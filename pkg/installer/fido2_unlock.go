@@ -15,9 +15,11 @@ package installer
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"os/exec"
 	"slices"
 	"strings"
 	"time"
@@ -42,6 +44,14 @@ const (
 
 	// fido2UnlockTestMapping is the mapping TestUnlock opens and closes.
 	fido2UnlockTestMapping = "fido2_unlock_test"
+
+	// fido2RawSecretChallenge is the string whose SHA-256 digest earlier
+	// installers passed to fido2-assert as the client data hash.
+	fido2RawSecretChallenge = "luks-enrollment-challenge"
+
+	// fido2RawSecretLength is the length of the hmac-secret output, the key
+	// earlier installers wrote to a fido2-manual slot.
+	fido2RawSecretLength = 32
 )
 
 // The go-luks2 header read and device mapping of the unlock. Tests replace
@@ -53,6 +63,14 @@ var (
 	luksIsUnlocked = luks2.IsUnlocked
 )
 
+// fido2Command runs a libfido2 tool with stdin and returns its stdout. The
+// context ends the tool. Tests replace it with a fake authenticator.
+var fido2Command = func(ctx context.Context, stdin string, name string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stdin = strings.NewReader(stdin)
+	return cmd.Output()
+}
+
 // fido2TokenDecoders maps a FIDO2 token type to a decoder that rebuilds the
 // authentication config its producer derived the slot key with. A type with
 // no entry (systemd-fido2) keys its slot with the raw hmac-secret.
@@ -63,6 +81,8 @@ var fido2TokenDecoders = map[string]func(token *FIDO2Token) (*fido2.Authenticati
 
 // FIDO2Unlock opens a LUKS device with the key the SDK FIDO2 handler derives
 // (UnlockWithKey) from the credential and salt in the header's FIDO2 token.
+// A fido2-manual slot the SDK key does not open is tried with the raw
+// hmac-secret earlier installers keyed it with.
 type FIDO2Unlock struct {
 	luksDevice string
 	debug      bool
@@ -166,8 +186,8 @@ func (f *FIDO2Unlock) Unlock(ctx context.Context, mappedName string) error {
 	}
 	defer clear(key)
 
-	if err := luksUnlock(f.luksDevice, key, mappedName); err != nil {
-		return f.keyRejected(token, err)
+	if err := f.open(ctx, token, key, mappedName); err != nil {
+		return err
 	}
 
 	fmt.Printf("LUKS device unlocked successfully as /dev/mapper/%s\n", mappedName)
@@ -188,8 +208,8 @@ func (f *FIDO2Unlock) TestUnlock(ctx context.Context) error {
 		}
 	}
 
-	if err := luksUnlock(f.luksDevice, key, fido2UnlockTestMapping); err != nil {
-		return f.keyRejected(token, err)
+	if err := f.open(ctx, token, key, fido2UnlockTestMapping); err != nil {
+		return err
 	}
 
 	if err := luksLock(fido2UnlockTestMapping); err != nil {
@@ -218,15 +238,75 @@ func (f *FIDO2Unlock) tokenKey(ctx context.Context) (*FIDO2Token, []byte, error)
 	return token, key, nil
 }
 
-// keyRejected reports that the device did not open with the derived key. An
-// fido2-manual token names no derivation, so a rejected key means the slot
-// holds the raw hmac-secret of an earlier installer; the authenticator is not
-// asked again.
-func (f *FIDO2Unlock) keyRejected(token *FIDO2Token, err error) error {
-	if token.Type == fido2ManualTokenType {
-		return f.rawSecretError(token, err)
+// open maps the device with the key derived for the token. A type fido2
+// token names the SDK derivation, so a rejected key is final. An
+// fido2-manual token names no derivation: the runtime LUKS service keys its
+// slot with the SDK derivation, earlier installers with the raw hmac-secret.
+// When the SDK key is rejected the slot is tried once more with the raw
+// hmac-secret, asked of the authenticator through fido2-assert as the earlier
+// installer did.
+func (f *FIDO2Unlock) open(ctx context.Context, token *FIDO2Token, key []byte, mappedName string) error {
+	err := luksUnlock(f.luksDevice, key, mappedName)
+	if err == nil {
+		return nil
 	}
-	return &FIDO2KeyRejectedError{Device: f.luksDevice, Keyslots: token.Keyslots, Err: err}
+	if token.Type != fido2ManualTokenType {
+		return &FIDO2KeyRejectedError{Device: f.luksDevice, Keyslots: token.Keyslots, Err: err}
+	}
+
+	fmt.Println("The SDK key did not open the slot; trying the raw hmac-secret of an earlier installer...")
+	secret, err := f.rawSecretKey(ctx, token)
+	if err != nil {
+		return err
+	}
+	defer clear(secret)
+	if err := luksUnlock(f.luksDevice, secret, mappedName); err != nil {
+		return &FIDO2KeyRejectedError{Device: f.luksDevice, Keyslots: token.Keyslots, Err: err}
+	}
+	return nil
+}
+
+// rawSecretKey returns the raw 32-byte hmac-secret an earlier installer keyed
+// a fido2-manual slot with. Like that installer it lists the authenticators
+// with fido2-token and asks the first one through fido2-assert, passing the
+// token's relying party, credential and salt verbatim.
+func (f *FIDO2Unlock) rawSecretKey(ctx context.Context, token *FIDO2Token) ([]byte, error) {
+	output, err := fido2Command(ctx, "", "fido2-token", "-L")
+	if err != nil {
+		return nil, &FIDO2AssertError{Step: "list the FIDO2 devices", Err: err}
+	}
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	devicePath := strings.TrimSuffix(strings.Split(lines[0], " ")[0], ":")
+	if devicePath == "" {
+		return nil, &FIDO2AssertError{Step: "list the FIDO2 devices", Err: &FIDO2NoDeviceError{}}
+	}
+	if f.debug {
+		fmt.Printf("Using FIDO2 device: %s\n", devicePath)
+	}
+
+	challenge := sha256.Sum256([]byte(fido2RawSecretChallenge))
+	params := fmt.Sprintf("%s\n%s\n%s\n%s\n",
+		base64.StdEncoding.EncodeToString(challenge[:]),
+		token.FIDO2RP,
+		token.FIDO2Credential,
+		token.FIDO2Salt,
+	)
+
+	fmt.Println("Touch your security key to unlock...")
+	output, err = fido2Command(ctx, params, "fido2-assert", "-G", "-h", devicePath)
+	if err != nil {
+		return nil, &FIDO2AssertError{Step: "get the hmac-secret", Err: err}
+	}
+	assertLines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	secret, err := base64.StdEncoding.DecodeString(assertLines[len(assertLines)-1])
+	if err != nil {
+		return nil, &FIDO2AssertError{Step: "decode the hmac-secret", Err: err}
+	}
+	if len(secret) != fido2RawSecretLength {
+		clear(secret)
+		return nil, &FIDO2AssertError{Step: "decode the hmac-secret", Err: &FIDO2SecretLengthError{Length: len(secret)}}
+	}
+	return secret, nil
 }
 
 // rawSecretError reports the token's slot as keyed with the raw hmac-secret.
@@ -312,11 +392,9 @@ func (e *FIDO2TokenNotFoundError) Error() string {
 	return fmt.Sprintf("fido2: no LUKS2 FIDO2 token bound to a keyslot on %s", e.Device)
 }
 
-// FIDO2RawSecretTokenError reports a FIDO2 slot keyed with the raw
-// hmac-secret, which the SDK cannot return (go-xkms #1769). A systemd-fido2
-// token is refused before the authenticator is asked, so Err is nil. An
-// fido2-manual token names no derivation: the SDK derivation was tried once,
-// the device rejected it, and Err is that rejection.
+// FIDO2RawSecretTokenError reports a systemd-fido2 slot, keyed with the raw
+// hmac-secret, which the SDK cannot return (go-xkms #1769). The token is
+// refused before the authenticator is asked, so Err is nil.
 type FIDO2RawSecretTokenError struct {
 	Device   string
 	Type     string
@@ -367,4 +445,39 @@ func (e *FIDO2TokenDecodeError) Error() string {
 // Unwrap returns the decode error.
 func (e *FIDO2TokenDecodeError) Unwrap() error {
 	return e.Err
+}
+
+// FIDO2NoDeviceError reports that fido2-token listed no authenticator.
+type FIDO2NoDeviceError struct{}
+
+// Error implements the error interface.
+func (e *FIDO2NoDeviceError) Error() string {
+	return "no FIDO2 devices detected"
+}
+
+// FIDO2AssertError reports a failed step of the raw hmac-secret unlock of a
+// fido2-manual token written by an earlier installer.
+type FIDO2AssertError struct {
+	Step string
+	Err  error
+}
+
+// Error implements the error interface.
+func (e *FIDO2AssertError) Error() string {
+	return fmt.Sprintf("fido2: failed to %s for the raw hmac-secret unlock: %v", e.Step, e.Err)
+}
+
+// Unwrap returns the cause.
+func (e *FIDO2AssertError) Unwrap() error {
+	return e.Err
+}
+
+// FIDO2SecretLengthError reports an hmac-secret of the wrong length.
+type FIDO2SecretLengthError struct {
+	Length int
+}
+
+// Error implements the error interface.
+func (e *FIDO2SecretLengthError) Error() string {
+	return fmt.Sprintf("invalid hmac-secret length: expected %d, got %d", fido2RawSecretLength, e.Length)
 }

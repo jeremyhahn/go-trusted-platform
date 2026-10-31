@@ -16,10 +16,12 @@ package installer
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/jeremyhahn/go-luks2/pkg/luks2"
@@ -81,15 +83,59 @@ type fakeUnlockDevice struct {
 	mapped   map[string]bool
 	handlers []*fido2.Config
 	openErr  error
+	tools    *fakeFIDO2Tools
+}
+
+// fakeFIDO2Tools stands in for the libfido2 tools (fido2-token, fido2-assert)
+// of the raw hmac-secret unlock. fido2-assert answers with the raw
+// hmac-secret of device for the credential and salt on its stdin.
+type fakeFIDO2Tools struct {
+	device       *sdkFakeFIDO2
+	listOutput   string
+	listErr      error
+	assertErr    error
+	assertOutput string
+	calls        [][]string
+	stdins       []string
+}
+
+func (f *fakeFIDO2Tools) run(_ context.Context, stdin string, name string, args ...string) ([]byte, error) {
+	f.calls = append(f.calls, append([]string{name}, args...))
+	f.stdins = append(f.stdins, stdin)
+	if name == "fido2-token" {
+		return []byte(f.listOutput), f.listErr
+	}
+	if f.assertErr != nil {
+		return nil, f.assertErr
+	}
+	if f.assertOutput != "" {
+		return []byte(f.assertOutput), nil
+	}
+	params := strings.Split(stdin, "\n")
+	credential, err := base64.StdEncoding.DecodeString(params[2])
+	if err != nil {
+		return nil, err
+	}
+	salt, err := base64.StdEncoding.DecodeString(params[3])
+	if err != nil {
+		return nil, err
+	}
+	secret := f.device.hmacSecret(credential, salt)
+	return []byte("assertion-header\n" + base64.StdEncoding.EncodeToString(secret) + "\n"), nil
 }
 
 func useFakeUnlockDevice(t *testing.T, header *fakeLUKSHeader, device fido2.Handler) *fakeUnlockDevice {
 	t.Helper()
-	fake := &fakeUnlockDevice{header: header, mapped: map[string]bool{}}
-	oldList, oldUnlock, oldLock, oldIsUnlocked, oldHandler := luksListTokens, luksUnlock, luksLock, luksIsUnlocked, newFIDO2Handler
+	tools := &fakeFIDO2Tools{listOutput: "/dev/hidraw0: vendor=0x1050, product=0x0407 (Yubico YubiKey)\n"}
+	if sdkDevice, ok := device.(*sdkFakeFIDO2); ok {
+		tools.device = sdkDevice
+	}
+	fake := &fakeUnlockDevice{header: header, mapped: map[string]bool{}, tools: tools}
+	oldList, oldUnlock, oldLock, oldIsUnlocked, oldHandler, oldCommand := luksListTokens, luksUnlock, luksLock, luksIsUnlocked, newFIDO2Handler, fido2Command
 	t.Cleanup(func() {
-		luksListTokens, luksUnlock, luksLock, luksIsUnlocked, newFIDO2Handler = oldList, oldUnlock, oldLock, oldIsUnlocked, oldHandler
+		luksListTokens, luksUnlock, luksLock, luksIsUnlocked, newFIDO2Handler, fido2Command = oldList, oldUnlock, oldLock, oldIsUnlocked, oldHandler, oldCommand
 	})
+	fido2Command = tools.run
 	luksListTokens = func(string) (map[int]*luks2.Token, error) {
 		if fake.listErr != nil {
 			return nil, fake.listErr
@@ -168,6 +214,7 @@ func TestFIDO2UnlockAfterEnrollment(t *testing.T) {
 		assert.Equal(t, []string{"3"}, rejected.Keyslots, name)
 	}
 	assert.False(t, fake.mapped["cryptroot2"])
+	assert.Empty(t, fake.tools.calls, "a token marked with the SDK derivation ran a libfido2 tool")
 }
 
 // The runtime LUKS service (pkg/app/backends) writes fido2-manual tokens
@@ -213,7 +260,10 @@ func TestFIDO2UnlockRuntimeTokens(t *testing.T) {
 // An fido2-manual token from an earlier installer keys its slot with the raw
 // hmac-secret. The SDK derivation is tried once, the device rejects it and
 // the error names go-xkms #1769.
-func TestFIDO2UnlockManualRawSecretToken(t *testing.T) {
+// rawSecretVolume returns a header as an earlier installer left it: a
+// fido2-manual token whose slot 3 is keyed with the raw hmac-secret.
+func rawSecretVolume(t *testing.T) (*fakeLUKSHeader, *sdkFakeFIDO2) {
+	t.Helper()
 	header := useFakeLUKSHeader(t)
 	device := newSDKFakeFIDO2()
 	header.slots[3] = device.hmacSecret(device.credential, device.salt)
@@ -225,15 +275,112 @@ func TestFIDO2UnlockManualRawSecretToken(t *testing.T) {
 		FIDO2RP:         "luks-alpine",
 		FIDO2UPRequired: true,
 	}
-	useFakeUnlockDevice(t, header, device)
+	return header, device
+}
 
-	err := NewFIDO2Unlock("/dev/fake-luks", false).Unlock(context.Background(), "cryptroot")
-	var rawErr *FIDO2RawSecretTokenError
-	require.ErrorAs(t, err, &rawErr)
-	assert.ErrorIs(t, err, errFakeWrongKey)
-	assert.Equal(t, fido2ManualTokenType, rawErr.Type)
-	assert.Contains(t, err.Error(), "go-xkms #1769")
-	assert.Len(t, device.unlocks, 1, "the authenticator was asked more than once")
+// TestFIDO2UnlockManualRawSecretToken opens a volume an earlier installer
+// enrolled: the SDK key is rejected once, then the raw hmac-secret from
+// fido2-assert opens the slot.
+func TestFIDO2UnlockManualRawSecretToken(t *testing.T) {
+	ctx := context.Background()
+	header, device := rawSecretVolume(t)
+	fake := useFakeUnlockDevice(t, header, device)
+	unlock := NewFIDO2Unlock("/dev/fake-luks", false)
+
+	require.NoError(t, unlock.Unlock(ctx, "cryptroot"))
+	assert.True(t, fake.mapped["cryptroot"], "the device was not mapped")
+	require.NoError(t, unlock.TestUnlock(ctx))
+	assert.False(t, fake.mapped[fido2UnlockTestMapping], "the test mapping was left open")
+
+	assert.Len(t, device.unlocks, 2, "the SDK derivation is tried once per unlock")
+	require.Len(t, fake.tools.calls, 4)
+	assert.Equal(t, []string{"fido2-token", "-L"}, fake.tools.calls[0])
+	assert.Equal(t, []string{"fido2-assert", "-G", "-h", "/dev/hidraw0"}, fake.tools.calls[1])
+	challenge := sha256.Sum256([]byte("luks-enrollment-challenge"))
+	assert.Equal(t, base64.StdEncoding.EncodeToString(challenge[:])+"\n"+
+		"luks-alpine\n"+
+		base64.StdEncoding.EncodeToString(device.credential)+"\n"+
+		base64.StdEncoding.EncodeToString(device.salt)+"\n", fake.tools.stdins[1])
+}
+
+// TestFIDO2UnlockRawSecretFailures covers each failure of the raw
+// hmac-secret unlock of an fido2-manual token.
+func TestFIDO2UnlockRawSecretFailures(t *testing.T) {
+	errFakeList := &fakeHandlerError{op: "fido2-token -L"}
+	errFakeAssert := &fakeHandlerError{op: "fido2-assert"}
+	tests := []struct {
+		name  string
+		setup func(tools *fakeFIDO2Tools, device *sdkFakeFIDO2)
+		check func(t *testing.T, err error)
+	}{
+		{
+			name:  "device list fails",
+			setup: func(tools *fakeFIDO2Tools, _ *sdkFakeFIDO2) { tools.listErr = errFakeList },
+			check: func(t *testing.T, err error) { assertAssertStep(t, err, "list the FIDO2 devices", errFakeList) },
+		},
+		{
+			name:  "no device listed",
+			setup: func(tools *fakeFIDO2Tools, _ *sdkFakeFIDO2) { tools.listOutput = "" },
+			check: func(t *testing.T, err error) {
+				var noDevice *FIDO2NoDeviceError
+				assert.ErrorAs(t, err, &noDevice)
+			},
+		},
+		{
+			name:  "assertion fails",
+			setup: func(tools *fakeFIDO2Tools, _ *sdkFakeFIDO2) { tools.assertErr = errFakeAssert },
+			check: func(t *testing.T, err error) { assertAssertStep(t, err, "get the hmac-secret", errFakeAssert) },
+		},
+		{
+			name:  "secret not base64",
+			setup: func(tools *fakeFIDO2Tools, _ *sdkFakeFIDO2) { tools.assertOutput = "not*base64" },
+			check: func(t *testing.T, err error) {
+				var corrupt base64.CorruptInputError
+				assert.ErrorAs(t, err, &corrupt)
+			},
+		},
+		{
+			name: "secret of the wrong length",
+			setup: func(tools *fakeFIDO2Tools, _ *sdkFakeFIDO2) {
+				tools.assertOutput = base64.StdEncoding.EncodeToString(make([]byte, 16))
+			},
+			check: func(t *testing.T, err error) {
+				var length *FIDO2SecretLengthError
+				require.ErrorAs(t, err, &length)
+				assert.Equal(t, 16, length.Length)
+			},
+		},
+		{
+			name:  "raw secret rejected",
+			setup: func(_ *fakeFIDO2Tools, device *sdkFakeFIDO2) { device.secret[0] ^= 0xff },
+			check: func(t *testing.T, err error) {
+				var rejected *FIDO2KeyRejectedError
+				require.ErrorAs(t, err, &rejected)
+				assert.ErrorIs(t, err, errFakeWrongKey)
+				assert.Equal(t, []string{"3"}, rejected.Keyslots)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			header, device := rawSecretVolume(t)
+			fake := useFakeUnlockDevice(t, header, device)
+			tt.setup(fake.tools, device)
+
+			err := NewFIDO2Unlock("/dev/fake-luks", false).Unlock(context.Background(), "cryptroot")
+			require.Error(t, err)
+			tt.check(t, err)
+			assert.False(t, fake.mapped["cryptroot"])
+		})
+	}
+}
+
+func assertAssertStep(t *testing.T, err error, step string, cause error) {
+	t.Helper()
+	var assertErr *FIDO2AssertError
+	require.ErrorAs(t, err, &assertErr)
+	assert.Equal(t, step, assertErr.Step)
+	assert.ErrorIs(t, err, cause)
 }
 
 func TestFIDO2UnlockSystemdToken(t *testing.T) {
