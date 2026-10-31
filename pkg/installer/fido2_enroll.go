@@ -41,6 +41,7 @@ var (
 	luksAddKey            = luks2.AddKey
 	luksFindFreeTokenSlot = luks2.FindFreeTokenSlot
 	luksImportToken       = luks2.ImportToken
+	luksKillSlot          = luks2.KillSlot
 )
 
 // FIDO2Enrollment handles FIDO2 security key enrollment for LUKS. The
@@ -317,7 +318,9 @@ func randomRead(b []byte) (n int, err error) {
 //
 // The context is checked before each authenticator call and before each
 // header write, and an authenticator call stops waiting when it ends, so a
-// cancelled installation never writes the keyslot or the token.
+// cancelled installation never writes the token. A cancellation that comes
+// after the keyslot is written removes it again (rollbackKeyslot), so no
+// slot is left that boot cannot unlock or a retry cannot reuse.
 func (f *FIDO2Enrollment) enrollWithHandler(ctx context.Context, handler fido2.Handler) error {
 	userID := make([]byte, 32)
 	if _, err := randomRead(userID); err != nil {
@@ -399,7 +402,7 @@ func (f *FIDO2Enrollment) enrollWithHandler(ctx context.Context, handler fido2.H
 	}
 
 	if err := ctx.Err(); err != nil {
-		return &FIDO2CanceledError{Step: "store the token", Err: err}
+		return f.rollbackKeyslot(&FIDO2CanceledError{Step: "store the token", Err: err})
 	}
 	fmt.Println("Storing FIDO2 metadata in LUKS token...")
 
@@ -428,6 +431,17 @@ func (f *FIDO2Enrollment) enrollWithHandler(ctx context.Context, handler fido2.H
 	fmt.Printf("Your LUKS device can now be unlocked with your security key (slot %d)\n", f.config.TargetKeyslot)
 
 	return nil
+}
+
+// rollbackKeyslot removes the keyslot this enrolment added and returns
+// cause, joined with a FIDO2RollbackError when the slot could not be
+// removed. go-luks2 takes no context, so the removal still runs after the
+// enrolment's context has ended.
+func (f *FIDO2Enrollment) rollbackKeyslot(cause error) error {
+	if err := luksKillSlot(f.config.LUKSDevice, []byte(f.config.LUKSPassphrase), f.config.TargetKeyslot); err != nil {
+		return errors.Join(cause, &FIDO2RollbackError{Slot: f.config.TargetKeyslot, Err: err})
+	}
+	return cause
 }
 
 // awaitAuthenticator runs a blocking SDK handler call, whose methods take no
@@ -501,6 +515,23 @@ func (e *FIDO2DeriveKeyError) Error() string {
 
 // Unwrap returns the handler error.
 func (e *FIDO2DeriveKeyError) Unwrap() error {
+	return e.Err
+}
+
+// FIDO2RollbackError reports that the keyslot a cancelled enrolment added
+// could not be removed again.
+type FIDO2RollbackError struct {
+	Slot int
+	Err  error
+}
+
+// Error implements the error interface.
+func (e *FIDO2RollbackError) Error() string {
+	return fmt.Sprintf("fido2: failed to remove LUKS key slot %d after the enrolment was cancelled: %v", e.Slot, e.Err)
+}
+
+// Unwrap returns the go-luks2 error.
+func (e *FIDO2RollbackError) Unwrap() error {
 	return e.Err
 }
 

@@ -18,6 +18,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os/exec"
 	"slices"
@@ -180,13 +181,12 @@ func (f *FIDO2Unlock) DeriveKey(ctx context.Context, token *FIDO2Token) ([]byte,
 
 // Unlock opens the LUKS device using FIDO2 security key
 func (f *FIDO2Unlock) Unlock(ctx context.Context, mappedName string) error {
-	token, key, err := f.tokenKey(ctx)
+	token, err := f.token()
 	if err != nil {
 		return err
 	}
-	defer clear(key)
 
-	if err := f.open(ctx, token, key, mappedName); err != nil {
+	if err := f.open(ctx, token, mappedName); err != nil {
 		return err
 	}
 
@@ -196,11 +196,10 @@ func (f *FIDO2Unlock) Unlock(ctx context.Context, mappedName string) error {
 
 // TestUnlock tests if the FIDO2 key can unlock the device without actually opening it
 func (f *FIDO2Unlock) TestUnlock(ctx context.Context) error {
-	token, key, err := f.tokenKey(ctx)
+	token, err := f.token()
 	if err != nil {
 		return err
 	}
-	defer clear(key)
 
 	if luksIsUnlocked(fido2UnlockTestMapping) {
 		if err := luksLock(fido2UnlockTestMapping); err != nil {
@@ -208,7 +207,7 @@ func (f *FIDO2Unlock) TestUnlock(ctx context.Context) error {
 		}
 	}
 
-	if err := f.open(ctx, token, key, fido2UnlockTestMapping); err != nil {
+	if err := f.open(ctx, token, fido2UnlockTestMapping); err != nil {
 		return err
 	}
 
@@ -220,47 +219,74 @@ func (f *FIDO2Unlock) TestUnlock(ctx context.Context) error {
 	return nil
 }
 
-// tokenKey reads the header's FIDO2 token and derives its slot key.
-func (f *FIDO2Unlock) tokenKey(ctx context.Context) (*FIDO2Token, []byte, error) {
+// token reads the header's FIDO2 token and checks that it decodes, so a
+// corrupt token is refused before the authenticator is asked.
+func (f *FIDO2Unlock) token() (*FIDO2Token, error) {
 	token, err := f.GetTokenInfo()
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	if f.debug {
 		fmt.Printf("Found FIDO2 token: type=%s, RP=%s, keyslots=%v\n", token.Type, token.FIDO2RP, token.Keyslots)
 	}
 
-	key, err := f.DeriveKey(ctx, token)
-	if err != nil {
-		return nil, nil, err
+	if _, err := fido2TokenDecoders[token.Type](token); err != nil {
+		return nil, err
 	}
-	return token, key, nil
+	return token, nil
 }
 
-// open maps the device with the key derived for the token. A type fido2
-// token names the SDK derivation, so a rejected key is final. An
-// fido2-manual token names no derivation: the runtime LUKS service keys its
-// slot with the SDK derivation, earlier installers with the raw hmac-secret.
-// When the SDK key is rejected the slot is tried once more with the raw
-// hmac-secret, asked of the authenticator through fido2-assert as the earlier
-// installer did.
-func (f *FIDO2Unlock) open(ctx context.Context, token *FIDO2Token, key []byte, mappedName string) error {
-	err := luksUnlock(f.luksDevice, key, mappedName)
-	if err == nil {
-		return nil
-	}
+// open maps the device with the key of the token's slot. The type fido2
+// token is the SDK-derivation marker: its slot opens with the SDK key alone.
+// A fido2-manual token carries no marker. Earlier installers keyed its slot
+// with the raw hmac-secret, asked through fido2-assert with user presence
+// only, so their fido2-up-required meant presence. The runtime LUKS service
+// keys it with the SDK derivation, its fido2-up-required meaning user
+// verification. The raw hmac-secret is tried first, so an earlier
+// installer's slot never waits on an SDK assertion that asks for a user
+// verification the authenticator may not support; the SDK key is tried
+// only when the raw hmac-secret does not open the slot.
+func (f *FIDO2Unlock) open(ctx context.Context, token *FIDO2Token, mappedName string) error {
 	if token.Type != fido2ManualTokenType {
-		return &FIDO2KeyRejectedError{Device: f.luksDevice, Keyslots: token.Keyslots, Err: err}
+		return f.openDerived(ctx, token, mappedName)
 	}
 
-	fmt.Println("The SDK key did not open the slot; trying the raw hmac-secret of an earlier installer...")
+	rawErr := f.openRawSecret(ctx, token, mappedName)
+	if rawErr == nil || ctx.Err() != nil {
+		return rawErr
+	}
+	fmt.Println("The raw hmac-secret of an earlier installer did not open the slot; trying the SDK key of the runtime LUKS service...")
+	if err := f.openDerived(ctx, token, mappedName); err != nil {
+		return errors.Join(rawErr, err)
+	}
+	return nil
+}
+
+// openDerived maps the device with the key the SDK derives for the token.
+func (f *FIDO2Unlock) openDerived(ctx context.Context, token *FIDO2Token, mappedName string) error {
+	key, err := f.DeriveKey(ctx, token)
+	if err != nil {
+		return err
+	}
+	defer clear(key)
+	return f.openWith(token, key, mappedName)
+}
+
+// openRawSecret maps the device with the raw hmac-secret an earlier
+// installer keyed a fido2-manual slot with.
+func (f *FIDO2Unlock) openRawSecret(ctx context.Context, token *FIDO2Token, mappedName string) error {
 	secret, err := f.rawSecretKey(ctx, token)
 	if err != nil {
 		return err
 	}
 	defer clear(secret)
-	if err := luksUnlock(f.luksDevice, secret, mappedName); err != nil {
+	return f.openWith(token, secret, mappedName)
+}
+
+// openWith maps the device with key, reporting a rejected key as typed.
+func (f *FIDO2Unlock) openWith(token *FIDO2Token, key []byte, mappedName string) error {
+	if err := luksUnlock(f.luksDevice, key, mappedName); err != nil {
 		return &FIDO2KeyRejectedError{Device: f.luksDevice, Keyslots: token.Keyslots, Err: err}
 	}
 	return nil
@@ -337,7 +363,12 @@ func decodeSDKToken(token *FIDO2Token) (*fido2.AuthenticationConfig, error) {
 // decodeManualToken decodes a type fido2-manual token as the runtime LUKS
 // service (pkg/app/backends) writes it: the credential ID verbatim in hex or
 // any base64 form, the salt in base64, and fido2-up-required carrying the
-// user-verification option the slot key was derived with.
+// user-verification option the slot key was derived with. The SDK key is
+// asked for only after the raw hmac-secret of an earlier installer, whose
+// fido2-up-required meant user presence, did not open the slot (open), so
+// reading the flag as user verification here never stands between a legacy
+// slot and its raw-secret unlock. The runtime needs the flag: the
+// authenticator's hmac-secret differs with and without user verification.
 func decodeManualToken(token *FIDO2Token) (*fido2.AuthenticationConfig, error) {
 	credentialID, err := decodeManualCredential(token.FIDO2Credential)
 	if err != nil {

@@ -112,6 +112,8 @@ var (
 	errFakeAddKey      = &fakeHandlerError{op: "add key"}
 	errFakeCredential  = &fakeHandlerError{op: "unknown credential"}
 	errFakeNoTokenSlot = &fakeHandlerError{op: "no free token slot"}
+	errFakeKillSlot    = &fakeHandlerError{op: "kill slot"}
+	errFakeNoUV        = &fakeHandlerError{op: "user verification unsupported"}
 )
 
 // sdkFakeFIDO2 models the SDK FIDO2 handler. The authenticator's hmac-secret
@@ -126,6 +128,9 @@ type sdkFakeFIDO2 struct {
 	enrollErr  error
 	unlockErr  error
 	unlocks    []*fido2.AuthenticationConfig
+	// noUV models an authenticator without built-in user verification: it
+	// rejects every assertion that asks for it.
+	noUV bool
 	// touch, when set, runs first in each authenticator call with the
 	// call's name ("enroll" or "unlock"); a test blocks in it.
 	touch func(op string)
@@ -186,6 +191,9 @@ func (f *sdkFakeFIDO2) UnlockWithKey(config *fido2.AuthenticationConfig) ([]byte
 	if f.unlockErr != nil {
 		return nil, f.unlockErr
 	}
+	if f.noUV && config.RequireUserVerification {
+		return nil, errFakeNoUV
+	}
 	if !bytes.Equal(config.CredentialID, f.credential) {
 		return nil, errFakeCredential
 	}
@@ -196,6 +204,7 @@ func (f *sdkFakeFIDO2) UnlockWithKey(config *fido2.AuthenticationConfig) ([]byte
 type fakeLUKSHeader struct {
 	addErr     error
 	tokenErr   error
+	killErr    error
 	slots      map[int][]byte
 	passedKeys [][]byte
 	tokens     map[int]*luks2.Token
@@ -204,10 +213,17 @@ type fakeLUKSHeader struct {
 func useFakeLUKSHeader(t *testing.T) *fakeLUKSHeader {
 	t.Helper()
 	header := &fakeLUKSHeader{slots: map[int][]byte{}, tokens: map[int]*luks2.Token{}}
-	oldAddKey, oldFind, oldImport := luksAddKey, luksFindFreeTokenSlot, luksImportToken
+	oldAddKey, oldFind, oldImport, oldKill := luksAddKey, luksFindFreeTokenSlot, luksImportToken, luksKillSlot
 	t.Cleanup(func() {
-		luksAddKey, luksFindFreeTokenSlot, luksImportToken = oldAddKey, oldFind, oldImport
+		luksAddKey, luksFindFreeTokenSlot, luksImportToken, luksKillSlot = oldAddKey, oldFind, oldImport, oldKill
 	})
+	luksKillSlot = func(device string, authPassphrase []byte, targetSlot int) error {
+		if header.killErr != nil {
+			return header.killErr
+		}
+		delete(header.slots, targetSlot)
+		return nil
+	}
 	luksAddKey = func(device string, passphrase, newPassphrase []byte, opts *luks2.AddKeyOptions) error {
 		header.passedKeys = append(header.passedKeys, newPassphrase)
 		if header.addErr != nil {
@@ -403,20 +419,43 @@ func TestFIDO2EnrollmentCanceledBeforeWrites(t *testing.T) {
 		assert.Empty(t, calls, "the authenticator was asked after cancellation")
 		assert.Empty(t, header.passedKeys)
 	})
-	t.Run("before the token", func(t *testing.T) {
-		header := useFakeLUKSHeader(t)
+	// Codex review 8643: a cancellation after the keyslot write removes the
+	// slot again, so boot is not left with a slot it cannot unlock and a
+	// retry can reuse the target slot.
+	cancelAfterAddKey := func(t *testing.T, header *fakeLUKSHeader) error {
+		t.Helper()
 		ctx, cancel := context.WithCancel(context.Background())
 		addKey := luksAddKey
 		luksAddKey = func(device string, passphrase, newPassphrase []byte, opts *luks2.AddKeyOptions) error {
 			cancel()
 			return addKey(device, passphrase, newPassphrase, opts)
 		}
+		return newTestFIDO2Enrollment(t).enrollWithHandler(ctx, newSDKFakeFIDO2())
+	}
+	t.Run("before the token", func(t *testing.T) {
+		header := useFakeLUKSHeader(t)
 
-		err := newTestFIDO2Enrollment(t).enrollWithHandler(ctx, newSDKFakeFIDO2())
+		err := cancelAfterAddKey(t, header)
 		var canceled *FIDO2CanceledError
 		require.ErrorAs(t, err, &canceled)
 		assert.Equal(t, "store the token", canceled.Step)
 		assert.ErrorIs(t, err, context.Canceled)
+		require.Len(t, header.passedKeys, 1, "the keyslot was not written before the cancellation")
+		assert.Empty(t, header.slots, "a cancelled enrolment left its keyslot")
+		assert.Empty(t, header.tokens, "a cancelled enrolment wrote a token")
+	})
+	t.Run("before the token, rollback fails", func(t *testing.T) {
+		header := useFakeLUKSHeader(t)
+		header.killErr = errFakeKillSlot
+
+		err := cancelAfterAddKey(t, header)
+		var canceled *FIDO2CanceledError
+		require.ErrorAs(t, err, &canceled)
+		assert.ErrorIs(t, err, context.Canceled)
+		var rollback *FIDO2RollbackError
+		require.ErrorAs(t, err, &rollback)
+		assert.Equal(t, 3, rollback.Slot)
+		assert.ErrorIs(t, err, errFakeKillSlot)
 		assert.Empty(t, header.tokens, "a cancelled enrolment wrote a token")
 	})
 }

@@ -292,7 +292,7 @@ func TestFIDO2UnlockManualRawSecretToken(t *testing.T) {
 	require.NoError(t, unlock.TestUnlock(ctx))
 	assert.False(t, fake.mapped[fido2UnlockTestMapping], "the test mapping was left open")
 
-	assert.Len(t, device.unlocks, 2, "the SDK derivation is tried once per unlock")
+	assert.Empty(t, device.unlocks, "the SDK derivation was tried before the raw hmac-secret")
 	require.Len(t, fake.tools.calls, 4)
 	assert.Equal(t, []string{"fido2-token", "-L"}, fake.tools.calls[0])
 	assert.Equal(t, []string{"fido2-assert", "-G", "-h", "/dev/hidraw0"}, fake.tools.calls[1])
@@ -301,6 +301,40 @@ func TestFIDO2UnlockManualRawSecretToken(t *testing.T) {
 		"luks-alpine\n"+
 		base64.StdEncoding.EncodeToString(device.credential)+"\n"+
 		base64.StdEncoding.EncodeToString(device.salt)+"\n", fake.tools.stdins[1])
+}
+
+// TestFIDO2UnlockLegacyTokenWithoutUV is the regression test for Codex
+// review 8643: an earlier installer wrote fido2-up-required=true meaning user
+// presence. On an authenticator without built-in user verification, whose
+// SDK assertion fails when verification is asked for, the volume still
+// unlocks through the raw hmac-secret.
+func TestFIDO2UnlockLegacyTokenWithoutUV(t *testing.T) {
+	header, device := rawSecretVolume(t)
+	device.noUV = true
+	fake := useFakeUnlockDevice(t, header, device)
+
+	require.NoError(t, NewFIDO2Unlock("/dev/fake-luks", false).Unlock(context.Background(), "cryptroot"))
+	assert.True(t, fake.mapped["cryptroot"], "the device was not mapped")
+	assert.Empty(t, device.unlocks, "the SDK derivation was tried before the raw hmac-secret")
+	require.Len(t, fake.tools.calls, 2)
+	assert.Equal(t, []string{"fido2-assert", "-G", "-h", "/dev/hidraw0"}, fake.tools.calls[1])
+}
+
+// TestFIDO2UnlockSDKTokenWithoutUV checks that a type fido2 token, the
+// SDK-derivation marker, unlocks through the SDK alone on the same
+// authenticator: it asks for no user verification and fido2-assert is never
+// run.
+func TestFIDO2UnlockSDKTokenWithoutUV(t *testing.T) {
+	header, device := enrolledFakeDevice(t)
+	device.noUV = true
+	device.unlocks = nil
+	fake := useFakeUnlockDevice(t, header, device)
+
+	require.NoError(t, NewFIDO2Unlock("/dev/fake-luks", false).Unlock(context.Background(), "cryptroot"))
+	assert.True(t, fake.mapped["cryptroot"], "the device was not mapped")
+	require.Len(t, device.unlocks, 1)
+	assert.False(t, device.unlocks[0].RequireUserVerification)
+	assert.Empty(t, fake.tools.calls, "fido2-assert was run for an SDK token")
 }
 
 // TestFIDO2UnlockRawSecretFailures covers each failure of the raw
