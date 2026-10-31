@@ -14,10 +14,12 @@
 package gateway
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tlspeer"
 )
 
@@ -54,6 +56,13 @@ func gatewayPrincipal(r *http.Request) (string, error) {
 	if err != nil {
 		return "", ErrGatewayIdentityRequired{Reason: err.Error()}
 	}
+	// An installer certificate carries clientAuth beside tp-pxeInstaller, so
+	// TLS admits it, and its CN can name a gateway. It holds only
+	// pxe:complete, never a gateway identity, so it is refused before the CN
+	// is read.
+	if issuance.HasInstallerMarker(leaf) {
+		return "", ErrInstallerNotGateway{CommonName: leaf.Subject.CommonName}
+	}
 	cn := leaf.Subject.CommonName
 	if cn == "" {
 		return "", ErrGatewayIdentityRequired{Reason: "client certificate carries no Common Name"}
@@ -72,10 +81,16 @@ func gatewayPrincipal(r *http.Request) (string, error) {
 }
 
 // authenticatedGateway resolves the calling gateway's certificate
-// principal. On failure it writes the 401 envelope and reports false;
-// the caller returns immediately.
+// principal. On failure it writes the 401 envelope, or the 403 envelope
+// for an installer certificate, which is authenticated but is never a
+// gateway, and reports false; the caller returns immediately.
 func (c *ControlPlane) authenticatedGateway(w http.ResponseWriter, r *http.Request) (string, bool) {
 	principal, err := gatewayPrincipal(r)
+	if errors.Is(err, ErrInstallerNotGateway{}) {
+		c.logger.Warn(err.Error())
+		c.respWriter.Error403(w, r, err, nil)
+		return "", false
+	}
 	if err != nil {
 		c.respWriter.Error401(w, r, err)
 		return "", false
@@ -124,4 +139,23 @@ type ErrGatewayIdentityMismatch struct {
 func (e ErrGatewayIdentityMismatch) Error() string {
 	return "gateway: certificate principal " + strconv.Quote(e.Principal) +
 		" is not authorized for gateway_id " + strconv.Quote(e.Requested)
+}
+
+// ErrInstallerNotGateway signals that the verified client certificate
+// carries the tp-pxeInstaller marker. An installer is never a gateway,
+// whatever its Common Name says.
+type ErrInstallerNotGateway struct {
+	// CommonName is the Common Name of the installer certificate.
+	CommonName string
+}
+
+func (e ErrInstallerNotGateway) Error() string {
+	return "gateway: certificate " + strconv.Quote(e.CommonName) +
+		" is an installer certificate (tp-pxeInstaller) and is not a gateway identity"
+}
+
+// Is matches any ErrInstallerNotGateway, whatever its Common Name.
+func (e ErrInstallerNotGateway) Is(target error) bool {
+	_, ok := target.(ErrInstallerNotGateway)
+	return ok
 }
