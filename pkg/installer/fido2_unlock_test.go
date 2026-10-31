@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -389,6 +390,88 @@ func TestFIDO2UnlockLegacyTokenWithoutUV(t *testing.T) {
 	assert.Empty(t, device.unlocks, "the SDK derivation was tried before the raw hmac-secret")
 	require.Len(t, fake.tools.calls, 2)
 	assert.Equal(t, []string{"fido2-assert", "-G", "-h", "/dev/hidraw0"}, fake.tools.calls[1])
+}
+
+// holdFIDO2Operation takes the operation slot as an abandoned SDK operation
+// would. The returned release frees it; it also runs at cleanup.
+func holdFIDO2Operation(t *testing.T) (release func()) {
+	t.Helper()
+	fido2Operation <- struct{}{}
+	release = sync.OnceFunc(func() { <-fido2Operation })
+	t.Cleanup(release)
+	return release
+}
+
+// assertFIDO2OperationFree fails unless the operation slot is free.
+func assertFIDO2OperationFree(t *testing.T) {
+	t.Helper()
+	select {
+	case fido2Operation <- struct{}{}:
+		<-fido2Operation
+	default:
+		t.Error("the FIDO2 operation slot is still held")
+	}
+}
+
+// assertCalls counts the fido2-assert launches the fake tools recorded.
+func assertCalls(tools *fakeFIDO2Tools) int {
+	count := 0
+	for _, call := range tools.calls {
+		if call[0] == "fido2-assert" {
+			count++
+		}
+	}
+	return count
+}
+
+// TestFIDO2UnlockRawSecretWaitsForOperation is the regression test for Codex
+// review 8659: while an abandoned SDK operation holds the authenticator, the
+// legacy unlock never launches fido2-assert. Cancelled, it returns the
+// cancellation; once the slot is free, it runs fido2-assert exactly once.
+func TestFIDO2UnlockRawSecretWaitsForOperation(t *testing.T) {
+	t.Run("cancelled while waiting", func(t *testing.T) {
+		header, device := rawSecretVolume(t)
+		fake := useFakeUnlockDevice(t, header, device)
+		busy := useFIDO2OperationBusy(t)
+		release := holdFIDO2Operation(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { done <- NewFIDO2Unlock("/dev/fake-luks", false).Unlock(ctx, "cryptroot") }()
+
+		<-busy
+		cancel()
+		err := <-done
+
+		var canceledErr *FIDO2CanceledError
+		require.ErrorAs(t, err, &canceledErr)
+		assert.ErrorIs(t, err, context.Canceled)
+		assert.Equal(t, "get the hmac-secret", canceledErr.Step)
+		assert.Zero(t, assertCalls(fake.tools), "fido2-assert ran while the authenticator was busy")
+		assert.Empty(t, device.unlocks, "a cancelled unlock tried the SDK derivation")
+		assert.Empty(t, fake.mapped, "a cancelled unlock opened the volume")
+
+		// A cancelled wait holds nothing: the slot is free once released.
+		release()
+		assertFIDO2OperationFree(t)
+	})
+
+	t.Run("runs once the slot is free", func(t *testing.T) {
+		header, device := rawSecretVolume(t)
+		fake := useFakeUnlockDevice(t, header, device)
+		busy := useFIDO2OperationBusy(t)
+		release := holdFIDO2Operation(t)
+		done := make(chan error, 1)
+		go func() { done <- NewFIDO2Unlock("/dev/fake-luks", false).Unlock(context.Background(), "cryptroot") }()
+
+		<-busy
+		assert.Zero(t, assertCalls(fake.tools), "fido2-assert ran while the authenticator was busy")
+		release()
+
+		require.NoError(t, <-done)
+		assert.Equal(t, 1, assertCalls(fake.tools))
+		assert.True(t, fake.mapped["cryptroot"], "the device was not mapped")
+		assertFIDO2OperationFree(t)
+	})
 }
 
 // TestFIDO2UnlockSDKTokenWithoutUV checks that a type fido2 token, the

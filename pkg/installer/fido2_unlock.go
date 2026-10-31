@@ -337,8 +337,15 @@ func (f *FIDO2Unlock) rawSecretKey(ctx context.Context, token *FIDO2Token) ([]by
 		token.FIDO2Salt,
 	)
 
+	// fido2-assert shares the authenticator with the SDK operations: it waits
+	// for an abandoned one to end, and holds the slot until the tool exits
+	// (the context kills it, and Output waits for it).
+	if err := acquireFIDO2Operation(ctx, "get the hmac-secret"); err != nil {
+		return nil, err
+	}
 	fmt.Println("Touch your security key to unlock...")
 	output, err = fido2Command(ctx, params, "fido2-assert", "-G", "-h", devicePath)
+	<-fido2Operation
 	if err != nil {
 		return nil, &FIDO2AssertError{Step: "get the hmac-secret", Err: err}
 	}

@@ -451,22 +451,8 @@ func (f *FIDO2Enrollment) rollbackKeyslot(cause error) error {
 // the slot; awaitAuthenticator returns once that drain is running.
 func awaitAuthenticator[T any](ctx context.Context, session *fido2Session, step string, call func(fido2.Handler) (T, error), discard func(T)) (T, error) {
 	var zero T
-	if err := ctx.Err(); err != nil {
-		return zero, &FIDO2CanceledError{Step: step, Err: err}
-	}
-	select {
-	case fido2Operation <- struct{}{}:
-	default:
-		fido2OperationBusy()
-		select {
-		case fido2Operation <- struct{}{}:
-		case <-ctx.Done():
-			return zero, &FIDO2CanceledError{Step: step, Err: ctx.Err()}
-		}
-	}
-	if err := ctx.Err(); err != nil {
-		<-fido2Operation
-		return zero, &FIDO2CanceledError{Step: step, Err: err}
+	if err := acquireFIDO2Operation(ctx, step); err != nil {
+		return zero, err
 	}
 
 	type outcome struct {
@@ -510,6 +496,31 @@ func awaitAuthenticator[T any](ctx context.Context, session *fido2Session, step 
 // until the key is touched or removed. It holds this slot until it ends, and
 // a retry waits for it (honouring its own context) rather than racing it for
 // the touch. Stopping the request itself is an SDK gap.
+// acquireFIDO2Operation takes the fido2Operation slot, waiting while an
+// abandoned operation still holds it. When ctx ends first it returns a
+// FIDO2CanceledError for step and holds nothing; otherwise the caller frees
+// the slot with <-fido2Operation once its operation has ended.
+func acquireFIDO2Operation(ctx context.Context, step string) error {
+	if err := ctx.Err(); err != nil {
+		return &FIDO2CanceledError{Step: step, Err: err}
+	}
+	select {
+	case fido2Operation <- struct{}{}:
+	default:
+		fido2OperationBusy()
+		select {
+		case fido2Operation <- struct{}{}:
+		case <-ctx.Done():
+			return &FIDO2CanceledError{Step: step, Err: ctx.Err()}
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		<-fido2Operation
+		return &FIDO2CanceledError{Step: step, Err: err}
+	}
+	return nil
+}
+
 var fido2Operation = make(chan struct{}, 1)
 
 // fido2OperationBusy tells the user why an operation waits: an earlier,
