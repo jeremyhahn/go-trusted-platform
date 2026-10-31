@@ -106,6 +106,16 @@ dropped. An `is_ca` request carrying any `ext_key_usage`, even an unknown one
 such as `IPSEC_IKE`, is refused with `ErrCAExtKeyUsageUnsupported` before the
 names are converted (Codex 8662).
 
+`PXE_INSTALLER` (also `PXEINSTALLER`) asks for an installer certificate (#1362):
+the leaf is signed with one critical extended key usage extension carrying
+`id-kp-clientAuth` and the private marker tp-pxeInstaller
+`1.3.6.1.4.1.29377.101.22` (RFC 5280 §4.2.1.12), passed to the signer through
+`ExtraExtensions`. Only `CLIENT_AUTH` may be named beside it; any other
+extended key usage is refused with 400 / `InvalidArgument` and
+`ErrInstallerExtKeyUsage`, and an `is_ca` request naming it is refused with
+`ErrCAExtKeyUsageUnsupported`. The daemon classifies installers by this marker
+(`issuance.HasInstallerMarker`), not by binding history (`docs/ipxe/api.md`).
+
 Renewal also refuses a CA certificate that carries name constraints (any
 permitted or excluded DNS, IP, email or URI subtree, RFC 5280 §4.2.1.10) or an
 extended key usage OID Go does not recognize, with
