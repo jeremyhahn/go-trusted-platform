@@ -238,9 +238,7 @@ are not a stable interface. Parse JSON.
    `platformd` uses, and they disagree about which schemes exist. Recorded, not
    resolved here.
 2. **`isResolverAvailable` is hard-coded**, by its own admission.
-3. **No tests.** There is no `secrets*_test.go` under
-   `pkg/cli/commands/bootstrap/` (globbed 2026-08-18).
-4. **CLI parity suite.** Every verb here should have a matching
+3. **CLI parity suite.** Every verb here should have a matching
    `CommandDefinition`. **This repository defines no `CommandDefinition` type**
    (grepped repo-wide, 2026-08-18), so the requirement is unmet repo-wide.
 

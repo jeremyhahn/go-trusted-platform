@@ -336,7 +336,7 @@ func setupTestGateway(t *testing.T) string {
 	})
 
 	runCmd(t, "ip", "netns", "add", ns)
-	runCmd(t, "ip", "link", "add", hostIf, "type", "veth", "peer", "name", peerIf)
+	runCmd(t, "ip", testenv.VethArgs(hostIf, peerIf)...)
 	runCmd(t, "ip", "link", "set", peerIf, "netns", ns)
 	runCmd(t, "ip", "addr", "add", hostCIDR, "dev", hostIf)
 	runCmd(t, "ip", "link", "set", hostIf, "up")

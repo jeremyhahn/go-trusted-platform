@@ -49,5 +49,21 @@ vulnerabilities:
   - id: CVE-2026-109869
     paths:
       - "usr/local/lib/node_modules/npm/node_modules/undici/package.json"
-    statement: "undici 6.28.0 bundled by npm in the dev/CI devcontainer, not a shipped artifact: DoS in npm's HTTP client; waits for npm 12.2.2 or 11.21.2 (bundling undici >= 6.29.1; 12.2.1 and 11.21.1 bundle 6.29.0); the npm pin lands and this entry is removed in the same PR when the fix ships (#1025; CA m1115, ruling 125)"
-    expired_at: 2026-10-31
+    statement: "undici 6.28.0 bundled by npm in the dev/CI devcontainer, not a shipped artifact: DoS in npm's HTTP client; waits for npm 12.2.2 or 11.21.2 (bundling undici >= 6.29.1; 12.2.1 and 11.21.1 bundle 6.29.0); the npm pin lands and this entry is removed in the same PR when the fix ships (#1025; CA m1115, ruling 125); re-checked 2026-10-31: no npm 11.21.2 or 12.2.2 published, Node v24.22.2 ships npm 11.19.1 (main run 73338)"
+    expired_at: 2026-11-30
+  # Added 2026-10-28 (#1140, main red at 37987ec06, CI run 69995). Fixed in
+  # undici 6.29.1, but no Node 24 release bundles it: v24.22.1, the newest on
+  # nodejs.org/dist/index.json, ships npm 11.19.1 with undici 6.28.0, and the
+  # newest npm 11 (11.21.1) bundles 6.29.0. Remove both entries and bump
+  # NODE_VERSION in scripts/tool-pins.sh when a Node 24 release bundles undici
+  # >= 6.29.1.
+  - id: CVE-2026-109383
+    paths:
+      - "usr/local/lib/node_modules/npm/node_modules/undici/package.json"
+    statement: "undici 6.28.0 bundled by npm in the dev/CI devcontainer, not a shipped artifact: certificate validation bypass via TLS options dropped in Agent; npm is a build-time tool not reachable from any shipped binary and talks only to the npm registry; no Node 24 release bundles undici >= 6.29.1 (#1140)"
+    expired_at: 2026-11-30
+  - id: CVE-2026-87018
+    paths:
+      - "usr/local/lib/node_modules/npm/node_modules/undici/package.json"
+    statement: "undici 6.28.0 bundled by npm in the dev/CI devcontainer, not a shipped artifact: DoS via TLS renegotiation; npm is a build-time tool not reachable from any shipped binary and talks only to the npm registry; no Node 24 release bundles undici >= 6.29.1 (#1140)"
+    expired_at: 2026-11-30

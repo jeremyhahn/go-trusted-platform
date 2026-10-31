@@ -142,7 +142,7 @@ curl -s -X POST https://platform.example.com/api/v1/pxe/stop
 
 ```bash
 platformctl iso profile list
-platformctl iso validate ./install-config.yaml
+platformctl iso profile validate ./install-config.yaml
 platformctl iso build ...
 platformctl iso test ...
 ```
@@ -213,8 +213,9 @@ Authorizing a PXE device needs `pxe:write` and fulfilling a provisioning session
 where the scope sits on top of the admin role. Signing a Secure Boot digest is
 pre-auth on gRPC: the machine proves itself inside the request (single-use
 nonce, EAB HMAC, EK-certificate binding), not with a platform token. On MCP the
-BMC tools are mapped; the `provision_*` tools are not, so every caller is
-refused them, and no `pxe_*` tool is registered. **One open path remains:** the
+BMC, `pxe_*` and `provision_*` tools take the scopes of their gRPC twins, and
+the four device-facing `provision_*` tools are open as their gRPC methods are.
+**One open path remains:** the
 install-completion webhook `POST /api/v1/pxe/webhook/complete` presents no
 credential (#238). See [api.md](api.md) §6 and
 [`docs/ipxe/api.md`](../ipxe/api.md) §5.

@@ -14,8 +14,10 @@ The QEMU orchestrator now automatically provisions and manages software TPM (swt
 ### Components
 
 1. **QEMUOrchestrator**: Main orchestrator managing VM instances
-2. **qemuInstance**: Extended to include swtpm reference
-3. **swtpm.SWTPM**: Software TPM implementation from `pkg/swtpm`
+2. **qemuInstance**: holds its swtpm as the `tpmEmulator` interface
+   (`swtpm tpmEmulator`)
+3. **swtpm.SWTPM**: Software TPM implementation from `pkg/swtpm`, the default
+   `tpmEmulator` the orchestrator's `emulatorFor` seam opens
 
 `Create` sources the swtpm in `provisionVTPM` (`pkg/compute/qemu.go`):
 
@@ -118,8 +120,12 @@ tpmSocket := instance.Metadata["tpm_socket"]
 
 ### Disabling TPM
 
-There is no per-instance switch. `Create` sets `TPMEnabled: true` and
-provisions the TPM before it returns. `Start` launches swtpm whenever the
+The per-instance switch is `VMSpec.DisableTPM` (`pkg/compute/vm_create.go`),
+which the daemon sets from a CreateVM request carrying `tpm.enabled: false`
+(`platformctl compute create --tpm=false`). `CreateWithSpec` sets
+`TPMEnabled: !spec.DisableTPM` and, when it is enabled, provisions the TPM
+before it returns; plain `Create` is `CreateWithSpec` with an empty `VMSpec`,
+so it always gets a TPM. `Start` launches swtpm whenever the
 instance holds one, so setting `instance.Config.TPMEnabled = false` after
 `Create` has no effect.
 
@@ -128,7 +134,7 @@ instance holds one, so setting `instance.Config.TPMEnabled = false` after
 ### createSWTPM Helper
 
 ```go
-func (o *QEMUOrchestrator) createSWTPM(ctx context.Context, instanceID, workDir string) (*swtpm.SWTPM, error)
+func (o *QEMUOrchestrator) createSWTPM(ctx context.Context, instanceID, workDir string) (tpmEmulator, error)
 ```
 
 Creates and initializes an swtpm instance:

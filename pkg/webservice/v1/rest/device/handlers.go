@@ -20,7 +20,6 @@ import (
 	"strconv"
 
 	"github.com/gorilla/mux"
-	"gopkg.in/yaml.v3"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
@@ -367,7 +366,7 @@ func (h *DeviceTemplateHandlers) HandleGetConfig(w http.ResponseWriter, r *http.
 		return
 	}
 
-	yamlBytes, err := yaml.Marshal(configData)
+	yamlBytes, err := entities.MarshalConfigYAML(configData)
 	if err != nil {
 		h.logger.Errorf("device: failed to marshal config to YAML: profile_id=%d error=%v", profile.ID, err)
 		h.responseWriter.Error500(w, r, ErrConfigMarshalFailed{Cause: err})

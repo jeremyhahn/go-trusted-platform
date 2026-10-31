@@ -28,9 +28,10 @@ The gRPC `DNSService` declares 13 RPCs: `CreateZone`, `GetZone`, `UpdateZone`,
 `ListRecords`, `SignZone`, `GetDNSSECStatus`, `Resolve` and `Register`.
 
 The transports do not carry the same set. Get record exists on REST, QUIC and
-MCP but not gRPC; update record exists on gRPC, QUIC and MCP but not REST;
-signing and DNSSEC status exist only on REST, gRPC and embedded. The full
-per-transport matrix is [api.md](api.md) §2.
+MCP but not gRPC. Update record exists on REST, gRPC and MCP; the daemon serves
+it on QUIC too, but the SDK QUIC adapter does not map it. Signing and DNSSEC
+status exist on REST, gRPC, MCP (`dns_zone_sign`, `dns_zone_dnssec_status`) and
+embedded, not QUIC. The full per-transport matrix is [api.md](api.md) §2.
 
 TLSA records are added through add record with type `TLSA`. The platform's
 own DANE publishing calls `dns.Service.AddTLSARecord` in-process
@@ -51,8 +52,13 @@ is [api.md](api.md) §5.
 ### One backend, and the answer without one
 
 Every transport reaches the one DNS service a `dns:` section starts. gRPC,
-the Unix socket and the embedded SDK transport share one `DNSServiceServer`;
-QUIC, MCP and REST hold the same `*dns.Service`.
+the Unix socket, the embedded SDK transport, the REST handlers
+(`pkg/webservice/v1/rest/dns/handlers.go`), the SDK-mapped QUIC operations and
+MCP's newer tools (`dns_zone_*`, `dns_record_*`, `dns_register`,
+`dns_lookup`) all go through a `DNSServiceServer`
+(`pkg/api/daemon/dns_grpc_service.go`). QUIC's flat-wire operations
+(`pkg/api/daemon/quic_dns.go`) and MCP's older tool family call the same
+`*dns.Service` directly.
 
 With no `dns:` section there is no backend, and every DNS call answers the
 not-configured error before it reads its input:

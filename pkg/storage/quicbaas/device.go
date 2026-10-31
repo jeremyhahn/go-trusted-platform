@@ -15,10 +15,10 @@ package quicbaas
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 )
 
 const entityTypeDevice = "Device"
@@ -59,7 +59,7 @@ func (d *DeviceDAO) FindBySerial(ctx context.Context, serial string) (*entities.
 	}
 
 	var device entities.Device
-	if err := json.Unmarshal(results[0].Data, &device); err != nil {
+	if err := datastore.DecodeEntity(results[0].Data, &device); err != nil {
 		return nil, ErrDeserializationFailed{EntityType: entityTypeDevice, Cause: err}
 	}
 	// VERIFY the index hit: a backend without this secondary index can
@@ -91,7 +91,7 @@ func (d *DeviceDAO) FindByHostname(ctx context.Context, hostname string) (*entit
 	}
 
 	var device entities.Device
-	if err := json.Unmarshal(results[0].Data, &device); err != nil {
+	if err := datastore.DecodeEntity(results[0].Data, &device); err != nil {
 		return nil, ErrDeserializationFailed{EntityType: entityTypeDevice, Cause: err}
 	}
 	// VERIFY the index hit — see FindBySerial: an unfiltered index
@@ -119,7 +119,7 @@ func (d *DeviceDAO) GetByModel(ctx context.Context, model string) ([]*entities.D
 
 		for _, entity := range svcEntities {
 			var device entities.Device
-			if err := json.Unmarshal(entity.Data, &device); err != nil {
+			if err := datastore.DecodeEntity(entity.Data, &device); err != nil {
 				d.logger.Warn("Failed to deserialize device", "id", entity.ID, "error", err)
 				continue
 			}
@@ -150,7 +150,7 @@ func (d *DeviceDAO) getDeviceByScan(ctx context.Context, field, value string) (*
 
 		for _, entity := range svcEntities {
 			var device entities.Device
-			if err := json.Unmarshal(entity.Data, &device); err != nil {
+			if err := datastore.DecodeEntity(entity.Data, &device); err != nil {
 				d.logger.Warn("Failed to deserialize device", "id", entity.ID, "error", err)
 				continue
 			}

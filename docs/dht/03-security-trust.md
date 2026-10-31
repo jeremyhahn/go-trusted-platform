@@ -5855,7 +5855,7 @@ func deriveAESKey(sharedSecret []byte) ([]byte, error) {
 
 ### Integration with go-xkms for Quantum-Safe Certificates
 
-The go-xkms CA component (pkg/ca, formerly go-trusted-ca, consumed via go-quicbaas SDK) supports quantum-safe X.509 certificates with ML-DSA signatures:
+The platform CA (`pkg/ca` in this repository, built on the go-xkms re-exports of the go-quicbaas SDK) is designed to support quantum-safe X.509 certificates with ML-DSA signatures:
 
 ```go
 import (

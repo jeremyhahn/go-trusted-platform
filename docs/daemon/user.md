@@ -223,7 +223,9 @@ Both scope catalogs **refuse anything unlisted**. Every gRPC RPC carries a
 required scope: the `PlatformDaemon` observers need `platform:read`,
 `UpdateConfig`, `ReloadConfig` and the service start/stop/restart calls need
 `platform:write`, and `Shutdown` and `DumpEntityType` need `platform:admin`.
-Only `grpc.health.v1.Health/Check` answers without a token.
+Only the probes answer without a token: `grpc.health.v1.Health/Check` and
+`PlatformDaemon/Liveness` and `/Readiness`, which an orchestrator calls before
+it holds a credential.
 
 On MCP every tool is classified. `platform_daemon_status`, `_version`,
 `_list_services` and `_get_service` need `platform:read`, and the service
@@ -235,7 +237,7 @@ picture is in [api.md](api.md) §5.
 
 ## Where to go next
 
-- [cli.md](cli.md) — global flags, the 41 command groups, the six binaries
+- [cli.md](cli.md) — global flags, the 50 top-level commands, the six binaries
 - [api.md](api.md) — the transport model and the **canonical QUIC
   category-opcode table**
 - [architecture.md](architecture.md) — how one daemon serves six transports

@@ -84,6 +84,7 @@ in use, and `client.Ping(ctx)` checks the daemon.
 | `WithOnlyProtocol(platform.Protocol)` | none |
 | `WithEmbeddedServices(*embedded.ServiceRegistry)` | none |
 | `WithQuicBaaSAddr(addr)`, `WithQuicBaaSTransport(name)` | none; transport auto-detected |
+| `WithQuicBaaSTLSConfig(*tls.Config)` | none; required with `WithQuicBaaSAddr` (see [§5](#5-go-quicbaas-services)) |
 
 `platform.ConnectUnix(ctx, opts)` and `platform.ConnectGRPC(ctx, opts)` connect
 with one protocol and no fallback.
@@ -142,8 +143,9 @@ import "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/ca"
 info, err := ca.NewClientFromGRPC(client.CA()).GetCAInfo(ctx)
 ```
 
-A service without a `Client` accessor is reached through its wrapper and an
-adapter from the transport package's `Connect`:
+A wrapper can also be built without a `platform.Client`, on an adapter from a
+transport package's `Connect`; every wrapper's `NewClient` takes a
+`transport.Adapter`:
 
 ```go
 import (
@@ -168,6 +170,7 @@ client, err := platform.NewClient(ctx,
     platform.WithUnixSocket("/run/platformd.sock"),
     platform.WithQuicBaaSAddr("baas.example.com:10443"),
     platform.WithQuicBaaSTransport("grpc"),
+    platform.WithQuicBaaSTLSConfig(baasTLS), // *tls.Config for quicbaasd
 )
 qb, err := client.QuicBaaS()
 if err != nil {
@@ -176,6 +179,9 @@ if err != nil {
 keys := qb.Security().KMS()
 ```
 
+The go-quicbaas SDK refuses every connection without TLS, so an address
+without `WithQuicBaaSTLSConfig` makes `QuicBaaS()` return
+`ErrQuicBaaSInitFailed` wrapping `ErrQuicBaaSTLSNotConfigured`.
 `WithQuicBaaSTransport` takes `unix`, `grpc`, `rest`, `quic` or `mcp`; an empty
 value auto-detects. Any other name makes `QuicBaaS()` return
 `ErrQuicBaaSInitFailed` wrapping `ErrProtocolNotSupported`; platformd services

@@ -17,7 +17,7 @@
 | `CreateCredential` | Generates a credential; the response is the **only** place the HMAC key (base64url, no padding) is ever returned. `expires_in_seconds` 0 = no expiry; negative is `InvalidArgument`. |
 | `GetCredential` / `GetCredentialByKeyID` | Lookup by id / KeyID; HMAC key never included. |
 | `ListCredentials` | Filter cascade: `profile_id` (with `tenant_id` refining), else `tenant_id`, else the full store. `status_filter` / `active_only` refine; pagination applies last so totals reflect the filtered set. `sort_by` supports `id` (default) and `created_at` with the `ascending` flag; unknown fields are `InvalidArgument`. |
-| `RevokeCredential` | Marks revoked; `revoker_id` recorded in the audit log. |
+| `RevokeCredential` | Marks revoked; `revoker_id` is only written to the daemon log, not stored with the credential. |
 | `ValidateCredential` | Constant-time `(key_id, hmac_key)` check. Validation failures return `valid=false` + `error_message` in-band (not an RPC error); malformed base64 is `InvalidArgument`. |
 | `DeleteCredential` | Permanent removal. |
 | `GetCredentialQRCode` | PNG QR at the requested pixel `size` (0 = configured default, negative = `InvalidArgument`). |

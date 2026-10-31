@@ -13,8 +13,13 @@
 
 **IMA has no service surface. Every capability is embedded-only.** Verified
 2026-08-18: no REST route, no gRPC service or RPC, no QUIC opcode, no MCP tool,
-and no `ServiceRegistry` field mentions IMA. Nothing in this repository even
-imports `pkg/ima`.
+and no `ServiceRegistry` field mentions IMA. The one importer of `pkg/ima` is
+the VPN agent's posture report (`pkg/vpn/agent/posture.go`): it calls
+`NewReader(WithSecurityFSPath(...)).GetStatus()` and sends `available`,
+`enabled`, `policy_loaded` and a SHA-256 `log_digest` of
+`ascii_runtime_measurements` as `IMAPosture` to the gateway, where
+`vpn_posture.rego` evaluates it. That is a VPN posture field, not an IMA
+service; `platformctl vpn posture` prints the three booleans.
 
 That makes every non-embedded cell in every table below `MISSING`. The tables
 exist anyway, because a capability documented on one transport tells the reader

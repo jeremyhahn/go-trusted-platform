@@ -25,67 +25,27 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // =============================================================================
 // Environment Variable Constants
 // =============================================================================
 
+// The transport endpoints are the variables the runner exports with the
+// ports it chose for platformd at run time (#997); there are no defaults.
 const (
-	// EnvPlatformdGRPCEndpoint is the environment variable for platformd gRPC endpoint.
-	// Default: 127.0.0.1:10443
-	EnvPlatformdGRPCEndpoint = "PLATFORMD_GRPC_ENDPOINT"
-
-	// EnvPlatformAPIEndpoint is the environment variable for the platformd REST endpoint.
-	// Default: 127.0.0.1:8443
-	EnvPlatformAPIEndpoint = "PLATFORM_API_ENDPOINT"
-
-	// EnvPlatformdQUICEndpoint is the environment variable for platformd QUIC endpoint.
-	// Default: 127.0.0.1:9444
-	EnvPlatformdQUICEndpoint = "PLATFORMD_QUIC_ENDPOINT"
-
-	// EnvPlatformdMCPEndpoint is the environment variable for platformd MCP endpoint.
-	// Default: 127.0.0.1:9445
-	EnvPlatformdMCPEndpoint = "PLATFORMD_MCP_ENDPOINT"
-
-	// EnvPlatformdUnixSocket is the environment variable for platformd Unix socket.
-	// Default: /run/platformd.sock
-	EnvPlatformdUnixSocket = "PLATFORMD_UNIX_SOCKET"
-
-	// EnvRegistryEndpoint is the environment variable for registry endpoint.
-	// Default: 127.0.0.1:5000
-	EnvRegistryEndpoint = "REGISTRY_ENDPOINT"
-)
-
-// =============================================================================
-// Default Endpoints
-// =============================================================================
-
-const (
-	// DefaultPlatformdGRPCEndpoint is the default platformd gRPC endpoint.
-	DefaultPlatformdGRPCEndpoint = "127.0.0.1:10443"
-
-	// DefaultPlatformAPIEndpoint is the default platformd REST endpoint.
-	DefaultPlatformAPIEndpoint = "127.0.0.1:8443"
-
-	// DefaultPlatformdQUICEndpoint is the default platformd QUIC endpoint.
-	DefaultPlatformdQUICEndpoint = "127.0.0.1:9444"
-
-	// DefaultPlatformdMCPEndpoint is the default platformd MCP endpoint.
-	DefaultPlatformdMCPEndpoint = "127.0.0.1:9445"
-
-	// DefaultPlatformdUnixSocket is the default platformd Unix socket path.
-	DefaultPlatformdUnixSocket = "/run/platformd.sock"
-
-	// DefaultRegistryEndpoint is the default registry endpoint.
-	DefaultRegistryEndpoint = "127.0.0.1:5000"
+	EnvPlatformdGRPCEndpoint = helpers.EnvGRPCEndpoint
+	EnvPlatformAPIEndpoint   = helpers.EnvAPIEndpoint
+	EnvPlatformdQUICEndpoint = helpers.EnvQUICEndpoint
+	EnvPlatformdMCPEndpoint  = helpers.EnvMCPEndpoint
 )
 
 // =============================================================================
@@ -105,41 +65,6 @@ const (
 	// MediaTypeImageLayer is the OCI uncompressed layer media type.
 	MediaTypeImageLayer = "application/vnd.oci.image.layer.v1.tar"
 )
-
-// =============================================================================
-// Endpoint Configuration
-// =============================================================================
-
-// ServiceEndpoints contains all configured service endpoints.
-type ServiceEndpoints struct {
-	PlatformdGRPC string
-	PlatformAPI   string
-	PlatformdQUIC string
-	PlatformdMCP  string
-	PlatformdUnix string
-	RegistryAddr  string
-}
-
-// GetServiceEndpoints returns service endpoints from environment
-// variables with sensible defaults.
-func GetServiceEndpoints() ServiceEndpoints {
-	return ServiceEndpoints{
-		PlatformdGRPC: getEnvOrDefault(EnvPlatformdGRPCEndpoint, DefaultPlatformdGRPCEndpoint),
-		PlatformAPI:   getEnvOrDefault(EnvPlatformAPIEndpoint, DefaultPlatformAPIEndpoint),
-		PlatformdQUIC: getEnvOrDefault(EnvPlatformdQUICEndpoint, DefaultPlatformdQUICEndpoint),
-		PlatformdMCP:  getEnvOrDefault(EnvPlatformdMCPEndpoint, DefaultPlatformdMCPEndpoint),
-		PlatformdUnix: getEnvOrDefault(EnvPlatformdUnixSocket, DefaultPlatformdUnixSocket),
-		RegistryAddr:  getEnvOrDefault(EnvRegistryEndpoint, DefaultRegistryEndpoint),
-	}
-}
-
-// getEnvOrDefault returns the environment variable value or the default if not set.
-func getEnvOrDefault(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
-}
 
 // =============================================================================
 // Test Data Generators

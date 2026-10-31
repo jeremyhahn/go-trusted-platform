@@ -19,6 +19,7 @@ import (
 	"errors"
 	"log/slog"
 	"net"
+	"net/netip"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -32,11 +33,16 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/calleradmission"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/ipc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/process"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/proxysvc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/vpn"
+	gwstate "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/state"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam/backends"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 )
 
@@ -367,6 +373,15 @@ type serviceRun struct {
 	readCalls   int
 	hardenedUID uint32
 	hardenedGID uint32
+	// leaseGateways are the gateways the vpn lease record was asked for.
+	leaseGateways []*gateway.Gateway
+	leaseErr      error
+	// gatewayConfig, when set, is the gateway built in place of the one
+	// hosting the fake handler, given the services serveProcess chose.
+	gatewayConfig *gateway.GatewayConfig
+	// leaseControl and journal, when set, are the lease record handed out.
+	leaseControl gateway.VPNLeaseControl
+	journal      *gateway.RevocationJournal
 }
 
 func newServiceRun() *serviceRun {
@@ -397,19 +412,50 @@ func (r *serviceRun) deps() serviceDeps {
 			if r.buildErr != nil {
 				return nil, r.buildErr
 			}
-			gw, err := gateway.NewGateway(&gateway.GatewayConfig{Enabled: true, ID: "gw-test"})
+			gwCfg := &gateway.GatewayConfig{Enabled: true, ID: "gw-test"}
+			if r.gatewayConfig != nil {
+				gwCfg = r.gatewayConfig
+				gwCfg.HostedServices = cfg.Gateway.HostedServices
+			}
+			gw, err := gateway.NewGateway(gwCfg)
 			if err != nil {
 				return nil, err
 			}
 			// Admit the node at its own minimums, as BuildGateway does.
-			gwCfg := gw.GetConfig()
+			gwCfg = gw.GetConfig()
 			gw.SetNodeMetrics(gwCfg.MinReputation, time.Duration(gwCfg.MinAgeDays)*24*time.Hour, gwCfg.MinUptimePct)
+			if r.gatewayConfig != nil {
+				return gw, nil
+			}
 			if err := gw.RegisterServiceHandler(r.handler); err != nil {
 				return nil, err
 			}
 			return gw, nil
 		},
+		vpnLeaseControl: func(_ context.Context, _ *ServeConfig, gw *gateway.Gateway, _ *slog.Logger) (gateway.VPNLeaseControl, *gateway.RevocationJournal, error) {
+			r.leaseGateways = append(r.leaseGateways, gw)
+			if r.leaseErr != nil {
+				return nil, nil, r.leaseErr
+			}
+			if r.leaseControl != nil {
+				return r.leaseControl, r.journal, nil
+			}
+			return fakeLeaseControl{}, nil, nil
+		},
 	}
+}
+
+// fakeLeaseControl stands in for the control plane's lease record; serveProcess
+// only hands it to the gateway, so none of its methods is called.
+type fakeLeaseControl struct{ gateway.VPNLeaseControl }
+
+// newVPNServiceRun is a run whose configuration enables the management VPN,
+// hosted by the vpn process.
+func newVPNServiceRun() *serviceRun {
+	run := newServiceRun()
+	run.handler = &fakeServiceHandler{name: gateway.ServiceManagementVPN}
+	run.loaded.Gateway.ManagementVPN = &gateway.ManagementVPNServiceConfig{Enabled: true}
+	return run
 }
 
 // serviceTestOptions puts the control socket in a test directory and admits
@@ -479,6 +525,142 @@ func TestServeProcess_HostsItsOwnServicesAndServesTheSupervisor(t *testing.T) {
 	assert.Equal(t, []string{gateway.ServiceTransit}, run.built.Gateway.HostedServices,
 		"DHCP is enabled but belongs to another process")
 	assert.Nil(t, run.built.Gateway.Supervisor)
+	assert.Empty(t, run.leaseGateways, "only the process hosting the VPN builds its lease record")
+}
+
+func TestServeProcess_TheVPNProcessWiresItsLeaseRecord(t *testing.T) {
+	run := newVPNServiceRun()
+	opts := serviceTestOptions(t)
+
+	cancel, done := startServiceProcess(t, "vpn", run, opts)
+	require.Eventually(t, func() bool {
+		_, active, ok := processStatus(t, opts.socket)
+		return ok && active[gateway.ServiceManagementVPN]
+	}, 5*time.Second, 10*time.Millisecond, "the supervisor must see the VPN active")
+
+	cancel()
+	require.NoError(t, <-done)
+	assert.Equal(t, []string{gateway.ServiceManagementVPN}, run.built.Gateway.HostedServices)
+	require.Len(t, run.leaseGateways, 1, "the vpn child builds its own lease record")
+	assert.NotNil(t, run.leaseGateways[0])
+}
+
+// recordingLeaseControl is a control plane holding no VPN leases that counts
+// the fetches of its record.
+type recordingLeaseControl struct {
+	gateway.VPNLeaseControl
+	fetches atomic.Int32
+}
+
+func (c *recordingLeaseControl) FetchDesiredConfig(context.Context) (*gwstate.DesiredConfig, error) {
+	c.fetches.Add(1)
+	return &gwstate.DesiredConfig{}, nil
+}
+
+// idleVPNPlane is a MASQUE plane that starts and stops; the tests admit no
+// client, so no peer is installed on it.
+type idleVPNPlane struct{ vpn.ManagedDataPlane }
+
+func (idleVPNPlane) Kind() vpn.DataPlaneKind     { return vpn.DataPlaneMASQUE }
+func (idleVPNPlane) Start(context.Context) error { return nil }
+func (idleVPNPlane) Stop(context.Context) error  { return nil }
+
+// The admission dependencies are reached only when a client connects, which
+// these tests never do.
+type (
+	unusedVPNIdentity struct{ vpn.IdentityPolicy }
+	unusedVPNVerifier struct{ vpn.Verifier }
+	unusedVPNPosture  struct{ vpn.PostureEvaluator }
+	unusedVPNFactors  struct{ vpn.FactorVerifier }
+	unusedVPNAudit    struct{ calleradmission.Auditor }
+)
+
+// vpnGatewayConfig is a gateway that builds the real management VPN, its
+// admission listener on a free loopback port.
+func vpnGatewayConfig(t *testing.T) *gateway.GatewayConfig {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := ln.Addr().(*net.TCPAddr).Port
+	require.NoError(t, ln.Close())
+
+	bundle := testutil.GenerateTestTLSBundle(t)
+	return &gateway.GatewayConfig{
+		Enabled:       true,
+		ID:            "gw-vpn-test",
+		MinReputation: gateway.MinReputation,
+		MinAgeDays:    gateway.MinAgeDays,
+		MinUptimePct:  gateway.MinUptimePct,
+		ManagementVPN: &gateway.ManagementVPNServiceConfig{Enabled: true, Config: vpn.Config{
+			Pool:     "remote-access",
+			AllowTo:  []string{"management"},
+			Listener: vpn.ListenerConfig{BindHost: "127.0.0.1", Port: port},
+			MASQUE: vpn.MASQUESettings{
+				Template: "https://gw.example:4433/.well-known/masque/ip/",
+				Routes:   []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")},
+			},
+		}},
+		Runtime: &gateway.GatewayRuntime{VPN: &gateway.VPNRuntime{
+			Identity: unusedVPNIdentity{},
+			Verifier: unusedVPNVerifier{},
+			Posture:  unusedVPNPosture{},
+			Factors:  unusedVPNFactors{},
+			IPAM:     backends.NewMemoryBackend(),
+			DataPlanes: map[vpn.DataPlaneKind]gateway.VPNDataPlaneFactory{
+				vpn.DataPlaneMASQUE: func(*slog.Logger) (vpn.ManagedDataPlane, error) { return idleVPNPlane{}, nil },
+			},
+			Audit:    unusedVPNAudit{},
+			Listener: vpn.ListenerDeps{Certificate: bundle.ServerCert, ClientCAs: fileAnchor(t, bundle.CACertPEM)},
+		}},
+	}
+}
+
+// TestServeProcess_TheVPNStartsFromItsLeaseRecord: the vpn child's real
+// management VPN rebuilds its leases from the control plane's record it was
+// handed before it serves.
+func TestServeProcess_TheVPNStartsFromItsLeaseRecord(t *testing.T) {
+	run := newVPNServiceRun()
+	run.gatewayConfig = vpnGatewayConfig(t)
+	control := &recordingLeaseControl{}
+	run.leaseControl = control
+	run.journal = gateway.NewRevocationJournal(filepath.Join(t.TempDir(), "vpn-revocations.json"))
+	opts := serviceTestOptions(t)
+
+	cancel, done := startServiceProcess(t, "vpn", run, opts)
+	require.Eventually(t, func() bool {
+		_, active, ok := processStatus(t, opts.socket)
+		return ok && active[gateway.ServiceManagementVPN]
+	}, 5*time.Second, 10*time.Millisecond, "the supervisor must see the VPN active")
+
+	cancel()
+	require.NoError(t, <-done)
+	assert.Equal(t, int32(1), control.fetches.Load(), "the VPN fetches its lease record once, at start")
+}
+
+// TestServeProcess_TheVPNReadsTheJournalItWasHanded: a journal the child
+// cannot parse refuses the VPN's start, named in the start error the
+// supervisor reads, so the journal handed to the child is the one it uses.
+func TestServeProcess_TheVPNReadsTheJournalItWasHanded(t *testing.T) {
+	run := newVPNServiceRun()
+	run.gatewayConfig = vpnGatewayConfig(t)
+	run.leaseControl = &recordingLeaseControl{}
+	journalPath := filepath.Join(t.TempDir(), "vpn-revocations.json")
+	require.NoError(t, os.WriteFile(journalPath, []byte("not json"), 0o600))
+	run.journal = gateway.NewRevocationJournal(journalPath)
+	opts := serviceTestOptions(t)
+
+	cancel, done := startServiceProcess(t, "vpn", run, opts)
+	var startErr string
+	require.Eventually(t, func() bool {
+		var ok bool
+		startErr, _, ok = processStatus(t, opts.socket)
+		return ok && startErr != ""
+	}, 5*time.Second, 10*time.Millisecond, "the start error must be readable over the control service")
+
+	cancel()
+	require.NoError(t, <-done)
+	assert.Contains(t, startErr, journalPath)
+	assert.Contains(t, startErr, "parse")
 }
 
 func TestServeProcess_TheProxyProcessHostsOnlyTheProxy(t *testing.T) {
@@ -637,6 +819,20 @@ func TestServeProcess_RefusesBeforeServing(t *testing.T) {
 				var socketErr *ipc.ErrSocketPath
 				require.ErrorAs(t, err, &socketErr)
 				assert.False(t, run.handler.active.Load(), "no service starts without the supervisor's socket")
+			},
+		},
+		{
+			name:    "the vpn lease record does not assemble",
+			process: "vpn",
+			setup: func(run *serviceRun, _ *serviceOptions) {
+				vpnRun := newVPNServiceRun()
+				run.handler, run.loaded = vpnRun.handler, vpnRun.loaded
+				run.leaseErr = failure
+			},
+			check: func(t *testing.T, err error, run *serviceRun) {
+				require.ErrorIs(t, err, failure)
+				require.Len(t, run.leaseGateways, 1)
+				assert.False(t, run.handler.active.Load(), "the VPN does not start without its lease record")
 			},
 		},
 	}

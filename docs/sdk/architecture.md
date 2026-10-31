@@ -129,11 +129,13 @@ daemon authorizes the caller.
 The platform is the top layer of the stack. It reaches go-quicbaas and the
 layers below it only through the go-quicbaas SDK. `Options.QuicBaaSAddr` and
 `Options.QuicBaaSTransport` make `Connect` open a second client, a
-`quicbaas.Client`, next to the platform connection. `Client.QuicBaaS()` returns
-it.
+`quicbaas.Client`, next to the platform connection, over the TLS configuration
+in `Options.QuicBaaSTLSConfig`. `Client.QuicBaaS()` returns it.
 
 - A failure to open it does not fail `Connect`; `QuicBaaS()` returns
-  `ErrQuicBaaSInitFailed`.
+  `ErrQuicBaaSInitFailed`. An address without `QuicBaaSTLSConfig` is such a
+  failure (`ErrQuicBaaSTLSNotConfigured`): the go-quicbaas SDK refuses every
+  connection without TLS.
 - With no address configured, `QuicBaaS()` returns `ErrQuicBaaSNotConfigured`.
 - `Close()` closes the side-client first, then the platform adapter.
 
