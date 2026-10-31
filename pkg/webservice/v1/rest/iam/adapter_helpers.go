@@ -17,10 +17,6 @@ import "strconv"
 
 // intToString formats an int64 as a base-10 string. Wrapped to keep the
 // adapter file purely declarative.
-func intToString(n int64) string {
-	return strconv.FormatInt(n, 10)
-}
-
 // parseInt parses a base-10 string into an int64. Invalid values
 // silently return 0 — adapter writers should only call this on values
 // they have round-tripped through intToString.
