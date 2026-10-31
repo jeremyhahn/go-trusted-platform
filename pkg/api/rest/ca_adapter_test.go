@@ -16,6 +16,7 @@ package rest
 import (
 	"context"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
 	"testing"
 	"time"
@@ -23,6 +24,7 @@ import (
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	xkmsca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
 	"github.com/stretchr/testify/assert"
@@ -65,6 +67,9 @@ type fakeProdCA struct {
 	signErr         error
 	signedCSR       []byte
 	signOpts        *xkmsca.SignOptions
+	// caCert, when set, is the issuing CA certificate; otherwise an
+	// unconstrained CA answers.
+	caCert *x509.Certificate
 }
 
 func (f *fakeProdCA) Identity() string                                { return f.identity }
@@ -104,6 +109,9 @@ func (f *fakeProdCA) CertStore() xkmssdk.CertStore { return f.certStore }
 // CACertificate is an issuer without a pathLenConstraint, so issuance.Issue
 // lets an isCA request through as a real root CA would (RFC 5280 §4.2.1.9).
 func (f *fakeProdCA) CACertificate() (*x509.Certificate, error) {
+	if f.caCert != nil {
+		return f.caCert, nil
+	}
 	return &x509.Certificate{BasicConstraintsValid: true, IsCA: true, MaxPathLen: -1}, nil
 }
 
@@ -177,6 +185,36 @@ func TestCAAuthorityAdapter_IssueCertificate_CARequestUsesCAProfile(t *testing.T
 	_, err = NewCAAuthorityAdapter(leafProd).IssueCertificate(context.Background(), &quicbaasca.CACertificateRequest{})
 	require.NoError(t, err)
 	assert.Empty(t, leafProd.issuedProfile, "a leaf request keeps the default profile")
+}
+
+// A subordinate CA beneath a pathLen-0 issuer comes back as the typed
+// refusal, still an invalid request, so the handler answers 400; the CA is
+// never asked.
+func TestCAAuthorityAdapter_IssueCertificate_PathLenRefusalIsInvalidRequest(t *testing.T) {
+	prod := &fakeProdCA{caCert: &x509.Certificate{
+		Subject:               pkix.Name{CommonName: "Issuing CA"},
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		MaxPathLenZero:        true,
+	}}
+
+	_, err := NewCAAuthorityAdapter(prod).IssueCertificate(context.Background(), &quicbaasca.CACertificateRequest{IsCA: true})
+
+	var refusal *issuance.IssuerPathLenExhaustedError
+	require.ErrorAs(t, err, &refusal)
+	assert.Equal(t, "CN=Issuing CA", refusal.Issuer)
+	assert.True(t, issuance.IsInvalidRequest(err))
+	assert.Empty(t, prod.issuedProfile, "the CA was asked to sign a refused subordinate CA")
+}
+
+// A CA fault on a subordinate CA request is no invalid request.
+func TestCAAuthorityAdapter_IssueCertificate_CAFaultIsNotInvalidRequest(t *testing.T) {
+	fault := errors.New("hsm offline")
+
+	_, err := NewCAAuthorityAdapter(&fakeProdCA{issueErr: fault}).IssueCertificate(context.Background(), &quicbaasca.CACertificateRequest{IsCA: true})
+
+	require.ErrorIs(t, err, fault)
+	assert.False(t, issuance.IsInvalidRequest(err))
 }
 
 func TestCAAuthorityAdapter_IssueCertificate_PropagatesError(t *testing.T) {

@@ -39,6 +39,7 @@ import (
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	xkmsbackend "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/backend"
 	xkmsca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/stretchr/testify/assert"
@@ -2979,6 +2980,52 @@ func TestCAHandler_HandleIssue_IssueFails(t *testing.T) {
 
 	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 	assert.Contains(t, string(resp.Payload), "failed to issue certificate")
+}
+
+// pathLenZeroCA is a mockCA whose issuing certificate has pathLen 0, so it
+// may sign no subordinate CA (RFC 5280 §4.2.1.9).
+type pathLenZeroCA struct {
+	*mockCA
+}
+
+func (m *pathLenZeroCA) CACertificate() (*x509.Certificate, error) {
+	return &x509.Certificate{
+		Subject:               pkix.Name{CommonName: "Issuing CA"},
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		MaxPathLenZero:        true,
+	}, nil
+}
+
+// issueSubCA sends handler a subordinate CA issue request with pathLen 0.
+func issueSubCA(t *testing.T, handler *CAHandler) *quicwire.Response {
+	t.Helper()
+	payload, err := quicwire.EncodePayload(&CAIssueRequest{
+		Subject:   &Subject{CommonName: "sub-ca.example.com"},
+		ValidDays: 365,
+		IsCA:      true,
+	})
+	require.NoError(t, err)
+	return handler.HandleRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpCAIssue, Payload: payload})
+}
+
+// A subordinate CA beneath a pathLen-0 issuer answers the invalid argument
+// status with the refusal's message, and the CA is never asked.
+func TestCAHandler_HandleIssue_PathLenRefusalIsInvalidArgument(t *testing.T) {
+	ca := &pathLenZeroCA{mockCA: newMockCA()}
+
+	resp := issueSubCA(t, NewCAHandler(logging.DefaultLogger(), ca, nil))
+
+	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
+	assert.Equal(t, (&issuance.IssuerPathLenExhaustedError{Issuer: "CN=Issuing CA"}).Error(), string(resp.Payload))
+	assert.Empty(t, ca.issuedProfile, "the CA was asked to sign a refused subordinate CA")
+}
+
+// A CA fault on a subordinate CA request stays a server error.
+func TestCAHandler_HandleIssue_CAFaultIsInternal(t *testing.T) {
+	resp := issueSubCA(t, NewCAHandler(logging.DefaultLogger(), &mockCAIssueFails{mockCA: newMockCA()}, nil))
+
+	assert.Equal(t, quicwire.StatusInternalError, resp.Status)
 }
 
 // mockCARevokeFails is a mock CA where Revoke always fails
