@@ -437,7 +437,9 @@ Authorizing or quarantining a PXE device therefore needs `pxe:write`.
 `pxe:complete` authorizes the install-complete webhook and nothing else: it is
 the only permission an installer certificate holds (§4), so an installer can
 report its own completion but cannot change another device's state, stop the
-service, or reach any CA operation (Codex 8652).
+service, or reach any CA operation (Codex 8652). The gRPC mTLS listener
+enforces this too: its interceptors answer any other RPC from an installer
+certificate with `PermissionDenied` (Codex 8662).
 
 **QUIC and MCP take the same scopes (#704).** Each QUIC opcode and `0xCF` sub
 carries the scope of its RPC (`pkg/api/quic/opcode_permissions.go`), and each of

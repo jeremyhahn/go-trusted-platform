@@ -98,6 +98,14 @@ exactly those three, with `CAKeyUsageUnsupportedError` (Codex 8646), so a CA is
 never issued with a usage it was not given (RFC 5280 §4.2.1.3). An `is_ca`
 request with no key usage gets the profile's three.
 
+Every transport parses `key_usage` and `ext_key_usage` names through
+`issuance.ParseRequestUsages` (`pkg/ca/issuance/usage.go`, case-insensitive),
+and refuses an unknown name with 400 / `InvalidArgument`
+and `ErrUnsupportedUsage` naming that string, so a name is never silently
+dropped. An `is_ca` request carrying any `ext_key_usage`, even an unknown one
+such as `IPSEC_IKE`, is refused with `ErrCAExtKeyUsageUnsupported` before the
+names are converted (Codex 8662).
+
 Renewal also refuses a CA certificate that carries name constraints (any
 permitted or excluded DNS, IP, email or URI subtree, RFC 5280 §4.2.1.10) or an
 extended key usage OID Go does not recognize, with
