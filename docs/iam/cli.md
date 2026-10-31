@@ -225,7 +225,7 @@ platformctl iam app rotate-secret tenant-a c-9a3f
 | Group membership add / remove | REST, gRPC, QUIC, MCP |
 | Authenticate | gRPC, QUIC, MCP |
 | Create / verify / revoke a token | gRPC, QUIC (`0xF9`–`0xFB`), MCP |
-| Check a permission | REST `POST /api/v1/iam/permissions/check`, gRPC, QUIC, MCP |
+| Check a permission | REST `POST /api/v1/iam/permissions/check` (not mounted on the daemon until the SDK serves PEP, `api.md`), gRPC, QUIC, MCP |
 
 Platform tenancy — the VLAN/bridge/keyspace/DEK kind — is a different feature
 with its own CLI: `platformctl tenant` ([`docs/tenant/`](../tenant/)).

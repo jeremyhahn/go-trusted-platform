@@ -226,7 +226,7 @@ SDN and `0xF0`–`0xF5` are reserved `OpDEK*` bytes the daemon does not serve
 | Create token | refused by the SDK: `ErrNoRESTRoute` | refused, `Unimplemented` | `0xF9`, refused, `StatusNotImplemented` | `iam_create_token`, `iam:write`, refused | refused |
 | Verify token | refused by the SDK: `ErrNoRESTRoute` | ✅ | `0xFB` | `iam_verify_token`, `iam:read` | ✅ |
 | Revoke token | refused by the SDK: `ErrNoRESTRoute` | refused, `Unimplemented` | `0xFA`, refused, `StatusNotImplemented` | `iam_revoke_token`, `iam:write`, refused | refused |
-| Check permission | `POST /api/v1/iam/permissions/check`, `/tenants/{tenant}/permissions/check` | ✅ | `0xF7` | `iam_check_permission`, `iam:read` | ✅ |
+| Check permission | `POST /api/v1/iam/permissions/check`, `/tenants/{tenant}/permissions/check` (not mounted on the daemon, see below) | ✅ | `0xF7` | `iam_check_permission`, `iam:read` | ✅ |
 
 **`iam_authenticate` is refused** with `ErrIAMAuthenticationViaOIDC`
 (`Unimplemented`): `PlatformIAMService` has no Authenticate RPC and the IAM
@@ -389,6 +389,12 @@ Waiting on the SDK v0.16 adoption (#906):
 | `PUT .../policies/{id}` | `Policy/Update` |
 | `PUT .../apps/{id}` | `App/Update` |
 | `POST .../apps/{id}/rotate` | `App/RotateSecret` |
+| `POST .../apps` | `App/Register`: dispatched, but the response carries no `ClientSecret`, the only copy of the application's secret |
+| `POST .../permissions/check` | `PEP/Check`: dispatched, but the embedded handler always answers `ServiceNotConfiguredError("IAM.PEP")` |
+
+Tenant create (`POST /api/v1/iam/tenants`) and tenant update refuse a body
+carrying `settings` (`mfa_required`, `max_users`) with `400` before anything is
+written: the pinned SDK's tenant create and update never apply them.
 
 Installer and machine certificates are not admitted (#1153). The credential and
 the scopes are described in [`docs/daemon/api.md`](../daemon/api.md).
