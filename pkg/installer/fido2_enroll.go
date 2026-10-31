@@ -16,6 +16,7 @@ package installer
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -279,7 +280,7 @@ func (f *FIDO2Enrollment) Enroll(ctx context.Context) error {
 	if err != nil {
 		return &WrappedError{Msg: "failed to open the FIDO2 handler", Err: err}
 	}
-	err = f.enrollWithHandler(handler)
+	err = f.enrollWithHandler(ctx, handler)
 	if closeErr := handler.Close(); closeErr != nil {
 		fmt.Printf("Warning: failed to close the FIDO2 handler: %v\n", closeErr)
 	}
@@ -313,17 +314,26 @@ func randomRead(b []byte) (n int, err error) {
 // key the SDK derives from it (UnlockWithKey). That is the key the initrd
 // FIDO2 strategy derives at boot, so the slot is never keyed with the raw
 // hmac-secret. The token type luks.TokenTypeFIDO2 records that derivation.
-func (f *FIDO2Enrollment) enrollWithHandler(handler fido2.Handler) error {
+//
+// The context is checked before each authenticator call and before each
+// header write, and an authenticator call stops waiting when it ends, so a
+// cancelled installation never writes the keyslot or the token.
+func (f *FIDO2Enrollment) enrollWithHandler(ctx context.Context, handler fido2.Handler) error {
 	userID := make([]byte, 32)
 	if _, err := randomRead(userID); err != nil {
 		return &WrappedError{Msg: "failed to generate user ID", Err: err}
 	}
 
 	fmt.Println("Creating FIDO2 credential (touch your security key)...")
-	result, err := handler.EnrollKey(&fido2.EnrollmentConfig{
-		RelyingParty: fido2.RelyingParty{ID: f.config.RelyingPartyID, Name: f.config.RelyingPartyID},
-		User:         fido2.User{ID: userID, Name: f.config.UserName, DisplayName: f.config.UserName},
+	result, err := awaitAuthenticator(ctx, "create the credential", func() (*fido2.EnrollmentResult, error) {
+		return handler.EnrollKey(&fido2.EnrollmentConfig{
+			RelyingParty: fido2.RelyingParty{ID: f.config.RelyingPartyID, Name: f.config.RelyingPartyID},
+			User:         fido2.User{ID: userID, Name: f.config.UserName, DisplayName: f.config.UserName},
+		})
 	})
+	if errors.As(err, new(*FIDO2CanceledError)) {
+		return err
+	}
 	if err != nil {
 		return &FIDO2EnrollKeyError{Err: err}
 	}
@@ -341,11 +351,16 @@ func (f *FIDO2Enrollment) enrollWithHandler(handler fido2.Handler) error {
 	}
 
 	fmt.Println("Deriving LUKS key from FIDO2 device (touch your security key again)...")
-	key, err := handler.UnlockWithKey(&fido2.AuthenticationConfig{
-		RelyingPartyID: rpID,
-		CredentialID:   result.CredentialID,
-		Salt:           salt,
+	key, err := awaitAuthenticator(ctx, "derive the LUKS key", func() ([]byte, error) {
+		return handler.UnlockWithKey(&fido2.AuthenticationConfig{
+			RelyingPartyID: rpID,
+			CredentialID:   result.CredentialID,
+			Salt:           salt,
+		})
 	})
+	if errors.As(err, new(*FIDO2CanceledError)) {
+		return err
+	}
 	if err != nil {
 		return &FIDO2DeriveKeyError{Err: err}
 	}
@@ -372,6 +387,9 @@ func (f *FIDO2Enrollment) enrollWithHandler(handler fido2.Handler) error {
 		return &WrappedError{Msg: "LUKS keyslot policy rejected the FIDO2 enrollment options", Err: err}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return &FIDO2CanceledError{Step: "add the keyslot", Err: err}
+	}
 	if err := luksAddKey(f.config.LUKSDevice, []byte(f.config.LUKSPassphrase), key, addKeyOpts); err != nil {
 		return &FIDO2AddKeyError{Slot: f.config.TargetKeyslot, Err: err}
 	}
@@ -380,6 +398,9 @@ func (f *FIDO2Enrollment) enrollWithHandler(handler fido2.Handler) error {
 		fmt.Printf("LUKS key slot %d added successfully\n", f.config.TargetKeyslot)
 	}
 
+	if err := ctx.Err(); err != nil {
+		return &FIDO2CanceledError{Step: "store the token", Err: err}
+	}
 	fmt.Println("Storing FIDO2 metadata in LUKS token...")
 
 	tokenID, err := luksFindFreeTokenSlot(f.config.LUKSDevice)
@@ -407,6 +428,48 @@ func (f *FIDO2Enrollment) enrollWithHandler(handler fido2.Handler) error {
 	fmt.Printf("Your LUKS device can now be unlocked with your security key (slot %d)\n", f.config.TargetKeyslot)
 
 	return nil
+}
+
+// awaitAuthenticator runs a blocking SDK handler call, whose methods take no
+// context, and stops waiting for it when ctx ends. The result channel is
+// buffered, so the call's goroutine finishes even when nobody receives.
+func awaitAuthenticator[T any](ctx context.Context, step string, call func() (T, error)) (T, error) {
+	var zero T
+	if err := ctx.Err(); err != nil {
+		return zero, &FIDO2CanceledError{Step: step, Err: err}
+	}
+	type outcome struct {
+		value T
+		err   error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		value, err := call()
+		done <- outcome{value: value, err: err}
+	}()
+	select {
+	case <-ctx.Done():
+		return zero, &FIDO2CanceledError{Step: step, Err: ctx.Err()}
+	case result := <-done:
+		return result.value, result.err
+	}
+}
+
+// FIDO2CanceledError reports that the enrolment stopped because its context
+// ended before Step.
+type FIDO2CanceledError struct {
+	Step string
+	Err  error
+}
+
+// Error implements the error interface.
+func (e *FIDO2CanceledError) Error() string {
+	return fmt.Sprintf("fido2: enrolment cancelled before it could %s: %v", e.Step, e.Err)
+}
+
+// Unwrap returns the context error.
+func (e *FIDO2CanceledError) Unwrap() error {
+	return e.Err
 }
 
 // FIDO2EnrollKeyError reports that the SDK handler could not create the

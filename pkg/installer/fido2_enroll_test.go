@@ -126,6 +126,9 @@ type sdkFakeFIDO2 struct {
 	enrollErr  error
 	unlockErr  error
 	unlocks    []*fido2.AuthenticationConfig
+	// touch, when set, runs first in each authenticator call with the
+	// call's name ("enroll" or "unlock"); a test blocks in it.
+	touch func(op string)
 }
 
 func newSDKFakeFIDO2() *sdkFakeFIDO2 {
@@ -162,6 +165,9 @@ func (f *sdkFakeFIDO2) WaitForDevice(context.Context) (*fido2.Device, error) {
 }
 
 func (f *sdkFakeFIDO2) EnrollKey(config *fido2.EnrollmentConfig) (*fido2.EnrollmentResult, error) {
+	if f.touch != nil {
+		f.touch("enroll")
+	}
 	if f.enrollErr != nil {
 		return nil, f.enrollErr
 	}
@@ -173,6 +179,9 @@ func (f *sdkFakeFIDO2) EnrollKey(config *fido2.EnrollmentConfig) (*fido2.Enrollm
 }
 
 func (f *sdkFakeFIDO2) UnlockWithKey(config *fido2.AuthenticationConfig) ([]byte, error) {
+	if f.touch != nil {
+		f.touch("unlock")
+	}
 	f.unlocks = append(f.unlocks, config)
 	if f.unlockErr != nil {
 		return nil, f.unlockErr
@@ -269,7 +278,7 @@ func TestFIDO2EnrollmentSlotKeyMatchesInitrd(t *testing.T) {
 			}
 			enrollment := newTestFIDO2Enrollment(t)
 
-			require.NoError(t, enrollment.enrollWithHandler(device))
+			require.NoError(t, enrollment.enrollWithHandler(context.Background(), device))
 
 			stored, ok := header.slots[enrollment.config.TargetKeyslot]
 			require.True(t, ok, "no key added to slot %d", enrollment.config.TargetKeyslot)
@@ -329,7 +338,7 @@ func TestFIDO2EnrollmentFailures(t *testing.T) {
 			device := newSDKFakeFIDO2()
 			tc.setup(device, header)
 
-			err := newTestFIDO2Enrollment(t).enrollWithHandler(device)
+			err := newTestFIDO2Enrollment(t).enrollWithHandler(context.Background(), device)
 			require.Error(t, err)
 			assert.True(t, errors.Is(err, tc.cause), "error %v does not wrap %v", err, tc.cause)
 			assert.True(t, errors.As(err, tc.target), "error %T is not %T", err, tc.target)
@@ -340,6 +349,78 @@ func TestFIDO2EnrollmentFailures(t *testing.T) {
 	}
 }
 
+// TestFIDO2EnrollmentCancellation cancels the enrolment while each
+// authenticator call waits for a touch: the enrolment returns at once and
+// writes neither the keyslot nor the token.
+func TestFIDO2EnrollmentCancellation(t *testing.T) {
+	for _, op := range []string{"enroll", "unlock"} {
+		t.Run(op, func(t *testing.T) {
+			header := useFakeLUKSHeader(t)
+			device := newSDKFakeFIDO2()
+			waiting := make(chan struct{})
+			touched := make(chan struct{})
+			t.Cleanup(func() { close(touched) })
+			device.touch = func(called string) {
+				if called == op {
+					close(waiting)
+					<-touched
+				}
+			}
+			enrollment := newTestFIDO2Enrollment(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			go func() { done <- enrollment.enrollWithHandler(ctx, device) }()
+
+			<-waiting
+			cancel()
+			err := <-done
+
+			var canceled *FIDO2CanceledError
+			require.ErrorAs(t, err, &canceled)
+			assert.ErrorIs(t, err, context.Canceled)
+			assert.Empty(t, header.passedKeys, "a cancelled enrolment added a keyslot")
+			assert.Empty(t, header.tokens, "a cancelled enrolment wrote a token")
+		})
+	}
+}
+
+// TestFIDO2EnrollmentCanceledBeforeWrites checks the context before the
+// first authenticator call and before the token write.
+func TestFIDO2EnrollmentCanceledBeforeWrites(t *testing.T) {
+	t.Run("before the credential", func(t *testing.T) {
+		header := useFakeLUKSHeader(t)
+		device := newSDKFakeFIDO2()
+		var calls []string
+		device.touch = func(op string) { calls = append(calls, op) }
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		err := newTestFIDO2Enrollment(t).enrollWithHandler(ctx, device)
+		var canceled *FIDO2CanceledError
+		require.ErrorAs(t, err, &canceled)
+		assert.Equal(t, "create the credential", canceled.Step)
+		assert.ErrorIs(t, err, context.Canceled)
+		assert.Empty(t, calls, "the authenticator was asked after cancellation")
+		assert.Empty(t, header.passedKeys)
+	})
+	t.Run("before the token", func(t *testing.T) {
+		header := useFakeLUKSHeader(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		addKey := luksAddKey
+		luksAddKey = func(device string, passphrase, newPassphrase []byte, opts *luks2.AddKeyOptions) error {
+			cancel()
+			return addKey(device, passphrase, newPassphrase, opts)
+		}
+
+		err := newTestFIDO2Enrollment(t).enrollWithHandler(ctx, newSDKFakeFIDO2())
+		var canceled *FIDO2CanceledError
+		require.ErrorAs(t, err, &canceled)
+		assert.Equal(t, "store the token", canceled.Step)
+		assert.ErrorIs(t, err, context.Canceled)
+		assert.Empty(t, header.tokens, "a cancelled enrolment wrote a token")
+	})
+}
+
 // TestFIDO2EnrollmentTokenSlotUnavailable checks that a header with no free
 // token slot keeps the enrolled key and reports success, as before.
 func TestFIDO2EnrollmentTokenSlotUnavailable(t *testing.T) {
@@ -347,7 +428,7 @@ func TestFIDO2EnrollmentTokenSlotUnavailable(t *testing.T) {
 	header.tokenErr = errFakeNoTokenSlot
 	enrollment := newTestFIDO2Enrollment(t)
 
-	require.NoError(t, enrollment.enrollWithHandler(newSDKFakeFIDO2()))
+	require.NoError(t, enrollment.enrollWithHandler(context.Background(), newSDKFakeFIDO2()))
 	assert.Len(t, header.slots, 1)
 	assert.Empty(t, header.tokens)
 }

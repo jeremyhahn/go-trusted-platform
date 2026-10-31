@@ -175,7 +175,7 @@ func enrolledFakeDevice(t *testing.T) (*fakeLUKSHeader, *sdkFakeFIDO2) {
 	t.Helper()
 	header := useFakeLUKSHeader(t)
 	device := newSDKFakeFIDO2()
-	require.NoError(t, newTestFIDO2Enrollment(t).enrollWithHandler(device))
+	require.NoError(t, newTestFIDO2Enrollment(t).enrollWithHandler(context.Background(), device))
 	return header, device
 }
 
