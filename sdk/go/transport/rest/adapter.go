@@ -1293,6 +1293,20 @@ var templatedRouteTable = map[string]templatedRoute{
 	"/platform.v1.PlatformIAMService/UpdateGroup": tenantItemRoute("/api/v1/iam/tenants/{tenant}/groups/{id}", http.MethodPut,
 		pathParam{placeholder: "{id}", field: "group_id"}),
 	"/platform.v1.PlatformIAMService/UpdateTenant": itemRoute("/api/v1/iam/tenants/{tenant}", http.MethodPut, "{tenant}", "tenant_id"),
+
+	// The tenant-scoped collections and the live PEP check --
+	// registerUserRoutes, registerGroupRoutes, registerRoleRoutes and the
+	// tenants/{tenant}/permissions/check route in router.go. The daemon's
+	// tenant guard (restiam.RequestedTenant) reads the tenant from the path
+	// or the tenant_id query, never the body, so a flat path with the
+	// tenant in the body was refused with 403 before the handler ran.
+	"/platform.v1.PlatformIAMService/CreateUser":      tenantItemRoute("/api/v1/iam/tenants/{tenant}/users", http.MethodPost),
+	"/platform.v1.PlatformIAMService/ListUsers":       tenantItemRoute("/api/v1/iam/tenants/{tenant}/users", http.MethodGet),
+	"/platform.v1.PlatformIAMService/CreateRole":      tenantItemRoute("/api/v1/iam/tenants/{tenant}/roles", http.MethodPost),
+	"/platform.v1.PlatformIAMService/ListRoles":       tenantItemRoute("/api/v1/iam/tenants/{tenant}/roles", http.MethodGet),
+	"/platform.v1.PlatformIAMService/CreateGroup":     tenantItemRoute("/api/v1/iam/tenants/{tenant}/groups", http.MethodPost),
+	"/platform.v1.PlatformIAMService/ListGroups":      tenantItemRoute("/api/v1/iam/tenants/{tenant}/groups", http.MethodGet),
+	"/platform.v1.PlatformIAMService/CheckPermission": tenantItemRoute("/api/v1/iam/tenants/{tenant}/permissions/check", http.MethodPost),
 }
 
 // itemRoute constructs a templated route for a singular accessor: the
@@ -1419,22 +1433,14 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.CAService/GetCRL":            {"/api/v1/ca/crl", http.MethodGet},
 	"/platform.v1.CAService/GetCABundle":       {"/api/v1/ca/bundle", http.MethodGet},
 
-	// IAM Service
-	"/platform.v1.PlatformIAMService/CreateUser": {"/api/v1/iam/users", http.MethodPost},
-	"/platform.v1.PlatformIAMService/ListUsers":  {"/api/v1/iam/users", http.MethodGet},
-
-	"/platform.v1.PlatformIAMService/CreateRole": {"/api/v1/iam/roles", http.MethodPost},
-	"/platform.v1.PlatformIAMService/ListRoles":  {"/api/v1/iam/roles", http.MethodGet},
-
-	"/platform.v1.PlatformIAMService/CreateGroup": {"/api/v1/iam/groups", http.MethodPost},
-	"/platform.v1.PlatformIAMService/ListGroups":  {"/api/v1/iam/groups", http.MethodGet},
-
+	// IAM Service. The tenant-scoped collections (users, roles, groups)
+	// and CheckPermission are templated routes above: the daemon's tenant
+	// guard reads the tenant from the path, never the body.
 	"/platform.v1.PlatformIAMService/CreateTenant": {"/api/v1/iam/tenants", http.MethodPost},
 	"/platform.v1.PlatformIAMService/ListTenants":  {"/api/v1/iam/tenants", http.MethodGet},
 
 	// GetCurrentUser was removed (#415): iam.proto declares no such rpc, and
 	// its path /iam/users/current routed to GetUser with id="current".
-	"/platform.v1.PlatformIAMService/CheckPermission": {"/api/v1/iam/permissions/check", http.MethodPost},
 	// CreateToken, RevokeToken and VerifyToken have no REST route: route()
 	// refuses them through restRefusedMethods (iam.go).
 
