@@ -424,6 +424,11 @@ func pxeSDKBundle(t *testing.T) *testutil.TestTLSBundle {
 		}
 	}
 	bundle := testutil.GenerateTestTLSBundle(t)
+	// The webhook admits only an installer certificate (#1362), so the client
+	// presents one, from a second CA the bundle's pool trusts.
+	installers := newWebhookIssuer(t, "installer CA")
+	bundle.CAPool.AddCert(installers.cert)
+	bundle.ClientCert = installers.issueInstallerTLS(t, webhookSerial)
 	pxeSDKBundles.Store(t, bundle)
 	t.Cleanup(func() { pxeSDKBundles.Delete(t) })
 	return bundle

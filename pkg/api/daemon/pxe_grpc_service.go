@@ -18,6 +18,7 @@ import (
 	"context"
 	"net"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tlspeer"
@@ -559,6 +560,14 @@ func (s *PXEGRPCService) webhookDevice(ctx context.Context, bodyMAC string) (*px
 	// The whole certificate is the identity: a serial is unique only within
 	// one issuer, and the listener admits more than one.
 	fingerprint := pxe.CertificateSHA256(leaf.Raw)
+
+	// Only an installer certificate completes an installation: one without
+	// the tp-pxeInstaller marker would hold operator scope on every other
+	// call, so binding it is refused here as an unbound one is (#1362).
+	if !issuance.HasInstallerMarker(leaf) {
+		return nil, "", status.Error(codes.PermissionDenied,
+			ErrPXEWebhookInstallerMarkerRequired{CertificateSHA256: fingerprint}.Error())
+	}
 	devices, err := s.pxeService.ListDevices(ctx, &pxe.DeviceFilter{InstallCertificateSHA256: fingerprint})
 	if err != nil {
 		return nil, "", s.mapPXEError(err, "find device for webhook")
@@ -586,6 +595,20 @@ func (s *PXEGRPCService) webhookDevice(ctx context.Context, bodyMAC string) (*px
 			ErrPXEWebhookIdentityMismatch{CertificateSHA256: fingerprint, MACAddress: bodyMAC}.Error())
 	}
 	return device, fingerprint, nil
+}
+
+// ErrPXEWebhookInstallerMarkerRequired is an install-complete webhook whose
+// client certificate lacks the tp-pxeInstaller extended key usage
+// (issuance.OIDPXEInstaller). A certificate without the marker is classified
+// as an operator, so it never completes an installation, bound or not.
+type ErrPXEWebhookInstallerMarkerRequired struct {
+	CertificateSHA256 string
+}
+
+func (e ErrPXEWebhookInstallerMarkerRequired) Error() string {
+	return "pxe webhook certificate sha256 " + e.CertificateSHA256 +
+		" is not an installer certificate: its extended key usage lacks tp-pxeInstaller (" +
+		issuance.OIDPXEInstaller.String() + ")"
 }
 
 // =============================================================================

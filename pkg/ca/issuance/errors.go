@@ -319,6 +319,40 @@ func (ErrUnhandledCriticalExtension) Is(target error) bool {
 
 func (ErrUnhandledCriticalExtension) invalidRequest() {}
 
+// ErrInstallerExtKeyUsage is a request naming PXE_INSTALLER with an extended
+// key usage other than CLIENT_AUTH. The installer marker extension carries
+// exactly id-kp-clientAuth and tp-pxeInstaller, so another usage would be
+// dropped; it is refused instead.
+type ErrInstallerExtKeyUsage struct {
+	// Name is the extended key usage the request named beside PXE_INSTALLER.
+	Name string
+}
+
+func (e ErrInstallerExtKeyUsage) Error() string {
+	return "an installer certificate (PXE_INSTALLER) carries only CLIENT_AUTH: " +
+		"extended key usage " + strconv.Quote(e.Name) + " cannot be added"
+}
+
+// Is reports whether target is an ErrInstallerExtKeyUsage.
+func (ErrInstallerExtKeyUsage) Is(target error) bool {
+	_, ok := target.(ErrInstallerExtKeyUsage)
+	return ok
+}
+
+func (ErrInstallerExtKeyUsage) invalidRequest() {}
+
+// InstallerMarkerEncodeError is a failure to encode the installer marker
+// extension.
+type InstallerMarkerEncodeError struct {
+	Err error
+}
+
+func (e *InstallerMarkerEncodeError) Error() string {
+	return "encode the installer marker extension: " + e.Err.Error()
+}
+
+func (e *InstallerMarkerEncodeError) Unwrap() error { return e.Err }
+
 // CAKeyUsageUnsupportedError is an isCA request, or the renewal of a CA
 // certificate, whose key usage differs from the one the SDK's CA profile
 // writes. The pinned go-xkms ca.NewCAProfile replaces the request's KeyUsage

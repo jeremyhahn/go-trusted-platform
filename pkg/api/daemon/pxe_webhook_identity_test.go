@@ -41,6 +41,7 @@ import (
 
 	apiquic "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/channelbind"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ipxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -90,8 +91,36 @@ func newWebhookIssuer(t *testing.T, name string) *webhookIssuer {
 	return &webhookIssuer{cert: cert, key: key}
 }
 
-// issue signs a node client certificate with the given serial.
+// issue signs a node installer certificate with the given serial: a client
+// certificate carrying the tp-pxeInstaller marker the CA signs PXE_INSTALLER
+// requests with.
 func (i *webhookIssuer) issue(t *testing.T, serial int64) *x509.Certificate {
+	t.Helper()
+	marker, err := issuance.InstallerMarkerExtension()
+	require.NoError(t, err)
+	cert, _ := i.issueWith(t, serial, marker)
+	return cert
+}
+
+// issueInstallerTLS is issue's installer certificate with its private key, as
+// a TLS client presents it.
+func (i *webhookIssuer) issueInstallerTLS(t *testing.T, serial int64) tls.Certificate {
+	t.Helper()
+	marker, err := issuance.InstallerMarkerExtension()
+	require.NoError(t, err)
+	cert, key := i.issueWith(t, serial, marker)
+	return tls.Certificate{Certificate: [][]byte{cert.Raw}, PrivateKey: key, Leaf: cert}
+}
+
+// issueOperator signs a plain client certificate, without the installer
+// marker: an operator's.
+func (i *webhookIssuer) issueOperator(t *testing.T, serial int64) *x509.Certificate {
+	t.Helper()
+	cert, _ := i.issueWith(t, serial)
+	return cert
+}
+
+func (i *webhookIssuer) issueWith(t *testing.T, serial int64, extra ...pkix.Extension) (*x509.Certificate, *ecdsa.PrivateKey) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
@@ -102,12 +131,15 @@ func (i *webhookIssuer) issue(t *testing.T, serial int64) *x509.Certificate {
 		NotAfter:     i.cert.NotAfter,
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		// An extended key usage extension here replaces the one ExtKeyUsage
+		// would produce.
+		ExtraExtensions: extra,
 	}
 	der, err := x509.CreateCertificate(rand.Reader, template, i.cert, &key.PublicKey, i.key)
 	require.NoError(t, err)
 	cert, err := x509.ParseCertificate(der)
 	require.NoError(t, err)
-	return cert
+	return cert, key
 }
 
 // webhookFixture is the real PXE service holding two installing nodes, the

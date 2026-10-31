@@ -28,6 +28,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -330,6 +331,12 @@ func (a mtlsPeerAuthenticator) AuthenticatePeer(ctx context.Context, chain []*x5
 // carries and an installer's does not, so there is no positive operator
 // marker to require instead.
 func (a mtlsPeerAuthenticator) peerScopes(ctx context.Context, leaf *x509.Certificate) ([]string, error) {
+	// The marker is read from the certificate itself, before any binding
+	// lookup, so a daemon that has restarted, or another instance, without
+	// the binding history still restricts an installer (Codex 8673, #1362).
+	if issuance.HasInstallerMarker(leaf) {
+		return []string{installerScope}, nil
+	}
 	if a.installs == nil {
 		return []string{mtlsOperatorScope}, nil
 	}

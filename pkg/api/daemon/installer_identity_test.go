@@ -87,7 +87,7 @@ func TestInstallerCertificate_StaysAnInstallerAfterItsInstallationEnds(t *testin
 func TestInstallerCertificate_OperatorCertificateKeepsEveryScope(t *testing.T) {
 	f := newWebhookFixture(t)
 	peer, pool := installerPeer(t, f)
-	operator := f.issuerA.issue(t, webhookSerial+100)
+	operator := f.issuerA.issueOperator(t, webhookSerial+100)
 	chain := []*x509.Certificate{operator, f.issuerA.cert}
 
 	authCtx, err := peer.AuthenticatePeer(context.Background(), chain)
@@ -191,7 +191,7 @@ func TestInstallerCertificate_IsRefusedEveryOperatorPXEOperation(t *testing.T) {
 	f := newWebhookFixture(t)
 	peer, pool := installerPeer(t, f)
 	grpcAuth := grpcMTLSAuth(t, f, pool)
-	operator := f.issuerA.issue(t, webhookSerial+100)
+	operator := f.issuerA.issueOperator(t, webhookSerial+100)
 
 	for name, op := range operatorPXEOperations {
 		for catalog, allowed := range authorizeEverywhere(t, peer, grpcAuth, f.node, op) {
@@ -213,7 +213,7 @@ func TestGRPCMTLSListener_EnforcesTheInstallerScope(t *testing.T) {
 	f := newWebhookFixture(t)
 	_, pool := installerPeer(t, f)
 	sel := grpcMTLSAuth(t, f, pool)
-	operator := f.issuerA.issue(t, webhookSerial+100)
+	operator := f.issuerA.issueOperator(t, webhookSerial+100)
 	issue := platformv1.CAService_IssueCertificate_FullMethodName
 
 	reached := false
@@ -250,6 +250,68 @@ func TestInstallerCertificate_CompletesOnlyItsOwnDevice(t *testing.T) {
 			got = call(t, f, verifiedState(f.node), &platformv1.PXEWebhookCompleteRequest{MacAddress: webhookNodeMAC, Success: true})
 			assert.Equal(t, codes.OK, got)
 			assert.Equal(t, pxe.StateInstallComplete, f.state(t, webhookNodeMAC))
+		})
+	}
+}
+
+// An installer certificate is classified by its tp-pxeInstaller marker, not by
+// the binding history the PXE state machine keeps in memory (Codex 8673 P1-1,
+// #1362). A second fixture's state machine never bound f.node: it stands for
+// a daemon that restarted with empty bindings, or another instance. Every
+// listener there still refuses the installer CA issuance and operator PXE
+// operations and admits pxe:complete, while a plain operator certificate keeps
+// CA issuance.
+func TestInstallerCertificate_IsRestrictedByItsMarkerWithoutBindingHistory(t *testing.T) {
+	f := newWebhookFixture(t)
+	restarted := newWebhookFixture(t)
+	bindings := pxeInstallBindings{service: restarted.svc}
+	bound, err := bindings.IsInstallCertificate(context.Background(), pxe.CertificateSHA256(f.node.Raw))
+	require.NoError(t, err)
+	require.False(t, bound, "the restarted instance has no record of the installer certificate")
+
+	_, pool := installerPeer(t, f)
+	adapter, err := auth.NewMTLSAdapterFromRoots(logging.DefaultLogger(), pool)
+	require.NoError(t, err)
+	peer := newMTLSPeerAuthenticator(adapter, bindings)
+	grpcAuth := grpcMTLSAuth(t, restarted, pool)
+	operator := f.issuerA.issueOperator(t, webhookSerial+100)
+	caIssue := pxeOperation{platformv1.CAService_IssueCertificate_FullMethodName, quicwire.OpCAIssue, nil, "ca_issue"}
+
+	for catalog, allowed := range authorizeEverywhere(t, peer, grpcAuth, f.node, caIssue) {
+		assert.False(t, allowed, "CA issuance on %s: an installer certificate is never the operator", catalog)
+	}
+	for catalog, allowed := range authorizeEverywhere(t, peer, grpcAuth, f.node, operatorPXEOperations["UpdateState"]) {
+		assert.False(t, allowed, "UpdateState on %s: an installer certificate holds no pxe:write", catalog)
+	}
+	for catalog, allowed := range authorizeEverywhere(t, peer, grpcAuth, f.node, webhookCompleteOperation) {
+		assert.True(t, allowed, "WebhookComplete on %s takes pxe:complete, which the installer holds", catalog)
+	}
+	for catalog, allowed := range authorizeEverywhere(t, peer, grpcAuth, operator, caIssue) {
+		assert.True(t, allowed, "CA issuance on %s: the operator certificate holds every scope", catalog)
+	}
+
+	router := guardedCARouter(t, pool, bindings)
+	installerChain := []*x509.Certificate{f.node, f.issuerA.cert}
+	assert.Equal(t, http.StatusForbidden, serveWithChain(router, http.MethodPost, "/api/v1/ca/certificates", installerChain))
+	operatorChain := []*x509.Certificate{operator, f.issuerA.cert}
+	assert.NotEqual(t, http.StatusForbidden, serveWithChain(router, http.MethodPost, "/api/v1/ca/certificates", operatorChain))
+	assert.NotEqual(t, http.StatusUnauthorized, serveWithChain(router, http.MethodPost, "/api/v1/ca/certificates", operatorChain))
+}
+
+// A certificate without the tp-pxeInstaller marker holds operator scope on
+// every other call, so it never completes an installation, even bound to the
+// device (#1362): the webhook refuses it on every transport.
+func TestInstallerCertificate_WebhookRefusesABoundCertificateWithoutTheMarker(t *testing.T) {
+	const unmarkedMAC = "00:11:22:33:44:c3"
+	for transport, call := range webhookTransports() {
+		t.Run(transport, func(t *testing.T) {
+			f := newWebhookFixture(t)
+			unmarked := f.issuerA.issueOperator(t, webhookSerial+50)
+			f.install(t, unmarkedMAC, unmarked)
+
+			got := call(t, f, verifiedState(unmarked), &platformv1.PXEWebhookCompleteRequest{MacAddress: unmarkedMAC, Success: true})
+			assert.Equal(t, codes.PermissionDenied, got)
+			assert.Equal(t, pxe.StateInstalling, f.state(t, unmarkedMAC))
 		})
 	}
 }

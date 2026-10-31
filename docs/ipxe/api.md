@@ -281,14 +281,24 @@ a body with no MAC is 400 (`InvalidArgument`, `ErrPXEWebhookMACRequired`,
 Transports with no peer certificate — Unix, MCP stdio, embedded — refuse the
 call. This binding is the only one: there is no separate certificate-binding RPC.
 
-**An installer certificate holds only `pxe:complete`.** The mTLS peer
-authenticator (`pkg/api/daemon/transport_auth.go`) gives a client certificate
-whose fingerprint was ever bound as an install certificate that one permission,
-and never a CA or other operator permission. The record of bound fingerprints
-keeps retired ones, so the restriction outlives the installation: once the
-device leaves `installing` or is removed, the same still-valid certificate is
-still an installer, not an operator (Codex 8652). The record is held in memory
-by the PXE state machine. Every mTLS listener applies this classification:
+**An installer certificate holds only `pxe:complete`.** An installer
+certificate is one whose extended key usage carries the private OID
+`tp-pxeInstaller` (`1.3.6.1.4.1.29377.101.22`, RFC 5280 §4.2.1.12) beside
+`id-kp-clientAuth`, in an extension marked critical; the CA signs it for an
+issuance request whose `ext_key_usage` names `PXE_INSTALLER`
+([CA api.md](../ca/api.md)). The mTLS peer authenticator
+(`pkg/api/daemon/transport_auth.go`, `issuance.HasInstallerMarker`) gives a
+certificate carrying the marker that one permission, and never a CA or other
+operator permission, from the certificate alone: a daemon that has restarted,
+or another instance, restricts it without any binding history (Codex 8673,
+#1362). A certificate whose fingerprint was ever bound as an install
+certificate is restricted as well, so the restriction outlives the
+installation: once the device leaves `installing` or is removed, the same
+still-valid certificate is still an installer, not an operator (Codex 8652).
+The webhook refuses a certificate without the marker with 403
+(`PermissionDenied`, `ErrPXEWebhookInstallerMarkerRequired`) even when it is
+bound, so only an installer certificate completes an installation; the
+SHA-256 binding stays the per-device check. Every mTLS listener applies this classification:
 REST through its `ScopeGuard`, QUIC and MCP through their peer authenticators,
 and gRPC through the mTLS interceptors (`pkg/api/daemon/mtls_interceptor.go`),
 which refuse a method whose scope (`grpccreds.ScopeForMethod`) the certificate
