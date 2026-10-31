@@ -22,6 +22,8 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/jeremyhahn/go-luks2/pkg/luks2"
@@ -134,6 +136,11 @@ type sdkFakeFIDO2 struct {
 	// touch, when set, runs first in each authenticator call with the
 	// call's name ("enroll" or "unlock"); a test blocks in it.
 	touch func(op string)
+	// returned holds every key UnlockWithKey returned, so a test can check
+	// that an abandoned operation's key was cleared.
+	returned [][]byte
+	// closed, when set, receives once per Close.
+	closed chan struct{}
 }
 
 func newSDKFakeFIDO2() *sdkFakeFIDO2 {
@@ -159,7 +166,12 @@ func (f *sdkFakeFIDO2) derive(credentialID, salt []byte) []byte {
 	return append(key1[:], key2[:]...)
 }
 
-func (f *sdkFakeFIDO2) Close() error { return nil }
+func (f *sdkFakeFIDO2) Close() error {
+	if f.closed != nil {
+		f.closed <- struct{}{}
+	}
+	return nil
+}
 
 func (f *sdkFakeFIDO2) ListDevices() ([]fido2.Device, error) {
 	return []fido2.Device{{}}, nil
@@ -197,7 +209,63 @@ func (f *sdkFakeFIDO2) UnlockWithKey(config *fido2.AuthenticationConfig) ([]byte
 	if !bytes.Equal(config.CredentialID, f.credential) {
 		return nil, errFakeCredential
 	}
-	return f.derive(config.CredentialID, config.Salt), nil
+	key := f.derive(config.CredentialID, config.Salt)
+	f.returned = append(f.returned, key)
+	return key, nil
+}
+
+// blockFakeFIDO2 makes the device's op call ("enroll" or "unlock") block
+// until finish. waiting is closed when the call starts. finish releases the
+// call and waits until its operation slot is free again, that is, until an
+// abandoned call's drain has cleared its result and closed the handler; it
+// also runs at cleanup, so a failed test never leaves the slot held.
+func blockFakeFIDO2(t *testing.T, device *sdkFakeFIDO2, op string) (waiting chan struct{}, finish func()) {
+	t.Helper()
+	device.closed = make(chan struct{}, 4)
+	waiting = make(chan struct{})
+	release := make(chan struct{})
+	var started sync.Once
+	device.touch = func(called string) {
+		if called == op {
+			started.Do(func() { close(waiting) })
+			<-release
+		}
+	}
+	finish = sync.OnceFunc(func() {
+		close(release)
+		fido2Operation <- struct{}{}
+		<-fido2Operation
+	})
+	t.Cleanup(finish)
+	return waiting, finish
+}
+
+// useFIDO2OperationBusy replaces the busy notice with one that signals the
+// returned channel.
+func useFIDO2OperationBusy(t *testing.T) chan struct{} {
+	t.Helper()
+	busy := make(chan struct{}, 4)
+	old := fido2OperationBusy
+	t.Cleanup(func() { fido2OperationBusy = old })
+	fido2OperationBusy = func() { busy <- struct{}{} }
+	return busy
+}
+
+// abandonFIDO2Enrollment starts an enrolment, cancels it while its
+// credential is being created and returns once it has returned, leaving the
+// abandoned authenticator call blocked until finish.
+func abandonFIDO2Enrollment(t *testing.T) (device *sdkFakeFIDO2, finish func()) {
+	t.Helper()
+	device = newSDKFakeFIDO2()
+	waiting, finish := blockFakeFIDO2(t, device, "enroll")
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	enrollment := newTestFIDO2Enrollment(t)
+	go func() { done <- enrollment.enrollWithHandler(ctx, device) }()
+	<-waiting
+	cancel()
+	require.ErrorAs(t, <-done, new(*FIDO2CanceledError))
+	return device, finish
 }
 
 // fakeLUKSHeader replaces the go-luks2 header writes of the enrolment.
@@ -373,15 +441,7 @@ func TestFIDO2EnrollmentCancellation(t *testing.T) {
 		t.Run(op, func(t *testing.T) {
 			header := useFakeLUKSHeader(t)
 			device := newSDKFakeFIDO2()
-			waiting := make(chan struct{})
-			touched := make(chan struct{})
-			t.Cleanup(func() { close(touched) })
-			device.touch = func(called string) {
-				if called == op {
-					close(waiting)
-					<-touched
-				}
-			}
+			waiting, finish := blockFakeFIDO2(t, device, op)
 			enrollment := newTestFIDO2Enrollment(t)
 			ctx, cancel := context.WithCancel(context.Background())
 			done := make(chan error, 1)
@@ -396,8 +456,67 @@ func TestFIDO2EnrollmentCancellation(t *testing.T) {
 			assert.ErrorIs(t, err, context.Canceled)
 			assert.Empty(t, header.passedKeys, "a cancelled enrolment added a keyslot")
 			assert.Empty(t, header.tokens, "a cancelled enrolment wrote a token")
+
+			// The abandoned call completes late. Its drain receives the
+			// result, clears any key and only then closes the handler.
+			finish()
+			select {
+			case <-device.closed:
+			default:
+				t.Fatal("the drain did not receive the late result and close the handler")
+			}
+			if op == "unlock" {
+				require.Len(t, device.returned, 1)
+				late := device.returned[0]
+				assert.Equal(t, make([]byte, len(late)), late, "the late key was not cleared")
+			}
 		})
 	}
+}
+
+func TestFIDO2EnrollmentRetryWaitsForAbandonedOperation(t *testing.T) {
+	useFakeLUKSHeader(t)
+	busy := useFIDO2OperationBusy(t)
+	_, finish := abandonFIDO2Enrollment(t)
+
+	retry := newSDKFakeFIDO2()
+	var abandonedEnded atomic.Bool
+	retry.touch = func(string) {
+		assert.True(t, abandonedEnded.Load(), "the retry reached the authenticator while the abandoned operation ran")
+	}
+	retried := make(chan error, 1)
+	enrollment := newTestFIDO2Enrollment(t)
+	go func() { retried <- enrollment.enrollWithHandler(context.Background(), retry) }()
+
+	<-busy
+	abandonedEnded.Store(true)
+	finish()
+	require.NoError(t, <-retried)
+	assert.Len(t, retry.unlocks, 1, "the retry did not derive its key")
+}
+
+func TestFIDO2EnrollmentRetryCanceledWhileWaiting(t *testing.T) {
+	header := useFakeLUKSHeader(t)
+	busy := useFIDO2OperationBusy(t)
+	_, finish := abandonFIDO2Enrollment(t)
+
+	retry := newSDKFakeFIDO2()
+	retry.touch = func(string) { t.Error("a retry cancelled while waiting reached the authenticator") }
+	ctx, cancel := context.WithCancel(context.Background())
+	retried := make(chan error, 1)
+	enrollment := newTestFIDO2Enrollment(t)
+	go func() { retried <- enrollment.enrollWithHandler(ctx, retry) }()
+
+	<-busy
+	cancel()
+	err := <-retried
+
+	var canceled *FIDO2CanceledError
+	require.ErrorAs(t, err, &canceled)
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, "create the credential", canceled.Step)
+	assert.Empty(t, header.passedKeys)
+	finish()
 }
 
 // TestFIDO2EnrollmentCanceledBeforeWrites checks the context before the

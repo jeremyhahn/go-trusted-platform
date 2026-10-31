@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jeremyhahn/go-luks2/pkg/luks2"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/fido2"
@@ -215,6 +216,76 @@ func TestFIDO2UnlockAfterEnrollment(t *testing.T) {
 	}
 	assert.False(t, fake.mapped["cryptroot2"])
 	assert.Empty(t, fake.tools.calls, "a token marked with the SDK derivation ran a libfido2 tool")
+}
+
+func TestFIDO2UnlockCanceled(t *testing.T) {
+	past, expire := context.WithDeadline(context.Background(), time.Now().Add(-time.Minute))
+	t.Cleanup(expire)
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	for name, tc := range map[string]struct {
+		ctx  context.Context
+		want error
+	}{
+		"cancelled":        {ctx: canceled, want: context.Canceled},
+		"deadline expired": {ctx: past, want: context.DeadlineExceeded},
+	} {
+		t.Run("before authentication, "+name, func(t *testing.T) {
+			header, device := enrolledFakeDevice(t)
+			fake := useFakeUnlockDevice(t, header, device)
+			device.touch = func(string) { t.Error("a cancelled unlock asked for a touch") }
+
+			err := NewFIDO2Unlock("/dev/fake-luks", false).Unlock(tc.ctx, "cryptroot")
+
+			var canceledErr *FIDO2CanceledError
+			require.ErrorAs(t, err, &canceledErr)
+			assert.ErrorIs(t, err, tc.want)
+			assert.Len(t, device.unlocks, 1, "only the enrolment derived a key")
+			assert.Empty(t, fake.mapped, "a cancelled unlock opened the volume")
+		})
+	}
+
+	t.Run("during authentication", func(t *testing.T) {
+		header, device := enrolledFakeDevice(t)
+		fake := useFakeUnlockDevice(t, header, device)
+		waiting, finish := blockFakeFIDO2(t, device, "unlock")
+		unlock := NewFIDO2Unlock("/dev/fake-luks", false)
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { done <- unlock.Unlock(ctx, "cryptroot") }()
+
+		<-waiting
+		cancel()
+		err := <-done
+
+		var canceledErr *FIDO2CanceledError
+		require.ErrorAs(t, err, &canceledErr)
+		assert.ErrorIs(t, err, context.Canceled)
+
+		// The late key reaches the drain, which clears it; nothing maps it.
+		finish()
+		require.Len(t, device.returned, 2, "one key at enrolment, one late")
+		late := device.returned[1]
+		assert.Equal(t, make([]byte, len(late)), late, "the late key was not cleared")
+		assert.Empty(t, fake.mapped, "a cancelled unlock opened the volume")
+	})
+
+	t.Run("before mapping", func(t *testing.T) {
+		header, device := enrolledFakeDevice(t)
+		fake := useFakeUnlockDevice(t, header, device)
+		unlock := NewFIDO2Unlock("/dev/fake-luks", false)
+		token, err := unlock.token()
+		require.NoError(t, err)
+		key, err := unlock.DeriveKey(context.Background(), token)
+		require.NoError(t, err)
+
+		err = unlock.openWith(canceled, token, key, "cryptroot")
+
+		var canceledErr *FIDO2CanceledError
+		require.ErrorAs(t, err, &canceledErr)
+		assert.ErrorIs(t, err, context.Canceled)
+		assert.Empty(t, fake.mapped, "a key that arrived after the cancel opened the volume")
+	})
 }
 
 // The runtime LUKS service (pkg/app/backends) writes fido2-manual tokens
