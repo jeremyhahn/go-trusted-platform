@@ -489,7 +489,13 @@ any other control plane every transport answers `ErrLifecycleUnenforced`.
    `GET /api/v1/device/profile` and `POST /api/v1/device/activate` extract the
    serial from the **verified client certificate** through the mTLS middleware.
    A caller that cannot present an IDevID cannot reach either route. IDevID
-   issuance itself is a separate feature.
+   issuance itself is a separate feature. The middleware refuses a PXE
+   installer certificate (one carrying the `tp-pxeInstaller` marker, OID
+   1.3.6.1.4.1.29377.101.22) with 403 `ErrInstallerNotDevice` before it reads
+   the serial: the installer leaf also carries clientAuth, so the chain check
+   admits it, but it is never a device identity, whatever its CN says. The
+   refusal covers every route behind the middleware, including
+   `POST /api/v1/device/heartbeat`.
 4. **Boot-time config lookup is cross-tenant by design.** `FindConfigForDevice`
    and the boot fetch (`GET /api/v1/devices/config`) search every tenant.
    Tenant isolation for this one path is provided by the uniqueness of the

@@ -18,7 +18,9 @@ import (
 	"crypto/x509"
 	"errors"
 	"net/http"
+	"strconv"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
@@ -85,6 +87,17 @@ func (m *mtlsMiddleware) Verify(w http.ResponseWriter, r *http.Request, next htt
 		return
 	}
 
+	// An installer certificate carries clientAuth beside tp-pxeInstaller, so
+	// the chain check above admits it, and its CN can name a device serial.
+	// It holds only pxe:complete, never a device identity, so it is refused
+	// before the serial is derived.
+	if issuance.HasInstallerMarker(clientCert) {
+		err := ErrInstallerNotDevice{CommonName: clientCert.Subject.CommonName}
+		m.logger.Warn(err.Error())
+		m.responseWriter.Error403(w, r, err, nil)
+		return
+	}
+
 	// Extract serial number from certificate CN or SAN
 	serial := DeviceSerialFromCert(clientCert)
 	if serial == "" {
@@ -123,3 +136,22 @@ var (
 	ErrCertVerifyFailed   = &MessageError{Msg: "client certificate verification failed"}
 	ErrNoDeviceSerial     = errors.New("no device serial in certificate")
 )
+
+// ErrInstallerNotDevice signals that the verified client certificate
+// carries the tp-pxeInstaller marker. An installer is never an enrolled
+// device, whatever its Common Name says.
+type ErrInstallerNotDevice struct {
+	// CommonName is the Common Name of the installer certificate.
+	CommonName string
+}
+
+func (e ErrInstallerNotDevice) Error() string {
+	return "mtls: certificate " + strconv.Quote(e.CommonName) +
+		" is an installer certificate (tp-pxeInstaller) and is not a device identity"
+}
+
+// Is matches any ErrInstallerNotDevice, whatever its Common Name.
+func (e ErrInstallerNotDevice) Is(target error) bool {
+	_, ok := target.(ErrInstallerNotDevice)
+	return ok
+}
