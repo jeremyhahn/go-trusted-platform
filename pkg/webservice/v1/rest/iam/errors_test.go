@@ -444,7 +444,6 @@ func TestErrConflictingQueryTenant_ImplementsErrorInterface(t *testing.T) {
 	assert.Equal(t, "tenant-b", conflict.Query)
 }
 
-
 func TestErrRoleChangeUnsupported_Error(t *testing.T) {
 	err := ErrRoleChangeUnsupported{TenantID: "tenant-a", UserID: "user-1"}
 

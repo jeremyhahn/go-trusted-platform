@@ -105,7 +105,6 @@ func SetUserRoles(ctx context.Context, client iamsdk.Client, tenantID, userID st
 	return syncUserRoles(ctx, client.User(), tenantID, userID, current, want)
 }
 
-
 // RequireUnchangedUserRoles refuses a user update whose role references name a
 // set other than the roles the user holds, with ErrRoleChangeUnsupported. The
 // pinned SDK's embedded transport dispatches neither User/AssignRole nor

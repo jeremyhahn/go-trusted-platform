@@ -48,6 +48,9 @@ type memIAM struct {
 	roles   map[string]*sdkiam.Role
 	groups  map[string]*sdkiam.Group
 	tenants map[string]*sdkiam.Tenant
+
+	// tenantUpdates counts the tenant updates that reached the client.
+	tenantUpdates int
 }
 
 func newMemIAM() *memIAM {
@@ -382,6 +385,24 @@ func (tc memTenants) Get(_ context.Context, tenantID string) (*sdkiam.Tenant, er
 	if err != nil {
 		return nil, err
 	}
+	copied := *tenant
+	return &copied, nil
+}
+
+// Update applies only the display name, as the pinned SDK's embedded tenant
+// update does; settings never reach it (the adapter refuses them).
+func (tc memTenants) Update(_ context.Context, tenantID string, req *sdkiam.UpdateTenantRequest) (*sdkiam.Tenant, error) {
+	tc.m.mu.Lock()
+	defer tc.m.mu.Unlock()
+	tenant, err := memFind(tc.m.tenants, "iam.tenant.update", "", tenantID)
+	if err != nil {
+		return nil, err
+	}
+	tc.m.tenantUpdates++
+	if req.DisplayName != "" {
+		tenant.Name = req.DisplayName
+	}
+	tenant.UpdatedAt = memIAMCreated
 	copied := *tenant
 	return &copied, nil
 }

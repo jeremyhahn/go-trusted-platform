@@ -67,7 +67,12 @@ func iamRESTServerOn(t *testing.T, iam *memIAM) *RESTServer {
 }
 
 func serveIAM(s *RESTServer, method, path, token string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(method, path, strings.NewReader("{}"))
+	return serveIAMBody(s, method, path, token, "{}")
+}
+
+// serveIAMBody is serveIAM with the JSON request body given.
+func serveIAMBody(s *RESTServer, method, path, token, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -287,6 +292,50 @@ func TestIAMREST_FlatRouteRefusesAForeignTenant(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &refused), recorder.Body.String())
 	assert.Equal(t, ErrIAMTenantForbidden{Requested: iamRESTTenantB}.Error(), refused.Error)
+}
+
+// tenantName reads the tenant name out of a tenant reply.
+func tenantName(t *testing.T, recorder *httptest.ResponseRecorder) string {
+	t.Helper()
+	var reply struct {
+		Payload struct {
+			Name string `json:"name"`
+		} `json:"payload"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &reply), recorder.Body.String())
+	return reply.Payload.Name
+}
+
+func TestIAMREST_TenantUpdateRenamesAndReadsBack(t *testing.T) {
+	iam := newMemIAM()
+	_, err := iam.Tenant().Create(context.Background(), &sdkiam.CreateTenantRequest{ID: iamRESTTenantA, Name: "original"})
+	require.NoError(t, err)
+	s := iamRESTServerOn(t, iam)
+	path := "/api/v1/iam/tenants/" + iamRESTTenantA
+
+	recorder := serveIAMBody(s, http.MethodPut, path, "system", `{"name":"renamed"}`)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	assert.Equal(t, "renamed", tenantName(t, recorder))
+
+	recorder = serveIAM(s, http.MethodGet, path, "system")
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	assert.Equal(t, "renamed", tenantName(t, recorder))
+}
+
+func TestIAMREST_TenantUpdateRefusesSettings(t *testing.T) {
+	iam := newMemIAM()
+	_, err := iam.Tenant().Create(context.Background(), &sdkiam.CreateTenantRequest{ID: iamRESTTenantA, Name: "original"})
+	require.NoError(t, err)
+	s := iamRESTServerOn(t, iam)
+	path := "/api/v1/iam/tenants/" + iamRESTTenantA
+
+	recorder := serveIAMBody(s, http.MethodPut, path, "system", `{"name":"renamed","settings":{"maxUsers":5}}`)
+	require.Equal(t, http.StatusBadRequest, recorder.Code, recorder.Body.String())
+	assert.Zero(t, iam.tenantUpdates, "refused settings must not reach the SDK")
+
+	recorder = serveIAM(s, http.MethodGet, path, "system")
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	assert.Equal(t, "original", tenantName(t, recorder))
 }
 
 func TestIAMScopeAction(t *testing.T) {
