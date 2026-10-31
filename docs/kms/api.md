@@ -439,6 +439,14 @@ method name, else 403:
 refused, never defaulted. Installer and machine certificates are not admitted:
 no `/api/v1/kms` route is on any installer or machine allowlist (#1153).
 
+Tenant callers are refused until the SDK bridges the tenant to the services
+(SDK gap). The pinned SDK's `transport.ContextWithTenant` sets a context key
+the embedded KMS and secrets services do not read, so a tenant call would run
+in system scope. A caller that passes the scope check is 403
+(`ErrKMSRESTTenantNotBridged`) before any SDK call, on the router's routes and
+on the daemon KMS handlers. A credential naming no tenant is 403
+(`ErrKMSRESTNoTenant`) and is never served in system scope.
+
 ---
 
 ## 7. Status and error mapping

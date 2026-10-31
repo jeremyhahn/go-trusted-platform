@@ -496,7 +496,7 @@ secrets) over the SDK KMS, crypto, DEK and secrets clients, before
 | every other router route under `/api/v1/kms` | same | `GET` `kms:read`; `POST`, `PUT`, `PATCH` `kms:write`; `DELETE` `kms:delete`; `POST` decrypt, verify, hmac verify, hash and random `kms:read` |
 
 A missing credential answers 401, a missing scope 403, and any other method is
-refused. Each admitted request runs in the caller's tenant, bound to the SDK call's context with `ContextWithTenant`; a credential naming no tenant is 403 (`ErrKMSRESTNoTenant`), never served in system scope. Installer and machine certificates are not admitted: no `/api/v1/kms`
+refused. A credential naming no tenant is 403 (`ErrKMSRESTNoTenant`), never served in system scope. Tenant callers are refused until the SDK bridges the tenant to the services (SDK gap): the pinned SDK's `transport.ContextWithTenant` sets a key the embedded KMS and secrets services do not read, so a tenant call would run in system scope. A caller that passes the scope check is therefore 403 (`ErrKMSRESTTenantNotBridged`) before any SDK call, on the router's routes and on the daemon KMS handlers behind the same guard. Installer and machine certificates are not admitted: no `/api/v1/kms`
 route is on any installer or machine allowlist (#1153). The daemon refuses to
 start when the KMS service is configured and the routes cannot be mounted.
 [`docs/kms/api.md`](../kms/api.md) §1 lists the paths `SetKMSHandlers` still
