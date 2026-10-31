@@ -53,6 +53,8 @@ const (
 	// fido2RawSecretLength is the length of the hmac-secret output, the key
 	// earlier installers wrote to a fido2-manual slot.
 	fido2RawSecretLength = 32
+	// fido2DeriveStep names the SDK key derivation in a cancellation error.
+	fido2DeriveStep = "derive the LUKS key"
 )
 
 // The go-luks2 header read and device mapping of the unlock. Tests replace
@@ -146,6 +148,9 @@ func (f *FIDO2Unlock) GetTokenInfo() (*FIDO2Token, error) {
 // handler. The token type picks the authentication config (relying party,
 // user verification) the key was enrolled with.
 func (f *FIDO2Unlock) DeriveKey(ctx context.Context, token *FIDO2Token) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, &FIDO2CanceledError{Step: fido2DeriveStep, Err: err}
+	}
 	decode, ok := fido2TokenDecoders[token.Type]
 	if !ok {
 		return nil, f.rawSecretError(token, nil)
@@ -154,8 +159,15 @@ func (f *FIDO2Unlock) DeriveKey(ctx context.Context, token *FIDO2Token) ([]byte,
 	if err != nil {
 		return nil, err
 	}
+	// The deadline also bounds the SDK's own wait for the touch. One that
+	// has already passed is a cancellation: the SDK ignores a negative
+	// Timeout and would wait for its default.
 	if deadline, ok := ctx.Deadline(); ok {
-		authConfig.Timeout = time.Until(deadline)
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return nil, &FIDO2CanceledError{Step: fido2DeriveStep, Err: context.DeadlineExceeded}
+		}
+		authConfig.Timeout = remaining
 	}
 
 	cfg := fido2.DefaultConfig
@@ -165,14 +177,16 @@ func (f *FIDO2Unlock) DeriveKey(ctx context.Context, token *FIDO2Token) ([]byte,
 	if err != nil {
 		return nil, &WrappedError{Msg: "failed to open the FIDO2 handler", Err: err}
 	}
-	defer func() {
-		if closeErr := handler.Close(); closeErr != nil {
-			fmt.Printf("Warning: failed to close the FIDO2 handler: %v\n", closeErr)
-		}
-	}()
+	session := &fido2Session{handler: handler}
+	defer session.close()
 
 	fmt.Println("Touch your security key to unlock...")
-	key, err := handler.UnlockWithKey(authConfig)
+	key, err := awaitAuthenticator(ctx, session, fido2DeriveStep, func(handler fido2.Handler) ([]byte, error) {
+		return handler.UnlockWithKey(authConfig)
+	}, clearKey)
+	if errors.As(err, new(*FIDO2CanceledError)) {
+		return nil, err
+	}
 	if err != nil {
 		return nil, &FIDO2DeriveKeyError{Err: err}
 	}
@@ -270,7 +284,7 @@ func (f *FIDO2Unlock) openDerived(ctx context.Context, token *FIDO2Token, mapped
 		return err
 	}
 	defer clear(key)
-	return f.openWith(token, key, mappedName)
+	return f.openWith(ctx, token, key, mappedName)
 }
 
 // openRawSecret maps the device with the raw hmac-secret an earlier
@@ -281,11 +295,16 @@ func (f *FIDO2Unlock) openRawSecret(ctx context.Context, token *FIDO2Token, mapp
 		return err
 	}
 	defer clear(secret)
-	return f.openWith(token, secret, mappedName)
+	return f.openWith(ctx, token, secret, mappedName)
 }
 
 // openWith maps the device with key, reporting a rejected key as typed.
-func (f *FIDO2Unlock) openWith(token *FIDO2Token, key []byte, mappedName string) error {
+func (f *FIDO2Unlock) openWith(ctx context.Context, token *FIDO2Token, key []byte, mappedName string) error {
+	// The key may arrive after the caller gave up; a cancelled unlock never
+	// maps the volume.
+	if err := ctx.Err(); err != nil {
+		return &FIDO2CanceledError{Step: "open the volume", Err: err}
+	}
 	if err := luksUnlock(f.luksDevice, key, mappedName); err != nil {
 		return &FIDO2KeyRejectedError{Device: f.luksDevice, Keyslots: token.Keyslots, Err: err}
 	}

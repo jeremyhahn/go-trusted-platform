@@ -281,11 +281,7 @@ func (f *FIDO2Enrollment) Enroll(ctx context.Context) error {
 	if err != nil {
 		return &WrappedError{Msg: "failed to open the FIDO2 handler", Err: err}
 	}
-	err = f.enrollWithHandler(ctx, handler)
-	if closeErr := handler.Close(); closeErr != nil {
-		fmt.Printf("Warning: failed to close the FIDO2 handler: %v\n", closeErr)
-	}
-	return err
+	return f.enrollWithHandler(ctx, handler)
 }
 
 // handlerConfig returns the SDK handler configuration for the detected device.
@@ -322,18 +318,21 @@ func randomRead(b []byte) (n int, err error) {
 // after the keyslot is written removes it again (rollbackKeyslot), so no
 // slot is left that boot cannot unlock or a retry cannot reuse.
 func (f *FIDO2Enrollment) enrollWithHandler(ctx context.Context, handler fido2.Handler) error {
+	session := &fido2Session{handler: handler}
+	defer session.close()
+
 	userID := make([]byte, 32)
 	if _, err := randomRead(userID); err != nil {
 		return &WrappedError{Msg: "failed to generate user ID", Err: err}
 	}
 
 	fmt.Println("Creating FIDO2 credential (touch your security key)...")
-	result, err := awaitAuthenticator(ctx, "create the credential", func() (*fido2.EnrollmentResult, error) {
+	result, err := awaitAuthenticator(ctx, session, "create the credential", func(handler fido2.Handler) (*fido2.EnrollmentResult, error) {
 		return handler.EnrollKey(&fido2.EnrollmentConfig{
 			RelyingParty: fido2.RelyingParty{ID: f.config.RelyingPartyID, Name: f.config.RelyingPartyID},
 			User:         fido2.User{ID: userID, Name: f.config.UserName, DisplayName: f.config.UserName},
 		})
-	})
+	}, discardNothing[*fido2.EnrollmentResult])
 	if errors.As(err, new(*FIDO2CanceledError)) {
 		return err
 	}
@@ -354,13 +353,13 @@ func (f *FIDO2Enrollment) enrollWithHandler(ctx context.Context, handler fido2.H
 	}
 
 	fmt.Println("Deriving LUKS key from FIDO2 device (touch your security key again)...")
-	key, err := awaitAuthenticator(ctx, "derive the LUKS key", func() ([]byte, error) {
+	key, err := awaitAuthenticator(ctx, session, fido2DeriveStep, func(handler fido2.Handler) ([]byte, error) {
 		return handler.UnlockWithKey(&fido2.AuthenticationConfig{
 			RelyingPartyID: rpID,
 			CredentialID:   result.CredentialID,
 			Salt:           salt,
 		})
-	})
+	}, clearKey)
 	if errors.As(err, new(*FIDO2CanceledError)) {
 		return err
 	}
@@ -445,29 +444,105 @@ func (f *FIDO2Enrollment) rollbackKeyslot(cause error) error {
 }
 
 // awaitAuthenticator runs a blocking SDK handler call, whose methods take no
-// context, and stops waiting for it when ctx ends. The result channel is
-// buffered, so the call's goroutine finishes even when nobody receives.
-func awaitAuthenticator[T any](ctx context.Context, step string, call func() (T, error)) (T, error) {
+// context, and stops waiting for it when ctx ends. It first takes the
+// fido2Operation slot, waiting for an abandoned operation to end. When ctx
+// ends during the call, a drain goroutine receives the late result, passes it
+// to discard (which clears any key), closes the session's handler and frees
+// the slot; awaitAuthenticator returns once that drain is running.
+func awaitAuthenticator[T any](ctx context.Context, session *fido2Session, step string, call func(fido2.Handler) (T, error), discard func(T)) (T, error) {
 	var zero T
 	if err := ctx.Err(); err != nil {
 		return zero, &FIDO2CanceledError{Step: step, Err: err}
 	}
+	select {
+	case fido2Operation <- struct{}{}:
+	default:
+		fido2OperationBusy()
+		select {
+		case fido2Operation <- struct{}{}:
+		case <-ctx.Done():
+			return zero, &FIDO2CanceledError{Step: step, Err: ctx.Err()}
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		<-fido2Operation
+		return zero, &FIDO2CanceledError{Step: step, Err: err}
+	}
+
 	type outcome struct {
 		value T
 		err   error
 	}
 	done := make(chan outcome, 1)
+	handler := session.handler
 	go func() {
-		value, err := call()
+		value, err := call(handler)
 		done <- outcome{value: value, err: err}
 	}()
 	select {
-	case <-ctx.Done():
-		return zero, &FIDO2CanceledError{Step: step, Err: ctx.Err()}
 	case result := <-done:
+		<-fido2Operation
 		return result.value, result.err
+	case <-ctx.Done():
+		// The SDK cannot stop the HID request (see fido2Operation), so the
+		// drain waits for it, clears what it returns, closes the handler and
+		// only then admits the next operation.
+		session.abandoned = true
+		go func() {
+			result := <-done
+			discard(result.value)
+			closeFIDO2Handler(handler)
+			<-fido2Operation
+		}()
+		return zero, &FIDO2CanceledError{Step: step, Err: ctx.Err()}
 	}
 }
+
+// fido2Operation admits one authenticator operation at a time, across every
+// enrolment and unlock in the process. The pinned SDK cannot stop one: its
+// Handler takes no context and its Close does nothing —
+//
+//	EnrollKey(config *EnrollmentConfig) (*EnrollmentResult, error)
+//	UnlockWithKey(config *AuthenticationConfig) ([]byte, error)
+//	Close() error
+//
+// — so an operation a cancelled caller abandons keeps the HID request open
+// until the key is touched or removed. It holds this slot until it ends, and
+// a retry waits for it (honouring its own context) rather than racing it for
+// the touch. Stopping the request itself is an SDK gap.
+var fido2Operation = make(chan struct{}, 1)
+
+// fido2OperationBusy tells the user why an operation waits: an earlier,
+// abandoned one still holds the authenticator.
+var fido2OperationBusy = func() {
+	fmt.Println("Waiting for the previous security key operation to end (touch or remove the key)...")
+}
+
+// fido2Session owns one SDK handler. When the caller abandons an operation,
+// the operation's drain closes the handler once the operation ends; the
+// caller's close then leaves it alone.
+type fido2Session struct {
+	handler   fido2.Handler
+	abandoned bool
+}
+
+func (s *fido2Session) close() {
+	if !s.abandoned {
+		closeFIDO2Handler(s.handler)
+	}
+}
+
+func closeFIDO2Handler(handler fido2.Handler) {
+	if err := handler.Close(); err != nil {
+		fmt.Printf("Warning: failed to close the FIDO2 handler: %v\n", err)
+	}
+}
+
+// discardNothing is the discard of an operation whose result holds no secret.
+func discardNothing[T any](T) {}
+
+// clearKey is the discard of an operation that derives a key.
+func clearKey(key []byte) { clear(key) }
 
 // FIDO2CanceledError reports that the enrolment stopped because its context
 // ended before Step.
