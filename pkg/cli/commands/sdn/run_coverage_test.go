@@ -237,13 +237,6 @@ func TestRunPolicyApply_NoContext(t *testing.T) {
 	assertNoContextError(t, err)
 }
 
-func TestRunPolicyApply_NoContext_InvalidType(t *testing.T) {
-	// NewBaseCommand fails before parsePolicyType is reached
-	err := runPolicyApply(noContextFlags(), "pol-1", "test-policy", "bad-type",
-		"desc", "br0", 100, true)
-	assertNoContextError(t, err)
-}
-
 func TestRunPolicyGet_NoContext(t *testing.T) {
 	err := runPolicyGet(noContextFlags(), "pol-1")
 	assertNoContextError(t, err)

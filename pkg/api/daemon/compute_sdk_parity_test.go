@@ -87,10 +87,22 @@ type vmSDKTransport struct {
 	wrongState codes.Code
 }
 
+// wrongStateOf is the class a VM in the wrong state reaches the caller as
+// for one verb. Every transport answers a delete with FailedPrecondition:
+// the SDK's REST transport reads a DELETE's 409 that way, since a delete
+// cannot collide with an existing resource.
+func (tr vmSDKTransport) wrongStateOf(deletes bool) codes.Code {
+	if deletes {
+		return codes.FailedPrecondition
+	}
+	return tr.wrongState
+}
+
 var vmSDKTransports = []vmSDKTransport{
-	// Both REST servers render FailedPrecondition as 400, which the SDK
-	// reads back as InvalidArgument.
-	{"REST", dialComputeREST, codes.InvalidArgument},
+	// Both REST servers render FailedPrecondition as 409 Conflict (#665),
+	// which the SDK reads back as AlreadyExists except on a DELETE (see
+	// wrongStateOf).
+	{"REST", dialComputeREST, codes.AlreadyExists},
 	{"QUIC", dialComputeQUIC, codes.FailedPrecondition},
 	{"MCP", dialComputeMCP, codes.FailedPrecondition},
 	{"gRPC", dialComputeGRPC, codes.FailedPrecondition},

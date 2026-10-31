@@ -25,6 +25,16 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
+// The role permissions the suite grants. go-qrdb's role store accepts only
+// permissions in its registry (pkg/role validatePermissions returns
+// InvalidPermissionError otherwise), and the pinned registry names the
+// secrets vocabulary but no device:* scope, so the suite uses secrets:*.
+const (
+	permSecretsRead   = "secrets:read"
+	permSecretsWrite  = "secrets:write"
+	permSecretsDelete = "secrets:delete"
+)
+
 // TestIAMMultiProtocol runs all IAM tests across multiple protocols
 func TestIAMMultiProtocol(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -526,7 +536,7 @@ func testRoleCRUD(t *testing.T, ctx context.Context, adapter IAMCommands) {
 			ID:          GenerateTestRoleID(testID),
 			Name:        "Test Role " + testID,
 			Description: "Test role description",
-			Permissions: []string{"device:read", "device:write"},
+			Permissions: []string{permSecretsRead, permSecretsWrite},
 		}
 
 		result, err := adapter.CreateRole(ctx, opts)
@@ -554,7 +564,7 @@ func testRoleCRUD(t *testing.T, ctx context.Context, adapter IAMCommands) {
 			ID:          GenerateTestRoleID(testID + "-get"),
 			Name:        "Test Role Get " + testID,
 			Description: "Test role for get operation",
-			Permissions: []string{"device:read"},
+			Permissions: []string{permSecretsRead},
 		}
 
 		createResult, err := adapter.CreateRole(ctx, createOpts)
@@ -589,7 +599,7 @@ func testRoleCRUD(t *testing.T, ctx context.Context, adapter IAMCommands) {
 			ID:          GenerateTestRoleID(testID + "-update"),
 			Name:        "Test Role Original",
 			Description: "Original description",
-			Permissions: []string{"device:read"},
+			Permissions: []string{permSecretsRead},
 		}
 
 		createResult, err := adapter.CreateRole(ctx, createOpts)
@@ -603,7 +613,7 @@ func testRoleCRUD(t *testing.T, ctx context.Context, adapter IAMCommands) {
 			RoleID:      createResult.Role.ID,
 			Name:        "Test Role Updated",
 			Description: "Updated description",
-			Permissions: []string{"device:read", "device:write", "device:delete"},
+			Permissions: []string{permSecretsRead, permSecretsWrite, permSecretsDelete},
 		}
 
 		updateResult, err := adapter.UpdateRole(ctx, updateOpts)
@@ -632,7 +642,7 @@ func testRoleCRUD(t *testing.T, ctx context.Context, adapter IAMCommands) {
 			ID:          GenerateTestRoleID(testID + "-delete"),
 			Name:        "Test Role Delete",
 			Description: "Test role for deletion",
-			Permissions: []string{"device:read"},
+			Permissions: []string{permSecretsRead},
 		}
 
 		createResult, err := adapter.CreateRole(ctx, createOpts)
@@ -675,7 +685,7 @@ func testRoleCRUD(t *testing.T, ctx context.Context, adapter IAMCommands) {
 				ID:          GenerateTestRoleID(testID + "-list-" + string(rune('a'+i))),
 				Name:        "Test Role List " + testID,
 				Description: "Test role for listing",
-				Permissions: []string{"device:read"},
+				Permissions: []string{permSecretsRead},
 			}
 
 			_, err := adapter.CreateRole(ctx, createOpts)
@@ -717,7 +727,7 @@ func testPermissionCheck(t *testing.T, ctx context.Context, adapter IAMCommands)
 			ID:          roleID,
 			Name:        "Test Role Permission Allow",
 			Description: "Test role for permission check",
-			Permissions: []string{"device:read", "device:write"},
+			Permissions: []string{permSecretsRead, permSecretsWrite},
 		}
 
 		_, err := adapter.CreateRole(ctx, roleOpts)
@@ -743,7 +753,7 @@ func testPermissionCheck(t *testing.T, ctx context.Context, adapter IAMCommands)
 			TenantID:  tenantID,
 			SubjectID: userResult.User.ID,
 			Action:    "read",
-			Resource:  "device",
+			Resource:  "secrets",
 			Roles:     []string{roleID},
 		}
 
@@ -807,7 +817,7 @@ func testRoleHierarchy(t *testing.T, ctx context.Context, adapter IAMCommands) {
 			ID:          roleID,
 			Name:        "Test Role Assign",
 			Description: "Test role for assignment",
-			Permissions: []string{"device:read"},
+			Permissions: []string{permSecretsRead},
 		}
 
 		_, err := adapter.CreateRole(ctx, roleOpts)
@@ -874,7 +884,7 @@ func testRoleHierarchy(t *testing.T, ctx context.Context, adapter IAMCommands) {
 			ID:          roleID,
 			Name:        "Test Role Revoke",
 			Description: "Test role for revocation",
-			Permissions: []string{"device:read"},
+			Permissions: []string{permSecretsRead},
 		}
 
 		_, err := adapter.CreateRole(ctx, roleOpts)
@@ -938,7 +948,7 @@ func testRoleHierarchy(t *testing.T, ctx context.Context, adapter IAMCommands) {
 			ID:          role1ID,
 			Name:        "Test Role Multi 1",
 			Description: "Test role 1 for multiple role assignment",
-			Permissions: []string{"device:read"},
+			Permissions: []string{permSecretsRead},
 		}
 
 		_, err := adapter.CreateRole(ctx, role1Opts)
@@ -952,7 +962,7 @@ func testRoleHierarchy(t *testing.T, ctx context.Context, adapter IAMCommands) {
 			ID:          role2ID,
 			Name:        "Test Role Multi 2",
 			Description: "Test role 2 for multiple role assignment",
-			Permissions: []string{"device:write"},
+			Permissions: []string{permSecretsWrite},
 		}
 
 		_, err = adapter.CreateRole(ctx, role2Opts)
@@ -1126,7 +1136,7 @@ func TestIAMMultiProtocol_ErrorHandling(t *testing.T) {
 					ID:          roleID,
 					Name:        "Test Role Dup 1",
 					Description: "First role",
-					Permissions: []string{"device:read"},
+					Permissions: []string{permSecretsRead},
 				}
 
 				_, err := adapter.CreateRole(ctx, opts)

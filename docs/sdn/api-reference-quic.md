@@ -41,9 +41,10 @@ Port authentication has no opcode. The SDK's QUIC transport maps neither
 sending anything. The other transports refuse both with `FailedPrecondition`
 until the switch enforces port authentication ([api.md](api.md) §4).
 
-The policy operations carry the policy shape REST, gRPC and MCP use, so a
-policy applied on one transport reads back the same on the others. The
-apply request and the responses are the REST types in
+The policy operations carry the policy shape the daemon-only REST server and
+MCP use, and reach the same `SDNService` as gRPC and the webservice REST
+routes, so a policy applied on one transport reads back the same on the
+others. The apply request and the responses are the REST types in
 `pkg/api/rest/sdn_handlers.go`, keyed by their Go field names (`Name`,
 `Type`, `Rules`, `DestinationPort`, …), not by the snake_case JSON names:
 

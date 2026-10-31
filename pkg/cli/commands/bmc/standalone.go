@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -298,11 +299,13 @@ func captureAndConfirmSPKI(ctx context.Context, host string, port int) (string, 
 	captureCfg := &tls.Config{
 		InsecureSkipVerify: true, //nolint:gosec // capture-then-confirm: peer cert capture only, no app data exchanged; pinned reconnect follows
 	}
-	conn, err := tls.DialWithDialer(dialer, "tcp", addr, captureCfg)
+	tlsDialer := &tls.Dialer{NetDialer: dialer, Config: captureCfg}
+	conn, err := tlsDialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return "", ErrBMCCaptureDial{Host: addr, Cause: err}
 	}
-	certs := conn.ConnectionState().PeerCertificates
+	// tls.Dialer always returns a *tls.Conn.
+	certs := conn.(*tls.Conn).ConnectionState().PeerCertificates
 	conn.Close()
 
 	if len(certs) == 0 {
@@ -336,11 +339,7 @@ func captureAndConfirmSPKI(ctx context.Context, host string, port int) (string, 
 
 // isTerminal reports whether os.Stdin is an interactive terminal.
 func isTerminal() bool {
-	fi, err := os.Stdin.Stat()
-	if err != nil {
-		return false
-	}
-	return (fi.Mode() & os.ModeCharDevice) != 0
+	return term.IsTerminal(int(os.Stdin.Fd()))
 }
 
 // newBMCClient is the package-level constructor used by newStandaloneClient.

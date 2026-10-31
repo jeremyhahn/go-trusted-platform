@@ -168,6 +168,10 @@ type supervisedGatewayd struct {
 	// programmed is the bridge as the datapath child left it before the
 	// current kill; datapathReconciled compares the successor against it.
 	programmed bridgeState
+
+	// oomKills is the memory.events oom_kill count a test caused on purpose,
+	// by child name; teardown expects every other leaf to have none.
+	oomKills map[string]int64
 }
 
 func TestGatewaydSupervisorKillUnderLoad(t *testing.T) {
@@ -278,6 +282,13 @@ func TestGatewaydSupervisorMemoryMaxRestartsOnlyThatChild(t *testing.T) {
 	if usageAfter.OOMKill <= usageBefore.OOMKill {
 		t.Fatalf("%s memory.events oom_kill = %d, want more than %d: the 1 MiB limit did not OOM-kill it", victim, usageAfter.OOMKill, usageBefore.OOMKill)
 	}
+	// memory.peak keeps the most the leaf ever held, so it still shows the
+	// charge the kill took away: over the 1 MiB limit, and at least what the
+	// child held just before the limit dropped.
+	if usageAfter.Peak <= 1<<20 || usageAfter.Peak < usageBefore.Current {
+		t.Errorf("%s memory.peak = %d, want over 1 MiB and at least the %d memory.current before the limit", victim, usageAfter.Peak, usageBefore.Current)
+	}
+	gw.oomKills = map[string]int64{victim: usageAfter.OOMKill}
 
 	after := gw.awaitRelaunch(t, victim, before, probes[victim])
 	if limit := readTrimmed(t, filepath.Join(leaf, "memory.max")); limit != strconv.FormatInt(def.MemoryMax, 10) {
@@ -461,12 +472,50 @@ func (g *supervisedGatewayd) launch(t *testing.T) {
 		close(exited)
 	}()
 
-	WaitFor(t, 60*time.Second, 200*time.Millisecond, "the datapath, proxy and routing children to serve", func() bool {
+	what := fmt.Sprintf("gatewayd (pid %d) datapath, proxy and routing children to serve", cmd.Process.Pid)
+	waitUntil(t, 60*time.Second, what, func() string {
 		g.requireRunning(t)
 		children := g.children(t)
-		return children["datapath"] != 0 && children["proxy"] != 0 && children["routing"] != 0 &&
-			g.datapathProgrammed() && g.proxyServes() && g.bgpListens()
+		for _, name := range []string{"datapath", "proxy", "routing"} {
+			if children[name] == 0 {
+				return "no " + name + " child running"
+			}
+		}
+		switch {
+		case !g.datapathProgrammed():
+			return "datapath has not programmed bridge " + supervisedBridge
+		case !g.proxyServes():
+			return "proxy not answering at " + g.baseURL
+		case !g.bgpListens():
+			return "routing not listening on " + g.bgpAddress
+		}
+		return ""
 	})
+}
+
+// waitUntil polls pending until it reports nothing left. On the deadline it
+// fails naming the wait, the deadline and what was still pending, so a
+// timed-out wait says why rather than only that it waited.
+func waitUntil(t *testing.T, timeout time.Duration, what string, pending func() string) {
+	t.Helper()
+	last := pending()
+	if last == "" {
+		return
+	}
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-deadline.C:
+			t.Fatalf("timed out after %v waiting for %s: still %s", timeout, what, last)
+		case <-ticker.C:
+			if last = pending(); last == "" {
+				return
+			}
+		}
+	}
 }
 
 // awaitRelaunch waits, within relaunchBound, for a new child of the given
@@ -857,6 +906,22 @@ func (g *supervisedGatewayd) stop(t *testing.T) {
 				continue
 			}
 			logMemory(t, name, "at teardown", usage)
+			def, err := process.DefinitionByName(name)
+			if err != nil {
+				t.Errorf("definition %s: %v", name, err)
+				continue
+			}
+			// A leaf that charged nothing measured nothing. One the kernel
+			// OOM-killed in, beyond what the test did on purpose, means
+			// the class value is below what the child needs; the relaunch
+			// keeps the leaf, so a purposeful kill is still counted here.
+			if usage.Peak <= 0 {
+				t.Errorf("%s memory.peak at teardown = %d, want the bytes the child charged", name, usage.Peak)
+			}
+			if want := g.oomKills[name]; usage.OOMKill != want {
+				t.Errorf("%s memory.events oom_kill at teardown = %d, want %d: the class MemoryMax %d killed it", name, usage.OOMKill, want, def.MemoryMax)
+			}
+			t.Logf("%s memory.peak %d is %.1f%% of the class MemoryMax %d", name, usage.Peak, 100*float64(usage.Peak)/float64(def.MemoryMax), def.MemoryMax)
 		}
 		if err := g.cmd.Process.Signal(syscall.SIGTERM); err != nil {
 			t.Errorf("signal gatewayd: %v", err)
@@ -866,12 +931,11 @@ func (g *supervisedGatewayd) stop(t *testing.T) {
 		select {
 		case <-g.exited:
 			if g.exitErr != nil {
-				// "signal: terminated" means gatewayd had no SIGTERM handler
-				// yet and Go's default action killed it mid-start.
-				t.Errorf("gatewayd shutdown on SIGTERM: %v, want exit status 0 from its stop path", g.exitErr)
+				t.Errorf("teardown: gatewayd (pid %d) did not shut down cleanly on SIGTERM: %v%s",
+					g.cmd.Process.Pid, g.exitErr, killedBySignal(g.exitErr))
 			}
 		case <-deadline.C:
-			t.Errorf("gatewayd did not stop within 30s of SIGTERM")
+			t.Errorf("teardown: gatewayd (pid %d) did not stop within 30s of SIGTERM", g.cmd.Process.Pid)
 			if err := g.cmd.Process.Kill(); err != nil {
 				t.Errorf("kill gatewayd: %v", err)
 			}
@@ -882,6 +946,21 @@ func (g *supervisedGatewayd) stop(t *testing.T) {
 		t.Logf("gatewayd log:\n%s", g.log(t))
 	}
 	g.removeCgroups(t)
+}
+
+// killedBySignal explains an exit by a signal's default action: gatewayd
+// handles SIGTERM, so dying of it means the handler was not installed when
+// the signal arrived.
+func killedBySignal(err error) string {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return ""
+	}
+	status, ok := exitErr.Sys().(syscall.WaitStatus)
+	if !ok || !status.Signaled() {
+		return ""
+	}
+	return fmt.Sprintf(" (killed by the default action of %v: no handler for it was installed yet)", status.Signal())
 }
 
 // removeCgroups removes the test's cgroup parent. A reaped child leaves

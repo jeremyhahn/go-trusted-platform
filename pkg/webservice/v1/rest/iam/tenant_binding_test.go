@@ -93,12 +93,19 @@ func tenantBoundIAMServer(t *testing.T, servedTenant *string) *httptest.Server {
 // given IAM client and policy enforcement point behind the handlers.
 func adminSessionIAMServer(t *testing.T, client IAMClient, pep PEPClient) *httptest.Server {
 	t.Helper()
+	return adminSessionIAMServerIn(t, "tenant-a", client, pep)
+}
+
+// adminSessionIAMServerIn is adminSessionIAMServer with the admin session
+// bound to tenantID, so a test can reach the system-only tenant routes.
+func adminSessionIAMServerIn(t *testing.T, tenantID string, client IAMClient, pep PEPClient) *httptest.Server {
+	t.Helper()
 	logger := logging.NewLogger(slog.LevelDebug, os.Stdout)
 	writer := response.NewResponseWriter(logger, nil)
 	guard, err := iammw.NewSessionGuard(logger, writer)
 	require.NoError(t, err)
 
-	session := iammw.NewIAMSession(&iamsdk.User{ID: "admin-a", TenantID: "tenant-a", Roles: []string{"admin"}})
+	session := iammw.NewIAMSession(&iamsdk.User{ID: "admin-a", TenantID: tenantID, Roles: []string{"admin"}})
 	authenticate := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			next.ServeHTTP(w, r.WithContext(iammw.SetSessionInContext(r.Context(), session)))

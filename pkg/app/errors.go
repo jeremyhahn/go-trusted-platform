@@ -143,6 +143,17 @@ func (ErrCANotConfigured) Error() string {
 	return "app: no certificate authority is configured"
 }
 
+// ErrEnrollmentUnavailable is returned by EnrollIdentity when the App lacks
+// something ACME device enrollment needs. Missing names it.
+type ErrEnrollmentUnavailable struct {
+	Missing string
+}
+
+// Error returns the error message.
+func (e ErrEnrollmentUnavailable) Error() string {
+	return "app: device enrollment is unavailable: " + e.Missing + " is missing"
+}
+
 // ErrCAPINs is returned by LoadOrInitCA when the CA's PINs cannot be read.
 type ErrCAPINs struct {
 	Cause error

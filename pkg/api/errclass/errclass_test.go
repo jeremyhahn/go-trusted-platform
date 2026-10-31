@@ -20,6 +20,7 @@ import (
 
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/transport/embedded"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -68,6 +69,8 @@ func TestCode(t *testing.T) {
 		{"database timeout", quicbaas.NewDatabaseError(quicbaas.ErrTimeout, "op", "slow"), codes.DeadlineExceeded},
 		{"database unavailable", quicbaas.NewDatabaseError(quicbaas.ErrUnavailable, "op", "down"), codes.Unavailable},
 		{"wrapped database error", wrapper{quicbaas.NewDatabaseError(quicbaas.ErrNotFound, "op", "gone")}, codes.NotFound},
+		{"embedded unknown method", embedded.NewUnknownMethodError("quicbaas.Secrets", "Rotate"), codes.Unimplemented},
+		{"wrapped embedded unknown method", wrapper{embedded.NewUnknownMethodError("quicbaas.Secrets", "Rotate")}, codes.Unimplemented},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -111,7 +114,7 @@ func TestHTTPStatus(t *testing.T) {
 		{codes.NotFound, http.StatusNotFound},
 		{codes.AlreadyExists, http.StatusConflict},
 		{codes.Aborted, http.StatusConflict},
-		{codes.FailedPrecondition, http.StatusPreconditionFailed},
+		{codes.FailedPrecondition, http.StatusConflict},
 		{codes.ResourceExhausted, http.StatusTooManyRequests},
 		{codes.Unimplemented, http.StatusNotImplemented},
 		{codes.Unavailable, http.StatusServiceUnavailable},

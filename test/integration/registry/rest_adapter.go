@@ -80,8 +80,12 @@ func (r *RESTAdapter) Name() string {
 
 // Setup builds the mTLS client and checks the registry surface answers.
 func (r *RESTAdapter) Setup(ctx context.Context) error {
-	r.baseURL = strings.TrimRight(helpers.GetRESTEndpoint(), "/")
-	r.httpClient = helpers.NewAdminHTTPClient(DefaultCommandTimeout)
+	endpoint, err := helpers.RequireEndpoint(helpers.EnvRESTEndpoint)
+	if err != nil {
+		return err
+	}
+	r.baseURL = strings.TrimRight(endpoint, "/")
+	r.httpClient = helpers.NewHTTPClient(DefaultCommandTimeout)
 
 	if _, err := r.Status(ctx); err != nil {
 		return ErrAdapterConnectionFailed{Adapter: "REST", URL: r.baseURL, Err: err}

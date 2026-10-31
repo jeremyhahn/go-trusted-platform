@@ -116,11 +116,6 @@ func NewQUICAdapter() *QUICAdapter {
 	}
 }
 
-// quicALPN is the ALPN protocol the daemon's QUIC listener negotiates, taken
-// from the server package rather than retyped. The previous adapter offered
-// "device-quic", which no listener has ever advertised.
-const quicALPN = quicwire.ALPNProtocol
-
 // Name returns the adapter name.
 func (a *QUICAdapter) Name() string { return "QUIC" }
 

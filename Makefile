@@ -358,9 +358,10 @@ BUILD_TAGS_ARG          := $(if $(strip $(BUILD_TAGS)),-tags '$(strip $(BUILD_TA
 # Integration tests always need codec tags for QUIC protocol support.
 # The go-codec library uses build tags to compile real codecs vs stubs.
 INTEGRATION_CODEC_TAGS  := codec_msgpack codec_json codec_cbor
-# Integration builds carry the vector service (the WITH_VECTOR=1 tags) so the
-# quicbaas and sdk suites' Vector assertions run against a real vector store;
-# pkg/storage/quicbaas.TestConfig enables it in exactly such a build.
+# Integration builds carry the vector service (the WITH_VECTOR=1 tags), and
+# pkg/storage/quicbaas.TestConfig enables it in exactly such a build. The
+# factory's Vector assertion runs as a unit test; add these tags through
+# GO_BUILD_TAGS to run it against a real vector store.
 INTEGRATION_VECTOR_TAGS := vector qrdb_vector
 TEST_BUILD_TAGS         := integration $(INTEGRATION_CODEC_TAGS) $(INTEGRATION_VECTOR_TAGS) $(strip $(BUILD_TAGS))
 TEST_BUILD_TAGS_ARG     := -tags '$(strip $(TEST_BUILD_TAGS))'
@@ -372,11 +373,16 @@ WEB_EMBED_DIR           := pkg/webserver/embed/dist
 DESKTOP_FRONTEND_SRC    := cmd/platformctl/frontend
 DESKTOP_FRONTEND_DIST   := cmd/platformctl/frontend/dist
 
-ARCH                    := $(shell go env GOARCH)
-OS                      := $(shell go env GOOS)
+# The go command on PATH, or empty. A host without Go (CI's integration legs
+# build the integration image on a runner that has none, #1119) takes the
+# host's GOOS and GOARCH from uname and GOBIN from GO_IMAGE's install path, so
+# a target that only drives docker parses without go.
+GO_CMD                  := $(shell command -v go 2>/dev/null)
+ARCH                    := $(if $(GO_CMD),$(shell go env GOARCH),$(patsubst x86_64,amd64,$(patsubst aarch64,arm64,$(shell uname -m))))
+OS                      := $(if $(GO_CMD),$(shell go env GOOS),$(shell uname -s | tr A-Z a-z))
 LONG_BITS               := $(shell getconf LONG_BIT)
 
-GOBIN                   := $(shell dirname `which go`)
+GOBIN                   := $(if $(GO_CMD),$(patsubst %/,%,$(dir $(GO_CMD))),/usr/local/go/bin)
 PYTHONBIN               ?= /usr/bin/python3.8
 PIPBIN                  ?= pip
 
@@ -645,6 +651,10 @@ COVERAGE_THRESHOLD          := 90
 #   G401: MD5/SHA1 - required for certificate thumbprints, PKCS standards
 #   G407: hardcoded nonce - false positive, nonces are random not hardcoded
 #   G505: crypto/sha1 import - required for PKCS standards, WebAuthn
+# How many packages gosec analyzes at once. Each worker type-checks its
+# package, so memory grows with it; CI's make security step passes 2 to keep
+# the stage under its 16g container limit (#1178).
+GOSEC_CONCURRENCY           ?= 4
 GOSEC_EXCLUDE               := G102,G103,G104,G107,G109,G110,G115,G118,G122,G204,G301,G302,G304,G305,G306,G401,G402,G407,G505,G702,G703,G704
 
 # Text colors
@@ -873,9 +883,11 @@ build-debug-static: build-debug
 # Cross-compile ARM 64-bit: a pure-Go build (CGO_ENABLED=0, same tag set as the
 # native `build` target), so no cross toolchain is required and the result is a
 # statically linked ELF. Output goes to $(ARM64_BIN_DIR), never bin/, so it
-# cannot clobber a native build. platformctl-static is the sibling name that
-# `platformctl iso create` (pkg/iso/customize.go) looks for next to platformd;
-# with CGO disabled it is byte-identical to platformctl, so it is a copy.
+# cannot clobber a native build. platformctl-static is the name
+# `platformctl diskimage create` looks for beside itself as the host installer;
+# with CGO disabled it is byte-identical to platformctl, so it is a copy. The
+# media's static installer is this platformctl-static, or platformctl when the
+# directory holds none (pkg/iso ISOBuildConfig.UseBinariesDir).
 .PHONY: build-arm64
 ## build-arm64: Cross-compile platformd, platformctl and platformctl-static for linux/arm64 into bin/aarch64
 build-arm64: _web-embed-prepare
@@ -1496,7 +1508,7 @@ test-quicbaas:
 .PHONY: test-quicbaas-coverage
 test-quicbaas-coverage:
 	@echo "Running QuicBaaS unit tests with coverage (fast, no Raft)..."
-	@echo "Note: client.go and factory.go (0%) require Raft - tested via integration-test-quicbaas"
+	@echo "Note: client.go and factory.go (0%) require Raft - tested via test-quicbaas-coverage-full"
 	go test -count=1 -tags "$(BUILD_TAGS)" -run "Test.*_Mock|^TestMockStorage|^TestErr|^TestDefault|^TestConfig|^TestConsistency|^TestParse|^TestGetFree|^TestAllErrors" -coverprofile=/tmp/quicbaas.cover ./pkg/storage/quicbaas/...
 	go tool cover -func=/tmp/quicbaas.cover | tail -1
 
@@ -1513,17 +1525,6 @@ test-quicbaas-coverage-full:
 test-quicbaas-all:
 	@echo "Running all QuicBaaS tests (includes Raft, serial, ~3 min)..."
 	go test -v -count=1 -tags "$(BUILD_TAGS)" -parallel 1 -timeout 10m ./pkg/storage/quicbaas/...
-
-# QuicBaaS and Datastore Integration Tests (using devcontainer)
-.PHONY: integration-test-quicbaas
-## integration-test-quicbaas: Run the QuicBaaS SDK integration suite (test/integration/quicbaas) in the devcontainer
-integration-test-quicbaas: build-devcontainer
-	$(call run-integration-suite,quicbaas)
-
-.PHONY: integration-test-datastore
-## integration-test-datastore: Run the datastore integration suite (test/integration/datastore) in the devcontainer
-integration-test-datastore: build-devcontainer
-	$(call run-integration-suite,datastore)
 
 .PHONY: integration-test-ca-quicbaas-adapter
 ## integration-test-ca-quicbaas-adapter: Run CA QuicBaaS adapter integration tests in development container
@@ -1814,11 +1815,6 @@ integration-test-tpm: build-devcontainer
 integration-test-bootstrap: build-devcontainer
 	$(call run-integration-suite,bootstrap)
 
-## integration-test-restroutes: Verify every WebUI REST endpoint is registered on platformd
-.PHONY: integration-test-restroutes
-integration-test-restroutes: build-devcontainer
-	$(call run-integration-suite,restroutes)
-
 # NTP (time synchronization) Tests
 #
 # NTP_TAGS pins the tag set the time-synchronization surface actually needs:
@@ -1970,11 +1966,6 @@ integration-test-authenticode: build-devcontainer
 integration-test-cli: build-devcontainer
 	$(call run-integration-suite,cli)
 
-## integration-test-cmd: Run the command suites (test/integration/cmd) in devcontainer, no shared platformd
-.PHONY: integration-test-cmd
-integration-test-cmd: build-devcontainer
-	$(call run-integration-suite,cmd)
-
 ## integration-test-compute: Run the compute VM multi-protocol suite (test/integration/compute) in devcontainer, platformd on local-qemu
 .PHONY: integration-test-compute
 integration-test-compute: build-devcontainer
@@ -1999,11 +1990,6 @@ integration-test-pxe: build-devcontainer
 .PHONY: integration-test-registry
 integration-test-registry: build-devcontainer
 	$(call run-integration-suite,registry)
-
-## integration-test-sdk: Run the SDK suite (test/integration/sdk) in devcontainer, no shared platformd
-.PHONY: integration-test-sdk
-integration-test-sdk: build-devcontainer
-	$(call run-integration-suite,sdk)
 
 ## bench-ntp: Run time-synchronization benchmarks
 .PHONY: bench-ntp
@@ -2051,8 +2037,10 @@ DOCKER_MODULE_MOUNTS :=
 # The host module cache, mounted into the devcontainer so a suite does not
 # re-download ~12G per run. Read-write on purpose: Go writes lock files into
 # the cache even when every module is already present, so a read-only mount
-# fails. Derived rather than hardcoded so this works off this workstation.
-GO_MODULE_CACHE := $(shell go env GOMODCACHE)
+# fails. Derived rather than hardcoded so this works off this workstation;
+# without go, go's own default (GOMODCACHE, else the first GOPATH entry's
+# pkg/mod, else ~/go/pkg/mod).
+GO_MODULE_CACHE := $(if $(GO_CMD),$(shell go env GOMODCACHE),$(or $(GOMODCACHE),$(if $(GOPATH),$(firstword $(subst :, ,$(GOPATH)))/pkg/mod),$(HOME)/go/pkg/mod))
 
 # One devcontainer invocation for every per-package integration suite.
 #
@@ -2076,6 +2064,8 @@ define run-integration-suite
 	@echo "Build tags: $(TEST_BUILD_TAGS)"
 	@docker run --rm --privileged \
 		--name go-trusted-platform-$(1)-test \
+		--memory $(IT_MEMORY) --memory-swap $(IT_MEMORY) \
+		$(if $(CI_CGROUP_PARENT),--cgroup-parent $(CI_CGROUP_PARENT)) \
 		--device /dev/net/tun:/dev/net/tun \
 		--tmpfs /tmp:exec,mode=1777 \
 		-v $(PWD):$(SOURCES_BASE)/go-trusted-platform \
@@ -2096,11 +2086,13 @@ endef
 .PHONY: integration-test
 ## integration-test: Run all integration suites in the integration image
 ## The CI standard's integration stage (handbook ci-standard.md §1). Builds the
-## integration stage of build/docker/devcontainer/Dockerfile as $(IT_IMAGE) and
+## integration-legs stage of build/docker/devcontainer/Dockerfile (the
+## integration image with a warm build cache) as $(IT_IMAGE) and
 ## runs compose.yaml's integration service under the project $(IT_PROJECT):
 ## its entrypoint is the suite runner, which starts OVS, swtpm and platformd,
-## and `all` selects the runner's ALL_TARGETS. The stack is torn down on every
-## exit and the target exits with the suites' status. CI passes a per-run
+## and `all` selects the runner's ALL_TARGETS. The stack is torn down
+## (`down --volumes --remove-orphans`) by an EXIT trap, so an error, Ctrl-C or
+## SIGTERM tears it down too, and the target exits with the suites' status. CI passes a per-run
 ## IT_PROJECT and IT_IMAGE so two runs on one daemon never collide.
 ## Set WITH_CODEC_* or other WITH_* flags for additional build tags.
 ## CUSTOMIZE (ruling 125): IT_FOREIGN_BASELINE=1 (CI sets it) also writes the
@@ -2109,21 +2101,42 @@ endef
 ## $(FOREIGN_BASELINE), and fails closed on anything it cannot attribute to a
 ## listed test. Unset, the target exits with the suites' own status, so a
 ## developer sees every failure (docs/test/integration.md).
+## IT_PREBUILT=1 runs the suites in an $(IT_IMAGE) already on the daemon and
+## builds nothing: CI's integration legs use the one image the integration-image
+## job built for the run (#1119).
 integration-test: SHELL := /bin/bash
-integration-test: docker-build-it
+integration-test: $(if $(IT_PREBUILT),,docker-build-it)
 	@echo "Build tags: $(TEST_BUILD_TAGS)"
 	@set -o pipefail; status=0; \
-	GO_TRUSTED_PLATFORM_IT_IMAGE=$(IT_IMAGE) HOST_UID=$$(id -u) HOST_GID=$$(id -g) \
+	export GO_TRUSTED_PLATFORM_IT_IMAGE=$(IT_IMAGE) GO_TRUSTED_PLATFORM_IT_MEMORY=$(IT_MEMORY) CI_CGROUP_PARENT='$(CI_CGROUP_PARENT)'; \
+	teardown() { \
+		docker compose -f $(DEVCONTAINER_COMPOSE) -p $(IT_PROJECT) down --volumes --remove-orphans || \
+			echo "warning: teardown of $(IT_PROJECT) failed; scripts/reap-stale-ci-stacks.sh removes what is left" >&2; \
+	}; \
+	trap teardown EXIT; trap 'exit 130' INT; trap 'exit 143' TERM; \
+	HOST_UID=$$(id -u) HOST_GID=$$(id -g) \
 		docker compose -f $(DEVCONTAINER_COMPOSE) -p $(IT_PROJECT) \
-		run --rm integration all "$(strip $(TEST_BUILD_TAGS))" $(if $(IT_FOREIGN_BASELINE),2>&1 | tee "$(IT_LOG)") || status=$$?; \
-	GO_TRUSTED_PLATFORM_IT_IMAGE=$(IT_IMAGE) \
-		docker compose -f $(DEVCONTAINER_COMPOSE) -p $(IT_PROJECT) down --volumes; \
+		run --rm integration $(IT_SELECT) "$(strip $(TEST_BUILD_TAGS))" $(if $(IT_FOREIGN_BASELINE),2>&1 | tee "$(IT_LOG)") || status=$$?; \
 	if [ $$status -ne 0 ] && [ -n "$(IT_FOREIGN_BASELINE)" ]; then \
 		echo "Integration suites failed (status $$status); checking the failures against $(FOREIGN_BASELINE) (ruling 125)"; \
 		status=0; \
 		$(GO) run ./scripts/foreignfailures -job integration -baseline $(FOREIGN_BASELINE) "$(IT_LOG)" || status=$$?; \
 	fi; \
 	exit $$status
+
+.PHONY: integration-test-leg
+## integration-test-leg: Run one leg of the integration suite (LEG=<n>)
+## CI runs the integration job as one parallel job per leg (#1119). A leg is
+## `make integration-test` on that leg's share of the runner's ALL_TARGETS:
+## same image, bootstrap and foreign-failure verdict. The legs and what each
+## holds: `bash build/docker/devcontainer/run-integration-tests.sh legs`.
+integration-test-leg: IT_SELECT = leg-$(LEG)
+integration-test-leg: integration-test
+ifneq ($(filter integration-test-leg,$(MAKECMDGOALS)),)
+ifeq ($(strip $(LEG)),)
+$(error integration-test-leg needs LEG=<n>, a leg of INTEGRATION_LEGS in the suite runner; docs/test/integration.md lists them)
+endif
+endif
 
 .PHONY: integration-test-webservice
 integration-test-webservice: docker-builder-load
@@ -2208,6 +2221,11 @@ DEVCONTAINER_COMPOSE := build/docker/devcontainer/compose.yaml
 DEVCONTAINER_IMAGE := trusted-platform-dev:latest
 DEVCONTAINER_NAME := trusted-platform-devcontainer
 
+# DEVCONTAINER_WAIT_FOR loads the harness's bounded readiness polls (wait_for,
+# no_process_matching) into a `docker exec ... bash -c` script, from the
+# checkout the devcontainer mounts at /workspace (#964).
+DEVCONTAINER_WAIT_FOR := source /workspace/build/docker/devcontainer/wait-for.sh
+
 # The toolchain image is tagged with a hash of everything baked into it, so a
 # change to the Dockerfile, a pin or a module list builds a new tag and an
 # unchanged tree reuses the old one. Recursive (=) so the hash runs only when a
@@ -2222,12 +2240,32 @@ TOOLCHAIN_IMAGE = go-trusted-platform-toolchain:$(TOOLCHAIN_TAG)
 # CI passes per-run values.
 IT_IMAGE ?= go-trusted-platform-it:local
 IT_PROJECT ?= go-trusted-platform-it
+# Set to use an $(IT_IMAGE) that is already built (integration-test).
+IT_PREBUILT ?=
+
+# The integration container's memory limit, swap included (so no swap): the
+# compose integration service (CI's integration legs and soak) and every
+# run-integration-suite container. The legs peaked at 4.5 to 12.9 GB with no
+# limit on ci-node-2 (#1178); 16g is that plus headroom.
+IT_MEMORY ?= 16g
+
+# The cgroup parent of every container CI starts: the run-integration-suite
+# container, the compose integration service (exported to it by
+# integration-test) and scripts/in-toolchain-image.sh's toolchain container,
+# which reads the same variable from its environment. Under ci.slice the runner
+# host bounds them together; without a parent they ran in system.slice, outside
+# it (#1178). Empty passes no parent: `make ... CI_CGROUP_PARENT=` on a host
+# with no ci.slice.
+CI_CGROUP_PARENT ?= ci.slice
 
 # The foreign-failure baseline (ruling 125). IT_FOREIGN_BASELINE is empty by
 # default: only `make integration-test IT_FOREIGN_BASELINE=1` consults it.
 IT_FOREIGN_BASELINE ?=
 IT_LOG ?= $(or $(TMPDIR),/tmp)/go-trusted-platform-integration.log
 FOREIGN_BASELINE ?= .github/foreign-failures.tsv
+# What `make integration-test` hands the suite runner: `all`, or `leg-<n>` when
+# integration-test-leg runs it (#1119).
+IT_SELECT := all
 # The FIPS job's sibling baseline, always consulted by `make test-fips`.
 FIPS_LOG ?= $(or $(TMPDIR),/tmp)/go-trusted-platform-fips.log
 FIPS_FOREIGN_BASELINE ?= .github/foreign-failures-fips.tsv
@@ -2240,26 +2278,99 @@ MODULE_ENV_FILE ?= .devcontainer/.env
 
 # The docker build arguments every devcontainer stage shares. $(comma) because a
 # literal comma inside $(if ...) would end its condition.
-# The key of the image's apt layer: the UTC day, so Debian's fixes reach the
-# image within a day although BuildKit caches the layer. Pass APT_REFRESH=<key>
+# The key of the image's apt layer: the newest Date: of the InRelease files of
+# the image's Debian suites (scripts/apt-refresh-key.sh), so a Debian fix
+# rebuilds the layer on the next build although BuildKit caches it. The script
+# falls back to the UTC date and hour, with a warning, if Debian is unreachable.
+# Computed once, and only by a recipe that expands it. Pass APT_REFRESH=<key>
 # to rebuild against a fixed key.
-APT_REFRESH ?= $(shell date -u +%Y-%m-%d)
+APT_REFRESH ?= $(eval APT_REFRESH := $$(shell scripts/apt-refresh-key.sh))$(APT_REFRESH)
 
+# The checksum of the Alpine package indexes the build resolves against
+# (scripts/apk-index-sum.sh, ci-standard.md §9). The devcontainer is Debian, so
+# CI's value is `none` and APT_REFRESH carries the package refresh; the build
+# argument is passed so the integration stages take it as the template does.
+APK_INDEX_SUM ?=
+
+# GO_BUILD_PROXY is passed only when the caller sets it, and quoted, because
+# CI's value uses the | separator (handbook devcontainer.md section 4,
+# ci-template v1.29.5).
 DEVCONTAINER_BUILD_ARGS = --build-arg GO_IMAGE=$(GO_IMAGE) \
 	--build-arg APT_REFRESH=$(APT_REFRESH) \
-	$(if $(GO_BUILD_PROXY),--build-arg GO_BUILD_PROXY=$(GO_BUILD_PROXY)) \
+	$(if $(GO_BUILD_PROXY),--build-arg "GO_BUILD_PROXY=$(GO_BUILD_PROXY)") \
 	$(if $(wildcard $(MODULE_ENV_FILE)),--secret id=gomodauth$(comma)src=$(MODULE_ENV_FILE)) \
 	-f $(DEVCONTAINER_DOCKERFILE)
 
-.PHONY: docker-build
-## docker-build: Build the toolchain image and the integration image
-docker-build: docker-build-it
-	DOCKER_BUILDKIT=1 docker build $(DEVCONTAINER_BUILD_ARGS) --target toolchain -t $(TOOLCHAIN_IMAGE) .
+# The BuildKit builder the devcontainer images build on. Empty builds on the
+# daemon's own builder. CI names this project's docker-container builder, so
+# its build cache is this project's alone and can be pruned without touching
+# another project's; --load copies the image into the daemon.
+BUILDX_BUILDER ?=
+# BUILDX_CLIENT_LOAD=1 makes docker-build-it stream the image to this shell's
+# `docker load` in place of --load, so it lands in the daemon `docker` here
+# talks to, whichever daemon the builder's node runs on. CI's integration legs
+# set it for the build a leg makes on a runner without the run's image (#1119).
+BUILDX_CLIENT_LOAD ?=
+DEVCONTAINER_CLIENT_LOAD = $(and $(BUILDX_BUILDER),$(BUILDX_CLIENT_LOAD))
+DEVCONTAINER_BUILD = $(if $(BUILDX_BUILDER),docker buildx build --builder $(BUILDX_BUILDER) $(if $(DEVCONTAINER_CLIENT_LOAD),--output type=docker$(comma)dest=-,--load),DOCKER_BUILDKIT=1 docker build)
+
+.PHONY: docker-build docker-build-integration docker-build-toolchain
+## docker-build: Build the integration image and the toolchain image
+docker-build: docker-build-integration docker-build-toolchain
+
+## docker-build-integration: Build the integration image as $(IT_IMAGE)
+## CI's image job gates $(IT_IMAGE) with `trivy image`: the integration stage,
+## without the warm build cache docker-build-it adds.
+## Its own target so CI's image job leases $(IT_IMAGE) before the toolchain
+## build starts: the image job holds its lease only across this build and the
+## scan (ci-standard.md §9).
+docker-build-integration:
+	$(DEVCONTAINER_BUILD) $(DEVCONTAINER_BUILD_ARGS) --build-arg APK_INDEX_SUM=$(APK_INDEX_SUM) \
+		--target integration -t $(IT_IMAGE) .
+
+## docker-build-toolchain: Build the toolchain image as $(TOOLCHAIN_IMAGE)
+docker-build-toolchain:
+	$(DEVCONTAINER_BUILD) $(DEVCONTAINER_BUILD_ARGS) --target toolchain -t $(TOOLCHAIN_IMAGE) .
+
+# IT_WARM_CACHE=0 makes docker-build-it skip the warm build cache: it builds
+# the integration stage, so a suite run compiles from an empty /gocache.
+IT_WARM_CACHE ?= 1
+IT_BUILD_TARGET = $(if $(filter 0,$(IT_WARM_CACHE)),integration,integration-legs)
 
 .PHONY: docker-build-it
-## docker-build-it: Build the integration image as $(IT_IMAGE)
+## docker-build-it: Build the image the integration suites run in as $(IT_IMAGE)
+## The integration-legs stage: the integration image with everything a suite
+## run compiles already in its build cache, built with the tags
+## integration-test passes the runner, so the cache matches (#1119).
+## IT_WARM_CACHE=0 builds the integration stage instead, without the warm build
+## cache: CI's leg fallback build, which the warm took past its timeout (#1146).
+# bash for this recipe alone: BUILDX_CLIENT_LOAD pipes the build into
+# `docker load` under pipefail, which dash (Debian's /bin/sh) does not have.
+docker-build-it: SHELL := /bin/bash
 docker-build-it:
-	DOCKER_BUILDKIT=1 docker build $(DEVCONTAINER_BUILD_ARGS) --target integration -t $(IT_IMAGE) .
+	$(if $(DEVCONTAINER_CLIENT_LOAD),set -o pipefail; )$(DEVCONTAINER_BUILD) $(DEVCONTAINER_BUILD_ARGS) --build-arg APK_INDEX_SUM=$(APK_INDEX_SUM) \
+		--target $(IT_BUILD_TARGET) 		--build-arg IT_BUILD_TAGS="$(strip $(TEST_BUILD_TAGS))" -t $(IT_IMAGE) . $(if $(DEVCONTAINER_CLIENT_LOAD),| docker load)
+
+# The integration image's content tag (ci-standard.md §9): a hash of the build
+# arguments that change the image (the stage, the warm cache's build tags, the
+# base and its package refresh) and of the whole build context, which is the
+# commit's tree, the diff of a dirty checkout and every untracked file
+# .gitignore keeps. An unchanged tree names the image it already built, so a
+# CI job reuses it; any change names a new one. IT_WARM_CACHE=0 names the
+# integration stage, as docker-build-integration builds it.
+IT_IMAGE_REPO := go-trusted-platform-ci-it
+
+.PHONY: it-image
+## it-image: Print the integration image's content tag, $(IT_IMAGE_REPO):<hash>
+it-image: SHELL := /bin/bash
+it-image:
+	@set -euo pipefail; \
+	{ printf '%s\n' 'GO_IMAGE=$(GO_IMAGE)' 'APT_REFRESH=$(APT_REFRESH)' 'APK_INDEX_SUM=$(APK_INDEX_SUM)' \
+		'TARGET=$(IT_BUILD_TARGET)' 'IT_BUILD_TAGS=$(if $(filter integration-legs,$(IT_BUILD_TARGET)),$(strip $(TEST_BUILD_TAGS)))'; \
+	  git rev-parse 'HEAD^{tree}'; \
+	  git diff --binary HEAD; \
+	  git ls-files -z --others --exclude-standard | xargs -0r sha256sum --; \
+	} | sha256sum | cut -c1-16 | sed 's|^|$(IT_IMAGE_REPO):|'
 
 .PHONY: toolchain-image
 ## toolchain-image: Print the toolchain image tag (CI reads it with make -s)
@@ -2538,9 +2649,8 @@ stress-sdn-local:
 ## devcontainer-compose-up: Start all integration test services via docker-compose
 devcontainer-compose-up: build-devcontainer
 	@echo "Starting integration test environment with docker-compose..."
-	@cd build/docker/devcontainer && docker compose up -d
-	@echo "Waiting for services to be ready..."
-	@sleep 5
+	@echo "Waiting for services to be running (healthy, where a healthcheck is defined)..."
+	@cd build/docker/devcontainer && docker compose up -d --wait --wait-timeout 120
 	@cd build/docker/devcontainer && docker compose ps
 
 .PHONY: devcontainer-compose-down
@@ -2567,120 +2677,8 @@ integration-test-compose-full: devcontainer-compose-up
 	@docker exec -e CGO_ENABLED=0 -w /workspace $(DEVCONTAINER_NAME) \
 		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 30m \
 		./test/integration/sdn/... \
-		./test/integration/vtpm/... \
-		./test/integration/datastore/...
+		./test/integration/vtpm/...
 	@$(MAKE) devcontainer-compose-down
-
-.PHONY: integration-test-web
-## integration-test-web: Run web frontend E2E tests with swtpm and backend
-integration-test-web: devcontainer-compose-up
-	@echo "$(CYAN)═══════════════════════════════════════════════════════════════$(RESET)"
-	@echo "$(CYAN)  Running Web Frontend E2E Integration Tests$(RESET)"
-	@echo "$(CYAN)═══════════════════════════════════════════════════════════════$(RESET)"
-	@echo ""
-	@echo "$(YELLOW)→ Cleaning up previous test processes...$(RESET)"
-	-@docker exec $(DEVCONTAINER_NAME) pkill -9 -f 'platformd-web-test' 2>/dev/null || true
-	-@docker exec $(DEVCONTAINER_NAME) pkill -9 -f 'next dev' 2>/dev/null || true
-	-@docker exec $(DEVCONTAINER_NAME) pkill -9 -f 'node.*next' 2>/dev/null || true
-	@sleep 1
-	@echo "$(YELLOW)→ Initializing swtpm (Software TPM)...$(RESET)"
-	-@docker exec $(DEVCONTAINER_NAME) pkill -f 'swtpm socket' 2>/dev/null || true
-	@docker exec $(DEVCONTAINER_NAME) rm -rf /tmp/swtpm
-	@docker exec $(DEVCONTAINER_NAME) mkdir -p /tmp/swtpm
-	@docker exec $(DEVCONTAINER_NAME) swtpm_setup --tpm2 --tpmstate /tmp/swtpm --overwrite --pcr-banks sha256
-	@echo "$(YELLOW)→ Starting swtpm daemon...$(RESET)"
-	@docker exec -d $(DEVCONTAINER_NAME) swtpm socket --tpm2 \
-		--tpmstate dir=/tmp/swtpm \
-		--server type=unixio,path=/tmp/swtpm/swtpm.sock \
-		--ctrl type=unixio,path=/tmp/swtpm/swtpm.sock.ctrl \
-		--flags startup-clear,not-need-init \
-		--log level=5,file=/tmp/swtpm/swtpm.log
-	@sleep 2
-	@docker exec $(DEVCONTAINER_NAME) ls -la /tmp/swtpm/
-	@docker exec $(DEVCONTAINER_NAME) pgrep -la swtpm || (echo "swtpm failed to start" && exit 1)
-	@echo ""
-	@echo "$(YELLOW)→ Building backend...$(RESET)"
-	@docker exec $(DEVCONTAINER_NAME) bash -c "\
-		cd /workspace && \
-		go build -tags '$(BUILD_TAGS)' -o bin/platformd-web-test ./cmd/platformd"
-	@echo ""
-	@echo "$(YELLOW)→ Copying web-test configuration...$(RESET)"
-	@docker exec $(DEVCONTAINER_NAME) bash -c "\
-		cp /workspace/configs/platform/standalone/web-test.example.yaml /workspace/pkg/config.yaml && \
-		rm -rf /workspace/pkg/trusted-data && \
-		mkdir -p /workspace/pkg/trusted-data/etc"
-	@echo ""
-	@echo "$(YELLOW)→ Starting backend with swtpm...$(RESET)"
-	@docker exec -d $(DEVCONTAINER_NAME) bash -c "\
-		cd /workspace/pkg && \
-		../bin/platformd-web-test --config config.yaml --raw-so-pin 123456 --raw-pin 123456 --intermediate 0 --init serve > /tmp/platformd.log 2>&1"
-	@sleep 5
-	@echo "$(YELLOW)→ Checking backend status...$(RESET)"
-	@docker exec $(DEVCONTAINER_NAME) bash -c "\
-		for i in 1 2 3 4 5 6; do \
-			curl -sk -X POST -H 'Content-Type: application/json' -d '{\"username\":\"healthcheck\"}' https://localhost:8443/api/v1/webauthn/login/begin 2>&1 | grep -q 'entity not found' && echo 'Backend is ready' && exit 0; \
-			echo 'Waiting for backend... attempt '\$$i; \
-			sleep 3; \
-		done; \
-		echo 'Backend failed to start, showing logs:'; \
-		tail -100 /tmp/platformd.log; \
-		echo '--- swtpm logs ---'; \
-		cat /tmp/swtpm/swtpm.log 2>/dev/null || true; \
-		exit 1"
-	@echo ""
-	@echo "$(YELLOW)→ Installing frontend dependencies...$(RESET)"
-	@docker exec $(DEVCONTAINER_NAME) bash -c "\
-		cd /workspace/web && \
-		npm install --silent"
-	@echo ""
-	@echo "$(YELLOW)→ Installing Playwright browsers...$(RESET)"
-	@docker exec $(DEVCONTAINER_NAME) bash -c "\
-		cd /workspace/web && \
-		npx playwright install chromium --with-deps"
-	@echo ""
-	@echo "$(YELLOW)→ Starting Next.js dev server...$(RESET)"
-	@docker exec -d $(DEVCONTAINER_NAME) bash -c "\
-		cd /workspace/web && \
-		npm run dev > /tmp/nextjs.log 2>&1"
-	@echo "$(YELLOW)→ Waiting for dev server to start...$(RESET)"
-	@sleep 5
-	@docker exec $(DEVCONTAINER_NAME) bash -c "\
-		for i in 1 2 3 4 5 6 7 8 9 10; do \
-			curl -s http://localhost:3000 >/dev/null 2>&1 && echo 'Dev server is ready' && exit 0; \
-			echo 'Waiting for dev server... attempt '\$$i; \
-			sleep 2; \
-		done; \
-		echo 'Dev server failed to start, showing logs:'; \
-		cat /tmp/nextjs.log; \
-		exit 1"
-	@echo ""
-	@echo "$(YELLOW)→ Running Playwright E2E tests...$(RESET)"
-	@docker exec $(DEVCONTAINER_NAME) bash -c "\
-		cd /workspace/web && \
-		npx playwright test --reporter=list" && \
-		TEST_RESULT=$$? || TEST_RESULT=$$?; \
-	echo ""; \
-	echo "$(YELLOW)→ Stopping services...$(RESET)"; \
-	docker exec $(DEVCONTAINER_NAME) bash -c "pkill -f 'next dev' || pkill -f 'node.*next' || true"; \
-	docker exec $(DEVCONTAINER_NAME) bash -c "pkill -f 'platformd-web-test' || true"; \
-	docker exec $(DEVCONTAINER_NAME) bash -c "pkill -f 'swtpm socket' || true"; \
-	echo "$(YELLOW)→ Fixing file ownership...$(RESET)"; \
-	docker exec $(DEVCONTAINER_NAME) bash -c "chown -R $(shell id -u):$(shell id -g) /workspace/web/.next /workspace/web/test-results /workspace/web/playwright-report 2>/dev/null || true"; \
-	if [ $$TEST_RESULT -eq 0 ]; then \
-		echo "$(GREEN)✓ Web E2E tests passed!$(RESET)"; \
-	else \
-		echo "$(RED)✗ Web E2E tests failed$(RESET)"; \
-		echo "$(YELLOW)Dev server logs:$(RESET)"; \
-		docker exec $(DEVCONTAINER_NAME) cat /tmp/nextjs.log 2>/dev/null || true; \
-		echo "$(YELLOW)Backend logs:$(RESET)"; \
-		docker exec $(DEVCONTAINER_NAME) tail -50 /tmp/platformd.log 2>/dev/null || true; \
-	fi; \
-	exit $$TEST_RESULT
-
-.PHONY: dev
-## dev: Start development environment (swtpm + backend + frontend) in devcontainer
-dev: devcontainer-compose-up
-	@docker exec $(DEVCONTAINER_NAME) /usr/local/bin/entrypoint.sh web-dev
 
 .PHONY: integration-test-web-shell
 ## integration-test-web-shell: Start shell with backend running for manual web testing
@@ -2694,7 +2692,9 @@ integration-test-web-shell: devcontainer-compose-up
 	@docker exec -d $(DEVCONTAINER_NAME) bash -c "\
 		cd /workspace/pkg && \
 		../bin/platformd-debug --config config.yaml --raw-so-pin 123456 --raw-pin 123456 --init serve > /tmp/platformd.log 2>&1"
-	@sleep 3
+	@docker exec $(DEVCONTAINER_NAME) bash -c "$(DEVCONTAINER_WAIT_FOR) && \
+		wait_for 120 'platformd REST on https://localhost:8443' curl -sk -o /dev/null https://localhost:8443/" || \
+		(docker exec $(DEVCONTAINER_NAME) tail -50 /tmp/platformd.log; exit 1)
 	@echo ""
 	@echo "$(YELLOW)→ Installing frontend dependencies...$(RESET)"
 	@docker exec $(DEVCONTAINER_NAME) bash -c "\
@@ -2789,99 +2789,6 @@ devcontainer-clean:
 	@docker rmi -f go-trusted-platform-datastore-integration-test:latest 2>/dev/null || true
 
 # =============================================================================
-# Cluster Integration Tests (multi-node Raft cluster)
-# =============================================================================
-.PHONY: integration-test-cluster
-## integration-test-cluster: Run cluster integration tests with multi-node Raft cluster
-integration-test-cluster: build-devcontainer
-	$(call run-integration-suite,cluster)
-
-.PHONY: integration-test-cluster-consensus
-## integration-test-cluster-consensus: Run cluster consensus tests only
-integration-test-cluster-consensus: build-devcontainer
-	@echo "Running cluster consensus tests..."
-	@docker run --rm --privileged \
-		--name go-trusted-platform-cluster-consensus \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
-		-e CGO_ENABLED=0 \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m -run '.*Consensus.*' ./test/integration/cluster/...
-
-.PHONY: integration-test-cluster-failover
-## integration-test-cluster-failover: Run cluster failover tests only
-integration-test-cluster-failover: build-devcontainer
-	@echo "Running cluster failover tests..."
-	@docker run --rm --privileged \
-		--name go-trusted-platform-cluster-failover \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
-		-e CGO_ENABLED=0 \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m -run '.*Failover.*' ./test/integration/cluster/...
-
-.PHONY: integration-test-cluster-sdn
-## integration-test-cluster-sdn: Run cluster SDN replication tests only
-integration-test-cluster-sdn: build-devcontainer
-	@echo "Running cluster SDN tests..."
-	@docker run --rm --privileged \
-		--name go-trusted-platform-cluster-sdn \
-		--device /dev/net/tun:/dev/net/tun \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
-		-e CGO_ENABLED=0 \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m -run '.*SDN.*' ./test/integration/cluster/...
-
-.PHONY: integration-test-cluster-ca
-## integration-test-cluster-ca: Run cluster CA replication tests only
-integration-test-cluster-ca: build-devcontainer
-	@echo "Running cluster CA tests..."
-	@docker run --rm --privileged \
-		--name go-trusted-platform-cluster-ca \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace \
-		-e CGO_ENABLED=0 \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -parallel 1 -timeout 10m -run '.*CA.*' ./test/integration/cluster/...
-
-.PHONY: integration-test-cluster-shell
-## integration-test-cluster-shell: Start interactive shell for cluster testing
-integration-test-cluster-shell: build-devcontainer
-	@echo "Starting cluster test shell..."
-	@docker run --rm -it --privileged \
-		--name go-trusted-platform-cluster-shell \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace/test/integration/cluster \
-		$(DEVCONTAINER_IMAGE) \
-		bash
-
-.PHONY: integration-test-cluster-compose
-## integration-test-cluster-compose: Run cluster tests using docker-compose (full multi-container setup)
-integration-test-cluster-compose: build-devcontainer
-	@echo "Starting multi-node cluster with docker-compose..."
-	@cd test/integration/cluster || exit 1; export DEVCONTAINER_IMAGE=$(DEVCONTAINER_IMAGE); \
-		status=0; docker compose up --abort-on-container-exit --exit-code-from test-runner || status=$$?; \
-		docker compose down -v; exit $$status
-
-.PHONY: integration-test-cluster-compose-up
-## integration-test-cluster-compose-up: Start cluster nodes only (for manual testing)
-integration-test-cluster-compose-up: build-devcontainer
-	@echo "Starting cluster nodes..."
-	@cd test/integration/cluster && DEVCONTAINER_IMAGE=$(DEVCONTAINER_IMAGE) docker compose up -d --scale test-runner=0
-
-.PHONY: integration-test-cluster-compose-down
-## integration-test-cluster-compose-down: Stop cluster nodes and cleanup
-integration-test-cluster-compose-down:
-	@echo "Stopping cluster nodes..."
-	@cd test/integration/cluster && docker compose down -v
-
-# =============================================================================
 # Daemon Multi-Protocol Integration Tests
 # =============================================================================
 .PHONY: integration-test-daemon
@@ -2931,38 +2838,6 @@ integration-test-ipxe-local:
 integration-test-ipxe-dhcp: build-devcontainer
 	$(call run-integration-suite,ipxe-dhcp)
 
-.PHONY: integration-test-ipxe-tftp
-## integration-test-ipxe-tftp: Run only TFTP protocol tests
-integration-test-ipxe-tftp: build-devcontainer
-	$(call run-integration-suite,ipxe-tftp)
-
-.PHONY: integration-test-ipxe-http
-## integration-test-ipxe-http: Run only HTTP boot script tests
-integration-test-ipxe-http: build-devcontainer
-	$(call run-integration-suite,ipxe-http)
-
-# =============================================================================
-# QUIC Protocol Integration Tests
-# =============================================================================
-.PHONY: integration-test-quic
-## integration-test-quic: Run QUIC protocol integration tests in development container
-integration-test-quic: build-devcontainer
-	$(call run-integration-suite,quic)
-
-.PHONY: integration-test-quic-local
-## integration-test-quic-local: Run QUIC integration tests locally (requires QUIC server running)
-integration-test-quic-local:
-	@echo "Running QUIC integration tests locally..."
-	go test -v $(TEST_BUILD_TAGS_ARG) -count=1 -timeout=10m ./test/integration/quic/...
-
-# =============================================================================
-# Network Authentication Integration Tests
-# =============================================================================
-.PHONY: integration-test-network
-## integration-test-network: Run network authentication integration tests in development container
-integration-test-network: build-devcontainer
-	$(call run-integration-suite,network)
-
 # vTPM Coverage
 .PHONY: coverage-vtpm
 ## coverage-vtpm: Generate vTPM package coverage report
@@ -3006,8 +2881,9 @@ coverage-vtpm:
 #   below; the regex entry stays because that mechanism is deliberately additive.
 # - pkg/compute$$: Requires swtpm and OVS
 # - pkg/qemu$$: Requires swtpm
-# - pkg/swtpm$$: Requires swtpm binary
-# - pkg/vtpm$$: Requires swtpm
+# - pkg/swtpm$$, pkg/vtpm$$: STALE as of 2026-10-25 (#964) — their own tests
+#   replace swtpm with a stand-in on PATH or serve the in-memory simulator on a
+#   unix socket. Re-added to the unit suite through TEST_UNIT_PKGS below.
 # - pkg/sdn/netlink$$: Requires root privileges and netlink
 # - pkg/ipxe$$: Requires network services
 # - pkg/testenv$$: Test helper utilities (not production code)
@@ -3107,6 +2983,11 @@ TEST_EXCLUDE := test/integration|sdk/go/gen|pkg/api/grpc/proto|pkg/api/grpc$$|cm
 # shared endpoint helpers read the variables run-integration-tests.sh exports,
 # built from the ports it gives platformd. Every other file keeps the tag.
 #
+# test/integration/iso added 2026-10-25 (#964 step b): without the integration
+# tag the package is runner.go and grub_detector.go with their tests, which
+# drive the process-group command runner and the GRUB menu detector over local
+# processes, with no platformd. Every other file keeps the tag.
+#
 # scripts/depscheck added 2026-10-15 (#927): `make deps-check`'s parse and
 # decision logic, tested over testdata fixtures with no network. Discovery
 # lists only ./pkg/... and ./cmd/..., so without this entry it would run in no
@@ -3116,7 +2997,29 @@ TEST_EXCLUDE := test/integration|sdk/go/gen|pkg/api/grpc/proto|pkg/api/grpc$$|cm
 # baseline checker the Integration job runs on a failed suite, and the test
 # that holds .github/foreign-failures.tsv to the ruling. Same reason as
 # depscheck: discovery would not reach it.
-TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/ ./pkg/webservice/v1/ ./pkg/dns/ ./pkg/cli/commands/admin/ ./pkg/platform/ ./test/integration/helpers/surface/ ./test/integration/helpers/ ./scripts/depscheck/ ./scripts/foreignfailures/
+#
+# test/integration/tenant added 2026-10-25 (#964 step b): without the
+# integration tag the package is cli_exec.go, commands.go and cli_exec_test.go,
+# the CLI adapter's argument rendering and output parsing, tested with no
+# daemon. Every other file keeps the tag.
+# pkg/swtpm and pkg/vtpm added 2026-10-25 (#964 step b): green on a host with
+# no swtpm and no QEMU. The swtpm tests put a stand-in swtpm on PATH; the vtpm
+# tests run the EK certificate injector against the in-memory TPM simulator
+# served on a unix socket. The real-swtpm checks stay in test/integration/vtpm.
+# test/integration/bmc/vbmc and test/integration/bmc/rmcpsim added 2026-10-25
+# (#964 step b): the self-tests of the bmc suite's two simulators, the Redfish
+# vBMC and the IPMI RMCP+ responder. Neither package carries a build tag; the
+# vbmc tests drive its routes through httptest and the rmcpsim tests talk to
+# the responder over 127.0.0.1 UDP, so they need no daemon, container or root.
+# TEST_EXCLUDE's test/integration entry kept them out of every unit stage.
+# internal/quicbaas added 2026-10-29 (#1204, Codex 8287 P1): the mcp-go v1.4.0
+# compatibility tests for the pinned SDK MCP transport. It lies outside the
+# ./pkg/... ./cmd/... discovery and TEST_EXCLUDE does not drop it; it runs in
+# about 1 s under -race.
+# pkg/firstboot added 2026-10-31 (#964 step e): the tests swap every host seam
+# (commands, mounts, LUKS, TPM detection, host sync) and root file access under
+# t.TempDir(), so they need no root, TPM, device or mount.
+TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/ ./pkg/webservice/v1/ ./pkg/dns/ ./pkg/cli/commands/admin/ ./pkg/platform/ ./pkg/swtpm/ ./pkg/vtpm/ ./pkg/firstboot/ ./test/integration/helpers/surface/ ./test/integration/helpers/ ./test/integration/bmc/vbmc/ ./test/integration/bmc/rmcpsim/ ./test/integration/iso/ ./test/integration/tenant/ ./scripts/depscheck/ ./scripts/foreignfailures/ ./internal/quicbaas/
 
 # RACE_EXCLUDE: packages with data races that are KNOWN and TRACKED. The race
 # gate must be green to be a gate, so a package lands here only with an issue
@@ -3409,6 +3312,10 @@ ifndef GO_BUILD_TAGS_PROBING
 	@echo "$(GREEN)✓ GO_BUILD_TAGS reaches every ci-template target$(RESET)"
 endif
 
+.PHONY: lint-gates
+## lint-gates: The repo's grep gates; CI runs them in the Lint Gates job beside Lint (ci-template v1.27)
+lint-gates: check-insecure-tls
+
 .PHONY: check-insecure-tls
 ## check-insecure-tls: Enforce InsecureSkipVerify allowlist (fails on unapproved use)
 check-insecure-tls:
@@ -3500,7 +3407,7 @@ gosec: $(GOSEC)
 	@echo "$(CYAN)$(BOLD)→ Running security analysis with gosec $(GOSEC_VERSION)...$(RESET)"
 	@mkdir -p $(BUILD_DIR)
 	@rc=0; \
-	$(GOSEC) -concurrency 4 -exclude=$(GOSEC_EXCLUDE) -severity medium -confidence medium \
+	$(GOSEC) -concurrency $(GOSEC_CONCURRENCY) -exclude=$(GOSEC_EXCLUDE) -severity medium -confidence medium \
 		$(if $(GO_BUILD_TAGS_CSV),-tags=$(GO_BUILD_TAGS_CSV)) \
 		-exclude-dir=test -exclude-dir=testdata -exclude-dir=vendor \
 		-exclude-generated \
@@ -3527,7 +3434,7 @@ gosec-sarif: $(GOSEC)
 	@# Findings do not fail this target (the SARIF file carries them); only a
 	@# run that produced no report at all (type errors, crash) does.
 	@rm -f $(BUILD_DIR)/gosec-results.sarif
-	@$(GOSEC) -concurrency 4 -exclude=$(GOSEC_EXCLUDE) -severity medium -confidence medium \
+	@$(GOSEC) -concurrency $(GOSEC_CONCURRENCY) -exclude=$(GOSEC_EXCLUDE) -severity medium -confidence medium \
 		-exclude-dir=test -exclude-dir=testdata -exclude-dir=vendor \
 		-exclude-generated \
 		-fmt=sarif -out=$(BUILD_DIR)/gosec-results.sarif ./... || true
@@ -4420,7 +4327,7 @@ DISKIMAGE_MODEL       ?= rpi4
 DISKIMAGE_SIZE_MB     ?= 4096
 DISKIMAGE_OUTPUT      ?= bin/trusted-platform-$(DISKIMAGE_TARGET).img
 DISKIMAGE_BUILDER_IMG ?= trusted-platform-diskimage-builder
-DISKIMAGE_HOST_ARCH   ?= $(shell go env GOARCH)
+DISKIMAGE_HOST_ARCH   ?= $(ARCH)
 DISKIMAGE_FLAGS       ?=
 RPI_SDCARD            ?=
 RPI_SDCARD_CONFIRM    ?=

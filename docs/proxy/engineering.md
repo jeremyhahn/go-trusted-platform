@@ -16,7 +16,7 @@
 | File | Holds |
 |---|---|
 | `proxy.go` | `Engine`, `New`, `Reload`, `Status`, `compile`, `mergeAuthDefaults` |
-| `config.go` | `Config`, `ListenerConfig`, `RouteConfig`, `AuthRequirements`, `AuthDefaults`, `BackendPoolConfig`, `BackendConfig`, `BackendTLSConfig`, `Validate` |
+| `config.go` | `Config`, `ControlPlaneConfig` (the platformd `proxy:` section: routes, pools, defaults), `ListenerConfig`, `RouteConfig`, `AuthRequirements`, `AuthDefaults`, `BackendPoolConfig`, `BackendConfig`, `BackendTLSConfig`, `Validate` |
 | `deps.go` | `Deps`, `AuthChain`, `AuthDecision`, `ClientIdentity`, `ChainCapabilities`, `CapabilityReporter`, `TrustResolver`, `AuditSink`, `checkFailClosed`, `checkRouteCapabilities` |
 | `authchain.go` | `Chain`, `NewAuthChain`, `AuthChainConfig`, `MTLSAuthenticator`, `ZoneExtractor`, `MatrixProvider`, `PolicyZoneExtractor`, the `Reason*` constants |
 | `tokenauth.go` | `TokenAuthenticator`, `TokenAuthRequest`, `TokenPrincipal`, `bearerToken`, `requestHTU` |
@@ -28,8 +28,9 @@
 | `handler.go` | `Engine.ServeHTTP`, `newReverseProxy`, `stripIdentityHeaders`, `stripRequestPrefix`, `writeJSONError` |
 | `identity.go` | `injectIdentity`, `buildXFCC`, the `X-TP-*` header constants |
 | `listener.go` | `Engine.Start`, `Engine.Stop`, `ListenerStatus`, `serverProtocols` |
-| `audit.go` | `AuditEvent`, `AuditSink`, `Decision*` constants, `noopSink` |
+| `audit.go` | `AuditEvent`, `Decision*` constants, `noopSink` (the `AuditSink` interface is in `deps.go`) |
 | `metrics.go` | `Engine.Metrics`, `MetricsSnapshot`, `RouteMetrics` |
+| `proto.go` | `RouteFromProto` / `RouteToProto`, `PoolFromProto` / `PoolToProto`, `ConfigFromProto` — conversion between the `platform.v1` messages and the engine schema |
 | `errors.go` | every sentinel and typed error in §5 |
 
 `pkg/sdn/gateway/proxysvc/` — the gatewayd assembly (see §8):
@@ -219,7 +220,10 @@ capabilities:
 | `allowed-zones` or `backend-zone` | `caps.Zones` | `ErrZoneEnforcementNotConfigured` |
 | pool `tls.trust-class` | `Deps.Trust == nil` | `ErrTrustResolverRequired` |
 
-All but the first three are wrapped in a `*ConfigError{Kind: "route", ID: …}`.
+The five capability errors are wrapped in a `*ConfigError{Kind: "route", ID: …}`;
+`ErrAuthChainRequired`, `ErrTLSRequiredForAuth` and `ErrTrustResolverRequired`
+are returned bare. The capability checks run only when at least one route is
+non-public.
 
 **Request time.** Every check denies rather than skipping. Notably:
 
@@ -386,7 +390,7 @@ keys, parsed by viper (`LoadServeConfig`).
 |---|---|---|---|
 | `proxy.enabled` | bool | `false` | Disabled sections are not validated |
 | `proxy.tls.cert-file` / `key-file` | path | — | Must be set together (`ErrConfigInvalid`); required when any route is non-public (`ErrServerTLSRequired`) |
-| `proxy.tls.client-ca-file` | path | — | Wins over the trust resolver; absent, the `internal`-class CA pool is used. Neither available with authenticated routes → `ErrClientCARequired` |
+| `proxy.tls.client-ca-file` | path | — | Wins over the platform anchor; absent, the platform anchor's CA pool (`platform-ca-file:`) is used — there is no `internal` trust class. Neither available with authenticated routes → `ErrClientCARequired` |
 | `proxy.listeners[].id` / `.address` / `.protocols` | string / string / list | protocols empty ⇒ h1+h2 | **Never synced from platformd** |
 | `proxy.routes[]` | list | — | Static base layer; see the route keys below |
 | `proxy.pools[]` | list | — | Static base layer |
@@ -557,12 +561,12 @@ Prometheus exporter in `pkg/proxy`** — the snapshot is the interface.
 
 | Layer | Location | Covers |
 |---|---|---|
-| Unit | `pkg/proxy/*_test.go` | `config_test.go` (validation matrix), `authchain_test.go` + `authchain_phase3_test.go` (chain order, deny reasons), `capabilities_test.go` (fail-closed composition), `deps_test.go`, `router_test.go` (host/prefix matching), `balancer_test.go`, `transport_test.go` (carryover), `handler_test.go` + `handler_injection_test.go` (strip/inject), `listener_test.go`, `lifecycle_test.go`, `audit_test.go`, `metrics_test.go`, `errors_test.go`, `identity_test.go`, `proxy_test.go`; `benchmark_test.go` for the hot path; `helpers_test.go` for fixtures |
+| Unit | `pkg/proxy/*_test.go` | `config_test.go` (validation matrix), `authchain_test.go` + `authchain_phase3_test.go` (chain order, deny reasons), `capabilities_test.go` (fail-closed composition), `deps_test.go`, `router_test.go` (host/prefix matching), `proto_test.go` (proto round-trip), `config_tags_test.go` (schema tags), `balancer_test.go`, `transport_test.go` (carryover), `handler_test.go` + `handler_injection_test.go` (strip/inject), `listener_test.go`, `lifecycle_test.go`, `audit_test.go`, `metrics_test.go`, `errors_test.go`, `identity_test.go`, `proxy_test.go`; `benchmark_test.go` for the hot path; `helpers_test.go` for fixtures |
 | Unit | `pkg/sdn/gateway/proxysvc/*_test.go` | Config validation, merge semantics, sync loop, attestation gate caching, token authenticator, OPA evaluator, audit sink |
 | Unit | `pkg/api/daemon/proxy_store_test.go`, `proxy_grpc_service_test.go`, `proxy_mcp_test.go` | Store semantics and error mapping |
 | Unit | `pkg/api/rest/proxy_handlers_test.go`, `pkg/api/quic/proxy_handlers_test.go`, `pkg/api/grpc/proxy_service_test.go` | Per-transport adapters |
 | Unit | `pkg/policy/opa/proxy_authz_test.go` | The embedded `proxy_authz` policy |
-| Integration | `test/integration/proxy/` (`//go:build integration`) | `gatewayd_test.go` — real `BuildProxyHandler` assembly; `multiprotocol_test.go` — the parity suite |
+| Integration | `test/integration/proxy/` (`//go:build integration`) | `multiprotocol_test.go` — the parity suite; the real `BuildProxyHandler` mTLS traffic check is the unit test `TestBuildProxyHandler_ServesMTLSTrafficOverARealHandshake` in `pkg/sdn/gateway/commands`, and the desired-config control loop is `TestDesiredConfigReachesTheGateway` in `pkg/sdn/gateway/controlplane` |
 
 **Fault-injection seams**: the four one-method interfaces, plus
 `proxysvc.DialFunc` / `AttestationDialFunc` / `AuditDialFunc` for connection

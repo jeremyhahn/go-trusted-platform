@@ -21,12 +21,12 @@ listeners (`KMSService.RegisterGRPCServices`, `pkg/api/daemon/kms_service.go`).
 A gRPC cell written `Service.Method` names one of those.
 REST: base path `/api/v1/kms`. The webservice router
 (`pkg/webservice/v1/rest/kms/router.go`) serves the routes keyed by name; the
-daemon REST server (`RESTServer.SetKMSHandlers`, `pkg/api/rest/kms_handlers.go`)
-serves export, the batch operations and rewrap.
+daemon REST server (`RESTServer.SetKMSHandlers`, `pkg/api/daemon/rest_service.go`,
+mounting the handlers in `pkg/api/rest/kms_handlers.go`) serves export, the batch operations and rewrap.
 QUIC: key management `0xC0`–`0xCF`, crypto `0xD0`–`0xDA`, plus a **KMS
-extended category opcode `0xCD`** whose subs `0x08`–`0x0D` are the DEK calls.
+extended category opcode `0xCD`** whose subs `0x08`–`0x10` are the DEK calls.
 The `OpDEK*` bytes `0xF0`–`0xF5` are reserved and unserved.
-MCP: 29 `kms_*` tools, 11 `secret_*` tools and 6 `dek_*` tools.
+MCP: 29 `kms_*` tools, 12 `secret_*` tools and 6 `dek_*` tools.
 
 ---
 
@@ -262,7 +262,7 @@ back from its `Get` as base64 text. The handler decodes it with
 `value` in the response is the base64 of the bytes that were stored. A stored
 value that is not base64 text answers 500 with `ErrMalformedSecretValue`.
 
-**QUIC DEK subs `0x08`–`0x0D` carry the quicbaas.kms.v1 messages.** Their
+**QUIC DEK subs `0x08`–`0x10` carry the quicbaas.kms.v1 messages.** Their
 payload after the sub-opcode byte is the `DEKManagement` request message and
 the reply is its response message. The QUIC handler
 (`pkg/api/daemon/quic_dek.go`) calls the `DEKServerAdapter` method the gRPC RPC
@@ -427,7 +427,7 @@ error before answering it.
 | `NotFound` | 404 | `0x02` `StatusNotFound` | `-32005` NotFound | Unknown key, DEK or secret |
 | `AlreadyExists` | 409 | `0x06` `StatusAlreadyExists` | `-32006` AlreadyExists | Key name in use |
 | `Aborted` | 409 | `0x06` `StatusAlreadyExists` | `-32603` InternalError | SDK conflict |
-| `FailedPrecondition` | 412 | `0x0C` `StatusFailedPrecondition` | `-32007` FailedPrecondition | Barrier or service not initialized |
+| `FailedPrecondition` | 409 | `0x0C` `StatusFailedPrecondition` | `-32007` FailedPrecondition | Barrier or service not initialized |
 | `ResourceExhausted` | 429 | `0x08` `StatusResourceExhausted` | `-32603` InternalError | **AEAD safety limit reached**, rate limited |
 | `Unimplemented` | 501 | `0x0B` `StatusNotImplemented` | `-32603` InternalError | The unimplemented CLI/service areas in [engineering.md](engineering.md) §2 |
 | `Unavailable` | 503 | `0x0A` `StatusUnavailable` | `-32004` ServiceUnavailable | KMS not wired into the daemon, barrier sealed, SDK connection lost |

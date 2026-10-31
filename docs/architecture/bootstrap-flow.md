@@ -56,8 +56,9 @@ processes even when collocated on a single box.
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**Privilege boundary**: `platformd` is one process; after start-up it
-can drop to the user named by `--setuid` (`pkg/app/privileges.go`).
+**Privilege boundary**: `platformd` is one process and runs as the user its
+systemd unit's `User=` names (`root`: it needs the TPM, OVS and network
+namespaces); it never changes its own credentials.
 `gatewayd` owns its OVS bridge through its own OVSDB connection, and can
 run sections in privilege-dropped child processes
 (`gatewayd service run <process>`, `pkg/sdn/gateway/process/`).

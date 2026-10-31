@@ -21,6 +21,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -184,6 +185,55 @@ func TestBuildReporterNilConfigAndNilLogger(t *testing.T) {
 	rep, err := BuildReporter(context.Background(), cfg, gw, nil)
 	if err != nil || rep == nil {
 		t.Fatalf("nil logger must default, got rep=%v err=%v", rep, err)
+	}
+}
+
+func TestVPNLeaseControl_TheVPNChildRecordsItsLeasesWithTheControlPlane(t *testing.T) {
+	gw := testGateway(t)
+	certFile, keyFile, caFile := writeTLSFixtures(t)
+	dataDir := t.TempDir()
+	cfg := &ServeConfig{
+		DataDir: dataDir,
+		ControlPlane: &controlplane.Config{
+			Enabled:   true,
+			BaseURL:   "https://cp.example.com:8443",
+			CertFile:  certFile,
+			KeyFile:   keyFile,
+			CAFile:    caFile,
+			GatewayID: tlsFixtureCN,
+		},
+	}
+	control, journal, err := vpnLeaseControl(context.Background(), cfg, gw, testLogger())
+	if err != nil {
+		t.Fatalf("vpnLeaseControl: %v", err)
+	}
+	if _, ok := control.(*controlplane.Reporter); !ok {
+		t.Fatalf("control = %T, want the control-plane reporter", control)
+	}
+	if want := vpnRevocationJournal(dataDir); !reflect.DeepEqual(journal, want) {
+		t.Fatalf("journal = %+v, want the journal under the data directory %+v", journal, want)
+	}
+}
+
+func TestVPNLeaseControl_NoControlPlaneKeepsTheLeasesInMemory(t *testing.T) {
+	gw := testGateway(t)
+	cfg := &ServeConfig{DataDir: t.TempDir(), ControlPlane: &controlplane.Config{Enabled: false}}
+	control, journal, err := vpnLeaseControl(context.Background(), cfg, gw, testLogger())
+	if err != nil || control != nil || journal != nil {
+		t.Fatalf("disabled section: control=%v journal=%v err=%v, want nil/nil/nil", control, journal, err)
+	}
+}
+
+func TestVPNLeaseControl_AnInvalidControlPlaneSectionIsRefused(t *testing.T) {
+	gw := testGateway(t)
+	cfg := &ServeConfig{ControlPlane: &controlplane.Config{Enabled: true}}
+	var sectionErr *ErrConfigSection
+	control, journal, err := vpnLeaseControl(context.Background(), cfg, gw, testLogger())
+	if !errors.As(err, &sectionErr) {
+		t.Fatalf("err = %v, want *ErrConfigSection", err)
+	}
+	if control != nil || journal != nil {
+		t.Fatalf("a refused section yields no record: control=%v journal=%v", control, journal)
 	}
 }
 

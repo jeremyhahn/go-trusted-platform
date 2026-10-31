@@ -48,7 +48,10 @@ type RolloverManager struct {
 	config    *dnsconfig.DANEConfig
 	phase     atomic.Uint32
 	doneChan  chan struct{}
-	logger    *logging.Logger
+	// failure is written before doneChan closes and read by Wait after it,
+	// so the channel close orders the two.
+	failure error
+	logger  *logging.Logger
 }
 
 // NewRolloverManager creates a RolloverManager with the given publisher, certificate
@@ -89,6 +92,7 @@ func (m *RolloverManager) BeginRollover(
 	}
 
 	m.doneChan = make(chan struct{})
+	m.failure = nil
 
 	if m.config.KeyReuse {
 		return m.immediateRollover(ctx, newCert, newTLSCert, hostname, port, zoneName)
@@ -107,7 +111,7 @@ func (m *RolloverManager) BeginRollover(
 		slog.Duration("delay", m.rolloverDelay()),
 	)
 
-	go m.runRollover(ctx, newTLSCert, hostname, port, zoneName)
+	go m.runRollover(ctx, newCert, newTLSCert, hostname, port, zoneName)
 
 	return nil
 }
@@ -117,12 +121,13 @@ func (m *RolloverManager) Phase() RolloverPhase {
 	return RolloverPhase(m.phase.Load())
 }
 
-// Wait blocks until the rollover completes or the context is cancelled. It
-// returns nil on successful completion or the context error if cancelled.
+// Wait blocks until the rollover ends or the context is cancelled. It returns
+// nil on successful completion, the error that ended a failed rollover, or the
+// context error if cancelled.
 func (m *RolloverManager) Wait(ctx context.Context) error {
 	select {
 	case <-m.doneChan:
-		return nil
+		return m.failure
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -140,19 +145,18 @@ func (m *RolloverManager) immediateRollover(
 ) error {
 
 	if err := m.reloader.Reload(newTLSCert); err != nil {
-		return ErrCertReloadFailed{Cause: err}
+		m.finish(err)
+		return err
 	}
 
-	// Remove old records and publish the new one. PublishForCertificate requires
-	// a CA cert for DANE-TA; for key-reuse DANE-EE only, fall back to
-	// PrePublishRollover which adds a single DANE-EE record.
-	if err := m.publisher.RemoveForHostname(ctx, hostname, port, zoneName); err != nil {
-		m.logger.Warn("failed to remove old DANE records", slog.String("hostname", hostname), slog.String("error", err.Error()))
+	// Publish the new record before retiring the old ones, so a publish
+	// failure never leaves the name without a TLSA record.
+	if err := m.publisher.PrePublishRollover(ctx, newCert, hostname, port, zoneName); err != nil {
+		m.finish(err)
+		return err
 	}
-	if err := m.publisher.PublishForCertificate(ctx, newCert, nil, hostname, port, zoneName); err != nil {
-		if err2 := m.publisher.PrePublishRollover(ctx, newCert, hostname, port, zoneName); err2 != nil {
-			return err2
-		}
+	if err := m.publisher.retireForHostname(ctx, newCert, hostname, port, zoneName); err != nil {
+		m.logger.Warn("failed to remove old DANE records", slog.String("hostname", hostname), slog.String("error", err.Error()))
 	}
 
 	m.logger.Info(
@@ -161,15 +165,16 @@ func (m *RolloverManager) immediateRollover(
 		slog.Int("port", int(port)),
 	)
 
-	close(m.doneChan)
+	m.finish(nil)
 	return nil
 }
 
 // runRollover executes the timed rollover sequence in a goroutine. It waits for
 // the rollover delay using time.After, then activates the new certificate and
-// cleans up old TLSA records.
+// retires the old TLSA records, or withdraws the rollover if activation fails.
 func (m *RolloverManager) runRollover(
 	ctx context.Context,
+	newCert *x509.Certificate,
 	newTLSCert *tls.Certificate,
 	hostname string,
 	port uint16,
@@ -180,35 +185,32 @@ func (m *RolloverManager) runRollover(
 
 	select {
 	case <-time.After(delay):
-		m.activateRollover(ctx, newTLSCert, hostname, port, zoneName)
-		m.completeRollover(ctx, hostname, port, zoneName)
+		if err := m.activateRollover(newTLSCert, hostname, port); err != nil {
+			m.withdrawRollover(ctx, newCert, hostname, port, zoneName, err)
+			return
+		}
+		m.completeRollover(ctx, newCert, hostname, port, zoneName)
 	case <-ctx.Done():
 		m.logger.Warn(
 			"DANE-EE TLSA rollover cancelled",
 			slog.String("hostname", hostname),
 			slog.String("reason", ctx.Err().Error()),
 		)
-		m.phase.Store(uint32(RolloverIdle))
-		close(m.doneChan)
+		m.finish(nil)
 	}
 }
 
 // activateRollover reloads the new TLS certificate into the CertReloader and
 // transitions the phase to RolloverActivated.
 func (m *RolloverManager) activateRollover(
-	ctx context.Context,
 	newTLSCert *tls.Certificate,
 	hostname string,
 	port uint16,
-	zoneName string,
-) {
+) error {
 
 	if err := m.reloader.Reload(newTLSCert); err != nil {
-		m.logger.Error(
-			ErrCertReloadFailed{Cause: err},
-			slog.String("hostname", hostname),
-		)
-		return
+		m.logger.Error(err, slog.String("hostname", hostname))
+		return err
 	}
 
 	m.phase.Store(uint32(RolloverActivated))
@@ -218,12 +220,41 @@ func (m *RolloverManager) activateRollover(
 		slog.String("hostname", hostname),
 		slog.Int("port", int(port)),
 	)
+	return nil
 }
 
-// completeRollover removes old DANE-EE TLSA records, re-signs the zone, and
-// transitions the phase back to idle.
+// withdrawRollover ends a rollover whose new certificate could not be
+// activated. The server still presents the old certificate, so its records
+// stay and the pre-published record for the new certificate is removed.
+// Wait returns cause.
+func (m *RolloverManager) withdrawRollover(
+	ctx context.Context,
+	newCert *x509.Certificate,
+	hostname string,
+	port uint16,
+	zoneName string,
+	cause error,
+) {
+
+	if err := m.publisher.withdrawRollover(ctx, newCert, hostname, port, zoneName); err != nil {
+		m.logger.Error(err, slog.String("hostname", hostname))
+	}
+
+	m.logger.Warn(
+		"DANE-EE TLSA rollover withdrawn",
+		slog.String("hostname", hostname),
+		slog.Int("port", int(port)),
+		slog.String("zone", zoneName),
+	)
+
+	m.finish(cause)
+}
+
+// completeRollover removes the old TLSA records, keeping the pre-published
+// record for newCert, re-signs the zone, and transitions the phase back to idle.
 func (m *RolloverManager) completeRollover(
 	ctx context.Context,
+	newCert *x509.Certificate,
 	hostname string,
 	port uint16,
 	zoneName string,
@@ -231,17 +262,11 @@ func (m *RolloverManager) completeRollover(
 
 	m.phase.Store(uint32(RolloverComplete))
 
-	// Remove old TLSA records for this hostname. The publisher's RemoveForHostname
-	// removes all TLSA records matching the name, then the new record will be
-	// re-published by the next renewal cycle or remains from pre-publish.
-	if err := m.publisher.RemoveForHostname(ctx, hostname, port, zoneName); err != nil {
-		m.logger.Error(
-			ErrDANEPublishFailed{Zone: zoneName, Cause: err},
-			slog.String("hostname", hostname),
-		)
+	// Retire the old TLSA records for this hostname, keeping the record
+	// pre-published for the certificate now being served.
+	if err := m.publisher.retireForHostname(ctx, newCert, hostname, port, zoneName); err != nil {
+		m.logger.Error(err, slog.String("hostname", hostname))
 	}
-
-	m.phase.Store(uint32(RolloverIdle))
 
 	m.logger.Info(
 		"DANE-EE TLSA rollover completed",
@@ -250,6 +275,13 @@ func (m *RolloverManager) completeRollover(
 		slog.String("zone", zoneName),
 	)
 
+	m.finish(nil)
+}
+
+// finish returns the manager to idle and releases Wait, which returns failure.
+func (m *RolloverManager) finish(failure error) {
+	m.failure = failure
+	m.phase.Store(uint32(RolloverIdle))
 	close(m.doneChan)
 }
 

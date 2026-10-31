@@ -20,7 +20,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -33,6 +32,7 @@ const (
 	EnvPlatformMCPEndpoint  = "PLATFORM_MCP_ENDPOINT"
 	EnvPlatformUnixSocket   = "PLATFORM_UNIX_SOCKET"
 	EnvPlatformCTL          = "PLATFORMCTL_PATH"
+	EnvPlatformCTLStatic    = "PLATFORMCTL_STATIC_PATH"
 	EnvISOTestWorkDir       = "ISO_TEST_WORK_DIR"
 	EnvISOTestSkipCleanup   = "ISO_TEST_SKIP_CLEANUP"
 )
@@ -250,46 +250,6 @@ type ErrValidationFailed struct {
 func (e ErrValidationFailed) Error() string {
 	return fmt.Sprintf("validation failed: %s", e.Reason)
 }
-
-// ErrCommandTimeout indicates a command timed out.
-type ErrCommandTimeout struct {
-	Command string
-	Timeout string
-}
-
-func (e ErrCommandTimeout) Error() string {
-	return fmt.Sprintf("command %s timed out after %s", e.Command, e.Timeout)
-}
-
-// ErrGRUBMenuNoBoot is returned when a guest draws the GRUB menu on its serial
-// console and no kernel boot line follows within grubMenuGrace: the guest is
-// stuck at the menu, and waiting out the install timeout would only spend time.
-type ErrGRUBMenuNoBoot struct {
-	Waited    time.Duration
-	LastLines []string
-}
-
-func (e ErrGRUBMenuNoBoot) Error() string {
-	return fmt.Sprintf("guest stopped at the GRUB menu: no kernel boot line on the serial console %s after the menu appeared; last serial lines:\n%s",
-		e.Waited, strings.Join(e.LastLines, "\n"))
-}
-
-// ErrVerbFailed reports a platformctl verb that exited non-zero or printed no
-// result, with the stderr it wrote.
-type ErrVerbFailed struct {
-	Stderr string
-	Err    error
-}
-
-func (e ErrVerbFailed) Error() string {
-	if e.Err == nil {
-		return e.Stderr
-	}
-	return e.Err.Error() + ": " + e.Stderr
-}
-
-// Unwrap returns the process error.
-func (e ErrVerbFailed) Unwrap() error { return e.Err }
 
 // =============================================================================
 // Test Helper Functions

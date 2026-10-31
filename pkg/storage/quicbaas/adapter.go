@@ -157,7 +157,7 @@ func (d *GenericDAO[E]) Get(ctx context.Context, id uint64) (E, error) {
 	}
 
 	entity := d.newEntity()
-	if err := json.Unmarshal(data, entity); err != nil {
+	if err := datastore.DecodeEntity(data, entity); err != nil {
 		return zero, ErrDeserializationFailed{EntityType: d.entityType, Cause: err}
 	}
 
@@ -251,7 +251,7 @@ func (d *GenericDAO[E]) Page(ctx context.Context, pageQuery datastore.PageQuery)
 
 		for _, svcEntity := range entities {
 			entity := d.newEntity()
-			if err := json.Unmarshal(svcEntity.Data, entity); err != nil {
+			if err := datastore.DecodeEntity(svcEntity.Data, entity); err != nil {
 				d.logger.Warn("Failed to deserialize entity", "type", d.entityType, "id", svcEntity.ID, "error", err)
 				continue
 			}

@@ -172,6 +172,8 @@ display name.
 | Layer | Location | Covers |
 |---|---|---|
 | Unit | `pkg/tenant/**/*_test.go` | State transitions, quota arithmetic, keyspace paths, the DEK adapter |
+| Unit | `pkg/api/daemon/tenant_*_test.go` | TenantService over gRPC (direct calls) and QUIC (a loopback server through the SDK), including status codes |
+| Unit | `test/integration/tenant/cli_exec_test.go` | The CLI adapter's flag rendering and JSON parsing, untagged, in `make test` |
 | Integration | `test/integration/tenant/` | Lifecycle, quotas, DEK and barrier operations against a running daemon, on all six transports |
 
 The transition table and `HasCapacity` are pure functions and are the cheapest
@@ -184,9 +186,10 @@ the mTLS trio (`PLATFORM_CLIENT_CERT`, `PLATFORM_CLIENT_KEY`,
 node in the container binds the ports the daemon already holds and tests nothing
 the daemon serves (#541). `pkg/arch/integration_daemon_guard_test.go` fails
 `make test` on any reference to the SDK's `NewServer` under `test/integration/`.
-`TestTenantGRPCService` (`grpc_adapter_test.go`) checks the TenantService
-protobuf contract over the gRPC adapter's connection and deletes the tenants it
-creates in `t.Cleanup`.
+The TenantService protobuf contract and its status codes are checked in the
+unit suite (`TestTenantGRPCServer_*`, `TestSDKQUIC_Tenant*` in
+`pkg/api/daemon`); the integration suite checks the same operations end to end
+through every transport in `TestTenantMultiProtocol`.
 
 **Known repo-wide gap:** no `CommandDefinition` type exists in this repository
 (grepped 2026-08-18), so the CLI parity requirement in

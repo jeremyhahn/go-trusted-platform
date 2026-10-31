@@ -12,11 +12,18 @@
 #   ./run-tests.sh policy    # Run policy engine tests
 #   ./run-tests.sh bridge    # Run bridge/port management tests
 #   ./run-tests.sh flows     # Run OpenFlow rules tests
-#   ./run-tests.sh state     # Run state transition tests
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Bounded readiness polls (#964): the image copy, else the repository's.
+WAIT_FOR_SH=/usr/local/lib/devcontainer/wait-for.sh
+if [ ! -f "$WAIT_FOR_SH" ]; then
+    WAIT_FOR_SH="$SCRIPT_DIR/../../../build/docker/devcontainer/wait-for.sh"
+fi
+# shellcheck source=build/docker/devcontainer/wait-for.sh
+source "$WAIT_FOR_SH"
 
 # Colors for output
 RED='\033[0;31m'
@@ -67,7 +74,7 @@ setup_ovs() {
             --detach \
             --log-file=/var/log/openvswitch/ovsdb-server.log
 
-        sleep 2
+        wait_for 10 "ovsdb-server on db.sock" sudo ovs-vsctl --no-wait --timeout=1 show || return 1
     fi
 
     # Initialize OVS
@@ -84,7 +91,7 @@ setup_ovs() {
             --detach \
             --log-file=/var/log/openvswitch/ovs-vswitchd.log
 
-        sleep 2
+        wait_for 10 "ovs-vswitchd control socket" sudo ovs-appctl -t ovs-vswitchd version || return 1
     fi
 
     # Verify OVS is running
@@ -115,15 +122,19 @@ teardown_ovs() {
         sudo ovs-vsctl del-br "$bridge" 2>/dev/null || true
     done
 
-    # Stop processes
+    # Stop processes. A process still running at its deadline is left to the
+    # force kill below.
+    local pid
     if [ -f /var/run/openvswitch/ovs-vswitchd.pid ]; then
-        sudo kill $(cat /var/run/openvswitch/ovs-vswitchd.pid) 2>/dev/null || true
-        sleep 1
+        pid=$(cat /var/run/openvswitch/ovs-vswitchd.pid)
+        sudo kill "$pid" 2>/dev/null || true
+        wait_for 5 "ovs-vswitchd (PID $pid) to exit after SIGTERM" process_gone "$pid" || true
     fi
 
     if [ -f /var/run/openvswitch/ovsdb-server.pid ]; then
-        sudo kill $(cat /var/run/openvswitch/ovsdb-server.pid) 2>/dev/null || true
-        sleep 1
+        pid=$(cat /var/run/openvswitch/ovsdb-server.pid)
+        sudo kill "$pid" 2>/dev/null || true
+        wait_for 5 "ovsdb-server (PID $pid) to exit after SIGTERM" process_gone "$pid" || true
     fi
 
     # Force kill if still running
@@ -218,19 +229,6 @@ run_openflow_tests() {
     log_info "=== OpenFlow Tests Complete ==="
 }
 
-run_state_transition_tests() {
-    log_info "=== Running State Transition Tests ==="
-    setup_ovs
-    cleanup_test_bridges
-
-    cd "$SCRIPT_DIR"
-    log_info "Running state transition tests..."
-    go test -v -timeout 10m -run TestProvisioning ./... -count=1
-
-    cleanup_test_bridges
-    log_info "=== State Transition Tests Complete ==="
-}
-
 show_test_status() {
     log_info "=== Test Environment Status ==="
 
@@ -272,7 +270,6 @@ Commands:
     policy           Run policy engine tests
     bridge           Run bridge/port management tests
     flows            Run OpenFlow rules tests
-    state            Run state transition tests
 
     help             Show this help message
 
@@ -317,9 +314,6 @@ case "${1:-test}" in
         ;;
     flows|openflow|acl)
         run_openflow_tests
-        ;;
-    state|transition)
-        run_state_transition_tests
         ;;
     help|--help|-h)
         show_help

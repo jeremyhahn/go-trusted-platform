@@ -124,7 +124,7 @@ func TestAttach_ServerRefusals(t *testing.T) {
 				if err := os.WriteFile(blocker, nil, 0o600); err != nil {
 					t.Fatalf("write blocker: %v", err)
 				}
-				server.VolumeDir = filepath.Join(blocker, "nbd")
+				server.Volumes = localVolumes(t, filepath.Join(blocker, "nbd"))
 			},
 			check: func(t *testing.T, err error) {
 				wantRefusal(t, err, ErrServerRefused{Option: optGo, Reply: repErrPlatform})

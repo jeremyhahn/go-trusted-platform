@@ -78,8 +78,11 @@ the missing build or the disabled setting.
 
 Integration builds (`TEST_BUILD_TAGS`, used by `make integration-test` and every
 `make integration-test-<suite>`) always carry `vector qrdb_vector`, and
-`quicbaas.TestConfig` enables the service in such a build. That way the
-quicbaas and sdk suites' Vector assertions run against a real vector store.
+`quicbaas.TestConfig` enables the service in such a build. The factory's
+Vector assertion (`TestFactory_SDKClient_VectorOperations` in
+`pkg/storage/quicbaas`) is a unit test: `make test` runs it without the service
+and asserts `ErrVectorUnavailable`; `make test-pkg PKG=./pkg/storage/quicbaas/
+GO_BUILD_TAGS='vector qrdb_vector'` runs it against a real vector store.
 
 ## qrdb Optional Feature Tags
 
@@ -105,9 +108,9 @@ The three group variables switch on every per-service variable for their cloud:
 
 | Variable | Default | Turns on |
 |-----------|---------|--------|
-| `WITH_AWS` | unset | `WITH_AWS_KMS` (`awskms`), `WITH_OBJSTORE_S3` (`awss3`), `WITH_AWS_COMPUTE` (`awscompute`) |
-| `WITH_GCP` | unset | `WITH_GCP_KMS` (`gcpkms`), `WITH_OBJSTORE_GCS` (`gcpstorage`), `WITH_GCP_COMPUTE` (`gcpcompute`) |
-| `WITH_AZURE` | unset | `WITH_AZURE_KV` (`azurekv`), `WITH_OBJSTORE_AZURE` (`azureblob`), `WITH_AZURE_COMPUTE` (`azurecompute`) |
+| `WITH_AWS` | 0 | `WITH_AWS_KMS` (`awskms`), `WITH_OBJSTORE_S3` (`awss3`), `WITH_AWS_COMPUTE` (`awscompute`) |
+| `WITH_GCP` | 0 | `WITH_GCP_KMS` (`gcpkms`), `WITH_OBJSTORE_GCS` (`gcpstorage`), `WITH_GCP_COMPUTE` (`gcpcompute`) |
+| `WITH_AZURE` | 0 | `WITH_AZURE_KV` (`azurekv`), `WITH_OBJSTORE_AZURE` (`azureblob`), `WITH_AZURE_COMPUTE` (`azurecompute`) |
 | `WITH_VAULT` | 0 | HashiCorp Vault (`vault`) |
 
 Each per-service variable defaults to 0 and can be set on its own.
@@ -172,8 +175,15 @@ Platform-specific build tags used by the Makefile.
 | Build Tag | Usage | Effect |
 |-----------|-------|--------|
 | `platform_web` | `WITH_WEB=1` | Embed web frontend into binary |
-| `desktop` | `WITH_DESKTOP=1` | Build the desktop GUI (requires Wails v2) |
+| `desktop` | `WITH_DESKTOP=1` | Build the desktop GUI into `platformctl` (requires Wails v2); only `cmd/platformctl` reads it |
 | `platform_p2p` | `WITH_P2P=1` | Include P2P/libp2p networking support |
+| `key_safety` | **Unavailable** | Would add the `platformctl kms` key-safety command (`pkg/cli/commands/kms/key_safety.go`), but a build with it fails: that file calls `SetKeySafety`, `GetKeySafety`, `ClearKeySafety`, `SafetyCheck` and `SafetyReport` (`key_safety.go:343,381,457,490,545`) on `platformv1.KeyManagementServiceClient` (`sdk/go/client.go:508`), and that interface (`sdk/go/gen/kms_grpc.pb.go:54`) declares none of them. Do not pass `GO_BUILD_TAGS=key_safety` until the platform KMS client supports those calls; no `WITH_*` variable sets it |
+
+Some files are selected by the **absence** of a tag (`!iam`, `!cluster`,
+`!fips`, `!awscompute`, `!azurecompute`, `!gcpcompute`, `!key_safety`,
+`!platform_p2p`, `!platform_web`, `!desktop`). The tagged build never sees
+them; the compile-everything target runs a second, untagged pass so they are
+still compiled (see the comment above it in the `Makefile`).
 
 ## Build Examples
 
@@ -195,6 +205,12 @@ Turn off the optional features that are on by default:
 ```bash
 make build WITH_RAFT=0 WITH_TIMESERIES=0 WITH_FROST=0
 ```
+
+`WITH_RAFT=0` drops the embedded QuicBaaS: the Makefile marks raft "required
+for embedded QuicBaaS". The test files tagged `//go:build raft` (for example
+`pkg/storage/quicbaas/factory_test.go` and
+`pkg/api/daemon/app_services_embedded_test.go`) are also left out of a
+raft-free build.
 
 ### Cloud Deployment (AWS Backend)
 
@@ -242,8 +258,14 @@ ARG WITH_WEB=false
 Usage:
 
 ```bash
-docker build --build-arg WITH_WEB=true -f build/docker/trusted-platform-builder/Dockerfile-alpine -t trusted-platform:latest .
+docker build --build-arg WITH_WEB=true -f build/docker/trusted-platform-builder/Dockerfile-alpine -t trusted-platform-builder:latest .
 ```
+
+These images are build environments: they do not compile go-trusted-platform
+(the Dockerfile's own note says so). `WITH_WEB=true` only copies the built web
+frontend into `pkg/webserver/embed/dist`; nothing is compiled with
+`platform_web` inside the image. Unlike the Makefile variable, which takes
+`1`/`0`, the Docker argument takes `true`/`false`.
 
 ## Related Documentation
 

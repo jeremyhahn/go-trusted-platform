@@ -189,6 +189,25 @@ func TestApply_SectionForAnInactiveServiceIsATypedError(t *testing.T) {
 	assert.Len(t, vipAddrs(gw), 2)
 }
 
+// TestApply_AChildAppliesOnlyTheSectionsOfItsServices: the supervisor sends
+// the vpn child the whole document (#557); the load-balancer and NAT sections
+// belong to the datapath child, so the vpn child leaves them alone rather than
+// failing them as inactive services.
+func TestApply_AChildAppliesOnlyTheSectionsOfItsServices(t *testing.T) {
+	cfg := reconcileGatewayConfig()
+	cfg.HostedServices = []string{ServiceManagementVPN}
+	gw := startGateway(t, cfg)
+	defer gw.Stop(context.Background())
+
+	require.NoError(t, gw.Apply(context.Background(), desiredDoc("rev-1")))
+	state := gw.DesiredConfigState()
+	assert.Equal(t, "rev-1", state.Version)
+	assert.Empty(t, state.LastError)
+	assert.Empty(t, vipAddrs(gw), "no load balancer runs in this child")
+	_, natActive := gw.NATService()
+	assert.False(t, natActive, "no NAT runs in this child")
+}
+
 func TestApply_RejectsAnInvalidDocument(t *testing.T) {
 	gw := startGateway(t, reconcileGatewayConfig())
 	defer gw.Stop(context.Background())

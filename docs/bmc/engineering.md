@@ -123,7 +123,7 @@ Package functions:
 `DiscoverMAC(ctx, *Config, *slog.Logger) (string, error)`,
 `DiscoverMACs(ctx, *Config, *slog.Logger) ([]string, error)`,
 `DetectProtocol(ctx, address string, timeout time.Duration) Protocol`,
-`GenerateRandomPassword(n int) (*memguard.Secret, error)`,
+`GenerateRandomPassword(n int) (*memguard.MemoryEnclave, error)`,
 `CredentialPath(name string) string`,
 `NameFromCredentialPath(path string) string`,
 `MarshalCredentials(*Credentials) ([]byte, error)`,
@@ -513,18 +513,18 @@ input unconditionally via `defer zero(b)`.
 
 Non-negotiable, and enforced by signature rather than convention:
 
-- `UserManager.CreateUser` and `SetUserPassword` take `*memguard.Secret`. Raw
+- `UserManager.CreateUser` and `SetUserPassword` take `*memguard.MemoryEnclave`. Raw
   `string`/`[]byte` passwords are deliberately absent from the interface.
 - `CertificateManager.ReplaceWebCertificate` takes `certPEM []byte` and
-  `keyPEM *memguard.Secret`.
-- `PasswordGenerator` is `func() (*memguard.Secret, error)`;
+  `keyPEM *memguard.MemoryEnclave`.
+- `PasswordGenerator` is `func() (*memguard.MemoryEnclave, error)`;
   `GenerateRandomPassword(n)` returns one. `DefaultPasswordLength` is `20`; the
   alphabet is `[A-Za-z0-9]` only, because BMC firmware routinely mangles
   punctuation.
-- `Credentials.Password` is a `*memguard.Secret` with `Destroy`, `IsAlive` and
-  `Clone`.
+- `Credentials.Password` is a `*memguard.MemoryEnclave`; `Credentials` itself
+  has `Destroy`, `IsAlive` and `Clone`.
 - `Service.ReplaceWebCertificate` copies the caller's `keyPEM` into a fresh
-  `memguard.Secret` and destroys it on return — and its doc comment states that
+  `memguard.MemoryEnclave` and destroys it on return — and its doc comment states that
   it does **not** scrub the caller's slice. Callers own that.
 - Intermediate `[]byte` buffers (PEM bundles, multipart bodies) are zeroed
   immediately after `httpClient.Do` returns.
@@ -619,6 +619,7 @@ signal, `VendorUnknown` otherwise.
 | Unit (CLI) | `pkg/cli/commands/bmc/*_test.go` | Flag validation, mode conflict, standalone config construction, enroll option tri-state |
 | Unit (API) | `pkg/webservice/v1/bmc/*_test.go`, `pkg/api/mcp/bmc_dispatch_test.go`, `pkg/api/daemon/quic_dispatch_guard_test.go` | Handler status codes, MCP tool dispatch, QUIC opcode routing |
 | Unit (SDK parity) | `pkg/api/daemon/bmc_{quic,mcp,embedded}_sdk_test.go` (drivers in `bmc_sdk_parity_test.go`) | Every `BMCService` method through the SDK's QUIC, MCP and embedded adapters against the daemon's handlers; the gRPC scope and not-found refusals |
+| Unit (simulators) | `test/integration/bmc/vbmc/main_test.go`, `test/integration/bmc/rmcpsim/simulator_test.go` | The harness's own simulators: vBMC config loading and Redfish identity routes (httptest), the RMCP+ responder's handshake, credential rotation, IPMI handlers and malformed-packet silence (127.0.0.1 UDP). Untagged; `make test` runs them through `TEST_UNIT_PKGS` |
 | Integration | `test/integration/bmc/` | Real containerized vBMC responders |
 
 Make targets: `make test-bmc` (runs `./pkg/bmc/...`,
@@ -711,7 +712,7 @@ The audit record for the trust lifecycle is `app.BMCEnrollResult.Steps` and
 containing secret material.
 
 **Never log:** BMC passwords, `MediaSpec.Password`, TLS private key PEM,
-`memguard.Secret` contents, or the marshalled `credentialRecord`.
+`memguard.MemoryEnclave` contents, or the marshalled `credentialRecord`.
 
 ## 14. Related
 

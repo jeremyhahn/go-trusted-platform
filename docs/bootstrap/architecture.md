@@ -142,7 +142,8 @@ pin before planning a partial rollout. The platform moved from 0.2.0-alpha to
 | **Physical switch configuration** | `pkg/switch/` — see [`docs/switch/`](../switch/architecture.md) | this repo, separate feature |
 | **DNS zones and DNSSEC signing** | [`docs/dns/`](../dns/) | this repo, separate feature |
 
-The ownership-register (`docs/00` §R) rows this feature touches are the
+The ownership-register (handbook
+`software/docs/00-ownership-and-sdk-boundary.md` §R) rows this feature touches are the
 platform's *zero-touch provisioning* row (shared
 with [`docs/provisioning/`](../provisioning/)) and, at its lower edge, the
 qrdb-owned *barrier/seal* and *firstboot/bootstrap* rows — consumed strictly
@@ -201,9 +202,11 @@ other model, `diskless`, is unchanged.
   manifest. That identity is the node's only export. An empty export name
   means that export, and the node's own identity names it too. Any other name
   is refused (`NBD_REP_ERR_POLICY`).
-- **Volumes.** One file per device, `<volume-dir>/<identity>.img`. It is
-  created sparse at the configured size on first attach, and kept at its size
-  afterwards. The node LUKS-encrypts it (#685), so the server holds ciphertext
+- **Volumes.** The server reaches each device's volume only through a
+  `VolumeProvider`, so the server is the same whatever the store. The store
+  built today is local files on a single boot node: one file per device,
+  `<volume-dir>/<identity>.img`. It is created sparse at the configured size
+  on first attach, and kept at its size afterwards. The node LUKS-encrypts it (#685), so the server holds ciphertext
   only.
 - **Commands.** `READ`, `WRITE` (with `FUA`), `FLUSH`, `TRIM` and `DISC`.
   A command that fails is answered with an NBD error code. Only a malformed
@@ -310,13 +313,13 @@ the logged fallback.
    and invalidate the seal written in step 4.
 4. Seal the LUKS key **under the Platform KeyStore SRK** (never the SSRK)
    with the platform policy on the sealed object (`PlatformPolicy: true`,
-   `pkg/firstboot/strategy.go:1301`), and write it to the EFI partition.
+   `pkg/firstboot/strategy.go:1328`), and write it to the EFI partition.
    This is the only seal first boot writes: it writes no upgrade seal, and
    it deletes any `seal-upgrade.*` it finds
-   (`pkg/firstboot/strategy.go:1400`). `pcr-banks` records the parent handle
+   (`deleteUpgradeSeals`, `pkg/firstboot/strategy.go:1387`). `pcr-banks` records the parent handle
    and its authorization mode (`keystore-platform-policy`) for the unseal
    side to replay. It also records the configured `seal-pcrs` list
-   (`pkg/firstboot/strategy.go:1333`), but that list is never applied to
+   (`formatPCRBanksContent`, `pkg/firstboot/strategy.go:1375`), but that list is never applied to
    the seal; the platform policy decides which PCRs bind it.
 5. Unlock the LUKS root; copy the installer's contents onto it; apply the
    recovery-key strategy (destroy or escrow).
@@ -504,9 +507,9 @@ platform is first drawn here.
    enrolled, `Keyfile` has no `installer.luks` once seal confirmation wiped
    it, and the boot stops at the `Password` prompt. After the passphrase,
    platformd sees the Platform SRK policy no longer match the current PCRs
-   (`pkg/app/app.go:1920-1929`) beside a present seal and refuses to start
-   with `ErrTPMSealPolicyDrift` (`pkg/app/app.go:1971-1973`,
-   `pkg/app/tpm_seal_guard.go:213`).
+   (`tpmCausePolicyDrift`, `pkg/app/app.go:1936`) beside a present seal and
+   refuses to start: `resolveTPMRecovery` (`pkg/app/app.go:1980`) returns
+   `ErrTPMSealPolicyDrift` (`pkg/app/tpm_seal_guard.go:214`).
 
    *Planned, not implemented (go-xkms #1443):* `TPM-Upgrade` stays; upgraded
    images are built and signed centrally and staged, not rebuilt on the

@@ -54,6 +54,12 @@ var (
 	// ErrNoRoot is returned when a tunnel identity's chain does not end in
 	// a self-signed root CA.
 	ErrNoRoot = errors.New("ipsec: tunnel identity chain does not end in a root CA")
+	// ErrChainBroken is returned when a certificate of a tunnel identity's
+	// chain is not signed by the certificate after it.
+	ErrChainBroken = errors.New("ipsec: tunnel identity chain is not signed in order")
+	// ErrNotAnchored is returned when a tunnel identity's root is not a
+	// certificate of the platform anchor.
+	ErrNotAnchored = errors.New("ipsec: tunnel identity does not chain to the platform anchor")
 	// ErrCRLQueueFull is returned when a CRL cannot be verified yet and the
 	// queue of such CRLs already holds as many issuers as it takes.
 	ErrCRLQueueFull = errors.New("ipsec: too many CRLs await a tunnel identity")

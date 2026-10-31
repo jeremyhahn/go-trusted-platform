@@ -364,6 +364,7 @@ warms from the store at start and keeps each report's original `CollectedAt`.
 | Layer | Location | Covers |
 |---|---|---|
 | Unit | `pkg/attestation/**/*_test.go`, `pkg/ima/*_test.go` | Merkle chain, quote verification, PCR comparison, config validation, error mapping |
+| Unit (transports) | `pkg/webservice/v1/rest/attestation/*_test.go`, `pkg/api/quic/attestation_*_test.go` | Every REST route's request mapping, status and nil-service answer; the QUIC opcodes' handling, and an attestation opcode answered over a loopback QUIC connection on the production ALPN |
 | Integration | `test/integration/attestation/` | End-to-end host, VM and container attestation against a daemon; the device-report and caller-policy verbs on every transport ([CLI §7](cli.md#7-parity-gap)) |
 
 `SoftwareTPM` is the fixture that makes unit tests hardware-free. Integration

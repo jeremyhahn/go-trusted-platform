@@ -1,6 +1,6 @@
 # Platform Tenancy — MCP Tool Reference
 
-> **Status: NORMATIVE** · Scope: `pkg/api/mcp/tenant_tools.go` · Last verified: 2026-10-21
+> **Status: NORMATIVE** · Scope: `pkg/api/mcp/tenant_tools.go` · Last verified: 2026-10-27
 > Conflicts with this document are defects. Fix them here first.
 > Transport matrix, scopes and error mapping: [api.md](api.md) §5–7.
 
@@ -24,7 +24,7 @@ Shared shapes:
 
 | Tool | Arguments | Result |
 |---|---|---|
-| `tenant_list` | — | `{tenants: [tenant], total}` |
+| `tenant_list` | `limit` (0 or less means 100), `offset` | `{tenants: [tenant], count, total}` — `count` is the page size, `total` all tenants |
 | `tenant_get` | `tenant_id` | tenant |
 | `tenant_get_by_name` | `name` | tenant |
 | `tenant_create` | `name` (required), `display_name`, `labels`, `annotations`, flat quota limits (below) | status + `{tenant}` |
@@ -59,11 +59,15 @@ error ([engineering.md](engineering.md) §5.3).
 
 | Tool | Arguments | Result |
 |---|---|---|
-| `tenant_rotate_dek` | `tenant_id` | `{success, tenant_id, old_version, new_version, timestamp, message}` |
+| `tenant_rotate_dek` | `tenant_id`, `background` | `{success, tenant_id, old_version, new_version, timestamp, message}` |
 | `tenant_get_dek_status` | `tenant_id` | `{tenant_id, path, version, algorithm, status, is_default, usage_count, bytes_used, max_usage_count, max_bytes_used, warning_percent, usage_percent, needs_rotation, ...}` |
 | `platform_tenant_barrier_init` | `tenant_id`, `threshold`, `shares` | status + `{tenant_id}` |
 | `platform_tenant_barrier_unseal` | `tenant_id`, `key` | status + `{tenant_id}` |
 | `platform_tenant_barrier_seal` | `tenant_id` | status + `{tenant_id}` |
 | `platform_tenant_barrier_status` | `tenant_id` | the barrier status, keyed by `tenant_id` |
+
+On platformd, `tenant_rotate_dek` and `tenant_get_dek_status` always return the
+tool error *"DEK isolation is not enabled"*: the daemon runs the tenant manager
+with DEK isolation off ([configuration.md](configuration.md)).
 
 Every tool needs the scope [api.md](api.md) §5 names for it.

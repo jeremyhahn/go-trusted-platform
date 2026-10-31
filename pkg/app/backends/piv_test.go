@@ -93,8 +93,12 @@ func (s *fakePIVStore) List() ([]xkmssdk.PIVSlotInfo, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]xkmssdk.PIVSlotInfo, 0, len(s.certs))
-	for slot := range s.certs {
-		out = append(out, xkmssdk.PIVSlotInfo{Slot: slot})
+	for slot, cert := range s.certs {
+		out = append(out, xkmssdk.PIVSlotInfo{
+			Slot:      slot,
+			Subject:   cert.Subject.CommonName,
+			Algorithm: cert.PublicKeyAlgorithm.String(),
+		})
 	}
 	return out, nil
 }

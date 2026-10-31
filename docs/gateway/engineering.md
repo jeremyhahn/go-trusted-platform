@@ -844,6 +844,17 @@ hop limit 255, version 3, checksum over the RFC 2460 §8.1 pseudo-header for
 both families, our VRID, our address list; anything else is counted in
 `Health.Dropped` and ignored.
 
+The socket (`fhrp.NewRawTransport`, `pkg/sdn/fhrp/transport_linux.go`) is a
+raw protocol-112 socket bound to the group's interface (`SO_BINDTODEVICE`) and
+joined to 224.0.0.18 / ff02::12 (RFC 9568 §5.1.1.2, §5.1.2.2). The IPv4 socket
+is not bound to `source`: Linux hands an IPv4 packet to a raw socket only when
+the socket's bound address is the packet's destination, so a socket bound to
+`source` never hears a peer's advertisement and every backup's Master_Down
+timer expires (two masters). IPv4 advertisements carry `source` per send in
+`IP_PKTINFO` instead, with multicast loopback off so the speaker does not count
+its own advertisements in `Health.Dropped`; the IPv6 socket, whose raw match also accepts a joined
+group, stays bound to `source`.
+
 Typed errors: `ErrInvalidGroupConfig`, `ErrDuplicateGroup`, `ErrInvalidPacket`,
 `ErrTransportRequired`, `ErrTransportFailed`, `ErrAddressOperationFailed`,
 `ErrSpeakerNotRunning`, `ErrSpeakerAlreadyRunning`, `ErrGroupNotFound`
@@ -859,15 +870,21 @@ together with stateless NAT failover. Conntrack/NAT state sync is #710.
 
 ### The process model — `pkg/sdn/gateway/process` (#557)
 
+> This section describes the code today, where `gatewayd serve` is the
+> supervisor. The target is [supervisor.md](supervisor.md) (#1191, ruling 240
+> item 4): one process per service under `platformd` as the single supervisor.
+> It supersedes #557's open questions about the supervisor (systemd template
+> units).
+
 | Type | What it is |
 |---|---|
-| `Class`, `Definition` | a privilege class (`ClassKernel`, `ClassParser`) and one process: name, class, hosted services, capabilities, `AddressFamilies`, `MemoryMax`, `CPUMax`, `Unprivileged`, `Supervised` |
+| `Class`, `Definition` | a privilege class (`ClassKernel`, `ClassParser`) and one process: name, class, hosted services, capabilities, `AddressFamilies`, `MemoryMax`, `CPUMax`, `Unprivileged`, `Supervised`, `ReconcilesDesired` (the process applies a section of the desired document: `datapath` the load-balancer and NAT sections, `vpn` the vpn section), and `StateDir` (the directory under `--data-dir` the process keeps its own state in: `vpn` for the vpn child's revocation journal) |
 | `DefinitionForService`, `DefinitionByName`, `Definitions`, `Processes` | the class table's lookups; `Processes(enabled)` returns only the processes those services need, each carrying only the enabled ones |
 | `Supervisor` | implements `gateway.ServiceSupervisor`: `Supervises`, `StartService`, `StopService`, `ServiceActive`, `ServiceHealth`, `ServiceSnapshot`, `Apply`, plus `Snapshot` and `Shutdown` |
 | `Config`, `Settings` | the supervisor's wiring, and the `process:` YAML section that builds it |
 | `Launcher`, `Spec`, `Child`, `ExecLauncher` | how a child is started; tests substitute a launcher whose children are in-process IPC servers |
 | `CgroupManager` | one cgroup v2 leaf per process; `+memory`/`+cpu` enabled in the `cgroup.subtree_control` of every `cgroup-parent` directory, then `memory.max` and `cpu.max` written before the child exists, and a `memory.swap.max` the leaf carries reset to `max` (the class table sets no swap limit); `Remove` waits for `populated 0` in the leaf's `cgroup.events` before the rmdir, and `Memory` reads `memory.current`, `memory.peak` and the `memory.events` counters |
-| `EnterHardened` | the child-side privilege drop: harden one thread, re-execute from it, install the class's seccomp filter on every thread, verify every thread |
+| `EnterHardened` | the child-side privilege drop: every step on every thread of the process (libcap `psx`), then the class's seccomp filter on every thread, then every thread verified |
 
 **The class table is not configuration.** `definitions` in `class.go` is the
 one place a service's class, capabilities and limits are decided. An operator
@@ -882,11 +899,12 @@ process therefore fails the test, which is how `nat64` was caught after it
 landed (#631 review); it runs in `datapath`, the one process holding
 `CAP_NET_ADMIN`.
 
-**The privilege drop is split across the exec on purpose.** The parent sets
-the ambient capability set and the cgroup at clone time (`SysProcAttr`:
+**The privilege drop is split between the parent and the child.** The parent
+sets the ambient capability set and the cgroup at clone time (`SysProcAttr`:
 `AmbientCaps`, `UseCgroupFD`, `Pdeathsig`). The child calls `EnterHardened`
-before it reads the configuration or opens a socket; its first stage runs these
-steps on one locked OS thread, in the order the kernel requires:
+before it reads the configuration or opens a socket. It runs these steps in the
+order the kernel requires, each one on every thread of the process (see
+"Every thread, not one" below):
 
 1. `no_new_privs`, so nothing it later execs can regain privilege.
 2. the bounding set reduced to the class's capabilities — **before** the uid
@@ -933,7 +951,233 @@ matches its config, and a WireGuard tunnel by keeping the device when its
 link, private key and listen port match and diffing its peers, and an
 IPsec tunnel by keeping the carrier link when it matches and reconciling
 its SAs and policies against the kernel's (matching ones kept, so their
-sequence numbers and replay state survive). A BGP peer sees the session
+sequence numbers and replay state survive). Once every configured tunnel
+is ensured, `tunnel.Manager.SweepIPsec` removes the SAs and policies the
+platform installed under SPIs or endpoints the configuration no longer
+names — a tunnel re-keyed onto new SPIs, or dropped, while no datapath
+ran — policies first and each pair's outbound SA last. With no tunnel or
+routing uplink configured, `EnabledServices` leaves the tunnels service out,
+so `gatewayd serve` (the single process, or the supervisor under `process:`)
+sweeps before `gw.Start` with a manager that has ensured nothing, making all
+of the platform's ESP state stale. Dumping XFRM state needs `CAP_NET_ADMIN`,
+which a gateway that never ran tunnels (BGP only, say) may not hold, so that
+sweep runs only on the record a start with tunnels writes under `--data-dir`
+(`tunnels-installed`), before the tunnels service installs anything, or on
+the ESP inventory (below), which exists only while it records a pair. With
+either, a sweep failure fails the start closed with `ErrStaleTunnelSweep` and
+keeps the record for the next start; a sweep that succeeds removes it, and
+it succeeds only once every object the inventory records is gone or
+confirmed absent. Without both nothing is swept and no privilege is needed;
+without a data directory nothing can be recorded, so every tunnel-less start
+sweeps, but with no ESP inventory that sweep removes nothing; an unreadable
+or unwritable record fails the start with `ErrTunnelsRecord`. A
+configuration without a `gateway:` section (proxy only; `BuildGateway`
+supplies a default) configures zero tunnels, so it sweeps a tunnel-enabled
+predecessor's state like a start whose last tunnel was dropped
+(`sweepDroppedTunnels` and `tunnelStateLeft` in
+`pkg/sdn/gateway/commands/serve.go`, `TestSweepDroppedTunnels`,
+`TestServeSweepsWithoutAGatewaySection`,
+`TestServeStopsOnASignalSentWhileStarting` for a start whose sweep would
+fail with `EPERM`). The carrier the killed
+predecessor left up for an obsolete tunnel, one dropped, replaced under
+other SPIs, or replaced under the same pair by a tunnel of another name,
+goes before its policies, as `RemoveTunnel` orders it, so it never sends
+in the clear: a GRE or IPIP link is deleted only when the inventory records
+it as a carrier of an owned pair, no configured tunnel is named after it,
+and its endpoints are that pair's (`removeStaleCarriersLocked`,
+`pkg/sdn/tunnel/ipsec.go:857`). This holds whether or not a configured
+tunnel still uses the pair: the inventory keeps every carrier it recorded
+for a pair until that carrier is removed, so a replacement that reuses the
+old tunnel's endpoints and SPIs under another name and carrier protocol
+keeps the pair's SAs, yet the old carrier is retired before the old
+protocol's policies go, and the record then forgets it
+(`sweepOwnedLocked`, `pkg/sdn/tunnel/ipsec.go:772`;
+`TestManager_SweepIPsec_RetiresTheCarrierOfAReplacementThatReusesItsPair`).
+The carrier follows the recorded pair, not a stale policy: a replacement on the
+same endpoints and carrier protocol updates the old policies in place, so
+none is stale, yet the old pair's SAs and inventory entry still go, and its
+carrier goes with them rather than stay up untracked
+(`TestManager_SweepIPsec_RemovesTheCarrierOfAReplacedTunnel`). If the
+removal fails the sweep fails with the protection intact. Matching endpoints prove nothing about who installed a
+link, so another installer's keyed GRE link between the same hosts is never
+touched (`TestManager_SweepIPsec_RemovesATunnelDroppedWhileNoManagerRan`;
+on real links, `hgre7` in
+`TestTunnel_NetNS_IPsecSweepRemovesOnlyStalePlatformState`). Shape and request id alone prove nothing either, since
+another installer may add an identical transport AES-GCM pair whose SPI
+equals its request id, so ownership is a durable inventory: before a pair's
+SAs, policies and carrier go in, the manager adds to the pair's record its
+request id, outbound endpoints, the carrier link name, the identity (source,
+destination, SPI) of each SA it installs and the identity (selector source,
+destination, protocol and direction, and template endpoints) of each policy
+it installs, keeping what earlier installs recorded, in
+`<data-dir>/ipsec-installed.json` (`pkg/sdn/tunnel/ipsec.go:142`,
+`ipsecInventoryEntry` at `pkg/sdn/tunnel/ipsec_inventory.go:82`,
+`ipsecInventoryPath` at `pkg/sdn/gateway/commands/assembly.go:997`), and
+drops the record once the pair's outbound SA is removed or swept; the file
+goes with its last pair, so its existence alone tells `gatewayd serve` there
+is state to sweep (`TestIPsecInventory_StoreRemovesAnEmptiedRecord`). Each
+write goes to a temporary file set to exactly 0600 and synced before it is
+renamed over the record (`store` and `writeFileSynced`,
+`pkg/sdn/tunnel/ipsec_inventory.go:232` and `:268`), so a file a crashed
+write left behind passes on no wider mode, and a crash cannot leave the
+record empty
+(`TestIPsecInventory_AStaleTemporaryFileDoesNotWidenTheRecord`). An
+outbound SA anchors a pair only
+when it has the platform's shape (transport ESP, AES-GCM, no mark, no
+encapsulation, and none of the fields `espState` never sets: output mark,
+xfrm interface id, SA direction, per-CPU number, extra flags, or a selector
+interface, port or protocol, or a selector source or destination address other
+than the unset `0.0.0.0/0` or `::/0` netlink reports (`selectorAddrUnset`);
+`ownedSAShape` and `stateFieldsUnset`,
+`pkg/sdn/tunnel/ipsec.go:493` and `:506`), its request id is its SPI (`ipsecReqid`), and the inventory
+records it (`ownedIPsec`, `pkg/sdn/tunnel/ipsec.go:559`). The pairs are
+built from the inventory, not from the kernel's SAs: a stop between
+`reconcileState`'s delete of a differing outbound SA and the add of its
+replacement leaves a recorded pair without its anchor, and the sweep still
+removes that pair's recorded inbound SA, policies and carrier on the
+recorded endpoints, never deleting the stand-in anchor
+(`recordedAnchor`, `pkg/sdn/tunnel/ipsec.go:603`;
+`TestManager_SweepIPsec_RemovesARecordedPairWithoutItsOutboundSA`), and a
+sweep that fails partway keeps the record for the next one
+(`TestManager_SweepIPsec_KeepsTheRecordOfAPairWithoutItsOutboundSAWhenASweepFails`). Any other SA belongs
+to the pair only when the inventory records its own identity: an IKE daemon
+may install SAs under the anchor's request id and endpoints, and those are
+never deleted, while an inbound SA a restart left behind under an older SPI
+is recorded and goes
+(`TestManager_SweepIPsec_LeavesAForeignSAUnderTheAnchorsReqid`). The kernel
+looks an SA up by destination, SPI, protocol and mark alone, so an SA under a
+recorded SPI that carries any field `espState` never sets is another
+installer's that replaced the platform's, and it is never deleted
+(`TestManager_SweepIPsec_LeavesAForeignSAThatReplacedARecordedOne`, one case
+per field). The ensure judges an SA already at a pair's key by the same
+shape check: `reconcileState` (`pkg/sdn/tunnel/ipsec.go:163`) keeps one of
+the platform's shape that matches, replaces one of that shape that differs
+(another key, a lockdown-zeroed key, other replay settings), and refuses any
+other with `ErrIPsecForeignSA`, never deleting it. The rollback and a
+tunnel's removal likewise leave a foreign SA at either key (`removeState`,
+`:365`, for the inbound SA; `removeIPsecStates`, `:335`, for the anchor,
+whose record alone is dropped) (`TestManager_EnsureTunnel_IPsecRefusesAForeignSA`,
+`TestManager_RemoveState`). A policy, too,
+goes only when the pair's record names its selector and template
+(`ownedPolicy`, `pkg/sdn/tunnel/ipsec.go:600`) and it has the shape
+`espPolicy` builds (`ownedPolicyShape`, `pkg/sdn/tunnel/ipsec.go:616`),
+leaving unset every field `espPolicy` never sets: the selector's interface
+(`Ifindex`) and ports, the priority, mark and xfrm interface id, and the
+template's SPI and optional flag (`policyFieldsUnset`,
+`pkg/sdn/tunnel/ipsec.go:641`). The ensure judges a policy already at a
+pair's key by the same shape check, so reconcile and sweep agree on what is
+the platform's: `reconcilePolicy` (`pkg/sdn/tunnel/ipsec.go:236`) keeps a
+policy that has the shape and the pair's template (`espPolicyMatches`,
+`:299`), replaces one that has the shape and another template (a request id
+an earlier configuration used), and refuses any other with
+`ErrIPsecForeignPolicy`, neither adopting nor overwriting it. A relaunch
+that meets one fails closed: the carrier it would have adopted is brought
+down (`adoptIPsec` runs `teardownTransport`, which deletes the link before
+it removes the platform's own policies and SAs), because a policy the
+platform did not write, with an optional template say, may admit the
+carrier's traffic in the clear. A carrier that will not go is reported with
+the refusal (`ErrTunnelRemoveFailed` joined to `ErrIPsecForeignPolicy` in
+`ErrTunnelCreateFailed`) and keeps its SAs. The fresh
+install's rollback and a tunnel's removal delete a policy at the pair's key
+only when it has that shape too (`removePolicy`, `:256`), so the policy a
+refused ensure met stays where its installer put it
+(`TestManager_EnsureTunnel_IPsecRefusesAForeignPolicy`,
+`TestManager_EnsureTunnel_IPsecKeepsAPolicyAsEspPolicyBuildsIt`). The
+kernel keys a policy on its whole selector, mark and interface id, so an
+interface-scoped policy with the pair's endpoints and template coexists with
+the platform's wildcard one and is another installer's; it is never deleted
+(`TestManager_SweepIPsec_LeavesAForeignPolicyWithAFieldThePlatformNeverSets`,
+one case per field). A template on the recorded
+anchor's endpoints and request id does not prove who installed it, since
+another installer may protect an IPIP carrier between the hosts of the
+platform's GRE pair under that request id, and that policy is never deleted,
+while a platform policy that a change of carrier protocol left stale goes
+and leaves the record
+(`TestManager_SweepIPsec_LeavesAForeignPolicyUnderTheAnchorsReqid`,
+`TestManager_SweepIPsec_ForgetsTheRecordedPolicyOfAReplacedCarrierProtocol`;
+on real XFRM state, the IPIP policy under the dropped pair's request id in
+`TestTunnel_NetNS_IPsecSweepRemovesOnlyStalePlatformState`). Because the anchor
+is the only evidence the sweep has, removing a tunnel keeps it, and its
+record, until the rest of its pair is gone. The rest is everything the pair
+records, not only what the current configuration names: an inbound SA under
+an SPI a later configuration replaced, and the carrier and policies of an
+earlier tunnel name that reused the pair, stay recorded until the start's
+sweep, and a start that rolls a tunnel back because a later tunnel failed to
+ensure runs before that sweep. So `removeIPsec`
+(`pkg/sdn/tunnel/ipsec.go:399`) first has `retireRecordedPair`
+(`pkg/sdn/tunnel/ipsec.go:429`) run the sweep over the tunnel's own recorded
+pair, with the tunnel being removed no longer naming anything (another
+managed tunnel naming the pair still keeps it): the recorded stale carriers
+go, then the recorded policies and SAs, the anchor last, and the record with
+it. Only then does it delete the tunnel's own policies, stopping at one it
+cannot delete. The order matters because a replacement on the same
+endpoints, carrier protocol and ESP pair shares the earlier carrier's
+policies (the SPD entries of RFC 4301 §4.4.1): deleting them first would let
+that carrier send in the clear, and leave it so if its deletion then failed.
+A carrier that cannot be deleted keeps the shared policies and fails the
+removal. A start that fails rolls its tunnel back through the same path and
+returns the rollback's `ErrTunnelRemoveFailed` joined with its own failure
+(`withRollback`, `pkg/sdn/tunnel/manager.go:228`; a failed install at
+`pkg/sdn/tunnel/manager.go:209`), so the next attempt, or
+the next start's sweep, retires the carrier and then the policies
+(`TestManager_EnsureTunnel_IPsecRollbackKeepsSharedPoliciesWhileTheEarlierCarrierStays`).
+A carrier that fails after it was added (`pkg/sdn/tunnel/manager.go:214`),
+and a tunnel that fails to bind to its uplink
+(`pkg/sdn/tunnel/manager.go:157`), are torn down by `teardownTransport`
+(`pkg/sdn/tunnel/manager.go:240`): it deletes the new carrier, returning
+`ErrTunnelRemoveFailed` before any policy is touched if it cannot, then runs
+`removeIPsec` and returns its error too. Both are joined with the start
+failure the same way, so the teardown failure is reported, no half-made
+carrier outlives its policies, and the policies stay until a retry retires
+the carrier and then the policies
+(`TestManager_EnsureTunnel_IPsecCarrierFailureRemovesTheHalfMadeCarrier`,
+`TestManager_EnsureTunnel_IPsecBindFailureReportsAnUnfinishedTeardown`,
+`TestManager_EnsureTunnel_IPsecBindFailureKeepsPoliciesWhileItsCarrierStays`).
+A GRE link that fails after it was added is torn down the same way
+(`pkg/sdn/tunnel/manager.go:202`), so a failed start leaves no down,
+half-configured link behind, and a link that will not go is reported with the
+failure
+(`TestManager_EnsureTunnel_GRECarrierFailureRemovesTheHalfMadeLink`,
+`TestManager_EnsureTunnel_GRECarrierThatWillNotGoIsReportedWithTheFailure`).
+`removeIPsecStates` (`pkg/sdn/tunnel/ipsec.go:343`) then stops at an
+inbound SA it cannot delete before the anchor is touched; an anchor that
+cannot be deleted keeps its record. Any failure returns before the record is
+touched. Only a policy or SA already gone (`ESRCH`, `ENOENT`) counts
+as removed. A failed lookup of the outbound SA, the one that proves it this
+tunnel's, deletes nothing and fails the removal
+(`TestManager_RemoveTunnel_IPsecKeepsTheAnchorWhenItsLookupFails`). The next start's sweep then recognises and removes what was left
+(`TestManager_RemoveTunnel_IPsecFailureKeepsTheAnchorForTheSweep`,
+`TestManager_RemoveTunnel_IPsecRetiresAnInboundSAALaterConfigReplaced`,
+`TestManager_RemoveTunnel_IPsecRetiresTheRecordedCarrierOfAnEarlierName`,
+`TestManager_RemoveTunnel_IPsecKeepsTheRecordWhileAReplacedMemberStays`). With nothing
+recorded, as without a data directory, `SweepIPsec` returns before it lists
+any state (`pkg/sdn/tunnel/ipsec.go:707`); state a release before the
+inventory installed has no record and is left until its configured tunnel
+is ensured again, which records it. The sweep groups owned state by request
+id and endpoint pair, so a tunnel whose remote moved
+under the same SPIs has its old pair swept beside the new one kept. A local
+endpoint that moves under the same remote and SPIs keeps the outbound SA's
+kernel identity (destination and SPI), so ensuring the new pair replaces the
+old pair's outbound SA, the anchor the sweep proves ownership by; the ensure
+therefore retires the old pair first (`retireMovedPair` in
+`pkg/sdn/tunnel/ipsec.go`): any stale carrier on its endpoints, its policies,
+its inbound SA, then its outbound SA. A retirement cut short fails the ensure
+and the cleanup keeps an outbound SA on another local endpoint
+(`removeIPsecStates`), so the next start still recognises the old pair
+(`TestManager_EnsureTunnel_RetiresTheOldPairWhenTheLocalMovesUnderTheSameSPIs`,
+`TestManager_EnsureTunnel_KeepsTheOldAnchorWhenRetiringFails`; on real XFRM
+state, `TestTunnel_NetNS_IPsecLocalMoveRetiresTheOldPair`). An
+IKE daemon's SAs, the overlay's templateless block policies, a pair
+whose outbound SA is already gone, and an unrecorded pair of the platform's
+exact shape with its SPI equal to its request id are never touched
+(`pkg/sdn/tunnel/ipsec_sweep_test.go`, among them
+`TestManager_EnsureTunnel_RetiresNothingForAnUnrecordedPairWithSPIEqualToReqid`; on real XFRM state,
+`TestTunnel_NetNS_IPsecSweepRemovesOnlyStalePlatformState` in
+`make integration-test-sdn`). A failed sweep fails the `tunnels` start
+with `tunnel.ErrIPsecSweepFailed`, whose `Op` names the list or remove
+step (`list links`, `remove carrier`, `read inventory` and `update inventory`
+among them), without tearing a tunnel down: the configured tunnels are correct,
+and the next start ensures them as no-ops and sweeps again. A BGP peer sees the session
 drop without a Cease NOTIFICATION, so graceful restart keeps its routes for
 the restart time. It can only keep the families the capability names: the
 speaker marks each enabled family's `MpGracefulRestart` on every peer when
@@ -965,30 +1209,41 @@ supervisor shutdown, death by the signal.
 stopped a successor whose children answered the test's probes before the
 supervisor had finished starting.
 
-**Every thread, not one: the drop re-executes (#657).**
-`prctl` and `capset` apply to the calling thread only, while the Go runtime
-has started several threads before `main` runs, so the steps above harden one
-thread out of many. `EnterHardened` closes that by re-executing gatewayd from
-the hardened thread: `execve` keeps the calling thread's credentials and
-discards every other thread, and every thread the new runtime starts is cloned
-from the hardened one. The goroutine is locked to its thread first and never
-unlocked, so nothing else runs on a half-hardened thread. Across the exec the
-kernel derives the new sets from the old: an unprivileged child's ambient set
-becomes its permitted and effective sets; a root kernel-class child's
-permitted set becomes its bounding set (already the class mask) and its
-effective set follows. `no_new_privs` survives the exec, so a setuid or
-file-capability image cannot raise anything.
+**Every thread, not one: the drop is process-wide through libcap `psx` (#657).**
+Linux credentials belong to a thread, not a process: `prctl` and `capset`
+change the calling thread only, and the Go runtime has started several threads
+before `main` runs. A drop made with plain syscalls would harden one thread out
+of many. Every step therefore reaches every thread:
 
-The second stage is recognised by `GATEWAYD_HARDENED_PARENT`, which carries
-the supervisor's pid across the exec. The marker grants nothing. The second
-stage first installs the class's seccomp filter (below), then reads
-`/proc/self/task/*/status` and refuses unless **every** thread has
-`NoNewPrivs` set, `Seccomp` at 2 (filter mode), and `CapPrm`, `CapEff` and
-`CapBnd` equal to the class mask — and, for an unprivileged class, all four
-uids and gids equal to the service account and no supplementary group but its
-own (`ErrPrivilegeNotHeld`, naming the thread and the field). It then re-arms
-the parent-death signal against the pid the first stage saw, so a supervisor
-that died across the exec is `ErrSupervisorExited`, not an orphan.
+- the uid, gid and supplementary groups go through the Go standard library
+  (`syscall.Setgroups`, `unix.Setresgid`, `unix.Setresuid`), which already
+  applies them to every thread: `syscall.AllThreadsSyscall` in the static
+  build, libc's set-id broadcast in the cgo build;
+- every `prctl` (`no_new_privs`, the bounding drop, `PR_SET_KEEPCAPS`, the
+  ambient raise, the parent-death signal) goes through libcap's `cap.Prctlw`,
+  and the capability sets through `cap.Set.SetProc`. Both run the syscall on
+  every thread through libcap's `psx` package. In the cgo build `psx` is the C
+  `libpsx`, which tracks every pthread and kills the process if any thread's
+  result differs. In the static build it is `syscall.AllThreadsSyscall`, which
+  panics on a difference. A thread that did not take a step can therefore
+  never run on.
+
+These calls sit in `kernelHardenOps` (`launcher.go`), behind the same
+`hardenOps` seam, so the order above is unchanged and stays a unit test.
+`TestKernelHardenOps_DropReachesEveryThread` re-executes the test binary as a
+real child, pins goroutines to threads of their own, and requires
+`NoNewPrivs` and the cleared capability sets on every task. It fails against a
+plain `unix.Prctl`. With root, the integration suite does the same through
+`EnterHardened` and checks the full proxy credentials on every thread
+(`TestEnterHardened_EveryThreadHoldsTheProxyCredentials`,
+`make integration-test-proxy`).
+
+After the drop, `EnterHardened` installs the class's seccomp filter (below).
+It then reads `/proc/self/task/*/status` and refuses unless **every** thread
+has `NoNewPrivs` set, `Seccomp` at 2 (filter mode), and `CapPrm`, `CapEff` and
+`CapBnd` equal to the class mask. For an unprivileged class, all four uids and
+gids must also equal the service account, with no supplementary group but its
+own. The refusal is `ErrPrivilegeNotHeld`, naming the thread and the field.
 
 **Seccomp, where the class allows (`seccomp.go`).** Capabilities bound what a
 child may do with privilege; much kernel surface needs none (a user namespace,
@@ -1027,19 +1282,32 @@ than run unfiltered. The program's logic is unit-tested in the `x/net/bpf`
 VM; the filter on a real kernel is exercised by every supervised child in
 `make integration-test-proxy`.
 
-The re-exec was chosen over the alternatives #657 listed:
-`syscall.AllThreadsSyscall` returns `ENOTSUP` under cgo and gatewayd is built
-both ways; libcap's Go bindings add a dependency for the same per-thread
-replay; dropping before the runtime starts threads would need C that runs
-before the Go runtime, which a pure-Go build does not have.
-It is an **owner call taken reversibly**: the choice is contained in
-`process/child.go`, and replacing it changes no caller.
+libcap's Go bindings are the owner's ruling among the alternatives #657
+listed (option 2). `syscall.AllThreadsSyscall` alone returns `ENOTSUP` under
+cgo, and gatewayd is built both ways: `make build-gatewayd` builds it with
+`CGO_ENABLED=1` (`Makefile:802`), and the static build uses `CGO_ENABLED=0`
+(`Makefile:855`). Dropping before the runtime starts threads would need C that
+runs before the Go runtime, which a pure-Go build does not have. An earlier
+stand-in re-executed gatewayd from one hardened thread. `psx` replaces it, so
+the second exec stage and its `GATEWAYD_HARDENED_PARENT` marker are gone.
+
+**Dependency reading (doc 00).** `kernel.org/pub/linux/libs/security/libcap/cap`
+and `.../psx` (v1.2.78) are one new direct dependency: the Go binding of
+libcap, a Linux system library (the kernel.org capability library every
+distribution ships), not a portfolio project and not a layer of the stack. Doc 00 L1 assigns capabilities to portfolio
+projects only, and its "Layer 0 libraries" paragraph names the in-house
+libraries consumed as ordinary Go libraries. L3 and L5 bound what the platform
+imports *from the stack* (`go-quicbaas/sdk/go` plus those Layer 0 libraries).
+As a system library binding libcap owns no portfolio capability and sits
+beside Layer 0 rather than in it: it is neither a Layer 0 library nor a lower
+layer. So L2 and L3 do not route it through an SDK, and it is imported
+directly, like `golang.org/x/sys`. It needs no §R row.
 
 Hardening before the config read also means a parser never opens a file as
 root that it could not open as itself, so a permission bug surfaces on the
-first start rather than the first restart. (The root command's own config read
-in the first stage is the same parse the supervisor already made of the same
-file; the services are built only from the read the second stage makes.)
+first start rather than the first restart. (The root command's own config read,
+made before `EnterHardened`, is the same parse the supervisor already made of
+the same file; the services are built only from the read made after the drop.)
 
 **Restarts.** A child that exits while the parent still wants services from it
 is relaunched after a doubling backoff (`RestartBackoff` → `RestartBackoffMax`),
@@ -1233,7 +1501,8 @@ accounting (`process memory`); every `process down, restarting` line carries
 the same fields, so an OOM kill is on record next to the restart it caused.
 
 **An ambiguous datapath is refused, not resolved.** `Apply` and `Snapshot` go
-to the kernel-class process through `datapathClient()`. The class table has one
+to the kernel-class process through `datapathClient()` (`Apply` also to the
+`vpn` child, below). The class table has one
 today, but it is data rather than a type: two would make map iteration order
 decide where the desired configuration lands. Two live kernel-class processes
 are `ErrAmbiguousDatapath` naming both.
@@ -1247,6 +1516,63 @@ kernel keeps a setgid bit only for a caller in the directory's group or holding
 `CAP_FSETID` — and one the service group still cannot write, or one without
 the setgid bit while a socket group is configured (`ErrSocketDirNotSetgid`), is
 a refusal naming the directory.
+
+**The supervisor creates a process's `StateDir`** under `--data-dir` before
+every launch of that process (`ensureStateDir`): mode `0700`, owned by the
+uid and gid an `Unprivileged` child runs as. The data directory belongs to
+root, so the unprivileged `vpn` child could not create `<data-dir>/vpn` for its
+revocation journal itself. For an `Unprivileged` child the data directory
+itself also gets search permission in the one class the kernel checks for the
+child's uid and gid, and nothing more (`grantTraverse`,
+`pkg/sdn/gateway/process/supervisor.go:494`): owner if the uid matches, else
+group if the gid matches, else other (`traverseBit`,
+`pkg/sdn/gateway/process/supervisor.go:512`). The kernel never falls back
+from a matching class to the next, so a `root:<service group>` directory at
+`0700` becomes `0710`, not `0701`, and a `root:root` one becomes `0701`. The
+child holds no supplementary group but its own (`dropCredentials`,
+`pkg/sdn/gateway/process/launcher.go:401`), so its gid is the only group that
+can match. A directory the child can already traverse is left unchanged.
+Without the bit the child cannot reach its own `vpn/` and the journal fails
+with `EACCES`. The bit is added to
+whatever mode the data directory already has, because gatewayd's tunnels
+record (`writeTunnelsRecord`, `pkg/sdn/gateway/commands/serve.go:192`) and the
+ESP inventory both create it `0700` before any child starts. Others still
+cannot list it, and every entry keeps its own mode. An existing directory has
+its owner and mode set again rather than assumed. A directory that cannot be
+created, chowned, chmodded or made traversable (`Op: "traverse"`) is `ErrStateDir{Process, Path, Op, Cause}` and the process is not
+launched, because a child that cannot write its state would run without it.
+With no `--data-dir` the child resolves its own default and nothing is laid
+out.
+
+**Moving to the supervised model hands the process's state files over.** A
+gatewayd that ran the management VPN unsupervised, as root, left
+`<data-dir>/vpn/pending-revocations.json` root-owned at `0600`. Supervised,
+the `vpn` child reads it as the service account when its lease store rebuilds
+(`projectedLeaseStore.rebuild`, `pkg/sdn/gateway/vpn_leases.go:295`, through
+`RevocationJournal.load`, `pkg/sdn/gateway/vpn_revocations.go:51`); owning
+`vpn/` is not enough to read a file in it, so the read failed with `EACCES` and
+the VPN did not start (Codex 7994). A `Definition` therefore names the
+`StateFiles` it reads back (`vpn`: `gateway.VPNRevocationJournalFile`,
+`pkg/sdn/gateway/process/class.go:194`), and for an `Unprivileged` child
+`ensureStateDir` hands each one that exists to the child's uid and gid before
+every launch, while the supervisor is still root
+(`pkg/sdn/gateway/process/supervisor.go:474`, `handOverStateFiles`,
+`pkg/sdn/gateway/process/statefile.go:19`). The file is opened with
+`O_NOFOLLOW` (and `O_NONBLOCK`, so a FIFO under the name cannot block the
+open), checked on the handle, and changed with `fchown` and `fchmod` to `0600`
+on that handle, never by path (`handOverStateFile`,
+`pkg/sdn/gateway/process/statefile.go:34`); its content, and so every pending
+revocation, is untouched. A symlink (`ErrStateFileSymlink`), anything but a
+regular file (`ErrStateFileNotRegular`) and a file with more than one hard link
+(`ErrStateFileLinked`) are refused, each inside `ErrStateDir{Op: "hand over"}`,
+and the child is not launched: each would hand it a file outside its state
+directory. A missing journal is not an error; the child creates it on its first
+revocation. The journal is the only file the `vpn` child reads from `vpn/`: its
+lease store is in memory (`vpn.NewMemoryLeaseStore`,
+`pkg/sdn/gateway/vpn_service.go:75`), and a journal write goes through a
+temporary file the child creates and renames over the journal
+(`RevocationJournal.save`), which owning `vpn/` allows; a temporary file a
+root gatewayd left behind is never read.
 
 The setgid bit is how every control socket gets the service group. The
 datapath child stays uid 0, but `harden` leaves it exactly `CAP_NET_ADMIN` and
@@ -1279,7 +1605,7 @@ been reaped. Every path that ends a child goes through the same
 graceful-then-kill `terminate`, so none of them can wait on a wedged child
 forever.
 
-**Processes move one at a time — `routing`, then `proxy`, then `provisioning`, then `datapath`.**
+**Processes move one at a time — `routing`, then `proxy`, then `provisioning`, then `datapath`, then `vpn`.**
 `Definition.Supervised` marks the processes that have left `gatewayd serve`;
 `Supervisor.Supervises` answers from it, and the gateway (`handlers.go`)
 registers a supervised handler only for those services. Every other service
@@ -1330,6 +1656,26 @@ and, for the VPN peer methods only, the service account the parsers share;
 `ApplyDesired` is the supervisor's alone. No parser process programs the
 kernel in-process: their backends (the BGP speaker, the proxy, the
 provisioning refusals) use no netlink and no OVS.
+
+`vpn` (`management-vpn`) moved after `datapath`, with the smallest set of all:
+no capability. Its data plane is programmed through the datapath child's
+`DatapathService` VPN peer methods (`DatapathPlane` →
+`ipc.Client.InstallVPNPeer`), so it needs no `CAP_NET_ADMIN`, and its
+admission listener's default port, 4433, needs no `CAP_NET_BIND_SERVICE`. It
+opens `AF_UNIX`, `AF_INET` and `AF_INET6` only — no `AF_NETLINK`, as it reads
+no routes or links (`TestSupervises_OnlyTheMovedProcessIsSupervised`). Its
+section of the desired document is the one section outside the datapath, so
+`Definition.ReconcilesDesired` marks both processes and `Supervisor.Apply`
+sends the whole document to each: the `vpn` child is given the last document
+at every launch and on every apply, and a failure there joins the datapath
+child's result as `ErrDesiredForwardFailed`
+(`TestApply_TheVPNChildIsGivenTheDocumentAtStartAndOnEveryApply`). A child
+applies only the sections of the services it hosts, so the `vpn` child leaves
+the load-balancer and NAT sections to `datapath`
+(`TestApply_AChildAppliesOnlyTheSectionsOfItsServices`). The snapshot's `vpn`
+section is relayed from the child through `ServiceSnapshot`; a child that
+cannot be read leaves the section out and logs why
+(`TestSupervisedSnapshot_RelaysTheVPNChildsSection`).
 
 **The wiring in `cmd/gatewayd`** (`pkg/sdn/gateway/commands`):
 
@@ -1463,6 +1809,8 @@ unkillable. It then sets `memory.swap.max` to 0 and lowers the live leaf's
   `memory.current`, `memory.peak` and `memory.events` are logged before the
   limit drops and once the write returns, so the job log shows how far over
   1 MiB the child was;
+- the leaf's `memory.peak` after the kill is over 1 MiB and at least the
+  `memory.current` read before the limit dropped;
 - only that child comes back, with a new PID;
 - the relaunch rewrites the class limit and resets the test's `memory.swap.max`
   of 0 to `max` (`Prepare` runs on every launch);
@@ -1483,7 +1831,12 @@ root before the suite runs (`prepare_gatewayd_supervision`). This works the
 way a systemd host does: the root's processes first move to an `init` leaf,
 because a cgroup holding processes cannot enable controllers for its children.
 Every test's teardown logs each running child's leaf accounting before it
-stops gatewayd, the measured basis for the class `MemoryMax` values. It then
+stops gatewayd, the measured basis for the class `MemoryMax` values, with the
+peak as a percentage of the class value. It asserts every leaf charged a
+non-zero `memory.peak` and has no `oom_kill` beyond the one
+`TestGatewaydSupervisorMemoryMaxRestartsOnlyThatChild` caused: a relaunch keeps
+the leaf, so that kill is still counted, and any other means a class value is
+below what its child needs. It then
 waits, through `CgroupManager.Remove`, for any leaf gatewayd left to report
 `populated 0` before it removes the test's cgroup parent.
 
@@ -1514,9 +1867,29 @@ same generation sweep (unit-tested in
 `TestSupervisedRelaunch_AKilledChildsSuccessorReconcilesTheBridgeItLeft` for
 the load balancer and NAT).
 
-**Still pending:** `vpn`, once it has a backend (the management VPN is a
-refused section today, #558). Its move must route the snapshot sections its
-service owns through `ServiceSnapshot` the same way.
+**The `vpn` child's relaunch keeps its leases and pending revocations.**
+`TestSupervisedRelaunch_AKilledVPNChildKeepsItsLeasesAndPendingRevocations`
+(`pkg/sdn/gateway/relaunch_test.go`) runs the `vpn` child under the
+supervisor against a control plane that records two leases and refuses every
+DELETE, with the revocation journal at `<data-dir>/vpn/pending-revocations.json`.
+The supervisor lays out that directory at mode `0700` before the first launch.
+The child is given a desired document, holds both leases, and has one revoked;
+the refused DELETE leaves that revocation journaled. The test then kills the
+child. The relaunched child holds the admitted lease again, does not reinstate
+the revoked one from the control plane's record, keeps the revocation pending
+in the journal, and is given the last desired document. In production the
+`vpn` child wires that record itself: `serveProcess` builds it with
+`vpnLeaseControl` (`pkg/sdn/gateway/commands/service.go`), the reporter
+`BuildReporter` assembles from the `control-plane:` section and the journal
+under `--data-dir`, and calls `SetVPNLeaseControl` on its own gateway before
+it serves the supervisor. The parent's reporter cannot serve it, since the
+leases are held in the child's gateway. Without an enabled `control-plane:`
+section the child keeps its leases in memory, as an unsupervised gatewayd
+does; a section that does not assemble stops the child before its VPN starts
+(`TestServeProcess_TheVPNProcessWiresItsLeaseRecord`,
+`TestVPNLeaseControl_*`). The child reads the `control-plane:` identity files
+after it drops to the service account, so the account must be able to read
+them.
 
 ### Supervisor IPC — `pkg/sdn/gateway/ipc` (#557)
 
@@ -2498,8 +2871,13 @@ Start installs the floor before the handler starts; a failed start closes the
 service and Stop closes it after the speaker. Neither removes the floor, so a
 node whose IPsec has stopped carries no plaintext VTEP traffic. The IPsec
 identity is the same file identity platformd uses (`token`,
-`certificate-file`); a certificate derived from the node's IDevID is not yet
-wired.
+`certificate-file`), held to the platform anchor of `platform-ca-file`: a
+chain whose root is not an anchor certificate is refused, and each peer's
+chain must contain that root ([tunnel identity](../sdn/overlay/architecture.md#tunnel-identity)).
+A gatewayd without `platform-ca-file` builds no overlay IPsec
+(`ipsec.ErrMissingDependency`). A certificate issued from the node's
+enrolled identity is not yet wired: the SDK re-exports no signer over the
+PKCS#11 IKE key.
 
 #### Trust assumptions
 
@@ -2567,7 +2945,7 @@ model.
 | Unit (pipeline) | `pkg/sdn/gateway/pipeline_test.go` | Every table a gate or `goto` routes into has an empty-match miss, each datapath service started alone; exactly one table-20 miss and it is the pipeline's; `fail_mode` is set before the pipeline is installed |
 | Integration (nat64) | `test/integration/nat64/` (harness) running `test/integration/sdn/nat64_*_test.go` (`nat64vm` tag) | `make integration-test-nat64`: an Alpine VM under QEMU/KVM in the devcontainer, with linux-lts and jool-modules-lts from one repository snapshot (`build/docker/nat64-vm`). The Jool driver against the real module (range tiling, idempotent converge, pool change, prefix change, refusal) and the datapath end to end: an IPv6-only client pings an IPv4-only server through a real gateway running `nat64:` alone, untagged and in a tagged client zone, with ARP/IPv4 and neighbour discovery crossing the same bridge. Fails, never skips, when KVM, the module or a guest test is missing |
 | Integration (nat64 surface) | `test/integration/sdn/nat64_surface_test.go` | `GetNAT64Status` against the integration platformd over the CLI, gRPC, Unix, REST, QUIC and MCP: each answers with its "not configured" mapping (the integration platformd sets no `datapath-socket`, so the gatewayd-resident translator is not reachable; the live IPC path is `TestNew_ServesGatewayBackendsOverIPC`), never an unknown method, a 404 or an unmapped opcode |
-| Integration | `test/integration/proxy/`, `test/integration/network/` | Real listeners, real backends |
+| Integration | `test/integration/proxy/` | Real listeners, real backends |
 | Spike (not a test) | `test/spike/nat64/main.go` (`//go:build spike`) | The #595 NAT64 throughput measurement: two TUNs in an unprivileged user namespace, one goroutine per direction over a lock-guarded binding table, UDP blast. Run by hand with `unshare -rn go run -tags spike ./test/spike/nat64`; excluded from every `make` target by its tag |
 | **Architecture** | `pkg/arch/gatewayguard_test.go` | `gatewayd`'s import closure |
 

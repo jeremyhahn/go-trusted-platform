@@ -7,7 +7,7 @@
 
 The `dns:` section is part of the platform configuration file. platformd
 reads exactly one file: the one `--config` names, or else the first
-`config.yaml` it finds in this order (`pkg/app/app.go:1549`):
+`config.yaml` it finds in this order (`initConfig`, `pkg/app/app.go:1545`):
 
 | Location | Description |
 |----------|-------------|
@@ -21,7 +21,7 @@ Files are not merged: the first one found is the whole configuration. Only
 when no `config.yaml` exists in any of these locations does platformd look
 for `config.<env>.yaml` (`--env`, default `dev`) in the same locations.
 
-The file is decoded with `viper.Unmarshal` (`pkg/app/app.go:1572`), so the key
+The file is decoded with `viper.Unmarshal` (`pkg/app/app.go:1581`), so the key
 names below are the structs' `mapstructure` tags. Where a `yaml` tag differs
 (SOA `min_ttl`, DS `digest_type` / `key_tag`, TLSA `matching_type`, zone
 `tenant_id`), the `mapstructure` name is the one the file must use.
@@ -33,11 +33,11 @@ are ([docs/daemon/configuration.md](../daemon/configuration.md)).
 
 | Key | Type | Default | Read by |
 |-----|------|---------|---------|
-| `allow-registration` | bool | `false` | Master switch for the `Register` route (`pkg/dns/service.go:364`) |
-| `allow-external-registration` | bool | `false` | `Register` into a public zone (`service.go:420`) |
-| `allow-internal-registration` | bool | `false` | `Register` into an internal zone (`service.go:424`) |
+| `allow-registration` | bool | `false` | Master switch for the `Register` route (`pkg/dns/service.go:380`) |
+| `allow-external-registration` | bool | `false` | `Register` into a public zone (`service.go:436`) |
+| `allow-internal-registration` | bool | `false` | `Register` into an internal zone (`service.go:440`) |
 | `default-ttl` | int | `0` | TTL of every record and zone the service creates without one: `Register`, the network sub-zone records, `CreateZone`, and an `AddRecord` with TTL 0 (`Config.RecordTTL`, `pkg/dns/config.go`). `0` means 3600. `dns.Run` refuses a value outside 0 to 2147483647 (RFC 2181 §8) with `ErrInvalidTTL` |
-| `private-ipv4`, `private-ipv6` | string | detected | `${PRIVATE_IPv4}` / `${PRIVATE_IPv6}`, and the internal-zone record each webservice registers. Empty means the host's detected address (`pkg/app/app.go:1225`) |
+| `private-ipv4`, `private-ipv6` | string | detected | `${PRIVATE_IPv4}` / `${PRIVATE_IPv6}`, and the internal-zone record each webservice registers. Empty means the host's detected address (`pkg/app/app.go:1234`) |
 | `public-ipv4`, `public-ipv6` | string | detected | `${PUBLIC_IPv4}` / `${PUBLIC_IPv6}`, and the public-zone record each webservice registers |
 | `zone-subdomains` | bool | `false` | One internal sub-zone per SDN network zone; see [user.md](user.md) |
 | `quicbaas` | map | below | Zone storage |
@@ -55,7 +55,7 @@ Anything else under `dns:` is ignored. There is no `shard-id`, `partition`,
 ## quicbaas
 
 Zones are stored through go-quicbaas (`quicbaas.NewFactory`,
-`pkg/dns/plugin.go:474`) under the `dns/zones` partition. The keys are the
+`pkg/dns/plugin.go:505`) under the `dns/zones` partition. The keys are the
 `quicbaas.Config` struct (`pkg/storage/quicbaas/config.go`). The defaults:
 
 ```yaml
@@ -83,7 +83,7 @@ The other keys (`transport`, `address`, `unix-socket`, `raft-address`,
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `port` | int | `8053` public, `9053` internal | UDP/TCP listen port |
-| `forwarders` | list | public `4.4.4.4`, `8.8.8.8`; internal `198.51.100.1`, `198.51.100.2`, `198.51.100.3` | Upstreams for names outside the server's zones |
+| `forwarders` | list | public `4.4.4.4`, `8.8.8.8`; internal `192.168.1.1`, `192.168.2.1`, `192.168.3.1` (`pkg/dns/config.go:74`, `:116`) | Upstreams for names outside the server's zones |
 | `zone` | map | `example.com.` / `example.internal.` | The server's zone, below |
 
 The internal server answers internal zones; the public server drops queries for
@@ -216,9 +216,9 @@ dns:
   resolver:
     servers:
       - {address: 127.0.0.1, port: 8053}
-    fallback:
-      - {address: 1.1.1.1, port: 53}
-      - {address: 8.8.8.8, port: 53}
+    fallback:                  # []string of host:port, unlike servers
+      - "1.1.1.1:53"
+      - "8.8.8.8:53"
     search-domains: []
     local-forwarder:
       enabled: false

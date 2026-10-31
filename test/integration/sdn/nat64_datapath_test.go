@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/boundedexec"
 )
 
@@ -101,7 +102,7 @@ func n64Topology(t *testing.T, vlan int) {
 		runCmdQuiet("ip", "netns", "del", n64ServerNS)
 	})
 	runCmd(t, "ip", "netns", "add", n64ServerNS)
-	runCmd(t, "ip", "link", "add", n64ServerHost, "type", "veth", "peer", "name", n64ServerPeer)
+	runCmd(t, "ip", testenv.VethArgs(n64ServerHost, n64ServerPeer)...)
 	runCmd(t, "ip", "link", "set", n64ServerPeer, "netns", n64ServerNS)
 	runCmd(t, "ip", "addr", "add", n64Pool4+"/24", "dev", n64ServerHost)
 	runCmd(t, "ip", "link", "set", n64ServerHost, "up")

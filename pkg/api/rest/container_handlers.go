@@ -495,13 +495,8 @@ func (h *ContainerHandlers) streamContainerLogs(ctx context.Context, w http.Resp
 	}
 	defer reader.Close()
 
-	// Set up SSE headers
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(http.StatusOK)
-
+	// The writer is checked before the SSE headers go out: once a 200 is
+	// sent, the refusal below could no longer reach the client as an error.
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		h.writeError(w, http.StatusInternalServerError, ErrContainerOperationFailed{
@@ -511,6 +506,13 @@ func (h *ContainerHandlers) streamContainerLogs(ctx context.Context, w http.Resp
 		return
 	}
 
+	// Set up SSE headers
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+
 	buf := make([]byte, 4096)
 	for {
 		select {
@@ -519,12 +521,18 @@ func (h *ContainerHandlers) streamContainerLogs(ctx context.Context, w http.Resp
 		default:
 			n, err := reader.Read(buf)
 			if n > 0 {
-				fmt.Fprintf(w, "data: %s\n\n", string(buf[:n]))
+				if _, werr := fmt.Fprintf(w, "data: %s\n\n", string(buf[:n])); werr != nil {
+					h.logger.Warn("Container log stream write failed", "error", werr, "id", containerID)
+					return
+				}
 				flusher.Flush()
 			}
 			if err != nil {
 				if err == io.EOF {
-					fmt.Fprintf(w, "event: end\ndata: stream ended\n\n")
+					if _, werr := fmt.Fprintf(w, "event: end\ndata: stream ended\n\n"); werr != nil {
+						h.logger.Warn("Container log stream write failed", "error", werr, "id", containerID)
+						return
+					}
 					flusher.Flush()
 				}
 				return
@@ -560,9 +568,11 @@ func (h *ContainerHandlers) handleAttestContainer(w http.ResponseWriter, r *http
 	}
 
 	// Parse optional request body
+	// ContentLength is -1 on a chunked request; an empty body decodes to
+	// io.EOF and means the request carried no options.
 	var req AttestContainerRequest
-	if r.Body != nil && r.ContentLength > 0 {
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 			h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: err.Error()})
 			return
 		}

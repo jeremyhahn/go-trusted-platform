@@ -16,6 +16,7 @@ package bmc
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -85,12 +86,16 @@ func TestLoadStandalonePassword_InsecureFileMode(t *testing.T) {
 	var insecure ErrBMCInsecurePasswordFile
 	require.ErrorAs(t, err, &insecure)
 	assert.Equal(t, path, insecure.Path)
+	assert.EqualError(t, err, "bmc: password file "+path+" has insecure mode -rw-r--r-- (require 0600 or stricter)")
 }
 
 func TestLoadStandalonePassword_FileMissing(t *testing.T) {
 	_, err := loadStandalonePassword(&standaloneBMCFlags{passwordFile: "/nonexistent/definitely-not-here"})
 	var unread ErrBMCPasswordFileUnreadable
 	require.ErrorAs(t, err, &unread)
+	require.ErrorIs(t, err, fs.ErrNotExist)
+	assert.EqualError(t, err, "bmc: password file /nonexistent/definitely-not-here unreadable: "+
+		"stat /nonexistent/definitely-not-here: no such file or directory")
 }
 
 func TestCheckModeConflict(t *testing.T) {
@@ -189,4 +194,22 @@ func TestErrBMCPasswordFileUnreadableUnwrap(t *testing.T) {
 	cause := errors.New("boom")
 	err := ErrBMCPasswordFileUnreadable{Path: "/x", Cause: cause}
 	assert.ErrorIs(t, err, cause)
+}
+
+// Regression: isTerminal tested os.ModeCharDevice, which /dev/null also
+// carries, so a non-interactive run with stdin from /dev/null dialled the
+// BMC unverified and prompted instead of failing with ErrBMCNoPinOrCAFile.
+func TestIsTerminal_DevNullIsNotATerminal(t *testing.T) {
+	devNull, err := os.Open(os.DevNull)
+	require.NoError(t, err)
+	orig := os.Stdin
+	os.Stdin = devNull
+	t.Cleanup(func() {
+		os.Stdin = orig
+		require.NoError(t, devNull.Close())
+	})
+
+	assert.False(t, isTerminal())
+	_, err = standaloneTLSProvider(context.Background(), &standaloneBMCFlags{host: "192.0.2.10"}, 443)
+	require.ErrorIs(t, err, ErrBMCNoPinOrCAFile{})
 }

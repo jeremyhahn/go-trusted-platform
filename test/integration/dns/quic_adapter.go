@@ -26,9 +26,9 @@
 // Resolve) carry the protobuf oneof, which cannot decode into raw pb — the
 // daemon encodes a flat mirror, so this adapter decodes the same mirror shape.
 //
-// UpdateZone has NO QUIC opcode (the 0x20-0x2D space is allocated or retired and
-// the gRPC UpdateZone RPC is not SDK-mapped over QUIC); it returns a typed
-// unsupported error.
+// UpdateZone travels under the DNS category opcode (OpDNSCategory 0x61) with
+// sub-opcode 0x30 in payload[0] and the pb UpdateZoneRequest in payload[1:],
+// the same framing the SDK QUIC client sends.
 
 //go:build integration
 
@@ -94,6 +94,11 @@ const (
 	OpDNSGetZone      byte = 0x27
 	OpDNSListZones    byte = 0x28
 	OpDNSResolve      byte = 0x29
+
+	// OpDNSCategory multiplexes the DNS operations past the flat block;
+	// the sub-opcode is payload[0] (sdk/go/wire/quicwire/dns_opcodes.go).
+	OpDNSCategory   byte = 0x61
+	OpDNSUpdateZone byte = 0x30
 )
 
 // =============================================================================
@@ -351,14 +356,6 @@ func (q *QUICAdapter) Teardown() error {
 // =============================================================================
 
 func (q *QUICAdapter) sendRequest(ctx context.Context, opcode byte, payload interface{}) (*quicResponse, error) {
-	q.mu.RLock()
-	if q.closed {
-		q.mu.RUnlock()
-		return nil, ErrQUICClientClosed{}
-	}
-	conn := q.conn
-	q.mu.RUnlock()
-
 	var payloadBytes []byte
 	if payload != nil {
 		var err error
@@ -367,6 +364,19 @@ func (q *QUICAdapter) sendRequest(ctx context.Context, opcode byte, payload inte
 			return nil, ErrQUICEncodeFailed{Operation: opcodeToString(opcode), Err: err}
 		}
 	}
+	return q.sendRaw(ctx, opcode, payloadBytes)
+}
+
+// sendRaw writes one request whose payload is already encoded and reads its
+// response, refusing a non-OK status with ErrQUICRequestFailed.
+func (q *QUICAdapter) sendRaw(ctx context.Context, opcode byte, payloadBytes []byte) (*quicResponse, error) {
+	q.mu.RLock()
+	if q.closed {
+		q.mu.RUnlock()
+		return nil, ErrQUICClientClosed{}
+	}
+	conn := q.conn
+	q.mu.RUnlock()
 
 	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
@@ -488,6 +498,8 @@ func opcodeToString(opcode byte) string {
 		return "ListZones"
 	case OpDNSResolve:
 		return "Resolve"
+	case OpDNSCategory:
+		return "DNSCategory"
 	default:
 		return fmt.Sprintf("Unknown(0x%02X)", opcode)
 	}
@@ -573,10 +585,33 @@ func (q *QUICAdapter) GetZone(ctx context.Context, zoneName string) (*GetZoneRes
 	return out, nil
 }
 
-// UpdateZone has no QUIC opcode (not SDK-mapped and the 0x20-0x2D space is
-// allocated or retired). It reports the operation as unsupported over QUIC.
+// UpdateZone changes a zone's TTL and description (OpDNSCategory 0x61,
+// sub-opcode 0x30, pb UpdateZoneRequest).
 func (q *QUICAdapter) UpdateZone(ctx context.Context, zoneName string, opts UpdateZoneOptions) (*UpdateZoneResult, error) {
-	return nil, ErrQUICDNSUnsupported{Method: "UpdateZone"}
+	body, err := encodePayload(&pb.UpdateZoneRequest{
+		Name:        zoneName,
+		Ttl:         opts.TTL,
+		Description: opts.Description,
+	})
+	if err != nil {
+		return nil, ErrQUICEncodeFailed{Operation: "UpdateZone", Err: err}
+	}
+	resp, err := q.sendRaw(ctx, OpDNSCategory, append([]byte{OpDNSUpdateZone}, body...))
+	if err != nil {
+		return nil, err
+	}
+	var result pb.UpdateZoneResponse
+	if err := decodePayload(resp.Payload, &result); err != nil {
+		return nil, ErrQUICDecodeFailed{Operation: "UpdateZone", Err: err}
+	}
+	if result.GetZone() == nil {
+		return nil, ErrQUICDecodeFailed{Operation: "UpdateZone", Err: ErrQUICMissingZone{}}
+	}
+	return &UpdateZoneResult{
+		Name:      result.GetZone().GetName(),
+		TTL:       result.GetZone().GetTtl(),
+		UpdatedAt: time.Now(),
+	}, nil
 }
 
 // DeleteZone deletes a DNS zone (0x26, pb DeleteZoneRequest).
@@ -905,14 +940,10 @@ type ErrQUICClientClosed struct{}
 
 func (e ErrQUICClientClosed) Error() string { return "QUIC client is closed" }
 
-// ErrQUICDNSUnsupported indicates a DNS operation with no QUIC opcode.
-type ErrQUICDNSUnsupported struct {
-	Method string
-}
+// ErrQUICMissingZone indicates a zone reply that carried no zone.
+type ErrQUICMissingZone struct{}
 
-func (e ErrQUICDNSUnsupported) Error() string {
-	return fmt.Sprintf("DNS operation %s is not supported over QUIC", e.Method)
-}
+func (e ErrQUICMissingZone) Error() string { return "QUIC reply carried no zone" }
 
 // Ensure QUICAdapter implements DNSCommands interface.
 var _ DNSCommands = (*QUICAdapter)(nil)

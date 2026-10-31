@@ -623,8 +623,8 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quicwire.Re
 
 	// Application Service Category Opcodes (0x53-0x55, 0x60) - cache,
 	// scheduler, messaging and object storage through the composed
-	// go-quicbaas SDK - and the switch category (0xCC), each served by its
-	// gRPC servicer.
+	// go-quicbaas SDK - the DNS category (0x61) and the switch category
+	// (0xCC), each served by its gRPC servicer.
 	case appQUICCategories[req.Opcode].handlers != nil:
 		return h.handleAppServiceCategory(ctx, req)
 
@@ -648,8 +648,9 @@ func (h *QUICServiceHandler) HandleRequest(ctx context.Context, req *quicwire.Re
 	// sub-opcodes AND the container sub-opcodes (create/start/stop/remove/
 	// get/list/logs/attest, whose direct opcodes are shadowed by the PXE
 	// ranges) in payload[0]; handleVMServiceOperation routes each to its
-	// handler. 0x60 is the object storage category and 0x66 the
-	// orchestrator category above; the rest of 0x61-0x6A is unassigned.
+	// handler. 0x60 and 0x61 are the object storage and DNS categories
+	// and 0x66 the orchestrator category above; the rest of 0x62-0x6A is
+	// unassigned.
 	case req.Opcode == quicwire.OpVMExtendedCategory:
 		return h.handleVMServiceOperation(ctx, req)
 

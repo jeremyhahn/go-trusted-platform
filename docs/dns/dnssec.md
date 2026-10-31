@@ -206,8 +206,9 @@ every zone save signs the zone (`Service.Save`, `pkg/dns/service.go:195`).
 
 ### Signing Example
 
-There is no `platformctl dns` command group ([CLI](cli.md)). Sign through the
-REST or gRPC API:
+Sign with `platformctl dns dnssec sign <zone>` and read the DS records with
+`platformctl dns dnssec status <zone>` ([CLI](cli.md)), or through the REST or
+gRPC API:
 
 ```bash
 # Sign a zone and save it; the response is the signed zone

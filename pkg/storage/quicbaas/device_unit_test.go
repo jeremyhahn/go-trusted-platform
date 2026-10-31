@@ -452,3 +452,34 @@ func TestDeviceDAO_GetByModel_ListError_Mock(t *testing.T) {
 
 	require.Error(t, err)
 }
+
+func TestDeviceDAO_NewDeviceReadBySecondInstance_Mock(t *testing.T) {
+	dao, mock := setupMockDeviceDAO(t)
+	defer mock.Stop(context.Background())
+
+	ctx := context.Background()
+	device := &entities.Device{
+		Serial:     "SN-PERSIST-001",
+		Model:      "Model-Persist",
+		AttestPub:  "attest-pub-key-data",
+		EKCert:     "ek-cert-pem-data",
+		SigningPub: "signing-pub-key-data",
+		HashAlgoId: 11, // SHA256
+		EventLog:   []byte{0x01, 0x02, 0x03, 0x04},
+	}
+	assert.Zero(t, device.ID)
+	require.NoError(t, dao.Save(ctx, device))
+	assert.NotZero(t, device.ID, "ID should be auto-generated")
+
+	// A DAO opened later over the same store reads every field back.
+	dao2 := NewDeviceDAO(mock, logging.DefaultLogger(), WithRequestTimeout(5*time.Second))
+	retrieved, err := dao2.Get(ctx, device.ID)
+	require.NoError(t, err)
+	assert.Equal(t, device.Serial, retrieved.Serial)
+	assert.Equal(t, device.Model, retrieved.Model)
+	assert.Equal(t, device.AttestPub, retrieved.AttestPub)
+	assert.Equal(t, device.EKCert, retrieved.EKCert)
+	assert.Equal(t, device.SigningPub, retrieved.SigningPub)
+	assert.Equal(t, device.HashAlgoId, retrieved.HashAlgoId)
+	assert.Equal(t, device.EventLog, retrieved.EventLog)
+}

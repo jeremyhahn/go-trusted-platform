@@ -93,6 +93,22 @@ func (e *ErrDesiredRestoreFailed) Error() string {
 
 func (e *ErrDesiredRestoreFailed) Unwrap() error { return e.Cause }
 
+// ErrDesiredForwardFailed reports a parser child that reconciles a section of
+// the desired document (the vpn child) and did not apply the document it was
+// sent. The document stays recorded for it, and its next launch is given it.
+type ErrDesiredForwardFailed struct {
+	Process string
+	Version string
+	Cause   error
+}
+
+func (e *ErrDesiredForwardFailed) Error() string {
+	return fmt.Sprintf("gatewayd supervisor: applying desired config %q in process %q: %v",
+		e.Version, e.Process, e.Cause)
+}
+
+func (e *ErrDesiredForwardFailed) Unwrap() error { return e.Cause }
+
 // ErrDesiredPending reports a desired document that arrived while the
 // datapath process had no child serving it — in its restart backoff,
 // mid-relaunch, or stopped. The document is recorded and is the one the next
@@ -316,7 +332,7 @@ func (e *ErrSupervisorExited) Error() string {
 	return fmt.Sprintf("gatewayd service: the supervisor (pid %d) exited during the privilege drop; reparented to pid %d", e.Parent, e.Now)
 }
 
-// ErrPrivilegeNotHeld is a re-executed child whose credentials do not match
+// ErrPrivilegeNotHeld is a hardened child whose credentials do not match
 // its class: a thread kept a capability, a uid or a group the class does not
 // allow, or no_new_privs is unset. The child refuses to start rather than
 // run with more privilege than the class table gives it.
@@ -333,8 +349,6 @@ func (e *ErrPrivilegeNotHeld) Error() string {
 	return fmt.Sprintf("gatewayd service: thread %s: %s is %q, the class requires %q", e.Task, e.Field, e.Got, e.Want)
 }
 
-// ErrSocketDir reports a control-socket directory the supervisor could not
-// create or secure.
 // ErrSeccompUnsupportedArch is a child on an architecture the seccomp
 // filter has no syscall table for. The child refuses to start rather than
 // run unconfined: a filter written against another architecture's syscall
@@ -360,6 +374,8 @@ func (e *ErrSeccompThreadNotSynced) Error() string {
 	return fmt.Sprintf("gatewayd service: seccomp could not synchronise thread %d", e.Thread)
 }
 
+// ErrSocketDir reports a control-socket directory the supervisor could not
+// create or secure.
 type ErrSocketDir struct {
 	Path  string
 	Op    string
@@ -371,3 +387,53 @@ func (e *ErrSocketDir) Error() string {
 }
 
 func (e *ErrSocketDir) Unwrap() error { return e.Cause }
+
+// ErrStateDir reports a process's state directory under the data directory
+// that the supervisor could not create or hand to the process's credentials.
+// The process is not launched: an unprivileged child that cannot write its
+// state would run without it.
+type ErrStateDir struct {
+	Process string
+	Path    string
+	Op      string
+	Cause   error
+}
+
+func (e *ErrStateDir) Error() string {
+	return fmt.Sprintf("gatewayd supervisor: process %q state directory %s %q: %v", e.Process, e.Op, e.Path, e.Cause)
+}
+
+func (e *ErrStateDir) Unwrap() error { return e.Cause }
+
+// ErrStateFileSymlink reports a state file the supervisor would hand to a
+// process's credentials that is a symlink. It is not followed: its target
+// could be any file root can change.
+type ErrStateFileSymlink struct {
+	Path string
+}
+
+func (e *ErrStateFileSymlink) Error() string {
+	return fmt.Sprintf("gatewayd supervisor: state file %q is a symlink", e.Path)
+}
+
+// ErrStateFileNotRegular reports a state file that is not a regular file.
+type ErrStateFileNotRegular struct {
+	Path string
+	Mode uint32
+}
+
+func (e *ErrStateFileNotRegular) Error() string {
+	return fmt.Sprintf("gatewayd supervisor: state file %q is not a regular file (mode %#o)", e.Path, e.Mode)
+}
+
+// ErrStateFileLinked reports a state file with more than one hard link: the
+// other name could be outside the state directory, and handing the file over
+// would hand that name over too.
+type ErrStateFileLinked struct {
+	Path  string
+	Links uint64
+}
+
+func (e *ErrStateFileLinked) Error() string {
+	return fmt.Sprintf("gatewayd supervisor: state file %q has %d hard links", e.Path, e.Links)
+}

@@ -38,7 +38,7 @@ func TestConfigValidate(t *testing.T) {
 		{"Anchor", func(c *Config) { c.Anchor = nil }},
 		{"Identities", func(c *Config) { c.Identities = nil }},
 		{"Identities", func(c *Config) { c.Identities = []string{"../escape"} }},
-		{"VolumeDir", func(c *Config) { c.VolumeDir = "" }},
+		{"Volumes", func(c *Config) { c.Volumes = nil }},
 		{"VolumeSize", func(c *Config) { c.VolumeSize = 0 }},
 		{"VolumeSize", func(c *Config) { c.VolumeSize = 1000 }},
 		{"HandshakeTimeout", func(c *Config) { c.HandshakeTimeout = -1 }},

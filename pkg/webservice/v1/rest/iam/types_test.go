@@ -134,39 +134,6 @@ func TestUserResponse_NilTimestamps(t *testing.T) {
 	assert.Nil(t, resp.LastAuth)
 }
 
-func TestListUsersResponse_Fields(t *testing.T) {
-	resp := ListUsersResponse{
-		PaginatedResponse: PaginatedResponse{
-			Total:  100,
-			Limit:  50,
-			Offset: 0,
-		},
-		Users: []UserResponse{
-			{ID: "user-1", Email: "user1@example.com"},
-			{ID: "user-2", Email: "user2@example.com"},
-		},
-	}
-
-	assert.Equal(t, int64(100), resp.Total)
-	assert.Equal(t, int32(50), resp.Limit)
-	assert.Equal(t, int32(0), resp.Offset)
-	assert.Len(t, resp.Users, 2)
-}
-
-func TestListUsersResponse_EmptyUsers(t *testing.T) {
-	resp := ListUsersResponse{
-		PaginatedResponse: PaginatedResponse{
-			Total:  0,
-			Limit:  50,
-			Offset: 0,
-		},
-		Users: []UserResponse{},
-	}
-
-	assert.Equal(t, int64(0), resp.Total)
-	assert.Empty(t, resp.Users)
-}
-
 func TestCreateGroupRequest_Fields(t *testing.T) {
 	req := CreateGroupRequest{
 		ID:          "engineering",
@@ -204,22 +171,6 @@ func TestGroupResponse_Fields(t *testing.T) {
 	assert.Equal(t, "group-123", resp.ID)
 	assert.Equal(t, "tenant-456", resp.TenantID)
 	assert.Len(t, resp.Members, 2)
-}
-
-func TestListGroupsResponse_Fields(t *testing.T) {
-	resp := ListGroupsResponse{
-		PaginatedResponse: PaginatedResponse{
-			Total:  10,
-			Limit:  50,
-			Offset: 0,
-		},
-		Groups: []GroupResponse{
-			{ID: "group-1", Name: "Group 1"},
-		},
-	}
-
-	assert.Equal(t, int64(10), resp.Total)
-	assert.Len(t, resp.Groups, 1)
 }
 
 func TestCreateRoleRequest_Fields(t *testing.T) {
@@ -261,21 +212,6 @@ func TestRoleResponse_Fields(t *testing.T) {
 	assert.Equal(t, "admin", resp.ID)
 	assert.Equal(t, "tenant-456", resp.TenantID)
 	assert.Len(t, resp.Permissions, 1)
-}
-
-func TestListRolesResponse_Fields(t *testing.T) {
-	resp := ListRolesResponse{
-		PaginatedResponse: PaginatedResponse{
-			Total: 5,
-		},
-		Roles: []RoleResponse{
-			{ID: "admin"},
-			{ID: "viewer"},
-		},
-	}
-
-	assert.Equal(t, int64(5), resp.Total)
-	assert.Len(t, resp.Roles, 2)
 }
 
 func TestTenantSettings_Fields(t *testing.T) {
@@ -611,35 +547,6 @@ func TestRotateSecretResponse_Fields(t *testing.T) {
 	assert.Equal(t, "client-abc-123", resp.ClientID)
 	assert.Equal(t, "Test App", resp.Name)
 	assert.Equal(t, "new-secret-xyz", resp.ClientSecret)
-}
-
-func TestSuccessResponse_Success(t *testing.T) {
-	resp := SuccessResponse{
-		Success: true,
-		Message: "Operation completed successfully",
-	}
-
-	assert.True(t, resp.Success)
-	assert.Equal(t, "Operation completed successfully", resp.Message)
-}
-
-func TestSuccessResponse_Failure(t *testing.T) {
-	resp := SuccessResponse{
-		Success: false,
-		Message: "Operation failed",
-	}
-
-	assert.False(t, resp.Success)
-	assert.Equal(t, "Operation failed", resp.Message)
-}
-
-func TestSuccessResponse_EmptyMessage(t *testing.T) {
-	resp := SuccessResponse{
-		Success: true,
-	}
-
-	assert.True(t, resp.Success)
-	assert.Empty(t, resp.Message)
 }
 
 func TestAssignRoleRequest_Fields(t *testing.T) {

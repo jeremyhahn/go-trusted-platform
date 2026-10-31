@@ -30,10 +30,10 @@ func TestFlowOperationsWithMockOpenFlow(t *testing.T) {
 
 	t.Run("AddFlow with getOpenFlowClient error simulation", func(t *testing.T) {
 		client := &Client{
-			connected:   true,
 			ofClients:   make(map[string]*openflow.Client),
 			ofClientsMu: sync.RWMutex{},
 		}
+		client.connected.Store(true)
 
 		flow := &FlowMod{
 			Table:    0,
@@ -49,10 +49,10 @@ func TestFlowOperationsWithMockOpenFlow(t *testing.T) {
 
 	t.Run("DeleteFlow with getOpenFlowClient error simulation", func(t *testing.T) {
 		client := &Client{
-			connected:   true,
 			ofClients:   make(map[string]*openflow.Client),
 			ofClientsMu: sync.RWMutex{},
 		}
+		client.connected.Store(true)
 
 		err := client.DeleteFlow(ctx, "br0", "in_port=1")
 		assert.Error(t, err)
@@ -60,10 +60,10 @@ func TestFlowOperationsWithMockOpenFlow(t *testing.T) {
 
 	t.Run("ListFlows with getOpenFlowClient error simulation", func(t *testing.T) {
 		client := &Client{
-			connected:   true,
 			ofClients:   make(map[string]*openflow.Client),
 			ofClientsMu: sync.RWMutex{},
 		}
+		client.connected.Store(true)
 
 		_, err := client.ListFlows(ctx, "br0")
 		assert.Error(t, err)
@@ -71,10 +71,10 @@ func TestFlowOperationsWithMockOpenFlow(t *testing.T) {
 
 	t.Run("DeleteAllFlows with getOpenFlowClient error simulation", func(t *testing.T) {
 		client := &Client{
-			connected:   true,
 			ofClients:   make(map[string]*openflow.Client),
 			ofClientsMu: sync.RWMutex{},
 		}
+		client.connected.Store(true)
 
 		err := client.DeleteAllFlows(ctx, "br0")
 		assert.Error(t, err)
@@ -82,10 +82,10 @@ func TestFlowOperationsWithMockOpenFlow(t *testing.T) {
 
 	t.Run("ModifyFlow with getOpenFlowClient error simulation", func(t *testing.T) {
 		client := &Client{
-			connected:   true,
 			ofClients:   make(map[string]*openflow.Client),
 			ofClientsMu: sync.RWMutex{},
 		}
+		client.connected.Store(true)
 
 		flow := &FlowMod{
 			Table:    0,
@@ -100,10 +100,10 @@ func TestFlowOperationsWithMockOpenFlow(t *testing.T) {
 
 	t.Run("GetFlowStats with getOpenFlowClient error simulation", func(t *testing.T) {
 		client := &Client{
-			connected:   true,
 			ofClients:   make(map[string]*openflow.Client),
 			ofClientsMu: sync.RWMutex{},
 		}
+		client.connected.Store(true)
 
 		_, err := client.GetFlowStats(ctx, "br0", "in_port=1")
 		assert.Error(t, err)
@@ -111,10 +111,10 @@ func TestFlowOperationsWithMockOpenFlow(t *testing.T) {
 
 	t.Run("GetFlowStats with empty match string", func(t *testing.T) {
 		client := &Client{
-			connected:   true,
 			ofClients:   make(map[string]*openflow.Client),
 			ofClientsMu: sync.RWMutex{},
 		}
+		client.connected.Store(true)
 
 		// Test with empty match string to cover that branch
 		_, err := client.GetFlowStats(ctx, "br0", "")
@@ -232,10 +232,10 @@ func TestConvertToOpenFlowEdgeCases(t *testing.T) {
 // TestDeleteFlowMatchParsing tests the match parsing in DeleteFlow
 func TestDeleteFlowMatchParsing(t *testing.T) {
 	client := &Client{
-		connected:   true,
 		ofClients:   make(map[string]*openflow.Client),
 		ofClientsMu: sync.RWMutex{},
 	}
+	client.connected.Store(true)
 	ctx := context.Background()
 
 	t.Run("DeleteFlow with invalid match string", func(t *testing.T) {
@@ -253,10 +253,10 @@ func TestDeleteFlowMatchParsing(t *testing.T) {
 // TestGetFlowStatsMatchParsing tests match parsing in GetFlowStats
 func TestGetFlowStatsMatchParsing(t *testing.T) {
 	client := &Client{
-		connected:   true,
 		ofClients:   make(map[string]*openflow.Client),
 		ofClientsMu: sync.RWMutex{},
 	}
+	client.connected.Store(true)
 	ctx := context.Background()
 
 	t.Run("GetFlowStats with invalid match in parseMatchString", func(t *testing.T) {

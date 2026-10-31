@@ -51,7 +51,7 @@ The trusted-computing platform product and control plane: provisioning, node and
 - **bootstrap** — every NBD package behind one build tag, omitted from a client binary that does not use NBD — [#883](../../issues/883) — open
 - **installer** — the initrd brings up the WireGuard overlay and attaches the NBD root inside it — [#883](../../issues/883) — open
 - **attestation** — the SDK peer verifier replaces the VM verifier and the DevID validator — [#666](../../issues/666) — open
-- **auth** — users held in go-quicbaas IAM, no user store of the platform's own — [#644](../../issues/644) — open
+- **auth** — users held in go-quicbaas IAM, no user store of the platform's own; ruling 133: the daemon REST plane authenticates and authorises only through the go-quicbaas SDK (IAM, JWT, WebAuthn, PIV, mTLS, RBAC/ABAC), with no auth model, route guard or token format of its own — [#644](../../issues/644) — open
 - **bootstrap** — the FIPS Noise bootstrap listener — [#518](../../issues/518) — open
 - **daemon** — MCP refuses anonymous enumeration and every tool has a permission — [#412](../../issues/412) — open
 - **installer** — root seal on `luks-root` and offline unseal from the `.tpmpolicy` binding record — [#720](../../issues/720) — blocked: waits on the go-quicbaas tag that carries go-xkms#1443 step 3
@@ -64,6 +64,7 @@ The trusted-computing platform product and control plane: provisioning, node and
 - **device-enrollment** — enrollment from pre-defined device configurations through enroll-01 and endorse-01, continuously attested — [#883](../../issues/883) — open
 
 ## Later
+- **gateway-supervisor** — the gateway services as one process each under platformd, the zebra-role route owner and BGP graceful restart (ruling 240 item 4) — [#1191](../../issues/1191) — open
 - **volume** — go-blockstore volumes on go-qrdb's volume pools, with the trust and workload wiring — [#90](../../issues/90) — open
 - **remote-deploy** — remote agent deploy over QUIC, replacing SSH — [#54](../../issues/54) — open
 - **pi-node-roles** — control-plane, compute and gateway templates for raspberrypi — [Raspberry Pi templates](configs/platform/templates/dedicated/raspberrypi/README.md) — open
@@ -71,6 +72,7 @@ The trusted-computing platform product and control plane: provisioning, node and
 - **sev-snp** — SEV-SNP guest attestation reports appraised as RFC 9334 Evidence, the report and AMD chain verified by go-xkms through the go-quicbaas SDK; not started — [SPEC Features](docs/SPEC.md#features) — blocked: waits for the HPE DL380 Gen10 Plus v2 to arrive
 - **sev-snp** — SEV-SNP guests on the compute QEMU/KVM provider, with the guest's vTPM bound to its SNP report; not started — [SPEC Features](docs/SPEC.md#features) — blocked: waits for the HPE DL380 Gen10 Plus v2 to arrive
 - **sev-snp** — the DL380 as the CI runner for the SEV-SNP suites; not started — [SPEC Features](docs/SPEC.md#features) — blocked: waits for the HPE DL380 Gen10 Plus v2 to arrive
+- **dns** — `platformctl` has no `dns` command group: DNS is reached through the daemon's REST, gRPC, QUIC, MCP and Unix APIs ([docs/dns/api.md](docs/dns/api.md)), and the SPEC dns row names no CLI group, so this is a recorded omission, not scope — [#954](../../issues/954) — open
 
 ## Future
 - **dht** — trusted DHT for the public peer-to-peer hosting platform; design only — [docs/dht/](docs/dht/) — open

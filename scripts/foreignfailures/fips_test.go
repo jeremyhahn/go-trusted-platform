@@ -139,7 +139,11 @@ func TestTheTwoListedFIPSPanicsAttributeAndRerunTheirPackages(t *testing.T) {
 	v, reruns := decideFIPSText(t, readFixture(t, "fips-panics.log"))
 	assert.False(t, v.gating(), "verdict: %+v", v)
 	assert.Len(t, v.Hits, 2)
-	assert.Empty(t, v.Stale)
+	// The fixture predates the pkg/api/daemon row: that package passes in
+	// it, so its row is the only stale one.
+	require.Len(t, v.Stale, 1)
+	assert.Equal(t, testKey{Package: "pkg/api/daemon", Name: "TestTPMSimulator_ActivateCredentialRefusesAForeignCredential"},
+		testKey{Package: v.Stale[0].Package, Name: v.Stale[0].Name})
 	assert.Equal(t, []rerun{{Package: "pkg/vpn/agent", Exclude: vpnPanic}, {Package: "pkg/app", Exclude: appPanic}}, reruns)
 }
 
@@ -165,6 +169,17 @@ func TestTheFIPSJobPassesOnlyAfterGreenReruns(t *testing.T) {
 	assert.Contains(t, stdout.String(), "rerun: pkg/app: 2 other tests passed under fips140=only (all but "+appPanic+")")
 	assert.Contains(t, stdout.String(), "every FIPS failure is in the FIPS foreign-failure baseline")
 	assert.Empty(t, stderr.String())
+}
+
+func TestAFIPSRerunWhoseOutputCannotBeWrittenGates(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "fips.log")
+	require.NoError(t, os.WriteFile(logPath, []byte(readFixture(t, "fips-panics.log")), 0o600))
+	var stderr bytes.Buffer
+	code := runIn(fipsEnv(newFakeGo()), []string{"-job", "fips", "-baseline", filepath.Join("..", "..", ".github", "foreign-failures-fips.tsv"),
+		"-tags", "fips codec_cbor", logPath}, failingWriter{}, &stderr)
+	assert.Equal(t, exitOutput, code)
+	assert.Contains(t, stderr.String(), "foreignfailures: writing output: write refused")
+	assert.Contains(t, stderr.String(), "the FIPS unit tests failed outside the FIPS foreign-failure baseline")
 }
 
 func TestTheSamePanicInAnUnlistedTestGates(t *testing.T) {
@@ -480,7 +495,7 @@ func TestParseFIPSBaselineRejectsMalformedRows(t *testing.T) {
 
 func TestRepositoryFIPSBaselineParses(t *testing.T) {
 	b := repositoryFIPSBaseline(t)
-	require.Len(t, b.entries, 5)
+	require.Len(t, b.entries, 6)
 	for _, e := range b.entries {
 		assert.Equal(t, kindPanic, e.Kind)
 		assert.Equal(t, fipsPanic, e.Message)
@@ -493,7 +508,9 @@ func TestRepositoryFIPSBaselineParses(t *testing.T) {
 	assert.Contains(t, b.tests, testKey{Package: "pkg/app", Name: appHiddenPanic})
 	assert.Contains(t, b.tests, testKey{Package: "pkg/app", Name: "TestIDevIDSigner_NilPublicKey"})
 	assert.Contains(t, b.tests, testKey{Package: "pkg/app", Name: "TestTPMSigner_IDevIDSignsTLS13ClientCertificateVerify"})
+	assert.Contains(t, b.tests, testKey{Package: "pkg/api/daemon", Name: "TestTPMSimulator_ActivateCredentialRefusesAForeignCredential"})
 	assert.Equal(t, 4, b.rowsIn("pkg/app"), "the bound on a pkg/app rerun")
+	assert.Equal(t, 1, b.rowsIn("pkg/api/daemon"), "the bound on a pkg/api/daemon rerun")
 	assert.Equal(t, 0, b.rowsIn("pkg/dns"))
 }
 

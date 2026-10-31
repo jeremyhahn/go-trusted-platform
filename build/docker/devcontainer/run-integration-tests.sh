@@ -11,7 +11,9 @@
 #   TARGET     - Optional target keyword selecting which package(s) to run.
 #                Known targets: the keys of TARGET_PACKAGES below. `all`
 #                runs the suites in ALL_TARGETS on one shared platformd; every
-#                other key runs one suite.
+#                other key runs one suite. `leg-<n>` runs leg n of
+#                INTEGRATION_LEGS the way `all` runs everything, and `legs`
+#                prints the legs and exits.
 #                If the first argument is not a known target, it is treated
 #                as BUILD_TAGS (backward-compatible with the prior 1-arg form).
 #                Default: all
@@ -28,6 +30,8 @@
 # Examples:
 #   run-integration-tests.sh
 #   run-integration-tests.sh all
+#   run-integration-tests.sh leg-2
+#   run-integration-tests.sh legs
 #   run-integration-tests.sh ceremony
 #   run-integration-tests.sh luks "integration $(make -s print-build-tags)"
 #   run-integration-tests.sh "integration $(make -s print-build-tags)"  # legacy form
@@ -36,6 +40,8 @@ set -uo pipefail
 
 # shellcheck source=build/docker/devcontainer/swtpm-provision.sh
 source "$(dirname "${BASH_SOURCE[0]}")/swtpm-provision.sh"
+# shellcheck source=build/docker/devcontainer/wait-for.sh
+source "$(dirname "${BASH_SOURCE[0]}")/wait-for.sh"
 
 # Known target keywords mapped to their Go test package paths, one or more
 # separated by spaces. A single-word first argument matching a key here
@@ -48,7 +54,6 @@ source "$(dirname "${BASH_SOURCE[0]}")/swtpm-provision.sh"
 declare -A TARGET_PACKAGES=(
     [all]=""
     [bmc]="./test/integration/bmc/..."
-    [bootstrap]="./test/integration/bootstrap/..."
     [ca]="./test/integration/ca/..."
     [ceremony]="./test/integration/ceremony/..."
     [piv]="./test/integration/piv/..."
@@ -60,7 +65,6 @@ declare -A TARGET_PACKAGES=(
     [tpm]="./test/integration/tpm/..."
     [cold-start]="./test/integration/cold_start/..."
     [barrier-gate]="./test/integration/barrier_gate/..."
-    [restroutes]="./test/integration/restroutes/..."
     [sdn]="./test/integration/sdn/ ./test/integration/sdn/mock_bgp/..."
     [sdn-stress]="./test/integration/sdn/stress/..."
     [proxy]="./test/integration/proxy/..."
@@ -82,27 +86,18 @@ declare -A TARGET_PACKAGES=(
     [acme]="./test/integration/acme/..."
     [authenticode]="./test/integration/authenticode/..."
     [cli]="./test/integration/cli/..."
-    [cluster]="./test/integration/cluster/..."
-    [cmd]="./test/integration/cmd/..."
     [compute]="./test/integration/compute/..."
     [container]="./test/integration/container/..."
     [daemon]="./test/integration/daemon/..."
-    [datastore]="./test/integration/datastore/..."
     [dns]="./test/integration/dns/..."
     [e2e]="./test/integration/e2e/..."
     [helpers]="./test/integration/helpers/..."
     [ipxe]="./test/integration/ipxe/..."
     [ipxe-dhcp]="./test/integration/ipxe/..."
-    [ipxe-tftp]="./test/integration/ipxe/..."
-    [ipxe-http]="./test/integration/ipxe/..."
     [iso]="./test/integration/iso/..."
     [kms]="./test/integration/kms/..."
-    [network]="./test/integration/network/..."
     [pxe]="./test/integration/pxe/..."
-    [quic]="./test/integration/quic/..."
-    [quicbaas]="./test/integration/quicbaas/..."
     [registry]="./test/integration/registry/..."
-    [sdk]="./test/integration/sdk/..."
     [secrets]="./test/integration/secrets/..."
     [vtpm]="./test/integration/vtpm/..."
 )
@@ -112,15 +107,13 @@ declare -A TARGET_PACKAGES=(
 # network namespaces, and nothing from the shared platformd.
 # testenv-enrollment is the two-VM ACME enrollment test of the root package;
 # it runs its full mode when INTEGRATION_TEST_SERVER_ISO and
-# INTEGRATION_TEST_CLIENT_ISO name pre-built ISOs. The ipxe-* targets are
-# the protocol slices of the ipxe suite. ipxe-http selects ^TestHTTP so it
-# leaves TestIPXEDHCPToHTTPChain to ipxe-dhcp, which starts a DHCP server.
+# INTEGRATION_TEST_CLIENT_ISO name pre-built ISOs. ipxe-dhcp is the DHCP
+# slice of the ipxe suite; it starts a DHCP server for
+# TestIPXEDHCPToHTTPChain.
 declare -A TARGET_RUN=(
     [lb]='^TestGroupLoadBalancer$'
     [testenv-enrollment]='^TestEnrollmentIntegration$'
     [ipxe-dhcp]='.*DHCP.*'
-    [ipxe-tftp]='.*TFTP.*'
-    [ipxe-http]='^TestHTTP'
 )
 
 # Per-target environment, NAME=value words passed to `env` before go test.
@@ -163,32 +156,23 @@ declare -A TARGET_TIMEOUTS=(
     [testenv-enrollment]="40m"
     [e2e]="50m"
     [compute]="30m"
-    [cluster]="15m"
 )
 
 # Targets that run without the shared platformd. Each suite needs no daemon:
 # lb drives OVS directly; installer runs a real dnsmasq against a stub
 # upstream it starts; the ipxe suites start their own iPXE server on
 # 127.0.0.1; testenv-enrollment and e2e boot their own QEMU guests;
-# datastore, quicbaas, sdk, cluster and cmd embed what they test; helpers
-# tests the shared harness library in-process. The
+# helpers tests the shared harness library in-process. The
 # targets that do more than skip the daemon -- cold-start, barrier-gate, bmc
 # and the host-built-input suites -- have their own branch in Main.
 declare -A TARGET_NO_DAEMON=(
     [lb]=1
     [installer]=1
     [testenv-enrollment]=1
-    [cluster]=1
-    [cmd]=1
-    [datastore]=1
     [e2e]=1
     [helpers]=1
     [ipxe]=1
     [ipxe-dhcp]=1
-    [ipxe-tftp]=1
-    [ipxe-http]=1
-    [quicbaas]=1
-    [sdk]=1
 )
 
 # The suites `all` runs on the one shared platformd: the daemon-free suites
@@ -200,10 +184,7 @@ declare -A TARGET_NO_DAEMON=(
 # build on the host; lb, testenv-enrollment and ipxe-* are slices of
 # packages already listed (sdn, root, ipxe). pxe stays runnable by name but
 # is out of the default set: platformd builds its PXE service with no
-# backend, so every PXE call answers SERVICE_NOT_CONFIGURED. bootstrap stays
-# runnable by name but is out of the default set too: its DANE tests need TLSA
-# records for _8443._tcp.localhost., and the shared platformd publishes none
-# (DANE off, no zone holds localhost.).
+# backend, so every PXE call answers SERVICE_NOT_CONFIGURED.
 # secureboot stays runnable by name but is out of the default set as well: its
 # FIPS-kernel test needs a prebuilt kernel, modules and signing key that only
 # the caller supplies (FIPS_KERNEL_IMAGE, FIPS_MODULES_TAR,
@@ -222,16 +203,68 @@ declare -A TARGET_NO_DAEMON=(
 # suites run all at once, and its generators would starve them the way they
 # starved sdn. In the daemon-backed list it runs alone, after sdn.
 ALL_TARGETS=(
-    helpers datastore quicbaas sdk cluster cmd ipxe installer e2e
+    helpers ipxe installer e2e
     root acme attestation authenticode ca ceremony cli
-    container daemon device dns fido2 iam iso kms luks network
-    ntp objectstorage orchestrator piv provision proxy quic registry restroutes sdn
+    container daemon device dns fido2 iam iso kms luks
+    ntp objectstorage orchestrator piv provision proxy registry sdn
     sdn-stress secrets tenant vpn vtpm tpm
+)
+
+# The legs CI runs as parallel jobs, one container and one shared platformd
+# each (#1119): every ALL_TARGETS entry, and compute, is in exactly one leg
+# (pkg/arch/integration_legs_test.go). `leg-<n>` runs leg n the way `all` runs
+# everything: its daemon-free suites at once, then its daemon-backed ones in
+# ALL_TARGETS order, so tpm stays last on its daemon, and compute after them on
+# a restarted one. The legs are balanced by CI's measured job times
+# (docs/test/integration.md, "Legs"); iso and sdn, the two longest, are apart.
+INTEGRATION_LEGS=(
+    "acme authenticode ca iso"
+    "ceremony cli container sdn"
+    "daemon device dns sdn-stress"
+    "helpers ipxe installer e2e root attestation fido2 iam kms luks ntp objectstorage orchestrator"
+    "piv provision proxy registry secrets tenant vpn vtpm tpm compute"
 )
 
 RUN_TARGET="all"
 ARG1="${1:-}"
 ARG2="${2:-}"
+
+# `legs` prints ALL_TARGETS and then each leg, one per line, and exits before
+# anything starts: the partition check and the docs read the legs from here.
+if [ "$ARG1" = "legs" ]; then
+    echo "all ${ALL_TARGETS[*]} compute"
+    for i in "${!INTEGRATION_LEGS[@]}"; do
+        echo "leg-$((i + 1)) ${INTEGRATION_LEGS[$i]}"
+    done
+    exit 0
+fi
+
+# The suites this run takes: every ALL_TARGETS entry and compute for `all`,
+# one leg's share of them for `leg-<n>`.
+SELECTED_TARGETS=("${ALL_TARGETS[@]}")
+RUN_COMPUTE=true
+RUN_LEG=""
+if [[ "$ARG1" =~ ^leg-([0-9]+)$ ]]; then
+    RUN_LEG="${BASH_REMATCH[1]}"
+    if [ "$RUN_LEG" -lt 1 ] || [ "$RUN_LEG" -gt "${#INTEGRATION_LEGS[@]}" ]; then
+        echo "FATAL: no integration leg ${RUN_LEG}; the legs are 1 to ${#INTEGRATION_LEGS[@]}" >&2
+        exit 2
+    fi
+    declare -A LEG_MEMBERS=()
+    for target in ${INTEGRATION_LEGS[$((RUN_LEG - 1))]}; do
+        LEG_MEMBERS[$target]=1
+    done
+    SELECTED_TARGETS=()
+    for target in "${ALL_TARGETS[@]}"; do
+        if [ -n "${LEG_MEMBERS[$target]:-}" ]; then
+            SELECTED_TARGETS+=("$target")
+        fi
+    done
+    if [ -z "${LEG_MEMBERS[compute]:-}" ]; then
+        RUN_COMPUTE=false
+    fi
+    ARG1="all"
+fi
 
 # derive_build_tags prints the tag set when the caller passed none: the
 # Makefile's derived list plus integration, never a hand-written copy of it.
@@ -244,6 +277,11 @@ derive_build_tags() {
 if [ -n "$ARG1" ] && [ -n "${TARGET_PACKAGES[$ARG1]+set}" ]; then
     RUN_TARGET="$ARG1"
     BUILD_TAGS="${ARG2:-$(derive_build_tags)}"
+elif [ "$ARG1" = "warm" ]; then
+    # `warm <build-tags> [<cache-dir>]`: see warm_build_cache.
+    RUN_TARGET="warm"
+    BUILD_TAGS="${ARG2:-$(derive_build_tags)}"
+    WARM_CACHE_DIR="${3:-}"
 else
     # Legacy single-arg form: treat ARG1 as BUILD_TAGS.
     BUILD_TAGS="${ARG1:-$(derive_build_tags)}"
@@ -270,10 +308,19 @@ PLATFORMD_SOCK_PATH="/tmp/platformd-integration/platformd.sock"
 # passes it to `platformd serve` and setup_env_vars() builds every exported
 # endpoint from it, so the daemon and the suites cannot disagree (#502).
 # test/integration/helpers/endpoints_test.go asserts that shape.
-PLATFORMD_REST_PORT="8443"
-PLATFORMD_GRPC_PORT="10443"
-PLATFORMD_QUIC_PORT="9444"
-PLATFORMD_MCP_PORT="9445"
+#
+# The ports are ephemeral, chosen by choose_platformd_ports() after
+# build_binaries, never fixed numbers: every act_runner job container runs
+# with `network: host`, so two Integration jobs on one host share one network
+# namespace, and with a fixed 8443 the second job's suites talked to the first
+# job's daemon (jobs 301360 and 301211, #997). The OVSDB manager's TCP port
+# (OVSDB_TCP_PORT, read by test/integration/sdn through OVSDB_ADDRESS) is
+# chosen in the same call for the same reason.
+PLATFORMD_REST_PORT=""
+PLATFORMD_GRPC_PORT=""
+PLATFORMD_QUIC_PORT=""
+PLATFORMD_MCP_PORT=""
+OVSDB_TCP_PORT=""
 
 # OVS bridge name used by the integration test config (sdn.ovs.bridge).
 # Platformd reads this from test/integration/config.yaml; the bridge is
@@ -447,6 +494,16 @@ setup_devices() {
 # OVS Setup
 # =============================================================================
 
+# ovsdb_listen_tcp makes the running ovsdb-server listen on the OVSDB_TCP_PORT
+# chosen for this run, the port OVSDB_ADDRESS names. It is added at runtime so
+# an ovsdb-server that was already running gets it too: the devcontainer
+# entrypoint (AUTO_START_OVS=true) starts one listening on 6640 only, and
+# without the new remote the SDN suite would dial an unbound port (#997).
+# Adding a remote the server already has is a no-op.
+ovsdb_listen_tcp() {
+    ovs-appctl -t ovsdb-server ovsdb-server/add-remote "ptcp:${OVSDB_TCP_PORT}:127.0.0.1"
+}
+
 start_ovs() {
     echo "=== Starting Open vSwitch ==="
 
@@ -464,14 +521,17 @@ start_ovs() {
         echo "Starting ovsdb-server..."
         ovsdb-server \
             --remote=punix:/var/run/openvswitch/db.sock \
-            --remote=ptcp:6640:127.0.0.1 \
             --pidfile=/var/run/openvswitch/ovsdb-server.pid \
             --detach \
             --log-file=/var/log/openvswitch/ovsdb-server.log \
             /etc/openvswitch/conf.db
-        sleep 2
+        wait_for 10 "ovsdb-server on db.sock" ovs-vsctl --no-wait --timeout=1 show || true
         ovs-vsctl --no-wait init || true
+    else
+        echo "ovsdb-server already running; reusing it"
     fi
+    ovsdb_listen_tcp || return 1
+    echo "OVSDB listening on ${OVSDB_ADDRESS}"
 
     # Start ovs-vswitchd
     if ! pgrep -x ovs-vswitchd > /dev/null; then
@@ -480,7 +540,7 @@ start_ovs() {
             --pidfile=/var/run/openvswitch/ovs-vswitchd.pid \
             --detach \
             --log-file=/var/log/openvswitch/ovs-vswitchd.log
-        sleep 2
+        wait_for 10 "ovs-vswitchd control socket" ovs-appctl -t ovs-vswitchd version || true
     fi
 
     # Verify OVS is operational
@@ -514,7 +574,7 @@ start_swtpm() {
 
     # Kill any existing swtpm
     pkill -9 -f 'swtpm socket' 2>/dev/null || true
-    sleep 1
+    wait_for 5 "the old swtpm to exit" no_process_matching 'swtpm socket' || exit 1
 
     rm -rf /tmp/swtpm
     mkdir -p /tmp/swtpm
@@ -535,9 +595,8 @@ start_swtpm() {
             --ctrl type=unixio,path=/tmp/swtpm/swtpm.sock.ctrl \
             --flags startup-clear,not-need-init \
             --log level=1,file=/tmp/swtpm/swtpm.log &
-        sleep 2
 
-        if [ -S /tmp/swtpm/swtpm.sock ]; then
+        if wait_for 10 "swtpm socket /tmp/swtpm/swtpm.sock" test -S /tmp/swtpm/swtpm.sock; then
             echo "swtpm started successfully"
         else
             echo "WARNING: swtpm socket not found"
@@ -552,6 +611,34 @@ start_swtpm() {
 # =============================================================================
 # platformd Setup
 # =============================================================================
+
+# choose_platformd_ports sets platformd's four listener ports and the OVSDB
+# manager's TCP port from one call to test/integration/helpers/freeport, which
+# binds 127.0.0.1:0 for each and holds them all until every one is bound, so
+# the five are distinct (#997). It runs from PLATFORM_BUILD_DIR, which
+# build_binaries has entered.
+choose_platformd_ports() {
+    echo "=== Choosing platformd's loopback ports ==="
+    if ! go build -buildvcs=false -o /tmp/freeport ./test/integration/helpers/freeport/; then
+        echo "FATAL: freeport build failed"
+        exit 1
+    fi
+    local ports
+    # REST, gRPC, QUIC (UDP), MCP, OVSDB manager.
+    if ! ports="$(/tmp/freeport tcp tcp udp tcp tcp)"; then
+        echo "FATAL: freeport could not bind loopback ports"
+        exit 1
+    fi
+    local -a port_list
+    mapfile -t port_list <<< "$ports"
+    PLATFORMD_REST_PORT="${port_list[0]}"
+    PLATFORMD_GRPC_PORT="${port_list[1]}"
+    PLATFORMD_QUIC_PORT="${port_list[2]}"
+    PLATFORMD_MCP_PORT="${port_list[3]}"
+    OVSDB_TCP_PORT="${port_list[4]}"
+    export OVSDB_ADDRESS="tcp:127.0.0.1:${OVSDB_TCP_PORT}"
+    echo "platformd ports: REST ${PLATFORMD_REST_PORT}, gRPC ${PLATFORMD_GRPC_PORT}, QUIC ${PLATFORMD_QUIC_PORT}/udp, MCP ${PLATFORMD_MCP_PORT}; OVSDB ${OVSDB_TCP_PORT}"
+}
 
 build_binaries() {
     echo "=== Building platformd and platformctl ==="
@@ -657,9 +744,15 @@ build_gatewayd() {
 # beside platformd and fails without (pkg/iso/customize.go StageMedia):
 # platform-initrd, which dracut calls at boot to unlock the root, and gatewayd,
 # which the gateway-role single-node template the iso suite bakes in needs
-# (pkg/iso/gatewayd.go). platform-initrd comes from its own make target, which
-# owns its build tags; GOFLAGS=-buildvcs=false for the reason build_binaries
-# gives.
+# (pkg/iso/gatewayd.go), and platformctl-static, the media's installer.
+# /tmp/platformctl is a CGO build, and customize refuses a dynamically linked
+# installer (pkg/iso DynamicBinaryError), so platformctl-static is the same
+# CLI built CGO_ENABLED=0 with the tags `make build` adds to the derived set.
+# The suite hands it to customize as --platformctl-static-binary from
+# PLATFORMCTL_STATIC_PATH: with platformctl named on the command line,
+# customize never looks beside it.
+# platform-initrd comes from its own make target, which owns its build tags;
+# GOFLAGS=-buildvcs=false for the reason build_binaries gives.
 prepare_iso_customize() {
     echo "=== Preparing iso customize binaries ==="
     if ! GOFLAGS="${GOFLAGS:+${GOFLAGS} }-buildvcs=false" make -s -C "${PLATFORM_BUILD_DIR}" \
@@ -668,6 +761,15 @@ prepare_iso_customize() {
         exit 1
     fi
     echo "platform-initrd built: /tmp/platform-initrd"
+    echo "Building platformctl-static..."
+    if ! CGO_ENABLED=0 go build -buildvcs=false -tags "osusergo netgo ${BUILD_TAGS}" \
+        -ldflags "${LDFLAGS}" \
+        -o /tmp/platformctl-static ./cmd/platformctl/; then
+        echo "FATAL: platformctl-static build failed"
+        exit 1
+    fi
+    export PLATFORMCTL_STATIC_PATH=/tmp/platformctl-static
+    echo "platformctl-static built: ${PLATFORMCTL_STATIC_PATH}"
     build_gatewayd
 }
 
@@ -703,6 +805,73 @@ prepare_gatewayd_supervision() {
     done
     echo "FATAL: cannot enable memory and cpu in ${root}/cgroup.subtree_control"
     exit 1
+}
+
+# warm_build_cache compiles into the build cache everything a run compiles:
+# platformd, platformctl, gatewayd, platform-initrd, and the vet check and test
+# binary of every package of every ALL_TARGETS key and compute. It starts
+# nothing. The integration-legs stage of the devcontainer Dockerfile runs it
+# (#1119), so a leg links and runs against a warm /gocache instead of compiling
+# the tree from an empty one.
+#
+# With WARM_CACHE_DIR (the stage's BuildKit cache mount, which keeps the last
+# build's cache) the build runs against that directory, so it compiles only what
+# changed since, and then copies what it used into the image's GOCACHE. The go
+# command refreshes the mtime of an entry it uses once that mtime is an hour old
+# (cmd/go/internal/cache), so every entry is first dated two hours back: after
+# the build, the entries newer than a stamp are exactly this build's. The rest
+# are deleted, which keeps the mount to one build's cache.
+#
+# A test package that does not compile is reported and left out: its suite
+# fails with the file:line in the leg that runs it, as it would without the warm
+# cache.
+warm_build_cache() {
+    local image_cache="${GOCACHE:-$(go env GOCACHE)}"
+    local stamp=""
+    if [ -n "${WARM_CACHE_DIR}" ]; then
+        mkdir -p "${WARM_CACHE_DIR}"
+        find "${WARM_CACHE_DIR}" -mindepth 2 -type f -exec touch -m -d '2 hours ago' {} +
+        stamp="$(mktemp)"
+        export GOCACHE="${WARM_CACHE_DIR}"
+    fi
+    echo "=== Warming the build cache (${GOCACHE}) ==="
+    build_binaries
+    prepare_iso_customize
+
+    local test_bin target pkg pkgs=()
+    test_bin="$(mktemp -u)"
+    for target in "${ALL_TARGETS[@]}" compute; do
+        compile_check "$target" || continue
+        read -r -a pkgs <<< "${TARGET_PACKAGES[$target]}"
+        for pkg in $(go list -tags "${BUILD_TAGS}" "${pkgs[@]}"); do
+            if ! go test -c -tags "${BUILD_TAGS}" -o "${test_bin}" "$pkg"; then
+                echo "WARNING: the test binary of $pkg ($target) does not compile"
+            fi
+            rm -f "${test_bin}"
+        done
+    done
+    # The binaries are rebuilt from the cache by each run, into its own /tmp.
+    rm -f /tmp/platformd /tmp/platformctl /tmp/gatewayd /tmp/platform-initrd
+
+    if [ -n "${stamp}" ]; then
+        find "${WARM_CACHE_DIR}" -mindepth 2 -type f ! -newer "${stamp}" -delete
+        rm -f "${stamp}"
+        mkdir -p "${image_cache}"
+        cp -a "${WARM_CACHE_DIR}/." "${image_cache}/"
+    fi
+    echo "=== Build cache warm: $(du -sh "${image_cache}" | cut -f1) in ${image_cache} ==="
+}
+
+# target_selected reports whether this run takes the suite KEY: every key for
+# `all`, the leg's own for `leg-<n>`.
+target_selected() {
+    local key="$1" target
+    for target in "${SELECTED_TARGETS[@]}"; do
+        if [ "$target" = "$key" ]; then
+            return 0
+        fi
+    done
+    return 1
 }
 
 # prepare_compute_config writes the platformd config for the compute target:
@@ -899,6 +1068,19 @@ NTPREFEOF
     fi
 }
 
+# platformd_socket_or_gone ends start_platformd's wait: the daemon has created
+# its socket, or it has exited and never will.
+platformd_socket_or_gone() {
+    [ -S "${PLATFORMD_SOCK_PATH}" ] || process_gone "${PLATFORMD_PID}"
+}
+
+# platformd_tls_ready reports whether platformd has written the admin client
+# bundle and the CA bundle the suites dial with.
+platformd_tls_ready() {
+    [ -f /tmp/platformd-integration/tls/client-bundle.pem ] &&
+        [ -f /tmp/platformd-integration/tls/ca-bundle.crt ]
+}
+
 start_platformd() {
     local config_file="${1:-${PLATFORM_BUILD_DIR}/test/integration/config.yaml}"
     echo "=== Starting platformd (config: ${config_file}) ==="
@@ -938,46 +1120,39 @@ start_platformd() {
     PLATFORMD_PID=$!
     echo "platformd starting (PID: $PLATFORMD_PID)..."
 
-    # Wait for socket to be ready. A daemon that has already exited will never
-    # create the socket, so stop waiting the moment the process is gone rather
-    # than burning the full 30 seconds on a config error.
-    for i in $(seq 1 30); do
-        if ! kill -0 "$PLATFORMD_PID" 2>/dev/null; then
-            echo "FATAL: platformd exited during startup (after ${i}s)"
-            break
+    # Wait for the socket. A daemon that has already exited never creates it,
+    # so the wait ends the moment the process is gone rather than burning the
+    # full 30 seconds on a config error.
+    if ! wait_for 30 "platformd socket ${PLATFORMD_SOCK_PATH}" platformd_socket_or_gone; then
+        echo "FATAL: platformd never created its socket at ${PLATFORMD_SOCK_PATH}"
+        report_platformd_startup_failure
+        return 1
+    fi
+    if [ -S "${PLATFORMD_SOCK_PATH}" ]; then
+        echo "platformd started successfully"
+        echo "=== platformd startup log (stdout/stderr) ==="
+        cat "${PLATFORMD_STARTUP_LOG}" 2>/dev/null || true
+        echo "=== platformd app log ==="
+        cat /tmp/platformd-integration/log/trusted-platform.log 2>/dev/null || true
+
+        # Wait for mTLS certificates to be generated. They land in
+        # <platform-dir>/tls (platform-dir comes from the config). The
+        # admin client-bundle.pem exists only because /tmp/platformd is
+        # built with the integration tag
+        # (pkg/daemon/commands/harness_admin_bundle_integration.go); a
+        # production platformd mints no admin key, and this harness has
+        # no barrier, so it has no /init step to take one from.
+        if wait_for 10 "platformd mTLS certificates" platformd_tls_ready; then
+            echo "mTLS certificates ready"
         fi
-        if [ -S "${PLATFORMD_SOCK_PATH}" ]; then
-            echo "platformd started successfully"
-            echo "=== platformd startup log (stdout/stderr) ==="
-            cat "${PLATFORMD_STARTUP_LOG}" 2>/dev/null || true
-            echo "=== platformd app log ==="
-            cat /tmp/platformd-integration/log/trusted-platform.log 2>/dev/null || true
 
-            # Wait for mTLS certificates to be generated. They land in
-            # <platform-dir>/tls (platform-dir comes from the config). The
-            # admin client-bundle.pem exists only because /tmp/platformd is
-            # built with the integration tag
-            # (pkg/daemon/commands/harness_admin_bundle_integration.go); a
-            # production platformd mints no admin key, and this harness has
-            # no barrier, so it has no /init step to take one from.
-            for _ in $(seq 1 10); do
-                if [ -f /tmp/platformd-integration/tls/client-bundle.pem ] && \
-                   [ -f /tmp/platformd-integration/tls/ca-bundle.crt ]; then
-                    echo "mTLS certificates ready"
-                    break
-                fi
-                sleep 1
-            done
+        start_chronyd
 
-            start_chronyd
+        echo "=== platformd ready ==="
+        return 0
+    fi
 
-            echo "=== platformd ready ==="
-            return 0
-        fi
-        sleep 1
-    done
-
-    echo "FATAL: platformd never created its socket at ${PLATFORMD_SOCK_PATH}"
+    echo "FATAL: platformd exited during startup"
     report_platformd_startup_failure
     return 1
 }
@@ -1149,12 +1324,20 @@ setup_env_vars() {
 echo "============================================="
 echo "  go-trusted-platform Integration Tests"
 echo "============================================="
-echo "Target:     ${RUN_TARGET}"
+echo "Target:     ${RUN_TARGET}${RUN_LEG:+ (leg ${RUN_LEG} of ${#INTEGRATION_LEGS[@]})}"
 echo "Build tags: ${BUILD_TAGS}"
 echo ""
 
+# `warm` only compiles; there is nothing for the EXIT trap to stop.
+if [ "$RUN_TARGET" = "warm" ]; then
+    trap - EXIT
+    warm_build_cache
+    exit 0
+fi
+
 # Phase 1: Build binaries
 build_binaries
+choose_platformd_ports
 
 # A single target's package is checked here, before OVS, swtpm or platformd
 # start, so a compile error ends the run with the file:line first. `all`
@@ -1166,7 +1349,7 @@ fi
 # Phase 2: Setup infrastructure
 setup_devices
 
-# OVS backs the SDN, network, lb, compute and e2e suites.
+# OVS backs the SDN, lb, compute and e2e suites.
 start_ovs || echo "WARNING: OVS setup failed; the suites that need OVS have none"
 
 # swtpm backs the shared platformd's TPM and every vTPM suite. The vtpm
@@ -1276,16 +1459,16 @@ else
     # platformd is required for every daemon-dependent suite. A failed bring-up
     # ends the run; see abort_no_daemon.
     start_platformd || abort_no_daemon
-    # `all` runs the proxy suite, whose supervised-process tests need
-    # gatewayd built and the cgroup controllers delegated.
-    if [ "$RUN_TARGET" = "all" ]; then
+    # The proxy suite's supervised-process tests need gatewayd built and the
+    # cgroup controllers delegated; a leg without proxy skips both.
+    if [ "$RUN_TARGET" = "all" ] && target_selected proxy; then
         prepare_gatewayd_supervision
     fi
 fi
 
 # The iso suite's customize step stages platform-initrd and gatewayd from
-# beside /tmp/platformd.
-if [ "$RUN_TARGET" = "iso" ] || [ "$RUN_TARGET" = "all" ]; then
+# beside /tmp/platformd, and platformctl-static from PLATFORMCTL_STATIC_PATH.
+if [ "$RUN_TARGET" = "iso" ] || { [ "$RUN_TARGET" = "all" ] && target_selected iso; }; then
     prepare_iso_customize
 fi
 
@@ -1382,19 +1565,22 @@ run_concurrent() {
 }
 
 if [ "$RUN_TARGET" = "all" ]; then
-    # The daemon-free suites of ALL_TARGETS (TARGET_NO_DAEMON) run at once:
-    # none shares state with another or with platformd. Every daemon-backed
-    # suite then runs alone on the one shared platformd, in list order.
+    # The daemon-free suites of SELECTED_TARGETS (TARGET_NO_DAEMON) run at
+    # once: none shares state with another or with platformd. Every
+    # daemon-backed suite then runs alone on the one shared platformd, in list
+    # order.
     DAEMON_FREE_TARGETS=()
     DAEMON_TARGETS=()
-    for target in "${ALL_TARGETS[@]}"; do
+    for target in "${SELECTED_TARGETS[@]}"; do
         if [ -n "${TARGET_NO_DAEMON[$target]:-}" ]; then
             DAEMON_FREE_TARGETS+=("$target")
         else
             DAEMON_TARGETS+=("$target")
         fi
     done
-    run_concurrent "${DAEMON_FREE_TARGETS[@]}"
+    if [ "${#DAEMON_FREE_TARGETS[@]}" -gt 0 ]; then
+        run_concurrent "${DAEMON_FREE_TARGETS[@]}"
+    fi
     for target in "${DAEMON_TARGETS[@]}"; do
         run_test "$target"
         record_result "$target" "$?"
@@ -1402,14 +1588,16 @@ if [ "$RUN_TARGET" = "all" ]; then
 
     # compute last, on its own daemon: a fresh swtpm (tpm cleared the shared
     # one) and platformd on the local QEMU provider.
-    echo "=== compute: restarting platformd on the local QEMU provider ==="
-    stop_platformd
-    if start_swtpm && prepare_compute_config && start_platformd "${COMPUTE_PLATFORMD_CONFIG}"; then
-        run_test compute
-        record_result compute "$?"
-    else
-        echo "--- FAIL: compute (platformd did not start on the local QEMU provider) ---"
-        record_result compute 1
+    if [ "$RUN_COMPUTE" = true ]; then
+        echo "=== compute: restarting platformd on the local QEMU provider ==="
+        stop_platformd
+        if start_swtpm && prepare_compute_config && start_platformd "${COMPUTE_PLATFORMD_CONFIG}"; then
+            run_test compute
+            record_result compute "$?"
+        else
+            echo "--- FAIL: compute (platformd did not start on the local QEMU provider) ---"
+            record_result compute 1
+        fi
     fi
 else
     run_test "$RUN_TARGET"

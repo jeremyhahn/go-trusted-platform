@@ -16,6 +16,7 @@ package daemon
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -1115,7 +1116,10 @@ func TestTenantCLIPathResolvesOwnTenant(t *testing.T) {
 	go func() { served <- gs.Serve(lis) }()
 	t.Cleanup(func() {
 		gs.Stop()
-		assert.NoError(t, <-served)
+		// Stop can win the race with Serve's start; Serve then returns ErrServerStopped, its other clean-shutdown result.
+		if err := <-served; !errors.Is(err, grpc.ErrServerStopped) {
+			assert.NoError(t, err)
+		}
 	})
 
 	conn, err := grpc.NewClient("unix://"+sock, grpc.WithTransportCredentials(local.NewCredentials()))

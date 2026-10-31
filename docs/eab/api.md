@@ -118,7 +118,7 @@ Pagination is the shared `PaginationRequest`/`PaginationResponse` from
 `common.proto`. On the MCP surface, `page` and `page_size` of `0` mean "return
 the full set"; the service walks the store in pages of `eabPageCollectSize`
 (100) to assemble an unfiltered list. MCP lists through the same
-`collectEABCredentials` / `filterEABCredentials` / `paginateEABCredentials`
+`collectEABCredentials` / `filterEABCredentials` / `paginatePage`
 path as gRPC, in gRPC's default order (`id` ascending); it has no `sort_by` or
 `ascending` argument. An unknown `status` is `InvalidArgument`.
 
@@ -136,8 +136,10 @@ must check `valid`, not just the status.
 ### Revoke
 
 `RevokeEABCredentialRequest`: `credential_id`, `revoker_id` (`uint64`, "ID of
-the user performing the revocation" — for the audit trail). The MCP tool marks
-only `credential_id` as required; a missing `revoker_id` becomes `0`.
+the user performing the revocation"). `revoker_id` is only written to the
+daemon log line `eab credential revoked` (`pkg/api/daemon/eab_grpc_service.go:393`);
+the credential store does not record who revoked it. The MCP tool marks only
+`credential_id` as required; a missing `revoker_id` becomes `0`.
 
 ### QR code
 
@@ -171,12 +173,12 @@ the MCP tool ignored `tenant_id` and swept every tenant.
 | QUIC byte | Name | gRPC | REST | EAB cause |
 |---|---|---|---|---|
 | `0x00` | `StatusOK` | `OK` | 200 / 201 | — |
-| `0x01` | `StatusInvalidRequest` | `InvalidArgument` | 400 | Malformed payload |
+| `0x01` | `StatusInvalidRequest` | `InvalidArgument` / `FailedPrecondition` | 400 / 409 | Malformed payload (`InvalidArgument`, 400); `ErrCredentialExpired`, `ErrCredentialRevoked`, `ErrCredentialAlreadyUsed` (`FailedPrecondition`, REST 409 — QUIC has no precondition byte, `pkg/api/daemon/quic_configdelivery.go:292`) |
 | `0x02` | `StatusNotFound` | `NotFound` | 404 | `ErrCredentialNotFound` |
 | `0x03` | `StatusUnauthorized` | `Unauthenticated` | 401 | Token invalid |
 | `0x04` | `StatusInternalError` | `Internal` | 500 | `ErrKeyGenerationFailed`, `ErrQRCodeGenerationFailed`, `ErrFileExportFailed`, any unmatched error |
 | `0x07` | `StatusPermissionDenied` | `PermissionDenied` | 403 | Missing `eab:*` scope (§5) |
-| `0x09` | `StatusInvalidArgument` | `InvalidArgument` | 400 | `ErrInvalidCredential`, `ErrInvalidProfileID`, `ErrInvalidTenantID`, `ErrInvalidExpiresAt`, `ErrCredentialExpired`, `ErrCredentialRevoked`, `ErrCredentialAlreadyUsed` (the last three as `FailedPrecondition`) |
+| `0x09` | `StatusInvalidArgument` | `InvalidArgument` | 400 | `ErrInvalidCredential`, `ErrInvalidProfileID`, `ErrInvalidTenantID`, `ErrInvalidExpiresAt` |
 | `0x0A` | `StatusUnavailable` | `Unavailable` | 503 | `ErrEABNotConfigured`, `ErrEABDeliveryNotConfigured` |
 
 **503 on every EAB call means the platform is not QuicBaaS-backed** — the

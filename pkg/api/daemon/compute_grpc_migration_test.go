@@ -17,6 +17,7 @@ package daemon
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute"
@@ -39,13 +40,18 @@ type migrationReceiverOrchestrator struct {
 	receiveErr  error
 	finalizeErr error
 
+	// mu guards the recorded call arguments below: the QUIC transport
+	// records them on its server goroutine while the test reads them.
+	mu             sync.Mutex
 	gotSpec        compute.MigrationSpec
 	lastReceiverID string
 	lastCommit     bool
 }
 
 func (m *migrationReceiverOrchestrator) ReceiveIncoming(_ context.Context, spec compute.MigrationSpec) (*compute.ReceiverHandle, error) {
+	m.mu.Lock()
 	m.gotSpec = spec
+	m.mu.Unlock()
 	if m.receiveErr != nil {
 		return nil, m.receiveErr
 	}
@@ -53,9 +59,32 @@ func (m *migrationReceiverOrchestrator) ReceiveIncoming(_ context.Context, spec 
 }
 
 func (m *migrationReceiverOrchestrator) FinalizeIncoming(_ context.Context, receiverID string, commit bool) error {
+	m.mu.Lock()
 	m.lastReceiverID = receiverID
 	m.lastCommit = commit
+	m.mu.Unlock()
 	return m.finalizeErr
+}
+
+// recordedSpec returns the spec of the last ReceiveIncoming call.
+func (m *migrationReceiverOrchestrator) recordedSpec() compute.MigrationSpec {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.gotSpec
+}
+
+// recordedReceiverID returns the receiver ID of the last FinalizeIncoming call.
+func (m *migrationReceiverOrchestrator) recordedReceiverID() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.lastReceiverID
+}
+
+// recordedCommit returns the commit flag of the last FinalizeIncoming call.
+func (m *migrationReceiverOrchestrator) recordedCommit() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.lastCommit
 }
 
 func newMigrationReceiverService(recv *migrationReceiverOrchestrator) *ComputeGRPCService {
@@ -92,14 +121,14 @@ func TestPrepareMigration_HappyPath(t *testing.T) {
 	assert.Equal(t, "dest.example", resp.GetTlsHostname())
 
 	// The wire spec is projected onto the compute migration spec.
-	assert.Equal(t, "guest", recv.gotSpec.VMName)
-	assert.Equal(t, compute.MigrateModeCold, recv.gotSpec.Mode)
-	assert.Equal(t, qemu.ArchAArch64, recv.gotSpec.Arch)
-	require.NotNil(t, recv.gotSpec.Config)
-	assert.Equal(t, 2048, recv.gotSpec.Config.Memory)
-	assert.Equal(t, 2, recv.gotSpec.Config.CPUs)
-	assert.True(t, recv.gotSpec.Config.TPMEnabled)
-	assert.Equal(t, "52:54:00:12:34:56", recv.gotSpec.Config.MACAddress)
+	assert.Equal(t, "guest", recv.recordedSpec().VMName)
+	assert.Equal(t, compute.MigrateModeCold, recv.recordedSpec().Mode)
+	assert.Equal(t, qemu.ArchAArch64, recv.recordedSpec().Arch)
+	require.NotNil(t, recv.recordedSpec().Config)
+	assert.Equal(t, 2048, recv.recordedSpec().Config.Memory)
+	assert.Equal(t, 2, recv.recordedSpec().Config.CPUs)
+	assert.True(t, recv.recordedSpec().Config.TPMEnabled)
+	assert.Equal(t, "52:54:00:12:34:56", recv.recordedSpec().Config.MACAddress)
 }
 
 func TestPrepareMigration_MissingSpec(t *testing.T) {
@@ -142,7 +171,7 @@ func TestPrepareMigration_ArchMismatch(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
 	assert.Contains(t, status.Convert(err).Message(), `"aarch64"`)
-	assert.Equal(t, qemu.ArchX86_64, recv.gotSpec.Arch)
+	assert.Equal(t, qemu.ArchX86_64, recv.recordedSpec().Arch)
 }
 
 func TestPrepareMigration_UndeterminedListenAddress(t *testing.T) {
@@ -191,8 +220,8 @@ func TestFinalizeMigration_Commit(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.True(t, resp.GetStatus().GetSuccess())
-	assert.Equal(t, "recv-1", recv.lastReceiverID)
-	assert.True(t, recv.lastCommit)
+	assert.Equal(t, "recv-1", recv.recordedReceiverID())
+	assert.True(t, recv.recordedCommit())
 }
 
 func TestFinalizeMigration_MissingReceiverID(t *testing.T) {

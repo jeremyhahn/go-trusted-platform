@@ -4,14 +4,17 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/artifacts"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/runner"
 )
 
 // repoBuilderDir is build/docker/virt-kernel-builder in this checkout.
@@ -341,6 +344,129 @@ func TestBuild_Failures(t *testing.T) {
 			t.Errorf("err = %v", err)
 		}
 	})
+}
+
+func TestOptionsWithDefaults(t *testing.T) {
+	t.Run("zero options take the pinned defaults", func(t *testing.T) {
+		builderDir := "/b"
+		o := (&Options{BuilderDir: builderDir}).withDefaults()
+		if o.Runner == nil || reflect.ValueOf(o.Runner).Pointer() != reflect.ValueOf(runner.Exec).Pointer() {
+			t.Error("Runner is not runner.Exec")
+		}
+		want := Options{
+			Runtime:       "docker",
+			BuilderDir:    builderDir,
+			OutputDir:     filepath.Join(builderDir, "output"),
+			CacheVolume:   DefaultCacheVolume,
+			Version:       DefaultVersion,
+			TarballSHA256: DefaultTarballSHA256,
+			LocalVersion:  DefaultLocalVersion,
+			Flavor:        DefaultFlavor,
+			Image:         "trusted-platform-virt-kernel-builder:" + DefaultVersion,
+		}
+		o.Runner = nil
+		if !reflect.DeepEqual(o, want) {
+			t.Errorf("options = %+v, want %+v", o, want)
+		}
+	})
+	t.Run("set options are kept", func(t *testing.T) {
+		in := Options{
+			Runner:        (&recordingRunner{}).run,
+			Runtime:       "podman",
+			BuilderDir:    "/b",
+			OutputDir:     "/out",
+			CacheVolume:   "vol",
+			Version:       "6.6.1",
+			TarballSHA256: "sum",
+			LocalVersion:  "-x",
+			Flavor:        "lts",
+			Image:         "img:tag",
+		}
+		o := in.withDefaults()
+		if reflect.ValueOf(o.Runner).Pointer() != reflect.ValueOf(in.Runner).Pointer() {
+			t.Error("Runner was replaced")
+		}
+		o.Runner, in.Runner = nil, nil
+		if !reflect.DeepEqual(o, in) {
+			t.Errorf("options = %+v, want %+v", o, in)
+		}
+	})
+	t.Run("the default image follows a pinned version", func(t *testing.T) {
+		o := (&Options{Version: "6.6.1"}).withDefaults()
+		if o.Image != "trusted-platform-virt-kernel-builder:6.6.1" {
+			t.Errorf("image = %q", o.Image)
+		}
+	})
+}
+
+func TestBuild_OutputFailures(t *testing.T) {
+	t.Run("output directory cannot be created", func(t *testing.T) {
+		builder := fakeBuilderDir(t)
+		blocker := filepath.Join(t.TempDir(), "file")
+		if err := os.WriteFile(blocker, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		rec := &recordingRunner{}
+		_, err := Build(context.Background(), Options{Runner: rec.run, BuilderDir: builder, OutputDir: filepath.Join(blocker, "out")})
+		var buildErr *BuildError
+		if !errors.As(err, &buildErr) || buildErr.Step != "creating the output directory" {
+			t.Fatalf("err = %v", err)
+		}
+		if len(rec.calls) != 1 {
+			t.Errorf("runner calls = %d, want only the image build", len(rec.calls))
+		}
+	})
+	t.Run("builder writes no manifest", func(t *testing.T) {
+		builder := fakeBuilderDir(t)
+		_, err := Build(context.Background(), Options{Runner: (&recordingRunner{}).run, BuilderDir: builder})
+		var manifestErr *ManifestError
+		if !errors.As(err, &manifestErr) || !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("err = %v", err)
+		}
+		if manifestErr != nil && manifestErr.Path != filepath.Join(builder, "output", ManifestName) {
+			t.Errorf("path = %q", manifestErr.Path)
+		}
+	})
+}
+
+func TestReadManifest_MalformedJSON(t *testing.T) {
+	out := t.TempDir()
+	if err := os.WriteFile(filepath.Join(out, ManifestName), []byte(`{"kernel_version":`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ReadManifest(out)
+	var manifestErr *ManifestError
+	var syntaxErr *json.SyntaxError
+	if !errors.As(err, &manifestErr) || !errors.As(err, &syntaxErr) {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestLocate_MissingArtifacts(t *testing.T) {
+	// SHA256SUMS verifies only the files present, so Locate itself must
+	// name a listed artifact that is gone.
+	tests := []struct {
+		name   string
+		remove string
+	}{
+		{name: "kernel release", remove: "kernel-version.txt"},
+		{name: "modules", remove: "modules-virt.tar.gz"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := t.TempDir()
+			writeOutput(t, out, "virt", "6.12.110-0-virt", "k")
+			path := filepath.Join(out, "virt", tt.remove)
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Locate(out, "virt")
+			var missing *artifacts.MissingError
+			if !errors.As(err, &missing) || missing.Path != path || missing.Hint != Hint {
+				t.Errorf("err = %v", err)
+			}
+		})
+	}
 }
 
 func TestErrorStrings(t *testing.T) {

@@ -1,6 +1,6 @@
 # Tenant Configuration Reference
 
-> **Status: REFERENCE** · Last verified: 2026-10-13
+> **Status: REFERENCE** · Last verified: 2026-10-27
 > `tenant.Config` (`pkg/tenant/config.go`) and how `platformd serve` builds it (`pkg/daemon/commands/serve_tenant.go`).
 
 > Subordinate to the feature files ([architecture.md](architecture.md),
@@ -31,14 +31,22 @@ The tenant manager is configured in code with `tenant.Config`
 | `DEKMaxBytes` | `uint64` | `0` (unlimited) | Bytes encrypted before rotation is due |
 | `DEKWarningPercent` | `int32` | `80` | Usage percentage at which DEK status reports a warning |
 
-`Config.Validate` rejects negative quota limits, an unsupported DEK algorithm
-and a `DEKWarningPercent` outside 0-100 with `ErrConfigValidation`.
+`Config.Validate` rejects negative quota limits with `ErrConfigValidation`. It
+checks the DEK fields — an unsupported `DEKAlgorithm`, a `DEKWarningPercent`
+outside 0-100 — only when `EnableDEKIsolation` is true; with isolation off they
+are not validated.
 
 ## How platformd wires it today
 
 `platformd serve` builds the manager from `tenant.DefaultConfig()` with
-`EnableDEKIsolation` turned off, over the quicbaas IAM tenant client. Tenant
-CRUD, lifecycle and quotas work; per-tenant DEKs are not created on that path.
+`EnableDEKIsolation` turned off, over the quicbaas IAM tenant client
+(`pkg/daemon/commands/serve_tenant.go`). Tenant CRUD, lifecycle and quotas
+work; per-tenant DEKs are not created on that path.
+
+**DEK rotation and DEK status fail on platformd.** `RotateTenantDEKWithOptions`
+and `GetTenantDEKStatus` (`pkg/tenant/manager.go`) return `ErrInvalidRequest`
+*"DEK isolation is not enabled"* when isolation is off, so the rotate-DEK and
+DEK-status operations answer that error on every transport.
 
 ## Network
 

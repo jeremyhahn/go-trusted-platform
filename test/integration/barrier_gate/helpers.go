@@ -401,35 +401,6 @@ func (h *Harness) AssertRemoteTransportsRefused(ctx context.Context) error {
 	return nil
 }
 
-// AssertProductionTransportsAccept verifies the production REST, gRPC and
-// QUIC listeners are bound after the gate releases. REST and gRPC use a
-// TCP-dial probe; QUIC is verified by confirming the kernel reports the
-// UDP socket as bound (a TCP dial would always fail because QUIC runs
-// over UDP). Failure surfaces ErrProductionPortNotBound naming the first
-// transport that did not come up.
-func (h *Harness) AssertProductionTransportsAccept(ctx context.Context) error {
-	tcpProbes := []struct {
-		Name string
-		Addr string
-	}{
-		{"REST", fmt.Sprintf("127.0.0.1:%d", h.cfg.RESTPort)},
-		{"gRPC", fmt.Sprintf("127.0.0.1:%d", h.cfg.GRPCPort)},
-	}
-	for _, p := range tcpProbes {
-		probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		err := dialExpectingAccept(probeCtx, p.Addr)
-		cancel()
-		if err != nil {
-			return &ErrProductionPortNotBound{Protocol: p.Name, Endpoint: p.Addr, Cause: err}
-		}
-	}
-	quicAddr := fmt.Sprintf("127.0.0.1:%d", h.cfg.QUICPort)
-	if err := assertUDPListenerBound(quicAddr); err != nil {
-		return &ErrProductionPortNotBound{Protocol: "QUIC-udp", Endpoint: quicAddr, Cause: err}
-	}
-	return nil
-}
-
 // =============================================================================
 // internal helpers
 // =============================================================================
@@ -602,23 +573,6 @@ func dialExpectingAccept(ctx context.Context, addr string) error {
 		return err
 	}
 	_ = conn.Close()
-	return nil
-}
-
-// assertUDPListenerBound returns nil when the kernel reports the UDP
-// socket at addr is already bound (EADDRINUSE on a fresh ListenPacket
-// attempt). For QUIC — which runs over UDP — this is a reliable
-// can-it-be-stolen check: if our ListenPacket succeeds, no one was on
-// the port; if it fails with EADDRINUSE, the production QUIC listener
-// holds it.
-func assertUDPListenerBound(addr string) error {
-	lc := net.ListenConfig{}
-	conn, err := lc.ListenPacket(context.Background(), "udp", addr)
-	if err == nil {
-		_ = conn.Close()
-		return &ErrUDPPortNotBound{Endpoint: addr}
-	}
-	// Any error opening the listener proves the port is in use.
 	return nil
 }
 

@@ -142,8 +142,8 @@ it as a string — ids are minted above 2^53 and a JSON number at that magnitude
 is rounded by every JavaScript client. Before #418 the field was a plain
 `uint64` and the JavaScript SDK posted it under `profileId`, a key the server
 does not read, so every console fulfil ran with profile id 0 and answered
-`404 profile not found`. The `Session` body's `profile_id` is still emitted as a
-JSON number; that row is #425.
+`404 profile not found`. The `Session` body's `profile_id` uses the same type
+and is emitted as a JSON string (#425, above).
 
 A missing or zero `profile_id` names no profile. `configdelivery.Service`
 refuses it with `ErrProfileIDRequired`
@@ -183,8 +183,9 @@ request is the body. The webservice routes
 | `NotifyInstallComplete` | `POST /api/v1/provisioning/devices/{mac}/install-complete` | admin role + `provisioning:write` | `PXEService.WebhookComplete`; `status` is `success` or `failure` |
 | `GetBootConfig` | none | — | no per-MAC boot configuration exists in platformd to answer it from; the SDK's `GET /api/v1/provisioning/devices/{mac}/boot-config` claim stays in the route ledger |
 
-An unknown MAC answers `404`, a bad `state` or `status` `400`, and a token
-without `provisioning:write` `403`. Under the legacy JWT handler the role gate
+An unknown MAC answers `404`, a bad `state` or `status` `400`, a transition the
+PXE service refuses (`FailedPrecondition`) `409` (#665), and a token without
+`provisioning:write` `403`. Under the legacy JWT handler the role gate
 alone applies.
 
 `NotifyInstallComplete` is the same operation as the booting node's
@@ -286,14 +287,15 @@ protects against unidentified machines; the operator half is the scoped
 | QUIC byte | Name | REST | Provisioning cause |
 |---|---|---|---|
 | `0x00` | `StatusOK` | 200 | — |
-| `0x01` | `StatusInvalidRequest` | 400 | Malformed MAC, EK serial or device record |
+| `0x01` | `StatusInvalidRequest` | 400 | Malformed MAC, EK serial or device record; for config delivery, a profile not provisioned for remote signing (REST answers that one `409`) |
 | `0x02` | `StatusNotFound` | 404 | Unknown device or session |
-| `0x03` | `StatusUnauthorized` | 401 | EAB credential rejected; nonce stale |
+| `0x03` | `StatusUnauthorized` | 401 | EAB credential rejected by `FetchConfig` |
 | `0x04` | `StatusInternalError` | 500 | Installer or boot-config failure |
 | `0x06` | `StatusAlreadyExists` | 409 | Device already registered |
-| `0x07` | `StatusPermissionDenied` | 403 | Device quarantined or not authorised |
+| `0x07` | `StatusPermissionDenied` | 403 | Device quarantined or not authorised; EAB rejected by `SignDigest`; EK certificate required or mismatched |
 | `0x08` | `StatusResourceExhausted` | 429 | Provisioning endpoint rate limit |
-| `0x0A` | `StatusUnavailable` | 503 | PXE service stopped or not wired in |
+| `0x09` | `StatusInvalidArgument` | 400 | Missing fields, a spent or expired nonce, an unparseable EK certificate, an expired or already-fulfilled session |
+| `0x0A` | `StatusUnavailable` | 503 | PXE service stopped or not wired in; no Secure Boot DB signer |
 
 **429 here is expected under a mass provisioning event.** The endpoint is
 reachable by machines with no identity, so it is rate-limited by design

@@ -19,10 +19,12 @@
 package errclass
 
 import (
+	"errors"
 	"net/http"
 
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/transport/embedded"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -34,6 +36,7 @@ import (
 var classifiers = []func(error) (codes.Code, bool){
 	statusClass,
 	sdkClass,
+	embeddedClass,
 	databaseClass,
 }
 
@@ -76,7 +79,9 @@ var databaseClasses = map[int]codes.Code{
 }
 
 // httpStatuses is the REST answer for each class; the platform SDK's REST
-// transport decodes these back to the same class.
+// transport decodes these back to the same class. FailedPrecondition is 409,
+// as protorest sends it platform-wide (#665): the SDK reads a 409 on a DELETE
+// back as FailedPrecondition and on any other method as AlreadyExists.
 var httpStatuses = map[codes.Code]int{
 	codes.InvalidArgument:    http.StatusBadRequest,
 	codes.Unauthenticated:    http.StatusUnauthorized,
@@ -84,7 +89,7 @@ var httpStatuses = map[codes.Code]int{
 	codes.NotFound:           http.StatusNotFound,
 	codes.AlreadyExists:      http.StatusConflict,
 	codes.Aborted:            http.StatusConflict,
-	codes.FailedPrecondition: http.StatusPreconditionFailed,
+	codes.FailedPrecondition: http.StatusConflict,
 	codes.ResourceExhausted:  http.StatusTooManyRequests,
 	codes.Unimplemented:      http.StatusNotImplemented,
 	codes.Unavailable:        http.StatusServiceUnavailable,
@@ -152,6 +157,17 @@ func statusClass(err error) (codes.Code, bool) {
 func sdkClass(err error) (codes.Code, bool) {
 	class, ok := sdkClasses[sdkerrors.Code(err)]
 	return class, ok
+}
+
+// embeddedClass classifies the SDK embedded transport's refusal of a method
+// it has no handler for. The refusal carries no SDK error code, yet it is
+// the SDK saying the operation is not implemented, so it is Unimplemented.
+func embeddedClass(err error) (codes.Code, bool) {
+	var unknown *embedded.UnknownMethodError
+	if errors.As(err, &unknown) {
+		return codes.Unimplemented, true
+	}
+	return codes.Unknown, false
 }
 
 // databaseClass classifies a database error, which the SDK's embedded

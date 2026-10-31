@@ -14,7 +14,7 @@
 over a Unix domain socket**, so gRPC and Unix share a column.
 `ServiceRegistry.Compute` carries the service in-process.
 
-gRPC: `ComputeService`, 36 RPCs (`pkg/api/grpc/proto/compute.proto`) — the
+gRPC: `ComputeService`, 37 RPCs (`pkg/api/grpc/proto/compute.proto`) — the
 largest service in the platform after IAM.
 REST: base path `/api/v1/compute` — web service
 (`pkg/webservice/v1/rest/compute/router.go`) and platformd's REST listener
@@ -279,8 +279,10 @@ create, get and list, to their sub-opcodes (`sdk/go/transport/quic/adapter.go`).
 Every adapter returns the client's typed error (`ErrStartVMFailed`, ...,
 `sdk/go/services/compute/errors.go`) wrapping the transport status: an unknown VM
 is NotFound everywhere. A VM in the wrong state is FailedPrecondition, except
-over REST, where it is InvalidArgument because both REST servers render
-FailedPrecondition as HTTP 400. `TestVMLifecycleSDKParity_*`
+over REST on any method but `DELETE`, where it is AlreadyExists: both REST
+servers render FailedPrecondition as HTTP 409 Conflict (#665), and the SDK
+reads a 409 as AlreadyExists unless the request was a `DELETE` (a snapshot
+delete stays FailedPrecondition). `TestVMLifecycleSDKParity_*`
 (`pkg/api/daemon/compute_sdk_parity_test.go`) holds this over REST, MCP, QUIC,
 gRPC, the Unix socket and the embedded transport.
 
@@ -441,8 +443,10 @@ Containers are the most evenly covered capability set in this feature.
 | Verify VM attestation | `POST /api/v1/compute/vms/{id}/attest/verify` | `VerifyVMAttestation` | `OpVMVerifyAttest` (`0xBF`) | `vm_attest_verify` | ✅ |
 | Attest container | `POST /api/v1/compute/containers/{id}/attest` | `AttestContainer` | `OpContainerAttest` (`0xEC`) | `container_attest` | ✅ |
 
-`platformctl container attest` is the only attestation CLI verb in the whole
-platform — see [`docs/attestation/cli.md`](../attestation/cli.md).
+`platformctl container attest` is the only compute attestation CLI verb: VM
+attestation has no `platformctl compute` verb. The platform's other attest
+verbs (`device attest`, `device attest-cert`, `piv attest` and the
+`attestation` group) are not compute verbs — see [`docs/attestation/cli.md`](../attestation/cli.md).
 
 The two VM attestation sub-opcodes carry the RPC's request message
 (`AttestVMRequest`, `VerifyVMAttestationRequest`) and are answered by the same
@@ -681,7 +685,7 @@ permission of the RPC it calls (`computeRouteScopes`,
 | `0x09` | `StatusInvalidArgument` | 400 | `ErrNoNetworkInZone` |
 | `0x0A` | `StatusUnavailable` | 503 | Compute not wired into the daemon |
 | `0x0B` | `StatusNotImplemented` | 501 | `ErrComputeProviderNotCompiled` |
-| `0x0C` | `StatusFailedPrecondition` | 400 | VM in the wrong state for the verb |
+| `0x0C` | `StatusFailedPrecondition` | 409 | VM in the wrong state for the verb |
 
 **501 means the binary was built without the provider's build tag** (`awscompute`,
 `azurecompute`, `gcpcompute`) — not that the feature is unfinished.

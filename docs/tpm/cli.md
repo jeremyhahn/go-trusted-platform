@@ -1,6 +1,6 @@
 # Physical TPM 2.0 — CLI
 
-> **Status: NORMATIVE** · Scope: `platformctl tpm` · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: `platformctl tpm` · Last verified: 2026-10-27
 > Conflicts with this document are defects. Fix them here first.
 > Every verb and every flag below was read out of `pkg/cli/commands/tpm/` on
 > 2026-08-18. Flags mentioned only in a command's help text but never registered
@@ -27,13 +27,13 @@ platformctl tpm device     TPM device information
 
 Registered at `pkg/cli/commands/root.go` alongside `platformctl vtpm`.
 
-**`platformctl tpm` is not part of the locked CLI surface.** `docs/11-cli-surface`
+**`platformctl tpm` is not part of the locked CLI surface.** `../handbook/software/docs/11-cli-surface.md`
 defines no `tpm` group for `platformctl`, so there is no cross-binary contract
 to mirror here. Treat this document as the definition until one exists.
 
 ### Global flags
 
-`platformctl` persistent flags (`pkg/cli/commands/root.go:125`). Precedence is
+`platformctl` persistent flags (`pkg/cli/commands/root.go:135`). Precedence is
 **flag > environment > config file > built-in default**.
 
 | Flag | Short | Default | Environment | Meaning |
@@ -111,7 +111,7 @@ How to read a row:
   `verifiedTPMRestricted` when present; the remedy (`tpm iak generate` …) when
   absent.
 - **`PlatformSRK`** is probed at the handle the daemon reports in its `Info`
-  properties (`platform_srk_handle`, from `tpm.platform-srk.handle`); the NOTES
+  properties (`platform_srk_handle`, from `tpm.platform-srk.srk-handle`); the NOTES
   say `handle from daemon config`. `--platform-srk-handle 0x8100XXXX` overrides
   it (`handle from --platform-srk-handle`). Only against a daemon that does not
   report the property does the CLI fall back to `0x81000002` and say
@@ -347,8 +347,9 @@ Two consequences worth stating plainly:
 
 - **The platform PCR cannot be extended from the CLI.** `tpm extend` is the verb
   for it and it does not work. The extension happens automatically in
-  `App.OpenTPM` on every boot; on QUIC it is `SubOpTPM2ExtendPCR`, and on MCP it
-  is `platform_tpm_pcr_extend` — both through `pkg/api/tpmpcr` ([api.md](api.md) §5).
+  `App.OpenTPM` on every boot; over the API it is gRPC `ExtendPCR`, REST
+  `POST /api/v1/tpm/pcrs/extend`, QUIC `SubOpTPM2ExtendPCR` and MCP
+  `platform_tpm_pcr_extend` ([api.md](api.md) §5).
 - **ACME device enrollment cannot be driven from `platformctl tpm`.** Build the
   CSR with `tpm idevid csr` / `tpm iak csr` and complete enrollment through the
   CA surface.
@@ -442,12 +443,13 @@ is the only LDevID verb.
 |---|---|
 | Quote the physical TPM | **No CLI verb anywhere.** There is no `platformctl attestation` group; the only attest verb is `platformctl container attest`, which quotes a container's measurement ([`docs/attestation/cli.md`](../attestation/cli.md) §1). Direct quoting is gRPC `Quote`, REST `POST /api/v1/tpm/quote`, QUIC `0x0F`, MCP `platform_tpm_quote` — over TLS only, bound to the connection ([api.md](api.md) §5) |
 | Verify a quote | gRPC `VerifyQuote`, REST `POST /api/v1/tpm/quote/verify`, QUIC `0x10`, MCP `platform_tpm_verify_quote` |
-| Read or extend physical PCRs | REST `GET /api/v1/tpm/pcrs` (read); extend is QUIC `0x12` only |
+| Read or extend physical PCRs | Read: gRPC `GetPCRs`, REST `GET`/`POST /api/v1/tpm/pcrs`. Extend: gRPC `ExtendPCR`, REST `POST /api/v1/tpm/pcrs/extend`, QUIC `0x12`, MCP `platform_tpm_pcr_extend` |
 | Attestation key (AK/IAK) create, get on the *TPMService* surface (delete is refused, [api.md](api.md) §8) | gRPC `CreateAK`/`GetAK`/`DeleteAK`, REST `/api/v1/tpm/ak`, QUIC `0x0C`–`0x0E` (named IAK), MCP `platform_tpm_iak*` |
 | Import an EK certificate | gRPC `ImportEKCertificate`, REST `POST /api/v1/tpm/ek/certificate`, QUIC `0x08`, MCP `platform_tpm_ek_import_cert` |
 | Get random bytes from the TPM | gRPC `GetRandom`, REST `POST /api/v1/tpm/random`, QUIC `0x14`, MCP `platform_tpm_random` |
 | MakeCredential / ActivateCredential | gRPC, QUIC `0x20`/`0x21`, MCP; also the daemon REST listener's `POST /api/v1/tpm/make-credential` and `POST /api/v1/tpm/activate-credential` ([api.md](api.md) §1) |
-| TPM capabilities, NV index listing, platform attributes | QUIC and MCP only (NV listing: QUIC `0x1B`, MCP `platform_tpm_nv_list`) |
+| TPM capabilities, platform attributes | gRPC `GetCapabilities` / `GetPlatformAttributes`, REST `GET /api/v1/tpm/capabilities` / `GET /api/v1/tpm/platform`, QUIC, MCP `platform_tpm_capabilities` / `platform_tpm_platform` |
+| NV index listing | QUIC `0x1B` and MCP `platform_tpm_nv_list` only |
 | Virtual TPMs | `platformctl vtpm` — [`docs/vtpm/cli.md`](../vtpm/cli.md) |
 
 ---
@@ -476,6 +478,9 @@ declares a `TPMCommands` interface implemented by six protocol adapters, and
 
 Coverage is partial. `TPMCommands` covers `Info`, `Provision`, `Clear`, EK
 create/info/certificate/delete, SRK create/info/delete, `Seal`, `Unseal` and
-`EventLog`. **NVRAM, device identity (IDevID/IAK/LDevID), `flush`, `status` and
+`EventLog`. A second interface, `TPMAttrCommands`
+(`test/integration/tpm/attrs_commands.go`), drives `Capabilities`,
+`PlatformAttributes`, `ExtendPCR`, `MakeCredential` and `ActivateCredential`
+over the RPC transports (these have no CLI verb). **NVRAM, device identity (IDevID/IAK/LDevID), `flush`, `status` and
 `device attributes` have no parity coverage.** The naming mismatch against the
 convention, and the gap, are raised for the owner rather than marked satisfied.

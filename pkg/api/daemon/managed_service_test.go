@@ -246,7 +246,10 @@ func grpcLifecycleOver(t *testing.T, svc *Service, lis net.Listener, target stri
 	go func() { served <- server.Serve(lis) }()
 	t.Cleanup(func() {
 		server.Stop()
-		assert.NoError(t, <-served)
+		// Stop can win the race with Serve's start; Serve then returns ErrServerStopped, its other clean-shutdown result.
+		if err := <-served; !errors.Is(err, grpc.ErrServerStopped) {
+			assert.NoError(t, err)
+		}
 	})
 
 	// Local credentials refuse any dial that is not loopback or a Unix socket.
@@ -295,8 +298,8 @@ var lifecycleTransports = map[string]lifecycleTransport{
 		rec := httptest.NewRecorder()
 		server.router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/services/tpm/"+verb, nil))
 		assert.Contains(t, rec.Body.String(), "cannot be started or stopped at runtime")
-		// 400 is how the platform REST mapper sends FailedPrecondition.
-		if rec.Code == http.StatusBadRequest {
+		// 409 is how the platform REST mapper sends FailedPrecondition (#665).
+		if rec.Code == http.StatusConflict {
 			return codes.FailedPrecondition
 		}
 		return codes.Unknown

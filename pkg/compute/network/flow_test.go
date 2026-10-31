@@ -663,6 +663,7 @@ type mockFlowController struct {
 	deleteFlowCalled bool
 	setVLANCalled    bool
 	shouldFail       bool
+	lastVLAN         uint16
 }
 
 func (m *mockFlowController) AddFlow(ctx context.Context, bridge string, rule *FlowRule) error {
@@ -691,6 +692,7 @@ func (m *mockFlowController) GetFlows(ctx context.Context, bridge string) ([]*Fl
 
 func (m *mockFlowController) SetPortVLAN(ctx context.Context, bridge string, portID string, vlan uint16) error {
 	m.setVLANCalled = true
+	m.lastVLAN = vlan
 	if m.shouldFail {
 		return ErrFlowRule{Operation: "SetPortVLAN", Reason: "mock error"}
 	}

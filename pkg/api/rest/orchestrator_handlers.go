@@ -20,7 +20,6 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
@@ -81,10 +80,7 @@ func NewOrchestratorHandlers(orchestrator platformv1.OrchestratorServiceServer, 
 		guard = (*ScopeGuard)(nil)
 	}
 	return &OrchestratorHandlers{
-		protoResponder: protoResponder{
-			logger:   logger,
-			statuses: map[codes.Code]int{codes.FailedPrecondition: http.StatusConflict},
-		},
+		protoResponder: protoResponder{logger: logger},
 		orchestrator:   orchestrator,
 		guard:          guard,
 		systemTenantID: systemTenantID,

@@ -112,7 +112,8 @@ func verdictStreamServer(t *testing.T, listener net.Listener, opts ...grpc.Serve
 	t.Cleanup(func() {
 		f.Close()
 		grpcServer.GracefulStop()
-		if err := <-served; err != nil {
+		// Stop can win the race with Serve's start; Serve then returns ErrServerStopped, its other clean-shutdown result.
+		if err := <-served; err != nil && !errors.Is(err, grpc.ErrServerStopped) {
 			t.Errorf("Serve: %v", err)
 		}
 	})

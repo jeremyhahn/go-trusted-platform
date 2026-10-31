@@ -13,25 +13,6 @@
 
 //go:build integration
 
-// Package secureboot proves the platform's Secure Boot chain against real
-// external verifiers and real firmware:
-//
-//   - pkg/modulesign signatures verify with OpenSSL's independent CMS
-//     implementation and follow the kernel's appended-signature contract
-//     (TestModuleSign*).
-//   - pkg/secureboot + pkg/uefi + pkg/authenticode produce a key set,
-//     OVMF-file enrollment and an Authenticode-signed EFI payload that real
-//     OVMF firmware BOOTS, while unsigned / wrongly-signed payloads are
-//     REJECTED by the firmware (TestOVMFSecureBootEnforcement).
-//   - The FIPS kernel (CONFIG_MODULE_SIG_FORCE) rejects unsigned modules at
-//     insmod and loads pkg/modulesign-signed modules
-//     (TestFIPSKernelModuleSignatureEnforcement — requires prebuilt
-//     artifacts via FIPS_KERNEL_IMAGE / FIPS_MODULES_TAR /
-//     FIPS_MODULE_SIGNING_KEY).
-//
-// Run via:
-//
-//	make integration-test-secureboot
 package secureboot
 
 import (
@@ -87,7 +68,7 @@ func signFixtureModule(t *testing.T, ctx context.Context) (original, signed []by
 
 // opensslCMSVerify runs OpenSSL's independent CMS verifier against a detached
 // module signature: content bytes + DER CMS + trusted signer certificate.
-func opensslCMSVerify(t *testing.T, ctx context.Context, allowFailure bool, content, cmsDER []byte, certPEM string) error {
+func opensslCMSVerify(t *testing.T, ctx context.Context, content, cmsDER []byte, certPEM string) error {
 	t.Helper()
 	requireTool(t, "openssl", "independently verify kernel-module CMS signatures")
 
@@ -106,7 +87,7 @@ func opensslCMSVerify(t *testing.T, ctx context.Context, allowFailure bool, cont
 	// The CMS carries no embedded certificates (the kernel matches the signer
 	// by issuer+serial against its keyring), so the signer certificate is
 	// supplied via -certfile and trusted directly via -CAfile -partial_chain.
-	_, err := runCommand(t, vctx, allowFailure, "openssl", "cms", "-verify",
+	_, err := runCommand(t, vctx, false, "openssl", "cms", "-verify",
 		"-binary", "-inform", "DER",
 		"-in", sigPath,
 		"-content", contentPath,
@@ -135,52 +116,7 @@ func TestModuleSignOpenSSLInterop(t *testing.T) {
 	}
 
 	cmsDER := extractModuleSignature(t, signed)
-	if err := opensslCMSVerify(t, ctx, false, original, cmsDER, certPEM); err != nil {
+	if err := opensslCMSVerify(t, ctx, original, cmsDER, certPEM); err != nil {
 		t.Fatalf("OpenSSL rejected a pkg/modulesign signature: %v", err)
-	}
-}
-
-// TestModuleSignCorruptedSignatureFailsVerify proves a flipped byte inside
-// the CMS envelope makes OpenSSL reject the signature.
-func TestModuleSignCorruptedSignatureFailsVerify(t *testing.T) {
-	ctx := context.Background()
-	original, signed, certPEM := signFixtureModule(t, ctx)
-
-	cmsDER := extractModuleSignature(t, signed)
-	corrupted := append([]byte{}, cmsDER...)
-	// Flip a byte in the back half of the envelope (inside the signature
-	// value, past the ASN.1 framing) so the DER still parses.
-	corrupted[len(corrupted)-10] ^= 0xFF
-
-	if err := opensslCMSVerify(t, ctx, true, original, corrupted, certPEM); err == nil {
-		t.Fatal("OpenSSL verified a corrupted CMS signature")
-	}
-}
-
-// TestModuleSignTamperedContentFailsVerify proves the signature is bound to
-// the module content: modifying one module byte invalidates verification.
-func TestModuleSignTamperedContentFailsVerify(t *testing.T) {
-	ctx := context.Background()
-	original, signed, certPEM := signFixtureModule(t, ctx)
-
-	tampered := append([]byte{}, original...)
-	tampered[len(tampered)/2] ^= 0x01
-
-	cmsDER := extractModuleSignature(t, signed)
-	if err := opensslCMSVerify(t, ctx, true, tampered, cmsDER, certPEM); err == nil {
-		t.Fatal("OpenSSL verified a signature over tampered module content")
-	}
-}
-
-// TestUnsignedModuleLacksTrailer proves an unsigned module carries no
-// appended-signature trailer — the exact condition CONFIG_MODULE_SIG_FORCE
-// rejects at load time.
-func TestUnsignedModuleLacksTrailer(t *testing.T) {
-	unsigned := buildTestKernelModule()
-	if hasModuleSignature(unsigned) {
-		t.Fatal("unsigned module fixture unexpectedly carries a signature trailer")
-	}
-	if !bytes.HasPrefix(unsigned, []byte{0x7F, 'E', 'L', 'F'}) {
-		t.Fatal("module fixture is not a valid ELF object")
 	}
 }

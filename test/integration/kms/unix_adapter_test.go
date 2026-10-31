@@ -51,7 +51,10 @@ func TestAwaitUnixReady(t *testing.T) {
 	go func() { served <- server.Serve(listener) }()
 	t.Cleanup(func() {
 		server.Stop()
-		assert.NoError(t, <-served)
+		// Stop can win the race with Serve's start; Serve then returns ErrServerStopped, its other clean-shutdown result.
+		if err := <-served; !errors.Is(err, grpc.ErrServerStopped) {
+			assert.NoError(t, err)
+		}
 	})
 
 	conn := unixClient(t, socketPath)

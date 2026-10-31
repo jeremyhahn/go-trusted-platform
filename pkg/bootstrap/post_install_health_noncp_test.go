@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -171,19 +172,48 @@ func TestAwaitPostInstallHealth_NonControlPlane_LeafFromAnotherCAFails(t *testin
 
 func TestAwaitPostInstallHealth_NonControlPlane_NotServingFailsAtTheDeadline(t *testing.T) {
 	cp := newTestCPPKI(t)
-	o := newNodeHealthTestOrchestrator(t, cp, issueTestNodeLeaf(t, cp, "gw.example.test"), newFakeHealthTicker(0))
+	// The deadline fires when the wait falls through to its ticker, which is
+	// after the first round of probes has recorded the refused dial. A wall
+	// clock deadline raced that probe under -race (main red, run 64653).
+	ctx := newCuedDeadlineContext()
+	o := newNodeHealthTestOrchestrator(t, cp, issueTestNodeLeaf(t, cp, "gw.example.test"), newHookedHealthTicker(0, ctx.expire))
 	writeRoleTemplate(t, o, RoleGateway, gatewayTemplate)
 	port := closedTCPPort(t)
 	o.healthChk.(*httpHealthChecker).httpsPorts = []int{port}
-	o.config.Platform.HealthTimeout = 50 * time.Millisecond
 	node := &DiscoveredNode{NodeConfig: NodeConfig{Hostname: "gw1", Role: RoleGateway}}
 
-	err := o.awaitPostInstallHealth(t.Context(), node, []string{"127.0.0.1"}, "")
+	err := o.awaitPostInstallHealth(ctx, node, []string{"127.0.0.1"}, "")
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("a node that never serves must fail at the health deadline, got %v", err)
 	}
 	if !strings.Contains(err.Error(), "connection refused") {
 		t.Errorf("the refused dial must be reported, got %v", err)
+	}
+}
+
+// cuedDeadlineContext is a context whose deadline passes when the test says
+// so: expire closes Done and Err reports context.DeadlineExceeded, which the
+// health wait's own timeout context inherits from its parent.
+type cuedDeadlineContext struct {
+	context.Context
+	done chan struct{}
+	once sync.Once
+}
+
+func newCuedDeadlineContext() *cuedDeadlineContext {
+	return &cuedDeadlineContext{Context: context.Background(), done: make(chan struct{})}
+}
+
+func (c *cuedDeadlineContext) expire() { c.once.Do(func() { close(c.done) }) }
+
+func (c *cuedDeadlineContext) Done() <-chan struct{} { return c.done }
+
+func (c *cuedDeadlineContext) Err() error {
+	select {
+	case <-c.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
 	}
 }
 

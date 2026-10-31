@@ -1,7 +1,7 @@
 # DNS Security
 
 > **Status: REFERENCE** · Last verified: 2026-10-18
-> The controls `pkg/dns` applies today, and the ones it does not have. There is no `platformctl dns` group (#954).
+> The controls `pkg/dns` applies today, and the ones it does not have. `platformctl dns` ([cli.md](cli.md)) reaches the same `DNSService` RPCs as the API, under the same authorization.
 
 ## Controls in the code
 

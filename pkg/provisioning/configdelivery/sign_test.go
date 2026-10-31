@@ -16,6 +16,7 @@ package configdelivery
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"testing"
@@ -154,6 +155,45 @@ func TestService_SignDigest_HappyPath(t *testing.T) {
 	}
 	if !bytes.Equal(signer.lastDigest, digest) {
 		t.Fatalf("signer received wrong digest: %x", signer.lastDigest)
+	}
+}
+
+// TestRemoteDBKeyRefs_StoredNumbersDecode pins #125: a profile read from the
+// store holds its numbers as json.Number (the DAO decodes with UseNumber). The
+// secure-boot section must still decode into the typed struct's int fields;
+// a plain yaml.Marshal quoted the number and the decode refused it.
+func TestRemoteDBKeyRefs_StoredNumbersDecode(t *testing.T) {
+	profile := remoteSignProfile("")
+	secureBoot := profile.Config.(map[string]interface{})["secure-boot"].(map[string]interface{})
+	secureBoot["db"].(map[string]interface{})["rsa"] = map[string]interface{}{"keysize": json.Number("4096")}
+
+	keyURI, certCN, err := remoteDBKeyRefs(profile, "db")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if keyURI != "kms://platform/secureboot/db" || certCN != "Trusted Platform Secure Boot DB" {
+		t.Fatalf("got key uri %q, cert cn %q", keyURI, certCN)
+	}
+
+	sb, err := secureBootFromProfile(profile)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sb.DB.RSAConfig == nil || sb.DB.RSAConfig.KeySize != 4096 {
+		t.Fatalf("expected db rsa keysize 4096, got %+v", sb.DB.RSAConfig)
+	}
+}
+
+// A json.Number that holds no number makes the config unserializable.
+func TestRemoteDBKeyRefs_InvalidStoredNumber(t *testing.T) {
+	profile := remoteSignProfile("")
+	profile.Config.(map[string]interface{})["port"] = json.Number("not-a-number")
+
+	_, _, err := remoteDBKeyRefs(profile, "db")
+
+	var notConfigured ErrRemoteSignNotConfigured
+	if !errors.As(err, &notConfigured) || notConfigured.Reason != "platform config is not serializable" {
+		t.Fatalf("expected the unserializable-config refusal, got %v", err)
 	}
 }
 

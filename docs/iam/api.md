@@ -21,8 +21,9 @@ QUIC: 22 IAM opcodes (`sdk/go/wire/quicwire/protocol.go`) — users
 `0xA9`–`0xAD`, roles `0xB5`–`0xBA`, groups `0xBB`–`0xBF`, and the extended
 range `0xF6`–`0xFB` — plus tenant records under the `OpIAMCategory` (`0x51`)
 category (`iam_opcodes.go`). The full byte map is §5a.
-MCP: 25 `iam_*` tools; 21 answer through `IAMGRPCService`, `iam_verify_token`
-through `IAMTokenService`, and 3 refuse (§8).
+MCP: 28 `iam_*` tools; 24 answer through `IAMGRPCService`, `iam_verify_token`
+through `IAMTokenService`, and 3 refuse — `iam_authenticate`,
+`iam_create_token` and `iam_revoke_token` (§6).
 
 ---
 
@@ -68,6 +69,38 @@ return the resource over REST as they do over gRPC. Create and List still use th
 unscoped form, but they carry the request's `tenant_id` in the body, so a
 foreign tenant is refused there and surfaces as `PermissionDenied`, as on
 gRPC; an empty one acts on the session's tenant.
+
+The status-only operations — Delete on users, roles, groups, tenants, policies
+and apps, AssignRole, RevokeRole, AddGroupMember and RemoveGroupMember — answer
+their proto reply as the envelope payload, `{"status": {"success": true,
+"message": "..."}, "timestamp": "..."}`, the shape the gRPC service returns and
+the SDK decodes (#445). They previously answered a bare `{"success", "message"}`
+that the SDK decoded as an empty status.
+
+The six list operations — ListUsers, ListGroups, ListRoles, ListTenants,
+ListPolicies and ListApps — answer their proto reply (`ListIAMUsersResponse`,
+...) as the envelope payload, in camelCase protojson, the shape the gRPC
+service returns (#445):
+
+```json
+{"users": [{"id": "...", "tenantId": "...", "createdAt": "..."}],
+ "pagination": {"page": 1, "pageSize": 50, "totalPages": 1, "totalItems": 3},
+ "total": "3", "timestamp": "..."}
+```
+
+The items key is the resource plural (`users`, `groups`, `roles`, `tenants`,
+`policies`, `apps`), each item the `IAM*` message gRPC returns; REST and gRPC
+build both from the same converters (`pkg/webservice/v1/rest/iam/proto.go`).
+`page` is the page `?offset=` falls on, `pageSize` the applied `?limit=`
+(default 50, at most 1000), `totalPages` and `totalItems` the totals;
+`total` repeats `totalItems` as a protojson int64 string, and protojson omits
+a zero field. They previously answered `{"total", "limit", "offset"}` with
+snake_case items, a shape the SDK's generated replies do not carry. The Go SDK's REST
+transport routes ListUsers, ListGroups, ListRoles and ListTenants with no
+query parameters, so it reads page 1 of 50. No policy or application RPC has
+an SDK REST route. The web console reads the list replies typed as the
+JavaScript SDK's `ListIAM*Response`; the single-resource Get replies stay the
+bare resource, so the console still accepts both a bare and a wrapped one there.
 
 Rows below give the unscoped path; the tenant-scoped equivalent always exists.
 
@@ -115,7 +148,7 @@ address when it has no local part (`UsernameFromEmail` in
 
 **Group membership is present on every transport except the CLI and the
 embedded transport.** On the CLI both verbs are unimplemented stubs — see
-[cli.md](cli.md) §4; on the embedded transport go-quicbaas registers no handler
+[cli.md](cli.md) §3; on the embedded transport go-quicbaas registers no handler
 for them — see [SPEC](../SPEC.md#interfaces).
 
 ## 5. Roles, policies and applications
@@ -284,9 +317,10 @@ look.
 authenticated caller holding the `admin` role, and the tenant-lifecycle routes
 (`/api/v1/iam/tenants*`) additionally require the caller to be in the system
 tenant. Denials are `401` (no session) and `403` (wrong role or wrong tenant).
-The router refuses to build without those guards, so the surface is either
-gated or absent. Details and rationale:
-[architecture.md §Authorization Flow](architecture.md#authorization-flow) and
+`pkg/webservice/v1/rest/iam/router.go` mounts `Authenticate` and
+`RequireAdmin` on the whole `/api/v1/iam` subtree and `RequireSystemTenant` on
+the tenant-record routes; the router refuses to build without those guards
+(`ErrAuthorizationRequired`), so the surface is either gated or absent. Details and rationale:
 [`docs/auth/architecture.md` §6c](../auth/architecture.md).
 
 That gate is REST-only; the gRPC, QUIC and MCP pictures follow.
@@ -354,14 +388,14 @@ on the `OpTenant*` bytes, which dispatch to the platform `TenantService`
 ([`docs/tenant/`](../tenant/)): an IAM tenant call reached the wrong service,
 and the catalog could not give one byte both meanings' scopes.
 
-**Twenty-five of the 28 `iam_*` MCP tools are in the MCP authorization map
-(#304)**, each with the `resource:action` of the `PlatformIAMService` method
-it answers through (`pkg/api/grpc/method_permissions.go`;
+**All 28 `iam_*` MCP tools are in the MCP authorization map (#304)**: 27
+carry the `resource:action` of the `PlatformIAMService` method they answer
+through, and `iam_authenticate` is open (below) (`pkg/api/grpc/method_permissions.go`;
 `toolPermissionCatalog`, `pkg/api/mcp/authz.go`):
 
 | Scope | Tools |
 |---|---|
-| `iam:write` | `iam_create_user`, `iam_update_user`, `iam_update_group`, `iam_create_role`, `iam_update_role`, `iam_assign_role`, `iam_revoke_role`, `iam_create_group`, `iam_add_group_member`, `iam_remove_group_member`, `iam_create_tenant` |
+| `iam:write` | `iam_create_user`, `iam_update_user`, `iam_update_group`, `iam_create_role`, `iam_update_role`, `iam_assign_role`, `iam_revoke_role`, `iam_create_group`, `iam_add_group_member`, `iam_remove_group_member`, `iam_create_tenant`, `iam_create_token`, `iam_revoke_token` |
 | `iam:delete` | `iam_delete_user`, `iam_delete_role`, `iam_delete_group`, `iam_delete_tenant` |
 | `iam:read` | `iam_get_user`, `iam_list_users`, `iam_get_role`, `iam_list_roles`, `iam_get_group`, `iam_list_groups`, `iam_get_tenant`, `iam_list_tenants`, `iam_check_permission`, `iam_verify_token` |
 

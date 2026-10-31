@@ -111,7 +111,9 @@ xkms backend, asks it to generate a key, and gets back a `crypto.Signer`;
 injected `crypto.Signer` and never sees key bytes at all. The backend
 vocabulary — `StoreSoftware`, `StorePKCS11`, `StoreTPM2`, `StoreAWSKMS`,
 `StoreAzureKV`, `StoreGCPKMS`, `StoreVault` — is go-xkms's, reached through the
-go-quicbaas SDK.
+go-quicbaas SDK. `backendToStoreType` maps an unknown backend type to
+`StoreSoftware` without an error; only `createXKMSBackend` refuses an
+unsupported type.
 
 One honest exception, marked `DEFERRED` in the code: `XKMSManager` keeps a
 `rawBackend *xkmssdk.SoftwareBackend` so it can export an RSA private key to
@@ -286,13 +288,15 @@ what it is.
 - **It does not offer a remote enrollment RPC.** By design — see §3.
 - **It does not sign modules anywhere in the production path.** `pkg/modulesign`
   is complete and proven against OpenSSL and a real FIPS kernel, but the only
-  callers today are the integration tests; in-tree modules are signed by the
+  callers today are the tests; in-tree modules are signed by the
   kernel build itself. Out-of-tree module signing is a library capability with
   no CLI verb. **PLANNED** surface.
 - **It does not support embedded or mobile firmware.** No AVR, no Raspberry Pi
   OTP boot, no Android/AVB, no OTA, no ISP flashing, no `platformctl firmware`
-  command group. `pkg/firmware`, `pkg/ota`, `pkg/avr`, `pkg/rpi` and
-  `pkg/android` **do not exist** (grepped 2026-08-18). Everything in this
+  command group. `pkg/ota`, `pkg/avr`, `pkg/rpi` and `pkg/android` **do not
+  exist**; `pkg/firmware` holds only `pkg/firmware/avr/attestation`, the AVR
+  evidence verifier described in [avr-attestation.md](avr-attestation.md), with
+  no sign, flash or OTA path. Everything in this
   folder's `README.md`, `rpi.md`, `android.md` and `configuration.md`
   describing those platforms is **PLANNED**, not shipped — see §9.
 
@@ -303,14 +307,14 @@ the code, the code is right.
 
 | Legacy claim | Reality in code |
 |---|---|
-| `architecture.md` (previous revision): "Firmware support is integrated into go-trusted-platform as `pkg/firmware`" with `pkg/firmware/{avr,rpi,android,signing,trust,encryption,testing}` and `pkg/ota/{avr,rpi,android}.go` | **None of those packages exist.** The shipped firmware surface is the six packages in this document's scope line. |
+| `architecture.md` (previous revision): "Firmware support is integrated into go-trusted-platform as `pkg/firmware`" with `pkg/firmware/{avr,rpi,android,signing,trust,encryption,testing}` and `pkg/ota/{avr,rpi,android}.go` | **None of those packages exist.** The shipped firmware surface is the six packages in this document's scope line, plus `pkg/firmware/avr/attestation` (AVR attestation evidence only; see [avr-attestation.md](avr-attestation.md)). |
 | `README.md`: `platformctl firmware sign\|flash\|attest\|test`, `platformctl firmware android …`, `platformctl firmware ota configure`, `platformctl ota update\|status\|rollback`, `platformctl vtpm install-swtpm\|create-bundle\|deploy-bundle` | **No such verbs.** There is no `firmware` or `ota` command group; the real `platformctl vtpm` verbs are in [`docs/vtpm/cli.md`](../vtpm/cli.md). |
 | `README.md`, `configuration.md`: a top-level `firmware:` config section | Does not exist. The legacy files already flag this as PROPOSED in places; treat the whole section as PLANNED. |
 | `secure-boot.md`: `uefi.ReadVariable(...)` / `uefi.WriteVariable(...)` | Those functions are in **`pkg/uefi/firmware`**, not `pkg/uefi`, and their signatures differ: `firmware.ReadVariable(name, guid) ([]byte, uint32, error)`, `firmware.WriteVariable(name, guid, attrs, data) error`. |
 | `secure-boot.md`, `uki.md`: `authenticode.NewSigner(&authenticode.SignerOptions{...})` | The constructor takes a context first: `authenticode.NewSigner(ctx, opts)`. |
 | `secure-boot.md`: `signer.SignFile(ukiPath)` | `SignFile(inputPath, outputPath string)` — two arguments; signing in place is `SignFile(ukiPath, ukiPath)`. The output is written to a temporary file beside it and renamed over it, so a failed signing leaves the existing file untouched. The installer signs to `<uki>.signed` and renames. |
-| `uki.md`: "Uses kernel's built-in EFI stub (CONFIG_EFI_STUB)"; "When `Stub` is nil, the builder uses the kernel itself as the base PE" | The opposite. `builder.loadStub` reads `uki.DefaultStubPath` (`/usr/lib/systemd/boot/efi/linuxx64.efi.stub`) when `UKI.Stub` is nil, precisely because the kernel's own EFI stub does not read PE sections. The kernel goes into the `.linux` section. (One log line in `builder.go` still says "Kernel loaded as base PE"; the log string is stale, the behaviour is not.) |
-| `uki.md`: per-architecture EFI stub paths for aarch64/arm/riscv64 | `SetArchitecture` records the architecture and nothing else. Both builders always read `DefaultStubPath`. Non-x86_64 stub selection is **PLANNED**. |
+| `uki.md`: "Uses kernel's built-in EFI stub (CONFIG_EFI_STUB)"; "When `Stub` is nil, the builder uses the kernel itself as the base PE" | The opposite for the native builder. `builder.loadStub` reads the host architecture's systemd stub (`uki.StubPath(uki.HostArchitecture())`, i.e. `uki.DefaultStubPath` = `/usr/lib/systemd/boot/efi/linuxx64.efi.stub` on x86_64) when `UKI.Stub` is nil, precisely because the kernel's own EFI stub does not read PE sections. The kernel goes into the `.linux` section. (One log line in `builder.go` still says "Kernel loaded as base PE"; the log string is stale, the behaviour is not.) |
+| `uki.md`: per-architecture EFI stub paths for aarch64/arm/riscv64 | `uki.StubPath` knows the x86_64, aarch64, arm and riscv64 stubs, and the native builder picks the **host** architecture's stub when constructed. `SetArchitecture` records the target architecture and nothing else, so a cross-architecture build needs an explicit `UKI.Stub`. The objcopy builder never reads a stub at all: the kernel is its base PE, it always records `x86_64`, and it ignores `UKI.Stub`. |
 | `uki.md`: `logging.NewLogger(logging.INFO)` | `logging.NewLogger(level slog.Level, ...)`. |
 | `uki.md`: `types.KeyAttributes` | `xkmssdk.KeyAttributes`, from `go-quicbaas/sdk/go/xkms`. |
 | Legacy files cite absolute workstation paths and an internal IP | Removed here. This folder is publication-bound; use `<install-dir>`, `$HOME`, `example.com`. |
@@ -332,5 +336,6 @@ exactly that certificate — the same binding `uefi.VerifySignedUKI` enforces.
 - Legacy notes retained in this folder: [secure-boot.md](secure-boot.md),
   [uefi.md](uefi.md), [uefi-secure-boot.md](uefi-secure-boot.md),
   [uki.md](uki.md), [authenticode.md](authenticode.md), [bios.md](bios.md),
-  and the PLANNED device notes [rpi.md](rpi.md), [android.md](android.md).
+  and the PLANNED device notes [rpi.md](rpi.md), [android.md](android.md),
+  plus [avr-attestation.md](avr-attestation.md) for `pkg/firmware/avr/attestation`.
   The legacy ROADMAP.md and avr.md are deleted.

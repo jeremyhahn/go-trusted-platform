@@ -50,6 +50,7 @@ choose. A `PutObject` `replication_policy.mode` is empty, `sync`, `async` or
 
 | Cause | gRPC status |
 |-------|-------------|
+| The caller's context is cancelled or its deadline passes | `CANCELLED` or `DEADLINE_EXCEEDED` |
 | The node's DAO factory has no SDK, or the SDK does not serve the group | `UNAVAILABLE`, `ErrorInfo` reason `SERVICE_NOT_CONFIGURED`, metadata `service` = `objectstorage` |
 | A required field is empty, a `limit` is negative, or a replication mode is unknown | `INVALID_ARGUMENT`, naming the field |
 | The SDK answers with a typed error (`QBError`) | its code's gRPC twin (`barrier.SDKCode`): `NotFound` `NOT_FOUND`, `AlreadyExists` `ALREADY_EXISTS`, ... |

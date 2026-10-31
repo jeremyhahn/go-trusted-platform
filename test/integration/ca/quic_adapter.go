@@ -332,9 +332,9 @@ func (q *QUICAdapter) Name() string {
 
 // Setup establishes the QUIC connection to platformd.
 func (q *QUICAdapter) Setup(ctx context.Context) error {
-	endpoint := os.Getenv(EnvPlatformQUICEndpoint)
-	if endpoint == "" {
-		endpoint = GetServiceEndpoints().PlatformQUIC
+	endpoint, err := helpers.RequireEndpoint(EnvPlatformQUICEndpoint)
+	if err != nil {
+		return err
 	}
 	q.endpoint = endpoint
 

@@ -822,18 +822,25 @@ func wireOverlayRuntime(ctx context.Context, cfg *ServeConfig, anchor *trust.Anc
 		return err
 	}
 	WireOverlayPlatform(runtime, client)
-	runtime.OverlayIPsec = newOverlayIPsec
+	runtime.OverlayIPsec = newOverlayIPsec(anchor)
 	return nil
 }
 
-// newOverlayIPsec builds the overlay's IPsec: an ipsec.Service that follows
-// the overlay's flood lists, as platformd's follows its static peers.
-func newOverlayIPsec(cfg *ipsecconfig.Config, admitter modes.VTEPAdmitter, logger *slog.Logger) (gateway.OverlayIPsec, error) {
-	svc, err := ipsec.NewEVPNService(cfg, admitter, logger)
-	if err != nil {
-		return nil, err
+// newOverlayIPsec returns the builder of the overlay's IPsec: an
+// ipsec.Service that follows the overlay's flood lists, as platformd's
+// follows its static peers. Its tunnel identity must chain to anchor; a
+// gatewayd without a platform-ca-file builds none.
+func newOverlayIPsec(anchor *trust.Anchor) func(*ipsecconfig.Config, modes.VTEPAdmitter, *slog.Logger) (gateway.OverlayIPsec, error) {
+	return func(cfg *ipsecconfig.Config, admitter modes.VTEPAdmitter, logger *slog.Logger) (gateway.OverlayIPsec, error) {
+		if anchor == nil {
+			return nil, ipsec.ErrMissingDependency
+		}
+		svc, err := ipsec.NewEVPNService(cfg, admitter, anchor, logger)
+		if err != nil {
+			return nil, err
+		}
+		return svc, nil
 	}
-	return svc, nil
 }
 
 // WireOverlayPlatform points the overlay admission inputs of runtime at
@@ -869,7 +876,7 @@ func overlayPlatformdConfig(cfg *ServeConfig) proxysvc.PlatformdConfig {
 // A proxy listener address that cannot be turned into a rule is a
 // configuration error, not a silently open port.
 func buildHostRuntime(cfg *ServeConfig, anchor *trust.Anchor, logger *slog.Logger) (*gateway.HostRuntime, error) {
-	host := &gateway.HostRuntime{Logger: logger}
+	host := &gateway.HostRuntime{Logger: logger, IPsecInventory: ipsecInventoryPath(cfg.DataDir)}
 	if cfg.Proxy != nil && cfg.Proxy.Enabled && len(cfg.Proxy.Listeners) > 0 {
 		addresses := make(map[string]string, len(cfg.Proxy.Listeners))
 		for _, l := range cfg.Proxy.Listeners {
@@ -968,7 +975,7 @@ const gatewayTOFUPinDir = "trust/tofu-pins"
 // gatewayVPNRevocationJournal is where gatewayd journals the management
 // VPN's revocations the control plane has not yet taken, relative to
 // --data-dir.
-const gatewayVPNRevocationJournal = "vpn/pending-revocations.json"
+const gatewayVPNRevocationJournal = "vpn/" + gateway.VPNRevocationJournalFile
 
 // vpnRevocationJournal is the revocation journal under dataDir. Without a
 // data directory it is nil, and a gateway hosting the management VPN refuses
@@ -978,6 +985,20 @@ func vpnRevocationJournal(dataDir string) *gateway.RevocationJournal {
 		return nil
 	}
 	return gateway.NewRevocationJournal(filepath.Join(dataDir, gatewayVPNRevocationJournal))
+}
+
+// gatewayIPsecInventory is the record, under --data-dir, of the ESP pairs
+// the tunnel manager installed: the only state a later sweep removes.
+const gatewayIPsecInventory = "ipsec-installed.json"
+
+// ipsecInventoryPath is the tunnel manager's ESP inventory under dataDir, or
+// "" without a data directory, where nothing is recorded and so nothing is
+// swept.
+func ipsecInventoryPath(dataDir string) string {
+	if dataDir == "" {
+		return ""
+	}
+	return filepath.Join(dataDir, gatewayIPsecInventory)
 }
 
 // tofuScopes reports whether any configured class lists the tofu strategy.

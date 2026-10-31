@@ -142,15 +142,3 @@ type ErrInitResponseInvalid struct {
 func (e *ErrInitResponseInvalid) Error() string {
 	return "barrier_gate: /init response invalid: " + e.Reason
 }
-
-// ErrUDPPortNotBound indicates a UDP probe to the supplied address
-// successfully claimed the port — meaning the production listener was
-// NOT holding it. Used by AssertProductionTransportsAccept's QUIC check.
-type ErrUDPPortNotBound struct {
-	Endpoint string
-}
-
-// Error returns a human-readable description.
-func (e *ErrUDPPortNotBound) Error() string {
-	return "barrier_gate: UDP endpoint " + e.Endpoint + " not bound (no production listener holds it)"
-}

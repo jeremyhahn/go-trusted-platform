@@ -125,6 +125,12 @@ const (
 	// 0x2B and 0x2D (UpdateConfig, FlushCache) were retired unimplemented:
 	// the DNS service has no runtime config update and no cache (#317); do
 	// not reuse them.
+	//
+	// The flat DNS block is full, so DNS operations added after it
+	// multiplex as sub-opcodes under OpDNSCategory (dns_opcodes.go), the
+	// first top-level byte no constant held (CA m1094). The sub-opcode is
+	// payload[0], as under OpGatewayCategory.
+	OpDNSCategory byte = 0x61
 
 	// SDN Overlay/Gateway/IPAM Category Opcodes (0x2E-0x2F)
 	// These are "category" opcodes that multiplex multiple sub-operations.
@@ -197,8 +203,9 @@ const (
 
 	// Compute (0x69). The VM verbs travel as OpVMExtendedCategory
 	// sub-opcodes (vm_opcodes.go). 0x60 is OpObjectStorageCategory
-	// (appservice_opcodes.go) and 0x66 is OpOrchestratorCategory
-	// (orchestrator_opcodes.go); the rest of 0x61-0x6A is unassigned.
+	// (appservice_opcodes.go), 0x61 is OpDNSCategory and 0x66 is
+	// OpOrchestratorCategory (orchestrator_opcodes.go); the rest of
+	// 0x62-0x6A is unassigned.
 	//
 	// OpVMExtendedCategory multiplexes the VM operations (create, delete,
 	// start, stop, get, list, restart, suspend, resume and the operational
@@ -805,6 +812,7 @@ var opcodeNames = map[byte]string{
 	OpDNSResolve:      "DNSResolve",
 	OpDNSGetConfig:    "DNSGetConfig",
 	OpDNSGetMetrics:   "DNSGetMetrics",
+	OpDNSCategory:     "DNSCategory",
 	OpOverlayCategory: "OverlayCategory",
 	OpGatewayCategory: "GatewayCategory",
 

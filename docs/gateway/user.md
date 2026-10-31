@@ -348,15 +348,17 @@ On an internet edge, the parsers that face the internet should not share a
 process with the datapath. The `process:` section turns on the supervised
 model (#557): `gatewayd serve` starts each supervised process as a child,
 dropped to its own privilege class, and restarts it with backoff if it dies.
-Four processes move: `routing` (`transit`, the BGP speaker), `proxy` (the
+Five processes move: `routing` (`transit`, the BGP speaker), `proxy` (the
 authenticating reverse proxy, when `proxy:` enables it) and `provisioning`
 (`edge`, `dhcp`, `pxe`) each run as the service account and hold
 `CAP_NET_BIND_SERVICE` alone; `datapath` (`firewall`, `nat`, `load-balancer`,
 `nat64`, `hostfw`, `tunnels`, `overlay`) stays root but keeps only
-`CAP_NET_ADMIN` and `CAP_NET_RAW`, and is the one process that opens OVSDB.
-Only the management VPN stays in the main process. A desired configuration
-pushed to the gateway goes to the `datapath` process, and a restarted
-`datapath` process gets the last one again and reprograms its flows from it.
+`CAP_NET_ADMIN` and `CAP_NET_RAW`, and is the one process that opens OVSDB;
+`vpn` (the management VPN) runs as the service account with no capability,
+so its admission listener needs a port of 1024 or above (the default is
+4433). A desired configuration pushed to the gateway goes to the `datapath`
+and `vpn` processes, and a restarted one gets the last one again: `datapath`
+reprograms its flows from it, `vpn` re-applies its enrolments and policies.
 The provisioning sections have no backend yet, so enabling one still
 stops the daemon with the section's reason, which now comes from the
 `provisioning` child.
@@ -410,7 +412,8 @@ must be readable by it**: the child reads them after it drops privileges, and
 it exits with an error rather than start without them. For the proxy that
 includes its TLS certificate, key and client CAs, and — when a `trust:` scope
 uses `tofu` — the pin directory `<data-dir>/trust/tofu-pins`, which the
-account must own. A process that has
+account must own. For `vpn` it includes the `control-plane:` certificate and
+key, through which the child records its leases. A process that has
 used up its restart budget stays down, and the gateway status reports it.
 The gateway snapshot still shows the BGP peers, read from the routing
 process; if that process cannot be reached, the snapshot's `bgp.error` says

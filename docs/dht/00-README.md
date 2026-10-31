@@ -3,7 +3,7 @@
 > **Status: NORMATIVE** · Scope: the planned `dht` feature (docs/SPEC.md:53); design only, no code exists · Last verified: 2026-10-21
 > Conflicts with this document are defects. Fix them here first.
 
-Part of [go-trusted-platform](https://github.com/jeremyhahn/go-trusted-platform) - implemented in `pkg/dht/`.
+Part of [go-trusted-platform](https://github.com/jeremyhahn/go-trusted-platform) - a design; no code exists (the planned package is `pkg/dht/`, which is not in the tree). See [architecture.md](architecture.md) §1.
 
 A Distributed Hash Table for the Trusted Computing Platform, providing decentralized key-value storage, consensus, reputation, and cryptographic services. The DHT integrates directly with platform services including TPM 2.0, XKMS (hardware RNG), certificate authority, and QuicBaaS storage.
 
@@ -11,7 +11,7 @@ A Distributed Hash Table for the Trusted Computing Platform, providing decentral
 - **RNG**: Hardware-backed via go-xkms (TPM2 > PKCS#11 > Software)
 - **Storage**: QuicBaaS for persistent DHT state
 - **Attestation**: TPM 2.0 for node identity and quotes
-- **Certificates**: go-xkms for distributed PKI (CA/ACME via pkg/ca + pkg/acme, consumed through go-quicbaas SDK)
+- **Certificates**: go-xkms for distributed PKI (the platform's own `pkg/ca` and `pkg/acme` in this repository, built on the go-xkms re-exports of the go-quicbaas SDK)
 - **Crypto**: go-frost/go-frostdkg for threshold signatures
 
 ---
@@ -46,6 +46,7 @@ A Distributed Hash Table for the Trusted Computing Platform, providing decentral
 | 23 | [P2P DNS](23-p2p-dns.md) | Distributed DNS resolution, automatic naming, custom domains |
 | 24 | [QuicBaaS Schema](24-quicbaas-schema.md) | DHT state storage schema, key naming, indexes, migrations |
 | 25 | [KMS FROST Lifecycle](25-kms-frost-lifecycle.md) | FROST share storage, rotation, backup, TPM-KMS integration |
+| 26 | [Organization Identity](26-organization-identity.md) | Organization identity model |
 | -- | [Constants Reference](00-CONSTANTS.md) | Canonical reference for all system constants and thresholds |
 | -- | [Wire Protocol](wire-protocol.md) | Protocol buffers, message types, transport options |
 | -- | [API Reference](api-reference.md) | Multi-protocol API overview |
@@ -55,7 +56,7 @@ A Distributed Hash Table for the Trusted Computing Platform, providing decentral
 | -- | [MCP API](api-reference-mcp.md) | MCP tools for AI agents |
 | -- | [Unix Socket API](api-reference-unix.md) | Unix socket IPC |
 | -- | [Gateway API](api-reference-gateway.md) | Browser extension gateway |
-| -- | [Roadmap](ROADMAP.md) | Implementation roadmap, phases, and security audit |
+| -- | [Roadmap](ROADMAP.md) | Pointer to [`docs/archive/dht-ROADMAP.md`](../archive/dht-ROADMAP.md): implementation roadmap, phases, and security audit |
 
 ---
 
@@ -307,6 +308,7 @@ All role eligibility thresholds are defined in [09-defense-reputation.md](09-def
 | **CA Participant** | 0.90+ | 120 | Certificate generation, trust decisions |
 | **Hub** | 0.80+ | 110 | Routing hub, regional caching |
 | **Gateway** | 0.85+ | 175 | External connectivity, IPv4 bridge |
+| **AI Arbitrator** | 0.85+ | — | Contract dispute resolution |
 | **Coordinator** | 0.95+ | 185 | Consensus leadership, governance |
 
 ---
@@ -406,12 +408,12 @@ Kademlia Alpha:     3
 
 | Component | Package | Status |
 |-----------|---------|--------|
-| Content Storage | `pkg/content/` | Implemented |
-| Update System | `pkg/updates/` | Implemented |
-| OS Images | `pkg/osimage/` | Implemented |
-| Boot System | `pkg/boot/` | Implemented |
-| Defense System | `pkg/defense/` | Implemented |
-| Git Storage | `pkg/git/` | Implemented |
+| Content Storage | `pkg/content/` | Planned |
+| Update System | `pkg/updates/` | Planned |
+| OS Images | `pkg/osimage/` | Planned |
+| Boot System | `pkg/boot/` | Planned — the existing `pkg/boot/` is the platform's local boot-manager CLI, not a DHT boot server |
+| Defense System | `pkg/defense/` | Planned |
+| Git Storage | `pkg/git/` | Planned |
 | DHT Core | `pkg/dht/core/` | Planned |
 | Service Discovery | `pkg/dht/discovery/` | Planned |
 | Browser Gateway | `pkg/dht/gateway/` | Planned |

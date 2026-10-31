@@ -142,7 +142,7 @@ Every other IAM CLI verb is implemented.
 
 | Layer | Location | Covers |
 |---|---|---|
-| Unit | `pkg/webservice/v1/rest/iam/*_test.go`, `pkg/api/daemon/iam_*_test.go`, `pkg/cli/commands/iam/*_test.go` | Adapter translation, route registration, handler behaviour |
+| Unit | `pkg/webservice/v1/rest/iam/*_test.go`, `pkg/api/daemon/iam_*_test.go`, `pkg/cli/commands/iam/*_test.go` | Adapter translation, route registration, handler behaviour; `TestSDKQUIC_IAMGetUnknownUser` sends a GetUser through the SDK's QUIC transport to a loopback server, across the ALPN handshake and the framing, and gets NotFound on the response frame |
 | Integration | `test/integration/iam/` | Against a running daemon and a real IAM backend |
 
 `iam_service_stub.go` is what the daemon uses when IAM is not wired — the

@@ -496,7 +496,7 @@ func TestTenantGRPCServer_GetTenantByName_Success(t *testing.T) {
 	server := createTestTenantGRPCServer(t)
 
 	// Create a tenant
-	_, err := server.CreateTenant(ctx, &platformv1.CreateTenantRequest{
+	createResp, err := server.CreateTenant(ctx, &platformv1.CreateTenantRequest{
 		Name:        "getbyname-test",
 		DisplayName: "Get By Name Test",
 	})
@@ -510,6 +510,7 @@ func TestTenantGRPCServer_GetTenantByName_Success(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, resp)
 	assert.Equal(t, "getbyname-test", resp.Tenant.Name)
+	assert.Equal(t, createResp.Tenant.Id, resp.Tenant.Id, "the name resolves to the tenant it was created for")
 }
 
 func TestTenantGRPCServer_GetTenantByName_InvalidArgument(t *testing.T) {
@@ -542,6 +543,37 @@ func TestTenantGRPCServer_GetTenantByName_NotFound(t *testing.T) {
 	assert.Equal(t, codes.NotFound, st.Code())
 }
 
+func TestTenantGRPCServer_CreateTenant_Success(t *testing.T) {
+	ctx := context.Background()
+	server := createTestTenantGRPCServer(t)
+
+	resp, err := server.CreateTenant(ctx, &platformv1.CreateTenantRequest{
+		Name:        "create-test",
+		DisplayName: "Create Test Tenant",
+		Labels:      map[string]string{"env": "test"},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, resp.Tenant)
+	assert.NotEmpty(t, resp.Tenant.Id, "the manager assigns the tenant an id")
+	assert.Equal(t, "create-test", resp.Tenant.Name)
+	assert.Equal(t, "Create Test Tenant", resp.Tenant.DisplayName)
+	assert.Equal(t, "test", resp.Tenant.Labels["env"])
+}
+
+func TestTenantGRPCServer_CreateTenant_InvalidArgument(t *testing.T) {
+	ctx := context.Background()
+	server := createTestTenantGRPCServer(t)
+
+	resp, err := server.CreateTenant(ctx, &platformv1.CreateTenantRequest{
+		Name:        "",
+		DisplayName: "Invalid Tenant",
+	})
+
+	assert.Nil(t, resp)
+	assert.Equal(t, codes.InvalidArgument, status.Code(err), "err = %v", err)
+}
+
 // =============================================================================
 // UpdateTenant Tests - Currently at 14.3% coverage
 // =============================================================================
@@ -568,6 +600,9 @@ func TestTenantGRPCServer_UpdateTenant_Success(t *testing.T) {
 	assert.NotNil(t, resp)
 	assert.True(t, resp.Status.Success)
 	assert.Equal(t, "tenant updated successfully", resp.Status.Message)
+	require.NotNil(t, resp.Tenant)
+	assert.Equal(t, "Updated Name", resp.Tenant.DisplayName, "the reply carries the updated tenant")
+	assert.Equal(t, "test", resp.Tenant.Labels["env"])
 }
 
 func TestTenantGRPCServer_UpdateTenant_InvalidArgument(t *testing.T) {
@@ -624,6 +659,9 @@ func TestTenantGRPCServer_DeleteTenant_Success(t *testing.T) {
 	assert.NotNil(t, resp)
 	assert.True(t, resp.Status.Success)
 	assert.Equal(t, "tenant deleted successfully", resp.Status.Message)
+
+	_, err = server.GetTenant(ctx, &platformv1.GetTenantRequest{TenantId: createResp.Tenant.Id})
+	assert.Equal(t, codes.NotFound, status.Code(err), "a deleted tenant is no longer found")
 }
 
 func TestTenantGRPCServer_DeleteTenant_InvalidArgument(t *testing.T) {

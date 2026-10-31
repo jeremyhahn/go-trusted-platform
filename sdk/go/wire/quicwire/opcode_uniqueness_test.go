@@ -41,6 +41,7 @@ const (
 	nsCompute  = "sub-opcode under compute extended category 0x69"
 	nsGateway  = "sub-opcode under the gateway category"
 	nsOverlay  = "sub-opcode under the overlay category"
+	nsDNS      = "sub-opcode under the DNS category"
 )
 
 // opcodeNamespaces classifies every file in this package that declares an
@@ -67,6 +68,7 @@ var opcodeNamespaces = map[string]string{
 	"gateway_perf_opcodes.go":  nsGateway,  // "Performance verification sub-opcodes ... under"
 	"gateway_nat64.go":         nsGateway,  // "NAT64 sub-opcodes ... takes the next free slot"
 	"overlay_opcodes.go":       nsOverlay,  // "Extended overlay opcode category marker"
+	"dns_opcodes.go":           nsDNS,      // "DNS sub-opcodes, carried in payload[0] under OpDNSCategory"
 }
 
 // knownCollisions is a RATCHET, not a suppression list. Seven same-namespace
@@ -293,5 +295,61 @@ func TestQUICOpcodes_KnownCollisionsAreStillReal(t *testing.T) {
 			"The collision was fixed but its exemption was left behind. Delete the entry — "+
 			"this list is a ratchet over #386 and may only shrink.",
 			len(stale), stale)
+	}
+}
+
+// retiredTopLevelOpcodes are top-level bytes retired unimplemented. A new
+// constant on one would make an old client's request reach a different
+// operation, so they stay free (DNS UpdateConfig and FlushCache, #317).
+var retiredTopLevelOpcodes = map[byte]string{
+	0x2B: "DNSUpdateConfig",
+	0x2D: "DNSFlushCache",
+}
+
+// TestQUICOpcodes_RetiredBytesStayFree fails when a top-level constant takes
+// a retired byte.
+func TestQUICOpcodes_RetiredBytesStayFree(t *testing.T) {
+	for _, c := range parseOpcodeConstants(t) {
+		if opcodeNamespaces[c.file] != nsTopLevel {
+			continue
+		}
+		if retired, ok := retiredTopLevelOpcodes[c.value]; ok {
+			t.Errorf("%s (%s) takes 0x%02X, retired with %s: allocate a sub-opcode under a category instead",
+				c.name, c.file, c.value, retired)
+		}
+	}
+}
+
+// TestQUICOpcodes_DNSCategoryLayout pins the DNS category byte and its
+// sub-opcodes: the category is a top-level byte of its own and UpdateZone is
+// sub-opcode 0x30 (CA m1094).
+func TestQUICOpcodes_DNSCategoryLayout(t *testing.T) {
+	topLevel := map[byte][]string{}
+	var dnsSubs []opcodeConst
+	for _, c := range parseOpcodeConstants(t) {
+		switch opcodeNamespaces[c.file] {
+		case nsTopLevel:
+			topLevel[c.value] = append(topLevel[c.value], c.name)
+		case nsDNS:
+			dnsSubs = append(dnsSubs, c)
+		}
+	}
+
+	if OpDNSCategory != 0x61 {
+		t.Errorf("OpDNSCategory = 0x%02X, want 0x61", OpDNSCategory)
+	}
+	if names := topLevel[OpDNSCategory]; len(names) != 1 || names[0] != "OpDNSCategory" {
+		t.Errorf("top-level 0x%02X is held by %v, want only OpDNSCategory", OpDNSCategory, names)
+	}
+	if OpDNSUpdateZone != 0x30 {
+		t.Errorf("OpDNSUpdateZone = 0x%02X, want 0x30", OpDNSUpdateZone)
+	}
+	if len(dnsSubs) == 0 {
+		t.Fatal("no DNS sub-opcodes parsed from dns_opcodes.go")
+	}
+	for _, c := range dnsSubs {
+		if c.value < 0x30 || c.value > 0x3F {
+			t.Errorf("%s = 0x%02X is outside the DNS sub-opcode range 0x30-0x3F", c.name, c.value)
+		}
 	}
 }

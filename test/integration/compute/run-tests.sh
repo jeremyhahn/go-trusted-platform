@@ -17,6 +17,16 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
+# Bounded readiness polls (wait_for, process_gone): the image installs the
+# helper; outside the image it comes from the repository.
+if [ -f /usr/local/lib/devcontainer/wait-for.sh ]; then
+    # shellcheck source=build/docker/devcontainer/wait-for.sh
+    source /usr/local/lib/devcontainer/wait-for.sh
+else
+    # shellcheck source=build/docker/devcontainer/wait-for.sh
+    source "$REPO_ROOT/build/docker/devcontainer/wait-for.sh"
+fi
+
 # The tags come from the Makefile, never a hand-written list.
 BUILD_TAGS="${BUILD_TAGS:-integration $(make -s -C "$REPO_ROOT" print-build-tags)}"
 
@@ -68,7 +78,7 @@ setup_ovs() {
             --detach \
             --log-file=/var/log/openvswitch/ovsdb-server.log
 
-        sleep 2
+        wait_for 10 "ovsdb-server on db.sock" sudo ovs-vsctl --no-wait --timeout=1 show || return 1
     fi
 
     # Initialize OVS
@@ -84,7 +94,7 @@ setup_ovs() {
             --detach \
             --log-file=/var/log/openvswitch/ovs-vswitchd.log
 
-        sleep 2
+        wait_for 10 "ovs-vswitchd control socket" sudo ovs-appctl -t ovs-vswitchd version || return 1
     fi
 
     # Verify OVS is running
@@ -169,13 +179,19 @@ teardown_ovs() {
 
     # Stop processes
     if [ -f /var/run/openvswitch/ovs-vswitchd.pid ]; then
-        sudo kill "$(cat /var/run/openvswitch/ovs-vswitchd.pid)" 2>/dev/null || true
-        sleep 1
+        local pid
+        pid="$(cat /var/run/openvswitch/ovs-vswitchd.pid)"
+        sudo kill "$pid" 2>/dev/null || true
+        wait_for 10 "ovs-vswitchd (PID $pid) to exit" process_gone "$pid" ||
+            log_warn "ovs-vswitchd (PID $pid) is still running"
     fi
 
     if [ -f /var/run/openvswitch/ovsdb-server.pid ]; then
-        sudo kill "$(cat /var/run/openvswitch/ovsdb-server.pid)" 2>/dev/null || true
-        sleep 1
+        local pid
+        pid="$(cat /var/run/openvswitch/ovsdb-server.pid)"
+        sudo kill "$pid" 2>/dev/null || true
+        wait_for 10 "ovsdb-server (PID $pid) to exit" process_gone "$pid" ||
+            log_warn "ovsdb-server (PID $pid) is still running"
     fi
 
     log_info "OVS stopped"

@@ -290,7 +290,13 @@ func (s *Server) Close() error
 func Attach(ctx context.Context, conn net.Conn, cfg ClientConfig) (*Export, error)
 func ServerFromCmdline(cmdline string) (ServerAddr, bool, error)
 func NewClientConfig(ctx context.Context, server ServerAddr, anchor *trust.Anchor, idevid tls.Certificate) (ClientConfig, error)
-func OpenMetadataFile(volumeDir, identity, name string) (*MetadataFile, error)
+func OpenMetadataFile(volumes VolumeProvider, identity, name string) (*MetadataFile, error)
+
+type VolumeProvider interface {
+    Create(identity string, size int64) error
+    Attach(identity string) (string, error)
+}
+func NewLocalVolumes(dir string) (*LocalVolumes, error)
 ```
 
 `Attach` is the node's side of the negotiation below. It is specified with the
@@ -307,8 +313,8 @@ refuses with `ErrCmdline`; the installer's `nbd` target calls it.
 - `Certificate`: the server's TLS certificate.
 - `Anchor`: a `*trust.Anchor`, the platform anchor.
 - `Identities`: the hostnames of the manifest's `diskless-nbd` entries.
-- `VolumeDir` and `VolumeSize`: where volumes live and the size each is
-  created at.
+- `Volumes` and `VolumeSize`: the `VolumeProvider` that holds the volumes,
+  and the size each is created at.
 - `HandshakeTimeout`: default 30 s. It bounds the whole negotiation, the TLS
   handshake included; transmission has no deadline.
 - `Logger`.
@@ -366,13 +372,35 @@ SEND_FUA | SEND_TRIM`. The largest payload is 32 MiB.
 | `DISC` | fsyncs, closes the volume and the connection; no reply | — (a failed fsync ends the session with `ErrVolume`) |
 | any other | — | `EINVAL` |
 
-**Volumes.** A volume lives at `<VolumeDir>/<identity>.img`. The directory is
-`0700` and each file `0600`. It is created with `O_EXCL` and truncated to
-`VolumeSize` on the first attach. After that it keeps its own size, so changing
-`VolumeSize` affects only new devices. Creation is serialised so that two first
-attaches cannot race. `VolumeSize` must be positive and a multiple of 512. An
-identity is accepted only as a DNS hostname (letters, digits, `-` and `.`), so
-it can never name a path outside `VolumeDir`.
+**Volumes.** The server reaches a volume only through `Config.Volumes`, a
+`VolumeProvider`. On every `GO`, `INFO` or `EXPORT_NAME` it calls
+`Create(identity, VolumeSize)`, which makes the volume if it does not exist
+and leaves an existing one as it is, then `Attach(identity)`, which returns
+the path of a regular file or block device. The server opens that path
+read-write and takes the export size by seeking to its end, which a block
+device needs: its `stat` size is 0. A provider refusal is answered
+`NBD_REP_ERR_PLATFORM`, as any `ErrVolume`. The installed-UKI read
+(`OpenMetadataFile`) attaches through the same provider; an `Attach` error
+wrapping `fs.ErrNotExist` is `ErrNotInstalled` there.
+
+| Operation | Built |
+|---|---|
+| create, at the configured size | yes (`Create`) |
+| attach to a device path | yes (`Attach`) |
+| grow-only resize, promote, demote | no: the store built today is local files on one boot node, which has no replica to promote and no resize |
+
+`LocalVolumes` (`NewLocalVolumes(dir)`; an empty `dir` is `ErrInvalidConfig`
+on `VolumeDir`) is that store: a volume lives at `<dir>/<identity>.img`. The
+directory is `0700` and each file `0600`. `Create` makes it with `O_EXCL` and
+truncates it to the size, so changing `VolumeSize` affects only new devices,
+and a size that is not a positive multiple of 512 is `ErrVolume` (`size`).
+Creation is serialised so that two first attaches cannot race. An identity is
+accepted only as a DNS hostname (letters, digits, `-` and `.`), so it can
+never name a path outside `dir`. `Attach` on a missing volume is `ErrVolume`
+(`attach`) wrapping `fs.ErrNotExist`. The container builds the one
+`LocalVolumes` over `NBDConfig.VolumeDir` in `nbdVolumes`
+(`pkg/bootstrap/container/nbd.go`), for the export server and the
+installed-UKI route alike.
 
 **Container wiring.** `container.NewServer` builds the export server only when
 the manifest has a `diskless-nbd` entry; the identities are those entries'
@@ -398,7 +426,10 @@ key with `ErrNBDCredentials`, and a value the export server refuses with
 listeners and before the device-script port, so the port the deploy gate
 probes answers only once a `diskless-nbd` root is reachable; a failed bind is
 `ErrServerStartFailed` and the device-script port never opens. `Stop` closes
-the export server.
+the export server and returns only once its listener is closed and its accept
+loop has exited (`nbd.Server.Close` waits for every running `Serve`), so the
+NBD port no longer answers when `Stop` or a cancelled `Start` returns. A
+`Serve` called after `Close` closes its listener and returns nil at once.
 
 `bootstrap.yaml` accepts `boot_model: diskless-nbd` on a Raspberry Pi
 (`BootModelDisklessNBD`, in `validPiBootModels`); a generic node is refused
@@ -425,7 +456,7 @@ A `diskless-nbd` node boots the installer until its export holds an install,
 then boots the UKI the install wrote. Its device script decides which on every
 request (`deviceBootInfo`, `pkg/bootstrap/container/server.go`) by reading the
 export's [metadata area](../installer/engineering.md#the-nbd-metadata-area)
-with `nbd.OpenMetadataFile(NBDConfig.VolumeDir, <hostname>, "EFI/BOOT/<file>")`,
+with `nbd.OpenMetadataFile(<the container's VolumeProvider>, <hostname>, "EFI/BOOT/<file>")`,
 where `<file>` is `uki.BootFileName` for the media set's architecture
 (`BOOTX64.EFI`, `BOOTAA64.EFI`):
 
@@ -790,6 +821,16 @@ no `rd.luks.*` or `rd.lvm.*`.
     first position and blanks are dropped (`Orchestrator.setSearchDomains`). It
     was once built from a Go map, so its order changed from run to run.
 
+23. **A rollover never leaves the served certificate without a TLSA record**
+    (RFC 7671 §8.1). Completion removes the old records at the name and keeps
+    the one pre-published for the new certificate. If the new certificate
+    cannot be loaded, the server keeps the old one, so the rollover is
+    withdrawn: the pre-published record is removed, the old records stay, and
+    `Wait` returns `ErrCertReloadFailed`. With key reuse the new record is
+    published before the old ones are removed; a reload or publish failure
+    leaves the zone as it was and is returned by both `BeginRollover` and
+    `Wait`.
+
 ## 4. Error semantics
 
 Every error in this feature is a typed struct or a package sentinel;
@@ -1131,8 +1172,8 @@ boundary 4.
 |---|---|---|
 | `<efi>/tpm2/installer.luks` | installer | Encrypted container: LUKS key, recovery key, config |
 | `<efi>/tpm2/seal-platform.pub` / `.priv` | first boot | The production seal. **Presence is the "already provisioned" marker.** |
-| `<efi>/tpm2/seal-upgrade.pub` / `.priv` | nothing in production | Read by the `TPM-Upgrade` strategy every boot, which declines when the files are absent (`pkg/initrd/strategy_tpm_upgrade.go:117-118`). Both writers are unreached: `writeUpgradeSealedObjects` (`pkg/firstboot/executor.go:763-774`) is called only from `Executor.Run`, which nothing calls, and nothing calls `TPMUpgradeStrategy.CreateUpgradeSeal` (`pkg/initrd/strategy_tpm_upgrade.go:304`). First boot deletes any it finds (`pkg/firstboot/strategy.go:1401-1402`). No device has one today. |
-| `<efi>/tpm2/pcr-banks` | first boot | `seal-pcrs` (recorded only, `pkg/firstboot/strategy.go:1335`; never applied to the seal, which uses the platform policy, `strategy.go:1302`), `platform-pcr`, `platform-pcr-bank`, `golden-pcrs`, `keystore-srk-handle` (the seal parent — the **Platform KeyStore SRK**, default `0x81000002`; never the SSRK, whose absence-of-platform-binding made platformd re-provision destructively, #61), `keystore-platform-policy` (HOW the seal authorized the parent SRK — the unseal replays this mode instead of assuming; absent defaults to `false`, the seal side's default), `ssrk-handle` |
+| `<efi>/tpm2/seal-upgrade.pub` / `.priv` | nothing in production | Read by the `TPM-Upgrade` strategy every boot, which declines when the files are absent (`pkg/initrd/strategy_tpm_upgrade.go:117-118`). Both writers are unreached: `writeUpgradeSealedObjects` (`pkg/firstboot/executor.go:763-774`) is called only from `Executor.Run`, which nothing calls, and nothing calls `TPMUpgradeStrategy.CreateUpgradeSeal` (`pkg/initrd/strategy_tpm_upgrade.go:304`). First boot deletes any it finds (`deleteUpgradeSeals`, called at `pkg/firstboot/strategy.go:1387`). No device has one today. |
+| `<efi>/tpm2/pcr-banks` | first boot | `seal-pcrs` (recorded only, `formatPCRBanksContent`, `pkg/firstboot/strategy.go:1399`; never applied to the seal, which uses the platform policy, `strategy.go:1328`), `platform-pcr`, `platform-pcr-bank`, `golden-pcrs`, `keystore-srk-handle` (the seal parent — the **Platform KeyStore SRK**, default `0x81000002`; never the SSRK, whose absence-of-platform-binding made platformd re-provision destructively, #61), `keystore-platform-policy` (HOW the seal authorized the parent SRK — the unseal replays this mode instead of assuming; absent defaults to `false`, the seal side's default), `ssrk-handle` |
 | `<efi>/tpm2/pcr-seal-values.txt` | first boot | PCR values at seal time, for debugging |
 | `<efi>/tpm2/swtpm-state/` | first boot | Software-TPM state, when a software TPM is in use |
 | `<efi>/tpm2/ppi-clear-attempted` | first boot | Loop guard for firmware-level TPM clear escalation |

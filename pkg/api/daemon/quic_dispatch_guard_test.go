@@ -54,6 +54,7 @@ import (
 //	0x55      messaging category
 //	0x56-0x5F tpm2 (idevid)     0xB0-0xB4 sdn extended
 //	0x60      objectstorage cat 0xB5-0xBF iam roles/groups
+//	0x61      dns category
 //	0x69      vm (ext cat)
 //	0x6B-0x6E tpm2 (iak ext)    0xC0-0xCB kms keys
 //	0x6F      container         0xCC-0xCF switch/kms-ext/secrets/prov cats
@@ -144,6 +145,7 @@ var quicDispatchFamilies = map[string]dispatchFamilySpec{
 	"scheduler":      {payload: []byte{quicwire.SchedulerSubGetStatus}, status: quicwire.StatusUnavailable, body: "QUIC service unavailable: scheduler"},
 	"messaging":      {payload: []byte{quicwire.MessagingSubGetStats}, status: quicwire.StatusUnavailable, body: "QUIC service unavailable: messaging"},
 	"objectstorage":  {payload: []byte{quicwire.ObjectStorageSubHeadObject}, status: quicwire.StatusUnavailable, body: "QUIC service unavailable: objectstorage"},
+	"dnscategory":    {payload: []byte{quicwire.OpDNSUpdateZone}, status: quicwire.StatusUnavailable, body: "QUIC service unavailable: dns"},
 	"pxe":            {status: quicwire.StatusUnavailable, body: "QUIC service unavailable: pxe"},
 }
 
@@ -217,7 +219,8 @@ var quicWireOwners = []struct {
 	{0x55, 0x55, "messaging"},
 	{0x56, 0x5F, "tpm2"},
 	{0x60, 0x60, "objectstorage"},
-	{0x61, 0x65, "reserved"}, // retired top-level VM bytes (#704), unclassified
+	{0x61, 0x61, "dnscategory"},
+	{0x62, 0x65, "reserved"}, // retired top-level VM bytes (#704), unclassified
 	{0x66, 0x66, "orchestrator"},
 	{0x67, 0x68, "reserved"}, // retired top-level VM bytes (#704), unclassified
 	{0x69, 0x69, "vm"},
@@ -399,6 +402,8 @@ var quicDispatchOpcodeIntents = map[string]dispatchOpcodeIntent{
 	"OpSchedulerCategory":         {value: quicwire.OpSchedulerCategory, mode: wireDirect, family: "scheduler"},
 	"OpMessagingCategory":         {value: quicwire.OpMessagingCategory, mode: wireDirect, family: "messaging"},
 	"OpObjectStorageCategory":     {value: quicwire.OpObjectStorageCategory, mode: wireDirect, family: "objectstorage"},
+	"OpDNSCategory":               {value: quicwire.OpDNSCategory, mode: wireDirect, family: "dnscategory"},
+	"OpDNSUpdateZone":             {value: quicwire.OpDNSUpdateZone, mode: categorySub, family: "dnscategory", category: quicwire.OpDNSCategory},
 	"OpIDevIDGenerate":            {value: quicwire.OpIDevIDGenerate, mode: wireDirect, family: "tpm2"},
 	"OpIDevIDInfo":                {value: quicwire.OpIDevIDInfo, mode: wireDirect, family: "tpm2"},
 	"OpIDevIDDelete":              {value: quicwire.OpIDevIDDelete, mode: wireDirect, family: "tpm2"},

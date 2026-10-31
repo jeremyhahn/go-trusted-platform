@@ -157,17 +157,6 @@ func (e ErrSwitchActionNotAcknowledged) Error() string {
 	return fmt.Sprintf("%s: switch answered status %q, not \"ok\"", e.Method, e.Status)
 }
 
-// ErrUnknownPortType indicates an SDN port type outside the pb PortType enum,
-// which has no REST name to send.
-type ErrUnknownPortType struct {
-	Type int32
-}
-
-// Error implements the error interface.
-func (e ErrUnknownPortType) Error() string {
-	return fmt.Sprintf("unknown SDN port type %d", e.Type)
-}
-
 // ErrDurationClearNotSupported indicates an UpdateIPAMPool request asked to
 // set a pool duration to zero. The REST pool update keeps any duration it
 // is not given a positive value for, so the request cannot be carried.
@@ -254,14 +243,4 @@ func (e ErrPCRDigestNotHex) Error() string {
 // Unwrap returns the underlying error.
 func (e ErrPCRDigestNotHex) Unwrap() error {
 	return e.Err
-}
-
-// ErrDNSRecordTypeRequired indicates an AddRecord request carried no record
-// type. The DNS REST route dispatches on the type, so a record without one
-// cannot be added.
-type ErrDNSRecordTypeRequired struct{}
-
-// Error implements the error interface.
-func (e ErrDNSRecordTypeRequired) Error() string {
-	return "DNS record type is required"
 }

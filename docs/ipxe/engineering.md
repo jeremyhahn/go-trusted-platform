@@ -13,7 +13,7 @@
 | File | Holds |
 |---|---|
 | `config.go` | `ServerConfig` (alias `Config`), `BootEntry`, `DefaultServerConfig`, `DefaultConfig`, `Validate`, `GetServerIP`, the `Default*` constants |
-| `server.go` | `Server`, `NewServer`, `Start`, `Stop`, `WaitForReady`, `IsRunning`, `ServerIP`, `HTTPServer`, `RunWithSignals` |
+| `server.go` | `Server`, `NewServer`, `Start`, `Stop`, `Ready`, `WaitForReady`, `IsRunning`, `ServerIP`, `HTTPServer`, `RunWithSignals` |
 | `dhcp_server.go` | `DHCPServer`, `DHCPConfig`, `NewDHCPServer`, `DHCPServerOption`, `WithIPAllocator`, `WithPacketConnFactory`, `SetConnFactory`, `SetAllocator`, `GetAllocator`, `PacketConnFactory`, `DefaultPacketConnFactory`, `DefaultBootFilenameByArch` |
 | `dhcp_rawconn_linux.go` | `ServerRawConn` over `AF_PACKET` (build-tagged Linux) |
 | `dhcp_rawconn_stub.go` | The non-Linux `ServerRawConn` stub, same method set |
@@ -36,6 +36,7 @@
 func NewServer(cfg *ServerConfig, logger *logging.Logger) (*Server, error)
 func (s *Server) Start(ctx context.Context) error
 func (s *Server) Stop() error
+func (s *Server) Ready() <-chan struct{}
 func (s *Server) WaitForReady(timeout time.Duration) error
 func (s *Server) IsRunning() bool
 func (s *Server) ServerIP() net.IP
@@ -91,8 +92,14 @@ the interface — recorded as a defect, not resolved here.
 type DeviceLookup func(mac string) (*DeviceBootInfo, error)
 func NewHTTPServer(cfg *ServerConfig, logger *logging.Logger) *HTTPServer
 func (s *HTTPServer) SetDeviceLookup(lookup DeviceLookup, gen *ScriptGenerator)
-func (s *HTTPServer) Start(ctx context.Context) error
+func (s *HTTPServer) Start(ctx context.Context, bound chan<- struct{}) error
 ```
+
+`Start` blocks until the context ends. It sends once on `bound`, without
+waiting, after its listener is bound; a nil `bound` is allowed. The DHCP and
+TFTP servers' `Start` take the same `bound` channel; `Server.Start` runs every
+enabled listener concurrently on one channel and closes `Ready()` once all of
+them have bound.
 
 `SetDeviceLookup` must be called **before** `Start`: the `/boot/device/` route
 is registered only when both `deviceLookup` and `scriptGen` are non-nil at
@@ -161,14 +168,18 @@ directory holding an extracted ISO.**
    is not IPv4 with `DHCPAddressError` (it matches `ErrInvalidConfig`):
    `buildDHCPConfig` uses the same parse, so an IPv6 gateway is refused rather
    than dropped from the offer as a nil `To4()`.
-4. **`Start` is not re-entrant.** A second `Start` on a running server returns
-   *"server is already running"*; `running` is an `atomic.Bool` guarded by a
-   mutex for the transition.
-5. **Service startup is concurrent and best-effort per service.** HTTP, TFTP and
-   DHCP each run in their own goroutine and push to a buffered `errChan` of
-   capacity 3. A failure in one does not stop the others; `WaitForReady`
-   (default 10 s, polled every 100 ms) is how a caller learns the server came
-   up.
+4. **A `Server` is single-use.** A second `Start` on a running server returns
+   *"server is already running"*, and a `Start` after the first one has
+   returned is refused with *"server has already been started; construct a new
+   Server"*: readiness and the first error are one-shot. `running` and
+   `started` are `atomic.Bool`s, with a mutex around the transition.
+5. **Services start concurrently, and one failure stops them all.** HTTP, TFTP
+   and DHCP each run in their own goroutine. `Ready()` closes once every
+   enabled listener has signalled its bind. The first service error stops the
+   server, and `Start` returns that error after every service has ended, so a
+   TFTP or DHCP bind failure is not masked. `WaitForReady` (default 10 s,
+   polled every 100 ms) checks only that the HTTP port accepts a connection;
+   `Ready()` is the check that covers all three listeners.
 6. **The TFTP server fails to start without `ipxe.efi`.** `loadFirmware` treats
    the x86-64 EFI binary as required and `ipxe32.efi` / `undionly.kpxe` /
    `snponly-aarch64.efi` as optional — a missing optional binary logs a
@@ -205,7 +216,7 @@ directory holding an extracted ISO.**
     large `boot.img` may take to transfer.
 14. **`/config/*` returns 503 when `InstallsDir` is empty**, because values are
     stored under it.
-18. **`/boot.ipxe` has one shape per configuration.** With a `DeviceLookup`
+15. **`/boot.ipxe` has one shape per configuration.** With a `DeviceLookup`
     wired it first chains `boot/device/${mac:hexhyp}.ipxe`, so a known device
     boots what it was assigned and an unknown one (404) falls through. Then:
     one entry with a kernel and an initrd is booted inline; several entries
@@ -214,7 +225,7 @@ directory holding an extracted ISO.**
     architecture with no entry gets the menu); anything else chains the
     menu. Every inline boot, per-device ones included, is the same
     bounded-retry block.
-15. **A boot entry with an `Architecture` is served only to that
+16. **A boot entry with an `Architecture` is served only to that
     architecture.** `EntriesForArchitecture` keeps entries whose
     `Architecture` is empty or equals the iPXE `${buildarch}` the client
     reports (`x86_64`, `arm64`, `i386`); `/menu.ipxe?arch=` filters with it,
@@ -436,7 +447,7 @@ silently fixed.
 | Firmware is cached in `~/.cache/go-trusted-platform/firmware/` | old `architecture.md` | `os.UserCacheDir()` first — which honours `$XDG_CACHE_HOME` — and `/var/cache/go-trusted-platform/firmware/` when the process has no per-user cache dir (root, container, system service). |
 | TFTP serves `ipxe.efi` (64-bit) and `ipxe32.efi` (32-bit) | old `architecture.md` | Three binaries: `undionly.kpxe` is also served, for legacy-BIOS ROMs, and arch selection is the whole point. |
 | `cmd/pxeboot` runs the `pkg/ipxe` server | implied throughout | It runs `pkg/bootstrap/container`, which wraps `ipxe.Server` and adds manifest-driven script generation. |
-| `/boot.ipxe` chains `/boot/device/<mac>.ipxe` when a `DeviceLookup` is wired | [architecture.md](architecture.md) §5 data flow, until 2026-09-22 | Nothing chained it: the per-device route was mounted and answered, but no script a node booted ever asked for it, so every device booted the shared entry. `/boot.ipxe` now chains it first (invariant 18). The per-device script also lacked the retry loop `/boot.ipxe` had; both now render the same block. |
+| `/boot.ipxe` chains `/boot/device/<mac>.ipxe` when a `DeviceLookup` is wired | [architecture.md](architecture.md) §5 data flow, until 2026-09-22 | Nothing chained it: the per-device route was mounted and answered, but no script a node booted ever asked for it, so every device booted the shared entry. `/boot.ipxe` now chains it first (invariant 15). The per-device script also lacked the retry loop `/boot.ipxe` had; both now render the same block. |
 | `platformctl iso test pxe` builds `DefaultTestEnvConfig()` | [cli.md](cli.md) §3, until 2026-09-22 | It built its own copy from `testenv.DefaultNetworkConfig()`, whose bridge subnet is a `/28`, while leasing `.100`–`.200`: every unicast reply to a client (the TFTP data) left through the host's default route, and the command's `qemu.Config` had no disk, which `Validate` refuses. Neither run had ever completed. The command now uses `ipxe.NewTestEnv` — which in turn named its unused second TAP 21 characters long, over the kernel's 15 — and gives the client a disk. Fixed with the aarch64 work (#686). |
 
 **Resolved divergence:** [`docs/provisioning/api.md`](../provisioning/api.md)

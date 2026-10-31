@@ -54,16 +54,14 @@ The DHCP tests' client binds UDP port 68, which needs root or
 # Run all iPXE integration tests in the devcontainer
 make integration-test-ipxe
 
-# Run one slice
+# Run only the DHCP slice
 make integration-test-ipxe-dhcp
-make integration-test-ipxe-tftp
-make integration-test-ipxe-http
 ```
 
 The runner sets `IPXE_DHCP_ENABLED=1` for `integration-test-ipxe` and
-`integration-test-ipxe-dhcp`, and selects each slice with `-run`:
-`ipxe-dhcp` runs `.*DHCP.*`, `ipxe-tftp` runs `.*TFTP.*`, `ipxe-http` runs
-`^TestHTTP`.
+`integration-test-ipxe-dhcp`; `ipxe-dhcp` selects `.*DHCP.*` with `-run`.
+The DHCP, TFTP and HTTP service tests are unit tests in `pkg/ipxe`
+(`make test-pkg PKG=./pkg/ipxe/`).
 
 On a host as root, `make integration-test-ipxe-local` runs the whole package
 with `IPXE_DHCP_ENABLED=1`. The older `run-tests.sh` beside the suite, which

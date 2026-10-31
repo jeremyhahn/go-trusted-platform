@@ -20,7 +20,7 @@ same capability row and are **not documented in this pass** — see
 
 ### Global flags
 
-`platformctl` persistent flags (`pkg/cli/commands/root.go:125`), precedence
+`platformctl` persistent flags (`pkg/cli/commands/root.go:134`), precedence
 **flag > environment > config file > default**:
 
 | Flag | Short | Default | Environment |
@@ -126,13 +126,13 @@ ISO build, customisation and test.
 | Verb | Purpose |
 |---|---|
 | `build`, `create`, `customize`, `extract`, `download` | Image production |
-| `install`, `boot`, `firstboot`, `pxe`, `client-server`, `test`, `all` | Test flows |
+| `test install`, `test boot`, `test firstboot`, `test pxe`, `test client-server`, `test all` | Test flows (all under `iso test`) |
 | `module-signing-key` | Kernel module signing key |
-| `profile list`, `profile show <name>` | Installation profiles |
-| `validate <config-file>` | Validate an installer configuration |
-| `generate` | Generate a configuration |
+| `profile list`, `profile show <profile-name>` | Installation profiles |
+| `profile validate <config-file>` | Validate an installer configuration |
+| `profile generate` | Generate a configuration |
 
-**Run `iso validate <config-file>` before `iso build`.** An installer
+**Run `iso profile validate <config-file>` before `iso build`.** An installer
 configuration that fails validation at build time has already cost you the build.
 
 ---
@@ -144,9 +144,9 @@ configuration that fails validation at build time has already cost you the build
 | Register / list / get / remove a PXE device | REST `/api/v1/pxe/devices`, gRPC `PXEService`, QUIC, MCP |
 | **Authorize / quarantine / retry** a PXE device | REST, gRPC, QUIC, MCP |
 | Set a PXE device enrolled | REST, gRPC, QUIC, MCP |
-| PXE device events | REST `GET /api/v1/pxe/devices/{id}/events`, MCP |
+| PXE device events | REST `GET /api/v1/pxe/devices/{id}/events`, gRPC `GetEvents`, QUIC, MCP |
 | Start / stop the PXE service | REST, gRPC, QUIC, MCP |
-| Remote Secure Boot digest signing | gRPC `SignDigest`, QUIC, MCP |
+| Remote Secure Boot digest signing | REST `POST /api/v1/provisioning/sign`, gRPC `SignDigest` (TCP and Unix socket), QUIC, MCP |
 
 **There is no `platformctl pxe` command group.** Every PXE device-lifecycle
 operation — including authorising and quarantining a device — is API-only. For a

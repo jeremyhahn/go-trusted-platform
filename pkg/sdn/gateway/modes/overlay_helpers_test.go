@@ -1041,6 +1041,9 @@ func newStoppedOverlay(t *testing.T, edit func(*OverlayModeConfig)) *overlayFixt
 	}
 	h, err := NewOverlayModeHandler(cfg, f.ovs, f.sw)
 	require.NoError(t, err)
+	// The tests drive the ND watch with the times they pass to ndTick; a
+	// zero clock never runs ahead of them.
+	h.ndClock = func() time.Time { return time.Time{} }
 	f.handler = h
 	return f
 }
