@@ -288,7 +288,11 @@ and never a CA or other operator permission. The record of bound fingerprints
 keeps retired ones, so the restriction outlives the installation: once the
 device leaves `installing` or is removed, the same still-valid certificate is
 still an installer, not an operator (Codex 8652). The record is held in memory
-by the PXE state machine.
+by the PXE state machine. Every mTLS listener applies this classification:
+REST through its `ScopeGuard`, QUIC and MCP through their peer authenticators,
+and gRPC through the mTLS interceptors (`pkg/api/daemon/mtls_interceptor.go`),
+which refuse a method whose scope (`grpccreds.ScopeForMethod`) the certificate
+does not hold with `PermissionDenied` before the handler runs (Codex 8662).
 
 **One installer certificate is bound to one device at a time.** Binding a
 fingerprint another device is installing under is refused with

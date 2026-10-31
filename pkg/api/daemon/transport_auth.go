@@ -100,7 +100,7 @@ var grpcTCPSkipMethods = []string{
 	platformv1.DeviceService_BootDelivery_FullMethodName,
 }
 
-func selectGRPCTCPAuth(config *Config, shared *platformTokenValidator, pep quicbaassdk.IAMPEPClient, logger *logging.Logger, skipMethods []string) (grpcAuthSelection, error) {
+func selectGRPCTCPAuth(config *Config, shared *platformTokenValidator, pep quicbaassdk.IAMPEPClient, installs installCertificateBindings, logger *logging.Logger, skipMethods []string) (grpcAuthSelection, error) {
 	if config.EnableMTLS {
 		if config.CAService == nil {
 			return grpcAuthSelection{}, ErrTransportAuthRequired{
@@ -118,6 +118,7 @@ func selectGRPCTCPAuth(config *Config, shared *platformTokenValidator, pep quicb
 		}
 		interceptorCfg := &MTLSInterceptorConfig{
 			Authenticator: mtlsAuth,
+			Peers:         newMTLSPeerAuthenticator(mtlsAuth, installs),
 			Logger:        logger,
 			SkipMethods:   skipMethods,
 		}

@@ -378,6 +378,14 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		return nil, err
 	}
 
+	// Create the PXE gRPC service. Every transport serves this one
+	// instance. platformd never sets its backend (PXE is a gateway-role
+	// service and the platformd config has no pxe: section), so each call
+	// answers Unavailable with SERVICE_NOT_CONFIGURED (requireService).
+	// It is built before the listeners because every mTLS listener reads
+	// its installer identities to tell an installer from the operator.
+	pxeGRPCService := NewPXEGRPCService(logger, nil)
+
 	// Create gRPC TCP server if enabled
 	var grpcServer *grpc.Server
 	grpcTLSCredsAttached := false
@@ -400,7 +408,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 
 		// Configure authentication interceptors. Fails closed (#550): with
 		// SkipIAMValidation off, no authentication backend means no server.
-		authSel, authErr := selectGRPCTCPAuth(config, platformTokenValidatorShared, iamPEP, logger, grpcTCPSkipMethods)
+		authSel, authErr := selectGRPCTCPAuth(config, platformTokenValidatorShared, iamPEP, pxeInstallBindings{service: pxeGRPCService}, logger, grpcTCPSkipMethods)
 		if authErr != nil {
 			return nil, authErr
 		}
@@ -986,11 +994,6 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	}
 	logger.Info("DNS gRPC service registered")
 
-	// Create the PXE gRPC service. Every transport serves this one
-	// instance. platformd never sets its backend (PXE is a gateway-role
-	// service and the platformd config has no pxe: section), so each call
-	// answers Unavailable with SERVICE_NOT_CONFIGURED (requireService).
-	pxeGRPCService := NewPXEGRPCService(logger, nil)
 	if grpcServer != nil {
 		platformv1.RegisterPXEServiceServer(grpcServer, pxeGRPCService)
 	}

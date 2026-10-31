@@ -447,7 +447,8 @@ The daemon REST listener serves every CA certificate route behind its
 `*:*`, but a client certificate whose SHA-256 was ever bound to a PXE device
 as its install certificate gets only `pxe:complete` and never a CA
 permission, so an installer is refused issue and renew with 403 (Codex 8238,
-Codex 8646). The installer record outlives the installation: leaving
+Codex 8646), and with `PermissionDenied` by the gRPC mTLS interceptors
+(Codex 8662). The installer record outlives the installation: leaving
 `installing` or removing the device does not turn the certificate into an
 operator (Codex 8652). When the binding cannot be read
 the peer is refused with 401:

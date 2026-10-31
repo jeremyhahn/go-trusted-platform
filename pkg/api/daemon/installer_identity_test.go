@@ -8,9 +8,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/peer"
+	"google.golang.org/grpc/status"
 
-	grpccreds "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
@@ -131,7 +134,7 @@ var webhookCompleteOperation = pxeOperation{
 
 // authorizeEverywhere checks op against the gRPC, QUIC and MCP catalogs for
 // the caller presenting leaf, and returns each catalog's verdict.
-func authorizeEverywhere(t *testing.T, peer mtlsPeerAuthenticator, leaf *x509.Certificate, op pxeOperation) map[string]bool {
+func authorizeEverywhere(t *testing.T, peer mtlsPeerAuthenticator, grpcAuth grpcAuthSelection, leaf *x509.Certificate, op pxeOperation) map[string]bool {
 	t.Helper()
 	authCtx, err := peer.AuthenticatePeer(context.Background(), []*x509.Certificate{leaf})
 	require.NoError(t, err)
@@ -144,10 +147,41 @@ func authorizeEverywhere(t *testing.T, peer mtlsPeerAuthenticator, leaf *x509.Ce
 	_, mcpErr := checker.AuthorizeTool(mcpContext(verifiedState(leaf)), op.mcpTool, "")
 
 	return map[string]bool{
-		"gRPC and REST": authCtx.RequireScope(grpccreds.ScopeForMethod(op.grpcMethod)) == nil,
+		// REST routes take the gRPC method's scope; the gRPC verdict is the
+		// production listener's interceptor.
+		"gRPC and REST": callGRPCUnary(grpcAuth, leaf, op.grpcMethod) == nil,
 		"QUIC":          authCtx.RequireScope(quicPerm.Scope()) == nil,
 		"MCP":           mcpErr == nil,
 	}
+}
+
+// grpcMTLSAuth is the interceptor pair the gRPC TCP listener installs under
+// mTLS, trusting pool and reading f's installer identities.
+func grpcMTLSAuth(t *testing.T, f *webhookFixture, pool *x509.CertPool) grpcAuthSelection {
+	t.Helper()
+	config := failClosedConfig()
+	config.EnableMTLS = true
+	config.CAService = routeTableCA{}
+	config.MTLSClientCAPool = pool
+	sel, err := selectGRPCTCPAuth(config, nil, nil, pxeInstallBindings{service: f.svc}, logging.DefaultLogger(), grpcTCPSkipMethods)
+	require.NoError(t, err)
+	return sel
+}
+
+// grpcPeerContext is the context a gRPC call over a TLS connection that
+// verified leaf carries.
+func grpcPeerContext(leaf *x509.Certificate) context.Context {
+	return peer.NewContext(context.Background(), &peer.Peer{
+		AuthInfo: credentials.TLSInfo{State: *verifiedState(leaf)},
+	})
+}
+
+// callGRPCUnary runs method through the unary interceptor for leaf. The
+// handler succeeds, so a nil result means the call was admitted.
+func callGRPCUnary(sel grpcAuthSelection, leaf *x509.Certificate, method string) error {
+	_, err := sel.unary(grpcPeerContext(leaf), nil, &grpc.UnaryServerInfo{FullMethod: method},
+		func(context.Context, interface{}) (interface{}, error) { return nil, nil })
+	return err
 }
 
 // An installer certificate holds pxe:complete and nothing else: every
@@ -155,20 +189,51 @@ func authorizeEverywhere(t *testing.T, peer mtlsPeerAuthenticator, leaf *x509.Ce
 // the operator's certificate passes them all.
 func TestInstallerCertificate_IsRefusedEveryOperatorPXEOperation(t *testing.T) {
 	f := newWebhookFixture(t)
-	peer, _ := installerPeer(t, f)
+	peer, pool := installerPeer(t, f)
+	grpcAuth := grpcMTLSAuth(t, f, pool)
 	operator := f.issuerA.issue(t, webhookSerial+100)
 
 	for name, op := range operatorPXEOperations {
-		for catalog, allowed := range authorizeEverywhere(t, peer, f.node, op) {
+		for catalog, allowed := range authorizeEverywhere(t, peer, grpcAuth, f.node, op) {
 			assert.False(t, allowed, "%s on %s: an installer certificate holds no pxe:write", name, catalog)
 		}
-		for catalog, allowed := range authorizeEverywhere(t, peer, operator, op) {
+		for catalog, allowed := range authorizeEverywhere(t, peer, grpcAuth, operator, op) {
 			assert.True(t, allowed, "%s on %s: the operator certificate holds every scope", name, catalog)
 		}
 	}
-	for catalog, allowed := range authorizeEverywhere(t, peer, f.node, webhookCompleteOperation) {
+	for catalog, allowed := range authorizeEverywhere(t, peer, grpcAuth, f.node, webhookCompleteOperation) {
 		assert.True(t, allowed, "WebhookComplete on %s takes pxe:complete, which the installer holds", catalog)
 	}
+}
+
+// The gRPC mTLS listener's own interceptors refuse an installer certificate a
+// CA issuance call, unary and streaming, before the handler runs, admit its
+// PXE completion, and admit the operator to CA issuance (Codex 8662).
+func TestGRPCMTLSListener_EnforcesTheInstallerScope(t *testing.T) {
+	f := newWebhookFixture(t)
+	_, pool := installerPeer(t, f)
+	sel := grpcMTLSAuth(t, f, pool)
+	operator := f.issuerA.issue(t, webhookSerial+100)
+	issue := platformv1.CAService_IssueCertificate_FullMethodName
+
+	reached := false
+	_, err := sel.unary(grpcPeerContext(f.node), nil, &grpc.UnaryServerInfo{FullMethod: issue},
+		func(context.Context, interface{}) (interface{}, error) { reached = true; return nil, nil })
+	assert.Equal(t, codes.PermissionDenied, status.Code(err), "unary CA issuance with an installer certificate")
+	assert.False(t, reached, "the unary handler must not run for a refused installer")
+
+	stream := &mtlsServerStream{ctx: grpcPeerContext(f.node)}
+	err = sel.stream(nil, stream, &grpc.StreamServerInfo{FullMethod: issue},
+		func(interface{}, grpc.ServerStream) error { reached = true; return nil })
+	assert.Equal(t, codes.PermissionDenied, status.Code(err), "streaming CA issuance with an installer certificate")
+	assert.False(t, reached, "the stream handler must not run for a refused installer")
+
+	assert.NoError(t, callGRPCUnary(sel, f.node, platformv1.PXEService_WebhookComplete_FullMethodName),
+		"the installer holds pxe:complete")
+	assert.NoError(t, callGRPCUnary(sel, operator, issue), "the operator certificate holds CA issuance")
+	err = sel.stream(nil, &mtlsServerStream{ctx: grpcPeerContext(operator)}, &grpc.StreamServerInfo{FullMethod: issue},
+		func(interface{}, grpc.ServerStream) error { return nil })
+	assert.NoError(t, err, "the operator certificate holds CA issuance on a stream")
 }
 
 // The scope admits the installer to the webhook, and the webhook then
