@@ -298,12 +298,14 @@ func (a *QuicBaaSIAMAdapter) CreateTenant(ctx context.Context, req *CreateTenant
 	if req == nil {
 		return nil, errors.New("create tenant request is required")
 	}
+	// The pinned SDK's embedded tenant create never reads settings; they are
+	// refused before anything is created rather than silently dropped.
+	if req.Settings != nil {
+		return nil, ErrTenantSettingsUnsupported{TenantID: req.ID}
+	}
 	sdkReq := &iamsdk.CreateTenantRequest{
 		ID:   req.ID,
 		Name: req.Name,
-	}
-	if req.Settings != nil {
-		sdkReq.Settings = encodeTenantSettings(req.Settings)
 	}
 	t, err := a.client.Tenant().Create(ctx, sdkReq)
 	if err != nil {
@@ -562,20 +564,6 @@ func (a *QuicBaaSIAMAdapter) RotateAppSecret(ctx context.Context, tenantID, clie
 // -----------------------------------------------------------------------------
 // Translation helpers.
 // -----------------------------------------------------------------------------
-
-func encodeTenantSettings(s *TenantSettings) map[string]string {
-	if s == nil {
-		return nil
-	}
-	out := map[string]string{}
-	if s.MaxUsers > 0 {
-		out["max_users"] = intToString(int64(s.MaxUsers))
-	}
-	if s.MFARequired {
-		out["mfa_required"] = "true"
-	}
-	return out
-}
 
 func decodeTenantSettings(m map[string]string) *TenantSettings {
 	if len(m) == 0 {

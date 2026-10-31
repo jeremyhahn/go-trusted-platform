@@ -18,6 +18,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
@@ -154,7 +155,13 @@ func (c *recordingUserClient) Update(_ context.Context, tenantID, userID string,
 // the way the pinned embedded handler does: only the display name applies.
 type recordingTenantClient struct {
 	iamsdk.TenantClient
+	created *iamsdk.CreateTenantRequest
 	updated *iamsdk.UpdateTenantRequest
+}
+
+func (c *recordingTenantClient) Create(_ context.Context, req *iamsdk.CreateTenantRequest) (*iamsdk.Tenant, error) {
+	c.created = req
+	return &iamsdk.Tenant{ID: req.ID, Name: req.Name}, nil
 }
 
 func (c *recordingTenantClient) Update(_ context.Context, tenantID string, req *iamsdk.UpdateTenantRequest) (*iamsdk.Tenant, error) {
@@ -453,6 +460,60 @@ func TestUpdateTenant_SettingsAreABadRequest(t *testing.T) {
 
 	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
 	assert.Nil(t, client.tenants.updated)
+}
+
+func TestQuicBaaSIAMAdapter_CreateTenant_SendsIDAndName(t *testing.T) {
+	client := &adapterSDKClient{tenants: &recordingTenantClient{}}
+
+	resp, err := NewQuicBaaSIAMAdapter(client).CreateTenant(context.Background(), &CreateTenantRequest{ID: "acme", Name: "Acme"})
+
+	require.NoError(t, err)
+	require.NotNil(t, client.tenants.created)
+	assert.Equal(t, "acme", client.tenants.created.ID)
+	assert.Equal(t, "Acme", client.tenants.created.Name)
+	assert.Equal(t, "acme", resp.ID)
+}
+
+func TestQuicBaaSIAMAdapter_CreateTenant_RefusesSettings(t *testing.T) {
+	client := &adapterSDKClient{tenants: &recordingTenantClient{}}
+
+	_, err := NewQuicBaaSIAMAdapter(client).CreateTenant(context.Background(), &CreateTenantRequest{ID: "acme", Settings: &TenantSettings{MaxUsers: 5}})
+
+	require.ErrorIs(t, err, ErrTenantSettingsUnsupported{})
+	assert.Nil(t, client.tenants.created, "refused settings must not create the tenant")
+}
+
+// TestCreateTenant_SettingsAreABadRequest drives the handler with the
+// in-memory SDK client: the pinned SDK's embedded transport cannot be built
+// in a unit test here.
+func TestCreateTenant_SettingsAreABadRequest(t *testing.T) {
+	for name, body := range map[string]string{
+		"mfa_required": `{"id":"acme","settings":{"mfa_required":true}}`,
+		"max_users":    `{"id":"acme","settings":{"max_users":5}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			client := &adapterSDKClient{tenants: &recordingTenantClient{}}
+			handlers, writer := adapterHandlers(client)
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/iam/tenants", strings.NewReader(body))
+			handlers.CreateTenant(httptest.NewRecorder(), req)
+
+			assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+			assert.Nil(t, client.tenants.created, "no tenant may be created with refused settings")
+		})
+	}
+}
+
+func TestCreateTenant_WithoutSettingsCreates(t *testing.T) {
+	client := &adapterSDKClient{tenants: &recordingTenantClient{}}
+	handlers, writer := adapterHandlers(client)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/iam/tenants", strings.NewReader(`{"id":"acme","name":"Acme"}`))
+	handlers.CreateTenant(httptest.NewRecorder(), req)
+
+	assert.Equal(t, http.StatusOK, writer.lastStatus)
+	require.NotNil(t, client.tenants.created)
+	assert.Equal(t, "acme", client.tenants.created.ID)
 }
 
 func TestQuicBaaSIAMAdapter_RequireUnchangedUserRoles_RefusesUnknownRole(t *testing.T) {
