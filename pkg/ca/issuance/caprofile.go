@@ -38,18 +38,11 @@ type Issuer interface {
 // MaxPathLen of 0 means pathLenConstraint 0 (no subordinate CA below it), the
 // meaning go-xkms gives it; a negative MaxPathLen leaves the path unlimited.
 func Issue(ctx context.Context, ca Issuer, req *quicbaasca.CACertificateRequest) (*quicbaasca.IssuedCertificate, error) {
-	if req == nil {
-		return nil, ErrNilCertificateRequest{}
+	if err := preflight(ca, req); err != nil {
+		return nil, err
 	}
 	if !req.IsCA {
 		return ca.IssueCertificate(ctx, req)
-	}
-	issuer, err := ca.CACertificate()
-	if err != nil {
-		return nil, &IssuerCertificateError{Err: err}
-	}
-	if err := checkIssuerPathLen(issuer, req.MaxPathLen); err != nil {
-		return nil, err
 	}
 	caReq := *req
 	caReq.MaxPathLenZero = caReq.MaxPathLen == 0
@@ -60,6 +53,28 @@ func Issue(ctx context.Context, ca Issuer, req *quicbaasca.CACertificateRequest)
 		caReq.MaxPathLen = 0
 	}
 	return ca.IssueCertificateWithProfile(ctx, &caReq, caProfileName)
+}
+
+// preflight runs the checks a request must pass against its issuer before
+// anything is signed. Issue runs it, and Renew runs it before it revokes the
+// certificate it replaces, so both refuse the same requests. An isCA request
+// may carry no extended key usage restriction (ErrCAExtKeyUsageUnsupported)
+// and must fit the issuer's path length (checkIssuerPathLen).
+func preflight(ca Issuer, req *quicbaasca.CACertificateRequest) error {
+	if req == nil {
+		return ErrNilCertificateRequest{}
+	}
+	if !req.IsCA {
+		return nil
+	}
+	if len(req.ExtKeyUsage) > 0 {
+		return ErrCAExtKeyUsageUnsupported{}
+	}
+	issuer, err := ca.CACertificate()
+	if err != nil {
+		return &IssuerCertificateError{Err: err}
+	}
+	return checkIssuerPathLen(issuer, req.MaxPathLen)
 }
 
 // checkIssuerPathLen refuses a subordinate CA the issuer's pathLenConstraint

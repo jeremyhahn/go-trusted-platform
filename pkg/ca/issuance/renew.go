@@ -47,6 +47,13 @@ func Renew(ctx context.Context, ca quicbaasca.CACertificateAuthority, existing *
 		return nil, &RenewStoresUnavailableError{}
 	}
 
+	// Refuse before anything is revoked, rotated or deleted: a refusal from
+	// Issue after those steps would leave no usable certificate behind.
+	req := renewalRequest(existing, opts)
+	if err := preflight(ca, req); err != nil {
+		return nil, &RenewError{Step: "check the renewal against the issuer", Err: err}
+	}
+
 	if err := ca.RevokeCert(ctx, existing, quicbaasca.RevokeOptions{}); err != nil {
 		return nil, &RenewError{Step: "revoke the old certificate", Err: err}
 	}
@@ -62,7 +69,7 @@ func Renew(ctx context.Context, ca quicbaasca.CACertificateAuthority, existing *
 
 	// Issue, not IssueCertificate: a CA certificate must be renewed with the
 	// CA profile, or the replacement would be a leaf.
-	issued, err := Issue(ctx, ca, renewalRequest(existing, opts))
+	issued, err := Issue(ctx, ca, req)
 	if err != nil {
 		return nil, &RenewError{Step: "issue the renewed certificate", Err: err}
 	}

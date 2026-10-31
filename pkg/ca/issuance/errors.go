@@ -246,3 +246,21 @@ func (e *SubordinatePathLenError) Error() string {
 }
 
 func (e *SubordinatePathLenError) invalidRequest() {}
+
+// ErrCAExtKeyUsageUnsupported is an isCA request, or the renewal of a CA
+// certificate, that carries an extended key usage restriction. The SDK issues
+// a CA certificate only through the named go-xkms "ca" profile
+// (IssueCertificateWithProfile with ca.NewCAProfile), and that profile sets
+// ExtKeyUsage to none and ignores the request's: the CA would come out
+// unrestricted, able to certify purposes the restriction excludes
+// (RFC 5280 §4.2.1.12). The request is refused until the SDK profile carries
+// the request's ExtKeyUsage.
+type ErrCAExtKeyUsageUnsupported struct{}
+
+func (ErrCAExtKeyUsageUnsupported) Error() string {
+	return "a CA certificate with an extended key usage restriction cannot be issued: " +
+		"the SDK's CA profile (go-xkms ca.NewCAProfile) drops the request's ExtKeyUsage, " +
+		"so the CA would be issued unrestricted"
+}
+
+func (ErrCAExtKeyUsageUnsupported) invalidRequest() {}

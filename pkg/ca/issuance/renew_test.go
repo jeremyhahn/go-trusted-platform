@@ -194,6 +194,76 @@ func TestRenew_AFailedIssueIsARenewError(t *testing.T) {
 	assert.EqualError(t, err, "failed to issue the renewed certificate: issuer down")
 }
 
+// renewIssuerCA is a renewCA whose own certificate is issuer, so a CA
+// certificate's renewal reaches the issuer checks.
+type renewIssuerCA struct {
+	*renewCA
+	issuer *x509.Certificate
+}
+
+func (c *renewIssuerCA) CACertificate() (*x509.Certificate, error) {
+	return c.issuer, nil
+}
+
+func renewableCACert(maxPathLen int) *x509.Certificate {
+	existing := renewableCert()
+	existing.IsCA = true
+	existing.BasicConstraintsValid = true
+	existing.MaxPathLen = maxPathLen
+	existing.MaxPathLenZero = maxPathLen == 0
+	existing.KeyUsage = x509.KeyUsageCertSign | x509.KeyUsageCRLSign
+	return existing
+}
+
+// assertRenewalUntouched checks that a refused renewal revoked, rotated,
+// deleted and issued nothing (Codex 8615 P1).
+func assertRenewalUntouched(t *testing.T, ca *renewCA) {
+	t.Helper()
+	assert.Empty(t, ca.revokeOpts, "a refused renewal must not revoke the old certificate")
+	assert.Empty(t, ca.keyStore.rotated, "a refused renewal must not rotate the key")
+	assert.Empty(t, ca.certStore.deleted, "a refused renewal must keep the stored certificate")
+	assert.Empty(t, ca.issued, "a refused renewal must issue nothing")
+}
+
+func TestRenew_APathLenRefusalLeavesTheOldCertificate(t *testing.T) {
+	ca := &renewIssuerCA{
+		renewCA: newRenewCA(),
+		issuer: &x509.Certificate{
+			Subject:               pkix.Name{CommonName: "Tight Issuer"},
+			IsCA:                  true,
+			BasicConstraintsValid: true,
+			MaxPathLen:            1,
+		},
+	}
+
+	_, err := Renew(context.Background(), ca, renewableCACert(1), RenewOptions{ValidDays: 30})
+
+	var renewErr *RenewError
+	require.ErrorAs(t, err, &renewErr)
+	assert.Equal(t, "check the renewal against the issuer", renewErr.Step)
+	var exceeded *SubordinatePathLenError
+	require.ErrorAs(t, err, &exceeded)
+	assert.Equal(t, 1, exceeded.Requested)
+	assert.Equal(t, 0, exceeded.Allowed)
+	assert.True(t, IsInvalidRequest(err))
+	assertRenewalUntouched(t, ca.renewCA)
+}
+
+func TestRenew_AnEKURestrictedCAIsRefusedBeforeRevocation(t *testing.T) {
+	ca := &renewIssuerCA{
+		renewCA: newRenewCA(),
+		issuer:  &x509.Certificate{Subject: pkix.Name{CommonName: "Root"}, IsCA: true, BasicConstraintsValid: true, MaxPathLen: -1},
+	}
+	existing := renewableCACert(0)
+	existing.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
+
+	_, err := Renew(context.Background(), ca, existing, RenewOptions{ValidDays: 30})
+
+	assert.ErrorIs(t, err, ErrCAExtKeyUsageUnsupported{})
+	assert.True(t, IsInvalidRequest(err))
+	assertRenewalUntouched(t, ca.renewCA)
+}
+
 // TestRenew_AnRSALeafRenewsOnARealSoftwareCA issues an RSA leaf on a
 // software-backed go-xkms CA and renews it. The software backend validates the
 // rotation's key attributes, so attributes without the RSA key size fail the

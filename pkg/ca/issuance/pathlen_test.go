@@ -249,6 +249,52 @@ func TestIssue_IssuerCertificateUnavailable(t *testing.T) {
 	}
 }
 
+// The SDK's CA profile drops ExtKeyUsage (Codex 8615 P1): a CA restricted to
+// serverAuth must be refused, never issued unrestricted, while a restricted
+// leaf and an unrestricted CA are still issued.
+func TestIssue_CAExtKeyUsageRestriction(t *testing.T) {
+	chain := newTestChain(t, 2)
+
+	issuer := &x509Issuer{cert: chain.intermediate, key: chain.interKey}
+	issued, err := Issue(context.Background(), issuer, &quicbaasca.CACertificateRequest{
+		Subject:     quicbaasca.CASubject{CommonName: "eku-restricted-ca", Organization: "Test Org", Country: "US"},
+		Valid:       1,
+		IsCA:        true,
+		MaxPathLen:  0,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		Signer:      newECKey(t),
+	})
+	require.Error(t, err)
+	assert.Nil(t, issued)
+	assert.ErrorIs(t, err, ErrCAExtKeyUsageUnsupported{})
+	assert.True(t, IsInvalidRequest(err), "an EKU-restricted CA request is the caller's to fix")
+	assert.Zero(t, issuer.signed, "a refused request must not be signed")
+	assert.Contains(t, err.Error(), "ca.NewCAProfile", "the refusal names the upstream gap")
+
+	leafIssuer := &x509Issuer{cert: chain.intermediate, key: chain.interKey}
+	leaf, err := Issue(context.Background(), leafIssuer, &quicbaasca.CACertificateRequest{
+		Subject:     quicbaasca.CASubject{CommonName: "eku-leaf", Organization: "Test Org", Country: "US"},
+		Valid:       1,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		Signer:      newECKey(t),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, leaf)
+	assert.Equal(t, 1, leafIssuer.signed, "a leaf's EKU restriction is not refused")
+
+	caIssuer := &x509Issuer{cert: chain.intermediate, key: chain.interKey}
+	ca, err := Issue(context.Background(), caIssuer, &quicbaasca.CACertificateRequest{
+		Subject:    quicbaasca.CASubject{CommonName: "eku-free-ca", Organization: "Test Org", Country: "US"},
+		Valid:      1,
+		IsCA:       true,
+		MaxPathLen: 0,
+		Signer:     newECKey(t),
+	})
+	require.NoError(t, err)
+	assert.True(t, ca.Certificate.IsCA)
+	assert.Empty(t, ca.Certificate.ExtKeyUsage)
+}
+
 // TestPathLenErrors_Messages checks the refusals name the issuer and the limit.
 func TestPathLenErrors_Messages(t *testing.T) {
 	exhausted := &IssuerPathLenExhaustedError{Issuer: "CN=inter"}
