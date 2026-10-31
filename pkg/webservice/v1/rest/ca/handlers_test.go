@@ -39,11 +39,13 @@ import (
 	"github.com/gorilla/mux"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	xkmsca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/internal/protorest"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/status"
 )
 
 // =============================================================================
@@ -85,6 +87,18 @@ type mockCertificateAuthority struct {
 	signerFn              func(ctx context.Context) (crypto.Signer, error)
 	publicKeyFn           func() crypto.PublicKey
 	signFn                func(rand io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error)
+
+	// caCertificate, when set, is the issuing CA certificate a subordinate
+	// CA request is checked against; otherwise the base mock's unconstrained
+	// CA answers.
+	caCertificate *x509.Certificate
+}
+
+func (m *mockCertificateAuthority) CACertificate() (*x509.Certificate, error) {
+	if m.caCertificate != nil {
+		return m.caCertificate, nil
+	}
+	return m.baseMockCA.CACertificate()
 }
 
 func (m *mockCertificateAuthority) Public() crypto.PublicKey {
@@ -1097,6 +1111,47 @@ func TestIssueCertificate_Error(t *testing.T) {
 		rec := httptest.NewRecorder()
 
 		handlers.IssueCertificate(rec, req)
+
+		assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
+	})
+}
+
+// A subordinate CA the issuer's path length forbids answers 400 with the
+// refusal's message; a CA fault on the same request stays a 500.
+func TestIssueCertificate_PathLen(t *testing.T) {
+	body := []byte(`{"request":{"subject":{"commonName":"sub-ca.example.com"},"isCa":true,"maxPathLen":0}}`)
+	issue := func(mockCA *mockCertificateAuthority) *mockHttpWriter {
+		handlers, writer := newTestHandlers(mockCA)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/ca/certificates", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		handlers.IssueCertificate(httptest.NewRecorder(), req)
+		return writer
+	}
+
+	t.Run("refusal is 400", func(t *testing.T) {
+		mockCA := &mockCertificateAuthority{initialized: true, caCertificate: &x509.Certificate{
+			Subject:               pkix.Name{CommonName: "Issuing CA"},
+			BasicConstraintsValid: true,
+			IsCA:                  true,
+			MaxPathLenZero:        true,
+		}}
+
+		writer := issue(mockCA)
+
+		assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+		require.NotNil(t, writer.lastError)
+		assert.Equal(t, (&issuance.IssuerPathLenExhaustedError{Issuer: "CN=Issuing CA"}).Error(),
+			status.Convert(writer.lastError).Message())
+		assert.Empty(t, mockCA.issuedProfile, "the CA was asked to sign a refused subordinate CA")
+	})
+
+	t.Run("CA fault is 500", func(t *testing.T) {
+		writer := issue(&mockCertificateAuthority{
+			initialized: true,
+			issueCertificateFn: func(_ context.Context, _ *xkmsca.CACertificateRequest) (*xkmsca.IssuedCertificate, error) {
+				return nil, errors.New("hsm offline")
+			},
+		})
 
 		assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
 	})
