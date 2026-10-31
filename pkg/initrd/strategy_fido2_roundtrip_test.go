@@ -22,6 +22,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -692,23 +694,30 @@ func TestFIDO2StrategyDefaultPath(t *testing.T) {
 		FIDO2UPRequired: true,
 	}
 
+	// The default fallback methods, through the chain NewManager registers.
 	platform := newFIDO2TestPlatform(device, volume)
 	platform.Config = DefaultConfig()
-	manager := &initrdManager{platform: platform, logger: logging.DefaultLogger()}
-	volumeConfig, err := manager.buildVolumeConfig()
+	platform.Config.PCRSelection = []uint{7}
+	built, err := NewManager(platform, logging.DefaultLogger())
 	if err != nil {
-		t.Fatalf("buildVolumeConfig failed: %v", err)
+		t.Fatalf("NewManager failed: %v", err)
 	}
+	manager := built.(*initrdManager)
+	marker := filepath.Join(t.TempDir(), "unlock-strategy")
+	manager.chain.SetMarkerPath(marker)
 
-	strategy := NewFIDO2Strategy(platform, logging.DefaultLogger())
-	if !strategy.CanUnlock(context.Background(), volumeConfig) {
-		t.Fatal("the default volume configuration has no FIDO2 slot")
-	}
-	if err := strategy.Unlock(context.Background(), volumeConfig); err != nil {
-		t.Fatalf("Unlock on the default path failed: %v", err)
+	if err := manager.UnlockVolumes(context.Background()); err != nil {
+		t.Fatalf("UnlockVolumes on the default path failed: %v", err)
 	}
 	if len(volume.opened) != 1 {
 		t.Errorf("slot tried %d times, want 1", len(volume.opened))
+	}
+	winner, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatalf("reading the unlock-strategy marker: %v", err)
+	}
+	if got := strings.TrimSpace(string(winner)); got != "FIDO2" {
+		t.Errorf("volume unlocked by %q, want FIDO2", got)
 	}
 }
 
