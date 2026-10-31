@@ -81,7 +81,8 @@ func serveIAM(s *RESTServer, method, path, token string) *httptest.ResponseRecor
 // handler answered it, rather than a guard, or the router finding no route.
 func assertReachedHandler(t *testing.T, recorder *httptest.ResponseRecorder, msgAndArgs ...any) {
 	t.Helper()
-	for _, refused := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusMethodNotAllowed} {
+	for _, refused := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusMethodNotAllowed,
+		http.StatusInternalServerError, http.StatusNotImplemented} {
 		assert.NotEqual(t, refused, recorder.Code, msgAndArgs...)
 	}
 	assert.NotEqual(t, "404 page not found\n", recorder.Body.String(), msgAndArgs...)
@@ -122,17 +123,38 @@ func TestSetIAMHandlers_RefusesAMissingDependency(t *testing.T) {
 func TestSetIAMHandlers_MountsEveryIAMRoute(t *testing.T) {
 	s := iamRESTServer(t)
 	routes := 0
-	require.NoError(t, s.router.Walk(func(route *mux.Route, _ *mux.Router, _ []*mux.Route) error {
+	require.NoError(t, s.router.Walk(func(route *mux.Route, _ *mux.Router, ancestors []*mux.Route) error {
 		template, err := route.GetPathTemplate()
 		if err != nil || !strings.HasPrefix(template, "/api/v1/iam") {
 			return nil
 		}
-		if _, err := route.GetMethods(); err == nil {
+		// Walk also descends into the IAM router each mounted route
+		// delegates to; count the daemon router's own routes only.
+		if len(ancestors) == 0 && route.GetHandler() != nil {
 			routes++
 		}
 		return nil
 	}))
-	assert.Equal(t, 71, routes)
+	// The IAM router's 71 routes, less the 18 (9 operations under both
+	// route forms) whose SDK operation the pinned embedded transport lacks.
+	assert.Len(t, iamRoutesAwaitingSDK, 18)
+	assert.Equal(t, 71-len(iamRoutesAwaitingSDK), routes)
+}
+
+// Every route whose operation the pinned SDK cannot dispatch is left out of
+// the daemon router, so it answers 404 like any unknown path — even where a
+// served route shares its path — rather than reaching a handler that fails
+// with 500.
+func TestIAMREST_RoutesAwaitingSDKAnswerNotFound(t *testing.T) {
+	s := iamRESTServer(t)
+	placeholders := strings.NewReplacer("{tenant}", iamRESTTenantA, "{id}", "x1", "{role}", "r1", "{user}", "u1")
+	for key := range iamRoutesAwaitingSDK {
+		t.Run(key.method+" "+key.template, func(t *testing.T) {
+			recorder := serveIAM(s, key.method, placeholders.Replace(key.template), "operator")
+			assert.Equal(t, http.StatusNotFound, recorder.Code)
+			assert.Equal(t, "404 page not found\n", recorder.Body.String())
+		})
+	}
 }
 
 func TestIAMREST_ScopePerMethod(t *testing.T) {
@@ -148,14 +170,12 @@ func TestIAMREST_ScopePerMethod(t *testing.T) {
 		{"reader", http.MethodPost, users, "iam:write", false},
 		{"reader", http.MethodPut, users + "/u1", "iam:write", false},
 		{"reader", http.MethodDelete, users + "/u1", "iam:delete", false},
-		{"reader", http.MethodPost, "/api/v1/iam/tenants/" + iamRESTTenantA + "/policies/validate", "iam:read", true},
-		{"reader", http.MethodPost, "/api/v1/iam/tenants/" + iamRESTTenantA + "/policies/test", "iam:read", true},
 		{"reader", http.MethodPost, "/api/v1/iam/tenants/" + iamRESTTenantA + "/permissions/check", "iam:read", true},
 		{"writer", http.MethodGet, users, "iam:read", false},
 		{"writer", http.MethodPost, users, "iam:write", true},
 		{"writer", http.MethodPut, users + "/u1", "iam:write", true},
 		{"writer", http.MethodDelete, users + "/u1", "iam:delete", false},
-		{"writer", http.MethodPost, "/api/v1/iam/tenants/" + iamRESTTenantA + "/policies/validate", "iam:read", false},
+		{"writer", http.MethodPost, "/api/v1/iam/tenants/" + iamRESTTenantA + "/permissions/check", "iam:read", false},
 		{"deleter", http.MethodDelete, users + "/u1", "iam:delete", true},
 		{"deleter", http.MethodPost, users, "iam:write", false},
 		{"other", http.MethodGet, users, "iam:read", false},

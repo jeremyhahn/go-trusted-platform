@@ -128,8 +128,6 @@ func TestIAMREST_AppRoutesStayInTheURLTenant(t *testing.T) {
 		suffix string
 	}{
 		{http.MethodGet, ""},
-		{http.MethodPut, ""},
-		{http.MethodPost, "/rotate"},
 		{http.MethodDelete, ""},
 	} {
 		t.Run(tc.method+tc.suffix, func(t *testing.T) {
@@ -149,29 +147,4 @@ func TestIAMREST_AppRoutesStayInTheURLTenant(t *testing.T) {
 	ownResp := serveIAM(s, http.MethodGet, tenantApps+own.ClientID, "operator")
 	assert.Equal(t, http.StatusOK, ownResp.Code, ownResp.Body.String())
 	assert.Contains(t, ownResp.Body.String(), "portal")
-}
-
-// iamMembershipRemovals are RevokeUserRole and RemoveGroupMember on the
-// tenant path and on the flat alias.
-var iamMembershipRemovals = []string{
-	"/api/v1/iam/tenants/" + iamRESTTenantA + "/users/u1/roles/admin",
-	"/api/v1/iam/users/u1/roles/admin?tenant_id=" + iamRESTTenantA,
-	"/api/v1/iam/tenants/" + iamRESTTenantA + "/groups/g1/members/u1",
-	"/api/v1/iam/groups/g1/members/u1?tenant_id=" + iamRESTTenantA,
-}
-
-// Removing a membership needs iam:write, as RevokeRole and
-// RemoveGroupMember do in the shared RPC catalog.
-func TestIAMREST_MembershipRemovalNeedsWrite(t *testing.T) {
-	s := iamRESTServer(t)
-	for _, path := range iamMembershipRemovals {
-		t.Run(path, func(t *testing.T) {
-			writer := serveIAM(s, http.MethodDelete, path, "writer")
-			assertReachedHandler(t, writer, writer.Body.String())
-
-			deleter := serveIAM(s, http.MethodDelete, path, "deleter")
-			assert.Equal(t, http.StatusForbidden, deleter.Code)
-			assert.Contains(t, deleter.Body.String(), "scope iam:write required")
-		})
-	}
 }

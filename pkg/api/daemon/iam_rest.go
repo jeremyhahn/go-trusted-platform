@@ -54,6 +54,45 @@ var iamMembershipDeletes = []string{
 
 // iamRouteAction is a route suffix whose scope action differs from the
 // one its method maps to in iamMethodActions.
+// iamRouteKey names one IAM route by its method and path template.
+type iamRouteKey struct {
+	method   string
+	template string
+}
+
+// iamOperationsAwaitingSDK are the IAM routes, relative to a tenant scope,
+// whose SDK operation the pinned go-quicbaas SDK (v0.12.0-alpha) cannot
+// dispatch on its embedded transport: transport/embedded/iam_dispatch.go
+// carries no handler for them, so mounted they answer 500 with
+// UnknownMethodError. The daemon leaves them out until the SDK v0.16 adoption
+// (#906) brings the operations.
+var iamOperationsAwaitingSDK = []iamRouteKey{
+	{http.MethodPost, "/users/{id}/roles/{role}"},      // quicbaas.IAM.User/AssignRole
+	{http.MethodDelete, "/users/{id}/roles/{role}"},    // quicbaas.IAM.User/RevokeRole
+	{http.MethodPost, "/groups/{id}/members/{user}"},   // quicbaas.IAM.Group/AddMember
+	{http.MethodDelete, "/groups/{id}/members/{user}"}, // quicbaas.IAM.Group/RemoveMember
+	{http.MethodPost, "/policies/validate"},            // quicbaas.IAM.Policy/Validate
+	{http.MethodPost, "/policies/test"},                // quicbaas.IAM.Policy/Test
+	{http.MethodPut, "/policies/{id}"},                 // quicbaas.IAM.Policy/Update
+	{http.MethodPut, "/apps/{id}"},                     // quicbaas.IAM.App/Update
+	{http.MethodPost, "/apps/{id}/rotate"},             // quicbaas.IAM.App/RotateSecret
+}
+
+// iamRoutesAwaitingSDK is iamOperationsAwaitingSDK under both route forms:
+// the tenant-scoped /iam/tenants/{tenant}/... and the flat /iam/....
+var iamRoutesAwaitingSDK = iamRouteKeysUnderBothForms(iamOperationsAwaitingSDK)
+
+func iamRouteKeysUnderBothForms(operations []iamRouteKey) map[iamRouteKey]struct{} {
+	const iamBase = iamRESTParentPath + "/iam"
+	out := make(map[iamRouteKey]struct{}, 2*len(operations))
+	for _, op := range operations {
+		for _, scope := range []string{iamBase + "/tenants/{tenant}", iamBase} {
+			out[iamRouteKey{method: op.method, template: scope + op.template}] = struct{}{}
+		}
+	}
+	return out
+}
+
 type iamRouteAction struct {
 	suffix string
 	action string
@@ -105,10 +144,55 @@ func (s *RESTServer) SetIAMHandlers(logger *logging.Logger, iamClient restiam.IA
 	if err != nil {
 		return ErrIAMRESTUnavailable{Reason: err.Error()}
 	}
-	// The IAM router's base path is relative to the /api/v1 parent.
-	router.RegisterRoutes(s.router.PathPrefix(iamRESTParentPath).Subrouter())
+	if err := s.mountIAMRoutes(router); err != nil {
+		return ErrIAMRESTUnavailable{Reason: err.Error()}
+	}
 	s.logger.Info("IAM REST routes registered")
 	return nil
+}
+
+// mountIAMRoutes mounts on the daemon router every IAM route except those in
+// iamRoutesAwaitingSDK. The IAM router registers its whole table, with its
+// authentication and admin guards, on a router of its own; each served route
+// is then mounted on the daemon router by its method and path template and
+// delegates to that router, so the guards run exactly as before.
+//
+// A served route matches its method with a matcher func rather than mux's
+// Methods matcher: a Methods mismatch answers 405, and a left-out route that
+// shares its path with a served one (PUT /policies/{id} beside GET) must answer
+// 404 like any unknown path.
+func (s *RESTServer) mountIAMRoutes(iamRouter *restiam.IAMRouter) error {
+	routes := mux.NewRouter()
+	// The IAM router's base path is relative to the /api/v1 parent.
+	iamRouter.RegisterRoutes(routes.PathPrefix(iamRESTParentPath).Subrouter())
+	return routes.Walk(func(route *mux.Route, _ *mux.Router, _ []*mux.Route) error {
+		if route.GetHandler() == nil {
+			// A path-prefix route that only holds a subrouter.
+			return nil
+		}
+		template, err := route.GetPathTemplate()
+		if err != nil {
+			return err
+		}
+		methods, err := route.GetMethods()
+		if err != nil {
+			return err
+		}
+		for _, method := range methods {
+			if _, awaiting := iamRoutesAwaitingSDK[iamRouteKey{method: method, template: template}]; awaiting {
+				continue
+			}
+			s.router.Handle(template, routes).MatcherFunc(iamMethodMatcher(method))
+		}
+		return nil
+	})
+}
+
+// iamMethodMatcher matches requests whose method is method.
+func iamMethodMatcher(method string) mux.MatcherFunc {
+	return func(r *http.Request, _ *mux.RouteMatch) bool {
+		return r.Method == method
+	}
 }
 
 // iamRESTAuthorization is the daemon's authorization for the IAM router.
