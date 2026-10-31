@@ -88,3 +88,39 @@ func TestQuicBaaSIAMAdapter_CreatePolicy_KeepsUnconditionalRules(t *testing.T) {
 	assert.Equal(t, []iamsdk.ActionMatcher{{Pattern: "read"}}, rule.Actions)
 	assert.Equal(t, []iamsdk.ResourceMatcher{{Pattern: "users/*"}}, rule.Resources)
 }
+
+// An admin-only grant must never be stored as a grant to everyone: the
+// SDK's create keeps no subject selector, and an empty selector matches
+// every subject, so the adapter refuses the policy.
+func TestQuicBaaSIAMAdapter_CreatePolicy_RefusesSubjectRestrictions(t *testing.T) {
+	cases := []struct {
+		name     string
+		specYAML string
+	}{
+		{"roles under spec", "spec:\n  subjects:\n    roles: [admin]\n  rules:\n  - name: admins\n    effect: allow\n    actions: ['*']\n    resources: ['*']\n"},
+		{"users on a flat document", "subjects:\n  users: [alice]\nrules:\n- name: alice\n  effect: allow\n  actions: [read]\n  resources: ['*']\n"},
+		{"a nested group selector", "spec:\n  subjects:\n    groups:\n      ids: [ops]\n  rules:\n  - name: ops\n    effect: allow\n    actions: [read]\n    resources: ['*']\n"},
+		{"a scalar selector", "spec:\n  subjects:\n    role: admin\n  rules:\n  - name: admins\n    effect: allow\n    actions: [read]\n    resources: ['*']\n"},
+		{"a list of subjects", "spec:\n  subjects: [admin]\n  rules:\n  - name: admins\n    effect: allow\n    actions: [read]\n    resources: ['*']\n"},
+		{"a non-string selector", "spec:\n  subjects:\n    uid: 7\n  rules:\n  - name: admins\n    effect: allow\n    actions: [read]\n    resources: ['*']\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			policies, err := createPolicyFromYAML(t, tc.specYAML)
+
+			var invalid ErrInvalidPolicySpec
+			require.ErrorAs(t, err, &invalid)
+			assert.Contains(t, err.Error(), "subject selectors")
+			assert.Empty(t, policies.created, "a refused policy must not be stored")
+		})
+	}
+}
+
+func TestQuicBaaSIAMAdapter_CreatePolicy_EmptySubjectsStillCreate(t *testing.T) {
+	policies, err := createPolicyFromYAML(t, "spec:\n  subjects:\n    roles: []\n    users: ''\n  rules:\n  - name: readers\n    effect: allow\n    actions: [read]\n    resources: ['*']\n")
+
+	require.NoError(t, err)
+	require.Len(t, policies.created, 1)
+	require.Len(t, policies.created[0].Rules, 1)
+	assert.Equal(t, "readers", policies.created[0].Rules[0].Name)
+}

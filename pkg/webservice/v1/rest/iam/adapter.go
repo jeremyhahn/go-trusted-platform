@@ -30,6 +30,9 @@ import (
 // priority, actions and resources, so a `when` or `unless` condition would
 // be dropped and a conditional rule stored as unconditional. A rule that
 // carries either is refused with ErrPolicyConditionUnsupported instead.
+// The create keeps no subject selector either, and an empty selector
+// matches every subject, so a policy whose `subjects` names any role, group
+// or user is refused with ErrInvalidPolicySpec rather than widened.
 func parsePolicyRulesFromYAML(specYAML string) ([]iamsdk.Rule, error) {
 	if specYAML == "" {
 		return nil, nil
@@ -45,6 +48,7 @@ func parsePolicyRulesFromYAML(specYAML string) ([]iamsdk.Rule, error) {
 				When      []map[string]interface{} `yaml:"when"`
 				Unless    []map[string]interface{} `yaml:"unless"`
 			} `yaml:"rules"`
+			Subjects interface{} `yaml:"subjects"`
 		} `yaml:"spec"`
 		Rules []struct {
 			Name      string                   `yaml:"name"`
@@ -55,9 +59,15 @@ func parsePolicyRulesFromYAML(specYAML string) ([]iamsdk.Rule, error) {
 			When      []map[string]interface{} `yaml:"when"`
 			Unless    []map[string]interface{} `yaml:"unless"`
 		} `yaml:"rules"`
+		Subjects interface{} `yaml:"subjects"`
 	}
 	if err := yaml.Unmarshal([]byte(specYAML), &doc); err != nil {
 		return nil, nil
+	}
+	if hasSubjectSelector(doc.Spec.Subjects) || hasSubjectSelector(doc.Subjects) {
+		return nil, ErrInvalidPolicySpec{Reason: "spec.subjects restricts which subjects the policy applies to, " +
+			"and the pinned IAM SDK's policy create does not carry subject selectors; " +
+			"stored without them the policy would apply to every subject in the tenant"}
 	}
 	src := doc.Spec.Rules
 	if len(src) == 0 {
@@ -95,6 +105,29 @@ func parsePolicyRulesFromYAML(specYAML string) ([]iamsdk.Rule, error) {
 		})
 	}
 	return out, nil
+}
+
+// hasSubjectSelector reports whether a policy's `subjects` value names any
+// subject (a role, group, user or any other selector). An absent or empty
+// selector restricts nothing.
+func hasSubjectSelector(subjects interface{}) bool {
+	switch v := subjects.(type) {
+	case nil:
+		return false
+	case map[string]interface{}:
+		for _, selector := range v {
+			if hasSubjectSelector(selector) {
+				return true
+			}
+		}
+		return false
+	case []interface{}:
+		return len(v) > 0
+	case string:
+		return v != ""
+	default:
+		return true
+	}
 }
 
 // QuicBaaSIAMAdapter wraps a quicbaassdk.IAMClient to satisfy the
