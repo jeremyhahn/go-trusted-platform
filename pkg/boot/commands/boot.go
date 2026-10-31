@@ -33,9 +33,35 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const (
+// Host paths and host calls of the boot and recovery commands. Each one
+// defaults to the real path or call and production never sets it; a unit
+// test points it at a temporary directory or a fake and restores it.
+var (
 	// Installer container mount point during firstboot
 	installerMountPoint = "/mnt/installer"
+
+	// rootConfigPath is the platform config on the decrypted root.
+	rootConfigPath = "/etc/trusted-platform/config.yaml"
+
+	// bootLogPath is the tmpfs breadcrumb log runBoot appends to.
+	bootLogPath = "/run/platform-initrd-boot.log"
+
+	// The go-luks2 and mount calls tryMountInstaller makes.
+	setupLoopDevice  = luks2.SetupLoopDevice
+	unlockLUKS       = luks2.Unlock
+	mappedDevicePath = luks2.GetMappedDevicePath
+	lockLUKS         = luks2.Lock
+	detachLoopDevice = luks2.DetachLoopDevice
+	mountFS          = syscall.Mount
+
+	// newInstallerCloser builds the calls that close the installer container.
+	newInstallerCloser = defaultInstallerCloser
+
+	// mountDisklessRoot mounts the dm-verity root of a diskless boot.
+	mountDisklessRoot = platforminitrd.MountDisklessRoot
+
+	// createManager builds the platform manager for boot and recovery.
+	createManager = CreateManager
 )
 
 var (
@@ -111,7 +137,7 @@ func runBoot(ctx context.Context) error {
 	// log file so that any subsequent forensic dump can recover the exact
 	// step where boot got stuck. The kernel console + this file are the
 	// two channels we have for diagnosing pre-pivot hangs.
-	bcFile, _ := os.OpenFile("/run/platform-initrd-boot.log",
+	bcFile, _ := os.OpenFile(bootLogPath,
 		os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	bc := func(format string, args ...any) {
 		line := fmt.Sprintf("[BOOT] "+format+"\n", args...)
@@ -151,7 +177,7 @@ func runBoot(ctx context.Context) error {
 	if disklessConfig != nil {
 		bc("step03: mounting diskless dm-verity root")
 		startTime := time.Now()
-		mount, err := platforminitrd.MountDisklessRoot(ctx, *disklessConfig)
+		mount, err := mountDisklessRoot(ctx, *disklessConfig)
 		if err != nil {
 			bc("step03: ERROR diskless root mount failed: %v", err)
 			return handleBootFailure(ctx, err, bootEmergency)
@@ -181,7 +207,7 @@ func runBoot(ctx context.Context) error {
 	installerOpen := installerMounted
 	defer func() {
 		if installerOpen {
-			if err := closeInstaller(installerLoopDev, defaultInstallerCloser()); err != nil {
+			if err := closeInstaller(installerLoopDev, newInstallerCloser()); err != nil {
 				fmt.Fprintf(os.Stderr, "[BOOT] WARNING: installer container left open: %v\n", err)
 			}
 		}
@@ -262,7 +288,7 @@ func runBoot(ctx context.Context) error {
 	bc("step07: CreateManager(tpmPath=%q)", bootTPMPath)
 	// Create platform manager
 	fmt.Fprintf(os.Stderr, "[BOOT] Creating platform manager\n")
-	manager, err := CreateManager(ctx, logger, config, bootTPMPath)
+	manager, err := createManager(ctx, logger, config, bootTPMPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[BOOT] ERROR: Failed to create manager: %v\n", err)
 		return handleBootFailure(ctx, err, bootEmergency)
@@ -290,7 +316,7 @@ func runBoot(ctx context.Context) error {
 	// container is closed first so the wipe acts on a quiescent file.
 	if installerMounted {
 		bc("step08: seal confirmation (unlockedWith=%q)", manager.UnlockedWith())
-		if err := closeInstaller(installerLoopDev, defaultInstallerCloser()); err != nil {
+		if err := closeInstaller(installerLoopDev, newInstallerCloser()); err != nil {
 			// Still mounted or mapped: not a file to overwrite. The root is
 			// unlocked, the boot goes on, the container stays for the next
 			// TPM-PCR boot to confirm.
@@ -433,7 +459,7 @@ func tryMountInstaller(efiPath string) (string, bool) {
 
 	fmt.Fprintf(os.Stderr, "[BOOT] tryMountInstaller: SetupLoopDevice(%q)\n", installerPath)
 	// Setup loop device for the installer file
-	loopDev, err := luks2.SetupLoopDevice(installerPath)
+	loopDev, err := setupLoopDevice(installerPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[BOOT] WARNING: Failed to setup loop device: %v\n", err)
 		return "", false
@@ -442,15 +468,15 @@ func tryMountInstaller(efiPath string) (string, bool) {
 	fmt.Fprintf(os.Stderr, "[BOOT] tryMountInstaller: luks2.Unlock(installer)\n")
 
 	// Unlock with well-known password using go-luks2
-	if err := luks2.Unlock(loopDev, []byte(bootconfig.InstallerPassword), "installer"); err != nil {
+	if err := unlockLUKS(loopDev, []byte(bootconfig.InstallerPassword), "installer"); err != nil {
 		fmt.Fprintf(os.Stderr, "[BOOT] WARNING: Failed to unlock installer: %v\n", err)
-		luks2.DetachLoopDevice(loopDev)
+		detachLoopDevice(loopDev)
 		return "", false
 	}
 	fmt.Fprintf(os.Stderr, "[BOOT] Installer unlocked successfully\n")
 
 	// Get mapped device path
-	installerDevPath, err := luks2.GetMappedDevicePath("installer")
+	installerDevPath, err := mappedDevicePath("installer")
 	if err != nil {
 		installerDevPath = "/dev/mapper/installer"
 	}
@@ -458,16 +484,16 @@ func tryMountInstaller(efiPath string) (string, bool) {
 	// Create mount point
 	if err := os.MkdirAll(installerMountPoint, 0700); err != nil {
 		fmt.Fprintf(os.Stderr, "[BOOT] WARNING: Failed to create mount point: %v\n", err)
-		luks2.Lock("installer")
-		luks2.DetachLoopDevice(loopDev)
+		lockLUKS("installer")
+		detachLoopDevice(loopDev)
 		return "", false
 	}
 
 	// Mount read-write for provisioning (FirstbootSealStrategy needs write access)
-	if err := syscall.Mount(installerDevPath, installerMountPoint, "ext4", 0, ""); err != nil {
+	if err := mountFS(installerDevPath, installerMountPoint, "ext4", 0, ""); err != nil {
 		fmt.Fprintf(os.Stderr, "[BOOT] WARNING: Failed to mount installer: %v\n", err)
-		luks2.Lock("installer")
-		luks2.DetachLoopDevice(loopDev)
+		lockLUKS("installer")
+		detachLoopDevice(loopDev)
 		return "", false
 	}
 
@@ -616,7 +642,7 @@ func loadSealPCRsFromConfig(logger interface {
 	// Single source of truth paths (installer.luks mirrors target filesystem)
 	configPaths := []string{
 		filepath.Join(installerMountPoint, "etc", "trusted-platform", "config.yaml"),
-		"/etc/trusted-platform/config.yaml",
+		rootConfigPath,
 	}
 
 	for _, path := range configPaths {
