@@ -123,7 +123,7 @@ Package functions:
 `DiscoverMAC(ctx, *Config, *slog.Logger) (string, error)`,
 `DiscoverMACs(ctx, *Config, *slog.Logger) ([]string, error)`,
 `DetectProtocol(ctx, address string, timeout time.Duration) Protocol`,
-`GenerateRandomPassword(n int) (*memguard.Secret, error)`,
+`GenerateRandomPassword(n int) (*memguard.MemoryEnclave, error)`,
 `CredentialPath(name string) string`,
 `NameFromCredentialPath(path string) string`,
 `MarshalCredentials(*Credentials) ([]byte, error)`,
@@ -513,18 +513,18 @@ input unconditionally via `defer zero(b)`.
 
 Non-negotiable, and enforced by signature rather than convention:
 
-- `UserManager.CreateUser` and `SetUserPassword` take `*memguard.Secret`. Raw
+- `UserManager.CreateUser` and `SetUserPassword` take `*memguard.MemoryEnclave`. Raw
   `string`/`[]byte` passwords are deliberately absent from the interface.
 - `CertificateManager.ReplaceWebCertificate` takes `certPEM []byte` and
-  `keyPEM *memguard.Secret`.
-- `PasswordGenerator` is `func() (*memguard.Secret, error)`;
+  `keyPEM *memguard.MemoryEnclave`.
+- `PasswordGenerator` is `func() (*memguard.MemoryEnclave, error)`;
   `GenerateRandomPassword(n)` returns one. `DefaultPasswordLength` is `20`; the
   alphabet is `[A-Za-z0-9]` only, because BMC firmware routinely mangles
   punctuation.
-- `Credentials.Password` is a `*memguard.Secret` with `Destroy`, `IsAlive` and
-  `Clone`.
+- `Credentials.Password` is a `*memguard.MemoryEnclave`; `Credentials` itself
+  has `Destroy`, `IsAlive` and `Clone`.
 - `Service.ReplaceWebCertificate` copies the caller's `keyPEM` into a fresh
-  `memguard.Secret` and destroys it on return — and its doc comment states that
+  `memguard.MemoryEnclave` and destroys it on return — and its doc comment states that
   it does **not** scrub the caller's slice. Callers own that.
 - Intermediate `[]byte` buffers (PEM bundles, multipart bodies) are zeroed
   immediately after `httpClient.Do` returns.
@@ -712,7 +712,7 @@ The audit record for the trust lifecycle is `app.BMCEnrollResult.Steps` and
 containing secret material.
 
 **Never log:** BMC passwords, `MediaSpec.Password`, TLS private key PEM,
-`memguard.Secret` contents, or the marshalled `credentialRecord`.
+`memguard.MemoryEnclave` contents, or the marshalled `credentialRecord`.
 
 ## 14. Related
 

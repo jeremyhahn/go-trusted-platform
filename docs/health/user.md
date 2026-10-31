@@ -43,7 +43,7 @@ platformctl health
 That gives you the verdict, and names every component that is not healthy:
 
 ```
-Overall Health: degraded
+Overall Health: DEGRADED
 
 [WARNING] ntp: DEGRADED — time-unsynced
 
@@ -57,16 +57,16 @@ platformctl health --detailed
 ```
 
 ```
-Overall Health: degraded
+Overall Health: DEGRADED
 
 Component Health:
 
 COMPONENT  STATUS    MESSAGE
-ca         healthy   CA service is healthy
-kms        healthy   KMS service is healthy
-ntp        degraded  time-unsynced
-quic       healthy   QUIC server is healthy
-rest       healthy   REST server is healthy
+ca         HEALTHY   CA service is healthy
+kms        HEALTHY   KMS service is healthy
+ntp        DEGRADED  time-unsynced
+quic       HEALTHY   QUIC server is healthy
+rest       HEALTHY   REST server is healthy
 ```
 
 ---
@@ -115,9 +115,10 @@ subsystem is wired.
 
 | Component | Goes degraded when | Goes unhealthy when |
 |---|---|---|
-| `ca` | Configured but not fully initialised; root certificate expires within 30 days; the trusted root cannot be read | Not initialised at all; root or intermediate certificate has expired |
+| `ca` | Configured but not fully initialised; root certificate expires within 30 days or is not yet valid; the trusted root cannot be read | Not initialised at all; root or intermediate certificate has expired |
 | `ntp` | The clock is not synchronised, or a large correction was seen after first boot | chronyd's control socket cannot be reached |
 | `sdn` | — | The OVS client is not initialised |
+| `sdn-addressing` | A configured bridge address was refused because another host already answers for it, or was assigned without a duplicate-address probe | — |
 | `kms`, `iam`, `tenant` | A custom health check reported a problem | The service is not running |
 | `quic`, `rest`, `mcp` | — | The server is not running |
 
@@ -137,7 +138,7 @@ webservice port, without a credential:
 ```
 GET https://platform.example.com/health/live    # liveness: restart the node if this fails
 GET https://platform.example.com/health/ready   # readiness: take it out of rotation if this fails
-GET https://platform.example.com/health         # aggregate: every component healthy
+GET https://platform.example.com/health         # aggregate: nothing degraded or unhealthy
 ```
 
 **The status code is the verdict.** Each answers `200` when the probe passes
@@ -174,7 +175,7 @@ matching REST probe does:
 It always exits 0. Parse the output instead:
 
 ```bash
-test "$(platformctl --output json health | jq -r .status)" = "healthy"
+test "$(platformctl --output json health | jq -r .status)" = "HEALTHY"
 ```
 
 **Health says healthy but a subsystem is clearly broken.**
@@ -187,7 +188,10 @@ failed. A failed registration is logged at warn with
 **Everything says healthy and the component list is empty.**
 The health registry is not wired into the surface you queried. That path reports
 healthy by construction — it is not evidence of anything. Confirm the component
-list is non-empty before trusting a green answer.
+list is non-empty before trusting a green answer. Two surfaces differ: gRPC
+`GetHealth` (and so `platformctl health`) falls back to listing the daemon's
+managed services by state, and the MCP health tools return a "service not
+available" error instead of an answer ([api.md](api.md) §6).
 
 **A component reports `unknown` with "health check timed out".**
 Its probe did not answer within the registry's 30-second budget. This usually
@@ -210,9 +214,12 @@ daemon configuration problem, not a fault in the subsystem.
 
 **A gRPC load balancer says the node is not serving, but `platformctl health`
 says healthy.**
-Those are two different mechanisms. Load balancers speak `grpc.health.v1`, which
-reports per gRPC service name and does not consult the component registry at
-all. Disagreement between them is expected, not a bug —
+Load balancers speak `grpc.health.v1`, which answers from the same component
+registry: `NOT_SERVING` only when the overall status is unhealthy, `SERVING`
+otherwise, degraded included. It answers one overall verdict for the empty
+service name; asking for a named service gets `NOT_FOUND`, because no service
+names are registered. So check the load balancer is probing with an empty
+service name, and that it reached this node —
 [architecture.md](architecture.md) §6.
 
 ---
@@ -221,6 +228,6 @@ all. Disagreement between them is expected, not a bug —
 
 - [cli.md](cli.md) — every flag on `platformctl health`
 - [api.md](api.md) — every capability on every transport, including what is missing
-- [architecture.md](architecture.md) — why parallel, why four states, why two mechanisms
+- [architecture.md](architecture.md) — why parallel, why four states, how `grpc.health.v1` reads the registry
 - [`docs/daemon/`](../daemon/) — service lifecycle, metrics, logs
 - [`docs/ntp/`](../ntp/) — the `ntp` component in depth

@@ -568,9 +568,11 @@ func (h *ContainerHandlers) handleAttestContainer(w http.ResponseWriter, r *http
 	}
 
 	// Parse optional request body
+	// ContentLength is -1 on a chunked request; an empty body decodes to
+	// io.EOF and means the request carried no options.
 	var req AttestContainerRequest
-	if r.Body != nil && r.ContentLength > 0 {
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 			h.writeError(w, http.StatusBadRequest, ErrInvalidRequestBody{Reason: err.Error()})
 			return
 		}

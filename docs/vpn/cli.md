@@ -130,7 +130,7 @@ host has no device identity, and the verb exits 1, when neither file exists or
 has a `tpm` section, the TPM does not open, the `tpm.idevid` section is missing,
 or no IDevID certificate is found. The certificate is read from the TPM's NV
 index only when `tpm.idevid.cert-handle` holds it, which platformd does not
-write today (go-xkms#138); pass the chain with `--idevid-cert`, exported with
+write today (#81); pass the chain with `--idevid-cert`, exported with
 `platformctl tpm idevid certificate -o json` (its `certificate_pem`).
 
 `disconnect` forgets the local lease and brings the data plane down even when

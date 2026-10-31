@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"path/filepath"
 	"syscall"
 	"testing"
 
@@ -248,12 +249,20 @@ func TestManager_EnsureTunnel_IPsecRollsBackOnFailure(t *testing.T) {
 
 // leftIPsec installs cfg and returns the kernel as a killed datapath leaves
 // it: the carrier, both SAs and both policies still in place.
-func leftIPsec(t *testing.T, cfg TunnelConfig) *mockNetlinkOps {
+func leftIPsec(t *testing.T, cfg TunnelConfig) (*mockNetlinkOps, Option) {
 	t.Helper()
 	mock := newMockNetlinkOps()
-	killed := newManagerWithOps(testLogger(), mock, WithKeyProvider(keysFor(cfg)))
+	inventory := testInventory(t)
+	killed := newManagerWithOps(testLogger(), mock, WithKeyProvider(keysFor(cfg)), inventory)
 	require.NoError(t, killed.EnsureTunnel(context.Background(), cfg))
-	return mock
+	return mock, inventory
+}
+
+// testInventory is an IPsec inventory in a fresh directory, for a manager
+// and its relaunch to share.
+func testInventory(t *testing.T) Option {
+	t.Helper()
+	return WithIPsecInventory(filepath.Join(t.TempDir(), "ipsec-installed.json"))
 }
 
 // stateBySPI is the SA the mock holds for spi, or nil.
@@ -268,7 +277,7 @@ func stateBySPI(mock *mockNetlinkOps, spi uint32) *vnl.XfrmState {
 
 func TestManager_EnsureTunnel_IPsecRelaunchKeepsLiveSAs(t *testing.T) {
 	cfg := ipsecConfig()
-	mock := leftIPsec(t, cfg)
+	mock, inventory := leftIPsec(t, cfg)
 	carrier := mock.links[cfg.Name]
 	out, in := stateBySPI(mock, cfg.IPsec.SPIOut), stateBySPI(mock, cfg.IPsec.SPIIn)
 	rewrites := mock.xfrmPolicyUpdates
@@ -276,7 +285,7 @@ func TestManager_EnsureTunnel_IPsecRelaunchKeepsLiveSAs(t *testing.T) {
 	mock.linkDelFn = func(vnl.Link) error { return errors.New("an adopted carrier is never deleted") }
 	mock.xfrmStateAddFn = func(*vnl.XfrmState) error { return errors.New("a live SA is never re-added") }
 	mock.xfrmStateDelFn = func(*vnl.XfrmState) error { return errors.New("a live SA is never deleted") }
-	relaunched := newManagerWithOps(testLogger(), mock, WithKeyProvider(keysFor(cfg)))
+	relaunched := newManagerWithOps(testLogger(), mock, WithKeyProvider(keysFor(cfg)), inventory)
 
 	require.NoError(t, relaunched.EnsureTunnel(context.Background(), cfg))
 
@@ -321,15 +330,6 @@ func TestManager_EnsureTunnel_IPsecRelaunchRepairsWhatDiffers(t *testing.T) {
 			},
 			rewrites: 1, carrierKept: true,
 		},
-		"inbound policy with optional template": {
-			mutate: func(m *mockNetlinkOps) {
-				weak := *m.xfrmPolicies[1]
-				weak.Tmpls = []vnl.XfrmPolicyTmpl{weak.Tmpls[0]}
-				weak.Tmpls[0].Optional = 1
-				m.xfrmPolicies[1] = &weak
-			},
-			rewrites: 1, carrierKept: true,
-		},
 		"inbound policy missing": {
 			mutate:   func(m *mockNetlinkOps) { m.xfrmPolicies = m.xfrmPolicies[:1] },
 			rewrites: 1, carrierKept: true,
@@ -340,7 +340,7 @@ func TestManager_EnsureTunnel_IPsecRelaunchRepairsWhatDiffers(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			mock := leftIPsec(t, cfg)
+			mock, inventory := leftIPsec(t, cfg)
 			carrier := mock.links[cfg.Name]
 			out, in := stateBySPI(mock, cfg.IPsec.SPIOut), stateBySPI(mock, cfg.IPsec.SPIIn)
 			rewrites := mock.xfrmPolicyUpdates
@@ -351,7 +351,7 @@ func TestManager_EnsureTunnel_IPsecRelaunchRepairsWhatDiffers(t *testing.T) {
 			if c.outKey != 0 {
 				keys.keys[cfg.IPsec.KeyRef] = espKey(c.outKey)
 			}
-			relaunched := newManagerWithOps(testLogger(), mock, WithKeyProvider(keys))
+			relaunched := newManagerWithOps(testLogger(), mock, WithKeyProvider(keys), inventory)
 
 			require.NoError(t, relaunched.EnsureTunnel(context.Background(), cfg))
 
@@ -399,10 +399,10 @@ func TestManager_EnsureTunnel_IPsecRelaunchFailuresTearNothingDown(t *testing.T)
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
-			mock := leftIPsec(t, cfg)
+			mock, inventory := leftIPsec(t, cfg)
 			carrier := mock.links[cfg.Name]
 			mutate(mock)
-			relaunched := newManagerWithOps(testLogger(), mock, WithKeyProvider(keysFor(cfg)))
+			relaunched := newManagerWithOps(testLogger(), mock, WithKeyProvider(keysFor(cfg)), inventory)
 
 			err := relaunched.EnsureTunnel(context.Background(), cfg)
 
@@ -414,6 +414,208 @@ func TestManager_EnsureTunnel_IPsecRelaunchFailuresTearNothingDown(t *testing.T)
 			assert.Len(t, mock.xfrmStates, 2, "live SAs are left for the next attempt")
 		})
 	}
+}
+
+// A policy at the platform's key that sets a field espPolicy leaves unset is
+// another installer's, as the sweep (ownedPolicy) judges it: reconcile
+// refuses it with a typed error and neither adopts nor replaces it, and the
+// fresh install's rollback leaves it in place.
+func TestManager_EnsureTunnel_IPsecRefusesAForeignPolicy(t *testing.T) {
+	cfg := ipsecConfig()
+	foreign := map[string]func(*vnl.XfrmPolicy){
+		"nonzero priority":  func(p *vnl.XfrmPolicy) { p.Priority = 7 },
+		"optional template": func(p *vnl.XfrmPolicy) { p.Tmpls[0].Optional = 1 },
+	}
+	for name, mutate := range foreign {
+		t.Run("fresh install, "+name, func(t *testing.T) {
+			mock := newMockNetlinkOps()
+			_, polIn := ipsecPolicies(cfg)
+			mutate(polIn)
+			mock.xfrmPolicies = append(mock.xfrmPolicies, polIn)
+			m := newManagerWithOps(testLogger(), mock, WithKeyProvider(keysFor(cfg)))
+
+			err := m.EnsureTunnel(context.Background(), cfg)
+
+			var foreignErr *ErrIPsecForeignPolicy
+			require.ErrorAs(t, err, &foreignErr)
+			assert.Equal(t, vnl.XFRM_DIR_IN.String(), foreignErr.Dir)
+			var cf *ErrTunnelCreateFailed
+			require.ErrorAs(t, err, &cf)
+			require.Len(t, mock.xfrmPolicies, 1, "the outbound policy is rolled back")
+			assert.Same(t, polIn, mock.xfrmPolicies[0], "the foreign policy is left as it was")
+			assert.Empty(t, mock.xfrmStates, "the SAs are rolled back")
+		})
+		t.Run("relaunch, "+name, func(t *testing.T) {
+			mock, inventory := leftIPsec(t, cfg)
+			theirs := *mock.xfrmPolicies[1]
+			theirs.Tmpls = []vnl.XfrmPolicyTmpl{theirs.Tmpls[0]}
+			mutate(&theirs)
+			mock.xfrmPolicies[1] = &theirs
+			rewrites := mock.xfrmPolicyUpdates
+			relaunched := newManagerWithOps(testLogger(), mock, WithKeyProvider(keysFor(cfg)), inventory)
+
+			err := relaunched.EnsureTunnel(context.Background(), cfg)
+
+			var foreignErr *ErrIPsecForeignPolicy
+			require.ErrorAs(t, err, &foreignErr)
+			assert.Equal(t, rewrites, mock.xfrmPolicyUpdates, "no policy is rewritten")
+			_, hasLink := mock.links[cfg.Name]
+			assert.False(t, hasLink, "the carrier is brought down, so nothing passes it unprotected")
+			require.Len(t, mock.xfrmPolicies, 1, "the platform's outbound policy goes with its carrier")
+			assert.Same(t, &theirs, mock.xfrmPolicies[0], "the foreign policy is left as it was")
+			assert.NotContains(t, relaunched.tunnels, cfg.Name)
+		})
+		t.Run("relaunch, carrier will not go, "+name, func(t *testing.T) {
+			mock, inventory := leftIPsec(t, cfg)
+			carrier := mock.links[cfg.Name]
+			theirs := *mock.xfrmPolicies[1]
+			theirs.Tmpls = []vnl.XfrmPolicyTmpl{theirs.Tmpls[0]}
+			mutate(&theirs)
+			mock.xfrmPolicies[1] = &theirs
+			mock.linkDelFn = func(vnl.Link) error { return syscall.EBUSY }
+			relaunched := newManagerWithOps(testLogger(), mock, WithKeyProvider(keysFor(cfg)), inventory)
+
+			err := relaunched.EnsureTunnel(context.Background(), cfg)
+
+			var cf *ErrTunnelCreateFailed
+			require.ErrorAs(t, err, &cf)
+			var foreignErr *ErrIPsecForeignPolicy
+			require.ErrorAs(t, err, &foreignErr, "the refusal is the context")
+			var rf *ErrTunnelRemoveFailed
+			require.ErrorAs(t, err, &rf, "the failure to bring the carrier down is returned")
+			assert.ErrorIs(t, err, syscall.EBUSY)
+			assert.Same(t, carrier, mock.links[cfg.Name])
+			assert.Same(t, &theirs, mock.xfrmPolicies[1], "the foreign policy is left as it was")
+			assert.Len(t, mock.xfrmStates, 2, "a carrier that will not go keeps its protection")
+		})
+	}
+}
+
+// A policy exactly as espPolicy builds it is the platform's: the relaunch
+// keeps it without a rewrite.
+func TestManager_EnsureTunnel_IPsecKeepsAPolicyAsEspPolicyBuildsIt(t *testing.T) {
+	cfg := ipsecConfig()
+	mock, inventory := leftIPsec(t, cfg)
+	polOut, polIn := ipsecPolicies(cfg)
+	mock.xfrmPolicies = []*vnl.XfrmPolicy{polOut, polIn}
+	rewrites := mock.xfrmPolicyUpdates
+	relaunched := newManagerWithOps(testLogger(), mock, WithKeyProvider(keysFor(cfg)), inventory)
+
+	require.NoError(t, relaunched.EnsureTunnel(context.Background(), cfg))
+
+	assert.Equal(t, rewrites, mock.xfrmPolicyUpdates, "no policy is rewritten")
+	assert.Same(t, polOut, mock.xfrmPolicies[0])
+	assert.Same(t, polIn, mock.xfrmPolicies[1])
+}
+
+func TestManager_RemovePolicy(t *testing.T) {
+	cfg := ipsecConfig()
+	t.Run("removes the platform's and tolerates a missing one", func(t *testing.T) {
+		mock := newMockNetlinkOps()
+		polOut, _ := ipsecPolicies(cfg)
+		mock.xfrmPolicies = []*vnl.XfrmPolicy{polOut}
+		m := newManagerWithOps(testLogger(), mock)
+
+		require.NoError(t, m.removePolicy(polOut))
+		assert.Empty(t, mock.xfrmPolicies)
+		require.NoError(t, m.removePolicy(polOut), "a policy already gone counts as removed")
+	})
+	t.Run("leaves another installer's", func(t *testing.T) {
+		mock := newMockNetlinkOps()
+		polOut, _ := ipsecPolicies(cfg)
+		theirs := *polOut
+		theirs.Priority = 7
+		mock.xfrmPolicies = []*vnl.XfrmPolicy{&theirs}
+		m := newManagerWithOps(testLogger(), mock)
+
+		require.NoError(t, m.removePolicy(polOut))
+		assert.Equal(t, []*vnl.XfrmPolicy{&theirs}, mock.xfrmPolicies)
+	})
+	t.Run("a failed read deletes nothing", func(t *testing.T) {
+		mock := newMockNetlinkOps()
+		polOut, _ := ipsecPolicies(cfg)
+		mock.xfrmPolicies = []*vnl.XfrmPolicy{polOut}
+		mock.xfrmPolicyGetFn = func(*vnl.XfrmPolicy) (*vnl.XfrmPolicy, error) { return nil, syscall.EPERM }
+		m := newManagerWithOps(testLogger(), mock)
+
+		require.ErrorIs(t, m.removePolicy(polOut), syscall.EPERM)
+		assert.Len(t, mock.xfrmPolicies, 1)
+	})
+}
+
+func TestManager_EnsureTunnel_IPsecRefusesAForeignSA(t *testing.T) {
+	cfg := ipsecConfig()
+	foreign := map[string]func(*vnl.XfrmState){
+		"output mark":    func(s *vnl.XfrmState) { s.OutputMark = &vnl.XfrmMark{Value: 1, Mask: 0xffffffff} },
+		"xfrm interface": func(s *vnl.XfrmState) { s.Ifid = 5 },
+	}
+	for name, mutate := range foreign {
+		t.Run("fresh install, "+name, func(t *testing.T) {
+			mock := newMockNetlinkOps()
+			_, in := ipsecStates(cfg, nil, nil)
+			mutate(in)
+			mock.xfrmStates = append(mock.xfrmStates, in)
+			m := newManagerWithOps(testLogger(), mock, WithKeyProvider(keysFor(cfg)))
+
+			err := m.EnsureTunnel(context.Background(), cfg)
+
+			var foreignErr *ErrIPsecForeignSA
+			require.ErrorAs(t, err, &foreignErr)
+			assert.Equal(t, int(cfg.IPsec.SPIIn), foreignErr.SPI)
+			var cf *ErrTunnelCreateFailed
+			require.ErrorAs(t, err, &cf)
+			assert.Equal(t, []*vnl.XfrmState{in}, mock.xfrmStates, "the foreign SA is left and the outbound SA rolled back")
+		})
+		t.Run("relaunch, "+name, func(t *testing.T) {
+			mock, inventory := leftIPsec(t, cfg)
+			theirs := stateBySPI(mock, cfg.IPsec.SPIIn)
+			mutate(theirs)
+			mock.xfrmStateAddFn = func(*vnl.XfrmState) error { return errors.New("no SA is added") }
+			mock.xfrmStateDelFn = func(*vnl.XfrmState) error { return errors.New("no SA is deleted") }
+			relaunched := newManagerWithOps(testLogger(), mock, WithKeyProvider(keysFor(cfg)), inventory)
+
+			err := relaunched.EnsureTunnel(context.Background(), cfg)
+
+			var foreignErr *ErrIPsecForeignSA
+			require.ErrorAs(t, err, &foreignErr)
+			assert.Same(t, theirs, stateBySPI(mock, cfg.IPsec.SPIIn), "the foreign SA is left as it was")
+		})
+	}
+}
+
+func TestManager_RemoveState(t *testing.T) {
+	cfg := ipsecConfig()
+	t.Run("removes the platform's and tolerates a missing one", func(t *testing.T) {
+		mock := newMockNetlinkOps()
+		_, in := ipsecStates(cfg, nil, nil)
+		mock.xfrmStates = []*vnl.XfrmState{in}
+		m := newManagerWithOps(testLogger(), mock)
+
+		require.NoError(t, m.removeState(in))
+		assert.Empty(t, mock.xfrmStates)
+		require.NoError(t, m.removeState(in), "an SA already gone counts as removed")
+	})
+	t.Run("leaves another installer's", func(t *testing.T) {
+		mock := newMockNetlinkOps()
+		_, in := ipsecStates(cfg, nil, nil)
+		theirs := *in
+		theirs.Ifid = 5
+		mock.xfrmStates = []*vnl.XfrmState{&theirs}
+		m := newManagerWithOps(testLogger(), mock)
+
+		require.NoError(t, m.removeState(in))
+		assert.Equal(t, []*vnl.XfrmState{&theirs}, mock.xfrmStates)
+	})
+	t.Run("a failed read deletes nothing", func(t *testing.T) {
+		mock := newMockNetlinkOps()
+		_, in := ipsecStates(cfg, nil, nil)
+		mock.xfrmStates = []*vnl.XfrmState{in}
+		mock.xfrmStateGetFn = func(*vnl.XfrmState) (*vnl.XfrmState, error) { return nil, syscall.EPERM }
+		m := newManagerWithOps(testLogger(), mock)
+
+		require.ErrorIs(t, m.removeState(in), syscall.EPERM)
+		assert.Len(t, mock.xfrmStates, 1)
+	})
 }
 
 func TestXfrmMissing(t *testing.T) {
@@ -478,6 +680,9 @@ func TestEspPolicyMatches(t *testing.T) {
 		"template mode":     func(p *vnl.XfrmPolicy) { p.Tmpls[0].Mode = vnl.XFRM_MODE_TUNNEL },
 		"template request":  func(p *vnl.XfrmPolicy) { p.Tmpls[0].Reqid = 7 },
 		"optional template": func(p *vnl.XfrmPolicy) { p.Tmpls[0].Optional = 1 },
+		"priority":          func(p *vnl.XfrmPolicy) { p.Priority = 7 },
+		"template SPI":      func(p *vnl.XfrmPolicy) { p.Tmpls[0].Spi = 9 },
+		"interface":         func(p *vnl.XfrmPolicy) { p.Ifindex = 3 },
 	}
 	for name, mutate := range differs {
 		t.Run(name, func(t *testing.T) {
@@ -684,14 +889,120 @@ func TestTransportErrors_Messages(t *testing.T) {
 	assert.Contains(t, (&ErrRekeyUnsupported{Name: "t", Transport: "gre"}).Error(), "gre")
 }
 
-func TestManager_RemoveTunnel_IPsecPolicyFailureIsReported(t *testing.T) {
-	mock := newMockNetlinkOps()
+func TestManager_RemoveTunnel_IPsecFailureKeepsTheAnchorForTheSweep(t *testing.T) {
 	cfg := ipsecConfig()
-	m := newManagerWithOps(testLogger(), mock, WithKeyProvider(keysFor(cfg)))
+	out, in := ipsecStates(cfg, nil, nil)
+	polOut, polIn := ipsecPolicies(cfg)
+	eperm := errors.New("EPERM")
+	isState := func(want *vnl.XfrmState) func(*vnl.XfrmState) bool {
+		return func(s *vnl.XfrmState) bool { return s.Spi == want.Spi && s.Dst.Equal(want.Dst) }
+	}
+	cases := []struct {
+		name       string
+		inject     func(*mockNetlinkOps)
+		wantStates int
+	}{
+		{
+			name: "outbound policy",
+			inject: func(mock *mockNetlinkOps) {
+				mock.xfrmPolicyDelFn = func(p *vnl.XfrmPolicy) error {
+					if p.Dir == polOut.Dir {
+						return eperm
+					}
+					return nil
+				}
+			},
+			wantStates: 2,
+		},
+		{
+			name: "inbound policy",
+			inject: func(mock *mockNetlinkOps) {
+				mock.xfrmPolicyDelFn = func(p *vnl.XfrmPolicy) error {
+					if p.Dir == polIn.Dir {
+						return eperm
+					}
+					return nil
+				}
+			},
+			wantStates: 2,
+		},
+		{
+			name: "inbound SA",
+			inject: func(mock *mockNetlinkOps) {
+				isIn := isState(in)
+				mock.xfrmStateDelFn = func(s *vnl.XfrmState) error {
+					if isIn(s) {
+						return eperm
+					}
+					return syscall.ESRCH
+				}
+			},
+			wantStates: 2,
+		},
+		{
+			name: "anchor",
+			inject: func(mock *mockNetlinkOps) {
+				isOut := isState(out)
+				mock.xfrmStateDelFn = func(s *vnl.XfrmState) error {
+					if isOut(s) {
+						return eperm
+					}
+					for i, have := range mock.xfrmStates {
+						if have.Spi == s.Spi && have.Dst.Equal(s.Dst) {
+							mock.xfrmStates = append(mock.xfrmStates[:i], mock.xfrmStates[i+1:]...)
+							return nil
+						}
+					}
+					return syscall.ESRCH
+				}
+			},
+			wantStates: 1,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := newMockNetlinkOps()
+			path := filepath.Join(t.TempDir(), "ipsec-installed.json")
+			m := newManagerWithOps(testLogger(), mock, WithKeyProvider(keysFor(cfg)), WithIPsecInventory(path))
+			require.NoError(t, m.EnsureTunnel(context.Background(), cfg))
+			tc.inject(mock)
+
+			err := m.RemoveTunnel(context.Background(), cfg.Name)
+			var rf *ErrTunnelRemoveFailed
+			require.True(t, errors.As(err, &rf), "got %v", err)
+			require.True(t, errors.Is(err, eperm), "the kernel's error is the cause: %v", err)
+			assert.Len(t, mock.xfrmStates, tc.wantStates, "nothing past the failure is removed")
+			assert.NotNil(t, stateBySPIDst(mock, uint32(out.Spi), out.Dst), "the anchor stays while any of its pair remains")
+			recorded, err := (&ipsecInventory{path: path}).load()
+			require.NoError(t, err)
+			assert.Contains(t, recorded, recordOf(out), "the record stays with the anchor")
+
+			// The next start, its kernel no longer failing, removes the rest.
+			mock.xfrmPolicyDelFn = nil
+			mock.xfrmStateDelFn = nil
+			next := newManagerWithOps(testLogger(), mock, WithIPsecInventory(path))
+			require.NoError(t, next.SweepIPsec())
+			assert.Empty(t, mock.xfrmStates, "the sweep recognises and removes the leftover SAs")
+			assert.Empty(t, mock.xfrmPolicies, "the sweep recognises and removes the leftover policies")
+			recorded, err = (&ipsecInventory{path: path}).load()
+			require.NoError(t, err)
+			assert.Empty(t, recorded)
+		})
+	}
+}
+
+func TestManager_RemoveTunnel_IPsecToleratesWhatIsAlreadyGone(t *testing.T) {
+	cfg := ipsecConfig()
+	mock := newMockNetlinkOps()
+	path := filepath.Join(t.TempDir(), "ipsec-installed.json")
+	m := newManagerWithOps(testLogger(), mock, WithKeyProvider(keysFor(cfg)), WithIPsecInventory(path))
 	require.NoError(t, m.EnsureTunnel(context.Background(), cfg))
-	mock.xfrmPolicyDelFn = func(*vnl.XfrmPolicy) error { return errors.New("EPERM") }
-	err := m.RemoveTunnel(context.Background(), cfg.Name)
-	var rf *ErrTunnelRemoveFailed
-	require.True(t, errors.As(err, &rf), "got %v", err)
-	assert.Empty(t, mock.xfrmStates, "SAs are still torn down so no key stays in the kernel")
+	mock.xfrmPolicies = nil
+	mock.xfrmStates = nil
+
+	require.NoError(t, m.RemoveTunnel(context.Background(), cfg.Name),
+		"state another hand already removed counts as removed")
+	recorded, err := (&ipsecInventory{path: path}).load()
+	require.NoError(t, err)
+	assert.Empty(t, recorded)
 }

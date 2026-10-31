@@ -25,11 +25,11 @@ not to SDN proper**, and are documented in [`docs/gateway/cli.md`](../gateway/cl
 
 **There is no top-level `platformctl gateway` command.** The gateway CLI lives
 under `platformctl sdn gateway`. `pkg/cli/commands/root.go` registers `sdn`,
-`proxy` and `switch` as top-level groups; `gateway` is not among the 48.
+`proxy` and `switch` as top-level groups; `gateway` is not among them.
 
 ### Global flags
 
-`platformctl` persistent flags (`pkg/cli/commands/root.go:133`), precedence
+`platformctl` persistent flags (`pkg/cli/commands/root.go:135`), precedence
 **flag > environment > config file > default**:
 
 | Flag | Short | Default | Environment |

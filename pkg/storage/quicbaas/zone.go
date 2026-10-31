@@ -15,10 +15,10 @@ package quicbaas
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 )
 
 const entityTypeZone = "Zone"
@@ -61,7 +61,7 @@ func (d *ZoneDAO) GetByName(ctx context.Context, name string) (*entities.Zone, e
 	}
 
 	var zone entities.Zone
-	if err := json.Unmarshal(results[0].Data, &zone); err != nil {
+	if err := datastore.DecodeEntity(results[0].Data, &zone); err != nil {
 		return nil, ErrDeserializationFailed{EntityType: entityTypeZone, Cause: err}
 	}
 
@@ -81,7 +81,7 @@ func (d *ZoneDAO) getZoneByScan(ctx context.Context, name string) (*entities.Zon
 
 		for _, entity := range svcEntities {
 			var zone entities.Zone
-			if err := json.Unmarshal(entity.Data, &zone); err != nil {
+			if err := datastore.DecodeEntity(entity.Data, &zone); err != nil {
 				d.logger.Warn("Failed to deserialize zone", "id", entity.ID, "error", err)
 				continue
 			}

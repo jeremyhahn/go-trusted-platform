@@ -107,7 +107,8 @@ the firmware files (`start4.elf`, `fixup4.dat`, the board `.dtb` files,
 ## Boot it under emulation first
 
 The `qemu-virt` image is the same build for the QEMU virt machine (only the
-kernel package differs: `linux-lts`, because the Pi kernel has no virtio).
+kernel differs: `linux-virt`, the platform-built kernel described above,
+because the Pi kernel has no virtio).
 Booting it proves the whole chain — U-Boot, Secure Boot verification of the
 UKI and of the kernel inside it, the initrd, firstboot sealing, platformd —
 on your workstation, with a software TPM, before a card is written:

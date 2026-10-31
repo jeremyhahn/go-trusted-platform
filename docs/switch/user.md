@@ -1,6 +1,6 @@
 # Managed Switch Provisioning — Using It
 
-> **Status: NORMATIVE** · Scope: operator tasks for physical switches · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: operator tasks for physical switches · Last verified: 2026-10-27
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 
@@ -9,7 +9,7 @@
 ## Read this first
 
 **Runtime switch management is not wired into the daemon today.** The
-configuration block is parsed, the routes exist on four transports, and nothing
+configuration block is parsed, the routes exist on every transport, and nothing
 constructs the service behind them. Every call returns "service unavailable"
 until that changes ([architecture.md](architecture.md) §8).
 
@@ -188,7 +188,7 @@ platformctl switch disable-port --server-url https://… --switch core-01 --port
 ```
 
 `disable-port` is `shutdown`. **There is no confirmation, no `--force` and no
-dry-run.** On every transport it needs `switch:write`: gRPC
+dry-run.** On the scoped transports it needs `switch:write`: gRPC
 and Unix, QUIC (#767) and the `switch_disable_port` MCP tool (#304)
 ([api.md](api.md) §7).
 
@@ -201,16 +201,24 @@ part of admitting an enrolled machine to the zones of its role
 ([`docs/device/`](../device/)).
 
 The VLAN move is a **deliberate no-op** when no switch service is configured or
-when the request carries no switch name and port. So a successful activation
-does not by itself mean a physical port changed VLAN — check with `list-ports`
-if it matters.
+when the request context carries no switch name and port. **Nothing in the
+daemon sets that switch name and port today** — the context keys are read in
+`pkg/webservice/v1/device/handler.go` and set only by its tests — so the move
+is skipped on every activation. A successful activation does not by itself mean
+a physical port changed VLAN — check with `list-ports` if it matters.
+
+When the move does run, activation refuses it if the device profile has no
+provisioning VLAN (there would be no fail-closed revert target) or if the
+provisioning and admitted VLANs are equal. A failed move reverts the port to the
+provisioning VLAN and verifies it by read-back
+([architecture.md](architecture.md) §4.3).
 
 ---
 
 ## Troubleshooting
 
 **Everything returns 503 / "service unavailable" / "switch service not
-initialized".**
+configured".**
 The daemon has no switch service wired. This is the default today. Confirm with
 `GET /api/v1/platform/service-registry` and read
 [architecture.md](architecture.md) §8. This is not a configuration mistake on

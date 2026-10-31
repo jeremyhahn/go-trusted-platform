@@ -18,17 +18,17 @@ appears here.
 
 - **Unix is gRPC over a Unix domain socket**, so gRPC and Unix share a column.
 - **Embedded** is `ServiceRegistry.Device`
-  (`sdk/go/transport/embedded/adapter.go:37`), dispatched by gRPC method string
-  through `registerDeviceHandlers` (`sdk/go/transport/embedded/dispatch.go:340`).
-- gRPC: `DeviceService`, **28 RPCs** (`pkg/api/grpc/proto/device.proto`).
+  (`sdk/go/transport/embedded/adapter.go:36`), dispatched by gRPC method string
+  through `registerDeviceHandlers` (`sdk/go/transport/embedded/dispatch.go:374`).
+- gRPC: `DeviceService`, **32 RPCs** (`pkg/api/grpc/proto/device.proto`).
 - REST: `/api/v1/devices/*`, `/api/v1/device/*`
   (`pkg/webservice/v1/router/device.go`, `pkg/webservice/v1/rest/device/router.go`).
 - QUIC: top-level opcodes **`0x30`–`0x3D`**, dispatched by
   `req.Opcode >= OpDeviceRegister && req.Opcode <= OpDeviceGetState`
-  (`pkg/api/daemon/quic_service.go:617`). No category indirection. `0x3C` and
+  (`pkg/api/daemon/quic_service.go:621`). No category indirection. `0x3C` and
   `0x3E` are retired (see below).
-- MCP: one device tool family, one profile family and two template tools —
-  see §6.
+- MCP: one device tool family, one profile family, five `device_template_*`
+  tools and `profile_create_from_template` — see §6.
 - Go SDK: `sdk/go/services/device` — `NewClient(transport.Adapter)` or
   `NewClientFromGRPC(platformv1.DeviceServiceClient)`. Over REST the SDK sends
   every RPC to the exact route in §2, verb and id constraint included (#321).
@@ -283,8 +283,7 @@ match a TPM against (`pkg/device/service.go`), so a device created without one
 could never be claimed. The webservice used to synthesise `dev-<id>` for an
 empty serial, which made `{}` a `201` there and a `400` on the daemon; that
 fallback is gone. The console's register form requires the serial, and the JS
-SDK's `CreateDeviceRequest` and the console's `RegisterDeviceInput` type it as
-required.
+SDK's `CreateDeviceRequest` types it as required.
 
 **A conflict is refused, not resolved.** The flat shape and the proto envelope
 (`CreateDeviceRequest { Device device = 1; }`, mirrored by the JS SDK's
@@ -292,10 +291,8 @@ required.
 field present in both places with different values has no right answer, so the
 request is a `400` instead of quietly taking one side.
 
-**Keys the device has no column for are ignored.** The console sends `name`,
-`type`, `device_type`, `description`, `version`, `tpm_manufacturer`,
-`tpm_version` and `tpm_firmware_version`; `entities.Device` stores none of
-them and `device.Request` does not declare them, so both listeners drop them.
+**Keys the device has no column for are ignored.** `entities.Device` stores
+only what `device.Request` declares, so both listeners drop any other key.
 `manufacturer` is the one key with an effect: it becomes the `model` when no
 `model` is supplied. `name` is deliberately never the serial — reusing it as one
 once wrote a display string where a TPM serial belongs, and on `PUT` overwrote
@@ -304,11 +301,15 @@ a real serial with it (#252). Pinned by
 `TestUpdateDeviceDoesNotOverwriteASerialWithAName`.
 
 **A device has no name.** The proto `Device` and `entities.Device` have no name
-field, so no transport persists one. The console's `web/src/types/device.ts`
-declares its own `Device` and `RegisterDeviceInput` with `name`, `type`,
-`description`, `tags` and `tpmInfo`; those are console-local types describing no
-server state. Whether a device should gain a first-class display name is open
-on #455.
+field, so no transport persists one, and none will: a device is identified by
+its serial and id (#455). The console's register form
+(`web/src/components/features/devices/device-form.tsx`) collects the serial
+alone and posts it in the SDK envelope, `{"device":{"serial":"SN-1"}}`; a
+refusal reaches the operator as the server's message. It has no name, type,
+description or TPM manufacturer/version/firmware field: the create contract
+stores none of them, so a value typed there would be silently dropped (#455).
+The TPM details a device does carry (`ek_cert`, `attest_pub`, `attest_cert`)
+come from enrollment, not from an operator.
 
 **The two listeners still differ on `PUT /api/v1/devices/{id}`.** Both decode
 the body with `device.DecodeRequest`, agree on every status, and leave the
@@ -346,7 +347,7 @@ different statuses.
 | Find matching profile | `POST /api/v1/device/profiles/match` | `FindMatchingProfile` — no match `NotFound` | `OpProvisioningCategory` (`0xCF`) sub-op `DeviceSubFindMatchingProfile` (`0x29`) — see §3.7 | `profile_find_matching` — no match `NotFound` | ✅ |
 | Find config for a device (EK serial / MAC) | `GET /api/v1/device/profiles/find-config` | `FindConfigForDevice` — no identity `InvalidArgument`, unknown identity `NotFound` | `OpProvisioningCategory` (`0xCF`) sub-op `DeviceSubFindConfigForDevice` (`0x2E`) — same codes | `profile_find_config` — same codes | ✅ |
 | Assign profile to a device identity (explicit `ek_serial`/`mac_address`, or `device_id` of a registered device — the server derives the EK serial from its stored EK certificate, #463) | `POST /api/v1/device/profiles/{id}/assign` | `AssignProfileToDevice` | `OpProvisioningCategory` (`0xCF`) sub `0x20` — see §3.7 | `profile_assign_to_device` | ✅ |
-| Unassign profile | `POST /api/v1/device/profiles/{id}/unassign` | `UnassignProfileFromDevice` | `MISSING — docs/13 G7` | `profile_unassign_from_device` | ✅ |
+| Unassign profile | `POST /api/v1/device/profiles/{id}/unassign` | `UnassignProfileFromDevice` | `OpProvisioningCategory` (`0xCF`) sub `DeviceProfileSubUnassign` (`0x21`) — see §3.7 | `profile_unassign_from_device` | ✅ |
 | Get profile over mTLS (device self-service) | `GET /api/v1/device/profile` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 
 ### 3.1 One name per resource
@@ -521,7 +522,8 @@ Two consequences worth knowing before writing a client:
 
 - **Omitting a field does not clear it.** Server-owned fields — lifecycle state
   and the identity/enrollment set (`TenantID`, `EKCert`, `AttestPub`,
-  `AttestCert`, `SigningPub`, `EventLog`, `HashAlgoId`, `Model`, `Serial`) — are
+  `AttestCert`, `SigningPub`, `EventLog`, `HashAlgoId`, `Model`, `Serial`,
+  `LastHeartbeatAddr`, `PriorPortClass`, `IDevIDCert`) — are
   restored, so
   a partial `PUT` cannot erase a device's TPM identity. Before #252 it could,
   silently.

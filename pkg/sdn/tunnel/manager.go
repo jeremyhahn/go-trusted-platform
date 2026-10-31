@@ -15,6 +15,7 @@ package tunnel
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net"
 	"sync"
@@ -36,14 +37,15 @@ type managedTunnel struct {
 // ESP through XFRM (ipsec), or a kernel WireGuard interface (non-FIPS builds).
 // All operations are idempotent and safe for concurrent use.
 type Manager struct {
-	tunnels map[string]*managedTunnel
-	mu      sync.RWMutex
-	logger  *slog.Logger
-	nl      netlinkOps
-	keys    KeyProvider
-	uplinks *UplinkManager
-	wg      wgOps
-	clock   func() time.Time
+	tunnels   map[string]*managedTunnel
+	mu        sync.RWMutex
+	logger    *slog.Logger
+	nl        netlinkOps
+	keys      KeyProvider
+	uplinks   *UplinkManager
+	inventory *ipsecInventory
+	wg        wgOps
+	clock     func() time.Time
 }
 
 // Option configures a Manager.
@@ -61,6 +63,18 @@ func WithKeyProvider(p KeyProvider) Option {
 // refused with ErrUplinkUnknown.
 func WithUplinks(u *UplinkManager) Option {
 	return func(m *Manager) { m.uplinks = u }
+}
+
+// WithIPsecInventory keeps the record of the ESP pairs the manager installs
+// at path, so a later manager's SweepIPsec removes only the pairs this
+// platform recorded. Without it no pair is provably the platform's across a
+// restart, and SweepIPsec removes nothing.
+func WithIPsecInventory(path string) Option {
+	return func(m *Manager) {
+		if path != "" {
+			m.inventory = &ipsecInventory{path: path}
+		}
+	}
 }
 
 // NewManager creates a new tunnel manager over the real netlink.
@@ -140,8 +154,7 @@ func (m *Manager) EnsureTunnel(ctx context.Context, config TunnelConfig) error {
 	managed := &managedTunnel{config: config}
 	if config.Uplink != "" {
 		if err := m.uplinks.BindTunnel(ctx, config.Uplink, config.Name, config.Local, config.Remote); err != nil {
-			m.teardownTransport(config)
-			return &ErrTunnelCreateFailed{Name: config.Name, Cause: err}
+			return withRollback(&ErrTunnelCreateFailed{Name: config.Name, Cause: err}, m.teardownTransport(config))
 		}
 		managed.bound = true
 	}
@@ -183,17 +196,22 @@ func (m *Manager) checkPrerequisites(config TunnelConfig) error {
 func (m *Manager) createTransport(ctx context.Context, config TunnelConfig) error {
 	switch config.effectiveTransport() {
 	case TransportGRE:
-		return m.createTunnel(config)
+		// A link that failed after it was added is deleted, so a failed
+		// start leaves no half-made carrier behind.
+		if err := m.createTunnel(config); err != nil {
+			return withRollback(err, m.teardownTransport(config))
+		}
+		return nil
 	case TransportIPsec:
 		// Protection first: the carrier must never carry a packet in the
 		// clear, so the policies exist before the interface comes up.
 		if err := m.reconcileIPsec(ctx, config); err != nil {
-			_ = m.removeIPsec(config)
-			return err
+			return withRollback(err, m.removeIPsec(config))
 		}
+		// A carrier that failed after it was added is deleted before its
+		// protection goes, so no half-made link outlives its policies.
 		if err := m.createTunnel(config); err != nil {
-			_ = m.removeIPsec(config)
-			return err
+			return withRollback(err, m.teardownTransport(config))
 		}
 		return nil
 	case TransportWireGuard:
@@ -203,14 +221,34 @@ func (m *Manager) createTransport(ctx context.Context, config TunnelConfig) erro
 	}
 }
 
-// teardownTransport undoes createTransport after a later step failed.
-func (m *Manager) teardownTransport(config TunnelConfig) {
+// withRollback reports a failed start with the rollback that undid it. A
+// rollback that cannot finish is joined with the start failure: what it left
+// in place (a carrier it could not delete, or the policies that still protect
+// a carrier it could not retire) is removed by the next attempt or sweep.
+func withRollback(cause, rollbackErr error) error {
+	if rollbackErr != nil {
+		return errors.Join(cause, rollbackErr)
+	}
+	return cause
+}
+
+// teardownTransport undoes createTransport after a later step failed. A
+// teardown that cannot finish is returned, so the caller reports it with the
+// step's failure: what it left in place (the carrier, or for ipsec the
+// policies that still protect a carrier it could not retire) is removed by
+// the next attempt or sweep.
+func (m *Manager) teardownTransport(config TunnelConfig) error {
 	if link, err := m.nl.LinkByName(config.Name); err == nil {
-		_ = m.nl.LinkDel(link)
+		// A carrier that will not go keeps its protection: return before
+		// any policy is touched, so it cannot send in the clear.
+		if err := m.nl.LinkDel(link); err != nil {
+			return &ErrTunnelRemoveFailed{Name: config.Name, Cause: err}
+		}
 	}
 	if config.effectiveTransport() == TransportIPsec {
-		_ = m.removeIPsec(config)
+		return m.removeIPsec(config)
 	}
+	return nil
 }
 
 // Rekey rotates the key material of an ipsec or wireguard tunnel in place
@@ -361,23 +399,24 @@ func (m *Manager) Close() error {
 	defer m.mu.Unlock()
 
 	ctx := context.Background()
-	var lastErr error
+	// Every tunnel that would not go is reported, not only the last one.
+	var errs []error
 	for name := range m.tunnels {
 		if err := m.removeTunnelLocked(ctx, name); err != nil {
 			m.logger.Error("failed to remove tunnel during close",
 				slog.String("name", name),
 				slog.Any("error", err))
-			lastErr = err
+			errs = append(errs, err)
 		}
 	}
 	if m.wg != nil {
-		if err := m.wg.Close(); err != nil && lastErr == nil {
-			lastErr = err
+		if err := m.wg.Close(); err != nil {
+			errs = append(errs, err)
 		}
 		m.wg = nil
 	}
 
-	return lastErr
+	return errors.Join(errs...)
 }
 
 // createTunnel performs the actual netlink operations to create the tunnel.

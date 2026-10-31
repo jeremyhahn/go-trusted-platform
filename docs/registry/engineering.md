@@ -16,7 +16,7 @@ correction is noted inline.
 
 ### The interface
 
-`pkg/registry/registry.go:29` — `TrustedRegistry`:
+`pkg/registry/registry.go:31` — `TrustedRegistry`:
 
 ```go
 type TrustedRegistry interface {
@@ -211,6 +211,9 @@ they are the contract, not the Go field names.
 | `encryption.quicbaas_addr` | string | Key-management endpoint |
 | `encryption.key_namespace` | string | Namespace for image encryption keys |
 | `encryption.algorithm` | string | e.g. `AES-256-GCM` |
+| `encryption.encrypt_by_default` | bool | Default `true`; platformd's `registry_init.go` forces it `false`. Only logged at construction (`encryption_enabled`) — a push is encrypted only with `--encrypt` |
+| `encryption.key_rotation_interval` | duration | Default 30 days. Parsed and not read: no rotation runs |
+| `encryption.dek_cache_size`, `encryption.dek_cache_ttl` | int / duration | Defaults 1000 / 1h. `Validate` rejects values `<= 0`; nothing else reads them |
 
 `StorageConfig`'s doc comment states that the stack's object-storage service is
 **the only supported storage backend** for the trusted registry.

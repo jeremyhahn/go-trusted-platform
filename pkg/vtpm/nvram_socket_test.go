@@ -27,6 +27,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/google/go-tpm-tools/simulator"
+	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/stretchr/testify/require"
 )
 
@@ -40,12 +42,31 @@ const tpmHeaderSize = 10
 func serveSimulatorOnSocket(t *testing.T) string {
 	t.Helper()
 
-	tpm := newSimulatorTransport(t)
-	socketPath := filepath.Join(t.TempDir(), "swtpm.sock")
-	listener, err := net.Listen("unix", socketPath)
+	return newSimulatorSocket(t).path
+}
+
+// simulatorSocket is the in-memory TPM simulator served on a unix socket.
+type simulatorSocket struct {
+	path string
+
+	// mu serialises the simulator between connections and power cycles.
+	mu  sync.Mutex
+	sim *simulator.Simulator
+}
+
+// newSimulatorSocket starts the simulator and serves it on a socket in the
+// test's temporary directory until the test ends.
+func newSimulatorSocket(t *testing.T) *simulatorSocket {
+	t.Helper()
+
+	s := &simulatorSocket{
+		path: filepath.Join(t.TempDir(), "swtpm.sock"),
+		sim:  newSimulator(t),
+	}
+	tpm := transport.FromReadWriter(s.sim)
+	listener, err := net.Listen("unix", s.path)
 	require.NoError(t, err)
 
-	var tpmMu sync.Mutex
 	var connections sync.WaitGroup
 	connections.Add(1)
 	go func() {
@@ -68,9 +89,9 @@ func serveSimulatorOnSocket(t *testing.T) string {
 					if err != nil {
 						return
 					}
-					tpmMu.Lock()
+					s.mu.Lock()
 					response, err := tpm.Send(command)
-					tpmMu.Unlock()
+					s.mu.Unlock()
 					if err != nil {
 						t.Errorf("simulator: %v", err)
 						return
@@ -86,7 +107,17 @@ func serveSimulatorOnSocket(t *testing.T) string {
 		require.NoError(t, listener.Close())
 		connections.Wait()
 	})
-	return socketPath
+	return s
+}
+
+// powerCycle resets the simulator as a host reboot resets a TPM: NV RAM
+// survives, everything volatile is lost.
+func (s *simulatorSocket) powerCycle(t *testing.T) {
+	t.Helper()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	require.NoError(t, s.sim.Reset())
 }
 
 // readTPMCommand reads one TPM command, whose header carries its total size.
@@ -198,3 +229,67 @@ func TestEKCertInjector_InjectCertificate_NoSocket(t *testing.T) {
 	require.True(t, errors.As(err, &injectFailed), "got %v", err)
 	require.ErrorContains(t, err, "failed to open swtpm socket")
 }
+
+// TestEKCertInjector_CheckEKCertificateExistsOverSocket is the first-boot
+// safety check: a fresh TPM reports no EK certificate, so provisioning may
+// write one; once one is present the check reports it and leaves it as it
+// was, so provisioning never overwrites a manufacturer's certificate.
+func TestEKCertInjector_CheckEKCertificateExistsOverSocket(t *testing.T) {
+	for _, algorithm := range []EKAlgorithm{EKAlgorithmRSA, EKAlgorithmECC} {
+		t.Run(string(algorithm), func(t *testing.T) {
+			ctx := context.Background()
+			injector := NewEKCertInjector(serveSimulatorOnSocket(t), nil)
+
+			exists, existing, err := injector.CheckEKCertificateExists(ctx, algorithm)
+			require.NoError(t, err)
+			require.False(t, exists, "a fresh TPM holds no EK certificate")
+			require.Nil(t, existing)
+
+			cert := newTestEKCertificate(t, 1)
+			require.NoError(t, injector.InjectCertificate(ctx, cert, algorithm))
+
+			exists, existing, err = injector.CheckEKCertificateExists(ctx, algorithm)
+			require.NoError(t, err)
+			require.True(t, exists, "a provisioned EK certificate must be detected")
+			require.True(t, cert.Equal(existing), "the detected certificate must be the provisioned one")
+
+			stored, err := injector.ReadCertificate(ctx, algorithm)
+			require.NoError(t, err)
+			require.True(t, cert.Equal(stored), "the existence check must leave the certificate unchanged")
+		})
+	}
+}
+
+// TestEKCertInjector_EKCertificatesSurviveTPMRestart provisions both EK
+// certificates, restarts the TPM and reads them back through a new
+// injector, as first boot does when a provisioned vTPM bundle starts again.
+func TestEKCertInjector_EKCertificatesSurviveTPMRestart(t *testing.T) {
+	ctx := context.Background()
+	tpm := newSimulatorSocket(t)
+	certs := map[EKAlgorithm]*x509.Certificate{
+		EKAlgorithmRSA: newTestEKCertificate(t, 1),
+		EKAlgorithmECC: newTestEKCertificate(t, 1),
+	}
+	injector := NewEKCertInjector(tpm.path, nil)
+	for algorithm, cert := range certs {
+		require.NoError(t, injector.InjectCertificate(ctx, cert, algorithm))
+		exists, stored, err := injector.CheckEKCertificateExists(ctx, algorithm)
+		require.NoError(t, err)
+		require.True(t, exists, "the %s EK certificate must be detected", algorithm)
+		require.True(t, cert.Equal(stored), "the %s EK certificate must be the provisioned one", algorithm)
+	}
+
+	tpm.powerCycle(t)
+
+	restarted := NewEKCertInjector(tpm.path, nil)
+	for algorithm, cert := range certs {
+		exists, persisted, err := restarted.CheckEKCertificateExists(ctx, algorithm)
+		require.NoError(t, err)
+		require.True(t, exists, "the %s EK certificate must survive a TPM restart", algorithm)
+		require.True(t, cert.Equal(persisted), "the %s EK certificate must be unchanged by a TPM restart", algorithm)
+	}
+}
+
+// TestEKCertInjector_CheckEKCertificateExists_TPMClosed reports a TPM that
+// stops answering as a failed check, never as an absent certificate that
+// provisioning could then write over.

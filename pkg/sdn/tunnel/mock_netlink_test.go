@@ -56,11 +56,16 @@ type mockNetlinkOps struct {
 	xfrmPolicyUpdateFn func(*vnl.XfrmPolicy) error
 	xfrmPolicyDelFn    func(*vnl.XfrmPolicy) error
 	xfrmPolicyGetFn    func(*vnl.XfrmPolicy) (*vnl.XfrmPolicy, error)
-	ruleAddFn          func(*vnl.Rule) error
-	ruleDelFn          func(*vnl.Rule) error
-	ruleListFn         func(int) ([]vnl.Rule, error)
-	routeReplaceFn     func(*vnl.Route) error
-	routeDelFn         func(*vnl.Route) error
+	xfrmStateListFn    func(int) ([]vnl.XfrmState, error)
+	xfrmPolicyListFn   func(int) ([]vnl.XfrmPolicy, error)
+	// listedKeys records every key slice XfrmStateList handed out, so a
+	// test can prove the caller zeroized them.
+	listedKeys     [][]byte
+	ruleAddFn      func(*vnl.Rule) error
+	ruleDelFn      func(*vnl.Rule) error
+	ruleListFn     func(int) ([]vnl.Rule, error)
+	routeReplaceFn func(*vnl.Route) error
+	routeDelFn     func(*vnl.Route) error
 }
 
 func newMockNetlinkOps() *mockNetlinkOps {
@@ -237,7 +242,8 @@ func (m *mockNetlinkOps) XfrmStateDel(state *vnl.XfrmState) error {
 			return nil
 		}
 	}
-	return errors.New("no such state")
+	// The kernel's answer for an SA it does not hold.
+	return syscall.ESRCH
 }
 
 // XfrmStateGet answers like the kernel: a copy of the matching SA, its key
@@ -293,15 +299,28 @@ func (m *mockNetlinkOps) XfrmPolicyGet(policy *vnl.XfrmPolicy) (*vnl.XfrmPolicy,
 	return nil, syscall.ENOENT
 }
 
-// policyIndex is the index of the policy with policy's selector and
-// direction, or -1. The caller holds m.mu.
+// policyIndex is the index of the policy with policy's selector (addresses,
+// protocol, ports and interface), direction, mark and xfrm interface id, or
+// -1: the key the kernel looks a policy up by. The caller holds m.mu.
 func (m *mockNetlinkOps) policyIndex(policy *vnl.XfrmPolicy) int {
 	for i, existing := range m.xfrmPolicies {
-		if existing.Dir == policy.Dir && existing.Src.String() == policy.Src.String() && existing.Dst.String() == policy.Dst.String() {
+		if existing.Dir == policy.Dir && existing.Proto == policy.Proto &&
+			existing.Src.String() == policy.Src.String() && existing.Dst.String() == policy.Dst.String() &&
+			existing.SrcPort == policy.SrcPort && existing.DstPort == policy.DstPort &&
+			existing.Ifindex == policy.Ifindex && existing.Ifid == policy.Ifid &&
+			sameMark(existing.Mark, policy.Mark) {
 			return i
 		}
 	}
 	return -1
+}
+
+// sameMark reports whether a and b are both unset or carry the same mark.
+func sameMark(a, b *vnl.XfrmMark) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 func (m *mockNetlinkOps) XfrmPolicyDel(policy *vnl.XfrmPolicy) error {
@@ -314,7 +333,41 @@ func (m *mockNetlinkOps) XfrmPolicyDel(policy *vnl.XfrmPolicy) error {
 		m.xfrmPolicies = append(m.xfrmPolicies[:i], m.xfrmPolicies[i+1:]...)
 		return nil
 	}
-	return errors.New("no such policy")
+	// The kernel's answer for a policy it does not hold.
+	return syscall.ENOENT
+}
+
+func (m *mockNetlinkOps) XfrmStateList(family int) ([]vnl.XfrmState, error) {
+	if m.xfrmStateListFn != nil {
+		return m.xfrmStateListFn(family)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]vnl.XfrmState, 0, len(m.xfrmStates))
+	for _, existing := range m.xfrmStates {
+		cp := *existing
+		if existing.Aead != nil {
+			aead := *existing.Aead
+			aead.Key = append([]byte(nil), existing.Aead.Key...)
+			cp.Aead = &aead
+			m.listedKeys = append(m.listedKeys, aead.Key)
+		}
+		out = append(out, cp)
+	}
+	return out, nil
+}
+
+func (m *mockNetlinkOps) XfrmPolicyList(family int) ([]vnl.XfrmPolicy, error) {
+	if m.xfrmPolicyListFn != nil {
+		return m.xfrmPolicyListFn(family)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]vnl.XfrmPolicy, 0, len(m.xfrmPolicies))
+	for _, existing := range m.xfrmPolicies {
+		out = append(out, *existing)
+	}
+	return out, nil
 }
 
 func (m *mockNetlinkOps) RuleAdd(rule *vnl.Rule) error {

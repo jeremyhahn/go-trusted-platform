@@ -404,3 +404,36 @@ func (e *ErrStateDir) Error() string {
 }
 
 func (e *ErrStateDir) Unwrap() error { return e.Cause }
+
+// ErrStateFileSymlink reports a state file the supervisor would hand to a
+// process's credentials that is a symlink. It is not followed: its target
+// could be any file root can change.
+type ErrStateFileSymlink struct {
+	Path string
+}
+
+func (e *ErrStateFileSymlink) Error() string {
+	return fmt.Sprintf("gatewayd supervisor: state file %q is a symlink", e.Path)
+}
+
+// ErrStateFileNotRegular reports a state file that is not a regular file.
+type ErrStateFileNotRegular struct {
+	Path string
+	Mode uint32
+}
+
+func (e *ErrStateFileNotRegular) Error() string {
+	return fmt.Sprintf("gatewayd supervisor: state file %q is not a regular file (mode %#o)", e.Path, e.Mode)
+}
+
+// ErrStateFileLinked reports a state file with more than one hard link: the
+// other name could be outside the state directory, and handing the file over
+// would hand that name over too.
+type ErrStateFileLinked struct {
+	Path  string
+	Links uint64
+}
+
+func (e *ErrStateFileLinked) Error() string {
+	return fmt.Sprintf("gatewayd supervisor: state file %q has %d hard links", e.Path, e.Links)
+}

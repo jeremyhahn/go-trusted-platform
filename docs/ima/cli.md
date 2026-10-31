@@ -110,9 +110,11 @@ log's template digest is actually in.
 ## 3. Why there is no CLI
 
 Not a decision that has been made and recorded — the surface simply has not been
-built. `pkg/ima` is a complete, unit-tested library with **no caller anywhere in
-this repository** ([architecture.md](architecture.md) §8). A CLI group would be
-the natural first consumer, and it is **PLANNED**.
+built. `pkg/ima` is a complete, unit-tested library whose only caller is the
+VPN agent's posture report ([architecture.md](architecture.md) §4).
+`platformctl vpn posture` prints the IMA `available`, `enabled` and
+`policy_loaded` flags it collects; nothing else is exposed. An `ima` CLI group
+is **PLANNED**.
 
 What a first cut would need, so the next agent does not have to work it out:
 

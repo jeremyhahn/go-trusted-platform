@@ -24,7 +24,7 @@ if [ -f /usr/local/lib/devcontainer/wait-for.sh ]; then
     source /usr/local/lib/devcontainer/wait-for.sh
 else
     # shellcheck source=build/docker/devcontainer/wait-for.sh
-    source "$$REPO_ROOT/build/docker/devcontainer/wait-for.sh"
+    source "$REPO_ROOT/build/docker/devcontainer/wait-for.sh"
 fi
 
 # The tags come from the Makefile, never a hand-written list.

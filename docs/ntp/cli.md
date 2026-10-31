@@ -21,7 +21,7 @@ Three verbs. **None takes a positional argument, and none defines a local
 flag.** Everything is driven by the `platformctl` persistent flags.
 
 The group is registered on the `platformctl` root
-(`pkg/cli/commands/root.go:185`).
+(`pkg/cli/commands/root.go:198`).
 
 ### Global flags
 
@@ -137,10 +137,13 @@ Reading it:
   later.
 - **`REACH` is an 8-bit shift register, printed in decimal.** `255` means the
   last eight polls all succeeded; `0` means nothing has been heard from that
-  source. Anything in between is a partially reachable source — `127` means the
-  most recent poll failed.
+  source. Anything in between is a partially reachable source. Each poll shifts
+  the register left and records its result in the lowest bit, so `254` means
+  the most recent poll failed and `127` means the oldest of the eight did.
 - **`POLL` is already in seconds.** chrony reports it as a log2 exponent; the
-  CLI decodes it.
+  control-socket parser in `pkg/ntp` decodes it before it reaches the wire,
+  and the CLI prints the value with an `s` suffix. `LAST RX` is likewise
+  seconds.
 - **`falseticker` is the interesting state**: chronyd believes that source
   disagrees with the majority. On a platform where time is a trust primitive,
   a falseticker is worth investigating, not ignoring.

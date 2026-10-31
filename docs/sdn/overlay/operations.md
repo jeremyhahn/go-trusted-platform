@@ -24,7 +24,7 @@ overlay data plane:
 ```bash
 # Remote VTEPs a gateway admitted (omit --gateway-id for this node)
 platformctl sdn gateway overlay vteps
-platformctl sdn gateway overlay get 10.0.0.2
+platformctl sdn gateway overlay vteps get 10.0.0.2
 
 # The overlay counters: VNIs, remote VTEPs, local and remote MACs, ND
 platformctl sdn gateway snapshot -o json
@@ -174,7 +174,7 @@ ip6tables -L -n | grep 4789
 ovs-vsctl list interface | grep -A 5 vxlan
 
 # Verify a gateway admitted the remote VTEP
-platformctl sdn gateway overlay get 10.0.0.2
+platformctl sdn gateway overlay vteps get 10.0.0.2
 ```
 
 **Suspected Underlay Problems:**
