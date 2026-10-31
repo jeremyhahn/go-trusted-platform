@@ -138,11 +138,15 @@ func (a iamRESTAuthorization) requireOwnTenant(next http.Handler) http.Handler {
 		if !ok {
 			return
 		}
-		if err := iamTenantDecision(caller.TenantID, restiam.RequestedTenant(r)); err != nil {
+		requested := restiam.RequestedTenant(r)
+		if err := iamTenantDecision(caller.TenantID, requested); err != nil {
 			a.respWriter.Error403(w, r, err, nil)
 			return
 		}
-		next.ServeHTTP(w, r)
+		// The daemon's flat routes carry neither a {tenant} path variable
+		// nor a webservice session, so hand the handlers the tenant this
+		// guard has just authorized.
+		next.ServeHTTP(w, r.WithContext(restiam.WithAuthorizedTenant(r.Context(), requested)))
 	})
 }
 

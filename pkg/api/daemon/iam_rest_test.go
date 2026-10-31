@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/gorilla/mux"
+	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -51,7 +53,13 @@ var iamRESTCallers = iamRESTTokens{
 // in-memory IAM.
 func iamRESTServer(t *testing.T) *RESTServer {
 	t.Helper()
-	iam := newMemIAM()
+	return iamRESTServerOn(t, newMemIAM())
+}
+
+// iamRESTServerOn serves the IAM routes against iam, so a test can seed
+// it and read back what a request did.
+func iamRESTServerOn(t *testing.T, iam *memIAM) *RESTServer {
+	t.Helper()
 	s := &RESTServer{router: mux.NewRouter(), logger: slog.Default()}
 	guard := restapi.NewScopeGuard(iamRESTCallers, nil, nil)
 	require.NoError(t, s.SetIAMHandlers(logging.DefaultLogger(), restiam.NewQuicBaaSIAMAdapter(iam), restiam.NewQuicBaaSPEPAdapter(iam.PEP()), guard, iamRESTSystemTenant))
@@ -216,6 +224,49 @@ func TestIAMREST_TenantRules(t *testing.T) {
 			assert.Equal(t, http.StatusForbidden, recorder.Code, recorder.Body.String())
 		})
 	}
+}
+
+// TestIAMREST_FlatRouteServesTheAuthorizedTenant drives a flat route end to
+// end: the daemon's own-tenant guard authorizes the tenant_id query and
+// hands that tenant to the IAM handler, which lists that tenant's users
+// and no other tenant's (Codex 8444 P1).
+func TestIAMREST_FlatRouteServesTheAuthorizedTenant(t *testing.T) {
+	iam := newMemIAM()
+	ctx := context.Background()
+	_, err := iam.User().Create(ctx, iamRESTTenantA, &sdkiam.CreateUserRequest{Username: "alice", Email: "alice@tenant-a"})
+	require.NoError(t, err)
+	_, err = iam.User().Create(ctx, iamRESTTenantB, &sdkiam.CreateUserRequest{Username: "bob", Email: "bob@tenant-b"})
+	require.NoError(t, err)
+	s := iamRESTServerOn(t, iam)
+
+	recorder := serveIAM(s, http.MethodGet, "/api/v1/iam/users?tenant_id="+iamRESTTenantA, "operator")
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	var listed struct {
+		Payload struct {
+			Users []struct {
+				TenantID string `json:"tenantId"`
+				Email    string `json:"email"`
+			} `json:"users"`
+		} `json:"payload"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &listed), recorder.Body.String())
+	require.Len(t, listed.Payload.Users, 1, recorder.Body.String())
+	assert.Equal(t, iamRESTTenantA, listed.Payload.Users[0].TenantID)
+	assert.Equal(t, "alice@tenant-a", listed.Payload.Users[0].Email)
+}
+
+// TestIAMREST_FlatRouteRefusesAForeignTenant keeps the guard in front of the
+// published tenant: a tenant-a caller naming tenant-b is refused with the
+// typed own-tenant error before any handler runs.
+func TestIAMREST_FlatRouteRefusesAForeignTenant(t *testing.T) {
+	s := iamRESTServer(t)
+	recorder := serveIAM(s, http.MethodGet, "/api/v1/iam/users?tenant_id="+iamRESTTenantB, "operator")
+	assert.Equal(t, http.StatusForbidden, recorder.Code, recorder.Body.String())
+	var refused struct {
+		Error string `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &refused), recorder.Body.String())
+	assert.Equal(t, ErrIAMTenantForbidden{Requested: iamRESTTenantB}.Error(), refused.Error)
 }
 
 func TestIAMScopeAction(t *testing.T) {

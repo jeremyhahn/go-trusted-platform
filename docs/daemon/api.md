@@ -474,11 +474,15 @@ authorization:
 | `Authenticate` | `ScopeGuard.Authenticate`: the guard's credentials above (`Bearer` platform token, else the verified client certificate as the `*:*` operator) | 401 `ErrRouteUnauthenticated`; 403 with no guard |
 | `RequireAdmin` | the caller's scope for the method: `GET` `iam:read`; `POST`, `PUT`, `PATCH` `iam:write`; `DELETE` `iam:delete`. `POST .../policies/validate`, `POST .../policies/test` and `POST .../permissions/check` change nothing and need `iam:read`. Any other method is refused, never defaulted | 403 |
 | `RequireSystemTenant` | the gRPC rule: the caller is of the system tenant | 403 |
-| `RequireOwnTenant` | the gRPC rule: the request's tenant (the `{tenant}` segment, else `tenant_id`) is the caller's | 403 |
+| `RequireOwnTenant` | the gRPC rule: the request's tenant (the `{tenant}` segment, else `tenant_id`) is the caller's; it then hands that authorized tenant to the handlers (`restiam.WithAuthorizedTenant`) | 403 `ErrIAMTenantForbidden` |
 
 There are no sessions and no role check: the scope is the authorization, and
 the operator's `*:*` passes every method. A caller bound to a tenant must name
 it on a flat route (`tenant_id`); one that names none is refused, as on gRPC.
+The handlers never read `tenant_id` themselves: a flat route has no `{tenant}`
+segment and no session, so they operate on the tenant `RequireOwnTenant`
+published after its check (`GET /api/v1/iam/users?tenant_id=tenant-a` from a
+`tenant-a` caller lists `tenant-a`'s users).
 Installer and machine certificates are not admitted to these routes: no
 `/api/v1/iam` route is on any installer or machine allowlist (#1153). The
 daemon refuses to start when the IAM service is enabled and the routes cannot

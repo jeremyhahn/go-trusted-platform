@@ -340,7 +340,12 @@ the `*:*` operator. `RequireAdmin` requires the scope for the method:
 
 `RequireSystemTenant` and `RequireOwnTenant` apply the gRPC tenant rules in
 the table below. A tenant-bound caller that names no tenant on a flat route is
-refused with `403`, because there is no session tenant to fall back on.
+refused with `403`, because there is no session tenant to fall back on. Once
+`RequireOwnTenant` has admitted the named tenant it publishes it with
+`WithAuthorizedTenant` (`pkg/webservice/v1/rest/iam/handlers.go`), and the
+handlers' `getTenantID` reads that value before the `{tenant}` segment and the
+session. The handlers never read the `tenant_id` query themselves; the webservice
+publishes no authorized tenant, so its behaviour is unchanged.
 Installer and machine certificates are not admitted (#1153). The credential and
 the scopes are described in [`docs/daemon/api.md`](../daemon/api.md).
 

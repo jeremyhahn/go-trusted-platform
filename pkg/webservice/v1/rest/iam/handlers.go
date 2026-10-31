@@ -146,6 +146,12 @@ func NewIAMHandlers(
 // /api/v1/iam/tenants/{tenant}/users (explicit, machine-friendly)
 // without duplicating the handler body.
 func (h *IAMHandlers) getTenantID(r *http.Request) string {
+	// A host that authorizes the tenant itself (the daemon's flat routes,
+	// which carry neither a {tenant} path variable nor a webservice
+	// session) publishes the tenant it authorized; that value wins.
+	if t, ok := AuthorizedTenant(r.Context()); ok {
+		return t
+	}
 	if t := mux.Vars(r)["tenant"]; t != "" {
 		// Guarded by RequireOwnTenant, which requires the named tenant to
 		// be the caller's own, so this is not a caller-chosen value.
@@ -168,6 +174,26 @@ func (h *IAMHandlers) getTenantID(r *http.Request) string {
 		return session.TenantID()
 	}
 	return ""
+}
+
+// authorizedTenantKey is the context key of the tenant a host's
+// RequireOwnTenant guard authorized for the request.
+type authorizedTenantKey struct{}
+
+// WithAuthorizedTenant returns ctx carrying tenantID as the tenant the
+// host's RequireOwnTenant guard authorized for the request. The handlers
+// read it before the {tenant} path variable and the session. Only a guard
+// that has verified the tenant against the caller may set it; the handlers
+// never read the tenant_id query themselves.
+func WithAuthorizedTenant(ctx context.Context, tenantID string) context.Context {
+	return context.WithValue(ctx, authorizedTenantKey{}, tenantID)
+}
+
+// AuthorizedTenant returns the tenant WithAuthorizedTenant published on
+// ctx, and false when none (or an empty one) was published.
+func AuthorizedTenant(ctx context.Context) (string, bool) {
+	tenantID, ok := ctx.Value(authorizedTenantKey{}).(string)
+	return tenantID, ok && tenantID != ""
 }
 
 func (h *IAMHandlers) getUserID(r *http.Request) string {
