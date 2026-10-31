@@ -18,6 +18,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/asn1"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
@@ -79,10 +80,25 @@ func Renew(ctx context.Context, ca quicbaasca.CACertificateAuthority, existing *
 	return issued.Certificate, nil
 }
 
+// policyRestrictions are the RFC 5280 certificate-policy extensions a CA can
+// carry to constrain the paths beneath it. The pinned SDK CA profile (go-xkms
+// ca.CertificateRequest) has no field for any of them, so a renewal would
+// issue the replacement CA without the restriction.
+var policyRestrictions = []struct {
+	oid  asn1.ObjectIdentifier
+	name string
+}{
+	{asn1.ObjectIdentifier{2, 5, 29, 32}, "certificate policies (RFC 5280 §4.2.1.4)"},
+	{asn1.ObjectIdentifier{2, 5, 29, 33}, "policy mappings (RFC 5280 §4.2.1.5)"},
+	{asn1.ObjectIdentifier{2, 5, 29, 36}, "policy constraints (RFC 5280 §4.2.1.11)"},
+	{asn1.ObjectIdentifier{2, 5, 29, 54}, "inhibit anyPolicy (RFC 5280 §4.2.1.14)"},
+}
+
 // checkRenewableRestrictions refuses the renewal of a CA certificate whose
-// name constraints or unrecognized extended key usages renewalRequest cannot
-// copy: the SDK request has no field for either, so the replacement CA would
-// silently lose them (CARestrictionUnsupportedError).
+// name constraints, unrecognized extended key usages or certificate-policy
+// extensions renewalRequest cannot copy: the SDK request has no field for
+// any of them, so the replacement CA would silently lose them
+// (CARestrictionUnsupportedError).
 func checkRenewableRestrictions(existing *x509.Certificate) error {
 	if existing == nil || !existing.IsCA {
 		return nil
@@ -92,6 +108,13 @@ func checkRenewableRestrictions(existing *x509.Certificate) error {
 	}
 	if len(existing.UnknownExtKeyUsage) > 0 {
 		return &CARestrictionUnsupportedError{Restriction: "an unrecognized extended key usage"}
+	}
+	for _, extension := range existing.Extensions {
+		for _, policy := range policyRestrictions {
+			if extension.Id.Equal(policy.oid) {
+				return &CARestrictionUnsupportedError{Restriction: policy.name}
+			}
+		}
 	}
 	return nil
 }
