@@ -19,6 +19,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"slices"
@@ -27,6 +28,7 @@ import (
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/fido2"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
 )
@@ -57,6 +59,7 @@ type fakeFIDO2 struct {
 	noSalt      bool
 	unlockErr   error
 	unlocks     int
+	configs     []*fido2.AuthenticationConfig
 }
 
 func newFakeFIDO2() *fakeFIDO2 {
@@ -107,6 +110,7 @@ func (f *fakeFIDO2) EnrollKey(config *fido2.EnrollmentConfig) (*fido2.Enrollment
 
 func (f *fakeFIDO2) UnlockWithKey(config *fido2.AuthenticationConfig) ([]byte, error) {
 	f.unlocks++
+	f.configs = append(f.configs, config)
 	if f.unlockErr != nil {
 		return nil, f.unlockErr
 	}
@@ -360,8 +364,9 @@ func TestFIDO2StrategyUnlockInstallerLayout(t *testing.T) {
 
 	volume := newTokenLUKS()
 	volume.keys[fido2TestSlot] = device.derive(enrollment.CredentialID, enrollment.Salt)
-	// Lower token IDs that must be passed over: one for another slot, one
-	// bound to this slot but carrying no FIDO2 credential or salt.
+	// Lower token IDs that must not stop the unlock: one for another slot
+	// whose credential the authenticator does not hold, one carrying no
+	// FIDO2 credential or salt.
 	volume.tokens[0] = &luks.Token{
 		Type:            "fido2-manual",
 		Keyslots:        []string{"0"},
@@ -384,55 +389,155 @@ func TestFIDO2StrategyUnlockInstallerLayout(t *testing.T) {
 	if err := strategy.Unlock(ctx, fido2TestVolume()); err != nil {
 		t.Fatalf("Unlock with the installer's token failed: %v", err)
 	}
+	// fido2-up-required is user presence on a type fido2 token; the
+	// installer derives the key without user verification.
+	last := device.configs[len(device.configs)-1]
+	if last.RequireUserVerification {
+		t.Error("type fido2 token was unlocked with user verification")
+	}
 }
 
 // TestFIDO2StrategyRawSecretTokenRefused checks that a token whose type does
 // not mark the SDK derivation (the installer's former fido2-manual layout,
 // whose slot holds the raw hmac-secret) is refused with the typed error
 // before the authenticator or the slot is tried.
-func TestFIDO2StrategyRawSecretTokenRefused(t *testing.T) {
-	for _, tokenType := range []string{"fido2-manual", "systemd-fido2"} {
-		t.Run(tokenType, func(t *testing.T) {
-			ctx := context.Background()
-			device := newFakeFIDO2()
-			enrollment, err := device.EnrollKey(&fido2.EnrollmentConfig{})
-			if err != nil {
-				t.Fatalf("EnrollKey failed: %v", err)
-			}
+// enrolledDevice returns a fake authenticator holding one credential.
+func enrolledDevice(t *testing.T) (*fakeFIDO2, *fido2.EnrollmentResult) {
+	t.Helper()
+	device := newFakeFIDO2()
+	enrollment, err := device.EnrollKey(&fido2.EnrollmentConfig{})
+	if err != nil {
+		t.Fatalf("EnrollKey failed: %v", err)
+	}
+	return device, enrollment
+}
 
+func TestFIDO2StrategySystemdTokenRefused(t *testing.T) {
+	device, enrollment := enrolledDevice(t)
+	volume := newTokenLUKS()
+	volume.keys[fido2TestSlot] = device.hmacSecret(enrollment.CredentialID, enrollment.Salt)
+	volume.tokens[0] = &luks.Token{
+		Type:            "systemd-fido2",
+		Keyslots:        []string{fmt.Sprintf("%d", fido2TestSlot)},
+		FIDO2Credential: base64.StdEncoding.EncodeToString(enrollment.CredentialID),
+		FIDO2Salt:       base64.StdEncoding.EncodeToString(enrollment.Salt),
+		FIDO2RP:         fido2RelyingPartyID,
+	}
+
+	strategy := NewFIDO2Strategy(newFIDO2TestPlatform(device, volume), logging.DefaultLogger())
+	err := strategy.Unlock(context.Background(), fido2TestVolume())
+	var rawErr *FIDO2RawSecretTokenError
+	if !errors.As(err, &rawErr) {
+		t.Fatalf("Unlock error = %v, want FIDO2RawSecretTokenError", err)
+	}
+	if rawErr.Type != "systemd-fido2" || rawErr.Slot != fido2TestSlot || rawErr.TokenID != 0 || rawErr.Err != nil {
+		t.Errorf("error fields = %+v, want systemd-fido2 slot %d token 0 and no cause", rawErr, fido2TestSlot)
+	}
+	if !strings.Contains(err.Error(), "go-xkms #1769") {
+		t.Errorf("error %q does not name go-xkms #1769", err)
+	}
+	if device.unlocks != 0 {
+		t.Errorf("UnlockWithKey called %d times, want 0", device.unlocks)
+	}
+	if len(volume.opened) != 0 {
+		t.Errorf("slot tried %d times, want 0", len(volume.opened))
+	}
+}
+
+// An fido2-manual token from an earlier installer keys its slot with the raw
+// hmac-secret. The token does not say so, so the SDK derivation is tried
+// once; the keyslot rejects it and the error names go-xkms #1769.
+func TestFIDO2StrategyManualRawSecretToken(t *testing.T) {
+	device, enrollment := enrolledDevice(t)
+	volume := newTokenLUKS()
+	volume.keys[fido2TestSlot] = device.hmacSecret(enrollment.CredentialID, enrollment.Salt)
+	volume.tokens[0] = &luks.Token{
+		Type:            fido2ManualTokenType,
+		Keyslots:        []string{fmt.Sprintf("%d", fido2TestSlot)},
+		FIDO2Credential: base64.StdEncoding.EncodeToString(enrollment.CredentialID),
+		FIDO2Salt:       base64.StdEncoding.EncodeToString(enrollment.Salt),
+		FIDO2RP:         "luks-alpine",
+	}
+
+	strategy := NewFIDO2Strategy(newFIDO2TestPlatform(device, volume), logging.DefaultLogger())
+	err := strategy.Unlock(context.Background(), fido2TestVolume())
+	var rawErr *FIDO2RawSecretTokenError
+	if !errors.As(err, &rawErr) {
+		t.Fatalf("Unlock error = %v, want FIDO2RawSecretTokenError", err)
+	}
+	if rawErr.Type != fido2ManualTokenType || rawErr.Slot != fido2TestSlot || rawErr.TokenID != 0 {
+		t.Errorf("error fields = %+v, want fido2-manual slot %d token 0", rawErr, fido2TestSlot)
+	}
+	if !errors.Is(err, errFakeWrongKey) {
+		t.Errorf("error %v does not carry the keyslot rejection", err)
+	}
+	if !strings.Contains(err.Error(), "go-xkms #1769") {
+		t.Errorf("error %q does not name go-xkms #1769", err)
+	}
+	if device.unlocks != 1 {
+		t.Errorf("UnlockWithKey called %d times, want 1", device.unlocks)
+	}
+	if len(volume.opened) != 1 {
+		t.Errorf("slot tried %d times, want 1", len(volume.opened))
+	}
+}
+
+// The runtime LUKS service (pkg/app/backends) writes fido2-manual tokens
+// keyed with the SDK derivation: the credential ID as the caller gave it, the
+// user-verification option in fido2-up-required, and its relying party.
+func TestFIDO2StrategyRuntimeTokens(t *testing.T) {
+	encodings := map[string]func([]byte) string{
+		"hex":            hex.EncodeToString,
+		"base64":         base64.StdEncoding.EncodeToString,
+		"raw base64":     base64.RawStdEncoding.EncodeToString,
+		"raw URL base64": base64.RawURLEncoding.EncodeToString,
+	}
+	tests := []struct {
+		name       string
+		encoding   string
+		rpID       string
+		upRequired bool
+		wantRP     string
+	}{
+		{name: "hex credential, verification required", encoding: "hex", rpID: "go-xkms", upRequired: true, wantRP: "go-xkms"},
+		{name: "base64 credential", encoding: "base64", rpID: "platform", wantRP: "platform"},
+		{name: "raw base64 credential", encoding: "raw base64", rpID: "go-xkms", upRequired: true, wantRP: "go-xkms"},
+		{name: "raw URL base64 credential, no relying party", encoding: "raw URL base64", wantRP: fido2.DefaultConfig.RelyingPartyID},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			device, enrollment := enrolledDevice(t)
 			volume := newTokenLUKS()
-			volume.keys[fido2TestSlot] = device.hmacSecret(enrollment.CredentialID, enrollment.Salt)
+			volume.keys[fido2TestSlot] = device.derive(enrollment.CredentialID, enrollment.Salt)
 			volume.tokens[0] = &luks.Token{
-				Type:            tokenType,
+				Type:            fido2ManualTokenType,
 				Keyslots:        []string{fmt.Sprintf("%d", fido2TestSlot)},
-				FIDO2Credential: base64.StdEncoding.EncodeToString(enrollment.CredentialID),
+				FIDO2Credential: encodings[tt.encoding](enrollment.CredentialID),
 				FIDO2Salt:       base64.StdEncoding.EncodeToString(enrollment.Salt),
-				FIDO2RP:         fido2RelyingPartyID,
+				FIDO2RP:         tt.rpID,
+				FIDO2UPRequired: tt.upRequired,
 			}
 
 			strategy := NewFIDO2Strategy(newFIDO2TestPlatform(device, volume), logging.DefaultLogger())
-			err = strategy.Unlock(ctx, fido2TestVolume())
-			var rawErr *FIDO2RawSecretTokenError
-			if !errors.As(err, &rawErr) {
-				t.Fatalf("Unlock error = %v, want FIDO2RawSecretTokenError", err)
+			if err := strategy.Unlock(context.Background(), fido2TestVolume()); err != nil {
+				t.Fatalf("Unlock failed: %v", err)
 			}
-			if rawErr.Type != tokenType || rawErr.Slot != fido2TestSlot || rawErr.TokenID != 0 {
-				t.Errorf("error fields = %+v, want type %q slot %d token 0", rawErr, tokenType, fido2TestSlot)
+			if len(device.configs) != 1 {
+				t.Fatalf("UnlockWithKey called %d times, want 1", len(device.configs))
 			}
-			if !strings.Contains(err.Error(), "go-xkms #1769") {
-				t.Errorf("error %q does not name go-xkms #1769", err)
+			config := device.configs[0]
+			if config.RelyingPartyID != tt.wantRP {
+				t.Errorf("relying party = %q, want %q", config.RelyingPartyID, tt.wantRP)
 			}
-			if device.unlocks != 0 {
-				t.Errorf("UnlockWithKey called %d times, want 0", device.unlocks)
-			}
-			if len(volume.opened) != 0 {
-				t.Errorf("slot tried %d times, want 0", len(volume.opened))
+			if config.RequireUserVerification != tt.upRequired {
+				t.Errorf("user verification = %v, want %v", config.RequireUserVerification, tt.upRequired)
 			}
 		})
 	}
 }
 
-func TestFIDO2StrategyLoadAuthConfigErrors(t *testing.T) {
+func TestFIDO2StrategyHeaderTokenErrors(t *testing.T) {
 	validCredential := base64.StdEncoding.EncodeToString([]byte("credential"))
 	validSalt := base64.StdEncoding.EncodeToString([]byte("salt"))
 
@@ -444,14 +549,15 @@ func TestFIDO2StrategyLoadAuthConfigErrors(t *testing.T) {
 		check     func(t *testing.T, err error)
 	}{
 		{
-			name: "no token for the slot",
+			name: "no FIDO2 token in the header",
 			tokens: map[int]*luks.Token{
-				0: {Type: luks.TokenTypeFIDO2, Keyslots: []string{"0"}, FIDO2Credential: validCredential, FIDO2Salt: validSalt},
+				0: {Type: luks.TokenTypeFIDO2, Keyslots: []string{"1"}, FIDO2Credential: validCredential},
+				1: {Type: luks.TokenTypeFIDO2, Keyslots: []string{"slot"}, FIDO2Credential: validCredential, FIDO2Salt: validSalt},
 			},
 			check: func(t *testing.T, err error) {
 				var notFound *FIDO2TokenNotFoundError
-				if !errors.As(err, &notFound) || notFound.Slot != fido2TestSlot {
-					t.Fatalf("expected FIDO2TokenNotFoundError for slot %d, got %v", fido2TestSlot, err)
+				if !errors.As(err, &notFound) || notFound.DevicePath != "/dev/sda2" {
+					t.Fatalf("expected FIDO2TokenNotFoundError for /dev/sda2, got %v", err)
 				}
 				if !strings.Contains(err.Error(), "/dev/sda2") {
 					t.Errorf("error %q does not name the device", err)
@@ -466,9 +572,23 @@ func TestFIDO2StrategyLoadAuthConfigErrors(t *testing.T) {
 			wantField: "fido2-credential",
 		},
 		{
+			name: "fido2-manual credential in no runtime encoding",
+			tokens: map[int]*luks.Token{
+				0: {Type: fido2ManualTokenType, Keyslots: []string{"1"}, FIDO2Credential: "not*base64", FIDO2Salt: validSalt},
+			},
+			wantField: "fido2-credential",
+		},
+		{
 			name: "bad base64 salt",
 			tokens: map[int]*luks.Token{
 				0: {Type: luks.TokenTypeFIDO2, Keyslots: []string{"1"}, FIDO2Credential: validCredential, FIDO2Salt: "not*base64"},
+			},
+			wantField: "fido2-salt",
+		},
+		{
+			name: "fido2-manual bad base64 salt",
+			tokens: map[int]*luks.Token{
+				0: {Type: fido2ManualTokenType, Keyslots: []string{"1"}, FIDO2Credential: validCredential, FIDO2Salt: "not*base64"},
 			},
 			wantField: "fido2-salt",
 		},
@@ -493,16 +613,12 @@ func TestFIDO2StrategyLoadAuthConfigErrors(t *testing.T) {
 			}
 			device := newFakeFIDO2()
 			strategy := NewFIDO2Strategy(newFIDO2TestPlatform(device, volume), logging.DefaultLogger())
-			slot := luks.KeySlot{Index: fido2TestSlot, Type: luks.UnlockFIDO2}
 
-			config, err := strategy.loadAuthConfig(context.Background(), "/dev/sda2", slot)
-			if config != nil {
-				t.Errorf("expected nil config, got %+v", config)
-			}
+			err := strategy.Unlock(context.Background(), fido2TestVolume())
 			if tt.wantField != "" {
 				var decodeErr *FIDO2TokenDecodeError
-				if !errors.As(err, &decodeErr) || decodeErr.Field != tt.wantField {
-					t.Fatalf("expected FIDO2TokenDecodeError on %s, got %v", tt.wantField, err)
+				if !errors.As(err, &decodeErr) || decodeErr.Field != tt.wantField || decodeErr.Slot != fido2TestSlot {
+					t.Fatalf("expected FIDO2TokenDecodeError on %s for slot %d, got %v", tt.wantField, fido2TestSlot, err)
 				}
 				if errors.Unwrap(decodeErr) == nil || !strings.Contains(err.Error(), tt.wantField) {
 					t.Errorf("decode error %q does not carry its cause and field", err)
@@ -511,14 +627,88 @@ func TestFIDO2StrategyLoadAuthConfigErrors(t *testing.T) {
 				tt.check(t, err)
 			}
 
-			// Unlock skips the slot and opens nothing.
-			if err := strategy.Unlock(context.Background(), fido2TestVolume()); err == nil {
-				t.Error("Unlock succeeded without a usable token")
+			if device.unlocks != 0 {
+				t.Errorf("UnlockWithKey called %d times", device.unlocks)
 			}
 			if len(volume.opened) != 0 {
 				t.Errorf("Open was called %d times", len(volume.opened))
 			}
 		})
+	}
+}
+
+// The slot comes from the header token, not from the configured volume: a
+// token bound to slot 2 opens slot 2 although the volume configures FIDO2 at
+// slot 1, and a slot named by two tokens is taken from the lower ID.
+func TestFIDO2StrategySlotFromHeader(t *testing.T) {
+	device, enrollment := enrolledDevice(t)
+	volume := newTokenLUKS()
+	volume.keys[2] = device.derive(enrollment.CredentialID, enrollment.Salt)
+	token := &luks.Token{
+		Type:            luks.TokenTypeFIDO2,
+		Keyslots:        []string{"2"},
+		FIDO2Credential: base64.StdEncoding.EncodeToString(enrollment.CredentialID),
+		FIDO2Salt:       base64.StdEncoding.EncodeToString(enrollment.Salt),
+	}
+	volume.tokens[4] = token
+	volume.tokens[7] = &luks.Token{Type: "systemd-fido2", Keyslots: []string{"2"}, FIDO2Credential: token.FIDO2Credential, FIDO2Salt: token.FIDO2Salt}
+
+	strategy := NewFIDO2Strategy(newFIDO2TestPlatform(device, volume), logging.DefaultLogger())
+	if err := strategy.Unlock(context.Background(), fido2TestVolume()); err != nil {
+		t.Fatalf("Unlock failed: %v", err)
+	}
+	if device.unlocks != 1 || len(volume.opened) != 1 {
+		t.Errorf("unlocks = %d, opens = %d, want 1 and 1", device.unlocks, len(volume.opened))
+	}
+	if device.configs[0].RelyingPartyID != fido2RelyingPartyID || device.configs[0].RequireUserVerification {
+		t.Errorf("config = %+v, want relying party %q without user verification", device.configs[0], fido2RelyingPartyID)
+	}
+}
+
+// The default path: the installer's default configuration enrols FIDO2 in
+// its default keyslot, and the initrd's default configuration, through
+// buildVolumeConfig with no overrides, unlocks that slot. The two defaults
+// number the FIDO2 slot differently (3 and the FallbackMethods position 2).
+func TestFIDO2StrategyDefaultPath(t *testing.T) {
+	installerConfig := installer.DefaultConfig()
+	enrollConfig := &installer.FIDO2EnrollmentConfig{LUKSDevice: "/dev/sda2"}
+	if installerConfig.FIDO2 != nil && installerConfig.FIDO2.Keyslot != 0 {
+		enrollConfig.TargetKeyslot = installerConfig.FIDO2.Keyslot
+	}
+	if _, err := installer.NewFIDO2Enrollment(enrollConfig); err != nil {
+		t.Fatalf("NewFIDO2Enrollment failed: %v", err)
+	}
+
+	// The slot and token exactly as pkg/installer enrols them.
+	device, enrollment := enrolledDevice(t)
+	volume := newTokenLUKS()
+	volume.keys[enrollConfig.TargetKeyslot] = device.derive(enrollment.CredentialID, enrollment.Salt)
+	volume.tokens[0] = &luks.Token{
+		Type:            luks.TokenTypeFIDO2,
+		Keyslots:        []string{fmt.Sprintf("%d", enrollConfig.TargetKeyslot)},
+		FIDO2Credential: base64.StdEncoding.EncodeToString(enrollment.CredentialID),
+		FIDO2Salt:       base64.StdEncoding.EncodeToString(enrollment.Salt),
+		FIDO2RP:         enrollConfig.RelyingPartyID,
+		FIDO2UPRequired: true,
+	}
+
+	platform := newFIDO2TestPlatform(device, volume)
+	platform.Config = DefaultConfig()
+	manager := &initrdManager{platform: platform, logger: logging.DefaultLogger()}
+	volumeConfig, err := manager.buildVolumeConfig()
+	if err != nil {
+		t.Fatalf("buildVolumeConfig failed: %v", err)
+	}
+
+	strategy := NewFIDO2Strategy(platform, logging.DefaultLogger())
+	if !strategy.CanUnlock(context.Background(), volumeConfig) {
+		t.Fatal("the default volume configuration has no FIDO2 slot")
+	}
+	if err := strategy.Unlock(context.Background(), volumeConfig); err != nil {
+		t.Fatalf("Unlock on the default path failed: %v", err)
+	}
+	if len(volume.opened) != 1 {
+		t.Errorf("slot tried %d times, want 1", len(volume.opened))
 	}
 }
 

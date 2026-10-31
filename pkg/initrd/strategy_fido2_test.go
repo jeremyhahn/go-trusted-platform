@@ -190,23 +190,18 @@ func TestFIDO2StrategyInstallNoFIDO2Slot(t *testing.T) {
 	}
 }
 
-func TestFIDO2StrategyLoadAuthConfigNoTokenSupport(t *testing.T) {
+func TestFIDO2StrategyHeaderSlotsNoTokenSupport(t *testing.T) {
 	logger := logging.DefaultLogger()
 	platform := createTestPlatform()
 
 	strategy := NewFIDO2Strategy(platform, logger)
 
-	slot := luks.KeySlot{
-		Index: 0,
-		Type:  luks.UnlockFIDO2,
-	}
-
-	config, err := strategy.loadAuthConfig(context.Background(), "/dev/sda2", slot)
+	targets, err := strategy.headerFIDO2Slots(context.Background(), "/dev/sda2")
 	var unsupported *FIDO2TokenUnsupportedError
 	if !errors.As(err, &unsupported) {
 		t.Fatalf("expected FIDO2TokenUnsupportedError, got %v", err)
 	}
-	if config != nil {
-		t.Errorf("expected nil config, got %+v", config)
+	if targets != nil {
+		t.Errorf("expected no slots, got %+v", targets)
 	}
 }

@@ -114,34 +114,39 @@ func (e *FIDO2TokenUnsupportedError) Error() string {
 	return "fido2: the LUKS handler has no LUKS2 token support"
 }
 
-// FIDO2TokenNotFoundError reports that no LUKS2 token bound to a FIDO2 slot
-// carries a credential and a salt.
+// FIDO2TokenNotFoundError reports that the LUKS2 header holds no FIDO2 token
+// that carries a credential, a salt and a keyslot.
 type FIDO2TokenNotFoundError struct {
 	DevicePath string
-	Slot       int
 }
 
 // Error implements the error interface.
 func (e *FIDO2TokenNotFoundError) Error() string {
-	return fmt.Sprintf("fido2: no LUKS2 FIDO2 token for slot %d on %s", e.Slot, e.DevicePath)
+	return fmt.Sprintf("fido2: no LUKS2 FIDO2 token bound to a keyslot on %s", e.DevicePath)
 }
 
-// FIDO2RawSecretTokenError reports a FIDO2 token whose type is not
-// luks.TokenTypeFIDO2. Only that type marks a slot keyed with the SDK
-// derivation (UnlockWithKey). Other types (the installer's former
-// fido2-manual, systemd-fido2) key the slot with the raw hmac-secret, which
-// the pinned SDK cannot return (go-xkms #1769), so the slot is not tried.
+// FIDO2RawSecretTokenError reports a FIDO2 slot keyed with the raw
+// hmac-secret, which the pinned SDK cannot return (go-xkms #1769). A
+// systemd-fido2 token is refused before the authenticator is asked, so Err
+// is nil. An fido2-manual token names no derivation: the SDK derivation was
+// tried once, the keyslot rejected it, and Err is that rejection.
 type FIDO2RawSecretTokenError struct {
 	DevicePath string
 	Slot       int
 	TokenID    int
 	Type       string
+	Err        error
 }
 
 // Error implements the error interface.
 func (e *FIDO2RawSecretTokenError) Error() string {
 	return fmt.Sprintf("fido2: LUKS2 token %d (type %q) for slot %d on %s keys the slot with the raw hmac-secret, "+
 		"which the SDK cannot derive (go-xkms #1769); re-enrol the slot", e.TokenID, e.Type, e.Slot, e.DevicePath)
+}
+
+// Unwrap returns the keyslot rejection, if the slot was tried.
+func (e *FIDO2RawSecretTokenError) Unwrap() error {
+	return e.Err
 }
 
 // FIDO2TokenDecodeError reports a FIDO2 token field that is not valid base64.

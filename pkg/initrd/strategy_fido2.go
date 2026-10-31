@@ -17,6 +17,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -38,6 +39,15 @@ const (
 
 	// fido2SaltSize is the salt length the CTAP2 hmac-secret extension takes.
 	fido2SaltSize = 32
+
+	// fido2ManualTokenType is the token type the runtime LUKS service
+	// (backends.LUKSFIDO2TokenType) and earlier installers write. It names
+	// no key derivation: the runtime keys its slot with the SDK derivation,
+	// earlier installers with the raw hmac-secret.
+	fido2ManualTokenType = "fido2-manual"
+
+	// fido2UnlockTimeout bounds the wait for the user's touch at boot.
+	fido2UnlockTimeout = 30 * time.Second
 )
 
 // fido2SaltReader is the entropy source for generated hmac-secret salts.
@@ -94,61 +104,68 @@ func (s *FIDO2Strategy) CanUnlock(ctx context.Context, volume *luks.VolumeConfig
 func (s *FIDO2Strategy) Unlock(ctx context.Context, volume *luks.VolumeConfig) error {
 	s.logger.Infof("Attempting FIDO2 unlock for %s", volume.DevicePath)
 
-	// Find FIDO2 key slots
-	var slotErrs []error
-	for _, slot := range volume.KeySlots {
-		if slot.Type != luks.UnlockFIDO2 {
-			continue
-		}
+	targets, err := s.headerFIDO2Slots(ctx, volume.DevicePath)
+	if err != nil {
+		return err
+	}
 
+	var slotErrs []error
+	for _, target := range targets {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
 		}
 
-		s.logger.Debugf("Trying FIDO2 slot %d", slot.Index)
-		s.logger.Info("Please touch your security key...")
-
-		// Load authentication config from slot metadata
-		authConfig, err := s.loadAuthConfig(ctx, volume.DevicePath, slot)
-		if err != nil {
-			s.logger.Warnf("Failed to load auth config for slot %d: %v", slot.Index, err)
+		if err := s.unlockSlot(ctx, volume, target); err != nil {
+			s.logger.Warnf("FIDO2 slot %d (token %d) failed: %v", target.slot, target.tokenID, err)
 			slotErrs = append(slotErrs, err)
 			continue
 		}
-
-		// Authenticate with FIDO2 device
-		key, err := s.platform.FIDO2.UnlockWithKey(authConfig)
-		if err != nil {
-			s.logger.Warnf("FIDO2 authentication failed for slot %d: %v", slot.Index, err)
-			slotErrs = append(slotErrs, err)
-			continue
-		}
-
-		// Attempt LUKS unlock
-		openOpts := &luks.OpenOptions{
-			AllowDiscards: volume.AllowDiscards,
-			Timeout:       volume.Timeout,
-			KeySlot:       &slot.Index,
-		}
-
-		err = s.platform.LUKS.Open(ctx, volume.DevicePath, volume.MappingName, key, openOpts)
-		clear(key)
-		if err == nil {
-			s.logger.Infof("Successfully unlocked %s with FIDO2 slot %d",
-				volume.DevicePath, slot.Index)
-			return nil
-		}
-
-		s.logger.Warnf("LUKS open failed with slot %d: %v", slot.Index, err)
-		slotErrs = append(slotErrs, err)
+		s.logger.Infof("Successfully unlocked %s with FIDO2 slot %d", volume.DevicePath, target.slot)
+		return nil
 	}
 
-	if len(slotErrs) == 0 {
-		return &MessageError{Msg: "all FIDO2 slots failed"}
-	}
 	return &WrappedError{Msg: "all FIDO2 slots failed", Err: errors.Join(slotErrs...)}
+}
+
+// unlockSlot derives the key a header token describes and opens its keyslot.
+// The token type picks the derivation (fido2TokenDecoders); a type with no
+// entry keys its slot with the raw hmac-secret and is refused before the
+// authenticator is asked. An fido2-manual token names no derivation, so the
+// SDK derivation is tried once and a rejection by the keyslot is reported as
+// FIDO2RawSecretTokenError, without asking the authenticator again.
+func (s *FIDO2Strategy) unlockSlot(ctx context.Context, volume *luks.VolumeConfig, target fido2SlotToken) error {
+	decode, ok := fido2TokenDecoders[target.token.Type]
+	if !ok {
+		return target.rawSecretError(volume.DevicePath, nil)
+	}
+
+	authConfig, err := decode(target)
+	if err != nil {
+		return err
+	}
+
+	s.logger.Debugf("Trying FIDO2 slot %d from token %d", target.slot, target.tokenID)
+	s.logger.Info("Please touch your security key...")
+
+	key, err := s.platform.FIDO2.UnlockWithKey(authConfig)
+	if err != nil {
+		return err
+	}
+
+	slot := target.slot
+	openOpts := &luks.OpenOptions{
+		AllowDiscards: volume.AllowDiscards,
+		Timeout:       volume.Timeout,
+		KeySlot:       &slot,
+	}
+	err = s.platform.LUKS.Open(ctx, volume.DevicePath, volume.MappingName, key, openOpts)
+	clear(key)
+	if err != nil && target.token.Type == fido2ManualTokenType {
+		return target.rawSecretError(volume.DevicePath, err)
+	}
+	return err
 }
 
 // Install performs installation-time setup for FIDO2 strategy
@@ -279,13 +296,13 @@ func (s *FIDO2Strategy) tokenHandler() (luks.TokenHandler, error) {
 	return tokens, nil
 }
 
-// loadAuthConfig reads the FIDO2 enrolment for a slot from the LUKS2 header.
-// It uses the first token (lowest ID) bound to the slot that carries a
-// credential and a salt. The token type marks the key derivation: only
-// luks.TokenTypeFIDO2 slots are keyed with the SDK derivation UnlockWithKey
-// returns. Any other type keys the slot with the raw hmac-secret, so it
-// returns a FIDO2RawSecretTokenError and no key is tried.
-func (s *FIDO2Strategy) loadAuthConfig(ctx context.Context, devicePath string, slot luks.KeySlot) (*fido2.AuthenticationConfig, error) {
+// headerFIDO2Slots lists the keyslots that the header's FIDO2 tokens are bound
+// to, in token ID order, from tokens that carry a credential and a salt. The
+// slot comes from the token's keyslots and never from the volume
+// configuration: buildVolumeConfig numbers slots by FallbackMethods position
+// (FIDO2 is 2 by default) while the installer enrols slot 3. A slot named by
+// several tokens is taken from the lowest-ID one.
+func (s *FIDO2Strategy) headerFIDO2Slots(ctx context.Context, devicePath string) ([]fido2SlotToken, error) {
 	tokens, err := s.tokenHandler()
 	if err != nil {
 		return nil, err
@@ -302,37 +319,74 @@ func (s *FIDO2Strategy) loadAuthConfig(ctx context.Context, devicePath string, s
 	}
 	slices.Sort(ids)
 
-	slotID := strconv.Itoa(slot.Index)
+	seen := make(map[int]bool)
+	var targets []fido2SlotToken
 	for _, id := range ids {
 		token := all[id]
 		if token == nil || token.FIDO2Credential == "" || token.FIDO2Salt == "" {
 			continue
 		}
-		if !slices.Contains(token.Keyslots, slotID) {
-			continue
+		for _, keyslot := range token.Keyslots {
+			slot, err := strconv.Atoi(keyslot)
+			if err != nil {
+				s.logger.Warnf("LUKS2 token %d names keyslot %q, which is not a number: %v", id, keyslot, err)
+				continue
+			}
+			if seen[slot] {
+				continue
+			}
+			seen[slot] = true
+			targets = append(targets, fido2SlotToken{tokenID: id, slot: slot, token: token})
 		}
-		if token.Type != luks.TokenTypeFIDO2 {
-			return nil, &FIDO2RawSecretTokenError{DevicePath: devicePath, Slot: slot.Index, TokenID: id, Type: token.Type}
-		}
-		return decodeFIDO2Token(token, slot.Index)
 	}
 
-	return nil, &FIDO2TokenNotFoundError{DevicePath: devicePath, Slot: slot.Index}
+	if len(targets) == 0 {
+		return nil, &FIDO2TokenNotFoundError{DevicePath: devicePath}
+	}
+	return targets, nil
 }
 
-// decodeFIDO2Token turns a LUKS2 FIDO2 token into an authentication config.
-func decodeFIDO2Token(token *luks.Token, slot int) (*fido2.AuthenticationConfig, error) {
-	credentialID, err := base64.StdEncoding.DecodeString(token.FIDO2Credential)
+// fido2SlotToken is a keyslot named by a FIDO2 token in the LUKS2 header.
+type fido2SlotToken struct {
+	tokenID int
+	slot    int
+	token   *luks.Token
+}
+
+// rawSecretError reports the slot as keyed with the raw hmac-secret. cause is
+// the keyslot's rejection of the SDK derivation, or nil when the slot was not
+// tried.
+func (t fido2SlotToken) rawSecretError(devicePath string, cause error) error {
+	return &FIDO2RawSecretTokenError{
+		DevicePath: devicePath,
+		Slot:       t.slot,
+		TokenID:    t.tokenID,
+		Type:       t.token.Type,
+		Err:        cause,
+	}
+}
+
+// fido2TokenDecoders maps a FIDO2 token type to a decoder that rebuilds the
+// authentication config its producer derived the slot key with.
+var fido2TokenDecoders = map[string]func(target fido2SlotToken) (*fido2.AuthenticationConfig, error){
+	luks.TokenTypeFIDO2:  decodeSDKToken,
+	fido2ManualTokenType: decodeManualToken,
+}
+
+// decodeSDKToken decodes a type fido2 token, written by this strategy and by
+// the installer: base64 credential and salt, no user verification.
+func decodeSDKToken(target fido2SlotToken) (*fido2.AuthenticationConfig, error) {
+	credentialID, err := base64.StdEncoding.DecodeString(target.token.FIDO2Credential)
 	if err != nil {
-		return nil, &FIDO2TokenDecodeError{Slot: slot, Field: "fido2-credential", Err: err}
+		return nil, &FIDO2TokenDecodeError{Slot: target.slot, Field: "fido2-credential", Err: err}
 	}
 
-	salt, err := base64.StdEncoding.DecodeString(token.FIDO2Salt)
+	salt, err := decodeTokenSalt(target)
 	if err != nil {
-		return nil, &FIDO2TokenDecodeError{Slot: slot, Field: "fido2-salt", Err: err}
+		return nil, err
 	}
 
-	rpID := token.FIDO2RP
+	rpID := target.token.FIDO2RP
 	if rpID == "" {
 		rpID = fido2RelyingPartyID
 	}
@@ -341,8 +395,57 @@ func decodeFIDO2Token(token *luks.Token, slot int) (*fido2.AuthenticationConfig,
 		RelyingPartyID: rpID,
 		CredentialID:   credentialID,
 		Salt:           salt,
-		Timeout:        30 * time.Second,
+		Timeout:        fido2UnlockTimeout,
 	}, nil
+}
+
+// decodeManualToken decodes a type fido2-manual token as the runtime LUKS
+// service (pkg/app/backends) writes it: the credential ID verbatim in hex or
+// any base64 form, the salt in base64, and fido2-up-required carrying the
+// user-verification option the slot key was derived with.
+func decodeManualToken(target fido2SlotToken) (*fido2.AuthenticationConfig, error) {
+	credentialID, err := decodeManualCredential(target.token.FIDO2Credential)
+	if err != nil {
+		return nil, &FIDO2TokenDecodeError{Slot: target.slot, Field: "fido2-credential", Err: err}
+	}
+
+	salt, err := decodeTokenSalt(target)
+	if err != nil {
+		return nil, err
+	}
+
+	config := fido2.DefaultAuthenticationConfig(credentialID, salt)
+	if target.token.FIDO2RP != "" {
+		config.RelyingPartyID = target.token.FIDO2RP
+	}
+	config.RequireUserVerification = target.token.FIDO2UPRequired
+	config.Timeout = fido2UnlockTimeout
+	return config, nil
+}
+
+// decodeTokenSalt decodes the base64 salt every FIDO2 token type carries.
+func decodeTokenSalt(target fido2SlotToken) ([]byte, error) {
+	salt, err := base64.StdEncoding.DecodeString(target.token.FIDO2Salt)
+	if err != nil {
+		return nil, &FIDO2TokenDecodeError{Slot: target.slot, Field: "fido2-salt", Err: err}
+	}
+	return salt, nil
+}
+
+// decodeManualCredential accepts the credential encodings the runtime LUKS
+// service accepts, in its order: hex, then standard, raw standard and raw URL
+// base64.
+func decodeManualCredential(encoded string) ([]byte, error) {
+	if credentialID, err := hex.DecodeString(encoded); err == nil {
+		return credentialID, nil
+	}
+	if credentialID, err := base64.StdEncoding.DecodeString(encoded); err == nil {
+		return credentialID, nil
+	}
+	if credentialID, err := base64.RawStdEncoding.DecodeString(encoded); err == nil {
+		return credentialID, nil
+	}
+	return base64.RawURLEncoding.DecodeString(encoded)
 }
 
 // storeEnrollmentMetadata writes the credential ID, salt and relying party
