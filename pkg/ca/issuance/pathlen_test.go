@@ -129,7 +129,6 @@ func TestIssue_SubordinatePathLen(t *testing.T) {
 		{name: "pathlen-1-beneath-pathlen-2", interPathLen: 2, isCA: true, requested: 1, wantPathLen: 1},
 		{name: "leaf-beneath-pathlen-0-is-issued", interPathLen: 0, isCA: false, requested: 0},
 		{name: "unconstrained-issuer-pathlen-3", unconstrained: true, isCA: true, requested: 3, wantPathLen: 3},
-		{name: "unconstrained-issuer-unlimited", unconstrained: true, isCA: true, requested: -1, wantPathLen: -1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -31,7 +31,9 @@ func TestIssue_CARequestReturnsCACertificate(t *testing.T) {
 	rootCert, err := root.CACertificate()
 	require.NoError(t, err)
 
-	for _, maxPathLen := range []int{0, 1} {
+	// -1 asks for no path-length limit; the issued certificate then has no
+	// pathLenConstraint, which crypto/x509 parses as MaxPathLen -1.
+	for _, maxPathLen := range []int{-1, 0, 1} {
 		name := "sub-ca-path-length-" + strconv.Itoa(maxPathLen)
 		t.Run(name, func(t *testing.T) {
 			key := newECKey(t)

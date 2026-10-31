@@ -53,6 +53,12 @@ func Issue(ctx context.Context, ca Issuer, req *quicbaasca.CACertificateRequest)
 	}
 	caReq := *req
 	caReq.MaxPathLenZero = caReq.MaxPathLen == 0
+	if caReq.MaxPathLen < 0 {
+		// The SDK refuses a negative MaxPathLen (ErrInvalidPathLength).
+		// MaxPathLen 0 with MaxPathLenZero false is crypto/x509's form for
+		// a basicConstraints with no pathLenConstraint: no limit.
+		caReq.MaxPathLen = 0
+	}
 	return ca.IssueCertificateWithProfile(ctx, &caReq, caProfileName)
 }
 
