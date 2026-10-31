@@ -463,7 +463,7 @@ func TestMCPServiceProvider_CAIssue_CACertificateCoverage(t *testing.T) {
 		Organization: "Test Org",
 		IsCA:         true,
 		MaxPathLen:   1,
-		KeyUsage:     []string{"certSign", "crlSign"},
+		KeyUsage:     []string{"digitalSignature", "certSign", "crlSign"},
 		ValidDays:    3650,
 	}
 

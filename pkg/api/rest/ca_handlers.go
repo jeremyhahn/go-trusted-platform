@@ -508,8 +508,10 @@ func (h *CAHandlers) RegisterRoutes(router *mux.Router) {
 
 	// Certificate CRUD operations. Each takes the scope the gRPC, QUIC and
 	// MCP transports check for the same operation; renewing issues a
-	// certificate, so it takes the issuing scope. An installer certificate
-	// holds no scope, so it reaches none of them (Codex 8238).
+	// certificate, so it takes the issuing scope. The daemon's mTLS peer
+	// authenticator grants a certificate bound as a PXE install certificate
+	// only pxe:write, so an installer reaches none of them (Codex 8238,
+	// Codex 8646).
 	router.HandleFunc("/api/v1/ca/certificates", h.guard.Require(scopeCertsGenerate, h.handleIssueCertificate)).Methods(http.MethodPost)
 	router.HandleFunc("/api/v1/ca/certificates", h.guard.Require(scopeCertsList, h.handleListCertificates)).Methods(http.MethodGet)
 	router.HandleFunc("/api/v1/ca/certificates/{serial}", h.guard.Require(scopeCertsRead, h.handleGetCertificate)).Methods(http.MethodGet)
@@ -938,6 +940,12 @@ func (h *CAHandlers) handleRenewCertificate(w http.ResponseWriter, r *http.Reque
 
 	newCert, err := h.ca.Renew(r.Context(), existingCert, renewOpts)
 	if err != nil {
+		// A renewal the issuer or the SDK's CA profile refuses is the
+		// caller's to fix, as it is for issuance.
+		if issuance.IsInvalidRequest(err) {
+			h.writeError(w, http.StatusBadRequest, err)
+			return
+		}
 		h.logger.Error("Failed to renew certificate", "error", err, "serial", serial)
 		h.writeError(w, http.StatusInternalServerError, ErrCertificateRenewFailed{Serial: serial, Err: err})
 		return

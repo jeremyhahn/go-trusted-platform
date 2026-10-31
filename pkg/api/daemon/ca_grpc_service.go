@@ -402,6 +402,11 @@ func (s *CAGRPCService) RenewCertificate(ctx context.Context, req *platformv1.Re
 
 	newCert, err := issuance.Renew(ctx, s.ca, existingCert, renewOpts)
 	if err != nil {
+		// A renewal the issuer or the SDK's CA profile refuses is the
+		// caller's to fix, as it is for Issue.
+		if issuance.IsInvalidRequest(err) {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
 		s.logger.Error(err, "failed to renew certificate")
 		var storesErr *issuance.RenewStoresUnavailableError
 		if errors.As(err, &storesErr) {

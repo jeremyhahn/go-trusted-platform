@@ -1140,7 +1140,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		if poolErr != nil {
 			return nil, poolErr
 		}
-		quicAuthMiddleware, quicLocalValidator, quicAuthErr := selectQUICAuth(config, platformTokenValidatorShared, quicClientCAPool, logger)
+		quicAuthMiddleware, quicLocalValidator, quicAuthErr := selectQUICAuth(config, platformTokenValidatorShared, quicClientCAPool, pxeInstallBindings{service: pxeGRPCService}, logger)
 		if quicAuthErr != nil {
 			return nil, quicAuthErr
 		}
@@ -1492,7 +1492,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	var restGuard *restapi.ScopeGuard
 	if daemon.concreteRestServer != nil {
 		var guardErr error
-		restGuard, guardErr = newRESTScopeGuard(config, platformTokenValidatorShared, logger)
+		restGuard, guardErr = newRESTScopeGuard(config, platformTokenValidatorShared, pxeInstallBindings{service: pxeGRPCService}, logger)
 		if guardErr != nil {
 			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: guardErr}
 			logger.Error(constructErr, "component", "rest_server")
@@ -2128,7 +2128,7 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 		}
 		mcpConfig.TLSConfig = tlsConfig
 
-		peers, err := newMCPPeerAuthenticator(d.config, d.logger)
+		peers, err := newMCPPeerAuthenticator(d.config, pxeInstallBindings{service: d.pxeGRPCService}, d.logger)
 		if err != nil {
 			return nil, err
 		}

@@ -37,7 +37,7 @@ func TestNewMCPPeerAuthenticator_MTLS_AdmitsTheOperatorCertificate(t *testing.T)
 	config.EnableMTLS = true
 	config.MTLSClientCAPool = trusted.CAPool
 
-	peers, err := newMCPPeerAuthenticator(config, logging.DefaultLogger())
+	peers, err := newMCPPeerAuthenticator(config, nil, logging.DefaultLogger())
 	require.NoError(t, err)
 	require.NotNil(t, peers)
 
@@ -55,7 +55,7 @@ func TestNewMCPPeerAuthenticator_MTLS_AdmitsTheOperatorCertificate(t *testing.T)
 // Without mTLS there is no certificate to authenticate: only bearer tokens do.
 func TestNewMCPPeerAuthenticator_NoMTLS_ReturnsNil(t *testing.T) {
 	t.Parallel()
-	peers, err := newMCPPeerAuthenticator(failClosedConfig(), logging.DefaultLogger())
+	peers, err := newMCPPeerAuthenticator(failClosedConfig(), nil, logging.DefaultLogger())
 	require.NoError(t, err)
 	assert.Nil(t, peers)
 }
@@ -65,7 +65,7 @@ func TestNewMCPPeerAuthenticator_MTLSWithoutClientCAPool_ReturnsTypedError(t *te
 	config := failClosedConfig()
 	config.EnableMTLS = true
 
-	peers, err := newMCPPeerAuthenticator(config, logging.DefaultLogger())
+	peers, err := newMCPPeerAuthenticator(config, nil, logging.DefaultLogger())
 	require.Error(t, err)
 	assert.Nil(t, peers)
 	var want ErrTransportAuthRequired

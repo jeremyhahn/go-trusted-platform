@@ -50,6 +50,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
@@ -114,8 +115,9 @@ func newCAParityFixture(t *testing.T) *caParityFixture {
 			StreetAddress:      []string{"1 Parity Way"},
 			PostalCode:         []string{"43004"},
 		},
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		// The key usage the SDK's CA profile writes and no EKU: issuance and
+		// renewal refuse a CA restriction the profile cannot carry.
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 		BasicConstraintsValid: true,
 		IsCA:                  true,
 		MaxPathLen:            2,
@@ -391,8 +393,7 @@ func TestCACertificateParity(t *testing.T) {
 		ValidDays:    90,
 		KeyAlgorithm: platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384,
 		StoreType:    "software",
-		KeyUsage:     []string{"DIGITAL_SIGNATURE", "CERT_SIGN"},
-		ExtKeyUsage:  []string{"SERVER_AUTH", "CLIENT_AUTH"},
+		KeyUsage:     []string{"DIGITAL_SIGNATURE", "CERT_SIGN", "CRL_SIGN"},
 		IsCa:         true,
 		MaxPathLen:   2,
 	}}
@@ -466,6 +467,54 @@ func TestCAPathLenRefusalParity(t *testing.T) {
 			assert.Equal(t, codes.InvalidArgument, status.Code(err), "error = %v", err)
 			assert.Contains(t, status.Convert(err).Message(), pathLenZeroRefusal())
 			assert.Nil(t, f.ca.last.Load(), "the CA was asked to sign a refused subordinate CA")
+		})
+	}
+}
+
+// Renewing a CA restricted by an EKU the SDK's CA profile would drop is a
+// request the caller must fix: every transport answers InvalidArgument (REST
+// 400), and nothing is revoked or issued.
+func TestCARenewalRestrictionRefusalParity(t *testing.T) {
+	f := newCAParityFixture(t)
+	restricted := f.ca.issuedCert
+	restrictedCA, _ := parityCertificate(t, &x509.Certificate{
+		SerialNumber:          restricted.SerialNumber,
+		Subject:               restricted.Subject,
+		KeyUsage:              restricted.KeyUsage,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		MaxPathLen:            2,
+	}, nil, nil)
+	f.ca.certStore.(*mockCertStore).certs[f.serial] = restrictedCA
+	ctx := context.Background()
+
+	transports := []struct {
+		name   string
+		client func(*testing.T) platformv1.CAServiceClient
+	}{
+		{"gRPC", f.grpcClient},
+		{"Unix", f.unixClient},
+		{"REST", f.restClient},
+		// QUIC is absent: the SDK QUIC adapter has no RenewCertificate
+		// request encoder, so it sends valid_days where the daemon's
+		// CARenewRequest reads extend_days, and every QUIC renewal is
+		// refused before it reaches issuance. That wire defect is reported
+		// with #1153; it is not this restriction's refusal.
+		{"MCP", f.mcpClient},
+		{"Embedded", f.embeddedClient},
+	}
+	for _, tr := range transports {
+		t.Run(tr.name, func(t *testing.T) {
+			client := tr.client(t)
+			f.ca.last.Store(nil)
+
+			_, err := client.RenewCertificate(ctx, &platformv1.RenewCertificateRequest{Serial: f.serial, ValidDays: 30})
+			require.Error(t, err)
+			assert.Equal(t, codes.InvalidArgument, status.Code(err), "error = %v", err)
+			assert.Contains(t, status.Convert(err).Message(), issuance.ErrCAExtKeyUsageUnsupported{}.Error())
+			assert.Empty(t, f.ca.revokedOpts, "the refused renewal revoked the old certificate")
+			assert.Nil(t, f.ca.last.Load(), "the CA was asked to sign a refused renewal")
 		})
 	}
 }

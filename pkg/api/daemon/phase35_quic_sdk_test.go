@@ -95,7 +95,7 @@ func newMTLSQUICAuthMiddleware(t *testing.T, bundle *testutil.TestTLSBundle) *qu
 	t.Helper()
 	config := DefaultConfig()
 	config.EnableMTLS = true
-	mw, _, err := selectQUICAuth(config, nil, bundle.CAPool, logging.DefaultLogger())
+	mw, _, err := selectQUICAuth(config, nil, bundle.CAPool, nil, logging.DefaultLogger())
 	if err != nil {
 		t.Fatalf("selectQUICAuth: %v", err)
 	}

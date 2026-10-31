@@ -28,6 +28,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -183,7 +184,7 @@ func selectGRPCTCPAuth(config *Config, shared *platformTokenValidator, pep quicb
 // operations are still refused. A configuration with no backend is refused
 // with ErrTransportAuthRequired instead of yielding an unauthenticated server
 // (#550).
-func selectQUICAuth(config *Config, shared *platformTokenValidator, clientCAPool *x509.CertPool, logger *logging.Logger) (*quic.AuthMiddleware, *grpcTokenValidator, error) {
+func selectQUICAuth(config *Config, shared *platformTokenValidator, clientCAPool *x509.CertPool, installs installCertificateBindings, logger *logging.Logger) (*quic.AuthMiddleware, *grpcTokenValidator, error) {
 	if config.EnableMTLS {
 		if clientCAPool == nil {
 			return nil, nil, ErrTransportAuthRequired{
@@ -197,7 +198,7 @@ func selectQUICAuth(config *Config, shared *platformTokenValidator, clientCAPool
 		}
 		logger.Info("QUIC server: mTLS authentication enabled")
 		opts := []quic.AuthMiddlewareOption{
-			quic.WithQUICPeerAuthenticator(mtlsPeerAuthenticator{authenticator: mtlsAuth}),
+			quic.WithQUICPeerAuthenticator(newMTLSPeerAuthenticator(mtlsAuth, installs)),
 			quic.WithQUICRequireAuth(true),
 		}
 		if shared != nil {
@@ -241,7 +242,60 @@ const mtlsOperatorScope = "*:*"
 // certificate authenticator the gRPC mTLS interceptor uses.
 type mtlsPeerAuthenticator struct {
 	authenticator auth.Authenticator
+	// installs tells an installer's certificate from the operator's. Nil on
+	// a listener with no PXE install flow: every trusted certificate is then
+	// the operator's.
+	installs installCertificateBindings
 }
+
+// newMTLSPeerAuthenticator builds the peer authenticator every mTLS listener
+// shares. installs is read on each request, so a PXE service configured
+// after the listener is built still separates installers from the operator.
+func newMTLSPeerAuthenticator(authenticator auth.Authenticator, installs installCertificateBindings) mtlsPeerAuthenticator {
+	return mtlsPeerAuthenticator{authenticator: authenticator, installs: installs}
+}
+
+// installerScope is the one scope an install certificate holds: the PXE
+// webhook (WebhookComplete) takes it. It reaches no certs:* operation.
+const installerScope = "pxe:write"
+
+// installCertificateBindings reports whether a certificate, by the lowercase
+// hex SHA-256 of its DER, is bound as a device's install certificate.
+type installCertificateBindings interface {
+	IsInstallCertificate(ctx context.Context, certificateSHA256 string) (bool, error)
+}
+
+// pxeInstallBindings reads install certificate bindings from the PXE store
+// the PXE handlers use (UpdateState and SetDeviceEnrolled bind and clear it).
+type pxeInstallBindings struct {
+	service *PXEGRPCService
+}
+
+// IsInstallCertificate implements installCertificateBindings. A node with no
+// PXE service binds no install certificate.
+func (b pxeInstallBindings) IsInstallCertificate(ctx context.Context, certificateSHA256 string) (bool, error) {
+	if b.service == nil || b.service.pxeService == nil {
+		return false, nil
+	}
+	devices, err := b.service.pxeService.ListDevices(ctx, &pxe.DeviceFilter{InstallCertificateSHA256: certificateSHA256})
+	if err != nil {
+		return false, err
+	}
+	return len(devices) > 0, nil
+}
+
+// InstallBindingLookupError is a verified certificate whose install binding
+// could not be read. The peer is refused rather than treated as the operator.
+type InstallBindingLookupError struct {
+	CertificateSHA256 string
+	Err               error
+}
+
+func (e *InstallBindingLookupError) Error() string {
+	return "mTLS peer " + e.CertificateSHA256 + ": read the PXE install certificate binding: " + e.Err.Error()
+}
+
+func (e *InstallBindingLookupError) Unwrap() error { return e.Err }
 
 // AuthenticatePeer implements quic.PeerAuthenticator.
 func (a mtlsPeerAuthenticator) AuthenticatePeer(ctx context.Context, chain []*x509.Certificate) (*platformtoken.AuthorizedContext, error) {
@@ -252,12 +306,37 @@ func (a mtlsPeerAuthenticator) AuthenticatePeer(ctx context.Context, chain []*x5
 	if err != nil {
 		return nil, err
 	}
+	scopes, err := a.peerScopes(ctx, chain[0])
+	if err != nil {
+		return nil, err
+	}
 	return &platformtoken.AuthorizedContext{
 		Subject:  identity.ID,
 		Username: identity.Name,
 		TenantID: identity.TenantID,
-		Scopes:   []string{mtlsOperatorScope},
+		Scopes:   scopes,
 	}, nil
+}
+
+// peerScopes is what a verified certificate may do. A certificate bound as a
+// device's install certificate is an installer, not the operator: the
+// listener trusts it so the installer can report its result, so it holds only
+// the scope the PXE webhook takes (Codex 8646). Any other trusted certificate
+// is the operator's.
+func (a mtlsPeerAuthenticator) peerScopes(ctx context.Context, leaf *x509.Certificate) ([]string, error) {
+	if a.installs == nil {
+		return []string{mtlsOperatorScope}, nil
+	}
+	fingerprint := pxe.CertificateSHA256(leaf.Raw)
+	bound, err := a.installs.IsInstallCertificate(ctx, fingerprint)
+	if err != nil {
+		// Fail closed: a certificate whose role cannot be read gets no scope.
+		return nil, &InstallBindingLookupError{CertificateSHA256: fingerprint, Err: err}
+	}
+	if bound {
+		return []string{installerScope}, nil
+	}
+	return []string{mtlsOperatorScope}, nil
 }
 
 // newRESTScopeGuard builds the guard that checks each daemon REST route's
@@ -265,7 +344,7 @@ func (a mtlsPeerAuthenticator) AuthenticatePeer(ctx context.Context, chain []*x5
 // the shared validator, else a client certificate verified against the mTLS
 // client CA pool, admitted as the operator. A credential with no verifier
 // configured is refused, so the guard never admits by default.
-func newRESTScopeGuard(config *Config, shared *platformTokenValidator, logger *logging.Logger) (*restapi.ScopeGuard, error) {
+func newRESTScopeGuard(config *Config, shared *platformTokenValidator, installs installCertificateBindings, logger *logging.Logger) (*restapi.ScopeGuard, error) {
 	var tokens restapi.TokenAuthorizer
 	// A nil *platformTokenValidator must not become a non-nil interface.
 	if shared != nil {
@@ -281,7 +360,7 @@ func newRESTScopeGuard(config *Config, shared *platformTokenValidator, logger *l
 		if authErr != nil {
 			return nil, ErrTLSConfigFailed{Reason: "REST mTLS auth: " + authErr.Error()}
 		}
-		peers = mtlsPeerAuthenticator{authenticator: mtlsAuth}
+		peers = newMTLSPeerAuthenticator(mtlsAuth, installs)
 	}
 	return restapi.NewScopeGuard(tokens, peers, logger.Slog()), nil
 }
@@ -291,7 +370,7 @@ func newRESTScopeGuard(config *Config, shared *platformTokenValidator, logger *l
 // REST, gRPC and QUIC accept under mTLS. It returns nil without mTLS: the MCP
 // listener then requests no client certificate and only bearer tokens
 // authenticate.
-func newMCPPeerAuthenticator(config *Config, logger *logging.Logger) (mcp.PeerAuthenticator, error) {
+func newMCPPeerAuthenticator(config *Config, installs installCertificateBindings, logger *logging.Logger) (mcp.PeerAuthenticator, error) {
 	clientCAPool, err := resolveMTLSClientCAPool(config, transportMCP)
 	if err != nil {
 		return nil, err
@@ -304,7 +383,7 @@ func newMCPPeerAuthenticator(config *Config, logger *logging.Logger) (mcp.PeerAu
 		return nil, ErrTLSConfigFailed{Reason: "MCP mTLS auth: " + err.Error()}
 	}
 	logger.Info("MCP server: mTLS authentication enabled")
-	return mtlsPeerAuthenticator{authenticator: mtlsAuth}, nil
+	return newMTLSPeerAuthenticator(mtlsAuth, installs), nil
 }
 
 // buildLocalTokenValidator builds the per-transport token validator from the

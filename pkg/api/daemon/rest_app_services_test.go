@@ -121,7 +121,7 @@ func appServicesRESTHandler(t *testing.T, servers appServiceServers) http.Handle
 	config := failClosedConfig()
 	config.EnableMTLS = true
 	config.MTLSClientCAPool = bundle.CAPool
-	guard, err := newRESTScopeGuard(config, nil, logging.DefaultLogger())
+	guard, err := newRESTScopeGuard(config, nil, nil, logging.DefaultLogger())
 	require.NoError(t, err)
 
 	s := newTestRESTServerForPhase35(t)
