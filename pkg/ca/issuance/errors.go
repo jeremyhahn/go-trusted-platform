@@ -319,6 +319,26 @@ func (ErrUnhandledCriticalExtension) Is(target error) bool {
 
 func (ErrUnhandledCriticalExtension) invalidRequest() {}
 
+// ErrInstallerRenewal is the renewal of a certificate carrying the
+// tp-pxeInstaller marker. The renewal request cannot carry the marker, so the
+// replacement would come out as an unrestricted client certificate; and an
+// installer certificate is single-use for one PXE install, the next install
+// issuing a new one (ruling 269(d)). The renewal is refused before the old
+// certificate is revoked (Codex 8676).
+type ErrInstallerRenewal struct{}
+
+func (ErrInstallerRenewal) Error() string {
+	return "an installer certificate (tp-pxeInstaller) is not renewable: the next PXE install issues a new one"
+}
+
+// Is reports whether target is an ErrInstallerRenewal.
+func (ErrInstallerRenewal) Is(target error) bool {
+	_, ok := target.(ErrInstallerRenewal)
+	return ok
+}
+
+func (ErrInstallerRenewal) invalidRequest() {}
+
 // ErrInstallerExtKeyUsage is a request naming PXE_INSTALLER with an extended
 // key usage other than CLIENT_AUTH. The installer marker extension carries
 // exactly id-kp-clientAuth and tp-pxeInstaller, so another usage would be

@@ -108,6 +108,9 @@ func checkRenewableRestrictions(existing *x509.Certificate) error {
 	if len(existing.UnhandledCriticalExtensions) > 0 {
 		return ErrUnhandledCriticalExtension{OIDs: existing.UnhandledCriticalExtensions}
 	}
+	if HasInstallerMarker(existing) {
+		return ErrInstallerRenewal{}
+	}
 	if !existing.IsCA {
 		return nil
 	}

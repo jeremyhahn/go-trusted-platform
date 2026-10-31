@@ -143,6 +143,11 @@ extension, so the replacement would be accepted where relying parties had to
 reject the original or process it under the extension's restrictions
 (RFC 5280 §4.2).
 
+Installer-marked certificates (the `tp-pxeInstaller` EKU marker) are not
+renewable: renewal refuses them with `ErrInstallerRenewal` before anything is
+revoked or issued, since the request cannot carry the marker and the next PXE
+install issues a new installer certificate (Codex 8676).
+
 All these refusals satisfy `issuance.IsInvalidRequest` and are the caller's
 error on every transport: `InvalidArgument` on gRPC, Unix, MCP and the
 embedded SDK, `StatusInvalidArgument` on QUIC, and 400 on REST and the web

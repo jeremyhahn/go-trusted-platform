@@ -353,6 +353,59 @@ func TestCheckRenewableRestrictions_ALeafAndAnUnrestrictedCAPass(t *testing.T) {
 	assert.NoError(t, checkRenewableRestrictions(encodedCACert(t, func(*x509.Certificate) {})))
 }
 
+// encodedLeafCert encodes a client certificate with the usages ParseRequestUsages
+// returns for extKeyUsageNames, as Issue would sign it, and parses it back.
+func encodedLeafCert(t *testing.T, extKeyUsageNames []string) *x509.Certificate {
+	t.Helper()
+	keyUsage, extKeyUsage, extensions, err := ParseRequestUsages(false, []string{"DIGITAL_SIGNATURE"}, extKeyUsageNames)
+	require.NoError(t, err)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	template := renewableCert()
+	template.KeyUsage = keyUsage
+	template.ExtKeyUsage = extKeyUsage
+	template.ExtraExtensions = extensions
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	require.NoError(t, err)
+	cert, err := x509.ParseCertificate(der)
+	require.NoError(t, err)
+	return cert
+}
+
+// The renewal request cannot carry the tp-pxeInstaller marker, so renewing an
+// installer certificate would issue an unrestricted client certificate
+// (Codex 8676). The renewal is refused before anything is revoked, rotated or
+// issued: the next PXE install issues a new installer certificate.
+func TestRenew_AnInstallerCertificateIsRefusedBeforeRevocation(t *testing.T) {
+	ca := newRenewCA()
+	existing := encodedLeafCert(t, []string{"PXE_INSTALLER"})
+	require.True(t, HasInstallerMarker(existing), "the test certificate carries the installer marker")
+	require.Empty(t, existing.UnhandledCriticalExtensions, "Go processes the marker's EKU extension")
+
+	_, err := Renew(context.Background(), ca, existing, RenewOptions{ValidDays: 30})
+
+	require.ErrorIs(t, err, ErrInstallerRenewal{})
+	assert.True(t, IsInvalidRequest(err))
+	assert.Contains(t, err.Error(), "not renewable")
+	assertRenewalUntouched(t, ca)
+}
+
+// A client certificate without the marker still renews: the refusal is keyed
+// on the marker, not on id-kp-clientAuth.
+func TestRenew_AClientAuthLeafWithoutTheMarkerRenews(t *testing.T) {
+	ca := newRenewCA()
+	existing := encodedLeafCert(t, []string{"CLIENT_AUTH"})
+	require.False(t, HasInstallerMarker(existing))
+
+	renewed, err := Renew(context.Background(), ca, existing, RenewOptions{ValidDays: 30})
+
+	require.NoError(t, err)
+	assert.Same(t, ca.renewedCert, renewed)
+	require.Len(t, ca.revokeOpts, 1)
+	require.Len(t, ca.issued, 1)
+	assert.Equal(t, []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, ca.issued[0].ExtKeyUsage)
+}
+
 // TestRenew_AnRSALeafRenewsOnARealSoftwareCA issues an RSA leaf on a
 // software-backed go-xkms CA and renews it. The software backend validates the
 // rotation's key attributes, so attributes without the RSA key size fail the
