@@ -65,10 +65,14 @@ SDK previously had no route for it and posted to an unserved
 `InvalidArgument` before anything is sent. The REST handlers answer a single
 user, role, group or tenant as the bare resource; the SDK places it in the
 reply's resource field (`IAMUserResponse.user`, ...), so Create, Get and Update
-return the resource over REST as they do over gRPC. Create and List still use the
-unscoped form, but they carry the request's `tenant_id` in the body, so a
-foreign tenant is refused there and surfaces as `PermissionDenied`, as on
-gRPC; an empty one acts on the session's tenant.
+return the resource over REST as they do over gRPC. Create and List on users,
+roles and groups, and CheckPermission, use the tenant-scoped form too
+(`/tenants/{tenant}/users`, `.../roles`, `.../groups`,
+`.../permissions/check`): the daemon's own-tenant guard reads the tenant from
+the path or the `tenant_id` query, never the body, so a body-only tenant was
+refused with `403` before the handler ran. A foreign tenant is refused and
+surfaces as `PermissionDenied`, as on gRPC; an empty `tenant_id` is refused
+with `InvalidArgument` before anything is sent.
 
 The status-only operations — Delete on users, roles, groups, tenants, policies
 and apps, AssignRole, RevokeRole, AddGroupMember and RemoveGroupMember — answer
@@ -357,6 +361,12 @@ The SDK's policy create keeps no rule conditions, so a policy spec with a
 (`pkg/webservice/v1/rest/iam/errors.go`), which names the rule and the
 condition, and nothing is stored. A conditional rule is never stored as an
 unconditional one.
+The create keeps no subject selector either, and an empty selector matches
+every subject in the tenant, so a policy whose `spec.subjects` (or top-level
+`subjects`) names any role, group, user or other selector is refused with
+`400` `ErrInvalidPolicySpec`, whose message names the SDK gap, and nothing is
+stored. An admin-only grant is never stored as a grant to everyone; an empty
+`subjects` restricts nothing and is accepted.
 Installer and machine certificates are not admitted (#1153). The credential and
 the scopes are described in [`docs/daemon/api.md`](../daemon/api.md).
 
