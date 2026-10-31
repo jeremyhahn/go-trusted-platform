@@ -127,6 +127,37 @@ func Connect(ctx context.Context, opts *platform.Options) (transport.Adapter, er
 	return a, nil
 }
 
+// ErrNilRoundTripper is returned by NewWithRoundTripper when it is given no
+// RoundTripper to send requests through.
+type ErrNilRoundTripper struct{}
+
+func (ErrNilRoundTripper) Error() string {
+	return "REST adapter: a RoundTripper is required"
+}
+
+// NewWithRoundTripper returns an adapter that sends every request through rt
+// with baseURL as the URL prefix. It skips Connect's TLS dialing and health
+// probe, so it suits an in-process caller that serves the daemon's REST
+// handler directly, such as a test that exercises the real route table
+// against the real handler without a listener.
+func NewWithRoundTripper(baseURL string, rt http.RoundTripper, token string) (*Adapter, error) {
+	if baseURL == "" {
+		return nil, platform.ErrEmptyAddress
+	}
+	if rt == nil {
+		return nil, ErrNilRoundTripper{}
+	}
+	a := &Adapter{
+		httpClient: &http.Client{Transport: rt},
+		baseURL:    strings.TrimSuffix(baseURL, "/"),
+	}
+	a.connected.Store(true)
+	if token != "" {
+		a.SetToken(token)
+	}
+	return a, nil
+}
+
 // probeHealth issues GET /health/live and succeeds only on a 2xx answer.
 // Every REST listener serves the liveness probe unauthenticated. It probes
 // liveness, not /health, because /health answers 503 while a component is
