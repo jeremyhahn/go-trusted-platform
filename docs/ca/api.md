@@ -66,7 +66,10 @@ extended key usages, the SHA-256 fingerprint, PEM, and DER when
 An issue request with `is_ca` set is signed with the go-xkms CA profile on
 every transport (`pkg/ca/issuance.Issue`): the certificate carries
 basicConstraints cA=TRUE, keyCertSign, and a pathLenConstraint of
-`max_path_len`, where 0 means no subordinate CA below it.
+`max_path_len`, where 0 means no subordinate CA below it. A negative
+`max_path_len` (conventionally -1) asks for no limit: `issuance.Issue` hands
+the SDK `MaxPathLen` 0 with `MaxPathLenZero` false, the crypto/x509 form of
+a basicConstraints with no pathLenConstraint.
 
 The issuing CA's own pathLenConstraint bounds the request (RFC 5280
 §4.2.1.9), checked once in `issuance.Issue` for every transport and for
@@ -79,8 +82,12 @@ renewal:
 | pathLen n > 0 | `max_path_len` ≥ n, or negative (no limit) | refused, `SubordinatePathLenError` (issuer, requested, allowed) |
 | no pathLen | any | issued as requested |
 
-Both refusals satisfy `issuance.IsInvalidRequest`; the issuer is named in
-the error message the transport returns. A request
+Both refusals satisfy `issuance.IsInvalidRequest` and are the caller's
+error on every transport: `InvalidArgument` on gRPC, Unix, MCP and the
+embedded SDK, `StatusInvalidArgument` on QUIC, and 400 on REST and the web
+service. The typed error's message, which names the issuer, is the message
+the transport returns; nothing is issued. Any other issuance failure stays a
+server error (`Internal` / 500). A request
 without `is_ca` is never bounded. When the issuing CA's certificate cannot be
 read, an `is_ca` request fails with `IssuerCertificateError`, a server error.
 
