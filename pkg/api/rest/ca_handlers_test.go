@@ -1601,40 +1601,6 @@ func TestCAHandlers_KeyAlgorithmToString(t *testing.T) {
 	}
 }
 
-func TestCAHandlers_ParseKeyUsage(t *testing.T) {
-	handlers := NewCAHandlers(nil, nil, nil)
-
-	usages := []string{
-		"DIGITAL_SIGNATURE",
-		"KEY_ENCIPHERMENT",
-		"CERT_SIGN",
-		"CRL_SIGN",
-	}
-
-	result := handlers.parseKeyUsage(usages)
-
-	assert.True(t, result&x509.KeyUsageDigitalSignature != 0)
-	assert.True(t, result&x509.KeyUsageKeyEncipherment != 0)
-	assert.True(t, result&x509.KeyUsageCertSign != 0)
-	assert.True(t, result&x509.KeyUsageCRLSign != 0)
-}
-
-func TestCAHandlers_ParseExtKeyUsage(t *testing.T) {
-	handlers := NewCAHandlers(nil, nil, nil)
-
-	usages := []string{
-		"SERVER_AUTH",
-		"CLIENT_AUTH",
-		"CODE_SIGNING",
-	}
-
-	result := handlers.parseExtKeyUsage(usages)
-
-	assert.Contains(t, result, x509.ExtKeyUsageServerAuth)
-	assert.Contains(t, result, x509.ExtKeyUsageClientAuth)
-	assert.Contains(t, result, x509.ExtKeyUsageCodeSigning)
-}
-
 func TestCAHandlers_KeyUsageToStrings(t *testing.T) {
 	handlers := NewCAHandlers(nil, nil, nil)
 

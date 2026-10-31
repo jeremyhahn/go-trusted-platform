@@ -308,3 +308,24 @@ func (e *CAKeyUsageUnsupportedError) Error() string {
 }
 
 func (e *CAKeyUsageUnsupportedError) invalidRequest() {}
+
+// ErrUnsupportedUsage is a key usage or extended key usage name the platform
+// does not recognize. It is refused, never dropped: dropping it would widen
+// the certificate, and on an isCA request grant the CA profile's full
+// authority. errors.Is matches any ErrUnsupportedUsage, whatever its Name.
+type ErrUnsupportedUsage struct {
+	// Name is the unrecognized usage string as the caller sent it.
+	Name string
+}
+
+func (e ErrUnsupportedUsage) Error() string {
+	return "unsupported key usage or extended key usage " + strconv.Quote(e.Name)
+}
+
+// Is reports whether target is an ErrUnsupportedUsage.
+func (ErrUnsupportedUsage) Is(target error) bool {
+	_, ok := target.(ErrUnsupportedUsage)
+	return ok
+}
+
+func (ErrUnsupportedUsage) invalidRequest() {}

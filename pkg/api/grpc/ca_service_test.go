@@ -1580,38 +1580,6 @@ func TestExtKeyUsageToStrings(t *testing.T) {
 	}
 }
 
-func TestParseKeyUsage(t *testing.T) {
-	t.Parallel()
-
-	service := &CAGRPCService{}
-
-	usages := []string{"DIGITAL_SIGNATURE", "CERT_SIGN", "KEY_ENCIPHERMENT"}
-	result := service.parseKeyUsage(usages)
-
-	if result&x509.KeyUsageDigitalSignature == 0 {
-		t.Error("expected digital signature")
-	}
-	if result&x509.KeyUsageCertSign == 0 {
-		t.Error("expected cert sign")
-	}
-	if result&x509.KeyUsageKeyEncipherment == 0 {
-		t.Error("expected key encipherment")
-	}
-}
-
-func TestParseExtKeyUsage(t *testing.T) {
-	t.Parallel()
-
-	service := &CAGRPCService{}
-
-	usages := []string{"SERVER_AUTH", "CLIENT_AUTH", "TIME_STAMPING", "OCSP_SIGNING"}
-	result := service.parseExtKeyUsage(usages)
-
-	if len(result) != 4 {
-		t.Errorf("expected 4 usages, got %d", len(result))
-	}
-}
-
 func TestKeyAlgorithmConversions(t *testing.T) {
 	t.Parallel()
 
@@ -1945,70 +1913,6 @@ func TestMatchesCertFilter(t *testing.T) {
 }
 
 // Additional tests for parseKeyUsage and parseExtKeyUsage
-
-func TestCAGRPCService_parseKeyUsage_AllTypes(t *testing.T) {
-	logger := createTestLogger()
-	mockCA := &configurableMockCA{}
-	service := NewCAGRPCService(logger, mockCA, nil)
-
-	tests := []struct {
-		input    []string
-		expected x509.KeyUsage
-	}{
-		{[]string{"DIGITAL_SIGNATURE"}, x509.KeyUsageDigitalSignature},
-		{[]string{"CONTENT_COMMITMENT"}, x509.KeyUsageContentCommitment},
-		{[]string{"KEY_ENCIPHERMENT"}, x509.KeyUsageKeyEncipherment},
-		{[]string{"DATA_ENCIPHERMENT"}, x509.KeyUsageDataEncipherment},
-		{[]string{"KEY_AGREEMENT"}, x509.KeyUsageKeyAgreement},
-		{[]string{"CERT_SIGN"}, x509.KeyUsageCertSign},
-		{[]string{"CRL_SIGN"}, x509.KeyUsageCRLSign},
-		{[]string{"ENCIPHER_ONLY"}, x509.KeyUsageEncipherOnly},
-		{[]string{"DECIPHER_ONLY"}, x509.KeyUsageDecipherOnly},
-		{[]string{"unknown"}, 0},
-		{nil, 0},
-	}
-
-	for _, tc := range tests {
-		result := service.parseKeyUsage(tc.input)
-		if result != tc.expected {
-			t.Errorf("parseKeyUsage(%v) = %v, expected %v", tc.input, result, tc.expected)
-		}
-	}
-}
-
-func TestCAGRPCService_parseExtKeyUsage_AllTypes(t *testing.T) {
-	logger := createTestLogger()
-	mockCA := &configurableMockCA{}
-	service := NewCAGRPCService(logger, mockCA, nil)
-
-	tests := []struct {
-		input    []string
-		expected []x509.ExtKeyUsage
-	}{
-		{[]string{"ANY"}, []x509.ExtKeyUsage{x509.ExtKeyUsageAny}},
-		{[]string{"SERVER_AUTH"}, []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}},
-		{[]string{"CLIENT_AUTH"}, []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}},
-		{[]string{"CODE_SIGNING"}, []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning}},
-		{[]string{"EMAIL_PROTECTION"}, []x509.ExtKeyUsage{x509.ExtKeyUsageEmailProtection}},
-		{[]string{"TIME_STAMPING"}, []x509.ExtKeyUsage{x509.ExtKeyUsageTimeStamping}},
-		{[]string{"OCSP_SIGNING"}, []x509.ExtKeyUsage{x509.ExtKeyUsageOCSPSigning}},
-		{[]string{"unknown"}, nil},
-		{nil, nil},
-	}
-
-	for _, tc := range tests {
-		result := service.parseExtKeyUsage(tc.input)
-		if len(result) != len(tc.expected) {
-			t.Errorf("parseExtKeyUsage(%v) returned %d items, expected %d", tc.input, len(result), len(tc.expected))
-			continue
-		}
-		for i, r := range result {
-			if r != tc.expected[i] {
-				t.Errorf("parseExtKeyUsage(%v)[%d] = %v, expected %v", tc.input, i, r, tc.expected[i])
-			}
-		}
-	}
-}
 
 func TestCAGRPCService_keyUsageToStrings_AllTypes(t *testing.T) {
 	logger := createTestLogger()

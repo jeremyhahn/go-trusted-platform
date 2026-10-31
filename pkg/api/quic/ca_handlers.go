@@ -371,6 +371,11 @@ func (h *CAHandler) handleIssue(ctx context.Context, req *quicwire.Request) *qui
 		return h.errorResponse(quicwire.StatusInvalidArgument, err)
 	}
 
+	keyUsage, extKeyUsage, err := issuance.ParseRequestUsages(issueReq.IsCA, issueReq.KeyUsage, issueReq.ExtKeyUsage)
+	if err != nil {
+		return h.errorResponse(quicwire.StatusInvalidArgument, err)
+	}
+
 	caReq := &quicbaasca.CACertificateRequest{
 		Subject: quicbaasca.CASubject{
 			CommonName:         issueReq.Subject.CommonName,
@@ -385,8 +390,8 @@ func (h *CAHandler) handleIssue(ctx context.Context, req *quicwire.Request) *qui
 		Valid:       int(issueReq.ValidDays),
 		IsCA:        issueReq.IsCA,
 		MaxPathLen:  int(issueReq.MaxPathLen),
-		KeyUsage:    h.parseKeyUsage(issueReq.KeyUsage),
-		ExtKeyUsage: h.parseExtKeyUsage(issueReq.ExtKeyUsage),
+		KeyUsage:    keyUsage,
+		ExtKeyUsage: extKeyUsage,
 	}
 
 	if issueReq.Sans != nil {
@@ -1112,56 +1117,6 @@ func (h *CAHandler) signatureAlgorithmToString(alg x509.SignatureAlgorithm) stri
 
 func (h *CAHandler) parseStoreType(storeType string) xkmssdk.StoreType {
 	return xkmssdk.ParseStoreType(storeType)
-}
-
-func (h *CAHandler) parseKeyUsage(usages []string) x509.KeyUsage {
-	var keyUsage x509.KeyUsage
-	for _, u := range usages {
-		switch strings.ToUpper(u) {
-		case "DIGITALSIGNATURE", "DIGITAL_SIGNATURE":
-			keyUsage |= x509.KeyUsageDigitalSignature
-		case "CONTENTCOMMITMENT", "CONTENT_COMMITMENT":
-			keyUsage |= x509.KeyUsageContentCommitment
-		case "KEYENCIPHERMENT", "KEY_ENCIPHERMENT":
-			keyUsage |= x509.KeyUsageKeyEncipherment
-		case "DATAENCIPHERMENT", "DATA_ENCIPHERMENT":
-			keyUsage |= x509.KeyUsageDataEncipherment
-		case "KEYAGREEMENT", "KEY_AGREEMENT":
-			keyUsage |= x509.KeyUsageKeyAgreement
-		case "CERTSIGN", "CERT_SIGN":
-			keyUsage |= x509.KeyUsageCertSign
-		case "CRLSIGN", "CRL_SIGN":
-			keyUsage |= x509.KeyUsageCRLSign
-		case "ENCIPHERONLY", "ENCIPHER_ONLY":
-			keyUsage |= x509.KeyUsageEncipherOnly
-		case "DECIPHERONLY", "DECIPHER_ONLY":
-			keyUsage |= x509.KeyUsageDecipherOnly
-		}
-	}
-	return keyUsage
-}
-
-func (h *CAHandler) parseExtKeyUsage(usages []string) []x509.ExtKeyUsage {
-	var extKeyUsage []x509.ExtKeyUsage
-	for _, u := range usages {
-		switch strings.ToUpper(u) {
-		case "ANY":
-			extKeyUsage = append(extKeyUsage, x509.ExtKeyUsageAny)
-		case "SERVERAUTH", "SERVER_AUTH":
-			extKeyUsage = append(extKeyUsage, x509.ExtKeyUsageServerAuth)
-		case "CLIENTAUTH", "CLIENT_AUTH":
-			extKeyUsage = append(extKeyUsage, x509.ExtKeyUsageClientAuth)
-		case "CODESIGNING", "CODE_SIGNING":
-			extKeyUsage = append(extKeyUsage, x509.ExtKeyUsageCodeSigning)
-		case "EMAILPROTECTION", "EMAIL_PROTECTION":
-			extKeyUsage = append(extKeyUsage, x509.ExtKeyUsageEmailProtection)
-		case "TIMESTAMPING", "TIME_STAMPING":
-			extKeyUsage = append(extKeyUsage, x509.ExtKeyUsageTimeStamping)
-		case "OCSPSIGNING", "OCSP_SIGNING":
-			extKeyUsage = append(extKeyUsage, x509.ExtKeyUsageOCSPSigning)
-		}
-	}
-	return extKeyUsage
 }
 
 func (h *CAHandler) certToFull(cert *x509.Certificate, includePEM bool) *Certificate {

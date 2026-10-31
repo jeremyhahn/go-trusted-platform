@@ -589,13 +589,18 @@ func TestCAAPIRest_KeyUsageRoundTrip(t *testing.T) {
 	var all x509.KeyUsage
 	var canonical []string
 	for _, u := range usages {
-		assert.Equal(t, u.bit, h.parseKeyUsage([]string{strings.ToLower(u.compact)}), u.compact)
-		assert.Equal(t, u.bit, h.parseKeyUsage([]string{u.canonical}), u.canonical)
+		for _, name := range []string{strings.ToLower(u.compact), u.canonical} {
+			got, err := issuance.ParseKeyUsages([]string{name})
+			require.NoError(t, err, name)
+			assert.Equal(t, u.bit, got, name)
+		}
 		all |= u.bit
 		canonical = append(canonical, u.canonical)
 	}
 	assert.Equal(t, canonical, h.keyUsageToStrings(all))
-	assert.Zero(t, h.parseKeyUsage([]string{"SIGN_EVERYTHING"}))
+	parsed, err := issuance.ParseKeyUsages(h.keyUsageToStrings(all))
+	require.NoError(t, err)
+	assert.Equal(t, all, parsed, "the names the handler writes parse back to the same mask")
 	assert.Nil(t, h.keyUsageToStrings(0))
 }
 
@@ -616,12 +621,17 @@ func TestCAAPIRest_ExtKeyUsageRoundTrip(t *testing.T) {
 	var values []x509.ExtKeyUsage
 	var canonical []string
 	for _, u := range usages {
-		assert.Equal(t, []x509.ExtKeyUsage{u.value}, h.parseExtKeyUsage([]string{strings.ToLower(u.compact)}), u.compact)
-		assert.Equal(t, []x509.ExtKeyUsage{u.value}, h.parseExtKeyUsage([]string{u.canonical}), u.canonical)
+		for _, name := range []string{strings.ToLower(u.compact), u.canonical} {
+			got, err := issuance.ParseExtKeyUsages([]string{name})
+			require.NoError(t, err, name)
+			assert.Equal(t, []x509.ExtKeyUsage{u.value}, got, name)
+		}
 		values = append(values, u.value)
 		canonical = append(canonical, u.canonical)
 	}
 	assert.Equal(t, canonical, h.extKeyUsageToStrings(values))
-	assert.Nil(t, h.parseExtKeyUsage([]string{"IPSEC_TUNNEL"}))
+	parsed, err := issuance.ParseExtKeyUsages(h.extKeyUsageToStrings(values))
+	require.NoError(t, err)
+	assert.Equal(t, values, parsed, "the names the handler writes parse back to the same usages")
 	assert.Nil(t, h.extKeyUsageToStrings([]x509.ExtKeyUsage{x509.ExtKeyUsageIPSECTunnel}))
 }

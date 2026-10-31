@@ -596,6 +596,12 @@ func (h *CAHandlers) handleIssueCertificate(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	keyUsage, extKeyUsage, err := issuance.ParseRequestUsages(certReq.GetIsCa(), certReq.GetKeyUsage(), certReq.GetExtKeyUsage())
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
 	// Build certificate request
 	caReq := &quicbaasca.CACertificateRequest{
 		Subject: quicbaasca.CASubject{
@@ -611,8 +617,8 @@ func (h *CAHandlers) handleIssueCertificate(w http.ResponseWriter, r *http.Reque
 		Valid:       int(certReq.GetValidDays()),
 		IsCA:        certReq.GetIsCa(),
 		MaxPathLen:  int(certReq.GetMaxPathLen()),
-		KeyUsage:    h.parseKeyUsage(certReq.GetKeyUsage()),
-		ExtKeyUsage: h.parseExtKeyUsage(certReq.GetExtKeyUsage()),
+		KeyUsage:    keyUsage,
+		ExtKeyUsage: extKeyUsage,
 	}
 
 	// Add SANs if provided
@@ -1553,58 +1559,6 @@ func (h *CAHandlers) parseKeyAlgorithm(s string) (x509.PublicKeyAlgorithm, error
 	default:
 		return 0, ErrInvalidKeyAlgorithm{Algorithm: s}
 	}
-}
-
-// parseKeyUsage parses key usage strings into x509.KeyUsage.
-func (h *CAHandlers) parseKeyUsage(usages []string) x509.KeyUsage {
-	var keyUsage x509.KeyUsage
-	for _, u := range usages {
-		switch strings.ToUpper(u) {
-		case "DIGITALSIGNATURE", "DIGITAL_SIGNATURE":
-			keyUsage |= x509.KeyUsageDigitalSignature
-		case "CONTENTCOMMITMENT", "CONTENT_COMMITMENT":
-			keyUsage |= x509.KeyUsageContentCommitment
-		case "KEYENCIPHERMENT", "KEY_ENCIPHERMENT":
-			keyUsage |= x509.KeyUsageKeyEncipherment
-		case "DATAENCIPHERMENT", "DATA_ENCIPHERMENT":
-			keyUsage |= x509.KeyUsageDataEncipherment
-		case "KEYAGREEMENT", "KEY_AGREEMENT":
-			keyUsage |= x509.KeyUsageKeyAgreement
-		case "CERTSIGN", "CERT_SIGN":
-			keyUsage |= x509.KeyUsageCertSign
-		case "CRLSIGN", "CRL_SIGN":
-			keyUsage |= x509.KeyUsageCRLSign
-		case "ENCIPHERONLY", "ENCIPHER_ONLY":
-			keyUsage |= x509.KeyUsageEncipherOnly
-		case "DECIPHERONLY", "DECIPHER_ONLY":
-			keyUsage |= x509.KeyUsageDecipherOnly
-		}
-	}
-	return keyUsage
-}
-
-// parseExtKeyUsage parses extended key usage strings.
-func (h *CAHandlers) parseExtKeyUsage(usages []string) []x509.ExtKeyUsage {
-	var extKeyUsage []x509.ExtKeyUsage
-	for _, u := range usages {
-		switch strings.ToUpper(u) {
-		case "ANY":
-			extKeyUsage = append(extKeyUsage, x509.ExtKeyUsageAny)
-		case "SERVERAUTH", "SERVER_AUTH":
-			extKeyUsage = append(extKeyUsage, x509.ExtKeyUsageServerAuth)
-		case "CLIENTAUTH", "CLIENT_AUTH":
-			extKeyUsage = append(extKeyUsage, x509.ExtKeyUsageClientAuth)
-		case "CODESIGNING", "CODE_SIGNING":
-			extKeyUsage = append(extKeyUsage, x509.ExtKeyUsageCodeSigning)
-		case "EMAILPROTECTION", "EMAIL_PROTECTION":
-			extKeyUsage = append(extKeyUsage, x509.ExtKeyUsageEmailProtection)
-		case "TIMESTAMPING", "TIME_STAMPING":
-			extKeyUsage = append(extKeyUsage, x509.ExtKeyUsageTimeStamping)
-		case "OCSPSIGNING", "OCSP_SIGNING":
-			extKeyUsage = append(extKeyUsage, x509.ExtKeyUsageOCSPSigning)
-		}
-	}
-	return extKeyUsage
 }
 
 // keyUsageToStrings converts key usage to strings.
