@@ -25,9 +25,14 @@ import (
 // parsePolicyRulesFromYAML extracts the rules slice from the canonical
 // IAM Policy YAML document. Returns nil when the YAML cannot be parsed;
 // callers should treat that as "no rules" and substitute a default.
-func parsePolicyRulesFromYAML(specYAML string) []iamsdk.Rule {
+//
+// The SDK's embedded policy create keeps only each rule's name, effect,
+// priority, actions and resources, so a `when` or `unless` condition would
+// be dropped and a conditional rule stored as unconditional. A rule that
+// carries either is refused with ErrPolicyConditionUnsupported instead.
+func parsePolicyRulesFromYAML(specYAML string) ([]iamsdk.Rule, error) {
 	if specYAML == "" {
-		return nil
+		return nil, nil
 	}
 	var doc struct {
 		Spec struct {
@@ -52,17 +57,23 @@ func parsePolicyRulesFromYAML(specYAML string) []iamsdk.Rule {
 		} `yaml:"rules"`
 	}
 	if err := yaml.Unmarshal([]byte(specYAML), &doc); err != nil {
-		return nil
+		return nil, nil
 	}
 	src := doc.Spec.Rules
 	if len(src) == 0 {
 		src = doc.Rules
 	}
 	if len(src) == 0 {
-		return nil
+		return nil, nil
 	}
 	out := make([]iamsdk.Rule, 0, len(src))
 	for _, r := range src {
+		if len(r.When) > 0 {
+			return nil, ErrPolicyConditionUnsupported{Rule: r.Name, Condition: "when"}
+		}
+		if len(r.Unless) > 0 {
+			return nil, ErrPolicyConditionUnsupported{Rule: r.Name, Condition: "unless"}
+		}
 		effect := iamsdk.EffectAllow
 		if r.Effect == "deny" {
 			effect = iamsdk.EffectDeny
@@ -83,7 +94,7 @@ func parsePolicyRulesFromYAML(specYAML string) []iamsdk.Rule {
 			Resources: resources,
 		})
 	}
-	return out
+	return out, nil
 }
 
 // QuicBaaSIAMAdapter wraps a quicbaassdk.IAMClient to satisfy the
@@ -323,7 +334,11 @@ func (a *QuicBaaSIAMAdapter) CreatePolicy(ctx context.Context, tenantID string, 
 	// flat Rules slice so validation passes. Falls back to a minimal
 	// placeholder rule when the YAML cannot be parsed so callers
 	// supplying just a name + description still succeed.
-	if rules := parsePolicyRulesFromYAML(req.SpecYAML); len(rules) > 0 {
+	rules, err := parsePolicyRulesFromYAML(req.SpecYAML)
+	if err != nil {
+		return nil, err
+	}
+	if len(rules) > 0 {
 		sdkReq.Rules = rules
 	} else {
 		sdkReq.Rules = []iamsdk.Rule{{

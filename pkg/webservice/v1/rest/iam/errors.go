@@ -143,6 +143,18 @@ func (e ErrInvalidPolicySpec) Error() string {
 	return fmt.Sprintf("invalid policy spec: %s", e.Reason)
 }
 
+// ErrPolicyConditionUnsupported refuses a policy rule that carries a
+// `when` or `unless` condition: the IAM SDK's policy create cannot carry
+// conditions, and storing the rule without them would widen it.
+type ErrPolicyConditionUnsupported struct {
+	Rule      string
+	Condition string
+}
+
+func (e ErrPolicyConditionUnsupported) Error() string {
+	return fmt.Sprintf("invalid policy spec: rule %q has a %q condition the IAM SDK cannot carry", e.Rule, e.Condition)
+}
+
 // ErrMissingRole is returned when role name is required but not provided
 type ErrMissingRole struct{}
 

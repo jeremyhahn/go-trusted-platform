@@ -288,6 +288,13 @@ func TestIAMScopeAction(t *testing.T) {
 		{http.MethodPost, "/api/v1/iam/permissions/check", "read"},
 		{http.MethodPost, "/api/v1/iam/tenants/{tenant}/policies", "write"},
 		{http.MethodPut, "/api/v1/iam/tenants/{tenant}/policies/test", "write"},
+		{http.MethodDelete, "/api/v1/iam/tenants/{tenant}/users/{id}/roles/{role}", "write"},
+		{http.MethodDelete, "/api/v1/iam/users/{id}/roles/{role}", "write"},
+		{http.MethodDelete, "/api/v1/iam/tenants/{tenant}/groups/{id}/members/{user}", "write"},
+		{http.MethodDelete, "/api/v1/iam/groups/{id}/members/{user}", "write"},
+		{http.MethodDelete, "/api/v1/iam/tenants/{tenant}/roles/{id}", "delete"},
+		{http.MethodDelete, "/api/v1/iam/tenants/{tenant}/groups/{id}", "delete"},
+		{http.MethodPost, "/api/v1/iam/tenants/{tenant}/users/{id}/roles/{role}", "write"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.method+" "+tc.route, func(t *testing.T) {

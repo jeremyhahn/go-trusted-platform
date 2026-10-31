@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/gorilla/mux"
+	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
@@ -41,6 +42,38 @@ var iamReadOnlyPosts = []string{
 	"/permissions/check",
 }
 
+// iamMembershipDeletes are the DELETE routes that remove a membership
+// rather than an IAM object: RevokeUserRole and RemoveGroupMember, on the
+// tenant path and its flat alias. The shared RPC catalog
+// (pkg/api/grpc/method_permissions.go) grants RevokeRole and
+// RemoveGroupMember to iam:write, so REST asks for the same scope.
+var iamMembershipDeletes = []string{
+	"/users/{id}/roles/{role}",
+	"/groups/{id}/members/{user}",
+}
+
+// iamRouteAction is a route suffix whose scope action differs from the
+// one its method maps to in iamMethodActions.
+type iamRouteAction struct {
+	suffix string
+	action string
+}
+
+// iamRouteActionExceptions lists, per method, the routes that need a
+// scope action other than the method's own.
+var iamRouteActionExceptions = map[string][]iamRouteAction{
+	http.MethodPost:   iamRouteActions(iamReadOnlyPosts, "read"),
+	http.MethodDelete: iamRouteActions(iamMembershipDeletes, "write"),
+}
+
+func iamRouteActions(suffixes []string, action string) []iamRouteAction {
+	out := make([]iamRouteAction, 0, len(suffixes))
+	for _, suffix := range suffixes {
+		out = append(out, iamRouteAction{suffix: suffix, action: action})
+	}
+	return out
+}
+
 // iamRESTCallerKey carries the caller ScopeGuard.Authenticate resolved to
 // the IAM guards that run after it.
 type iamRESTCallerKey struct{}
@@ -63,7 +96,7 @@ func (s *RESTServer) SetIAMHandlers(logger *logging.Logger, iamClient restiam.IA
 	}
 	respWriter := response.NewResponseWriter(logger, nil)
 	authz := iamRESTAuthorization{guard: guard, respWriter: respWriter, systemTenantID: systemTenantID}
-	router, err := restiam.NewIAMRouter(logger, iamClient, pepClient, respWriter, restiam.Authorization{
+	router, err := restiam.NewIAMRouter(logger, iamTenantApps{IAMClient: iamClient}, pepClient, respWriter, restiam.Authorization{
 		Authenticate:        authz.authenticate,
 		RequireAdmin:        authz.requireScope,
 		RequireSystemTenant: authz.requireSystemTenant,
@@ -168,11 +201,13 @@ func iamScopeAction(method, route string) (string, error) {
 	if !ok {
 		return "", restapi.ErrRouteForbidden{Scope: iamScopePrefix + "*", Reason: "method " + method + " is not served"}
 	}
-	if method == http.MethodPost {
-		for _, suffix := range iamReadOnlyPosts {
-			if strings.HasSuffix(route, suffix) {
-				return "read", nil
-			}
+	exceptions, ok := iamRouteActionExceptions[method]
+	if !ok {
+		return action, nil
+	}
+	for _, exception := range exceptions {
+		if strings.HasSuffix(route, exception.suffix) {
+			return exception.action, nil
 		}
 	}
 	return action, nil
@@ -187,4 +222,58 @@ func iamRouteTemplate(r *http.Request) string {
 		}
 	}
 	return r.URL.Path
+}
+
+// iamTenantApps keeps the application instance routes inside the URL
+// tenant. The pinned SDK looks an application's client ID up across every
+// tenant for Get, Update, Delete and RotateSecret, so the URL tenant check
+// alone would let a caller reach another tenant's application by its
+// client ID. Each call first confirms, through the tenant-scoped List, that
+// the client ID belongs to the tenant; a foreign client ID gets the same
+// not-found as a missing one, and nothing is changed.
+type iamTenantApps struct {
+	restiam.IAMClient
+}
+
+func (c iamTenantApps) GetApp(ctx context.Context, tenantID, clientID string) (*sdkiam.Application, error) {
+	if err := c.requireTenantApp(ctx, tenantID, clientID); err != nil {
+		return nil, err
+	}
+	return c.IAMClient.GetApp(ctx, tenantID, clientID)
+}
+
+func (c iamTenantApps) UpdateApp(ctx context.Context, tenantID, clientID string, req *sdkiam.UpdateAppRequest) (*sdkiam.Application, error) {
+	if err := c.requireTenantApp(ctx, tenantID, clientID); err != nil {
+		return nil, err
+	}
+	return c.IAMClient.UpdateApp(ctx, tenantID, clientID, req)
+}
+
+func (c iamTenantApps) DeleteApp(ctx context.Context, tenantID, clientID string) error {
+	if err := c.requireTenantApp(ctx, tenantID, clientID); err != nil {
+		return err
+	}
+	return c.IAMClient.DeleteApp(ctx, tenantID, clientID)
+}
+
+func (c iamTenantApps) RotateAppSecret(ctx context.Context, tenantID, clientID string) (*restiam.RotateSecretResponse, error) {
+	if err := c.requireTenantApp(ctx, tenantID, clientID); err != nil {
+		return nil, err
+	}
+	return c.IAMClient.RotateAppSecret(ctx, tenantID, clientID)
+}
+
+// requireTenantApp returns restiam.ErrAppNotFound unless the tenant's own
+// application list holds the client ID.
+func (c iamTenantApps) requireTenantApp(ctx context.Context, tenantID, clientID string) error {
+	apps, err := c.ListApps(ctx, tenantID, 0, 0)
+	if err != nil {
+		return err
+	}
+	for i := range apps.Apps {
+		if apps.Apps[i].ClientID == clientID {
+			return nil
+		}
+	}
+	return restiam.ErrAppNotFound{TenantID: tenantID, AppID: clientID}
 }
