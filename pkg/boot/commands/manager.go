@@ -25,6 +25,7 @@ import (
 
 	googleLogger "github.com/google/logger"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/fido2"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	platforminitrd "github.com/jeremyhahn/go-trusted-platform/pkg/initrd"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -264,20 +265,52 @@ func CreateManager(ctx context.Context, logger *logging.Logger, config *platform
 	backendInstance := xkmssdk.NewFileBackend(xkmsLogger, storageBackend)
 
 	// 4. Create Platform Bundle (minimal dependencies for boot)
-	// No XKMS, no FIDO2 - just TPM + LUKS + backend for unsealing
+	// No XKMS - TPM + LUKS + backend for unsealing, and the FIDO2 handler
+	// newBootManager opens
 	platformBundle := &platforminitrd.Platform{
 		TPM:     tpmModule,
 		LUKS:    luksHandler,
-		FIDO2:   nil,             // Not needed for boot
 		XKMS:    nil,             // Not needed for boot
 		Backend: backendInstance, // Direct backend access for TPM unsealing
 		Config:  config,
 	}
 
-	// 6. Create Manager
-	manager, err := platforminitrd.NewManager(platformBundle, logger)
+	// 5. Create Manager
+	manager, err := newBootManager(logger, platformBundle)
 	if err != nil {
 		tpmModule.Close()
+		return nil, err
+	}
+
+	return manager, nil
+}
+
+// newBootFIDO2Handler opens the SDK FIDO2 handler on the HID transport.
+// Tests replace it with a fake authenticator.
+var newBootFIDO2Handler = func(cfg *fido2.Config) (fido2.Handler, error) {
+	return fido2.NewHandler(cfg, fido2.NewDefaultEnumerator())
+}
+
+// newBootManager sets the platform's FIDO2 handler, so that the manager
+// registers the FIDO2 strategy when FallbackMethods names it, and builds the
+// initrd manager. A handler that cannot be opened leaves FIDO2 out of the
+// chain rather than failing boot: the TPM and password strategies still run.
+func newBootManager(logger *logging.Logger, platformBundle *platforminitrd.Platform) (platforminitrd.Manager, error) {
+	cfg := fido2.DefaultConfig
+	handler, err := newBootFIDO2Handler(&cfg)
+	if err != nil {
+		logger.Warn("FIDO2 handler not available, FIDO2 unlock is disabled", "error", err)
+	} else {
+		platformBundle.FIDO2 = handler
+	}
+
+	manager, err := platforminitrd.NewManager(platformBundle, logger)
+	if err != nil {
+		if platformBundle.FIDO2 != nil {
+			if closeErr := platformBundle.FIDO2.Close(); closeErr != nil {
+				logger.Warn("failed to close the FIDO2 handler", "error", closeErr)
+			}
+		}
 		return nil, &WrappedError{Msg: "failed to create initrd manager", Err: err}
 	}
 

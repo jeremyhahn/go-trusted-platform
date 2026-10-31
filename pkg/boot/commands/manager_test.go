@@ -1,11 +1,19 @@
 package commands
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/fido2"
+
+	platforminitrd "github.com/jeremyhahn/go-trusted-platform/pkg/initrd"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	storageluks "github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
 )
 
 func TestSrkHandleHex(t *testing.T) {
@@ -345,5 +353,210 @@ ssrk-handle=0x81000001
 				t.Errorf("PlatformPolicy = %v, want %v", result.PlatformSRK.PlatformPolicy, tc.want)
 			}
 		})
+	}
+}
+
+// bootFakeFIDO2 is an authenticator whose key is a hash of the credential
+// and salt it is asked about.
+type bootFakeFIDO2 struct {
+	unlocks []*fido2.AuthenticationConfig
+	closed  int
+}
+
+func bootFIDO2Key(credentialID, salt []byte) []byte {
+	sum := sha256.Sum256(append(append([]byte{}, credentialID...), salt...))
+	return sum[:]
+}
+
+func (f *bootFakeFIDO2) EnrollKey(*fido2.EnrollmentConfig) (*fido2.EnrollmentResult, error) {
+	return nil, errors.New("enrolment is not part of boot")
+}
+
+func (f *bootFakeFIDO2) UnlockWithKey(config *fido2.AuthenticationConfig) ([]byte, error) {
+	f.unlocks = append(f.unlocks, config)
+	return bootFIDO2Key(config.CredentialID, config.Salt), nil
+}
+
+func (f *bootFakeFIDO2) ListDevices() ([]fido2.Device, error) { return nil, nil }
+
+func (f *bootFakeFIDO2) WaitForDevice(context.Context) (*fido2.Device, error) {
+	return &fido2.Device{}, nil
+}
+
+func (f *bootFakeFIDO2) Close() error {
+	f.closed++
+	return nil
+}
+
+// bootTokenLUKS is a LUKS2 header holding tokens. Open records the key and
+// keyslot it is given and then refuses, so that the chain never records a
+// winner on the host.
+type bootTokenLUKS struct {
+	storageluks.Handler
+	storageluks.TokenHandler
+	tokens map[int]*storageluks.Token
+	opens  []bootOpen
+}
+
+type bootOpen struct {
+	device, mapping string
+	key             []byte
+	slot            int
+}
+
+var errBootOpenRecorded = errors.New("open recorded")
+
+func (l *bootTokenLUKS) TokenList(context.Context, string) (map[int]*storageluks.Token, error) {
+	return l.tokens, nil
+}
+
+func (l *bootTokenLUKS) Open(_ context.Context, device, mapping string, key []byte, opts *storageluks.OpenOptions) error {
+	slot := -1
+	if opts != nil && opts.KeySlot != nil {
+		slot = *opts.KeySlot
+	}
+	l.opens = append(l.opens, bootOpen{device: device, mapping: mapping, key: append([]byte{}, key...), slot: slot})
+	return errBootOpenRecorded
+}
+
+// bootEnumerator is an HID bus with no authenticator on it.
+type bootEnumerator struct{}
+
+func (bootEnumerator) Enumerate(uint16, uint16) ([]fido2.HIDDevice, error) { return nil, nil }
+
+func (bootEnumerator) Open(string) (fido2.HIDDevice, error) {
+	return nil, errors.New("no HID device")
+}
+
+func useBootFIDO2Handler(t *testing.T, factory func(*fido2.Config) (fido2.Handler, error)) {
+	t.Helper()
+	old := newBootFIDO2Handler
+	t.Cleanup(func() { newBootFIDO2Handler = old })
+	newBootFIDO2Handler = factory
+}
+
+func bootFIDO2Config() *platforminitrd.Config {
+	config := platforminitrd.DefaultConfig()
+	config.Mode = platforminitrd.ModeBoot
+	config.RootDevice = "/dev/boot-test-root"
+	config.PCRSelection = []uint{7}
+	config.FallbackMethods = []storageluks.UnlockMethod{storageluks.UnlockFIDO2}
+	return config
+}
+
+// TestNewBootManagerRegistersFIDO2 builds the boot manager through the
+// production path with only the authenticator faked, and unlocks the
+// installer's token (type fido2, keyslot 3) through the registered chain.
+func TestNewBootManagerRegistersFIDO2(t *testing.T) {
+	device := &bootFakeFIDO2{}
+	useBootFIDO2Handler(t, func(*fido2.Config) (fido2.Handler, error) { return device, nil })
+
+	credentialID := []byte("installer-credential")
+	salt := []byte("0123456789abcdef0123456789abcdef")
+	header := &bootTokenLUKS{tokens: map[int]*storageluks.Token{
+		0: {
+			Type:            storageluks.TokenTypeFIDO2,
+			Keyslots:        []string{"3"},
+			FIDO2Credential: base64.StdEncoding.EncodeToString(credentialID),
+			FIDO2Salt:       base64.StdEncoding.EncodeToString(salt),
+			FIDO2RP:         "luks-alpine",
+			FIDO2UPRequired: true,
+		},
+	}}
+	bundle := &platforminitrd.Platform{LUKS: header, Config: bootFIDO2Config()}
+
+	manager, err := newBootManager(logging.DefaultLogger(), bundle)
+	if err != nil {
+		t.Fatalf("newBootManager: %v", err)
+	}
+	if bundle.FIDO2 != device {
+		t.Fatalf("platform FIDO2 handler = %v, want the SDK handler", bundle.FIDO2)
+	}
+
+	err = manager.UnlockVolumes(context.Background())
+	if !errors.Is(err, errBootOpenRecorded) {
+		t.Fatalf("UnlockVolumes error = %v, want the recorded open", err)
+	}
+	if len(device.unlocks) != 1 {
+		t.Fatalf("authenticator asked %d times, want 1", len(device.unlocks))
+	}
+	if got := device.unlocks[0].RelyingPartyID; got != "luks-alpine" {
+		t.Errorf("relying party = %q, want luks-alpine", got)
+	}
+	if len(header.opens) != 1 {
+		t.Fatalf("Open called %d times, want 1", len(header.opens))
+	}
+	open := header.opens[0]
+	if open.device != "/dev/boot-test-root" || open.mapping != "cryptroot" || open.slot != 3 {
+		t.Errorf("Open(%q, %q, slot %d), want (/dev/boot-test-root, cryptroot, slot 3)", open.device, open.mapping, open.slot)
+	}
+	if string(open.key) != string(bootFIDO2Key(credentialID, salt)) {
+		t.Error("Open was not given the authenticator's key for the installer token")
+	}
+}
+
+// TestNewBootManagerSDKHandler opens the real SDK handler on an HID bus with
+// no authenticator: the initrd can build it before a key is plugged in.
+func TestNewBootManagerSDKHandler(t *testing.T) {
+	useBootFIDO2Handler(t, func(cfg *fido2.Config) (fido2.Handler, error) {
+		return fido2.NewHandler(cfg, bootEnumerator{})
+	})
+	bundle := &platforminitrd.Platform{LUKS: &bootTokenLUKS{}, Config: bootFIDO2Config()}
+
+	manager, err := newBootManager(logging.DefaultLogger(), bundle)
+	if err != nil {
+		t.Fatalf("newBootManager: %v", err)
+	}
+	if bundle.FIDO2 == nil {
+		t.Fatal("platform FIDO2 handler is nil, want the SDK handler")
+	}
+	if err := manager.Close(); err != nil {
+		t.Errorf("Close: %v", err)
+	}
+}
+
+// TestNewBootManagerFIDO2Unavailable leaves FIDO2 out of the chain when the
+// handler cannot be opened, and boot carries on without it.
+func TestNewBootManagerFIDO2Unavailable(t *testing.T) {
+	useBootFIDO2Handler(t, func(*fido2.Config) (fido2.Handler, error) {
+		return nil, errors.New("no HID transport")
+	})
+	header := &bootTokenLUKS{}
+	bundle := &platforminitrd.Platform{LUKS: header, Config: bootFIDO2Config()}
+
+	manager, err := newBootManager(logging.DefaultLogger(), bundle)
+	if err != nil {
+		t.Fatalf("newBootManager: %v", err)
+	}
+	if bundle.FIDO2 != nil {
+		t.Fatalf("platform FIDO2 handler = %v, want nil", bundle.FIDO2)
+	}
+	if err := manager.UnlockVolumes(context.Background()); !errors.Is(err, platforminitrd.ErrUnlockFailed) {
+		t.Fatalf("UnlockVolumes error = %v, want ErrUnlockFailed", err)
+	}
+	if len(header.opens) != 0 {
+		t.Errorf("Open called %d times without a FIDO2 handler, want 0", len(header.opens))
+	}
+}
+
+// TestNewBootManagerInvalidConfig closes the FIDO2 handler when the manager
+// cannot be built.
+func TestNewBootManagerInvalidConfig(t *testing.T) {
+	device := &bootFakeFIDO2{}
+	useBootFIDO2Handler(t, func(*fido2.Config) (fido2.Handler, error) { return device, nil })
+	config := bootFIDO2Config()
+	config.RootDevice = ""
+	bundle := &platforminitrd.Platform{LUKS: &bootTokenLUKS{}, Config: config}
+
+	manager, err := newBootManager(logging.DefaultLogger(), bundle)
+	var wrapped *WrappedError
+	if !errors.As(err, &wrapped) {
+		t.Fatalf("newBootManager error = %v, want WrappedError", err)
+	}
+	if manager != nil {
+		t.Errorf("manager = %v, want nil", manager)
+	}
+	if device.closed != 1 {
+		t.Errorf("FIDO2 handler closed %d times, want 1", device.closed)
 	}
 }
