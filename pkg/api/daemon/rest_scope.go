@@ -73,11 +73,20 @@ func sdnRouteScope(method, route string) (string, error) {
 	return sdnScopeResource + ":" + action, nil
 }
 
-// catalogRouteRPCs maps each PIV, LUKS and FIDO2 route on the daemon REST
-// listener, as "METHOD route-template", to the gRPC method it serves. The
+// catalogRouteRPCs maps each ceremony, PIV, LUKS and FIDO2 route on the daemon
+// REST listener, as "METHOD route-template", to the gRPC method it serves. The
 // route needs the scope the gRPC catalog gives that method: several of these
-// POSTs read, delete or use a key, so the HTTP method cannot name the action.
+// POSTs read, delete or use a key, and every ceremony step has its own
+// action, so the HTTP method cannot name the action.
 var catalogRouteRPCs = map[string]string{
+	"POST /api/v1/ceremony/init":                 "/platform.v1.CeremonyService/Init",
+	"GET /api/v1/ceremony/status":                "/platform.v1.CeremonyService/Status",
+	"POST /api/v1/ceremony/claim-cert/begin":     "/platform.v1.CeremonyService/ClaimCertBegin",
+	"POST /api/v1/ceremony/claim-cert/complete":  "/platform.v1.CeremonyService/ClaimCertComplete",
+	"POST /api/v1/ceremony/claim-share/begin":    "/platform.v1.CeremonyService/ClaimShareBegin",
+	"POST /api/v1/ceremony/claim-share/complete": "/platform.v1.CeremonyService/ClaimShareComplete",
+	"POST /api/v1/ceremony/sign-csr":             "/platform.v1.CeremonyService/SignCSR",
+
 	"GET /api/v1/piv/devices":                 "/platform.v1.PIVService/ListDevices",
 	"GET /api/v1/piv/devices/{device}/slots":  "/platform.v1.PIVService/ListSlots",
 	"GET /api/v1/piv/slots/{slot}":            "/platform.v1.PIVService/SlotInfo",

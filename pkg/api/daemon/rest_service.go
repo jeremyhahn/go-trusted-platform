@@ -1202,14 +1202,16 @@ func getMCPAddress(config *Config) string {
 
 // SetCeremonyService wires the ceremony service into the REST server and
 // registers its routes.
-func (s *RESTServer) SetCeremonyService(svc *CeremonyService) {
-	if svc == nil {
-		return
+func (s *RESTServer) SetCeremonyService(svc *CeremonyService, guard *restapi.ScopeGuard) error {
+	if guard == nil {
+		return ErrCeremonyRESTUnavailable{Reason: "no REST scope guard"}
 	}
-	h := newCeremonyRESTHandlers(svc)
-	api := s.router.PathPrefix(restBasePath).Subrouter()
-	h.registerCeremonyRoutes(api)
+	if svc == nil {
+		return nil
+	}
+	newCeremonyRESTHandlers(svc).registerCeremonyRoutes(s.catalogGuardedAPI(guard))
 	s.logger.Info("Ceremony REST routes registered")
+	return nil
 }
 
 // SetPIVService mounts the PIV routes behind guard; each needs the scope the

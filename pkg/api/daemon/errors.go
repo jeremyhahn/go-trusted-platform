@@ -1248,6 +1248,16 @@ func (e ErrSDNRESTUnavailable) Error() string {
 	return "SDN REST routes unavailable: " + e.Reason
 }
 
+// ErrCeremonyRESTUnavailable reports that the ceremony routes could not be
+// mounted on the daemon REST listener.
+type ErrCeremonyRESTUnavailable struct {
+	Reason string
+}
+
+func (e ErrCeremonyRESTUnavailable) Error() string {
+	return "ceremony REST routes unavailable: " + e.Reason
+}
+
 // ErrPIVRESTUnavailable reports that the PIV routes could not be mounted on
 // the daemon REST listener.
 type ErrPIVRESTUnavailable struct {

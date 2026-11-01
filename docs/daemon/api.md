@@ -606,11 +606,12 @@ service the routes still mount, behind the guard, and the non-zone routes answer
 gateway (`/api/v1/sdn/gateway`) routes are separate mounts and still rely on
 mTLS alone.
 
-**The daemon REST PIV, LUKS and FIDO2 routes check the RPC's scope (#997).**
-`SetPIVService`, `SetLUKSService` and `SetFIDO2Service`
-(`pkg/api/daemon/rest_service.go`) mount the `/api/v1/piv`, `/api/v1/luks` and
-`/api/v1/fido2` routes behind the REST scope guard. Several of their `POST`s
-read, delete or use a key, so the HTTP method does not name the action:
+**The daemon REST ceremony, PIV, LUKS and FIDO2 routes check the RPC's scope (#997).**
+`SetCeremonyService`, `SetPIVService`, `SetLUKSService` and `SetFIDO2Service`
+(`pkg/api/daemon/rest_service.go`) mount the `/api/v1/ceremony`,
+`/api/v1/piv`, `/api/v1/luks` and `/api/v1/fido2` routes behind the REST scope
+guard. Several of their `POST`s read, delete or use a key, and every ceremony
+step has its own action, so the HTTP method does not name the action:
 `catalogRouteRPCs` (`pkg/api/daemon/rest_scope.go`) maps each route to the
 gRPC method it serves, and the route needs the scope the gRPC catalog gives
 that method (`grpcapi.ScopeForMethod`). A route missing from the map, or a
@@ -619,6 +620,12 @@ method without a catalog scope, is refused for every caller
 
 | Routes | Scope |
 |--------|-------|
+| `POST /ceremony/init` | `ceremony:initialize` |
+| `GET /ceremony/status` | `ceremony:status` |
+| `POST /ceremony/claim-cert/begin`, `POST /ceremony/claim-cert/complete` | `ceremony:claim_cert` |
+| `POST /ceremony/claim-share/begin` | `ceremony:claim_share_begin` |
+| `POST /ceremony/claim-share/complete` | `ceremony:claim_share_complete` |
+| `POST /ceremony/sign-csr` | `ceremony:sign_csr` |
 | `GET /piv/devices`, `GET /piv/devices/{device}/slots`, `GET /piv/slots/{slot}`, `POST /piv/slots/{slot}/attest` | `piv:read` |
 | `POST /piv/slots/{slot}/generate`, `POST /piv/slots/{slot}/import` | `piv:write` |
 | `POST /piv/slots/{slot}/sign` | `piv:use` |
@@ -630,8 +637,8 @@ method without a catalog scope, is refused for every caller
 | `POST /fido2/register`, `POST /fido2/authenticate` | `fido2:write` |
 
 A missing credential answers 401 and a missing scope 403. A failed mount (no
-scope guard: `ErrPIVRESTUnavailable`, `ErrLUKSRESTUnavailable`,
-`ErrFIDO2RESTUnavailable`) stops the daemon (`ErrTransportConstructionFailed`).
+scope guard: `ErrCeremonyRESTUnavailable`, `ErrPIVRESTUnavailable`,
+`ErrLUKSRESTUnavailable`, `ErrFIDO2RESTUnavailable`) stops the daemon (`ErrTransportConstructionFailed`).
 
 `TestDaemonREST_EveryMountedRouteIsGuarded` (`pkg/api/daemon/rest_scope_test.go`)
 walks the daemon REST router and sends every route a request with no

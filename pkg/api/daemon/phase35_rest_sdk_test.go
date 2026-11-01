@@ -40,7 +40,7 @@ func newPhase35SDKClient(t *testing.T) (*RESTServer, *sdkrest.Adapter) {
 	t.Helper()
 	s := newTestRESTServerForPhase35(t)
 	ceremony, piv, fido := phase35Services()
-	s.SetCeremonyService(ceremony)
+	mustMountS6(t, s.SetCeremonyService(ceremony, s6RESTGuard()))
 	mustMountS6(t, s.SetPIVService(piv, s6RESTGuard()))
 	mustMountS6(t, s.SetFIDO2Service(fido, s6RESTGuard()))
 	a := connectPhase35REST(t, s.router)
