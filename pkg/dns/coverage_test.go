@@ -26,6 +26,7 @@ import (
 	"errors"
 	"math/big"
 	"net"
+	"sync"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
@@ -41,6 +42,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// sharedRSAKey generates one RSA-2048 key for the whole package run. Every
+// test that needs an RSA key only reads its public half, and 2048-bit
+// generation dominated the package's test time.
+var sharedRSAKey = sync.OnceValues(func() (*rsa.PrivateKey, error) {
+	return rsa.GenerateKey(rand.Reader, 2048)
+})
 
 // =============================================================================
 // service.go coverage - functions not yet tested
@@ -1266,7 +1274,7 @@ func TestCoverage_DNSSECService_GetEffectiveKeyConfig(t *testing.T) {
 // =============================================================================
 
 func TestCoverage_ExtractPublicKey(t *testing.T) {
-	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	rsaKey, err := sharedRSAKey()
 	require.NoError(t, err)
 	pub, err := extractPublicKey(rsaKey)
 	require.NoError(t, err)
@@ -1298,7 +1306,7 @@ func TestCoverage_ExtractPublicKey_CryptoSigner(t *testing.T) {
 }
 
 func TestCoverage_PublicKeyToDNSSECAlgorithm(t *testing.T) {
-	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	rsaKey, err := sharedRSAKey()
 	require.NoError(t, err)
 	alg, err := publicKeyToDNSSECAlgorithm(&rsaKey.PublicKey)
 	require.NoError(t, err)
@@ -1447,7 +1455,7 @@ func TestCoverage_QuicbaasAlgorithmToString(t *testing.T) {
 }
 
 func TestCoverage_EncodePublicKeyToPEM(t *testing.T) {
-	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	rsaKey, err := sharedRSAKey()
 	require.NoError(t, err)
 	pemStr, err := encodePublicKeyToPEM(&rsaKey.PublicKey)
 	require.NoError(t, err)
@@ -1494,7 +1502,7 @@ func TestCoverage_ParsePublicKeyFromPEM_Ed25519RawBytes(t *testing.T) {
 }
 
 func TestCoverage_ParsePublicKeyFromPEM_PKCS1RSA(t *testing.T) {
-	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	rsaKey, err := sharedRSAKey()
 	require.NoError(t, err)
 
 	pkcs1Bytes := x509.MarshalPKCS1PublicKey(&rsaKey.PublicKey)
@@ -1521,7 +1529,7 @@ func TestCoverage_ParsePublicKeyFromXKMS_InvalidAlgorithm(t *testing.T) {
 
 // xkmsSigner.Public coverage
 func TestCoverage_XkmsSigner_Public(t *testing.T) {
-	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	rsaKey, err := sharedRSAKey()
 	require.NoError(t, err)
 
 	signer := &xkmsSigner{publicKey: &rsaKey.PublicKey}
@@ -1530,7 +1538,7 @@ func TestCoverage_XkmsSigner_Public(t *testing.T) {
 
 // quicbaasKMSSigner.Public coverage
 func TestCoverage_QuicbaasKMSSigner_Public(t *testing.T) {
-	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	rsaKey, err := sharedRSAKey()
 	require.NoError(t, err)
 
 	signer := &quicbaasKMSSigner{publicKey: &rsaKey.PublicKey}
