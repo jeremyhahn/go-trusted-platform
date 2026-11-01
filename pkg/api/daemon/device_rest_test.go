@@ -24,7 +24,8 @@ import (
 // deviceRESTCallers are the callers the device REST tests authenticate as.
 var deviceRESTCallers = iamRESTTokens{
 	"device-reader": {Subject: "device-reader", TenantID: iamRESTTenantA, Scopes: []string{"device:read"}},
-	"device-writer": {Subject: "device-writer", TenantID: iamRESTTenantA, Scopes: []string{"device:write"}},
+	"device-writer":  {Subject: "device-writer", TenantID: iamRESTTenantA, Scopes: []string{"device:write"}},
+	"device-deleter": {Subject: "device-deleter", TenantID: iamRESTTenantA, Scopes: []string{"device:delete"}},
 }
 
 // countingTokens authorizes deviceRESTCallers and counts the authorizations.
@@ -158,6 +159,50 @@ func TestDeviceRouterREST_ScopePerRoute(t *testing.T) {
 	assert.Equal(t, int32(1), lifecycle.disables.Load())
 
 	assert.Equal(t, http.StatusUnauthorized, serveIAM(s, http.MethodGet, "/api/v1/device/profiles/find-config?mac=x", "").Code)
+}
+
+// TestDeviceRouterREST_ServesTheIntegrationLeaves pins every route the
+// integration REST adapter calls for devices, profiles and templates: each
+// must be mounted, so the router answers with something other than 404 or 405.
+func TestDeviceRouterREST_ServesTheIntegrationLeaves(t *testing.T) {
+	s := deviceRESTServer(t, deviceRESTCallers, &recordingLifecycleServer{})
+
+	leaves := []struct {
+		leaf, method, path, token string
+	}{
+		{"OperatorLifecycle CreateDevice", http.MethodPost, "/api/v1/devices", "device-writer"},
+		{"OperatorLifecycle ListDevices", http.MethodGet, "/api/v1/devices?limit=10&offset=0", "device-reader"},
+		{"OperatorLifecycle GetDevice", http.MethodGet, "/api/v1/devices/7", "device-reader"},
+		{"OperatorLifecycle UpdateDevice", http.MethodPut, "/api/v1/devices/7", "device-writer"},
+		{"OperatorLifecycle DeleteDevice", http.MethodDelete, "/api/v1/devices/7", "device-deleter"},
+		{"OperatorLifecycle FindDeviceBySerial", http.MethodGet, "/api/v1/devices/serial/SN-1", "device-reader"},
+		{"OperatorLifecycle DisableDevice", http.MethodPost, "/api/v1/devices/7/disable", "device-writer"},
+		{"OperatorLifecycle EnableDevice", http.MethodPost, "/api/v1/devices/7/enable", "device-writer"},
+		{"Attestation RecordAttestCert", http.MethodPost, "/api/v1/devices/7/attest-cert/record", "device-writer"},
+		{"ConfigForDevice FindConfigByEKSerial", http.MethodGet, "/api/v1/device/profiles/find-config?ek_serial=EK-1", "device-reader"},
+		{"ConfigForDevice FindConfigByMAC", http.MethodGet, "/api/v1/device/profiles/find-config?mac=52:54:00:12:34:56", "device-reader"},
+		{"ProfileAssignment AssignProfileToDevice", http.MethodPost, "/api/v1/device/profiles/7/assign", "device-writer"},
+		{"ProfileLookups FindMatchingProfile", http.MethodPost, "/api/v1/device/profiles/match", "device-reader"},
+		{"ProfileLookups FindProfileByMACAddress", http.MethodGet, "/api/v1/device/profiles/mac/52:54:00:12:34:56", "device-reader"},
+		{"ProfileLookups FindProfileBySerial", http.MethodGet, "/api/v1/device/profiles/serial/SN-1", "device-reader"},
+		{"TemplateCRUD CreateTemplate", http.MethodPost, "/api/v1/device/templates", "device-writer"},
+		{"TemplateCRUD GetTemplate", http.MethodGet, "/api/v1/device/templates/7", "device-reader"},
+		{"TemplateCRUD UpdateTemplate", http.MethodPut, "/api/v1/device/templates/7", "device-writer"},
+		{"TemplateCRUD DeleteTemplate", http.MethodDelete, "/api/v1/device/templates/7", "device-deleter"},
+		{"TemplateCRUD ListTemplates", http.MethodGet, "/api/v1/device/templates?limit=10&offset=0", "device-reader"},
+		{"TemplateToProfile CreateProfileFromTemplate", http.MethodPost, "/api/v1/device/templates/7/create-profile", "device-writer"},
+	}
+	for _, leaf := range leaves {
+		t.Run(leaf.leaf, func(t *testing.T) {
+			// Match routes without running the handler: the route-table
+			// fakes answer only the calls the scope tests make.
+			req, err := http.NewRequest(leaf.method, leaf.path, nil)
+			require.NoError(t, err)
+			var match mux.RouteMatch
+			assert.True(t, s.router.Match(req, &match), "%s %s is not served", leaf.method, leaf.path)
+			assert.NoError(t, match.MatchErr)
+		})
+	}
 }
 
 // The per-route authorizer answers 401 without a credential and 403 without

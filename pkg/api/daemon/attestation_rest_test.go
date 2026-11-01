@@ -136,6 +136,34 @@ func TestAttestationREST_ScopePerRoute(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, serveIAM(s, http.MethodGet, "/api/v1/attestation/manifests", "").Code)
 }
 
+// TestAttestationREST_ServesTheIntegrationLeaves pins every route the
+// integration REST adapter calls for attestation: each must be mounted, so
+// the router answers with something other than 404 or 405.
+func TestAttestationREST_ServesTheIntegrationLeaves(t *testing.T) {
+	s := &RESTServer{router: mux.NewRouter(), logger: slog.Default()}
+	guard := restapi.NewScopeGuard(attestationRESTCallers, nil, nil)
+	require.NoError(t, s.SetAttestationRouterHandlers(logging.DefaultLogger(), &recordingAttestationServer{},
+		ReportingHandles{Reports: routeTableAttestationCache{}}, guard))
+
+	leaves := []struct {
+		leaf, method, path, token string
+	}{
+		{"Manifest BuildManifest", http.MethodPost, "/api/v1/attestation/manifests/build", "attestation-writer"},
+		{"attestation/REST GetManifest", http.MethodGet, "/api/v1/attestation/manifests/m1", "attestation-reader"},
+		{"attestation/REST VerifyManifest", http.MethodPost, "/api/v1/attestation/manifests/verify", "attestation-reader"},
+		{"VMAttestation GenerateVMQuote", http.MethodPost, "/api/v1/attestation/vm/vm-1", "attestation-writer"},
+		{"VMAttestation VerifyVMAttestation", http.MethodPost, "/api/v1/attestation/quote/verify", "attestation-reader"},
+		{"Reporting Callers", http.MethodGet, "/api/v1/attestation/callers", "attestation-reader"},
+	}
+	for _, leaf := range leaves {
+		t.Run(leaf.leaf, func(t *testing.T) {
+			code := serveIAM(s, leaf.method, leaf.path, leaf.token).Code
+			assert.NotEqual(t, http.StatusNotFound, code)
+			assert.NotEqual(t, http.StatusMethodNotAllowed, code)
+		})
+	}
+}
+
 func TestAttestationRouteScope(t *testing.T) {
 	cases := []struct{ method, route, scope string }{
 		{http.MethodGet, "/api/v1/attestation/manifests", "attestation:read"},
