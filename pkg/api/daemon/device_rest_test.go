@@ -23,7 +23,7 @@ import (
 
 // deviceRESTCallers are the callers the device REST tests authenticate as.
 var deviceRESTCallers = iamRESTTokens{
-	"device-reader": {Subject: "device-reader", TenantID: iamRESTTenantA, Scopes: []string{"device:read"}},
+	"device-reader":  {Subject: "device-reader", TenantID: iamRESTTenantA, Scopes: []string{"device:read"}},
 	"device-writer":  {Subject: "device-writer", TenantID: iamRESTTenantA, Scopes: []string{"device:write"}},
 	"device-deleter": {Subject: "device-deleter", TenantID: iamRESTTenantA, Scopes: []string{"device:delete"}},
 }
