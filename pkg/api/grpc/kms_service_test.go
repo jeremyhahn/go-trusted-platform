@@ -2447,6 +2447,8 @@ func TestKMSGRPCService_mapError_Classes(t *testing.T) {
 		{"unimplemented", sdkerrors.NewUnimplemented("kms.ImportKey", "not supported"), codes.Unimplemented},
 		{"unavailable", sdkerrors.NewUnavailable("kms.GetKey", "sealed"), codes.Unavailable},
 		{"typed status error", status.Error(codes.InvalidArgument, "bad cursor"), codes.InvalidArgument},
+		{"kms operation failed", ErrKMSOperationFailed{Operation: "test", Reason: "failed"}, codes.Internal},
+		{"generic error", errors.New("generic error"), codes.Internal},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2478,154 +2480,31 @@ func TestKMSGRPCService_mapError_NilError(t *testing.T) {
 	}
 }
 
-func TestKMSGRPCService_mapError_KMSOperationFailed(t *testing.T) {
-	service, _ := newTestKMSService()
-	err := ErrKMSOperationFailed{Operation: "test", Reason: "failed"}
-
-	result := service.mapError("test", err)
-	if result == nil {
-		t.Fatal("Expected non-nil result")
-	}
-
-	st, ok := status.FromError(result)
-	if !ok {
-		t.Fatal("Expected gRPC status error")
-	}
-
-	if st.Code() != codes.Internal {
-		t.Errorf("Expected Internal, got %v", st.Code())
-	}
-}
-
-func TestKMSGRPCService_mapError_GenericError(t *testing.T) {
-	service, _ := newTestKMSService()
-	err := errors.New("generic error")
-
-	result := service.mapError("test", err)
-	if result == nil {
-		t.Fatal("Expected non-nil result")
-	}
-
-	st, ok := status.FromError(result)
-	if !ok {
-		t.Fatal("Expected gRPC status error")
-	}
-
-	if st.Code() != codes.Internal {
-		t.Errorf("Expected Internal, got %v", st.Code())
-	}
-}
-
 // Test error type definitions
 
-func TestErrNilKMSService_Error(t *testing.T) {
-	err := ErrNilKMSService{}
-	expected := "kms service is nil"
-	if err.Error() != expected {
-		t.Errorf("Expected '%s', got '%s'", expected, err.Error())
+func TestKMSErrors_Error(t *testing.T) {
+	tests := []struct {
+		err      error
+		expected string
+	}{
+		{ErrNilKMSService{}, "kms service is nil"},
+		{ErrMissingKeyID{}, "key ID is required"},
+		{ErrMissingKeySpec{}, "key specification is required"},
+		{ErrMissingKeyMaterial{}, "key material is required"},
+		{ErrMissingPlaintext{}, "plaintext is required"},
+		{ErrMissingCiphertext{}, "ciphertext is required"},
+		{ErrMissingMessage{}, "message is required"},
+		{ErrMissingSignature{}, "signature is required"},
+		{ErrMissingData{}, "data is required"},
+		{ErrMissingHMAC{}, "hmac is required"},
+		{ErrInvalidNumBytes{}, "num_bytes must be greater than 0"},
+		{ErrMissingWrappingKeyID{}, "wrapping key ID is required"},
+		{ErrMissingItems{}, "items are required"},
+		{ErrTooManyItems{Max: 100}, "too many items in batch request"},
 	}
-}
-
-func TestErrMissingKeyID_Error(t *testing.T) {
-	err := ErrMissingKeyID{}
-	expected := "key ID is required"
-	if err.Error() != expected {
-		t.Errorf("Expected '%s', got '%s'", expected, err.Error())
-	}
-}
-
-func TestErrMissingKeySpec_Error(t *testing.T) {
-	err := ErrMissingKeySpec{}
-	expected := "key specification is required"
-	if err.Error() != expected {
-		t.Errorf("Expected '%s', got '%s'", expected, err.Error())
-	}
-}
-
-func TestErrMissingKeyMaterial_Error(t *testing.T) {
-	err := ErrMissingKeyMaterial{}
-	expected := "key material is required"
-	if err.Error() != expected {
-		t.Errorf("Expected '%s', got '%s'", expected, err.Error())
-	}
-}
-
-func TestErrMissingPlaintext_Error(t *testing.T) {
-	err := ErrMissingPlaintext{}
-	expected := "plaintext is required"
-	if err.Error() != expected {
-		t.Errorf("Expected '%s', got '%s'", expected, err.Error())
-	}
-}
-
-func TestErrMissingCiphertext_Error(t *testing.T) {
-	err := ErrMissingCiphertext{}
-	expected := "ciphertext is required"
-	if err.Error() != expected {
-		t.Errorf("Expected '%s', got '%s'", expected, err.Error())
-	}
-}
-
-func TestErrMissingMessage_Error(t *testing.T) {
-	err := ErrMissingMessage{}
-	expected := "message is required"
-	if err.Error() != expected {
-		t.Errorf("Expected '%s', got '%s'", expected, err.Error())
-	}
-}
-
-func TestErrMissingSignature_Error(t *testing.T) {
-	err := ErrMissingSignature{}
-	expected := "signature is required"
-	if err.Error() != expected {
-		t.Errorf("Expected '%s', got '%s'", expected, err.Error())
-	}
-}
-
-func TestErrMissingData_Error(t *testing.T) {
-	err := ErrMissingData{}
-	expected := "data is required"
-	if err.Error() != expected {
-		t.Errorf("Expected '%s', got '%s'", expected, err.Error())
-	}
-}
-
-func TestErrMissingHMAC_Error(t *testing.T) {
-	err := ErrMissingHMAC{}
-	expected := "hmac is required"
-	if err.Error() != expected {
-		t.Errorf("Expected '%s', got '%s'", expected, err.Error())
-	}
-}
-
-func TestErrInvalidNumBytes_Error(t *testing.T) {
-	err := ErrInvalidNumBytes{}
-	expected := "num_bytes must be greater than 0"
-	if err.Error() != expected {
-		t.Errorf("Expected '%s', got '%s'", expected, err.Error())
-	}
-}
-
-func TestErrMissingWrappingKeyID_Error(t *testing.T) {
-	err := ErrMissingWrappingKeyID{}
-	expected := "wrapping key ID is required"
-	if err.Error() != expected {
-		t.Errorf("Expected '%s', got '%s'", expected, err.Error())
-	}
-}
-
-func TestErrMissingItems_Error(t *testing.T) {
-	err := ErrMissingItems{}
-	expected := "items are required"
-	if err.Error() != expected {
-		t.Errorf("Expected '%s', got '%s'", expected, err.Error())
-	}
-}
-
-func TestErrTooManyItems_Error(t *testing.T) {
-	err := ErrTooManyItems{Max: 100}
-	expected := "too many items in batch request"
-	if err.Error() != expected {
-		t.Errorf("Expected '%s', got '%s'", expected, err.Error())
+	for _, tt := range tests {
+		if tt.err.Error() != tt.expected {
+			t.Errorf("%T: expected '%s', got '%s'", tt.err, tt.expected, tt.err.Error())
+		}
 	}
 }

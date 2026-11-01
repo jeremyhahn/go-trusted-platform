@@ -39,6 +39,7 @@ func sdkRESTConnection(t *testing.T, server *httptest.Server) grpc.ClientConnInt
 // the real IAM router and its guards, into the PEP, and decodes the verdict
 // back into the generated response.
 func TestCheckPermissionOverSDKREST_RoundTrip(t *testing.T) {
+	t.Parallel()
 	var got *iamsdk.CheckRequest
 	pep := &mockPEPClient{
 		checkFn: func(_ context.Context, req *iamsdk.CheckRequest) (*iamsdk.CheckResponse, error) {
@@ -89,6 +90,7 @@ func TestCheckPermissionOverSDKREST_RoundTrip(t *testing.T) {
 // PEP is asked, an incomplete check is rejected, and a daemon without a PEP
 // answers Unavailable rather than a verdict.
 func TestCheckPermissionOverSDKREST_Refusals(t *testing.T) {
+	t.Parallel()
 	complete := func() *platformv1.CheckIAMPermissionRequest {
 		return &platformv1.CheckIAMPermissionRequest{
 			TenantId: "tenant-a", SubjectId: "user-1", Action: "read", Resource: "documents/7",

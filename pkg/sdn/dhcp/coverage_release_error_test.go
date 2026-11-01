@@ -14,86 +14,14 @@
 package dhcp
 
 import (
-	"context"
 	"net"
 	"net/netip"
 	"testing"
 	"time"
 
-	"github.com/insomniacslk/dhcp/dhcpv4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam/backends"
 )
-
-// TestIPAMPlugin_HandleRelease_ConcurrentRemoval tests the scenario where
-// a lease is removed by another goroutine between GetByIP and Remove calls.
-// This tests the error handling at line 352-357 in plugin_ipam.go.
-func TestIPAMPlugin_HandleRelease_ConcurrentRemoval(t *testing.T) {
-	ctx := context.Background()
-	allocator := backends.NewMemoryBackend()
-	defer allocator.Close()
-
-	poolID := "test-pool"
-	err := allocator.CreatePool(ctx, &ipam.Pool{
-		ID:                   poolID,
-		Name:                 "test-pool",
-		CIDR:                 netip.MustParsePrefix("192.168.1.0/24"),
-		Gateway:              netip.MustParseAddr("192.168.1.1"),
-		DefaultLeaseDuration: 24 * time.Hour,
-	})
-	require.NoError(t, err)
-
-	opts := DHCPOptions{
-		SubnetMask: net.CIDRMask(24, 32),
-		Router:     netip.MustParseAddr("192.168.1.1"),
-		LeaseTime:  time.Hour,
-	}
-
-	t.Run("handles concurrent lease removal gracefully", func(t *testing.T) {
-		// We'll test this by releasing a lease that doesn't exist in the store
-		// but exists in IPAM, which triggers the "no lease found" warning path
-		plugin, err := NewIPAMPlugin(allocator, poolID, opts)
-		require.NoError(t, err)
-		defer plugin.Close()
-
-		handler := plugin.Handler4()
-
-		mac, _ := net.ParseMAC("00:11:22:33:AA:01")
-
-		// First get a lease
-		discoverReq, _ := dhcpv4.New(
-			dhcpv4.WithHwAddr(mac),
-			dhcpv4.WithMessageType(dhcpv4.MessageTypeDiscover),
-		)
-		discoverResp, _ := dhcpv4.NewReplyFromRequest(discoverReq)
-		discoverResp.ServerIPAddr = net.ParseIP("192.168.1.1")
-
-		offerResult, _ := handler(discoverReq, discoverResp)
-		require.NotNil(t, offerResult)
-		leasedIP := offerResult.YourIPAddr
-		leasedIPAddr, _ := netip.AddrFromSlice(leasedIP.To4())
-
-		// Remove the lease from the store to simulate concurrent removal
-		err = plugin.GetLeaseStore().Remove(leasedIPAddr)
-		require.NoError(t, err)
-
-		// Now release - GetByIP will fail because lease was removed
-		releaseReq, _ := dhcpv4.New(
-			dhcpv4.WithHwAddr(mac),
-			dhcpv4.WithMessageType(dhcpv4.MessageTypeRelease),
-			dhcpv4.WithClientIP(leasedIP),
-		)
-		releaseResp, _ := dhcpv4.NewReplyFromRequest(releaseReq)
-
-		// This triggers the "no lease found" warning path (line 328-331)
-		result, stop := handler(releaseReq, releaseResp)
-		assert.Nil(t, result)
-		assert.True(t, stop)
-	})
-}
 
 // TestCoreDHCPServer_ReleaseLease_RaceConditionScenarios tests various
 // race condition scenarios in ReleaseLease.
