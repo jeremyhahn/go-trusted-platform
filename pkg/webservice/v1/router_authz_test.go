@@ -943,10 +943,22 @@ func TestGatedRoutes_RejectAuthenticatedCallersWithoutTheAdminRole(t *testing.T)
 		tokenHandler: &sessionAuth{roles: []string{"user"}, tenantID: "system"},
 	})
 
-	for _, tc := range gatedProbes {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, http.StatusForbidden, probe(router, tc.method, tc.path))
-		})
+	groups := map[string][]struct {
+		name   string
+		method string
+		path   string
+	}{
+		"gated":    gatedProbes,
+		"platform": platformProbes,
+		"compute":  computeProbes,
+		"network":  networkProbes,
+	}
+	for group, probes := range groups {
+		for _, tc := range probes {
+			t.Run(group+"/"+tc.name, func(t *testing.T) {
+				assert.Equal(t, http.StatusForbidden, probe(router, tc.method, tc.path))
+			})
+		}
 	}
 }
 
@@ -1366,18 +1378,6 @@ func TestPlatformRoutes_AreRegisteredAndGated(t *testing.T) {
 
 // TestPlatformRoutes_RejectAuthenticatedCallersWithoutTheAdminRole is the
 // authorization half for /platform.
-func TestPlatformRoutes_RejectAuthenticatedCallersWithoutTheAdminRole(t *testing.T) {
-	router := newGatedTestRouter(t, &testHandlerRegistry{
-		tokenHandler: &sessionAuth{roles: []string{"user"}, tenantID: "system"},
-	})
-
-	for _, tc := range platformProbes {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, http.StatusForbidden, probe(router, tc.method, tc.path))
-		})
-	}
-}
-
 // TestPlatformRoutes_AdmitTheConsoleCookie proves the console still reaches
 // its own Platform pages — config, logs, health and metrics are all read by
 // the dashboard, so this is the surface most likely to break on a gate.
@@ -1471,18 +1471,6 @@ func TestComputeRoutes_AreRegisteredAndGated(t *testing.T) {
 
 // TestComputeRoutes_RejectAuthenticatedCallersWithoutTheAdminRole is the
 // authorization half.
-func TestComputeRoutes_RejectAuthenticatedCallersWithoutTheAdminRole(t *testing.T) {
-	router := newGatedTestRouter(t, &testHandlerRegistry{
-		tokenHandler: &sessionAuth{roles: []string{"user"}, tenantID: "system"},
-	})
-
-	for _, tc := range computeProbes {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, http.StatusForbidden, probe(router, tc.method, tc.path))
-		})
-	}
-}
-
 // TestComputeImagesRoutesStillPrecedeTheComputeStub pins the ordering the
 // two surfaces depend on. /compute/images belongs to the registry and
 // /compute to the orchestrator; mux matches in registration order, so
@@ -1566,18 +1554,6 @@ func TestNetworkRoutes_AreRegisteredAndGated(t *testing.T) {
 
 // TestNetworkRoutes_RejectAuthenticatedCallersWithoutTheAdminRole is the
 // authorization half for the network group.
-func TestNetworkRoutes_RejectAuthenticatedCallersWithoutTheAdminRole(t *testing.T) {
-	router := newGatedTestRouter(t, &testHandlerRegistry{
-		tokenHandler: &sessionAuth{roles: []string{"user"}, tenantID: "system"},
-	})
-
-	for _, tc := range networkProbes {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, http.StatusForbidden, probe(router, tc.method, tc.path))
-		})
-	}
-}
-
 // =============================================================================
 // Gateway — split by principal, not by verb
 // =============================================================================

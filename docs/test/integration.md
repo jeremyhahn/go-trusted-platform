@@ -369,7 +369,18 @@ adapter (`cli_exec_test.go`), which need no daemon.
 the process-group command runner) and `grub_detector.go` carry no build tag,
 and their tests (`runner_test.go`, `grub_detector_test.go`) run in `make test`
 through `TEST_UNIT_PKGS`; `make integration-test-iso` runs the
-integration-tagged `multiprotocol_test.go` against `platformd`. The `device`
+integration-tagged `multiprotocol_test.go` against `platformd`. Its
+`iso customize` takes `platform-initrd` and `gatewayd` from beside `/tmp/platformctl`, so
+the runner's `prepare_iso_customize` builds `platform-initrd`, `gatewayd` and
+`platformctl-static` into `/tmp`. `/tmp/platformctl` is a CGO build, and
+customize refuses a dynamically linked installer (`DynamicBinaryError`), so
+`/tmp/platformctl-static` is the same CLI built `CGO_ENABLED=0` with the tags
+`make build` adds to the derived set (docs/installer/cli.md §4). The runner
+exports its path as `PLATFORMCTL_STATIC_PATH`, and the suite passes it to
+customize as `--platformctl-static-binary`: customize names the running
+`platformctl` as the installer and never looks beside it for the static one.
+The suite fails, rather than fall back to the CGO build, when
+`PLATFORMCTL_STATIC_PATH` is unset or names no file. The `device`
 suite keeps only its daemon-backed tests: the adapter decode tests that
 exercised the harness and no server were removed, and the wrong-ALPN handshake
 check is `TestServerRefusesAWrongALPNAtTheHandshake` in `pkg/api/quic`.
@@ -411,26 +422,23 @@ keys at once, its daemon-backed keys one at a time in `ALL_TARGETS` order (so
 daemon. Each leg is its own compose project and network namespace, so the legs
 keep the fixed listener ports without colliding.
 
-The `integration-image` job builds the image once per run with
-`make docker-build-it BUILDX_CLIENT_LOAD=1` (below: `--load` would import it
-into the builder node's daemon, where the job's `docker save` cannot find it),
-fails if the image is not on the job's own daemon, leases it until its
-teardown, outputs its image id and its layer identity (a SHA-256 of the
-image's `RootFS.Layers` diff ids), and uploads a `docker save` of it as the run
-artifact `integration-image-<attempt>`. Each leg leases that id (a created,
-never-started container that names it), tags it with a tag of its own
-(`IT_IMAGE`, `-leg<n>`) and runs `make integration-test-leg IT_PREBUILT=1`
-under that tag, which builds nothing. No leg runs under the job's shared
-`-legs` tag: `docker image rm` untags an image that has another tag even while
-containers use it, so one leg's teardown could remove a shared tag under a leg
-that held a lease but had not yet started compose (#1146). Each teardown
-removes its lease, its own tag and the shared tag; removing the last tag is
-refused while another leg's lease names the image, so the last leg deletes it.
-A tag a refusal left, and the job's copy no leg reached (every leg ran on
-another daemon, or the upload failed and no leg ran), the stale-stack reaper
-(below) removes once no lease names it, no claim of its run is live (the
-integration-image job's claim outlives that job by the min-age) and it is past
-the min-age.
+The `integration-image` job names the image with `make -s it-image` (its
+content tag, below), reuses it when the runner's daemon already holds that tag,
+and otherwise builds it once with `make docker-build-it BUILDX_CLIENT_LOAD=1`
+(below: `--load` would import it into the builder node's daemon, where the
+job's `docker save` cannot find it). It fails if the image is not on the job's
+own daemon, leases it until its teardown, outputs its image id and its layer
+identity (a SHA-256 of the image's `RootFS.Layers` diff ids), and uploads a
+`docker save` of it as the run artifact `integration-image-<attempt>`. It also
+outputs the `APK_INDEX_SUM` and `APT_REFRESH` it read, so each leg's `make -s
+it-image` names the same tag. Each leg leases that id under the image lock (a
+created, never-started container that names it), re-tags it `IT_IMAGE` under
+the same lock and runs `make integration-test-leg IT_PREBUILT=1` under that
+tag, which builds nothing. The tag names the content, so the legs, and every
+later run of the same tree on that daemon, share it, and no teardown removes
+it: each removes only its lease. The stale-stack reaper (below) removes the tag
+once no container uses its image and it was created or last tagged more than
+two hours ago.
 
 The legs share the image job's runner label, not its daemon: a label can name
 several runners, and on github.com every job is a fresh machine. A leg whose
@@ -440,12 +448,12 @@ necessarily its id: an image id is the config digest on the classic overlay2
 image store and the manifest digest on the containerd image store, so the id
 the image job read on its daemon names nothing on a daemon whose store differs
 (run 70938, legs 1 and 3: `No such image` again after a successful load). The
-leg therefore leases the id of the tag the load restored (the job's `-legs`
-tag), then compares that image's layer identity with the job's: the layers'
+leg therefore leases the id of the tag the load restored (the content tag), then compares that image's layer identity with the job's: the layers'
 diff ids are digests of the uncompressed layers, the same on every store. So
 every leg still runs the one image built per run. Only if the load fails or
 restores other layers does the leg build the image there, with a warning,
-under its own tag, so no other leg's build or teardown can move or remove it.
+under the `integration` stage's own content tag (`make -s it-image
+IT_WARM_CACHE=0`), which a daemon that already holds it reuses.
 That build runs
 `make docker-build-it BUILDX_CLIENT_LOAD=1 IT_WARM_CACHE=0`: `IT_WARM_CACHE=0`
 builds the `integration` stage without the warm build cache, whose ten-minute
@@ -750,13 +758,13 @@ devcontainer image so a developer and CI run the same thing:
 | Job | Tier | What it runs |
 |-----|------|--------------|
 | `changes` | PR | Lists the PR's changed files and sets `docs_only` (below) (`ci.yml:162`) |
-| `image` | PR | `make docker-build-integration`, leased from then until the teardown so no other job's reaper removes it, then `make docker-build-toolchain` (`ci.yml:280-286`), then, in the toolchain image through `scripts/in-toolchain-image.sh`: `make fmt-check`, `make vet` and `make lint` (`:292-308`); the releasability test on a docs-only PR (`:312-316`); off a docs-only PR, `make build build-no-web rpi-binaries`, `go build ./...`, the `sdk/go` build and consumer check, `make test test-sdk-go` and `make test-race` (`:323-369`); on every event, a docs-only PR included, `make deps-check` (ci-template v1.28, `:391-396`); in the full tier, `make security` (`:378-384`) and `trivy image` on the integration image (`:406-416`). Each step's container is memory-limited (see "Memory limits") |
+| `image` | PR | `make -s it-image IT_WARM_CACHE=0` names the integration image, reused when the daemon holds that tag and otherwise built with `make docker-build-integration`; the lease spans only that build and the `docker save` that `trivy image` scans, and is released before `make docker-build-toolchain` (`ci.yml:280-286`), then, in the toolchain image through `scripts/in-toolchain-image.sh`: `make fmt-check`, `make vet` and `make lint` (`:292-308`); the releasability test on a docs-only PR (`:312-316`); off a docs-only PR, `make build build-no-web rpi-binaries`, `go build ./...`, the `sdk/go` build and consumer check, `make test test-sdk-go` and `make test-race` (`:323-369`); on every event, a docs-only PR included, `make deps-check` (ci-template v1.28, `:391-396`); in the full tier, `make security` (`:378-384`) and `trivy image` on the integration image (`:406-416`). Each step's container is memory-limited (see "Memory limits") |
 | `lint-gates` | PR | `make lint-gates`, the repo's grep gates (today `check-insecure-tls`), on the runner (`ci.yml:459`) |
 | `arch-gates` | PR | No direct go-objstore import outside a storage seam (this repo has none) (`ci.yml:466`) |
 | `sdkjs` | docs | The JS SDK's unit tests and lint, on the runner (`ci.yml:495`) |
 | `web` | full | The web console's tests, typecheck and build (`ci.yml:535-566`) |
-| `integration-image` | full | `make docker-build-it` once per run; outputs the image id a leg on its daemon leases and the layer identity a leg that loads the image compares, and uploads the image as the artifact a leg on another daemon loads (see "Legs"); needs `image` (`ci.yml:568-678`) |
-| `integration` | full | A matrix job per leg: `make integration-test-leg LEG=<n> IT_PREBUILT=1` in the run's leased integration image, under a per-leg `IT_PROJECT` and `IT_IMAGE` tag and the `IT_MEMORY` limit, torn down on every exit (see "Legs" and "Memory limits"); needs `integration-image` (`ci.yml:680-853`) |
+| `integration-image` | full | `make docker-build-it` once per run, or the daemon's image of the same content tag; outputs the image id a leg on its daemon leases and the layer identity a leg that loads the image compares, and uploads the image as the artifact a leg on another daemon loads (see "Legs"); needs `image` (`ci.yml:568-678`) |
+| `integration` | full | A matrix job per leg: `make integration-test-leg LEG=<n> IT_PREBUILT=1` in the run's leased integration image, under a per-leg `IT_PROJECT` and the run's content tag `IT_IMAGE` and the `IT_MEMORY` limit, torn down on every exit (see "Legs" and "Memory limits"); needs `integration-image` (`ci.yml:680-853`) |
 | `soak` | nightly | `make integration-test` looped for `SOAK_MINUTES` (below), under the same `IT_MEMORY` limit (`ci.yml:867-974`) |
 | `fips` | full | `make test-fips`; outside the gate (`ci.yml:976-992`) |
 
@@ -864,66 +872,75 @@ CanoKey QEMU build, autotools, tpm2-abrmd, yubikey-manager, the Secure Boot
 signing tools, the X server and the legacy network tools were dropped because
 nothing called them, and the `trivy image` step scans every package left. The toolchain image is tagged with a hash of its inputs
 (`make -s toolchain-image`). Forge credentials reach the build only as the
-`gomodauth` BuildKit secret, from `MODULE_ENV_FILE`. The integration image is
-tagged per run and job (`go-trusted-platform-ci-it:<run>-<attempt>`, `-image`
-in the `image` job, `-legs` in the `integration-image` job, `-leg<n>` in each
-`integration` leg, `-soak` in the `soak` job; `ci.yml:212`, `:540`, `:655`,
-`:808`)
-and removed at job end. The three jobs build on the project's
-own `docker-container` BuildKit builder, `go-trusted-platform-ci`
-(`BUILDX_BUILDER`, which `make docker-build` honours; empty uses the daemon's
-builder), so the build cache is this project's alone: each job prunes it to
-`BUILDKIT_KEEP_STORAGE` (40 GB) before its build and at teardown, never with a
-global `docker builder prune` (ruling 108). A cancelled run whose teardown did
-not run leaves its image tag; its cache is trimmed by the next job. Every job that starts
-containers first runs `scripts/reap-stale-ci-stacks.sh go-trusted-platform-ci-`,
-which removes the stacks a runner that died mid-job left behind: a project
-whose containers are all stopped longer than the min-age (3h05m) goes with
-its networks and volumes. A network or volume that outlived its project's
-containers (a cancelled job's teardown never ran; m1250 found nine such
-networks on one runner, the last of them on a `192.168.0.0/16` block that
-covered the monitoring VLAN) is removed as well, when no container of any
-state uses it and it was created longer than the min-age ago. So is an image
-whose reference starts with the prefix (each is one run's, like
-`go-trusted-platform-ci-it:<run>-<attempt>-legs`), under the same two
-conditions (a lease is a container that names it) and a third: no live claim
-names its run. That frees the tag a
-cancelled run left and the integration-image job's copy that no leg's teardown
-reached (#1146), which neither `buildx prune` nor any other step removes. An
-image's Created time is no proof that its job ended (a warm build cache can
-return an image built long before), so every job that builds one leases it
-from the build to its teardown. The lease is taken the moment the image is
-loaded, before any later build: the image job runs `make
-docker-build-integration`, leases `IT_IMAGE`, and only then `make
-docker-build-toolchain`, so the toolchain build never runs with the
-integration image unheld. `pkg/arch/cilease_test.go` fails `make test` when a
-`make docker-build*` in `ci.yml` is not leased in the same step, a build starts
-before the image an earlier build made is leased (`make docker-build` itself,
-which builds both images in one call, included), a lease is never removed, or
-a matrix job's `IT_IMAGE` is shared by its jobs.
+`gomodauth` BuildKit secret, from `MODULE_ENV_FILE`.
 
-A lease cannot name an image before the image exists, so a job's tag (or a
-leg's `docker load` of the integration-image job's tag) is on the daemon a
-moment before its lease, and a warm cache can make that tag look stale
-already. Codex's review of #1146 found a reaper in another job could remove it
-in that moment. A claim closes the window: every job with an `IT_IMAGE` first
-creates a volume `go-trusted-platform-ci-<run>-<attempt>-<job>-claim` labelled
-`ci.claim=<run>-<attempt>` (the "Claim this run's images" step, `ci.yml:253-254`),
-before it builds, loads or leases anything, and removes it at its teardown.
-The reaper reads the image list first and the claims after it, and keeps every
-image whose tag's `<run>-<attempt>` a live claim names
-(`scripts/reap-stale-ci-stacks.sh:196-237`): a tag on the list was published
-after its job's claim, so that claim is on the claim list unless the job tore
-it down, done with the image. That covers every tag of the run, so a leg's
-claim also keeps the integration-image job's tag it loads. The
-integration-image job leaves its claim at teardown, so its copy stays for the
-legs on that daemon; the reaper removes a claim once it is past the min-age
-(no job runs that long), and the run's images with it. A claim the reaper
-cannot list or read might be live, so it then removes no image that pass.
-`pkg/arch/cilease_test.go` fails `make test` when a job with an `IT_IMAGE` uses
-it in a step before its claim. A
-failed removal is reported and skipped; `REAP_DRY_RUN=1` only prints. The tests in
-`pkg/arch/reapstale_test.go` run the script against a fake `docker`.
+The integration image is named by its content (ci-standard.md §9, #1272): `make
+-s it-image` prints `go-trusted-platform-ci-it:<hash>`, the first 16 hex digits
+of a SHA-256 over the build arguments that change the image (`GO_IMAGE`,
+`APT_REFRESH`, `APK_INDEX_SUM`, the build target and, for `integration-legs`,
+its build tags), the commit's tree, the uncommitted diff and the untracked
+files git does not ignore. `APK_INDEX_SUM` is `scripts/apk-index-sum.sh` (the
+ci-template's, verbatim) over the base image; that base is Debian (`GO_IMAGE`
+in `scripts/tool-pins.sh`), so it is `none`, and `APT_REFRESH`
+(`scripts/apt-refresh-key.sh`) is what changes the tag when a Debian package is
+fixed. Each job reads both once and passes the same values to the tag and to
+the build. The `image` job names the `integration` stage (`IT_WARM_CACHE=0`);
+`integration-image`, the legs and `soak` name `integration-legs`. A job that
+finds its tag on the daemon reuses it and builds nothing, and every job and run
+of one tree on a runner shares the tag, so no job removes it. The three jobs
+build on the project's own `docker-container` BuildKit builder,
+`go-trusted-platform-ci` (`BUILDX_BUILDER`, which `make docker-build` honours;
+empty uses the daemon's builder), so the build cache is this project's alone:
+each job prunes it to `BUILDKIT_KEEP_STORAGE` (40 GB) before its build and at
+teardown, never with a global `docker builder prune` (ruling 108). A cancelled
+run whose teardown did not run leaves its lease; its cache is trimmed by the
+next job.
+
+Every job that starts containers first runs `scripts/reap-stale-ci-stacks.sh
+go-trusted-platform-ci-`, the ci-template's reaper v5 plus one repo-specific
+section (the template has no CUSTOMIZE block for it). It removes what a runner
+that died mid-job left behind: a compose project whose containers are all
+stopped longer than the min-age (3h05m) goes with its networks and volumes, and
+so does a stale container outside compose with the prefix, such as a dead job's
+lease. The repo-specific section sweeps the networks and volumes a cancelled or
+killed run left after its containers were gone, which the compose loop never
+sees: a network holds an address block of the daemon's pools, a volume holds
+disk. One goes when its `com.docker.compose.project` label starts with the
+prefix, the compose loop saw no container of that project, no container of any
+state uses it, and it was created more than the min-age ago (a network's
+`Created` is read RFC 3339). A failed inspect or removal is reported and the
+sweep continues. It removes a `go-trusted-platform-ci-it:<hash>` tag created
+or last tagged more than `REAP_IMAGE_MIN_AGE` (2 h) ago whose image no
+container, running or created, uses; neither `buildx prune` nor any other step
+removes those tags. An image's age is no proof that no job needs it (a reused
+tag can be days old), so every job that uses the image holds a lease on it: a
+created, never-started container
+`go-trusted-platform-ci-lease-<run>-<attempt>-<random>` that names its id,
+removed in an `if: always()` step. The lease and every re-tag are taken under
+the daemon's image lock, a created container
+`go-trusted-platform-ci-image-lock` that the daemon refuses to create twice;
+the reaper's image loop holds the same lock, so its in-use check and its
+`docker image rm` cannot straddle a job's lease or re-tag. A lock created more
+than 600 s ago is a dead holder's and is removed. The `image` job's lease spans
+only the build (or the reuse) and the `docker save` its `trivy image` step
+scans later: it is released before `make docker-build-toolchain`, the lint
+gates and the unit, race and security suites, none of which touches the
+integration image.
+
+`pkg/arch/cilease_test.go` fails `make test` when a job names `IT_IMAGE` in its
+env or uses it before `make -s it-image` names it, a `make docker-build*` in
+`ci.yml` is not leased in the same step, a build starts before the image an
+earlier build made is leased (`make docker-build` itself, which builds both
+images in one call, included), a lease or a `docker tag` is outside the image
+lock, a step runs `docker image rm`, toolchain work runs while the job holds a
+lease, or no `if: always()` step removes the lease. It also fails when a step
+names `it-image.tar` outside `$RUNNER_TEMP`, where every
+`scripts/in-toolchain-image.sh` step's checkout copy and every build context
+would carry the 3 GB archive: the `trivy image` step alone receives it, through
+`IN_IMAGE_COPY="$RUNNER_TEMP/it-image.tar:/src/integration-image.tar"`, and the
+`if: always()` Tear down removes it (#1272). A failed removal is
+reported and skipped; `REAP_DRY_RUN=1` only prints. The tests in
+`pkg/arch/reapstale_test.go` run the script against a stateful fake `docker`.
 
 The toolchain container writes in four places: the checkout at `/src`, the
 build cache at `/gocache` (a named volume under compose, the container's own

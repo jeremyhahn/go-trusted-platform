@@ -46,7 +46,6 @@ var deliberatelyUnreached = map[string]string{
 	"pkg/compute":                     "needs an OCI runtime",
 	"pkg/compute/podman":              "needs an OCI runtime",
 	"pkg/dns/dao":                     "datastore harness; unrouted, see #34",
-	"pkg/firstboot":                   "needs root and real block devices",
 	"pkg/initrd":                      "static initramfs build; needs a TPM, LUKS and block devices",
 	"pkg/installer":                   "needs root and real block devices",
 	"pkg/installer/alpine":            "needs root and real block devices",
