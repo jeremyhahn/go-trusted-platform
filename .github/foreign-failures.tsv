@@ -232,13 +232,6 @@ test	test/integration	TestProtocolByName/REST/iam/CreateRole	go-quicbaas#1778	fi
 test	test/integration	TestServiceProtocolByName/iam/REST/AssignRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
 test	test/integration	TestServiceProtocolByName/iam/REST/CheckPermission	go-quicbaas#1810	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1810
 test	test/integration	TestServiceProtocolByName/iam/REST/CreateRole	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778
-test	test/integration/attestation	TestAttestationREST/BuildManifest	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
-test	test/integration/attestation	TestAttestationREST/BuildManifest_WithContainers	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
-test	test/integration/attestation	TestAttestationREST/GenerateVMQuote	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
-test	test/integration/attestation	TestAttestationREST/GetVMAttestation	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
-test	test/integration/attestation	TestAttestationREST/VerifyVMAttestation	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
-test	test/integration/attestation	TestAttestationREST/VerifyVMAttestation_InvalidNonce	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
-test	test/integration/attestation	TestAttestationReporting_TransportsAgree	go-trusted-platform#997	the PR that carries the owner ruling on go-trusted-platform#997 (daemon REST surface, owner queue item 138) removes these rows
 # test/integration/iam REST leaves: same daemon 404 (#997, CA m1029 (C))
 test	test/integration/iam	TestIAMMultiProtocol/REST/GroupCRUD/GroupMembership	go-trusted-platform#906	go-quicbaas v0.16.0-alpha (the v0.16 bump PR removes these rows)
 test	test/integration/iam	TestIAMMultiProtocol/REST/PermissionCheck/CheckPermission_Allowed	go-quicbaas#1778	first go-quicbaas tag after v0.16.0-alpha that closes go-quicbaas#1778

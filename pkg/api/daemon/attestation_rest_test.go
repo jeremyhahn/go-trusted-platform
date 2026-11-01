@@ -6,12 +6,14 @@ import (
 	"net/http"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/reporting"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -160,6 +162,59 @@ func TestAttestationREST_ServesTheIntegrationLeaves(t *testing.T) {
 			code := serveIAM(s, leaf.method, leaf.path, leaf.token).Code
 			assert.NotEqual(t, http.StatusNotFound, code)
 			assert.NotEqual(t, http.StatusMethodNotAllowed, code)
+		})
+	}
+}
+
+// vmRefusingAttestationServer refuses VM evidence the way the daemon's
+// attestation service does on a node with no TPM session.
+type vmRefusingAttestationServer struct {
+	recordingAttestationServer
+}
+
+func (s *vmRefusingAttestationServer) CollectVMAttestation(context.Context, *platformv1.CollectVMAttestationRequest) (*platformv1.CollectVMAttestationResponse, error) {
+	return nil, errVMEvidenceRefused{}
+}
+
+// errVMEvidenceRefused stands in for the attestation service's
+// ErrTPMSessionNotConfigured, which this package cannot import (cycle).
+type errVMEvidenceRefused struct{}
+
+func (errVMEvidenceRefused) Error() string {
+	return "attestation: TPM session not configured for CollectVMAttestation"
+}
+
+// TestAttestationREST_ServesTheBaselineLeaves holds one row per REST call the
+// #997 baseline leaves make (TestAttestationREST manifest and VM subtests,
+// TestAttestationReporting_TransportsAgree): each reaches a served route, and
+// a VM evidence call carries the service's refusal reason to the caller.
+func TestAttestationREST_ServesTheBaselineLeaves(t *testing.T) {
+	s := &RESTServer{router: mux.NewRouter(), logger: slog.Default()}
+	guard := restapi.NewScopeGuard(attestationRESTCallers, nil, nil)
+	require.NoError(t, s.SetAttestationRouterHandlers(logging.DefaultLogger(), &vmRefusingAttestationServer{},
+		ReportingHandles{Reports: reporting.NewCache(time.Hour)}, guard))
+	refusal := errVMEvidenceRefused{}.Error()
+
+	leaves := []struct {
+		leaf, method, path, token, wantBody string
+	}{
+		{"TestAttestationREST/BuildManifest", http.MethodPost, "/api/v1/attestation/manifests/build", "attestation-writer", ""},
+		{"TestAttestationREST/BuildManifest_WithContainers", http.MethodPost, "/api/v1/attestation/manifests/build", "attestation-writer", ""},
+		{"TestAttestationREST/GenerateVMQuote", http.MethodPost, "/api/v1/attestation/vm/vm-1", "attestation-writer", refusal},
+		{"TestAttestationREST/GetVMAttestation", http.MethodPost, "/api/v1/attestation/vm/vm-1-attest", "attestation-writer", refusal},
+		{"TestAttestationREST/VerifyVMAttestation", http.MethodPost, "/api/v1/attestation/vm/vm-1-verify", "attestation-writer", refusal},
+		{"TestAttestationREST/VerifyVMAttestation_InvalidNonce", http.MethodPost, "/api/v1/attestation/vm/vm-1-invalid", "attestation-writer", refusal},
+		{"TestAttestationReporting_TransportsAgree DescribeCallerPolicy", http.MethodGet, "/api/v1/attestation/callers", "attestation-reader", ""},
+		{"TestAttestationReporting_TransportsAgree ListDeviceReports", http.MethodGet, "/api/v1/attestation/reports", "attestation-reader", ""},
+	}
+	for _, leaf := range leaves {
+		t.Run(leaf.leaf, func(t *testing.T) {
+			recorder := serveIAM(s, leaf.method, leaf.path, leaf.token)
+			assertReachedHandler(t, recorder, recorder.Body.String())
+			assert.NotEqual(t, http.StatusNotFound, recorder.Code)
+			if leaf.wantBody != "" {
+				assert.Contains(t, recorder.Body.String(), leaf.wantBody)
+			}
 		})
 	}
 }
