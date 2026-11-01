@@ -108,6 +108,7 @@ var s6Scopes = []string{
 	"vtpm:read", "vtpm:write", "vtpm:delete",
 	"proxy:read", "proxy:write", "proxy:delete",
 	"cluster:read", "cluster:write",
+	"sdn:read", "sdn:write", "sdn:delete",
 }
 
 // s6RESTCallers grants s6OperatorToken every scope, "dns-reader" none of
@@ -152,6 +153,8 @@ func newRESTServerWithS6(t *testing.T) *RESTServer {
 	require.NoError(t, s.SetProxyService(NewProxyGRPCServiceWithStore(log, NewProxyStore(), nil), guard))
 	cluster, _ := registerClusterGRPCService(log)
 	require.NoError(t, s.SetClusterService(cluster, guard))
+	require.NoError(t, s.SetOverlayHandlers(newOverlayControllerRESTAdapter(&stubOverlayController{}), guard))
+	require.NoError(t, s.SetGatewayIPAMService(nil, nil, guard))
 	return s
 }
 
@@ -203,7 +206,7 @@ func TestCatalogRouteRPCs_CoverEveryMountedRoute(t *testing.T) {
 	sort.Strings(mounted)
 	sort.Strings(mapped)
 	assert.Equal(t, mapped, mounted)
-	assert.Len(t, s6RouteScopes, len(mounted))
+	assert.Len(t, mounted, len(s6RouteScopes)+len(s9RouteScopes))
 }
 
 func TestCatalogRouteScope(t *testing.T) {

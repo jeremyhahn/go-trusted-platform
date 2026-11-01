@@ -1666,19 +1666,37 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 
 	// Wire overlay REST handlers when the overlay controller was built.
 	// Uses the same controller hoisted during QUIC wiring so all transports
-	// share the same in-process overlay state.
+	// share the same in-process overlay state. The overlay and gateway routes
+	// run behind restGuard, each needing the scope the gRPC catalog gives its
+	// rpc; a failed mount stops the daemon.
 	if daemon.concreteRestServer != nil && overlayCtrl != nil {
-		daemon.concreteRestServer.SetOverlayHandlers(newOverlayControllerRESTAdapter(overlayCtrl))
-		logger.Info("Overlay REST routes registered")
+		if err := daemon.concreteRestServer.SetOverlayHandlers(newOverlayControllerRESTAdapter(overlayCtrl), restGuard); err != nil {
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: err}
+			logger.Error(constructErr, "component", "rest_server")
+			return nil, constructErr
+		}
 	}
 
 	// Wire gateway IPAM REST handlers. Pass the same in-memory allocator
 	// used by the gRPC service so REST and gRPC share the same state.
 	if daemon.concreteRestServer != nil && daemon.gatewayGRPCService != nil {
-		daemon.concreteRestServer.SetGatewayIPAMService(daemon.gatewayGRPCService.IPAMAllocator(), daemon.gatewayGRPCService)
-		daemon.concreteRestServer.SetGatewaySnapshotService(daemon.gatewayGRPCService)
-		daemon.concreteRestServer.SetGatewayBGPService(daemon.gatewayGRPCService)
-		daemon.concreteRestServer.SetGatewayBackends(daemon.gatewayGRPCService)
+		rs := daemon.concreteRestServer
+		gw := daemon.gatewayGRPCService
+		mountErr := rs.SetGatewayIPAMService(gw.IPAMAllocator(), gw, restGuard)
+		if mountErr == nil {
+			mountErr = rs.SetGatewaySnapshotService(gw)
+		}
+		if mountErr == nil {
+			mountErr = rs.SetGatewayBGPService(gw)
+		}
+		if mountErr == nil {
+			mountErr = rs.SetGatewayBackends(gw)
+		}
+		if mountErr != nil {
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: mountErr}
+			logger.Error(constructErr, "component", "rest_server")
+			return nil, constructErr
+		}
 		logger.Info("Gateway IPAM REST service wired into REST server")
 	}
 

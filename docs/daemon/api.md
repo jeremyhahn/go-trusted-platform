@@ -603,8 +603,8 @@ A missing credential answers 401 and a missing scope 403. Without an SDN
 service the routes still mount, behind the guard, and the non-zone routes answer
 503. A failed mount (no scope guard, `ErrSDNRESTUnavailable`) stops the daemon
 (`ErrTransportConstructionFailed`). The overlay (`/api/v1/sdn/overlay`) and
-gateway (`/api/v1/sdn/gateway`) routes are separate mounts and still rely on
-mTLS alone.
+gateway (`/api/v1/sdn/gateway`) routes are separate mounts that take their
+scopes from the gRPC catalog (below).
 
 **The daemon REST ceremony, PIV, LUKS and FIDO2 routes check the RPC's scope (#997).**
 `SetCeremonyService`, `SetPIVService`, `SetLUKSService` and `SetFIDO2Service`
@@ -660,6 +660,27 @@ A missing credential answers 401 and a missing scope 403. A failed mount (no
 scope guard: `ErrCeremonyRESTUnavailable`, `ErrPIVRESTUnavailable`,
 `ErrLUKSRESTUnavailable`, `ErrFIDO2RESTUnavailable`, `ErrVTPMRESTUnavailable`,
 `ErrProxyRESTUnavailable`, `ErrClusterRESTUnavailable`) stops the daemon (`ErrTransportConstructionFailed`).
+
+**The SDN overlay and gateway routes take the same map (#997).**
+`SetOverlayHandlers` (`rest_service.go`) and `SetGatewayIPAMService`
+(`rest_sdn.go`) mount `/api/v1/sdn/overlay` and `/api/v1/sdn/gateway` (IPAM,
+status, mode, BGP, admitted VTEPs, LB, NAT64 and perf) on `catalogGuardedRoot`.
+Three `DELETE`s are writes in the gRPC catalog, so the HTTP method does not
+name the action. `SetGatewaySnapshotService`, `SetGatewayBGPService` and
+`SetGatewayBackends` only wire a service into the mounted gateway routes: called
+before `SetGatewayIPAMService` they mount nothing and return
+`ErrGatewayRESTUnavailable`.
+
+| Routes (under `/sdn`) | Scope |
+|--------|-------|
+| every overlay and gateway `GET` | `sdn:read` |
+| `POST /overlay/vnis`, `PUT /gateway/mode`, `POST /gateway/bgp/prefixes`, `POST /gateway/ipam/pools`, `PUT /gateway/ipam/pools/{id}`, `POST /gateway/ipam/allocations`, `POST /gateway/lb/vips`, `PUT /gateway/lb/vips/{protocol}/{address}/{port}/backends`, `POST /gateway/perf/flows` | `sdn:write` |
+| `DELETE /overlay/macs/{mac}` (`ForgetMAC`), `DELETE /gateway/bgp/prefixes/{prefix}` (`WithdrawPrefix`), `DELETE /gateway/ipam/allocations/{ip}` (`ReleaseIP`) | `sdn:write` |
+| `DELETE /overlay/vnis/{vni}`, `DELETE /gateway/ipam/pools/{id}`, `DELETE /gateway/lb/vips/{protocol}/{address}/{port}` | `sdn:delete` |
+
+A missing credential answers 401 and a missing scope 403. A failed mount (no
+scope guard: `ErrOverlayRESTUnavailable`, `ErrGatewayRESTUnavailable`) stops
+the daemon (`ErrTransportConstructionFailed`).
 
 `TestDaemonREST_EveryMountedRouteIsGuarded` (`pkg/api/daemon/rest_scope_test.go`)
 walks the daemon REST router and sends every route a request with no

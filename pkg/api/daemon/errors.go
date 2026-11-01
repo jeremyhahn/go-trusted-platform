@@ -1278,6 +1278,27 @@ func (e ErrProxyRESTUnavailable) Error() string {
 	return "proxy REST routes unavailable: " + e.Reason
 }
 
+// ErrOverlayRESTUnavailable reports that the SDN overlay routes could not be
+// mounted on the daemon REST listener.
+type ErrOverlayRESTUnavailable struct {
+	Reason string
+}
+
+func (e ErrOverlayRESTUnavailable) Error() string {
+	return "overlay REST routes unavailable: " + e.Reason
+}
+
+// ErrGatewayRESTUnavailable reports that the SDN gateway routes could not be
+// mounted on the daemon REST listener, or that a gateway service was wired
+// before they were mounted.
+type ErrGatewayRESTUnavailable struct {
+	Reason string
+}
+
+func (e ErrGatewayRESTUnavailable) Error() string {
+	return "gateway REST routes unavailable: " + e.Reason
+}
+
 // ErrClusterRESTUnavailable reports that the cluster routes could not be
 // mounted on the daemon REST listener.
 type ErrClusterRESTUnavailable struct {
