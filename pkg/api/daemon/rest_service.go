@@ -1259,14 +1259,19 @@ func (s *RESTServer) SetFIDO2Service(svc *FIDO2Service, guard *restapi.ScopeGuar
 // SetClusterService wires the Cluster gRPC service into the REST server
 // and mounts /api/v1/cluster routes. The handlers fall through to the
 // gRPC implementation, so REST and gRPC report identical state when the
-// underlying coordinator is missing (HTTP 503 + Unavailable code).
-func (s *RESTServer) SetClusterService(svc platformv1.ClusterServiceServer) {
+// underlying coordinator is missing (HTTP 503 + Unavailable code). Each
+// route runs behind guard and needs the scope the gRPC catalog gives its
+// rpc; a nil guard is refused with ErrClusterRESTUnavailable.
+func (s *RESTServer) SetClusterService(svc platformv1.ClusterServiceServer, guard *restapi.ScopeGuard) error {
+	if guard == nil {
+		return ErrClusterRESTUnavailable{Reason: "no REST scope guard"}
+	}
 	h := newClusterRESTHandlers(svc)
-	api := s.router.PathPrefix(restBasePath).Subrouter()
-	h.registerClusterRoutes(api)
+	h.registerClusterRoutes(s.catalogGuardedAPI(guard))
 	if svc == nil {
 		s.logger.Info("Cluster REST routes registered (no backend; will return 503)")
-		return
+		return nil
 	}
 	s.logger.Info("Cluster REST routes registered")
+	return nil
 }

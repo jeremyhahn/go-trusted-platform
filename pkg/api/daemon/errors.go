@@ -1258,6 +1258,36 @@ func (e ErrCeremonyRESTUnavailable) Error() string {
 	return "ceremony REST routes unavailable: " + e.Reason
 }
 
+// ErrVTPMRESTUnavailable reports that the vTPM routes could not be mounted
+// on the daemon REST listener.
+type ErrVTPMRESTUnavailable struct {
+	Reason string
+}
+
+func (e ErrVTPMRESTUnavailable) Error() string {
+	return "vTPM REST routes unavailable: " + e.Reason
+}
+
+// ErrProxyRESTUnavailable reports that the proxy routes could not be mounted
+// on the daemon REST listener.
+type ErrProxyRESTUnavailable struct {
+	Reason string
+}
+
+func (e ErrProxyRESTUnavailable) Error() string {
+	return "proxy REST routes unavailable: " + e.Reason
+}
+
+// ErrClusterRESTUnavailable reports that the cluster routes could not be
+// mounted on the daemon REST listener.
+type ErrClusterRESTUnavailable struct {
+	Reason string
+}
+
+func (e ErrClusterRESTUnavailable) Error() string {
+	return "cluster REST routes unavailable: " + e.Reason
+}
+
 // ErrPIVRESTUnavailable reports that the PIV routes could not be mounted on
 // the daemon REST listener.
 type ErrPIVRESTUnavailable struct {

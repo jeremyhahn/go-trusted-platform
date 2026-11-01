@@ -54,6 +54,48 @@ var s6RouteScopes = []struct {
 	{http.MethodGet, "/api/v1/fido2/devices/{device}", "/api/v1/fido2/devices/key0", "fido2:read"},
 	{http.MethodPost, "/api/v1/fido2/register", "/api/v1/fido2/register", "fido2:write"},
 	{http.MethodPost, "/api/v1/fido2/authenticate", "/api/v1/fido2/authenticate", "fido2:write"},
+	{http.MethodPost, "/api/v1/vtpm/bundles", "/api/v1/vtpm/bundles", "vtpm:write"},
+	{http.MethodGet, "/api/v1/vtpm/bundles", "/api/v1/vtpm/bundles", "vtpm:read"},
+	{http.MethodGet, "/api/v1/vtpm/bundles/{id}", "/api/v1/vtpm/bundles/b1", "vtpm:read"},
+	{http.MethodDelete, "/api/v1/vtpm/bundles/{id}", "/api/v1/vtpm/bundles/b1", "vtpm:delete"},
+	{http.MethodPost, "/api/v1/vtpm/bundles/{id}/start", "/api/v1/vtpm/bundles/b1/start", "vtpm:write"},
+	{http.MethodPost, "/api/v1/vtpm/bundles/{id}/stop", "/api/v1/vtpm/bundles/b1/stop", "vtpm:write"},
+	{http.MethodGet, "/api/v1/vtpm/bundles/{id}/state", "/api/v1/vtpm/bundles/b1/state", "vtpm:read"},
+	{http.MethodPost, "/api/v1/vtpm/bundles/{id}/validate", "/api/v1/vtpm/bundles/b1/validate", "vtpm:read"},
+	{http.MethodGet, "/api/v1/vtpm/bundles/{id}/path", "/api/v1/vtpm/bundles/b1/path", "vtpm:read"},
+	{http.MethodGet, "/api/v1/vtpm/bundles/{id}/tpm-socket", "/api/v1/vtpm/bundles/b1/tpm-socket", "vtpm:read"},
+	{http.MethodGet, "/api/v1/vtpm/bundles/{id}/nvram", "/api/v1/vtpm/bundles/b1/nvram", "vtpm:read"},
+	{http.MethodPost, "/api/v1/vtpm/bundles/{id}/quote", "/api/v1/vtpm/bundles/b1/quote", "vtpm:read"},
+	{http.MethodGet, "/api/v1/vtpm/bundles/{id}/pcr/{index}", "/api/v1/vtpm/bundles/b1/pcr/7", "vtpm:read"},
+	{http.MethodPost, "/api/v1/vtpm/bundles/{id}/pcr/{index}/extend", "/api/v1/vtpm/bundles/b1/pcr/7/extend", "vtpm:write"},
+	{http.MethodPost, "/api/v1/vtpm/bundles/{id}/seal", "/api/v1/vtpm/bundles/b1/seal", "vtpm:write"},
+	{http.MethodPost, "/api/v1/vtpm/bundles/{id}/unseal", "/api/v1/vtpm/bundles/b1/unseal", "vtpm:read"},
+	{http.MethodGet, "/api/v1/vtpm/bundles/{id}/export", "/api/v1/vtpm/bundles/b1/export", "vtpm:read"},
+	{http.MethodPost, "/api/v1/vtpm/bundles/import", "/api/v1/vtpm/bundles/import", "vtpm:write"},
+	{http.MethodPost, "/api/v1/vtpm/templates", "/api/v1/vtpm/templates", "vtpm:write"},
+	{http.MethodGet, "/api/v1/vtpm/templates", "/api/v1/vtpm/templates", "vtpm:read"},
+	{http.MethodGet, "/api/v1/vtpm/templates/{id}", "/api/v1/vtpm/templates/t1", "vtpm:read"},
+	{http.MethodDelete, "/api/v1/vtpm/templates/{id}", "/api/v1/vtpm/templates/t1", "vtpm:delete"},
+	{http.MethodPost, "/api/v1/vtpm/templates/{id}/clone", "/api/v1/vtpm/templates/t1/clone", "vtpm:write"},
+	{http.MethodPost, "/api/v1/proxy/routes", "/api/v1/proxy/routes", "proxy:write"},
+	{http.MethodGet, "/api/v1/proxy/routes", "/api/v1/proxy/routes", "proxy:read"},
+	{http.MethodGet, "/api/v1/proxy/routes/{id}", "/api/v1/proxy/routes/r1", "proxy:read"},
+	{http.MethodPut, "/api/v1/proxy/routes/{id}", "/api/v1/proxy/routes/r1", "proxy:write"},
+	{http.MethodDelete, "/api/v1/proxy/routes/{id}", "/api/v1/proxy/routes/r1", "proxy:delete"},
+	{http.MethodPost, "/api/v1/proxy/pools", "/api/v1/proxy/pools", "proxy:write"},
+	{http.MethodGet, "/api/v1/proxy/pools", "/api/v1/proxy/pools", "proxy:read"},
+	{http.MethodGet, "/api/v1/proxy/pools/{id}", "/api/v1/proxy/pools/p1", "proxy:read"},
+	{http.MethodPut, "/api/v1/proxy/pools/{id}", "/api/v1/proxy/pools/p1", "proxy:write"},
+	{http.MethodDelete, "/api/v1/proxy/pools/{id}", "/api/v1/proxy/pools/p1", "proxy:delete"},
+	{http.MethodGet, "/api/v1/proxy/config", "/api/v1/proxy/config", "proxy:read"},
+	{http.MethodGet, "/api/v1/proxy/status", "/api/v1/proxy/status", "proxy:read"},
+	{http.MethodPost, "/api/v1/proxy/reload", "/api/v1/proxy/reload", "proxy:write"},
+	{http.MethodGet, "/api/v1/proxy/zone-matrix", "/api/v1/proxy/zone-matrix", "proxy:read"},
+	{http.MethodGet, "/api/v1/cluster/status", "/api/v1/cluster/status", "cluster:read"},
+	{http.MethodGet, "/api/v1/cluster/nodes", "/api/v1/cluster/nodes", "cluster:read"},
+	{http.MethodPost, "/api/v1/cluster/bootstrap", "/api/v1/cluster/bootstrap", "cluster:write"},
+	{http.MethodPost, "/api/v1/cluster/join", "/api/v1/cluster/join", "cluster:write"},
+	{http.MethodPost, "/api/v1/cluster/leave", "/api/v1/cluster/leave", "cluster:write"},
 }
 
 // s6Scopes is every scope the PIV, LUKS and FIDO2 routes use.
@@ -63,6 +105,9 @@ var s6Scopes = []string{
 	"piv:read", "piv:write", "piv:use", "piv:delete",
 	"luks:read", "luks:write", "luks:delete",
 	"fido2:read", "fido2:write",
+	"vtpm:read", "vtpm:write", "vtpm:delete",
+	"proxy:read", "proxy:write", "proxy:delete",
+	"cluster:read", "cluster:write",
 }
 
 // s6RESTCallers grants s6OperatorToken every scope, "dns-reader" none of
@@ -103,6 +148,10 @@ func newRESTServerWithS6(t *testing.T) *RESTServer {
 	require.NoError(t, s.SetPIVService(NewPIVService(log, nil), guard))
 	require.NoError(t, s.SetLUKSService(NewLUKSService(log, nil, rootYes()), guard))
 	require.NoError(t, s.SetFIDO2Service(NewFIDO2Service(log, nil), guard))
+	require.NoError(t, s.SetVTPMService(&mockVTPMService{}, guard))
+	require.NoError(t, s.SetProxyService(NewProxyGRPCServiceWithStore(log, NewProxyStore(), nil), guard))
+	cluster, _ := registerClusterGRPCService(log)
+	require.NoError(t, s.SetClusterService(cluster, guard))
 	return s
 }
 
@@ -204,6 +253,13 @@ func TestS6Setters_RefuseANilGuard(t *testing.T) {
 			ErrLUKSRESTUnavailable{Reason: "no REST scope guard"}},
 		{"FIDO2", func(s *RESTServer) error { return s.SetFIDO2Service(NewFIDO2Service(log, nil), nil) },
 			ErrFIDO2RESTUnavailable{Reason: "no REST scope guard"}},
+		{"vTPM", func(s *RESTServer) error { return s.SetVTPMService(&mockVTPMService{}, nil) },
+			ErrVTPMRESTUnavailable{Reason: "no REST scope guard"}},
+		{"Proxy", func(s *RESTServer) error {
+			return s.SetProxyService(NewProxyGRPCServiceWithStore(log, NewProxyStore(), nil), nil)
+		}, ErrProxyRESTUnavailable{Reason: "no REST scope guard"}},
+		{"Cluster", func(s *RESTServer) error { return s.SetClusterService(nil, nil) },
+			ErrClusterRESTUnavailable{Reason: "no REST scope guard"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -212,6 +268,26 @@ func TestS6Setters_RefuseANilGuard(t *testing.T) {
 			assert.Empty(t, testWalkHandlers(t, s.router), "a refused mount leaves no route")
 		})
 	}
+}
+
+// TestCatalogGuardedRoot_GuardsOnlyItsOwnRoutes proves the matcher-less
+// subrouter the vTPM and proxy routes mount on runs its guard only for its
+// own routes: a root route mounted beside it, and a vTPM path it does not
+// serve, answer as they did before, without a credential.
+func TestCatalogGuardedRoot_GuardsOnlyItsOwnRoutes(t *testing.T) {
+	s := newRESTServerWithS6(t)
+	s.router.HandleFunc("/api/v1/s8-open", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+	}).Methods(http.MethodGet)
+
+	assert.Equal(t, http.StatusTeapot, serveIAM(s, http.MethodGet, "/api/v1/s8-open", "").Code)
+
+	recorder := serveIAM(s, http.MethodGet, "/api/v1/vtpm/unserved", "")
+	assert.Equal(t, http.StatusNotFound, recorder.Code)
+	assert.Equal(t, "404 page not found\n", recorder.Body.String())
+
+	// A guarded route still refuses the same anonymous caller.
+	assert.Equal(t, http.StatusUnauthorized, serveIAM(s, http.MethodGet, "/api/v1/vtpm/bundles", "").Code)
 }
 
 // testWalkHandlers lists, as "METHOD template", the routes on router that
