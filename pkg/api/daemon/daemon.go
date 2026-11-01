@@ -55,6 +55,7 @@ import (
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	restiam "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/iam"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
@@ -1508,6 +1509,21 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		}
 	}
 
+	// The attestation and device routers mount before the device facade:
+	// the first matching route wins, so they serve every path they share
+	// with it. Each one runs behind restGuard, and a failed mount stops the
+	// daemon rather than leaving the routes unserved or unguarded.
+	if daemon.concreteRestServer != nil {
+		var reportingHandles ReportingHandles
+		if config.AttestationReporting != nil {
+			reportingHandles = *config.AttestationReporting
+		}
+		if err := daemon.concreteRestServer.SetAttestationRouterHandlers(logger, attestationService, reportingHandles, restGuard); err != nil {
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: err}
+			logger.Error(constructErr, "component", "rest_server")
+			return nil, constructErr
+		}
+	}
 	// Wire device + profile REST handlers if the services are available.
 	// Without this, /api/v1/devices/* would not be served and the REST
 	// adapter for `platformctl --protocol rest device list` would 404.
@@ -1521,7 +1537,32 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		if deviceService != nil {
 			attestSvc = deviceService
 		}
-		daemon.concreteRestServer.SetDeviceHandlers(config.DeviceService, config.DeviceProfileService, attestSvc)
+		if err := daemon.concreteRestServer.SetDeviceRouterHandlers(logger, config.DeviceService, config.DeviceProfileService, config.DeviceTemplateService, attestSvc, restGuard); err != nil {
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: err}
+			logger.Error(constructErr, "component", "rest_server")
+			return nil, constructErr
+		}
+		if err := daemon.concreteRestServer.SetDeviceHandlers(config.DeviceService, config.DeviceProfileService, attestSvc, restGuard); err != nil {
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: err}
+			logger.Error(constructErr, "component", "rest_server")
+			return nil, constructErr
+		}
+	}
+
+	// The DNS and PXE routes serve the same DNSServiceServer and
+	// PXEGRPCService instances gRPC, QUIC, MCP and Unix serve, behind
+	// restGuard. A failed mount stops the daemon.
+	if daemon.concreteRestServer != nil {
+		if err := daemon.concreteRestServer.SetDNSRouterHandlers(logger, dnsGRPCService, restGuard); err != nil {
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: err}
+			logger.Error(constructErr, "component", "rest_server")
+			return nil, constructErr
+		}
+		if err := daemon.concreteRestServer.SetPXERouterHandlers(logger, pxeGRPCService, restGuard); err != nil {
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: err}
+			logger.Error(constructErr, "component", "rest_server")
+			return nil, constructErr
+		}
 	}
 
 	// Wire CA REST handlers if the CA service is available. Without this,
@@ -1545,8 +1586,26 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// for `platformctl --protocol rest kms ...` would 404. The facade shares
 	// the same QuicBaaS SDK clients as the gRPC and embedded transports so
 	// all transports return identical results.
+	// The name-keyed KMS router (keys, crypto, DEKs and secrets, #997) mounts
+	// first, behind the REST scope guard: the first matching route wins, so
+	// it serves every path it shares with the daemon's own KMS handlers.
+	if daemon.concreteRestServer != nil && kmsService != nil {
+		restKMS, restCrypto, restDEK, restSecrets, kmsErr := kmsService.RESTClients()
+		if kmsErr == nil {
+			kmsErr = daemon.concreteRestServer.SetKMSRouterHandlers(logger, restKMS, restCrypto, restDEK, restSecrets, restGuard)
+		}
+		if kmsErr != nil {
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: kmsErr}
+			logger.Error(constructErr, "component", "rest_server")
+			return nil, constructErr
+		}
+	}
 	if daemon.concreteRestServer != nil && kmsPlatformBackend != nil {
-		daemon.concreteRestServer.SetKMSHandlers(NewPlatformKMSRESTFacade(kmsPlatformBackend))
+		if facadeErr := daemon.concreteRestServer.SetKMSHandlers(NewPlatformKMSRESTFacade(kmsPlatformBackend), restGuard); facadeErr != nil {
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: facadeErr}
+			logger.Error(constructErr, "component", "rest_server")
+			return nil, constructErr
+		}
 	}
 
 	// Wire platform tenant manager into REST handlers + gRPC server when
@@ -1555,6 +1614,27 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// instance is shared across REST, gRPC, QUIC, MCP, and Unix so every
 	// transport sees identical per-tenant state including barrier lifecycle.
 	// REST and gRPC both authorize the caller against the same system tenant.
+	// Wire the IAM REST handlers (#997). /api/v1/iam is the webservice IAM
+	// router authorized by the platform ScopeGuard: the caller's iam:read,
+	// iam:write or iam:delete scope gates each method, and the tenant rules
+	// are the ones the gRPC, QUIC and MCP IAM transports apply.
+	if daemon.concreteRestServer != nil {
+		if iamService == nil {
+			logger.Warn("IAM REST routes not registered: the IAM service is disabled")
+		} else {
+			var iamRESTPEP restiam.PEPClient
+			if sdkPEP := iamService.PEP(); sdkPEP != nil {
+				iamRESTPEP = restiam.NewQuicBaaSPEPAdapter(sdkPEP)
+			}
+			iamErr := daemon.concreteRestServer.SetIAMHandlers(logger, restiam.NewQuicBaaSIAMAdapter(iamService.Client()), iamRESTPEP, restGuard, config.PlatformTenantID)
+			if iamErr != nil {
+				constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: iamErr}
+				logger.Error(constructErr, "component", "rest_server")
+				return nil, constructErr
+			}
+		}
+	}
+
 	if config.PlatformTenantManager != nil {
 		if daemon.concreteRestServer != nil {
 			daemon.concreteRestServer.SetTenantHandlers(config.PlatformTenantManager, restGuard, config.PlatformTenantID)
@@ -1576,7 +1656,11 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 
 	// Wire SDN service into REST server if both are available
 	if daemon.concreteRestServer != nil && daemon.sdnService != nil {
-		daemon.concreteRestServer.SetSDNService(daemon.sdnService)
+		if err := daemon.concreteRestServer.SetSDNService(daemon.sdnService, restGuard); err != nil {
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: err}
+			logger.Error(constructErr, "component", "rest_server")
+			return nil, constructErr
+		}
 		logger.Info("SDN service wired into REST server")
 	}
 
@@ -1615,14 +1699,23 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		if daemon.ceremonyService != nil && daemon.ceremonyService.service != nil {
 			daemon.concreteRestServer.SetCeremonyService(daemon.ceremonyService.service)
 		}
+		// The PIV, LUKS and FIDO2 routes run behind restGuard, each needing
+		// the scope the gRPC catalog gives its rpc. A failed mount stops the
+		// daemon.
+		var mountErr error
 		if daemon.pivService != nil && daemon.pivService.service != nil {
-			daemon.concreteRestServer.SetPIVService(daemon.pivService.service)
+			mountErr = daemon.concreteRestServer.SetPIVService(daemon.pivService.service, restGuard)
 		}
-		if daemon.luksService != nil && daemon.luksService.service != nil {
-			daemon.concreteRestServer.SetLUKSService(daemon.luksService.service)
+		if mountErr == nil && daemon.luksService != nil && daemon.luksService.service != nil {
+			mountErr = daemon.concreteRestServer.SetLUKSService(daemon.luksService.service, restGuard)
 		}
-		if daemon.fido2Service != nil && daemon.fido2Service.service != nil {
-			daemon.concreteRestServer.SetFIDO2Service(daemon.fido2Service.service)
+		if mountErr == nil && daemon.fido2Service != nil && daemon.fido2Service.service != nil {
+			mountErr = daemon.concreteRestServer.SetFIDO2Service(daemon.fido2Service.service, restGuard)
+		}
+		if mountErr != nil {
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: mountErr}
+			logger.Error(constructErr, "component", "rest_server")
+			return nil, constructErr
 		}
 		// Cluster REST always mounts; if no coordinator is wired the
 		// handlers return 503 with a clear "not configured" body so the

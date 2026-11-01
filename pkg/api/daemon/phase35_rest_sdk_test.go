@@ -41,9 +41,11 @@ func newPhase35SDKClient(t *testing.T) (*RESTServer, *sdkrest.Adapter) {
 	s := newTestRESTServerForPhase35(t)
 	ceremony, piv, fido := phase35Services()
 	s.SetCeremonyService(ceremony)
-	s.SetPIVService(piv)
-	s.SetFIDO2Service(fido)
-	return s, connectPhase35REST(t, s.router)
+	mustMountS6(t, s.SetPIVService(piv, s6RESTGuard()))
+	mustMountS6(t, s.SetFIDO2Service(fido, s6RESTGuard()))
+	a := connectPhase35REST(t, s.router)
+	a.SetToken(s6OperatorToken)
+	return s, a
 }
 
 // connectPhase35REST serves h over TLS, as the daemon's REST listener does
@@ -316,8 +318,9 @@ func phase35SDKCases() []phase35SDKCase {
 // server-side refusal reaches the client as an error, not an empty reply.
 func TestPhase35RESTClientAgainstDaemonRouter_ServerErrorsSurface(t *testing.T) {
 	s := newTestRESTServerForPhase35(t)
-	s.SetPIVService(NewPIVService(logging.DefaultLogger(), nil))
+	mustMountS6(t, s.SetPIVService(NewPIVService(logging.DefaultLogger(), nil), s6RESTGuard()))
 	a := connectPhase35REST(t, s.router)
+	a.SetToken(s6OperatorToken)
 
 	err := a.Connection().Invoke(context.Background(), "/platform.v1.PIVService/ListDevices",
 		&platformv1.PIVListDevicesRequest{}, &platformv1.PIVListDevicesResponse{})

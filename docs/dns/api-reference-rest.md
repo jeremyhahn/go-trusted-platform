@@ -9,7 +9,7 @@
 | Base Path | `/api/v1/dns` |
 | Port | 8443 |
 | Content-Type | `application/json` |
-| Authorization | authenticated caller holding the `admin` role, on every route |
+| Authorization | webservice: authenticated caller holding the `admin` role, on every route; daemon REST listener: the `dns:read`, `dns:write` or `dns:delete` scope the gRPC catalog gives the rpc ([daemon api.md](../daemon/api.md)) |
 
 Every route serves the `DNSService` proto messages
 (`pkg/api/grpc/proto/platform_dns.proto`) in protojson, the shape gRPC and the

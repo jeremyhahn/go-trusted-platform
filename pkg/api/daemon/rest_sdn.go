@@ -15,8 +15,10 @@ package daemon
 
 import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -26,17 +28,33 @@ import (
 // gRPC, QUIC, MCP and Unix transports serve, so every transport sees one
 // state. When svc is nil, handlers are still created so that zone endpoints
 // (registered unconditionally in RegisterRoutes) are available; the SDN
-// routes return 503.
-func (s *RESTServer) SetSDNService(svc *SDNService) {
+// routes return 503. Every route authenticates through guard and needs the
+// sdn:* scope the gRPC catalog gives its SDNService rpc; a nil guard is
+// refused.
+func (s *RESTServer) SetSDNService(svc *SDNService, guard *rest.ScopeGuard) error {
+	if guard == nil {
+		return ErrSDNRESTUnavailable{Reason: "no REST scope guard"}
+	}
 	// A nil *SDNService must reach the handlers as a nil interface, so the
 	// routes answer 503 rather than dereference it.
 	var server platformv1.SDNServiceServer
 	if svc != nil {
 		server = svc
 	}
+	authz := restScopeAuthorization{
+		guard:      guard,
+		respWriter: response.NewResponseWriter(logging.NewFromSlog(s.logger), nil),
+		routeScope: sdnRouteScope,
+	}
+	// The SDN routes carry absolute /api/v1/sdn paths, so they mount on a
+	// matcher-less subrouter: its middleware runs only for a route that
+	// matched inside it.
+	guarded := s.router.NewRoute().Subrouter()
+	guarded.Use(authz.authorize)
 	sdnHandlers := rest.NewSDNHandlers(server, s.logger)
-	sdnHandlers.RegisterRoutes(s.router)
+	sdnHandlers.RegisterRoutes(guarded)
 	s.sdnHandlers = sdnHandlers
+	return nil
 }
 
 // SetGatewayIPAMService wires IPAM and gateway REST handlers using the provided

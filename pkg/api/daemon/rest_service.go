@@ -36,9 +36,11 @@ import (
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restgateway "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/gateway"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -419,21 +421,29 @@ func (s *RESTServer) SetAppServiceHandlers(servers restapi.AppServiceServers, gu
 // not registered at all. Before #403 the REST package carried its own
 // "verifier" that returned true for any input, so this route reported every
 // device attested.
-func (s *RESTServer) SetDeviceHandlers(
-	deviceSvc restapi.DeviceServiceInterface,
-	profileSvc restapi.ProfileServiceInterface,
-	attestSvc platformv1.DeviceServiceServer,
-) {
+//
+// Every route authenticates through guard and needs the device:* scope the
+// gRPC catalog gives its rpc; a nil guard is an ErrDeviceRESTUnavailable.
+// Without a device or profile service nothing is mounted.
+func (s *RESTServer) SetDeviceHandlers(deviceSvc restapi.DeviceServiceInterface, profileSvc restapi.ProfileServiceInterface, attestSvc platformv1.DeviceServiceServer, guard *restapi.ScopeGuard) error {
+	if guard == nil {
+		return ErrDeviceRESTUnavailable{Reason: "no REST scope guard"}
+	}
 	if deviceSvc == nil && profileSvc == nil {
-		return
+		return nil
 	}
 	opts := []restapi.DeviceHandlerOption{}
 	if attestSvc != nil {
 		opts = append(opts, restapi.WithDeviceAttestService(attestSvc))
 	}
 	handlers := restapi.NewDeviceHandlers(deviceSvc, profileSvc, s.logger, opts...)
-	handlers.RegisterRoutes(s.router)
+	respWriter := response.NewResponseWriter(logging.NewFromSlog(s.logger), nil)
+	authz := restScopeAuthorization{guard: guard, respWriter: respWriter, routeScope: deviceRouteScope}
+	sub := s.router.NewRoute().Subrouter()
+	sub.Use(authz.authorize)
+	handlers.RegisterRoutes(sub)
 	s.logger.Info("Device REST routes registered", "attestation", attestSvc != nil)
+	return nil
 }
 
 // SetTenantHandlers wires the tenant REST handlers onto the daemon's REST
@@ -466,14 +476,26 @@ func (s *RESTServer) SetTenantHandlers(manager restapi.TenantManagerInterface, g
 // /api/v1/kms/* endpoints are served. The service delegates to the same
 // QuicBaaS SDK KMS and Crypto clients used by the gRPC, QUIC, MCP, and
 // embedded transports, so keys created via REST are visible everywhere else
-// and vice-versa. Mirrors SetDeviceHandlers / SetTenantHandlers.
-func (s *RESTServer) SetKMSHandlers(service restapi.KMSService) {
+// and vice-versa. Every route runs behind guard, the kms:* scope check the KMS
+// router uses (kmsRouteScope). A nil service mounts nothing; a nil guard is
+// ErrKMSRESTUnavailable and mounts nothing, never an unguarded route.
+func (s *RESTServer) SetKMSHandlers(service restapi.KMSService, guard *restapi.ScopeGuard) error {
 	if service == nil {
-		return
+		return nil
 	}
-	handlers := restapi.NewKMSHandlers(service, s.logger)
-	handlers.RegisterRoutes(s.router)
+	if guard == nil {
+		return ErrKMSRESTUnavailable{Reason: "no REST scope guard"}
+	}
+	respWriter := response.NewResponseWriter(logging.NewFromSlog(s.logger), nil)
+	authz := restScopeAuthorization{guard: guard, respWriter: respWriter, routeScope: kmsRouteScope}
+	// A matcher-less subrouter matches only its own routes, so the KMS router
+	// mounted before it keeps every path the two share. RegisterRoutes
+	// registers full /api/v1/... paths, hence no /api/v1 prefix here.
+	sub := s.router.NewRoute().Subrouter()
+	sub.Use(authz.authorize)
+	restapi.NewKMSHandlers(service, s.logger).RegisterRoutes(sub)
 	s.logger.Info("KMS REST routes registered")
+	return nil
 }
 
 // SetComputeHandlers wires the compute (VM and container) REST handlers onto
@@ -1190,37 +1212,46 @@ func (s *RESTServer) SetCeremonyService(svc *CeremonyService) {
 	s.logger.Info("Ceremony REST routes registered")
 }
 
-// SetPIVService wires the PIV service into the REST server and registers its routes.
-func (s *RESTServer) SetPIVService(svc *PIVService) {
-	if svc == nil {
-		return
+// SetPIVService mounts the PIV routes behind guard; each needs the scope the
+// gRPC catalog gives the PIVService method it serves.
+func (s *RESTServer) SetPIVService(svc *PIVService, guard *restapi.ScopeGuard) error {
+	if guard == nil {
+		return ErrPIVRESTUnavailable{Reason: "no REST scope guard"}
 	}
-	h := newPIVRESTHandlers(svc)
-	api := s.router.PathPrefix(restBasePath).Subrouter()
-	h.registerPIVRoutes(api)
+	if svc == nil {
+		return nil
+	}
+	newPIVRESTHandlers(svc).registerPIVRoutes(s.catalogGuardedAPI(guard))
 	s.logger.Info("PIV REST routes registered")
+	return nil
 }
 
-// SetLUKSService wires the LUKS service into the REST server and registers its routes.
-func (s *RESTServer) SetLUKSService(svc *LUKSService) {
-	if svc == nil {
-		return
+// SetLUKSService mounts the LUKS routes behind guard; each needs the scope
+// the gRPC catalog gives the LUKSService method it serves.
+func (s *RESTServer) SetLUKSService(svc *LUKSService, guard *restapi.ScopeGuard) error {
+	if guard == nil {
+		return ErrLUKSRESTUnavailable{Reason: "no REST scope guard"}
 	}
-	h := newLUKSRESTHandlers(svc)
-	api := s.router.PathPrefix(restBasePath).Subrouter()
-	h.registerLUKSRoutes(api)
+	if svc == nil {
+		return nil
+	}
+	newLUKSRESTHandlers(svc).registerLUKSRoutes(s.catalogGuardedAPI(guard))
 	s.logger.Info("LUKS REST routes registered")
+	return nil
 }
 
-// SetFIDO2Service wires the FIDO2 service into the REST server and registers its routes.
-func (s *RESTServer) SetFIDO2Service(svc *FIDO2Service) {
-	if svc == nil {
-		return
+// SetFIDO2Service mounts the FIDO2 routes behind guard; each needs the scope
+// the gRPC catalog gives the FIDO2Service method it serves.
+func (s *RESTServer) SetFIDO2Service(svc *FIDO2Service, guard *restapi.ScopeGuard) error {
+	if guard == nil {
+		return ErrFIDO2RESTUnavailable{Reason: "no REST scope guard"}
 	}
-	h := newFIDO2RESTHandlers(svc)
-	api := s.router.PathPrefix(restBasePath).Subrouter()
-	h.registerFIDO2Routes(api)
+	if svc == nil {
+		return nil
+	}
+	newFIDO2RESTHandlers(svc).registerFIDO2Routes(s.catalogGuardedAPI(guard))
 	s.logger.Info("FIDO2 REST routes registered")
+	return nil
 }
 
 // SetClusterService wires the Cluster gRPC service into the REST server
