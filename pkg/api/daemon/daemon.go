@@ -1557,6 +1557,15 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			logger.Error(constructErr, "component", "rest_server")
 			return nil, constructErr
 		}
+		// The registry routes serve the same RegistryService gRPC, QUIC,
+		// MCP and Unix serve; a daemon without a registry mounts none.
+		if config.RegistryService != nil {
+			if err := daemon.concreteRestServer.SetRegistryRouterHandlers(logger, config.RegistryService, restGuard); err != nil {
+				constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: err}
+				logger.Error(constructErr, "component", "rest_server")
+				return nil, constructErr
+			}
+		}
 	}
 
 	// Wire CA REST handlers if the CA service is available. Without this,

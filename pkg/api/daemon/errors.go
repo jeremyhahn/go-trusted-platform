@@ -1238,6 +1238,16 @@ func (e ErrDNSRESTUnavailable) Error() string {
 	return "DNS REST routes unavailable: " + e.Reason
 }
 
+// ErrRegistryRESTUnavailable reports that the registry routes could not be
+// mounted on the daemon REST listener.
+type ErrRegistryRESTUnavailable struct {
+	Reason string
+}
+
+func (e ErrRegistryRESTUnavailable) Error() string {
+	return "registry REST routes unavailable: " + e.Reason
+}
+
 // ErrSDNRESTUnavailable reports that the SDN routes could not be mounted on
 // the daemon REST listener.
 type ErrSDNRESTUnavailable struct {
