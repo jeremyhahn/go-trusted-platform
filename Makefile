@@ -2557,19 +2557,6 @@ stress-sdn-bgp: build-devcontainer
 		$(DEVCONTAINER_IMAGE) \
 		go test -v $(TEST_BUILD_TAGS_ARG) -timeout=15m -run TestBGP ./stress/...
 
-.PHONY: stress-sdn-dhcp
-## stress-sdn-dhcp: Run DHCP stress tests
-stress-sdn-dhcp: build-devcontainer
-	@echo "Running DHCP stress tests..."
-	@docker run --rm --privileged \
-		--name go-trusted-platform-dhcp-stress \
-		-e CGO_ENABLED=0 \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace/test/integration/sdn \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -timeout=15m -run TestDHCP ./stress/...
-
 .PHONY: stress-sdn-cluster
 ## stress-sdn-cluster: Run cluster state stress tests
 stress-sdn-cluster: build-devcontainer
