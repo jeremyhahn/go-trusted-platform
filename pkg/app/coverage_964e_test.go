@@ -14,6 +14,7 @@ import (
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/object"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 )
 
 // errCoverage964e is the cause the fakes and wrappers in this file return.
@@ -396,6 +397,72 @@ func TestCoverage964e_StoreFactoryAdapters(t *testing.T) {
 		var msg *MessageError
 		if !errors.As(err, &msg) || ks != nil || !strings.Contains(msg.Msg, "QuicBaaS service not initialized") {
 			t.Fatalf("keyStoreFactoryAdapter() = (%v, %v), want the QuicBaaS-not-initialized error", ks, err)
+		}
+	})
+}
+
+func TestCoverage964e_BootstrapTrustErrors(t *testing.T) {
+	scopeConfig := func(strategy trust.Strategy) *trust.Config {
+		return &trust.Config{Bootstrap: &trust.ScopeConfig{
+			Strategies: []trust.Strategy{strategy},
+		}}
+	}
+
+	t.Run("strategy outside the bootstrap allowlist fails resolver init", func(t *testing.T) {
+		a := &App{Logger: logging.DefaultLogger(), TrustConfig: scopeConfig(trust.StrategyCAFile)}
+		err := a.BootstrapTrust(context.Background())
+		var initErr ErrBootstrapClientInit
+		if !errors.As(err, &initErr) {
+			t.Fatalf("got %v (%T), want ErrBootstrapClientInit", err, err)
+		}
+		var notAllowed *trust.ErrStrategyNotAllowed
+		if !errors.As(err, &notAllowed) || notAllowed.Strategy != trust.StrategyCAFile {
+			t.Fatalf("cause = %v, want ErrStrategyNotAllowed for ca-file", err)
+		}
+		if a.trustResolver != nil {
+			t.Fatal("trust resolver stored despite init failure")
+		}
+	})
+
+	t.Run("strategy without inputs fails the bundle fetch", func(t *testing.T) {
+		a := &App{Logger: logging.DefaultLogger(), TrustConfig: scopeConfig(trust.StrategySPKI)}
+		err := a.BootstrapTrust(context.Background())
+		var fetchErr ErrBootstrapFetchBundle
+		if !errors.As(err, &fetchErr) {
+			t.Fatalf("got %v (%T), want ErrBootstrapFetchBundle", err, err)
+		}
+		if a.trustResolver == nil {
+			t.Fatal("resolver is stored before the fetch is attempted")
+		}
+	})
+}
+
+func TestCoverage964e_IsSecureBootSecretNotFound(t *testing.T) {
+	cases := map[string]struct {
+		err  error
+		want bool
+	}{
+		"nil error":         {err: nil, want: false},
+		"not found message": {err: errors.New("secret Not Found"), want: true},
+		"wrapped not found": {err: &WrappedError{Msg: "read", Err: errors.New("key not found")}, want: true},
+		"unrelated failure": {err: errCoverage964e, want: false},
+		"permission denied": {err: errors.New("permission denied"), want: false},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := isSecureBootSecretNotFound(tc.err); got != tc.want {
+				t.Fatalf("isSecureBootSecretNotFound(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCoverage964e_BMCDNSNameLoader(t *testing.T) {
+	a := &App{Logger: logging.DefaultLogger()}
+
+	t.Run("empty host has no name", func(t *testing.T) {
+		if got := a.buildBMCDNSNameLoader("")(context.Background()); got != "" {
+			t.Fatalf("loader(\"\") = %q, want empty", got)
 		}
 	})
 }
