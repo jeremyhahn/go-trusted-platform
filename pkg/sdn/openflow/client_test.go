@@ -157,7 +157,12 @@ func TestClient_Connect(t *testing.T) {
 			socketDir := filepath.Dir(socketPath)
 			bridgeName := "test-bridge"
 
-			client, err := NewClient(bridgeName, WithSocketDir(socketDir), WithTimeout(2*time.Second))
+			timeout := 2 * time.Second
+			if tt.errorType == ErrTimeout {
+				timeout = noReplyTimeout
+			}
+
+			client, err := NewClient(bridgeName, WithSocketDir(socketDir), WithTimeout(timeout))
 			if err != nil {
 				t.Fatalf("failed to create client: %v", err)
 			}
@@ -656,8 +661,13 @@ func TestClient_Echo(t *testing.T) {
 				tt.setupServer(server)
 			}
 
+			timeout := 2 * time.Second
+			if tt.expectError {
+				timeout = noReplyTimeout
+			}
+
 			socketDir := filepath.Dir(socketPath)
-			client, err := NewClient("test-bridge", WithSocketDir(socketDir), WithTimeout(2*time.Second))
+			client, err := NewClient("test-bridge", WithSocketDir(socketDir), WithTimeout(timeout))
 			if err != nil {
 				t.Fatalf("failed to create client: %v", err)
 			}
