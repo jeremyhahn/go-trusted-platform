@@ -113,6 +113,31 @@ after the first boot following installation.`,
 	return cmd
 }
 
+// sealStrategy is the part of firstboot.FirstbootSealStrategy that
+// runFirstboot drives.
+type sealStrategy interface {
+	CanUnlock(ctx context.Context, volume *storageluks.VolumeConfig) bool
+	Unlock(ctx context.Context, volume *storageluks.VolumeConfig) error
+}
+
+// Host seams. Production code never reassigns them; unit tests replace them
+// so runFirstboot can be exercised without a TPM, cryptsetup or an EFI
+// partition.
+var (
+	newExecutor     = firstboot.NewExecutor
+	newLUKSHandler  = storageluks.NewCryptsetupHandler
+	newSealStrategy = func(executor *firstboot.Executor, luksHandler storageluks.Handler, logger *logging.Logger) sealStrategy {
+		return firstboot.NewFirstbootSealStrategy(executor, luksHandler, logger)
+	}
+
+	// systemConfigPaths are the host config files loadPCRsFromConfig probes
+	// after the --config flag and the config directory.
+	systemConfigPaths = []string{
+		"/etc/trusted-platform/config.yaml",
+		"/boot/efi/tpm2/install-config.yaml",
+	}
+)
+
 func runFirstboot(ctx context.Context) error {
 	fmt.Println("Starting firstboot TPM sealing workflow...")
 
@@ -153,7 +178,7 @@ func runFirstboot(ctx context.Context) error {
 	}
 
 	// Create the firstboot executor
-	executor, err := firstboot.NewExecutor(ctx, config, logger)
+	executor, err := newExecutor(ctx, config, logger)
 	if err != nil {
 		return &WrappedError{Msg: "failed to create firstboot executor", Err: err}
 	}
@@ -163,13 +188,13 @@ func runFirstboot(ctx context.Context) error {
 	luksConfig := storageluks.DefaultConfig()
 	googleLog := googleLogger.Init("luks", false, false, os.Stdout)
 
-	luksHandler, err := storageluks.NewCryptsetupHandler(luksConfig, googleLog)
+	luksHandler, err := newLUKSHandler(luksConfig, googleLog)
 	if err != nil {
 		return &WrappedError{Msg: "failed to initialize LUKS handler", Err: err}
 	}
 
 	// Create and run the firstboot seal strategy
-	strategy := firstboot.NewFirstbootSealStrategy(executor, luksHandler, logger)
+	strategy := newSealStrategy(executor, luksHandler, logger)
 
 	// Check if firstboot is needed
 	volume := &storageluks.VolumeConfig{
@@ -227,9 +252,8 @@ func loadPCRsFromConfig(logger *logging.Logger) ([]uint, error) {
 	configPaths := []string{
 		firstbootConfig,
 		filepath.Join(firstbootConfigDir, "config.yaml"),
-		"/etc/trusted-platform/config.yaml",
-		"/boot/efi/tpm2/install-config.yaml",
 	}
+	configPaths = append(configPaths, systemConfigPaths...)
 
 	var configPath string
 	for _, path := range configPaths {
