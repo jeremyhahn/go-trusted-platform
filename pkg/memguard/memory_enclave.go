@@ -106,7 +106,25 @@ func lockRegion(b []byte) (*secure.Buffer, error) {
 	if len(b) == 0 {
 		return nil, nil
 	}
-	return secure.NewBufferFromBytes(b)
+	return lockBuffer(b)
+}
+
+// Host seams. Each defaults to the real host call and production code
+// never reassigns it; unit tests swap one to drive a failure branch
+// that the host cannot be made to take on demand.
+var (
+	// lockBuffer copies b into a locked, guarded buffer and wipes b.
+	lockBuffer = secure.NewBufferFromBytes
+	// randRead fills b from the operating system's CSPRNG.
+	randRead = rand.Read
+	// openFile opens path for NewMemoryEnclaveFromFile.
+	openFile = func(path string) (enclaveFile, error) { return os.Open(path) }
+)
+
+// enclaveFile is the subset of *os.File that NewMemoryEnclaveFromFile uses.
+type enclaveFile interface {
+	io.ReadSeekCloser
+	Stat() (os.FileInfo, error)
 }
 
 // NewMemoryEnclave wraps b in a locked memory region and zeroes the source
@@ -155,7 +173,7 @@ func NewRandomMemoryEnclave(size int) (*MemoryEnclave, error) {
 	}
 
 	b := make([]byte, size)
-	if _, err := rand.Read(b); err != nil {
+	if _, err := randRead(b); err != nil {
 		clear(b)
 		return nil, ErrRandomSource{Reason: err.Error()}
 	}
@@ -203,7 +221,7 @@ const MaxFileSize = 64 << 10
 // is what doc 00 L1/L8 forbid; the gap is reported upstream instead. See
 // docs/security/protected-memory.md.
 func NewMemoryEnclaveFromFile(path string) (*MemoryEnclave, error) {
-	f, err := os.Open(path)
+	f, err := openFile(path)
 	if err != nil {
 		return nil, ErrFileUnreadable{Path: path, Reason: err.Error()}
 	}
