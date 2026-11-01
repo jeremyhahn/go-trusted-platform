@@ -69,6 +69,30 @@ func TestPXERouterREST_ScopePerRoute(t *testing.T) {
 	assert.Contains(t, recorder.Body.String(), "pxe:delete")
 }
 
+// TestPXERouterREST_ServesTheIntegrationLeaves pins every route the
+// integration REST adapters call for PXE: each must be mounted, so the
+// router answers with something other than 404 or 405.
+func TestPXERouterREST_ServesTheIntegrationLeaves(t *testing.T) {
+	s := pxeRESTServer(t)
+
+	leaves := []struct {
+		leaf, method, path, token string
+	}{
+		{"pxe/REST GetStatus", http.MethodGet, "/api/v1/pxe/status", "pxe-reader"},
+		{"pxe/REST ListDevices", http.MethodGet, "/api/v1/pxe/devices", "pxe-reader"},
+		{"pxe/REST RegisterDevice", http.MethodPost, "/api/v1/pxe/devices", "pxe-writer"},
+		{"pxe/REST GetDevice", http.MethodGet, "/api/v1/pxe/devices/7", "pxe-reader"},
+		{"pxe/REST RemoveDevice", http.MethodDelete, "/api/v1/pxe/devices/7", "pxe-deleter"},
+	}
+	for _, leaf := range leaves {
+		t.Run(leaf.leaf, func(t *testing.T) {
+			code := serveIAM(s, leaf.method, leaf.path, leaf.token).Code
+			assert.NotEqual(t, http.StatusNotFound, code)
+			assert.NotEqual(t, http.StatusMethodNotAllowed, code)
+		})
+	}
+}
+
 // TestPXERouterREST_AnswersNotConfigured: platformd sets no PXE backend, so
 // REST answers what gRPC, QUIC, MCP and Unix answer.
 func TestPXERouterREST_AnswersNotConfigured(t *testing.T) {

@@ -19,8 +19,11 @@ import (
 // dnsRESTCallers are the callers the DNS REST tests authenticate as.
 var dnsRESTCallers = iamRESTTokens{
 	"dns-reader":  {Subject: "dns-reader", TenantID: iamRESTTenantA, Scopes: []string{"dns:read"}},
+	"dns-writer":  {Subject: "dns-writer", TenantID: iamRESTTenantA, Scopes: []string{"dns:write"}},
 	"dns-deleter": {Subject: "dns-deleter", TenantID: iamRESTTenantA, Scopes: []string{"dns:delete"}},
 	"pxe-reader":  {Subject: "pxe-reader", TenantID: iamRESTTenantA, Scopes: []string{"pxe:read"}},
+	"pxe-writer":  {Subject: "pxe-writer", TenantID: iamRESTTenantA, Scopes: []string{"pxe:write"}},
+	"pxe-deleter": {Subject: "pxe-deleter", TenantID: iamRESTTenantA, Scopes: []string{"pxe:delete"}},
 }
 
 // recordingDNSServer counts the DNS calls that reach the gRPC servicer.
@@ -87,6 +90,42 @@ func TestDNSRouterREST_ScopePerRoute(t *testing.T) {
 	recorder = serveIAM(s, http.MethodDelete, "/api/v1/dns/zones/example.com", "dns-deleter")
 	assertReachedHandler(t, recorder, recorder.Body.String())
 	assert.Equal(t, int32(1), server.deletes.Load())
+}
+
+// TestDNSRouterREST_ServesTheIntegrationLeaves pins every route the
+// integration REST adapters call for DNS: each must be mounted, so the
+// router answers with something other than 404 or 405.
+func TestDNSRouterREST_ServesTheIntegrationLeaves(t *testing.T) {
+	s := &RESTServer{router: mux.NewRouter(), logger: slog.Default()}
+	require.NoError(t, s.SetDNSRouterHandlers(logging.DefaultLogger(), &recordingDNSServer{}, restapi.NewScopeGuard(dnsRESTCallers, nil, nil)))
+
+	leaves := []struct {
+		leaf, method, path, token string
+	}{
+		{"dns/REST ListZones", http.MethodGet, "/api/v1/dns/zones", "dns-reader"},
+		{"TestDNSMultiProtocol/REST CreateZone", http.MethodPost, "/api/v1/dns/zones", "dns-writer"},
+		{"TestDNSMultiProtocol/REST GetZone", http.MethodGet, "/api/v1/dns/zones/example.com", "dns-reader"},
+		{"TestDNSMultiProtocol/REST UpdateZone", http.MethodPut, "/api/v1/dns/zones/example.com", "dns-writer"},
+		{"TestDNSMultiProtocol/REST DeleteZone", http.MethodDelete, "/api/v1/dns/zones/example.com", "dns-deleter"},
+		{"dns/REST CreateRecord", http.MethodPost, "/api/v1/dns/zones/example.com/records", "dns-writer"},
+		{"TestDNSMultiProtocol/REST UpdateRecord", http.MethodPut, "/api/v1/dns/zones/example.com/records", "dns-writer"},
+		{"TestDNSMultiProtocol/REST ListRecords", http.MethodGet, "/api/v1/dns/zones/example.com/records", "dns-reader"},
+		{"TestDNSMultiProtocol/REST GetRecord", http.MethodGet, "/api/v1/dns/zones/example.com/records/A/www", "dns-reader"},
+		{"dns/REST DeleteRecord", http.MethodDelete, "/api/v1/dns/zones/example.com/records/A/www", "dns-deleter"},
+		{"dns/REST ResolveA", http.MethodGet, "/api/v1/dns/resolve?fqdn=www.example.com&type=A", "dns-reader"},
+		{"dns/REST ResolveAAAA", http.MethodGet, "/api/v1/dns/resolve?fqdn=www.example.com&type=AAAA", "dns-reader"},
+		{"dns/REST ResolveTXT", http.MethodGet, "/api/v1/dns/resolve?fqdn=www.example.com&type=TXT", "dns-reader"},
+		{"TestDNSMultiProtocol/REST SignZone", http.MethodPost, "/api/v1/dns/zones/example.com/sign", "dns-writer"},
+		{"TestDNSMultiProtocol/REST GetDNSSECStatus", http.MethodGet, "/api/v1/dns/zones/example.com/dnssec", "dns-reader"},
+		{"TestDNSMultiProtocol/REST Register", http.MethodPost, "/api/v1/dns/register", "dns-writer"},
+	}
+	for _, leaf := range leaves {
+		t.Run(leaf.leaf, func(t *testing.T) {
+			code := serveIAM(s, leaf.method, leaf.path, leaf.token).Code
+			assert.NotEqual(t, http.StatusNotFound, code)
+			assert.NotEqual(t, http.StatusMethodNotAllowed, code)
+		})
+	}
 }
 
 func TestDNSRouteScope(t *testing.T) {
