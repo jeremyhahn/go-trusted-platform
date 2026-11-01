@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	quicbaassecret "github.com/jeremyhahn/go-quicbaas/sdk/go/secret"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -442,6 +444,7 @@ func TestCoverage964e_IsSecureBootSecretNotFound(t *testing.T) {
 		err  error
 		want bool
 	}{
+		"typed secret miss": {err: &WrappedError{Msg: "read", Err: &quicbaassecret.SecretNotFoundError{Scheme: "kms", Name: "db"}}, want: true},
 		"nil error":         {err: nil, want: false},
 		"not found message": {err: errors.New("secret Not Found"), want: true},
 		"wrapped not found": {err: &WrappedError{Msg: "read", Err: errors.New("key not found")}, want: true},
@@ -463,6 +466,69 @@ func TestCoverage964e_BMCDNSNameLoader(t *testing.T) {
 	t.Run("empty host has no name", func(t *testing.T) {
 		if got := a.buildBMCDNSNameLoader("")(context.Background()); got != "" {
 			t.Fatalf("loader(\"\") = %q, want empty", got)
+		}
+	})
+}
+
+func TestCoverage964e_TrustConfigNeedsTOFU(t *testing.T) {
+	bootstrapChain := func(strategies ...trust.Strategy) *trust.Config {
+		return &trust.Config{Bootstrap: &trust.ScopeConfig{Strategies: strategies}}
+	}
+	cases := map[string]struct {
+		cfg  *trust.Config
+		want bool
+	}{
+		"nil config":           {cfg: nil, want: false},
+		"no scopes":            {cfg: &trust.Config{}, want: false},
+		"chain without tofu":   {cfg: bootstrapChain(trust.StrategyDANE, trust.StrategySPKI), want: false},
+		"chain ending in tofu": {cfg: bootstrapChain(trust.StrategyDANE, trust.StrategyTOFU), want: true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := trustConfigNeedsTOFU(tc.cfg); got != tc.want {
+				t.Fatalf("trustConfigNeedsTOFU = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCoverage964e_CertificateMatchesKeyUnmarshalableKey(t *testing.T) {
+	_, pub := selfSignedCert(t, "iak")
+	cert := &x509.Certificate{PublicKey: "not-a-public-key"}
+	if certificateMatchesKey(cert, iakAttrsFor("x", pub)) {
+		t.Fatal("a certificate whose key cannot be marshalled must not match")
+	}
+}
+
+func TestCoverage964e_TrustResolver(t *testing.T) {
+	t.Run("valid config builds and caches a resolver", func(t *testing.T) {
+		a := &App{Logger: logging.DefaultLogger(), TrustConfig: &trust.Config{
+			Bootstrap: &trust.ScopeConfig{Strategies: []trust.Strategy{trust.StrategySPKI}},
+		}}
+		first := a.TrustResolver()
+		if first == nil {
+			t.Fatal("TrustResolver returned nil for a valid config")
+		}
+		if a.TrustResolver() != first {
+			t.Fatal("second call did not return the cached resolver")
+		}
+	})
+
+	t.Run("invalid config yields no resolver", func(t *testing.T) {
+		a := &App{Logger: logging.DefaultLogger(), TrustConfig: &trust.Config{
+			Bootstrap: &trust.ScopeConfig{Strategies: []trust.Strategy{trust.StrategyCAFile}},
+		}}
+		if r := a.TrustResolver(); r != nil {
+			t.Fatalf("TrustResolver = %v, want nil for a disallowed strategy", r)
+		}
+		if a.trustResolver != nil {
+			t.Fatal("a failed build must not be cached")
+		}
+	})
+
+	t.Run("no trust config yields no resolver", func(t *testing.T) {
+		if r := (&App{Logger: logging.DefaultLogger()}).TrustResolver(); r != nil {
+			t.Fatalf("TrustResolver = %v, want nil", r)
 		}
 	})
 }
