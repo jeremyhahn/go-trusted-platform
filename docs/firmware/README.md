@@ -103,10 +103,10 @@ avr-gcc -mmcu=atmega328p -o firmware.elf main.c
 avr-objcopy -O ihex firmware.elf firmware.hex
 
 # Sign with platform CA
-platformctl firmware sign firmware.hex --device arduino-001
+platformctl firmware sign --input firmware.hex --device arduino-001
 
 # Flash to device
-platformctl firmware flash firmware.hex --port /dev/ttyUSB0 --verify
+platformctl firmware flash --input firmware.hex --port /dev/ttyUSB0 --verify
 
 # Attest device
 platformctl firmware attest --device-id arduino-001 --port /dev/ttyUSB0
@@ -168,7 +168,7 @@ platformctl firmware android flash-grapheneos \
 
 # Attest device
 platformctl firmware attest \
-  --device pixel-7 \
+  --device-id pixel-7 \
   --protocol android-hardware
 ```
 
@@ -282,8 +282,12 @@ Firmware operations integrate with QuicBaaS for:
 - **Fleet Management**: Track device inventory, firmware versions, attestation status
 - **Compliance**: SOC 2, ISO 27001 reporting
 
+> **PROPOSED** - this policy format, the `firmware-*` roles and the
+> `firmware:*` resources are not implemented; nothing in `pkg/` defines them.
+> Shipped IAM policies are described in [docs/iam/](../iam/).
+
 ```yaml
-# ABAC policy (uses apiVersion/kind/metadata/spec format)
+# PROPOSED ABAC policy - NOT YET IMPLEMENTED
 apiVersion: abac.trustedplatform.io/v1
 kind: Policy
 metadata:

@@ -23,6 +23,7 @@ import { Label } from '@/components/ui/label';
 import { DNSZoneTable } from '@/components/features/networking/dns-zone-table';
 import { useDNS, useApi, useToast } from '@/hooks';
 import type { DNSZone } from '@/types/infrastructure';
+import { readZone } from '@/lib/dns-wire';
 
 export default function DNSZonesPage() {
   const { toast } = useToast();
@@ -52,32 +53,10 @@ export default function DNSZonesPage() {
     }
   );
 
-  // Transform SDK zones to local DNSZone type for UI compatibility.
-  // createdAt / updatedAt come from the REST envelope when the backend
-  // has real timestamps; otherwise we leave them empty and the table
-  // renders "—". Never fall back to `new Date()` — that made every zone
-  // look freshly minted on every page render.
-  const zones: DNSZone[] = useMemo(() => {
-    if (!zonesData?.zones) return [];
-    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-    return zonesData.zones.map((zone: any) => ({
-      id: String(zone.id),
-      name: zone.name,
-      type: (zone.internal ? 'primary' : 'secondary') as DNSZone['type'],
-      status: 'active',
-      recordCount: zone.records ? Object.keys(zone.records).reduce((count: number, key: string) => {
-        const records = zone.records?.[key as keyof typeof zone.records];
-        return count + (Array.isArray(records) ? records.length : (records ? 1 : 0));
-      }, 0) : 0,
-      ttl: zone.ttl || 3600,
-      serial: zone.records?.soa?.serial || 0,
-      refresh: zone.records?.soa?.refresh || 3600,
-      retry: zone.records?.soa?.retry || 600,
-      expire: zone.records?.soa?.expire || 604800,
-      createdAt: zone.created_at || zone.createdAt || '',
-      updatedAt: zone.updated_at || zone.updatedAt || '',
-    }));
-  }, [zonesData]);
+  // Each zone is the proto Zone in protojson (#445). It carries no
+  // timestamps, so the table renders "—" for them; never fall back to
+  // `new Date()` — that made every zone look freshly minted on every render.
+  const zones: DNSZone[] = useMemo(() => (zonesData?.zones ?? []).map(readZone), [zonesData]);
 
   const stats = {
     total: zones.length,

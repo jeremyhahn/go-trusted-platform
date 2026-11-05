@@ -10959,7 +10959,7 @@ The CA pool signing threshold adapts dynamically based on threat conditions, pro
 The default threshold of 40% (vs. theoretical 33%) provides additional margin against correlated failures and sophisticated attacks.
 
 ```go
-// pkg/ca/adaptive_threshold.go
+// design sketch; not in the tree (would be pkg/ca/adaptive_threshold.go)
 
 // AdaptiveThresholdConfig defines threshold parameters
 type AdaptiveThresholdConfig struct {
@@ -11093,7 +11093,7 @@ func (m *AdaptiveThresholdManager) EvaluateThreshold() (*ThresholdChange, error)
 The system monitors for correlated signing patterns that might indicate vendor compromise or coordinated attack.
 
 ```go
-// pkg/ca/anomaly_detection.go
+// design sketch; not in the tree (would be pkg/ca/anomaly_detection.go)
 
 // AnomalyDetector identifies suspicious patterns in signing behavior
 type AnomalyDetector struct {
@@ -11292,7 +11292,7 @@ func (d *AnomalyDetector) DetectTimingCorrelation() []CorrelatedAnomaly {
 During elevated threat conditions, the threshold can be temporarily increased to provide additional security margin.
 
 ```go
-// pkg/ca/emergency_threshold.go
+// design sketch; not in the tree (would be pkg/ca/emergency_threshold.go)
 
 // EmergencyThresholdManager handles rapid threshold escalation
 type EmergencyThresholdManager struct {

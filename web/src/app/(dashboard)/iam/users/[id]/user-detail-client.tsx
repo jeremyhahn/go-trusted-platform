@@ -69,8 +69,8 @@ export default function UserDetailPage() {
     [isEditFormOpen, tenantId]
   );
 
-  // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-  const allRoles = (rolesData?.roles || []).map((r: any) => ({
+  // The list reply is the proto ListIAMRolesResponse in protojson (#445).
+  const allRoles = (rolesData?.roles || []).map((r) => ({
     id: r.id,
     name: r.name,
     description: r.description || '',

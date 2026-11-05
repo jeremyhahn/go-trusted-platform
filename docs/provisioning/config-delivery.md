@@ -1,6 +1,6 @@
 # Config Delivery (Post-Bootstrap / Production)
 
-> **Status: REFERENCE** · Last verified: 2026-10-15
+> **Status: REFERENCE** · Last verified: 2026-10-27
 > Post-bootstrap (production) config delivery: how installed devices fetch
 > config from a running control plane over authenticated HTTPS, with DANE,
 > Noise or SPKI trust bootstrap and EAB authentication.
@@ -22,7 +22,7 @@ At boot time, the device has no TLS trust store and no client certificate. Trust
 
 ## Authentication
 
-Config delivery uses EAB (External Account Binding) credentials for authentication. The device sends its EAB key ID and HMAC key, which the server validates against the EAB credential store. A failed EAB check answers 401 on `/provisioning/config` and 403 on `/provisioning/sign`.
+Config delivery uses EAB (External Account Binding) credentials for authentication. The device sends its EAB key ID and HMAC key (`eab_hmac`, **unpadded base64url**: the server decodes it with `base64.RawURLEncoding`), which the server validates against the EAB credential store. `eab_key_id`, `eab_hmac`, `nonce` and at least one of `ek_serial` / `mac_address` are required (400 otherwise). The nonce is checked before the EAB credential (`verifyNonceAndEAB`, `pkg/provisioning/configdelivery/service.go`). A failed EAB check answers 401 on `/provisioning/config` and 403 on `/provisioning/sign`.
 
 A nonce mechanism prevents replay attacks:
 1. Device requests nonce: `GET /api/v1/provisioning/config/nonce`
@@ -47,9 +47,19 @@ works for that device. After the profile is resolved, config delivery and
 remote signing require the validated credential's `ProfileID` to be the
 resolved profile's, and — when the profile names a tenant — its `TenantID` to
 be the profile's. A credential presented by a device that resolves to another
-profile, or to no profile at all, is refused with HTTP 403
+profile is refused with HTTP 403
 (`configdelivery: eab credential is not bound to this device's profile`); it never opens a
-pending session and never gets a digest signed.
+pending session and never gets a digest signed. On `/provisioning/config` a
+validated credential from a device that resolves to no profile at all is
+refused with the same 403; on `/provisioning/sign` no matched profile is a 409
+(see below).
+
+A pending (QR-mode) session is therefore opened only when the server holds no
+credential to bind: no profile service is wired, or no EAB service is wired
+(`ServiceParams.EABService` nil). The daemon and the webservice wire both from
+the service registry when the registry holds them (`pkg/api/daemon/daemon.go`,
+`pkg/webservice/v1/registry.go`); with no EAB service the EAB fields are still
+required but are **not validated**.
 
 ### EK Certificate Binding
 
@@ -65,8 +75,9 @@ mismatch`), and an undecodable presented certificate with HTTP 400.
 
 EK matching is **enforced by default** (`ServiceParams.RequireEKMatch`, nil meaning true). With
 enforcement on, a matched profile with no prestaged EK certificate is rejected
-(there is nothing to verify against). Setting `RequireEKMatch` to false (the
-private-repo escape hatch) falls back to EK-serial / MAC matching when the
+(there is nothing to verify against). No configuration key sets it: both production
+constructors leave it nil, so it is always enforced. Setting `RequireEKMatch`
+to false in code (the private-repo escape hatch) falls back to EK-serial / MAC matching when the
 matched profile has no prestaged EK certificate; a prestaged certificate is
 still binding even with enforcement off.
 
@@ -79,10 +90,11 @@ verifies against. It can be set through every transport surface:
 - **gRPC / Unix**: `DeviceService.CreateProfile` / `UpdateProfile` with
   `DeviceProfile.ek_cert` (PEM). A non-empty value that does not parse as a
   PEM X.509 certificate is rejected with `INVALID_ARGUMENT`.
-- **REST**: `POST/PUT /api/v1/device/profiles` (webservice) and
-  `POST/PUT /api/v1/devices/profiles` (daemon REST) accept `ek_cert` in the
+- **REST**: `POST /api/v1/device/profiles` / `PUT /api/v1/device/profiles/{id}`
+  (webservice) and `POST /api/v1/devices/profiles` /
+  `PUT /api/v1/devices/profiles/{id}` (daemon REST) accept `ek_cert` in the
   profile JSON body; malformed certificates are rejected with 400.
-- **QUIC**: `OpDeviceCreateProfile` (0x38) / `OpDeviceSetProfile` carry
+- **QUIC**: `OpDeviceCreateProfile` (0x38) / `OpDeviceSetProfile` (0x36) carry
   `ek_cert` on the profile wire structs.
 - **MCP**: the `profile_create` / `profile_update_by_id` tools accept
   `ek_cert`.
@@ -124,7 +136,7 @@ and the cross-transport error mapping.
 
 ## API Endpoints (REST)
 
-All endpoints are on the standard HTTPS port. The device-facing ones (nonce, config, sign, poll) carry no role guard, because a device has no client certificate at this stage: config and sign authenticate by EAB, sign also by the EK. The operator views (list, get, fulfill) take the `provisioning:read` / `provisioning:write` scopes (`registerProvisioningDeviceRoutes`, `pkg/webservice/v1/router/device.go`). Full details with the response envelope: [api-reference-rest.md](api-reference-rest.md).
+All endpoints are on the standard HTTPS port. The device-facing ones (nonce, config, sign, poll) carry no role guard, because a device has no client certificate at this stage: config and sign authenticate by EAB, sign also by the EK. They are mounted on the ungated router (`registerProvisioningDeviceRoutes`, `pkg/webservice/v1/router/device.go`). The operator views (list, get, fulfill) are mounted on the admin-gated router and take the `provisioning:read` / `provisioning:write` scopes (`registerProvisioningOperatorRoutes`, same file). Every response body below is the `payload` of the standard envelope (`{code, error, success, payload}`); full details: [api-reference-rest.md](api-reference-rest.md).
 
 ### Get Nonce
 
@@ -163,6 +175,18 @@ Response (no match — enter QR mode):
 }
 ```
 
+Both answers are 200; tell them apart by `status` versus `session_id`. The
+pending URL is `<BaseURL>/api/v1/provisioning/sessions/<id>`, where `BaseURL`
+is `https://<host>[:<port>]` (`ProvisionBaseURL`) or empty. Status codes: `400`
+missing field, missing or expired nonce, or undecodable EK certificate; `401`
+EAB validation failure; `403` EAB binding or EK binding failure
+(`writeFetchConfigError`, `pkg/provisioning/configdelivery/handler.go`).
+
+`platformctl provision fetch-config` and `provision interactive` send no
+`ek_cert` (the CLI request struct has no such field and there is no
+`--ek-cert` flag), so against the default `RequireEKMatch` a matched profile
+answers 403 to them.
+
 ### Sign Digest (remote Secure Boot resign)
 
 A bare-metal node configured with `secure-boot.resign-mode: remote` (see
@@ -200,8 +224,14 @@ profile's `secure-boot.db` block, signs the supplied digest via the platform KMS
 node can embed it in the UKI Authenticode signature and enroll it into the
 firmware signature database.
 
-Status codes: `400` malformed request, expired or missing nonce, unusable
-digest or undecodable EK certificate, `403` EAB or EK verification failure,
+`digest` must be 32, 48 or 64 bytes (SHA-256 / 384 / 512, chosen from the
+length, `hashAlgForDigest` in `pkg/api/daemon/remote_db_signer.go`);
+`key_ref` defaults to `db`. The `503` check runs first, before the request is
+validated.
+
+Status codes: `400` malformed request, expired or missing nonce, empty
+digest or undecodable EK certificate (a digest of any other length fails in
+the signer and answers `500`), `403` EAB or EK verification failure,
 `409` the device profile is not provisioned for remote signing (no profile
 matched, `key_ref` other than `db`, secure boot disabled, `resign-mode` not
 `remote`, or no DB key URI); the same 409 is returned when the KMS does not
@@ -237,6 +267,11 @@ Request (`session_id` is read from the body only when the path has none;
 Response:
 { "status": "fulfilled" }
 ```
+
+Sessions live in the service's memory and expire 30 minutes after creation
+(`defaultSessionTTL`, `ServiceParams.SessionTTL`). Poll and fulfill answer
+`404` for an unknown session or profile and `400` for an expired or already
+fulfilled session or a missing `profile_id` (`writeSessionError`).
 
 Sessions are also listed and inspected via
 `GET /api/v1/provisioning/sessions` and

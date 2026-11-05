@@ -93,8 +93,10 @@ tenant created without its roles therefore cannot hold anyone, and every
 registration's mirror failed with `iam.role: not_found`.
 
 - **Every IAM tenant carries its default roles.** `tenant.Manager.CreateTenant`
-  provisions them straight after creating the IAM tenant, through the SDK's
-  role reconcile (`SDK().Identity().IAM().Role().Reconcile`). It seeds the built-in
+  provisions them straight after creating the IAM tenant, through the role
+  reconciler (`iamRoleClient.Reconcile`, `pkg/tenant/manager.go`; the daemon
+  hands it the QuicBaaS IAM client's `Role()`,
+  `pkg/daemon/commands/serve_tenant.go`). It seeds the built-in
   roles (`so`, `admin`, `operator`, `user`, `auditor`, `custodian`) that are
   absent, never touches a custom role, and writes nothing on a tenant that
   already has them. A failure is `tenant.ErrDefaultRolesFailed` and rolls the
@@ -157,6 +159,14 @@ registration's mirror failed with `iam.role: not_found`.
   are unimplemented stubs ([cli.md](cli.md) §3), not a scope decision.
 
 ## System Overview
+
+> **Not implemented — legacy design.** Everything from here to the end of this
+> file describes a platform-side IAM module that does not exist. There is no
+> `pkg/iam/` package, no platform ABAC engine, no `__iam:` storage keys and no
+> `iam:` configuration section (`mode: server` / `mode: client`). Identities,
+> roles, policies and decisions live in the go-qrdb IAM service, reached through
+> the go-quicbaas SDK, as the sections above describe; REST authorization is in
+> [api.md](api.md) §8. These sections are kept as design history only.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐

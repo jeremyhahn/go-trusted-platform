@@ -126,7 +126,8 @@ booting machine ──▶ provisioning listener (bind-host in the provisioning z
                            1. FindByMACAddress
                            2. FindBySerial
                            3. FindMatchingProfile (prefix / model rules)
-                           └─ hit ⇒ the profile's config as YAML; miss ⇒ 404
+                           └─ hit ⇒ the profile's config as YAML; miss ⇒ 404;
+                              neither mac nor serial ⇒ 400 ErrMissingDeviceIdentifier
 ```
 
 The operator's query for the same answer is `FindConfigForDevice`
@@ -164,11 +165,23 @@ closed state machine:
 
 ```
 unknown → registered → installing → installed → activated → attested
-                    ↘            ↘           ↘           ↘
-                      quarantined ⇄ attested   suspended → revoked (terminal)
 ```
 
-`registered` may also go straight to `activated` for machines with no install
+The full table is `allowedTransitions` in `pkg/device/entities/device.go`:
+
+| From | To |
+|---|---|
+| `unknown` | `registered` |
+| `registered` | `installing`, `activated`, `quarantined`, `suspended`, `revoked` |
+| `installing` | `installed`, `quarantined`, `suspended`, `revoked` |
+| `installed` | `activated`, `quarantined`, `suspended`, `revoked` |
+| `activated` | `attested`, `quarantined`, `suspended`, `revoked` |
+| `attested` | `quarantined`, `suspended`, `revoked` |
+| `quarantined` | `attested`, `suspended`, `revoked` |
+| `suspended` | `attested`, `quarantined`, `revoked` |
+| `revoked` | none (terminal) |
+
+`registered` may go straight to `activated` for machines with no install
 step. `quarantined` and `suspended` both carry `PriorState`/`PriorZone` on the
 `Device` so remediation restores the machine to where it was, rather than to a
 guess.
@@ -210,6 +223,13 @@ See [`docs/attestation/architecture.md`](../attestation/architecture.md),
 
 `POST /api/v1/device/activate` is mTLS-authenticated; the device serial comes
 from the client certificate, never from the body.
+
+gRPC also declares `DeviceGRPCService.ActivateDevice`
+(`pkg/api/daemon/device_grpc_service.go`). It takes the serial from the
+request, looks up the device and its matching profile, and returns the
+profile's production VLAN with `activation_status: activated`. It does not
+run the activation described below: no state transition, no SDN or switch-port
+move.
 
 The device side is platformd's `FetchProfileAndActivate`: it presents the
 node's IDevID certificate and signs the TLS 1.3 handshake with the IDevID key
@@ -476,9 +496,13 @@ any other control plane every transport answers `ErrLifecycleUnenforced`.
    EK serial / MAC, not by a tenant filter.
 5. **The provisioning config-fetch routes are unauthenticated at the transport
    layer.** `pkg/webservice/v1/router/device.go` registers
-   `/api/v1/provisioning/*` with the comment *"These routes are UNPROTECTED (no
-   mTLS) since devices at boot have no client cert"* — they are EAB- and
-   EK-authenticated at the application layer instead. Those routes belong to
+   `/api/v1/provisioning/config`, `/config/nonce`, `/sign` and
+   `/sessions/{id}/poll` with no transport guard, because a machine at boot has
+   no client certificate — they are EAB- (and, for `/sign`, EK-) authenticated
+   at the application layer instead. The operator routes on the same prefix are
+   scoped: `GET /provisioning/sessions` and `/sessions/{id}` need
+   `provisioning:read`, and `POST /sessions/{id}/fulfill` needs
+   `provisioning:write`. Those routes belong to
    the config-delivery feature; they are named here because they sit on the
    same router and an operator reading firewall rules will see them adjacent to
    device routes. The device feature's own unauthenticated route,

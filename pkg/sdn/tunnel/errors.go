@@ -227,6 +227,61 @@ func (e *ErrRekeyFailed) Unwrap() error {
 	return e.Cause
 }
 
+// ErrIPsecSweepFailed is returned when the manager cannot list or remove the
+// stale ESP state an earlier incarnation installed. Op names the step.
+type ErrIPsecSweepFailed struct {
+	Op    string
+	Cause error
+}
+
+func (e *ErrIPsecSweepFailed) Error() string {
+	return "ipsec sweep: " + e.Op + ": " + e.Cause.Error()
+}
+
+func (e *ErrIPsecSweepFailed) Unwrap() error {
+	return e.Cause
+}
+
+// ErrIPsecInventory is returned when the record of the ESP pairs the
+// platform installed cannot be read or written. Op names the step.
+type ErrIPsecInventory struct {
+	Path  string
+	Op    string
+	Cause error
+}
+
+func (e *ErrIPsecInventory) Error() string {
+	return "ipsec inventory " + e.Path + ": " + e.Op + ": " + e.Cause.Error()
+}
+
+func (e *ErrIPsecInventory) Unwrap() error {
+	return e.Cause
+}
+
+// ErrIPsecForeignPolicy is returned when the policy installed at a key the
+// tunnel's ESP pair needs is not one espPolicy builds (ownedPolicyShape):
+// another installer's. It is neither adopted nor replaced.
+type ErrIPsecForeignPolicy struct {
+	Src, Dst string
+	Dir      string
+}
+
+func (e *ErrIPsecForeignPolicy) Error() string {
+	return "ipsec policy " + e.Src + " -> " + e.Dst + " " + e.Dir + " is another installer's"
+}
+
+// ErrIPsecForeignSA reports an SA at the key the platform installs under
+// that is not of the shape it builds: another installer's, which the
+// platform neither adopts nor replaces.
+type ErrIPsecForeignSA struct {
+	Dst string
+	SPI int
+}
+
+func (e *ErrIPsecForeignSA) Error() string {
+	return "ipsec SA " + e.Dst + " spi " + strconv.Itoa(e.SPI) + " is another installer's"
+}
+
 // ErrRekeyUnsupported is returned when Rekey is called on a tunnel whose
 // transport has no key to rotate.
 type ErrRekeyUnsupported struct {

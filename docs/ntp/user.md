@@ -337,8 +337,9 @@ backup.example.org    server  unreachable  0        64s   0      0s       0.0000
   `combined` (contributing), `excluded`, `unreachable`, `falseticker`,
   `jittery`.
 - **`REACH`** is an 8-bit register printed in decimal. **`255` means the last
-  eight polls all succeeded; `0` means nothing has been heard.** `127` means the
-  most recent poll failed and the seven before it succeeded.
+  eight polls all succeeded; `0` means nothing has been heard.** Each poll
+  shifts the register left and records its result in the lowest bit, so `254`
+  means the most recent poll failed and `127` means the oldest of the eight did.
 - **`falseticker` is the one to investigate.** It means that source disagrees
   with the majority. On a platform where time is a trust primitive, that is
   either a broken server or a hostile one.

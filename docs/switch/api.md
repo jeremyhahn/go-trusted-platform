@@ -1,6 +1,6 @@
 # Managed Switch Provisioning — API
 
-> **Status: NORMATIVE** · Scope: physical-switch routes on every transport · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: physical-switch routes on every transport · Last verified: 2026-10-27
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 >
@@ -18,7 +18,7 @@ appears here.
 
 - **Unix is gRPC over a Unix domain socket**, so gRPC and Unix share a column.
   `platformv1.RegisterSwitchServiceServer` is called for **both** the TCP gRPC
-  server and the UDS server (`pkg/api/daemon/daemon.go:1031,1034`).
+  server and the UDS server (`pkg/api/daemon/daemon.go:1054,1057`).
 - gRPC: `SwitchService`, **5 RPCs** (`pkg/api/grpc/proto/switch.proto`).
 - REST: base path `/api/v1/switches`
   (`pkg/webservice/v1/rest/switch/router.go`).
@@ -72,7 +72,7 @@ client that sends a raw slash will match a different route or none.
 | Get port VLAN only | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | in-process Go only: `Manager.GetPortVLAN` |
 
 `Manager.GetPortVLAN` is part of the `Manager` interface, implemented by the
-SSH driver, and exposed on **no transport at all**. Its information is a strict
+SSH driver (and the no-op manager), and exposed on **no transport at all**. Its information is a strict
 subset of `GetPortStatus`, which is presumably why — but it is a real interface
 method with no route, so it is a row here rather than an omission.
 
@@ -91,9 +91,9 @@ holds only while the service is wired — see §9.
 | Configure switch (VLANs + ports) | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | in-process Go only: `Configurator.Configure` |
 | Verify switch against config | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | in-process Go only: `Configurator.Verify` |
 
-**Unlike §3, this is a decision rather than a gap.** `Service` deliberately
-exposes only `Manager`; the source states *"The Service layer doesn't execute
-ConfigureVLANs/ConfigurePorts (no Configurator exposed)."* The `Configurator`
+**Unlike §3, this is a decision rather than a gap.** `Service`
+(`pkg/switch/service.go`) deliberately exposes only `Manager(name)` and
+`Close()`; it holds no `Configurator`. The `Configurator`
 is reached exactly once, from `pkg/bootstrap/orchestrator.go::configureSwitch`,
 because VLAN creation writes `copy running-config startup-config` and is not
 something a runtime API should offer ([architecture.md](architecture.md) §2.1).
@@ -145,14 +145,15 @@ service returns. Any other `status` is an error
 The category opcode is a **single byte followed by a sub-opcode byte**: the
 daemon reads `req.Payload[0]` as the sub-opcode and treats `req.Payload[1:]` as
 the sub-request. **The sub-request is the generated `platform.v1` protobuf
-message**, MessagePack-encoded — the same message gRPC uses. The source is
-explicit:
+message**, MessagePack-encoded — the same message gRPC uses: the SDK QUIC
+adapter encodes the generated request struct directly under the sub-opcode, and
+the daemon decodes `payload[1:]` into the same message
+(`pkg/api/daemon/quic_switch.go:25-30`, `pkg/api/daemon/quic_app_services.go`).
+The protobuf messages are the wire contract.
 
-> *"The SDK QUIC transport adapter routes every SwitchService method to
-> OpSwitchCategory … and encodes the generated platform.v1 protobuf request
-> struct directly under the category sub-opcode. The daemon therefore decodes
-> the payload into the SAME platform.v1 message the SDK sent … the protobuf
-> messages ARE the wire contract (identical to the device surface)."*
+An unknown category answers `StatusNotImplemented`; a category whose servicer is
+not set answers `StatusUnavailable` with `ErrQUICServiceUnavailable` — both are
+checked before the payload (`quic_app_services.go`).
 
 An empty payload is `StatusInvalidRequest` with
 `ErrQUICMissingField{Field:"sub_opcode"}`.
@@ -225,7 +226,9 @@ own resource.
 **MCP requires the same `switch` scopes (#304).** `switch_list_ports` and
 `switch_port_status` need `switch:read`; `switch_enable_port`,
 `switch_disable_port` and `switch_set_vlan` need `switch:write`
-(`pkg/api/mcp/authz.go`). A caller without the scope gets `PermissionDenied`
+(each tool's `scope` on its `switchTools` entry in
+`pkg/api/mcp/switch_tools.go`, which `pkg/api/mcp/authz.go` loads into the
+catalog). A caller without the scope gets `PermissionDenied`
 (`-32003`) and the tool never runs. Switch ports are platform-level: no
 transport scopes them to a tenant.
 
@@ -300,7 +303,7 @@ The gRPC service is registered on both the TCP and UDS servers with an
 > *"Create the Switch gRPC service. It has no switch backend yet, so every
 > method answers Unavailable (not configured); the QUIC opcodes, the MCP
 > tools and the embedded transport call this same servicer."*
-> — `pkg/api/daemon/daemon.go:1026`
+> — `pkg/api/daemon/daemon.go:1049`
 
 Until that is wired:
 
@@ -317,7 +320,7 @@ Until that is wired:
 anything else.**
 
 The `switches:` config block is parsed into `app.App.SwitchConfigs`
-(`pkg/app/app.go:334`) and nothing constructs a `Service` from it. The
+(`pkg/app/app.go:371`) and nothing constructs a `Service` from it. The
 bootstrap `Configurator` path is separate and does run.
 
 ---

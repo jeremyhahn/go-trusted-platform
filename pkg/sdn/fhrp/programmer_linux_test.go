@@ -18,11 +18,13 @@ package fhrp
 import (
 	"net"
 	"net/netip"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	vnl "github.com/vishvananda/netlink"
+	"golang.org/x/sys/unix"
 )
 
 // The kernel-facing paths are exercised end to end by
@@ -57,6 +59,40 @@ func TestRawTransport_UnknownInterfaceFailsClosed(t *testing.T) {
 	require.Error(t, err)
 	_, err = NewRawTransport().Open("no-such-if-585", FamilyIPv6, netip.MustParseAddr("fd00::2"))
 	require.Error(t, err)
+}
+
+// failingRawConn is a syscall.RawConn whose Control never reaches the fd.
+type failingRawConn struct{ err error }
+
+func (f failingRawConn) Control(func(uintptr)) error    { return f.err }
+func (f failingRawConn) Read(func(uintptr) bool) error  { return f.err }
+func (f failingRawConn) Write(func(uintptr) bool) error { return f.err }
+
+func loopbackRawConn(t *testing.T) syscall.RawConn {
+	t.Helper()
+	pc, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, pc.Close()) })
+	rc, err := pc.(*net.UDPConn).SyscallConn()
+	require.NoError(t, err)
+	return rc
+}
+
+func TestBindToDevice_ScopesTheSocketToTheInterface(t *testing.T) {
+	rc := loopbackRawConn(t)
+	require.NoError(t, bindToDevice(rc, "lo"))
+	var bound string
+	var sockErr error
+	require.NoError(t, rc.Control(func(fd uintptr) {
+		bound, sockErr = unix.GetsockoptString(int(fd), unix.SOL_SOCKET, unix.SO_BINDTODEVICE)
+	}))
+	require.NoError(t, sockErr)
+	assert.Equal(t, "lo", bound)
+}
+
+func TestBindToDevice_ReportsFailures(t *testing.T) {
+	require.Error(t, bindToDevice(loopbackRawConn(t), "no-such-if-596"), "an unknown interface is refused")
+	assert.ErrorIs(t, bindToDevice(failingRawConn{err: syscall.EBADF}, "lo"), syscall.EBADF, "a socket that cannot be reached is refused")
 }
 
 func TestAddrOf(t *testing.T) {

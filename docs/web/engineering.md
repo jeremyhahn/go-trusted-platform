@@ -1,6 +1,6 @@
 # Web Console and Web Server — Engineering Contract
 
-> **Status: NORMATIVE** · Scope: `pkg/webserver/`, `pkg/webservice/`, `web/` · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: `pkg/webserver/`, `pkg/webservice/`, `web/` · Last verified: 2026-10-27
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 >
@@ -31,17 +31,21 @@ tag and fed from `pkg/webserver/embed/dist` by the Makefile.
 
 | File | Holds |
 |---|---|
-| `webserver_v1.go` | `WebServerV1`, `NewWebServerV1`, `Run`, `Shutdown`, `buildRoutes`, `serveStaticFiles`, `serveEmbeddedFiles`, `serveFilesystemFiles`, `serveEmbeddedFile`, `findPlaceholderFallback`, `findPlaceholderFallbackFS`, `reverseProxyHandler`, `startHTTP`, `startHTTPS`, `endpoints`, `debugRoutes`, `CertReloader`, `validateHostHeader`, `ensureDirectoryExists`, `createDefaultIndexFile`, `addAltSvcHeader` |
+| `webserver_v1.go` | `WebServerV1`, `NewWebServerV1`, `Run`, `Shutdown`, `buildRoutes`, `serveStaticFiles`, `serveEmbeddedFiles`, `serveFilesystemFiles`, `serveEmbeddedFile`, `findPlaceholderFallback`, `findPlaceholderFallbackFS`, `reverseProxyHandler`, `startHTTP`, `startHTTPS`, `plaintextHandler`, `redirectToTLS`, `servedHosts`, `debugRoutes`, `CertReloader`, `ensureDirectoryExists`, `createDefaultIndexFile`, `addAltSvcHeader` |
 | `types.go` | `DefaultConfig`, `DefaultConfigRSA`, `DefaultConfigECDSA`, `DefaultConfigEd25519` |
+| `edge.go` | Surface and listener limits (#571): `resolveSurface`, `resolveLimits`, `ListenerLimits`, the `Edge*` defaults, the rate limiter, `misdirectedUnlessServed`; `ErrUnknownSurface`, `ErrEdgeSurfaceEmpty`, `ErrProvisioningSurfaceEmpty` |
+| `provisioning.go` | `ValidateProvisioningSurface` and its typed refusals (#177) |
+| `cert_reload_errors.go` | Typed errors for certificate hot-reload |
 | `loadbalancer.go` | `LoadBalancerFunc`, `RoundRobinBalancer` |
 | `mtls_client.go`, `mtls_signer.go` | mTLS client and signer helpers |
 | `util.go`, `errors.go` | helpers; `WrappedError` |
 
 `pkg/webservice/v1/` — configuration, routing and middleware:
-`config.go`, `router.go`, `registry.go`, `service_registry.go`, `keycache.go`,
+`config.go`, `types.go`, `errors.go`, `authz.go`, `router.go`, `registry.go`,
+`service_registry.go`, `keycache.go`, `attestation_capture.go`,
 `router/` (per-group routers), `middleware/` (`cors.go`, `mtls.go`, `iam/`,
 `tenant/`), `jwt/`, `response/`, `rest/<service>/`, `device/`, `bmc/`,
-`invitation/`.
+`invitation/`, `login/`, `webauthn/`, `adminclaim/`, `system/`.
 
 ### 1.3 `web/` — the console
 
@@ -52,6 +56,7 @@ web/
 │   │   ├── layout.tsx, page.tsx, providers.tsx, globals.css, fonts/
 │   │   ├── auth/webauthn/, auth/login/, logout/, protected/
 │   │   ├── admin/tenant/, admin/invitations/
+│   │   ├── (auth)/                 # route group: layout.tsx only, no pages
 │   │   └── (dashboard)/            # route group: layout + AuthGuard
 │   │       ├── dashboard/ account/security/
 │   │       ├── iam/ tenant/ ca/ kms/ devices/ attestation/ tpm/
@@ -59,20 +64,24 @@ web/
 │   ├── components/{ui,layout,features,security,brand}/, theme-*.tsx
 │   ├── contexts/AuthContext.tsx    # the only auth implementation
 │   ├── hooks/{index.ts,use-toast.ts,...}   # index.ts re-exports AuthContext
-│   ├── lib/utils.ts
+│   ├── lib/{utils.ts,number-field.ts,device-*.ts,compute-state.ts,sdn-wire.ts,...}
+│   ├── test/control-plane-fetch.tsx    # shared vitest helper
 │   ├── types/*.ts
-│   └── utils/{cookie.ts,jwt.ts,getBaseUrl.ts,dynamic-route.ts,auth-factors-api.ts}
+│   └── utils/{cookie.ts,jwt.ts,session.ts,errors.ts,getBaseUrl.ts,dynamic-route.ts,auth-factors-api.ts,...}
 ├── e2e/                            # Playwright E2E (mocked backend)
 ├── next.config.mjs, tailwind.config.ts, playwright.config.ts,
-│   playwright.integration.config.ts, package.json, Makefile
+│   playwright.integration.config.ts, vitest.config.ts, package.json, Makefile
 ```
 
-~205 `.tsx` files across roughly 70 pages. **Correction:** the pre-migration
-`architecture.md` describes six pages under a flat `src/app/` and a
-`(auth)` route group. `(auth)` does not exist; the authenticated surface is the
-`(dashboard)` group and the legacy `admin/`, `protected/`, `logout/`,
-`auth/webauthn/`, `auth/login/` pages sit outside it. `control-panel.md`'s
-`src/lib/api/` layer does not exist either — `src/lib/` holds `utils.ts` only.
+~225 `.tsx` files across roughly 90 pages. **Correction:** the pre-migration
+`architecture.md` describes six pages under a flat `src/app/` and an
+`(auth)` route group holding the auth pages. `(auth)` holds only a
+`layout.tsx`; the authenticated surface is the `(dashboard)` group and the
+legacy `admin/`, `protected/`, `logout/`, `auth/webauthn/`, `auth/login/` pages
+sit outside both. `control-panel.md`'s `src/lib/api/` layer does not exist
+either — `src/lib/` holds pure helpers (`utils.ts`, `number-field.ts`, the
+device, compute and SDN wire mappers) with their vitest files, and no API
+client.
 
 ## 2. Exported surface
 
@@ -102,23 +111,33 @@ var ErrLoadTlsCerts, ErrBindPort error
 without a CA terminates the process; there is no error return.
 
 **`Run()` blocks** until `Shutdown()` sends on `closeChan`. `Shutdown` allows
-5 seconds for `httpServer.Shutdown` and does **not** stop the HTTP/3 server —
-`h3Server` is a local in `startHTTPS` with no handle kept.
+one 5-second context for the plaintext and TLS `http.Server.Shutdown` calls
+and the HTTP/3 server. `startHTTPS` keeps the HTTP/3 server, its UDP socket and
+a `done` channel in `server.h3`; `shutdownHTTP3` drains it with
+`http3.Server.Shutdown(ctx)` (GOAWAY, then wait for in-flight requests), falls
+back to `Close` (which aborts them) when the drain fails or the context
+expires, waits on `done` for `Serve` to return, then closes the UDP socket so
+the port is released. A failed step is an `ErrHTTP3Shutdown` (`drain`,
+`close`, `socket`) that `Shutdown` logs.
 
 Server timeouts (`webserver_v1.go`):
 `HTTP_CLIENT_TIMEOUT` 10s, `HTTP_SERVER_READ_TIMEOUT` 5s,
-`HTTP_SERVER_WRITE_TIMEOUT` 30s, `HTTP_SERVER_IDLE_TIMEOUT` 120s.
+`HTTP_SERVER_WRITE_TIMEOUT` 30s, `HTTP_SERVER_IDLE_TIMEOUT` 120s. The three
+server values are the defaults `resolveLimits` (`edge.go`) applies when the
+entry's `read-timeout`, `write-timeout` or `idle-timeout` is unset (§6).
 
-**`HTTP_SERVER_WRITE_TIMEOUT` is 30 seconds and applies to every response**,
-including any streaming endpoint mounted under `/api/v1`. A stream that needs
-to run longer than 30s cannot, on this server.
+**The write timeout applies to every response on the listener**, including any
+streaming endpoint mounted under `/api/v1`. A stream that needs to run longer
+than the default 30s needs a larger `write-timeout` on that entry.
+
+`Shutdown` drains the plaintext and TLS servers and closes the rate limiter.
 
 ## 3. Invariants
 
 1. **`buildRoutes()` builds a fresh `mux.Router` and swaps it under
    `routerMutex`**, then re-wraps it in `addAltSvcHeader`. It is called once by
    `Run()`, and is written to be safe to call again at runtime.
-2. **`/v2` is registered on the root router before the `/api/v1` subrouter**,
+2. **On the `full` surface, `/v2` is registered on the root router before the `/api/v1` subrouter**,
    because the OCI distribution specification mandates the host root. It goes
    through the same `v1.Router` (`RegisterRootRoutes`) so it shares the API's
    gates; the root router is walked by its own authorization audit
@@ -132,9 +151,10 @@ to run longer than 30s cannot, on this server.
    instead of a bare 404. `/platform/service-registry` is deliberately exempt —
    it would otherwise be masked by its own stub.
 5. **`isNonSPAPath` is checked before any SPA fallback**, on both the embedded
-   and the filesystem path. Prefixes: `/api/`, `/_next/`, `/static/`.
-6. **`isAPIPath` decides 404 shape**: `/api/` prefix gets JSON, everything else
-   gets `http.NotFound`.
+   and the filesystem path. It is `apiPathPrefixes` (`/api/`, `/v1/`, `/v2/`,
+   `/.well-known/`) plus `staticAssetPathPrefixes` (`/_next/`, `/static/`).
+6. **`isAPIPath` decides 404 shape**: an `apiPathPrefixes` path gets JSON,
+   everything else gets `http.NotFound`.
 7. **The placeholder walk goes deepest-segment-first** and stops at the first
    `__placeholder__/index` that exists. Its client-side counterpart is
    `resolveDynamicId`, which trusts `useParams()` unless the value is missing or
@@ -188,6 +208,10 @@ presentation**:
 | Situation | Behavior |
 |---|---|
 | `_ca == nil` at construction | `logger.FatalError` — process exits |
+| Unknown `surface` value | `logger.FatalError(ErrUnknownSurface)` at construction |
+| Plaintext-only listener off loopback | `logger.FatalError(ErrPlaintextExposure)` at construction |
+| `edge` surface with no ACME server and no virtual hosts | `logger.FatalError(ErrEdgeSurfaceEmpty)` in `buildRoutes` |
+| `provisioning` surface whose route cannot mount | `logger.FatalError(ErrProvisioningSurfaceEmpty)` in `buildRoutes` |
 | TLS config or cert-reloader construction fails | `logger.FatalError` |
 | `certificate.acme.cross-sign.directory` is not a parseable FQDN | `logger.FatalError` |
 | HTTP or HTTPS listener cannot bind | `logger.Fatalf` |
@@ -218,7 +242,7 @@ services it hosts):
 
 | Condition | Status | Body |
 |---|---|---|
-| Miss under `/api/` | 404 | `{"error":"not found","path":"…","message":"the requested API endpoint does not exist"}` |
+| Miss under `/api/`, `/v1/`, `/v2/` or `/.well-known/` | 404 | `{"error":"not found","path":"…","message":"the requested API endpoint does not exist"}` |
 | Miss under `/_next/` or `/static/` | 404 | `http.NotFound` plain text |
 | Miss elsewhere, no SPA index on disk | 404 | plain text |
 | Embedded file stat failure | 500 | `Internal Server Error` plain text |
@@ -317,7 +341,7 @@ root. `<install-dir>` is `/var/lib/trusted-platform` in the shipped installer.
 make build WITH_WEB=1
 ```
 
-`WITH_WEB=1` adds the `platform_web` build tag (`Makefile:276`) and triggers
+`WITH_WEB=1` adds the `platform_web` build tag (`Makefile:277`) and triggers
 `_web-embed-prepare`, which runs `npm install && npm run build` in
 `sdk/javascript` and then in `web/`, and copies `web/out/*` into
 `pkg/webserver/embed/dist` (`WEB_EMBED_DIR`). **`WITH_WEB` defaults to `0`** —
@@ -355,6 +379,7 @@ and `embedding.md` all show `yarn install` / `yarn dev` / `yarn build`.
 | `start` | `next start` — unused; there is no server runtime |
 | `lint` | `eslint src` |
 | `typecheck` | `tsc --noEmit` |
+| `test:unit` | `vitest run` |
 | `test` / `test:e2e` | `playwright test` |
 | `test:e2e:ui` / `:headed` / `:debug` | `playwright test --ui` / `--headed` / `--debug` |
 

@@ -15,9 +15,9 @@ package kvstore
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 )
 
@@ -57,7 +57,7 @@ func (d *InvitationDAO) GetByToken(ctx context.Context, token string) (*entities
 	}
 
 	var invitation entities.Invitation
-	if err := json.Unmarshal(results[0].Data, &invitation); err != nil {
+	if err := datastore.DecodeEntity(results[0].Data, &invitation); err != nil {
 		return nil, ErrDeserializationFailed{EntityType: entityTypeInvitation, Cause: err}
 	}
 
@@ -77,7 +77,7 @@ func (d *InvitationDAO) getInvitationByTokenScan(ctx context.Context, token stri
 
 		for _, entity := range svcEntities {
 			var invitation entities.Invitation
-			if err := json.Unmarshal(entity.Data, &invitation); err != nil {
+			if err := datastore.DecodeEntity(entity.Data, &invitation); err != nil {
 				d.logger.Warn("Failed to deserialize invitation", "id", entity.ID, "error", err)
 				continue
 			}
@@ -112,7 +112,7 @@ func (d *InvitationDAO) GetByEmail(ctx context.Context, email string) (*entities
 	}
 
 	var invitation entities.Invitation
-	if err := json.Unmarshal(results[0].Data, &invitation); err != nil {
+	if err := datastore.DecodeEntity(results[0].Data, &invitation); err != nil {
 		return nil, ErrDeserializationFailed{EntityType: entityTypeInvitation, Cause: err}
 	}
 
@@ -132,7 +132,7 @@ func (d *InvitationDAO) getInvitationByEmailScan(ctx context.Context, email stri
 
 		for _, entity := range svcEntities {
 			var invitation entities.Invitation
-			if err := json.Unmarshal(entity.Data, &invitation); err != nil {
+			if err := datastore.DecodeEntity(entity.Data, &invitation); err != nil {
 				d.logger.Warn("Failed to deserialize invitation", "id", entity.ID, "error", err)
 				continue
 			}
@@ -168,7 +168,7 @@ func (d *InvitationDAO) GetByTenant(ctx context.Context, tenantID string) ([]*en
 
 		for _, entity := range svcEntities {
 			var invitation entities.Invitation
-			if err := json.Unmarshal(entity.Data, &invitation); err != nil {
+			if err := datastore.DecodeEntity(entity.Data, &invitation); err != nil {
 				d.logger.Warn("Failed to deserialize invitation", "id", entity.ID, "error", err)
 				continue
 			}
@@ -204,7 +204,7 @@ func (d *InvitationDAO) GetPendingByTenant(ctx context.Context, tenantID string)
 
 		for _, entity := range svcEntities {
 			var invitation entities.Invitation
-			if err := json.Unmarshal(entity.Data, &invitation); err != nil {
+			if err := datastore.DecodeEntity(entity.Data, &invitation); err != nil {
 				d.logger.Warn("Failed to deserialize invitation", "id", entity.ID, "error", err)
 				continue
 			}

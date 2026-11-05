@@ -1,7 +1,7 @@
 # vTPM Configuration
 
 > **Status: REFERENCE** · Last verified: 2026-10-13
-> The `vtpm:` section of the platformd config (`pkg/vtpm/config.go`, `App.VTPMConfig` in `pkg/app/app.go:488`).
+> The `vtpm:` section of the platformd config (`pkg/vtpm/config.go`, `App.VTPMConfig` in `pkg/app/app.go`).
 
 ## Configuration File
 
@@ -50,10 +50,10 @@ Directory structure:
 **Notes:**
 - The vTPM service reads only `ovmf-vars`: it is copied into each bundle's
   NVRAM, and Secure Boot keys are enrolled into that copy
-  (`pkg/vtpm/service.go:235`, `:476`).
+  (`pkg/vtpm/service.go:236`, `:477`).
 - `ovmf-code` and `ovmf-code-secure` are not read by the vTPM service. The
   firmware a VM boots comes from the compute service's own OVMF settings
-  (`pkg/compute/config.go:306`).
+  (`OVMFCode`, `OVMFCodeSecure` and `OVMFVars` in `pkg/compute/config.go`).
 
 ### PCR Banks
 
@@ -85,7 +85,7 @@ Supported values:
 
 `secure-boot-keys-dir` is only checked for existence by `Validate`; the service
 reads no keys from it. Every bundle gets freshly generated keys in its own
-`secure-boot-keys/` directory (`pkg/vtpm/service.go:184`):
+`secure-boot-keys/` directory (`pkg/vtpm/service.go:185`):
 
 ```
 {base-dir}/bundles/{id}/secure-boot-keys/

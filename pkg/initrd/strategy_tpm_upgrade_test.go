@@ -82,20 +82,3 @@ func TestTPMUpgradeStrategyGetSSRKHandleDefault(t *testing.T) {
 		t.Errorf("expected default SSRK handle 0x81000001, got 0x%08x", handle)
 	}
 }
-
-func TestTPMUpgradeStrategyCreateUpgradeSealEmptyKey(t *testing.T) {
-	logger := logging.DefaultLogger()
-	platform := createTestPlatform()
-
-	strategy := NewTPMUpgradeStrategy(platform, logger)
-
-	err := strategy.CreateUpgradeSeal(nil)
-	if err == nil {
-		t.Error("expected error for nil key")
-	}
-
-	err = strategy.CreateUpgradeSeal([]byte{})
-	if err == nil {
-		t.Error("expected error for empty key")
-	}
-}

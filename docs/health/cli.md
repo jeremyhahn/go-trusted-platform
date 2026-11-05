@@ -16,7 +16,7 @@ platformctl health    Show platform health status
 ```
 
 **One verb, no subcommands, no positional arguments.** It is registered directly
-on the `platformctl` root (`root.go:157`), not under a command group.
+on the `platformctl` root (`root.go:163`), not under a command group.
 
 ## 2. Flags
 
@@ -32,7 +32,7 @@ The component list is fetched either way: `--detailed` is passed through to the
 RPC as `GetHealthRequest.Detailed`, which the server ignores, and it gates the
 table rendering client-side.
 
-The unhealthy lines exist because a bare "Overall Health: degraded" names
+The unhealthy lines exist because a bare "Overall Health: DEGRADED" names
 nothing, so finding the cause took a second command that an operator had to
 know to run. A fleet ran time-unsynced from enrolment that way (#509): the
 `ntp` component was reporting `time-unsynced` the whole time, one flag away
@@ -82,7 +82,11 @@ The overall line is colour-coded by status:
 | `daemonsvc.HealthStatusHealthy` | success (green) |
 | `daemonsvc.HealthStatusDegraded` | warning (yellow) |
 | `daemonsvc.HealthStatusUnhealthy` | error (red) |
-| anything else | info |
+| anything else — in practice `unknown`, which arrives as `daemonsvc.HealthStatusUnspecified` (`"UNKNOWN"`) | info |
+
+The SDK spells the statuses in upper case: `HEALTHY`, `DEGRADED`,
+`UNHEALTHY`, `UNKNOWN` (`sdk/go/services/daemon/types.go`). That is what the
+overall line prints and what `--output json` carries in `status`.
 
 `--output json` is the form to parse. The `table` renderer is for humans and its
 columns are not a stable interface.
@@ -121,7 +125,7 @@ platformctl --server platform.example.com:<grpc-port> --output json health
 platformctl --transport embedded health --detailed
 
 # Gate a script on the verdict (exit status will NOT do it for you)
-test "$(platformctl --output json health | jq -r .status)" = "healthy"
+test "$(platformctl --output json health | jq -r .status)" = "HEALTHY"
 ```
 
 ## 6. What the CLI does not cover

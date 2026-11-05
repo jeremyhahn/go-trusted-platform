@@ -1,6 +1,6 @@
 # Managed Switch Provisioning — Architecture
 
-> **Status: NORMATIVE** · Scope: `pkg/switch/`, `pkg/webservice/v1/rest/switch/`, `pkg/api/daemon/switch_grpc_service.go`, `pkg/api/daemon/quic_switch.go`, `sdk/go/services/switch/` · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: `pkg/switch/`, `pkg/webservice/v1/rest/switch/`, `pkg/api/daemon/switch_grpc_service.go`, `pkg/api/daemon/quic_switch.go`, `sdk/go/services/switch/` · Last verified: 2026-10-27
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 
@@ -65,7 +65,7 @@ destroyed on every error path.
 |---|---|
 | **Trust the switch host key on first connect (TOFU)** | The first connection is exactly when a man-in-the-middle is cheapest, and the thing being handed over is a fabric administrator credential. `NewSSHExecutor` fails closed: *"It fails closed when no host-key pins are provisioned: the legacy insecure host-key-ignore behaviour is gone."* Operators pre-populate pin envelopes via the xkms tooling. |
 | **Hold the SSH private key as a `[]byte`** | A fabric admin key sitting in ordinary heap memory outlives its use and lands in core dumps. `loadSSHKey` seals the PEM into a `secure.Buffer`, parses through `keys.ParsePEM`, and hands ownership to the session; every failure path calls `key.Destroy()`. |
-| **One interface covering both setup and runtime** | Setup is declarative, whole-switch, and writes `copy running-config startup-config`. Runtime is imperative, single-port, and must not persist. Merging them would make an activation-time VLAN move a config-save event on a production switch. `Service` deliberately exposes only `Manager` — the source note says *"The Service layer doesn't execute ConfigureVLANs/ConfigurePorts (no Configurator exposed)."* |
+| **One interface covering both setup and runtime** | Setup is declarative, whole-switch, and writes `copy running-config startup-config`. Runtime is imperative, single-port, and must not persist. Merging them would make an activation-time VLAN move a config-save event on a production switch. `Service` deliberately exposes only `Manager(name)` and `Close()` and holds no `Configurator`; the only `Configurator` caller is the bootstrap orchestrator (§4.1). |
 | **A vendor `switch` statement** | Adding a vendor would touch dispatch logic in two places and grow a branch each time. Two registries mean a new vendor is one map entry plus one factory ([engineering.md](engineering.md) §7). |
 | **A per-vendor structured API (NETCONF, gNMI, REST)** | Real fleets are heterogeneous and older switches carry none of them. The CLI is the one interface every candidate device has. The cost is output parsing, which is confined to five regexes and one fixed-width table parser and is the acknowledged weak point (§6). |
 | **Eager SSH connection at service construction** | A daemon would fail to start because a switch was rebooting. `ensureConnected` dials on first use and reuses the session afterwards. The cost is that a bad credential is not discovered until the first port operation. |
@@ -171,11 +171,26 @@ The device activation path calls into this feature:
 
 ```
 POST /api/v1/device/activate       (docs/device/)
-   └─ Handler.transitionSwitchPort
-        ├─ switch name + port from the request context (not from the profile)
-        ├─ SwitchServiceProvider.Manager(switchName)
-        └─ Manager.SetPortVLAN(ctx, port, admittedVLAN)
+   ├─ Handler.prepareSwitchTransition
+   │    ├─ switch name + port from the request context (not from the profile)
+   │    └─ SwitchServiceProvider.Manager(switchName)   → ErrSwitchNotConfigured
+   └─ Handler.commitSwitchTransition
+        ├─ Manager.GetPortVLAN(ctx, port)              (informational; warns if already admitted)
+        ├─ Manager.SetPortVLAN(ctx, port, admittedVLAN)
+        └─ on either failure: revertAndVerify
+             ├─ Manager.SetPortVLAN(ctx, port, provisioningVLAN)
+             └─ Manager.GetPortVLAN read-back         → ErrSwitchPortIndeterminate if not closed
 ```
+
+The activation path fails closed: the SSH command sequence is not atomic, so a
+failed read or move forces the port back to the provisioning VLAN and verifies
+it by read-back (`pkg/webservice/v1/device/handler.go`). Only a verified revert
+lets the plain `ErrSwitchVLANTransitionFailed` stand.
+
+The switch name and port are read from the unexported context keys
+`contextKeySwitchName` / `contextKeySwitchPort`; no production code sets them
+(only `handler_switch_test.go` does), so today `prepareSwitchTransition` skips
+the move on every activation even when a switch service is wired.
 
 `SwitchServiceProvider` is declared in `pkg/webservice/v1/device` as a
 one-method interface (`Manager(name) (switchmgmt.Manager, error)`), which
@@ -284,7 +299,7 @@ anywhere in the repository**.
 The gRPC service is registered with an explicit nil backend under the comment
 *"Create the Switch gRPC service. It has no switch backend yet, so every
 method answers Unavailable (not configured); the QUIC opcodes, the MCP tools
-and the embedded transport call this same servicer."* (`pkg/api/daemon/daemon.go:1026`). The consequence is concrete and worth
+and the embedded transport call this same servicer."* (`pkg/api/daemon/daemon.go:1049`). The consequence is concrete and worth
 stating plainly:
 
 - REST `/api/v1/switches/...` returns **503** carrying the machine-readable
@@ -299,7 +314,7 @@ stating plainly:
   `Unavailable` (`StatusUnavailable` on QUIC).
 
 The `switches:` configuration block is parsed into `app.App.SwitchConfigs`
-(`pkg/app/app.go:334`) and, today, nothing constructs a `Service` from it. The
+(`pkg/app/app.go:371`) and, today, nothing constructs a `Service` from it. The
 bootstrap `Configurator` path (§4.1) is separate and does run — it builds its
 config from `bootstrap.SwitchConfig`, not from `App.SwitchConfigs`.
 

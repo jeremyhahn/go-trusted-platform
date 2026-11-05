@@ -142,7 +142,7 @@ The Trusted Registry implements an OCI-compliant container registry with attesta
 
 ### TrustedRegistry
 
-Verbatim from `pkg/registry/registry.go:29`:
+Verbatim from `pkg/registry/registry.go:31`:
 
 ```go
 // TrustedRegistry is a container registry requiring host attestation

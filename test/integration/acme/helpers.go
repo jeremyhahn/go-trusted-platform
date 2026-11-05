@@ -80,7 +80,11 @@ const (
 	DefaultPlatformctlBinary = "platformctl"
 
 	// DefaultACMEDirectoryURL is the default ACME directory URL.
-	DefaultACMEDirectoryURL = "https://localhost:8443/api/v1/acme/directory"
+	DefaultACMEDirectoryURL = "https://localhost:8443" + acmeDirectoryPath
+
+	// acmeDirectoryPath is the ACME directory's path on the platformd REST
+	// endpoint.
+	acmeDirectoryPath = "/api/v1/acme/directory"
 
 	// DefaultACMECACert is the default ACME CA certificate path.
 	DefaultACMECACert = "ca-bundle.pem"
@@ -113,7 +117,7 @@ func GetServiceEndpoints() ServiceEndpoints {
 		PlatformGRPC:    getEnvOrDefault(EnvPlatformGRPCEndpoint, DefaultPlatformGRPCEndpoint),
 		PlatformQUIC:    getEnvOrDefault(EnvPlatformQUICEndpoint, DefaultPlatformQUICEndpoint),
 		PlatformMCP:     getEnvOrDefault(EnvPlatformMCPEndpoint, DefaultPlatformMCPEndpoint),
-		ACMEDirectory:   getEnvOrDefault(EnvACMEDirectoryURL, DefaultACMEDirectoryURL),
+		ACMEDirectory:   acmeDirectoryURL(),
 		ACMECACert:      getEnvOrDefault(EnvACMECACert, DefaultACMECACert),
 	}
 }
@@ -124,6 +128,20 @@ func getEnvOrDefault(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+// acmeDirectoryURL returns ACME_DIRECTORY_URL when it is set, else the ACME
+// directory on the REST endpoint the integration runner exports as
+// PLATFORM_API_ENDPOINT. The runner chooses that port at run time (#997), so
+// the fixed default applies only to a suite run by hand.
+func acmeDirectoryURL() string {
+	if url := os.Getenv(EnvACMEDirectoryURL); url != "" {
+		return url
+	}
+	if api := os.Getenv(EnvPlatformAPIEndpoint); api != "" {
+		return api + acmeDirectoryPath
+	}
+	return DefaultACMEDirectoryURL
 }
 
 // =============================================================================

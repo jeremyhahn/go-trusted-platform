@@ -17,7 +17,23 @@ Device Template ──(copy + customize)──▶ Device Profile ──(assign d
 
 ## Creating Templates
 
-There is no `platformctl` command for templates; use the REST API or the web UI.
+Use `platformctl device template`, the REST API or the web UI.
+
+### CLI
+
+`platformctl device template` (`pkg/cli/commands/device/template.go`) has the
+verbs `create`, `get <id>`, `list`, `update <id>`, `delete <id>` and
+`create-profile <template-id>`. `create` and `update` take `--name`,
+`--description`, `--role` and `--config-file` (the platform config, YAML or
+JSON). `create-profile` takes `--name`, `--model`, `--role`, `--zone`,
+`--ek-serial`, `--mac` and `--ek-cert` as the profile overrides.
+
+```bash
+platformctl device template create --name edge-server-v1 --role server \
+  --config-file platform-config.yaml
+platformctl device template create-profile 1 --name edge-01 \
+  --mac 52:54:00:12:34:56
+```
 
 ### REST API
 

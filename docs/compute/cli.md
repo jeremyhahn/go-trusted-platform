@@ -20,7 +20,7 @@ the first thing that costs someone a minute.
 
 ### Global flags
 
-`platformctl` persistent flags (`pkg/cli/commands/root.go:125`), precedence
+`platformctl` persistent flags (`pkg/cli/commands/root.go:135-157`), precedence
 **flag > environment > config file > default**:
 
 | Flag | Short | Default | Environment |
@@ -61,9 +61,9 @@ the first thing that costs someone a minute.
 | Flag | Short | Type | Default | Meaning |
 |---|---|---|---|---|
 | `--name` | `-n` | string | | VM name (**required**) |
-| `--cpus` | | uint | `2` | vCPU cores |
-| `--memory` | | uint | `2048` | Memory in MB |
-| `--disk-size` | | uint | `20` | Boot disk size in GB |
+| `--cpus` | | uint32 | `2` | vCPU cores |
+| `--memory` | | uint64 | `2048` | Memory in MB |
+| `--disk-size` | | uint64 | `20` | Boot disk size in GB |
 | `--firmware` | | string | `uefi` | `uefi`, `uefi-secure-boot`; the daemon refuses `bios` |
 | `--secure-boot` | | bool | `false` | Enable UEFI Secure Boot |
 | `--tpm` | | bool | `true` | Attach a virtual TPM 2.0 (vTPM); `--tpm=false` creates the VM without one |
@@ -86,7 +86,8 @@ configured as one thing. Secure Boot also needs `ovmf_code_secure` in the
 daemon's compute configuration.
 
 **`--tpm` is what makes a VM attestable.** Without a virtual TPM the VM cannot
-produce a quote and `compute attest` has nothing to work with. It is on by
+produce a quote, so there is nothing to attest. (`compute` has no `attest`
+verb; `container attest` is the compute-side attestation verb.) It is on by
 default; `--tpm=false` is the way to leave it off.
 
 ```bash
@@ -251,10 +252,12 @@ This is the **only attestation verb in the entire CLI** — see
 
 ## 5. Cloud providers need build tags
 
-`compute create` against AWS, Azure or GCP requires the binary to be built with
-`awscompute`, `azurecompute` or `gcpcompute`. Without the tag the call returns
-"compute provider not compiled" (mapped to 501), which is a build fact, not a
-runtime failure.
+`compute create` against AWS, Azure or GCP requires the daemon to be built with
+`awscompute`, `azurecompute` or `gcpcompute`. Without the tag the daemon fails
+to build its orchestrator at start-up with *"compute: provider <name> is not
+compiled into this build …"*, logs *"Compute orchestrator not available
+(container operations will fail)"*, and runs without one. That is a build fact,
+not a runtime failure.
 
 ---
 

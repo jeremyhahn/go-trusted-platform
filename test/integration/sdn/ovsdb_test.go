@@ -17,6 +17,7 @@ package sdn
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -29,10 +30,20 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
 )
 
-const (
-	ovsdbAddress = "tcp:127.0.0.1:6640"
-	testTimeout  = 30 * time.Second
-)
+const testTimeout = 30 * time.Second
+
+// ovsdbAddress is the OVSDB manager the runner exports as OVSDB_ADDRESS: its
+// port is ephemeral, because two Integration jobs on one host-network runner
+// share one network namespace (#997). The fixed 6640 is used only outside the
+// runner.
+var ovsdbAddress = ovsdbAddressFromEnv()
+
+func ovsdbAddressFromEnv() string {
+	if address := os.Getenv("OVSDB_ADDRESS"); address != "" {
+		return address
+	}
+	return "tcp:127.0.0.1:6640"
+}
 
 // Bridge represents an OVS bridge
 type Bridge struct {

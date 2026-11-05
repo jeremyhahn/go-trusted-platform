@@ -116,7 +116,7 @@ func TestParseAKPublicArea_ECCRoundTrip(t *testing.T) {
 }
 
 func TestParseAKPublicArea_RSARoundTrip(t *testing.T) {
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	key, err := testRSAKey()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,6 +174,50 @@ func TestParseAKPublicArea_OffCurvePointIsRefused(t *testing.T) {
 	var invalid ErrAKPublicAreaInvalid
 	if !errors.As(err, &invalid) {
 		t.Fatalf("want ErrAKPublicAreaInvalid for off-curve point, got %v", err)
+	}
+}
+
+func TestParseAKPublicArea_OversizedCoordinateIsRefused(t *testing.T) {
+	// A P-256 coordinate is at most 32 bytes; a 33-byte buffer cannot be
+	// left-padded into the SEC 1 point and must be refused, not truncated.
+	oversized := make([]byte, 33)
+	oversized[0] = 0x01
+	_, err := ParseAKPublicArea(marshalECCPublicAreaXY(oversized, make([]byte, 32), restrictedSigningAttrs))
+	var invalid ErrAKPublicAreaInvalid
+	if !errors.As(err, &invalid) {
+		t.Fatalf("want ErrAKPublicAreaInvalid for a 33-byte P-256 coordinate, got %v", err)
+	}
+	if invalid.Reason != "ECC coordinate longer than the curve field" {
+		t.Errorf("Reason = %q, want the oversized-coordinate refusal", invalid.Reason)
+	}
+}
+
+func TestParseAKPublicArea_UnsupportedCurveIsRefused(t *testing.T) {
+	area := tpm2.TPMTPublic{
+		Type:             tpm2.TPMAlgECC,
+		NameAlg:          tpm2.TPMAlgSHA256,
+		ObjectAttributes: restrictedSigningAttrs,
+		Parameters: tpm2.NewTPMUPublicParms(tpm2.TPMAlgECC, &tpm2.TPMSECCParms{
+			Scheme: tpm2.TPMTECCScheme{
+				Scheme: tpm2.TPMAlgECDSA,
+				Details: tpm2.NewTPMUAsymScheme(tpm2.TPMAlgECDSA, &tpm2.TPMSSigSchemeECDSA{
+					HashAlg: tpm2.TPMAlgSHA256,
+				}),
+			},
+			CurveID: tpm2.TPMECCBNP256,
+		}),
+		Unique: tpm2.NewTPMUPublicID(tpm2.TPMAlgECC, &tpm2.TPMSECCPoint{
+			X: tpm2.TPM2BECCParameter{Buffer: make([]byte, 32)},
+			Y: tpm2.TPM2BECCParameter{Buffer: make([]byte, 32)},
+		}),
+	}
+	_, err := ParseAKPublicArea(tpm2.Marshal(area))
+	var invalid ErrAKPublicAreaInvalid
+	if !errors.As(err, &invalid) {
+		t.Fatalf("want ErrAKPublicAreaInvalid for a BN P-256 public area, got %v", err)
+	}
+	if invalid.Reason != "ECC curve" || invalid.Cause == nil {
+		t.Errorf("want Reason %q with the curve lookup cause, got %+v", "ECC curve", invalid)
 	}
 }
 

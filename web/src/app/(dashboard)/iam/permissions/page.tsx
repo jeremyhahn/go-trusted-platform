@@ -60,9 +60,9 @@ export default function PermissionsPage() {
     [tenantId]
   );
 
-  // Convert SDK types to legacy types
-  // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-  const groups: Group[] = (groupsData?.groups || []).map((g: any) => ({
+  // Convert SDK types to legacy types. The list replies are the proto
+  // ListIAMGroupsResponse and ListIAMPoliciesResponse in protojson (#445).
+  const groups: Group[] = (groupsData?.groups || []).map((g) => ({
     id: g.id,
     name: g.name,
     description: g.description,
@@ -72,8 +72,7 @@ export default function PermissionsPage() {
     updated_at: g.updatedAt
   }));
 
-  // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-  const policies: Policy[] = (policiesData?.policies || []).map((p: any) => ({
+  const policies: Policy[] = (policiesData?.policies || []).map((p) => ({
     name: p.name,
     description: p.description,
     priority: p.priority || 0,

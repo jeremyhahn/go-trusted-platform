@@ -127,9 +127,10 @@ _, err = client.AddRecord(ctx, &platformv1.AddRecordRequest{
 ## Errors
 
 Status codes follow [api.md](api.md) §5: `NOT_FOUND` for an unknown zone or
-record (including a zone of another tenant), `ALREADY_EXISTS` for a taken zone
-name, `INVALID_ARGUMENT` for a malformed request or unsupported record type,
-`PERMISSION_DENIED` for a missing `dns:*` scope.
+record (including a zone of another tenant), `INVALID_ARGUMENT` for a malformed request or unsupported record type,
+`PERMISSION_DENIED` for a missing `dns:*` scope. No RPC answers
+`ALREADY_EXISTS`: `CreateZone` on a taken name saves over the existing zone,
+and `Register` on a taken name answers `INTERNAL` (`dns_grpc_service.go:521`).
 
 With no `dns:` section the answer is `UNAVAILABLE` with an `ErrorInfo` detail,
 reason `SERVICE_NOT_CONFIGURED` and metadata `service=dns`. Every method checks

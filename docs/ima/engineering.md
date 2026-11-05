@@ -13,7 +13,9 @@
 ## 1. Package layout
 
 `pkg/ima` imports only the Go standard library. It has no dependency on any
-other package in this repository, and no package in this repository imports it.
+other package in this repository. Its one importer is the VPN agent's posture
+report (`pkg/vpn/agent/posture.go`), which calls `NewReader(...).GetStatus()`
+and digests `ascii_runtime_measurements` — see [api.md](api.md).
 
 | File | Holds |
 |---|---|
@@ -22,8 +24,19 @@ other package in this repository, and no package in this repository imports it.
 | `verifier.go` | `Verifier`, its options, allowlists, event/file/signature verification, PCR 10 replay, hashing, analysis helpers |
 | `tpm_integration.go` | PCR bank constants, PCR 10 read from TPM sysfs, TPM/bank availability |
 | `errors.go` | `MessageError`, `SentinelCauseError`, `WrappedError` |
+| `fips_errors.go` | `ErrFIPSHashNotApproved{Algorithm}` |
+| `hash_sha1.go` (`!fips`) | `newSHA1` returns a SHA-1 hasher; `assertApprovedMeasurement` admits every event |
+| `hash_sha1_fips.go` (`fips`) | `newSHA1` returns `ErrFIPSHashNotApproved`; `assertApprovedMeasurement` refuses an event labelled `sha1` or `md5`, or carrying a 20-byte template hash |
 
-Test files: `reader_test.go`, `verifier_test.go`, `tpm_integration_test.go`.
+Test files: `reader_test.go`, `verifier_test.go`, `tpm_integration_test.go`,
+`verifier_sha1_test.go` (`!fips`), `verifier_sha1_fips_test.go` (`fips`).
+
+**A FIPS build reads SHA-1 measurements but never verifies them.** Parsing is
+unchanged, so a legacy log stays readable. `verifyEvent` calls
+`assertApprovedMeasurement` before anything else, so a SHA-1 event fails
+verification with `ErrFIPSHashNotApproved` instead of passing on its length, and
+`getHasher("sha1")` (used by `HashFile`, `ComputePCR10` and the PCR replay)
+returns the same error.
 
 ---
 
@@ -129,7 +142,9 @@ func (v *Verifier) FindModifiedFiles(log *EventLog) []string
 **`WithTPMSysPath` does not exist.** Custom TPM paths are per-call, §2.4.
 
 **`AddToAllowlistWithAlg` writes to `allowlistByAlg`, which nothing reads.** It
-has no effect on any verification path today.
+has no effect on any verification path today. `RemoveFromAllowlist` deletes
+only from the main allowlist and leaves `allowlistByAlg` untouched;
+`ClearAllowlist` resets both.
 
 ### 2.4 TPM integration (methods on `*Verifier`)
 
@@ -422,18 +437,21 @@ os:
 | `os.ima.hash-algorithm` | `HashAlgorithm` | string | `sha256` when empty at cmdline time | `sha256`, `sha1`, `sha512` |
 | `os.ima.evm` | `EVM` | bool | `false` | Adds `evm=fix` to the kernel command line |
 | `os.ima.appraise-mode` | `AppraiseMode` | string | `""` | `off`, `log`, `enforce`, `fix`. Empty or `off` adds no `ima_appraise=` parameter |
-| `os.ima.audit-enabled` | `AuditEnabled` | bool | `false` | Adds `ima_audit=1`, installs `audit`/`audit-openrc`, enables `auditd` |
+| `os.ima.audit-enabled` | `AuditEnabled` | bool | `false` | Adds `ima_audit=1`, installs `audit`/`audit-openrc`, and enables `auditd` only if `/etc/init.d/auditd` exists in the target root |
 | `os.ima.signing-key-path` | `SigningKeyPath` | string | `""` | Recorded only; the installer does not consume it |
 | `os.ima.public-key-path` | `PublicKeyPath` | string | `""` | Recorded only; the boot script loads a **hard-coded** `/etc/ima/ima-public-key.pem` regardless of this value |
 | `os.ima.monitor-paths` | `MonitorPaths` | []string | `[]` | Extra paths appended to the generated policy — but see the `obj_type=` defect in [architecture.md](architecture.md) §9 |
 
-`installer.DefaultIMAMonitorPaths()` returns a 40-entry list of common
+`installer.DefaultIMAMonitorPaths()` returns a 43-entry list of common
 system-binary, library, cron, init and network-config paths. **It is never
 called by any non-test code.** If you want those paths measured you must put
 them in `monitor-paths` yourself.
 
-ISO builds carry two derived booleans, `iso.Config.IMAEnabled` and
-`iso.Config.IMAAuditEnabled`, which only add packages to the image.
+ISO builds carry two booleans, `iso.PreFetchConfig.IMAEnabled` and
+`iso.PreFetchConfig.IMAAuditEnabled` (`pkg/iso/prefetch.go`), which only add
+packages to the image. The one caller that builds a `PreFetchConfig`
+(`pkg/iso/customize.go`) sets `IMAEnabled: false`, so ISO builds never stage
+the IMA packages today.
 
 ### Kernel command line, as emitted
 
@@ -461,6 +479,7 @@ an environment variable.
 | `/etc/ima/ima-policy` | `0644` | The generated policy |
 | `/etc/ima/ima.conf` | `0644` | `IMA_ENABLED`, `IMA_POLICY`, `IMA_HASH`, `IMA_AUDIT`, `IMA_APPRAISE`, `IMA_EVM` — a record for humans, read by nothing |
 | `/etc/local.d/ima.start` | `0755` | Loads the policy and the `.ima` public key at boot |
+| `/etc/local.d/platformd-debug.start` | `0755` | Not IMA: an integration-test debug script, written in the same step, that dumps and tails the platformd logs to the quirk's serial port |
 
 Directory `/etc/ima` is created `0755`. The OpenRC `local` service, which runs
 `local.d` scripts, is added to the default runlevel by the installer.
@@ -494,7 +513,7 @@ dont_measure fsmagic=0x73636673    # securityfs
 Every value is derived on demand from kernel-published files. There is nothing
 to migrate and no compatibility window to maintain.
 
-The only durable artefacts are the three install-time files above, and they are
+The only durable IMA artefacts are the first three install-time files above, and they are
 plain text regenerated by a reinstall.
 
 ---

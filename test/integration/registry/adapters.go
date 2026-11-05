@@ -192,9 +192,9 @@ func (g *GRPCAdapter) Name() string {
 
 // Setup initializes the gRPC connection.
 func (g *GRPCAdapter) Setup(ctx context.Context) error {
-	endpoint := os.Getenv(EnvPlatformdGRPCEndpoint)
-	if endpoint == "" {
-		endpoint = DefaultPlatformdGRPCEndpoint
+	endpoint, err := helpers.RequireEndpoint(EnvPlatformdGRPCEndpoint)
+	if err != nil {
+		return err
 	}
 	g.endpoint = endpoint
 
@@ -242,9 +242,9 @@ func (q *QUICAdapter) Name() string {
 
 // Setup initializes the QUIC connection.
 func (q *QUICAdapter) Setup(ctx context.Context) error {
-	endpoint := os.Getenv(EnvPlatformdQUICEndpoint)
-	if endpoint == "" {
-		endpoint = DefaultPlatformdQUICEndpoint
+	endpoint, err := helpers.RequireEndpoint(EnvPlatformdQUICEndpoint)
+	if err != nil {
+		return err
 	}
 	q.endpoint = endpoint
 

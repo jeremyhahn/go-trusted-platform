@@ -262,7 +262,9 @@ func TestProbe_ProxyDHCP(t *testing.T) {
 func TestProbe_IgnoresOffersWithoutTheMatchString(t *testing.T) {
 	server := newFakeDHCPServer(t, func(s *fakeDHCPServer) { s.option43 = []byte{0x06, 0x01, 0x08, 0xff} }) // an x86 PXE reply
 	opts := loopbackOptions(t, server, 0)
-	opts.DHCPTimeout = 700 * time.Millisecond
+	// Three or four DISCOVERs fit the window; the test needs two.
+	opts.DHCPRequestTimeout = 100 * time.Millisecond
+	opts.DHCPTimeout = 350 * time.Millisecond
 
 	report, err := Probe(context.Background(), opts)
 	var dhcpErr *DHCPError
@@ -277,7 +279,7 @@ func TestProbe_IgnoresOffersWithoutTheMatchString(t *testing.T) {
 func TestProbe_SilentNetworkTimesOut(t *testing.T) {
 	server := newFakeDHCPServer(t, func(s *fakeDHCPServer) { s.silent = true })
 	opts := loopbackOptions(t, server, 0)
-	opts.DHCPTimeout = 500 * time.Millisecond
+	opts.DHCPTimeout = 150 * time.Millisecond
 
 	_, err := Probe(context.Background(), opts)
 	var timeout *TimeoutError
@@ -399,7 +401,7 @@ func TestProbe_StalledTFTPServer(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { stalled.Close() })
 	opts := loopbackOptions(t, newFakeDHCPServer(t), stalled.LocalAddr().(*net.UDPAddr).Port)
-	opts.TFTPFileTimeout = 200 * time.Millisecond
+	opts.TFTPFileTimeout = 100 * time.Millisecond
 
 	report, err := Probe(context.Background(), opts)
 	var tftpErr *TFTPError

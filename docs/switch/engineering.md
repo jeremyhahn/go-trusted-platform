@@ -1,11 +1,11 @@
 # Managed Switch Provisioning — Engineering Contract
 
-> **Status: NORMATIVE** · Scope: `pkg/switch/`, `pkg/webservice/v1/rest/switch/`, `pkg/api/daemon/switch_grpc_service.go`, `pkg/api/daemon/quic_switch.go`, `sdk/go/services/switch/` · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: `pkg/switch/`, `pkg/webservice/v1/rest/switch/`, `pkg/api/daemon/switch_grpc_service.go`, `pkg/api/daemon/quic_switch.go`, `sdk/go/services/switch/` · Last verified: 2026-10-27
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 
 This is the file an implementing agent works from. Every identifier below was
-read out of the source on 2026-08-18.
+read out of the source on 2026-10-27.
 
 ---
 
@@ -27,7 +27,7 @@ directory is `pkg/switch/`. Importers alias it:
 | `cisco_nexus.go` | `ciscoNexusConfigurator`, `GenerateVLANCommands`, `GeneratePortCommands`, `ExpandPortRange`, `validateConfig`, `ValidateVLANConfig`, `ValidatePortConfig`, `containsError`, `joinInts` |
 | `noop.go` | `NewNoopConfigurator` |
 | `noop_manager.go` | `NewNoopManager` |
-| `errors.go` | 15 typed errors |
+| `errors.go` | 16 typed errors |
 
 ## 2. Exported surface
 
@@ -69,7 +69,7 @@ type SSHExecutor interface {
 | `NewNoopManager` | `() Manager` | Every method returns nil / zero values |
 | `NewNoopConfigurator` | `() Configurator` | Every method returns nil |
 
-No functional options exist in this package (grepped 2026-08-18). Everything
+No functional options exist in this package (grepped 2026-10-27). Everything
 is configured through `Config`.
 
 `Service.Manager(name)` returns `ErrManagerNotFound{Name}` for an unknown name.
@@ -84,13 +84,17 @@ still attempting the rest.
 | `GeneratePortCommands` | `([]PortConfig) ([]string, error)` | yes — `ciscoNexusConfigurator.ConfigurePorts` |
 | `ExpandPortRange` | `(string) ([]string, error)` | yes — port command generation and `Verify` |
 | `ValidateVLANConfig` | `(VLANConfig) error` | **no — test-only** |
-| `ValidatePortConfig` | `(PortConfig) error` | **no — test-only** |
+| `ValidatePortConfig` | `(PortConfig) error` | yes — `GeneratePortCommands`, for every port |
 
-`ValidateVLANConfig` and `ValidatePortConfig` are exported and have **no
-non-test caller** (grepped 2026-08-18). Nothing in the construction or
-configuration path enforces the 1–4094 VLAN range, the trunk-needs-VLANs rule
-or the access-needs-a-VLAN rule that they implement. If you want those checks,
-call them; do not assume the framework does. This corrects the legacy
+`ValidateVLANConfig` is exported and has **no non-test caller** (grepped
+2026-10-27). Nothing in the construction or configuration path enforces the
+1–4094 VLAN-id range it implements; `GenerateVLANCommands` emits whatever ids it
+is given. If you want that check, call it; do not assume the framework does.
+`ValidatePortConfig` *is* enforced: `GeneratePortCommands` calls it for every
+port before generating any command and returns `ErrPortConfigFailed{Port}` on
+the first failure, so the trunk-needs-VLANs, access-needs-a-VLAN, native-VLAN
+and MTU rules (§9) hold on the bootstrap path. It checks `access_vlan >= 1` but
+not the 4094 upper bound. This corrects the legacy
 `configuration.md`, which presented VLAN-range validation as happening at
 startup.
 
@@ -231,7 +235,7 @@ activation.
 | `ErrSSHParseOutputFailed` | `Command`, `Output`, `Reason` | Any parser failure; **carries the raw switch output** |
 | `ErrPortVLANSetFailed` | `Port`, `VLANID`, `Cause` | `SetPortVLAN` |
 | `ErrVLANConfigFailed` | `VLANID`, `Cause` | `ConfigureVLANs` — note `VLANID` is always `0` here, the code does not attribute the failing VLAN |
-| `ErrPortConfigFailed` | `Port`, `Cause` | `ConfigurePorts` — `Port` is always `""` for the same reason |
+| `ErrPortConfigFailed` | `Port`, `Cause` | `ConfigurePorts` command failure — `Port` is `""` there for the same reason; `GeneratePortCommands` validation failure — `Port` is the failing port spec |
 | `ErrUnsupportedVendor` | `Vendor` | Vendor absent from either registry |
 | `ErrVerificationFailed` | `Details` | `Verify` could not find a VLAN or interface in switch output |
 | `ErrInvalidPortRange` | `Port`, `Reason` | `ExpandPortRange` — empty spec, unparseable bound, or start > end |
@@ -320,7 +324,7 @@ Rules:
 | Parser | Input command | Extracts |
 |---|---|---|
 | `parseAccessVLANFromSwitchport` | `show interfaces <port> switchport` | Access VLAN, via `(?i)access\s+mode\s+vlan:\s*(\d+)` |
-| `parseSwitchportOutput` | same | `Mode` (operational mode preferred, administrative as fallback), `AccessVLAN`, `TrunkVLANs`, `Enabled` (from the literal `switchport: enabled`) |
+| `parseSwitchportOutput` | same | `Mode` (operational mode preferred, administrative as fallback), `AccessVLAN`, `TrunkVLANs`, `NativeVLAN` (from `Trunking Native Mode VLAN:`), `Enabled` (from the literal `switchport: enabled`) |
 | `parseInterfaceStatusTable` | `show interfaces status` | Per-port `Port`, `Enabled`, `LinkUp`, `Mode`, `AccessVLAN`, `Description` |
 | `parseTrunkVLANList` | — | Comma-separated VLAN list; unparseable entries are silently dropped |
 
@@ -340,7 +344,7 @@ could extract. That is why `ErrPortNotFound` is unreachable from
 
 ## 9. Configuration
 
-Platform config, `pkg/app/app.go:334`:
+Platform config, `pkg/app/app.go:371`:
 
 ```yaml
 switches:
@@ -389,7 +393,7 @@ switches:
 every port) requires a trunk's native VLAN to be in its allowed list, refuses a
 native VLAN on an access port, and bounds the MTU to 1500–9216.
 
-**There are no switch-specific environment variables** (grepped 2026-08-18).
+**There are no switch-specific environment variables** (grepped 2026-10-27).
 
 **The `secret:"true"` tag is declarative here.** `pkg/bootstrap.SecretStructTag`
 names it, and its only reader is the diskless image build, which refuses a
@@ -426,14 +430,14 @@ the seam — `NewNoopManager()` satisfies it.
 There is no integration suite against real switch hardware in this repository.
 
 **Known repo-wide gap:** no `CommandDefinition` type exists in this repository
-(grepped 2026-08-18), so the CLI parity requirement in
+(grepped 2026-10-27), so the CLI parity requirement in
 `conventions/feature-docs.md` §4 is unmet repo-wide, not only here.
 
 ## 11. Observability
 
 - **Logging.** Every command is logged at **Debug** with the full command
-  string (`"ssh set port vlan"`, `"ssh enable port"`, `"ssh disable port"`,
-  `"ssh list ports"`, `"executing vlan command"`, `"executing port command"`).
+  string (`"ssh set port vlan"`, `"ssh get port vlan"`, `"ssh get port status"`,
+  `"ssh enable port"`, `"ssh disable port"`, `"ssh list ports"`, `"executing vlan command"`, `"executing port command"`).
   Failures are logged at **Error** by the REST layer and by the gRPC servicer,
   which QUIC, MCP and embedded call, with switch, port and error. No transport
   logs a successful mutation above Debug. `Service.Close` logs a failed manager
