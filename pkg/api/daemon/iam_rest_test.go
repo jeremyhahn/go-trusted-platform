@@ -40,6 +40,7 @@ func (t iamRESTTokens) AuthorizeToken(_ context.Context, token, _, _, _, _ strin
 // iamRESTCallers are the callers the IAM REST tests authenticate as.
 var iamRESTCallers = iamRESTTokens{
 	"reader":   {Subject: "reader", TenantID: iamRESTTenantA, Scopes: []string{"iam:read"}},
+	"reader-b": {Subject: "reader-b", TenantID: iamRESTTenantB, Scopes: []string{"iam:read"}},
 	"writer":   {Subject: "writer", TenantID: iamRESTTenantA, Scopes: []string{"iam:write"}},
 	"deleter":  {Subject: "deleter", TenantID: iamRESTTenantA, Scopes: []string{"iam:delete"}},
 	"operator": {Subject: "operator", TenantID: iamRESTTenantA, Scopes: []string{mtlsOperatorScope}},
@@ -216,6 +217,20 @@ func TestIAMREST_TenantRules(t *testing.T) {
 			assert.Equal(t, http.StatusForbidden, recorder.Code, recorder.Body.String())
 		})
 	}
+}
+
+// A flat route names its tenant in the query, not the path. The handler must
+// receive the tenant the guard verified; a caller bound to another tenant is
+// refused.
+func TestIAMREST_FlatRouteKeepsVerifiedTenant(t *testing.T) {
+	s := iamRESTServer(t)
+	path := "/api/v1/iam/users?tenant_id=" + iamRESTTenantA
+
+	recorder := serveIAM(s, http.MethodGet, path, "reader")
+	assert.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	recorder = serveIAM(s, http.MethodGet, path, "reader-b")
+	assert.Equal(t, http.StatusForbidden, recorder.Code, recorder.Body.String())
 }
 
 func TestIAMScopeAction(t *testing.T) {
