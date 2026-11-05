@@ -22,6 +22,7 @@ import (
 	"encoding/base64"
 	"io"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -53,6 +54,23 @@ func (m *mockDecrypter) Decrypt(randReader io.Reader, msg []byte, opts crypto.De
 
 // newTestKeyPair generates an RSA key pair for testing.
 func newTestKeyPair(t *testing.T) *rsa.PrivateKey {
+	t.Helper()
+	key, err := sharedTestKey()
+	if err != nil {
+		t.Fatalf("failed to generate test key: %v", err)
+	}
+	return key
+}
+
+// sharedTestKey generates one RSA-2048 key for the package run: the
+// resolver only reads it, and per-test generation dominated the run time.
+var sharedTestKey = sync.OnceValues(func() (*rsa.PrivateKey, error) {
+	return rsa.GenerateKey(rand.Reader, 2048)
+})
+
+// newDistinctTestKeyPair generates a fresh key that differs from the
+// shared one, for tests that need a mismatched key.
+func newDistinctTestKeyPair(t *testing.T) *rsa.PrivateKey {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -424,7 +442,7 @@ func TestIDevIDResolver_Resolve_InvalidBase64(t *testing.T) {
 
 func TestIDevIDResolver_Resolve_DecryptionFailed(t *testing.T) {
 	key := newTestKeyPair(t)
-	otherKey := newTestKeyPair(t)
+	otherKey := newDistinctTestKeyPair(t)
 
 	// Encrypt with one key, try to decrypt with another
 	ciphertext := encryptTestData(t, &otherKey.PublicKey, []byte("secret"))

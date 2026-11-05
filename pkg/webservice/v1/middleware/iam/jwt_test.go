@@ -125,10 +125,12 @@ func validClaims() jwt.MapClaims {
 // ---------------------------------------------------------------------------
 
 func TestNewJWTMiddleware(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, nil)
 	httpWriter := newMockHttpWriter()
 
 	t.Run("creates_middleware_with_rsa_public_key", func(t *testing.T) {
+		t.Parallel()
 		_, publicKey := generateTestRSAKeyPair()
 		config := JWTConfig{
 			PublicKey: publicKey,
@@ -146,6 +148,7 @@ func TestNewJWTMiddleware(t *testing.T) {
 	})
 
 	t.Run("creates_middleware_with_ecdsa_p256_key", func(t *testing.T) {
+		t.Parallel()
 		_, publicKey := generateTestECDSAKeyPair(elliptic.P256())
 		config := JWTConfig{PublicKey: publicKey}
 
@@ -160,6 +163,7 @@ func TestNewJWTMiddleware(t *testing.T) {
 	})
 
 	t.Run("creates_middleware_with_ed25519_key", func(t *testing.T) {
+		t.Parallel()
 		_, publicKey := generateTestEd25519KeyPair()
 		config := JWTConfig{PublicKey: publicKey}
 
@@ -174,6 +178,7 @@ func TestNewJWTMiddleware(t *testing.T) {
 	})
 
 	t.Run("rejects_nil_public_key", func(t *testing.T) {
+		t.Parallel()
 		config := JWTConfig{PublicKey: nil}
 		_, err := NewJWTMiddleware(logger, httpWriter, config, nil)
 
@@ -186,6 +191,7 @@ func TestNewJWTMiddleware(t *testing.T) {
 	})
 
 	t.Run("rejects_symmetric_signing_key_type", func(t *testing.T) {
+		t.Parallel()
 		// Passing a bare []byte masquerading as PublicKey should fail
 		config := JWTConfig{PublicKey: []byte("a-symmetric-key")}
 		_, err := NewJWTMiddleware(logger, httpWriter, config, nil)
@@ -199,6 +205,7 @@ func TestNewJWTMiddleware(t *testing.T) {
 	})
 
 	t.Run("returns_error_for_nil_logger", func(t *testing.T) {
+		t.Parallel()
 		_, publicKey := generateTestRSAKeyPair()
 		config := JWTConfig{PublicKey: publicKey}
 		_, err := NewJWTMiddleware(nil, httpWriter, config, nil)
@@ -212,6 +219,7 @@ func TestNewJWTMiddleware(t *testing.T) {
 	})
 
 	t.Run("returns_error_for_nil_response_writer", func(t *testing.T) {
+		t.Parallel()
 		_, publicKey := generateTestRSAKeyPair()
 		config := JWTConfig{PublicKey: publicKey}
 		_, err := NewJWTMiddleware(logger, nil, config, nil)
@@ -243,9 +251,11 @@ func TestNewJWTMiddleware(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestJWTMiddleware_Verify(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, nil)
 
 	t.Run("accepts_valid_rsa_token", func(t *testing.T) {
+		t.Parallel()
 		httpWriter := newMockHttpWriter()
 		privateKey, publicKey := generateTestRSAKeyPair()
 		config := JWTConfig{PublicKey: publicKey}
@@ -266,6 +276,7 @@ func TestJWTMiddleware_Verify(t *testing.T) {
 	})
 
 	t.Run("accepts_valid_ecdsa_token", func(t *testing.T) {
+		t.Parallel()
 		httpWriter := newMockHttpWriter()
 		privateKey, publicKey := generateTestECDSAKeyPair(elliptic.P256())
 		config := JWTConfig{PublicKey: publicKey}
@@ -286,6 +297,7 @@ func TestJWTMiddleware_Verify(t *testing.T) {
 	})
 
 	t.Run("accepts_valid_eddsa_token", func(t *testing.T) {
+		t.Parallel()
 		httpWriter := newMockHttpWriter()
 		privateKey, publicKey := generateTestEd25519KeyPair()
 		config := JWTConfig{PublicKey: publicKey}
@@ -306,6 +318,7 @@ func TestJWTMiddleware_Verify(t *testing.T) {
 	})
 
 	t.Run("rejects_missing_token", func(t *testing.T) {
+		t.Parallel()
 		httpWriter := newMockHttpWriter()
 		_, publicKey := generateTestRSAKeyPair()
 		config := JWTConfig{PublicKey: publicKey}
@@ -327,6 +340,7 @@ func TestJWTMiddleware_Verify(t *testing.T) {
 
 	// F-02: token without exp must be rejected unconditionally
 	t.Run("rejects_token_without_exp_claim", func(t *testing.T) {
+		t.Parallel()
 		httpWriter := newMockHttpWriter()
 		privateKey, publicKey := generateTestRSAKeyPair()
 		config := JWTConfig{PublicKey: publicKey}
@@ -356,6 +370,7 @@ func TestJWTMiddleware_Verify(t *testing.T) {
 
 	// F-02: expired token is rejected
 	t.Run("rejects_expired_token", func(t *testing.T) {
+		t.Parallel()
 		httpWriter := newMockHttpWriter()
 		privateKey, publicKey := generateTestRSAKeyPair()
 		config := JWTConfig{PublicKey: publicKey}
@@ -385,6 +400,7 @@ func TestJWTMiddleware_Verify(t *testing.T) {
 
 	// F-02: nbf in future is rejected
 	t.Run("rejects_token_nbf_in_future", func(t *testing.T) {
+		t.Parallel()
 		httpWriter := newMockHttpWriter()
 		privateKey, publicKey := generateTestRSAKeyPair()
 		config := JWTConfig{PublicKey: publicKey}
@@ -416,6 +432,7 @@ func TestJWTMiddleware_Verify(t *testing.T) {
 
 	// F-04: HS256-signed token must be rejected even with a valid-looking signature
 	t.Run("rejects_hs256_signed_token", func(t *testing.T) {
+		t.Parallel()
 		httpWriter := newMockHttpWriter()
 		// The middleware is configured with an RSA key — no symmetric key is accepted
 		_, publicKey := generateTestRSAKeyPair()
@@ -442,6 +459,7 @@ func TestJWTMiddleware_Verify(t *testing.T) {
 
 	// F-04: disallowed algorithm (e.g. ECDSA token presented to RSA verifier) rejected
 	t.Run("rejects_wrong_algorithm_ecdsa_against_rsa_key", func(t *testing.T) {
+		t.Parallel()
 		httpWriter := newMockHttpWriter()
 		ecPriv, _ := generateTestECDSAKeyPair(elliptic.P256())
 		_, rsaPub := generateTestRSAKeyPair()
@@ -469,6 +487,7 @@ func TestJWTMiddleware_Verify(t *testing.T) {
 	})
 
 	t.Run("rejects_token_with_wrong_rsa_key", func(t *testing.T) {
+		t.Parallel()
 		httpWriter := newMockHttpWriter()
 		privateKey, _ := generateTestRSAKeyPair()
 		_, wrongPublicKey := generateTestRSAKeyPair()
@@ -494,6 +513,7 @@ func TestJWTMiddleware_Verify(t *testing.T) {
 	})
 
 	t.Run("requires_mfa_when_configured", func(t *testing.T) {
+		t.Parallel()
 		httpWriter := newMockHttpWriter()
 		privateKey, publicKey := generateTestRSAKeyPair()
 		config := JWTConfig{
@@ -522,6 +542,7 @@ func TestJWTMiddleware_Verify(t *testing.T) {
 	})
 
 	t.Run("allows_mfa_verified_token_when_required", func(t *testing.T) {
+		t.Parallel()
 		httpWriter := newMockHttpWriter()
 		privateKey, publicKey := generateTestRSAKeyPair()
 		config := JWTConfig{
@@ -552,9 +573,11 @@ func TestJWTMiddleware_Verify(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestJWTMiddleware_Handler(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, nil)
 
 	t.Run("wraps_handler_correctly", func(t *testing.T) {
+		t.Parallel()
 		httpWriter := newMockHttpWriter()
 		privateKey, publicKey := generateTestRSAKeyPair()
 		config := JWTConfig{PublicKey: publicKey}
@@ -577,6 +600,7 @@ func TestJWTMiddleware_Handler(t *testing.T) {
 	})
 
 	t.Run("rejects_unauthenticated_request", func(t *testing.T) {
+		t.Parallel()
 		httpWriter := newMockHttpWriter()
 		_, publicKey := generateTestRSAKeyPair()
 		config := JWTConfig{PublicKey: publicKey}
@@ -601,11 +625,13 @@ func TestJWTMiddleware_Handler(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestJWTMiddleware_ValidateToken(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, nil)
 	httpWriter := newMockHttpWriter()
 	privateKey, publicKey := generateTestRSAKeyPair()
 
 	t.Run("validates_issuer", func(t *testing.T) {
+		t.Parallel()
 		config := JWTConfig{
 			PublicKey: publicKey,
 			Issuer:    "expected-issuer",
@@ -627,6 +653,7 @@ func TestJWTMiddleware_ValidateToken(t *testing.T) {
 	})
 
 	t.Run("validates_audience", func(t *testing.T) {
+		t.Parallel()
 		config := JWTConfig{
 			PublicKey: publicKey,
 			Audience:  []string{"expected-audience"},
@@ -648,6 +675,7 @@ func TestJWTMiddleware_ValidateToken(t *testing.T) {
 	})
 
 	t.Run("rejects_token_missing_exp", func(t *testing.T) {
+		t.Parallel()
 		config := JWTConfig{PublicKey: publicKey}
 		middleware, _ := NewJWTMiddleware(logger, httpWriter, config, nil)
 
@@ -669,6 +697,7 @@ func TestJWTMiddleware_ValidateToken(t *testing.T) {
 	})
 
 	t.Run("rejects_expired_token", func(t *testing.T) {
+		t.Parallel()
 		config := JWTConfig{PublicKey: publicKey}
 		middleware, _ := NewJWTMiddleware(logger, httpWriter, config, nil)
 
@@ -687,6 +716,7 @@ func TestJWTMiddleware_ValidateToken(t *testing.T) {
 	})
 
 	t.Run("rejects_future_nbf", func(t *testing.T) {
+		t.Parallel()
 		config := JWTConfig{PublicKey: publicKey}
 		middleware, _ := NewJWTMiddleware(logger, httpWriter, config, nil)
 
@@ -707,6 +737,7 @@ func TestJWTMiddleware_ValidateToken(t *testing.T) {
 	})
 
 	t.Run("rejects_future_iat", func(t *testing.T) {
+		t.Parallel()
 		config := JWTConfig{PublicKey: publicKey}
 		middleware, _ := NewJWTMiddleware(logger, httpWriter, config, nil)
 
@@ -726,6 +757,7 @@ func TestJWTMiddleware_ValidateToken(t *testing.T) {
 	})
 
 	t.Run("allows_clock_skew_within_limit", func(t *testing.T) {
+		t.Parallel()
 		config := JWTConfig{
 			PublicKey: publicKey,
 			ClockSkew: 30 * time.Second,
@@ -749,6 +781,7 @@ func TestJWTMiddleware_ValidateToken(t *testing.T) {
 	})
 
 	t.Run("rejects_expired_beyond_clock_skew", func(t *testing.T) {
+		t.Parallel()
 		config := JWTConfig{
 			PublicKey: publicKey,
 			ClockSkew: 30 * time.Second,
@@ -775,6 +808,7 @@ func TestJWTMiddleware_ValidateToken(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestJWTMiddleware_ExtractToken(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, nil)
 	httpWriter := newMockHttpWriter()
 	_, publicKey := generateTestRSAKeyPair()
@@ -783,6 +817,7 @@ func TestJWTMiddleware_ExtractToken(t *testing.T) {
 	middleware, _ := NewJWTMiddleware(logger, httpWriter, config, nil)
 
 	t.Run("extracts_bearer_token", func(t *testing.T) {
+		t.Parallel()
 		req := httptest.NewRequest(http.MethodGet, "/test", nil)
 		req.Header.Set(AuthorizationHeader, "Bearer my-token-123")
 
@@ -797,6 +832,7 @@ func TestJWTMiddleware_ExtractToken(t *testing.T) {
 	})
 
 	t.Run("returns_error_for_missing_header", func(t *testing.T) {
+		t.Parallel()
 		req := httptest.NewRequest(http.MethodGet, "/test", nil)
 
 		_, err := middleware.extractToken(req)
@@ -810,6 +846,7 @@ func TestJWTMiddleware_ExtractToken(t *testing.T) {
 	})
 
 	t.Run("returns_error_for_invalid_format", func(t *testing.T) {
+		t.Parallel()
 		req := httptest.NewRequest(http.MethodGet, "/test", nil)
 		req.Header.Set(AuthorizationHeader, "Basic dXNlcjpwYXNz")
 
@@ -824,6 +861,7 @@ func TestJWTMiddleware_ExtractToken(t *testing.T) {
 	})
 
 	t.Run("returns_error_for_empty_bearer_token", func(t *testing.T) {
+		t.Parallel()
 		req := httptest.NewRequest(http.MethodGet, "/test", nil)
 		req.Header.Set(AuthorizationHeader, "Bearer ")
 
@@ -843,6 +881,7 @@ func TestJWTMiddleware_ExtractToken(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestJWTMiddleware_ExtractClaims(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, nil)
 	httpWriter := newMockHttpWriter()
 	privateKey, publicKey := generateTestRSAKeyPair()
@@ -851,6 +890,7 @@ func TestJWTMiddleware_ExtractClaims(t *testing.T) {
 	middleware, _ := NewJWTMiddleware(logger, httpWriter, config, nil)
 
 	t.Run("extracts_standard_claims", func(t *testing.T) {
+		t.Parallel()
 		now := time.Now()
 		claims := jwt.MapClaims{
 			"sub":           "user-123",
@@ -896,6 +936,7 @@ func TestJWTMiddleware_ExtractClaims(t *testing.T) {
 	})
 
 	t.Run("extracts_roles_and_groups", func(t *testing.T) {
+		t.Parallel()
 		claims := validClaims()
 		claims["roles"] = []interface{}{"admin", "user"}
 		claims["groups"] = []interface{}{"developers", "ops"}
@@ -918,6 +959,7 @@ func TestJWTMiddleware_ExtractClaims(t *testing.T) {
 	})
 
 	t.Run("handles_string_audience", func(t *testing.T) {
+		t.Parallel()
 		claims := validClaims()
 		claims["aud"] = "single-audience"
 		token := createRSAToken(claims, privateKey)
@@ -936,6 +978,7 @@ func TestJWTMiddleware_ExtractClaims(t *testing.T) {
 	})
 
 	t.Run("handles_array_audience", func(t *testing.T) {
+		t.Parallel()
 		claims := validClaims()
 		claims["aud"] = []interface{}{"audience1", "audience2"}
 		token := createRSAToken(claims, privateKey)
@@ -951,6 +994,7 @@ func TestJWTMiddleware_ExtractClaims(t *testing.T) {
 	})
 
 	t.Run("extracts_custom_claims", func(t *testing.T) {
+		t.Parallel()
 		claims := validClaims()
 		claims["custom_field"] = "custom_value"
 		claims["another_key"] = 42.0
@@ -975,7 +1019,9 @@ func TestJWTMiddleware_ExtractClaims(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSigningMethodFromKey(t *testing.T) {
+	t.Parallel()
 	t.Run("p256_maps_to_es256", func(t *testing.T) {
+		t.Parallel()
 		_, pub := generateTestECDSAKeyPair(elliptic.P256())
 		method, algs, err := signingMethodFromKey(pub)
 		if err != nil {
@@ -993,6 +1039,7 @@ func TestSigningMethodFromKey(t *testing.T) {
 	})
 
 	t.Run("p384_maps_to_es384", func(t *testing.T) {
+		t.Parallel()
 		_, pub := generateTestECDSAKeyPair(elliptic.P384())
 		method, algs, err := signingMethodFromKey(pub)
 		if err != nil {
@@ -1007,6 +1054,7 @@ func TestSigningMethodFromKey(t *testing.T) {
 	})
 
 	t.Run("p521_maps_to_es512", func(t *testing.T) {
+		t.Parallel()
 		_, pub := generateTestECDSAKeyPair(elliptic.P521())
 		method, algs, err := signingMethodFromKey(pub)
 		if err != nil {
@@ -1019,6 +1067,7 @@ func TestSigningMethodFromKey(t *testing.T) {
 	})
 
 	t.Run("ed25519_maps_to_eddsa", func(t *testing.T) {
+		t.Parallel()
 		_, pub := generateTestEd25519KeyPair()
 		method, algs, err := signingMethodFromKey(pub)
 		if err != nil {
@@ -1036,6 +1085,7 @@ func TestSigningMethodFromKey(t *testing.T) {
 	})
 
 	t.Run("rsa_allows_rs_and_ps_variants", func(t *testing.T) {
+		t.Parallel()
 		_, pub := generateTestRSAKeyPair()
 		_, algs, err := signingMethodFromKey(pub)
 		if err != nil {
@@ -1049,6 +1099,7 @@ func TestSigningMethodFromKey(t *testing.T) {
 	})
 
 	t.Run("unsupported_key_type_returns_error", func(t *testing.T) {
+		t.Parallel()
 		_, _, err := signingMethodFromKey("a plain string")
 		if err == nil {
 			t.Fatal("expected error for unsupported key type")
@@ -1064,10 +1115,12 @@ func TestSigningMethodFromKey(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestJWTMiddleware_GenerateToken(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, nil)
 	httpWriter := newMockHttpWriter()
 
 	t.Run("returns_error_because_middleware_is_verification_only", func(t *testing.T) {
+		t.Parallel()
 		_, publicKey := generateTestRSAKeyPair()
 		config := JWTConfig{PublicKey: publicKey}
 		middleware, _ := NewJWTMiddleware(logger, httpWriter, config, nil)
@@ -1089,10 +1142,12 @@ func TestJWTMiddleware_GenerateToken(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestJWTMiddleware_RefreshToken(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, nil)
 	privateKey, publicKey := generateTestRSAKeyPair()
 
 	t.Run("refreshes_valid_token", func(t *testing.T) {
+		t.Parallel()
 		httpWriter := newMockHttpWriter()
 		iamService := newMockIAMServiceClient()
 		iamService.getUserFunc = func(ctx context.Context, tenantID, userID string) (*sdkiam.User, error) {
@@ -1136,6 +1191,7 @@ func TestJWTMiddleware_RefreshToken(t *testing.T) {
 	})
 
 	t.Run("rejects_invalid_token", func(t *testing.T) {
+		t.Parallel()
 		httpWriter := newMockHttpWriter()
 		iamService := newMockIAMServiceClient()
 
@@ -1157,6 +1213,7 @@ func TestJWTMiddleware_RefreshToken(t *testing.T) {
 	})
 
 	t.Run("rejects_when_user_not_found", func(t *testing.T) {
+		t.Parallel()
 		httpWriter := newMockHttpWriter()
 		iamService := newMockIAMServiceClient()
 		iamService.getUserFunc = func(ctx context.Context, tenantID, userID string) (*sdkiam.User, error) {
@@ -1186,6 +1243,7 @@ func TestJWTMiddleware_RefreshToken(t *testing.T) {
 	})
 
 	t.Run("returns_500_when_iam_service_not_configured", func(t *testing.T) {
+		t.Parallel()
 		httpWriter := newMockHttpWriter()
 
 		config := JWTConfig{
@@ -1215,7 +1273,9 @@ func TestJWTMiddleware_RefreshToken(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestGetClaimsFromContext(t *testing.T) {
+	t.Parallel()
 	t.Run("retrieves_claims_from_context", func(t *testing.T) {
+		t.Parallel()
 		claims := &JWTClaims{
 			Subject:  "user-123",
 			TenantID: "tenant-456",
@@ -1234,6 +1294,7 @@ func TestGetClaimsFromContext(t *testing.T) {
 	})
 
 	t.Run("returns_false_when_not_in_context", func(t *testing.T) {
+		t.Parallel()
 		ctx := context.Background()
 
 		_, ok := GetClaimsFromContext(ctx)
@@ -1244,6 +1305,7 @@ func TestGetClaimsFromContext(t *testing.T) {
 	})
 
 	t.Run("returns_false_for_wrong_type", func(t *testing.T) {
+		t.Parallel()
 		ctx := context.WithValue(context.Background(), jwtClaimsContextKey, "not claims")
 
 		_, ok := GetClaimsFromContext(ctx)
@@ -1259,6 +1321,7 @@ func TestGetClaimsFromContext(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestJWTMiddleware_ValidateAudience(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, nil)
 	httpWriter := newMockHttpWriter()
 	_, publicKey := generateTestRSAKeyPair()
@@ -1319,6 +1382,7 @@ func TestJWTMiddleware_ValidateAudience(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestJWTMiddleware_TranslateJWTError(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, nil)
 	httpWriter := newMockHttpWriter()
 	_, publicKey := generateTestRSAKeyPair()
@@ -1353,7 +1417,9 @@ func TestJWTMiddleware_TranslateJWTError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestErrTokenMissingExp(t *testing.T) {
+	t.Parallel()
 	t.Run("error_message", func(t *testing.T) {
+		t.Parallel()
 		err := ErrTokenMissingExp{}
 		if err.Error() == "" {
 			t.Error("expected non-empty error message")
@@ -1366,7 +1432,9 @@ func TestErrTokenMissingExp(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestErrAlgorithmNotAllowed(t *testing.T) {
+	t.Parallel()
 	t.Run("error_message_includes_algorithm", func(t *testing.T) {
+		t.Parallel()
 		err := ErrAlgorithmNotAllowed{Algorithm: "HS256"}
 		if err.Error() == "" {
 			t.Error("expected non-empty error message")
