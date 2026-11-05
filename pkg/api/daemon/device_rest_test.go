@@ -8,8 +8,11 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/mux"
+	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -227,4 +230,46 @@ func TestDeviceRouterREST_RouterChecksItsOwnScope(t *testing.T) {
 	// the caller the parent verified, because a DPoP proof is single-use and
 	// a second validation would reject the request as a replay.
 	assert.Equal(t, int32(1), tokens.authorizations.Load())
+}
+
+// A DPoP-bound request through the real platform token validator: the parent
+// ScopeGuard consumes the single-use proof, and the router's own scope check
+// must reuse that caller rather than present the proof again as a replay.
+func TestDeviceRouterREST_DPoPProofPassesTheRealValidatorOnce(t *testing.T) {
+	issuer := newPTIssuerKey(t)
+	jwks := issuer.jwksHandler(t)
+	validator := newSharedValidator(t, jwks.URL, false)
+	s := deviceRESTServer(t, validator, &recordingLifecycleServer{})
+
+	holder := newPTIssuerKey(t).priv
+	thumbprint, err := quicbaas.DPoPThumbprint(holder.Public())
+	require.NoError(t, err)
+	now := time.Now()
+	claims := jwt.MapClaims{
+		"iss":       testPTIssuer,
+		"aud":       []string{testPTAudience},
+		"sub":       "device-writer",
+		"exp":       now.Add(10 * time.Minute).Unix(),
+		"iat":       now.Unix(),
+		"jti":       "jti-device-writer-dpop",
+		"tenant_id": iamRESTTenantA,
+		"scp":       []string{"device:write"},
+		"cnf":       map[string]any{"jkt": thumbprint},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodES256, claims)
+	token.Header["kid"] = issuer.kid
+	token.Header["typ"] = "at+jwt"
+	accessToken, err := token.SignedString(issuer.priv)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/7/disable", strings.NewReader("{}"))
+	proof, err := quicbaas.NewDPoPProof(holder, req.Method, "http://"+req.Host+req.URL.Path)
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("DPoP", proof)
+	recorder := httptest.NewRecorder()
+	s.router.ServeHTTP(recorder, req)
+
+	assertReachedHandler(t, recorder, recorder.Body.String())
 }
