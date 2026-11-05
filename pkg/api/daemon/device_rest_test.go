@@ -223,5 +223,8 @@ func TestDeviceRouterREST_RouterChecksItsOwnScope(t *testing.T) {
 	s := deviceRESTServer(t, tokens, &recordingLifecycleServer{})
 	recorder := serveIAM(s, http.MethodPost, "/api/v1/devices/7/disable", "device-writer")
 	assertReachedHandler(t, recorder, recorder.Body.String())
-	assert.Equal(t, int32(2), tokens.authorizations.Load())
+	// One authentication per request: the router's own scope check reuses
+	// the caller the parent verified, because a DPoP proof is single-use and
+	// a second validation would reject the request as a replay.
+	assert.Equal(t, int32(1), tokens.authorizations.Load())
 }
