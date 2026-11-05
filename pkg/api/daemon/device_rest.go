@@ -25,14 +25,29 @@ var deviceReadOnlyPosts = []string{
 // restScopeAuthorizer is the device router's per-route scope check over the
 // daemon's REST scope guard.
 type restScopeAuthorizer struct {
-	guard *restapi.ScopeGuard
+	guard      *restapi.ScopeGuard
+	respWriter response.HttpWriter
 }
 
-// RequireScope admits a request whose credential carries scope; the guard
-// answers 401 without a credential and 403 without the scope.
+// RequireScope admits a request whose caller carries scope. It reuses the
+// caller the parent middleware verified, so the request is authenticated
+// once: a DPoP proof is single-use and a second validation is a replay. A
+// request without a verified caller goes through the guard, which answers 401
+// without a credential and 403 without the scope.
 func (a restScopeAuthorizer) RequireScope(scope string) func(next http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
-		return a.guard.Require(scope, next.ServeHTTP)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			caller, ok := restCaller(r)
+			if !ok {
+				a.guard.Require(scope, next.ServeHTTP).ServeHTTP(w, r)
+				return
+			}
+			if err := caller.RequireScope(scope); err != nil {
+				a.respWriter.Error403(w, r, restapi.ErrRouteForbidden{Scope: scope, Reason: err.Error()}, nil)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
 	}
 }
 
@@ -63,7 +78,7 @@ func (s *RESTServer) SetDeviceRouterHandlers(logger *logging.Logger, deviceSvc d
 	}
 	deviceRouter.SetAttestCertHandler(wsdevice.NewAttestCertHandler(logger, respWriter, attestSvc))
 	deviceRouter.SetLifecycleHandler(wsdevice.NewLifecycleHandler(logger, respWriter, attestSvc))
-	deviceRouter.SetScopeAuthorizer(restScopeAuthorizer{guard: guard})
+	deviceRouter.SetScopeAuthorizer(restScopeAuthorizer{guard: guard, respWriter: respWriter})
 	authz := restScopeAuthorization{guard: guard, respWriter: respWriter, routeScope: deviceRouteScope}
 	parent := s.router.PathPrefix(iamRESTParentPath).Subrouter()
 	parent.Use(authz.authorize)

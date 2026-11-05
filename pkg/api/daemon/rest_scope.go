@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
@@ -261,6 +262,18 @@ func (a restScopeAuthorization) authorize(next http.Handler) http.Handler {
 			a.respWriter.Error403(w, r, restapi.ErrRouteForbidden{Scope: scope, Reason: err.Error()}, nil)
 			return
 		}
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), restCallerKey{}, caller)))
 	})
+}
+
+// restCallerKey is the request context key of the caller authorize verified.
+// A route's own scope check reads it instead of authenticating again: a
+// sender-constrained (DPoP) proof is single-use, so a second validation would
+// reject the request as a replay.
+type restCallerKey struct{}
+
+// restCaller returns the caller authorize verified for r, if any.
+func restCaller(r *http.Request) (*platformtoken.AuthorizedContext, bool) {
+	caller, ok := r.Context().Value(restCallerKey{}).(*platformtoken.AuthorizedContext)
+	return caller, ok && caller != nil
 }
