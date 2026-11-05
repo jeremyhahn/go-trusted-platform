@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
@@ -130,8 +131,22 @@ func (a iamRESTAuthorization) requireOwnTenant(next http.Handler) http.Handler {
 			a.respWriter.Error403(w, r, err, nil)
 			return
 		}
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, withVerifiedTenant(r, caller.TenantID))
 	})
+}
+
+// withVerifiedTenant returns r with the {tenant} route variable set to the
+// caller's verified tenant, which the IAM handlers read. Flat routes name the
+// tenant only in the query, which the handlers deliberately ignore, so the
+// tenant the ownership check admitted is carried to them here.
+func withVerifiedTenant(r *http.Request, tenantID string) *http.Request {
+	routeVars := mux.Vars(r)
+	vars := make(map[string]string, len(routeVars)+1)
+	for name, value := range routeVars {
+		vars[name] = value
+	}
+	vars["tenant"] = tenantID
+	return mux.SetURLVars(r, vars)
 }
 
 // caller returns the caller authenticate resolved. A request that reached a
