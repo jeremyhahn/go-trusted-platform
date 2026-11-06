@@ -258,13 +258,29 @@ func (h *Handlers) GenerateKey(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	h.success201(w, r, &GenerateKeyResponse{
+	out := &GenerateKeyResponse{
 		KeyID:              resp.KeyID,
 		Version:            resp.Version,
 		Algorithm:          resp.Algorithm.String(),
 		Exportable:         resp.Exportable,
 		DeletionProtection: resp.DeletionProtection,
-	})
+	}
+	// The SDK's GenerateKey carries no metadata, so the requested
+	// description and tags are recorded on the new key in a second call.
+	if req.Description != "" || len(req.Tags) > 0 {
+		meta, err := h.kms.UpdateKeyMetadata(ctx, &kmsclient.UpdateKeyMetadataRequest{
+			KeyID:       resp.KeyID,
+			Description: req.Description,
+			Tags:        req.Tags,
+		})
+		if err != nil {
+			h.fail(w, r, err)
+			return
+		}
+		out.Description = meta.Description
+		out.Tags = meta.Tags
+	}
+	h.success201(w, r, out)
 }
 
 // ImportKey handles POST /api/v1/kms/keys/import.

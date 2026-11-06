@@ -130,6 +130,7 @@ func TestSetIAMHandlers_MountsEveryIAMRoute(t *testing.T) {
 
 func TestIAMREST_ScopePerMethod(t *testing.T) {
 	const users = "/api/v1/iam/tenants/" + iamRESTTenantA + "/users"
+	const groups = "/api/v1/iam/tenants/" + iamRESTTenantA + "/groups"
 	cases := []struct {
 		token  string
 		method string
@@ -152,6 +153,16 @@ func TestIAMREST_ScopePerMethod(t *testing.T) {
 		{"deleter", http.MethodDelete, users + "/u1", "iam:delete", true},
 		{"deleter", http.MethodPost, users, "iam:write", false},
 		{"other", http.MethodGet, users, "iam:read", false},
+		// RevokeRole and RemoveGroupMember are iam:write in the gRPC
+		// catalog, in both the tenant-scoped and the flat form.
+		{"writer", http.MethodDelete, users + "/u1/roles/admin", "iam:write", true},
+		{"deleter", http.MethodDelete, users + "/u1/roles/admin", "iam:write", false},
+		{"writer", http.MethodDelete, groups + "/g1/members/u1", "iam:write", true},
+		{"deleter", http.MethodDelete, groups + "/g1/members/u1", "iam:write", false},
+		{"writer", http.MethodDelete, "/api/v1/iam/users/u1/roles/admin?tenant_id=" + iamRESTTenantA, "iam:write", true},
+		{"deleter", http.MethodDelete, "/api/v1/iam/users/u1/roles/admin?tenant_id=" + iamRESTTenantA, "iam:write", false},
+		{"writer", http.MethodDelete, "/api/v1/iam/groups/g1/members/u1?tenant_id=" + iamRESTTenantA, "iam:write", true},
+		{"deleter", http.MethodDelete, "/api/v1/iam/groups/g1/members/u1?tenant_id=" + iamRESTTenantA, "iam:write", false},
 	}
 	s := iamRESTServer(t)
 	for _, tc := range cases {
@@ -252,6 +263,11 @@ func TestIAMScopeAction(t *testing.T) {
 		{http.MethodPost, "/api/v1/iam/permissions/check", "read"},
 		{http.MethodPost, "/api/v1/iam/tenants/{tenant}/policies", "write"},
 		{http.MethodPut, "/api/v1/iam/tenants/{tenant}/policies/test", "write"},
+		{http.MethodDelete, "/api/v1/iam/tenants/{tenant}/users/{id}/roles/{role}", "write"},
+		{http.MethodDelete, "/api/v1/iam/users/{id}/roles/{role}", "write"},
+		{http.MethodDelete, "/api/v1/iam/tenants/{tenant}/groups/{id}/members/{user}", "write"},
+		{http.MethodDelete, "/api/v1/iam/groups/{id}/members/{user}", "write"},
+		{http.MethodDelete, "/api/v1/iam/tenants/{tenant}/groups/{id}", "delete"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.method+" "+tc.route, func(t *testing.T) {

@@ -85,6 +85,10 @@ type GenerateKeyResponse struct {
 
 	// DeletionProtection reports whether the key is deletion-protected.
 	DeletionProtection bool `json:"deletion_protection,omitempty"`
+
+	// Description and Tags are the metadata recorded on the generated key.
+	Description string            `json:"description,omitempty"`
+	Tags        map[string]string `json:"tags,omitempty"`
 }
 
 // ImportKeyRequest is the JSON body for POST /api/v1/kms/keys/import.

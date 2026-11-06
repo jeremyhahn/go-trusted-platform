@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
@@ -28,6 +29,15 @@ var iamReadOnlyPosts = []string{
 	"/policies/validate",
 	"/policies/test",
 	"/permissions/check",
+}
+
+// iamWriteDeletes are the DELETE routes that change a membership rather than
+// delete an entity: RevokeRole and RemoveGroupMember, both iam:write in the
+// gRPC catalog (pkg/api/grpc/method_permissions.go). They are matched as a
+// suffix of the route, which covers the flat and the tenant-scoped form.
+var iamWriteDeletes = []string{
+	"/users/{id}/roles/{role}",
+	"/groups/{id}/members/{user}",
 }
 
 // iamRESTCallerKey carries the caller ScopeGuard.Authenticate resolved to
@@ -161,7 +171,15 @@ func (a iamRESTAuthorization) caller(w http.ResponseWriter, r *http.Request) (*p
 }
 
 // iamScopeAction returns the IAM action a request performs: read, write or
-// delete. The three read-only POSTs need read. An unknown method is refused.
+// delete. The three read-only POSTs need read and the membership DELETEs need
+// write. An unknown method is refused.
 func iamScopeAction(method, route string) (string, error) {
+	if method == http.MethodDelete {
+		for _, suffix := range iamWriteDeletes {
+			if strings.HasSuffix(route, suffix) {
+				return "write", nil
+			}
+		}
+	}
 	return restScopeAction(iamScopeResource, iamReadOnlyPosts, method, route)
 }
