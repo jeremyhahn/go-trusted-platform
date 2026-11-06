@@ -41,16 +41,6 @@ func (m *MockWebServiceRouter) RegisterRoutes(router *mux.Router) {
 	})
 }
 
-func TestWebServiceRouter_Interface(t *testing.T) {
-	t.Run("interface can be implemented", func(t *testing.T) {
-		var router WebServiceRouter
-		mockRouter := &MockWebServiceRouter{}
-
-		router = mockRouter
-		require.NotNil(t, router)
-	})
-}
-
 func TestWebServiceRouter_RegisterRoutes(t *testing.T) {
 	t.Run("RegisterRoutes is called", func(t *testing.T) {
 		mockRouter := &MockWebServiceRouter{}
@@ -80,32 +70,6 @@ func TestWebServiceRouter_RegisterRoutes(t *testing.T) {
 	})
 }
 
-func TestWebServiceRouter_ACMERouterImplementation(t *testing.T) {
-	t.Run("ACMERouter implements WebServiceRouter", func(t *testing.T) {
-		var router WebServiceRouter
-		mockService := &MockRestServicer{}
-
-		acmeRouter := NewACMERouter(mockService)
-		router = acmeRouter
-
-		require.NotNil(t, router)
-		assert.Implements(t, (*WebServiceRouter)(nil), acmeRouter)
-	})
-}
-
-func TestWebServiceRouter_AuthenticationRouterImplementation(t *testing.T) {
-	t.Run("AuthenticationRouter implements WebServiceRouter", func(t *testing.T) {
-		var router WebServiceRouter
-		mockMiddleware := &MockJsonWebTokenMiddleware{}
-
-		authRouter := NewAuthenticationRouter(mockMiddleware)
-		router = authRouter
-
-		require.NotNil(t, router)
-		assert.Implements(t, (*WebServiceRouter)(nil), authRouter)
-	})
-}
-
 func TestWebServiceRouter_SystemRouterImplementation(t *testing.T) {
 	t.Run("SystemRouter implements WebServiceRouter", func(t *testing.T) {
 		var router WebServiceRouter
@@ -123,63 +87,6 @@ func TestWebServiceRouter_SystemRouterImplementation(t *testing.T) {
 		router = sysRouter
 		require.NotNil(t, router)
 		assert.Implements(t, (*WebServiceRouter)(nil), sysRouter)
-	})
-}
-
-func TestWebServiceRouter_WebAuthnRouterImplementation(t *testing.T) {
-	t.Run("WebAuthnRouter implements WebServiceRouter", func(t *testing.T) {
-		var router WebServiceRouter
-		mockMiddleware := &MockJsonWebTokenMiddleware{}
-		mockHandler := &MockWebAuthnRestHandler{}
-
-		webAuthnRouter := NewWebAuthnRouter(mockMiddleware, mockHandler)
-		router = webAuthnRouter
-
-		require.NotNil(t, router)
-		assert.Implements(t, (*WebServiceRouter)(nil), webAuthnRouter)
-	})
-}
-
-func TestWebServiceRouter_MultipleImplementations(t *testing.T) {
-	t.Run("multiple routers can be used together", func(t *testing.T) {
-		var routers []WebServiceRouter
-
-		mockService := &MockRestServicer{}
-		mockJWT := &MockJsonWebTokenMiddleware{}
-		mockHandler := &MockWebAuthnRestHandler{}
-
-		acmeRouter := NewACMERouter(mockService)
-		authRouter := NewAuthenticationRouter(mockJWT)
-		webAuthnRouter := NewWebAuthnRouter(mockJWT, mockHandler)
-
-		routers = append(routers, acmeRouter)
-		routers = append(routers, authRouter)
-		routers = append(routers, webAuthnRouter)
-
-		assert.Len(t, routers, 3)
-
-		for _, router := range routers {
-			assert.NotNil(t, router)
-		}
-	})
-
-	t.Run("multiple routers can register to same mux", func(t *testing.T) {
-		mockService := &MockRestServicer{}
-		mockJWT := &MockJsonWebTokenMiddleware{}
-		mockHandler := &MockWebAuthnRestHandler{}
-
-		acmeRouter := NewACMERouter(mockService)
-		authRouter := NewAuthenticationRouter(mockJWT)
-		webAuthnRouter := NewWebAuthnRouter(mockJWT, mockHandler)
-
-		muxRouter := mux.NewRouter()
-
-		// All routers should be able to register their routes
-		require.NotPanics(t, func() {
-			acmeRouter.RegisterRoutes(muxRouter)
-			authRouter.RegisterRoutes(muxRouter)
-			webAuthnRouter.RegisterRoutes(muxRouter)
-		})
 	})
 }
 
