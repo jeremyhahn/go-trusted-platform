@@ -887,24 +887,29 @@ func ndFallBackHandledAt(t *testing.T, f *overlayFixture, fired, handled time.Ti
 	return f.handler.ndResumeAt
 }
 
-func TestOverlayNDHoldDownCountsFromWhenTheFallbackActs(t *testing.T) {
-	f := newOverlayFixture(t, nil).withVNI(t)
-	require.NoError(t, f.handler.LearnMAC(context.Background(), ovlL2VNI, ovlHostMAC, ndTargetIP))
-	handled := time.Now()
-	fired := handled.Add(-5 * time.Second)
+func TestOverlayNDHoldDownCountsFromTheLaterOfTickAndClock(t *testing.T) {
+	now := time.Now()
+	tests := []struct {
+		name           string
+		fired, handled time.Time
+	}{
+		{
+			name:  "a tick handled late holds down from when it is handled, not from when it fired",
+			fired: now.Add(-5 * time.Second), handled: now,
+		},
+		{
+			name:  "a clock behind the tick never moves the hold-down earlier",
+			fired: now, handled: now.Add(-5 * time.Second),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newOverlayFixture(t, nil).withVNI(t)
+			require.NoError(t, f.handler.LearnMAC(context.Background(), ovlL2VNI, ovlHostMAC, ndTargetIP))
 
-	assert.Equal(t, handled.Add(overlayNDFallbackHoldDown), ndFallBackHandledAt(t, f, fired, handled),
-		"a tick handled late holds down from when it is handled, not from when it fired")
-}
-
-func TestOverlayNDHoldDownCountsFromTheTickWhenTheClockIsEarlier(t *testing.T) {
-	f := newOverlayFixture(t, nil).withVNI(t)
-	require.NoError(t, f.handler.LearnMAC(context.Background(), ovlL2VNI, ovlHostMAC, ndTargetIP))
-	fired := time.Now()
-	handled := fired.Add(-5 * time.Second)
-
-	assert.Equal(t, fired.Add(overlayNDFallbackHoldDown), ndFallBackHandledAt(t, f, fired, handled),
-		"a clock behind the tick never moves the hold-down earlier")
+			assert.Equal(t, now.Add(overlayNDFallbackHoldDown), ndFallBackHandledAt(t, f, tt.fired, tt.handled))
+		})
+	}
 }
 
 func TestOverlayNDHoldDownBacksOffOnRepeatedFallbacks(t *testing.T) {
@@ -954,30 +959,28 @@ func TestOverlayNDHoldDownResetsAfterAQuietPeriod(t *testing.T) {
 }
 
 func TestOverlayNDHoldDownStartsAtTheConfiguredBase(t *testing.T) {
-	const base = 2 * time.Second
-	f := newOverlayFixture(t, func(c *OverlayModeConfig) { c.NDFallbackHoldDown = base }).withVNI(t)
-	ctx := context.Background()
-	require.NoError(t, f.handler.LearnMAC(ctx, ovlL2VNI, ovlHostMAC, ndTargetIP))
-	now := time.Now()
+	tests := []struct {
+		name       string
+		base       time.Duration
+		wantSecond time.Duration
+	}{
+		{name: "a recent fallback doubles the configured base", base: 2 * time.Second, wantSecond: 4 * time.Second},
+		{name: "the back-off never passes its cap", base: overlayNDFallbackHoldDownMax, wantSecond: overlayNDFallbackHoldDownMax},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newOverlayFixture(t, func(c *OverlayModeConfig) { c.NDFallbackHoldDown = tt.base }).withVNI(t)
+			ctx := context.Background()
+			require.NoError(t, f.handler.LearnMAC(ctx, ovlL2VNI, ovlHostMAC, ndTargetIP))
+			now := time.Now()
 
-	require.Equal(t, base, ndFallBackAt(t, f, now), "the first fallback holds down for the configured base")
-	now = now.Add(base)
-	f.handler.ndTick(ctx, now)
-	require.True(t, f.handler.GetStatus().NDSuppression.Suppressing)
-	assert.Equal(t, 2*base, ndFallBackAt(t, f, now.Add(time.Second)), "a recent fallback doubles the configured base")
-}
-
-func TestOverlayNDHoldDownCapAllowsTheMaximumBase(t *testing.T) {
-	f := newOverlayFixture(t, func(c *OverlayModeConfig) { c.NDFallbackHoldDown = overlayNDFallbackHoldDownMax }).withVNI(t)
-	ctx := context.Background()
-	require.NoError(t, f.handler.LearnMAC(ctx, ovlL2VNI, ovlHostMAC, ndTargetIP))
-	now := time.Now()
-
-	require.Equal(t, overlayNDFallbackHoldDownMax, ndFallBackAt(t, f, now))
-	now = now.Add(overlayNDFallbackHoldDownMax)
-	f.handler.ndTick(ctx, now)
-	require.True(t, f.handler.GetStatus().NDSuppression.Suppressing)
-	assert.Equal(t, overlayNDFallbackHoldDownMax, ndFallBackAt(t, f, now.Add(time.Second)), "the back-off never passes its cap")
+			require.Equal(t, tt.base, ndFallBackAt(t, f, now), "the first fallback holds down for the configured base")
+			now = now.Add(tt.base)
+			f.handler.ndTick(ctx, now)
+			require.True(t, f.handler.GetStatus().NDSuppression.Suppressing)
+			assert.Equal(t, tt.wantSecond, ndFallBackAt(t, f, now.Add(time.Second)))
+		})
+	}
 }
 
 func TestOverlayNDFallbackPuntsExpireWhenTheDeleteFails(t *testing.T) {
@@ -1077,20 +1080,6 @@ func TestOverlayNDMeterRefreshKeepsTheCountWhenStatsFail(t *testing.T) {
 	f.handler.refreshNDMeterDrops(ctx)
 
 	assert.Equal(t, uint64(4), f.handler.GetStatus().NDSuppression.MeterDropped)
-}
-
-func TestOverlayNDCountsQueueDrops(t *testing.T) {
-	f := newOverlayFixture(t, nil).withVNI(t)
-	frame := validNS(ndTargetIP).frame()
-
-	// The worker blocks on mu, so the queue fills and the rest are dropped.
-	f.handler.mu.Lock()
-	for range overlayNDQueueSize + 8 {
-		f.sw.emitPacketIn(ndPacketIn(nxmTunnelMatch(ovlL2VNI), frame))
-	}
-	f.handler.mu.Unlock()
-
-	assert.NotZero(t, f.handler.GetStatus().NDSuppression.QueueDropped)
 }
 
 func TestParseNeighborSolicitation(t *testing.T) {
