@@ -55,19 +55,22 @@ func TestRunBridgeCreate_InvalidBridgeType(t *testing.T) {
 	assert.IsType(t, ErrInvalidBridgeType{}, err)
 }
 
+// The bridge get/list/delete, gateway status, overlay status and policy get
+// NoContext tests go through cmd.RunE, so one test covers both the command's
+// RunE wiring and the run function's NoContext branch.
 func TestRunBridgeGet_NoContext(t *testing.T) {
-	err := runBridgeGet(noContextFlags(), "br0")
-	assertNoContextError(t, err)
+	cmd := newBridgeGetCommand(noContextFlags)
+	assertNoContextError(t, cmd.RunE(cmd, []string{"br0"}))
 }
 
 func TestRunBridgeList_NoContext(t *testing.T) {
-	err := runBridgeList(noContextFlags(), "", "", 0, "")
-	assertNoContextError(t, err)
+	cmd := newBridgeListCommand(noContextFlags)
+	assertNoContextError(t, cmd.RunE(cmd, nil))
 }
 
 func TestRunBridgeDelete_NoContext(t *testing.T) {
-	err := runBridgeDelete(noContextFlags(), "br0", false, false, false)
-	assertNoContextError(t, err)
+	cmd := newBridgeDeleteCommand(noContextFlags)
+	assertNoContextError(t, cmd.RunE(cmd, []string{"br0"}))
 }
 
 // =============================================================================
@@ -97,8 +100,8 @@ func TestRunFlowList_NoContext(t *testing.T) {
 // =============================================================================
 
 func TestRunGatewayStatus_NoContext(t *testing.T) {
-	err := runGatewayStatus(noContextFlags())
-	assertNoContextError(t, err)
+	cmd := newGatewayStatusCommand(noContextFlags)
+	assertNoContextError(t, cmd.RunE(cmd, nil))
 }
 
 func TestRunGatewayModeSet_NoContext(t *testing.T) {
@@ -160,8 +163,8 @@ func TestRunIPAMAllocations_NoContext(t *testing.T) {
 // =============================================================================
 
 func TestRunOverlayStatus_NoContext(t *testing.T) {
-	err := runOverlayStatus(noContextFlags())
-	assertNoContextError(t, err)
+	cmd := newOverlayStatusCommand(noContextFlags)
+	assertNoContextError(t, cmd.RunE(cmd, nil))
 }
 
 func TestRunVTEPList_NoContext(t *testing.T) {
@@ -216,8 +219,8 @@ func TestRunPolicyApply_NoContext(t *testing.T) {
 }
 
 func TestRunPolicyGet_NoContext(t *testing.T) {
-	err := runPolicyGet(noContextFlags(), "pol-1")
-	assertNoContextError(t, err)
+	cmd := newPolicyGetCommand(noContextFlags)
+	assertNoContextError(t, cmd.RunE(cmd, []string{"pol-1"}))
 }
 
 func TestRunPolicyList_NoContext(t *testing.T) {
