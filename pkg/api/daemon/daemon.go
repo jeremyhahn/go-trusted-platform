@@ -1595,7 +1595,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		}
 	}
 	if daemon.concreteRestServer != nil && kmsPlatformBackend != nil {
-		if facadeErr := daemon.concreteRestServer.SetKMSHandlers(NewPlatformKMSRESTFacade(kmsPlatformBackend), restGuard); facadeErr != nil {
+		if facadeErr := daemon.concreteRestServer.SetKMSHandlers(NewPlatformKMSRESTFacade(kmsPlatformBackend), restGuard, config.PlatformTenantID); facadeErr != nil {
 			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: facadeErr}
 			logger.Error(constructErr, "component", "rest_server")
 			return nil, constructErr

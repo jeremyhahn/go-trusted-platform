@@ -479,7 +479,7 @@ func (s *RESTServer) SetTenantHandlers(manager restapi.TenantManagerInterface, g
 // and vice-versa. Every route runs behind guard, the kms:* scope check the KMS
 // router uses (kmsRouteScope). A nil service mounts nothing; a nil guard is
 // ErrKMSRESTUnavailable and mounts nothing, never an unguarded route.
-func (s *RESTServer) SetKMSHandlers(service restapi.KMSService, guard *restapi.ScopeGuard) error {
+func (s *RESTServer) SetKMSHandlers(service restapi.KMSService, guard *restapi.ScopeGuard, systemTenantID string) error {
 	if service == nil {
 		return nil
 	}
@@ -487,7 +487,7 @@ func (s *RESTServer) SetKMSHandlers(service restapi.KMSService, guard *restapi.S
 		return ErrKMSRESTUnavailable{Reason: "no REST scope guard"}
 	}
 	respWriter := response.NewResponseWriter(logging.NewFromSlog(s.logger), nil)
-	authz := restScopeAuthorization{guard: guard, respWriter: respWriter, routeScope: kmsRouteScope}
+	authz := kmsRESTAuthorization(guard, respWriter, systemTenantID)
 	// A matcher-less subrouter matches only its own routes, so the KMS router
 	// mounted before it keeps every path the two share. RegisterRoutes
 	// registers full /api/v1/... paths, hence no /api/v1 prefix here.

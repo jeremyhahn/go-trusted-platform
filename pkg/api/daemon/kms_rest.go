@@ -62,7 +62,20 @@ func (s *RESTServer) SetKMSRouterHandlers(logger *logging.Logger, kms kmsclient.
 		return ErrKMSRESTUnavailable{Reason: "no REST scope guard"}
 	}
 	respWriter := response.NewResponseWriter(logger, nil)
-	authz := restScopeAuthorization{
+	authz := kmsRESTAuthorization(guard, respWriter, systemTenantID)
+	parent := s.router.PathPrefix(iamRESTParentPath).Subrouter()
+	parent.Use(authz.authorize)
+	// The KMS router's /kms base path is relative to the /api/v1 parent.
+	restkms.NewKMSRouter(logger, kms, crypto, dek, secrets, respWriter).RegisterRoutes(parent)
+	s.logger.Info("KMS REST routes registered")
+	return nil
+}
+
+// kmsRESTAuthorization is the authorization both KMS mounts apply: the route's
+// scope, then the tenant gate, because the router and the fallback facade both
+// reach SDK clients that cannot bind the caller's tenant.
+func kmsRESTAuthorization(guard *restapi.ScopeGuard, respWriter response.HttpWriter, systemTenantID string) restScopeAuthorization {
+	return restScopeAuthorization{
 		guard:      guard,
 		respWriter: respWriter,
 		routeScope: kmsRouteScope,
@@ -70,12 +83,6 @@ func (s *RESTServer) SetKMSRouterHandlers(logger *logging.Logger, kms kmsclient.
 			return kmsRouterTenantDecision(systemTenantID, callerTenantID)
 		},
 	}
-	parent := s.router.PathPrefix(iamRESTParentPath).Subrouter()
-	parent.Use(authz.authorize)
-	// The KMS router's /kms base path is relative to the /api/v1 parent.
-	restkms.NewKMSRouter(logger, kms, crypto, dek, secrets, respWriter).RegisterRoutes(parent)
-	s.logger.Info("KMS REST routes registered")
-	return nil
 }
 
 // ErrKMSRouterTenantUnbound refuses a tenant-bound caller on the KMS router.

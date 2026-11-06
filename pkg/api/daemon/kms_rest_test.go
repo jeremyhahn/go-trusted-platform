@@ -277,7 +277,7 @@ func TestKMSREST_RouterTakesPrecedenceOverTheDaemonHandlers(t *testing.T) {
 	}}
 	s := kmsRESTServer(t, client)
 	guard := restapi.NewScopeGuard(kmsRESTCallers, nil, nil)
-	require.NoError(t, s.SetKMSHandlers(NewPlatformKMSRESTFacade(NewPlatformKMSBackend(client, &platformMockCryptoClient{}, slog.Default())), guard))
+	require.NoError(t, s.SetKMSHandlers(NewPlatformKMSRESTFacade(NewPlatformKMSBackend(client, &platformMockCryptoClient{}, slog.Default())), guard, iamRESTTenantA))
 
 	assert.Equal(t, http.StatusUnauthorized, serveIAM(s, http.MethodGet, "/api/v1/kms/keys/k1", "").Code,
 		"the overlapping key route answers through the guard")
@@ -295,7 +295,7 @@ func TestSetKMSHandlers_NilGuardIsRefused(t *testing.T) {
 	s := &RESTServer{router: mux.NewRouter(), logger: slog.Default()}
 	facade := NewPlatformKMSRESTFacade(NewPlatformKMSBackend(&platformMockKMSClient{}, &platformMockCryptoClient{}, slog.Default()))
 
-	err := s.SetKMSHandlers(facade, nil)
+	err := s.SetKMSHandlers(facade, nil, iamRESTTenantA)
 
 	var unavailable ErrKMSRESTUnavailable
 	require.ErrorAs(t, err, &unavailable)
@@ -306,7 +306,7 @@ func TestSetKMSHandlers_NilGuardIsRefused(t *testing.T) {
 func TestSetKMSHandlers_NilServiceMountsNothing(t *testing.T) {
 	s := &RESTServer{router: mux.NewRouter(), logger: slog.Default()}
 
-	require.NoError(t, s.SetKMSHandlers(nil, restapi.NewScopeGuard(kmsRESTCallers, nil, nil)))
+	require.NoError(t, s.SetKMSHandlers(nil, restapi.NewScopeGuard(kmsRESTCallers, nil, nil), iamRESTTenantA))
 	assert.Empty(t, testutil.WalkRoutes(t, s.Router()))
 }
 
@@ -316,7 +316,7 @@ func TestSetKMSHandlers_FacadeOnlyPathNeedsScope(t *testing.T) {
 	}}
 	s := kmsRESTServer(t, client)
 	guard := restapi.NewScopeGuard(kmsRESTCallers, nil, nil)
-	require.NoError(t, s.SetKMSHandlers(NewPlatformKMSRESTFacade(NewPlatformKMSBackend(client, &platformMockCryptoClient{}, slog.Default())), guard))
+	require.NoError(t, s.SetKMSHandlers(NewPlatformKMSRESTFacade(NewPlatformKMSBackend(client, &platformMockCryptoClient{}, slog.Default())), guard, iamRESTTenantA))
 
 	recorder := serveIAM(s, http.MethodPost, "/api/v1/kms/sign", "kms-reader")
 	assert.Equal(t, http.StatusForbidden, recorder.Code)
