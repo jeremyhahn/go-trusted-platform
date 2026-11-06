@@ -759,7 +759,7 @@ devcontainer image so a developer and CI run the same thing:
 | Job | Tier | What it runs |
 |-----|------|--------------|
 | `changes` | PR | Lists the PR's changed files and sets `docs_only` (below) (`ci.yml:162`) |
-| `image` | PR | `make -s it-image IT_WARM_CACHE=0` names the integration image, reused when the daemon holds that tag and otherwise built with `make docker-build-integration`; the lease spans only that build and the `docker save` that `trivy image` scans, and is released before `make docker-build-toolchain` (`ci.yml:280-286`), then, in the toolchain image through `scripts/in-toolchain-image.sh`: `make fmt-check`, `make vet` and `make lint` (`:292-308`); the releasability test on a docs-only PR (`:312-316`); off a docs-only PR, `make build build-no-web rpi-binaries`, `go build ./...`, the `sdk/go` build and consumer check, `make test test-sdk-go` and `make test-race` (`:323-369`); on every event, a docs-only PR included, `make deps-check` (ci-template v1.28, `:391-396`); in the full tier, `make security` (`:378-384`) and `trivy image` on the integration image (`:406-416`). Each step's container is memory-limited (see "Memory limits") |
+| `image` | PR | `make -s it-image IT_WARM_CACHE=0` names the integration image, reused when the daemon holds that tag and otherwise built with `make docker-build-integration`; the lease spans only that build and the `docker save` that `trivy image` scans, and is released before `make docker-build-toolchain` (`ci.yml:280-286`), then, in the toolchain image through `scripts/in-toolchain-image.sh`: `make fmt-check`, `make vet` and `make lint` (`:292-308`); the releasability test on a docs-only PR (`:312-316`); off a docs-only PR, `make build build-no-web rpi-binaries`, `go build ./...`, the `sdk/go` build and consumer check, `make test test-sdk-go` and `make test-race` (`:323-369`); on every event, a docs-only PR included, `make deps-check` (ci-template v1.28, `:391-396`); in the full tier, `make security-novuln` (`make security` without govulncheck, which runs in `vuln`) and `trivy image` on the integration image (`:406-416`). Each step's container is memory-limited (see "Memory limits") |
 | `lint-gates` | PR | `make lint-gates`, the repo's grep gates (today `check-insecure-tls`), on the runner (`ci.yml:459`) |
 | `arch-gates` | PR | No direct go-objstore import outside a storage seam (this repo has none) (`ci.yml:466`) |
 | `sdkjs` | docs | The JS SDK's unit tests and lint, on the runner (`ci.yml:495`) |
@@ -768,6 +768,7 @@ devcontainer image so a developer and CI run the same thing:
 | `integration` | full | A matrix job per leg: `make integration-test-leg LEG=<n> IT_PREBUILT=1` in the run's leased integration image, under a per-leg `IT_PROJECT` and the run's content tag `IT_IMAGE` and the `IT_MEMORY` limit, torn down on every exit (see "Legs" and "Memory limits"); needs `integration-image` (`ci.yml:680-853`) |
 | `soak` | nightly | `make integration-test` looped for `SOAK_MINUTES` (below), under the same `IT_MEMORY` limit (`ci.yml:867-974`) |
 | `fips` | full | `make test-fips`; outside the gate (`ci.yml:976-992`) |
+| `vuln` | full | govulncheck, the `make vuln` part of `make security`, on its own: `make docker-build-toolchain` on the job's runner (a toolchain image lives only on its builder's daemon; the project's BuildKit cache keeps it warm), then `make vuln` in the toolchain image at 20g with `GOMEMLIMIT` 18GiB, since its symbol scan reached 16.7 GB under the `image` job's 16g (#1425) |
 
 The tiers follow ci-template v1.28 (handbook `ci-standard.md` §8; the header
 of `ci.yml:63-72`). The PR tier is the `changes`, `image`, `lint-gates` and
@@ -1019,9 +1020,10 @@ Each `ci.yml` step sets its own size:
 | `image` / `sdk/go` build and consumer check | toolchain | none | 8g | 16 |
 | `image` / `make test test-sdk-go` | toolchain | none | 16g | 16 |
 | `image` / `make test-race` | toolchain | none | 16g | 8 |
-| `image` / `make security` | toolchain | none | 16g | 8, and `GOSEC_CONCURRENCY=2` |
+| `image` / `make security-novuln` | toolchain | none | 16g | 8, and `GOSEC_CONCURRENCY=2` |
 | `image` / `make deps-check` | toolchain | none | 4g | 16 |
 | `image` / `trivy image` | toolchain | none | 8g | 16 |
+| `vuln` / `make vuln` | toolchain | 16g (in `make security`, OOM-killed) | 20g, `GOMEMLIMIT` 18GiB (`IN_IMAGE_GOMEMLIMIT`) | 8 |
 | `integration` / each leg | compose `integration` | none | 16g (`IT_MEMORY`) | host |
 | `soak` / each iteration | compose `integration` | none | 16g (`IT_MEMORY`) | host |
 
@@ -1029,7 +1031,7 @@ Each `ci.yml` step sets its own size:
 at once; the security step passes 2, and `GOMAXPROCS` 8 bounds the `go list`
 compiles gosec loads through. `pkg/arch/cimemory_test.go` fails when a
 `ci.yml` step that runs `scripts/in-toolchain-image.sh` sets no
-`IN_IMAGE_MEMORY`, or one above 16g; when an integration step's job sets no
+`IN_IMAGE_MEMORY`, or one above 16g (20g in the `vuln` job); when an integration step's job sets no
 `IT_MEMORY`; when the compose integration service lacks `mem_limit` or its
 `memswap_limit` differs; and when `run-integration-suite` drops the limit. It
 also fails when a launch step, its job or the workflow sets `CI_CGROUP_PARENT`
