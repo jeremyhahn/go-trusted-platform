@@ -26,6 +26,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -1382,11 +1383,26 @@ func TestGenerateSessionID(t *testing.T) {
 
 // Helper functions for creating test certificates
 
+// deviceKey is the RSA key the device-certificate helpers sign with: one
+// 2048-bit key generated per test binary instead of one per certificate. No
+// test trusts a device certificate, and every test CA has its own key.
+var deviceKey = sync.OnceValues(func() (*rsa.PrivateKey, error) {
+	return rsa.GenerateKey(rand.Reader, 2048)
+})
+
+func testDeviceKey(t *testing.T) *rsa.PrivateKey {
+	t.Helper()
+
+	key, err := deviceKey()
+	require.NoError(t, err)
+
+	return key
+}
+
 func createTestCertificate(t *testing.T) *x509.Certificate {
 	t.Helper()
 
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	require.NoError(t, err)
+	key := testDeviceKey(t)
 
 	template := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
@@ -1410,8 +1426,7 @@ func createTestCertificate(t *testing.T) *x509.Certificate {
 func createExpiredCertificate(t *testing.T) *x509.Certificate {
 	t.Helper()
 
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	require.NoError(t, err)
+	key := testDeviceKey(t)
 
 	template := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
@@ -1435,8 +1450,7 @@ func createExpiredCertificate(t *testing.T) *x509.Certificate {
 func createFutureCertificate(t *testing.T) *x509.Certificate {
 	t.Helper()
 
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	require.NoError(t, err)
+	key := testDeviceKey(t)
 
 	template := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
@@ -1463,8 +1477,7 @@ func createFutureCertificate(t *testing.T) *x509.Certificate {
 func createCertWithOIDs(t *testing.T, oids []asn1.ObjectIdentifier) *x509.Certificate {
 	t.Helper()
 
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	require.NoError(t, err)
+	key := testDeviceKey(t)
 
 	template := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),

@@ -48,11 +48,13 @@ func newIssuerTestService(t *testing.T) *Service {
 }
 
 func TestNewUserTokenIssuer_RequiresUserGetter(t *testing.T) {
+	t.Parallel()
 	_, err := NewUserTokenIssuer(nil, newIssuerTestService(t))
 	assert.ErrorIs(t, err, ErrUserGetterRequired)
 }
 
 func TestNewUserTokenIssuer_RequiresService(t *testing.T) {
+	t.Parallel()
 	_, err := NewUserTokenIssuer(&stubUserGetter{}, nil)
 	assert.ErrorIs(t, err, ErrTokenServiceRequired)
 }
@@ -61,6 +63,7 @@ func TestNewUserTokenIssuer_RequiresService(t *testing.T) {
 // overrides the stored assignment in the issued token without mutating
 // the stored record.
 func TestUserTokenIssuer_StampsTenant(t *testing.T) {
+	t.Parallel()
 	service := newIssuerTestService(t)
 	user := entities.NewUser("owner@example.com")
 	issuer, err := NewUserTokenIssuer(&stubUserGetter{user: user}, service)
@@ -86,6 +89,7 @@ func TestUserTokenIssuer_StampsTenant(t *testing.T) {
 // TestUserTokenIssuer_KeepsStoredRoles proves an empty roles argument
 // falls back to the stored record's roles.
 func TestUserTokenIssuer_KeepsStoredRoles(t *testing.T) {
+	t.Parallel()
 	service := newIssuerTestService(t)
 	user := entities.NewUser("roles@example.com")
 	user.Roles = []*entities.Role{{Name: "operator"}}
@@ -104,6 +108,7 @@ func TestUserTokenIssuer_KeepsStoredRoles(t *testing.T) {
 // TestUserTokenIssuer_KeepsStoredTenant proves an empty tenant argument
 // leaves the user's persisted assignment in the token.
 func TestUserTokenIssuer_KeepsStoredTenant(t *testing.T) {
+	t.Parallel()
 	service := newIssuerTestService(t)
 	user := entities.NewUser("member@example.com")
 	user.TenantID = "tenant-stored"
@@ -122,6 +127,7 @@ func TestUserTokenIssuer_KeepsStoredTenant(t *testing.T) {
 // TestUserTokenIssuer_LookupError proves a failed user lookup issues
 // nothing.
 func TestUserTokenIssuer_LookupError(t *testing.T) {
+	t.Parallel()
 	service := newIssuerTestService(t)
 	lookupErr := errors.New("store unavailable")
 	issuer, err := NewUserTokenIssuer(&stubUserGetter{err: lookupErr}, service)

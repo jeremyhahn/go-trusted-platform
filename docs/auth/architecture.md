@@ -1222,6 +1222,100 @@ belongs to the second REST server tracked on #232.
 Tracked on #165 (the seven routes) and #420 (the audit's reach) — do not read
 this section as a claim that the platform is fully gated.
 
+## 6d. Second authorization models (audit, #926)
+
+The owner ruled on 2026-10-15 that IAM and RBAC form one model for every
+project. go-qrdb implements it, and each project above inherits it through
+go-quicbaas. No project keeps a second authorization model, and on every
+layer the tenant is the X.509 subject `OU`. This section lists what
+go-trusted-platform still keeps of its own, measured against main
+`4ad200e68`. Line numbers are 1-based at that commit. It follows the
+go-quicbaas audit (go-quicbaas #1369, rows in PR #1370): the rows come first,
+and the issues are filed under them. Most findings already have an
+"IAM clean-up" bullet in [SPEC.md](../SPEC.md) §Interfaces. The audit
+re-measures them, adds what those bullets miss, and marks what has already
+been fixed.
+
+### Inventory 1: roles, permissions and authorization checks the platform keeps
+
+| # | Where (file:line) | What it decides | Replaced by |
+|---|---|---|---|
+| A1 | `pkg/api/daemon/transport_auth.go:237`, `:259` (`mtlsOperatorScope`, `mtlsPeerAuthenticator.AuthenticatePeer`) | Every caller with a verified client certificate gets `*:*` on QUIC, REST and MCP | `IAMPEPClient.Check` (`sdk/go`, alias of `client/iam.PEPClient`) for the certificate's principal |
+| A2 | `pkg/api/daemon/mtls_interceptor.go:75`, `:101` | The gRPC mTLS interceptors authenticate the caller and then call the handler, with no per-method check | `IAMPEPClient.Check` per method |
+| A3 | `pkg/api/quic/auth.go:281-304` (`AuthorizeRequest`) | Allows an operation whose scope is empty (`:288-289`), and every request when no checker is wired (`:303-304`) | `IAMPEPClient.Check`. Deny when no decision point is wired |
+| A4 | `pkg/api/grpc/method_permissions.go:54` (`preAuthMethods`), `:113` (`buildGRPCMethodPermissions`) | The platform's own gRPC method → `resource:action` catalogue | No SDK surface yet: per-method declarations in an API module, like `ModuleMCPToolPermissions` (`ModuleGRPCPublicMethods` lists only the public methods) |
+| A5 | `pkg/api/quic/opcode_permissions.go:312` (`opcodePermissions`), `:570` (`categoryPermissions`) | The platform's own QUIC opcode → permission catalogue | No SDK surface yet (same gap as A4) |
+| A6 | `pkg/api/mcp/authz.go:55` (`toolPermissionCatalog`), `:877` (its own `resource:action` parsing) | MCP tool permissions (#304) | `ModuleMCPToolPermissions` (`sdk/go`) declares each tool's `Permission`, and `IAMPEPClient.Check` decides it |
+| A7 | `pkg/api/rest/auth_factor_handlers.go:441` (`callerAuthorized`), `:447` (CN prefix `admin`), `:453` (OU `admin`) | Lets three callers administer auth factors: one with no TLS peer, one whose CN starts with `admin`, and one whose OU is `admin`. The OU is the tenant, so this reads a tenant name as a role | `IAMPEPClient.Check` on go-qrdb's auth-factor permissions |
+| A8 | `pkg/api/daemon/daemon.go:422-426` (Unix gRPC chain), `pkg/api/grpc/ca_service.go:321-322` (`IsRoot`) | The Unix socket runs with no per-method check, and CA CSR signing admits a root caller identified by peer credentials | `IAMPEPClient.Check`. Open: how a root peer-credential caller maps to a principal |
+| A9 | `pkg/webservice/v1/authz.go:66` (`gated`), `pkg/webservice/v1/router.go:128` (`operatorChain`), `:291` and about 40 `gated(common.ROLE_ADMIN)` mounts, `:1031` (`guard.RequireRoles`) | Web routes gated on the local `admin` role | `platformtoken.AuthorizedContext.RequireScope` / `RequireAnyScope` (`sdk/go/platformtoken`) on each route's permission |
+| A10 | `pkg/webservice/v1/middleware/iam/guard.go:69` (`RequireRoles`), `:88` (`RequireAllRoles`), `platform_token.go:209` (`RequireRole`), `session.go:151` (`HasRole`), `authz.go:54` (`NewAuthzMiddleware`, no production caller) | Role middleware of the platform's own | Same as A9. `NewAuthzMiddleware` is deleted |
+| A11 | `pkg/webservice/v1/router.go:896`, `rest/ca/router.go:155`, `rest/compute/router.go:75`, `rest/pxe/router.go:147`, `rest/vpn/router.go:108`, `router/device.go:78` | Each route scope guard passes the request through when no authorizer is wired | `RequireScope` with no bypass. A route with no authorizer is refused |
+| A12 | `pkg/store/datastore/entities/user.go:33` (`Roles`), `:64` (`AddRole`), `:69` (`HasRole`), `entities/role.go`, `kvstore/role.go`, `pkg/storage/quicbaas/role.go`, `pkg/platform/service/role.go`, `pkg/webservice/v1/invitation/types.go:77`, `:86` (`Role`), `pkg/webservice/v1/adminclaim/service.go:601-602` (local `ROLE_ADMIN` grant) | A local role store, role assignment, invitation roles and the admin claim's role grant | `rbac.Client` `ListRoles` / `AssignRole` (`sdk/go/client/rbac`), `IAMRoleClient.Reconcile` (`sdk/go`) |
+| A13 | `entities/user.go:29` (`IsTenantOwner`), `pkg/platform/service/tenant_user.go:281` (`DefaultTenantOwnerRole = "admin"`), `:604` (synthesized `tenant_owner`), `pkg/webservice/v1/jwt/service.go:64`, `middleware/tenant/context.go:65`, `:161` | Tenant ownership held as a user field, a role the platform assigns itself and a claim in a token the platform mints | A go-qrdb role assignment through `rbac.Client.AssignRole`, decided by `IAMPEPClient.Check`. At login, `quicbaas.Identity.TenantOwner` (#662, not yet published) |
+| A14 | `pkg/common/types.go:44-45` (`ROLE_SO`, `ROLE_ADMIN`), `pkg/api/daemon/fido2_service.go:46` (`FIDO2RoleSO`), `ceremony_service.go:66` (`CeremonyRoleSO`) | Role names of the platform's own | No SDK surface yet: go-qrdb `BuiltInRoles`, and the officer roles, re-exported in go-quicbaas `sdk/go` |
+| A15 | `pkg/ca/issuance/issuance.go:104` (`SignCSRScope`), `pkg/api/mcp/authz.go:423` | `ca:sign-csr`, a permission that no default role carries by name. The REST handler now aliases `issuance.SignCSRScope` (`rest/ca/handlers.go:60`), so the duplicate the SPEC bullet names is gone | No SDK surface yet: `ca:sign-csr` in go-qrdb's vocabulary, carried by a default role |
+| A16 | `pkg/api/mcp/authz.go:169-226`, `:446-466`, `:745-747`, `pkg/webservice/v1/router/device.go:63-66`, and A4/A5 | Onboarding permissions (`device:write`, `provisioning:*`, `idevid:*`) that exist only in the platform's catalogues | No SDK surface yet: these permissions in go-qrdb's vocabulary, on its default roles |
+| A17 | `pkg/tenant/access.go:47` (`AuthorizeTenantAccess`), `pkg/api/daemon/tenant_grpc_authz.go:56-60` (`authorizeTenant` allows a caller with no tenant binding), `iam_tenant_authz.go:23` (`callerTenant`), `middleware/iam/guard.go:116` (`RequireTenant`), `:173` (`RequireOwnTenantOrSystem`), `:228` (`RequireOwnTenantNameOrSystem`), `:283` (`RequireOwnTenant`) | Own-tenant-or-system checks of the platform's own | `IAMDomainTenantManager` (`sdk/go`) with `IAMPEPClient.Check` scoped to the request's tenant. `RequireOwnTenant` stays until go-qrdb #683 lands |
+| A18 | `pkg/dns/service.go:172-175`, `:985` (`zone.IsOwnedBy(s.params.TenantID)`) | Zone access by comparing the zone's tenant with the daemon's configured tenant, not the caller's | `IAMPEPClient.Check` with `CheckRequest.TenantID` set to the zone's tenant |
+| A19 | `pkg/store/datastore/entities/user.go:32` (`Password`), `kvstore/user.go`, `pkg/storage/quicbaas/user.go`, `pkg/platform/service/user.go`, `iam_user_reconcile.go` | A local user store, mirrored into go-quicbaas IAM (#644) | `IAMUserClient` (`sdk/go`). The mirror goes |
+| A20 | `pkg/registry/auth.go:192` (`NewRegistryAuthHandler`, no production caller), `:213` (`registry.access`), `:288` | The OPA policy's decision grants registry session permissions | `IAMPEPClient.Check`. No SDK surface yet for registry permissions in go-qrdb's vocabulary |
+| A21 | `pkg/proxy/authchain.go:257`, `:320-334` (`rolesFromIdentity`) | The route `required-roles` gate has been removed (`pkg/proxy/config.go:112`), but the certificate OU is still copied into `ClientIdentity.Roles`, which reads the tenant as a role | Drop `Roles` from the mTLS identity. A route's permission is `required-scopes`, decided by `IAMPEPClient.Check` |
+| A22 | `pkg/policy/opa/engine.go:208` (`Evaluate`), policies under `pkg/policy/opa/policies/`, built at `pkg/sdn/gateway/proxysvc/opa.go:53` and `pkg/sdn/gateway/services/vpn/tenant_posture.go:55` | Evidence questions: attestation (`quote`, `vm`, `host`), image and container admission, VPN posture, and the proxy route's zone, attestation and method checks. `proxy_authz.rego:21` denies by default and takes no roles (`pkg/proxy/policy.go:57`) | **Not a second model.** It stays under the `security` and `policy-engines` rows. The registry use (A20) is the one access question OPA still answers |
+| A23 | `pkg/api/daemon/platform_token_validator.go:354-355` | **Fixed.** An empty resource or action now returns `ErrEmptyPermission` | (none needed) |
+
+### Inventory 2: where a principal's or device's tenant is read
+
+Every entry below takes the tenant from somewhere other than the subject `OU`.
+No production path reads the tenant from the OU today. The only code that can
+(T5) has no production caller, and `pkg/auth` offers no OU field at all (`IdentityField`, `pkg/auth/interface.go:26-34`).
+
+| # | Where (file:line) | Source of the tenant | Used by |
+|---|---|---|---|
+| T1 | `pkg/auth/mtls.go:219` (configured `TenantField`, default O at `pkg/auth/interface.go:204`), `:221-223` (falls back to O), `:119-120` (`DefaultTenant`) | Certificate O, otherwise a configured default | Daemon gRPC mTLS (`transport_auth.go:114`), QUIC (`:194`), the REST and MCP peer authenticator (`:294`), which stamps the tenant into `AuthorizedContext.TenantID` (`:258`) |
+| T2 | `pkg/sdn/gateway/commands/assembly.go:690-691` | Certificate O through T1, otherwise the hard-coded `"default"` | gatewayd mTLS |
+| T3 | `pkg/sdn/policy/certificate.go:135-145` (`ExtractTenantID`) | Certificate O, otherwise the first dot-separated component of the CN | SDN port policy |
+| T4 | `pkg/sdn/policy/enrollment_hook.go:898-900` | Certificate O, otherwise `"default"` | SDN enrollment port policy |
+| T5 | `pkg/webservice/v1/middleware/iam/auth.go:244` (token claim), `:246` (`X-Tenant-ID` header, `types.go:33`), `:248-249` (`DefaultTenantID`), `:202-204` and `:275-282` (configured CN, OU, O or SAN on certificates) | Claim, then header, then config. A certificate is read from whichever field is configured. `NewAuthMiddleware` (`:48`) has no production caller | No production path. Deleted |
+| T6 | `pkg/webservice/v1/middleware/tenant/context.go:159` | The `tenant_id` claim of the platform-minted JWT (`pkg/webservice/v1/jwt/`) | Web session routes |
+| T7 | `pkg/api/mcp/dragondb_auth.go:240-242` | The validated token's tenant, otherwise `defaultTenantID`. Production leaves it unset (`pkg/api/daemon/daemon.go:2236-2239`), and `SetDefaultTenantID` (`:320`) has no caller, so the fallback is dormant | MCP |
+| T8 | `pkg/webservice/v1/adminclaim/proof.go:88`, `:108`, `:135-136` | The tenant segment of the URI SAN `spiffe://<domain>/tenant/<t>/user/<admin>`, compared with the configured operating tenant | Admin claim (§6b) |
+| T9 | `pkg/webservice/v1/webauthn/webauthn.go:74` | The adopted operating tenant (`pkg/app/app.go:896`, `EnsureOperatingTenant`), stamped onto every ceremony call | WebAuthn REST proxy |
+| T10 | `pkg/dns/service.go:72`, `:172-175` | The daemon's configured tenant | DNS zone access (A18) |
+| T11 | `pkg/api/daemon/vpn_grpc_service.go:107`, `:125`, `:144`, `pkg/api/rest/vpn_handlers.go:136`, `:146`, `:167`, `:177`, `:208` | Request body or `tenant_id` query string | VPN peers, gateways and posture policies |
+| T12 | `pkg/api/daemon/eab_grpc_service.go:181`, `:257`, `:559`, `pkg/webservice/v1/rest/eab/handlers.go:143`, `:368-369` | Request body or query string | EAB key administration |
+| T13 | `pkg/api/daemon/invitation_grpc_service.go:175`, `:251-253` | Request body | gRPC invitation create and list |
+| T14 | `pkg/webservice/v1/device/template_handlers.go:243` | Query string | Device templates |
+
+T11 to T14 name a tenant in the request and never compare it with the
+caller's. T6 and the broker platform token's `tenant_id` are claims, which are
+safe only if their issuer derived them from the OU. Neither the platform nor
+the pinned SDK guarantees that.
+
+### Proposed SPEC rows
+
+The owner adds these rows to [SPEC.md](../SPEC.md). This audit does not edit it.
+
+- ``iam: the mTLS `*:*` grant and the authenticate-only gRPC mTLS interceptors are replaced by IAMPEPClient.Check on every method (#926)`` (A1, A2)
+- `iam: the QUIC allow-on-empty-scope and allow-without-checker paths are replaced by IAMPEPClient.Check, deny when unwired (#926)` (A3)
+- `iam: the gRPC method and QUIC opcode permission catalogues are replaced by go-quicbaas API-module permission declarations, an SDK gap (#926)` (A4, A5)
+- `iam: the MCP tool permission catalogue is replaced by ModuleMCPToolPermissions and IAMPEPClient.Check (#926)` (A6)
+- `iam: callerAuthorized's CN/OU admin check is replaced by IAMPEPClient.Check on go-qrdb's auth-factor permissions (#926)` (A7)
+- `iam: the Unix socket's unchecked methods and peer-credential root are replaced by IAMPEPClient.Check (#926)` (A8)
+- `iam: the gated(ROLE_ADMIN) route gates, the role middleware and the authorizer-less scope-guard bypass are replaced by platformtoken.AuthorizedContext.RequireScope (#926)` (A9 to A11)
+- `iam: the local role store, invitation roles and admin-claim role grant are replaced by rbac.Client and IAMRoleClient (#926)` (A12)
+- `iam: the tenant-owner field, role and token claim are replaced by a go-qrdb role assignment and quicbaas.Identity.TenantOwner (#926)` (A13)
+- `iam: the ROLE_SO, ROLE_ADMIN, FIDO2 and ceremony officer role names are replaced by go-qrdb built-in roles re-exported in sdk/go, an SDK gap (#926)` (A14)
+- `iam: ca:sign-csr and the onboarding and registry permissions are replaced by go-qrdb permissions on its default roles, an SDK gap (#926)` (A15, A16, A20)
+- `iam: the own-tenant-or-system checks are replaced by IAMDomainTenantManager with IAMPEPClient.Check (#926)` (A17)
+- `iam: DNS zone ownership against the daemon's tenant is replaced by IAMPEPClient.Check on the zone's tenant (#926)` (A18)
+- `iam: the local user store and its IAM mirror are replaced by IAMUserClient (#926)` (A19)
+- `iam: the registry OPA access decision is replaced by IAMPEPClient.Check (#926)` (A20)
+- `iam: the proxy's OU-as-role identity is replaced by IAMPEPClient.Check on required-scopes (#926)` (A21)
+- `iam: the tenant read from the certificate O, the CN, a default or a SPIFFE path is replaced by the subject OU resolved through a go-quicbaas certificate-to-principal verb, an SDK gap (#926)` (T1 to T4, T8)
+- `iam: the tenant read from a header, a request body, a query string or a configured default is replaced by the authenticated principal's OU tenant passed to IAMPEPClient.Check as CheckRequest.TenantID (#926)` (T5, T7, T9 to T14)
+- `iam: the tenant claim of the platform-minted session JWT is replaced by the SDK session's principal tenant (#926)` (T6)
+
 ## 7. What this feature deliberately does not do
 
 - **It does not store identities.** No users, no groups, no roles, no

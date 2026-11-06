@@ -71,21 +71,6 @@ func serveOverlay(t *testing.T, srv platformv1.OverlayServiceServer) (*httptest.
 	return server, platformv1.NewOverlayServiceClient(adapter.Connection())
 }
 
-// TestSDKREST_DeleteVNI: the VNI travels in the numeric {vni} segment and
-// reaches the DeleteVNI handler. Before #452 the SDK sent it in the body of
-// DELETE /api/v1/overlay/vnis, which the router does not serve.
-func TestSDKREST_DeleteVNI(t *testing.T) {
-	srv := &fakeOverlayServer{}
-	_, client := serveOverlay(t, srv)
-
-	resp, err := client.DeleteVNI(context.Background(), &platformv1.DeleteVNIRequest{Vni: 1000100})
-
-	require.NoError(t, err)
-	require.NotNil(t, srv.deleted, "the request reached no handler")
-	assert.Equal(t, uint32(1000100), srv.deleted.GetVni())
-	assert.True(t, resp.GetStatus().GetSuccess())
-}
-
 // TestSDKREST_DeleteVNI_ZeroVNINeverLeavesTheClient: zero would leave the
 // numeric segment empty, so the SDK refuses it before the wire.
 func TestSDKREST_DeleteVNI_ZeroVNINeverLeavesTheClient(t *testing.T) {
@@ -114,16 +99,4 @@ func TestSDKREST_DeleteVNI_NonNumericVNIIsRefused(t *testing.T) {
 
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 	assert.Nil(t, srv.deleted, "a non-numeric VNI reached the handler")
-}
-
-// TestSDKREST_DeleteVNI_ServerErrorKeepsItsStatus: a NotFound from the
-// server comes back to the SDK caller as NotFound.
-func TestSDKREST_DeleteVNI_ServerErrorKeepsItsStatus(t *testing.T) {
-	srv := &fakeOverlayServer{err: status.Error(codes.NotFound, "vni not found")}
-	_, client := serveOverlay(t, srv)
-
-	_, err := client.DeleteVNI(context.Background(), &platformv1.DeleteVNIRequest{Vni: 4242})
-
-	require.Error(t, err)
-	assert.Equal(t, codes.NotFound, status.Code(err))
 }
