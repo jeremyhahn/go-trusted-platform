@@ -454,6 +454,12 @@ func TestCommandTree_DispatchesToServer(t *testing.T) {
 		method string
 	}{
 		{[]string{"bridge", "create", "--id", "b1", "--name", "br0", "--type", "ovs"}, "CreateBridge"},
+		{[]string{"bridge", "get", "br0"}, "GetBridge"},
+		{[]string{"bridge", "list"}, "ListBridges"},
+		{[]string{"bridge", "delete", "br0"}, "DeleteBridge"},
+		{[]string{"policy", "get", "p1"}, "GetPolicy"},
+		{[]string{"overlay", "status"}, "GetOverlayStatus"},
+		{[]string{"gateway", "status"}, "GetGatewayStatus"},
 		{[]string{"flow", "add", "--bridge", "br0", "--id", "f1", "--table", "0", "--priority", "1", "--action", "drop"}, "AddFlow"},
 		{[]string{"flow", "delete", "f1", "--bridge", "br0"}, "DeleteFlow"},
 		{[]string{"flow", "list", "--bridge", "br0"}, "ListFlows"},
