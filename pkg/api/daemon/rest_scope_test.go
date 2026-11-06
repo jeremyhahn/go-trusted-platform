@@ -168,7 +168,7 @@ func serveWithoutCredential(router http.Handler, method, path string) (answer st
 func TestDaemonREST_EveryMountedRouteIsGuarded(t *testing.T) {
 	guard := restapi.NewScopeGuard(nil, nil, nil)
 	s, _ := daemonRouteTable(t, guard)
-	require.NoError(t, s.SetKMSRouterHandlers(logging.DefaultLogger(), &platformMockKMSClient{}, &platformMockCryptoClient{}, nil, nil, guard))
+	require.NoError(t, s.SetKMSRouterHandlers(logging.DefaultLogger(), &platformMockKMSClient{}, &platformMockCryptoClient{}, nil, nil, guard, iamRESTTenantA))
 	iam := newMemIAM()
 	require.NoError(t, s.SetIAMHandlers(logging.DefaultLogger(), restiam.NewQuicBaaSIAMAdapter(iam), restiam.NewQuicBaaSPEPAdapter(iam.PEP()), guard, iamRESTSystemTenant))
 

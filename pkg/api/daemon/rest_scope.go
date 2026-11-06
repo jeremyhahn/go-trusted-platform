@@ -247,6 +247,9 @@ type restScopeAuthorization struct {
 	guard      *restapi.ScopeGuard
 	respWriter response.HttpWriter
 	routeScope func(method, route string) (string, error)
+	// callerGate, when set, refuses an authenticated, scoped caller the
+	// router cannot serve (for example a tenant it cannot bind).
+	callerGate func(callerTenantID string) error
 }
 
 // authorize answers 401 for a missing or invalid credential and 403 for a
@@ -261,6 +264,12 @@ func (a restScopeAuthorization) authorize(next http.Handler) http.Handler {
 		if err := caller.RequireScope(scope); err != nil {
 			a.respWriter.Error403(w, r, restapi.ErrRouteForbidden{Scope: scope, Reason: err.Error()}, nil)
 			return
+		}
+		if a.callerGate != nil {
+			if err := a.callerGate(caller.TenantID); err != nil {
+				a.respWriter.Error403(w, r, err, nil)
+				return
+			}
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), restCallerKey{}, caller)))
 	})

@@ -10,6 +10,7 @@ import (
 
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restkms "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/kms"
 )
@@ -46,7 +47,7 @@ var kmsReadOnlyPosts = []string{
 // secrets:* scope its method names. Register it before SetKMSHandlers: the
 // first matching route wins, so the guarded router serves every path both
 // mount. A nil client is allowed; the router answers 503 for its routes.
-func (s *RESTServer) SetKMSRouterHandlers(logger *logging.Logger, kms kmsclient.Client, crypto cryptoclient.Client, dek dekclient.Client, secrets secretsclient.Client, guard *restapi.ScopeGuard) error {
+func (s *RESTServer) SetKMSRouterHandlers(logger *logging.Logger, kms kmsclient.Client, crypto cryptoclient.Client, dek dekclient.Client, secrets secretsclient.Client, guard *restapi.ScopeGuard, systemTenantID string) error {
 	switch {
 	case logger == nil:
 		return ErrKMSRESTUnavailable{Reason: "no logger"}
@@ -54,13 +55,41 @@ func (s *RESTServer) SetKMSRouterHandlers(logger *logging.Logger, kms kmsclient.
 		return ErrKMSRESTUnavailable{Reason: "no REST scope guard"}
 	}
 	respWriter := response.NewResponseWriter(logger, nil)
-	authz := restScopeAuthorization{guard: guard, respWriter: respWriter, routeScope: kmsRouteScope}
+	authz := restScopeAuthorization{
+		guard:      guard,
+		respWriter: respWriter,
+		routeScope: kmsRouteScope,
+		callerGate: func(callerTenantID string) error {
+			return kmsRouterTenantDecision(systemTenantID, callerTenantID)
+		},
+	}
 	parent := s.router.PathPrefix(iamRESTParentPath).Subrouter()
 	parent.Use(authz.authorize)
 	// The KMS router's /kms base path is relative to the /api/v1 parent.
 	restkms.NewKMSRouter(logger, kms, crypto, dek, secrets, respWriter).RegisterRoutes(parent)
 	s.logger.Info("KMS REST routes registered")
 	return nil
+}
+
+// ErrKMSRouterTenantUnbound refuses a tenant-bound caller on the KMS router.
+// The embedded KMS and secrets services select their namespace from a tenant
+// the SDK gives the platform no way to set, so a tenant caller would be
+// served from the system namespace; the router fails closed instead.
+type ErrKMSRouterTenantUnbound struct {
+	Tenant string
+}
+
+func (e ErrKMSRouterTenantUnbound) Error() string {
+	return "KMS router: tenant " + e.Tenant + " refused: the KMS router serves only the system tenant until the SDK can bind a caller's tenant to the embedded KMS and secrets services"
+}
+
+// kmsRouterTenantDecision admits a caller with no tenant or the system
+// tenant, and refuses every other tenant.
+func kmsRouterTenantDecision(systemTenantID, callerTenantID string) error {
+	if callerTenantID == "" || tenant.IsSystemTenant(systemTenantID, callerTenantID) {
+		return nil
+	}
+	return ErrKMSRouterTenantUnbound{Tenant: callerTenantID}
 }
 
 // kmsRouteScope is the scope a KMS router request needs: secrets:<action>

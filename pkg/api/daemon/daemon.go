@@ -1586,7 +1586,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	if daemon.concreteRestServer != nil && kmsService != nil {
 		restKMS, restCrypto, restDEK, restSecrets, kmsErr := kmsService.RESTClients()
 		if kmsErr == nil {
-			kmsErr = daemon.concreteRestServer.SetKMSRouterHandlers(logger, restKMS, restCrypto, restDEK, restSecrets, restGuard)
+			kmsErr = daemon.concreteRestServer.SetKMSRouterHandlers(logger, restKMS, restCrypto, restDEK, restSecrets, restGuard, config.PlatformTenantID)
 		}
 		if kmsErr != nil {
 			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: kmsErr}

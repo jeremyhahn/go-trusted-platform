@@ -39,7 +39,7 @@ func kmsRESTServer(t *testing.T, kmsClient kms.Client) *RESTServer {
 	t.Helper()
 	s := &RESTServer{router: mux.NewRouter(), logger: slog.Default()}
 	guard := restapi.NewScopeGuard(kmsRESTCallers, nil, nil)
-	require.NoError(t, s.SetKMSRouterHandlers(logging.DefaultLogger(), kmsClient, &platformMockCryptoClient{}, nil, nil, guard))
+	require.NoError(t, s.SetKMSRouterHandlers(logging.DefaultLogger(), kmsClient, &platformMockCryptoClient{}, nil, nil, guard, iamRESTTenantA))
 	return s
 }
 
@@ -57,7 +57,7 @@ func TestSetKMSRouterHandlers_RefusesAMissingDependency(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := &RESTServer{router: mux.NewRouter(), logger: slog.Default()}
-			err := s.SetKMSRouterHandlers(tc.logger, &platformMockKMSClient{}, &platformMockCryptoClient{}, nil, nil, tc.guard)
+			err := s.SetKMSRouterHandlers(tc.logger, &platformMockKMSClient{}, &platformMockCryptoClient{}, nil, nil, tc.guard, iamRESTTenantA)
 			var unavailable ErrKMSRESTUnavailable
 			require.ErrorAs(t, err, &unavailable)
 			assert.Equal(t, tc.reason, unavailable.Reason)
@@ -205,6 +205,16 @@ func TestKMSREST_TenantBoundCallerIsRefused(t *testing.T) {
 			assertReachedHandler(t, admitted, admitted.Body.String())
 		})
 	}
+}
+
+func TestKMSRouterTenantDecision(t *testing.T) {
+	require.NoError(t, kmsRouterTenantDecision(iamRESTTenantA, iamRESTTenantA))
+	require.NoError(t, kmsRouterTenantDecision(iamRESTTenantA, ""))
+
+	var unbound ErrKMSRouterTenantUnbound
+	require.ErrorAs(t, kmsRouterTenantDecision(iamRESTTenantA, iamRESTTenantB), &unbound)
+	assert.Equal(t, iamRESTTenantB, unbound.Tenant)
+	assert.Contains(t, unbound.Error(), "serves only the system tenant")
 }
 
 // An admitted request reaches the SDK client; a refused one never does.
