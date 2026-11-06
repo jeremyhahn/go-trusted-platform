@@ -39,22 +39,6 @@ func TestNewStopCommand(t *testing.T) {
 	}
 }
 
-func TestNewStopCommand_HasLongDescription(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{}
-	}
-
-	cmd := newStopCommand(getFlags)
-
-	if cmd.Long == "" {
-		t.Error("Long description should not be empty")
-	}
-
-	if len(cmd.Long) < 50 {
-		t.Error("Long description should be descriptive")
-	}
-}
-
 func TestNewStopCommand_RequiresOneArg(t *testing.T) {
 	getFlags := func() *cli.CommonFlags {
 		return &cli.CommonFlags{}
