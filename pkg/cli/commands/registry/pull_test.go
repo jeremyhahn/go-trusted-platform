@@ -41,6 +41,10 @@ func TestNewPullCommand(t *testing.T) {
 	if cmd.Short != "Pull an image from the registry" {
 		t.Errorf("unexpected Short description: %q", cmd.Short)
 	}
+
+	if cmd.RunE == nil {
+		t.Error("RunE should be set")
+	}
 }
 
 func TestNewPullCommand_HasLongDescription(t *testing.T) {
@@ -96,23 +100,33 @@ func TestNewPullCommand_HasFlags(t *testing.T) {
 	tests := []struct {
 		name      string
 		shorthand string
+		flagType  string
+		defValue  string
 	}{
-		{name: "decrypt", shorthand: "d"},
-		{name: "verify", shorthand: ""},
-		{name: "platform", shorthand: "p"},
-		{name: "output-file", shorthand: ""},
+		{name: "decrypt", shorthand: "d", flagType: "bool", defValue: "false"},
+		{name: "verify", shorthand: "", flagType: "bool", defValue: "false"},
+		{name: "platform", shorthand: "p", flagType: "string", defValue: ""},
+		{name: "output-file", shorthand: "", flagType: "string", defValue: ""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			flag := cmd.Flags().Lookup(tt.name)
 			if flag == nil {
-				t.Errorf("expected flag %q to exist", tt.name)
-				return
+				t.Fatalf("expected flag %q to exist", tt.name)
 			}
 			if flag.Shorthand != tt.shorthand {
 				t.Errorf("expected shorthand %q for flag %q, got %q",
 					tt.shorthand, tt.name, flag.Shorthand)
+			}
+			if flag.Value.Type() != tt.flagType {
+				t.Errorf("expected %s flag to be %s, got %s", tt.name, tt.flagType, flag.Value.Type())
+			}
+			if flag.DefValue != tt.defValue {
+				t.Errorf("expected %s default %q, got %q", tt.name, tt.defValue, flag.DefValue)
+			}
+			if flag.Usage == "" {
+				t.Errorf("flag %q should have usage text", tt.name)
 			}
 		})
 	}
@@ -196,74 +210,6 @@ func TestRunPull_InvalidImageReference(t *testing.T) {
 	}
 }
 
-func TestNewPullCommand_DefaultFlagValues(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{}
-	}
-
-	cmd := NewPullCommand(getFlags)
-
-	decryptFlag := cmd.Flags().Lookup("decrypt")
-	if decryptFlag == nil {
-		t.Fatal("decrypt flag not found")
-	}
-	if decryptFlag.DefValue != "false" {
-		t.Errorf("expected decrypt default to be 'false', got %q", decryptFlag.DefValue)
-	}
-
-	verifyFlag := cmd.Flags().Lookup("verify")
-	if verifyFlag == nil {
-		t.Fatal("verify flag not found")
-	}
-	if verifyFlag.DefValue != "false" {
-		t.Errorf("expected verify default to be 'false', got %q", verifyFlag.DefValue)
-	}
-
-	platformFlag := cmd.Flags().Lookup("platform")
-	if platformFlag == nil {
-		t.Fatal("platform flag not found")
-	}
-	if platformFlag.DefValue != "" {
-		t.Errorf("expected platform default to be empty, got %q", platformFlag.DefValue)
-	}
-
-	outputFlag := cmd.Flags().Lookup("output-file")
-	if outputFlag == nil {
-		t.Fatal("output flag not found")
-	}
-	if outputFlag.DefValue != "" {
-		t.Errorf("expected output default to be empty, got %q", outputFlag.DefValue)
-	}
-}
-
-func TestNewPullCommand_FlagUsage(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{}
-	}
-
-	cmd := NewPullCommand(getFlags)
-
-	decryptFlag := cmd.Flags().Lookup("decrypt")
-	if decryptFlag.Usage == "" {
-		t.Error("decrypt flag should have usage text")
-	}
-
-	verifyFlag := cmd.Flags().Lookup("verify")
-	if verifyFlag.Usage == "" {
-		t.Error("verify flag should have usage text")
-	}
-
-	platformFlag := cmd.Flags().Lookup("platform")
-	if platformFlag.Usage == "" {
-		t.Error("platform flag should have usage text")
-	}
-
-	outputFlag := cmd.Flags().Lookup("output-file")
-	if outputFlag.Usage == "" {
-		t.Error("output flag should have usage text")
-	}
-}
-
 func TestPullResult_EmptyPlatform(t *testing.T) {
 	result := PullResult{
 		Reference: "myrepo/myimage:v1.0",
@@ -277,63 +223,5 @@ func TestPullResult_EmptyPlatform(t *testing.T) {
 
 	if result.Platform != "" {
 		t.Errorf("expected empty Platform, got %q", result.Platform)
-	}
-}
-
-func TestNewPullCommand_RunEExists(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{
-			OutputFormat: cli.OutputFormatTable,
-		}
-	}
-
-	cmd := NewPullCommand(getFlags)
-
-	if cmd.RunE == nil {
-		t.Error("RunE should be set")
-	}
-}
-
-func TestNewPullCommand_FlagTypes(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{}
-	}
-
-	cmd := NewPullCommand(getFlags)
-
-	// Verify decrypt is a bool flag
-	decryptFlag := cmd.Flags().Lookup("decrypt")
-	if decryptFlag == nil {
-		t.Fatal("decrypt flag not found")
-	}
-	if decryptFlag.Value.Type() != "bool" {
-		t.Errorf("expected decrypt flag to be bool, got %s", decryptFlag.Value.Type())
-	}
-
-	// Verify verify is a bool flag
-	verifyFlag := cmd.Flags().Lookup("verify")
-	if verifyFlag == nil {
-		t.Fatal("verify flag not found")
-	}
-	if verifyFlag.Value.Type() != "bool" {
-		t.Errorf("expected verify flag to be bool, got %s", verifyFlag.Value.Type())
-	}
-
-	// Verify platform is a string flag
-	platformFlag := cmd.Flags().Lookup("platform")
-	if platformFlag == nil {
-		t.Fatal("platform flag not found")
-	}
-	if platformFlag.Value.Type() != "string" {
-		t.Errorf("expected platform flag to be string, got %s", platformFlag.Value.Type())
-	}
-
-	// Verify output is a string flag
-	outputFlag := cmd.Flags().Lookup("output-file")
-	if outputFlag == nil {
-		t.Fatal("output flag not found")
-	}
-	if outputFlag.Value.Type() != "string" {
-		t.Errorf("expected output flag to be string, got %s", outputFlag.Value.Type())
 	}
 }

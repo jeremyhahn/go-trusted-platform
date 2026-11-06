@@ -167,6 +167,10 @@ func TestNewPushCommand(t *testing.T) {
 	if cmd.Short != "Push an image to the registry" {
 		t.Errorf("unexpected Short description: %q", cmd.Short)
 	}
+
+	if cmd.RunE == nil {
+		t.Error("RunE should be set")
+	}
 }
 
 func TestNewPushCommand_HasLongDescription(t *testing.T) {
@@ -222,25 +226,35 @@ func TestNewPushCommand_HasFlags(t *testing.T) {
 	tests := []struct {
 		name      string
 		shorthand string
+		flagType  string
+		defValue  string
 	}{
-		{name: "encrypt", shorthand: "e"},
-		{name: "key-id", shorthand: "k"},
-		{name: "sign", shorthand: "s"},
-		{name: "signing-key-id", shorthand: ""},
-		{name: "overwrite", shorthand: ""},
-		{name: "input", shorthand: "i"},
+		{name: "encrypt", shorthand: "e", flagType: "bool", defValue: "false"},
+		{name: "key-id", shorthand: "k", flagType: "string", defValue: ""},
+		{name: "sign", shorthand: "s", flagType: "bool", defValue: "false"},
+		{name: "signing-key-id", shorthand: "", flagType: "string", defValue: ""},
+		{name: "overwrite", shorthand: "", flagType: "bool", defValue: "false"},
+		{name: "input", shorthand: "i", flagType: "string", defValue: ""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			flag := cmd.Flags().Lookup(tt.name)
 			if flag == nil {
-				t.Errorf("expected flag %q to exist", tt.name)
-				return
+				t.Fatalf("expected flag %q to exist", tt.name)
 			}
-			if tt.shorthand != "" && flag.Shorthand != tt.shorthand {
+			if flag.Shorthand != tt.shorthand {
 				t.Errorf("expected shorthand %q for flag %q, got %q",
 					tt.shorthand, tt.name, flag.Shorthand)
+			}
+			if flag.Value.Type() != tt.flagType {
+				t.Errorf("expected %s flag to be %s, got %s", tt.name, tt.flagType, flag.Value.Type())
+			}
+			if flag.DefValue != tt.defValue {
+				t.Errorf("expected %s default %q, got %q", tt.name, tt.defValue, flag.DefValue)
+			}
+			if flag.Usage == "" {
+				t.Errorf("flag %q should have usage text", tt.name)
 			}
 		})
 	}
@@ -283,157 +297,5 @@ func TestPushResult_JSONTags(t *testing.T) {
 
 	if result.Timestamp != 1234567890 {
 		t.Errorf("unexpected Timestamp: %d", result.Timestamp)
-	}
-}
-
-func TestNewPushCommand_DefaultFlagValues(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{}
-	}
-
-	cmd := NewPushCommand(getFlags)
-
-	encryptFlag := cmd.Flags().Lookup("encrypt")
-	if encryptFlag == nil {
-		t.Fatal("encrypt flag not found")
-	}
-	if encryptFlag.DefValue != "false" {
-		t.Errorf("expected encrypt default to be 'false', got %q", encryptFlag.DefValue)
-	}
-
-	keyIDFlag := cmd.Flags().Lookup("key-id")
-	if keyIDFlag == nil {
-		t.Fatal("key-id flag not found")
-	}
-	if keyIDFlag.DefValue != "" {
-		t.Errorf("expected key-id default to be empty, got %q", keyIDFlag.DefValue)
-	}
-
-	signFlag := cmd.Flags().Lookup("sign")
-	if signFlag == nil {
-		t.Fatal("sign flag not found")
-	}
-	if signFlag.DefValue != "false" {
-		t.Errorf("expected sign default to be 'false', got %q", signFlag.DefValue)
-	}
-
-	overwriteFlag := cmd.Flags().Lookup("overwrite")
-	if overwriteFlag == nil {
-		t.Fatal("overwrite flag not found")
-	}
-	if overwriteFlag.DefValue != "false" {
-		t.Errorf("expected overwrite default to be 'false', got %q", overwriteFlag.DefValue)
-	}
-
-	inputFlag := cmd.Flags().Lookup("input")
-	if inputFlag == nil {
-		t.Fatal("input flag not found")
-	}
-	if inputFlag.DefValue != "" {
-		t.Errorf("expected input default to be empty, got %q", inputFlag.DefValue)
-	}
-}
-
-func TestNewPushCommand_FlagUsage(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{}
-	}
-
-	cmd := NewPushCommand(getFlags)
-
-	encryptFlag := cmd.Flags().Lookup("encrypt")
-	if encryptFlag.Usage == "" {
-		t.Error("encrypt flag should have usage text")
-	}
-
-	keyIDFlag := cmd.Flags().Lookup("key-id")
-	if keyIDFlag.Usage == "" {
-		t.Error("key-id flag should have usage text")
-	}
-
-	signFlag := cmd.Flags().Lookup("sign")
-	if signFlag.Usage == "" {
-		t.Error("sign flag should have usage text")
-	}
-
-	inputFlag := cmd.Flags().Lookup("input")
-	if inputFlag.Usage == "" {
-		t.Error("input flag should have usage text")
-	}
-}
-
-func TestNewPushCommand_RunEExists(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{
-			OutputFormat: cli.OutputFormatTable,
-		}
-	}
-
-	cmd := NewPushCommand(getFlags)
-
-	if cmd.RunE == nil {
-		t.Error("RunE should be set")
-	}
-}
-
-func TestNewPushCommand_FlagTypes(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{}
-	}
-
-	cmd := NewPushCommand(getFlags)
-
-	// Verify encrypt is a bool flag
-	encryptFlag := cmd.Flags().Lookup("encrypt")
-	if encryptFlag == nil {
-		t.Fatal("encrypt flag not found")
-	}
-	if encryptFlag.Value.Type() != "bool" {
-		t.Errorf("expected encrypt flag to be bool, got %s", encryptFlag.Value.Type())
-	}
-
-	// Verify key-id is a string flag
-	keyIDFlag := cmd.Flags().Lookup("key-id")
-	if keyIDFlag == nil {
-		t.Fatal("key-id flag not found")
-	}
-	if keyIDFlag.Value.Type() != "string" {
-		t.Errorf("expected key-id flag to be string, got %s", keyIDFlag.Value.Type())
-	}
-
-	// Verify sign is a bool flag
-	signFlag := cmd.Flags().Lookup("sign")
-	if signFlag == nil {
-		t.Fatal("sign flag not found")
-	}
-	if signFlag.Value.Type() != "bool" {
-		t.Errorf("expected sign flag to be bool, got %s", signFlag.Value.Type())
-	}
-
-	// Verify signing-key-id is a string flag
-	signingKeyIDFlag := cmd.Flags().Lookup("signing-key-id")
-	if signingKeyIDFlag == nil {
-		t.Fatal("signing-key-id flag not found")
-	}
-	if signingKeyIDFlag.Value.Type() != "string" {
-		t.Errorf("expected signing-key-id flag to be string, got %s", signingKeyIDFlag.Value.Type())
-	}
-
-	// Verify overwrite is a bool flag
-	overwriteFlag := cmd.Flags().Lookup("overwrite")
-	if overwriteFlag == nil {
-		t.Fatal("overwrite flag not found")
-	}
-	if overwriteFlag.Value.Type() != "bool" {
-		t.Errorf("expected overwrite flag to be bool, got %s", overwriteFlag.Value.Type())
-	}
-
-	// Verify input is a string flag
-	inputFlag := cmd.Flags().Lookup("input")
-	if inputFlag == nil {
-		t.Fatal("input flag not found")
-	}
-	if inputFlag.Value.Type() != "string" {
-		t.Errorf("expected input flag to be string, got %s", inputFlag.Value.Type())
 	}
 }
