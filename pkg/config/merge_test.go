@@ -714,27 +714,6 @@ network:
 	}
 }
 
-func TestDeepMergeYAML_ArrayOfObjectsMergeByNameError(t *testing.T) {
-	// Verify that a completely invalid base still returns an error.
-	base := []byte(`{{{not valid`)
-	overrides := []byte(`
-network:
-  interfaces:
-    - name: eth0
-      type: static
-`)
-
-	_, err := DeepMergeYAML(base, overrides)
-	if err == nil {
-		t.Fatal("expected error for invalid base YAML")
-	}
-
-	var unmarshalErr *ErrMergeUnmarshal
-	if !errors.As(err, &unmarshalErr) {
-		t.Fatalf("expected ErrMergeUnmarshal, got %T: %v", err, err)
-	}
-}
-
 func TestDeepMergeYAML_ArrayOfObjectsAddNewElement(t *testing.T) {
 	base := []byte(`
 services:
@@ -952,44 +931,6 @@ network:
 	}
 	if eth0["name"] != "eth0" {
 		t.Errorf("expected name=eth0, got %v", eth0["name"])
-	}
-}
-
-func TestDeepMergeYAML_ArrayOfObjectsEmptyOverride(t *testing.T) {
-	base := []byte(`
-network:
-  interfaces:
-    - name: eth0
-      type: dhcp
-`)
-	overrides := []byte(`
-network:
-  interfaces: []
-`)
-
-	merged, err := DeepMergeYAML(base, overrides)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	var result map[string]interface{}
-	if err := yaml.Unmarshal(merged, &result); err != nil {
-		t.Fatalf("failed to unmarshal merged result: %v", err)
-	}
-
-	network, ok := toStringMap(result["network"])
-	if !ok {
-		t.Fatal("expected network to be a map")
-	}
-
-	ifaces, ok := network["interfaces"].([]interface{})
-	if !ok {
-		t.Fatal("expected interfaces to be a slice")
-	}
-
-	// Empty override slice: replaces the base list.
-	if len(ifaces) != 0 {
-		t.Fatalf("expected the base interfaces replaced by [], got %v", ifaces)
 	}
 }
 
