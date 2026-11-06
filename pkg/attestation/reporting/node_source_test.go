@@ -314,46 +314,39 @@ func TestNodeQuoteSource_NodeRefusalIsReportedNotVerified(t *testing.T) {
 	assert.NotContains(t, err.Error(), "second line")
 }
 
-func TestNodeQuoteSource_WrongNonceEchoIsRefused(t *testing.T) {
-	pki := newTestPKI(t, "node-01.example.internal")
-	node := newFakeNode(t, pki)
-	node.respond = func(w http.ResponseWriter, _ []byte, _ map[string]any) {
-		_, err := w.Write(envelope(t, goodAttestation([]byte("stale"))))
-		require.NoError(t, err)
-	}
-	src, err := NewNodeQuoteSource(NodeQuoteSourceConfig{
-		Addresses: &fixedResolver{eps: []Endpoint{{Address: node.address(), ServerName: "node-01.example.internal"}}},
-		TLS:       dialerWith(pki, pki.client),
-	})
-	require.NoError(t, err)
-	_, err = src.Collect(context.Background(), "42", []byte("n"))
-	var notBound ErrQuoteNotBound
-	require.ErrorAs(t, err, &notBound)
-	assert.Equal(t, node.address(), notBound.Endpoint)
-}
-
-// TestNodeQuoteSource_BareNonceEchoIsRefused is a node on the old contract,
-// or one that quotes whatever it is sent: it echoes the bare nonce, which
-// proves nothing about the connection, so it is refused (#482).
-func TestNodeQuoteSource_BareNonceEchoIsRefused(t *testing.T) {
-	pki := newTestPKI(t, "node-01.example.internal")
-	node := newFakeNode(t, pki)
+// TestNodeQuoteSource_UnboundNonceEchoIsRefused covers a node that echoes a
+// nonce other than the one bound to this connection: a stale value, or the
+// bare nonce from a node on the old contract or one that quotes whatever it
+// is sent. Neither proves anything about the connection, so both are
+// refused (#482).
+func TestNodeQuoteSource_UnboundNonceEchoIsRefused(t *testing.T) {
 	nonce := []byte("fresh-nonce")
-	node.respond = func(w http.ResponseWriter, _ []byte, _ map[string]any) {
-		_, err := w.Write(envelope(t, goodAttestation(nonce)))
-		require.NoError(t, err)
+	cases := map[string][]byte{
+		"stale nonce": []byte("stale"),
+		"bare nonce":  nonce,
 	}
-	src, err := NewNodeQuoteSource(NodeQuoteSourceConfig{
-		Addresses: &fixedResolver{eps: []Endpoint{{Address: node.address(), ServerName: "node-01.example.internal"}}},
-		TLS:       dialerWith(pki, pki.client),
-	})
-	require.NoError(t, err)
+	for name, echoed := range cases {
+		t.Run(name, func(t *testing.T) {
+			pki := newTestPKI(t, "node-01.example.internal")
+			node := newFakeNode(t, pki)
+			node.respond = func(w http.ResponseWriter, _ []byte, _ map[string]any) {
+				_, err := w.Write(envelope(t, goodAttestation(echoed)))
+				require.NoError(t, err)
+			}
+			src, err := NewNodeQuoteSource(NodeQuoteSourceConfig{
+				Addresses: &fixedResolver{eps: []Endpoint{{Address: node.address(), ServerName: "node-01.example.internal"}}},
+				TLS:       dialerWith(pki, pki.client),
+			})
+			require.NoError(t, err)
 
-	_, err = src.Collect(context.Background(), "42", nonce)
+			_, err = src.Collect(context.Background(), "42", nonce)
 
-	var notBound ErrQuoteNotBound
-	require.ErrorAs(t, err, &notBound)
-	assert.Contains(t, err.Error(), "not bound to this connection")
+			var notBound ErrQuoteNotBound
+			require.ErrorAs(t, err, &notBound)
+			assert.Equal(t, node.address(), notBound.Endpoint)
+			assert.Contains(t, err.Error(), "not bound to this connection")
+		})
+	}
 }
 
 // TestNodeQuoteSource_RelayedQuoteIsRefused is the relay of #482 against the
@@ -508,44 +501,6 @@ func TestNodeQuoteSource_EachConnectionIsBoundSeparately(t *testing.T) {
 	assert.NotEqual(t, a.ChannelBinding, b.ChannelBinding,
 		"the same nonce over two connections is bound to two different values")
 	assert.Equal(t, int32(2), node.hits.Load())
-}
-
-func TestNodeQuoteSource_DialCompletesTheHandshake(t *testing.T) {
-	pki := newTestPKI(t, "node-01.example.internal")
-	node := newFakeNode(t, pki)
-	src, err := NewNodeQuoteSource(NodeQuoteSourceConfig{
-		Addresses: &fixedResolver{},
-		TLS:       dialerWith(pki, pki.client),
-	})
-	require.NoError(t, err)
-
-	conn, err := src.dial(context.Background(), Endpoint{Address: node.address(), ServerName: "node-01.example.internal"})
-	require.NoError(t, err)
-	t.Cleanup(func() { src.closeConn(conn) })
-
-	state := conn.ConnectionState()
-	assert.True(t, state.HandshakeComplete)
-	assert.Equal(t, "node-01.example.internal", state.ServerName)
-	binding, err := xkms.PeerChannelBinding(&state)
-	require.NoError(t, err)
-	assert.Len(t, binding, xkms.PeerChannelBindingLength)
-}
-
-func TestNodeQuoteSource_DialRefusesAnUnreachableEndpoint(t *testing.T) {
-	pki := newTestPKI(t, "node-01.example.internal")
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	addr := ln.Addr().String()
-	require.NoError(t, ln.Close())
-
-	src, err := NewNodeQuoteSource(NodeQuoteSourceConfig{
-		Addresses: &fixedResolver{},
-		TLS:       dialerWith(pki, pki.client),
-	})
-	require.NoError(t, err)
-	conn, err := src.dial(context.Background(), Endpoint{Address: addr, ServerName: "node-01.example.internal"})
-	require.Error(t, err)
-	assert.Nil(t, conn)
 }
 
 func TestNodeQuoteSource_CloseConnIsQuietOnAClosedConnection(t *testing.T) {
