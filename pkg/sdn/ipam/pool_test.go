@@ -442,6 +442,9 @@ func TestGetFirstUsableIP(t *testing.T) {
 			if got != want {
 				t.Errorf("GetFirstUsableIP(%s) = %v, want %v", tt.cidr, got, want)
 			}
+			if alias, err := NextUsableIP(cidr); err != nil || alias != want {
+				t.Errorf("NextUsableIP(%s) = %v, %v, want %v", tt.cidr, alias, err, want)
+			}
 		})
 	}
 
@@ -477,6 +480,9 @@ func TestGetLastUsableIP(t *testing.T) {
 			want := netip.MustParseAddr(tt.want)
 			if got != want {
 				t.Errorf("GetLastUsableIP(%s) = %v, want %v", tt.cidr, got, want)
+			}
+			if alias, err := LastUsableIP(cidr); err != nil || alias != want {
+				t.Errorf("LastUsableIP(%s) = %v, %v, want %v", tt.cidr, alias, err, want)
 			}
 		})
 	}
