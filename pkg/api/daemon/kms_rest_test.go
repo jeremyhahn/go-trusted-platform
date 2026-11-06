@@ -31,6 +31,7 @@ var kmsRESTCallers = iamRESTTokens{
 	"operator":       {Subject: "operator", TenantID: iamRESTTenantA, Scopes: []string{mtlsOperatorScope}},
 	"tenant-b-all":   {Subject: "tenant-b-all", TenantID: iamRESTTenantB, Scopes: []string{"secrets:*", "kms:*"}},
 	"system-all":     {Subject: "system-all", TenantID: iamRESTTenantA, Scopes: []string{"secrets:*", "kms:*"}},
+	"no-tenant-all":  {Subject: "no-tenant-all", Scopes: []string{"secrets:*", "kms:*"}},
 }
 
 // kmsRESTServer is a RESTServer serving the KMS router over the fake SDK
@@ -323,6 +324,38 @@ func TestSetKMSHandlers_FacadeOnlyPathNeedsScope(t *testing.T) {
 
 	recorder = serveIAM(s, http.MethodGet, "/api/v1/kms/status", "kms-reader")
 	assertReachedHandler(t, recorder, recorder.Body.String())
+}
+
+// The fallback mount reaches the same unbound SDK clients as the KMS router,
+// so a key named in the body must not let another tenant past the router's
+// tenant gate.
+func TestSetKMSHandlers_FallbackRoutesRefuseUnboundTenant(t *testing.T) {
+	routes := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/api/v1/kms/decrypt"},
+		{http.MethodPost, "/api/v1/kms/sign"},
+		{http.MethodGet, "/api/v1/kms/keys/k1/export"},
+	}
+	client := &platformMockKMSClient{}
+	s := kmsRESTServer(t, client)
+	guard := restapi.NewScopeGuard(kmsRESTCallers, nil, nil)
+	require.NoError(t, s.SetKMSHandlers(NewPlatformKMSRESTFacade(NewPlatformKMSBackend(client, &platformMockCryptoClient{}, slog.Default())), guard, iamRESTTenantA))
+
+	for _, route := range routes {
+		t.Run(route.method+" "+route.path, func(t *testing.T) {
+			refused := serveIAM(s, route.method, route.path, "tenant-b-all")
+			assert.Equal(t, http.StatusForbidden, refused.Code)
+			assert.Contains(t, refused.Body.String(), "serves only the system tenant")
+
+			admitted := serveIAM(s, route.method, route.path, "system-all")
+			assertReachedHandler(t, admitted, admitted.Body.String())
+
+			untenanted := serveIAM(s, route.method, route.path, "no-tenant-all")
+			assertReachedHandler(t, untenanted, untenanted.Body.String())
+		})
+	}
 }
 
 // A request whose method has no action is refused before the scope check.
