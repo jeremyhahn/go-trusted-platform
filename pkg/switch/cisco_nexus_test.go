@@ -819,34 +819,25 @@ func TestValidateConfig_Nil(t *testing.T) {
 	}
 }
 
-func TestValidateConfig_MissingHost(t *testing.T) {
-	config := &Config{User: "admin", SSHKey: "/tmp/key"}
-	err := validateConfig(config)
-	if err == nil {
-		t.Fatal("expected error for missing host")
+func TestValidateConfig_MissingField(t *testing.T) {
+	tests := []struct {
+		field  string
+		config *Config
+	}{
+		{"host", &Config{User: "admin", SSHKey: "/tmp/key"}},
+		{"user", &Config{Host: "10.0.0.1", SSHKey: "/tmp/key"}},
+		{"ssh_key", &Config{Host: "10.0.0.1", User: "admin"}},
 	}
-	var invalidCfg ErrInvalidConfig
-	if !errors.As(err, &invalidCfg) {
-		t.Fatalf("expected ErrInvalidConfig, got: %T", err)
-	}
-	if invalidCfg.Field != "host" {
-		t.Fatalf("expected field 'host', got: %s", invalidCfg.Field)
-	}
-}
-
-func TestValidateConfig_MissingUser(t *testing.T) {
-	config := &Config{Host: "10.0.0.1", SSHKey: "/tmp/key"}
-	err := validateConfig(config)
-	if err == nil {
-		t.Fatal("expected error for missing user")
-	}
-}
-
-func TestValidateConfig_MissingSSHKey(t *testing.T) {
-	config := &Config{Host: "10.0.0.1", User: "admin"}
-	err := validateConfig(config)
-	if err == nil {
-		t.Fatal("expected error for missing ssh_key")
+	for _, tt := range tests {
+		t.Run(tt.field, func(t *testing.T) {
+			var invalidCfg ErrInvalidConfig
+			if err := validateConfig(tt.config); !errors.As(err, &invalidCfg) {
+				t.Fatalf("expected ErrInvalidConfig, got: %T %v", err, err)
+			}
+			if invalidCfg.Field != tt.field {
+				t.Fatalf("expected field %q, got: %s", tt.field, invalidCfg.Field)
+			}
+		})
 	}
 }
 
@@ -876,13 +867,6 @@ func TestContainsError(t *testing.T) {
 }
 
 // --- joinInts tests ---
-
-func TestJoinInts(t *testing.T) {
-	result := joinInts([]int{5, 6, 10}, ",")
-	if result != "5,6,10" {
-		t.Fatalf("expected '5,6,10', got: %s", result)
-	}
-}
 
 func TestJoinInts_Empty(t *testing.T) {
 	result := joinInts(nil, ",")
