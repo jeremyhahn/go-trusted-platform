@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -342,6 +343,35 @@ func TestRunErrors(t *testing.T) {
 		code, _, stderr := runFixture(t, goCommand{}, "-go", filepath.Join(t.TempDir(), "no-such-go"), "testdata/pass")
 		assert.Equal(t, exitLookup, code)
 		assert.Contains(t, stderr, "depscheck: go env GOPROXY")
+	})
+}
+
+// failingWriter refuses every write, as a closed pipe does.
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("write refused") }
+
+func TestRunFailsWhenTheReportCannotBeWritten(t *testing.T) {
+	src := fixtureSource{goproxy: "direct"}
+	t.Run("stdout of a passing report", func(t *testing.T) {
+		var stderr bytes.Buffer
+		code := run([]string{"testdata/pass"}, src, testNow, failingWriter{}, &stderr)
+		assert.Equal(t, exitOutput, code)
+	})
+	t.Run("stderr of a failing report", func(t *testing.T) {
+		var stdout bytes.Buffer
+		code := run([]string{"testdata/fail"}, fixtureSource{goproxy: "https://proxy.golang.org,direct"}, testNow, &stdout, failingWriter{})
+		assert.Equal(t, exitOutput, code)
+	})
+	t.Run("stderr of the usage error", func(t *testing.T) {
+		var stdout bytes.Buffer
+		code := run(nil, src, testNow, &stdout, failingWriter{})
+		assert.Equal(t, exitOutput, code)
+	})
+	t.Run("stderr of a module error", func(t *testing.T) {
+		var stdout bytes.Buffer
+		code := run([]string{t.TempDir()}, src, testNow, &stdout, failingWriter{})
+		assert.Equal(t, exitOutput, code)
 	})
 }
 
