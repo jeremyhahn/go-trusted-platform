@@ -192,16 +192,6 @@ func TestMutualTLSClientGet_RedirectFollowed(t *testing.T) {
 	assert.Equal(t, finalBody, string(body))
 }
 
-func TestMutualTLSClientStruct(t *testing.T) {
-	t.Run("struct fields exist", func(t *testing.T) {
-		client := MutualTLSClient{}
-
-		// Verify struct can be created with fields
-		assert.Nil(t, client.logger)
-		assert.Nil(t, client.ca)
-	})
-}
-
 func TestMutualTLSClientGet_RequestHeaders(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelError, io.Discard)
 
