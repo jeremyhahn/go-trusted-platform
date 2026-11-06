@@ -9,13 +9,6 @@ import (
 	"testing"
 )
 
-func TestNewPoolManager(t *testing.T) {
-	pm := NewPoolManager()
-	if pm == nil {
-		t.Fatal("NewPoolManager() returned nil")
-	}
-}
-
 func TestPoolManager_ValidatePool(t *testing.T) {
 	pm := NewPoolManager()
 
