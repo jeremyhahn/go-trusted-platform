@@ -892,17 +892,14 @@ func TestOverlayNDHoldDownCountsFromTheLaterOfTickAndClock(t *testing.T) {
 	tests := []struct {
 		name           string
 		fired, handled time.Time
-		want           time.Time
 	}{
 		{
 			name:  "a tick handled late holds down from when it is handled, not from when it fired",
 			fired: now.Add(-5 * time.Second), handled: now,
-			want: now.Add(overlayNDFallbackHoldDown),
 		},
 		{
 			name:  "a clock behind the tick never moves the hold-down earlier",
 			fired: now, handled: now.Add(-5 * time.Second),
-			want: now.Add(overlayNDFallbackHoldDown),
 		},
 	}
 	for _, tt := range tests {
@@ -910,7 +907,7 @@ func TestOverlayNDHoldDownCountsFromTheLaterOfTickAndClock(t *testing.T) {
 			f := newOverlayFixture(t, nil).withVNI(t)
 			require.NoError(t, f.handler.LearnMAC(context.Background(), ovlL2VNI, ovlHostMAC, ndTargetIP))
 
-			assert.Equal(t, tt.want, ndFallBackHandledAt(t, f, tt.fired, tt.handled))
+			assert.Equal(t, now.Add(overlayNDFallbackHoldDown), ndFallBackHandledAt(t, f, tt.fired, tt.handled))
 		})
 	}
 }
