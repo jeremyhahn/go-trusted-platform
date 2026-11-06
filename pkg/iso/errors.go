@@ -315,6 +315,36 @@ func (e *BinaryArchMismatchError) Error() string {
 	return "iso: binary " + e.Path + " is built for " + e.Got.String() + ", the media targets " + e.Want.String()
 }
 
+// DynamicBinaryError reports a binary the media installs as statically
+// linked (platformctl-static) that names a program interpreter: it needs a
+// host loader and libraries Alpine's musl userland does not carry.
+type DynamicBinaryError struct {
+	Path        string
+	Interpreter string
+}
+
+// Error implements error.
+func (e *DynamicBinaryError) Error() string {
+	return "iso: binary " + e.Path + " is dynamically linked (interpreter " + e.Interpreter + "), the media needs a static one"
+}
+
+// MissingInputError reports a customize input the build request names but
+// that does not exist. An unset input means "do not install"; a named one
+// that is missing fails the build (#351).
+type MissingInputError struct {
+	Input string
+	Path  string
+	Err   error
+}
+
+// Error implements error.
+func (e *MissingInputError) Error() string {
+	return "iso: " + e.Input + " " + e.Path + " is named by the build but does not exist: " + e.Err.Error()
+}
+
+// Unwrap returns the underlying stat error.
+func (e *MissingInputError) Unwrap() error { return e.Err }
+
 // InstallerListError reports a platform config whose os.packages or
 // os.services is not a list, so the media cannot add what it installs.
 type InstallerListError struct {

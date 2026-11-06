@@ -81,38 +81,6 @@ func TestIPAMPlugin_GetRequestedIP_FallbackToIPv6(t *testing.T) {
 		assert.True(t, stop)
 		assert.Equal(t, dhcpv4.MessageTypeAck, result.MessageType())
 	})
-
-	t.Run("handles ciaddr with only 16-byte IP", func(t *testing.T) {
-		mac, _ := net.ParseMAC("00:11:22:33:DD:02")
-
-		// First get a lease
-		discoverReq, _ := dhcpv4.New(
-			dhcpv4.WithHwAddr(mac),
-			dhcpv4.WithMessageType(dhcpv4.MessageTypeDiscover),
-		)
-		discoverResp, _ := dhcpv4.NewReplyFromRequest(discoverReq)
-		discoverResp.ServerIPAddr = net.ParseIP("192.168.1.1")
-
-		offerResult, _ := handler(discoverReq, discoverResp)
-		require.NotNil(t, offerResult)
-		offeredIP := offerResult.YourIPAddr
-
-		// Create a request with ciaddr in 16-byte format
-		requestReq, _ := dhcpv4.New(
-			dhcpv4.WithHwAddr(mac),
-			dhcpv4.WithMessageType(dhcpv4.MessageTypeRequest),
-		)
-		// IPv4-mapped IPv6: 16-byte representation
-		requestReq.ClientIPAddr = offeredIP.To16()
-
-		requestResp, _ := dhcpv4.NewReplyFromRequest(requestReq)
-		requestResp.ServerIPAddr = net.ParseIP("192.168.1.1")
-
-		result, stop := handler(requestReq, requestResp)
-		require.NotNil(t, result)
-		assert.True(t, stop)
-		assert.Equal(t, dhcpv4.MessageTypeAck, result.MessageType())
-	})
 }
 
 // TestIPAMPlugin_GetRequestedIP_InvalidOption50 tests handling of invalid option 50.

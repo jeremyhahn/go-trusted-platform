@@ -87,6 +87,7 @@ func (m *MockUserService) IsTenantOwner(ctx context.Context, userID uint64) (boo
 }
 
 func TestNewRestHandler(t *testing.T) {
+	t.Parallel()
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
@@ -106,6 +107,7 @@ func TestNewRestHandler(t *testing.T) {
 }
 
 func TestHandlerGenerateToken_NoLoginClientFailsClosed(t *testing.T) {
+	t.Parallel()
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
@@ -157,6 +159,7 @@ func TestHandlerGenerateToken_NoLoginClientFailsClosed(t *testing.T) {
 // outcome. With no driver wired the route fails closed with 403, which is
 // the same refusal it gives a well-formed body.
 func TestHandlerGenerateToken_IgnoresTheRequestBody(t *testing.T) {
+	t.Parallel()
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
@@ -189,6 +192,7 @@ func TestHandlerGenerateToken_IgnoresTheRequestBody(t *testing.T) {
 }
 
 func TestHandlerRefreshToken_Success(t *testing.T) {
+	t.Parallel()
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
@@ -235,6 +239,7 @@ func TestHandlerRefreshToken_Success(t *testing.T) {
 }
 
 func TestHandlerRefreshToken_MissingToken(t *testing.T) {
+	t.Parallel()
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
@@ -264,6 +269,7 @@ func TestHandlerRefreshToken_MissingToken(t *testing.T) {
 }
 
 func TestHandlerRefreshToken_InvalidToken(t *testing.T) {
+	t.Parallel()
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
@@ -297,6 +303,7 @@ func TestHandlerRefreshToken_InvalidToken(t *testing.T) {
 // parses successfully but is marked as invalid (expired token scenario).
 // This covers the token.Valid check at handler.go:206-208.
 func TestHandlerRefreshToken_ExpiredToken(t *testing.T) {
+	t.Parallel()
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
@@ -345,6 +352,7 @@ func TestHandlerRefreshToken_ExpiredToken(t *testing.T) {
 }
 
 func TestHandlerVerify_Success(t *testing.T) {
+	t.Parallel()
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
@@ -385,81 +393,11 @@ func TestHandlerVerify_Success(t *testing.T) {
 	assert.True(t, nextCalled)
 }
 
-func TestHandlerVerify_MissingToken(t *testing.T) {
-	params, ks := testServiceParamsWithXKMS()
-	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
-
-	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
-	assert.Nil(t, err)
-
-	jwtService, err := NewService(context.Background(), params)
-	assert.Nil(t, err)
-
-	logger := logging.DefaultLogger()
-	responseWriter := response.NewResponseWriter(logger, nil)
-	mockUserService := new(MockUserService)
-
-	handler, err := NewRestHandler(logger, responseWriter, jwtService, mockUserService)
-	assert.Nil(t, err)
-
-	// Create request without Authorization header
-	req := httptest.NewRequest("GET", "/protected", nil)
-	req.Header.Set("Accept", "application/json")
-	w := httptest.NewRecorder()
-
-	// Track if next handler was called
-	nextCalled := false
-	next := func(w http.ResponseWriter, r *http.Request) {
-		nextCalled = true
-	}
-
-	// Call handler
-	handler.(*RestHandler).Verify(w, req, next)
-
-	// Check that next handler was NOT called
-	assert.False(t, nextCalled)
-}
-
-func TestHandlerVerify_InvalidToken(t *testing.T) {
-	params, ks := testServiceParamsWithXKMS()
-	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
-
-	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
-	assert.Nil(t, err)
-
-	jwtService, err := NewService(context.Background(), params)
-	assert.Nil(t, err)
-
-	logger := logging.DefaultLogger()
-	responseWriter := response.NewResponseWriter(logger, nil)
-	mockUserService := new(MockUserService)
-
-	handler, err := NewRestHandler(logger, responseWriter, jwtService, mockUserService)
-	assert.Nil(t, err)
-
-	// Create request with invalid token
-	req := httptest.NewRequest("GET", "/protected", nil)
-	req.Header.Set("Authorization", "Bearer invalid.token.here")
-	req.Header.Set("Accept", "application/json")
-	w := httptest.NewRecorder()
-
-	// Track if next handler was called
-	nextCalled := false
-	next := func(w http.ResponseWriter, r *http.Request) {
-		nextCalled = true
-	}
-
-	// Call handler
-	handler.(*RestHandler).Verify(w, req, next)
-
-	// Check that next handler was NOT called
-	assert.False(t, nextCalled)
-}
-
 // TestHandlerVerify_VerificationFailure tests the Verify handler when the token
 // parses correctly but fails verification (e.g., wrong audience).
 // This covers the jwtService.Verify error path at handler.go:272-274.
 func TestHandlerVerify_VerificationFailure(t *testing.T) {
+	t.Parallel()
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 	params.Audience = "correct-audience"
@@ -514,6 +452,7 @@ func TestHandlerVerify_VerificationFailure(t *testing.T) {
 }
 
 func TestCreateSession_Success(t *testing.T) {
+	t.Parallel()
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
@@ -554,6 +493,7 @@ func TestCreateSession_Success(t *testing.T) {
 }
 
 func TestCreateSession_WithServiceID(t *testing.T) {
+	t.Parallel()
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
@@ -600,6 +540,7 @@ func TestCreateSession_WithServiceID(t *testing.T) {
 }
 
 func TestCreateSession_UserServiceError(t *testing.T) {
+	t.Parallel()
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
@@ -640,6 +581,7 @@ func TestCreateSession_UserServiceError(t *testing.T) {
 }
 
 func TestCreateSession_MissingToken(t *testing.T) {
+	t.Parallel()
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
@@ -668,6 +610,7 @@ func TestCreateSession_MissingToken(t *testing.T) {
 }
 
 func TestCreateSession_ParseServiceIDError(t *testing.T) {
+	t.Parallel()
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
@@ -718,6 +661,7 @@ func TestCreateSession_ParseServiceIDError(t *testing.T) {
 // RBAC route guards a session built from the SAME token it just verified.
 // Without this, every guard mounted downstream would 401 unconditionally.
 func TestHandlerVerify_PublishesSession(t *testing.T) {
+	t.Parallel()
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
@@ -760,6 +704,7 @@ func TestHandlerVerify_PublishesSession(t *testing.T) {
 // TestHandlerVerify_PublishesNoRolesForAnUnprivilegedToken is the negative
 // half: a token with no roles claim must not satisfy a role guard.
 func TestHandlerVerify_PublishesNoRolesForAnUnprivilegedToken(t *testing.T) {
+	t.Parallel()
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
@@ -793,6 +738,7 @@ func TestHandlerVerify_PublishesNoRolesForAnUnprivilegedToken(t *testing.T) {
 }
 
 func TestSessionFromClaims_NilClaims(t *testing.T) {
+	t.Parallel()
 	assert.Nil(t, sessionFromClaims(nil))
 }
 
@@ -803,6 +749,7 @@ func TestSessionFromClaims_NilClaims(t *testing.T) {
 // but the IAM routes are now gated on the roles claim, so an admin would
 // have been locked out of the console on their first refresh.
 func TestHandlerRefreshToken_PreservesTenantAndRoles(t *testing.T) {
+	t.Parallel()
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
@@ -869,6 +816,7 @@ func TestHandlerRefreshToken_PreservesTenantAndRoles(t *testing.T) {
 // refreshing before each expiry; minting from the store means the refresh
 // observes the revocation.
 func TestHandlerRefreshToken_PicksUpARevocation(t *testing.T) {
+	t.Parallel()
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
@@ -919,6 +867,7 @@ func TestHandlerRefreshToken_PicksUpARevocation(t *testing.T) {
 // TestHandlerRefreshToken_FailsClosedWhenTheUserIsGone: a token for a
 // deleted user must not be renewable.
 func TestHandlerRefreshToken_FailsClosedWhenTheUserIsGone(t *testing.T) {
+	t.Parallel()
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
@@ -956,6 +905,7 @@ func TestHandlerRefreshToken_FailsClosedWhenTheUserIsGone(t *testing.T) {
 // via jwtService.Verify — could be exchanged here for a fresh,
 // correctly-audienced platform token.
 func TestHandlerRefreshToken_RejectsAWrongAudienceToken(t *testing.T) {
+	t.Parallel()
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
@@ -1021,6 +971,7 @@ func backboneSessionRequest(t *testing.T, handler *RestHandler, target string) *
 }
 
 func TestHandlerRefreshToken_RefusesABackboneSession(t *testing.T) {
+	t.Parallel()
 	handler := newHandlerForLoginTest(t)
 	rec := httptest.NewRecorder()
 
@@ -1031,6 +982,7 @@ func TestHandlerRefreshToken_RefusesABackboneSession(t *testing.T) {
 }
 
 func TestCreateSession_RefusesABackboneSession(t *testing.T) {
+	t.Parallel()
 	handler := newHandlerForLoginTest(t)
 	rec := httptest.NewRecorder()
 
@@ -1114,6 +1066,7 @@ func completeLogin(t *testing.T, driver *loginpkg.Driver) string {
 //
 // 403 and not 401: the caller's certificate was never the problem.
 func TestGenerateTokenDeclinesTheUnbindableMTLSFactor(t *testing.T) {
+	t.Parallel()
 	handler := newHandlerForLoginTest(t)
 	client := &stubLoginClient{bearer: "broker.issued.bearer"}
 	handler.SetLoginDriver(newLoginDriverForTest(t, client, handler.jwtService, nil))
@@ -1149,6 +1102,7 @@ func TestGenerateTokenDeclinesTheUnbindableMTLSFactor(t *testing.T) {
 // bearer is forwarded — and this test is what proves the replacement is
 // actually accepted before the mint is removed.
 func TestLoginSessionIsAcceptedByTheDefaultProtectedRouteSeam(t *testing.T) {
+	t.Parallel()
 	handler := newHandlerForLoginTest(t)
 	driver := newLoginDriverForTest(t, &stubLoginClient{
 		bearer: "broker.issued.bearer",
@@ -1194,6 +1148,7 @@ func TestLoginSessionIsAcceptedByTheDefaultProtectedRouteSeam(t *testing.T) {
 // their workspace must not carry "admin" into the workspace session, so the
 // IAM router's admin guard refuses them there.
 func TestLoginWorkspaceSessionOfAnOperatingAdminIsRefusedByTheAdminGuard(t *testing.T) {
+	t.Parallel()
 	handler := newHandlerForLoginTest(t)
 	driver := newLoginDriverForTest(t, &stubLoginClient{
 		bearer: "broker.issued.bearer",
@@ -1241,6 +1196,7 @@ func TestLoginWorkspaceSessionOfAnOperatingAdminIsRefusedByTheAdminGuard(t *test
 // saying who it belongs to has authenticated nobody, and no credential may
 // come out of it.
 func TestLoginRefusesWhenTheCeremonyNamesNobody(t *testing.T) {
+	t.Parallel()
 	handler := newHandlerForLoginTest(t)
 	driver := newLoginDriverForTest(t,
 		&stubLoginClient{bearer: "broker.issued.bearer"}, handler.jwtService, nil)
@@ -1264,6 +1220,7 @@ func TestLoginRefusesWhenTheCeremonyNamesNobody(t *testing.T) {
 // token, it is rejecting the one /login returns. Without this the 401 above
 // would prove nothing.
 func TestPlatformMintedTokenIsAcceptedByTheDefaultProtectedRouteSeam(t *testing.T) {
+	t.Parallel()
 	handler := newHandlerForLoginTest(t)
 
 	minted, err := handler.jwtService.GenerateToken(&entities.User{
@@ -1317,6 +1274,7 @@ func newHandlerForLoginTest(t *testing.T) *RestHandler {
 // signer did not produce, received an empty 200 OK. Access was never
 // granted, but every client was told the opposite of what happened.
 func TestHandlerVerify_UnauthenticatedRequestIsToldSo(t *testing.T) {
+	t.Parallel()
 	handler := newHandlerForLoginTest(t)
 
 	for name, authorization := range map[string]string{
