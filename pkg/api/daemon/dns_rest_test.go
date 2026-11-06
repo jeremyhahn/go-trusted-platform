@@ -56,7 +56,6 @@ func TestSetDNSRouterHandlers_RefusesAMissingDependency(t *testing.T) {
 		{"no logger", nil, &recordingDNSServer{}, guard, iamRESTTenantA, "no logger"},
 		{"no server", logging.DefaultLogger(), nil, guard, iamRESTTenantA, "no DNS service"},
 		{"no guard", logging.DefaultLogger(), &recordingDNSServer{}, nil, iamRESTTenantA, "no REST scope guard"},
-		{"no backend tenant", logging.DefaultLogger(), &recordingDNSServer{}, guard, "", "no DNS backend tenant"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -113,6 +112,21 @@ func TestDNSRouterREST_RefusesACallerOfAnotherTenant(t *testing.T) {
 	recorder = serveIAM(s, http.MethodGet, "/api/v1/dns/zones", "dns-operator")
 	assertReachedHandler(t, recorder, recorder.Body.String())
 	assert.Equal(t, int32(2), server.lists.Load())
+}
+
+// With no backend tenant configured, only an untenanted caller is served.
+func TestDNSRouterREST_NoBackendTenantRefusesATenantCaller(t *testing.T) {
+	server := &recordingDNSServer{}
+	s := &RESTServer{router: mux.NewRouter(), logger: slog.Default()}
+	require.NoError(t, s.SetDNSRouterHandlers(logging.DefaultLogger(), server, restapi.NewScopeGuard(dnsRESTCallers, nil, nil), ""))
+
+	recorder := serveIAM(s, http.MethodGet, "/api/v1/dns/zones", "dns-reader")
+	assert.Equal(t, http.StatusForbidden, recorder.Code, recorder.Body.String())
+	assert.Zero(t, server.lists.Load(), "a tenant caller never reaches ListZones")
+
+	recorder = serveIAM(s, http.MethodGet, "/api/v1/dns/zones", "dns-operator")
+	assertReachedHandler(t, recorder, recorder.Body.String())
+	assert.Equal(t, int32(1), server.lists.Load())
 }
 
 func TestDNSRouterTenantDecision(t *testing.T) {

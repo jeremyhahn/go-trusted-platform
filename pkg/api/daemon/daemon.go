@@ -1547,7 +1547,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// PXEGRPCService instances gRPC, QUIC, MCP and Unix serve, behind
 	// restGuard. A failed mount stops the daemon.
 	if daemon.concreteRestServer != nil {
-		if err := daemon.concreteRestServer.SetDNSRouterHandlers(logger, dnsGRPCService, restGuard); err != nil {
+		if err := daemon.concreteRestServer.SetDNSRouterHandlers(logger, dnsGRPCService, restGuard, config.PlatformTenantID); err != nil {
 			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: err}
 			logger.Error(constructErr, "component", "rest_server")
 			return nil, constructErr

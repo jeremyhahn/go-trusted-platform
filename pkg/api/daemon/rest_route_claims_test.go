@@ -83,7 +83,7 @@ func daemonRouteTable(t *testing.T, guard *restapi.ScopeGuard) (*RESTServer, []s
 	require.NoError(t, s.SetDeviceRouterHandlers(log, routeTableDeviceService{}, routeTableDeviceProfiles{},
 		routeTableDeviceTemplates{}, platformv1.UnimplementedDeviceServiceServer{}, guard))
 	require.NoError(t, s.SetDeviceHandlers(routeTableDevices{}, routeTableProfiles{}, platformv1.UnimplementedDeviceServiceServer{}, guard))
-	require.NoError(t, s.SetDNSRouterHandlers(log, platformv1.UnimplementedDNSServiceServer{}, guard))
+	require.NoError(t, s.SetDNSRouterHandlers(log, platformv1.UnimplementedDNSServiceServer{}, guard, ""))
 	require.NoError(t, s.SetPXERouterHandlers(log, platformv1.UnimplementedPXEServiceServer{}, guard))
 	s.SetTenantHandlers(routeTableTenants{}, guard, "")
 	require.NoError(t, s.SetKMSHandlers(routeTableKMS{}, guard, iamRESTTenantA))
