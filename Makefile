@@ -883,9 +883,11 @@ build-debug-static: build-debug
 # Cross-compile ARM 64-bit: a pure-Go build (CGO_ENABLED=0, same tag set as the
 # native `build` target), so no cross toolchain is required and the result is a
 # statically linked ELF. Output goes to $(ARM64_BIN_DIR), never bin/, so it
-# cannot clobber a native build. platformctl-static is the sibling name that
-# `platformctl iso create` (pkg/iso/customize.go) looks for next to platformd;
-# with CGO disabled it is byte-identical to platformctl, so it is a copy.
+# cannot clobber a native build. platformctl-static is the name
+# `platformctl diskimage create` looks for beside itself as the host installer;
+# with CGO disabled it is byte-identical to platformctl, so it is a copy. The
+# media's static installer is this platformctl-static, or platformctl when the
+# directory holds none (pkg/iso ISOBuildConfig.UseBinariesDir).
 .PHONY: build-arm64
 ## build-arm64: Cross-compile platformd, platformctl and platformctl-static for linux/arm64 into bin/aarch64
 build-arm64: _web-embed-prepare
@@ -2251,9 +2253,18 @@ MODULE_ENV_FILE ?= .devcontainer/.env
 # to rebuild against a fixed key.
 APT_REFRESH ?= $(eval APT_REFRESH := $$(shell scripts/apt-refresh-key.sh))$(APT_REFRESH)
 
+# The checksum of the Alpine package indexes the build resolves against
+# (scripts/apk-index-sum.sh, ci-standard.md §9). The devcontainer is Debian, so
+# CI's value is `none` and APT_REFRESH carries the package refresh; the build
+# argument is passed so the integration stages take it as the template does.
+APK_INDEX_SUM ?=
+
+# GO_BUILD_PROXY is passed only when the caller sets it, and quoted, because
+# CI's value uses the | separator (handbook devcontainer.md section 4,
+# ci-template v1.29.5).
 DEVCONTAINER_BUILD_ARGS = --build-arg GO_IMAGE=$(GO_IMAGE) \
 	--build-arg APT_REFRESH=$(APT_REFRESH) \
-	$(if $(GO_BUILD_PROXY),--build-arg GO_BUILD_PROXY=$(GO_BUILD_PROXY)) \
+	$(if $(GO_BUILD_PROXY),--build-arg "GO_BUILD_PROXY=$(GO_BUILD_PROXY)") \
 	$(if $(wildcard $(MODULE_ENV_FILE)),--secret id=gomodauth$(comma)src=$(MODULE_ENV_FILE)) \
 	-f $(DEVCONTAINER_DOCKERFILE)
 
@@ -2278,10 +2289,11 @@ docker-build: docker-build-integration docker-build-toolchain
 ## CI's image job gates $(IT_IMAGE) with `trivy image`: the integration stage,
 ## without the warm build cache docker-build-it adds.
 ## Its own target so CI's image job leases $(IT_IMAGE) before the toolchain
-## build starts (#1146): until a container names it, another job's reaper may
-## remove an image whose cached Created time is past its min-age.
+## build starts: the image job holds its lease only across this build and the
+## scan (ci-standard.md §9).
 docker-build-integration:
-	$(DEVCONTAINER_BUILD) $(DEVCONTAINER_BUILD_ARGS) --target integration -t $(IT_IMAGE) .
+	$(DEVCONTAINER_BUILD) $(DEVCONTAINER_BUILD_ARGS) --build-arg APK_INDEX_SUM=$(APK_INDEX_SUM) \
+		--target integration -t $(IT_IMAGE) .
 
 ## docker-build-toolchain: Build the toolchain image as $(TOOLCHAIN_IMAGE)
 docker-build-toolchain:
@@ -2303,8 +2315,29 @@ IT_BUILD_TARGET = $(if $(filter 0,$(IT_WARM_CACHE)),integration,integration-legs
 # `docker load` under pipefail, which dash (Debian's /bin/sh) does not have.
 docker-build-it: SHELL := /bin/bash
 docker-build-it:
-	$(if $(DEVCONTAINER_CLIENT_LOAD),set -o pipefail; )$(DEVCONTAINER_BUILD) $(DEVCONTAINER_BUILD_ARGS) --target $(IT_BUILD_TARGET) \
-		--build-arg IT_BUILD_TAGS="$(strip $(TEST_BUILD_TAGS))" -t $(IT_IMAGE) . $(if $(DEVCONTAINER_CLIENT_LOAD),| docker load)
+	$(if $(DEVCONTAINER_CLIENT_LOAD),set -o pipefail; )$(DEVCONTAINER_BUILD) $(DEVCONTAINER_BUILD_ARGS) --build-arg APK_INDEX_SUM=$(APK_INDEX_SUM) \
+		--target $(IT_BUILD_TARGET) 		--build-arg IT_BUILD_TAGS="$(strip $(TEST_BUILD_TAGS))" -t $(IT_IMAGE) . $(if $(DEVCONTAINER_CLIENT_LOAD),| docker load)
+
+# The integration image's content tag (ci-standard.md §9): a hash of the build
+# arguments that change the image (the stage, the warm cache's build tags, the
+# base and its package refresh) and of the whole build context, which is the
+# commit's tree, the diff of a dirty checkout and every untracked file
+# .gitignore keeps. An unchanged tree names the image it already built, so a
+# CI job reuses it; any change names a new one. IT_WARM_CACHE=0 names the
+# integration stage, as docker-build-integration builds it.
+IT_IMAGE_REPO := go-trusted-platform-ci-it
+
+.PHONY: it-image
+## it-image: Print the integration image's content tag, $(IT_IMAGE_REPO):<hash>
+it-image: SHELL := /bin/bash
+it-image:
+	@set -euo pipefail; \
+	{ printf '%s\n' 'GO_IMAGE=$(GO_IMAGE)' 'APT_REFRESH=$(APT_REFRESH)' 'APK_INDEX_SUM=$(APK_INDEX_SUM)' \
+		'TARGET=$(IT_BUILD_TARGET)' 'IT_BUILD_TAGS=$(if $(filter integration-legs,$(IT_BUILD_TARGET)),$(strip $(TEST_BUILD_TAGS)))'; \
+	  git rev-parse 'HEAD^{tree}'; \
+	  git diff --binary HEAD; \
+	  git ls-files -z --others --exclude-standard | xargs -0r sha256sum --; \
+	} | sha256sum | cut -c1-16 | sed 's|^|$(IT_IMAGE_REPO):|'
 
 .PHONY: toolchain-image
 ## toolchain-image: Print the toolchain image tag (CI reads it with make -s)
@@ -2613,115 +2646,6 @@ integration-test-compose-full: devcontainer-compose-up
 		./test/integration/sdn/... \
 		./test/integration/vtpm/...
 	@$(MAKE) devcontainer-compose-down
-
-.PHONY: integration-test-web
-## integration-test-web: Run web frontend E2E tests with swtpm and backend
-integration-test-web: devcontainer-compose-up
-	@echo "$(CYAN)═══════════════════════════════════════════════════════════════$(RESET)"
-	@echo "$(CYAN)  Running Web Frontend E2E Integration Tests$(RESET)"
-	@echo "$(CYAN)═══════════════════════════════════════════════════════════════$(RESET)"
-	@echo ""
-	@echo "$(YELLOW)→ Cleaning up previous test processes...$(RESET)"
-	-@docker exec $(DEVCONTAINER_NAME) pkill -9 -f 'platformd-web-test' 2>/dev/null || true
-	-@docker exec $(DEVCONTAINER_NAME) pkill -9 -f 'next dev' 2>/dev/null || true
-	-@docker exec $(DEVCONTAINER_NAME) pkill -9 -f 'node.*next' 2>/dev/null || true
-	@docker exec $(DEVCONTAINER_NAME) bash -c "$(DEVCONTAINER_WAIT_FOR) && \
-		wait_for 10 'the previous web test processes to exit' \
-			no_process_matching '[p]latformd-web-test|[n]ext dev|[n]ode.*next'"
-	@echo "$(YELLOW)→ Initializing swtpm (Software TPM)...$(RESET)"
-	-@docker exec $(DEVCONTAINER_NAME) pkill -f 'swtpm socket' 2>/dev/null || true
-	@docker exec $(DEVCONTAINER_NAME) rm -rf /tmp/swtpm
-	@docker exec $(DEVCONTAINER_NAME) mkdir -p /tmp/swtpm
-	@docker exec $(DEVCONTAINER_NAME) swtpm_setup --tpm2 --tpmstate /tmp/swtpm --overwrite --pcr-banks sha256
-	@echo "$(YELLOW)→ Starting swtpm daemon...$(RESET)"
-	@docker exec -d $(DEVCONTAINER_NAME) swtpm socket --tpm2 \
-		--tpmstate dir=/tmp/swtpm \
-		--server type=unixio,path=/tmp/swtpm/swtpm.sock \
-		--ctrl type=unixio,path=/tmp/swtpm/swtpm.sock.ctrl \
-		--flags startup-clear,not-need-init \
-		--log level=5,file=/tmp/swtpm/swtpm.log
-	@docker exec $(DEVCONTAINER_NAME) bash -c "$(DEVCONTAINER_WAIT_FOR) && \
-		wait_for 10 'swtpm socket /tmp/swtpm/swtpm.sock' test -S /tmp/swtpm/swtpm.sock"
-	@docker exec $(DEVCONTAINER_NAME) ls -la /tmp/swtpm/
-	@docker exec $(DEVCONTAINER_NAME) pgrep -la swtpm || (echo "swtpm failed to start" && exit 1)
-	@echo ""
-	@echo "$(YELLOW)→ Building backend...$(RESET)"
-	@docker exec $(DEVCONTAINER_NAME) bash -c "\
-		cd /workspace && \
-		go build -tags '$(BUILD_TAGS)' -o bin/platformd-web-test ./cmd/platformd"
-	@echo ""
-	@echo "$(YELLOW)→ Copying web-test configuration...$(RESET)"
-	@docker exec $(DEVCONTAINER_NAME) bash -c "\
-		cp /workspace/configs/platform/standalone/web-test.example.yaml /workspace/pkg/config.yaml && \
-		rm -rf /workspace/pkg/trusted-data && \
-		mkdir -p /workspace/pkg/trusted-data/etc"
-	@echo ""
-	@echo "$(YELLOW)→ Starting backend with swtpm...$(RESET)"
-	@docker exec -d $(DEVCONTAINER_NAME) bash -c "\
-		cd /workspace/pkg && \
-		../bin/platformd-web-test --config config.yaml --raw-so-pin 123456 --raw-pin 123456 --intermediate 0 --init serve > /tmp/platformd.log 2>&1"
-	@echo "$(YELLOW)→ Waiting for the backend web API...$(RESET)"
-	@docker exec $(DEVCONTAINER_NAME) bash -c "$(DEVCONTAINER_WAIT_FOR) || exit 1; \
-		backend_ready() { curl -sk -X POST -H 'Content-Type: application/json' -d '{\"username\":\"healthcheck\"}' https://localhost:8443/api/v1/webauthn/login/begin 2>&1 | grep -q 'entity not found'; }; \
-		if wait_for 60 'platformd web API on https://localhost:8443' backend_ready; then \
-			echo 'Backend is ready'; exit 0; \
-		fi; \
-		echo 'Backend failed to start, showing logs:'; \
-		tail -100 /tmp/platformd.log; \
-		echo '--- swtpm logs ---'; \
-		cat /tmp/swtpm/swtpm.log 2>/dev/null || true; \
-		exit 1"
-	@echo ""
-	@echo "$(YELLOW)→ Installing frontend dependencies...$(RESET)"
-	@docker exec $(DEVCONTAINER_NAME) bash -c "\
-		cd /workspace/web && \
-		npm install --silent"
-	@echo ""
-	@echo "$(YELLOW)→ Installing Playwright browsers...$(RESET)"
-	@docker exec $(DEVCONTAINER_NAME) bash -c "\
-		cd /workspace/web && \
-		npx playwright install chromium --with-deps"
-	@echo ""
-	@echo "$(YELLOW)→ Starting Next.js dev server...$(RESET)"
-	@docker exec -d $(DEVCONTAINER_NAME) bash -c "\
-		cd /workspace/web && \
-		npm run dev > /tmp/nextjs.log 2>&1"
-	@echo "$(YELLOW)→ Waiting for dev server to start...$(RESET)"
-	@docker exec $(DEVCONTAINER_NAME) bash -c "$(DEVCONTAINER_WAIT_FOR) || exit 1; \
-		if wait_for 60 'Next.js dev server on http://localhost:3000' curl -s http://localhost:3000; then \
-			echo 'Dev server is ready'; exit 0; \
-		fi; \
-		echo 'Dev server failed to start, showing logs:'; \
-		cat /tmp/nextjs.log; \
-		exit 1"
-	@echo ""
-	@echo "$(YELLOW)→ Running Playwright E2E tests...$(RESET)"
-	@docker exec $(DEVCONTAINER_NAME) bash -c "\
-		cd /workspace/web && \
-		npx playwright test --reporter=list" && \
-		TEST_RESULT=$$? || TEST_RESULT=$$?; \
-	echo ""; \
-	echo "$(YELLOW)→ Stopping services...$(RESET)"; \
-	docker exec $(DEVCONTAINER_NAME) bash -c "pkill -f 'next dev' || pkill -f 'node.*next' || true"; \
-	docker exec $(DEVCONTAINER_NAME) bash -c "pkill -f 'platformd-web-test' || true"; \
-	docker exec $(DEVCONTAINER_NAME) bash -c "pkill -f 'swtpm socket' || true"; \
-	echo "$(YELLOW)→ Fixing file ownership...$(RESET)"; \
-	docker exec $(DEVCONTAINER_NAME) bash -c "chown -R $(shell id -u):$(shell id -g) /workspace/web/.next /workspace/web/test-results /workspace/web/playwright-report 2>/dev/null || true"; \
-	if [ $$TEST_RESULT -eq 0 ]; then \
-		echo "$(GREEN)✓ Web E2E tests passed!$(RESET)"; \
-	else \
-		echo "$(RED)✗ Web E2E tests failed$(RESET)"; \
-		echo "$(YELLOW)Dev server logs:$(RESET)"; \
-		docker exec $(DEVCONTAINER_NAME) cat /tmp/nextjs.log 2>/dev/null || true; \
-		echo "$(YELLOW)Backend logs:$(RESET)"; \
-		docker exec $(DEVCONTAINER_NAME) tail -50 /tmp/platformd.log 2>/dev/null || true; \
-	fi; \
-	exit $$TEST_RESULT
-
-.PHONY: dev
-## dev: Start development environment (swtpm + backend + frontend) in devcontainer
-dev: devcontainer-compose-up
-	@docker exec $(DEVCONTAINER_NAME) /usr/local/bin/entrypoint.sh web-dev
 
 .PHONY: integration-test-web-shell
 ## integration-test-web-shell: Start shell with backend running for manual web testing
@@ -3055,7 +2979,14 @@ TEST_EXCLUDE := test/integration|sdk/go/gen|pkg/api/grpc/proto|pkg/api/grpc$$|cm
 # vbmc tests drive its routes through httptest and the rmcpsim tests talk to
 # the responder over 127.0.0.1 UDP, so they need no daemon, container or root.
 # TEST_EXCLUDE's test/integration entry kept them out of every unit stage.
-TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/ ./pkg/webservice/v1/ ./pkg/dns/ ./pkg/cli/commands/admin/ ./pkg/platform/ ./pkg/swtpm/ ./pkg/vtpm/ ./test/integration/helpers/surface/ ./test/integration/helpers/ ./test/integration/bmc/vbmc/ ./test/integration/bmc/rmcpsim/ ./test/integration/iso/ ./test/integration/tenant/ ./scripts/depscheck/ ./scripts/foreignfailures/
+# internal/quicbaas added 2026-10-29 (#1204, Codex 8287 P1): the mcp-go v1.4.0
+# compatibility tests for the pinned SDK MCP transport. It lies outside the
+# ./pkg/... ./cmd/... discovery and TEST_EXCLUDE does not drop it; it runs in
+# about 1 s under -race.
+# pkg/firstboot added 2026-10-31 (#964 step e): the tests swap every host seam
+# (commands, mounts, LUKS, TPM detection, host sync) and root file access under
+# t.TempDir(), so they need no root, TPM, device or mount.
+TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/ ./pkg/webservice/v1/ ./pkg/dns/ ./pkg/cli/commands/admin/ ./pkg/platform/ ./pkg/swtpm/ ./pkg/vtpm/ ./pkg/firstboot/ ./test/integration/helpers/surface/ ./test/integration/helpers/ ./test/integration/bmc/vbmc/ ./test/integration/bmc/rmcpsim/ ./test/integration/iso/ ./test/integration/tenant/ ./scripts/depscheck/ ./scripts/foreignfailures/ ./internal/quicbaas/
 
 # RACE_EXCLUDE: packages with data races that are KNOWN and TRACKED. The race
 # gate must be green to be a gate, so a package lands here only with an issue
