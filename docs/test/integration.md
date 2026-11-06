@@ -457,7 +457,8 @@ IT_WARM_CACHE=0`), which a daemon that already holds it reuses.
 That build runs
 `make docker-build-it BUILDX_CLIENT_LOAD=1 IT_WARM_CACHE=0`: `IT_WARM_CACHE=0`
 builds the `integration` stage without the warm build cache, whose ten-minute
-warm took run 70938's fallback past the leg's 60-minute timeout; the suites
+warm took run 70938's fallback past the leg's then 60-minute timeout (75 since #1299, for the artifact
+download and load); the suites
 compile from an empty `/gocache` in less. `BUILDX_CLIENT_LOAD=1` streams the image to the
 step's `docker load` in place of `--load`: `--load` imports into the daemon of
 the builder's node, which need not be the daemon the leg uses (run 68044, leg
