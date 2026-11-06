@@ -103,89 +103,67 @@ func TestCiscoNexus_GenerateVLANCommands_Empty(t *testing.T) {
 
 // --- Port command generation tests ---
 
-func TestCiscoNexus_GeneratePortCommands_Trunk(t *testing.T) {
-	ports := []PortConfig{
+func TestCiscoNexus_GeneratePortCommands(t *testing.T) {
+	tests := []struct {
+		name    string
+		ports   []PortConfig
+		want    []string
+		absent  []string
+		wantMTU int
+	}{
 		{
-			Port:        "Eth1/1",
-			Mode:        "trunk",
-			VLANs:       []int{5, 6, 10},
-			Description: "gateway-01",
+			name:  "trunk",
+			ports: []PortConfig{{Port: "Eth1/1", Mode: "trunk", VLANs: []int{5, 6, 10}, Description: "gateway-01"}},
+			want: []string{"interface Eth1/1", "switchport mode trunk", "switchport trunk allowed vlan 5,6,10",
+				"description gateway-01", "no shutdown"},
+		},
+		{
+			name:  "access",
+			ports: []PortConfig{{Port: "Eth1/2", Mode: "access", AccessVLAN: 10}},
+			want:  []string{"switchport mode access", "switchport access vlan 10"},
+		},
+		{
+			name:  "port range expands to one interface per port",
+			ports: []PortConfig{{Port: "Eth1/3-5", Mode: "trunk", VLANs: []int{10, 20}}},
+			want:  []string{"interface Eth1/3", "interface Eth1/4", "interface Eth1/5"},
+		},
+		{
+			name: "native VLAN and an mtu line per port",
+			ports: []PortConfig{
+				{Port: "Eth1/25", Mode: "trunk", VLANs: []int{401, 403, 405}, NativeVLAN: 405, MTU: 9216},
+				{Port: "Eth1/41", Mode: "access", AccessVLAN: 402, MTU: 9216},
+			},
+			want:    []string{"switchport trunk native vlan 405", "mtu 9216", "switchport access vlan 402"},
+			absent:  []string{"no switchport trunk native vlan"},
+			wantMTU: 2,
+		},
+		{
+			name:  "trunk without a native VLAN clears it",
+			ports: []PortConfig{{Port: "Eth1/3", Mode: "trunk", VLANs: []int{400, 401}, MTU: 9216}},
+			want:  []string{"no switchport trunk native vlan"},
 		},
 	}
-
-	commands, err := GeneratePortCommands(ports)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	joined := strings.Join(commands, "\n")
-
-	if !strings.Contains(joined, "interface Eth1/1") {
-		t.Fatal("expected interface Eth1/1 command")
-	}
-	if !strings.Contains(joined, "switchport mode trunk") {
-		t.Fatal("expected switchport mode trunk")
-	}
-	if !strings.Contains(joined, "switchport trunk allowed vlan 5,6,10") {
-		t.Fatal("expected trunk allowed vlan list")
-	}
-	if !strings.Contains(joined, "description gateway-01") {
-		t.Fatal("expected description")
-	}
-	if !strings.Contains(joined, "no shutdown") {
-		t.Fatal("expected no shutdown")
-	}
-}
-
-func TestCiscoNexus_GeneratePortCommands_Access(t *testing.T) {
-	ports := []PortConfig{
-		{
-			Port:       "Eth1/2",
-			Mode:       "access",
-			AccessVLAN: 10,
-		},
-	}
-
-	commands, err := GeneratePortCommands(ports)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	joined := strings.Join(commands, "\n")
-
-	if !strings.Contains(joined, "switchport mode access") {
-		t.Fatal("expected switchport mode access")
-	}
-	if !strings.Contains(joined, "switchport access vlan 10") {
-		t.Fatal("expected access vlan assignment")
-	}
-}
-
-func TestCiscoNexus_GeneratePortCommands_PortRange(t *testing.T) {
-	ports := []PortConfig{
-		{
-			Port:  "Eth1/3-5",
-			Mode:  "trunk",
-			VLANs: []int{10, 20},
-		},
-	}
-
-	commands, err := GeneratePortCommands(ports)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	joined := strings.Join(commands, "\n")
-
-	// Should expand to 3 individual interfaces
-	if !strings.Contains(joined, "interface Eth1/3") {
-		t.Fatal("expected interface Eth1/3")
-	}
-	if !strings.Contains(joined, "interface Eth1/4") {
-		t.Fatal("expected interface Eth1/4")
-	}
-	if !strings.Contains(joined, "interface Eth1/5") {
-		t.Fatal("expected interface Eth1/5")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			commands, err := GeneratePortCommands(tt.ports)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			joined := strings.Join(commands, "\n")
+			for _, want := range tt.want {
+				if !strings.Contains(joined, want) {
+					t.Fatalf("expected %q in:\n%s", want, joined)
+				}
+			}
+			for _, absent := range tt.absent {
+				if strings.Contains(joined, absent) {
+					t.Fatalf("unexpected %q in:\n%s", absent, joined)
+				}
+			}
+			if tt.wantMTU > 0 && strings.Count(joined, "mtu 9216") != tt.wantMTU {
+				t.Fatalf("expected %d mtu lines in:\n%s", tt.wantMTU, joined)
+			}
+		})
 	}
 }
 
@@ -289,35 +267,6 @@ func TestCiscoNexus_ExpandPortRange(t *testing.T) {
 }
 
 // --- Configure with mock SSH tests ---
-
-func TestCiscoNexus_Configure_WithMock(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	mock := newMockSSHExecutor()
-
-	config := &Config{
-		Vendor: VendorCiscoNexus,
-		Host:   "10.0.0.1",
-		User:   "admin",
-		SSHKey: "/tmp/key",
-		VLANs: []VLANConfig{
-			{ID: 10, Name: "production"},
-		},
-		Ports: []PortConfig{
-			{Port: "Eth1/1", Mode: "trunk", VLANs: []int{10}},
-		},
-	}
-
-	c := newCiscoNexusWithExecutor(config, logger, mock)
-	ctx := context.Background()
-
-	if err := c.Configure(ctx, config); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(mock.commands) == 0 {
-		t.Fatal("expected commands to be executed")
-	}
-}
 
 func TestCiscoNexus_Configure_VLANsOnly(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
@@ -452,13 +401,9 @@ func TestCiscoNexus_Configure_VLANError(t *testing.T) {
 func TestCiscoNexus_Configure_PortError(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
-	// Use a mock that fails only after VLAN commands succeed
-	callCount := 0
-	vlanCmdCount := 0
-
-	mock := &countingMockExecutor{
-		failAfter: -1, // don't fail by default
-	}
+	// Fail only after every VLAN command has succeeded.
+	vlans := []VLANConfig{{ID: 10, Name: "test"}}
+	mock := &countingMockExecutor{failAfter: len(GenerateVLANCommands(vlans))}
 
 	switchConfig := &Config{
 		Vendor: VendorCiscoNexus,
@@ -469,15 +414,6 @@ func TestCiscoNexus_Configure_PortError(t *testing.T) {
 
 	c := newCiscoNexusWithExecutor(switchConfig, logger, mock)
 	ctx := context.Background()
-
-	// First, count how many VLAN commands there are
-	vlans := []VLANConfig{{ID: 10, Name: "test"}}
-	vlanCmds := GenerateVLANCommands(vlans)
-	vlanCmdCount = len(vlanCmds)
-	_ = callCount
-
-	// Set mock to fail after VLAN commands
-	mock.failAfter = vlanCmdCount
 
 	config := &Config{
 		VLANs: vlans,
@@ -957,25 +893,6 @@ func TestJoinInts_Empty(t *testing.T) {
 
 // TestCiscoNexus_GeneratePortCommands_NativeAndMTU emits the native VLAN and
 // MTU of a hypervisor-class trunk and the MTU of a BMC access port.
-func TestCiscoNexus_GeneratePortCommands_NativeAndMTU(t *testing.T) {
-	commands, err := GeneratePortCommands([]PortConfig{
-		{Port: "Eth1/25", Mode: "trunk", VLANs: []int{401, 403, 405}, NativeVLAN: 405, MTU: 9216},
-		{Port: "Eth1/41", Mode: "access", AccessVLAN: 402, MTU: 9216},
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	joined := strings.Join(commands, "\n")
-	for _, want := range []string{"switchport trunk native vlan 405", "mtu 9216", "switchport access vlan 402"} {
-		if !strings.Contains(joined, want) {
-			t.Fatalf("expected %q in %s", want, joined)
-		}
-	}
-	if strings.Count(joined, "mtu 9216") != 2 {
-		t.Fatalf("expected an mtu line per port: %s", joined)
-	}
-}
-
 // TestCiscoNexus_GeneratePortCommands_Invalid refuses an invalid port
 // before generating anything.
 func TestCiscoNexus_GeneratePortCommands_Invalid(t *testing.T) {
@@ -993,22 +910,3 @@ func TestCiscoNexus_GeneratePortCommands_Invalid(t *testing.T) {
 // TestGeneratePortCommands_TrunkWithoutNativeClearsIt checks a trunk with
 // no native VLAN removes any native VLAN a re-used port still carries, and
 // a trunk with one sets it.
-func TestGeneratePortCommands_TrunkWithoutNativeClearsIt(t *testing.T) {
-	cmds, err := GeneratePortCommands([]PortConfig{{Port: "Eth1/3", Mode: "trunk", VLANs: []int{400, 401}, MTU: 9216}})
-	if err != nil {
-		t.Fatalf("GeneratePortCommands: %v", err)
-	}
-	joined := strings.Join(cmds, "\n")
-	if !strings.Contains(joined, "no switchport trunk native vlan") {
-		t.Fatalf("a trunk without a native VLAN must clear it:\n%s", joined)
-	}
-
-	cmds, err = GeneratePortCommands([]PortConfig{{Port: "Eth1/25", Mode: "trunk", VLANs: []int{401, 405}, NativeVLAN: 405}})
-	if err != nil {
-		t.Fatalf("GeneratePortCommands: %v", err)
-	}
-	joined = strings.Join(cmds, "\n")
-	if strings.Contains(joined, "no switchport trunk native vlan") || !strings.Contains(joined, "switchport trunk native vlan 405") {
-		t.Fatalf("a trunk with a native VLAN must set it:\n%s", joined)
-	}
-}
