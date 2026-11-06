@@ -28,6 +28,8 @@ var kmsRESTCallers = iamRESTTokens{
 	"kms-all":        {Subject: "kms-all", TenantID: iamRESTTenantA, Scopes: []string{"kms:*"}},
 	"secrets-reader": {Subject: "secrets-reader", TenantID: iamRESTTenantA, Scopes: []string{"secrets:read"}},
 	"operator":       {Subject: "operator", TenantID: iamRESTTenantA, Scopes: []string{mtlsOperatorScope}},
+	"tenant-b-all":   {Subject: "tenant-b-all", TenantID: iamRESTTenantB, Scopes: []string{"secrets:*", "kms:*"}},
+	"system-all":     {Subject: "system-all", TenantID: iamRESTTenantA, Scopes: []string{"secrets:*", "kms:*"}},
 }
 
 // kmsRESTServer is a RESTServer serving the KMS router over the fake SDK
@@ -174,6 +176,33 @@ func TestKMSREST_ScopePerRoute(t *testing.T) {
 			}
 			assert.Equal(t, http.StatusForbidden, recorder.Code)
 			assert.Contains(t, recorder.Body.String(), "scope "+tc.scope+" required")
+		})
+	}
+}
+
+// TestKMSREST_TenantBoundCallerIsRefused pins the fail-closed tenant rule:
+// the SDK cannot bind a caller's tenant to the embedded KMS and secrets
+// services, so a caller bound to any tenant other than the system tenant
+// (tenant A here) must be refused before dispatch, whatever its scopes.
+func TestKMSREST_TenantBoundCallerIsRefused(t *testing.T) {
+	routes := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/api/v1/kms/secrets"},
+		{http.MethodGet, "/api/v1/kms/secrets/db-password"},
+		{http.MethodPost, "/api/v1/kms/secrets"},
+		{http.MethodGet, "/api/v1/kms/keys/k1"},
+	}
+	s := kmsRESTServer(t, &platformMockKMSClient{})
+	for _, route := range routes {
+		t.Run(route.method+" "+route.path, func(t *testing.T) {
+			refused := serveIAM(s, route.method, route.path, "tenant-b-all")
+			assert.Equal(t, http.StatusForbidden, refused.Code)
+			assert.Contains(t, refused.Body.String(), "serves only the system tenant")
+
+			admitted := serveIAM(s, route.method, route.path, "system-all")
+			assertReachedHandler(t, admitted, admitted.Body.String())
 		})
 	}
 }
