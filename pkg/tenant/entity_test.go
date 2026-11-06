@@ -633,27 +633,6 @@ func TestTenantEntity_HasDEK(t *testing.T) {
 	}
 }
 
-func TestTenantEntity_Clone_DEKPath(t *testing.T) {
-	entity := &TenantEntity{
-		ID:      "tenant-123",
-		Name:    "test-tenant",
-		State:   StateActive,
-		DEKPath: "/tenant/tenant-123/default",
-	}
-
-	clone := entity.Clone()
-
-	if clone.DEKPath != entity.DEKPath {
-		t.Errorf("Clone().DEKPath = %q, want %q", clone.DEKPath, entity.DEKPath)
-	}
-
-	// Modifying clone should not affect original
-	clone.DEKPath = "/different/path"
-	if entity.DEKPath == clone.DEKPath {
-		t.Error("Modifying clone affected original")
-	}
-}
-
 func TestHashStringToUint32(t *testing.T) {
 	// Test that hash function is deterministic
 	hash1 := hashStringToUint32("test-string")
@@ -709,6 +688,9 @@ func TestTenantEntity_Clone_ValidEntity(t *testing.T) {
 	}
 	if clone.State != entity.State {
 		t.Errorf("Clone().State = %q, want %q", clone.State, entity.State)
+	}
+	if clone.DEKPath != entity.DEKPath {
+		t.Errorf("Clone().DEKPath = %q, want %q", clone.DEKPath, entity.DEKPath)
 	}
 }
 
