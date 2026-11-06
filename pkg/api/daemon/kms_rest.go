@@ -51,9 +51,10 @@ var kmsReadOnlyPosts = []string{
 // SetKMSRouterHandlers mounts the name-keyed KMS router (keys, crypto, DEKs
 // and secrets) at /api/v1/kms on the daemon REST listener over the SDK
 // clients. Every route authenticates through guard and needs the kms:* or
-// secrets:* scope its method names. Register it before SetKMSHandlers: the
-// first matching route wins, so the guarded router serves every path both
-// mount. A nil client is allowed; the router answers 503 for its routes.
+// secrets:* scope its method names. Register it after SetKMSHandlers (see
+// SetKMSMounts): the first matching route wins, so the daemon facade keeps
+// every path both mount and the router adds only its name-keyed paths. A nil
+// client is allowed; the router answers 503 for its routes.
 func (s *RESTServer) SetKMSRouterHandlers(logger *logging.Logger, kms kmsclient.Client, crypto cryptoclient.Client, dek dekclient.Client, secrets secretsclient.Client, guard *restapi.ScopeGuard, systemTenantID string) error {
 	switch {
 	case logger == nil:
@@ -69,6 +70,32 @@ func (s *RESTServer) SetKMSRouterHandlers(logger *logging.Logger, kms kmsclient.
 	restkms.NewKMSRouter(logger, kms, crypto, dek, secrets, respWriter).RegisterRoutes(parent)
 	s.logger.Info("KMS REST routes registered")
 	return nil
+}
+
+// KMSRouterClients are the SDK clients the name-keyed KMS router serves.
+type KMSRouterClients struct {
+	KMS     kmsclient.Client
+	Crypto  cryptoclient.Client
+	DEK     dekclient.Client
+	Secrets secretsclient.Client
+}
+
+// SetKMSMounts mounts the daemon KMS facade, then the name-keyed KMS router.
+// The first matching route wins, so the facade serves every path both mount
+// (GET /keys/{id}, POST /hash, POST /random, ...) with the contract the SDK
+// REST transport decodes, and the router adds only its own paths. A nil
+// facade or nil router skips that mount; both share the scope and tenant
+// gate, so the order does not change who is admitted.
+func (s *RESTServer) SetKMSMounts(logger *logging.Logger, facade restapi.KMSService, router *KMSRouterClients, guard *restapi.ScopeGuard, systemTenantID string) error {
+	if facade != nil {
+		if err := s.SetKMSHandlers(facade, guard, systemTenantID); err != nil {
+			return err
+		}
+	}
+	if router == nil {
+		return nil
+	}
+	return s.SetKMSRouterHandlers(logger, router.KMS, router.Crypto, router.DEK, router.Secrets, guard, systemTenantID)
 }
 
 // kmsRESTAuthorization is the authorization both KMS mounts apply: the route's

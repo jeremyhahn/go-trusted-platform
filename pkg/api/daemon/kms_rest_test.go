@@ -354,6 +354,28 @@ func TestKMSREST_FacadeTakesPrecedenceOnSharedPaths(t *testing.T) {
 	assert.Equal(t, int32(1), statusCalls.Load(), "/api/v1/kms/status still reaches the daemon facade")
 }
 
+func TestSetKMSMounts_SkipsAMissingMountAndRefusesANilGuard(t *testing.T) {
+	guard := restapi.NewScopeGuard(kmsRESTCallers, nil, nil)
+	facade := NewPlatformKMSRESTFacade(NewPlatformKMSBackend(&platformMockKMSClient{}, &platformMockCryptoClient{}, slog.Default()))
+
+	t.Run("nil facade and nil router mount nothing", func(t *testing.T) {
+		s := &RESTServer{router: mux.NewRouter(), logger: slog.Default()}
+		require.NoError(t, s.SetKMSMounts(logging.DefaultLogger(), nil, nil, guard, iamRESTTenantA))
+		assert.Equal(t, http.StatusNotFound, serveIAM(s, http.MethodGet, "/api/v1/kms/keys/k1", "system-all").Code)
+	})
+
+	t.Run("a nil guard is refused", func(t *testing.T) {
+		s := &RESTServer{router: mux.NewRouter(), logger: slog.Default()}
+		assert.Error(t, s.SetKMSMounts(logging.DefaultLogger(), facade, &KMSRouterClients{}, nil, iamRESTTenantA))
+	})
+
+	t.Run("a router refusal is returned", func(t *testing.T) {
+		s := &RESTServer{router: mux.NewRouter(), logger: slog.Default()}
+		err := s.SetKMSMounts(nil, nil, &KMSRouterClients{}, guard, iamRESTTenantA)
+		assert.ErrorAs(t, err, new(ErrKMSRESTUnavailable))
+	})
+}
+
 // serveIAMBody is serveIAM with a JSON request body.
 func serveIAMBody(s *RESTServer, method, path, token, body string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))

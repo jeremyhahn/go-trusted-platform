@@ -1580,23 +1580,26 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// for `platformctl --protocol rest kms ...` would 404. The facade shares
 	// the same QuicBaaS SDK clients as the gRPC and embedded transports so
 	// all transports return identical results.
-	// The name-keyed KMS router (keys, crypto, DEKs and secrets, #997) mounts
-	// first, behind the REST scope guard: the first matching route wins, so
-	// it serves every path it shares with the daemon's own KMS handlers.
-	if daemon.concreteRestServer != nil && kmsService != nil {
-		restKMS, restCrypto, restDEK, restSecrets, kmsErr := kmsService.RESTClients()
+	// The daemon's KMS facade mounts first and the name-keyed KMS router
+	// (keys, crypto, DEKs and secrets, #997) after it, both behind the REST
+	// scope guard: the first matching route wins, so the facade keeps the
+	// contract of every path both serve and the router adds its own paths.
+	if daemon.concreteRestServer != nil {
+		var facade restapi.KMSService
+		if kmsPlatformBackend != nil {
+			facade = NewPlatformKMSRESTFacade(kmsPlatformBackend)
+		}
+		var router *KMSRouterClients
+		var kmsErr error
+		if kmsService != nil {
+			router = &KMSRouterClients{}
+			router.KMS, router.Crypto, router.DEK, router.Secrets, kmsErr = kmsService.RESTClients()
+		}
 		if kmsErr == nil {
-			kmsErr = daemon.concreteRestServer.SetKMSRouterHandlers(logger, restKMS, restCrypto, restDEK, restSecrets, restGuard, config.PlatformTenantID)
+			kmsErr = daemon.concreteRestServer.SetKMSMounts(logger, facade, router, restGuard, config.PlatformTenantID)
 		}
 		if kmsErr != nil {
 			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: kmsErr}
-			logger.Error(constructErr, "component", "rest_server")
-			return nil, constructErr
-		}
-	}
-	if daemon.concreteRestServer != nil && kmsPlatformBackend != nil {
-		if facadeErr := daemon.concreteRestServer.SetKMSHandlers(NewPlatformKMSRESTFacade(kmsPlatformBackend), restGuard, config.PlatformTenantID); facadeErr != nil {
-			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: facadeErr}
 			logger.Error(constructErr, "component", "rest_server")
 			return nil, constructErr
 		}
