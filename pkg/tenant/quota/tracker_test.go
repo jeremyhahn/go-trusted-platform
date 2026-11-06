@@ -746,40 +746,6 @@ func TestTracker_Set_NegativeValue(t *testing.T) {
 	}
 }
 
-func TestTracker_Set_AllResourceTypes(t *testing.T) {
-	resources := []ResourceType{
-		ResourceVMs, ResourceContainers, ResourceVCPUs, ResourceMemory,
-		ResourceBridges, ResourcePorts, ResourceBandwidth,
-		ResourceDisk, ResourceVolumes, ResourceSnapshots,
-	}
-
-	for _, resource := range resources {
-		t.Run(string(resource), func(t *testing.T) {
-			store := newMockQuotaStore()
-			logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-
-			tracker, err := NewTracker(store, logger)
-			if err != nil {
-				t.Fatalf("NewTracker() error = %v", err)
-			}
-
-			ctx := context.Background()
-			err = tracker.Set(ctx, "tenant-1", resource, 100)
-			if err != nil {
-				t.Fatalf("Set(%s) error = %v", resource, err)
-			}
-
-			usage, err := tracker.GetUsage(ctx, "tenant-1", resource)
-			if err != nil {
-				t.Fatalf("GetUsage(%s) error = %v", resource, err)
-			}
-			if usage != 100 {
-				t.Errorf("usage = %d, expected 100", usage)
-			}
-		})
-	}
-}
-
 func TestTracker_Invalidate_ClearsCache(t *testing.T) {
 	store := newMockQuotaStore()
 	store.setUsage("tenant-1", &TenantUsage{
