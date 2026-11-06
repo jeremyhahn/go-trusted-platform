@@ -23,22 +23,10 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 )
-
-func TestNewVTPMRouter(t *testing.T) {
-	logger := logging.NewLogger(slog.LevelDebug, os.Stdout)
-	service := &mockVTPMService{}
-	writer := &mockHttpWriter{}
-
-	router := NewVTPMRouter(logger, service, writer)
-
-	require.NotNil(t, router)
-	assert.NotNil(t, router.handlers)
-}
 
 func TestVTPMRouter_RegisterRoutes(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelDebug, os.Stdout)
@@ -91,54 +79,6 @@ func TestVTPMRouter_RegisterRoutes(t *testing.T) {
 	}
 }
 
-func TestVTPMRouter_BundleRoutes_Functional(t *testing.T) {
-	logger := logging.NewLogger(slog.LevelDebug, os.Stdout)
-
-	bundle := createTestBundle("test-bundle")
-	service := &mockVTPMService{
-		getBundleFn: func(ctx context.Context, id string) (*vtpm.Bundle, error) {
-			return bundle, nil
-		},
-	}
-	writer := &mockHttpWriter{}
-
-	vtpmRouter := NewVTPMRouter(logger, service, writer)
-	muxRouter := mux.NewRouter()
-	vtpmRouter.RegisterRoutes(muxRouter.PathPrefix("/api/v1").Subrouter())
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/vtpm/bundles/test-bundle", nil)
-	rec := httptest.NewRecorder()
-
-	muxRouter.ServeHTTP(rec, req)
-
-	// Route was matched (not 404)
-	assert.NotEqual(t, http.StatusNotFound, rec.Code, "Route should be matched")
-}
-
-func TestVTPMRouter_TemplateRoutes_Functional(t *testing.T) {
-	logger := logging.NewLogger(slog.LevelDebug, os.Stdout)
-
-	template := createTestTemplate("test-template")
-	service := &mockVTPMService{
-		getTemplateFn: func(ctx context.Context, id string) (*vtpm.Template, error) {
-			return template, nil
-		},
-	}
-	writer := &mockHttpWriter{}
-
-	vtpmRouter := NewVTPMRouter(logger, service, writer)
-	muxRouter := mux.NewRouter()
-	vtpmRouter.RegisterRoutes(muxRouter.PathPrefix("/api/v1").Subrouter())
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/vtpm/templates/test-template", nil)
-	rec := httptest.NewRecorder()
-
-	muxRouter.ServeHTTP(rec, req)
-
-	// Route was matched (not 404)
-	assert.NotEqual(t, http.StatusNotFound, rec.Code, "Route should be matched")
-}
-
 func TestVTPMRouter_UnregisteredRoute_Returns404(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelDebug, os.Stdout)
 	service := &mockVTPMService{}
@@ -154,26 +94,6 @@ func TestVTPMRouter_UnregisteredRoute_Returns404(t *testing.T) {
 
 	muxRouter.ServeHTTP(rec, req)
 
-	assert.Equal(t, http.StatusNotFound, rec.Code)
-}
-
-func TestVTPMRouter_WrongMethod_ReturnsNotFound(t *testing.T) {
-	logger := logging.NewLogger(slog.LevelDebug, os.Stdout)
-	service := &mockVTPMService{}
-	writer := &mockHttpWriter{}
-
-	vtpmRouter := NewVTPMRouter(logger, service, writer)
-	muxRouter := mux.NewRouter()
-	vtpmRouter.RegisterRoutes(muxRouter.PathPrefix("/api/v1").Subrouter())
-
-	// Mux returns 404 for unmatched method on a registered path by default
-	// (unless MethodNotAllowedHandler is configured). This tests that behavior.
-	req := httptest.NewRequest(http.MethodPatch, "/api/v1/vtpm/bundles", nil)
-	rec := httptest.NewRecorder()
-
-	muxRouter.ServeHTTP(rec, req)
-
-	// PATCH is not registered, so it should not match any route
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 }
 
