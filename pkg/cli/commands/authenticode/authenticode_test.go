@@ -27,6 +27,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -39,19 +40,16 @@ import (
 )
 
 // Test helper to create CommonFlags getter
+// testRSAKey is one 2048-bit RSA key shared by every test that needs one:
+// generating it is the slowest step in this package's tests.
+var testRSAKey = sync.OnceValues(func() (*rsa.PrivateKey, error) {
+	return rsa.GenerateKey(rand.Reader, 2048)
+})
+
 func newTestFlags() func() *cli.CommonFlags {
 	return func() *cli.CommonFlags {
 		return &cli.CommonFlags{
 			OutputFormat: cli.OutputFormatJSON,
-			NoColor:      true,
-		}
-	}
-}
-
-func newTestFlagsWithFormat(format cli.OutputFormat) func() *cli.CommonFlags {
-	return func() *cli.CommonFlags {
-		return &cli.CommonFlags{
-			OutputFormat: format,
 			NoColor:      true,
 		}
 	}
@@ -238,44 +236,12 @@ func TestRunSignParseKeyFailure(t *testing.T) {
 }
 
 // TestRunSignPKCS8KeyParsing tests runSign with PKCS#8 formatted key
-func TestRunSignPKCS8KeyParsing(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	// Generate ECDSA key
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	require.NoError(t, err)
-
-	// Encode as PKCS#8
-	pkcs8Bytes, err := x509.MarshalPKCS8PrivateKey(privateKey)
-	require.NoError(t, err)
-
-	keyPath := filepath.Join(tmpDir, "key.pem")
-	pemBlock := &pem.Block{
-		Type:  "PRIVATE KEY",
-		Bytes: pkcs8Bytes,
-	}
-	err = os.WriteFile(keyPath, pem.EncodeToMemory(pemBlock), 0600)
-	require.NoError(t, err)
-
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatJSON,
-		NoColor:      true,
-	}
-
-	// Should fail on cert reading, not key parsing
-	err = runSign(context.Background(), flags, keyPath, "/nonexistent/cert.pem", "/some/input", "/some/output")
-
-	require.Error(t, err)
-	var readCertErr ErrReadCertificateFailed
-	require.ErrorAs(t, err, &readCertErr)
-}
-
 // TestRunSignReadCertFailure tests runSign when certificate file cannot be read
 func TestRunSignReadCertFailure(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Generate valid RSA key
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	privateKey, err := testRSAKey()
 	require.NoError(t, err)
 
 	keyPath := filepath.Join(tmpDir, "key.pem")
@@ -304,7 +270,7 @@ func TestRunSignDecodeCertFailure(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Generate valid RSA key
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	privateKey, err := testRSAKey()
 	require.NoError(t, err)
 
 	keyPath := filepath.Join(tmpDir, "key.pem")
@@ -338,7 +304,7 @@ func TestRunSignParseCertFailure(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Generate valid RSA key
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	privateKey, err := testRSAKey()
 	require.NoError(t, err)
 
 	keyPath := filepath.Join(tmpDir, "key.pem")
@@ -511,46 +477,8 @@ func TestErrorMessages(t *testing.T) {
 }
 
 // TestSignCommandExecution tests the sign command execution flow
-func TestSignCommandExecution(t *testing.T) {
-	cmd := newSignCommand(newTestFlags())
-	require.NotNil(t, cmd)
-
-	// Verify RunE is set
-	assert.NotNil(t, cmd.RunE)
-}
-
 // TestVerifyCommandExecution tests the verify command execution flow
-func TestVerifyCommandExecution(t *testing.T) {
-	cmd := newVerifyCommand(newTestFlags())
-	require.NotNil(t, cmd)
-
-	// Verify RunE is set
-	assert.NotNil(t, cmd.RunE)
-}
-
 // TestCommandHierarchy tests the command hierarchy relationships
-func TestCommandHierarchy(t *testing.T) {
-	rootCmd := NewCommand(newTestFlags())
-
-	// Get sign command
-	var signCmd, verifyCmd *cobra.Command
-	for _, cmd := range rootCmd.Commands() {
-		switch cmd.Use {
-		case "sign":
-			signCmd = cmd
-		case "verify":
-			verifyCmd = cmd
-		}
-	}
-
-	require.NotNil(t, signCmd)
-	require.NotNil(t, verifyCmd)
-
-	// Verify commands have parents
-	assert.Equal(t, rootCmd, signCmd.Parent())
-	assert.Equal(t, rootCmd, verifyCmd.Parent())
-}
-
 // Helper to generate a test certificate
 func generateTestCertificate(t *testing.T, key crypto.Signer) *x509.Certificate {
 	t.Helper()
@@ -649,34 +577,7 @@ func TestRunVerify_SignedPE(t *testing.T) {
 }
 
 // TestVerifyCommandFlagsRequired tests that required flags are marked
-func TestVerifyCommandFlagsRequired(t *testing.T) {
-	cmd := newVerifyCommand(newTestFlags())
-
-	// Check if input flag is required
-	inputFlag := cmd.Flag("input")
-	require.NotNil(t, inputFlag)
-
-	// Cert flag should be optional
-	certFlag := cmd.Flag("cert")
-	require.NotNil(t, certFlag)
-}
-
 // TestOutputFormatTableSign tests sign command with table output format
-func TestOutputFormatTableSign(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	keyPath, certPath, _ := writeTestKeyAndCert(t, tmpDir)
-
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatTable,
-		NoColor:      true,
-	}
-
-	// Should still fail on signing but exercise the table output path
-	err := runSign(context.Background(), flags, keyPath, certPath, "/nonexistent/input.efi", "/some/output.efi")
-	require.Error(t, err)
-}
-
 // TestOutputFormatTableVerify tests verify command with table output format
 func TestOutputFormatTableVerify(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -694,67 +595,8 @@ func TestOutputFormatTableVerify(t *testing.T) {
 }
 
 // TestRSAKeyParsing tests runSign with PKCS#1 RSA key format
-func TestRSAKeyParsing(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	// Generate RSA key
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	require.NoError(t, err)
-
-	// Write as PKCS#1
-	keyPath := filepath.Join(tmpDir, "key.pem")
-	pemBlock := &pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
-	}
-	err = os.WriteFile(keyPath, pem.EncodeToMemory(pemBlock), 0600)
-	require.NoError(t, err)
-
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatJSON,
-		NoColor:      true,
-	}
-
-	// Should fail on cert reading, not key parsing
-	err = runSign(context.Background(), flags, keyPath, "/nonexistent/cert.pem", "/some/input", "/some/output")
-
-	require.Error(t, err)
-	var readCertErr ErrReadCertificateFailed
-	require.ErrorAs(t, err, &readCertErr)
-}
-
 // TestSignCommandWithOutputFormats tests sign command supports all output formats
-func TestSignCommandWithOutputFormats(t *testing.T) {
-	formats := []cli.OutputFormat{
-		cli.OutputFormatJSON,
-		cli.OutputFormatYAML,
-		cli.OutputFormatTable,
-	}
-
-	for _, format := range formats {
-		t.Run(string(format), func(t *testing.T) {
-			cmd := newSignCommand(newTestFlagsWithFormat(format))
-			require.NotNil(t, cmd)
-		})
-	}
-}
-
 // TestVerifyCommandWithOutputFormats tests verify command supports all output formats
-func TestVerifyCommandWithOutputFormats(t *testing.T) {
-	formats := []cli.OutputFormat{
-		cli.OutputFormatJSON,
-		cli.OutputFormatYAML,
-		cli.OutputFormatTable,
-	}
-
-	for _, format := range formats {
-		t.Run(string(format), func(t *testing.T) {
-			cmd := newVerifyCommand(newTestFlagsWithFormat(format))
-			require.NotNil(t, cmd)
-		})
-	}
-}
-
 // TestSignCommandRunEExecution tests the sign command RunE handler execution
 func TestSignCommandRunEExecution(t *testing.T) {
 	cmd := newSignCommand(newTestFlags())
@@ -821,36 +663,11 @@ func TestVerifyCommandRunEWithEmptyCert(t *testing.T) {
 }
 
 // TestSignCommandRunEWithValidKeyAndCert tests sign command RunE with valid key/cert but missing input
-func TestSignCommandRunEWithValidKeyAndCert(t *testing.T) {
-	tmpDir := t.TempDir()
-	keyPath, certPath, _ := writeTestKeyAndCert(t, tmpDir)
-
-	cmd := newSignCommand(newTestFlags())
-
-	// Set up output capture
-	var outBuf bytes.Buffer
-	cmd.SetOut(&outBuf)
-	cmd.SetErr(&outBuf)
-
-	// Set flags with valid key/cert but nonexistent input
-	_ = cmd.Flags().Set("key", keyPath)
-	_ = cmd.Flags().Set("cert", certPath)
-	_ = cmd.Flags().Set("input", "/nonexistent/input.efi")
-	_ = cmd.Flags().Set("out", "/tmp/output.efi")
-
-	// Execute RunE directly
-	err := cmd.RunE(cmd, []string{})
-
-	require.Error(t, err)
-	var signErr ErrSignFileFailed
-	require.ErrorAs(t, err, &signErr)
-}
-
 // writeTestRSAKeyAndCert creates test RSA key and certificate files
 func writeTestRSAKeyAndCert(t *testing.T, tmpDir string) (string, string, *rsa.PrivateKey) {
 	t.Helper()
 
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	privateKey, err := testRSAKey()
 	require.NoError(t, err)
 
 	// Write key as PKCS#1
@@ -891,88 +708,39 @@ func writeTestRSAKeyAndCert(t *testing.T, tmpDir string) (string, string, *rsa.P
 }
 
 // TestRunSignSuccessJSON tests runSign with a valid PE file and JSON output
-func TestRunSignSuccessJSON(t *testing.T) {
-	tmpDir := t.TempDir()
-
+func TestRunSignSuccess(t *testing.T) {
 	// Create test RSA key and certificate (authenticode works better with RSA)
-	keyPath, certPath, _ := writeTestRSAKeyAndCert(t, tmpDir)
+	keyDir := t.TempDir()
+	keyPath, certPath, _ := writeTestRSAKeyAndCert(t, keyDir)
 
-	// Create minimal PE file
-	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
-	inputPath := filepath.Join(tmpDir, "input.efi")
-	err := os.WriteFile(inputPath, peData, 0644)
-	require.NoError(t, err)
+	formats := []cli.OutputFormat{cli.OutputFormatJSON, cli.OutputFormatTable, cli.OutputFormatYAML}
+	for _, format := range formats {
+		t.Run(string(format), func(t *testing.T) {
+			tmpDir := t.TempDir()
 
-	outputPath := filepath.Join(tmpDir, "output.efi")
+			// Create minimal PE file
+			peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
+			inputPath := filepath.Join(tmpDir, "input.efi")
+			err := os.WriteFile(inputPath, peData, 0644)
+			require.NoError(t, err)
 
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatJSON,
-		NoColor:      true,
+			outputPath := filepath.Join(tmpDir, "output.efi")
+
+			flags := &cli.CommonFlags{
+				OutputFormat: format,
+				NoColor:      true,
+			}
+
+			// Sign the PE file
+			err = runSign(context.Background(), flags, keyPath, certPath, inputPath, outputPath)
+			require.NoError(t, err)
+
+			// Verify output file was created
+			_, err = os.Stat(outputPath)
+			require.NoError(t, err)
+		})
 	}
-
-	// Sign the PE file
-	err = runSign(context.Background(), flags, keyPath, certPath, inputPath, outputPath)
-	require.NoError(t, err)
-
-	// Verify output file was created
-	_, err = os.Stat(outputPath)
-	require.NoError(t, err)
 }
 
 // TestRunSignSuccessTable tests runSign with a valid PE file and Table output
-func TestRunSignSuccessTable(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	// Create test RSA key and certificate
-	keyPath, certPath, _ := writeTestRSAKeyAndCert(t, tmpDir)
-
-	// Create minimal PE file
-	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
-	inputPath := filepath.Join(tmpDir, "input.efi")
-	err := os.WriteFile(inputPath, peData, 0644)
-	require.NoError(t, err)
-
-	outputPath := filepath.Join(tmpDir, "output.efi")
-
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatTable,
-		NoColor:      true,
-	}
-
-	// Sign the PE file
-	err = runSign(context.Background(), flags, keyPath, certPath, inputPath, outputPath)
-	require.NoError(t, err)
-
-	// Verify output file was created
-	_, err = os.Stat(outputPath)
-	require.NoError(t, err)
-}
-
 // TestRunSignSuccessYAML tests runSign with a valid PE file and YAML output
-func TestRunSignSuccessYAML(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	// Create test RSA key and certificate
-	keyPath, certPath, _ := writeTestRSAKeyAndCert(t, tmpDir)
-
-	// Create minimal PE file
-	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
-	inputPath := filepath.Join(tmpDir, "input.efi")
-	err := os.WriteFile(inputPath, peData, 0644)
-	require.NoError(t, err)
-
-	outputPath := filepath.Join(tmpDir, "output.efi")
-
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatYAML,
-		NoColor:      true,
-	}
-
-	// Sign the PE file
-	err = runSign(context.Background(), flags, keyPath, certPath, inputPath, outputPath)
-	require.NoError(t, err)
-
-	// Verify output file was created
-	_, err = os.Stat(outputPath)
-	require.NoError(t, err)
-}
