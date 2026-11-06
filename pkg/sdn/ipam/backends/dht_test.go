@@ -73,7 +73,7 @@ func TestCalculatePoolSize(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cidr := netip.MustParsePrefix(tt.cidr)
-			got := CalculatePoolSize(cidr)
+			got := calculatePoolSize(cidr)
 			if got != tt.expected {
 				t.Errorf("calculatePoolSize(%s) = %d, want %d", tt.cidr, got, tt.expected)
 			}
@@ -99,7 +99,7 @@ func TestRandomIPInCIDR(t *testing.T) {
 
 			// Generate multiple IPs and verify they're all in range
 			for i := 0; i < 100; i++ {
-				ip, err := RandomIPInCIDR(cidr)
+				ip, err := randomIPInCIDR(cidr)
 				if err != nil {
 					t.Fatalf("randomIPInCIDR(%s) failed: %v", tt.cidr, err)
 				}
@@ -154,7 +154,7 @@ func TestIsNetworkOrBroadcast(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cidr := netip.MustParsePrefix(tt.cidr)
 			ip := netip.MustParseAddr(tt.ip)
-			got := IsNetworkOrBroadcast(cidr, ip)
+			got := isNetworkOrBroadcast(cidr, ip)
 			if got != tt.expected {
 				t.Errorf("isNetworkOrBroadcast(%s, %s) = %v, want %v",
 					tt.cidr, tt.ip, got, tt.expected)
@@ -585,6 +585,43 @@ func TestUpdatePoolStats(t *testing.T) {
 }
 
 // TestExportedFunctions tests the exported utility functions.
+func TestExportedFunctions(t *testing.T) {
+	cidr := netip.MustParsePrefix("192.168.1.0/24")
+
+	t.Run("CalculatePoolSize", func(t *testing.T) {
+		size := CalculatePoolSize(cidr)
+		if size != 254 {
+			t.Errorf("CalculatePoolSize() = %d, want 254", size)
+		}
+	})
+
+	t.Run("RandomIPInCIDR", func(t *testing.T) {
+		ip, err := RandomIPInCIDR(cidr)
+		if err != nil {
+			t.Fatalf("RandomIPInCIDR() error = %v", err)
+		}
+		if !cidr.Contains(ip) {
+			t.Errorf("RandomIPInCIDR() = %s, not in CIDR", ip)
+		}
+	})
+
+	t.Run("IsNetworkOrBroadcast", func(t *testing.T) {
+		network := netip.MustParseAddr("192.168.1.0")
+		broadcast := netip.MustParseAddr("192.168.1.255")
+		regular := netip.MustParseAddr("192.168.1.100")
+
+		if !IsNetworkOrBroadcast(cidr, network) {
+			t.Error("IsNetworkOrBroadcast(network) = false, want true")
+		}
+		if !IsNetworkOrBroadcast(cidr, broadcast) {
+			t.Error("IsNetworkOrBroadcast(broadcast) = false, want true")
+		}
+		if IsNetworkOrBroadcast(cidr, regular) {
+			t.Error("IsNetworkOrBroadcast(regular) = true, want false")
+		}
+	})
+}
+
 // TestIPToBigInt tests IP to big.Int conversion.
 func TestIPToBigInt(t *testing.T) {
 	t.Run("IPv4", func(t *testing.T) {
