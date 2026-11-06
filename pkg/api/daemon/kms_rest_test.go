@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/gorilla/mux"
+	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -269,26 +270,100 @@ func TestKMSREST_NoCredentialIsUnauthorized(t *testing.T) {
 // The guarded router mounts before the daemon's own KMS handlers, so it
 // answers every path both serve, while the daemon keeps the paths only it
 // serves.
-func TestKMSREST_RouterTakesPrecedenceOverTheDaemonHandlers(t *testing.T) {
-	var statusCalls atomic.Int32
-	client := &platformMockKMSClient{backendStatusFn: func(context.Context) (*kms.BackendStatusResponse, error) {
-		statusCalls.Add(1)
-		return &kms.BackendStatusResponse{}, nil
-	}}
-	s := kmsRESTServer(t, client)
+// kmsMountedServer mounts the daemon facade and the name-keyed router through
+// SetKMSMounts, in the order the daemon mounts them.
+func kmsMountedServer(t *testing.T, kmsClient kms.Client, cryptoClient *platformMockCryptoClient) *RESTServer {
+	t.Helper()
+	s := &RESTServer{router: mux.NewRouter(), logger: slog.Default()}
 	guard := restapi.NewScopeGuard(kmsRESTCallers, nil, nil)
-	require.NoError(t, s.SetKMSHandlers(NewPlatformKMSRESTFacade(NewPlatformKMSBackend(client, &platformMockCryptoClient{}, slog.Default())), guard, iamRESTTenantA))
+	facade := NewPlatformKMSRESTFacade(NewPlatformKMSBackend(kmsClient, cryptoClient, slog.Default()))
+	router := &KMSRouterClients{KMS: kmsClient, Crypto: cryptoClient}
+	require.NoError(t, s.SetKMSMounts(logging.DefaultLogger(), facade, router, guard, iamRESTTenantA))
+	return s
+}
+
+// TestKMSREST_FacadeTakesPrecedenceOnSharedPaths holds every path both KMS
+// mounts serve to the daemon facade's contract, which the SDK REST transport
+// decodes: {key, metadata} for a key, random_bytes, and the numeric hash
+// algorithm. A router-only path still reaches the router.
+func TestKMSREST_FacadeTakesPrecedenceOnSharedPaths(t *testing.T) {
+	var statusCalls atomic.Int32
+	client := &platformMockKMSClient{
+		backendStatusFn: func(context.Context) (*kms.BackendStatusResponse, error) {
+			statusCalls.Add(1)
+			return &kms.BackendStatusResponse{}, nil
+		},
+		getKeyMetadataFn: func(_ context.Context, keyID string) (*kms.KeyMetadataResponse, error) {
+			return &kms.KeyMetadataResponse{KeyID: keyID}, nil
+		},
+	}
+	var hashAlg atomic.Int32
+	var encryptCalls atomic.Int32
+	crypto := &platformMockCryptoClient{
+		hashFn: func(_ context.Context, req *quicbaas.HashRequest) (*quicbaas.HashResponse, error) {
+			hashAlg.Store(int32(req.HashAlg))
+			return &quicbaas.HashResponse{HashAlg: req.HashAlg, Hash: []byte("sha512-digest")}, nil
+		},
+		generateRandomFn: func(_ context.Context, req *quicbaas.GenerateRandomRequest) (*quicbaas.GenerateRandomResponse, error) {
+			return &quicbaas.GenerateRandomResponse{RandomBytes: []byte("rand")}, nil
+		},
+		encryptFn: func(context.Context, *quicbaas.EncryptRequest) (*quicbaas.EncryptResponse, error) {
+			encryptCalls.Add(1)
+			return &quicbaas.EncryptResponse{Ciphertext: []byte("ciphertext"), KeyVersion: 1}, nil
+		},
+	}
+	s := kmsMountedServer(t, client, crypto)
 
 	assert.Equal(t, http.StatusUnauthorized, serveIAM(s, http.MethodGet, "/api/v1/kms/keys/k1", "").Code,
-		"the overlapping key route answers through the guard")
+		"the shared key route answers through the guard")
 	assert.Equal(t, http.StatusUnauthorized, serveIAM(s, http.MethodPost, "/api/v1/kms/keys", "").Code,
-		"the overlapping generate route answers through the guard")
+		"the shared generate route answers through the guard")
+
+	t.Run("GET key answers key and metadata", func(t *testing.T) {
+		recorder := serveIAM(s, http.MethodGet, "/api/v1/kms/keys/k1", "system-all")
+		assertReachedHandler(t, recorder, recorder.Body.String())
+		assert.Contains(t, recorder.Body.String(), `"metadata"`)
+		assert.Contains(t, recorder.Body.String(), `"key"`)
+	})
+
+	t.Run("POST random answers random_bytes", func(t *testing.T) {
+		recorder := serveIAMBody(s, http.MethodPost, "/api/v1/kms/random", "system-all", `{"num_bytes":4}`)
+		assertReachedHandler(t, recorder, recorder.Body.String())
+		assert.Contains(t, recorder.Body.String(), `"random_bytes"`)
+	})
+
+	t.Run("POST hash keeps the numeric algorithm", func(t *testing.T) {
+		want, err := platformKMSHashToSDK(4)
+		require.NoError(t, err)
+		recorder := serveIAMBody(s, http.MethodPost, "/api/v1/kms/hash", "system-all", `{"data":"YQ==","algorithm":4}`)
+		assertReachedHandler(t, recorder, recorder.Body.String())
+		assert.Equal(t, int32(want), hashAlg.Load(), "the facade hashes with the requested algorithm")
+		assert.Contains(t, recorder.Body.String(), "c2hhNTEyLWRpZ2VzdA==", "the facade answers the digest")
+	})
+
+	t.Run("router-only encrypt reaches the router", func(t *testing.T) {
+		recorder := serveIAMBody(s, http.MethodPost, "/api/v1/kms/encrypt/k1", "system-all", `{"plaintext":"YQ=="}`)
+		assertReachedHandler(t, recorder, recorder.Body.String())
+		assert.Equal(t, int32(1), encryptCalls.Load())
+	})
 
 	assert.Equal(t, http.StatusUnauthorized, serveIAM(s, http.MethodGet, "/api/v1/kms/status", "").Code,
 		"the facade-only status route answers through the guard")
 	recorder := serveIAM(s, http.MethodGet, "/api/v1/kms/status", "kms-reader")
 	assertReachedHandler(t, recorder, recorder.Body.String())
 	assert.Equal(t, int32(1), statusCalls.Load(), "/api/v1/kms/status still reaches the daemon facade")
+}
+
+// serveIAMBody is serveIAM with a JSON request body.
+func serveIAMBody(s *RESTServer, method, path, token, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	recorder := httptest.NewRecorder()
+	s.router.ServeHTTP(recorder, req)
+	return recorder
 }
 
 func TestSetKMSHandlers_NilGuardIsRefused(t *testing.T) {
@@ -314,9 +389,7 @@ func TestSetKMSHandlers_FacadeOnlyPathNeedsScope(t *testing.T) {
 	client := &platformMockKMSClient{backendStatusFn: func(context.Context) (*kms.BackendStatusResponse, error) {
 		return &kms.BackendStatusResponse{}, nil
 	}}
-	s := kmsRESTServer(t, client)
-	guard := restapi.NewScopeGuard(kmsRESTCallers, nil, nil)
-	require.NoError(t, s.SetKMSHandlers(NewPlatformKMSRESTFacade(NewPlatformKMSBackend(client, &platformMockCryptoClient{}, slog.Default())), guard, iamRESTTenantA))
+	s := kmsMountedServer(t, client, &platformMockCryptoClient{})
 
 	recorder := serveIAM(s, http.MethodPost, "/api/v1/kms/sign", "kms-reader")
 	assert.Equal(t, http.StatusForbidden, recorder.Code)
@@ -339,9 +412,7 @@ func TestSetKMSHandlers_FallbackRoutesRefuseUnboundTenant(t *testing.T) {
 		{http.MethodGet, "/api/v1/kms/keys/k1/export"},
 	}
 	client := &platformMockKMSClient{}
-	s := kmsRESTServer(t, client)
-	guard := restapi.NewScopeGuard(kmsRESTCallers, nil, nil)
-	require.NoError(t, s.SetKMSHandlers(NewPlatformKMSRESTFacade(NewPlatformKMSBackend(client, &platformMockCryptoClient{}, slog.Default())), guard, iamRESTTenantA))
+	s := kmsMountedServer(t, client, &platformMockCryptoClient{})
 
 	for _, route := range routes {
 		t.Run(route.method+" "+route.path, func(t *testing.T) {
