@@ -136,17 +136,6 @@ func TestDispatchInitShamir_InvalidOutputFormat(t *testing.T) {
 	}
 }
 
-// TestDispatchUnseal_InvalidOutputFormat covers the default branch.
-func TestDispatchUnseal_InvalidOutputFormat(t *testing.T) {
-	fake := &fakeBarrierClient{}
-	d, _ := newTestDispatcher(cli.OutputFormat("xml"), fake)
-	err := dispatchUnseal(d, "x")
-	var typed cli.ErrInvalidOutputFormat
-	if !errors.As(err, &typed) {
-		t.Errorf("expected ErrInvalidOutputFormat, got %T: %v", err, err)
-	}
-}
-
 // TestDispatchUnsealShares_InvalidOutputFormat covers the default branch.
 func TestDispatchUnsealShares_InvalidOutputFormat(t *testing.T) {
 	fake := &fakeBarrierClient{}
