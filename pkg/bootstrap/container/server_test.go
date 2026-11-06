@@ -540,18 +540,16 @@ func TestServerConfig_Validate_PathsMustBeServed(t *testing.T) {
 // a nil config, a nil logger, a config that fails Validate, and a manifest
 // path that does not exist.
 func TestNewServer_Errors(t *testing.T) {
-	validButNoManifest := func() *ServerConfig {
-		return &ServerConfig{
-			ManifestPath: "/nonexistent/manifest.yaml",
-			DataDir:      "/tmp",
-			MediaDir:     "/tmp/media",
-			DHCPConfig: DHCPConfig{
-				ServerIP:   "192.168.1.1",
-				RangeStart: "192.168.1.100",
-				RangeEnd:   "192.168.1.200",
-				SubnetMask: "255.255.255.0",
-			},
-		}
+	missingManifest := &ServerConfig{
+		ManifestPath: "/nonexistent/manifest.yaml",
+		DataDir:      "/tmp",
+		MediaDir:     "/tmp/media",
+		DHCPConfig: DHCPConfig{
+			ServerIP:   "192.168.1.1",
+			RangeStart: "192.168.1.100",
+			RangeEnd:   "192.168.1.200",
+			SubnetMask: "255.255.255.0",
+		},
 	}
 	tests := []struct {
 		name      string
@@ -562,7 +560,7 @@ func TestNewServer_Errors(t *testing.T) {
 		{name: "nil config", config: nil, logger: testLogger(), wantField: "config"},
 		{name: "nil logger", config: &ServerConfig{}, logger: nil, wantField: "logger"},
 		{name: "invalid config", config: &ServerConfig{ManifestPath: ""}, logger: testLogger(), wantField: "manifest_path"},
-		{name: "manifest not found", config: validButNoManifest(), logger: testLogger()},
+		{name: "manifest not found", config: missingManifest, logger: testLogger()},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
