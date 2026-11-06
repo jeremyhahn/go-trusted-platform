@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"net/http"
 	"strings"
 
 	cryptoclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/crypto"
@@ -25,6 +26,12 @@ const (
 	// kmsSecretsRoutePrefix is the route template prefix of the secrets
 	// routes the KMS router serves.
 	kmsSecretsRoutePrefix = iamRESTParentPath + "/kms/secrets"
+	// kmsSecretVersionsRouteSuffix ends the route template that lists one
+	// secret's versions.
+	kmsSecretVersionsRouteSuffix = "/versions"
+	// scopeActionList is the catalog action of the secret enumeration
+	// routes: gRPC ListSecrets and ListSecretVersions require secrets:list.
+	scopeActionList = "list"
 )
 
 // kmsReadOnlyPosts are the KMS POST routes that only evaluate a request
@@ -97,6 +104,9 @@ func kmsRouterTenantDecision(systemTenantID, callerTenantID string) error {
 func kmsRouteScope(method, route string) (string, error) {
 	resource, readOnlyPosts := kmsScopeResource, kmsReadOnlyPosts
 	if strings.HasPrefix(route, kmsSecretsRoutePrefix) {
+		if isSecretEnumerationRoute(method, route) {
+			return secretsScopeResource + ":" + scopeActionList, nil
+		}
 		resource, readOnlyPosts = secretsScopeResource, nil
 	}
 	action, err := restScopeAction(resource, readOnlyPosts, method, route)
@@ -104,4 +114,13 @@ func kmsRouteScope(method, route string) (string, error) {
 		return "", err
 	}
 	return resource + ":" + action, nil
+}
+
+// isSecretEnumerationRoute reports whether a secrets route lists rather than
+// reads: a GET on the secrets collection or on one secret's versions.
+func isSecretEnumerationRoute(method, route string) bool {
+	if method != http.MethodGet {
+		return false
+	}
+	return route == kmsSecretsRoutePrefix || strings.HasSuffix(route, kmsSecretVersionsRouteSuffix)
 }
