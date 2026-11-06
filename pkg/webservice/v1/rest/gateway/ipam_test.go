@@ -328,33 +328,6 @@ func TestIPAMRoutes_Allocations(t *testing.T) {
 	}
 }
 
-func TestIPAMRoutes_ErrorMapping(t *testing.T) {
-	cases := []struct {
-		name string
-		code codes.Code
-		want int
-	}{
-		{"unavailable maps 503", codes.Unavailable, http.StatusServiceUnavailable},
-		{"already exists maps 409", codes.AlreadyExists, http.StatusConflict},
-		{"not found maps 404", codes.NotFound, http.StatusNotFound},
-		{"invalid argument maps 400", codes.InvalidArgument, http.StatusBadRequest},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			mr := newIPAMTestRouter(t, &mockIPAMGatewayService{
-				listPoolsFunc: func(_ context.Context, _ *platformv1.ListIPAMPoolsRequest) (*platformv1.ListIPAMPoolsResponse, error) {
-					return nil, status.Error(tc.code, "ipam backend says no")
-				},
-			})
-			rec := httptest.NewRecorder()
-			mr.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sdn/gateway/ipam/pools", nil))
-			if rec.Code != tc.want {
-				t.Fatalf("status = %d, want %d (body=%s)", rec.Code, tc.want, rec.Body.String())
-			}
-		})
-	}
-}
-
 func TestIPAMRoutes_NilServerAnswers503(t *testing.T) {
 	mr := newIPAMTestRouter(t, nil)
 
@@ -537,13 +510,6 @@ func TestIPAMRoutes_UpdatePoolWindow(t *testing.T) {
 	}
 }
 
-func TestDerefString(t *testing.T) {
-	s := "x"
-	if derefString(&s) != "x" || derefString(nil) != "" {
-		t.Fatal("derefString")
-	}
-}
-
 func TestIPAMRoutes_GetPool(t *testing.T) {
 	var gotID string
 	mr := newIPAMTestRouter(t, &mockIPAMGatewayService{
@@ -585,6 +551,9 @@ func failingIPAMService(err error) *mockIPAMGatewayService {
 		createPoolFunc: func(context.Context, *platformv1.CreateIPAMPoolRequest) (*platformv1.CreateIPAMPoolResponse, error) {
 			return nil, err
 		},
+		listPoolsFunc: func(context.Context, *platformv1.ListIPAMPoolsRequest) (*platformv1.ListIPAMPoolsResponse, error) {
+			return nil, err
+		},
 		getPoolFunc: func(context.Context, *platformv1.GetIPAMPoolRequest) (*platformv1.GetIPAMPoolResponse, error) {
 			return nil, err
 		},
@@ -615,6 +584,7 @@ func TestIPAMRoutes_ServiceErrorsReachTheCaller(t *testing.T) {
 		code   codes.Code
 		want   int
 	}{
+		{"list pools invalid argument", http.MethodGet, "/sdn/gateway/ipam/pools", "", codes.InvalidArgument, http.StatusBadRequest},
 		{"create pool conflict", http.MethodPost, "/sdn/gateway/ipam/pools", `{"id":"prod-v4","cidr":"10.0.0.0/24"}`, codes.AlreadyExists, http.StatusConflict},
 		{"update unknown pool", http.MethodPut, "/sdn/gateway/ipam/pools/missing", `{"name":"renamed"}`, codes.NotFound, http.StatusNotFound},
 		{"delete unknown pool", http.MethodDelete, "/sdn/gateway/ipam/pools/missing", "", codes.NotFound, http.StatusNotFound},
