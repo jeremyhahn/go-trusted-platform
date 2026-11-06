@@ -55,9 +55,8 @@ func TestRunBridgeCreate_InvalidBridgeType(t *testing.T) {
 	assert.IsType(t, ErrInvalidBridgeType{}, err)
 }
 
-// The bridge get/list/delete, gateway status, overlay status and policy get
-// NoContext tests go through cmd.RunE, so one test covers both the command's
-// RunE wiring and the run function's NoContext branch.
+// Tests that go through cmd.RunE cover the command wiring and the run
+// function's NoContext branch in one call.
 func TestRunBridgeGet_NoContext(t *testing.T) {
 	cmd := newBridgeGetCommand(noContextFlags)
 	assertNoContextError(t, cmd.RunE(cmd, []string{"br0"}))
