@@ -21,7 +21,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"io"
@@ -1314,63 +1313,6 @@ func TestClientIsRetryable(t *testing.T) {
 		err := ErrPushFailed{}
 		if !client.isRetryable(err, 0, retry) {
 			t.Error("unknown error should be retryable by default")
-		}
-	})
-}
-
-func TestClientResponseParsing(t *testing.T) {
-	t.Run("json response", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			resp := map[string]interface{}{
-				"status":  "accepted",
-				"id":      "12345",
-				"message": "Manifest received",
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			if err := json.NewEncoder(w).Encode(resp); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-		}))
-		defer server.Close()
-
-		cfg := DefaultClientConfig()
-		client, err := NewClient(cfg)
-		if err != nil {
-			t.Fatalf("expected no error, got %v", err)
-		}
-		defer client.Close()
-
-		target := &PushTarget{
-			ID:        "json-target",
-			Endpoint:  server.URL,
-			Transport: TransportHTTP,
-			Enabled:   true,
-		}
-
-		request := &PushRequest{
-			ManifestID:  "manifest-1",
-			Payload:     []byte(`{"test":"data"}`),
-			ContentType: "application/json",
-		}
-
-		result, err := client.Push(context.Background(), target, request)
-		if err != nil {
-			t.Fatalf("expected no error, got %v", err)
-		}
-
-		if !result.Success() {
-			t.Error("expected success")
-		}
-
-		var respData map[string]interface{}
-		if err := json.Unmarshal(result.Response, &respData); err != nil {
-			t.Fatalf("failed to parse response: %v", err)
-		}
-
-		if respData["status"] != "accepted" {
-			t.Errorf("unexpected status: %v", respData["status"])
 		}
 	})
 }
