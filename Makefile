@@ -3560,6 +3560,11 @@ mod-verify:
 security: gosec vuln mod-verify trivy
 	@echo "$(GREEN)$(BOLD)✓ Security suite passed!$(RESET)"
 
+.PHONY: security-novuln
+## security-novuln: make security without govulncheck; CI runs vuln as its own job at 20g (#1425)
+security-novuln: gosec mod-verify trivy
+	@echo "$(GREEN)$(BOLD)✓ Security suite (without govulncheck) passed!$(RESET)"
+
 .PHONY: check
 ## check: Run all code quality and security checks
 check: fmt-check vet lint gosec vuln
