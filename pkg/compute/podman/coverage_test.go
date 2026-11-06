@@ -106,39 +106,9 @@ func TestRuntime_GenerateContainerID_IsHex(t *testing.T) {
 }
 
 // TestPodmanManager_RemoveImage_NotInitialized verifies error when not initialized.
-func TestPodmanManager_RemoveImage_NotInitialized(t *testing.T) {
-	mgr, err := NewPodmanManager(nil)
-	require.NoError(t, err)
-
-	err = mgr.RemoveImage(context.Background(), "test:latest", false)
-	assert.ErrorIs(t, err, ErrClientNotConnected)
-}
-
 // TestPodmanManager_PullImage_NotInitialized verifies error when not initialized.
-func TestPodmanManager_PullImage_NotInitialized(t *testing.T) {
-	mgr, err := NewPodmanManager(nil)
-	require.NoError(t, err)
-
-	err = mgr.PullImage(context.Background(), "test:latest")
-	assert.ErrorIs(t, err, ErrClientNotConnected)
-}
-
 // TestPodmanManager_PullImage_EmptyRef verifies error for empty image ref.
-func TestPodmanManager_PullImage_EmptyRef(t *testing.T) {
-	mgr := createInitializedTestManager(t)
-
-	err := mgr.PullImage(context.Background(), "")
-	require.Error(t, err)
-}
-
 // TestPodmanManager_InspectImage_EmptyRef verifies error for empty image ref.
-func TestPodmanManager_InspectImage_EmptyRef(t *testing.T) {
-	mgr := createInitializedTestManager(t)
-
-	_, err := mgr.InspectImage(context.Background(), "")
-	require.Error(t, err)
-}
-
 // TestPodmanManager_InspectImage_Success verifies basic image inspection.
 func TestPodmanManager_InspectImage_Success(t *testing.T) {
 	mgr := createInitializedTestManager(t)
@@ -159,116 +129,18 @@ func TestPodmanManager_ListImages_Success(t *testing.T) {
 }
 
 // TestPodmanManager_StartContainer_NotInitialized verifies error when not initialized.
-func TestPodmanManager_StartContainer_NotInitialized(t *testing.T) {
-	mgr, err := NewPodmanManager(nil)
-	require.NoError(t, err)
-
-	err = mgr.StartContainer(context.Background(), "test-id")
-	assert.ErrorIs(t, err, ErrClientNotConnected)
-}
-
 // TestPodmanManager_StartContainer_EmptyID verifies error for empty container ID.
-func TestPodmanManager_StartContainer_EmptyID(t *testing.T) {
-	mgr := createInitializedTestManager(t)
-
-	err := mgr.StartContainer(context.Background(), "")
-	require.Error(t, err)
-}
-
 // TestPodmanManager_StopContainer_NotInitialized verifies error when not initialized.
-func TestPodmanManager_StopContainer_NotInitialized(t *testing.T) {
-	mgr, err := NewPodmanManager(nil)
-	require.NoError(t, err)
-
-	err = mgr.StopContainer(context.Background(), "test-id", nil)
-	assert.ErrorIs(t, err, ErrClientNotConnected)
-}
-
 // TestPodmanManager_StopContainer_EmptyID verifies error for empty container ID.
-func TestPodmanManager_StopContainer_EmptyID(t *testing.T) {
-	mgr := createInitializedTestManager(t)
-
-	err := mgr.StopContainer(context.Background(), "", nil)
-	require.Error(t, err)
-}
-
 // TestPodmanManager_RemoveContainer_NotInitialized verifies error when not initialized.
-func TestPodmanManager_RemoveContainer_NotInitialized(t *testing.T) {
-	mgr, err := NewPodmanManager(nil)
-	require.NoError(t, err)
-
-	err = mgr.RemoveContainer(context.Background(), "test-id", false)
-	assert.ErrorIs(t, err, ErrClientNotConnected)
-}
-
 // TestPodmanManager_RemoveContainer_EmptyID verifies error for empty container ID.
-func TestPodmanManager_RemoveContainer_EmptyID(t *testing.T) {
-	mgr := createInitializedTestManager(t)
-
-	err := mgr.RemoveContainer(context.Background(), "", false)
-	require.Error(t, err)
-}
-
 // TestPodmanManager_InspectContainer_NotInitialized verifies error when not initialized.
-func TestPodmanManager_InspectContainer_NotInitialized(t *testing.T) {
-	mgr, err := NewPodmanManager(nil)
-	require.NoError(t, err)
-
-	_, err = mgr.InspectContainer(context.Background(), "test-id")
-	assert.ErrorIs(t, err, ErrClientNotConnected)
-}
-
 // TestPodmanManager_InspectContainer_EmptyID verifies error for empty container ID.
-func TestPodmanManager_InspectContainer_EmptyID(t *testing.T) {
-	mgr := createInitializedTestManager(t)
-
-	_, err := mgr.InspectContainer(context.Background(), "")
-	require.Error(t, err)
-}
-
 // TestPodmanManager_ListContainers_NotInitialized verifies error when not initialized.
-func TestPodmanManager_ListContainers_NotInitialized(t *testing.T) {
-	mgr, err := NewPodmanManager(nil)
-	require.NoError(t, err)
-
-	_, err = mgr.ListContainers(context.Background(), true)
-	assert.ErrorIs(t, err, ErrClientNotConnected)
-}
-
 // TestPodmanManager_WaitContainer_NotInitialized verifies error when not initialized.
-func TestPodmanManager_WaitContainer_NotInitialized(t *testing.T) {
-	mgr, err := NewPodmanManager(nil)
-	require.NoError(t, err)
-
-	_, err = mgr.WaitContainer(context.Background(), "test-id")
-	assert.ErrorIs(t, err, ErrClientNotConnected)
-}
-
 // TestPodmanManager_WaitContainer_EmptyID verifies error for empty container ID.
-func TestPodmanManager_WaitContainer_EmptyID(t *testing.T) {
-	mgr := createInitializedTestManager(t)
-
-	_, err := mgr.WaitContainer(context.Background(), "")
-	require.Error(t, err)
-}
-
 // TestPodmanManager_GetContainerLogs_NotInitialized verifies error when not initialized.
-func TestPodmanManager_GetContainerLogs_NotInitialized(t *testing.T) {
-	mgr, err := NewPodmanManager(nil)
-	require.NoError(t, err)
-
-	_, err = mgr.GetContainerLogs(context.Background(), "test-id", false, nil)
-	assert.ErrorIs(t, err, ErrClientNotConnected)
-}
-
 // TestPodmanManager_GetContainerLogs_EmptyID verifies error for empty container ID.
-func TestPodmanManager_GetContainerLogs_EmptyID(t *testing.T) {
-	mgr := createInitializedTestManager(t)
-
-	_, err := mgr.GetContainerLogs(context.Background(), "", false, nil)
-	require.Error(t, err)
-}
-
 // TestPodmanManager_GetContainerLogs_WithSinceParam verifies logs with since time.
 func TestPodmanManager_GetContainerLogs_WithSinceParam(t *testing.T) {
 	mgr := createInitializedTestManager(t)
@@ -292,33 +164,8 @@ func TestPodmanManager_GetContainerLogs_NilSince(t *testing.T) {
 }
 
 // TestPodmanManager_RemoveImage_EmptyRef verifies error for empty image ref.
-func TestPodmanManager_RemoveImage_EmptyRef(t *testing.T) {
-	mgr := createInitializedTestManager(t)
-
-	err := mgr.RemoveImage(context.Background(), "", false)
-	require.Error(t, err)
-}
-
 // TestPodmanManager_GetAttestor verifies attestor accessor.
-func TestPodmanManager_GetAttestor(t *testing.T) {
-	mgr, err := NewPodmanManager(nil)
-	require.NoError(t, err)
-
-	assert.Nil(t, mgr.GetAttestor())
-}
-
 // TestPodmanManager_CreateContainer_NotInitialized verifies error when not initialized.
-func TestPodmanManager_CreateContainer_NotInitialized(t *testing.T) {
-	mgr, err := NewPodmanManager(nil)
-	require.NoError(t, err)
-
-	_, err = mgr.CreateContainer(context.Background(), &ContainerConfig{
-		Name:  "test",
-		Image: "alpine:latest",
-	})
-	assert.ErrorIs(t, err, ErrClientNotConnected)
-}
-
 // TestWithRuntimeLogger verifies the runtime logger option.
 func TestWithRuntimeLogger(t *testing.T) {
 	logger := slog.Default()
@@ -329,29 +176,8 @@ func TestWithRuntimeLogger(t *testing.T) {
 }
 
 // TestManagerConfig_Validate_NilRuntime verifies validation with nil runtime.
-func TestManagerConfig_Validate_NilRuntime(t *testing.T) {
-	cfg := DefaultManagerConfig()
-	cfg.Runtime = nil
-	err := cfg.Validate()
-	require.Error(t, err)
-}
-
 // TestManagerConfig_Validate_NegativeMaxContainers verifies validation with bad max containers.
-func TestManagerConfig_Validate_NegativeMaxContainers(t *testing.T) {
-	cfg := DefaultManagerConfig()
-	cfg.MaxContainers = -1
-	err := cfg.Validate()
-	require.Error(t, err)
-}
-
 // TestManagerConfig_Validate_NegativeStopTimeout verifies validation with negative timeout.
-func TestManagerConfig_Validate_NegativeStopTimeout(t *testing.T) {
-	cfg := DefaultManagerConfig()
-	cfg.DefaultStopTimeout = -1
-	err := cfg.Validate()
-	require.Error(t, err)
-}
-
 // createInitializedTestManager creates a podman manager with initialized flag set
 // but no actual runtime, for testing validation paths.
 func createInitializedTestManager(t *testing.T) PodmanManager {

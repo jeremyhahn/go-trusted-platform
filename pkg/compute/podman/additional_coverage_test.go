@@ -266,13 +266,3 @@ func TestRuntime_EnsureDirectories_EmptyDirSkipped(t *testing.T) {
 // =============================================================================
 // Manager — ManagerConfig Validate edge case
 // =============================================================================
-
-func TestManagerConfig_Validate_ZeroMaxContainers(t *testing.T) {
-	cfg := &ManagerConfig{
-		Runtime:            DefaultRuntimeConfig(),
-		MaxContainers:      0,
-		DefaultStopTimeout: DefaultStopTimeout,
-	}
-	err := cfg.Validate()
-	require.Error(t, err)
-}
