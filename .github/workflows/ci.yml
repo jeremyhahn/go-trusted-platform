@@ -572,20 +572,21 @@ jobs:
           IN_IMAGE_GOMAXPROCS: 8
         run: scripts/in-toolchain-image.sh "$TOOLCHAIN_IMAGE" make test-race
 
-      # make security: gosec, govulncheck, go mod verify and `trivy fs`
-      # (devops.md §8), with GOSEC_EXCLUDE, the govulncheck module list and
-      # GOVULN_ALLOW single-sourced in the Makefile. security and trivy are
-      # full-tier steps (v1.23, ci-standard.md §8), with a network for the
-      # vulnerability databases. Unbounded it reached 17.0 GB; GOMAXPROCS 8 (the
-      # go list compiles gosec loads through) and GOSEC_CONCURRENCY 2 keep it
-      # under 16g (#1178).
-      - name: make security
+      # make security-novuln: make security (devops.md §8) without
+      # govulncheck, i.e. gosec, go mod verify and `trivy fs`, with
+      # GOSEC_EXCLUDE single-sourced in the Makefile. govulncheck runs in the
+      # vuln job at 20g: its symbol scan reached 16.7 GB under this step's 16g
+      # (#1425). security and trivy are full-tier steps (v1.23,
+      # ci-standard.md §8), with a network for the vulnerability databases.
+      # Unbounded it reached 17.0 GB; GOMAXPROCS 8 (the go list compiles gosec
+      # loads through) and GOSEC_CONCURRENCY 2 keep it under 16g (#1178).
+      - name: make security-novuln
         if: ${{ !cancelled() && env.TOOLCHAIN_IMAGE != '' && env.CI_FULL_TIER == 'true' }}
         env:
           IN_IMAGE_NETWORK: bridge
           IN_IMAGE_MEMORY: 16g
           IN_IMAGE_GOMAXPROCS: 8
-        run: scripts/in-toolchain-image.sh "$TOOLCHAIN_IMAGE" make security GOSEC_CONCURRENCY=2
+        run: scripts/in-toolchain-image.sh "$TOOLCHAIN_IMAGE" make security-novuln GOSEC_CONCURRENCY=2
 
       # Fails when a library, first-party or third-party, is behind its latest
       # release without devops.md §9's documented reason (ci-standard.md §1).
