@@ -76,7 +76,7 @@
 #     tier (pkg/arch/citiers_test.go holds the format).
 #   - integration needs image (isolation, see there) and applies the
 #     foreign-failure baseline (ruling 125); soak applies it per iteration.
-#   - FIPS is kept and ungated (#853, see its comment).
+#   - FIPS is kept and gated in the `main` tier (#853, #1411, see its comment).
 #   - trivy image keeps --ignore-unfixed, --skip-dirs /gomodcache and its
 #     ignorefile. The SARIF upload is gone with the runner security job:
 #     Gitea has no code-scanning ingest.
@@ -1392,15 +1392,14 @@ jobs:
           [ -z "${IT_LEASE:-}" ] || docker rm "$IT_LEASE" >/dev/null 2>&1 || true
           docker buildx prune --builder "$BUILDX_BUILDER" --force --keep-storage "$BUILDKIT_KEEP_STORAGE" || true
 
-  # CUSTOMIZE (FIPS 140-3, #853): the ungated job. It runs on push to main,
-  # the schedule and workflow_dispatch, and never on a pull request, `ci:full`
-  # or not (m1355 / DS-3878, DS-4613): its `if:` is not the full tier's.
+  # CUSTOMIZE (FIPS 140-3, #853): the one `main`-tier job. It runs on push to
+  # main, the schedule and workflow_dispatch, and never on a pull request,
+  # `ci:full` or not (m1355 / DS-3878, DS-4613): its `if:` is not the full tier's.
   #
-  # It is deliberately NOT in ci-gate's `needs`: it is still red on causes
-  # this repository cannot close (the header of nightly.yml lists them), so
-  # it reports `CI / FIPS` without turning CI Gate red.
-  # pkg/arch/citiers_test.go fails `make test` if it is ever gated, if a gated
-  # job needs it, or if its `if:` is not exactly the one below. Its steps match nightly.yml's `fips` job;
+  # It is in ci-gate's `needs` (#1411, ruling 297): a push whose FIPS fails
+  # reads CI Gate failure, and its skip passes only on a pull request.
+  # pkg/arch/citiers_test.go fails `make test` if it leaves the gate, if a
+  # non-main job needs it, or if its `if:` is not exactly the one below. Its steps match nightly.yml's `fips` job;
   # change the suite in the Makefile (`make test-fips`), not here. That target
   # also applies the FIPS foreign-failure baseline (ruling 125,
   # .github/foreign-failures-fips.tsv); nightly.yml's header lists what it
@@ -1450,7 +1449,7 @@ jobs:
     # skipped job as `skipped`, not `success`), never a green nightly. Every
     # other verdict, an empty one included, runs it.
     if: ${{ always() && (github.event_name != 'schedule' || needs.schedule-guard.outputs.verdict != 'busy') }}
-    needs: [changes, schedule-guard, image, lint-gates, arch-gates, sdkjs, web, integration-image, integration, soak]
+    needs: [changes, schedule-guard, image, lint-gates, arch-gates, sdkjs, web, integration-image, integration, soak, fips]
     steps:
       - name: Verify every job succeeded
         env:
@@ -1462,6 +1461,8 @@ jobs:
           # v1.24: a `nightly` job runs on schedule and workflow_dispatch only.
           NIGHTLY: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
           DRAFT: ${{ github.event.pull_request.draft == true }}
+          # #1411 (ruling 297): a `main` job runs on every event but a pull request.
+          PULL_REQUEST: ${{ github.event_name == 'pull_request' }}
           RESULT_CHANGES: ${{ needs.changes.result }}
           RESULT_SCHEDULE_GUARD: ${{ needs.schedule-guard.result }}
           RESULT_IMAGE: ${{ needs.image.result }}
@@ -1472,6 +1473,7 @@ jobs:
           RESULT_INTEGRATION_IMAGE: ${{ needs.integration-image.result }}
           RESULT_INTEGRATION: ${{ needs.integration.result }}
           RESULT_SOAK: ${{ needs.soak.result }}
+          RESULT_FIPS: ${{ needs.fips.result }}
         run: |
           # skipped != failed, and a skipped job fails the gate: it means the
           # job did not run (go-qrdb#42). The exceptions: a `full` job skipped
@@ -1479,7 +1481,9 @@ jobs:
           # reading exactly `false`; a `docs` job skipped on a docs-only PR
           # (v1.24), DOCS_ONLY reading exactly `true` and FULL_TIER exactly
           # `false`; and a `nightly` job skipped off the schedule and dispatch
-          # (v1.24), NIGHTLY not reading `true`. Anything else fails closed. A
+          # (v1.24), NIGHTLY not reading `true`; and a `main` job skipped on a
+          # pull request (#1411), PULL_REQUEST reading exactly `true`. Anything
+          # else fails closed. A
           # draft PR fails first (v1.26): its jobs all skip, and a gate that
           # passed on those skips would let a draft merge untested.
           if [ "${DRAFT}" = true ]; then
@@ -1493,7 +1497,7 @@ jobs:
             name="$2"
             result="$3"
             case "$tier" in
-              pr|docs|full|nightly) ;;
+              pr|docs|full|nightly|main) ;;
               *) echo "FAIL $name (unknown tier '$tier' - failing closed)"; status=1; return ;;
             esac
             case "$result" in
@@ -1506,6 +1510,8 @@ jobs:
                   echo "SKIP $name (docs-only PR - passes)"
                 elif [ "$tier" = nightly ] && [ "$NIGHTLY" != true ]; then
                   echo "SKIP $name (nightly and dispatch only - passes)"
+                elif [ "$tier" = main ] && [ "$PULL_REQUEST" = true ]; then
+                  echo "SKIP $name (never on a pull request - passes)"
                 else
                   echo "FAIL $name (skipped in the $tier tier - see its job)"; status=1
                 fi
@@ -1529,4 +1535,5 @@ jobs:
           check full integration-image "$RESULT_INTEGRATION_IMAGE"
           check full integration "$RESULT_INTEGRATION"
           check nightly soak "$RESULT_SOAK"
+          check main fips "$RESULT_FIPS"
           exit $status
