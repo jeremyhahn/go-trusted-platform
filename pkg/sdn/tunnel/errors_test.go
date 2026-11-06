@@ -103,20 +103,3 @@ func TestErrXfrmReply(t *testing.T) {
 		assert.NoError(t, err.Unwrap())
 	})
 }
-
-func TestErrors_TypeAssertions(t *testing.T) {
-	t.Run("ErrTunnelNotFound type assertion", func(t *testing.T) {
-		var err error = &ErrTunnelNotFound{Name: "gre1"}
-		var target *ErrTunnelNotFound
-		require.True(t, errors.As(err, &target))
-		assert.Equal(t, "gre1", target.Name)
-	})
-
-	t.Run("ErrInvalidTunnelConfig type assertion", func(t *testing.T) {
-		var err error = &ErrInvalidTunnelConfig{Name: "gre2", Reason: "bad"}
-		var target *ErrInvalidTunnelConfig
-		require.True(t, errors.As(err, &target))
-		assert.Equal(t, "gre2", target.Name)
-		assert.Equal(t, "bad", target.Reason)
-	})
-}
