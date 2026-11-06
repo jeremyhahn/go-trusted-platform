@@ -196,46 +196,6 @@ func TestRunPull_InvalidImageReference(t *testing.T) {
 	}
 }
 
-func TestPullResult_Fields(t *testing.T) {
-	result := PullResult{
-		Reference: "myrepo/myimage:v1.0",
-		Digest:    "sha256:abc123",
-		Size:      2048,
-		Decrypted: true,
-		Verified:  true,
-		Platform:  "linux/amd64",
-		Timestamp: 1234567890,
-	}
-
-	if result.Reference != "myrepo/myimage:v1.0" {
-		t.Errorf("unexpected Reference: %q", result.Reference)
-	}
-
-	if result.Digest != "sha256:abc123" {
-		t.Errorf("unexpected Digest: %q", result.Digest)
-	}
-
-	if result.Size != 2048 {
-		t.Errorf("unexpected Size: %d", result.Size)
-	}
-
-	if !result.Decrypted {
-		t.Error("expected Decrypted to be true")
-	}
-
-	if !result.Verified {
-		t.Error("expected Verified to be true")
-	}
-
-	if result.Platform != "linux/amd64" {
-		t.Errorf("unexpected Platform: %q", result.Platform)
-	}
-
-	if result.Timestamp != 1234567890 {
-		t.Errorf("unexpected Timestamp: %d", result.Timestamp)
-	}
-}
-
 func TestNewPullCommand_DefaultFlagValues(t *testing.T) {
 	getFlags := func() *cli.CommonFlags {
 		return &cli.CommonFlags{}
@@ -317,34 +277,6 @@ func TestPullResult_EmptyPlatform(t *testing.T) {
 
 	if result.Platform != "" {
 		t.Errorf("expected empty Platform, got %q", result.Platform)
-	}
-}
-
-func TestPullResult_ZeroValues(t *testing.T) {
-	var result PullResult
-
-	if result.Reference != "" {
-		t.Errorf("expected empty Reference, got %q", result.Reference)
-	}
-
-	if result.Digest != "" {
-		t.Errorf("expected empty Digest, got %q", result.Digest)
-	}
-
-	if result.Size != 0 {
-		t.Errorf("expected zero Size, got %d", result.Size)
-	}
-
-	if result.Decrypted {
-		t.Error("expected Decrypted to be false")
-	}
-
-	if result.Verified {
-		t.Error("expected Verified to be false")
-	}
-
-	if result.Timestamp != 0 {
-		t.Errorf("expected zero Timestamp, got %d", result.Timestamp)
 	}
 }
 

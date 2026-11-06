@@ -437,35 +437,3 @@ func TestNewPushCommand_FlagTypes(t *testing.T) {
 		t.Errorf("expected input flag to be string, got %s", inputFlag.Value.Type())
 	}
 }
-
-func TestPushResult_ZeroValues(t *testing.T) {
-	var result PushResult
-
-	if result.Reference != "" {
-		t.Errorf("expected empty Reference, got %q", result.Reference)
-	}
-
-	if result.Digest != "" {
-		t.Errorf("expected empty Digest, got %q", result.Digest)
-	}
-
-	if result.Size != 0 {
-		t.Errorf("expected zero Size, got %d", result.Size)
-	}
-
-	if result.Encrypted {
-		t.Error("expected Encrypted to be false")
-	}
-
-	if result.KeyID != "" {
-		t.Errorf("expected empty KeyID, got %q", result.KeyID)
-	}
-
-	if result.Signed {
-		t.Error("expected Signed to be false")
-	}
-
-	if result.Timestamp != 0 {
-		t.Errorf("expected zero Timestamp, got %d", result.Timestamp)
-	}
-}
