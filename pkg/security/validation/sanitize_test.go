@@ -126,6 +126,16 @@ func TestSanitizer_StripJavaScript(t *testing.T) {
 			input:    "<script>a()</script>text<script>b()</script>",
 			expected: "text",
 		},
+		{
+			name:     "strip script tags spanning newlines",
+			input:    "<script>\nfunction evil() {\n  alert('XSS');\n}\n</script>",
+			expected: "",
+		},
+		{
+			name:     "strip uppercase javascript protocol",
+			input:    "JAVASCRIPT:alert(1)",
+			expected: "alert(1)",
+		},
 	}
 
 	for _, tt := range tests {
@@ -223,6 +233,17 @@ func TestSanitizer_StripSQLKeywords(t *testing.T) {
 			input:    "ALTER TABLE users",
 			expected: " TABLE users",
 		},
+		{name: "strip GRANT keyword", input: "GRANT", expected: ""},
+		{name: "strip REVOKE keyword", input: "REVOKE", expected: ""},
+		{name: "strip SHUTDOWN keyword", input: "SHUTDOWN", expected: ""},
+		{name: "strip double at sign", input: "@@VERSION", expected: "VERSION"},
+		{name: "mixed case stripping", input: "SeLeCt", expected: ""},
+		{name: "repeated keyword", input: "SELECT SELECT SELECT", expected: "  "},
+		{name: "strip CONVERT function", input: "CONVERT(int, value)", expected: "int, value)"},
+		{name: "strip CAST function", input: "CAST(value AS int)", expected: "value AS int)"},
+		{name: "strip CHAR function", input: "CHAR(65)", expected: "65)"},
+		{name: "strip EXEC keyword", input: "EXEC", expected: ""},
+		{name: "EXEC is stripped before EXECUTE", input: "EXECUTE", expected: "UTE"},
 	}
 
 	for _, tt := range tests {
@@ -325,187 +346,6 @@ func TestStripHTML_AllowedTags(t *testing.T) {
 			result := StripHTML(tt.input, tt.allowedTags)
 			if !tt.checkFunc(result) {
 				t.Errorf("StripHTML() = %q, %s", result, tt.description)
-			}
-		})
-	}
-}
-
-func TestStripJavaScript_Direct(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected string
-	}{
-		{
-			name:     "remove script tags",
-			input:    "<script>alert('XSS')</script>",
-			expected: "",
-		},
-		{
-			name:     "remove script tags with newlines",
-			input:    "<script>\nfunction evil() {\n  alert('XSS');\n}\n</script>",
-			expected: "",
-		},
-		{
-			name:     "remove onclick event",
-			input:    "<button onclick=\"malicious()\">Click</button>",
-			expected: "<button>Click</button>",
-		},
-		{
-			name:     "remove onload event",
-			input:    "<body onload=\"init()\">Content</body>",
-			expected: "<body>Content</body>",
-		},
-		{
-			name:     "remove onfocus event",
-			input:    "<input onfocus=\"steal()\" />",
-			expected: "<input />",
-		},
-		{
-			name:     "remove javascript protocol",
-			input:    "javascript:void(0)",
-			expected: "void(0)",
-		},
-		{
-			name:     "remove JAVASCRIPT protocol (uppercase)",
-			input:    "JAVASCRIPT:alert(1)",
-			expected: "alert(1)",
-		},
-		{
-			name:     "preserve non-javascript content",
-			input:    "This is regular text without any scripts",
-			expected: "This is regular text without any scripts",
-		},
-		{
-			name:     "mixed content",
-			input:    "Safe text<script>evil()</script> more safe text",
-			expected: "Safe text more safe text",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := stripJavaScript(tt.input)
-			if result != tt.expected {
-				t.Errorf("stripJavaScript() = %q, expected %q", result, tt.expected)
-			}
-		})
-	}
-}
-
-func TestStripSQLKeywords_Direct(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected string
-	}{
-		{
-			name:     "remove SELECT",
-			input:    "SELECT",
-			expected: "",
-		},
-		{
-			name:     "remove INSERT",
-			input:    "INSERT",
-			expected: "",
-		},
-		{
-			name:     "remove UPDATE",
-			input:    "UPDATE",
-			expected: "",
-		},
-		{
-			name:     "remove DELETE",
-			input:    "DELETE",
-			expected: "",
-		},
-		{
-			name:     "remove DROP",
-			input:    "DROP",
-			expected: "",
-		},
-		{
-			name:     "remove UNION",
-			input:    "UNION",
-			expected: "",
-		},
-		{
-			name:     "remove GRANT",
-			input:    "GRANT",
-			expected: "",
-		},
-		{
-			name:     "remove REVOKE",
-			input:    "REVOKE",
-			expected: "",
-		},
-		{
-			name:     "remove double dash comment",
-			input:    "--",
-			expected: "",
-		},
-		{
-			name:     "remove double at sign",
-			input:    "@@VERSION",
-			expected: "VERSION",
-		},
-		{
-			name:     "remove SHUTDOWN",
-			input:    "SHUTDOWN",
-			expected: "",
-		},
-		{
-			name:     "case insensitive - lowercase",
-			input:    "select",
-			expected: "",
-		},
-		{
-			name:     "case insensitive - mixed case",
-			input:    "SeLeCt",
-			expected: "",
-		},
-		{
-			name:     "multiple occurrences",
-			input:    "SELECT SELECT SELECT",
-			expected: "  ",
-		},
-		{
-			name:     "preserve safe text",
-			input:    "Hello World",
-			expected: "Hello World",
-		},
-		{
-			name:     "CONVERT function",
-			input:    "CONVERT(int, value)",
-			expected: "int, value)",
-		},
-		{
-			name:     "CAST function",
-			input:    "CAST(value AS int)",
-			expected: "value AS int)",
-		},
-		{
-			name:     "EXEC keyword",
-			input:    "EXEC",
-			expected: "",
-		},
-		{
-			name:     "EXECUTE keyword - note EXEC is stripped first leaving UTE",
-			input:    "EXECUTE",
-			expected: "UTE",
-		},
-		{
-			name:     "CHAR function",
-			input:    "CHAR(65)",
-			expected: "65)",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := stripSQLKeywords(tt.input)
-			if result != tt.expected {
-				t.Errorf("stripSQLKeywords() = %q, expected %q", result, tt.expected)
 			}
 		})
 	}
@@ -855,6 +695,10 @@ func TestSQLSanitizer_EscapeString(t *testing.T) {
 		{"it's", "it''s"},
 		{"back\\slash", "back\\\\slash"},
 		{"null\x00byte", "null\\0byte"},
+		{"line1\nline2", "line1\\nline2"},
+		{"line1\rline2", "line1\\rline2"},
+		{"data\x1amore", "data\\Zmore"},
+		{"it's a \"test\"\nwith\x00null", "it''s a \"test\"\\nwith\\0null"},
 	}
 
 	for _, tt := range tests {
@@ -862,46 +706,6 @@ func TestSQLSanitizer_EscapeString(t *testing.T) {
 		if result != tt.expected {
 			t.Errorf("EscapeString(%q) = %q, expected %q", tt.input, result, tt.expected)
 		}
-	}
-}
-
-func TestSQLSanitizer_EscapeString_Additional(t *testing.T) {
-	sanitizer := NewSQLSanitizer()
-
-	tests := []struct {
-		name     string
-		input    string
-		expected string
-	}{
-		{
-			name:     "escape newline",
-			input:    "line1\nline2",
-			expected: "line1\\nline2",
-		},
-		{
-			name:     "escape carriage return",
-			input:    "line1\rline2",
-			expected: "line1\\rline2",
-		},
-		{
-			name:     "escape substitute character",
-			input:    "data\x1amore",
-			expected: "data\\Zmore",
-		},
-		{
-			name:     "multiple escapes",
-			input:    "it's a \"test\"\nwith\x00null",
-			expected: "it''s a \"test\"\\nwith\\0null",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := sanitizer.EscapeString(tt.input)
-			if result != tt.expected {
-				t.Errorf("EscapeString() = %q, expected %q", result, tt.expected)
-			}
-		})
 	}
 }
 
@@ -979,6 +783,12 @@ func TestContainsPathTraversal(t *testing.T) {
 		{"%2e%2e/etc/passwd", true},
 		{"normal/path", false},
 		{"a/b/c", false},
+		{"%252e%252e/etc/passwd", true},
+		{"..%c0%af/etc/passwd", true},
+		{"..%c1%9c/etc/passwd", true},
+		{"..%5c/etc/passwd", true},
+		{"..%255c/etc/passwd", true},
+		{"100%complete/file.txt", false},
 	}
 
 	for _, tt := range tests {
@@ -986,54 +796,6 @@ func TestContainsPathTraversal(t *testing.T) {
 		if result != tt.expected {
 			t.Errorf("containsPathTraversal(%q) = %v, expected %v", tt.path, result, tt.expected)
 		}
-	}
-}
-
-func TestContainsPathTraversal_Encodings(t *testing.T) {
-	tests := []struct {
-		name     string
-		path     string
-		expected bool
-	}{
-		{
-			name:     "double URL encoded",
-			path:     "%252e%252e/etc/passwd",
-			expected: true,
-		},
-		{
-			name:     "UTF-8 overlong encoding style 1",
-			path:     "..%c0%af/etc/passwd",
-			expected: true,
-		},
-		{
-			name:     "UTF-8 overlong encoding style 2",
-			path:     "..%c1%9c/etc/passwd",
-			expected: true,
-		},
-		{
-			name:     "backslash URL encoded",
-			path:     "..%5c/etc/passwd",
-			expected: true,
-		},
-		{
-			name:     "double encoded backslash",
-			path:     "..%255c/etc/passwd",
-			expected: true,
-		},
-		{
-			name:     "normal path with percent",
-			path:     "100%complete/file.txt",
-			expected: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := containsPathTraversal(tt.path)
-			if result != tt.expected {
-				t.Errorf("containsPathTraversal() = %v, expected %v", result, tt.expected)
-			}
-		})
 	}
 }
 
