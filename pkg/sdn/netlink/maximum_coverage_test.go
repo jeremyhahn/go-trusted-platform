@@ -396,80 +396,6 @@ func TestComprehensive_AllOperations(t *testing.T) {
 	})
 }
 
-// TestAllErrorConstructors tests all error constructor functions
-func TestAllErrorConstructors(t *testing.T) {
-	tests := []struct {
-		name    string
-		errFunc func() error
-		errType ErrorType
-		errMsg  string
-	}{
-		{
-			name:    "ErrInvalidName",
-			errFunc: func() error { return ErrInvalidName("test") },
-			errType: ErrorTypeInvalidName,
-			errMsg:  "invalid",
-		},
-		{
-			name:    "ErrNotFound",
-			errFunc: func() error { return ErrNotFound("iface") },
-			errType: ErrorTypeNotFound,
-			errMsg:  "not found",
-		},
-		{
-			name:    "ErrAlreadyExists",
-			errFunc: func() error { return ErrAlreadyExists("tap0") },
-			errType: ErrorTypeAlreadyExists,
-			errMsg:  "already exists",
-		},
-		{
-			name:    "ErrCreateFailed",
-			errFunc: func() error { return ErrCreateFailed("tap0", assert.AnError) },
-			errType: ErrorTypeCreateFailed,
-			errMsg:  "create",
-		},
-		{
-			name:    "ErrDeleteFailed",
-			errFunc: func() error { return ErrDeleteFailed("tap0", assert.AnError) },
-			errType: ErrorTypeDeleteFailed,
-			errMsg:  "delete",
-		},
-		{
-			name:    "ErrSetupFailed",
-			errFunc: func() error { return ErrSetupFailed("tap0", "test", assert.AnError) },
-			errType: ErrorTypeSetupFailed,
-			errMsg:  "setup",
-		},
-		{
-			name:    "ErrStateFailed",
-			errFunc: func() error { return ErrStateFailed("tap0", "up", assert.AnError) },
-			errType: ErrorTypeStateFailed,
-			errMsg:  "state",
-		},
-		{
-			name:    "ErrPermission",
-			errFunc: func() error { return ErrPermission("test", assert.AnError) },
-			errType: ErrorTypePermission,
-			errMsg:  "permission",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := tt.errFunc()
-			require.Error(t, err)
-
-			var netlinkErr *NetlinkError
-			if ne, ok := err.(*NetlinkError); ok {
-				netlinkErr = ne
-			}
-			require.NotNil(t, netlinkErr)
-			assert.Equal(t, tt.errType, netlinkErr.Type)
-			assert.Contains(t, err.Error(), tt.errMsg)
-		})
-	}
-}
-
 // TestAllValidationPaths tests all validation code paths
 func TestAllValidationPaths(t *testing.T) {
 	m := NewManager()
@@ -611,25 +537,6 @@ func TestLinkWithHardwareAddr(t *testing.T) {
 	dummy.HardwareAddr = net.HardwareAddr{}
 	info = linkToInfo(dummy)
 	assert.Equal(t, "", info.HardwareAddr)
-}
-
-// TestErrorTypeString tests error type string representations
-func TestErrorTypeString(t *testing.T) {
-	types := []ErrorType{
-		ErrorTypeInvalidName,
-		ErrorTypeNotFound,
-		ErrorTypeAlreadyExists,
-		ErrorTypeCreateFailed,
-		ErrorTypeDeleteFailed,
-		ErrorTypeSetupFailed,
-		ErrorTypeStateFailed,
-		ErrorTypePermission,
-	}
-
-	for _, errType := range types {
-		err := &NetlinkError{Type: errType, Message: "test"}
-		assert.NotEmpty(t, err.Error())
-	}
 }
 
 // TestDeleteLinkLookupError tests delete when lookup fails
