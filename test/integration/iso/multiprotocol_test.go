@@ -189,7 +189,7 @@ func ensureExtractedISO(t *testing.T, ctx context.Context, cmd ISOCommands, work
 // also stages platform-initrd and, for the gateway-role template, gatewayd
 // from beside platformd and fails without them; the runner builds all three
 // into the directory of platformctl.
-func customizeInputs(t *testing.T) (platformdPath, platformConfig string) {
+func customizeInputs(t *testing.T) (platformdPath, platformctlStaticPath, platformConfig string) {
 	t.Helper()
 	binDir, err := PlatformBinaryDir()
 	if err != nil {
@@ -209,7 +209,16 @@ func customizeInputs(t *testing.T) (platformdPath, platformConfig string) {
 	if !FileExists(platformConfig) {
 		t.Fatalf("missing prerequisite: platform config template not found: %s", platformConfig)
 	}
-	return filepath.Join(binDir, "platformd"), platformConfig
+	// The running platformctl is a CGO build customize refuses as the
+	// installer; the runner exports the static one (prepare_iso_customize).
+	platformctlStaticPath = os.Getenv(EnvPlatformCTLStatic)
+	if platformctlStaticPath == "" {
+		t.Fatalf("missing prerequisite: %s is unset; it names the CGO_ENABLED=0 platformctl iso customize installs", EnvPlatformCTLStatic)
+	}
+	if !FileExists(platformctlStaticPath) {
+		t.Fatalf("missing prerequisite: %v", ErrBinaryNotFound{Name: "platformctl-static", Path: platformctlStaticPath})
+	}
+	return filepath.Join(binDir, "platformd"), platformctlStaticPath, platformConfig
 }
 
 // ensureBuiltISO returns an ISO customized and rebuilt from the extracted tree,
@@ -226,12 +235,13 @@ func ensureBuiltISO(t *testing.T, ctx context.Context, cmd ISOCommands, workDir 
 	}
 
 	isoDir := ensureExtractedISO(t, ctx, cmd, workDir)
-	platformdPath, platformConfig := customizeInputs(t)
+	platformdPath, platformctlStaticPath, platformConfig := customizeInputs(t)
 	customized, err := cmd.Customize(ctx, CustomizeOptions{
-		ISODir:         isoDir,
-		PlatformdPath:  platformdPath,
-		PlatformConfig: platformConfig,
-		WorkDir:        workDir,
+		ISODir:                isoDir,
+		PlatformdPath:         platformdPath,
+		PlatformctlStaticPath: platformctlStaticPath,
+		PlatformConfig:        platformConfig,
+		WorkDir:               workDir,
 	})
 	if err != nil {
 		t.Fatalf("missing prerequisite: customizing the ISO fixture: %v", err)
@@ -496,14 +506,15 @@ func testCustomizeOperations(t *testing.T, ctx context.Context, cmd ISOCommands,
 		// The pre-fetch reads the local mirror, not dl-cdn.alpinelinux.org:
 		// nothing installs from this tree, so the fixture packages suffice.
 		mirror := newAlpineMirror(t)
-		platformdPath, platformConfig := customizeInputs(t)
+		platformdPath, platformctlStaticPath, platformConfig := customizeInputs(t)
 		result, err := cmd.Customize(testCtx, CustomizeOptions{
-			ISODir:         isoDir,
-			Overlay:        overlayDir,
-			PlatformdPath:  platformdPath,
-			PlatformConfig: platformConfig,
-			ConfigFile:     mirror.writeBuildConfig(t, workDir),
-			WorkDir:        workDir,
+			ISODir:                isoDir,
+			Overlay:               overlayDir,
+			PlatformdPath:         platformdPath,
+			PlatformctlStaticPath: platformctlStaticPath,
+			PlatformConfig:        platformConfig,
+			ConfigFile:            mirror.writeBuildConfig(t, workDir),
+			WorkDir:               workDir,
 		})
 		require.NoError(t, err)
 		assert.True(t, result.Success)
@@ -895,10 +906,11 @@ func fixtureWorkDir(t *testing.T) string {
 	require.NoError(t, os.MkdirAll(extractedISODir(workDir), 0o755))
 
 	binDir := t.TempDir()
-	for _, name := range []string{"platformctl", "platformd", "platform-initrd", "gatewayd"} {
+	for _, name := range []string{"platformctl", "platformctl-static", "platformd", "platform-initrd", "gatewayd"} {
 		require.NoError(t, os.WriteFile(filepath.Join(binDir, name), []byte("#!/bin/sh\n"), 0o755))
 	}
 	t.Setenv(EnvPlatformCTL, filepath.Join(binDir, "platformctl"))
+	t.Setenv(EnvPlatformCTLStatic, filepath.Join(binDir, "platformctl-static"))
 	return workDir
 }
 
@@ -914,6 +926,7 @@ func TestEnsureBuiltISO_CustomizesBeforeBuilding(t *testing.T) {
 	assert.Equal(t, []string{"customize", "build"}, cmd.calls)
 	assert.Equal(t, extractedISODir(workDir), cmd.customize.ISODir)
 	assert.Equal(t, "platformd", filepath.Base(cmd.customize.PlatformdPath))
+	assert.Equal(t, os.Getenv(EnvPlatformCTLStatic), cmd.customize.PlatformctlStaticPath)
 	assert.True(t, FileExists(cmd.customize.PlatformConfig))
 }
 

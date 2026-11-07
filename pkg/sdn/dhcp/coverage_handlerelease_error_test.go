@@ -117,48 +117,4 @@ func TestIPAMPlugin_HandleRelease_RemoveErrorPath(t *testing.T) {
 		}
 	})
 
-	t.Run("remove fails after SetState due to closed store", func(t *testing.T) {
-		// This test verifies the warning is logged when Remove fails
-		// We can't easily trigger this without a race, but we can verify
-		// the code path exists by examining logs
-
-		ls := NewLeaseStore()
-		plugin, err := NewIPAMPlugin(allocator, poolID, opts, WithLeaseStore(ls))
-		require.NoError(t, err)
-		defer plugin.Close()
-
-		handler := plugin.Handler4()
-
-		mac, _ := net.ParseMAC("00:11:22:33:FF:01")
-
-		// Get a lease
-		discoverReq, _ := dhcpv4.New(
-			dhcpv4.WithHwAddr(mac),
-			dhcpv4.WithMessageType(dhcpv4.MessageTypeDiscover),
-		)
-		discoverResp, _ := dhcpv4.NewReplyFromRequest(discoverReq)
-		discoverResp.ServerIPAddr = net.ParseIP("192.168.1.1")
-
-		offerResult, _ := handler(discoverReq, discoverResp)
-		require.NotNil(t, offerResult)
-		leasedIP := offerResult.YourIPAddr
-
-		// Close the store to cause Remove to fail
-		// But first we need to get past GetByIP check
-		// This is tricky because closed store returns false for GetByIP
-
-		// Instead, manually remove from IP map but keep in MAC map
-		// This isn't possible with the current LeaseStore API
-		// So we just verify normal release works
-		releaseReq, _ := dhcpv4.New(
-			dhcpv4.WithHwAddr(mac),
-			dhcpv4.WithMessageType(dhcpv4.MessageTypeRelease),
-			dhcpv4.WithClientIP(leasedIP),
-		)
-		releaseResp, _ := dhcpv4.NewReplyFromRequest(releaseReq)
-
-		result, stop := handler(releaseReq, releaseResp)
-		assert.Nil(t, result)
-		assert.True(t, stop)
-	})
 }

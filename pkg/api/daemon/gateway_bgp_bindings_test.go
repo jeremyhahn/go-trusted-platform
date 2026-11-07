@@ -436,14 +436,21 @@ func TestErrBGPAttributeUnsupported(t *testing.T) {
 func TestRESTServer_SetGatewayBGPService(t *testing.T) {
 	t.Run("nil is ignored", func(t *testing.T) {
 		s := newTestRESTServerForPhase35(t)
-		s.SetGatewayBGPService(nil)
+		require.NoError(t, s.SetGatewayBGPService(nil))
+		assert.Nil(t, s.gatewayService)
+	})
+	t.Run("refuses a controller before the guarded mount", func(t *testing.T) {
+		s := newTestRESTServerForPhase35(t)
+		err := s.SetGatewayBGPService(newFakeGatewayBGPController())
+		require.ErrorAs(t, err, new(ErrGatewayRESTUnavailable))
 		assert.Nil(t, s.gatewayService)
 	})
 	t.Run("wires the BGP routes", func(t *testing.T) {
 		s := newTestRESTServerForPhase35(t)
-		s.SetGatewayBGPService(newFakeGatewayBGPController())
+		require.NoError(t, s.SetGatewayIPAMService(nil, nil, s6RESTGuard()))
+		require.NoError(t, s.SetGatewayBGPService(newFakeGatewayBGPController()))
 
-		code, body := doJSON(t, s, http.MethodGet, "/api/v1/sdn/gateway/bgp/status", nil)
+		code, body := doJSONAs(t, s, s6OperatorToken, http.MethodGet, "/api/v1/sdn/gateway/bgp/status", nil)
 		require.Equal(t, http.StatusOK, code, string(body))
 		var st rest.BGPStatusResponse
 		require.NoError(t, json.Unmarshal(body, &st))
@@ -475,7 +482,8 @@ func newBGPParityTransports(t *testing.T, speaker BGPSpeakerInterface) bgpParity
 	logger := logging.DefaultLogger()
 	adapter := newFullGatewayQUICAdapter(ipamBackends.NewMemoryBackend(), nil, nil, nil, svc, nil)
 	restServer := newTestRESTServerForPhase35(t)
-	restServer.SetGatewayBGPService(svc)
+	require.NoError(t, restServer.SetGatewayIPAMService(nil, nil, s6RESTGuard()))
+	require.NoError(t, restServer.SetGatewayBGPService(svc))
 	return bgpParityTransports{
 		grpc: svc,
 		quic: newTestQUICServiceHandler(logger, WithQUICGatewayHandler(quic.NewGatewayHandler(logger, adapter))),
@@ -562,14 +570,14 @@ func TestGatewayBGP_TransportParity(t *testing.T) {
 	})
 
 	t.Run("REST", func(t *testing.T) {
-		code, body := doJSON(t, tr.rest, http.MethodGet, "/api/v1/sdn/gateway/bgp/status", nil)
+		code, body := doJSONAs(t, tr.rest, s6OperatorToken, http.MethodGet, "/api/v1/sdn/gateway/bgp/status", nil)
 		require.Equal(t, http.StatusOK, code, string(body))
 		var st rest.BGPStatusResponse
 		require.NoError(t, json.Unmarshal(body, &st))
 		assert.Equal(t, uint32(65001), st.LocalASN)
 		assert.Equal(t, "10.0.0.1", st.RouterID)
 
-		code, body = doJSON(t, tr.rest, http.MethodGet, "/api/v1/sdn/gateway/bgp/peers", nil)
+		code, body = doJSONAs(t, tr.rest, s6OperatorToken, http.MethodGet, "/api/v1/sdn/gateway/bgp/peers", nil)
 		require.Equal(t, http.StatusOK, code, string(body))
 		var peers rest.BGPPeerListResponse
 		require.NoError(t, json.Unmarshal(body, &peers))
@@ -577,12 +585,12 @@ func TestGatewayBGP_TransportParity(t *testing.T) {
 		assert.Equal(t, "10.0.0.2", peers.Peers[0].Address)
 		assert.WithinDuration(t, time.Now().Add(-time.Hour), peers.Peers[0].Uptime, 2*time.Second)
 
-		code, body = doJSON(t, tr.rest, http.MethodPost, "/api/v1/sdn/gateway/bgp/prefixes", rest.AnnouncePrefixRequest{Prefix: prefix})
+		code, body = doJSONAs(t, tr.rest, s6OperatorToken, http.MethodPost, "/api/v1/sdn/gateway/bgp/prefixes", rest.AnnouncePrefixRequest{Prefix: prefix})
 		require.Equal(t, http.StatusCreated, code, string(body))
-		code, body = doJSON(t, tr.rest, http.MethodDelete, "/api/v1/sdn/gateway/bgp/prefixes/"+url.PathEscape(prefix), nil)
+		code, body = doJSONAs(t, tr.rest, s6OperatorToken, http.MethodDelete, "/api/v1/sdn/gateway/bgp/prefixes/"+url.PathEscape(prefix), nil)
 		require.Equal(t, http.StatusOK, code, string(body))
 
-		code, body = doJSON(t, tr.rest, http.MethodGet, "/api/v1/sdn/gateway/bgp/prefixes", nil)
+		code, body = doJSONAs(t, tr.rest, s6OperatorToken, http.MethodGet, "/api/v1/sdn/gateway/bgp/prefixes", nil)
 		require.Equal(t, http.StatusOK, code, string(body))
 		var prefixes rest.AnnouncedPrefixListResponse
 		require.NoError(t, json.Unmarshal(body, &prefixes))
@@ -719,7 +727,7 @@ func TestGatewayBGP_TransportParityNotConfigured(t *testing.T) {
 			{http.MethodGet, "/api/v1/sdn/gateway/bgp/prefixes", nil},
 		}
 		for _, c := range calls {
-			code, body := doJSON(t, tr.rest, c.method, c.path, c.body)
+			code, body := doJSONAs(t, tr.rest, s6OperatorToken, c.method, c.path, c.body)
 			assert.Equal(t, http.StatusServiceUnavailable, code, "%s %s: %s", c.method, c.path, body)
 		}
 	})
