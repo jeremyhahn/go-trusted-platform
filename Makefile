@@ -3442,7 +3442,23 @@ GOVULN_MODULES := . sdk/go
 #       release, bump gobgp, DELETE this entry and the ID from GOVULN_ALLOW
 #       below, and mark the tracking issue done. Watch
 #       https://pkg.go.dev/vuln/GO-2026-4736.
-GOVULN_ALLOW := GO-2026-4736
+#   GO-2026-6911 (allowlisted 2026-11-06; mcp-go v1.5.0 — #1422)
+#       github.com/mark3labs/mcp-go: the client HTTP transport, every version,
+#       no fixed version published. No non-test package in this repo imports
+#       mcp-go; it arrives through the go-quicbaas SDK MCP transport. The
+#       client package is imported directly only by a test, internal/quicbaas/mcpgo_compat_test.go
+#       (TestMCPGoCompat_ModuleServerAlias -> client.NewStreamableHttpClient),
+#       against an in-process httptest server. Any runtime client use sits
+#       inside the go-quicbaas SDK MCP transport, which tracks the finding as
+#       quicbaas #2211.
+#
+#       Exposure: no platform runtime path builds an mcp-go client; the test
+#       client talks only to a loopback server it started itself.
+#
+#       CLOSING CONDITION (quicbaas #2211): the day upstream publishes a fixed
+#       mcp-go release, bump it, DELETE this entry and the ID from GOVULN_ALLOW
+#       below. Watch https://pkg.go.dev/vuln/GO-2026-6911.
+GOVULN_ALLOW := GO-2026-4736 GO-2026-6911
 
 # Each module is scanned in two steps (#940). The symbol scan builds SSA and a
 # call graph for the whole import closure; on module . it outgrew the CI job's

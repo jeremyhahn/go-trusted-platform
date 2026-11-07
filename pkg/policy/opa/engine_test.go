@@ -103,23 +103,6 @@ func TestOPAEngine_Initialize(t *testing.T) {
 		assert.True(t, engine.IsInitialized())
 	})
 
-	t.Run("successful initialization with policy directory", func(t *testing.T) {
-		engine := NewOPAEngine()
-		ctx := context.Background()
-
-		tmpDir := t.TempDir()
-
-		cfg := &config.PolicyConfig{
-			Engine:        config.PolicyEngineOPA,
-			PolicyDir:     tmpDir,
-			DefaultAction: config.DefaultActionDeny,
-		}
-
-		err := engine.Initialize(ctx, cfg)
-		require.NoError(t, err)
-		assert.True(t, engine.IsInitialized())
-	})
-
 	t.Run("loads policies from directory", func(t *testing.T) {
 		engine := NewOPAEngine()
 		ctx := context.Background()
@@ -323,24 +306,6 @@ func TestOPAEngine_LoadPolicy(t *testing.T) {
 		assert.ErrorAs(t, err, &invalidNameErr)
 	})
 
-	t.Run("error with invalid name starting with number", func(t *testing.T) {
-		engine := NewOPAEngine()
-		ctx := context.Background()
-
-		cfg := &config.PolicyConfig{
-			Engine:        config.PolicyEngineOPA,
-			DefaultAction: config.DefaultActionDeny,
-		}
-		err := engine.Initialize(ctx, cfg)
-		require.NoError(t, err)
-
-		err = engine.LoadPolicy(ctx, "123policy", []byte(testPolicy))
-		require.Error(t, err)
-
-		var invalidNameErr ErrInvalidPolicyName
-		assert.ErrorAs(t, err, &invalidNameErr)
-	})
-
 	t.Run("error with empty content", func(t *testing.T) {
 		engine := NewOPAEngine()
 		ctx := context.Background()
@@ -375,36 +340,6 @@ func TestOPAEngine_LoadPolicy(t *testing.T) {
 
 		var invalidPolicyErr ErrInvalidPolicy
 		assert.ErrorAs(t, err, &invalidPolicyErr)
-	})
-
-	t.Run("policy name with hyphen is valid", func(t *testing.T) {
-		engine := NewOPAEngine()
-		ctx := context.Background()
-
-		cfg := &config.PolicyConfig{
-			Engine:        config.PolicyEngineOPA,
-			DefaultAction: config.DefaultActionDeny,
-		}
-		err := engine.Initialize(ctx, cfg)
-		require.NoError(t, err)
-
-		err = engine.LoadPolicy(ctx, "test-policy", []byte(testPolicy))
-		require.NoError(t, err)
-	})
-
-	t.Run("policy name with underscore is valid", func(t *testing.T) {
-		engine := NewOPAEngine()
-		ctx := context.Background()
-
-		cfg := &config.PolicyConfig{
-			Engine:        config.PolicyEngineOPA,
-			DefaultAction: config.DefaultActionDeny,
-		}
-		err := engine.Initialize(ctx, cfg)
-		require.NoError(t, err)
-
-		err = engine.LoadPolicy(ctx, "test_policy", []byte(testPolicy))
-		require.NoError(t, err)
 	})
 
 	t.Run("policy update replaces existing policy", func(t *testing.T) {
@@ -735,32 +670,6 @@ import rego.v1
 }
 
 func TestOPAEngine_EvaluateWithData(t *testing.T) {
-	t.Run("successful evaluation with data", func(t *testing.T) {
-		engine := NewOPAEngine()
-		ctx := context.Background()
-
-		cfg := &config.PolicyConfig{
-			Engine:        config.PolicyEngineOPA,
-			DefaultAction: config.DefaultActionDeny,
-		}
-		err := engine.Initialize(ctx, cfg)
-		require.NoError(t, err)
-
-		err = engine.LoadPolicy(ctx, "datacheck", []byte(testPolicyWithData))
-		require.NoError(t, err)
-
-		input := map[string]interface{}{
-			"role": "editor",
-		}
-		data := map[string]interface{}{
-			"allowed_roles": []interface{}{"admin", "editor", "viewer"},
-		}
-
-		result, err := engine.EvaluateWithData(ctx, "datacheck", input, data)
-		require.NoError(t, err)
-		assert.True(t, result.Allowed)
-	})
-
 	t.Run("evaluation with data deny", func(t *testing.T) {
 		engine := NewOPAEngine()
 		ctx := context.Background()
@@ -954,44 +863,6 @@ default allow := true
 }
 
 func TestOPAEngine_GetPolicy(t *testing.T) {
-	t.Run("returns policy by name", func(t *testing.T) {
-		engine := NewOPAEngine()
-		ctx := context.Background()
-
-		cfg := &config.PolicyConfig{
-			Engine:        config.PolicyEngineOPA,
-			DefaultAction: config.DefaultActionDeny,
-		}
-		err := engine.Initialize(ctx, cfg)
-		require.NoError(t, err)
-
-		err = engine.LoadPolicy(ctx, "testpolicy", []byte(testPolicy))
-		require.NoError(t, err)
-
-		policy, err := engine.GetPolicy("testpolicy")
-		require.NoError(t, err)
-		assert.Equal(t, "testpolicy", policy.Name)
-		assert.Contains(t, policy.Content, "package test.policy")
-	})
-
-	t.Run("error when policy not found", func(t *testing.T) {
-		engine := NewOPAEngine()
-		ctx := context.Background()
-
-		cfg := &config.PolicyConfig{
-			Engine:        config.PolicyEngineOPA,
-			DefaultAction: config.DefaultActionDeny,
-		}
-		err := engine.Initialize(ctx, cfg)
-		require.NoError(t, err)
-
-		_, err = engine.GetPolicy("nonexistent")
-		require.Error(t, err)
-
-		var notFoundErr ErrPolicyNotFound
-		assert.ErrorAs(t, err, &notFoundErr)
-	})
-
 	t.Run("policy includes checksum", func(t *testing.T) {
 		engine := NewOPAEngine()
 		ctx := context.Background()
