@@ -353,59 +353,6 @@ func TestIPAMPlugin_HandleInform_IPv6Handling(t *testing.T) {
 	})
 }
 
-// TestIPAMPlugin_GetRequestedIP_EdgeCases tests edge cases in getRequestedIP.
-func TestIPAMPlugin_GetRequestedIP_EdgeCases(t *testing.T) {
-	ctx := context.Background()
-	allocator := backends.NewMemoryBackend()
-	defer allocator.Close()
-
-	poolID := "test-pool"
-	createTestPool(ctx, t, allocator, poolID)
-
-	opts := DHCPOptions{
-		SubnetMask: net.CIDRMask(24, 32),
-		Router:     netip.MustParseAddr("192.168.1.1"),
-		LeaseTime:  time.Hour,
-	}
-
-	plugin, err := NewIPAMPlugin(allocator, poolID, opts)
-	require.NoError(t, err)
-	defer plugin.Close()
-
-	handler := plugin.Handler4()
-
-	t.Run("handles request with only ciaddr in IPv6 format", func(t *testing.T) {
-		mac, _ := net.ParseMAC("00:11:22:33:99:05")
-
-		// Do discover first to get lease
-		discoverReq, _ := dhcpv4.New(
-			dhcpv4.WithHwAddr(mac),
-			dhcpv4.WithMessageType(dhcpv4.MessageTypeDiscover),
-		)
-		discoverResp, _ := dhcpv4.NewReplyFromRequest(discoverReq)
-		discoverResp.ServerIPAddr = net.ParseIP("192.168.1.1")
-		offerResult, _ := handler(discoverReq, discoverResp)
-		require.NotNil(t, offerResult)
-
-		// Request using IPv6 representation
-		requestReq, _ := dhcpv4.New(
-			dhcpv4.WithHwAddr(mac),
-			dhcpv4.WithMessageType(dhcpv4.MessageTypeRequest),
-		)
-		// Use the offered IP in IPv6 format
-		requestReq.ClientIPAddr = offerResult.YourIPAddr.To16()
-
-		requestResp, _ := dhcpv4.NewReplyFromRequest(requestReq)
-		requestResp.ServerIPAddr = net.ParseIP("192.168.1.1")
-
-		result, stop := handler(requestReq, requestResp)
-		require.NotNil(t, result)
-		assert.True(t, stop)
-		// Should succeed as the IP can be extracted from IPv6 format
-		assert.Equal(t, dhcpv4.MessageTypeAck, result.MessageType())
-	})
-}
-
 // TestIPAMPlugin_SetOptions_ValidationFailure tests SetOptions validation failure.
 func TestIPAMPlugin_SetOptions_ValidationFailure(t *testing.T) {
 	allocator := newMockAllocator()

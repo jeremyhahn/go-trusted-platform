@@ -14,14 +14,17 @@ platformctl vtpm template    Manage vTPM templates
 platformctl vtpm pcr         PCR (Platform Configuration Register) operations
 ```
 
-**Almost every verb takes `--bundle-id`, not a positional argument** — the
-exceptions are `info`, `delete`, `export` and `import`, which take a positional
-`[bundle-id]` or `[archive-path]`. Mixing the two up is the most common mistake
-here.
+**The runtime verbs take `--bundle-id`, not a positional argument** —
+`start`, `stop`, `is-running`, `quote`, `seal`, `unseal`, `pcr extend` and
+`pcr read`. `info`, `delete` and `export` take a positional `[bundle-id]`, and
+`import` a positional `[archive-path]`. Mixing the two up is the most common
+mistake here. `create` and `clone` take no id at all: the daemon assigns
+`<hostname>-<unix-nanoseconds>` (`pkg/vtpm/service.go` `generateBundleID`) and
+the command prints it.
 
 ### Global flags
 
-`platformctl` persistent flags (`pkg/cli/commands/root.go:125`), precedence
+`platformctl` persistent flags (`pkg/cli/commands/root.go`), precedence
 **flag > environment > config file > default**:
 
 | Flag | Short | Default | Environment |
@@ -49,7 +52,7 @@ refused dial — after the fixed text, and unwraps to it (`errors.Is` / `As`).
 
 | Verb | Argument | Purpose |
 |---|---|---|
-| `create` | `--bundle-id` | Create a **pre-assigned** vTPM bundle |
+| `create` | `--hostname` | Create a **pre-assigned** vTPM bundle |
 | `clone` | `--template` | Clone a bundle from a template |
 | `list` | — | List bundles |
 | `info` | `[bundle-id]` | Bundle information |
@@ -62,7 +65,6 @@ refused dial — after the fixed text, and unwraps to it (`errors.Is` / `As`).
 
 | Flag | Type | Default | Meaning |
 |---|---|---|---|
-| `--bundle-id` | string | | Bundle ID (**required**) |
 | `--hostname` | string | | Hostname for the VM (**required**) |
 | `--secure-boot` | bool | **`true`** | Generate and enroll Secure Boot keys |
 | `--ek-algorithm` | string | `RSA` | `RSA` or `ECC`, any case; anything else is rejected |
@@ -78,7 +80,8 @@ generation and is part of the vTPM's initial state; it is not applied later.
 
 **`clone`**: `--template` (required), `--hostname` (required), `--label`.
 
-**`list`**: `--mode` filters by `template` or `pre-assigned`.
+**`list`**: `--mode` filters by `template` or `pre-assigned`; `--limit`
+(default `0`, no limit) and `--offset` (default `0`) page the result.
 
 **`delete`**: `--force` / `-f` skips the confirmation prompt.
 
@@ -86,7 +89,7 @@ generation and is part of the vTPM's initial state; it is not applied later.
 `--overwrite`.
 
 ```bash
-platformctl vtpm create --bundle-id web-01-tpm --hostname web-01 --ek-algorithm ECC
+platformctl vtpm create --hostname web-01 --ek-algorithm ECC   # prints the id; below it is web-01-tpm
 platformctl vtpm list --mode pre-assigned
 platformctl vtpm start --bundle-id web-01-tpm
 platformctl vtpm is-running --bundle-id web-01-tpm
@@ -121,8 +124,8 @@ platformctl vtpm clone --template uefi-sb-ecc --hostname web-02
 | `quote` | `--bundle-id` (required), `--nonce` hex (**required**), `--pcrs` comma-separated (**required**) |
 | `seal` | `--bundle-id` (required), `--data` base64 (required), `--pcrs`, `--auth-value` |
 | `unseal` | `--bundle-id` (required), `--sealed-data` base64 (required), `--auth-value` |
-| `pcr extend` | `--bundle-id` (required), `--data` hex (required) |
-| `pcr read` | `--bundle-id` (required) |
+| `pcr extend` | `--bundle-id` (required), `--pcr-index` 0-23 (required), `--data` hex (required) |
+| `pcr read` | `--bundle-id` (required), `--pcr-index` 0-23 (required) |
 
 **`quote --nonce` is required and not generated.** Unlike
 `platformctl container attest`, which generates one, `vtpm quote` makes you
@@ -144,7 +147,7 @@ warning about shell history applies.
 platformctl vtpm quote --bundle-id web-01-tpm \
     --nonce 9f86d081884c7d659a2feaa0c55ad015 --pcrs 0,1,7
 platformctl vtpm seal --bundle-id web-01-tpm --data "$(base64 -w0 secret.bin)" --pcrs 0,7
-platformctl vtpm pcr read --bundle-id web-01-tpm
+platformctl vtpm pcr read --bundle-id web-01-tpm --pcr-index 7
 ```
 
 ---

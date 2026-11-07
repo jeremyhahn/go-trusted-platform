@@ -98,14 +98,14 @@ This command performs all steps in sequence:
 1. Download Alpine ISO
 2. Extract ISO contents
 3. Generate Secure Boot keys (if needed)
-4. Customize with platform components (binary copies itself into ISO)
+4. Customize with platform components (platformd, platformctl, ...)
 5. Build final bootable ISO
 
 This is equivalent to running download, extract, customize, and build commands
 in sequence, but with automatic coordination and sensible defaults.
 
-The platformd binary automatically copies itself into the ISO, so no separate
-binary path needs to be specified. The output filename defaults to:
+The ISO carries the platformd the --config file names (platformd-binary), else
+the platformd beside platformctl. The output filename defaults to:
   trusted-<os>-<version>-<arch>.iso
 
 Examples:
@@ -138,7 +138,7 @@ Examples:
 	// autoinstall repo setup falls back to the public Alpine mirror.
 	cmd.Flags().StringVar(&flags.platformAPKDir, "platform-apk-dir", "", "strongSwan builder output (make strongswan-build) whose apks the ISO carries and installs for the overlay's IPsec transport")
 	cmd.Flags().StringVar(&flags.platformctlPath, "platformctl-binary", "", "platformctl binary the media installs with (default: this platformctl)")
-	cmd.Flags().StringVar(&flags.platformctlStaticPath, "platformctl-static-binary", "", "Static platformctl for Alpine/musl (default: not installed)")
+	cmd.Flags().StringVar(&flags.platformctlStaticPath, "platformctl-static-binary", "", "Static platformctl for Alpine/musl (default: not installed; --platformctl-binary must then be static)")
 	cmd.Flags().StringVar(&flags.apkMirror, "apk-mirror", "", "Install-time APK mirror base URL (e.g. http://10.4.6.11:8080); empty falls back to the public Alpine mirror")
 	cmd.Flags().StringVar(&flags.arch, "arch", "x86_64", "Architecture (x86_64 or aarch64)")
 
@@ -250,7 +250,7 @@ func runCreate(commonFlags *cli.CommonFlags, flags *createFlags, out io.Writer) 
 	printInfo(fmt.Sprintf("Alpine version: %s", buildConfig.AlpineVersion))
 	printInfo(fmt.Sprintf("Architecture: %s", buildConfig.Architecture))
 	printInfo(fmt.Sprintf("Platform type: %s", buildConfig.PlatformType))
-	printInfo(fmt.Sprintf("Platformd binary: %s (self)", buildConfig.PlatformdBinary))
+	printInfo(fmt.Sprintf("Platformd binary: %s", buildConfig.PlatformdBinary))
 	printInfo(fmt.Sprintf("Secure Boot: %v", buildConfig.SecureBoot))
 	printInfo(fmt.Sprintf("TPM auto-unseal: %v", buildConfig.TPMAutoUnseal))
 	printInfo(fmt.Sprintf("LUKS encryption: %v", buildConfig.LUKSTPMOnly))
@@ -376,12 +376,6 @@ func applyOverrides(flags *createFlags) error {
 func buildISOBuildConfig(flags *createFlags) (*pkgiso.ISOBuildConfig, error) {
 	config := pkgiso.DefaultISOBuildConfig()
 
-	platformdPath, err := siblingPlatformdBinary()
-	if err != nil {
-		return nil, err
-	}
-	config.PlatformdBinary = platformdPath
-
 	// Override from flags
 	if flags.alpineVersion != "" {
 		config.AlpineVersion = flags.alpineVersion
@@ -505,7 +499,7 @@ func buildISOBuildConfig(flags *createFlags) (*pkgiso.ISOBuildConfig, error) {
 		config.CAKeyAlgorithm = flags.caKeyAlgorithm
 	}
 
-	config, err = applyConfigFile(config, flags)
+	config, err := mergeConfigFile(config, flags)
 	if err != nil {
 		return nil, err
 	}
@@ -640,18 +634,24 @@ func getCreateLogger(flags *createFlags) *logging.Logger {
 }
 
 // mergeConfigs merges two configurations, with override taking precedence
-// applyConfigFile merges the --config file under the flag-built config, then
-// names the platformctl binaries. Naming them after the merge keeps a
-// config file's platformctl-binary and platformctl-static-binary unless a
-// flag overrides them, and defaults platformctl to this one only when
-// neither names it (#351).
-func applyConfigFile(config *pkgiso.ISOBuildConfig, flags *createFlags) (*pkgiso.ISOBuildConfig, error) {
+// mergeConfigFile merges the --config file, when one is given, under the
+// flag-built configuration, then names the platformctl binaries. Naming them
+// after the merge keeps them whichever way the configuration arrived: the
+// flags win, then the config file, then the running platformctl.
+func mergeConfigFile(config *pkgiso.ISOBuildConfig, flags *createFlags) (*pkgiso.ISOBuildConfig, error) {
 	if flags.configFile != "" {
 		loadedConfig, err := pkgiso.LoadISOBuildConfig(flags.configFile)
 		if err != nil {
 			return nil, &WrappedError{Msg: "failed to load config file", Err: err}
 		}
 		config = mergeConfigs(loadedConfig, config)
+	}
+	if config.PlatformdBinary == "" {
+		platformdPath, err := siblingPlatformdBinary()
+		if err != nil {
+			return nil, err
+		}
+		config.PlatformdBinary = platformdPath
 	}
 	if err := namePlatformctlBinaries(config, flags.platformctlPath, flags.platformctlStaticPath); err != nil {
 		return nil, err
@@ -681,8 +681,8 @@ func mergeConfigs(base, override *pkgiso.ISOBuildConfig) *pkgiso.ISOBuildConfig 
 	if override.WorkDir != "" && override.WorkDir != "work" {
 		result.WorkDir = override.WorkDir
 	}
-	// Always use the current binary (self-copy) - don't override from config file
-	// The PlatformdBinary is auto-detected using os.Executable()
+	// PlatformdBinary keeps the config file's value; mergeConfigFile falls
+	// back to the platformd beside platformctl when the file names none.
 	if override.KeysDir != "" {
 		result.KeysDir = override.KeysDir
 	}

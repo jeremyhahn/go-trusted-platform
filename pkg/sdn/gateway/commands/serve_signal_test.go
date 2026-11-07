@@ -41,6 +41,9 @@ func useGlobalServeConfig(t *testing.T, yaml string) {
 	}
 	restore()
 	t.Cleanup(restore)
+	sweep := serveIPsecSweep
+	serveIPsecSweep = func(*slog.Logger, string) error { return nil }
+	t.Cleanup(func() { serveIPsecSweep = sweep })
 	viper.SetConfigType("yaml")
 	require.NoError(t, viper.ReadConfig(strings.NewReader(yaml)))
 	viper.Set("data-dir", t.TempDir())

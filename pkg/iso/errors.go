@@ -315,6 +315,19 @@ func (e *BinaryArchMismatchError) Error() string {
 	return "iso: binary " + e.Path + " is built for " + e.Got.String() + ", the media targets " + e.Want.String()
 }
 
+// DynamicBinaryError reports a binary the media installs as statically
+// linked (platformctl-static) that names a program interpreter: it needs a
+// host loader and libraries Alpine's musl userland does not carry.
+type DynamicBinaryError struct {
+	Path        string
+	Interpreter string
+}
+
+// Error implements error.
+func (e *DynamicBinaryError) Error() string {
+	return "iso: binary " + e.Path + " is dynamically linked (interpreter " + e.Interpreter + "), the media needs a static one"
+}
+
 // MissingInputError reports a customize input the build request names but
 // that does not exist. An unset input means "do not install"; a named one
 // that is missing fails the build (#351).

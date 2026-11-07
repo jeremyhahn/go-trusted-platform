@@ -28,6 +28,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/ipc"
 	ipcv1 "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/ipc/gen"
 	gwstate "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/state"
+	"golang.org/x/sys/unix"
 )
 
 // Defaults for the supervisor's timings. They are fields on Config so a test
@@ -146,6 +147,11 @@ type Supervisor struct {
 	// caller waiting for it still honours its context.
 	applying chan struct{}
 
+	// fchown changes the owner of a state file handed to a child
+	// (handOverStateFiles); unix.Fchown, replaced in tests so none changes
+	// a file's owner on the host.
+	fchown func(fd, uid, gid int) error
+
 	// desired is the last document Apply was given. A process that
 	// reconciles a section of it and is started after that apply is given
 	// it at launch.
@@ -208,6 +214,7 @@ func New(cfg Config) *Supervisor {
 		cfg:       cfg.withDefaults(),
 		processes: make(map[string]*supervised),
 		applying:  make(chan struct{}, 1),
+		fchown:    unix.Fchown,
 	}
 }
 
@@ -461,12 +468,56 @@ func (s *Supervisor) ensureStateDir(def Definition) error {
 		if err := os.Chown(dir, int(s.cfg.UID), int(s.cfg.GID)); err != nil {
 			return &ErrStateDir{Process: def.Name, Path: dir, Op: "chown", Cause: err}
 		}
+		if err := grantTraverse(s.cfg.Inherited.DataDir, s.cfg.UID, s.cfg.GID); err != nil {
+			return &ErrStateDir{Process: def.Name, Path: s.cfg.Inherited.DataDir, Op: "traverse", Cause: err}
+		}
+		if err := s.handOverStateFiles(def, dir); err != nil {
+			return err
+		}
 	}
 	// MkdirAll leaves an existing directory's mode alone.
 	if err := os.Chmod(dir, stateDirMode); err != nil {
 		return &ErrStateDir{Process: def.Name, Path: dir, Op: "chmod", Cause: err}
 	}
 	return nil
+}
+
+// grantTraverse adds search permission to a directory for a child running as
+// uid and gid, so an unprivileged child can reach its own state directory
+// beneath it. The bit goes into the one class the kernel checks for that child
+// (traverseBit): a root:<group> directory at 0700 gains g+x, not o+x, which
+// the child's group match would never consult. Nothing else changes: no class
+// gains read, no other class gains anything, and a directory the child can
+// already traverse is left alone. The data directory may already exist at
+// 0700 — gatewayd's tunnels record and the ESP inventory both create it that
+// way — so the bit is added to whatever mode it has.
+func grantTraverse(path string, uid, gid uint32) error {
+	var st syscall.Stat_t
+	if err := syscall.Stat(path, &st); err != nil {
+		return err
+	}
+	mode := st.Mode & 0o7777
+	search := traverseBit(st.Uid, st.Gid, uid, gid)
+	if mode&search != 0 {
+		return nil
+	}
+	return syscall.Chmod(path, mode|search)
+}
+
+// traverseBit is the one execute bit the kernel checks for a process with uid
+// and gid on a directory owned by ownerUID:ownerGID. Exactly one permission
+// class applies: owner if the uid matches, else group if the gid matches, else
+// other; a class that does not apply is never consulted. The child holds no
+// supplementary group but its own (dropCredentials), so gid is its only group.
+func traverseBit(ownerUID, ownerGID, uid, gid uint32) uint32 {
+	switch {
+	case ownerUID == uid:
+		return 0o100
+	case ownerGID == gid:
+		return 0o010
+	default:
+		return 0o001
+	}
 }
 
 // launch starts the child and its watch goroutine.
@@ -1075,9 +1126,13 @@ func (s *Supervisor) memoryAttr(name string) slog.Attr {
 	if err != nil {
 		return slog.Any("memory_error", err)
 	}
+	peak := slog.Int64("peak", usage.Peak)
+	if !usage.HasPeak {
+		peak = slog.String("peak", "absent")
+	}
 	return slog.Group("memory",
 		slog.Int64("current", usage.Current),
-		slog.Int64("peak", usage.Peak),
+		peak,
 		slog.Int64("oom_kill", usage.OOMKill))
 }
 

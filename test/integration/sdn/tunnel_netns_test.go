@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
@@ -33,6 +34,7 @@ import (
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/tunnel"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
 )
 
 const (
@@ -272,8 +274,9 @@ func TestTunnel_NetNS_IPsecRelaunchKeepsLiveSAs(t *testing.T) {
 	}
 	// The first manager is never closed: its carrier, SAs and policies stay
 	// in the kernel, as a SIGKILL leaves them.
+	inventory := tunnel.WithIPsecInventory(filepath.Join(t.TempDir(), "ipsec-installed.json"))
 	inNS(t, hostNS, func() {
-		killed := tunnel.NewManager(logger, tunnel.WithKeyProvider(keys))
+		killed := tunnel.NewManager(logger, tunnel.WithKeyProvider(keys), inventory)
 		require.NoError(t, killed.EnsureTunnel(context.Background(), cfg))
 	})
 	require.NoError(t, dialWithin(hostNS, t, echo), "the first manager's tunnel carries traffic")
@@ -284,7 +287,7 @@ func TestTunnel_NetNS_IPsecRelaunchKeepsLiveSAs(t *testing.T) {
 
 	var relaunched *tunnel.Manager
 	inNS(t, hostNS, func() {
-		relaunched = tunnel.NewManager(logger, tunnel.WithKeyProvider(keys))
+		relaunched = tunnel.NewManager(logger, tunnel.WithKeyProvider(keys), inventory)
 		require.NoError(t, relaunched.EnsureTunnel(context.Background(), cfg))
 	})
 	t.Cleanup(func() { inNS(t, hostNS, func() { _ = relaunched.Close() }) })
@@ -310,6 +313,221 @@ func hostOutSA(t *testing.T, hh *netlink.Handle) *netlink.XfrmState {
 	})
 	require.NoError(t, err)
 	return sa
+}
+
+// A relaunched manager sweeps the ESP state its killed predecessor left
+// under SPIs the configuration no longer names (#557): a dropped tunnel's SA
+// pair and policies, and the inbound SA of a pair whose peer re-keyed while
+// no datapath ran. The configured tunnel keeps its SAs, and an IKE daemon's
+// SA and policy are never touched.
+func TestTunnel_NetNS_IPsecSweepRemovesOnlyStalePlatformState(t *testing.T) {
+	require.Equal(t, 0, os.Geteuid(), "the tunnel test needs root (NET_ADMIN); run it in the devcontainer")
+	hostNS, peerNS, hh, ph := twoNamespaces(t, "esps")
+	defer hh.Close()
+	defer ph.Close()
+
+	const (
+		droppedRemote = "10.97.0.99"
+		droppedSPIOut = 0x6001
+		droppedSPIIn  = 0x6002
+		rekeyedSPIIn  = 0x5003
+		ikeRemote     = "10.97.0.77"
+		ikeSPI        = 0x41a2b3c4
+		ikeReqid      = 1
+		// Another installer's pair of the platform's exact shape, its SPI
+		// equal to its request id, that the inventory does not record.
+		foreignRemote = "10.97.0.66"
+		foreignSPIOut = 0x7001
+		foreignSPIIn  = 0x7002
+	)
+	hostIP, peerIP := net.ParseIP(tunHostOuter), net.ParseIP(tunPeerOuter)
+	droppedIP, ikeIP := net.ParseIP(droppedRemote), net.ParseIP(ikeRemote)
+	foreignIP := net.ParseIP(foreignRemote)
+	host32 := &net.IPNet{IP: hostIP.To4(), Mask: net.CIDRMask(32, 32)}
+	dropped32 := &net.IPNet{IP: droppedIP.To4(), Mask: net.CIDRMask(32, 32)}
+	ike32 := &net.IPNet{IP: ikeIP.To4(), Mask: net.CIDRMask(32, 32)}
+	foreign32 := &net.IPNet{IP: foreignIP.To4(), Mask: net.CIDRMask(32, 32)}
+	gcm := func(b byte) *netlink.XfrmStateAlgo {
+		return &netlink.XfrmStateAlgo{Name: "rfc4106(gcm(aes))", Key: espKeyBytes(b), ICVLen: 128}
+	}
+	esp := func(src, dst net.IP, spi, reqid int, key byte) *netlink.XfrmState {
+		return &netlink.XfrmState{Src: src, Dst: dst, Proto: netlink.XFRM_PROTO_ESP, Mode: netlink.XFRM_MODE_TRANSPORT,
+			Spi: spi, Reqid: reqid, ReplayWindow: 128, ESN: true, Aead: gcm(key)}
+	}
+	policy := func(src, dst *net.IPNet, proto netlink.Proto, dir netlink.Dir, reqid int) *netlink.XfrmPolicy {
+		return &netlink.XfrmPolicy{Src: src, Dst: dst, Proto: proto, Dir: dir, Action: netlink.XFRM_POLICY_ALLOW,
+			Tmpls: []netlink.XfrmPolicyTmpl{{Src: src.IP, Dst: dst.IP, Proto: netlink.XFRM_PROTO_ESP, Mode: netlink.XFRM_MODE_TRANSPORT, Reqid: reqid}}}
+	}
+
+	keys := staticKeys{material: map[string][]byte{"k/out": espKeyBytes(0xA5), "k/in": espKeyBytes(0x5A)}}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	cfg := tunnel.TunnelConfig{
+		Name: "hgre4", Type: tunnel.TunnelTypeGRE, Transport: tunnel.TransportIPsec,
+		Local: tunHostOuter, Remote: tunPeerOuter, TunnelIP: tunHostInner + "/30",
+		IPsec: &tunnel.IPsecConfig{KeyRef: "k/out", PeerKeyRef: "k/in", SPIOut: espSPIOut, SPIIn: espSPIIn},
+	}
+	// A killed predecessor installed, and so recorded, the configured tunnel
+	// under an inbound SPI since replaced, and a tunnel since dropped from
+	// the configuration with its carrier, still up with its address and
+	// connected route. It is never closed: its state stays in the kernel, as
+	// a SIGKILL leaves it, and its inventory is the production record.
+	rekeyed := cfg
+	rekeyedIPsec := *cfg.IPsec
+	rekeyedIPsec.SPIIn = rekeyedSPIIn
+	rekeyed.IPsec = &rekeyedIPsec
+	dropped := tunnel.TunnelConfig{
+		Name: "hgre9", Type: tunnel.TunnelTypeGRE, Transport: tunnel.TransportIPsec,
+		Local: tunHostOuter, Remote: droppedRemote, TunnelIP: "10.98.9.1/30",
+		IPsec: &tunnel.IPsecConfig{KeyRef: "k/out", PeerKeyRef: "k/in", SPIOut: droppedSPIOut, SPIIn: droppedSPIIn},
+	}
+	inventory := filepath.Join(t.TempDir(), "ipsec-installed.json")
+	inNS(t, hostNS, func() {
+		killed := tunnel.NewManager(logger, tunnel.WithKeyProvider(keys), tunnel.WithIPsecInventory(inventory))
+		require.NoError(t, killed.EnsureTunnel(context.Background(), dropped))
+		require.NoError(t, killed.EnsureTunnel(context.Background(), rekeyed))
+	})
+
+	// What an IKE daemon and another installer left in the kernel.
+	for _, s := range []*netlink.XfrmState{
+		esp(hostIP, ikeIP, ikeSPI, ikeReqid, 0x44),
+		esp(hostIP, foreignIP, foreignSPIOut, foreignSPIOut, 0x55),
+		esp(foreignIP, hostIP, foreignSPIIn, foreignSPIOut, 0x66),
+	} {
+		require.NoError(t, hh.XfrmStateAdd(s))
+	}
+	for _, p := range []*netlink.XfrmPolicy{
+		policy(host32, ike32, 0, netlink.XFRM_DIR_OUT, ikeReqid),
+		policy(host32, foreign32, 47, netlink.XFRM_DIR_OUT, foreignSPIOut),
+		// Another installer's IPIP protection between the dropped tunnel's
+		// hosts under its request id: its template names the recorded
+		// anchor's endpoints and request id, but the inventory does not
+		// record its selector.
+		policy(host32, dropped32, 4, netlink.XFRM_DIR_OUT, droppedSPIOut),
+	} {
+		require.NoError(t, hh.XfrmPolicyAdd(p))
+	}
+	// Another installer's keyed carrier between the dropped tunnel's hosts,
+	// which the stale policies match but the inventory does not name; and a
+	// carrier the sweep has no stale policy for.
+	require.NoError(t, hh.LinkAdd(&netlink.Gretun{LinkAttrs: netlink.LinkAttrs{Name: "hgre7"},
+		Local: hostIP, Remote: droppedIP, IKey: 7, OKey: 7}))
+	addrUp(t, hh, "hgre7", "10.98.7.1/30")
+	require.NoError(t, hh.LinkAdd(&netlink.Gretun{LinkAttrs: netlink.LinkAttrs{Name: "hgre8"},
+		Local: hostIP, Remote: ikeIP}))
+	addrUp(t, hh, "hgre8", "10.98.8.1/30")
+
+	peerESP(t, ph, espKeyBytes(0xA5), espKeyBytes(0x5A))
+	require.NoError(t, ph.LinkAdd(&netlink.Gretun{LinkAttrs: netlink.LinkAttrs{Name: "pgre4"},
+		Local: peerIP, Remote: hostIP}))
+	addrUp(t, ph, "pgre4", tunPeerInner+"/30")
+	echo := net.JoinHostPort(tunPeerInner, strconv.Itoa(tunEchoPort))
+	listenWithin(peerNS, t, echo)
+
+	var relaunched *tunnel.Manager
+	inNS(t, hostNS, func() {
+		relaunched = tunnel.NewManager(logger, tunnel.WithKeyProvider(keys), tunnel.WithIPsecInventory(inventory))
+		require.NoError(t, relaunched.EnsureTunnel(context.Background(), cfg))
+	})
+	t.Cleanup(func() { inNS(t, hostNS, func() { _ = relaunched.Close() }) })
+	require.NoError(t, dialWithin(hostNS, t, echo), "the configured tunnel carries traffic before the sweep")
+	before := hostOutSA(t, hh)
+
+	inNS(t, hostNS, func() { require.NoError(t, relaunched.SweepIPsec()) })
+
+	states, err := hh.XfrmStateList(netlink.FAMILY_V4)
+	require.NoError(t, err)
+	spis := make([]int, 0, len(states))
+	for _, s := range states {
+		spis = append(spis, s.Spi)
+	}
+	assert.ElementsMatch(t, []int{espSPIOut, espSPIIn, ikeSPI, foreignSPIOut, foreignSPIIn}, spis,
+		"only the configured pair, the IKE SA and the unrecorded pair survive the sweep")
+	policies, err := hh.XfrmPolicyList(netlink.FAMILY_V4)
+	require.NoError(t, err)
+	remaining := make([]int, 0, len(policies))
+	for _, p := range policies {
+		require.Len(t, p.Tmpls, 1)
+		remaining = append(remaining, p.Tmpls[0].Reqid)
+	}
+	assert.ElementsMatch(t, []int{espSPIOut, espSPIOut, ikeReqid, foreignSPIOut, droppedSPIOut}, remaining,
+		"the dropped tunnel's recorded policies are gone; the configured tunnel's, the IKE and the unrecorded policies stay, "+
+			"the foreign IPIP policy under the dropped pair's request id among them")
+	_, err = hh.LinkByName("hgre9")
+	assert.Error(t, err, "the dropped tunnel's carrier is removed, so it never sends in the clear")
+	_, err = hh.LinkByName("hgre7")
+	assert.NoError(t, err, "a carrier the inventory does not name is never touched, though its endpoints match")
+	_, err = hh.LinkByName("hgre8")
+	assert.NoError(t, err, "a carrier no stale policy protects is never touched")
+	_, err = hh.LinkByName(cfg.Name)
+	assert.NoError(t, err, "the configured carrier stays")
+
+	kept := hostOutSA(t, hh)
+	assert.Equal(t, before.Statistics.AddTime, kept.Statistics.AddTime, "the configured outbound SA is not reinstalled")
+	assert.GreaterOrEqual(t, kept.Statistics.Packets, before.Statistics.Packets, "its counters were not reset")
+	require.NoError(t, dialWithin(hostNS, t, echo), "traffic flows after the sweep")
+}
+
+// TestTunnel_NetNS_IPsecLocalMoveRetiresTheOldPair moves the tunnel's local
+// endpoint under the same remote and SPIs. The kernel keys an ESP SA by
+// destination and SPI, so the new outbound SA replaces the old pair's; the
+// ensure retires the old inbound SA and policies with it, and the sweep
+// after it finds nothing stale.
+func TestTunnel_NetNS_IPsecLocalMoveRetiresTheOldPair(t *testing.T) {
+	require.Equal(t, 0, os.Geteuid(), "the tunnel test needs root (NET_ADMIN); run it in the devcontainer")
+	hostNS, peerNS, hh, ph := twoNamespaces(t, "espl")
+	defer hh.Close()
+	defer ph.Close()
+
+	const oldLocal = "10.97.0.5"
+	oldIP, peerIP := net.ParseIP(oldLocal), net.ParseIP(tunPeerOuter)
+	keys := staticKeys{material: map[string][]byte{"k/out": espKeyBytes(0xA5), "k/in": espKeyBytes(0x5A)}}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	cfg := tunnel.TunnelConfig{
+		Name: "hgre5", Type: tunnel.TunnelTypeGRE, Transport: tunnel.TransportIPsec,
+		Local: tunHostOuter, Remote: tunPeerOuter, TunnelIP: tunHostInner + "/30",
+		IPsec: &tunnel.IPsecConfig{KeyRef: "k/out", PeerKeyRef: "k/in", SPIOut: espSPIOut, SPIIn: espSPIIn},
+	}
+
+	// A killed predecessor configured with the old local installed, and so
+	// recorded, the tunnel's pair, policies and carrier. It is never closed:
+	// its state stays in the kernel, as a SIGKILL leaves it, and its
+	// inventory is the production record.
+	old := cfg
+	old.Local = oldLocal
+	inventory := filepath.Join(t.TempDir(), "ipsec-installed.json")
+	inNS(t, hostNS, func() {
+		killed := tunnel.NewManager(logger, tunnel.WithKeyProvider(keys), tunnel.WithIPsecInventory(inventory))
+		require.NoError(t, killed.EnsureTunnel(context.Background(), old))
+	})
+
+	peerESP(t, ph, espKeyBytes(0xA5), espKeyBytes(0x5A))
+	require.NoError(t, ph.LinkAdd(&netlink.Gretun{LinkAttrs: netlink.LinkAttrs{Name: "pgre5"},
+		Local: peerIP, Remote: net.ParseIP(tunHostOuter)}))
+	addrUp(t, ph, "pgre5", tunPeerInner+"/30")
+	echo := net.JoinHostPort(tunPeerInner, strconv.Itoa(tunEchoPort))
+	listenWithin(peerNS, t, echo)
+
+	var relaunched *tunnel.Manager
+	inNS(t, hostNS, func() {
+		relaunched = tunnel.NewManager(logger, tunnel.WithKeyProvider(keys), tunnel.WithIPsecInventory(inventory))
+		require.NoError(t, relaunched.EnsureTunnel(context.Background(), cfg))
+		require.NoError(t, relaunched.SweepIPsec())
+	})
+	t.Cleanup(func() { inNS(t, hostNS, func() { _ = relaunched.Close() }) })
+
+	states, err := hh.XfrmStateList(netlink.FAMILY_V4)
+	require.NoError(t, err)
+	require.Len(t, states, 2, "only the configured pair's SAs remain")
+	for _, s := range states {
+		assert.False(t, s.Src.Equal(oldIP) || s.Dst.Equal(oldIP), "SA %s->%s spi %#x is on the old local", s.Src, s.Dst, s.Spi)
+	}
+	policies, err := hh.XfrmPolicyList(netlink.FAMILY_V4)
+	require.NoError(t, err)
+	require.Len(t, policies, 2, "only the configured pair's policies remain")
+	for _, p := range policies {
+		assert.False(t, p.Src.IP.Equal(oldIP) || p.Dst.IP.Equal(oldIP), "policy %s->%s is on the old local", p.Src, p.Dst)
+	}
+	require.NoError(t, dialWithin(hostNS, t, echo), "the moved tunnel carries traffic")
 }
 
 // twoNamespaces builds host and peer namespaces joined by a veth pair
@@ -485,7 +703,7 @@ func twoNamespaces(t *testing.T, tag string) (hostNS, peerNS netns.NsHandle, hh,
 	require.NoError(t, err)
 	ph, err = netlink.NewHandleAt(peerNS)
 	require.NoError(t, err)
-	require.NoError(t, hh.LinkAdd(&netlink.Veth{LinkAttrs: netlink.LinkAttrs{Name: "tun0"}, PeerName: "tun1"}))
+	require.NoError(t, hh.LinkAdd(testenv.NewVeth("tun0", "tun1")))
 	peerLink, err := hh.LinkByName("tun1")
 	require.NoError(t, err)
 	require.NoError(t, hh.LinkSetNsFd(peerLink, int(peerNS)))

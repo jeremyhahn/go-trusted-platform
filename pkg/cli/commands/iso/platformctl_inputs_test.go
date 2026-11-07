@@ -14,6 +14,8 @@
 package iso
 
 import (
+	"context"
+	"debug/elf"
 	"os"
 	"path/filepath"
 	"testing"
@@ -21,7 +23,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/diskimagetest"
 	pkgiso "github.com/jeremyhahn/go-trusted-platform/pkg/iso"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
 func TestNamePlatformctlBinaries_DefaultsToThisPlatformctl(t *testing.T) {
@@ -57,59 +61,190 @@ func TestNamePlatformctlBinaries_KeepsConfigFileValues(t *testing.T) {
 	assert.Equal(t, "/from/config/platformctl-static", config.PlatformctlStaticBinary)
 }
 
-// writeISOConfigFile writes an `iso create --config` file and returns its path.
-func writeISOConfigFile(t *testing.T, body string) string {
+// writeConfigFile writes an iso create --config file and returns its path.
+func writeConfigFile(t *testing.T, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "iso.yaml")
-	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 	return path
 }
 
-// The --config merge must not drop the file's platformctl binaries (Codex
-// review on #1107): media without them cannot run the installer.
-func TestApplyConfigFile_KeepsConfigFileBinaries(t *testing.T) {
-	flags := &createFlags{configFile: writeISOConfigFile(t,
-		"platformctl-binary: /from/config/platformctl\n"+
-			"platformctl-static-binary: /from/config/platformctl-static\n")}
+func TestMergeConfigFile_DefaultsToThisPlatformctl(t *testing.T) {
+	placeSiblingPlatformd(t)
+	flags := &createFlags{configFile: writeConfigFile(t, "{}\n")}
 
-	config, err := applyConfigFile(pkgiso.DefaultISOBuildConfig(), flags)
+	config, err := mergeConfigFile(pkgiso.DefaultISOBuildConfig(), flags)
+	require.NoError(t, err)
+
+	self, err := os.Executable()
+	require.NoError(t, err)
+	self, err = filepath.EvalSymlinks(self)
+	require.NoError(t, err)
+	assert.Equal(t, self, config.PlatformctlBinary, "a config file without the field still gets the running platformctl")
+}
+
+func TestMergeConfigFile_KeepsConfigFileValues(t *testing.T) {
+	placeSiblingPlatformd(t)
+	flags := &createFlags{configFile: writeConfigFile(t,
+		"platformctl-binary: /from/config/platformctl\nplatformctl-static-binary: /from/config/platformctl-static\n")}
+
+	config, err := mergeConfigFile(pkgiso.DefaultISOBuildConfig(), flags)
 	require.NoError(t, err)
 	assert.Equal(t, "/from/config/platformctl", config.PlatformctlBinary)
 	assert.Equal(t, "/from/config/platformctl-static", config.PlatformctlStaticBinary)
 }
 
-func TestApplyConfigFile_FlagsOverrideConfigFile(t *testing.T) {
+func TestMergeConfigFile_FlagsWin(t *testing.T) {
+	placeSiblingPlatformd(t)
 	flags := &createFlags{
-		configFile:            writeISOConfigFile(t, "platformctl-binary: /from/config/platformctl\n"),
+		configFile: writeConfigFile(t,
+			"platformctl-binary: /from/config/platformctl\nplatformctl-static-binary: /from/config/platformctl-static\n"),
 		platformctlPath:       "/flag/platformctl",
 		platformctlStaticPath: "/flag/platformctl-static",
 	}
 
-	config, err := applyConfigFile(pkgiso.DefaultISOBuildConfig(), flags)
+	config, err := mergeConfigFile(pkgiso.DefaultISOBuildConfig(), flags)
 	require.NoError(t, err)
 	assert.Equal(t, "/flag/platformctl", config.PlatformctlBinary)
 	assert.Equal(t, "/flag/platformctl-static", config.PlatformctlStaticBinary)
 }
 
-func TestApplyConfigFile_DefaultsToThisPlatformctl(t *testing.T) {
-	flags := &createFlags{configFile: writeISOConfigFile(t, "alpine-version: 3.22.2\n")}
+func TestMergeConfigFile_MissingFile(t *testing.T) {
+	flags := &createFlags{configFile: filepath.Join(t.TempDir(), "absent.yaml")}
 
-	config, err := applyConfigFile(pkgiso.DefaultISOBuildConfig(), flags)
-	require.NoError(t, err)
-	self, err := os.Executable()
-	require.NoError(t, err)
-	self, err = filepath.EvalSymlinks(self)
-	require.NoError(t, err)
-	assert.Equal(t, self, config.PlatformctlBinary, "a config file naming no platformctl keeps the running one")
-	assert.Empty(t, config.PlatformctlStaticBinary)
+	_, err := mergeConfigFile(pkgiso.DefaultISOBuildConfig(), flags)
+	var wrapped *WrappedError
+	require.ErrorAs(t, err, &wrapped)
 }
 
-func TestApplyConfigFile_RejectsUnreadableConfigFile(t *testing.T) {
-	flags := &createFlags{configFile: filepath.Join(t.TempDir(), "missing.yaml")}
+// cliStageBuild is the build `iso create --config` merges for staging: the
+// config file names platformd; platformctl and platformctl-static come from
+// the flags.
+func cliStageBuild(t *testing.T, flags *createFlags) (*pkgiso.ISOBuildConfig, error) {
+	t.Helper()
+	flags.configFile = stagingConfigFile(t)
+	config := pkgiso.DefaultISOBuildConfig()
+	config.SecureBoot = false
+	return mergeConfigFile(config, flags)
+}
 
-	config, err := applyConfigFile(pkgiso.DefaultISOBuildConfig(), flags)
-	require.Error(t, err)
-	assert.Nil(t, config)
-	var wrapped *WrappedError
-	assert.ErrorAs(t, err, &wrapped)
+// stagingConfigFile writes a build config naming a static platformd and a
+// platform config, everything StageInstallMedia needs besides platformctl.
+func stagingConfigFile(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	platformd := filepath.Join(dir, "platformd")
+	diskimagetest.WriteELF(t, platformd, elf.EM_X86_64)
+	platformConfig := filepath.Join(dir, "platform.yaml")
+	require.NoError(t, os.WriteFile(platformConfig, []byte("os:\n  hostname: node\nseal-pcrs: [0, 7, 9]\nsecure-boot:\n  enabled: false\n"), 0o600))
+	return writeConfigFile(t, "architecture: x86_64\n"+
+		"work-dir: "+t.TempDir()+"\n"+
+		"platform-version: 1.0.0-test\n"+
+		"platform-config-file: "+platformConfig+"\n"+
+		"platformd-binary: "+platformd+"\n"+
+		"pre-fetch: false\n")
+}
+
+// platformctlStagers resolve the build config the way each verb does from
+// its --platformctl-binary and --platformctl-static-binary flags.
+var platformctlStagers = map[string]func(t *testing.T, platformctl, static string) (*pkgiso.ISOBuildConfig, error){
+	"create": func(t *testing.T, platformctl, static string) (*pkgiso.ISOBuildConfig, error) {
+		return cliStageBuild(t, &createFlags{platformctlPath: platformctl, platformctlStaticPath: static})
+	},
+	"customize": func(t *testing.T, platformctl, static string) (*pkgiso.ISOBuildConfig, error) {
+		return customizeBuildConfig(&customizeFlags{
+			configFile:            stagingConfigFile(t),
+			platformctlPath:       platformctl,
+			platformctlStaticPath: static,
+		})
+	},
+}
+
+// TestStaging_NoStaticRejectsDynamicPlatformctl drives the iso create and
+// iso customize inputs into staging with a dynamically linked platformctl (a
+// desktop glibc build) and no static installer: the build fails rather than
+// ship an installer Alpine cannot run (#1152).
+func TestStaging_NoStaticRejectsDynamicPlatformctl(t *testing.T) {
+	for verb, stage := range platformctlStagers {
+		t.Run(verb, func(t *testing.T) {
+			platformctl := filepath.Join(t.TempDir(), "platformctl")
+			diskimagetest.WriteDynamicELF(t, platformctl, elf.EM_X86_64)
+			config, err := stage(t, platformctl, "")
+			require.NoError(t, err)
+			require.Empty(t, config.PlatformctlStaticBinary)
+
+			_, err = pkgiso.StageInstallMedia(context.Background(), config, "media", pkgiso.InstallerOverrides{}, nil, logging.DefaultLogger())
+			var dynamic *pkgiso.DynamicBinaryError
+			require.ErrorAs(t, err, &dynamic)
+			assert.Equal(t, platformctl, dynamic.Path)
+		})
+	}
+}
+
+// TestStaging_StaticFlagAcceptsDynamicPlatformctl supplies a static installer
+// beside the dynamic platformctl through --platformctl-static-binary, as the
+// iso integration suite does for iso customize (Codex 8120): the media
+// carries both.
+func TestStaging_StaticFlagAcceptsDynamicPlatformctl(t *testing.T) {
+	for verb, stage := range platformctlStagers {
+		t.Run(verb, func(t *testing.T) {
+			bins := t.TempDir()
+			platformctl := filepath.Join(bins, "platformctl")
+			diskimagetest.WriteDynamicELF(t, platformctl, elf.EM_X86_64)
+			static := filepath.Join(bins, "platformctl-static")
+			diskimagetest.WriteELF(t, static, elf.EM_X86_64)
+			config, err := stage(t, platformctl, static)
+			require.NoError(t, err)
+			assert.Equal(t, static, config.PlatformctlStaticBinary)
+
+			media, err := pkgiso.StageInstallMedia(context.Background(), config, "media", pkgiso.InstallerOverrides{}, nil, logging.DefaultLogger())
+			require.NoError(t, err)
+			assert.FileExists(t, filepath.Join(media.Dir, "platformd-bin", "platformctl"))
+			assert.FileExists(t, filepath.Join(media.Dir, "platformd-bin", "platformctl-static"))
+		})
+	}
+}
+
+// builderStage maps cfg through the shared ISO builder (`iso test
+// client-server`) and stages the install media from the result.
+func builderStage(t *testing.T, cfg *ISOBuilderConfig) (*pkgiso.InstallMedia, error) {
+	t.Helper()
+	dir := t.TempDir()
+	platformd := filepath.Join(dir, "platformd")
+	diskimagetest.WriteELF(t, platformd, elf.EM_X86_64)
+	platformConfig := filepath.Join(dir, "platform.yaml")
+	require.NoError(t, os.WriteFile(platformConfig, []byte("os:\n  hostname: node\nseal-pcrs: [0, 7, 9]\nsecure-boot:\n  enabled: false\n"), 0o600))
+	cfg.WorkDir = t.TempDir()
+
+	config, err := newBuilderISOBuildConfig(cfg, platformd)
+	require.NoError(t, err)
+	config.Architecture = "x86_64"
+	config.PlatformVersion = "1.0.0-test"
+	config.PlatformConfigFile = platformConfig
+	return pkgiso.StageInstallMedia(context.Background(), config, "media", pkgiso.InstallerOverrides{}, nil, logging.DefaultLogger())
+}
+
+// A dynamically linked platformctl is accepted by the shared builder when a
+// static installer is supplied beside it (Codex review on #1152).
+func TestBuilderStaging_StaticInstallerAcceptsDynamicPlatformctl(t *testing.T) {
+	bins := t.TempDir()
+	platformctl := filepath.Join(bins, "platformctl")
+	diskimagetest.WriteDynamicELF(t, platformctl, elf.EM_X86_64)
+	static := filepath.Join(bins, "platformctl-static")
+	diskimagetest.WriteELF(t, static, elf.EM_X86_64)
+
+	media, err := builderStage(t, &ISOBuilderConfig{PlatformctlBinary: platformctl, PlatformctlStaticBinary: static})
+	require.NoError(t, err)
+	assert.FileExists(t, filepath.Join(media.Dir, "platformd-bin", "platformctl"))
+	assert.FileExists(t, filepath.Join(media.Dir, "platformd-bin", "platformctl-static"))
+}
+
+func TestBuilderStaging_NoStaticRejectsDynamicPlatformctl(t *testing.T) {
+	platformctl := filepath.Join(t.TempDir(), "platformctl")
+	diskimagetest.WriteDynamicELF(t, platformctl, elf.EM_X86_64)
+
+	_, err := builderStage(t, &ISOBuilderConfig{PlatformctlBinary: platformctl})
+	var dynamic *pkgiso.DynamicBinaryError
+	require.ErrorAs(t, err, &dynamic)
+	assert.Equal(t, platformctl, dynamic.Path)
 }

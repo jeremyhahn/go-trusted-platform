@@ -81,7 +81,7 @@ Example:
 	cmd.Flags().StringVar(&flags.keysDir, "keys-dir", "", "Secure Boot keys directory")
 	cmd.Flags().StringVar(&flags.platformdPath, "platformd-binary", "", "Path to platformd binary (default: platformd beside platformctl)")
 	cmd.Flags().StringVar(&flags.platformctlPath, "platformctl-binary", "", "platformctl binary the media installs with (default: this platformctl)")
-	cmd.Flags().StringVar(&flags.platformctlStaticPath, "platformctl-static-binary", "", "Static platformctl for Alpine/musl (default: not installed)")
+	cmd.Flags().StringVar(&flags.platformctlStaticPath, "platformctl-static-binary", "", "Static platformctl for Alpine/musl (default: not installed; --platformctl-binary must then be static)")
 	cmd.Flags().StringVar(&flags.platformConfig, "platform-config", "", "Platform configuration baked into the ISO")
 
 	// Common flags

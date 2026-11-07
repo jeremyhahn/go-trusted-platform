@@ -16,13 +16,18 @@ package commands
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"slices"
 	"syscall"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/process"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/tunnel"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -103,13 +108,116 @@ func runServe(cmd *cobra.Command, args []string) error {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(signals)
-	return serve(viper.GetViper(), buildServeLogger(), signals)
+	return serve(viper.GetViper(), buildServeLogger(), signals, serveIPsecSweep)
+}
+
+// ipsecSweep removes the ESP state the tunnel manager installed that no
+// ensured tunnel names; serve runs it on a start with no tunnel configured.
+type ipsecSweep func(logger *slog.Logger, inventory string) error
+
+// serveIPsecSweep is the sweep runServe hands serve: the kernel's, which a
+// test of runServe replaces so it never reads the host's XFRM state.
+var serveIPsecSweep ipsecSweep = netlinkIPsecSweep
+
+// netlinkIPsecSweep sweeps the kernel's XFRM state with a manager that has
+// ensured no tunnel, so every SA, policy and carrier the platform installed
+// is stale (tunnel.Manager.SweepIPsec). The platform's state is what the
+// inventory records; anything else in the kernel is left alone.
+func netlinkIPsecSweep(logger *slog.Logger, inventory string) error {
+	return tunnel.NewManager(logger, tunnel.WithIPsecInventory(inventory)).SweepIPsec()
+}
+
+// gatewayTunnelsRecord is the file under --data-dir recording that a start
+// enabled the tunnels service, so the ESP state it installed may outlive it.
+const gatewayTunnelsRecord = "tunnels-installed"
+
+// sweepDroppedTunnels removes a killed predecessor's tunnel state when the
+// configuration no longer enables the tunnels service. With tunnels
+// configured, the process hosting that service sweeps once it has ensured
+// them (the gateway's own child under supervision), so exactly one process
+// sweeps per start; this start only records under --data-dir that tunnels
+// ran. Without tunnels, the sweep, which needs CAP_NET_ADMIN, runs only
+// when that record or the ESP inventory (ipsecInventoryPath) exists, and
+// fails the start closed if it cannot sweep; the record goes once the sweep
+// succeeds, which it does only after every object the inventory records is
+// gone or confirmed absent. A gateway that never ran tunnels (BGP only, say)
+// has neither and may run without CAP_NET_ADMIN. A configuration without a
+// `gateway:` section (proxy only) configures zero tunnels, so a tunnel-enabled
+// predecessor's state is swept as when the last tunnel is dropped. Without a
+// data directory nothing can be recorded, so every tunnel-less start sweeps,
+// and with no ESP inventory to prove a pair the platform's that sweep removes
+// nothing.
+func sweepDroppedTunnels(cfg *ServeConfig, sweep ipsecSweep, logger *slog.Logger) error {
+	record := tunnelsRecordPath(cfg.DataDir)
+	if cfg.Gateway != nil && slices.Contains(cfg.Gateway.EnabledServices(), gateway.ServiceTunnels) {
+		return writeTunnelsRecord(cfg.DataDir, record)
+	}
+	inventory := ipsecInventoryPath(cfg.DataDir)
+	if record != "" {
+		left, err := tunnelStateLeft(record, inventory)
+		if err != nil || !left {
+			return err
+		}
+	}
+	if err := sweep(logger, inventory); err != nil {
+		return &ErrStaleTunnelSweep{Cause: err}
+	}
+	if record == "" {
+		return nil
+	}
+	if err := os.Remove(record); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return &ErrTunnelsRecord{Path: record, Cause: err}
+	}
+	logger.Info("Stale tunnel state swept", slog.String("record", record))
+	return nil
+}
+
+// tunnelStateLeft reports whether a predecessor may have left tunnel state:
+// the tunnels record or the ESP inventory exists. The inventory alone
+// suffices, so state a predecessor recorded is swept even when its record
+// was removed before everything the inventory names was gone.
+func tunnelStateLeft(paths ...string) (bool, error) {
+	for _, path := range paths {
+		_, err := os.Stat(path)
+		if err == nil {
+			return true, nil
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return false, &ErrTunnelsRecord{Path: path, Cause: err}
+		}
+	}
+	return false, nil
+}
+
+// tunnelsRecordPath is the record under dataDir that tunnels were enabled,
+// or empty without a data directory.
+func tunnelsRecordPath(dataDir string) string {
+	if dataDir == "" {
+		return ""
+	}
+	return filepath.Join(dataDir, gatewayTunnelsRecord)
+}
+
+// writeTunnelsRecord records, before the tunnels service installs anything,
+// that a later start without tunnels has state to sweep. Without a data
+// directory there is nowhere to keep it, and such a start always sweeps.
+func writeTunnelsRecord(dataDir, record string) error {
+	if record == "" {
+		return nil
+	}
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		return &ErrTunnelsRecord{Path: record, Cause: err}
+	}
+	if err := os.WriteFile(record, nil, 0o600); err != nil {
+		return &ErrTunnelsRecord{Path: record, Cause: err}
+	}
+	return nil
 }
 
 // serve runs the gateway daemon on the configuration in v until signals
 // delivers a stop, then shuts it down. A signal already waiting when the
 // gateway finishes starting stops it as soon as it has started.
-func serve(v *viper.Viper, logger *slog.Logger, signals <-chan os.Signal) error {
+func serve(v *viper.Viper, logger *slog.Logger, signals <-chan os.Signal, sweep ipsecSweep) error {
 	logger.Info("Starting gateway daemon",
 		slog.String("data_dir", v.GetString("data-dir")),
 		slog.String("config", v.ConfigFileUsed()),
@@ -167,6 +275,13 @@ func serve(v *viper.Viper, logger *slog.Logger, signals <-chan os.Signal) error 
 	// than leaving a gateway running unscraped.
 	metricsServer, err := BuildMetricsServer(cfg.Metrics, gw, logger)
 	if err != nil {
+		return err
+	}
+
+	// A predecessor killed while it ran tunnels left their carriers, SAs
+	// and policies up; when the last tunnel has since been dropped, no
+	// tunnels service starts to sweep them, so the start does.
+	if err := sweepDroppedTunnels(cfg, sweep, logger); err != nil {
 		return err
 	}
 

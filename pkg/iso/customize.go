@@ -20,6 +20,7 @@ import (
 	"debug/elf"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -140,6 +141,9 @@ func (c *Customizer) StageMedia(ctx context.Context) error {
 	// build (#351). Neither is inferred from PlatformdBinary.
 	if err := c.CopyPlatformctlBinary(ctx, c.config.Platform.PlatformctlBinary); err != nil {
 		return &WrappedError{Msg: "failed to copy platformctl binary", Err: err}
+	}
+	if err := c.requireStaticInstaller(); err != nil {
+		return err
 	}
 	if err := c.CopyPlatformctlStaticBinary(ctx, c.config.Platform.PlatformctlStaticBinary); err != nil {
 		return &WrappedError{Msg: "failed to copy platformctl-static binary", Err: err}
@@ -502,7 +506,7 @@ func (c *Customizer) CopyPlatformdBinary(ctx context.Context, binaryPath string)
 func (c *Customizer) CopyPlatformctlBinary(ctx context.Context, binaryPath string) error {
 	if binaryPath == "" {
 		c.logger.Debug("No platformctl binary specified, skipping")
-		return nil
+		return c.removeStagedBinary("platformctl")
 	}
 
 	c.logger.Info("Copying platformctl binary", "source", binaryPath)
@@ -547,12 +551,31 @@ func (c *Customizer) CopyPlatformctlBinary(ctx context.Context, binaryPath strin
 	return nil
 }
 
+// requireStaticInstaller rejects a dynamically linked platformctl when the
+// build supplies no platformctl-static: the Alpine autoinstall script then
+// runs the regular platformctl (buildAutoinstallScript), and a glibc binary
+// has no loader or libraries on Alpine's musl userland. The staged copy is
+// removed so a failed build leaves no unrunnable installer behind.
+func (c *Customizer) requireStaticInstaller() error {
+	platform := c.config.Platform
+	if platform.PlatformctlStaticBinary != "" || platform.PlatformctlBinary == "" {
+		return nil
+	}
+	if err := validateStaticBinary(platform.PlatformctlBinary); err != nil {
+		if removeErr := c.removeStagedBinary("platformctl"); removeErr != nil {
+			return removeErr
+		}
+		return err
+	}
+	return nil
+}
+
 // CopyPlatformctlStaticBinary copies the static platformctl CLI binary to the ISO for installation.
 // The static binary is required for Alpine Linux which uses musl libc (incompatible with glibc).
 func (c *Customizer) CopyPlatformctlStaticBinary(ctx context.Context, binaryPath string) error {
 	if binaryPath == "" {
 		c.logger.Debug("No platformctl-static binary specified, skipping")
-		return nil
+		return c.removeStagedBinary("platformctl-static")
 	}
 
 	c.logger.Info("Copying platformctl-static binary", "source", binaryPath)
@@ -565,6 +588,9 @@ func (c *Customizer) CopyPlatformctlStaticBinary(ctx context.Context, binaryPath
 	// Validate binary
 	if err := c.validateTargetBinary(binaryPath); err != nil {
 		return &WrappedError{Msg: "platformctl-static binary validation failed", Err: err}
+	}
+	if err := validateStaticBinary(binaryPath); err != nil {
+		return err
 	}
 
 	// Create destination directory
@@ -594,6 +620,17 @@ func (c *Customizer) CopyPlatformctlStaticBinary(ctx context.Context, binaryPath
 			"sha256", checksum)
 	}
 
+	return nil
+}
+
+// removeStagedBinary removes platformd-bin/name from the media tree. An
+// unset optional input is not installed, and a tree customized again must
+// not keep the copy an earlier run staged (#1152).
+func (c *Customizer) removeStagedBinary(name string) error {
+	path := filepath.Join(c.config.Directories.ISO, "platformd-bin", name)
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return &WrappedError{Msg: "failed to remove stale " + name + " binary", Err: err}
+	}
 	return nil
 }
 
@@ -5385,6 +5422,28 @@ func (c *Customizer) validateTargetBinary(path string) error {
 		return &UnsupportedArchitectureError{Arch: string(c.config.architecture())}
 	}
 	return validateBinary(path, want)
+}
+
+// validateStaticBinary checks that the ELF at path names no program
+// interpreter (PT_INTERP): a CGO_ENABLED=0 Go binary is statically linked
+// and runs on Alpine's musl userland; a dynamic one does not.
+func validateStaticBinary(path string) error {
+	elfFile, err := elf.Open(path)
+	if err != nil {
+		return &WrappedError{Msg: "not a valid ELF binary", Err: err}
+	}
+	defer elfFile.Close()
+	for _, prog := range elfFile.Progs {
+		if prog.Type != elf.PT_INTERP {
+			continue
+		}
+		interp, err := io.ReadAll(prog.Open())
+		if err != nil {
+			return &WrappedError{Msg: "failed to read the program interpreter", Err: err}
+		}
+		return &DynamicBinaryError{Path: path, Interpreter: strings.TrimRight(string(interp), "\x00")}
+	}
+	return nil
 }
 
 // validateBinary checks that path is a regular 64-bit ELF file compiled for

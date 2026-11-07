@@ -1,11 +1,11 @@
 # Managed Switch Provisioning — CLI
 
-> **Status: NORMATIVE** · Scope: `platformctl switch` · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: `platformctl switch` · Last verified: 2026-10-27
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 >
 > Every verb and every flag below was read out of `pkg/cli/commands/switch/`
-> on 2026-08-18.
+> on 2026-10-27.
 
 ---
 
@@ -17,7 +17,7 @@ platformctl switch    Physical switch management operations
 
 Five verbs: `list-ports`, `port-status`, `set-vlan`, `enable-port`,
 `disable-port`. Registered on the root command at
-`pkg/cli/commands/root.go:193`.
+`pkg/cli/commands/root.go:206`.
 
 ### 1.1 This group does not use the standard transport flags
 
@@ -125,9 +125,10 @@ state for one port, read it out of `list-ports`
 ([architecture.md](architecture.md) §6).
 
 **A nonexistent port does not error.** The parser returns a zero-valued status
-rather than a not-found, so you get `mode: access, access_vlan: 0,
-enabled: false` for a port that does not exist. Cross-check against
-`list-ports`.
+rather than a not-found, and the single-port path does not run the
+`containsError` check on the switch's reply, so you get an empty `mode`,
+`access_vlan: 0` and `enabled: false` for a port that does not exist.
+Cross-check against `list-ports`.
 
 ---
 
@@ -204,7 +205,7 @@ It takes the port down immediately. There is also no dry-run.
 | `switch: invalid --vlan N (must be 1-4094)` | Out of range |
 | `switch: --server-url is required` | Missing `--server-url` |
 | `switch: failed to create client: …` | Client construction failed |
-| `switch: failed to build TLS config: …` | CA or client certificate could not be loaded |
+| `switch: failed to create client: switch: failed to build TLS config: …` | CA or client certificate could not be loaded; the TLS error is wrapped in the client-construction error |
 | `switch: <verb> failed: …` | The operation failed on the server; wraps the SDK error, which wraps the HTTP status and body |
 
 All five verbs set `SilenceUsage: true`, so a runtime failure prints the error
@@ -219,7 +220,7 @@ columns are not a stable interface.
 
 | Capability | Reach it with |
 |---|---|
-| Read a port's access VLAN alone (`GetPortVLAN`) | No transport exposes it — Go only ([api.md](api.md) §4) |
+| Read a port's access VLAN alone (`GetPortVLAN`) | No transport exposes it — Go only ([api.md](api.md) §3) |
 | Create or modify VLANs | Bootstrap configuration only ([`docs/bootstrap/`](../bootstrap/)) |
 | Configure port modes declaratively | Bootstrap configuration only |
 | Verify a switch against its declared config | Go only (`Configurator.Verify`) |

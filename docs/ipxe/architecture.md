@@ -80,7 +80,7 @@ platform's PXE service), and `pkg/cli/commands/iso` (`platformctl iso test pxe`)
 
 | Piece | File | Owner |
 |---|---|---|
-| Lifecycle orchestrator | `pkg/ipxe/server.go` — `Server`, `NewServer`, `Start`, `Stop`, `WaitForReady`, `IsRunning`, `ServerIP`, `HTTPServer`, `RunWithSignals` | this repo |
+| Lifecycle orchestrator | `pkg/ipxe/server.go` — `Server`, `NewServer`, `Start`, `Stop`, `Ready`, `WaitForReady`, `IsRunning`, `ServerIP`, `HTTPServer`, `RunWithSignals` | this repo |
 | Configuration and validation | `pkg/ipxe/config.go` — `ServerConfig` (aliased `Config`), `BootEntry`, `DefaultServerConfig`, `Validate`, `GetServerIP` | this repo |
 | DHCP with PXE options | `pkg/ipxe/dhcp_server.go` — `DHCPServer`, `DHCPConfig`, `DefaultBootFilenameByArch` | this repo |
 | Raw-socket DHCP transport | `pkg/ipxe/dhcp_rawconn_linux.go` / `_stub.go` — `ServerRawConn` | this repo |

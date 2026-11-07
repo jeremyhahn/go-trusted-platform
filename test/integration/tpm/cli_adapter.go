@@ -23,6 +23,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
 // =============================================================================
@@ -121,10 +123,11 @@ func (c *CLIAdapter) Setup(ctx context.Context) error {
 	// The env is read here, not in NewCLIAdapter, because TestMain sets it
 	// after the adapters are constructed.
 	c.socketPath = resolveCLISocketPath()
-	c.grpcEndpoint = os.Getenv(EnvPlatformGRPCEndpoint)
-	if c.grpcEndpoint == "" {
-		c.grpcEndpoint = GetServiceEndpoints().PlatformGRPC
+	grpcEndpoint, err := helpers.RequireEndpoint(EnvPlatformGRPCEndpoint)
+	if err != nil {
+		return err
 	}
+	c.grpcEndpoint = grpcEndpoint
 	if err := c.createTestConfig(); err != nil {
 		return ErrConnectionFailed{Protocol: "CLI", Endpoint: binaryPath, Err: err}
 	}

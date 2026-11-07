@@ -44,12 +44,12 @@ for device attestation.
 |--------------|----------------------------------|-----------------------------|
 | http-01      | HTTP validation (/.well-known/)  | Web servers                 |
 | dns-01       | DNS TXT record validation        | Wildcard certs, non-HTTP    |
-| enroll-01    | TPM attestation (device-01)      | IDevID issuance             |
+| enroll-01    | TPM attestation                  | IDevID issuance             |
 | endorse-01   | EK certificate installation      | TPM without mfr EK cert     |
 
 ## enroll-01 Challenge Flow
 
-The enroll-01 (device-01) challenge enables IDevID certificate issuance
+The enroll-01 challenge enables IDevID certificate issuance
 with TPM attestation:
 
 ```
@@ -97,9 +97,9 @@ with TPM attestation:
 │    │     • IDevID CSR (signed by IAK)   │                │        │
 │    │     • EK certificate               │                │        │
 │    │                │                   │                │        │
-│    │  6. POST /.well-known/acme-challenge/{token}        │        │
-│    │     Content-Type: application/jose+json             │        │
-│    │     Body: TCG-CSR-IDEVID ─────────▶                 │        │
+│    │  6. Serve TCG-CSR-IDEVID at                         │        │
+│    │     /.well-known/acme-challenge/{token}             │        │
+│    │                ◀───────────────── GET (server)      │        │
 │    │                │                   │                │        │
 │    │                │                   │ 7. Validate:   │        │
 │    │                │                   │    • EK cert   │        │
@@ -129,7 +129,8 @@ with TPM attestation:
 │    │                │                   │    • Encrypt to EK      │
 │    │                │                   │    • Bind to IAK name   │
 │    │                │                   │                │        │
-│    │  9. GET /.well-known/acme-activation/{token}        │        │
+│    │  9. Server POSTs the credential blob to the client: │        │
+│    │     /.well-known/acme-activation/{token}            │        │
 │    │                │                   │                │        │
 │    │  10. Credential Blob ◀─────────────                 │        │
 │    │      (encrypted secret)            │                │        │
@@ -140,8 +141,8 @@ with TPM attestation:
 │    │      • Load IAK                    │                │        │
 │    │      • Decrypt secret              │                │        │
 │    │                │                   │                │        │
-│    │  12. POST /.well-known/acme-activation/{token}      │        │
-│    │      Body: decrypted secret ───────▶                 │        │
+│    │  12. Response to the POST in step 9:                │        │
+│    │      decrypted secret ────────────▶                 │        │
 │    │                │                   │                │        │
 │    │                │                   │ 13. Verify     │        │
 │    │                │                   │     secret     │        │
@@ -201,7 +202,7 @@ with TPM attestation:
 │  Extensions:                                                      │
 │  ┌────────────────────────────────────────────────────────────┐  │
 │  │ Key Usage: digitalSignature                                 │  │
-│  │ Extended Key Usage: clientAuth, id-kp-cmcRA                 │  │
+│  │ Extended Key Usage: clientAuth                              │  │
 │  │ Subject Alt Names:                                          │  │
 │  │   • otherName: hwSerialNum                                  │  │
 │  │   • otherName: hwType (OID)                                 │  │
@@ -220,17 +221,25 @@ with TPM attestation:
 
 ## Rate Limiting
 
-| Endpoint            | Limit                      | Key                |
-|---------------------|----------------------------|--------------------|
-| /new-account        | 5 requests/hour            | IP address         |
-| /new-nonce          | 60 requests/minute         | IP address         |
-| /new-order          | 50 requests/week           | Account (JWS KID)  |
-| /orders/{id}        | 5 requests/minute          | Account            |
-| /authz/{id}         | 5 requests/minute          | Account            |
-| /challenge/{id}     | 5 requests/minute          | Account            |
-| /cert/{id}          | 10 requests/hour           | Account            |
-| /revoke-cert        | 5 requests/hour            | Account            |
-| /directory          | 100 requests/hour          | IP address         |
+The platform's ACME router sets one limiter per route
+(`pkg/webservice/v1/router/acme.go:45-55`); each is keyed by the
+`ACMEClientID` middleware. The limits are fixed in code, not configurable.
+
+| Route (under `/api/v1/acme`)        | Limit                 |
+|-------------------------------------|-----------------------|
+| `/new-account`, `/account/{id}`, `/key-change` | 100 per hour (shared limiter) |
+| `/new-nonce`                        | 1000 per minute       |
+| `/new-order`                        | 500 per hour          |
+| `/order/{id}/finalize`              | 500 per hour          |
+| `/order/{id}`                       | 100 per minute        |
+| `/orders`                           | 100 per minute        |
+| `/authz/{id}`                       | 100 per minute        |
+| `/challenge/{id}`                   | 100 per minute        |
+| `/cert/{id}`                        | 100 per hour          |
+| `/revoke-cert`                      | 50 per hour           |
+| `/directory`                        | 1000 per hour         |
+
+`/ca-bundle` has no limiter.
 
 ## Configuration
 
@@ -317,8 +326,8 @@ The platform supports dynamic port configuration for challenges:
 Challenge Type    Port Suffix    Example
 http-01           (standard)     /.well-known/acme-challenge/
 http-8080         8080           http://host:8080/.well-known/acme-challenge/
-device-01         (standard)     /.well-known/acme-challenge/
-device-8443       8443           https://host:8443/.well-known/acme-challenge/
+enroll-01         (standard)     /.well-known/acme-challenge/
+enroll-8080       8080           http://host:8080/.well-known/acme-challenge/
 ```
 
 ## Cross-Signed Certificates
@@ -358,7 +367,6 @@ The ACME server supports cross-signing with public CAs:
 |-------------------------|-----------|------------------------------|
 | Bad CSR                 | 400       | badCSR                       |
 | Account does not exist  | 400       | accountDoesNotExist          |
-| Invalid challenge       | 400       | invalidChallenge             |
 | Rate limited            | 429       | rateLimited                  |
 | Unauthorized            | 403       | unauthorized                 |
 | Server error            | 500       | serverInternal               |

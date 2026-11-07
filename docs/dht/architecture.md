@@ -20,7 +20,7 @@ Verified against the tree on 2026-08-18:
 | Any occurrence of `dht` or `DHT` under `sdk/` | **none** |
 | A `dht` or `p2p` command group under `pkg/cli/commands/` | **none** |
 | A `dht:` or top-level `p2p:` configuration key | **none** |
-| `docs/dht/ROADMAP.md` own status line | *"STATUS: Design Complete - Implementation Pending"* |
+| The DHT milestone plan's own status line (`docs/archive/dht-ROADMAP.md`; `docs/dht/ROADMAP.md` is now a pointer to it) | *"STATUS: Design Complete - Implementation Pending"* |
 
 There is therefore **no CLI, no REST route, no gRPC service, no QUIC opcode, no
 MCP tool and no SDK client** for this feature. [cli.md](cli.md) and
@@ -231,20 +231,23 @@ recorded here so the next reader does not act on them.
 
 | Claim | Reality (verified 2026-08-18) |
 |---|---|
-| `00-README.md` line 3: *"implemented in `pkg/dht/`"* | `pkg/dht/` does not exist. |
+| `00-README.md` line 6: *"implemented in `pkg/dht/`"* | `pkg/dht/` does not exist. |
 | `00-README.md` Implementation Status: Content Storage `pkg/content/` — **Implemented** | `pkg/content/` does not exist. |
 | Same table: Update System `pkg/updates/` — **Implemented** | `pkg/updates/` does not exist. |
 | Same table: OS Images `pkg/osimage/` — **Implemented** | `pkg/osimage/` does not exist. |
 | Same table: Defense System `pkg/defense/` — **Implemented** | `pkg/defense/` does not exist. |
 | Same table: Git Storage `pkg/git/` — **Implemented** | `pkg/git/` does not exist. |
 | Same table: Boot System `pkg/boot/` — **Implemented** | `pkg/boot/` **does** exist (`pkg/boot/commands/`, `pkg/boot/config/`) but it is the platform's local boot-manager CLI, not a DHT boot server. The row is right about the path and wrong about the meaning. |
-| `ROADMAP.md`: *"Hierarchical Kademlia DHT with 160-bit node IDs"* | The same document's §1.1 specifies *"NodeID type (32-byte SHA256 of public key)"* — 256 bits. The two statements contradict each other and the contradiction is unresolved. |
-| `api-reference.md`: a protocol/port table (REST 8443, gRPC 9443, QUIC 9444, MCP 9445, Unix `/run/platformd.sock`) | No DHT listener exists on any port. 8443 and 9443 are the platform web service's TLS ports; 9444 and 9445 appear nowhere in the shipped configuration. |
+| `docs/archive/dht-ROADMAP.md`: *"Hierarchical Kademlia DHT with 160-bit node IDs"* | The same document's §1.1 specifies *"NodeID type (32-byte SHA256 of public key)"* — 256 bits. The two statements contradict each other and the contradiction is unresolved. |
+| `api-reference.md`: a protocol/port table (REST 8443, gRPC 9443, QUIC 9444, MCP 9445, Unix `/run/platformd.sock`) | No DHT listener exists on any port. The platform daemon's own defaults are REST `8443`, gRPC `10443`, QUIC `9444` and MCP `9445` (`pkg/config/daemon.go:52-55`); 9444 and 9445 are therefore the platform's QUIC and MCP ports, and nothing listens for gRPC on 9443. None of them carries a DHT route. |
 | `api-reference*.md` generally: endpoint, method and tool listings | None are served. See [api.md](api.md). |
-| `18-platformd-p2p.md`: a top-level `p2p:` configuration block and `platformctl p2p status` | Neither exists. The only `p2p` keys in the code are `sdn.transit.p2p` (an IPv4 prefix for /31 links) and the gateway's `p2p` boolean, both unrelated. |
+| `18-platformd-p2p.md`: a top-level `p2p:` configuration block and `platformctl p2p status` | Neither exists. The only `p2p` configuration key in the code is the gateway's `p2p` boolean (`pkg/sdn/gateway/types.go:788`), which is unrelated. |
 
-**Nothing above has been edited in the design documents themselves.** They are
-the design record; this folder is the requirements contract. Where they
+The `00-README.md` rows above (the `pkg/dht/` line and the Implementation
+Status table) were corrected in that file under #833, as were the
+`api-reference.md` gRPC port and parity wording; the rows are kept as the
+record of what the documents used to say. The rest are uncorrected in the
+design documents themselves. They are the design record; this folder is the requirements contract. Where they
 disagree, this folder wins.
 
 ## 10. The design document index
@@ -280,10 +283,10 @@ disagree, this folder wins.
 | 25 | [25-kms-frost-lifecycle.md](25-kms-frost-lifecycle.md) | FROST share storage, rotation, backup |
 | 26 | [26-organization-identity.md](26-organization-identity.md) | Organization identity model |
 | — | [wire-protocol.md](wire-protocol.md) | Protocol buffers, message types, transports |
-| — | [ROADMAP.md](ROADMAP.md) | Milestones and phase plan |
+| — | [ROADMAP.md](ROADMAP.md) | Pointer; the milestones and phase plan are in [`docs/archive/dht-ROADMAP.md`](../archive/dht-ROADMAP.md) |
 | — | `api-reference*.md` (7 files) | **Design-time** protocol sketches — nothing in them is served |
 
-## 11. What has to happen before this folder becomes NORMATIVE
+## 11. What has to happen before this design is built
 
 1. An owner decision to build it. New features are the owner's authority alone;
    an agent that finds this folder and starts implementing is out of bounds.
@@ -291,12 +294,14 @@ disagree, this folder wins.
 3. The relationship to `pkg/sdn/gateway/p2p` settled: shared libp2p host, or two
    independent stacks. Building either way without deciding produces a
    duplicate.
-4. `00-README.md`'s Implementation Status table corrected or deleted.
+4. `00-README.md`'s Implementation Status table corrected or deleted — done
+   under #833: every row now reads Planned.
 5. The design's capability set mapped onto `docs/00 §R` rows with owners and
    tiers, so the SDK obligations are known before code exists.
 
-Until then this folder is a design record with a status banner, and the four
-sibling files say so.
+The banner is NORMATIVE for the design contract only: its scope line says
+"design only, no code exists", and until the steps above are done this folder
+is a design record, as the four sibling files say.
 
 ## 12. Related
 

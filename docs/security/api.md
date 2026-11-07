@@ -16,8 +16,10 @@ There is no `PolicyService` on gRPC, no `/api/v1/policy/*` or
 policy management, rate limiting or input validation. Verified 2026-08-18.
 
 `pkg/policy/opa` is an **in-process library** consumed by
-`pkg/sdn/gateway/proxysvc`. `pkg/security/ratelimit` and
-`pkg/security/validation` are libraries with **no consumers at all**
+`pkg/sdn/gateway/proxysvc` and `pkg/sdn/gateway/services/vpn`.
+`pkg/security/ratelimit` is consumed in-process by `pkg/webservice` (per-source
+listener limits) and the `POST /init` attempt budget; its state is not exposed
+on any transport. `pkg/security/validation` has **no consumers at all**
 ([architecture.md](architecture.md) §3).
 
 The transport model, the QUIC frame format, the status-byte vocabulary and the
@@ -41,9 +43,9 @@ platform-wide authorization catalogs are defined once in
 | Engine statistics | `(*OPAEngine).Stats()` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | Watch a policy directory | `opa.NewFileWatcher(dir)`, `opa.NewWatchedEngine(engine, dir)` | `MISSING` — local by nature | `MISSING` — local by nature | `MISSING` — local by nature | `MISSING` — local by nature | `MISSING` — local by nature |
 | Evaluate a proxy route policy | `proxysvc.OPAEvaluator.Evaluate(ctx, policy, input)` | `MISSING` | `MISSING` | `MISSING` | `MISSING` | `MISSING` |
-| Rate-limit a key | `ratelimit.Limiter.Allow` / `AllowN` / `Wait` / `WaitN` | `MISSING` — no consumer | `MISSING` — no consumer | `MISSING` — no consumer | `MISSING` — no consumer | `MISSING` — no consumer |
-| Reset rate-limit state | `ratelimit.Limiter.Reset` / `ResetAll` | `MISSING` — no consumer | `MISSING` — no consumer | `MISSING` — no consumer | `MISSING` — no consumer | `MISSING` — no consumer |
-| Rate-limiter statistics | `(*TokenBucketLimiter).Stats()`, `(*SlidingWindowLimiter).Stats()`, `.GetKeyStats(key)` | `MISSING` — no consumer | `MISSING` — no consumer | `MISSING` — no consumer | `MISSING` — no consumer | `MISSING` — no consumer |
+| Rate-limit a key | `ratelimit.Limiter.Allow` / `AllowN` / `Wait` / `WaitN` | `MISSING` — in-process only | `MISSING` — in-process only | `MISSING` — in-process only | `MISSING` — in-process only | `MISSING` — in-process only |
+| Reset rate-limit state | `ratelimit.Limiter.Reset` / `ResetAll` | `MISSING` — in-process only | `MISSING` — in-process only | `MISSING` — in-process only | `MISSING` — in-process only | `MISSING` — in-process only |
+| Rate-limiter statistics | `(*TokenBucketLimiter).Stats()`, `(*SlidingWindowLimiter).Stats()`, `.GetKeyStats(key)` | `MISSING` — in-process only | `MISSING` — in-process only | `MISSING` — in-process only | `MISSING` — in-process only | `MISSING` — in-process only |
 | Validate a value | `validation.Validator.Validate(value)` and the nine constructors | `MISSING` — no consumer | `MISSING` — no consumer | `MISSING` — no consumer | `MISSING` — no consumer | `MISSING` — no consumer |
 | Sanitize a string / path / SQL identifier | `(*Sanitizer).SanitizeString`, `(*PathSanitizer).SanitizePath`, `(*SQLSanitizer).Escape*`, `StripHTML`, `SanitizePath`, `StripControl`, `StripNonPrintable` | `MISSING` — no consumer | `MISSING` — no consumer | `MISSING` — no consumer | `MISSING` — no consumer | `MISSING` — no consumer |
 

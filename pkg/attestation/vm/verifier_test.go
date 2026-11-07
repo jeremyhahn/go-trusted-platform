@@ -14,21 +14,44 @@
 package vm
 
 import (
+	"bytes"
 	"context"
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
 	"log/slog"
 	"math/big"
+	"sync"
 	"testing"
 	"time"
 )
 
 // testCAKeyPair holds a CA certificate and private key for testing.
+// cachedRSAKey returns a generator that makes one RSA-2048 key on first use
+// and returns it after that. Key generation is the bulk of this package's test
+// time; no test needs a fresh key, only keys of different roles that differ.
+func cachedRSAKey() func() (*rsa.PrivateKey, error) {
+	return sync.OnceValues(func() (*rsa.PrivateKey, error) {
+		return rsa.GenerateKey(rand.Reader, 2048)
+	})
+}
+
+var (
+	// testCARSAKey signs the test CA certificates.
+	testCARSAKey = cachedRSAKey()
+	// testRSAKey is the AIK / EK / subject key the tests sign and verify with.
+	testRSAKey = cachedRSAKey()
+	// testRogueRSAKey signs certificates that must not chain to the test CA.
+	testRogueRSAKey = cachedRSAKey()
+)
+
 type testCAKeyPair struct {
 	cert    *x509.Certificate
 	privKey *rsa.PrivateKey
@@ -36,7 +59,7 @@ type testCAKeyPair struct {
 
 // newTestCA creates a new test CA certificate and key pair.
 func newTestCA() *testCAKeyPair {
-	privKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	privKey, _ := testCARSAKey()
 
 	template := x509.Certificate{
 		SerialNumber: big.NewInt(1),
@@ -226,7 +249,7 @@ func TestVMVerifier_VerifyQuote(t *testing.T) {
 		verifier := setupVerifier()
 
 		// Create test keys and certificate
-		aikPrivKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+		aikPrivKey, _ := testRSAKey()
 		ekCert, _ := ca.issueEKCertificate("vm-123", "host-456", &aikPrivKey.PublicKey)
 
 		nonce := []byte{0x01, 0x02, 0x03, 0x04}
@@ -315,7 +338,7 @@ func TestVMVerifier_VerifyQuote(t *testing.T) {
 	t.Run("nonce mismatch", func(t *testing.T) {
 		verifier := setupVerifier()
 
-		aikPrivKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+		aikPrivKey, _ := testRSAKey()
 		ekCert, _ := ca.issueEKCertificate("vm-123", "host-456", &aikPrivKey.PublicKey)
 
 		nonce := []byte{0x01, 0x02, 0x03, 0x04}
@@ -352,7 +375,7 @@ func TestVMVerifier_VerifyQuote(t *testing.T) {
 	t.Run("PCR mismatch", func(t *testing.T) {
 		verifier := setupVerifier()
 
-		aikPrivKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+		aikPrivKey, _ := testRSAKey()
 		ekCert, _ := ca.issueEKCertificate("vm-123", "host-456", &aikPrivKey.PublicKey)
 
 		nonce := []byte{0x01, 0x02, 0x03, 0x04}
@@ -399,7 +422,7 @@ func TestVMVerifier_VerifyQuote(t *testing.T) {
 	t.Run("invalid signature", func(t *testing.T) {
 		verifier := setupVerifier()
 
-		aikPrivKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+		aikPrivKey, _ := testRSAKey()
 		ekCert, _ := ca.issueEKCertificate("vm-123", "host-456", &aikPrivKey.PublicKey)
 
 		nonce := []byte{0x01, 0x02, 0x03, 0x04}
@@ -441,7 +464,7 @@ func TestVMVerifier_VerifyQuote(t *testing.T) {
 		t.Helper()
 		verifier := setupVerifier()
 
-		aikPrivKey, err := rsa.GenerateKey(rand.Reader, 2048)
+		aikPrivKey, err := testRSAKey()
 		if err != nil {
 			t.Fatalf("GenerateKey: %v", err)
 		}
@@ -499,7 +522,7 @@ func TestVMVerifier_VerifyQuote(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		aikPrivKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+		aikPrivKey, _ := testRSAKey()
 		nonce := []byte{0x01, 0x02}
 		quote := createTestQuote(aikPrivKey, nonce, []PCRValue{
 			{Index: 0, Value: make([]byte, 32), Algorithm: HashAlgorithmSHA256},
@@ -541,7 +564,7 @@ func TestVMVerifier_VerifyAttestation(t *testing.T) {
 	t.Run("successful attestation verification", func(t *testing.T) {
 		verifier := setupVerifier()
 
-		aikPrivKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+		aikPrivKey, _ := testRSAKey()
 		ekCert, _ := ca.issueEKCertificate("vm-123", "host-456", &aikPrivKey.PublicKey)
 
 		nonce := []byte{0x01, 0x02, 0x03, 0x04}
@@ -662,7 +685,7 @@ func TestVMVerifier_VerifyEKCertificate(t *testing.T) {
 	t.Run("valid certificate", func(t *testing.T) {
 		verifier := setupVerifier()
 
-		privKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+		privKey, _ := testRSAKey()
 		ekCert, _ := ca.issueEKCertificate("vm-123", "host-456", &privKey.PublicKey)
 
 		identity := &VMIdentity{
@@ -719,7 +742,7 @@ func TestVMVerifier_VerifyEKCertificate(t *testing.T) {
 		verifier := setupVerifier()
 
 		// Create self-signed certificate (not signed by CA)
-		privKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+		privKey, _ := testRogueRSAKey()
 		template := x509.Certificate{
 			SerialNumber: big.NewInt(1),
 			Subject:      pkix.Name{CommonName: "vm:vm-123@host:host-456"},
@@ -744,7 +767,7 @@ func TestVMVerifier_VerifyEKCertificate(t *testing.T) {
 	t.Run("identity mismatch", func(t *testing.T) {
 		verifier := setupVerifier()
 
-		privKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+		privKey, _ := testRSAKey()
 		ekCert, _ := ca.issueEKCertificate("vm-different", "host-different", &privKey.PublicKey)
 
 		identity := &VMIdentity{
@@ -777,7 +800,7 @@ func TestVMVerifier_HostBindingValidation(t *testing.T) {
 			t.Fatalf("Initialize failed: %v", err)
 		}
 
-		aikPrivKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+		aikPrivKey, _ := testRSAKey()
 		ekCert, _ := ca.issueEKCertificate("vm-123", "host-allowed-1", &aikPrivKey.PublicKey)
 
 		identity := &VMIdentity{
@@ -805,7 +828,7 @@ func TestVMVerifier_HostBindingValidation(t *testing.T) {
 			t.Fatalf("Initialize failed: %v", err)
 		}
 
-		aikPrivKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+		aikPrivKey, _ := testRSAKey()
 		ekCert, _ := ca.issueEKCertificate("vm-123", "host-not-allowed", &aikPrivKey.PublicKey)
 
 		identity := &VMIdentity{
@@ -895,51 +918,107 @@ func TestVMVerifier_Close(t *testing.T) {
 }
 
 func TestParsePublicKey(t *testing.T) {
-	t.Run("DER format", func(t *testing.T) {
-		privKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-		pubKeyBytes, _ := x509.MarshalPKIXPublicKey(&privKey.PublicKey)
+	privKey, err := testRSAKey()
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	pkixDER, err := x509.MarshalPKIXPublicKey(&privKey.PublicKey)
+	if err != nil {
+		t.Fatalf("MarshalPKIXPublicKey: %v", err)
+	}
 
-		pubKey, err := parsePublicKey(pubKeyBytes)
-		if err != nil {
-			t.Errorf("parsePublicKey() unexpected error: %v", err)
-		}
-		if pubKey == nil {
-			t.Error("Expected non-nil public key")
-		}
-	})
+	tests := []struct {
+		name string
+		data []byte
+	}{
+		{name: "PKIX DER", data: pkixDER},
+		{name: "PKIX PEM", data: pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pkixDER})},
+		{name: "PKCS#1 DER", data: x509.MarshalPKCS1PublicKey(&privKey.PublicKey)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pubKey, err := parsePublicKey(tt.data)
+			if err != nil {
+				t.Fatalf("parsePublicKey() unexpected error: %v", err)
+			}
+			rsaKey, ok := pubKey.(*rsa.PublicKey)
+			if !ok || !rsaKey.Equal(&privKey.PublicKey) {
+				t.Errorf("parsePublicKey() = %T, want the generated RSA public key", pubKey)
+			}
+		})
+	}
 
-	t.Run("invalid data", func(t *testing.T) {
-		_, err := parsePublicKey([]byte{0x00, 0x01, 0x02})
-		if err == nil {
-			t.Error("Expected error for invalid data")
-		}
-	})
+	refusals := []struct {
+		name string
+		data []byte
+	}{
+		{name: "garbage", data: []byte{0x00, 0x01, 0x02}},
+		{name: "PEM with a non-key body", data: pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: []byte{0x30, 0x00}})},
+	}
+	for _, tt := range refusals {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := parsePublicKey(tt.data)
+			var sigErr ErrSignatureInvalid
+			if !errors.As(err, &sigErr) {
+				t.Fatalf("want ErrSignatureInvalid, got %v", err)
+			}
+		})
+	}
 }
 
 func TestParseEKCertificate(t *testing.T) {
-	t.Run("DER format", func(t *testing.T) {
-		privKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-		template := x509.Certificate{
-			SerialNumber: big.NewInt(1),
-			Subject:      pkix.Name{CommonName: "Test"},
-			NotBefore:    time.Now(),
-			NotAfter:     time.Now().Add(time.Hour),
-		}
-		certBytes, _ := x509.CreateCertificate(rand.Reader, &template, &template, &privKey.PublicKey, privKey)
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "vm:vm-1@host:host-1"},
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &privKey.PublicKey, privKey)
+	if err != nil {
+		t.Fatalf("CreateCertificate: %v", err)
+	}
 
-		cert, err := parseEKCertificate(certBytes)
-		if err != nil {
-			t.Errorf("parseEKCertificate() unexpected error: %v", err)
-		}
-		if cert == nil {
-			t.Error("Expected non-nil certificate")
-		}
-	})
+	tests := []struct {
+		name string
+		data []byte
+	}{
+		{name: "DER", data: certDER},
+		{name: "PEM", data: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cert, err := parseEKCertificate(tt.data)
+			if err != nil {
+				t.Fatalf("parseEKCertificate() unexpected error: %v", err)
+			}
+			if !bytes.Equal(cert.Raw, certDER) {
+				t.Error("parseEKCertificate() returned a different certificate")
+			}
+		})
+	}
 
-	t.Run("invalid data", func(t *testing.T) {
-		_, err := parseEKCertificate([]byte{0x00, 0x01, 0x02})
-		if err == nil {
-			t.Error("Expected error for invalid data")
-		}
-	})
+	refusals := []struct {
+		name string
+		data []byte
+	}{
+		{name: "garbage", data: []byte{0x00, 0x01, 0x02}},
+		{name: "PEM of another type", data: pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: certDER})},
+		{name: "PEM certificate with a corrupt body", data: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER[:len(certDER)/2]})},
+	}
+	for _, tt := range refusals {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := parseEKCertificate(tt.data)
+			var ekErr ErrEKCertificateInvalid
+			if !errors.As(err, &ekErr) {
+				t.Fatalf("want ErrEKCertificateInvalid, got %v", err)
+			}
+			if ekErr.Cause == nil {
+				t.Error("ErrEKCertificateInvalid should carry the x509 parse cause")
+			}
+		})
+	}
 }

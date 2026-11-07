@@ -1144,6 +1144,56 @@ func TestHandleRotateKey(t *testing.T) {
 	})
 }
 
+// TestHandleRotateKeyChunkedBody sends the body as net/http presents a
+// Transfer-Encoding: chunked request, with ContentLength -1.
+func TestHandleRotateKeyChunkedBody(t *testing.T) {
+	t.Run("chunked body reaches the service", func(t *testing.T) {
+		svc := newMockKMSService()
+		_, router := setupKMSTestHandler(svc)
+
+		body, err := json.Marshal(KMSRotateKeyRequest{RetainOldVersion: true})
+		require.NoError(t, err)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/kms/keys/test-key-123/rotate", bytes.NewReader(body))
+		req.ContentLength = -1
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		require.NotNil(t, svc.lastRotateKeyReq)
+		assert.True(t, svc.lastRotateKeyReq.RetainOldVersion)
+	})
+
+	t.Run("empty chunked body rotates with defaults", func(t *testing.T) {
+		svc := newMockKMSService()
+		_, router := setupKMSTestHandler(svc)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/kms/keys/test-key-123/rotate", bytes.NewReader(nil))
+		req.ContentLength = -1
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		require.NotNil(t, svc.lastRotateKeyReq)
+		assert.False(t, svc.lastRotateKeyReq.RetainOldVersion)
+	})
+
+	t.Run("malformed chunked JSON returns 400", func(t *testing.T) {
+		svc := newMockKMSService()
+		_, router := setupKMSTestHandler(svc)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/kms/keys/test-key-123/rotate", strings.NewReader("{invalid"))
+		req.ContentLength = -1
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+		assert.Nil(t, svc.lastRotateKeyReq)
+	})
+}
+
 // =============================================================================
 // Export Key Tests
 // =============================================================================

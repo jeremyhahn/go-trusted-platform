@@ -59,7 +59,7 @@ When the owner authorises the work, this file must be written against
 section per verb: purpose, positional arguments, **every** flag with type,
 default and whether required, exit codes, output formats, and at least one
 runnable example per verb using placeholder hosts. Any verb inside the locked
-CLI surface must follow `docs/11-cli-surface` rather than inventing a local
+CLI surface must follow [`../handbook/software/docs/11-cli-surface.md`](../../../handbook/software/docs/11-cli-surface.md) rather than inventing a local
 dialect, and every verb needs a matching entry in the integration parity suite.
 
 Until then this file exists and says what it says: **no CLI surface.**

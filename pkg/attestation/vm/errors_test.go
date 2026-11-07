@@ -467,6 +467,45 @@ func TestErrHostBindingInvalid(t *testing.T) {
 	}
 }
 
+func TestErrAKPublicAreaInvalid(t *testing.T) {
+	cause := errors.New("tpm2: short buffer")
+	tests := []struct {
+		name string
+		err  ErrAKPublicAreaInvalid
+		want string
+	}{
+		{name: "bare", err: ErrAKPublicAreaInvalid{}, want: "vm: attestation key public area invalid"},
+		{name: "reason", err: ErrAKPublicAreaInvalid{Reason: "ECC curve"}, want: "vm: attestation key public area invalid: ECC curve"},
+		{
+			name: "reason and cause",
+			err:  ErrAKPublicAreaInvalid{Reason: "RSA unique", Cause: cause},
+			want: "vm: attestation key public area invalid: RSA unique: tpm2: short buffer",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.err.Error(); got != tt.want {
+				t.Errorf("Error() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+
+	if !errors.Is(ErrAKPublicAreaInvalid{Cause: cause}, cause) {
+		t.Error("ErrAKPublicAreaInvalid does not unwrap to its cause")
+	}
+	if (ErrAKPublicAreaInvalid{}).Unwrap() != nil {
+		t.Error("Unwrap() without a cause should be nil")
+	}
+}
+
+func TestErrAKPublicAreaNotRestricted(t *testing.T) {
+	err := ErrAKPublicAreaNotRestricted{Reason: "sign attribute clear"}
+	want := "vm: attestation key public area is not a restricted signing key: sign attribute clear"
+	if got := err.Error(); got != want {
+		t.Errorf("Error() = %q, want %q", got, want)
+	}
+}
+
 func TestErrorsImplementErrorInterface(t *testing.T) {
 	errs := []error{
 		ErrQuoteGenerationFailed{Reason: "test"},

@@ -122,7 +122,7 @@ type Config struct {
 	// directory.
 	Build *diskimage.BuildConfig
 	// ARM64BinariesDir and X86BinariesDir hold each architecture's
-	// platformd, platformctl, platformctl-static, platform-initrd and
+	// platformd, platformctl, platform-initrd and
 	// gatewayd.
 	ARM64BinariesDir string
 	X86BinariesDir   string

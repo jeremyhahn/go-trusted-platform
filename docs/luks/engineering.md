@@ -50,7 +50,9 @@
 1. **Validation order in `LUKSService`.** Mutating operations check root first,
    then `Device`, then the operation's own fields, then that a backend is set.
    Read-only operations (`Status`, `ListSlots`, `Info`) and `TestUnlock` check
-   `Device`, then the backend; they never check root.
+   `Device`, then the backend; they never check root. One check precedes
+   root: `EnrollFIDO2` with `require_pin` is refused with
+   `ErrLUKSFIDO2PINUnsupported` before anything else.
 2. **Field order within an operation:** `EnrollPassphrase` checks the new
    passphrase before the existing one; `EnrollFIDO2` checks the credential ID
    before the existing passphrase; `ChangePassphrase` checks the new passphrase
@@ -125,6 +127,8 @@
 | `ErrLUKSNewPassphraseRequired` | `luks: new passphrase is required` | 400 | `InvalidArgument` |
 | `ErrLUKSCredentialIDRequired` | `luks: fido2 credential id is required` | 400 | `InvalidArgument` |
 | `ErrLUKSSlotRequired` | `luks: slot index is required` | 400 | `InvalidArgument` |
+| `ErrLUKSFIDO2PINUnsupported` | `luks: fido2 require-pin is refused: …` | 400 | `InvalidArgument` |
+| `ErrLUKSMalformedBody` | `luks: malformed request body` | 400 | — (REST only) |
 | anything else | — | 500 | `Internal` |
 
 `ErrLUKSSlotRequired` is mapped but never returned.

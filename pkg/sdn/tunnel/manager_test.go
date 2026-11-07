@@ -241,6 +241,40 @@ func TestManager_EnsureTunnel_SetUpFails(t *testing.T) {
 	require.True(t, errors.As(err, &createErr))
 }
 
+func TestManager_EnsureTunnel_GRECarrierFailureRemovesTheHalfMadeLink(t *testing.T) {
+	// The link was added and then failed to come up: the failed start
+	// deletes it rather than leaving a down, half-configured carrier.
+	mock := newMockNetlinkOps()
+	cause := errors.New("set up error")
+	mock.linkSetUpFn = func(vnl.Link) error { return cause }
+	mgr := newManagerWithOps(testLogger(), mock)
+	config := validGREConfig()
+
+	err := mgr.EnsureTunnel(context.Background(), config)
+
+	assert.ErrorIs(t, err, cause)
+	assert.NotContains(t, mock.links, config.Name, "the half-made link is removed")
+	assert.NotContains(t, mock.addrs, config.Name)
+}
+
+func TestManager_EnsureTunnel_GRECarrierThatWillNotGoIsReportedWithTheFailure(t *testing.T) {
+	mock := newMockNetlinkOps()
+	cause := errors.New("set up error")
+	stuck := errors.New("link busy")
+	mock.linkSetUpFn = func(vnl.Link) error { return cause }
+	mock.linkDelFn = func(vnl.Link) error { return stuck }
+	mgr := newManagerWithOps(testLogger(), mock)
+	config := validGREConfig()
+
+	err := mgr.EnsureTunnel(context.Background(), config)
+
+	assert.ErrorIs(t, err, cause)
+	assert.ErrorIs(t, err, stuck, "what the rollback left in place is reported")
+	var removeErr *ErrTunnelRemoveFailed
+	require.ErrorAs(t, err, &removeErr)
+	assert.Equal(t, config.Name, removeErr.Name)
+}
+
 func TestManager_RemoveTunnel(t *testing.T) {
 	mock := newMockNetlinkOps()
 	mgr := newManagerWithOps(testLogger(), mock)
@@ -520,6 +554,45 @@ func TestManager_Close_PartialFailure(t *testing.T) {
 
 	err = mgr.Close()
 	require.Error(t, err)
+}
+
+// closeFailingWG is a WireGuard client whose Close fails. It embeds wgOps,
+// not mockWG, so it builds under the FIPS tag set too, where Manager.Close
+// still closes the client and mockWG does not exist.
+type closeFailingWG struct {
+	wgOps
+	closeErr error
+}
+
+func (c *closeFailingWG) Close() error { return c.closeErr }
+
+func TestManager_Close_ReportsEveryFailure(t *testing.T) {
+	// Two tunnels that will not go and a WireGuard client that will not
+	// close: each is reported, not only the last one Close met.
+	mock := newMockNetlinkOps()
+	mgr := newManagerWithOps(testLogger(), mock)
+	ctx := context.Background()
+	first := validGREConfig()
+	second := validGREConfig()
+	second.Name = "gre2"
+	second.Remote = "198.51.100.101"
+	second.TunnelIP = "10.255.0.5/30"
+	require.NoError(t, mgr.EnsureTunnel(ctx, first))
+	require.NoError(t, mgr.EnsureTunnel(ctx, second))
+	stuck := map[string]error{
+		first.Name:  errors.New("gre1 busy"),
+		second.Name: errors.New("gre2 busy"),
+	}
+	mock.linkDelFn = func(link vnl.Link) error { return stuck[link.Attrs().Name] }
+	wgErr := errors.New("wireguard client close")
+	mgr.wg = &closeFailingWG{closeErr: wgErr}
+
+	err := mgr.Close()
+
+	assert.ErrorIs(t, err, stuck[first.Name])
+	assert.ErrorIs(t, err, stuck[second.Name])
+	assert.ErrorIs(t, err, wgErr)
+	assert.Nil(t, mgr.wg, "the client is released even when its close fails")
 }
 
 func TestManager_EnsureTunnel_ReclainsUnmanagedLink(t *testing.T) {
