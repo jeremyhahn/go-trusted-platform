@@ -77,7 +77,7 @@ Examples:
 	f := cmd.Flags()
 	f.StringVar(&flags.output, "output", "", "Output directory, replaced (default <work-dir>/netboot-media)")
 	f.StringVar(&flags.cacheDir, "cache-dir", "", "Alpine netboot release cache (default <output>.cache/alpine)")
-	f.StringVar(&flags.x86BinariesDir, "x86-binaries-dir", "", "x86_64 platformd, platformctl, platformctl-static, platform-initrd, gatewayd (default: next to this binary)")
+	f.StringVar(&flags.x86BinariesDir, "x86-binaries-dir", "", "x86_64 platformd, platformctl, platform-initrd, gatewayd (default: next to this binary)")
 	f.StringVar(&flags.arm64BinariesDir, "arm64-binaries-dir", "", "arm64 binaries (default: aarch64/ next to this binary)")
 	f.StringVar(&flags.ipxe, "ipxe", DefaultARM64IPXE, "The arm64 iPXE to sign (make ipxe-build)")
 	f.StringVar(&flags.model, "model", rpi.DefaultModel, "Raspberry Pi board the TFTP tree's config.txt is written for: "+joinModels())

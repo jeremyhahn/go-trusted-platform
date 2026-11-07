@@ -83,7 +83,7 @@ func newInitializedSigner(t *testing.T, tpm TPMDevice, algorithm HashAlgorithm) 
 // supported algorithm, so the builder, signer and verifier must agree on the
 // digest for SHA-384 and SHA-512 as well as SHA-256.
 func TestHashAlgorithmRoundTrip(t *testing.T) {
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	privateKey, err := testRSAKey()
 	if err != nil {
 		t.Fatalf("failed to generate key: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestHashAlgorithmRoundTrip(t *testing.T) {
 // TestHashAlgorithmMismatchRejected checks that a signature made with one
 // algorithm does not verify under another.
 func TestHashAlgorithmMismatchRejected(t *testing.T) {
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	privateKey, err := testRSAKey()
 	if err != nil {
 		t.Fatalf("failed to generate key: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestHashAlgorithmMismatchRejected(t *testing.T) {
 // sign a digest of the configured size with the configured algorithm, and
 // that the resulting signature verifies.
 func TestManifestSignerSignTPMHashAlgorithms(t *testing.T) {
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	privateKey, err := testRSAKey()
 	if err != nil {
 		t.Fatalf("failed to generate key: %v", err)
 	}
@@ -218,7 +218,7 @@ func TestVerifyManifestSignatureRejections(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to generate key: %v", err)
 	}
-	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	rsaKey, err := testRSAKey()
 	if err != nil {
 		t.Fatalf("failed to generate key: %v", err)
 	}
@@ -279,7 +279,7 @@ func TestManifestSignerVerifySignatureUnsupportedKey(t *testing.T) {
 // TestParsePublicKeyPEM covers the PEM-encoded PKIX path and a PEM block
 // that does not hold a public key.
 func TestParsePublicKeyPEM(t *testing.T) {
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	privateKey, err := testRSAKey()
 	if err != nil {
 		t.Fatalf("failed to generate key: %v", err)
 	}

@@ -64,6 +64,7 @@ func session(tenantID string, roles ...string) IAMSession {
 }
 
 func TestNewSessionGuard_RejectsMissingDependencies(t *testing.T) {
+	t.Parallel()
 	writer := response.NewResponseWriter(guardLogger(), nil)
 
 	guard, err := NewSessionGuard(nil, writer)
@@ -78,6 +79,7 @@ func TestNewSessionGuard_RejectsMissingDependencies(t *testing.T) {
 // TestSessionGuard_FailsClosedWithoutSession is the property that makes a
 // guard safe to mount: with no authenticator ahead of it, it denies.
 func TestSessionGuard_FailsClosedWithoutSession(t *testing.T) {
+	t.Parallel()
 	guard := newGuard(t)
 	guards := map[string]func(http.Handler) http.Handler{
 		"RequireRoles":    guard.RequireRoles("admin"),
@@ -94,6 +96,7 @@ func TestSessionGuard_FailsClosedWithoutSession(t *testing.T) {
 }
 
 func TestRequireRoles(t *testing.T) {
+	t.Parallel()
 	guard := newGuard(t)
 	tests := []struct {
 		name    string
@@ -117,6 +120,7 @@ func TestRequireRoles(t *testing.T) {
 }
 
 func TestRequireAllRoles(t *testing.T) {
+	t.Parallel()
 	guard := newGuard(t)
 	tests := []struct {
 		name    string
@@ -139,6 +143,7 @@ func TestRequireAllRoles(t *testing.T) {
 // admin holds the same "admin" role inside their own tenant and must not
 // reach the system-tenant surfaces with it.
 func TestRequireTenant(t *testing.T) {
+	t.Parallel()
 	guard := newGuard(t)
 	tests := []struct {
 		name     string
@@ -163,6 +168,7 @@ func TestRequireTenant(t *testing.T) {
 // TestAuthMiddlewarePromotesGuard proves AuthMiddleware's RBAC surface is
 // the guard's implementation, not a second copy of it.
 func TestAuthMiddlewarePromotesGuard(t *testing.T) {
+	t.Parallel()
 	mw, err := NewAuthMiddleware(guardLogger(),
 		response.NewResponseWriter(guardLogger(), nil),
 		AuthConfig{}, newMockIAMServiceClient(), nil, nil, nil)
@@ -181,6 +187,7 @@ func TestAuthMiddlewarePromotesGuard(t *testing.T) {
 // otherwise let an administrator of one tenant act on any other by naming
 // it in the path.
 func TestRequireOwnTenant(t *testing.T) {
+	t.Parallel()
 	guard := newGuard(t)
 	named := func(value string) func(*http.Request) string {
 		return func(*http.Request) string { return value }
@@ -246,6 +253,7 @@ func serveOwnOrSystem(
 // itself is the case docs/auth/architecture.md §6c says this surface exists
 // for.
 func TestRequireOwnTenantOrSystem_AdmitsTheCallersOwnTenant(t *testing.T) {
+	t.Parallel()
 	reached, _ := serveOwnOrSystem(t, "system", "tenant-a", "tenant-a")
 	assert.True(t, reached)
 }
@@ -254,6 +262,7 @@ func TestRequireOwnTenantOrSystem_AdmitsTheCallersOwnTenant(t *testing.T) {
 // across tenants, and platformctl drives this surface as a system admin
 // naming a tenant. Denying it would break the only caller the surface has.
 func TestRequireOwnTenantOrSystem_AdmitsTheSystemTenant(t *testing.T) {
+	t.Parallel()
 	reached, _ := serveOwnOrSystem(t, "system", "system", "tenant-b")
 	assert.True(t, reached)
 }
@@ -263,6 +272,7 @@ func TestRequireOwnTenantOrSystem_AdmitsTheSystemTenant(t *testing.T) {
 // admitted this, because the role says the caller is an administrator and not
 // which tenant they administer.
 func TestRequireOwnTenantOrSystem_DeniesAnotherTenant(t *testing.T) {
+	t.Parallel()
 	reached, status := serveOwnOrSystem(t, "system", "tenant-a", "tenant-b")
 	assert.False(t, reached, "tenant-a reached tenant-b")
 	assert.Equal(t, http.StatusForbidden, status)
@@ -271,6 +281,7 @@ func TestRequireOwnTenantOrSystem_DeniesAnotherTenant(t *testing.T) {
 // TestRequireOwnTenantOrSystem_DeniesWithoutASession — a guard mounted without
 // an authenticator ahead of it must deny, never open.
 func TestRequireOwnTenantOrSystem_DeniesWithoutASession(t *testing.T) {
+	t.Parallel()
 	reached, status := serveOwnOrSystem(t, "system", "", "tenant-b")
 	assert.False(t, reached)
 	assert.Equal(t, http.StatusUnauthorized, status)
@@ -280,6 +291,7 @@ func TestRequireOwnTenantOrSystem_DeniesWithoutASession(t *testing.T) {
 // routes name no tenant; the handler then resolves it from the verified
 // session, which is not caller-controlled.
 func TestRequireOwnTenantOrSystem_AdmitsWhenNoTenantIsNamed(t *testing.T) {
+	t.Parallel()
 	reached, _ := serveOwnOrSystem(t, "system", "tenant-a", "")
 	assert.True(t, reached)
 }
@@ -289,6 +301,7 @@ func TestRequireOwnTenantOrSystem_AdmitsWhenNoTenantIsNamed(t *testing.T) {
 // not treat "no system tenant configured" as "everyone is the system tenant" —
 // the same reasoning RequireTenant carries for an empty tenantID.
 func TestRequireOwnTenantOrSystem_AnEmptySystemIDDoesNotAdmit(t *testing.T) {
+	t.Parallel()
 	reached, status := serveOwnOrSystem(t, "", "tenant-a", "tenant-b")
 	assert.False(t, reached, "an unconfigured system tenant admitted a cross-tenant request")
 	assert.Equal(t, http.StatusForbidden, status)
@@ -298,6 +311,7 @@ func TestRequireOwnTenantOrSystem_AnEmptySystemIDDoesNotAdmit(t *testing.T) {
 // read the named tenant cannot compare it, so it refuses rather than passing
 // the request through unchecked.
 func TestRequireOwnTenantOrSystem_DeniesWithoutAnExtractor(t *testing.T) {
+	t.Parallel()
 	logger := logging.DefaultLogger()
 	g, err := NewSessionGuard(logger, response.NewResponseWriter(logger, nil))
 	require.NoError(t, err)
@@ -352,18 +366,21 @@ func serveOwnNameOrSystem(
 }
 
 func TestRequireOwnTenantNameOrSystem_AdmitsTheCallersOwnName(t *testing.T) {
+	t.Parallel()
 	got := serveOwnNameOrSystem(t, "system", "tenant-a", "tenant-a")
 	assert.True(t, got.reached, "a tenant must resolve its own name")
 	assert.Equal(t, http.StatusOK, got.status)
 }
 
 func TestRequireOwnTenantNameOrSystem_AdmitsTheSystemTenantWithoutALookup(t *testing.T) {
+	t.Parallel()
 	got := serveOwnNameOrSystem(t, "system", "system", "tenant-b")
 	assert.True(t, got.reached, "the system tenant resolves any name")
 	assert.False(t, got.resolved, "the system tenant needs no lookup")
 }
 
 func TestRequireOwnTenantNameOrSystem_DeniesAForeignAndAnUnknownNameAlike(t *testing.T) {
+	t.Parallel()
 	foreign := serveOwnNameOrSystem(t, "system", "tenant-a", "tenant-b")
 	unknown := serveOwnNameOrSystem(t, "system", "tenant-a", "")
 
@@ -377,6 +394,7 @@ func TestRequireOwnTenantNameOrSystem_DeniesAForeignAndAnUnknownNameAlike(t *tes
 }
 
 func TestRequireOwnTenantNameOrSystem_DeniesWithoutASession(t *testing.T) {
+	t.Parallel()
 	got := serveOwnNameOrSystem(t, "system", "", "tenant-a")
 	assert.False(t, got.reached)
 	assert.False(t, got.resolved, "no lookup runs for an unauthenticated caller")
@@ -384,6 +402,7 @@ func TestRequireOwnTenantNameOrSystem_DeniesWithoutASession(t *testing.T) {
 }
 
 func TestRequireOwnTenantNameOrSystem_AnEmptySystemIDDoesNotAdmit(t *testing.T) {
+	t.Parallel()
 	// With no system tenant configured the caller is an ordinary tenant:
 	// another tenant's name is still refused.
 	got := serveOwnNameOrSystem(t, "", "tenant-a", "tenant-b")
@@ -392,6 +411,7 @@ func TestRequireOwnTenantNameOrSystem_AnEmptySystemIDDoesNotAdmit(t *testing.T) 
 }
 
 func TestRequireOwnTenantNameOrSystem_DeniesWithoutAResolver(t *testing.T) {
+	t.Parallel()
 	g, rec := ownOrSystemGuard(t, "system")
 
 	reached := false
