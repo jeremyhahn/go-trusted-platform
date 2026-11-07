@@ -406,7 +406,6 @@ tpm:
     platform-policy: false
     rsa:
       size: 2048
-  platform-pcr-bank: sha256
   # PCRs to include in golden integrity measurement for TPM-sealed secrets.
   # Leave empty to use ALL PCRs (0-23) for comprehensive boot chain measurement.
   # This includes BIOS/UEFI firmware, kernel command line, and IMA file measurements.

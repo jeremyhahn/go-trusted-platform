@@ -260,7 +260,7 @@ func TestClient_SendFlowMods_BarrierTimeout(t *testing.T) {
 	server.mu.Unlock()
 
 	socketDir := filepath.Dir(socketPath)
-	client, err := NewClient("test-bridge", WithSocketDir(socketDir), WithTimeout(500*time.Millisecond))
+	client, err := NewClient("test-bridge", WithSocketDir(socketDir), WithTimeout(noReplyTimeout))
 	if err != nil {
 		t.Fatalf("failed to create client: %v", err)
 	}

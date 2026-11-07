@@ -22,39 +22,38 @@ import (
 // from NVRAM and into the platform certificate store, before the TPM module
 // is constructed from this config.
 //
-// # Why — this is an interim, see #80
+// # Why — this is an interim, see #81
 //
-// go-xkms `writeCertToNVRAM` defines its NV index with
-// `NT: tpm2.TPMNT(0x01)` — **TPM_NT_COUNTER**. A counter index accepts a
-// data size of exactly 8 bytes, so the TPM rejects every certificate-sized
-// define with `TPM_RC_SIZE` on parameter 2. Certificate storage requires
-// TPM_NT_ORDINARY (0x00). Measured against the reference simulator:
-// counter/1500 fails, counter/8 succeeds, ordinary/1500 succeeds, and
-// ordinary only fails above TPM_PT_NV_INDEX_MAX (2048 here).
-//
-// The failure is therefore NOT about certificate size and NOT about
-// chunking — the write loop already chunks correctly against
-// TPM_PT_NV_BUFFER_MAX. Any configured cert handle makes that identity's
-// persistence fail on every boot, fatally, before the daemon can serve.
+// go-xkms#138 (the NV index defined as TPM_NT_COUNTER) is fixed at the
+// pinned go-xkms: the index is TPM_NT_ORDINARY and a certificate larger than
+// TPM_PT_NV_INDEX_MAX is refused before the define. The NV write still cannot
+// succeed on a platform TPM, for a second reason: go-xkms `writeCertToNVRAM`
+// authorizes TPM2_NV_DefineSpace on the owner hierarchy with an EMPTY
+// password, while `provisionTPMHierarchies` sets the owner auth to the SO PIN
+// before `provisionPlatformIdentity` provisions the IAK and IDevID
+// certificates. Measured against the reference simulator: with empty owner
+// auth the IDevID certificate is written and read back; with the owner auth
+// set the define fails with TPM_RC_BAD_AUTH. A second provision of the same
+// index fails with TPM_RC_NV_DEFINED, because the index is never undefined
+// first. Every cached go-xkms tag up to v0.55.0-alpha has the same
+// authorization. Honouring a configured handle today would make identity
+// provisioning fail on every node, fatally.
 //
 // Both identities are covered because `writeCertToNVRAM` is shared:
 // `ProvisionIDevIDCert` reaches it whenever `idevid.cert-handle` is set
-// (which every shipped template does — this is the live failure), and
-// `ProvisionIAKCert` reaches it identically whenever `iak.cert-handle` is
-// set (which no shipped template does today — a latent trap for the next
-// configuration that sets one).
+// (which every shipped template does), and `ProvisionIAKCert` reaches it
+// identically whenever `iak.cert-handle` is set.
 //
 // Clearing the handle is what makes the path work rather than merely fail
 // differently: for each identity the Provision and read accessors both
 // branch on `CertHandle == 0`, so zero sends the write AND the read to the
 // certificate store together. That store is already constructed on every
-// boot precisely as the NVRAM fallback, so nothing new is introduced here.
+// boot, so nothing new is introduced here.
 //
-// Fixed upstream by go-xkms#138. When that fix is adopted, delete this
-// function and its call site so configured handles are honoured again;
-// #81 tracks it, including migrating nodes provisioned under the interim
-// and the separate TPM_PT_NV_INDEX_MAX size ceiling that NVRAM imposes and
-// the certificate store does not.
+// The EK certificate is not affected: `ProvisionEKCert` authorizes with the
+// hierarchy auth it is given, and provisionEKCertificate places it in NV when
+// it fits. When go-xkms authorizes the identity NV writes with the owner
+// hierarchy auth, delete this function and its call site; #81 tracks it.
 func applyCertHandleNVInterim(cfg *xkmssdk.TPMConfig, logger *logging.Logger) {
 	if cfg == nil {
 		return
@@ -67,10 +66,10 @@ func applyCertHandleNVInterim(cfg *xkmssdk.TPMConfig, logger *logging.Logger) {
 	// matched nothing (#94).
 	warn := func(identity string, handle uint32) {
 		logger.Warn(
-			"ignoring the configured cert-handle: go-xkms defines the NV index as a "+
-				"counter, so the TPM rejects every certificate-sized write with TPM_RC_SIZE, "+
-				"which is fatal at startup (go-xkms#138). The certificate is stored in the "+
-				"platform certificate store until that fix is adopted.",
+			"ignoring the configured cert-handle: go-xkms authorizes the identity "+
+				"certificate NV define with an empty owner password, so on a TPM the platform "+
+				"owns the write fails with TPM_RC_BAD_AUTH, which is fatal at startup (#81). "+
+				"The certificate is stored in the platform certificate store.",
 			"identity", identity,
 			"ignored_cert_handle", handle)
 	}
