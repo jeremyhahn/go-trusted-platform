@@ -15,6 +15,7 @@ package daemon
 
 import (
 	"context"
+	"crypto/x509"
 	"log/slog"
 	"testing"
 	"time"
@@ -42,6 +43,14 @@ func (s *stubRefresh) Refresh(id string) error {
 type stubDescriber struct{ d calleradmission.Description }
 
 func (s stubDescriber) Describe() calleradmission.Description { return s.d }
+
+// Evaluate refuses every peer, as a policy with no trust anchors does.
+func (s stubDescriber) Evaluate(context.Context, *calleradmission.Peer) calleradmission.Decision {
+	return calleradmission.Decision{Admitted: false, Strategy: s.d.Strategy, Reason: calleradmission.ReasonNoAnchors}
+}
+
+// Anchors is empty: the stub chains no caller to anything.
+func (s stubDescriber) Anchors() []*x509.Certificate { return nil }
 
 func reportingCache(t *testing.T) *reporting.Cache {
 	t.Helper()

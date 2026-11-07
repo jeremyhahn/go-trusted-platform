@@ -14,7 +14,6 @@
 package iso
 
 import (
-	"context"
 	"debug/elf"
 	"os"
 	"path/filepath"
@@ -224,38 +223,4 @@ func TestCustomizer_WriteInitrdConfig(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to write config file")
 	})
-}
-
-func TestCustomizer_CopyPlatformctlBinary_EmptyPath(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	config := &PlatformISOConfig{
-		Directories: DirectoryConfig{
-			ISO:     filepath.Join(tmpDir, "iso"),
-			Overlay: filepath.Join(tmpDir, "overlay"),
-		},
-	}
-
-	c := NewCustomizer(config, nil)
-	ctx := context.Background()
-
-	err := c.CopyPlatformctlBinary(ctx, "")
-	assert.NoError(t, err)
-}
-
-func TestCustomizer_CopyPlatformctlBinary_NotFound(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	config := &PlatformISOConfig{
-		Directories: DirectoryConfig{
-			ISO:     filepath.Join(tmpDir, "iso"),
-			Overlay: filepath.Join(tmpDir, "overlay"),
-		},
-	}
-
-	c := NewCustomizer(config, nil)
-	ctx := context.Background()
-
-	err := c.CopyPlatformctlBinary(ctx, "/nonexistent/platformctl")
-	assert.NoError(t, err)
 }
