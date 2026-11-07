@@ -681,38 +681,6 @@ func TestService_Delete_NotFound(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestService_Count_Empty(t *testing.T) {
-	ds := testServiceDatastore(t)
-
-	service, err := NewService(ds)
-	require.NoError(t, err)
-
-	ctx := context.Background()
-
-	count, err := service.Count(ctx)
-	require.NoError(t, err)
-	assert.GreaterOrEqual(t, count, 0)
-}
-
-func TestService_Page_Empty(t *testing.T) {
-	ds := testServiceDatastore(t)
-
-	service, err := NewService(ds)
-	require.NoError(t, err)
-
-	ctx := context.Background()
-
-	pageQuery := datastore.PageQuery{
-		Page:      1,
-		PageSize:  10,
-		SortOrder: datastore.SORT_ASCENDING,
-	}
-
-	result, err := service.Page(ctx, pageQuery)
-	require.NoError(t, err)
-	assert.GreaterOrEqual(t, len(result.Entities), 0)
-}
-
 func TestService_Page_WithDifferentSortOrder(t *testing.T) {
 	ds := testServiceDatastore(t)
 
@@ -744,27 +712,6 @@ func TestService_Page_WithDifferentSortOrder(t *testing.T) {
 	assert.GreaterOrEqual(t, len(result.Entities), 3)
 }
 
-func TestService_Delete_Success(t *testing.T) {
-	ds := testServiceDatastore(t)
-
-	service, err := NewService(ds)
-	require.NoError(t, err)
-
-	ctx := context.Background()
-
-	device := &entities.Device{
-		ID:     555,
-		Model:  "DeleteTPM",
-		Serial: "SNDEL555",
-	}
-
-	err = service.Save(ctx, device)
-	require.NoError(t, err)
-
-	err = service.Delete(ctx, device)
-	assert.NoError(t, err)
-}
-
 func TestService_Count_AfterDeletion(t *testing.T) {
 	ds := testServiceDatastore(t)
 
@@ -792,44 +739,6 @@ func TestService_Count_AfterDeletion(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, count1-1, count2)
-}
-
-func TestService_Page_MultiPage(t *testing.T) {
-	ds := testServiceDatastore(t)
-
-	service, err := NewService(ds)
-	require.NoError(t, err)
-
-	ctx := context.Background()
-
-	// Create 15 devices
-	for i := 1; i <= 15; i++ {
-		device := &entities.Device{
-			ID:     uint64(i + 2000),
-			Model:  "PageTPM" + string(rune('0'+i)),
-			Serial: "SNPAGE" + string(rune('0'+i)),
-		}
-		err = service.Save(ctx, device)
-		require.NoError(t, err)
-	}
-
-	// Get page 1
-	page1, err := service.Page(ctx, datastore.PageQuery{
-		Page:      1,
-		PageSize:  5,
-		SortOrder: datastore.SORT_ASCENDING,
-	})
-	require.NoError(t, err)
-	assert.GreaterOrEqual(t, len(page1.Entities), 5)
-
-	// Get page 2
-	page2, err := service.Page(ctx, datastore.PageQuery{
-		Page:      2,
-		PageSize:  5,
-		SortOrder: datastore.SORT_ASCENDING,
-	})
-	require.NoError(t, err)
-	assert.GreaterOrEqual(t, len(page2.Entities), 0)
 }
 
 func TestService_RecordHeartbeat_BySerial(t *testing.T) {

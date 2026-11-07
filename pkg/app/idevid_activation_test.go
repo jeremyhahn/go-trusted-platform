@@ -229,6 +229,29 @@ func TestDeviceActivation_IDevIDOverMTLS(t *testing.T) {
 		assert.Equal(t, uint16(admittedVLAN), vlan)
 	})
 
+	t.Run("a second activation is a 404 and the port stays authorized", func(t *testing.T) {
+		server := newActivationServer(t, platformCA, platformCA)
+		server.enroll(t, cert)
+
+		client, err := app.newIDevIDClient(server.srv.URL, cert, server.serverPool())
+		require.NoError(t, err)
+		profile, err := client.FetchProfile(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, activationSerial, profile.SerialNumber)
+
+		_, err = client.Activate(context.Background())
+		require.NoError(t, err)
+		server.requirePortState(t, policy.PortStateAuthorized)
+
+		// A successful activation consumes the pending activation, so
+		// activating again is a 404, not a server fault
+		// (docs/sdn/provisioning.md, "POST /api/v1/device/activate" errors).
+		_, err = client.Activate(context.Background())
+		require.ErrorIs(t, err, provisioning.ErrServerError)
+		assert.ErrorContains(t, err, "server returned status 404")
+		server.requirePortState(t, policy.PortStateAuthorized)
+	})
+
 	t.Run("an IDevID certificate the platform CA did not issue changes nothing", func(t *testing.T) {
 		server := newActivationServer(t, platformCA, platformCA)
 		server.enroll(t, cert)
