@@ -25,16 +25,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestApplyCertHandleNVInterim pins the #80 interim. go-xkms
-// writeCertToNVRAM defines its NV index as TPM_NT_COUNTER, which accepts a
-// data size of exactly 8 bytes, so the TPM rejects every certificate-sized
-// define with TPM_RC_SIZE — fatally, on every boot. Clearing the handle
-// sends both the Provision call and the read accessor to the certificate
-// store, which is the only value that makes the path work rather than fail
-// differently.
+// TestApplyCertHandleNVInterim pins the #81 interim. go-xkms
+// writeCertToNVRAM authorizes its NV define on the owner hierarchy with an
+// empty password, so once the platform has set the owner auth the TPM
+// rejects the define with TPM_RC_BAD_AUTH — fatally, on every boot. Clearing
+// the handle sends both the Provision call and the read accessor to the
+// certificate store, which is the only value that makes the path work rather
+// than fail differently.
 //
-// Remove this behavior — and these expectations — when go-xkms#138 is
-// adopted; tracked as #81.
+// Remove this behavior — and these expectations — when go-xkms authorizes
+// the identity NV writes with the owner hierarchy auth; tracked as #81.
 func TestApplyCertHandleNVInterim(t *testing.T) {
 	// 0x01C90000 is the IDevID handle every shipped template sets.
 	const shippedHandle = 0x01C90000
@@ -46,7 +46,7 @@ func TestApplyCertHandleNVInterim(t *testing.T) {
 		applyCertHandleNVInterim(cfg, logging.NewLogger(slog.LevelDebug, &logged))
 
 		assert.Zero(t, cfg.IDevID.CertHandle,
-			"a non-zero cert-handle routes IDevID to the NV path, which cannot succeed until go-xkms#138 lands")
+			"a non-zero cert-handle routes IDevID to the NV path, which fails with TPM_RC_BAD_AUTH on an owned TPM")
 
 		// The warning is the whole mitigation for overriding operator
 		// intent — silently discarding it would be the defect.
@@ -57,8 +57,10 @@ func TestApplyCertHandleNVInterim(t *testing.T) {
 		// of it (#94). Keep the message constant.
 		assert.Contains(t, out, "ignoring the configured cert-handle",
 			"the warning must carry a constant, greppable phrase")
-		assert.Contains(t, out, "go-xkms#138",
-			"the warning must name the upstream issue so the override is traceable")
+		assert.Contains(t, out, "#81",
+			"the warning must name the tracking issue so the override is traceable")
+		assert.Contains(t, out, "TPM_RC_BAD_AUTH",
+			"the warning must name the failure the override avoids")
 		assert.Contains(t, out, strconv.Itoa(shippedHandle),
 			"the warning must report the handle that was ignored")
 		assert.Contains(t, out, "IDevID", "the warning must name the affected identity")
@@ -134,14 +136,14 @@ func TestTPMIdentityPersistenceIsRoutedToTheCertStore(t *testing.T) {
 	// branch, and its CN is populated so the store has a key (#78: an
 	// empty CN is what the store rejects on a fresh provision).
 	assert.Zero(t, cfg.IAK.CertHandle,
-		"IAK must not take the NV path — writeCertToNVRAM is broken for certificates (go-xkms#138)")
+		"IAK must not take the NV path — writeCertToNVRAM authorizes with an empty owner password (#81)")
 	assert.Equal(t, "node-07-iak", cfg.IAK.CN,
 		"the certificate store keys on the CN, so the IAK needs a non-empty one")
 
 	// IDevID: handle cleared, so both the write and the read use the
 	// certificate store, and its CN is populated so the store has a key.
 	assert.Zero(t, cfg.IDevID.CertHandle,
-		"IDevID must not take the NV path until go-xkms#138 lands")
+		"IDevID must not take the NV path until go-xkms authorizes it with the owner auth (#81)")
 	assert.Equal(t, "node-07-idevid", cfg.IDevID.CN,
 		"the certificate store keys on the CN, so IDevID needs a non-empty one")
 }

@@ -31,6 +31,7 @@ import (
 )
 
 func TestGenerateToken(t *testing.T) {
+	t.Parallel()
 
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
@@ -52,6 +53,7 @@ func TestGenerateToken(t *testing.T) {
 }
 
 func TestNewService(t *testing.T) {
+	t.Parallel()
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
@@ -68,6 +70,7 @@ func TestNewService(t *testing.T) {
 }
 
 func TestNewService_SignerError(t *testing.T) {
+	t.Parallel()
 	params := testServiceParams()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
@@ -81,6 +84,7 @@ func TestNewService_SignerError(t *testing.T) {
 // NewSigningMethodSigner fails due to unsupported algorithm configuration.
 // This covers the error path at service.go:78-80.
 func TestNewService_SigningMethodError(t *testing.T) {
+	t.Parallel()
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
@@ -102,6 +106,7 @@ func TestNewService_SigningMethodError(t *testing.T) {
 // TestNewService_UnsupportedAlgorithm tests NewService with an unsupported
 // public key algorithm to trigger the signing method error path.
 func TestNewService_UnsupportedAlgorithm(t *testing.T) {
+	t.Parallel()
 	ks := createXKMS()
 	defer ks.Close()
 
@@ -131,6 +136,7 @@ func TestNewService_UnsupportedAlgorithm(t *testing.T) {
 }
 
 func TestParseToken(t *testing.T) {
+	t.Parallel()
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
@@ -162,6 +168,7 @@ func TestParseToken(t *testing.T) {
 }
 
 func TestParseToken_MissingAuthHeader(t *testing.T) {
+	t.Parallel()
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
@@ -182,6 +189,7 @@ func TestParseToken_MissingAuthHeader(t *testing.T) {
 }
 
 func TestVerifyTokenClaims_ReturnsVerifiedPrincipal(t *testing.T) {
+	t.Parallel()
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
@@ -204,6 +212,7 @@ func TestVerifyTokenClaims_ReturnsVerifiedPrincipal(t *testing.T) {
 }
 
 func TestVerifyTokenClaims_RejectsInvalidTokens(t *testing.T) {
+	t.Parallel()
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
@@ -230,6 +239,7 @@ func TestVerifyTokenClaims_RejectsInvalidTokens(t *testing.T) {
 }
 
 func TestParseToken_InvalidToken(t *testing.T) {
+	t.Parallel()
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
@@ -251,6 +261,7 @@ func TestParseToken_InvalidToken(t *testing.T) {
 }
 
 func TestParseTokenString(t *testing.T) {
+	t.Parallel()
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
@@ -309,6 +320,7 @@ func hostileUser(t *testing.T) *entities.User {
 // float64. The platform user id must therefore travel as a decimal string,
 // or such a consumer reads a different user (#642).
 func TestGenerateToken_HostileUserIDSurvivesASchemalessDecode(t *testing.T) {
+	t.Parallel()
 	service := newTestService(t)
 	user := hostileUser(t)
 
@@ -332,6 +344,7 @@ func TestGenerateToken_HostileUserIDSurvivesASchemalessDecode(t *testing.T) {
 // The server's own reader: the real issuer, then the real parser, must
 // hand back exactly the id that was issued.
 func TestParseToken_HostileUserIDRoundTrips(t *testing.T) {
+	t.Parallel()
 	service := newTestService(t)
 	user := hostileUser(t)
 
@@ -349,6 +362,7 @@ func TestParseToken_HostileUserIDRoundTrips(t *testing.T) {
 }
 
 func TestPlatformUserID_RejectsAMissingOrMalformedClaim(t *testing.T) {
+	t.Parallel()
 	for name, uid := range map[string]string{
 		"missing":       "",
 		"not a number":  "operator@platform",
@@ -367,6 +381,7 @@ func TestPlatformUserID_RejectsAMissingOrMalformedClaim(t *testing.T) {
 }
 
 func TestParseTokenString_InvalidToken(t *testing.T) {
+	t.Parallel()
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
@@ -383,6 +398,7 @@ func TestParseTokenString_InvalidToken(t *testing.T) {
 }
 
 func TestKeyFunc(t *testing.T) {
+	t.Parallel()
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
@@ -400,6 +416,7 @@ func TestKeyFunc(t *testing.T) {
 }
 
 func TestPublicKey(t *testing.T) {
+	t.Parallel()
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
@@ -416,6 +433,7 @@ func TestPublicKey(t *testing.T) {
 }
 
 func TestServiceVerify(t *testing.T) {
+	t.Parallel()
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
@@ -439,6 +457,7 @@ func TestServiceVerify(t *testing.T) {
 }
 
 func TestServiceVerify_InvalidToken(t *testing.T) {
+	t.Parallel()
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 
@@ -465,6 +484,7 @@ func TestServiceVerify_InvalidToken(t *testing.T) {
 }
 
 func TestServiceVerify_WrongAudience(t *testing.T) {
+	t.Parallel()
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 	params.Audience = "localhost"
@@ -493,6 +513,7 @@ func TestServiceVerify_WrongAudience(t *testing.T) {
 
 // TestServiceErrors tests the error sentinel values are properly defined.
 func TestServiceErrors(t *testing.T) {
+	t.Parallel()
 	assert.NotNil(t, ErrAuthorizationHeaderRequired)
 	assert.NotNil(t, ErrInvalidToken)
 	assert.NotNil(t, ErrInvalidUserClaim)
@@ -506,6 +527,7 @@ func TestServiceErrors(t *testing.T) {
 
 // TestServiceParams_Validation tests the ServiceParams structure.
 func TestServiceParams_Validation(t *testing.T) {
+	t.Parallel()
 	params := ServiceParams{
 		Audience:   "test-audience",
 		Expiration: 3600,
@@ -521,6 +543,7 @@ func TestServiceParams_Validation(t *testing.T) {
 // clients use, their precedence, and the short-header case that used to
 // panic on a slice out of range.
 func TestRequestToken(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		header  string
@@ -564,6 +587,7 @@ func TestRequestToken(t *testing.T) {
 // TestParseToken_AcceptsTheConsoleCookie is the console's path end to end:
 // the SDK client sends credentials, not an Authorization header.
 func TestParseToken_AcceptsTheConsoleCookie(t *testing.T) {
+	t.Parallel()
 	params, ks := testServiceParamsWithXKMS()
 	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
 	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
@@ -584,18 +608,4 @@ func TestParseToken_AcceptsTheConsoleCookie(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, token)
 	assert.Equal(t, "system", claims.TenantID)
-}
-
-func TestParseToken_NoCredential(t *testing.T) {
-	params, ks := testServiceParamsWithXKMS()
-	params.KeyAttrs.KeyType = xkmssdk.KeyTypeTLS
-	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
-	require.NoError(t, err)
-
-	service, err := NewService(context.Background(), params)
-	require.NoError(t, err)
-
-	_, _, err = service.ParseToken(
-		httptest.NewRequest("GET", "/protected", nil))
-	assert.ErrorIs(t, err, ErrAuthorizationHeaderRequired)
 }

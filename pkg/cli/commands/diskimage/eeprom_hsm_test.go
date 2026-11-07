@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -28,7 +29,7 @@ import (
 )
 
 func TestRPIEEPROMHSMCommand_MatchesUpstreamWrapperContract(t *testing.T) {
-	key, cert := secureboottest.KeyPair(t, "fleet")
+	key, cert := rsaKeyPair(t, 2048)
 	kms := &secureboottest.KMS{Key: key}
 	ca := &secureboottest.CA{Certs: map[string]*x509.Certificate{"rpi/fleet": cert}}
 	input := filepath.Join(t.TempDir(), "bootconf.txt")
@@ -56,7 +57,7 @@ func TestRPIEEPROMHSMCommand_MatchesUpstreamWrapperContract(t *testing.T) {
 }
 
 func TestRPIEEPROMHSMCommand_Errors(t *testing.T) {
-	key, cert := secureboottest.KeyPair(t, "fleet")
+	key, cert := rsaKeyPair(t, 2048)
 	clientsFor := func(kms *secureboottest.KMS, cert *x509.Certificate) pkgiso.KMSClientsFunc {
 		return func() (*pkgiso.KMSClients, error) {
 			return &pkgiso.KMSClients{
@@ -142,7 +143,7 @@ func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }
 // signature rpi-eeprom-digest never receives is a failure, not a silent
 // success: the wrapper's caller would otherwise sign with nothing.
 func TestRPIEEPROMHSMCommand_ReportsAnUnwritableSignature(t *testing.T) {
-	key, cert := secureboottest.KeyPair(t, "fleet")
+	key, cert := rsaKeyPair(t, 2048)
 	clients := func() (*pkgiso.KMSClients, error) {
 		return &pkgiso.KMSClients{
 			KMS: &secureboottest.KMS{Key: key},
@@ -199,15 +200,43 @@ func TestRunRPIEEPROMHSM_NilFlagsAreRefused(t *testing.T) {
 	assert.Empty(t, algErr.Algorithm)
 }
 
-// rsaKeyPair is secureboottest.KeyPair for a key of another size.
+// rsaKeyPair returns the shared RSA key of the given size and a self-signed
+// "fleet" certificate for it, as secureboottest.KeyPair does for a fresh key.
 func rsaKeyPair(t *testing.T, bits int) (*rsa.PrivateKey, *x509.Certificate) {
 	t.Helper()
-	key, err := rsa.GenerateKey(rand.Reader, bits)
+	fixture, ok := rsaFixtures[bits]
+	require.True(t, ok, "no RSA fixture of %d bits", bits)
+	pair, err := fixture()
 	require.NoError(t, err)
+	return pair.key, pair.cert
+}
+
+// rsaFixture is an RSA key and a self-signed certificate for it.
+type rsaFixture struct {
+	key  *rsa.PrivateKey
+	cert *x509.Certificate
+}
+
+// rsaFixtures generates each key size once per run: RSA key generation is
+// the slowest step of these tests, and no test changes a key.
+var rsaFixtures = map[int]func() (rsaFixture, error){
+	2048: sync.OnceValues(func() (rsaFixture, error) { return newRSAFixture(2048) }),
+	3072: sync.OnceValues(func() (rsaFixture, error) { return newRSAFixture(3072) }),
+}
+
+func newRSAFixture(bits int) (rsaFixture, error) {
+	key, err := rsa.GenerateKey(rand.Reader, bits)
+	if err != nil {
+		return rsaFixture{}, err
+	}
 	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "fleet"}}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	require.NoError(t, err)
+	if err != nil {
+		return rsaFixture{}, err
+	}
 	cert, err := x509.ParseCertificate(der)
-	require.NoError(t, err)
-	return key, cert
+	if err != nil {
+		return rsaFixture{}, err
+	}
+	return rsaFixture{key: key, cert: cert}, nil
 }
