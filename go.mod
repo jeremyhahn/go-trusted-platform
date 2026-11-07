@@ -50,7 +50,7 @@ require (
 	github.com/gorilla/mux v1.8.1
 	github.com/insomniacslk/dhcp v0.0.0-20251020182700-175e84fbb167 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	github.com/jeremyhahn/go-codec v1.4.0 // held: v1.5.0-alpha is not in the module cache and cannot be fetched offline in #933; go-quicbaas, go-xkms and go-qrdb (every cached tag) still require v1.4.0
-	github.com/jeremyhahn/go-luks2 v1.0.2-alpha // DS-7482: lifts go-enclave to v0.10.0-alpha under go-qrdb, go-xkms and go-quicbaas
+	github.com/jeremyhahn/go-luks2 v0.2.0-alpha // held: v1.0.0-rc.4 lifts go-enclave to v0.8.0-alpha under go-qrdb, go-xkms and go-quicbaas (all on v0.5.0-alpha); later tags cannot be fetched offline in #933
 	github.com/jeremyhahn/go-quicbaas v0.12.0-alpha // held: the v0.16.0-alpha adoption is #906/#937 (fix-qbsdk16)
 	github.com/jeremyhahn/go-quicbaas/sdk/go v0.12.0-alpha // held: the v0.16.0-alpha adoption is #906/#937 (fix-qbsdk16)
 	github.com/jeremyhahn/go-trusted-platform/sdk/go v0.1.0-alpha
@@ -244,7 +244,7 @@ require (
 	github.com/jbenet/go-temp-err-catcher v0.1.0 // indirect
 	github.com/jchv/go-winloader v0.0.0-20250406163304-c1995be93bd1 // indirect
 	github.com/jeremyhahn/go-auth v0.2.0-alpha // indirect
-	github.com/jeremyhahn/go-enclave v0.10.0-alpha // indirect
+	github.com/jeremyhahn/go-enclave v0.5.0-alpha // indirect
 	github.com/jeremyhahn/go-frost v0.3.0-alpha // indirect
 	github.com/jeremyhahn/go-objstore v0.3.0-alpha // indirect
 	github.com/jeremyhahn/go-qrdb v0.19.0-alpha // indirect
