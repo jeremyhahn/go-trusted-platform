@@ -2983,7 +2983,10 @@ TEST_EXCLUDE := test/integration|sdk/go/gen|pkg/api/grpc/proto|pkg/api/grpc$$|cm
 # compatibility tests for the pinned SDK MCP transport. It lies outside the
 # ./pkg/... ./cmd/... discovery and TEST_EXCLUDE does not drop it; it runs in
 # about 1 s under -race.
-TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/ ./pkg/webservice/v1/ ./pkg/dns/ ./pkg/cli/commands/admin/ ./pkg/platform/ ./pkg/swtpm/ ./pkg/vtpm/ ./test/integration/helpers/surface/ ./test/integration/helpers/ ./test/integration/bmc/vbmc/ ./test/integration/bmc/rmcpsim/ ./test/integration/iso/ ./test/integration/tenant/ ./scripts/depscheck/ ./scripts/foreignfailures/ ./internal/quicbaas/
+# pkg/firstboot added 2026-10-31 (#964 step e): the tests swap every host seam
+# (commands, mounts, LUKS, TPM detection, host sync) and root file access under
+# t.TempDir(), so they need no root, TPM, device or mount.
+TEST_UNIT_PKGS := ./pkg/app/ ./pkg/daemon/commands/ ./pkg/cli/commands/bootstrap/ ./pkg/webservice/v1/ ./pkg/dns/ ./pkg/cli/commands/admin/ ./pkg/platform/ ./pkg/swtpm/ ./pkg/vtpm/ ./pkg/firstboot/ ./test/integration/helpers/surface/ ./test/integration/helpers/ ./test/integration/bmc/vbmc/ ./test/integration/bmc/rmcpsim/ ./test/integration/iso/ ./test/integration/tenant/ ./scripts/depscheck/ ./scripts/foreignfailures/ ./internal/quicbaas/
 
 # RACE_EXCLUDE: packages with data races that are KNOWN and TRACKED. The race
 # gate must be green to be a gate, so a package lands here only with an issue
@@ -3439,7 +3442,23 @@ GOVULN_MODULES := . sdk/go
 #       release, bump gobgp, DELETE this entry and the ID from GOVULN_ALLOW
 #       below, and mark the tracking issue done. Watch
 #       https://pkg.go.dev/vuln/GO-2026-4736.
-GOVULN_ALLOW := GO-2026-4736
+#   GO-2026-6911 (allowlisted 2026-11-06; mcp-go v1.5.0 — #1422)
+#       github.com/mark3labs/mcp-go: the client HTTP transport, every version,
+#       no fixed version published. No non-test package in this repo imports
+#       mcp-go; it arrives through the go-quicbaas SDK MCP transport. The
+#       client package is imported directly only by a test, internal/quicbaas/mcpgo_compat_test.go
+#       (TestMCPGoCompat_ModuleServerAlias -> client.NewStreamableHttpClient),
+#       against an in-process httptest server. Any runtime client use sits
+#       inside the go-quicbaas SDK MCP transport, which tracks the finding as
+#       quicbaas #2211.
+#
+#       Exposure: no platform runtime path builds an mcp-go client; the test
+#       client talks only to a loopback server it started itself.
+#
+#       CLOSING CONDITION (quicbaas #2211): the day upstream publishes a fixed
+#       mcp-go release, bump it, DELETE this entry and the ID from GOVULN_ALLOW
+#       below. Watch https://pkg.go.dev/vuln/GO-2026-6911.
+GOVULN_ALLOW := GO-2026-4736 GO-2026-6911
 
 # Each module is scanned in two steps (#940). The symbol scan builds SSA and a
 # call graph for the whole import closure; on module . it outgrew the CI job's

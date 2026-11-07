@@ -380,7 +380,7 @@ func TestNegotiation_MalformedOpeningIsRefused(t *testing.T) {
 func TestNegotiation_SilentClientHitsTheHandshakeDeadline(t *testing.T) {
 	bundle := testutil.GenerateTestTLSBundle(t)
 	cfg := testConfig(t, bundle)
-	cfg.HandshakeTimeout = 50 * time.Millisecond
+	cfg.HandshakeTimeout = 10 * time.Millisecond
 	addr, result := startSession(t, newTestServer(t, cfg))
 
 	dialClient(t, addr, clientFlagFixedNewstyle|clientFlagNoZeroes)
