@@ -19,6 +19,7 @@ import (
 
 // TestErrUnauthorized tests the ErrUnauthorized error type.
 func TestErrUnauthorized(t *testing.T) {
+	t.Parallel()
 	t.Run("without_reason", func(t *testing.T) {
 		err := ErrUnauthorized{}
 		expected := "unauthorized"
@@ -42,6 +43,7 @@ func TestErrUnauthorized(t *testing.T) {
 
 // TestErrForbidden tests the ErrForbidden error type.
 func TestErrForbidden(t *testing.T) {
+	t.Parallel()
 	t.Run("with_reason", func(t *testing.T) {
 		err := ErrForbidden{Reason: "access denied"}
 		expected := "forbidden: access denied"
@@ -77,6 +79,7 @@ func TestErrForbidden(t *testing.T) {
 
 // TestErrTLSRequired tests the ErrTLSRequired error type.
 func TestErrTLSRequired(t *testing.T) {
+	t.Parallel()
 	t.Run("error_message", func(t *testing.T) {
 		err := ErrTLSRequired{}
 		expected := "TLS connection required"
@@ -92,6 +95,7 @@ func TestErrTLSRequired(t *testing.T) {
 
 // TestErrMTLSRequired tests the ErrMTLSRequired error type.
 func TestErrMTLSRequired(t *testing.T) {
+	t.Parallel()
 	t.Run("error_message", func(t *testing.T) {
 		err := ErrMTLSRequired{}
 		expected := "client certificate required"
@@ -107,6 +111,7 @@ func TestErrMTLSRequired(t *testing.T) {
 
 // TestErrCertificateInvalid tests the ErrCertificateInvalid error type.
 func TestErrCertificateInvalid(t *testing.T) {
+	t.Parallel()
 	t.Run("without_reason", func(t *testing.T) {
 		err := ErrCertificateInvalid{}
 		expected := "certificate validation failed"
@@ -130,6 +135,7 @@ func TestErrCertificateInvalid(t *testing.T) {
 
 // TestErrTokenInvalid tests the ErrTokenInvalid error type.
 func TestErrTokenInvalid(t *testing.T) {
+	t.Parallel()
 	t.Run("without_reason", func(t *testing.T) {
 		err := ErrTokenInvalid{}
 		expected := "invalid token"
@@ -153,6 +159,7 @@ func TestErrTokenInvalid(t *testing.T) {
 
 // TestErrTokenExpired tests the ErrTokenExpired error type.
 func TestErrTokenExpired(t *testing.T) {
+	t.Parallel()
 	t.Run("without_expired_at", func(t *testing.T) {
 		err := ErrTokenExpired{}
 		expected := "token expired"
@@ -176,6 +183,7 @@ func TestErrTokenExpired(t *testing.T) {
 
 // TestErrTokenNotYetValid tests the ErrTokenNotYetValid error type.
 func TestErrTokenNotYetValid(t *testing.T) {
+	t.Parallel()
 	t.Run("without_not_before", func(t *testing.T) {
 		err := ErrTokenNotYetValid{}
 		expected := "token not yet valid"
@@ -199,6 +207,7 @@ func TestErrTokenNotYetValid(t *testing.T) {
 
 // TestErrMissingToken tests the ErrMissingToken error type.
 func TestErrMissingToken(t *testing.T) {
+	t.Parallel()
 	t.Run("error_message", func(t *testing.T) {
 		err := ErrMissingToken{}
 		expected := "authentication token required"
@@ -214,6 +223,7 @@ func TestErrMissingToken(t *testing.T) {
 
 // TestErrMissingTenantID tests the ErrMissingTenantID error type.
 func TestErrMissingTenantID(t *testing.T) {
+	t.Parallel()
 	t.Run("error_message", func(t *testing.T) {
 		err := ErrMissingTenantID{}
 		expected := "tenant ID required"
@@ -229,6 +239,7 @@ func TestErrMissingTenantID(t *testing.T) {
 
 // TestErrUserNotFound tests the ErrUserNotFound error type.
 func TestErrUserNotFound(t *testing.T) {
+	t.Parallel()
 	t.Run("without_identifier", func(t *testing.T) {
 		err := ErrUserNotFound{}
 		expected := "user not found"
@@ -252,6 +263,7 @@ func TestErrUserNotFound(t *testing.T) {
 
 // TestErrMFARequired tests the ErrMFARequired error type.
 func TestErrMFARequired(t *testing.T) {
+	t.Parallel()
 	t.Run("error_message", func(t *testing.T) {
 		err := ErrMFARequired{}
 		expected := "MFA verification required"
@@ -267,6 +279,7 @@ func TestErrMFARequired(t *testing.T) {
 
 // TestErrMFAExpired tests the ErrMFAExpired error type.
 func TestErrMFAExpired(t *testing.T) {
+	t.Parallel()
 	t.Run("error_message", func(t *testing.T) {
 		err := ErrMFAExpired{}
 		expected := "MFA verification expired"
@@ -282,6 +295,7 @@ func TestErrMFAExpired(t *testing.T) {
 
 // TestErrSessionInvalid tests the ErrSessionInvalid error type.
 func TestErrSessionInvalid(t *testing.T) {
+	t.Parallel()
 	t.Run("without_fields", func(t *testing.T) {
 		err := ErrSessionInvalid{}
 		expected := "invalid session"
@@ -324,6 +338,7 @@ func TestErrSessionInvalid(t *testing.T) {
 
 // TestErrServiceUnavailable tests the ErrServiceUnavailable error type.
 func TestErrServiceUnavailable(t *testing.T) {
+	t.Parallel()
 	t.Run("without_reason", func(t *testing.T) {
 		err := ErrServiceUnavailable{Service: "IAM"}
 		expected := "service unavailable: IAM"
@@ -347,6 +362,7 @@ func TestErrServiceUnavailable(t *testing.T) {
 
 // TestErrInvalidConfig tests the ErrInvalidConfig error type.
 func TestErrInvalidConfig(t *testing.T) {
+	t.Parallel()
 	t.Run("without_reason", func(t *testing.T) {
 		err := ErrInvalidConfig{Field: "signingKey"}
 		expected := "invalid configuration: signingKey"
@@ -370,6 +386,7 @@ func TestErrInvalidConfig(t *testing.T) {
 
 // TestErrAudienceMismatch tests the ErrAudienceMismatch error type.
 func TestErrAudienceMismatch(t *testing.T) {
+	t.Parallel()
 	t.Run("error_message", func(t *testing.T) {
 		err := ErrAudienceMismatch{
 			Expected: []string{"api.example.com"},
@@ -399,6 +416,7 @@ func TestErrAudienceMismatch(t *testing.T) {
 
 // TestErrIssuerMismatch tests the ErrIssuerMismatch error type.
 func TestErrIssuerMismatch(t *testing.T) {
+	t.Parallel()
 	t.Run("error_message", func(t *testing.T) {
 		err := ErrIssuerMismatch{
 			Expected: "https://auth.example.com",
@@ -417,6 +435,7 @@ func TestErrIssuerMismatch(t *testing.T) {
 
 // TestAllErrorsImplementErrorInterface verifies all error types implement the error interface.
 func TestAllErrorsImplementErrorInterface(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		err  error

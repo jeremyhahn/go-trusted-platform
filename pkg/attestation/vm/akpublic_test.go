@@ -116,7 +116,7 @@ func TestParseAKPublicArea_ECCRoundTrip(t *testing.T) {
 }
 
 func TestParseAKPublicArea_RSARoundTrip(t *testing.T) {
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	key, err := testRSAKey()
 	if err != nil {
 		t.Fatal(err)
 	}

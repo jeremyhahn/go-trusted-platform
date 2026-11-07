@@ -323,6 +323,27 @@ the tenant-record routes; the router refuses to build without those guards
 (`ErrAuthorizationRequired`), so the surface is either gated or absent. Details and rationale:
 [`docs/auth/architecture.md` §6c](../auth/architecture.md).
 
+**The daemon REST plane serves the same routes (#997).** In daemon mode
+`SetIAMHandlers` (`pkg/api/daemon/iam_rest.go`) mounts this router on the
+platformd REST listener with the daemon's authorization in the four hooks. There
+are no sessions and no `admin` role check. `Authenticate` is the daemon's
+`ScopeGuard`: a `Bearer` platform token, or else the verified client certificate as
+the `*:*` operator. `RequireAdmin` requires the scope for the method:
+
+| Method | Scope |
+|---|---|
+| `GET` | `iam:read` |
+| `POST`, `PUT`, `PATCH` | `iam:write` |
+| `DELETE` | `iam:delete` |
+| `POST .../policies/validate`, `POST .../policies/test`, `POST .../permissions/check` (flat and tenant-scoped) | `iam:read` — they evaluate the body and change nothing |
+| any other method | refused, `403` |
+
+`RequireSystemTenant` and `RequireOwnTenant` apply the gRPC tenant rules in
+the table below. A tenant-bound caller that names no tenant on a flat route is
+refused with `403`, because there is no session tenant to fall back on.
+Installer and machine certificates are not admitted (#1153). The credential and
+the scopes are described in [`docs/daemon/api.md`](../daemon/api.md).
+
 That gate is REST-only; the gRPC, QUIC and MCP pictures follow.
 
 **The tenant binding is on every transport (#401).** A tenant-bound caller is
