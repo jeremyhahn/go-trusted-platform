@@ -423,271 +423,52 @@ func TestNewMatch(t *testing.T) {
 }
 
 // TestMatch_AddInPort tests adding input port match
-func TestMatch_AddInPort(t *testing.T) {
-	match := NewMatch()
-	port := uint32(5)
+// TestMatch_AddTypedFields checks that each typed Add* helper appends exactly
+// one OpenFlow-basic OXM field with the right field code and wire encoding.
+func TestMatch_AddTypedFields(t *testing.T) {
+	ethDst, _ := net.ParseMAC("aa:bb:cc:dd:ee:ff")
+	ethSrc, _ := net.ParseMAC("11:22:33:44:55:66")
 
-	match.AddInPort(port)
-
-	if len(match.Fields) != 1 {
-		t.Fatalf("Expected 1 field, got %d", len(match.Fields))
+	tests := []struct {
+		name      string
+		add       func(m *Match)
+		wantField uint8
+		wantValue []byte
+	}{
+		{"in port", func(m *Match) { m.AddInPort(5) }, OFPXMTOFBInPort, []byte{0, 0, 0, 5}},
+		{"eth dst", func(m *Match) { m.AddEthDst(ethDst) }, OFPXMTOFBEthDst, ethDst},
+		{"eth src", func(m *Match) { m.AddEthSrc(ethSrc) }, OFPXMTOFBEthSrc, ethSrc},
+		{"eth type", func(m *Match) { m.AddEthType(0x0800) }, OFPXMTOFBEthType, []byte{0x08, 0x00}},
+		// The VLAN VID carries the OFPVID_PRESENT bit (0x1000).
+		{"vlan vid", func(m *Match) { m.AddVLANVid(100) }, OFPXMTOFBVlanVid, []byte{0x10, 0x64}},
+		{"ipv4 src", func(m *Match) { m.AddIPv4Src(net.ParseIP("192.168.1.100")) }, OFPXMTOFBIPv4Src, []byte{192, 168, 1, 100}},
+		{"ipv4 dst", func(m *Match) { m.AddIPv4Dst(net.ParseIP("10.0.0.1")) }, OFPXMTOFBIPv4Dst, []byte{10, 0, 0, 1}},
+		{"ip proto", func(m *Match) { m.AddIPProto(6) }, OFPXMTOFBIPProto, []byte{6}},
+		{"tcp src", func(m *Match) { m.AddTCPSrc(8080) }, OFPXMTOFBTCPSrc, []byte{0x1f, 0x90}},
+		{"tcp dst", func(m *Match) { m.AddTCPDst(443) }, OFPXMTOFBTCPDst, []byte{0x01, 0xbb}},
+		{"udp src", func(m *Match) { m.AddUDPSrc(53) }, OFPXMTOFBUDPSrc, []byte{0, 53}},
+		{"udp dst", func(m *Match) { m.AddUDPDst(67) }, OFPXMTOFBUDPDst, []byte{0, 67}},
 	}
 
-	field := match.Fields[0]
-	if field.Class != OFPXMCOpenflowBasic {
-		t.Errorf("Expected class %d, got %d", OFPXMCOpenflowBasic, field.Class)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			match := NewMatch()
+			tt.add(match)
 
-	if field.Field != OFPXMTOFBInPort {
-		t.Errorf("Expected field %d, got %d", OFPXMTOFBInPort, field.Field)
-	}
-
-	if len(field.Value) != 4 {
-		t.Errorf("Expected value length 4, got %d", len(field.Value))
-	}
-
-	decodedPort := binary.BigEndian.Uint32(field.Value)
-	if decodedPort != port {
-		t.Errorf("Expected port %d, got %d", port, decodedPort)
-	}
-}
-
-// TestMatch_AddEthDst tests adding ethernet destination
-func TestMatch_AddEthDst(t *testing.T) {
-	match := NewMatch()
-	mac, _ := net.ParseMAC("aa:bb:cc:dd:ee:ff")
-
-	match.AddEthDst(mac)
-
-	if len(match.Fields) != 1 {
-		t.Fatalf("Expected 1 field, got %d", len(match.Fields))
-	}
-
-	field := match.Fields[0]
-	if field.Field != OFPXMTOFBEthDst {
-		t.Errorf("Expected field %d, got %d", OFPXMTOFBEthDst, field.Field)
-	}
-
-	if !bytes.Equal(field.Value, mac) {
-		t.Errorf("Expected MAC %v, got %v", mac, field.Value)
-	}
-}
-
-// TestMatch_AddEthSrc tests adding ethernet source
-func TestMatch_AddEthSrc(t *testing.T) {
-	match := NewMatch()
-	mac, _ := net.ParseMAC("11:22:33:44:55:66")
-
-	match.AddEthSrc(mac)
-
-	if len(match.Fields) != 1 {
-		t.Fatalf("Expected 1 field, got %d", len(match.Fields))
-	}
-
-	field := match.Fields[0]
-	if field.Field != OFPXMTOFBEthSrc {
-		t.Errorf("Expected field %d, got %d", OFPXMTOFBEthSrc, field.Field)
-	}
-
-	if !bytes.Equal(field.Value, mac) {
-		t.Errorf("Expected MAC %v, got %v", mac, field.Value)
-	}
-}
-
-// TestMatch_AddEthType tests adding ethertype
-func TestMatch_AddEthType(t *testing.T) {
-	match := NewMatch()
-	ethType := uint16(0x0800) // IPv4
-
-	match.AddEthType(ethType)
-
-	if len(match.Fields) != 1 {
-		t.Fatalf("Expected 1 field, got %d", len(match.Fields))
-	}
-
-	field := match.Fields[0]
-	if field.Field != OFPXMTOFBEthType {
-		t.Errorf("Expected field %d, got %d", OFPXMTOFBEthType, field.Field)
-	}
-
-	decodedType := binary.BigEndian.Uint16(field.Value)
-	if decodedType != ethType {
-		t.Errorf("Expected ethertype 0x%x, got 0x%x", ethType, decodedType)
-	}
-}
-
-// TestMatch_AddVLANVid tests adding VLAN ID
-func TestMatch_AddVLANVid(t *testing.T) {
-	match := NewMatch()
-	vid := uint16(100)
-
-	match.AddVLANVid(vid)
-
-	if len(match.Fields) != 1 {
-		t.Fatalf("Expected 1 field, got %d", len(match.Fields))
-	}
-
-	field := match.Fields[0]
-	if field.Field != OFPXMTOFBVlanVid {
-		t.Errorf("Expected field %d, got %d", OFPXMTOFBVlanVid, field.Field)
-	}
-
-	// VLAN VID should have OFPVID_PRESENT bit set
-	decodedVid := binary.BigEndian.Uint16(field.Value)
-	expectedVid := vid | 0x1000
-	if decodedVid != expectedVid {
-		t.Errorf("Expected VID 0x%x, got 0x%x", expectedVid, decodedVid)
-	}
-}
-
-// TestMatch_AddIPv4Src tests adding IPv4 source
-func TestMatch_AddIPv4Src(t *testing.T) {
-	match := NewMatch()
-	ip := net.ParseIP("192.168.1.100")
-
-	match.AddIPv4Src(ip)
-
-	if len(match.Fields) != 1 {
-		t.Fatalf("Expected 1 field, got %d", len(match.Fields))
-	}
-
-	field := match.Fields[0]
-	if field.Field != OFPXMTOFBIPv4Src {
-		t.Errorf("Expected field %d, got %d", OFPXMTOFBIPv4Src, field.Field)
-	}
-
-	if !bytes.Equal(field.Value, ip.To4()) {
-		t.Errorf("Expected IP %v, got %v", ip.To4(), field.Value)
-	}
-}
-
-// TestMatch_AddIPv4Dst tests adding IPv4 destination
-func TestMatch_AddIPv4Dst(t *testing.T) {
-	match := NewMatch()
-	ip := net.ParseIP("10.0.0.1")
-
-	match.AddIPv4Dst(ip)
-
-	if len(match.Fields) != 1 {
-		t.Fatalf("Expected 1 field, got %d", len(match.Fields))
-	}
-
-	field := match.Fields[0]
-	if field.Field != OFPXMTOFBIPv4Dst {
-		t.Errorf("Expected field %d, got %d", OFPXMTOFBIPv4Dst, field.Field)
-	}
-
-	if !bytes.Equal(field.Value, ip.To4()) {
-		t.Errorf("Expected IP %v, got %v", ip.To4(), field.Value)
-	}
-}
-
-// TestMatch_AddIPProto tests adding IP protocol
-func TestMatch_AddIPProto(t *testing.T) {
-	match := NewMatch()
-	proto := uint8(6) // TCP
-
-	match.AddIPProto(proto)
-
-	if len(match.Fields) != 1 {
-		t.Fatalf("Expected 1 field, got %d", len(match.Fields))
-	}
-
-	field := match.Fields[0]
-	if field.Field != OFPXMTOFBIPProto {
-		t.Errorf("Expected field %d, got %d", OFPXMTOFBIPProto, field.Field)
-	}
-
-	if field.Value[0] != proto {
-		t.Errorf("Expected proto %d, got %d", proto, field.Value[0])
-	}
-}
-
-// TestMatch_AddTCPSrc tests adding TCP source port
-func TestMatch_AddTCPSrc(t *testing.T) {
-	match := NewMatch()
-	port := uint16(8080)
-
-	match.AddTCPSrc(port)
-
-	if len(match.Fields) != 1 {
-		t.Fatalf("Expected 1 field, got %d", len(match.Fields))
-	}
-
-	field := match.Fields[0]
-	if field.Field != OFPXMTOFBTCPSrc {
-		t.Errorf("Expected field %d, got %d", OFPXMTOFBTCPSrc, field.Field)
-	}
-
-	decodedPort := binary.BigEndian.Uint16(field.Value)
-	if decodedPort != port {
-		t.Errorf("Expected port %d, got %d", port, decodedPort)
-	}
-}
-
-// TestMatch_AddTCPDst tests adding TCP destination port
-func TestMatch_AddTCPDst(t *testing.T) {
-	match := NewMatch()
-	port := uint16(443)
-
-	match.AddTCPDst(port)
-
-	if len(match.Fields) != 1 {
-		t.Fatalf("Expected 1 field, got %d", len(match.Fields))
-	}
-
-	field := match.Fields[0]
-	if field.Field != OFPXMTOFBTCPDst {
-		t.Errorf("Expected field %d, got %d", OFPXMTOFBTCPDst, field.Field)
-	}
-
-	decodedPort := binary.BigEndian.Uint16(field.Value)
-	if decodedPort != port {
-		t.Errorf("Expected port %d, got %d", port, decodedPort)
-	}
-}
-
-// TestMatch_AddUDPSrc tests adding UDP source port
-func TestMatch_AddUDPSrc(t *testing.T) {
-	match := NewMatch()
-	port := uint16(53)
-
-	match.AddUDPSrc(port)
-
-	if len(match.Fields) != 1 {
-		t.Fatalf("Expected 1 field, got %d", len(match.Fields))
-	}
-
-	field := match.Fields[0]
-	if field.Field != OFPXMTOFBUDPSrc {
-		t.Errorf("Expected field %d, got %d", OFPXMTOFBUDPSrc, field.Field)
-	}
-
-	decodedPort := binary.BigEndian.Uint16(field.Value)
-	if decodedPort != port {
-		t.Errorf("Expected port %d, got %d", port, decodedPort)
-	}
-}
-
-// TestMatch_AddUDPDst tests adding UDP destination port
-func TestMatch_AddUDPDst(t *testing.T) {
-	match := NewMatch()
-	port := uint16(67)
-
-	match.AddUDPDst(port)
-
-	if len(match.Fields) != 1 {
-		t.Fatalf("Expected 1 field, got %d", len(match.Fields))
-	}
-
-	field := match.Fields[0]
-	if field.Field != OFPXMTOFBUDPDst {
-		t.Errorf("Expected field %d, got %d", OFPXMTOFBUDPDst, field.Field)
-	}
-
-	decodedPort := binary.BigEndian.Uint16(field.Value)
-	if decodedPort != port {
-		t.Errorf("Expected port %d, got %d", port, decodedPort)
+			if len(match.Fields) != 1 {
+				t.Fatalf("Expected 1 field, got %d", len(match.Fields))
+			}
+			field := match.Fields[0]
+			if field.Class != OFPXMCOpenflowBasic {
+				t.Errorf("Expected class %d, got %d", OFPXMCOpenflowBasic, field.Class)
+			}
+			if field.Field != tt.wantField {
+				t.Errorf("Expected field %d, got %d", tt.wantField, field.Field)
+			}
+			if !bytes.Equal(field.Value, tt.wantValue) {
+				t.Errorf("Expected value %x, got %x", tt.wantValue, field.Value)
+			}
+		})
 	}
 }
 
