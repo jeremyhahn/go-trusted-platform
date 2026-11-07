@@ -261,44 +261,55 @@ downgrade is invisible in every downstream artefact.
    currently ignored, so all four of the persistence calls #62 added resolve
    to the store.
 
-   > **INTERIM (#80) — a configured `idevid.cert-handle` or
+   > **INTERIM (#81) — a configured `idevid.cert-handle` or
    > `iak.cert-handle` is cleared, so identity certificates are stored in the
    > platform certificate store rather than TPM NVRAM.**
    >
-   > go-xkms `writeCertToNVRAM` defines its NV index with
-   > `NT: tpm2.TPMNT(0x01)` — **`TPM_NT_COUNTER`**. A counter index accepts a
-   > data size of exactly **8 bytes**, so the TPM rejects every
-   > certificate-sized define with `TPM_RC_SIZE` on parameter 2. Certificate
-   > storage requires `TPM_NT_ORDINARY` (`0x00`). Measured against the
-   > reference simulator: counter/1500 fails, counter/8 succeeds,
-   > ordinary/1500 succeeds, and ordinary fails only above
-   > `TPM_PT_NV_INDEX_MAX` (2048).
-   >
-   > So this is **not** a certificate-size problem and **not** a chunking
-   > problem — the write loop already chunks correctly against
-   > `TPM_PT_NV_BUFFER_MAX` (1024). It fails at 512 bytes just the same.
+   > go-xkms#138 (the index defined as `TPM_NT_COUNTER`) is fixed at the
+   > pinned go-xkms: `writeCertToNVRAM` defines `TPM_NT_ORDINARY` and refuses
+   > a certificate above `TPM_PT_NV_INDEX_MAX` before the define. It still
+   > cannot succeed on a platform TPM: it authorizes `TPM2_NV_DefineSpace` on
+   > the owner hierarchy with an **empty password**, and
+   > `provisionTPMHierarchies` sets the owner auth to the SO PIN before
+   > `provisionPlatformIdentity` writes the IAK and IDevID certificates.
+   > Measured against the reference simulator: with empty owner auth the
+   > IDevID certificate is written and read back; with the owner auth set the
+   > define fails with `TPM_RC_BAD_AUTH`. A second provision of the same index
+   > fails with `TPM_RC_NV_DEFINED`, because the index is never undefined
+   > first. Every cached go-xkms tag up to v0.55.0-alpha authorizes the same
+   > way.
    >
    > `applyCertHandleNVInterim` (`pkg/app/tpm_cert_nv.go`) clears the handle
    > with a warning. Zero is what makes the path *work* rather than fail
    > differently: for each identity the Provision call and the read accessor
    > both branch on `CertHandle == 0`, so it sends the write and the read to
-   > the certificate store together. That store is constructed on every boot
-   > anyway, as the documented NVRAM fallback.
+   > the certificate store together.
    >
    > **Both identities are covered** because `writeCertToNVRAM` is shared:
-   > IDevID is the live failure (every shipped template sets its handle),
-   > while IAK carries the identical latent trap for any configuration that
-   > sets `iak.cert-handle`.
+   > every shipped template sets `idevid.cert-handle`, and IAK carries the
+   > identical trap for any configuration that sets `iak.cert-handle`.
    >
-   > A second reason the store is the safer route: an NV index is capped at
-   > `TPM_PT_NV_INDEX_MAX`, so a certificate above it could never be
-   > persisted through NVRAM even once the counter bug is fixed. The store
-   > has no such ceiling (`TestCertStoreHasNoNVSizeCeiling`).
+   > The store has no `TPM_PT_NV_INDEX_MAX` ceiling
+   > (`TestCertStoreHasNoNVSizeCeiling`), so it is also where a certificate
+   > too large for an NV index belongs once NV persistence returns.
    >
-   > Fixed upstream by **go-xkms#138**. NV persistence returns when that fix
-   > is adopted here.
-   > Tracked as **#81**, including migrating nodes provisioned under the
-   > interim.
+   > Tracked as **#81**: NV persistence returns when go-xkms authorizes the
+   > identity NV writes with the owner hierarchy auth, including migrating
+   > nodes provisioned under the interim.
+   >
+   > **The EK certificate is placed by size today.**
+   > `provisionEKCertificate` (`pkg/app/tpm_ek_cert_placement.go`) reads
+   > `TPM_PT_NV_INDEX_MAX` and `TPM_PT_NV_BUFFER_MAX` through
+   > `TPM2_GetCapability` (TPM 2.0 Part 3 §30.2). With `ek.cert-handle` set, a
+   > certificate no larger than both goes to NV at `0x01C00002` (TCG EK
+   > Credential Profile v2.1 §2.2.1.4) through `ProvisionEKCert`, which
+   > authorizes with the configured hierarchy auth; a larger one goes to the
+   > TPM certificate store. The write limit counts because the pinned
+   > `ProvisionEKCert` sends the whole certificate in one `TPM2_NV_Write`
+   > without chunking: a certificate between the two limits fails with
+   > `TPM_RC_SIZE` (upstream gap: go-xkms should chunk the EK write). An NV write error is
+   > returned as `EKCertNVWriteError` and never downgraded to the store or to
+   > a CA import. `EKCertificate()` reads NV first, then the store.
 10. **`tpm.entropy` rebinds `App.Random` to the TPM.** Otherwise `rand.Reader`.
 
 ## 5. NVRAM — `pkg/api/tpmnv`
@@ -528,7 +539,7 @@ Keys as shipped in `configs/platform/templates/single-node/default.yaml`:
 | `tpm.iak.handle` | `0x81010002` | IAK persistent handle |
 | `tpm.iak.signature-algorithm` | `SHA256-RSA` | IAK signing algorithm |
 | `tpm.idevid.handle` | `0x81020000` | IDevID persistent handle |
-| `tpm.idevid.cert-handle` | `0x01C90000` | NV index for the IDevID certificate. **Currently IGNORED** — cleared at bring-up so the certificate store is used instead (interim, item 9 / go-xkms#138). `tpm.iak.cert-handle` is cleared the same way |
+| `tpm.idevid.cert-handle` | `0x01C90000` | NV index for the IDevID certificate. **Currently IGNORED** — cleared at bring-up so the certificate store is used instead (interim, item 9 / #81). `tpm.iak.cert-handle` is cleared the same way |
 | `tpm.idevid.model`, `.serial` | per node | TCG device identity fields |
 | `tpm.platform-pcr` | `23` | The PCR the platform extends with its golden measurement |
 | `tpm.platform-pcr-bank` | `sha256` | Bank for that PCR |

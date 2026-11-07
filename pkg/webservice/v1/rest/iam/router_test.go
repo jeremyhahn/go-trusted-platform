@@ -33,6 +33,7 @@ import (
 )
 
 func TestNewIAMRouter(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, os.Stdout)
 	iamClient := &mockIAMClient{}
 	pepClient := &mockPEPClient{}
@@ -45,6 +46,7 @@ func TestNewIAMRouter(t *testing.T) {
 }
 
 func TestRegisterRoutes(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, os.Stdout)
 	iamClient := &mockIAMClient{}
 	pepClient := &mockPEPClient{}
@@ -126,6 +128,7 @@ func TestRegisterRoutes(t *testing.T) {
 }
 
 func TestTenantRoutes_Registration(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, os.Stdout)
 	iamClient := &mockIAMClient{}
 	pepClient := &mockPEPClient{}
@@ -170,6 +173,7 @@ func TestTenantRoutes_Registration(t *testing.T) {
 }
 
 func TestUserRoutes_Registration(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, os.Stdout)
 	iamClient := &mockIAMClient{}
 	pepClient := &mockPEPClient{}
@@ -214,6 +218,7 @@ func TestUserRoutes_Registration(t *testing.T) {
 }
 
 func TestGroupRoutes_Registration(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, os.Stdout)
 	iamClient := &mockIAMClient{}
 	pepClient := &mockPEPClient{}
@@ -258,6 +263,7 @@ func TestGroupRoutes_Registration(t *testing.T) {
 }
 
 func TestRoleRoutes_Registration(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, os.Stdout)
 	iamClient := &mockIAMClient{}
 	pepClient := &mockPEPClient{}
@@ -302,6 +308,7 @@ func TestRoleRoutes_Registration(t *testing.T) {
 }
 
 func TestPolicyRoutes_Registration(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, os.Stdout)
 	iamClient := &mockIAMClient{}
 	pepClient := &mockPEPClient{}
@@ -356,6 +363,7 @@ func TestPolicyRoutes_Registration(t *testing.T) {
 }
 
 func TestAppRoutes_Registration(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, os.Stdout)
 	iamClient := &mockIAMClient{}
 	pepClient := &mockPEPClient{}
@@ -400,6 +408,7 @@ func TestAppRoutes_Registration(t *testing.T) {
 }
 
 func TestRoutes_MethodNotAllowed(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, os.Stdout)
 	iamClient := &mockIAMClient{}
 	pepClient := &mockPEPClient{}
@@ -432,6 +441,7 @@ func TestRoutes_MethodNotAllowed(t *testing.T) {
 }
 
 func TestRoutes_NotFound(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, os.Stdout)
 	iamClient := &mockIAMClient{}
 	pepClient := &mockPEPClient{}
@@ -465,10 +475,12 @@ func TestRoutes_NotFound(t *testing.T) {
 }
 
 func TestBasePath_Constant(t *testing.T) {
+	t.Parallel()
 	assert.Equal(t, "/iam", basePath)
 }
 
 func TestRoutes_WithSpecialCharactersInIDs(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, os.Stdout)
 	iamClient := &mockIAMClient{}
 	pepClient := &mockPEPClient{}
@@ -528,6 +540,7 @@ func TestRoutes_WithSpecialCharactersInIDs(t *testing.T) {
 }
 
 func TestRoutes_SubrouterIsolation(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, os.Stdout)
 	iamClient := &mockIAMClient{}
 	pepClient := &mockPEPClient{}
@@ -555,6 +568,7 @@ func TestRoutes_SubrouterIsolation(t *testing.T) {
 }
 
 func TestRoutes_HandlerExecution(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, os.Stdout)
 
 	// Create a mock that returns data
@@ -622,6 +636,7 @@ func newTestRouter(
 }
 
 func TestNewIAMRouter_RequiresEveryGuard(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, os.Stdout)
 	writer := &mockHttpWriter{}
 	calls := []string{}
@@ -670,6 +685,7 @@ func TestNewIAMRouter_RequiresEveryGuard(t *testing.T) {
 // whole subtree — the regression this issue exists to prevent is a route
 // that quietly bypasses it.
 func TestRegisterRoutes_GuardsEveryRoute(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, os.Stdout)
 	calls := []string{}
 	iamRouter, err := NewIAMRouter(logger, &mockIAMClient{}, &mockPEPClient{},
@@ -723,6 +739,7 @@ func TestRegisterRoutes_GuardsEveryRoute(t *testing.T) {
 // on the wire gets. It is the regression test for #159: before it, every
 // route below answered 200 with no credential at all.
 func TestRegisterRoutes_RealGuardsDenyEndToEnd(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, os.Stdout)
 	writer := response.NewResponseWriter(logger, nil)
 	guard, err := iammw.NewSessionGuard(logger, writer)
@@ -820,6 +837,7 @@ func TestRegisterRoutes_RealGuardsDenyEndToEnd(t *testing.T) {
 // RequireSystemTenant (the tenant records themselves, which the control
 // plane drives across tenants).
 func TestRegisterRoutes_EveryTenantScopedRouteIsGuarded(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, os.Stdout)
 	calls := []string{}
 	iamRouter, err := NewIAMRouter(logger, &mockIAMClient{}, &mockPEPClient{},
