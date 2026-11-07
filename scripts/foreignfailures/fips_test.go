@@ -171,6 +171,17 @@ func TestTheFIPSJobPassesOnlyAfterGreenReruns(t *testing.T) {
 	assert.Empty(t, stderr.String())
 }
 
+func TestAFIPSRerunWhoseOutputCannotBeWrittenGates(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "fips.log")
+	require.NoError(t, os.WriteFile(logPath, []byte(readFixture(t, "fips-panics.log")), 0o600))
+	var stderr bytes.Buffer
+	code := runIn(fipsEnv(newFakeGo()), []string{"-job", "fips", "-baseline", filepath.Join("..", "..", ".github", "foreign-failures-fips.tsv"),
+		"-tags", "fips codec_cbor", logPath}, failingWriter{}, &stderr)
+	assert.Equal(t, exitOutput, code)
+	assert.Contains(t, stderr.String(), "foreignfailures: writing output: write refused")
+	assert.Contains(t, stderr.String(), "the FIPS unit tests failed outside the FIPS foreign-failure baseline")
+}
+
 func TestTheSamePanicInAnUnlistedTestGates(t *testing.T) {
 	text := strings.ReplaceAll(readFixture(t, "fips-panics.log"), vpnPanic, "TestXKMSTPM_Unlisted")
 	v, _ := decideFIPSText(t, text)

@@ -69,6 +69,12 @@ type ISOBuildConfig struct {
 	// Binary path (auto-detected via os.Executable() - binary copies itself)
 	PlatformdBinary string `yaml:"platformd-binary" json:"platformd_binary"`
 
+	// platformctl CLI binaries bundled on the media. Each is installed only
+	// when named here; a named binary that is missing fails the build. They
+	// are never inferred from PlatformdBinary (#351).
+	PlatformctlBinary       string `yaml:"platformctl-binary" json:"platformctl_binary"`
+	PlatformctlStaticBinary string `yaml:"platformctl-static-binary" json:"platformctl_static_binary"`
+
 	// Platform configuration file (platformd.yaml for TPM provisioning)
 	PlatformConfigFile string `yaml:"platform-config-file" json:"platform_config_file"`
 
@@ -510,6 +516,25 @@ func (c *ISOBuildConfig) ResolveBinaries() error {
 	}
 
 	return nil
+}
+
+// UseBinariesDir names platformd and platformctl in dir, a `make build` or
+// `make build-arm64` output. The media's platformctl-static is the
+// platformctl-static in dir when there is one (build-arm64 writes it, and
+// build-no-web and build-desktop link platformctl with CGO, so only a
+// supplied static copy serves Alpine there); otherwise it is that
+// platformctl, which `make build` links statically (#1152). The customizer
+// rejects a dynamically linked platformctl-static (DynamicBinaryError).
+// It is the caller's explicit choice: pkg/iso never infers one binary's
+// path from another's (#351).
+func (c *ISOBuildConfig) UseBinariesDir(dir string) {
+	c.PlatformdBinary = filepath.Join(dir, "platformd")
+	c.PlatformctlBinary = filepath.Join(dir, "platformctl")
+	c.PlatformctlStaticBinary = c.PlatformctlBinary
+	static := filepath.Join(dir, "platformctl-static")
+	if info, err := os.Stat(static); err == nil && info.Mode().IsRegular() {
+		c.PlatformctlStaticBinary = static
+	}
 }
 
 // GetAlpineISOURL returns the download URL
