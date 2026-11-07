@@ -19,7 +19,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -45,7 +44,7 @@ type mockVTPMDevice struct {
 
 func newMockVTPMDevice() *mockVTPMDevice {
 	// Generate RSA key pair for AIK
-	privKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	privKey, _ := testRSAKey()
 	aikPubKeyBytes, _ := x509.MarshalPKIXPublicKey(&privKey.PublicKey)
 
 	// Generate EK certificate
