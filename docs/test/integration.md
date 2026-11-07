@@ -369,7 +369,18 @@ adapter (`cli_exec_test.go`), which need no daemon.
 the process-group command runner) and `grub_detector.go` carry no build tag,
 and their tests (`runner_test.go`, `grub_detector_test.go`) run in `make test`
 through `TEST_UNIT_PKGS`; `make integration-test-iso` runs the
-integration-tagged `multiprotocol_test.go` against `platformd`. The `device`
+integration-tagged `multiprotocol_test.go` against `platformd`. Its
+`iso customize` takes `platform-initrd` and `gatewayd` from beside `/tmp/platformctl`, so
+the runner's `prepare_iso_customize` builds `platform-initrd`, `gatewayd` and
+`platformctl-static` into `/tmp`. `/tmp/platformctl` is a CGO build, and
+customize refuses a dynamically linked installer (`DynamicBinaryError`), so
+`/tmp/platformctl-static` is the same CLI built `CGO_ENABLED=0` with the tags
+`make build` adds to the derived set (docs/installer/cli.md §4). The runner
+exports its path as `PLATFORMCTL_STATIC_PATH`, and the suite passes it to
+customize as `--platformctl-static-binary`: customize names the running
+`platformctl` as the installer and never looks beside it for the static one.
+The suite fails, rather than fall back to the CGO build, when
+`PLATFORMCTL_STATIC_PATH` is unset or names no file. The `device`
 suite keeps only its daemon-backed tests: the adapter decode tests that
 exercised the harness and no server were removed, and the wrong-ALPN handshake
 check is `TestServerRefusesAWrongALPNAtTheHandshake` in `pkg/api/quic`.
@@ -446,7 +457,8 @@ IT_WARM_CACHE=0`), which a daemon that already holds it reuses.
 That build runs
 `make docker-build-it BUILDX_CLIENT_LOAD=1 IT_WARM_CACHE=0`: `IT_WARM_CACHE=0`
 builds the `integration` stage without the warm build cache, whose ten-minute
-warm took run 70938's fallback past the leg's 60-minute timeout; the suites
+warm took run 70938's fallback past the leg's then 60-minute timeout (75 since #1299, for the artifact
+download and load); the suites
 compile from an empty `/gocache` in less. `BUILDX_CLIENT_LOAD=1` streams the image to the
 step's `docker load` in place of `--load`: `--load` imports into the daemon of
 the builder's node, which need not be the daemon the leg uses (run 68044, leg

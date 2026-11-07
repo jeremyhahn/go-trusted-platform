@@ -26,6 +26,38 @@ import (
 // media staging's architecture check.
 func WriteELF(t *testing.T, path string, machine elf.Machine) {
 	t.Helper()
+	if err := os.WriteFile(path, elfHeader(machine), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// WriteDynamicELF writes a minimal 64-bit ELF for machine that names a
+// program interpreter (PT_INTERP), as a CGO-enabled, dynamically linked
+// executable does.
+func WriteDynamicELF(t *testing.T, path string, machine elf.Machine) {
+	t.Helper()
+	const phoff, phentsize = 64, 56
+	interp := []byte("/lib64/ld-linux-x86-64.so.2\x00")
+	file := elfHeader(machine)
+	binary.LittleEndian.PutUint64(file[32:], phoff)
+	binary.LittleEndian.PutUint16(file[56:], 1)
+	phdr := make([]byte, phentsize)
+	binary.LittleEndian.PutUint32(phdr[0:], uint32(elf.PT_INTERP))
+	binary.LittleEndian.PutUint32(phdr[4:], uint32(elf.PF_R))
+	binary.LittleEndian.PutUint64(phdr[8:], phoff+phentsize)
+	binary.LittleEndian.PutUint64(phdr[32:], uint64(len(interp)))
+	binary.LittleEndian.PutUint64(phdr[40:], uint64(len(interp)))
+	binary.LittleEndian.PutUint64(phdr[48:], 1)
+	file = append(file, phdr...)
+	file = append(file, interp...)
+	if err := os.WriteFile(path, file, 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// elfHeader is a 64-bit little-endian ELF executable header for machine,
+// with no program or section headers.
+func elfHeader(machine elf.Machine) []byte {
 	hdr := make([]byte, 64)
 	copy(hdr, []byte{0x7f, 'E', 'L', 'F', 2, 1, 1, 0})
 	binary.LittleEndian.PutUint16(hdr[16:], uint16(elf.ET_EXEC))
@@ -34,9 +66,7 @@ func WriteELF(t *testing.T, path string, machine elf.Machine) {
 	binary.LittleEndian.PutUint16(hdr[52:], 64)
 	binary.LittleEndian.PutUint16(hdr[54:], 56)
 	binary.LittleEndian.PutUint16(hdr[58:], 64)
-	if err := os.WriteFile(path, hdr, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	return hdr
 }
 
 // Binaries lays out the platform binaries the media staging looks for, built
