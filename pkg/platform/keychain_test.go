@@ -113,23 +113,6 @@ func TestXKMSConfig_SetCN_Overwrite(t *testing.T) {
 // =============================================================================
 
 func TestTPMSigner_Public_ReturnsSetPublicKey(t *testing.T) {
-	// Generate a test RSA key
-	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	require.NoError(t, err)
-
-	signer := &TPMSigner{
-		publicKey: &rsaKey.PublicKey,
-	}
-
-	assert.Equal(t, &rsaKey.PublicKey, signer.Public())
-}
-
-func TestTPMSigner_Public_ReturnsNilWhenNotSet(t *testing.T) {
-	signer := &TPMSigner{}
-	assert.Nil(t, signer.Public())
-}
-
-func TestTPMSigner_Public_ECDSAKey(t *testing.T) {
 	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 
@@ -137,17 +120,22 @@ func TestTPMSigner_Public_ECDSAKey(t *testing.T) {
 		publicKey: &ecKey.PublicKey,
 	}
 
-	pubKey := signer.Public()
-	assert.NotNil(t, pubKey)
-	_, ok := pubKey.(*ecdsa.PublicKey)
-	assert.True(t, ok)
+	assert.Equal(t, &ecKey.PublicKey, signer.Public())
+}
+
+func TestTPMSigner_Public_ReturnsNilWhenNotSet(t *testing.T) {
+	signer := &TPMSigner{}
+	assert.Nil(t, signer.Public())
 }
 
 func TestNewTPMSigner_WithTPMAttributes(t *testing.T) {
 	mockTPM := &mockTPM{
 		parsePublicKeyFunc: func(publicBytes []byte) (crypto.PublicKey, error) {
-			rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-			return &rsaKey.PublicKey, nil
+			ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			if err != nil {
+				return nil, err
+			}
+			return &ecKey.PublicKey, nil
 		},
 	}
 
@@ -993,7 +981,9 @@ func TestXKMS_GenerateKey_InvalidBackend(t *testing.T) {
 	assert.Equal(t, xkmssdk.ErrInvalidKeyStore, err)
 }
 
-func TestXKMS_GenerateKey_SoftwareBackend(t *testing.T) {
+// TestXKMS_SoftwareBackend_KeyLifecycle drives one generated RSA key through
+// get, signer, rotate and delete, so the slow key generation runs once.
+func TestXKMS_SoftwareBackend_KeyLifecycle(t *testing.T) {
 	memStorage := xkmssdk.NewStorageMemory()
 	keyStorage := xkmssdk.NewStorageMemory()
 
@@ -1015,10 +1005,29 @@ func TestXKMS_GenerateKey_SoftwareBackend(t *testing.T) {
 			KeySize: 2048,
 		},
 	}
+	ctx := context.Background()
 
-	key, err := kc.GenerateKey(context.Background(), attrs)
+	key, err := kc.GenerateKey(ctx, attrs)
 	require.NoError(t, err)
 	assert.NotNil(t, key)
+
+	got, err := kc.GetKey(ctx, attrs)
+	require.NoError(t, err)
+	assert.NotNil(t, got)
+
+	signer, err := kc.Signer(ctx, attrs)
+	require.NoError(t, err)
+	assert.NotNil(t, signer)
+
+	err = kc.RotateKey(ctx, attrs)
+	require.NoError(t, err)
+
+	err = kc.DeleteKey(ctx, attrs)
+	require.NoError(t, err)
+
+	// Verify key is deleted - GetKey should return error
+	_, err = kc.GetKey(ctx, attrs)
+	assert.Error(t, err)
 }
 
 func TestXKMS_GetKey_InvalidBackend(t *testing.T) {
@@ -1187,108 +1196,6 @@ func TestXKMS_RotateKey_InvalidBackend(t *testing.T) {
 	assert.Equal(t, xkmssdk.ErrInvalidKeyStore, err)
 }
 
-func TestXKMS_GetKey_SoftwareBackend(t *testing.T) {
-	memStorage := xkmssdk.NewStorageMemory()
-	keyStorage := xkmssdk.NewStorageMemory()
-
-	cfg := &XKMSConfig{
-		CN:             "test-xkms",
-		SoftwareConfig: &xkmssdk.SoftwareBackendConfig{},
-	}
-
-	kc, err := NewXKMS(slog.Default(), cfg, nil, keyStorage, memStorage, nil, nil)
-	require.NoError(t, err)
-	defer kc.Close()
-
-	// First generate a key
-	attrs := &xkmssdk.KeyAttributes{
-		CN:           "test-get-key",
-		StoreType:    xkmssdk.StoreSoftware,
-		KeyAlgorithm: x509.RSA,
-		KeyType:      xkmssdk.KeyTypeSigning,
-		RSAAttributes: &xkmssdk.RSAAttributes{
-			KeySize: 2048,
-		},
-	}
-
-	_, err = kc.GenerateKey(context.Background(), attrs)
-	require.NoError(t, err)
-
-	// Then get the key
-	key, err := kc.GetKey(context.Background(), attrs)
-	require.NoError(t, err)
-	assert.NotNil(t, key)
-}
-
-func TestXKMS_DeleteKey_SoftwareBackend(t *testing.T) {
-	memStorage := xkmssdk.NewStorageMemory()
-	keyStorage := xkmssdk.NewStorageMemory()
-
-	cfg := &XKMSConfig{
-		CN:             "test-xkms",
-		SoftwareConfig: &xkmssdk.SoftwareBackendConfig{},
-	}
-
-	kc, err := NewXKMS(slog.Default(), cfg, nil, keyStorage, memStorage, nil, nil)
-	require.NoError(t, err)
-	defer kc.Close()
-
-	// First generate a key
-	attrs := &xkmssdk.KeyAttributes{
-		CN:           "test-delete-key",
-		StoreType:    xkmssdk.StoreSoftware,
-		KeyAlgorithm: x509.RSA,
-		KeyType:      xkmssdk.KeyTypeSigning,
-		RSAAttributes: &xkmssdk.RSAAttributes{
-			KeySize: 2048,
-		},
-	}
-
-	_, err = kc.GenerateKey(context.Background(), attrs)
-	require.NoError(t, err)
-
-	// Then delete the key
-	err = kc.DeleteKey(context.Background(), attrs)
-	require.NoError(t, err)
-
-	// Verify key is deleted - GetKey should return error
-	_, err = kc.GetKey(context.Background(), attrs)
-	assert.Error(t, err)
-}
-
-func TestXKMS_Signer_SoftwareBackend(t *testing.T) {
-	memStorage := xkmssdk.NewStorageMemory()
-	keyStorage := xkmssdk.NewStorageMemory()
-
-	cfg := &XKMSConfig{
-		CN:             "test-xkms",
-		SoftwareConfig: &xkmssdk.SoftwareBackendConfig{},
-	}
-
-	kc, err := NewXKMS(slog.Default(), cfg, nil, keyStorage, memStorage, nil, nil)
-	require.NoError(t, err)
-	defer kc.Close()
-
-	// First generate a key
-	attrs := &xkmssdk.KeyAttributes{
-		CN:           "test-signer-key",
-		StoreType:    xkmssdk.StoreSoftware,
-		KeyAlgorithm: x509.RSA,
-		KeyType:      xkmssdk.KeyTypeSigning,
-		RSAAttributes: &xkmssdk.RSAAttributes{
-			KeySize: 2048,
-		},
-	}
-
-	_, err = kc.GenerateKey(context.Background(), attrs)
-	require.NoError(t, err)
-
-	// Get signer for the key
-	signer, err := kc.Signer(context.Background(), attrs)
-	require.NoError(t, err)
-	assert.NotNil(t, signer)
-}
-
 func TestXKMS_Decrypter_SoftwareBackend(t *testing.T) {
 	memStorage := xkmssdk.NewStorageMemory()
 	keyStorage := xkmssdk.NewStorageMemory()
@@ -1320,38 +1227,6 @@ func TestXKMS_Decrypter_SoftwareBackend(t *testing.T) {
 	decrypter, err := kc.Decrypter(context.Background(), attrs)
 	require.NoError(t, err)
 	assert.NotNil(t, decrypter)
-}
-
-func TestXKMS_RotateKey_SoftwareBackend(t *testing.T) {
-	memStorage := xkmssdk.NewStorageMemory()
-	keyStorage := xkmssdk.NewStorageMemory()
-
-	cfg := &XKMSConfig{
-		CN:             "test-xkms",
-		SoftwareConfig: &xkmssdk.SoftwareBackendConfig{},
-	}
-
-	kc, err := NewXKMS(slog.Default(), cfg, nil, keyStorage, memStorage, nil, nil)
-	require.NoError(t, err)
-	defer kc.Close()
-
-	// First generate a key
-	attrs := &xkmssdk.KeyAttributes{
-		CN:           "test-rotate-key",
-		StoreType:    xkmssdk.StoreSoftware,
-		KeyAlgorithm: x509.RSA,
-		KeyType:      xkmssdk.KeyTypeSigning,
-		RSAAttributes: &xkmssdk.RSAAttributes{
-			KeySize: 2048,
-		},
-	}
-
-	_, err = kc.GenerateKey(context.Background(), attrs)
-	require.NoError(t, err)
-
-	// Rotate the key
-	err = kc.RotateKey(context.Background(), attrs)
-	require.NoError(t, err)
 }
 
 func TestXKMS_Close_WithCloseError(t *testing.T) {

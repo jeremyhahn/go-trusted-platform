@@ -149,6 +149,7 @@ func listReplyCases() []listReplyCase {
 // routes over REST through the real IAM router, and checks the SDK decodes
 // the items, the pagination, the total and the timestamp of the proto reply.
 func TestListRepliesOverSDKREST_RoundTrip(t *testing.T) {
+	t.Parallel()
 	for _, tc := range listReplyCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			var got listCall
@@ -174,6 +175,7 @@ func TestListRepliesOverSDKREST_RoundTrip(t *testing.T) {
 // TestListRepliesOverSDKREST_ServiceErrors checks a NotFound from the IAM
 // client reaches the SDK caller as codes.NotFound with no reply.
 func TestListRepliesOverSDKREST_ServiceErrors(t *testing.T) {
+	t.Parallel()
 	for _, tc := range listReplyCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			var got listCall
