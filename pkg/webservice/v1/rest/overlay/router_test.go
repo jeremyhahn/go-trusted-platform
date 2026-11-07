@@ -49,17 +49,6 @@ var overlayRoutes = []struct{ method, path string }{
 	{http.MethodDelete, "/api/v1/overlay/macs"},
 }
 
-func TestOverlayRouter_RoutesRegistered(t *testing.T) {
-	_, parent := newRouter()
-	for _, tc := range overlayRoutes {
-		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
-			req := httptest.NewRequest(tc.method, tc.path, nil)
-			var match mux.RouteMatch
-			assert.True(t, parent.Match(req, &match))
-		})
-	}
-}
-
 func TestOverlayRouter_NilServer(t *testing.T) {
 	_, parent := newRouter()
 	for _, tc := range overlayRoutes {

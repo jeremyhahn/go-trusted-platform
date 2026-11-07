@@ -210,7 +210,7 @@ func (e *Executor) installGatewaydService(platformConfig []byte) error {
 	return installGatewaydServiceAt(platformConfig, gatewaydInstallPaths{
 		configDir:  gatewaydConfigDir,
 		initScript: gatewaydInitScript,
-	}, fileExists, execRunner, e.logInfo, e.logWarn)
+	}, fileExists, hostCommand, e.logInfo, e.logWarn)
 }
 
 // gatewaydInstallPaths are the two locations the install writes.

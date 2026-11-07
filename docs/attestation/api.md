@@ -25,7 +25,8 @@ two share a column below. `ServiceRegistry.Attestation`
 gRPC: `AttestationService` in `pkg/api/grpc/proto/attestation.proto` — sixteen RPCs.
 REST: `pkg/webservice/v1/rest/attestation/` (`server_router.go`,
 `events_router.go`, `reports_router.go`, `clock_router.go`, `verdicts_router.go`
-— see §3).
+— see §3). The daemon REST listener serves the manifest, quote-verify,
+report and callers routes behind its scope guard ([`docs/daemon/api.md`](../daemon/api.md) §1, #997).
 QUIC: `pkg/api/quic/attestation_handlers.go` plus the base range in
 `sdk/go/wire/quicwire/protocol.go`, routed by the daemon for opcodes `0x70`–`0x77`
 and `0x7C`–`0x7F` (`pkg/api/daemon/quic_attestation.go`). The manifest and
