@@ -20,12 +20,18 @@ import (
 // SetProxyService wires the shared proxy configuration service into the
 // daemon's REST API. The svc argument is satisfied by the shared
 // ProxyGRPCService so REST, gRPC, QUIC and MCP all serve the same store
-// with identical error mapping.
-func (s *RESTServer) SetProxyService(svc rest.ProxyServiceBackend) {
+// with identical error mapping. Each route runs behind guard and needs the
+// scope the gRPC catalog gives its rpc; a nil guard is refused with
+// ErrProxyRESTUnavailable.
+func (s *RESTServer) SetProxyService(svc rest.ProxyServiceBackend, guard *rest.ScopeGuard) error {
+	if guard == nil {
+		return ErrProxyRESTUnavailable{Reason: "no REST scope guard"}
+	}
 	if svc == nil {
-		return
+		return nil
 	}
 	handlers := rest.NewProxyHandlers(svc, s.logger)
-	handlers.RegisterRoutes(s.router)
+	handlers.RegisterRoutes(s.catalogGuardedRoot(guard))
 	s.logger.Info("Proxy REST routes registered")
+	return nil
 }

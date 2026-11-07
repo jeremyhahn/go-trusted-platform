@@ -742,9 +742,15 @@ build_gatewayd() {
 # beside platformd and fails without (pkg/iso/customize.go StageMedia):
 # platform-initrd, which dracut calls at boot to unlock the root, and gatewayd,
 # which the gateway-role single-node template the iso suite bakes in needs
-# (pkg/iso/gatewayd.go). platform-initrd comes from its own make target, which
-# owns its build tags; GOFLAGS=-buildvcs=false for the reason build_binaries
-# gives.
+# (pkg/iso/gatewayd.go), and platformctl-static, the media's installer.
+# /tmp/platformctl is a CGO build, and customize refuses a dynamically linked
+# installer (pkg/iso DynamicBinaryError), so platformctl-static is the same
+# CLI built CGO_ENABLED=0 with the tags `make build` adds to the derived set.
+# The suite hands it to customize as --platformctl-static-binary from
+# PLATFORMCTL_STATIC_PATH: with platformctl named on the command line,
+# customize never looks beside it.
+# platform-initrd comes from its own make target, which owns its build tags;
+# GOFLAGS=-buildvcs=false for the reason build_binaries gives.
 prepare_iso_customize() {
     echo "=== Preparing iso customize binaries ==="
     if ! GOFLAGS="${GOFLAGS:+${GOFLAGS} }-buildvcs=false" make -s -C "${PLATFORM_BUILD_DIR}" \
@@ -753,6 +759,15 @@ prepare_iso_customize() {
         exit 1
     fi
     echo "platform-initrd built: /tmp/platform-initrd"
+    echo "Building platformctl-static..."
+    if ! CGO_ENABLED=0 go build -buildvcs=false -tags "osusergo netgo ${BUILD_TAGS}" \
+        -ldflags "${LDFLAGS}" \
+        -o /tmp/platformctl-static ./cmd/platformctl/; then
+        echo "FATAL: platformctl-static build failed"
+        exit 1
+    fi
+    export PLATFORMCTL_STATIC_PATH=/tmp/platformctl-static
+    echo "platformctl-static built: ${PLATFORMCTL_STATIC_PATH}"
     build_gatewayd
 }
 
@@ -1433,7 +1448,7 @@ else
 fi
 
 # The iso suite's customize step stages platform-initrd and gatewayd from
-# beside /tmp/platformd.
+# beside /tmp/platformd, and platformctl-static from PLATFORMCTL_STATIC_PATH.
 if [ "$RUN_TARGET" = "iso" ] || { [ "$RUN_TARGET" = "all" ] && target_selected iso; }; then
     prepare_iso_customize
 fi
