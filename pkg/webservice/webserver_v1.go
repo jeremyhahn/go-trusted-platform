@@ -70,6 +70,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restca "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/ca"
 
+	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 
 	v1 "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1"
@@ -181,6 +182,10 @@ type WebServerV1 struct {
 	// route rebuild on the TLS side cannot leak into it, and Shutdown
 	// drains both (#535).
 	plainServer *http.Server
+	// h3 is the HTTP/3 listener startHTTPS opens; stored atomically
+	// because startHTTPS runs on its own goroutine, and Shutdown closes
+	// and joins it.
+	h3 atomic.Pointer[h3Listener]
 	// surface and limits are resolved once from config (#571); limiter is
 	// the per-source token bucket both listeners share, nil when none.
 	surface             string
@@ -192,6 +197,34 @@ type WebServerV1 struct {
 	router              *mux.Router
 	routerMutex         *sync.Mutex
 	keyAttributes       *xkmssdk.KeyAttributes
+}
+
+// h3Listener is the HTTP/3 server, the UDP socket it serves, and done,
+// closed once its Serve goroutine has returned.
+type h3Listener struct {
+	server *http3.Server
+	conn   net.PacketConn
+	done   chan struct{}
+}
+
+// ErrHTTP3Shutdown is a step of the HTTP/3 shutdown that failed: drain
+// (the graceful Shutdown did not finish within the shutdown context), close
+// (the Close fallback failed) or socket (the UDP socket did not close).
+type ErrHTTP3Shutdown struct {
+	Step  string
+	Cause error
+}
+
+func (e *ErrHTTP3Shutdown) Error() string {
+	return fmt.Sprintf("webserver: HTTP/3 shutdown %s: %v", e.Step, e.Cause)
+}
+
+func (e *ErrHTTP3Shutdown) Unwrap() error { return e.Cause }
+
+// isServerClosed reports whether err is the clean exit an HTTP/3 Serve
+// returns after Close or Shutdown.
+func isServerClosed(err error) bool {
+	return errors.Is(err, http.ErrServerClosed) || errors.Is(err, quic.ErrServerClosed)
 }
 
 func NewWebServerV1(
@@ -264,11 +297,41 @@ func (server *WebServerV1) Shutdown() {
 	if err := server.httpServer.Shutdown(ctx); err != nil {
 		server.logger.Warn("webserver: TLS listener did not drain", slog.String("error", err.Error()))
 	}
+	if err := server.shutdownHTTP3(ctx); err != nil {
+		server.logger.Warn("webserver: HTTP/3 listener did not drain", slog.String("error", err.Error()))
+	}
 	if server.limiter != nil {
 		if err := server.limiter.Close(); err != nil {
 			server.logger.Warn("webserver: rate limiter did not close", slog.String("error", err.Error()))
 		}
 	}
+}
+
+// shutdownHTTP3 drains the HTTP/3 server startHTTPS opened within ctx,
+// closes it when the drain fails or ctx expires, waits for its Serve
+// goroutine to return, then releases the UDP socket. It does nothing when
+// startHTTPS never ran.
+func (server *WebServerV1) shutdownHTTP3(ctx context.Context) error {
+	h3 := server.h3.Load()
+	if h3 == nil {
+		return nil
+	}
+	var errs []error
+	// Shutdown sends GOAWAY and waits, within ctx, for the in-flight
+	// requests to complete; Close is the fallback that aborts them.
+	if err := h3.server.Shutdown(ctx); err != nil {
+		errs = append(errs, &ErrHTTP3Shutdown{Step: "drain", Cause: err})
+		if err := h3.server.Close(); err != nil {
+			errs = append(errs, &ErrHTTP3Shutdown{Step: "close", Cause: err})
+		}
+	}
+	// Shutdown and Close both close the listener Serve accepts from, so
+	// Serve returns and closes done.
+	<-h3.done
+	if err := h3.conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+		errs = append(errs, &ErrHTTP3Shutdown{Step: "socket", Cause: err})
+	}
+	return errors.Join(errs...)
 }
 
 // Starts the web server
@@ -966,12 +1029,16 @@ func (server *WebServerV1) startHTTPS() {
 		server.logger.Fatalf("Failed to start HTTP/3 server: %v", err)
 	}
 
+	h3 := &h3Listener{server: h3Server, conn: udpConn, done: make(chan struct{})}
+	server.h3.Store(h3)
+
 	go func() {
+		defer close(h3.done)
 		server.logger.Info(
 			"Listening for incoming HTTP/3 connections",
-			slog.String("udp", sTlsAddr))
+			slog.String("udp", udpConn.LocalAddr().String()))
 
-		if err := h3Server.Serve(udpConn); err != nil && err != http.ErrServerClosed {
+		if err := h3Server.Serve(udpConn); err != nil && !isServerClosed(err) {
 			server.logger.Fatalf("HTTP/3 server error: %v", err)
 		}
 	}()
