@@ -181,6 +181,11 @@ env:
   # release.yml set the same).
   GOWORK: "off"
   GOFLAGS: "-buildvcs=false"
+  # The jeremyhahn/* modules resolve direct from GitHub, never through
+  # proxy.golang.org or sum.golang.org: the history rewrite moved published
+  # tags, and the public proxy and checksum database keep the old zips
+  # and hashes for good, so go.sum (the rewritten bits) cannot verify there.
+  GOPRIVATE: "github.com/jeremyhahn/*"
   # The full-tier selection (v1.23): every event but pull_request, and a PR
   # labelled ci:full. Steps and ci-gate read it; a job-level `if:` cannot.
   CI_FULL_TIER: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full') }}
