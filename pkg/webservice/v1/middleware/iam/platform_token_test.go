@@ -144,6 +144,7 @@ func newTestPlatformMiddleware(t *testing.T, validator platformTokenValidator, a
 }
 
 func TestNewPlatformTokenMiddleware(t *testing.T) {
+	t.Parallel()
 	key := newBrokerKey(t)
 	validator := newRealValidator(t, key)
 
@@ -183,6 +184,7 @@ func TestNewPlatformTokenMiddleware(t *testing.T) {
 }
 
 func TestPlatformTokenMiddleware_Verify_BearerAllowed(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	key := newBrokerKey(t)
 	validator := newRealValidator(t, key)
@@ -230,6 +232,7 @@ func TestPlatformTokenMiddleware_Verify_BearerAllowed(t *testing.T) {
 }
 
 func TestPlatformTokenMiddleware_Verify_BearerRejectedWhenDPoPRequired(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	key := newBrokerKey(t)
 	validator := newRealValidator(t, key)
@@ -257,6 +260,7 @@ func TestPlatformTokenMiddleware_Verify_BearerRejectedWhenDPoPRequired(t *testin
 }
 
 func TestPlatformTokenMiddleware_Verify_DPoPBound(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	key := newBrokerKey(t)
 	validator := newRealValidator(t, key)
@@ -313,6 +317,7 @@ func TestPlatformTokenMiddleware_Verify_DPoPBound(t *testing.T) {
 }
 
 func TestPlatformTokenMiddleware_Verify_DPoPMismatchRejected(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	key := newBrokerKey(t)
 	validator := newRealValidator(t, key)
@@ -349,6 +354,7 @@ func TestPlatformTokenMiddleware_Verify_DPoPMismatchRejected(t *testing.T) {
 }
 
 func TestPlatformTokenMiddleware_Verify_RejectsBadToken(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	key := newBrokerKey(t)
 	otherKey := newBrokerKey(t)
@@ -413,6 +419,7 @@ func TestPlatformTokenMiddleware_Verify_RejectsBadToken(t *testing.T) {
 }
 
 func TestPlatformTokenMiddleware_Verify_MissingToken(t *testing.T) {
+	t.Parallel()
 	key := newBrokerKey(t)
 	validator := newRealValidator(t, key)
 	mw, writer := newTestPlatformMiddleware(t, validator, true)
@@ -431,6 +438,7 @@ func TestPlatformTokenMiddleware_Verify_MissingToken(t *testing.T) {
 }
 
 func TestPlatformTokenMiddleware_RequireScope(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	key := newBrokerKey(t)
 	validator := newRealValidator(t, key)
@@ -477,6 +485,7 @@ func TestPlatformTokenMiddleware_RequireScope(t *testing.T) {
 }
 
 func TestPlatformTokenMiddleware_RequireRole(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	key := newBrokerKey(t)
 	validator := newRealValidator(t, key)
@@ -519,6 +528,7 @@ func TestPlatformTokenMiddleware_RequireRole(t *testing.T) {
 }
 
 func TestPlatformTokenMiddleware_RequireScope_NoContext(t *testing.T) {
+	t.Parallel()
 	key := newBrokerKey(t)
 	validator := newRealValidator(t, key)
 	mw, writer := newTestPlatformMiddleware(t, validator, true)
@@ -538,6 +548,7 @@ func TestPlatformTokenMiddleware_RequireScope_NoContext(t *testing.T) {
 }
 
 func TestPlatformTokenMiddleware_RefreshTokenAlwaysFails(t *testing.T) {
+	t.Parallel()
 	key := newBrokerKey(t)
 	validator := newRealValidator(t, key)
 	mw, writer := newTestPlatformMiddleware(t, validator, true)
@@ -552,6 +563,7 @@ func TestPlatformTokenMiddleware_RefreshTokenAlwaysFails(t *testing.T) {
 }
 
 func TestRequestURL(t *testing.T) {
+	t.Parallel()
 	t.Run("tls request yields https htu", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "https://platform.test/api/v1/system?x=1", nil)
 		got := requestURL(req)
@@ -574,6 +586,7 @@ func TestRequestURL(t *testing.T) {
 }
 
 func TestNewPlatformTokenValidator(t *testing.T) {
+	t.Parallel()
 	t.Run("valid params with defaults", func(t *testing.T) {
 		// Offline mode needs no introspection URL: a minimal valid config builds.
 		v, err := NewPlatformTokenValidator(PlatformTokenValidatorParams{
@@ -644,6 +657,7 @@ func (f *fakeValidator) Validate(ctx context.Context, token, dpopProof, htm, htu
 }
 
 func TestPlatformTokenMiddleware_Verify_ValidatorErrorMapsTo401(t *testing.T) {
+	t.Parallel()
 	mw, writer := newTestPlatformMiddleware(t, &fakeValidator{err: errors.New("boom")}, true)
 
 	next := func(w http.ResponseWriter, r *http.Request) {
@@ -667,6 +681,7 @@ func TestPlatformTokenMiddleware_Verify_ValidatorErrorMapsTo401(t *testing.T) {
 // (a broker-issued, cnf.jkt-bound token validating at a downstream service) but
 // runs fully in-memory via httptest so it stays a fast unit test.
 func TestPlatformTokenMiddleware_RemoteJWKS(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	key := newBrokerKey(t)
 
