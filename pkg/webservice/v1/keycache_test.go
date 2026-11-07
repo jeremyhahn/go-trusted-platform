@@ -128,6 +128,11 @@ func TestKeyCache_Key(t *testing.T) {
 }
 
 func TestKeyCache_ThreadSafety(t *testing.T) {
+	// One RSA key, copied per goroutine: the cache stores pointers, so each
+	// copy is a distinct entry, without paying for a key generation per writer.
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+
 	t.Run("concurrent writes", func(t *testing.T) {
 		cache := newKeyCache()
 		var wg sync.WaitGroup
@@ -137,9 +142,8 @@ func TestKeyCache_ThreadSafety(t *testing.T) {
 			wg.Add(1)
 			go func(id int) {
 				defer wg.Done()
-				key, err := rsa.GenerateKey(rand.Reader, 2048)
-				require.NoError(t, err)
-				cache.put(string(rune('a'+id%26))+string(rune('0'+id/26)), &key.PublicKey)
+				pub := key.PublicKey
+				cache.put(string(rune('a'+id%26))+string(rune('0'+id/26)), &pub)
 			}(i)
 		}
 
@@ -151,8 +155,6 @@ func TestKeyCache_ThreadSafety(t *testing.T) {
 
 	t.Run("concurrent reads", func(t *testing.T) {
 		cache := newKeyCache()
-		key, err := rsa.GenerateKey(rand.Reader, 2048)
-		require.NoError(t, err)
 		cache.put("test-key", &key.PublicKey)
 
 		var wg sync.WaitGroup
@@ -188,9 +190,8 @@ func TestKeyCache_ThreadSafety(t *testing.T) {
 			wg.Add(1)
 			go func(id int) {
 				defer wg.Done()
-				key, err := rsa.GenerateKey(rand.Reader, 2048)
-				require.NoError(t, err)
-				cache.put(string(rune('w'+id%20)), &key.PublicKey)
+				pub := key.PublicKey
+				cache.put(string(rune('w'+id%20)), &pub)
 			}(i)
 		}
 
@@ -218,9 +219,8 @@ func TestKeyCache_ThreadSafety(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				key, err := rsa.GenerateKey(rand.Reader, 2048)
-				require.NoError(t, err)
-				cache.put("contested-key", &key.PublicKey)
+				pub := key.PublicKey
+				cache.put("contested-key", &pub)
 			}()
 		}
 
