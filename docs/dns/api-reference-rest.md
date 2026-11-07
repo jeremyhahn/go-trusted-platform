@@ -9,7 +9,7 @@
 | Base Path | `/api/v1/dns` |
 | Port | 8443 |
 | Content-Type | `application/json` |
-| Authorization | authenticated caller holding the `admin` role, on every route |
+| Authorization | webservice: authenticated caller holding the `admin` role, on every route; daemon REST listener: the `dns:read`, `dns:write` or `dns:delete` scope the gRPC catalog gives the rpc ([daemon api.md](../daemon/api.md)) |
 
 Every route serves the `DNSService` proto messages
 (`pkg/api/grpc/proto/platform_dns.proto`) in protojson, the shape gRPC and the
@@ -220,7 +220,7 @@ status and `error` set to the message.
 |--------|-------|
 | 400 | Malformed body, missing zone name, record type, record name, `fqdn` or `ip`, or an unsupported record type |
 | 401 | Not authenticated |
-| 403 | Caller lacks the `admin` role |
+| 403 | Caller lacks the `admin` role, or (daemon REST listener) is bound to a tenant other than the DNS backend's tenant (`platform_tenant_id`); the request never reaches the DNS service, and with no backend tenant configured only an untenanted caller is served |
 | 404 | Unknown zone or record |
 | 500 | Store, signing or registration failure |
 | 503 | No DNS backend: the daemon has no `dns:` section (code `SERVICE_NOT_CONFIGURED`) |

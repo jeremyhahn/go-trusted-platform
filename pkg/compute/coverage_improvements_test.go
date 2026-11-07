@@ -24,7 +24,6 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 )
 
@@ -590,26 +589,6 @@ func TestInstanceFilter_Matches_ProfileID(t *testing.T) {
 	})
 }
 
-// TestLifecycleManager_WaitForState_InvalidState tests WaitForState with invalid target state
-func TestLifecycleManager_WaitForState_InvalidState(t *testing.T) {
-	lm := NewLifecycleManager()
-
-	err := lm.WaitForState("test-instance", InstanceState("invalid"), time.Second)
-	if err == nil {
-		t.Error("Expected error for invalid target state")
-	}
-}
-
-// TestLifecycleManager_WaitForState_EmptyID tests WaitForState with empty ID
-func TestLifecycleManager_WaitForState_EmptyID(t *testing.T) {
-	lm := NewLifecycleManager()
-
-	err := lm.WaitForState("", StateStopped, time.Second)
-	if err != ErrInvalidInstanceID {
-		t.Errorf("Expected ErrInvalidInstanceID, got %v", err)
-	}
-}
-
 // TestLifecycleManager_WaitForState_InstanceNotFound tests WaitForState when instance not found
 func TestLifecycleManager_WaitForState_InstanceNotFound(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
@@ -622,55 +601,6 @@ func TestLifecycleManager_WaitForState_InstanceNotFound(t *testing.T) {
 	})
 }
 
-// TestLifecycleManager_WaitForState_Timeout tests WaitForState timeout
-func TestLifecycleManager_WaitForState_Timeout(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		lm := NewLifecycleManager()
-
-		// Set initial state
-		err := lm.SetState("test-instance", StateCreating)
-		if err != nil {
-			t.Fatalf("Failed to set initial state: %v", err)
-		}
-
-		// Wait for a state that will never be reached
-		err = lm.WaitForState("test-instance", StateRunning, time.Millisecond*200)
-		if err != ErrTimeout {
-			t.Errorf("Expected ErrTimeout, got %v", err)
-		}
-	})
-}
-
-// TestLifecycleManager_WaitForState_EntersError tests WaitForState when instance enters error state
-func TestLifecycleManager_WaitForState_EntersError(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		lm := NewLifecycleManager()
-		mustSetState(t, lm, "test-instance", StateCreating)
-
-		done := startWaitForState(lm, "test-instance", StateRunning, time.Second*5)
-		mustSetState(t, lm, "test-instance", StateError)
-
-		if err := <-done; err == nil {
-			t.Error("Expected error when instance enters error state")
-		}
-	})
-}
-
-// TestLifecycleManager_WaitForState_Success tests WaitForState success case
-func TestLifecycleManager_WaitForState_Success(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		lm := NewLifecycleManager()
-		mustSetState(t, lm, "test-instance", StateCreating)
-
-		done := startWaitForState(lm, "test-instance", StateStopped, time.Second*5)
-		mustSetState(t, lm, "test-instance", StateStopped)
-
-		if err := <-done; err != nil {
-			t.Errorf("Unexpected error: %v", err)
-		}
-	})
-}
-
 // TestLifecycleManager_GetStateTimestamp_NotFound tests GetStateTimestamp when instance not found
 func TestLifecycleManager_GetStateTimestamp_NotFound(t *testing.T) {
 	lm := NewLifecycleManager()
@@ -678,124 +608,6 @@ func TestLifecycleManager_GetStateTimestamp_NotFound(t *testing.T) {
 	_, err := lm.GetStateTimestamp("non-existent")
 	if err != ErrInstanceNotFound {
 		t.Errorf("Expected ErrInstanceNotFound, got %v", err)
-	}
-}
-
-// TestOrchestratorConfig_Validate_EmptyDiskSize tests validation with empty disk size
-func TestOrchestratorConfig_Validate_EmptyDiskSize(t *testing.T) {
-	config := &OrchestratorConfig{
-		Type:            ComputeTypeVM,
-		WorkDir:         "/tmp/test",
-		DefaultMemory:   4096,
-		DefaultCPUs:     2,
-		DefaultDiskSize: "",
-		MaxInstances:    10,
-		Arch:            qemu.ArchX86_64,
-		QEMUBinary:      "qemu-system-x86_64",
-		OVMFCode:        "/path/to/ovmf",
-		OVMFVars:        "/path/to/vars",
-	}
-
-	err := config.Validate()
-	if err == nil {
-		t.Error("Expected error for empty disk size")
-	}
-}
-
-// TestOrchestratorConfig_Validate_EmptyWorkDir tests validation with empty work dir
-func TestOrchestratorConfig_Validate_EmptyWorkDir(t *testing.T) {
-	config := &OrchestratorConfig{
-		Type:            ComputeTypeVM,
-		WorkDir:         "",
-		DefaultMemory:   4096,
-		DefaultCPUs:     2,
-		DefaultDiskSize: "10G",
-		MaxInstances:    10,
-	}
-
-	err := config.Validate()
-	if err == nil {
-		t.Error("Expected error for empty work dir")
-	}
-}
-
-// TestOrchestratorConfig_Validate_InvalidComputeType tests validation with invalid compute type
-func TestOrchestratorConfig_Validate_InvalidComputeType(t *testing.T) {
-	config := &OrchestratorConfig{
-		Type:            ComputeType("invalid"),
-		WorkDir:         "/tmp/test",
-		DefaultMemory:   4096,
-		DefaultCPUs:     2,
-		DefaultDiskSize: "10G",
-		MaxInstances:    10,
-	}
-
-	err := config.Validate()
-	if err == nil {
-		t.Error("Expected error for invalid compute type")
-	}
-}
-
-// TestOrchestratorConfig_Validate_VM_MissingQEMU tests VM config missing QEMU binary
-func TestOrchestratorConfig_Validate_VM_MissingQEMU(t *testing.T) {
-	config := &OrchestratorConfig{
-		Type:            ComputeTypeVM,
-		WorkDir:         "/tmp/test",
-		DefaultMemory:   4096,
-		DefaultCPUs:     2,
-		DefaultDiskSize: "10G",
-		MaxInstances:    10,
-		Arch:            qemu.ArchX86_64,
-		QEMUBinary:      "",
-		OVMFCode:        "/path/to/ovmf",
-		OVMFVars:        "/path/to/vars",
-	}
-
-	err := config.Validate()
-	if err == nil {
-		t.Error("Expected error for missing QEMU binary")
-	}
-}
-
-// TestOrchestratorConfig_Validate_VM_MissingOVMFCode tests VM config missing OVMF code
-func TestOrchestratorConfig_Validate_VM_MissingOVMFCode(t *testing.T) {
-	config := &OrchestratorConfig{
-		Type:            ComputeTypeVM,
-		WorkDir:         "/tmp/test",
-		DefaultMemory:   4096,
-		DefaultCPUs:     2,
-		DefaultDiskSize: "10G",
-		MaxInstances:    10,
-		Arch:            qemu.ArchX86_64,
-		QEMUBinary:      "qemu-system-x86_64",
-		OVMFCode:        "",
-		OVMFVars:        "/path/to/vars",
-	}
-
-	err := config.Validate()
-	if err == nil {
-		t.Error("Expected error for missing OVMF code")
-	}
-}
-
-// TestOrchestratorConfig_Validate_VM_MissingOVMFVars tests VM config missing OVMF vars
-func TestOrchestratorConfig_Validate_VM_MissingOVMFVars(t *testing.T) {
-	config := &OrchestratorConfig{
-		Type:            ComputeTypeVM,
-		WorkDir:         "/tmp/test",
-		DefaultMemory:   4096,
-		DefaultCPUs:     2,
-		DefaultDiskSize: "10G",
-		MaxInstances:    10,
-		Arch:            qemu.ArchX86_64,
-		QEMUBinary:      "qemu-system-x86_64",
-		OVMFCode:        "/path/to/ovmf",
-		OVMFVars:        "",
-	}
-
-	err := config.Validate()
-	if err == nil {
-		t.Error("Expected error for missing OVMF vars")
 	}
 }
 

@@ -23,6 +23,7 @@ import (
 	"github.com/fatih/color"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	pkgiso "github.com/jeremyhahn/go-trusted-platform/pkg/iso"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
@@ -116,6 +117,19 @@ func dirExists(path string) bool {
 // running platformctl. platformd and platformctl are separate binaries built
 // from separate cmd/ directories and shipped together.
 func siblingPlatformdBinary() (string, error) {
+	selfPath, err := selfBinary()
+	if err != nil {
+		return "", err
+	}
+	platformdPath := filepath.Join(filepath.Dir(selfPath), "platformd")
+	if _, err := os.Stat(platformdPath); err != nil {
+		return "", &MessageError{Msg: fmt.Sprintf("platformd binary not found at %s (build with 'make build')", platformdPath)}
+	}
+	return platformdPath, nil
+}
+
+// selfBinary is the resolved path of the running platformctl.
+func selfBinary() (string, error) {
 	selfPath, err := os.Executable()
 	if err != nil {
 		return "", &WrappedError{Msg: "failed to get executable path", Err: err}
@@ -124,9 +138,27 @@ func siblingPlatformdBinary() (string, error) {
 	if err != nil {
 		return "", &WrappedError{Msg: "failed to resolve executable path", Err: err}
 	}
-	platformdPath := filepath.Join(filepath.Dir(selfPath), "platformd")
-	if _, err := os.Stat(platformdPath); err != nil {
-		return "", &MessageError{Msg: fmt.Sprintf("platformd binary not found at %s (build with 'make build')", platformdPath)}
+	return selfPath, nil
+}
+
+// namePlatformctlBinaries names the platformctl binaries the media carries
+// (#351). platformctl, the installer's entry point, defaults to this running
+// platformctl; platformctl-static is installed only when named. pkg/iso never
+// infers either from platformd's path.
+func namePlatformctlBinaries(config *pkgiso.ISOBuildConfig, platformctl, platformctlStatic string) error {
+	if platformctl != "" {
+		config.PlatformctlBinary = platformctl
 	}
-	return platformdPath, nil
+	if platformctlStatic != "" {
+		config.PlatformctlStaticBinary = platformctlStatic
+	}
+	if config.PlatformctlBinary != "" {
+		return nil
+	}
+	self, err := selfBinary()
+	if err != nil {
+		return err
+	}
+	config.PlatformctlBinary = self
+	return nil
 }

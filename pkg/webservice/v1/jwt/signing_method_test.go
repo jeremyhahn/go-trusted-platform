@@ -33,6 +33,7 @@ const (
 )
 
 func TestSigningMethodRS(t *testing.T) {
+	t.Parallel()
 
 	ks := createXKMS()
 	defer ks.Close()
@@ -104,6 +105,7 @@ func TestSigningMethodRS(t *testing.T) {
 }
 
 func TestSigningMethodPS(t *testing.T) {
+	t.Parallel()
 
 	ks := createXKMS()
 	defer ks.Close()
@@ -179,6 +181,7 @@ func TestSigningMethodPS(t *testing.T) {
 }
 
 func TestSigningMethodES(t *testing.T) {
+	t.Parallel()
 
 	ks := createXKMS()
 	defer ks.Close()
@@ -260,6 +263,7 @@ func TestSigningMethodES(t *testing.T) {
 }
 
 func TestSigningMethodES_Ed25519(t *testing.T) {
+	t.Parallel()
 
 	ks := createXKMS()
 	defer ks.Close()

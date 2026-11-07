@@ -256,7 +256,7 @@ func TestClient_Handshake_WrongHelloType(t *testing.T) {
 	server.mu.Unlock()
 
 	socketDir := filepath.Dir(socketPath)
-	client, err := NewClient("test-bridge", WithSocketDir(socketDir), WithTimeout(2*time.Second))
+	client, err := NewClient("test-bridge", WithSocketDir(socketDir), WithTimeout(noReplyTimeout))
 	if err != nil {
 		t.Fatalf("failed to create client: %v", err)
 	}
@@ -297,12 +297,16 @@ func TestClient_Handshake_WrongFeaturesReplyType(t *testing.T) {
 }
 
 // TestClient_Barrier_ErrorPath tests barrier error handling
+// noReplyTimeout is the client timeout for tests whose server never sends the
+// reply: the test waits it out, so it is kept short.
+const noReplyTimeout = 250 * time.Millisecond
+
 func TestClient_Barrier_ErrorPath(t *testing.T) {
 	server, socketPath := newMockOFServer(t)
 	defer server.close()
 
 	socketDir := filepath.Dir(socketPath)
-	client, err := NewClient("test-bridge", WithSocketDir(socketDir), WithTimeout(2*time.Second))
+	client, err := NewClient("test-bridge", WithSocketDir(socketDir), WithTimeout(noReplyTimeout))
 	if err != nil {
 		t.Fatalf("failed to create client: %v", err)
 	}

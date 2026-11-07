@@ -122,7 +122,7 @@ type Config struct {
 	// directory.
 	Build *diskimage.BuildConfig
 	// ARM64BinariesDir and X86BinariesDir hold each architecture's
-	// platformd, platformctl, platformctl-static, platform-initrd and
+	// platformd, platformctl, platform-initrd and
 	// gatewayd.
 	ARM64BinariesDir string
 	X86BinariesDir   string
@@ -434,7 +434,7 @@ func (c *Config) buildSet(ctx context.Context, set Set, work string) (*stagedSet
 func (c *Config) stageMedia(ctx context.Context, set Set, isoBuild *iso.ISOBuildConfig) (*setMedia, error) {
 	if set.Target == "" {
 		isoBuild.Architecture = alpineArch(set.Architecture)
-		isoBuild.PlatformdBinary = filepath.Join(c.binariesDir(set), "platformd")
+		isoBuild.UseBinariesDir(c.binariesDir(set))
 		logger := c.Build.Logger
 		if logger == nil {
 			logger = logging.DefaultLogger()
