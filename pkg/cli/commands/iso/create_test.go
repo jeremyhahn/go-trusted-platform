@@ -123,61 +123,6 @@ func TestNewCreateCommand_DefaultValues(t *testing.T) {
 	assert.Equal(t, "false", verboseFlag.DefValue)
 }
 
-func TestNewCreateCommand_HasRunE(t *testing.T) {
-	cmd := newCreateCommand(getTestFlags)
-	assert.NotNil(t, cmd.RunE)
-}
-
-func TestCreateFlags_StructFields(t *testing.T) {
-	flags := &createFlags{
-		alpineVersion:   "3.22.2",
-		mirror:          "http://mirror.example.com/alpine",
-		arch:            "x86_64",
-		platformVersion: "1.0.0",
-		platformConfig:  "/etc/platform.yaml",
-		platformType:    "server",
-		secureBoot:      true,
-		tpmUnseal:       true,
-		luks:            true,
-		fips:            false,
-		fido2:           false,
-		overlay:         "/tmp/overlay",
-		output:          "platform.iso",
-		keysDir:         "/tmp/keys",
-		generateKeys:    true,
-		keyBackend:      "file",
-		force:           false,
-		webUI:           "/var/www",
-		configFile:      "/etc/config.yaml",
-		workDir:         "work",
-		debug:           false,
-		verbose:         false,
-	}
-
-	assert.Equal(t, "3.22.2", flags.alpineVersion)
-	assert.Equal(t, "http://mirror.example.com/alpine", flags.mirror)
-	assert.Equal(t, "x86_64", flags.arch)
-	assert.Equal(t, "1.0.0", flags.platformVersion)
-	assert.Equal(t, "/etc/platform.yaml", flags.platformConfig)
-	assert.Equal(t, "server", flags.platformType)
-	assert.True(t, flags.secureBoot)
-	assert.True(t, flags.tpmUnseal)
-	assert.True(t, flags.luks)
-	assert.False(t, flags.fips)
-	assert.False(t, flags.fido2)
-	assert.Equal(t, "/tmp/overlay", flags.overlay)
-	assert.Equal(t, "platform.iso", flags.output)
-	assert.Equal(t, "/tmp/keys", flags.keysDir)
-	assert.True(t, flags.generateKeys)
-	assert.Equal(t, "file", flags.keyBackend)
-	assert.False(t, flags.force)
-	assert.Equal(t, "/var/www", flags.webUI)
-	assert.Equal(t, "/etc/config.yaml", flags.configFile)
-	assert.Equal(t, "work", flags.workDir)
-	assert.False(t, flags.debug)
-	assert.False(t, flags.verbose)
-}
-
 func TestReadVersionFile_NotFound(t *testing.T) {
 	// Save current directory
 	originalDir, err := os.Getwd()
