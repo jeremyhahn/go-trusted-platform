@@ -34,6 +34,7 @@ import (
 // the RBAC guards, and the console refuses to consider itself signed in
 // without a subject and an email.
 func TestIssueSessionProjectsTheBackboneIdentity(t *testing.T) {
+	t.Parallel()
 	handler := newHandlerForLoginTest(t)
 
 	bearer, expiresAt, err := handler.jwtService.IssueSession(&quicbaas.Identity{
@@ -76,6 +77,7 @@ func TestIssueSessionProjectsTheBackboneIdentity(t *testing.T) {
 // produce a credential with an undefined principal or an undefined blast
 // radius. Each must fail issuance rather than mint something weaker.
 func TestIssueSessionRefusesAnIncompleteIdentity(t *testing.T) {
+	t.Parallel()
 	handler := newHandlerForLoginTest(t)
 
 	for name, testCase := range map[string]struct {
@@ -110,6 +112,7 @@ func TestIssueSessionRefusesAnIncompleteIdentity(t *testing.T) {
 // reading the 500 this produces would otherwise go looking for a login
 // that resolved nobody.
 func TestIssueSessionOnANilServiceRefuses(t *testing.T) {
+	t.Parallel()
 	var service *Service
 
 	_, _, err := service.IssueSession(&quicbaas.Identity{
@@ -124,6 +127,7 @@ func TestIssueSessionOnANilServiceRefuses(t *testing.T) {
 // the acceptance tests mean something: the credential verifies because
 // THIS service signed it, not because the seam accepts anything.
 func TestIssuedSessionIsRejectedByAForeignSigner(t *testing.T) {
+	t.Parallel()
 	issuing := newHandlerForLoginTest(t)
 	verifying := newHandlerForLoginTest(t)
 
@@ -162,6 +166,7 @@ func (s failingSigner) Sign(io.Reader, []byte, crypto.SignerOpts) ([]byte, error
 // and the error must reach the driver, which reports it as a platform
 // fault rather than a rejected login.
 func TestIssueSessionSurfacesASigningFailure(t *testing.T) {
+	t.Parallel()
 	working := newHandlerForLoginTest(t).jwtService
 	broken := &Service{
 		params:        working.params,

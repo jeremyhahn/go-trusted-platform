@@ -245,31 +245,6 @@ func (m *ekWorkingMockCA) IssueEKCertificate(ctx context.Context, publicKey cryp
 // Certificate Fingerprint Tests
 // =============================================================================
 
-func TestCertFingerprint_Consistency(t *testing.T) {
-	// Generate a certificate
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject: pkix.Name{
-			CommonName: "test.example.com",
-		},
-		NotBefore: time.Now(),
-		NotAfter:  time.Now().Add(365 * 24 * time.Hour),
-	}
-
-	certDER, _ := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	cert, _ := x509.ParseCertificate(certDER)
-
-	// Calculate fingerprint multiple times - should be consistent
-	fp1 := certFingerprint(cert)
-	fp2 := certFingerprint(cert)
-	fp3 := certFingerprint(cert)
-
-	if fp1 != fp2 || fp2 != fp3 {
-		t.Error("certFingerprint should return consistent results")
-	}
-}
-
 func TestCertFingerprint_Format(t *testing.T) {
 	// Generate a certificate
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
@@ -286,6 +261,9 @@ func TestCertFingerprint_Format(t *testing.T) {
 	cert, _ := x509.ParseCertificate(certDER)
 
 	fp := certFingerprint(cert)
+	if certFingerprint(cert) != fp {
+		t.Error("certFingerprint should return consistent results")
+	}
 
 	// Verify format: "sha256:" prefix followed by hex string
 	if !strings.HasPrefix(fp, "sha256:") {

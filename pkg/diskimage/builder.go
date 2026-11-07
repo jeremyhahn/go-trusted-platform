@@ -85,7 +85,7 @@ func StageMedia(ctx context.Context, cfg *BuildConfig) (*StagedMedia, error) {
 	// architecture and the binaries directory decides the platformd path.
 	c.ISO.Architecture = string(target.Architecture())
 	if c.BinariesDir != "" {
-		c.ISO.PlatformdBinary = filepath.Join(c.BinariesDir, "platformd")
+		c.ISO.UseBinariesDir(c.BinariesDir)
 	}
 	media, err := iso.StageInstallMedia(ctx, c.ISO, MediaDirName, target.InstallerOverrides(), c.KMSClients, c.Logger)
 	if err != nil {

@@ -338,6 +338,7 @@ func testDBKey(t *testing.T) (*ecdsa.PrivateKey, *x509.Certificate) {
 }
 
 func TestBuildDisklessRootSignsTheManifest(t *testing.T) {
+	t.Parallel()
 	rec := &diskimagetest.Runner{}
 	staged, err := StageMedia(context.Background(), buildConfigForTest(t, "qemu-virt", rec))
 	if err != nil {
@@ -396,6 +397,7 @@ func TestBuildDisklessRootSignsTheManifest(t *testing.T) {
 }
 
 func TestBuildDisklessRootFailures(t *testing.T) {
+	t.Parallel()
 	rec := &diskimagetest.Runner{}
 	staged, err := StageMedia(context.Background(), buildConfigForTest(t, "qemu-virt", rec))
 	if err != nil {
@@ -435,6 +437,7 @@ func TestBuildDisklessRootFailures(t *testing.T) {
 }
 
 func TestBuildDisklessRootRefusesDebugMedia(t *testing.T) {
+	t.Parallel()
 	rec := &diskimagetest.Runner{}
 	staged, err := StageMedia(context.Background(), buildConfigForTest(t, "qemu-virt", rec))
 	if err != nil {
