@@ -241,6 +241,9 @@ type MemoryUsage struct {
 	Current int64
 	// Peak is memory.peak, the most bytes ever charged to the leaf.
 	Peak int64
+	// HasPeak is false on a kernel without memory.peak (before 5.19); Peak
+	// is then zero and means nothing.
+	HasPeak bool
 	// Max counts memory.events "max": allocations that hit memory.max.
 	Max int64
 	// OOM counts memory.events "oom": allocations that failed at the limit.
@@ -262,16 +265,21 @@ func (m *CgroupManager) Memory(process string) (MemoryUsage, error) {
 	if err != nil {
 		return MemoryUsage{}, err
 	}
-	peak, err := readCounter(filepath.Join(path, "memory.peak"))
-	if err != nil {
-		return MemoryUsage{}, err
+	// memory.peak arrived in Linux 5.19; an older kernel has no such file,
+	// which is no reason to lose the rest of the accounting.
+	usage := MemoryUsage{Current: current}
+	peakFile := filepath.Join(path, "memory.peak")
+	if _, statErr := os.Stat(peakFile); !os.IsNotExist(statErr) {
+		if usage.Peak, err = readCounter(peakFile); err != nil {
+			return MemoryUsage{}, err
+		}
+		usage.HasPeak = true
 	}
 	file := filepath.Join(path, "memory.events")
 	counters, err := readKeyed(file)
 	if err != nil {
 		return MemoryUsage{}, err
 	}
-	usage := MemoryUsage{Current: current, Peak: peak}
 	for key, field := range map[string]*int64{"max": &usage.Max, "oom": &usage.OOM, "oom_kill": &usage.OOMKill} {
 		if *field, err = counters.value(file, key); err != nil {
 			return MemoryUsage{}, err

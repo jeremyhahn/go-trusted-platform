@@ -323,10 +323,10 @@ func nbdStartConfig(t *testing.T, nbdListen string) (config *ServerConfig, devic
 // that the NBD export server answers on its address with the newstyle
 // greeting, and that stopping the container closes it.
 func TestStart_ServesNBDForDisklessNBDNodes(t *testing.T) {
-	_, nbdAddr, cancel, startErr := startNBDContainer(t)
+	_, nbdLn, cancel, startErr := startNBDContainer(t)
 	deadline := time.After(5 * time.Second)
 
-	conn, err := net.Dial("tcp", nbdAddr)
+	conn, err := net.Dial("tcp", nbdLn.Addr().String())
 	require.NoError(t, err)
 	require.NoError(t, conn.SetDeadline(time.Now().Add(5*time.Second)))
 	greeting := make([]byte, 16)
@@ -342,18 +342,22 @@ func TestStart_ServesNBDForDisklessNBDNodes(t *testing.T) {
 	case <-deadline:
 		t.Fatal("Start did not return after its context was cancelled")
 	}
-	if conn, err := net.Dial("tcp", nbdAddr); err == nil {
-		_ = conn.Close()
+	// The listener itself, not its port: once closed, the port is back in
+	// the OS's ephemeral range, where a parallel test may bind it (#1124).
+	select {
+	case <-nbdLn.closed:
+	default:
 		t.Fatal("the NBD listener outlived the container")
 	}
 }
 
 func TestStop_ClosesTheNBDListenerBeforeItReturns(t *testing.T) {
-	srv, nbdAddr, cancel, startErr := startNBDContainer(t)
+	srv, nbdLn, cancel, startErr := startNBDContainer(t)
 
 	require.NoError(t, srv.Stop())
-	if conn, err := net.Dial("tcp", nbdAddr); err == nil {
-		_ = conn.Close()
+	select {
+	case <-nbdLn.closed:
+	default:
 		t.Fatal("the NBD listener outlived Stop")
 	}
 
@@ -369,12 +373,28 @@ func TestStop_ClosesTheNBDListenerBeforeItReturns(t *testing.T) {
 // startNBDContainer starts a container serving one diskless-nbd node and
 // returns once its NBD export server listens. cancel stops Start, whose
 // result arrives on startErr.
-func startNBDContainer(t *testing.T) (srv *Server, nbdAddr string, cancel context.CancelFunc, startErr <-chan error) {
+func startNBDContainer(t *testing.T) (srv *Server, nbdLn *closeSignalListener, cancel context.CancelFunc, startErr <-chan error) {
 	t.Helper()
 	config, _ := nbdStartConfig(t, "")
 	listening := newLogSignal("nbd export server listening")
 	srv, err := NewServer(config, slog.New(listening))
 	require.NoError(t, err)
+
+	// Start binds the configured address through listenNBD; the test binds
+	// that same address and keeps the listener to observe its Close. An
+	// OS-chosen port here could land on DeviceScriptPort, which
+	// nbdStartConfig allocated but Start has not bound yet.
+	requested := make(chan string, 1)
+	nbdLn = &closeSignalListener{closed: make(chan struct{})}
+	srv.listenNBD = func(network, address string) (net.Listener, error) {
+		requested <- address
+		ln, err := net.Listen(network, address)
+		if err != nil {
+			return nil, err
+		}
+		nbdLn.Listener = ln
+		return nbdLn, nil
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -388,7 +408,21 @@ func startNBDContainer(t *testing.T) (srv *Server, nbdAddr string, cancel contex
 	case <-time.After(5 * time.Second):
 		t.Fatal("the NBD server never listened")
 	}
-	return srv, config.NBD.ListenAddr, cancel, result
+	assert.Equal(t, config.NBD.ListenAddr, <-requested)
+	return srv, nbdLn, cancel, result
+}
+
+// closeSignalListener closes closed once its listener has been closed.
+type closeSignalListener struct {
+	net.Listener
+	once   sync.Once
+	closed chan struct{}
+}
+
+func (l *closeSignalListener) Close() error {
+	err := l.Listener.Close()
+	l.once.Do(func() { close(l.closed) })
+	return err
 }
 
 // TestStart_NBDBindFailureKeepsDeviceScriptDown: the device-script port is
