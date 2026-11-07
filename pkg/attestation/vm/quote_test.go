@@ -84,7 +84,7 @@ func buildTestQuote(t *testing.T, nonce []byte, pcrValues map[int][]byte) []byte
 func signTestQuote(t *testing.T, quoteData []byte) ([]byte, []byte) {
 	t.Helper()
 
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	key, err := testRSAKey()
 	require.NoError(t, err)
 
 	hashed := sha256.Sum256(quoteData)
@@ -115,7 +115,7 @@ func signQuote(t *testing.T, signer crypto.Signer, quote []byte, opts crypto.Sig
 func TestVerifyQuoteSignatureWithAlgorithm_RoundTrips(t *testing.T) {
 	quote := buildTestQuote(t, []byte("nonce"), map[int][]byte{7: make([]byte, 32)})
 
-	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	rsaKey, err := testRSAKey()
 	require.NoError(t, err)
 	p256, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
@@ -159,7 +159,7 @@ func TestVerifyQuoteSignatureWithAlgorithm_RoundTrips(t *testing.T) {
 // RSASSA, nor RSASSA as RSA-PSS, under the same key.
 func TestVerifyQuoteSignatureWithAlgorithm_DeclaredSchemeIsTheOneChecked(t *testing.T) {
 	quote := buildTestQuote(t, []byte("nonce"), map[int][]byte{7: make([]byte, 32)})
-	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	rsaKey, err := testRSAKey()
 	require.NoError(t, err)
 
 	pssOpts := &rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash, Hash: crypto.SHA256}
@@ -175,7 +175,7 @@ func TestVerifyQuoteSignatureWithAlgorithm_DeclaredSchemeIsTheOneChecked(t *test
 
 func TestVerifyQuoteSignatureWithAlgorithm_SchemeKeyMismatch(t *testing.T) {
 	quote := buildTestQuote(t, []byte("nonce"), map[int][]byte{7: make([]byte, 32)})
-	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	rsaKey, err := testRSAKey()
 	require.NoError(t, err)
 	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
@@ -262,7 +262,7 @@ func TestQuoteSignatureAlgorithm_NamesTheIAKScheme(t *testing.T) {
 // an RSA-PSS IAK verifies under it.
 func TestQuoteSignatureAlgorithm_IsWhatTheVerifierTakes(t *testing.T) {
 	quote := buildTestQuote(t, []byte("nonce"), map[int][]byte{7: make([]byte, 32)})
-	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	rsaKey, err := testRSAKey()
 	require.NoError(t, err)
 	akPub, signature := signQuote(t, rsaKey, quote, &rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash, Hash: crypto.SHA256})
 

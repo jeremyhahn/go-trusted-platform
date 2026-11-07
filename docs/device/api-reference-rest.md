@@ -5,6 +5,9 @@
 
 Base URL: `https://localhost:8443/api/v1`
 
+The daemon REST listener serves the operator routes below behind its scope guard,
+with the scope listed for each path ([`docs/daemon/api.md`](../daemon/api.md) §1, #997).
+
 ## Device Endpoints
 
 | Method | Path | Scope | Description |
