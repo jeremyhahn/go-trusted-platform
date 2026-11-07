@@ -30,6 +30,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -458,10 +459,16 @@ func TestBootCertificateProofDigest_SeparatesItsFields(t *testing.T) {
 
 func mustRSAKey(t *testing.T) *rsa.PrivateKey {
 	t.Helper()
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	key, err := sharedRSAKey()
 	require.NoError(t, err)
 	return key
 }
+
+// sharedRSAKey is generated once: 2048-bit RSA generation is the slowest
+// step in this package's tests, and no test needs a key of its own.
+var sharedRSAKey = sync.OnceValues(func() (*rsa.PrivateKey, error) {
+	return rsa.GenerateKey(rand.Reader, 2048)
+})
 
 // failingSigner reports a key but cannot sign with it, as a TPM that has
 // locked out or lost its policy session.

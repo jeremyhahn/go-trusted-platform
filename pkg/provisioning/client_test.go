@@ -82,25 +82,6 @@ func startTLSTestServer(t *testing.T, handler http.Handler) (*httptest.Server, *
 	return server, bundle.CAPool
 }
 
-func TestNewClient_Success(t *testing.T) {
-	cert, key := generateTestCertificate(t, "test-device")
-	caPool := x509.NewCertPool()
-	caPool.AddCert(cert)
-
-	config := &ClientConfig{
-		ServerURL:   "https://server.example.com:8443",
-		Certificate: cert,
-		PrivateKey:  key,
-		CACertPool:  caPool,
-		Timeout:     10 * time.Second,
-	}
-
-	logger := logging.DefaultLogger()
-	client, err := NewClient(config, logger)
-	require.NoError(t, err)
-	assert.NotNil(t, client)
-}
-
 func TestNewClient_NilConfig(t *testing.T) {
 	logger := logging.DefaultLogger()
 	client, err := NewClient(nil, logger)
@@ -475,7 +456,9 @@ func TestFetchProfileAndActivate_ActivationFails(t *testing.T) {
 }
 
 func TestClient_ContextCancellation(t *testing.T) {
+	requestArrived := make(chan struct{}, 1)
 	server, caPool := startTLSTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestArrived <- struct{}{}
 		// A server that never answers: only the client giving up ends this request.
 		<-r.Context().Done()
 	}))
@@ -494,8 +477,16 @@ func TestClient_ContextCancellation(t *testing.T) {
 	client, err := NewClient(config, logger)
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	// Cancel once the server holds the request, rather than waiting out a deadline.
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	go func() {
+		select {
+		case <-requestArrived:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 
 	profile, err := client.FetchProfile(ctx)
 	assert.Error(t, err)

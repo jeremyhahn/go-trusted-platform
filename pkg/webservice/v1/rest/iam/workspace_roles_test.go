@@ -24,6 +24,7 @@ import (
 )
 
 func TestWorkspaceRoleResolverReadsTheRolesOfTheWorkspaceUser(t *testing.T) {
+	t.Parallel()
 	var gotTenant, gotEmail string
 	client := &mockIAMClient{
 		getByEmailFn: func(_ context.Context, tenantID, email string) (*iamsdk.User, error) {
@@ -49,6 +50,7 @@ func TestWorkspaceRoleResolverReadsTheRolesOfTheWorkspaceUser(t *testing.T) {
 }
 
 func TestWorkspaceRoleResolverAnswersNoRolesForAPrincipalTheWorkspaceDoesNotHold(t *testing.T) {
+	t.Parallel()
 	client := &mockIAMClient{
 		getByEmailFn: func(context.Context, string, string) (*iamsdk.User, error) {
 			return nil, sdkerrors.NewNotFound("iam.user.get_by_email", "user not found")
@@ -69,6 +71,7 @@ func TestWorkspaceRoleResolverAnswersNoRolesForAPrincipalTheWorkspaceDoesNotHold
 }
 
 func TestWorkspaceRoleResolverReturnsALookupFailure(t *testing.T) {
+	t.Parallel()
 	cause := errors.New("iam unavailable")
 	client := &mockIAMClient{
 		getByEmailFn: func(context.Context, string, string) (*iamsdk.User, error) {
@@ -90,6 +93,7 @@ func TestWorkspaceRoleResolverReturnsALookupFailure(t *testing.T) {
 }
 
 func TestNewWorkspaceRoleResolverRefusesANilClient(t *testing.T) {
+	t.Parallel()
 	resolver, err := NewWorkspaceRoleResolver(nil)
 	if !errors.As(err, new(ErrRoleResolverClientMissing)) {
 		t.Fatalf("expected ErrRoleResolverClientMissing, got %v", err)

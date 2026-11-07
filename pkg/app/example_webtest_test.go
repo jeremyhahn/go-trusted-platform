@@ -26,7 +26,7 @@ import (
 )
 
 // webTestExample is the platformd config the web console flows start
-// (make integration-test-web, make config, entrypoint.sh, web/Makefile).
+// (make config, make integration-test-web-shell, web/Makefile).
 const webTestExample = "../../configs/platform/standalone/web-test.example.yaml"
 
 // TestWebTestExample_Loads loads the web-test example through platformd's
