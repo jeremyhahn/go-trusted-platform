@@ -22,9 +22,10 @@
 #              artifact on Gitea)
 # A finding that is already an open issue gets a comment, not a new issue.
 #
-# RUNNERS. `runs-on: batch`: Infrastructure registers "batch" runners with
-# capacity 8 (ci-node-1), 8 (ci-node-2) and 3 (omega). Nothing else uses
-# that label, so batch work never takes a CI slot from a pull request.
+# RUNNERS. Hosted `ubuntu-latest` (CA m2061): 4 cores and 6 hours a job.
+# fuzz, race-full and bench run as four shards; race-full and bench each take
+# a round-robin quarter of test-race's package list (`make print-race-pkgs
+# SHARD=n SHARDS=4`).
 #
 # ARTIFACTS. actions/upload-artifact v4 and later refuse any server that is
 # not github.com ("not currently supported on GHES"; Gitea presents as one),
@@ -101,12 +102,12 @@ jobs:
   # The runner does not expand a matrix built from another job's output
   # (go-quicraft ci.yml), so the targets are split over a static matrix of
   # four shards, and each shard fuzzes two targets at a time with
-  # -parallel=4: 8 cores per shard, 20 minutes per pair of targets.
+  # -parallel=2: 4 cores per shard, 20 minutes per pair of targets.
   fuzz:
     name: Fuzz (shard ${{ matrix.shard }}/4)
     if: inputs.jobs == 'all' || inputs.jobs == 'fuzz'
-    runs-on: batch
-    timeout-minutes: 180
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
@@ -149,7 +150,7 @@ jobs:
           fuzz_one() {
             pkg=$1 target=$2 log="fuzz-logs/$(echo "$pkg" | tr / _).$target.log"
             if go test -tags="$FUZZ_TAGS" -run='^$' -fuzz="^${target}\$" \
-                 -fuzztime="$FUZZTIME" -parallel=4 "$pkg" > "$log" 2>&1; then
+                 -fuzztime="$FUZZTIME" -parallel=2 "$pkg" > "$log" 2>&1; then
               echo "ok   $pkg $target"
             elif grep -q 'context deadline exceeded' "$log" &&
                  ! grep -q 'Failing input written to' "$log"; then
@@ -200,10 +201,14 @@ jobs:
 
   # The unit suite under the race detector, three times, on main.
   race-full:
-    name: Race (full, -count=3)
+    name: Race (full, -count=3, shard ${{ matrix.shard }}/4)
     if: inputs.jobs == 'all' || inputs.jobs == 'race-full'
-    runs-on: batch
-    timeout-minutes: 180
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
@@ -231,7 +236,7 @@ jobs:
           set -e
           tags=$(make -s print-build-tags)
           skip=$(make -s print-test-skip)
-          pkgs=$(make -s print-race-pkgs)
+          pkgs=$(make -s print-race-pkgs SHARD=${{ matrix.shard }} SHARDS=4)
           {
             echo "RACE_TAGS=$tags"
             echo "RACE_SKIP=$skip"
@@ -245,7 +250,7 @@ jobs:
           set -o pipefail
           rc=0
           # shellcheck disable=SC2086 # RACE_PKGS is a package list
-          go test -race -count=3 -timeout=170m -tags="$RACE_TAGS" -skip "$RACE_SKIP" $RACE_PKGS 2>&1 | tee race.log || rc=$?
+          go test -race -count=3 -timeout=340m -tags="$RACE_TAGS" -skip "$RACE_SKIP" $RACE_PKGS 2>&1 | tee race.log || rc=$?
           grep -n 'WARNING: DATA RACE' race.log | sed 's/^/BATCH-FINDING race /' || true
           grep -E '^(--- FAIL|FAIL)' race.log | sed 's/^/BATCH-FINDING race-fail /' || true
           exit "$rc"
@@ -256,8 +261,8 @@ jobs:
   soak:
     name: Soak (${{ inputs.soak_minutes }} min)
     if: inputs.jobs == 'all' || inputs.jobs == 'soak'
-    runs-on: batch  # CUSTOMIZE: the raft-guest label for go-quicraft and go-qrdb
-    timeout-minutes: 180
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
@@ -314,10 +319,14 @@ jobs:
   # Benchmarks with allocations. -count=5 gives benchstat enough samples to
   # tell a 20 % regression from noise; one sample cannot.
   bench:
-    name: Bench
+    name: Bench (shard ${{ matrix.shard }}/4)
     if: inputs.jobs == 'all' || inputs.jobs == 'bench'
-    runs-on: batch
-    timeout-minutes: 180
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
@@ -329,7 +338,7 @@ jobs:
         run: |
           set -e
           tags=$(make -s print-build-tags)
-          pkgs=$(make -s print-race-pkgs)
+          pkgs=$(make -s print-race-pkgs SHARD=${{ matrix.shard }} SHARDS=4)
           {
             echo "BENCH_TAGS=$tags"
             echo "BENCH_PKGS=$pkgs"
@@ -341,16 +350,16 @@ jobs:
         run: |
           set -o pipefail
           # shellcheck disable=SC2086 # BENCH_PKGS is a package list
-          go test -run='^$' -bench=. -benchmem -count=5 -timeout=170m -tags="$BENCH_TAGS" $BENCH_PKGS 2>&1 | tee "bench-${GITHUB_SHA}.txt"
+          go test -run='^$' -bench=. -benchmem -count=5 -timeout=340m -tags="$BENCH_TAGS" $BENCH_PKGS 2>&1 | tee "bench-${GITHUB_SHA}-${{ matrix.shard }}.txt"
 
       - name: Post the results to the run summary
         if: always()
         run: |
           {
-            echo "## Benchmarks at ${GITHUB_SHA}"
+            echo "## Benchmarks at ${GITHUB_SHA}, shard ${{ matrix.shard }}/4"
             echo
             echo '```'
-            grep -E '^(Benchmark|goos|goarch|pkg|cpu)' "bench-${GITHUB_SHA}.txt" || true
+            grep -E '^(Benchmark|goos|goarch|pkg|cpu)' "bench-${GITHUB_SHA}-${{ matrix.shard }}.txt" || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -358,14 +367,14 @@ jobs:
         if: always() && github.server_url != 'https://github.com'
         uses: actions/upload-artifact@c6a366c94c3e0affe28c06c8df20a878f24da3cf # v3.2.2
         with:
-          name: bench-${{ github.sha }}
-          path: bench-${{ github.sha }}.txt
+          name: bench-${{ github.sha }}-${{ matrix.shard }}
+          path: bench-${{ github.sha }}-${{ matrix.shard }}.txt
           retention-days: 90
 
       - name: Upload the results (GitHub)
         if: always() && github.server_url == 'https://github.com'
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: bench-${{ github.sha }}
-          path: bench-${{ github.sha }}.txt
+          name: bench-${{ github.sha }}-${{ matrix.shard }}
+          path: bench-${{ github.sha }}-${{ matrix.shard }}.txt
           retention-days: 90
