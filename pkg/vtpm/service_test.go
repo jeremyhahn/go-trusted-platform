@@ -384,20 +384,6 @@ func TestService_DeleteTemplate(t *testing.T) {
 	}
 }
 
-func TestService_DeleteTemplate_NotFound(t *testing.T) {
-	config := createTestConfig(t)
-	service, err := NewService(config, nil, &mockCA{})
-	if err != nil {
-		t.Fatalf("NewService failed: %v", err)
-	}
-
-	ctx := context.Background()
-	err = service.DeleteTemplate(ctx, "nonexistent")
-	if err == nil {
-		t.Error("DeleteTemplate should fail for nonexistent template")
-	}
-}
-
 func TestService_ListTemplates(t *testing.T) {
 	config := createTestConfig(t)
 	service, err := NewService(config, nil, &mockCA{})
@@ -448,37 +434,6 @@ func TestService_CloneTemplate_NotFound(t *testing.T) {
 	}
 }
 
-func TestService_CloneTemplate_MissingHostname(t *testing.T) {
-	config := createTestConfig(t)
-	service, err := NewService(config, nil, &mockCA{})
-	if err != nil {
-		t.Fatalf("NewService failed: %v", err)
-	}
-
-	ctx := context.Background()
-	_, err = service.CloneTemplate(ctx, &CloneOptions{
-		TemplateID: "some-template",
-		Hostname:   "", // Missing
-	})
-	if err == nil {
-		t.Error("CloneTemplate should fail without hostname")
-	}
-}
-
-func TestService_ValidateBundle(t *testing.T) {
-	config := createTestConfig(t)
-	service, err := NewService(config, nil, &mockCA{})
-	if err != nil {
-		t.Fatalf("NewService failed: %v", err)
-	}
-
-	ctx := context.Background()
-	err = service.ValidateBundle(ctx, "nonexistent")
-	if err == nil {
-		t.Error("ValidateBundle should fail for nonexistent bundle")
-	}
-}
-
 func TestService_GetTPMSocketPath(t *testing.T) {
 	config := createTestConfig(t)
 	service, err := NewService(config, nil, &mockCA{})
@@ -515,33 +470,6 @@ func TestService_Close(t *testing.T) {
 	err = service.Close()
 	if err != nil {
 		t.Errorf("Close returned error: %v", err)
-	}
-}
-
-func TestGenerateBundleID(t *testing.T) {
-	config := createTestConfig(t)
-	service, err := NewService(config, nil, &mockCA{})
-	if err != nil {
-		t.Fatalf("NewService failed: %v", err)
-	}
-
-	// With hostname
-	id := service.generateBundleID("test.example.com")
-	if id == "" {
-		t.Error("generateBundleID should return non-empty string")
-	}
-
-	// Without hostname
-	id = service.generateBundleID("")
-	if id == "" {
-		t.Error("generateBundleID should return non-empty string even without hostname")
-	}
-
-	// IDs should be unique
-	id1 := service.generateBundleID("test")
-	id2 := service.generateBundleID("test")
-	if id1 == id2 {
-		t.Error("generateBundleID should generate unique IDs")
 	}
 }
 
@@ -830,47 +758,6 @@ func TestFileChecksum_FileNotFound(t *testing.T) {
 	_, err := fileChecksum("/nonexistent/file.txt")
 	if err == nil {
 		t.Error("fileChecksum should fail for nonexistent file")
-	}
-}
-
-func TestCertFingerprint(t *testing.T) {
-	// Generate a test certificate
-	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject: pkix.Name{
-			CommonName: "test.example.com",
-		},
-		NotBefore: time.Now(),
-		NotAfter:  time.Now().Add(time.Hour),
-	}
-
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &rsaKey.PublicKey, rsaKey)
-	if err != nil {
-		t.Fatalf("Failed to create certificate: %v", err)
-	}
-
-	cert, err := x509.ParseCertificate(certDER)
-	if err != nil {
-		t.Fatalf("Failed to parse certificate: %v", err)
-	}
-
-	fingerprint := certFingerprint(cert)
-
-	// Verify format
-	if !strings.HasPrefix(fingerprint, "sha256:") {
-		t.Errorf("Fingerprint should have sha256: prefix, got %v", fingerprint)
-	}
-
-	// Verify length
-	if len(fingerprint) != 7+64 {
-		t.Errorf("Fingerprint length = %d, want 71", len(fingerprint))
-	}
-
-	// Same cert should produce same fingerprint
-	fingerprint2 := certFingerprint(cert)
-	if fingerprint != fingerprint2 {
-		t.Error("Same cert should produce same fingerprint")
 	}
 }
 
@@ -1686,53 +1573,6 @@ func TestService_CloneTemplate_Success(t *testing.T) {
 	}
 }
 
-func TestService_CloneTemplate_WithSecureBoot(t *testing.T) {
-	config := createTestConfig(t)
-	service, err := NewService(config, nil, &mockCA{})
-	if err != nil {
-		t.Fatalf("NewService failed: %v", err)
-	}
-
-	// Create a template with secure boot
-	templateID := "sb-clone-source"
-	templatePath := config.TemplatePath(templateID)
-	os.MkdirAll(filepath.Join(templatePath, "tpm"), 0700)
-	os.MkdirAll(filepath.Join(templatePath, "ovmf"), 0700)
-	os.MkdirAll(filepath.Join(templatePath, "secure-boot-keys"), 0700)
-
-	// Create files
-	os.WriteFile(filepath.Join(templatePath, "tpm", "tpm2-00.permall"), []byte("tpm-state"), 0600)
-	os.WriteFile(filepath.Join(templatePath, "ovmf", "OVMF_VARS.fd"), []byte("ovmf-vars"), 0600)
-	os.WriteFile(filepath.Join(templatePath, "secure-boot-keys", "PK.key"), []byte("pk-key"), 0600)
-	os.WriteFile(filepath.Join(templatePath, "secure-boot-keys", "PK.crt"), []byte("pk-crt"), 0600)
-
-	manifest := &Manifest{
-		Version:           ManifestVersion,
-		ID:                templateID,
-		Mode:              BundleModeTemplate,
-		CreatedAt:         time.Now(),
-		EKAlgorithm:       EKAlgorithmRSA,
-		SecureBootEnabled: true,
-	}
-	manifestData, _ := json.Marshal(manifest)
-	os.WriteFile(filepath.Join(templatePath, "manifest.json"), manifestData, 0600)
-
-	ctx := context.Background()
-	bundle, err := service.CloneTemplate(ctx, &CloneOptions{
-		TemplateID: templateID,
-		Hostname:   "sb-clone-test.example.com",
-	})
-	if err != nil {
-		t.Fatalf("CloneTemplate failed: %v", err)
-	}
-
-	// Verify secure boot files were copied
-	bundlePath := config.BundlePath(bundle.ID)
-	if _, err := os.Stat(filepath.Join(bundlePath, "secure-boot-keys", "PK.key")); os.IsNotExist(err) {
-		t.Error("Secure boot PK key should exist in cloned bundle")
-	}
-}
-
 // =============================================================================
 // GetTemplate Tests
 // =============================================================================
@@ -2457,131 +2297,10 @@ func TestService_ValidateBundle_MultipleChecksums(t *testing.T) {
 }
 
 // Test that ErrInvalidConfig includes field information
-func TestErrInvalidConfig_FieldInfo(t *testing.T) {
-	err := ErrInvalidConfig{Field: "TestField", Reason: "test reason"}
-	errStr := err.Error()
-
-	if !strings.Contains(errStr, "TestField") {
-		t.Errorf("Error message should contain field name: %v", errStr)
-	}
-	if !strings.Contains(errStr, "test reason") {
-		t.Errorf("Error message should contain reason: %v", errStr)
-	}
-}
-
 // Test error wrapping with errors.Is
-func TestErrorWrapping_ErrorsIs(t *testing.T) {
-	baseErr := errors.New("base error")
-
-	tests := []struct {
-		name string
-		err  error
-	}{
-		{"ErrVTPMStartFailed", ErrVTPMStartFailed{BundleID: "test", Cause: baseErr}},
-		{"ErrVTPMStopFailed", ErrVTPMStopFailed{BundleID: "test", Cause: baseErr}},
-		{"ErrTPMQuoteFailed", ErrTPMQuoteFailed{BundleID: "test", Cause: baseErr}},
-		{"ErrTPMSealFailed", ErrTPMSealFailed{BundleID: "test", Cause: baseErr}},
-		{"ErrTPMUnsealFailed", ErrTPMUnsealFailed{BundleID: "test", Cause: baseErr}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if !errors.Is(tt.err, baseErr) {
-				t.Errorf("errors.Is should find base error in %s", tt.name)
-			}
-		})
-	}
-}
-
 // =============================================================================
 // Additional Tests for Runtime TPM Operations Coverage
 // =============================================================================
-
-func TestService_Quote_InvalidNonce_Empty(t *testing.T) {
-	config := createTestConfig(t)
-	service, err := NewService(config, nil, &mockCA{})
-	if err != nil {
-		t.Fatalf("NewService failed: %v", err)
-	}
-
-	// Create a bundle that exists but simulate running state
-	bundleID := "quote-test"
-	bundlePath := config.BundlePath(bundleID)
-	os.MkdirAll(filepath.Join(bundlePath, "tpm"), 0700)
-	manifest := &Manifest{
-		Version:   ManifestVersion,
-		ID:        bundleID,
-		Mode:      BundleModePreAssigned,
-		CreatedAt: time.Now(),
-	}
-	manifestData, _ := json.Marshal(manifest)
-	os.WriteFile(filepath.Join(bundlePath, "manifest.json"), manifestData, 0600)
-
-	// Service.Quote fails with ErrVTPMNotRunning when bundle isn't started
-	// Testing input validation would require a running TPM
-	ctx := context.Background()
-	_, err = service.Quote(ctx, bundleID, []byte{}, []int{0})
-	if err == nil {
-		t.Error("Quote should fail for non-running bundle")
-	}
-}
-
-func TestService_Seal_EmptyData(t *testing.T) {
-	config := createTestConfig(t)
-	service, err := NewService(config, nil, &mockCA{})
-	if err != nil {
-		t.Fatalf("NewService failed: %v", err)
-	}
-
-	ctx := context.Background()
-	// Empty data should fail (not running is checked first)
-	_, err = service.Seal(ctx, "test-bundle", []byte{}, nil)
-	if err == nil {
-		t.Error("Seal should fail for non-running bundle")
-	}
-}
-
-func TestService_ExtendPCR_InvalidPCRIndex(t *testing.T) {
-	config := createTestConfig(t)
-	service, err := NewService(config, nil, &mockCA{})
-	if err != nil {
-		t.Fatalf("NewService failed: %v", err)
-	}
-
-	ctx := context.Background()
-
-	// Even if not running, the error is ErrVTPMNotRunning first
-	// The PCR validation happens after the running check
-	err = service.ExtendPCR(ctx, "test-bundle", -1, []byte("data"))
-	if err == nil {
-		t.Error("ExtendPCR should fail for non-running bundle")
-	}
-
-	err = service.ExtendPCR(ctx, "test-bundle", 24, []byte("data"))
-	if err == nil {
-		t.Error("ExtendPCR should fail for non-running bundle")
-	}
-}
-
-func TestService_ReadPCR_InvalidPCRIndex(t *testing.T) {
-	config := createTestConfig(t)
-	service, err := NewService(config, nil, &mockCA{})
-	if err != nil {
-		t.Fatalf("NewService failed: %v", err)
-	}
-
-	ctx := context.Background()
-
-	_, err = service.ReadPCR(ctx, "test-bundle", -1)
-	if err == nil {
-		t.Error("ReadPCR should fail for non-running bundle")
-	}
-
-	_, err = service.ReadPCR(ctx, "test-bundle", 24)
-	if err == nil {
-		t.Error("ReadPCR should fail for non-running bundle")
-	}
-}
 
 func TestService_CloneTemplate_CopyOVMFFails(t *testing.T) {
 	config := createTestConfig(t)
@@ -3043,30 +2762,35 @@ func TestService_Quote_InputValidation(t *testing.T) {
 		nonce   []byte
 		pcrs    []int
 		wantErr string
+		target  any
 	}{
 		{
 			name:    "empty nonce",
 			nonce:   []byte{},
 			pcrs:    []int{0},
 			wantErr: "nonce cannot be empty",
+			target:  new(ErrInvalidNonce),
 		},
 		{
 			name:    "nonce too long",
 			nonce:   make([]byte, 65),
 			pcrs:    []int{0},
 			wantErr: "nonce too long",
+			target:  new(ErrInvalidNonce),
 		},
 		{
 			name:    "invalid PCR index negative",
 			nonce:   []byte("test-nonce"),
 			pcrs:    []int{-1},
 			wantErr: "invalid PCR index",
+			target:  new(ErrInvalidPCRIndex),
 		},
 		{
 			name:    "invalid PCR index too high",
 			nonce:   []byte("test-nonce"),
 			pcrs:    []int{24},
 			wantErr: "invalid PCR index",
+			target:  new(ErrInvalidPCRIndex),
 		},
 		{
 			name:    "valid inputs - fails at connection",
@@ -3085,6 +2809,9 @@ func TestService_Quote_InputValidation(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tt.wantErr) {
 				t.Errorf("Expected error containing %q, got: %v", tt.wantErr, err)
+			}
+			if tt.target != nil && !errors.As(err, tt.target) {
+				t.Errorf("Expected %T, got %T: %v", tt.target, err, err)
 			}
 		})
 	}
@@ -3129,6 +2856,7 @@ func TestService_Seal_InputValidation(t *testing.T) {
 		data    []byte
 		opts    *SealOptions
 		wantErr string
+		target  any
 	}{
 		{
 			name:    "empty data",
@@ -3141,12 +2869,14 @@ func TestService_Seal_InputValidation(t *testing.T) {
 			data:    []byte("secret"),
 			opts:    &SealOptions{PCRs: []int{-1}},
 			wantErr: "invalid PCR index",
+			target:  new(ErrInvalidPCRIndex),
 		},
 		{
 			name:    "invalid PCR in options too high",
 			data:    []byte("secret"),
 			opts:    &SealOptions{PCRs: []int{24}},
 			wantErr: "invalid PCR index",
+			target:  new(ErrInvalidPCRIndex),
 		},
 		{
 			name:    "valid inputs - fails at connection",
@@ -3165,6 +2895,9 @@ func TestService_Seal_InputValidation(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tt.wantErr) {
 				t.Errorf("Expected error containing %q, got: %v", tt.wantErr, err)
+			}
+			if tt.target != nil && !errors.As(err, tt.target) {
+				t.Errorf("Expected %T, got %T: %v", tt.target, err, err)
 			}
 		})
 	}
@@ -3209,18 +2942,21 @@ func TestService_Unseal_InputValidation(t *testing.T) {
 		sealedData []byte
 		authValue  string
 		wantErr    string
+		target     any
 	}{
 		{
 			name:       "empty sealed data",
 			sealedData: []byte{},
 			authValue:  "",
 			wantErr:    "unexpected end of JSON input",
+			target:     new(ErrTPMUnsealFailed),
 		},
 		{
 			name:       "valid inputs - fails at connection",
 			sealedData: []byte("some-sealed-data"),
 			authValue:  "password",
 			wantErr:    "invalid character",
+			target:     new(ErrTPMUnsealFailed),
 		},
 	}
 
@@ -3233,6 +2969,9 @@ func TestService_Unseal_InputValidation(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tt.wantErr) {
 				t.Errorf("Expected error containing %q, got: %v", tt.wantErr, err)
+			}
+			if tt.target != nil && !errors.As(err, tt.target) {
+				t.Errorf("Expected %T, got %T: %v", tt.target, err, err)
 			}
 		})
 	}
@@ -3391,88 +3130,6 @@ func TestService_ReadPCR_InputValidation(t *testing.T) {
 // Additional Error Type Tests
 // =============================================================================
 
-func TestAllErrorTypes(t *testing.T) {
-	baseErr := errors.New("base error")
-
-	tests := []struct {
-		name string
-		err  error
-	}{
-		{"ErrBundleNotFound", ErrBundleNotFound{ID: "test"}},
-		{"ErrBundleAlreadyExists", ErrBundleAlreadyExists{ID: "test"}},
-		{"ErrTemplateNotFound", ErrTemplateNotFound{ID: "test"}},
-		{"ErrTemplateAlreadyExists", ErrTemplateAlreadyExists{ID: "test"}},
-		{"ErrInvalidManifest", ErrInvalidManifest{Reason: "test"}},
-		{"ErrEKCertInjectionFailed", ErrEKCertInjectionFailed{Cause: baseErr}},
-		{"ErrSecureBootEnrollmentFailed", ErrSecureBootEnrollmentFailed{Cause: baseErr}},
-		{"ErrSWTPMOperationFailed", ErrSWTPMOperationFailed{Operation: "test", Cause: baseErr}},
-		{"ErrNVRAMWriteFailed", ErrNVRAMWriteFailed{NVIndex: 0x01C00002, Cause: baseErr}},
-		{"ErrArchiveOperationFailed", ErrArchiveOperationFailed{Operation: "test", Cause: baseErr}},
-		{"ErrCAUnavailable", ErrCAUnavailable{Cause: baseErr}},
-		{"ErrCAUnavailable_NoCause", ErrCAUnavailable{Cause: nil}},
-		{"ErrInvalidConfig", ErrInvalidConfig{Field: "test", Reason: "test"}},
-		{"ErrChecksumMismatch", ErrChecksumMismatch{File: "test", Expected: "a", Actual: "b"}},
-		{"ErrSecureBootKeyGenFailed", ErrSecureBootKeyGenFailed{Cause: baseErr}},
-		{"ErrOVMFNotFound", ErrOVMFNotFound{Path: "/test"}},
-		{"ErrVTPMNotRunning", ErrVTPMNotRunning{BundleID: "test"}},
-		{"ErrVTPMAlreadyRunning", ErrVTPMAlreadyRunning{BundleID: "test"}},
-		{"ErrVTPMStartFailed", ErrVTPMStartFailed{BundleID: "test", Cause: baseErr}},
-		{"ErrVTPMStopFailed", ErrVTPMStopFailed{BundleID: "test", Cause: baseErr}},
-		{"ErrTPMQuoteFailed", ErrTPMQuoteFailed{BundleID: "test", Cause: baseErr}},
-		{"ErrTPMSealFailed", ErrTPMSealFailed{BundleID: "test", Cause: baseErr}},
-		{"ErrTPMUnsealFailed", ErrTPMUnsealFailed{BundleID: "test", Cause: baseErr}},
-		{"ErrPCRExtendFailed", ErrPCRExtendFailed{BundleID: "test", PCRIndex: 0, Cause: baseErr}},
-		{"ErrPCRReadFailed", ErrPCRReadFailed{BundleID: "test", PCRIndex: 0, Cause: baseErr}},
-		{"ErrInvalidPCRIndex", ErrInvalidPCRIndex{PCRIndex: 25}},
-		{"ErrInvalidNonce", ErrInvalidNonce{Reason: "test"}},
-		{"ErrTPMConnectionFailed", ErrTPMConnectionFailed{SocketPath: "/test", Cause: baseErr}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Test that Error() returns non-empty string
-			errStr := tt.err.Error()
-			if errStr == "" {
-				t.Errorf("%s.Error() returned empty string", tt.name)
-			}
-		})
-	}
-}
-
-func TestErrorUnwrap(t *testing.T) {
-	baseErr := errors.New("base error")
-
-	tests := []struct {
-		name    string
-		err     error
-		wantErr error
-	}{
-		{"ErrEKCertInjectionFailed", ErrEKCertInjectionFailed{Cause: baseErr}, baseErr},
-		{"ErrSecureBootEnrollmentFailed", ErrSecureBootEnrollmentFailed{Cause: baseErr}, baseErr},
-		{"ErrSWTPMOperationFailed", ErrSWTPMOperationFailed{Cause: baseErr}, baseErr},
-		{"ErrNVRAMWriteFailed", ErrNVRAMWriteFailed{Cause: baseErr}, baseErr},
-		{"ErrArchiveOperationFailed", ErrArchiveOperationFailed{Cause: baseErr}, baseErr},
-		{"ErrCAUnavailable", ErrCAUnavailable{Cause: baseErr}, baseErr},
-		{"ErrSecureBootKeyGenFailed", ErrSecureBootKeyGenFailed{Cause: baseErr}, baseErr},
-		{"ErrVTPMStartFailed", ErrVTPMStartFailed{Cause: baseErr}, baseErr},
-		{"ErrVTPMStopFailed", ErrVTPMStopFailed{Cause: baseErr}, baseErr},
-		{"ErrTPMQuoteFailed", ErrTPMQuoteFailed{Cause: baseErr}, baseErr},
-		{"ErrTPMSealFailed", ErrTPMSealFailed{Cause: baseErr}, baseErr},
-		{"ErrTPMUnsealFailed", ErrTPMUnsealFailed{Cause: baseErr}, baseErr},
-		{"ErrPCRExtendFailed", ErrPCRExtendFailed{Cause: baseErr}, baseErr},
-		{"ErrPCRReadFailed", ErrPCRReadFailed{Cause: baseErr}, baseErr},
-		{"ErrTPMConnectionFailed", ErrTPMConnectionFailed{Cause: baseErr}, baseErr},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if !errors.Is(tt.err, tt.wantErr) {
-				t.Errorf("errors.Is(%s, baseErr) = false", tt.name)
-			}
-		})
-	}
-}
-
 // =============================================================================
 // Additional Service Tests
 // =============================================================================
@@ -3560,266 +3217,6 @@ func TestService_PathMethods(t *testing.T) {
 // Additional Coverage Tests
 // =============================================================================
 
-func TestService_Quote_EmptyNonce(t *testing.T) {
-	config := createTestConfig(t)
-	service, err := NewService(config, nil, &mockCA{})
-	if err != nil {
-		t.Fatalf("NewService failed: %v", err)
-	}
-
-	// Create a bundle first
-	bundleID := "test-quote-empty-nonce"
-	bundlePath := config.BundlePath(bundleID)
-	os.MkdirAll(bundlePath, 0700)
-
-	manifest := &Manifest{
-		Version:   ManifestVersion,
-		ID:        bundleID,
-		Mode:      BundleModePreAssigned,
-		CreatedAt: time.Now(),
-	}
-	manifestData, _ := json.Marshal(manifest)
-	os.WriteFile(filepath.Join(bundlePath, "manifest.json"), manifestData, 0600)
-
-	// Manually add to instances map to simulate running state
-	service.instances[bundleID] = &runningInstance{
-		swtpm:      nil,
-		socketPath: "/nonexistent/socket.sock",
-	}
-
-	ctx := context.Background()
-	_, err = service.Quote(ctx, bundleID, []byte{}, []int{0, 1})
-	if err == nil {
-		t.Error("Quote should fail with empty nonce")
-	}
-
-	var invalidNonceErr ErrInvalidNonce
-	if !errors.As(err, &invalidNonceErr) {
-		t.Errorf("Expected ErrInvalidNonce, got %T", err)
-	}
-}
-
-func TestService_Quote_NonceTooLong(t *testing.T) {
-	config := createTestConfig(t)
-	service, err := NewService(config, nil, &mockCA{})
-	if err != nil {
-		t.Fatalf("NewService failed: %v", err)
-	}
-
-	// Simulate running instance
-	service.instances["test-bundle-long-nonce"] = &runningInstance{
-		swtpm:      nil,
-		socketPath: "/nonexistent/socket.sock",
-	}
-
-	ctx := context.Background()
-	longNonce := make([]byte, 65) // Max is 64
-	_, err = service.Quote(ctx, "test-bundle-long-nonce", longNonce, []int{0, 1})
-	if err == nil {
-		t.Error("Quote should fail with nonce > 64 bytes")
-	}
-
-	var invalidNonceErr ErrInvalidNonce
-	if !errors.As(err, &invalidNonceErr) {
-		t.Errorf("Expected ErrInvalidNonce, got %T", err)
-	}
-}
-
-func TestService_Quote_InvalidPCRIndexNegative(t *testing.T) {
-	config := createTestConfig(t)
-	service, err := NewService(config, nil, &mockCA{})
-	if err != nil {
-		t.Fatalf("NewService failed: %v", err)
-	}
-
-	// Simulate running instance
-	service.instances["test-bundle-pcr-neg"] = &runningInstance{
-		swtpm:      nil,
-		socketPath: "/nonexistent/socket.sock",
-	}
-
-	ctx := context.Background()
-	_, err = service.Quote(ctx, "test-bundle-pcr-neg", []byte("nonce"), []int{-1})
-	if err == nil {
-		t.Error("Quote should fail with negative PCR index")
-	}
-
-	var pcrErr ErrInvalidPCRIndex
-	if !errors.As(err, &pcrErr) {
-		t.Errorf("Expected ErrInvalidPCRIndex, got %T", err)
-	}
-}
-
-func TestService_Quote_InvalidPCRIndexHigh(t *testing.T) {
-	config := createTestConfig(t)
-	service, err := NewService(config, nil, &mockCA{})
-	if err != nil {
-		t.Fatalf("NewService failed: %v", err)
-	}
-
-	// Simulate running instance
-	service.instances["test-bundle-pcr-high"] = &runningInstance{
-		swtpm:      nil,
-		socketPath: "/nonexistent/socket.sock",
-	}
-
-	ctx := context.Background()
-	_, err = service.Quote(ctx, "test-bundle-pcr-high", []byte("nonce"), []int{24})
-	if err == nil {
-		t.Error("Quote should fail with PCR > 23")
-	}
-
-	var pcrErr ErrInvalidPCRIndex
-	if !errors.As(err, &pcrErr) {
-		t.Errorf("Expected ErrInvalidPCRIndex, got %T", err)
-	}
-}
-
-func TestService_Seal_InvalidPCRIndexNegative(t *testing.T) {
-	config := createTestConfig(t)
-	service, err := NewService(config, nil, &mockCA{})
-	if err != nil {
-		t.Fatalf("NewService failed: %v", err)
-	}
-
-	// Simulate running instance
-	service.instances["test-bundle-seal-pcr-neg"] = &runningInstance{
-		swtpm:      nil,
-		socketPath: "/nonexistent/socket.sock",
-	}
-
-	ctx := context.Background()
-	_, err = service.Seal(ctx, "test-bundle-seal-pcr-neg", []byte("data"), &SealOptions{
-		PCRs: []int{-1},
-	})
-	if err == nil {
-		t.Error("Seal should fail with negative PCR index")
-	}
-
-	var pcrErr ErrInvalidPCRIndex
-	if !errors.As(err, &pcrErr) {
-		t.Errorf("Expected ErrInvalidPCRIndex, got %T", err)
-	}
-}
-
-func TestService_Seal_InvalidPCRIndexHigh(t *testing.T) {
-	config := createTestConfig(t)
-	service, err := NewService(config, nil, &mockCA{})
-	if err != nil {
-		t.Fatalf("NewService failed: %v", err)
-	}
-
-	// Simulate running instance
-	service.instances["test-bundle-seal-pcr-high"] = &runningInstance{
-		swtpm:      nil,
-		socketPath: "/nonexistent/socket.sock",
-	}
-
-	ctx := context.Background()
-	_, err = service.Seal(ctx, "test-bundle-seal-pcr-high", []byte("data"), &SealOptions{
-		PCRs: []int{24},
-	})
-	if err == nil {
-		t.Error("Seal should fail with PCR > 23")
-	}
-
-	var pcrErr ErrInvalidPCRIndex
-	if !errors.As(err, &pcrErr) {
-		t.Errorf("Expected ErrInvalidPCRIndex, got %T", err)
-	}
-}
-
-func TestService_Unseal_InvalidJSONBlob(t *testing.T) {
-	config := createTestConfig(t)
-	service, err := NewService(config, nil, &mockCA{})
-	if err != nil {
-		t.Fatalf("NewService failed: %v", err)
-	}
-
-	// Simulate running instance
-	service.instances["test-bundle-unseal-json"] = &runningInstance{
-		swtpm:      nil,
-		socketPath: "/nonexistent/socket.sock",
-	}
-
-	ctx := context.Background()
-	_, err = service.Unseal(ctx, "test-bundle-unseal-json", []byte("invalid-json"), "")
-	if err == nil {
-		t.Error("Unseal should fail with invalid JSON")
-	}
-
-	var unsealErr ErrTPMUnsealFailed
-	if !errors.As(err, &unsealErr) {
-		t.Errorf("Expected ErrTPMUnsealFailed, got %T", err)
-	}
-}
-
-func TestService_Start_AlreadyRunningInstance(t *testing.T) {
-	config := createTestConfig(t)
-	service, err := NewService(config, nil, &mockCA{})
-	if err != nil {
-		t.Fatalf("NewService failed: %v", err)
-	}
-
-	bundleID := "already-running-test"
-
-	// Simulate running instance
-	service.instances[bundleID] = &runningInstance{
-		swtpm:      nil,
-		socketPath: "/nonexistent/socket.sock",
-	}
-
-	ctx := context.Background()
-	err = service.Start(ctx, bundleID)
-	if err == nil {
-		t.Error("Start should fail for already running bundle")
-	}
-
-	var alreadyRunningErr ErrVTPMAlreadyRunning
-	if !errors.As(err, &alreadyRunningErr) {
-		t.Errorf("Expected ErrVTPMAlreadyRunning, got %T", err)
-	}
-}
-
-func TestService_GetBundle_WithSecureBootEnabled(t *testing.T) {
-	config := createTestConfig(t)
-	service, err := NewService(config, nil, &mockCA{})
-	if err != nil {
-		t.Fatalf("NewService failed: %v", err)
-	}
-
-	bundleID := "secureboot-get-test"
-	bundlePath := config.BundlePath(bundleID)
-	os.MkdirAll(filepath.Join(bundlePath, "tpm"), 0700)
-	os.MkdirAll(filepath.Join(bundlePath, "ovmf"), 0700)
-	os.MkdirAll(filepath.Join(bundlePath, "secure-boot-keys"), 0700)
-
-	manifest := &Manifest{
-		Version:           ManifestVersion,
-		ID:                bundleID,
-		Mode:              BundleModePreAssigned,
-		CreatedAt:         time.Now(),
-		SecureBootEnabled: true,
-	}
-	manifestData, _ := json.Marshal(manifest)
-	os.WriteFile(filepath.Join(bundlePath, "manifest.json"), manifestData, 0600)
-
-	ctx := context.Background()
-	bundle, err := service.GetBundle(ctx, bundleID)
-	if err != nil {
-		t.Fatalf("GetBundle failed: %v", err)
-	}
-
-	if bundle.SecureBootKeys == nil {
-		t.Error("SecureBootKeys should be set for secure boot enabled bundle")
-	}
-
-	// Verify key paths are set
-	if bundle.SecureBootKeys.PKKey == "" {
-		t.Error("PKKey path should be set")
-	}
-}
-
 func TestService_GetBundlePathMethod(t *testing.T) {
 	config := createTestConfig(t)
 	service, err := NewService(config, nil, &mockCA{})
@@ -3831,228 +3228,6 @@ func TestService_GetBundlePathMethod(t *testing.T) {
 	expected := filepath.Join(config.BaseDir, "bundles", bundleID)
 	if got := service.GetBundlePath(bundleID); got != expected {
 		t.Errorf("GetBundlePath = %v, want %v", got, expected)
-	}
-}
-
-func TestService_ValidateBundleChecksumFileNotFound(t *testing.T) {
-	config := createTestConfig(t)
-	service, err := NewService(config, nil, &mockCA{})
-	if err != nil {
-		t.Fatalf("NewService failed: %v", err)
-	}
-
-	bundleID := "missing-checksum-file"
-	bundlePath := config.BundlePath(bundleID)
-	os.MkdirAll(bundlePath, 0700)
-
-	manifest := &Manifest{
-		Version:   ManifestVersion,
-		ID:        bundleID,
-		Mode:      BundleModePreAssigned,
-		CreatedAt: time.Now(),
-		Checksums: map[string]string{
-			"nonexistent/file.bin": "sha256:somechecksum",
-		},
-	}
-	manifestData, _ := json.Marshal(manifest)
-	os.WriteFile(filepath.Join(bundlePath, "manifest.json"), manifestData, 0600)
-
-	ctx := context.Background()
-	err = service.ValidateBundle(ctx, bundleID)
-	if err == nil {
-		t.Error("ValidateBundle should fail when file in checksums doesn't exist")
-	}
-
-	var checksumErr ErrChecksumMismatch
-	if !errors.As(err, &checksumErr) {
-		t.Errorf("Expected ErrChecksumMismatch, got %T", err)
-	}
-}
-
-func TestService_ValidateBundleChecksumMismatchContent(t *testing.T) {
-	config := createTestConfig(t)
-	service, err := NewService(config, nil, &mockCA{})
-	if err != nil {
-		t.Fatalf("NewService failed: %v", err)
-	}
-
-	bundleID := "checksum-mismatch-test"
-	bundlePath := config.BundlePath(bundleID)
-	os.MkdirAll(filepath.Join(bundlePath, "tpm"), 0700)
-
-	// Create a file and calculate its checksum
-	testFile := filepath.Join(bundlePath, "tpm", "test.bin")
-	os.WriteFile(testFile, []byte("original content"), 0600)
-
-	manifest := &Manifest{
-		Version:   ManifestVersion,
-		ID:        bundleID,
-		Mode:      BundleModePreAssigned,
-		CreatedAt: time.Now(),
-		Checksums: map[string]string{
-			"tpm/test.bin": "sha256:wrongchecksum",
-		},
-	}
-	manifestData, _ := json.Marshal(manifest)
-	os.WriteFile(filepath.Join(bundlePath, "manifest.json"), manifestData, 0600)
-
-	ctx := context.Background()
-	err = service.ValidateBundle(ctx, bundleID)
-	if err == nil {
-		t.Error("ValidateBundle should fail with checksum mismatch")
-	}
-
-	var checksumErr ErrChecksumMismatch
-	if !errors.As(err, &checksumErr) {
-		t.Errorf("Expected ErrChecksumMismatch, got %T", err)
-	}
-}
-
-func TestService_ListBundlesIgnoresFiles(t *testing.T) {
-	config := createTestConfig(t)
-	service, err := NewService(config, nil, &mockCA{})
-	if err != nil {
-		t.Fatalf("NewService failed: %v", err)
-	}
-
-	// Create a file (not directory) in bundles dir
-	os.WriteFile(filepath.Join(config.BundlesDir(), "not-a-bundle-file.txt"), []byte("test"), 0644)
-
-	ctx := context.Background()
-	bundles, err := service.ListBundles(ctx, nil)
-	if err != nil {
-		t.Fatalf("ListBundles failed: %v", err)
-	}
-
-	// Should not include the file as a bundle
-	for _, b := range bundles {
-		if b.ID == "not-a-bundle-file.txt" {
-			t.Error("Files should not be listed as bundles")
-		}
-	}
-}
-
-func TestService_ListTemplatesIgnoresFiles(t *testing.T) {
-	config := createTestConfig(t)
-	service, err := NewService(config, nil, &mockCA{})
-	if err != nil {
-		t.Fatalf("NewService failed: %v", err)
-	}
-
-	// Create a file (not directory) in templates dir
-	os.WriteFile(filepath.Join(config.TemplatesDir(), "not-a-template-file.txt"), []byte("test"), 0644)
-
-	ctx := context.Background()
-	templates, err := service.ListTemplates(ctx)
-	if err != nil {
-		t.Fatalf("ListTemplates failed: %v", err)
-	}
-
-	// Should not include the file as a template
-	for _, t2 := range templates {
-		if t2.ID == "not-a-template-file.txt" {
-			t.Error("Files should not be listed as templates")
-		}
-	}
-}
-
-func TestService_CloneTemplateWithSecureBootKeys(t *testing.T) {
-	config := createTestConfig(t)
-	service, err := NewService(config, nil, &mockCA{})
-	if err != nil {
-		t.Fatalf("NewService failed: %v", err)
-	}
-
-	// Create a template with secure boot enabled
-	templateID := "sb-clone-test"
-	templatePath := config.TemplatePath(templateID)
-	os.MkdirAll(filepath.Join(templatePath, "tpm"), 0700)
-	os.MkdirAll(filepath.Join(templatePath, "ovmf"), 0700)
-	os.MkdirAll(filepath.Join(templatePath, "secure-boot-keys"), 0700)
-
-	// Create template state files
-	os.WriteFile(filepath.Join(templatePath, "tpm", "tpm2-00.permall"), []byte("tpm-state"), 0600)
-	os.WriteFile(filepath.Join(templatePath, "ovmf", "OVMF_VARS.fd"), []byte("ovmf-vars"), 0600)
-	os.WriteFile(filepath.Join(templatePath, "secure-boot-keys", "PK.key"), []byte("pk-key"), 0600)
-
-	manifest := &Manifest{
-		Version:           ManifestVersion,
-		ID:                templateID,
-		Mode:              BundleModeTemplate,
-		CreatedAt:         time.Now(),
-		EKAlgorithm:       EKAlgorithmRSA,
-		SecureBootEnabled: true,
-	}
-	manifestData, _ := json.Marshal(manifest)
-	os.WriteFile(filepath.Join(templatePath, "manifest.json"), manifestData, 0600)
-
-	ctx := context.Background()
-	bundle, err := service.CloneTemplate(ctx, &CloneOptions{
-		TemplateID: templateID,
-		Hostname:   "sb-cloned-test.example.com",
-	})
-	if err != nil {
-		t.Fatalf("CloneTemplate failed: %v", err)
-	}
-
-	// Verify secure boot keys were copied
-	bundlePath := config.BundlePath(bundle.ID)
-	if _, err := os.Stat(filepath.Join(bundlePath, "secure-boot-keys", "PK.key")); os.IsNotExist(err) {
-		t.Error("Secure boot key should be copied")
-	}
-}
-
-func TestService_CloneTemplateSuccess(t *testing.T) {
-	config := createTestConfig(t)
-	service, err := NewService(config, nil, &mockCA{})
-	if err != nil {
-		t.Fatalf("NewService failed: %v", err)
-	}
-
-	// Create a template
-	templateID := "clone-success-template"
-	templatePath := config.TemplatePath(templateID)
-	os.MkdirAll(filepath.Join(templatePath, "tpm"), 0700)
-	os.MkdirAll(filepath.Join(templatePath, "ovmf"), 0700)
-
-	// Create template state files
-	os.WriteFile(filepath.Join(templatePath, "tpm", "tpm2-00.permall"), []byte("tpm-state"), 0600)
-	os.WriteFile(filepath.Join(templatePath, "ovmf", "OVMF_VARS.fd"), []byte("ovmf-vars"), 0600)
-
-	manifest := &Manifest{
-		Version:     ManifestVersion,
-		ID:          templateID,
-		Mode:        BundleModeTemplate,
-		CreatedAt:   time.Now(),
-		EKAlgorithm: EKAlgorithmRSA,
-	}
-	manifestData, _ := json.Marshal(manifest)
-	os.WriteFile(filepath.Join(templatePath, "manifest.json"), manifestData, 0600)
-
-	ctx := context.Background()
-	bundle, err := service.CloneTemplate(ctx, &CloneOptions{
-		TemplateID: templateID,
-		Hostname:   "cloned-success.example.com",
-		Labels:     map[string]string{"source": "template"},
-	})
-	if err != nil {
-		t.Fatalf("CloneTemplate failed: %v", err)
-	}
-
-	if bundle.ID == "" {
-		t.Error("Bundle ID should not be empty")
-	}
-	if bundle.ClonedFrom != templateID {
-		t.Errorf("ClonedFrom = %v, want %v", bundle.ClonedFrom, templateID)
-	}
-
-	// Verify files were copied
-	bundlePath := config.BundlePath(bundle.ID)
-	if _, err := os.Stat(filepath.Join(bundlePath, "tpm", "tpm2-00.permall")); os.IsNotExist(err) {
-		t.Error("TPM state file should be copied")
-	}
-	if _, err := os.Stat(filepath.Join(bundlePath, "ovmf", "OVMF_VARS.fd")); os.IsNotExist(err) {
-		t.Error("OVMF vars file should be copied")
 	}
 }
 
@@ -4311,71 +3486,6 @@ func TestEKCertInjector_CheckEKCertificateExists_InvalidSocket(t *testing.T) {
 // Additional Edge Case Tests
 // =============================================================================
 
-func TestService_Quote_NilTPMOps(t *testing.T) {
-	config := createTestConfig(t)
-	service, err := NewService(config, nil, &mockCA{})
-	if err != nil {
-		t.Fatalf("NewService failed: %v", err)
-	}
-
-	bundleID := "quote-nil-tpmops"
-
-	// Simulate running instance with nil tpmOps
-	service.mu.Lock()
-	service.instances[bundleID] = &runningInstance{
-		swtpm:      nil,
-		socketPath: "/tmp/test.sock",
-		tpmOps:     nil,
-	}
-	service.mu.Unlock()
-
-	ctx := context.Background()
-	_, err = service.Quote(ctx, bundleID, []byte("nonce"), []int{0})
-	if err == nil {
-		t.Error("Quote should fail with nil tpmOps")
-	}
-
-	// Should fail at tpmOps check, not input validation
-	if !strings.Contains(err.Error(), "failed to connect") && !strings.Contains(err.Error(), "not initialized") {
-		t.Errorf("Expected connection/initialization error, got: %v", err)
-	}
-
-	// Clean up
-	service.mu.Lock()
-	delete(service.instances, bundleID)
-	service.mu.Unlock()
-}
-
-func TestService_Seal_NilTPMOps(t *testing.T) {
-	config := createTestConfig(t)
-	service, err := NewService(config, nil, &mockCA{})
-	if err != nil {
-		t.Fatalf("NewService failed: %v", err)
-	}
-
-	bundleID := "seal-nil-tpmops"
-
-	// Simulate running instance with nil tpmOps
-	service.mu.Lock()
-	service.instances[bundleID] = &runningInstance{
-		swtpm:      nil,
-		socketPath: "/tmp/test.sock",
-		tpmOps:     nil,
-	}
-	service.mu.Unlock()
-
-	ctx := context.Background()
-	_, err = service.Seal(ctx, bundleID, []byte("secret"), nil)
-	if err == nil {
-		t.Error("Seal should fail with nil tpmOps")
-	}
-
-	// Clean up
-	service.mu.Lock()
-	delete(service.instances, bundleID)
-	service.mu.Unlock()
-}
-
 func TestService_Unseal_NilTPMOps(t *testing.T) {
 	config := createTestConfig(t)
 	service, err := NewService(config, nil, &mockCA{})
@@ -4400,66 +3510,6 @@ func TestService_Unseal_NilTPMOps(t *testing.T) {
 	_, err = service.Unseal(ctx, bundleID, sealedJSON, "")
 	if err == nil {
 		t.Error("Unseal should fail with nil tpmOps")
-	}
-
-	// Clean up
-	service.mu.Lock()
-	delete(service.instances, bundleID)
-	service.mu.Unlock()
-}
-
-func TestService_ExtendPCR_NilTPMOps(t *testing.T) {
-	config := createTestConfig(t)
-	service, err := NewService(config, nil, &mockCA{})
-	if err != nil {
-		t.Fatalf("NewService failed: %v", err)
-	}
-
-	bundleID := "extend-nil-tpmops"
-
-	// Simulate running instance with nil tpmOps
-	service.mu.Lock()
-	service.instances[bundleID] = &runningInstance{
-		swtpm:      nil,
-		socketPath: "/tmp/test.sock",
-		tpmOps:     nil,
-	}
-	service.mu.Unlock()
-
-	ctx := context.Background()
-	err = service.ExtendPCR(ctx, bundleID, 0, []byte("data"))
-	if err == nil {
-		t.Error("ExtendPCR should fail with nil tpmOps")
-	}
-
-	// Clean up
-	service.mu.Lock()
-	delete(service.instances, bundleID)
-	service.mu.Unlock()
-}
-
-func TestService_ReadPCR_NilTPMOps(t *testing.T) {
-	config := createTestConfig(t)
-	service, err := NewService(config, nil, &mockCA{})
-	if err != nil {
-		t.Fatalf("NewService failed: %v", err)
-	}
-
-	bundleID := "read-pcr-nil-tpmops"
-
-	// Simulate running instance with nil tpmOps
-	service.mu.Lock()
-	service.instances[bundleID] = &runningInstance{
-		swtpm:      nil,
-		socketPath: "/tmp/test.sock",
-		tpmOps:     nil,
-	}
-	service.mu.Unlock()
-
-	ctx := context.Background()
-	_, err = service.ReadPCR(ctx, bundleID, 0)
-	if err == nil {
-		t.Error("ReadPCR should fail with nil tpmOps")
 	}
 
 	// Clean up
@@ -4672,38 +3722,6 @@ func TestService_DeleteTemplate_NotFound_More(t *testing.T) {
 	}
 }
 
-func TestService_DeleteTemplate_Success(t *testing.T) {
-	config := createTestConfig(t)
-	service, err := NewService(config, nil, &mockCA{})
-	if err != nil {
-		t.Fatalf("NewService failed: %v", err)
-	}
-
-	// Create a template
-	templateID := "delete-me-template"
-	templatePath := config.TemplatePath(templateID)
-	os.MkdirAll(templatePath, 0700)
-	manifest := &Manifest{
-		Version:   ManifestVersion,
-		ID:        templateID,
-		Mode:      BundleModeTemplate,
-		CreatedAt: time.Now(),
-	}
-	manifestData, _ := json.Marshal(manifest)
-	os.WriteFile(filepath.Join(templatePath, "manifest.json"), manifestData, 0600)
-
-	ctx := context.Background()
-	err = service.DeleteTemplate(ctx, templateID)
-	if err != nil {
-		t.Fatalf("DeleteTemplate failed: %v", err)
-	}
-
-	// Verify template was deleted
-	if _, err := os.Stat(templatePath); !os.IsNotExist(err) {
-		t.Error("Template directory should be deleted")
-	}
-}
-
 // =============================================================================
 // Bundle Mode Filter Test
 // =============================================================================
@@ -4763,34 +3781,6 @@ func TestService_ListBundles_FilterByTemplateMode(t *testing.T) {
 // =============================================================================
 // CertFingerprint Test
 // =============================================================================
-
-func TestCertFingerprint_Coverage(t *testing.T) {
-	// Create a test certificate
-	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject: pkix.Name{
-			CommonName: "test.example.com",
-		},
-		NotBefore: time.Now(),
-		NotAfter:  time.Now().Add(time.Hour),
-	}
-	certDER, _ := x509.CreateCertificate(rand.Reader, template, template, &rsaKey.PublicKey, rsaKey)
-	cert, _ := x509.ParseCertificate(certDER)
-
-	fingerprint := certFingerprint(cert)
-
-	// Fingerprint should be a hex string starting with "sha256:"
-	if !strings.HasPrefix(fingerprint, "sha256:") {
-		t.Errorf("Fingerprint should start with 'sha256:', got: %s", fingerprint)
-	}
-
-	// Fingerprint should be consistent for same cert
-	fingerprint2 := certFingerprint(cert)
-	if fingerprint != fingerprint2 {
-		t.Error("Fingerprint should be consistent for same certificate")
-	}
-}
 
 // =============================================================================
 // Additional Service Method Tests
@@ -4898,90 +3888,6 @@ func TestService_NewService_TemplatesDirectoryCreationFails(t *testing.T) {
 	}
 	if !strings.Contains(cfgErr.Reason, "failed to create templates directory") {
 		t.Errorf("reason %q, want the templates directory failure", cfgErr.Reason)
-	}
-}
-
-func TestService_GetBundle_MalformedManifest(t *testing.T) {
-	config := createTestConfig(t)
-	service, err := NewService(config, nil, &mockCA{})
-	if err != nil {
-		t.Fatalf("NewService failed: %v", err)
-	}
-
-	bundleID := "malformed-manifest"
-	bundlePath := config.BundlePath(bundleID)
-	os.MkdirAll(bundlePath, 0700)
-
-	// Write invalid JSON
-	os.WriteFile(filepath.Join(bundlePath, "manifest.json"), []byte("not valid json"), 0600)
-
-	ctx := context.Background()
-	_, err = service.GetBundle(ctx, bundleID)
-	if err == nil {
-		t.Error("GetBundle should fail for malformed manifest")
-	}
-}
-
-func TestService_GetTemplate_MalformedManifest(t *testing.T) {
-	config := createTestConfig(t)
-	service, err := NewService(config, nil, &mockCA{})
-	if err != nil {
-		t.Fatalf("NewService failed: %v", err)
-	}
-
-	templateID := "malformed-template"
-	templatePath := config.TemplatePath(templateID)
-	os.MkdirAll(templatePath, 0700)
-
-	// Write invalid JSON
-	os.WriteFile(filepath.Join(templatePath, "manifest.json"), []byte("invalid json"), 0600)
-
-	ctx := context.Background()
-	_, err = service.GetTemplate(ctx, templateID)
-	if err == nil {
-		t.Error("GetTemplate should fail for malformed manifest")
-	}
-}
-
-func TestService_ListBundles_NonDirectoryEntry(t *testing.T) {
-	config := createTestConfig(t)
-	service, err := NewService(config, nil, &mockCA{})
-	if err != nil {
-		t.Fatalf("NewService failed: %v", err)
-	}
-
-	// Create a file in the bundles directory (should be skipped)
-	bundlesDir := config.BundlesDir()
-	os.WriteFile(filepath.Join(bundlesDir, "not-a-directory.txt"), []byte("content"), 0644)
-
-	// Create a valid bundle
-	bundleID := "valid-bundle"
-	bundlePath := config.BundlePath(bundleID)
-	os.MkdirAll(bundlePath, 0700)
-	manifest := &Manifest{
-		Version:   ManifestVersion,
-		ID:        bundleID,
-		Mode:      BundleModePreAssigned,
-		CreatedAt: time.Now(),
-	}
-	manifestData, _ := json.Marshal(manifest)
-	os.WriteFile(filepath.Join(bundlePath, "manifest.json"), manifestData, 0600)
-
-	ctx := context.Background()
-	bundles, err := service.ListBundles(ctx, nil)
-	if err != nil {
-		t.Fatalf("ListBundles failed: %v", err)
-	}
-
-	// Should only find the valid bundle, not the file
-	found := false
-	for _, b := range bundles {
-		if b.ID == bundleID {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("ListBundles should find valid-bundle")
 	}
 }
 

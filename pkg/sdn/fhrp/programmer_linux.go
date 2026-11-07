@@ -16,6 +16,7 @@
 package fhrp
 
 import (
+	"io"
 	"net"
 	"net/netip"
 
@@ -55,11 +56,40 @@ type netlinkProgrammer struct {
 	handle *vnl.Handle
 }
 
+// frameWriter is the part of *packet.Conn the gratuitous ARP uses; unit
+// tests substitute a fake through listenARP.
+type frameWriter interface {
+	WriteTo(b []byte, addr net.Addr) (int, error)
+	Close() error
+}
+
+// Host seams for the netlink and raw-socket calls made without a handle.
+// Each defaults to the real host call and only unit tests replace them.
+var (
+	netlinkLinkByName  = vnl.LinkByName
+	netlinkAddrReplace = vnl.AddrReplace
+	netlinkAddrDel     = vnl.AddrDel
+	listenARP          = func(ifi *net.Interface) (frameWriter, error) {
+		conn, err := packet.Listen(ifi, packet.Raw, unix.ETH_P_ARP, nil)
+		if err != nil {
+			return nil, err
+		}
+		return conn, nil
+	}
+	listenICMPv6 = func() (io.Closer, ipv6Conn, error) {
+		pc, err := icmp.ListenPacket("ip6:ipv6-icmp", "::")
+		if err != nil {
+			return nil, nil, err
+		}
+		return pc, pc.IPv6PacketConn(), nil
+	}
+)
+
 func (p *netlinkProgrammer) linkByName(name string) (vnl.Link, error) {
 	if p.handle != nil {
 		return p.handle.LinkByName(name)
 	}
-	return vnl.LinkByName(name)
+	return netlinkLinkByName(name)
 }
 
 // AddAddress implements Programmer.
@@ -75,7 +105,7 @@ func (p *netlinkProgrammer) AddAddress(iface string, prefix netip.Prefix, _ net.
 	if p.handle != nil {
 		return p.handle.AddrReplace(link, addr)
 	}
-	return vnl.AddrReplace(link, addr)
+	return netlinkAddrReplace(link, addr)
 }
 
 // DeleteAddress implements Programmer.
@@ -91,7 +121,7 @@ func (p *netlinkProgrammer) DeleteAddress(iface string, prefix netip.Prefix, _ n
 	if p.handle != nil {
 		err = p.handle.AddrDel(link, addr)
 	} else {
-		err = vnl.AddrDel(link, addr)
+		err = netlinkAddrDel(link, addr)
 	}
 	if err != nil && err.Error() == unix.EADDRNOTAVAIL.Error() {
 		return nil
@@ -102,7 +132,7 @@ func (p *netlinkProgrammer) DeleteAddress(iface string, prefix netip.Prefix, _ n
 // Announce implements Programmer. The raw sockets it opens live in the
 // calling thread's network namespace.
 func (p *netlinkProgrammer) Announce(iface string, addr netip.Addr, _ net.HardwareAddr) error {
-	ifi, err := net.InterfaceByName(iface)
+	ifi, err := interfaceByName(iface)
 	if err != nil {
 		return err
 	}
@@ -115,7 +145,7 @@ func (p *netlinkProgrammer) Announce(iface string, addr netip.Addr, _ net.Hardwa
 // announceARP sends a gratuitous ARP reply for addr from the interface's
 // MAC to the broadcast address.
 func announceARP(ifi *net.Interface, addr netip.Addr) error {
-	conn, err := packet.Listen(ifi, packet.Raw, unix.ETH_P_ARP, nil)
+	conn, err := listenARP(ifi)
 	if err != nil {
 		return err
 	}
@@ -132,12 +162,11 @@ func announceARP(ifi *net.Interface, addr netip.Addr) error {
 // for addr to all-nodes with the Override flag and the interface's MAC as
 // the target link-layer address.
 func announceNA(ifi *net.Interface, addr netip.Addr) error {
-	pc, err := icmp.ListenPacket("ip6:ipv6-icmp", "::")
+	pc, p, err := listenICMPv6()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = pc.Close() }()
-	p := pc.IPv6PacketConn()
 	if err := p.SetHopLimit(RequiredTTL); err != nil {
 		return err
 	}

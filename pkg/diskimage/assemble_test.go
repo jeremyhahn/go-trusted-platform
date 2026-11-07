@@ -43,6 +43,7 @@ func assembleConfig() *installer.Config {
 }
 
 func TestAssembleAttachesInstallsAndDetaches(t *testing.T) {
+	t.Parallel()
 	out := filepath.Join(t.TempDir(), "image.img")
 	rec := &fakeRunner{loop: "/dev/loop7"}
 	var seen *installer.Config
