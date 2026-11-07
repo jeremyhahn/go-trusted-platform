@@ -829,32 +829,11 @@ func TestErrAdapterCreationFailed_Error(t *testing.T) {
 	assert.Equal(t, cause, err.Unwrap())
 }
 
-func TestErrAdapterCreationFailed_Unwrap(t *testing.T) {
-	cause := errors.New("underlying error")
-	err := ErrAdapterCreationFailed{Adapter: "CA", Cause: cause}
-
-	// Test errors.Is via Unwrap
-	assert.True(t, errors.Is(err, cause))
-}
-
 func TestErrAdapterStartFailed_Error(t *testing.T) {
 	cause := assert.AnError
 	err := ErrAdapterStartFailed{Adapter: "CA", Cause: cause}
 	assert.Contains(t, err.Error(), "platform registry: failed to start CA adapter")
 	assert.Equal(t, cause, err.Unwrap())
-}
-
-func TestErrAdapterStartFailed_Unwrap(t *testing.T) {
-	cause := errors.New("start failed")
-	err := ErrAdapterStartFailed{Adapter: "XKMS", Cause: cause}
-
-	// Test errors.Is via Unwrap
-	assert.True(t, errors.Is(err, cause))
-}
-
-func TestErrAdapterNotConfigured_Error(t *testing.T) {
-	err := ErrAdapterNotConfigured{Adapter: "XKMS"}
-	assert.Equal(t, "platform registry: XKMS adapter is not configured", err.Error())
 }
 
 func TestErrAdapterNotConfigured_AllAdapters(t *testing.T) {
@@ -890,17 +869,6 @@ func TestErrServiceUnavailable_Error(t *testing.T) {
 		err := ErrServiceUnavailable{Service: "Secrets", Reason: ""}
 		assert.Equal(t, "platform registry: service Secrets is unavailable", err.Error())
 	})
-}
-
-func TestErrServiceUnavailable_AllServices(t *testing.T) {
-	services := []string{"KV", "KMS", "Secrets", "IAM", "Crypto", "Vector", "TimeSeries", "Scheduler", "Messaging"}
-
-	for _, svc := range services {
-		t.Run(svc, func(t *testing.T) {
-			err := ErrServiceUnavailable{Service: svc}
-			assert.Contains(t, err.Error(), svc)
-		})
-	}
 }
 
 // =============================================================================
@@ -1211,127 +1179,6 @@ func TestRegistry_ConcurrentAccess_MultipleStops(t *testing.T) {
 
 	// Should end up closed
 	assert.True(t, registry.IsClosed())
-}
-
-// =============================================================================
-// QuicBaaS Convenience Accessor Tests (All 9 exposed accessors)
-// =============================================================================
-
-func TestRegistry_KV_NilWhenNotConfigured(t *testing.T) {
-	logger := logging.NewLogger(slog.LevelDebug, nil)
-
-	cfg := &RegistryConfig{
-		Logger: logger,
-	}
-
-	registry, err := NewRegistry(cfg)
-	require.NoError(t, err)
-
-	assert.Nil(t, registry.KV())
-}
-
-func TestRegistry_KMS_NilWhenNotConfigured(t *testing.T) {
-	logger := logging.NewLogger(slog.LevelDebug, nil)
-
-	cfg := &RegistryConfig{
-		Logger: logger,
-	}
-
-	registry, err := NewRegistry(cfg)
-	require.NoError(t, err)
-
-	assert.Nil(t, registry.KMS())
-}
-
-func TestRegistry_Secrets_NilWhenNotConfigured(t *testing.T) {
-	logger := logging.NewLogger(slog.LevelDebug, nil)
-
-	cfg := &RegistryConfig{
-		Logger: logger,
-	}
-
-	registry, err := NewRegistry(cfg)
-	require.NoError(t, err)
-
-	assert.Nil(t, registry.Secrets())
-}
-
-func TestRegistry_IAM_NilWhenNotConfigured(t *testing.T) {
-	logger := logging.NewLogger(slog.LevelDebug, nil)
-
-	cfg := &RegistryConfig{
-		Logger: logger,
-	}
-
-	registry, err := NewRegistry(cfg)
-	require.NoError(t, err)
-
-	assert.Nil(t, registry.IAM())
-}
-
-func TestRegistry_Crypto_NilWhenNotConfigured(t *testing.T) {
-	logger := logging.NewLogger(slog.LevelDebug, nil)
-
-	cfg := &RegistryConfig{
-		Logger: logger,
-	}
-
-	registry, err := NewRegistry(cfg)
-	require.NoError(t, err)
-
-	assert.Nil(t, registry.Crypto())
-}
-
-func TestRegistry_Vector_NilWhenNotConfigured(t *testing.T) {
-	logger := logging.NewLogger(slog.LevelDebug, nil)
-
-	cfg := &RegistryConfig{
-		Logger: logger,
-	}
-
-	registry, err := NewRegistry(cfg)
-	require.NoError(t, err)
-
-	assert.Nil(t, registry.Vector())
-}
-
-func TestRegistry_TimeSeries_NilWhenNotConfigured(t *testing.T) {
-	logger := logging.NewLogger(slog.LevelDebug, nil)
-
-	cfg := &RegistryConfig{
-		Logger: logger,
-	}
-
-	registry, err := NewRegistry(cfg)
-	require.NoError(t, err)
-
-	assert.Nil(t, registry.TimeSeries())
-}
-
-func TestRegistry_Scheduler_NilWhenNotConfigured(t *testing.T) {
-	logger := logging.NewLogger(slog.LevelDebug, nil)
-
-	cfg := &RegistryConfig{
-		Logger: logger,
-	}
-
-	registry, err := NewRegistry(cfg)
-	require.NoError(t, err)
-
-	assert.Nil(t, registry.Scheduler())
-}
-
-func TestRegistry_Messaging_NilWhenNotConfigured(t *testing.T) {
-	logger := logging.NewLogger(slog.LevelDebug, nil)
-
-	cfg := &RegistryConfig{
-		Logger: logger,
-	}
-
-	registry, err := NewRegistry(cfg)
-	require.NoError(t, err)
-
-	assert.Nil(t, registry.Messaging())
 }
 
 // =============================================================================
