@@ -23,6 +23,7 @@ import (
 	"crypto/x509/pkix"
 	"log/slog"
 	"math/big"
+	"sync"
 	"testing"
 	"time"
 )
@@ -42,8 +43,24 @@ func createTestCACert() *x509.Certificate {
 	return template
 }
 
+// cachedRSAKey returns a generator that makes one RSA-2048 key on first use
+// and returns it after that. Key generation is the bulk of this package's test
+// time; no test needs a fresh key, only a second key that differs.
+func cachedRSAKey() func() (*rsa.PrivateKey, error) {
+	return sync.OnceValues(func() (*rsa.PrivateKey, error) {
+		return rsa.GenerateKey(rand.Reader, 2048)
+	})
+}
+
+var (
+	// testRSAKey is the key the tests sign manifests with.
+	testRSAKey = cachedRSAKey()
+	// testOtherRSAKey is a different key, for wrong-key verification.
+	testOtherRSAKey = cachedRSAKey()
+)
+
 func createSignedTestManifest(t *testing.T) (*HostManifest, *rsa.PrivateKey) {
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	privateKey, err := testRSAKey()
 	if err != nil {
 		t.Fatalf("failed to generate key: %v", err)
 	}
@@ -257,7 +274,7 @@ func TestManifestVerifierVerify(t *testing.T) {
 			t.Fatalf("Initialize failed: %v", err)
 		}
 
-		privateKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+		privateKey, _ := testRSAKey()
 
 		_, err := verifier.Verify(context.Background(), nil, &privateKey.PublicKey, []byte("nonce"))
 		if err == nil {
@@ -280,7 +297,7 @@ func TestManifestVerifierVerify(t *testing.T) {
 		manifest.Signature = []byte("invalid-signature")
 
 		// Use a different key for verification
-		otherKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+		otherKey, _ := testOtherRSAKey()
 
 		result, err := verifier.Verify(context.Background(), manifest, &otherKey.PublicKey, manifest.Nonce)
 		if err != nil {
@@ -430,7 +447,7 @@ func TestManifestVerifierVerifySignature(t *testing.T) {
 			t.Fatalf("Initialize failed: %v", err)
 		}
 
-		privateKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+		privateKey, _ := testRSAKey()
 		manifest := createTestManifest()
 		root, _ := RecomputeMerkleRoot(manifest, HashAlgorithmSHA384)
 		manifest.MerkleRoot = root
@@ -457,7 +474,7 @@ func TestManifestVerifierVerifySignature(t *testing.T) {
 			t.Fatalf("Initialize failed: %v", err)
 		}
 
-		privateKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+		privateKey, _ := testRSAKey()
 		manifest := createTestManifest()
 		root, _ := RecomputeMerkleRoot(manifest, HashAlgorithmSHA512)
 		manifest.MerkleRoot = root
@@ -487,7 +504,7 @@ func TestManifestVerifierVerifySignature(t *testing.T) {
 		manifest, _ := createSignedTestManifest(t)
 		manifest.Signature = []byte("invalid")
 
-		otherKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+		otherKey, _ := testOtherRSAKey()
 
 		valid, err := verifier.VerifySignature(context.Background(), manifest, &otherKey.PublicKey)
 		if err == nil {
@@ -508,7 +525,7 @@ func TestManifestVerifierVerifySignature(t *testing.T) {
 			t.Fatalf("Initialize failed: %v", err)
 		}
 
-		privateKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+		privateKey, _ := testRSAKey()
 
 		_, err := verifier.VerifySignature(context.Background(), nil, &privateKey.PublicKey)
 		if err == nil {
@@ -547,7 +564,7 @@ func TestManifestVerifierVerifySignature(t *testing.T) {
 		manifest := createTestManifest()
 		manifest.Signature = nil
 
-		privateKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+		privateKey, _ := testRSAKey()
 
 		_, err := verifier.VerifySignature(context.Background(), manifest, &privateKey.PublicKey)
 		if err == nil {
@@ -1135,7 +1152,7 @@ func TestQuickVerify(t *testing.T) {
 	})
 
 	t.Run("NilManifest", func(t *testing.T) {
-		privateKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+		privateKey, _ := testRSAKey()
 		_, err := QuickVerify(nil, &privateKey.PublicKey, []byte("nonce"), HashAlgorithmSHA256)
 		if err == nil {
 			t.Fatal("expected error for nil manifest")
@@ -1144,7 +1161,7 @@ func TestQuickVerify(t *testing.T) {
 
 	t.Run("InvalidManifest", func(t *testing.T) {
 		manifest := &HostManifest{} // Missing required fields
-		privateKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+		privateKey, _ := testRSAKey()
 
 		_, err := QuickVerify(manifest, &privateKey.PublicKey, []byte("nonce"), HashAlgorithmSHA256)
 		if err == nil {
@@ -1175,7 +1192,7 @@ func TestQuickVerify(t *testing.T) {
 func TestExtractPublicKeyFromManifest(t *testing.T) {
 	t.Run("Success", func(t *testing.T) {
 		// Generate a key pair and encode the public key
-		privateKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+		privateKey, _ := testRSAKey()
 		pubKeyBytes, _ := x509.MarshalPKIXPublicKey(&privateKey.PublicKey)
 
 		manifest := createTestManifest()

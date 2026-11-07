@@ -1126,9 +1126,13 @@ func (s *Supervisor) memoryAttr(name string) slog.Attr {
 	if err != nil {
 		return slog.Any("memory_error", err)
 	}
+	peak := slog.Int64("peak", usage.Peak)
+	if !usage.HasPeak {
+		peak = slog.String("peak", "absent")
+	}
 	return slog.Group("memory",
 		slog.Int64("current", usage.Current),
-		slog.Int64("peak", usage.Peak),
+		peak,
 		slog.Int64("oom_kill", usage.OOMKill))
 }
 

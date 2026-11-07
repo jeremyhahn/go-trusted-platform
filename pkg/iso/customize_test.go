@@ -668,63 +668,6 @@ func TestWriteConfigs(t *testing.T) {
 	}
 }
 
-// TestCopySecureBootKeys_AutoGenerate tests that Secure Boot keys are automatically
-// generated when they don't exist, regardless of the SecureBoot config flag.
-func TestCopySecureBootKeys_AutoGenerate(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	// Create minimal directory structure
-	isoDir := filepath.Join(tmpDir, "iso")
-	if err := os.MkdirAll(isoDir, 0755); err != nil {
-		t.Fatalf("Failed to create ISO directory: %v", err)
-	}
-
-	// Configure with keys directory that doesn't exist
-	keysDir := filepath.Join(tmpDir, "new-secure-boot-keys")
-
-	config := &PlatformISOConfig{
-		Directories: DirectoryConfig{
-			Work: tmpDir,
-			ISO:  isoDir,
-			Keys: keysDir,
-		},
-		Security: SecurityConfig{
-			SecureBoot: false, // Even when false, keys should be generated
-		},
-	}
-
-	logger := logging.DefaultLogger()
-	customizer := NewCustomizer(config, logger)
-
-	ctx := context.Background()
-	if err := customizer.CopySecureBootKeys(ctx); err != nil {
-		t.Fatalf("CopySecureBootKeys failed: %v", err)
-	}
-
-	// Verify keys were generated in keys directory
-	dbKey := filepath.Join(keysDir, "DB.key")
-	dbCert := filepath.Join(keysDir, "DB.crt")
-
-	if _, err := os.Stat(dbKey); os.IsNotExist(err) {
-		t.Error("DB.key was not generated")
-	}
-	if _, err := os.Stat(dbCert); os.IsNotExist(err) {
-		t.Error("DB.crt was not generated")
-	}
-
-	// Verify keys were copied to ISO directory
-	isoKeysDir := filepath.Join(isoDir, "secure-boot-keys")
-	isoDbKey := filepath.Join(isoKeysDir, "DB.key")
-	isoDbCert := filepath.Join(isoKeysDir, "DB.crt")
-
-	if _, err := os.Stat(isoDbKey); os.IsNotExist(err) {
-		t.Error("DB.key was not copied to ISO")
-	}
-	if _, err := os.Stat(isoDbCert); os.IsNotExist(err) {
-		t.Error("DB.crt was not copied to ISO")
-	}
-}
-
 // TestCopySecureBootKeys_ExistingKeys tests that existing keys are used
 // and copied to the ISO without regeneration.
 func TestCopySecureBootKeys_ExistingKeys(t *testing.T) {
@@ -831,14 +774,18 @@ func TestCopySecureBootKeys_DefaultKeysDir(t *testing.T) {
 	}
 
 	// Verify keys were generated in default location
-	if _, err := os.Stat(filepath.Join(expectedKeysDir, "DB.key")); os.IsNotExist(err) {
-		t.Error("DB.key was not generated in default keys directory")
+	for _, name := range []string{"DB.key", "DB.crt"} {
+		if _, err := os.Stat(filepath.Join(expectedKeysDir, name)); os.IsNotExist(err) {
+			t.Errorf("%s was not generated in default keys directory", name)
+		}
 	}
 
 	// Verify keys were copied to ISO
 	isoKeysDir := filepath.Join(isoDir, "secure-boot-keys")
-	if _, err := os.Stat(filepath.Join(isoKeysDir, "DB.key")); os.IsNotExist(err) {
-		t.Error("DB.key was not copied to ISO directory")
+	for _, name := range []string{"DB.key", "DB.crt"} {
+		if _, err := os.Stat(filepath.Join(isoKeysDir, name)); os.IsNotExist(err) {
+			t.Errorf("%s was not copied to ISO directory", name)
+		}
 	}
 }
 
@@ -868,48 +815,5 @@ func TestEnsureSecureBootKeysExist_NewKeys(t *testing.T) {
 		if _, err := os.Stat(path); os.IsNotExist(err) {
 			t.Errorf("Required file %s was not generated", file)
 		}
-	}
-}
-
-// TestEnsureSecureBootKeysExist_ExistingKeys tests that existing keys are not overwritten.
-func TestEnsureSecureBootKeysExist_ExistingKeys(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	// Create keys directory with existing keys
-	keysDir := filepath.Join(tmpDir, "existing-keys")
-	if err := os.MkdirAll(keysDir, 0755); err != nil {
-		t.Fatalf("Failed to create keys directory: %v", err)
-	}
-
-	// Create minimal existing key/cert
-	testContent := []byte("ORIGINAL CONTENT")
-	if err := os.WriteFile(filepath.Join(keysDir, "DB.key"), testContent, 0600); err != nil {
-		t.Fatalf("Failed to write test key: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(keysDir, "DB.crt"), testContent, 0644); err != nil {
-		t.Fatalf("Failed to write test cert: %v", err)
-	}
-
-	config := &PlatformISOConfig{
-		Directories: DirectoryConfig{
-			Work: tmpDir,
-		},
-	}
-
-	logger := logging.DefaultLogger()
-	customizer := NewCustomizer(config, logger)
-
-	ctx := context.Background()
-	if err := customizer.ensureSecureBootKeysExist(ctx, keysDir); err != nil {
-		t.Fatalf("ensureSecureBootKeysExist failed: %v", err)
-	}
-
-	// Verify original content was preserved
-	keyData, err := os.ReadFile(filepath.Join(keysDir, "DB.key"))
-	if err != nil {
-		t.Fatalf("Failed to read key file: %v", err)
-	}
-	if string(keyData) != string(testContent) {
-		t.Error("Key file was modified when it should have been preserved")
 	}
 }

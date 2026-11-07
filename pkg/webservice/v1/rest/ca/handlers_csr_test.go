@@ -23,6 +23,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -39,13 +40,44 @@ import (
 // KMS holds key as "rpi/fleet".
 func csrHandlers(t *testing.T, key *rsa.PrivateKey) (*CAHandlers, *mockHttpWriter, *issuancetest.CA) {
 	t.Helper()
-	signer := issuancetest.NewCA(t)
+	root := sharedCSRKeys(t).ca
+	// A fresh CA per test on the shared root: Opts and Err start empty.
+	signer := &issuancetest.CA{Key: root.Key, Root: root.Root}
 	handlers, writer := newTestHandlers(&mockCertificateAuthority{
 		initialized: true,
 		signCSRFn:   signer.SignCSR,
 	})
 	handlers.WithKMS(issuancetest.NewKMS(t, "rpi/fleet", &key.PublicKey))
 	return handlers, writer, signer
+}
+
+// csrKeys holds the RSA-2048 keys the CSR tests share: generating them per
+// test dominated the package time. Tests only read them.
+type csrKeys struct {
+	ca     *issuancetest.CA
+	device *rsa.PrivateKey
+}
+
+var (
+	csrKeysOnce   sync.Once
+	csrKeysShared csrKeys
+)
+
+func sharedCSRKeys(t *testing.T) csrKeys {
+	t.Helper()
+	csrKeysOnce.Do(func() {
+		csrKeysShared = csrKeys{ca: issuancetest.NewCA(t), device: issuancetest.RSAKey(t)}
+	})
+	if csrKeysShared.ca == nil || csrKeysShared.device == nil {
+		t.Fatal("shared CSR keys were not created")
+	}
+	return csrKeysShared
+}
+
+// deviceKey is the shared key a test's CSR certifies and its KMS holds.
+func deviceKey(t *testing.T) *rsa.PrivateKey {
+	t.Helper()
+	return sharedCSRKeys(t).device
 }
 
 // postSignCSR posts a CSR as a caller whose platform token carries scopes;
@@ -66,7 +98,7 @@ func postSignCSR(t *testing.T, handlers *CAHandlers, req *platformv1.SignCSRRequ
 }
 
 func TestSignCSR_CertifiesTheKMSKeyForCodeSigning(t *testing.T) {
-	key := issuancetest.RSAKey(t)
+	key := deviceKey(t)
 	handlers, writer, signer := csrHandlers(t, key)
 
 	rec := postSignCSR(t, handlers, &platformv1.SignCSRRequest{
@@ -107,7 +139,7 @@ func TestSignCSR_NeedsItsOwnScope(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			key := issuancetest.RSAKey(t)
+			key := deviceKey(t)
 			handlers, writer, signer := csrHandlers(t, key)
 
 			rec := postSignCSR(t, handlers, &platformv1.SignCSRRequest{
@@ -124,7 +156,7 @@ func TestSignCSR_NeedsItsOwnScope(t *testing.T) {
 }
 
 func TestSignCSR_Errors(t *testing.T) {
-	key := issuancetest.RSAKey(t)
+	key := deviceKey(t)
 	csr := string(issuancetest.CSR(t, key, "rpi/fleet"))
 	cases := []struct {
 		name    string
@@ -155,7 +187,7 @@ func TestSignCSR_Errors(t *testing.T) {
 }
 
 func TestSignCSR_BodyIsNotJSON(t *testing.T) {
-	handlers, writer, signer := csrHandlers(t, issuancetest.RSAKey(t))
+	handlers, writer, signer := csrHandlers(t, deviceKey(t))
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/ca/sign-csr", bytes.NewReader([]byte("{")))
 	req = req.WithContext(iammw.SetAuthorizedContext(req.Context(),
 		&platformtoken.AuthorizedContext{Subject: "admin", Scopes: []string{SignCSRScope}}))
@@ -174,7 +206,7 @@ func TestSignCSR_WithoutACA(t *testing.T) {
 // route: the same CSR is certified through a router given the KMS and
 // refused, without reaching the CA, through one that was not.
 func TestCARouter_WithKMS(t *testing.T) {
-	key := issuancetest.RSAKey(t)
+	key := deviceKey(t)
 	csr := string(issuancetest.CSR(t, key, "rpi/fleet"))
 	cases := []struct {
 		name    string
@@ -214,7 +246,7 @@ func TestCARouter_WithKMS(t *testing.T) {
 // Issuing a certificate never certifies a caller's CSR: csr_pem is no longer
 // part of the request, so the field is dropped and the CA never signs it.
 func TestIssueCertificate_IgnoresACSR(t *testing.T) {
-	key := issuancetest.RSAKey(t)
+	key := deviceKey(t)
 	handlers, _, signer := csrHandlers(t, key)
 	csr, err := json.Marshal(string(issuancetest.CSR(t, key, "rpi/fleet")))
 	require.NoError(t, err)
