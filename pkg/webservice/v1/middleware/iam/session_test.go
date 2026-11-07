@@ -39,6 +39,7 @@ func createTestUser(opts ...func(*sdkiam.User)) *sdkiam.User {
 
 // TestNewIAMSession tests the NewIAMSession constructor.
 func TestNewIAMSession(t *testing.T) {
+	t.Parallel()
 	t.Run("creates_session_from_valid_user", func(t *testing.T) {
 		user := createTestUser()
 		session := NewIAMSession(user)
@@ -122,6 +123,7 @@ func TestNewIAMSession(t *testing.T) {
 
 // TestNewIAMSessionWithMFA tests the NewIAMSessionWithMFA constructor.
 func TestNewIAMSessionWithMFA(t *testing.T) {
+	t.Parallel()
 	t.Run("sets_explicit_mfa_status", func(t *testing.T) {
 		user := createTestUser()
 		mfaTime := time.Now()
@@ -160,6 +162,7 @@ func TestNewIAMSessionWithMFA(t *testing.T) {
 
 // TestIAMSession_HasRole tests the HasRole method.
 func TestIAMSession_HasRole(t *testing.T) {
+	t.Parallel()
 	user := createTestUser(func(u *sdkiam.User) {
 		u.Roles = []string{"admin", "user", "viewer"}
 	})
@@ -198,6 +201,7 @@ func TestIAMSession_HasRole(t *testing.T) {
 
 // TestIAMSession_HasAllRoles tests the HasAllRoles method.
 func TestIAMSession_HasAllRoles(t *testing.T) {
+	t.Parallel()
 	user := createTestUser(func(u *sdkiam.User) {
 		u.Roles = []string{"admin", "user", "viewer"}
 	})
@@ -233,6 +237,7 @@ func TestIAMSession_HasAllRoles(t *testing.T) {
 
 // TestIAMSession_HasAnyRole tests the HasAnyRole method.
 func TestIAMSession_HasAnyRole(t *testing.T) {
+	t.Parallel()
 	user := createTestUser(func(u *sdkiam.User) {
 		u.Roles = []string{"admin", "user"}
 	})
@@ -268,6 +273,7 @@ func TestIAMSession_HasAnyRole(t *testing.T) {
 
 // TestIAMSession_HasGroup tests the HasGroup method.
 func TestIAMSession_HasGroup(t *testing.T) {
+	t.Parallel()
 	user := createTestUser(func(u *sdkiam.User) {
 		u.Groups = []string{"developers", "ops", "security"}
 	})
@@ -300,6 +306,7 @@ func TestIAMSession_HasGroup(t *testing.T) {
 
 // TestIAMSession_Attributes tests the Attributes and GetAttribute methods.
 func TestIAMSession_Attributes(t *testing.T) {
+	t.Parallel()
 	user := createTestUser(func(u *sdkiam.User) {
 		u.Metadata = map[string]string{
 			"department": "engineering",
@@ -362,6 +369,7 @@ func TestIAMSession_Attributes(t *testing.T) {
 
 // TestIAMSession_User tests the User method.
 func TestIAMSession_User(t *testing.T) {
+	t.Parallel()
 	t.Run("returns_underlying_user", func(t *testing.T) {
 		user := createTestUser()
 		session := NewIAMSession(user)
@@ -374,6 +382,7 @@ func TestIAMSession_User(t *testing.T) {
 
 // TestIAMSession_ToSubject tests the ToSubject method.
 func TestIAMSession_ToSubject(t *testing.T) {
+	t.Parallel()
 	t.Run("converts_session_to_subject", func(t *testing.T) {
 		mfaTime := time.Now()
 		user := createTestUser(func(u *sdkiam.User) {
@@ -417,6 +426,7 @@ func TestIAMSession_ToSubject(t *testing.T) {
 
 // TestIAMSession_NilUserHandling tests that session methods handle nil user correctly.
 func TestIAMSession_NilUserHandling(t *testing.T) {
+	t.Parallel()
 	// Create a session with nil user through type assertion trick
 	// This tests edge cases in the session implementation
 	session := &iamSession{user: nil}
@@ -472,6 +482,7 @@ func TestIAMSession_NilUserHandling(t *testing.T) {
 
 // TestIAMSession_ImplementsInterface verifies iamSession implements IAMSession interface.
 func TestIAMSession_ImplementsInterface(t *testing.T) {
+	t.Parallel()
 	user := createTestUser()
 	var _ = NewIAMSession(user)
 }
