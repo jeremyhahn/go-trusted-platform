@@ -111,8 +111,14 @@ var ErrLoadTlsCerts, ErrBindPort error
 without a CA terminates the process; there is no error return.
 
 **`Run()` blocks** until `Shutdown()` sends on `closeChan`. `Shutdown` allows
-5 seconds for `httpServer.Shutdown` and does **not** stop the HTTP/3 server —
-`h3Server` is a local in `startHTTPS` with no handle kept.
+one 5-second context for the plaintext and TLS `http.Server.Shutdown` calls
+and the HTTP/3 server. `startHTTPS` keeps the HTTP/3 server, its UDP socket and
+a `done` channel in `server.h3`; `shutdownHTTP3` drains it with
+`http3.Server.Shutdown(ctx)` (GOAWAY, then wait for in-flight requests), falls
+back to `Close` (which aborts them) when the drain fails or the context
+expires, waits on `done` for `Serve` to return, then closes the UDP socket so
+the port is released. A failed step is an `ErrHTTP3Shutdown` (`drain`,
+`close`, `socket`) that `Shutdown` logs.
 
 Server timeouts (`webserver_v1.go`):
 `HTTP_CLIENT_TIMEOUT` 10s, `HTTP_SERVER_READ_TIMEOUT` 5s,
