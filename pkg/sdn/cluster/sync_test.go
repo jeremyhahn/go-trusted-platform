@@ -1016,6 +1016,9 @@ func TestSyncBridgeSingle(t *testing.T) {
 	if len(ovsClient.createBridgeCalls) != 1 {
 		t.Errorf("Expected 1 CreateBridge call, got %d", len(ovsClient.createBridgeCalls))
 	}
+	if _, getBridgeErr := ovsClient.GetBridge(context.Background(), "br0"); getBridgeErr != nil {
+		t.Errorf("Bridge should have been created in OVS")
+	}
 }
 
 // Test: SyncBridge with non-local node returns error
@@ -1387,67 +1390,6 @@ func TestBuildMatchString(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := sync.buildMatchString(tt.match)
-			if result != tt.expected {
-				t.Errorf("Expected '%s', got '%s'", tt.expected, result)
-			}
-		})
-	}
-}
-
-// Test: Flow actions string building
-func TestBuildActionsString(t *testing.T) {
-	sync := &quicbaasSynchronizer{}
-
-	tests := []struct {
-		name     string
-		actions  []*FlowAction
-		expected string
-	}{
-		{
-			name:     "nil actions",
-			actions:  nil,
-			expected: "drop",
-		},
-		{
-			name:     "empty actions",
-			actions:  []*FlowAction{},
-			expected: "drop",
-		},
-		{
-			name: "output action",
-			actions: []*FlowAction{
-				{Type: ActionOutput, Port: ptrUint32(2)},
-			},
-			expected: "output:2",
-		},
-		{
-			name: "multiple actions",
-			actions: []*FlowAction{
-				{Type: ActionSetVLAN, VLANVid: ptrUint16(100)},
-				{Type: ActionOutput, Port: ptrUint32(2)},
-			},
-			expected: "mod_vlan_vid:100,output:2",
-		},
-		{
-			name: "special actions",
-			actions: []*FlowAction{
-				{Type: ActionNormal},
-			},
-			expected: "NORMAL",
-		},
-		{
-			name: "strip vlan and flood",
-			actions: []*FlowAction{
-				{Type: ActionStripVLAN},
-				{Type: ActionFlood},
-			},
-			expected: "strip_vlan,FLOOD",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := sync.buildActionsString(tt.actions)
 			if result != tt.expected {
 				t.Errorf("Expected '%s', got '%s'", tt.expected, result)
 			}
@@ -2294,6 +2236,14 @@ func TestBuildActionsString_AllActionTypes(t *testing.T) {
 			expected: "mod_vlan_vid:100,output:1",
 		},
 		{
+			name: "strip vlan and flood",
+			actions: []*FlowAction{
+				{Type: ActionStripVLAN},
+				{Type: ActionFlood},
+			},
+			expected: "strip_vlan,FLOOD",
+		},
+		{
 			name: "output without port is skipped",
 			actions: []*FlowAction{
 				{Type: ActionOutput, Port: nil},
@@ -2597,24 +2547,6 @@ func TestUpdatePortWithRetry_TrunksUpdate(t *testing.T) {
 	}
 }
 
-func TestSyncSingleBridge_NodeMismatch(t *testing.T) {
-	stateManager, _, sync := createSyncTestFixture(t)
-
-	// Set up bridge for different node
-	bridge := &BridgeState{
-		ID:     "br-1",
-		Name:   "bridge1",
-		NodeID: 99, // Different from synchronizer's node ID (which is 1)
-	}
-	stateManager.CreateBridge(context.Background(), bridge)
-
-	err := sync.SyncBridge("br-1")
-
-	if err == nil {
-		t.Error("SyncBridge() should return error for node mismatch")
-	}
-}
-
 func TestSyncSingleBridge_BridgeExists(t *testing.T) {
 	stateManager, ovsClient, sync := createSyncTestFixture(t)
 
@@ -2632,29 +2564,6 @@ func TestSyncSingleBridge_BridgeExists(t *testing.T) {
 
 	if err != nil {
 		t.Errorf("SyncBridge() error = %v", err)
-	}
-}
-
-func TestSyncSingleBridge_BridgeDoesNotExist(t *testing.T) {
-	stateManager, ovsClient, sync := createSyncTestFixture(t)
-
-	// Set up bridge in state manager but not in OVS
-	bridge := &BridgeState{
-		ID:     "br-1",
-		Name:   "bridge1",
-		NodeID: 1,
-	}
-	stateManager.CreateBridge(context.Background(), bridge)
-
-	err := sync.SyncBridge("br-1")
-
-	if err != nil {
-		t.Errorf("SyncBridge() error = %v", err)
-	}
-	// Verify bridge was created in OVS
-	_, getBridgeErr := ovsClient.GetBridge(context.Background(), "bridge1")
-	if getBridgeErr != nil {
-		t.Errorf("Bridge should have been created in OVS")
 	}
 }
 

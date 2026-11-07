@@ -27,7 +27,7 @@ acme:
         cn: acme-account
         debug: true
         hash: SHA-256
-        password: 123456
+        password: "123456"
         platform-policy: true
         rsa:
           size: 2048
@@ -150,7 +150,7 @@ certificate-authority:
           signature-algorithm: SHA256-RSAPSS
           hash: SHA-256
           store: software
-          password: 123456
+          password: "123456"
           platform-policy: true
           debug: true
 
@@ -162,7 +162,7 @@ certificate-authority:
           signature-algorithm: SHA256-RSAPSS
           hash: SHA-256
           store: pkcs11
-          password: 123456
+          password: "123456"
           platform-policy: true
           debug: true
 
@@ -173,7 +173,7 @@ certificate-authority:
           signature-algorithm: SHA256-RSAPSS
           hash: SHA-256
           store: tpm2
-          password: 123456
+          password: "123456"
           platform-policy: true
           debug: true
 
@@ -184,7 +184,7 @@ certificate-authority:
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: software
-          password: 123456
+          password: "123456"
           platform-policy: true
           debug: true
 
@@ -195,7 +195,7 @@ certificate-authority:
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: pkcs11
-          password: 123456
+          password: "123456"
           platform-policy: true
           debug: true
 
@@ -206,7 +206,7 @@ certificate-authority:
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: tpm2
-          password: 123456
+          password: "123456"
           platform-policy: true
           debug: true
 
@@ -217,7 +217,7 @@ certificate-authority:
           signature-algorithm: Ed25519
           hash: SHA-256
           store: software
-          password: 123456
+          password: "123456"
           platform-policy: true
           debug: true
 
@@ -265,7 +265,7 @@ certificate-authority:
           signature-algorithm: SHA256-RSAPSS
           hash: SHA-256
           store: software
-          password: 123456
+          password: "123456"
           platform-policy: true
           debug: true
 
@@ -276,7 +276,7 @@ certificate-authority:
           signature-algorithm: SHA256-RSAPSS
           hash: SHA-256
           store: pkcs11
-          password: 123456
+          password: "123456"
           platform-policy: true
           debug: true
 
@@ -287,7 +287,7 @@ certificate-authority:
           signature-algorithm: SHA256-RSAPSS
           hash: SHA-256
           store: tpm2
-          password: 123456
+          password: "123456"
           platform-policy: true
           debug: true
 
@@ -298,7 +298,7 @@ certificate-authority:
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: software
-          password: 123456
+          password: "123456"
           platform-policy: true
           debug: true
 
@@ -309,7 +309,7 @@ certificate-authority:
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: pkcs11
-          password: 123456
+          password: "123456"
           platform-policy: true
           debug: true
 
@@ -320,7 +320,7 @@ certificate-authority:
           signature-algorithm: ECDSA-SHA256
           hash: SHA-256
           store: tpm2
-          password: 123456
+          password: "123456"
           platform-policy: true
           debug: true
 
@@ -331,7 +331,7 @@ certificate-authority:
           signature-algorithm: Ed25519
           hash: SHA-256
           store: software
-          password: 123456
+          password: "123456"
           platform-policy: true
           debug: true
       valid: 10
@@ -389,7 +389,7 @@ webservice:
     signature-algorithm: ECDSA-SHA256
     hash: SHA-256
     store: software
-    password: 123456
+    password: "123456"
     platform-policy: true
     debug: true
 

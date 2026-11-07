@@ -90,35 +90,6 @@ func (f *mockPacketConnFactory) CreateConn(iface string, serverIP net.IP, useRaw
 	return f.conn, nil
 }
 
-// TestNewDHCPServer_ConnFactory tests that connection factory is properly initialized.
-func TestNewDHCPServer_ConnFactory(t *testing.T) {
-	config := &DHCPConfig{
-		ServerIP:   net.ParseIP("192.168.1.1"),
-		RangeStart: net.ParseIP("192.168.1.100"),
-		RangeEnd:   net.ParseIP("192.168.1.200"),
-	}
-
-	server, err := NewDHCPServer(config, logging.DefaultLogger())
-
-	require.NoError(t, err)
-	require.NotNil(t, server)
-	assert.NotNil(t, server.connFactory, "connFactory should be initialized")
-
-	// Verify it's the default factory
-	_, ok := server.connFactory.(*DefaultPacketConnFactory)
-	assert.True(t, ok, "connFactory should be DefaultPacketConnFactory")
-}
-
-// TestDHCPServer_SetConnFactory tests setting a custom connection factory.
-func TestDHCPServer_SetConnFactory(t *testing.T) {
-	server := createTestDHCPServer(t)
-
-	mockFactory := &mockPacketConnFactory{}
-	server.SetConnFactory(mockFactory)
-
-	assert.Equal(t, mockFactory, server.connFactory)
-}
-
 // TestDHCPServer_Start tests the DHCP server Start method.
 func TestDHCPServer_Start(t *testing.T) {
 	t.Run("returns error when connection factory fails", func(t *testing.T) {
@@ -352,6 +323,8 @@ func TestNewDHCPServer_Success(t *testing.T) {
 			assert.Equal(t, tt.config.ServerIP, server.serverIP)
 			assert.NotNil(t, server.leases)
 			assert.Equal(t, tt.config.RangeStart, server.nextIP)
+			_, ok := server.connFactory.(*DefaultPacketConnFactory)
+			assert.True(t, ok, "connFactory should be DefaultPacketConnFactory")
 
 			// Verify default lease time is applied when not set
 			if tt.config.LeaseTime == 0 {
