@@ -79,11 +79,11 @@ require (
 	github.com/vishvananda/netns v0.0.5
 	github.com/wailsapp/wails/v2 v2.14.0 // held: v2.14.0 clears CVE-2026-34157 (fixed in v2.13.0) and is the newest release in the offline module cache; later releases cannot be fetched offline
 	github.com/yosida95/uritemplate/v3 v3.0.2
-	golang.org/x/crypto v0.57.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
-	golang.org/x/net v0.60.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
-	golang.org/x/sync v0.23.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
-	golang.org/x/sys v0.48.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
-	golang.org/x/term v0.46.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	golang.org/x/crypto v0.58.0
+	golang.org/x/net v0.62.0
+	golang.org/x/sync v0.24.0
+	golang.org/x/sys v0.49.0
+	golang.org/x/term v0.47.0
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20241231184526-a9ab2273dd10
 	google.golang.org/api v0.293.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260819154853-08b0e4226688 // held: the latest version is not in the module cache and cannot be fetched offline in #933
@@ -431,10 +431,10 @@ require (
 	golang.org/x/exp v0.0.0-20260813180055-c1d0aacb2297 // indirect
 	golang.org/x/mod v0.41.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
-	golang.org/x/telemetry v0.0.0-20260811182544-a038080d80e5 // indirect
-	golang.org/x/text v0.42.0 // indirect
+	golang.org/x/telemetry v0.0.0-20260924152758-ed294f943157 // indirect
+	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
-	golang.org/x/tools v0.49.0 // indirect
+	golang.org/x/tools v0.51.0 // indirect
 	golang.zx2c4.com/wireguard v0.0.0-20231211153847-12269c276173 // indirect
 	gonum.org/v1/gonum v0.17.0 // indirect
 	google.golang.org/genproto v0.0.0-20260810153831-ec0a7760b754 // indirect
