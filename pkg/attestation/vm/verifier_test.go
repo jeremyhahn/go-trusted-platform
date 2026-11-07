@@ -28,11 +28,30 @@ import (
 	"errors"
 	"log/slog"
 	"math/big"
+	"sync"
 	"testing"
 	"time"
 )
 
 // testCAKeyPair holds a CA certificate and private key for testing.
+// cachedRSAKey returns a generator that makes one RSA-2048 key on first use
+// and returns it after that. Key generation is the bulk of this package's test
+// time; no test needs a fresh key, only keys of different roles that differ.
+func cachedRSAKey() func() (*rsa.PrivateKey, error) {
+	return sync.OnceValues(func() (*rsa.PrivateKey, error) {
+		return rsa.GenerateKey(rand.Reader, 2048)
+	})
+}
+
+var (
+	// testCARSAKey signs the test CA certificates.
+	testCARSAKey = cachedRSAKey()
+	// testRSAKey is the AIK / EK / subject key the tests sign and verify with.
+	testRSAKey = cachedRSAKey()
+	// testRogueRSAKey signs certificates that must not chain to the test CA.
+	testRogueRSAKey = cachedRSAKey()
+)
+
 type testCAKeyPair struct {
 	cert    *x509.Certificate
 	privKey *rsa.PrivateKey
@@ -40,7 +59,7 @@ type testCAKeyPair struct {
 
 // newTestCA creates a new test CA certificate and key pair.
 func newTestCA() *testCAKeyPair {
-	privKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	privKey, _ := testCARSAKey()
 
 	template := x509.Certificate{
 		SerialNumber: big.NewInt(1),
@@ -230,7 +249,7 @@ func TestVMVerifier_VerifyQuote(t *testing.T) {
 		verifier := setupVerifier()
 
 		// Create test keys and certificate
-		aikPrivKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+		aikPrivKey, _ := testRSAKey()
 		ekCert, _ := ca.issueEKCertificate("vm-123", "host-456", &aikPrivKey.PublicKey)
 
 		nonce := []byte{0x01, 0x02, 0x03, 0x04}
@@ -319,7 +338,7 @@ func TestVMVerifier_VerifyQuote(t *testing.T) {
 	t.Run("nonce mismatch", func(t *testing.T) {
 		verifier := setupVerifier()
 
-		aikPrivKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+		aikPrivKey, _ := testRSAKey()
 		ekCert, _ := ca.issueEKCertificate("vm-123", "host-456", &aikPrivKey.PublicKey)
 
 		nonce := []byte{0x01, 0x02, 0x03, 0x04}
@@ -356,7 +375,7 @@ func TestVMVerifier_VerifyQuote(t *testing.T) {
 	t.Run("PCR mismatch", func(t *testing.T) {
 		verifier := setupVerifier()
 
-		aikPrivKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+		aikPrivKey, _ := testRSAKey()
 		ekCert, _ := ca.issueEKCertificate("vm-123", "host-456", &aikPrivKey.PublicKey)
 
 		nonce := []byte{0x01, 0x02, 0x03, 0x04}
@@ -403,7 +422,7 @@ func TestVMVerifier_VerifyQuote(t *testing.T) {
 	t.Run("invalid signature", func(t *testing.T) {
 		verifier := setupVerifier()
 
-		aikPrivKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+		aikPrivKey, _ := testRSAKey()
 		ekCert, _ := ca.issueEKCertificate("vm-123", "host-456", &aikPrivKey.PublicKey)
 
 		nonce := []byte{0x01, 0x02, 0x03, 0x04}
@@ -445,7 +464,7 @@ func TestVMVerifier_VerifyQuote(t *testing.T) {
 		t.Helper()
 		verifier := setupVerifier()
 
-		aikPrivKey, err := rsa.GenerateKey(rand.Reader, 2048)
+		aikPrivKey, err := testRSAKey()
 		if err != nil {
 			t.Fatalf("GenerateKey: %v", err)
 		}
@@ -503,7 +522,7 @@ func TestVMVerifier_VerifyQuote(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		aikPrivKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+		aikPrivKey, _ := testRSAKey()
 		nonce := []byte{0x01, 0x02}
 		quote := createTestQuote(aikPrivKey, nonce, []PCRValue{
 			{Index: 0, Value: make([]byte, 32), Algorithm: HashAlgorithmSHA256},
@@ -545,7 +564,7 @@ func TestVMVerifier_VerifyAttestation(t *testing.T) {
 	t.Run("successful attestation verification", func(t *testing.T) {
 		verifier := setupVerifier()
 
-		aikPrivKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+		aikPrivKey, _ := testRSAKey()
 		ekCert, _ := ca.issueEKCertificate("vm-123", "host-456", &aikPrivKey.PublicKey)
 
 		nonce := []byte{0x01, 0x02, 0x03, 0x04}
@@ -666,7 +685,7 @@ func TestVMVerifier_VerifyEKCertificate(t *testing.T) {
 	t.Run("valid certificate", func(t *testing.T) {
 		verifier := setupVerifier()
 
-		privKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+		privKey, _ := testRSAKey()
 		ekCert, _ := ca.issueEKCertificate("vm-123", "host-456", &privKey.PublicKey)
 
 		identity := &VMIdentity{
@@ -723,7 +742,7 @@ func TestVMVerifier_VerifyEKCertificate(t *testing.T) {
 		verifier := setupVerifier()
 
 		// Create self-signed certificate (not signed by CA)
-		privKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+		privKey, _ := testRogueRSAKey()
 		template := x509.Certificate{
 			SerialNumber: big.NewInt(1),
 			Subject:      pkix.Name{CommonName: "vm:vm-123@host:host-456"},
@@ -748,7 +767,7 @@ func TestVMVerifier_VerifyEKCertificate(t *testing.T) {
 	t.Run("identity mismatch", func(t *testing.T) {
 		verifier := setupVerifier()
 
-		privKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+		privKey, _ := testRSAKey()
 		ekCert, _ := ca.issueEKCertificate("vm-different", "host-different", &privKey.PublicKey)
 
 		identity := &VMIdentity{
@@ -781,7 +800,7 @@ func TestVMVerifier_HostBindingValidation(t *testing.T) {
 			t.Fatalf("Initialize failed: %v", err)
 		}
 
-		aikPrivKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+		aikPrivKey, _ := testRSAKey()
 		ekCert, _ := ca.issueEKCertificate("vm-123", "host-allowed-1", &aikPrivKey.PublicKey)
 
 		identity := &VMIdentity{
@@ -809,7 +828,7 @@ func TestVMVerifier_HostBindingValidation(t *testing.T) {
 			t.Fatalf("Initialize failed: %v", err)
 		}
 
-		aikPrivKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+		aikPrivKey, _ := testRSAKey()
 		ekCert, _ := ca.issueEKCertificate("vm-123", "host-not-allowed", &aikPrivKey.PublicKey)
 
 		identity := &VMIdentity{
@@ -899,7 +918,7 @@ func TestVMVerifier_Close(t *testing.T) {
 }
 
 func TestParsePublicKey(t *testing.T) {
-	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	privKey, err := testRSAKey()
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
 	}

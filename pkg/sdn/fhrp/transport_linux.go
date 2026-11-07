@@ -43,9 +43,45 @@ func NewRawTransport() Transport { return rawTransport{} }
 
 type rawTransport struct{}
 
+// ipv4Conn is the part of *ipv4.PacketConn the transport uses; unit tests
+// substitute a fake through newIPv4Conn.
+type ipv4Conn interface {
+	JoinGroup(ifi *net.Interface, group net.Addr) error
+	SetTTL(ttl int) error
+	SetMulticastTTL(ttl int) error
+	SetMulticastInterface(ifi *net.Interface) error
+	SetMulticastLoopback(on bool) error
+	SetControlMessage(cf ipv4.ControlFlags, on bool) error
+	WriteTo(b []byte, cm *ipv4.ControlMessage, dst net.Addr) (int, error)
+	ReadFrom(b []byte) (int, *ipv4.ControlMessage, net.Addr, error)
+}
+
+// ipv6Conn is the part of *ipv6.PacketConn the transport and the
+// unsolicited Neighbor Advertisement use; unit tests substitute a fake.
+type ipv6Conn interface {
+	JoinGroup(ifi *net.Interface, group net.Addr) error
+	SetHopLimit(hoplim int) error
+	SetMulticastHopLimit(hoplim int) error
+	SetMulticastInterface(ifi *net.Interface) error
+	SetControlMessage(cf ipv6.ControlFlags, on bool) error
+	WriteTo(b []byte, cm *ipv6.ControlMessage, dst net.Addr) (int, error)
+	ReadFrom(b []byte) (int, *ipv6.ControlMessage, net.Addr, error)
+}
+
+// Host seams: each defaults to the real host call and only unit tests
+// replace them, so the raw-socket paths run without CAP_NET_RAW.
+var (
+	interfaceByName = net.InterfaceByName
+	listenPacket    = func(lc *net.ListenConfig, network, address string) (net.PacketConn, error) {
+		return lc.ListenPacket(context.Background(), network, address)
+	}
+	newIPv4Conn = func(pc net.PacketConn) ipv4Conn { return ipv4.NewPacketConn(pc) }
+	newIPv6Conn = func(pc net.PacketConn) ipv6Conn { return ipv6.NewPacketConn(pc) }
+)
+
 // Open implements Transport.
 func (rawTransport) Open(iface string, family Family, source netip.Addr) (Conn, error) {
-	ifi, err := net.InterfaceByName(iface)
+	ifi, err := interfaceByName(iface)
 	if err != nil {
 		return nil, err
 	}
@@ -56,14 +92,14 @@ func (rawTransport) Open(iface string, family Family, source netip.Addr) (Conn, 
 	lc := net.ListenConfig{Control: func(_, _ string, rc syscall.RawConn) error {
 		return bindToDevice(rc, iface)
 	}}
-	pc, err := lc.ListenPacket(context.Background(), network, laddr)
+	pc, err := listenPacket(&lc, network, laddr)
 	if err != nil {
 		return nil, err
 	}
 	group := family.MulticastAddr()
 	c := &rawConn{pc: pc, src: source.AsSlice()}
 	if family == FamilyIPv6 {
-		p := ipv6.NewPacketConn(pc)
+		p := newIPv6Conn(pc)
 		if err := p.JoinGroup(ifi, &net.UDPAddr{IP: group.AsSlice()}); err != nil {
 			_ = pc.Close()
 			return nil, err
@@ -87,7 +123,7 @@ func (rawTransport) Open(iface string, family Family, source netip.Addr) (Conn, 
 		c.v6 = p
 		return c, nil
 	}
-	p := ipv4.NewPacketConn(pc)
+	p := newIPv4Conn(pc)
 	if err := p.JoinGroup(ifi, &net.UDPAddr{IP: group.AsSlice()}); err != nil {
 		_ = pc.Close()
 		return nil, err
@@ -133,8 +169,8 @@ func bindToDevice(rc syscall.RawConn, iface string) error {
 
 type rawConn struct {
 	pc net.PacketConn
-	v4 *ipv4.PacketConn
-	v6 *ipv6.PacketConn
+	v4 ipv4Conn
+	v6 ipv6Conn
 	// src is the advertisement source; the unbound IPv4 socket sends it
 	// as IP_PKTINFO's ipi_spec_dst.
 	src net.IP

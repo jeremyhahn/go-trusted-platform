@@ -934,7 +934,9 @@ func (s *HTTPServer) handleInstallUpload(w http.ResponseWriter, r *http.Request)
 	// not raw request data: they are the capture groups of
 	// installMACPathRegexp / installPathRegexp, whose character classes
 	// admit no <, >, ", ' or &.
-	fmt.Fprintf(w, "stored %d bytes at /installs/%s/%s\n", written, hostname, filename)
+	if _, err := fmt.Fprintf(w, "stored %d bytes at /installs/%s/%s\n", written, hostname, filename); err != nil {
+		s.logger.Warn("writing install upload response", "hostname", hostname, "filename", filename, "error", err.Error())
+	}
 }
 
 // handleInstallIndex returns either an HTML directory listing of one host's
