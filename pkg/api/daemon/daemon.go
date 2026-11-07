@@ -55,6 +55,7 @@ import (
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	restiam "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/iam"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
@@ -1480,12 +1481,6 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		logger.Info("REST server not enabled")
 	}
 
-	// Wire vTPM service into REST server if both are available
-	if daemon.concreteRestServer != nil && config.VTPMService != nil {
-		daemon.concreteRestServer.SetVTPMService(config.VTPMService)
-		logger.Info("vTPM service wired into REST server")
-	}
-
 	// Wire the time-synchronization, VPN control-plane and compute REST
 	// handlers onto the daemon's own REST listener. Without them
 	// /api/v1/ntp/*, /api/v1/vpn/* and /api/v1/compute/* would 404 there.
@@ -1511,6 +1506,21 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		}
 	}
 
+	// The attestation and device routers mount before the device facade:
+	// the first matching route wins, so they serve every path they share
+	// with it. Each one runs behind restGuard, and a failed mount stops the
+	// daemon rather than leaving the routes unserved or unguarded.
+	if daemon.concreteRestServer != nil {
+		var reportingHandles ReportingHandles
+		if config.AttestationReporting != nil {
+			reportingHandles = *config.AttestationReporting
+		}
+		if err := daemon.concreteRestServer.SetAttestationRouterHandlers(logger, attestationService, reportingHandles, restGuard); err != nil {
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: err}
+			logger.Error(constructErr, "component", "rest_server")
+			return nil, constructErr
+		}
+	}
 	// Wire device + profile REST handlers if the services are available.
 	// Without this, /api/v1/devices/* would not be served and the REST
 	// adapter for `platformctl --protocol rest device list` would 404.
@@ -1524,7 +1534,32 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		if deviceService != nil {
 			attestSvc = deviceService
 		}
-		daemon.concreteRestServer.SetDeviceHandlers(config.DeviceService, config.DeviceProfileService, attestSvc)
+		if err := daemon.concreteRestServer.SetDeviceRouterHandlers(logger, config.DeviceService, config.DeviceProfileService, config.DeviceTemplateService, attestSvc, restGuard); err != nil {
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: err}
+			logger.Error(constructErr, "component", "rest_server")
+			return nil, constructErr
+		}
+		if err := daemon.concreteRestServer.SetDeviceHandlers(config.DeviceService, config.DeviceProfileService, attestSvc, restGuard); err != nil {
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: err}
+			logger.Error(constructErr, "component", "rest_server")
+			return nil, constructErr
+		}
+	}
+
+	// The DNS and PXE routes serve the same DNSServiceServer and
+	// PXEGRPCService instances gRPC, QUIC, MCP and Unix serve, behind
+	// restGuard. A failed mount stops the daemon.
+	if daemon.concreteRestServer != nil {
+		if err := daemon.concreteRestServer.SetDNSRouterHandlers(logger, dnsGRPCService, restGuard, config.PlatformTenantID); err != nil {
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: err}
+			logger.Error(constructErr, "component", "rest_server")
+			return nil, constructErr
+		}
+		if err := daemon.concreteRestServer.SetPXERouterHandlers(logger, pxeGRPCService, restGuard); err != nil {
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: err}
+			logger.Error(constructErr, "component", "rest_server")
+			return nil, constructErr
+		}
 	}
 
 	// Wire CA REST handlers if the CA service is available. Without this,
@@ -1558,6 +1593,27 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// instance is shared across REST, gRPC, QUIC, MCP, and Unix so every
 	// transport sees identical per-tenant state including barrier lifecycle.
 	// REST and gRPC both authorize the caller against the same system tenant.
+	// Wire the IAM REST handlers (#997). /api/v1/iam is the webservice IAM
+	// router authorized by the platform ScopeGuard: the caller's iam:read,
+	// iam:write or iam:delete scope gates each method, and the tenant rules
+	// are the ones the gRPC, QUIC and MCP IAM transports apply.
+	if daemon.concreteRestServer != nil {
+		if iamService == nil {
+			logger.Warn("IAM REST routes not registered: the IAM service is disabled")
+		} else {
+			var iamRESTPEP restiam.PEPClient
+			if sdkPEP := iamService.PEP(); sdkPEP != nil {
+				iamRESTPEP = restiam.NewQuicBaaSPEPAdapter(sdkPEP)
+			}
+			iamErr := daemon.concreteRestServer.SetIAMHandlers(logger, restiam.NewQuicBaaSIAMAdapter(iamService.Client()), iamRESTPEP, restGuard, config.PlatformTenantID)
+			if iamErr != nil {
+				constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: iamErr}
+				logger.Error(constructErr, "component", "rest_server")
+				return nil, constructErr
+			}
+		}
+	}
+
 	if config.PlatformTenantManager != nil {
 		if daemon.concreteRestServer != nil {
 			daemon.concreteRestServer.SetTenantHandlers(config.PlatformTenantManager, restGuard, config.PlatformTenantID)
@@ -1579,7 +1635,11 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 
 	// Wire SDN service into REST server if both are available
 	if daemon.concreteRestServer != nil && daemon.sdnService != nil {
-		daemon.concreteRestServer.SetSDNService(daemon.sdnService)
+		if err := daemon.concreteRestServer.SetSDNService(daemon.sdnService, restGuard); err != nil {
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: err}
+			logger.Error(constructErr, "component", "rest_server")
+			return nil, constructErr
+		}
 		logger.Info("SDN service wired into REST server")
 	}
 
@@ -1591,46 +1651,76 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 
 	// Wire overlay REST handlers when the overlay controller was built.
 	// Uses the same controller hoisted during QUIC wiring so all transports
-	// share the same in-process overlay state.
+	// share the same in-process overlay state. The overlay and gateway routes
+	// run behind restGuard, each needing the scope the gRPC catalog gives its
+	// rpc; a failed mount stops the daemon.
 	if daemon.concreteRestServer != nil && overlayCtrl != nil {
-		daemon.concreteRestServer.SetOverlayHandlers(newOverlayControllerRESTAdapter(overlayCtrl))
-		logger.Info("Overlay REST routes registered")
+		if err := daemon.concreteRestServer.SetOverlayHandlers(newOverlayControllerRESTAdapter(overlayCtrl), restGuard); err != nil {
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: err}
+			logger.Error(constructErr, "component", "rest_server")
+			return nil, constructErr
+		}
 	}
 
 	// Wire gateway IPAM REST handlers. Pass the same in-memory allocator
 	// used by the gRPC service so REST and gRPC share the same state.
 	if daemon.concreteRestServer != nil && daemon.gatewayGRPCService != nil {
-		daemon.concreteRestServer.SetGatewayIPAMService(daemon.gatewayGRPCService.IPAMAllocator(), daemon.gatewayGRPCService)
-		daemon.concreteRestServer.SetGatewaySnapshotService(daemon.gatewayGRPCService)
-		daemon.concreteRestServer.SetGatewayBGPService(daemon.gatewayGRPCService)
-		daemon.concreteRestServer.SetGatewayBackends(daemon.gatewayGRPCService)
+		rs := daemon.concreteRestServer
+		gw := daemon.gatewayGRPCService
+		mountErr := rs.SetGatewayIPAMService(gw.IPAMAllocator(), gw, restGuard)
+		if mountErr == nil {
+			mountErr = rs.SetGatewaySnapshotService(gw)
+		}
+		if mountErr == nil {
+			mountErr = rs.SetGatewayBGPService(gw)
+		}
+		if mountErr == nil {
+			mountErr = rs.SetGatewayBackends(gw)
+		}
+		if mountErr != nil {
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: mountErr}
+			logger.Error(constructErr, "component", "rest_server")
+			return nil, constructErr
+		}
 		logger.Info("Gateway IPAM REST service wired into REST server")
 	}
 
-	// Wire proxy REST handlers over the same shared ProxyGRPCService.
-	if daemon.concreteRestServer != nil && daemon.proxyGRPCService != nil {
-		daemon.concreteRestServer.SetProxyService(daemon.proxyGRPCService)
-		logger.Info("Proxy REST service wired into REST server")
-	}
-
-	// Wire Phase 3.5 services (ceremony/piv/luks/fido2) into REST server.
+	// Wire the vTPM, proxy (over the same shared ProxyGRPCService), Phase 3.5
+	// (ceremony/piv/luks/fido2) and cluster services into the REST server.
 	if daemon.concreteRestServer != nil {
-		if daemon.ceremonyService != nil && daemon.ceremonyService.service != nil {
-			daemon.concreteRestServer.SetCeremonyService(daemon.ceremonyService.service)
+		// The vTPM, proxy, ceremony, PIV, LUKS, FIDO2 and cluster routes run
+		// behind restGuard, each needing the scope the gRPC catalog gives its
+		// rpc. A failed mount stops the daemon.
+		var mountErr error
+		if config.VTPMService != nil {
+			mountErr = daemon.concreteRestServer.SetVTPMService(config.VTPMService, restGuard)
 		}
-		if daemon.pivService != nil && daemon.pivService.service != nil {
-			daemon.concreteRestServer.SetPIVService(daemon.pivService.service)
+		if mountErr == nil && daemon.proxyGRPCService != nil {
+			mountErr = daemon.concreteRestServer.SetProxyService(daemon.proxyGRPCService, restGuard)
 		}
-		if daemon.luksService != nil && daemon.luksService.service != nil {
-			daemon.concreteRestServer.SetLUKSService(daemon.luksService.service)
+		if mountErr == nil && daemon.ceremonyService != nil && daemon.ceremonyService.service != nil {
+			mountErr = daemon.concreteRestServer.SetCeremonyService(daemon.ceremonyService.service, restGuard)
 		}
-		if daemon.fido2Service != nil && daemon.fido2Service.service != nil {
-			daemon.concreteRestServer.SetFIDO2Service(daemon.fido2Service.service)
+		if mountErr == nil && daemon.pivService != nil && daemon.pivService.service != nil {
+			mountErr = daemon.concreteRestServer.SetPIVService(daemon.pivService.service, restGuard)
+		}
+		if mountErr == nil && daemon.luksService != nil && daemon.luksService.service != nil {
+			mountErr = daemon.concreteRestServer.SetLUKSService(daemon.luksService.service, restGuard)
+		}
+		if mountErr == nil && daemon.fido2Service != nil && daemon.fido2Service.service != nil {
+			mountErr = daemon.concreteRestServer.SetFIDO2Service(daemon.fido2Service.service, restGuard)
 		}
 		// Cluster REST always mounts; if no coordinator is wired the
 		// handlers return 503 with a clear "not configured" body so the
 		// dashboard can render an actionable empty state rather than 404.
-		daemon.concreteRestServer.SetClusterService(clusterGRPCService)
+		if mountErr == nil {
+			mountErr = daemon.concreteRestServer.SetClusterService(clusterGRPCService, restGuard)
+		}
+		if mountErr != nil {
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: mountErr}
+			logger.Error(constructErr, "component", "rest_server")
+			return nil, constructErr
+		}
 	}
 
 	// Wire config delivery for pre-enrollment provisioning across the REST and

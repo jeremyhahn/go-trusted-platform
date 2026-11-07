@@ -75,12 +75,10 @@ func certOfAtLeast(t *testing.T, cn string, size int) *x509.Certificate {
 
 // TestCertStoreHasNoNVSizeCeiling is the size half of the #80 regression net.
 //
-// #80's interim routes IDevID certificate persistence away from TPM NVRAM and
-// into this store, because go-xkms defines the NV index as a counter
-// (go-xkms#138). Size is the second reason that route matters: an NV index is
-// capped at TPM_PT_NV_INDEX_MAX (2048 bytes measured), so a certificate larger
-// than that could never be persisted through NVRAM even once the counter bug
-// is fixed. A real IDevID carrying TCG platform extensions can exceed it.
+// #81 places an identity or EK certificate in TPM NVRAM only when it fits:
+// an NV index is capped at TPM_PT_NV_INDEX_MAX (2048 bytes measured), so a
+// larger certificate goes to this store instead. A real IDevID carrying TCG
+// platform extensions can exceed it.
 //
 // This pins that the store itself imposes no such ceiling — including a
 // certificate past both the per-command buffer and the whole-index limit —
@@ -124,7 +122,7 @@ func TestCertStoreHasNoNVSizeCeiling(t *testing.T) {
 // The four calls — IAK and IDevID, each on the local-issuance and ACME
 // paths — cannot be driven at unit level: they need a live TPM, and the
 // ACME pair needs an ACME server. What they share is this store. Under the
-// #80 interim every one of them resolves here, differing only in which
+// #81 interim every one of them resolves here, differing only in which
 // certificate class they hand over and under which key. So exercising
 // this boundary with both classes is the closest honest unit-level cover
 // for all four, and it is deliberately paired with the routing assertion in

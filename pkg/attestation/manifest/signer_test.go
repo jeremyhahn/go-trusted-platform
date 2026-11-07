@@ -306,7 +306,7 @@ func TestManifestSignerSign(t *testing.T) {
 
 func TestManifestSignerSignWithKey(t *testing.T) {
 	// Generate test RSA key pair
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	privateKey, err := testRSAKey()
 	if err != nil {
 		t.Fatalf("failed to generate key: %v", err)
 	}
@@ -367,7 +367,7 @@ func TestManifestSignerSignWithKey(t *testing.T) {
 
 func TestManifestSignerVerifySignature(t *testing.T) {
 	// Generate test RSA key pair
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	privateKey, err := testRSAKey()
 	if err != nil {
 		t.Fatalf("failed to generate key: %v", err)
 	}
@@ -527,7 +527,7 @@ func TestManifestSignerClose(t *testing.T) {
 
 func TestParsePublicKey(t *testing.T) {
 	// Generate test RSA key
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	privateKey, err := testRSAKey()
 	if err != nil {
 		t.Fatalf("failed to generate key: %v", err)
 	}
@@ -630,7 +630,7 @@ func TestComputeManifestDigest(t *testing.T) {
 
 func TestVerifyManifestSignature(t *testing.T) {
 	// Generate test RSA key pair
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	privateKey, err := testRSAKey()
 	if err != nil {
 		t.Fatalf("failed to generate key: %v", err)
 	}

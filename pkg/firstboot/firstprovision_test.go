@@ -64,6 +64,20 @@ func TestRequireEKCertificate_AbsentRelaxedWarns(t *testing.T) {
 	require.Contains(t, log.String(), ekCertificateSetting)
 }
 
+// failingWriter refuses every write, as a full or closed log does.
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errLogWrite }
+
+var errLogWrite = errors.New("log write refused")
+
+func TestRequireEKCertificate_RelaxedWarningUnwritableRefused(t *testing.T) {
+	err := requireEKCertificate(fakeEKReader{err: xkmssdk.ErrTPMEndorsementCertNotFound}, true, failingWriter{})
+	require.ErrorIs(t, err, errLogWrite)
+	var wrapped *WrappedError
+	require.ErrorAs(t, err, &wrapped)
+}
+
 // A lookup that failed for another reason is not a missing certificate:
 // the relaxation does not cover it.
 func TestRequireEKCertificate_LookupFailure(t *testing.T) {

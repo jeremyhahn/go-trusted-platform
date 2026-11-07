@@ -94,6 +94,50 @@ func TestScopeGuardRequireCaller(t *testing.T) {
 	})
 }
 
+// TestScopeGuardAuthenticate: any authenticated caller reaches the handler,
+// whatever its scopes, and receives the caller; no credential is 401 and a
+// nil guard 403.
+func TestScopeGuardAuthenticate(t *testing.T) {
+	var nilGuard *ScopeGuard
+	cases := []struct {
+		name     string
+		guard    *ScopeGuard
+		request  *http.Request
+		want     int
+		wantBody string
+	}{
+		{"a valid token passes the caller", NewScopeGuard(&scopedAuthorizer{scopes: map[string][]string{operatorToken: {"ntp:read"}}}, nil, nil), operatorRequest(http.MethodPost, "/x", nil), http.StatusNoContent, ""},
+		{"a verified certificate passes the caller", NewScopeGuard(nil, grantingPeers{scopes: []string{"*:*"}}, nil), certificateRequest(http.MethodGet, "/x", operatorToken), http.StatusNoContent, ""},
+		{"no credential is 401", operatorGuard(), httptest.NewRequest(http.MethodGet, "/x", nil), http.StatusUnauthorized, "authentication required"},
+		{"a forged token is 401", operatorGuard(), func() *http.Request {
+			req := httptest.NewRequest(http.MethodGet, "/x", nil)
+			req.Header.Set("Authorization", "Bearer forged")
+			return req
+		}(), http.StatusUnauthorized, "token invalid"},
+		{"a refused certificate is 401", NewScopeGuard(nil, grantingPeers{err: errors.New("unknown issuer")}, nil), certificateRequest(http.MethodGet, "/x", "operator"), http.StatusUnauthorized, "unknown issuer"},
+		{"a nil guard is 403", nilGuard, operatorRequest(http.MethodGet, "/x", nil), http.StatusForbidden, "no authorization is configured"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got *platformtoken.AuthorizedContext
+			rr := httptest.NewRecorder()
+			tc.guard.Authenticate(func(w http.ResponseWriter, _ *http.Request, caller *platformtoken.AuthorizedContext) {
+				got = caller
+				w.WriteHeader(http.StatusNoContent)
+			})(rr, tc.request)
+
+			assert.Equal(t, tc.want, rr.Code)
+			if tc.want == http.StatusNoContent {
+				require.NotNil(t, got)
+				assert.Equal(t, operatorToken, got.Subject)
+				return
+			}
+			assert.Nil(t, got)
+			assert.Contains(t, rr.Body.String(), tc.wantBody)
+		})
+	}
+}
+
 // grantingPeers admits any verified chain with scopes, or fails with err.
 type grantingPeers struct {
 	scopes []string
