@@ -18,6 +18,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 	kmssvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/kms"
 )
@@ -129,12 +131,24 @@ func TestNewCryptoCommand_NoRunE(t *testing.T) {
 
 // Error type tests
 
-func TestErrCryptoClientNotInitialized_Error(t *testing.T) {
-	err := ErrCryptoClientNotInitialized{}
-	expected := "crypto client not initialized"
+func TestCryptoErrors_Error(t *testing.T) {
+	tests := []struct {
+		err      error
+		expected string
+	}{
+		{ErrCryptoClientNotInitialized{}, "crypto client not initialized"},
+		{ErrInvalidHashAlgorithm{Algorithm: "md5"}, "invalid hash algorithm: md5"},
+		{ErrInvalidAlgorithm{Algorithm: "invalid-alg"}, "invalid algorithm: invalid-alg"},
+		{ErrHMACRequired{}, "HMAC is required (use --hmac flag)"},
+		{ErrSignatureRequired{}, "signature is required (use --signature flag)"},
+	}
 
-	if err.Error() != expected {
-		t.Errorf("Error() = %q, want %q", err.Error(), expected)
+	for _, tt := range tests {
+		t.Run(tt.expected, func(t *testing.T) {
+			if tt.err.Error() != tt.expected {
+				t.Errorf("Error() = %q, want %q", tt.err.Error(), tt.expected)
+			}
+		})
 	}
 }
 
@@ -257,24 +271,6 @@ func TestErrKeyIDRequired_Error(t *testing.T) {
 				t.Errorf("Error() = %q, want %q", err.Error(), tt.expected)
 			}
 		})
-	}
-}
-
-func TestErrInvalidHashAlgorithm_Error(t *testing.T) {
-	err := ErrInvalidHashAlgorithm{Algorithm: "md5"}
-	expected := "invalid hash algorithm: md5"
-
-	if err.Error() != expected {
-		t.Errorf("Error() = %q, want %q", err.Error(), expected)
-	}
-}
-
-func TestErrInvalidAlgorithm_Error(t *testing.T) {
-	err := ErrInvalidAlgorithm{Algorithm: "invalid-alg"}
-	expected := "invalid algorithm: invalid-alg"
-
-	if err.Error() != expected {
-		t.Errorf("Error() = %q, want %q", err.Error(), expected)
 	}
 }
 
@@ -516,17 +512,33 @@ func TestFormatRandomBytes(t *testing.T) {
 	}
 }
 
-func TestCryptoCommand_GetFlagsNotCalledOnCreation(t *testing.T) {
-	callCount := 0
-	getFlags := func() *cli.CommonFlags {
-		callCount++
-		return &cli.CommonFlags{}
+func TestCryptoCommands_GetFlagsNotCalledOnCreation(t *testing.T) {
+	constructors := map[string]func(func() *cli.CommonFlags) *cobra.Command{
+		"crypto":  NewCryptoCommand,
+		"encrypt": newCryptoEncryptCommand,
+		"decrypt": newCryptoDecryptCommand,
+		"sign":    newCryptoSignCommand,
+		"random":  newCryptoRandomCommand,
+		"datakey": newCryptoDataKeyCommand,
+		"hash":    newCryptoHashCommand,
+		"hmac":    newCryptoHMACCommand,
+		"verify":  newCryptoVerifyCommand,
 	}
 
-	_ = NewCryptoCommand(getFlags)
+	for name, newCommand := range constructors {
+		t.Run(name, func(t *testing.T) {
+			callCount := 0
+			getFlags := func() *cli.CommonFlags {
+				callCount++
+				return &cli.CommonFlags{}
+			}
 
-	if callCount != 0 {
-		t.Errorf("getFlags was called %d times during command creation, expected 0", callCount)
+			_ = newCommand(getFlags)
+
+			if callCount != 0 {
+				t.Errorf("getFlags was called %d times during creation, expected 0", callCount)
+			}
+		})
 	}
 }
 
@@ -1127,76 +1139,6 @@ func TestRandomFlags_Fields(t *testing.T) {
 	}
 }
 
-func TestEncryptCommand_GetFlagsNotCalledOnCreation(t *testing.T) {
-	callCount := 0
-	getFlags := func() *cli.CommonFlags {
-		callCount++
-		return &cli.CommonFlags{}
-	}
-
-	_ = newCryptoEncryptCommand(getFlags)
-
-	if callCount != 0 {
-		t.Errorf("getFlags was called %d times during creation, expected 0", callCount)
-	}
-}
-
-func TestDecryptCommand_GetFlagsNotCalledOnCreation(t *testing.T) {
-	callCount := 0
-	getFlags := func() *cli.CommonFlags {
-		callCount++
-		return &cli.CommonFlags{}
-	}
-
-	_ = newCryptoDecryptCommand(getFlags)
-
-	if callCount != 0 {
-		t.Errorf("getFlags was called %d times during creation, expected 0", callCount)
-	}
-}
-
-func TestSignCommand_GetFlagsNotCalledOnCreation(t *testing.T) {
-	callCount := 0
-	getFlags := func() *cli.CommonFlags {
-		callCount++
-		return &cli.CommonFlags{}
-	}
-
-	_ = newCryptoSignCommand(getFlags)
-
-	if callCount != 0 {
-		t.Errorf("getFlags was called %d times during creation, expected 0", callCount)
-	}
-}
-
-func TestRandomCommand_GetFlagsNotCalledOnCreation(t *testing.T) {
-	callCount := 0
-	getFlags := func() *cli.CommonFlags {
-		callCount++
-		return &cli.CommonFlags{}
-	}
-
-	_ = newCryptoRandomCommand(getFlags)
-
-	if callCount != 0 {
-		t.Errorf("getFlags was called %d times during creation, expected 0", callCount)
-	}
-}
-
-func TestDataKeyCommand_GetFlagsNotCalledOnCreation(t *testing.T) {
-	callCount := 0
-	getFlags := func() *cli.CommonFlags {
-		callCount++
-		return &cli.CommonFlags{}
-	}
-
-	_ = newCryptoDataKeyCommand(getFlags)
-
-	if callCount != 0 {
-		t.Errorf("getFlags was called %d times during creation, expected 0", callCount)
-	}
-}
-
 func TestDecodeBase64Input_Valid(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1376,20 +1318,6 @@ func TestFormatHashOutput(t *testing.T) {
 	}
 }
 
-func TestHashCommand_GetFlagsNotCalledOnCreation(t *testing.T) {
-	callCount := 0
-	getFlags := func() *cli.CommonFlags {
-		callCount++
-		return &cli.CommonFlags{}
-	}
-
-	_ = newCryptoHashCommand(getFlags)
-
-	if callCount != 0 {
-		t.Errorf("getFlags was called %d times during creation, expected 0", callCount)
-	}
-}
-
 // HMAC command tests
 
 func TestNewCryptoHMACCommand_Structure(t *testing.T) {
@@ -1553,15 +1481,6 @@ func TestNewHMACVerifyCommand_Flags(t *testing.T) {
 	}
 }
 
-func TestErrHMACRequired_Error(t *testing.T) {
-	err := ErrHMACRequired{}
-	expected := "HMAC is required (use --hmac flag)"
-
-	if err.Error() != expected {
-		t.Errorf("Error() = %q, want %q", err.Error(), expected)
-	}
-}
-
 func TestHMACGenerateFlags_Fields(t *testing.T) {
 	flags := hmacGenerateFlags{
 		keyID:         "hmac-key",
@@ -1615,20 +1534,6 @@ func TestHMACVerifyFlags_Fields(t *testing.T) {
 	}
 	if flags.keyVersion != 2 {
 		t.Errorf("keyVersion = %d", flags.keyVersion)
-	}
-}
-
-func TestHMACCommand_GetFlagsNotCalledOnCreation(t *testing.T) {
-	callCount := 0
-	getFlags := func() *cli.CommonFlags {
-		callCount++
-		return &cli.CommonFlags{}
-	}
-
-	_ = newCryptoHMACCommand(getFlags)
-
-	if callCount != 0 {
-		t.Errorf("getFlags was called %d times during creation, expected 0", callCount)
 	}
 }
 
@@ -1716,15 +1621,6 @@ func TestNewCryptoVerifyCommand_LongDescription(t *testing.T) {
 	}
 }
 
-func TestErrSignatureRequired_Error(t *testing.T) {
-	err := ErrSignatureRequired{}
-	expected := "signature is required (use --signature flag)"
-
-	if err.Error() != expected {
-		t.Errorf("Error() = %q, want %q", err.Error(), expected)
-	}
-}
-
 func TestVerifyFlags_Fields(t *testing.T) {
 	flags := verifyFlags{
 		keyID:         "verify-key",
@@ -1752,19 +1648,5 @@ func TestVerifyFlags_Fields(t *testing.T) {
 	}
 	if flags.keyVersion != 3 {
 		t.Errorf("keyVersion = %d", flags.keyVersion)
-	}
-}
-
-func TestVerifyCommand_GetFlagsNotCalledOnCreation(t *testing.T) {
-	callCount := 0
-	getFlags := func() *cli.CommonFlags {
-		callCount++
-		return &cli.CommonFlags{}
-	}
-
-	_ = newCryptoVerifyCommand(getFlags)
-
-	if callCount != 0 {
-		t.Errorf("getFlags was called %d times during creation, expected 0", callCount)
 	}
 }
