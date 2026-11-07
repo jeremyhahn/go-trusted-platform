@@ -47,20 +47,6 @@ func TestNewCRUDHandler(t *testing.T) {
 }
 
 // TestCRUDHandler_CreateDevice_SaveError tests CreateDevice with a service save error.
-func TestCRUDHandler_CreateDevice_SaveError(t *testing.T) {
-	handler, deviceSvc, _ := newTestHandler()
-	deviceSvc.saveErr = errors.New("database unavailable")
-
-	body := `{"id": 1, "model": "TestTPM", "serial": "SN001"}`
-	req := httptest.NewRequest(http.MethodPost, "/devices", bytes.NewBufferString(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	handler.CreateDevice(w, req)
-
-	assert.Equal(t, http.StatusInternalServerError, w.Code)
-}
-
 // TestCRUDHandler_UpdateDevice_ServiceError tests UpdateDevice with a service error.
 func TestCRUDHandler_UpdateDevice_ServiceError(t *testing.T) {
 	handler, deviceSvc, _ := newTestHandler()

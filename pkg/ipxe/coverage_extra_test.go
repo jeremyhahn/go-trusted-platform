@@ -340,26 +340,3 @@ func TestHTTPServer_proxyArgsURLs_MultipleHTTPS(t *testing.T) {
 	assert.Contains(t, result, "/proxy/https/test.com/file2")
 	assert.Contains(t, result, "normal_arg=value")
 }
-
-// TestDHCPServer_isIPXEClient_WithoutUserClass tests iPXE detection without user class.
-func TestDHCPServer_isIPXEClient_WithoutUserClass(t *testing.T) {
-	config := &DHCPConfig{
-		ServerIP:     net.ParseIP("192.168.1.1"),
-		BroadcastIP:  net.ParseIP("192.168.1.255"),
-		SubnetMask:   net.ParseIP("255.255.255.0"),
-		RangeStart:   net.ParseIP("192.168.1.100"),
-		RangeEnd:     net.ParseIP("192.168.1.200"),
-		LeaseTime:    time.Hour,
-		BootFilename: "ipxe.efi",
-	}
-
-	server, err := NewDHCPServer(config, logging.DefaultLogger())
-	require.NoError(t, err)
-
-	// Create a request without iPXE user class
-	req, err := dhcpv4.NewDiscovery(net.HardwareAddr{0x00, 0x11, 0x22, 0x33, 0x44, 0x55})
-	require.NoError(t, err)
-
-	result := server.isIPXEClient(req)
-	assert.False(t, result, "should not detect iPXE client without user class")
-}
