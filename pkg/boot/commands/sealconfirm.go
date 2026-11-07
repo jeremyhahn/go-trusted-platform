@@ -116,7 +116,7 @@ func (c sealConfirmation) run() (bool, error) {
 func loadSecureWipePassesFromConfig() int {
 	for _, path := range []string{
 		filepath.Join(installerMountPoint, "etc", "trusted-platform", "config.yaml"),
-		"/etc/trusted-platform/config.yaml",
+		rootConfigPath,
 	} {
 		data, err := os.ReadFile(path)
 		if err != nil {

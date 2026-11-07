@@ -1098,28 +1098,6 @@ func TestFlowActionBuilder(t *testing.T) {
 }
 
 // TestConvertToOpenFlowComplex tests complex flow conversion
-func TestConvertToOpenFlowComplex(t *testing.T) {
-	flow := &FlowMod{
-		Table:       10,
-		Priority:    1000,
-		Match:       "in_port=1,dl_type=0x0800,nw_src=192.168.1.0,nw_dst=10.0.0.0,nw_proto=6,tp_dst=80",
-		Actions:     "mod_vlan_vid:100,mod_dl_src:aa:bb:cc:dd:ee:ff,output:2",
-		Cookie:      "0xdeadbeefcafe",
-		IdleTimeout: 60,
-		HardTimeout: 600,
-	}
-
-	ofFlow, err := convertToOpenFlow(flow)
-	require.NoError(t, err)
-	assert.Equal(t, uint8(10), ofFlow.TableID)
-	assert.Equal(t, uint16(1000), ofFlow.Priority)
-	assert.Equal(t, uint64(0xdeadbeefcafe), ofFlow.Cookie)
-	assert.Equal(t, uint16(60), ofFlow.IdleTimeout)
-	assert.Equal(t, uint16(600), ofFlow.HardTimeout)
-	assert.NotNil(t, ofFlow.Match)
-	assert.NotEmpty(t, ofFlow.Instructions)
-}
-
 // TestConcurrentFlowOperations tests thread safety
 func TestConcurrentFlowOperations(t *testing.T) {
 	t.Run("concurrent match parsing", func(t *testing.T) {

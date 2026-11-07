@@ -195,6 +195,10 @@ USER dev:dev
 FROM base AS integration
 ARG DEBIAN_FRONTEND=noninteractive
 ARG TARGETARCH
+# The Alpine package index checksum the content tag hashes (ci-standard.md §9,
+# scripts/apk-index-sum.sh). This base is Debian, so CI passes `none`; the
+# base stage's APT_REFRESH is what rebuilds the packages on a Debian fix.
+ARG APK_INDEX_SUM
 SHELL ["/bin/bash", "-c"]
 
 # Networking and process tools the suites and the entrypoint call. Every

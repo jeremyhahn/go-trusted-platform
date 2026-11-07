@@ -485,6 +485,7 @@ func TestCRUDHandler_CreateDevice_StorageFailureIsNotA201(t *testing.T) {
 	handler.CreateDevice(w, req)
 
 	assert.NotEqual(t, http.StatusCreated, w.Code)
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
 	assert.Empty(t, deviceSvc.devices)
 }
 
@@ -1134,6 +1135,20 @@ func TestErrors(t *testing.T) {
 
 		err2 := ErrInvalidPaginationParams{}
 		assert.Equal(t, "invalid pagination parameters", err2.Error())
+	})
+
+	t.Run("handler error variables", func(t *testing.T) {
+		assert.NotNil(t, ErrMissingSerial)
+		assert.NotNil(t, ErrProfileNotFound)
+		assert.Contains(t, ErrMissingSerial.Error(), "serial")
+		assert.Contains(t, ErrProfileNotFound.Error(), "profile")
+	})
+
+	t.Run("profile service error variables", func(t *testing.T) {
+		assert.NotNil(t, ErrProfileServiceNotInitialized)
+		assert.NotNil(t, ErrProfileNotFoundBySerial)
+		assert.Contains(t, ErrProfileServiceNotInitialized.Error(), "profile service")
+		assert.Contains(t, ErrProfileNotFoundBySerial.Error(), "profile not found")
 	})
 }
 

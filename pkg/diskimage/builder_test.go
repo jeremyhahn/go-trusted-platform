@@ -63,6 +63,7 @@ func assertNoHostBindMounts(t *testing.T, rec *diskimagetest.Runner) {
 }
 
 func TestCreateStagesMediaAndRunsTheContainer(t *testing.T) {
+	t.Parallel()
 	rec := &diskimagetest.Runner{}
 	cfg := buildConfigForTest(t, "qemu-virt", rec)
 	res, err := Create(context.Background(), cfg)
@@ -140,6 +141,7 @@ func writeHostInstaller(t *testing.T) string {
 // A target that is the host runs the media's own installer at the host
 // platform, with no second binary copied in.
 func TestCreateNativeTargetRunsTheMediaInstaller(t *testing.T) {
+	t.Parallel()
 	rec := &diskimagetest.Runner{}
 	cfg := buildConfigForTest(t, "qemu-virt", rec)
 	cfg.HostArch = "arm64"
@@ -157,6 +159,7 @@ func TestCreateNativeTargetRunsTheMediaInstaller(t *testing.T) {
 }
 
 func TestCreateForeignTargetNeedsAHostInstaller(t *testing.T) {
+	t.Parallel()
 	rec := &diskimagetest.Runner{}
 	cfg := buildConfigForTest(t, "qemu-virt", rec)
 	cfg.HostInstallerBinary = ""
@@ -173,6 +176,7 @@ func TestCreateForeignTargetNeedsAHostInstaller(t *testing.T) {
 }
 
 func TestCreateFailures(t *testing.T) {
+	t.Parallel()
 	var stage *StageError
 	if _, err := Create(context.Background(), &BuildConfig{SkipPreflight: true}); !errors.As(err, &stage) {
 		t.Errorf("nil ISO config error = %v", err)
@@ -420,6 +424,7 @@ func TestUBootPreseedsTheResolvedCertificates(t *testing.T) {
 // TestStageMediaResolvesSecureBootMaterial: with Secure Boot on, the staged
 // media carries the build's resolved certificates and DB signer.
 func TestStageMediaResolvesSecureBootMaterial(t *testing.T) {
+	t.Parallel()
 	cfg := buildConfigForTest(t, "qemu-virt", &diskimagetest.Runner{})
 	cfg.ISO.SecureBoot = true
 	cfg.ISO.GenerateKeys = false
