@@ -518,7 +518,7 @@ var routeVariable = regexp.MustCompile(`\{[^{}]*(\{[^{}]*\}[^{}]*)*\}`)
 // without a decision fails here.
 func TestMTLSInstallerScope_EveryRESTRouteIsAllowlistedOrRefused(t *testing.T) {
 	f := newInstallerScopeFixture(t)
-	server, _ := daemonRouteTable(t)
+	server, _ := daemonRouteTable(t, restapi.NewScopeGuard(nil, nil, nil))
 	cp, _ := newGatewayControlPlane(t)
 	server.SetGatewayControlPlane(cp)
 	routes := servedRoutes(t, server.Router())
