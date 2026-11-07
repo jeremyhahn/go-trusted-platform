@@ -101,6 +101,7 @@ func withNoDigitalSignature() func(*x509.Certificate) {
 
 // TestNewAttestationVerifier tests the NewAttestationVerifier constructor.
 func TestNewAttestationVerifier(t *testing.T) {
+	t.Parallel()
 	t.Run("creates_verifier_with_defaults", func(t *testing.T) {
 		verifier := NewAttestationVerifier()
 
@@ -154,6 +155,7 @@ func TestNewAttestationVerifier(t *testing.T) {
 
 // TestAttestationVerifier_IsIDevIDCertificate tests the IsIDevIDCertificate method.
 func TestAttestationVerifier_IsIDevIDCertificate(t *testing.T) {
+	t.Parallel()
 	verifier := NewAttestationVerifier()
 
 	t.Run("returns_true_for_idevid_cert", func(t *testing.T) {
@@ -201,6 +203,7 @@ func TestAttestationVerifier_IsIDevIDCertificate(t *testing.T) {
 
 // TestAttestationVerifier_IsIAKCertificate tests the IsIAKCertificate method.
 func TestAttestationVerifier_IsIAKCertificate(t *testing.T) {
+	t.Parallel()
 	verifier := NewAttestationVerifier()
 
 	t.Run("returns_true_for_iak_cert", func(t *testing.T) {
@@ -244,6 +247,7 @@ func TestAttestationVerifier_IsIAKCertificate(t *testing.T) {
 
 // TestAttestationVerifier_VerifyIDevID tests the VerifyIDevID method.
 func TestAttestationVerifier_VerifyIDevID(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	t.Run("succeeds_for_valid_idevid", func(t *testing.T) {
@@ -318,6 +322,7 @@ func TestAttestationVerifier_VerifyIDevID(t *testing.T) {
 
 // TestAttestationVerifier_VerifyIAK tests the VerifyIAK method.
 func TestAttestationVerifier_VerifyIAK(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	t.Run("succeeds_for_valid_iak", func(t *testing.T) {
@@ -392,6 +397,7 @@ func TestAttestationVerifier_VerifyIAK(t *testing.T) {
 
 // TestAuthMiddleware_RequireTPMAttestation tests the RequireTPMAttestation middleware.
 func TestAuthMiddleware_RequireTPMAttestation(t *testing.T) {
+	t.Parallel()
 	logger := createTestLogger()
 	iamService := newMockIAMServiceClient()
 
@@ -499,6 +505,7 @@ func TestAuthMiddleware_RequireTPMAttestation(t *testing.T) {
 
 // TestIAMSession_AttestationMethods tests the attestation-related methods on IAMSession.
 func TestIAMSession_AttestationMethods(t *testing.T) {
+	t.Parallel()
 	t.Run("attestation_verified_returns_correct_value", func(t *testing.T) {
 		// Test with attestation verified
 		sessionVerified := NewIAMSessionWithAttestation(
@@ -597,6 +604,7 @@ func TestIAMSession_AttestationMethods(t *testing.T) {
 
 // TestAttestationConfig_Options tests the attestation configuration options.
 func TestAttestationConfig_Options(t *testing.T) {
+	t.Parallel()
 	t.Run("with_require_tpm_attestation", func(t *testing.T) {
 		config := &AttestationConfig{}
 		opt := WithRequireTPMAttestation(true)
@@ -630,6 +638,7 @@ func TestAttestationConfig_Options(t *testing.T) {
 
 // TestAttestationVerifier_WrapAttestationError tests error wrapping functionality.
 func TestAttestationVerifier_WrapAttestationError(t *testing.T) {
+	t.Parallel()
 	// Note: wrapAttestationError is not exported, so we test it indirectly
 	// through the VerifyIDevID and VerifyIAK methods
 
@@ -673,6 +682,7 @@ func TestAttestationVerifier_WrapAttestationError(t *testing.T) {
 
 // TestOIDConstants tests the OID constant definitions.
 func TestOIDConstants(t *testing.T) {
+	t.Parallel()
 	t.Run("idevid_oid_is_correct", func(t *testing.T) {
 		expected := asn1.ObjectIdentifier{2, 23, 133, 5, 4, 2}
 		if !OIDTCGIDevID.Equal(expected) {
@@ -711,6 +721,7 @@ func TestOIDConstants(t *testing.T) {
 
 // TestAttestationVerifier_MultipleExtensions tests certificates with multiple TCG extensions.
 func TestAttestationVerifier_MultipleExtensions(t *testing.T) {
+	t.Parallel()
 	verifier := NewAttestationVerifier()
 
 	t.Run("detects_idevid_with_all_tpm_extensions", func(t *testing.T) {

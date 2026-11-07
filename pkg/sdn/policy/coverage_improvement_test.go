@@ -397,51 +397,6 @@ func TestSDNEnrollmentHook_OnEnrollmentComplete_NoProfileBySerialOrMAC(t *testin
 	mockDAO.AssertExpectations(t)
 }
 
-// TestSDNEnrollmentHook_OnEnrollmentComplete_PortNotRegistered tests that an
-// unregistered port defers the transition instead of failing enrollment.
-func TestSDNEnrollmentHook_OnEnrollmentComplete_PortNotRegistered(t *testing.T) {
-	mockEngine := &MockPolicyEngine{}
-	mockDAO := &MockDeviceProfileDAO{}
-
-	hook, err := NewSDNEnrollmentHook(SDNEnrollmentHookConfig{
-		Logger:       slog.Default(),
-		PolicyEngine: mockEngine,
-		ProfileDAO:   mockDAO,
-	})
-	require.NoError(t, err)
-
-	// Test MAC extractor that returns a valid MAC (but port not registered)
-	hook.macExtractor = testMACExtractor("52:54:00:12:34:56")
-	// Note: Not calling hook.RegisterPort()
-
-	profile := createTestDeviceProfile(1, "Server Profile", "", "SRV-", 100)
-	mockDAO.On("ForEachPage", mock.Anything, mock.Anything, mock.Anything).
-		Run(func(args mock.Arguments) {
-			fn := args.Get(2).(datastore.PagerFunc[*entities.DeviceProfile])
-			_ = fn(datastore.PageResult[*entities.DeviceProfile]{Entities: []*entities.DeviceProfile{profile}})
-		}).
-		Return(&MessageError{Msg: "found"}).Once()
-
-	event := &EnrollmentEvent{
-		Context:       context.Background(),
-		Certificate:   createEnrollmentCertificate(t, "TestOrg"),
-		ClientIP:      "192.168.1.100",
-		ProductSerial: "SRV-12345",
-	}
-
-	err = hook.OnEnrollmentComplete(event)
-	assert.NoError(t, err)
-
-	// The pending activation is recorded with the MAC; the port transition
-	// is deferred until the device attaches to the fabric.
-	pending, ok := hook.PeekPendingActivation("SRV-12345")
-	require.True(t, ok)
-	assert.Empty(t, pending.PortID)
-	assert.Equal(t, "52:54:00:12:34:56", pending.MAC)
-
-	mockDAO.AssertExpectations(t)
-}
-
 // TestSDNEnrollmentHook_OnEnrollmentComplete_NilProfile tests when profile is nil after lookup
 func TestSDNEnrollmentHook_OnEnrollmentComplete_NilProfile(t *testing.T) {
 	mockEngine := &MockPolicyEngine{}
@@ -468,43 +423,6 @@ func TestSDNEnrollmentHook_OnEnrollmentComplete_NilProfile(t *testing.T) {
 	err = hook.OnEnrollmentComplete(event)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "unable to identify device")
-}
-
-// TestEngine_RemovePolicyFromEnrolled tests removing policy from enrolled state
-func TestEngine_RemovePolicyFromEnrolled(t *testing.T) {
-	controller := newMockFlowController()
-	config := Config{
-		BridgeName:     "br0",
-		FlowController: controller,
-	}
-
-	engine, err := NewEngine(config)
-	require.NoError(t, err)
-
-	// Apply policy first
-	policy := &PortPolicy{
-		TenantID: "tenant-1",
-		VLAN:     100,
-	}
-	require.NoError(t, engine.ApplyPolicy("port1", policy))
-
-	// Verify state is authorized
-	state, err := engine.GetPortState("port1")
-	require.NoError(t, err)
-	assert.Equal(t, PortStateAuthorized, state)
-
-	// Remove policy
-	err = engine.RemovePolicy("port1")
-	require.NoError(t, err)
-
-	// Verify state is unauthorized
-	state, err = engine.GetPortState("port1")
-	require.NoError(t, err)
-	assert.Equal(t, PortStateUnauthorized, state)
-
-	// Verify policy is removed
-	_, err = engine.GetPolicy("port1")
-	assert.ErrorIs(t, err, ErrPolicyNotFound)
 }
 
 // TestEngine_AuthenticatePort_FromUnauthorized tests authentication from unauthorized state

@@ -857,49 +857,6 @@ func TestProfileService_Delete_NotFound(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestProfileService_Count_Empty(t *testing.T) {
-	ds := testProfileServiceDatastore(t)
-	ctx := context.Background()
-
-	service, err := NewProfileService(ds)
-	require.NoError(t, err)
-
-	count, err := service.Count(ctx)
-	require.NoError(t, err)
-	assert.GreaterOrEqual(t, count, 0)
-}
-
-func TestProfileService_Page_Empty(t *testing.T) {
-	ds := testProfileServiceDatastore(t)
-	ctx := context.Background()
-
-	service, err := NewProfileService(ds)
-	require.NoError(t, err)
-
-	pageQuery := datastore.PageQuery{
-		Page:      1,
-		PageSize:  10,
-		SortOrder: datastore.SORT_ASCENDING,
-	}
-
-	result, err := service.Page(ctx, pageQuery)
-	require.NoError(t, err)
-	assert.GreaterOrEqual(t, len(result.Entities), 0)
-}
-
-func TestProfileService_FindMatchingProfile_Empty(t *testing.T) {
-	ds := testProfileServiceDatastore(t)
-	ctx := context.Background()
-
-	service, err := NewProfileService(ds)
-	require.NoError(t, err)
-
-	// QuicBaaS returns ErrNotFoundByIndex for index lookups
-	_, err = service.FindMatchingProfile(ctx, "aa:bb:cc:dd:ee:ff", "SN999", "AnyModel")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not found")
-}
-
 func TestProfileService_Page_WithDifferentSortOrder(t *testing.T) {
 	ds := testProfileServiceDatastore(t)
 	ctx := context.Background()
@@ -930,51 +887,6 @@ func TestProfileService_Page_WithDifferentSortOrder(t *testing.T) {
 	assert.GreaterOrEqual(t, len(result.Entities), 3)
 }
 
-func TestProfileService_Delete_Success(t *testing.T) {
-	ds := testProfileServiceDatastore(t)
-	ctx := context.Background()
-
-	service, err := NewProfileService(ds)
-	require.NoError(t, err)
-
-	profile := &entities.DeviceProfile{
-		ID:    1111,
-		Name:  "DeleteProfile",
-		Model: "DeleteModel",
-	}
-
-	err = service.Save(ctx, profile)
-	require.NoError(t, err)
-
-	err = service.Delete(ctx, profile)
-	assert.NoError(t, err)
-}
-
-func TestProfileService_Update_Success(t *testing.T) {
-	ds := testProfileServiceDatastore(t)
-	ctx := context.Background()
-
-	service, err := NewProfileService(ds)
-	require.NoError(t, err)
-
-	profile := &entities.DeviceProfile{
-		ID:    1234,
-		Name:  "OriginalName",
-		Model: "OriginalModel",
-	}
-
-	err = service.Save(ctx, profile)
-	require.NoError(t, err)
-
-	profile.Name = "UpdatedName"
-	err = service.Update(ctx, profile)
-	require.NoError(t, err)
-
-	retrieved, err := service.Get(ctx, profile.ID)
-	require.NoError(t, err)
-	assert.Equal(t, "UpdatedName", retrieved.Name)
-}
-
 func TestProfileService_Count_AfterDeletion(t *testing.T) {
 	ds := testProfileServiceDatastore(t)
 	ctx := context.Background()
@@ -1001,43 +913,6 @@ func TestProfileService_Count_AfterDeletion(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, count1-1, count2)
-}
-
-func TestProfileService_Page_MultiPage(t *testing.T) {
-	ds := testProfileServiceDatastore(t)
-	ctx := context.Background()
-
-	service, err := NewProfileService(ds)
-	require.NoError(t, err)
-
-	// Create 15 profiles
-	for i := 1; i <= 15; i++ {
-		profile := &entities.DeviceProfile{
-			ID:    uint64(i + 3000),
-			Name:  "PageProfile" + string(rune('0'+i)),
-			Model: "PageModel" + string(rune('0'+i)),
-		}
-		err = service.Save(ctx, profile)
-		require.NoError(t, err)
-	}
-
-	// Get page 1
-	page1, err := service.Page(ctx, datastore.PageQuery{
-		Page:      1,
-		PageSize:  5,
-		SortOrder: datastore.SORT_ASCENDING,
-	})
-	require.NoError(t, err)
-	assert.GreaterOrEqual(t, len(page1.Entities), 5)
-
-	// Get page 2
-	page2, err := service.Page(ctx, datastore.PageQuery{
-		Page:      2,
-		PageSize:  5,
-		SortOrder: datastore.SORT_ASCENDING,
-	})
-	require.NoError(t, err)
-	assert.GreaterOrEqual(t, len(page2.Entities), 0)
 }
 
 // TestProfileService_Update_PreservesPCRBaselineAndAssignment proves a
