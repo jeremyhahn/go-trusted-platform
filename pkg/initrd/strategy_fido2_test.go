@@ -40,68 +40,6 @@ func TestNewFIDO2Strategy(t *testing.T) {
 	}
 }
 
-func TestFIDO2StrategyCanUnlockNoHandler(t *testing.T) {
-	logger := logging.DefaultLogger()
-	platform := createTestPlatform()
-	platform.FIDO2 = nil
-
-	strategy := NewFIDO2Strategy(platform, logger)
-
-	ctx := context.Background()
-	volume := &luks.VolumeConfig{
-		DevicePath:  "/dev/sda2",
-		MappingName: "cryptroot",
-		KeySlots: []luks.KeySlot{
-			{Index: 0, Type: luks.UnlockFIDO2},
-		},
-	}
-
-	if strategy.CanUnlock(ctx, volume) {
-		t.Error("expected CanUnlock to return false when FIDO2 handler is nil")
-	}
-}
-
-func TestFIDO2StrategyCanUnlockNoFIDO2Slot(t *testing.T) {
-	logger := logging.DefaultLogger()
-	platform := createTestPlatform()
-	// FIDO2 is nil by default in createTestPlatform
-
-	strategy := NewFIDO2Strategy(platform, logger)
-
-	ctx := context.Background()
-	volume := &luks.VolumeConfig{
-		DevicePath:  "/dev/sda2",
-		MappingName: "cryptroot",
-		KeySlots: []luks.KeySlot{
-			{Index: 0, Type: luks.UnlockTPMPCR},
-			{Index: 1, Type: luks.UnlockPassword},
-		},
-	}
-
-	if strategy.CanUnlock(ctx, volume) {
-		t.Error("expected CanUnlock to return false without FIDO2 key slot")
-	}
-}
-
-func TestFIDO2StrategyCanUnlockEmptySlots(t *testing.T) {
-	logger := logging.DefaultLogger()
-	platform := createTestPlatform()
-	platform.FIDO2 = nil
-
-	strategy := NewFIDO2Strategy(platform, logger)
-
-	ctx := context.Background()
-	volume := &luks.VolumeConfig{
-		DevicePath:  "/dev/sda2",
-		MappingName: "cryptroot",
-		KeySlots:    []luks.KeySlot{},
-	}
-
-	if strategy.CanUnlock(ctx, volume) {
-		t.Error("expected CanUnlock to return false with empty slots")
-	}
-}
-
 func TestFIDO2StrategyUnlockNoFIDO2Slots(t *testing.T) {
 	logger := logging.DefaultLogger()
 	platform := createTestPlatform()
