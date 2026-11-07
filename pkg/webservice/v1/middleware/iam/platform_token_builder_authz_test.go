@@ -24,6 +24,7 @@ import (
 // requires an introspection URL — so liveness-requiring modes without one
 // fail closed rather than silently downgrading to offline.
 func TestNewPlatformTokenValidator_ConfigValidation(t *testing.T) {
+	t.Parallel()
 	const (
 		issuer           = "https://broker.test"
 		jwksURL          = "https://broker.test/jwks"

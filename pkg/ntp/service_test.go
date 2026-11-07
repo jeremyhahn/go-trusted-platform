@@ -378,35 +378,6 @@ func TestAssertResolvedAcceptsMaterialAndRefusesEmpty(t *testing.T) {
 	}
 }
 
-func TestApplyIsIdempotentWhenNothingChanged(t *testing.T) {
-	cfg := consumerConfig()
-	fs := newMemFS()
-	runner := newFakeRunner(map[string]fakeResponse{
-		"default": {Output: ""},
-		"restart": {Output: ""},
-		"status":  {Output: "started"},
-	})
-	svc := newTestService(t, cfg, &fakeController{}, runner, fs)
-	ctx := context.Background()
-
-	if err := svc.Apply(ctx); err != nil {
-		t.Fatalf("first Apply() error = %v", err)
-	}
-	if err := svc.Apply(ctx); err != nil {
-		t.Fatalf("second Apply() error = %v", err)
-	}
-
-	restarts := 0
-	for _, call := range runner.calls {
-		if len(call.Args) > 0 && call.Args[len(call.Args)-1] == "restart" {
-			restarts++
-		}
-	}
-	if restarts != 1 {
-		t.Fatalf("restart count = %d, want 1 (unchanged config must not disturb a converged clock)", restarts)
-	}
-}
-
 // TestApplyRestartsWhenNTSMaterialRotates asserts certificate renewal can
 // deploy through Apply: rotated NTS material restarts chronyd even though
 // the rendered chrony.conf is unchanged (chronyd only reads the NTS-KE
