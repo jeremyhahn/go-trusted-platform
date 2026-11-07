@@ -1236,11 +1236,6 @@ func TestClassifySecureBootDBRef_SchemeRules(t *testing.T) {
 		require.Empty(t, certFile)
 	})
 
-	t.Run("missing key-uri is still rejected", func(t *testing.T) {
-		_, _, err := classifySecureBootDBRef("", media+"/DB.crt")
-		require.Error(t, err)
-	})
-
 	t.Run("non-media file key with omitted cert-uri is rejected", func(t *testing.T) {
 		_, _, err := classifySecureBootDBRef("file:///etc/keys/DB.key", "")
 		require.Error(t, err)

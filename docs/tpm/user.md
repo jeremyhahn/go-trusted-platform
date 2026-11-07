@@ -104,9 +104,11 @@ Five things people get wrong here:
 **`cert-handle` is currently ignored for both identities.** `idevid.cert-handle`
 and `iak.cert-handle` are cleared at startup, and the IAK and IDevID
 certificates are kept in the platform certificate store instead of TPM NVRAM.
-This is a temporary measure: go-xkms defines the NV index as a *counter*, which
-the TPM will only accept at 8 bytes, so every certificate-sized NV write fails
-and the daemon will not start (go-xkms#138, tracked here as #81). You will see a
+This is a temporary measure: go-xkms authorizes the NV write on the owner
+hierarchy with an empty password, so once platformd has taken ownership of the
+TPM the write fails with `TPM_RC_BAD_AUTH` and the daemon will not start
+(tracked as #81). The EK certificate is not affected: it goes to TPM NVRAM at
+`ek.cert-handle` when it fits, and to the certificate store when it does not. You will see a
 warning naming the ignored handle at boot. Setting the field does no harm — it
 simply has no effect for now.
 
