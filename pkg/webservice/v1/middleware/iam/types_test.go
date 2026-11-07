@@ -23,6 +23,7 @@ import (
 
 // TestContextKey tests that ContextKey type works correctly.
 func TestContextKey(t *testing.T) {
+	t.Parallel()
 	t.Run("SessionContextKey_is_defined", func(t *testing.T) {
 		if SessionContextKey == "" {
 			t.Error("expected SessionContextKey to be non-empty")
@@ -35,6 +36,7 @@ func TestContextKey(t *testing.T) {
 
 // TestConstants tests the defined constants.
 func TestConstants(t *testing.T) {
+	t.Parallel()
 	t.Run("header_constants", func(t *testing.T) {
 		if TenantIDHeader != "X-Tenant-ID" {
 			t.Errorf("expected TenantIDHeader 'X-Tenant-ID', got %q", TenantIDHeader)
@@ -53,6 +55,7 @@ func TestConstants(t *testing.T) {
 
 // TestHTTPMethodToAction tests the HTTP method to action mapping.
 func TestHTTPMethodToAction(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		method   string
 		expected string
@@ -88,6 +91,7 @@ func TestHTTPMethodToAction(t *testing.T) {
 
 // TestGetSessionFromContext tests the GetSessionFromContext function.
 func TestGetSessionFromContext(t *testing.T) {
+	t.Parallel()
 	t.Run("returns_session_when_present", func(t *testing.T) {
 		session := NewIAMSession(&sdkiam.User{
 			ID:       "user-123",
@@ -139,6 +143,7 @@ func TestGetSessionFromContext(t *testing.T) {
 
 // TestSetSessionInContext tests the SetSessionInContext function.
 func TestSetSessionInContext(t *testing.T) {
+	t.Parallel()
 	t.Run("sets_session_in_context", func(t *testing.T) {
 		session := NewIAMSession(&sdkiam.User{
 			ID:       "user-123",
@@ -189,6 +194,7 @@ func TestSetSessionInContext(t *testing.T) {
 
 // TestJWTClaims tests the JWTClaims struct.
 func TestJWTClaims(t *testing.T) {
+	t.Parallel()
 	t.Run("zero_value_is_valid", func(t *testing.T) {
 		claims := JWTClaims{}
 
@@ -249,6 +255,7 @@ func TestJWTClaims(t *testing.T) {
 
 // TestAuthConfig tests the AuthConfig struct.
 func TestAuthConfig(t *testing.T) {
+	t.Parallel()
 	t.Run("zero_value_defaults", func(t *testing.T) {
 		config := AuthConfig{}
 
@@ -296,6 +303,7 @@ func TestAuthConfig(t *testing.T) {
 
 // TestJWTConfig tests the JWTConfig struct.
 func TestJWTConfig(t *testing.T) {
+	t.Parallel()
 	t.Run("zero_value_defaults", func(t *testing.T) {
 		config := JWTConfig{}
 
@@ -341,6 +349,7 @@ func TestJWTConfig(t *testing.T) {
 
 // TestAuthzConfig tests the AuthzConfig struct.
 func TestAuthzConfig(t *testing.T) {
+	t.Parallel()
 	t.Run("zero_value_defaults", func(t *testing.T) {
 		config := AuthzConfig{}
 
@@ -381,6 +390,7 @@ func TestAuthzConfig(t *testing.T) {
 
 // TestIAMSession_Interface tests that IAMSession interface is properly defined.
 func TestIAMSession_Interface(t *testing.T) {
+	t.Parallel()
 	t.Run("interface_has_all_required_methods", func(t *testing.T) {
 		session := NewIAMSession(&sdkiam.User{
 			ID:       "user-123",
@@ -409,6 +419,7 @@ func TestIAMSession_Interface(t *testing.T) {
 
 // TestServiceClientInterfaces tests that service client interfaces are properly defined.
 func TestServiceClientInterfaces(t *testing.T) {
+	t.Parallel()
 	t.Run("IAMServiceClient_interface", func(t *testing.T) {
 		var _ IAMServiceClient = &mockIAMServiceClient{}
 	})
