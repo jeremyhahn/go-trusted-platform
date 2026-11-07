@@ -62,6 +62,7 @@ func tenantRoles() *pagedRoleClient {
 }
 
 func TestResolveRoleIDs_ResolvesNamesAndIDsAcrossPages(t *testing.T) {
+	t.Parallel()
 	roles := tenantRoles()
 
 	ids, err := ResolveRoleIDs(context.Background(), roles, "tenant-a", []string{"operator", "0b5e-admin"})
@@ -74,6 +75,7 @@ func TestResolveRoleIDs_ResolvesNamesAndIDsAcrossPages(t *testing.T) {
 }
 
 func TestResolveRoleIDs_NoReferencesReadsNothing(t *testing.T) {
+	t.Parallel()
 	roles := tenantRoles()
 
 	ids, err := ResolveRoleIDs(context.Background(), roles, "tenant-a", nil)
@@ -84,6 +86,7 @@ func TestResolveRoleIDs_NoReferencesReadsNothing(t *testing.T) {
 }
 
 func TestResolveRoleIDs_UnknownRoleIsNotFound(t *testing.T) {
+	t.Parallel()
 	_, err := ResolveRoleIDs(context.Background(), tenantRoles(), "tenant-a", []string{"admin", "owner"})
 
 	var notFound ErrRoleNotFound
@@ -92,12 +95,14 @@ func TestResolveRoleIDs_UnknownRoleIsNotFound(t *testing.T) {
 }
 
 func TestResolveRoleIDs_EmptyReferenceIsMissingRole(t *testing.T) {
+	t.Parallel()
 	_, err := ResolveRoleIDs(context.Background(), tenantRoles(), "tenant-a", []string{""})
 
 	assert.ErrorIs(t, err, ErrMissingRole{})
 }
 
 func TestResolveRoleIDs_ListFailureIsTyped(t *testing.T) {
+	t.Parallel()
 	roles := &pagedRoleClient{err: errRoleListUnavailable{}}
 
 	_, err := ResolveRoleIDs(context.Background(), roles, "tenant-a", []string{"admin"})
@@ -109,6 +114,7 @@ func TestResolveRoleIDs_ListFailureIsTyped(t *testing.T) {
 }
 
 func TestResolveRoleIDs_NilRoleClient(t *testing.T) {
+	t.Parallel()
 	_, err := ResolveRoleIDs(context.Background(), nil, "tenant-a", []string{"admin"})
 
 	assert.ErrorIs(t, err, ErrRoleClientMissing{})
@@ -158,6 +164,7 @@ func (c *adapterSDKClient) User() iamsdk.UserClient { return c.users }
 func (c *adapterSDKClient) Role() iamsdk.RoleClient { return c.roles }
 
 func TestQuicBaaSIAMAdapter_CreateUser_SendsRoleIDs(t *testing.T) {
+	t.Parallel()
 	client := &adapterSDKClient{users: &recordingUserClient{}, roles: tenantRoles()}
 	req := &iamsdk.CreateUserRequest{Username: "owner", Email: "owner@example.com", Roles: []string{"admin"}}
 
@@ -170,6 +177,7 @@ func TestQuicBaaSIAMAdapter_CreateUser_SendsRoleIDs(t *testing.T) {
 }
 
 func TestQuicBaaSIAMAdapter_CreateUser_RefusesUnknownRole(t *testing.T) {
+	t.Parallel()
 	client := &adapterSDKClient{users: &recordingUserClient{}, roles: tenantRoles()}
 	req := &iamsdk.CreateUserRequest{Username: "owner", Email: "owner@example.com", Roles: []string{"owner"}}
 
@@ -181,6 +189,7 @@ func TestQuicBaaSIAMAdapter_CreateUser_RefusesUnknownRole(t *testing.T) {
 }
 
 func TestQuicBaaSIAMAdapter_CreateUser_NilRequest(t *testing.T) {
+	t.Parallel()
 	client := &adapterSDKClient{users: &recordingUserClient{}, roles: tenantRoles()}
 
 	_, err := NewQuicBaaSIAMAdapter(client).CreateUser(context.Background(), "tenant-a", nil)
@@ -191,6 +200,7 @@ func TestQuicBaaSIAMAdapter_CreateUser_NilRequest(t *testing.T) {
 }
 
 func TestErrRoleListFailed_Unwrap(t *testing.T) {
+	t.Parallel()
 	err := ErrRoleListFailed{TenantID: "tenant-a", Err: errRoleListUnavailable{}}
 
 	assert.Equal(t, "rest/iam: listing the roles of tenant tenant-a: role store unavailable", err.Error())
@@ -199,6 +209,7 @@ func TestErrRoleListFailed_Unwrap(t *testing.T) {
 }
 
 func TestErrUserRolesSyncFailed_Unwrap(t *testing.T) {
+	t.Parallel()
 	err := ErrUserRolesSyncFailed{TenantID: "tenant-a", UserID: "user-1", RoleID: "0b5e-admin", Err: errRoleListUnavailable{}}
 
 	assert.Equal(t, "rest/iam: setting role 0b5e-admin on user user-1 in tenant tenant-a: role store unavailable", err.Error())
@@ -207,6 +218,7 @@ func TestErrUserRolesSyncFailed_Unwrap(t *testing.T) {
 }
 
 func TestResolveRoleID_ResolvesName(t *testing.T) {
+	t.Parallel()
 	id, err := ResolveRoleID(context.Background(), tenantRoles(), "tenant-a", "operator")
 
 	require.NoError(t, err)
@@ -214,6 +226,7 @@ func TestResolveRoleID_ResolvesName(t *testing.T) {
 }
 
 func TestResolveRoleID_EmptyReferenceReadsNothing(t *testing.T) {
+	t.Parallel()
 	roles := tenantRoles()
 
 	_, err := ResolveRoleID(context.Background(), roles, "tenant-a", "")
@@ -231,6 +244,7 @@ func userHolding(roleIDs ...string) *adapterSDKClient {
 }
 
 func TestSetUserRoles_ReplacesTheRoleSet(t *testing.T) {
+	t.Parallel()
 	client := userHolding("0b5e-admin", "0b5e-custom")
 
 	err := SetUserRoles(context.Background(), client, "tenant-a", "user-1", []string{"operator", "admin"})
@@ -241,6 +255,7 @@ func TestSetUserRoles_ReplacesTheRoleSet(t *testing.T) {
 }
 
 func TestSetUserRoles_NoReferencesLeavesRolesAlone(t *testing.T) {
+	t.Parallel()
 	client := userHolding("0b5e-admin")
 
 	require.NoError(t, SetUserRoles(context.Background(), client, "tenant-a", "user-1", nil))
@@ -251,6 +266,7 @@ func TestSetUserRoles_NoReferencesLeavesRolesAlone(t *testing.T) {
 }
 
 func TestSetUserRoles_UnknownRoleChangesNothing(t *testing.T) {
+	t.Parallel()
 	client := userHolding("0b5e-custom")
 
 	err := SetUserRoles(context.Background(), client, "tenant-a", "user-1", []string{"admin", "owner"})
@@ -263,6 +279,7 @@ func TestSetUserRoles_UnknownRoleChangesNothing(t *testing.T) {
 }
 
 func TestSetUserRoles_AssignFailureIsTypedAndRevokesNothing(t *testing.T) {
+	t.Parallel()
 	client := userHolding("0b5e-custom")
 	client.users.assignErr = errRoleListUnavailable{}
 
@@ -275,12 +292,14 @@ func TestSetUserRoles_AssignFailureIsTypedAndRevokesNothing(t *testing.T) {
 }
 
 func TestSetUserRoles_NilClient(t *testing.T) {
+	t.Parallel()
 	err := SetUserRoles(context.Background(), nil, "tenant-a", "user-1", []string{"admin"})
 
 	assert.ErrorIs(t, err, ErrIAMClientMissing{})
 }
 
 func TestQuicBaaSIAMAdapter_AssignRole_SendsRoleID(t *testing.T) {
+	t.Parallel()
 	client := userHolding()
 
 	require.NoError(t, NewQuicBaaSIAMAdapter(client).AssignRole(context.Background(), "tenant-a", "user-1", "admin"))
@@ -289,6 +308,7 @@ func TestQuicBaaSIAMAdapter_AssignRole_SendsRoleID(t *testing.T) {
 }
 
 func TestQuicBaaSIAMAdapter_AssignRole_RefusesUnknownRole(t *testing.T) {
+	t.Parallel()
 	client := userHolding()
 
 	err := NewQuicBaaSIAMAdapter(client).AssignRole(context.Background(), "tenant-a", "user-1", "owner")
@@ -299,6 +319,7 @@ func TestQuicBaaSIAMAdapter_AssignRole_RefusesUnknownRole(t *testing.T) {
 }
 
 func TestQuicBaaSIAMAdapter_RevokeRole_SendsRoleID(t *testing.T) {
+	t.Parallel()
 	client := userHolding("0b5e-admin")
 
 	require.NoError(t, NewQuicBaaSIAMAdapter(client).RevokeRole(context.Background(), "tenant-a", "user-1", "admin"))
@@ -307,6 +328,7 @@ func TestQuicBaaSIAMAdapter_RevokeRole_SendsRoleID(t *testing.T) {
 }
 
 func TestQuicBaaSIAMAdapter_RevokeRole_RefusesUnknownRole(t *testing.T) {
+	t.Parallel()
 	client := userHolding("0b5e-admin")
 
 	err := NewQuicBaaSIAMAdapter(client).RevokeRole(context.Background(), "tenant-a", "user-1", "owner")
@@ -317,6 +339,7 @@ func TestQuicBaaSIAMAdapter_RevokeRole_RefusesUnknownRole(t *testing.T) {
 }
 
 func TestQuicBaaSIAMAdapter_SetUserRoles_ResolvesNames(t *testing.T) {
+	t.Parallel()
 	client := userHolding()
 
 	require.NoError(t, NewQuicBaaSIAMAdapter(client).SetUserRoles(context.Background(), "tenant-a", "user-1", []string{"admin"}))
@@ -325,6 +348,7 @@ func TestQuicBaaSIAMAdapter_SetUserRoles_ResolvesNames(t *testing.T) {
 }
 
 func TestQuicBaaSIAMAdapter_SetUserRoles_RefusesUnknownRole(t *testing.T) {
+	t.Parallel()
 	client := userHolding()
 
 	err := NewQuicBaaSIAMAdapter(client).SetUserRoles(context.Background(), "tenant-a", "user-1", []string{"owner"})

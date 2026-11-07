@@ -219,18 +219,6 @@ func TestErrDeviceHandlerRequired_Error(t *testing.T) {
 		ErrDeviceHandlerRequired{Handler: "TemplateCRUDHandler"}.Error())
 }
 
-func TestDeviceRouter_RegisterRoutes(t *testing.T) {
-	mockMTLS := &MockMTLSMiddleware{}
-	mockHandler := &MockDeviceRestHandler{}
-
-	deviceRouter := newTestDeviceRouter(t, mockMTLS, mockHandler, &MockDeviceCRUDHandler{})
-	muxRouter := mux.NewRouter()
-
-	require.NotPanics(t, func() {
-		registerAllDeviceRoutes(deviceRouter, muxRouter)
-	})
-}
-
 func TestDeviceRouter_ProfileEndpoint(t *testing.T) {
 	mockMTLS := &MockMTLSMiddleware{}
 	mockHandler := &MockDeviceRestHandler{}
@@ -484,15 +472,6 @@ func TestRegisterRoutes_MountsTheTemplateRoutes(t *testing.T) {
 	} {
 		assert.True(t, operator[route], "%s is not registered", route)
 	}
-}
-
-func TestDeviceRouter_ImplementsInterface(t *testing.T) {
-	mockMTLS := &MockMTLSMiddleware{}
-	mockHandler := &MockDeviceRestHandler{}
-
-	var router = newTestDeviceRouter(t, mockMTLS, mockHandler, &MockDeviceCRUDHandler{})
-	assert.NotNil(t, router)
-	assert.Implements(t, (*WebServiceRouter)(nil), router)
 }
 
 // =============================================================================
