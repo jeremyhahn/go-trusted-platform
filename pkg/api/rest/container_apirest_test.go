@@ -99,6 +99,34 @@ func TestContainerAPIRest_FollowLogsWithoutFlusher(t *testing.T) {
 	assert.True(t, logs.closed, "the log stream is released")
 }
 
+// goneClientWriter is an event-stream writer whose client has disconnected:
+// every write fails, and flushes are counted.
+type goneClientWriter struct {
+	header  http.Header
+	flushes int
+}
+
+func (w *goneClientWriter) Header() http.Header       { return w.header }
+func (w *goneClientWriter) WriteHeader(int)           {}
+func (w *goneClientWriter) Write([]byte) (int, error) { return 0, errors.New("client gone") }
+func (w *goneClientWriter) Flush()                    { w.flushes++ }
+
+func TestContainerAPIRest_FollowLogsStopsWhenTheClientIsGone(t *testing.T) {
+	orch := newStreamingMockOrchestrator()
+	orch.addTestInstance("c1", "web", compute.StateRunning)
+	logs := &closeTrackingReader{Reader: strings.NewReader("line 1\n")}
+	orch.logsReader = logs
+	h := NewContainerHandlers(orch, slog.Default())
+
+	req := mux.SetURLVars(httptest.NewRequest(http.MethodGet, "/api/v1/containers/c1/logs?follow=true", nil), map[string]string{"id": "c1"})
+	w := &goneClientWriter{header: http.Header{}}
+
+	h.handleGetContainerLogs(w, req)
+
+	assert.Zero(t, w.flushes, "nothing is flushed after the first write fails")
+	assert.True(t, logs.closed, "the log stream is released")
+}
+
 func TestContainerAPIRest_WriteJSONEncodeFailure(t *testing.T) {
 	h := NewContainerHandlers(newMockOrchestrator(), slog.Default())
 	rec := httptest.NewRecorder()

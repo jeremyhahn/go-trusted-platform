@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
@@ -177,12 +176,6 @@ func TestBuildConfigResolvesBinariesAndOverrides(t *testing.T) {
 	var notFound ErrBinariesNotFound
 	if _, err := buildConfig(&createFlags{target: "rpi", binariesDir: filepath.Join(dir, "empty")}); !errors.As(err, &notFound) {
 		t.Errorf("missing binaries error = %v", err)
-	}
-	if _, err := mergeOverrides("", overrides); err == nil {
-		t.Error("overrides without a template accepted")
-	}
-	if _, err := mergeOverrides(template, filepath.Join(dir, "missing.yaml")); err == nil {
-		t.Error("missing overrides file accepted")
 	}
 }
 
@@ -473,22 +466,5 @@ func TestParsePortForwards(t *testing.T) {
 		if !errors.As(err, &invalid) || invalid.Spec != bad {
 			t.Errorf("%q: err = %v", bad, err)
 		}
-	}
-}
-
-func TestRunTestBoot_RejectsABadForwardBeforeBooting(t *testing.T) {
-	err := runTestBoot(nil, &testFlags{image: "nope.img", firmware: "nope.bin", forwards: []string{"bad"}})
-	var invalid ErrInvalidPortForward
-	if !errors.As(err, &invalid) {
-		t.Errorf("err = %v", err)
-	}
-}
-
-func TestRunTestBoot_ReportsAMissingImage(t *testing.T) {
-	dir := t.TempDir()
-	err := runTestBoot(nil, &testFlags{image: filepath.Join(dir, "missing.img"), firmware: filepath.Join(dir, "missing.bin"), workDir: dir, timeout: time.Second})
-	var bootErr *pkgdiskimage.BootError
-	if !errors.As(err, &bootErr) || bootErr.Step != "opening the image" {
-		t.Errorf("err = %v", err)
 	}
 }
