@@ -1,8 +1,7 @@
 # Web test platformd (example)
 #
 # The platformd the web console flows start in the devcontainer:
-#   - make integration-test-web, make integration-test-web-shell (via
-#     make config) and entrypoint.sh web-dev / e2e-shell copy it to
+#   - make integration-test-web-shell (via make config) copies it to
 #     /workspace/pkg/config.yaml,
 #   - web/Makefile start-backend copies it to /workspace/config.yaml.
 #

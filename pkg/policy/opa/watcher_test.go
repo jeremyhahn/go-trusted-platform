@@ -164,18 +164,6 @@ func TestFileWatcher_Stop(t *testing.T) {
 }
 
 func TestFileWatcher_OnPolicyChange(t *testing.T) {
-	t.Run("callback registered", func(t *testing.T) {
-		tmpDir := t.TempDir()
-		watcher, err := NewFileWatcher(tmpDir)
-		require.NoError(t, err)
-
-		watcher.OnPolicyChange(func(name string, content []byte, deleted bool) {
-			// Callback is registered but not invoked in this test
-		})
-
-		assert.Len(t, watcher.callbacks, 1)
-	})
-
 	t.Run("multiple callbacks registered", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		watcher, err := NewFileWatcher(tmpDir)
@@ -348,31 +336,6 @@ func TestNewWatchedEngine(t *testing.T) {
 		watchedEngine, err := NewWatchedEngine(engine, "/non/existent/path")
 		require.Error(t, err)
 		assert.Nil(t, watchedEngine)
-	})
-}
-
-func TestWatchedEngine_Start(t *testing.T) {
-	t.Run("successful start", func(t *testing.T) {
-		tmpDir := t.TempDir()
-		engine := NewOPAEngine()
-		ctx := context.Background()
-
-		cfg := &config.PolicyConfig{
-			Engine:        config.PolicyEngineOPA,
-			PolicyDir:     tmpDir,
-			DefaultAction: config.DefaultActionDeny,
-		}
-		err := engine.Initialize(ctx, cfg)
-		require.NoError(t, err)
-
-		watchedEngine, err := NewWatchedEngine(engine, tmpDir)
-		require.NoError(t, err)
-
-		err = watchedEngine.Start(ctx)
-		require.NoError(t, err)
-
-		err = watchedEngine.Stop()
-		require.NoError(t, err)
 	})
 }
 

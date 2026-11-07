@@ -717,6 +717,9 @@ func TestBarrierInitErrors_Messages(t *testing.T) {
 		"duplicate username":      &ErrBarrierInitOfficerInvalid{Index: 1, Username: "bob", Reason: "duplicate username"},
 		"unusable csr_pem: bad":   &ErrBarrierInitOfficerInvalid{Reason: "unusable csr_pem", Err: errors.New("bad")},
 		"no PEM block":            &ErrBarrierInitOfficerCSRNotPEM{},
+		"initialized app":         ErrBarrierGateRequiresApp{},
+		"quicbaas SDK client":     ErrBarrierGateRequiresSDK{},
+		"barrier initialization after the ceremony failed: sealed backend": ErrBarrierInitFailed{Cause: errors.New("sealed backend")},
 	}
 	for want, err := range cases {
 		if !strings.Contains(err.Error(), want) {
@@ -1152,25 +1155,6 @@ func TestBarrierInitService_SyncFailureKeepsCachedState(t *testing.T) {
 // Errors
 // =============================================================================
 
-func TestErrBarrierGateRequiresApp(t *testing.T) {
-	if (ErrBarrierGateRequiresApp{}).Error() == "" {
-		t.Error("expected non-empty error")
-	}
-}
-
-func TestErrBarrierGateRequiresSDK(t *testing.T) {
-	if (ErrBarrierGateRequiresSDK{}).Error() == "" {
-		t.Error("expected non-empty error")
-	}
-}
-
-func TestErrBarrierInitFailed_MessageCarriesCause(t *testing.T) {
-	err := ErrBarrierInitFailed{Cause: errors.New("sealed backend")}
-	if got := err.Error(); got != "barrier initialization after the ceremony failed: sealed backend" {
-		t.Errorf("message: got %q", got)
-	}
-}
-
 func TestErrBarrierInitFailed_NilCause(t *testing.T) {
 	err := ErrBarrierInitFailed{}
 	if got := err.Error(); got != "barrier initialization after the ceremony failed" {
@@ -1274,25 +1258,12 @@ func TestDefaultBarrierGateConfig(t *testing.T) {
 	if cfg.socketPath == "" {
 		t.Error("socketPath default must be non-empty")
 	}
-	if cfg.httpAddr == "" {
-		t.Error("httpAddr default must be non-empty")
+	if cfg.httpAddr != apidaemon.DefaultInitOnlyHTTPAddr {
+		t.Errorf("defaultBarrierGateConfig().httpAddr = %q, want %q",
+			cfg.httpAddr, apidaemon.DefaultInitOnlyHTTPAddr)
 	}
 	if cfg.pollEvery <= 0 {
 		t.Error("pollEvery default must be positive")
-	}
-}
-
-// =============================================================================
-// Gate HTTP address
-// =============================================================================
-
-// TestDefaultBarrierGateConfig_UsesInitOnlyDefault pins the gate to the
-// init-only server's default address, whose port choice is tested in
-// pkg/api/daemon against every production transport port.
-func TestDefaultBarrierGateConfig_UsesInitOnlyDefault(t *testing.T) {
-	if got := defaultBarrierGateConfig().httpAddr; got != apidaemon.DefaultInitOnlyHTTPAddr {
-		t.Errorf("defaultBarrierGateConfig().httpAddr = %q, want %q",
-			got, apidaemon.DefaultInitOnlyHTTPAddr)
 	}
 }
 
@@ -1337,24 +1308,9 @@ func withSocketPath(t *testing.T, path string) {
 	t.Cleanup(func() { serveSocketPath = prev })
 }
 
-// TestInvokeBarrierGate_DispatchesViaHook proves invokeBarrierGate routes
-// through the swappable initOnlyGate hook. This is the seam both
-// runWithWebservices and runDaemonOnly use to call the gate.
-func TestInvokeBarrierGate_DispatchesViaHook(t *testing.T) {
-	fake := &fakeInitOnlyGate{}
-	withFakeGate(t, fake)
-	withSocketPath(t, "/tmp/test-platformd.sock")
-
-	logger := logging.NewLogger(0, nil)
-	if err := invokeBarrierGate(context.Background(), nil, logger); err != nil {
-		t.Fatalf("invokeBarrierGate: unexpected error %v", err)
-	}
-	if fake.called != 1 {
-		t.Errorf("fake gate called %d times, want 1", fake.called)
-	}
-}
-
-// TestInvokeBarrierGate_ThreadsSocketPath confirms the operator-configured
+// TestInvokeBarrierGate_ThreadsSocketPath proves invokeBarrierGate routes
+// through the swappable initOnlyGate hook, the seam both runWithWebservices
+// and runDaemonOnly use, and confirms the operator-configured
 // --socket-path CLI value is threaded into the gate config. Without this,
 // the gate would bind /run/platformd.sock and the production daemon would
 // silently bind whatever the CLI specified, leaving local platformctl
@@ -1367,6 +1323,9 @@ func TestInvokeBarrierGate_ThreadsSocketPath(t *testing.T) {
 	logger := logging.NewLogger(0, nil)
 	if err := invokeBarrierGate(context.Background(), nil, logger); err != nil {
 		t.Fatalf("invokeBarrierGate: %v", err)
+	}
+	if fake.called != 1 {
+		t.Errorf("fake gate called %d times, want 1", fake.called)
 	}
 	if fake.lastCfg.socketPath != "/var/run/custom-platformd.sock" {
 		t.Errorf("gate socketPath = %q, want %q",
