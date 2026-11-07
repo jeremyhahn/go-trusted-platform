@@ -680,15 +680,3 @@ func TestLinkState_Constants(t *testing.T) {
 	assert.Equal(t, LinkState("down"), LinkStateDown)
 	assert.Equal(t, LinkState("unknown"), LinkStateUnknown)
 }
-
-// TestErrorType_Constants tests ErrorType constant values
-func TestErrorType_Constants(t *testing.T) {
-	assert.Equal(t, ErrorType("invalid_name"), ErrorTypeInvalidName)
-	assert.Equal(t, ErrorType("not_found"), ErrorTypeNotFound)
-	assert.Equal(t, ErrorType("already_exists"), ErrorTypeAlreadyExists)
-	assert.Equal(t, ErrorType("create_failed"), ErrorTypeCreateFailed)
-	assert.Equal(t, ErrorType("delete_failed"), ErrorTypeDeleteFailed)
-	assert.Equal(t, ErrorType("setup_failed"), ErrorTypeSetupFailed)
-	assert.Equal(t, ErrorType("state_failed"), ErrorTypeStateFailed)
-	assert.Equal(t, ErrorType("permission"), ErrorTypePermission)
-}

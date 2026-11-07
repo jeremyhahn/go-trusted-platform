@@ -124,9 +124,6 @@ linters:
         - (*github.com/fatih/color.Color).Printf
         - (*github.com/fatih/color.Color).Println
         - (*github.com/fatih/color.Color).Fprintf
-        - fmt.Fprintf
-        - fmt.Printf
-        - fmt.Println
         # Crypto random
         - rand.Read
         - io.ReadFull
