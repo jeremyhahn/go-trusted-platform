@@ -58,7 +58,7 @@ require (
 	github.com/klauspost/compress v1.19.1 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	github.com/libp2p/go-libp2p v0.50.0 // held: v0.50.0 requires exactly quic-go v0.62.0 and webtransport-go v0.13.0; later versions are not in the module cache and cannot be fetched offline in #1140
 	github.com/libp2p/go-libp2p-kad-dht v0.37.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
-	github.com/mark3labs/mcp-go v1.4.0
+	github.com/mark3labs/mcp-go v1.5.0
 	github.com/mdlayher/packet v1.1.2 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	github.com/mdobak/go-xerrors v1.0.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	github.com/miekg/dns v1.1.72 // held: the latest version is not in the module cache and cannot be fetched offline in #933
@@ -71,7 +71,7 @@ require (
 	github.com/quic-go/connect-ip-go v0.2.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	github.com/quic-go/quic-go v0.62.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	github.com/spf13/cobra v1.10.2
-	github.com/spf13/pflag v1.0.10
+	github.com/spf13/pflag v1.1.0
 	github.com/spf13/viper v1.21.0
 	github.com/stretchr/testify v1.12.1
 	github.com/strongswan/govici v0.8.2
