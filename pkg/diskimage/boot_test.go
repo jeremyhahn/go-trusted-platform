@@ -218,6 +218,7 @@ func TestBoot_ExpectStopsTheVMWhenTheMilestoneAppears(t *testing.T) {
 }
 
 func TestBoot_ExpectTimesOut(t *testing.T) {
+	t.Parallel()
 	f := newBootFixture(t)
 	opts := f.options()
 	opts.SerialLog = filepath.Join(f.dir, "serial.log")

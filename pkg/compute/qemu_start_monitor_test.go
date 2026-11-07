@@ -46,6 +46,7 @@ func (f *fakeMonitorConnector) ConnectMonitor(ctx context.Context) error {
 
 // A monitor that refuses dials while QEMU starts is retried until it accepts.
 func TestAwaitMonitor_RetriesRefusedDialUntilConnected(t *testing.T) {
+	t.Parallel()
 	vm := &fakeMonitorConnector{connect: func(call int) error {
 		if call < 2 {
 			return errQMPRefused
@@ -60,6 +61,7 @@ func TestAwaitMonitor_RetriesRefusedDialUntilConnected(t *testing.T) {
 }
 
 func TestAwaitMonitor_AlreadyConnectedIsReady(t *testing.T) {
+	t.Parallel()
 	vm := &fakeMonitorConnector{connect: func(int) error { return qemu.ErrMonitorAlreadyConnected{} }}
 
 	require.NoError(t, awaitMonitor(context.Background(), vm, make(chan error), time.Minute))
@@ -67,6 +69,7 @@ func TestAwaitMonitor_AlreadyConnectedIsReady(t *testing.T) {
 
 // QEMU exiting after it bound the socket is a start failure carrying its reason.
 func TestAwaitMonitor_QEMUExitIsStartFailureWithReason(t *testing.T) {
+	t.Parallel()
 	vm := &fakeMonitorConnector{connect: func(int) error { return errQMPRefused }}
 	exited := make(chan error, 1)
 	exited <- &qemu.SentinelCauseError{
@@ -82,6 +85,7 @@ func TestAwaitMonitor_QEMUExitIsStartFailureWithReason(t *testing.T) {
 }
 
 func TestAwaitMonitor_CleanExitIsStartFailure(t *testing.T) {
+	t.Parallel()
 	vm := &fakeMonitorConnector{connect: func(int) error { return qemu.ErrVMNotRunning }}
 	exited := make(chan error, 1)
 	exited <- nil
@@ -92,6 +96,7 @@ func TestAwaitMonitor_CleanExitIsStartFailure(t *testing.T) {
 }
 
 func TestAwaitMonitor_TimesOutWhenMonitorNeverAccepts(t *testing.T) {
+	t.Parallel()
 	vm := &fakeMonitorConnector{connect: func(int) error { return errQMPRefused }}
 
 	err := awaitMonitor(context.Background(), vm, make(chan error), 3*monitorRetryInterval)
@@ -101,6 +106,7 @@ func TestAwaitMonitor_TimesOutWhenMonitorNeverAccepts(t *testing.T) {
 }
 
 func TestAwaitMonitor_StopsWhenContextCanceled(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	vm := &fakeMonitorConnector{connect: func(int) error {
 		cancel()
@@ -112,35 +118,6 @@ func TestAwaitMonitor_StopsWhenContextCanceled(t *testing.T) {
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
-// A QEMU that exits during start (here it refuses to run, as without KVM)
-// fails Start with QEMU's own reason and leaves the instance in error, not
-// running with a monitor nobody can reach. The name stays short: the
-// instance sockets live under t.TempDir, and unix socket paths cap at 107.
-func TestStart_QEMUExitIsStartFailure(t *testing.T) {
-	orch := newSWTPMTestOrchestrator(t, &fakeHost{})
-	firmwareDir := t.TempDir()
-	orch.config.OVMFCode = writeTestFile(t, firmwareDir, "OVMF_CODE.fd", "code", 0o644)
-	orch.config.OVMFVars = writeTestFile(t, firmwareDir, "OVMF_VARS.fd", "vars", 0o644)
-	orch.config.QEMUBinary = writeTestFile(t, firmwareDir, "qemu-system-x86_64",
-		"#!/bin/sh\necho 'qemu-system-x86_64: failed to initialize kvm: No such file or directory' >&2\nexit 1\n", 0o755)
-	ctx := context.Background()
-	instance, err := orch.Create(ctx, &entities.DeviceProfile{ID: 1, Name: "test-vm-exits"})
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(instance.Config.DiskPath, []byte("disk"), 0o600))
-	// The qcow2 NVRAM is qemu-img's to make; provisioned here like the disk.
-	nvram := (&qemu.Config{WorkDir: instance.Config.WorkDir, NVRAMFormat: qemu.DiskFormatQCOW2}).GetNVRAMPath()
-	require.NoError(t, os.MkdirAll(filepath.Dir(nvram), 0o755))
-	require.NoError(t, os.WriteFile(nvram, []byte("vars"), 0o600))
-
-	err = orch.Start(ctx, instance.ID)
-
-	require.ErrorIs(t, err, ErrVMExitedDuringStart)
-	assert.Contains(t, err.Error(), "failed to initialize kvm")
-	state, stateErr := orch.GetState(ctx, instance.ID)
-	require.NoError(t, stateErr)
-	assert.Equal(t, StateError, state)
-}
-
 // newExitingQEMUInstance creates an instance on a fake host whose QEMU exits
 // at once, with the disk and qcow2 NVRAM Start expects already in place.
 func newExitingQEMUInstance(t *testing.T, host *fakeHost, name string) (*QEMUOrchestrator, *Instance) {
@@ -149,7 +126,8 @@ func newExitingQEMUInstance(t *testing.T, host *fakeHost, name string) (*QEMUOrc
 	firmwareDir := t.TempDir()
 	orch.config.OVMFCode = writeTestFile(t, firmwareDir, "OVMF_CODE.fd", "code", 0o644)
 	orch.config.OVMFVars = writeTestFile(t, firmwareDir, "OVMF_VARS.fd", "vars", 0o644)
-	orch.config.QEMUBinary = writeTestFile(t, firmwareDir, "qemu-system-x86_64", "#!/bin/sh\nexit 1\n", 0o755)
+	orch.config.QEMUBinary = writeTestFile(t, firmwareDir, "qemu-system-x86_64",
+		"#!/bin/sh\necho 'qemu-system-x86_64: failed to initialize kvm: No such file or directory' >&2\nexit 1\n", 0o755)
 	instance, err := orch.Create(context.Background(), &entities.DeviceProfile{ID: 1, Name: name})
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(instance.Config.DiskPath, []byte("disk"), 0o600))
@@ -172,6 +150,10 @@ func TestStart_QEMUDialsTheSocketSWTPMListensOn(t *testing.T) {
 	err := orch.Start(context.Background(), instance.ID)
 
 	require.ErrorIs(t, err, ErrVMExitedDuringStart)
+	assert.Contains(t, err.Error(), "failed to initialize kvm")
+	state, stateErr := orch.GetState(context.Background(), instance.ID)
+	require.NoError(t, stateErr)
+	assert.Equal(t, StateError, state)
 	assert.NotEqual(t, created, running)
 	assert.Equal(t, running, qemuInst.vm.GetConfig().TPMSocket)
 	assert.Equal(t, running, instance.Metadata["tpm_socket"])

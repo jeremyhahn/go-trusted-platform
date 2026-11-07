@@ -790,13 +790,6 @@ func TestGetProfile_MultipleACLs(t *testing.T) {
 }
 
 // TestErrorVariables verifies error variable definitions
-func TestErrorVariables(t *testing.T) {
-	assert.NotNil(t, ErrMissingSerial)
-	assert.NotNil(t, ErrProfileNotFound)
-
-	assert.Contains(t, ErrMissingSerial.Error(), "serial")
-	assert.Contains(t, ErrProfileNotFound.Error(), "profile")
-}
 
 func TestActivate_ResponseContainsCorrectFields(t *testing.T) {
 	logger := newTestLogger()

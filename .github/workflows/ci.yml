@@ -796,7 +796,11 @@ jobs:
     # no image is left for legs that never run. v1.29.3: schedule-guard as
     # the template has it, as on every bigdisk job.
     needs: [image, schedule-guard]
-    timeout-minutes: 60
+    # A cold build on a loaded runner (#1299, run 72198): `make
+    # docker-build-it` 47.5 min + `docker save` 3.5 min + the 3.2 GB upload
+    # at about 5.7 MB/s, about 9.5 min, is about 61 min. 90 leaves margin
+    # for a slower runner; a warm runner reuses the image (#1292).
+    timeout-minutes: 90
     outputs:
       image_id: ${{ steps.build.outputs.image_id }}
       # The image's identity on any daemon: a hash of its layers' diff ids,
@@ -994,8 +998,11 @@ jobs:
       fail-fast: false
       matrix:
         leg: [1, 2, 3, 4, 5]
-    # Backstop above the 20-minute target, for a leg that hangs.
-    timeout-minutes: 60
+    # Backstop above the 20-minute target, for a leg that hangs. A leg whose
+    # daemon lacks the image also downloads and `docker load`s the 3.2 GB
+    # artifact: about 9.5 min at the 5.7 MB/s of #1299 (run 72198) plus the
+    # load, about 13 min, rounded up to 15 above the old 60.
+    timeout-minutes: 75
     env:
       IT_PROJECT: go-trusted-platform-ci-${{ github.run_id }}-${{ github.run_attempt }}-leg${{ matrix.leg }}
       IT_IMAGE_ID: ${{ needs.integration-image.outputs.image_id }}
