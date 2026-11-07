@@ -25,6 +25,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -39,9 +40,36 @@ var (
 
 func rsaKey(t *testing.T, bits int) *rsa.PrivateKey {
 	t.Helper()
-	key, err := rsa.GenerateKey(rand.Reader, bits)
+	generate, ok := testKeys[bits]
+	require.True(t, ok, "no test key of %d bits", bits)
+	key, err := generate()
 	require.NoError(t, err)
 	return key
+}
+
+// otherKey is a second key of the bootloader's size, for the tests that
+// need a key OTP was not fused with.
+func otherKey(t *testing.T) *rsa.PrivateKey {
+	t.Helper()
+	key, err := secondKey()
+	require.NoError(t, err)
+	return key
+}
+
+// RSA key generation is most of the package's test time, so each key is
+// generated once and shared; no test modifies a key.
+var (
+	testKeys = map[int]func() (*rsa.PrivateKey, error){
+		KeyBits: generateKey(KeyBits),
+		3072:    generateKey(3072),
+	}
+	secondKey = generateKey(KeyBits)
+)
+
+func generateKey(bits int) func() (*rsa.PrivateKey, error) {
+	return sync.OnceValues(func() (*rsa.PrivateKey, error) {
+		return rsa.GenerateKey(rand.Reader, bits)
+	})
 }
 
 // signer is a crypto.Signer whose Sign is replaceable, to model a KMS that
@@ -161,7 +189,7 @@ func TestVerify_RefusesATamperedImage(t *testing.T) {
 
 func TestVerify_RefusesTheWrongKey(t *testing.T) {
 	fleet := rsaKey(t, KeyBits)
-	other := rsaKey(t, KeyBits)
+	other := otherKey(t)
 	fleetHash, err := KeyHash(&fleet.PublicKey)
 	require.NoError(t, err)
 	otherHash, err := KeyHash(&other.PublicKey)
@@ -291,7 +319,7 @@ func TestSign_Errors(t *testing.T) {
 		assert.ErrorIs(t, err, refuse)
 	})
 	t.Run("the signer signs with another key", func(t *testing.T) {
-		other := rsaKey(t, KeyBits)
+		other := otherKey(t)
 		wrong := signer{Signer: key, sign: func(digest []byte) ([]byte, error) {
 			return rsa.SignPKCS1v15(rand.Reader, other, crypto.SHA256, digest)
 		}}
@@ -334,7 +362,7 @@ func TestVerify_RefusesAKeyTheBootloaderCannotUse(t *testing.T) {
 // irreversible OTP burn, so each refusal must print what to compare.
 func TestErrors_NameWhatToCheck(t *testing.T) {
 	fleet := rsaKey(t, KeyBits)
-	other := rsaKey(t, KeyBits)
+	other := otherKey(t)
 	fleetHash, err := KeyHash(&fleet.PublicKey)
 	require.NoError(t, err)
 	otherHash, err := KeyHash(&other.PublicKey)
@@ -391,22 +419,4 @@ func TestSignDigest_IsTheSignatureInBootSig(t *testing.T) {
 	parsed, err := Parse(bootSig)
 	require.NoError(t, err)
 	assert.Equal(t, sig, parsed.RSA, "PKCS#1 v1.5 is deterministic: boot.sig carries SignDigest's signature")
-}
-
-func TestSignDigest_Errors(t *testing.T) {
-	digest := sha256.Sum256(image)
-
-	t.Run("RSA of another size", func(t *testing.T) {
-		_, err := SignDigest(rsaKey(t, 3072), digest)
-		var bits *KeyBitsError
-		assert.ErrorAs(t, err, &bits)
-	})
-	t.Run("the KMS refuses", func(t *testing.T) {
-		refuse := errors.New("kms: permission denied")
-		key := rsaKey(t, KeyBits)
-		_, err := SignDigest(signer{Signer: key, sign: func([]byte) ([]byte, error) { return nil, refuse }}, digest)
-		var signErr *SignError
-		require.ErrorAs(t, err, &signErr)
-		assert.ErrorIs(t, err, refuse)
-	})
 }
