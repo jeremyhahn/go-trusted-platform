@@ -70,6 +70,9 @@ type Server struct {
 	// nbdServer exports the diskless-nbd nodes' roots; nil when the
 	// manifest has none.
 	nbdServer *nbd.Server
+	// listenNBD binds the NBD export server's listener: net.Listen, which
+	// a test replaces to observe that listener's Close (#1124).
+	listenNBD func(network, address string) (net.Listener, error)
 }
 
 // alpineRepoBranch derives the Alpine repository branch path component
@@ -180,6 +183,7 @@ func NewServer(config *ServerConfig, logger *slog.Logger) (*Server, error) {
 		defaults:   defaults,
 		scriptGen:  ipxe.NewScriptGenerator(serverBaseURL(config), logger),
 		nbdServer:  nbdServer,
+		listenNBD:  net.Listen,
 	}
 	// /boot.ipxe chains the per-device route first: a node in the
 	// manifest boots its media set, with its role and hostname.
@@ -276,7 +280,7 @@ func (s *Server) Start(ctx context.Context) error {
 		// the same reason: a diskless-nbd node's root must be reachable
 		// before the gate reports the container ready.
 		if s.nbdServer != nil {
-			nbdLn, err := net.Listen("tcp", s.config.NBD.ListenAddr)
+			nbdLn, err := s.listenNBD("tcp", s.config.NBD.ListenAddr)
 			if err != nil {
 				errCh <- ErrServerStartFailed{Cause: err}
 				return
