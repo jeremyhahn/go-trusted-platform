@@ -124,8 +124,9 @@ func (b *luksWireBackend) ChangePassphrase(_ context.Context, req *LUKSChangePas
 func newLUKSRESTSDKClient(t *testing.T, svc *LUKSService) *lukssdk.GRPCClient {
 	t.Helper()
 	s := newTestRESTServerForPhase35(t)
-	s.SetLUKSService(svc)
+	mustMountS6(t, s.SetLUKSService(svc, s6RESTGuard()))
 	a := connectPhase35REST(t, s.router)
+	a.SetToken(s6OperatorToken)
 	return lukssdk.NewGRPCClientFromClient(platformv1.NewLUKSServiceClient(a.Connection()))
 }
 
@@ -388,7 +389,7 @@ func TestLUKSRESTClientAgainstDaemonRouter_ErrorsSurface(t *testing.T) {
 // input holds a passphrase.
 func TestLUKSREST_MalformedBodyHidesInput(t *testing.T) {
 	s := newTestRESTServerForPhase35(t)
-	s.SetLUKSService(NewLUKSService(logging.DefaultLogger(), &luksWireBackend{}, rootYes()))
+	mustMountS6(t, s.SetLUKSService(NewLUKSService(logging.DefaultLogger(), &luksWireBackend{}, rootYes()), s6RESTGuard()))
 
 	bodies := map[string]string{
 		"truncated":    `{"device":"/dev/sda","new_passphrase":"` + luksTestNew,
@@ -398,6 +399,7 @@ func TestLUKSREST_MalformedBodyHidesInput(t *testing.T) {
 	for name, body := range bodies {
 		t.Run(name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/luks/enroll/passphrase", strings.NewReader(body))
+			req.Header.Set("Authorization", "Bearer "+s6OperatorToken)
 			rec := httptest.NewRecorder()
 			s.router.ServeHTTP(rec, req)
 
