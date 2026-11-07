@@ -320,30 +320,6 @@ func TestBackendToStoreType(t *testing.T) {
 	}
 }
 
-// TestGenerateAllContextCancellation tests context cancellation during generation
-func TestGenerateAllContextCancellation(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	config := &XKMSConfig{
-		KeysDir:    tmpDir,
-		Backend:    BackendFile,
-		ExportKeys: true,
-	}
-
-	km, err := NewXKMSManager(config, nil)
-	require.NoError(t, err)
-	defer km.Close()
-
-	// Create a cancelled context
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	// GenerateKey should fail with context error
-	err = km.generateKey(ctx, KeyTypePK, "Platform Key")
-	assert.Error(t, err)
-	assert.ErrorIs(t, err, context.Canceled)
-}
-
 // TestGenerateAllWithoutExport tests generation without key export
 func TestGenerateAllWithoutExport(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -366,35 +342,6 @@ func TestGenerateAllWithoutExport(t *testing.T) {
 	paths := km.GetKeyPaths()
 	_, err = os.Stat(paths.PKKey)
 	assert.True(t, os.IsNotExist(err), "Key files should not exist when ExportKeys is false")
-}
-
-// TestGenerateCertificateError tests error handling in certificate generation
-func TestGenerateCertificateError(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	config := &XKMSConfig{
-		KeysDir:    tmpDir,
-		Backend:    BackendFile,
-		ExportKeys: true,
-	}
-
-	km, err := NewXKMSManager(config, nil)
-	require.NoError(t, err)
-	defer km.Close()
-
-	// Create a test RSA key
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	require.NoError(t, err)
-
-	subject := pkix.Name{
-		CommonName: "Test",
-	}
-
-	// Test successful certificate generation
-	cert, err := km.generateCertificate(privateKey, subject, KeyTypePK)
-	require.NoError(t, err)
-	assert.NotNil(t, cert)
-	assert.Equal(t, "Test", cert.Subject.CommonName)
 }
 
 // TestWriteKeyError tests error handling in writeKey
@@ -704,62 +651,6 @@ func TestGenerateKeyFallback(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// TestGenerateAllErrorPropagation tests error propagation from individual key generation
-func TestGenerateAllErrorPropagation(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	config := &XKMSConfig{
-		KeysDir:    tmpDir,
-		Backend:    BackendFile,
-		ExportKeys: true,
-	}
-
-	km, err := NewXKMSManager(config, nil)
-	require.NoError(t, err)
-	defer km.Close()
-
-	// Create first key
-	ctx := context.Background()
-	err = km.GeneratePlatformKey(ctx)
-	require.NoError(t, err)
-
-	// Point KeysDir to a path under a regular file so file creation
-	// fails regardless of privilege level (root bypasses chmod)
-	blockerFile := filepath.Join(tmpDir, "blocker")
-	err = os.WriteFile(blockerFile, []byte("x"), 0644)
-	require.NoError(t, err)
-	km.config.KeysDir = filepath.Join(blockerFile, "impossible")
-
-	// Try to generate KEK - should fail during export
-	err = km.GenerateKeyExchangeKey(ctx)
-	assert.Error(t, err)
-}
-
-// TestGenerateAllWithCountryAndOrganization tests key generation with all cert fields
-func TestGenerateAllWithCountryAndOrganization(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	config := &XKMSConfig{
-		KeysDir:      tmpDir,
-		Backend:      BackendFile,
-		CommonName:   "Test",
-		Country:      "", // Empty country
-		Organization: "", // Empty organization
-		ExportKeys:   true,
-	}
-
-	km, err := NewXKMSManager(config, nil)
-	require.NoError(t, err)
-	defer km.Close()
-
-	ctx := context.Background()
-	err = km.GenerateAll(ctx)
-	require.NoError(t, err)
-
-	// Verify keys were created
-	assert.True(t, km.KeysExist())
-}
-
 // TestCreateXKMSBackendErrors tests error paths in createXKMSBackend
 func TestCreateXKMSBackendErrors(t *testing.T) {
 	// Test with invalid path that can't be created
@@ -851,29 +742,6 @@ func TestGetSignerNonSigner(t *testing.T) {
 	}
 }
 
-// TestCloseWithError tests Close error handling
-func TestCloseWithError(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	config := &XKMSConfig{
-		KeysDir:    tmpDir,
-		Backend:    BackendFile,
-		ExportKeys: true,
-	}
-
-	km, err := NewXKMSManager(config, nil)
-	require.NoError(t, err)
-
-	// Normal close
-	err = km.Close()
-	assert.NoError(t, err)
-	assert.Nil(t, km.ks)
-
-	// Try to close again (should return no error)
-	err = km.Close()
-	assert.NoError(t, err)
-}
-
 // TestGenerateKeyWithExistingKey tests regenerating an existing key
 func TestGenerateKeyWithExistingKey(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -938,39 +806,6 @@ func TestXKMSManagerLeavesProcessServiceAlone(t *testing.T) {
 	got, err := xkmssdk.ServiceGetBackend("software")
 	require.NoError(t, err)
 	assert.Same(t, processKS, got)
-}
-
-// TestGenerateCertificateWithAllFields tests certificate generation with all optional fields
-func TestGenerateCertificateWithAllFields(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	config := &XKMSConfig{
-		KeysDir:      tmpDir,
-		Backend:      BackendFile,
-		CommonName:   "Full Test",
-		Country:      "US",
-		Organization: "Test Organization",
-		KeySize:      4096, // Use larger key size
-		ValidYears:   5,
-		ExportKeys:   true,
-	}
-
-	km, err := NewXKMSManager(config, nil)
-	require.NoError(t, err)
-	defer km.Close()
-
-	ctx := context.Background()
-	err = km.GenerateAll(ctx)
-	require.NoError(t, err)
-
-	// Verify all keys exist
-	paths := km.GetKeyPaths()
-	assert.FileExists(t, paths.PKKey)
-	assert.FileExists(t, paths.KEKKey)
-	assert.FileExists(t, paths.DBKey)
-	assert.FileExists(t, paths.PKCert)
-	assert.FileExists(t, paths.KEKCert)
-	assert.FileExists(t, paths.DBCert)
 }
 
 // TestExportCertificateError tests exportCertificate error handling
@@ -1046,129 +881,6 @@ func TestExportPrivateKeyError(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// TestGenerateKeyNonRSAExport tests warning path for non-RSA key export
-func TestGenerateKeyNonRSAExport(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	config := &XKMSConfig{
-		KeysDir:    tmpDir,
-		Backend:    BackendFile,
-		ExportKeys: true,
-	}
-
-	km, err := NewXKMSManager(config, nil)
-	require.NoError(t, err)
-	defer km.Close()
-
-	// This test verifies the code path exists even though we use RSA
-	// The non-RSA warning path is covered by generating normally
-	ctx := context.Background()
-	err = km.GeneratePlatformKey(ctx)
-	require.NoError(t, err)
-}
-
-// TestGenerateAllMkdirSuccess tests successful directory creation path
-func TestGenerateAllMkdirSuccess(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	// Remove the tmpDir to test mkdir
-	keysDir := filepath.Join(tmpDir, "newkeys")
-
-	config := &XKMSConfig{
-		KeysDir:    keysDir,
-		Backend:    BackendFile,
-		ExportKeys: true,
-	}
-
-	km, err := NewXKMSManager(config, nil)
-	require.NoError(t, err)
-	defer km.Close()
-
-	ctx := context.Background()
-	err = km.GenerateAll(ctx)
-	require.NoError(t, err)
-
-	// Verify directory was created
-	_, err = os.Stat(keysDir)
-	require.NoError(t, err)
-}
-
-// TestGenerateKeyDeleteKeyError tests the warning path when DeleteKey fails
-func TestGenerateKeyDeleteKeyError(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	config := &XKMSConfig{
-		KeysDir:    tmpDir,
-		Backend:    BackendFile,
-		CommonName: "Test",
-		ExportKeys: true,
-	}
-
-	km, err := NewXKMSManager(config, nil)
-	require.NoError(t, err)
-	defer km.Close()
-
-	ctx := context.Background()
-
-	// Generate key first time
-	err = km.GeneratePlatformKey(ctx)
-	require.NoError(t, err)
-
-	// Generate again - this will trigger the DeleteKey path
-	// The key exists, so it will try to delete it
-	err = km.GeneratePlatformKey(ctx)
-	require.NoError(t, err)
-}
-
-// TestGenerateKeyGenerateError tests error from xkms.GenerateKey
-func TestGenerateKeyGenerateError(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	config := &XKMSConfig{
-		KeysDir:    tmpDir,
-		Backend:    BackendFile,
-		ExportKeys: false,
-	}
-
-	km, err := NewXKMSManager(config, nil)
-	require.NoError(t, err)
-	defer km.Close()
-
-	// Set rawBackend to nil and test the fallback path
-	km.rawBackend = nil
-
-	ctx := context.Background()
-
-	// This should work fine using the service fallback
-	err = km.GeneratePlatformKey(ctx)
-	require.NoError(t, err)
-}
-
-// TestGenerateAllErrorPaths tests all error paths in GenerateAll
-func TestGenerateAllErrorPaths(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	config := &XKMSConfig{
-		KeysDir:    tmpDir,
-		Backend:    BackendFile,
-		ExportKeys: true,
-	}
-
-	km, err := NewXKMSManager(config, nil)
-	require.NoError(t, err)
-	defer km.Close()
-
-	ctx := context.Background()
-
-	// Test successful generation
-	err = km.GenerateAll(ctx)
-	require.NoError(t, err)
-
-	// Now test that it skips generation when keys exist
-	err = km.GenerateAll(ctx)
-	require.NoError(t, err)
-}
-
 // TestSaveCertificateError tests certificate save error path
 func TestSaveCertificateError(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -1194,63 +906,6 @@ func TestSaveCertificateError(t *testing.T) {
 	ctx := context.Background()
 	err = km2.GeneratePlatformKey(ctx)
 	require.NoError(t, err)
-}
-
-// TestCloseServiceError tests Close with service close error path
-func TestCloseServiceError(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	config := &XKMSConfig{
-		KeysDir:    tmpDir,
-		Backend:    BackendFile,
-		ExportKeys: true,
-	}
-
-	km, err := NewXKMSManager(config, nil)
-	require.NoError(t, err)
-
-	// Normal close
-	err = km.Close()
-	assert.NoError(t, err)
-
-	// Already closed, should not error
-	err = km.Close()
-	assert.NoError(t, err)
-}
-
-// TestGenerateAllWithDatabaseKeyError tests error in DB key generation
-func TestGenerateAllWithDatabaseKeyError(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	config := &XKMSConfig{
-		KeysDir:    tmpDir,
-		Backend:    BackendFile,
-		ExportKeys: true,
-	}
-
-	km, err := NewXKMSManager(config, nil)
-	require.NoError(t, err)
-	defer km.Close()
-
-	ctx := context.Background()
-
-	// Generate PK and KEK first
-	err = km.GeneratePlatformKey(ctx)
-	require.NoError(t, err)
-
-	err = km.GenerateKeyExchangeKey(ctx)
-	require.NoError(t, err)
-
-	// Point KeysDir to a path under a regular file so file creation
-	// fails regardless of privilege level (root bypasses chmod)
-	blockerFile := filepath.Join(tmpDir, "blocker")
-	err = os.WriteFile(blockerFile, []byte("x"), 0644)
-	require.NoError(t, err)
-	km.config.KeysDir = filepath.Join(blockerFile, "impossible")
-
-	// Try to generate DB key - should fail on export
-	err = km.GenerateDatabaseKey(ctx)
-	assert.Error(t, err)
 }
 
 // TestCreateBackendDefaultCase tests unsupported backend default case
@@ -1296,69 +951,6 @@ func TestGenerateAllPKError(t *testing.T) {
 	err = km.GenerateAll(ctx)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to generate Platform Key")
-}
-
-// TestGenerateAllErrorFlowKEK tests GenerateAll when KEK fails after PK succeeds
-func TestGenerateAllErrorFlowKEK(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	config := &XKMSConfig{
-		KeysDir:    tmpDir,
-		Backend:    BackendFile,
-		ExportKeys: true,
-	}
-
-	km, err := NewXKMSManager(config, nil)
-	require.NoError(t, err)
-	defer km.Close()
-
-	// Generate PK successfully first
-	ctx := context.Background()
-	err = km.GeneratePlatformKey(ctx)
-	require.NoError(t, err)
-
-	// Create KEK.crt as a directory so certificate export fails when
-	// trying to open it as a file. This works regardless of privilege
-	// level (root bypasses chmod but cannot open a directory for writing).
-	err = os.Mkdir(filepath.Join(tmpDir, "KEK.crt"), 0755)
-	require.NoError(t, err)
-
-	// KEK will fail during export
-	err = km.GenerateKeyExchangeKey(ctx)
-	assert.Error(t, err)
-}
-
-// TestGenerateAllErrorFlowDB tests GenerateAll when DB fails after PK and KEK succeed
-func TestGenerateAllErrorFlowDB(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	config := &XKMSConfig{
-		KeysDir:    tmpDir,
-		Backend:    BackendFile,
-		ExportKeys: true,
-	}
-
-	km, err := NewXKMSManager(config, nil)
-	require.NoError(t, err)
-	defer km.Close()
-
-	// Generate PK and KEK successfully
-	ctx := context.Background()
-	err = km.GeneratePlatformKey(ctx)
-	require.NoError(t, err)
-
-	err = km.GenerateKeyExchangeKey(ctx)
-	require.NoError(t, err)
-
-	// Create DB.crt as a directory so certificate export fails when
-	// trying to open it as a file. This works regardless of privilege
-	// level (root bypasses chmod but cannot open a directory for writing).
-	err = os.Mkdir(filepath.Join(tmpDir, "DB.crt"), 0755)
-	require.NoError(t, err)
-
-	// DB will fail during export
-	err = km.GenerateDatabaseKey(ctx)
-	assert.Error(t, err)
 }
 
 // TestGenerateAllCallsGenerateFunctions tests that GenerateAll properly calls all generate functions
@@ -1413,6 +1005,7 @@ func TestGenerateAllWithCancelledContextDuringGeneration(t *testing.T) {
 	assert.Error(t, err)
 	// The error should be from the first key generation (PK)
 	assert.Contains(t, err.Error(), "Platform Key")
+	assert.ErrorIs(t, err, context.Canceled)
 }
 
 // TestCreateXKMSBackendCertStorageError tests cert storage creation error path

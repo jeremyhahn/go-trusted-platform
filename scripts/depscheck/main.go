@@ -26,7 +26,24 @@ const (
 	exitOK           = 0
 	exitUndocumented = 1
 	exitLookup       = 2
+	// exitOutput is returned when the report could not be written: a check
+	// whose output was lost does not pass.
+	exitOutput = 3
 )
+
+// reportWriter writes report lines to one stream and keeps the first write
+// error; later lines are skipped once a write has failed.
+type reportWriter struct {
+	w   io.Writer
+	err error
+}
+
+func (r *reportWriter) printf(format string, args ...any) {
+	if r.err != nil {
+		return
+	}
+	_, r.err = fmt.Fprintf(r.w, format, args...)
+}
 
 func main() {
 	os.Exit(run(os.Args[1:], goCommand{}, time.Now(), os.Stdout, os.Stderr))
@@ -43,7 +60,9 @@ func run(args []string, src moduleSource, now time.Time, stdout, stderr io.Write
 		return exitLookup
 	}
 	if flags.NArg() == 0 {
-		fmt.Fprintf(stderr, "%s\n", ErrUsage)
+		if _, err := fmt.Fprintf(stderr, "%s\n", ErrUsage); err != nil {
+			return exitOutput
+		}
 		return exitLookup
 	}
 	if g, ok := src.(goCommand); ok && g.path == "" {
@@ -53,7 +72,9 @@ func run(args []string, src moduleSource, now time.Time, stdout, stderr io.Write
 	for _, dir := range flags.Args() {
 		found, err := checkModule(src, dir, *firstParty, now)
 		if err != nil {
-			fmt.Fprintf(stderr, "%s\n", err)
+			if _, werr := fmt.Fprintf(stderr, "%s\n", err); werr != nil {
+				return exitOutput
+			}
 			return exitLookup
 		}
 		findings = append(findings, found...)
@@ -103,33 +124,44 @@ func checkModule(src moduleSource, dir, firstParty string, now time.Time) ([]fin
 // exit status. Held dependencies with a reason are listed on stdout so the
 // pins stay visible; failures go to stderr.
 func report(findings []finding, stdout, stderr io.Writer) int {
+	out, errOut := &reportWriter{w: stdout}, &reportWriter{w: stderr}
+	code := writeReport(findings, out, errOut)
+	if out.err != nil || errOut.err != nil {
+		return exitOutput
+	}
+	return code
+}
+
+// writeReport writes one line per finding and the verdict, and returns the
+// verdict's exit code.
+func writeReport(findings []finding, out, errOut *reportWriter) int {
 	lookups, undocumented := 0, 0
 	for _, f := range findings {
 		d := f.Dep
 		switch {
 		case f.Lookup != nil:
-			fmt.Fprintf(stderr, "%s:%d: %v\n", d.File, d.Line, f.Lookup)
+			errOut.printf("%s:%d: %v\n", d.File, d.Line, f.Lookup)
 			lookups++
 		case f.Unused:
-			fmt.Fprintf(stdout, "%s:%d: note: replace of %s applies to no module in the build list\n", d.File, d.Line, d.Module)
+			out.printf("%s:%d: note: replace of %s applies to no module in the build list\n", d.File, d.Line, d.Module)
 		case !f.Behind:
 		case d.Reason == "" && f.Fresh:
-			fmt.Fprintf(stdout, "%s:%d: fresh: %s %s, latest %s released %s, under 7 days: reported, not failed\n", d.File, d.Line, d.Path, d.Version, f.Latest, f.Released.UTC().Format(time.DateOnly))
+			out.printf("%s:%d: fresh: %s %s, latest %s released %s, under 7 days: reported, not failed\n", d.File, d.Line, d.Path, d.Version, f.Latest, f.Released.UTC().Format(time.DateOnly))
 		case d.Reason == "":
-			fmt.Fprintf(stderr, "%s:%d: %s %s is behind latest %s and its %s line carries no reason comment\n", d.File, d.Line, d.Path, d.Version, f.Latest, d.Kind)
+			errOut.printf("%s:%d: %s %s is behind latest %s and its %s line carries no reason comment\n", d.File, d.Line, d.Path, d.Version, f.Latest, d.Kind)
 			undocumented++
 		default:
-			fmt.Fprintf(stdout, "%s:%d: held: %s %s, latest %s: %s\n", d.File, d.Line, d.Path, d.Version, f.Latest, d.Reason)
+			out.printf("%s:%d: held: %s %s, latest %s: %s\n", d.File, d.Line, d.Path, d.Version, f.Latest, d.Reason)
 		}
 	}
 	switch {
 	case lookups > 0:
-		fmt.Fprintf(stderr, "deps-check: FAILED: the latest version of %d module(s) could not be looked up\n", lookups)
+		errOut.printf("deps-check: FAILED: the latest version of %d module(s) could not be looked up\n", lookups)
 		return exitLookup
 	case undocumented > 0:
-		fmt.Fprintf(stderr, "deps-check: FAILED: %d module(s) behind latest without a go.mod reason comment (devops.md §9)\n", undocumented)
+		errOut.printf("deps-check: FAILED: %d module(s) behind latest without a go.mod reason comment (devops.md §9)\n", undocumented)
 		return exitUndocumented
 	}
-	fmt.Fprintf(stdout, "%s\n", "deps-check: every dependency is at its latest version or documents why it is held")
+	out.printf("%s\n", "deps-check: every dependency is at its latest version or documents why it is held")
 	return exitOK
 }

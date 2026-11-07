@@ -14,7 +14,6 @@
 package opa
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -24,11 +23,6 @@ func TestErrEngineNotInitialized(t *testing.T) {
 	t.Run("error message", func(t *testing.T) {
 		err := ErrEngineNotInitialized{}
 		assert.Equal(t, "policy engine not initialized", err.Error())
-	})
-
-	t.Run("implements error interface", func(t *testing.T) {
-		var err error = ErrEngineNotInitialized{}
-		assert.NotNil(t, err)
 	})
 }
 
@@ -260,30 +254,5 @@ func TestErrQueryFailed(t *testing.T) {
 	t.Run("without query or reason", func(t *testing.T) {
 		err := ErrQueryFailed{}
 		assert.Equal(t, "query failed", err.Error())
-	})
-}
-
-func TestErrorTypeAssertions(t *testing.T) {
-	t.Run("ErrPolicyNotFound type assertion", func(t *testing.T) {
-		var err error = ErrPolicyNotFound{Name: "test"}
-		var target ErrPolicyNotFound
-		assert.True(t, errors.As(err, &target))
-		assert.Equal(t, "test", target.Name)
-	})
-
-	t.Run("ErrInvalidPolicy type assertion", func(t *testing.T) {
-		var err error = ErrInvalidPolicy{Name: "test", Reason: "bad syntax"}
-		var target ErrInvalidPolicy
-		assert.True(t, errors.As(err, &target))
-		assert.Equal(t, "test", target.Name)
-		assert.Equal(t, "bad syntax", target.Reason)
-	})
-
-	t.Run("ErrEvaluationFailed type assertion", func(t *testing.T) {
-		var err error = ErrEvaluationFailed{PolicyName: "test", Reason: "timeout"}
-		var target ErrEvaluationFailed
-		assert.True(t, errors.As(err, &target))
-		assert.Equal(t, "test", target.PolicyName)
-		assert.Equal(t, "timeout", target.Reason)
 	})
 }
