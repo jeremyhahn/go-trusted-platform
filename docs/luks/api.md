@@ -134,13 +134,13 @@ message. The SDK REST transport takes that message from the `error` key.
 
 | Transport | Requirement |
 |---|---|
-| REST | mTLS client certificate, which the daemon REST handshake requires. The LUKS routes are outside the scope guard: they take no `Bearer` token and check no scope. |
+| REST | the REST scope guard: a `Bearer` platform token, else the verified mTLS client certificate (the `*:*` operator), holding the scope the gRPC catalog gives the route's method (`catalogRouteRPCs`, `pkg/api/daemon/rest_scope.go`). No credential answers 401, a missing scope 403. |
 | gRPC TCP | a platform token carrying the method's `luks:*` scope (`pkg/api/grpc/method_permissions.go`). |
 | QUIC | a platform token carrying the sub-opcode's `luks:*` scope (`pkg/api/quic/opcode_permissions.go`). |
 | MCP | a platform token carrying the tool's `luks:*` scope (`toolPermissionCatalog`, `pkg/api/mcp/authz.go`). |
 | Unix | gRPC over the local socket; see [`docs/daemon/api.md`](../daemon/api.md). |
 
-| Operation | gRPC, QUIC and MCP scope |
+| Operation | REST, gRPC, QUIC and MCP scope |
 |---|---|
 | Status, ListSlots, Info, TestUnlock | `luks:read` |
 | EnrollPassphrase, EnrollFIDO2, EnrollTPM, EnrollRecovery, ChangePassphrase | `luks:write` |

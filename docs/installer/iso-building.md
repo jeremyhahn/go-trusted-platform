@@ -125,12 +125,17 @@ platformctl iso extract --iso work/alpine-standard-3.22.2-x86_64.iso
 # Customize ISO (integrates platform binaries and configuration)
 platformctl iso customize --iso-dir work/iso \
   --platformd-binary ./platformd-static \
+  --platformctl-static-binary ./platformctl-static \
   --platform-config configs/platform/templates/single-node/default.yaml \
   --keys-dir secure-boot-keys
 
 # Build final bootable ISO
 platformctl iso build --iso-dir work/iso --output trusted-platform.iso
 ```
+
+An optional input left unset is not installed; one the build names that does
+not exist fails it with `iso.MissingInputError`. No binary's path is inferred
+from `platformd`'s ([cli.md](cli.md) §3.1).
 
 
 ### Download Command
