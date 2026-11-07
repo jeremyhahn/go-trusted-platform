@@ -139,6 +139,7 @@ func adminSessionIAMServerIn(t *testing.T, tenantID string, client IAMClient, pe
 // PermissionDenied (HTTP 403) for tenant-b, and refused with InvalidArgument
 // when the tenant is missing.
 func TestIAMOverSDKREST_TenantBinding(t *testing.T) {
+	t.Parallel()
 	type operation struct {
 		grpcMethod string
 		request    func(tenantID string) proto.Message
@@ -237,6 +238,7 @@ func TestIAMOverSDKREST_TenantBinding(t *testing.T) {
 // its changed field in the body, and come back as the updated resource on
 // the reply.
 func TestIAMOverSDKREST_Update(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name       string
 		grpcMethod string
@@ -311,6 +313,7 @@ func TestIAMOverSDKREST_Update(t *testing.T) {
 // with 403, as gRPC refuses it with PermissionDenied, and never answered
 // with the session tenant's object under the same id.
 func TestIAMOverRawREST_FlatRouteTenantQuery(t *testing.T) {
+	t.Parallel()
 	items := map[string]string{
 		"GetUser":  "/api/v1/iam/users/u-1",
 		"GetRole":  "/api/v1/iam/roles/r-1",
@@ -354,6 +357,7 @@ func TestIAMOverRawREST_FlatRouteTenantQuery(t *testing.T) {
 // of the two is the caller's own; the same tenant in both, or no query, is
 // served as before.
 func TestIAMOverRawREST_ScopedRouteTenantQuery(t *testing.T) {
+	t.Parallel()
 	items := map[string]string{
 		"GetUser":  "/users/u-1",
 		"GetRole":  "/roles/r-1",
@@ -395,6 +399,7 @@ func TestIAMOverRawREST_ScopedRouteTenantQuery(t *testing.T) {
 }
 
 func TestRequestedTenant(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		target  string
@@ -446,6 +451,7 @@ func sendIAMJSON(t *testing.T, server *httptest.Server, method, path string, fie
 // spelling a client sends, is held to the rule the tenant_id query is. A
 // refused request reaches neither a write nor a lookup.
 func TestIAMOverRawREST_FlatRouteBodyTenant(t *testing.T) {
+	t.Parallel()
 	routes := []struct {
 		name   string
 		method string
@@ -506,6 +512,7 @@ func TestIAMOverRawREST_FlatRouteBodyTenant(t *testing.T) {
 // the same rule: a path naming the caller's own tenant does not carry a body
 // naming another one through.
 func TestIAMOverRawREST_ScopedRouteBodyTenant(t *testing.T) {
+	t.Parallel()
 	var servedTenant string
 	server := tenantBoundIAMServer(t, &servedTenant)
 
@@ -522,6 +529,7 @@ func TestIAMOverRawREST_ScopedRouteBodyTenant(t *testing.T) {
 // TestIAMOverRawREST_ListMalformedBody is the error half of reading a list
 // route's body: a body that is not JSON is refused with 400, not skipped.
 func TestIAMOverRawREST_ListMalformedBody(t *testing.T) {
+	t.Parallel()
 	var servedTenant string
 	server := tenantBoundIAMServer(t, &servedTenant)
 
@@ -544,6 +552,7 @@ func TestIAMOverRawREST_ListMalformedBody(t *testing.T) {
 // sends Create and List to the unscoped routes with the request's tenant_id in
 // the body: a foreign tenant is PermissionDenied, as it is on gRPC (#401).
 func TestIAMOverSDKREST_BodyTenant(t *testing.T) {
+	t.Parallel()
 	type operation struct {
 		grpcMethod string
 		request    func(tenantID string) proto.Message
