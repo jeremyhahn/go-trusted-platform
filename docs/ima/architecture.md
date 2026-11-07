@@ -87,16 +87,18 @@ statement (see §6).
 | IMA configuration schema and defaults | `pkg/installer/types.go` (`IMAConfig`, `DefaultIMAMonitorPaths`) — [`docs/installer/`](../installer/) | this repo, separate feature |
 | Kernel command-line parameters, inside the signed UKI | `pkg/installer/installer.go` — [`docs/firmware/`](../firmware/) for how the UKI is signed | this repo, separate feature |
 | Policy generation, package installation, boot script, dracut wiring | `pkg/installer/alpine.go` | this repo, separate feature |
-| ISO package staging | `pkg/iso/prefetch.go` (`Config.IMAEnabled`, `Config.IMAAuditEnabled`) | this repo, separate feature |
+| ISO package staging | `pkg/iso/prefetch.go` (`PreFetchConfig.IMAEnabled`, `PreFetchConfig.IMAAuditEnabled`; `pkg/iso/customize.go` sets `IMAEnabled: false`) | this repo, separate feature |
 | **The measurement itself** | the Linux kernel's IMA subsystem | **not this repo, not any repo we own** |
 | **The TPM** | hardware, or swtpm — reached here only through sysfs | **not this repo** |
 | **Quoting PCR 10 and evaluating it against policy** | `pkg/attestation/` — [`docs/attestation/`](../attestation/) | this repo, separate feature (**not wired to this one today** — §8) |
 | **What signs the boot image that carries the IMA parameters** | `pkg/uefi`, `pkg/authenticode` — [`docs/firmware/`](../firmware/) | this repo, adjacent feature |
 
 `pkg/ima` imports **nothing** from this repository — only the Go standard
-library. And nothing in this repository imports `pkg/ima` (grepped 2026-08-18).
-It is a self-contained library with a complete unit test suite and no production
-caller. That is a fact about today, not a design goal; see §8.
+library. Its one importer is the VPN agent's posture report
+(`pkg/vpn/agent/posture.go`), which reports `GetStatus()`'s `Available`,
+`Enabled` and `PolicyLoaded` plus a SHA-256 digest of the ASCII log to the
+gateway. No attestation, CLI or API path calls it. That is a fact about today,
+not a design goal; see §8.
 
 ## 5. Data flow
 
@@ -114,6 +116,7 @@ os.ima.enabled: true
         │                            public key into the .ima keyring
         │
         ├─▶ dracut: add_drivers tpm tpm_tis tpm_crb
+        │           (aarch64 adds tpm_tis_spi spi-gpio spi-bitbang spi-bcm2835)
         │           install_items /usr/bin/evmctl /usr/bin/keyctl
         │           install_items /etc/ima/ima-policy
         │
@@ -278,8 +281,8 @@ Two further limits, both consequences of the ASCII format:
 - **It has no API surface on any transport.** Not REST, not gRPC, not Unix, not
   QUIC, not MCP, not embedded. See [api.md](api.md).
 - **It is not wired into attestation.** `pkg/attestation/manifest` has no IMA
-  field, and no package in this repository imports `pkg/ima`. The library is
-  complete and tested; the integration is **PLANNED**.
+  field, and the only importer of `pkg/ima` is the VPN posture report. The
+  library is complete and tested; the attestation integration is **PLANNED**.
 - **It does not support the binary measurement log.** `EventPaths.BinaryRuntime`
   names the path; nothing reads it. **PLANNED.**
 
@@ -296,7 +299,7 @@ Two further limits, both consequences of the ASCII format:
 | `troubleshooting.md`: `platformctl ima policy generate --output /etc/ima/ima-policy` | **No such command.** There is no `ima` command group at all. |
 | `tpm-integration.md`: `platformctl ima verify`, `platformctl ima status`, `platformctl ima export --format json` | **No such commands.** |
 | `tpm-integration.md`: `platformctl tpm pcr read --pcr 10 --bank sha256` | **No such verb.** `platformctl tpm` has `extend`, `policy`, `eventlog`, `nvram`, `seal`, `unseal` and others, but no `pcr` subcommand. Read PCR 10 with `cat /sys/class/tpm/tpm0/pcr-sha256/10`. |
-| `tpm-integration.md`: the host manifest includes IMA data | `pkg/attestation/manifest` has no IMA field. Nothing in the repository imports `pkg/ima`. |
+| `tpm-integration.md`: the host manifest includes IMA data | `pkg/attestation/manifest` has no IMA field. The only importer of `pkg/ima` is the VPN posture report (`pkg/vpn/agent/posture.go`). |
 
 One defect found in the code itself, recorded rather than silently documented
 around:

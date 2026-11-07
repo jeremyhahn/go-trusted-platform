@@ -17,7 +17,6 @@ package tpm
 
 import (
 	"context"
-	"os"
 	"strings"
 	"time"
 
@@ -49,9 +48,9 @@ func (g *GRPCAdapter) Name() string {
 
 // Setup initializes the gRPC connection to platformd.
 func (g *GRPCAdapter) Setup(ctx context.Context) error {
-	endpoint := os.Getenv(EnvPlatformGRPCEndpoint)
-	if endpoint == "" {
-		endpoint = GetServiceEndpoints().PlatformGRPC
+	endpoint, err := helpers.RequireEndpoint(EnvPlatformGRPCEndpoint)
+	if err != nil {
+		return err
 	}
 
 	conn, err := grpc.NewClient(endpoint,

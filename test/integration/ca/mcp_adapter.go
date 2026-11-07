@@ -209,9 +209,9 @@ func (m *MCPAdapter) Name() string {
 
 // Setup initializes the MCP connection by performing the JSON-RPC initialize handshake.
 func (m *MCPAdapter) Setup(ctx context.Context) error {
-	endpoint := os.Getenv(EnvPlatformMCPEndpoint)
-	if endpoint == "" {
-		endpoint = GetServiceEndpoints().PlatformMCP
+	endpoint, err := helpers.RequireEndpoint(EnvPlatformMCPEndpoint)
+	if err != nil {
+		return err
 	}
 	m.endpoint = helpers.MCPBaseURL(endpoint)
 	m.httpClient = helpers.NewHTTPClient(DefaultMCPTimeoutCA)

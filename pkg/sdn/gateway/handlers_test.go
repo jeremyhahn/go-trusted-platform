@@ -220,6 +220,16 @@ type fakeTunnelManager struct {
 	listErr   error
 	statuses  map[string]tunnel.TunnelStatus
 	uplinks   []tunnel.UplinkStatus
+	// swept records how many tunnels were ensured at each SweepIPsec call.
+	swept    []int
+	sweepErr error
+}
+
+func (f *fakeTunnelManager) SweepIPsec() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.swept = append(f.swept, len(f.ensured))
+	return f.sweepErr
 }
 
 func (f *fakeTunnelManager) EnsureTunnel(_ context.Context, cfg tunnel.TunnelConfig) error {
@@ -669,6 +679,45 @@ func TestTunnelsService_RollsBackOnEnsureFailure(t *testing.T) {
 	assert.Equal(t, ServiceTunnels, failed.Service)
 	assert.Equal(t, []string{"gre-pri"}, mgr.removed, "the tunnel created before the failure is removed")
 	assert.Empty(t, mgr.ensured)
+}
+
+func twoTunnelGateway(t *testing.T, mgr *fakeTunnelManager) *Gateway {
+	t.Helper()
+	cfg := baseGatewayConfig("tunnel-gw-sweep")
+	cfg.Tunnels = []TunnelConfig{
+		{Name: "gre-pri", Type: "gre", Local: "192.0.2.1", Remote: "198.51.100.1", TunnelIP: "10.255.0.1/30"},
+		{Name: "gre-alt", Type: "gre", Local: "192.0.2.1", Remote: "198.51.100.2", TunnelIP: "10.255.0.5/30"},
+	}
+	cfg.Host = &HostRuntime{TunnelManager: mgr}
+	gw, err := NewGateway(cfg)
+	require.NoError(t, err)
+	gw.SetNodeMetrics(validNodeMetrics())
+	return gw
+}
+
+func TestTunnelsService_SweepsStaleIPsecAfterEnsuring(t *testing.T) {
+	mgr := &fakeTunnelManager{}
+	gw := twoTunnelGateway(t, mgr)
+
+	require.NoError(t, gw.Start(context.Background()))
+	t.Cleanup(func() { _ = gw.Stop(context.Background()) })
+
+	assert.Equal(t, []int{2}, mgr.swept, "the sweep runs once, after every configured tunnel is ensured")
+}
+
+func TestTunnelsService_SweepFailureTearsNothingDown(t *testing.T) {
+	mgr := &fakeTunnelManager{sweepErr: &tunnel.ErrIPsecSweepFailed{Op: "list SAs", Cause: errors.New("EPERM")}}
+	gw := twoTunnelGateway(t, mgr)
+
+	err := gw.Start(context.Background())
+
+	var failed *ErrServiceStartFailed
+	require.True(t, errors.As(err, &failed), "got %v", err)
+	assert.Equal(t, ServiceTunnels, failed.Service)
+	var sweep *tunnel.ErrIPsecSweepFailed
+	assert.True(t, errors.As(err, &sweep), "the sweep failure is reported, got %v", err)
+	assert.Equal(t, []string{"gre-pri", "gre-alt"}, mgr.ensured, "the configured tunnels stay up")
+	assert.Empty(t, mgr.removed, "a failed sweep tears nothing down")
 }
 
 func TestHostFWService_Lifecycle(t *testing.T) {

@@ -346,7 +346,7 @@ the public half. **This does not change the gRPC or MCP positions above.**
 
 ## 6. Known defect
 
-`pkg/webservice/v1/rest/ca/handlers.go:715` records that the proto
+`pkg/webservice/v1/rest/ca/handlers.go:762` records that the proto
 `IssueCertificateRequest` carries **no explicit field** for something the REST
 handler needs. The REST issuance path and the gRPC message are therefore not
 fully aligned. Check the code before assuming a field exists on either side.

@@ -48,8 +48,11 @@ The gRPC code of a failed call becomes a status byte
 | `NOT_FOUND` | `StatusNotFound` |
 | `ALREADY_EXISTS` | `StatusAlreadyExists` |
 | `PERMISSION_DENIED` | `StatusPermissionDenied` |
+| `UNAUTHENTICATED` | `StatusUnauthorized` |
 | `FAILED_PRECONDITION` | `StatusInvalidRequest` |
+| `RESOURCE_EXHAUSTED` | `StatusResourceExhausted` |
 | `UNAVAILABLE` | `StatusUnavailable` |
+| `UNIMPLEMENTED` | `StatusNotImplemented` |
 | `DEADLINE_EXCEEDED` | `StatusTimeout` |
 | anything else | `StatusInternalError` |
 

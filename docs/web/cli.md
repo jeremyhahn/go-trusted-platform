@@ -1,6 +1,6 @@
 # Web Console and Web Server — CLI
 
-> **Status: NORMATIVE** · Scope: web-related CLI surface · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: web-related CLI surface · Last verified: 2026-10-27
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 

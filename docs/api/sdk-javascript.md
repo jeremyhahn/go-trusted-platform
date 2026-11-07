@@ -98,7 +98,7 @@ function CertificateList() {
   const client = usePlatformClient();
 
   const { data, isLoading, error, refetch } = useApi(
-    () => client.ca.listCertificates({ page: 1, pageSize: 50 }),
+    () => client.ca.listCertificates({ page: 1, limit: 50 }),
     [], // Dependencies array
     {
       refetchInterval: 30000, // Poll every 30s
@@ -114,7 +114,7 @@ function CertificateList() {
     <ul>
       {data?.certificates.map((cert) => (
         <li key={cert.serial}>
-          {cert.subject} - Expires: {cert.notAfter}
+          {cert.commonName} - Expires: {cert.notAfter}
         </li>
       ))}
     </ul>
@@ -137,7 +137,7 @@ function IssueCertificateForm() {
     (request: CertificateRequest) => ca.issueCertificate(request),
     {
       onSuccess: (cert, variables) => {
-        toast.success(`Certificate ${cert.serial} issued`);
+        toast.success(`Certificate ${cert.certificate?.serial} issued`);
         setCommonName('');
       },
       onError: (error) => {
@@ -217,10 +217,10 @@ The JavaScript SDK provides access to data, AI/ML, security, and infrastructure 
 
 | Category | Services | Count |
 |----------|----------|-------|
-| Data | kv, batch, transaction, query, timeseries, backup | 6 |
+| Data | kv, batch, transaction, query, quicBaaSTimeSeries, quicBaaSBackup | 6 |
 | AI/ML | vector, embedding, ollama | 3 |
 | Security | auth, dataKms, secrets, crypto, dynamicSecrets, certificate, seal, rbac, clusterDek | 9 |
-| Infrastructure | cluster, health, operations, cache, parameterStore, scheduler, objectStorage, objectStorageAdmin, objectTransfer | 9 |
+| Infrastructure | cluster, health, operations, cache, parameterStore, scheduler, quicBaaSObjectStorage, quicBaaSObjectStorageAdmin, objectTransfer | 9 |
 | Identity | dataIam (with sub-clients) | 1 |
 
 ### KV Operations
@@ -234,8 +234,8 @@ await client.kv.put({
 
 // Get a value
 const result = await client.kv.get({ key: 'users/user-123' });
-if (result.data) {
-  const user = JSON.parse(result.data.value);
+if (result.data?.kv) {
+  const user = JSON.parse(result.data.kv.value);
   console.log('User:', user.name);
 }
 
@@ -249,8 +249,8 @@ await client.kv.delete({ key: 'users/user-123' });
 ### Vector Search
 
 ```typescript
-// Upsert vectors
-await client.vector.upsert({
+// Insert vectors
+await client.vector.insert({
   namespace: 'documents',
   vectors: [
     { id: 'doc-1', values: embedding1, metadata: { title: 'Document 1' } },
@@ -258,8 +258,8 @@ await client.vector.upsert({
   ],
 });
 
-// Search similar vectors
-const results = await client.vector.searchSimilar({
+// Search by a query vector
+const results = await client.vector.search({
   namespace: 'documents',
   vector: queryEmbedding,
   topK: 10,
@@ -267,7 +267,7 @@ const results = await client.vector.searchSimilar({
 });
 
 if (results.data) {
-  results.data.matches.forEach((match) => {
+  results.data.results.forEach((match) => {
     console.log(`Match: ${match.id} (score: ${match.score})`);
   });
 }
@@ -279,14 +279,14 @@ if (results.data) {
 // Generate embedding
 const embeddingResult = await client.embedding.generate({
   input: 'Hello, world!',
-  provider: 'voyage',
+  provider: 'VOYAGE',
   model: 'voyage-3',
 });
 
 // Batch embedding
 const batchResult = await client.embedding.generateBatch({
   inputs: ['text 1', 'text 2', 'text 3'],
-  provider: 'voyage',
+  provider: 'VOYAGE',
 });
 ```
 
@@ -294,7 +294,7 @@ const batchResult = await client.embedding.generateBatch({
 
 ```typescript
 // Store a secret
-await client.secrets.put({
+await client.secrets.create({
   path: 'apps/myapp/database',
   data: {
     password: 'secret123',
@@ -310,7 +310,7 @@ if (secret.data) {
 }
 
 // List secrets
-const secretsList = await client.secrets.list({ prefix: 'apps/myapp/' });
+const secretsList = await client.secrets.list({ pathPrefix: 'apps/myapp/' });
 ```
 
 ### Data Key Management
@@ -318,19 +318,20 @@ const secretsList = await client.secrets.list({ prefix: 'apps/myapp/' });
 ```typescript
 // Generate a key
 const key = await client.dataKms.generateKey({
-  keyId: 'my-encryption-key',
-  algorithm: 'AES-256-GCM',
+  name: 'my-encryption-key',
+  algorithm: 'AES_256',
 });
+const keyId = key.data!.key!.keyId;
 
 // Encrypt data
 const encrypted = await client.dataKms.encrypt({
-  keyId: 'my-encryption-key',
+  keyId,
   plaintext: btoa('sensitive data'),
 });
 
 // Decrypt data
 const decrypted = await client.dataKms.decrypt({
-  keyId: 'my-encryption-key',
+  keyId,
   ciphertext: encrypted.data!.ciphertext,
 });
 ```
@@ -338,8 +339,8 @@ const decrypted = await client.dataKms.decrypt({
 ### Cache Operations
 
 ```typescript
-// Set cache entry
-await client.cache.set({
+// Put cache entry
+await client.cache.put({
   key: 'session:user-123',
   value: JSON.stringify({ userId: 'user-123', roles: ['admin'] }),
   ttlSeconds: 3600,
@@ -349,8 +350,8 @@ await client.cache.set({
 const cached = await client.cache.get({ key: 'session:user-123' });
 
 // Get cache stats
-const stats = await client.cache.stats();
-console.log('Cache hit rate:', stats.data?.hitRate);
+const stats = await client.cache.getStats();
+console.log('Cache hit ratio:', stats.data?.hitRatio);
 ```
 
 ### Health Checks
@@ -447,7 +448,7 @@ function DataManager() {
 
   // Use with useMutation for write operations
   const storeSecret = useMutation(
-    (req) => secrets.put(req),
+    (req) => secrets.create(req),
     { onSuccess: () => console.log('Secret stored') }
   );
 
@@ -481,18 +482,18 @@ function SemanticSearch() {
       // Generate embedding for query
       const embResult = await embeddingSvc.generate({
         input: searchQuery,
-        provider: 'voyage',
+        provider: 'VOYAGE',
       });
 
-      // Search for similar vectors
-      return vector.searchSimilar({
+      // Search by the query's embedding
+      return vector.search({
         namespace: 'documents',
-        vector: embResult.data!.embedding,
+        vector: embResult.data!.embedding.values,
         topK: 10,
       });
     },
     {
-      onSuccess: (data) => setResults(data.data?.matches || []),
+      onSuccess: (data) => setResults(data.results),
     }
   );
 
@@ -533,27 +534,27 @@ const system = await client.platform.getSystemInfo();
 // List certificates
 const certs = await client.ca.listCertificates({
   page: 1,
-  pageSize: 50,
-  status: 'valid',
+  limit: 50,
 });
 
 // Issue certificate
 const cert = await client.ca.issueCertificate({
   subject: {
     commonName: 'server.example.com',
-    organization: ['Example Corp'],
+    organization: 'Example Corp',
   },
-  dnsNames: ['server.example.com', 'localhost'],
+  sans: { dnsNames: ['server.example.com', 'localhost'] },
   validDays: 365,
 });
+const serial = cert.data!.certificate!.serial;
 
 // Get certificate by serial
-const retrieved = await client.ca.getCertificate(cert.data!.serial);
+const retrieved = await client.ca.getCertificate(serial);
 
 // Revoke certificate
 await client.ca.revokeCertificate({
-  serial: cert.data!.serial,
-  reason: 'keyCompromise',
+  serial,
+  reason: 'KEY_COMPROMISE',
 });
 
 // Download certificate bundle
@@ -575,15 +576,17 @@ const sealed = await client.tpm.seal({
   pcrIndices: [0, 1, 7],
 });
 
-// Unseal data
+// Unseal data: the sealed object is addressed by its common name
 const unsealed = await client.tpm.unseal({
-  sealedData: sealed.data!.sealedData,
+  cn: 'my-secret',
+  pcrIndices: [0, 1, 7],
 });
 
-// Get attestation quote
+// Get attestation quote, signed by the attestation key at akHandle
 const quote = await client.tpm.quote({
+  akHandle,
   pcrIndices: [0, 1, 2, 3, 4, 5, 6, 7],
-  nonce: crypto.randomUUID(),
+  nonce: btoa(crypto.randomUUID()),
 });
 ```
 
@@ -635,8 +638,8 @@ const role = await client.iam.createRole({
 
 // Assign role to user
 await client.iam.assignRole({
-  userId: user.data!.id,
-  roleId: role.data!.id,
+  userId: user.data!.user.id,
+  roleId: role.data!.role.id,
 });
 ```
 
@@ -843,10 +846,9 @@ import type {
   // Certificate types
   Certificate,
   CertificateRequest,
-  CertificateProfile,
 
   // TPM types
-  TPMInfo,
+  TPMInfoResponse,
   SealRequest,
   SealResponse,
   QuoteRequest,
@@ -854,17 +856,15 @@ import type {
 
   // vTPM types
   VTPMInstance,
-  VTPMBundle,
-  CreateVTPMRequest,
+  CreateVTPMInstanceRequest,
 
   // IAM types
-  User,
-  Role,
-  Permission,
-  AuthResponse,
+  IAMUser,
+  IAMRole,
+  AuthenticateIAMResponse,
 
   // KMS types
-  Key,
+  KMSKeyMetadata,
   EncryptRequest,
   EncryptResponse,
 
@@ -878,18 +878,19 @@ import type {
 const response = await client.ca.issueCertificate(request);
 
 if (response.error) {
-  // Handle specific error codes
+  // The REST envelope carries the HTTP status as an integer, so the client
+  // reports the error code as HTTP_<status> (client/api-client.ts).
   switch (response.error.code) {
-    case 'INVALID_ARGUMENT':
+    case 'HTTP_400':
       console.error('Invalid request:', response.error.message);
       break;
-    case 'PERMISSION_DENIED':
+    case 'HTTP_403':
       console.error('Access denied');
       break;
-    case 'NOT_FOUND':
+    case 'HTTP_404':
       console.error('Resource not found');
       break;
-    case 'ALREADY_EXISTS':
+    case 'HTTP_409':
       console.error('Resource already exists');
       break;
     default:
@@ -964,7 +965,7 @@ function CertificateManager() {
 
   // Fetch certificates
   const { data, isLoading, error, refetch } = useApi(
-    () => ca.listCertificates({ page: 1, pageSize: 20 }),
+    () => ca.listCertificates({ page: 1, limit: 20 }),
     [],
     { refetchInterval: 30000 }
   );
@@ -987,7 +988,7 @@ function CertificateManager() {
   // Revoke certificate mutation
   const revokeCert = useMutation(
     (serial: string) =>
-      ca.revokeCertificate({ serial, reason: 'unspecified' }),
+      ca.revokeCertificate({ serial, reason: 'UNSPECIFIED' }),
     {
       onSuccess: () => refetch(),
     }
@@ -1029,7 +1030,7 @@ function CertificateManager() {
           {data?.certificates.map((cert) => (
             <tr key={cert.serial}>
               <td>{cert.serial}</td>
-              <td>{cert.subject}</td>
+              <td>{cert.commonName}</td>
               <td>{new Date(cert.notAfter).toLocaleDateString()}</td>
               <td>
                 <button

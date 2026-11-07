@@ -1,6 +1,6 @@
 # Web Console and Web Server — API
 
-> **Status: NORMATIVE** · Scope: routes owned by `pkg/webservice` itself, on every transport · Last verified: 2026-08-18
+> **Status: NORMATIVE** · Scope: routes owned by `pkg/webservice` itself, on every transport · Last verified: 2026-10-27
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 >
@@ -31,7 +31,7 @@ REST transport.
 `ProtocolGRPC`, `ProtocolREST`, `ProtocolQUIC`, `ProtocolMCP`.
 
 **Every capability in this feature is HTTP-shaped and REST-only.** There is no
-`WebService` in `ServiceRegistry` (`sdk/go/transport/embedded/adapter.go`'s 25
+`WebService` in `ServiceRegistry` (`sdk/go/transport/embedded/adapter.go`'s 34
 fields do not include one), no `.proto` for it, no QUIC opcode range, and no
 `web_*` MCP tool. Grepped 2026-08-18.
 
@@ -63,8 +63,9 @@ Served by the catch-all handler; there is no method restriction beyond what
 **Ordering matters and is not configurable**: rewrite → exact file → directory
 index → non-SPA exclusion → `__placeholder__` walk → SPA index → 404.
 
-**The non-SPA exclusion list is `/api/`, `/_next/`, `/static/`.** A miss under
-`/api/` returns a JSON 404; the other two return plain-text 404. Everything
+**The non-SPA exclusion list is `/api/`, `/v1/`, `/v2/`, `/.well-known/`,
+`/_next/`, `/static/`.** A miss under the first four (`apiPathPrefixes`)
+returns a JSON 404; a miss under `/_next/` or `/static/` returns plain-text 404. Everything
 else falls back to the SPA shell with **status 200** — a client that treats
 "200 with HTML" as success will not notice a bad URL.
 
@@ -202,6 +203,7 @@ listener. The route's contract is in
 |---|---|---|
 | `/api/v1/...` — every platform service | `pkg/webservice/v1/router.go` and `rest/<service>/` | that service's feature folder |
 | `/v2/...` — OCI distribution | mounted on the **root** router by `Router.RegisterRootRoutes`, only when `OCIDistBackend()` is non-nil, behind the caller gate and admin chain (#549) | [`docs/registry/`](../registry/) |
+| `/health`, `/health/live`, `/health/ready` | mounted on the **root** router by `Router.RegisterRootRoutes` (`pkg/api/healthprobe`), on the `full` surface | [`docs/health/`](../health/) |
 | `/swagger/...` | static files, present only when built by `make build-public-html` | [engineering.md](engineering.md) §8 |
 
 `/v2` is at the host root because the distribution specification requires it —
@@ -213,7 +215,7 @@ Errors this server produces itself (as opposed to the services it hosts):
 
 | Condition | Status | Body |
 |---|---|---|
-| Miss under `/api/` | 404 | `{"error":"not found","path":"…","message":"the requested API endpoint does not exist"}` |
+| Miss under `/api/`, `/v1/`, `/v2/` or `/.well-known/` | 404 | `{"error":"not found","path":"…","message":"the requested API endpoint does not exist"}` |
 | Miss under `/_next/` or `/static/` | 404 | plain text |
 | Miss elsewhere with no SPA index available | 404 | plain text |
 | SPA fallback served | **200** | the shell `index` |
@@ -236,7 +238,7 @@ bounded by the daemon's own wiring and is small.
 ## 10. Versioning
 
 REST under `/api/v1`; the Swagger annotations in `webserver_v1.go` declare
-`@BasePath /api/v1` and schemes `http, https, ws, wss`. The OCI `/v2` routes
+`@BasePath /api/v1` and declare no `@schemes`. The OCI `/v2` routes
 carry the **distribution specification's** version, not the platform's
 ([`docs/registry/api.md`](../registry/api.md)).
 

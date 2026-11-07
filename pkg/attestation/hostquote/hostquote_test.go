@@ -45,6 +45,11 @@ type quotingTPM struct {
 	readErr    error
 	readValues map[int][]byte
 	quotes     int
+	// quotedPCRs, when set, is the selection the TPM signs in place of
+	// the one it was asked for.
+	quotedPCRs []uint
+	// quoted, when set, replaces the TPMS_ATTEST body the TPM signs.
+	quoted []byte
 }
 
 func newQuotingTPM(t *testing.T) *quotingTPM {
@@ -63,6 +68,9 @@ func (f *quotingTPM) Quote(pcrs []uint, nonce []byte) (xkmssdk.Quote, error) {
 	f.quotes++
 	if f.quoteErr != nil {
 		return xkmssdk.Quote{}, f.quoteErr
+	}
+	if f.quotedPCRs != nil {
+		pcrs = f.quotedPCRs
 	}
 	idx := make([]int, 0, len(pcrs))
 	for _, p := range pcrs {
@@ -84,6 +92,9 @@ func (f *quotingTPM) Quote(pcrs []uint, nonce []byte) (xkmssdk.Quote, error) {
 			PCRDigest: tpm2.TPM2BDigest{Buffer: h.Sum(nil)},
 		}),
 	})
+	if f.quoted != nil {
+		quoted = f.quoted
+	}
 	digest := sha256.Sum256(quoted)
 	sig, err := ecdsa.SignASN1(rand.Reader, f.key, digest[:])
 	if err != nil {
@@ -191,6 +202,88 @@ func TestCollect_SurfacesTPMFailuresUnwrappable(t *testing.T) {
 	tpm.quoteErr, tpm.readErr = nil, errors.New("read failed")
 	_, err = Collect(context.Background(), tpm, nil, "", []byte("n"))
 	assert.ErrorIs(t, err, tpm.readErr)
+}
+
+// A TPM that signs a selection other than the one the caller asked for
+// must not have its quote passed on: the verifier would appraise PCRs
+// the caller never selected.
+func TestCollect_RefusesAQuoteOverAnotherSelection(t *testing.T) {
+	cases := map[string]struct {
+		quoted []uint
+		want   []int
+	}{
+		"fewer PCRs":            {[]uint{0}, []int{0}},
+		"same count, other PCR": {[]uint{0, 8}, []int{0, 8}},
+		"more PCRs":             {[]uint{0, 7, 14}, []int{0, 7, 14}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			tpm := newQuotingTPM(t)
+			tpm.quotedPCRs = tc.quoted
+			_, err := Collect(context.Background(), tpm, []int{7, 0}, manifest.HashAlgorithmSHA256, []byte("n"))
+			var mismatch ErrQuotedSelectionMismatch
+			require.ErrorAs(t, err, &mismatch)
+			assert.Equal(t, tc.want, mismatch.Quoted)
+			assert.Equal(t, []int{0, 7}, mismatch.Selected)
+		})
+	}
+}
+
+func TestCollect_RefusesAnUnreadableQuote(t *testing.T) {
+	cases := map[string][]byte{
+		"empty":     {},
+		"truncated": {0xff, 0x54, 0x43},
+	}
+	for name, quoted := range cases {
+		t.Run(name, func(t *testing.T) {
+			tpm := newQuotingTPM(t)
+			tpm.quoted = quoted
+			_, err := Collect(context.Background(), tpm, []int{0, 7}, manifest.HashAlgorithmSHA256, []byte("n"))
+			var failed ErrCollectFailed
+			require.ErrorAs(t, err, &failed)
+			assert.Equal(t, "quote structure unreadable", failed.Reason)
+			assert.ErrorAs(t, err, &vm.ErrQuoteVerificationFailed{})
+		})
+	}
+}
+
+// The error text is what an operator reads in the daemon log and the CLI;
+// each must name the register, bank or selection at fault.
+func TestErrorMessages(t *testing.T) {
+	cases := map[string]struct {
+		err  error
+		want string
+	}{
+		"collect failed without cause": {
+			ErrCollectFailed{Reason: "a caller nonce is required"},
+			"hostquote: a caller nonce is required",
+		},
+		"collect failed with cause": {
+			ErrCollectFailed{Reason: "invalid PCR selection", Cause: ErrPCRIndexDuplicate{Index: 7}},
+			"hostquote: invalid PCR selection: pcr index 7 selected twice",
+		},
+		"index out of range": {
+			ErrPCRIndexOutOfRange{Index: 24},
+			"pcr index 24 out of range 0-23",
+		},
+		"quoted selection mismatch": {
+			ErrQuotedSelectionMismatch{Quoted: []int{0}, Selected: []int{0, 7}},
+			"TPM quoted PCRs [0], caller selected [0 7]",
+		},
+		"bank missing": {
+			ErrPCRBankMissing{Algorithm: manifest.HashAlgorithmSHA256},
+			"TPM returned no " + string(manifest.HashAlgorithmSHA256) + " bank",
+		},
+		"value missing": {
+			ErrPCRValueMissing{Algorithm: manifest.HashAlgorithmSHA256, Index: 7},
+			"bank " + string(manifest.HashAlgorithmSHA256) + " has no value for pcr 7",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			assert.EqualError(t, tc.err, tc.want)
+		})
+	}
 }
 
 func TestIndices(t *testing.T) {

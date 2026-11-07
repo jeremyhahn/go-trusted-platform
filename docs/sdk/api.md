@@ -17,9 +17,9 @@ when their adapter maps it:
 
 | Transport | Where the mapping lives |
 |---|---|
-| REST | `transport/rest/adapter.go` (`grpcMethodToRESTMap`, `templatedRouteTable`), plus `ldevid.go`, `provisioning.go`, `attestation_reports.go`, `app_services.go`, `iam.go` (single IAM resources onto the reply's resource field) |
-| QUIC | `transport/quic/adapter.go` (`grpcMethodToOpcodeMap`, `categorySubOpcodeMap`), plus `aaa_ldevid.go`, `aab_bmc.go`, `aab_cluster.go`, `aab_invitation.go`, `aab_ntp.go`, `aab_pxe.go`, `aac_app_services.go`, `ceremony.go`, `device.go`, `dns.go`, `fido2.go`, `gateway_nat64.go`, `luks.go`, `piv.go`, `provisioning.go`, `tpm_quote.go` |
-| MCP | `transport/mcp/adapter.go` (`grpcMethodToMCPToolMap`), plus `app_services.go`, `attestation_reports.go`, `bmc.go`, `cluster.go`, `eab.go`, `invitation.go`, `ldevid.go`, `phase35.go`, `provisioning.go`, `pxe.go`, `registry.go`, `switch.go`, `tpm_quote.go` |
+| REST | `transport/rest/adapter.go` (`grpcMethodToRESTMap`, `templatedRouteTable`), plus one file per feature beside it (`ldevid.go`, `provisioning.go`, `app_services.go`, `iam.go`, `vpn.go`, ...) |
+| QUIC | `transport/quic/adapter.go` (`grpcMethodToOpcodeMap`, `categorySubOpcodeMap`), plus one file per feature beside it (`aaa_ldevid.go`, `aab_*.go`, `aac_app_services.go`, `device.go`, `tpm_quote.go`, ...) |
+| MCP | `transport/mcp/adapter.go` (`grpcMethodToMCPToolMap`), plus one file per feature beside it (`app_services.go`, `ldevid.go`, `registry.go`, `vpn.go`, ...) |
 | Embedded | `transport/embedded/adapter.go` (`ServiceRegistry`), `dispatch.go` (`register<Service>Handlers`) |
 
 The server side of each transport, with ports, opcodes and authorization, is
@@ -46,6 +46,7 @@ folder's own `api.md`. Streaming RPCs are ✅ only on gRPC / Unix.
 | `PXEService` | `PXE()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `DNSService` | `DNS()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `NTPService` | `NTP()` | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `VPNService` | `VPN()` | ✅ | ✅ | ✅ | ✅ | `MISSING — docs/13 G7` |
 | `GatewayService` | `Gateway()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `ProxyService` | `Proxy()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `OverlayService` | `Overlay()` | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -68,8 +69,10 @@ folder's own `api.md`. Streaming RPCs are ✅ only on gRPC / Unix.
 | `PIVService` | `PIV()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `LUKSService` | `LUKS()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 
-A service with no `Client` accessor is reached through its `sdk/go/services/*`
-wrapper (see [engineering.md §2](engineering.md#service-wrapper-constructors)).
+`ProvisioningGateway` is the one service with no `Client` accessor and no
+`sdk/go/services/*` wrapper: build `platformv1.NewProvisioningGatewayClient`
+on an adapter's `Connection()`. Every wrapper also takes an adapter directly
+(see [engineering.md §2](engineering.md#service-wrapper-constructors)).
 
 ## 3. go-quicbaas re-export surface
 

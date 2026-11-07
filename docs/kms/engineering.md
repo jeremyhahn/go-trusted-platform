@@ -89,9 +89,9 @@ There is no KMS type exported from this repository. The surface is:
 - **REST** — `/api/v1/kms`, the largest REST route set in the platform after
   IAM.
 - **QUIC** — key management `0xC0`–`0xCF`, crypto `0xD0`–`0xDA`, plus a
-  **KMS extended category opcode `0xCD`** whose subs `0x08`–`0x0D` are the DEK
+  **KMS extended category opcode `0xCD`** whose subs `0x08`–`0x10` are the DEK
   calls. The `OpDEK*` bytes `0xF0`–`0xF5` are reserved and unserved.
-- **MCP** — 29 `kms_*` tools, 11 `secret_*` tools and 6 `dek_*` tools.
+- **MCP** — 29 `kms_*` tools, 12 `secret_*` tools and 6 `dek_*` tools.
 - **SDK** — `sdk/go/services/kms`.
 
 ## 4. Invariants

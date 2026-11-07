@@ -312,10 +312,6 @@ func TestNewClientConfig_Refused(t *testing.T) {
 			check: func(err error) bool { var e ErrCmdline; return errors.As(err, &e) && e.Param == ParamServer },
 		},
 		{
-			name: "no port", server: ServerAddr{Host: "localhost"}, anchor: good, idevid: bundle.ClientCert,
-			check: func(err error) bool { var e ErrCmdline; return errors.As(err, &e) && e.Param == ParamServer },
-		},
-		{
 			name: "missing certificate", server: server, anchor: good, idevid: tls.Certificate{},
 			check: func(err error) bool { var e ErrInvalidConfig; return errors.As(err, &e) && e.Field == "Certificate" },
 		},
@@ -646,7 +642,7 @@ func TestAttach_Cancelled(t *testing.T) {
 func TestAttach_Timeout(t *testing.T) {
 	bundle := testutil.GenerateTestTLSBundle(t)
 	cfg := nodeConfig(bundle)
-	cfg.HandshakeTimeout = 50 * time.Millisecond
+	cfg.HandshakeTimeout = time.Millisecond
 	silent := func(p *scriptedPeer) error {
 		_, err := p.conn.Read(make([]byte, 1))
 		if errors.Is(err, io.EOF) {

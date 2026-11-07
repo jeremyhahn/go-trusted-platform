@@ -450,7 +450,7 @@ At scale, individual gateway route announcements would overwhelm global BGP tabl
 Instead of announcing individual /48 prefixes per gateway, the network aggregates routes at the regional level using /40 prefixes.
 
 ```go
-// pkg/bgp/aggregation.go
+// design sketch; not in the tree (would be pkg/sdn/bgp/aggregation.go)
 
 // RegionalAggregation handles BGP route consolidation
 type RegionalAggregation struct {
@@ -509,7 +509,7 @@ func (ra *RegionalAggregation) CalculateRegionalPrefix(regionID RegionID) netip.
 Within each region, traffic is routed to specific gateways using Interior Gateway Protocol (OSPF or IS-IS) rather than external BGP.
 
 ```go
-// pkg/bgp/internal_routing.go
+// design sketch; not in the tree (would be pkg/sdn/bgp/internal_routing.go)
 
 // InternalRoutingConfig configures IGP for intra-region routing
 type InternalRoutingConfig struct {
@@ -566,7 +566,7 @@ func (d *IGPRouteDistributor) AnnounceGatewayRoute(
 All BGP route announcements require Resource Public Key Infrastructure (RPKI) validation to prevent route hijacking.
 
 ```go
-// pkg/bgp/rpki.go
+// design sketch; not in the tree (would be pkg/sdn/bgp/rpki.go)
 
 // RPKIValidator validates route origin authorization
 type RPKIValidator struct {
@@ -632,7 +632,7 @@ const (
 Route announcements require verification from multiple gateways before propagation to prevent single-point-of-compromise attacks.
 
 ```go
-// pkg/bgp/multi_gateway_verify.go
+// design sketch; not in the tree (would be pkg/sdn/bgp/multi_gateway_verify.go)
 
 // MultiGatewayVerifier requires consensus for route announcements
 type MultiGatewayVerifier struct {
@@ -1474,7 +1474,7 @@ func (g *GatewayNode) establishMeshConnection(target NodeInfo) net.Conn {
 Gateway nodes require strict eligibility criteria and diversity enforcement to maintain network integrity. The system enforces geographic, network, and vendor diversity across all gateway selections.
 
 ```go
-// pkg/gateway/sybil_defense.go
+// design sketch; not in the tree (would be pkg/sdn/gateway/sybil_defense.go)
 
 // Role Promotion Requirements (P4-H15: Complete age requirements)
 // CANONICAL: All role promotions require minimum network participation

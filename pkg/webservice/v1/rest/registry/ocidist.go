@@ -502,16 +502,20 @@ func (h *OCIDistHandlers) putUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A final body chunk may accompany the PUT (clients that batched
-	// the tail into the commit call).
-	if r.ContentLength > 0 {
+	// the tail into the commit call). ContentLength is -1 on a chunked
+	// request, so the body is read unless it is known to be empty, and
+	// appended only when it carried bytes.
+	if r.ContentLength != 0 {
 		tail, err := readBounded(w, r, h.limits.MaxChunkBytes)
 		if err != nil {
 			writeBodyError(w, err, "BLOB_UPLOAD_INVALID")
 			return
 		}
-		if _, err := h.appendChunk(vars["uuid"], sess, tail); err != nil {
-			writeBodyError(w, err, "BLOB_UPLOAD_INVALID")
-			return
+		if len(tail) > 0 {
+			if _, err := h.appendChunk(vars["uuid"], sess, tail); err != nil {
+				writeBodyError(w, err, "BLOB_UPLOAD_INVALID")
+				return
+			}
 		}
 	}
 	// The commit consumes the session either way: the buffer moves out

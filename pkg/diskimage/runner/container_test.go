@@ -3,6 +3,8 @@ package runner
 import (
 	"context"
 	"errors"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -129,6 +131,59 @@ func TestContainerRunStepFailures(t *testing.T) {
 			}
 			if got := strings.Join(rec.verbs(), ","); got != tt.verbs {
 				t.Errorf("calls = %s, want %s", got, tt.verbs)
+			}
+		})
+	}
+}
+
+// An output directory that cannot be created on the host fails the run before
+// anything is copied out, and the container is still removed.
+func TestContainerRunOutputDirectoryFailure(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	host := filepath.Join(file, "out")
+	c := sampleContainer(t)
+	c.Out = []Copy{{Host: host, Container: "/output"}}
+
+	rec := &recorder{}
+	err := c.Run(context.Background(), rec.run, "docker")
+
+	var cErr *ContainerError
+	if !errors.As(err, &cErr) || cErr.Step != "creating "+host {
+		t.Fatalf("error = %v, want step %q", err, "creating "+host)
+	}
+	var pathErr *fs.PathError
+	if !errors.As(err, &pathErr) {
+		t.Errorf("error = %v, want the wrapped *fs.PathError", err)
+	}
+	if got := strings.Join(rec.verbs(), ","); got != "create,cp,start,rm" {
+		t.Errorf("calls = %s, want create,cp,start,rm", got)
+	}
+}
+
+func TestContainerErrorMessage(t *testing.T) {
+	tests := map[string]struct {
+		err  *ContainerError
+		want string
+	}{
+		"create": {
+			err:  &ContainerError{Step: "creating the container", Err: errBoom},
+			want: "runner: creating the container: " + errBoom.Error(),
+		},
+		"cp out": {
+			err:  &ContainerError{Step: "copying /output out", Err: errors.New("no such container")},
+			want: "runner: copying /output out: no such container",
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			if got := tt.err.Error(); got != tt.want {
+				t.Errorf("Error() = %q, want %q", got, tt.want)
+			}
+			if !errors.Is(tt.err, tt.err.Err) {
+				t.Errorf("errors.Is does not reach the wrapped error")
 			}
 		})
 	}

@@ -32,14 +32,14 @@ rather than internals.
 
 | Package | Holds |
 |---|---|
-| `pkg/provisioning/` | `client.go`, `types.go`, `errors.go` — the provisioning client and its types |
+| `pkg/provisioning/` | `client.go`, `boot.go`, `types.go`, `errors.go` — the provisioning client and its types |
 | `pkg/provisioning/configdelivery/` | `service.go`, `handler.go`, `nonce.go`, `sign.go`, `types.go`, `errors.go` — **pre-enrollment config delivery** |
 | `pkg/provisioning/baremetal/` | `service.go`, `config.go`, `types.go`, `doc.go`, `errors.go` |
-| `pkg/ipxe/` | `config.go`, `dhcp_rawconn_linux.go`, `dhcp_rawconn_stub.go` |
+| `pkg/ipxe/` | `server.go`, `config.go`, `dhcp_server.go`, `tftp_server.go`, `http_server.go`, `script_generator.go`, `ipam_allocator.go`, `iso.go`, `media_status.go`, `media_watch.go`, `clock.go`, `errors.go`, and the raw/UDP DHCP sockets `dhcp_rawconn_{linux,stub}.go`, `dhcp_udpconn_{linux,stub}.go` |
 | `pkg/installer/` | The OS installer — see §4 |
 
-`pkg/ipxe/dhcp_rawconn_stub.go` is the non-Linux stub for the raw DHCP
-connection; the real implementation is Linux-only. Provisioning boots machines,
+`pkg/ipxe/dhcp_rawconn_stub.go` and `dhcp_udpconn_stub.go` are the non-Linux
+stubs for the DHCP sockets; the real implementation is Linux-only. Provisioning boots machines,
 and that needs raw sockets.
 
 ## 3. Config delivery — the pre-enrollment problem, solved
@@ -163,7 +163,7 @@ reachable by unidentified machines and is rate-limited for that reason.
   CLI and Unix adapters, and the shared `SDKAdapter` (`sdk_adapter.go`)
   pinned to REST, gRPC, QUIC or MCP with `platform.WithOnlyProtocol`. But no
   production code constructs a `pkg/compute/pxe.Service`, so platformd's
-  `PXEGRPCService` has no backend (`pkg/api/daemon/daemon.go:975-979`) and every
+  `PXEGRPCService` has no backend (`NewPXEGRPCService(logger, nil)`, `pkg/api/daemon/daemon.go:992`) and every
   PXE call answers `SERVICE_NOT_CONFIGURED`. Against the shared integration
   platformd the suite fails at adapter setup on every transport, so it is
   kept out of `make integration-test`'s default set and runs by name with
@@ -179,12 +179,12 @@ reachable by unidentified machines and is rate-limited for that reason.
   `ipxe.Server` on each start (the server is single-use, `pkg/ipxe/server.go`)
   under a context of its own, so a stopped service starts again and the
   server outlives the `StartService` request.
-- `test/integration/authenticode/multiprotocol_test.go:68-72` has **all five
+- `test/integration/authenticode/multiprotocol_test.go:67-71` has **all five
   protocol adapters commented out**: a multi-protocol conformance test that
   exercises the CLI alone.
 - The PXE suite's CLI leg asserts a declared gap, never a skip: there is no
   `platformctl pxe` group, PXE device lifecycle is API-only
-  (`docs/daemon/cli.md:223`). `testPXEProtocol` routes the `*CLIAdapter` into
+  (`docs/daemon/cli.md:224`). `testPXEProtocol` routes the `*CLIAdapter` into
   `assertPXECLIGap`, which runs the real binary once and requires the
   unknown-command non-zero exit, and checks the CLI adapter methods return
   the typed `ErrCLIPXENotImplemented` refusal. When a `platformctl pxe`

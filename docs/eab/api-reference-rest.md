@@ -45,6 +45,8 @@
 - The HMAC key appears only in the `CreateCredential` response.
 - `qrcode?size=N` takes `0` (server default) to `2147483647`; a larger or
   non-numeric `size` is refused with 400, as is an `{id}` beyond uint64.
+- An `{id}` that is not all digits matches no route (`{id:[0-9]+}`,
+  `pkg/webservice/v1/rest/eab/router.go`) and answers 404, not 400.
 - When the EAB backend is not configured the handlers return the
   structured 503 "service unavailable" envelope.
 - The SDK REST adapter (`sdk/go/transport/rest`) maps

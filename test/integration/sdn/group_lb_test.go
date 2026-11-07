@@ -33,6 +33,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/loadbalancer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers/boundedexec"
 )
 
@@ -206,7 +207,7 @@ func setupHairpinSegment(t *testing.T, bridge string) (int, segmentHost, segment
 	runCmd(t, "ip", "netns", "add", lbSegmentNS)
 	runCmd(t, "ip", "-n", lbSegmentNS, "link", "add", "sbr", "type", "bridge")
 	runCmd(t, "ip", "-n", lbSegmentNS, "link", "set", "sbr", "up")
-	runCmd(t, "ip", "link", "add", uplink, "type", "veth", "peer", "name", inside)
+	runCmd(t, "ip", testenv.VethArgs(uplink, inside)...)
 	runCmd(t, "ip", "link", "set", inside, "netns", lbSegmentNS)
 	runCmd(t, "ip", "-n", lbSegmentNS, "link", "set", inside, "master", "sbr")
 	runCmd(t, "ip", "-n", lbSegmentNS, "link", "set", inside, "up")
@@ -218,7 +219,7 @@ func setupHairpinSegment(t *testing.T, bridge string) (int, segmentHost, segment
 		runCmdQuiet("ip", "netns", "del", ns)
 		t.Cleanup(func() { runCmdQuiet("ip", "netns", "del", ns) })
 		runCmd(t, "ip", "netns", "add", ns)
-		runCmd(t, "ip", "link", "add", hostIf, "type", "veth", "peer", "name", segIf)
+		runCmd(t, "ip", testenv.VethArgs(hostIf, segIf)...)
 		runCmd(t, "ip", "link", "set", hostIf, "netns", ns)
 		runCmd(t, "ip", "link", "set", segIf, "netns", lbSegmentNS)
 		runCmd(t, "ip", "-n", lbSegmentNS, "link", "set", segIf, "master", "sbr")

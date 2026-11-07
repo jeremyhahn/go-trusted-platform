@@ -13,8 +13,8 @@ There is **no `pkg/security/audit`** — see [architecture.md](architecture.md) 
 
 | Path | Files | Importers in this repo |
 |---|---|---|
-| `pkg/policy/opa/` | `engine.go`, `types.go`, `errors.go`, `embed.go`, `watcher.go`, `policies/*.rego` | `pkg/sdn/gateway/proxysvc` |
-| `pkg/security/ratelimit/` | `types.go`, `token_bucket.go`, `sliding_window.go`, `errors.go` | **none** |
+| `pkg/policy/opa/` | `engine.go`, `types.go`, `errors.go`, `embed.go`, `watcher.go`, `policies/*.rego` | `pkg/sdn/gateway/proxysvc`, `pkg/sdn/gateway/services/vpn` |
+| `pkg/security/ratelimit/` | `types.go`, `token_bucket.go`, `sliding_window.go`, `clock.go`, `errors.go` | `pkg/webservice` (`webserver_v1.go`, `edge.go`), `pkg/api/daemon` (`initonly.go`), `pkg/api/rest` (`init_handlers.go`) — `TokenBucketLimiter` only |
 | `pkg/security/validation/` | `types.go`, `validators.go`, `sanitize.go`, `errors.go` | **none** |
 
 ---
@@ -230,7 +230,7 @@ with `"opa_error"`.
 
 ## 4. `pkg/policy/opa` — error semantics
 
-Sixteen typed structs in `errors.go`, all value receivers; match with
+Seventeen typed structs in `errors.go`, all value receivers; match with
 `errors.As`.
 
 | Error | Fields | Returned when |
@@ -484,6 +484,7 @@ Rego's own.
 |---|---|---|---|
 | OPA engine | `pkg/policy/opa/engine_test.go`, `types_test.go`, `errors_test.go` | Initialize guards, directory/embedded precedence, load/unload/recompile, evaluation and default action, stats | 92.1% |
 | OPA proxy policy | `pkg/policy/opa/proxy_authz_test.go` | The `proxy.authz` policy's allow/deny behaviour |  |
+| OPA VPN posture policy | `pkg/policy/opa/vpn_posture_test.go` | `vpn.posture` loads, a compliant client is allowed, each drift is a named violation, empty input is denied |  |
 | OPA watcher | `pkg/policy/opa/watcher_test.go` | Start/stop, debounce hold-off and coalescing, non-rego filtering, change callbacks, auto-reload and auto-unload |  |
 | Rate limiting | `pkg/security/ratelimit/*_test.go` | Both algorithms: allow, allowN, wait, cancellation, reset, close, per-key isolation, replenishment, window rotation, cleanup, concurrency, stats | 95.3% |
 | Validation | `pkg/security/validation/*_test.go` | Every validator and sanitizer, every error | 98.7% |
@@ -508,9 +509,8 @@ Fault-injection seams:
 `conventions/feature-docs.md` §4 is unmet repo-wide. It is moot here — this
 section has no CLI verbs ([cli.md](cli.md)).
 
-**Coverage is not usage.** `pkg/security/ratelimit` and
-`pkg/security/validation` are among the best-covered packages in the repository
-and neither has a non-test importer ([architecture.md](architecture.md) §3).
+**Coverage is not usage.** `pkg/security/validation` is among the
+best-covered packages in the repository and has no non-test importer ([architecture.md](architecture.md) §3).
 
 ---
 

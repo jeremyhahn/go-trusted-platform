@@ -10,6 +10,7 @@ import (
 	"debug/elf"
 	"encoding/hex"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -386,6 +387,21 @@ func TestPiBootFiles(t *testing.T) {
 		assert.Equal(t, "signing the arm64 iPXE", buildErr.Step)
 		assert.NoFileExists(t, filepath.Join(notPE.OutputDir, filepath.FromSlash(ARM64IPXEFile)))
 	})
+	t.Run("the firmware directory cannot be created", func(t *testing.T) {
+		plain := &Config{OutputDir: t.TempDir(), Model: "rpi4", IPXEFile: cfg.IPXEFile}
+		require.NoError(t, os.WriteFile(filepath.Join(plain.OutputDir, "firmware"), nil, 0o644))
+		var buildErr *BuildError
+		require.ErrorAs(t, plain.piBootFiles(context.Background(), &stagedSet{media: &setMedia{dir: media, image: image}}), &buildErr)
+		assert.Equal(t, container.MediaSetRaspberryPi, buildErr.Set)
+		assert.Equal(t, "creating the firmware directory", buildErr.Step)
+	})
+	t.Run("the iPXE cannot be placed over a directory", func(t *testing.T) {
+		plain := &Config{OutputDir: t.TempDir(), Model: "rpi4", IPXEFile: cfg.IPXEFile}
+		require.NoError(t, os.MkdirAll(filepath.Join(plain.OutputDir, filepath.FromSlash(ARM64IPXEFile)), 0o755))
+		var buildErr *BuildError
+		require.ErrorAs(t, plain.piBootFiles(context.Background(), &stagedSet{media: &setMedia{dir: media, image: image}}), &buildErr)
+		assert.Equal(t, "placing the arm64 iPXE", buildErr.Step)
+	})
 	t.Run("a tampered iPXE is refused", func(t *testing.T) {
 		require.NoError(t, os.WriteFile(cfg.IPXEFile, []byte("tampered"), 0o644))
 		var buildErr *BuildError
@@ -579,6 +595,40 @@ func TestBuild_FailsNamingTheSetAndStep(t *testing.T) {
 	})
 }
 
+func TestBuildSet_FailsPlacingTheMediaInTheSet(t *testing.T) {
+	resolved := func(t *testing.T) (*Config, string) {
+		cfg := buildConfig(t, diskimagetest.PlatformConfig(t))
+		cfg.X86BinariesDir = diskimagetest.Binaries(t, elf.EM_X86_64)
+		cfg.Sets = []Set{X86_64Set}
+		c, err := cfg.resolve()
+		require.NoError(t, err)
+		work := filepath.Join(t.TempDir(), ".work")
+		require.NoError(t, os.MkdirAll(work, 0o755))
+		return c, work
+	}
+
+	t.Run("the sets directory is a file", func(t *testing.T) {
+		c, work := resolved(t)
+		require.NoError(t, os.MkdirAll(c.OutputDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(c.OutputDir, container.NetbootMediaSetsDir), nil, 0o644))
+		_, err := c.buildSet(context.Background(), X86_64Set, work)
+		var buildErr *BuildError
+		require.ErrorAs(t, err, &buildErr)
+		assert.Equal(t, container.MediaSetX86_64, buildErr.Set)
+		assert.Equal(t, "creating the set directory", buildErr.Step)
+	})
+	t.Run("the set already holds a cdrom tree", func(t *testing.T) {
+		c, work := resolved(t)
+		stale := filepath.Join(c.OutputDir, container.NetbootMediaSetsDir, X86_64Set.Name, CDROMDir, "stale")
+		require.NoError(t, os.MkdirAll(stale, 0o755))
+		_, err := c.buildSet(context.Background(), X86_64Set, work)
+		var buildErr *BuildError
+		require.ErrorAs(t, err, &buildErr)
+		assert.Equal(t, "moving the media into the set", buildErr.Step)
+		assert.DirExists(t, stale, "a stale tree is never merged into")
+	})
+}
+
 func TestPlaceKernel(t *testing.T) {
 	kernel := authenticodetest.MinimalPE(authenticodetest.MachineARM64)
 	keyPath, certPath := authenticodetest.WriteKeyPair(t, t.TempDir())
@@ -637,4 +687,108 @@ func TestWriteChecksums(t *testing.T) {
 	var buildErr *BuildError
 	require.ErrorAs(t, writeChecksums(filepath.Join(root, "absent")), &buildErr)
 	assert.Equal(t, "hashing the build", buildErr.Step)
+}
+
+func TestWriteChecksums_SumsFileIsADirectory(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, container.NetbootMediaIndex), []byte("index"), 0o644))
+	require.NoError(t, os.Mkdir(filepath.Join(root, container.NetbootMediaSums), 0o755))
+
+	var buildErr *BuildError
+	require.ErrorAs(t, writeChecksums(root), &buildErr)
+	assert.Equal(t, "writing "+container.NetbootMediaSums, buildErr.Step)
+}
+
+// writeSetFiles lays out a media set directory as buildSet leaves it before
+// the payload list: the set's boot files and a cdrom/ tree with the
+// installer's entry point.
+func writeSetFiles(t *testing.T, setDir string, set container.MediaSet) {
+	t.Helper()
+	bin := filepath.Join(setDir, CDROMDir, filepath.Dir(container.InstallerEntryPoint))
+	require.NoError(t, os.MkdirAll(bin, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(setDir, CDROMDir, container.InstallerEntryPoint), []byte("platformctl"), 0o755))
+	for _, name := range []string{set.Kernel, set.Initrd, set.Modloop} {
+		require.NoError(t, os.WriteFile(filepath.Join(setDir, name), []byte(name), 0o644))
+	}
+}
+
+func TestWritePayloadListAndDescriptor_LoadBackAsAServableSet(t *testing.T) {
+	sets := filepath.Join(t.TempDir(), container.NetbootMediaSetsDir)
+	want := container.MediaSet{
+		Name:         ARM64VirtSet.Name,
+		Architecture: ARM64VirtSet.Architecture,
+		Kernel:       "vmlinuz-virt",
+		Initrd:       "initramfs-virt",
+		Modloop:      "modloop-virt",
+		KernelArgs:   ARM64VirtSet.KernelArgs,
+		Default:      true,
+	}
+	setDir := filepath.Join(sets, want.Name)
+	writeSetFiles(t, setDir, want)
+
+	require.NoError(t, writePayloadList(setDir))
+	require.NoError(t, writeDescriptor(setDir, want))
+
+	f, err := os.Open(filepath.Join(setDir, container.PayloadListName))
+	require.NoError(t, err)
+	defer f.Close()
+	entries, err := container.ParsePayloadList(f)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, container.InstallerEntryPoint, entries[0].Dest)
+	assert.Equal(t, CDROMDir+"/"+container.InstallerEntryPoint, entries[0].Src)
+
+	loaded, err := container.LoadMediaSets(sets, "/data/"+container.NetbootMediaSetsDir)
+	require.NoError(t, err, "the container serves what the builder writes")
+	require.Len(t, loaded, 1)
+	assert.Equal(t, want.Name, loaded[0].Name)
+	assert.Equal(t, want.Architecture, loaded[0].Architecture)
+	assert.Equal(t, want.Kernel, loaded[0].Kernel)
+	assert.Equal(t, want.KernelArgs, loaded[0].KernelArgs)
+	assert.True(t, loaded[0].Default)
+}
+
+func TestWritePayloadList_Errors(t *testing.T) {
+	t.Run("the set has no cdrom tree", func(t *testing.T) {
+		assert.ErrorIs(t, writePayloadList(t.TempDir()), fs.ErrNotExist)
+	})
+	t.Run("the cdrom tree holds a symlink", func(t *testing.T) {
+		setDir := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(setDir, CDROMDir), 0o755))
+		require.NoError(t, os.Symlink("/etc/passwd", filepath.Join(setDir, CDROMDir, "passwd")))
+		var listErr container.ErrPayloadList
+		require.ErrorAs(t, writePayloadList(setDir), &listErr)
+		assert.NoFileExists(t, filepath.Join(setDir, container.PayloadListName))
+	})
+	t.Run("the payload list path is a directory", func(t *testing.T) {
+		setDir := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(setDir, CDROMDir), 0o755))
+		require.NoError(t, os.Mkdir(filepath.Join(setDir, container.PayloadListName), 0o755))
+		require.Error(t, writePayloadList(setDir))
+	})
+}
+
+func TestWriteDescriptor_MissingSetDirectory(t *testing.T) {
+	err := writeDescriptor(filepath.Join(t.TempDir(), "absent"), container.MediaSet{Name: ARM64VirtSet.Name})
+	assert.ErrorIs(t, err, fs.ErrNotExist)
+}
+
+func TestWriteIndex(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, TFTPTreeDir), 0o755))
+	setDir := filepath.Join(root, container.NetbootMediaSetsDir, ARM64VirtSet.Name)
+	require.NoError(t, os.MkdirAll(setDir, 0o755))
+	require.NoError(t, writeDescriptor(setDir, container.MediaSet{Name: ARM64VirtSet.Name}))
+	want := &container.NetbootMedia{MediaSets: []string{ARM64VirtSet.Name}, TFTPTree: TFTPTreeDir}
+
+	require.NoError(t, writeIndex(root, want))
+	require.NoError(t, writeChecksums(root))
+	got, err := container.LoadNetbootMedia(root)
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+
+	var buildErr *BuildError
+	require.ErrorAs(t, writeIndex(filepath.Join(root, "absent"), want), &buildErr)
+	assert.Equal(t, "writing the index", buildErr.Step)
+	assert.ErrorIs(t, buildErr, fs.ErrNotExist)
 }
