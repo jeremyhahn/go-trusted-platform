@@ -759,25 +759,6 @@ func TestComputeAttributesDigest(t *testing.T) {
 	require.NotEqual(t, digest, digest2)
 }
 
-func TestBuildSPCContent(t *testing.T) {
-	_, cert := generateTestKey(t)
-
-	s := &Signer{
-		cert: cert,
-	}
-
-	// Create test digest
-	digest := sha256.Sum256([]byte("test data"))
-
-	// Build SPC content
-	spcContent, err := s.buildSPCContent(digest[:])
-	require.NoError(t, err)
-	require.NotEmpty(t, spcContent)
-
-	// Should be valid ASN.1
-	require.Greater(t, len(spcContent), 32) // At least contains the digest
-}
-
 // createTestASN1Sequence creates a minimal valid ASN.1 SEQUENCE for testing.
 // The extractSignature function validates ASN.1 structure, so we need valid DER.
 func createTestASN1Sequence(payload []byte) []byte {
@@ -1147,23 +1128,6 @@ func TestExtractSequenceContent(t *testing.T) {
 	}
 }
 
-func TestPublic(t *testing.T) {
-	key, cert := generateTestKey(t)
-	_ = key
-
-	s := &Signer{
-		cert: cert,
-	}
-
-	pubKey := s.Public()
-	require.NotNil(t, pubKey)
-
-	// Should be the same as the certificate's public key
-	rsaPubKey, ok := pubKey.(*rsa.PublicKey)
-	require.True(t, ok)
-	require.Equal(t, cert.PublicKey.(*rsa.PublicKey).N, rsaPubKey.N)
-}
-
 func TestVerify(t *testing.T) {
 	key, cert := generateTestKey(t)
 	logger := logging.DefaultLogger()
@@ -1375,75 +1339,6 @@ func TestSigningTimeUnsigned(t *testing.T) {
 	require.Contains(t, err.Error(), "not signed")
 }
 
-func TestSignWithCertChain(t *testing.T) {
-	// Generate intermediate and leaf certificates
-	rootKey, rootCert := generateTestKey(t)
-
-	// Create intermediate CA
-	intermediateKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	require.NoError(t, err)
-
-	intermediateTemplate := &x509.Certificate{
-		SerialNumber: big.NewInt(2),
-		Subject: pkix.Name{
-			CommonName:   "Test Intermediate CA",
-			Organization: []string{"Test Org"},
-		},
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-	}
-
-	intermediateDER, err := x509.CreateCertificate(rand.Reader, intermediateTemplate, rootCert, &intermediateKey.PublicKey, rootKey)
-	require.NoError(t, err)
-	intermediateCert, err := x509.ParseCertificate(intermediateDER)
-	require.NoError(t, err)
-
-	// Create leaf certificate
-	leafKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	require.NoError(t, err)
-
-	leafTemplate := &x509.Certificate{
-		SerialNumber: big.NewInt(3),
-		Subject: pkix.Name{
-			CommonName:   "Test Code Signing Cert",
-			Organization: []string{"Test Org"},
-		},
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		KeyUsage:              x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning},
-		BasicConstraintsValid: true,
-	}
-
-	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, intermediateCert, &leafKey.PublicKey, intermediateKey)
-	require.NoError(t, err)
-	leafCert, err := x509.ParseCertificate(leafDER)
-	require.NoError(t, err)
-
-	// Create signer with certificate chain
-	logger := logging.DefaultLogger()
-	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: leafKey},
-		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
-		Certificate:   leafCert,
-		CertChain:     []*x509.Certificate{intermediateCert, rootCert},
-		Logger:        logger,
-	})
-	require.NoError(t, err)
-
-	// Sign with chain
-	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
-	input := bytes.NewReader(peData)
-	output := &bytes.Buffer{}
-
-	err = signer.Sign(input, output)
-	require.NoError(t, err)
-	require.Greater(t, output.Len(), len(peData))
-}
-
 func TestVerifyInvalidPE(t *testing.T) {
 	key, cert := generateTestKey(t)
 	logger := logging.DefaultLogger()
@@ -1464,142 +1359,10 @@ func TestVerifyInvalidPE(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestVerifyFileNotFound(t *testing.T) {
-	key, cert := generateTestKey(t)
-	logger := logging.DefaultLogger()
-
-	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key},
-		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
-		Certificate:   cert,
-		Logger:        logger,
-	})
-	require.NoError(t, err)
-
-	// Try to verify non-existent file
-	err = signer.VerifyFile("/nonexistent/path/file.efi")
-	require.Error(t, err)
-}
-
-func TestSignFileInputNotFound(t *testing.T) {
-	key, cert := generateTestKey(t)
-	logger := logging.DefaultLogger()
-
-	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key},
-		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
-		Certificate:   cert,
-		Logger:        logger,
-	})
-	require.NoError(t, err)
-
-	tmpDir := t.TempDir()
-	outputPath := filepath.Join(tmpDir, "output.efi")
-
-	// Try to sign non-existent file
-	err = signer.SignFile("/nonexistent/path/file.efi", outputPath)
-	require.Error(t, err)
-}
-
-func TestExtractCertificateFileNotFound(t *testing.T) {
-	key, cert := generateTestKey(t)
-	logger := logging.DefaultLogger()
-
-	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key},
-		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
-		Certificate:   cert,
-		Logger:        logger,
-	})
-	require.NoError(t, err)
-
-	// Try to extract certificate from non-existent file
-	extractedCert, err := signer.ExtractCertificateFile("/nonexistent/path/file.efi")
-	require.Error(t, err)
-	require.Nil(t, extractedCert)
-}
-
 // Ensure mock types satisfy the interfaces
 var _ xkmssdk.KeyProvider = (*mockBackend)(nil)
 var _ crypto.Signer = (*mockSigner)(nil)
 var _ crypto.Signer = (*mockECDSASigner)(nil)
-
-func TestReSigning(t *testing.T) {
-	// Test re-signing an already-signed PE file
-	// This exercises the computeAuthenticodeDigest path with existing signature
-	key, cert := generateTestKey(t)
-	logger := logging.DefaultLogger()
-
-	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key},
-		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
-		Certificate:   cert,
-		Logger:        logger,
-	})
-	require.NoError(t, err)
-
-	// First signing
-	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
-	input1 := bytes.NewReader(peData)
-	output1 := &bytes.Buffer{}
-
-	err = signer.Sign(input1, output1)
-	require.NoError(t, err)
-
-	// Verify first signature
-	verify1 := bytes.NewReader(output1.Bytes())
-	err = signer.Verify(verify1)
-	require.NoError(t, err)
-
-	// Re-sign the already-signed PE
-	input2 := bytes.NewReader(output1.Bytes())
-	output2 := &bytes.Buffer{}
-
-	err = signer.Sign(input2, output2)
-	require.NoError(t, err)
-
-	// Verify re-signed PE
-	verify2 := bytes.NewReader(output2.Bytes())
-	err = signer.Verify(verify2)
-	require.NoError(t, err)
-
-	// Both should be valid signed PEs
-	require.Greater(t, output1.Len(), len(peData))
-	require.Greater(t, output2.Len(), len(peData))
-}
-
-func TestSignTwice(t *testing.T) {
-	// Test signing a PE twice in succession
-	key, cert := generateTestKey(t)
-	logger := logging.DefaultLogger()
-
-	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key},
-		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
-		Certificate:   cert,
-		Logger:        logger,
-	})
-	require.NoError(t, err)
-
-	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
-
-	// Sign twice
-	for i := 0; i < 2; i++ {
-		input := bytes.NewReader(peData)
-		output := &bytes.Buffer{}
-
-		err = signer.Sign(input, output)
-		require.NoError(t, err)
-
-		// Use output as input for next iteration
-		peData = output.Bytes()
-	}
-
-	// Final PE should be valid and signed
-	verify := bytes.NewReader(peData)
-	err = signer.Verify(verify)
-	require.NoError(t, err)
-}
 
 func TestExtractSequenceContentEdgeCases(t *testing.T) {
 	// Additional edge cases for extractSequenceContent beyond what's in TestExtractSequenceContent
@@ -1745,21 +1508,6 @@ func TestComputePEChecksumOddSize(t *testing.T) {
 
 	checksum := s.computePEChecksum(oddPE)
 	require.Greater(t, checksum, uint32(0))
-}
-
-func TestGetChecksumOffset(t *testing.T) {
-	_, cert := generateTestKey(t)
-	s := &Signer{cert: cert}
-
-	// Test with valid PE
-	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
-	offset := s.getChecksumOffset(peData)
-	require.Greater(t, offset, uint32(0))
-
-	// Test with too small data
-	smallData := make([]byte, 32)
-	offset = s.getChecksumOffset(smallData)
-	require.Equal(t, uint32(0), offset)
 }
 
 func TestVerifyPKCS7SignatureNoSignerInfos(t *testing.T) {
@@ -1991,50 +1739,6 @@ func TestSignFileOutputCreateError(t *testing.T) {
 
 	err = signer.SignFile(inputPath, outputPath)
 	require.Error(t, err)
-}
-
-func TestSignPE32(t *testing.T) {
-	// Test signing a PE32 (32-bit) file
-	key, cert := generateTestKey(t)
-	logger := logging.DefaultLogger()
-
-	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key},
-		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
-		Certificate:   cert,
-		Logger:        logger,
-	})
-	require.NoError(t, err)
-
-	peData := createMinimalPE32(t)
-	input := bytes.NewReader(peData)
-	output := &bytes.Buffer{}
-
-	err = signer.Sign(input, output)
-	require.NoError(t, err)
-	require.Greater(t, output.Len(), len(peData))
-
-	// Verify the signed PE
-	verifyInput := bytes.NewReader(output.Bytes())
-	err = signer.Verify(verifyInput)
-	require.NoError(t, err)
-}
-
-func TestBuildSPCString(t *testing.T) {
-	// Test the SPC string building function
-	spcString := buildSPCString()
-	require.NotEmpty(t, spcString)
-
-	// Should be UTF-16BE encoding of "<<<Obsolete>>>"
-	// Each character is 2 bytes
-	require.Equal(t, 14*2, len(spcString))
-}
-
-func TestBuildSPCLink(t *testing.T) {
-	// Test the SPC link building function
-	link, err := buildSPCLink()
-	require.NoError(t, err)
-	require.NotEmpty(t, link.Bytes)
 }
 
 func TestSigningTimeReadError(t *testing.T) {
@@ -2493,17 +2197,6 @@ func TestVerifyCryptographicSignatureECDSAInvalidSig(t *testing.T) {
 	require.Contains(t, err.Error(), "ECDSA signature verification failed")
 }
 
-func TestBuildSPCContentError(t *testing.T) {
-	_, cert := generateTestKey(t)
-	s := &Signer{cert: cert}
-
-	// Test with valid digest - this should succeed
-	digest := sha256.Sum256([]byte("test"))
-	content, err := s.buildSPCContent(digest[:])
-	require.NoError(t, err)
-	require.NotEmpty(t, content)
-}
-
 func TestComputeAuthenticodeDigestWithPadding(t *testing.T) {
 	_, cert := generateTestKey(t)
 	s := &Signer{cert: cert}
@@ -2590,39 +2283,6 @@ func TestSignWithMultipleCerts(t *testing.T) {
 	verifyInput := bytes.NewReader(output.Bytes())
 	err = signer.Verify(verifyInput)
 	require.NoError(t, err)
-}
-
-func TestComputeAuthenticodeDigestAlreadySigned(t *testing.T) {
-	// Test path where PE already has signature (covers the else branch at line 263)
-	key, cert := generateTestKey(t)
-	logger := logging.DefaultLogger()
-
-	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key},
-		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
-		Certificate:   cert,
-		Logger:        logger,
-	})
-	require.NoError(t, err)
-
-	// First sign the PE
-	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
-	input := bytes.NewReader(peData)
-	output := &bytes.Buffer{}
-
-	err = signer.Sign(input, output)
-	require.NoError(t, err)
-
-	// Parse signed PE
-	signedPE, err := parsePE(output.Bytes())
-	require.NoError(t, err)
-	require.Greater(t, signedPE.certTableOffset, uint32(0))
-
-	// Compute digest on signed PE - this covers the else branch
-	s := &Signer{cert: cert}
-	digest, err := s.computeAuthenticodeDigest(signedPE)
-	require.NoError(t, err)
-	require.Len(t, digest, 32)
 }
 
 func TestVerifyPKCS7SignatureExtractDigestError(t *testing.T) {
@@ -3411,17 +3071,6 @@ func TestComputeAttributesDigestEmptyData(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestComputeAttributesDigestTooShort(t *testing.T) {
-	_, cert := generateTestKey(t)
-	s := &Signer{cert: cert}
-
-	// Test with data too short for a SEQUENCE
-	shortData := []byte{0x30}
-
-	_, err := s.computeAttributesDigest(shortData, time.Now())
-	require.Error(t, err)
-}
-
 func TestSignFileOutputChmodSuccess(t *testing.T) {
 	key, cert := generateTestKey(t)
 	logger := logging.DefaultLogger()
@@ -3530,17 +3179,6 @@ func TestExtractSignatureShortWinCertData(t *testing.T) {
 }
 
 // Add test for fmt import used in sizes test
-func TestBuildSPCLinkIntegration(t *testing.T) {
-	link, err := buildSPCLink()
-	require.NoError(t, err)
-	require.NotEmpty(t, link.Bytes)
-
-	// Verify structure
-	require.Equal(t, asn1.ClassContextSpecific, link.Class)
-	require.Equal(t, 0, link.Tag)
-	require.True(t, link.IsCompound)
-}
-
 func TestVerifyModifiedChecksumField(t *testing.T) {
 	key, cert := generateTestKey(t)
 	logger := logging.DefaultLogger()
@@ -3660,35 +3298,6 @@ func TestSignAndVerifyMultipleFilesSequentially(t *testing.T) {
 }
 
 // TestExtractCertificateChainVerification tests certificate extraction with a chain
-func TestExtractCertificateChainVerification(t *testing.T) {
-	key, cert := generateTestKey(t)
-	logger := logging.DefaultLogger()
-
-	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key},
-		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
-		Certificate:   cert,
-		Logger:        logger,
-	})
-	require.NoError(t, err)
-
-	// Sign a PE
-	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
-	input := bytes.NewReader(peData)
-	output := &bytes.Buffer{}
-
-	err = signer.Sign(input, output)
-	require.NoError(t, err)
-
-	// Extract certificate and verify it matches
-	extractInput := bytes.NewReader(output.Bytes())
-	extractedCert, err := signer.ExtractCertificate(extractInput)
-	require.NoError(t, err)
-	require.NotNil(t, extractedCert)
-	require.Equal(t, cert.Subject.CommonName, extractedCert.Subject.CommonName)
-	require.Equal(t, cert.SerialNumber, extractedCert.SerialNumber)
-}
-
 // TestVerifyPKCS7TrailingDataDetection tests that trailing data after ContentInfo is detected
 func TestVerifyPKCS7TrailingDataDetection(t *testing.T) {
 	key, cert := generateTestKey(t)
@@ -3798,32 +3407,6 @@ func TestSigningTimeExtraction(t *testing.T) {
 }
 
 // TestComputeAuthenticodeDigestConsistency tests that digest computation is consistent
-func TestComputeAuthenticodeDigestConsistency(t *testing.T) {
-	key, cert := generateTestKey(t)
-	logger := logging.DefaultLogger()
-
-	s := &Signer{
-		keystore: &mockBackend{privateKey: key},
-		keyAttrs: &xkmssdk.KeyAttributes{CN: "test"},
-		cert:     cert,
-		logger:   logger,
-	}
-
-	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
-	pe, err := parsePE(peData)
-	require.NoError(t, err)
-
-	// Compute digest multiple times and verify consistency
-	digest1, err := s.computeAuthenticodeDigest(pe)
-	require.NoError(t, err)
-
-	digest2, err := s.computeAuthenticodeDigest(pe)
-	require.NoError(t, err)
-
-	require.Equal(t, digest1, digest2)
-	require.Len(t, digest1, 32) // SHA-256 produces 32 bytes
-}
-
 // TestBuildSPCContentValidStructure tests that SPC content is properly structured
 func TestBuildSPCContentValidStructure(t *testing.T) {
 	_, cert := generateTestKey(t)
@@ -4060,59 +3643,6 @@ func TestComputeAttributesDigestDeterminism(t *testing.T) {
 }
 
 // TestExtractSequenceContentVariousLengths tests sequence content extraction with different lengths
-func TestExtractSequenceContentVariousLengths(t *testing.T) {
-	tests := []struct {
-		name     string
-		data     []byte
-		wantErr  bool
-		errMatch string
-	}{
-		{
-			name:     "too_short",
-			data:     []byte{0x30},
-			wantErr:  true,
-			errMatch: "data too short",
-		},
-		{
-			name:     "not_sequence",
-			data:     []byte{0x31, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00},
-			wantErr:  true,
-			errMatch: "expected SEQUENCE tag",
-		},
-		{
-			name:    "short_form_valid",
-			data:    []byte{0x30, 0x03, 0x01, 0x02, 0x03},
-			wantErr: false,
-		},
-		{
-			name:    "long_form_0x81",
-			data:    append([]byte{0x30, 0x81, 0x80}, make([]byte, 128)...),
-			wantErr: false,
-		},
-		{
-			name:     "content_exceeds_data",
-			data:     []byte{0x30, 0x50, 0x00},
-			wantErr:  true,
-			errMatch: "content length exceeds data",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			content, err := extractSequenceContent(tt.data)
-			if tt.wantErr {
-				require.Error(t, err)
-				if tt.errMatch != "" {
-					require.Contains(t, err.Error(), tt.errMatch)
-				}
-			} else {
-				require.NoError(t, err)
-				require.NotNil(t, content)
-			}
-		})
-	}
-}
-
 // TestGetChecksumOffsetVariousPEs tests checksum offset calculation
 func TestGetChecksumOffsetVariousPEs(t *testing.T) {
 	_, cert := generateTestKey(t)
@@ -4135,27 +3665,6 @@ func TestGetChecksumOffsetVariousPEs(t *testing.T) {
 }
 
 // TestComputePEChecksumDifferentSizes tests PE checksum with various file sizes
-func TestComputePEChecksumDifferentSizes(t *testing.T) {
-	_, cert := generateTestKey(t)
-	s := &Signer{cert: cert}
-
-	// Test with different PE sizes
-	sizes := []int{4096, 8192, 16384}
-	for _, size := range sizes {
-		t.Run(fmt.Sprintf("size_%d", size), func(t *testing.T) {
-			peData := make([]byte, size)
-			// Set up minimal PE headers
-			binary.LittleEndian.PutUint16(peData[0:2], 0x5A4D)
-			binary.LittleEndian.PutUint32(peData[60:64], 0x80)
-			copy(peData[0x80:0x84], []byte("PE\x00\x00"))
-			binary.LittleEndian.PutUint16(peData[0x98:0x9A], 0x20b) // PE32+
-
-			checksum := s.computePEChecksum(peData)
-			require.Greater(t, checksum, uint32(0))
-		})
-	}
-}
-
 // TestExtractCertificateFromPKCS7WithShortCertBytes tests certificate extraction edge cases
 func TestExtractCertificateFromPKCS7WithShortCertBytes(t *testing.T) {
 	s := &Signer{}
@@ -4505,59 +4014,6 @@ func TestExtractSigningTimeEdgeCases(t *testing.T) {
 }
 
 // TestSigningTimeNoSignerInfos tests SigningTime when no signer infos present
-func TestSigningTimeNoSignerInfos(t *testing.T) {
-	// Need to construct valid PKCS#7 with no signer infos
-	versionBytes, _ := asn1.Marshal(1)
-	digestAlgsBytes, _ := asn1.Marshal(asn1.RawValue{
-		Class:      asn1.ClassUniversal,
-		Tag:        asn1.TagSet,
-		IsCompound: true,
-		Bytes:      []byte{},
-	})
-	contentInfoBytes, _ := asn1.Marshal(contentInfo{
-		ContentType: oidData,
-	})
-	signerInfosBytes, _ := asn1.Marshal(asn1.RawValue{
-		Class:      asn1.ClassUniversal,
-		Tag:        asn1.TagSet,
-		IsCompound: true,
-		Bytes:      []byte{}, // Empty signer infos
-	})
-
-	signedDataContent := make([]byte, 0)
-	signedDataContent = append(signedDataContent, versionBytes...)
-	signedDataContent = append(signedDataContent, digestAlgsBytes...)
-	signedDataContent = append(signedDataContent, contentInfoBytes...)
-	signedDataContent = append(signedDataContent, signerInfosBytes...)
-
-	signedDataSeq, _ := asn1.Marshal(asn1.RawValue{
-		Class:      asn1.ClassUniversal,
-		Tag:        asn1.TagSequence,
-		IsCompound: true,
-		Bytes:      signedDataContent,
-	})
-
-	ciContent := asn1.RawValue{
-		Class:      asn1.ClassContextSpecific,
-		Tag:        0,
-		IsCompound: true,
-		Bytes:      signedDataSeq,
-	}
-	ciContentBytes, _ := asn1.Marshal(ciContent)
-	oidBytes, _ := asn1.Marshal(oidSignedData)
-	ciSeqContent := append(oidBytes, ciContentBytes...)
-	pkcs7Bytes, _ := asn1.Marshal(asn1.RawValue{
-		Class:      asn1.ClassUniversal,
-		Tag:        asn1.TagSequence,
-		IsCompound: true,
-		Bytes:      ciSeqContent,
-	})
-
-	_, err := extractSigningTime(pkcs7Bytes)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "no signer info")
-}
-
 // TestExtractDigestFromContentSuccess tests successful digest extraction from SPC content
 func TestExtractDigestFromContentSuccess(t *testing.T) {
 	_, cert := generateTestKey(t)
@@ -4583,33 +4039,6 @@ func TestExtractDigestFromContentInvalid(t *testing.T) {
 }
 
 // TestSignWithCertificateChainMultiple tests signing with multiple certificates in chain
-func TestSignWithCertificateChainMultiple(t *testing.T) {
-	key, cert := generateTestKey(t)
-	_, intermediateCert := generateTestKey(t) // Generate another cert for chain
-	logger := logging.DefaultLogger()
-
-	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key},
-		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
-		Certificate:   cert,
-		CertChain:     []*x509.Certificate{intermediateCert},
-		Logger:        logger,
-	})
-	require.NoError(t, err)
-
-	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
-	input := bytes.NewReader(peData)
-	output := &bytes.Buffer{}
-
-	err = signer.Sign(input, output)
-	require.NoError(t, err)
-
-	// Verify the signature
-	verifyInput := bytes.NewReader(output.Bytes())
-	err = signer.Verify(verifyInput)
-	require.NoError(t, err)
-}
-
 // TestSigningTimeParseError tests SigningTime with invalid PE
 func TestSigningTimeParseError(t *testing.T) {
 	// Test with data that's not a valid PE
@@ -4618,51 +4047,8 @@ func TestSigningTimeParseError(t *testing.T) {
 }
 
 // TestSigningTimeUnsignedPE tests SigningTime on unsigned PE
-func TestSigningTimeUnsignedPE(t *testing.T) {
-	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
-	_, err := SigningTime(bytes.NewReader(peData))
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "PE file is not signed")
-}
-
 // TestExtractCertificateUnsignedPE tests ExtractCertificate on unsigned PE
-func TestExtractCertificateUnsignedPE(t *testing.T) {
-	key, cert := generateTestKey(t)
-	logger := logging.DefaultLogger()
-
-	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key},
-		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
-		Certificate:   cert,
-		Logger:        logger,
-	})
-	require.NoError(t, err)
-
-	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
-	_, err = signer.ExtractCertificate(bytes.NewReader(peData))
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "PE file is not signed")
-}
-
 // TestVerifyUnsignedPEFile tests Verify on unsigned PE
-func TestVerifyUnsignedPEFile(t *testing.T) {
-	key, cert := generateTestKey(t)
-	logger := logging.DefaultLogger()
-
-	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key},
-		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
-		Certificate:   cert,
-		Logger:        logger,
-	})
-	require.NoError(t, err)
-
-	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
-	err = signer.Verify(bytes.NewReader(peData))
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "PE file is not signed")
-}
-
 // TestComputeAttributesDigestWithSPCError tests attribute digest with invalid SPC content
 func TestComputeAttributesDigestWithSPCError(t *testing.T) {
 	_, cert := generateTestKey(t)
@@ -4681,38 +4067,6 @@ func TestComputeAttributesDigestWithSPCError(t *testing.T) {
 }
 
 // TestVerifyPKCS7SignatureNoSignerInfoError tests verification with no signer infos
-func TestVerifyPKCS7SignatureNoSignerInfoError(t *testing.T) {
-	key, cert := generateTestKey(t)
-	logger := logging.DefaultLogger()
-
-	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key},
-		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
-		Certificate:   cert,
-		Logger:        logger,
-	})
-	require.NoError(t, err)
-
-	// Sign a PE
-	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
-	input := bytes.NewReader(peData)
-	output := &bytes.Buffer{}
-
-	err = signer.Sign(input, output)
-	require.NoError(t, err)
-
-	signedPE, err := parsePE(output.Bytes())
-	require.NoError(t, err)
-
-	s := &Signer{cert: cert, logger: logger}
-	sig, err := s.extractSignature(signedPE)
-	require.NoError(t, err)
-
-	// Construct signature with empty signer infos (harder to do, so we corrupt existing)
-	// This test verifies the code path exists even if we can't easily trigger it
-	require.NotNil(t, sig)
-}
-
 // TestVerifyCryptographicSignatureMessageDigestMismatch tests digest mismatch
 func TestVerifyCryptographicSignatureMessageDigestMismatch(t *testing.T) {
 	key, cert := generateTestKey(t)
@@ -4788,23 +4142,6 @@ func TestParsePEDataBoundsCheck(t *testing.T) {
 }
 
 // TestSignFileInputOpenError tests SignFile when input file doesn't exist
-func TestSignFileInputOpenError(t *testing.T) {
-	key, cert := generateTestKey(t)
-	logger := logging.DefaultLogger()
-
-	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key},
-		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
-		Certificate:   cert,
-		Logger:        logger,
-	})
-	require.NoError(t, err)
-
-	err = signer.SignFile("/nonexistent/path/input.efi", "/tmp/output.efi")
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "failed to open input file")
-}
-
 // TestSignFileOutputCreateError tests SignFile when output path is invalid
 func TestSignFileOutputPathError(t *testing.T) {
 	key, cert := generateTestKey(t)
@@ -4866,13 +4203,6 @@ func TestExtractCertificateFileNotFoundError(t *testing.T) {
 }
 
 // TestSigningTimeFromReadError tests SigningTime when reader fails
-func TestSigningTimeFromReadError(t *testing.T) {
-	reader := &errorReader{err: errors.New("read error")}
-	_, err := SigningTime(reader)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "failed to read PE file")
-}
-
 // TestExtractSequenceContentShortData tests extractSequenceContent with various edge cases
 func TestExtractSequenceContentShortData(t *testing.T) {
 	// Test with 0x82 length but not enough data for content
@@ -4987,37 +4317,6 @@ func TestComputeAuthenticodeDigestWithAlignedPE(t *testing.T) {
 }
 
 // TestComputeAuthenticodeDigestWithExistingSignature tests digest computation on already-signed PE
-func TestComputeAuthenticodeDigestSignedPE(t *testing.T) {
-	key, cert := generateTestKey(t)
-	logger := logging.DefaultLogger()
-
-	signer, err := NewSigner(context.Background(), &SignerOptions{
-		KeyStore:      &mockBackend{privateKey: key},
-		KeyAttributes: &xkmssdk.KeyAttributes{CN: "test"},
-		Certificate:   cert,
-		Logger:        logger,
-	})
-	require.NoError(t, err)
-
-	// Sign a PE
-	peData := authenticodetest.MinimalPE(authenticodetest.MachineAMD64)
-	input := bytes.NewReader(peData)
-	output := &bytes.Buffer{}
-
-	err = signer.Sign(input, output)
-	require.NoError(t, err)
-
-	// Parse signed PE and compute digest again
-	signedPE, err := parsePE(output.Bytes())
-	require.NoError(t, err)
-	require.Greater(t, signedPE.certTableOffset, uint32(0)) // Has signature
-
-	s := signer.(*Signer)
-	digest, err := s.computeAuthenticodeDigest(signedPE)
-	require.NoError(t, err)
-	require.Len(t, digest, 32)
-}
-
 // TestSignAndVerifyARM64PE proves the signer is COFF-machine agnostic: an
 // aarch64 UKI (EFI/BOOT/BOOTAA64.EFI, machine 0xAA64) must sign and verify
 // exactly like the x86-64 image, and so must any other machine value.

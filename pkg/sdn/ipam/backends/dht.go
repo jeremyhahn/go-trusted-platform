@@ -20,11 +20,9 @@ package backends
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"math/big"
 	"net/netip"
