@@ -658,11 +658,19 @@ func TestProfileErrors_NameTheirSubjectAndKeepTheCause(t *testing.T) {
 	}
 }
 
-func TestProfileErrors_Messages(t *testing.T) {
+func TestErrors_Messages(t *testing.T) {
 	tests := []struct {
 		err     error
 		message string
 	}{
+		{ErrInvalidDeviceID{ID: "abc"}, "invalid device ID: abc"},
+		{ErrDeviceNotFound{ID: 18446744073709551615}, "device not found: 18446744073709551615"},
+		{ErrDeviceNotFoundBySerial{Serial: "SN-001/ABC"}, "device not found with serial: SN-001/ABC"},
+		{ErrSerialNumberRequired{}, "serial number is required"},
+		{ErrDeleteDeviceFailed{ID: 123, Reason: "device is currently in use"}, "failed to delete device 123: device is currently in use"},
+		{ErrGetDeviceFailed{ID: 123, Reason: "connection timeout"}, "failed to get device 123: connection timeout"},
+		{ErrListDevicesFailed{Reason: "operation timed out"}, "failed to list devices: operation timed out"},
+		{ErrFindDeviceBySerialFailed{Serial: "ABC123", Reason: "connection refused"}, "failed to find device by serial ABC123: connection refused"},
 		{ErrProfileNameRequired{}, "device profile: --name is required"},
 		{ErrProfileInvalidRole{Role: "x"}, `device profile: invalid role "x", must be one of: control-plane, gateway, worker, server, client, workstation, edge, iot, load-balancer`},
 		{ErrProfileEKCertInvalid{Reason: "no PEM"}, "device profile: EK certificate is not a valid PEM x509 certificate: no PEM"},

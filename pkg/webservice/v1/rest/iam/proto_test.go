@@ -16,10 +16,12 @@ var (
 )
 
 func TestUserToProto_Nil(t *testing.T) {
+	t.Parallel()
 	assert.Nil(t, UserToProto(nil))
 }
 
 func TestUserToProto_Populated(t *testing.T) {
+	t.Parallel()
 	lastLogin := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
 	got := UserToProto(&iamsdk.User{
 		ID: "user-1", TenantID: "tenant-a", Email: "a@example.com", DisplayName: "Alice",
@@ -44,6 +46,7 @@ func TestUserToProto_Populated(t *testing.T) {
 }
 
 func TestUserToProto_NoLoginNoAuthMethods(t *testing.T) {
+	t.Parallel()
 	got := UserToProto(&iamsdk.User{ID: "user-1"})
 
 	require.NotNil(t, got)
@@ -52,10 +55,12 @@ func TestUserToProto_NoLoginNoAuthMethods(t *testing.T) {
 }
 
 func TestRoleToProto_Nil(t *testing.T) {
+	t.Parallel()
 	assert.Nil(t, RoleToProto(nil))
 }
 
 func TestRoleToProto_Populated(t *testing.T) {
+	t.Parallel()
 	got := RoleToProto(&iamsdk.Role{
 		ID: "writer", TenantID: "tenant-a", Name: "Writer", Description: "writes",
 		Permissions: []string{"docs:write"}, CreatedAt: protoCreated, UpdatedAt: protoUpdated,
@@ -72,10 +77,12 @@ func TestRoleToProto_Populated(t *testing.T) {
 }
 
 func TestGroupToProto_Nil(t *testing.T) {
+	t.Parallel()
 	assert.Nil(t, GroupToProto(nil))
 }
 
 func TestGroupToProto_Populated(t *testing.T) {
+	t.Parallel()
 	got := GroupToProto(&iamsdk.Group{
 		ID: "docs", TenantID: "tenant-a", Name: "Docs", Description: "doc writers",
 		CreatedAt: protoCreated, UpdatedAt: protoUpdated,
@@ -91,10 +98,12 @@ func TestGroupToProto_Populated(t *testing.T) {
 }
 
 func TestTenantToProto_Nil(t *testing.T) {
+	t.Parallel()
 	assert.Nil(t, TenantToProto(nil))
 }
 
 func TestTenantToProto_Populated(t *testing.T) {
+	t.Parallel()
 	got := TenantToProto(&iamsdk.Tenant{
 		ID: "tenant-a", Name: "Tenant A",
 		Settings:  map[string]string{"mfa_required": "true"},
@@ -110,6 +119,7 @@ func TestTenantToProto_Populated(t *testing.T) {
 }
 
 func TestTenantToProto_NoSettings(t *testing.T) {
+	t.Parallel()
 	got := TenantToProto(&iamsdk.Tenant{ID: "tenant-a"})
 
 	require.NotNil(t, got)
@@ -117,10 +127,12 @@ func TestTenantToProto_NoSettings(t *testing.T) {
 }
 
 func TestPolicyToProto_Nil(t *testing.T) {
+	t.Parallel()
 	assert.Nil(t, PolicyToProto(nil))
 }
 
 func TestPolicyToProto_Populated(t *testing.T) {
+	t.Parallel()
 	got := PolicyToProto(&iamsdk.Policy{
 		Name: "allow-docs", TenantID: "tenant-a", Description: "docs access", Priority: 7,
 		SpecYAML: []byte("rules: []"), Labels: map[string]string{"env": "dev"},
@@ -139,10 +151,12 @@ func TestPolicyToProto_Populated(t *testing.T) {
 }
 
 func TestAppToProto_Nil(t *testing.T) {
+	t.Parallel()
 	assert.Nil(t, AppToProto(nil))
 }
 
 func TestAppToProto_Populated(t *testing.T) {
+	t.Parallel()
 	got := AppToProto(&iamsdk.Application{
 		ClientID: "client-1", ClientSecret: "s3cret", TenantID: "tenant-a", Name: "Portal",
 		RedirectURIs:  []string{"https://portal.example/cb"},
@@ -164,6 +178,7 @@ func TestAppToProto_Populated(t *testing.T) {
 }
 
 func TestTenantResponseToProto_Populated(t *testing.T) {
+	t.Parallel()
 	got := tenantResponseToProto(&TenantResponse{
 		ID: "tenant-a", Name: "Tenant A",
 		Settings:  &TenantSettings{MaxUsers: 10, MFARequired: true},
@@ -179,6 +194,7 @@ func TestTenantResponseToProto_Populated(t *testing.T) {
 }
 
 func TestTenantResponseToProto_NoSettingsNoTimes(t *testing.T) {
+	t.Parallel()
 	got := tenantResponseToProto(&TenantResponse{ID: "tenant-a"})
 
 	assert.Nil(t, got.GetSettings())
@@ -187,6 +203,7 @@ func TestTenantResponseToProto_NoSettingsNoTimes(t *testing.T) {
 }
 
 func TestPolicyResponseToProto_Populated(t *testing.T) {
+	t.Parallel()
 	got := policyResponseToProto(&PolicyResponse{
 		Name: "allow-docs", TenantID: "tenant-a", Description: "docs access", Priority: 7,
 		SpecYAML: "rules: []", Labels: map[string]string{"env": "dev"},
@@ -204,6 +221,7 @@ func TestPolicyResponseToProto_Populated(t *testing.T) {
 }
 
 func TestPolicyResponseToProto_NoTimes(t *testing.T) {
+	t.Parallel()
 	got := policyResponseToProto(&PolicyResponse{Name: "allow-docs"})
 
 	assert.Nil(t, got.GetCreatedAt())
@@ -211,6 +229,7 @@ func TestPolicyResponseToProto_NoTimes(t *testing.T) {
 }
 
 func TestAppResponseToProto_Populated(t *testing.T) {
+	t.Parallel()
 	got := appResponseToProto(&AppResponse{
 		ClientID: "client-1", ClientSecret: "s3cret", TenantID: "tenant-a", Name: "Portal",
 		RedirectURIs: []string{"https://portal.example/cb"}, GrantTypes: []string{"authorization_code"},
@@ -231,6 +250,7 @@ func TestAppResponseToProto_Populated(t *testing.T) {
 }
 
 func TestAppResponseToProto_NoTimes(t *testing.T) {
+	t.Parallel()
 	got := appResponseToProto(&AppResponse{ClientID: "client-1"})
 
 	assert.Nil(t, got.GetCreatedAt())
@@ -238,6 +258,7 @@ func TestAppResponseToProto_NoTimes(t *testing.T) {
 }
 
 func TestListPagination(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name                                   string
 		limit, offset                          int32
@@ -266,6 +287,7 @@ func TestListPagination(t *testing.T) {
 // TestListPagination_ZeroPageSize pins that a zero page size reports page 1
 // of no pages instead of dividing by zero.
 func TestListPagination_ZeroPageSize(t *testing.T) {
+	t.Parallel()
 	got := ListPagination(0, 20, 25)
 
 	require.NotNil(t, got)

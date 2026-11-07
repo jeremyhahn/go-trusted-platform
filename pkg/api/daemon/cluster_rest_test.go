@@ -20,9 +20,9 @@ import (
 // 503 (not 404). 503 lets the WebUI render an actionable empty state.
 func TestRESTServer_ClusterRoutesMounted_NoBackend(t *testing.T) {
 	s := newTestRESTServerForPhase35(t)
-	s.SetClusterService(nil)
+	mustMountS6(t, s.SetClusterService(nil, s6RESTGuard()))
 
-	code, body := doJSON(t, s, http.MethodGet, "/api/v1/cluster/status", nil)
+	code, body := doJSONAs(t, s, s6OperatorToken, http.MethodGet, "/api/v1/cluster/status", nil)
 	if code != http.StatusServiceUnavailable {
 		t.Errorf("GET /cluster/status: want 503, got %d (body=%s)", code, body)
 	}
@@ -55,7 +55,7 @@ func newClusterRESTServer(t *testing.T, svc ClusterServicer) *RESTServer {
 	s := newTestRESTServerForPhase35(t)
 	service, backend := registerClusterGRPCService(logging.DefaultLogger())
 	backend.set(svc)
-	s.SetClusterService(service)
+	mustMountS6(t, s.SetClusterService(service, s6RESTGuard()))
 	return s
 }
 
@@ -65,7 +65,7 @@ func TestRESTServer_ClusterRoutes_ServicerUnset(t *testing.T) {
 	s := newClusterRESTServer(t, nil)
 	for _, tt := range clusterRESTCases {
 		t.Run(tt.method+" "+tt.path, func(t *testing.T) {
-			code, body := doJSON(t, s, tt.method, tt.path, tt.body)
+			code, body := doJSONAs(t, s, s6OperatorToken, tt.method, tt.path, tt.body)
 			if code != http.StatusServiceUnavailable {
 				t.Errorf("want 503, got %d (body=%s)", code, body)
 			}
@@ -80,7 +80,7 @@ func TestRESTServer_ClusterRoutes_ServicerResults(t *testing.T) {
 	s := newClusterRESTServer(t, fake)
 	for _, tt := range clusterRESTCases {
 		t.Run(tt.method+" "+tt.path, func(t *testing.T) {
-			code, body := doJSON(t, s, tt.method, tt.path, tt.body)
+			code, body := doJSONAs(t, s, s6OperatorToken, tt.method, tt.path, tt.body)
 			if code != http.StatusOK {
 				t.Fatalf("want 200, got %d (body=%s)", code, body)
 			}
@@ -91,7 +91,7 @@ func TestRESTServer_ClusterRoutes_ServicerResults(t *testing.T) {
 			fake.bootstrapCalled, fake.joinCalled, fake.leaveCalled)
 	}
 
-	code, body := doJSON(t, s, http.MethodGet, "/api/v1/cluster/nodes", nil)
+	code, body := doJSONAs(t, s, s6OperatorToken, http.MethodGet, "/api/v1/cluster/nodes", nil)
 	if code != http.StatusOK {
 		t.Fatalf("GET /cluster/nodes: want 200, got %d", code)
 	}
@@ -128,7 +128,7 @@ func TestRESTServer_ClusterRoutes_Errors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			code, body := doJSON(t, s, tt.method, tt.path, tt.body)
+			code, body := doJSONAs(t, s, s6OperatorToken, tt.method, tt.path, tt.body)
 			if code != tt.want {
 				t.Errorf("want %d, got %d (body=%s)", tt.want, code, body)
 			}
@@ -147,7 +147,7 @@ func TestRESTServer_ClusterRoutes_FailedPreconditionIsConflict(t *testing.T) {
 	fake := &fakeClusterServicer{nodeID: 1, statusErr: grpcapi.ErrClusterNotInitialized{}}
 	s := newClusterRESTServer(t, fake)
 
-	code, body := doJSON(t, s, http.MethodGet, "/api/v1/cluster/status", nil)
+	code, body := doJSONAs(t, s, s6OperatorToken, http.MethodGet, "/api/v1/cluster/status", nil)
 	if code != http.StatusConflict {
 		t.Errorf("want %d, got %d (body=%s)", http.StatusConflict, code, body)
 	}

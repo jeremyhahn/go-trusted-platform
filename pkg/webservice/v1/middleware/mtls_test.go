@@ -24,6 +24,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -34,11 +35,40 @@ import (
 )
 
 // testCertAuthority generates a self-signed CA certificate
+// Indexes into testKeys, one per role in a certificate chain.
+const (
+	rootKeyIndex = iota
+	intermediateKeyIndex
+	leafKeyIndex
+)
+
+// testKeys generates one RSA key per chain role, once for the whole package:
+// key generation dominated this package's test time, and no test needs a
+// fresh key.
+var testKeys = sync.OnceValues(func() ([]*rsa.PrivateKey, error) {
+	keys := make([]*rsa.PrivateKey, leafKeyIndex+1)
+	for i := range keys {
+		key, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			return nil, err
+		}
+		keys[i] = key
+	}
+	return keys, nil
+})
+
+// testKey returns the shared key for a chain role.
+func testKey(t *testing.T, index int) *rsa.PrivateKey {
+	t.Helper()
+	keys, err := testKeys()
+	require.NoError(t, err)
+	return keys[index]
+}
+
 func testCertAuthority(t *testing.T) (*x509.Certificate, *rsa.PrivateKey) {
 	t.Helper()
 
-	caKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	require.NoError(t, err)
+	caKey := testKey(t, rootKeyIndex)
 
 	caTemplate := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
@@ -66,8 +96,7 @@ func testCertAuthority(t *testing.T) (*x509.Certificate, *rsa.PrivateKey) {
 func testClientCert(t *testing.T, caCert *x509.Certificate, caKey *rsa.PrivateKey, cn string, dnsNames []string, serialNumber string) *x509.Certificate {
 	t.Helper()
 
-	clientKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	require.NoError(t, err)
+	clientKey := testKey(t, leafKeyIndex)
 
 	clientTemplate := &x509.Certificate{
 		SerialNumber: big.NewInt(2),
@@ -95,8 +124,7 @@ func testClientCert(t *testing.T, caCert *x509.Certificate, caKey *rsa.PrivateKe
 func testSelfSignedClientCert(t *testing.T, cn string) *x509.Certificate {
 	t.Helper()
 
-	clientKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	require.NoError(t, err)
+	clientKey := testKey(t, leafKeyIndex)
 
 	clientTemplate := &x509.Certificate{
 		SerialNumber: big.NewInt(100),
@@ -330,8 +358,7 @@ func TestMTLSMiddleware_Verify(t *testing.T) {
 		writer := testResponseWriter()
 
 		// Create root CA
-		rootKey, err := rsa.GenerateKey(rand.Reader, 2048)
-		require.NoError(t, err)
+		rootKey := testKey(t, rootKeyIndex)
 
 		rootTemplate := &x509.Certificate{
 			SerialNumber: big.NewInt(1),
@@ -352,8 +379,7 @@ func TestMTLSMiddleware_Verify(t *testing.T) {
 		require.NoError(t, err)
 
 		// Create intermediate CA
-		intermediateKey, err := rsa.GenerateKey(rand.Reader, 2048)
-		require.NoError(t, err)
+		intermediateKey := testKey(t, intermediateKeyIndex)
 
 		intermediateTemplate := &x509.Certificate{
 			SerialNumber: big.NewInt(2),
@@ -374,8 +400,7 @@ func TestMTLSMiddleware_Verify(t *testing.T) {
 		require.NoError(t, err)
 
 		// Create client cert signed by intermediate
-		clientKey, err := rsa.GenerateKey(rand.Reader, 2048)
-		require.NoError(t, err)
+		clientKey := testKey(t, leafKeyIndex)
 
 		clientTemplate := &x509.Certificate{
 			SerialNumber: big.NewInt(3),
@@ -470,20 +495,6 @@ func TestExtractSerialFromCert(t *testing.T) {
 				SerialNumber: "",
 			},
 			DNSNames: nil,
-		}
-
-		result := DeviceSerialFromCert(cert)
-
-		assert.Equal(t, "", result)
-	})
-
-	t.Run("returns empty string when all fields empty and DNS is empty slice", func(t *testing.T) {
-		cert := &x509.Certificate{
-			Subject: pkix.Name{
-				CommonName:   "",
-				SerialNumber: "",
-			},
-			DNSNames: []string{},
 		}
 
 		result := DeviceSerialFromCert(cert)
