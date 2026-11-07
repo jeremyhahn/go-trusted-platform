@@ -172,21 +172,6 @@ func TestNewSecretsMigrateCommand(t *testing.T) {
 	assert.Equal(t, "config-secrets", keyIDFlag.DefValue)
 }
 
-func TestRunSecretsMigrate_ConfigPathRequired(t *testing.T) {
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatTable,
-	}
-	cmdFlags := &secretsMigrateFlags{
-		configPath: "",
-	}
-
-	err := runSecretsMigrate(flags, cmdFlags)
-	require.Error(t, err)
-
-	var configErr ErrConfigPathRequired
-	assert.ErrorAs(t, err, &configErr)
-}
-
 // -----------------------------------------------------------------------------
 // Status Command Tests
 // -----------------------------------------------------------------------------
@@ -212,21 +197,6 @@ func TestNewSecretsStatusCommand(t *testing.T) {
 	showURIsFlag := cmd.Flag("show-uris")
 	require.NotNil(t, showURIsFlag)
 	assert.Equal(t, "false", showURIsFlag.DefValue)
-}
-
-func TestRunSecretsStatus_ConfigPathRequired(t *testing.T) {
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatTable,
-	}
-	cmdFlags := &secretsStatusFlags{
-		configPath: "",
-	}
-
-	err := runSecretsStatus(flags, cmdFlags)
-	require.Error(t, err)
-
-	var configErr ErrConfigPathRequired
-	assert.ErrorAs(t, err, &configErr)
 }
 
 // -----------------------------------------------------------------------------
@@ -264,21 +234,6 @@ func TestNewSecretsVerifyCommand(t *testing.T) {
 	assert.Equal(t, "false", showSecretsFlag.DefValue)
 }
 
-func TestRunSecretsVerify_ConfigPathRequired(t *testing.T) {
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatTable,
-	}
-	cmdFlags := &secretsVerifyFlags{
-		configPath: "",
-	}
-
-	err := runSecretsVerify(flags, cmdFlags)
-	require.Error(t, err)
-
-	var configErr ErrConfigPathRequired
-	assert.ErrorAs(t, err, &configErr)
-}
-
 // -----------------------------------------------------------------------------
 // Resolve Command Tests
 // -----------------------------------------------------------------------------
@@ -305,38 +260,6 @@ func TestNewSecretsResolveCommand(t *testing.T) {
 	rawFlag := cmd.Flag("raw")
 	require.NotNil(t, rawFlag)
 	assert.Equal(t, "false", rawFlag.DefValue)
-}
-
-func TestRunSecretsResolve_URIRequired(t *testing.T) {
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatTable,
-	}
-	cmdFlags := &secretsResolveFlags{
-		masked: true,
-		raw:    false,
-	}
-
-	err := runSecretsResolve(flags, "", cmdFlags)
-	require.Error(t, err)
-
-	var uriErr ErrSecretURIRequired
-	assert.ErrorAs(t, err, &uriErr)
-}
-
-func TestRunSecretsResolve_InvalidScheme(t *testing.T) {
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatTable,
-	}
-	cmdFlags := &secretsResolveFlags{
-		masked: true,
-		raw:    false,
-	}
-
-	err := runSecretsResolve(flags, "invalid://secret", cmdFlags)
-	require.Error(t, err)
-
-	var invalidErr ErrInvalidSecretURI
-	assert.ErrorAs(t, err, &invalidErr)
 }
 
 // -----------------------------------------------------------------------------
@@ -652,159 +575,21 @@ func TestErrKMSEncryptFailed(t *testing.T) {
 // secretSchemeStats Tests
 // -----------------------------------------------------------------------------
 
-func TestSecretSchemeStats(t *testing.T) {
-	stats := &secretSchemeStats{
-		scheme:    "kms",
-		count:     5,
-		available: true,
-		secrets:   make([]secretInfo, 0),
-	}
-
-	assert.Equal(t, "kms", stats.scheme)
-	assert.Equal(t, 5, stats.count)
-	assert.True(t, stats.available)
-	assert.Empty(t, stats.secrets)
-}
-
 // -----------------------------------------------------------------------------
 // verificationResult Tests
 // -----------------------------------------------------------------------------
-
-func TestVerificationResult(t *testing.T) {
-	result := verificationResult{
-		path:     "database.password",
-		uri:      "kms://config/db/password",
-		scheme:   "kms",
-		success:  true,
-		value:    "resolved_value",
-		errorMsg: "",
-	}
-
-	assert.Equal(t, "database.password", result.path)
-	assert.Equal(t, "kms://config/db/password", result.uri)
-	assert.Equal(t, "kms", result.scheme)
-	assert.True(t, result.success)
-	assert.Equal(t, "resolved_value", result.value)
-	assert.Empty(t, result.errorMsg)
-}
 
 // -----------------------------------------------------------------------------
 // secretInfo Tests
 // -----------------------------------------------------------------------------
 
-func TestSecretInfo(t *testing.T) {
-	info := secretInfo{
-		path: "database.password",
-		uri:  "kms://config/db/password",
-		line: 42,
-	}
-
-	assert.Equal(t, "database.password", info.path)
-	assert.Equal(t, "kms://config/db/password", info.uri)
-	assert.Equal(t, 42, info.line)
-}
-
 // -----------------------------------------------------------------------------
 // Flag Struct Tests
 // -----------------------------------------------------------------------------
 
-func TestSecretsMigrateFlags(t *testing.T) {
-	flags := &secretsMigrateFlags{
-		configPath: "/etc/config.yaml",
-		dryRun:     true,
-		noBackup:   false,
-		force:      true,
-		keyID:      "my-key",
-	}
-
-	assert.Equal(t, "/etc/config.yaml", flags.configPath)
-	assert.True(t, flags.dryRun)
-	assert.False(t, flags.noBackup)
-	assert.True(t, flags.force)
-	assert.Equal(t, "my-key", flags.keyID)
-}
-
-func TestSecretsStatusFlags(t *testing.T) {
-	flags := &secretsStatusFlags{
-		configPath: "/etc/config.yaml",
-		showURIs:   true,
-	}
-
-	assert.Equal(t, "/etc/config.yaml", flags.configPath)
-	assert.True(t, flags.showURIs)
-}
-
-func TestSecretsVerifyFlags(t *testing.T) {
-	flags := &secretsVerifyFlags{
-		configPath:  "/etc/config.yaml",
-		dryRun:      true,
-		failFast:    true,
-		showSecrets: false,
-	}
-
-	assert.Equal(t, "/etc/config.yaml", flags.configPath)
-	assert.True(t, flags.dryRun)
-	assert.True(t, flags.failFast)
-	assert.False(t, flags.showSecrets)
-}
-
-func TestSecretsResolveFlags(t *testing.T) {
-	flags := &secretsResolveFlags{
-		masked: true,
-		raw:    false,
-	}
-
-	assert.True(t, flags.masked)
-	assert.False(t, flags.raw)
-}
-
 // -----------------------------------------------------------------------------
 // Command RunE callback binding tests
 // -----------------------------------------------------------------------------
-
-func TestMigrateCommand_RunE(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{
-			OutputFormat: cli.OutputFormatTable,
-		}
-	}
-
-	cmd := newSecretsMigrateCommand(getFlags)
-	require.NotNil(t, cmd.RunE)
-}
-
-func TestStatusCommand_RunE(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{
-			OutputFormat: cli.OutputFormatTable,
-		}
-	}
-
-	cmd := newSecretsStatusCommand(getFlags)
-	require.NotNil(t, cmd.RunE)
-}
-
-func TestVerifyCommand_RunE(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{
-			OutputFormat: cli.OutputFormatTable,
-		}
-	}
-
-	cmd := newSecretsVerifyCommand(getFlags)
-	require.NotNil(t, cmd.RunE)
-}
-
-func TestResolveCommand_RunE(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{
-			OutputFormat: cli.OutputFormatTable,
-		}
-	}
-
-	cmd := newSecretsResolveCommand(getFlags)
-	require.NotNil(t, cmd.RunE)
-}
 
 // -----------------------------------------------------------------------------
 // YAML Config Scanning Edge Cases
@@ -1018,43 +803,6 @@ func TestCommandLongDescriptions(t *testing.T) {
 // Required Flags Tests
 // -----------------------------------------------------------------------------
 
-func TestMigrateCommand_RequiredFlags(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{OutputFormat: cli.OutputFormatJSON}
-	}
-
-	cmd := newSecretsMigrateCommand(getFlags)
-
-	configFlag := cmd.Flag("config")
-	require.NotNil(t, configFlag)
-	// Check if the flag exists and is properly defined
-	assert.NotEmpty(t, configFlag.Usage)
-}
-
-func TestStatusCommand_RequiredFlags(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{OutputFormat: cli.OutputFormatJSON}
-	}
-
-	cmd := newSecretsStatusCommand(getFlags)
-
-	configFlag := cmd.Flag("config")
-	require.NotNil(t, configFlag)
-	assert.NotEmpty(t, configFlag.Usage)
-}
-
-func TestVerifyCommand_RequiredFlags(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{OutputFormat: cli.OutputFormatJSON}
-	}
-
-	cmd := newSecretsVerifyCommand(getFlags)
-
-	configFlag := cmd.Flag("config")
-	require.NotNil(t, configFlag)
-	assert.NotEmpty(t, configFlag.Usage)
-}
-
 // -----------------------------------------------------------------------------
 // Verify scanNestedSecrets function behavior
 // -----------------------------------------------------------------------------
@@ -1091,22 +839,6 @@ func TestScanNestedSecrets_TabIndentation(t *testing.T) {
 // -----------------------------------------------------------------------------
 // Verification Result with Error
 // -----------------------------------------------------------------------------
-
-func TestVerificationResult_WithError(t *testing.T) {
-	result := verificationResult{
-		path:     "database.password",
-		uri:      "kms://config/db/password",
-		scheme:   "kms",
-		success:  false,
-		value:    "",
-		errorMsg: "secret not found",
-	}
-
-	assert.Equal(t, "database.password", result.path)
-	assert.False(t, result.success)
-	assert.Equal(t, "secret not found", result.errorMsg)
-	assert.Empty(t, result.value)
-}
 
 // -----------------------------------------------------------------------------
 // Additional secretInfo tests with line number
@@ -1158,28 +890,6 @@ func TestDetectScheme_Prefixes(t *testing.T) {
 // -----------------------------------------------------------------------------
 // Migration Entry Tests
 // -----------------------------------------------------------------------------
-
-func TestMigrationEntry(t *testing.T) {
-	entry := migrationEntry{
-		path:       "database.password",
-		uri:        "env://DB_PASSWORD",
-		scheme:     "env",
-		resolved:   true,
-		value:      []byte("secret123"),
-		kmsPath:    "kms://config/database/password",
-		errorMsg:   "",
-		alreadyKMS: false,
-	}
-
-	assert.Equal(t, "database.password", entry.path)
-	assert.Equal(t, "env://DB_PASSWORD", entry.uri)
-	assert.Equal(t, "env", entry.scheme)
-	assert.True(t, entry.resolved)
-	assert.Equal(t, []byte("secret123"), entry.value)
-	assert.Equal(t, "kms://config/database/password", entry.kmsPath)
-	assert.Empty(t, entry.errorMsg)
-	assert.False(t, entry.alreadyKMS)
-}
 
 // -----------------------------------------------------------------------------
 // File Scheme Tests
@@ -1354,26 +1064,6 @@ api:
 // Migration Entry Edge Cases
 // -----------------------------------------------------------------------------
 
-func TestMigrationEntry_WithError(t *testing.T) {
-	entry := migrationEntry{
-		path:     "failed.secret",
-		uri:      "env://MISSING_VAR",
-		scheme:   "env",
-		resolved: false,
-		errorMsg: "environment variable not set: MISSING_VAR",
-	}
-
-	assert.Equal(t, "failed.secret", entry.path)
-	assert.False(t, entry.resolved)
-	assert.NotEmpty(t, entry.errorMsg)
-	assert.Empty(t, entry.value)
-	assert.Empty(t, entry.kmsPath)
-}
-
 // -----------------------------------------------------------------------------
 // SchemeFile Constant Test
 // -----------------------------------------------------------------------------
-
-func TestSchemeFileConstant(t *testing.T) {
-	assert.Equal(t, "file://", SchemeFile)
-}

@@ -236,6 +236,28 @@ func TestHandleAttachContainer_StreamsUntilSessionEnds(t *testing.T) {
 	assert.True(t, session.closed, "attach session must be closed when the handler returns")
 }
 
+func TestHandleAttachContainer_StopsWhenTheClientIsGone(t *testing.T) {
+	for name, chunks := range map[string][]string{
+		"a data event":  {"hello"},
+		"the end event": nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			session := &fakeAttachSession{output: make(chan container.AttachChunk, len(chunks))}
+			for _, c := range chunks {
+				session.output <- container.AttachChunk{Stream: "console", Data: []byte(c)}
+			}
+			close(session.output)
+			orch := &opsMockOrchestrator{mockOrchestrator: newMockOrchestrator(), session: session}
+			router := newOpsRouter(orch)
+			w := &goneClientWriter{header: http.Header{}}
+
+			router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/containers/c1/attach", nil))
+
+			assert.Zero(t, w.flushes, "nothing is flushed after the first write fails")
+		})
+	}
+}
+
 func TestHandleAttachContainer_ClientDisconnect(t *testing.T) {
 	session := &fakeAttachSession{output: make(chan container.AttachChunk)}
 	orch := &opsMockOrchestrator{mockOrchestrator: newMockOrchestrator(), session: session}

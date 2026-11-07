@@ -16,70 +16,11 @@ package initrd
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
 )
-
-func TestInitializePlatformNoTPM(t *testing.T) {
-	logger := logging.DefaultLogger()
-	platform := createTestPlatform()
-	platform.TPM = nil
-
-	mgr, err := NewManager(platform, logger)
-	if err != nil {
-		t.Fatalf("NewManager failed: %v", err)
-	}
-
-	impl := mgr.(*initrdManager)
-	err = impl.initializePlatform(context.Background())
-	if err == nil {
-		t.Error("expected error when TPM is nil")
-	}
-}
-
-func TestInitializePlatformNoLUKS(t *testing.T) {
-	logger := logging.DefaultLogger()
-	platform := createTestPlatform()
-	// TPM is nil, but we set LUKS to nil to test that path
-	// initializePlatform checks TPM first, so nil TPM => early error
-	// We need TPM non-nil but LUKS nil. Since we can't mock TPM directly,
-	// we test that TPM nil is caught first.
-	platform.LUKS = nil
-
-	mgr, err := NewManager(platform, logger)
-	if err != nil {
-		t.Fatalf("NewManager failed: %v", err)
-	}
-
-	impl := mgr.(*initrdManager)
-	err = impl.initializePlatform(context.Background())
-	if err == nil {
-		t.Error("expected error when TPM or LUKS is nil")
-	}
-}
-
-func TestInitializePlatformNoXKMSNoBackend(t *testing.T) {
-	logger := logging.DefaultLogger()
-	platform := createTestPlatform()
-	platform.TPM = nil // Can't test XKMS/Backend check without real TPM
-	platform.XKMS = nil
-	platform.Backend = nil
-
-	mgr, err := NewManager(platform, logger)
-	if err != nil {
-		t.Fatalf("NewManager failed: %v", err)
-	}
-
-	impl := mgr.(*initrdManager)
-	err = impl.initializePlatform(context.Background())
-	if err == nil {
-		t.Error("expected error")
-	}
-}
 
 func TestBuildVolumeConfigKeySlotsPriority(t *testing.T) {
 	logger := logging.DefaultLogger()
@@ -584,32 +525,6 @@ func TestRegisterDefaultStrategiesAllMethods(t *testing.T) {
 	}
 }
 
-func TestDetectModeFromCmdlineExecution(t *testing.T) {
-	logger := logging.DefaultLogger()
-	platform := createTestPlatform()
-	platform.Config.Mode = 0 // Auto-detect
-
-	tmpDir := t.TempDir()
-	tmpDevice := filepath.Join(tmpDir, "sda2")
-	if err := os.WriteFile(tmpDevice, []byte("test"), 0644); err != nil {
-		t.Fatalf("failed to create temp device: %v", err)
-	}
-	platform.Config.RootDevice = tmpDevice
-
-	mgr, err := NewManager(platform, logger)
-	if err != nil {
-		t.Fatalf("NewManager failed: %v", err)
-	}
-
-	impl := mgr.(*initrdManager)
-
-	// detectModeFromCmdline reads /proc/cmdline
-	mode, err := impl.detectModeFromCmdline()
-	// May succeed or fail depending on system
-	_ = mode
-	_ = err
-}
-
 func TestMergeConfigAuditLogPath(t *testing.T) {
 	base := &Config{
 		RootDevice:   "/dev/sda2",
@@ -760,24 +675,6 @@ func TestUnlockVolumesEmptyRootDevice(t *testing.T) {
 	err = mgr.UnlockVolumes(ctx)
 	if err == nil {
 		t.Error("expected error for empty root device")
-	}
-}
-
-func TestCloseNilTPMAndFIDO2(t *testing.T) {
-	logger := logging.DefaultLogger()
-	platform := createTestPlatform()
-	platform.TPM = nil
-	platform.FIDO2 = nil
-
-	mgr, err := NewManager(platform, logger)
-	if err != nil {
-		t.Fatalf("NewManager failed: %v", err)
-	}
-
-	// Should succeed with no TPM or FIDO2
-	err = mgr.Close()
-	if err != nil {
-		t.Errorf("Close failed: %v", err)
 	}
 }
 

@@ -32,6 +32,7 @@ const (
 	EnvPlatformMCPEndpoint  = "PLATFORM_MCP_ENDPOINT"
 	EnvPlatformUnixSocket   = "PLATFORM_UNIX_SOCKET"
 	EnvPlatformCTL          = "PLATFORMCTL_PATH"
+	EnvPlatformCTLStatic    = "PLATFORMCTL_STATIC_PATH"
 	EnvISOTestWorkDir       = "ISO_TEST_WORK_DIR"
 	EnvISOTestSkipCleanup   = "ISO_TEST_SKIP_CLEANUP"
 )
