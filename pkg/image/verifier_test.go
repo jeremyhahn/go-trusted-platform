@@ -582,27 +582,37 @@ func TestParseTrustAnchorsFromPEM_Empty(t *testing.T) {
 
 func TestDigestMatches(t *testing.T) {
 	data := []byte("test data")
-	digest := ComputeDigest(data, DigestSHA256)
 
-	assert.True(t, DigestMatches(data, digest))
-	assert.False(t, DigestMatches([]byte("different data"), digest))
+	for _, algorithm := range []DigestAlgorithm{DigestSHA256, DigestSHA384, DigestSHA512} {
+		t.Run(string(algorithm), func(t *testing.T) {
+			digest := ComputeDigest(data, algorithm)
+			assert.True(t, DigestMatches(data, digest))
+			assert.False(t, DigestMatches([]byte("different data"), digest))
+		})
+	}
+
 	assert.False(t, DigestMatches(data, "invalid:digest"))
 }
 
 func TestComputeDigest(t *testing.T) {
 	data := []byte("test data")
 
-	sha256Digest := ComputeDigest(data, DigestSHA256)
-	assert.True(t, isValidDigest(sha256Digest))
-	assert.Contains(t, sha256Digest, "sha256:")
-
-	sha384Digest := ComputeDigest(data, DigestSHA384)
-	assert.True(t, isValidDigest(sha384Digest))
-	assert.Contains(t, sha384Digest, "sha384:")
-
-	sha512Digest := ComputeDigest(data, DigestSHA512)
-	assert.True(t, isValidDigest(sha512Digest))
-	assert.Contains(t, sha512Digest, "sha512:")
+	tests := []struct {
+		algorithm DigestAlgorithm
+		prefix    string
+	}{
+		{DigestSHA256, "sha256:"},
+		{DigestSHA384, "sha384:"},
+		{DigestSHA512, "sha512:"},
+		{"", "sha256:"}, // empty algorithm defaults to SHA-256
+	}
+	for _, tt := range tests {
+		t.Run(tt.prefix+string(tt.algorithm), func(t *testing.T) {
+			digest := ComputeDigest(data, tt.algorithm)
+			assert.True(t, isValidDigest(digest))
+			assert.Contains(t, digest, tt.prefix)
+		})
+	}
 }
 
 func TestComparesEqual(t *testing.T) {
@@ -755,25 +765,6 @@ func TestNewVerifierFromFiles_InvalidCert(t *testing.T) {
 
 	_, err = NewVerifierFromFiles(tmpFile.Name())
 	assert.Error(t, err)
-}
-
-func TestDigestMatches_AllAlgorithms(t *testing.T) {
-	data := []byte("test data for digest matching")
-
-	// Test SHA-256
-	sha256Digest := ComputeDigest(data, DigestSHA256)
-	assert.True(t, DigestMatches(data, sha256Digest))
-
-	// Test SHA-384
-	sha384Digest := ComputeDigest(data, DigestSHA384)
-	assert.True(t, DigestMatches(data, sha384Digest))
-
-	// Test SHA-512
-	sha512Digest := ComputeDigest(data, DigestSHA512)
-	assert.True(t, DigestMatches(data, sha512Digest))
-
-	// Test unknown algorithm
-	assert.False(t, DigestMatches(data, "unknown:abc123"))
 }
 
 func TestVerifier_VerifySignature_WithTimestamp(t *testing.T) {
@@ -1196,14 +1187,6 @@ func TestVerifier_MergeOptions_IntermediateCerts(t *testing.T) {
 		IntermediateCerts: []*x509.Certificate{cert2},
 	})
 	assert.Equal(t, []*x509.Certificate{cert2}, merged.IntermediateCerts)
-}
-
-func TestComputeDigest_DefaultAlgorithm(t *testing.T) {
-	data := []byte("test data")
-
-	// Empty algorithm should default to SHA256
-	digest := ComputeDigest(data, "")
-	assert.Contains(t, digest, "sha256:")
 }
 
 func TestParseTrustAnchorsFromPEM_SkipsNonCertBlocks(t *testing.T) {
