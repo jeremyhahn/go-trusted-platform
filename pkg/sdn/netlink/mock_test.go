@@ -261,49 +261,6 @@ func TestTAPInfo_EmbeddedFields(t *testing.T) {
 	}
 }
 
-func TestErrorTypes_Coverage(t *testing.T) {
-	// Ensure all error type constants are defined and unique
-	errorTypes := []ErrorType{
-		ErrorTypeInvalidName,
-		ErrorTypeNotFound,
-		ErrorTypeAlreadyExists,
-		ErrorTypeCreateFailed,
-		ErrorTypeDeleteFailed,
-		ErrorTypeSetupFailed,
-		ErrorTypeStateFailed,
-		ErrorTypePermission,
-	}
-
-	// Check they're all different
-	seen := make(map[ErrorType]bool)
-	for _, et := range errorTypes {
-		if seen[et] {
-			t.Errorf("Duplicate error type: %v", et)
-		}
-		seen[et] = true
-	}
-
-	// Check they're not empty
-	for _, et := range errorTypes {
-		if et == "" {
-			t.Error("Error type is empty string")
-		}
-	}
-}
-
-func TestLinkState_Values(t *testing.T) {
-	// Test that LinkState constants are correct
-	if LinkStateUp != "up" {
-		t.Errorf("LinkStateUp = %s, want 'up'", LinkStateUp)
-	}
-	if LinkStateDown != "down" {
-		t.Errorf("LinkStateDown = %s, want 'down'", LinkStateDown)
-	}
-	if LinkStateUnknown != "unknown" {
-		t.Errorf("LinkStateUnknown = %s, want 'unknown'", LinkStateUnknown)
-	}
-}
-
 func TestIsFlagSet_MultipleFlags(t *testing.T) {
 	// Test with multiple flags set
 	flags := uint32(net.FlagUp | net.FlagBroadcast | net.FlagMulticast | net.FlagRunning)

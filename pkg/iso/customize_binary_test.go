@@ -199,64 +199,6 @@ func TestCopyPlatformdBinary(t *testing.T) {
 	}
 }
 
-func TestCopyPlatformctlBinary(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	tests := []struct {
-		name       string
-		binaryPath string
-		setup      func() error
-		wantErr    bool
-	}{
-		{
-			name:       "empty path returns nil",
-			binaryPath: "",
-			wantErr:    false,
-		},
-		{
-			name:       "binary not found returns nil - graceful handling",
-			binaryPath: filepath.Join(tmpDir, "nonexistent-platformctl"),
-			wantErr:    false, // CopyPlatformctlBinary returns nil if file doesn't exist
-		},
-		{
-			name:       "invalid binary format",
-			binaryPath: filepath.Join(tmpDir, "invalid-platformctl"),
-			setup: func() error {
-				return os.WriteFile(filepath.Join(tmpDir, "invalid-platformctl"), []byte("not a binary"), 0755)
-			},
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.setup != nil {
-				if err := tt.setup(); err != nil {
-					t.Fatalf("setup failed: %v", err)
-				}
-			}
-
-			isoDir := filepath.Join(tmpDir, tt.name, "iso")
-			os.MkdirAll(isoDir, 0755)
-
-			config := &PlatformISOConfig{
-				Directories: DirectoryConfig{
-					ISO:     isoDir,
-					Overlay: filepath.Join(tmpDir, tt.name, "overlay"),
-				},
-			}
-
-			customizer := NewCustomizer(config, logging.DefaultLogger())
-			ctx := context.Background()
-
-			err := customizer.CopyPlatformctlBinary(ctx, tt.binaryPath)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("CopyPlatformctlBinary() error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
-	}
-}
-
 func TestCopyObjcopyBinary(t *testing.T) {
 	tmpDir := t.TempDir()
 

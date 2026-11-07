@@ -23,7 +23,10 @@ certificate-authority:
   # Add localhost and 127.0.0.1 to every issued certificate (development)
   include-localhost-sans: true
 
-  # Upstream field; platformd does NOT enforce it today (see note below)
+  # Refuse a software-backed CA key with an empty password. Read but not yet
+  # enforced: platformd does not pass it to the SDK CA until go-xkms #1768 is
+  # released, because the pinned go-xkms drops the CA key password when it
+  # rebuilds the identity (#833).
   require-key-password: true
 
   # Upstream field; platformd IGNORES it (see note below)
@@ -99,19 +102,15 @@ certificate-authority:
           - admin@example.com
 ```
 
-Three fields of the upstream `CAConfig` schema have no effect in platformd today:
+Two fields of the upstream `CAConfig` schema have no effect in platformd today:
 
 - `default-validity-days` is decoded but not forwarded. `App.LoadCA`
   (`pkg/app/app.go:3259`) and `App.InitCA` (`pkg/app/app.go:3347`) build
-  `quicbaasca.Params` from `Identity` and the three store factories only, so
+  `quicbaasca.Params` from `Identity` and the three store factories only
+  (`App.caParams`), so
   `quicbaasca.NewCA` never sees the value and the CA keeps its built-in
   365-day default whatever is configured.
 
-- `require-key-password` is parsed but not forwarded. `App.LoadCA` and
-  `App.InitCA` (`pkg/app/app.go`) build `quicbaasca.Params` without
-  `RequireKeyPassword`, and the go-xkms constructor enforces the check only
-  from `Params.RequireKeyPassword`, so an empty software CA key password is
-  still accepted. Do not rely on this setting for protection.
 - `home-dir` is ignored. `App.InitCA` overwrites it with `platform-dir`, and
   both `InitCA` and `LoadCA` build the CA stores with `NewCAStoreFactory`
   (`pkg/app/ca_factory.go`). Do not point backup tooling at `home-dir`.
@@ -433,7 +432,7 @@ platform KMS (`?ensure=true` generates the value on first use).
 certificate-authority:
   selected-ca: 1
   default-validity-days: 365
-  require-key-password: true   # not enforced by platformd today (see above)
+  require-key-password: true
 
   identity:
     - # Root CA
@@ -489,7 +488,7 @@ certificate-authority:
 certificate-authority:
   selected-ca: 1
   default-validity-days: 365
-  require-key-password: true   # not enforced by platformd today (see above)
+  require-key-password: true
 
   identity:
     - # Root CA with TPM-backed keys
