@@ -80,6 +80,7 @@ func createTestCertificate(opts ...func(*x509.Certificate)) (*x509.Certificate, 
 
 // TestNewAuthMiddleware tests the NewAuthMiddleware constructor.
 func TestNewAuthMiddleware(t *testing.T) {
+	t.Parallel()
 	logger := createTestLogger()
 	httpWriter := newMockHttpWriter()
 	iamService := newMockIAMServiceClient()
@@ -133,6 +134,7 @@ func TestNewAuthMiddleware(t *testing.T) {
 
 // TestAuthMiddleware_Handler tests the Handler method.
 func TestAuthMiddleware_Handler(t *testing.T) {
+	t.Parallel()
 	logger := createTestLogger()
 	httpWriter := newMockHttpWriter()
 	iamService := newMockIAMServiceClient()
@@ -181,6 +183,7 @@ func TestAuthMiddleware_Handler(t *testing.T) {
 
 // TestAuthMiddleware_Authenticate tests the Authenticate method.
 func TestAuthMiddleware_Authenticate(t *testing.T) {
+	t.Parallel()
 	logger := createTestLogger()
 	iamService := newMockIAMServiceClient()
 
@@ -233,6 +236,7 @@ func TestAuthMiddleware_Authenticate(t *testing.T) {
 
 // TestAuthMiddleware_AuthenticateWithMTLS tests mTLS authentication.
 func TestAuthMiddleware_AuthenticateWithMTLS(t *testing.T) {
+	t.Parallel()
 	logger := createTestLogger()
 
 	t.Run("authenticates_with_valid_certificate", func(t *testing.T) {
@@ -562,6 +566,7 @@ func TestAuthMiddleware_AuthenticateWithMTLS(t *testing.T) {
 
 // TestAuthMiddleware_ExtractTenantFromCert tests tenant extraction from certificates.
 func TestAuthMiddleware_ExtractTenantFromCert(t *testing.T) {
+	t.Parallel()
 	logger := createTestLogger()
 	httpWriter := newMockHttpWriter()
 	iamService := newMockIAMServiceClient()
@@ -660,6 +665,7 @@ func TestAuthMiddleware_ExtractTenantFromCert(t *testing.T) {
 
 // TestAuthMiddleware_RequireRoles tests the RequireRoles middleware.
 func TestAuthMiddleware_RequireRoles(t *testing.T) {
+	t.Parallel()
 	logger := createTestLogger()
 	iamService := newMockIAMServiceClient()
 
@@ -746,6 +752,7 @@ func TestAuthMiddleware_RequireRoles(t *testing.T) {
 
 // TestAuthMiddleware_RequireAllRoles tests the RequireAllRoles middleware.
 func TestAuthMiddleware_RequireAllRoles(t *testing.T) {
+	t.Parallel()
 	logger := createTestLogger()
 	iamService := newMockIAMServiceClient()
 
@@ -832,6 +839,7 @@ func TestAuthMiddleware_RequireAllRoles(t *testing.T) {
 
 // TestAuthMiddleware_RequireGroups tests the RequireGroups middleware.
 func TestAuthMiddleware_RequireGroups(t *testing.T) {
+	t.Parallel()
 	logger := createTestLogger()
 	iamService := newMockIAMServiceClient()
 
@@ -918,6 +926,7 @@ func TestAuthMiddleware_RequireGroups(t *testing.T) {
 
 // TestAuthMiddleware_RequireMFA tests the RequireMFA middleware.
 func TestAuthMiddleware_RequireMFA(t *testing.T) {
+	t.Parallel()
 	logger := createTestLogger()
 	iamService := newMockIAMServiceClient()
 
@@ -1002,6 +1011,7 @@ func TestAuthMiddleware_RequireMFA(t *testing.T) {
 
 // TestAuthMiddleware_CreateSession tests the CreateSession method.
 func TestAuthMiddleware_CreateSession(t *testing.T) {
+	t.Parallel()
 	logger := createTestLogger()
 
 	t.Run("returns_error_when_no_auth_method_succeeds", func(t *testing.T) {
@@ -1114,6 +1124,7 @@ func TestAuthMiddleware_CreateSession(t *testing.T) {
 
 // TestAuthMiddleware_AuthenticateWithJWT tests JWT authentication fallback.
 func TestAuthMiddleware_AuthenticateWithJWT(t *testing.T) {
+	t.Parallel()
 	logger := createTestLogger()
 	rsaPrivKey, rsaPubKey := generateTestRSAKeyPair()
 
@@ -1386,6 +1397,7 @@ func TestAuthMiddleware_AuthenticateWithJWT(t *testing.T) {
 
 // TestGetSetSessionInContext tests the context helper functions.
 func TestGetSetSessionInContext(t *testing.T) {
+	t.Parallel()
 	t.Run("sets_and_gets_session_from_context", func(t *testing.T) {
 		session := NewIAMSession(&sdkiam.User{
 			ID:       "user-123",
@@ -1428,6 +1440,7 @@ func TestGetSetSessionInContext(t *testing.T) {
 
 // TestAuthMiddleware_LookupUserByID tests the lookupUserByID internal function.
 func TestAuthMiddleware_LookupUserByID(t *testing.T) {
+	t.Parallel()
 	logger := createTestLogger()
 	rsaPrivKey, rsaPubKey := generateTestRSAKeyPair()
 
