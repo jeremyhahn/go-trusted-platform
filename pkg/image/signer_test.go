@@ -739,7 +739,8 @@ func TestSigner_SignImage_RegistryError(t *testing.T) {
 	rsaKey, rsaCert := generateTestRSAKeyPair(t)
 
 	registryClient, err := NewRegistryClient(&RegistryOptions{
-		MaxRetries: 0, // No retries for faster test
+		MaxRetries: 1,
+		RetryDelay: time.Millisecond,
 		CACertPool: caPool,
 	})
 	require.NoError(t, err)
