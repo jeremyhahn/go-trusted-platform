@@ -154,7 +154,7 @@ Nothing is persisted by this feature. Sealed objects, NV contents and key
 handles live in the TPM; the EK certificate falls back to the platform
 certificate store when NVRAM cannot hold it (`App.TPMCertStore`). The IAK and
 IDevID certificates currently go to that same store unconditionally — their
-configured NV handles are ignored while the #80 interim stands (see
+configured NV handles are ignored while the #81 interim stands (see
 [engineering.md](engineering.md) item 9).
 
 ### 4c. Recovery — the one destructive path
@@ -320,8 +320,8 @@ stateless node's PIN material lives across boots is an open owner decision
    NVRAM will hold, it is stored in the platform certificate store instead. A
    verifier trusting an EK certificate must know which of the two it read.
    The IAK and IDevID certificates are in the store unconditionally today —
-   the #80 interim ignores their NV handles because go-xkms defines the NV
-   index as a counter (go-xkms#138), so a verifier must not assume an
+   the #81 interim ignores their NV handles because go-xkms authorizes the
+   NV write with an empty owner password, so a verifier must not assume an
    identity certificate is in NVRAM merely because a handle is configured.
 
 ## 6. What this feature deliberately does not do

@@ -2393,7 +2393,13 @@ func TestCgroupManager_MemoryReadsTheLeafAccounting(t *testing.T) {
 
 	usage, err := manager.Memory("routing")
 	require.NoError(t, err)
-	assert.Equal(t, MemoryUsage{Current: 1 << 20, Peak: 40 << 20, Max: 12, OOM: 3, OOMKill: 1}, usage)
+	assert.Equal(t, MemoryUsage{Current: 1 << 20, Peak: 40 << 20, HasPeak: true, Max: 12, OOM: 3, OOMKill: 1}, usage)
+
+	// A kernel before 5.19 has no memory.peak: the rest is still read.
+	require.NoError(t, os.Remove(filepath.Join(leaf, "memory.peak")))
+	usage, err = manager.Memory("routing")
+	require.NoError(t, err)
+	assert.Equal(t, MemoryUsage{Current: 1 << 20, Max: 12, OOM: 3, OOMKill: 1}, usage)
 
 	var disabled *CgroupManager
 	usage, err = disabled.Memory("routing")
@@ -2420,6 +2426,11 @@ func TestCgroupManager_MemoryReportsMissingAndMalformedFiles(t *testing.T) {
 	assert.Equal(t, "lots", format.Line)
 
 	writeLeafFile(t, leaf, "memory.current", "4096\n")
+	writeLeafFile(t, leaf, "memory.peak", "most\n")
+	_, err = manager.Memory("routing")
+	require.ErrorAs(t, err, &format)
+	assert.Equal(t, filepath.Join(leaf, "memory.peak"), format.Path)
+
 	writeLeafFile(t, leaf, "memory.peak", "8192\n")
 	writeLeafFile(t, leaf, "memory.events", "max 0\noom 0\n")
 	_, err = manager.Memory("routing")
@@ -3145,6 +3156,26 @@ func TestSupervisor_LogsTheLeafMemoryAtARestartAndAStop(t *testing.T) {
 	require.NoError(t, supervisor.StopService(ctx, gateway.ServiceTransit))
 	assert.Contains(t, logs.String(),
 		`msg="gatewayd supervisor: process memory" process=routing memory.current=1048576 memory.peak=52428800 memory.oom_kill=1`)
+}
+
+func TestSupervisor_LogsAnAbsentMemoryPeak(t *testing.T) {
+	root := t.TempDir()
+	logs := &lockedLog{}
+	supervisor, _, _ := newSupervisor(t, func(c *Config) {
+		c.Cgroups = &CgroupManager{Root: root, Parent: "gatewayd"}
+		c.Logger = slog.New(slog.NewTextHandler(logs, nil))
+	})
+	ctx := testContext(t)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceTransit))
+
+	// A kernel before 5.19 has no memory.peak: the log says so and keeps
+	// the rest of the accounting.
+	leaf := filepath.Join(root, "gatewayd", "routing")
+	writeLeafFile(t, leaf, "memory.current", "4096\n")
+	writeLeafFile(t, leaf, "memory.events", "max 0\noom 0\noom_kill 0\n")
+	require.NoError(t, supervisor.StopService(ctx, gateway.ServiceTransit))
+	assert.Contains(t, logs.String(),
+		`msg="gatewayd supervisor: process memory" process=routing memory.current=4096 memory.peak=absent memory.oom_kill=0`)
 }
 
 func TestSupervisor_LogsAMemoryReadFailureInsteadOfTheAccounting(t *testing.T) {
