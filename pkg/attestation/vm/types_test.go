@@ -15,7 +15,6 @@ package vm
 
 import (
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"math/big"
@@ -643,7 +642,7 @@ func TestQuoteRequest_Validate(t *testing.T) {
 
 func TestVerifyRequest_Validate(t *testing.T) {
 	// Create a test certificate
-	privKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	privKey, _ := testRSAKey()
 	template := x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{CommonName: "Test CA"},
@@ -786,7 +785,7 @@ func TestAttestorConfig_Validate(t *testing.T) {
 
 func TestVerifierConfig_Validate(t *testing.T) {
 	// Create a test certificate
-	privKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	privKey, _ := testRSAKey()
 	template := x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{CommonName: "Test CA"},
