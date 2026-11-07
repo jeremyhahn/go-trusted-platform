@@ -48,7 +48,8 @@ type ekCertificateReader interface {
 // requireEKCertificate decides whether firstboot may provision this TPM. A
 // TPM with an EK certificate proceeds. A TPM without one is refused with an
 // EKCertificateMissingError, unless allowMissing is set, in which case it
-// proceeds and a warning naming the relaxation is written to log. Any other
+// proceeds and a warning naming the relaxation is written to log; if that
+// warning cannot be written, the TPM is refused with a WrappedError. Any other
 // lookup failure is returned wrapped: the TPM is not provisioned on an EK
 // state firstboot could not read.
 func requireEKCertificate(tpm ekCertificateReader, allowMissing bool, log io.Writer) error {
@@ -65,7 +66,10 @@ func requireEKCertificate(tpm ekCertificateReader, allowMissing bool, log io.Wri
 	if !allowMissing {
 		return &EKCertificateMissingError{Cause: err}
 	}
-	fmt.Fprintf(log, "[FIRSTBOOT-SEAL] WARNING: TPM has no EK certificate; provisioning it anyway because %s is true\n", ekCertificateSetting)
+	if _, err := fmt.Fprintf(log, "[FIRSTBOOT-SEAL] WARNING: TPM has no EK certificate; provisioning it anyway because %s is true\n", ekCertificateSetting); err != nil {
+		// The relaxation is only allowed when it is recorded.
+		return &WrappedError{Msg: "EK certificate relaxation warning could not be written", Err: err}
+	}
 	return nil
 }
 
