@@ -1,4 +1,4 @@
-# code-review-template: v5.8.2 -- the code review in Gitea CI for a pull request
+# code-review-template: v5.9.2 -- the code review in Gitea or GitHub CI for a pull request
 # that carries `code-review` and `task:ready`, routed by its labels through
 # route-labels (labels.md §2). Codex on the `codex` runner reviews every such
 # PR; `agent:opencode` adds an advisory COMMENT review by the opencode job on
@@ -25,6 +25,44 @@
 #   vars.OLLAMA_URL           repo Actions variable: the Ollama address the
 #                             opencode review uses (required since v5.7;
 #                             unset, the opencode job fails)
+#
+# v5.9.2 (2026-11-07, Company Agent m2066 item 3): the GitHub token check
+# takes `ghs_` then letters, digits, dot, underscore and hyphen, the form
+# GitHub issues installation tokens in now (Infra 19:33Z); v5.9.1 refused
+# it and the first codex job on go-enclave failed at the check.
+#
+# v5.9.1 (2026-11-07, Company Agent m2047 item 6): on GitHub the reviewer is
+# the repo variable CODEX_REVIEWER and nothing else. Unset or empty, the
+# guard fails the job before any API call; it never defaults, because the
+# v5.9.0 default `review-codex[bot]` is a foreign App. The company's is
+# `automatethethings-codex-review[bot]`. The Gitea path is unchanged.
+#
+# v5.9.0 (2026-11-07, Company Agent m2044 item 5): the codex job runs on
+# GitHub as well as Gitea, chosen by github.server_url (FORGE). On GitHub the
+# API is api.github.com, the reviewer is the review-codex GitHub App
+# (REVIEWER `review-codex[bot]`, or the repo variable CODEX_REVIEWER), and
+# /run/reviewer/token holds that App's installation token (`ghs_`), sent as a
+# Bearer header and read again before each posting step, since an
+# installation token lives one hour and the job up to 75 minutes. An
+# installation token cannot read /user, so the guard proves the identity by
+# filing a PENDING review (visible to its author only), reading its login and
+# deleting it, before any verdict. GitHub's review event is APPROVE and its
+# recorded states are APPROVED and CHANGES_REQUESTED (DISMISSED when
+# dismissed); my_verdicts reads CHANGES_REQUESTED as REQUEST_CHANGES. Lists
+# page with per_page, issue comments included. Module sources come from
+# /contents (raw) and /tarball. The review-gate check stays review-request.sh's
+# (claude-agents #614). The opencode job stays Gitea-only for now: on GitHub
+# it does not start. The Gitea path is unchanged.
+#
+# v5.8.3 (2026-10-30, handbook #495 point 2, Company Agent ruling 261(d)): a
+# finding that rests only on a source being unavailable here is P2, and a
+# security finding never is. When a module is listed as not fetched, the
+# prompt says so: a finding whose only ground is that a module's source could
+# not be read or checked in this job is filed at P2 (advisory), never P0 or P1,
+# so it no longer requests changes on its own. A security finding keeps the
+# priority the change itself warrants and is never lowered on that ground.
+# Before v5.8.3 such a finding could block the merge as a P1 that no change to
+# the PR could answer. The workflow's code is unchanged from v5.8.2.
 #
 # v5.8.2 (2026-10-29, go-trusted-platform #1206): regression tests for the
 # v5.8 public-module fetch, in the handbook beside this template
@@ -270,7 +308,10 @@ permissions:
   contents: read
 
 env:
-  REVIEWER: codex
+  # v5.9.0: GitHub or Gitea, by the server this run is on.
+  FORGE: ${{ github.server_url == 'https://github.com' && 'github' || 'gitea' }}
+  # v5.9.1: no default on GitHub; the guard refuses an empty REVIEWER.
+  REVIEWER: ${{ github.server_url != 'https://github.com' && 'codex' || vars.CODEX_REVIEWER }}
   TOKEN_FILE: /run/reviewer/token
   # Root's (0711: uid 1000 may pass through to its codex-home/, never list):
   # the token header, the prompt, the findings, the log of errors, all 0600.
@@ -282,8 +323,8 @@ env:
   # Root's, read-only to uid 1000: the source of the first-party modules the
   # change requires, one directory per repository and ref (v4.2).
   DEPS: /tmp/codex-review-deps
-  GITEA_API: ${{ github.server_url }}/api/v1
-  REPO_API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}
+  FORGE_API: ${{ github.server_url == 'https://github.com' && 'https://api.github.com' || format('{0}/api/v1', github.server_url) }}
+  REPO_API: ${{ github.server_url == 'https://github.com' && format('https://api.github.com/repos/{0}', github.repository) || format('{0}/api/v1/repos/{1}', github.server_url, github.repository) }}
   PR_NUM: ${{ github.event.pull_request.number }}
   EVENT_SHA: ${{ github.event.pull_request.head.sha }}
 
@@ -327,6 +368,11 @@ jobs:
           EVENT_LABEL: ${{ github.event.label.name }}
         run: |
           set -euo pipefail
+          # v5.9.1: the reviewer is named by the repo, never defaulted.
+          if [ -z "$REVIEWER" ]; then
+            echo "::error::CODEX_REVIEWER is not set for this repository; the codex job does not default the reviewer (code-review.yml v5.9.1)"
+            exit 1
+          fi
           umask 077
           rm -rf "$WORK"
           mkdir -m 0711 "$WORK"
@@ -346,13 +392,15 @@ jobs:
           die() { echo "::error::$*" >&2; printf '%s\n' "$*" >> "$WORK/error"; exit 1; }
           api() { # method path [json-file] -> response body; dies unless 2xx
             # A path is the repository's, except /user: that is the instance's.
-            local code url=$REPO_API$2 retry=()
-            case "$2" in /user|/user/*) url=$GITEA_API$2 ;; esac
+            local code url=$REPO_API$2 retry=() gh=()
+            case "$2" in /user|/user/*) url=$FORGE_API$2 ;; esac
+            [ "$FORGE" != github ] ||
+              gh=(-H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28')
             # Only a read is retried: a retried POST could file a second review.
             [ "$1" = GET ] && retry=(--retry 3 --retry-all-errors)
             code=$(curl -sS --proto '=http,https' --max-time 60 "${retry[@]}" \
                      -o "$WORK/api.json" -w '%{http_code}' -X "$1" \
-                     -H @"$HDR" -H 'Content-Type: application/json' \
+                     -H @"$HDR" -H 'Content-Type: application/json' "${gh[@]}" \
                      ${3:+--data-binary "@$3"} "$url") || die "cannot reach $url"
             case "$code" in
               2??) cat "$WORK/api.json" ;;
@@ -360,10 +408,12 @@ jobs:
             esac
           }
           # Every page of a list endpoint ($1 ends in `?...`), as one array.
+          # GitHub pages with per_page (100 at most), Gitea with limit.
           api_all() {
-            local page=1 all='[]' got n
+            local page=1 all='[]' got n size=limit=50
+            [ "$FORGE" != github ] || size=per_page=100
             while :; do
-              got=$(api GET "$1&limit=50&page=$page") || exit 1
+              got=$(api GET "$1&$size&page=$page") || exit 1
               n=$(jq 'if type == "array" then length else error("not a list") end' <<<"$got") ||
                 die "GET $1 did not answer a list"
               [[ $n =~ ^[0-9]+$ ]] || die "GET $1 page $page gave no count"
@@ -375,13 +425,38 @@ jobs:
           }
           # The reviewer's own reviews of THIS head. PENDING is a draft visible
           # to its author alone and is no verdict, and a dismissed review no
-          # longer stands; neither is returned.
+          # longer stands (GitHub: state DISMISSED); neither is returned.
+          # GitHub's CHANGES_REQUESTED is returned as REQUEST_CHANGES.
           my_verdicts() {
             local all
             all=$(api_all "/pulls/$PR_NUM/reviews?") || exit 1
             jq -c --arg u "$REVIEWER" --arg s "$EVENT_SHA" '
-                [ .[] | select(.user.login == $u and .commit_id == $s and (.dismissed | not)
+                [ .[] | (if .state == "CHANGES_REQUESTED" then .state = "REQUEST_CHANGES" else . end)
+                      | select(.user.login == $u and .commit_id == $s and (.dismissed | not)
                                and (.state == "APPROVED" or .state == "REQUEST_CHANGES")) ]' <<<"$all"
+          }
+          # FAIL CLOSED on the credential: no token, no review, and no other
+          # token to fall back to. Read into $HDR (root, 0600); never echoed.
+          # GitHub (v5.9.0): the review-codex App's installation token, read
+          # again before each posting step because it lives one hour.
+          load_token() {
+            local tok=""
+            [ -r "$TOKEN_FILE" ] ||
+              die "the reviewer token $TOKEN_FILE is not mounted on this runner (dept-infra#94)"
+            IFS= read -r tok < "$TOKEN_FILE" || true
+            tok=${tok%$'\r'}
+            [ -n "$tok" ] || die "the reviewer token $TOKEN_FILE is empty (dept-infra#94)"
+            if [ "$FORGE" = github ]; then
+              [[ $tok =~ ^ghs_[A-Za-z0-9._-]+$ ]] ||
+                { unset tok; die "the reviewer token $TOKEN_FILE is not a GitHub App installation token (dept-infra#94)"; }
+              printf 'Authorization: Bearer %s\n' "$tok" > "$HDR"
+            else
+              [[ $tok =~ ^[A-Za-z0-9._-]+$ ]] ||
+                { unset tok; die "the reviewer token $TOKEN_FILE is not a Gitea token (dept-infra#94)"; }
+              printf 'Authorization: token %s\n' "$tok" > "$HDR"
+            fi
+            unset tok
+            chmod 600 "$HDR"
           }
           # Run a command as uid 1000, the only identity that touches the
           # checkout or runs codex. env -i: the job environment carries the
@@ -433,26 +508,18 @@ jobs:
           [ -z "${DOCKER_HOST+set}" ] ||
             die "DOCKER_HOST is set in the job container; the codex runner must not set it (dept-infra#94)"
 
-          # FAIL CLOSED on the credential: no token, no review, and no other
-          # token to fall back to. Read once; never echoed.
-          [ -r "$TOKEN_FILE" ] ||
-            die "the reviewer token $TOKEN_FILE is not mounted on this runner (dept-infra#94)"
-          tok=""
-          IFS= read -r tok < "$TOKEN_FILE" || true
-          tok=${tok%$'\r'}
-          [ -n "$tok" ] || die "the reviewer token $TOKEN_FILE is empty (dept-infra#94)"
-          [[ $tok =~ ^[A-Za-z0-9._-]+$ ]] ||
-            { unset tok; die "the reviewer token $TOKEN_FILE is not a Gitea token (dept-infra#94)"; }
-          printf 'Authorization: token %s\n' "$tok" > "$HDR"
-          unset tok
-          chmod 600 "$HDR"
+          # FAIL CLOSED on the credential (lib.sh load_token).
+          load_token
 
           # The verdict is posted as whoever owns the token, and automerge
           # accepts approvals from several logins. Refuse to review as anyone
-          # but the reviewer.
-          me=$(api GET /user | jq -r '.login // empty')
-          [ "$me" = "$REVIEWER" ] ||
-            die "the token at $TOKEN_FILE belongs to '${me:-unknown}', not '$REVIEWER' (dept-infra#94)"
+          # but the reviewer. GitHub's installation token cannot read /user;
+          # its identity is proved below, once the PR is known to be open.
+          if [ "$FORGE" != github ]; then
+            me=$(api GET /user | jq -r '.login // empty')
+            [ "$me" = "$REVIEWER" ] ||
+              die "the token at $TOKEN_FILE belongs to '${me:-unknown}', not '$REVIEWER' (dept-infra#94)"
+          fi
 
           # The LIVE pull request, not the event payload: a re-run replays the
           # payload it was created with, labels and all.
@@ -493,6 +560,27 @@ jobs:
             exit 0
           fi
           echo "requested=true" >> "$GITHUB_OUTPUT"
+
+          # GITHUB IDENTITY (v5.9.0): a PENDING review, visible to its author
+          # alone and no verdict, names the token's login; it is deleted at
+          # once. Anyone but the reviewer is refused before codex runs. GitHub
+          # keeps one PENDING review per author: one left by a run that died
+          # here is the token's own, so it is read and deleted instead.
+          if [ "$FORGE" = github ]; then
+            all=$(api_all "/pulls/$PR_NUM/reviews?")
+            probe=$(jq -c '[ .[] | select(.state == "PENDING") ] | first // empty' <<<"$all")
+            if [ -z "$probe" ]; then
+              jq -n --arg s "$EVENT_SHA" '{commit_id: $s}' > "$WORK/probe.json"
+              probe=$(api POST "/pulls/$PR_NUM/reviews" "$WORK/probe.json")
+            fi
+            me=$(jq -r '.user.login // empty' <<<"$probe")
+            probe_id=$(jq -r '.id // empty' <<<"$probe")
+            [ "$(jq -r '.state // empty' <<<"$probe")" = PENDING ] && [[ $probe_id =~ ^[0-9]+$ ]] ||
+              die "the identity probe on PR $PR_NUM was not filed as a PENDING review"
+            api DELETE "/pulls/$PR_NUM/reviews/$probe_id" >/dev/null
+            [ "$me" = "$REVIEWER" ] ||
+              die "the token at $TOKEN_FILE belongs to '${me:-unknown}', not '$REVIEWER' (dept-infra#94)"
+          fi
 
           # THE ROUTE (labels.md §2): route-labels reads agent:, model: and
           # effort: from the live labels; unlabelled is codex, gpt-6.1-sol,
@@ -610,9 +698,8 @@ jobs:
             rm -rf -- "${refresh_dir:?}"
             [ "$rc" != 75 ] ||
               die "timed out after 300 s waiting for $CODEX_MASTER/.review.lock to refresh the Codex login"
-            if [ "$rc" = 124 ] || [ "$rc" = 137 ]; then
+            [ "$rc" != 124 ] && [ "$rc" != 137 ] ||
               die "the Codex refresh call (\`codex exec\`) did not finish within 120 s; the Codex login was not refreshed"
-            fi
             copy_login
             exp=$(token_exp "$CODEX_COPY") || exp=""
             [[ $exp =~ ^[0-9]+$ ]] || exp=0
@@ -662,9 +749,15 @@ jobs:
           max_total=$(( 1024 * 1024 * 1024 ))
 
           # get URL FILE -> the HTTP code; the body goes to FILE. Never dies.
+          # GitHub (v5.9.0): the API headers, and redirects followed over https
+          # (a tarball answers 302 to codeload; curl keeps the Authorization
+          # header to the API host only). Further arguments go to curl.
+          gh=()
+          [ "$FORGE" != github ] ||
+            gh=(-L --max-redirs 3 --proto-redir '=https' -H 'X-GitHub-Api-Version: 2022-11-28')
           get() {
             curl -sS --proto '=http,https' --max-time 60 --max-filesize $(( 256 * 1024 * 1024 )) \
-              -o "$2" -w '%{http_code}' -H @"$HDR" "$1" 2>/dev/null || echo 000
+              -o "$2" -w '%{http_code}' -H @"$HDR" "${gh[@]}" "${@:3}" "$1" 2>/dev/null || echo 000
           }
           # getpub URL FILE -> the HTTP code, for the module proxy: https
           # only, and never the Gitea token. Never dies.
@@ -732,7 +825,11 @@ jobs:
           : > "$WORK/deps.pubbase"
           for f in "${mods[@]}"; do
             [[ $f =~ ^[A-Za-z0-9_./-]+$ ]] || continue
-            code=$(get "$REPO_API/raw/$f?ref=$ref_q" "$WORK/base.mod")
+            if [ "$FORGE" = github ]; then
+              code=$(get "$REPO_API/contents/$f?ref=$ref_q" "$WORK/base.mod" -H 'Accept: application/vnd.github.raw')
+            else
+              code=$(get "$REPO_API/raw/$f?ref=$ref_q" "$WORK/base.mod")
+            fi
             [ "$code" = 200 ] || continue
             requires "$WORK/base.mod" | awk '{ split($1, p, "/"); print p[3] }' >> "$WORK/deps.base"
             public_requires "$WORK/base.mod" "$f" >> "$WORK/deps.pubbase"
@@ -750,7 +847,7 @@ jobs:
               continue
             fi
             if [ "$repo" != "$self" ] && ! grep -qxF -- "$repo" "$WORK/deps.base"; then
-              code=$(get "$GITEA_API/repos/$owner/$repo" "$WORK/repo.json")
+              code=$(get "$FORGE_API/repos/$owner/$repo" "$WORK/repo.json")
               if [ "$code" != 200 ] || [ "$(jq -r '.private' "$WORK/repo.json" 2>/dev/null)" != false ]; then
                 echo "- $m@$v: not fetched, $owner/$repo is private (or unreadable) and the base branch does not require it" >> "$WORK/deps.missing"
                 continue
@@ -775,7 +872,11 @@ jobs:
             for r in "${refs[@]}"; do
               dest="$DEPS/$repo@${r//\//_}"
               if [ -n "${seen[$dest]:-}" ]; then got=$dest; break; fi
-              code=$(get "$GITEA_API/repos/$owner/$repo/archive/$r.tar.gz" "$WORK/dep.tgz")
+              if [ "$FORGE" = github ]; then
+                code=$(get "$FORGE_API/repos/$owner/$repo/tarball/$r" "$WORK/dep.tgz")
+              else
+                code=$(get "$FORGE_API/repos/$owner/$repo/archive/$r.tar.gz" "$WORK/dep.tgz")
+              fi
               [ "$code" = 200 ] || continue
               total=$(( total + $(stat -c %s "$WORK/dep.tgz") ))
               install -d -m 0755 "$dest"
@@ -1033,7 +1134,10 @@ jobs:
             if [ -s "$WORK/deps.ok" ]; then cat "$WORK/deps.ok"; else printf -- '- none fetched\n'; fi
             if [ -s "$WORK/deps.missing" ]; then
               printf '\nNot available in this job. Their absence is a limit of this environment, not\n'
-              printf 'a defect of the change: never report a module missing or unresolvable for it.\n\n'
+              printf 'a defect of the change: never report a module missing or unresolvable for it.\n'
+              printf 'A finding whose only ground is that a source listed here could not be read or\n'
+              printf 'checked is P2, never P0 or P1. A security finding is never lowered on that\n'
+              printf 'ground: give it the priority the change itself shows.\n\n'
               cat "$WORK/deps.missing"
             fi
           } > "$WORK/prompt.md"
@@ -1115,6 +1219,7 @@ jobs:
         run: |
           # shellcheck source=/dev/null
           . "$WORK/lib.sh"
+          [ "$FORGE" != github ] || load_token
 
           # The effort codex ran at: a large head raised it (v5.6).
           ran=$(head -c 16 "$WORK/effort" 2>/dev/null) || ran=""
@@ -1170,12 +1275,22 @@ jobs:
 
           # Gitea's events are APPROVED / REQUEST_CHANGES. It answers an
           # unknown event (APPROVE) with 200 and files a PENDING draft, so the
-          # state it records is checked, not the HTTP code.
-          jq -n --rawfile b "$WORK/body.md" --arg e "$event" --arg s "$EVENT_SHA" \
+          # state it records is checked, not the HTTP code. GitHub's events are
+          # APPROVE / REQUEST_CHANGES, recorded as APPROVED / CHANGES_REQUESTED.
+          send=$event want=$event
+          if [ "$FORGE" = github ]; then
+            case "$event" in
+              APPROVED) send=APPROVE ;;
+              REQUEST_CHANGES) want=CHANGES_REQUESTED ;;
+            esac
+          fi
+          jq -n --rawfile b "$WORK/body.md" --arg e "$send" --arg s "$EVENT_SHA" \
             '{event: $e, body: $b, commit_id: $s}' > "$WORK/review.json"
           posted=$(api POST "/pulls/$PR_NUM/reviews" "$WORK/review.json")
           state=$(jq -r '.state // empty' <<<"$posted")
-          [ "$state" = "$event" ] || die "Gitea filed the review as '${state:-nothing}', not $event"
+          [ "$state" = "$want" ] || die "$FORGE filed the review as '${state:-nothing}', not $want"
+          who=$(jq -r '.user.login // empty' <<<"$posted")
+          [ "$who" = "$REVIEWER" ] || die "$FORGE filed the review as '${who:-unknown}', not $REVIEWER"
           { echo "review_id=$(jq -r '.id' <<<"$posted")"; echo "verdict=$event"; } >> "$GITHUB_OUTPUT"
           echo "Posted $event on $EVENT_SHA as $REVIEWER."
 
@@ -1196,6 +1311,7 @@ jobs:
         run: |
           # shellcheck source=/dev/null
           . "$WORK/lib.sh"
+          [ "$FORGE" != github ] || load_token
 
           pr=$(api GET "/pulls/$PR_NUM")
           if [ "$(jq -r '.state // empty' <<<"$pr")" != "open" ] ||
@@ -1230,6 +1346,7 @@ jobs:
           # shellcheck source=/dev/null
           . "$WORK/lib.sh"
           [ ! -e "$WORK/verdict" ] || exit 0
+          [ "$FORGE" != github ] || load_token
           marker="<!-- codex-review:error head=$EVENT_SHA -->"
           reason=$(cat "$WORK/error" 2>/dev/null || echo "see the Code Review job log")
           jq -n --arg m "$marker" --arg r "$reason" --arg s "$EVENT_SHA" '{body: (
@@ -1239,9 +1356,14 @@ jobs:
             > "$WORK/comment.json"
           # Gitea's issue-comments endpoint has no page/limit parameters and
           # returns every comment in one response, so api_all would never see
-          # an empty page: one GET.
-          id=$(api GET "/issues/$PR_NUM/comments" | jq -r --arg u "$REVIEWER" --arg m "$marker" '
-                 [ .[] | select(.user.login == $u and ((.body // "") | contains($m))) ] | max_by(.id) | .id // empty')
+          # an empty page: one GET. GitHub's pages (30 by default): api_all.
+          if [ "$FORGE" = github ]; then
+            comments=$(api_all "/issues/$PR_NUM/comments?")
+          else
+            comments=$(api GET "/issues/$PR_NUM/comments")
+          fi
+          id=$(jq -r --arg u "$REVIEWER" --arg m "$marker" '
+                 [ .[] | select(.user.login == $u and ((.body // "") | contains($m))) ] | max_by(.id) | .id // empty' <<<"$comments")
           if [ -n "$id" ]; then
             api PATCH "/issues/comments/$id" "$WORK/comment.json" >/dev/null
           else
@@ -1298,7 +1420,8 @@ jobs:
   review-opencode:
     name: Code Review (opencode)
     needs: review
-    if: needs.review.outputs.agent == 'opencode'
+    # Gitea only (v5.9.0): its token check and permission read are Gitea's.
+    if: needs.review.outputs.agent == 'opencode' && github.server_url != 'https://github.com'
     runs-on: qwen  # CUSTOMIZE: the opencode review host's runner label
     # 3300 s >= 1530 + 630 (the two runs, kill grace included) + 2 x 130 (the
     # debug calls) + 880 s for checkout, guard, prepare, post and cleanup.
@@ -1334,7 +1457,7 @@ jobs:
           api() { # method path [json-file] -> response body; dies unless 2xx
             # Paths are the repository's, except /user (the token's owner).
             local code url=$REPO_API$2 retry=()
-            case "$2" in /user|/user/*) url=$GITEA_API$2 ;; esac
+            case "$2" in /user|/user/*) url=$FORGE_API$2 ;; esac
             [ "$1" = GET ] && retry=(--retry 3 --retry-all-errors)
             code=$(curl -sS --max-time 60 "${retry[@]}" -o "$WORK/api.json" -w '%{http_code}' \
                      -X "$1" -H @"$HDR" -H 'Content-Type: application/json' \
