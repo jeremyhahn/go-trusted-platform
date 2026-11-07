@@ -187,8 +187,8 @@ func (e *Executor) Run(ctx context.Context) error {
 
 	// Check for re-seal condition: upgrade seals exist (TPM-Upgrade was used)
 	resealNeeded := false
-	_, errPub := os.Stat(EFISealUpgradePub)
-	_, errPriv := os.Stat(EFISealUpgradePriv)
+	_, errPub := os.Stat(hostPath(EFISealUpgradePub))
+	_, errPriv := os.Stat(hostPath(EFISealUpgradePriv))
 	if errPub == nil && errPriv == nil {
 		e.logger.Info("Upgrade seals found on EFI partition - PCR re-sealing required")
 		e.logger.Info("This indicates TPM-Upgrade was used (PCR seals failed during boot)")
@@ -287,13 +287,13 @@ func (e *Executor) Run(ctx context.Context) error {
 		// Initial firstboot: Try encrypted installer container first (new approach)
 		// Fall back to plain key file for backwards compatibility
 
-		if _, err := os.Stat(EFIInstallerFile); err == nil {
+		if _, err := os.Stat(hostPath(EFIInstallerFile)); err == nil {
 			// New approach: Extract keys from encrypted installer container
 			e.logger.Info("Found encrypted installer container - extracting keys...")
 			e.logger.Info("Installer container provides forensic protection against SSD spare block recovery")
 
 			var extractErr error
-			key, recoveryKey, configData, extractErr = e.extractKeysFromInstaller(ctx, EFIInstallerFile)
+			key, recoveryKey, configData, extractErr = e.extractKeysFromInstaller(ctx, hostPath(EFIInstallerFile))
 			if extractErr != nil {
 				return &WrappedError{Msg: "failed to extract keys from installer", Err: extractErr}
 			}
@@ -308,10 +308,10 @@ func (e *Executor) Run(ctx context.Context) error {
 
 			// Secure wipe the installer container after extraction
 			e.logger.Info("Secure wiping installer container...")
-			if err := e.secureWipeInstaller(EFIInstallerFile); err != nil {
+			if err := e.secureWipeInstaller(hostPath(EFIInstallerFile)); err != nil {
 				e.logger.Warnf("Failed to secure wipe installer: %v", err)
 				// Try to at least delete it
-				if rmErr := os.Remove(EFIInstallerFile); rmErr != nil {
+				if rmErr := os.Remove(hostPath(EFIInstallerFile)); rmErr != nil {
 					e.logger.Warnf("Failed to delete installer: %v", rmErr)
 				}
 			} else {
@@ -336,7 +336,7 @@ func (e *Executor) Run(ctx context.Context) error {
 	}()
 
 	// Create EFI TPM directory (EFI already mounted above)
-	if err := os.MkdirAll(EFITPMDir, 0755); err != nil {
+	if err := os.MkdirAll(hostPath(EFITPMDir), 0755); err != nil {
 		return &WrappedError{Msg: "failed to create EFI TPM directory", Err: err}
 	}
 
@@ -424,7 +424,7 @@ func (e *Executor) Run(ctx context.Context) error {
 		e.logger.Info("PCR protection enabled - boot integrity will be verified")
 	} else {
 		// Remove PCR banks file to disable PCR verification
-		os.Remove(EFIPCRBanks)
+		os.Remove(hostPath(EFIPCRBanks))
 		e.logger.Info("No PCR banks file (in-guest swtpm - no PCR verification)")
 	}
 
@@ -454,7 +454,7 @@ func (e *Executor) Run(ctx context.Context) error {
 	// waiting on finished work. Calling the syscall directly also drops a fork
 	// of /bin/sync whose exit status was being discarded.
 	e.logger.Debug("Syncing filesystem...")
-	unix.Sync()
+	hostSync()
 
 	// Handle password keyslot removal if configured
 	if e.config.LuksTPMOnly {
@@ -484,8 +484,8 @@ func (e *Executor) Run(ctx context.Context) error {
 
 	// Write config data to platform directory (if extracted from installer container)
 	if len(configData) > 0 {
-		platformConfigPath := "/var/lib/trusted-platform/config.yaml"
-		etcConfigPath := "/etc/trusted-platform/config.yaml"
+		platformConfigPath := hostPath("/var/lib/trusted-platform/config.yaml")
+		etcConfigPath := hostPath("/etc/trusted-platform/config.yaml")
 
 		// Write to platform directory
 		if err := os.MkdirAll(filepath.Dir(platformConfigPath), 0755); err == nil {
@@ -747,11 +747,11 @@ func platformKeystoreSealAttrs(parent *xkmssdk.KeyAttributes) *xkmssdk.KeyAttrib
 
 // writeSealedObjects writes the Platform SRK sealed objects to the EFI partition
 func (e *Executor) writeSealedObjects(pubBlob, privBlob []byte) error {
-	if err := os.WriteFile(EFISealPlatformPub, pubBlob, 0600); err != nil {
+	if err := os.WriteFile(hostPath(EFISealPlatformPub), pubBlob, 0600); err != nil {
 		return &WrappedError{Msg: "failed to write seal-platform.pub", Err: err}
 	}
 
-	if err := os.WriteFile(EFISealPlatformPriv, privBlob, 0600); err != nil {
+	if err := os.WriteFile(hostPath(EFISealPlatformPriv), privBlob, 0600); err != nil {
 		return &WrappedError{Msg: "failed to write seal-platform.priv", Err: err}
 	}
 
@@ -761,11 +761,11 @@ func (e *Executor) writeSealedObjects(pubBlob, privBlob []byte) error {
 
 // writeUpgradeSealedObjects writes the non-PCR sealed objects for TPM-Upgrade strategy
 func (e *Executor) writeUpgradeSealedObjects(pubBlob, privBlob []byte) error {
-	if err := os.WriteFile(EFISealUpgradePub, pubBlob, 0600); err != nil {
+	if err := os.WriteFile(hostPath(EFISealUpgradePub), pubBlob, 0600); err != nil {
 		return &WrappedError{Msg: "failed to write seal-upgrade.pub", Err: err}
 	}
 
-	if err := os.WriteFile(EFISealUpgradePriv, privBlob, 0600); err != nil {
+	if err := os.WriteFile(hostPath(EFISealUpgradePriv), privBlob, 0600); err != nil {
 		return &WrappedError{Msg: "failed to write seal-upgrade.priv", Err: err}
 	}
 
@@ -812,11 +812,11 @@ func (e *Executor) createPlatformKeystoreSealedObjects(ctx context.Context, key 
 
 // writePlatformKeystoreSealedObjects writes the Platform KeyStore sealed objects to EFI partition
 func (e *Executor) writePlatformKeystoreSealedObjects(pubBlob, privBlob []byte) error {
-	if err := os.WriteFile(EFISealPlatformPub, pubBlob, 0600); err != nil {
+	if err := os.WriteFile(hostPath(EFISealPlatformPub), pubBlob, 0600); err != nil {
 		return &WrappedError{Msg: "failed to write seal-platform.pub", Err: err}
 	}
 
-	if err := os.WriteFile(EFISealPlatformPriv, privBlob, 0600); err != nil {
+	if err := os.WriteFile(hostPath(EFISealPlatformPriv), privBlob, 0600); err != nil {
 		return &WrappedError{Msg: "failed to write seal-platform.priv", Err: err}
 	}
 
@@ -832,20 +832,20 @@ func (e *Executor) readKeyFromUpgradeSeals(ctx context.Context) ([]byte, error) 
 		return nil, ErrTPMNotAvailable
 	}
 
-	if _, err := os.Stat(EFISealUpgradePub); err != nil {
+	if _, err := os.Stat(hostPath(EFISealUpgradePub)); err != nil {
 		return nil, &WrappedError{Msg: "upgrade seal public file not found", Err: err}
 	}
-	if _, err := os.Stat(EFISealUpgradePriv); err != nil {
+	if _, err := os.Stat(hostPath(EFISealUpgradePriv)); err != nil {
 		return nil, &WrappedError{Msg: "upgrade seal private file not found", Err: err}
 	}
 
 	e.logger.Info("Reading upgrade seal files from EFI partition...")
 
-	pubBlob, err := os.ReadFile(EFISealUpgradePub)
+	pubBlob, err := os.ReadFile(hostPath(EFISealUpgradePub))
 	if err != nil {
 		return nil, &WrappedError{Msg: "failed to read upgrade seal public", Err: err}
 	}
-	privBlob, err := os.ReadFile(EFISealUpgradePriv)
+	privBlob, err := os.ReadFile(hostPath(EFISealUpgradePriv))
 	if err != nil {
 		return nil, &WrappedError{Msg: "failed to read upgrade seal private", Err: err}
 	}
@@ -939,7 +939,7 @@ func (e *Executor) writePCRBanks(pcrSelection []uint) error {
 		platformPCR, platformPCRBank,
 		uint32(keystoreSRKHandle), e.getPlatformPolicy(), uint32(ssrkHandle))
 
-	if err := os.WriteFile(EFIPCRBanks, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(hostPath(EFIPCRBanks), []byte(content), 0644); err != nil {
 		return &WrappedError{Msg: "failed to write pcr-banks", Err: err}
 	}
 
@@ -971,7 +971,7 @@ func (e *Executor) savePCRValues(pcrSelection []uint) error {
 		output.WriteString("\n")
 	}
 
-	if err := os.WriteFile(EFIPCRValues, []byte(output.String()), 0644); err != nil {
+	if err := os.WriteFile(hostPath(EFIPCRValues), []byte(output.String()), 0644); err != nil {
 		return &WrappedError{Msg: "failed to write PCR values", Err: err}
 	}
 
@@ -981,7 +981,7 @@ func (e *Executor) savePCRValues(pcrSelection []uint) error {
 
 // copySwtpmState copies swtpm state files to the EFI partition
 func (e *Executor) copySwtpmState(swtpmStateDir string) error {
-	if err := os.MkdirAll(EFISwtpmStateDir, 0755); err != nil {
+	if err := os.MkdirAll(hostPath(EFISwtpmStateDir), 0755); err != nil {
 		return &WrappedError{Msg: "failed to create swtpm state directory", Err: err}
 	}
 
@@ -1003,7 +1003,7 @@ func (e *Executor) copySwtpmState(swtpmStateDir string) error {
 		}
 
 		srcPath := filepath.Join(swtpmStateDir, name)
-		dstPath := filepath.Join(EFISwtpmStateDir, name)
+		dstPath := filepath.Join(hostPath(EFISwtpmStateDir), name)
 
 		data, err := os.ReadFile(srcPath)
 		if err != nil {
@@ -1028,8 +1028,8 @@ func (e *Executor) removeLuksPasswordKeyslot(luksDevice string, key []byte) erro
 	if luksDevice == "" {
 		devices := []string{"/dev/vda3", "/dev/sda3", "/dev/nvme0n1p3", "/dev/sda2", "/dev/vda2"}
 		for _, dev := range devices {
-			if _, err := os.Stat(dev); err == nil {
-				isLuks, err := luks2.IsLUKS(dev)
+			if _, err := os.Stat(hostPath(dev)); err == nil {
+				isLuks, err := luksIsLUKS(dev)
 				if err == nil && isLuks {
 					luksDevice = dev
 					break
@@ -1044,7 +1044,7 @@ func (e *Executor) removeLuksPasswordKeyslot(luksDevice string, key []byte) erro
 
 	e.logger.Infof("Found LUKS device: %s", luksDevice)
 
-	if err := luks2.KillSlot(luksDevice, key, 0); err != nil {
+	if err := luksKillSlot(luksDevice, key, 0); err != nil {
 		return &WrappedError{Msg: "failed to remove keyslot", Err: err}
 	}
 
@@ -1053,15 +1053,13 @@ func (e *Executor) removeLuksPasswordKeyslot(luksDevice string, key []byte) erro
 
 // ensureEFIMounted ensures the EFI partition is mounted
 func (e *Executor) ensureEFIMounted(mountPoint string) error {
-	cmd := exec.Command("mountpoint", "-q", mountPoint)
-	if err := cmd.Run(); err == nil {
+	if _, err := hostCommand("mountpoint", "-q", mountPoint); err == nil {
 		e.logger.Debug("EFI partition already mounted")
 		return nil
 	}
 
 	e.logger.Info("Mounting EFI partition...")
-	cmd = exec.Command("mount", mountPoint)
-	if err := cmd.Run(); err != nil {
+	if _, err := hostCommand("mount", mountPoint); err != nil {
 		return &WrappedError{Msg: "failed to mount EFI partition", Err: err}
 	}
 
@@ -1080,20 +1078,20 @@ func (e *Executor) flushTPMContext() {
 // isTPMSealed checks if the TPM has been sealed by looking for the actual sealed objects
 // on the EFI partition, rather than relying on a marker file
 func (e *Executor) isTPMSealed() bool {
-	_, errPub := os.Stat(EFISealPlatformPub)
-	_, errPriv := os.Stat(EFISealPlatformPriv)
+	_, errPub := os.Stat(hostPath(EFISealPlatformPub))
+	_, errPriv := os.Stat(hostPath(EFISealPlatformPriv))
 	return errPub == nil && errPriv == nil
 }
 
 // createMarkerFile creates the platform initialized marker file
 // Note: TPM sealed state is detected by presence of seal-platform.pub/priv files
 func (e *Executor) createMarkerFile() error {
-	platformDir := filepath.Dir(PlatformInitializedMarker)
+	platformDir := filepath.Dir(hostPath(PlatformInitializedMarker))
 	if err := os.MkdirAll(platformDir, 0755); err != nil {
 		return &WrappedError{Msg: "failed to create platform marker directory", Err: err}
 	}
 
-	if err := os.WriteFile(PlatformInitializedMarker, []byte("initialized\n"), 0644); err != nil {
+	if err := os.WriteFile(hostPath(PlatformInitializedMarker), []byte("initialized\n"), 0644); err != nil {
 		return &WrappedError{Msg: "failed to create platform initialized marker file", Err: err}
 	}
 	e.logger.Info("Platform initialized marker file created", "file", PlatformInitializedMarker)
@@ -1107,14 +1105,12 @@ func (e *Executor) startSwtpm(stateDir string) (*exec.Cmd, error) {
 	ctrlPath := filepath.Join(stateDir, "swtpm.sock.ctrl")
 
 	e.logger.Info("Initializing software TPM with SHA256 PCR banks...")
-	setupCmd := exec.Command("swtpm_setup",
+	setupOutput, err := hostCommand("swtpm_setup",
 		"--tpm2",
 		"--tpmstate", stateDir,
 		"--pcr-banks", "sha256",
 		"--overwrite",
 	)
-
-	setupOutput, err := setupCmd.CombinedOutput()
 	if err != nil {
 		return nil, &CommandOutputError{Msg: "swtpm_setup failed", Err: err, Detail: fmt.Sprintf("\nOutput: %s", setupOutput)}
 	}
@@ -1129,7 +1125,7 @@ func (e *Executor) startSwtpm(stateDir string) (*exec.Cmd, error) {
 		"--log", "level=1",
 	)
 
-	if err := cmd.Start(); err != nil {
+	if err := hostStartProcess(cmd); err != nil {
 		return nil, &WrappedError{Msg: "failed to start swtpm", Err: err}
 	}
 
@@ -1184,8 +1180,7 @@ func (e *Executor) waitForSocket(socketPath string, timeout time.Duration) error
 	defer ticker.Stop()
 
 	for time.Now().Before(deadline) {
-		info, err := os.Stat(socketPath)
-		if err == nil && info.Mode()&os.ModeSocket != 0 {
+		if hostIsSocket(socketPath) {
 			return nil
 		}
 		<-ticker.C
@@ -1196,13 +1191,12 @@ func (e *Executor) waitForSocket(socketPath string, timeout time.Duration) error
 
 // saveDebugInfo saves additional debug information
 func (e *Executor) saveDebugInfo() {
-	debugFile := EFITPMDir + "/boot-env.txt"
+	debugFile := hostPath(EFITPMDir) + "/boot-env.txt"
 
 	var output strings.Builder
 	output.WriteString("=== Boot Order ===\n")
 
-	cmd := exec.Command("efibootmgr", "-v")
-	if out, err := cmd.CombinedOutput(); err == nil {
+	if out, err := hostCommand("efibootmgr", "-v"); err == nil {
 		output.Write(out)
 	} else {
 		output.WriteString("efibootmgr not available\n")
@@ -1210,7 +1204,7 @@ func (e *Executor) saveDebugInfo() {
 
 	output.WriteString("\n=== Secure Boot Status ===\n")
 
-	sbPath := "/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
+	sbPath := hostPath("/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c")
 	if data, err := os.ReadFile(sbPath); err == nil {
 		fmt.Fprintf(&output, "SecureBoot: %x\n", data)
 	} else {
@@ -1295,18 +1289,18 @@ start_pre() {
 
 // detectInitSystem returns "openrc", "systemd", or "unknown"
 func detectInitSystem() string {
-	if _, err := os.Stat("/sbin/openrc-run"); err == nil {
+	if _, err := os.Stat(hostPath("/sbin/openrc-run")); err == nil {
 		return "openrc"
 	}
-	if _, err := os.Stat("/etc/init.d"); err == nil {
-		if _, err := exec.LookPath("rc-service"); err == nil {
+	if _, err := os.Stat(hostPath("/etc/init.d")); err == nil {
+		if _, err := hostLookPath("rc-service"); err == nil {
 			return "openrc"
 		}
 	}
-	if _, err := os.Stat("/run/systemd/system"); err == nil {
+	if _, err := os.Stat(hostPath("/run/systemd/system")); err == nil {
 		return "systemd"
 	}
-	if _, err := exec.LookPath("systemctl"); err == nil {
+	if _, err := hostLookPath("systemctl"); err == nil {
 		return "systemd"
 	}
 	return "unknown"
@@ -1317,7 +1311,7 @@ func (e *Executor) installPlatformdService(debug bool) error {
 	initSystem := detectInitSystem()
 	e.logger.Info("Detected init system", "type", initSystem)
 
-	configDir := "/etc/trusted-platform"
+	configDir := hostPath("/etc/trusted-platform")
 	if err := os.MkdirAll(configDir, 0755); err != nil {
 		return &WrappedError{Msg: fmt.Sprintf("failed to create config directory %s", configDir), Err: err}
 	}
@@ -1352,22 +1346,22 @@ func (e *Executor) installPlatformdService(debug bool) error {
 func (e *Executor) installOpenRCService() error {
 	e.logger.Info("Installing platformd OpenRC service (Alpine Linux)...")
 
-	if err := os.MkdirAll("/var/log/trusted-platform", 0755); err != nil {
+	if err := os.MkdirAll(hostPath("/var/log/trusted-platform"), 0755); err != nil {
 		e.logger.Warnf("Failed to create log directory: %v", err)
 	}
 
-	initScript := "/etc/init.d/platformd"
+	initScript := hostPath("/etc/init.d/platformd")
 	if err := os.WriteFile(initScript, []byte(platformdOpenRCScript), 0755); err != nil {
 		return &WrappedError{Msg: fmt.Sprintf("failed to write init script %s", initScript), Err: err}
 	}
 	e.logger.Info("Created OpenRC init script", "path", initScript)
 
-	if output, err := exec.Command("rc-update", "add", "platformd", "default").CombinedOutput(); err != nil {
+	if output, err := hostCommand("rc-update", "add", "platformd", "default"); err != nil {
 		return &CommandOutputError{Msg: "failed to enable platformd service", Err: err, Detail: fmt.Sprintf(" (output: %s)", string(output))}
 	}
 	e.logger.Info("Enabled platformd service at default runlevel")
 
-	if output, err := exec.Command("rc-service", "platformd", "start").CombinedOutput(); err != nil {
+	if output, err := hostCommand("rc-service", "platformd", "start"); err != nil {
 		e.logger.Warnf("Failed to start platformd service: %v (output: %s)", err, string(output))
 	} else {
 		e.logger.Info("Started platformd service")
@@ -1380,10 +1374,10 @@ func (e *Executor) installOpenRCService() error {
 func (e *Executor) installSystemdService() error {
 	e.logger.Info("Installing platformd systemd service...")
 
-	serviceFile := "/lib/systemd/system/platformd.service"
-	if _, err := os.Stat("/lib/systemd/system"); os.IsNotExist(err) {
-		serviceFile = "/etc/systemd/system/platformd.service"
-		if err := os.MkdirAll("/etc/systemd/system", 0755); err != nil {
+	serviceFile := hostPath("/lib/systemd/system/platformd.service")
+	if _, err := os.Stat(hostPath("/lib/systemd/system")); os.IsNotExist(err) {
+		serviceFile = hostPath("/etc/systemd/system/platformd.service")
+		if err := os.MkdirAll(hostPath("/etc/systemd/system"), 0755); err != nil {
 			return &WrappedError{Msg: "failed to create systemd directory", Err: err}
 		}
 	}
@@ -1393,16 +1387,16 @@ func (e *Executor) installSystemdService() error {
 	}
 	e.logger.Info("Created systemd service file", "path", serviceFile)
 
-	if output, err := exec.Command("systemctl", "daemon-reload").CombinedOutput(); err != nil {
+	if output, err := hostCommand("systemctl", "daemon-reload"); err != nil {
 		e.logger.Warnf("Failed to reload systemd daemon: %v (output: %s)", err, string(output))
 	}
 
-	if output, err := exec.Command("systemctl", "enable", "platformd.service").CombinedOutput(); err != nil {
+	if output, err := hostCommand("systemctl", "enable", "platformd.service"); err != nil {
 		return &CommandOutputError{Msg: "failed to enable platformd service", Err: err, Detail: fmt.Sprintf(" (output: %s)", string(output))}
 	}
 	e.logger.Info("Enabled platformd service")
 
-	if output, err := exec.Command("systemctl", "start", "platformd.service").CombinedOutput(); err != nil {
+	if output, err := hostCommand("systemctl", "start", "platformd.service"); err != nil {
 		e.logger.Warnf("Failed to start platformd service: %v (output: %s)", err, string(output))
 	} else {
 		e.logger.Info("Started platformd service")
@@ -1414,15 +1408,15 @@ func (e *Executor) installSystemdService() error {
 // extractKeysFromInstaller opens the encrypted installer container and extracts files
 func (e *Executor) extractKeysFromInstaller(ctx context.Context, installerPath string) ([]byte, string, []byte, error) {
 	// Clean up any leftover installer device mapper from initramfs failures
-	if _, err := os.Stat("/dev/mapper/installer"); err == nil {
+	if _, err := os.Stat(hostPath("/dev/mapper/installer")); err == nil {
 		e.logger.Warn("Found leftover installer device mapper from initramfs, cleaning up...")
 
-		syscall.Unmount("/mnt/installer", 0)
-		syscall.Unmount("/mnt/installer", syscall.MNT_DETACH)
-		syscall.Unmount("/tmp/installer-mount", 0)
-		syscall.Unmount("/tmp/installer-mount", syscall.MNT_DETACH)
+		unmountOrWarn(e.logger, "/mnt/installer", 0)
+		unmountOrWarn(e.logger, "/mnt/installer", syscall.MNT_DETACH)
+		unmountOrWarn(e.logger, hostPath("/tmp/installer-mount"), 0)
+		unmountOrWarn(e.logger, hostPath("/tmp/installer-mount"), syscall.MNT_DETACH)
 
-		if err := luks2.Lock("installer"); err != nil {
+		if err := luksLock("installer"); err != nil {
 			e.logger.Warnf("Failed to close leftover installer LUKS: %v", err)
 		} else {
 			e.logger.Info("Closed leftover installer LUKS container")
@@ -1430,16 +1424,16 @@ func (e *Executor) extractKeysFromInstaller(ctx context.Context, installerPath s
 
 		for i := 0; i < 8; i++ {
 			loopPath := fmt.Sprintf("/dev/loop%d", i)
-			if info, err := exec.Command("losetup", loopPath).Output(); err == nil {
+			if info, err := hostCommandStdout("losetup", loopPath); err == nil {
 				if strings.Contains(string(info), "installer.luks") {
-					if err := exec.Command("losetup", "-d", loopPath).Run(); err == nil {
+					if _, err := hostCommand("losetup", "-d", loopPath); err == nil {
 						e.logger.Infof("Detached leftover loop device %s", loopPath)
 					}
 				}
 			}
 		}
 
-		if _, err := os.Stat("/dev/mapper/installer"); err == nil {
+		if _, err := os.Stat(hostPath("/dev/mapper/installer")); err == nil {
 			e.logger.Warn("Could not fully clean up leftover installer device mapper")
 		} else {
 			e.logger.Info("Installer device mapper cleaned up successfully")
@@ -1448,34 +1442,34 @@ func (e *Executor) extractKeysFromInstaller(ctx context.Context, installerPath s
 
 	e.logger.Info("Setting up loop device for installer...")
 
-	loopDev, err := luks2.SetupLoopDevice(installerPath)
+	loopDev, err := luksSetupLoopDevice(installerPath)
 	if err != nil {
 		return nil, "", nil, &WrappedError{Msg: "failed to setup loop device", Err: err}
 	}
 
 	e.logger.Info("Unlocking installer container...")
-	if err := luks2.Unlock(loopDev, []byte(installer.InstallerPassword), "installer"); err != nil {
-		luks2.DetachLoopDevice(loopDev)
+	if err := luksUnlock(loopDev, []byte(installer.InstallerPassword), "installer"); err != nil {
+		detachOrWarn(e.logger, loopDev)
 		return nil, "", nil, &WrappedError{Msg: "failed to unlock installer", Err: err}
 	}
 
-	installerDevPath, err := luks2.GetMappedDevicePath("installer")
+	installerDevPath, err := luksGetMappedDevicePath("installer")
 	if err != nil {
 		e.logger.Warnf("GetMappedDevicePath failed, using default path: %v", err)
-		installerDevPath = "/dev/mapper/installer"
+		installerDevPath = hostPath("/dev/mapper/installer")
 	}
 	e.logger.Info("Installer unlocked", "device", installerDevPath)
 
-	mountPoint := "/tmp/installer-mount"
+	mountPoint := hostPath("/tmp/installer-mount")
 	if err := os.MkdirAll(mountPoint, 0700); err != nil {
-		luks2.Lock("installer")
-		luks2.DetachLoopDevice(loopDev)
+		lockOrWarn(e.logger, "installer")
+		detachOrWarn(e.logger, loopDev)
 		return nil, "", nil, &WrappedError{Msg: "failed to create mount point", Err: err}
 	}
 
-	if err := syscall.Mount(installerDevPath, mountPoint, "ext4", syscall.MS_RDONLY, ""); err != nil {
-		luks2.Lock("installer")
-		luks2.DetachLoopDevice(loopDev)
+	if err := hostMount(installerDevPath, mountPoint, "ext4", syscall.MS_RDONLY, ""); err != nil {
+		lockOrWarn(e.logger, "installer")
+		detachOrWarn(e.logger, loopDev)
 		return nil, "", nil, &WrappedError{Msg: "failed to mount installer", Err: err}
 	}
 
@@ -1486,9 +1480,9 @@ func (e *Executor) extractKeysFromInstaller(ctx context.Context, installerPath s
 	luksKeyPath := filepath.Join(mountPoint, "luks-key.bin")
 	luksKey, err = os.ReadFile(luksKeyPath)
 	if err != nil {
-		syscall.Unmount(mountPoint, 0)
-		luks2.Lock("installer")
-		luks2.DetachLoopDevice(loopDev)
+		unmountOrWarn(e.logger, mountPoint, 0)
+		lockOrWarn(e.logger, "installer")
+		detachOrWarn(e.logger, loopDev)
 		return nil, "", nil, &WrappedError{Msg: "failed to read luks-key.bin", Err: err}
 	}
 
@@ -1511,10 +1505,10 @@ func (e *Executor) extractKeysFromInstaller(ctx context.Context, installerPath s
 		}
 	}
 
-	syscall.Unmount(mountPoint, 0)
+	unmountOrWarn(e.logger, mountPoint, 0)
 	os.Remove(mountPoint)
-	luks2.Lock("installer")
-	luks2.DetachLoopDevice(loopDev)
+	lockOrWarn(e.logger, "installer")
+	detachOrWarn(e.logger, loopDev)
 
 	e.logger.Info("Keys extracted from installer successfully")
 	return luksKey, recoveryKey, configData, nil
@@ -1532,7 +1526,7 @@ func (e *Executor) secureWipeInstaller(installerPath string) error {
 		Trim:       true,
 	}
 
-	if err := luks2.Wipe(wipeOpts); err != nil {
+	if err := luksWipe(wipeOpts); err != nil {
 		return &WrappedError{Msg: "secure wipe failed", Err: err}
 	}
 
@@ -1550,12 +1544,12 @@ func (e *Executor) writeRecoveryKey(recoveryKey string) error {
 		return nil
 	}
 
-	dir := filepath.Dir(RecoveryKeyPath)
+	dir := filepath.Dir(hostPath(RecoveryKeyPath))
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return &WrappedError{Msg: "failed to create recovery key directory", Err: err}
 	}
 
-	if err := os.WriteFile(RecoveryKeyPath, []byte(recoveryKey), 0600); err != nil {
+	if err := os.WriteFile(hostPath(RecoveryKeyPath), []byte(recoveryKey), 0600); err != nil {
 		return &WrappedError{Msg: "failed to write recovery key", Err: err}
 	}
 
@@ -1579,7 +1573,7 @@ func NewTPMDetector(logger *logging.Logger) *TPMDetector {
 
 // DetectTPMType detects whether the system has a hardware or software TPM
 func (d *TPMDetector) DetectTPMType() (TPMType, string, error) {
-	swtpmSocket := "/var/lib/swtpm/swtpm.sock"
+	swtpmSocket := hostPath("/var/lib/swtpm/swtpm.sock")
 	if d.isSocket(swtpmSocket) {
 		d.logger.Info("Detected software TPM (swtpm) - already running")
 		d.logger.Info("In-guest swtpm detected - PCR sealing should be disabled")
@@ -1609,7 +1603,7 @@ func (d *TPMDetector) DetectOrStartTPM(swtpmStateDir string) (TPMType, string, b
 	d.logger.Info("No TPM device found, attempting to start swtpm")
 
 	if swtpmStateDir == "" {
-		swtpmStateDir = "/var/lib/swtpm"
+		swtpmStateDir = hostPath("/var/lib/swtpm")
 	}
 
 	if err := os.MkdirAll(swtpmStateDir, 0755); err != nil {
@@ -1640,31 +1634,23 @@ func (d *TPMDetector) DetectOrStartTPM(swtpmStateDir string) (TPMType, string, b
 }
 
 func (d *TPMDetector) isSocket(path string) bool {
-	info, err := os.Stat(path)
-	if err != nil {
-		return false
-	}
-	return info.Mode()&os.ModeSocket != 0
+	return hostIsSocket(path)
 }
 
 func (d *TPMDetector) isDevice(path string) bool {
-	info, err := os.Stat(path)
-	if err != nil {
-		return false
-	}
-	return info.Mode()&os.ModeDevice != 0
+	return hostIsDevice(path)
 }
 
 func (d *TPMDetector) commandExists(cmd string) bool {
-	_, err := os.Stat("/usr/bin/" + cmd)
+	_, err := os.Stat(hostPath("/usr/bin/" + cmd))
 	if err == nil {
 		return true
 	}
-	_, err = os.Stat("/usr/sbin/" + cmd)
+	_, err = os.Stat(hostPath("/usr/sbin/" + cmd))
 	if err == nil {
 		return true
 	}
-	_, err = os.Stat("/sbin/" + cmd)
+	_, err = os.Stat(hostPath("/sbin/" + cmd))
 	return err == nil
 }
 
@@ -1684,11 +1670,11 @@ func detectTPMDevice(logger *logging.Logger) (string, error) {
 		return tpmPath, nil
 	}
 
-	if _, err := os.Stat("/dev/tpmrm0"); err == nil {
+	if _, err := os.Stat(hostPath("/dev/tpmrm0")); err == nil {
 		logger.Info("Found TPM device at /dev/tpmrm0")
 		return "/dev/tpmrm0", nil
 	}
-	if _, err := os.Stat("/dev/tpm0"); err == nil {
+	if _, err := os.Stat(hostPath("/dev/tpm0")); err == nil {
 		logger.Info("Found TPM device at /dev/tpm0")
 		return "/dev/tpm0", nil
 	}
@@ -1700,7 +1686,7 @@ func detectTPMDevice(logger *logging.Logger) (string, error) {
 func loadTPMConfig(logger *logging.Logger) (*xkmssdk.TPMConfig, error) {
 	var loadedTPMConfig *xkmssdk.TPMConfig
 
-	pcrBanksPath := "/boot/efi/tpm2/pcr-banks"
+	pcrBanksPath := hostPath("/boot/efi/tpm2/pcr-banks")
 	if pcrBanksConfig := parsePCRBanksConfig(pcrBanksPath, logger); pcrBanksConfig != nil {
 		loadedTPMConfig = pcrBanksConfig
 		srkHandle := "none"
@@ -1873,7 +1859,7 @@ func initializeTPM(tpmConfig *xkmssdk.TPMConfig, logger *logging.Logger) (xkmssd
 
 	// Create storage backend for TPM sealed keys
 	// Use /boot/efi/tpm2 as the storage location for sealed blobs
-	storagePath := "/boot/efi/tpm2"
+	storagePath := hostPath("/boot/efi/tpm2")
 	if err := os.MkdirAll(storagePath, 0700); err != nil {
 		logger.Warn("Failed to create TPM storage directory", "path", storagePath, "error", err)
 	}
@@ -1899,10 +1885,10 @@ func initializeTPM(tpmConfig *xkmssdk.TPMConfig, logger *logging.Logger) (xkmssd
 
 	var tpmModule xkmssdk.TrustedPlatformModule
 	maxRetries := 5
-	retryDelay := 2 * time.Second
+	retryDelay := tpmRetryDelay
 
 	for i := 0; i < maxRetries; i++ {
-		tpmModule, err = xkmssdk.NewTPM2(tpmParams)
+		tpmModule, err = openTPM2(tpmParams)
 		if err == nil || err == xkmssdk.ErrTPMNotInitialized {
 			if err == xkmssdk.ErrTPMNotInitialized {
 				logger.Info("TPM opened successfully (not yet provisioned)", "attempt", i+1)
