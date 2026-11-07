@@ -1187,6 +1187,170 @@ func (e ErrIAMTenantForbidden) Error() string {
 	return fmt.Sprintf("IAM request names tenant %q: caller may not act on another tenant", e.Requested)
 }
 
+// ErrIAMRESTUnavailable is returned when the IAM REST routes cannot be
+// mounted on the daemon REST plane because a dependency is missing.
+type ErrIAMRESTUnavailable struct {
+	Reason string
+}
+
+func (e ErrIAMRESTUnavailable) Error() string {
+	return "IAM REST routes unavailable: " + e.Reason
+}
+
+// ErrAttestationRESTUnavailable reports that the /api/v1/attestation routers
+// (manifests, quote verification, reports and callers) could not be mounted
+// on the daemon REST listener.
+type ErrAttestationRESTUnavailable struct {
+	Reason string
+}
+
+func (e ErrAttestationRESTUnavailable) Error() string {
+	return "attestation REST routes unavailable: " + e.Reason
+}
+
+// ErrDeviceRESTUnavailable reports that the device operator routes could not
+// be mounted on the daemon REST listener.
+type ErrDeviceRESTUnavailable struct {
+	Reason string
+}
+
+func (e ErrDeviceRESTUnavailable) Error() string {
+	return "device REST routes unavailable: " + e.Reason
+}
+
+// ErrDNSRESTUnavailable reports that the DNS routes could not be mounted on
+// the daemon REST listener.
+type ErrDNSRESTUnavailable struct {
+	Reason string
+}
+
+func (e ErrDNSRESTUnavailable) Error() string {
+	return "DNS REST routes unavailable: " + e.Reason
+}
+
+// ErrSDNRESTUnavailable reports that the SDN routes could not be mounted on
+// the daemon REST listener.
+type ErrSDNRESTUnavailable struct {
+	Reason string
+}
+
+func (e ErrSDNRESTUnavailable) Error() string {
+	return "SDN REST routes unavailable: " + e.Reason
+}
+
+// ErrCeremonyRESTUnavailable reports that the ceremony routes could not be
+// mounted on the daemon REST listener.
+type ErrCeremonyRESTUnavailable struct {
+	Reason string
+}
+
+func (e ErrCeremonyRESTUnavailable) Error() string {
+	return "ceremony REST routes unavailable: " + e.Reason
+}
+
+// ErrVTPMRESTUnavailable reports that the vTPM routes could not be mounted
+// on the daemon REST listener.
+type ErrVTPMRESTUnavailable struct {
+	Reason string
+}
+
+func (e ErrVTPMRESTUnavailable) Error() string {
+	return "vTPM REST routes unavailable: " + e.Reason
+}
+
+// ErrProxyRESTUnavailable reports that the proxy routes could not be mounted
+// on the daemon REST listener.
+type ErrProxyRESTUnavailable struct {
+	Reason string
+}
+
+func (e ErrProxyRESTUnavailable) Error() string {
+	return "proxy REST routes unavailable: " + e.Reason
+}
+
+// ErrOverlayRESTUnavailable reports that the SDN overlay routes could not be
+// mounted on the daemon REST listener.
+type ErrOverlayRESTUnavailable struct {
+	Reason string
+}
+
+func (e ErrOverlayRESTUnavailable) Error() string {
+	return "overlay REST routes unavailable: " + e.Reason
+}
+
+// ErrGatewayRESTUnavailable reports that the SDN gateway routes could not be
+// mounted on the daemon REST listener, or that a gateway service was wired
+// before they were mounted.
+type ErrGatewayRESTUnavailable struct {
+	Reason string
+}
+
+func (e ErrGatewayRESTUnavailable) Error() string {
+	return "gateway REST routes unavailable: " + e.Reason
+}
+
+// ErrClusterRESTUnavailable reports that the cluster routes could not be
+// mounted on the daemon REST listener.
+type ErrClusterRESTUnavailable struct {
+	Reason string
+}
+
+func (e ErrClusterRESTUnavailable) Error() string {
+	return "cluster REST routes unavailable: " + e.Reason
+}
+
+// ErrPIVRESTUnavailable reports that the PIV routes could not be mounted on
+// the daemon REST listener.
+type ErrPIVRESTUnavailable struct {
+	Reason string
+}
+
+func (e ErrPIVRESTUnavailable) Error() string {
+	return "PIV REST routes unavailable: " + e.Reason
+}
+
+// ErrLUKSRESTUnavailable reports that the LUKS routes could not be mounted on
+// the daemon REST listener.
+type ErrLUKSRESTUnavailable struct {
+	Reason string
+}
+
+func (e ErrLUKSRESTUnavailable) Error() string {
+	return "LUKS REST routes unavailable: " + e.Reason
+}
+
+// ErrFIDO2RESTUnavailable reports that the FIDO2 routes could not be mounted
+// on the daemon REST listener.
+type ErrFIDO2RESTUnavailable struct {
+	Reason string
+}
+
+func (e ErrFIDO2RESTUnavailable) Error() string {
+	return "FIDO2 REST routes unavailable: " + e.Reason
+}
+
+// ErrRESTRouteUnscoped reports a daemon REST route the gRPC catalog gives no
+// scope, so the route refuses every caller.
+type ErrRESTRouteUnscoped struct {
+	Method string
+	Route  string
+	Reason string
+}
+
+func (e ErrRESTRouteUnscoped) Error() string {
+	return "REST route " + e.Method + " " + e.Route + " has no scope: " + e.Reason
+}
+
+// ErrPXERESTUnavailable reports that the PXE operator routes could not be
+// mounted on the daemon REST listener.
+type ErrPXERESTUnavailable struct {
+	Reason string
+}
+
+func (e ErrPXERESTUnavailable) Error() string {
+	return "PXE REST routes unavailable: " + e.Reason
+}
+
 // ErrTenantBarrierShamirUnsupported is returned when InitTenantBarrier asks
 // for Shamir sharing. The per-tenant barrier initializes with its
 // deterministic credential only, and the init returns no shares, so

@@ -21,7 +21,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/securewipe"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -32,11 +31,9 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/partition"
 	platform "github.com/jeremyhahn/go-trusted-platform/pkg/platform"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tpmowner"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/uefi/firmware"
 )
 
 const (
@@ -237,8 +234,8 @@ func (s *FirstbootSealStrategy) Unlock(ctx context.Context, volume *luks.VolumeC
 	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] STEP 2: Reading keys from installer\n")
 	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] ----------------------------------------\n")
 
-	luksKeyPath := filepath.Join(strategyInstallerMountPoint, "luks-key.bin")
-	recoveryKeyPath := filepath.Join(strategyInstallerMountPoint, "recovery-key.txt")
+	luksKeyPath := filepath.Join(hostPath(strategyInstallerMountPoint), "luks-key.bin")
+	recoveryKeyPath := filepath.Join(hostPath(strategyInstallerMountPoint), "recovery-key.txt")
 
 	luksKey, err := os.ReadFile(luksKeyPath)
 	if err != nil {
@@ -269,11 +266,11 @@ func (s *FirstbootSealStrategy) Unlock(ctx context.Context, volume *luks.VolumeC
 
 	// Mount securityfs if not already mounted - required for TPM event log access
 	// The binary_bios_measurements file is at /sys/kernel/security/tpm0/binary_bios_measurements
-	securityfsPath := "/sys/kernel/security"
+	securityfsPath := hostPath("/sys/kernel/security")
 	if _, err := os.Stat(filepath.Join(securityfsPath, "tpm0")); os.IsNotExist(err) {
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Mounting securityfs for TPM event log access...\n")
 		if err := os.MkdirAll(securityfsPath, 0755); err == nil {
-			if err := syscall.Mount("securityfs", securityfsPath, "securityfs", 0, ""); err != nil {
+			if err := hostMount("securityfs", securityfsPath, "securityfs", 0, ""); err != nil {
 				fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] WARNING: Failed to mount securityfs: %v\n", err)
 				fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] TPM event log may not be available\n")
 			} else {
@@ -306,7 +303,7 @@ func (s *FirstbootSealStrategy) Unlock(ctx context.Context, volume *luks.VolumeC
 			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Waiting for TPM event log (%d/10): %v\n", i+1, err)
 		}
 		// Try to trigger TPM driver to process ACPI event log by reading from TPM device
-		if f, err := os.Open("/dev/tpm0"); err == nil {
+		if f, err := os.Open(hostPath("/dev/tpm0")); err == nil {
 			f.Close()
 		}
 		<-eventLogTicker.C
@@ -395,9 +392,9 @@ func (s *FirstbootSealStrategy) Unlock(ctx context.Context, volume *luks.VolumeC
 	// Only set this when sealing actually succeeded — if we're in retry
 	// mode, the system is NOT fully provisioned and the variable would lie.
 	if !sealRetryNeeded {
-		if firmware.IsAvailable() {
+		if firmwareIsAvailable() {
 			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Setting TRUSTED_PLATFORM EFI variable...\n")
-			if err := firmware.SetTrustedPlatform(); err != nil {
+			if err := firmwareSetTrustedPlatform(); err != nil {
 				fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] WARNING: Failed to set TRUSTED_PLATFORM EFI variable: %v\n", err)
 				// This is not a fatal error - the system is still provisioned
 			} else {
@@ -431,21 +428,21 @@ func (s *FirstbootSealStrategy) Unlock(ctx context.Context, volume *luks.VolumeC
 
 	// DEBUG: Check device node state after LUKS unlock
 	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] DEBUG: Checking device nodes after unlock...\n")
-	if output, err := exec.Command("ls", "-la", "/dev/mapper/").CombinedOutput(); err == nil {
+	if output, err := hostCommand("ls", "-la", "/dev/mapper/"); err == nil {
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] DEBUG: /dev/mapper/ contents:\n%s\n", string(output))
 	} else {
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] DEBUG: Failed to list /dev/mapper/: %v\n", err)
 	}
-	if output, err := exec.Command("ls", "-la", "/dev/dm-*").CombinedOutput(); err == nil {
+	if output, err := hostCommand("ls", "-la", "/dev/dm-*"); err == nil {
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] DEBUG: /dev/dm-* devices:\n%s\n", string(output))
 	} else {
 		// Try with shell expansion
-		if output2, err2 := exec.Command("sh", "-c", "ls -la /dev/dm-* 2>/dev/null || echo 'No dm-* devices'").CombinedOutput(); err2 == nil {
+		if output2, err2 := hostCommand("sh", "-c", "ls -la /dev/dm-* 2>/dev/null || echo 'No dm-* devices'"); err2 == nil {
 			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] DEBUG: /dev/dm-* devices:\n%s\n", string(output2))
 		}
 	}
 	// Check cryptroot specifically
-	mapperPath := fmt.Sprintf("/dev/mapper/%s", volume.MappingName)
+	mapperPath := hostPath(fmt.Sprintf("/dev/mapper/%s", volume.MappingName))
 	if fi, err := os.Lstat(mapperPath); err == nil {
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] DEBUG: %s exists, mode=%v\n", mapperPath, fi.Mode())
 		if fi.Mode()&os.ModeSymlink != 0 {
@@ -539,7 +536,7 @@ func (s *FirstbootSealStrategy) Unlock(ctx context.Context, volume *luks.VolumeC
 	// strategy has either destroyed it or handed it off to tmpfs.
 	clearString(&recoveryKey)
 
-	syscall.Sync()
+	hostSync()
 
 	// Resolve the seal parent handle for the summary message
 	sealParentHandle := s.getLUKSSealParentHandle()
@@ -582,7 +579,7 @@ func (s *FirstbootSealStrategy) Unlock(ctx context.Context, volume *luks.VolumeC
 func (s *FirstbootSealStrategy) openInstaller(installerPath string) (string, error) {
 	// Check if installer is already mounted by dracut hook
 	// The dracut hook mounts it at /mnt/installer before calling platformd
-	testFile := filepath.Join(strategyInstallerMountPoint, "luks-key.bin")
+	testFile := filepath.Join(hostPath(strategyInstallerMountPoint), "luks-key.bin")
 	if _, err := os.Stat(testFile); err == nil {
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Installer already mounted at %s (by dracut hook)\n", strategyInstallerMountPoint)
 		// Return empty loopDev to indicate we didn't open it
@@ -592,35 +589,35 @@ func (s *FirstbootSealStrategy) openInstaller(installerPath string) (string, err
 	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Setting up loop device for installer...\n")
 
 	// Setup loop device
-	loopDev, err := luks2.SetupLoopDevice(installerPath)
+	loopDev, err := luksSetupLoopDevice(installerPath)
 	if err != nil {
 		return "", &WrappedError{Msg: "failed to setup loop device", Err: err}
 	}
 
 	// Unlock with well-known password
 	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Unlocking installer (forensic protection password)...\n")
-	if err := luks2.Unlock(loopDev, []byte(installer.InstallerPassword), "installer"); err != nil {
-		luks2.DetachLoopDevice(loopDev)
+	if err := luksUnlock(loopDev, []byte(installer.InstallerPassword), "installer"); err != nil {
+		detachOrWarn(s.logger, loopDev)
 		return "", &WrappedError{Msg: "failed to unlock installer", Err: err}
 	}
 
 	// Get mapped device path
-	installerDevPath, err := luks2.GetMappedDevicePath("installer")
+	installerDevPath, err := luksGetMappedDevicePath("installer")
 	if err != nil {
 		installerDevPath = "/dev/mapper/installer"
 	}
 
 	// Create and mount
-	if err := os.MkdirAll(strategyInstallerMountPoint, 0700); err != nil {
-		luks2.Lock("installer")
-		luks2.DetachLoopDevice(loopDev)
+	if err := os.MkdirAll(hostPath(strategyInstallerMountPoint), 0700); err != nil {
+		lockOrWarn(s.logger, "installer")
+		detachOrWarn(s.logger, loopDev)
 		return "", &WrappedError{Msg: "failed to create mount point", Err: err}
 	}
 
 	// Mount read-write for provisioning
-	if err := syscall.Mount(installerDevPath, strategyInstallerMountPoint, "ext4", 0, ""); err != nil {
-		luks2.Lock("installer")
-		luks2.DetachLoopDevice(loopDev)
+	if err := hostMount(installerDevPath, hostPath(strategyInstallerMountPoint), "ext4", 0, ""); err != nil {
+		lockOrWarn(s.logger, "installer")
+		detachOrWarn(s.logger, loopDev)
 		return "", &WrappedError{Msg: "failed to mount installer", Err: err}
 	}
 
@@ -657,11 +654,11 @@ func (s *FirstbootSealStrategy) closeInstaller(loopDev, installerPath string, pa
 	// the slow case fail just the same.
 
 	// Sync filesystem before any cleanup
-	syscall.Sync()
+	hostSync()
 
 	// Check if any processes are using the installer mount
 	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Checking for processes using installer mount...\n")
-	if output, err := exec.Command("fuser", "-m", strategyInstallerMountPoint).CombinedOutput(); err == nil {
+	if output, err := hostCommand("fuser", "-m", hostPath(strategyInstallerMountPoint)); err == nil {
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Processes using mount: %s\n", strings.TrimSpace(string(output)))
 	}
 
@@ -669,10 +666,10 @@ func (s *FirstbootSealStrategy) closeInstaller(loopDev, installerPath string, pa
 	// their open file handles until they naturally close. This prevents the
 	// firstboot process from being killed during cleanup.
 	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Unmounting installer (lazy)...\n")
-	if err := syscall.Unmount(strategyInstallerMountPoint, syscall.MNT_DETACH); err != nil {
+	if err := hostUnmount(hostPath(strategyInstallerMountPoint), syscall.MNT_DETACH); err != nil {
 		// Try normal unmount as fallback
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Lazy unmount failed: %v, trying normal unmount...\n", err)
-		if err := syscall.Unmount(strategyInstallerMountPoint, 0); err != nil {
+		if err := hostUnmount(hostPath(strategyInstallerMountPoint), 0); err != nil {
 			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] WARNING: Normal unmount also failed: %v\n", err)
 		} else {
 			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Normal unmount succeeded\n")
@@ -680,7 +677,7 @@ func (s *FirstbootSealStrategy) closeInstaller(loopDev, installerPath string, pa
 	} else {
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Lazy unmount succeeded\n")
 	}
-	_ = os.Remove(strategyInstallerMountPoint)
+	_ = os.Remove(hostPath(strategyInstallerMountPoint))
 
 	// A lazy unmount detaches immediately and releases the handles as their
 	// owners close them; there is no completion event to wait for here, and the
@@ -688,7 +685,7 @@ func (s *FirstbootSealStrategy) closeInstaller(loopDev, installerPath string, pa
 	// above stays as diagnostics for the log; it used to also buy a further half
 	// second, which bought nothing the retry loop was not already doing, and its
 	// result is no longer held in a variable that outlives the log line.
-	syscall.Sync()
+	hostSync()
 
 	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Closing LUKS container...\n")
 	luksErr := closeInstallerMapping(defaultInstallerMappingCloser())
@@ -697,7 +694,7 @@ func (s *FirstbootSealStrategy) closeInstaller(loopDev, installerPath string, pa
 	} else {
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] WARNING: Failed to close LUKS container: %v\n", luksErr)
 		// Final attempt: dmsetup remove with deferred option
-		if output, err := exec.Command("dmsetup", "remove", "--deferred", "installer").CombinedOutput(); err != nil {
+		if output, err := hostCommand("dmsetup", "remove", "--deferred", "installer"); err != nil {
 			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] dmsetup remove --deferred also failed: %s\n", strings.TrimSpace(string(output)))
 		} else {
 			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] LUKS container scheduled for deferred removal\n")
@@ -706,7 +703,7 @@ func (s *FirstbootSealStrategy) closeInstaller(loopDev, installerPath string, pa
 
 	// Detach loop device if we created it
 	if loopDev != "" {
-		if err := luks2.DetachLoopDevice(loopDev); err != nil {
+		if err := luksDetachLoopDevice(loopDev); err != nil {
 			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] WARNING: Failed to detach loop device: %v\n", err)
 		} else {
 			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Loop device detached\n")
@@ -719,7 +716,7 @@ func (s *FirstbootSealStrategy) closeInstaller(loopDev, installerPath string, pa
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] PRESERVING installer.luks for retry\n")
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Sealing failed - tpm-firstboot-seal service will retry after boot\n")
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] ----------------------------------------\n")
-		syscall.Sync()
+		hostSync()
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Installer cleanup complete (preserved)\n")
 		return
 	}
@@ -740,7 +737,7 @@ func (s *FirstbootSealStrategy) closeInstaller(loopDev, installerPath string, pa
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] installer.luks securely wiped\n")
 	}
 
-	syscall.Sync()
+	hostSync()
 	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Installer cleanup complete\n")
 }
 
@@ -766,9 +763,9 @@ const (
 
 func defaultInstallerMappingCloser() installerMappingCloser {
 	return installerMappingCloser{
-		lock: luks2.Lock,
+		lock: luksLock,
 		forceRemove: func(name string) error {
-			if output, err := exec.Command("dmsetup", "remove", "--force", name).CombinedOutput(); err != nil {
+			if output, err := hostCommand("dmsetup", "remove", "--force", name); err != nil {
 				return &WrappedError{Msg: "dmsetup remove --force " + name + ": " + strings.TrimSpace(string(output)), Err: err}
 			}
 			return nil
@@ -1027,7 +1024,7 @@ const strategyRootMountPoint = "/mnt/root-tmp"
 // checks can pick it up and surface the degraded state.
 func (s *FirstbootSealStrategy) copyInstallerToRoot(mappingName, recoveryKey, sealRetryReason string) error {
 	// Temporary mount point for root filesystem
-	rootMountPoint := strategyRootMountPoint
+	rootMountPoint := hostPath(strategyRootMountPoint)
 
 	// Load installer config to check if LVM is used
 	// Default to LVM with vg0/root if config can't be read
@@ -1035,7 +1032,7 @@ func (s *FirstbootSealStrategy) copyInstallerToRoot(mappingName, recoveryKey, se
 	vgName := "vg0"
 	lvName := "root"
 
-	configPath := filepath.Join(strategyInstallerMountPoint, "etc", "trusted-platform", "config.yaml")
+	configPath := filepath.Join(hostPath(strategyInstallerMountPoint), "etc", "trusted-platform", "config.yaml")
 	if cfg, err := installer.LoadConfig(configPath); err == nil {
 		useLVM = cfg.Disk.RootFilesystem == installer.FilesystemLVM
 		if cfg.Disk.LVMVolumeGroup != "" {
@@ -1057,12 +1054,12 @@ func (s *FirstbootSealStrategy) copyInstallerToRoot(mappingName, recoveryKey, se
 
 		// DEBUG: Show PV scan devices before LVM commands
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] DEBUG: Checking devices before LVM activation...\n")
-		if output, err := exec.Command("/sbin/lvm", "pvs", "--all", "-v").CombinedOutput(); err == nil {
+		if output, err := hostCommand("/sbin/lvm", "pvs", "--all", "-v"); err == nil {
 			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] DEBUG: pvs --all output:\n%s\n", string(output))
 		} else {
 			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] DEBUG: pvs --all failed: %v\nOutput: %s\n", err, string(output))
 		}
-		if output, err := exec.Command("/sbin/lvm", "lvmdiskscan").CombinedOutput(); err == nil {
+		if output, err := hostCommand("/sbin/lvm", "lvmdiskscan"); err == nil {
 			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] DEBUG: lvmdiskscan output:\n%s\n", string(output))
 		}
 
@@ -1071,7 +1068,7 @@ func (s *FirstbootSealStrategy) copyInstallerToRoot(mappingName, recoveryKey, se
 			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] WARNING: lvm pvscan failed: %v\n", err)
 		}
 		// Show PVs found after pvscan
-		if output, err := exec.Command("/sbin/lvm", "pvs").CombinedOutput(); err == nil {
+		if output, err := hostCommand("/sbin/lvm", "pvs"); err == nil {
 			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] DEBUG: pvs after pvscan:\n%s\n", string(output))
 		}
 
@@ -1102,7 +1099,7 @@ func (s *FirstbootSealStrategy) copyInstallerToRoot(mappingName, recoveryKey, se
 		_ = s.runCommand("udevadm", "settle", "--timeout=5")
 
 		// LVM root device: /dev/mapper/vg0-root
-		rootDevPath = filepath.Join(strategyDevMapperDir, vgName+"-"+lvName)
+		rootDevPath = filepath.Join(hostPath(strategyDevMapperDir), vgName+"-"+lvName)
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Using LVM root device: %s\n", rootDevPath)
 
 		// Wait up to 5 seconds for device node to appear
@@ -1115,7 +1112,7 @@ func (s *FirstbootSealStrategy) copyInstallerToRoot(mappingName, recoveryKey, se
 				break
 			}
 			// Also check /dev/vgName/lvName format
-			altPath := filepath.Join(strategyDevDir, vgName, lvName)
+			altPath := filepath.Join(hostPath(strategyDevDir), vgName, lvName)
 			if _, err := os.Stat(altPath); err == nil {
 				rootDevPath = altPath
 				deviceFound = true
@@ -1128,13 +1125,13 @@ func (s *FirstbootSealStrategy) copyInstallerToRoot(mappingName, recoveryKey, se
 		if !deviceFound {
 			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] WARNING: LVM device not found after activation, attempting dmsetup...\n")
 			// Try to list dm devices for debugging
-			if output, err := exec.Command("dmsetup", "ls").CombinedOutput(); err == nil {
+			if output, err := hostCommand("dmsetup", "ls"); err == nil {
 				fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] dmsetup ls output: %s\n", string(output))
 			}
 		}
 	} else {
 		// Non-LVM: use the LUKS mapping directly
-		rootDevPath = filepath.Join(strategyDevMapperDir, mappingName)
+		rootDevPath = filepath.Join(hostPath(strategyDevMapperDir), mappingName)
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Using direct root device: %s\n", rootDevPath)
 	}
 
@@ -1151,18 +1148,18 @@ func (s *FirstbootSealStrategy) copyInstallerToRoot(mappingName, recoveryKey, se
 
 	// Mount the root filesystem
 	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Mounting root at %s...\n", rootMountPoint)
-	if err := syscall.Mount(rootDevPath, rootMountPoint, "ext4", 0, ""); err != nil {
+	if err := hostMount(rootDevPath, rootMountPoint, "ext4", 0, ""); err != nil {
 		// Try xfs if ext4 fails
-		if err := syscall.Mount(rootDevPath, rootMountPoint, "xfs", 0, ""); err != nil {
+		if err := hostMount(rootDevPath, rootMountPoint, "xfs", 0, ""); err != nil {
 			// Try btrfs as last resort
-			if err := syscall.Mount(rootDevPath, rootMountPoint, "btrfs", 0, ""); err != nil {
+			if err := hostMount(rootDevPath, rootMountPoint, "btrfs", 0, ""); err != nil {
 				return &WrappedError{Msg: "failed to mount root filesystem", Err: err}
 			}
 		}
 	}
 	defer func() {
-		syscall.Sync()
-		syscall.Unmount(rootMountPoint, 0)
+		hostSync()
+		unmountOrWarn(s.logger, rootMountPoint, 0)
 	}()
 	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Root filesystem mounted\n")
 
@@ -1171,9 +1168,9 @@ func (s *FirstbootSealStrategy) copyInstallerToRoot(mappingName, recoveryKey, se
 		src  string
 		dest string
 	}{
-		{filepath.Join(strategyInstallerMountPoint, "var", "lib", "trusted-platform"), filepath.Join(rootMountPoint, "var", "lib", "trusted-platform")},
-		{filepath.Join(strategyInstallerMountPoint, "var", "log", "trusted-platform"), filepath.Join(rootMountPoint, "var", "log", "trusted-platform")},
-		{filepath.Join(strategyInstallerMountPoint, "etc", "trusted-platform"), filepath.Join(rootMountPoint, "etc", "trusted-platform")},
+		{filepath.Join(hostPath(strategyInstallerMountPoint), "var", "lib", "trusted-platform"), filepath.Join(rootMountPoint, "var", "lib", "trusted-platform")},
+		{filepath.Join(hostPath(strategyInstallerMountPoint), "var", "log", "trusted-platform"), filepath.Join(rootMountPoint, "var", "log", "trusted-platform")},
+		{filepath.Join(hostPath(strategyInstallerMountPoint), "etc", "trusted-platform"), filepath.Join(rootMountPoint, "etc", "trusted-platform")},
 	}
 
 	for _, sync := range dirsToSync {
@@ -1239,8 +1236,7 @@ func (s *FirstbootSealStrategy) copyInstallerToRoot(mappingName, recoveryKey, se
 
 // runCommand executes a command and returns any error
 func (s *FirstbootSealStrategy) runCommand(name string, args ...string) error {
-	cmd := exec.Command(name, args...)
-	output, err := cmd.CombinedOutput()
+	output, err := hostCommand(name, args...)
 	if err != nil {
 		return &CommandOutputError{Msg: fmt.Sprintf("%s %v failed", name, args), Err: err, Detail: fmt.Sprintf(" (output: %s)", string(output))}
 	}
@@ -1492,7 +1488,7 @@ func (s *FirstbootSealStrategy) getLUKSSealParentHandle() uint32 {
 // loadInstallerConfig loads the installer configuration from the mounted
 // installer container. Returns nil if the config cannot be loaded.
 func (s *FirstbootSealStrategy) loadInstallerConfig() *installer.Config {
-	configPath := filepath.Join(strategyInstallerMountPoint, "etc", "trusted-platform", "config.yaml")
+	configPath := filepath.Join(hostPath(strategyInstallerMountPoint), "etc", "trusted-platform", "config.yaml")
 	cfg, err := installer.LoadConfig(configPath)
 	if err != nil {
 		return nil
@@ -1586,7 +1582,7 @@ func (s *FirstbootSealStrategy) escalateToPPIForceClear(cause error) {
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] WARNING: could not write PPI marker (%v) — skipping PPI escalation to avoid a reboot loop.\n", err)
 		return
 	}
-	syscall.Sync()
+	hostSync()
 
 	if err := s.executor.TPM().ForceClear(); err != nil {
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] PPI ForceClear scheduling failed: %v — continuing with a degraded TPM.\n", err)
@@ -1594,8 +1590,10 @@ func (s *FirstbootSealStrategy) escalateToPPIForceClear(cause error) {
 	}
 
 	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] UEFI PPI ForceClear scheduled — rebooting so the firmware clears the TPM at POST...\n")
-	exec.Command("sync").Run()
-	syscall.Sync()
+	if output, err := hostCommand("sync"); err != nil {
+		s.logger.Warn("sync command failed", "output", strings.TrimSpace(string(output)), "error", err)
+	}
+	hostSync()
 
 	// Immediate reboot so no provisioning runs on the still-dirty TPM. On the
 	// next boot the firmware has cleared it and FactoryResetWithClear succeeds.
@@ -1680,15 +1678,15 @@ func (s *FirstbootSealStrategy) applyRecoveryKeyStrategy(devicePath, recoveryKey
 	switch strategy {
 	case installer.RecoveryKeyStrategyDestroy:
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] recovery-key-strategy=destroy: killing LUKS slot %d on %s\n", luksSlotRecovery, devicePath)
-		if err := luks2.KillSlot(devicePath, []byte(recoveryKey), luksSlotRecovery); err != nil {
-			return strategy, &WrappedError{Msg: fmt.Sprintf("luks2.KillSlot(slot=%d)", luksSlotRecovery), Err: err}
+		if err := luksKillSlot(devicePath, []byte(recoveryKey), luksSlotRecovery); err != nil {
+			return strategy, &WrappedError{Msg: fmt.Sprintf("luksKillSlot(slot=%d)", luksSlotRecovery), Err: err}
 		}
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Recovery keyslot %d killed — recovery passphrase is unrecoverable\n", luksSlotRecovery)
 		return strategy, nil
 
 	case installer.RecoveryKeyStrategyEscrow:
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] recovery-key-strategy=escrow: staging passphrase at %s for platformd pickup\n", firstbootHandoffRecoveryKey)
-		if err := writeHandoffFile(firstbootHandoffRecoveryKey, []byte(recoveryKey)); err != nil {
+		if err := writeHandoffFile(hostPath(firstbootHandoffRecoveryKey), []byte(recoveryKey)); err != nil {
 			return strategy, err
 		}
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Recovery passphrase staged for platformd escrow consumer\n")
@@ -1722,9 +1720,9 @@ func (s *FirstbootSealStrategy) applyRecoveryKeyStrategy(devicePath, recoveryKey
 func (s *FirstbootSealStrategy) dumpFirstbootForensics() {
 	// Bail out quietly if the installer is not mounted (we never got past
 	// step 1) — there is nowhere to write to.
-	probe := filepath.Join(strategyInstallerMountPoint, "luks-key.bin")
+	probe := filepath.Join(hostPath(strategyInstallerMountPoint), "luks-key.bin")
 	if _, err := os.Stat(probe); err != nil {
-		altProbe := filepath.Join(strategyInstallerMountPoint, "etc", "trusted-platform", "config.yaml")
+		altProbe := filepath.Join(hostPath(strategyInstallerMountPoint), "etc", "trusted-platform", "config.yaml")
 		if _, altErr := os.Stat(altProbe); altErr != nil {
 			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-FORENSICS] installer not mounted — skipping dump\n")
 			return
@@ -1732,7 +1730,7 @@ func (s *FirstbootSealStrategy) dumpFirstbootForensics() {
 	}
 
 	stamp := time.Now().UTC().Format("20060102T150405Z")
-	dumpDir := filepath.Join(strategyInstallerMountPoint, "firstboot-runs", stamp)
+	dumpDir := filepath.Join(hostPath(strategyInstallerMountPoint), "firstboot-runs", stamp)
 	if err := os.MkdirAll(dumpDir, 0700); err != nil {
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-FORENSICS] mkdir %s: %v\n", dumpDir, err)
 		return
@@ -1758,7 +1756,7 @@ func (s *FirstbootSealStrategy) dumpFirstbootForensics() {
 		{"date.txt", []string{"date", "-u", "+%Y-%m-%dT%H:%M:%SZ"}},
 	}
 	for _, cmd := range commands {
-		out, _ := exec.Command(cmd.argv[0], cmd.argv[1:]...).CombinedOutput()
+		out, _ := hostCommand(cmd.argv[0], cmd.argv[1:]...)
 		path := filepath.Join(dumpDir, cmd.name)
 		if err := os.WriteFile(path, out, 0600); err != nil {
 			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-FORENSICS] write %s: %v\n", path, err)
@@ -1766,13 +1764,13 @@ func (s *FirstbootSealStrategy) dumpFirstbootForensics() {
 	}
 
 	// Marker so the operator knows where the latest dump lives.
-	latest := filepath.Join(strategyInstallerMountPoint, "firstboot-runs", "latest")
+	latest := filepath.Join(hostPath(strategyInstallerMountPoint), "firstboot-runs", "latest")
 	_ = os.Remove(latest)
 	_ = os.Symlink(stamp, latest)
 
 	// Sync so the writes hit the encrypted device before the eventual
 	// closeInstaller path locks the LUKS volume.
-	syscall.Sync()
+	hostSync()
 
 	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-FORENSICS] forensic dump written to %s (preserved in installer container)\n", dumpDir)
 }
@@ -1800,7 +1798,7 @@ func (s *FirstbootSealStrategy) Install(ctx context.Context, volume *luks.Volume
 
 // getEFIPath returns the EFI partition path
 func (s *FirstbootSealStrategy) getEFIPath() string {
-	return strategyEFIMountPoint
+	return hostPath(strategyEFIMountPoint)
 }
 
 // ensureEFIMounted mounts EFI read-only
@@ -1815,7 +1813,7 @@ func (s *FirstbootSealStrategy) ensureEFIMountedRW() (bool, error) {
 
 // mountEFI mounts the EFI partition
 func (s *FirstbootSealStrategy) mountEFI(flags uintptr) (bool, error) {
-	efiDir := filepath.Join(strategyEFIMountPoint, "EFI")
+	efiDir := filepath.Join(hostPath(strategyEFIMountPoint), "EFI")
 	if stat, err := os.Stat(efiDir); err == nil && stat.IsDir() {
 		return true, nil
 	}
@@ -1825,11 +1823,11 @@ func (s *FirstbootSealStrategy) mountEFI(flags uintptr) (bool, error) {
 		return false, &MessageError{Msg: "no EFI partition found"}
 	}
 
-	if err := os.MkdirAll(strategyEFIMountPoint, 0755); err != nil {
+	if err := os.MkdirAll(hostPath(strategyEFIMountPoint), 0755); err != nil {
 		return false, &WrappedError{Msg: "failed to create mount point", Err: err}
 	}
 
-	if err := syscall.Mount(bootDevice, strategyEFIMountPoint, "vfat", flags, ""); err != nil {
+	if err := hostMount(bootDevice, hostPath(strategyEFIMountPoint), "vfat", flags, ""); err != nil {
 		return false, &WrappedError{Msg: fmt.Sprintf("failed to mount %s", bootDevice), Err: err}
 	}
 
@@ -1841,7 +1839,7 @@ func (s *FirstbootSealStrategy) mountEFI(flags uintptr) (bool, error) {
 // well-known first-partition names, see pkg/partition). It returns "" when
 // none exists, which the caller reports.
 func (s *FirstbootSealStrategy) detectEFIDevice() string {
-	device, err := partition.FindESP(s.executor.rootDevice())
+	device, err := findESP(s.executor.rootDevice())
 	if err != nil {
 		s.logger.Debugf("EFI partition detection failed: %v", err)
 		return ""
@@ -1851,7 +1849,7 @@ func (s *FirstbootSealStrategy) detectEFIDevice() string {
 
 // unmountEFI unmounts the EFI partition
 func (s *FirstbootSealStrategy) unmountEFI() {
-	syscall.Unmount(strategyEFIMountPoint, 0)
+	unmountOrWarn(s.logger, hostPath(strategyEFIMountPoint), 0)
 }
 
 // ProcessFirstbootMarkers processes markers after switch_root
@@ -1882,7 +1880,7 @@ func ProcessFirstbootMarkers(efiPath string) error {
 
 	// Remove markers
 	os.Remove(markerPath)
-	os.RemoveAll(strategyMarkerDir)
+	os.RemoveAll(hostPath(strategyMarkerDir))
 
 	fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Firstboot markers processed\n")
 	return nil
@@ -1890,13 +1888,13 @@ func ProcessFirstbootMarkers(efiPath string) error {
 
 // processRecoveryKey copies recovery key from marker to /root/
 func processRecoveryKey() {
-	recoveryPath := filepath.Join(strategyMarkerDir, "luks-recovery.txt")
+	recoveryPath := filepath.Join(hostPath(strategyMarkerDir), "luks-recovery.txt")
 	data, err := os.ReadFile(recoveryPath)
 	if err != nil {
 		return
 	}
 
-	destPath := RecoveryKeyPath
+	destPath := hostPath(RecoveryKeyPath)
 	if err := os.WriteFile(destPath, data, 0600); err != nil {
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] WARNING: Failed to write recovery key: %v\n", err)
 		return
@@ -1913,11 +1911,11 @@ func copyInstallerToRootFS() error {
 	// Copy var/ and etc/ directories
 	dirs := []string{"var", "etc"}
 	for _, dir := range dirs {
-		src := filepath.Join(strategyInstallerMountPoint, dir)
+		src := filepath.Join(hostPath(strategyInstallerMountPoint), dir)
 		if _, err := os.Stat(src); err != nil {
 			continue
 		}
-		if err := copyDirRecursive(src, "/"+dir); err != nil {
+		if err := copyDirRecursive(src, hostPath("/"+dir)); err != nil {
 			fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] WARNING: Failed to copy %s: %v\n", dir, err)
 		}
 	}
@@ -1961,7 +1959,7 @@ func copyDirRecursive(src, dest string) error {
 // removed slot as "keyslot 0 does not exist", which is the state this
 // wants, so a retry boot after a partial first boot is not an error.
 func killInstallerKeyslot(devicePath string, luksKey []byte) {
-	err := luks2.KillSlot(devicePath, luksKey, luksSlotInstaller)
+	err := luksKillSlot(devicePath, luksKey, luksSlotInstaller)
 	switch {
 	case err == nil:
 		fmt.Fprintf(os.Stderr, "[FIRSTBOOT-SEAL] Installer keyslot %d killed — the install-time passphrase no longer opens the root\n", luksSlotInstaller)

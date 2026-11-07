@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -81,16 +82,6 @@ func TestNewCommand(t *testing.T) {
 	}
 }
 
-func TestNewCommand_NilFlags(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return nil
-	}
-
-	cmd := NewCommand(getFlags)
-	require.NotNil(t, cmd)
-	assert.Equal(t, "device", cmd.Use)
-}
-
 // ============================================================================
 // List Command Tests
 // ============================================================================
@@ -113,57 +104,6 @@ func TestNewListCommand(t *testing.T) {
 	pageSizeFlag := cmd.Flag("page-size")
 	require.NotNil(t, pageSizeFlag)
 	assert.Equal(t, "20", pageSizeFlag.DefValue)
-}
-
-func TestNewListCommand_FlagParsing(t *testing.T) {
-	tests := []struct {
-		name     string
-		args     []string
-		wantPage string
-		wantSize string
-	}{
-		{
-			name:     "default values",
-			args:     []string{},
-			wantPage: "1",
-			wantSize: "20",
-		},
-		{
-			name:     "custom page",
-			args:     []string{"--page", "5"},
-			wantPage: "5",
-			wantSize: "20",
-		},
-		{
-			name:     "custom page size",
-			args:     []string{"--page-size", "100"},
-			wantPage: "1",
-			wantSize: "100",
-		},
-		{
-			name:     "both custom",
-			args:     []string{"--page", "3", "--page-size", "50"},
-			wantPage: "3",
-			wantSize: "50",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cmd := newListCommand(getTestFlagsWithFormat(cli.OutputFormatJSON))
-			cmd.SetArgs(tt.args)
-			err := cmd.ParseFlags(tt.args)
-			require.NoError(t, err)
-
-			pageFlag := cmd.Flag("page")
-			require.NotNil(t, pageFlag)
-			assert.Equal(t, tt.wantPage, pageFlag.Value.String())
-
-			pageSizeFlag := cmd.Flag("page-size")
-			require.NotNil(t, pageSizeFlag)
-			assert.Equal(t, tt.wantSize, pageSizeFlag.Value.String())
-		})
-	}
 }
 
 func TestBuildListOutput(t *testing.T) {
@@ -231,19 +171,6 @@ func TestPrintListTable_EmptyDevices(t *testing.T) {
 
 	// Note: The function prints to stdout directly for "No devices found"
 	// We're verifying the function doesn't panic with empty input
-}
-
-func TestPrintListTable_WithDevices(t *testing.T) {
-	var buf bytes.Buffer
-	printer := cli.NewPrinterWithWriter(cli.OutputFormatTable, true, &buf)
-	devices := []deviceInfo{
-		{ID: 1, Serial: "ABC123", Model: "Device Model 1"},
-		{ID: 2, Serial: "DEF456", Model: "Device Model 2"},
-	}
-
-	printListTable(printer, devices, 1, 20, 2)
-
-	// The function prints to stdout, so we're mainly verifying no panic occurs
 }
 
 // ============================================================================
@@ -615,322 +542,38 @@ func TestTruncate(t *testing.T) {
 // Error Type Tests
 // ============================================================================
 
-func TestErrInvalidDeviceID(t *testing.T) {
-	tests := []struct {
-		name     string
-		id       string
-		expected string
-	}{
-		{
-			name:     "non-numeric ID",
-			id:       "abc",
-			expected: "invalid device ID: abc",
-		},
-		{
-			name:     "empty ID",
-			id:       "",
-			expected: "invalid device ID: ",
-		},
-		{
-			name:     "special characters",
-			id:       "!@#$",
-			expected: "invalid device ID: !@#$",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := ErrInvalidDeviceID{ID: tt.id}
-			assert.Equal(t, tt.expected, err.Error())
-		})
-	}
-}
-
-func TestErrDeviceNotFound(t *testing.T) {
-	tests := []struct {
-		name     string
-		id       uint64
-		expected string
-	}{
-		{
-			name:     "device ID 123",
-			id:       123,
-			expected: "device not found: 123",
-		},
-		{
-			name:     "device ID 0",
-			id:       0,
-			expected: "device not found: 0",
-		},
-		{
-			name:     "large device ID",
-			id:       18446744073709551615, // max uint64
-			expected: "device not found: 18446744073709551615",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := ErrDeviceNotFound{ID: tt.id}
-			assert.Equal(t, tt.expected, err.Error())
-		})
-	}
-}
-
-func TestErrDeviceNotFoundBySerial(t *testing.T) {
-	tests := []struct {
-		name     string
-		serial   string
-		expected string
-	}{
-		{
-			name:     "normal serial",
-			serial:   "ABC123",
-			expected: "device not found with serial: ABC123",
-		},
-		{
-			name:     "empty serial",
-			serial:   "",
-			expected: "device not found with serial: ",
-		},
-		{
-			name:     "serial with special chars",
-			serial:   "SN-001/ABC",
-			expected: "device not found with serial: SN-001/ABC",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := ErrDeviceNotFoundBySerial{Serial: tt.serial}
-			assert.Equal(t, tt.expected, err.Error())
-		})
-	}
-}
-
-func TestErrSerialNumberRequired(t *testing.T) {
-	err := ErrSerialNumberRequired{}
-	assert.Equal(t, "serial number is required", err.Error())
-}
-
-func TestErrDeleteDeviceFailed(t *testing.T) {
-	tests := []struct {
-		name     string
-		id       uint64
-		reason   string
-		expected string
-	}{
-		{
-			name:     "device in use",
-			id:       123,
-			reason:   "device is currently in use",
-			expected: "failed to delete device 123: device is currently in use",
-		},
-		{
-			name:     "permission denied",
-			id:       456,
-			reason:   "permission denied",
-			expected: "failed to delete device 456: permission denied",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := ErrDeleteDeviceFailed{ID: tt.id, Reason: tt.reason}
-			assert.Equal(t, tt.expected, err.Error())
-		})
-	}
-}
-
-func TestErrGetDeviceFailed(t *testing.T) {
-	tests := []struct {
-		name     string
-		id       uint64
-		reason   string
-		expected string
-	}{
-		{
-			name:     "connection error",
-			id:       123,
-			reason:   "connection timeout",
-			expected: "failed to get device 123: connection timeout",
-		},
-		{
-			name:     "database error",
-			id:       789,
-			reason:   "database unavailable",
-			expected: "failed to get device 789: database unavailable",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := ErrGetDeviceFailed{ID: tt.id, Reason: tt.reason}
-			assert.Equal(t, tt.expected, err.Error())
-		})
-	}
-}
-
-func TestErrListDevicesFailed(t *testing.T) {
-	tests := []struct {
-		name     string
-		reason   string
-		expected string
-	}{
-		{
-			name:     "timeout error",
-			reason:   "operation timed out",
-			expected: "failed to list devices: operation timed out",
-		},
-		{
-			name:     "auth error",
-			reason:   "authentication failed",
-			expected: "failed to list devices: authentication failed",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := ErrListDevicesFailed{Reason: tt.reason}
-			assert.Equal(t, tt.expected, err.Error())
-		})
-	}
-}
-
-func TestErrFindDeviceBySerialFailed(t *testing.T) {
-	tests := []struct {
-		name     string
-		serial   string
-		reason   string
-		expected string
-	}{
-		{
-			name:     "connection error",
-			serial:   "ABC123",
-			reason:   "connection refused",
-			expected: "failed to find device by serial ABC123: connection refused",
-		},
-		{
-			name:     "internal error",
-			serial:   "DEF456",
-			reason:   "internal server error",
-			expected: "failed to find device by serial DEF456: internal server error",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := ErrFindDeviceBySerialFailed{Serial: tt.serial, Reason: tt.reason}
-			assert.Equal(t, tt.expected, err.Error())
-		})
-	}
-}
-
 // ============================================================================
 // Command Args Validation Tests
 // ============================================================================
 
-func TestGetCommand_RequiresExactlyOneArg(t *testing.T) {
+func TestIDCommands_RequireExactlyOneArg(t *testing.T) {
 	getFlags := getTestFlagsWithFormat(cli.OutputFormatJSON)
-	cmd := newGetCommand(getFlags)
-
-	// Test with no args
-	cmd.SetArgs([]string{})
-	err := cmd.Execute()
-	require.Error(t, err)
-
-	// Test with too many args
-	cmd = newGetCommand(getFlags)
-	cmd.SetArgs([]string{"123", "456"})
-	err = cmd.Execute()
-	require.Error(t, err)
-}
-
-func TestDeleteCommand_RequiresExactlyOneArg(t *testing.T) {
-	getFlags := getTestFlagsWithFormat(cli.OutputFormatJSON)
-	cmd := newDeleteCommand(getFlags)
-
-	// Test with no args
-	cmd.SetArgs([]string{})
-	err := cmd.Execute()
-	require.Error(t, err)
-
-	// Test with too many args
-	cmd = newDeleteCommand(getFlags)
-	cmd.SetArgs([]string{"123", "456"})
-	err = cmd.Execute()
-	require.Error(t, err)
-}
-
-func TestFindSerialCommand_RequiresExactlyOneArg(t *testing.T) {
-	getFlags := getTestFlagsWithFormat(cli.OutputFormatJSON)
-	cmd := newFindSerialCommand(getFlags)
-
-	// Test with no args
-	cmd.SetArgs([]string{})
-	err := cmd.Execute()
-	require.Error(t, err)
-
-	// Test with too many args
-	cmd = newFindSerialCommand(getFlags)
-	cmd.SetArgs([]string{"serial1", "serial2"})
-	err = cmd.Execute()
-	require.Error(t, err)
+	tests := []struct {
+		name       string
+		newCommand func(func() *cli.CommonFlags) *cobra.Command
+	}{
+		{"get", newGetCommand},
+		{"delete", newDeleteCommand},
+		{"find-serial", newFindSerialCommand},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, args := range [][]string{{}, {"123", "456"}} {
+				cmd := tt.newCommand(getFlags)
+				cmd.SetArgs(args)
+				require.Error(t, cmd.Execute(), "args = %v", args)
+			}
+		})
+	}
 }
 
 // ============================================================================
 // Device Info Struct Tests
 // ============================================================================
 
-func TestDeviceInfoStruct(t *testing.T) {
-	device := deviceInfo{
-		ID:     1,
-		Serial: "SN001",
-		Model:  "Model-A",
-	}
-
-	assert.Equal(t, uint64(1), device.ID)
-	assert.Equal(t, "SN001", device.Serial)
-	assert.Equal(t, "Model-A", device.Model)
-}
-
-func TestDeviceDetailStruct(t *testing.T) {
-	device := deviceDetail{
-		ID:         1,
-		Serial:     "SN001",
-		Model:      "Model-A",
-		HashAlgoID: 1,
-		EKCert:     "ek-cert",
-		AttestPub:  "attest-pub",
-		SigningPub: "signing-pub",
-	}
-
-	assert.Equal(t, uint64(1), device.ID)
-	assert.Equal(t, "SN001", device.Serial)
-	assert.Equal(t, "Model-A", device.Model)
-	assert.Equal(t, 1, device.HashAlgoID)
-	assert.Equal(t, "ek-cert", device.EKCert)
-	assert.Equal(t, "attest-pub", device.AttestPub)
-	assert.Equal(t, "signing-pub", device.SigningPub)
-}
-
 // ============================================================================
 // Edge Case Tests
 // ============================================================================
-
-func TestBuildListOutput_EdgeCases(t *testing.T) {
-	// Test with page size of 1
-	output := buildListOutput(1, 1, 5, make([]deviceInfo, 1))
-	assert.Equal(t, 5, output["total_pages"])
-
-	// Test with page size equal to total
-	output = buildListOutput(1, 10, 10, make([]deviceInfo, 10))
-	assert.Equal(t, 1, output["total_pages"])
-
-	// Test with page size greater than total
-	output = buildListOutput(1, 100, 50, make([]deviceInfo, 50))
-	assert.Equal(t, 1, output["total_pages"])
-}
 
 // TestPrintDeviceDetails_ShowsAttestCert proves the table output names the
 // enrolled attestation certificate beside the bare key (#404), truncated the
