@@ -55,6 +55,14 @@ type ISOBuilderConfig struct {
 	// If empty, uses the current executable (os.Executable())
 	PlatformdBinary string
 
+	// PlatformctlBinary is the platformctl installed on the target. If empty,
+	// uses the running platformctl.
+	PlatformctlBinary string
+
+	// PlatformctlStaticBinary is the static platformctl the Alpine installer
+	// runs. If empty, none is installed and PlatformctlBinary must be static.
+	PlatformctlStaticBinary string
+
 	// CABundlePath is the path to the CA certificate bundle to embed in the ISO
 	// This allows clients to trust the server's CA without insecure network fetch
 	CABundlePath string
@@ -124,24 +132,9 @@ func BuildCustomISO(ctx context.Context, logger *logging.Logger, cfg *ISOBuilder
 	}
 
 	// Build ISO configuration
-	buildConfig := pkgiso.DefaultISOBuildConfig()
-	buildConfig.PlatformdBinary = platformdPath
-	buildConfig.WorkDir = cfg.WorkDir
-	buildConfig.OutputISO = cfg.OutputPath
-	buildConfig.EnableFIDO2 = cfg.EnableFIDO2
-	buildConfig.Debug = cfg.Debug
-	buildConfig.SecureBoot = cfg.SecureBoot
-	buildConfig.GenerateKeys = cfg.SecureBoot // Generate keys if SecureBoot is enabled
-	buildConfig.PreFetch = cfg.PreFetch
-
-	// Set keys directory if provided
-	if cfg.KeysDir != "" {
-		buildConfig.KeysDir = cfg.KeysDir
-	}
-
-	// Set platform type
-	if cfg.PlatformType != "" {
-		buildConfig.PlatformType = pkgiso.PlatformType(cfg.PlatformType)
+	buildConfig, err := newBuilderISOBuildConfig(cfg, platformdPath)
+	if err != nil {
+		return err
 	}
 
 	// Set platform config if provided
@@ -247,6 +240,36 @@ func BuildCustomISO(ctx context.Context, logger *logging.Logger, cfg *ISOBuilder
 	logger.Infof("ISO created: %s", outputISO)
 
 	return nil
+}
+
+// newBuilderISOBuildConfig maps the builder inputs onto a pkg/iso build
+// config. platformctl and platformctl-static follow the same rules as
+// `iso create` (namePlatformctlBinaries): a dynamically linked platformctl
+// needs a platformctl-static beside it, or staging rejects it.
+func newBuilderISOBuildConfig(cfg *ISOBuilderConfig, platformdPath string) (*pkgiso.ISOBuildConfig, error) {
+	buildConfig := pkgiso.DefaultISOBuildConfig()
+	buildConfig.PlatformdBinary = platformdPath
+	if err := namePlatformctlBinaries(buildConfig, cfg.PlatformctlBinary, cfg.PlatformctlStaticBinary); err != nil {
+		return nil, err
+	}
+	buildConfig.WorkDir = cfg.WorkDir
+	buildConfig.OutputISO = cfg.OutputPath
+	buildConfig.EnableFIDO2 = cfg.EnableFIDO2
+	buildConfig.Debug = cfg.Debug
+	buildConfig.SecureBoot = cfg.SecureBoot
+	buildConfig.GenerateKeys = cfg.SecureBoot // Generate keys if SecureBoot is enabled
+	buildConfig.PreFetch = cfg.PreFetch
+
+	// Set keys directory if provided
+	if cfg.KeysDir != "" {
+		buildConfig.KeysDir = cfg.KeysDir
+	}
+
+	// Set platform type
+	if cfg.PlatformType != "" {
+		buildConfig.PlatformType = pkgiso.PlatformType(cfg.PlatformType)
+	}
+	return buildConfig, nil
 }
 
 // resolveWebUIPath determines the WebUI path to use for the ISO.

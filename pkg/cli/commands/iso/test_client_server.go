@@ -82,6 +82,8 @@ type clientServerFlags struct {
 	dnsHostPort       int
 	useOVS            bool
 	platformdBinary   string
+	platformctlBinary string
+	platformctlStatic string
 	forceConsole      bool
 	webUIPath         string
 	serverProfile     string
@@ -236,6 +238,10 @@ Examples:
 	// Platformd binary override (useful for static builds)
 	cmd.Flags().StringVar(&flags.platformdBinary, "platformd-binary", "",
 		"Path to platformd binary for ISO building (default: current executable)")
+	cmd.Flags().StringVar(&flags.platformctlBinary, "platformctl-binary", "",
+		"Path to platformctl installed on the target (default: current executable)")
+	cmd.Flags().StringVar(&flags.platformctlStatic, "platformctl-static-binary", "",
+		"Static platformctl for Alpine/musl (default: not installed; --platformctl-binary must then be static)")
 
 	// WebUI path (public_html directory or tarball)
 	cmd.Flags().StringVar(&flags.webUIPath, "webui", "",
@@ -552,16 +558,18 @@ func runCSServerVM(ctx context.Context, logger *logging.Logger, network testenv.
 		// PreFetch is enabled because the test runs in an isolated network
 		// without internet access for downloading packages
 		isoBuilderConfig := &ISOBuilderConfig{
-			OutputPath:         serverISO,
-			WorkDir:            filepath.Join(flags.serverWorkDir, "iso-build"),
-			PlatformConfigPath: platformConfigPath,
-			PlatformType:       "server",
-			SecureBoot:         flags.secureBoot,
-			EnableFIDO2:        flags.fido2Enable,
-			Debug:              flags.debug,
-			PlatformdBinary:    flags.platformdBinary,
-			WebUIPath:          flags.webUIPath,
-			PreFetch:           true,
+			OutputPath:              serverISO,
+			WorkDir:                 filepath.Join(flags.serverWorkDir, "iso-build"),
+			PlatformConfigPath:      platformConfigPath,
+			PlatformType:            "server",
+			SecureBoot:              flags.secureBoot,
+			EnableFIDO2:             flags.fido2Enable,
+			Debug:                   flags.debug,
+			PlatformdBinary:         flags.platformdBinary,
+			PlatformctlBinary:       flags.platformctlBinary,
+			PlatformctlStaticBinary: flags.platformctlStatic,
+			WebUIPath:               flags.webUIPath,
+			PreFetch:                true,
 		}
 		if err := BuildCustomISO(ctx, logger, isoBuilderConfig); err != nil {
 			return &WrappedError{Msg: "failed to build server ISO", Err: err}
@@ -1150,17 +1158,19 @@ func runCSClientVM(ctx context.Context, logger *logging.Logger, network testenv.
 		// Build custom ISO with client's installer config
 		// PreFetch is enabled because the test runs in an isolated network
 		isoBuilderConfig := &ISOBuilderConfig{
-			OutputPath:         clientISO,
-			WorkDir:            filepath.Join(flags.clientWorkDir, "iso-build"),
-			PlatformConfigPath: platformConfigPath,
-			PlatformType:       "client",
-			SecureBoot:         flags.secureBoot,
-			EnableFIDO2:        flags.fido2Enable,
-			Debug:              flags.debug,
-			PlatformdBinary:    flags.platformdBinary,
-			CABundlePath:       csClientCABundlePath(csServerCABundlePath, flags),
-			WebUIPath:          flags.webUIPath,
-			PreFetch:           true,
+			OutputPath:              clientISO,
+			WorkDir:                 filepath.Join(flags.clientWorkDir, "iso-build"),
+			PlatformConfigPath:      platformConfigPath,
+			PlatformType:            "client",
+			SecureBoot:              flags.secureBoot,
+			EnableFIDO2:             flags.fido2Enable,
+			Debug:                   flags.debug,
+			PlatformdBinary:         flags.platformdBinary,
+			PlatformctlBinary:       flags.platformctlBinary,
+			PlatformctlStaticBinary: flags.platformctlStatic,
+			CABundlePath:            csClientCABundlePath(csServerCABundlePath, flags),
+			WebUIPath:               flags.webUIPath,
+			PreFetch:                true,
 		}
 		if err := BuildCustomISO(ctx, logger, isoBuilderConfig); err != nil {
 			return &WrappedError{Msg: "failed to build client ISO", Err: err}
@@ -1354,16 +1364,18 @@ func runCSServerVMUserNetwork(ctx context.Context, logger *logging.Logger, flags
 		// Build custom ISO with server's installer config
 		// PreFetch is enabled because the test runs in an isolated network
 		isoBuilderConfig := &ISOBuilderConfig{
-			OutputPath:         serverISO,
-			WorkDir:            filepath.Join(flags.serverWorkDir, "iso-build"),
-			PlatformConfigPath: platformConfigPath,
-			PlatformType:       "server",
-			SecureBoot:         flags.secureBoot,
-			EnableFIDO2:        flags.fido2Enable,
-			Debug:              flags.debug,
-			PlatformdBinary:    flags.platformdBinary,
-			WebUIPath:          flags.webUIPath,
-			PreFetch:           true,
+			OutputPath:              serverISO,
+			WorkDir:                 filepath.Join(flags.serverWorkDir, "iso-build"),
+			PlatformConfigPath:      platformConfigPath,
+			PlatformType:            "server",
+			SecureBoot:              flags.secureBoot,
+			EnableFIDO2:             flags.fido2Enable,
+			Debug:                   flags.debug,
+			PlatformdBinary:         flags.platformdBinary,
+			PlatformctlBinary:       flags.platformctlBinary,
+			PlatformctlStaticBinary: flags.platformctlStatic,
+			WebUIPath:               flags.webUIPath,
+			PreFetch:                true,
 		}
 		if err := BuildCustomISO(ctx, logger, isoBuilderConfig); err != nil {
 			return &WrappedError{Msg: "failed to build server ISO", Err: err}

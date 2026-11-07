@@ -36,6 +36,7 @@ const (
 	exitOK     = 0 // every failure is in the baseline
 	exitGating = 1 // a failure the baseline does not list, or cannot be attributed
 	exitUsage  = 2 // the arguments, the baseline or the log cannot be read
+	exitOutput = 3 // the output could not be written
 )
 
 // defaultModule is this repository's module path; baseline packages are
@@ -114,27 +115,23 @@ func runIn(env environment, args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	if flags.NArg() != 1 {
-		fmt.Fprintf(stderr, "%v\n", ErrUsage)
-		return exitUsage
+		return fail(stderr, ErrUsage)
 	}
 	j, ok := jobs[*jobName]
 	if !ok {
-		fmt.Fprintf(stderr, "%v\n", &JobError{Job: *jobName})
-		return exitUsage
+		return fail(stderr, &JobError{Job: *jobName})
 	}
 	if *baselinePath == "" {
 		*baselinePath = j.defaultBaseline
 	}
 	b, err := j.loadBaseline(*baselinePath)
 	if err != nil {
-		fmt.Fprintf(stderr, "%v\n", err)
-		return exitUsage
+		return fail(stderr, err)
 	}
 	opts := options{module: *module, tags: *tags, skipTests: *skipTests, goBin: *goBin}
 	v, err := j.check(context.Background(), env, opts, b, flags.Arg(0), stdout)
 	if err != nil {
-		fmt.Fprintf(stderr, "%v\n", err)
-		return exitUsage
+		return fail(stderr, err)
 	}
 	return report(v, j, stdout, stderr)
 }
@@ -209,31 +206,64 @@ func readSuiteLog(path, module string) (*suiteLog, error) {
 
 // report prints the verdict and returns the exit code.
 func report(v *verdict, j job, stdout, stderr io.Writer) int {
+	out, errOut := &reportWriter{w: stdout}, &reportWriter{w: stderr}
+	code := writeReport(v, j, out, errOut)
+	if out.err != nil || errOut.err != nil {
+		return exitOutput
+	}
+	return code
+}
+
+// writeReport writes the verdict's lines and returns its exit code.
+func writeReport(v *verdict, j job, out, errOut *reportWriter) int {
 	if len(v.Hits) > 0 {
-		fmt.Fprintf(stdout, "foreign-failure baseline (ruling 125): %d listed failures in this run\n", len(v.Hits))
+		out.printf("foreign-failure baseline (ruling 125): %d listed failures in this run\n", len(v.Hits))
 		for _, line := range v.hitsByUpstream() {
-			fmt.Fprintf(stdout, "  %s\n", line)
+			out.printf("  %s\n", line)
 		}
 	}
 	for _, line := range v.Reran {
-		fmt.Fprintf(stdout, "rerun: %s\n", line)
+		out.printf("rerun: %s\n", line)
 	}
 	if len(v.Stale) > 0 {
-		fmt.Fprintf(stdout, "notice: %d baseline entries did not fail in this run; remove each in the PR that adopts its closing release:\n", len(v.Stale))
+		out.printf("notice: %d baseline entries did not fail in this run; remove each in the PR that adopts its closing release:\n", len(v.Stale))
 		for _, e := range v.Stale {
-			fmt.Fprintf(stdout, "  %s\t%s\t%s\t%s\n", e.Kind, e.Package, e.Name, e.Upstream)
+			out.printf("  %s\t%s\t%s\t%s\n", e.Kind, e.Package, e.Name, e.Upstream)
 		}
 	}
 	for _, f := range v.Unlisted {
-		fmt.Fprintf(stderr, "FAIL not in the baseline: %s %s\n", f.Package, f.Name)
+		errOut.printf("FAIL not in the baseline: %s %s\n", f.Package, f.Name)
 	}
 	for _, reason := range v.Unattributable {
-		fmt.Fprintf(stderr, "FAIL cannot be attributed to a listed test: %s\n", reason)
+		errOut.printf("FAIL cannot be attributed to a listed test: %s\n", reason)
 	}
 	if v.gating() {
-		fmt.Fprintf(stderr, "%v\n", j.failedLine)
+		errOut.printf("%v\n", j.failedLine)
 		return exitGating
 	}
-	fmt.Fprintf(stdout, "%v\n", j.passedLine)
+	out.printf("%v\n", j.passedLine)
 	return exitOK
+}
+
+// fail writes err to stderr and returns exitUsage, or exitOutput when stderr
+// cannot be written.
+func fail(stderr io.Writer, err error) int {
+	if _, werr := fmt.Fprintf(stderr, "%v\n", err); werr != nil {
+		return exitOutput
+	}
+	return exitUsage
+}
+
+// reportWriter writes lines to one stream and keeps the first write error;
+// later lines are skipped once a write has failed.
+type reportWriter struct {
+	w   io.Writer
+	err error
+}
+
+func (r *reportWriter) printf(format string, args ...any) {
+	if r.err != nil {
+		return
+	}
+	_, r.err = fmt.Fprintf(r.w, format, args...)
 }

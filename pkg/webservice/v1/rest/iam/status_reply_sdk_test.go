@@ -131,6 +131,7 @@ func statusReplyCases() []statusReplyCase {
 // SDK sees the outcome the gRPC service reports instead of an empty status
 // (#445).
 func TestStatusRepliesOverSDKREST_RoundTrip(t *testing.T) {
+	t.Parallel()
 	for _, tc := range statusReplyCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			var got []string
@@ -151,6 +152,7 @@ func TestStatusRepliesOverSDKREST_RoundTrip(t *testing.T) {
 // TestStatusRepliesOverSDKREST_ServiceErrors pins the error half: a failure in
 // the IAM service reaches the SDK as its gRPC code, not as a reply.
 func TestStatusRepliesOverSDKREST_ServiceErrors(t *testing.T) {
+	t.Parallel()
 	for _, tc := range statusReplyCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			var got []string

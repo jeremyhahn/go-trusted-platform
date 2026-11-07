@@ -26,15 +26,17 @@ import (
 
 // customizeFlags holds flags for the customize command
 type customizeFlags struct {
-	isoDir         string
-	overlay        string
-	keysDir        string
-	platformdPath  string
-	platformConfig string
-	configFile     string
-	workDir        string
-	preFetch       bool
-	debug          bool
+	isoDir                string
+	overlay               string
+	keysDir               string
+	platformdPath         string
+	platformctlPath       string
+	platformctlStaticPath string
+	platformConfig        string
+	configFile            string
+	workDir               string
+	preFetch              bool
+	debug                 bool
 }
 
 // customizeResult is what `iso customize` prints (docs/installer/cli.md §4).
@@ -78,6 +80,8 @@ Example:
 	cmd.Flags().StringVar(&flags.overlay, "overlay", "", "Overlay directory to merge into ISO")
 	cmd.Flags().StringVar(&flags.keysDir, "keys-dir", "", "Secure Boot keys directory")
 	cmd.Flags().StringVar(&flags.platformdPath, "platformd-binary", "", "Path to platformd binary (default: platformd beside platformctl)")
+	cmd.Flags().StringVar(&flags.platformctlPath, "platformctl-binary", "", "platformctl binary the media installs with (default: this platformctl)")
+	cmd.Flags().StringVar(&flags.platformctlStaticPath, "platformctl-static-binary", "", "Static platformctl for Alpine/musl (default: not installed; --platformctl-binary must then be static)")
 	cmd.Flags().StringVar(&flags.platformConfig, "platform-config", "", "Platform configuration baked into the ISO")
 
 	// Common flags
@@ -157,6 +161,9 @@ func customizeBuildConfig(flags *customizeFlags) (*pkgiso.ISOBuildConfig, error)
 			return nil, err
 		}
 		buildConfig.PlatformdBinary = platformdPath
+	}
+	if err := namePlatformctlBinaries(buildConfig, flags.platformctlPath, flags.platformctlStaticPath); err != nil {
+		return nil, err
 	}
 	if flags.platformConfig != "" {
 		buildConfig.PlatformConfigFile = flags.platformConfig
