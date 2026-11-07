@@ -19,6 +19,7 @@ import (
 	"io"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -83,7 +84,8 @@ func TestRegistryClient_GetImageDigest_ServerError(t *testing.T) {
 	defer server.Close()
 
 	client, err := NewRegistryClient(&RegistryOptions{
-		MaxRetries: 0,
+		MaxRetries: 1,
+		RetryDelay: time.Millisecond,
 		CACertPool: caPool,
 	})
 	require.NoError(t, err)

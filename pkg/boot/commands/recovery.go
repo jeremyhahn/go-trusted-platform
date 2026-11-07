@@ -119,7 +119,7 @@ func runRecovery(ctx context.Context) error {
 	}
 
 	// Create platform manager
-	manager, err := CreateManager(ctx, logger, config, recoveryTPMPath)
+	manager, err := createManager(ctx, logger, config, recoveryTPMPath)
 	if err != nil {
 		logger.Error(&WrappedError{Msg: "failed to create manager", Err: err})
 		return &WrappedError{Msg: "failed to create manager", Err: err}
