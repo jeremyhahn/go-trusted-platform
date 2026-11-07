@@ -597,38 +597,60 @@ func TestEnrollmentStatus_String_Disabled(t *testing.T) {
 }
 
 func TestSetPlatformInfo_Success(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "enroller-test-*")
-	require.NoError(t, err)
-	defer func() { _ = os.RemoveAll(tmpDir) }()
-
-	nvramPath := filepath.Join(tmpDir, "OVMF_VARS.fd")
-	createTestNVRAM(t, nvramPath)
-
-	config := &SecureBootEnrollerConfig{
-		NVRAMPath: nvramPath,
-		KeysDir:   tmpDir,
+	tests := []struct {
+		name string
+		info PlatformInfo
+		want string
+	}{
+		{
+			name: "all fields",
+			info: PlatformInfo{Version: "1.0.0", BuildDate: "2024-01-15T12:00:00Z", GitCommit: "abc123"},
+			want: "1.0.0|2024-01-15T12:00:00Z|abc123",
+		},
+		{
+			name: "version only",
+			info: PlatformInfo{Version: "1.0.0"},
+			want: "1.0.0",
+		},
+		{
+			name: "build date only",
+			info: PlatformInfo{Version: "1.0.0", BuildDate: "2024-01-15T12:00:00Z"},
+			want: "1.0.0|2024-01-15T12:00:00Z",
+		},
+		{
+			name: "git commit only",
+			info: PlatformInfo{Version: "1.0.0", GitCommit: "abc123"},
+			want: "1.0.0||abc123",
+		},
 	}
 
-	enroller, err := NewSecureBootEnroller(config, nil)
-	require.NoError(t, err)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			nvramPath := filepath.Join(tmpDir, "OVMF_VARS.fd")
+			createTestNVRAM(t, nvramPath)
 
-	info := &PlatformInfo{
-		Version:   "1.0.0",
-		BuildDate: "2024-01-15T12:00:00Z",
-		GitCommit: "abc123",
+			config := &SecureBootEnrollerConfig{
+				NVRAMPath: nvramPath,
+				KeysDir:   tmpDir,
+			}
+
+			enroller, err := NewSecureBootEnroller(config, nil)
+			require.NoError(t, err)
+
+			info := tc.info
+			err = enroller.SetPlatformInfo(context.Background(), &info)
+			require.NoError(t, err)
+
+			// Verify it was saved
+			nvram, err := OpenNVRAM(nvramPath)
+			require.NoError(t, err)
+
+			v, err := nvram.GetVariable("TRUSTED_PLATFORM", TrustedPlatformGUID)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, string(v.Data))
+		})
 	}
-
-	ctx := context.Background()
-	err = enroller.SetPlatformInfo(ctx, info)
-	require.NoError(t, err)
-
-	// Verify it was saved
-	nvram, err := OpenNVRAM(nvramPath)
-	require.NoError(t, err)
-
-	v, err := nvram.GetVariable("TRUSTED_PLATFORM", TrustedPlatformGUID)
-	require.NoError(t, err)
-	assert.Equal(t, "1.0.0|2024-01-15T12:00:00Z|abc123", string(v.Data))
 }
 
 func TestSetPlatformInfo_NilInfo(t *testing.T) {
@@ -677,38 +699,6 @@ func TestSetPlatformInfo_EmptyVersion(t *testing.T) {
 	err = enroller.SetPlatformInfo(ctx, info)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "platform version is required")
-}
-
-func TestSetPlatformInfo_VersionOnly(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "enroller-test-*")
-	require.NoError(t, err)
-	defer func() { _ = os.RemoveAll(tmpDir) }()
-
-	nvramPath := filepath.Join(tmpDir, "OVMF_VARS.fd")
-	createTestNVRAM(t, nvramPath)
-
-	config := &SecureBootEnrollerConfig{
-		NVRAMPath: nvramPath,
-		KeysDir:   tmpDir,
-	}
-
-	enroller, err := NewSecureBootEnroller(config, nil)
-	require.NoError(t, err)
-
-	info := &PlatformInfo{
-		Version: "1.0.0",
-	}
-
-	ctx := context.Background()
-	err = enroller.SetPlatformInfo(ctx, info)
-	require.NoError(t, err)
-
-	nvram, err := OpenNVRAM(nvramPath)
-	require.NoError(t, err)
-
-	v, err := nvram.GetVariable("TRUSTED_PLATFORM", TrustedPlatformGUID)
-	require.NoError(t, err)
-	assert.Equal(t, "1.0.0", string(v.Data))
 }
 
 func TestGetPlatformInfo_Success(t *testing.T) {
@@ -768,200 +758,62 @@ func TestGetPlatformInfo_NotFound(t *testing.T) {
 }
 
 func TestEnrollKeysWithPlatformInfo_Success(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "enroller-test-*")
-	require.NoError(t, err)
-	defer func() { _ = os.RemoveAll(tmpDir) }()
-
-	// Create test certificates
-	_, pkDER := createTestCertificate(t, "Platform Key")
-	_, kekDER := createTestCertificate(t, "Key Exchange Key")
-	_, dbDER := createTestCertificate(t, "Database Key")
-
-	// Write certificates as PEM files
-	pkPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: pkDER})
-	kekPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: kekDER})
-	dbPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: dbDER})
-
-	err = os.WriteFile(filepath.Join(tmpDir, "PK.crt"), pkPEM, 0644)
-	require.NoError(t, err)
-	err = os.WriteFile(filepath.Join(tmpDir, "KEK.crt"), kekPEM, 0644)
-	require.NoError(t, err)
-	err = os.WriteFile(filepath.Join(tmpDir, "DB.crt"), dbPEM, 0644)
-	require.NoError(t, err)
-
-	// Create test NVRAM template
-	templatePath := filepath.Join(tmpDir, "OVMF_VARS_template.fd")
-	createTestNVRAM(t, templatePath)
-
-	config := &SecureBootEnrollerConfig{
-		NVRAMPath:    filepath.Join(tmpDir, "OVMF_VARS.fd"),
-		KeysDir:      tmpDir,
-		TemplatePath: templatePath,
+	tests := []struct {
+		name string
+		info *PlatformInfo
+		// wantVersion is the stored version; empty means the platform
+		// info is skipped and only the keys are enrolled.
+		wantVersion string
+	}{
+		{
+			name:        "full info",
+			info:        &PlatformInfo{Version: "1.0.0", BuildDate: "2024-01-15T12:00:00Z", GitCommit: "abc123"},
+			wantVersion: "1.0.0",
+		},
+		{name: "nil info", info: nil},
+		{name: "empty version", info: &PlatformInfo{Version: ""}},
 	}
 
-	enroller, err := NewSecureBootEnroller(config, nil)
-	require.NoError(t, err)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
 
-	info := &PlatformInfo{
-		Version:   "1.0.0",
-		BuildDate: "2024-01-15T12:00:00Z",
-		GitCommit: "abc123",
+			// Create test certificates
+			_, pkDER := createTestCertificate(t, "Platform Key")
+			_, kekDER := createTestCertificate(t, "Key Exchange Key")
+			_, dbDER := createTestCertificate(t, "Database Key")
+
+			// Write certificates as PEM files
+			for name, der := range map[string][]byte{"PK.crt": pkDER, "KEK.crt": kekDER, "DB.crt": dbDER} {
+				certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+				require.NoError(t, os.WriteFile(filepath.Join(tmpDir, name), certPEM, 0644))
+			}
+
+			// Create test NVRAM template
+			templatePath := filepath.Join(tmpDir, "OVMF_VARS_template.fd")
+			createTestNVRAM(t, templatePath)
+
+			config := &SecureBootEnrollerConfig{
+				NVRAMPath:    filepath.Join(tmpDir, "OVMF_VARS.fd"),
+				KeysDir:      tmpDir,
+				TemplatePath: templatePath,
+			}
+
+			enroller, err := NewSecureBootEnroller(config, nil)
+			require.NoError(t, err)
+
+			err = enroller.EnrollKeysWithPlatformInfo(context.Background(), tc.info)
+			require.NoError(t, err)
+
+			if tc.wantVersion == "" {
+				return
+			}
+			// Verify platform info was set
+			retrieved, err := enroller.GetPlatformInfo()
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantVersion, retrieved.Version)
+		})
 	}
-
-	ctx := context.Background()
-	err = enroller.EnrollKeysWithPlatformInfo(ctx, info)
-	require.NoError(t, err)
-
-	// Verify platform info was set
-	retrieved, err := enroller.GetPlatformInfo()
-	require.NoError(t, err)
-	assert.Equal(t, "1.0.0", retrieved.Version)
-}
-
-func TestEnrollKeysWithPlatformInfo_NilInfo(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "enroller-test-*")
-	require.NoError(t, err)
-	defer func() { _ = os.RemoveAll(tmpDir) }()
-
-	// Create test certificates
-	_, pkDER := createTestCertificate(t, "Platform Key")
-	_, kekDER := createTestCertificate(t, "Key Exchange Key")
-	_, dbDER := createTestCertificate(t, "Database Key")
-
-	pkPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: pkDER})
-	kekPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: kekDER})
-	dbPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: dbDER})
-
-	err = os.WriteFile(filepath.Join(tmpDir, "PK.crt"), pkPEM, 0644)
-	require.NoError(t, err)
-	err = os.WriteFile(filepath.Join(tmpDir, "KEK.crt"), kekPEM, 0644)
-	require.NoError(t, err)
-	err = os.WriteFile(filepath.Join(tmpDir, "DB.crt"), dbPEM, 0644)
-	require.NoError(t, err)
-
-	templatePath := filepath.Join(tmpDir, "OVMF_VARS_template.fd")
-	createTestNVRAM(t, templatePath)
-
-	config := &SecureBootEnrollerConfig{
-		NVRAMPath:    filepath.Join(tmpDir, "OVMF_VARS.fd"),
-		KeysDir:      tmpDir,
-		TemplatePath: templatePath,
-	}
-
-	enroller, err := NewSecureBootEnroller(config, nil)
-	require.NoError(t, err)
-
-	ctx := context.Background()
-	err = enroller.EnrollKeysWithPlatformInfo(ctx, nil)
-	require.NoError(t, err)
-}
-
-func TestEnrollKeysWithPlatformInfo_EmptyVersion(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "enroller-test-*")
-	require.NoError(t, err)
-	defer func() { _ = os.RemoveAll(tmpDir) }()
-
-	// Create test certificates
-	_, pkDER := createTestCertificate(t, "Platform Key")
-	_, kekDER := createTestCertificate(t, "Key Exchange Key")
-	_, dbDER := createTestCertificate(t, "Database Key")
-
-	pkPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: pkDER})
-	kekPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: kekDER})
-	dbPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: dbDER})
-
-	err = os.WriteFile(filepath.Join(tmpDir, "PK.crt"), pkPEM, 0644)
-	require.NoError(t, err)
-	err = os.WriteFile(filepath.Join(tmpDir, "KEK.crt"), kekPEM, 0644)
-	require.NoError(t, err)
-	err = os.WriteFile(filepath.Join(tmpDir, "DB.crt"), dbPEM, 0644)
-	require.NoError(t, err)
-
-	templatePath := filepath.Join(tmpDir, "OVMF_VARS_template.fd")
-	createTestNVRAM(t, templatePath)
-
-	config := &SecureBootEnrollerConfig{
-		NVRAMPath:    filepath.Join(tmpDir, "OVMF_VARS.fd"),
-		KeysDir:      tmpDir,
-		TemplatePath: templatePath,
-	}
-
-	enroller, err := NewSecureBootEnroller(config, nil)
-	require.NoError(t, err)
-
-	info := &PlatformInfo{
-		Version: "", // Empty version
-	}
-
-	ctx := context.Background()
-	err = enroller.EnrollKeysWithPlatformInfo(ctx, info)
-	require.NoError(t, err) // Should succeed, platform info just won't be set
-}
-
-func TestSetPlatformInfo_WithBuildDateOnly(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "enroller-test-*")
-	require.NoError(t, err)
-	defer func() { _ = os.RemoveAll(tmpDir) }()
-
-	nvramPath := filepath.Join(tmpDir, "OVMF_VARS.fd")
-	createTestNVRAM(t, nvramPath)
-
-	config := &SecureBootEnrollerConfig{
-		NVRAMPath: nvramPath,
-		KeysDir:   tmpDir,
-	}
-
-	enroller, err := NewSecureBootEnroller(config, nil)
-	require.NoError(t, err)
-
-	info := &PlatformInfo{
-		Version:   "1.0.0",
-		BuildDate: "2024-01-15T12:00:00Z",
-	}
-
-	ctx := context.Background()
-	err = enroller.SetPlatformInfo(ctx, info)
-	require.NoError(t, err)
-
-	nvram, err := OpenNVRAM(nvramPath)
-	require.NoError(t, err)
-
-	v, err := nvram.GetVariable("TRUSTED_PLATFORM", TrustedPlatformGUID)
-	require.NoError(t, err)
-	assert.Equal(t, "1.0.0|2024-01-15T12:00:00Z", string(v.Data))
-}
-
-func TestSetPlatformInfo_WithGitCommitOnly(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "enroller-test-*")
-	require.NoError(t, err)
-	defer func() { _ = os.RemoveAll(tmpDir) }()
-
-	nvramPath := filepath.Join(tmpDir, "OVMF_VARS.fd")
-	createTestNVRAM(t, nvramPath)
-
-	config := &SecureBootEnrollerConfig{
-		NVRAMPath: nvramPath,
-		KeysDir:   tmpDir,
-	}
-
-	enroller, err := NewSecureBootEnroller(config, nil)
-	require.NoError(t, err)
-
-	info := &PlatformInfo{
-		Version:   "1.0.0",
-		GitCommit: "abc123",
-	}
-
-	ctx := context.Background()
-	err = enroller.SetPlatformInfo(ctx, info)
-	require.NoError(t, err)
-
-	nvram, err := OpenNVRAM(nvramPath)
-	require.NoError(t, err)
-
-	v, err := nvram.GetVariable("TRUSTED_PLATFORM", TrustedPlatformGUID)
-	require.NoError(t, err)
-	assert.Equal(t, "1.0.0||abc123", string(v.Data))
 }
 
 func TestParseVariableStore_TooSmallForHeader(t *testing.T) {
