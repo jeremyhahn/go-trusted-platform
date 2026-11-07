@@ -1261,7 +1261,7 @@ func ValidateDKGPoolSize(poolSize int) error {
 ### Regional CA Responsibilities
 
 ```go
-// pkg/ca/hierarchical.go
+// design sketch; not in the tree (would be pkg/ca/hierarchical.go)
 
 // RegionalCAConfig defines a regional sub-CA
 type RegionalCAConfig struct {

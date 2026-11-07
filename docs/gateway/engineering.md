@@ -870,6 +870,12 @@ together with stateless NAT failover. Conntrack/NAT state sync is #710.
 
 ### The process model — `pkg/sdn/gateway/process` (#557)
 
+> This section describes the code today, where `gatewayd serve` is the
+> supervisor. The target is [supervisor.md](supervisor.md) (#1191, ruling 240
+> item 4): one process per service under `platformd` as the single supervisor.
+> It supersedes #557's open questions about the supervisor (systemd template
+> units).
+
 | Type | What it is |
 |---|---|
 | `Class`, `Definition` | a privilege class (`ClassKernel`, `ClassParser`) and one process: name, class, hosted services, capabilities, `AddressFamilies`, `MemoryMax`, `CPUMax`, `Unprivileged`, `Supervised`, `ReconcilesDesired` (the process applies a section of the desired document: `datapath` the load-balancer and NAT sections, `vpn` the vpn section), and `StateDir` (the directory under `--data-dir` the process keeps its own state in: `vpn` for the vpn child's revocation journal) |
@@ -1801,10 +1807,13 @@ unkillable. It then sets `memory.swap.max` to 0 and lowers the live leaf's
   `O_NONBLOCK`, and since Linux 6.16 a non-blocking `memory.max` write sets
   the limit and returns without reclaim or the OOM kill. The leaf's
   `memory.current`, `memory.peak` and `memory.events` are logged before the
-  limit drops and once the write returns, so the job log shows how far over
-  1 MiB the child was;
+  limit drops, once the write returns and once the successor serves, so the
+  job log shows how far over 1 MiB the child was and what its successor
+  needs;
 - the leaf's `memory.peak` after the kill is over 1 MiB and at least the
-  `memory.current` read before the limit dropped;
+  `memory.current` read before the limit dropped. The test needs cgroup v2
+  `memory.peak` (Linux 5.19 or later): on an older kernel the file is absent
+  and the assertion fails with a message naming that requirement;
 - only that child comes back, with a new PID;
 - the relaunch rewrites the class limit and resets the test's `memory.swap.max`
   of 0 to `max` (`Prepare` runs on every launch);
@@ -1827,7 +1836,7 @@ because a cgroup holding processes cannot enable controllers for its children.
 Every test's teardown logs each running child's leaf accounting before it
 stops gatewayd, the measured basis for the class `MemoryMax` values, with the
 peak as a percentage of the class value. It asserts every leaf charged a
-non-zero `memory.peak` and has no `oom_kill` beyond the one
+non-zero `memory.peak` (an absent `memory.peak` fails it the same way) and has no `oom_kill` beyond the one
 `TestGatewaydSupervisorMemoryMaxRestartsOnlyThatChild` caused: a relaunch keeps
 the leaf, so that kill is still counted, and any other means a class value is
 below what its child needs. It then

@@ -214,7 +214,7 @@ ALL_TARGETS=(
 # (pkg/arch/integration_legs_test.go). `leg-<n>` runs leg n the way `all` runs
 # everything: its daemon-free suites at once, then its daemon-backed ones in
 # ALL_TARGETS order, so tpm stays last on its daemon, and compute after them on
-# a restarted one. The legs are balanced by an estimate of each suite's cost
+# a restarted one. The legs are balanced by CI's measured job times
 # (docs/test/integration.md, "Legs"); iso and sdn, the two longest, are apart.
 INTEGRATION_LEGS=(
     "acme authenticode ca iso"
@@ -276,6 +276,11 @@ derive_build_tags() {
 if [ -n "$ARG1" ] && [ -n "${TARGET_PACKAGES[$ARG1]+set}" ]; then
     RUN_TARGET="$ARG1"
     BUILD_TAGS="${ARG2:-$(derive_build_tags)}"
+elif [ "$ARG1" = "warm" ]; then
+    # `warm <build-tags> [<cache-dir>]`: see warm_build_cache.
+    RUN_TARGET="warm"
+    BUILD_TAGS="${ARG2:-$(derive_build_tags)}"
+    WARM_CACHE_DIR="${3:-}"
 else
     # Legacy single-arg form: treat ARG1 as BUILD_TAGS.
     BUILD_TAGS="${ARG1:-$(derive_build_tags)}"
@@ -738,9 +743,15 @@ build_gatewayd() {
 # beside platformd and fails without (pkg/iso/customize.go StageMedia):
 # platform-initrd, which dracut calls at boot to unlock the root, and gatewayd,
 # which the gateway-role single-node template the iso suite bakes in needs
-# (pkg/iso/gatewayd.go). platform-initrd comes from its own make target, which
-# owns its build tags; GOFLAGS=-buildvcs=false for the reason build_binaries
-# gives.
+# (pkg/iso/gatewayd.go), and platformctl-static, the media's installer.
+# /tmp/platformctl is a CGO build, and customize refuses a dynamically linked
+# installer (pkg/iso DynamicBinaryError), so platformctl-static is the same
+# CLI built CGO_ENABLED=0 with the tags `make build` adds to the derived set.
+# The suite hands it to customize as --platformctl-static-binary from
+# PLATFORMCTL_STATIC_PATH: with platformctl named on the command line,
+# customize never looks beside it.
+# platform-initrd comes from its own make target, which owns its build tags;
+# GOFLAGS=-buildvcs=false for the reason build_binaries gives.
 prepare_iso_customize() {
     echo "=== Preparing iso customize binaries ==="
     if ! GOFLAGS="${GOFLAGS:+${GOFLAGS} }-buildvcs=false" make -s -C "${PLATFORM_BUILD_DIR}" \
@@ -749,6 +760,15 @@ prepare_iso_customize() {
         exit 1
     fi
     echo "platform-initrd built: /tmp/platform-initrd"
+    echo "Building platformctl-static..."
+    if ! CGO_ENABLED=0 go build -buildvcs=false -tags "osusergo netgo ${BUILD_TAGS}" \
+        -ldflags "${LDFLAGS}" \
+        -o /tmp/platformctl-static ./cmd/platformctl/; then
+        echo "FATAL: platformctl-static build failed"
+        exit 1
+    fi
+    export PLATFORMCTL_STATIC_PATH=/tmp/platformctl-static
+    echo "platformctl-static built: ${PLATFORMCTL_STATIC_PATH}"
     build_gatewayd
 }
 
@@ -784,6 +804,73 @@ prepare_gatewayd_supervision() {
     done
     echo "FATAL: cannot enable memory and cpu in ${root}/cgroup.subtree_control"
     exit 1
+}
+
+# warm_build_cache compiles into the build cache everything a run compiles:
+# platformd, platformctl, gatewayd, platform-initrd, and the vet check and test
+# binary of every package of every ALL_TARGETS key and compute. It starts
+# nothing. The integration-legs stage of the devcontainer Dockerfile runs it
+# (#1119), so a leg links and runs against a warm /gocache instead of compiling
+# the tree from an empty one.
+#
+# With WARM_CACHE_DIR (the stage's BuildKit cache mount, which keeps the last
+# build's cache) the build runs against that directory, so it compiles only what
+# changed since, and then copies what it used into the image's GOCACHE. The go
+# command refreshes the mtime of an entry it uses once that mtime is an hour old
+# (cmd/go/internal/cache), so every entry is first dated two hours back: after
+# the build, the entries newer than a stamp are exactly this build's. The rest
+# are deleted, which keeps the mount to one build's cache.
+#
+# A test package that does not compile is reported and left out: its suite
+# fails with the file:line in the leg that runs it, as it would without the warm
+# cache.
+warm_build_cache() {
+    local image_cache="${GOCACHE:-$(go env GOCACHE)}"
+    local stamp=""
+    if [ -n "${WARM_CACHE_DIR}" ]; then
+        mkdir -p "${WARM_CACHE_DIR}"
+        find "${WARM_CACHE_DIR}" -mindepth 2 -type f -exec touch -m -d '2 hours ago' {} +
+        stamp="$(mktemp)"
+        export GOCACHE="${WARM_CACHE_DIR}"
+    fi
+    echo "=== Warming the build cache (${GOCACHE}) ==="
+    build_binaries
+    prepare_iso_customize
+
+    local test_bin target pkg pkgs=()
+    test_bin="$(mktemp -u)"
+    for target in "${ALL_TARGETS[@]}" compute; do
+        compile_check "$target" || continue
+        read -r -a pkgs <<< "${TARGET_PACKAGES[$target]}"
+        for pkg in $(go list -tags "${BUILD_TAGS}" "${pkgs[@]}"); do
+            if ! go test -c -tags "${BUILD_TAGS}" -o "${test_bin}" "$pkg"; then
+                echo "WARNING: the test binary of $pkg ($target) does not compile"
+            fi
+            rm -f "${test_bin}"
+        done
+    done
+    # The binaries are rebuilt from the cache by each run, into its own /tmp.
+    rm -f /tmp/platformd /tmp/platformctl /tmp/gatewayd /tmp/platform-initrd
+
+    if [ -n "${stamp}" ]; then
+        find "${WARM_CACHE_DIR}" -mindepth 2 -type f ! -newer "${stamp}" -delete
+        rm -f "${stamp}"
+        mkdir -p "${image_cache}"
+        cp -a "${WARM_CACHE_DIR}/." "${image_cache}/"
+    fi
+    echo "=== Build cache warm: $(du -sh "${image_cache}" | cut -f1) in ${image_cache} ==="
+}
+
+# target_selected reports whether this run takes the suite KEY: every key for
+# `all`, the leg's own for `leg-<n>`.
+target_selected() {
+    local key="$1" target
+    for target in "${SELECTED_TARGETS[@]}"; do
+        if [ "$target" = "$key" ]; then
+            return 0
+        fi
+    done
+    return 1
 }
 
 # prepare_compute_config writes the platformd config for the compute target:
@@ -980,6 +1067,19 @@ NTPREFEOF
     fi
 }
 
+# platformd_socket_or_gone ends start_platformd's wait: the daemon has created
+# its socket, or it has exited and never will.
+platformd_socket_or_gone() {
+    [ -S "${PLATFORMD_SOCK_PATH}" ] || process_gone "${PLATFORMD_PID}"
+}
+
+# platformd_tls_ready reports whether platformd has written the admin client
+# bundle and the CA bundle the suites dial with.
+platformd_tls_ready() {
+    [ -f /tmp/platformd-integration/tls/client-bundle.pem ] &&
+        [ -f /tmp/platformd-integration/tls/ca-bundle.crt ]
+}
+
 start_platformd() {
     local config_file="${1:-${PLATFORM_BUILD_DIR}/test/integration/config.yaml}"
     echo "=== Starting platformd (config: ${config_file}) ==="
@@ -1019,46 +1119,39 @@ start_platformd() {
     PLATFORMD_PID=$!
     echo "platformd starting (PID: $PLATFORMD_PID)..."
 
-    # Wait for socket to be ready. A daemon that has already exited will never
-    # create the socket, so stop waiting the moment the process is gone rather
-    # than burning the full 30 seconds on a config error.
-    for i in $(seq 1 30); do
-        if ! kill -0 "$PLATFORMD_PID" 2>/dev/null; then
-            echo "FATAL: platformd exited during startup (after ${i}s)"
-            break
+    # Wait for the socket. A daemon that has already exited never creates it,
+    # so the wait ends the moment the process is gone rather than burning the
+    # full 30 seconds on a config error.
+    if ! wait_for 30 "platformd socket ${PLATFORMD_SOCK_PATH}" platformd_socket_or_gone; then
+        echo "FATAL: platformd never created its socket at ${PLATFORMD_SOCK_PATH}"
+        report_platformd_startup_failure
+        return 1
+    fi
+    if [ -S "${PLATFORMD_SOCK_PATH}" ]; then
+        echo "platformd started successfully"
+        echo "=== platformd startup log (stdout/stderr) ==="
+        cat "${PLATFORMD_STARTUP_LOG}" 2>/dev/null || true
+        echo "=== platformd app log ==="
+        cat /tmp/platformd-integration/log/trusted-platform.log 2>/dev/null || true
+
+        # Wait for mTLS certificates to be generated. They land in
+        # <platform-dir>/tls (platform-dir comes from the config). The
+        # admin client-bundle.pem exists only because /tmp/platformd is
+        # built with the integration tag
+        # (pkg/daemon/commands/harness_admin_bundle_integration.go); a
+        # production platformd mints no admin key, and this harness has
+        # no barrier, so it has no /init step to take one from.
+        if wait_for 10 "platformd mTLS certificates" platformd_tls_ready; then
+            echo "mTLS certificates ready"
         fi
-        if [ -S "${PLATFORMD_SOCK_PATH}" ]; then
-            echo "platformd started successfully"
-            echo "=== platformd startup log (stdout/stderr) ==="
-            cat "${PLATFORMD_STARTUP_LOG}" 2>/dev/null || true
-            echo "=== platformd app log ==="
-            cat /tmp/platformd-integration/log/trusted-platform.log 2>/dev/null || true
 
-            # Wait for mTLS certificates to be generated. They land in
-            # <platform-dir>/tls (platform-dir comes from the config). The
-            # admin client-bundle.pem exists only because /tmp/platformd is
-            # built with the integration tag
-            # (pkg/daemon/commands/harness_admin_bundle_integration.go); a
-            # production platformd mints no admin key, and this harness has
-            # no barrier, so it has no /init step to take one from.
-            for _ in $(seq 1 10); do
-                if [ -f /tmp/platformd-integration/tls/client-bundle.pem ] && \
-                   [ -f /tmp/platformd-integration/tls/ca-bundle.crt ]; then
-                    echo "mTLS certificates ready"
-                    break
-                fi
-                sleep 1
-            done
+        start_chronyd
 
-            start_chronyd
+        echo "=== platformd ready ==="
+        return 0
+    fi
 
-            echo "=== platformd ready ==="
-            return 0
-        fi
-        sleep 1
-    done
-
-    echo "FATAL: platformd never created its socket at ${PLATFORMD_SOCK_PATH}"
+    echo "FATAL: platformd exited during startup"
     report_platformd_startup_failure
     return 1
 }
@@ -1224,6 +1317,13 @@ echo "Target:     ${RUN_TARGET}${RUN_LEG:+ (leg ${RUN_LEG} of ${#INTEGRATION_LEG
 echo "Build tags: ${BUILD_TAGS}"
 echo ""
 
+# `warm` only compiles; there is nothing for the EXIT trap to stop.
+if [ "$RUN_TARGET" = "warm" ]; then
+    trap - EXIT
+    warm_build_cache
+    exit 0
+fi
+
 # Phase 1: Build binaries
 build_binaries
 choose_platformd_ports
@@ -1348,16 +1448,16 @@ else
     # platformd is required for every daemon-dependent suite. A failed bring-up
     # ends the run; see abort_no_daemon.
     start_platformd || abort_no_daemon
-    # `all` runs the proxy suite, whose supervised-process tests need
-    # gatewayd built and the cgroup controllers delegated.
-    if [ "$RUN_TARGET" = "all" ]; then
+    # The proxy suite's supervised-process tests need gatewayd built and the
+    # cgroup controllers delegated; a leg without proxy skips both.
+    if [ "$RUN_TARGET" = "all" ] && target_selected proxy; then
         prepare_gatewayd_supervision
     fi
 fi
 
 # The iso suite's customize step stages platform-initrd and gatewayd from
-# beside /tmp/platformd.
-if [ "$RUN_TARGET" = "iso" ] || [ "$RUN_TARGET" = "all" ]; then
+# beside /tmp/platformd, and platformctl-static from PLATFORMCTL_STATIC_PATH.
+if [ "$RUN_TARGET" = "iso" ] || { [ "$RUN_TARGET" = "all" ] && target_selected iso; }; then
     prepare_iso_customize
 fi
 

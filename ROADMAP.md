@@ -64,6 +64,7 @@ The trusted-computing platform product and control plane: provisioning, node and
 - **device-enrollment** — enrollment from pre-defined device configurations through enroll-01 and endorse-01, continuously attested — [#883](../../issues/883) — open
 
 ## Later
+- **gateway-supervisor** — the gateway services as one process each under platformd, the zebra-role route owner and BGP graceful restart (ruling 240 item 4) — [#1191](../../issues/1191) — open
 - **volume** — go-blockstore volumes on go-qrdb's volume pools, with the trust and workload wiring — [#90](../../issues/90) — open
 - **remote-deploy** — remote agent deploy over QUIC, replacing SSH — [#54](../../issues/54) — open
 - **pi-node-roles** — control-plane, compute and gateway templates for raspberrypi — [Raspberry Pi templates](configs/platform/templates/dedicated/raspberrypi/README.md) — open

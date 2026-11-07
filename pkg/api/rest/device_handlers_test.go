@@ -1190,6 +1190,57 @@ func TestHandleActivateDevice(t *testing.T) {
 	})
 }
 
+// TestHandleActivateDeviceChunkedBody sends the body as net/http presents a
+// Transfer-Encoding: chunked request, with ContentLength -1.
+func TestHandleActivateDeviceChunkedBody(t *testing.T) {
+	newRouter := func() (*mockDeviceService, http.Handler) {
+		deviceSvc := newMockDeviceService()
+		deviceSvc.addDevice(&entities.Device{ID: 12345, Serial: "SN-12345", State: entities.DeviceStateRegistered})
+		_, router := setupDeviceTestHandler(deviceSvc, newMockProfileService())
+		return deviceSvc, router
+	}
+	activate := func(router http.Handler, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/12345/activate", bytes.NewReader([]byte(body)))
+		req.Header.Set("Content-Type", "application/json")
+		req.ContentLength = -1
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		return w
+	}
+
+	t.Run("chunked body activates the device", func(t *testing.T) {
+		deviceSvc, router := newRouter()
+
+		body, err := json.Marshal(DeviceActivateRequest{Nonce: []byte{0x01, 0x02, 0x03}})
+		require.NoError(t, err)
+		w := activate(router, string(body))
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		device, err := deviceSvc.Get(context.Background(), 12345)
+		require.NoError(t, err)
+		assert.Equal(t, entities.DeviceStateActivated, device.State)
+	})
+
+	t.Run("empty chunked body activates the device", func(t *testing.T) {
+		_, router := newRouter()
+
+		w := activate(router, "")
+
+		assert.Equal(t, http.StatusOK, w.Code)
+	})
+
+	t.Run("malformed chunked JSON returns 400", func(t *testing.T) {
+		deviceSvc, router := newRouter()
+
+		w := activate(router, "{invalid")
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+		device, err := deviceSvc.Get(context.Background(), 12345)
+		require.NoError(t, err)
+		assert.Equal(t, entities.DeviceStateRegistered, device.State)
+	})
+}
+
 // =============================================================================
 // Device Attest Tests
 //

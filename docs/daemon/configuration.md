@@ -7,7 +7,10 @@ Configuration reference for the Trusted Platform daemon (`platformd serve`).
 
 ## Configuration Structure
 
-The daemon reads three things, and only these:
+The daemon's listener configuration comes from three sources, and only these
+(the root command's persistent flags — `--config`, `--config-dir`,
+`--platform-dir`, `--log-dir`, `--ca-dir`, `--env`, the PIN flags — select
+the platform YAML and data directories and are not listener settings):
 
 | Source | What it sets |
 |---|---|
@@ -73,6 +76,8 @@ listener on its own `webservices[].bind-host`, documented in
 | `--enable-mtls` | `false` | Require client certificates on the network transports |
 | `--skip-iam-validation` | `false` | Testing only: every transport accepts unauthenticated requests |
 | `--<transport>-bind-host`, `--<transport>-port` | see above | Listen address |
+| `--raft-address` | empty | Raft address advertised to peers (`quicbaas.raft-address`) |
+| `--raft-listen-address` | empty | Raft transport bind address; empty binds the advertised address (`quicbaas.raft-listen-address`) |
 
 In webservices mode (the platform YAML lists at least one `webservices[]`
 entry) the webservice
@@ -140,6 +145,8 @@ the environment.
 | `PLATFORMD_DAEMON_GRPC_BIND_HOST` / `_PORT` | `daemon.grpc.bind-host` / `.port` | gRPC bind host / port |
 | `PLATFORMD_DAEMON_QUIC_BIND_HOST` / `_PORT` | `daemon.quic.bind-host` / `.port` | QUIC bind host / port |
 | `PLATFORMD_DAEMON_MCP_BIND_HOST` / `_PORT` | `daemon.mcp.bind-host` / `.port` | MCP bind host / port |
+| `PLATFORMD_QUICBAAS_RAFT_ADDRESS` | `quicbaas.raft-address` | Raft advertised address |
+| `PLATFORMD_QUICBAAS_RAFT_LISTEN_ADDRESS` | `quicbaas.raft-listen-address` | Raft bind address |
 
 ## Required keys at load
 

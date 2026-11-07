@@ -153,14 +153,18 @@ type ExtractResult struct {
 
 // CustomizeOptions contains options for customizing ISO contents.
 type CustomizeOptions struct {
-	ISODir         string
-	Overlay        string
-	KeysDir        string
-	PlatformdPath  string
-	PlatformConfig string
-	ConfigFile     string
-	WorkDir        string
-	Debug          bool
+	ISODir        string
+	Overlay       string
+	KeysDir       string
+	PlatformdPath string
+	// PlatformctlStaticPath is the CGO_ENABLED=0 platformctl the media
+	// installs (--platformctl-static-binary); customize refuses a dynamic
+	// installer without it.
+	PlatformctlStaticPath string
+	PlatformConfig        string
+	ConfigFile            string
+	WorkDir               string
+	Debug                 bool
 }
 
 // CustomizeResult is the result `iso customize` prints.

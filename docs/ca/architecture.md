@@ -33,10 +33,12 @@ pkg/store/object/objstore_adapter.go
 ```
 
 There is **no certificate logic in this repository.** `pkg/ca/` is those two
-adapters, an errors file, and a scoped instruction file.
+adapters with their errors file (`pkg/ca/quicbaas/`), the `pkg/ca/issuance/`
+request helpers (store aliases, Sign CSR pre-checks, renew), and a scoped
+instruction file.
 
 Authorization for issuance comes from **ACME challenge types**, and the ones
-that matter here are `endorse-01`, `device-01` and `device-attest-01` — a device
+that matter here are `endorse-01`, `enroll-01` and `device-attest-01` — a device
 proves what it is from hardware rather than proving control of a name.
 
 ### Alternatives rejected
@@ -84,8 +86,8 @@ through `services/ca`.
    how a relying party checks what it already has. Since #165 that is
    enforced structurally rather than by convention: they are the whole of
    `CARouter.RegisterPublicRoutes`, and `/ca/certificates` — issuance,
-   revocation and the issued-certificate inventory — is the whole of the
-   gated `CARouter.RegisterRoutes`.
+   revocation, renew, verify and the issued-certificate inventory — plus
+   `POST /ca/sign-csr` is the whole of the gated `CARouter.RegisterRoutes`.
 4. **The system trust store.** `install-ca-certificates` gives this CA the
    ability to impersonate anything to that host. Routine on a platform node, a
    decision elsewhere.
@@ -101,15 +103,14 @@ through `services/ca`.
 - **It does not implement the TPM challenge handlers.** `endorse-01`,
   `enroll-01` and `device-attest-01` are the stack's.
 - **It does not hold CA private keys.**
-- **It does not offer renew or verify over REST.** That is a gap
-  ([api.md](api.md) §2), not a decision.
 - **It has no unrevoke.**
 
 ## A stale instruction file
 
 `pkg/ca/CLAUDE.md` still names **`go-trusted-ca`** as the owner of CA and ACME
 functionality. That repository was **decommissioned on 2026-08-19** — rolled into
-go-xkms — and the identifier survives in ten tracked files. That file is an agent
+go-xkms — and the identifier survives in 24 tracked files outside `docs/` and `web/`
+([engineering.md](engineering.md) §2). That file is an agent
 instruction file with an `AGENTS.md` mirror, so it needs its own change rather
 than a documentation edit; it is reported in [engineering.md](engineering.md) §2
 and in the migration report.
@@ -237,7 +238,7 @@ CA hierarchy, certificate types, and key storage integration.
 |----------------------|------------------------------------------|
 | Subject CN           | Device serial number                     |
 | Key Usage            | digitalSignature                         |
-| Extended Key Usage   | clientAuth, id-kp-cmcRA                  |
+| Extended Key Usage   | clientAuth                               |
 | TCG OIDs             | tcg-at-tpmManufacturer, tcg-at-tpmModel  |
 | Validity             | Device lifetime                          |
 | Key Algorithm        | ECDSA P-256 (TPM-bound)                  |
@@ -251,9 +252,9 @@ CA hierarchy, certificate types, and key storage integration.
 │                                                                   │
 │  go-xkms Unified Interface                                    │
 │  ┌────────────────────────────────────────────────────────────┐  │
-│  │  KeyStore Interface                                         │  │
+│  │  xkms Backend interface                                     │  │
 │  │  ┌────────────────────────────────────────────────────────┐│  │
-│  │  │ Create() │ Get() │ Sign() │ Verify() │ Delete()        ││  │
+│  │  │ GenerateRSA/ECDSA() │ GetKey() │ Signer() │ DeleteKey()││  │
 │  │  └────────────────────────────────────────────────────────┘│  │
 │  └────────────────────────────────────────────────────────────┘  │
 │                                                                   │
@@ -281,11 +282,9 @@ CA hierarchy, certificate types, and key storage integration.
 ```yaml
 # CA key storage configuration
 certificate-authority:
-  platform-ca: 1
+  selected-ca: 1
   identity:
     - # Root CA
-      key-algorithm: ECDSA
-      key-size: 384
       keystore-type: tpm2           # software, tpm2, pkcs11
       keystores:
         tpm2:
@@ -311,16 +310,12 @@ certificate-authority:
           - root-ca.example.com
 
     - # TLS CA (Intermediate)
-      key-algorithm: RSA
-      key-size: 4096
       keystore-type: pkcs11
       keystores:
         pkcs11:
-          library: /usr/lib/softhsm/libsofthsm2.so
+          module: /usr/lib/softhsm/libsofthsm2.so
           slot: 0
-          label: TLS-CA-Key
           pin: "kms://ca/tls/pkcs11/pin"
-          platform-policy: true
       keys:
         - algorithm: RSA
           rsa:
@@ -340,8 +335,6 @@ certificate-authority:
           - tls-ca.example.com
 
     - # Device CA (Intermediate)
-      key-algorithm: ECDSA
-      key-size: 256
       keystore-type: tpm2
       keystores:
         tpm2:
@@ -398,7 +391,7 @@ certificate-authority:
 │  │ • Validity period                                           │  │
 │  │ • Extensions                                                │  │
 │  │                                                             │  │
-│  │ Sign TBS        ─────▶   KeyStore.Sign()                    │  │
+│  │ Sign TBS        ─────▶   Backend Signer()                   │  │
 │  │                          (TPM/PKCS11/SW)                    │  │
 │  │                                                             │  │
 │  │ Encode Certificate                                          │  │
@@ -408,7 +401,7 @@ certificate-authority:
 │  ┌────────────────────────────────────────────────────────────┐  │
 │  │ CA Service                       Client                     │  │
 │  │                                                             │  │
-│  │ Store in CA DB  ─────▶                                      │  │
+│  │ Store via certstore ─▶                                      │  │
 │  │                                                             │  │
 │  │ Return Cert     ─────▶   Store Certificate                  │  │
 │  │ (PEM/DER)                (KeyStore)                         │  │
@@ -431,7 +424,7 @@ certificate-authority:
 │  │ Certificate Revoked                                         │  │
 │  │       │                                                     │  │
 │  │       ▼                                                     │  │
-│  │ Update CRL Database                                         │  │
+│  │ Record revocation in the certificate store                  │  │
 │  │       │                                                     │  │
 │  │       ▼                                                     │  │
 │  │ Generate New CRL ───▶ Sign with CA Key                      │  │
@@ -442,52 +435,21 @@ certificate-authority:
 │  │   • File system                                             │  │
 │  └────────────────────────────────────────────────────────────┘  │
 │                                                                   │
-│  OCSP Responder                                                   │
-│  ┌────────────────────────────────────────────────────────────┐  │
-│  │ Client          OCSP Responder          CA Database         │  │
-│  │                                                             │  │
-│  │ OCSP Request  ──────▶                                       │  │
-│  │ (cert serial)          Query Status  ──────▶               │  │
-│  │                                      ◀──────  Status        │  │
-│  │ ◀──────  OCSP Response                                      │  │
-│  │          (good/revoked/unknown)                             │  │
-│  └────────────────────────────────────────────────────────────┘  │
-│                                                                   │
 └───────────────────────────────────────────────────────────────────┘
 ```
 
-## Database Schema
+## Persistence
 
-```
-┌───────────────────────────────────────────────────────────────────┐
-│                      CA Database Schema                           │
-├───────────────────────────────────────────────────────────────────┤
-│                                                                   │
-│  certificates                                                     │
-│  ┌────────────────────────────────────────────────────────────┐  │
-│  │ serial_number  │ PRIMARY KEY, unique certificate ID         │  │
-│  │ subject_cn     │ Subject common name                        │  │
-│  │ issuer_cn      │ Issuing CA common name                     │  │
-│  │ not_before     │ Validity start                             │  │
-│  │ not_after      │ Validity end                               │  │
-│  │ status         │ active, revoked, expired                   │  │
-│  │ revoked_at     │ Revocation timestamp                       │  │
-│  │ revoke_reason  │ CRL reason code                            │  │
-│  │ certificate    │ DER-encoded certificate                    │  │
-│  │ key_attrs      │ Key attributes JSON                        │  │
-│  └────────────────────────────────────────────────────────────┘  │
-│                                                                   │
-│  ca_keys                                                          │
-│  ┌────────────────────────────────────────────────────────────┐  │
-│  │ ca_cn          │ CA common name                             │  │
-│  │ algorithm      │ RSA, ECDSA, Ed25519                        │  │
-│  │ store_type     │ tpm, pkcs11, software                      │  │
-│  │ handle         │ TPM handle or PKCS#11 label                │  │
-│  │ certificate    │ CA certificate                             │  │
-│  └────────────────────────────────────────────────────────────┘  │
-│                                                                   │
-└───────────────────────────────────────────────────────────────────┘
-```
+There is no CA database and no SQL schema. Issued certificates are written
+through the certificate-store adapter (`pkg/store/certstore/adapter.go`) and
+looked up by serial. The one CA-owned record is the upstream
+`persistedRevocation` (`serial`, `reason`, `revoked_at`, `deleted_keys`),
+which the CRL is generated from. CA keys live in the identity's key store
+(`software`, `tpm2` or `pkcs11`), not in a table.
+
+The platform mounts no OCSP responder route; an issued certificate carries the
+`ocsp-servers` URLs configured on its identity, and revocation status is
+published through the CRL (`GET /api/v1/ca/crl`).
 
 ## Security Considerations
 
@@ -496,7 +458,7 @@ certificate-authority:
 | Root CA compromise     | Offline storage, HSM, ceremony procedures   |
 | Private key theft      | TPM/HSM storage, no software extraction     |
 | Unauthorized issuance  | Policy engine, audit logging                |
-| Revocation bypass      | CRL/OCSP required, short validity periods   |
+| Revocation bypass      | CRL checking, short validity periods        |
 | Name collision         | Strict validation, namespace policies       |
 
 ## QuicBaaS KMS Integration

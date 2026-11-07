@@ -18,9 +18,10 @@ The reason differs per package:
   section of the gateway's configuration ([engineering.md](engineering.md) §5).
   Policies are files; `Initialize` reads the directory at startup and the shipped
   consumer does not reload. Managing policies is managing files, plus a restart.
-- **`pkg/security/ratelimit`** and **`pkg/security/validation`** are libraries
-  with no callers at all ([architecture.md](architecture.md) §3). There is
-  nothing running for a CLI verb to inspect.
+- **`pkg/security/ratelimit`** runs inside the webservice listeners and the
+  `POST /init` budget, configured by each listener's `rate-limit:` block; its
+  state is not exposed for a CLI verb to inspect. **`pkg/security/validation`**
+  has no callers at all ([architecture.md](architecture.md) §3).
 
 ---
 

@@ -13,6 +13,7 @@ platformctl iam
     user     Manage users
     group    Manage groups
     role     Manage roles
+    tenant   Manage IAM tenants
     policy   Manage authorization policies
     app      Manage OAuth applications
 ```
@@ -20,15 +21,18 @@ platformctl iam
 **`list` pages by page number, not by offset.** `--page` counts from `1`;
 there is no `--limit` or `--offset`.
 
-**Every verb is tenant-explicit.** `get`, `delete` and the role verbs take
-`<tenant-id>` as a **positional argument**; `create`, `update` and `list` take
-`--tenant` (required). That is deliberate: it makes the ambiguity the REST
+**Every tenant-scoped verb is tenant-explicit.** `get`, `delete` and the
+`assign-role` / `revoke-role` verbs take `<tenant-id>` as a **positional
+argument**; `create`, `update`, `list` and the policy verbs take `--tenant`
+(required). `iam tenant` is the exception: it manages the tenants themselves,
+so `create` and `update` take `--id` and `list` takes no tenant at all. That is
+deliberate: it makes the ambiguity the REST
 surface has — where an unscoped route's tenant comes from context — impossible
 at the CLI.
 
 ### Global flags
 
-`platformctl` persistent flags (`pkg/cli/commands/root.go:125`), precedence
+`platformctl` persistent flags (`pkg/cli/commands/root.go:135-156`), precedence
 **flag > environment > config file > default**:
 
 | Flag | Short | Default | Environment |
@@ -42,9 +46,18 @@ at the CLI.
 | `--verbose` | `-v` | `false` | |
 | `--no-color` | | `false` | `NO_COLOR` |
 
-`iam group` binds `-t` to `--tenant`, `-n` to `--name` and `-d` to
-`--description`. The other subgroups use long-form `--tenant` with no short.
-**That inconsistency is in the code**; use long forms.
+`iam group` and `iam role` bind `-t` to `--tenant`, `-n` to `--name` and `-d`
+to `--description`; `iam role` also binds `-p` to `--permissions` on `create`
+and `update`. `user`, `tenant`, `policy` and `app` use long-form flags with no
+short, except `--page`/`-p` and `--page-size`/`-s` on `user`, `tenant` and
+`policy` `list`. **That inconsistency is in the code**; use long forms.
+
+Required flags are enforced two ways. `group` and `role` mark `--tenant`
+required with Cobra, so a missing flag fails before the command runs with
+Cobra's `required flag(s) "tenant" not set`. `user`, `tenant`, `policy` and
+`app` check inside the command and return a typed error (`ErrMissingTenantID`,
+`ErrMissingEmail`, `ErrMissingUserID`, `ErrMissingPolicyName`,
+`ErrMissingAppName`, `ErrMissingClientID`, ...).
 
 ---
 
@@ -118,25 +131,49 @@ As a partial workaround, `iam user create --groups ...` and
 
 | Verb | Positional | Flags |
 |---|---|---|
-| `create` | `<role-id>` | `--tenant` (required) |
+| `create` | `<role-id>` | `--tenant`/`-t` (required), `--name`/`-n`, `--description`/`-d`, `--permissions`/`-p` |
 | `get` | `<tenant-id> <role-id>` | — |
-| `list` | — | `--tenant` (required), `--page`/`-p` (default `1`), `--page-size`/`-s` (default `50`) |
-| `update` | `<role-id>` | `--tenant` (required) |
+| `list` | — | `--tenant`/`-t` (required), `--page`/`-p` (default `1`), `--page-size`/`-s` (default `50`) |
+| `update` | `<role-id>` | `--tenant`/`-t` (required), `--name`/`-n`, `--description`/`-d`, `--permissions`/`-p` |
 | `delete` | `<tenant-id> <role-id>` | — |
+
+`--permissions` is a comma-separated list.
+
+---
+
+## 4a. `platformctl iam tenant`
+
+IAM tenants — the scope every other `iam` verb names with `--tenant`.
+
+| Verb | Positional | Flags |
+|---|---|---|
+| `create` | — | `--id` (required), `--name`, `--max-users` (`0` = unlimited), `--mfa-required` |
+| `get` | `<tenant-id>` | — |
+| `list` | — | `--page`/`-p` (default `1`), `--page-size`/`-s` (default `50`) |
+| `update` | — | `--id` (required), `--name`, `--max-users`, `--mfa-required` |
+| `delete` | `<tenant-id>` | — |
+
+**`update` merges.** It reads the tenant first and keeps every value whose flag
+is not given; `--mfa-required` is applied only when it is passed.
+
+```bash
+platformctl iam tenant create --id acme --name "Acme Corp" --max-users 100 --mfa-required
+platformctl iam tenant update --id acme --max-users 200
+```
 
 ---
 
 ## 5. `platformctl iam policy`
 
-| Verb | Positional | Purpose |
+| Verb | Positional | Flags |
 |---|---|---|
-| `create` | — | Create a policy |
-| `get` | `<tenant-id> <policy-name>` | Policy information |
-| `list` | — | List policies |
-| `update` | — | Update a policy |
-| `delete` | `<tenant-id> <policy-name>` | Delete a policy |
-| **`validate`** | — | Validate a policy YAML file |
-| **`test`** | — | Test a policy against a request |
+| `create` | — | `--tenant`, `--name`, `--file` (all required), `--description`, `--priority`, `--labels` |
+| `get` | `<tenant-id> <policy-name>` | — |
+| `list` | — | `--tenant` (required), `--page`/`-p` (default `1`), `--page-size`/`-s` (default `50`) |
+| `update` | — | `--tenant`, `--name` (required), `--description`, `--priority`, `--file` (replaces the spec), `--labels` |
+| `delete` | `<tenant-id> <policy-name>` | — |
+| **`validate`** | — | `--tenant`, `--file` (required) |
+| **`test`** | — | `--tenant`, `--subject`, `--action`, `--resource` (required), `--roles`, `--groups`, `--context` (`key=value`) |
 
 **`validate` and `test` are the two verbs to use before `create`.** `validate`
 checks the YAML is a well-formed policy; `test` evaluates it against a concrete
@@ -144,9 +181,10 @@ request and tells you what it would decide. Applying an authorization policy
 without testing it is how a lockout happens.
 
 ```bash
-platformctl iam policy validate --tenant tenant-a ...
-platformctl iam policy test     --tenant tenant-a ...
-platformctl iam policy create   --tenant tenant-a ...
+platformctl iam policy validate --tenant tenant-a --file ops-policy.yaml
+platformctl iam policy test     --tenant tenant-a --subject u-0f21 \
+    --action read --resource /api/v1/devices --roles operator
+platformctl iam policy create   --tenant tenant-a --name ops --file ops-policy.yaml
 ```
 
 ---
@@ -187,8 +225,7 @@ platformctl iam app rotate-secret tenant-a c-9a3f
 | Group membership add / remove | REST, gRPC, QUIC, MCP |
 | Authenticate | gRPC, QUIC, MCP |
 | Create / verify / revoke a token | gRPC, QUIC (`0xF9`–`0xFB`), MCP |
-| Check a permission | gRPC, QUIC, MCP |
-| Tenant CRUD (IAM scoping) | REST `/api/v1/iam/tenants`, gRPC, MCP |
+| Check a permission | REST `POST /api/v1/iam/permissions/check`, gRPC, QUIC, MCP |
 
 Platform tenancy — the VLAN/bridge/keyspace/DEK kind — is a different feature
 with its own CLI: `platformctl tenant` ([`docs/tenant/`](../tenant/)).

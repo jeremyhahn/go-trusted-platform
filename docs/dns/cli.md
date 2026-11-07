@@ -113,10 +113,9 @@ does not carry its RPC, and the transport returns the error ([api.md](api.md) §
 
 | Verb | Not carried by |
 |---|---|
-| `dnssec sign`, `dnssec status`, `register` | QUIC |
-| `record update` | REST |
+| `zone get`, `record update`, `dnssec sign`, `dnssec status`, `register` | QUIC (the SDK QUIC adapter maps only add, delete and list record, resolve, and zone create, update, delete and list: `sdk/go/transport/quic/adapter.go:879-886`) |
 
-Every other verb works on all transports.
+Every other verb works on all transports. REST carries every verb.
 
 ---
 

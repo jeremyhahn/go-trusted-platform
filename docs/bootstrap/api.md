@@ -133,7 +133,7 @@ What bootstrap adds on top is the officer ceremony:
 
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
-| Ceremony status, claim-cert, claim-share | `MISSING — docs/13 G7` | `CeremonyService` | `OpCeremonyCategory` (`0x9A`) | `platform_ceremony_*` ([`docs/cli/ceremony.md`](../cli/ceremony.md)) | `ServiceRegistry.Ceremony`; `Manager.CeremonyInitialize`, `.CeremonyStatus`, `.BeginClaimCert`, `.CompleteClaimCert`, `.BeginClaimShare`, `.CompleteClaimShare` |
+| Ceremony status, claim-cert, claim-share | `MISSING — docs/13 G7` | `CeremonyService` | `OpCeremonyCategory` (`0x9A`) | `platform_ceremony_*` ([`docs/cli/ceremony.md`](../cli/ceremony.md)) | `embedded.ServiceRegistry.Ceremony`; `barrier.Manager.CeremonyInitialize`, `.CeremonyStatus`, `.BeginClaimCert`, `.CompleteClaimCert`, `.BeginClaimShare`, `.CompleteClaimShare` |
 
 **`OpTenantBarrierCategory` (`0x9E`) and the `platform_tenant_barrier_*` MCP
 tools are a different capability**: they operate on per-tenant barriers, not on
@@ -187,20 +187,20 @@ They are the only part of bootstrap that crosses a network boundary as an API.
 | Capability | REST | gRPC / Unix | QUIC | MCP | Embedded |
 |---|---|---|---|---|---|
 | Upload a device template (seeder shape) | `POST /api/v1/devices/templates` | `MISSING — docs/13 G7` ⁷ | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ via the template service |
-| Create a profile from a template (seeder shape) | `POST /api/v1/devices/templates/{id}/create-profile` → `201` envelope, `payload.id` string (below) | `DeviceService.CreateProfileFromTemplate` | `MISSING — docs/13 G7` ⁸ | `MISSING — docs/13 G7` | ✅ |
+| Create a profile from a template (seeder shape) | `POST /api/v1/devices/templates/{id}/create-profile` → `201` envelope, `payload.id` string (below) | `DeviceService.CreateProfileFromTemplate` | sub-op `0x28` under `0xCF` ⁸ | `profile_create_from_template` ⁸ | ✅ |
 | Fetch a device's config at boot (`?mac=` / `?serial=`) | `GET /api/v1/devices/config`, **provisioning listener only** (#177) | REST-only ⁹ | REST-only ⁹ | REST-only ⁹ | REST-only ⁹ |
 | Enroll a node's BMC | `POST /api/v1/bmc/{profileID}/enroll` | see [`docs/bmc/`](../bmc/) | see [`docs/bmc/`](../bmc/) | see [`docs/bmc/`](../bmc/) | see [`docs/bmc/`](../bmc/) |
 
 ⁷ The seeder's `{"role", "template"}` upload has no equivalent on the other
 transports. Storing a template in the CRUD shape does: `DeviceService.CreateTemplate`
-on gRPC/Unix, QUIC sub-op `0x23` under `0xCF`, the MCP tool
+on gRPC/Unix, QUIC sub-op `0x27` (`DeviceSubTemplateCreate`) under `0xCF`, the MCP tool
 `device_template_create` and embedded (#497) — see
 [`docs/device/api.md`](../device/api.md) §4.
 
 ⁸ `OpDeviceCreateProfile` (`0x38`) creates a profile directly; it is **not** the
 create-from-template path. The MCP `profile_create` tool is likewise the direct
 path. Building a profile from a template in the CRUD shape (`overrides` only, no
-seeder `mac`/`hostname`/`config`) is QUIC sub-op `0x24` under `0xCF` and the MCP
+seeder `mac`/`hostname`/`config`) is QUIC sub-op `0x28` (`DeviceSubProfileFromTemplate`) under `0xCF` and the MCP
 tool `profile_create_from_template` (#497).
 
 ⁹ The boot fetch is REST-only by design. Its caller is a machine still booting,

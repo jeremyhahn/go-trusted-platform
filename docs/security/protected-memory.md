@@ -152,9 +152,9 @@ enclave is a copy and the original cannot be scrubbed:
 | Site | Plaintext holder |
 |---|---|
 | `pkg/bmc/service_user.go:49,73` | `CreateUser` / `SetUserPassword` take `password string` |
-| `pkg/cli/commands/bmc/user.go:585,670` | `passwordStr` from the terminal prompt, enclaved at 593 / 683 |
+| `pkg/cli/commands/bmc/user.go:586,671` | `passwordStr` from the terminal prompt, enclaved at 594 / 684 |
 | `pkg/bmc/config.go:26` | `cfg.Password` decoded from YAML/JSON |
-| `pkg/bmc/credentials.go:156,168,196` | `credentialRecord.Password` on both the marshal and unmarshal side |
+| `pkg/bmc/credentials.go:156,167,196` | `credentialRecord.Password` on both the marshal and unmarshal side |
 
 Converting one of those strings to `[]byte` creates a wipeable *copy*; it
 cannot scrub the string's backing array. Protection therefore begins at the
@@ -297,12 +297,10 @@ sweep:
 | `pkg/api/daemon/ceremony_service.go:182` | Shamir share (claim-share result) |
 | `sdk/go/wire/quicwire/phase35_types.go:101` | Shamir share (QUIC wire) |
 | `pkg/api/rest/init_handlers.go:145,147` | barrier root secret + Shamir share |
-| `pkg/api/rest/tpm_handlers.go:176,186,200` | TPM auth secrets |
-| `pkg/api/quic/tpm_handlers.go:218,227,239` | TPM auth secrets |
-| `pkg/api/rest/tenant_handlers.go:160` | tenant key material |
-| `pkg/api/grpc/iam_types.go:330,335` | IAM tokens |
+| `pkg/api/quic/tpm_handlers.go:220,229,241` | TPM credential-activation secrets |
+| `pkg/api/rest/tenant_handlers.go:161` | tenant key material |
 | `pkg/attestation/push/types.go:116,122` | push token + password |
-| `pkg/sdn/bgp/types.go:735` | BGP MD5 session secret (`AuthKey`, resolved at runtime) |
+| `pkg/sdn/bgp/types.go:734` | BGP MD5 session secret (`AuthKey`, resolved at runtime) |
 
 All are wire DTOs or service-layer request/result types whose signatures
 ship to consumers, so each is a breaking change and belongs to the

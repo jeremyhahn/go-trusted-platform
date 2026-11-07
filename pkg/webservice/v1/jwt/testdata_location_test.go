@@ -35,6 +35,7 @@ import (
 // change that nothing else would notice, because the normal path cleans up
 // after itself and looks fine.
 func TestTestDataDirIsOutsideTheSourceTree(t *testing.T) {
+	t.Parallel()
 	require.NotEmpty(t, testDataDir, "setup must have created a test data directory")
 
 	pkgDir, err := os.Getwd()
@@ -62,6 +63,7 @@ func TestTestDataDirIsOutsideTheSourceTree(t *testing.T) {
 // change could move testDataDir correctly and still leave a stray ./testdata
 // behind from some other code path.
 func TestSourceTreeHasNoTestdataDirectory(t *testing.T) {
+	t.Parallel()
 	_, err := os.Stat("testdata")
 	assert.True(t, os.IsNotExist(err),
 		"./testdata must not exist in the package directory; these tests write key material and it is not gitignored")

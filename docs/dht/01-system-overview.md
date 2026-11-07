@@ -751,7 +751,7 @@ results, err := vectors.Query(ctx, &vectors.QueryRequest{
 Vector similarity search can leak information across tenant boundaries if not properly isolated. QuicBaaS implements strict tenant separation to prevent cross-tenant data inference attacks.
 
 ```go
-// pkg/quicbaas/vector_isolation.go
+// design sketch; not in the tree (would be pkg/storage/quicbaas/vector_isolation.go)
 
 // VectorSearchIsolation enforces strict tenant separation for vector queries
 type VectorSearchIsolation struct {

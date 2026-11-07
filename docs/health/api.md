@@ -37,10 +37,10 @@ For health specifically:
 
 | Route | Registered by | Body shape |
 |---|---|---|
-| `GET /health` | `healthprobe.Handlers.RegisterRoutes` (`pkg/api/healthprobe/healthprobe.go:96`), mounted on **both** listeners: the daemon's (`pkg/api/daemon/rest_service.go:255`) and the webservice root (`pkg/webservice/v1/router.go:119`) | `GetHealthResponse{status, components: [], timestamp}` |
+| `GET /health` | `healthprobe.Handlers.RegisterRoutes` (`pkg/api/healthprobe/healthprobe.go:97`), mounted on **both** listeners: the daemon's (`pkg/api/daemon/rest_service.go:263`) and the webservice root (`pkg/webservice/v1/router.go:120`) | `GetHealthResponse{status, components: [], timestamp}` |
 | `GET /health/live` | same | `LivenessResponse{alive, timestamp}` |
 | `GET /health/ready` | same | `ReadinessResponse{ready, status, timestamp}` |
-| `GET /api/v1/health` | `RESTServer.handleHealth` (`pkg/api/daemon/rest_service.go:260`), daemon listener only | `HealthResponse{status, timestamp, components[]}` |
+| `GET /api/v1/health` | `RESTServer.handleHealth` (`pkg/api/daemon/rest_service.go:268`), daemon listener only | `HealthResponse{status, timestamp, components[]}` |
 | `GET /api/v1/platform/health` | `PlatformRouter.registerHealthRoutes` (`pkg/webservice/v1/rest/platform/router.go`) | `HealthResponse{health: {healthy, status, message, services[], timestamp}}` |
 
 **The three root routes are the probes.** They exist for load balancers,
@@ -89,9 +89,9 @@ count route is added.
 
 **Every transport answers the probes from one source.** `pkg/health/probe.go`
 defines `Liveness`, `Readiness` and `Aggregate`; gRPC
-(`pkg/api/daemon/service.go:326`, `:333`), REST (`pkg/api/healthprobe`), QUIC
-(`pkg/api/daemon/quic_service.go:952`–`963`) and MCP
-(`pkg/api/daemon/mcp_service.go:1260`–`1289`) only encode the answer, so the
+(`pkg/api/daemon/service.go:345`, `:352`), REST (`pkg/api/healthprobe`), QUIC
+(`pkg/api/daemon/quic_service.go:966`–`976`) and MCP
+(`pkg/api/daemon/mcp_service.go:1321`–`1351`) only encode the answer, so the
 same registry state gives the same verdict on all six (one exception, an
 unwired registry under gRPC `GetHealth`: §6). Point a liveness probe
 at `GET /health/live` and a readiness probe at `GET /health/ready`. `GET /health`
@@ -107,7 +107,7 @@ encodes its result:
 |---|---|---|---|---|
 | Liveness (`health.Liveness`) | nothing | always: an answer proves the process is answering | always `200` | `{alive: true, timestamp}` |
 | Readiness (`health.Readiness`) | one registry sweep | no component is `unhealthy`. A `degraded` component, or one whose check timed out (`unknown`), leaves the platform ready; a closed registry does not | `200` / `503` | `{ready, status, timestamp}` |
-| Aggregate (`health.Aggregate`) | one registry sweep | every component is `healthy` | `200` / `503` | `{status, components: [], timestamp}` |
+| Aggregate (`health.Aggregate`) | one registry sweep | the overall status is `healthy`: no component `unhealthy` or `degraded`. An `unknown` component does not move the overall status, so healthy plus unknown passes | `200` / `503` | `{status, components: [], timestamp}` |
 
 `status` is the registry's overall status (architecture.md §2), mapped onto
 `platform.v1.HealthStatus`; protojson spells it `HEALTH_STATUS_DEGRADED` and so
@@ -118,12 +118,12 @@ on. A degraded platform is therefore alive, ready, and not aggregate-healthy.
 payload; MCP returns the tool result; REST returns `503` with the same body it
 sends with `200`. The Go SDK's REST transport reads a probe's `503` whose body
 decodes as the rpc's response message as that response
-(`sdk/go/transport/rest/health.go:35`), so `client.Readiness` gives
+(`sdk/go/transport/rest/health.go:40`), so `client.Readiness` gives
 `ready: false` over REST exactly as it does over gRPC. Any other `503` — a
 proxy's error page, or a non-probe method — stays `codes.Unavailable`.
 
 The SDK's REST `Connect` checks the platform is reachable with
-`GET /health/live` (`sdk/go/transport/rest/adapter.go:133`), not `/health`, so
+`GET /health/live` (`sdk/go/transport/rest/adapter.go:138`), not `/health`, so
 a client can still connect to a platform that is up but degraded.
 
 **The unauthenticated probes name no component.** QUIC `OpHealth`, MCP
@@ -155,9 +155,11 @@ gRPC response (`platform.v1.GetHealthResponse`):
 | `components[]` | `ComponentHealth` | one per registered checker |
 | `timestamp` | `Timestamp` | `SystemHealth.Timestamp` |
 
-`platform.v1.ComponentHealth` carries `name`, `status`, `message`, `last_check`
-— **and nothing else. `ComponentHealth.Details` and `Duration` do not cross the
-gRPC boundary at all**, which is why `platformctl health --detailed` cannot show
+`platform.v1.ComponentHealth` (`pkg/api/grpc/proto/common.proto`) carries
+`name`, `status`, `message`, `last_check` and a `map<string, string> details = 5`
+field — **but `Service.GetHealth` never fills `details`, and there is no
+`Duration` field, so `ComponentHealth.Details` and `Duration` do not cross the
+gRPC boundary**, which is why `platformctl health --detailed` cannot show
 them. No other transport carries them either: both REST breakdowns stop at the
 message, and the probes carry no component.
 
@@ -193,7 +195,7 @@ REST `GET /api/v1/platform/health` (`HealthResponse{Health: PlatformHealth}`):
 
 `message` is set by the handler, not by a checker: `"one or more components are
 degraded"` for degraded, `"one or more components are unhealthy"` for unhealthy,
-absent for healthy.
+absent for healthy and for unknown.
 
 QUIC `OpHealth`, `OpLiveness` and `OpReadiness` answer with the same messages
 as the rpcs — `GetHealthResponse` (no components), `LivenessResponse` and
@@ -227,7 +229,7 @@ the registry and degrades to a static answer rather than failing**:
 | Condition | Result |
 |---|---|
 | Registry wired, sweep completes | `SystemHealth.Status` as computed |
-| **Registry not wired** (nil) | Every probe on every transport: healthy, ready, alive (`200` on REST), no components. REST `/api/v1/health`: `200` with `status: "healthy"` and no components. gRPC `GetHealth`: falls back to per-service state from `Service.services`, worst case `HEALTH_STATUS_DEGRADED` — the one answer that can differ from the probes' |
+| **Registry not wired** (nil) | Every probe on REST, gRPC and QUIC: healthy, ready, alive (`200` on REST), no components. MCP: when no health service is wired at all, `platform_health`, `platform_liveness` and `platform_readiness` return `ErrServiceNotAvailable{Service: "health"}` (`pkg/api/daemon/mcp_service.go:1321`); a wired service with a nil registry answers healthy like the others. REST `/api/v1/health`: `200` with `status: "healthy"` and no components. gRPC `GetHealth`: falls back to per-service state from `Service.services`, worst case `HEALTH_STATUS_DEGRADED` — the one answer that can differ from the probes' |
 | Registry closed | `SystemHealth.Status = unhealthy`, empty `Components` |
 | A checker times out | that component `unknown`, `message: "health check timed out"`, `details.error` = the context error |
 | A checker answers **after** its deadline | the same timeout result — a late answer is never reported as the component's status |
@@ -248,12 +250,12 @@ return `StatusOK` (`0x00`) whatever the verdict, or `StatusInternalError`
 
 | Transport | Requirement |
 |---|---|
-| REST `/health`, `/health/live`, `/health/ready` | **None, on both listeners.** The webservice mounts them on the root router (`pkg/webservice/v1/router.go:119`), outside the `/api/v1` authentication chain; the daemon listener serves them beside its other routes. They name no component (§4) |
+| REST `/health`, `/health/live`, `/health/ready` | **None, on both listeners.** The webservice mounts them on the root router (`pkg/webservice/v1/router.go:120`), outside the `/api/v1` authentication chain; the daemon listener serves them beside its other routes. They name no component (§4) |
 | REST `/api/v1/health` | None. **Daemon listener only** — the webservice does not serve it. It lists every component with its status and message |
 | REST `/api/v1/platform/health` | **Authenticated caller holding `admin`** (#165). The whole `/api/v1/platform/**` subtree is gated; the component breakdown names which subsystem is degraded, which is reconnaissance |
 | gRPC `PlatformDaemon/GetHealth` | **Authenticated caller holding `platform:read`** (#768), in the gRPC scope catalog (`pkg/api/grpc/method_permissions.go`). The catalog is default-deny. `grpc.health.v1.Health/List` and `/Watch` need the same permission; only `grpc.health.v1.Health/Check`, the aggregate probe, is served without a token |
-| gRPC `PlatformDaemon/Liveness`, `PlatformDaemon/Readiness` | **None.** In `preAuthMethods` (`pkg/api/grpc/method_permissions.go:66`–`67`) and in the TCP listener's `grpcTCPSkipMethods` (`pkg/api/daemon/transport_auth.go:90`–`91`). Each answers a boolean — readiness the overall status too — never a component name, so it discloses no more than `Health/Check` |
-| QUIC `OpHealth`/`OpLiveness`/`OpReadiness` | **None.** In `preAuthOpcodes` (`pkg/api/quic/opcode_permissions.go:131`), the only opcodes besides `OpIAMAuthenticate` served without credentials. All three name no component |
+| gRPC `PlatformDaemon/Liveness`, `PlatformDaemon/Readiness` | **None.** In `preAuthMethods` (`pkg/api/grpc/method_permissions.go:67`–`68`) and in the TCP listener's `grpcTCPSkipMethods` (`pkg/api/daemon/transport_auth.go:96`–`97`). Each answers a boolean — readiness the overall status too — never a component name, so it discloses no more than `Health/Check` |
+| QUIC `OpHealth`/`OpLiveness`/`OpReadiness` | **None.** In `preAuthOpcodes` (`pkg/api/quic/opcode_permissions.go:137`), the only opcodes besides `OpIAMAuthenticate` served without credentials. All three name no component |
 | MCP | `platform_health`, `platform_liveness`, `platform_readiness` are mapped to the **empty permission string** in `pkg/api/mcp/authz.go` — explicitly "no auth required", and commented as such |
 | Embedded | In-process; no token |
 
@@ -274,9 +276,13 @@ values feed both listeners.
 
 ## 8. Related surfaces that are not this feature
 
-- **`grpc.health.v1`** (`Health/Check`, `Health/Watch`) is served by
-  `HealthGRPCService` and is a separate mechanism with a separate vocabulary —
-  [architecture.md](architecture.md) §6. It does **not** read this registry.
+- **`grpc.health.v1`** (`Health/Check`, `Health/List`, `Health/Watch`) is
+  served by `HealthGRPCService`, a separate interface with a separate
+  vocabulary — [architecture.md](architecture.md) §6. It **does** read this
+  registry, through one `platform` checker: an unhealthy overall status answers
+  `NOT_SERVING`, degraded stays `SERVING`, and any named service answers
+  `NOT_FOUND`. `Check` is unauthenticated; `List` and `Watch` need
+  `platform:read` (`pkg/api/grpc/method_permissions.go:651`–`652`).
 - **`GET /api/v1/platform/metrics`** projects the same `SystemHealth` into the
   dashboard's service tiles alongside CPU/memory/disk. Documented with the
   daemon: [`docs/daemon/api.md`](../daemon/api.md).

@@ -76,12 +76,15 @@ platform's normal `scp`-claim path. It authenticates instead with, in order:
 1. a single-use nonce, consumed before anything else;
 2. an EAB credential (`eab_key_id` + `eab_hmac`);
 3. a device-profile match on `ek_serial` / `mac_address`;
-4. cryptographic EK-certificate binding against the matched profile.
+4. EAB binding: the credential must be issued for the matched profile (and its
+   tenant, when the profile names one), or the request fails with
+   `ErrEABProfileMismatch` (`verifyEABBinding`);
+5. cryptographic EK-certificate binding against the matched profile.
 
-All four are enforced **before the digest is signed**. There is no `scp`
+All five are enforced **before the digest is signed**. There is no `scp`
 permission on the REST route, and gRPC `SignDigest` is pre-auth. On MCP
 `provision_sign_digest` is classified open (`""`, #304) to match: it needs no
-token, and the four checks above, made by the shared
+token, and the five checks above, made by the shared
 `configdelivery.Service`, are the whole gate. The QUIC sign sub-opcode is
 pre-auth the same way (#317).
 
@@ -99,6 +102,7 @@ certificate through `CAService.GetCertificate`.
 | Missing nonce | `ErrNonceRequired` |
 | Nonce consumed or EAB invalid | EAB/nonce verification error |
 | No device profile matched | `ErrRemoteSignNotConfigured{"no device profile matched the request identity"}` |
+| EAB credential issued for another profile or tenant | `ErrEABProfileMismatch` |
 | EK certificate absent or mismatched | EK-binding error |
 | Secure Boot disabled / resign-mode not `remote` / no `db.key-uri` / selector other than `db` | `ErrRemoteSignNotConfigured{Reason}` |
 | KMS reports the DB key not found (typed SDK not-found, `sdkerrors.IsNotFound`) | `ErrRemoteSignNotConfigured{Reason}` (wrapped in `ErrSignFailed`) |
@@ -211,7 +215,7 @@ must be able to tell "not exposed" from "not built".
 
 | Capability | Status |
 |---|---|
-| Sign, flash, attest or OTA-update AVR firmware | **Not implemented.** `pkg/firmware`, `pkg/ota`, `pkg/avr` do not exist |
+| Sign, flash, attest or OTA-update AVR firmware | **Not implemented.** `pkg/ota` and `pkg/avr` do not exist; `pkg/firmware` holds only `pkg/firmware/avr/attestation` ([avr-attestation.md](avr-attestation.md)), with no sign, flash or OTA path |
 | Raspberry Pi OTP secure boot, boot-chain signing, A/B OTA | **Not implemented.** `pkg/rpi` does not exist |
 | Android / GrapheneOS fastboot, AVB 2.0, hardware attestation | **Not implemented.** `pkg/android` does not exist |
 | Firmware encryption (AES-128-CTR), ATECC608A support | **Not implemented** |

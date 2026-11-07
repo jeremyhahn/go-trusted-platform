@@ -1,6 +1,6 @@
 # Factory Image — Architecture
 
-> **Status: NORMATIVE** · Scope: `pkg/diskimage/` (`rpi`, `qemuvirt`, `uboot`, `runner`), `pkg/cli/commands/diskimage/`, `build/docker/uboot-builder/`, `build/docker/diskimage-builder/` · Last verified: 2026-09-16
+> **Status: NORMATIVE** · Scope: `pkg/diskimage/` (`rpi`, `qemuvirt`, `uboot`, `runner`, `virtkernel`, `netboot`, `artifacts`, `fatimage`, `diskimagetest`), `pkg/disklessroot/`, `pkg/cli/commands/diskimage/`, `build/docker/uboot-builder/`, `build/docker/diskimage-builder/` · Last verified: 2026-09-16
 > Conflicts with this document are defects. Fix them here first.
 > The feature folder is: [architecture.md](architecture.md) · [engineering.md](engineering.md) · [cli.md](cli.md) · [api.md](api.md) · [user.md](user.md).
 
@@ -38,12 +38,14 @@ the device.**
 
 - **Phase A — on the build host** (`pkg/diskimage`). `Create` stages the
   install media exactly as `platformctl iso create` does (`pkg/iso`'s
-  `StageMedia`: pre-fetched apk repository for the target architecture,
+  `StageInstallMedia`: pre-fetched apk repository for the target architecture,
   platform binaries, the baked platform config, Secure Boot keys, CA bundle),
   adds the target's boot firmware, then starts an Alpine container
   (`build/docker/diskimage-builder`) **at the host platform** (`linux/<host
   GOARCH>`, not the target's) with `--privileged` but its own private
-  `/dev`, the media at `/media/cdrom` and the output directory at `/work`.
+  `/dev`, the media copied in at `/media/cdrom` and the image copied out of
+  `/work` (`runner.Container`: create, copy in, start, copy out; no bind
+  mounts, because the docker daemon may not share the build's filesystem).
   Under qemu-user there are no keyring syscalls, so go-luks2 cannot open the
   LUKS volume in a foreign-architecture container (#802): partitioning, LUKS
   and mkfs therefore run natively, and only the target-chroot steps (apk,
@@ -137,7 +139,8 @@ An MBR partition table, because that is what the Pi firmware reads:
 All board device trees are staged, so one image boots any supported model;
 `--model` selects the description baked into the config and the DTB whose
 presence the build verifies. The kernel is `linux-rpi` for `rpi` and
-`linux-lts` for `qemu-virt` (the Pi kernel carries no virtio).
+`linux-virt` for `qemu-virt` (the Pi kernel carries no virtio) — a kernel the
+platform builds, next section.
 
 ### The stand-in's kernel
 
@@ -228,7 +231,7 @@ same root hash.
 | QEMU virt target | `pkg/diskimage/qemuvirt` | the emulated stand-in (U-Boot supplied to QEMU as `-bios`, empty boot-firmware directory) |
 | U-Boot | `pkg/diskimage/uboot` + `build/docker/uboot-builder` | cache key, container invocation, checksum verification of what comes back |
 | Installer seams | `pkg/installer/boot_firmware.go` | `InstallTarget`, `BootFirmwareType`, `imageTargetSkips` — documented in [installer engineering.md](../installer/engineering.md) invariant 3 |
-| Media staging and overrides | `pkg/iso` | `StageMedia`, `InstallerOverrides`, `NewPlatformISOConfig`, `EnsureSecureBootKeys` |
+| Media staging and overrides | `pkg/iso` | `StageInstallMedia` (which drives the `Customizer`'s `StageMedia`), `InstallerOverrides`, `NewPlatformISOConfig`, `EnsureSecureBootKeys`, `ResolveSecureBootMaterial` |
 
 Everything here is platform-owned (docs/00 §R: secure boot, measured boot,
 UKI, installer/ISO/initrd). Secure Boot key generation reaches go-xkms through
@@ -240,21 +243,25 @@ below the platform is touched. There is no daemon surface ([api.md](api.md)).
 ```
 platformctl diskimage create --target rpi --model rpi4
   ├─ Preflight            docker usable; qemu-aarch64 binfmt with the F flag; loop + dm_crypt loaded
-  ├─ EnsureSecureBootKeys generate or reuse PK/KEK/db (or "remote" when the config signs remotely)
+  ├─ iso.StageInstallMedia
+  │    ├─ EnsureSecureBootKeys       generate or reuse PK/KEK/db (or "remote" when the config signs remotely)
+  │    ├─ ResolveSecureBootMaterial  the DB signer and certificates the build signs with
+  │    └─ Customizer.StageMedia      <work>/media: apks-prefetch/aarch64, platformd-bin/, configs/installer.yaml, keys, ...
   ├─ uboot.Build          reuse output/ when manifest.json carries the cache key, else build
-  ├─ StageMedia           <work>/media: apks-prefetch/aarch64, platformd-bin/, configs/installer.yaml, keys, ...
+  ├─ virtkernel           the platform-built kernel (qemu-virt only)
   ├─ StageBootFirmware    <work>/media/boot-firmware: kernel8.img, config.txt, DTBs, overlays, blobs
-  └─ docker run --privileged -v media:/media/cdrom:ro -v out:/work  (linux/<host arch>, private /dev; host-arch installer at /installer when the target is foreign)
+  ├─ StageKernel          the platform-built kernel onto the media (qemu-virt only)
+  └─ runner.Container --privileged: create, cp media → /media/cdrom, start, cp /work → out  (linux/<host arch>, private /dev; host-arch installer at /installer when the target is foreign)
        platformctl-static diskimage assemble --platform-config /media/cdrom/configs/installer.yaml
          ├─ sparse image → LOOP_CTL_GET_FREE, mknod /dev/loopN if missing, losetup --partscan
          ├─ installer.Install with Target=image, Boot.Firmware=uboot, Disk.Device=/dev/loopN
          │    copies /media/cdrom/boot-firmware onto the ESP root, writes the PROVISIONED sentinel
          └─ sync, losetup --detach
-  ⇒ Result{Image, SHA256, SizeBytes, MediaDir, UBoot}
+  ⇒ Result{Image, SHA256, SizeBytes, MediaDir, UBoot, Kernel}
 ```
 
-What crosses the container boundary: the media (read-only) and the output
-directory, nothing else. The host's `/dev` is never bind-mounted: the
+What crosses the container boundary: the media (copied in) and the image
+(copied out), nothing else. The host's `/dev` is never bind-mounted: the
 installer's `mdev -s`, which creates the partition nodes, resets the mode of
 every device node it walks, and on a shared `/dev` that takes `/dev/null` away
 from every unprivileged process on the build host.
@@ -307,7 +314,8 @@ What persists: the image, the staged media directory, the U-Boot output
 - **It does not build every role on every Pi.** `rpi4` ships the
   single-node template (the default) and, through `--role compute`, the
   dedicated-profile compute node; `rpi5` ships the same compute node as an
-  experimental template (next item). A Pi gateway or control plane has no
+  experimental template (next item); `--role control-plane` builds the
+  standalone control plane on `cm4` and `rpi4`. A Pi gateway has no
   template ([`dedicated/raspberrypi/README.md`](../../configs/platform/templates/dedicated/raspberrypi/README.md)
   says why), and other models fall back to the x86 single-node template with
   the target's overrides; `--overrides` adjusts anything else, including

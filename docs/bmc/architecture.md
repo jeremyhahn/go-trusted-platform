@@ -273,7 +273,7 @@ see [engineering.md](engineering.md) §6.
    control of the host: power, boot device, virtual media, serial console. Whoever
    holds it can boot arbitrary media on the machine. Consequences that follow
    from that and are enforced in code:
-   - Passwords and TLS private keys are `*memguard.Secret` across every API
+   - Passwords and TLS private keys are `*memguard.MemoryEnclave` across every API
      boundary — `UserManager.CreateUser`/`SetUserPassword`,
      `CertificateManager.ReplaceWebCertificate`, `PasswordGenerator`. Raw
      `string`/`[]byte` passwords are not part of the public API.
@@ -415,6 +415,8 @@ Registered entries (`pkg/quirks/registry.go`), with what each actually changes:
 | `aspeed` | `Manufacturer` | `8250_aspeed_vuart` kernel module and SOL on `ttyS4` |
 | `dell inc.` | `Manufacturer` | COM1 SOL, SMB2, encryption required, no cert fallback chain |
 | `hpe` | `Manufacturer` | Same shape as Dell |
+| `raspberry pi` (manufacturer-wide) | `Manufacturer`, supplied by the media generator (no BMC) | PL011 SOL on `ttyAMA0`, no `earlycon`, `rootwait`; `tty1` is the last console so the HDMI port shows OpenRC |
+| `raspberry pi/qemu virt` | `Manufacturer` and `Model` contains `qemu virt` | The emulated boot of the factory image (`pkg/diskimage/qemuvirt`): same UART as the Pi, with `ttyAMA0` last so the serial line is `/dev/console` |
 
 Two quirk fields, and the clear that undoes one of them, deserve their own
 note because they encode failure modes that are invisible without them:
@@ -480,7 +482,7 @@ code as of 2026-08-18.
 | `password: "vault://bmc/..."` | `configuration.md` | `vault://` appears nowhere in `pkg/`. The secret-reference scheme is `kms://`, e.g. `kms://bmc/password?ensure=true&len=16&enc=base64` |
 | `enrollment:`, `certificate:`, `key:`, `backend:`, `allow_cgi_fallback` shown as **device-profile** fields | `configuration.md` | `entities.BMCConfig` has exactly five fields: `address`, `port`, `username`, `password`, `protocol`. Those other keys belong to `bmc.Config`, which is populated from the top-level `bmc:` block of the platformd YAML — not from a device profile |
 | `acme.request.authz_type` / `challenge_type` | `configuration.md` | The validated field is `Certificate.ACME.Challenge`; `validateCertBlock` requires it to equal `dns-01` |
-| REST endpoint table lists 13 routes, omitting cert and user routes | `operations.md` | The daemon registers 20 route entries covering 17 distinct paths, including `GET/PUT /bmc/{profileID}/cert` and five `/users` routes |
+| REST endpoint table lists 13 routes, omitting cert and user routes | `operations.md` | The daemon registers 20 route entries covering 13 distinct paths, including `GET/PUT /bmc/{profileID}/cert` and five `/users` routes |
 | "All five transports expose the enrollment operation" | `operations.md` | Five were listed — REST, gRPC, Unix (gRPC over UDS), QUIC, MCP — but there are six: embedded carries enrollment too, through `ServiceRegistry.BMC` ([api.md](api.md) §2) |
 | "automatic 90-day password rotation" as a shipped capability | `README.md` | `DefaultRotationInterval` is defined and `RotationEngine.RotateOnce` works, but no scheduler job registers rotation. Only *certificate* renewal is scheduled (`RegisterCertRenewal`) |
 | `--output-format json` | `operations.md` | The global output flag is `--output` / `-o`; `platformctl` uses `cli.CommonFlags.OutputFormat` behind it |

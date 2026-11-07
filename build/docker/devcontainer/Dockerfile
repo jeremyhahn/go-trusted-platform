@@ -16,6 +16,10 @@
 #                initramfs tools, Node and the Playwright libraries) and the
 #                source at /workspace. `make integration-test` runs it under the
 #                privileged compose service (compose.yaml beside this file).
+#   integration-legs
+#                integration + a warm build cache: everything a suite run
+#                compiles, compiled once into /gocache. The image the suites run
+#                in; `trivy image` scans integration, which it leaves unchanged.
 #
 # Build with `make docker-build` (both images) or `make build-devcontainer`
 # (the integration image as trusted-platform-dev:latest): they pass GO_IMAGE
@@ -83,6 +87,11 @@ WORKDIR /src
 # layer or a command line. With no secret, modules resolve from the public
 # proxy, so a module only the forge serves fails the build here, loudly.
 # sdk/go is copied because the root go.mod replaces it with ./sdk/go.
+# The cache is opened for reading by any uid (the toolchain image runs as the
+# invoking user) in this same RUN, while its files are still in the layer
+# being written. A chmod -R in a later layer copies every file of the cache up
+# into a new layer: 107 s on ci-node-2 and 1468 to 2287 s on omega
+# (go-trusted-platform run 70307, CA m1594). COPY --from keeps the modes.
 COPY go.mod go.sum ./
 COPY sdk/go/go.mod sdk/go/go.sum ./sdk/go/
 COPY build/tools-src/ ./build/tools-src/
@@ -96,7 +105,8 @@ RUN --mount=type=secret,id=gomodauth \
     fi; \
     go mod download; \
     (cd sdk/go && go mod download); \
-    for d in build/tools-src/*/; do (cd "$d" && go mod download); done
+    for d in build/tools-src/*/; do (cd "$d" && go mod download); done; \
+    chmod -R a+rX /gomodcache
 RUN set -eu; \
     go mod verify; \
     (cd sdk/go && go mod verify)
@@ -135,13 +145,11 @@ RUN set -eu; \
     useradd -m -u 10001 -g dev -d /home/dev dev; \
     install -d -m 0755 -o 10001 -g 10001 /src
 COPY --from=modules /gomodcache /gomodcache
-# Open the module cache for reading and the (empty) build cache for writing to
-# any uid (the toolchain image runs as the invoking user). The race-instrumented
-# standard library is not pre-built here: it cost 11 minutes of every uncached
-# image build (CA m639), and the race job builds it on first use.
-RUN set -eu; \
-    chmod -R a+rX /gomodcache; \
-    install -d -m 0777 /gocache
+# Open the (empty) build cache for writing to any uid; the module cache was
+# opened for reading in the modules stage. The race-instrumented standard
+# library is not pre-built here: it cost 11 minutes of every uncached image
+# build (CA m639), and the race job builds it on first use.
+RUN install -d -m 0777 /gocache
 # Nothing fetches a module at run time (devcontainer.md §4).
 ENV GOPROXY=off
 
@@ -187,6 +195,10 @@ USER dev:dev
 FROM base AS integration
 ARG DEBIAN_FRONTEND=noninteractive
 ARG TARGETARCH
+# The Alpine package index checksum the content tag hashes (ci-standard.md §9,
+# scripts/apk-index-sum.sh). This base is Debian, so CI passes `none`; the
+# base stage's APT_REFRESH is what rebuilds the packages on a Debian fix.
+ARG APK_INDEX_SUM
 SHELL ["/bin/bash", "-c"]
 
 # Networking and process tools the suites and the entrypoint call. Every
@@ -364,3 +376,22 @@ WORKDIR /workspace
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["bash"]
+
+# ---------------------------------------------------------------------------
+# The image `make integration-test` and CI's integration legs run (#1119). The
+# runner's `warm` mode compiles platformd, platformctl, gatewayd,
+# platform-initrd and every suite's test package into /gocache, so each leg
+# links and runs instead of compiling the tree from an empty cache. The cache
+# is build output, no package: the stage `trivy image` scans is integration.
+# The cache mount keeps the last build's cache on the project's BuildKit
+# builder, so a build compiles only what its commit changed (warm_build_cache
+# in the runner). IT_BUILD_TAGS is the tag set the Makefile passes the runner,
+# and GOFLAGS and GOWORK are compose.yaml's integration environment: the cache
+# entries a leg finds are the ones its own build asks for only when both match.
+FROM integration AS integration-legs
+ARG IT_BUILD_TAGS
+RUN --mount=type=cache,id=go-trusted-platform-it-gocache,target=/buildcache,sharing=locked \
+    set -eu; \
+    : "${IT_BUILD_TAGS:?pass the Makefile TEST_BUILD_TAGS: make docker-build-it}"; \
+    GOFLAGS="-mod=readonly -buildvcs=false" GOWORK=off \
+      bash build/docker/devcontainer/run-integration-tests.sh warm "${IT_BUILD_TAGS}" /buildcache

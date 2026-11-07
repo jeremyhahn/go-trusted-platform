@@ -63,27 +63,20 @@ export default function AppsPage() {
     }
   );
 
-  // Transform SDK apps to DisplayApplication for UI compatibility.
-  // The server uses snake_case (`client_id`, `grant_types`,
-  // `redirect_uris`); accept both shapes so neither end has to
-  // re-encode the response.
+  // Transform SDK apps to DisplayApplication for UI compatibility. The
+  // list reply is the proto ListIAMAppsResponse in protojson (#445):
+  // camelCase fields, every list present.
   const apps: DisplayApplication[] = useMemo(() => {
-    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-    const list = (appsData as any)?.apps ?? (appsData as any)?.applications ?? [];
-    if (!Array.isArray(list)) return [];
-    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-    return list.map((app: any) => {
-      const clientId = app.clientId ?? app.client_id ?? '';
-      const redirectUris = app.redirectUris ?? app.redirect_uris ?? [];
-      const grantTypes = app.grantTypes ?? app.grant_types ?? [];
+    return (appsData?.apps ?? []).map((app) => {
+      const clientId = app.clientId ?? '';
       return {
         clientId,
         name: app.name || clientId || 'unnamed',
-        redirectUriCount: Array.isArray(redirectUris) ? redirectUris.length : 0,
-        grantTypes: Array.isArray(grantTypes) ? grantTypes : [],
-        resourcePrefix: app.resourcePrefix ?? app.resource_prefix,
-        createdAt: app.createdAt ?? app.created_at,
-        updatedAt: app.updatedAt ?? app.updated_at,
+        redirectUriCount: app.redirectUris?.length ?? 0,
+        grantTypes: app.grantTypes ?? [],
+        resourcePrefix: app.resourcePrefix,
+        createdAt: app.createdAt,
+        updatedAt: app.updatedAt,
       };
     });
   }, [appsData]);

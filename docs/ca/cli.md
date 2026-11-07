@@ -17,7 +17,7 @@ platformctl acme    ACME certificate management
 
 ### Global flags
 
-`platformctl` persistent flags (`pkg/cli/commands/root.go:134`), precedence
+`platformctl` persistent flags (`pkg/cli/commands/root.go:135`), precedence
 **flag > environment > config file > default**:
 
 | Flag | Short | Default | Environment |
@@ -194,7 +194,7 @@ Both verbs are daemon RPCs (`CAService/InstallCACertificates`,
 `CAService/UninstallCACertificates`, permission `trust:write`), so they would
 change the trust store of the host platformd runs on, not the caller's. **No
 platformd CA service implements either RPC today**
-(`pkg/api/daemon/ca_grpc_service.go:55`, `pkg/api/grpc/ca_service.go:127`), so
+(`pkg/api/daemon/ca_grpc_service.go:56`, `pkg/api/grpc/ca_service.go:127`), so
 both fail. To trust the CA on the local host, write the bundle yourself:
 
 ```bash
@@ -262,6 +262,8 @@ The refusal reads `acme <verb>: platformd has no ACME call for RFC 8555 <section
 `device-01` and `device-attest-01` are the TPM-based challenge types — they let
 a device prove what it is rather than proving control of a name. `--authz
 permanent-identifier` is the authorization type that pairs with them.
+The stack's ACME server offers `enroll-01`, not `device-01`; the flag accepts
+the latter and rejects the former (`pkg/cli/commands/acme/renew.go:141`).
 
 **The `--directory` default points at a local development address.** In any real
 deployment, pass the platform's ACME directory URL explicitly.
@@ -285,7 +287,7 @@ platformctl acme rotate-key
 | Capability | Reach it with |
 |---|---|
 | Get the bootstrap bundle / root / intermediate directly | REST `/api/v1/ca/bootstrap`, `/ca/root`, `/ca/intermediate` |
-| Renew or verify over REST | `POST /api/v1/ca/certificates/{serial}/renew`, `POST /api/v1/ca/certificates/verify` (`pkg/api/rest/ca_handlers.go:509`, `:516`) |
+| Renew or verify over REST | `POST /api/v1/ca/certificates/{serial}/renew`, `POST /api/v1/ca/certificates/verify` (`pkg/api/rest/ca_handlers.go:512`, `:519`) |
 
 ---
 
