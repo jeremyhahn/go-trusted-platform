@@ -236,11 +236,17 @@ func (h *ContainerHandlers) handleAttachContainer(w http.ResponseWriter, r *http
 			return
 		case chunk, ok := <-output:
 			if !ok {
-				fmt.Fprintf(w, "event: end\ndata: session ended\n\n")
+				if _, err := fmt.Fprintf(w, "event: end\ndata: session ended\n\n"); err != nil {
+					h.logger.Warn("Container attach stream write failed", "error", err, "id", containerID)
+					return
+				}
 				flusher.Flush()
 				return
 			}
-			fmt.Fprintf(w, "data: %s\n\n", string(chunk.Data))
+			if _, err := fmt.Fprintf(w, "data: %s\n\n", string(chunk.Data)); err != nil {
+				h.logger.Warn("Container attach stream write failed", "error", err, "id", containerID)
+				return
+			}
 			flusher.Flush()
 		}
 	}
