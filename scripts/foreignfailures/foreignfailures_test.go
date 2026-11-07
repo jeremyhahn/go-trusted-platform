@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -582,4 +583,35 @@ func TestRun(t *testing.T) {
 			assert.Contains(t, stderr.String(), tc.stderr)
 		})
 	}
+}
+
+// failingWriter refuses every write, as a closed pipe does.
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("write refused") }
+
+func TestRunFailsWhenTheOutputCannotBeWritten(t *testing.T) {
+	dir := t.TempDir()
+	baselinePath := filepath.Join(dir, "foreign-failures.tsv")
+	require.NoError(t, os.WriteFile(baselinePath, []byte(testBaseline), 0o600))
+	write := func(name, text string) string {
+		path := filepath.Join(dir, name)
+		require.NoError(t, os.WriteFile(path, []byte(text), 0o600))
+		return path
+	}
+	listed := write("listed.log", suiteOutput(failedTarget("iam", "test/integration/iam", "--- FAIL: TestIAMCLI/CreateRole (0.01s)")))
+	unlisted := write("unlisted.log", suiteOutput(failedTarget("iam", "test/integration/iam", "--- FAIL: TestIAMCLI/Other (0.01s)")))
+
+	t.Run("stdout of a passing verdict", func(t *testing.T) {
+		var stderr bytes.Buffer
+		assert.Equal(t, exitOutput, run([]string{"-baseline", baselinePath, listed}, failingWriter{}, &stderr))
+	})
+	t.Run("stderr of a gating verdict", func(t *testing.T) {
+		var stdout bytes.Buffer
+		assert.Equal(t, exitOutput, run([]string{"-baseline", baselinePath, unlisted}, &stdout, failingWriter{}))
+	})
+	t.Run("stderr of a usage error", func(t *testing.T) {
+		var stdout bytes.Buffer
+		assert.Equal(t, exitOutput, run([]string{"-baseline", baselinePath}, &stdout, failingWriter{}))
+	})
 }

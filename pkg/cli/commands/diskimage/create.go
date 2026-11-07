@@ -119,7 +119,7 @@ Examples:
 	f.StringVar(&flags.role, "role", "", "Dedicated-profile role for the rpi target, built from dedicated/raspberrypi/<model>/<role>.yaml (compute on rpi4 and rpi5, control-plane on cm4 and rpi4); empty builds the single-node image")
 	f.IntVar(&flags.sizeMB, "size", pkgdiskimage.DefaultSizeMB, "Image size in MB")
 	f.StringVar(&flags.output, "output", "", "Output image path (default <work-dir>/trusted-platform-<target>.img)")
-	f.StringVar(&flags.binariesDir, "binaries-dir", "", "Directory holding the target-architecture platformd, platformctl, platformctl-static, platform-initrd and gatewayd (default: aarch64/ next to this binary)")
+	f.StringVar(&flags.binariesDir, "binaries-dir", "", "Directory holding the target-architecture platformd, platformctl, platform-initrd and gatewayd (default: aarch64/ next to this binary)")
 	addMediaFlags(f, &flags.mediaFlags)
 	return cmd
 }
@@ -314,7 +314,7 @@ func buildConfig(flags *createFlags) (*pkgiso.ISOBuildConfig, error) {
 	if err != nil {
 		return nil, err
 	}
-	cfg.PlatformdBinary = filepath.Join(binDir, "platformd")
+	cfg.UseBinariesDir(binDir)
 	return cfg, nil
 }
 

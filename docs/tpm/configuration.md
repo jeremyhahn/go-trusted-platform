@@ -91,16 +91,25 @@ then those two. Left unset (`0`), the EK certificate is looked up only in the
 platform certificate store and NV is never read, so a manufacturer certificate
 in NV is not found.
 
+When platformd imports an EK certificate with `ek.cert-handle` set, it reads
+`TPM_PT_NV_INDEX_MAX` and `TPM_PT_NV_BUFFER_MAX` from the TPM (TPM 2.0 Part 2
+§6.13). A certificate no larger than both goes to NV at `0x01C00002`; a larger
+one goes to the platform certificate store, which the read falls back to. The
+write limit counts because go-xkms writes the certificate in one
+`TPM2_NV_Write` (1024 bytes on the reference simulator). A failed NV write is a startup error
+(`EKCertNVWriteError`); it is never moved to the store. With `ek.cert-handle`
+unset, the certificate goes to the store.
+
 **`iak.cert-handle` and `idevid.cert-handle` are currently IGNORED.** Both are
 cleared at startup (`applyCertHandleNVInterim`, `pkg/app/tpm_cert_nv.go`), and the IAK and IDevID certificates are kept in the platform
 certificate store instead of TPM NVRAM. A warning naming the ignored handle is
 logged at boot.
 
-This is temporary. go-xkms defines the NV index as a *counter*, which the TPM
-accepts only at 8 bytes, so every certificate-sized NV write is rejected with
-`TPM_RC_SIZE` and the daemon does not start — see go-xkms#138, tracked here as
-issue #81 and documented in [engineering.md](engineering.md) item 9. Setting
-either field is harmless; it simply has no effect until that fix is adopted.
+This is temporary. go-xkms authorizes the identity NV write on the owner
+hierarchy with an empty password, so after platformd sets the owner auth the
+TPM rejects it with `TPM_RC_BAD_AUTH` and the daemon does not start — tracked
+as issue #81 and documented in [engineering.md](engineering.md) item 9.
+Setting either field is harmless; it simply has no effect until that is fixed.
 
 Two consequences worth knowing while this stands:
 
