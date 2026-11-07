@@ -1988,7 +1988,7 @@ test-webservice-jwt:
 
 # Base directory containing all source repositories
 # This must match the paths used in go.mod replace directives
-SOURCES_BASE := /home/jhahn/sources
+SOURCES_BASE := /sources
 
 # Local module volume mounts for docker - only mount packages with local replace directives in go.mod
 # Sibling-module bind mounts, deliberately empty since the tagged-module
