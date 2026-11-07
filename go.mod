@@ -55,7 +55,7 @@ require (
 	github.com/jeremyhahn/go-quicbaas/sdk/go v0.12.0-alpha // held: the v0.16.0-alpha adoption is #906/#937 (fix-qbsdk16)
 	github.com/jeremyhahn/go-trusted-platform/sdk/go v0.1.0-alpha
 	github.com/jeremyhahn/trusted-firmware/sdk/go v0.3.0-alpha // held: the latest version is not in the module cache and cannot be fetched offline in #933
-	github.com/klauspost/compress v1.19.1 // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	github.com/klauspost/compress v1.20.2 // held: v1.20.3 is not in the module cache and cannot be fetched offline (m1985a: module lookup disabled by GOPROXY=off)
 	github.com/libp2p/go-libp2p v0.50.0 // held: v0.50.0 requires exactly quic-go v0.62.0 and webtransport-go v0.13.0; later versions are not in the module cache and cannot be fetched offline in #1140
 	github.com/libp2p/go-libp2p-kad-dht v0.37.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	github.com/mark3labs/mcp-go v1.5.0
