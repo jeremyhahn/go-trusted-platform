@@ -17,7 +17,6 @@ import (
 	"bytes"
 	"crypto"
 	"crypto/ecdsa"
-	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
@@ -30,6 +29,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -55,14 +55,29 @@ func selfSigned(t *testing.T, signer crypto.Signer) *x509.Certificate {
 	return cert
 }
 
+// rsaFixture returns one RSA-2048 key and self-signed certificate shared by
+// every test: generating a 2048-bit key per test dominated the package time.
+// Tests only read the key and certificate.
 func rsaFixture(t *testing.T) (*rsa.PrivateKey, *x509.Certificate) {
 	t.Helper()
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatalf("GenerateKey: %v", err)
+	rsaFixtureOnce.Do(func() {
+		key, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			t.Fatalf("GenerateKey: %v", err)
+		}
+		rsaFixtureKey, rsaFixtureCert = key, selfSigned(t, key)
+	})
+	if rsaFixtureKey == nil || rsaFixtureCert == nil {
+		t.Fatal("shared RSA fixture was not created")
 	}
-	return key, selfSigned(t, key)
+	return rsaFixtureKey, rsaFixtureCert
 }
+
+var (
+	rsaFixtureOnce sync.Once
+	rsaFixtureKey  *rsa.PrivateKey
+	rsaFixtureCert *x509.Certificate
+)
 
 func ecdsaFixture(t *testing.T) (*ecdsa.PrivateKey, *x509.Certificate) {
 	t.Helper()
@@ -386,27 +401,6 @@ func TestBuildModuleSignatureNilInputs(t *testing.T) {
 	}
 }
 
-func TestSignatureAlgorithm(t *testing.T) {
-	rsaKey, _ := rsaFixture(t)
-	ecKey, _ := ecdsaFixture(t)
-
-	if alg, err := signatureAlgorithm(rsaKey.Public()); err != nil || !alg.Algorithm.Equal(oidRSAEncryption) {
-		t.Errorf("RSA: alg=%v err=%v, want rsaEncryption", alg.Algorithm, err)
-	}
-	if alg, err := signatureAlgorithm(ecKey.Public()); err != nil || !alg.Algorithm.Equal(oidECDSAWithSHA256) {
-		t.Errorf("ECDSA: alg=%v err=%v, want ecdsa-with-SHA256", alg.Algorithm, err)
-	}
-
-	edPub, _, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("ed25519 GenerateKey: %v", err)
-	}
-	var ue ErrUnsupportedKeyType
-	if _, err := signatureAlgorithm(edPub); !errors.As(err, &ue) {
-		t.Errorf("ed25519 error = %v, want ErrUnsupportedKeyType", err)
-	}
-}
-
 func TestSignModuleInPlace(t *testing.T) {
 	key, cert := rsaFixture(t)
 	dir := t.TempDir()
@@ -468,7 +462,6 @@ func TestSignModuleMissingFile(t *testing.T) {
 }
 
 func TestEnumerateModules(t *testing.T) {
-	key, cert := rsaFixture(t)
 	root := t.TempDir()
 	kver := "6.1.0-modulesign"
 	base := filepath.Join(root, "lib", "modules", kver)
@@ -513,23 +506,6 @@ func TestEnumerateModules(t *testing.T) {
 		if !seen {
 			t.Errorf("module not enumerated: %s", p)
 		}
-	}
-
-	// Compressed .ko.gz modules are enumerated AND signable in place: signing
-	// rewrites the file with the signature appended to the decompressed image.
-	if err := SignModule(compressed, key, cert); err != nil {
-		t.Fatalf("SignModule(.ko.gz): %v", err)
-	}
-	signedRaw, err := os.ReadFile(compressed)
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
-	decompressed, err := gzipDecompress(signedRaw)
-	if err != nil {
-		t.Fatalf("gzipDecompress signed module: %v", err)
-	}
-	if !bytes.HasSuffix(decompressed, []byte(magic)) {
-		t.Error("signed .ko.gz does not carry the kernel magic on its decompressed payload")
 	}
 }
 

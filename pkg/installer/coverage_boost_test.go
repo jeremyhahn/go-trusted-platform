@@ -1316,98 +1316,9 @@ func TestUKIBuilderAdapter_BuildUKI_MissingCmdline(t *testing.T) {
 // types.go - FIDO2Config, IMAConfig structure tests
 // =============================================================================
 
-func TestFIDO2Config_Structure(t *testing.T) {
-	config := &FIDO2Config{
-		RelyingPartyID:       "my-rp",
-		Keyslot:              3,
-		UserPresenceRequired: true,
-		Timeout:              30,
-	}
-
-	assert.Equal(t, "my-rp", config.RelyingPartyID)
-	assert.Equal(t, 3, config.Keyslot)
-	assert.True(t, config.UserPresenceRequired)
-	assert.Equal(t, 30, config.Timeout)
-}
-
-func TestIMAConfig_Structure(t *testing.T) {
-	config := &IMAConfig{
-		Enabled:        true,
-		Policy:         "tcb",
-		EVM:            true,
-		HashAlgorithm:  "sha256",
-		MonitorPaths:   []string{"/bin", "/sbin"},
-		AppraiseMode:   "enforce",
-		AuditEnabled:   true,
-		SigningKeyPath: "/keys/ima.key",
-		PublicKeyPath:  "/keys/ima.pub",
-	}
-
-	assert.True(t, config.Enabled)
-	assert.True(t, config.EVM)
-	assert.Equal(t, "tcb", config.Policy)
-	assert.Equal(t, "sha256", config.HashAlgorithm)
-	assert.Len(t, config.MonitorPaths, 2)
-	assert.Equal(t, "enforce", config.AppraiseMode)
-	assert.True(t, config.AuditEnabled)
-}
-
-func TestConfig_WithFIDO2(t *testing.T) {
-	config := &Config{
-		Disk: &DiskConfig{
-			Device: "/dev/sda",
-		},
-		OS: &OSConfig{
-			OS: OSAlpine,
-		},
-		EnableFIDO2Enrollment: true,
-		FIDO2: &FIDO2Config{
-			RelyingPartyID:       "luks-test",
-			Keyslot:              3,
-			UserPresenceRequired: true,
-			Timeout:              60,
-		},
-	}
-
-	assert.True(t, config.EnableFIDO2Enrollment)
-	assert.NotNil(t, config.FIDO2)
-	assert.Equal(t, "luks-test", config.FIDO2.RelyingPartyID)
-	assert.NoError(t, config.Validate())
-}
-
-func TestConfig_WithEnvironment(t *testing.T) {
-	config := &Config{
-		Disk: &DiskConfig{
-			Device: "/dev/sda",
-		},
-		OS: &OSConfig{
-			OS: OSAlpine,
-		},
-		Environment: "test",
-	}
-
-	assert.Equal(t, "test", config.Environment)
-	assert.NoError(t, config.Validate())
-}
-
 // =============================================================================
 // postinstall.go - NewPostInstallExecutor fields
 // =============================================================================
-
-func TestNewPostInstallExecutor_Fields(t *testing.T) {
-	logger := createTestLogger()
-	config := &OSConfig{
-		PostInstall:       "echo hello",
-		PostInstallScript: "/path/to/script.sh",
-	}
-
-	executor := NewPostInstallExecutor(logger, config)
-	assert.NotNil(t, executor)
-	assert.Equal(t, logger, executor.logger)
-	assert.Equal(t, config, executor.config)
-	assert.Equal(t, "echo hello", executor.config.PostInstall)
-	assert.Equal(t, "/path/to/script.sh", executor.config.PostInstallScript)
-}
 
 // mockWriter is a minimal io.Writer for testing
 type mockWriter struct{}

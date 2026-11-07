@@ -18,25 +18,20 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
 
-func TestArgon2(t *testing.T) {
+// sharedHash hashes sharedPassword once with the default parameters. A
+// default-parameter argon2id run costs tens of milliseconds, so the tests
+// that only read a valid hash share this one.
+const sharedPassword = "correct-password"
 
-	password := "$ecret!"
-	passwordHasher := NewArgon2(rand.Reader)
-	hash, err := passwordHasher.Hash(password)
-	assert.Nil(t, err)
-	assert.NotNil(t, hash)
-
-	match, err := passwordHasher.Compare(password, hash)
-	assert.Nil(t, err)
-	assert.True(t, match)
-
-	fmt.Println(hash)
-}
+var sharedHash = sync.OnceValues(func() (string, error) {
+	return NewArgon2(rand.Reader).Hash(sharedPassword)
+})
 
 func TestCreateArgon2(t *testing.T) {
 
@@ -63,10 +58,7 @@ func TestCreateArgon2(t *testing.T) {
 
 // TestHash_Success tests successful password hashing
 func TestHash_Success(t *testing.T) {
-	hasher := NewArgon2(rand.Reader)
-	password := "test-password"
-
-	hash, err := hasher.Hash(password)
+	hash, err := sharedHash()
 
 	assert.NoError(t, err)
 	assert.NotEmpty(t, hash)
@@ -95,12 +87,11 @@ func TestHash_RNGError(t *testing.T) {
 // TestCompare_Success tests successful password comparison
 func TestCompare_Success(t *testing.T) {
 	hasher := NewArgon2(rand.Reader)
-	password := "correct-password"
 
-	hash, err := hasher.Hash(password)
+	hash, err := sharedHash()
 	assert.NoError(t, err)
 
-	match, err := hasher.Compare(password, hash)
+	match, err := hasher.Compare(sharedPassword, hash)
 
 	assert.NoError(t, err)
 	assert.True(t, match)
@@ -109,9 +100,8 @@ func TestCompare_Success(t *testing.T) {
 // TestCompare_WrongPassword tests comparison with incorrect password
 func TestCompare_WrongPassword(t *testing.T) {
 	hasher := NewArgon2(rand.Reader)
-	password := "correct-password"
 
-	hash, err := hasher.Hash(password)
+	hash, err := sharedHash()
 	assert.NoError(t, err)
 
 	match, err := hasher.Compare("wrong-password", hash)
@@ -222,9 +212,8 @@ func TestCreateSalt_ShortRead(t *testing.T) {
 // TestDecodeHash_Success tests successful hash decoding
 func TestDecodeHash_Success(t *testing.T) {
 	hasher := NewArgon2(rand.Reader)
-	password := "test-password"
 
-	hash, err := hasher.Hash(password)
+	hash, err := sharedHash()
 	assert.NoError(t, err)
 
 	hasherImpl := hasher.(Argon2Hasher)
