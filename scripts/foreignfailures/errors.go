@@ -82,3 +82,15 @@ func (e *ReadError) Error() string {
 }
 
 func (e *ReadError) Unwrap() error { return e.Err }
+
+// WriteError is a failure to write the checker's output: a verdict whose
+// output was lost does not pass.
+type WriteError struct {
+	Err error
+}
+
+func (e *WriteError) Error() string {
+	return fmt.Sprintf("foreignfailures: writing output: %v", e.Err)
+}
+
+func (e *WriteError) Unwrap() error { return e.Err }

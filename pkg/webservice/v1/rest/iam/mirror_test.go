@@ -24,6 +24,7 @@ import (
 )
 
 func TestMirrorUser_CreatesUserWithRoles(t *testing.T) {
+	t.Parallel()
 	var got *iamsdk.CreateUserRequest
 	var gotTenant string
 	client := &mockIAMClient{
@@ -42,6 +43,7 @@ func TestMirrorUser_CreatesUserWithRoles(t *testing.T) {
 }
 
 func TestMirrorUser_AlreadyExistsIsSuccessOtherErrorsAreNot(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	exists := NewQuicBaaSUserMirror(&mockIAMClient{
 		createUserFn: func(context.Context, string, *iamsdk.CreateUserRequest) (*iamsdk.User, error) {
@@ -60,6 +62,7 @@ func TestMirrorUser_AlreadyExistsIsSuccessOtherErrorsAreNot(t *testing.T) {
 }
 
 func TestMirroredEmails_ReadsEveryPage(t *testing.T) {
+	t.Parallel()
 	pages := map[string]*iamsdk.ListUsersResponse{
 		"": {
 			Users:      []iamsdk.User{{Email: "Ann@Example.com"}},
@@ -83,6 +86,7 @@ func TestMirroredEmails_ReadsEveryPage(t *testing.T) {
 }
 
 func TestMirroredEmails_StopsOnARepeatedPageToken(t *testing.T) {
+	t.Parallel()
 	calls := 0
 	client := &mockIAMClient{
 		listUsersFn: func(context.Context, string, *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
@@ -98,6 +102,7 @@ func TestMirroredEmails_StopsOnARepeatedPageToken(t *testing.T) {
 }
 
 func TestMirroredEmails_Errors(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	_, err := NewQuicBaaSUserMirror(nil).MirroredEmails(ctx, "t1")
@@ -114,6 +119,7 @@ func TestMirroredEmails_Errors(t *testing.T) {
 }
 
 func TestUsernameFromEmail(t *testing.T) {
+	t.Parallel()
 	cases := map[string]string{
 		"alice@acme.test": "alice",
 		"bob":             "bob",

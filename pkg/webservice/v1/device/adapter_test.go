@@ -17,7 +17,6 @@ import (
 	"context"
 	"testing"
 
-	devicepkg "github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/stretchr/testify/assert"
@@ -70,18 +69,6 @@ func TestNewProfileServiceAdapterWithInterfaces(t *testing.T) {
 	mockProfileService := &MockDeviceProfileService{}
 
 	adapter := NewProfileServiceAdapterWithInterfaces(mockDeviceService, mockProfileService)
-	require.NotNil(t, adapter)
-
-	// Compile-time check: adapter is already ProfileService via return type
-	_ = adapter
-}
-
-func TestNewProfileServiceAdapter_WithRealTypes(t *testing.T) {
-	// Create with real type pointers (even if nil)
-	var deviceService *devicepkg.Service
-	var profileService *devicepkg.ProfileService
-
-	adapter := NewProfileServiceAdapter(deviceService, profileService)
 	require.NotNil(t, adapter)
 
 	// Compile-time check: adapter is already ProfileService via return type
