@@ -31,6 +31,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/manifest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/reporting"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
@@ -39,6 +40,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
@@ -391,8 +393,18 @@ func TestNewComputeOrchestrator_UncompiledProviderFailsClosed(t *testing.T) {
 	}
 }
 
-func TestWireQuarantineObserver_RegistersWithAPolicyEngine(t *testing.T) {
+func TestWireQuarantineObserver_FailedAttestationQuarantinesThePort(t *testing.T) {
 	zones := zone.Defaults()
+	plan, err := netplan.New(netplan.Environment{ID: 4}, zones)
+	require.NoError(t, err)
+	zfm, err := policy.NewZoneFlowManager(policy.ZoneFlowManagerConfig{
+		BridgeName:     "br-fabric",
+		FlowController: nullOVSPort{},
+		PortController: nullOVSPort{},
+		Plan:           plan,
+		Zones:          zones,
+	})
+	require.NoError(t, err)
 	eng, err := policy.NewEngine(policy.Config{
 		BridgeName:     "br-fabric",
 		FlowController: nullOVSPort{},
@@ -401,11 +413,57 @@ func TestWireQuarantineObserver_RegistersWithAPolicyEngine(t *testing.T) {
 		Logger:         quietLogger(),
 	})
 	require.NoError(t, err)
+	// Both devices were enrolled and activated on the fabric before attestation.
+	for _, port := range []string{"tap07", "tap08"} {
+		for _, step := range []policy.PortState{policy.PortStateProvisioning, policy.PortStateEnrolled, policy.PortStateAuthorized} {
+			require.NoError(t, eng.SetPortState(port, step))
+		}
+	}
 
+	devices := &hostnameDevices{stubSaveGetSvc: &stubSaveGetSvc{devices: map[uint64]*entities.Device{
+		7: {ID: 7, Hostname: "node-07", State: entities.DeviceStateAttested, NetworkPortID: "tap07"},
+		8: {ID: 8, Hostname: "node-08", State: entities.DeviceStateAttested, NetworkPortID: "tap08"},
+	}}}
 	svcs := &attestationServices{Service: buildRealAttestationService(t)}
-	devices := &stubSaveGetSvc{devices: make(map[uint64]*entities.Device)}
-	mgr := wireQuarantineObserver(svcs, &sdnPolicyComponents{Engine: eng, ResolvedZones: zones}, devices, newTestLogger())
-	assert.NotNil(t, mgr, "an attestation service, a policy engine and a device store make a quarantine manager")
+	sdn := &sdnPolicyComponents{Engine: eng, ZoneFlowManager: zfm, ResolvedZones: zones}
+	require.NotNil(t, wireQuarantineObserver(svcs, sdn, devices, newTestLogger()))
+
+	ctx := context.Background()
+	failed, err := svcs.Service.VerifyManifest(ctx,
+		&manifest.HostManifest{ID: "m-07", HostID: "node-07", Nonce: []byte("replayed")},
+		nil, []byte("fresh"), nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, manifest.VerificationStatusFailed, failed.Status)
+
+	passed, err := svcs.Service.VerifyManifest(ctx,
+		&manifest.HostManifest{ID: "m-08", HostID: "node-08"}, nil, nil, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, manifest.VerificationStatusVerified, passed.Status)
+
+	state, err := eng.GetPortState("tap07")
+	require.NoError(t, err, "the failed host's port is known to the policy engine")
+	assert.Equal(t, policy.PortStateQuarantined, state, "the failed host's port is quarantined")
+	assert.Equal(t, entities.DeviceStateQuarantined, devices.devices[7].State)
+	state, err = eng.GetPortState("tap08")
+	require.NoError(t, err)
+	assert.Equal(t, policy.PortStateAuthorized, state, "a passing attestation leaves the other device's port alone")
+	assert.Equal(t, entities.DeviceStateAttested, devices.devices[8].State)
+}
+
+// hostnameDevices resolves a host name to its device record, which is how
+// the attestation service maps a manifest's host to a device.
+type hostnameDevices struct {
+	*stubSaveGetSvc
+}
+
+func (s *hostnameDevices) FindByHostname(_ context.Context, h string) (*entities.Device, error) {
+	for _, d := range s.devices {
+		if d.Hostname == h {
+			cp := *d
+			return &cp, nil
+		}
+	}
+	return nil, errHostNotFound(h)
 }
 
 func TestInitSDNPolicy_Guards(t *testing.T) {

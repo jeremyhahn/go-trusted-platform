@@ -125,17 +125,46 @@ func (g *ScopeGuard) authorize(r *http.Request, scope string, tokenOnly bool) (*
 	if tokenOnly && !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
 		return nil, http.StatusUnauthorized, ErrRouteUnauthenticated{Reason: "this route requires a platform bearer token granting " + scope}
 	}
-	authCtx, err := g.authenticate(r)
+	authCtx, err := g.identify(r)
 	if err != nil {
 		return nil, http.StatusUnauthorized, err
-	}
-	if authCtx == nil {
-		return nil, http.StatusUnauthorized, ErrRouteUnauthenticated{Reason: "the credential authorized no caller"}
 	}
 	if err := authCtx.RequireScope(scope); err != nil {
 		return nil, http.StatusForbidden, ErrRouteForbidden{Scope: scope, Reason: err.Error()}
 	}
 	return authCtx, http.StatusOK, nil
+}
+
+// Authenticate serves next to any authenticated caller, without a scope
+// check, and hands it the caller. It is for a router that makes its own
+// per-route scope decision on the caller (the daemon's IAM REST plane). A
+// nil guard answers 403 and a missing or invalid credential 401, as Require
+// does.
+func (g *ScopeGuard) Authenticate(next CallerHandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if g == nil {
+			writeGuardError(w, g.loggerOrDefault(), http.StatusForbidden, ErrRouteForbidden{Reason: "no authorization is configured for this route"})
+			return
+		}
+		caller, err := g.identify(r)
+		if err != nil {
+			writeGuardError(w, g.loggerOrDefault(), http.StatusUnauthorized, err)
+			return
+		}
+		next(w, r, caller)
+	}
+}
+
+// identify authenticates r and returns the caller its credential names.
+func (g *ScopeGuard) identify(r *http.Request) (*platformtoken.AuthorizedContext, error) {
+	authCtx, err := g.authenticate(r)
+	if err != nil {
+		return nil, err
+	}
+	if authCtx == nil {
+		return nil, ErrRouteUnauthenticated{Reason: "the credential authorized no caller"}
+	}
+	return authCtx, nil
 }
 
 // authenticate resolves the caller from its bearer token, or else from its
