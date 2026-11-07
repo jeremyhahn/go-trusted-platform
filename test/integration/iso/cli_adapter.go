@@ -286,6 +286,9 @@ func (c *CLIAdapter) Customize(ctx context.Context, opts CustomizeOptions) (*Cus
 	if opts.PlatformdPath != "" {
 		args = append(args, "--platformd-binary", opts.PlatformdPath)
 	}
+	if opts.PlatformctlStaticPath != "" {
+		args = append(args, "--platformctl-static-binary", opts.PlatformctlStaticPath)
+	}
 	if opts.PlatformConfig != "" {
 		args = append(args, "--platform-config", opts.PlatformConfig)
 	}
