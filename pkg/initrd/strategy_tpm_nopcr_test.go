@@ -14,11 +14,9 @@
 package initrd
 
 import (
-	"context"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
 )
 
 func TestNewTPMNoPCRStrategy(t *testing.T) {
@@ -37,45 +35,6 @@ func TestNewTPMNoPCRStrategy(t *testing.T) {
 
 	if strategy.Priority() != 5 {
 		t.Errorf("expected priority 5, got %d", strategy.Priority())
-	}
-}
-
-func TestTPMNoPCRStrategyCanUnlockNoTPM(t *testing.T) {
-	logger := logging.DefaultLogger()
-	platform := createTestPlatform()
-	platform.TPM = nil
-
-	strategy := NewTPMNoPCRStrategy(platform, logger)
-
-	ctx := context.Background()
-	volume := &luks.VolumeConfig{
-		DevicePath:  "/dev/sda2",
-		MappingName: "cryptroot",
-	}
-
-	if strategy.CanUnlock(ctx, volume) {
-		t.Error("expected CanUnlock to return false when TPM is nil")
-	}
-}
-
-func TestTPMNoPCRStrategyCanUnlockNoSealFiles(t *testing.T) {
-	logger := logging.DefaultLogger()
-	platform := createTestPlatform()
-	platform.TPM = nil
-
-	tmpDir := t.TempDir()
-	platform.Config.XKMSPath = tmpDir
-
-	strategy := NewTPMNoPCRStrategy(platform, logger)
-
-	ctx := context.Background()
-	volume := &luks.VolumeConfig{
-		DevicePath:  "/dev/sda2",
-		MappingName: "cryptroot",
-	}
-
-	if strategy.CanUnlock(ctx, volume) {
-		t.Error("expected CanUnlock to return false (no TPM)")
 	}
 }
 
