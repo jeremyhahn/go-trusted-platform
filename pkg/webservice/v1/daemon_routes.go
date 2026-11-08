@@ -49,16 +49,6 @@ var callerCheckedDaemonMethodRoutes = map[string]struct{}{
 	http.MethodPost + " /api/v1/users/{id}/factors/mtls/issue-cert": {},
 }
 
-// clientCertEnrolmentDaemonRoutes lists, keyed "METHOD template", the
-// replayed daemon routes that skip the client-certificate gate: a console
-// user signed in with a passkey enrols their first certificate here, so the
-// certificate being enrolled cannot be required (Codex P1 on #1443). Each
-// is also in callerCheckedDaemonMethodRoutes, so it still takes the
-// webservice session and the handler's own user and CSR checks.
-var clientCertEnrolmentDaemonRoutes = map[string]struct{}{
-	http.MethodPost + " /api/v1/users/{id}/factors/mtls/issue-cert": {},
-}
-
 // privilegedDaemonRoutes maps each daemon CA route that mutates the CA or
 // enumerates what it issued to the scope its webservice twin requires on
 // top of the admin role (pkg/webservice/v1/rest/ca/router.go); an empty
@@ -678,10 +668,6 @@ func daemonRouteGroup(template string) string {
 func requireDaemonClientCert(writer response.HttpWriter, roots *x509.CertPool) mux.MiddlewareFunc {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if enrolsClientCert(r) {
-				next.ServeHTTP(w, r)
-				return
-			}
 			if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 || len(r.TLS.PeerCertificates) == 0 {
 				writer.Error401(w, r, ErrDaemonRouteClientCertRequired{})
 				return
@@ -693,21 +679,6 @@ func requireDaemonClientCert(writer response.HttpWriter, roots *x509.CertPool) m
 			next.ServeHTTP(w, r)
 		})
 	}
-}
-
-// enrolsClientCert reports whether r is on a route that enrols the client
-// certificate itself, which the caller cannot yet present.
-func enrolsClientCert(r *http.Request) bool {
-	route := mux.CurrentRoute(r)
-	if route == nil {
-		return false
-	}
-	template, err := route.GetPathTemplate()
-	if err != nil {
-		return false
-	}
-	_, ok := clientCertEnrolmentDaemonRoutes[r.Method+" "+template]
-	return ok
 }
 
 // verifyDaemonClient verifies the peer's leaf, with the peer's other
