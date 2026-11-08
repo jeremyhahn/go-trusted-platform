@@ -1,3 +1,7 @@
+# automerge v13.1 (2026-11-08, Company Agent m2107 item 4): the fail-closed
+# check on the domain and the reviewer list is an if; v13 wrote it as
+# `A && B || C`, which actionlint reports as shellcheck SC2015 and a lint
+# that treats findings as errors fails on. No behaviour change.
 # automerge v13 (2026-11-08, Company Agent m2101 item 2): no login or
 # domain is written here. AUTOMERGE_APPROVERS (a JSON array of logins),
 # AGENT_DOMAIN and, where the agent is not agent-<repo>, AGENT_LOGIN are
@@ -201,10 +205,11 @@ jobs:
             echo "::error::AGENT_TOKEN is not set on this repository; the merge is made as the project agent."
             exit 1; }
           # v13: fail closed without the domain or any reviewer list.
-          # shellcheck disable=SC2015 # die and exit end the script, so C runs only when A && B fails.
-          [ -n "${AGENT_DOMAIN:-}" ] && { [ -n "${APPROVERS:-}" ] || [ -n "${APPROVERS_ONLY:-}" ]; } || {
+          # v13.1: an if, not `A && B || C` (shellcheck SC2015).
+          if [ -z "${AGENT_DOMAIN:-}" ] || { [ -z "${APPROVERS:-}" ] && [ -z "${APPROVERS_ONLY:-}" ]; }; then
             echo "::error::AGENT_DOMAIN and AUTOMERGE_APPROVERS (or AUTOMERGE_APPROVERS_ONLY) must be set as repository variables (automerge v13)."
-            exit 1; }
+            exit 1
+          fi
           APPROVERS=${APPROVERS:-[]}
           me="${AGENT_LOGIN:-agent-${REPOSITORY#*/}}"
           me_email="$me@$AGENT_DOMAIN"
