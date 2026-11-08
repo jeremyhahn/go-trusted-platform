@@ -152,6 +152,43 @@ func (a *RESTAdapter) doRequest(ctx context.Context, method, path string, body i
 	return respBody, nil
 }
 
+// unwrapPayload returns the resource a tenant route answered with: the
+// payload of the webservice envelope (pkg/webservice/v1/response), or the
+// daemon's bare object. An empty body yields no payload.
+func unwrapPayload(body []byte) ([]byte, error) {
+	if len(bytes.TrimSpace(body)) == 0 {
+		return nil, nil
+	}
+	// The webservice tenant handlers wrap every answer in
+	// {code, success, payload}, while the daemon REST listener answers with
+	// the bare object or array. Only an object carrying a payload key is
+	// unwrapped.
+	if bytes.TrimSpace(body)[0] != '{' {
+		return body, nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return nil, err
+	}
+	if payload, ok := fields["payload"]; ok {
+		return payload, nil
+	}
+	return body, nil
+}
+
+// decodePayload decodes the resource a tenant route answered with into v.
+// A response with no payload leaves v untouched.
+func decodePayload(body []byte, v interface{}) error {
+	payload, err := unwrapPayload(body)
+	if err != nil {
+		return err
+	}
+	if payload == nil {
+		return nil
+	}
+	return json.Unmarshal(payload, v)
+}
+
 // =============================================================================
 // Tenant CRUD Operations
 // =============================================================================
@@ -164,7 +201,7 @@ func (a *RESTAdapter) CreateTenant(ctx context.Context, opts CreateTenantOptions
 	}
 
 	var tenant TenantData
-	if err := json.Unmarshal(body, &tenant); err != nil {
+	if err := decodePayload(body, &tenant); err != nil {
 		return nil, ErrRESTRequestFailed{
 			Operation: "CreateTenant",
 			Message:   "failed to parse response: " + err.Error(),
@@ -185,7 +222,7 @@ func (a *RESTAdapter) GetTenant(ctx context.Context, opts GetTenantOptions) (*Ge
 	}
 
 	var tenant TenantData
-	if err := json.Unmarshal(body, &tenant); err != nil {
+	if err := decodePayload(body, &tenant); err != nil {
 		return nil, ErrRESTRequestFailed{
 			Operation: "GetTenant",
 			Message:   "failed to parse response: " + err.Error(),
@@ -206,7 +243,7 @@ func (a *RESTAdapter) GetTenantByName(ctx context.Context, opts GetTenantByNameO
 	}
 
 	var tenant TenantData
-	if err := json.Unmarshal(body, &tenant); err != nil {
+	if err := decodePayload(body, &tenant); err != nil {
 		return nil, ErrRESTRequestFailed{
 			Operation: "GetTenantByName",
 			Message:   "failed to parse response: " + err.Error(),
@@ -238,7 +275,7 @@ func (a *RESTAdapter) UpdateTenant(ctx context.Context, opts UpdateTenantOptions
 	}
 
 	var tenant TenantData
-	if err := json.Unmarshal(body, &tenant); err != nil {
+	if err := decodePayload(body, &tenant); err != nil {
 		return nil, ErrRESTRequestFailed{
 			Operation: "UpdateTenant",
 			Message:   "failed to parse response: " + err.Error(),
@@ -259,7 +296,7 @@ func (a *RESTAdapter) DeleteTenant(ctx context.Context, opts DeleteTenantOptions
 	}
 
 	var result DeleteTenantResult
-	if err := json.Unmarshal(body, &result); err != nil {
+	if err := decodePayload(body, &result); err != nil {
 		// Delete may return simple success
 		return &DeleteTenantResult{Success: true, Message: "tenant deleted successfully"}, nil
 	}
@@ -288,9 +325,9 @@ func (a *RESTAdapter) ListTenants(ctx context.Context, opts ListTenantsOptions) 
 	}
 
 	var result ListTenantsResult
-	if err := json.Unmarshal(body, &result); err != nil {
+	if err := decodePayload(body, &result); err != nil {
 		var tenants []*TenantData
-		if err := json.Unmarshal(body, &tenants); err != nil {
+		if err := decodePayload(body, &tenants); err != nil {
 			return nil, ErrRESTRequestFailed{
 				Operation: "ListTenants",
 				Message:   "failed to parse response: " + err.Error(),
@@ -318,7 +355,7 @@ func (a *RESTAdapter) SuspendTenant(ctx context.Context, opts SuspendTenantOptio
 	}
 
 	var result SuspendTenantResult
-	if err := json.Unmarshal(body, &result); err != nil {
+	if err := decodePayload(body, &result); err != nil {
 		return &SuspendTenantResult{Success: true, Message: "tenant suspended successfully"}, nil
 	}
 
@@ -335,7 +372,7 @@ func (a *RESTAdapter) ResumeTenant(ctx context.Context, opts ResumeTenantOptions
 	}
 
 	var result ResumeTenantResult
-	if err := json.Unmarshal(body, &result); err != nil {
+	if err := decodePayload(body, &result); err != nil {
 		return &ResumeTenantResult{Success: true, Message: "tenant resumed successfully"}, nil
 	}
 
@@ -356,7 +393,7 @@ func (a *RESTAdapter) GetQuotas(ctx context.Context, opts GetQuotasOptions) (*Ge
 	}
 
 	var result GetQuotasResult
-	if err := json.Unmarshal(body, &result); err != nil {
+	if err := decodePayload(body, &result); err != nil {
 		return nil, ErrRESTRequestFailed{
 			Operation: "GetQuotas",
 			Message:   "failed to parse response: " + err.Error(),
@@ -377,7 +414,7 @@ func (a *RESTAdapter) UpdateQuotas(ctx context.Context, opts UpdateQuotasOptions
 	}
 
 	var result UpdateQuotasResult
-	if err := json.Unmarshal(body, &result); err != nil {
+	if err := decodePayload(body, &result); err != nil {
 		return nil, ErrRESTRequestFailed{
 			Operation: "UpdateQuotas",
 			Message:   "failed to parse response: " + err.Error(),
@@ -398,7 +435,7 @@ func (a *RESTAdapter) GetUsage(ctx context.Context, opts GetUsageOptions) (*GetU
 	}
 
 	var result GetUsageResult
-	if err := json.Unmarshal(body, &result); err != nil {
+	if err := decodePayload(body, &result); err != nil {
 		return nil, ErrRESTRequestFailed{
 			Operation: "GetUsage",
 			Message:   "failed to parse response: " + err.Error(),
@@ -426,7 +463,7 @@ func (a *RESTAdapter) CheckQuota(ctx context.Context, opts CheckQuotaOptions) (*
 	}
 
 	var result CheckQuotaResult
-	if err := json.Unmarshal(body, &result); err != nil {
+	if err := decodePayload(body, &result); err != nil {
 		return nil, ErrRESTRequestFailed{
 			Operation: "CheckQuota",
 			Message:   "failed to parse response: " + err.Error(),
@@ -449,7 +486,7 @@ func (a *RESTAdapter) SyncTenants(ctx context.Context) (*SyncTenantsResult, erro
 	}
 
 	var result SyncTenantsResult
-	if err := json.Unmarshal(body, &result); err != nil {
+	if err := decodePayload(body, &result); err != nil {
 		return &SyncTenantsResult{Success: true, Message: "tenant manager synchronized successfully"}, nil
 	}
 
@@ -485,7 +522,7 @@ func (a *RESTAdapter) InitTenantBarrier(ctx context.Context, opts InitTenantBarr
 		Success  bool   `json:"success"`
 		Message  string `json:"message,omitempty"`
 	}
-	if err := json.Unmarshal(body, &resp); err != nil {
+	if err := decodePayload(body, &resp); err != nil {
 		return &InitTenantBarrierResult{Success: true, Message: "tenant barrier initialized"}, nil
 	}
 
@@ -516,7 +553,7 @@ func (a *RESTAdapter) UnsealTenantBarrier(ctx context.Context, opts UnsealTenant
 		Success  bool   `json:"success"`
 		Message  string `json:"message,omitempty"`
 	}
-	if err := json.Unmarshal(body, &resp); err != nil {
+	if err := decodePayload(body, &resp); err != nil {
 		return &UnsealTenantBarrierResult{Success: true, Message: "tenant barrier unsealed"}, nil
 	}
 
@@ -544,7 +581,7 @@ func (a *RESTAdapter) SealTenantBarrier(ctx context.Context, opts SealTenantBarr
 		Success  bool   `json:"success"`
 		Message  string `json:"message,omitempty"`
 	}
-	if err := json.Unmarshal(body, &resp); err != nil {
+	if err := decodePayload(body, &resp); err != nil {
 		return &SealTenantBarrierResult{Success: true, Message: "tenant barrier sealed"}, nil
 	}
 
@@ -575,7 +612,7 @@ func (a *RESTAdapter) TenantBarrierStatus(ctx context.Context, opts TenantBarrie
 		Strategy       string `json:"strategy"`
 		HardwareBacked bool   `json:"hardware_backed"`
 	}
-	if err := json.Unmarshal(body, &resp); err != nil {
+	if err := decodePayload(body, &resp); err != nil {
 		return nil, ErrRESTRequestFailed{
 			Operation: "TenantBarrierStatus",
 			Message:   "failed to parse response: " + err.Error(),
