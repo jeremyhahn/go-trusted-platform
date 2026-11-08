@@ -305,7 +305,7 @@ func testConfig(now time.Time) *Config {
 	return &Config{
 		TenantID:       testTenant,
 		DeviceRef:      "usb0",
-		Platform:       "arduino-nano-every",
+		Platform:       "avr-dev-board",
 		RequestTimeout: linkTimeout,
 		Clock:          func() time.Time { return now },
 	}
