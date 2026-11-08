@@ -181,6 +181,11 @@ env:
   # release.yml set the same).
   GOWORK: "off"
   GOFLAGS: "-buildvcs=false"
+  # The jeremyhahn/* modules resolve direct from GitHub, never through
+  # proxy.golang.org or sum.golang.org: the history rewrite moved published
+  # tags, and the public proxy and checksum database keep the old zips
+  # and hashes for good, so go.sum (the rewritten bits) cannot verify there.
+  GOPRIVATE: "github.com/jeremyhahn/*"
   # The full-tier selection (v1.23): every event but pull_request, and a PR
   # labelled ci:full. Steps and ci-gate read it; a job-level `if:` cannot.
   CI_FULL_TIER: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full') }}
@@ -322,8 +327,8 @@ jobs:
     # schedule guard's `run`.
     if: ${{ !github.event.pull_request.draft && (github.event_name != 'schedule' || needs.schedule-guard.outputs.verdict == 'run') }}
     needs: [changes, schedule-guard]   # v1.29.3
-    # CUSTOMIZE: lint (up to GOLANGCI_LINT_TIMEOUT, 45m, #426), the unit suite
-    # and the race suite run one after another here.
+    # CUSTOMIZE: lint (up to GOLANGCI_LINT_TIMEOUT, 45m, #426) and the unit
+    # suite run one after another here; the race suite is the race job.
     timeout-minutes: 240
     env:
       # CUSTOMIZE (ruling 108 (b)): the project's own BuildKit builder
@@ -562,16 +567,6 @@ jobs:
           IN_IMAGE_GOMAXPROCS: 16
         run: scripts/in-toolchain-image.sh "$TOOLCHAIN_IMAGE" make test test-sdk-go
 
-      # CUSTOMIZE (race): the unit suite under the race detector, minus
-      # RACE_EXCLUDE (#37). Race detection is sampling, not proof: a ratchet
-      # against reintroduction.
-      - name: make test-race
-        if: ${{ !cancelled() && env.TOOLCHAIN_IMAGE != '' && needs.changes.outputs.docs_only != 'true' }}
-        env:
-          IN_IMAGE_MEMORY: 16g
-          IN_IMAGE_GOMAXPROCS: 8
-        run: scripts/in-toolchain-image.sh "$TOOLCHAIN_IMAGE" make test-race
-
       # make security: gosec, govulncheck, go mod verify and `trivy fs`
       # (devops.md §8), with GOSEC_EXCLUDE, the govulncheck module list and
       # GOVULN_ALLOW single-sourced in the Makefile. security and trivy are
@@ -742,6 +737,37 @@ jobs:
 
       - name: JavaScript SDK lint
         run: make lint-sdk-js
+
+  # CUSTOMIZE (race): the unit suite under the race detector, minus
+  # RACE_EXCLUDE (#37). Race detection is sampling, not proof: a ratchet
+  # against reintroduction. Hosted runners (CA m2061): four shards, each a
+  # round-robin quarter of test-race's package list (Makefile SHARD/SHARDS),
+  # to fit a hosted job's 4 cores and 6 hours.
+  race:
+    name: Race (shard ${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    if: ${{ needs.changes.outputs.docs_only != 'true' && !github.event.pull_request.draft }}
+    needs: [changes]
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      # cpio: pkg/diskimage/netboot repacks an initramfs with it. libssl-dev:
+      # pkg/app's IDevID mTLS tests run go-tpm-tools' simulator, which
+      # compiles the reference TPM with cgo against OpenSSL (#149).
+      - name: Install cpio and the OpenSSL headers
+        run: sudo apt-get update && sudo apt-get install -y cpio libssl-dev
+
+      - name: make test-race
+        run: make test-race SHARD=${{ matrix.shard }} SHARDS=4
 
   # ==========================================================================
   # The full tier. These gate every push to main, the schedule, and a PR
@@ -981,7 +1007,7 @@ jobs:
     # only on the schedule guard's `run`.
     if: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')) && !github.event.pull_request.draft && (github.event_name != 'schedule' || needs.schedule-guard.outputs.verdict == 'run') }}
     # CUSTOMIZE (isolation, not staging): the privileged integration suite and
-    # the image job's unit and race suites starve a shared runner when they
+    # the image job's unit suite starve a shared runner when they
     # overlap. Neither consumes the other's output. `needs: image` holds
     # through integration-image, whose image every leg runs in. v1.29.3:
     # schedule-guard as the template has it; the image job skips with the
@@ -1398,7 +1424,7 @@ jobs:
   #
   # It is deliberately NOT in ci-gate's `needs`: it is still red on causes
   # this repository cannot close (the header of nightly.yml lists them), so
-  # it reports `CI / FIPS` without turning CI Gate red.
+  # its four shards report `CI / FIPS (shard n/4)` without turning CI Gate red.
   # pkg/arch/citiers_test.go fails `make test` if it is ever gated, if a gated
   # job needs it, or if its `if:` is not exactly the one below. Its steps match nightly.yml's `fips` job;
   # change the suite in the Makefile (`make test-fips`), not here. That target
@@ -1406,10 +1432,18 @@ jobs:
   # .github/foreign-failures-fips.tsv); nightly.yml's header lists what it
   # tolerates.
   fips:
-    name: FIPS
+    name: FIPS (shard ${{ matrix.shard }}/4)
+    # Hosted runners (CA m2061): four shards of `make test-fips`, each a
+    # round-robin quarter of the package list (Makefile SHARD/SHARDS), to fit
+    # a hosted job's 4 cores and 6 hours. The job carries no module
+    # credential and no proxy setting.
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
     if: ${{ github.event_name != 'pull_request' }}
-    timeout-minutes: 60
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
@@ -1421,7 +1455,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y cpio libssl-dev
 
       - name: FIPS build and unit tests
-        run: make test-fips
+        run: make test-fips SHARD=${{ matrix.shard }} SHARDS=4
 
   # ==========================================================================
   # The gate
@@ -1450,7 +1484,7 @@ jobs:
     # skipped job as `skipped`, not `success`), never a green nightly. Every
     # other verdict, an empty one included, runs it.
     if: ${{ always() && (github.event_name != 'schedule' || needs.schedule-guard.outputs.verdict != 'busy') }}
-    needs: [changes, schedule-guard, image, lint-gates, arch-gates, sdkjs, web, integration-image, integration, soak]
+    needs: [changes, schedule-guard, image, lint-gates, arch-gates, sdkjs, race, web, integration-image, integration, soak]
     steps:
       - name: Verify every job succeeded
         env:
@@ -1468,6 +1502,7 @@ jobs:
           RESULT_LINT_GATES: ${{ needs.lint-gates.result }}
           RESULT_ARCH_GATES: ${{ needs.arch-gates.result }}
           RESULT_SDK_JS: ${{ needs.sdkjs.result }}
+          RESULT_RACE: ${{ needs.race.result }}
           RESULT_WEB: ${{ needs.web.result }}
           RESULT_INTEGRATION_IMAGE: ${{ needs.integration-image.result }}
           RESULT_INTEGRATION: ${{ needs.integration.result }}
@@ -1525,6 +1560,7 @@ jobs:
           check pr lint-gates "$RESULT_LINT_GATES"
           check pr arch-gates "$RESULT_ARCH_GATES"
           check docs sdkjs "$RESULT_SDK_JS"
+          check docs race "$RESULT_RACE"
           check full web "$RESULT_WEB"
           check full integration-image "$RESULT_INTEGRATION_IMAGE"
           check full integration "$RESULT_INTEGRATION"
