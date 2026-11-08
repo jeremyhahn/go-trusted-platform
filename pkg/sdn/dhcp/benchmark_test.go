@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -719,6 +720,61 @@ func BenchmarkLeaseStore_Renew_Parallel(b *testing.B) {
 			ip := leases[i%len(leases)].IP
 			_ = store.Renew(ip, duration)
 			i++
+		}
+	})
+}
+
+// BenchmarkLeaseStore_Churn_Parallel is the DHCP client lifecycle under load:
+// 60% new leases, 30% renewals of live leases and 10% releases (#964).
+func BenchmarkLeaseStore_Churn_Parallel(b *testing.B) {
+	store := NewLeaseStore()
+
+	// Pre-populate the leases the renewals target.
+	live := make([]netip.Addr, 1000)
+	for i := range live {
+		lease := &Lease{
+			IP:        netip.AddrFrom4([4]byte{172, 16, byte(i >> 8), byte(i)}),
+			MAC:       net.HardwareAddr{0x52, 0x54, 0x00, 0x02, byte(i >> 8), byte(i)},
+			PoolID:    "pool-1",
+			Interface: "eth0",
+			LeasedAt:  time.Now(),
+			ExpiresAt: time.Now().Add(24 * time.Hour),
+			State:     LeaseStateActive,
+		}
+		_ = store.Add(lease)
+		live[i] = lease.IP
+	}
+
+	var next atomic.Uint64
+	duration := 24 * time.Hour
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		var lastAdded netip.Addr
+		for pb.Next() {
+			n := next.Add(1)
+			switch n % 10 {
+			case 0, 1, 2, 3, 4, 5:
+				lease := &Lease{
+					IP:        netip.AddrFrom4([4]byte{10, byte(n >> 16), byte(n >> 8), byte(n)}),
+					MAC:       net.HardwareAddr{0x52, 0x54, byte(n >> 24), byte(n >> 16), byte(n >> 8), byte(n)},
+					PoolID:    "pool-1",
+					Interface: "eth0",
+					LeasedAt:  time.Now(),
+					ExpiresAt: time.Now().Add(duration),
+					State:     LeaseStateActive,
+				}
+				_ = store.Add(lease)
+				lastAdded = lease.IP
+			case 6, 7, 8:
+				_ = store.Renew(live[n%uint64(len(live))], duration)
+			default:
+				if lastAdded.IsValid() {
+					_ = store.Remove(lastAdded)
+					lastAdded = netip.Addr{}
+				}
+			}
 		}
 	})
 }
