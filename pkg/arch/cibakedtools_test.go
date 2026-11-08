@@ -29,7 +29,7 @@ import (
 // call, and a live source of flakes: sum.golang.org resolves to an IPv6
 // address the runner hosts cannot route, so the install fails whenever Go's
 // v6 -> v4 fallback does not complete. A version bump is a rebuild of the
-// image (agent-company owns its pins), never a `go install` added back here.
+// image (the image maintainers own its pins), never a `go install` added back here.
 //
 // Only workflow `run:` steps are checked. A Makefile target that builds its
 // own pinned copy (install-golangci-lint builds GOLANGCI_LINT_VERSION, which
@@ -124,7 +124,7 @@ func bakedToolInstallFindings(wf ciWorkflow, kept map[string]string) []BakedTool
 			Line:    in.Line,
 			Package: in.Package,
 			Reason: fmt.Sprintf("the runner image bakes %s %s; drop this network install of @%s (#98), "+
-				"and ask agent-company for an image rebuild if the pin must move", tool.Name, tool.Version, in.Version),
+				"and ask the image maintainers for an image rebuild if the pin must move", tool.Name, tool.Version, in.Version),
 		})
 	}
 	return findings

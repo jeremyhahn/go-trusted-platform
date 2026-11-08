@@ -71,7 +71,7 @@ Recommended production baseline: 1 control-plane node (standalone, pebble storag
          ┌─────────────┼─────────────┐
          │             │             │
     ┌────▼────┐  ┌─────▼─────┐  ┌───▼──────┐
-    │  gw-01  │  │   cp-01   │  │compute-01│
+    │ edge-01 │  │   cp-01   │  │compute-01│
     │ Gateway │  │  Control  │  │  Worker  │
     │         │  │  Plane    │  │          │
     │ DHCP    │  │ CA/ACME   │  │ QEMU/KVM │
@@ -84,7 +84,7 @@ Recommended production baseline: 1 control-plane node (standalone, pebble storag
 
 **Hardware Requirements:**
 - Control Plane (cp-01): 4 CPU, 16GB RAM, 256GB SSD, TPM 2.0
-- Gateway (gw-01): 4 CPU, 8GB RAM, 128GB SSD, TPM 2.0, dual 1GbE NICs
+- Gateway (edge-01): 4 CPU, 8GB RAM, 128GB SSD, TPM 2.0, dual 1GbE NICs
 - Compute (compute-01): 4 CPU, 16GB+ RAM, 256GB+ SSD, TPM 2.0
 
 **Architecture:**
@@ -118,7 +118,7 @@ platformctl bootstrap run --config deployments/three-node/bootstrap.yaml
          ┌─────────┬───┴───┬─────────┐
          │         │       │         │
     ┌────▼───┐┌────▼───┐   │    ┌────▼───┐
-    │  gw-01 ││  gw-02 │   │    │compute │
+    │edge-01 ││edge-02 │   │    │compute │
     │Gateway ││Gateway │   │    │nodes   │
     │(HA)    ││(HA)    │   │    │(N)     │
     └────────┘└────────┘   │    └────────┘
@@ -217,7 +217,7 @@ use environment block 4.
    └──┬──────────┬──────────────┬──────────────┬─────────┘
       │          │              │              │
   ┌───▼───┐  ┌───▼───┐    ┌─────▼─────┐   ┌────▼─────┐
-  │ gw-01 │  │ gw-02 │    │ cp-01..03 │   │ compute  │   hypervisor trunks:
+  │edge-01│  │edge-02│    │ cp-01..03 │   │ compute  │   hypervisor trunks:
   │ gw    │  │ gw    │    │           │   │ nodes    │   401, 403–408,
   │ trunk │  │ trunk │    │           │   │          │   native 405
   └───────┘  └───────┘    └───────────┘   └──────────┘
@@ -232,7 +232,7 @@ Management (402) leaves the platform only through an external management firewal
 |-----:|------|--------|----------------|
 | 400 | transit | 10.4.0.0/24 | gateways only |
 | 401 | fabric | 10.4.1.0/24 | gateways, hypervisors |
-| 402 | management | 10.4.2.0/24 | BMC access ports, management firewall |
+| 402 | management | 198.51.100.0/24 | BMC access ports, management firewall |
 | 403 | hypervisor | 10.4.3.0/24 | hypervisors |
 | 404 | quarantine | 10.4.4.0/24 | gateways, hypervisors |
 | 405 | provisioning | 192.0.2.0/24 | gateways, hypervisors (native) |
@@ -254,10 +254,10 @@ link), loopbacks (`10.4.132.0/22`), service VIPs (`10.4.136.0/21`), platform-VRF
 
 | Node | `network.role` | Zone addresses | Platform VRF |
 |------|----------------|----------------|--------------|
-| gw-01 | `gateway` | `.2` on 400, 401, 404, 405, 406, 408; answers for `.1` | `10.4.144.2/32` |
+| edge-01 | `gateway` | `.2` on 400, 401, 404, 405, 406, 408; answers for `.1` | `10.4.144.2/32` |
 | cp-01 | `control-plane` | `10.4.1.10` (fabric), `10.4.6.10` (control-plane) | `10.4.144.10/32` |
 | compute-01 | `compute` | `10.4.1.20` (fabric), `10.4.3.20` (hypervisor), `10.4.7.20` (storage) | `10.4.144.20/32` |
-| BMCs | — | `10.4.2.20`–`10.4.2.22` on management, access ports | — |
+| BMCs | — | `198.51.100.20`–`198.51.100.22` on management, access ports | — |
 
 The trunk of every node rides the OVS bridge `br-fabric`; workloads attach to `br-int`.
 
@@ -358,7 +358,7 @@ deployments/three-node/bootstrap.yaml:
       mac: aa:bb:cc:dd:ee:01
       role: control-plane
       ip: 192.0.2.10
-    - hostname: gw-01
+    - hostname: edge-01
       mac: aa:bb:cc:dd:ee:02
       role: gateway
       ip: 192.0.2.20
@@ -389,7 +389,7 @@ Process:
 
 4. Post-boot:
    • cp-01 starts in server mode
-   • gw-01 and compute-01 start in client mode
+   • edge-01 and compute-01 start in client mode
    • All nodes enroll and converge
    • Network comes live
 ```
@@ -426,11 +426,11 @@ deployments/ha-cluster/bootstrap.yaml:
       role: control-plane
       ip: 192.0.2.12
     # Gateways (HA pair)
-    - hostname: gw-01
+    - hostname: edge-01
       mac: aa:bb:cc:dd:ee:04
       role: gateway
       ip: 192.0.2.20
-    - hostname: gw-02
+    - hostname: edge-02
       mac: aa:bb:cc:dd:ee:05
       role: gateway
       ip: 192.0.2.21
@@ -465,7 +465,7 @@ Process:
 4. Post-boot cluster convergence:
    • cp-01, cp-02, cp-03 form Raft quorum
    • QuicBaaS initializes with 3-node replication
-   • gw-01 and gw-02 enroll and configure HA pair
+   • edge-01 and edge-02 enroll and configure HA pair
    • Workers enroll and connect to control plane
    • Network comes live with redundancy
 ```
@@ -706,7 +706,7 @@ Hardware TPM availability determines the security tier of a deployment. Map tier
 
 **Configuration**
 - [ ] Verify cp-01 started in server mode
-- [ ] Verify gw-01 and compute-01 enrolled as client mode
+- [ ] Verify edge-01 and compute-01 enrolled as client mode
 - [ ] Configure CA with root + intermediate certificates
 - [ ] Set up IAM users, roles, policies
 - [ ] Configure DNS zones (internal)

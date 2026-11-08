@@ -16,6 +16,8 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 
@@ -26,9 +28,13 @@ import (
 )
 
 // testEnvironment is environment 4 of the reference network on the default
-// base, the environment the bootstrap tests are numbered from.
+// base, the environment the bootstrap tests are numbered from. Management
+// and provisioning carry the documentation reference ranges as overrides.
 func testEnvironment() *netplan.Environment {
-	return &netplan.Environment{ID: 4}
+	return &netplan.Environment{ID: 4, Overrides: []netplan.Override{
+		{Zone: zone.ZoneManagement, Subnet: netip.MustParsePrefix("198.51.100.0/24")},
+		{Zone: zone.ZoneProvisioning, Subnet: netip.MustParsePrefix("192.0.2.0/24")},
+	}}
 }
 
 // TestNetworkPlan derives the plan from the environment and an owner zone.
@@ -95,8 +101,14 @@ func TestNetworkPlan_Errors(t *testing.T) {
 		t.Fatalf("ErrSwitchPortClass must name the port and wrap the cause: %v", classErr)
 	}
 
+	// An override may only name a declared zone, so omitting management
+	// drops its override too.
+	noMgmtEnv := testEnvironment()
+	noMgmtEnv.Overrides = slices.DeleteFunc(noMgmtEnv.Overrides, func(o netplan.Override) bool {
+		return o.Zone == zone.ZoneManagement
+	})
 	noMgmt := &BootstrapConfig{
-		Environment: testEnvironment(),
+		Environment: noMgmtEnv,
 		Zones:       []zone.ZoneConfig{{Name: zone.ZoneManagement, Omit: true}},
 		Switch:      &SwitchConfig{PortAssignments: []PortAssignment{{Port: "Eth1/41", Class: zone.PortClassBMC}}},
 	}
@@ -157,7 +169,7 @@ switch:
   vendor: cisco-nexus
   host: 192.0.2.10
   port_assignments:
-    - {port: Eth1/3, class: gateway, description: gw-01}
+    - {port: Eth1/3, class: gateway, description: edge-01}
     - {port: Eth1/25-27, class: hypervisor}
 platform:
   domain: example.com
