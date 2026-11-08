@@ -51,7 +51,11 @@ func (e ErrRESTConnectionFailed) Unwrap() error {
 // client's does.
 type RESTAdapter struct {
 	*GRPCAdapter
-	baseURL  string
+	baseURL string
+	// bearer supplies the bearer the transport presents: the DNS routes
+	// are admin-gated webservice routes, reached with the harness admin
+	// session's bearer.
+	bearer   func(ctx context.Context) (string, error)
 	platform platform.Client
 }
 
@@ -63,6 +67,7 @@ func NewRESTAdapter() *RESTAdapter {
 	return &RESTAdapter{
 		GRPCAdapter: NewGRPCAdapter(),
 		baseURL:     helpers.RESTBaseURL(endpoint),
+		bearer:      helpers.HarnessAdminSession().Bearer,
 	}
 }
 
@@ -74,11 +79,17 @@ func (r *RESTAdapter) Name() string {
 // Setup connects the platform SDK client over REST and verifies the DNS
 // routes are mounted by listing zones, the cheapest read they serve.
 func (r *RESTAdapter) Setup(ctx context.Context) error {
-	client, err := platform.Connect(ctx, platform.NewOptions(
+	options := platform.NewOptions(
 		platform.WithOnlyProtocol(platform.ProtocolREST),
 		platform.WithRESTAddr(r.baseURL),
 		platform.WithTLSConfig(helpers.TLSConfigOrInsecure()),
-	))
+	)
+	token, err := r.bearer(ctx)
+	if err != nil {
+		return ErrRESTConnectionFailed{URL: r.baseURL, Err: err}
+	}
+	options.BearerToken = token
+	client, err := platform.Connect(ctx, options)
 	if err != nil {
 		return ErrRESTConnectionFailed{URL: r.baseURL, Err: err}
 	}
