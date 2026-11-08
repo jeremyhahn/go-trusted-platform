@@ -46,7 +46,7 @@ func TestGenerateScript_Gateway(t *testing.T) {
 	info := &DeviceBootInfo{
 		MAC:               "52:54:00:aa:bb:cc",
 		Role:              "gateway",
-		Hostname:          "gw-01",
+		Hostname:          "node-01",
 		KernelURL:         "http://172.16.7.1:8080/files/vmlinuz",
 		InitrdURL:         "http://172.16.7.1:8080/files/initramfs",
 		ConfigServerURL:   "https://platformd:8443",
@@ -59,7 +59,7 @@ func TestGenerateScript_Gateway(t *testing.T) {
 	assert.Contains(t, script, "kernel http://172.16.7.1:8080/files/vmlinuz")
 	assert.Contains(t, script, "platform_config=https://platformd:8443")
 	assert.Contains(t, script, "platform_role=gateway")
-	assert.Contains(t, script, "platform_hostname=gw-01")
+	assert.Contains(t, script, "platform_hostname=node-01")
 	assert.Contains(t, script, "bootstrap_strategy=dane")
 	assert.Contains(t, script, "initrd http://172.16.7.1:8080/files/initramfs")
 	assert.Contains(t, script, "boot")
@@ -113,7 +113,7 @@ func TestGenerateScript_ExtraArgs(t *testing.T) {
 	info := &DeviceBootInfo{
 		MAC:             "52:54:00:aa:bb:cc",
 		Role:            "gateway",
-		Hostname:        "gw-02",
+		Hostname:        "node-02",
 		KernelURL:       "http://172.16.7.1:8080/files/vmlinuz",
 		InitrdURL:       "http://172.16.7.1:8080/files/initramfs",
 		ConfigServerURL: "https://platformd:8443",
