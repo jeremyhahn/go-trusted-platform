@@ -234,6 +234,43 @@ func TestCoverage964_TPMOperationsSealUnseal(t *testing.T) {
 	}
 }
 
+func TestCoverage964_TPMOperationsUnsealRejectsWrongPassword(t *testing.T) {
+	for _, attempt := range []struct {
+		name      string
+		authValue string
+	}{
+		{"wrong password", "not-the-secret"},
+		{"missing password", ""},
+	} {
+		t.Run(attempt.name, func(t *testing.T) {
+			ctx := context.Background()
+			ops, _ := newSocketTPMOperations(t)
+
+			sealed, err := ops.Seal(ctx, []byte("secret-964"), nil, "s3cret")
+			require.NoError(t, err)
+
+			plain, err := ops.Unseal(ctx, sealed, attempt.authValue)
+			require.Error(t, err)
+			require.Nil(t, plain)
+		})
+	}
+}
+
+func TestCoverage964_TPMOperationsUnsealRejectsChangedPCR(t *testing.T) {
+	ctx := context.Background()
+	ops, _ := newSocketTPMOperations(t)
+
+	sealed, err := ops.Seal(ctx, []byte("secret-964"), []int{0, 7}, "")
+	require.NoError(t, err)
+
+	digest := sha256.Sum256([]byte("measured-state-change"))
+	require.NoError(t, ops.ExtendPCR(7, digest[:]))
+
+	plain, err := ops.Unseal(ctx, sealed, "")
+	require.Error(t, err)
+	require.Nil(t, plain)
+}
+
 func TestCoverage964_TPMOperationsInjectNilCertificate(t *testing.T) {
 	ops, _ := newSocketTPMOperations(t)
 
