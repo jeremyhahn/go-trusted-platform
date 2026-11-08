@@ -82,6 +82,31 @@ func TestOrchestratorTenantRoutesRefuseAnotherTenant(t *testing.T) {
 	}
 }
 
+// TestOrchestratorQueryCannotOverridePathTenant: a query key naming a
+// path-bound field, under its proto or its JSON name, never reaches the
+// service with another tenant. The loop runs each request many times so
+// map iteration order cannot hide an override.
+func TestOrchestratorQueryCannotOverridePathTenant(t *testing.T) {
+	for _, query := range []string{"tenantId=globex", "tenant_id=globex", "agentId=other", "agent_id=other"} {
+		t.Run(query, func(t *testing.T) {
+			for range 20 {
+				srv := &orchestratorRecordingServer{}
+				rec := serveOrchestrator(orchestratorRouter(srv), http.MethodPost,
+					"/api/v1/orchestrator/tenants/acme/agents/x/disable?"+query)
+				if srv.got != nil {
+					req, ok := srv.got.(*platformv1.DisableOrchestratorAgentRequest)
+					if !ok || req.GetTenantId() != "acme" || req.GetAgentId() != "x" {
+						t.Fatalf("service reached with %v, want tenant acme and agent x only", srv.got)
+					}
+				}
+				if rec.Code != http.StatusBadRequest {
+					t.Fatalf("status = %d (%s), want 400", rec.Code, rec.Body)
+				}
+			}
+		})
+	}
+}
+
 func serveOrchestrator(router http.Handler, method, target string) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, operatorRequest(method, target, http.NoBody))
