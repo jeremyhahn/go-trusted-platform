@@ -284,11 +284,47 @@ func (r *RESTAdapter) doGet(ctx context.Context, path string, result interface{}
 		return err
 	}
 	if result != nil {
-		if err := json.Unmarshal(body, result); err != nil {
+		payload, err := unwrapPayload(body)
+		if err != nil {
+			return ErrRESTResponseParseFailed{Operation: "GET " + path, Err: err}
+		}
+		if payload == nil {
+			return nil
+		}
+		if err := json.Unmarshal(payload, result); err != nil {
 			return ErrRESTResponseParseFailed{Operation: "GET " + path, Err: err}
 		}
 	}
 	return nil
+}
+
+// unwrapPayload returns the resource a CA route answered with: the payload
+// of the webservice envelope (pkg/webservice/v1/response), or the daemon's
+// bare object. An empty or null answer yields no payload.
+func unwrapPayload(body []byte) ([]byte, error) {
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 {
+		return nil, nil
+	}
+	// The webservice CA handlers wrap every answer in
+	// {code, success, payload}, while the daemon REST listener answers with
+	// the bare object or array. Only an object carrying a payload key is
+	// unwrapped.
+	if trimmed[0] != '{' {
+		return body, nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return nil, err
+	}
+	if payload, ok := fields["payload"]; ok {
+		// protojson rejects a top-level null; a null payload is no payload.
+		if string(bytes.TrimSpace(payload)) == "null" {
+			return nil, nil
+		}
+		return payload, nil
+	}
+	return body, nil
 }
 
 // doPost sends an HTTP POST request with a JSON body and decodes the response.
@@ -305,7 +341,14 @@ func (r *RESTAdapter) doPost(ctx context.Context, path string, reqBody interface
 		return err
 	}
 	if result != nil {
-		if err := json.Unmarshal(body, result); err != nil {
+		payload, err := unwrapPayload(body)
+		if err != nil {
+			return ErrRESTResponseParseFailed{Operation: "POST " + path, Err: err}
+		}
+		if payload == nil {
+			return nil
+		}
+		if err := json.Unmarshal(payload, result); err != nil {
 			return ErrRESTResponseParseFailed{Operation: "POST " + path, Err: err}
 		}
 	}
@@ -327,7 +370,14 @@ func (r *RESTAdapter) doProto(ctx context.Context, method, path string, req, res
 	if err != nil {
 		return err
 	}
-	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(body, result); err != nil {
+	payload, err := unwrapPayload(body)
+	if err != nil {
+		return ErrRESTResponseParseFailed{Operation: method + " " + path, Err: err}
+	}
+	if payload == nil {
+		return nil
+	}
+	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(payload, result); err != nil {
 		return ErrRESTResponseParseFailed{Operation: method + " " + path, Err: err}
 	}
 	return nil
