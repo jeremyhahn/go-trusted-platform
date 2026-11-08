@@ -258,7 +258,7 @@ func (id Identity) Prefix(mode PrefixMode, custom string) (string, error) {
 
 // Model is how one board family boots over the network.
 type Model struct {
-	// Name is the platform's --model name (rpi4, rpi400, cm4, rpi3b+, rpi5).
+	// Name is the platform's --model name (rpi4, rpi400, cm4, rpi3b+, rpi5). lab-string-ok
 	Name string
 	// FourCC opens the option 97 GUID; empty for the boot ROM models,
 	// which send the serial repeated.
@@ -277,7 +277,7 @@ type Model struct {
 // models is the supported board table, matching pkg/diskimage/rpi.
 var models = map[string]Model{
 	"rpi4":   {Name: "rpi4", FourCC: FourCCPi4, FirstStage: []string{"start4.elf"}, Fixup: "fixup4.dat", DTB: "bcm2711-rpi-4-b.dtb"},
-	"rpi400": {Name: "rpi400", FourCC: FourCCPi4, FirstStage: []string{"start4.elf"}, Fixup: "fixup4.dat", DTB: "bcm2711-rpi-400.dtb"},
+	"rpi400": {Name: "rpi400", FourCC: FourCCPi4, FirstStage: []string{"start4.elf"}, Fixup: "fixup4.dat", DTB: "bcm2711-rpi-400.dtb"}, // lab-string-ok
 	"cm4":    {Name: "cm4", FourCC: FourCCPi4, FirstStage: []string{"start4.elf"}, Fixup: "fixup4.dat", DTB: "bcm2711-rpi-cm4.dtb"},
 	"rpi3b+": {Name: "rpi3b+", FirstStage: []string{"bootcode.bin", "start.elf"}, Fixup: "fixup.dat", DTB: "bcm2710-rpi-3-b-plus.dtb"},
 	"rpi5":   {Name: "rpi5", FourCC: FourCCPi5, DTB: "bcm2712-rpi-5-b.dtb"},

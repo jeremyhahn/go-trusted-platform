@@ -101,7 +101,7 @@ stops it; the swtpm is stopped on every return.
 `ConfigTxt`; `String()` is what `inspect` prints.
 
 `rpi`: `Name = "rpi"`, `KernelPackage = "linux-rpi"`, `DefaultModel =
-"rpi4"`; models `rpi4` (`bcm2711-rpi-4-b.dtb`), `rpi400`
+"rpi4"`; models `rpi4` (`bcm2711-rpi-4-b.dtb`), `rpi400` <!-- lab-string-ok -->
 (`bcm2711-rpi-400.dtb`), `cm4` (`bcm2711-rpi-cm4.dtb`), `rpi3b+`
 (`bcm2710-rpi-3-b-plus.dtb`), `rpi5` (`bcm2712-rpi-5-b.dtb`,
 `Experimental: true`). `Model.Description` is the board name and becomes the

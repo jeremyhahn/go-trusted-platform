@@ -673,7 +673,9 @@ jobs:
       # number only. v1.31 grepped whole lines with -F, so no line matched and
       # the gate was green for a false reason. The step prints path and line
       # of a match, never the value. A run without the secret (a fork PR)
-      # skips with a notice; a push to main without it fails.
+      # skips with a notice; a push to main without it fails. A matched line
+      # that carries the InfoSec waiver marker lab-string-ok is not reported
+      # (DS-7563, CA m2110).
       - name: Releasability (private patterns)
         if: ${{ !cancelled() }}
         env:
@@ -729,17 +731,19 @@ jobs:
             exit 1
           fi
           rc=0
-          hits=$(git grep -n -I -i -E -f "$pf" -- . | cut -d: -f1,2; exit "${PIPESTATUS[0]}") || rc=$?
+          out=$(git grep -n -I -i -E -f "$pf" -- .) || rc=$?
           case $rc in
-            0)
-              echo "::error::internal names in the tracked tree (path:line; the values are not shown):"
-              printf '%s\n' "$hits"
-              exit 1 ;;
-            1) ;;
+            0|1) ;;
             *)
               echo "::error::git grep failed (rc $rc)"
               exit 1 ;;
           esac
+          hits=$(printf '%s\n' "$out" | grep -v -F 'lab-string-ok' | grep -v '^$' | cut -d: -f1,2 || true)
+          if [ -n "$hits" ]; then
+            echo "::error::internal names in the tracked tree (path:line; the values are not shown):"
+            printf '%s\n' "$hits"
+            exit 1
+          fi
           echo "releasability: $count private patterns, 0 matches"
 
   # v1.29.2 (ruling 239(8)): a CUSTOMIZE job that runs only when certain
