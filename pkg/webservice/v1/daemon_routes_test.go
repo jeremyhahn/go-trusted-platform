@@ -146,10 +146,10 @@ func TestMountDaemonRESTRoutes_OperatorRouteReplaysTheSessionCaller(t *testing.T
 	assert.Contains(t, daemon.served.Roles, common.ROLE_ADMIN)
 }
 
-// A console user signed in with a passkey holds no client certificate yet:
-// issue-cert is how they enrol their first one, so the route takes the
-// webservice session in place of the certificate being enrolled.
-func TestMountDaemonRESTRoutes_IssueCertEnrolsWithoutAClientCert(t *testing.T) {
+// issue-cert answers from the platform CA whose certificates the daemon
+// transports accept as operators (Codex P0 on #1443), so it keeps the
+// client-certificate gate: a webservice session alone never reaches the CA.
+func TestMountDaemonRESTRoutes_IssueCertRequiresAClientCert(t *testing.T) {
 	platform := testutil.GenerateTestTLSBundle(t)
 	key := issuancetest.RSAKey(t)
 
@@ -158,7 +158,7 @@ func TestMountDaemonRESTRoutes_IssueCertEnrolsWithoutAClientCert(t *testing.T) {
 		auth jwt.TokenHandler
 		want int
 	}{
-		{"console session", &sessionAuth{roles: []string{"user"}, tenantID: "system"}, http.StatusCreated},
+		{"console session", &sessionAuth{roles: []string{"user"}, tenantID: "system"}, http.StatusUnauthorized},
 		{"no session", &anonymousAuth{}, http.StatusUnauthorized},
 	}
 	for _, tt := range tests {
@@ -182,11 +182,7 @@ func TestMountDaemonRESTRoutes_IssueCertEnrolsWithoutAClientCert(t *testing.T) {
 			root.ServeHTTP(rec, req)
 
 			assert.Equal(t, tt.want, rec.Code, rec.Body.String())
-			if tt.want == http.StatusCreated {
-				assert.NotNil(t, ca.Opts, "the CA signed the CSR")
-			} else {
-				assert.Nil(t, ca.Opts, "a request without a session must not reach the CA")
-			}
+			assert.Nil(t, ca.Opts, "a request without a client certificate must not reach the CA")
 		})
 	}
 }
