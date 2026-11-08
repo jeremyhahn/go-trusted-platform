@@ -245,6 +245,15 @@ func TestMountDaemonRESTRoutes_EveryDaemonRouteRequiresClientCert(t *testing.T) 
 
 		rec := httptest.NewRecorder()
 		root.ServeHTTP(rec, httptest.NewRequest(method, path, nil))
+		// Codex P1 on #1443: issue-cert enrols the first client certificate,
+		// so it takes the webservice session in place of one; this fixture
+		// has no session to give, and the request must still be refused.
+		// TestMountDaemonRESTRoutes_IssueCertEnrolsWithoutAClientCert covers
+		// the session and no-session cases.
+		if route == http.MethodPost+" /api/v1/users/{id}/factors/mtls/issue-cert" {
+			assert.GreaterOrEqual(t, rec.Code, http.StatusBadRequest, "%s %s without a session", method, path)
+			continue
+		}
 		assert.Equal(t, http.StatusUnauthorized, rec.Code, "%s %s without a client certificate", method, path)
 	}
 }
