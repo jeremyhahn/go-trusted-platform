@@ -119,24 +119,30 @@ func (s *RESTServer) SetIAMHandlers(logger *logging.Logger, iamClient restiam.IA
 	if err != nil {
 		return ErrIAMRESTUnavailable{Reason: err.Error()}
 	}
-	if err := s.mountIAMRoutes(router); err != nil {
+	if err := s.mountIAMRoutes(router, authz); err != nil {
 		return ErrIAMRESTUnavailable{Reason: err.Error()}
 	}
 	s.logger.Info("IAM REST routes registered")
 	return nil
 }
 
-// mountIAMRoutes mounts on the daemon router every IAM route except those in
-// iamRoutesAwaitingSDK. The IAM router registers its whole table, with its
+// mountIAMRoutes mounts every IAM route on the daemon router. The IAM router registers its whole table, with its
 // authentication and admin guards, on a router of its own; each served route
 // is then mounted on the daemon router by its method and path template and
-// delegates to that router, so the guards run exactly as before.
+// delegates to that router, so the guards run exactly as before. A route in
+// iamRoutesAwaitingSDK does not reach the IAM router: it runs the same
+// authentication, so a caller with no credential is refused with 401 like on
+// every other route, and then answers an authenticated caller 404 like any
+// unknown path.
 //
 // A served route matches its method with a matcher func rather than mux's
-// Methods matcher: a Methods mismatch answers 405, and a left-out route that
-// shares its path with a served one (PUT /policies/{id} beside GET) must answer
-// 404 like any unknown path.
-func (s *RESTServer) mountIAMRoutes(iamRouter *restiam.IAMRouter) error {
+// Methods matcher: a Methods mismatch answers 405, and a method the IAM router
+// does not register on a path it serves (PUT /policies/{id} beside GET) must
+// answer 404 like any unknown path. A route awaiting the SDK keeps mux's
+// Methods matcher, so a walk of the daemon router reads its method; several of
+// those paths serve no method at all.
+func (s *RESTServer) mountIAMRoutes(iamRouter *restiam.IAMRouter, authz iamRESTAuthorization) error {
+	awaitingSDK := authz.authenticate(http.HandlerFunc(http.NotFound))
 	routes := mux.NewRouter()
 	// The IAM router's base path is relative to the /api/v1 parent.
 	iamRouter.RegisterRoutes(routes.PathPrefix(iamRESTParentPath).Subrouter())
@@ -155,6 +161,7 @@ func (s *RESTServer) mountIAMRoutes(iamRouter *restiam.IAMRouter) error {
 		}
 		for _, method := range methods {
 			if _, awaiting := iamRoutesAwaitingSDK[iamRouteKey{method: method, template: template}]; awaiting {
+				s.router.Handle(template, awaitingSDK).Methods(method)
 				continue
 			}
 			s.router.Handle(template, routes).MatcherFunc(iamMethodMatcher(method))

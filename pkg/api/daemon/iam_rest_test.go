@@ -151,10 +151,12 @@ func TestSetIAMHandlers_MountsEveryIAMRoute(t *testing.T) {
 		}
 		return nil
 	}))
-	// The IAM router's 71 routes, less the 22 (11 operations under both
-	// route forms) the pinned embedded transport lacks or cannot serve.
+	// The IAM router's 71 routes, the 22 (11 operations under both route
+	// forms) the pinned embedded transport lacks or cannot serve included:
+	// those answer 401 to no credential and 404 past it
+	// (TestIAMREST_RoutesAwaitingSDKAnswerNotFound).
 	assert.Len(t, iamRoutesAwaitingSDK, 22)
-	assert.Equal(t, 71-len(iamRoutesAwaitingSDK), routes)
+	assert.Equal(t, 71, routes)
 }
 
 // Every route whose operation the pinned SDK cannot dispatch is left out of
