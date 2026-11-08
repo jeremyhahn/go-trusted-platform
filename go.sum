@@ -614,7 +614,7 @@ github.com/jchv/go-winloader v0.0.0-20250406163304-c1995be93bd1 h1:njuLRcjAuMKr7
 github.com/jchv/go-winloader v0.0.0-20250406163304-c1995be93bd1/go.mod h1:alcuEEnZsY1WQsagKhZDsoPCRoOijYqhZvPwLG0kzVs=
 github.com/jeremyhahn/go-auth v0.2.0-alpha h1:BW+KU+uYPSpoRB8IW6l9aJrvMEMHSGYLQyAezlaBoLo=
 github.com/jeremyhahn/go-auth v0.2.0-alpha/go.mod h1:EpLRQmiMJiKYS4dYiLI61es7o0wbsXXNVg4tc8Rums0=
-github.com/jeremyhahn/go-codec v1.4.0 h1:ORbXlqpzg5RDlYGKyqKmbVNdF7TFjabO/7lVgpJ96W8=
+github.com/jeremyhahn/go-codec v1.4.0 h1:vgfmGAFDvkrg0U3EpnijU82isxIK4AN4oS2tVk95Uas=
 github.com/jeremyhahn/go-codec v1.4.0/go.mod h1:WsKvb0GxD0jRyLQRCpNCb5RsXBg4GY1LfwqK3kbIqF4=
 github.com/jeremyhahn/go-enclave v0.5.0-alpha h1:F20BBwRSne7OPs+NeYMh+9nAWJXCo+m1hsRSRgY1ODQ=
 github.com/jeremyhahn/go-enclave v0.5.0-alpha/go.mod h1:bU9hT/V0f8tE+AtFVQ3H4+inajclOBDHNi+Tr5/LAI8=
