@@ -83,6 +83,10 @@ func orchestratorErrToGRPC(err error) error {
 
 // orchestratorCall runs one service operation and converts its error.
 func orchestratorCall[Req, Resp any](ctx context.Context, s *OrchestratorGRPCService, req Req, op func(context.Context, Req) (Resp, error)) (Resp, error) {
+	if err := s.authorizeSystemOnly(ctx, req); err != nil {
+		var zero Resp
+		return zero, err
+	}
 	if err := s.authorizeTenant(ctx, req); err != nil {
 		var zero Resp
 		return zero, err
@@ -93,6 +97,21 @@ func orchestratorCall[Req, Resp any](ctx context.Context, s *OrchestratorGRPCSer
 		return zero, orchestratorErrToGRPC(err)
 	}
 	return resp, nil
+}
+
+// authorizeSystemOnly refuses the session RPCs to every caller but the system
+// tenant. The SDK cannot carry the caller's tenant into the embedded
+// orchestrator, which then lists and closes sessions across all tenants.
+func (s *OrchestratorGRPCService) authorizeSystemOnly(ctx context.Context, req any) error {
+	switch req.(type) {
+	case *platformv1.ListOrchestratorSessionsRequest, *platformv1.CloseOrchestratorSessionRequest:
+	default:
+		return nil
+	}
+	if caller, bound := callerTenant(ctx); bound && tenant.IsSystemTenant(s.systemTenantID, caller) {
+		return nil
+	}
+	return status.Error(codes.PermissionDenied, "orchestrator sessions are served to the system tenant only")
 }
 
 // tenantScopedRequest is every OrchestratorService request that names the
