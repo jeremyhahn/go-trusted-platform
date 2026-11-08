@@ -30,6 +30,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
@@ -147,6 +148,15 @@ func daemonRoutesOnWebservice(t *testing.T) *mux.Router {
 
 // mountDaemonRoutes is daemonRoutesOnWebservice over the client roots and
 // the webservice and session gates given.
+// goldenPeers grants every verified peer every scope, so the daemon's
+// guard admits the golden tests' client certificate and the webservice gate
+// stays the gate under test.
+type goldenPeers struct{}
+
+func (goldenPeers) AuthenticatePeer(context.Context, []*x509.Certificate) (*platformtoken.AuthorizedContext, error) {
+	return &platformtoken.AuthorizedContext{Subject: "golden", Scopes: []string{"*:*"}}, nil
+}
+
 func mountDaemonRoutes(t *testing.T, roots *x509.CertPool, authorize v1.DaemonRouteAuthorizer, caller v1.DaemonCallerAuthenticator) *mux.Router {
 	t.Helper()
 
@@ -158,9 +168,9 @@ func mountDaemonRoutes(t *testing.T, roots *x509.CertPool, authorize v1.DaemonRo
 	require.NoError(t, err)
 
 	logger := logging.DefaultLogger()
-	// The webservice gate in front of the replayed routes decides each
-	// request here; the daemon's own guard only needs to exist.
-	guard := restapi.NewScopeGuard(nil, nil, nil)
+	// The daemon's own guard admits the verified caller, so the webservice
+	// gate in front of the replayed routes decides each request here.
+	guard := restapi.NewScopeGuard(nil, goldenPeers{}, nil)
 	server.SetBMCHandler(goldenBMC{})
 	require.NoError(t, server.SetCeremonyService(daemon.NewCeremonyService(logger, nil), guard))
 	require.NoError(t, server.SetPIVService(daemon.NewPIVService(logger, nil), guard))
