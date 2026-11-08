@@ -157,7 +157,7 @@ switch:
   vendor: cisco-nexus
   host: 192.0.2.10
   port_assignments:
-    - {port: Eth1/3, class: gateway, description: gw-01}
+    - {port: Eth1/3, class: gateway, description: edge-01}
     - {port: Eth1/25-27, class: hypervisor}
 platform:
   domain: example.com

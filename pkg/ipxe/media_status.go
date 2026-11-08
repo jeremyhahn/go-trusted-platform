@@ -337,14 +337,14 @@ func readComm(path string) string {
 }
 
 // smbdClientTitleRE matches the process title Debian smbd gives each
-// per-connection worker: "smbd: client [10.4.2.103]"; the bracket
+// per-connection worker: "smbd: client [192.0.2.103]"; the bracket
 // content is taken whole so an IPv6 address or a port suffix survives,
 // and leading whitespace or a case change in the fixed words does not
 // lose the tag.
 var smbdClientTitleRE = regexp.MustCompile(`(?i)^\s*smbd:\s+client\s+\[([^\]]+)\]`)
 
 // smbdBracketTitleRE matches the title Alpine/musl smbd gives each
-// per-connection worker: "smbd[10.4.2.103]". The closing bracket is
+// per-connection worker: "smbd[192.0.2.103]". The closing bracket is
 // optional because /proc/<pid>/comm truncates the title to 15 bytes
 // (measured live: "smbd[198.51.100"); a missing bracket means the
 // captured client is a prefix of the real address.

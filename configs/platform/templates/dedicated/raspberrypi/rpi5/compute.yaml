@@ -460,7 +460,7 @@ trust:
 # =============================================================================
 
 bmc:
-  address: 10.4.2.21  # management (VLAN 402) carries BMCs only
+  address: 198.51.100.149  # management (VLAN 402) carries BMCs only
   port: 623
   username: admin
   password: "kms://bmc/password?ensure=true&len=16&enc=base64"

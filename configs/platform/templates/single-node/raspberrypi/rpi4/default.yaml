@@ -520,7 +520,7 @@ trust:
 # =============================================================================
 
 bmc:
-  address: 10.4.2.10  # management (VLAN 402); .1 is the gateway VIP
+  address: 198.51.100.138  # management (VLAN 402); .129 is the gateway VIP
   port: 623
   username: admin
   password: "kms://bmc/password?ensure=true&len=16&enc=base64"

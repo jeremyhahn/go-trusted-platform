@@ -52,7 +52,7 @@ func TestLoadServeConfig_ShippedGatewaydTemplateDecodes(t *testing.T) {
 	require.NotNil(t, cfg.Gateway, "gateway section")
 	g := cfg.Gateway
 	assert.True(t, g.Enabled)
-	assert.Equal(t, "gw-01-gateway", g.ID)
+	assert.Equal(t, "edge-01-gateway", g.ID)
 	assert.Equal(t, "10.4.6.1", g.AnycastIP,
 		"the gateway answers for the control-plane zone's gateway address .1")
 
@@ -160,7 +160,7 @@ func TestLoadServeConfig_ShippedGatewaydTemplateDecodes(t *testing.T) {
 
 	require.NotNil(t, cfg.ControlPlane, "control-plane section")
 	assert.True(t, cfg.ControlPlane.Enabled)
-	assert.Equal(t, "gw-01-gateway", cfg.ControlPlane.GatewayID)
+	assert.Equal(t, "edge-01-gateway", cfg.ControlPlane.GatewayID)
 	assert.NotEmpty(t, cfg.ControlPlane.CertFile)
 }
 
