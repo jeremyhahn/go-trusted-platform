@@ -68,7 +68,7 @@ func TestEncodeTemplateJSON_RefusesBMC(t *testing.T) {
 
 func TestEncodeProfileOverridesJSON(t *testing.T) {
 	out, err := EncodeProfileOverridesJSON(&platformv1.DeviceProfile{
-		Name:     "gw-01",
+		Name:     "edge-01",
 		Role:     platformv1.DeviceRole_DEVICE_ROLE_GATEWAY,
 		EkSerial: "EK-1",
 		EventLog: []byte{0x01, 0x02},
@@ -76,7 +76,7 @@ func TestEncodeProfileOverridesJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeProfileOverridesJSON: %v", err)
 	}
-	want := map[string]string{"name": "gw-01", "role": "gateway", "ek_serial": "EK-1", "event_log": "AQI="}
+	want := map[string]string{"name": "edge-01", "role": "gateway", "ek_serial": "EK-1", "event_log": "AQI="}
 	for key, value := range want {
 		if out[key] != value {
 			t.Errorf("%s = %v, want %q", key, out[key], value)

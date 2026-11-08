@@ -90,7 +90,7 @@ WORKDIR /src
 # The cache is opened for reading by any uid (the toolchain image runs as the
 # invoking user) in this same RUN, while its files are still in the layer
 # being written. A chmod -R in a later layer copies every file of the cache up
-# into a new layer: 107 s on ci-node-2 and 1468 to 2287 s on omega
+# into a new layer: 107 s on one runner and 1468 to 2287 s on another
 # (go-trusted-platform run 70307, CA m1594). COPY --from keeps the modes.
 COPY go.mod go.sum ./
 COPY sdk/go/go.mod sdk/go/go.sum ./sdk/go/
