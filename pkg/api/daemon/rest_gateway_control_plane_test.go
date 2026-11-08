@@ -71,17 +71,17 @@ func TestRESTServer_SetGatewayControlPlane_StoresGatewayTelemetry(t *testing.T) 
 	s.SetGatewayControlPlane(cp)
 
 	rec := httptest.NewRecorder()
-	s.Router().ServeHTTP(rec, gatewayTelemetryRequest(t, "gw-01", "gw-01"))
+	s.Router().ServeHTTP(rec, gatewayTelemetryRequest(t, "edge-01", "edge-01"))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d (body %s)", rec.Code, http.StatusOK, rec.Body.String())
 	}
-	snap, err := store.Get("gw-01")
+	snap, err := store.Get("edge-01")
 	if err != nil {
-		t.Fatalf("store.Get(gw-01): %v", err)
+		t.Fatalf("store.Get(edge-01): %v", err)
 	}
-	if snap.GatewayID != "gw-01" {
-		t.Fatalf("stored gateway_id = %q, want gw-01", snap.GatewayID)
+	if snap.GatewayID != "edge-01" {
+		t.Fatalf("stored gateway_id = %q, want edge-01", snap.GatewayID)
 	}
 }
 
@@ -94,13 +94,13 @@ func TestRESTServer_SetGatewayControlPlane_RefusesAnotherGatewaysReport(t *testi
 	s.SetGatewayControlPlane(cp)
 
 	rec := httptest.NewRecorder()
-	s.Router().ServeHTTP(rec, gatewayTelemetryRequest(t, "gw-02", "gw-01"))
+	s.Router().ServeHTTP(rec, gatewayTelemetryRequest(t, "edge-02", "edge-01"))
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want %d (body %s)", rec.Code, http.StatusForbidden, rec.Body.String())
 	}
-	if _, err := store.Get("gw-02"); err == nil {
-		t.Fatal("a report for gw-02 under gw-01's certificate was stored")
+	if _, err := store.Get("edge-02"); err == nil {
+		t.Fatal("a report for edge-02 under edge-01's certificate was stored")
 	}
 }
 
@@ -111,7 +111,7 @@ func TestRESTServer_SetGatewayControlPlane_NilLeavesRoutesUnmounted(t *testing.T
 	s.SetGatewayControlPlane(nil)
 
 	rec := httptest.NewRecorder()
-	s.Router().ServeHTTP(rec, gatewayTelemetryRequest(t, "gw-01", "gw-01"))
+	s.Router().ServeHTTP(rec, gatewayTelemetryRequest(t, "edge-01", "edge-01"))
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)

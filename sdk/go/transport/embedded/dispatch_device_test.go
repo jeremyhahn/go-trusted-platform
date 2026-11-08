@@ -98,7 +98,7 @@ func TestDispatch_DeviceCreateProfileFromTemplate(t *testing.T) {
 	}
 	resp, err := handler(context.Background(), &platformv1.CreateProfileFromTemplateRequest{
 		TemplateId: 9000,
-		Overrides:  &platformv1.DeviceProfile{Name: "gw-01"},
+		Overrides:  &platformv1.DeviceProfile{Name: "edge-01"},
 	})
 	if err != nil {
 		t.Fatalf("handler returned unexpected error: %v", err)
@@ -107,7 +107,7 @@ func TestDispatch_DeviceCreateProfileFromTemplate(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected *CreateProfileResponse, got %T", resp)
 	}
-	if created.GetProfile().GetName() != "gw-01" {
+	if created.GetProfile().GetName() != "edge-01" {
 		t.Errorf("profile = %v", created.GetProfile())
 	}
 }
