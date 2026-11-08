@@ -392,6 +392,7 @@ PACKAGE                 ?= go-trusted-platform
 APPNAME                 ?= trusted-platform
 PLATFORMD               ?= bin/platformd
 PLATFORMCTL             ?= bin/platformctl
+PLATFORMCTL_STATIC      ?= bin/platformctl-static
 PLATFORM_INITRD         ?= bin/platform-initrd
 GATEWAYD                ?= bin/gatewayd
 DEPLOYER_PIN            ?= bin/deployer-pin
@@ -852,7 +853,10 @@ build-check:
 	@echo "$(GREEN)✓ both modules compile, tagged and untagged$(RESET)"
 
 # Native local build (builds both platformd and platformctl)
-# Produces static binaries with embedded web frontend
+# Produces static binaries with embedded web frontend. platformctl-static is
+# the name a netboot set or disk image takes the media's static installer
+# from (pkg/iso ISOBuildConfig.UseBinariesDir); with CGO disabled it is
+# byte-identical to platformctl, so it is a copy, as in build-arm64.
 # Set WITH_WEB=0 to skip web frontend embedding (default is enabled)
 # Set WITH_P2P=1 to include P2P/libp2p support in gatewayd
 .PHONY: build
@@ -863,6 +867,7 @@ build: _web-embed-prepare
 	@mkdir -p bin
 	CGO_ENABLED=0 $(GOBIN)/go build -tags "osusergo netgo $(BUILD_TAGS)" -v -o $(PLATFORMD) --ldflags '-w -s ${LDFLAGS}' ./cmd/platformd
 	CGO_ENABLED=0 $(GOBIN)/go build -tags "osusergo netgo $(BUILD_TAGS)" -v -o $(PLATFORMCTL) --ldflags '-w -s ${LDFLAGS}' ./cmd/platformctl
+	cp -f $(PLATFORMCTL) $(PLATFORMCTL_STATIC)
 	CGO_ENABLED=0 $(GOBIN)/go build -tags "osusergo netgo $(BUILD_TAGS)" -v -o $(GATEWAYD) --ldflags '-w -s ${LDFLAGS}' ./cmd/gatewayd
 	CGO_ENABLED=0 $(GOBIN)/go build -tags "osusergo netgo $(BUILD_TAGS)" -v -o $(DEPLOYER_PIN) --ldflags '-w -s ${LDFLAGS}' ./cmd/deployer-pin
 
