@@ -178,7 +178,18 @@ jobs:
   # the two jobs' steps identical and change the FIPS suite in the Makefile.
   fips:
     name: FIPS
-    runs-on: ubuntu-latest
+    # The private module dependencies resolve through the LAN Go module proxy
+    # on the self-hosted runner, so the job carries no module credential. The
+    # proxy address is the GO_MODULE_PROXY repository variable, never a value
+    # in the tree. GOPRIVATE and GONOPROXY are cleared so a runner-wide
+    # setting cannot send the private modules around the proxy; GONOSUMDB
+    # keeps the public checksum database for every other module.
+    runs-on: [self-hosted, linux, x64]
+    env:
+      GOPROXY: ${{ vars.GO_MODULE_PROXY }}
+      GOPRIVATE: ""
+      GONOPROXY: ""
+      GONOSUMDB: github.com/jeremyhahn/*
     # needs: none — nightly runs standalone; build health is ci.yml's job.
     timeout-minutes: 60
     steps:
