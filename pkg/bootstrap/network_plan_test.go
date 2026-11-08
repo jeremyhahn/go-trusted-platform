@@ -16,6 +16,7 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"strings"
 	"testing"
 
@@ -26,9 +27,13 @@ import (
 )
 
 // testEnvironment is environment 4 of the reference network on the default
-// base, the environment the bootstrap tests are numbered from.
+// base, the environment the bootstrap tests are numbered from. Management
+// and provisioning carry the documentation reference ranges as overrides.
 func testEnvironment() *netplan.Environment {
-	return &netplan.Environment{ID: 4}
+	return &netplan.Environment{ID: 4, Overrides: []netplan.Override{
+		{Zone: zone.ZoneManagement, Subnet: netip.MustParsePrefix("198.51.100.0/24")},
+		{Zone: zone.ZoneProvisioning, Subnet: netip.MustParsePrefix("192.0.2.0/24")},
+	}}
 }
 
 // TestNetworkPlan derives the plan from the environment and an owner zone.

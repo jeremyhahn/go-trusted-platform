@@ -495,6 +495,10 @@ sdn:
     # The deployment's RFC 4193 ULA /48. Generate your own random global
     # ID; this one is the reference document's example.
     ula: fd12:3456:789a::/48
+    # Management and provisioning use the documentation reference ranges.
+    overrides:
+      - {zone: management, subnet: 198.51.100.0/24}
+      - {zone: provisioning, subnet: 192.0.2.0/24}
   # zones: the built-in zones (transit, fabric, management, hypervisor,
   # quarantine, provisioning, control-plane, storage, backup) need no entry.
   # An entry tunes a built-in's policy or declares an owner-defined zone at

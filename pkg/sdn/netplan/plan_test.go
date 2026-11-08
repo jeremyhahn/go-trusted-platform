@@ -26,9 +26,14 @@ import (
 )
 
 // referencePlan is environment 4 of the reference with the built-in zones.
+// Management and provisioning carry the documentation reference ranges as
+// overrides.
 func referencePlan(t *testing.T) *netplan.Plan {
 	t.Helper()
-	p, err := netplan.New(netplan.Environment{ID: 4, ULA: ula}, zone.Defaults())
+	p, err := netplan.New(netplan.Environment{ID: 4, ULA: ula, Overrides: []netplan.Override{
+		{Zone: zone.ZoneManagement, Subnet: netip.MustParsePrefix("198.51.100.0/24")},
+		{Zone: zone.ZoneProvisioning, Subnet: netip.MustParsePrefix("192.0.2.0/24")},
+	}}, zone.Defaults())
 	require.NoError(t, err)
 	return p
 }
@@ -51,11 +56,7 @@ func TestNew_WorkedExample(t *testing.T) {
 		{zone.ZoneStorage, 407, "10.4.7.0/24", "fd12:3456:789a:407::/64", "10.4.7.1"},
 		{zone.ZoneBackup, 408, "10.4.8.0/24", "fd12:3456:789a:408::/64", "10.4.8.1"},
 	}
-	p, err := netplan.New(netplan.Environment{ID: 4, ULA: ula, Overrides: []netplan.Override{
-		{Zone: zone.ZoneManagement, Subnet: netip.MustParsePrefix("198.51.100.0/24")},
-		{Zone: zone.ZoneProvisioning, Subnet: netip.MustParsePrefix("192.0.2.0/24")},
-	}}, zone.Defaults())
-	require.NoError(t, err)
+	p := referencePlan(t)
 	zones := p.Zones()
 	require.Len(t, zones, len(want))
 	for i, w := range want {
