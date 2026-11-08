@@ -123,8 +123,9 @@ func (h *OrchestratorHandlers) registerUnder(router *mux.Router, prefix string) 
 // ownTenantOrSystem serves next only when the caller belongs to the tenant
 // the path names, or is the system tenant (tenant.AuthorizeTenantAccess);
 // any other caller, and one carrying no tenant, is refused with 403. The
-// tenant the request reaches the service with is the path's: the body
-// cannot override a path variable (decodeProtoParams binds it last).
+// tenant the request reaches the service with is the path's: path variables
+// are bound after the body, and orchestratorRPC refuses a query key naming
+// a path-bound field under either of its names.
 func (h *OrchestratorHandlers) ownTenantOrSystem(next http.HandlerFunc) CallerHandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request, caller *platformtoken.AuthorizedContext) {
 		var callerTenant string
@@ -160,12 +161,28 @@ func (h *OrchestratorHandlers) routes() []orchestratorRoute {
 	}
 }
 
-// orchestratorRPC adapts one OrchestratorService method to a route.
+// orchestratorRPC adapts one OrchestratorService method to a route. A
+// query key naming a field the path sets, under its proto or its JSON name
+// (?tenantId=, ?tenant_id=), is refused with 400 before decoding, so the
+// request reaches the service with exactly the path's values.
 func orchestratorRPC[Req any, PReq interface {
 	*Req
 	proto.Message
 }, Resp proto.Message](h *OrchestratorHandlers, rpc func(platformv1.OrchestratorServiceServer, context.Context, PReq) (Resp, error)) http.HandlerFunc {
-	return protoRPC(h.protoResponder, h.orchestratorService, rpc)
+	fields := PReq(new(Req)).ProtoReflect().Descriptor().Fields()
+	next := protoRPC(h.protoResponder, h.orchestratorService, rpc)
+	return func(w http.ResponseWriter, r *http.Request) {
+		vars := mux.Vars(r)
+		for key := range r.URL.Query() {
+			if field := protoFieldByName(fields, key); field != nil {
+				if _, bound := vars[string(field.Name())]; bound {
+					h.writeError(w, http.StatusBadRequest, ErrInvalidQueryParameter{Name: key, Reason: "the path sets this field"})
+					return
+				}
+			}
+		}
+		next(w, r)
+	}
 }
 
 // orchestratorService returns the orchestrator service, or
