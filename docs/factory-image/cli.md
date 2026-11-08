@@ -52,11 +52,11 @@ and the staged media directory.
 | Flag | Type | Default | Meaning |
 |---|---|---|---|
 | `--target` | string | `rpi` | `rpi` or `qemu-virt` |
-| `--model` | string | `rpi4` for `rpi` | `rpi4`, `rpi400`, `cm4`, `rpi3b+`, `rpi5` (experimental) |
+| `--model` | string | `rpi4` for `rpi` | `rpi4`, `rpi400`, `cm4`, `rpi3b+`, `rpi5` (experimental) | <!-- lab-string-ok: Raspberry Pi model name, not a lab host -->
 | `--role` | string | | dedicated-profile role for `--target rpi`: builds `configs/platform/templates/dedicated/raspberrypi/<model>/<role>.yaml` (today `compute` on `rpi4`, and on `rpi5` as an experimental template; `control-plane` on `cm4` and `rpi4`). Empty builds the single-node image. Refused with `ErrRoleTemplate` beside `--platform-config`, on `qemu-virt`, for a model the builder does not know, or when that file does not exist; there is no fallback |
 | `--size` | int | `4096` | image size in MB; minimum `2048` |
 | `--output` | string | `<work-dir>/trusted-platform-<target>.img` | output image path |
-| `--binaries-dir` | string | `aarch64/` next to the running binary | directory holding the target-architecture `platformd`, `platformctl`, `platformctl-static`, `platform-initrd`, `gatewayd` |
+| `--binaries-dir` | string | `aarch64/` next to the running binary | directory holding the target-architecture `platformd`, `platformctl`, `platform-initrd`, `gatewayd`; its `platformctl-static` (or, when it has none, its static `platformctl`) is the media's `platformctl-static` |
 | `--builder-image` | string | `trusted-platform-diskimage-builder` | assemble container image repository, without a tag or digest (a registry port such as `registry:5000/foo` is fine; `foo:latest` and `foo@sha256:…` are rejected); tagged `:<arch>` (host arch for assemble, target arch for netboot-initfs and diskless-root) so each platform has its own image |
 | `--builder-dir` | string | `build/docker/diskimage-builder` | assemble container build context |
 | `--container-runtime` | string | `docker` | container runtime binary |

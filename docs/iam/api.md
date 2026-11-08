@@ -339,7 +339,7 @@ the `*:*` operator. `RequireAdmin` requires the scope for the method:
 | `GET` | `iam:read` |
 | `POST`, `PUT`, `PATCH` | `iam:write` |
 | `DELETE` | `iam:delete` |
-| `POST .../permissions/check` (flat and tenant-scoped) | `iam:read` — it evaluates the body and changes nothing |
+| `POST .../policies/validate`, `POST .../policies/test`, `POST .../permissions/check` (flat and tenant-scoped) | `iam:read` — they evaluate the body and change nothing |
 | any other method | refused, `403` |
 
 `RequireSystemTenant` and `RequireOwnTenant` apply the gRPC tenant rules in

@@ -15,23 +15,13 @@ import (
 	restiam "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/iam"
 )
 
-// iamScopePrefix prefixes the action a request needs: iam:read, iam:write
-// or iam:delete.
-const iamScopePrefix = "iam:"
+// iamScopeResource is the resource of the scope a request needs: iam:read,
+// iam:write or iam:delete.
+const iamScopeResource = "iam"
 
 // iamRESTParentPath is the parent the IAM router's /iam base path mounts
 // under, so the routes resolve to /api/v1/iam/....
 const iamRESTParentPath = "/api/v1"
-
-// iamMethodActions maps an HTTP method to the IAM action it performs. A
-// method missing from the map is refused, never defaulted.
-var iamMethodActions = map[string]string{
-	http.MethodGet:    "read",
-	http.MethodPost:   "write",
-	http.MethodPut:    "write",
-	http.MethodPatch:  "write",
-	http.MethodDelete: "delete",
-}
 
 // iamReadOnlyPosts are the POST routes that only evaluate a request body
 // and change nothing, so they need iam:read. They are matched as a suffix
@@ -42,18 +32,15 @@ var iamReadOnlyPosts = []string{
 	"/permissions/check",
 }
 
-// iamMembershipDeletes are the DELETE routes that remove a membership
-// rather than an IAM object: RevokeUserRole and RemoveGroupMember, on the
-// tenant path and its flat alias. The shared RPC catalog
-// (pkg/api/grpc/method_permissions.go) grants RevokeRole and
-// RemoveGroupMember to iam:write, so REST asks for the same scope.
-var iamMembershipDeletes = []string{
+// iamWriteDeletes are the DELETE routes that change a membership rather than
+// delete an entity: RevokeRole and RemoveGroupMember, both iam:write in the
+// gRPC catalog (pkg/api/grpc/method_permissions.go). They are matched as a
+// suffix of the route, which covers the flat and the tenant-scoped form.
+var iamWriteDeletes = []string{
 	"/users/{id}/roles/{role}",
 	"/groups/{id}/members/{user}",
 }
 
-// iamRouteAction is a route suffix whose scope action differs from the
-// one its method maps to in iamMethodActions.
 // iamRouteKey names one IAM route by its method and path template.
 type iamRouteKey struct {
 	method   string
@@ -97,26 +84,6 @@ func iamRouteKeysUnderBothForms(operations []iamRouteKey) map[iamRouteKey]struct
 		for _, scope := range []string{iamBase + "/tenants/{tenant}", iamBase} {
 			out[iamRouteKey{method: op.method, template: scope + op.template}] = struct{}{}
 		}
-	}
-	return out
-}
-
-type iamRouteAction struct {
-	suffix string
-	action string
-}
-
-// iamRouteActionExceptions lists, per method, the routes that need a
-// scope action other than the method's own.
-var iamRouteActionExceptions = map[string][]iamRouteAction{
-	http.MethodPost:   iamRouteActions(iamReadOnlyPosts, "read"),
-	http.MethodDelete: iamRouteActions(iamMembershipDeletes, "write"),
-}
-
-func iamRouteActions(suffixes []string, action string) []iamRouteAction {
-	out := make([]iamRouteAction, 0, len(suffixes))
-	for _, suffix := range suffixes {
-		out = append(out, iamRouteAction{suffix: suffix, action: action})
 	}
 	return out
 }
@@ -225,12 +192,12 @@ func (a iamRESTAuthorization) requireScope(next http.Handler) http.Handler {
 		if !ok {
 			return
 		}
-		action, err := iamScopeAction(r.Method, iamRouteTemplate(r))
+		action, err := iamScopeAction(r.Method, restRouteTemplate(r))
 		if err != nil {
 			a.respWriter.Error403(w, r, err, nil)
 			return
 		}
-		scope := iamScopePrefix + action
+		scope := iamScopeResource + ":" + action
 		if err := caller.RequireScope(scope); err != nil {
 			a.respWriter.Error403(w, r, restapi.ErrRouteForbidden{Scope: scope, Reason: err.Error()}, nil)
 			return
@@ -246,7 +213,7 @@ func (a iamRESTAuthorization) requireSystemTenant(next http.Handler) http.Handle
 		if !ok {
 			return
 		}
-		method := r.Method + " " + iamRouteTemplate(r)
+		method := r.Method + " " + restRouteTemplate(r)
 		if err := systemCallerDecision(a.systemTenantID, caller.TenantID, method); err != nil {
 			a.respWriter.Error403(w, r, err, nil)
 			return
@@ -271,8 +238,23 @@ func (a iamRESTAuthorization) requireOwnTenant(next http.Handler) http.Handler {
 		// The daemon's flat routes carry neither a {tenant} path variable
 		// nor a webservice session, so hand the handlers the tenant this
 		// guard has just authorized.
-		next.ServeHTTP(w, r.WithContext(restiam.WithAuthorizedTenant(r.Context(), requested)))
+		authorized := r.WithContext(restiam.WithAuthorizedTenant(r.Context(), requested))
+		next.ServeHTTP(w, withVerifiedTenant(authorized, caller.TenantID))
 	})
+}
+
+// withVerifiedTenant returns r with the {tenant} route variable set to the
+// caller's verified tenant, which the IAM handlers read. Flat routes name the
+// tenant only in the query, which the handlers deliberately ignore, so the
+// tenant the ownership check admitted is carried to them here.
+func withVerifiedTenant(r *http.Request, tenantID string) *http.Request {
+	routeVars := mux.Vars(r)
+	vars := make(map[string]string, len(routeVars)+1)
+	for name, value := range routeVars {
+		vars[name] = value
+	}
+	vars["tenant"] = tenantID
+	return mux.SetURLVars(r, vars)
 }
 
 // caller returns the caller authenticate resolved. A request that reached a
@@ -287,33 +269,17 @@ func (a iamRESTAuthorization) caller(w http.ResponseWriter, r *http.Request) (*p
 }
 
 // iamScopeAction returns the IAM action a request performs: read, write or
-// delete. The three read-only POSTs need read. An unknown method is refused.
+// delete. The three read-only POSTs need read and the membership DELETEs need
+// write. An unknown method is refused.
 func iamScopeAction(method, route string) (string, error) {
-	action, ok := iamMethodActions[method]
-	if !ok {
-		return "", restapi.ErrRouteForbidden{Scope: iamScopePrefix + "*", Reason: "method " + method + " is not served"}
-	}
-	exceptions, ok := iamRouteActionExceptions[method]
-	if !ok {
-		return action, nil
-	}
-	for _, exception := range exceptions {
-		if strings.HasSuffix(route, exception.suffix) {
-			return exception.action, nil
+	if method == http.MethodDelete {
+		for _, suffix := range iamWriteDeletes {
+			if strings.HasSuffix(route, suffix) {
+				return "write", nil
+			}
 		}
 	}
-	return action, nil
-}
-
-// iamRouteTemplate is the path template of the matched route, or the
-// request path when no route matched.
-func iamRouteTemplate(r *http.Request) string {
-	if route := mux.CurrentRoute(r); route != nil {
-		if template, err := route.GetPathTemplate(); err == nil {
-			return template
-		}
-	}
-	return r.URL.Path
+	return restScopeAction(iamScopeResource, iamReadOnlyPosts, method, route)
 }
 
 // iamTenantApps keeps the application instance routes inside the URL

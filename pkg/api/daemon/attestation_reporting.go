@@ -23,14 +23,9 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/calleradmission"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/reporting"
+	restattestation "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/attestation"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
-
-// CallerPolicyDescriber reports a node's compiled caller-admission policy.
-// *calleradmission.Policy satisfies it.
-type CallerPolicyDescriber interface {
-	Describe() calleradmission.Description
-}
 
 // ReportingHandles is what the attestation reporting service hands the
 // transports: the read-only report view, the refresh trigger and the caller
@@ -40,7 +35,11 @@ type CallerPolicyDescriber interface {
 type ReportingHandles struct {
 	Reports   reporting.Viewer
 	Refresher reporting.Refresher
-	Policy    CallerPolicyDescriber
+	// Policy is the node's compiled caller-admission policy, the one the
+	// webservice quote routes enforce; *calleradmission.Policy satisfies it.
+	// The transports describe it, and the daemon REST listener serves it at
+	// /api/v1/attestation/callers.
+	Policy restattestation.CallerPolicy
 }
 
 // reportingHandles is the atomically swapped handle set on the gRPC server.

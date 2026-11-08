@@ -30,6 +30,7 @@ import (
 
 // TestNewAuthzMiddleware tests the NewAuthzMiddleware constructor.
 func TestNewAuthzMiddleware(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, nil)
 	httpWriter := newMockHttpWriter()
 	pepService := newMockPEPServiceClient()
@@ -102,6 +103,7 @@ func TestNewAuthzMiddleware(t *testing.T) {
 
 // TestAuthzMiddleware_Handler tests the Handler method.
 func TestAuthzMiddleware_Handler(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, nil)
 	httpWriter := newMockHttpWriter()
 	pepService := newMockPEPServiceClient()
@@ -136,6 +138,7 @@ func TestAuthzMiddleware_Handler(t *testing.T) {
 
 // TestAuthzMiddleware_Authorize tests the Authorize method.
 func TestAuthzMiddleware_Authorize(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, nil)
 
 	t.Run("allows_authorized_request", func(t *testing.T) {
@@ -345,6 +348,7 @@ func TestAuthzMiddleware_Authorize(t *testing.T) {
 
 // TestAuthzMiddleware_HTTPMethodToAction tests HTTP method to action mapping.
 func TestAuthzMiddleware_HTTPMethodToAction(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, nil)
 	httpWriter := newMockHttpWriter()
 
@@ -424,6 +428,7 @@ func TestAuthzMiddleware_HTTPMethodToAction(t *testing.T) {
 
 // TestAuthzMiddleware_ExtractResource tests resource extraction from URL.
 func TestAuthzMiddleware_ExtractResource(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, nil)
 	httpWriter := newMockHttpWriter()
 
@@ -471,6 +476,7 @@ func TestAuthzMiddleware_ExtractResource(t *testing.T) {
 
 // TestAuthzMiddleware_ExtractPolicyContext tests policy context extraction.
 func TestAuthzMiddleware_ExtractPolicyContext(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, nil)
 	httpWriter := newMockHttpWriter()
 
@@ -552,6 +558,7 @@ func TestAuthzMiddleware_ExtractPolicyContext(t *testing.T) {
 
 // TestAuthzMiddleware_Caching tests the authorization decision caching.
 func TestAuthzMiddleware_Caching(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, nil)
 	httpWriter := newMockHttpWriter()
 
@@ -689,6 +696,7 @@ func TestAuthzMiddleware_Caching(t *testing.T) {
 
 // TestAuthzMiddleware_CheckResource tests the CheckResource method.
 func TestAuthzMiddleware_CheckResource(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, nil)
 	httpWriter := newMockHttpWriter()
 
@@ -743,6 +751,7 @@ func TestAuthzMiddleware_CheckResource(t *testing.T) {
 
 // TestAuthzMiddleware_CheckBatch tests the CheckBatch method.
 func TestAuthzMiddleware_CheckBatch(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, nil)
 	httpWriter := newMockHttpWriter()
 
@@ -851,6 +860,7 @@ func TestAuthzMiddleware_CheckBatch(t *testing.T) {
 
 // TestResourceAuthorizer tests the ResourceAuthorizer helper.
 func TestResourceAuthorizer(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, nil)
 	httpWriter := newMockHttpWriter()
 
@@ -957,6 +967,7 @@ func TestResourceAuthorizer(t *testing.T) {
 
 // TestAuthzMiddleware_AuthorizeHandler tests the AuthorizeHandler middleware factory.
 func TestAuthzMiddleware_AuthorizeHandler(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, nil)
 
 	t.Run("allows_authorized_request", func(t *testing.T) {
@@ -1046,6 +1057,7 @@ func TestAuthzMiddleware_AuthorizeHandler(t *testing.T) {
 
 // TestAuthzMiddleware_DefaultDecision tests default authorization decisions.
 func TestAuthzMiddleware_DefaultDecision(t *testing.T) {
+	t.Parallel()
 	logger := logging.NewLogger(slog.LevelDebug, nil)
 	httpWriter := newMockHttpWriter()
 

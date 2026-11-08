@@ -108,6 +108,7 @@ func TestGenerateNetbootInitfs_Failures(t *testing.T) {
 }
 
 func TestBuildNetbootInitfs(t *testing.T) {
+	t.Parallel()
 	rec := &diskimagetest.Runner{}
 	staged, err := StageMedia(context.Background(), buildConfigForTest(t, "qemu-virt", rec))
 	if err != nil {

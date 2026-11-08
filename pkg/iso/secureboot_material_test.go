@@ -202,6 +202,8 @@ func stageBuild(t *testing.T, machine elf.Machine) *ISOBuildConfig {
 	build.WorkDir = t.TempDir()
 	build.PlatformVersion = "1.0.0-test"
 	build.PlatformdBinary = filepath.Join(bins, "platformd")
+	build.PlatformctlBinary = filepath.Join(bins, "platformctl")
+	build.PlatformctlStaticBinary = filepath.Join(bins, "platformctl-static")
 	build.PlatformConfigFile = writeConfig(t, t.TempDir(), "os:\n  hostname: node\nseal-pcrs: [0, 7, 9]\nsecure-boot:\n  enabled: false\n")
 	build.PreFetch = false
 	build.SecureBoot = false
@@ -218,6 +220,7 @@ func TestStageInstallMedia(t *testing.T) {
 	for _, rel := range []string{
 		"platformd-bin/platformd",
 		"platformd-bin/platformctl",
+		"platformd-bin/platformctl-static",
 		"configs/installer.yaml",
 		"dracut-platformd/90platformd/module-setup.sh",
 	} {

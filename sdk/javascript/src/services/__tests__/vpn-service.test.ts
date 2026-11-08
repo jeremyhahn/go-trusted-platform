@@ -128,9 +128,9 @@ describe('VPNService', () => {
     it('GETs /status for one gateway', async () => {
       vi.mocked(mockClient.get).mockResolvedValue({ success: true, data: { gateways: [] } });
 
-      await service.getStatus('gw-01');
+      await service.getStatus('edge-01');
 
-      expect(mockClient.get).toHaveBeenCalledWith('/v1/vpn/status?gateway_id=gw-01');
+      expect(mockClient.get).toHaveBeenCalledWith('/v1/vpn/status?gateway_id=edge-01');
     });
 
     it('leaves the gateway filter off to report every gateway', async () => {

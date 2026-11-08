@@ -46,8 +46,24 @@
 # container runs in system.slice, outside that bound (#1178). Set it empty to
 # pass no --cgroup-parent (a developer host with no ci.slice).
 #
+# IN_IMAGE_COPY=<host file>:<container path> copies one more file, outside the
+# checkout, into the container before it starts, owned by the run's user: the
+# trivy image step's `docker save` archive (#1272), which is kept out of the
+# checkout so no other step streams it. The container path's directory must
+# exist once the checkout is in (e.g. /src), and must not be under /tmp, whose
+# tmpfs hides what is copied before start. Unset, nothing more is copied.
+#
 # The container is named go-trusted-platform-ci-tc-<pid>-<random>, under the
 # prefix scripts/reap-stale-ci-stacks.sh reaps, and is removed on every exit.
+# v4 (ci-template v1.29.4 and v1.29.5, Company Agent rulings 261(c) and
+# 262(a)): Go's build and link scratch
+# (TMPDIR, GOTMPDIR) is an anonymous volume on the image's /var/tmp
+# (IN_IMAGE_SCRATCH overrides), on the daemon's data disk, not the 3 GB /tmp
+# tmpfs, and removed with the container. A scratch directory that is missing or not writable fails
+# the stage by name. A bridge stage's GOPROXY puts DEVCACHE_GOPROXY (Athens)
+# first when the runner sets it: <DEVCACHE_GOPROXY>|https://proxy.golang.org|direct,
+# so any error falls through to the public proxy; GOPRIVATE travels with it.
+#
 set -euo pipefail
 
 if [ "$#" -lt 2 ]; then
@@ -66,6 +82,11 @@ if ! [[ $memory =~ ^[1-9][0-9]*[mg]$ ]]; then
   echo "IN_IMAGE_MEMORY must be a size in m or g, e.g. 16g: $memory" >&2
   exit 2
 fi
+scratch=${IN_IMAGE_SCRATCH:-/var/tmp}
+case $scratch in
+  /*) ;;
+  *) echo "IN_IMAGE_SCRATCH must be an absolute path: $scratch" >&2; exit 2 ;;
+esac
 gomaxprocs=${IN_IMAGE_GOMAXPROCS:-16}
 if ! [[ $gomaxprocs =~ ^[1-9][0-9]*$ ]]; then
   echo "IN_IMAGE_GOMAXPROCS must be a positive integer: $gomaxprocs" >&2
@@ -75,6 +96,18 @@ cgroup_parent=${CI_CGROUP_PARENT-ci.slice}
 if [ -n "$cgroup_parent" ] && ! [[ $cgroup_parent =~ ^[A-Za-z0-9][A-Za-z0-9_.@:/-]*$ ]]; then
   echo "CI_CGROUP_PARENT must be a cgroup name such as ci.slice, or empty: $cgroup_parent" >&2
   exit 2
+fi
+copy=${IN_IMAGE_COPY:-}
+copy_src=
+copy_dest=
+if [ -n "$copy" ]; then
+  copy_src=${copy%%:*}
+  copy_dest=${copy#*:}
+  if [ "$copy_src" = "$copy" ] || [ ! -f "$copy_src" ] ||
+    ! [[ $copy_dest =~ ^/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$ ]] || [[ $copy_dest == /tmp/* ]]; then
+    echo "IN_IMAGE_COPY must be <host file>:<absolute container path outside /tmp>: $copy" >&2
+    exit 2
+  fi
 fi
 
 uid=10001
@@ -91,6 +124,10 @@ args=(
   --ulimit core=1048576:1048576
   --ulimit nofile=65536:65536
   --tmpfs "/tmp:rw,exec,nosuid,nodev,size=3g,mode=1777"
+  # Go's build and link scratch on disk, not the tmpfs (v4, above).
+  -v "$scratch"
+  --env TMPDIR="$scratch"
+  --env GOTMPDIR="$scratch"
   --network "$network"
   --user "$uid:$uid"
   --workdir /src
@@ -107,7 +144,7 @@ if [ "$network" = bridge ]; then
   # further fetch more. The writable one starts empty, so a stage downloads
   # its whole graph (gigabytes): it goes beside the build cache on disk, not
   # in the 3g /tmp tmpfs, where it left no room for trivy's DB (#933).
-  args+=(--env "GOPROXY=https://proxy.golang.org,direct" --env GOMODCACHE=/gocache/mod)
+  args+=(--env "GOPROXY=${DEVCACHE_GOPROXY:+$DEVCACHE_GOPROXY|}https://proxy.golang.org|direct" --env GOMODCACHE=/gocache/mod)
   for v in GOPRIVATE GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; do
     if [ -n "${!v:-}" ]; then args+=(--env "$v"); fi
   done
@@ -116,7 +153,16 @@ fi
 cleanup() { docker rm -f -v "$name" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
-docker create "${args[@]}" "$image" sh -c "$*" >/dev/null
+# The scratch directory is checked in the container first (v4), so a missing
+# or unwritable one fails the stage here by name, not later as ENOSPC or EACCES.
+# shellcheck disable=SC2016 # expands in the container, not here
+guard='[ -d "$TMPDIR" ] && [ -w "$TMPDIR" ] || { echo "in-toolchain-image: scratch directory $TMPDIR is missing or not writable" >&2; exit 2; }'
+docker create "${args[@]}" "$image" sh -c "$guard; $*" >/dev/null
 tar -C "$PWD" --owner="$uid" --group="$uid" --numeric-owner -cf - . |
   docker cp -a - "$name:/src"
+if [ -n "$copy_src" ]; then
+  tar -C "$(dirname "$copy_src")" --owner="$uid" --group="$uid" --numeric-owner \
+    --transform "s|.*|$(basename "$copy_dest")|" -cf - "$(basename "$copy_src")" |
+    docker cp -a - "$name:$(dirname "$copy_dest")"
+fi
 docker start -a "$name"

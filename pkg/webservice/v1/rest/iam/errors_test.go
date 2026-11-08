@@ -21,72 +21,85 @@ import (
 )
 
 func TestErrMissingTenantID_Error(t *testing.T) {
+	t.Parallel()
 	err := ErrMissingTenantID{}
 	assert.Equal(t, "tenant ID is required", err.Error())
 }
 
 func TestErrMissingTenantID_ImplementsErrorInterface(t *testing.T) {
+	t.Parallel()
 	var err error = ErrMissingTenantID{}
 	assert.NotNil(t, err)
 	assert.Equal(t, "tenant ID is required", err.Error())
 }
 
 func TestErrMissingUserID_Error(t *testing.T) {
+	t.Parallel()
 	err := ErrMissingUserID{}
 	assert.Equal(t, "user ID is required", err.Error())
 }
 
 func TestErrMissingUserID_ImplementsErrorInterface(t *testing.T) {
+	t.Parallel()
 	var err error = ErrMissingUserID{}
 	assert.NotNil(t, err)
 	assert.Equal(t, "user ID is required", err.Error())
 }
 
 func TestErrMissingGroupID_Error(t *testing.T) {
+	t.Parallel()
 	err := ErrMissingGroupID{}
 	assert.Equal(t, "group ID is required", err.Error())
 }
 
 func TestErrMissingGroupID_ImplementsErrorInterface(t *testing.T) {
+	t.Parallel()
 	var err error = ErrMissingGroupID{}
 	assert.NotNil(t, err)
 	assert.Equal(t, "group ID is required", err.Error())
 }
 
 func TestErrMissingRoleID_Error(t *testing.T) {
+	t.Parallel()
 	err := ErrMissingRoleID{}
 	assert.Equal(t, "role ID is required", err.Error())
 }
 
 func TestErrMissingRoleID_ImplementsErrorInterface(t *testing.T) {
+	t.Parallel()
 	var err error = ErrMissingRoleID{}
 	assert.NotNil(t, err)
 	assert.Equal(t, "role ID is required", err.Error())
 }
 
 func TestErrMissingPolicyID_Error(t *testing.T) {
+	t.Parallel()
 	err := ErrMissingPolicyID{}
 	assert.Equal(t, "policy ID is required", err.Error())
 }
 
 func TestErrMissingPolicyID_ImplementsErrorInterface(t *testing.T) {
+	t.Parallel()
 	var err error = ErrMissingPolicyID{}
 	assert.NotNil(t, err)
 	assert.Equal(t, "policy ID is required", err.Error())
 }
 
 func TestErrMissingAppID_Error(t *testing.T) {
+	t.Parallel()
 	err := ErrMissingAppID{}
 	assert.Equal(t, "app ID is required", err.Error())
 }
 
 func TestErrMissingAppID_ImplementsErrorInterface(t *testing.T) {
+	t.Parallel()
 	var err error = ErrMissingAppID{}
 	assert.NotNil(t, err)
 	assert.Equal(t, "app ID is required", err.Error())
 }
 
 func TestErrInvalidRequestBody_Error(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		reason   string
@@ -118,12 +131,14 @@ func TestErrInvalidRequestBody_Error(t *testing.T) {
 }
 
 func TestErrInvalidRequestBody_ImplementsErrorInterface(t *testing.T) {
+	t.Parallel()
 	var err error = ErrInvalidRequestBody{Reason: "test reason"}
 	assert.NotNil(t, err)
 	assert.Contains(t, err.Error(), "invalid request body")
 }
 
 func TestErrInvalidPaginationParams_Error(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		reason   string
@@ -155,12 +170,14 @@ func TestErrInvalidPaginationParams_Error(t *testing.T) {
 }
 
 func TestErrInvalidPaginationParams_ImplementsErrorInterface(t *testing.T) {
+	t.Parallel()
 	var err error = ErrInvalidPaginationParams{Reason: "test"}
 	assert.NotNil(t, err)
 	assert.Contains(t, err.Error(), "invalid pagination parameters")
 }
 
 func TestErrUserNotFound_Error(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		tenantID string
@@ -196,12 +213,14 @@ func TestErrUserNotFound_Error(t *testing.T) {
 }
 
 func TestErrUserNotFound_ImplementsErrorInterface(t *testing.T) {
+	t.Parallel()
 	var err error = ErrUserNotFound{TenantID: "t1", UserID: "u1"}
 	assert.NotNil(t, err)
 	assert.Contains(t, err.Error(), "user not found")
 }
 
 func TestErrGroupNotFound_Error(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		tenantID string
@@ -231,12 +250,14 @@ func TestErrGroupNotFound_Error(t *testing.T) {
 }
 
 func TestErrGroupNotFound_ImplementsErrorInterface(t *testing.T) {
+	t.Parallel()
 	var err error = ErrGroupNotFound{TenantID: "t1", GroupID: "g1"}
 	assert.NotNil(t, err)
 	assert.Contains(t, err.Error(), "group not found")
 }
 
 func TestErrRoleNotFound_Error(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		tenantID string
@@ -266,12 +287,14 @@ func TestErrRoleNotFound_Error(t *testing.T) {
 }
 
 func TestErrRoleNotFound_ImplementsErrorInterface(t *testing.T) {
+	t.Parallel()
 	var err error = ErrRoleNotFound{TenantID: "t1", RoleID: "r1"}
 	assert.NotNil(t, err)
 	assert.Contains(t, err.Error(), "role not found")
 }
 
 func TestErrTenantNotFound_Error(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		tenantID string
@@ -298,12 +321,14 @@ func TestErrTenantNotFound_Error(t *testing.T) {
 }
 
 func TestErrTenantNotFound_ImplementsErrorInterface(t *testing.T) {
+	t.Parallel()
 	var err error = ErrTenantNotFound{TenantID: "t1"}
 	assert.NotNil(t, err)
 	assert.Contains(t, err.Error(), "tenant not found")
 }
 
 func TestErrPolicyNotFound_Error(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		tenantID string
@@ -333,12 +358,14 @@ func TestErrPolicyNotFound_Error(t *testing.T) {
 }
 
 func TestErrPolicyNotFound_ImplementsErrorInterface(t *testing.T) {
+	t.Parallel()
 	var err error = ErrPolicyNotFound{TenantID: "t1", PolicyID: "p1"}
 	assert.NotNil(t, err)
 	assert.Contains(t, err.Error(), "policy not found")
 }
 
 func TestErrAppNotFound_Error(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		tenantID string
@@ -368,12 +395,14 @@ func TestErrAppNotFound_Error(t *testing.T) {
 }
 
 func TestErrAppNotFound_ImplementsErrorInterface(t *testing.T) {
+	t.Parallel()
 	var err error = ErrAppNotFound{TenantID: "t1", AppID: "a1"}
 	assert.NotNil(t, err)
 	assert.Contains(t, err.Error(), "application not found")
 }
 
 func TestErrInvalidPolicySpec_Error(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		reason   string
@@ -405,39 +434,46 @@ func TestErrInvalidPolicySpec_Error(t *testing.T) {
 }
 
 func TestErrInvalidPolicySpec_ImplementsErrorInterface(t *testing.T) {
+	t.Parallel()
 	var err error = ErrInvalidPolicySpec{Reason: "test"}
 	assert.NotNil(t, err)
 	assert.Contains(t, err.Error(), "invalid policy spec")
 }
 
 func TestErrMissingRole_Error(t *testing.T) {
+	t.Parallel()
 	err := ErrMissingRole{}
 	assert.Equal(t, "role is required", err.Error())
 }
 
 func TestErrMissingRole_ImplementsErrorInterface(t *testing.T) {
+	t.Parallel()
 	var err error = ErrMissingRole{}
 	assert.NotNil(t, err)
 	assert.Equal(t, "role is required", err.Error())
 }
 
 func TestErrMissingMember_Error(t *testing.T) {
+	t.Parallel()
 	err := ErrMissingMember{}
 	assert.Equal(t, "member ID is required", err.Error())
 }
 
 func TestErrMissingMember_ImplementsErrorInterface(t *testing.T) {
+	t.Parallel()
 	var err error = ErrMissingMember{}
 	assert.NotNil(t, err)
 	assert.Equal(t, "member ID is required", err.Error())
 }
 
 func TestErrConflictingQueryTenant_Error(t *testing.T) {
+	t.Parallel()
 	err := ErrConflictingQueryTenant{Path: "tenant-a", Query: "tenant-b"}
 	assert.Equal(t, `rest/iam: tenant_id query "tenant-b" conflicts with path tenant "tenant-a"`, err.Error())
 }
 
 func TestErrConflictingQueryTenant_ImplementsErrorInterface(t *testing.T) {
+	t.Parallel()
 	var err error = ErrConflictingQueryTenant{Path: "tenant-a", Query: "tenant-b"}
 	var conflict ErrConflictingQueryTenant
 	assert.ErrorAs(t, err, &conflict)
@@ -473,6 +509,7 @@ func TestErrTenantSettingsUnsupported_Is(t *testing.T) {
 }
 
 func TestAllErrorTypesAreDistinct(t *testing.T) {
+	t.Parallel()
 	errors := []error{
 		ErrMissingTenantID{},
 		ErrMissingUserID{},
