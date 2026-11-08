@@ -67,7 +67,7 @@ RUN set -eu; \
     esac; \
     v="${TRIVY_VERSION#v}"; \
     f="trivy_${v}_Linux-${arch}.tar.gz"; \
-    curl -fsSL -o "/tmp/${f}" "https://github.com/aquasecurity/trivy/releases/download/${TRIVY_VERSION}/${f}"; \
+    curl -fsSL --retry 5 --retry-delay 5 -o "/tmp/${f}" "https://github.com/aquasecurity/trivy/releases/download/${TRIVY_VERSION}/${f}"; \
     echo "${sum}  /tmp/${f}" > /tmp/trivy.sha256; \
     sha256sum -c /tmp/trivy.sha256; \
     tar -xzf "/tmp/${f}" -C /out trivy; \
@@ -305,7 +305,7 @@ RUN set -eu; \
       *) echo "no node pin for ${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
     f="node-${NODE_VERSION}-linux-${arch}.tar.xz"; \
-    curl -fsSL -o "/tmp/${f}" "https://nodejs.org/dist/${NODE_VERSION}/${f}"; \
+    curl -fsSL --retry 5 --retry-delay 5 -o "/tmp/${f}" "https://nodejs.org/dist/${NODE_VERSION}/${f}"; \
     echo "${sum}  /tmp/${f}" > /tmp/node.sha256; \
     sha256sum -c /tmp/node.sha256; \
     tar -xJf "/tmp/${f}" -C /usr/local --strip-components=1 --no-same-owner; \
