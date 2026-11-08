@@ -145,10 +145,18 @@ func TestCoverage964_InitCA(t *testing.T) {
 }
 
 func TestCoverage964_ImportEndorsementKeyCertificate(t *testing.T) {
-	t.Run("missing certificate is reported", func(t *testing.T) {
+	t.Run("missing certificate is issued by the local CA and written", func(t *testing.T) {
 		a := newCAHarness(t)
-		_, err := a.ImportEndorsementKeyCertificate(context.Background())
+		_, err := a.TPM.EKCertificate()
 		require.ErrorIs(t, err, xkmssdk.ErrTPMEndorsementCertNotFound)
+		// The NV write authorizes with the configured hierarchy auth: the
+		// harness took ownership with the SO PIN.
+		a.TPMConfig.EK.HierarchyAuth = harnessSOPIN
+		got, err := a.ImportEndorsementKeyCertificate(context.Background())
+		require.NoError(t, err)
+		stored, err := a.TPM.EKCertificate()
+		require.NoError(t, err)
+		require.Equal(t, got.Raw, stored.Raw)
 	})
 	t.Run("manufacturer certificate is imported", func(t *testing.T) {
 		a := newCAHarness(t)
