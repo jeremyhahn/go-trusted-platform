@@ -39,10 +39,10 @@ services:
       - ../:/workspace:cached
 
       # Mount sibling projects for local go.mod replace directives
-      - ../../go-trusted-ca:/home/jhahn/sources/go-trusted-ca:cached
-      - ../../go-quicbaas:/home/jhahn/sources/go-quicbaas:cached
-      - ../../go-xkms:/home/jhahn/sources/go-xkms:cached
-      - ../../go-objstore:/home/jhahn/sources/go-objstore:cached
+      - ../../go-trusted-ca:/sources/go-trusted-ca:cached
+      - ../../go-quicbaas:/sources/go-quicbaas:cached
+      - ../../go-xkms:/sources/go-xkms:cached
+      - ../../go-objstore:/sources/go-objstore:cached
 
       # Go module cache for faster builds
       - trusted-platform-webdev-go-mod-cache:/go/pkg/mod

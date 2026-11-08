@@ -669,7 +669,7 @@ trust:
 # =============================================================================
 
 bmc:
-  address: 10.4.2.20  # management (VLAN 402) carries BMCs only
+  address: 198.51.100.148  # management (VLAN 402) carries BMCs only
   port: 623
   username: admin
   password: "kms://bmc/password?ensure=true&len=16&enc=base64"
@@ -748,6 +748,10 @@ sdn:
     # The deployment's RFC 4193 ULA /48. Generate your own random global
     # ID; this one is the reference document's example.
     ula: fd12:3456:789a::/48
+    # Management and provisioning use the documentation reference ranges.
+    overrides:
+      - {zone: management, subnet: 198.51.100.0/24}
+      - {zone: provisioning, subnet: 192.0.2.0/24}
   # zones: the built-in zones (transit, fabric, management, hypervisor,
   # quarantine, provisioning, control-plane, storage, backup) need no entry.
   # An entry tunes a built-in's policy or declares an owner-defined zone at
@@ -813,13 +817,13 @@ sdn:
           - Ethernet1/49
           - Ethernet1/50
     ports:
-      - {switch-id: switch-01, port: Ethernet1/3, class: gateway, description: gw-01 data}
-      - {switch-id: switch-02, port: Ethernet1/3, class: gateway, description: gw-01 data}
+      - {switch-id: switch-01, port: Ethernet1/3, class: gateway, description: edge-01 data}
+      - {switch-id: switch-02, port: Ethernet1/3, class: gateway, description: edge-01 data}
       - {switch-id: switch-01, port: Ethernet1/25, class: hypervisor, description: cp-01 data}
       - {switch-id: switch-02, port: Ethernet1/25, class: hypervisor, description: cp-01 data}
       - {switch-id: switch-01, port: Ethernet1/28, class: hypervisor, description: compute-01 data}
       - {switch-id: switch-02, port: Ethernet1/28, class: hypervisor, description: compute-01 data}
-      - {switch-id: switch-01, port: Ethernet1/41, class: bmc, description: gw-01 BMC}
+      - {switch-id: switch-01, port: Ethernet1/41, class: bmc, description: edge-01 BMC}
       - {switch-id: switch-01, port: Ethernet1/42, class: bmc, description: cp-01 BMC}
       - {switch-id: switch-02, port: Ethernet1/41, class: bmc, description: compute-01 BMC}
   overlay:

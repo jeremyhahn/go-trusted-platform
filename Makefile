@@ -1374,10 +1374,19 @@ softhsm-init:
 # hardware answer is recorded in the registry.
 TEST_SKIP := TestPickBootSourceOverrideTarget_X10WithCDDVDAlias|TestPickBootSourceOverrideTarget_X10PrefersVendorUEFIOverUSBCD|TestX10SDVBootMediaType|TestSupermicroManufacturerWideBootMediaType|TestResolveVeloCloudEDGE840
 
+# SHARDS and SHARD split the unit suites' package list for the hosted CI
+# runners (4 cores, 6 hours a job): `make test-race SHARD=1 SHARDS=4` runs the
+# second of four round-robin slices of the list. The default, one shard, is the
+# whole list. test-fips hands them to `make test`, and print-race-pkgs prints
+# the shard's list, so batch.yml's sharded jobs read the same slices.
+SHARDS ?= 1
+SHARD ?= 0
+SHARD_PICK = awk -v n=$(SHARDS) -v s=$(SHARD) '(NR - 1) % n == s'
+
 .PHONY: test
 test: check-insecure-tls check-go-build-tags
 	@echo "Running all unit tests..."
-	go test -tags "$(BUILD_TAGS)" -v -skip "$(TEST_SKIP)" $$(go list ./pkg/... ./cmd/... 2>/dev/null | grep -v -E "$(TEST_EXCLUDE)") $(TEST_UNIT_PKGS)
+	go test -tags "$(BUILD_TAGS)" -v -skip "$(TEST_SKIP)" $$({ go list ./pkg/... ./cmd/... 2>/dev/null | grep -v -E "$(TEST_EXCLUDE)"; printf '%s\n' $(TEST_UNIT_PKGS); } | $(SHARD_PICK))
 
 .PHONY: test-fips
 ## test-fips: FIPS 140-3 suite: build ./... and run `make test`, both with the fips tag under GODEBUG=fips140=only
@@ -1991,9 +2000,9 @@ test-webservice-jwt:
 # These tests run in docker containers with real services and perform complete end-to-end testing
 # Note: Local module directories referenced by go.mod replace directives must be mounted
 
-# Base directory containing all source repositories
-# This must match the paths used in go.mod replace directives
-SOURCES_BASE := /home/jhahn/sources
+# In-container root the source repositories are mounted under, the same
+# root the compose files mount sibling module checkouts at.
+SOURCES_BASE := /sources
 
 # Local module volume mounts for docker - only mount packages with local replace directives in go.mod
 # Sibling-module bind mounts, deliberately empty since the tagged-module
@@ -3014,13 +3023,15 @@ RACE_EXCLUDE := ^$$
 RACE_PKGS_DISCOVER = \
 	pkgs=$$(go list -tags "$(BUILD_TAGS)" ./pkg/... ./cmd/...); \
 	pkgs=$$(printf '%s\n' "$$pkgs" | grep -v -E "$(TEST_EXCLUDE)" | grep -v -E "$(RACE_EXCLUDE)"); \
-	[ -n "$$pkgs" ] || { echo "$@: package discovery produced no packages" >&2; exit 1; }
+	[ -n "$$pkgs" ] || { echo "$@: package discovery produced no packages" >&2; exit 1; }; \
+	pkgs=$$(printf '%s\n' $$pkgs $(TEST_UNIT_PKGS) | $(SHARD_PICK)); \
+	[ -n "$$pkgs" ] || { echo "$@: shard $(SHARD) of $(SHARDS) has no packages" >&2; exit 1; }
 
 test-race:
 	@echo "Running unit tests under the race detector..."
 	@set -e; \
 	$(RACE_PKGS_DISCOVER); \
-	go test -race -tags "$(BUILD_TAGS)" -skip "$(TEST_SKIP)" -timeout 20m $$pkgs $(TEST_UNIT_PKGS)
+	go test -race -tags "$(BUILD_TAGS)" -skip "$(TEST_SKIP)" -timeout 20m $$pkgs
 
 ## print-race-pkgs: Print test-race's package set on one line (batch.yml race-full and bench read it)
 #
@@ -3030,7 +3041,7 @@ test-race:
 print-race-pkgs:
 	@set -e; \
 	$(RACE_PKGS_DISCOVER); \
-	echo $$pkgs $(TEST_UNIT_PKGS)
+	echo $$pkgs
 
 ## print-test-skip: Print the TEST_SKIP pattern the unit suites pass to -skip
 .PHONY: print-test-skip
