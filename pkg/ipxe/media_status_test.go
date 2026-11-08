@@ -195,8 +195,8 @@ func TestScanMediaOpens_SeparatesSMBClients(t *testing.T) {
 	iso := filepath.Join(data, "platform.iso")
 	// Two BMCs read the same ISO through two smbd workers; a third smbd
 	// process carries no client title.
-	proc.openFor("smbd", "10.4.2.103", 301, 5, iso, 1000)
-	proc.openFor("smbd", "10.4.2.104", 302, 5, iso, 2000)
+	proc.openFor("smbd", "192.0.2.103", 301, 5, iso, 1000)
+	proc.openFor("smbd", "192.0.2.104", 302, 5, iso, 2000)
 	proc.open(303, 5, iso, 10)
 
 	scan, err := scanMediaOpens(proc.root, data, 999)
@@ -204,8 +204,8 @@ func TestScanMediaOpens_SeparatesSMBClients(t *testing.T) {
 	file := scan.files[iso]
 	require.NotNil(t, file)
 	require.Len(t, file.byName, 3)
-	assert.Equal(t, int64(1000), file.byName[openerKey{name: "smbd", client: "10.4.2.103"}].posSum)
-	assert.Equal(t, int64(2000), file.byName[openerKey{name: "smbd", client: "10.4.2.104"}].posSum)
+	assert.Equal(t, int64(1000), file.byName[openerKey{name: "smbd", client: "192.0.2.103"}].posSum)
+	assert.Equal(t, int64(2000), file.byName[openerKey{name: "smbd", client: "192.0.2.104"}].posSum)
 	assert.Equal(t, int64(10), file.byName[openerKey{name: "smbd"}].posSum)
 }
 
@@ -221,10 +221,10 @@ func TestReadClientFromTitle(t *testing.T) {
 		client        string
 		truncated     bool
 	}{
-		{"a", "smbd: client [10.4.2.103]\x00", "10.4.2.103", false},
+		{"a", "smbd: client [192.0.2.103]\x00", "192.0.2.103", false},
 		{"b", "smbd: client [fe80::1]\x00", "fe80::1", false},
 		{"e", "  SMBD: Client [10.0.0.5:52311]\x00", "10.0.0.5:52311", false},
-		{"f", "smbd[10.4.2.103]\x00", "10.4.2.103", false},
+		{"f", "smbd[192.0.2.103]\x00", "192.0.2.103", false},
 		{"g", "smbd[198.51.100", "198.51.100", true},
 		{"c", "/usr/sbin/smbd\x00--foreground\x00", "", false},
 		{"d", "sha256sum\x00x.iso\x00", "", false},
@@ -246,10 +246,10 @@ func TestParseSMBDWorkerTitle(t *testing.T) {
 		truncated bool
 	}{
 		// The Debian per-connection title.
-		{"smbd: client [10.4.2.103]", "10.4.2.103", false},
+		{"smbd: client [192.0.2.103]", "192.0.2.103", false},
 		// The Alpine per-connection title, and its 15-byte comm
 		// truncation exactly as measured live during #126.
-		{"smbd[10.4.2.103]", "10.4.2.103", false},
+		{"smbd[192.0.2.103]", "192.0.2.103", false},
 		{"smbd[198.51.100", "198.51.100", true},
 		// A worker whose short address fits comm keeps its bracket.
 		{"smbd[10.0.0.5]", "10.0.0.5", false},
@@ -293,7 +293,7 @@ func TestOpenersNamed_MatchesWorkerTitledComms(t *testing.T) {
 	m := &MediaOpen{Openers: []MediaOpener{
 		{Name: "smbd"},
 		{Name: "smbd[198.51.100", Client: "198.51.100", ClientTruncated: true},
-		{Name: "smbd[10.4.2.103]", Client: "10.4.2.103"},
+		{Name: "smbd[192.0.2.103]", Client: "192.0.2.103"},
 		{Name: "smbd-notify"},
 		{Name: "sha256sum"},
 	}}
@@ -301,7 +301,7 @@ func TestOpenersNamed_MatchesWorkerTitledComms(t *testing.T) {
 	require.Len(t, got, 3, "exact smbd plus both smbd[ worker titles; never exact-only")
 	assert.Equal(t, "smbd", got[0].Name)
 	assert.Equal(t, "smbd[198.51.100", got[1].Name)
-	assert.Equal(t, "smbd[10.4.2.103]", got[2].Name)
+	assert.Equal(t, "smbd[192.0.2.103]", got[2].Name)
 }
 
 func TestReadComm(t *testing.T) {
