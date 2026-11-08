@@ -87,11 +87,21 @@ func serveIAMBody(s *RESTServer, method, path, token, body string) *httptest.Res
 // handler answered it, rather than a guard, or the router finding no route.
 func assertReachedHandler(t *testing.T, recorder *httptest.ResponseRecorder, msgAndArgs ...any) {
 	t.Helper()
-	for _, refused := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusMethodNotAllowed,
-		http.StatusInternalServerError, http.StatusNotImplemented} {
+	for _, refused := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusMethodNotAllowed} {
 		assert.NotEqual(t, refused, recorder.Code, msgAndArgs...)
 	}
 	assert.NotEqual(t, "404 page not found\n", recorder.Body.String(), msgAndArgs...)
+}
+
+// assertIAMHandlerServed asserts that the request passed the guard and that
+// the IAM handler behind it served the call: its fakes never fail, so a 500
+// or 501 means the handler was reached but could not serve the operation.
+func assertIAMHandlerServed(t *testing.T, recorder *httptest.ResponseRecorder, msgAndArgs ...any) {
+	t.Helper()
+	assertReachedHandler(t, recorder, msgAndArgs...)
+	for _, refused := range []int{http.StatusInternalServerError, http.StatusNotImplemented} {
+		assert.NotEqual(t, refused, recorder.Code, msgAndArgs...)
+	}
 }
 
 func TestSetIAMHandlers_RefusesAMissingDependency(t *testing.T) {
@@ -217,7 +227,7 @@ func TestIAMREST_ScopePerMethod(t *testing.T) {
 		t.Run(tc.token+" "+tc.method+" "+tc.path, func(t *testing.T) {
 			recorder := serveIAM(s, tc.method, tc.path, tc.token)
 			if tc.admit {
-				assertReachedHandler(t, recorder, recorder.Body.String())
+				assertIAMHandlerServed(t, recorder, recorder.Body.String())
 				return
 			}
 			assert.Equal(t, http.StatusForbidden, recorder.Code)
@@ -266,7 +276,7 @@ func TestIAMREST_OperatorPassesEveryMethod(t *testing.T) {
 		{http.MethodDelete, "/api/v1/iam/tenants/tenant-a/users/u1"},
 	} {
 		recorder := serveIAM(s, route.method, route.path, "operator")
-		assertReachedHandler(t, recorder, "%s %s: %s", route.method, route.path, recorder.Body.String())
+		assertIAMHandlerServed(t, recorder, "%s %s: %s", route.method, route.path, recorder.Body.String())
 	}
 }
 
@@ -299,7 +309,7 @@ func TestIAMREST_TenantRules(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			recorder := serveIAM(s, tc.method, tc.path, tc.token)
 			if tc.admit {
-				assertReachedHandler(t, recorder, recorder.Body.String())
+				assertIAMHandlerServed(t, recorder, recorder.Body.String())
 				return
 			}
 			assert.Equal(t, http.StatusForbidden, recorder.Code, recorder.Body.String())
