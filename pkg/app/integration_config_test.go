@@ -185,9 +185,9 @@ func TestIntegrationConfig_RunModeMismatch(t *testing.T) {
 		"no admin-email: the registry leaves /api/v1/admin/claim unregistered")
 	assert.False(t, adminClaimServed(&App{WebServices: webservice, AdminEmail: "admin@localhost"}),
 		"an address IAM refuses (no dotted domain) cannot back the claim")
-	assert.False(t, adminClaimServed(&App{AdminEmail: "admin@integration.internal"}),
+	assert.False(t, adminClaimServed(&App{AdminEmail: "admin@integration.example.test"}),
 		"daemon-only: no webservice mounts the admin-claim routes, whatever the email")
-	assert.True(t, adminClaimServed(&App{WebServices: webservice, AdminEmail: "admin@integration.internal"}),
+	assert.True(t, adminClaimServed(&App{WebServices: webservice, AdminEmail: "admin@integration.example.test"}),
 		"a webservice with an IAM-valid admin-email serves the claim")
 }
 
