@@ -1995,9 +1995,9 @@ test-webservice-jwt:
 # These tests run in docker containers with real services and perform complete end-to-end testing
 # Note: Local module directories referenced by go.mod replace directives must be mounted
 
-# Base directory containing all source repositories
-# This must match the paths used in go.mod replace directives
-SOURCES_BASE := /home/jhahn/sources
+# In-container root the source repositories are mounted under, the same
+# root the compose files mount sibling module checkouts at.
+SOURCES_BASE := /sources
 
 # Local module volume mounts for docker - only mount packages with local replace directives in go.mod
 # Sibling-module bind mounts, deliberately empty since the tagged-module
