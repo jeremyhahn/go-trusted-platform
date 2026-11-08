@@ -577,6 +577,7 @@ jobs:
             fi
             me=$(jq -r '.user.login // empty' <<<"$probe")
             probe_id=$(jq -r '.id // empty' <<<"$probe")
+            # shellcheck disable=SC2015 # die and exit end the script, so C runs only when A && B fails.
             [ "$(jq -r '.state // empty' <<<"$probe")" = PENDING ] && [[ $probe_id =~ ^[0-9]+$ ]] ||
               die "the identity probe on PR $PR_NUM was not filed as a PENDING review"
             api DELETE "/pulls/$PR_NUM/reviews/$probe_id" >/dev/null
@@ -700,6 +701,7 @@ jobs:
             rm -rf -- "${refresh_dir:?}"
             [ "$rc" != 75 ] ||
               die "timed out after 300 s waiting for $CODEX_MASTER/.review.lock to refresh the Codex login"
+            # shellcheck disable=SC2015 # die and exit end the script, so C runs only when A && B fails.
             [ "$rc" != 124 ] && [ "$rc" != 137 ] ||
               die "the Codex refresh call (\`codex exec\`) did not finish within 120 s; the Codex login was not refreshed"
             copy_login

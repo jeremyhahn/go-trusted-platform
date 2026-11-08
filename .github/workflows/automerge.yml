@@ -201,6 +201,7 @@ jobs:
             echo "::error::AGENT_TOKEN is not set on this repository; the merge is made as the project agent."
             exit 1; }
           # v13: fail closed without the domain or any reviewer list.
+          # shellcheck disable=SC2015 # die and exit end the script, so C runs only when A && B fails.
           [ -n "${AGENT_DOMAIN:-}" ] && { [ -n "${APPROVERS:-}" ] || [ -n "${APPROVERS_ONLY:-}" ]; } || {
             echo "::error::AGENT_DOMAIN and AUTOMERGE_APPROVERS (or AUTOMERGE_APPROVERS_ONLY) must be set as repository variables (automerge v13)."
             exit 1; }
