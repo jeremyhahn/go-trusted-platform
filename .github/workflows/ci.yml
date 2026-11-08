@@ -662,6 +662,85 @@ jobs:
         if: ${{ steps.probe.outputs.has_target == 'true' }}
         run: make lint-gates
 
+      # v1.32 (2026-11-08, Company Agent m2098 item 2, InfoSec finding): the
+      # internal-name gate. Its patterns are internal values, so they never
+      # live in this repository: the Actions secret RELEASABILITY_PATTERNS
+      # carries the private pattern file (source in platform-configs). Blank
+      # and `#` lines are skipped; every other line is `class<TAB>regex`, a
+      # class of lab-address, lab-host or owner-path (an `/i` suffix is
+      # allowed) and a POSIX extended regex. A malformed line, an unknown
+      # class or a regex grep -E refuses fails the step, which prints the line
+      # number only. v1.31 grepped whole lines with -F, so no line matched and
+      # the gate was green for a false reason. The step prints path and line
+      # of a match, never the value. A run without the secret (a fork PR)
+      # skips with a notice; a push to main without it fails.
+      - name: Releasability (private patterns)
+        if: ${{ !cancelled() }}
+        env:
+          RELEASABILITY_PATTERNS: ${{ secrets.RELEASABILITY_PATTERNS }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ -z "$RELEASABILITY_PATTERNS" ]; then
+            if [ "$EVENT" = push ]; then
+              echo "::error::RELEASABILITY_PATTERNS is not set; the gate needs the private pattern file (public-hygiene.md)"
+              exit 1
+            fi
+            echo "::notice::RELEASABILITY_PATTERNS is not available to this run; pushes to main run the gate"
+            exit 0
+          fi
+          pf=$(mktemp)
+          chmod 600 "$pf"
+          trap 'rm -f "$pf"' EXIT
+          tab=$(printf '\t')
+          n=0 bad=0 count=0
+          while IFS= read -r line || [ -n "$line" ]; do
+            n=$((n + 1))
+            line=${line%$'\r'}
+            trimmed=${line#"${line%%[![:space:]]*}"}
+            case $trimmed in ''|'#'*) continue ;; esac
+            case $line in
+              *"$tab"*) ;;
+              *) echo "::error::pattern line $n is not class<TAB>regex"; bad=1; continue ;;
+            esac
+            class=${line%%"$tab"*}
+            re=${line#*"$tab"}
+            case $class in
+              lab-address|lab-host|owner-path|lab-address/i|lab-host/i|owner-path/i) ;;
+              *) echo "::error::pattern line $n has an unknown class"; bad=1; continue ;;
+            esac
+            if [ -z "$re" ]; then
+              echo "::error::pattern line $n has an empty regex"; bad=1; continue
+            fi
+            rc=0
+            grep -E -e "$re" /dev/null > /dev/null 2>&1 || rc=$?
+            if [ "$rc" -ge 2 ]; then
+              echo "::error::pattern line $n has a regex grep -E refuses"; bad=1; continue
+            fi
+            printf '%s\n' "$re" >> "$pf"
+            count=$((count + 1))
+          done <<< "$RELEASABILITY_PATTERNS"
+          if [ "$bad" != 0 ]; then
+            echo "::error::the private pattern file is malformed (line numbers above; the values are not shown)"
+            exit 1
+          fi
+          if [ "$count" = 0 ]; then
+            echo "::error::RELEASABILITY_PATTERNS holds no class<TAB>regex line"
+            exit 1
+          fi
+          rc=0
+          hits=$(git grep -n -I -i -E -f "$pf" -- . | cut -d: -f1,2; exit "${PIPESTATUS[0]}") || rc=$?
+          case $rc in
+            0)
+              echo "::error::internal names in the tracked tree (path:line; the values are not shown):"
+              printf '%s\n' "$hits"
+              exit 1 ;;
+            1) ;;
+            *)
+              echo "::error::git grep failed (rc $rc)"
+              exit 1 ;;
+          esac
+          echo "releasability: $count private patterns, 0 matches"
+
   # v1.29.2 (ruling 239(8)): a CUSTOMIZE job that runs only when certain
   # paths change (the changes job gains an output for them, `optee` here)
   # needs the image job as well, and its `if:` tests an image job output
