@@ -472,7 +472,7 @@ authorization:
 | Router hook | Daemon implementation | Refusal |
 |-------------|-----------------------|---------|
 | `Authenticate` | `ScopeGuard.Authenticate`: the guard's credentials above (`Bearer` platform token, else the verified client certificate as the `*:*` operator) | 401 `ErrRouteUnauthenticated`; 403 with no guard |
-| `RequireAdmin` | the caller's scope for the method: `GET` `iam:read`; `POST`, `PUT`, `PATCH` `iam:write`; `DELETE` `iam:delete`, except `DELETE .../users/{id}/roles/{role}` and `DELETE .../groups/{id}/members/{user}`, which need `iam:write` as gRPC `RevokeRole` and `RemoveGroupMember` do. `POST .../policies/validate`, `POST .../policies/test` and `POST .../permissions/check` change nothing and need `iam:read`. Any other method is refused, never defaulted | 403 |
+| `RequireAdmin` | the caller's scope for the method: `GET` `iam:read`; `POST`, `PUT`, `PATCH` `iam:write`; `DELETE` `iam:delete`, except `DELETE .../users/{id}/roles/{role}` and `DELETE .../groups/{id}/members/{user}`, which need `iam:write` as gRPC `RevokeRole` and `RemoveGroupMember` do. `POST .../policies/validate`, `POST .../policies/test` and `POST .../permissions/check` change nothing and need `iam:read`. These five routes are not mounted until the SDK adoption (`iamOperationsAwaitingSDK`) and answer `404` (see [`docs/iam/api.md`](../iam/api.md)). Any other method is refused, never defaulted | 403; 404 for an unmounted route |
 | `RequireSystemTenant` | the gRPC rule: the caller is of the system tenant | 403 |
 | `RequireOwnTenant` | the gRPC rule: the request's tenant (the `{tenant}` segment, else `tenant_id`) is the caller's; it then hands that authorized tenant to the handlers (`restiam.WithAuthorizedTenant`) | 403 `ErrIAMTenantForbidden` |
 

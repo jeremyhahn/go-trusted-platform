@@ -185,9 +185,11 @@ func TestIAMREST_UnservableOperationsAnswerNotFound(t *testing.T) {
 
 func TestIAMREST_ScopePerMethod(t *testing.T) {
 	const users = "/api/v1/iam/tenants/" + iamRESTTenantA + "/users"
+	const groups = "/api/v1/iam/tenants/" + iamRESTTenantA + "/groups"
 	// The read-only POSTs and the membership DELETEs are left unmounted
-	// until the SDK adoption (iamOperationsAwaitingSDK), so they answer 404;
-	// TestIAMScopeAction covers the scope they need.
+	// until the SDK adoption (iamOperationsAwaitingSDK), so they answer 404
+	// (TestIAMREST_RoutesAwaitingSDKAnswerNotFound); TestIAMScopeAction
+	// covers the scope they need. The mounted group DELETE keeps iam:delete.
 	cases := []struct {
 		token  string
 		method string
@@ -205,6 +207,9 @@ func TestIAMREST_ScopePerMethod(t *testing.T) {
 		{"writer", http.MethodDelete, users + "/u1", "iam:delete", false},
 		{"deleter", http.MethodDelete, users + "/u1", "iam:delete", true},
 		{"deleter", http.MethodPost, users, "iam:write", false},
+		{"writer", http.MethodDelete, groups + "/g1", "iam:delete", false},
+		{"deleter", http.MethodDelete, groups + "/g1", "iam:delete", true},
+		{"writer", http.MethodDelete, "/api/v1/iam/groups/g1?tenant_id=" + iamRESTTenantA, "iam:delete", false},
 		{"other", http.MethodGet, users, "iam:read", false},
 	}
 	s := iamRESTServer(t)
@@ -398,6 +403,7 @@ func TestIAMScopeAction(t *testing.T) {
 		{http.MethodDelete, "/api/v1/iam/groups/{id}/members/{user}", "write"},
 		{http.MethodDelete, "/api/v1/iam/tenants/{tenant}/roles/{id}", "delete"},
 		{http.MethodDelete, "/api/v1/iam/tenants/{tenant}/groups/{id}", "delete"},
+		{http.MethodDelete, "/api/v1/iam/groups/{id}", "delete"},
 		{http.MethodPost, "/api/v1/iam/tenants/{tenant}/users/{id}/roles/{role}", "write"},
 	}
 	for _, tc := range cases {

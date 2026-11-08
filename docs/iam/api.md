@@ -339,7 +339,8 @@ the `*:*` operator. `RequireAdmin` requires the scope for the method:
 | `GET` | `iam:read` |
 | `POST`, `PUT`, `PATCH` | `iam:write` |
 | `DELETE` | `iam:delete` |
-| `POST .../policies/validate`, `POST .../policies/test`, `POST .../permissions/check` (flat and tenant-scoped) | `iam:read` — they evaluate the body and change nothing |
+| `DELETE .../users/{id}/roles/{role}`, `DELETE .../groups/{id}/members/{user}` (flat and tenant-scoped) | `iam:write`, as gRPC `RevokeRole` and `RemoveGroupMember` — not mounted on the daemon yet, `404` (below) |
+| `POST .../policies/validate`, `POST .../policies/test`, `POST .../permissions/check` (flat and tenant-scoped) | `iam:read` — they evaluate the body and change nothing; not mounted on the daemon yet, `404` (below) |
 | any other method | refused, `403` |
 
 `RequireSystemTenant` and `RequireOwnTenant` apply the gRPC tenant rules in
