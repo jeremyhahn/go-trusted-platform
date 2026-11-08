@@ -226,6 +226,36 @@ func TestIAMREST_ScopePerMethod(t *testing.T) {
 	}
 }
 
+// TestIAMREST_ScopeRowsAwaitingSDKAnswerNotFound names main's #1424 scope
+// rows whose routes iamOperationsAwaitingSDK leaves unmounted: each answers
+// 404 to the caller main admitted, in the tenant-scoped and the flat form,
+// rather than reaching a handler. TestIAMScopeAction keeps the scope each
+// needs once it is mounted.
+func TestIAMREST_ScopeRowsAwaitingSDKAnswerNotFound(t *testing.T) {
+	const tenant = "/api/v1/iam/tenants/" + iamRESTTenantA
+	cases := []struct {
+		token  string
+		method string
+		path   string
+	}{
+		{"reader", http.MethodPost, tenant + "/policies/validate"},
+		{"reader", http.MethodPost, tenant + "/policies/test"},
+		{"reader", http.MethodPost, tenant + "/permissions/check"},
+		{"writer", http.MethodDelete, tenant + "/users/u1/roles/admin"},
+		{"writer", http.MethodDelete, tenant + "/groups/g1/members/u1"},
+		{"writer", http.MethodDelete, "/api/v1/iam/users/u1/roles/admin?tenant_id=" + iamRESTTenantA},
+		{"writer", http.MethodDelete, "/api/v1/iam/groups/g1/members/u1?tenant_id=" + iamRESTTenantA},
+	}
+	s := iamRESTServer(t)
+	for _, tc := range cases {
+		t.Run(tc.token+" "+tc.method+" "+tc.path, func(t *testing.T) {
+			recorder := serveIAM(s, tc.method, tc.path, tc.token)
+			assert.Equal(t, http.StatusNotFound, recorder.Code)
+			assert.Equal(t, "404 page not found\n", recorder.Body.String())
+		})
+	}
+}
+
 // The mTLS operator's *:* scope admits every method on every route.
 func TestIAMREST_OperatorPassesEveryMethod(t *testing.T) {
 	s := iamRESTServer(t)
