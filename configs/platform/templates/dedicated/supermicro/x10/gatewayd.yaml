@@ -25,7 +25,7 @@
 
 gateway:
   enabled: true
-  id: gw-01-gateway
+  id: edge-01-gateway
   node-id: 1
   tier: datacenter
 
@@ -293,7 +293,7 @@ sdn:
 control-plane:
   enabled: true
   base-url: https://cp.example.internal:8443
-  gateway-id: gw-01-gateway
+  gateway-id: edge-01-gateway
   interval: 30s
   reconcile-interval: 60s
   cert-file: /etc/gatewayd/client.pem

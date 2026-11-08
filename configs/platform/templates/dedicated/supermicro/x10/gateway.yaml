@@ -438,7 +438,7 @@ trust:
 # =============================================================================
 
 bmc:
-  address: 10.4.2.22  # management (VLAN 402) carries BMCs only
+  address: 198.51.100.150  # management (VLAN 402) carries BMCs only
   port: 623
   username: admin
   password: "kms://bmc/password?ensure=true&len=16&enc=base64"
@@ -565,7 +565,7 @@ tpm:
     signature-algorithm: SHA256-RSA
   idevid:
     model: SuperMicro X10
-    serial: sm-gw-01
+    serial: sm-edge-01
     cert-handle: 0x01C90000
     debug: true
     handle: 0x81020000
