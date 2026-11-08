@@ -16,11 +16,15 @@ package v1
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/gorilla/mux"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
+	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -93,6 +97,49 @@ func TestRegisterRoutes_DaemonRoutesRequireVerifiedClientCert(t *testing.T) {
 			assert.Equal(t, tt.want, getWithTLS(root, fakeDaemonPath, tt.state))
 		})
 	}
+}
+
+// proxyDaemonRoutes mounts GET /proxy/routes behind the daemon's own scope
+// guard, as the daemon does, so a replayed request must satisfy it.
+type proxyDaemonRoutes struct {
+	roots  *x509.CertPool
+	guard  *restapi.ScopeGuard
+	served *platformtoken.AuthorizedContext
+}
+
+func (d *proxyDaemonRoutes) ClientCAs() *x509.CertPool { return d.roots }
+
+func (d *proxyDaemonRoutes) MountRESTRoutes(r *mux.Router) error {
+	r.HandleFunc("/proxy/routes", d.guard.RequireCaller(proxyReadScope,
+		func(w http.ResponseWriter, _ *http.Request, caller *platformtoken.AuthorizedContext) {
+			d.served = caller
+			w.WriteHeader(http.StatusOK)
+		})).Methods(http.MethodGet)
+	return nil
+}
+
+// A console admin session (the legacy JWT, which carries no platform token)
+// passes the operator gate and must then pass the daemon's scope guard as
+// that session, not by re-reading the bearer: the guard has no token
+// authorizer, so a re-read bearer would be refused 401.
+func TestMountDaemonRESTRoutes_OperatorRouteReplaysTheSessionCaller(t *testing.T) {
+	platform := testutil.GenerateTestTLSBundle(t)
+	daemon := &proxyDaemonRoutes{roots: platform.CAPool, guard: restapi.NewScopeGuard(nil, nil, slog.Default())}
+	v1Router := newGatedV1Router(t, &testHandlerRegistry{tokenHandler: &sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "system"}})
+	root := mux.NewRouter()
+	api := root.PathPrefix("/api/v1").Subrouter()
+	require.NoError(t, MountDaemonRESTRoutes(api, daemon, v1Router.responseWriter, v1Router.daemonRouteAuthorizer(), v1Router.daemonCallerAuthenticator()))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/proxy/routes", nil)
+	req.Header.Set("Authorization", "Bearer console-admin")
+	req.TLS = verifiedClientState(t, platform)
+	rec := httptest.NewRecorder()
+	root.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.NotNil(t, daemon.served)
+	assert.Equal(t, []string{proxyReadScope}, daemon.served.Scopes, "the caller holds only the scope the operator gate authorized")
+	assert.Contains(t, daemon.served.Roles, common.ROLE_ADMIN)
 }
 
 // verifiedClientState is the connection state a webservice handshake
