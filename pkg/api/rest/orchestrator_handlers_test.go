@@ -107,6 +107,39 @@ func TestOrchestratorQueryCannotOverridePathTenant(t *testing.T) {
 	}
 }
 
+// TestOrchestratorSessionRoutesServeOnlyTheSystemTenant: the session RPCs
+// carry no tenant, and the embedded orchestrator lists every tenant's
+// sessions for a caller it cannot place in a tenant, so a tenant caller
+// holding the orchestrator scopes is refused before the service.
+func TestOrchestratorSessionRoutesServeOnlyTheSystemTenant(t *testing.T) {
+	for _, call := range orchestratorRouteCalls {
+		if !strings.Contains(call.target, "/sessions") {
+			continue
+		}
+		t.Run(call.method+" "+call.target, func(t *testing.T) {
+			acme := &orchestratorRecordingServer{}
+			rec := serveOrchestrator(orchestratorRouter(acme), call.method, call.target)
+			if rec.Code != http.StatusForbidden || acme.got != nil {
+				t.Fatalf("tenant caller: status = %d, RPC called = %v; want 403 before the RPC", rec.Code, acme.got != nil)
+			}
+
+			system := &orchestratorRecordingServer{}
+			if rec := serveOrchestrator(systemOrchestratorRouter(system), call.method, call.target); rec.Code != http.StatusOK || system.got == nil {
+				t.Fatalf("system tenant: status = %d (%s), RPC called = %v; want 200 from the RPC", rec.Code, rec.Body, system.got != nil)
+			}
+		})
+	}
+}
+
+// systemOrchestratorRouter mounts the orchestrator routes for a caller in
+// the system tenant.
+func systemOrchestratorRouter(server platformv1.OrchestratorServiceServer) *mux.Router {
+	router := mux.NewRouter()
+	guard := NewScopeGuard(tenantOperatorAuthorizer{tenantID: "system"}, nil, nil)
+	NewOrchestratorHandlers(server, guard, "system", nil).RegisterRoutes(router)
+	return router
+}
+
 func serveOrchestrator(router http.Handler, method, target string) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, operatorRequest(method, target, http.NoBody))
@@ -251,8 +284,7 @@ func (s *orchestratorRecordingServer) CancelJob(_ context.Context, req *platform
 	return orchestratorAnswer(s, req, &platformv1.CancelOrchestratorJobResponse{})
 }
 
-// orchestratorRouteCalls is every orchestrator route, called for tenant
-// acme, with the RPC request it must bind from the path.
+// orchestratorRouteCalls is every orchestrator route, called by a\n// system-tenant caller for tenant acme, with the RPC request it must bind from the path.
 var orchestratorRouteCalls = []struct {
 	method string
 	target string
@@ -274,7 +306,7 @@ func TestOrchestratorEveryRouteServesItsRPC(t *testing.T) {
 	for _, call := range orchestratorRouteCalls {
 		t.Run(call.method+" "+call.target, func(t *testing.T) {
 			server := &orchestratorRecordingServer{}
-			rec := serveOrchestrator(orchestratorRouter(server), call.method, call.target)
+			rec := serveOrchestrator(systemOrchestratorRouter(server), call.method, call.target)
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status = %d (%s), want 200", rec.Code, rec.Body)
 			}
@@ -289,7 +321,7 @@ func TestOrchestratorEveryRouteMapsTheServiceError(t *testing.T) {
 	for _, call := range orchestratorRouteCalls {
 		t.Run(call.method+" "+call.target, func(t *testing.T) {
 			server := &orchestratorRecordingServer{err: status.Error(codes.NotFound, "no such orchestrator object")}
-			rec := serveOrchestrator(orchestratorRouter(server), call.method, call.target)
+			rec := serveOrchestrator(systemOrchestratorRouter(server), call.method, call.target)
 			if rec.Code != http.StatusNotFound {
 				t.Fatalf("status = %d (%s), want 404", rec.Code, rec.Body)
 			}
