@@ -170,6 +170,11 @@ env:
   # Gitea tags (conventions/dependency-resolution.md §2).
   GOWORK: "off"
   GOFLAGS: "-buildvcs=false"
+  # The jeremyhahn/* modules resolve direct from GitHub, never through
+  # proxy.golang.org or sum.golang.org: the history rewrite moved published
+  # tags, and the public proxy and checksum database keep the old zips
+  # and hashes for good, so go.sum (the rewritten bits) cannot verify there.
+  GOPRIVATE: "github.com/jeremyhahn/*"
 
 jobs:
   # The same job runs in ci.yml on push to main. Its definition — tags,
