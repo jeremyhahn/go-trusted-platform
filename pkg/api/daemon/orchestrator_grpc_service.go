@@ -124,8 +124,8 @@ type tenantScopedRequest interface {
 // the one REST applies too: the system tenant may name any tenant, any other
 // caller its own tenant only, and a request naming another tenant is refused
 // with codes.PermissionDenied, as authorizeIAMTenant does for IAM. A caller with
-// no tenant-bound identity (the Unix-socket operator, the in-process
-// webservice, which applies its own tenant rule) is admitted, as
+// no tenant-bound identity (the Unix-socket operator, or a REST tenant route,
+// which applies the same rule itself and forwards no caller) is admitted, as
 // callerTenant documents.
 func (s *OrchestratorGRPCService) authorizeTenant(ctx context.Context, req any) error {
 	scoped, ok := req.(tenantScopedRequest)

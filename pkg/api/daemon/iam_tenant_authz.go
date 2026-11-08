@@ -6,6 +6,7 @@ import (
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 
 	"google.golang.org/grpc/codes"
@@ -14,12 +15,16 @@ import (
 
 // callerTenant reports the tenant the authenticated caller is bound to. The
 // second result is false when the caller carries no tenant-bound identity:
-// the Unix-socket operator, authenticated by peer credentials, and a daemon
-// run with SkipIAMValidation.
+// the Unix-socket operator, authenticated by peer credentials, a daemon run
+// with SkipIAMValidation, and an in-process REST route that forwards no
+// caller.
 //
 // The sources mirror the REST session: a validated platform token (gRPC,
 // QUIC or MCP) carries its tenant_id claim, and an mTLS client certificate carries
-// the tenant the certificate authenticator extracted from it.
+// the tenant the certificate authenticator extracted from it. A REST route
+// that verified its caller and calls the service in-process publishes that
+// caller with rest.WithCaller; it counts only when no transport identity is
+// bound.
 func callerTenant(ctx context.Context) (string, bool) {
 	if authCtx, ok := grpcapi.AuthorizedContextFromContext(ctx); ok && authCtx != nil {
 		return authCtx.TenantID, true
@@ -32,6 +37,9 @@ func callerTenant(ctx context.Context) (string, bool) {
 	}
 	if identity := IdentityFromContext(ctx); identity != nil {
 		return identity.TenantID, true
+	}
+	if caller, ok := rest.CallerFromContext(ctx); ok {
+		return caller.TenantID, true
 	}
 	return "", false
 }

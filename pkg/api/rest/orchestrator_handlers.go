@@ -165,14 +165,15 @@ func (h *OrchestratorHandlers) ownTenantOrSystem(next http.HandlerFunc) CallerHa
 // systemOnly runs next only for a caller in the system tenant. The SDK
 // cannot carry the caller's tenant into the embedded orchestrator, which
 // serves every tenant's sessions to a request without one, so any other
-// caller, or none, is refused.
+// caller, or none, is refused. next receives the caller in its context
+// (WithCaller), so the shared service's own system-tenant check sees it.
 func (h *OrchestratorHandlers) systemOnly(next http.HandlerFunc) CallerHandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request, caller *platformtoken.AuthorizedContext) {
 		if caller == nil || !tenant.IsSystemTenant(h.systemTenantID, caller.TenantID) {
 			h.writeError(w, http.StatusForbidden, errOrchestratorSystemOnly)
 			return
 		}
-		next(w, r)
+		next(w, r.WithContext(WithCaller(r.Context(), caller)))
 	}
 }
 

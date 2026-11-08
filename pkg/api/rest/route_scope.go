@@ -221,7 +221,14 @@ func WithCaller(ctx context.Context, caller *platformtoken.AuthorizedContext) co
 // transport's client certificate belongs to the front end, not the caller,
 // so no check may fall back to it.
 func replayedCaller(r *http.Request) (*platformtoken.AuthorizedContext, bool) {
-	caller, ok := r.Context().Value(callerContextKey{}).(*platformtoken.AuthorizedContext)
+	return CallerFromContext(r.Context())
+}
+
+// CallerFromContext returns the principal WithCaller put in ctx, so an
+// in-process service a REST route calls can apply its own rule to the
+// caller the route already verified.
+func CallerFromContext(ctx context.Context) (*platformtoken.AuthorizedContext, bool) {
+	caller, ok := ctx.Value(callerContextKey{}).(*platformtoken.AuthorizedContext)
 	return caller, ok && caller != nil
 }
 
