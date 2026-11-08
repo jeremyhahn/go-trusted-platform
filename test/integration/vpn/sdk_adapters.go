@@ -39,8 +39,12 @@ type SDKAdapter struct {
 	name     string
 	endpoint string
 	options  func() *platform.Options
-	client   platform.Client
-	vpn      *sdkvpn.Client
+	// bearer, when set, supplies the bearer the transport presents: the
+	// REST adapter reaches the admin-gated webservice routes with the
+	// harness admin session's bearer.
+	bearer func(ctx context.Context) (string, error)
+	client platform.Client
+	vpn    *sdkvpn.Client
 }
 
 // NewGRPCAdapter drives the VPN service over TLS gRPC.
@@ -72,6 +76,7 @@ func NewRESTAdapter() *SDKAdapter {
 				platform.WithTLSConfig(helpers.TLSConfigOrInsecure()),
 			)
 		},
+		bearer: helpers.HarnessAdminSession().Bearer,
 	}
 }
 
@@ -127,7 +132,15 @@ func (a *SDKAdapter) Name() string { return a.name }
 
 // Setup connects the platform SDK client over the selected transport.
 func (a *SDKAdapter) Setup(ctx context.Context) error {
-	client, err := platform.Connect(ctx, a.options())
+	options := a.options()
+	if a.bearer != nil {
+		token, err := a.bearer(ctx)
+		if err != nil {
+			return ErrConnectionFailed{Protocol: a.name, Endpoint: a.endpoint, Err: err}
+		}
+		options.BearerToken = token
+	}
+	client, err := platform.Connect(ctx, options)
 	if err != nil {
 		return ErrConnectionFailed{Protocol: a.name, Endpoint: a.endpoint, Err: err}
 	}
