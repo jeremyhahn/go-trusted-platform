@@ -122,16 +122,23 @@ func (s *fakeDHCPServer) serve() {
 }
 
 // plainPacketConn hides the *net.UDPConn from the TFTP server. Given a
-// UDPConn, pin/tftp reads each request's control message and calls
-// net.InterfaceByIndex, a netlink dump of every link that waits on the
+// UDPConn, pin/tftp v3.1.0 server.go Serve turns on control messages
+// (214-226) and server.go processRequest4 calls net.InterfaceByIndex for
+// each request (272), a netlink dump of every link that waits on the
 // kernel's RTNL lock; on a CI host busy creating and removing containers
-// that wait outlasts the client's retry budget (#1174). Without it the
-// server answers from the address the kernel routes to the client.
+// that wait outlasts the client's retry budget (#1174). Without it Serve
+// reads through server.go processRequest (299), which looks up no
+// interface, and the server answers from the address the kernel routes to
+// the client.
 type plainPacketConn struct {
 	net.PacketConn
 }
 
 // tftpTree serves dir on a loopback TFTP server and returns its port.
+// Cleanup requires Serve to return nil after Shutdown: pin/tftp v3.1.0
+// server.go Shutdown closes the conn then cancels, and Serve's loop
+// returns nil on the cancel (see
+// TestTFTPTree_PlainPacketConnServesAndShutsDownCleanly).
 func tftpTree(t *testing.T, dir string) int {
 	t.Helper()
 	srv := tftp.NewServer(func(filename string, rf io.ReaderFrom) error {
@@ -156,8 +163,16 @@ func tftpTree(t *testing.T, dir string) int {
 	return conn.LocalAddr().(*net.UDPAddr).Port
 }
 
-// Server.Serve reads a PacketConn that is not a *net.UDPConn through processRequest,
-// and Server.Shutdown closes the conn and cancels, so Serve's loop returns nil.
+// The pin/tftp v3.1.0 contracts the plainPacketConn harness relies on:
+//   - server.go Serve (198) wraps conn in an ipv4/ipv6 control-message
+//     PacketConn only when it is a *net.UDPConn (214-226); any other
+//     PacketConn reads through server.go processRequest (243, 299), which
+//     calls conn.ReadFrom and handlePacket (328) with a nil local IP and
+//     calls no interface lookup and no control-message API.
+//   - server.go Shutdown (312) closes the conn (318), then cancels (322).
+//     processRequest's ReadFrom error (303) only reaches the hook (245) and
+//     Serve's loop returns nil once it sees the cancel (233-235), so Serve
+//     returns nil, never "use of closed network connection".
 func TestTFTPTree_PlainPacketConnServesAndShutsDownCleanly(t *testing.T) {
 	dir := stageTree(t)
 	srv := tftp.NewServer(func(filename string, rf io.ReaderFrom) error {
