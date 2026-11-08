@@ -16,8 +16,8 @@ ca-dir: /tmp/platformd-integration/ca
 # (pkg/app/app.go AdminEmail). The webservice registry builds the
 # /api/v1/admin/claim routes only when it is set, and the admin session the
 # REST adapters open starts there (docs/test/integration.md, "Admin session").
-# The address is in the harness DNS zone below; IAM requires a dotted domain.
-admin-email: admin@integration.internal
+# The address is in the reserved example.test domain; IAM requires a dotted domain.
+admin-email: admin@example.test
 
 # Domain for test certificates
 domain: localhost
