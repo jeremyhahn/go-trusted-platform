@@ -106,7 +106,7 @@ func TestCoverage964c_IssueWebServiceCertificate(t *testing.T) {
 		refused := errCARefused{op: "csr"}
 		ca := &faultingCA{CACertificateAuthority: realCA, csrErr: refused}
 		a.CA = ca
-		a.Hostmaster = "hostmaster@coverage.internal"
+		a.Hostmaster = "hostmaster@example.test"
 		a.ACMEClient = &trustedca.ACMEClient{}
 		a.ACMEConfig = &trustedca.ACMEConfig{Client: &trustedca.ACMEClientYAMLConfig{DirectoryURL: "https://acme.example/directory"}}
 		t.Cleanup(func() { a.ACMEClient, a.ACMEConfig = nil, nil })
@@ -120,7 +120,7 @@ func TestCoverage964c_IssueWebServiceCertificate(t *testing.T) {
 		req := ca.csrRequests[0]
 		assert.Equal(t, "public.coverage.internal", req.Subject.CommonName)
 		assert.Equal(t, []string{"public.coverage.internal"}, req.SANS.DNS)
-		assert.Equal(t, []string{"hostmaster@coverage.internal"}, req.SANS.Email)
+		assert.Equal(t, []string{"hostmaster@example.test"}, req.SANS.Email)
 		assert.Zero(t, ca.issued, "the public ACME path never issues from the local CA")
 	})
 
