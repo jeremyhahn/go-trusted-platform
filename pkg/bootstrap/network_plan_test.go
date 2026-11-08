@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 
@@ -100,8 +101,14 @@ func TestNetworkPlan_Errors(t *testing.T) {
 		t.Fatalf("ErrSwitchPortClass must name the port and wrap the cause: %v", classErr)
 	}
 
+	// An override may only name a declared zone, so omitting management
+	// drops its override too.
+	noMgmtEnv := testEnvironment()
+	noMgmtEnv.Overrides = slices.DeleteFunc(noMgmtEnv.Overrides, func(o netplan.Override) bool {
+		return o.Zone == zone.ZoneManagement
+	})
 	noMgmt := &BootstrapConfig{
-		Environment: testEnvironment(),
+		Environment: noMgmtEnv,
 		Zones:       []zone.ZoneConfig{{Name: zone.ZoneManagement, Omit: true}},
 		Switch:      &SwitchConfig{PortAssignments: []PortAssignment{{Port: "Eth1/41", Class: zone.PortClassBMC}}},
 	}
