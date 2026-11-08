@@ -641,7 +641,7 @@ choose_platformd_ports() {
 build_binaries() {
     echo "=== Building platformd and platformctl ==="
 
-    # Detect a Go workspace setup: when /home/jhahn/sources/go.work exists
+    # Detect a Go workspace setup: when /sources/go.work exists
     # the host has mounted a multi-repo go workspace into the container, and
     # the build must run from the in-workspace path of go-trusted-platform
     # so the `use ./go-trusted-platform` directive resolves. Otherwise fall
@@ -649,8 +649,8 @@ build_binaries() {
     # path working unchanged while supporting the cold-start
     # target that needs local source replaces for go-xkms, go-quicbaas etc.
     PLATFORM_BUILD_DIR="/workspace"
-    if [ -f /home/jhahn/sources/go.work ] && [ -d /home/jhahn/sources/go-trusted-platform ]; then
-        PLATFORM_BUILD_DIR="/home/jhahn/sources/go-trusted-platform"
+    if [ -f /sources/go.work ] && [ -d /sources/go-trusted-platform ]; then
+        PLATFORM_BUILD_DIR="/sources/go-trusted-platform"
         export GOTOOLCHAIN="${GOTOOLCHAIN:-auto}"
         echo "Detected go workspace; building from $PLATFORM_BUILD_DIR (GOTOOLCHAIN=$GOTOOLCHAIN)"
     fi

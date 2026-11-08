@@ -332,19 +332,19 @@ func TestListPosturePolicies_ReportsStoreFailures(t *testing.T) {
 func TestStatus_ReadsTheReportedVPNSections(t *testing.T) {
 	svc, _ := newTestService(t)
 	store := &fakeSnapshots{snaps: map[string]*gwstate.Snapshot{
-		"gw-02": {GatewayID: "gw-02"},
-		"gw-01": {GatewayID: "gw-01", ReportedAt: testNow, VPN: &gwstate.VPNState{Running: true, Admissions: 3}},
+		"edge-02": {GatewayID: "edge-02"},
+		"edge-01": {GatewayID: "edge-01", ReportedAt: testNow, VPN: &gwstate.VPNState{Running: true, Admissions: 3}},
 	}}
 	svc.SetGatewaySnapshotStore(store)
 
 	all, err := svc.Status(context.Background(), "")
 	require.NoError(t, err)
 	require.Len(t, all, 2)
-	assert.Equal(t, "gw-01", all[0].GatewayID)
+	assert.Equal(t, "edge-01", all[0].GatewayID)
 	assert.Equal(t, uint64(3), all[0].VPN.Admissions)
 	assert.Nil(t, all[1].VPN, "a gateway without the VPN service reports no section")
 
-	one, err := svc.Status(context.Background(), "gw-01")
+	one, err := svc.Status(context.Background(), "edge-01")
 	require.NoError(t, err)
 	require.Len(t, one, 1)
 	assert.True(t, one[0].VPN.Running)
@@ -360,13 +360,13 @@ func TestStatus_FailsClosed(t *testing.T) {
 
 	store := &fakeSnapshots{snaps: map[string]*gwstate.Snapshot{}}
 	svc.SetGatewaySnapshotStore(store)
-	_, err = svc.Status(ctx, "gw-09")
+	_, err = svc.Status(ctx, "edge-09")
 	var notFound *ErrGatewayNotFound
 	require.True(t, errors.As(err, &notFound), "got %v", err)
 
 	store.err = errors.New("disk")
 	var storeErr *ErrStoreUnavailable
-	_, err = svc.Status(ctx, "gw-09")
+	_, err = svc.Status(ctx, "edge-09")
 	require.True(t, errors.As(err, &storeErr), "got %v", err)
 	_, err = svc.Status(ctx, "")
 	require.True(t, errors.As(err, &storeErr), "got %v", err)
