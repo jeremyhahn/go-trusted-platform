@@ -15,6 +15,7 @@ package rest
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 
@@ -87,15 +88,32 @@ func NewOrchestratorHandlers(orchestrator platformv1.OrchestratorServiceServer, 
 	}
 }
 
+// errOrchestratorSystemOnly refuses a session route to a caller outside
+// the system tenant.
+var errOrchestratorSystemOnly = errors.New("orchestrator: sessions are served to the system tenant only")
+
 // orchestratorRoute is one row of the orchestrator route table. A route
-// whose path names {tenant_id} is tenantScoped.
+// whose path names {tenant_id} is ownTenant; a session route is systemOnly.
 type orchestratorRoute struct {
-	method       string
-	path         string
-	scope        string
-	tenantScoped bool
-	handler      http.HandlerFunc
+	method  string
+	path    string
+	scope   string
+	access  orchestratorAccess
+	handler http.HandlerFunc
 }
+
+// orchestratorAccess is the tenant rule a route applies to its caller.
+type orchestratorAccess int
+
+const (
+	// anyCaller admits every caller holding the route's scope.
+	anyCaller orchestratorAccess = iota
+	// ownTenant admits the caller of the path's tenant, or the system tenant.
+	ownTenant
+	// systemOnly admits only the system tenant: the route carries no
+	// tenant, and the orchestrator cannot be told the caller's.
+	systemOnly
+)
 
 // RegisterRoutes mounts every orchestrator route on a root router, under
 // /api/v1, behind the scope it requires.
@@ -112,8 +130,11 @@ func (h *OrchestratorHandlers) RegisterVersionedRoutes(router *mux.Router) {
 func (h *OrchestratorHandlers) registerUnder(router *mux.Router, prefix string) {
 	for _, route := range h.routes() {
 		handler := h.guard.Require(route.scope, route.handler)
-		if route.tenantScoped {
+		switch route.access {
+		case ownTenant:
 			handler = h.guard.RequireCaller(route.scope, h.ownTenantOrSystem(route.handler))
+		case systemOnly:
+			handler = h.guard.RequireCaller(route.scope, h.systemOnly(route.handler))
 		}
 		router.HandleFunc(prefix+orchestratorPath+route.path, handler).Methods(route.method)
 	}
@@ -141,6 +162,20 @@ func (h *OrchestratorHandlers) ownTenantOrSystem(next http.HandlerFunc) CallerHa
 	}
 }
 
+// systemOnly runs next only for a caller in the system tenant. The SDK
+// cannot carry the caller's tenant into the embedded orchestrator, which
+// serves every tenant's sessions to a request without one, so any other
+// caller, or none, is refused.
+func (h *OrchestratorHandlers) systemOnly(next http.HandlerFunc) CallerHandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request, caller *platformtoken.AuthorizedContext) {
+		if caller == nil || !tenant.IsSystemTenant(h.systemTenantID, caller.TenantID) {
+			h.writeError(w, http.StatusForbidden, errOrchestratorSystemOnly)
+			return
+		}
+		next(w, r)
+	}
+}
+
 // routes is the orchestrator route table. Path variables are named after
 // the request field they set; list filters and paging travel in the query
 // (?status=, ?statuses=a&statuses=b, ?page.limit=, ?page.offset=).
@@ -148,16 +183,16 @@ func (h *OrchestratorHandlers) routes() []orchestratorRoute {
 	const agents = "/tenants/{tenant_id}/agents"
 	const jobs = "/tenants/{tenant_id}/jobs"
 	return []orchestratorRoute{
-		{http.MethodGet, "/health", scopeOrchestratorRead, false, orchestratorRPC(h, platformv1.OrchestratorServiceServer.Health)},
-		{http.MethodGet, agents, scopeOrchestratorRead, true, orchestratorRPC(h, platformv1.OrchestratorServiceServer.ListAgents)},
-		{http.MethodGet, agents + "/{agent_id}", scopeOrchestratorRead, true, orchestratorRPC(h, platformv1.OrchestratorServiceServer.GetAgent)},
-		{http.MethodPost, agents + "/{agent_id}/disable", scopeOrchestratorWrite, true, orchestratorRPC(h, platformv1.OrchestratorServiceServer.DisableAgent)},
-		{http.MethodPost, agents + "/{agent_id}/enable", scopeOrchestratorWrite, true, orchestratorRPC(h, platformv1.OrchestratorServiceServer.EnableAgent)},
-		{http.MethodGet, "/sessions", scopeOrchestratorRead, false, orchestratorRPC(h, platformv1.OrchestratorServiceServer.ListSessions)},
-		{http.MethodDelete, "/sessions/{session_id}", scopeOrchestratorWrite, false, orchestratorRPC(h, platformv1.OrchestratorServiceServer.CloseSession)},
-		{http.MethodGet, jobs, scopeOrchestratorRead, true, orchestratorRPC(h, platformv1.OrchestratorServiceServer.ListJobs)},
-		{http.MethodGet, jobs + "/{job_id}", scopeOrchestratorRead, true, orchestratorRPC(h, platformv1.OrchestratorServiceServer.GetJob)},
-		{http.MethodPost, jobs + "/{job_id}/cancel", scopeOrchestratorWrite, true, orchestratorRPC(h, platformv1.OrchestratorServiceServer.CancelJob)},
+		{http.MethodGet, "/health", scopeOrchestratorRead, anyCaller, orchestratorRPC(h, platformv1.OrchestratorServiceServer.Health)},
+		{http.MethodGet, agents, scopeOrchestratorRead, ownTenant, orchestratorRPC(h, platformv1.OrchestratorServiceServer.ListAgents)},
+		{http.MethodGet, agents + "/{agent_id}", scopeOrchestratorRead, ownTenant, orchestratorRPC(h, platformv1.OrchestratorServiceServer.GetAgent)},
+		{http.MethodPost, agents + "/{agent_id}/disable", scopeOrchestratorWrite, ownTenant, orchestratorRPC(h, platformv1.OrchestratorServiceServer.DisableAgent)},
+		{http.MethodPost, agents + "/{agent_id}/enable", scopeOrchestratorWrite, ownTenant, orchestratorRPC(h, platformv1.OrchestratorServiceServer.EnableAgent)},
+		{http.MethodGet, "/sessions", scopeOrchestratorRead, systemOnly, orchestratorRPC(h, platformv1.OrchestratorServiceServer.ListSessions)},
+		{http.MethodDelete, "/sessions/{session_id}", scopeOrchestratorWrite, systemOnly, orchestratorRPC(h, platformv1.OrchestratorServiceServer.CloseSession)},
+		{http.MethodGet, jobs, scopeOrchestratorRead, ownTenant, orchestratorRPC(h, platformv1.OrchestratorServiceServer.ListJobs)},
+		{http.MethodGet, jobs + "/{job_id}", scopeOrchestratorRead, ownTenant, orchestratorRPC(h, platformv1.OrchestratorServiceServer.GetJob)},
+		{http.MethodPost, jobs + "/{job_id}/cancel", scopeOrchestratorWrite, ownTenant, orchestratorRPC(h, platformv1.OrchestratorServiceServer.CancelJob)},
 	}
 }
 
