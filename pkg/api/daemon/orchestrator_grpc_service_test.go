@@ -48,6 +48,14 @@ func (c *orchestratorTestClient) CancelJob(_ context.Context, req *sdkorch.Cance
 	return &sdkorch.CancelJobResponse{JobID: req.JobID, Cancelled: true}, nil
 }
 
+func (c *orchestratorTestClient) ListSessions(_ context.Context, _ *sdkorch.ListSessionsRequest) (*sdkorch.ListSessionsResponse, error) {
+	return &sdkorch.ListSessionsResponse{Sessions: []*sdkorch.SessionStatusResponse{{SessionID: "s1", Status: "active"}}}, nil
+}
+
+func (c *orchestratorTestClient) CloseSession(_ context.Context, req *sdkorch.CloseSessionRequest) (*sdkorch.CloseSessionResponse, error) {
+	return &sdkorch.CloseSessionResponse{SessionID: req.SessionID, Closed: true}, nil
+}
+
 func orchestratorGRPCOver(client sdkorch.Client) *OrchestratorGRPCService {
 	return NewOrchestratorGRPCService(orchestrator.NewService(func() sdkorch.Client { return client }))
 }
@@ -104,6 +112,47 @@ func TestOrchestratorGRPC_TenantRule(t *testing.T) {
 
 	if err := svc.authorizeTenant(tokenCallerContext("t2"), &platformv1.OrchestratorHealthRequest{}); err != nil {
 		t.Fatalf("Health names no tenant and must pass: %v", err)
+	}
+}
+
+// The SDK cannot carry the caller's tenant into the embedded orchestrator,
+// which lists every tenant's sessions, so the session RPCs serve only the
+// system tenant.
+func TestOrchestratorGRPC_SessionsServeOnlySystemTenant(t *testing.T) {
+	svc := orchestratorGRPCOver(&orchestratorTestClient{})
+	svc.SetSystemTenant("sys")
+	listReq := &platformv1.ListOrchestratorSessionsRequest{}
+	closeReq := &platformv1.CloseOrchestratorSessionRequest{SessionId: "s1"}
+
+	refused := map[string]context.Context{
+		"tenant caller":  tokenCallerContext("t1"),
+		"unbound caller": context.Background(),
+	}
+	for name, ctx := range refused {
+		t.Run(name, func(t *testing.T) {
+			if _, err := svc.ListSessions(ctx, listReq); status.Code(err) != codes.PermissionDenied {
+				t.Fatalf("ListSessions: code = %v (%v), want PermissionDenied", status.Code(err), err)
+			}
+			if _, err := svc.CloseSession(ctx, closeReq); status.Code(err) != codes.PermissionDenied {
+				t.Fatalf("CloseSession: code = %v (%v), want PermissionDenied", status.Code(err), err)
+			}
+		})
+	}
+
+	sys := tokenCallerContext("sys")
+	list, err := svc.ListSessions(sys, listReq)
+	if err != nil {
+		t.Fatalf("system ListSessions: %v", err)
+	}
+	if len(list.GetSessions()) != 1 || list.GetSessions()[0].GetSessionId() != "s1" {
+		t.Fatalf("system ListSessions = %v, want session s1", list.GetSessions())
+	}
+	closed, err := svc.CloseSession(sys, closeReq)
+	if err != nil {
+		t.Fatalf("system CloseSession: %v", err)
+	}
+	if !closed.GetClosed() || closed.GetSessionId() != "s1" {
+		t.Fatalf("system CloseSession = %v, want s1 closed", closed)
 	}
 }
 
