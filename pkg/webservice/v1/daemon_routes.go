@@ -701,11 +701,20 @@ func (v1Router *Router) daemonRouteAuthorizer() DaemonRouteAuthorizer {
 	scoped, checksScopes := v1Router.authMiddleware().(middleware.ScopeAuthorizer)
 	return func(scope string) func(http.Handler) http.Handler {
 		if scope == "" || !checksScopes {
-			return operator
+			// No scope check here: the admin session this gate admits is
+			// granted the route's scope, and only that one, so the
+			// daemon's own scope check still runs on it.
+			var granted []string
+			if scope != "" {
+				granted = []string{scope}
+			}
+			return func(next http.Handler) http.Handler {
+				return operator(v1Router.publishSessionCaller(granted, next))
+			}
 		}
 		requireScope := scoped.RequireScope(scope)
 		return func(next http.Handler) http.Handler {
-			return operator(requireScope(next))
+			return operator(requireScope(v1Router.publishSessionCaller(nil, next)))
 		}
 	}
 }
@@ -720,28 +729,38 @@ func (v1Router *Router) daemonCallerAuthenticator() DaemonCallerAuthenticator {
 		return DaemonCallerAuthenticator(v1Router.denyAll(err))
 	}
 	return func(next http.Handler) http.Handler {
-		return authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			session, ok := iammw.GetSessionFromContext(r.Context())
-			if !ok {
-				v1Router.responseWriter.Error401(w, r, ErrDaemonRouteNoSession{})
-				return
-			}
-			caller := &platformtoken.AuthorizedContext{
-				Subject:  session.UserID(),
-				TenantID: session.TenantID(),
-				Roles:    session.Roles(),
-			}
-			if user := session.User(); user != nil {
-				caller.Username = user.Username
-			}
-			// Scopes come only from the platform token that authenticated
-			// the session. A session without one holds none, so a scoped
-			// daemon handler refuses it; it never borrows the operator
-			// scope of the transport's client certificate.
-			if authCtx, scoped := iammw.AuthorizedContextFromContext(r.Context()); scoped && authCtx != nil {
-				caller.Scopes = authCtx.Scopes
-			}
-			next.ServeHTTP(w, r.WithContext(restapi.WithCaller(r.Context(), caller)))
-		}))
+		return authenticate(v1Router.publishSessionCaller(nil, next))
 	}
+}
+
+// publishSessionCaller serves next with the authenticated session published
+// as the replayed daemon caller, so the daemon's scope guard decides on the
+// session and never re-reads the request's credential.
+//
+// Scopes come only from the platform token that authenticated the session.
+// A session without one holds none, so a scoped daemon handler refuses it;
+// it never borrows the operator scope of the transport's client
+// certificate. granted is the exception: the scopes an operator gate has
+// already authorized for this route on a session that carries no token.
+func (v1Router *Router) publishSessionCaller(granted []string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		session, ok := iammw.GetSessionFromContext(r.Context())
+		if !ok {
+			v1Router.responseWriter.Error401(w, r, ErrDaemonRouteNoSession{})
+			return
+		}
+		caller := &platformtoken.AuthorizedContext{
+			Subject:  session.UserID(),
+			TenantID: session.TenantID(),
+			Roles:    session.Roles(),
+			Scopes:   granted,
+		}
+		if user := session.User(); user != nil {
+			caller.Username = user.Username
+		}
+		if authCtx, scoped := iammw.AuthorizedContextFromContext(r.Context()); scoped && authCtx != nil {
+			caller.Scopes = authCtx.Scopes
+		}
+		next.ServeHTTP(w, r.WithContext(restapi.WithCaller(r.Context(), caller)))
+	})
 }
