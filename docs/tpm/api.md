@@ -1,6 +1,6 @@
 # Physical TPM 2.0 — API
 
-> **Status: NORMATIVE** · Scope: TPM and device-identity routes on every transport · Last verified: 2026-10-16
+> **Status: NORMATIVE** · Scope: TPM and device-identity routes on every transport · Last verified: 2026-10-27
 > Conflicts with this document are defects. Fix them here first.
 > One row per capability across all six transports. A transport that does not
 > carry a capability is written `MISSING — docs/13 G7`, never omitted.
@@ -269,8 +269,9 @@ so Unix, embedded and both REST servers), QUIC `0x12` and MCP
 `platform_tpm_pcr_extend` all call `tpmpcr.Extend`: the index must be 0–23
 and the data non-empty (both `InvalidArgument`, and the TPM is not touched),
 and the bank defaults to `sha256`. The request is `index`, `hash_alg` and
-`data` (`ExtendPCRRequest`; `hashAlg` in the REST body, `hash_alg` in the MCP
-arguments and in `TPM2ExtendPCRRequest` on QUIC); a successful extend
+`data` (`ExtendPCRRequest`; `hashAlg` in the REST body, `pcr_index`,
+`hash_alg` and base64 `data` in the MCP arguments, and `hash_alg` in
+`TPM2ExtendPCRRequest` on QUIC); a successful extend
 answers `success: true` with `PCR <index> extended` (`tpmpcr.ExtendedMessage`)
 on every transport — gRPC's `status`, QUIC's `TPM2StatusResponse` and the MCP
 result's `success` / `message`.
@@ -480,7 +481,7 @@ way to reach it is HTTP.
 service's route above** (`sdk/go/transport/rest/adapter.go`; `CreateLDevID` in
 `ldevid.go`) except `DeleteIDevID` and `DeleteIAK`, which go to the daemon
 listener's `DELETE /api/v1/tpm/idevid` / `/api/v1/tpm/iak` so the refusal
-below arrives as `412` and keeps its class. For every other RPC, `platformv1.NewIDevIDServiceClient` over
+below arrives as `409` and keeps its class. For every other RPC, `platformv1.NewIDevIDServiceClient` over
 REST reaches the same
 handlers a browser does (`TestSDKREST_*`,
 `pkg/webservice/v1/rest/idevid/ldevid_test.go`). Until #452 the table named
@@ -504,11 +505,12 @@ which evicts nothing from a persistent handle, and reported success. Both REST s
 paths: the daemon listener and the web service, which also keeps its own
 `DELETE /api/v1/idevid` / `DELETE /api/v1/idevid/iak` on the same handlers,
 behind the admin role gate. On the wire the class is QUIC status `0x0C`
-(`StatusFailedPrecondition`) and HTTP `412` on both REST servers: the daemon
-listener's IDevID-family mapping, shared with LDevID, and on the web service
-the identity-delete handlers' own mapping (`protorest.WriteIdentityDeleteError`),
-because `protorest`'s shared `400` (#665) reaches the SDK as `InvalidArgument`,
-not the refusal. The SDK returns
+(`StatusFailedPrecondition`) and HTTP `409` on both REST servers, the
+platform's status for `FailedPrecondition` (#665): the daemon listener's
+IDevID-family mapping, shared with LDevID, and on the web service `protorest`'s
+shared mapping. The SDK's REST transport reads a `409` on a `DELETE` back as
+`FailedPrecondition` (a delete cannot collide with an existing resource) and on
+any other method as `AlreadyExists`, so the refusal keeps its class. The SDK returns
 `*idevid.ErrIdentityKeyNotDeletable`, and `platformctl tpm idevid delete` /
 `platformctl tpm iak delete` exit `1` with the refusal.
 
@@ -516,7 +518,7 @@ The certificate deletes (Delete IDevID Certificate, Delete IAK Certificate)
 are real on every transport and answer in gRPC's classes (#704): daemon REST
 `DELETE /api/v1/tpm/idevid/cert` / `DELETE /api/v1/tpm/iak/cert` and QUIC
 `0x7A` / `0x7B` call the shared IDevID service, as gRPC, Unix and MCP do. No
-TPM is `FailedPrecondition` (QUIC `0x0C`, HTTP `412` on both REST servers), a
+TPM is `FailedPrecondition` (QUIC `0x0C`, HTTP `409` on both REST servers), a
 missing certificate `NotFound` (`404`), a bad NV index `InvalidArgument`
 (`400`) and any other TPM failure `Internal` (`500`); with no IDevID service
 wired the daemon REST and QUIC handlers answer `Unavailable` (`503`). Until
@@ -548,7 +550,7 @@ catalogs are default-deny** ([`docs/daemon/api.md`](../daemon/api.md) §5).
 | QUIC `0x99` category | **every sub-opcode scoped** in `pkg/api/quic/opcode_permissions.go`, which is fail-closed: `tpm:read` for the observers plus `Quote`, `VerifyQuote`, `Certify`, `Unseal`, `MakeCred` and the NV reads; `tpm:write` for `Provision`, the `Create*` calls, `ImportEKCert`, `ExtendPCR`, `Seal`, `NVWrite`, the IDevID CSR and `ActivateCred`; `tpm:delete` for `Clear`, the `Delete*` calls and `NVDelete`. The exception is `LDevIDCSR` (`0x1D`): the daemon serves it with `IDevIDService.CreateLDevID`, so it takes `idevid:write` |
 | QUIC device-identity opcodes | **scoped** with their gRPC `IDevIDService` twins' scopes (#304): `idevid:read` for info, has, get-cert and device attributes; `idevid:write` for generate, CSR, install-cert and activate-credential; `idevid:delete` for the deletes. One `idevid:*` grant covers the same operation on gRPC, QUIC and MCP |
 | REST — web service | route-level middleware only; no per-operation TPM scope (below) |
-| REST — daemon listener, `TPMHandlers` | **every route scoped** in `TPMHandlers.routes` (`pkg/api/rest/tpm_handlers.go`), on the gRPC tiers: `tpm:read` for the `GET` routes plus `POST pcrs`, `quote`, `quote/verify`, `certify`, `make-credential`, `random` and `unseal`; `tpm:write` for `provision`, `POST ek`, `POST ek/certificate`, `POST srk`, `POST ak`, `POST`/`PUT nvram`, `seal` and `activate-credential`; `tpm:delete` for `clear` and every `DELETE` (`ek`, `srk`, `ak`, `nvram`, with or without the path parameter). Each route goes through the listener's shared `ScopeGuard` (`pkg/api/rest/route_scope.go`), as every other daemon REST route does: a bearer platform token must grant the route's scope, and without one a verified operator client certificate (`*:*`) is accepted. No credential or a rejected token is `401` (`ErrRouteUnauthenticated`); a token without the scope, or no guard, is `403` (`ErrRouteForbidden`) |
+| REST — daemon listener, `TPMHandlers` | **every route scoped** in `TPMHandlers.routes` (`pkg/api/rest/tpm_handlers.go`), on the gRPC tiers: `tpm:read` for the `GET` routes plus `POST pcrs`, `quote`, `quote/verify`, `certify`, `make-credential`, `random` and `unseal`; `tpm:write` for `provision`, `POST ek`, `POST ek/certificate`, `POST srk`, `POST ak`, `POST`/`PUT nvram`, `pcrs/extend`, `seal` and `activate-credential`; `tpm:delete` for `clear` and every `DELETE` (`ek`, `srk`, `ak`, `nvram`, with or without the path parameter). Each route goes through the listener's shared `ScopeGuard` (`pkg/api/rest/route_scope.go`), as every other daemon REST route does: a bearer platform token must grant the route's scope, and without one a verified operator client certificate (`*:*`) is accepted. No credential or a rejected token is `401` (`ErrRouteUnauthenticated`); a token without the scope, or no guard, is `403` (`ErrRouteForbidden`) |
 | REST — daemon listener, `rest_idevid.go` | no per-operation scope; mTLS only |
 
 **Concretely: on gRPC, `Clear` and `DeleteEK` need `tpm:delete`, `Unseal`
@@ -592,7 +594,7 @@ QUIC status bytes are the platform-wide vocabulary
 | `0x07` | `StatusPermissionDenied` | 403 | `PermissionDenied` | upstream text matching `permission` / `denied` / `unauthorized` / `forbidden` / `authorization` |
 | `0x0A` | `StatusUnavailable` | 503 | `Unavailable` | `ErrTPM2ServiceNotAvailable` — **the daemon has no TPM handle** |
 | `0x0B` | `StatusNotImplemented` | 501 | `Unimplemented` | `ErrTPM2UnknownSubOpcode` |
-| `0x01` | `StatusInvalidRequest` | 400 | `FailedPrecondition` | `tpmek.ErrNotConfigured` / `tpmek.ErrAlgorithm` (Create EK when `tpm.ek` names no handle, or an algorithm with no EK template); on gRPC and MCP also upstream text matching `TPM` / `tpm` / `handle` |
+| `0x01` | `StatusInvalidRequest` | 409 (#665) | `FailedPrecondition` | `tpmek.ErrNotConfigured` / `tpmek.ErrAlgorithm` (Create EK when `tpm.ek` names no handle, or an algorithm with no EK template); on gRPC and MCP also upstream text matching `TPM` / `tpm` / `handle` |
 
 **503 on any TPM operation means the daemon has no TPM**, not that the operation
 failed. Check `platformctl tpm status` and the `"TPM target resolved"` log line

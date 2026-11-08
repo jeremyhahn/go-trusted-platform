@@ -151,22 +151,30 @@ QUIC uses category opcode `0x9A` with the sub-opcode in `payload[0]`.
 The embedded transport dispatches every RPC in-process through
 `ServiceRegistry.Ceremony`.
 
-| Subcommand | gRPC method (`platform.v1.CeremonyService`) | QUIC sub-opcode | Scope |
-|------------|---------------------------------------------|-----------------|-------|
-| `ceremony init` | `Init` | `0x01` | `ceremony:write` |
-| `ceremony status` | `Status` | `0x02` | `ceremony:read` |
-| `ceremony claim-cert begin` | `ClaimCertBegin` | `0x03` | `ceremony:write` |
-| `ceremony claim-cert complete` | `ClaimCertComplete` | `0x04` | `ceremony:write` |
-| `ceremony claim-share begin` | `ClaimShareBegin` | `0x05` | `ceremony:write` |
-| `ceremony claim-share complete` | `ClaimShareComplete` | `0x07` | `ceremony:write` |
-| `ceremony sign-csr` | `SignCSR` | `0x06` | `ceremony:write` |
+| Subcommand | gRPC method (`platform.v1.CeremonyService`) | QUIC sub-opcode | QUIC / MCP scope | gRPC / REST scope |
+|------------|---------------------------------------------|-----------------|------------------|------------|
+| `ceremony init` | `Init` | `0x01` | `ceremony:write` | `ceremony:initialize` |
+| `ceremony status` | `Status` | `0x02` | `ceremony:read` | `ceremony:status` |
+| `ceremony claim-cert begin` | `ClaimCertBegin` | `0x03` | `ceremony:write` | `ceremony:claim_cert` |
+| `ceremony claim-cert complete` | `ClaimCertComplete` | `0x04` | `ceremony:write` | `ceremony:claim_cert` |
+| `ceremony claim-share begin` | `ClaimShareBegin` | `0x05` | `ceremony:write` | `ceremony:claim_share_begin` |
+| `ceremony claim-share complete` | `ClaimShareComplete` | `0x07` | `ceremony:write` | `ceremony:claim_share_complete` |
+| `ceremony sign-csr` | `SignCSR` | `0x06` | `ceremony:write` | `ceremony:sign_csr` |
+
+gRPC checks a per-action scope (`pkg/api/grpc/method_permissions.go`), and the
+daemon REST `/api/v1/ceremony` routes check the same scope as their RPC
+(`catalogRouteRPCs`, [`docs/daemon/api.md`](../daemon/api.md)); QUIC
+(`pkg/api/quic/opcode_permissions.go`) and MCP (`pkg/api/mcp/authz.go`) check
+`ceremony:read` / `ceremony:write`.
 
 `init` and `status` are scoped, not pre-auth. First boot has no token to present,
 so it runs over the Unix socket (local, not token-gated) or the pre-auth
-`POST /init` REST route. On gRPC (TCP), QUIC and MCP an unauthenticated `init`
-would let a remote caller seize an uninitialized platform, so those transports
-require `ceremony:write`. A token without the scope is refused
-(`PermissionDenied` / `StatusPermissionDenied`), and so is a QUIC caller with no
+`POST /init` REST route. On gRPC (TCP), daemon REST, QUIC and MCP an
+unauthenticated `init` would let a remote caller seize an uninitialized
+platform, so those transports require a scope: `ceremony:initialize` on gRPC
+and REST, `ceremony:write` on QUIC and MCP. A token without the scope is refused
+(`PermissionDenied` / REST 403 / `StatusPermissionDenied`; no credential on REST
+is 401), and so is a QUIC caller with no
 principal; under mTLS the client certificate is the principal and holds every
 scope ([`docs/daemon/api.md`](../daemon/api.md) §5). Scopes are minted by the broker
 from the subject's IAM permissions, so a role gains `ceremony:read` /

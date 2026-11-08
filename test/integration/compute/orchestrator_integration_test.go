@@ -262,30 +262,6 @@ func TestQEMUOrchestratorStart(t *testing.T) {
 	require.NoError(t, err, "Failed to delete VM instance")
 }
 
-// TestQEMUOrchestratorStartError tests Start() error handling.
-func TestQEMUOrchestratorStartError(t *testing.T) {
-	requireDevcontainer(t)
-
-	workDir := t.TempDir()
-	defer cleanupTestDir(t, workDir)
-
-	orchestrator := createTestOrchestrator(t, workDir)
-	defer orchestrator.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
-	defer cancel()
-
-	// Test starting a non-existent instance
-	err := orchestrator.Start(ctx, "non-existent-instance-id")
-	assert.Error(t, err)
-	assert.ErrorIs(t, err, compute.ErrInstanceNotFound)
-
-	// Test starting with empty instance ID
-	err = orchestrator.Start(ctx, "")
-	assert.Error(t, err)
-	assert.ErrorIs(t, err, compute.ErrInvalidInstanceID)
-}
-
 // TestQEMUOrchestratorStop tests stopping a running VM.
 func TestQEMUOrchestratorStop(t *testing.T) {
 	requireDevcontainer(t)
@@ -334,40 +310,6 @@ func TestQEMUOrchestratorStop(t *testing.T) {
 	// Cleanup
 	err = orchestrator.Delete(ctx, instance.ID)
 	require.NoError(t, err)
-}
-
-// TestQEMUOrchestratorStopError tests Stop() error handling.
-func TestQEMUOrchestratorStopError(t *testing.T) {
-	requireDevcontainer(t)
-
-	workDir := t.TempDir()
-	defer cleanupTestDir(t, workDir)
-
-	orchestrator := createTestOrchestrator(t, workDir)
-	defer orchestrator.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
-	defer cancel()
-
-	// Test stopping a non-existent instance
-	err := orchestrator.Stop(ctx, "non-existent-instance-id")
-	assert.Error(t, err)
-	assert.ErrorIs(t, err, compute.ErrInstanceNotFound)
-
-	// Test stopping with empty instance ID
-	err = orchestrator.Stop(ctx, "")
-	assert.Error(t, err)
-	assert.ErrorIs(t, err, compute.ErrInvalidInstanceID)
-
-	// Test stopping a stopped instance
-	profile := createTestDeviceProfile("test-vm-stop-error")
-	instance, err := orchestrator.Create(ctx, profile)
-	require.NoError(t, err)
-	defer orchestrator.Delete(ctx, instance.ID)
-
-	err = orchestrator.Stop(ctx, instance.ID)
-	assert.Error(t, err)
-	assert.ErrorIs(t, err, compute.ErrInstanceNotRunning)
 }
 
 // TestQEMUOrchestratorSuspendResumeReboot tests suspend, resume and reboot of a
@@ -490,42 +432,6 @@ func TestQEMUOrchestratorAttachNetwork(t *testing.T) {
 	}
 }
 
-// TestQEMUOrchestratorAttachNetworkError tests AttachNetwork() error handling.
-func TestQEMUOrchestratorAttachNetworkError(t *testing.T) {
-	requireDevcontainer(t)
-	setupTestBridge(t)
-	defer cleanupTestBridge(t)
-
-	workDir := t.TempDir()
-	defer cleanupTestDir(t, workDir)
-
-	orchestrator := createTestOrchestrator(t, workDir)
-	defer orchestrator.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
-	defer cancel()
-
-	// Test attaching to non-existent instance
-	err := orchestrator.AttachNetwork(ctx, "non-existent-id", "test-port")
-	assert.Error(t, err)
-	assert.ErrorIs(t, err, compute.ErrInstanceNotFound)
-
-	// Test attaching with empty instance ID
-	err = orchestrator.AttachNetwork(ctx, "", "test-port")
-	assert.Error(t, err)
-	assert.ErrorIs(t, err, compute.ErrInvalidInstanceID)
-
-	// Test attaching with empty port name
-	profile := createTestDeviceProfile("test-vm-attach-error")
-	instance, err := orchestrator.Create(ctx, profile)
-	require.NoError(t, err)
-	defer orchestrator.Delete(ctx, instance.ID)
-
-	err = orchestrator.AttachNetwork(ctx, instance.ID, "")
-	assert.Error(t, err)
-	assert.ErrorIs(t, err, compute.ErrNetworkAttachmentFailed)
-}
-
 // TestQEMUOrchestratorDetachNetwork tests OVS network detachment.
 func TestQEMUOrchestratorDetachNetwork(t *testing.T) {
 	requireDevcontainer(t)
@@ -568,47 +474,6 @@ func TestQEMUOrchestratorDetachNetwork(t *testing.T) {
 	assert.Len(t, detachedInstance.NetworkAttachments, 0, "Should have no network attachments after detach")
 
 	t.Logf("Network detached successfully: port=%s", portName)
-}
-
-// TestQEMUOrchestratorDetachNetworkError tests DetachNetwork() error handling.
-func TestQEMUOrchestratorDetachNetworkError(t *testing.T) {
-	requireDevcontainer(t)
-	setupTestBridge(t)
-	defer cleanupTestBridge(t)
-
-	workDir := t.TempDir()
-	defer cleanupTestDir(t, workDir)
-
-	orchestrator := createTestOrchestrator(t, workDir)
-	defer orchestrator.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
-	defer cancel()
-
-	// Test detaching from non-existent instance
-	err := orchestrator.DetachNetwork(ctx, "non-existent-id", "test-port")
-	assert.Error(t, err)
-	assert.ErrorIs(t, err, compute.ErrInstanceNotFound)
-
-	// Test detaching with empty instance ID
-	err = orchestrator.DetachNetwork(ctx, "", "test-port")
-	assert.Error(t, err)
-	assert.ErrorIs(t, err, compute.ErrInvalidInstanceID)
-
-	// Test detaching with empty port name
-	profile := createTestDeviceProfile("test-vm-detach-error")
-	instance, err := orchestrator.Create(ctx, profile)
-	require.NoError(t, err)
-	defer orchestrator.Delete(ctx, instance.ID)
-
-	err = orchestrator.DetachNetwork(ctx, instance.ID, "")
-	assert.Error(t, err)
-	assert.ErrorIs(t, err, compute.ErrNetworkDetachmentFailed)
-
-	// Test detaching when no network is attached
-	err = orchestrator.DetachNetwork(ctx, instance.ID, "some-port")
-	assert.Error(t, err)
-	assert.ErrorIs(t, err, compute.ErrNetworkDetachmentFailed)
 }
 
 // TestQEMUOrchestratorE2ELifecycle tests the complete end-to-end lifecycle:

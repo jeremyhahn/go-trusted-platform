@@ -20,7 +20,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
@@ -114,17 +113,6 @@ func StartEchoBackend(t *testing.T) *httptest.Server {
 	return server
 }
 
-// DecodeEcho parses an echo backend response body.
-func DecodeEcho(t *testing.T, resp *http.Response) *EchoResponse {
-	t.Helper()
-	defer resp.Body.Close()
-	var echo EchoResponse
-	if err := json.NewDecoder(resp.Body).Decode(&echo); err != nil {
-		t.Fatalf("decode echo response: %v", err)
-	}
-	return &echo
-}
-
 // =============================================================================
 // Bounded condition polling (ticker-driven, no sleep loops)
 // =============================================================================
@@ -155,35 +143,6 @@ func WaitFor(t *testing.T, timeout, interval time.Duration, description string, 
 // =============================================================================
 // Client TLS material
 // =============================================================================
-
-// PlatformClientTLS loads the harness mTLS client credentials plus the
-// platform CA bundle from the environment.
-func PlatformClientTLS(t *testing.T) *tls.Config {
-	t.Helper()
-	certFile := os.Getenv(EnvClientCert)
-	keyFile := os.Getenv(EnvClientKey)
-	caFile := os.Getenv(EnvCACert)
-	if certFile == "" || keyFile == "" || caFile == "" {
-		t.Fatalf("mTLS environment not configured; need %s, %s, %s", EnvClientCert, EnvClientKey, EnvCACert)
-	}
-	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
-	if err != nil {
-		t.Fatalf("load client keypair: %v", err)
-	}
-	caPEM, err := os.ReadFile(caFile)
-	if err != nil {
-		t.Fatalf("read CA bundle: %v", err)
-	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(caPEM) {
-		t.Fatalf("CA bundle %s contains no certificates", caFile)
-	}
-	return &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		RootCAs:      pool,
-		MinVersion:   tls.VersionTLS13,
-	}
-}
 
 // GatewayTLSFixture is an ephemeral CA plus server keypair for the gatewayd
 // front door under test.

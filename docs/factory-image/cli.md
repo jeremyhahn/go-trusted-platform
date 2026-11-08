@@ -19,6 +19,8 @@ platformctl diskimage inspect    Report an image's partitions, EFI partition con
 platformctl diskimage assemble   (hidden) Run the installer against a loop-mounted image
 platformctl diskimage netboot-initfs (hidden) Netboot initramfs + modloop for a platform-built kernel
 platformctl diskimage diskless-root (hidden) Squashfs root + dm-verity tree for diskless media
+platformctl diskimage test       Boot a factory image under emulation
+platformctl diskimage test boot  Boot an image (interactive console, or wait for a serial milestone)
 ```
 
 All verbs except `rpi-eeprom-hsm` run on a build host without a running daemon;
@@ -40,7 +42,9 @@ arm64 container against a host swtpm).
 
 Builds an image end to end: preflight, Secure Boot keys, U-Boot (built or
 located), media staging, boot firmware, and the assemble step inside the
-arm64 container. Prints the image path, SHA-256, size, the U-Boot binary used
+assemble container, which runs at the build host's platform (for a foreign
+target it runs the host-architecture installer at
+`/installer/platformctl-static`). Prints the image path, SHA-256, size, the U-Boot binary used
 and the staged media directory.
 
 ### Build flags
@@ -48,11 +52,11 @@ and the staged media directory.
 | Flag | Type | Default | Meaning |
 |---|---|---|---|
 | `--target` | string | `rpi` | `rpi` or `qemu-virt` |
-| `--model` | string | `rpi4` for `rpi` | `rpi4`, `rpi400`, `cm4`, `rpi3b+`, `rpi5` (experimental) |
-| `--role` | string | | dedicated-profile role for `--target rpi`: builds `configs/platform/templates/dedicated/raspberrypi/<model>/<role>.yaml` (today `compute` on `rpi4`, and on `rpi5` as an experimental template). Empty builds the single-node image. Refused with `ErrRoleTemplate` beside `--platform-config`, on `qemu-virt`, for a model the builder does not know, or when that file does not exist; there is no fallback |
+| `--model` | string | `rpi4` for `rpi` | `rpi4`, `rpi400`, `cm4`, `rpi3b+`, `rpi5` (experimental) | <!-- lab-string-ok: Raspberry Pi model name, not a lab host -->
+| `--role` | string | | dedicated-profile role for `--target rpi`: builds `configs/platform/templates/dedicated/raspberrypi/<model>/<role>.yaml` (today `compute` on `rpi4`, and on `rpi5` as an experimental template; `control-plane` on `cm4` and `rpi4`). Empty builds the single-node image. Refused with `ErrRoleTemplate` beside `--platform-config`, on `qemu-virt`, for a model the builder does not know, or when that file does not exist; there is no fallback |
 | `--size` | int | `4096` | image size in MB; minimum `2048` |
 | `--output` | string | `<work-dir>/trusted-platform-<target>.img` | output image path |
-| `--binaries-dir` | string | `aarch64/` next to the running binary | directory holding the target-architecture `platformd`, `platformctl`, `platformctl-static`, `platform-initrd`, `gatewayd` |
+| `--binaries-dir` | string | `aarch64/` next to the running binary | directory holding the target-architecture `platformd`, `platformctl`, `platform-initrd`, `gatewayd`; its `platformctl-static` (or, when it has none, its static `platformctl`) is the media's `platformctl-static` |
 | `--builder-image` | string | `trusted-platform-diskimage-builder` | assemble container image repository, without a tag or digest (a registry port such as `registry:5000/foo` is fine; `foo:latest` and `foo@sha256:…` are rejected); tagged `:<arch>` (host arch for assemble, target arch for netboot-initfs and diskless-root) so each platform has its own image |
 | `--builder-dir` | string | `build/docker/diskimage-builder` | assemble container build context |
 | `--container-runtime` | string | `docker` | container runtime binary |
@@ -76,6 +80,7 @@ and the staged media directory.
 | `--apk-mirror` | string | | install-time apk mirror baked into the kernel cmdline |
 | `--platform-config` | string | auto-detected | platform config template baked into the image (the `--role` template when one is given; otherwise `configs/platform/templates/single-node/raspberrypi/<model>/default.yaml` when present, else `configs/platform/templates/single-node/default.yaml`) |
 | `--overrides` | string | | override YAML deep-merged onto `--platform-config` (requires it) |
+| `--platform-apk-dir` | string | | strongSwan builder output (`make strongswan-build`) whose apks the media carries and installs for the overlay's IPsec transport; refused without `--pre-fetch` |
 | `--platform-type` | string | `server` | `server` or `client` |
 | `--secure-boot` | bool | `true` | enable Secure Boot; the keys are preseeded into U-Boot |
 | `--tpm-unseal` | bool | `true` | enable TPM auto-unseal |
@@ -135,7 +140,7 @@ per MAC replaces it at install), and:
 |---|---|---|---|
 | `--output` | string | `<work-dir>/netboot-media` | output directory; replaced |
 | `--cache-dir` | string | `<output>.cache/alpine` | pinned Alpine netboot releases |
-| `--x86-binaries-dir` | string | next to this binary | x86_64 `platformd`, `platformctl`, `platform-initrd`, `gatewayd` |
+| `--x86-binaries-dir` | string | next to this binary | x86_64 `platformd`, `platformctl`, `platformctl-static`, `platform-initrd`, `gatewayd` |
 | `--arm64-binaries-dir` | string | `aarch64/` next to this binary | the arm64 set |
 | `--ipxe` | string | `build/docker/ipxe-builder/output/bin-arm64-efi/snponly.efi` | the arm64 iPXE to sign (`make ipxe-build`; checked against its `SHA256SUMS`) |
 | `--model` | string | `rpi4` | board the TFTP tree's `config.txt` is written for |
@@ -281,7 +286,8 @@ Exactly one of `--config` and `--platform-config` is required
 `--platform-config /media/cdrom/configs/installer.yaml`.
 
 ```sh
-# what create runs inside the arm64 container
+# what create runs inside the assemble container (host platform; for a foreign
+# target the binary is /installer/platformctl-static, the host-architecture one)
 platformctl-static diskimage assemble --platform-config /media/cdrom/configs/installer.yaml \
   --output /work/trusted-platform-rpi.img --size 4096
 ```

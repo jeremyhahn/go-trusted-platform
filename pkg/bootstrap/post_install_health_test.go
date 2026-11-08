@@ -27,6 +27,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -475,11 +476,55 @@ func registrationSink(t *testing.T, node *DiscoveredNode, ip string) DeployerCon
 	return DeployerConfig{Host: host, BootstrapHTTPPort: p}
 }
 
-// startRogueCPServer binds a second, attacker-controlled control plane
-// on 127.0.0.2 at the same port as the genuine one, presenting a leaf
-// for the same TLS name issued by its own CA and serving that CA as its
-// bundle. It returns a counter of requests that completed a handshake.
-func startRogueCPServer(t *testing.T, port int) (rogue *testCPPKI, hits *atomic.Int64) {
+// loopbackPairAttempts bounds how many fresh ports listenLoopbackPair
+// tries before giving up: a port free on 127.0.0.1 can already be held
+// on 127.0.0.2 (or the wildcard address) by another process on the runner.
+const loopbackPairAttempts = 8
+
+// listenLoopbackPair binds 127.0.0.1 and 127.0.0.2 on one shared port
+// before either server starts, since the config carries a single
+// ControlPlanePort. A port taken on 127.0.0.2 is released and retried
+// with a fresh one; any other bind error fails the test at once.
+func listenLoopbackPair(t *testing.T) (genuine, rogue net.Listener) {
+	t.Helper()
+	for attempt := 0; attempt < loopbackPairAttempts; attempt++ {
+		g, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("listen on 127.0.0.1: %v", err)
+		}
+		port := g.Addr().(*net.TCPAddr).Port
+		r, err := net.Listen("tcp", net.JoinHostPort("127.0.0.2", strconv.Itoa(port)))
+		if err == nil {
+			return g, r
+		}
+		if closeErr := g.Close(); closeErr != nil {
+			t.Fatalf("close 127.0.0.1:%d: %v", port, closeErr)
+		}
+		if !errors.Is(err, syscall.EADDRINUSE) {
+			t.Fatalf("listen on 127.0.0.2:%d: %v", port, err)
+		}
+	}
+	t.Fatalf("no port free on both 127.0.0.1 and 127.0.0.2 after %d attempts", loopbackPairAttempts)
+	return nil, nil
+}
+
+// serveTLSOn starts srv over TLS on l, replacing the listener
+// httptest.NewUnstartedServer opened for it.
+func serveTLSOn(t *testing.T, srv *httptest.Server, l net.Listener, pki *testCPPKI) {
+	t.Helper()
+	if err := srv.Listener.Close(); err != nil {
+		t.Fatalf("close default listener: %v", err)
+	}
+	srv.Listener = l
+	srv.TLS = &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{pki.tlsCert}}
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+}
+
+// startRogueCPServer serves a second, attacker-controlled control plane
+// on l (127.0.0.2, at the same port as the genuine one), presenting a leaf
+// from its own CA and answering every request with that CA.
+func startRogueCPServer(t *testing.T, l net.Listener) (rogue *testCPPKI, hits *atomic.Int64) {
 	t.Helper()
 	rogue = newTestCPPKI(t)
 	hits = &atomic.Int64{}
@@ -489,29 +534,25 @@ func startRogueCPServer(t *testing.T, port int) (rogue *testCPPKI, hits *atomic.
 			t.Errorf("rogue write: %v", err)
 		}
 	}))
-	if err := srv.Listener.Close(); err != nil {
-		t.Fatalf("close default listener: %v", err)
-	}
-	l, err := net.Listen("tcp", net.JoinHostPort("127.0.0.2", strconv.Itoa(port)))
-	if err != nil {
-		t.Fatalf("listen on 127.0.0.2:%d: %v", port, err)
-	}
-	srv.Listener = l
-	srv.TLS = &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{rogue.tlsCert}}
-	srv.StartTLS()
-	t.Cleanup(srv.Close)
+	serveTLSOn(t, srv, l, rogue)
 	return rogue, hits
 }
 
 // rogueRegistration stands up the genuine control plane on the node's
 // static 127.0.0.1, a rogue one on 127.0.0.2, and a registration.json
-// that points the node at the rogue.
+// that reports only the rogue address.
 func rogueRegistration(t *testing.T, o *Orchestrator) (genuine, rogue *testCPPKI, rogueHits *atomic.Int64) {
 	t.Helper()
+	genuineL, rogueL := listenLoopbackPair(t)
 	genuine = newTestCPPKI(t)
-	srv := startTestCPServer(t, genuine, http.StatusOK, genuine.caPEM)
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if _, err := w.Write(genuine.caPEM); err != nil {
+			t.Errorf("genuine write: %v", err)
+		}
+	}))
+	serveTLSOn(t, srv, genuineL, genuine)
 	pointControlPlaneAt(t, o, srv)
-	rogue, rogueHits = startRogueCPServer(t, o.config.Platform.ControlPlanePort)
+	rogue, rogueHits = startRogueCPServer(t, rogueL)
 	o.discovered[0].MACs = []string{"aa:bb:cc:dd:ee:01"}
 	o.config.Deployer = registrationSink(t, &o.discovered[0], "127.0.0.2")
 	return genuine, rogue, rogueHits

@@ -61,7 +61,7 @@ go test -tags "$(make -C ../.. -s print-build-tags)" ./transport/rest/ -run Test
 | `wire/<protocol>wire/` | the wire contract shared with the daemon (§1) |
 | `transport/adapter.go` | `transport.Adapter` |
 | `transport/<protocol>/` | one adapter per protocol; each registers from `init()` |
-| `gen/` | generated protobuf and gRPC code, package `platformv1`, 31 services |
+| `gen/` | generated protobuf and gRPC code, package `platformv1`, 36 services |
 | `services/<name>/` | domain wrappers over the generated clients, plus `common` (pagination, shared errors) |
 | `services/quicbaas/`, `services/auth/` | typed frontage over the go-quicbaas SDK |
 | `services/orchestration/` | container-trust aliases over `go-quicbaas/sdk/go/orchestration` |
@@ -139,7 +139,7 @@ change set:
    `POST /api/v1/<service>/<method>`. Do not rely on the fallback: map the
    method explicitly. Two servers answer `/api/v1`, and every route claim is
    checked against the built table of the one that serves its prefix:
-   `TestSDKRouteClaims` (`pkg/webservice/v1/route_coverage_test.go`) for the
+   `TestSDKRouteClaims_ResolveAgainstBuiltRoutes` (`pkg/webservice/v1/route_coverage_test.go`) for the
    webservice router, `TestDaemonRESTRouteClaims_ResolveAgainstBuiltRoutes`
    (`pkg/api/daemon/rest_route_claims_test.go`) for the daemon REST server.
    The prefixes only the daemon serves are `DaemonOnlyPrefixes` in
@@ -169,7 +169,7 @@ also needs a unary form, or it is `MISSING` on four transports.
 |---|---|---|---|---|
 | unix | `UnixSocket` (default `/run/platformd.sock`) exists (`os.Stat`) | `MaxMessageSize` | `BearerToken`, `TLSConfig`, `TLSServerName` (`ErrUnsupportedOption`) | `ErrConnectionFailed` if the socket is missing; the connection itself is lazy |
 | grpc | `GRPCAddr` (`ErrEmptyAddress`) | `ClientTLSConfig()`, `BearerToken` per RPC, `MaxMessageSize` | — | `ErrConnectionFailed` only for an unusable target; the connection is lazy, so a dead endpoint fails on the first RPC |
-| rest | `RESTAddr`; `https://` is added when no scheme is given | `ClientTLSConfig()`, `Timeout`, `BearerToken` | any `http://` address (`ErrInsecureTransport`) | `ErrConnectionFailed` when `GET /health` fails or is not 2xx; wrapping `ErrTimeout` when it runs out of time |
+| rest | `RESTAddr`; `https://` is added when no scheme is given | `ClientTLSConfig()`, `Timeout`, `BearerToken` | any `http://` address (`ErrInsecureTransport`) | `ErrConnectionFailed` when `GET /health/live` fails or is not 2xx; wrapping `ErrTimeout` when it runs out of time |
 | quic | `QUICAddr` | `ClientTLSConfig()`, ALPN `platform-quic`, idle timeout `2 × Timeout`, `BearerToken` in every request | — | `ErrConnectionFailed` when the dial or handshake fails; wrapping `ErrTimeout` when it runs out of time |
 | mcp | `MCPAddr`; `https://` is added when no scheme is given | over `https://`: `ClientTLSConfig()`, `BearerToken`; always `Timeout` | `BearerToken`, `TLSConfig`, `TLSServerName` over `http://` (`ErrInsecureTransport`) | `ErrConnectionFailed` when `initialize` fails; wrapping `ErrTimeout` when it runs out of time |
 | embedded | `EmbeddedServices` holding `*embedded.ServiceRegistry` (`ErrNilRegistry`) | none | `BearerToken`, `TLSConfig`, `TLSServerName` (`ErrUnsupportedOption`) | `ErrNilRegistry` |
@@ -204,7 +204,8 @@ HTTP → gRPC status mapping (REST, and a non-2xx answer on MCP):
 | 401 | `Unauthenticated` |
 | 403 | `PermissionDenied` |
 | 404 | `NotFound` |
-| 409 | `AlreadyExists` |
+| 409 | `AlreadyExists`; on a `DELETE`, `FailedPrecondition` (a delete cannot collide with an existing resource, #665) |
+| 412 | `FailedPrecondition` |
 | 429 | `ResourceExhausted` |
 | 500 | `Internal` |
 | 501 | `Unimplemented` |
@@ -232,6 +233,7 @@ them with a value target:
 | `ErrCloseFailed{Protocol, Err}` | closing the adapter or side-client failed |
 | `ErrQuicBaaSNotConfigured{}` | `QuicBaaS()` called with no address configured |
 | `ErrQuicBaaSInitFailed{Addr, Transport, Err}` | the side-client failed to open |
+| `ErrQuicBaaSTLSNotConfigured{}` | inside `ErrQuicBaaSInitFailed`: a `QuicBaaSAddr` without `QuicBaaSTLSConfig` |
 
 The embedded transport has its own types (`transport/embedded/errors.go`):
 `ErrNilRegistry`, `ErrNotConnected`, `ErrMethodNotFound`, `ErrTypeMismatch`,

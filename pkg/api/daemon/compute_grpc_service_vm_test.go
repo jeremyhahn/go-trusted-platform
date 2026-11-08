@@ -18,6 +18,7 @@ package daemon
 import (
 	"context"
 	"crypto/x509"
+	"sync"
 	"testing"
 	"time"
 
@@ -44,6 +45,9 @@ type vmCapableMockOrchestrator struct {
 
 	snapshots []*compute.VMSnapshot
 
+	// mu guards the recorded call arguments below: the QUIC transport
+	// records them on its server goroutine while the test reads them.
+	mu              sync.Mutex
 	lastAttestNonce []byte
 	lastAttestPCRs  []int
 	lastEvidence    *compute.VMAttestationEvidence
@@ -91,8 +95,10 @@ func (m *vmCapableMockOrchestrator) AttestVM(ctx context.Context, instanceID str
 	if m.attestErr != nil {
 		return nil, m.attestErr
 	}
+	m.mu.Lock()
 	m.lastAttestNonce = nonce
 	m.lastAttestPCRs = pcrIndices
+	m.mu.Unlock()
 	return &compute.VMAttestationReport{
 		VMID:      instanceID,
 		VMName:    "test-vm",
@@ -113,7 +119,9 @@ func (m *vmCapableMockOrchestrator) VerifyVMAttestation(ctx context.Context, ins
 	if m.verifyErr != nil {
 		return nil, m.verifyErr
 	}
+	m.mu.Lock()
 	m.lastEvidence = evidence
+	m.mu.Unlock()
 	return &compute.VMVerificationResult{
 		Verified:       true,
 		SignatureValid: true,
@@ -122,6 +130,27 @@ func (m *vmCapableMockOrchestrator) VerifyVMAttestation(ctx context.Context, ins
 		Message:        "attestation verified",
 		ActualPCRs:     map[int][]byte{0: {0x01}},
 	}, nil
+}
+
+// recordedAttestNonce returns the nonce of the last AttestVM call.
+func (m *vmCapableMockOrchestrator) recordedAttestNonce() []byte {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.lastAttestNonce
+}
+
+// recordedAttestPCRs returns the PCR indices of the last AttestVM call.
+func (m *vmCapableMockOrchestrator) recordedAttestPCRs() []int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.lastAttestPCRs
+}
+
+// recordedEvidence returns the evidence of the last VerifyVMAttestation call.
+func (m *vmCapableMockOrchestrator) recordedEvidence() *compute.VMAttestationEvidence {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.lastEvidence
 }
 
 func newVMCapableComputeService() (*ComputeGRPCService, *vmCapableMockOrchestrator) {
@@ -454,8 +483,8 @@ func TestComputeGRPCService_AttestVM(t *testing.T) {
 		require.Len(t, resp.GetPcrValues(), 2)
 		assert.Equal(t, uint32(0), resp.GetPcrValues()[0].GetIndex())
 		assert.Equal(t, platformv1.PCRBank_PCR_BANK_SHA256, resp.GetPcrValues()[0].GetBank())
-		assert.Equal(t, []byte("nonce"), orchestrator.lastAttestNonce)
-		assert.Equal(t, []int{0, 7}, orchestrator.lastAttestPCRs)
+		assert.Equal(t, []byte("nonce"), orchestrator.recordedAttestNonce())
+		assert.Equal(t, []int{0, 7}, orchestrator.recordedAttestPCRs())
 	})
 
 	t.Run("TPM-less instance maps to FailedPrecondition", func(t *testing.T) {
@@ -486,10 +515,10 @@ func TestComputeGRPCService_VerifyVMAttestation(t *testing.T) {
 		assert.Equal(t, "attestation verified", resp.GetMessage())
 		require.Len(t, resp.GetActualPcrs(), 1)
 
-		require.NotNil(t, orchestrator.lastEvidence)
-		assert.Equal(t, []byte("quote"), orchestrator.lastEvidence.Quote)
-		assert.Equal(t, x509.SHA256WithRSAPSS.String(), orchestrator.lastEvidence.SignatureAlgorithm)
-		assert.Equal(t, []byte{0x01}, orchestrator.lastEvidence.ExpectedPCRs[0])
+		require.NotNil(t, orchestrator.recordedEvidence())
+		assert.Equal(t, []byte("quote"), orchestrator.recordedEvidence().Quote)
+		assert.Equal(t, x509.SHA256WithRSAPSS.String(), orchestrator.recordedEvidence().SignatureAlgorithm)
+		assert.Equal(t, []byte{0x01}, orchestrator.recordedEvidence().ExpectedPCRs[0])
 	})
 
 	t.Run("missing VM ID", func(t *testing.T) {

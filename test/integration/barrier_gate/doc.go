@@ -26,27 +26,16 @@
 // All other transports (gRPC TCP, REST, QUIC, MCP) MUST NOT be bound until
 // the barrier transitions to unsealed.
 //
-// Test cases:
+// TestM6_WarmBoot_UnsealThenTransitions is the suite's one test: it
+// initializes a real daemon cold, restarts the process, asserts the gate
+// rebinds in the sealed state with the production ports refused, then
+// POST /unseal releases the gate and production REST binds. It stays here
+// because the barrier surviving a real process restart cannot be shown in
+// memory.
 //
-//  1. TestM6_SealedDaemonRefusesRemotePorts — a fresh daemon configured
-//     with seal_strategy=software comes up in the
-//     uninitialized state; gate /healthz answers; production REST/gRPC/QUIC
-//     ports refuse connections.
-//
-//  2. TestM6_GateAcceptsInitThenTransitions — POST /init drives the
-//     ceremony; once the barrier reports unsealed the gate listener tears
-//     down and the production transports bind. Verified by:
-//     (a) gate port stops accepting new connections, and
-//     (b) production REST port begins accepting connections.
-//
-//  3. TestM6_WarmBoot_UnsealThenTransitions — a warm-boot variant.
-//     The originally-specified "already-unsealed daemon skips gate
-//     entirely on restart" cannot be exercised: the platform has no
-//     automatic unseal, so the restarted daemon comes up sealed.
-//     This test therefore proves the same M6 transition contract
-//     (gate → production handoff) via the warm-boot /unseal path:
-//     initialize cold → stop → restart (gate binds in sealed state) →
-//     POST /unseal → assert production transports come up.
+// The gate's own contract (healthz state, POST /unseal, release on
+// unseal) is unit-tested in
+// pkg/daemon/commands/serve_barrier_gate_unseal_test.go.
 //
 // Run via: make integration-test-barrier-gate
 package barrier_gate

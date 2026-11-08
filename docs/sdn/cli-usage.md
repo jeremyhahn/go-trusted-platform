@@ -365,6 +365,28 @@ platformctl sdn gateway status
 platformctl sdn gateway status -o json
 ```
 
+### Gateway Snapshot
+
+```bash
+# One gateway's state (omit --gateway-id for this node), or every gateway's
+platformctl sdn gateway snapshot [--gateway-id <id>]
+platformctl sdn gateway snapshot --all -o json
+```
+
+### Admitted Overlay VTEPs
+
+```bash
+# The remote VTEPs a gateway admitted (omit --gateway-id for this node)
+platformctl sdn gateway overlay vteps [--gateway-id <id>]
+platformctl sdn gateway overlay vteps get <vtep> [--gateway-id <id>]
+```
+
+### NAT64 Status
+
+```bash
+platformctl sdn gateway nat64 status
+```
+
 ### Set Gateway Mode
 
 ```bash
@@ -428,7 +450,7 @@ platformctl sdn gateway lb vip remove --protocol tcp --address <VIP> --port <POR
 
 ```bash
 # Flow programming throughput (mutates bridge flow tables)
-platformctl sdn gateway perf flows --count 1000 --batch
+platformctl sdn gateway perf flows [--bridge <bridge>] --count 1000 --batch
 
 # Live datapath counters (cache hits/misses, hw-offload state)
 platformctl sdn gateway perf datapath [--bridge <bridge>]

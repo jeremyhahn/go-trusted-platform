@@ -67,6 +67,50 @@ func TestStubBackend_AllMethodsReturnUnsupported(t *testing.T) {
 	assertUnsupported(t, "Compare", err)
 }
 
+// TestStubBackend_RegisteredWithDispatcher proves the package's init
+// registration: the dispatcher routes every Supermicro manufacturer
+// spelling to a StubBackend carrying the target's platform, and that
+// backend refuses with the typed unsupported error rather than a nil
+// provider or a generic error.
+func TestStubBackend_RegisteredWithDispatcher(t *testing.T) {
+	tests := []struct {
+		name         string
+		manufacturer string
+		platform     string
+	}{
+		{name: "redfish manufacturer", manufacturer: "Supermicro", platform: "X10SDV-TP8F"},
+		{name: "spaced spelling", manufacturer: "Super Micro Computer, Inc.", platform: "X11SPM-TF"},
+		{name: "unknown platform", manufacturer: "SUPERMICRO", platform: ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			p, err := attestation.NewProvider(ctx, nil, attestation.Target{
+				Manufacturer: tc.manufacturer,
+				Platform:     tc.platform,
+			})
+			if err != nil {
+				t.Fatalf("NewProvider: %v", err)
+			}
+			if _, ok := p.(*supermicro.StubBackend); !ok {
+				t.Fatalf("provider is %T, want *supermicro.StubBackend", p)
+			}
+
+			_, err = p.Dump(ctx, []byte("nonce"))
+			var unsupported attestation.ErrAttestationUnsupported
+			if !errors.As(err, &unsupported) {
+				t.Fatalf("Dump: want ErrAttestationUnsupported, got %T: %v", err, err)
+			}
+			if unsupported.Vendor != attestation.VendorSupermicro {
+				t.Errorf("Vendor=%q want %q", unsupported.Vendor, attestation.VendorSupermicro)
+			}
+			if unsupported.Platform != tc.platform {
+				t.Errorf("Platform=%q want %q", unsupported.Platform, tc.platform)
+			}
+		})
+	}
+}
+
 // TestStubBackend_ImplementsProviderInterface is a compile-time guard
 // (the stub file has a `var _ AttestationProvider = (*StubBackend)(nil)`
 // line, but this test makes the contract explicit at test time too).

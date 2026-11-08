@@ -23,6 +23,8 @@ import (
 	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -363,4 +365,100 @@ func TestQUICIAMCategoryRoleUpdateRejectsBadRequests(t *testing.T) {
 			t.Fatalf("payload %q does not name the IAM role operation", resp.Payload)
 		}
 	})
+}
+
+// iamDirectRequest encodes a direct (non-category) IAM opcode request.
+func iamDirectRequest(t *testing.T, opcode byte, msg proto.Message) *quicwire.Request {
+	t.Helper()
+	payload, err := quicwire.EncodePayload(msg)
+	if err != nil {
+		t.Fatalf("encode %T: %v", msg, err)
+	}
+	return &quicwire.Request{Opcode: opcode, Payload: payload}
+}
+
+// TestQUICIAMListsCarryPaginationAndTimestamp: the user, role and group
+// lists answer OK over the QUIC handler with the pagination block and the
+// response timestamp the SDK QUIC adapter reads.
+func TestQUICIAMListsCarryPaginationAndTimestamp(t *testing.T) {
+	handler := newTestQUICServiceHandler(logging.DefaultLogger())
+	handler.SetIAMGRPCService(wiredIAMGRPCService(newMemIAM()))
+	page := &platformv1.PaginationRequest{PageSize: 10}
+
+	type listResponse interface {
+		proto.Message
+		GetPagination() *platformv1.PaginationResponse
+		GetTimestamp() *timestamppb.Timestamp
+	}
+	cases := map[string]struct {
+		opcode byte
+		req    proto.Message
+		resp   listResponse
+	}{
+		"users":  {quicwire.OpIAMUserList, &platformv1.ListIAMUsersRequest{TenantId: "acme", Pagination: page}, &platformv1.ListIAMUsersResponse{}},
+		"roles":  {quicwire.OpIAMRoleList, &platformv1.ListIAMRolesRequest{TenantId: "acme", Pagination: page}, &platformv1.ListIAMRolesResponse{}},
+		"groups": {quicwire.OpIAMGroupList, &platformv1.ListIAMGroupsRequest{TenantId: "acme", Pagination: page}, &platformv1.ListIAMGroupsResponse{}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			resp := handler.HandleRequest(context.Background(), iamDirectRequest(t, tc.opcode, tc.req))
+			if resp.Status != quicwire.StatusOK {
+				t.Fatalf("status = 0x%02x, want OK (payload %q)", resp.Status, resp.Payload)
+			}
+			if err := quicwire.DecodePayload(resp.Payload, tc.resp); err != nil {
+				t.Fatalf("decode %T: %v", tc.resp, err)
+			}
+			if got := tc.resp.GetPagination().GetPageSize(); got != 10 {
+				t.Fatalf("pagination page size = %d, want 10", got)
+			}
+			if tc.resp.GetTimestamp() == nil {
+				t.Fatal("timestamp not set")
+			}
+		})
+	}
+}
+
+// TestQUICIAMRejectsMissingIdentifiers: a user create without a tenant and a
+// user get without a user ID are refused as invalid input over QUIC.
+func TestQUICIAMRejectsMissingIdentifiers(t *testing.T) {
+	handler := newTestQUICServiceHandler(logging.DefaultLogger())
+	handler.SetIAMGRPCService(wiredIAMGRPCService(newMemIAM()))
+
+	cases := map[string]*quicwire.Request{
+		"create without tenant": iamDirectRequest(t, quicwire.OpIAMUserCreate,
+			&platformv1.CreateIAMUserRequest{Email: "test@example.com", Name: "testuser"}),
+		"get without user": iamDirectRequest(t, quicwire.OpIAMUserGet,
+			&platformv1.GetIAMUserRequest{TenantId: "acme"}),
+	}
+	for name, req := range cases {
+		t.Run(name, func(t *testing.T) {
+			resp := handler.HandleRequest(context.Background(), req)
+			if resp.Status != quicwire.StatusInvalidArgument {
+				t.Fatalf("status = 0x%02x, want InvalidArgument (payload %q)", resp.Status, resp.Payload)
+			}
+		})
+	}
+}
+
+// TestQUICIAMCheckPermissionAnswersVerdict: a permission check for a subject
+// with no roles answers OK with a timestamped deny, not an error.
+func TestQUICIAMCheckPermissionAnswersVerdict(t *testing.T) {
+	handler := newTestQUICServiceHandler(logging.DefaultLogger())
+	handler.SetIAMGRPCService(wiredIAMGRPCService(newMemIAM()))
+
+	resp := handler.HandleRequest(context.Background(), iamDirectRequest(t, quicwire.OpIAMCheckPermission,
+		&platformv1.CheckIAMPermissionRequest{TenantId: "acme", SubjectId: "test-subject", Resource: "document://123", Action: "read"}))
+	if resp.Status != quicwire.StatusOK {
+		t.Fatalf("status = 0x%02x, want OK (payload %q)", resp.Status, resp.Payload)
+	}
+	var verdict platformv1.CheckIAMPermissionResponse
+	if err := quicwire.DecodePayload(resp.Payload, &verdict); err != nil {
+		t.Fatalf("decode verdict: %v", err)
+	}
+	if verdict.GetAllowed() {
+		t.Fatal("allowed = true for a subject with no roles, want false")
+	}
+	if verdict.GetTimestamp() == nil {
+		t.Fatal("timestamp not set")
+	}
 }

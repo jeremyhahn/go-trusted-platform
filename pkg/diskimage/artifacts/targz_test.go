@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"errors"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -107,6 +109,76 @@ func TestExtractTarGz(t *testing.T) {
 			} else if errors.Unwrap(err) == nil || ext.Error() == "" {
 				t.Errorf("%s: the error does not carry its cause", name)
 			}
+		}
+	})
+}
+
+// writeArchive writes a .tar.gz of hdrs, each followed by its body, without
+// the tar trailer, and returns its path. A body shorter than its header's
+// Size leaves the member truncated.
+func writeArchive(t *testing.T, hdrs []*tar.Header, bodies []string) string {
+	t.Helper()
+	var out bytes.Buffer
+	gz := gzip.NewWriter(&out)
+	tw := tar.NewWriter(gz)
+	for i, hdr := range hdrs {
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(bodies[i])); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "a.tar.gz")
+	if err := os.WriteFile(path, out.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestExtractTarGz_SkipsNonRegularMembers(t *testing.T) {
+	path := writeArchive(t, []*tar.Header{
+		{Name: "boot/overlays/", Mode: 0o755, Typeflag: tar.TypeDir},
+		{Name: "boot/link", Linkname: "/etc/shadow", Typeflag: tar.TypeSymlink},
+		{Name: "boot/hard", Linkname: "boot/cmdline.txt", Typeflag: tar.TypeLink},
+		{Name: "boot/cmdline.txt", Mode: 0o644, Size: 4, Typeflag: tar.TypeReg},
+	}, []string{"", "", "", "root"})
+	dest := t.TempDir()
+	written, err := ExtractTarGz(path, "boot/", dest, func(string) bool { return true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(written) != 1 || written[0] != "cmdline.txt" {
+		t.Errorf("written = %v, want only cmdline.txt", written)
+	}
+	for _, name := range []string{"overlays", "link", "hard"} {
+		if _, err := os.Lstat(filepath.Join(dest, name)); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("%s: Lstat err = %v, want it absent", name, err)
+		}
+	}
+}
+
+func TestExtractTarGz_WriteFailures(t *testing.T) {
+	t.Run("destination is a directory", func(t *testing.T) {
+		path := writeArchive(t, []*tar.Header{{Name: "boot/a", Mode: 0o644, Size: 1, Typeflag: tar.TypeReg}}, []string{"x"})
+		dest := t.TempDir()
+		if err := os.Mkdir(filepath.Join(dest, "a"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		var ext *ExtractError
+		if _, err := ExtractTarGz(path, "boot/", dest, func(string) bool { return true }); !errors.As(err, &ext) || ext.Archive != path {
+			t.Fatalf("err = %v, want an ExtractError for %s", err, path)
+		}
+	})
+	t.Run("member body shorter than its header", func(t *testing.T) {
+		path := writeArchive(t, []*tar.Header{{Name: "boot/a", Mode: 0o644, Size: 100, Typeflag: tar.TypeReg}}, []string{"short"})
+		var ext *ExtractError
+		_, err := ExtractTarGz(path, "boot/", t.TempDir(), func(string) bool { return true })
+		if !errors.As(err, &ext) || !errors.Is(err, io.ErrUnexpectedEOF) {
+			t.Fatalf("err = %v, want an ExtractError wrapping io.ErrUnexpectedEOF", err)
 		}
 	})
 }

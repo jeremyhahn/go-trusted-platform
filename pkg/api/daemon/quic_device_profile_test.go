@@ -241,6 +241,29 @@ func TestQUICDeviceGetProfile_NotFound(t *testing.T) {
 	assert.Equal(t, quicwire.StatusNotFound, resp.Status)
 }
 
+// TestQUICDevice_UnknownIdentityIsNotFound: every device read and write keyed
+// by an id or serial no device has answers NotFound on the response frame.
+func TestQUICDevice_UnknownIdentityIsNotFound(t *testing.T) {
+	handler, _ := newQUICDeviceProfileHandler(t)
+	const absentID = uint64(18446744073709551615)
+
+	cases := map[string]*quicwire.Request{
+		"GetDevice": encodeQUICRequest(t, quicwire.OpDeviceGet, &platformv1.GetDeviceRequest{Id: absentID}),
+		"UpdateDevice": encodeQUICRequest(t, quicwire.OpDeviceUpdate, &platformv1.UpdateDeviceRequest{
+			Device: &platformv1.Device{Id: absentID, Model: "nope"},
+		}),
+		"DeleteDevice":  encodeQUICRequest(t, quicwire.OpDeviceUnregister, &platformv1.DeleteDeviceRequest{Id: absentID}),
+		"FindBySerial":  encodeQUICRequest(t, quicwire.OpDeviceGet, &platformv1.FindDeviceBySerialRequest{Serial: "SN-DOES-NOT-EXIST"}),
+		"DeleteProfile": encodeQUICRequest(t, quicwire.OpDeviceDeleteProfile, &platformv1.DeleteProfileRequest{Id: absentID}),
+	}
+	for name, req := range cases {
+		t.Run(name, func(t *testing.T) {
+			resp := handler.HandleRequest(context.Background(), req)
+			assert.Equal(t, quicwire.StatusNotFound, resp.Status, "payload: %s", resp.Payload)
+		})
+	}
+}
+
 // TestQUICDeviceListProfiles_CountViaPagination verifies the list reply
 // carries the total profile count in the pagination so the SDK can derive
 // CountProfilesResponse from the same wire payload.
@@ -434,6 +457,22 @@ func TestQUICDeviceRegister_MissingDevice(t *testing.T) {
 	req := encodeQUICRequest(t, quicwire.OpDeviceRegister, &platformv1.CreateDeviceRequest{})
 	resp := handler.HandleRequest(context.Background(), req)
 	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
+}
+
+// TestQUICDeviceGet_ZeroIDIsInvalidArgument: a device or profile get that
+// names no ID is refused as invalid input on the QUIC wire, not looked up.
+func TestQUICDeviceGet_ZeroIDIsInvalidArgument(t *testing.T) {
+	handler, _ := newQUICDeviceProfileHandler(t)
+
+	for name, req := range map[string]*quicwire.Request{
+		"device":  encodeQUICRequest(t, quicwire.OpDeviceGet, &platformv1.GetDeviceRequest{Id: 0}),
+		"profile": encodeQUICRequest(t, quicwire.OpDeviceGetProfile, &platformv1.GetProfileRequest{Id: 0}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			resp := handler.HandleRequest(context.Background(), req)
+			assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
+		})
+	}
 }
 
 // TestQUICDeviceRegister_NoSerial verifies a device without a serial is

@@ -139,6 +139,10 @@ type ConnAuth struct {
 	Auth       string `vici:"auth"`
 	ID         string `vici:"id"`
 	Revocation string `vici:"revocation"`
+	// CACerts are PEM CA certificates the authenticating side's chain
+	// must contain (charon's AUTH_RULE_CA_CERT): a certificate charon
+	// could chain to another CA it holds is refused.
+	CACerts []string `vici:"cacerts"`
 }
 
 // ChildSA is a CHILD_SA of a Connection.

@@ -129,27 +129,6 @@ func RequireCLIRefusal(t require.TestingT, adapter string, err, want error) bool
 	return true
 }
 
-// ErrCLINoCommandGroup is a suite CLI adapter's refusal of an operation whose
-// platformctl command group does not exist. The SDK serves the operation over
-// every other transport; only the operator CLI is missing, and Issue names the
-// issue that records the omission.
-type ErrCLINoCommandGroup struct {
-	Group     string
-	Operation string
-	Issue     string
-}
-
-func (e ErrCLINoCommandGroup) Error() string {
-	return fmt.Sprintf("platformctl has no %s command group, so %s has no CLI (%s)", e.Group, e.Operation, e.Issue)
-}
-
-// Is matches any ErrCLINoCommandGroup, so a suite asserts the refusal with
-// errors.Is against the zero value.
-func (e ErrCLINoCommandGroup) Is(target error) bool {
-	_, ok := target.(ErrCLINoCommandGroup)
-	return ok
-}
-
 // ErrCLICommandGroupPresent is returned by a suite CLI adapter's Setup when
 // platformctl lists a command group the adapter still declares missing. The
 // declared gap has closed: the adapter must drive the group instead.

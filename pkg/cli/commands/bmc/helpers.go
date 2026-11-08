@@ -260,7 +260,7 @@ func encodeJSON(w io.Writer, v interface{}) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(v); err != nil {
-		return ErrResponseDecodeFailed{Cause: err}
+		return ErrOutputWriteFailed{Cause: err}
 	}
 	return nil
 }

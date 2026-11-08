@@ -90,6 +90,23 @@ func TestNewProviderGetSystemInfoFailure(t *testing.T) {
 	}
 }
 
+// TestNewProviderRecognisedVendorNotRegistered covers a manufacturer that
+// DetectVendor recognises but whose backend is not linked into the binary.
+// This test binary deliberately does not import the supermicro backend, so
+// NewProvider must refuse with ErrUnsupportedVendor naming the manufacturer
+// rather than dispatch to a missing factory.
+func TestNewProviderRecognisedVendorNotRegistered(t *testing.T) {
+	_, err := attestation.NewProvider(context.Background(), nil,
+		attestation.Target{Manufacturer: "Supermicro"})
+	var unsupported attestation.ErrUnsupportedVendor
+	if !errors.As(err, &unsupported) {
+		t.Fatalf("want ErrUnsupportedVendor, got %T (%v)", err, err)
+	}
+	if unsupported.Manufacturer != "Supermicro" {
+		t.Fatalf("Manufacturer = %q, want %q", unsupported.Manufacturer, "Supermicro")
+	}
+}
+
 func TestNewProviderNilClientNoManufacturer(t *testing.T) {
 	_, err := attestation.NewProvider(context.Background(), nil, attestation.Target{})
 	if err == nil {

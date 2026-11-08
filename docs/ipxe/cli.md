@@ -60,6 +60,7 @@ short forms and no subcommands.
 | `--data-dir` | string | `/data` | no | Directory served at `/data/`; `--media-dir` must be inside it |
 | `--media-dir` | string | `/data/media` | **yes** | The media sets served, one per subdirectory with a `media-set.yaml` (`container.MediaSet`): the netboot media build's `media/`, staged by the deployer. It must hold at least one set |
 | `--tftp-dir` | string | `""` | no | Raspberry Pi boot tree served over TFTP beside the iPXE firmware |
+| `--firmware-dir` | string | `""` | no | Directory the iPXE firmware is loaded from and cached into; empty is the user cache directory, else the system one |
 | `--firmware-override` | name=path | — | no | Serve a prebuilt firmware file in place of the upstream download; repeatable (the db-signed arm64 iPXE as `snponly-aarch64.efi`) |
 | `--dhcp-proxy` | bool | `false` | no | Proxy DHCP: boot options, no lease — the segment has its own DHCP server |
 | `--nbd-listen` | string | `""` | no | NBD-over-TLS export server address; empty is `--dhcp-server-ip`:10809 |

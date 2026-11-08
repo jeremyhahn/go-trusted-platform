@@ -39,14 +39,23 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { SDNTopology } from '@/components/features/networking/sdn-topology';
 import { useSDN, useApi, useToast } from '@/hooks';
-import type { Network, FlowRule, FlowAction } from '@/types/infrastructure';
+import type { FlowRule } from '@/types/infrastructure';
+import type { BridgeType } from 'trusted-platform-sdk';
+import {
+  bridgeKindLabels,
+  flowActionKind,
+  flowTableNumber,
+  readBridge,
+  readUint64,
+  type SDNBridgeRow,
+} from '@/lib/sdn-wire';
 
 export default function SDNPage() {
   const { toast } = useToast();
   const sdn = useSDN();
   const [createOpen, setCreateOpen] = useState(false);
   const [createName, setCreateName] = useState('');
-  const [createType, setCreateType] = useState<'ovs' | 'linux'>('ovs');
+  const [createType, setCreateType] = useState<BridgeType>('BRIDGE_TYPE_OVS');
   const [createSubmitting, setCreateSubmitting] = useState(false);
 
   // Fetch bridges using SDK
@@ -91,31 +100,11 @@ export default function SDNPage() {
     refetchBridges();
   };
 
-  // Transform SDK bridges to local Network type for UI compatibility.
-  // The server returns flat bridge records (id/name/type/status/created_at)
-  // rather than the SDK's nested {config: BridgeConfig} shape. Read both
-  // shapes so the page works regardless of which contract is on the wire.
-  const networks: Network[] = useMemo(() => {
-    if (!bridgesData?.bridges) return [];
-    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-    return bridgesData.bridges.map((bridge: any) => {
-      const name = bridge.config?.name || bridge.name || bridge.id;
-      const rawType = bridge.config?.type || bridge.type || '';
-      return {
-        id: bridge.id,
-        name,
-        type: (String(rawType).toLowerCase() === 'ovs' ? 'overlay' : 'vlan') as Network['type'],
-        cidr: '',
-        gateway: undefined,
-        status: 'active' as Network['status'],
-        vlanId: undefined,
-        createdAt:
-          bridge.createdAt ||
-          bridge.created_at ||
-          new Date().toISOString(),
-      };
-    });
-  }, [bridgesData]);
+  // One row per bridge of the ListBridgesResponse (protojson, #445).
+  const networks: SDNBridgeRow[] = useMemo(
+    () => (bridgesData?.bridges ?? []).map(readBridge),
+    [bridgesData]
+  );
 
   // Build topology from bridges (simplified view - bridges as nodes)
   const topology = useMemo(() => {
@@ -140,7 +129,7 @@ export default function SDNPage() {
       return {
         id: flow.id,
         switchId: flow.config?.bridgeId || '',
-        table: typeof flow.config?.table === 'number' ? flow.config.table : 0,
+        table: flowTableNumber(flow.config?.table),
         priority: flow.config?.priority || 0,
         match: sdkMatch ? {
           inPort: sdkMatch.inPort,
@@ -156,12 +145,12 @@ export default function SDNPage() {
           udpSrc: sdkMatch.udpSrc,
           udpDst: sdkMatch.udpDst,
         } : {},
-        actions: (flow.config?.actions || []).map((a: { type?: string; port?: string }) => ({
-          type: (a.type || 'output') as FlowAction['type'],
+        actions: (flow.config?.actions || []).map((a) => ({
+          type: flowActionKind(a.type),
           value: a.port,
         })),
-        packets: flow.stats?.packetCount || 0,
-        bytes: flow.stats?.byteCount || 0,
+        packets: readUint64(flow.stats?.packetCount),
+        bytes: readUint64(flow.stats?.byteCount),
         duration: flow.stats?.durationSeconds || 0,
       };
     });
@@ -214,11 +203,11 @@ export default function SDNPage() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="bridge-type">Type</Label>
-              <Select value={createType} onValueChange={(v) => setCreateType(v as 'ovs' | 'linux')}>
+              <Select value={createType} onValueChange={(v) => setCreateType(v as BridgeType)}>
                 <SelectTrigger id="bridge-type"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="ovs">OVS (Open vSwitch)</SelectItem>
-                  <SelectItem value="linux">Linux Bridge</SelectItem>
+                  <SelectItem value="BRIDGE_TYPE_OVS">OVS (Open vSwitch)</SelectItem>
+                  <SelectItem value="BRIDGE_TYPE_LINUX">Linux Bridge</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -230,14 +219,9 @@ export default function SDNPage() {
               onClick={async () => {
                 setCreateSubmitting(true);
                 try {
-                  // The platform SDN REST handler expects a flat
-                  // {name, type} body, not the SDK's nested
-                  // {config: {...}} shape; bypass the SDK typing.
                   await sdn.createBridge({
-                    name: createName,
-                    type: createType === 'ovs' ? 'BRIDGE_TYPE_OVS' : 'BRIDGE_TYPE_LINUX',
-                  // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-                  } as any);
+                    config: { name: createName, type: createType },
+                  });
                   toast({ title: 'Network created', variant: 'success' });
                   setCreateOpen(false);
                   setCreateName('');
@@ -299,8 +283,6 @@ export default function SDNPage() {
                 <TableRow>
                   <TableHead>Name</TableHead>
                   <TableHead>Type</TableHead>
-                  <TableHead>CIDR</TableHead>
-                  <TableHead>Gateway</TableHead>
                   <TableHead>Status</TableHead>
                 </TableRow>
               </TableHeader>
@@ -308,7 +290,7 @@ export default function SDNPage() {
                 {networks.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={5}
+                      colSpan={3}
                       className="text-center text-muted-foreground"
                     >
                       No networks found
@@ -319,15 +301,9 @@ export default function SDNPage() {
                     <TableRow key={network.id}>
                       <TableCell className="font-medium">{network.name}</TableCell>
                       <TableCell>
-                        <Badge variant="outline" className="capitalize">
-                          {network.type}
+                        <Badge variant="outline">
+                          {bridgeKindLabels[network.kind]}
                         </Badge>
-                      </TableCell>
-                      <TableCell className="font-mono text-sm">
-                        {network.cidr}
-                      </TableCell>
-                      <TableCell className="font-mono text-sm">
-                        {network.gateway || '-'}
                       </TableCell>
                       <TableCell>
                         <Badge

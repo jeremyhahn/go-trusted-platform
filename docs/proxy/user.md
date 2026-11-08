@@ -36,8 +36,9 @@ gateway converges on its next sync tick (default 15 seconds).
 1. **A gateway with the proxy service enabled** — `proxy.enabled: true` in its
    configuration, with `proxy.tls.cert-file` / `key-file` and at least one
    listener. Any route that is not `public` also needs a client CA source:
-   `proxy.tls.client-ca-file`, or a `trust:` section the platform's
-   `internal`-class pool can be read from.
+   `proxy.tls.client-ca-file`, or the platform anchor (`platform-ca-file:` in
+   the gateway configuration), whose CA pool is used when no client CA file is
+   set.
 2. **`platformctl` pointed at your platformd** — `--server`, or a configured
    context.
 3. **Zones, if you plan to use them.** `allowed-zones` and `backend-zone` are

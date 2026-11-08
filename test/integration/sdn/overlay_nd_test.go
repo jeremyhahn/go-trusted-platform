@@ -262,10 +262,26 @@ func TestOverlayND_SuppressesKnownTargets(t *testing.T) {
 
 		ovlNDSettle(t)
 		floods := ovlNDFloodPackets(ctx, t, ovsClient)
+		// A failed flood wait shows whether a punt, a megaflow to the meter or
+		// the meter itself was there by then.
+		flooded := false
+		t.Cleanup(func() {
+			if flooded || !t.Failed() {
+				return
+			}
+			for _, table := range []uint8{modes.TableARP, modes.TableEgress} {
+				t.Logf("table %d at the failed flood wait:\n%s", table,
+					runCmd(t, "ovs-ofctl", "-O", "OpenFlow13", "dump-flows", bridge.name, fmt.Sprintf("table=%d", table)))
+			}
+			t.Logf("datapath flows at the failed flood wait:\n%s", runCmd(t, "ovs-appctl", "dpctl/dump-flows"))
+			t.Logf("meters at the failed flood wait:\n%s",
+				runCmd(t, "ovs-ofctl", "-O", "OpenFlow13", "dump-meters", bridge.name))
+		})
 		sendNDFrame(t, conn, solicitation)
 		waitFor(ctx, t, "the known target's solicitation to flood", 50*time.Millisecond, 10*time.Second, func() bool {
 			return ovlNDFloodPackets(ctx, t, ovsClient) > floods
 		})
+		flooded = true
 
 		// The second fallback inside the quiet period holds down twice as long.
 		waitFor(ctx, t, "suppression to resume after the hold-down", 500*time.Millisecond, ovlNDDoubledHoldDownWait, func() bool {
@@ -350,15 +366,22 @@ func ovlNDPunts(ctx context.Context, t *testing.T, client *ovs.Client) (int, int
 	return len(flows), packets
 }
 
-// ovlNDSettle waits for the datapath to follow a punt change the OpenFlow
-// tables already show. OVS revalidates its kernel megaflows asynchronously,
-// so a solicitation sent right after a punt is removed can still ride the
-// old megaflow to the controller, which answers a known target instead of
-// letting it flood; one sent right after a punt is installed can still
-// flood. Every send that follows a punt change waits here first.
+// ovlNDSettle makes the datapath follow a punt change the OpenFlow tables
+// already show. OVS revalidates its kernel megaflows asynchronously, so a
+// solicitation sent right after a punt is removed can still ride the old
+// megaflow through the meter to the controller: the controller answers it,
+// or, after a burst has drained the meter, the meter drops it, and either
+// way it never floods. One sent right after a punt is installed can still
+// flood. `revalidator/wait` is not enough: it replies when the revalidation
+// round in progress ends, and a round that began before the punt change can
+// keep the old megaflow. `revalidator/purge` deletes every megaflow before it
+// replies, pushing their statistics to the OpenFlow flows first, so the next
+// packet is translated against the tables as they are and the flow counters
+// read afterwards are current. Every send that follows a punt change purges
+// here first.
 func ovlNDSettle(t *testing.T) {
 	t.Helper()
-	runCmd(t, "ovs-appctl", "revalidator/wait")
+	runCmd(t, "ovs-appctl", "revalidator/purge")
 }
 
 // openNDSocket opens a raw IPv6 packet socket on the endpoint's VLAN

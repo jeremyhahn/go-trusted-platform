@@ -23,12 +23,14 @@ import (
 )
 
 func TestPaginationParams_ZeroValues(t *testing.T) {
+	t.Parallel()
 	params := PaginationParams{}
 	assert.Equal(t, int32(0), params.Limit)
 	assert.Equal(t, int32(0), params.Offset)
 }
 
 func TestPaginationParams_WithValues(t *testing.T) {
+	t.Parallel()
 	params := PaginationParams{
 		Limit:  50,
 		Offset: 100,
@@ -38,6 +40,7 @@ func TestPaginationParams_WithValues(t *testing.T) {
 }
 
 func TestPaginatedResponse_ZeroValues(t *testing.T) {
+	t.Parallel()
 	resp := PaginatedResponse{}
 	assert.Equal(t, int64(0), resp.Total)
 	assert.Equal(t, int32(0), resp.Limit)
@@ -45,6 +48,7 @@ func TestPaginatedResponse_ZeroValues(t *testing.T) {
 }
 
 func TestPaginatedResponse_WithValues(t *testing.T) {
+	t.Parallel()
 	resp := PaginatedResponse{
 		Total:  100,
 		Limit:  50,
@@ -56,6 +60,7 @@ func TestPaginatedResponse_WithValues(t *testing.T) {
 }
 
 func TestCreateUserRequest_Fields(t *testing.T) {
+	t.Parallel()
 	req := CreateUserRequest{
 		Email:      "test@example.com",
 		Name:       "Test User",
@@ -72,6 +77,7 @@ func TestCreateUserRequest_Fields(t *testing.T) {
 }
 
 func TestCreateUserRequest_EmptyFields(t *testing.T) {
+	t.Parallel()
 	req := CreateUserRequest{}
 	assert.Empty(t, req.Email)
 	assert.Empty(t, req.Name)
@@ -81,6 +87,7 @@ func TestCreateUserRequest_EmptyFields(t *testing.T) {
 }
 
 func TestUpdateUserRequest_Fields(t *testing.T) {
+	t.Parallel()
 	req := UpdateUserRequest{
 		Email:      "updated@example.com",
 		Name:       "Updated User",
@@ -97,6 +104,7 @@ func TestUpdateUserRequest_Fields(t *testing.T) {
 }
 
 func TestUserResponse_Fields(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	resp := UserResponse{
 		ID:          "user-123",
@@ -123,6 +131,7 @@ func TestUserResponse_Fields(t *testing.T) {
 }
 
 func TestUserResponse_NilTimestamps(t *testing.T) {
+	t.Parallel()
 	resp := UserResponse{
 		ID:       "user-123",
 		TenantID: "tenant-456",
@@ -134,40 +143,8 @@ func TestUserResponse_NilTimestamps(t *testing.T) {
 	assert.Nil(t, resp.LastAuth)
 }
 
-func TestListUsersResponse_Fields(t *testing.T) {
-	resp := ListUsersResponse{
-		PaginatedResponse: PaginatedResponse{
-			Total:  100,
-			Limit:  50,
-			Offset: 0,
-		},
-		Users: []UserResponse{
-			{ID: "user-1", Email: "user1@example.com"},
-			{ID: "user-2", Email: "user2@example.com"},
-		},
-	}
-
-	assert.Equal(t, int64(100), resp.Total)
-	assert.Equal(t, int32(50), resp.Limit)
-	assert.Equal(t, int32(0), resp.Offset)
-	assert.Len(t, resp.Users, 2)
-}
-
-func TestListUsersResponse_EmptyUsers(t *testing.T) {
-	resp := ListUsersResponse{
-		PaginatedResponse: PaginatedResponse{
-			Total:  0,
-			Limit:  50,
-			Offset: 0,
-		},
-		Users: []UserResponse{},
-	}
-
-	assert.Equal(t, int64(0), resp.Total)
-	assert.Empty(t, resp.Users)
-}
-
 func TestCreateGroupRequest_Fields(t *testing.T) {
+	t.Parallel()
 	req := CreateGroupRequest{
 		ID:          "engineering",
 		Name:        "Engineering Team",
@@ -180,6 +157,7 @@ func TestCreateGroupRequest_Fields(t *testing.T) {
 }
 
 func TestUpdateGroupRequest_Fields(t *testing.T) {
+	t.Parallel()
 	req := UpdateGroupRequest{
 		Name:        "Updated Team",
 		Description: "Updated description",
@@ -190,6 +168,7 @@ func TestUpdateGroupRequest_Fields(t *testing.T) {
 }
 
 func TestGroupResponse_Fields(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	resp := GroupResponse{
 		ID:          "group-123",
@@ -206,23 +185,8 @@ func TestGroupResponse_Fields(t *testing.T) {
 	assert.Len(t, resp.Members, 2)
 }
 
-func TestListGroupsResponse_Fields(t *testing.T) {
-	resp := ListGroupsResponse{
-		PaginatedResponse: PaginatedResponse{
-			Total:  10,
-			Limit:  50,
-			Offset: 0,
-		},
-		Groups: []GroupResponse{
-			{ID: "group-1", Name: "Group 1"},
-		},
-	}
-
-	assert.Equal(t, int64(10), resp.Total)
-	assert.Len(t, resp.Groups, 1)
-}
-
 func TestCreateRoleRequest_Fields(t *testing.T) {
+	t.Parallel()
 	req := CreateRoleRequest{
 		ID:          "admin",
 		Name:        "Administrator",
@@ -236,6 +200,7 @@ func TestCreateRoleRequest_Fields(t *testing.T) {
 }
 
 func TestUpdateRoleRequest_Fields(t *testing.T) {
+	t.Parallel()
 	req := UpdateRoleRequest{
 		Name:        "Updated Role",
 		Description: "Updated description",
@@ -247,6 +212,7 @@ func TestUpdateRoleRequest_Fields(t *testing.T) {
 }
 
 func TestRoleResponse_Fields(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	resp := RoleResponse{
 		ID:          "admin",
@@ -263,22 +229,8 @@ func TestRoleResponse_Fields(t *testing.T) {
 	assert.Len(t, resp.Permissions, 1)
 }
 
-func TestListRolesResponse_Fields(t *testing.T) {
-	resp := ListRolesResponse{
-		PaginatedResponse: PaginatedResponse{
-			Total: 5,
-		},
-		Roles: []RoleResponse{
-			{ID: "admin"},
-			{ID: "viewer"},
-		},
-	}
-
-	assert.Equal(t, int64(5), resp.Total)
-	assert.Len(t, resp.Roles, 2)
-}
-
 func TestTenantSettings_Fields(t *testing.T) {
+	t.Parallel()
 	settings := TenantSettings{
 		MaxUsers:    100,
 		MFARequired: true,
@@ -289,12 +241,14 @@ func TestTenantSettings_Fields(t *testing.T) {
 }
 
 func TestTenantSettings_ZeroValues(t *testing.T) {
+	t.Parallel()
 	settings := TenantSettings{}
 	assert.Equal(t, int32(0), settings.MaxUsers)
 	assert.False(t, settings.MFARequired)
 }
 
 func TestCreateTenantRequest_Fields(t *testing.T) {
+	t.Parallel()
 	req := CreateTenantRequest{
 		ID:   "acme",
 		Name: "Acme Corporation",
@@ -311,6 +265,7 @@ func TestCreateTenantRequest_Fields(t *testing.T) {
 }
 
 func TestCreateTenantRequest_NilSettings(t *testing.T) {
+	t.Parallel()
 	req := CreateTenantRequest{
 		ID:   "acme",
 		Name: "Acme Corporation",
@@ -320,6 +275,7 @@ func TestCreateTenantRequest_NilSettings(t *testing.T) {
 }
 
 func TestUpdateTenantRequest_Fields(t *testing.T) {
+	t.Parallel()
 	req := UpdateTenantRequest{
 		Name: "Updated Corp",
 		Settings: &TenantSettings{
@@ -332,6 +288,7 @@ func TestUpdateTenantRequest_Fields(t *testing.T) {
 }
 
 func TestTenantResponse_Fields(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	resp := TenantResponse{
 		ID:   "tenant-123",
@@ -350,6 +307,7 @@ func TestTenantResponse_Fields(t *testing.T) {
 }
 
 func TestListTenantsResponse_Fields(t *testing.T) {
+	t.Parallel()
 	resp := ListTenantsResponse{
 		PaginatedResponse: PaginatedResponse{
 			Total: 3,
@@ -365,6 +323,7 @@ func TestListTenantsResponse_Fields(t *testing.T) {
 }
 
 func TestCreatePolicyRequest_Fields(t *testing.T) {
+	t.Parallel()
 	req := CreatePolicyRequest{
 		Name:        "admin-policy",
 		Description: "Admin access policy",
@@ -380,6 +339,7 @@ func TestCreatePolicyRequest_Fields(t *testing.T) {
 }
 
 func TestUpdatePolicyRequest_Fields(t *testing.T) {
+	t.Parallel()
 	req := UpdatePolicyRequest{
 		Description: "Updated policy",
 		Priority:    200,
@@ -392,6 +352,7 @@ func TestUpdatePolicyRequest_Fields(t *testing.T) {
 }
 
 func TestPolicyResponse_Fields(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	resp := PolicyResponse{
 		Name:        "test-policy",
@@ -410,6 +371,7 @@ func TestPolicyResponse_Fields(t *testing.T) {
 }
 
 func TestListPoliciesResponse_Fields(t *testing.T) {
+	t.Parallel()
 	resp := ListPoliciesResponse{
 		PaginatedResponse: PaginatedResponse{
 			Total: 10,
@@ -425,6 +387,7 @@ func TestListPoliciesResponse_Fields(t *testing.T) {
 }
 
 func TestValidatePolicyRequest_Fields(t *testing.T) {
+	t.Parallel()
 	req := ValidatePolicyRequest{
 		SpecYAML: "rules:\n  - effect: allow\n    actions: ['*']",
 	}
@@ -433,11 +396,13 @@ func TestValidatePolicyRequest_Fields(t *testing.T) {
 }
 
 func TestValidatePolicyRequest_EmptySpec(t *testing.T) {
+	t.Parallel()
 	req := ValidatePolicyRequest{}
 	assert.Empty(t, req.SpecYAML)
 }
 
 func TestValidatePolicyResponse_ValidPolicy(t *testing.T) {
+	t.Parallel()
 	resp := ValidatePolicyResponse{
 		Valid:  true,
 		Errors: nil,
@@ -448,6 +413,7 @@ func TestValidatePolicyResponse_ValidPolicy(t *testing.T) {
 }
 
 func TestValidatePolicyResponse_InvalidPolicy(t *testing.T) {
+	t.Parallel()
 	resp := ValidatePolicyResponse{
 		Valid:  false,
 		Errors: []string{"missing required field 'rules'", "invalid effect value"},
@@ -458,6 +424,7 @@ func TestValidatePolicyResponse_InvalidPolicy(t *testing.T) {
 }
 
 func TestTestPolicyRequest_Fields(t *testing.T) {
+	t.Parallel()
 	req := TestPolicyRequest{
 		SubjectID:  "user-123",
 		Roles:      []string{"admin"},
@@ -476,6 +443,7 @@ func TestTestPolicyRequest_Fields(t *testing.T) {
 }
 
 func TestTestPolicyRequest_MinimalFields(t *testing.T) {
+	t.Parallel()
 	req := TestPolicyRequest{
 		SubjectID: "user-123",
 		Action:    "read",
@@ -490,6 +458,7 @@ func TestTestPolicyRequest_MinimalFields(t *testing.T) {
 }
 
 func TestTestPolicyResponse_Allowed(t *testing.T) {
+	t.Parallel()
 	resp := TestPolicyResponse{
 		Allowed:          true,
 		MatchedPolicy:    "admin-policy",
@@ -504,6 +473,7 @@ func TestTestPolicyResponse_Allowed(t *testing.T) {
 }
 
 func TestTestPolicyResponse_Denied(t *testing.T) {
+	t.Parallel()
 	resp := TestPolicyResponse{
 		Allowed:          false,
 		MatchedPolicy:    "",
@@ -517,6 +487,7 @@ func TestTestPolicyResponse_Denied(t *testing.T) {
 }
 
 func TestRegisterAppRequest_Fields(t *testing.T) {
+	t.Parallel()
 	req := RegisterAppRequest{
 		Name:           "My App",
 		RedirectURIs:   []string{"https://app.example.com/callback"},
@@ -533,6 +504,7 @@ func TestRegisterAppRequest_Fields(t *testing.T) {
 }
 
 func TestRegisterAppRequest_MinimalFields(t *testing.T) {
+	t.Parallel()
 	req := RegisterAppRequest{
 		Name: "Simple App",
 	}
@@ -543,6 +515,7 @@ func TestRegisterAppRequest_MinimalFields(t *testing.T) {
 }
 
 func TestUpdateAppRequest_Fields(t *testing.T) {
+	t.Parallel()
 	req := UpdateAppRequest{
 		Name:           "Updated App",
 		RedirectURIs:   []string{"https://new-url.example.com"},
@@ -556,6 +529,7 @@ func TestUpdateAppRequest_Fields(t *testing.T) {
 }
 
 func TestAppResponse_Fields(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	resp := AppResponse{
 		ClientID:       "client-abc-123",
@@ -577,6 +551,7 @@ func TestAppResponse_Fields(t *testing.T) {
 }
 
 func TestAppResponse_NoSecret(t *testing.T) {
+	t.Parallel()
 	resp := AppResponse{
 		ClientID: "client-abc-123",
 		TenantID: "tenant-456",
@@ -587,6 +562,7 @@ func TestAppResponse_NoSecret(t *testing.T) {
 }
 
 func TestListAppsResponse_Fields(t *testing.T) {
+	t.Parallel()
 	resp := ListAppsResponse{
 		PaginatedResponse: PaginatedResponse{
 			Total: 5,
@@ -602,6 +578,7 @@ func TestListAppsResponse_Fields(t *testing.T) {
 }
 
 func TestRotateSecretResponse_Fields(t *testing.T) {
+	t.Parallel()
 	resp := RotateSecretResponse{
 		ClientID:     "client-abc-123",
 		Name:         "Test App",
@@ -613,36 +590,8 @@ func TestRotateSecretResponse_Fields(t *testing.T) {
 	assert.Equal(t, "new-secret-xyz", resp.ClientSecret)
 }
 
-func TestSuccessResponse_Success(t *testing.T) {
-	resp := SuccessResponse{
-		Success: true,
-		Message: "Operation completed successfully",
-	}
-
-	assert.True(t, resp.Success)
-	assert.Equal(t, "Operation completed successfully", resp.Message)
-}
-
-func TestSuccessResponse_Failure(t *testing.T) {
-	resp := SuccessResponse{
-		Success: false,
-		Message: "Operation failed",
-	}
-
-	assert.False(t, resp.Success)
-	assert.Equal(t, "Operation failed", resp.Message)
-}
-
-func TestSuccessResponse_EmptyMessage(t *testing.T) {
-	resp := SuccessResponse{
-		Success: true,
-	}
-
-	assert.True(t, resp.Success)
-	assert.Empty(t, resp.Message)
-}
-
 func TestAssignRoleRequest_Fields(t *testing.T) {
+	t.Parallel()
 	req := AssignRoleRequest{
 		Role: "admin",
 	}
@@ -651,11 +600,13 @@ func TestAssignRoleRequest_Fields(t *testing.T) {
 }
 
 func TestAssignRoleRequest_EmptyRole(t *testing.T) {
+	t.Parallel()
 	req := AssignRoleRequest{}
 	assert.Empty(t, req.Role)
 }
 
 func TestMembershipRequest_Fields(t *testing.T) {
+	t.Parallel()
 	req := MembershipRequest{
 		UserID: "user-123",
 	}
@@ -664,11 +615,13 @@ func TestMembershipRequest_Fields(t *testing.T) {
 }
 
 func TestMembershipRequest_EmptyUserID(t *testing.T) {
+	t.Parallel()
 	req := MembershipRequest{}
 	assert.Empty(t, req.UserID)
 }
 
 func TestUserResponse_JSONTags(t *testing.T) {
+	t.Parallel()
 	// This test ensures the struct has proper JSON tags for serialization
 	resp := UserResponse{
 		ID:          "id-123",
@@ -687,6 +640,7 @@ func TestUserResponse_JSONTags(t *testing.T) {
 }
 
 func TestPolicyResponse_EmptyLabels(t *testing.T) {
+	t.Parallel()
 	resp := PolicyResponse{
 		Name:     "policy-1",
 		TenantID: "tenant-1",
@@ -697,6 +651,7 @@ func TestPolicyResponse_EmptyLabels(t *testing.T) {
 }
 
 func TestPolicyResponse_WithLabels(t *testing.T) {
+	t.Parallel()
 	resp := PolicyResponse{
 		Name:     "policy-1",
 		TenantID: "tenant-1",
@@ -720,6 +675,7 @@ func TestPolicyResponse_WithLabels(t *testing.T) {
 // declared camelCase-only with no arm in Resolve() (#345) — an omission a
 // test over the whole struct would have caught the moment it was written.
 func TestRegisterAppRequest_Resolve(t *testing.T) {
+	t.Parallel()
 	t.Run("camelCase aliases resolve into the canonical fields", func(t *testing.T) {
 		req := &RegisterAppRequest{
 			Name:                "app",
@@ -782,6 +738,7 @@ func TestRegisterAppRequest_Resolve(t *testing.T) {
 // tenant_id was silently dropped, because tenantId was the only spelling the
 // struct declared for that field — while AppResponse returned tenant_id.
 func TestRegisterAppRequest_BothSpellingsUnmarshal(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		body string
@@ -806,6 +763,7 @@ func TestRegisterAppRequest_BothSpellingsUnmarshal(t *testing.T) {
 // tenant, or only the tenant the route acts on, names no other one; a foreign
 // tenant in either spelling does.
 func TestBodyTenant_NamesOtherThan(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		body BodyTenant
@@ -829,6 +787,7 @@ func TestBodyTenant_NamesOtherThan(t *testing.T) {
 // TestBodyTenant_EmbeddedUnmarshal pins the wire half: the embedded fields
 // decode with the rest of a request body, in one pass.
 func TestBodyTenant_EmbeddedUnmarshal(t *testing.T) {
+	t.Parallel()
 	var req CreateUserRequest
 	require.NoError(t, json.Unmarshal([]byte(`{"email":"u@example.test","tenant_id":"tenant-b"}`), &req))
 

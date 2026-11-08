@@ -22,6 +22,14 @@ set -e
 # =============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Bounded readiness polls (#964): the image copy, else the repository's.
+WAIT_FOR_SH=/usr/local/lib/devcontainer/wait-for.sh
+if [ ! -f "$WAIT_FOR_SH" ]; then
+    WAIT_FOR_SH="$SCRIPT_DIR/../../../build/docker/devcontainer/wait-for.sh"
+fi
+# shellcheck source=build/docker/devcontainer/wait-for.sh
+source "$WAIT_FOR_SH"
 TOPOLOGY_WORK_DIR="${TOPOLOGY_WORK_DIR:-/tmp/sdn-topology}"
 COMPOSE_PROJECT="${COMPOSE_PROJECT:-sdn-test}"
 
@@ -76,7 +84,7 @@ setup_ovs() {
             --pidfile=/var/run/openvswitch/ovsdb-server.pid \
             --detach \
             --log-file=/var/log/openvswitch/ovsdb-server.log
-        sleep 2
+        wait_for 10 "ovsdb-server on db.sock" ovs-vsctl --no-wait --timeout=1 show || return 1
     else
         info "ovsdb-server already running"
     fi
@@ -91,7 +99,7 @@ setup_ovs() {
         ovs-vswitchd --pidfile=/var/run/openvswitch/ovs-vswitchd.pid \
             --detach \
             --log-file=/var/log/openvswitch/ovs-vswitchd.log
-        sleep 2
+        wait_for 10 "ovs-vswitchd control socket" ovs-appctl -t ovs-vswitchd version || return 1
     else
         info "ovs-vswitchd already running"
     fi
@@ -688,8 +696,8 @@ networks:
     driver: bridge
     ipam:
       config:
-        - subnet: 10.254.0.0/24
-          gateway: 10.254.0.1
+        - subnet: 203.0.113.0/24
+          gateway: 203.0.113.1
   underlay:
     driver: bridge
     ipam:
@@ -724,7 +732,7 @@ services:
       - EVPN_ENABLED=true
       - TRANSIT_ENABLED=true
       - NODE_IP=10.100.0.10
-      - TRANSIT_IP=10.254.0.10
+      - TRANSIT_IP=203.0.113.10
     healthcheck:
       test: ["CMD", "ovs-vsctl", "show"]
       interval: 10s
@@ -745,8 +753,8 @@ services:
       - management
     environment:
       - BGP_ASN=64496
-      - ROUTER_ID=10.254.0.100
-      - NEIGHBOR_IP=10.254.0.10
+      - ROUTER_ID=203.0.113.100
+      - NEIGHBOR_IP=203.0.113.10
       - NEIGHBOR_ASN=64512
     healthcheck:
       test: ["CMD", "vtysh", "-c", "show bgp summary"]

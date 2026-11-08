@@ -26,6 +26,7 @@ import (
 	"time"
 
 	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 
 	"github.com/gorilla/mux"
@@ -33,6 +34,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
@@ -490,6 +493,17 @@ func newTestHandlers(iamClient *mockIAMClient, pepClient *mockPEPClient) (*IAMHa
 	return handlers, writer
 }
 
+// decodeProtoReply decodes the protojson payload a handler wrote through
+// protorest into reply, failing the test when the handler wrote any other shape.
+func decodeProtoReply(t *testing.T, writer *mockHttpWriter, reply proto.Message) {
+	t.Helper()
+	envelope, ok := writer.lastPayload.(restwire.WebServiceResponse)
+	require.True(t, ok, "the handler wrote %T, not a proto reply envelope", writer.lastPayload)
+	raw, ok := envelope.Payload.(json.RawMessage)
+	require.True(t, ok, "the envelope payload is %T, not protojson", envelope.Payload)
+	require.NoError(t, protojson.Unmarshal(raw, reply))
+}
+
 func createRequestWithVars(method, path string, body interface{}, vars map[string]string) *http.Request {
 	var reqBody bytes.Buffer
 	if body != nil {
@@ -510,6 +524,7 @@ func createRequestWithVars(method, path string, body interface{}, vars map[strin
 // Tests for NewIAMHandlers
 
 func TestNewIAMHandlers(t *testing.T) {
+	t.Parallel()
 	logger := newTestLogger()
 	iamClient := &mockIAMClient{}
 	pepClient := &mockPEPClient{}
@@ -527,6 +542,7 @@ func TestNewIAMHandlers(t *testing.T) {
 // Tests for User Handlers
 
 func TestCreateUser_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		createUserFn: func(ctx context.Context, tenantID string, req *iamsdk.CreateUserRequest) (*iamsdk.User, error) {
 			return &iamsdk.User{
@@ -562,6 +578,7 @@ func TestCreateUser_Success(t *testing.T) {
 }
 
 func TestCreateUser_MissingTenantID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	body := CreateUserRequest{Email: "test@example.com"}
@@ -576,6 +593,7 @@ func TestCreateUser_MissingTenantID(t *testing.T) {
 }
 
 func TestCreateUser_InvalidRequestBody(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/iam/tenants/tenant-1/users", bytes.NewBufferString("invalid json"))
@@ -591,6 +609,7 @@ func TestCreateUser_InvalidRequestBody(t *testing.T) {
 }
 
 func TestCreateUser_GRPCError(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		createUserFn: func(ctx context.Context, tenantID string, req *iamsdk.CreateUserRequest) (*iamsdk.User, error) {
 			return nil, status.Error(codes.AlreadyExists, "user already exists")
@@ -609,6 +628,7 @@ func TestCreateUser_GRPCError(t *testing.T) {
 }
 
 func TestListUsers_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		listUsersFn: func(ctx context.Context, tenantID string, req *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
 			return &iamsdk.ListUsersResponse{
@@ -629,13 +649,16 @@ func TestListUsers_Success(t *testing.T) {
 	handlers.ListUsers(rec, req)
 
 	assert.Equal(t, http.StatusOK, writer.lastStatus)
-	payload, ok := writer.lastPayload.(ListUsersResponse)
-	require.True(t, ok)
-	assert.Len(t, payload.Users, 2)
-	assert.Equal(t, int64(2), payload.Total)
+	reply := &platformv1.ListIAMUsersResponse{}
+	decodeProtoReply(t, writer, reply)
+	assert.Len(t, reply.GetUsers(), 2)
+	assert.Equal(t, int64(2), reply.GetTotal())
+	assert.Equal(t, uint64(2), reply.GetPagination().GetTotalItems())
+	assert.NotNil(t, reply.GetTimestamp())
 }
 
 func TestListUsers_WithPagination(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		listUsersFn: func(ctx context.Context, tenantID string, req *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
 			assert.Equal(t, int32(25), int32(req.PageSize))
@@ -656,13 +679,15 @@ func TestListUsers_WithPagination(t *testing.T) {
 	handlers.ListUsers(rec, req)
 
 	assert.Equal(t, http.StatusOK, writer.lastStatus)
-	payload, ok := writer.lastPayload.(ListUsersResponse)
-	require.True(t, ok)
-	assert.Equal(t, int32(25), payload.Limit)
-	assert.Equal(t, int32(50), payload.Offset)
+	reply := &platformv1.ListIAMUsersResponse{}
+	decodeProtoReply(t, writer, reply)
+	// offset 50 at 25 per page falls on page 3.
+	assert.Equal(t, uint32(25), reply.GetPagination().GetPageSize())
+	assert.Equal(t, uint32(3), reply.GetPagination().GetPage())
 }
 
 func TestListUsers_MissingTenantID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodGet, "/api/v1/iam/tenants//users", nil, map[string]string{"tenant": ""})
@@ -674,6 +699,7 @@ func TestListUsers_MissingTenantID(t *testing.T) {
 }
 
 func TestGetUser_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		getUserFn: func(ctx context.Context, tenantID, userID string) (*iamsdk.User, error) {
 			return &iamsdk.User{
@@ -705,6 +731,7 @@ func TestGetUser_Success(t *testing.T) {
 }
 
 func TestGetUser_NotFound(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		getUserFn: func(ctx context.Context, tenantID, userID string) (*iamsdk.User, error) {
 			return nil, status.Error(codes.NotFound, "user not found")
@@ -722,6 +749,7 @@ func TestGetUser_NotFound(t *testing.T) {
 }
 
 func TestGetUser_MissingUserID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodGet, "/api/v1/iam/tenants/tenant-1/users/", nil, map[string]string{"tenant": "tenant-1", "id": ""})
@@ -735,6 +763,7 @@ func TestGetUser_MissingUserID(t *testing.T) {
 }
 
 func TestUpdateUser_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		updateUserFn: func(ctx context.Context, tenantID, userID string, req *iamsdk.UpdateUserRequest) (*iamsdk.User, error) {
 			return &iamsdk.User{
@@ -761,6 +790,7 @@ func TestUpdateUser_Success(t *testing.T) {
 }
 
 func TestUpdateUser_NotFound(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		updateUserFn: func(ctx context.Context, tenantID, userID string, req *iamsdk.UpdateUserRequest) (*iamsdk.User, error) {
 			return nil, status.Error(codes.NotFound, "user not found")
@@ -779,6 +809,7 @@ func TestUpdateUser_NotFound(t *testing.T) {
 }
 
 func TestUpdateUser_ReplacesRoles(t *testing.T) {
+	t.Parallel()
 	var setRoles []string
 	iamClient := &mockIAMClient{
 		setUserRolesFn: func(ctx context.Context, tenantID, userID string, roles []string) error {
@@ -803,6 +834,7 @@ func TestUpdateUser_ReplacesRoles(t *testing.T) {
 }
 
 func TestUpdateUser_UnknownRoleIsNotFoundAndUpdatesNothing(t *testing.T) {
+	t.Parallel()
 	updated := false
 	iamClient := &mockIAMClient{
 		setUserRolesFn: func(ctx context.Context, tenantID, userID string, roles []string) error {
@@ -827,6 +859,7 @@ func TestUpdateUser_UnknownRoleIsNotFoundAndUpdatesNothing(t *testing.T) {
 }
 
 func TestDeleteUser_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		deleteUserFn: func(ctx context.Context, tenantID, userID string) error {
 			return nil
@@ -841,12 +874,15 @@ func TestDeleteUser_Success(t *testing.T) {
 	handlers.DeleteUser(rec, req)
 
 	assert.Equal(t, http.StatusOK, writer.lastStatus)
-	payload, ok := writer.lastPayload.(SuccessResponse)
-	require.True(t, ok)
-	assert.True(t, payload.Success)
+	reply := &platformv1.DeleteIAMUserResponse{}
+	decodeProtoReply(t, writer, reply)
+	assert.True(t, reply.GetStatus().GetSuccess())
+	assert.Equal(t, "user deleted successfully", reply.GetStatus().GetMessage())
+	assert.NotNil(t, reply.GetTimestamp())
 }
 
 func TestDeleteUser_NotFound(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		deleteUserFn: func(ctx context.Context, tenantID, userID string) error {
 			return status.Error(codes.NotFound, "user not found")
@@ -864,6 +900,7 @@ func TestDeleteUser_NotFound(t *testing.T) {
 }
 
 func TestAssignUserRole_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		assignRoleFn: func(ctx context.Context, tenantID, userID, roleID string) error {
 			return nil
@@ -878,12 +915,14 @@ func TestAssignUserRole_Success(t *testing.T) {
 	handlers.AssignUserRole(rec, req)
 
 	assert.Equal(t, http.StatusOK, writer.lastStatus)
-	payload, ok := writer.lastPayload.(SuccessResponse)
-	require.True(t, ok)
-	assert.True(t, payload.Success)
+	reply := &platformv1.AssignIAMRoleResponse{}
+	decodeProtoReply(t, writer, reply)
+	assert.True(t, reply.GetStatus().GetSuccess())
+	assert.Equal(t, "role assigned successfully", reply.GetStatus().GetMessage())
 }
 
 func TestAssignUserRole_MissingRole(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodPost, "/api/v1/iam/tenants/tenant-1/users/user-123/roles/", nil, map[string]string{"tenant": "tenant-1", "id": "user-123", "role": ""})
@@ -895,6 +934,7 @@ func TestAssignUserRole_MissingRole(t *testing.T) {
 }
 
 func TestAssignUserRole_Error(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		assignRoleFn: func(ctx context.Context, tenantID, userID, roleID string) error {
 			return status.Error(codes.NotFound, "role not found")
@@ -912,6 +952,7 @@ func TestAssignUserRole_Error(t *testing.T) {
 }
 
 func TestRevokeUserRole_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		revokeRoleFn: func(ctx context.Context, tenantID, userID, roleID string) error {
 			return nil
@@ -929,6 +970,7 @@ func TestRevokeUserRole_Success(t *testing.T) {
 }
 
 func TestRevokeUserRole_Error(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		revokeRoleFn: func(ctx context.Context, tenantID, userID, roleID string) error {
 			return status.Error(codes.InvalidArgument, "role not assigned")
@@ -948,6 +990,7 @@ func TestRevokeUserRole_Error(t *testing.T) {
 // Tests for Group Handlers
 
 func TestCreateGroup_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		createGroupFn: func(ctx context.Context, tenantID string, req *iamsdk.CreateGroupRequest) (*iamsdk.Group, error) {
 			return &iamsdk.Group{
@@ -974,6 +1017,7 @@ func TestCreateGroup_Success(t *testing.T) {
 }
 
 func TestListGroups_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		listGroupsFn: func(ctx context.Context, tenantID string, req *iamsdk.ListGroupsRequest) (*iamsdk.ListGroupsResponse, error) {
 			return &iamsdk.ListGroupsResponse{
@@ -993,12 +1037,13 @@ func TestListGroups_Success(t *testing.T) {
 	handlers.ListGroups(rec, req)
 
 	assert.Equal(t, http.StatusOK, writer.lastStatus)
-	payload, ok := writer.lastPayload.(ListGroupsResponse)
-	require.True(t, ok)
-	assert.Len(t, payload.Groups, 2)
+	reply := &platformv1.ListIAMGroupsResponse{}
+	decodeProtoReply(t, writer, reply)
+	assert.Len(t, reply.GetGroups(), 2)
 }
 
 func TestGetGroup_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		getGroupFn: func(ctx context.Context, tenantID, groupID string) (*iamsdk.Group, error) {
 			return &iamsdk.Group{
@@ -1019,6 +1064,7 @@ func TestGetGroup_Success(t *testing.T) {
 }
 
 func TestUpdateGroup_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		updateGroupFn: func(ctx context.Context, tenantID, groupID string, req *iamsdk.UpdateGroupRequest) (*iamsdk.Group, error) {
 			return &iamsdk.Group{
@@ -1041,6 +1087,7 @@ func TestUpdateGroup_Success(t *testing.T) {
 }
 
 func TestDeleteGroup_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		deleteGroupFn: func(ctx context.Context, tenantID, groupID string) error {
 			return nil
@@ -1058,6 +1105,7 @@ func TestDeleteGroup_Success(t *testing.T) {
 }
 
 func TestAddGroupMember_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		addGroupMemberFn: func(ctx context.Context, tenantID, groupID, userID string) error {
 			return nil
@@ -1075,6 +1123,7 @@ func TestAddGroupMember_Success(t *testing.T) {
 }
 
 func TestAddGroupMember_MissingMember(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodPost, "/api/v1/iam/tenants/tenant-1/groups/group-1/members/", nil, map[string]string{"tenant": "tenant-1", "id": "group-1", "user": ""})
@@ -1086,6 +1135,7 @@ func TestAddGroupMember_MissingMember(t *testing.T) {
 }
 
 func TestRemoveGroupMember_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		removeGroupMemberFn: func(ctx context.Context, tenantID, groupID, userID string) error {
 			return nil
@@ -1105,6 +1155,7 @@ func TestRemoveGroupMember_Success(t *testing.T) {
 // Tests for Role Handlers
 
 func TestCreateRole_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		createRoleFn: func(ctx context.Context, tenantID string, req *iamsdk.CreateRoleRequest) (*iamsdk.Role, error) {
 			return &iamsdk.Role{
@@ -1129,6 +1180,7 @@ func TestCreateRole_Success(t *testing.T) {
 }
 
 func TestListRoles_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		listRolesFn: func(ctx context.Context, tenantID string, req *iamsdk.ListRolesRequest) (*iamsdk.ListRolesResponse, error) {
 			return &iamsdk.ListRolesResponse{
@@ -1151,6 +1203,7 @@ func TestListRoles_Success(t *testing.T) {
 }
 
 func TestGetRole_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		getRoleFn: func(ctx context.Context, tenantID, roleID string) (*iamsdk.Role, error) {
 			return &iamsdk.Role{
@@ -1172,6 +1225,7 @@ func TestGetRole_Success(t *testing.T) {
 }
 
 func TestUpdateRole_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		updateRoleFn: func(ctx context.Context, tenantID, roleID string, req *iamsdk.UpdateRoleRequest) (*iamsdk.Role, error) {
 			return &iamsdk.Role{
@@ -1194,6 +1248,7 @@ func TestUpdateRole_Success(t *testing.T) {
 }
 
 func TestDeleteRole_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		deleteRoleFn: func(ctx context.Context, tenantID, roleID string) error {
 			return nil
@@ -1213,6 +1268,7 @@ func TestDeleteRole_Success(t *testing.T) {
 // Tests for Tenant Handlers
 
 func TestCreateTenant_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		createTenantFn: func(ctx context.Context, req *CreateTenantRequest) (*TenantResponse, error) {
 			return &TenantResponse{
@@ -1234,6 +1290,7 @@ func TestCreateTenant_Success(t *testing.T) {
 }
 
 func TestCreateTenant_MissingID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	body := CreateTenantRequest{Name: "Acme Corporation"} // Missing ID
@@ -1246,6 +1303,7 @@ func TestCreateTenant_MissingID(t *testing.T) {
 }
 
 func TestCreateTenant_WithSettings(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		createTenantFn: func(ctx context.Context, req *CreateTenantRequest) (*TenantResponse, error) {
 			return &TenantResponse{
@@ -1275,6 +1333,7 @@ func TestCreateTenant_WithSettings(t *testing.T) {
 }
 
 func TestListTenants_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		listTenantsFn: func(ctx context.Context, limit, offset int32) (*ListTenantsResponse, error) {
 			return &ListTenantsResponse{
@@ -1297,6 +1356,7 @@ func TestListTenants_Success(t *testing.T) {
 }
 
 func TestGetTenant_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		getTenantFn: func(ctx context.Context, tenantID string) (*TenantResponse, error) {
 			return &TenantResponse{
@@ -1317,6 +1377,7 @@ func TestGetTenant_Success(t *testing.T) {
 }
 
 func TestUpdateTenant_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		updateTenantFn: func(ctx context.Context, tenantID string, req *UpdateTenantRequest) (*TenantResponse, error) {
 			return &TenantResponse{
@@ -1338,6 +1399,7 @@ func TestUpdateTenant_Success(t *testing.T) {
 }
 
 func TestDeleteTenant_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		deleteTenantFn: func(ctx context.Context, tenantID string) error {
 			return nil
@@ -1357,6 +1419,7 @@ func TestDeleteTenant_Success(t *testing.T) {
 // Tests for Policy Handlers
 
 func TestCreatePolicy_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		createPolicyFn: func(ctx context.Context, tenantID string, req *CreatePolicyRequest) (*PolicyResponse, error) {
 			return &PolicyResponse{
@@ -1386,6 +1449,7 @@ func TestCreatePolicy_Success(t *testing.T) {
 }
 
 func TestCreatePolicy_MissingName(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	body := CreatePolicyRequest{SpecYAML: "rules: []"} // Missing Name
@@ -1398,6 +1462,7 @@ func TestCreatePolicy_MissingName(t *testing.T) {
 }
 
 func TestCreatePolicy_MissingSpec(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	body := CreatePolicyRequest{Name: "test-policy"} // Missing SpecYAML
@@ -1410,6 +1475,7 @@ func TestCreatePolicy_MissingSpec(t *testing.T) {
 }
 
 func TestListPolicies_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		listPoliciesFn: func(ctx context.Context, tenantID string, limit, offset int32) (*ListPoliciesResponse, error) {
 			return &ListPoliciesResponse{
@@ -1432,6 +1498,7 @@ func TestListPolicies_Success(t *testing.T) {
 }
 
 func TestGetPolicy_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		getPolicyFn: func(ctx context.Context, tenantID, policyName string) (*PolicyResponse, error) {
 			return &PolicyResponse{
@@ -1453,6 +1520,7 @@ func TestGetPolicy_Success(t *testing.T) {
 }
 
 func TestUpdatePolicy_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		updatePolicyFn: func(ctx context.Context, tenantID, policyName string, req *UpdatePolicyRequest) (*PolicyResponse, error) {
 			return &PolicyResponse{
@@ -1475,6 +1543,7 @@ func TestUpdatePolicy_Success(t *testing.T) {
 }
 
 func TestDeletePolicy_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		deletePolicyFn: func(ctx context.Context, tenantID, policyName string) error {
 			return nil
@@ -1492,6 +1561,7 @@ func TestDeletePolicy_Success(t *testing.T) {
 }
 
 func TestValidatePolicy_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		validatePolicyFn: func(ctx context.Context, tenantID, specYAML string) (*ValidatePolicyResponse, error) {
 			return &ValidatePolicyResponse{
@@ -1513,6 +1583,7 @@ func TestValidatePolicy_Success(t *testing.T) {
 }
 
 func TestValidatePolicy_MissingSpec(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	body := ValidatePolicyRequest{} // Missing SpecYAML
@@ -1525,6 +1596,7 @@ func TestValidatePolicy_MissingSpec(t *testing.T) {
 }
 
 func TestValidatePolicy_Invalid(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		validatePolicyFn: func(ctx context.Context, tenantID, specYAML string) (*ValidatePolicyResponse, error) {
 			return &ValidatePolicyResponse{
@@ -1550,6 +1622,7 @@ func TestValidatePolicy_Invalid(t *testing.T) {
 }
 
 func TestTestPolicy_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		testPolicyFn: func(ctx context.Context, tenantID string, req *TestPolicyRequest) (*TestPolicyResponse, error) {
 			return &TestPolicyResponse{
@@ -1582,6 +1655,7 @@ func TestTestPolicy_Success(t *testing.T) {
 }
 
 func TestTestPolicy_MissingSubjectID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	body := TestPolicyRequest{Action: "read", Resource: "files/*"} // Missing SubjectID
@@ -1594,6 +1668,7 @@ func TestTestPolicy_MissingSubjectID(t *testing.T) {
 }
 
 func TestTestPolicy_MissingAction(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	body := TestPolicyRequest{SubjectID: "user-123", Resource: "files/*"} // Missing Action
@@ -1606,6 +1681,7 @@ func TestTestPolicy_MissingAction(t *testing.T) {
 }
 
 func TestTestPolicy_MissingResource(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	body := TestPolicyRequest{SubjectID: "user-123", Action: "read"} // Missing Resource
@@ -1620,6 +1696,7 @@ func TestTestPolicy_MissingResource(t *testing.T) {
 // Tests for App Handlers
 
 func TestRegisterApp_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		registerAppFn: func(ctx context.Context, tenantID string, req *iamsdk.RegisterAppRequest) (*iamsdk.Application, error) {
 			return &iamsdk.Application{
@@ -1651,6 +1728,7 @@ func TestRegisterApp_Success(t *testing.T) {
 }
 
 func TestRegisterApp_MissingName(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	body := RegisterAppRequest{RedirectURIs: []string{"https://app.example.com"}} // Missing Name
@@ -1663,6 +1741,7 @@ func TestRegisterApp_MissingName(t *testing.T) {
 }
 
 func TestListApps_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		listAppsFn: func(ctx context.Context, tenantID string, limit, offset int32) (*ListAppsResponse, error) {
 			return &ListAppsResponse{
@@ -1685,6 +1764,7 @@ func TestListApps_Success(t *testing.T) {
 }
 
 func TestGetApp_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		getAppFn: func(ctx context.Context, tenantID, clientID string) (*iamsdk.Application, error) {
 			return &iamsdk.Application{
@@ -1706,6 +1786,7 @@ func TestGetApp_Success(t *testing.T) {
 }
 
 func TestUpdateApp_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		updateAppFn: func(ctx context.Context, tenantID, clientID string, req *iamsdk.UpdateAppRequest) (*iamsdk.Application, error) {
 			return &iamsdk.Application{
@@ -1727,6 +1808,7 @@ func TestUpdateApp_Success(t *testing.T) {
 }
 
 func TestDeleteApp_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		deleteAppFn: func(ctx context.Context, tenantID, clientID string) error {
 			return nil
@@ -1744,6 +1826,7 @@ func TestDeleteApp_Success(t *testing.T) {
 }
 
 func TestRotateAppSecret_Success(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		rotateAppSecretFn: func(ctx context.Context, tenantID, clientID string) (*RotateSecretResponse, error) {
 			return &RotateSecretResponse{
@@ -1767,6 +1850,7 @@ func TestRotateAppSecret_Success(t *testing.T) {
 }
 
 func TestRotateAppSecret_MissingAppID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodPost, "/api/v1/iam/tenants/tenant-1/apps//rotate", nil, map[string]string{"tenant": "tenant-1", "id": ""})
@@ -1780,6 +1864,7 @@ func TestRotateAppSecret_MissingAppID(t *testing.T) {
 // Tests for helper methods
 
 func TestGetPaginationParams_Defaults(t *testing.T) {
+	t.Parallel()
 	handlers, _ := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
@@ -1790,6 +1875,7 @@ func TestGetPaginationParams_Defaults(t *testing.T) {
 }
 
 func TestGetPaginationParams_CustomValues(t *testing.T) {
+	t.Parallel()
 	handlers, _ := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := httptest.NewRequest(http.MethodGet, "/test?limit=100&offset=50", nil)
@@ -1800,6 +1886,7 @@ func TestGetPaginationParams_CustomValues(t *testing.T) {
 }
 
 func TestGetPaginationParams_ExceedsMaxLimit(t *testing.T) {
+	t.Parallel()
 	handlers, _ := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := httptest.NewRequest(http.MethodGet, "/test?limit=5000", nil)
@@ -1809,6 +1896,7 @@ func TestGetPaginationParams_ExceedsMaxLimit(t *testing.T) {
 }
 
 func TestGetPaginationParams_NegativeLimit(t *testing.T) {
+	t.Parallel()
 	handlers, _ := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := httptest.NewRequest(http.MethodGet, "/test?limit=-10", nil)
@@ -1818,6 +1906,7 @@ func TestGetPaginationParams_NegativeLimit(t *testing.T) {
 }
 
 func TestGetPaginationParams_NegativeOffset(t *testing.T) {
+	t.Parallel()
 	handlers, _ := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := httptest.NewRequest(http.MethodGet, "/test?offset=-10", nil)
@@ -1827,6 +1916,7 @@ func TestGetPaginationParams_NegativeOffset(t *testing.T) {
 }
 
 func TestGetPaginationParams_InvalidValues(t *testing.T) {
+	t.Parallel()
 	handlers, _ := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := httptest.NewRequest(http.MethodGet, "/test?limit=abc&offset=xyz", nil)
@@ -1839,6 +1929,7 @@ func TestGetPaginationParams_InvalidValues(t *testing.T) {
 // Tests for GRPC error handling
 
 func TestHandleGRPCError_NotFound(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
@@ -1850,6 +1941,7 @@ func TestHandleGRPCError_NotFound(t *testing.T) {
 }
 
 func TestHandleGRPCError_InvalidArgument(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
@@ -1861,6 +1953,7 @@ func TestHandleGRPCError_InvalidArgument(t *testing.T) {
 }
 
 func TestHandleGRPCError_PermissionDenied(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
@@ -1872,6 +1965,7 @@ func TestHandleGRPCError_PermissionDenied(t *testing.T) {
 }
 
 func TestHandleGRPCError_Unauthenticated(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
@@ -1883,6 +1977,7 @@ func TestHandleGRPCError_Unauthenticated(t *testing.T) {
 }
 
 func TestHandleGRPCError_AlreadyExists(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
@@ -1893,7 +1988,21 @@ func TestHandleGRPCError_AlreadyExists(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
 }
 
+func TestHandleGRPCError_FailedPreconditionIsConflict(t *testing.T) {
+	t.Parallel()
+	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	rec := httptest.NewRecorder()
+
+	handlers.handleGRPCError(rec, req, status.Error(codes.FailedPrecondition, "iam service is not available"))
+
+	assert.Equal(t, http.StatusConflict, writer.lastStatus)
+	assert.Contains(t, rec.Body.String(), "iam service is not available")
+}
+
 func TestHandleGRPCError_Internal(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
@@ -1905,6 +2014,7 @@ func TestHandleGRPCError_Internal(t *testing.T) {
 }
 
 func TestHandleGRPCError_NonGRPCError(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
@@ -1918,11 +2028,13 @@ func TestHandleGRPCError_NonGRPCError(t *testing.T) {
 // Test timeFromTimestamp helper
 
 func TestTimeFromTimestamp_Nil(t *testing.T) {
+	t.Parallel()
 	result := timeFromTimestamp(nil)
 	assert.Nil(t, result)
 }
 
 func TestTimeFromTimestamp_Valid(t *testing.T) {
+	t.Parallel()
 	ts := timestamppb.Now()
 	result := timeFromTimestamp(ts)
 	require.NotNil(t, result)
@@ -1932,6 +2044,7 @@ func TestTimeFromTimestamp_Valid(t *testing.T) {
 // Additional error path tests for User handlers
 
 func TestUpdateUser_MissingTenantID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	body := UpdateUserRequest{Name: "Updated Name"}
@@ -1946,6 +2059,7 @@ func TestUpdateUser_MissingTenantID(t *testing.T) {
 }
 
 func TestUpdateUser_MissingUserID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	body := UpdateUserRequest{Name: "Updated Name"}
@@ -1960,6 +2074,7 @@ func TestUpdateUser_MissingUserID(t *testing.T) {
 }
 
 func TestUpdateUser_InvalidRequestBody(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/iam/tenants/tenant-1/users/user-123", bytes.NewBufferString("invalid json"))
@@ -1975,6 +2090,7 @@ func TestUpdateUser_InvalidRequestBody(t *testing.T) {
 }
 
 func TestDeleteUser_MissingTenantID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodDelete, "/api/v1/iam/tenants//users/user-123", nil, map[string]string{"tenant": "", "id": "user-123"})
@@ -1986,6 +2102,7 @@ func TestDeleteUser_MissingTenantID(t *testing.T) {
 }
 
 func TestDeleteUser_MissingUserID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodDelete, "/api/v1/iam/tenants/tenant-1/users/", nil, map[string]string{"tenant": "tenant-1", "id": ""})
@@ -1997,6 +2114,7 @@ func TestDeleteUser_MissingUserID(t *testing.T) {
 }
 
 func TestAssignUserRole_MissingTenantID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodPost, "/api/v1/iam/tenants//users/user-123/roles/admin", nil, map[string]string{"tenant": "", "id": "user-123", "role": "admin"})
@@ -2008,6 +2126,7 @@ func TestAssignUserRole_MissingTenantID(t *testing.T) {
 }
 
 func TestAssignUserRole_MissingUserID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodPost, "/api/v1/iam/tenants/tenant-1/users//roles/admin", nil, map[string]string{"tenant": "tenant-1", "id": "", "role": "admin"})
@@ -2019,6 +2138,7 @@ func TestAssignUserRole_MissingUserID(t *testing.T) {
 }
 
 func TestRevokeUserRole_MissingTenantID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodDelete, "/api/v1/iam/tenants//users/user-123/roles/admin", nil, map[string]string{"tenant": "", "id": "user-123", "role": "admin"})
@@ -2030,6 +2150,7 @@ func TestRevokeUserRole_MissingTenantID(t *testing.T) {
 }
 
 func TestRevokeUserRole_MissingUserID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodDelete, "/api/v1/iam/tenants/tenant-1/users//roles/admin", nil, map[string]string{"tenant": "tenant-1", "id": "", "role": "admin"})
@@ -2041,6 +2162,7 @@ func TestRevokeUserRole_MissingUserID(t *testing.T) {
 }
 
 func TestRevokeUserRole_MissingRole(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodDelete, "/api/v1/iam/tenants/tenant-1/users/user-123/roles/", nil, map[string]string{"tenant": "tenant-1", "id": "user-123", "role": ""})
@@ -2054,6 +2176,7 @@ func TestRevokeUserRole_MissingRole(t *testing.T) {
 // Additional error path tests for Group handlers
 
 func TestCreateGroup_MissingTenantID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	body := CreateGroupRequest{ID: "engineering", Name: "Engineering"}
@@ -2066,6 +2189,7 @@ func TestCreateGroup_MissingTenantID(t *testing.T) {
 }
 
 func TestCreateGroup_InvalidRequestBody(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/iam/tenants/tenant-1/groups", bytes.NewBufferString("invalid json"))
@@ -2079,6 +2203,7 @@ func TestCreateGroup_InvalidRequestBody(t *testing.T) {
 }
 
 func TestCreateGroup_GRPCError(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		createGroupFn: func(ctx context.Context, tenantID string, req *iamsdk.CreateGroupRequest) (*iamsdk.Group, error) {
 			return nil, status.Error(codes.AlreadyExists, "group already exists")
@@ -2097,6 +2222,7 @@ func TestCreateGroup_GRPCError(t *testing.T) {
 }
 
 func TestListGroups_MissingTenantID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodGet, "/api/v1/iam/tenants//groups", nil, map[string]string{"tenant": ""})
@@ -2108,6 +2234,7 @@ func TestListGroups_MissingTenantID(t *testing.T) {
 }
 
 func TestListGroups_GRPCError(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		listGroupsFn: func(ctx context.Context, tenantID string, req *iamsdk.ListGroupsRequest) (*iamsdk.ListGroupsResponse, error) {
 			return nil, status.Error(codes.Internal, "internal error")
@@ -2125,6 +2252,7 @@ func TestListGroups_GRPCError(t *testing.T) {
 }
 
 func TestGetGroup_MissingTenantID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodGet, "/api/v1/iam/tenants//groups/engineering", nil, map[string]string{"tenant": "", "id": "engineering"})
@@ -2136,6 +2264,7 @@ func TestGetGroup_MissingTenantID(t *testing.T) {
 }
 
 func TestGetGroup_MissingGroupID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodGet, "/api/v1/iam/tenants/tenant-1/groups/", nil, map[string]string{"tenant": "tenant-1", "id": ""})
@@ -2147,6 +2276,7 @@ func TestGetGroup_MissingGroupID(t *testing.T) {
 }
 
 func TestGetGroup_GRPCError(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		getGroupFn: func(ctx context.Context, tenantID, groupID string) (*iamsdk.Group, error) {
 			return nil, status.Error(codes.NotFound, "group not found")
@@ -2164,6 +2294,7 @@ func TestGetGroup_GRPCError(t *testing.T) {
 }
 
 func TestUpdateGroup_MissingTenantID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	body := UpdateGroupRequest{Name: "Updated Group"}
@@ -2176,6 +2307,7 @@ func TestUpdateGroup_MissingTenantID(t *testing.T) {
 }
 
 func TestUpdateGroup_MissingGroupID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	body := UpdateGroupRequest{Name: "Updated Group"}
@@ -2188,6 +2320,7 @@ func TestUpdateGroup_MissingGroupID(t *testing.T) {
 }
 
 func TestUpdateGroup_InvalidRequestBody(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/iam/tenants/tenant-1/groups/group-1", bytes.NewBufferString("invalid json"))
@@ -2201,6 +2334,7 @@ func TestUpdateGroup_InvalidRequestBody(t *testing.T) {
 }
 
 func TestUpdateGroup_GRPCError(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		updateGroupFn: func(ctx context.Context, tenantID, groupID string, req *iamsdk.UpdateGroupRequest) (*iamsdk.Group, error) {
 			return nil, status.Error(codes.NotFound, "group not found")
@@ -2219,6 +2353,7 @@ func TestUpdateGroup_GRPCError(t *testing.T) {
 }
 
 func TestDeleteGroup_MissingTenantID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodDelete, "/api/v1/iam/tenants//groups/group-1", nil, map[string]string{"tenant": "", "id": "group-1"})
@@ -2230,6 +2365,7 @@ func TestDeleteGroup_MissingTenantID(t *testing.T) {
 }
 
 func TestDeleteGroup_MissingGroupID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodDelete, "/api/v1/iam/tenants/tenant-1/groups/", nil, map[string]string{"tenant": "tenant-1", "id": ""})
@@ -2241,6 +2377,7 @@ func TestDeleteGroup_MissingGroupID(t *testing.T) {
 }
 
 func TestDeleteGroup_GRPCError(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		deleteGroupFn: func(ctx context.Context, tenantID, groupID string) error {
 			return status.Error(codes.NotFound, "group not found")
@@ -2258,6 +2395,7 @@ func TestDeleteGroup_GRPCError(t *testing.T) {
 }
 
 func TestAddGroupMember_MissingTenantID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodPost, "/api/v1/iam/tenants//groups/group-1/members/user-123", nil, map[string]string{"tenant": "", "id": "group-1", "user": "user-123"})
@@ -2269,6 +2407,7 @@ func TestAddGroupMember_MissingTenantID(t *testing.T) {
 }
 
 func TestAddGroupMember_MissingGroupID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodPost, "/api/v1/iam/tenants/tenant-1/groups//members/user-123", nil, map[string]string{"tenant": "tenant-1", "id": "", "user": "user-123"})
@@ -2280,6 +2419,7 @@ func TestAddGroupMember_MissingGroupID(t *testing.T) {
 }
 
 func TestAddGroupMember_GRPCError(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		addGroupMemberFn: func(ctx context.Context, tenantID, groupID, userID string) error {
 			return status.Error(codes.NotFound, "user or group not found")
@@ -2297,6 +2437,7 @@ func TestAddGroupMember_GRPCError(t *testing.T) {
 }
 
 func TestRemoveGroupMember_MissingTenantID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodDelete, "/api/v1/iam/tenants//groups/group-1/members/user-123", nil, map[string]string{"tenant": "", "id": "group-1", "user": "user-123"})
@@ -2308,6 +2449,7 @@ func TestRemoveGroupMember_MissingTenantID(t *testing.T) {
 }
 
 func TestRemoveGroupMember_MissingGroupID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodDelete, "/api/v1/iam/tenants/tenant-1/groups//members/user-123", nil, map[string]string{"tenant": "tenant-1", "id": "", "user": "user-123"})
@@ -2319,6 +2461,7 @@ func TestRemoveGroupMember_MissingGroupID(t *testing.T) {
 }
 
 func TestRemoveGroupMember_MissingMember(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodDelete, "/api/v1/iam/tenants/tenant-1/groups/group-1/members/", nil, map[string]string{"tenant": "tenant-1", "id": "group-1", "user": ""})
@@ -2330,6 +2473,7 @@ func TestRemoveGroupMember_MissingMember(t *testing.T) {
 }
 
 func TestRemoveGroupMember_GRPCError(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		removeGroupMemberFn: func(ctx context.Context, tenantID, groupID, userID string) error {
 			return status.Error(codes.NotFound, "member not found")
@@ -2349,6 +2493,7 @@ func TestRemoveGroupMember_GRPCError(t *testing.T) {
 // Additional error path tests for Role handlers
 
 func TestCreateRole_MissingTenantID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	body := CreateRoleRequest{ID: "admin", Name: "Administrator"}
@@ -2361,6 +2506,7 @@ func TestCreateRole_MissingTenantID(t *testing.T) {
 }
 
 func TestCreateRole_InvalidRequestBody(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/iam/tenants/tenant-1/roles", bytes.NewBufferString("invalid json"))
@@ -2374,6 +2520,7 @@ func TestCreateRole_InvalidRequestBody(t *testing.T) {
 }
 
 func TestCreateRole_GRPCError(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		createRoleFn: func(ctx context.Context, tenantID string, req *iamsdk.CreateRoleRequest) (*iamsdk.Role, error) {
 			return nil, status.Error(codes.AlreadyExists, "role already exists")
@@ -2392,6 +2539,7 @@ func TestCreateRole_GRPCError(t *testing.T) {
 }
 
 func TestListRoles_MissingTenantID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodGet, "/api/v1/iam/tenants//roles", nil, map[string]string{"tenant": ""})
@@ -2403,6 +2551,7 @@ func TestListRoles_MissingTenantID(t *testing.T) {
 }
 
 func TestListRoles_GRPCError(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		listRolesFn: func(ctx context.Context, tenantID string, req *iamsdk.ListRolesRequest) (*iamsdk.ListRolesResponse, error) {
 			return nil, status.Error(codes.Internal, "internal error")
@@ -2420,6 +2569,7 @@ func TestListRoles_GRPCError(t *testing.T) {
 }
 
 func TestGetRole_MissingTenantID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodGet, "/api/v1/iam/tenants//roles/admin", nil, map[string]string{"tenant": "", "id": "admin"})
@@ -2431,6 +2581,7 @@ func TestGetRole_MissingTenantID(t *testing.T) {
 }
 
 func TestGetRole_MissingRoleID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodGet, "/api/v1/iam/tenants/tenant-1/roles/", nil, map[string]string{"tenant": "tenant-1", "id": ""})
@@ -2442,6 +2593,7 @@ func TestGetRole_MissingRoleID(t *testing.T) {
 }
 
 func TestGetRole_GRPCError(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		getRoleFn: func(ctx context.Context, tenantID, roleID string) (*iamsdk.Role, error) {
 			return nil, status.Error(codes.NotFound, "role not found")
@@ -2459,6 +2611,7 @@ func TestGetRole_GRPCError(t *testing.T) {
 }
 
 func TestUpdateRole_MissingTenantID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	body := UpdateRoleRequest{Name: "Updated Role"}
@@ -2471,6 +2624,7 @@ func TestUpdateRole_MissingTenantID(t *testing.T) {
 }
 
 func TestUpdateRole_MissingRoleID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	body := UpdateRoleRequest{Name: "Updated Role"}
@@ -2483,6 +2637,7 @@ func TestUpdateRole_MissingRoleID(t *testing.T) {
 }
 
 func TestUpdateRole_InvalidRequestBody(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/iam/tenants/tenant-1/roles/admin", bytes.NewBufferString("invalid json"))
@@ -2496,6 +2651,7 @@ func TestUpdateRole_InvalidRequestBody(t *testing.T) {
 }
 
 func TestUpdateRole_GRPCError(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		updateRoleFn: func(ctx context.Context, tenantID, roleID string, req *iamsdk.UpdateRoleRequest) (*iamsdk.Role, error) {
 			return nil, status.Error(codes.NotFound, "role not found")
@@ -2514,6 +2670,7 @@ func TestUpdateRole_GRPCError(t *testing.T) {
 }
 
 func TestDeleteRole_MissingTenantID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodDelete, "/api/v1/iam/tenants//roles/admin", nil, map[string]string{"tenant": "", "id": "admin"})
@@ -2525,6 +2682,7 @@ func TestDeleteRole_MissingTenantID(t *testing.T) {
 }
 
 func TestDeleteRole_MissingRoleID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodDelete, "/api/v1/iam/tenants/tenant-1/roles/", nil, map[string]string{"tenant": "tenant-1", "id": ""})
@@ -2536,6 +2694,7 @@ func TestDeleteRole_MissingRoleID(t *testing.T) {
 }
 
 func TestDeleteRole_GRPCError(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		deleteRoleFn: func(ctx context.Context, tenantID, roleID string) error {
 			return status.Error(codes.NotFound, "role not found")
@@ -2555,6 +2714,7 @@ func TestDeleteRole_GRPCError(t *testing.T) {
 // Additional error path tests for Tenant handlers
 
 func TestCreateTenant_InvalidRequestBody(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/iam/tenants", bytes.NewBufferString("invalid json"))
@@ -2567,6 +2727,7 @@ func TestCreateTenant_InvalidRequestBody(t *testing.T) {
 }
 
 func TestCreateTenant_GRPCError(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		createTenantFn: func(ctx context.Context, req *CreateTenantRequest) (*TenantResponse, error) {
 			return nil, status.Error(codes.AlreadyExists, "tenant already exists")
@@ -2585,6 +2746,7 @@ func TestCreateTenant_GRPCError(t *testing.T) {
 }
 
 func TestListTenants_GRPCError(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		listTenantsFn: func(ctx context.Context, limit, offset int32) (*ListTenantsResponse, error) {
 			return nil, status.Error(codes.Internal, "internal error")
@@ -2602,6 +2764,7 @@ func TestListTenants_GRPCError(t *testing.T) {
 }
 
 func TestGetTenant_MissingTenantID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodGet, "/api/v1/iam/tenants/", nil, map[string]string{"tenant": ""})
@@ -2613,6 +2776,7 @@ func TestGetTenant_MissingTenantID(t *testing.T) {
 }
 
 func TestGetTenant_GRPCError(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		getTenantFn: func(ctx context.Context, tenantID string) (*TenantResponse, error) {
 			return nil, status.Error(codes.NotFound, "tenant not found")
@@ -2630,6 +2794,7 @@ func TestGetTenant_GRPCError(t *testing.T) {
 }
 
 func TestUpdateTenant_MissingTenantID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	body := UpdateTenantRequest{Name: "Updated Corporation"}
@@ -2642,6 +2807,7 @@ func TestUpdateTenant_MissingTenantID(t *testing.T) {
 }
 
 func TestUpdateTenant_InvalidRequestBody(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/iam/tenants/acme", bytes.NewBufferString("invalid json"))
@@ -2655,6 +2821,7 @@ func TestUpdateTenant_InvalidRequestBody(t *testing.T) {
 }
 
 func TestUpdateTenant_GRPCError(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		updateTenantFn: func(ctx context.Context, tenantID string, req *UpdateTenantRequest) (*TenantResponse, error) {
 			return nil, status.Error(codes.NotFound, "tenant not found")
@@ -2673,6 +2840,7 @@ func TestUpdateTenant_GRPCError(t *testing.T) {
 }
 
 func TestDeleteTenant_MissingTenantID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodDelete, "/api/v1/iam/tenants/", nil, map[string]string{"tenant": ""})
@@ -2684,6 +2852,7 @@ func TestDeleteTenant_MissingTenantID(t *testing.T) {
 }
 
 func TestDeleteTenant_GRPCError(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		deleteTenantFn: func(ctx context.Context, tenantID string) error {
 			return status.Error(codes.NotFound, "tenant not found")
@@ -2703,6 +2872,7 @@ func TestDeleteTenant_GRPCError(t *testing.T) {
 // Additional error path tests for Policy handlers
 
 func TestCreatePolicy_MissingTenantID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	body := CreatePolicyRequest{Name: "test-policy", SpecYAML: "rules: []"}
@@ -2715,6 +2885,7 @@ func TestCreatePolicy_MissingTenantID(t *testing.T) {
 }
 
 func TestCreatePolicy_InvalidRequestBody(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/iam/tenants/tenant-1/policies", bytes.NewBufferString("invalid json"))
@@ -2728,6 +2899,7 @@ func TestCreatePolicy_InvalidRequestBody(t *testing.T) {
 }
 
 func TestCreatePolicy_GRPCError(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		createPolicyFn: func(ctx context.Context, tenantID string, req *CreatePolicyRequest) (*PolicyResponse, error) {
 			return nil, status.Error(codes.AlreadyExists, "policy already exists")
@@ -2746,6 +2918,7 @@ func TestCreatePolicy_GRPCError(t *testing.T) {
 }
 
 func TestListPolicies_MissingTenantID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodGet, "/api/v1/iam/tenants//policies", nil, map[string]string{"tenant": ""})
@@ -2757,6 +2930,7 @@ func TestListPolicies_MissingTenantID(t *testing.T) {
 }
 
 func TestListPolicies_GRPCError(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		listPoliciesFn: func(ctx context.Context, tenantID string, limit, offset int32) (*ListPoliciesResponse, error) {
 			return nil, status.Error(codes.Internal, "internal error")
@@ -2774,6 +2948,7 @@ func TestListPolicies_GRPCError(t *testing.T) {
 }
 
 func TestGetPolicy_MissingTenantID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodGet, "/api/v1/iam/tenants//policies/admin-policy", nil, map[string]string{"tenant": "", "id": "admin-policy"})
@@ -2785,6 +2960,7 @@ func TestGetPolicy_MissingTenantID(t *testing.T) {
 }
 
 func TestGetPolicy_MissingPolicyID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodGet, "/api/v1/iam/tenants/tenant-1/policies/", nil, map[string]string{"tenant": "tenant-1", "id": ""})
@@ -2796,6 +2972,7 @@ func TestGetPolicy_MissingPolicyID(t *testing.T) {
 }
 
 func TestGetPolicy_GRPCError(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		getPolicyFn: func(ctx context.Context, tenantID, policyName string) (*PolicyResponse, error) {
 			return nil, status.Error(codes.NotFound, "policy not found")
@@ -2813,6 +2990,7 @@ func TestGetPolicy_GRPCError(t *testing.T) {
 }
 
 func TestUpdatePolicy_MissingTenantID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	body := UpdatePolicyRequest{Description: "Updated policy"}
@@ -2825,6 +3003,7 @@ func TestUpdatePolicy_MissingTenantID(t *testing.T) {
 }
 
 func TestUpdatePolicy_MissingPolicyID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	body := UpdatePolicyRequest{Description: "Updated policy"}
@@ -2837,6 +3016,7 @@ func TestUpdatePolicy_MissingPolicyID(t *testing.T) {
 }
 
 func TestUpdatePolicy_InvalidRequestBody(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/iam/tenants/tenant-1/policies/admin-policy", bytes.NewBufferString("invalid json"))
@@ -2850,6 +3030,7 @@ func TestUpdatePolicy_InvalidRequestBody(t *testing.T) {
 }
 
 func TestUpdatePolicy_GRPCError(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		updatePolicyFn: func(ctx context.Context, tenantID, policyName string, req *UpdatePolicyRequest) (*PolicyResponse, error) {
 			return nil, status.Error(codes.NotFound, "policy not found")
@@ -2868,6 +3049,7 @@ func TestUpdatePolicy_GRPCError(t *testing.T) {
 }
 
 func TestDeletePolicy_MissingTenantID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodDelete, "/api/v1/iam/tenants//policies/admin-policy", nil, map[string]string{"tenant": "", "id": "admin-policy"})
@@ -2879,6 +3061,7 @@ func TestDeletePolicy_MissingTenantID(t *testing.T) {
 }
 
 func TestDeletePolicy_MissingPolicyID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodDelete, "/api/v1/iam/tenants/tenant-1/policies/", nil, map[string]string{"tenant": "tenant-1", "id": ""})
@@ -2890,6 +3073,7 @@ func TestDeletePolicy_MissingPolicyID(t *testing.T) {
 }
 
 func TestDeletePolicy_GRPCError(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		deletePolicyFn: func(ctx context.Context, tenantID, policyName string) error {
 			return status.Error(codes.NotFound, "policy not found")
@@ -2907,6 +3091,7 @@ func TestDeletePolicy_GRPCError(t *testing.T) {
 }
 
 func TestValidatePolicy_MissingTenantID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	body := ValidatePolicyRequest{SpecYAML: "rules: []"}
@@ -2919,6 +3104,7 @@ func TestValidatePolicy_MissingTenantID(t *testing.T) {
 }
 
 func TestValidatePolicy_InvalidRequestBody(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/iam/tenants/tenant-1/policies/validate", bytes.NewBufferString("invalid json"))
@@ -2932,6 +3118,7 @@ func TestValidatePolicy_InvalidRequestBody(t *testing.T) {
 }
 
 func TestValidatePolicy_GRPCError(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		validatePolicyFn: func(ctx context.Context, tenantID, specYAML string) (*ValidatePolicyResponse, error) {
 			return nil, status.Error(codes.Internal, "internal error")
@@ -2950,6 +3137,7 @@ func TestValidatePolicy_GRPCError(t *testing.T) {
 }
 
 func TestTestPolicy_MissingTenantID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	body := TestPolicyRequest{SubjectID: "user-123", Action: "read", Resource: "files/*"}
@@ -2962,6 +3150,7 @@ func TestTestPolicy_MissingTenantID(t *testing.T) {
 }
 
 func TestTestPolicy_InvalidRequestBody(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/iam/tenants/tenant-1/policies/test", bytes.NewBufferString("invalid json"))
@@ -2975,6 +3164,7 @@ func TestTestPolicy_InvalidRequestBody(t *testing.T) {
 }
 
 func TestTestPolicy_GRPCError(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		testPolicyFn: func(ctx context.Context, tenantID string, req *TestPolicyRequest) (*TestPolicyResponse, error) {
 			return nil, status.Error(codes.Internal, "internal error")
@@ -2993,6 +3183,7 @@ func TestTestPolicy_GRPCError(t *testing.T) {
 }
 
 func TestCheckPermission_Success(t *testing.T) {
+	t.Parallel()
 	var got *iamsdk.CheckRequest
 	pepClient := &mockPEPClient{
 		checkFn: func(ctx context.Context, req *iamsdk.CheckRequest) (*iamsdk.CheckResponse, error) {
@@ -3045,6 +3236,7 @@ func TestCheckPermission_Success(t *testing.T) {
 }
 
 func TestCheckPermission_DeniedIsAVerdictNotAnError(t *testing.T) {
+	t.Parallel()
 	pepClient := &mockPEPClient{
 		checkFn: func(ctx context.Context, req *iamsdk.CheckRequest) (*iamsdk.CheckResponse, error) {
 			return &iamsdk.CheckResponse{Allowed: false}, nil
@@ -3065,6 +3257,7 @@ func TestCheckPermission_DeniedIsAVerdictNotAnError(t *testing.T) {
 }
 
 func TestCheckPermission_NoPEPIsServiceUnavailable(t *testing.T) {
+	t.Parallel()
 	writer := &mockHttpWriter{}
 	handlers := NewIAMHandlers(newTestLogger(), &mockIAMClient{}, nil, writer)
 
@@ -3081,6 +3274,7 @@ func TestCheckPermission_NoPEPIsServiceUnavailable(t *testing.T) {
 }
 
 func TestCheckPermission_MissingTenantID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	body := CheckPermissionRequest{SubjectID: "user-123", Action: "read", Resource: "files/1"}
@@ -3093,6 +3287,7 @@ func TestCheckPermission_MissingTenantID(t *testing.T) {
 }
 
 func TestCheckPermission_InvalidRequestBody(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/iam/tenants/tenant-1/permissions/check", bytes.NewBufferString("invalid json"))
@@ -3106,6 +3301,7 @@ func TestCheckPermission_InvalidRequestBody(t *testing.T) {
 }
 
 func TestCheckPermission_ForeignBodyTenantIsForbidden(t *testing.T) {
+	t.Parallel()
 	pepClient := &mockPEPClient{
 		checkFn: func(ctx context.Context, req *iamsdk.CheckRequest) (*iamsdk.CheckResponse, error) {
 			t.Fatal("the PEP was consulted for a body naming another tenant")
@@ -3129,6 +3325,7 @@ func TestCheckPermission_ForeignBodyTenantIsForbidden(t *testing.T) {
 }
 
 func TestCheckPermission_MissingRequiredField(t *testing.T) {
+	t.Parallel()
 	complete := CheckPermissionRequest{SubjectID: "user-123", Action: "read", Resource: "files/1"}
 	tests := []struct {
 		name  string
@@ -3163,6 +3360,7 @@ func TestCheckPermission_MissingRequiredField(t *testing.T) {
 }
 
 func TestCheckPermission_PEPError(t *testing.T) {
+	t.Parallel()
 	pepClient := &mockPEPClient{
 		checkFn: func(ctx context.Context, req *iamsdk.CheckRequest) (*iamsdk.CheckResponse, error) {
 			return nil, status.Error(codes.Internal, "internal error")
@@ -3180,6 +3378,7 @@ func TestCheckPermission_PEPError(t *testing.T) {
 }
 
 func TestToAnyMap(t *testing.T) {
+	t.Parallel()
 	assert.Nil(t, toAnyMap(nil), "a nil map must stay nil")
 	assert.Nil(t, toAnyMap(map[string]string{}), "an empty map must become nil")
 	assert.Equal(t, map[string]interface{}{"a": "1", "b": "2"}, toAnyMap(map[string]string{"a": "1", "b": "2"}))
@@ -3188,6 +3387,7 @@ func TestToAnyMap(t *testing.T) {
 // Additional error path tests for App handlers
 
 func TestRegisterApp_MissingTenantID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	body := RegisterAppRequest{Name: "My App", RedirectURIs: []string{"https://app.example.com"}}
@@ -3200,6 +3400,7 @@ func TestRegisterApp_MissingTenantID(t *testing.T) {
 }
 
 func TestRegisterApp_InvalidRequestBody(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/iam/tenants/tenant-1/apps", bytes.NewBufferString("invalid json"))
@@ -3213,6 +3414,7 @@ func TestRegisterApp_InvalidRequestBody(t *testing.T) {
 }
 
 func TestRegisterApp_GRPCError(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		registerAppFn: func(ctx context.Context, tenantID string, req *iamsdk.RegisterAppRequest) (*iamsdk.Application, error) {
 			return nil, status.Error(codes.AlreadyExists, "app already exists")
@@ -3231,6 +3433,7 @@ func TestRegisterApp_GRPCError(t *testing.T) {
 }
 
 func TestListApps_MissingTenantID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodGet, "/api/v1/iam/tenants//apps", nil, map[string]string{"tenant": ""})
@@ -3242,6 +3445,7 @@ func TestListApps_MissingTenantID(t *testing.T) {
 }
 
 func TestListApps_GRPCError(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		listAppsFn: func(ctx context.Context, tenantID string, limit, offset int32) (*ListAppsResponse, error) {
 			return nil, status.Error(codes.Internal, "internal error")
@@ -3259,6 +3463,7 @@ func TestListApps_GRPCError(t *testing.T) {
 }
 
 func TestGetApp_MissingTenantID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodGet, "/api/v1/iam/tenants//apps/client-abc", nil, map[string]string{"tenant": "", "id": "client-abc"})
@@ -3270,6 +3475,7 @@ func TestGetApp_MissingTenantID(t *testing.T) {
 }
 
 func TestGetApp_MissingAppID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodGet, "/api/v1/iam/tenants/tenant-1/apps/", nil, map[string]string{"tenant": "tenant-1", "id": ""})
@@ -3281,6 +3487,7 @@ func TestGetApp_MissingAppID(t *testing.T) {
 }
 
 func TestGetApp_GRPCError(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		getAppFn: func(ctx context.Context, tenantID, clientID string) (*iamsdk.Application, error) {
 			return nil, status.Error(codes.NotFound, "app not found")
@@ -3298,6 +3505,7 @@ func TestGetApp_GRPCError(t *testing.T) {
 }
 
 func TestUpdateApp_MissingTenantID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	body := UpdateAppRequest{Name: "Updated App"}
@@ -3310,6 +3518,7 @@ func TestUpdateApp_MissingTenantID(t *testing.T) {
 }
 
 func TestUpdateApp_MissingAppID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	body := UpdateAppRequest{Name: "Updated App"}
@@ -3322,6 +3531,7 @@ func TestUpdateApp_MissingAppID(t *testing.T) {
 }
 
 func TestUpdateApp_InvalidRequestBody(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/iam/tenants/tenant-1/apps/client-abc", bytes.NewBufferString("invalid json"))
@@ -3335,6 +3545,7 @@ func TestUpdateApp_InvalidRequestBody(t *testing.T) {
 }
 
 func TestUpdateApp_GRPCError(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		updateAppFn: func(ctx context.Context, tenantID, clientID string, req *iamsdk.UpdateAppRequest) (*iamsdk.Application, error) {
 			return nil, status.Error(codes.NotFound, "app not found")
@@ -3353,6 +3564,7 @@ func TestUpdateApp_GRPCError(t *testing.T) {
 }
 
 func TestDeleteApp_MissingTenantID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodDelete, "/api/v1/iam/tenants//apps/client-abc", nil, map[string]string{"tenant": "", "id": "client-abc"})
@@ -3364,6 +3576,7 @@ func TestDeleteApp_MissingTenantID(t *testing.T) {
 }
 
 func TestDeleteApp_MissingAppID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodDelete, "/api/v1/iam/tenants/tenant-1/apps/", nil, map[string]string{"tenant": "tenant-1", "id": ""})
@@ -3375,6 +3588,7 @@ func TestDeleteApp_MissingAppID(t *testing.T) {
 }
 
 func TestDeleteApp_GRPCError(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		deleteAppFn: func(ctx context.Context, tenantID, clientID string) error {
 			return status.Error(codes.NotFound, "app not found")
@@ -3392,6 +3606,7 @@ func TestDeleteApp_GRPCError(t *testing.T) {
 }
 
 func TestRotateAppSecret_MissingTenantID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodPost, "/api/v1/iam/tenants//apps/client-abc/rotate", nil, map[string]string{"tenant": "", "id": "client-abc"})
@@ -3403,6 +3618,7 @@ func TestRotateAppSecret_MissingTenantID(t *testing.T) {
 }
 
 func TestRotateAppSecret_GRPCError(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		rotateAppSecretFn: func(ctx context.Context, tenantID, clientID string) (*RotateSecretResponse, error) {
 			return nil, status.Error(codes.NotFound, "app not found")
@@ -3422,6 +3638,7 @@ func TestRotateAppSecret_GRPCError(t *testing.T) {
 // Tests for User list error paths
 
 func TestListUsers_GRPCError(t *testing.T) {
+	t.Parallel()
 	iamClient := &mockIAMClient{
 		listUsersFn: func(ctx context.Context, tenantID string, req *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
 			return nil, status.Error(codes.Internal, "internal error")
@@ -3439,6 +3656,7 @@ func TestListUsers_GRPCError(t *testing.T) {
 }
 
 func TestGetUser_MissingTenantID(t *testing.T) {
+	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})
 
 	req := createRequestWithVars(http.MethodGet, "/api/v1/iam/tenants//users/user-123", nil, map[string]string{"tenant": "", "id": "user-123"})
@@ -3461,6 +3679,7 @@ func TestGetUser_MissingTenantID(t *testing.T) {
 // verified session the auth middleware published, so one identity drives
 // both decisions.
 func TestGetTenantID_ResolvesFromTheVerifiedSession(t *testing.T) {
+	t.Parallel()
 	handlers := &IAMHandlers{}
 
 	// A forged cookie whose unsigned payload claims a tenant the caller

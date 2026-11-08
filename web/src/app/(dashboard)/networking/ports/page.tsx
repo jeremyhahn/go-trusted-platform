@@ -29,7 +29,8 @@ import {
 } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
 import { useSDN, useApi } from '@/hooks';
-import type { Port, PortStatus } from 'trusted-platform-sdk';
+import type { Port, PortType } from 'trusted-platform-sdk';
+import { portState, readUint64, type SDNPortState } from '@/lib/sdn-wire';
 
 // Types for SDN Port management
 interface SDNPort {
@@ -38,7 +39,7 @@ interface SDNPort {
   number: number;
   switch: string;
   macAddress: string;
-  status: 'up' | 'down' | 'blocked';
+  status: SDNPortState;
   speed: string;
   duplex: 'full' | 'half' | 'auto';
   vlanId?: number;
@@ -59,19 +60,13 @@ function formatBytes(bytes: number): string {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
-function mapPortStatus(status: PortStatus): 'up' | 'down' | 'blocked' {
-  if (status === 'UP' || status === 'FORWARDING') return 'up';
-  if (status === 'BLOCKED') return 'blocked';
-  return 'down';
-}
-
 export default function SDNPortsPage() {
   const { toast } = useToast();
   const sdn = useSDN();
   const [selectedBridgeId, setSelectedBridgeId] = useState<string>('');
   const [createOpen, setCreateOpen] = useState(false);
   const [createName, setCreateName] = useState('');
-  const [createType, setCreateType] = useState('internal');
+  const [createType, setCreateType] = useState<PortType>('PORT_TYPE_INTERNAL');
   const [createSubmitting, setCreateSubmitting] = useState(false);
 
   // Fetch bridges to get the first bridge ID
@@ -128,16 +123,16 @@ export default function SDNPortsPage() {
       number: index + 1,
       switch: selectedBridgeId,
       macAddress: port.config?.macAddress || 'N/A',
-      status: mapPortStatus(port.status),
+      status: portState(port.status),
       speed: 'N/A',
       duplex: 'auto' as const,
       vlanId: port.config?.vlan,
-      rxPackets: port.stats?.packetsReceived || 0,
-      txPackets: port.stats?.packetsSent || 0,
-      rxBytes: port.stats?.bytesReceived || 0,
-      txBytes: port.stats?.bytesSent || 0,
-      rxErrors: port.stats?.errors || 0,
-      txErrors: port.stats?.errors || 0,
+      rxPackets: readUint64(port.stats?.packetsReceived),
+      txPackets: readUint64(port.stats?.packetsSent),
+      rxBytes: readUint64(port.stats?.bytesReceived),
+      txBytes: readUint64(port.stats?.bytesSent),
+      rxErrors: readUint64(port.stats?.errors),
+      txErrors: readUint64(port.stats?.errors),
       lastSeen: port.updatedAt || new Date().toISOString(),
     }));
   }, [portsData, selectedBridgeId]);
@@ -426,15 +421,15 @@ export default function SDNPortsPage() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="port-type">Type</Label>
-              <Select value={createType} onValueChange={setCreateType}>
+              <Select value={createType} onValueChange={(v) => setCreateType(v as PortType)}>
                 <SelectTrigger id="port-type"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="internal">internal</SelectItem>
-                  <SelectItem value="physical">physical</SelectItem>
-                  <SelectItem value="tap">tap</SelectItem>
-                  <SelectItem value="veth">veth</SelectItem>
-                  <SelectItem value="vxlan">vxlan</SelectItem>
-                  <SelectItem value="gre">gre</SelectItem>
+                  <SelectItem value="PORT_TYPE_INTERNAL">internal</SelectItem>
+                  <SelectItem value="PORT_TYPE_PHYSICAL">physical</SelectItem>
+                  <SelectItem value="PORT_TYPE_TAP">tap</SelectItem>
+                  <SelectItem value="PORT_TYPE_VETH">veth</SelectItem>
+                  <SelectItem value="PORT_TYPE_VXLAN">vxlan</SelectItem>
+                  <SelectItem value="PORT_TYPE_GRE">gre</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -448,8 +443,7 @@ export default function SDNPortsPage() {
                 try {
                   await sdn.addPort({
                     bridgeId: selectedBridgeId,
-                    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-                    config: { name: createName, type: createType as any },
+                    config: { name: createName, type: createType },
                   });
                   toast({ title: 'Port added', variant: 'success' });
                   setCreateOpen(false);

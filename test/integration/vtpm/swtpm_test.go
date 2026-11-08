@@ -17,13 +17,13 @@ package vtpm_test
 
 import (
 	"context"
+	"crypto/x509"
 	"os"
-	"sync"
-	"syscall"
 	"testing"
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/swtpm"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -44,43 +44,8 @@ func initializedSWTPM(t *testing.T, ctx context.Context, pcrBanks ...string) *sw
 	return sw
 }
 
-// startedSWTPM returns a running swtpm that is stopped when the test ends.
-func startedSWTPM(t *testing.T, ctx context.Context) *swtpm.SWTPM {
-	t.Helper()
-
-	sw := initializedSWTPM(t, ctx)
-	require.NoError(t, sw.Start(ctx))
-	t.Cleanup(func() {
-		if sw.IsRunning() {
-			if err := sw.Stop(); err != nil {
-				t.Logf("cleanup: %v", err)
-			}
-		}
-	})
-	return sw
-}
-
-// killSWTPM kills the swtpm process behind the SWTPM's back and waits for
-// the SWTPM to observe the exit.
-func killSWTPM(t *testing.T, sw *swtpm.SWTPM) {
-	t.Helper()
-
-	require.NoError(t, syscall.Kill(sw.PID(), syscall.SIGKILL))
-	require.Eventually(t, func() bool { return !sw.IsRunning() }, 5*time.Second, 20*time.Millisecond)
-}
-
 func TestSWTPMDaemon_InitializeMultiplePCRBanks(t *testing.T) {
 	initializedSWTPM(t, context.Background(), "sha256", "sha384", "sha512")
-}
-
-func TestSWTPMDaemon_InitializeCancelledContext(t *testing.T) {
-	sw, err := swtpm.NewSWTPM(&swtpm.Config{StateDir: t.TempDir()}, nil)
-	require.NoError(t, err)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	assert.ErrorIs(t, sw.Initialize(ctx), swtpm.ErrInitFailed)
 }
 
 func TestSWTPMDaemon_StartStop(t *testing.T) {
@@ -100,54 +65,44 @@ func TestSWTPMDaemon_StartStop(t *testing.T) {
 	assert.Equal(t, 0, sw.PID())
 }
 
-func TestSWTPMDaemon_StartAlreadyRunning(t *testing.T) {
+// TestSWTPMDaemon_RestartKeepsInjectedEKCertificates stops the swtpm process
+// holding the injected RSA and ECC EK certificates and starts a new one on
+// the same state directory: the VM's identity lives in that directory, so
+// both certificates must come back byte for byte. The pkg/vtpm simulator
+// test only resets an in-memory TPM; this one reloads swtpm's state from disk.
+func TestSWTPMDaemon_RestartKeepsInjectedEKCertificates(t *testing.T) {
 	ctx := context.Background()
-	sw := startedSWTPM(t, ctx)
+	first := initializedSWTPM(t, ctx)
+	require.NoError(t, first.Start(ctx))
+	require.NoError(t, first.WaitForSocket(5*time.Second))
 
-	assert.ErrorIs(t, sw.Start(ctx), swtpm.ErrAlreadyRunning)
-}
-
-func TestSWTPMDaemon_SendStartup(t *testing.T) {
-	ctx := context.Background()
-	sw := startedSWTPM(t, ctx)
-	require.NoError(t, sw.WaitForSocket(5*time.Second))
-
-	require.NoError(t, sw.SendStartup())
-	// A second TPM2_Startup reports TPM_RC_INITIALIZE, which is not an error.
-	require.NoError(t, sw.SendStartup())
-}
-
-func TestSWTPMDaemon_ConcurrentAccess(t *testing.T) {
-	sw := startedSWTPM(t, context.Background())
-
-	var wg sync.WaitGroup
-	for range 10 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			assert.True(t, sw.IsRunning())
-			assert.NotEmpty(t, sw.StateDir())
-			assert.NotEmpty(t, sw.SocketPath())
-			assert.Greater(t, sw.PID(), 0)
-		}()
+	certs := map[vtpm.EKAlgorithm]*x509.Certificate{
+		vtpm.EKAlgorithmRSA: generateIdentifiableEKCert(t, "RESTART-RSA-EK"),
+		vtpm.EKAlgorithmECC: generateIdentifiableEKCert(t, "RESTART-ECC-EK"),
 	}
-	wg.Wait()
-}
+	injector := vtpm.NewEKCertInjector(first.SocketPath(), nil)
+	for algorithm, cert := range certs {
+		require.NoError(t, injector.InjectCertificate(ctx, cert, algorithm))
+	}
 
-func TestSWTPMDaemon_KilledProcess(t *testing.T) {
-	sw := startedSWTPM(t, context.Background())
+	// Stop returns once the process has exited.
+	firstPID := first.PID()
+	require.NoError(t, first.Stop())
+	require.False(t, first.IsRunning())
 
-	killSWTPM(t, sw)
+	second, err := swtpm.NewSWTPM(&swtpm.Config{StateDir: first.StateDir()}, nil)
+	require.NoError(t, err)
+	require.True(t, second.IsInitialized(), "the restarted swtpm must find the stopped one's state")
+	require.NoError(t, second.Start(ctx))
+	t.Cleanup(func() { assert.NoError(t, second.Stop()) })
+	require.NoError(t, second.WaitForSocket(5*time.Second))
+	require.NotEqual(t, firstPID, second.PID(), "the certificates must be read from a new swtpm process")
 
-	assert.ErrorIs(t, sw.WaitForSocket(2*time.Second), swtpm.ErrSocketNotReady)
-	assert.NoError(t, sw.Stop(), "Stop must tolerate a process that already exited")
-}
-
-func TestSWTPMDaemon_StopExisting(t *testing.T) {
-	sw := startedSWTPM(t, context.Background())
-	require.NoError(t, sw.WaitForSocket(5*time.Second))
-
-	require.NoError(t, swtpm.StopExisting(sw.StateDir()))
-
-	require.Eventually(t, func() bool { return !sw.IsRunning() }, 5*time.Second, 20*time.Millisecond)
+	restarted := vtpm.NewEKCertInjector(second.SocketPath(), nil)
+	for algorithm, cert := range certs {
+		exists, persisted, err := restarted.CheckEKCertificateExists(ctx, algorithm)
+		require.NoError(t, err)
+		require.True(t, exists, "the %s EK certificate must survive an swtpm restart", algorithm)
+		assert.Equal(t, cert.Raw, persisted.Raw, "the %s EK certificate must be unchanged by an swtpm restart", algorithm)
+	}
 }

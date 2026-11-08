@@ -269,6 +269,13 @@ func TestDNSGetRecord_DaemonNative(t *testing.T) {
 		assert.Equal(t, "A", result.Record.RecordType)
 	})
 
+	t.Run("missing zone", func(t *testing.T) {
+		handler := createDNSUnitTestHandler(NewMockDNSService())
+		req := createDNSUnitTestRequest(t, quicwire.OpDNSGetRecord, &DNSGetRecordRequest{Name: "www", RecordType: "A"})
+		resp := handler.HandleRequest(ctx, req)
+		assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status)
+	})
+
 	t.Run("missing name", func(t *testing.T) {
 		handler := createDNSUnitTestHandler(NewMockDNSService())
 		req := createDNSUnitTestRequest(t, quicwire.OpDNSGetRecord, &DNSGetRecordRequest{Zone: "example.com.", RecordType: "A"})

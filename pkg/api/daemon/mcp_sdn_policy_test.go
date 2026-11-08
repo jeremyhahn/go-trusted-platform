@@ -28,6 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
@@ -224,8 +225,7 @@ func newPolicyTransports(t *testing.T) policyTransports {
 	t.Helper()
 	svc := newPolicySDNService()
 
-	handlers := rest.NewSDNHandlers(nil, slog.Default())
-	handlers.SetControlService(svc)
+	handlers := rest.NewSDNHandlers(svc, slog.Default())
 	router := mux.NewRouter()
 	handlers.RegisterRoutes(router)
 
@@ -249,6 +249,31 @@ func (p policyTransports) serveREST(t *testing.T, method, path string, body []by
 	return w
 }
 
+// webPolicyProtoBody is webPolicyBody as the REST route takes it: a protojson
+// ApplyPolicyRequest.
+func webPolicyProtoBody(t *testing.T) []byte {
+	t.Helper()
+	var req rest.CreatePolicyRequest
+	require.NoError(t, json.Unmarshal([]byte(webPolicyBody), &req))
+	apply, err := rest.PolicyRequestToProto(req)
+	require.NoError(t, err)
+	body, err := protojson.Marshal(apply)
+	require.NoError(t, err)
+	return body
+}
+
+// decodeRESTPolicy decodes the policy a REST policy route answered with (an
+// ApplyPolicyResponse or GetPolicyResponse) into the form the MCP and QUIC
+// transports answer with.
+func decodeRESTPolicy(t *testing.T, w *httptest.ResponseRecorder) rest.PolicyResponse {
+	t.Helper()
+	// Only the policy field is read; an ApplyPolicyResponse also carries status.
+	var resp platformv1.GetPolicyResponse
+	decode := protojson.UnmarshalOptions{DiscardUnknown: true}
+	require.NoError(t, decode.Unmarshal(w.Body.Bytes(), &resp), w.Body.String())
+	return rest.PolicyToResponse(resp.GetPolicy())
+}
+
 // decodeToolResult re-encodes an MCP tool result as JSON, the form an MCP
 // client receives, and decodes it into v.
 func decodeToolResult(t *testing.T, result interface{}, v interface{}) {
@@ -266,10 +291,9 @@ func TestSDNPolicyTransportParity(t *testing.T) {
 			p := newPolicyTransports(t)
 			tools := p.mcpTools[providerName]
 
-			created := p.serveREST(t, http.MethodPost, "/api/v1/sdn/policies", []byte(webPolicyBody))
-			require.Equal(t, http.StatusCreated, created.Code, created.Body.String())
-			var restPolicy rest.PolicyResponse
-			require.NoError(t, json.NewDecoder(created.Body).Decode(&restPolicy))
+			created := p.serveREST(t, http.MethodPost, "/api/v1/sdn/policies", webPolicyProtoBody(t))
+			require.Equal(t, http.StatusOK, created.Code, created.Body.String())
+			restPolicy := decodeRESTPolicy(t, created)
 
 			_, err := p.svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{Config: &platformv1.PolicyConfig{
 				Name: "grpc-qos",
@@ -309,8 +333,7 @@ func TestSDNPolicyTransportParity(t *testing.T) {
 
 			fetched := p.serveREST(t, http.MethodGet, "/api/v1/sdn/policies/"+mcpPolicy.ID, nil)
 			require.Equal(t, http.StatusOK, fetched.Code, fetched.Body.String())
-			var restPolicy rest.PolicyResponse
-			require.NoError(t, json.NewDecoder(fetched.Body).Decode(&restPolicy))
+			restPolicy := decodeRESTPolicy(t, fetched)
 			assert.Equal(t, mcpPolicy, restPolicy)
 
 			grpcPolicy, err := p.svc.GetPolicy(ctx, &platformv1.GetPolicyRequest{PolicyId: "web"})
@@ -327,10 +350,9 @@ func TestSDNPolicyTransportParity(t *testing.T) {
 	t.Run("REST, gRPC and MCP policies are seen over QUIC", func(t *testing.T) {
 		p := newPolicyTransports(t)
 
-		created := p.serveREST(t, http.MethodPost, "/api/v1/sdn/policies", []byte(webPolicyBody))
-		require.Equal(t, http.StatusCreated, created.Code, created.Body.String())
-		var restPolicy rest.PolicyResponse
-		require.NoError(t, json.NewDecoder(created.Body).Decode(&restPolicy))
+		created := p.serveREST(t, http.MethodPost, "/api/v1/sdn/policies", webPolicyProtoBody(t))
+		require.Equal(t, http.StatusOK, created.Code, created.Body.String())
+		restPolicy := decodeRESTPolicy(t, created)
 
 		_, err := p.svc.ApplyPolicy(ctx, &platformv1.ApplyPolicyRequest{Config: &platformv1.PolicyConfig{
 			Name: "grpc-qos",
@@ -369,8 +391,7 @@ func TestSDNPolicyTransportParity(t *testing.T) {
 
 		fetched := p.serveREST(t, http.MethodGet, "/api/v1/sdn/policies/"+quicPolicy.ID, nil)
 		require.Equal(t, http.StatusOK, fetched.Code, fetched.Body.String())
-		var restPolicy rest.PolicyResponse
-		require.NoError(t, json.NewDecoder(fetched.Body).Decode(&restPolicy))
+		restPolicy := decodeRESTPolicy(t, fetched)
 		assert.Equal(t, quicPolicy, restPolicy)
 
 		got, err := p.mcpTools["MCPServiceProvider"].ExecuteTool(ctx, "sdn_get_policy", map[string]interface{}{"policy_id": quicPolicy.ID})

@@ -1,6 +1,6 @@
 # SDN Testing Strategy
 
-> **Status: REFERENCE** · Last verified: 2026-10-15
+> **Status: REFERENCE** · Last verified: 2026-10-26
 > How the SDN packages are tested.
 
 ## Overview
@@ -14,7 +14,7 @@ devcontainer with real OVS infrastructure.
 | Layer | Location | Dependencies | Run by |
 |-------|----------|--------------|--------|
 | Unit | `pkg/sdn/*/` | None (mocks) | `make test` (CI Gate) |
-| Integration | `test/integration/sdn/` | OVS, swtpm and platformd in the devcontainer | `make integration-test-sdn` (no CI workflow) |
+| Integration | `test/integration/sdn/` | OVS, swtpm and platformd in the devcontainer | `make integration-test-sdn`; CI's full-tier `integration` job |
 | Stress | `test/integration/sdn/stress/` | Privileged devcontainer | `make stress-sdn` |
 | Benchmark | `pkg/sdn/*/benchmark_test.go` | None | `make bench-sdn` |
 
@@ -43,7 +43,7 @@ file plus coverage files. The core packages:
 | `pkg/sdn/openflow` | Client against a mock switch (`client_test.go`, `client_batch_test.go`), message encoding (`messages_test.go`, `protocol_test.go`), groups, meters, conntrack, Nicira extensions, tunnels |
 | `pkg/sdn/ovs` | OVSDB client against a mock server (`client_test.go`), bridges, ports, flows and flow grammar, QoS, VXLAN, `ovs-appctl` (`appctl_test.go`), types |
 | `pkg/sdn/netlink` | Links and TAP devices, with mock netlink handles (`mock_netlink_test.go`, `tap_mock_test.go`) |
-| `pkg/sdn/policy` | Engine, state machine (`state_test.go`), certificate extraction, monitor, enrollment hook, quarantine, admission, zone flows |
+| `pkg/sdn/policy` | Engine, state machine (`state_test.go`), port state transitions across network phases against a recording flow controller (`state_transition_test.go`), certificate extraction, monitor, enrollment hook, quarantine, admission, zone flows |
 
 ### Mock Servers
 
@@ -83,7 +83,7 @@ are generated in the tests.
 | `arp_native_test.go` | The pure Go ARP reader against the kernel table (`TestNativeARP_*`) |
 | `ovsdb_test.go`, `bridge_test.go`, `port_test.go`, `bridge_port_management_test.go`, `tap_test.go` | OVSDB, bridges, ports, TAP/veth/patch ports |
 | `flow_test.go`, `flow_batch_test.go`, `openflow_rules_test.go` | Flow install, removal, priorities, per-phase rules |
-| `policy_engine_integration_test.go`, `state_transition_integration_test.go`, `network_provisioning_test.go` | Policy engine, port state transitions, provisioning |
+| `policy_engine_integration_test.go`, `network_provisioning_test.go` | Policy engine, provisioning |
 | `multiprotocol_test.go`, `overlay_multiprotocol_test.go`, `ipam_test.go`, `zone_test.go`, `nat64_surface_test.go`, `perf_cli_test.go` | The SDN, overlay, IPAM, zone, NAT64 and perf surfaces over CLI, REST, gRPC, QUIC, MCP and Unix |
 | `gateway_*_test.go`, `ct_firewall_test.go`, `nat_dual_uplink_test.go`, `group_lb_test.go`, `nat64_*_test.go` | The gateway datapath |
 | `*_netns_test.go`, `overlay_nd_test.go` | Network-namespace tests: FHRP, host firewall, tunnels, ND suppression |
@@ -103,6 +103,9 @@ package sdn
 - Run in the privileged devcontainer, never on the host
 - OVS installed and running
 - Root permissions for OVS operations
+- Veth pairs created through `pkg/testenv` (`NewVeth`, `VethArgs`,
+  `VethNetnsArgs`), which give both ends one tx and one rx queue; see
+  [Test Veths Have One Queue Per End](../test/integration.md#test-veths-have-one-queue-per-end)
 
 ## Makefile Targets
 
@@ -166,12 +169,20 @@ sudo platformctl iso test client-server --use-ovs
 
 ## CI
 
-The CI Gate runs `make test` on every PR but a docs-only one (every changed
-file markdown or under `docs/`), which runs Lint and the Gate only unless it
-is labelled `ci:full`. `make test-race` runs in the full tier: pushes to main
-and PRs labelled `ci:full`. No workflow runs
-`make integration-test-sdn`; run it in the devcontainer before merging SDN
-changes.
+CI's `image` job runs `make test`, and its `race` job runs `make test-race` in
+four shards (`SHARD=n SHARDS=4`), on every run but a docs-only PR (every changed file markdown or under `docs/`), which runs only
+the lint steps and the gates unless it is labelled `ci:full`
+(`.github/workflows/ci.yml:301-315`). The full tier's `integration` job runs
+the suite `make integration-test` runs, split into five parallel legs
+(`make integration-test-leg`, `ci.yml:515-518` and `:576`); every runner
+target, `sdn` included, is in exactly one leg
+(`build/docker/devcontainer/run-integration-tests.sh:221-233`). The job runs
+on every push to main, on `workflow_dispatch`, on the schedule and on a
+`ci:full` PR (`ci.yml:85-99` and `:503`). A failed leaf test fails the job
+unless `.github/foreign-failures.tsv` lists it (`ci.yml:568-576`; see
+[docs/test/integration.md](../test/integration.md)). Run
+`make integration-test-sdn` in the devcontainer before merging SDN changes;
+an unlabelled PR does not run it.
 
 ## Performance Testing
 

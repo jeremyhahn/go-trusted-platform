@@ -108,8 +108,8 @@ a device profile so a machine picks up its vTPM at provisioning time.
    three different things: state directory, control socket, NVRAM store.
 2. **The swtpm daemon has a lifecycle independent of the bundle.**
    `StartVTPM`, `StopVTPM`, `IsVTPMRunning`. A bundle can exist and not be
-   running; every runtime operation on a stopped bundle fails at target
-   resolution with `ErrSwtpmSocketUnavailable`.
+   running; quote, seal, unseal, PCR read and extend, and stop on a stopped
+   bundle fail with `ErrVTPMNotRunning` (`FailedPrecondition`, REST 409).
 3. **Export and import are streaming.** `ExportBundle` is a server stream and
    `ImportBundle` a client stream — a bundle carries NVRAM and state and does
    not fit a unary message.
@@ -119,19 +119,37 @@ a device profile so a machine picks up its vTPM at provisioning time.
 
 ## 7. Configuration
 
-`pkg/vtpm/config.go` carries the TPM target selection consumed by `target.go`.
-The distinction that matters is hardware character device versus swtpm Unix
-socket, and the errors in §3 are what a mismatch produces.
+The TPM target is not a `vtpm:` key. `ResolveTPMTarget` (`target.go`) reads
+the platform `tpm:` section (`App.TPMConfig`, `pkg/app/app.go`), the one
+decision point for which TPM an operation reaches:
+
+| `tpm:` setting | Target |
+|---|---|
+| `simulator: true` | the simulator; `device` is ignored |
+| `device: auto` or empty | detected: swtpm socket first, then `/dev/tpmrm0`, then `/dev/tpm0` |
+| `device: <path>.sock` | swtpm; the socket must exist |
+| `device: /dev/...` | hardware; the character device must exist |
+
+An explicit setting never falls back: a hardware path that is not usable is
+`ErrHardwareTPMUnavailable`, a socket that is not there is
+`ErrSwtpmSocketUnavailable`, and the type mismatches are the errors in §3.
+`pkg/vtpm/config.go` holds the bundle settings
+([configuration.md](configuration.md)).
 
 ## 8. Test strategy
 
 | Layer | Location | Covers |
 |---|---|---|
-| Unit | `pkg/vtpm/*_test.go`, `pkg/swtpm/*_test.go` | Target resolution, bundle generation, archive round-trip |
-| Integration | `test/integration/` vTPM paths | Real swtpm processes |
+| Unit | `pkg/vtpm/*_test.go`, `pkg/swtpm/*_test.go` | Target resolution, bundle generation, archive round-trip, EK certificate injection over a socket, swtpm daemon lifecycle |
+| Integration | `test/integration/vtpm/` | Real swtpm processes |
 
-`pkg/vtpm` and `pkg/swtpm` are both excluded from `make test` — they need a real
-swtpm binary — and are covered by `make integration-test`.
+`make test` runs both packages through `TEST_UNIT_PKGS` on a host with no swtpm
+and no QEMU. The `pkg/swtpm` tests put a stand-in `swtpm` on `PATH`; the
+`pkg/vtpm` EK certificate tests serve the in-memory TPM simulator on a unix
+socket, so `InjectCertificate`, `ReadCertificate` and `VerifyCertificate` run
+end to end. `test/integration/vtpm/` keeps what needs the real binaries:
+`swtpm_setup` accepting several PCR banks, the daemon creating its socket,
+EK certificate persistence across a restart, and the QEMU paths.
 
 **Known repo-wide gap:** no `CommandDefinition` type exists in this repository
 (grepped 2026-08-18), so the CLI parity requirement in

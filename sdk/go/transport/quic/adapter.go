@@ -477,6 +477,7 @@ var categoryOpcodes = map[byte]struct{}{
 	quicwire.OpProvisioningCategory:  {},
 	quicwire.OpVMExtendedCategory:    {},
 	quicwire.OpKMSExtendedCategory:   {},
+	quicwire.OpDNSCategory:           {},
 }
 
 // categorySubOpcodeMap routes gRPC method paths to the sub-opcode byte
@@ -487,6 +488,11 @@ var categoryOpcodes = map[byte]struct{}{
 // init function asserts this invariant at startup so a missing mapping
 // is caught at process start, not at first request.
 var categorySubOpcodeMap = map[string]byte{
+	// DNS Service — OpDNSCategory (0x61), the operations past the flat
+	// 0x20-0x2C block. Server dispatcher:
+	// pkg/api/daemon/quic_dns_delegate.go::dnsQUICHandlers
+	"/platform.v1.DNSService/UpdateZone": quicwire.OpDNSUpdateZone,
+
 	// Ceremony Service — OpCeremonyCategory (0x9A)
 	// Server dispatcher: pkg/api/daemon/phase35_quic.go::ceremonyQUICDispatch
 	"/platform.v1.CeremonyService/Init":               quicwire.CeremonySubInit,
@@ -877,6 +883,7 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.DNSService/Resolve":      quicwire.OpDNSResolve,
 	"/platform.v1.DNSService/CreateZone":   quicwire.OpDNSAddZone,
 	"/platform.v1.DNSService/DeleteZone":   quicwire.OpDNSDeleteZone,
+	"/platform.v1.DNSService/UpdateZone":   quicwire.OpDNSCategory,
 	"/platform.v1.DNSService/ListZones":    quicwire.OpDNSListZones,
 
 	// Attestation Service — proto: pkg/api/grpc/proto/attestation.proto

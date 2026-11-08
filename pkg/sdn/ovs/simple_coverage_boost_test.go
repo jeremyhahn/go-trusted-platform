@@ -29,7 +29,6 @@ func TestAdditionalFlowCoverage(t *testing.T) {
 
 	t.Run("DeleteFlow with various match patterns", func(t *testing.T) {
 		client := &Client{
-			connected: false,
 			ofClients: make(map[string]*openflow.Client),
 		}
 
@@ -40,7 +39,6 @@ func TestAdditionalFlowCoverage(t *testing.T) {
 
 	t.Run("ListFlows when not connected", func(t *testing.T) {
 		client := &Client{
-			connected: false,
 			ofClients: make(map[string]*openflow.Client),
 		}
 
@@ -50,7 +48,6 @@ func TestAdditionalFlowCoverage(t *testing.T) {
 
 	t.Run("ModifyFlow when not connected", func(t *testing.T) {
 		client := &Client{
-			connected: false,
 			ofClients: make(map[string]*openflow.Client),
 		}
 
@@ -65,7 +62,6 @@ func TestAdditionalFlowCoverage(t *testing.T) {
 
 	t.Run("GetFlowStats when not connected", func(t *testing.T) {
 		client := &Client{
-			connected: false,
 			ofClients: make(map[string]*openflow.Client),
 		}
 

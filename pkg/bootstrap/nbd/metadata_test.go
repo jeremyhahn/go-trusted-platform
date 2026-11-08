@@ -65,7 +65,7 @@ func TestOpenMetadataFile_ReadsTheInstalledArea(t *testing.T) {
 			"/tpm2/pcr-banks":        []byte("sha256\n"),
 			"tpm2/empty":             {},
 		} {
-			file, err := OpenMetadataFile(dir, "node-01", name)
+			file, err := OpenMetadataFile(localVolumes(t, dir), "node-01", name)
 			if err != nil {
 				t.Fatalf("%d-byte sectors: %s: %v", sectorSize, name, err)
 			}
@@ -89,7 +89,7 @@ func TestOpenMetadataFile_NotInstalled(t *testing.T) {
 		"truncated volume": make([]byte, 100),
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := OpenMetadataFile(writeVolume(t, content), "node-01", "EFI/BOOT/BOOTAA64.EFI")
+			_, err := OpenMetadataFile(localVolumes(t, writeVolume(t, content)), "node-01", "EFI/BOOT/BOOTAA64.EFI")
 			var notInstalled ErrNotInstalled
 			if !errors.As(err, &notInstalled) || notInstalled.Identity != "node-01" {
 				t.Fatalf("err = %v, want ErrNotInstalled for node-01", err)
@@ -142,7 +142,7 @@ func TestOpenMetadataFile_RefusesWhatIsNotAnInstalledArea(t *testing.T) {
 			if file == "" {
 				file = "EFI/BOOT/BOOTAA64.EFI"
 			}
-			_, err := OpenMetadataFile(writeVolume(t, img.Bytes), "node-01", file)
+			_, err := OpenMetadataFile(localVolumes(t, writeVolume(t, img.Bytes)), "node-01", file)
 			var area ErrMetadataArea
 			if !errors.As(err, &area) {
 				t.Fatalf("err = %v, want ErrMetadataArea", err)
@@ -155,10 +155,21 @@ func TestOpenMetadataFile_RefusesWhatIsNotAnInstalledArea(t *testing.T) {
 }
 
 func TestOpenMetadataFile_RefusesAnInvalidIdentity(t *testing.T) {
-	_, err := OpenMetadataFile(t.TempDir(), "../node-01", "EFI/BOOT/BOOTAA64.EFI")
+	_, err := OpenMetadataFile(localVolumes(t, t.TempDir()), "../node-01", "EFI/BOOT/BOOTAA64.EFI")
 	var volumeErr ErrVolume
 	if !errors.As(err, &volumeErr) || !errors.Is(err, fs.ErrInvalid) {
 		t.Fatalf("err = %v, want ErrVolume wrapping fs.ErrInvalid", err)
+	}
+}
+
+// A provider that cannot attach the volume, for a reason other than its
+// absence, is not "not installed": the refusal reaches the caller as it is.
+func TestOpenMetadataFile_ReturnsTheProviderRefusal(t *testing.T) {
+	refusal := ErrVolume{Identity: "node-01", Op: "attach", Cause: fs.ErrPermission}
+	_, err := OpenMetadataFile(&recordingVolumes{attachErr: refusal}, "node-01", "EFI/BOOT/BOOTAA64.EFI")
+	var notInstalled ErrNotInstalled
+	if !errors.Is(err, refusal) || errors.As(err, &notInstalled) {
+		t.Fatalf("OpenMetadataFile = %v, want the provider's refusal", err)
 	}
 }
 

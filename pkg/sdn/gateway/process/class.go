@@ -72,6 +72,21 @@ type Definition struct {
 	// into a supervised child. The processes move one at a time; until one
 	// does, its services keep running inside the supervisor's own process.
 	Supervised bool
+	// ReconcilesDesired reports whether the process applies a section of
+	// the desired document. The supervisor sends the document to each such
+	// child on every apply and gives it to the child at every launch.
+	ReconcilesDesired bool
+	// StateDir is the directory under the gatewayd data directory
+	// (--data-dir) the process writes its own state to. The supervisor
+	// creates it before every launch, owned by the credentials the process
+	// runs with, so an unprivileged child can write there. Empty means the
+	// process keeps no state of its own.
+	StateDir string
+	// StateFiles are the files in StateDir the process reads back. A
+	// gatewayd that ran the process's services unsupervised, as root, left
+	// them root-owned; the supervisor hands each that exists to the
+	// process's credentials before every launch, keeping its content.
+	StateFiles []string
 }
 
 // serviceFamilies are the address families every gateway process opens:
@@ -113,6 +128,8 @@ var definitions = []Definition{
 		// holds the OVS runtime, and is reached by parser children only
 		// through the datapath IPC service.
 		Supervised: true,
+		// The load-balancer and NAT sections.
+		ReconcilesDesired: true,
 	},
 	{
 		Name:            "routing",
@@ -159,10 +176,22 @@ var definitions = []Definition{
 		Name:            "vpn",
 		Class:           ClassParser,
 		Services:        []string{gateway.ServiceManagementVPN},
-		AddressFamilies: serviceFamilies,
+		AddressFamilies: []uint32{unix.AF_UNIX, unix.AF_INET, unix.AF_INET6},
 		MemoryMax:       256 << 20,
 		CPUMax:          "100000 100000",
 		Unprivileged:    true,
+		// Fourth to move, and with the least: no capability at all. Its
+		// data plane is reached through the datapath IPC service, which
+		// keeps CAP_NET_ADMIN, and its admission listener's default port
+		// (4433) is unprivileged. AF_UNIX for that IPC, AF_INET and
+		// AF_INET6 for the listener and the control plane; it reads no
+		// routes or links, so no AF_NETLINK.
+		Supervised: true,
+		// The vpn section.
+		ReconcilesDesired: true,
+		// Its revocation journal, vpn/pending-revocations.json.
+		StateDir:   "vpn",
+		StateFiles: []string{gateway.VPNRevocationJournalFile},
 	},
 }
 

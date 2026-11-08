@@ -44,8 +44,15 @@ type Server struct {
 	conns    map[net.Conn]struct{}
 	stopping bool
 
+	// closeOnce and closed are guarded by mu as well, so a Serve call
+	// either registers in serving before Close starts waiting or sees
+	// closed and never registers.
 	closeOnce sync.Once
 	closed    chan struct{}
+
+	// serving counts the running Serve calls, so Close can wait until
+	// each one has closed its listener and left its accept loop.
+	serving sync.WaitGroup
 }
 
 // NewServer validates cfg and returns a server ready to Serve.
@@ -79,7 +86,7 @@ func NewServer(cfg Config) (*Server, error) {
 		},
 		anchor:           cfg.Anchor,
 		identities:       identities,
-		volumes:          newVolumeStore(cfg.VolumeDir, cfg.VolumeSize),
+		volumes:          newVolumeStore(cfg.Volumes, cfg.VolumeSize),
 		handshakeTimeout: timeout,
 		logger:           logger,
 		conns:            make(map[net.Conn]struct{}),
@@ -92,6 +99,12 @@ func NewServer(cfg Config) (*Server, error) {
 // for their goroutines. It returns nil on shutdown and ErrServeFailed if
 // the listener fails first.
 func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
+	if !s.beginServe() {
+		s.shutdown(ln)
+		return nil
+	}
+	defer s.serving.Done()
+
 	ctx, cancel := context.WithCancel(ctx)
 	var sessions sync.WaitGroup
 	defer func() {
@@ -128,10 +141,30 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	}
 }
 
-// Close stops a running Serve. It is safe to call more than once.
+// Close stops every running Serve and returns once each has closed its
+// listener and its accept loop has exited, so the port no longer
+// accepts when Close returns. A Serve called after Close closes its
+// listener and returns nil at once. It is safe to call more than once.
 func (s *Server) Close() error {
+	s.mu.Lock()
 	s.closeOnce.Do(func() { close(s.closed) })
+	s.mu.Unlock()
+	s.serving.Wait()
 	return nil
+}
+
+// beginServe registers a Serve call with serving. It reports false once
+// Close has begun: that Serve must not run, and Close does not wait for it.
+func (s *Server) beginServe() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	select {
+	case <-s.closed:
+		return false
+	default:
+	}
+	s.serving.Add(1)
+	return true
 }
 
 func (s *Server) track(conn net.Conn) bool {

@@ -149,20 +149,23 @@ func TestSDNPortAuthParity(t *testing.T) {
 	revokeReq := &platformv1.RevokePortAuthRequest{BridgeId: "br0", PortId: "port0"}
 
 	transports := []struct {
-		name   string
-		client func(*testing.T) platformv1.SDNServiceClient
-		want   codes.Code
+		name       string
+		client     func(*testing.T) platformv1.SDNServiceClient
+		wantAuth   codes.Code
+		wantRevoke codes.Code
 	}{
-		{"gRPC", f.grpcClient, codes.FailedPrecondition},
-		{"Unix", f.unixClient, codes.FailedPrecondition},
-		{"Embedded", f.embeddedClient, codes.FailedPrecondition},
-		// REST answers 400, the platform's status for FailedPrecondition;
-		// the SDK's REST transport reads every 400 as InvalidArgument.
-		{"REST", f.restClient, codes.InvalidArgument},
+		{"gRPC", f.grpcClient, codes.FailedPrecondition, codes.FailedPrecondition},
+		{"Unix", f.unixClient, codes.FailedPrecondition, codes.FailedPrecondition},
+		{"Embedded", f.embeddedClient, codes.FailedPrecondition, codes.FailedPrecondition},
+		// REST answers 409, the platform's status for FailedPrecondition
+		// (#665). The SDK's REST transport reads a 409 as AlreadyExists,
+		// except on a DELETE (RevokePortAuth), which it reads as
+		// FailedPrecondition.
+		{"REST", f.restClient, codes.AlreadyExists, codes.FailedPrecondition},
 		// The SDK's QUIC and MCP transports map no port-auth call (QUIC has
 		// no opcode for it), so they refuse before anything is sent.
-		{"QUIC", f.quicClient, codes.Unimplemented},
-		{"MCP", f.mcpClient, codes.Unimplemented},
+		{"QUIC", f.quicClient, codes.Unimplemented, codes.Unimplemented},
+		{"MCP", f.mcpClient, codes.Unimplemented, codes.Unimplemented},
 	}
 	for _, tr := range transports {
 		t.Run(tr.name, func(t *testing.T) {
@@ -170,11 +173,11 @@ func TestSDNPortAuthParity(t *testing.T) {
 
 			authResp, err := client.AuthenticatePort(ctx, authReq)
 			assert.Nil(t, authResp)
-			assert.Equal(t, tr.want, status.Code(err), "AuthenticatePort: %v", err)
+			assert.Equal(t, tr.wantAuth, status.Code(err), "AuthenticatePort: %v", err)
 
 			revokeResp, err := client.RevokePortAuth(ctx, revokeReq)
 			assert.Nil(t, revokeResp)
-			assert.Equal(t, tr.want, status.Code(err), "RevokePortAuth: %v", err)
+			assert.Equal(t, tr.wantRevoke, status.Code(err), "RevokePortAuth: %v", err)
 		})
 	}
 

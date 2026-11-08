@@ -195,11 +195,26 @@ func TestStartOverlay_RefusesWithoutTheFloor(t *testing.T) {
 func TestStartOverlay_RefusesAnIPsecServiceItCannotBuild(t *testing.T) {
 	h := newOverlayStartHarness(t)
 	starters := h.starters()
-	starters.ipsec = newOverlayStarters(&Config{}, h.logger).ipsec // no crl-files: refused before any netlink connection
+	starters.ipsec = newOverlayStarters(&Config{App: overlayTestApp(t)}, h.logger).ipsec // no crl-files: refused before any netlink connection
 	_, ctrl, err := startOverlay(context.Background(), overlayWithIPsec(), starters, h.logger)
 	var cfgErr *ipsecconfig.ConfigError
 	if !errors.As(err, &cfgErr) || cfgErr.Field != "crl-files" {
 		t.Fatalf("err = %v, want a ConfigError on crl-files", err)
+	}
+	if ctrl != nil || len(h.steps) != 0 {
+		t.Fatalf("steps %v, want nothing started", h.steps)
+	}
+}
+
+// Without the App there is no platform anchor to hold the tunnel identity
+// to, so no IPsec service is built.
+func TestStartOverlay_RefusesIPsecWithoutThePlatformAnchor(t *testing.T) {
+	h := newOverlayStartHarness(t)
+	starters := h.starters()
+	starters.ipsec = newOverlayStarters(&Config{}, h.logger).ipsec
+	_, ctrl, err := startOverlay(context.Background(), overlayWithIPsec(), starters, h.logger)
+	if !errors.Is(err, ipsec.ErrMissingDependency) {
+		t.Fatalf("err = %v, want ipsec.ErrMissingDependency", err)
 	}
 	if ctrl != nil || len(h.steps) != 0 {
 		t.Fatalf("steps %v, want nothing started", h.steps)

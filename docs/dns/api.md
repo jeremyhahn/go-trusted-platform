@@ -1,6 +1,6 @@
 # DNS — API
 
-> **Status: NORMATIVE** · Scope: DNS routes on every transport · Last verified: 2026-10-15
+> **Status: NORMATIVE** · Scope: DNS routes on every transport · Last verified: 2026-10-26
 > Conflicts with this document are defects. Fix them here first.
 > One row per capability across all six transports. A transport that does not
 > carry a capability is written `MISSING`, never omitted.
@@ -16,14 +16,20 @@ over a Unix domain socket**, so gRPC and Unix share a column.
 
 **One backend serves every transport.** platformd starts one DNS service from
 the `dns:` section. gRPC, Unix and embedded share one `DNSServiceServer` over
-it (`Daemon.DNSGRPCServiceServer`, `pkg/api/daemon/daemon.go`); QUIC, MCP and
-REST hold the same `*dns.Service`. With no `dns:` section there is no backend,
+it (`Daemon.DNSGRPCServiceServer`, `pkg/api/daemon/daemon.go`). REST calls
+that same `DNSServiceServer` and serves its proto messages in protojson, so a
+REST body is the gRPC message (#445). The SDK-mapped QUIC operations and MCP's
+newer tools go through the same `DNSServiceServer`; QUIC's flat-wire operations
+and MCP's older tools call the same `*dns.Service`. With no `dns:` section there is no backend,
 and every transport answers the not-configured error (§5).
 
 gRPC: `DNSService`, 13 RPCs (`pkg/api/grpc/proto/platform_dns.proto`).
 REST: base path `/api/v1/dns` (`pkg/webservice/v1/rest/dns/router.go`).
-QUIC: top-level opcodes `0x20`–`0x2C` — no category indirection. `0x2B` and
-`0x2D` are retired (#317) — see §2.
+QUIC: top-level opcodes `0x20`–`0x2C`, and the DNS category `OpDNSCategory`
+(`0x61`) for operations past that full block: the sub-opcode (`0x30`–`0x3F`)
+is `payload[0]`, as under the Gateway category `0x2F`
+(`sdk/go/wire/quicwire/dns_opcodes.go`). `0x2B` and `0x2D` are retired (#317)
+and stay do-not-reuse — see §2.
 MCP: **two parallel tool families** — see §3.
 
 ---
@@ -34,13 +40,13 @@ MCP: **two parallel tool families** — see §3.
 |---|---|---|---|---|---|
 | Create zone | `POST /api/v1/dns/zones` | `CreateZone` | `OpDNSAddZone` (`0x25`) | `dns_create_zone`, `dns_zone_create` | ✅ |
 | List zones | `GET /api/v1/dns/zones` | `ListZones` | `OpDNSListZones` (`0x28`) | `dns_list_zones`, `dns_zone_list` | ✅ |
-| Get zone | `GET /api/v1/dns/zones/{zone}` | `GetZone` | `OpDNSGetZone` (`0x27`) | `dns_zone_get` | ✅ |
-| Update zone | `PUT /api/v1/dns/zones/{zone}` | `UpdateZone` | `MISSING — docs/13 G7` | `dns_zone_update` | ✅ |
+| Get zone | `GET /api/v1/dns/zones/{zone}` | `GetZone` | `OpDNSGetZone` (`0x27`), daemon only (†) | `dns_zone_get` | ✅ |
+| Update zone | `PUT /api/v1/dns/zones/{zone}` | `UpdateZone` | `OpDNSCategory` (`0x61`) / `OpDNSUpdateZone` (`0x30`) | `dns_zone_update` | ✅ |
 | Delete zone | `DELETE /api/v1/dns/zones/{zone}` | `DeleteZone` | `OpDNSDeleteZone` (`0x26`) | `dns_delete_zone`, `dns_zone_delete` | ✅ |
 | Add record | `POST /api/v1/dns/zones/{zone}/records` | `AddRecord` | `OpDNSAddRecord` (`0x20`) | `dns_add_record`, `dns_record_create` | ✅ |
 | List records | `GET /api/v1/dns/zones/{zone}/records` | `ListRecords` | `OpDNSListRecords` (`0x24`) | `dns_list_records`, `dns_record_list` | ✅ |
 | Get record | `GET /api/v1/dns/zones/{zone}/records/{type}/{name}` | `MISSING — docs/13 G7` | `OpDNSGetRecord` (`0x23`) | `dns_get_record`, `dns_record_get` | — |
-| Update record | `MISSING — docs/13 G7` | `UpdateRecord` | `OpDNSUpdateRecord` (`0x22`) | `dns_record_update` | ✅ |
+| Update record | `PUT /api/v1/dns/zones/{zone}/records` | `UpdateRecord` | `OpDNSUpdateRecord` (`0x22`), daemon only (†) | `dns_record_update` | ✅ |
 | Delete record | `DELETE /api/v1/dns/zones/{zone}/records/{type}/{name}` | `DeleteRecord` | `OpDNSDeleteRecord` (`0x21`) | `dns_delete_record`, `dns_record_delete` | ✅ |
 | Sign zone | `POST /api/v1/dns/zones/{zone}/sign` | `SignZone` | `MISSING — docs/13 G7` | `dns_zone_sign` | ✅ |
 | DNSSEC status | `GET /api/v1/dns/zones/{zone}/dnssec` | `GetDNSSECStatus` | `MISSING — docs/13 G7` | `dns_zone_dnssec_status` | ✅ |
@@ -50,7 +56,12 @@ MCP: **two parallel tool families** — see §3.
 | Get DNS config | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDNSGetConfig` (`0x2A`) | `MISSING — docs/13 G7` | — |
 | DNS metrics | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `OpDNSGetMetrics` (`0x2C`) | `MISSING — docs/13 G7` | — |
 
-Two shapes stand out:
+(†) The daemon serves the opcode on its flat wire (`pkg/api/daemon/quic_dns.go`),
+but the SDK QUIC adapter does not map `GetZone` or `UpdateRecord`
+(`sdk/go/transport/quic/adapter.go:879-886`), so an SDK or `platformctl` call
+over QUIC fails. The same is true of get record, which has no SDK method at all.
+
+Three shapes stand out:
 
 - **DNSSEC — signing and status — has no QUIC opcode.** REST, gRPC, MCP
   (`dns_zone_sign`, `dns_zone_dnssec_status`) and embedded carry it.
@@ -62,7 +73,8 @@ Two shapes stand out:
   and the platform's DNS server keeps no cache. The only cache is the dnsmasq
   local forwarder's (`cache-size`, `pkg/dns/resolver.go`), which no platform
   API controls. #317 retired both bytes; the wire refuses them as unclassified
-  (`StatusPermissionDenied`). Do not reuse them. A flush verb needs a dnsmasq
+  (`StatusPermissionDenied`). They are do-not-reuse: a new DNS verb takes a
+  sub-opcode under `OpDNSCategory` (`0x61`), never `0x2B` or `0x2D`. A flush verb needs a dnsmasq
   control path in the DNS service layer, served on every transport.
 
 `DELETE /api/v1/dns/zones/{zone}/records/{type}/{name}` keys a record by type
@@ -73,9 +85,11 @@ name); `GET /api/v1/dns/zones/{zone}/records` lists the zone, optionally
 filtered by `?type=`. The two are distinct routes with distinct answers.
 
 The SDK REST client (`sdk/go/transport/rest/dns.go`) calls these routes with
-the zone, record type and record name in the path, never in the body; the type
-travels as its mnemonic (`A`, `AAAA`, `MX`), and a record call without a type
-is refused before it is sent. Get record is served on REST, and on MCP by
+the zone, record type and record name in the path and query, and sends the
+rest of the request message as protojson; the type travels as its mnemonic
+(`A`, `AAAA`, `MX`). A call missing a value its path needs — a zone, or a
+record's type or name — is refused with `InvalidArgument` before it is sent.
+The reply is the RPC's response message, decoded as it is on gRPC. Get record is served on REST, and on MCP by
 `dns_record_get` from `ListRecords` (§3). The SDK cannot call it, because
 `DNSService` declares no `GetRecord` rpc (docs/13 G7).
 
@@ -160,7 +174,7 @@ are **default-deny** ([`docs/auth/architecture.md`](../auth/architecture.md)).
 **`DNSService` is fully scoped on gRPC** with 13 methods mapped, resource
 `dns`, actions `read`/`write`/`delete`.
 
-On MCP, the eight older-family tools in §3 carry a permission. So do all eleven
+On MCP, the eight older-family tools in §3 carry a permission. So do all fourteen
 newer-family tools, each with its gRPC method's scope.
 
 The tenant is the DNS service's own. `DNSService` carries no caller tenant on
@@ -192,7 +206,7 @@ positions described above are unchanged. See
 | `0x02` | `StatusNotFound` | 404 | Unknown zone or record |
 | `0x03` | `StatusUnauthorized` | 401 | Token invalid |
 | `0x04` | `StatusInternalError` | 500 | Resolver or key-store failure |
-| `0x06` | `StatusAlreadyExists` | 500 | `ErrZoneAlreadyExists` (REST `Register` only; REST `CreateZone` saves over an existing zone) |
+| `0x06` | `StatusAlreadyExists` | — | Not answered by any DNS call: create zone saves over an existing zone on every transport (`dns_grpc_service.go:60`, `service.go:1145`), and `Register` maps `ErrZoneAlreadyExists` to gRPC `INTERNAL` / REST 500 (`dns_grpc_service.go:521`) |
 | `0x07` | `StatusPermissionDenied` | 403 | Missing `dns:*` scope |
 | `0x09` | `StatusInvalidArgument` | 400 | `ErrRecordTypeNotSupported`, `ErrInvalidResolverAddress`, `ErrInvalidResolverPort` |
 | `0x0A` | `StatusUnavailable` | 503 | No DNS backend: the daemon has no `dns:` section |
@@ -225,7 +239,7 @@ start rather than answering requests badly.
 
 `Register` (`POST /api/v1/dns/register`, `DNSService.Register`) creates a zone
 after checking only that the name is not taken. Domain ownership verification is
-explicitly deferred in the code (`pkg/dns/service.go:477`, blocked on the IAM
+explicitly deferred in the code (`pkg/dns/service.go:493`, blocked on the IAM
 domain-ownership model).
 
 **Before enabling `allow-external-registration`, read

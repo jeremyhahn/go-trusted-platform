@@ -32,7 +32,6 @@ import (
 
 	"github.com/jeremyhahn/go-codec"
 	"github.com/jeremyhahn/go-codec/pkg/factory"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
@@ -657,23 +656,6 @@ func pbStorageToData(s *platformv1.StorageQuota) *StorageQuotaData {
 	return &StorageQuotaData{
 		MaxVolumesGB: s.GetMaxVolumesGb(),
 		MaxSnapshots: s.GetMaxSnapshots(),
-	}
-}
-
-func pbTenantStateToState(s platformv1.TenantState) tenant.State {
-	switch s {
-	case platformv1.TenantState_TENANT_STATE_PENDING:
-		return tenant.StateCreated
-	case platformv1.TenantState_TENANT_STATE_ACTIVE:
-		return tenant.StateActive
-	case platformv1.TenantState_TENANT_STATE_SUSPENDED:
-		return tenant.StateSuspended
-	case platformv1.TenantState_TENANT_STATE_DELETING:
-		return tenant.StateDeleting
-	case platformv1.TenantState_TENANT_STATE_DELETED:
-		return tenant.StateDeleted
-	default:
-		return tenant.State("")
 	}
 }
 

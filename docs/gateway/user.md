@@ -260,7 +260,7 @@ same way. gatewayd checks this at startup and refuses to start on a
 mismatch:
 
 ```
-gatewayd: control-plane gateway-id "gw-01" does not match the client
+gatewayd: control-plane gateway-id "edge-01" does not match the client
 certificate Common Name "gw-edge-1" in /etc/gatewayd/idevid.pem; the
 control plane binds reported telemetry to the certificate identity
 ```
@@ -284,7 +284,7 @@ hostfw:
     - interface: eth0            # management leg
       protocol: tcp
       port: 22
-      sources: [10.4.2.0/24, fd12:3456:789a:402::/64]
+      sources: [198.51.100.128/25, fd12:3456:789a:402::/64]
       comment: sshd from the management network
   peers:
     - interface: wan0
@@ -348,15 +348,17 @@ On an internet edge, the parsers that face the internet should not share a
 process with the datapath. The `process:` section turns on the supervised
 model (#557): `gatewayd serve` starts each supervised process as a child,
 dropped to its own privilege class, and restarts it with backoff if it dies.
-Four processes move: `routing` (`transit`, the BGP speaker), `proxy` (the
+Five processes move: `routing` (`transit`, the BGP speaker), `proxy` (the
 authenticating reverse proxy, when `proxy:` enables it) and `provisioning`
 (`edge`, `dhcp`, `pxe`) each run as the service account and hold
 `CAP_NET_BIND_SERVICE` alone; `datapath` (`firewall`, `nat`, `load-balancer`,
 `nat64`, `hostfw`, `tunnels`, `overlay`) stays root but keeps only
-`CAP_NET_ADMIN` and `CAP_NET_RAW`, and is the one process that opens OVSDB.
-Only the management VPN stays in the main process. A desired configuration
-pushed to the gateway goes to the `datapath` process, and a restarted
-`datapath` process gets the last one again and reprograms its flows from it.
+`CAP_NET_ADMIN` and `CAP_NET_RAW`, and is the one process that opens OVSDB;
+`vpn` (the management VPN) runs as the service account with no capability,
+so its admission listener needs a port of 1024 or above (the default is
+4433). A desired configuration pushed to the gateway goes to the `datapath`
+and `vpn` processes, and a restarted one gets the last one again: `datapath`
+reprograms its flows from it, `vpn` re-applies its enrolments and policies.
 The provisioning sections have no backend yet, so enabling one still
 stops the daemon with the section's reason, which now comes from the
 `provisioning` child.
@@ -404,13 +406,15 @@ container needs delegated. Each process's leaf accounting is in the gatewayd
 log: `process memory` (`memory.current`, `memory.peak`, `memory.oom_kill`) when
 the process stops, and the same `memory` fields on every `process down,
 restarting` line, so an OOM kill behind a restart and a class's real peak are
-on record. The counters belong to the leaf and carry over a relaunch.
+on record. The counters belong to the leaf and carry over a relaunch. A kernel
+before 5.19 has no `memory.peak`; the log then shows `memory.peak=absent`.
 The account must exist, and **the configuration file and every file it names
 must be readable by it**: the child reads them after it drops privileges, and
 it exits with an error rather than start without them. For the proxy that
 includes its TLS certificate, key and client CAs, and — when a `trust:` scope
 uses `tofu` — the pin directory `<data-dir>/trust/tofu-pins`, which the
-account must own. A process that has
+account must own. For `vpn` it includes the `control-plane:` certificate and
+key, through which the child records its leases. A process that has
 used up its restart budget stays down, and the gateway status reports it.
 The gateway snapshot still shows the BGP peers, read from the routing
 process; if that process cannot be reached, the snapshot's `bgp.error` says
@@ -435,11 +439,11 @@ its telemetry snapshot:
 platformctl sdn gateway snapshot
 
 # A gateway that reports to this control plane
-platformctl sdn gateway snapshot --gateway-id gw-01-gateway
+platformctl sdn gateway snapshot --gateway-id edge-01-gateway
 
 # Overlay VTEPs admitted for decapsulation
-platformctl sdn gateway overlay vteps --gateway-id gw-01-gateway
-platformctl sdn gateway overlay vteps get 10.255.0.10 --gateway-id gw-01-gateway
+platformctl sdn gateway overlay vteps --gateway-id edge-01-gateway
+platformctl sdn gateway overlay vteps get 10.255.0.10 --gateway-id edge-01-gateway
 ```
 
 Sections are printed only for services the gateway runs. If the Tunnels

@@ -183,7 +183,7 @@ func TestComputeParity_VMAttestRefusesOutOfRangePCR(t *testing.T) {
 	_, grpcErr := svc.AttestVM(context.Background(), req)
 
 	assertSameClass(t, codes.InvalidArgument, mcpErr, grpcErr)
-	assert.Nil(t, orch.lastAttestPCRs, "the backend must not be asked to quote")
+	assert.Nil(t, orch.recordedAttestPCRs(), "the backend must not be asked to quote")
 }
 
 func TestComputeParity_VMAttestErrors(t *testing.T) {

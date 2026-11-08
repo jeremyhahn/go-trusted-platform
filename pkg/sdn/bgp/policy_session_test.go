@@ -15,9 +15,11 @@ package bgp
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/netip"
 	"slices"
+	"syscall"
 	"testing"
 	"time"
 
@@ -75,6 +77,61 @@ func freePort(t *testing.T) uint16 {
 	return uint16(port)
 }
 
+// freePortAttempts bounds how often listenOnFreePort picks a new port.
+const freePortAttempts = 5
+
+// listenOnFreePort calls listen with a free port and returns that port. The
+// port is released between freePort and the speaker's bind, and any socket
+// can take it meanwhile: another package's test, or a speaker's own dial,
+// whose local port comes from the same ephemeral range. listen is retried
+// with a new port only while it fails with EADDRINUSE; any other error fails
+// the test at once.
+func listenOnFreePort(t *testing.T, listen func(port uint16) error) uint16 {
+	t.Helper()
+	var err error
+	for range freePortAttempts {
+		port := freePort(t)
+		err = listen(port)
+		if !errors.Is(err, syscall.EADDRINUSE) {
+			require.NoError(t, err)
+			return port
+		}
+	}
+	require.NoError(t, err, "no free port in %d attempts", freePortAttempts)
+	return 0
+}
+
+// startOnFreePort starts a speaker built from config on a free port, stops
+// it when the test ends, and returns it with its port. newOptions builds the
+// options for each attempt: a speaker whose start failed has stopped its
+// server, so a retry needs a new one.
+func startOnFreePort(t *testing.T, config *BGPConfig, newOptions func() []SpeakerOption) (*Speaker, uint16) {
+	t.Helper()
+	var s *Speaker
+	port := listenOnFreePort(t, func(port uint16) error {
+		config.ListenPort = port
+		var err error
+		s, err = NewSpeaker(config, speakerTestLogger(), newOptions()...)
+		require.NoError(t, err)
+		return s.Start(context.Background())
+	})
+	t.Cleanup(func() { require.NoError(t, s.Stop(context.Background())) })
+	return s, port
+}
+
+// noOptions is the newOptions of a speaker that takes no options.
+func noOptions() []SpeakerOption { return nil }
+
+// dialPort is the newOptions of a speaker that dials its peers on port.
+func dialPort(port uint16) func() []SpeakerOption {
+	return func() []SpeakerOption {
+		return []SpeakerOption{WithBGPServer(remotePortServer{
+			BGPServerInterface: NewGoBGPServerAdapter(server.NewBgpServer()),
+			port:               uint32(port),
+		})}
+	}
+}
+
 // loopback is the address both speakers listen on and peer with.
 var loopback = netip.MustParseAddr("127.0.0.1")
 
@@ -86,27 +143,14 @@ func sessionPair(t *testing.T, local, remote *BGPConfig) (*Speaker, *Speaker) {
 	t.Helper()
 	ctx := context.Background()
 
-	localPort, remotePort := freePort(t), freePort(t)
 	local.ListenAddresses = []netip.Addr{loopback}
-	local.ListenPort = localPort
 	remote.ListenAddresses = []netip.Addr{loopback}
-	remote.ListenPort = remotePort
 	local.Neighbors[0].Address = loopback
 	local.Neighbors[0].PassiveMode = true
 	remote.Neighbors[0].Address = loopback
 
-	localSpeaker, err := NewSpeaker(local, speakerTestLogger())
-	require.NoError(t, err)
-	remoteSpeaker, err := NewSpeaker(remote, speakerTestLogger(), WithBGPServer(remotePortServer{
-		BGPServerInterface: NewGoBGPServerAdapter(server.NewBgpServer()),
-		port:               uint32(localPort),
-	}))
-	require.NoError(t, err)
-
-	for _, s := range []*Speaker{localSpeaker, remoteSpeaker} {
-		require.NoError(t, s.Start(ctx))
-		t.Cleanup(func() { _ = s.Stop(context.Background()) })
-	}
+	localSpeaker, localPort := startOnFreePort(t, local, noOptions)
+	remoteSpeaker, _ := startOnFreePort(t, remote, dialPort(localPort))
 	require.NoError(t, localSpeaker.AddPeer(ctx, &local.Neighbors[0]))
 	require.NoError(t, remoteSpeaker.AddPeer(ctx, &remote.Neighbors[0]))
 

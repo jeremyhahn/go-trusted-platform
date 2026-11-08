@@ -86,8 +86,8 @@ type SOLSession struct {
 	// payloadInstance is the IPMI 2.0 SOL payload instance this session
 	// activated against. Stored so Deactivate sends the matching instance.
 	payloadInstance byte
-	// bytesReceived counts SOL data bytes the receive loop has emitted to
-	// the output channel. Inspected by callers (e.g. the bmc console
+	// bytesReceived counts SOL data bytes the receive loop has received
+	// from the BMC, counted before they are handed to the output channel. Inspected by callers (e.g. the bmc console
 	// CLI command) to detect a "session activated, no data ever arrived"
 	// outcome — almost always a wrong-payload-instance symptom.
 	bytesReceived atomic.Uint64
@@ -293,9 +293,11 @@ func (sol *SOLSession) receiveLoop() {
 		buf := make([]byte, len(charData))
 		copy(buf, charData)
 
+		// Count before the hand-off: a reader that has the bytes must see
+		// them counted.
+		sol.bytesReceived.Add(uint64(len(buf)))
 		select {
 		case sol.output <- buf:
-			sol.bytesReceived.Add(uint64(len(buf)))
 		case <-sol.done:
 			return
 		}

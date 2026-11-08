@@ -124,6 +124,46 @@ type LUKSBackend struct {
 	logger *logging.Logger
 	fido2  LUKSFIDO2Handler
 	tpm    LUKSTPMHandler
+
+	// kdfCost, when set, fixes the KDF cost of every keyslot the backend
+	// writes. Production leaves it nil so go-luks2 calibrates the cost for
+	// the host; the package's unit tests set it so a keyslot write does not
+	// spend seconds in the KDF.
+	kdfCost *luksKDFCost
+}
+
+// luksKDFCost is a fixed keyslot KDF cost (see LUKSBackend.kdfCost): the
+// KDF, hash and PBKDF2 iteration time of an added keyslot, and the Argon2
+// cost of a recovery keyslot, whose options carry no PBKDF2 iteration time.
+type luksKDFCost struct {
+	kdfType        string
+	hash           string
+	pbkdfIterTime  int
+	argon2Time     int
+	argon2Memory   int
+	argon2Parallel int
+}
+
+// applyAddKey fixes the KDF of a new keyslot's options. A nil cost leaves
+// the options as the FIPS policy resolved them.
+func (c *luksKDFCost) applyAddKey(opts *luks2.AddKeyOptions) {
+	if c == nil {
+		return
+	}
+	opts.KDFType = c.kdfType
+	opts.Hash = c.hash
+	opts.PBKDFIterTime = c.pbkdfIterTime
+}
+
+// applyRecovery fixes the Argon2 cost of a recovery keyslot's options. A
+// nil cost leaves the options as the FIPS policy resolved them.
+func (c *luksKDFCost) applyRecovery(opts *luks2.RecoveryKeyOptions) {
+	if c == nil {
+		return
+	}
+	opts.Argon2Time = c.argon2Time
+	opts.Argon2Memory = c.argon2Memory
+	opts.Argon2Parallel = c.argon2Parallel
 }
 
 // Compile-time assertion.
@@ -291,11 +331,27 @@ func (b *LUKSBackend) Info(ctx context.Context, device string) (*daemon.LUKSInfo
 		Label:        info.Label,
 		Version:      int32(info.Version),
 		Cipher:       info.Cipher,
-		KeySize:      int32(info.KeySize),
+		KeySize:      volumeKeyBits(info, list.Slots),
 		SectorSize:   int32(sectorSize),
 		Slots:        list.Slots,
 		MetadataJSON: string(metaJSON),
 	}, nil
+}
+
+// volumeKeyBits returns the volume key size in bits. go-luks2's
+// GetVolumeInfo does not fill VolumeInfo.KeySize, so the size falls back to
+// the keyslots: every LUKS2 keyslot stores the volume key, and a keyslot's
+// key_size is in bytes. Zero means the volume has no keyslot to read it from.
+func volumeKeyBits(info *luks2.VolumeInfo, slots []daemon.LUKSKeyslot) int32 {
+	if info.KeySize != 0 {
+		return int32(info.KeySize)
+	}
+	for _, s := range slots {
+		if s.KeySize > 0 {
+			return s.KeySize * 8
+		}
+	}
+	return 0
 }
 
 // EnrollPassphrase adds a new passphrase keyslot.
@@ -308,6 +364,7 @@ func (b *LUKSBackend) EnrollPassphrase(ctx context.Context, req *daemon.LUKSEnro
 	if err != nil {
 		return nil, err
 	}
+	b.kdfCost.applyAddKey(addOpts)
 	if err := luks2.AddKey(
 		req.Device,
 		[]byte(req.ExistingPassphrase),
@@ -368,6 +425,7 @@ func (b *LUKSBackend) EnrollFIDO2(ctx context.Context, req *daemon.LUKSEnrollFID
 	if err != nil {
 		return nil, err
 	}
+	b.kdfCost.applyAddKey(addOpts)
 	if err := luks2.AddKey(
 		req.Device,
 		[]byte(req.ExistingPassphrase),
@@ -419,6 +477,7 @@ func (b *LUKSBackend) EnrollTPM(ctx context.Context, req *daemon.LUKSEnrollTPMRe
 	if err != nil {
 		return nil, err
 	}
+	b.kdfCost.applyAddKey(addOpts)
 	if err := luks2.AddKey(
 		req.Device,
 		[]byte(req.ExistingPassphrase),
@@ -449,6 +508,7 @@ func (b *LUKSBackend) EnrollRecovery(ctx context.Context, req *daemon.LUKSEnroll
 	if err := fipsRecoveryKeyPolicy(&recoveryOpts.KDFType); err != nil {
 		return nil, err
 	}
+	b.kdfCost.applyRecovery(recoveryOpts)
 	recoveryKey, err := luks2.AddRecoveryKey(
 		req.Device,
 		[]byte(req.ExistingPassphrase),

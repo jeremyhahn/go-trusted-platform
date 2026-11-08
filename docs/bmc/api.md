@@ -21,7 +21,7 @@ opcode table, the platform authorization model — is
 |---|---|---|
 | **gRPC** | `platform.v1.BMCService`, **23 RPCs** | `pkg/api/grpc/proto/bmc.proto`; registered in `pkg/api/daemon/daemon.go` |
 | **Unix** | **The same 23 RPCs.** Unix is gRPC over a UDS; `BMCService` is registered on both `grpcServer` and `grpcUDSServer` | same |
-| **REST** | base path `/api/v1/bmc/{profileID}`, **20 route registrations over 17 paths** | `pkg/api/daemon/rest_service.go`; handlers in `pkg/webservice/v1/bmc/` |
+| **REST** | base path `/api/v1/bmc/{profileID}`, **20 route registrations over 13 paths** | `pkg/api/daemon/rest_service.go`; handlers in `pkg/webservice/v1/bmc/` |
 | **QUIC** | `OpBMCCategory` = `0x9F`, **23 sub-opcodes** `0x01`–`0x17`, one per gRPC RPC | `sdk/go/wire/quicwire/phase35_opcodes.go`; handler `pkg/api/daemon/quic_bmc.go` |
 | **MCP** | **23 tools**, all named `platform_bmc_*`, one per gRPC RPC | `pkg/api/mcp/bmc_tools.go`; servicer wired in `pkg/api/daemon/daemon.go` |
 | **Embedded** | **The same 23 RPCs**, through `ServiceRegistry.BMC` | `sdk/go/transport/embedded/dispatch.go`; registry built in `pkg/api/daemon/embedded_host.go` |
@@ -349,7 +349,7 @@ BMC routes are registered in two places:
 
 | Registrar | Routes | Includes enroll / cert-restore? |
 |---|---|---|
-| `pkg/api/daemon/rest_service.go` | 20 registrations, 17 paths | **Yes** |
+| `pkg/api/daemon/rest_service.go` | 20 registrations, 13 paths | **Yes** |
 | `pkg/webservice/v1/router/bmc.go` (`BMCRouter`) | 18 registrations | **No** |
 
 `BMCRouter` covers power, boot device, virtual media, sensors, system info,

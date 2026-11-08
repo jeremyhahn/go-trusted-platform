@@ -267,7 +267,7 @@ func TestNegotiation_AnotherDevicesExportIsRefused(t *testing.T) {
 			t.Fatalf("session error = %v, want ErrExportNotPermitted", err)
 		}
 	})
-	if _, err := os.Stat(filepath.Join(cfg.VolumeDir, "other-device"+volumeSuffix)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := cfg.Volumes.Attach("other-device"); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("the other device's volume was touched: %v", err)
 	}
 }
@@ -322,7 +322,7 @@ func TestNegotiation_VolumeFailureIsAPlatformError(t *testing.T) {
 	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	cfg.VolumeDir = blocker
+	cfg.Volumes = localVolumes(t, blocker)
 
 	addr, result := startSession(t, newTestServer(t, cfg))
 	c := dialClient(t, addr, clientFlagFixedNewstyle|clientFlagNoZeroes)
@@ -380,7 +380,7 @@ func TestNegotiation_MalformedOpeningIsRefused(t *testing.T) {
 func TestNegotiation_SilentClientHitsTheHandshakeDeadline(t *testing.T) {
 	bundle := testutil.GenerateTestTLSBundle(t)
 	cfg := testConfig(t, bundle)
-	cfg.HandshakeTimeout = 50 * time.Millisecond
+	cfg.HandshakeTimeout = 10 * time.Millisecond
 	addr, result := startSession(t, newTestServer(t, cfg))
 
 	dialClient(t, addr, clientFlagFixedNewstyle|clientFlagNoZeroes)

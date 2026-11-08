@@ -12,7 +12,10 @@
 | Result | `CallToolResult`; the output below is its text block ([daemon api.md](../daemon/api.md) §1 "MCP tool results") |
 | Authorization | each tool requires a `dns:read`, `dns:write` or `dns:delete` scope |
 
-There are no DNS resources (`resources/read`); everything is a tool.
+Two DNS resources are readable with `resources/read`
+(`pkg/api/mcp/resources.go:65`, `:72`): `platform://dns/zones` lists the zones,
+and `platform://dns/zone/{zone}` returns one zone's records. Everything else is
+a tool.
 
 ## Newer family (bound to `DNSService`)
 

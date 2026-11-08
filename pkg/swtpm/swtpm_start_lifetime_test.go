@@ -29,8 +29,13 @@ import (
 // on PATH, so Start runs without the real emulator.
 func fakeSWTPMOnPath(t *testing.T) {
 	t.Helper()
+	fakeSWTPMScriptOnPath(t, "#!/bin/sh\nexec sleep 300\n")
+}
+
+// fakeSWTPMScriptOnPath puts script on PATH as the swtpm binary.
+func fakeSWTPMScriptOnPath(t *testing.T, script string) {
+	t.Helper()
 	binDir := t.TempDir()
-	script := "#!/bin/sh\nexec sleep 300\n"
 	require.NoError(t, os.WriteFile(filepath.Join(binDir, "swtpm"), []byte(script), 0o755))
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }

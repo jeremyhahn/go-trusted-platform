@@ -17,32 +17,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
-	"syscall"
 )
 
-// hardenedParentEnv marks the re-executed image of a hardened child and
-// carries the supervisor's pid across the exec, so the second stage can tell
-// whether the supervisor died while the parent-death signal was disarmed.
-// The marker grants nothing: the second stage verifies its credentials
-// against the class before it trusts them.
-const hardenedParentEnv = "GATEWAYD_HARDENED_PARENT"
-
-// childOps is what EnterHardened needs from the operating system, so both
-// stages are unit tests rather than irreversible syscalls on the test binary.
+// childOps is what EnterHardened needs from the operating system, so the
+// drop is a unit test rather than irreversible syscalls on the test binary.
 type childOps struct {
 	harden hardenOps
-	// executable resolves this binary before the drop, while root can
-	// still read every path to it.
-	executable func() (string, error)
-	// exec replaces the process image from the calling thread.
-	exec func(path string, argv, env []string) error
-	// args and environ are this process's own.
-	args    []string
-	environ []string
 	// taskStatuses returns /proc/self/task/<tid>/status for every thread.
 	taskStatuses func() (map[string]string, error)
 	// syscalls returns this architecture's seccomp syscall table.
@@ -52,64 +35,35 @@ type childOps struct {
 // EnterHardened drops a child to its class and returns only in a process
 // whose every thread holds exactly the class's credentials.
 //
-// prctl and capset change the calling thread only, while the Go runtime has
-// started several threads before main runs (#657). So the first stage locks
-// its goroutine to one thread, hardens that thread, and re-executes the
-// binary from it: execve keeps the calling thread's credentials and discards
-// every other thread, and every thread the new runtime starts is cloned from
-// the hardened one. The second stage, recognised by hardenedParentEnv,
-// installs the class's seccomp filter on every thread, verifies every thread
-// against the class and re-arms the parent-death signal. A failure in either stage is fatal to the child.
+// The Go runtime has started several threads before main runs, and every
+// credential the drop changes is a property of one thread (#657). harden
+// therefore makes each change on every thread at once — the uid, gid and
+// groups through the standard library, the prctl and capset calls through
+// libcap's psx mechanism — then the class's seccomp filter is installed on
+// every thread, and every thread is read back and checked against the
+// class. A failure at any step is fatal to the child.
 func EnterHardened(def Definition, uid, gid uint32) error {
-	// The lock is never released: on success the image is replaced, and on
-	// failure the child exits, so no other goroutine may run on a
-	// half-hardened thread in between.
-	runtime.LockOSThread()
 	return enterHardened(def, uid, gid, childOps{
 		harden:       kernelHardenOps{},
-		executable:   os.Executable,
-		exec:         syscall.Exec,
-		args:         os.Args,
-		environ:      os.Environ(),
 		taskStatuses: readTaskStatuses,
 		syscalls:     nativeSeccompTable,
 	})
 }
 
 func enterHardened(def Definition, uid, gid uint32, ops childOps) error {
-	if marker, ok := lookupEnv(ops.environ, hardenedParentEnv); ok {
-		return verifyHardened(def, uid, gid, marker, ops)
-	}
-	binary, err := ops.executable()
-	if err != nil {
-		return &ErrHardening{Step: "resolve the executable to re-execute", Cause: err}
-	}
-	parent := ops.harden.getppid()
 	if err := harden(def, uid, gid, ops.harden); err != nil {
 		return err
-	}
-	// The marker is absent here, or this would be the second stage.
-	env := append(slices.Clip(ops.environ), hardenedParentEnv+"="+strconv.Itoa(parent))
-	err = ops.exec(binary, ops.args, env)
-	return &ErrHardening{Step: "re-execute from the hardened thread", Cause: err}
-}
-
-// verifyHardened is the second stage: the class's seccomp filter is
-// installed on every thread, every thread must then hold the class's
-// credentials and the filter, and the parent-death signal is re-armed
-// against the supervisor the first stage saw.
-//
-// The filter is installed here rather than before the re-exec because the
-// first stage still has to exec, which a parser's filter refuses, and
-// because the new image's threads are all present to be synchronised.
-func verifyHardened(def Definition, uid, gid uint32, marker string, ops childOps) error {
-	parent, err := strconv.Atoi(marker)
-	if err != nil {
-		return &ErrHardening{Step: "read the hardened-stage marker", Cause: err}
 	}
 	if err := confineSyscalls(def, ops); err != nil {
 		return err
 	}
+	return verifyThreads(def, uid, gid, ops)
+}
+
+// verifyThreads reads every thread back and refuses unless each one holds
+// exactly the class's credentials and the seccomp filter. It is what proves
+// the drop reached every thread, rather than trusting that it did.
+func verifyThreads(def Definition, uid, gid uint32, ops childOps) error {
 	statuses, err := ops.taskStatuses()
 	if err != nil {
 		return &ErrHardening{Step: "read the thread credentials", Cause: err}
@@ -127,7 +81,7 @@ func verifyHardened(def Definition, uid, gid uint32, marker string, ops childOps
 			return &ErrHardening{Step: "verify the hardened credentials", Cause: err}
 		}
 	}
-	return rearmParentDeath(parent, ops.harden)
+	return nil
 }
 
 // confineSyscalls installs the process's seccomp filter on every thread. It
@@ -205,15 +159,6 @@ func capabilityMask(capabilities []uintptr) uint64 {
 		mask |= 1 << capability
 	}
 	return mask
-}
-
-func lookupEnv(environ []string, key string) (string, bool) {
-	for _, entry := range environ {
-		if value, found := strings.CutPrefix(entry, key+"="); found {
-			return value, true
-		}
-	}
-	return "", false
 }
 
 // readTaskStatuses reads the status document of every thread of this

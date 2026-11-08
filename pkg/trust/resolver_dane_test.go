@@ -328,6 +328,84 @@ func TestCAPool_DANE_Success(t *testing.T) {
 	}
 }
 
+// TestCAPool_DANE_ChainBundle covers what the bootstrap integration suite
+// asserted against a live platformd (#964 step b): a multi-certificate
+// chain bundle fetched over DANE arrives whole and in served order, and the
+// pool built from it verifies a leaf issued under its intermediate.
+func TestCAPool_DANE_ChainBundle(t *testing.T) {
+	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Chain Root CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+	}
+	root := signTestCert(t, rootTemplate, rootTemplate, &rootKey.PublicKey, rootKey)
+
+	intermediateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intermediate := signTestCert(t, &x509.Certificate{
+		SerialNumber:          big.NewInt(2),
+		Subject:               pkix.Name{CommonName: "Chain Intermediate CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+	}, root, &intermediateKey.PublicKey, rootKey)
+
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf := signTestCert(t, &x509.Certificate{
+		SerialNumber: big.NewInt(3),
+		Subject:      pkix.Name{CommonName: "svc.chain.test"},
+		DNSNames:     []string{"svc.chain.test"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}, intermediate, &leafKey.PublicKey, intermediateKey)
+
+	bundle := append(
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: intermediate.Raw}),
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: root.Raw})...)
+
+	cert := newDANEServerCert(t)
+	dnsAddr := startMockTLSADNS(t,
+		tlsaRecord(3, spkiHashHex(t, cert)),
+		tlsaRecord(2, pemSPKIHashHex(t, bundle)))
+	server := startBundleServer(t, cert, bundle)
+
+	cfg := &Config{Bootstrap: daneScope(t, server.URL, dnsAddr)}
+	resolver := newTestResolver(t, cfg)
+
+	fetched, err := resolver.CABundlePEM(t.Context(), ClassBootstrap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(fetched) != string(bundle) {
+		t.Fatal("the DANE fetch must return the served chain whole and in order")
+	}
+
+	pool, err := resolver.CAPool(t.Context(), ClassBootstrap, server.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := leaf.Verify(x509.VerifyOptions{Roots: pool}); err != nil {
+		t.Errorf("a leaf issued under the fetched chain must verify against its pool: %v", err)
+	}
+}
+
 func TestCAPool_DANE_EmptyBundle(t *testing.T) {
 	cert := newDANEServerCert(t)
 	// The TA record's hash is irrelevant here: the fetch fails on the

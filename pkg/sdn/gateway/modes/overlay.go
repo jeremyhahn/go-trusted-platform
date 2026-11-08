@@ -529,6 +529,9 @@ type OverlayModeHandler struct {
 	ndHoldDown   time.Duration
 	ndResumedAt  time.Time
 	nd           ndCounters
+	// ndClock reads the time a fallback acts at; a tick the loop handles
+	// late carries the time it fired, not the time it is handled.
+	ndClock func() time.Time
 }
 
 // NewOverlayModeHandler creates a new overlay mode handler.
@@ -551,6 +554,7 @@ func NewOverlayModeHandler(
 	}
 
 	h := &OverlayModeHandler{
+		ndClock:     time.Now,
 		config:      config,
 		ovsClient:   ovsClient,
 		ofClient:    ofClient,

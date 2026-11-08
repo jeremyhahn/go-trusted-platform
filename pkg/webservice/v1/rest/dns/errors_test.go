@@ -19,64 +19,12 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestErrMissingZoneName_Error(t *testing.T) {
-	err := ErrMissingZoneName{}
-	assert.Equal(t, "zone name is required", err.Error())
-}
-
-func TestErrMissingRecordName_Error(t *testing.T) {
-	err := ErrMissingRecordName{}
-	assert.Equal(t, "record name is required", err.Error())
-}
-
-func TestErrMissingRecordType_Error(t *testing.T) {
-	err := ErrMissingRecordType{}
-	assert.Equal(t, "record type is required", err.Error())
-}
-
-func TestErrInvalidRequestBody_Error(t *testing.T) {
-	err := ErrInvalidRequestBody{Reason: "invalid JSON"}
-	assert.Equal(t, "invalid request body: invalid JSON", err.Error())
-}
-
-func TestErrInvalidRequestBody_Error_Empty(t *testing.T) {
-	err := ErrInvalidRequestBody{}
-	assert.Equal(t, "invalid request body: ", err.Error())
-}
-
 func TestErrInvalidRecordType_Error(t *testing.T) {
-	err := ErrInvalidRecordType{Type: "UNKNOWN"}
+	err := &ErrInvalidRecordType{Type: "UNKNOWN"}
 	assert.Equal(t, "invalid record type: UNKNOWN", err.Error())
 }
 
 func TestErrRecordNotFound_Error(t *testing.T) {
-	err := ErrRecordNotFound{Type: "A", Name: "www"}
+	err := &ErrRecordNotFound{Type: "A", Name: "www"}
 	assert.Equal(t, "record not found: A www", err.Error())
-}
-
-func TestErrInvalidRecordType_Error_Empty(t *testing.T) {
-	err := ErrInvalidRecordType{}
-	assert.Equal(t, "invalid record type: ", err.Error())
-}
-
-func TestErrMissingFQDN_Error(t *testing.T) {
-	err := ErrMissingFQDN{}
-	assert.Equal(t, "fqdn is required", err.Error())
-}
-
-func TestErrMissingIP_Error(t *testing.T) {
-	err := ErrMissingIP{}
-	assert.Equal(t, "ip address is required", err.Error())
-}
-
-// Test error interface implementation
-func TestErrorsImplementErrorInterface(t *testing.T) {
-	var _ error = ErrMissingZoneName{}
-	var _ error = ErrMissingRecordName{}
-	var _ error = ErrMissingRecordType{}
-	var _ error = ErrInvalidRequestBody{}
-	var _ error = ErrInvalidRecordType{}
-	var _ error = ErrRecordNotFound{}
-	var _ error = ErrMissingFQDN{}
-	var _ error = ErrMissingIP{}
 }

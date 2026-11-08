@@ -35,12 +35,12 @@ require (
 	github.com/codegangsta/negroni v1.0.0
 	github.com/coredhcp/coredhcp v0.0.0-20260117135807-60ec8025cdfc // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	github.com/coredns/caddy v1.1.4-0.20250930002214-15135a999495 // held: the latest version is not in the module cache and cannot be fetched offline in #933
-	github.com/coredns/coredns v1.14.7
+	github.com/coredns/coredns v1.14.7 // held: v1.15.0 is not in the module cache and cannot be fetched offline in #1140
 	github.com/digitalocean/go-qemu v0.0.0-20250212194115-ee9b0668d242
 	github.com/fatih/color v1.19.0
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/fxamacker/cbor/v2 v2.9.6
-	github.com/go-jose/go-jose/v4 v4.1.4 // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	github.com/go-jose/go-jose/v4 v4.1.6
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/go-tpm v0.9.8
@@ -56,9 +56,10 @@ require (
 	github.com/jeremyhahn/go-quicbaas/sdk/go v0.12.0-alpha // held: the v0.16.0-alpha adoption is #906/#937 (fix-qbsdk16)
 	github.com/jeremyhahn/go-trusted-platform/sdk/go v0.1.0-alpha
 	github.com/jeremyhahn/trusted-firmware/sdk/go v0.3.0-alpha // held: the latest version is not in the module cache and cannot be fetched offline in #933
-	github.com/klauspost/compress v1.19.1 // held: the latest version is not in the module cache and cannot be fetched offline in #933
-	github.com/libp2p/go-libp2p v0.46.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	github.com/klauspost/compress v1.20.2 // held: v1.20.3 is not in the module cache and cannot be fetched offline (m1985a: module lookup disabled by GOPROXY=off)
+	github.com/libp2p/go-libp2p v0.50.0 // held: v0.50.0 requires exactly quic-go v0.62.0 and webtransport-go v0.13.0; later versions are not in the module cache and cannot be fetched offline in #1140
 	github.com/libp2p/go-libp2p-kad-dht v0.37.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	github.com/mark3labs/mcp-go v1.5.0
 	github.com/mdlayher/packet v1.1.2 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	github.com/mdobak/go-xerrors v1.0.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	github.com/miekg/dns v1.1.72 // held: the latest version is not in the module cache and cannot be fetched offline in #933
@@ -71,19 +72,19 @@ require (
 	github.com/quic-go/connect-ip-go v0.2.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	github.com/quic-go/quic-go v0.62.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	github.com/spf13/cobra v1.10.2
-	github.com/spf13/pflag v1.0.10
+	github.com/spf13/pflag v1.1.0
 	github.com/spf13/viper v1.21.0
 	github.com/stretchr/testify v1.12.1
 	github.com/strongswan/govici v0.8.2
 	github.com/vishvananda/netlink v1.3.1
 	github.com/vishvananda/netns v0.0.5
-	github.com/wailsapp/wails/v2 v2.12.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	github.com/wailsapp/wails/v2 v2.14.0 // held: v2.14.0 clears CVE-2026-34157 (fixed in v2.13.0) and is the newest release in the offline module cache; later releases cannot be fetched offline
 	github.com/yosida95/uritemplate/v3 v3.0.2
-	golang.org/x/crypto v0.57.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
-	golang.org/x/net v0.60.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
-	golang.org/x/sync v0.23.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
-	golang.org/x/sys v0.48.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
-	golang.org/x/term v0.46.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	golang.org/x/crypto v0.58.0
+	golang.org/x/net v0.62.0
+	golang.org/x/sync v0.24.0
+	golang.org/x/sys v0.49.0
+	golang.org/x/term v0.47.0
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20241231184526-a9ab2273dd10
 	google.golang.org/api v0.293.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260819154853-08b0e4226688 // held: the latest version is not in the module cache and cannot be fetched offline in #933
@@ -91,6 +92,7 @@ require (
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v2 v2.4.0
 	gopkg.in/yaml.v3 v3.0.1
+	kernel.org/pub/linux/libs/security/libcap/cap v1.2.78
 )
 
 require (
@@ -104,8 +106,9 @@ require (
 	cloud.google.com/go/longrunning v1.2.0 // indirect
 	cloud.google.com/go/monitoring v1.30.0 // indirect
 	cloud.google.com/go/storage v1.64.0 // indirect
-	filippo.io/bigmod v0.1.0 // indirect
+	filippo.io/bigmod v0.1.1-0.20260103110540-f8a47775ebe5 // indirect
 	filippo.io/edwards25519 v1.2.0 // indirect
+	filippo.io/keygen v1.0.0 // indirect
 	git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3 // indirect
 	github.com/Azure/azure-pipeline-go v0.2.3 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/internal v1.12.0 // indirect
@@ -139,11 +142,9 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sso v1.33.5 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.38.5 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.45.5 // indirect
-	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/benbjohnson/clock v1.3.5 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bep/debounce v1.2.1 // indirect
-	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/bytedance/gopkg v0.1.4 // indirect
 	github.com/bytedance/sonic v1.15.2 // indirect
 	github.com/bytedance/sonic/loader v0.5.2 // indirect
@@ -166,7 +167,7 @@ require (
 	github.com/cockroachdb/tokenbucket v0.0.0-20250429170803-42689b6311bb // indirect
 	github.com/coreos/go-systemd/v22 v22.7.0 // indirect
 	github.com/davidlazar/go-crypto v0.0.0-20200604182044-b73af7476f6c // indirect
-	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
+	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.1 // indirect
 	github.com/dgryski/go-farm v0.0.0-20240924180020-3414d57e47da // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/digitalocean/go-libvirt v0.0.0-20220804181439-8648fbde413e // indirect
@@ -176,7 +177,7 @@ require (
 	github.com/dolthub/go-mysql-server v0.20.1-0.20260812191550-bda99d66b4bf // indirect
 	github.com/dolthub/jsonpath v0.0.2-0.20260807003725-336cd89c1c76 // indirect
 	github.com/dolthub/vitess v0.0.0-20260728212736-0542037326d7 // indirect
-	github.com/dunglas/httpsfv v1.1.0 // indirect
+	github.com/dunglas/httpsfv v1.1.1 // indirect
 	github.com/eapache/channels v1.1.0 // indirect
 	github.com/eapache/queue v1.1.0 // indirect
 	github.com/envoyproxy/go-control-plane/envoy v1.37.0 // indirect
@@ -210,6 +211,7 @@ require (
 	github.com/golang/snappy v1.0.0 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/gopacket v1.1.19 // indirect
+	github.com/google/jsonschema-go v0.4.2 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.21 // indirect
 	github.com/googleapis/gax-go/v2 v2.23.0 // indirect
@@ -232,10 +234,9 @@ require (
 	github.com/hashicorp/vault/api v1.23.0 // indirect
 	github.com/huin/goupnp v1.3.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
-	github.com/invopop/jsonschema v0.13.0 // indirect
 	github.com/ipfs/boxo v0.35.2 // indirect
-	github.com/ipfs/go-cid v0.6.0 // indirect
-	github.com/ipfs/go-datastore v0.9.0 // indirect
+	github.com/ipfs/go-cid v0.6.2 // indirect
+	github.com/ipfs/go-datastore v0.9.2 // indirect
 	github.com/ipfs/go-log/v2 v2.9.0 // indirect
 	github.com/ipld/go-ipld-prime v0.21.0 // indirect
 	github.com/jackc/pgx/v5 v5.10.0 // indirect
@@ -260,7 +261,7 @@ require (
 	github.com/k-sone/critbitgo v1.4.0 // indirect
 	github.com/kevinburke/ssh_config v1.6.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
-	github.com/koron/go-ssdp v0.0.6 // indirect
+	github.com/koron/go-ssdp v0.9.1 // indirect
 	github.com/kr/fs v0.1.0 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
@@ -289,11 +290,9 @@ require (
 	github.com/libp2p/go-libp2p-record v0.3.1 // indirect
 	github.com/libp2p/go-libp2p-routing-helpers v0.7.5 // indirect
 	github.com/libp2p/go-msgio v0.3.0 // indirect
-	github.com/libp2p/go-netroute v0.3.0 // indirect
+	github.com/libp2p/go-netroute v0.4.0 // indirect
 	github.com/libp2p/go-reuseport v0.4.0 // indirect
-	github.com/libp2p/go-yamux/v5 v5.0.1 // indirect
-	github.com/mailru/easyjson v0.9.2 // indirect
-	github.com/mark3labs/mcp-go v0.45.0 // indirect
+	github.com/libp2p/go-yamux/v5 v5.1.0 // indirect
 	github.com/marten-seemann/tcp v0.0.0-20210406111302-dfbc87cc63fd // indirect
 	github.com/mattn/go-colorable v0.1.15 // indirect
 	github.com/mattn/go-ieproxy v0.0.12 // indirect
@@ -311,12 +310,12 @@ require (
 	github.com/mitchellh/mapstructure v1.5.1-0.20231216201459-8508981c8b6c // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
-	github.com/mr-tron/base58 v1.2.0 // indirect
+	github.com/mr-tron/base58 v1.3.0 // indirect
 	github.com/multiformats/go-base32 v0.1.0 // indirect
 	github.com/multiformats/go-base36 v0.2.0 // indirect
-	github.com/multiformats/go-multiaddr-dns v0.4.1 // indirect
+	github.com/multiformats/go-multiaddr-dns v0.6.0 // indirect
 	github.com/multiformats/go-multiaddr-fmt v0.1.0 // indirect
-	github.com/multiformats/go-multibase v0.2.0 // indirect
+	github.com/multiformats/go-multibase v0.3.0 // indirect
 	github.com/multiformats/go-multicodec v0.10.0 // indirect
 	github.com/multiformats/go-multihash v0.2.3 // indirect
 	github.com/multiformats/go-multistream v0.6.1 // indirect
@@ -330,22 +329,20 @@ require (
 	github.com/philhofer/fwd v1.2.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.23 // indirect
 	github.com/pion/datachannel v1.5.10 // indirect
-	github.com/pion/dtls/v2 v2.2.12 // indirect
-	github.com/pion/dtls/v3 v3.0.6 // indirect
+	github.com/pion/dtls/v3 v3.1.2 // indirect
 	github.com/pion/ice/v4 v4.0.10 // indirect
 	github.com/pion/interceptor v0.1.40 // indirect
-	github.com/pion/logging v0.2.3 // indirect
+	github.com/pion/logging v0.2.4 // indirect
 	github.com/pion/mdns/v2 v2.0.7 // indirect
 	github.com/pion/randutil v0.1.0 // indirect
-	github.com/pion/rtcp v1.2.15 // indirect
+	github.com/pion/rtcp v1.2.16 // indirect
 	github.com/pion/rtp v1.8.19 // indirect
 	github.com/pion/sctp v1.8.39 // indirect
-	github.com/pion/sdp/v3 v3.0.13 // indirect
+	github.com/pion/sdp/v3 v3.0.18 // indirect
 	github.com/pion/srtp/v3 v3.0.6 // indirect
-	github.com/pion/stun v0.6.1 // indirect
-	github.com/pion/stun/v3 v3.0.0 // indirect
-	github.com/pion/transport/v2 v2.2.10 // indirect
+	github.com/pion/stun/v3 v3.1.1 // indirect
 	github.com/pion/transport/v3 v3.0.7 // indirect
+	github.com/pion/transport/v4 v4.0.1 // indirect
 	github.com/pion/turn/v4 v4.0.2 // indirect
 	github.com/pion/webrtc/v4 v4.1.2 // indirect
 	github.com/pires/go-proxyproto v0.15.0 // indirect
@@ -361,7 +358,7 @@ require (
 	github.com/prometheus/exporter-toolkit v0.17.1 // indirect
 	github.com/prometheus/procfs v0.21.1 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
-	github.com/quic-go/webtransport-go v0.10.0 // indirect
+	github.com/quic-go/webtransport-go v0.13.0 // indirect
 	github.com/rcrowley/go-metrics v0.0.0-20250401214520-65e299d6c5c9 // indirect
 	github.com/redis/go-redis/v9 v9.18.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
@@ -370,6 +367,7 @@ require (
 	github.com/ryanuber/go-glob v1.0.0 // indirect
 	github.com/sagikazarmark/locafero v0.12.0 // indirect
 	github.com/samber/lo v1.53.0 // indirect
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
 	github.com/segmentio/fasthash v1.0.3 // indirect
 	github.com/sirupsen/logrus v1.10.1 // indirect
@@ -397,7 +395,6 @@ require (
 	github.com/wailsapp/go-webview2 v1.0.23 // indirect
 	github.com/wailsapp/mimetype v1.4.1 // indirect
 	github.com/whyrusleeping/go-keyspace v0.0.0-20160322163242-5b898ac5add1 // indirect
-	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/xeipuuv/gojsonpointer v0.0.0-20190905194746-02993c407bfb // indirect
@@ -434,16 +431,17 @@ require (
 	golang.org/x/exp v0.0.0-20260813180055-c1d0aacb2297 // indirect
 	golang.org/x/mod v0.41.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
-	golang.org/x/telemetry v0.0.0-20260811182544-a038080d80e5 // indirect
-	golang.org/x/text v0.42.0 // indirect
+	golang.org/x/telemetry v0.0.0-20260924152758-ed294f943157 // indirect
+	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
-	golang.org/x/tools v0.49.0 // indirect
+	golang.org/x/tools v0.51.0 // indirect
 	golang.zx2c4.com/wireguard v0.0.0-20231211153847-12269c276173 // indirect
 	gonum.org/v1/gonum v0.17.0 // indirect
 	google.golang.org/genproto v0.0.0-20260810153831-ec0a7760b754 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260819154853-08b0e4226688 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/src-d/go-errors.v1 v1.0.0 // indirect
+	kernel.org/pub/linux/libs/security/libcap/psx v1.2.78 // indirect
 	lukechampine.com/blake3 v1.4.1 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 	software.sslmate.com/src/go-pkcs12 v0.7.3 // indirect

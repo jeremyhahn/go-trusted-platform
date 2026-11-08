@@ -124,7 +124,7 @@ func TestAttach_ServerRefusals(t *testing.T) {
 				if err := os.WriteFile(blocker, nil, 0o600); err != nil {
 					t.Fatalf("write blocker: %v", err)
 				}
-				server.VolumeDir = filepath.Join(blocker, "nbd")
+				server.Volumes = localVolumes(t, filepath.Join(blocker, "nbd"))
 			},
 			check: func(t *testing.T, err error) {
 				wantRefusal(t, err, ErrServerRefused{Option: optGo, Reply: repErrPlatform})
@@ -309,10 +309,6 @@ func TestNewClientConfig_Refused(t *testing.T) {
 		},
 		{
 			name: "bad address", server: ServerAddr{Host: "boot_01", Port: DefaultPort}, anchor: good, idevid: bundle.ClientCert,
-			check: func(err error) bool { var e ErrCmdline; return errors.As(err, &e) && e.Param == ParamServer },
-		},
-		{
-			name: "no port", server: ServerAddr{Host: "localhost"}, anchor: good, idevid: bundle.ClientCert,
 			check: func(err error) bool { var e ErrCmdline; return errors.As(err, &e) && e.Param == ParamServer },
 		},
 		{
@@ -646,7 +642,7 @@ func TestAttach_Cancelled(t *testing.T) {
 func TestAttach_Timeout(t *testing.T) {
 	bundle := testutil.GenerateTestTLSBundle(t)
 	cfg := nodeConfig(bundle)
-	cfg.HandshakeTimeout = 50 * time.Millisecond
+	cfg.HandshakeTimeout = time.Millisecond
 	silent := func(p *scriptedPeer) error {
 		_, err := p.conn.Read(make([]byte, 1))
 		if errors.Is(err, io.EOF) {

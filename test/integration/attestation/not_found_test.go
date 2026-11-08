@@ -18,15 +18,56 @@ package attestation
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/gorilla/mux"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	restattestation "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/attestation"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
+
+// fakeAttestationServer stores one manifest and answers NotFound for any other.
+type fakeAttestationServer struct {
+	platformv1.UnimplementedAttestationServiceServer
+	manifest *platformv1.HostManifest
+}
+
+func newFakeAttestationServer() *fakeAttestationServer {
+	return &fakeAttestationServer{manifest: &platformv1.HostManifest{Id: "manifest-1", HostId: "host-1"}}
+}
+
+func (s *fakeAttestationServer) GetManifest(ctx context.Context, req *platformv1.GetManifestRequest) (*platformv1.GetManifestResponse, error) {
+	if req.GetId() != s.manifest.GetId() {
+		return nil, status.Error(codes.NotFound, "manifest not found")
+	}
+	return &platformv1.GetManifestResponse{Manifest: s.manifest}, nil
+}
+
+// newRESTAdapterAgainstRouter serves the daemon's own attestation router under
+// /api/v1, in process, and returns a REST adapter pointed at it, so a path the
+// adapter invents fails here with the 404 the daemon would answer (#546).
+func newRESTAdapterAgainstRouter(t *testing.T, server platformv1.AttestationServiceServer) *RESTAdapter {
+	t.Helper()
+	logger := logging.NewLogger(slog.LevelError, io.Discard)
+	router := restattestation.NewAttestationServerRouter(logger, server, response.NewResponseWriter(logger, nil))
+
+	root := mux.NewRouter()
+	router.RegisterRoutes(root.PathPrefix("/api/v1").Subrouter())
+
+	srv := httptest.NewServer(root)
+	t.Cleanup(srv.Close)
+	return &RESTAdapter{endpoint: srv.URL, client: srv.Client()}
+}
 
 func TestIsNotFound_TransportErrors(t *testing.T) {
 	tests := []struct {

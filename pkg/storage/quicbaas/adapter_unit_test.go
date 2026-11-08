@@ -16,6 +16,8 @@ package quicbaas
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -42,16 +44,19 @@ func setupMockDAO(t *testing.T) (*GenericDAO[*TestRole], *MockStorage) {
 	mock := NewMockStorage()
 	require.NoError(t, mock.Start(context.Background()))
 
-	logger := newTestLogger(t)
-	dao := NewGenericDAO[*TestRole](
+	return newMockRoleDAO(t, mock), mock
+}
+
+// newMockRoleDAO builds a TestRole DAO on an existing store, so a test can
+// open a second DAO instance over the data the first one wrote.
+func newMockRoleDAO(t *testing.T, mock *MockStorage) *GenericDAO[*TestRole] {
+	return NewGenericDAO[*TestRole](
 		mock,
 		"TestRole",
 		func() *TestRole { return &TestRole{} },
-		logger,
+		newTestLogger(t),
 		WithRequestTimeout(5*time.Second),
 	)
-
-	return dao, mock
 }
 
 // === Save Tests ===
@@ -62,11 +67,18 @@ func TestGenericDAO_Save_NewEntity_Mock(t *testing.T) {
 
 	ctx := context.Background()
 	role := &TestRole{Name: "admin"}
+	assert.Zero(t, role.ID)
 	err := dao.Save(ctx, role)
 
 	require.NoError(t, err)
 	assert.NotZero(t, role.ID, "ID should be auto-generated")
 	assert.Equal(t, 1, mock.Count("TestRole"), "entity should be stored")
+
+	// The auto-assigned ID is the key the entity is stored under.
+	retrieved, err := dao.Get(ctx, role.ID)
+	require.NoError(t, err)
+	assert.Equal(t, role.ID, retrieved.ID)
+	assert.Equal(t, "admin", retrieved.Name)
 }
 
 func TestGenericDAO_Save_ExistingEntity_Mock(t *testing.T) {
@@ -279,6 +291,24 @@ func TestGenericDAO_Page_FirstPage_Mock(t *testing.T) {
 	assert.True(t, result.HasMore)
 	assert.Equal(t, 1, result.Page)
 	assert.Equal(t, 3, result.PageSize)
+	assert.Equal(t, 10, result.Total)
+}
+
+func TestGenericDAO_Page_MiddlePage_Mock(t *testing.T) {
+	dao, mock := setupMockDAO(t)
+	defer mock.Stop(context.Background())
+
+	ctx := context.Background()
+	for i := 1; i <= 10; i++ {
+		require.NoError(t, dao.Save(ctx, &TestRole{ID: uint64(i), Name: "role"}))
+	}
+
+	result, err := dao.Page(ctx, datastore.PageQuery{Page: 2, PageSize: 3})
+
+	require.NoError(t, err)
+	assert.Equal(t, 3, len(result.Entities))
+	assert.Equal(t, 2, result.Page)
+	assert.True(t, result.HasMore)
 }
 
 func TestGenericDAO_Page_LastPage_Mock(t *testing.T) {
@@ -350,7 +380,9 @@ func TestGenericDAO_ForEachPage_Success_Mock(t *testing.T) {
 	}
 
 	var allEntities []*TestRole
+	pageCount := 0
 	processor := func(result datastore.PageResult[*TestRole]) error {
+		pageCount++
 		allEntities = append(allEntities, result.Entities...)
 		return nil
 	}
@@ -359,6 +391,7 @@ func TestGenericDAO_ForEachPage_Success_Mock(t *testing.T) {
 	err := dao.ForEachPage(ctx, query, processor)
 
 	require.NoError(t, err)
+	assert.Equal(t, 4, pageCount, "10 entities at 3 per page is 4 pages")
 	assert.Equal(t, 10, len(allEntities))
 }
 
@@ -457,4 +490,71 @@ func TestDefaultRequestTimeout_Mock(t *testing.T) {
 	)
 
 	assert.Equal(t, DefaultRequestTimeout, dao.requestTimeout)
+}
+
+func TestGenericDAO_SecondInstanceReadsSavedEntities_Mock(t *testing.T) {
+	dao, mock := setupMockDAO(t)
+	defer mock.Stop(context.Background())
+
+	ctx := context.Background()
+	roles := []*TestRole{{Name: "role-1"}, {Name: "role-2"}, {Name: "role-3"}}
+	for _, role := range roles {
+		require.NoError(t, dao.Save(ctx, role))
+	}
+
+	// A DAO opened later over the same store sees everything the first wrote.
+	dao2 := newMockRoleDAO(t, mock)
+	for _, role := range roles {
+		retrieved, err := dao2.Get(ctx, role.ID)
+		require.NoError(t, err)
+		assert.Equal(t, role.Name, retrieved.Name)
+	}
+}
+
+func TestGenericDAO_ConcurrentSaveAndGet_Mock(t *testing.T) {
+	dao, mock := setupMockDAO(t)
+	defer mock.Stop(context.Background())
+
+	ctx := context.Background()
+	const seeded, workers = 5, 10
+	seeds := make([]*TestRole, seeded)
+	for i := range seeds {
+		seeds[i] = &TestRole{Name: fmt.Sprintf("seed-%d", i)}
+		require.NoError(t, dao.Save(ctx, seeds[i]))
+	}
+
+	// Each worker saves a new auto-ID entity while another reads a seed.
+	errs := make(chan error, 2*workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(2)
+		go func(idx int) {
+			defer wg.Done()
+			errs <- dao.Save(ctx, &TestRole{Name: fmt.Sprintf("worker-%d", idx)})
+		}(i)
+		go func(seed *TestRole) {
+			defer wg.Done()
+			retrieved, err := dao.Get(ctx, seed.ID)
+			if err == nil && retrieved.Name != seed.Name {
+				err = errSeedMismatch{want: seed.Name, got: retrieved.Name}
+			}
+			errs <- err
+		}(seeds[i%seeded])
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	count, err := dao.Count(ctx)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, count, seeded+workers)
+}
+
+// errSeedMismatch reports a concurrent read that returned another entity.
+type errSeedMismatch struct{ want, got string }
+
+func (e errSeedMismatch) Error() string {
+	return fmt.Sprintf("read %q, want %q", e.got, e.want)
 }

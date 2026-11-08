@@ -63,14 +63,14 @@ func TestGatewayAdmittedVTEP_SDKOverMCP(t *testing.T) {
 	var calls []toolCall
 	client := sdkGatewayOverMCP(t, "gateway_admitted_vtep", admittedVTEP("198.51.100.10"), &calls)
 
-	got, err := client.GetAdmittedVTEP(context.Background(), "gw-01", "198.51.100.10")
+	got, err := client.GetAdmittedVTEP(context.Background(), "edge-01", "198.51.100.10")
 	if err != nil {
 		t.Fatalf("GetAdmittedVTEP: %v", err)
 	}
 	if len(calls) != 1 || calls[0].Name != "gateway_admitted_vtep" {
 		t.Fatalf("calls = %+v, want a single gateway_admitted_vtep", calls)
 	}
-	wantArgs := map[string]interface{}{"gateway_id": "gw-01", "vtep": "198.51.100.10"}
+	wantArgs := map[string]interface{}{"gateway_id": "edge-01", "vtep": "198.51.100.10"}
 	if !reflect.DeepEqual(calls[0].Arguments, wantArgs) {
 		t.Fatalf("tool arguments = %v, want %v", calls[0].Arguments, wantArgs)
 	}
@@ -86,15 +86,15 @@ func TestListGatewayAdmittedVTEPs_SDKOverMCP(t *testing.T) {
 		"count": 2,
 	}, &calls)
 
-	got, err := client.ListAdmittedVTEPs(context.Background(), "gw-01")
+	got, err := client.ListAdmittedVTEPs(context.Background(), "edge-01")
 	if err != nil {
 		t.Fatalf("ListAdmittedVTEPs: %v", err)
 	}
 	if len(calls) != 1 || calls[0].Name != "gateway_admitted_vteps" {
 		t.Fatalf("calls = %+v, want a single gateway_admitted_vteps", calls)
 	}
-	if calls[0].Arguments["gateway_id"] != "gw-01" {
-		t.Fatalf("tool arguments = %v, want gateway_id gw-01", calls[0].Arguments)
+	if calls[0].Arguments["gateway_id"] != "edge-01" {
+		t.Fatalf("tool arguments = %v, want gateway_id edge-01", calls[0].Arguments)
 	}
 	if len(got) != 2 || !proto.Equal(got[0], admittedVTEP("198.51.100.10")) || got[1].GetVtep() != "198.51.100.11" {
 		t.Fatalf("reply = %v", got)

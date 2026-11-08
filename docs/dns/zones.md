@@ -63,9 +63,13 @@ type Zone struct {
     Name        string    // Zone name with trailing dot (e.g., "example.internal.")
     TenantID    string    // Tenant that owns this zone (multi-tenant isolation)
     TTL         uint32    // Default TTL for records in seconds
+    KSK         *common.KeyConfig // Per-zone key-signing key override (optional)
+    ZSK         *common.KeyConfig // Per-zone zone-signing key override (optional)
     RecordSet   RecordSet // All DNS records in the zone
     Description string    // Human-readable zone description
     Internal    bool      // True for internal zones, false for public
+    CreatedAt   time.Time
+    UpdatedAt   time.Time
 }
 ```
 
@@ -75,7 +79,8 @@ type Zone struct {
 | `name` | FQDN with trailing dot | Yes |
 | `tenant_id` | Tenant identifier for multi-tenant isolation | Yes |
 | `ttl` | Default TTL in seconds | Yes |
-| `records` | SOA, NS, A, AAAA, CNAME, MX, TXT, SRV, DNSKEY, DS, RRSIG | Yes |
+| `ksk`, `zsk` | Per-zone DNSSEC key overrides; absent means the `dnssec:` defaults (`pkg/dns/entities/zone.go:30`) | No |
+| `records` | SOA, NS, A, AAAA, CAA, CNAME, MX, TXT, SRV, TLSA, DNSKEY, DS, RRSIG, NSEC, NSEC3, NSEC3PARAM | Yes |
 | `description` | Zone description | No |
 | `internal` | Internal zone flag | Yes |
 
@@ -90,9 +95,11 @@ func (z *Zone) IsOwnedBy(tenantID string) bool {
 }
 ```
 
-- Zones are automatically assigned the caller's TenantID on creation
-- Authorization checks verify tenant ownership before zone modifications
-- DNSSEC keys are stored in tenant-scoped KMS paths
+- Zones are assigned the DNS service's own TenantID on creation (the tenant the
+  daemon configured it with; the caller's tenant is not consulted)
+- Zone reads and modifications refuse a zone another tenant owns
+  (`pkg/dns/service.go:174`)
+- DNSSEC key IDs are tenant-scoped: `dnssec_{tenantID}_{zoneName}_{keyType}`
 
 ### SOA Record Requirements
 
@@ -112,7 +119,7 @@ soa:
 ```
 
 The config loader reads `min_ttl`, the field's `mapstructure` tag
-(`pkg/dns/entities/records.go:114`); a `min-ttl:` key is silently ignored.
+(`pkg/dns/entities/records.go:115`); a `min-ttl:` key is silently ignored.
 
 ### NS Record Configuration
 
@@ -357,8 +364,8 @@ a:
 
 ## Zone Operations Without a CLI
 
-There is no `platformctl dns` command group ([cli.md](cli.md)). Zone and record
-CRUD go through REST `/api/v1/dns/zones` or gRPC `DNSService`; host registration
+`platformctl dns zone` and `platformctl dns record` ([cli.md](cli.md)) manage
+zones and records. The same CRUD is available through REST `/api/v1/dns/zones` or gRPC `DNSService`; host registration
 is `POST /api/v1/dns/register`. [api-reference-rest.md](api-reference-rest.md)
 has the request bodies.
 

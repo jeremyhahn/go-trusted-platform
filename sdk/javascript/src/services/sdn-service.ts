@@ -38,7 +38,28 @@ import type {
   RevokePortAuthResponse,
   GetPortStatsResponse,
   GetFlowStatsResponse,
+  SDNLabelSelector,
 } from '../types/sdn.js';
+
+/**
+ * Builds the query parameters of an SDN list request under the proto field
+ * names the REST routes bind: `pagination.page`, `pagination.pageSize` and
+ * `selector.matchLabels.<key>`.
+ */
+function listQuery(
+  selector: SDNLabelSelector | undefined,
+  page: number | undefined,
+  pageSize: number | undefined
+): Record<string, string | number | undefined> {
+  const query: Record<string, string | number | undefined> = {
+    'pagination.page': page,
+    'pagination.pageSize': pageSize,
+  };
+  Object.entries(selector?.matchLabels ?? {}).forEach(([key, value]) => {
+    query[`selector.matchLabels.${key}`] = value;
+  });
+  return query;
+}
 
 /**
  * SDN Service class
@@ -49,7 +70,7 @@ import type {
  *
  * // Create a bridge
  * const bridge = await client.sdn.createBridge({
- *   config: { name: 'br0', type: 'OVS', stpEnabled: true }
+ *   config: { name: 'br0', type: 'BRIDGE_TYPE_OVS', stpEnabled: true }
  * });
  *
  * // Add a port
@@ -64,7 +85,7 @@ import type {
  *     bridgeId: bridge.data.bridge.id,
  *     priority: 100,
  *     match: { inPort: port.data.port.id, vlanId: 100 },
- *     actions: [{ type: 'OUTPUT', port: 'CONTROLLER' }],
+ *     actions: [{ type: 'FLOW_ACTION_OUTPUT', port: 'CONTROLLER' }],
  *   }
  * });
  * ```
@@ -112,16 +133,8 @@ export class SDNService extends BaseService {
    * @returns List of bridges
    */
   async listBridges(request?: ListBridgesRequest): Promise<ApiResponse<ListBridgesResponse>> {
-    const filters: Record<string, string | undefined> = {};
-    if (request?.selector?.matchLabels !== undefined) {
-      Object.entries(request.selector.matchLabels).forEach(([k, v]) => {
-        filters[`label_${k}`] = v;
-      });
-    }
     return this.client.get<ListBridgesResponse>(this.buildUrl('/bridges', {
-      page: request?.page,
-      limit: request?.pageSize,
-      filters,
+      filters: listQuery(request?.selector, request?.page, request?.pageSize),
     }));
   }
 
@@ -177,17 +190,9 @@ export class SDNService extends BaseService {
    * @returns List of ports
    */
   async listPorts(request: ListPortsRequest): Promise<ApiResponse<ListPortsResponse>> {
-    const filters: Record<string, string | undefined> = {};
-    if (request.selector?.matchLabels !== undefined) {
-      Object.entries(request.selector.matchLabels).forEach(([k, v]) => {
-        filters[`label_${k}`] = v;
-      });
-    }
     return this.client.get<ListPortsResponse>(
       this.buildUrl(`/bridges/${this.encodePathSegment(request.bridgeId)}/ports`, {
-        page: request.page,
-        limit: request.pageSize,
-        filters,
+        filters: listQuery(request.selector, request.page, request.pageSize),
       })
     );
   }
@@ -274,9 +279,10 @@ export class SDNService extends BaseService {
   async listFlows(request: ListFlowsRequest): Promise<ApiResponse<ListFlowsResponse>> {
     return this.client.get<ListFlowsResponse>(
       this.buildUrl(`/bridges/${this.encodePathSegment(request.bridgeId)}/flows`, {
-        page: request.page,
-        limit: request.pageSize,
-        filters: { table: request.table },
+        filters: {
+          ...listQuery(undefined, request.page, request.pageSize),
+          table: request.table,
+        },
       })
     );
   }
@@ -344,15 +350,9 @@ export class SDNService extends BaseService {
    * @returns List of VLANs
    */
   async listVLANs(request: ListVLANsRequest): Promise<ApiResponse<ListVLANsResponse>> {
-    const filters: Record<string, string | undefined> = {};
-    if (request.selector?.matchLabels !== undefined) {
-      Object.entries(request.selector.matchLabels).forEach(([k, v]) => {
-        filters[`label_${k}`] = v;
-      });
-    }
     return this.client.get<ListVLANsResponse>(
       this.buildUrl(`/bridges/${this.encodePathSegment(request.bridgeId)}/vlans`, {
-        filters,
+        filters: listQuery(request.selector, undefined, undefined),
       })
     );
   }

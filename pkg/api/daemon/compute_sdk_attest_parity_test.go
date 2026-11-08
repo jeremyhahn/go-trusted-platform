@@ -70,7 +70,7 @@ func TestVMAttestSDKParity_AttestThenVerify(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, []byte("quote-bytes"), quote.GetQuote())
 			assert.Equal(t, x509.SHA256WithRSAPSS.String(), quote.GetSignatureAlgorithm())
-			assert.Equal(t, []int{0, 7}, orch.lastAttestPCRs)
+			assert.Equal(t, []int{0, 7}, orch.recordedAttestPCRs())
 
 			verified, err := client.VerifyVMAttestation(ctx, &platformv1.VerifyVMAttestationRequest{
 				VmId:               "vm-1",
@@ -82,9 +82,9 @@ func TestVMAttestSDKParity_AttestThenVerify(t *testing.T) {
 			})
 			require.NoError(t, err)
 			assert.True(t, verified.GetVerified())
-			require.NotNil(t, orch.lastEvidence)
-			assert.Equal(t, []byte("signature-bytes"), orch.lastEvidence.Signature)
-			assert.Equal(t, []byte{0x07}, orch.lastEvidence.ExpectedPCRs[7])
+			require.NotNil(t, orch.recordedEvidence())
+			assert.Equal(t, []byte("signature-bytes"), orch.recordedEvidence().Signature)
+			assert.Equal(t, []byte{0x07}, orch.recordedEvidence().ExpectedPCRs[7])
 		})
 	}
 }

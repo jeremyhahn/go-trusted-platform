@@ -451,6 +451,32 @@ func (h *QUICServiceHandler) handleDNSDeleteZone(ctx context.Context, req *quicw
 	return h.encodeDNSResponse(pbResp)
 }
 
+// dnsQUICHandlers routes the OpDNSCategory (0x61) sub-opcodes. Each runs the
+// gRPC DNSService method of the same name, so the request, the reply and the
+// error codes are the ones gRPC, REST and MCP carry.
+var dnsQUICHandlers = map[byte]appQUICHandler{
+	quicwire.OpDNSUpdateZone: (*QUICServiceHandler).handleDNSUpdateZone,
+}
+
+// handleDNSUpdateZone serves OpDNSUpdateZone: body is a platform.v1
+// UpdateZoneRequest and the reply an UpdateZoneResponse.
+func (h *QUICServiceHandler) handleDNSUpdateZone(ctx context.Context, body []byte) *quicwire.Response {
+	var updateReq platformv1.UpdateZoneRequest
+	if err := quicwire.DecodePayload(body, &updateReq); err != nil {
+		return h.errorResponse(quicwire.StatusInvalidRequest, ErrQUICDecodingFailed{Cause: err})
+	}
+	if updateReq.GetName() == "" {
+		return h.errorResponse(quicwire.StatusInvalidArgument, ErrQUICMissingField{Field: "name"})
+	}
+
+	pbResp, err := h.dnsGRPC.UpdateZone(ctx, &updateReq)
+	if err != nil {
+		h.logger.Error(err, "failed to update DNS zone", "zone", updateReq.GetName())
+		return h.dnsErrorToQUICResponse("DNSUpdateZone", err)
+	}
+	return h.encodeDNSResponse(pbResp)
+}
+
 // handleDNSListZones decodes the pb ListZonesRequest (no oneof), delegates,
 // and encodes the pb response. ListZonesResponse carries Zones whose nested
 // RecordSet uses explicit typed slices (no oneof), so it round-trips as raw

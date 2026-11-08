@@ -6,134 +6,33 @@ This document summarizes the integration tests created to verify the end-to-end 
 
 ## Test Files Created
 
-### 1. `/test/integration/iso/network_integration_test.go`
+### 1. Device profile network checks (moved, #964 step b)
 
-Tests the integration between device profiles and network configuration:
+The seven service-layer tests that lived in
+`network_integration_test.go` asserted nothing a live service was needed
+for. Profile-to-policy conversion is now
+`TestSDNEnrollmentHook_BuildPortPolicy_CarriesACLFields` in
+`pkg/sdn/policy/enrollment_hook_test.go`; role, auth-method and ACL
+validity are `TestDeviceRole_IsValid`, `TestAuthMethod_IsValid` and
+`TestACLConfig_IsValid` in `pkg/device/entities/profile_test.go`.
 
-#### Test: TestDeviceProfileNetworkConfigExtraction
-- **Status**: PASSING
-- **Purpose**: Verifies that network configurations can be correctly extracted from device profiles
-- **Coverage**:
-  - Full network configuration (provisioning, production, quarantine)
-  - Client profile with provisioning and production only
-  - VLAN assignment verification
-  - ACL rule extraction
-  - DHCP pool configuration
-  - Static IP configuration
+### 1a. ISO runner and GRUB detector (unit suite, #964 step b)
 
-#### Test: TestNetworkPhaseACLValidation
-- **Status**: PASSING
-- **Purpose**: Verifies ACL configuration validation
-- **Coverage**:
-  - Valid TCP ACLs
-  - Valid UDP ACLs
-  - Valid ICMP ACLs
-  - Valid "any" protocol ACLs
-  - Valid deny ACLs
-  - Invalid protocol detection
-  - Invalid action detection
+`runner.go` (`CLIAdapter`, `runCommand`, `runCommandWithTimeout` and their
+error types) and `grub_detector.go` carry no build tag. Their tests,
+`runner_test.go` and `grub_detector_test.go`, need no daemon and run in
+`make test` through the Makefile's `TEST_UNIT_PKGS`. `cli_adapter.go`,
+`commands.go`, `helpers.go` and `multiprotocol_test.go` keep the
+`integration` tag.
 
-#### Test: TestSDNPolicyConversion
-- **Status**: PASSING
-- **Purpose**: Verifies conversion from device profile network config to SDN policy structures
-- **Coverage**:
-  - Provisioning network to SDN policy conversion
-  - Production network to SDN policy conversion
-  - ACL rule translation
-  - Protocol mapping (TCP/UDP/ICMP)
+### 2. SDN port state transitions (moved, #964 step b)
 
-#### Test: TestProvisioningToProductionTransition
-- **Status**: PASSING
-- **Purpose**: Verifies the state transition when a device moves from provisioning to production network
-- **Coverage**:
-  - VLAN change during transition (100 -> 200)
-  - Gateway change during transition
-  - DNS server change during transition
-
-#### Test: TestAuthMethodValidation
-- **Status**: PASSING
-- **Purpose**: Verifies authentication method validation
-- **Coverage**:
-  - None authentication
-  - 802.1X authentication
-  - Invalid authentication method detection
-
-#### Test: TestDeviceRoleValidation
-- **Status**: PASSING
-- **Purpose**: Verifies device role validation
-- **Coverage**:
-  - Server, Client, Workstation roles
-  - Edge, IoT, Gateway roles
-  - Load Balancer role
-  - Unknown role
-  - Invalid role detection
-
-#### Test: TestDHCPPoolConfiguration
-- **Status**: PASSING
-- **Purpose**: Verifies DHCP pool configuration
-- **Coverage**:
-  - DHCP network range verification
-  - Lease time validation
-  - Start/end IP range verification
-
-### 2. `/test/integration/sdn/state_transition_integration_test.go`
-
-Tests the SDN policy engine state transitions with device profiles:
-
-#### Test: TestProvisioningToEnrolledTransition
-- **Status**: FAILING (state machine validation issue)
-- **Purpose**: Verifies transition from provisioning to enrolled state
-- **Issues**: Need to align test expectations with actual state machine transitions
-
-#### Test: TestEnrolledToAuthorizedTransition
-- **Status**: PASSING
-- **Purpose**: Verifies transition from enrolled to authorized (production activation)
-- **Coverage**:
-  - Production policy application
-  - Flow installation verification
-  - VLAN assignment
-
-#### Test: TestProvisioningVLANToProductionVLANTransition
-- **Status**: PASSING
-- **Purpose**: Verifies VLAN changes during network phase transitions
-- **Coverage**:
-  - Provisioning VLAN application (100)
-  - Production VLAN transition (200)
-  - Flow cleanup on VLAN change
-
-#### Test: TestACLRulesTransition
-- **Status**: PASSING
-- **Purpose**: Verifies ACL rule changes during phase transitions
-- **Coverage**:
-  - Restrictive provisioning ACLs (HTTPS, DNS only)
-  - Permissive production ACLs (all traffic)
-  - ACL count verification
-
-#### Test: TestQuarantineNetworkTransition
-- **Status**: PASSING
-- **Purpose**: Verifies transitions to/from quarantine state
-- **Coverage**:
-  - Production to quarantine transition
-  - Quarantine VLAN application (300)
-  - Return to production after remediation
-
-#### Test: TestDeviceProfileToSDNPolicyIntegration
-- **Status**: PARTIALLY PASSING
-- **Purpose**: End-to-end integration from device profile to SDN policy enforcement
-- **Phases Tested**:
-  1. Provisioning network (VLAN 100) - PASSING
-  2. Enrollment complete - FAILING (state machine issue)
-  3. Production network activation (VLAN 200) - PASSING
-  4. Quarantine for scanning (VLAN 300) - FAILING (state machine issue)
-  5. Return to production - PASSING
-
-#### Test: TestStateTransitionValidation
-- **Status**: PASSING
-- **Purpose**: Verifies that invalid state transitions are rejected
-- **Coverage**:
-  - Cannot go directly from unconnected to authorized
-  - Cannot go from blocked to authorized without admin intervention
-  - Valid transition path verification
+The eight state-transition tests that lived in
+`test/integration/sdn/state_transition_integration_test.go` drove the
+policy engine against an in-memory flow controller and touched no OVS.
+They are now unit tests in `pkg/sdn/policy/state_transition_test.go`
+(`TestProvisioningToEnrolledTransition` through
+`TestStateTransitionValidation`) and run in `make test`.
 
 ### 3. `/pkg/iso/network_config_integration_test.go`
 
@@ -193,8 +92,8 @@ Tests network configuration generation and embedding in ISO:
 - Device role validation
 - DHCP pool configuration
 
-### SDN Policy Engine Tests (MIXED)
-- State transitions: 5 tests passing, 2 tests have state machine issues
+### SDN Policy Engine Tests
+- State transitions: unit suite, `pkg/sdn/policy/state_transition_test.go`
 - Policy application: All passing
 - Flow management: All passing
 - VLAN transitions: All passing
@@ -251,7 +150,7 @@ The tests verify the following end-to-end flow:
 
 ## Mock Components
 
-### MockFlowController
+### recordingFlowController (`pkg/sdn/policy/state_transition_test.go`)
 Implements the `policy.FlowController` interface for testing:
 - Tracks installed flows
 - Tracks deleted flows
@@ -260,19 +159,20 @@ Implements the `policy.FlowController` interface for testing:
 
 ## Known Issues
 
-1. **State Transition Tests**: Some tests expect transitions that aren't allowed by the state machine:
-   - Cannot transition from `Authorized` back to `Enrolled`
-   - Need to update tests to match actual state machine behavior
-
-2. **Build Dependencies**: ISO network config tests require full build environment:
+1. **Build Dependencies**: ISO network config tests require full build environment:
    - Tests are skipped in short mode
    - Would benefit from lighter-weight mocking
 
 ## Test Execution
 
+### Run the ISO unit tests (runner, GRUB detector):
+```bash
+make test-pkg PKG=./test/integration/iso/
+```
+
 ### Run all ISO integration tests:
 ```bash
-go test -v ./test/integration/iso/...
+make integration-test-iso
 ```
 
 ### Run all SDN integration tests:

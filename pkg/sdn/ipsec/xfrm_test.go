@@ -188,6 +188,37 @@ func TestBlockPolicyFailsClosed(t *testing.T) {
 	}
 }
 
+// TestBlockPolicyLeavesNoCleartextPath runs every flow the floor must stop
+// against the block policies alone: VXLAN and BGP to and from the node and
+// routed through it into the fabric, and ESP routed into the fabric, which
+// is another host's tunnel. What is routed out of the fabric elsewhere is
+// the nftables filter's (TestFilterFailsClosed).
+func TestBlockPolicyLeavesNoCleartextPath(t *testing.T) {
+	_, x := installedBlockPolicy(t, validConfig())
+	local, peer, beyond := addr(local4), addr(peer4), addr("10.30.0.5")
+	out, in, fwd := netlink.XFRM_DIR_OUT, netlink.XFRM_DIR_IN, netlink.XFRM_DIR_FWD
+	udp, tcp, esp := uint8(unix.IPPROTO_UDP), uint8(unix.IPPROTO_TCP), uint8(unix.IPPROTO_ESP)
+
+	for _, tt := range []struct {
+		name string
+		f    flow
+	}{
+		{"VXLAN from the node", flow{dir: out, src: local, dst: peer, proto: udp}},
+		{"VXLAN to the node", flow{dir: in, src: peer, dst: local, proto: udp}},
+		{"VXLAN routed into the fabric", flow{dir: fwd, src: beyond, dst: peer, proto: udp, oif: fabricIndex}},
+		{"BGP from the node", flow{dir: out, src: local, dst: peer, proto: tcp}},
+		{"BGP to the node", flow{dir: in, src: peer, dst: local, proto: tcp}},
+		{"BGP routed into the fabric", flow{dir: fwd, src: beyond, dst: peer, proto: tcp, oif: fabricIndex}},
+		{"ESP routed into the fabric", flow{dir: fwd, src: beyond, dst: peer, proto: esp, oif: fabricIndex}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := action(x.lookup(tt.f)); got != "block" {
+				t.Fatalf("policy = %s, want block", got)
+			}
+		})
+	}
+}
+
 func TestBlockPolicyIPv6(t *testing.T) {
 	slaac := ipv6Config()
 	slaac.UnderlaySLAAC = true

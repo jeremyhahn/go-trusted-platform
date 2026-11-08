@@ -155,6 +155,11 @@ Examples:
 func runPolicyApply(flags *cli.CommonFlags, policyID, name, policyType,
 	description, bridgeID string, priority int, enabled bool) error {
 
+	pt, ok := sdnsvc.ParsePolicyType(policyType)
+	if !ok {
+		return ErrInvalidPolicyType{Type: policyType}
+	}
+
 	base, err := cli.NewBaseCommand(flags)
 	if err != nil {
 		return err
@@ -162,11 +167,6 @@ func runPolicyApply(flags *cli.CommonFlags, policyID, name, policyType,
 	defer base.Close()
 
 	sdkClient := sdnsvc.NewClientFromGRPC(base.Client().SDN())
-
-	pt, ok := sdnsvc.ParsePolicyType(policyType)
-	if !ok {
-		return ErrInvalidPolicyType{Type: policyType}
-	}
 
 	config := &sdnsvc.PolicyConfig{
 		Name:        name,

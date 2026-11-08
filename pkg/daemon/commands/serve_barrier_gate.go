@@ -848,6 +848,15 @@ func runInitOnlyMode(ctx context.Context, a *app.App, logger *logging.Logger, ga
 		initSvc = issuer
 	}
 
+	return serveUntilUnsealed(ctx, logger, gateCfg, gate, stateProvider, initSvc, unsealWaiterOf(a))
+}
+
+// serveUntilUnsealed binds the init-only listeners, serves /healthz,
+// /init and /unseal until waiter reports the barrier unsealed (or ctx
+// ends), then stops the listeners. It returns nil once the barrier is
+// unsealed and the production transports may bind.
+func serveUntilUnsealed(ctx context.Context, logger *logging.Logger, gateCfg barrierGateConfig,
+	gate gateBarrier, stateProvider *barrierStateProvider, initSvc rest.BarrierInitService, waiter unsealWaiter) error {
 	// Wire unseal service when the barrier manager is available. The
 	// manager is always present once App.initBarrier() returned ok, but
 	// we tolerate its absence so the gate can also surface a useful
@@ -880,7 +889,7 @@ func runInitOnlyMode(ctx context.Context, a *app.App, logger *logging.Logger, ga
 
 	// Block until the barrier reaches the unsealed state, the context is
 	// cancelled, or the initial state was already unsealed.
-	waitErr := waitForUnseal(ctx, a, logger, gateCfg.pollEvery)
+	waitErr := waitForUnseal(ctx, waiter, logger, gateCfg.pollEvery)
 
 	// Always tear down the init-only listeners regardless of the wait
 	// outcome; the caller will either return (on cancel/error) or bind
@@ -901,11 +910,7 @@ func runInitOnlyMode(ctx context.Context, a *app.App, logger *logging.Logger, ga
 // /init transitioning us from uninitialized to sealed, plus external
 // unseals from peer nodes that the local manager only learns about via
 // SyncStatus). No time.Sleep is used.
-func waitForUnseal(ctx context.Context, a *app.App, logger *logging.Logger, pollEvery time.Duration) error {
-	if a == nil {
-		return ErrBarrierGateRequiresApp{}
-	}
-	mgr := a.Barrier()
+func waitForUnseal(ctx context.Context, mgr unsealWaiter, logger *logging.Logger, pollEvery time.Duration) error {
 	if mgr == nil {
 		// No manager: nothing to wait for. Treat as ready.
 		return nil
@@ -955,6 +960,27 @@ func waitForUnseal(ctx context.Context, a *app.App, logger *logging.Logger, poll
 			}
 		}
 	}
+}
+
+// unsealWaiter is the part of the barrier manager waitForUnseal reads:
+// the state, the local ready signal and the status sync that sees an
+// unseal made elsewhere. *barrier.Manager satisfies it.
+type unsealWaiter interface {
+	IsInitialized() bool
+	IsSealed() bool
+	WaitReady(ctx context.Context) error
+	SyncStatus(ctx context.Context) error
+}
+
+// unsealWaiterOf returns the app's barrier manager as an unsealWaiter,
+// or a nil interface when there is no manager, so waitForUnseal's nil
+// check sees it.
+func unsealWaiterOf(a *app.App) unsealWaiter {
+	mgr := a.Barrier()
+	if mgr == nil {
+		return nil
+	}
+	return mgr
 }
 
 // =============================================================================

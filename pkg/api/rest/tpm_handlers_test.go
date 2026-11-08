@@ -819,7 +819,7 @@ func TestTPMRPC(t *testing.T) {
 		want int
 	}{
 		{status.Error(codes.InvalidArgument, "nonce too long"), http.StatusBadRequest},
-		{status.Error(codes.FailedPrecondition, "no channel binding"), http.StatusBadRequest},
+		{status.Error(codes.FailedPrecondition, "no channel binding"), http.StatusConflict},
 		{status.Error(codes.PermissionDenied, "denied"), http.StatusForbidden},
 		{status.Error(codes.Unavailable, "no TPM"), http.StatusServiceUnavailable},
 		{errors.New("not a status error"), http.StatusInternalServerError},
@@ -837,8 +837,8 @@ func TestTPMRPC(t *testing.T) {
 }
 
 // DeleteAK refuses because the IAK is not evicted. Both routes answer that
-// refusal 412, as the daemon's IAK delete route does, while every other
-// error keeps the generic mapping.
+// FailedPrecondition refusal 409, the shared mapping (#665), as the daemon's
+// IAK delete route does; every other error keeps the generic mapping too.
 func TestTPMDeleteAKStatuses(t *testing.T) {
 	refused := status.Error(codes.FailedPrecondition, "the IAK key is TPM-resident")
 	cases := []struct {
@@ -846,7 +846,7 @@ func TestTPMDeleteAKStatuses(t *testing.T) {
 		err  error
 		want int
 	}{
-		{"refusal is 412", refused, http.StatusPreconditionFailed},
+		{"refusal is 409", refused, http.StatusConflict},
 		{"unavailable stays 503", status.Error(codes.Unavailable, "no TPM"), http.StatusServiceUnavailable},
 		{"non-status error stays 500", errors.New("not a status error"), http.StatusInternalServerError},
 	}
@@ -863,12 +863,12 @@ func TestTPMDeleteAKStatuses(t *testing.T) {
 		}
 	}
 
-	t.Run("other routes keep FailedPrecondition at 400", func(t *testing.T) {
+	t.Run("other routes keep the shared FailedPrecondition 409", func(t *testing.T) {
 		router := tpmRouter(&fakeTPMService{err: refused}, tpmGuard())
 
 		rec := serveTPM(router, newTPMRequest(http.MethodDelete, "/api/v1/tpm/srk", ""), tpmAdminToken)
 
-		assert.Equal(t, http.StatusBadRequest, rec.Code)
+		assert.Equal(t, http.StatusConflict, rec.Code)
 	})
 }
 

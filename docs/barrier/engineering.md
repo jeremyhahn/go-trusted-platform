@@ -13,7 +13,7 @@
 | `pkg/barrier/config.go` | `Config`, the seal-strategy constants, the ceremony types |
 | `pkg/barrier/errors.go` | Sentinels, `ManagerError`, `ConfigError` |
 | `pkg/app/barrier.go` | `App.Barrier()`, `initBarrier` |
-| `pkg/daemon/commands/serve_barrier_gate.go` | The gate: `invokeBarrierGate`, `runInitOnlyMode`, `waitForUnseal`, the gate's state, init and unseal services |
+| `pkg/daemon/commands/serve_barrier_gate.go` | The gate: `invokeBarrierGate`, `runInitOnlyMode`, `serveUntilUnsealed`, `waitForUnseal`, the gate's state, init and unseal services |
 | `pkg/api/daemon/initonly.go` | `InitOnlyServer`: the pre-unseal listeners |
 | `pkg/api/rest/init_handlers.go` | `InitHandlers`: `/healthz`, `/init`, `/unseal`, and their request and response types |
 | `pkg/api/daemon/barrier_grpc_service.go` | `BarrierGRPCService`, which implements `platform.v1.BarrierService` |
@@ -350,8 +350,8 @@ generation: a waiter blocks until the next signal (the gate's one-second
 
 | Kind | Where |
 |---|---|
-| Unit | `pkg/barrier/{manager,config,errors,error_codes}_test.go`, `pkg/app/barrier_cov2_test.go`, `pkg/daemon/commands/serve_barrier_gate_test.go`, `pkg/api/rest/init_handlers_test.go`, `pkg/app/backends/ceremony_test.go`, `pkg/api/daemon/initonly_test.go`, `pkg/api/daemon/barrier_grpc_service_test.go`, `pkg/cli/commands/barrier/barrier_test.go`, `pkg/tenant/barrier_test.go` |
-| Integration | `test/integration/barrier_gate/` — the gate against a running daemon |
+| Unit | `pkg/barrier/{manager,config,errors,error_codes}_test.go`, `pkg/app/barrier_cov2_test.go`, `pkg/daemon/commands/serve_barrier_gate{,_unseal}_test.go`, `pkg/api/rest/init_handlers_test.go`, `pkg/app/backends/ceremony_test.go`, `pkg/api/daemon/initonly_test.go`, `pkg/api/daemon/barrier_grpc_service_test.go`, `pkg/cli/commands/barrier/barrier_test.go`, `pkg/tenant/barrier_test.go` |
+| Integration | `test/integration/barrier_gate/` — `TestM6_WarmBoot_UnsealThenTransitions`: a real daemon and TPM restart sealed, the gate reports `sealed`, and `POST /unseal` releases it. The gate's serve-until-unsealed contract itself is unit-tested by `pkg/daemon/commands/serve_barrier_gate_unseal_test.go` |
 
 Run one package with `make test-pkg PKG=./pkg/barrier/`.
 

@@ -26,7 +26,7 @@ These hold for every `platformctl` verb unless a section below says otherwise.
 |---|---|
 | `0` | Success. A parent group run with no subcommand (`platformctl service`) prints its help and exits 0. |
 | `1` | Any error: bad flag, bad argument, unreachable daemon, failed RPC. `main.go` prints `Error: <message>` to stderr. |
-| `2` | Panic. Only reachable today through the `-v` shorthand clash (§2.3). |
+| `2` | Panic. No verb is known to reach it today. |
 
 The root command sets `SilenceUsage`, so a failed verb prints only the error
 line, not its usage.
@@ -133,11 +133,9 @@ work with no daemon are `version --client`, `completion`, `context`, `wipe`,
 `pkcs11` argument validation (§6), and the feature verbs that only touch local
 files (for example `iso` and `diskimage` builds — see their feature docs).
 
-**Short flags clash in two verbs.** `registry pull` declares `-v` for `--verify`
-and `container remove` declares `-v` for `--volumes`, while the root already owns
-`-v` for `--verbose`. Cobra cannot redefine a persistent shorthand: both verbs,
-their `--help`, and `platformctl completion bash` (which walks every verb) panic
-with exit 2 (`unable to redefine 'v' shorthand`). Local flags that reuse the
+**`-v` is always `--verbose`.** The root owns `-v`, and Cobra cannot redefine a
+persistent shorthand, so `registry pull --verify` and `container remove
+--volumes` have no short form. Local flags that reuse the
 **long** name, such as `-o, --output` meaning a directory in `db dump` or a file
 in `ca bundle`, are legal and shadow the global flag inside that verb. **Use
 long forms in scripts.**
@@ -172,16 +170,16 @@ quicbaas connection's TLS files `quicbaas_ca_cert`, `quicbaas_client_cert` and
 `quicbaas_client_key`;
 `remote` also accepts `protocol`, `quicbaas_addr` and `quicbaas_transport`.
 
-**The `context` verbs always write `~/.platformctl/config.yaml`,** whatever
-`--config` says — see §4.6.
+**The `context` verbs write back to the file they read** — the `--config` path
+when given, else `~/.platformctl/config.yaml` — see §4.6.
 
 ---
 
 ## 3. The command tree
 
-`root.go` registers **44 top-level commands** in a default build: 11 root verbs
-and 33 feature groups. A build with the `pkcs11` tag adds `pkcs11`
-(`root_pkcs11.go`), for **45**. `help` is Cobra's own and is not counted.
+`root.go` registers **50 top-level commands** in a default build: 11 root verbs
+and 39 feature groups. A build with the `pkcs11` tag adds `pkcs11`
+(`root_pkcs11.go`), for **51**. `help` is Cobra's own and is not counted.
 
 ### 3.1 Root verbs — documented here (§4)
 
@@ -199,6 +197,7 @@ and 33 feature groups. A build with the `pkcs11` tag adds `pkcs11`
 | `barrier` | [`barrier/cli.md`](../barrier/cli.md) |
 | `bmc` | [`bmc/cli.md`](../bmc/cli.md) |
 | `bootstrap`, `firstboot` | [`bootstrap/cli.md`](../bootstrap/cli.md) |
+| `cache`, `messaging`, `scheduler` | no feature doc yet; `pkg/cli/commands/appsvc/` |
 | `ceremony` | [`cli/ceremony.md`](../cli/ceremony.md) |
 | `compute`, `container` | [`compute/cli.md`](../compute/cli.md) |
 | `db` | this document, §5 |
@@ -210,6 +209,7 @@ and 33 feature groups. A build with the `pkcs11` tag adds `pkcs11`
 | `kms` | [`kms/cli.md`](../kms/cli.md) |
 | `luks` | [`luks/cli.md`](../luks/cli.md) |
 | `ntp` | [`ntp/cli.md`](../ntp/cli.md) |
+| `objectstorage` | [`objectstorage/api-reference.md`](../objectstorage/api-reference.md) |
 | `piv` | [`cli/piv.md`](../cli/piv.md) |
 | `provision` | [`provisioning/cli.md`](../provisioning/cli.md) |
 | `proxy` | [`proxy/cli.md`](../proxy/cli.md) |
@@ -218,11 +218,13 @@ and 33 feature groups. A build with the `pkcs11` tag adds `pkcs11`
 | `switch` | [`switch/cli.md`](../switch/cli.md) |
 | `tenant` | [`tenant/cli.md`](../tenant/cli.md) |
 | `tpm` | [`tpm/cli.md`](../tpm/cli.md) |
+| `vpn` | [`vpn/cli.md`](../vpn/cli.md) |
 | `vtpm` | [`vtpm/cli.md`](../vtpm/cli.md) |
 | `pkcs11` (`pkcs11` tag) | this document, §6 |
+| `dns` | [`dns/cli.md`](../dns/cli.md) |
 
-**There is no `dns`, no `pxe`, no `gateway` and no `cluster` top-level group.**
-DNS has essentially no CLI ([`dns/cli.md`](../dns/cli.md)); PXE device lifecycle
+**There is no `pxe`, no `gateway` and no `cluster` top-level group.**
+PXE device lifecycle
 is API-only; the gateway lives under `platformctl sdn gateway`. The secure-boot
 group is spelled `secure-boot`.
 
@@ -359,7 +361,7 @@ daemon.
 | `--token` | | string | | Bearer token for REST, MCP and QUIC |
 
 Errors: `--server is required for remote contexts`;
-`invalid context type "<t>" (must be 'local', 'remote', or 'embedded')`; an
+`invalid context type: <t> (must be 'local', 'remote', or 'embedded')`; an
 unknown `--protocol`.
 
 The writing verbs (`add`, `use`, `delete`) save to the file they read: the
@@ -430,8 +432,6 @@ Prints a shell-completion script. Needs no daemon.
 - **Args:** exactly one of `bash`, `zsh`, `fish`, `powershell`.
 - **Flags:** none.
 - **Exit:** 0; 1 with `accepts 1 arg(s), received 0` when no shell is named.
-  **`bash` panics (exit 2)** because of the `-v` clash (§2.3); `zsh`, `fish` and
-  `powershell` work.
 
 ```bash
 platformctl completion zsh > "${fpath[1]}/_platformctl"
@@ -586,7 +586,6 @@ Persistent flags:
 | `--so-pin` | | bool | `false` | Supply the Security Officer PIN interactively |
 | `--raw-pin` | | string | | User PIN, non-interactive |
 | `--raw-so-pin` | | string | | Security Officer PIN, non-interactive |
-| `--setuid` | | string | `root` | User to drop to when started as root. Parsed but not yet applied: no startup path calls `App.DropPrivileges`, which prepares the log file for that user while still root, then drops groups, GID and UID, and returns a typed error (user lookup, a UID/GID outside `0..4294967294`, log file, setgroups/setgid/setuid) rather than exiting; see [engineering.md](engineering.md) §5 |
 
 `platformd serve` flags. Each bind host and port also has a config key
 `daemon.<proto>.bind-host` / `daemon.<proto>.port` and an environment variable
@@ -670,7 +669,7 @@ started" and "Startup failed" — keep those openings if the wording changes.
 
 ### 7.2 `gatewayd`, `pxeboot`, `platform-initrd`
 
-- **`gatewayd`** — `serve`, `version`, `completion`; global flags `--config`
+- **`gatewayd`** — `serve`, `service` (`service run <process>`), `version`, `completion`; global flags `--config`
   (`/etc/gatewayd/config.yaml`), `--config-dir` (`/etc/gatewayd`), `--data-dir`
   (`/var/lib/gatewayd`), `-d, --debug`, `--log-format` (`json`), `--log-level`
   (`info`). See [`gateway/cli.md`](../gateway/cli.md).

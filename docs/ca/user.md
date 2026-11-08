@@ -45,15 +45,16 @@ Or from the CLI:
 platformctl ca bundle --output ./ca-bundle.pem
 ```
 
-These are the only CA routes with no counterpart on the other transports, and
-that is deliberate.
+The root, intermediate and bootstrap routes have no counterpart on the other
+transports, and that is deliberate; the bundle is also served over gRPC
+(`GetCABundle`), QUIC (`OpCABundle`) and MCP (`ca_bundle`).
 
 ---
 
 ## Issuing a certificate directly
 
 ```bash
-platformctl ca issue web-01.example.com kms rsa \
+platformctl ca issue web-01.example.com pkcs8 RSA-2048 \
     --valid-days 90 \
     --sans-dns web-01.example.com,web.example.com \
     --ext-key-usage serverAuth
@@ -96,12 +97,14 @@ the RFC 8555 section it would carry; see [cli.md §3](cli.md#3-platformctl-acme)
 | `http-01` | Control of a web path |
 | `dns-01` | Control of a DNS record ([`docs/dns/`](../dns/)) |
 | `endorse-01` | The device's TPM endorsement |
-| `device-01` | Device identity |
+| `enroll-01` | TPM credential activation of the enrolling key |
 | `device-attest-01` | Device attestation |
 
 The last three are what make this a trusted-computing CA: a device proves **what
 it is**, from hardware, rather than proving it can write a file or a DNS record.
 Pair them with `--authz permanent-identifier`.
+`acme renew --challenge` does not accept `enroll-01` yet; it accepts a
+`device-01` that the stack's ACME server does not offer.
 
 Those challenge handlers are the stack's, not this repository's — see
 [`docs/device/`](../device/) for the enrollment side.
@@ -132,7 +135,7 @@ certificate again works the same way.
 to use after a suspected key exposure: the old key is replaced and the old
 certificate is revoked in the same step.
 
-**Renewal has no REST route.** Use the CLI, gRPC, QUIC or MCP.
+Over REST, renewal is `POST /api/v1/ca/certificates/{serial}/renew`.
 
 ---
 
@@ -140,7 +143,8 @@ certificate is revoked in the same step.
 
 ```bash
 platformctl ca revoke 0A1B2C3D --reason superseded
-platformctl ca crl export --output ./crl.pem --entries
+platformctl ca crl --entries
+platformctl ca crl export --output ./ca.crl
 ```
 
 Two things to get right:
@@ -175,9 +179,14 @@ platformctl ca install-ca-certificates
 platformctl ca uninstall-ca-certificates
 ```
 
-These modify the host's trust store. Adding a CA to a machine's trust store
-means that CA can impersonate anything to that machine — a reasonable thing to
-do on a platform node, and a decision worth being deliberate about elsewhere.
+**Neither works today.** Both are daemon RPCs that would change the trust
+store of the host platformd runs on, and no platformd CA service implements
+them yet, so both fail ([cli.md](cli.md)). To trust the CA on a host, write the
+bundle into its trust store yourself (`platformctl ca bundle | sudo tee …`).
+
+Adding a CA to a machine's trust store means that CA can impersonate anything
+to that machine — a reasonable thing to do on a platform node, and a decision
+worth being deliberate about elsewhere.
 
 ---
 
@@ -194,9 +203,6 @@ retrying tightly.
 **`ca init` says the CA already exists.**
 It does. `--force` re-initialises, and **every certificate the old CA issued
 becomes unverifiable**. This is not a retry flag.
-
-**Renew or verify is not available over REST.**
-Correct — neither has a REST route. Use the CLI, gRPC, QUIC or MCP.
 
 **`ca issue` and `acme renew` disagree about SAN flags.**
 They do. `ca issue` takes `--sans-dns` / `--sans-ips` / `--sans-email` as

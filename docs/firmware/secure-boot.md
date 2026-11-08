@@ -514,7 +514,7 @@ Secure Boot enrollment is firmware-specific. Before deploying `enforce: true` to
 ## Integration Testing
 
 `test/integration/secureboot/` proves the chain against real external
-verifiers and real firmware. Run with:
+verifiers, real firmware and a real kernel. Run with:
 
 ```bash
 make integration-test-secureboot
@@ -523,10 +523,17 @@ make integration-test-secureboot
 | Test | Proves |
 |------|--------|
 | `TestModuleSignOpenSSLInterop` | `pkg/modulesign` output is a valid detached CMS over the exact module bytes (verified by OpenSSL, an independent implementation) and follows the kernel appended-signature contract (trailer + magic). |
-| `TestModuleSignCorruptedSignatureFailsVerify` / `TestModuleSignTamperedContentFailsVerify` | Signature and content binding: any modification fails verification. |
-| `TestUnsignedModuleLacksTrailer` | Unsigned modules carry no trailer — the condition `CONFIG_MODULE_SIG_FORCE` rejects. |
 | `TestOVMFSecureBootEnforcement` | Full enforce cycle on real OVMF firmware: platform-generated PK/KEK/DB enrolled into the variable store via `pkg/uefi`, a DB-signed EFI payload (platform Authenticode signer, cross-checked with `sbverify`) **boots**, while unsigned and wrongly-signed payloads are **rejected** by the firmware with `Access Denied`. |
 | `TestFIPSKernelModuleSignatureEnforcement` | The real FIPS kernel rejects an unsigned module at insmod with `ENOKEY` ("Required key not available"), loads the build-signed module, and loads the same module re-signed by `pkg/modulesign` with the stable platform key. |
+
+`pkg/modulesign`'s unit suite also checks the module signature in memory,
+against the package's own parsing: `TestModuleSignatureTrailer` (the kernel's
+appended-signature trailer and magic), `TestSignModuleInPlace` (the module
+bytes are kept and the signature appended) and
+`TestBuildModuleSignatureVerifiesAgainstSignerCertificate` (the detached CMS
+verifies given only the signer certificate, matched by issuer and serial as the
+kernel does, and a tampered module or corrupted signature fails at the check
+that names it).
 
 The FIPS-kernel test consumes **prebuilt artifacts** (the kernel takes hours
 to build) via environment variables and FAILS with a typed setup error when

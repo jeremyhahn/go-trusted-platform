@@ -21,7 +21,6 @@ package daemon
 import (
 	"context"
 	"fmt"
-	"os"
 	"time"
 
 	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -51,9 +50,9 @@ func (g *GRPCAdapter) Name() string {
 
 // Setup initializes the gRPC connection to platformd.
 func (g *GRPCAdapter) Setup(ctx context.Context) error {
-	endpoint := os.Getenv(EnvPlatformGRPCEndpoint)
-	if endpoint == "" {
-		endpoint = GetServiceEndpoints().PlatformGRPC
+	endpoint, err := helpers.RequireEndpoint(EnvPlatformGRPCEndpoint)
+	if err != nil {
+		return err
 	}
 
 	conn, err := grpc.NewClient(endpoint,

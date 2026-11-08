@@ -144,7 +144,8 @@ func serveDeviceGated(t *testing.T, pki gatePKI, devices platformv1.DeviceServic
 	go func() { served <- srv.Serve(lis) }()
 	t.Cleanup(func() {
 		srv.Stop()
-		if err := <-served; err != nil {
+		// Stop can win the race with Serve's start; Serve then returns ErrServerStopped, its other clean-shutdown result.
+		if err := <-served; err != nil && !errors.Is(err, grpc.ErrServerStopped) {
 			t.Errorf("serving the gated listener: %v", err)
 		}
 	})

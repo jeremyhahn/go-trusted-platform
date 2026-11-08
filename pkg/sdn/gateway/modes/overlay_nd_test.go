@@ -866,14 +866,45 @@ func TestOverlayNDDropsDuringTheHoldDownExtendIt(t *testing.T) {
 // returns the hold-down the fallback set.
 func ndFallBackAt(t *testing.T, f *overlayFixture, now time.Time) time.Duration {
 	t.Helper()
+	return ndFallBackHandledAt(t, f, now, now).Sub(now)
+}
+
+// ndFallBackHandledAt has the meter drop a punt and runs the watch on a
+// tick that fired at fired and is handled at handled, and returns the time
+// the fallback resumes suppression at.
+func ndFallBackHandledAt(t *testing.T, f *overlayFixture, fired, handled time.Time) time.Time {
+	t.Helper()
 	f.sw.mu.Lock()
 	f.sw.meterDrops++
 	f.sw.mu.Unlock()
-	f.handler.ndTick(context.Background(), now)
+	f.handler.mu.Lock()
+	f.handler.ndClock = func() time.Time { return handled }
+	f.handler.mu.Unlock()
+	f.handler.ndTick(context.Background(), fired)
 	f.handler.mu.Lock()
 	defer f.handler.mu.Unlock()
 	require.False(t, f.handler.ndSuppressing, "a drop falls back")
-	return f.handler.ndResumeAt.Sub(now)
+	return f.handler.ndResumeAt
+}
+
+func TestOverlayNDHoldDownCountsFromWhenTheFallbackActs(t *testing.T) {
+	f := newOverlayFixture(t, nil).withVNI(t)
+	require.NoError(t, f.handler.LearnMAC(context.Background(), ovlL2VNI, ovlHostMAC, ndTargetIP))
+	handled := time.Now()
+	fired := handled.Add(-5 * time.Second)
+
+	assert.Equal(t, handled.Add(overlayNDFallbackHoldDown), ndFallBackHandledAt(t, f, fired, handled),
+		"a tick handled late holds down from when it is handled, not from when it fired")
+}
+
+func TestOverlayNDHoldDownCountsFromTheTickWhenTheClockIsEarlier(t *testing.T) {
+	f := newOverlayFixture(t, nil).withVNI(t)
+	require.NoError(t, f.handler.LearnMAC(context.Background(), ovlL2VNI, ovlHostMAC, ndTargetIP))
+	fired := time.Now()
+	handled := fired.Add(-5 * time.Second)
+
+	assert.Equal(t, fired.Add(overlayNDFallbackHoldDown), ndFallBackHandledAt(t, f, fired, handled),
+		"a clock behind the tick never moves the hold-down earlier")
 }
 
 func TestOverlayNDHoldDownBacksOffOnRepeatedFallbacks(t *testing.T) {

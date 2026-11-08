@@ -70,17 +70,33 @@ func startFabricSpeaker(t *testing.T, config *BGPConfig, opts ...SpeakerOption) 
 func evpnFabric(t *testing.T) (rr, a, b *Speaker) {
 	t.Helper()
 	ctx := context.Background()
-	vtepPort := freePort(t)
 	policy := fabricPolicy(t)
 
-	vtep := func(routerID string, session netip.Addr) *Speaker {
-		s := startFabricSpeaker(t, &BGPConfig{
+	startVTEP := func(routerID string, session netip.Addr, port uint16) (*Speaker, error) {
+		s, err := NewSpeaker(&BGPConfig{
 			RouterID:        netip.MustParseAddr(routerID),
 			ASN:             64512,
 			ListenAddresses: []netip.Addr{session},
-			ListenPort:      vtepPort,
+			ListenPort:      port,
 			EnabledFamilies: []AddressFamily{AFamilyEVPN},
-		})
+		}, speakerTestLogger())
+		require.NoError(t, err)
+		err = s.Start(ctx)
+		return s, err
+	}
+	// Both VTEPs listen on one port, so they take it together.
+	vtepPort := listenOnFreePort(t, func(port uint16) error {
+		var err error
+		if a, err = startVTEP("192.0.2.11", vtepASession, port); err != nil {
+			return err
+		}
+		if b, err = startVTEP("192.0.2.12", vtepBSession, port); err != nil {
+			require.NoError(t, a.Stop(ctx))
+		}
+		return err
+	})
+	for _, s := range []*Speaker{a, b} {
+		t.Cleanup(func() { assert.NoError(t, s.Stop(context.Background())) })
 		require.NoError(t, s.AddPeer(ctx, &NeighborConfig{
 			Name:            "route-reflector",
 			Address:         rrSession,
@@ -89,23 +105,16 @@ func evpnFabric(t *testing.T) (rr, a, b *Speaker) {
 			EnabledFamilies: []AddressFamily{AFamilyEVPN},
 			Policy:          policy,
 		}))
-		return s
 	}
-	a = vtep("192.0.2.11", vtepASession)
-	b = vtep("192.0.2.12", vtepBSession)
 
-	rr = startFabricSpeaker(t, &BGPConfig{
+	rr, _ = startOnFreePort(t, &BGPConfig{
 		RouterID:         netip.MustParseAddr("192.0.2.1"),
 		ASN:              64512,
 		ListenAddresses:  []netip.Addr{rrSession},
-		ListenPort:       freePort(t),
 		EnabledFamilies:  []AddressFamily{AFamilyEVPN},
 		IsRouteReflector: true,
 		ClusterID:        "10.255.0.1",
-	}, WithBGPServer(remotePortServer{
-		BGPServerInterface: NewGoBGPServerAdapter(server.NewBgpServer()),
-		port:               uint32(vtepPort),
-	}))
+	}, dialPort(vtepPort))
 	for name, session := range map[string]netip.Addr{"vtep-a": vtepASession, "vtep-b": vtepBSession} {
 		require.NoError(t, rr.AddPeer(ctx, &NeighborConfig{
 			Name:                 name,
@@ -138,25 +147,20 @@ func requireEstablished(t *testing.T, s *Speaker, peer netip.Addr) {
 // that address and port fails to start, which is how the combination broke.
 func TestEVPNSession_OutboundOnlyBesideTransitListener(t *testing.T) {
 	ctx := context.Background()
-	bgpPort := freePort(t)
-	rrPort := freePort(t)
-
-	startFabricSpeaker(t, &BGPConfig{
+	_, bgpPort := startOnFreePort(t, &BGPConfig{
 		RouterID:        netip.MustParseAddr("192.0.2.20"),
 		ASN:             64600,
 		ListenAddresses: []netip.Addr{vtepASession},
-		ListenPort:      bgpPort,
-	})
+	}, noOptions)
 
-	rr := startFabricSpeaker(t, &BGPConfig{
+	rr, rrPort := startOnFreePort(t, &BGPConfig{
 		RouterID:         netip.MustParseAddr("192.0.2.1"),
 		ASN:              64512,
 		ListenAddresses:  []netip.Addr{rrSession},
-		ListenPort:       rrPort,
 		EnabledFamilies:  []AddressFamily{AFamilyEVPN},
 		IsRouteReflector: true,
 		ClusterID:        "10.255.0.1",
-	})
+	}, noOptions)
 	require.NoError(t, rr.AddPeer(ctx, &NeighborConfig{
 		Name:                 "overlay-vtep",
 		Address:              vtepASession,

@@ -375,7 +375,7 @@ func NewDNSRegistrationHook(
 		//      pointing at the client IP. This is what makes
 		//      `gw.example.internal` resolvable from the moment the GW
 		//      finishes enroll-01 — without it, operators have to
-		//      query opaque `Super-Server-node-01-gw-01.example.internal`
+		//      query opaque `Super-Server-node-01-edge-01.example.internal`
 		//      records to find each node.
 		//
 		// Wildcards, cross-zone SANs, and CN duplicates are filtered
@@ -795,6 +795,7 @@ type RestHandlerRegistry interface {
 	ConfigDeliveryHandler() configdelivery.RestHandler
 	DeviceService() devicepkg.DeviceService
 	DNSService() dns.DNSService
+	DNSServiceServer() platformv1.DNSServiceServer
 	EABServiceServer() platformv1.EABServiceServer
 	EmbeddedAdapter() sdktransport.Adapter
 	GatewayServiceServer() platformv1.GatewayServiceServer
@@ -1023,6 +1024,7 @@ type RegistryParams struct {
 	AttestationServiceServer platformv1.AttestationServiceServer
 	CAServiceServer          platformv1.CAServiceServer
 	ComputeServiceServer     platformv1.ComputeServiceServer
+	DNSServiceServer         platformv1.DNSServiceServer
 	DeviceServiceServer      platformv1.DeviceServiceServer
 	EABServiceServer         platformv1.EABServiceServer
 	EmbeddedAdapter          sdktransport.Adapter
@@ -1959,8 +1961,8 @@ func (registry *HandlerRegistry) TenantID() string {
 }
 
 // DNSService returns the DNS service from the platform service registry,
-// or nil when no DNS service is configured. The returned value satisfies the
-// dns.DNSService interface used by the REST router.
+// or nil when no DNS service is configured. The REST router gates the /dns
+// surface on it; the routes themselves call DNSServiceServer.
 func (registry *HandlerRegistry) DNSService() dns.DNSService {
 	if registry.params.ServiceRegistry == nil {
 		return nil
@@ -2012,6 +2014,12 @@ func (registry *HandlerRegistry) DeviceServiceServer() platformv1.DeviceServiceS
 // implementation used by the REST compute router, or nil.
 func (registry *HandlerRegistry) ComputeServiceServer() platformv1.ComputeServiceServer {
 	return registry.params.ComputeServiceServer
+}
+
+// DNSServiceServer returns the in-process DNSService gRPC implementation the
+// REST DNS router delegates to, or nil.
+func (registry *HandlerRegistry) DNSServiceServer() platformv1.DNSServiceServer {
+	return registry.params.DNSServiceServer
 }
 
 // RegistryService returns the OCI artifact registry adapter wired

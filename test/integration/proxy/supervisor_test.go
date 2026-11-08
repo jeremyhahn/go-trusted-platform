@@ -168,6 +168,10 @@ type supervisedGatewayd struct {
 	// programmed is the bridge as the datapath child left it before the
 	// current kill; datapathReconciled compares the successor against it.
 	programmed bridgeState
+
+	// oomKills is the memory.events oom_kill count a test caused on purpose,
+	// by child name; teardown expects every other leaf to have none.
+	oomKills map[string]int64
 }
 
 func TestGatewaydSupervisorKillUnderLoad(t *testing.T) {
@@ -257,7 +261,7 @@ func TestGatewaydSupervisorMemoryMaxRestartsOnlyThatChild(t *testing.T) {
 	// The child's charge just before the limit drops is what the kernel
 	// has to reclaim or kill to fit 1 MiB.
 	usageBefore := leafMemory(t, gw.cgroups(), victim)
-	logMemory(t, victim, "before the 1 MiB limit", usageBefore)
+	logMemory(t, victim, before[victim], "before the 1 MiB limit", usageBefore)
 	failedBefore := load.failed.Load()
 
 	// Take swap away so reclaim cannot satisfy the limit, then set one far
@@ -274,16 +278,30 @@ func TestGatewaydSupervisorMemoryMaxRestartsOnlyThatChild(t *testing.T) {
 	// memory is freed. So the count has risen by now, or the child was never
 	// killed and no relaunch can follow.
 	usageAfter := leafMemory(t, gw.cgroups(), victim)
-	logMemory(t, victim, "after the 1 MiB limit", usageAfter)
+	logMemory(t, victim, before[victim], "after the 1 MiB limit", usageAfter)
 	if usageAfter.OOMKill <= usageBefore.OOMKill {
 		t.Fatalf("%s memory.events oom_kill = %d, want more than %d: the 1 MiB limit did not OOM-kill it", victim, usageAfter.OOMKill, usageBefore.OOMKill)
 	}
+	// memory.peak keeps the most the leaf ever held, so it still shows the
+	// charge the kill took away: over the 1 MiB limit, and at least what the
+	// child held just before the limit dropped.
+	switch {
+	case !usageAfter.HasPeak:
+		t.Errorf(peakRequired, victim)
+	case usageAfter.Peak <= 1<<20 || usageAfter.Peak < usageBefore.Current:
+		t.Errorf("%s memory.peak = %d, want over 1 MiB and at least the %d memory.current before the limit", victim, usageAfter.Peak, usageBefore.Current)
+	}
+	gw.oomKills = map[string]int64{victim: usageAfter.OOMKill}
 
 	after := gw.awaitRelaunch(t, victim, before, probes[victim])
 	if limit := readTrimmed(t, filepath.Join(leaf, "memory.max")); limit != strconv.FormatInt(def.MemoryMax, 10) {
 		t.Errorf("relaunched %s memory.max = %s, want the class value %d restored", victim, limit, def.MemoryMax)
 	}
 	t.Logf("%s: pid %d OOM-killed, pid %d relaunched", victim, before[victim], after[victim])
+	// The leaf outlives the relaunch, so memory.peak stays the leaf's
+	// all-time high; memory.current is the successor's own charge once it
+	// serves again, what the class needs to come back.
+	logMemory(t, victim, after[victim], "relaunched and serving", leafMemory(t, gw.cgroups(), victim))
 
 	load.waitForTraffic(t)
 	if failed := load.failed.Load(); failed != failedBefore {
@@ -461,12 +479,50 @@ func (g *supervisedGatewayd) launch(t *testing.T) {
 		close(exited)
 	}()
 
-	WaitFor(t, 60*time.Second, 200*time.Millisecond, "the datapath, proxy and routing children to serve", func() bool {
+	what := fmt.Sprintf("gatewayd (pid %d) datapath, proxy and routing children to serve", cmd.Process.Pid)
+	waitUntil(t, 60*time.Second, what, func() string {
 		g.requireRunning(t)
 		children := g.children(t)
-		return children["datapath"] != 0 && children["proxy"] != 0 && children["routing"] != 0 &&
-			g.datapathProgrammed() && g.proxyServes() && g.bgpListens()
+		for _, name := range []string{"datapath", "proxy", "routing"} {
+			if children[name] == 0 {
+				return "no " + name + " child running"
+			}
+		}
+		switch {
+		case !g.datapathProgrammed():
+			return "datapath has not programmed bridge " + supervisedBridge
+		case !g.proxyServes():
+			return "proxy not answering at " + g.baseURL
+		case !g.bgpListens():
+			return "routing not listening on " + g.bgpAddress
+		}
+		return ""
 	})
+}
+
+// waitUntil polls pending until it reports nothing left. On the deadline it
+// fails naming the wait, the deadline and what was still pending, so a
+// timed-out wait says why rather than only that it waited.
+func waitUntil(t *testing.T, timeout time.Duration, what string, pending func() string) {
+	t.Helper()
+	last := pending()
+	if last == "" {
+		return
+	}
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-deadline.C:
+			t.Fatalf("timed out after %v waiting for %s: still %s", timeout, what, last)
+		case <-ticker.C:
+			if last = pending(); last == "" {
+				return
+			}
+		}
+	}
 }
 
 // awaitRelaunch waits, within relaunchBound, for a new child of the given
@@ -576,16 +632,35 @@ func (g *supervisedGatewayd) bgpListens() bool {
 	return conn.Close() == nil
 }
 
-// datapathProgrammed reports whether the datapath child has programmed the
-// suite bridge: flows under a gateway generation, and the VIP's group.
+// datapathProgrammed reports whether the running datapath child has
+// programmed the suite bridge: the VIP's group, and flows under a generation
+// of its own. A launch over a bridge a killed datapath child left starts with
+// g.programmed holding that child's bridge, whose generations it must not
+// count.
 func (g *supervisedGatewayd) datapathProgrammed() bool {
 	state, err := readBridge()
 	if err != nil {
 		return false
 	}
-	return len(state.generations) > 0 && slices.ContainsFunc(state.rules, func(rule string) bool {
+	return state.programmedSince(g.programmed)
+}
+
+// programmedSince reports whether s holds the VIP's group and a flow
+// generation predecessor does not. A predecessor's leftover flows and groups
+// say nothing about whether its successor has programmed anything.
+func (s bridgeState) programmedSince(predecessor bridgeState) bool {
+	hasGroup := slices.ContainsFunc(s.rules, func(rule string) bool {
 		return strings.HasPrefix(rule, "group_id=")
 	})
+	if !hasGroup {
+		return false
+	}
+	for cookie := range s.generations {
+		if !predecessor.generations[cookie] {
+			return true
+		}
+	}
+	return false
 }
 
 // datapathReconciled reports whether a relaunched datapath child has
@@ -791,6 +866,56 @@ func TestParseBridgeComparesProgrammingNotGenerations(t *testing.T) {
 	}
 }
 
+// A launch over the bridge a killed datapath child left must not take that
+// child's flows for its successor's programming. The check launch once made,
+// any generation and a group, passed on the leftovers alone.
+func TestProgrammedSinceRefusesAPredecessorsLeftovers(t *testing.T) {
+	const (
+		header = "OFPST_FLOW reply (OF1.3) (xid=0x2):\n"
+		group  = " group_id=1,type=select,bucket=actions=output:7\n"
+		flow   = ", duration=1.5s, table=0, n_packets=4, n_bytes=240, priority=100,tcp,nw_dst=10.100.0.20,tp_dst=80 actions=group:1\n"
+	)
+	parse := func(t *testing.T, flows, groups string) bridgeState {
+		t.Helper()
+		state, err := parseBridge(header+flows, groups)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		return state
+	}
+	predecessor := parse(t, " cookie=0xf1be000300000001"+flow, group)
+
+	t.Run("leftovers alone", func(t *testing.T) {
+		left := parse(t, " cookie=0xf1be000300000001"+flow, group)
+		oldCheck := len(left.generations) > 0 && slices.ContainsFunc(left.rules, func(rule string) bool {
+			return strings.HasPrefix(rule, "group_id=")
+		})
+		if !oldCheck {
+			t.Fatalf("the old check refused the leftovers; this test no longer shows its defect")
+		}
+		if left.programmedSince(predecessor) {
+			t.Errorf("the predecessor's leftovers count as the successor's programming")
+		}
+	})
+	t.Run("the successor's generation", func(t *testing.T) {
+		next := parse(t, " cookie=0xf1be000300000001"+flow+" cookie=0xf1be000300000002"+flow, group)
+		if !next.programmedSince(predecessor) {
+			t.Errorf("a generation the predecessor did not hold is the successor's programming")
+		}
+	})
+	t.Run("no group", func(t *testing.T) {
+		next := parse(t, " cookie=0xf1be000300000002"+flow, "")
+		if next.programmedSince(predecessor) {
+			t.Errorf("flows without the VIP's group count as programmed")
+		}
+	})
+	t.Run("first launch", func(t *testing.T) {
+		if !predecessor.programmedSince(bridgeState{}) {
+			t.Errorf("a first launch, with no predecessor, is refused its own generation")
+		}
+	})
+}
+
 // TestParseBridgeLeavesFixedCookiesOutOfTheGenerations pins what a
 // generation is: an owner's cookie with a generation drawn in its low 32
 // bits. The base pipeline (gateway.CookiePipeline) and the overlay's ND
@@ -826,6 +951,35 @@ func TestParseBridgeRefusesAnUnparsableCookie(t *testing.T) {
 	}
 }
 
+func TestLeafBusyNamesTheTasksLeftInTheLeaf(t *testing.T) {
+	leaf := t.TempDir()
+	if err := os.WriteFile(filepath.Join(leaf, "cgroup.procs"), []byte("4242\n4243\n"), 0o600); err != nil {
+		t.Fatalf("write cgroup.procs: %v", err)
+	}
+	err := leafBusy(leaf, context.DeadlineExceeded)
+	var leafErr *cgroupLeafError
+	if !errors.As(err, &leafErr) {
+		t.Fatalf("err = %v, want *cgroupLeafError", err)
+	}
+	if leafErr.Leaf != leaf || leafErr.Procs != "4242 4243" {
+		t.Errorf("leaf %q procs %q, want %q and \"4242 4243\"", leafErr.Leaf, leafErr.Procs, leaf)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("err = %v, want it to wrap the wait's deadline", err)
+	}
+}
+
+func TestLeafBusySaysWhenCgroupProcsCannotBeRead(t *testing.T) {
+	leaf := filepath.Join(t.TempDir(), "gone")
+	var leafErr *cgroupLeafError
+	if !errors.As(leafBusy(leaf, context.DeadlineExceeded), &leafErr) {
+		t.Fatal("want *cgroupLeafError for a leaf with no cgroup.procs")
+	}
+	if !strings.HasPrefix(leafErr.Procs, "unreadable: ") {
+		t.Errorf("procs = %q, want it to say cgroup.procs was unreadable", leafErr.Procs)
+	}
+}
+
 // requireRunning fails the test at once if gatewayd itself has exited: the
 // supervisor must outlive every child it restarts.
 func (g *supervisedGatewayd) requireRunning(t *testing.T) {
@@ -850,13 +1004,32 @@ func (g *supervisedGatewayd) stop(t *testing.T) {
 		// measured basis for its MemoryMax (#955); gatewayd removes the
 		// leaves as it stops, so it is read first. A read failure is
 		// reported, not fatal: the stop below must still happen.
-		for name := range g.children(t) {
+		for name, pid := range g.children(t) {
 			usage, err := g.cgroups().Memory(name)
 			if err != nil {
 				t.Errorf("%s leaf memory: %v", name, err)
 				continue
 			}
-			logMemory(t, name, "at teardown", usage)
+			logMemory(t, name, pid, "at teardown", usage)
+			def, err := process.DefinitionByName(name)
+			if err != nil {
+				t.Errorf("definition %s: %v", name, err)
+				continue
+			}
+			// A leaf that charged nothing measured nothing. One the kernel
+			// OOM-killed in, beyond what the test did on purpose, means
+			// the class value is below what the child needs; the relaunch
+			// keeps the leaf, so a purposeful kill is still counted here.
+			switch {
+			case !usage.HasPeak:
+				t.Errorf(peakRequired, name)
+			case usage.Peak <= 0:
+				t.Errorf("%s memory.peak at teardown = %d, want the bytes the child charged", name, usage.Peak)
+			}
+			if want := g.oomKills[name]; usage.OOMKill != want {
+				t.Errorf("%s memory.events oom_kill at teardown = %d, want %d: the class MemoryMax %d killed it", name, usage.OOMKill, want, def.MemoryMax)
+			}
+			t.Logf("%s memory.peak %d is %.1f%% of the class MemoryMax %d", name, usage.Peak, 100*float64(usage.Peak)/float64(def.MemoryMax), def.MemoryMax)
 		}
 		if err := g.cmd.Process.Signal(syscall.SIGTERM); err != nil {
 			t.Errorf("signal gatewayd: %v", err)
@@ -866,12 +1039,11 @@ func (g *supervisedGatewayd) stop(t *testing.T) {
 		select {
 		case <-g.exited:
 			if g.exitErr != nil {
-				// "signal: terminated" means gatewayd had no SIGTERM handler
-				// yet and Go's default action killed it mid-start.
-				t.Errorf("gatewayd shutdown on SIGTERM: %v, want exit status 0 from its stop path", g.exitErr)
+				t.Errorf("teardown: gatewayd (pid %d) did not shut down cleanly on SIGTERM: %v%s",
+					g.cmd.Process.Pid, g.exitErr, killedBySignal(g.exitErr))
 			}
 		case <-deadline.C:
-			t.Errorf("gatewayd did not stop within 30s of SIGTERM")
+			t.Errorf("teardown: gatewayd (pid %d) did not stop within 30s of SIGTERM", g.cmd.Process.Pid)
 			if err := g.cmd.Process.Kill(); err != nil {
 				t.Errorf("kill gatewayd: %v", err)
 			}
@@ -884,10 +1056,27 @@ func (g *supervisedGatewayd) stop(t *testing.T) {
 	g.removeCgroups(t)
 }
 
+// killedBySignal explains an exit by a signal's default action: gatewayd
+// handles SIGTERM, so dying of it means the handler was not installed when
+// the signal arrived.
+func killedBySignal(err error) string {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return ""
+	}
+	status, ok := exitErr.Sys().(syscall.WaitStatus)
+	if !ok || !status.Signaled() {
+		return ""
+	}
+	return fmt.Sprintf(" (killed by the default action of %v: no handler for it was installed yet)", status.Signal())
+}
+
 // removeCgroups removes the test's cgroup parent. A reaped child leaves
 // its leaf only after its last context switch, so every leaf gatewayd did
 // not remove is first waited on until the kernel reports it empty
-// (cgroup.events "populated 0"); the parent cannot be removed before.
+// (cgroup.events "populated 0"); the parent cannot be removed before. A
+// leaf still populated at the deadline fails the test with a
+// cgroupLeafError naming the PIDs in its cgroup.procs.
 func (g *supervisedGatewayd) removeCgroups(t *testing.T) {
 	parent := filepath.Join(cgroupRoot, g.cgroupParent)
 	entries, err := os.ReadDir(parent)
@@ -905,12 +1094,39 @@ func (g *supervisedGatewayd) removeCgroups(t *testing.T) {
 			continue // an interface file, not a leaf
 		}
 		if err := g.cgroups().Remove(ctx, entry.Name()); err != nil {
-			t.Errorf("remove cgroup leaf %s: %v", entry.Name(), err)
+			t.Errorf("teardown: %v", leafBusy(filepath.Join(parent, entry.Name()), err))
 		}
 	}
 	if err := os.Remove(parent); err != nil && !os.IsNotExist(err) {
 		t.Errorf("remove cgroup parent: %v", err)
 	}
+}
+
+// cgroupLeafError is a leaf the teardown could not remove, with the tasks
+// still in it: after gatewayd has exited, any PID left there is a child
+// that outlived its supervisor.
+type cgroupLeafError struct {
+	Leaf  string
+	Procs string
+	Cause error
+}
+
+func (e *cgroupLeafError) Error() string {
+	return fmt.Sprintf("cgroup leaf %s not removed (cgroup.procs: %s): %v", e.Leaf, e.Procs, e.Cause)
+}
+
+func (e *cgroupLeafError) Unwrap() error { return e.Cause }
+
+// leafBusy names the leaf a removal failed on and the tasks it still holds.
+func leafBusy(leaf string, cause error) error {
+	procs, err := os.ReadFile(filepath.Join(leaf, "cgroup.procs")) // #nosec G304 -- a leaf of the suite's own cgroup parent
+	switch {
+	case err != nil:
+		return &cgroupLeafError{Leaf: leaf, Procs: "unreadable: " + err.Error(), Cause: cause}
+	case len(bytes.TrimSpace(procs)) == 0:
+		return &cgroupLeafError{Leaf: leaf, Procs: "empty", Cause: cause}
+	}
+	return &cgroupLeafError{Leaf: leaf, Procs: strings.Join(strings.Fields(string(procs)), " "), Cause: cause}
 }
 
 // cgroups is the view of the cgroup tree gatewayd places its children in.
@@ -1099,6 +1315,10 @@ func writeCgroupFile(t *testing.T, path, value string) {
 	}
 }
 
+// peakRequired fails a peak assertion on a kernel without memory.peak: the
+// test measures each class's MemoryMax from it, so it cannot pass without it.
+const peakRequired = "%s memory.peak is absent: this test needs cgroup v2 memory.peak, Linux 5.19 or later"
+
 // leafMemory reads a child's leaf accounting.
 func leafMemory(t *testing.T, cgroups *process.CgroupManager, name string) process.MemoryUsage {
 	t.Helper()
@@ -1111,8 +1331,12 @@ func leafMemory(t *testing.T, cgroups *process.CgroupManager, name string) proce
 
 // logMemory records a leaf's accounting in the job log: the measured
 // numbers behind every class's MemoryMax and behind an OOM kill.
-func logMemory(t *testing.T, name, when string, usage process.MemoryUsage) {
+func logMemory(t *testing.T, name string, pid int, when string, usage process.MemoryUsage) {
 	t.Helper()
-	t.Logf("%s memory %s: memory.current %d, memory.peak %d, memory.events max %d oom %d oom_kill %d",
-		name, when, usage.Current, usage.Peak, usage.Max, usage.OOM, usage.OOMKill)
+	peak := "absent (kernel before 5.19)"
+	if usage.HasPeak {
+		peak = strconv.FormatInt(usage.Peak, 10)
+	}
+	t.Logf("%s (pid %d) memory %s: memory.current %d, memory.peak %s, memory.events max %d oom %d oom_kill %d",
+		name, pid, when, usage.Current, peak, usage.Max, usage.OOM, usage.OOMKill)
 }

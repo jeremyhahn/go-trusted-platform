@@ -630,6 +630,11 @@ var categoryPermissions = map[byte]map[byte]OpcodePermission{
 
 	quicwire.OpIPAMCategory: ipamSubPermissions,
 
+	// DNS operations past the flat block (gRPC DNSService)
+	quicwire.OpDNSCategory: {
+		quicwire.OpDNSUpdateZone: dnsWrite,
+	},
+
 	// Time synchronization (gRPC NTPService)
 	quicwire.OpNTPCategory: {
 		quicwire.NTPSubGetStatus:   ntpRead,

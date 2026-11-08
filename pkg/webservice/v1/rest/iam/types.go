@@ -89,12 +89,6 @@ type UserResponse struct {
 	LastAuth    *time.Time        `json:"last_auth,omitempty"`
 }
 
-// ListUsersResponse is the response for listing users
-type ListUsersResponse struct {
-	PaginatedResponse
-	Users []UserResponse `json:"users"`
-}
-
 // CreateGroupRequest is the request body for creating a group
 type CreateGroupRequest struct {
 	BodyTenant
@@ -121,12 +115,6 @@ type GroupResponse struct {
 	Members     []string   `json:"members,omitempty"`
 	CreatedAt   *time.Time `json:"created_at,omitempty"`
 	UpdatedAt   *time.Time `json:"updated_at,omitempty"`
-}
-
-// ListGroupsResponse is the response for listing groups
-type ListGroupsResponse struct {
-	PaginatedResponse
-	Groups []GroupResponse `json:"groups"`
 }
 
 // CreateRoleRequest is the request body for creating a role
@@ -157,12 +145,6 @@ type RoleResponse struct {
 	Permissions []string   `json:"permissions,omitempty"`
 	CreatedAt   *time.Time `json:"created_at,omitempty"`
 	UpdatedAt   *time.Time `json:"updated_at,omitempty"`
-}
-
-// ListRolesResponse is the response for listing roles
-type ListRolesResponse struct {
-	PaginatedResponse
-	Roles []RoleResponse `json:"roles"`
 }
 
 // TenantSettings contains tenant configuration settings
@@ -369,12 +351,6 @@ type RotateSecretResponse struct {
 	ClientID     string `json:"client_id"`
 	Name         string `json:"name"`
 	ClientSecret string `json:"client_secret" secret:"true"`
-}
-
-// SuccessResponse is a generic success response
-type SuccessResponse struct {
-	Success bool   `json:"success"`
-	Message string `json:"message,omitempty"`
 }
 
 // AssignRoleRequest is the request body for assigning a role

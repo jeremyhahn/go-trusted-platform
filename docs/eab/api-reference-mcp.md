@@ -38,7 +38,9 @@ serves the `tenant_id` it is given.
 - uint64 arguments (`credential_id`, `profile_id`, `revoker_id`) may be
   sent as JSON numbers **or decimal strings**; strings are the canonical
   form (JSON numbers lose precision past 2^53) and are what the SDK MCP
-  adapter emits.
+  adapter emits. A value that does not parse becomes `0`, so a malformed
+  `credential_id` is refused as missing (`eab: credential_id is required and
+  must be non-zero`), not as malformed.
 - Credential results render `id` / `profile_id` as decimal strings,
   `status` as `active | revoked | expired | used`, and timestamps as
   RFC3339. The HMAC key appears in the create result only — but the QR
@@ -50,9 +52,12 @@ serves the `tenant_id` it is given.
   `InvalidArgument`.
 - The QR result base64-encodes the PNG under `qr_code`.
 - Errors carry the gRPC class (`ErrEABToolFailure`): `NotFound`,
-  `InvalidArgument`, `FailedPrecondition`, `Internal`. Without an EAB
-  backend every tool returns `Unavailable`
-  (`eab: service provider not configured`).
+  `InvalidArgument`, `FailedPrecondition`, `Unavailable`, `Internal`. With no
+  EAB backend behind the daemon's provider every tool returns `Unavailable`
+  (`eab service not configured`, `pkg/api/daemon/mcp_eab.go:47`). The other
+  string, `eab: service provider not configured` (`pkg/api/mcp/eab_tools.go:42`),
+  appears only when the MCP service provider does not implement `EABProvider`
+  at all.
 
 The SDK MCP adapter (`sdk/go/transport/mcp/eab.go`) maps
 `platform.v1.EABService` methods onto these tools and rebuilds the pb

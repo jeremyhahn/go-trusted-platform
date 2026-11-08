@@ -33,7 +33,7 @@ const policy = {
 };
 
 const gateway = {
-  gatewayId: "gw-01",
+  gatewayId: "gateway-a",
   reportedAtUnix: "1760300000",
   reporting: true,
   running: true,
@@ -124,7 +124,7 @@ describe("VPNPage", () => {
     renderPage();
 
     expect(await screen.findByText("10.8.0.2")).toBeTruthy();
-    expect(screen.getByText("gw-01 refused acme/laptop-9")).toBeTruthy();
+    expect(screen.getByText("gateway-a refused acme/laptop-9")).toBeTruthy();
     expect(screen.getByText("posture violation")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Revoke laptop-1" })).toBeTruthy();
     expect(screen.getByText("corp")).toBeTruthy();
@@ -216,9 +216,9 @@ describe("VPNPage", () => {
 
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "Edit corp" }));
-    const module = (await screen.findByLabelText("Module *")) as HTMLTextAreaElement;
-    expect(module.value).toBe(policy.module);
-    fireEvent.change(module, { target: { value: edited } });
+    const moduleField = (await screen.findByLabelText("Module *")) as HTMLTextAreaElement;
+    expect(moduleField.value).toBe(policy.module);
+    fireEvent.change(moduleField, { target: { value: edited } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(screen.queryByLabelText("Module *")).toBeNull());
@@ -244,8 +244,8 @@ describe("VPNPage", () => {
 
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "Edit corp" }));
-    const module = await screen.findByLabelText("Module *");
-    fireEvent.change(module, { target: { value: "package wrong" } });
+    const moduleField = await screen.findByLabelText("Module *");
+    fireEvent.change(moduleField, { target: { value: "package wrong" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(callsTo("PUT", "/api/v1/vpn/posture-policies/corp")).toHaveLength(1));
@@ -277,5 +277,97 @@ describe("VPNPage", () => {
       name: "strict",
       module: "package vpn.posture\n",
     });
+  });
+
+  it("enrols a peer under the tenant with the zones the operator lists", async () => {
+    fetchMock.mockImplementation(
+      routes((method, url, body) =>
+        method === "POST" && url.pathname === "/api/v1/vpn/peers"
+          ? ok({ peer: { ...(body as object), enrolledAtUnix: "1760300100" } })
+          : undefined
+      )
+    );
+
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Enrol Peer" }));
+    fireEvent.change(await screen.findByLabelText("Tenant *"), { target: { value: " acme " } });
+    fireEvent.change(screen.getByLabelText("Device ID *"), { target: { value: "laptop-2" } });
+    fireEvent.change(screen.getByLabelText("Zones"), { target: { value: "management, , storage " } });
+    fireEvent.click(screen.getByRole("button", { name: "Enrol" }));
+
+    await waitFor(() => expect(screen.queryByLabelText("Device ID *")).toBeNull());
+    const [call] = callsTo("POST", "/api/v1/vpn/peers");
+    expect(JSON.parse(String(call?.[1]?.body))).toEqual({
+      tenantId: "acme",
+      deviceId: "laptop-2",
+      zones: ["management", "storage"],
+    });
+  });
+
+  it("does not enrol a peer without a tenant and a device", async () => {
+    fetchMock.mockImplementation(routes());
+
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Enrol Peer" }));
+    fireEvent.change(await screen.findByLabelText("Tenant *"), { target: { value: "acme" } });
+    fireEvent.change(screen.getByLabelText("Device ID *"), { target: { value: "   " } });
+
+    expect((screen.getByRole("button", { name: "Enrol" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(callsTo("POST", "/api/v1/vpn/peers")).toHaveLength(0);
+  });
+
+  it("keeps the enrol dialog open when the enrolment is refused", async () => {
+    fetchMock.mockImplementation(
+      routes((method) => (method === "POST" ? failure(400, "vpn: invalid peer: zone is not allowed") : undefined))
+    );
+
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Enrol Peer" }));
+    fireEvent.change(await screen.findByLabelText("Tenant *"), { target: { value: "acme" } });
+    fireEvent.change(screen.getByLabelText("Device ID *"), { target: { value: "laptop-2" } });
+    fireEvent.click(screen.getByRole("button", { name: "Enrol" }));
+
+    await waitFor(() => expect(callsTo("POST", "/api/v1/vpn/peers")).toHaveLength(1));
+    await waitFor(() =>
+      expect((screen.getByRole("button", { name: "Enrol" }) as HTMLButtonElement).disabled).toBe(false)
+    );
+    expect((screen.getByLabelText("Device ID *") as HTMLInputElement).value).toBe("laptop-2");
+  });
+
+  it("deletes a posture policy under its tenant after confirmation", async () => {
+    fetchMock.mockImplementation(
+      routes((method, url) =>
+        method === "DELETE" && url.pathname === "/api/v1/vpn/posture-policies/corp" ? ok({}) : undefined
+      )
+    );
+
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Delete corp" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm Delete" }));
+
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Confirm Delete" })).toBeNull());
+    const [call] = callsTo("DELETE", "/api/v1/vpn/posture-policies/corp");
+    expect(new URL(String(call?.[0])).searchParams.get("tenant_id")).toBe("acme");
+  });
+
+  it("keeps the delete dialog open when the delete is refused", async () => {
+    fetchMock.mockImplementation(
+      routes((method) =>
+        method === "DELETE" ? failure(404, "vpn: posture policy not found") : undefined
+      )
+    );
+
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Delete corp" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm Delete" }));
+
+    await waitFor(() =>
+      expect(callsTo("DELETE", "/api/v1/vpn/posture-policies/corp")).toHaveLength(1)
+    );
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("button", { name: "Confirm Delete" }) as HTMLButtonElement).disabled
+      ).toBe(false)
+    );
   });
 });

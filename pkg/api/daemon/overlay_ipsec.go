@@ -43,7 +43,14 @@ type overlayStarters struct {
 func newOverlayStarters(config *Config, logger *logging.Logger) overlayStarters {
 	return overlayStarters{
 		ipsec: func(cfg *ipsecconfig.Config) (overlayIPsec, error) {
-			return ipsec.NewService(cfg, logger.Slog())
+			if config.App == nil {
+				return nil, ipsec.ErrMissingDependency
+			}
+			anchor, err := config.App.PlatformAnchor()
+			if err != nil {
+				return nil, err
+			}
+			return ipsec.NewService(cfg, anchor, logger.Slog())
 		},
 		vtep: func(cfg *sdn.OverlayConfig) (overlayVTEP, error) {
 			return resolveOverlayVTEP(config.App.PublicIPv4, cfg, interfaceAddrs)

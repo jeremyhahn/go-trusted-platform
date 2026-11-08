@@ -36,9 +36,11 @@ import (
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restgateway "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/gateway"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -63,9 +65,9 @@ var serviceStatusStringMap = map[platformv1.ServiceStatus]string{
 // a human-readable string using the protobuf ServiceStatus enum.
 // restServiceRefusalStatus answers ErrServiceNotControllable. The refusal is
 // FailedPrecondition, which the platform webservice REST mapper
-// (protorest.WriteError) sends as 400; this server matches it so both REST
-// surfaces answer the same refusal the same way.
-const restServiceRefusalStatus = http.StatusBadRequest
+// (protorest.WriteError) sends as 409 Conflict (#665); this server matches it
+// so both REST surfaces answer the same refusal the same way.
+const restServiceRefusalStatus = http.StatusConflict
 
 func serviceStatusToString(rawStatus int32) string {
 	s, ok := serviceStatusStringMap[platformv1.ServiceStatus(rawStatus)]
@@ -299,9 +301,16 @@ func (s *RESTServer) registerCoreRoutes(api *mux.Router) {
 // records it so MountOwnedRoutes can register the same handlers on the
 // webservice listener.
 func (s *RESTServer) mountOwned(register func(api *mux.Router)) {
-	register(s.router.PathPrefix(restBasePath).Subrouter())
+	s.mountOwnedBehind(nil, register)
+}
+
+// mountOwnedBehind is mountOwned for a group whose routes run behind the
+// middleware mw, on this server's router and on the webservice's alike. A nil
+// mw mounts the group unguarded.
+func (s *RESTServer) mountOwnedBehind(mw mux.MiddlewareFunc, register func(api *mux.Router)) {
+	register(behind(s.router.PathPrefix(restBasePath).Subrouter(), mw))
 	s.ownedRoutes = append(s.ownedRoutes, func(api *mux.Router) error {
-		register(api)
+		register(behind(api, mw))
 		return nil
 	})
 }
@@ -311,14 +320,34 @@ func (s *RESTServer) mountOwned(register func(api *mux.Router)) {
 // group on a scratch router and registers each route on api at its path
 // below /api/v1.
 func (s *RESTServer) mountOwnedAbsolute(register func(root *mux.Router)) {
-	register(s.router)
+	s.mountOwnedAbsoluteBehind(nil, register)
+}
+
+// mountOwnedAbsoluteBehind is mountOwnedAbsolute for a group whose routes run
+// behind the middleware mw, on this server's router and on the webservice's
+// alike. A nil mw mounts the group unguarded.
+func (s *RESTServer) mountOwnedAbsoluteBehind(mw mux.MiddlewareFunc, register func(root *mux.Router)) {
+	register(behind(s.router, mw))
 	s.ownedRoutes = append(s.ownedRoutes, func(api *mux.Router) error {
+		guarded := behind(api, mw)
 		group := mux.NewRouter()
 		register(group)
 		return group.Walk(func(route *mux.Route, _ *mux.Router, _ []*mux.Route) error {
-			return replayRoute(api, route)
+			return replayRoute(guarded, route)
 		})
 	})
+}
+
+// behind returns r itself for a nil mw, else a matcher-less subrouter of r
+// whose routes run behind mw. gorilla/mux runs a subrouter's middleware only
+// when one of its own routes matched, so mw guards no other path.
+func behind(r *mux.Router, mw mux.MiddlewareFunc) *mux.Router {
+	if mw == nil {
+		return r
+	}
+	sub := r.NewRoute().Subrouter()
+	sub.Use(mw)
+	return sub
 }
 
 // replayRoute registers route's handler on api, a router rooted at /api/v1,
@@ -492,21 +521,27 @@ func (s *RESTServer) SetAppServiceHandlers(servers restapi.AppServiceServers, gu
 // not registered at all. Before #403 the REST package carried its own
 // "verifier" that returned true for any input, so this route reported every
 // device attested.
-func (s *RESTServer) SetDeviceHandlers(
-	deviceSvc restapi.DeviceServiceInterface,
-	profileSvc restapi.ProfileServiceInterface,
-	attestSvc platformv1.DeviceServiceServer,
-) {
+//
+// Every route authenticates through guard and needs the device:* scope the
+// gRPC catalog gives its rpc; a nil guard is an ErrDeviceRESTUnavailable.
+// Without a device or profile service nothing is mounted.
+func (s *RESTServer) SetDeviceHandlers(deviceSvc restapi.DeviceServiceInterface, profileSvc restapi.ProfileServiceInterface, attestSvc platformv1.DeviceServiceServer, guard *restapi.ScopeGuard) error {
+	if guard == nil {
+		return ErrDeviceRESTUnavailable{Reason: "no REST scope guard"}
+	}
 	if deviceSvc == nil && profileSvc == nil {
-		return
+		return nil
 	}
 	opts := []restapi.DeviceHandlerOption{}
 	if attestSvc != nil {
 		opts = append(opts, restapi.WithDeviceAttestService(attestSvc))
 	}
 	handlers := restapi.NewDeviceHandlers(deviceSvc, profileSvc, s.logger, opts...)
-	s.mountOwnedAbsolute(handlers.RegisterRoutes)
+	respWriter := response.NewResponseWriter(logging.NewFromSlog(s.logger), nil)
+	authz := restScopeAuthorization{guard: guard, respWriter: respWriter, routeScope: deviceRouteScope}
+	s.mountOwnedAbsoluteBehind(authz.authorize, handlers.RegisterRoutes)
 	s.logger.Info("Device REST routes registered", "attestation", attestSvc != nil)
+	return nil
 }
 
 // SetTenantHandlers wires the tenant REST handlers onto the daemon's REST
@@ -565,13 +600,17 @@ func (s *RESTServer) SetComputeHandlers(compute platformv1.ComputeServiceServer,
 // method is a no-op — routes are not mounted, so callers that 404 get a clear
 // signal that the overlay feature is disabled rather than an internal error.
 // Mirrors SetDeviceHandlers / SetTenantHandlers.
-func (s *RESTServer) SetOverlayHandlers(svc restapi.OverlayServiceInterface) {
+func (s *RESTServer) SetOverlayHandlers(svc restapi.OverlayServiceInterface, guard *restapi.ScopeGuard) error {
+	if guard == nil {
+		return ErrOverlayRESTUnavailable{Reason: "no REST scope guard"}
+	}
 	if svc == nil {
-		return
+		return nil
 	}
 	handlers := restapi.NewOverlayHandlers(svc, s.logger)
-	s.mountOwnedAbsolute(handlers.RegisterRoutes)
+	s.mountOwnedAbsoluteBehind(s.catalogAuthorization(guard).authorize, handlers.RegisterRoutes)
 	s.logger.Info("Overlay REST routes registered")
+	return nil
 }
 
 // SetCAHandlers wires the CA REST handlers onto the daemon's REST router so
@@ -1253,55 +1292,76 @@ func getMCPAddress(config *Config) string {
 
 // SetCeremonyService wires the ceremony service into the REST server and
 // registers its routes.
-func (s *RESTServer) SetCeremonyService(svc *CeremonyService) {
-	if svc == nil {
-		return
+func (s *RESTServer) SetCeremonyService(svc *CeremonyService, guard *restapi.ScopeGuard) error {
+	if guard == nil {
+		return ErrCeremonyRESTUnavailable{Reason: "no REST scope guard"}
 	}
-	h := newCeremonyRESTHandlers(svc)
-	s.mountOwned(h.registerCeremonyRoutes)
+	if svc == nil {
+		return nil
+	}
+	s.mountOwnedBehind(s.catalogAuthorization(guard).authorize, newCeremonyRESTHandlers(svc).registerCeremonyRoutes)
 	s.logger.Info("Ceremony REST routes registered")
+	return nil
 }
 
-// SetPIVService wires the PIV service into the REST server and registers its routes.
-func (s *RESTServer) SetPIVService(svc *PIVService) {
-	if svc == nil {
-		return
+// SetPIVService mounts the PIV routes behind guard; each needs the scope the
+// gRPC catalog gives the PIVService method it serves.
+func (s *RESTServer) SetPIVService(svc *PIVService, guard *restapi.ScopeGuard) error {
+	if guard == nil {
+		return ErrPIVRESTUnavailable{Reason: "no REST scope guard"}
 	}
-	h := newPIVRESTHandlers(svc)
-	s.mountOwned(h.registerPIVRoutes)
+	if svc == nil {
+		return nil
+	}
+	s.mountOwnedBehind(s.catalogAuthorization(guard).authorize, newPIVRESTHandlers(svc).registerPIVRoutes)
 	s.logger.Info("PIV REST routes registered")
+	return nil
 }
 
-// SetLUKSService wires the LUKS service into the REST server and registers its routes.
-func (s *RESTServer) SetLUKSService(svc *LUKSService) {
-	if svc == nil {
-		return
+// SetLUKSService mounts the LUKS routes behind guard; each needs the scope
+// the gRPC catalog gives the LUKSService method it serves.
+func (s *RESTServer) SetLUKSService(svc *LUKSService, guard *restapi.ScopeGuard) error {
+	if guard == nil {
+		return ErrLUKSRESTUnavailable{Reason: "no REST scope guard"}
 	}
-	h := newLUKSRESTHandlers(svc)
-	s.mountOwned(h.registerLUKSRoutes)
+	if svc == nil {
+		return nil
+	}
+	s.mountOwnedBehind(s.catalogAuthorization(guard).authorize, newLUKSRESTHandlers(svc).registerLUKSRoutes)
 	s.logger.Info("LUKS REST routes registered")
+	return nil
 }
 
-// SetFIDO2Service wires the FIDO2 service into the REST server and registers its routes.
-func (s *RESTServer) SetFIDO2Service(svc *FIDO2Service) {
-	if svc == nil {
-		return
+// SetFIDO2Service mounts the FIDO2 routes behind guard; each needs the scope
+// the gRPC catalog gives the FIDO2Service method it serves.
+func (s *RESTServer) SetFIDO2Service(svc *FIDO2Service, guard *restapi.ScopeGuard) error {
+	if guard == nil {
+		return ErrFIDO2RESTUnavailable{Reason: "no REST scope guard"}
 	}
-	h := newFIDO2RESTHandlers(svc)
-	s.mountOwned(h.registerFIDO2Routes)
+	if svc == nil {
+		return nil
+	}
+	s.mountOwnedBehind(s.catalogAuthorization(guard).authorize, newFIDO2RESTHandlers(svc).registerFIDO2Routes)
 	s.logger.Info("FIDO2 REST routes registered")
+	return nil
 }
 
 // SetClusterService wires the Cluster gRPC service into the REST server
 // and mounts /api/v1/cluster routes. The handlers fall through to the
 // gRPC implementation, so REST and gRPC report identical state when the
-// underlying coordinator is missing (HTTP 503 + Unavailable code).
-func (s *RESTServer) SetClusterService(svc platformv1.ClusterServiceServer) {
+// underlying coordinator is missing (HTTP 503 + Unavailable code). Each
+// route runs behind guard and needs the scope the gRPC catalog gives its
+// rpc; a nil guard is refused with ErrClusterRESTUnavailable.
+func (s *RESTServer) SetClusterService(svc platformv1.ClusterServiceServer, guard *restapi.ScopeGuard) error {
+	if guard == nil {
+		return ErrClusterRESTUnavailable{Reason: "no REST scope guard"}
+	}
 	h := newClusterRESTHandlers(svc)
-	s.mountOwned(h.registerClusterRoutes)
+	s.mountOwnedBehind(s.catalogAuthorization(guard).authorize, h.registerClusterRoutes)
 	if svc == nil {
 		s.logger.Info("Cluster REST routes registered (no backend; will return 503)")
-		return
+		return nil
 	}
 	s.logger.Info("Cluster REST routes registered")
+	return nil
 }

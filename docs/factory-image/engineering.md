@@ -28,7 +28,8 @@
 | `pkg/diskimage/diskimagetest/` | `WriteELF`, `Binaries`, `UBootOutput`, `VirtKernelOutput`, `PlatformConfig` — the build inputs every image-building package's tests lay out |
 | `build/docker/virt-kernel-builder/` | `Dockerfile`, `Makefile`, `build-virt-kernel.sh`, `configs/virt.config`, `README.md` |
 | `pkg/diskimage/runner/` | `Runner`, `Exec`, `CommandError` |
-| `pkg/cli/commands/diskimage/` | `NewCommand`; `create.go`, `inspect.go`, `test.go` (`test boot`, `ErrInvalidPortForward`), `assemble.go`, `merge.go`, `errors.go` |
+| `pkg/diskimage/fatimage/` | `Build`, `Options` (the FAT16 `boot.img` writer), `Open`, `Image` (its reader); `NameError`, `ReadError`, `NotRegularError`, `TooLargeError`, `FormatError`, `GeometryError`, `NotFoundError` — see §6 signed HTTP boot |
+| `pkg/cli/commands/diskimage/` | `NewCommand` (`diskimage.go`); `create.go`, `inspect.go`, `test.go` (`test boot`, `ErrInvalidPortForward`), `assemble.go`, `netboot.go`, `netboot_initfs.go`, `diskless_root.go`, `eeprom_hsm.go` (`rpi-eeprom-hsm`), `merge.go`, `errors.go` |
 | `pkg/qemu/arch.go` | `Arch` (`ArchX86_64`, `ArchAArch64`), `DiskFormatQCOW2`/`DiskFormatRaw`, the `archProfiles` map; `Config.Arch`, `Firmware`, `DiskFormat`, `TPMDevice`; `ErrUnsupportedArch`, `ErrFirmwareMissing`, `ErrUnsupportedBootMode`. The x86_64 command line is pinned by `TestBuildQEMUCommand_X86Golden` |
 | `pkg/qemu/harness/` | `TPM` (interface over `*swtpm.SWTPM`), `StartTPM`, `StopTPM`, `TPMState`; `WaitForSerial`, `WaitForSerialAfter`, `SerialSize`, `SerialContains`; `Console` (`DialConsole`, `Expect`, `Send`, `SendLine`, `Discard`, `Transcript`, `Close`); `TPMError`, `SerialError`, `SerialTimeoutError`, `ConsoleError`, `ConsoleTimeoutError`. Shared by `iso test`, `diskimage test boot` and the integration suites |
 | `pkg/installer/release.go` | `releaseOnFailure`, `afterFailedInstall`, `releaseDisk`, `diskRelease`, `luksMappedName`; `ErrDiskRelease` (installer engineering.md invariant 16) |
@@ -41,7 +42,7 @@
 | `pkg/iso/types.go` | `InstallerOverrides` |
 | `build/docker/uboot-builder/` | `Dockerfile`, `Makefile`, `build-uboot.sh`, `mkesl.py`, `configs/{common-efi.config,rpi_arm64-tpm.config,qemu_arm64-tpm.config,tpm-soft-spi.dts}`, `patches/0001-mbedtls-glue-return-errno-for-parse-failures.patch`, `README.md` — every file but the README is a cache-key input |
 | `build/docker/trusted-platform/Dockerfile-alpine-swtpm-arm64` | arm64 Alpine + swtpm for the userspace suite; the platform binaries are bind-mounted from `bin/aarch64` |
-| `build/docker/diskimage-builder/Dockerfile` | the arm64 Alpine assemble container (apk-tools, parted, dosfstools, e2fsprogs, lvm2, util-linux, kmod, cpio, xz, mkinitfs, squashfs-tools, cryptsetup — no platform binaries, no keys); it also runs `diskimage netboot-initfs` and `diskimage diskless-root`. One image per platform: `BuildConfig.builderImageFor(arch)` tags `<BuilderImage>:<arch>` — host arch for assemble, target arch for netboot-initfs and diskless-root — so no step can run another platform's image |
+| `build/docker/diskimage-builder/Dockerfile` | the Alpine assemble container (apk-tools, parted, dosfstools, e2fsprogs, lvm2, util-linux, kmod, cpio, xz, mkinitfs, squashfs-tools, cryptsetup — no platform binaries, no keys); it also runs `diskimage netboot-initfs` and `diskimage diskless-root`. One image per platform: `BuildConfig.builderImageFor(arch)` tags `<BuilderImage>:<arch>` — host arch for assemble, target arch for netboot-initfs and diskless-root — so no step can run another platform's image |
 | `pkg/diskimage/netboot_initfs.go` | `GenerateNetbootInitfs` (in-container), `StagedMedia.BuildNetbootInitfs` (host side), `NetbootInitfsOptions`, `NetbootInitfs`, `NetbootInitfsFeatures` |
 | `pkg/diskimage/diskless_root.go` | `GenerateDisklessRoot` (in-container), `StagedMedia.BuildDisklessRoot` (host side through `runner.Container`), `DisklessRootOptions`, `DisklessRoot`, `DisklessRootFSFile`, `DisklessVerityFile`, `DisklessRootHashFile` |
 | `pkg/diskimage/diskless_secrets.go` | `refuseRootPrivateKeys`, the pre-`mksquashfs` walk that refuses a root carrying private key material, and its `DisklessRootPrivateKeyError` |
@@ -100,7 +101,7 @@ stops it; the swtpm is stopped on every return.
 `ConfigTxt`; `String()` is what `inspect` prints.
 
 `rpi`: `Name = "rpi"`, `KernelPackage = "linux-rpi"`, `DefaultModel =
-"rpi4"`; models `rpi4` (`bcm2711-rpi-4-b.dtb`), `rpi400`
+"rpi4"`; models `rpi4` (`bcm2711-rpi-4-b.dtb`), `rpi400` <!-- lab-string-ok: Raspberry Pi model name, not a lab host -->
 (`bcm2711-rpi-400.dtb`), `cm4` (`bcm2711-rpi-cm4.dtb`), `rpi3b+`
 (`bcm2710-rpi-3-b-plus.dtb`), `rpi5` (`bcm2712-rpi-5-b.dtb`,
 `Experimental: true`). `Model.Description` is the board name and becomes the
@@ -111,7 +112,7 @@ bootloader EEPROM reads `config.txt` and loads `kernel8.img` itself. `ConfigTxt(
 `uart_2ndstage=1`, `dtoverlay=disable-bt`, `dtoverlay=tpm-soft-spi`,
 `kernel=kernel8.img`.
 
-`qemuvirt`: `Name = "qemu-virt"`, `KernelPackage = "linux-lts"`, board
+`qemuvirt`: `Name = "qemu-virt"`, `KernelPackage = "linux-virt"`, board
 `uboot.BoardQEMUArm64`; `StageBootFirmware` leaves the directory empty.
 
 `uboot`: `BoardRPiArm64 = "rpi_arm64"`, `BoardQEMUArm64 = "qemu_arm64"`;
@@ -230,15 +231,22 @@ All errors are typed; none is `fmt.Errorf`. Every wrapping type implements
 | Error | Package | Returned when |
 |---|---|---|
 | `UnknownTargetError{Target, Targets}` | `diskimage` | `--target` is not `rpi` or `qemu-virt` |
-| `PreflightError{Check, Remedy}` | `diskimage` | a build-host requirement is unmet; `Remedy` names the fix (`make init`, `modprobe ...`) |
+| `PreflightError{Check, Remedy}` | `diskimage` | a build-host requirement is unmet; `Remedy` names the fix (`make binfmt`, `modprobe ...`, or installing and starting the container runtime) |
 | `StageError{Step, Err}` | `diskimage` | configuration, Secure Boot keys, U-Boot, media staging or boot-firmware staging failed |
 | `AssembleError{Step, Err}` | `diskimage` | the container step, the loop device or the install failed |
+| `HostInstallerMissingError{HostArch, TargetArch}` | `diskimage` | a foreign-architecture build has no host-architecture installer binary (invariant 14) |
+| `LoopDeviceError{Op, Err}` | `diskimage` | the loop device could not be obtained or named (invariant 10) |
 | `InspectError{Path, Reason, Err}` | `diskimage` | the image cannot be read, has no MBR, or its ESP cannot be listed |
+| `BootError{Step, Err}` | `diskimage` | a step of `Boot`, the emulated boot, failed |
+| `DisklessRootInputError{Field, Reason}`; `DisklessRootHashError{Output, Err}`; `DisklessRootContentError{Where, Path}`; `DisklessRootPrivateKeyError`; `DisklessRootCredentialError`; `DisklessRootConfigSecretError` | `diskimage` | a missing or invalid diskless-root input; `veritysetup` output without a valid root hash; a root missing `/sbin/init` or `/usr/bin/platformd` (invariant 7); private key material, a usable password hash, or a plaintext `secret:"true"` config field in the public root |
+| `ManifestError`; `InputError`; `BuildError` | `virtkernel` | the kernel builder's manifest, inputs or build, as for `uboot` |
+| `BuildError`, `PrivateKeyMaterialError`, `UnpinnedReleaseError`, `MissingFileError`, `UnsupportedDisklessSetError`; `HTTPBootError`, `NoPiSetError`, `NoEEPROMError`, `FleetKeyRefError` | `netboot` | the netboot media build and its signed HTTP boot (§6) |
 | `UnknownModelError{Model, Models}`; `PackageMissingError{Package, Dir}`; `PackageError{Package, Err}`; `FirmwareMissingError{File}`; `StageError{Step, Err}` | `rpi` | unknown `--model`; a required apk not prefetched; a malformed apk; a required boot file not produced; the staging directory could not be laid out |
 | `ArtifactMissingError{Path, Hint}`; `ChecksumMismatchError{Path, Reason}`; `ManifestError{Path, Err}` | `uboot` | `u-boot.bin`, `SHA256SUMS` or the overlay absent; a digest mismatch, a file with no entry or a malformed sums line; `manifest.json` unreadable, incomplete or carrying the wrong cache key |
 | `InputError{Path, Err}`; `BuildError{Step, Err}` | `uboot` | a fragment, overlay source or certificate unreadable; the builder image build or run failed |
 | `CommandError{Name, Args, Output, Err}` | `runner` | any external command exited non-zero; carries the combined output |
 | `ErrBuildFailed{Reason}`, `ErrConfigRequired{}`, `ErrConfigLoadFailed{Path, Err}`, `ErrBinariesNotFound{Dir}`, `ErrRoleTemplate{Target, Model, Role, Reason}` | `cli/commands/diskimage` | the CLI wrappers; `ErrBinariesNotFound` names `make rpi-binaries`; `ErrRoleTemplate` is a `--role` with no dedicated template to build |
+| `ErrInvalidPortForward{Spec}`, `ErrSourceDateEpoch{Value}`, `ErrUnknownMediaSet{Name, Known}`, `ErrHTTPBootFlags{Flag}`, `ErrEEPROMHSMAlgorithm{Algorithm}`, `ErrEEPROMHSMFlag{Flag}`, `ErrEEPROMHSMSign{Step, Err}` | `cli/commands/diskimage` | a `--forward` that is not `host:guest[/tcp\|udp]`; a diskless build without a valid `SOURCE_DATE_EPOCH`; a `--sets` name the netboot build does not produce; an HTTP boot flag without `--fleet-key`; the `rpi-eeprom-hsm` wrapper asked for another algorithm, missing a flag, or failing to sign |
 | `ErrUnknownInstallTarget`, `ErrUnknownBootFirmware`, `ErrBootFirmwareStage` | `installer` | an unknown `install-target` / `boot.firmware` spelling; a failed firmware copy |
 
 **Fail-closed paths**: preflight; the size floor; U-Boot checksum
@@ -259,7 +267,8 @@ The platform config baked into the image is `--platform-config`
 when it exists — `rpi4` ships one — else
 `configs/platform/templates/single-node/default.yaml`), or, with `--role
 <role>`, `configs/platform/templates/dedicated/raspberrypi/<model>/<role>.yaml`
-(`rpi4/compute.yaml` and the experimental `rpi5/compute.yaml` ship; a model
+(`rpi4/compute.yaml`, the experimental `rpi5/compute.yaml`, and
+`cm4/control-plane.yaml` and `rpi4/control-plane.yaml` ship; a model
 the builder does not know or a missing file is `ErrRoleTemplate`, never a
 fallback to single-node). It is deep-merged with `--overrides`. The target's `InstallerOverrides` are then applied on top:
 
@@ -522,8 +531,8 @@ dispatch also runs the emulated first boot.
 
 ## 8. Observability
 
-Log events (structured, through `logging.Logger`): `[DISKIMAGE] Secure Boot
-keys` (`decision`, `dir`), `[DISKIMAGE] Image attached` (`image`, `loop`,
+Log events (structured, through `logging.Logger`): `[MEDIA] Secure Boot
+keys` (`decision`, `dir`; logged by `iso.StageInstallMedia`), `[DISKIMAGE] Image attached` (`image`, `loop`,
 `size_mb`), `[DISKIMAGE] failed to detach the loop device after a failed
 install`, `[UBOOT] Copied boot firmware onto the EFI partition` (`from`,
 `to`), `[UBOOT] Secure Boot enforcement requested: the PK/KEK/db are

@@ -17,7 +17,6 @@ package kms
 
 import (
 	"context"
-	"os"
 	"time"
 
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
@@ -52,9 +51,9 @@ func (g *GRPCAdapter) Name() string {
 
 // Setup initializes the gRPC connection to platformd.
 func (g *GRPCAdapter) Setup(ctx context.Context) error {
-	endpoint := os.Getenv("PLATFORM_GRPC_ENDPOINT")
-	if endpoint == "" {
-		endpoint = GetServiceEndpoints().PlatformdGRPC
+	endpoint, err := helpers.RequireEndpoint("PLATFORM_GRPC_ENDPOINT")
+	if err != nil {
+		return err
 	}
 
 	conn, err := grpc.NewClient(endpoint,

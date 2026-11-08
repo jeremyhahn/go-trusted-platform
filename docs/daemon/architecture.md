@@ -704,7 +704,9 @@ daemon does not run a sweep of its own.
 **When it renews.** `applyDaemonTLSIdentity` registers a cert target named
 `daemon.platformd`, of kind `daemon` (`daemonIdentityCertTarget`,
 `pkg/daemon/commands/daemon_identity_renewal.go`). The node's
-`platform.cert-renewal.<nodeID>` job runs daily at 02:00. It reissues the
+`platform.cert-renewal.<nodeID>` job runs daily at 02:00 on the embedded
+deployment; a node backed by a remote go-quicbaas registers no renewal job, so
+its identity runs to expiry (#1173). The sweep reissues the
 target once the served certificate is within 30 days of `NotAfter`.
 Reissue takes the same keystore path as boot (`issueDaemonServerIdentity`):
 

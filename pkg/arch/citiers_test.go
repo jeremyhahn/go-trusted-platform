@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -27,32 +28,88 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ci.yml runs in two tiers (#852). The PR tier runs on every pull_request; the
-// full tier runs on push to main, on workflow_dispatch, and on a PR labelled
-// `ci:full`. CI Gate is the one required check, so it alone decides whether a
-// skipped job is the tier working or a job that silently never ran. These
-// tests hold the three places a tier is written down — the job's `if:`, the
-// gate's `needs`, and the gate's tagged `check` line — to one another.
-// FIPS is the one main-only job (#853): it never runs on a pull_request and
-// must appear in neither the gate's `needs` nor its `check` lines. The docs
-// tier (ci-template v1.24) is the PR-tier work a docs-only PR skips: those
-// jobs need the `changes` job and skip when its docs_only output is `true`.
+// ci.yml runs in two tiers (#852, ci-template v1.23). The PR tier runs on
+// every pull_request; the full tier runs on push to main, on
+// workflow_dispatch, and on a PR labelled `ci:full`. CI Gate is the one
+// required check, so it alone decides whether a skipped job is the tier
+// working or a job that silently never ran. These tests hold the three places
+// a tier is written down — the job's `if:`, the gate's `needs`, and the gate's
+// tagged `check` line — to one another. The docs tier (ci-template v1.24) is
+// the PR-tier work a docs-only PR skips: those jobs need the `changes` job and
+// skip when its docs_only output is `true`. A draft PR runs no CI
+// (ci-template v1.26): every job's `if:` carries the draft guard, and the gate
+// fails on a draft. The nightly tier (ci-template v1.27, ruling 135) runs on
+// main's schedule and on a dispatch: its soak may skip only when the gate's
+// NIGHTLY flag is not `true`. FIPS is the one ungated job (#853): it runs on
+// main, the schedule and dispatch, never on a pull request (DS-4613), and appears in neither the gate's `needs` nor its `check` lines.
 
 const (
 	ciWorkflowFile = ".github/workflows/ci.yml"
 	ciGateJobID    = "ci-gate"
-	ciGateIf       = "always()"
+	// ciGateIf runs the gate after every job, failed or skipped, except on a
+	// schedule run the schedule guard found busy (v1.29.3): that run posts
+	// `skipped`, never a green nightly.
+	ciGateIf = "${{ always() && (github.event_name != 'schedule' || needs.schedule-guard.outputs.verdict != 'busy') }}"
+
+	// scheduleGuardJobID is the job that, on a schedule run, reads whether a
+	// main push run is in flight and sets `verdict` (v1.29.3, ruling
+	// 255(10)/(11)(c)).
+	scheduleGuardJobID = "schedule-guard"
+
+	// bigdiskLabel is the runner label of the jobs the schedule guard holds.
+	bigdiskLabel = "bigdisk"
+
+	// scheduleGuardExpr is the clause every bigdisk job's `if:` carries: off
+	// schedule it is true, on a schedule run only on the guard's `run`.
+	scheduleGuardExpr = "github.event_name != 'schedule' || needs.schedule-guard.outputs.verdict == 'run'"
+
+	// prTierGuardedIf, fullTierGuardedIf and nightlyGuardedIf are the tier
+	// `if:`s of a bigdisk job, character for character: the tier's own
+	// condition and the schedule guard.
+	prTierGuardedIf   = "${{ " + draftGuard + " && (" + scheduleGuardExpr + ") }}"
+	fullTierGuardedIf = "${{ (" + fullTierExpr + ") && " + draftGuard + " && (" + scheduleGuardExpr + ") }}"
+	nightlyGuardedIf  = "${{ (github.event_name == 'schedule' && needs.schedule-guard.outputs.verdict == 'run') || github.event_name == 'workflow_dispatch' }}"
+
+	// scheduleEnv and scheduleGuardEnv are the gate's schedule flag and the
+	// guard's verdict: on a schedule run the gate fails on any verdict but
+	// `run`.
+	scheduleEnv           = "SCHEDULE"
+	scheduleEnvValue      = "${{ github.event_name == 'schedule' }}"
+	scheduleGuardEnv      = "SCHEDULE_GUARD"
+	scheduleGuardEnvValue = "${{ needs.schedule-guard.outputs.verdict }}"
 
 	tierPR   = "pr"
 	tierDocs = "docs"
 	tierFull = "full"
 
+	// tierNightly is the scheduled tier (ci-template v1.27, ruling 135): the
+	// soak runs on main's schedule and on a dispatch, never on a PR or a push.
+	tierNightly = "nightly"
+
+	// nightlyExpr selects the nightly tier. A PR event never matches it, so
+	// the draft guard is not repeated in nightlyIf.
+	nightlyExpr = "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'"
+
+	// nightlyIf is the `if:` of every nightly-tier job, character for character.
+	nightlyIf = "${{ " + nightlyExpr + " }}"
+
+	// nightlyEnv is the gate's nightly flag: the gate lets a nightly-tier
+	// job's skip through only when it reads anything but `true`.
+	nightlyEnv      = "NIGHTLY"
+	nightlyEnvValue = nightlyIf
+
 	// changesJobID is the job whose docs_only output selects the docs tier.
 	changesJobID = "changes"
 
+	// draftGuard is in every job's `if:`: a draft PR runs no CI (v1.26).
+	draftGuard = "!github.event.pull_request.draft"
+
+	// prTierIf is the `if:` of every PR-tier job: the draft guard alone.
+	prTierIf = "${{ " + draftGuard + " }}"
+
 	// docsOnlyIf is the condition every docs-tier job carries as its own
 	// `if:`, character for character: it runs unless docs_only is `true`.
-	docsOnlyIf = "needs.changes.outputs.docs_only != 'true'"
+	docsOnlyIf = "${{ needs.changes.outputs.docs_only != 'true' && " + draftGuard + " }}"
 
 	// docsOnlyEnv is the gate's rendering of the changes job's output: the
 	// gate lets a docs-tier job's skip through only when it reads exactly
@@ -60,32 +117,54 @@ const (
 	docsOnlyEnv      = "DOCS_ONLY"
 	docsOnlyEnvValue = "${{ needs.changes.outputs.docs_only }}"
 
-	// tierMain is the full tier's main-only, ungated part (#853): FIPS, which
-	// runs on push to main and on workflow_dispatch, never on a pull_request,
-	// and reports without feeding CI Gate because it is still known-red.
-	tierMain = "main"
+	// fullTierExpr selects the full tier: every event but pull_request, and a
+	// PR labelled ci:full. The workflow's CI_FULL_TIER env is this
+	// expression; a job-level `if:` cannot read env, so each full-tier job
+	// repeats it in fullTierIf.
+	fullTierExpr = "github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')"
 
 	// fullTierIf is the condition every full-tier job carries as its own `if:`,
 	// character for character.
-	fullTierIf = "github.event_name == 'push' || github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full')"
+	fullTierIf = "${{ (" + fullTierExpr + ") && " + draftGuard + " }}"
 
-	// mainOnlyIf is fullTierIf without the `ci:full` clause, so no
-	// pull_request can select the job.
-	mainOnlyIf = "github.event_name == 'push' || github.event_name == 'workflow_dispatch'"
+	// mainOnlyIf is the `if:` of every ungated job: push to main, the schedule
+	// and workflow_dispatch, never a pull request, `ci:full` or not
+	// (m1355 / DS-3878, DS-4613). It is no tier: the gate never reads it.
+	mainOnlyIf = "${{ github.event_name != 'pull_request' }}"
 
-	// fullTierEnv is the gate's rendering of fullTierIf: the gate lets a
+	// ciFullTierEnv is the workflow-level env the steps and the gate read.
+	ciFullTierEnv      = "CI_FULL_TIER"
+	ciFullTierEnvValue = "${{ " + fullTierExpr + " }}"
+
+	// fullTierEnv is the gate's rendering of CI_FULL_TIER: the gate lets a
 	// full-tier job's skip through only when it reads exactly `false`.
 	fullTierEnv      = "FULL_TIER"
-	fullTierEnvValue = "${{ " + fullTierIf + " }}"
+	fullTierEnvValue = "${{ env." + ciFullTierEnv + " }}"
+
+	// draftEnv is the gate's draft flag: the gate fails when it reads `true`.
+	draftEnv      = "DRAFT"
+	draftEnvValue = "${{ github.event.pull_request.draft == true }}"
 
 	// supersededGroup keys a run by workflow AND ref, so a push to a PR cancels
-	// only that PR's older run (#510).
-	supersededGroup = "${{ github.workflow }}-${{ github.ref }}"
+	// only that PR's older run (#510). On main it keys by event and commit
+	// instead (ci-template v1.26.2, ruling 145), so each main run is its own
+	// group: the next push to main never cancels the run in progress
+	// (DS-3465), and a dispatch never shares a group with a push. A schedule
+	// run keys by repository alone, tested first (v1.29.3, ruling
+	// 255(10)/(11)(c)), so a repository has one schedule run at a time. Gitea
+	// 1.27.1 evaluates expressions in `group`, not in `cancel-in-progress`.
+	supersededGroup = "${{ github.workflow }}-${{ github.event_name == 'schedule' && format('schedule-{0}', github.repository) || github.ref == 'refs/heads/main' && format('main-{0}-{1}', github.event_name, github.sha) || github.ref }}"
 )
+
+// ungatedJobs run under mainOnlyIf and report without feeding CI Gate (#853):
+// FIPS, still red on causes this repository cannot close (nightly.yml's
+// header lists them).
+var ungatedJobs = []string{"fips"}
 
 // prTriggerTypes are ci.yml's pull_request activity types. `ci:full` takes
 // effect on the PR's next push or update-branch: there is no `labeled`, see
-// labelTypes.
+// labelTypes. There is no `ready_for_review` or `edited` either: a draft
+// marked ready starts its run on the next push.
 var prTriggerTypes = []string{"opened", "synchronize", "reopened"}
 
 // labelTypes are the pull_request activity types a label change matches. Gitea
@@ -97,23 +176,35 @@ var prTriggerTypes = []string{"opened", "synchronize", "reopened"}
 // over the real run's contexts, the required CI Gate among them.
 var labelTypes = []string{"labeled", "unlabeled"}
 
-// tierByIf maps a job's `if:` to its tier. A PR-tier job has no `if:`; any
-// other condition belongs to no tier and is a finding.
+// tierByIf maps a job's `if:` to its tier. Any other condition, no `if:`
+// included, belongs to no tier and is a finding.
 var tierByIf = map[string]string{
-	"":         tierPR,
+	prTierIf:   tierPR,
 	docsOnlyIf: tierDocs,
 	fullTierIf: tierFull,
-	mainOnlyIf: tierMain,
+	nightlyIf:  tierNightly,
+
+	prTierGuardedIf:   tierPR,
+	fullTierGuardedIf: tierFull,
+	nightlyGuardedIf:  tierNightly,
+}
+
+// scheduleGuardedIf holds the `if:`s that read the schedule guard's verdict.
+var scheduleGuardedIf = map[string]bool{
+	prTierGuardedIf:   true,
+	fullTierGuardedIf: true,
+	nightlyGuardedIf:  true,
 }
 
 // gatedTiers are the tiers a gate `check` line may carry.
-var gatedTiers = []string{tierPR, tierDocs, tierFull}
+var gatedTiers = []string{tierPR, tierDocs, tierFull, tierNightly}
 
 // tierLabel names a gated tier in a finding.
 var tierLabel = map[string]string{
-	tierPR:   "PR",
-	tierDocs: "docs",
-	tierFull: "full",
+	tierPR:      "PR",
+	tierDocs:    "docs",
+	tierFull:    "full",
+	tierNightly: "nightly",
 }
 
 var (
@@ -156,11 +247,12 @@ type ciStep struct {
 
 // ciJob is one workflow job, reduced to what the tier check reads.
 type ciJob struct {
-	ID    string
-	Line  int
-	If    string
-	Needs []string
-	Steps []ciStep
+	ID     string
+	Line   int
+	If     string
+	RunsOn string
+	Needs  []string
+	Steps  []ciStep
 }
 
 // ciGateCheck is one tagged `check` line in the gate's script.
@@ -237,9 +329,10 @@ func parseCIWorkflow(file string, data []byte) (ciWorkflow, error) {
 // parseCIJob decodes one job from its key and value nodes.
 func parseCIJob(file string, key, value *yaml.Node) (ciJob, error) {
 	var raw struct {
-		If    string    `yaml:"if"`
-		Needs yaml.Node `yaml:"needs"`
-		Steps []struct {
+		If     string    `yaml:"if"`
+		RunsOn yaml.Node `yaml:"runs-on"`
+		Needs  yaml.Node `yaml:"needs"`
+		Steps  []struct {
 			Env map[string]string `yaml:"env"`
 			Run yaml.Node         `yaml:"run"`
 		} `yaml:"steps"`
@@ -248,7 +341,11 @@ func parseCIJob(file string, key, value *yaml.Node) (ciJob, error) {
 		return ciJob{}, TestReachLoadError{File: file, Line: key.Line, Detail: "job " + key.Value + " does not decode", Err: err}
 	}
 
-	job := ciJob{ID: key.Value, Line: key.Line, If: raw.If}
+	job := ciJob{ID: key.Value, Line: key.Line, If: raw.If, RunsOn: raw.RunsOn.Value}
+	// A label list: every label, so a bigdisk label in it is seen.
+	for _, label := range raw.RunsOn.Content {
+		job.RunsOn += " " + label.Value
+	}
 	if raw.Needs.Kind == yaml.ScalarNode {
 		job.Needs = []string{raw.Needs.Value}
 	} else if raw.Needs.Kind != 0 {
@@ -358,7 +455,19 @@ func gateFindings(wf ciWorkflow, gate ciJob, jobs map[string]ciJob) (map[string]
 		return nil, findings
 	}
 	if got := step.Env[fullTierEnv]; got != fullTierEnvValue {
-		fail(step.RunLine, fmt.Sprintf("$%s is %q, want %q, the full-tier jobs' `if:`", fullTierEnv, got, fullTierEnvValue))
+		fail(step.RunLine, fmt.Sprintf("$%s is %q, want %q, the workflow's full-tier selection", fullTierEnv, got, fullTierEnvValue))
+	}
+	if got := step.Env[draftEnv]; got != draftEnvValue {
+		fail(step.RunLine, fmt.Sprintf("$%s is %q, want %q: a draft PR's gate must fail, not pass on its skips", draftEnv, got, draftEnvValue))
+	}
+	if _, ok := jobs[scheduleGuardJobID]; !ok {
+		fail(gate.Line, "the workflow has no "+scheduleGuardJobID+" job: a schedule run's bigdisk jobs would run while main is busy")
+	}
+	if got := step.Env[scheduleEnv]; got != scheduleEnvValue {
+		fail(step.RunLine, fmt.Sprintf("$%s is %q, want %q: without it a schedule run passes on bigdisk jobs the guard skipped", scheduleEnv, got, scheduleEnvValue))
+	}
+	if got := step.Env[scheduleGuardEnv]; got != scheduleGuardEnvValue {
+		fail(step.RunLine, fmt.Sprintf("$%s is %q, want %q: without it a schedule run passes on bigdisk jobs the guard skipped", scheduleGuardEnv, got, scheduleGuardEnvValue))
 	}
 
 	checks, parseErrs := parseGateChecks(wf.File, step)
@@ -374,6 +483,10 @@ func gateFindings(wf ciWorkflow, gate ciJob, jobs map[string]ciJob) (map[string]
 	if got := step.Env[docsOnlyEnv]; docsTagged && got != docsOnlyEnvValue {
 		fail(step.RunLine, fmt.Sprintf("$%s is %q, want %q: a docs-tier skip passes only on the changes job's word", docsOnlyEnv, got, docsOnlyEnvValue))
 	}
+	nightlyTagged := slices.ContainsFunc(checks, func(c ciGateCheck) bool { return c.Tier == tierNightly })
+	if got := step.Env[nightlyEnv]; nightlyTagged && got != nightlyEnvValue {
+		fail(step.RunLine, fmt.Sprintf("$%s is %q, want %q: without it a nightly run passes on a skipped soak", nightlyEnv, got, nightlyEnvValue))
+	}
 	return checked, findings
 }
 
@@ -386,6 +499,18 @@ func ciTierFindings(wf ciWorkflow) []error {
 		findings = append(findings, CITierError{
 			File: wf.File, Line: wf.PRTypesLine, Job: "on.pull_request",
 			Reason: fmt.Sprintf("types are %v, want %v: ci:full takes effect on the next push, not on a label event", wf.PRTypes, prTriggerTypes),
+		})
+	}
+
+	envNode := mappingValue(mappingValue(wf.Doc, "env"), ciFullTierEnv)
+	if envNode == nil || envNode.Value != ciFullTierEnvValue {
+		line, got := 0, ""
+		if envNode != nil {
+			line, got = envNode.Line, envNode.Value
+		}
+		findings = append(findings, CITierError{
+			File: wf.File, Line: line, Job: "env",
+			Reason: fmt.Sprintf("%s is %q, want %q, the full-tier jobs' `if:` without the draft guard", ciFullTierEnv, got, ciFullTierEnvValue),
 		})
 	}
 
@@ -403,14 +528,14 @@ func ciTierFindings(wf ciWorkflow) []error {
 	tiers := make(map[string]string, len(wf.Jobs))
 	docsTier := false
 	for _, j := range wf.Jobs {
-		if j.ID == ciGateJobID {
+		if j.ID == ciGateJobID || slices.Contains(ungatedJobs, j.ID) {
 			continue
 		}
 		tier, known := tierByIf[j.If]
 		if !known {
 			findings = append(findings, CITierError{
 				File: wf.File, Line: j.Line, Job: j.ID,
-				Reason: fmt.Sprintf("if: %q is no tier: a PR-tier job has no `if:`, a docs-tier job has exactly %q, a full-tier job exactly %q, a main-only job exactly %q", j.If, docsOnlyIf, fullTierIf, mainOnlyIf),
+				Reason: fmt.Sprintf("if: %q is no tier: a PR-tier job has exactly %q, a docs-tier job exactly %q, a full-tier job exactly %q, a nightly-tier job exactly %q", j.If, prTierIf, docsOnlyIf, fullTierIf, nightlyIf),
 			})
 			continue
 		}
@@ -430,12 +555,22 @@ func ciTierFindings(wf ciWorkflow) []error {
 		}
 		tier, known := tiers[j.ID]
 		c, gated := checked[j.ID]
-		if tier == tierMain {
+		guarded := scheduleGuardedIf[j.If]
+		if strings.Contains(j.RunsOn, bigdiskLabel) && !guarded {
+			fail(j.Line, "a bigdisk job's if: carries the schedule guard `("+scheduleGuardExpr+")`: without it a schedule run fills the runner while main is busy")
+		}
+		if guarded && !slices.Contains(j.Needs, scheduleGuardJobID) {
+			fail(j.Line, "its if: reads the schedule guard, so it needs "+scheduleGuardJobID+": without it the verdict does not render and a schedule run skips the job")
+		}
+		if slices.Contains(ungatedJobs, j.ID) {
+			if j.If != mainOnlyIf {
+				fail(j.Line, fmt.Sprintf("an ungated job runs on main, the schedule and dispatch only, never on a pull request: if: %q, want %q", j.If, mainOnlyIf))
+			}
 			if slices.Contains(gate.Needs, j.ID) {
-				fail(j.Line, "a main-only job is ungated: remove it from ci-gate's needs")
+				fail(j.Line, "an ungated job: remove it from ci-gate's needs")
 			}
 			if gated {
-				fail(c.Line, "a main-only job is ungated: remove its check line from ci-gate")
+				fail(c.Line, "an ungated job: remove its check line from ci-gate")
 			}
 			continue
 		}
@@ -451,14 +586,17 @@ func ciTierFindings(wf ciWorkflow) []error {
 			fail(j.Line, "a docs-tier job needs "+changesJobID+": without it, docs_only does not render and the job always runs")
 		}
 		for _, need := range j.Needs {
-			if tiers[need] == tierMain {
-				fail(j.Line, "a gated job needs main-only job "+need+": skipped on every PR, it would skip this job too")
+			if slices.Contains(ungatedJobs, need) {
+				fail(j.Line, "a gated job needs ungated job "+need+": a red ungated job would skip this one and turn the gate red")
 			}
 			if (tier == tierPR || tier == tierDocs) && tiers[need] == tierFull {
 				fail(j.Line, "a "+tierLabel[tier]+"-tier job needs full-tier job "+need+": skipped on every ordinary PR, it would skip this job too")
 			}
 			if tier == tierPR && tiers[need] == tierDocs {
 				fail(j.Line, "a PR-tier job needs docs-tier job "+need+": skipped on every docs-only PR, it would skip this job too")
+			}
+			if tier != tierNightly && tiers[need] == tierNightly {
+				fail(j.Line, "a "+tierLabel[tier]+"-tier job needs nightly-tier job "+need+": skipped on every PR and push, it would skip this job too")
 			}
 		}
 	}
@@ -487,7 +625,8 @@ func workflowTriggers(doc *yaml.Node) []string {
 }
 
 // concurrencyFindings reports a pull_request-triggered workflow that does not
-// cancel its superseded runs. pull_request_target is deliberately not held to
+// cancel its superseded PR runs, or that lets a push to main cancel the main
+// run in progress. pull_request_target is deliberately not held to
 // this: its github.ref is the BASE branch, so a ref-keyed group would put every
 // PR in one group and let each cancel the others; those workflows key by PR.
 func concurrencyFindings(wf ciWorkflow) []error {
@@ -503,7 +642,7 @@ func concurrencyFindings(wf ciWorkflow) []error {
 	}
 	var findings []error
 	if group := mappingValue(block, "group"); group == nil || group.Value != supersededGroup {
-		findings = append(findings, fail(block.Line, "group must be "+supersededGroup+", one group per workflow and ref")...)
+		findings = append(findings, fail(block.Line, "group must be "+supersededGroup+": one group per workflow and ref, so a PR push supersedes only its own run, and one per commit on main, so no push cancels a main run")...)
 	}
 	cancel := mappingValue(block, "cancel-in-progress")
 	if cancel == nil || cancel.ShortTag() != "!!bool" || cancel.Value != "true" {
@@ -551,7 +690,9 @@ func TestPullRequestWorkflowsCancelSupersededRuns(t *testing.T) {
 
 // TestCIGateScriptPassesASkipOnlyForAnUnselectedTier runs the real gate
 // script under bash with the results a runner would hand it.
-func TestCIGateScriptPassesASkipOnlyForAnUnselectedTier(t *testing.T) {
+// loadGateStep returns ci.yml's gate step and its check lines.
+func loadGateStep(t *testing.T) (ciStep, []ciGateCheck) {
+	t.Helper()
 	wf := loadCIWorkflow(t, repoRoot(t), ciWorkflowFile)
 	gateIdx := slices.IndexFunc(wf.Jobs, func(j ciJob) bool { return j.ID == ciGateJobID })
 	require.GreaterOrEqual(t, gateIdx, 0, "ci.yml has no ci-gate job")
@@ -559,21 +700,79 @@ func TestCIGateScriptPassesASkipOnlyForAnUnselectedTier(t *testing.T) {
 	require.True(t, ok, "ci-gate has no check lines")
 	checks, findings := parseGateChecks(wf.File, step)
 	require.Empty(t, findings)
+	return step, checks
+}
+
+// TestCIGateScriptFailsAScheduleRunTheGuardDidNotClear runs ci.yml's gate
+// script with every job green: a schedule run passes only on the schedule
+// guard's `run` (v1.29.3). A `busy` verdict never reaches the script, as the
+// gate's if: skips it.
+func TestCIGateScriptFailsAScheduleRunTheGuardDidNotClear(t *testing.T) {
+	step, checks := loadGateStep(t)
+	bash, err := exec.LookPath("bash")
+	require.NoError(t, err)
+
+	cases := []struct {
+		name     string
+		schedule string
+		verdict  string
+		wantPass bool
+	}{
+		{"a schedule run the guard cleared", "true", "run", true},
+		{"a schedule run the guard could not read", "true", "unreadable", false},
+		{"a schedule run whose verdict did not render", "true", "", false},
+		{"a push, which the guard does not check", "false", "run", true},
+		{"a push whose verdict did not render", "false", "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := []string{
+				"PATH=" + os.Getenv("PATH"),
+				fullTierEnv + "=true",
+				docsOnlyEnv + "=false",
+				draftEnv + "=false",
+				nightlyEnv + "=" + tc.schedule,
+				scheduleEnv + "=" + tc.schedule,
+				scheduleGuardEnv + "=" + tc.verdict,
+			}
+			for _, c := range checks {
+				env = append(env, c.EnvVar+"=success")
+			}
+			// -eo pipefail is the runner's default bash invocation for `run:`.
+			cmd := exec.CommandContext(t.Context(), bash, "-eo", "pipefail", "-c", step.Run)
+			cmd.Env = env
+			out, runErr := cmd.CombinedOutput()
+			if tc.wantPass {
+				require.NoError(t, runErr, string(out))
+				return
+			}
+			var exitErr *exec.ExitError
+			require.ErrorAs(t, runErr, &exitErr, "the gate passed:\n%s", out)
+			require.Contains(t, string(out), "FAIL schedule-guard")
+		})
+	}
+}
+
+func TestCIGateScriptPassesASkipOnlyForAnUnselectedTier(t *testing.T) {
+	step, checks := loadGateStep(t)
 
 	varOf := func(tier string) string {
 		idx := slices.IndexFunc(checks, func(c ciGateCheck) bool { return c.Tier == tier })
 		require.GreaterOrEqual(t, idx, 0, "the gate checks no %s-tier job", tier)
 		return checks[idx].EnvVar
 	}
-	prVar, docsVar, fullVar := varOf(tierPR), varOf(tierDocs), varOf(tierFull)
+	prVar, docsVar, fullVar, nightlyVar := varOf(tierPR), varOf(tierDocs), varOf(tierFull), varOf(tierNightly)
 
+	// A PR skips the nightly tier alongside the full tier.
 	everyFullSkipped := make(map[string]string)
 	everyDocsAndFullSkipped := make(map[string]string)
+	everySkipped := make(map[string]string)
 	for _, c := range checks {
-		if c.Tier == tierFull || c.Tier == tierDocs {
+		everySkipped[c.EnvVar] = "skipped"
+		if c.Tier == tierFull || c.Tier == tierDocs || c.Tier == tierNightly {
 			everyDocsAndFullSkipped[c.EnvVar] = "skipped"
 		}
-		if c.Tier == tierFull {
+		if c.Tier == tierFull || c.Tier == tierNightly {
 			everyFullSkipped[c.EnvVar] = "skipped"
 		}
 	}
@@ -587,24 +786,38 @@ func TestCIGateScriptPassesASkipOnlyForAnUnselectedTier(t *testing.T) {
 		docsOnly string
 		results  map[string]string
 		wantPass bool
+		draft    bool
+		nightly  string
 	}{
-		{"every job succeeded on a full-tier run", "true", "false", nil, true},
-		{"the full tier skipped on an ordinary PR", "false", "false", everyFullSkipped, true},
-		{"the docs and full tiers skipped on a docs-only PR", "false", "true", everyDocsAndFullSkipped, true},
-		{"a full-tier job skipped although the full tier was selected", "true", "false", map[string]string{fullVar: "skipped"}, false},
-		{"a full-tier job skipped while FULL_TIER did not render", "", "false", map[string]string{fullVar: "skipped"}, false},
-		{"a pr-tier job skipped", "false", "false", map[string]string{prVar: "skipped"}, false},
-		{"a pr-tier job skipped on a docs-only PR", "false", "true", map[string]string{prVar: "skipped"}, false},
-		{"a docs-tier job skipped on a PR that is not docs-only", "false", "false", map[string]string{docsVar: "skipped"}, false},
-		{"a docs-tier job skipped while DOCS_ONLY did not render", "false", "", map[string]string{docsVar: "skipped"}, false},
-		{"a docs-tier job skipped on a run that selected the full tier", "true", "true", map[string]string{docsVar: "skipped"}, false},
-		{"a docs-tier job failed on a docs-only PR", "false", "true", map[string]string{docsVar: "failure"}, false},
-		{"a full-tier job failed on an ordinary PR", "false", "false", map[string]string{fullVar: "failure"}, false},
-		{"a result that did not render", "false", "false", map[string]string{prVar: ""}, false},
+		{"every job succeeded on a full-tier run", "true", "false", map[string]string{nightlyVar: "skipped"}, true, false, "false"},
+		{"every job succeeded on a nightly run", "true", "false", nil, true, false, "true"},
+		{"a nightly-tier job skipped on a nightly run", "true", "false", map[string]string{nightlyVar: "skipped"}, false, false, "true"},
+		{"a nightly-tier job failed on a nightly run", "true", "false", map[string]string{nightlyVar: "failure"}, false, false, "true"},
+		{"a nightly-tier job failed on a push", "true", "false", map[string]string{nightlyVar: "failure"}, false, false, "false"},
+		{"the full tier skipped on an ordinary PR", "false", "false", everyFullSkipped, true, false, "false"},
+		{"the docs and full tiers skipped on a docs-only PR", "false", "true", everyDocsAndFullSkipped, true, false, "false"},
+		{"a full-tier job skipped although the full tier was selected", "true", "false", map[string]string{fullVar: "skipped"}, false, false, "false"},
+		{"a full-tier job skipped while FULL_TIER did not render", "", "false", map[string]string{fullVar: "skipped"}, false, false, "false"},
+		{"a pr-tier job skipped", "false", "false", map[string]string{prVar: "skipped"}, false, false, "false"},
+		{"a pr-tier job skipped on a docs-only PR", "false", "true", map[string]string{prVar: "skipped"}, false, false, "false"},
+		{"a docs-tier job skipped on a PR that is not docs-only", "false", "false", map[string]string{docsVar: "skipped"}, false, false, "false"},
+		{"a docs-tier job skipped while DOCS_ONLY did not render", "false", "", map[string]string{docsVar: "skipped"}, false, false, "false"},
+		{"a docs-tier job skipped on a run that selected the full tier", "true", "true", map[string]string{docsVar: "skipped"}, false, false, "false"},
+		{"a docs-tier job failed on a docs-only PR", "false", "true", map[string]string{docsVar: "failure"}, false, false, "false"},
+		{"a full-tier job failed on an ordinary PR", "false", "false", map[string]string{fullVar: "failure"}, false, false, "false"},
+		{"a result that did not render", "false", "false", map[string]string{prVar: ""}, false, false, "false"},
+		{"a draft PR whose jobs all succeeded", "false", "false", nil, false, true, "false"},
+		{"a draft PR whose every job skipped", "false", "false", everySkipped, false, true, "false"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			env := []string{"PATH=" + os.Getenv("PATH"), fullTierEnv + "=" + tc.fullTier, docsOnlyEnv + "=" + tc.docsOnly}
+			env := []string{
+				"PATH=" + os.Getenv("PATH"),
+				fullTierEnv + "=" + tc.fullTier,
+				docsOnlyEnv + "=" + tc.docsOnly,
+				draftEnv + "=" + strconv.FormatBool(tc.draft),
+				nightlyEnv + "=" + tc.nightly,
+			}
 			for _, c := range checks {
 				result, set := tc.results[c.EnvVar]
 				if !set {
@@ -632,12 +845,16 @@ const fixtureTieredCI = `on:
   pull_request:
     types: [opened, synchronize, reopened]
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ` + supersededGroup + `
   cancel-in-progress: true
+env:
+  CI_FULL_TIER: ` + ciFullTierEnvValue + `
 jobs:
   lint:
+    if: ` + prTierIf + `
     runs-on: x
   changes:
+    if: ` + prTierIf + `
     runs-on: x
   build:
     if: ` + docsOnlyIf + `
@@ -647,22 +864,41 @@ jobs:
     needs: lint
   fips:
     if: ` + mainOnlyIf + `
+  soak:
+    if: ` + nightlyIf + `
+  schedule-guard:
+    if: ` + prTierIf + `
+    runs-on: x
+  image:
+    if: ` + prTierGuardedIf + `
+    needs: [changes, schedule-guard]
+    runs-on: ${{ github.server_url == 'https://github.com' && 'ubuntu-latest' || 'bigdisk' }}
   ci-gate:
-    if: always()
-    needs: [lint, changes, build, race]
+    if: ` + ciGateIf + `
+    needs: [lint, changes, build, race, soak, schedule-guard, image]
     steps:
       - env:
           FULL_TIER: ` + fullTierEnvValue + `
           DOCS_ONLY: ` + docsOnlyEnvValue + `
+          DRAFT: ` + draftEnvValue + `
+          NIGHTLY: ` + nightlyEnvValue + `
+          SCHEDULE: ` + scheduleEnvValue + `
+          SCHEDULE_GUARD: ` + scheduleGuardEnvValue + `
           RESULT_LINT: ${{ needs.lint.result }}
           RESULT_CHANGES: ${{ needs.changes.result }}
+          RESULT_SCHEDULE_GUARD: ${{ needs.schedule-guard.result }}
+          RESULT_IMAGE: ${{ needs.image.result }}
           RESULT_BUILD: ${{ needs.build.result }}
           RESULT_RACE: ${{ needs.race.result }}
+          RESULT_SOAK: ${{ needs.soak.result }}
         run: |
           check pr lint "$RESULT_LINT"
           check pr changes "$RESULT_CHANGES"
+          check pr schedule-guard "$RESULT_SCHEDULE_GUARD"
+          check pr image "$RESULT_IMAGE"
           check docs build "$RESULT_BUILD"
           check full race "$RESULT_RACE"
+          check nightly soak "$RESULT_SOAK"
 `
 
 func parseFixture(t *testing.T, data string) ciWorkflow {
@@ -690,31 +926,58 @@ func TestCITierFindingsRejectEachInconsistency(t *testing.T) {
 		{"an untagged check line", `check pr lint "$RESULT_LINT"`, `check lint "$RESULT_LINT"`, "check line is not"},
 		{"an unknown tier tag", `check pr lint`, `check fast lint`, `tier tag "fast" is none of`},
 		{"a job with no check line", "          check pr lint \"$RESULT_LINT\"\n", "", "lint: no check line in ci-gate"},
-		{"a job missing from the gate's needs", `needs: [lint, changes, build, race]`, `needs: [lint, changes, build]`, "race: not in ci-gate's needs"},
+		{"a job missing from the gate's needs", `race, soak,`, `soak,`, "race: not in ci-gate's needs"},
 		{"a docs-tier job tagged pr", `check docs build`, `check pr build`, "build: tagged pr in ci-gate, but its if: puts it in the docs tier"},
 		{"a pr-tier job tagged docs", `check pr lint`, `check docs lint`, "lint: tagged docs in ci-gate, but its if: puts it in the pr tier"},
-		{"a docs-only if: that drifted", "!= 'true'\n    needs: [changes]", "!= true\n    needs: [changes]", "build: if: "},
+		{"a docs-only if: that drifted", "!= 'true' &&", "!= true &&", "build: if: "},
 		{"a docs-tier job that does not need changes", "    needs: [changes]\n", "    needs: [lint]\n", "build: a docs-tier job needs changes"},
-		{"a docs tier without a changes job", "  changes:\n    runs-on: x\n", "", "the docs tier has no changes job"},
-		{"a changes job missing from the gate's needs", `needs: [lint, changes, build, race]`, `needs: [lint, build, race]`, "changes: not in ci-gate's needs"},
+		{"a docs tier without a changes job", "  changes:\n    if: " + prTierIf + "\n    runs-on: x\n", "", "the docs tier has no changes job"},
+		{"a changes job missing from the gate's needs", `needs: [lint, changes, build`, `needs: [lint, build`, "changes: not in ci-gate's needs"},
 		{"a changes job with no check line", "          check pr changes \"$RESULT_CHANGES\"\n", "", "changes: no check line in ci-gate"},
 		{"a DOCS_ONLY that reads another output", `DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}`, `DOCS_ONLY: ${{ needs.changes.outputs.docs }}`, "$DOCS_ONLY is"},
 		{"a DOCS_ONLY that is missing", "          DOCS_ONLY: " + docsOnlyEnvValue + "\n", "", "$DOCS_ONLY is \"\""},
-		{"a pr-tier job needing a docs-tier job", "  lint:\n    runs-on: x\n", "  lint:\n    runs-on: x\n    needs: build\n", "a PR-tier job needs docs-tier job build"},
+		{"a pr-tier job needing a docs-tier job", "    runs-on: x\n  changes:", "    runs-on: x\n    needs: build\n  changes:", "a PR-tier job needs docs-tier job build"},
 		{"a docs-tier job needing a full-tier job", "    needs: [changes]\n", "    needs: [changes, race]\n", "a docs-tier job needs full-tier job race"},
-		{"a full-tier if: that drifted", "'ci:full')\n    needs: lint", "'ci-full')\n    needs: lint", "race: if: "},
-		{"a pr-tier job needing a full-tier job", "  lint:\n    runs-on: x\n", "  lint:\n    runs-on: x\n    needs: race\n", "a PR-tier job needs full-tier job race"},
+		{"a full-tier if: that drifted", "'ci:full'))", "'ci-full'))", "race: if: "},
+		{"a pr-tier job needing a full-tier job", "    runs-on: x\n  changes:", "    runs-on: x\n    needs: race\n  changes:", "a PR-tier job needs full-tier job race"},
 		{"a check reading another job's result", `RESULT_RACE: ${{ needs.race.result }}`, `RESULT_RACE: ${{ needs.lint.result }}`, "$RESULT_RACE is"},
-		{"a FULL_TIER that drifted from the jobs' if:", `FULL_TIER: ${{ github.event_name == 'push'`, `FULL_TIER: ${{ github.event_name == 'pull_request'`, "$FULL_TIER is"},
-		{"a gate that does not always run", `if: always()`, `if: success()`, `if: is "success()"`},
+		{"a FULL_TIER that does not read CI_FULL_TIER", fullTierEnvValue, `${{ github.event_name == 'push' }}`, "$FULL_TIER is"},
+		{"a CI_FULL_TIER that drifted from the jobs' if:", "CI_FULL_TIER: ${{ github.event_name != 'pull_request'", "CI_FULL_TIER: ${{ github.event_name == 'push'", "env: CI_FULL_TIER is"},
+		{"a workflow without CI_FULL_TIER", "env:\n  CI_FULL_TIER: " + ciFullTierEnvValue + "\n", "", "env: CI_FULL_TIER is \"\""},
+		{"a gate without the draft flag", "          DRAFT: " + draftEnvValue + "\n", "", "$DRAFT is \"\""},
+		{"a draft flag that never reads true", draftEnvValue, `${{ github.event.pull_request.draft == 'true' }}`, "$DRAFT is"},
+		{"a pr-tier job without the draft guard", "  lint:\n    if: " + prTierIf + "\n", "  lint:\n", `lint: if: "" is no tier`},
+		{"a docs-tier job without the draft guard", "!= 'true' && " + draftGuard, "!= 'true'", "build: if: "},
+		{"a full-tier job without the draft guard", "    if: " + fullTierIf + "\n    needs: lint", "    if: ${{ " + fullTierExpr + " }}\n    needs: lint", "race: if: "},
+		{"a gate that does not always run", "if: " + ciGateIf, `if: success()`, `if: is "success()"`},
+		{"a gate that runs on a busy schedule", "if: " + ciGateIf, `if: always()`, `if: is "always()"`},
+		{"a bigdisk job without the schedule guard", "    if: " + prTierGuardedIf + "\n    needs: [changes, schedule-guard]", "    if: " + prTierIf + "\n    needs: [changes, schedule-guard]", "image: a bigdisk job's if: carries the schedule guard"},
+		{"a bigdisk job whose guard drifted", "needs.schedule-guard.outputs.verdict == 'run') }}\n    needs: [changes", "needs.schedule-guard.outputs.verdict != 'busy') }}\n    needs: [changes", "image: if: "},
+		{"a bigdisk job that does not need the schedule guard", `needs: [changes, schedule-guard]`, `needs: [changes]`, "image: its if: reads the schedule guard, so it needs schedule-guard"},
+		{"a schedule guard missing from the gate's needs", `soak, schedule-guard, image]`, `soak, image]`, "schedule-guard: not in ci-gate's needs"},
+		{"a schedule guard with no check line", "          check pr schedule-guard \"$RESULT_SCHEDULE_GUARD\"\n", "", "schedule-guard: no check line in ci-gate"},
+		{"a workflow without the schedule guard job", "  schedule-guard:\n    if: " + prTierIf + "\n    runs-on: x\n", "", "the workflow has no schedule-guard job"},
+		{"a gate without the schedule flag", "          SCHEDULE: " + scheduleEnvValue + "\n", "", "$SCHEDULE is \"\""},
+		{"a schedule flag that reads another event", "SCHEDULE: " + scheduleEnvValue, "SCHEDULE: ${{ github.event_name == 'push' }}", "$SCHEDULE is"},
+		{"a gate without the schedule guard's verdict", "          SCHEDULE_GUARD: " + scheduleGuardEnvValue + "\n", "", "$SCHEDULE_GUARD is \"\""},
+		{"a verdict that reads the guard's result", "SCHEDULE_GUARD: " + scheduleGuardEnvValue, "SCHEDULE_GUARD: ${{ needs.schedule-guard.result }}", "$SCHEDULE_GUARD is"},
 		{"a gate checking an undefined job", `check full race "$RESULT_RACE"`, "check full race \"$RESULT_RACE\"\n          check pr ghost \"$RESULT_RACE\"", "ghost: ci-gate checks a job the workflow does not define"},
 		{"pull_request with the labeled type", `reopened]`, `reopened, labeled]`, "not on a label event"},
+		{"pull_request with the ready_for_review type", `reopened]`, `reopened, ready_for_review]`, "not on a label event"},
 		{"pull_request without the synchronize type", `synchronize, `, ``, "types are [opened reopened]"},
-		{"a main-only job in the gate's needs", `needs: [lint, changes, build, race]`, `needs: [lint, changes, build, race, fips]`, "fips: a main-only job is ungated: remove it from ci-gate's needs"},
-		{"a main-only job with a check line", `check full race "$RESULT_RACE"`, "check full race \"$RESULT_RACE\"\n          check full fips \"$RESULT_RACE\"", "fips: a main-only job is ungated: remove its check line"},
-		{"a main-only job a ci:full PR can select", "  fips:\n    if: " + mainOnlyIf + "\n", "  fips:\n    if: " + fullTierIf + "\n", "fips: not in ci-gate's needs"},
-		{"a main-only job without workflow_dispatch", "  fips:\n    if: " + mainOnlyIf + "\n", "  fips:\n    if: github.event_name == 'push'\n", "fips: if: "},
-		{"a gated job needing a main-only job", "    needs: lint\n  fips:", "    needs: [lint, fips]\n  fips:", "race: a gated job needs main-only job fips"},
+		{"an ungated job in the gate's needs", `race, soak,`, `race, fips, soak,`, "fips: an ungated job: remove it from ci-gate's needs"},
+		{"an ungated job with a check line", `check full race "$RESULT_RACE"`, "check full race \"$RESULT_RACE\"\n          check full fips \"$RESULT_RACE\"", "fips: an ungated job: remove its check line"},
+		{"an ungated job on the full tier (the ci:full PR leak, DS-4613)", "  fips:\n    if: " + mainOnlyIf + "\n", "  fips:\n    if: " + fullTierIf + "\n", "fips: an ungated job runs on main, the schedule and dispatch only, never on a pull request"},
+		{"an ungated job on the PR tier", "  fips:\n    if: " + mainOnlyIf + "\n", "  fips:\n    if: " + prTierIf + "\n", "fips: an ungated job runs on main, the schedule and dispatch only, never on a pull request"},
+		{"an ungated job whose if: drifted", "  fips:\n    if: " + mainOnlyIf + "\n", "  fips:\n    if: github.event_name == 'push'\n", "fips: an ungated job runs on main, the schedule and dispatch only, never on a pull request"},
+		{"a gated job needing an ungated job", "    needs: lint\n  fips:", "    needs: [lint, fips]\n  fips:", "race: a gated job needs ungated job fips"},
+		{"a nightly-tier job tagged full", `check nightly soak`, `check full soak`, "soak: tagged full in ci-gate, but its if: puts it in the nightly tier"},
+		{"a full-tier job tagged nightly", `check full race`, `check nightly race`, "race: tagged nightly in ci-gate, but its if: puts it in the full tier"},
+		{"a nightly if: that drifted", "  soak:\n    if: " + nightlyIf + "\n", "  soak:\n    if: ${{ github.event_name == 'schedule' }}\n", "soak: if: "},
+		{"a nightly-tier job missing from the gate's needs", `race, soak,`, `race,`, "soak: not in ci-gate's needs"},
+		{"a gate without the nightly flag", "          NIGHTLY: " + nightlyEnvValue + "\n", "", "$NIGHTLY is \"\""},
+		{"a nightly flag that reads another event", "NIGHTLY: " + nightlyEnvValue, "NIGHTLY: ${{ github.event_name == 'push' }}", "$NIGHTLY is"},
+		{"a full-tier job needing a nightly-tier job", "    needs: lint\n  fips:", "    needs: [lint, soak]\n  fips:", "a full-tier job needs nightly-tier job soak"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -740,8 +1003,8 @@ func TestCITierFindingsPointAtTheMisTaggedLine(t *testing.T) {
 	require.Len(t, findings, 1)
 	var tierErr CITierError
 	require.ErrorAs(t, findings[0], &tierErr)
-	// The fixture's last line is the race check.
-	require.Equal(t, strings.Count(fixtureTieredCI, "\n"), tierErr.Line)
+	// The race check is the fixture's next-to-last line; the soak check follows it.
+	require.Equal(t, strings.Count(fixtureTieredCI, "\n")-1, tierErr.Line)
 }
 
 func TestConcurrencyFindingsRejectAnUncancellableGroup(t *testing.T) {
@@ -752,9 +1015,19 @@ func TestConcurrencyFindingsRejectAnUncancellableGroup(t *testing.T) {
 		want string
 	}{
 		{"an expression for cancel-in-progress", `cancel-in-progress: true`, `cancel-in-progress: ${{ true }}`, "must be the literal true"},
+		{"a main-only expression for cancel-in-progress", `cancel-in-progress: true`, `cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}`, "must be the literal true"},
 		{"cancel-in-progress false", `cancel-in-progress: true`, `cancel-in-progress: false`, "must be the literal true"},
-		{"a group with no ref", `group: ${{ github.workflow }}-${{ github.ref }}`, `group: ${{ github.workflow }}`, "group must be"},
-		{"no concurrency block", "concurrency:\n  group: ${{ github.workflow }}-${{ github.ref }}\n  cancel-in-progress: true\n", "", "has no concurrency block"},
+		{"a group with no ref", supersededGroup, `${{ github.workflow }}`, "group must be"},
+		{"a ref-only group lets a main push cancel main", supersededGroup, `${{ github.workflow }}-${{ github.ref }}`, "group must be"},
+		{"a sha-only group never supersedes a PR run", supersededGroup, `${{ github.workflow }}-${{ github.sha }}`, "group must be"},
+		{"a run_id group on main", supersededGroup, `${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}`, "group must be"},
+		{"a main group without the event", "format('main-{0}-{1}', github.event_name, github.sha)", "github.sha", "group must be"},
+		{"a per-commit group on a branch other than main", `'refs/heads/main'`, `'refs/heads/dev'`, "group must be"},
+		{"a per-ref group on main with a per-commit group elsewhere", supersededGroup, `${{ github.workflow }}-${{ github.ref != 'refs/heads/main' && github.sha || github.ref }}`, "group must be"},
+		{"a schedule run that takes a main or ref group", supersededGroup, `${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && format('main-{0}-{1}', github.event_name, github.sha) || github.ref }}`, "group must be"},
+		{"a schedule group keyed by commit", "format('schedule-{0}', github.repository)", "format('schedule-{0}-{1}', github.repository, github.sha)", "group must be"},
+		{"a schedule group tested after the main group", supersededGroup, `${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && format('main-{0}-{1}', github.event_name, github.sha) || github.event_name == 'schedule' && format('schedule-{0}', github.repository) || github.ref }}`, "group must be"},
+		{"no concurrency block", "concurrency:\n  group: " + supersededGroup + "\n  cancel-in-progress: true\n", "", "has no concurrency block"},
 		{"a labeled trigger", `reopened]`, `reopened, labeled]`, "types include labeled"},
 		{"an unlabeled trigger", `reopened]`, `reopened, unlabeled]`, "types include unlabeled"},
 	}

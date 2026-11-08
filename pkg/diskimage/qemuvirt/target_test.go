@@ -3,6 +3,7 @@ package qemuvirt
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -98,22 +99,84 @@ func TestStageKernelCopiesTheArtifactDirectory(t *testing.T) {
 }
 
 func TestStageKernelFailures(t *testing.T) {
-	var stage *StageError
-	if err := New().StageKernel(context.Background(), t.TempDir(), nil); !errors.As(err, &stage) || !errors.Is(err, errNoKernel) {
-		t.Errorf("nil kernel: %v", err)
+	cases := []struct {
+		name     string
+		setup    func(t *testing.T) (mediaDir string, kernel *virtkernel.Artifacts)
+		wantStep string
+		wantErr  error
+	}{
+		{
+			name: "nil kernel",
+			setup: func(t *testing.T) (string, *virtkernel.Artifacts) {
+				return t.TempDir(), nil
+			},
+			wantStep: "staging the kernel",
+			wantErr:  errNoKernel,
+		},
+		{
+			name: "media dir is a file",
+			setup: func(t *testing.T) (string, *virtkernel.Artifacts) {
+				file := filepath.Join(t.TempDir(), "file")
+				if err := os.WriteFile(file, nil, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				return file, fakeKernel(t)
+			},
+			wantStep: "clearing the kernel staging directory",
+		},
+		{
+			// RemoveAll treats a dangling parent as already gone, so the
+			// failure surfaces when the staging directory is created.
+			name: "staging parent is a dangling symlink",
+			setup: func(t *testing.T) (string, *virtkernel.Artifacts) {
+				media := t.TempDir()
+				if err := os.Symlink(filepath.Join(media, "gone"), filepath.Join(media, "kernel-artifacts")); err != nil {
+					t.Fatal(err)
+				}
+				return media, fakeKernel(t)
+			},
+			wantStep: "creating the kernel staging directory",
+		},
+		{
+			name: "missing artifacts",
+			setup: func(t *testing.T) (string, *virtkernel.Artifacts) {
+				return t.TempDir(), &virtkernel.Artifacts{Dir: filepath.Join(t.TempDir(), "nope")}
+			},
+			wantStep: "reading the kernel artifacts",
+			wantErr:  fs.ErrNotExist,
+		},
+		{
+			// A dangling symlink among the artifacts must fail the stage,
+			// never be skipped and leave an incomplete kernel on the media.
+			name: "unreadable artifact",
+			setup: func(t *testing.T) (string, *virtkernel.Artifacts) {
+				kernel := fakeKernel(t)
+				if err := os.Symlink(filepath.Join(kernel.Dir, "gone"), filepath.Join(kernel.Dir, "broken")); err != nil {
+					t.Fatal(err)
+				}
+				return t.TempDir(), kernel
+			},
+			wantStep: "copying broken",
+			wantErr:  fs.ErrNotExist,
+		},
 	}
-	file := filepath.Join(t.TempDir(), "file")
-	if err := os.WriteFile(file, nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := New().StageKernel(context.Background(), file, fakeKernel(t)); !errors.As(err, &stage) {
-		t.Errorf("unwritable media: %v", err)
-	}
-	missing := &virtkernel.Artifacts{Dir: filepath.Join(t.TempDir(), "nope")}
-	if err := New().StageKernel(context.Background(), t.TempDir(), missing); !errors.As(err, &stage) {
-		t.Errorf("missing artifacts: %v", err)
-	}
-	if got := stage.Error(); got == "" {
-		t.Error("empty error string")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mediaDir, kernel := tc.setup(t)
+			err := New().StageKernel(context.Background(), mediaDir, kernel)
+			var stage *StageError
+			if !errors.As(err, &stage) {
+				t.Fatalf("got %v, want *StageError", err)
+			}
+			if stage.Step != tc.wantStep {
+				t.Errorf("Step = %q, want %q", stage.Step, tc.wantStep)
+			}
+			if tc.wantErr != nil && !errors.Is(err, tc.wantErr) {
+				t.Errorf("got %v, want it to wrap %v", err, tc.wantErr)
+			}
+			if stage.Error() == "" {
+				t.Error("empty error string")
+			}
+		})
 	}
 }

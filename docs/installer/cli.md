@@ -87,7 +87,7 @@ run this from live install media.** It repartitions the target disk.
 | `--fips` | bool | `false` | FIPS mode (forces PBKDF2 over Argon2id) |
 | `--lockdown` | bool | **`true`** | Kernel lockdown |
 | `--lockdown-mode` | string | `confidentiality` | `integrity` or `confidentiality` |
-| `--tpm-auto-upgrade-seal` | bool | **`true`** | Written to `/etc/alpine-tpm.conf` (`pkg/installer/alpine.go:601`) and read by nothing; no automatic reseal exists ([engineering.md §5](engineering.md#5-unlock-strategy-table--as-the-code-registers-it)) |
+| `--tpm-auto-upgrade-seal` | bool | **`true`** | Written to `/etc/alpine-tpm.conf` (`pkg/installer/alpine.go:602`) and read by nothing; no automatic reseal exists ([engineering.md §5](engineering.md#5-unlock-strategy-table--as-the-code-registers-it)) |
 | `--platformd-binary` | string | `""` | Path to the platformd binary to install |
 | `--verbose` / `-v` | bool | `false` | Verbose logging |
 | `--debug` | bool | `false` | Debug logging (implies verbose) |
@@ -142,7 +142,7 @@ Build a Unified Kernel Image.
 | `--cmdline` | string | `""` | Kernel command line |
 | `--output` | string | `""` | Output path for the UKI |
 | `--osrelease` | string | `""` | Path to an os-release file |
-| `--stub` | string | `""` | EFI stub; defaults to `/usr/lib/systemd/boot/efi/linuxx64.efi.stub` |
+| `--stub` | string | `""` | EFI stub; defaults to the host architecture's systemd stub, e.g. `/usr/lib/systemd/boot/efi/linuxx64.efi.stub` |
 | `--use-objcopy` | bool | `false` | Use the objcopy-based builder |
 | `--verbose` / `-v` | bool | `false` | Verbose logging |
 | `--debug` | bool | `false` | Debug logging |
@@ -163,7 +163,7 @@ under enforced Secure Boot with `CONFIG_MODULE_SIG_FORCE`.
 |---|---|---|---|
 | `--kver` | string | `""` | Kernel version; empty = newest under `/lib/modules` |
 | `--config` | string | `""` | Platform config; defaults to `/etc/platformd/config.yaml`, then `/etc/platformd/install.yaml` |
-| `--uki` | string | `""` | Live UKI to replace; defaults to `/boot/efi/EFI/BOOT/BOOTX64.EFI` |
+| `--uki` | string | `""` | Live UKI to replace; defaults to the host architecture's loader under `/boot/efi/EFI/BOOT` (`BOOTX64.EFI` or `BOOTAA64.EFI`) |
 | `--verbose` / `-v` | bool | `false` | Verbose logging |
 | `--debug` | bool | `false` | Debug logging |
 
@@ -198,8 +198,9 @@ platformctl iso module-signing-key   Generate the kernel module-signing key
 ### 3.1 `platformctl iso create`
 
 The only ISO-production verb that is implemented end to end. It runs download →
-extract → generate Secure Boot keys → customise → build in sequence. The running
-`platformd` binary copies **itself** into the ISO, so no binary path is needed.
+extract → generate Secure Boot keys → customise → build in sequence. The ISO
+carries the `platformd` the `--config` file names (`platformd-binary`), else the
+`platformd` beside `platformctl`; neither found fails the build.
 
 Alpine:
 
@@ -247,6 +248,29 @@ Build:
 | `--debug` / `--verbose` | bool | `false` | Output verbosity |
 | `--pre-fetch` | bool | **`true`** | Pre-download all packages into the ISO for offline install. **Unavailable in a `fips`-tagged build** — see the note below |
 | `--platform-apk-dir` | string | `""` | strongSwan builder output (`make strongswan-build`; one `x86_64/` and `aarch64/` directory each) whose apks go into the offline repository and are installed for the overlay's IPsec transport. Requires `--pre-fetch` and an embedded platform config; empty = the media carry none of them. See below |
+| `--platformctl-binary` | string | `""` → the `--config` file's `platformctl-binary`, else this `platformctl` | The `platformctl` the media install with (`platformd-bin/platformctl`). Named and missing fails the build |
+| `--platformctl-static-binary` | string | `""` → the `--config` file's `platformctl-static-binary`, else not installed | Static `platformctl` for Alpine/musl (`platformd-bin/platformctl-static`); not installed means `--platformctl-binary` must be static. Named and missing fails the build |
+
+**Customize inputs: unset is not installed, named-but-missing fails the
+build (#351).** An optional input the build leaves empty is skipped (logged at
+debug). A path the build names that does not exist fails with
+`iso.MissingInputError`. No input's path is inferred from another's:
+`platformctl` and `platformctl-static` are never looked up beside `platformd`.
+`platformctl diskimage` names `platformd` and `platformctl` in its
+`--binaries-dir`. The media's `platformctl-static` is the directory's
+`platformctl-static` when it holds one (`make build-arm64` writes it; the
+CGO-enabled `build-no-web` and `build-desktop` CLIs need one supplied), and
+otherwise that `platformctl`, which the native `make build` links statically
+(`CGO_ENABLED=0`). A `platformctl-static` that names a program interpreter is
+dynamically linked and fails the build with `iso.DynamicBinaryError`. With no
+`platformctl-static`, the autoinstall script runs the `platformctl`
+(`pkg/iso/customize.go:3891`), so that `platformctl` must be static too:
+`iso create`, `iso customize` and `iso test client-server` from a dynamically
+linked (glibc) `platformctl` need `--platformctl-static-binary`, or they fail
+with the same error (`pkg/iso/customize.go:559`; the shared test builder takes
+both inputs at `pkg/cli/commands/iso/iso_builder.go:252`). Customizing
+a tree again removes a `platformctl` or `platformctl-static` the earlier run
+staged when the new build leaves that input unset.
 
 Dynamic configuration and trust bootstrap:
 
@@ -287,9 +311,6 @@ Two ways to proceed:
   is a build-host operation — it does not determine whether the *installed
   system* runs in FIPS mode, which is selected by the `ProfileFIPS` install
   profile and the FIPS kernel.
-
-```text
-```
 
 **`--pre-fetch` defaults to `true` and should stay that way** for BMC virtual
 media, air-gapped and PXE installs. `--pre-fetch=false` is only safe when the
@@ -462,7 +483,9 @@ bugs), `--skip-install`, `--server-only`, `--client-only`, `--user-network`
 `--server-profile`, `--client-profile`, `--dynamic-network`, `--enable-dhcp`,
 `--server-timeout` (`600`), `--bootstrap-strategy` (`dane`),
 `--bootstrap-noise-key`, `--bootstrap-spki-pin`, `--platformd-binary`,
-`--webui`, `--console` (**`true`**), `--fido2`, `--fido2-mode`, `--debug`.
+`--platformctl-binary` (`""` → the running `platformctl`),
+`--platformctl-static-binary` (`""` → not installed; `--platformctl-binary`
+must then be static), `--webui`, `--console` (**`true`**), `--fido2`, `--fido2-mode`, `--debug`.
 
 ```bash
 sudo platformctl iso test client-server --iso trusted-alpine-1.0.0-x86_64.iso
@@ -532,6 +555,9 @@ is refused), `--work-dir` (`work`), `--debug`. Prints `success`, `output_dir`,
 
 **`iso customize`** — `--iso-dir` (**required**), `--overlay`, `--keys-dir`,
 `--platformd-binary` (`""` → `platformd` beside `platformctl`),
+`--platformctl-binary` (`""` → this `platformctl`, unless the `--config` file
+names one), `--platformctl-static-binary` (`""` → not installed, unless the
+`--config` file names one; named and missing fails, as on `iso create`),
 `--platform-config` (platform config baked into the ISO; **required** unless
 the `--config` file names a config server), `--config` (ISO build
 configuration file), `--work-dir` (`work`), `--pre-fetch` (**`true`**, as on

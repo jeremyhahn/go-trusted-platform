@@ -385,6 +385,11 @@ func (h *OverlayModeHandler) ndWatch(ctx context.Context, now time.Time) ([]ndKe
 // punts still expire: nothing refreshes them while fallen back. Caller
 // holds mu.
 func (h *OverlayModeHandler) ndFallBack(ctx context.Context, now time.Time) {
+	// The hold-down counts from when the punts are dropped: a tick handled
+	// late fired earlier than that, and would cut the hold-down short.
+	if handled := h.ndClock(); handled.After(now) {
+		now = handled
+	}
 	if h.ndSuppressing {
 		h.ndHoldDown = nextNDHoldDown(h.ndHoldDownBase(), h.ndHoldDown, now.Sub(h.ndResumedAt))
 	}

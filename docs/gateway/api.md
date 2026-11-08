@@ -74,8 +74,10 @@ on QUIC, 503 on the two admitted-VTEP REST routes, and "service not
 available: gateway" from MCP, which carries the `Unavailable` class (#65).
 
 **Every transport answers status and mode from the one gateway gRPC service
-(#65).** QUIC, MCP and the `/api/v1/sdn/gateway/{status,mode}` REST routes
-bind to it in `pkg/api/daemon/gateway_status_bindings.go`; gRPC, Unix and the
+(#65).** QUIC, MCP and the daemon REST routes `GET /api/v1/sdn/gateway/status`
+and `PUT /api/v1/sdn/gateway/mode` (`pkg/api/rest/gateway_handlers.go`; note
+the method: the webservice's `/api/v1/gateway/mode` is `POST`) bind to it in
+`pkg/api/daemon/gateway_status_bindings.go`; gRPC, Unix and the
 embedded SDK call it directly, and `/api/v1/gateway/*` proxies gRPC. The
 service reads the gateway that runs in the same process. `platformd` runs
 none (`gatewayd` constructs it), so on a live control plane both verbs answer
@@ -107,7 +109,11 @@ the same control-plane link to gatewayd-resident services as §5a.
 REST withdraw carries the prefix as the `prefix` query parameter, URL-encoded
 (`DELETE /api/v1/gateway/bgp/prefixes?prefix=203.0.113.0%2F24`), and a
 `DELETE` body is ignored. A missing or malformed prefix is refused with 400
-and the same reason gRPC returns (`prefix is required`, `invalid prefix`). The
+and the same reason gRPC returns (`prefix is required`, `invalid prefix`).
+The daemon REST stack (`pkg/api/rest/gateway_handlers.go`) also serves the BGP
+verbs, under `/api/v1/sdn/gateway/bgp/*`, and its withdraw carries the
+prefix in the path, decoded with `url.PathUnescape`
+(`DELETE /api/v1/sdn/gateway/bgp/prefixes/203.0.113.0%2F24`). The
 per-transport table and the validation order are in [BGP API](../bgp/api.md).
 
 ---
@@ -116,7 +122,8 @@ per-transport table and the validation order are in [BGP API](../bgp/api.md).
 
 REST carries the full pool CRUD under `/api/v1/sdn/gateway/ipam`
 (`pkg/webservice/v1/rest/gateway/ipam.go`, the WebUI's Networking → IPAM
-contract — see [`docs/sdn/ipam/`](../sdn/ipam/)), plus a reduced
+contract — see [`docs/sdn/ipam/`](../sdn/ipam/); the daemon REST stack serves
+the same routes from `pkg/api/rest/gateway_handlers.go`), plus a reduced
 read-oriented set under `/api/v1/gateway/ipam`; gRPC and MCP carry full pool
 CRUD. QUIC has both the gateway-category sub-opcodes and a dedicated **IPAM
 category opcode `0x3F`**.
@@ -237,7 +244,7 @@ asked for. `instance_present` false on an `active` service means the
 translator's instance disappeared underneath a started section, which is
 the failure this surface exists to make visible.
 
-Every transport carries the same nine fields, converted through one shared
+Every transport carries the same ten fields, converted through one shared
 function per transport family so the transports cannot drift:
 
 | Field | Meaning |
@@ -250,6 +257,7 @@ function per transport family so the transports cannot drift:
 | `pool4_used` | Allocated address:port pairs |
 | `module_version` | The translator's reported version |
 | `flow_count` | Pipeline flows the service holds |
+| `last_reconcile` | When the translator and flows were last converged |
 | `last_error` | The last reconcile failure, absent when the last succeeded |
 
 On the wire, REST and MCP carry the bare status object above. QUIC carries
@@ -267,7 +275,7 @@ Error mapping, the same on every transport:
 | Cause | gRPC / Unix | REST | QUIC | MCP |
 |---|---|---|---|---|
 | Section not running (may be starting, or refused and fixable in configuration) | `Unavailable` | 503 | `StatusUnavailable` | "service not available" |
-| Kernel cannot carry the translator (no retry helps until someone loads the module) | `FailedPrecondition` | 412 | `StatusInvalidRequest` | the error, with the kernel's reason |
+| Kernel cannot carry the translator (no retry helps until someone loads the module) | `FailedPrecondition` | 409 | `StatusInvalidRequest` | the error, with the kernel's reason |
 | Anything else | `Internal` | 500 | `StatusInternalError` | the error |
 
 QUIC has no failed-precondition byte. It carries this case as
@@ -360,7 +368,7 @@ The response payload is `{"gateway_id": …, "config": <DesiredConfig>}`, where
 
 ```json
 {
-  "gateway_id": "gw-01-gateway",
+  "gateway_id": "edge-01-gateway",
   "version": "rev-4",
   "load_balancer": {"vips": [{"address": "10.0.200.10", "port": 443, "protocol": "tcp",
                              "backends": [{"address": "10.0.100.11", "port": 8443, "weight": 2}]}]},
@@ -500,7 +508,7 @@ positions described above are unchanged. See
 | QUIC byte | Name | REST | Gateway cause |
 |---|---|---|---|
 | `0x00` | `StatusOK` | 200 | — |
-| `0x01` | `StatusInvalidRequest` | 400 | Malformed prefix, pool, VIP or route; on REST a host precondition is 412 instead (the NAT64 module, §5a) |
+| `0x01` | `StatusInvalidRequest` | 400 | Malformed prefix, pool, VIP or route; on REST a host precondition is 409 instead (the NAT64 module, §5a) |
 | `0x02` | `StatusNotFound` | 404 | Unknown pool, VIP, route or gateway ID |
 | `0x03` | `StatusUnauthorized` | 401 | Proxy auth chain rejected the request |
 | `0x04` | `StatusInternalError` | 500 | BGP speaker or datapath failure |

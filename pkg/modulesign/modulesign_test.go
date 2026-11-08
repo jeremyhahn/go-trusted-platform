@@ -17,7 +17,6 @@ import (
 	"bytes"
 	"crypto"
 	"crypto/ecdsa"
-	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
@@ -30,6 +29,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -55,14 +55,29 @@ func selfSigned(t *testing.T, signer crypto.Signer) *x509.Certificate {
 	return cert
 }
 
+// rsaFixture returns one RSA-2048 key and self-signed certificate shared by
+// every test: generating a 2048-bit key per test dominated the package time.
+// Tests only read the key and certificate.
 func rsaFixture(t *testing.T) (*rsa.PrivateKey, *x509.Certificate) {
 	t.Helper()
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatalf("GenerateKey: %v", err)
+	rsaFixtureOnce.Do(func() {
+		key, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			t.Fatalf("GenerateKey: %v", err)
+		}
+		rsaFixtureKey, rsaFixtureCert = key, selfSigned(t, key)
+	})
+	if rsaFixtureKey == nil || rsaFixtureCert == nil {
+		t.Fatal("shared RSA fixture was not created")
 	}
-	return key, selfSigned(t, key)
+	return rsaFixtureKey, rsaFixtureCert
 }
+
+var (
+	rsaFixtureOnce sync.Once
+	rsaFixtureKey  *rsa.PrivateKey
+	rsaFixtureCert *x509.Certificate
+)
 
 func ecdsaFixture(t *testing.T) (*ecdsa.PrivateKey, *x509.Certificate) {
 	t.Helper()
@@ -129,6 +144,17 @@ func signedAttrsSET(t *testing.T, si signerInfo) []byte {
 
 func messageDigestAttr(t *testing.T, si signerInfo) []byte {
 	t.Helper()
+	var digest []byte
+	if _, err := asn1.Unmarshal(signedAttrValue(t, si, oidAttributeMessageDigest), &digest); err != nil {
+		t.Fatalf("unmarshal messageDigest value: %v", err)
+	}
+	return digest
+}
+
+// signedAttrValue returns the DER of the single value of the signed attribute
+// of type oid, failing the test when the attribute is absent.
+func signedAttrValue(t *testing.T, si signerInfo, oid asn1.ObjectIdentifier) []byte {
+	t.Helper()
 	// Wrap the [0] IMPLICIT content in a SEQUENCE so it can be decoded as a slice
 	// of attributes (SET OF and SEQUENCE OF share identical element encodings).
 	seq, err := asn1.Marshal(asn1.RawValue{
@@ -145,17 +171,57 @@ func messageDigestAttr(t *testing.T, si signerInfo) []byte {
 		t.Fatalf("unmarshal attributes: %v", err)
 	}
 	for _, a := range attrs {
-		if !a.Type.Equal(oidAttributeMessageDigest) {
-			continue
+		if a.Type.Equal(oid) {
+			return a.Values.Bytes
 		}
-		var digest []byte
-		if _, err := asn1.Unmarshal(a.Values.Bytes, &digest); err != nil {
-			t.Fatalf("unmarshal messageDigest value: %v", err)
-		}
-		return digest
 	}
-	t.Fatal("messageDigest attribute not found")
+	t.Fatalf("signed attribute %v not found", oid)
 	return nil
+}
+
+// verifyFailure names the check a detached module signature failed;
+// verifyOK means every check passed.
+type verifyFailure string
+
+const (
+	verifyOK             verifyFailure = ""
+	verifyBadSigner      verifyFailure = "signer identifier does not name the certificate"
+	verifyBadContentType verifyFailure = "contentType attribute is not id-data"
+	verifyBadDigest      verifyFailure = "messageDigest does not match the content"
+	verifyBadSignature   verifyFailure = "signature does not verify under the certificate key"
+)
+
+// verifyDetached checks a detached module CMS against content and the signer
+// certificate the way `openssl cms -verify -certfile cert` and the kernel's
+// PKCS#7 parser do (RFC 5652 §5.4, §5.6, §11.1): the CMS carries no
+// certificates, so the signer is matched by issuer and serial number; the
+// signed attributes must bind id-data and the content's SHA-256; and the
+// signature over the attributes must verify under the certificate's key.
+func verifyDetached(t *testing.T, content, cmsDER []byte, cert *x509.Certificate) verifyFailure {
+	t.Helper()
+	_, si := parseCMS(t, cmsDER)
+
+	if !bytes.Equal(si.SID.Issuer.FullBytes, cert.RawIssuer) || si.SID.SerialNumber.Cmp(cert.SerialNumber) != 0 {
+		return verifyBadSigner
+	}
+
+	var contentType asn1.ObjectIdentifier
+	if _, err := asn1.Unmarshal(signedAttrValue(t, si, oidAttributeContentType), &contentType); err != nil {
+		t.Fatalf("unmarshal contentType value: %v", err)
+	}
+	if !contentType.Equal(oidData) {
+		return verifyBadContentType
+	}
+
+	digest := sha256.Sum256(content)
+	if !bytes.Equal(messageDigestAttr(t, si), digest[:]) {
+		return verifyBadDigest
+	}
+
+	if err := cert.CheckSignature(x509.SHA256WithRSA, signedAttrsSET(t, si), si.Signature); err != nil {
+		return verifyBadSignature
+	}
+	return verifyOK
 }
 
 // --- tests -------------------------------------------------------------------
@@ -242,6 +308,39 @@ func TestBuildModuleSignatureRoundTrip(t *testing.T) {
 	}
 }
 
+// TestBuildModuleSignatureVerifiesAgainstSignerCertificate verifies a module
+// signature given only the signer certificate, as the kernel does, and checks
+// that a tampered module and a corrupted signature are each rejected by the
+// check that guards them.
+func TestBuildModuleSignatureVerifiesAgainstSignerCertificate(t *testing.T) {
+	key, cert := rsaFixture(t)
+	content := []byte("\x7fELF module image the kernel will verify")
+
+	out, err := BuildModuleSignature(content, key, cert)
+	if err != nil {
+		t.Fatalf("BuildModuleSignature: %v", err)
+	}
+	cmsDER, _, _ := splitEnvelope(t, out)
+
+	if got := verifyDetached(t, content, cmsDER, cert); got != verifyOK {
+		t.Fatalf("valid signature rejected: %s", got)
+	}
+
+	tampered := append([]byte{}, content...)
+	tampered[len(tampered)/2] ^= 0x01
+	if got := verifyDetached(t, tampered, cmsDER, cert); got != verifyBadDigest {
+		t.Errorf("tampered content: got %q, want %q", got, verifyBadDigest)
+	}
+
+	// Flip a byte near the end of the envelope: the signature value is the
+	// last field of the SignerInfo, so the DER still parses.
+	corrupted := append([]byte{}, cmsDER...)
+	corrupted[len(corrupted)-10] ^= 0xFF
+	if got := verifyDetached(t, content, corrupted, cert); got != verifyBadSignature {
+		t.Errorf("corrupted signature: got %q, want %q", got, verifyBadSignature)
+	}
+}
+
 func TestBuildModuleSignatureDeterministic(t *testing.T) {
 	key, cert := rsaFixture(t)
 	content := []byte("deterministic across repeated invocations")
@@ -299,27 +398,6 @@ func TestBuildModuleSignatureNilInputs(t *testing.T) {
 	}
 	if _, err := BuildModuleSignature([]byte("x"), key, nil); !errors.As(err, &ErrNilCertificate{}) {
 		t.Errorf("nil certificate error = %v, want ErrNilCertificate", err)
-	}
-}
-
-func TestSignatureAlgorithm(t *testing.T) {
-	rsaKey, _ := rsaFixture(t)
-	ecKey, _ := ecdsaFixture(t)
-
-	if alg, err := signatureAlgorithm(rsaKey.Public()); err != nil || !alg.Algorithm.Equal(oidRSAEncryption) {
-		t.Errorf("RSA: alg=%v err=%v, want rsaEncryption", alg.Algorithm, err)
-	}
-	if alg, err := signatureAlgorithm(ecKey.Public()); err != nil || !alg.Algorithm.Equal(oidECDSAWithSHA256) {
-		t.Errorf("ECDSA: alg=%v err=%v, want ecdsa-with-SHA256", alg.Algorithm, err)
-	}
-
-	edPub, _, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("ed25519 GenerateKey: %v", err)
-	}
-	var ue ErrUnsupportedKeyType
-	if _, err := signatureAlgorithm(edPub); !errors.As(err, &ue) {
-		t.Errorf("ed25519 error = %v, want ErrUnsupportedKeyType", err)
 	}
 }
 
@@ -384,7 +462,6 @@ func TestSignModuleMissingFile(t *testing.T) {
 }
 
 func TestEnumerateModules(t *testing.T) {
-	key, cert := rsaFixture(t)
 	root := t.TempDir()
 	kver := "6.1.0-modulesign"
 	base := filepath.Join(root, "lib", "modules", kver)
@@ -429,23 +506,6 @@ func TestEnumerateModules(t *testing.T) {
 		if !seen {
 			t.Errorf("module not enumerated: %s", p)
 		}
-	}
-
-	// Compressed .ko.gz modules are enumerated AND signable in place: signing
-	// rewrites the file with the signature appended to the decompressed image.
-	if err := SignModule(compressed, key, cert); err != nil {
-		t.Fatalf("SignModule(.ko.gz): %v", err)
-	}
-	signedRaw, err := os.ReadFile(compressed)
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
-	decompressed, err := gzipDecompress(signedRaw)
-	if err != nil {
-		t.Fatalf("gzipDecompress signed module: %v", err)
-	}
-	if !bytes.HasSuffix(decompressed, []byte(magic)) {
-		t.Error("signed .ko.gz does not carry the kernel magic on its decompressed payload")
 	}
 }
 

@@ -216,7 +216,7 @@ with no identity to key on. The daemon log names which.
 ## Task 5 — Templates
 
 Template create, get, list, update and delete reach every transport: the
-`platformctl device template` verbs ([cli.md](cli.md) §2.8), the gRPC, Unix and
+`platformctl device template` verbs ([cli.md](cli.md) §2.11), the gRPC, Unix and
 QUIC `DeviceService` RPCs, the `device_template_*` MCP tools and the REST routes
 below ([api.md](api.md) §4). Only the lookup by name is REST-only.
 
@@ -231,7 +231,7 @@ curl https://cp.example.com:8443/api/v1/device/templates
 # Turn a template into a profile
 curl -X POST https://cp.example.com:8443/api/v1/device/templates/7/create-profile \
      -H 'Content-Type: application/json' \
-     --data '{"name":"gw-02","role":"gateway"}'
+     --data '{"name":"edge-02","role":"gateway"}'
 ```
 
 Creating a profile from a template deep-copies the template's config and match
@@ -343,7 +343,7 @@ console shows the refusal as an error toast:
 | `... device 42 is not suspended (state=attested); only a disabled device can be re-enabled` | Enable on a device that is not suspended. |
 | `... no zone carries lifecycle role quarantine` | Enable needs a zone with the quarantine role to re-admit the port into. |
 
-Each refusal is a `400` on REST and `FAILED_PRECONDITION` on gRPC and the Unix
+Each refusal is a `409` on REST and `FAILED_PRECONDITION` on gRPC and the Unix
 socket. Nothing is recorded and the port is not touched.
 
 ---
@@ -389,8 +389,8 @@ physical port changed VLAN. See [`docs/switch/`](../switch/).
 **`device boot certificate` or `device boot delivery` fails at once with "channel binding unavailable" or "diskless boot needs a TLS 1.3 connection".**
 Unix sockets and MCP are not valid channels for boot proofs. The proof is bound
 to the TLS session of the connection that carries it, and neither transport has
-one, so the call is refused before anything is sent. Use `--protocol grpc`,
-`quic` or `rest` ([cli.md](cli.md) §2.7).
+one, so the call is refused before anything is sent. Use `--transport grpc`,
+`quic` or `rest` ([cli.md](cli.md) §2.8).
 
 **An MCP client says `unknown tool: device_create`.**
 That tool no longer exists; it was advertised without an implementation and

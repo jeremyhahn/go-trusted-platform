@@ -9,7 +9,7 @@
 | Property | Value |
 |----------|-------|
 | Port | 9444 (UDP, QUIC with TLS 1.3) |
-| Opcodes | `0x20`–`0x2C`, top level, no category byte |
+| Opcodes | `0x20`–`0x2C` top level; the DNS category `0x61` with the sub-opcode (`0x30`–`0x3F`) in `payload[0]` |
 | Payload | the platform codec (`quicwire.EncodePayload`), not HTTP/3 |
 
 QUIC does not carry the REST routes. Each request is one opcode and one
@@ -32,8 +32,16 @@ encoded payload; each response is one status byte and one encoded payload.
 | `0x2A` | `OpDNSGetConfig` | empty | `config` (`internal_domain`, `public_domain`, `dnssec_enabled`, `allow_registration`), `timestamp` |
 | `0x2C` | `OpDNSGetMetrics` | empty | `metrics` (`zone_count`, `total_records`, `queries_total`, `cache_hits`, `cache_misses`, `dnssec_validated`, `forwarded_queries`), `timestamp` |
 
-`0x2B` and `0x2D` are retired and refused ([api.md](api.md) §2). There is no
-QUIC opcode for update zone, sign zone, DNSSEC status or register.
+Under the DNS category `OpDNSCategory` (`0x61`), `payload[0]` is the
+sub-opcode and `payload[1:]` the encoded gRPC request:
+
+| Category / sub-opcode | Name | Request | Response |
+|--------|------|---------|----------|
+| `0x61` / `0x30` | `OpDNSUpdateZone` | `UpdateZoneRequest` (`Name`, `Ttl`, `Description`) | `UpdateZoneResponse` |
+
+`0x2B` and `0x2D` are retired and refused ([api.md](api.md) §2), and stay
+do-not-reuse. There is no QUIC opcode for sign zone, DNSSEC status or
+register.
 
 ### Two payload shapes
 

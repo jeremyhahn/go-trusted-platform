@@ -24,6 +24,7 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/unix"
+	"kernel.org/pub/linux/libs/security/libcap/cap"
 )
 
 // Spec is one child launch: which process definition, where its control
@@ -232,7 +233,7 @@ type hardenOps interface {
 	setgroups(gids []int) error
 	setresgid(rgid, egid, sgid int) error
 	setresuid(ruid, euid, suid int) error
-	capset(header *unix.CapUserHeader, data *[2]unix.CapUserData) error
+	capset(data *[2]unix.CapUserData) error
 	seccomp(filter []unix.SockFilter) error
 	getppid() int
 }
@@ -240,8 +241,18 @@ type hardenOps interface {
 // kernelHardenOps makes the real syscalls.
 type kernelHardenOps struct{}
 
+// prctl runs the call on every thread of the process through libcap's psx
+// mechanism (#657). no_new_privs, the bounding set, keepcaps, the ambient
+// set and the parent-death signal are each a property of one task, while
+// the Go runtime has started several threads before main runs: a plain
+// prctl would set them on whichever thread the goroutine happened to be on.
+// psx works in both gatewayd builds — through its C library when cgo is
+// linked, where syscall.AllThreadsSyscall returns ENOTSUP, and through
+// AllThreadsSyscall when it is not — and a thread that answers differently
+// from the others kills the process rather than leaving it split.
 func (kernelHardenOps) prctl(option, arg2, arg3, arg4, arg5 uintptr) error {
-	return unix.Prctl(int(option), arg2, arg3, arg4, arg5)
+	_, err := cap.Prctlw(option, arg2, arg3, arg4, arg5)
+	return err
 }
 
 // setgroups uses the standard library rather than x/sys: the standard
@@ -258,8 +269,38 @@ func (kernelHardenOps) setresuid(ruid, euid, suid int) error {
 	return unix.Setresuid(ruid, euid, suid)
 }
 
-func (kernelHardenOps) capset(header *unix.CapUserHeader, data *[2]unix.CapUserData) error {
-	return unix.Capset(header, &data[0])
+// capset writes the three capability sets on every thread of the process
+// (cap.Set.SetProc, psx), for the same reason prctl does: capset(2) with pid
+// 0 changes the calling thread only. data is in the kernel's
+// _LINUX_CAPABILITY_VERSION_3 layout, the low 32 capabilities in data[0].
+func (kernelHardenOps) capset(data *[2]unix.CapUserData) error {
+	vectors := []struct {
+		flag cap.Flag
+		mask uint64
+	}{
+		{cap.Effective, uint64(data[1].Effective)<<32 | uint64(data[0].Effective)},
+		{cap.Permitted, uint64(data[1].Permitted)<<32 | uint64(data[0].Permitted)},
+		{cap.Inheritable, uint64(data[1].Inheritable)<<32 | uint64(data[0].Inheritable)},
+	}
+	set := cap.NewSet()
+	for _, vector := range vectors {
+		if err := set.SetFlag(vector.flag, true, capValues(vector.mask)...); err != nil {
+			return err
+		}
+	}
+	return set.SetProc()
+}
+
+// capValues lists the capabilities whose bits are set in mask, the inverse
+// of capabilityMask.
+func capValues(mask uint64) []cap.Value {
+	var values []cap.Value
+	for bit := range 64 {
+		if mask&(1<<bit) != 0 {
+			values = append(values, cap.Value(bit))
+		}
+	}
+	return values
 }
 
 // seccomp installs filter on every thread of the process at once
@@ -324,8 +365,10 @@ func (kernelHardenOps) getppid() int { return os.Getppid() }
 // A failure at any step is fatal to the child: running with more privilege
 // than the class allows is the thing this model exists to prevent.
 //
-// Every step changes the calling thread only; EnterHardened is what turns
-// the one hardened thread into a hardened process.
+// Every step reaches every thread of the process: the uid, gid and group
+// changes through the standard library, which applies them process-wide,
+// and the prctl and capset calls through kernelHardenOps' libcap psx calls
+// (#657). EnterHardened then verifies each thread against the class.
 func harden(def Definition, uid, gid uint32, ops hardenOps) error {
 	// Read before anything drops privilege, so the re-arm below can tell
 	// whether the supervisor died inside the window where nothing was armed.
@@ -420,12 +463,11 @@ func dropBoundingSet(def Definition, ops hardenOps) error {
 func setCapabilities(capabilities []uintptr, ops hardenOps) error {
 	mask := capabilityMask(capabilities)
 	low, high := uint32(mask), uint32(mask>>32)
-	header := unix.CapUserHeader{Version: unix.LINUX_CAPABILITY_VERSION_3, Pid: 0}
 	data := [2]unix.CapUserData{
 		{Effective: low, Permitted: low, Inheritable: low},
 		{Effective: high, Permitted: high, Inheritable: high},
 	}
-	if err := ops.capset(&header, &data); err != nil {
+	if err := ops.capset(&data); err != nil {
 		return &ErrHardening{Step: "set the class capabilities after the uid drop", Cause: err}
 	}
 	for _, capability := range capabilities {

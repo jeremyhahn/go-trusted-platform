@@ -15,10 +15,10 @@ package quicbaas
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 )
 
 const entityTypeDeviceTemplate = "DeviceTemplate"
@@ -57,7 +57,7 @@ func (d *DeviceTemplateDAO) FindByName(ctx context.Context, tenantID, name strin
 
 		for _, entity := range svcEntities {
 			var template entities.DeviceTemplate
-			if err := json.Unmarshal(entity.Data, &template); err != nil {
+			if err := datastore.DecodeEntity(entity.Data, &template); err != nil {
 				d.logger.Warn("Failed to deserialize device template", "id", entity.ID, "error", err)
 				continue
 			}

@@ -85,9 +85,9 @@ func TestMCPServiceProvider_VMAttestVerify_ForwardsEvidence(t *testing.T) {
 	var resp platformv1.VerifyVMAttestationResponse
 	decodeMCPProto(t, result, &resp)
 	assert.True(t, resp.GetVerified())
-	require.NotNil(t, orchestrator.lastEvidence)
-	assert.Equal(t, x509.SHA256WithRSAPSS.String(), orchestrator.lastEvidence.SignatureAlgorithm)
-	assert.Equal(t, []byte{0x07}, orchestrator.lastEvidence.ExpectedPCRs[7])
+	require.NotNil(t, orchestrator.recordedEvidence())
+	assert.Equal(t, x509.SHA256WithRSAPSS.String(), orchestrator.recordedEvidence().SignatureAlgorithm)
+	assert.Equal(t, []byte{0x07}, orchestrator.recordedEvidence().ExpectedPCRs[7])
 }
 
 // A PCR bank AttestVM does not quote over is InvalidArgument, as on gRPC.
@@ -103,7 +103,7 @@ func TestMCPServiceProvider_VMAttestVerify_RejectsOtherBank(t *testing.T) {
 		},
 	})
 	assert.Equal(t, codes.InvalidArgument, status.Code(err))
-	assert.Nil(t, orchestrator.lastEvidence)
+	assert.Nil(t, orchestrator.recordedEvidence())
 }
 
 // vm_snapshot_get answers ComputeService.GetSnapshot's response.

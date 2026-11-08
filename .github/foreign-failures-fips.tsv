@@ -19,7 +19,8 @@
 # The panic killed the test binary, so every test after it never ran. For
 # each attributed package the checker therefore runs ALL of its other
 # top-level tests again, by explicit name (`go test -list`, then `-run
-# '^(A|B|...)$'`; no -skip, no -short, no build tag), under the same
+# '^(A|B|...)$'`, split into batches whose pattern stays under 64 KiB, the
+# exec argument limit; no -skip, no -short, no build tag), under the same
 # GOFIPS140/fips140=only environment and derived build tags, and the job
 # passes only when that rerun passes and runs every name. Names `make test`'s
 # TEST_SKIP drops are left out of the rerun exactly as they were from the run.
@@ -38,6 +39,7 @@
 #
 # kind	package	name	upstream	closing_release	frame	message
 panic	pkg/vpn/agent	TestXKMSTPM_IDevIDSignerSignsWithTheTPMKey	go-quicbaas#1389+go-trusted-platform#937	go-quicbaas v0.16.0-alpha (its adoption PR removes these rows)	github.com/google/go-tpm/tpm2.(*policySession).Authorize	crypto/hmac: use of keys shorter than 112 bits is not allowed in FIPS 140-only mode
+panic	pkg/api/daemon	TestTPMSimulator_ActivateCredentialRefusesAForeignCredential	go-quicbaas#1389+go-trusted-platform#937	go-quicbaas v0.16.0-alpha (its adoption PR removes these rows)	github.com/google/go-tpm/tpm2.(*policySession).Authorize	crypto/hmac: use of keys shorter than 112 bits is not allowed in FIPS 140-only mode
 panic	pkg/app	TestDeviceActivation_IDevIDOverMTLS	go-quicbaas#1389+go-trusted-platform#937	go-quicbaas v0.16.0-alpha (its adoption PR removes these rows)	github.com/google/go-tpm/tpm2.(*policySession).Authorize	crypto/hmac: use of keys shorter than 112 bits is not allowed in FIPS 140-only mode
 panic	pkg/app	TestFetchProfileAndActivate_IDevIDOverMTLS	go-quicbaas#1389+go-trusted-platform#937	go-quicbaas v0.16.0-alpha (its adoption PR removes these rows)	github.com/google/go-tpm/tpm2.(*policySession).Authorize	crypto/hmac: use of keys shorter than 112 bits is not allowed in FIPS 140-only mode
 panic	pkg/app	TestIDevIDSigner_NilPublicKey	go-quicbaas#1389+go-trusted-platform#937	go-quicbaas v0.16.0-alpha (its adoption PR removes these rows)	github.com/google/go-tpm/tpm2.(*policySession).Authorize	crypto/hmac: use of keys shorter than 112 bits is not allowed in FIPS 140-only mode

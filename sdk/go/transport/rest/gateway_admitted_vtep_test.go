@@ -70,12 +70,12 @@ func sdkGatewayOverREST(t *testing.T, body string) (*sdkgateway.Client, *url.URL
 func TestGatewayAdmittedVTEP_SDKOverREST(t *testing.T) {
 	client, requested := sdkGatewayOverREST(t, fmt.Sprintf(servedAdmittedVTEP, "2001:db8::10"))
 
-	got, err := client.GetAdmittedVTEP(context.Background(), "gw-01", "2001:db8::10")
+	got, err := client.GetAdmittedVTEP(context.Background(), "edge-01", "2001:db8::10")
 	if err != nil {
 		t.Fatalf("GetAdmittedVTEP: %v", err)
 	}
-	if requested.Path != "/api/v1/sdn/gateway/overlay/vteps/2001:db8::10" || requested.Query().Get("gateway_id") != "gw-01" {
-		t.Fatalf("requested %s, want the admitted-VTEP route for gw-01", requested)
+	if requested.Path != "/api/v1/sdn/gateway/overlay/vteps/2001:db8::10" || requested.Query().Get("gateway_id") != "edge-01" {
+		t.Fatalf("requested %s, want the admitted-VTEP route for edge-01", requested)
 	}
 	if !proto.Equal(got, wantAdmittedVTEP("2001:db8::10")) {
 		t.Fatalf("reply = %v, want %v", got, wantAdmittedVTEP("2001:db8::10"))

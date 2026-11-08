@@ -24,6 +24,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"math/big"
 	"net"
 	"net/http"
@@ -182,7 +183,10 @@ func serveGRPCServices(t *testing.T, lis net.Listener, register func(grpc.Servic
 	go func() { done <- srv.Serve(lis) }()
 	t.Cleanup(func() {
 		srv.Stop()
-		assert.NoError(t, <-done)
+		// Stop can win the race with Serve's start; Serve then returns ErrServerStopped, its other clean-shutdown result.
+		if err := <-done; !errors.Is(err, grpc.ErrServerStopped) {
+			assert.NoError(t, err)
+		}
 	})
 }
 

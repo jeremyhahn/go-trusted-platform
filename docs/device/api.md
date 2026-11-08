@@ -18,17 +18,17 @@ appears here.
 
 - **Unix is gRPC over a Unix domain socket**, so gRPC and Unix share a column.
 - **Embedded** is `ServiceRegistry.Device`
-  (`sdk/go/transport/embedded/adapter.go:37`), dispatched by gRPC method string
-  through `registerDeviceHandlers` (`sdk/go/transport/embedded/dispatch.go:340`).
-- gRPC: `DeviceService`, **28 RPCs** (`pkg/api/grpc/proto/device.proto`).
+  (`sdk/go/transport/embedded/adapter.go:36`), dispatched by gRPC method string
+  through `registerDeviceHandlers` (`sdk/go/transport/embedded/dispatch.go:374`).
+- gRPC: `DeviceService`, **32 RPCs** (`pkg/api/grpc/proto/device.proto`).
 - REST: `/api/v1/devices/*`, `/api/v1/device/*`
   (`pkg/webservice/v1/router/device.go`, `pkg/webservice/v1/rest/device/router.go`).
 - QUIC: top-level opcodes **`0x30`–`0x3D`**, dispatched by
   `req.Opcode >= OpDeviceRegister && req.Opcode <= OpDeviceGetState`
-  (`pkg/api/daemon/quic_service.go:617`). No category indirection. `0x3C` and
+  (`pkg/api/daemon/quic_service.go:621`). No category indirection. `0x3C` and
   `0x3E` are retired (see below).
-- MCP: one device tool family, one profile family and two template tools —
-  see §6.
+- MCP: one device tool family, one profile family, five `device_template_*`
+  tools and `profile_create_from_template` — see §6.
 - Go SDK: `sdk/go/services/device` — `NewClient(transport.Adapter)` or
   `NewClientFromGRPC(platformv1.DeviceServiceClient)`. Over REST the SDK sends
   every RPC to the exact route in §2, verb and id constraint included (#321).
@@ -283,8 +283,7 @@ match a TPM against (`pkg/device/service.go`), so a device created without one
 could never be claimed. The webservice used to synthesise `dev-<id>` for an
 empty serial, which made `{}` a `201` there and a `400` on the daemon; that
 fallback is gone. The console's register form requires the serial, and the JS
-SDK's `CreateDeviceRequest` and the console's `RegisterDeviceInput` type it as
-required.
+SDK's `CreateDeviceRequest` types it as required.
 
 **A conflict is refused, not resolved.** The flat shape and the proto envelope
 (`CreateDeviceRequest { Device device = 1; }`, mirrored by the JS SDK's
@@ -292,10 +291,8 @@ required.
 field present in both places with different values has no right answer, so the
 request is a `400` instead of quietly taking one side.
 
-**Keys the device has no column for are ignored.** The console sends `name`,
-`type`, `device_type`, `description`, `version`, `tpm_manufacturer`,
-`tpm_version` and `tpm_firmware_version`; `entities.Device` stores none of
-them and `device.Request` does not declare them, so both listeners drop them.
+**Keys the device has no column for are ignored.** `entities.Device` stores
+only what `device.Request` declares, so both listeners drop any other key.
 `manufacturer` is the one key with an effect: it becomes the `model` when no
 `model` is supplied. `name` is deliberately never the serial — reusing it as one
 once wrote a display string where a TPM serial belongs, and on `PUT` overwrote
@@ -304,11 +301,15 @@ a real serial with it (#252). Pinned by
 `TestUpdateDeviceDoesNotOverwriteASerialWithAName`.
 
 **A device has no name.** The proto `Device` and `entities.Device` have no name
-field, so no transport persists one. The console's `web/src/types/device.ts`
-declares its own `Device` and `RegisterDeviceInput` with `name`, `type`,
-`description`, `tags` and `tpmInfo`; those are console-local types describing no
-server state. Whether a device should gain a first-class display name is open
-on #455.
+field, so no transport persists one, and none will: a device is identified by
+its serial and id (#455). The console's register form
+(`web/src/components/features/devices/device-form.tsx`) collects the serial
+alone and posts it in the SDK envelope, `{"device":{"serial":"SN-1"}}`; a
+refusal reaches the operator as the server's message. It has no name, type,
+description or TPM manufacturer/version/firmware field: the create contract
+stores none of them, so a value typed there would be silently dropped (#455).
+The TPM details a device does carry (`ek_cert`, `attest_pub`, `attest_cert`)
+come from enrollment, not from an operator.
 
 **The two listeners still differ on `PUT /api/v1/devices/{id}`.** Both decode
 the body with `device.DecodeRequest`, agree on every status, and leave the
@@ -346,7 +347,7 @@ different statuses.
 | Find matching profile | `POST /api/v1/device/profiles/match` | `FindMatchingProfile` — no match `NotFound` | `OpProvisioningCategory` (`0xCF`) sub-op `DeviceSubFindMatchingProfile` (`0x29`) — see §3.7 | `profile_find_matching` — no match `NotFound` | ✅ |
 | Find config for a device (EK serial / MAC) | `GET /api/v1/device/profiles/find-config` | `FindConfigForDevice` — no identity `InvalidArgument`, unknown identity `NotFound` | `OpProvisioningCategory` (`0xCF`) sub-op `DeviceSubFindConfigForDevice` (`0x2E`) — same codes | `profile_find_config` — same codes | ✅ |
 | Assign profile to a device identity (explicit `ek_serial`/`mac_address`, or `device_id` of a registered device — the server derives the EK serial from its stored EK certificate, #463) | `POST /api/v1/device/profiles/{id}/assign` | `AssignProfileToDevice` | `OpProvisioningCategory` (`0xCF`) sub `0x20` — see §3.7 | `profile_assign_to_device` | ✅ |
-| Unassign profile | `POST /api/v1/device/profiles/{id}/unassign` | `UnassignProfileFromDevice` | `MISSING — docs/13 G7` | `profile_unassign_from_device` | ✅ |
+| Unassign profile | `POST /api/v1/device/profiles/{id}/unassign` | `UnassignProfileFromDevice` | `OpProvisioningCategory` (`0xCF`) sub `DeviceProfileSubUnassign` (`0x21`) — see §3.7 | `profile_unassign_from_device` | ✅ |
 | Get profile over mTLS (device self-service) | `GET /api/v1/device/profile` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 
 ### 3.1 One name per resource
@@ -521,7 +522,8 @@ Two consequences worth knowing before writing a client:
 
 - **Omitting a field does not clear it.** Server-owned fields — lifecycle state
   and the identity/enrollment set (`TenantID`, `EKCert`, `AttestPub`,
-  `AttestCert`, `SigningPub`, `EventLog`, `HashAlgoId`, `Model`, `Serial`) — are
+  `AttestCert`, `SigningPub`, `EventLog`, `HashAlgoId`, `Model`, `Serial`,
+  `LastHeartbeatAddr`, `PriorPortClass`, `IDevIDCert`) — are
   restored, so
   a partial `PUT` cannot erase a device's TPM identity. Before #252 it could,
   silently.
@@ -1045,7 +1047,7 @@ refused candidate, `source` and `attest_cert` are empty, and `subject`,
 removed.
 
 `source` is `device`, `ca` or `reissued`. A refusal is `FAILED_PRECONDITION`
-on gRPC/Unix/MCP, QUIC status `0x01`, and `400` on REST, with a message that
+on gRPC/Unix/MCP, QUIC status `0x01`, and `409` on REST, with a message that
 names **every** candidate and why it was refused (`ca[node-03]: … does not
 carry tcg-cap-verifiedTPMRestricted`). `UNAVAILABLE` means no CA is
 configured. Every attempt is audited as an attestation store event —
@@ -1146,9 +1148,10 @@ boot proved freshness and IAK possession, not the expected boot state.
 
 | Status | Cause |
 |---|---|
-| 400 | no identity, a body that is not the JSON above, or a connection with no TLS 1.3 exporter to bind to (`ErrBootChannelRequired`) |
+| 400 | no identity, or a body that is not the JSON above |
 | 403 | certificate: any request that does not prove the recorded IDevID key, one body for all of them. Delivery: wrong or unchained certificate, a quote nonce that is not this connection's, failed or unevaluable attestation, revoked or suspended device |
 | 404 | delivery: identity unknown, or no profile bound to the device |
+| 409 | a connection with no TLS 1.3 exporter to bind to (`ErrBootChannelRequired`, `FailedPrecondition`; #665) |
 | 500 | recorded chain unparseable, CA bundle, storage or verifier fault |
 
 #### Transports
@@ -1192,7 +1195,7 @@ it, before the boot service runs — an empty nonce never reaches it:
 
 | Transport | Refusal for a connection with no channel |
 |---|---|
-| REST | `400` |
+| REST | `409`, the platform's status for `FailedPrecondition` (#665) |
 | gRPC, Unix socket | `FailedPrecondition` |
 | QUIC | `StatusInvalidRequest` |
 | MCP | `-32007` (`FailedPrecondition`): tool error `ErrBootChannelRequired` (Transport `MCP`), from both MCP service providers |
@@ -1277,10 +1280,10 @@ as they were:
 
 | Cause | Error | gRPC / Unix / MCP | QUIC | REST |
 |---|---|---|---|---|
-| The daemon has no SDN policy engine (not SDN-OVS, or no attestation quarantine observer) | `ErrLifecycleUnenforced` | `FAILED_PRECONDITION` | `0x01` | 400 |
-| The device has no `network_port_id` | `ErrDeviceNotOnFabric` | `FAILED_PRECONDITION` | `0x01` | 400 |
-| Disable from `suspended` or `revoked` | `entities.ErrInvalidTransition` | `FAILED_PRECONDITION` | `0x01` | 400 |
-| Enable from anything but `suspended`; no zone with lifecycle role `quarantine`; the engine knows no port for the device | `policy.ErrDeviceNotSuspended`, `ErrNoQuarantineZone`, `ErrUnknownDevicePort` | `FAILED_PRECONDITION` | `0x01` | 400 |
+| The daemon has no SDN policy engine (not SDN-OVS, or no attestation quarantine observer) | `ErrLifecycleUnenforced` | `FAILED_PRECONDITION` | `0x01` | 409 |
+| The device has no `network_port_id` | `ErrDeviceNotOnFabric` | `FAILED_PRECONDITION` | `0x01` | 409 |
+| Disable from `suspended` or `revoked` | `entities.ErrInvalidTransition` | `FAILED_PRECONDITION` | `0x01` | 409 |
+| Enable from anything but `suspended`; no zone with lifecycle role `quarantine`; the engine knows no port for the device | `policy.ErrDeviceNotSuspended`, `ErrNoQuarantineZone`, `ErrUnknownDevicePort` | `FAILED_PRECONDITION` | `0x01` | 409 |
 | `reason` longer than 256 bytes; id missing or `0` | `ErrLifecycleReasonTooLong`; `ErrInvalidDeviceID` | `INVALID_ARGUMENT` | `0x09` | 400 |
 | Unknown device | — | `NOT_FOUND` | `0x02` | 404 |
 
@@ -1476,7 +1479,7 @@ On MCP, all 20 device-related tool names carry a permission — see §6.
 | QUIC byte | Name | REST | Device cause |
 |---|---|---|---|
 | `0x00` | `StatusOK` | 200 | — |
-| `0x01` | `StatusInvalidRequest` | 400 | Payload failed to decode (`ErrQUICDecodingFailed`); a refused operator Disable/Enable (`FAILED_PRECONDITION`, §4.7) |
+| `0x01` | `StatusInvalidRequest` | 400 | Payload failed to decode (`ErrQUICDecodingFailed`); a refused operator Disable/Enable (`FAILED_PRECONDITION`, §4.7; 409 on REST) |
 | `0x02` | `StatusNotFound` | 404 | Unknown device, profile or template; `ErrNoMatchingConfig`; `ErrProfileNotFound` |
 | `0x03` | `StatusUnauthorized` | 401 | Token invalid; missing or unverified mTLS client certificate |
 | `0x04` | `StatusInternalError` | 500 | Storage failure (`*WrappedError`); `ErrARPLookupFailed`; `ErrPortTransitionFailed`; switch VLAN transition failure |

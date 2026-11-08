@@ -324,7 +324,7 @@ five TFTP retries five seconds apart).
 | `--serial` | string | `""` | The Pi's serial number, up to eight hex digits (**required**) |
 | `--mac` | string | `""` | The Pi's Ethernet address (**required**) |
 | `--revision` | string | `0` | Board revision code, hex; goes into option 97 |
-| `--model` | string | `rpi4` | `rpi4`, `rpi400`, `cm4`, `rpi3b+`, `rpi5` — decides the FourCC, the first-stage files and the device tree |
+| `--model` | string | `rpi4` | `rpi4`, `rpi400`, `cm4`, `rpi3b+`, `rpi5` — decides the FourCC, the first-stage files and the device tree | <!-- lab-string-ok: Raspberry Pi model name, not a lab host -->
 | `--prefix` | string | `serial` | The bootloader's `TFTP_PREFIX`: `serial` (`9ffefdef/`), `mac` (`dc-a6-32-01-36-c2/`) or `string` |
 | `--prefix-str` | string | `""` | `TFTP_PREFIX_STR`, with `--prefix string` |
 | `--option43` | string | `Raspberry Pi Boot` | The bootloader's `PXE_OPTION43` match string |
@@ -730,7 +730,7 @@ read the log, then retry with `platformctl bmc enroll`.
 | BMC enrollment outside a bootstrap run | `platformctl bmc` — [`docs/bmc/`](../bmc/) |
 | Building or customising the ISO | `platformctl iso` — [`docs/provisioning/cli.md`](../provisioning/cli.md) |
 | Device templates and profiles outside seeding | `platformctl device` — [`docs/device/`](../device/) |
-| DANE TLSA record management | `platformctl dns` — [`docs/dns/cli.md`](../dns/cli.md) |
+| DANE TLSA record management | `platformctl dns record add --type tlsa` — [`docs/dns/cli.md`](../dns/cli.md) |
 | Running bootstrap remotely | Nothing. There is no bootstrap service on any transport — [api.md](api.md) §5 |
 
 ---

@@ -356,6 +356,10 @@ func testConfig() Config {
 		Pool:       "vpn-clients",
 		DataPlanes: []DataPlaneKind{DataPlaneMASQUE},
 		AllowTo:    []string{"management"},
+		MASQUE: MASQUESettings{
+			Template: "https://gw.example:4433/.well-known/masque/ip/",
+			Routes:   []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")},
+		},
 	}
 }
 

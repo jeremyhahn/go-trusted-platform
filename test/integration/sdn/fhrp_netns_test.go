@@ -17,6 +17,7 @@ package sdn
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/netip"
 	"os"
@@ -29,6 +30,7 @@ import (
 	"github.com/vishvananda/netns"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/fhrp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testenv"
 )
 
 const (
@@ -93,16 +95,35 @@ func (e *fhrpEvents) GroupEvent(ev fhrp.Event) { e.ch <- ev }
 
 func (e *fhrpEvents) awaitState(t *testing.T, prio uint8, state fhrp.State) {
 	t.Helper()
+	e.await(t, fmt.Sprintf("speaker with priority %d never reached %s", prio, state), func(ev fhrp.Event) bool {
+		return ev.Kind == fhrp.EventTransition && ev.Status.Priority == prio && ev.Status.State == state
+	})
+}
+
+// awaitHeardInBackup waits until the speaker with priority prio has
+// processed an advertisement from the one with priority from and is
+// Backup after it: proof the advertisement crossed the wire, and that any
+// Master state the receiver held before it was given up (RFC 9568 §6.4.3).
+func (e *fhrpEvents) awaitHeardInBackup(t *testing.T, prio, from uint8) {
+	t.Helper()
+	e.await(t, fmt.Sprintf("speaker with priority %d never heard priority %d as backup", prio, from), func(ev fhrp.Event) bool {
+		return ev.Kind == fhrp.EventAdvertisement && ev.Priority == from &&
+			ev.Status.Priority == prio && ev.Status.State == fhrp.StateBackup
+	})
+}
+
+func (e *fhrpEvents) await(t *testing.T, failure string, match func(fhrp.Event) bool) {
+	t.Helper()
 	deadline := time.NewTimer(15 * time.Second)
 	defer deadline.Stop()
 	for {
 		select {
 		case ev := <-e.ch:
-			if ev.Kind == fhrp.EventTransition && ev.Status.Priority == prio && ev.Status.State == state {
+			if match(ev) {
 				return
 			}
 		case <-deadline.C:
-			t.Fatalf("speaker with priority %d never reached %s", prio, state)
+			t.Fatal(failure)
 		}
 	}
 }
@@ -137,7 +158,7 @@ func TestFHRP_NetNS_TwoSpeakersElectAndFailOver(t *testing.T) {
 	require.NoError(t, err)
 	defer hb.Close()
 
-	require.NoError(t, ha.LinkAdd(&netlink.Veth{LinkAttrs: netlink.LinkAttrs{Name: "vr0"}, PeerName: "vr1"}))
+	require.NoError(t, ha.LinkAdd(testenv.NewVeth("vr0", "vr1")))
 	peer, err := ha.LinkByName("vr1")
 	require.NoError(t, err)
 	require.NoError(t, ha.LinkSetNsFd(peer, int(nsB)))
@@ -169,12 +190,26 @@ func TestFHRP_NetNS_TwoSpeakersElectAndFailOver(t *testing.T) {
 	b := newSpeaker(nsB, hb, group("vr1", fhrpBAddr, 100))
 
 	ctx := context.Background()
+	// Stop both speakers before the namespaces close, on every exit path:
+	// a speaker left running keeps advertising from a torn-down interface.
+	stopAtEnd := func(s *fhrp.Speaker) {
+		t.Cleanup(func() {
+			if s.Active() {
+				require.NoError(t, s.Stop(ctx))
+			}
+		})
+	}
 	require.NoError(t, a.Start(ctx))
+	stopAtEnd(a)
 	require.NoError(t, b.Start(ctx))
-	defer func() { _ = b.Stop(ctx) }()
+	stopAtEnd(b)
 
-	// Election: A (200) masters within 3 × 0.2 s + skew; B stays backup.
+	// Election: A (200) masters within 3 × 0.2 s + skew; B hears it and is
+	// backup. Waiting for B to hear A, not for A's transition alone, is what
+	// proves the election: B also becomes master on its own Master_Down
+	// timer when it hears nothing (RFC 9568 §6.4.2).
 	events.awaitState(t, 200, fhrp.StateMaster)
+	events.awaitHeardInBackup(t, 100, 200)
 	require.True(t, holdsVIP(t, ha, "vr0"), "the master holds the virtual address")
 	require.False(t, holdsVIP(t, hb, "vr1"), "the backup does not")
 	stB, err := b.GroupState("vr1", 7)

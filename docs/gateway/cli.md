@@ -8,7 +8,7 @@
 ## 1. Where the gateway CLI actually lives
 
 **There is no `platformctl gateway` command group.** `pkg/cli/commands/root.go`
-registers 44 top-level commands and `gateway` is not one of them
+registers 50 top-level commands and `gateway` is not one of them
 ([`docs/daemon/cli.md`](../daemon/cli.md) §3). The gateway
 verbs are subgroups of `sdn`:
 
@@ -19,16 +19,20 @@ verbs are subgroups of `sdn`:
 | `platformctl sdn gateway nat64` | NAT64 translator status |
 | `platformctl sdn gateway perf` | Datapath performance |
 | `platformctl sdn ipam` | Pools and allocations |
+| `platformctl proxy` | The trusted reverse proxy — **this one is top-level** |
 
 `lb`, `nat64` and `perf` are registered only under `sdn gateway`
 (`pkg/cli/commands/sdn/gateway.go`). There is no `platformctl sdn lb` and no
 `platformctl sdn perf`.
-| `platformctl proxy` | The trusted reverse proxy — **this one is top-level** |
 
 `gatewayd` itself is the daemon binary (`cmd/gatewayd/main.go`), not an
 administrative CLI: its `main` calls `commands.Execute()` and it is run as a
-service, configured by file. `gatewayd serve` takes only the global `--config` and
-`--data-dir`: every listener address and the BGP speaker come from that file.
+service, configured by file. `gatewayd serve` takes only the global persistent
+flags (`pkg/sdn/gateway/commands/root.go`): `--config` (default
+`/etc/gatewayd/config.yaml`), `--config-dir` (default `/etc/gatewayd`),
+`--data-dir` (default `/var/lib/gatewayd`), `--debug`/`-d`, `--log-format`
+(default `json`) and `--log-level` (default `info`). Every listener address and
+the BGP speaker come from the config file.
 The `--listen`, `--api-port`, `--grpc-port`, `--bgp-asn` and `--bgp-router-id`
 flags it once had configured nothing and are gone (#93).
 
@@ -45,7 +49,7 @@ service account, or if the process hosts no enabled service.
 
 ### Global flags
 
-`platformctl` persistent flags (`pkg/cli/commands/root.go:125`), precedence
+`platformctl` persistent flags (`pkg/cli/commands/root.go:135-156`), precedence
 **flag > environment > config file > default**:
 
 | Flag | Short | Default | Environment |
@@ -112,10 +116,10 @@ address is not currently admitted.
 ```bash
 platformctl sdn gateway status --output json
 platformctl sdn gateway snapshot
-platformctl sdn gateway snapshot --gateway-id gw-01-gateway
+platformctl sdn gateway snapshot --gateway-id edge-01-gateway
 platformctl sdn gateway snapshot --all --output json
-platformctl sdn gateway overlay vteps --gateway-id gw-01-gateway
-platformctl sdn gateway overlay vteps get 10.255.0.10 --gateway-id gw-01-gateway
+platformctl sdn gateway overlay vteps --gateway-id edge-01-gateway
+platformctl sdn gateway overlay vteps get 10.255.0.10 --gateway-id edge-01-gateway
 platformctl sdn gateway bgp peers
 platformctl sdn gateway bgp announce --prefix 203.0.113.0/24 --next-hop 198.51.100.1
 platformctl sdn gateway bgp withdraw --prefix 203.0.113.0/24
@@ -134,7 +138,7 @@ Pools first, then allocations from them.
 |---|---|
 | `list` | `--zone` (filter; empty returns all pools) |
 | `get` | `--id` (required) |
-| `create` | `--id` (optional, generated if omitted), `--name` (required), `--cidr` (required, **immutable**), `--gateway`, `--zone`, `--description` |
+| `create` | `--id` (optional, generated if omitted), `--name` (required), `--cidr` (required, **immutable**), `--gateway`, `--zone`, `--description`, `--lease-seconds` (default lease; `0` never expires) |
 | `update` | `--id` (required), `--name`, `--gateway`, `--zone`, `--description`, `--lease-seconds`, `--reserved`, `--range-start`, `--range-end` |
 | `delete` | `--id` (required) |
 

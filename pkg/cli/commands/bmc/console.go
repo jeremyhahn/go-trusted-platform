@@ -64,14 +64,14 @@ command requires --bmc-protocol ipmi (or auto-detection landing on IPMI).
 Examples:
   # Interactive console
   platformctl bmc console \
-    --bmc-host 10.4.2.103 \
+    --bmc-host 192.0.2.103 \
     --bmc-user admin \
     --bmc-pass-file /etc/platform/bmc.pass \
     --bmc-protocol ipmi
 
   # Capture session to a log file (no TTY required)
   platformctl bmc console \
-    --bmc-host 10.4.2.103 \
+    --bmc-host 192.0.2.103 \
     --bmc-user admin \
     --bmc-pass-file /etc/platform/bmc.pass \
     --bmc-protocol ipmi \
@@ -79,7 +79,7 @@ Examples:
 
   # Send a single serial-break and exit
   platformctl bmc console \
-    --bmc-host 10.4.2.103 \
+    --bmc-host 192.0.2.103 \
     --bmc-user admin \
     --bmc-pass-file /etc/platform/bmc.pass \
     --bmc-protocol ipmi \
@@ -177,7 +177,7 @@ func runConsole(
 // configured delay between writes. Escape sequences are decoded so the user
 // can pass shell-quoted control bytes (\r, \n, \t, \e, \xNN) without
 // shell-escaping nightmares.
-func sendStringsToSOL(ctx context.Context, sol *bmc.SOLSession, strs []string, delay time.Duration) error {
+func sendStringsToSOL(ctx context.Context, sol io.Writer, strs []string, delay time.Duration) error {
 	for i, s := range strs {
 		if i > 0 {
 			select {
@@ -303,6 +303,14 @@ func runConsoleInteractive(ctx context.Context, sol *bmc.SOLSession, host string
 	return err
 }
 
+// solLogSource is the part of *bmc.SOLSession that log mode reads: the
+// console byte stream plus the counters behind the zero-bytes warning.
+type solLogSource interface {
+	io.Reader
+	BytesReceived() uint64
+	PayloadInstance() byte
+}
+
 // runConsoleLogMode is the non-interactive capture path. It writes received
 // SOL bytes to logFile (or stdout when empty) until the BMC closes the
 // session, the user sends SIGINT, or the context is cancelled.
@@ -311,7 +319,7 @@ func runConsoleInteractive(ctx context.Context, sol *bmc.SOLSession, host string
 // to disk immediately — silent SOL sessions (BIOS redirection off, wrong
 // COM port) must produce a zero-byte file we can rely on rather than a
 // file that could still hold buffered bytes at termination.
-func runConsoleLogMode(ctx context.Context, sol *bmc.SOLSession, logFile string) error {
+func runConsoleLogMode(ctx context.Context, sol solLogSource, logFile string) error {
 	var dst io.Writer = os.Stdout
 	var syncer interface{ Sync() error }
 	if logFile != "" {

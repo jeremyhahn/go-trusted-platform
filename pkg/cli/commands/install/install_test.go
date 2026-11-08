@@ -77,16 +77,6 @@ func TestNewCommand(t *testing.T) {
 	}
 }
 
-func TestNewCommand_NilFlags(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return nil
-	}
-
-	cmd := NewCommand(getFlags)
-	require.NotNil(t, cmd)
-	assert.Equal(t, "install", cmd.Use)
-}
-
 // ============================================================================
 // System Command Tests
 // ============================================================================
@@ -919,78 +909,6 @@ func TestSystemCommand_NoArgsAccepted(t *testing.T) {
 // Flags Struct Tests
 // ============================================================================
 
-func TestSystemFlagsStruct(t *testing.T) {
-	flags := &systemFlags{
-		config:             "/etc/platformd/install.yaml",
-		os:                 "alpine",
-		osVersion:          "3.22",
-		disk:               "/dev/sda",
-		efiSize:            538,
-		partitionTable:     "gpt",
-		filesystem:         "lvm",
-		lvmVG:              "vg0",
-		lvmLV:              "root",
-		password:           "secret",
-		rootPassword:       "rootsecret",
-		hostname:           "testhost",
-		mirror:             "https://example.com/alpine",
-		automated:          true,
-		fips:               true,
-		lockdown:           true,
-		lockdownMode:       "confidentiality",
-		tpmAutoUpgradeSeal: true,
-		platformdBinary:    "/usr/bin/platformd",
-		verbose:            true,
-		debug:              true,
-	}
-
-	assert.Equal(t, "/etc/platformd/install.yaml", flags.config)
-	assert.Equal(t, "alpine", flags.os)
-	assert.Equal(t, "3.22", flags.osVersion)
-	assert.Equal(t, "/dev/sda", flags.disk)
-	assert.Equal(t, 538, flags.efiSize)
-	assert.Equal(t, "gpt", flags.partitionTable)
-	assert.Equal(t, "lvm", flags.filesystem)
-	assert.Equal(t, "vg0", flags.lvmVG)
-	assert.Equal(t, "root", flags.lvmLV)
-	assert.Equal(t, "secret", flags.password)
-	assert.Equal(t, "rootsecret", flags.rootPassword)
-	assert.Equal(t, "testhost", flags.hostname)
-	assert.Equal(t, "https://example.com/alpine", flags.mirror)
-	assert.True(t, flags.automated)
-	assert.True(t, flags.fips)
-	assert.True(t, flags.lockdown)
-	assert.Equal(t, "confidentiality", flags.lockdownMode)
-	assert.True(t, flags.tpmAutoUpgradeSeal)
-	assert.Equal(t, "/usr/bin/platformd", flags.platformdBinary)
-	assert.True(t, flags.verbose)
-	assert.True(t, flags.debug)
-}
-
-func TestUKIFlagsStruct(t *testing.T) {
-	flags := &ukiFlags{
-		kernelPath:    "/boot/vmlinuz",
-		initramfsPath: "/boot/initramfs",
-		cmdlineStr:    "root=/dev/mapper/cryptroot ro",
-		outputPath:    "/boot/efi/EFI/BOOT/BOOTX64.EFI",
-		osReleasePath: "/etc/os-release",
-		stubPath:      "/usr/lib/stub.efi",
-		useObjcopy:    true,
-		verbose:       true,
-		debug:         true,
-	}
-
-	assert.Equal(t, "/boot/vmlinuz", flags.kernelPath)
-	assert.Equal(t, "/boot/initramfs", flags.initramfsPath)
-	assert.Equal(t, "root=/dev/mapper/cryptroot ro", flags.cmdlineStr)
-	assert.Equal(t, "/boot/efi/EFI/BOOT/BOOTX64.EFI", flags.outputPath)
-	assert.Equal(t, "/etc/os-release", flags.osReleasePath)
-	assert.Equal(t, "/usr/lib/stub.efi", flags.stubPath)
-	assert.True(t, flags.useObjcopy)
-	assert.True(t, flags.verbose)
-	assert.True(t, flags.debug)
-}
-
 // ============================================================================
 // Config Loading Tests
 // ============================================================================
@@ -1016,7 +934,7 @@ func TestLoadConfig_ConfigFileNotFound(t *testing.T) {
 	}
 
 	logger := getInstallLogger(false, false)
-	config, err := loadConfig(logger, cmd, cmdFlags)
+	config, _, err := loadConfig(logger, cmd, cmdFlags)
 
 	// When config file doesn't exist but was explicitly specified, should succeed
 	// and create config from flags (since stat will fail)
@@ -1045,7 +963,7 @@ func TestLoadConfig_CreatesFromFlagsWhenNoConfigFile(t *testing.T) {
 	}
 
 	logger := getInstallLogger(false, false)
-	config, err := loadConfig(logger, cmd, cmdFlags)
+	config, _, err := loadConfig(logger, cmd, cmdFlags)
 
 	// Default config file (/etc/platformd/install.yaml) likely doesn't exist
 	// so it should create from flags
@@ -1083,7 +1001,7 @@ os:
 	}
 
 	logger := getInstallLogger(false, false)
-	config, err := loadConfig(logger, cmd, cmdFlags)
+	config, _, err := loadConfig(logger, cmd, cmdFlags)
 
 	require.NoError(t, err)
 	require.NotNil(t, config)
@@ -1224,25 +1142,6 @@ func TestLoadUnifiedConfig_ValidEmptyConfig(t *testing.T) {
 // ============================================================================
 // Command Integration Tests
 // ============================================================================
-
-func TestInstallCommandHierarchy(t *testing.T) {
-	getFlags := getTestFlagsWithFormat(cli.OutputFormatJSON)
-	rootCmd := NewCommand(getFlags)
-
-	// Find system subcommand
-	var systemCmd, ukiCmd *struct{}
-	for _, sub := range rootCmd.Commands() {
-		switch sub.Use {
-		case "system":
-			systemCmd = &struct{}{}
-		case "uki":
-			ukiCmd = &struct{}{}
-		}
-	}
-
-	assert.NotNil(t, systemCmd, "system subcommand should exist")
-	assert.NotNil(t, ukiCmd, "uki subcommand should exist")
-}
 
 func TestSystemCommand_MultipleFlagsAtOnce(t *testing.T) {
 	getFlags := getTestFlagsWithFormat(cli.OutputFormatJSON)
@@ -1643,27 +1542,28 @@ func TestRunSystemInstall_PasswordRequiredInAutomatedMode(t *testing.T) {
 }
 
 func TestRunSystemInstall_InstallerCreationFailed(t *testing.T) {
-	getFlags := getTestFlagsWithFormat(cli.OutputFormatJSON)
-	cmd := newSystemCommand(getFlags)
+	cmd := newSystemCommand(getTestFlagsWithFormat(cli.OutputFormatJSON))
+	cfgPath := filepath.Join(t.TempDir(), "install.yaml")
+	// A valid config the installer cannot boot: refused at construction,
+	// before any disk or TPM is touched.
+	cfgContent := `
+disk:
+  device: /nonexistent/device
+  partition-table: gpt
+  efi-partition-size: 538
+  encryption:
+    password: test
+os:
+  os: haiku
+  hostname: testhost
+`
+	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgContent), 0o600))
 
-	err := cmd.ParseFlags([]string{"--disk", "/nonexistent/device", "--password", "test"})
-	require.NoError(t, err)
+	err := runSystemInstall(cmd, &cli.CommonFlags{OutputFormat: cli.OutputFormatJSON}, &systemFlags{config: cfgPath})
 
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatJSON,
-	}
-	cmdFlags := &systemFlags{
-		disk:     "/nonexistent/device",
-		password: "test",
-		os:       "invalid_os_that_doesnt_exist",
-		hostname: "testhost",
-	}
-
-	err = runSystemInstall(cmd, flags, cmdFlags)
-
-	require.Error(t, err)
-	// Could be either validation error or installer creation error
-	// depending on how the installer handles the invalid OS
+	var createErr ErrInstallerCreationFailed
+	require.ErrorAs(t, err, &createErr)
+	assert.Contains(t, err.Error(), "unsupported OS: haiku")
 }
 
 func TestRunSystemInstall_ConfigLoadFailed(t *testing.T) {

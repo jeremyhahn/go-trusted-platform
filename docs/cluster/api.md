@@ -50,23 +50,24 @@ For cluster:
 - **gRPC**: `platform.v1.ClusterService`, **5 RPCs** — `Bootstrap`, `Join`,
   `Leave`, `GetStatus`, `ListNodes` (`pkg/api/grpc/proto/cluster.proto`).
   `registerClusterGRPCService` registers it on the TCP server and the
-  Unix-socket server (`daemon.go:946`).
+  Unix-socket server (`daemon.go:971`).
 - **REST**: `/api/v1/cluster/*`, registered by
   `RESTServer.SetClusterService` → `clusterRESTHandlers.registerClusterRoutes`
   under `restBasePath` = `/api/v1`. The daemon passes it the registered gRPC
-  service (`daemon.go:1595`), so REST and gRPC run the same code.
+  service (`daemon.go:1630`), so REST and gRPC run the same code.
 - **QUIC**: category opcode `OpClusterCategory` (`0x90`), one sub-opcode per
   RPC (`sdk/go/wire/quicwire/cluster_opcodes.go`). `handleClusterCategory`
   (`pkg/api/daemon/quic_cluster.go`) looks the sub-opcode up in
   `clusterQUICHandlers` and calls the registered gRPC service
-  (`daemon.go:1284`). `0x90` was the head of the never-implemented `OpJWT*`
+  (`daemon.go:1316`). `0x90` was the head of the never-implemented `OpJWT*`
   range; token issuance ships as `OpIAMTokenCreate` (`0xF9`).
 - **MCP**: five `platform_cluster_*` tools (`pkg/api/mcp/cluster_tools.go`),
-  each calling the registered gRPC service (`daemon.go:1985`).
+  each calling the registered gRPC service (`daemon.go:2066`).
 - **Embedded**: `ServiceRegistry.Cluster` exists as a field
   (`sdk/go/transport/embedded/adapter.go`) but the only place a registry is
   constructed — `pkg/api/daemon/embedded_host.go`, shared by the GUI and the
-  CLI — populates nine fields and **not** `Cluster`.
+  CLI — sets `Daemon`, `CallerContext` and 21 service fields, and **not**
+  `Cluster`.
 
 ## 3. Capabilities
 
@@ -274,6 +275,7 @@ validates (§6).
 | `PermissionDenied` | 403 |
 | `NotFound` | 404 |
 | `AlreadyExists` | 409 |
+| `FailedPrecondition` (`ErrClusterNotInitialized`, `ErrCannotLeaveAsLeader`) | 409 (#665) |
 | anything else | 500 |
 
 **Today every cluster REST call returns 503**, because no servicer is set and

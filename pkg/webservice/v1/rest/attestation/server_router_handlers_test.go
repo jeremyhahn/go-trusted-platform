@@ -319,3 +319,21 @@ func TestAttestationServerRouter_QuoteRoutesPassTheConnectionTLS(t *testing.T) {
 		})
 	}
 }
+
+// TestAttestationServerRouter_CollectVMDecodesTheEscapedPathSegment requires
+// the VM named by a percent-encoded path segment to reach the server decoded,
+// with the quote configuration from the body alongside it.
+func TestAttestationServerRouter_CollectVMDecodesTheEscapedPathSegment(t *testing.T) {
+	server := &recordingAttestationServer{}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/attestation/vm/vm%20one",
+		strings.NewReader(`{"nonce":"AQID","config":{"pcrIndices":[0,7]}}`))
+	rec := httptest.NewRecorder()
+	mountAllAttestationRoutes(server).ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	vm, ok := server.req.(*platformv1.CollectVMAttestationRequest)
+	require.True(t, ok, "the router dispatched %T, want CollectVMAttestationRequest", server.req)
+	assert.Equal(t, "vm one", vm.GetVmId())
+	assert.Equal(t, []byte{1, 2, 3}, vm.GetNonce())
+	assert.Equal(t, []uint32{0, 7}, vm.GetConfig().GetPcrIndices())
+}
