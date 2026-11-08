@@ -441,8 +441,8 @@ hostname.
 
 **The CN is used verbatim and never normalized.** A certificate whose CN
 has leading or trailing whitespace is refused (401) rather than trimmed:
-trimming would make a certificate issued for `" gw-01 "` authenticate
-as `gw-01`, which is an aliasing path into another gateway's record —
+trimming would make a certificate issued for `" edge-01 "` authenticate
+as `edge-01`, which is an aliasing path into another gateway's record —
 precisely what an exact binding exists to close. A CN that is only
 whitespace falls under the same rule. gatewayd reads its own certificate
 CN verbatim for the startup check for the matching reason: trimming there
@@ -1807,10 +1807,13 @@ unkillable. It then sets `memory.swap.max` to 0 and lowers the live leaf's
   `O_NONBLOCK`, and since Linux 6.16 a non-blocking `memory.max` write sets
   the limit and returns without reclaim or the OOM kill. The leaf's
   `memory.current`, `memory.peak` and `memory.events` are logged before the
-  limit drops and once the write returns, so the job log shows how far over
-  1 MiB the child was;
+  limit drops, once the write returns and once the successor serves, so the
+  job log shows how far over 1 MiB the child was and what its successor
+  needs;
 - the leaf's `memory.peak` after the kill is over 1 MiB and at least the
-  `memory.current` read before the limit dropped;
+  `memory.current` read before the limit dropped. The test needs cgroup v2
+  `memory.peak` (Linux 5.19 or later): on an older kernel the file is absent
+  and the assertion fails with a message naming that requirement;
 - only that child comes back, with a new PID;
 - the relaunch rewrites the class limit and resets the test's `memory.swap.max`
   of 0 to `max` (`Prepare` runs on every launch);
@@ -1833,7 +1836,7 @@ because a cgroup holding processes cannot enable controllers for its children.
 Every test's teardown logs each running child's leaf accounting before it
 stops gatewayd, the measured basis for the class `MemoryMax` values, with the
 peak as a percentage of the class value. It asserts every leaf charged a
-non-zero `memory.peak` and has no `oom_kill` beyond the one
+non-zero `memory.peak` (an absent `memory.peak` fails it the same way) and has no `oom_kill` beyond the one
 `TestGatewaydSupervisorMemoryMaxRestartsOnlyThatChild` caused: a relaunch keeps
 the leaf, so that kill is still counted, and any other means a class value is
 below what its child needs. It then
