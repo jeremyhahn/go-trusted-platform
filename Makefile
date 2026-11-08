@@ -392,6 +392,7 @@ PACKAGE                 ?= go-trusted-platform
 APPNAME                 ?= trusted-platform
 PLATFORMD               ?= bin/platformd
 PLATFORMCTL             ?= bin/platformctl
+PLATFORMCTL_STATIC      ?= bin/platformctl-static
 PLATFORM_INITRD         ?= bin/platform-initrd
 GATEWAYD                ?= bin/gatewayd
 DEPLOYER_PIN            ?= bin/deployer-pin
@@ -852,7 +853,10 @@ build-check:
 	@echo "$(GREEN)✓ both modules compile, tagged and untagged$(RESET)"
 
 # Native local build (builds both platformd and platformctl)
-# Produces static binaries with embedded web frontend
+# Produces static binaries with embedded web frontend. platformctl-static is
+# the name a netboot set or disk image takes the media's static installer
+# from (pkg/iso ISOBuildConfig.UseBinariesDir); with CGO disabled it is
+# byte-identical to platformctl, so it is a copy, as in build-arm64.
 # Set WITH_WEB=0 to skip web frontend embedding (default is enabled)
 # Set WITH_P2P=1 to include P2P/libp2p support in gatewayd
 .PHONY: build
@@ -863,6 +867,7 @@ build: _web-embed-prepare
 	@mkdir -p bin
 	CGO_ENABLED=0 $(GOBIN)/go build -tags "osusergo netgo $(BUILD_TAGS)" -v -o $(PLATFORMD) --ldflags '-w -s ${LDFLAGS}' ./cmd/platformd
 	CGO_ENABLED=0 $(GOBIN)/go build -tags "osusergo netgo $(BUILD_TAGS)" -v -o $(PLATFORMCTL) --ldflags '-w -s ${LDFLAGS}' ./cmd/platformctl
+	cp -f $(PLATFORMCTL) $(PLATFORMCTL_STATIC)
 	CGO_ENABLED=0 $(GOBIN)/go build -tags "osusergo netgo $(BUILD_TAGS)" -v -o $(GATEWAYD) --ldflags '-w -s ${LDFLAGS}' ./cmd/gatewayd
 	CGO_ENABLED=0 $(GOBIN)/go build -tags "osusergo netgo $(BUILD_TAGS)" -v -o $(DEPLOYER_PIN) --ldflags '-w -s ${LDFLAGS}' ./cmd/deployer-pin
 
@@ -1369,10 +1374,19 @@ softhsm-init:
 # hardware answer is recorded in the registry.
 TEST_SKIP := TestPickBootSourceOverrideTarget_X10WithCDDVDAlias|TestPickBootSourceOverrideTarget_X10PrefersVendorUEFIOverUSBCD|TestX10SDVBootMediaType|TestSupermicroManufacturerWideBootMediaType|TestResolveVeloCloudEDGE840
 
+# SHARDS and SHARD split the unit suites' package list for the hosted CI
+# runners (4 cores, 6 hours a job): `make test-race SHARD=1 SHARDS=4` runs the
+# second of four round-robin slices of the list. The default, one shard, is the
+# whole list. test-fips hands them to `make test`, and print-race-pkgs prints
+# the shard's list, so batch.yml's sharded jobs read the same slices.
+SHARDS ?= 1
+SHARD ?= 0
+SHARD_PICK = awk -v n=$(SHARDS) -v s=$(SHARD) '(NR - 1) % n == s'
+
 .PHONY: test
 test: check-insecure-tls check-go-build-tags
 	@echo "Running all unit tests..."
-	go test -tags "$(BUILD_TAGS)" -v -skip "$(TEST_SKIP)" $$(go list ./pkg/... ./cmd/... 2>/dev/null | grep -v -E "$(TEST_EXCLUDE)") $(TEST_UNIT_PKGS)
+	go test -tags "$(BUILD_TAGS)" -v -skip "$(TEST_SKIP)" $$({ go list ./pkg/... ./cmd/... 2>/dev/null | grep -v -E "$(TEST_EXCLUDE)"; printf '%s\n' $(TEST_UNIT_PKGS); } | $(SHARD_PICK))
 
 .PHONY: test-fips
 ## test-fips: FIPS 140-3 suite: build ./... and run `make test`, both with the fips tag under GODEBUG=fips140=only
@@ -1986,9 +2000,9 @@ test-webservice-jwt:
 # These tests run in docker containers with real services and perform complete end-to-end testing
 # Note: Local module directories referenced by go.mod replace directives must be mounted
 
-# Base directory containing all source repositories
-# This must match the paths used in go.mod replace directives
-SOURCES_BASE := /home/jhahn/sources
+# In-container root the source repositories are mounted under, the same
+# root the compose files mount sibling module checkouts at.
+SOURCES_BASE := /sources
 
 # Local module volume mounts for docker - only mount packages with local replace directives in go.mod
 # Sibling-module bind mounts, deliberately empty since the tagged-module
@@ -3009,13 +3023,15 @@ RACE_EXCLUDE := ^$$
 RACE_PKGS_DISCOVER = \
 	pkgs=$$(go list -tags "$(BUILD_TAGS)" ./pkg/... ./cmd/...); \
 	pkgs=$$(printf '%s\n' "$$pkgs" | grep -v -E "$(TEST_EXCLUDE)" | grep -v -E "$(RACE_EXCLUDE)"); \
-	[ -n "$$pkgs" ] || { echo "$@: package discovery produced no packages" >&2; exit 1; }
+	[ -n "$$pkgs" ] || { echo "$@: package discovery produced no packages" >&2; exit 1; }; \
+	pkgs=$$(printf '%s\n' $$pkgs $(TEST_UNIT_PKGS) | $(SHARD_PICK)); \
+	[ -n "$$pkgs" ] || { echo "$@: shard $(SHARD) of $(SHARDS) has no packages" >&2; exit 1; }
 
 test-race:
 	@echo "Running unit tests under the race detector..."
 	@set -e; \
 	$(RACE_PKGS_DISCOVER); \
-	go test -race -tags "$(BUILD_TAGS)" -skip "$(TEST_SKIP)" -timeout 20m $$pkgs $(TEST_UNIT_PKGS)
+	go test -race -tags "$(BUILD_TAGS)" -skip "$(TEST_SKIP)" -timeout 20m $$pkgs
 
 ## print-race-pkgs: Print test-race's package set on one line (batch.yml race-full and bench read it)
 #
@@ -3025,7 +3041,7 @@ test-race:
 print-race-pkgs:
 	@set -e; \
 	$(RACE_PKGS_DISCOVER); \
-	echo $$pkgs $(TEST_UNIT_PKGS)
+	echo $$pkgs
 
 ## print-test-skip: Print the TEST_SKIP pattern the unit suites pass to -skip
 .PHONY: print-test-skip
@@ -3442,7 +3458,23 @@ GOVULN_MODULES := . sdk/go
 #       release, bump gobgp, DELETE this entry and the ID from GOVULN_ALLOW
 #       below, and mark the tracking issue done. Watch
 #       https://pkg.go.dev/vuln/GO-2026-4736.
-GOVULN_ALLOW := GO-2026-4736
+#   GO-2026-6911 (allowlisted 2026-11-06; mcp-go v1.5.0 — #1422)
+#       github.com/mark3labs/mcp-go: the client HTTP transport, every version,
+#       no fixed version published. No non-test package in this repo imports
+#       mcp-go; it arrives through the go-quicbaas SDK MCP transport. The
+#       client package is imported directly only by a test, internal/quicbaas/mcpgo_compat_test.go
+#       (TestMCPGoCompat_ModuleServerAlias -> client.NewStreamableHttpClient),
+#       against an in-process httptest server. Any runtime client use sits
+#       inside the go-quicbaas SDK MCP transport, which tracks the finding as
+#       quicbaas #2211.
+#
+#       Exposure: no platform runtime path builds an mcp-go client; the test
+#       client talks only to a loopback server it started itself.
+#
+#       CLOSING CONDITION (quicbaas #2211): the day upstream publishes a fixed
+#       mcp-go release, bump it, DELETE this entry and the ID from GOVULN_ALLOW
+#       below. Watch https://pkg.go.dev/vuln/GO-2026-6911.
+GOVULN_ALLOW := GO-2026-4736 GO-2026-6911
 
 # Each module is scanned in two steps (#940). The symbol scan builds SSA and a
 # call graph for the whole import closure; on module . it outgrew the CI job's

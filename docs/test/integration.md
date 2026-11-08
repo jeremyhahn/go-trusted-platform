@@ -457,7 +457,8 @@ IT_WARM_CACHE=0`), which a daemon that already holds it reuses.
 That build runs
 `make docker-build-it BUILDX_CLIENT_LOAD=1 IT_WARM_CACHE=0`: `IT_WARM_CACHE=0`
 builds the `integration` stage without the warm build cache, whose ten-minute
-warm took run 70938's fallback past the leg's 60-minute timeout; the suites
+warm took run 70938's fallback past the leg's then 60-minute timeout (75 since #1299, for the artifact
+download and load); the suites
 compile from an empty `/gocache` in less. `BUILDX_CLIENT_LOAD=1` streams the image to the
 step's `docker load` in place of `--load`: `--load` imports into the daemon of
 the builder's node, which need not be the daemon the leg uses (run 68044, leg
@@ -594,10 +595,13 @@ lane runs.
 CI runs `make integration-test` in its full tier, and loops it in the nightly
 `soak` job (see CI below). The other
 workflow that touches tests is `.github/workflows/batch.yml` (#860): a `workflow_dispatch`-only workflow, dispatched on
-`main` and never part of a merge gate, that runs on the self-hosted `batch`
-runners. It fuzzes every `Fuzz*` target, runs the `make test-race` package set
-with `-count=3`, soaks by looping `make test-race` (not these suites), and
-benchmarks the same package set. It reads its tags and packages from the
+`main` and never part of a merge gate, that runs on hosted `ubuntu-latest`
+runners (4 cores, 6 hours a job). It fuzzes every `Fuzz*` target, runs the
+`make test-race` package set with `-count=3`, soaks by looping
+`make test-race` (not these suites), and benchmarks the same package set. Fuzz,
+race-full and bench run as four shards; race-full and bench each take one
+round-robin quarter of the package set (`make print-race-pkgs SHARD=n
+SHARDS=4`). It reads its tags and packages from the
 Makefile (`print-build-tags`, `print-race-pkgs`, `print-test-skip`). Each
 finding is a log line that starts with `BATCH-FINDING`.
 
@@ -793,7 +797,7 @@ them a page a unit test reads (`DOCS_TESTED_PATTERN`, `ci.yml:151`, today
 
 `integration-image` needs `image` (`ci.yml:531`) and `integration` needs
 `integration-image` (`ci.yml:633`), for isolation, not for `image`'s output:
-the privileged integration suite and the `image` job's unit and race suites
+the privileged integration suite and the `image` job's unit suite
 starve a shared runner when they overlap (`ci.yml:629-632`), so the run's one
 integration image is built when `image` ends, and `integration` starts after
 it as five parallel legs (see "Legs"). Every other job but `CI Gate` needs at
@@ -1017,7 +1021,7 @@ Each `ci.yml` step sets its own size:
 | `image` / `go build ./...` | toolchain | none | 12g | 16 |
 | `image` / `sdk/go` build and consumer check | toolchain | none | 8g | 16 |
 | `image` / `make test test-sdk-go` | toolchain | none | 16g | 16 |
-| `image` / `make test-race` | toolchain | none | 16g | 8 |
+| `race` / `make test-race SHARD=n SHARDS=4` | none, the hosted runner | none | runner | host |
 | `image` / `make security` | toolchain | none | 16g | 8, and `GOSEC_CONCURRENCY=2` |
 | `image` / `make deps-check` | toolchain | none | 4g | 16 |
 | `image` / `trivy image` | toolchain | none | 8g | 16 |
@@ -1094,8 +1098,8 @@ The file is tab-separated, with the columns `kind`, `package`, `name`,
 
 #### The FIPS baseline
 
-The FIPS job (`fips` in `ci.yml:696-712` and `nightly.yml`, both one `make test-fips`
-call, outside `ci-gate`'s needs) has its own baseline, the sibling file
+The FIPS job (`fips` in `ci.yml` and `nightly.yml`, both four hosted shards of
+one `make test-fips SHARD=n SHARDS=4` call, outside `ci-gate`'s needs) has its own baseline, the sibling file
 `.github/foreign-failures-fips.tsv`. It is a separate file rather than a
 `kind` in the Integration file for three reasons:
 

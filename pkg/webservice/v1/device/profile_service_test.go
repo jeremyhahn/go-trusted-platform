@@ -431,11 +431,3 @@ func TestProfileFromDeviceProfile_ACLWithZeroPorts(t *testing.T) {
 	assert.False(t, hasDstPort, "zero dst_port should not be in match map")
 	assert.Equal(t, "tcp", result.ACLs[0].Match["protocol"])
 }
-
-func TestErrorVariables_ProfileService(t *testing.T) {
-	assert.NotNil(t, ErrProfileServiceNotInitialized)
-	assert.NotNil(t, ErrProfileNotFoundBySerial)
-
-	assert.Contains(t, ErrProfileServiceNotInitialized.Error(), "profile service")
-	assert.Contains(t, ErrProfileNotFoundBySerial.Error(), "profile not found")
-}

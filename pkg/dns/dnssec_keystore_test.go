@@ -462,7 +462,7 @@ func TestEcdsaPublicKeyToBase64_P521(t *testing.T) {
 
 func TestRsaPublicKeyToBase64(t *testing.T) {
 	// Test with a small key for speed
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	key, err := sharedRSAKey()
 	require.NoError(t, err)
 
 	encoded := rsaPublicKeyToBase64(&key.PublicKey)
@@ -607,7 +607,7 @@ func TestBuildKeyAttrsFromXKMSAlgorithm(t *testing.T) {
 // TestBuildDNSKEY tests the DNSKEY record building function.
 func TestBuildDNSKEY(t *testing.T) {
 	// Generate test keys
-	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	rsaKey, err := sharedRSAKey()
 	require.NoError(t, err)
 
 	ecdsaP256Key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -737,7 +737,7 @@ func TestParsePublicKeyFromXKMS(t *testing.T) {
 	assert.IsType(t, ed25519.PublicKey{}, parsedKey)
 
 	// Test with PKIX encoded RSA key
-	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	rsaKey, err := sharedRSAKey()
 	require.NoError(t, err)
 
 	pkixBytes, err := x509.MarshalPKIXPublicKey(&rsaKey.PublicKey)
@@ -776,7 +776,7 @@ func TestParsePublicKeyFromPEM(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to decode PEM block")
 
 	// Test with valid RSA key in PEM
-	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	rsaKey, err := sharedRSAKey()
 	require.NoError(t, err)
 
 	pkixBytes, err := x509.MarshalPKIXPublicKey(&rsaKey.PublicKey)

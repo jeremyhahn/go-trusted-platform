@@ -260,7 +260,7 @@ same way. gatewayd checks this at startup and refuses to start on a
 mismatch:
 
 ```
-gatewayd: control-plane gateway-id "gw-01" does not match the client
+gatewayd: control-plane gateway-id "edge-01" does not match the client
 certificate Common Name "gw-edge-1" in /etc/gatewayd/idevid.pem; the
 control plane binds reported telemetry to the certificate identity
 ```
@@ -284,7 +284,7 @@ hostfw:
     - interface: eth0            # management leg
       protocol: tcp
       port: 22
-      sources: [10.4.2.0/24, fd12:3456:789a:402::/64]
+      sources: [198.51.100.128/25, fd12:3456:789a:402::/64]
       comment: sshd from the management network
   peers:
     - interface: wan0
@@ -406,7 +406,8 @@ container needs delegated. Each process's leaf accounting is in the gatewayd
 log: `process memory` (`memory.current`, `memory.peak`, `memory.oom_kill`) when
 the process stops, and the same `memory` fields on every `process down,
 restarting` line, so an OOM kill behind a restart and a class's real peak are
-on record. The counters belong to the leaf and carry over a relaunch.
+on record. The counters belong to the leaf and carry over a relaunch. A kernel
+before 5.19 has no `memory.peak`; the log then shows `memory.peak=absent`.
 The account must exist, and **the configuration file and every file it names
 must be readable by it**: the child reads them after it drops privileges, and
 it exits with an error rather than start without them. For the proxy that
@@ -438,11 +439,11 @@ its telemetry snapshot:
 platformctl sdn gateway snapshot
 
 # A gateway that reports to this control plane
-platformctl sdn gateway snapshot --gateway-id gw-01-gateway
+platformctl sdn gateway snapshot --gateway-id edge-01-gateway
 
 # Overlay VTEPs admitted for decapsulation
-platformctl sdn gateway overlay vteps --gateway-id gw-01-gateway
-platformctl sdn gateway overlay vteps get 10.255.0.10 --gateway-id gw-01-gateway
+platformctl sdn gateway overlay vteps --gateway-id edge-01-gateway
+platformctl sdn gateway overlay vteps get 10.255.0.10 --gateway-id edge-01-gateway
 ```
 
 Sections are printed only for services the gateway runs. If the Tunnels

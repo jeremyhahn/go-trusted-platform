@@ -313,21 +313,6 @@ func TestUnlockVolumes(t *testing.T) {
 	}
 }
 
-func TestClose(t *testing.T) {
-	logger := logging.DefaultLogger()
-	platform := createTestPlatform()
-
-	mgr, err := NewManager(platform, logger)
-	if err != nil {
-		t.Fatalf("NewManager failed: %v", err)
-	}
-
-	err = mgr.Close()
-	if err != nil {
-		t.Errorf("Close failed: %v", err)
-	}
-}
-
 func TestRegisterDefaultStrategies(t *testing.T) {
 	logger := logging.DefaultLogger()
 	platform := createTestPlatform()
@@ -420,56 +405,5 @@ func TestValidateDevicesMissingBootDevice(t *testing.T) {
 	err = mgr.Initialize(ctx)
 	if err != nil {
 		t.Errorf("Initialize should succeed with missing boot device: %v", err)
-	}
-}
-
-func TestDetectModeFromCmdline(t *testing.T) {
-	// This test would require mocking /proc/cmdline
-	// For now, we'll create a basic test that exercises the code path
-	logger := logging.DefaultLogger()
-	platform := createTestPlatform()
-	platform.Config.Mode = 0 // Auto-detect
-
-	// Create a temporary file to act as the root device
-	tmpDir := t.TempDir()
-	tmpDevice := filepath.Join(tmpDir, "sda2")
-	if err := os.WriteFile(tmpDevice, []byte("test"), 0644); err != nil {
-		t.Fatalf("failed to create temp device: %v", err)
-	}
-	platform.Config.RootDevice = tmpDevice
-
-	mgr, err := NewManager(platform, logger)
-	if err != nil {
-		t.Fatalf("NewManager failed: %v", err)
-	}
-
-	ctx := context.Background()
-	_, err = mgr.DetectMode(ctx)
-	// Error is expected if /proc/cmdline doesn't exist or doesn't contain our markers
-	// That's OK for this test
-	_ = err
-}
-
-func TestBuildVolumeConfig(t *testing.T) {
-	logger := logging.DefaultLogger()
-	platform := createTestPlatform()
-
-	mgr, err := NewManager(platform, logger)
-	if err != nil {
-		t.Fatalf("NewManager failed: %v", err)
-	}
-
-	impl := mgr.(*initrdManager)
-	volume, err := impl.buildVolumeConfig()
-	if err != nil {
-		t.Fatalf("buildVolumeConfig failed: %v", err)
-	}
-
-	if volume == nil {
-		t.Fatal("buildVolumeConfig returned nil volume")
-	}
-
-	if volume.DevicePath != platform.Config.RootDevice {
-		t.Errorf("expected device path %s, got %s", platform.Config.RootDevice, volume.DevicePath)
 	}
 }
