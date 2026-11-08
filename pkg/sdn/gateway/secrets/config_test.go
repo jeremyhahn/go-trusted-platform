@@ -21,7 +21,7 @@ import (
 
 func TestConfigValidate_Accepts(t *testing.T) {
 	cases := []Config{
-		{QuicBaaSAddr: "10.4.2.140:9443"},
+		{QuicBaaSAddr: "198.51.100.140:9443"},
 		{QuicBaaSAddr: "/run/quicbaasd.sock", QuicBaaSTransport: "unix"},
 		{QuicBaaSAddr: "h:1", QuicBaaSTransport: "grpc", Timeout: 5 * time.Second},
 		{QuicBaaSAddr: "h:1", QuicBaaSTransport: "rest"},
