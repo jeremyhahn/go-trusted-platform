@@ -169,8 +169,8 @@ sudo platformctl iso test client-server --use-ovs
 
 ## CI
 
-CI's `image` job runs `make test` and `make test-race` on every run but a
-docs-only PR (every changed file markdown or under `docs/`), which runs only
+CI's `image` job runs `make test`, and its `race` job runs `make test-race` in
+four shards (`SHARD=n SHARDS=4`), on every run but a docs-only PR (every changed file markdown or under `docs/`), which runs only
 the lint steps and the gates unless it is labelled `ci:full`
 (`.github/workflows/ci.yml:301-315`). The full tier's `integration` job runs
 the suite `make integration-test` runs, split into five parallel legs
