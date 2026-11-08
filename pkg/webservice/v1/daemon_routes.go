@@ -532,18 +532,21 @@ func MountDaemonRESTRoutes(api *mux.Router, routes DaemonRESTRoutes, writer resp
 // route takes nothing more, and an unclassified method answers 403
 // ErrDaemonRouteUnclassified without reaching the daemon handler. The guard
 // runs after the client-certificate gate, so a gated route needs both
-// credentials.
+// credentials. It is middleware on group, so it also runs before any
+// middleware the daemon mounted its own groups behind (the daemon's own
+// scope guard), and a caller the webservice refuses is refused with the
+// webservice's status.
 func guardPrivilegedDaemonRoutes(group *mux.Router, writer response.HttpWriter, authorize DaemonRouteAuthorizer, caller DaemonCallerAuthenticator) error {
 	gates := map[daemonRouteKind]func(scope string) func(http.Handler) http.Handler{
 		daemonRouteOperator:    authorize,
 		daemonRouteSession:     func(string) func(http.Handler) http.Handler { return caller },
 		daemonRouteCertificate: func(string) func(http.Handler) http.Handler { return certificateOnly },
 	}
-	return group.Walk(func(route *mux.Route, _ *mux.Router, _ []*mux.Route) error {
+	guarded := make(map[*mux.Route]methodGatedDaemonRoute)
+	err := group.Walk(func(route *mux.Route, _ *mux.Router, _ []*mux.Route) error {
 		// A group prefix carries no handler; the routes under it are each
 		// walked, and classified, on their own.
-		handler := route.GetHandler()
-		if handler == nil {
+		if route.GetHandler() == nil {
 			return nil
 		}
 		// A handler route without a path template is classified under the
@@ -558,42 +561,58 @@ func guardPrivilegedDaemonRoutes(group *mux.Router, writer response.HttpWriter, 
 		if err != nil {
 			methods = daemonRouteMethods
 		}
-		guarded := methodGatedDaemonRoute{gates: make(map[string]http.Handler, len(methods)), template: template, writer: writer}
-		// Methods that share a classification share one gated handler.
-		built := make(map[daemonRouteAccess]http.Handler, len(methods))
+		gated := methodGatedDaemonRoute{gates: make(map[string]func(http.Handler) http.Handler, len(methods)), template: template, writer: writer}
+		// Methods that share a classification share one gate.
+		built := make(map[daemonRouteAccess]func(http.Handler) http.Handler, len(methods))
 		for _, method := range methods {
 			access := classifyDaemonRoute(method, template)
 			gate, ok := gates[access.kind]
 			if !ok {
 				continue
 			}
-			gated, ok := built[access]
+			scoped, ok := built[access]
 			if !ok {
-				gated = gate(access.scope)(handler)
-				built[access] = gated
+				scoped = gate(access.scope)
+				built[access] = scoped
 			}
-			guarded.gates[method] = gated
+			gated.gates[method] = scoped
 		}
-		route.Handler(guarded)
+		guarded[route] = gated
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	group.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// A route the walk did not see was added after the guard was
+			// mounted; it is unclassified, and denied.
+			gated, ok := guarded[mux.CurrentRoute(r)]
+			if !ok {
+				writer.Error403(w, r, ErrDaemonRouteUnclassified{Method: r.Method}, nil)
+				return
+			}
+			gated.serve(w, r, next)
+		})
+	})
+	return nil
 }
 
 // certificateOnly is the gate of a certificate-only route: the client
 // certificate gate in front of it is the whole check.
 func certificateOnly(next http.Handler) http.Handler { return next }
 
-// methodGatedDaemonRoute serves each request through the gate its method
-// was classified to, and refuses a method that was classified to none.
+// methodGatedDaemonRoute serves each request to next through the gate its
+// method was classified to, and refuses a method that was classified to none.
 type methodGatedDaemonRoute struct {
-	gates    map[string]http.Handler
+	gates    map[string]func(http.Handler) http.Handler
 	template string
 	writer   response.HttpWriter
 }
 
-func (m methodGatedDaemonRoute) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if gated, ok := m.gates[r.Method]; ok {
-		gated.ServeHTTP(w, r)
+func (m methodGatedDaemonRoute) serve(w http.ResponseWriter, r *http.Request, next http.Handler) {
+	if gate, ok := m.gates[r.Method]; ok {
+		gate(next).ServeHTTP(w, r)
 		return
 	}
 	m.writer.Error403(w, r, ErrDaemonRouteUnclassified{Method: r.Method, Template: m.template}, nil)
