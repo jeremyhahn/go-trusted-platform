@@ -98,7 +98,7 @@ func ubootArtifacts(t *testing.T) uboot.Artifacts {
 }
 
 func TestModels(t *testing.T) {
-	if got := Models(); strings.Join(got, ",") != "cm4,rpi3b+,rpi4,rpi400,rpi5" { // lab-string-ok
+	if got := Models(); strings.Join(got, ",") != "cm4,rpi3b+,rpi4,rpi400,rpi5" { // lab-string-ok: Raspberry Pi model name, not a lab host
 		t.Errorf("Models() = %v", got)
 	}
 	m, err := LookupModel("")
@@ -123,7 +123,7 @@ func TestModels(t *testing.T) {
 // TestModelSoC pins which boards HTTP-boot: the 2711 and 2712 EEPROMs do; the
 // 3B+'s boot ROM has no EEPROM to fetch or verify boot.img.
 func TestModelSoC(t *testing.T) {
-	want := map[string]string{"rpi4": "2711", "rpi400": "2711", "cm4": "2711", "rpi5": "2712", "rpi3b+": ""} // lab-string-ok
+	want := map[string]string{"rpi4": "2711", "rpi400": "2711", "cm4": "2711", "rpi5": "2712", "rpi3b+": ""} // lab-string-ok: Raspberry Pi model name, not a lab host
 	for name, soc := range want {
 		m, err := LookupModel(name)
 		if err != nil || m.SoC != soc {

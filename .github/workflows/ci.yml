@@ -674,8 +674,9 @@ jobs:
       # the gate was green for a false reason. The step prints path and line
       # of a match, never the value. A run without the secret (a fork PR)
       # skips with a notice; a push to main without it fails. A matched line
-      # that carries the InfoSec waiver marker lab-string-ok is not reported
-      # (DS-7563, CA m2110).
+      # that carries the InfoSec waiver marker with its reason,
+      # "lab-string-ok: <reason>", is not reported (DS-7563, CA m2110); a bare
+      # marker without the colon and a reason still fails (CA m2113 (3)).
       - name: Releasability (private patterns)
         if: ${{ !cancelled() }}
         env:
@@ -738,7 +739,7 @@ jobs:
               echo "::error::git grep failed (rc $rc)"
               exit 1 ;;
           esac
-          hits=$(printf '%s\n' "$out" | grep -v -F 'lab-string-ok' | grep -v '^$' | cut -d: -f1,2 || true)
+          hits=$(printf '%s\n' "$out" | grep -v -E 'lab-string-ok:[[:space:]]*[[:alnum:]]' | grep -v '^$' | cut -d: -f1,2 || true)
           if [ -n "$hits" ]; then
             echo "::error::internal names in the tracked tree (path:line; the values are not shown):"
             printf '%s\n' "$hits"

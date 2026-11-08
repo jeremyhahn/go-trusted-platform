@@ -1044,7 +1044,7 @@ rather than silently ignored.
 | `nodes[].boot_method` | string | `pxe` | `pxe` or `virtual-media` |
 | `nodes[].skip_install` | bool | `false` | Already-deployed node |
 | `nodes[].platform` | string | — (generic server) | `raspberrypi`; without it `model` and `serial` are rejected. A Pi has no BMC, so `bmc_address` is rejected on it (`ErrInvalidNodePlatform`) |
-| `nodes[].model` | string | — | **Required** for `raspberrypi`: `rpi4`, `rpi400`, `cm4`, `rpi3b+`, `rpi5` (`rpinetboot.Models`) | <!-- lab-string-ok -->
+| `nodes[].model` | string | — | **Required** for `raspberrypi`: `rpi4`, `rpi400`, `cm4`, `rpi3b+`, `rpi5` (`rpinetboot.Models`) | <!-- lab-string-ok: Raspberry Pi model name, not a lab host -->
 | `nodes[].architecture` | string | `aarch64` for a Pi, else `x86_64` | `x86_64` or `aarch64`; a Pi must be `aarch64` (`EffectiveArchitecture`) |
 | `nodes[].serial` | string | — | Pi only: up to eight hex digits, the bootloader's serial; names the node's per-device TFTP directory |
 | `nodes[].boot_model` | string | `sd` for a Pi, empty for a generic server | `sd` for Pi SD-card install, or `diskless` for a stateless node whose root comes from the media set's squashfs+verity artifacts; carried per MAC in the container manifest, and its device script adds `platform_boot_model=diskless` (`ErrDisklessUnavailable` when the set has no diskless root); or, on a Pi only, `diskless-nbd` for a root exported by the boot server over NBD-over-TLS, whose device script adds `platform_boot_model=diskless-nbd` and `platform_nbd_server` (the export server's address; `ErrNBDServerAddress` when none is dialable) to the set's installer arguments |
