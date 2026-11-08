@@ -322,6 +322,17 @@ PLATFORMD_QUIC_PORT=""
 PLATFORMD_MCP_PORT=""
 OVSDB_TCP_PORT=""
 
+# The REST port test/integration/config.yaml carries: its webservice tls-port
+# and its WebAuthn relying-party origin. With a webservice configured the
+# daemon opens no REST listener of its own (leaveRESTToWebservice,
+# pkg/daemon/commands/serve.go), so --rest-port alone does not move REST:
+# start_platformd rewrites this port to PLATFORMD_REST_PORT in the copy of the
+# config it starts platformd on. pkg/app/integration_config_test.go asserts
+# the config carries this port and that the rewrite is made. It names no
+# listener, so it sits outside the PLATFORMD_*_PORT set that
+# test/integration/helpers/endpoints_test.go keeps free of fixed numbers.
+HARNESS_CONFIG_REST_PORT="8443"
+
 # OVS bridge name used by the integration test config (sdn.ovs.bridge).
 # Platformd reads this from test/integration/config.yaml; the bridge is
 # pre-created here so the App.initSDN path finds it immediately and avoids
@@ -1091,6 +1102,20 @@ start_platformd() {
              /tmp/platformd-integration/ca \
              /tmp/platformd-integration/vtpm \
              /tmp/platformd-integration/quicbaas
+
+    # Serve REST on this job's port: the webservice tls-port and the
+    # relying-party origin move from HARNESS_CONFIG_REST_PORT to
+    # PLATFORMD_REST_PORT, where PLATFORM_REST_ENDPOINT points.
+    local run_config="/tmp/platformd-integration/platformd-config.yaml"
+    sed -e "s|^\( *tls-port: \)${HARNESS_CONFIG_REST_PORT}\$|\1${PLATFORMD_REST_PORT}|" \
+        -e "s|https://localhost:${HARNESS_CONFIG_REST_PORT}\$|https://localhost:${PLATFORMD_REST_PORT}|" \
+        "${config_file}" > "${run_config}" || return 1
+    if grep -Eq "(tls-port: |https://localhost:)${HARNESS_CONFIG_REST_PORT}\$" "${run_config}"; then
+        echo "FATAL: ${run_config} still serves REST on ${HARNESS_CONFIG_REST_PORT}, not ${PLATFORMD_REST_PORT}"
+        return 1
+    fi
+    config_file="${run_config}"
+    echo "platformd REST webservice on ${PLATFORMD_REST_PORT} (config: ${config_file})"
 
     # Start platformd with mTLS authentication, as production runs it.
     #

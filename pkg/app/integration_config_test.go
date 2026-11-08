@@ -139,8 +139,9 @@ func adminClaimServed(a *App) bool {
 // control plane. The Unix socket binds in platformDaemon.Start, after
 // LoadOrInitCA and InitWebServer and before any webservice listener runs.
 //
-// The harness config serves REST from one webservice on the runner's
-// PLATFORMD_REST_PORT, where PLATFORM_REST_ENDPOINT points. The barrier-gate
+// The harness config serves REST from one webservice on the port the runner
+// rewrites to its per-job PLATFORMD_REST_PORT, where PLATFORM_REST_ENDPOINT
+// points. The barrier-gate
 // config stays daemon-only: its suite starts its own platformd on its own
 // ports and reaches REST on the daemon listener
 // (test/integration/barrier_gate/helpers.go).
@@ -148,7 +149,7 @@ func TestIntegrationConfig_RunMode(t *testing.T) {
 	script, err := os.ReadFile(integrationRunner)
 	require.NoError(t, err)
 	restPort, ok := harnessRESTPort(script)
-	require.True(t, ok, "the runner sets PLATFORMD_REST_PORT")
+	require.True(t, ok, "the runner rewrites the config's REST port to PLATFORMD_REST_PORT")
 
 	tests := []struct {
 		path  string
@@ -339,16 +340,34 @@ func TestIntegrationConfig_NTPTypoRefused(t *testing.T) {
 	assert.Equal(t, "ntp", unknown.Section)
 }
 
-// restPortVariable is the runner's REST port, the one PLATFORM_REST_ENDPOINT
-// names.
-var restPortVariable = regexp.MustCompile(`(?m)^PLATFORMD_REST_PORT="(\d+)"$`)
+// restPortVariable is the REST port the harness config carries, which the
+// runner rewrites to its per-job PLATFORMD_REST_PORT.
+var restPortVariable = regexp.MustCompile(`(?m)^HARNESS_CONFIG_REST_PORT="(\d+)"$`)
 
-// harnessRESTPort returns the REST port run-integration-tests.sh points the
-// adapters at.
+// restPortRewrites are the sed expressions start_platformd applies to the
+// config it starts platformd on: the webservice tls-port and the WebAuthn
+// relying-party origin move to PLATFORMD_REST_PORT, where
+// PLATFORM_REST_ENDPOINT points. With a webservice configured the daemon
+// opens no REST listener (leaveRESTToWebservice), so --rest-port alone
+// would leave REST on the config's port.
+var restPortRewrites = [][]byte{
+	[]byte(`"s|^\( *tls-port: \)${HARNESS_CONFIG_REST_PORT}\$|\1${PLATFORMD_REST_PORT}|"`),
+	[]byte(`"s|https://localhost:${HARNESS_CONFIG_REST_PORT}\$|https://localhost:${PLATFORMD_REST_PORT}|"`),
+}
+
+// harnessRESTPort returns the REST port the harness config must carry: the
+// one run-integration-tests.sh rewrites to the per-job port the adapters
+// dial. It reports false unless the runner names that port and makes both
+// rewrites.
 func harnessRESTPort(script []byte) (string, bool) {
 	match := restPortVariable.FindSubmatch(script)
 	if match == nil {
 		return "", false
+	}
+	for _, rewrite := range restPortRewrites {
+		if !bytes.Contains(script, rewrite) {
+			return "", false
+		}
 	}
 	return string(match[1]), true
 }
@@ -366,8 +385,8 @@ func TestIntegrationConfig_ServesRESTThroughWebservice(t *testing.T) {
 	script, err := os.ReadFile(integrationRunner)
 	require.NoError(t, err)
 	port, ok := harnessRESTPort(script)
-	require.True(t, ok, "the runner sets PLATFORMD_REST_PORT")
-	assert.Equal(t, port, strconv.Itoa(ws.TLSPort), "the webservice listens where PLATFORM_REST_ENDPOINT points")
+	require.True(t, ok, "the runner rewrites the config's REST port to PLATFORMD_REST_PORT")
+	assert.Equal(t, port, strconv.Itoa(ws.TLSPort), "the runner moves this port to PLATFORMD_REST_PORT, where PLATFORM_REST_ENDPOINT points")
 	assert.Zero(t, ws.Port, "no plaintext listener")
 
 	assert.Equal(t, "localhost", ws.Certificate.Subject.CommonName)
@@ -379,7 +398,8 @@ func TestIntegrationConfig_ServesRESTThroughWebservice(t *testing.T) {
 
 // TestIntegrationConfig_WebAuthnRelyingPartyIsHarnessOrigin pins the relying
 // party the harness admin session registers its passkey against: the
-// helper's origin is PLATFORM_REST_ENDPOINT, https://localhost:<REST port>.
+// helper's origin is PLATFORM_REST_ENDPOINT, https://localhost:<REST port>,
+// which the runner writes over the config's origin port.
 func TestIntegrationConfig_WebAuthnRelyingPartyIsHarnessOrigin(t *testing.T) {
 	a := loadTemplate(t, integrationConfig)
 
@@ -390,13 +410,29 @@ func TestIntegrationConfig_WebAuthnRelyingPartyIsHarnessOrigin(t *testing.T) {
 	script, err := os.ReadFile(integrationRunner)
 	require.NoError(t, err)
 	port, ok := harnessRESTPort(script)
-	require.True(t, ok, "the runner sets PLATFORMD_REST_PORT")
+	require.True(t, ok, "the runner rewrites the config's REST port to PLATFORMD_REST_PORT")
 	assert.Equal(t, "localhost", ws.WebAuthn.RPID, "the RP id is the host the adapters dial")
 	assert.Equal(t, []string{"https://localhost:" + port}, ws.WebAuthn.RPOrigins)
 }
 
 func TestIntegrationConfig_HarnessRESTPortMissing(t *testing.T) {
-	port, ok := harnessRESTPort([]byte("PLATFORMD_GRPC_PORT=\"10443\"\n# PLATFORMD_REST_PORT=\"8443\"\n"))
-	assert.False(t, ok, "a commented or absent REST port is not the runner's")
-	assert.Empty(t, port)
+	rewrites := string(bytes.Join(restPortRewrites, []byte("\n")))
+	tests := []struct {
+		name   string
+		script string
+	}{
+		{"commented port", "PLATFORMD_GRPC_PORT=\"10443\"\n# HARNESS_CONFIG_REST_PORT=\"8443\"\n" + rewrites + "\n"},
+		{"no rewrite", "HARNESS_CONFIG_REST_PORT=\"8443\"\n"},
+		{"tls-port rewrite only", "HARNESS_CONFIG_REST_PORT=\"8443\"\n" + string(restPortRewrites[0]) + "\n"},
+		{"origin rewrite only", "HARNESS_CONFIG_REST_PORT=\"8443\"\n" + string(restPortRewrites[1]) + "\n"},
+	}
+	for _, tt := range tests {
+		port, ok := harnessRESTPort([]byte(tt.script))
+		assert.False(t, ok, "%s: the webservice stays off the runner's per-job port", tt.name)
+		assert.Empty(t, port, tt.name)
+	}
+
+	port, ok := harnessRESTPort([]byte("HARNESS_CONFIG_REST_PORT=\"8443\"\n" + rewrites + "\n"))
+	assert.True(t, ok, "the port and both rewrites")
+	assert.Equal(t, "8443", port)
 }
