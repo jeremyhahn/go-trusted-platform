@@ -128,10 +128,12 @@ func (s *RESTServer) SetZoneService(svc gateway.ZoneService) {
 	if svc == nil {
 		return
 	}
+	// The zone routes are the SDN handlers' routes, so they mount only
+	// through SetSDNService, behind the SDN route scope. Without that guard
+	// there is nothing to mount them behind, so they stay unmounted.
 	if s.sdnHandlers == nil {
-		// Ensure handlers exist even if SetSDNService was never called.
-		s.sdnHandlers = rest.NewSDNHandlers(nil, s.logger)
-		s.mountOwnedAbsolute(s.sdnHandlers.RegisterRoutes)
+		s.logger.Warn("Zone service not wired: the SDN REST routes are not mounted behind the REST scope guard")
+		return
 	}
 	s.sdnHandlers.SetZoneService(svc)
 	s.logger.Info("Zone service wired into SDN REST handlers")

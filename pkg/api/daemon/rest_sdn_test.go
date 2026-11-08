@@ -15,6 +15,7 @@ import (
 
 	"github.com/gorilla/mux"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -266,6 +267,32 @@ func TestSDNREST_EveryRouteNeedsItsScope(t *testing.T) {
 		recorder = serveIAM(s, tc.method, tc.path, "sdn-operator")
 		assertReachedHandler(t, recorder, name, recorder.Body.String())
 	}
+}
+
+func TestSetZoneService_ZoneRoutesNeedTheSDNScope(t *testing.T) {
+	zones, err := gateway.NewZoneService(nil, nil)
+	require.NoError(t, err)
+	s := &RESTServer{router: mux.NewRouter(), logger: slog.Default()}
+	require.NoError(t, s.SetSDNService(newTestSDNService(NewConfigurableMockOVSClient()), sdnRESTGuard()))
+	s.SetZoneService(zones)
+
+	assert.Equal(t, http.StatusUnauthorized, serveIAM(s, http.MethodGet, "/api/v1/sdn/zones", "").Code)
+	recorder := serveIAM(s, http.MethodGet, "/api/v1/sdn/zones", "dns-reader")
+	assert.Equal(t, http.StatusForbidden, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "sdn:read")
+	recorder = serveIAM(s, http.MethodGet, "/api/v1/sdn/zones", "sdn-operator")
+	assert.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+}
+
+func TestSetZoneService_WithoutTheSDNScopeGuardMountsNothing(t *testing.T) {
+	zones, err := gateway.NewZoneService(nil, nil)
+	require.NoError(t, err)
+	s := &RESTServer{router: mux.NewRouter(), logger: slog.Default()}
+	s.SetZoneService(zones)
+
+	assert.Nil(t, s.sdnHandlers)
+	assert.Empty(t, s.ownedRoutes)
+	assert.Equal(t, http.StatusNotFound, serveIAM(s, http.MethodGet, "/api/v1/sdn/zones", "sdn-operator").Code)
 }
 
 func TestSDNREST_ReaderCannotWriteOrDelete(t *testing.T) {
