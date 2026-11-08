@@ -1,4 +1,4 @@
-# code-review-template: v5.9.2 -- the code review in Gitea or GitHub CI for a pull request
+# code-review-template: v5.9.3 -- the code review in Gitea or GitHub CI for a pull request
 # that carries `code-review` and `task:ready`, routed by its labels through
 # route-labels (labels.md §2). Codex on the `codex` runner reviews every such
 # PR; `agent:opencode` adds an advisory COMMENT review by the opencode job on
@@ -26,6 +26,8 @@
 #                             opencode review uses (required since v5.7;
 #                             unset, the opencode job fails)
 #
+# v5.9.3 (2026-11-08, Company Agent m2101 item 2): comments only; the
+# internal token-variable name in WHO RUNS WHAT is gone. No behaviour change.
 # v5.9.2 (2026-11-07, Company Agent m2066 item 3): the GitHub token check
 # takes `ghs_` then letters, digits, dot, underscore and hyphen, the form
 # GitHub issues installation tokens in now (Infra 19:33Z); v5.9.1 refused
@@ -1394,7 +1396,8 @@ jobs:
   # uid 1000 (`node` in the image): opencode and the checks made as it. The
   # model READS and WRITES TEXT, nothing else:
   # - opencode runs as uid 1000 through setpriv with a scrubbed environment.
-  #   The token, its header file and lib.sh are root-only; GITEA_TOKEN is gone.
+  #   The token, its header file and lib.sh are root-only; no forge token
+  #   variable reaches it.
   # - OPENCODE_DISABLE_PROJECT_CONFIG=1 and --pure: no opencode.json,
   #   .opencode/ (plugins, agents, commands), AGENTS.md or CLAUDE.md from the
   #   PR head is loaded. The config is the image's, rewritten by root into a

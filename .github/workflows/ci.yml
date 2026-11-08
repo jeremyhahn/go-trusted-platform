@@ -667,8 +667,8 @@ jobs:
       # live in this repository: the Actions secret RELEASABILITY_PATTERNS
       # carries the private pattern file (source in platform-configs). Blank
       # and `#` lines are skipped; every other line is `class<TAB>regex`, a
-      # class of lab-address, lab-host or owner-path (an `/i` suffix is
-      # allowed) and a POSIX extended regex. A malformed line, an unknown
+      # class of coord-host, internal-email, lab-address, lab-host or
+      # owner-path (v1.33; an `/i` suffix is allowed) and a POSIX extended regex. A malformed line, an unknown
       # class or a regex grep -E refuses fails the step, which prints the line
       # number only. v1.31 grepped whole lines with -F, so no line matched and
       # the gate was green for a false reason. The step prints path and line
@@ -705,7 +705,8 @@ jobs:
             class=${line%%"$tab"*}
             re=${line#*"$tab"}
             case $class in
-              lab-address|lab-host|owner-path|lab-address/i|lab-host/i|owner-path/i) ;;
+              coord-host|internal-email|lab-address|lab-host|owner-path) ;;
+              coord-host/i|internal-email/i|lab-address/i|lab-host/i|owner-path/i) ;;
               *) echo "::error::pattern line $n has an unknown class"; bad=1; continue ;;
             esac
             if [ -z "$re" ]; then
