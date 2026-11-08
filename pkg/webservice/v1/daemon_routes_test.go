@@ -14,8 +14,10 @@
 package v1
 
 import (
+	"bytes"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -24,11 +26,13 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance/issuancetest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 )
 
@@ -140,6 +144,51 @@ func TestMountDaemonRESTRoutes_OperatorRouteReplaysTheSessionCaller(t *testing.T
 	require.NotNil(t, daemon.served)
 	assert.Equal(t, []string{proxyReadScope}, daemon.served.Scopes, "the caller holds only the scope the operator gate authorized")
 	assert.Contains(t, daemon.served.Roles, common.ROLE_ADMIN)
+}
+
+// A console user signed in with a passkey holds no client certificate yet:
+// issue-cert is how they enrol their first one, so the route takes the
+// webservice session in place of the certificate being enrolled.
+func TestMountDaemonRESTRoutes_IssueCertEnrolsWithoutAClientCert(t *testing.T) {
+	platform := testutil.GenerateTestTLSBundle(t)
+	key := issuancetest.RSAKey(t)
+
+	tests := []struct {
+		name string
+		auth jwt.TokenHandler
+		want int
+	}{
+		{"console session", &sessionAuth{roles: []string{"user"}, tenantID: "system"}, http.StatusCreated},
+		{"no session", &anonymousAuth{}, http.StatusUnauthorized},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ca := issueCertCA{issuancetest.NewCA(t)}
+			guard := restapi.NewScopeGuard(nil, nil, slog.Default())
+			daemon := &issueCertDaemonRoutes{
+				roots:    platform.CAPool,
+				handlers: restapi.NewAuthFactorHandlers(ca, slog.Default()).WithScopeGuard(guard),
+			}
+			v1Router := newGatedV1Router(t, &testHandlerRegistry{tokenHandler: tt.auth})
+			root := mux.NewRouter()
+			api := root.PathPrefix("/api/v1").Subrouter()
+			require.NoError(t, MountDaemonRESTRoutes(api, daemon, v1Router.responseWriter, v1Router.daemonRouteAuthorizer(), v1Router.daemonCallerAuthenticator()))
+
+			body, err := json.Marshal(restapi.IssueMTLSCertRequest{CSRPEM: string(issuancetest.CSR(t, key, "probe-user"))})
+			require.NoError(t, err)
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/users/probe-user/factors/mtls/issue-cert", bytes.NewReader(body))
+			req.Header.Set("Authorization", "Bearer console-session")
+			rec := httptest.NewRecorder()
+			root.ServeHTTP(rec, req)
+
+			assert.Equal(t, tt.want, rec.Code, rec.Body.String())
+			if tt.want == http.StatusCreated {
+				assert.NotNil(t, ca.Opts, "the CA signed the CSR")
+			} else {
+				assert.Nil(t, ca.Opts, "a request without a session must not reach the CA")
+			}
+		})
+	}
 }
 
 // verifiedClientState is the connection state a webservice handshake
