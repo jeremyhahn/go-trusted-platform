@@ -15,9 +15,15 @@ package daemon
 
 import (
 	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/gorilla/mux"
 	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/orchestrator"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	sdkorch "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/orchestrator"
@@ -153,6 +159,58 @@ func TestOrchestratorGRPC_SessionsServeOnlySystemTenant(t *testing.T) {
 	}
 	if !closed.GetClosed() || closed.GetSessionId() != "s1" {
 		t.Fatalf("system CloseSession = %v, want s1 closed", closed)
+	}
+}
+
+// restCallerAuthorizer admits each token as the caller it names.
+type restCallerAuthorizer map[string]*platformtoken.AuthorizedContext
+
+func (a restCallerAuthorizer) AuthorizeToken(_ context.Context, token, _, _, _, _ string) (*platformtoken.AuthorizedContext, error) {
+	if caller, ok := a[token]; ok {
+		return caller, nil
+	}
+	return nil, errors.New("unknown token")
+}
+
+// TestOrchestratorREST_SessionsReachTheSharedService: the REST session
+// routes hand the caller they verified to the shared service, whose own
+// system-tenant check then admits the system tenant and refuses any other.
+func TestOrchestratorREST_SessionsReachTheSharedService(t *testing.T) {
+	svc := orchestratorGRPCOver(&orchestratorTestClient{})
+	svc.SetSystemTenant("sys")
+	guard := rest.NewScopeGuard(restCallerAuthorizer{
+		"sys-read":     {Subject: "sys-read", TenantID: "sys", Scopes: []string{"orchestrator:read"}},
+		"sys-write":    {Subject: "sys-write", TenantID: "sys", Scopes: []string{"orchestrator:write"}},
+		"tenant-read":  {Subject: "tenant-read", TenantID: "t1", Scopes: []string{"orchestrator:read"}},
+		"tenant-write": {Subject: "tenant-write", TenantID: "t1", Scopes: []string{"orchestrator:write"}},
+	}, nil, nil)
+	router := mux.NewRouter()
+	rest.NewOrchestratorHandlers(svc, guard, "sys", nil).RegisterRoutes(router)
+
+	serve := func(method, target, token string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, target, http.NoBody)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec
+	}
+	const sessions = "/api/v1/orchestrator/sessions"
+
+	tests := []struct {
+		name, method, target, token string
+		want                        int
+	}{
+		{"system list", http.MethodGet, sessions, "sys-read", http.StatusOK},
+		{"system close", http.MethodDelete, sessions + "/s1", "sys-write", http.StatusOK},
+		{"tenant list", http.MethodGet, sessions, "tenant-read", http.StatusForbidden},
+		{"tenant close", http.MethodDelete, sessions + "/s1", "tenant-write", http.StatusForbidden},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if rec := serve(tt.method, tt.target, tt.token); rec.Code != tt.want {
+				t.Fatalf("status = %d (%s), want %d", rec.Code, rec.Body, tt.want)
+			}
+		})
 	}
 }
 
