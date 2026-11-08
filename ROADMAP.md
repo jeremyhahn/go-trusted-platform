@@ -72,7 +72,6 @@ The trusted-computing platform product and control plane: provisioning, node and
 - **sev-snp** — SEV-SNP guest attestation reports appraised as RFC 9334 Evidence, the report and AMD chain verified by go-xkms through the go-quicbaas SDK; not started — [SPEC Features](docs/SPEC.md#features) — blocked: waits for the HPE DL380 Gen10 Plus v2 to arrive
 - **sev-snp** — SEV-SNP guests on the compute QEMU/KVM provider, with the guest's vTPM bound to its SNP report; not started — [SPEC Features](docs/SPEC.md#features) — blocked: waits for the HPE DL380 Gen10 Plus v2 to arrive
 - **sev-snp** — the DL380 as the CI runner for the SEV-SNP suites; not started — [SPEC Features](docs/SPEC.md#features) — blocked: waits for the HPE DL380 Gen10 Plus v2 to arrive
-- **dns** — `platformctl` has no `dns` command group: DNS is reached through the daemon's REST, gRPC, QUIC, MCP and Unix APIs ([docs/dns/api.md](docs/dns/api.md)), and the SPEC dns row names no CLI group, so this is a recorded omission, not scope — [#954](../../issues/954) — open
 
 ## Future
 - **dht** — trusted DHT for the public peer-to-peer hosting platform; design only — [docs/dht/](docs/dht/) — open
