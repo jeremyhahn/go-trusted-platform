@@ -223,7 +223,7 @@ func TestCoverage964_LoadOrInitCA(t *testing.T) {
 	require.NoError(t, a.LoadOrInitCA(ctx, params))
 	got, err := a.CA.TrustedRoot()
 	require.NoError(t, err)
-	require.Equal(t, want.Subject.CommonName, got.Subject.CommonName, "the configured root is brought back")
+	require.Equal(t, want.Raw, got.Raw, "the original root certificate survives the reload")
 
 	so, user, err := a.ParsePINs([]byte(harnessSOPIN), []byte("123456"))
 	require.NoError(t, err)
