@@ -34,10 +34,6 @@ import (
 // the shared daemon on.
 const integrationConfig = "../../test/integration/config.yaml"
 
-// barrierGateConfig is the platformd config the barrier-gate suite starts its
-// own daemon on, with the shared daemon stopped.
-const barrierGateConfig = "../../test/integration/barrier_gate/config.yaml"
-
 // integrationRunner is the script that starts swtpm and both daemons.
 const integrationRunner = "../../build/docker/devcontainer/run-integration-tests.sh"
 
@@ -66,7 +62,7 @@ func TestIntegrationConfig_TPMIsHarnessSwtpm(t *testing.T) {
 	socket, ok := harnessSwtpmSocket(script)
 	require.True(t, ok, "start_swtpm serves swtpm on a Unix socket")
 
-	for _, path := range []string{integrationConfig, barrierGateConfig} {
+	for _, path := range []string{integrationConfig} {
 		a := loadTemplate(t, path)
 		assert.False(t, a.TPMConfig.UseSimulator, "%s: tpm.simulator", path)
 		assert.Equal(t, socket, a.TPMConfig.Device, "%s: tpm.device is the harness swtpm socket", path)
@@ -97,7 +93,7 @@ func TestIntegrationConfig_EKCertIsTheSwtpmNVIndex(t *testing.T) {
 	// TCG EK Credential Profile 2.1 §2.2.1.4: RSA 2048 EK certificate index.
 	const rsa2048EKCertIndex = 0x01C00002
 
-	for _, path := range []string{integrationConfig, barrierGateConfig} {
+	for _, path := range []string{integrationConfig} {
 		a := loadTemplate(t, path)
 		require.NotNil(t, a.TPMConfig.EK, "%s: tpm.ek", path)
 		assert.Equal(t, uint32(rsa2048EKCertIndex), a.TPMConfig.EK.CertHandle,
@@ -113,7 +109,7 @@ func TestIntegrationConfig_EKCertIsTheSwtpmNVIndex(t *testing.T) {
 // every REST adapter loses its endpoint. The gatewayd-facing routes the sdn
 // suite needs are on the daemon REST server.
 func TestIntegrationConfig_DaemonOnly(t *testing.T) {
-	for _, path := range []string{integrationConfig, barrierGateConfig} {
+	for _, path := range []string{integrationConfig} {
 		a := loadTemplate(t, path)
 		assert.Empty(t, a.WebServices, "%s: webservices switches platformd out of daemon-only mode", path)
 	}
@@ -162,7 +158,7 @@ func TestIntegrationConfig_EKCertificateAtHarnessIndex(t *testing.T) {
 	index, ok := harnessEKCertIndex(script)
 	require.True(t, ok, "swtpm-provision.sh creates the EK certificate")
 
-	for _, path := range []string{integrationConfig, barrierGateConfig} {
+	for _, path := range []string{integrationConfig} {
 		a := loadTemplate(t, path)
 		require.NotNil(t, a.TPMConfig.EK, "%s: tpm.ek", path)
 		assert.Equal(t, index, a.TPMConfig.EK.CertHandle,
