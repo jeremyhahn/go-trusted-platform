@@ -18,6 +18,7 @@ package compute_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -229,7 +230,14 @@ func (a *RESTAdapter) call(ctx context.Context, method, path string, query url.V
 		}
 	}
 
-	if err := protojson.Unmarshal(respBody, out); err != nil {
+	payload, err := unwrapPayload(operation, resp.StatusCode, respBody)
+	if err != nil {
+		return err
+	}
+	if payload == nil {
+		return nil
+	}
+	if err := protojson.Unmarshal(payload, out); err != nil {
 		return ErrRESTRequestFailed{
 			Operation:  operation,
 			StatusCode: resp.StatusCode,
@@ -239,6 +247,35 @@ func (a *RESTAdapter) call(ctx context.Context, method, path string, query url.V
 	}
 
 	return nil
+}
+
+// unwrapPayload returns the resource a compute route answered with: the
+// payload of the webservice envelope (pkg/webservice/v1/response), or the
+// daemon's bare object. An empty body yields no payload.
+func unwrapPayload(operation string, statusCode int, body []byte) ([]byte, error) {
+	if len(bytes.TrimSpace(body)) == 0 {
+		return nil, nil
+	}
+	// The webservice compute handlers wrap every answer in
+	// {code, success, payload}, while the daemon REST listener answers with
+	// the bare object. Only an object carrying a payload key is unwrapped.
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return nil, ErrRESTRequestFailed{
+			Operation:  operation,
+			StatusCode: statusCode,
+			Message:    "failed to parse response: " + err.Error(),
+			Body:       string(body),
+		}
+	}
+	if payload, ok := fields["payload"]; ok {
+		// protojson rejects a top-level null; a null payload is no payload.
+		if string(bytes.TrimSpace(payload)) == "null" {
+			return nil, nil
+		}
+		return payload, nil
+	}
+	return body, nil
 }
 
 // restRPC runs one compute RPC over REST and returns its decoded reply.
