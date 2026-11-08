@@ -64,6 +64,7 @@ declare -A TARGET_PACKAGES=(
     [device]="./test/integration/device/..."
     [tpm]="./test/integration/tpm/..."
     [cold-start]="./test/integration/cold_start/..."
+    [barrier-gate]="./test/integration/barrier_gate/..."
     [sdn]="./test/integration/sdn/ ./test/integration/sdn/mock_bgp/..."
     [sdn-stress]="./test/integration/sdn/stress/..."
     [proxy]="./test/integration/proxy/..."
@@ -161,7 +162,7 @@ declare -A TARGET_TIMEOUTS=(
 # upstream it starts; the ipxe suites start their own iPXE server on
 # 127.0.0.1; testenv-enrollment and e2e boot their own QEMU guests;
 # helpers tests the shared harness library in-process. The
-# targets that do more than skip the daemon -- cold-start, bmc
+# targets that do more than skip the daemon -- cold-start, barrier-gate, bmc
 # and the host-built-input suites -- have their own branch in Main.
 declare -A TARGET_NO_DAEMON=(
     [lb]=1
@@ -176,7 +177,7 @@ declare -A TARGET_NO_DAEMON=(
 # The suites `all` runs on the one shared platformd: the daemon-free suites
 # first, all at once (run_concurrent), then every daemon-backed one, one at a
 # time in list order. Left out, each for
-# a reason the suite itself sets: cold-start needs the shared
+# a reason the suite itself sets: cold-start and barrier-gate need the shared
 # daemon NOT running; bmc needs platformd started against the vBMC config;
 # diskimage, netboot, nat64 and ipsec need inputs only their make targets
 # build on the host; lb, testenv-enrollment and ipxe-* are slices of
@@ -646,8 +647,8 @@ build_binaries() {
     # the build must run from the in-workspace path of go-trusted-platform
     # so the `use ./go-trusted-platform` directive resolves. Otherwise fall
     # back to the legacy /workspace cwd. This keeps the legacy single-mount
-    # path working unchanged while supporting the cold-start
-    # target that needs local source replaces for go-xkms, go-quicbaas etc.
+    # path working unchanged while supporting the barrier-gate / cold-start
+    # targets that need local source replaces for go-xkms, go-quicbaas etc.
     PLATFORM_BUILD_DIR="/workspace"
     if [ -f /sources/go.work ] && [ -d /sources/go-trusted-platform ]; then
         PLATFORM_BUILD_DIR="/sources/go-trusted-platform"
@@ -1350,7 +1351,7 @@ if ! start_swtpm; then
     echo "WARNING: swtpm setup failed; the suites that need a TPM have none"
 fi
 
-# Cold-start scenarios manage their own platformd
+# Cold-start and barrier-gate scenarios manage their own platformd
 # lifecycle; the shared auto-unsealed daemon must NOT be running when
 # the harness boots a fresh init-only daemon. Skip the shared start and
 # seed the per-scenario env vars instead.
@@ -1360,6 +1361,13 @@ if [ "$RUN_TARGET" = "cold-start" ]; then
     mkdir -p /tmp/platformd-cold-start
     export PLATFORM_COLD_START_DIR="/tmp/platformd-cold-start"
     export PLATFORM_COLD_START_BIN="/tmp/platformd"
+elif [ "$RUN_TARGET" = "barrier-gate" ]; then
+    echo "=== barrier-gate target: skipping shared platformd ==="
+    rm -rf /tmp/platformd-barrier-gate
+    mkdir -p /tmp/platformd-barrier-gate
+    export PLATFORM_BARRIER_GATE_DIR="/tmp/platformd-barrier-gate"
+    export PLATFORM_BARRIER_GATE_BIN="/tmp/platformd"
+    export PLATFORM_BARRIER_GATE_CONFIG="${PLATFORM_BUILD_DIR}/test/integration/barrier_gate/config.yaml"
 elif [ "$RUN_TARGET" = "bmc" ]; then
     # BMC target: start vBMC first (generates /tmp/vbmc-ca.pem and the
     # modified config that trusts it), then start platformd with that config.
@@ -1594,6 +1602,12 @@ echo "=== platformd log dir listing ==="
 ls -la /tmp/platformd-integration/log/ 2>/dev/null || echo "(missing)"
 echo "=== platformd CA dir listing ==="
 ls -laR /tmp/platformd-integration/ca/ 2>/dev/null || echo "(missing)"
+echo "=== barrier-gate platformd stderr (post-test) ==="
+cat /tmp/platformd-barrier-gate/platformd.log 2>/dev/null || echo "(empty or missing)"
+echo "=== barrier-gate platformd app log (post-test) ==="
+cat /tmp/platformd-barrier-gate/log/trusted-platform.log 2>/dev/null || echo "(empty or missing)"
+echo "=== barrier-gate data dir listing ==="
+ls -laR /tmp/platformd-barrier-gate/ 2>/dev/null | head -60 || echo "(missing)"
 echo "=== end platformd diagnostics ==="
 
 echo ""

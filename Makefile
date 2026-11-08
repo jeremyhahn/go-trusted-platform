@@ -1814,6 +1814,11 @@ integration-test-secureboot-hw:
 integration-test-cold-start: build-devcontainer
 	$(call run-integration-suite,cold-start)
 
+## integration-test-barrier-gate: Run M6 barrier-gate (init-only loopback) integration tests in devcontainer
+.PHONY: integration-test-barrier-gate
+integration-test-barrier-gate: build-devcontainer
+	$(call run-integration-suite,barrier-gate)
+
 ## integration-test-tpm: Run TPM multi-protocol integration tests in devcontainer
 .PHONY: integration-test-tpm
 integration-test-tpm: build-devcontainer
