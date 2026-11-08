@@ -524,7 +524,7 @@ cache the bring-up only links the binaries and starts OVS, swtpm and
 |-----|------|---------------------|---------------|
 | 1 | `acme`, `authenticode`, `ca`, `iso` | 8.9 min (`iso` 7.9) | about 10.5 min |
 | 2 | `ceremony`, `cli`, `container`, `sdn` | 3.7 min | about 5 min |
-| 3 | `daemon`, `device`, `dns`, `sdn-stress` | 5.5 min (`sdn-stress` 4.5) | about 7 min |
+| 3 | `daemon`, `device`, `dns`, `restroutes`, `sdn-stress` | 5.5 min (`sdn-stress` 4.5) | about 7 min |
 | 4 | `helpers`, `ipxe`, `installer`, `e2e`, `root`, `attestation`, `fido2`, `iam`, `kms`, `luks`, `ntp`, `objectstorage` | 3.8 min (with `sdk`, since moved to `pkg/storage/quicbaas`'s unit suite) | about 5.5 min |
 | 5 | `piv`, `provision`, `proxy`, `registry`, `secrets`, `tenant`, `vpn`, `vtpm`, `tpm`, `compute` | about 12 min (24 less a 6.5-minute build and a 5.5-minute bring-up, as on the other legs) | about 13.5 min |
 

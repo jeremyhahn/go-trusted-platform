@@ -97,6 +97,7 @@ declare -A TARGET_PACKAGES=(
     [kms]="./test/integration/kms/..."
     [pxe]="./test/integration/pxe/..."
     [registry]="./test/integration/registry/..."
+    [restroutes]="./test/integration/restroutes/..."
     [secrets]="./test/integration/secrets/..."
     [vtpm]="./test/integration/vtpm/..."
 )
@@ -208,7 +209,7 @@ ALL_TARGETS=(
     helpers ipxe installer e2e
     root acme attestation authenticode ca ceremony cli
     container daemon device dns fido2 iam iso kms luks
-    ntp objectstorage piv provision proxy registry sdn
+    ntp objectstorage piv provision proxy registry restroutes sdn
     sdn-stress secrets tenant vpn vtpm tpm
 )
 
@@ -222,7 +223,7 @@ ALL_TARGETS=(
 INTEGRATION_LEGS=(
     "acme authenticode ca iso"
     "ceremony cli container sdn"
-    "daemon device dns sdn-stress"
+    "daemon device dns restroutes sdn-stress"
     "helpers ipxe installer e2e root attestation fido2 iam kms luks ntp objectstorage"
     "piv provision proxy registry secrets tenant vpn vtpm tpm compute"
 )
