@@ -25,6 +25,11 @@
 | `GetJob` | `GetOrchestratorJobRequest` | `GetOrchestratorJobResponse` | `orchestrator:read` |
 | `CancelJob` | `CancelOrchestratorJobRequest` | `CancelOrchestratorJobResponse` | `orchestrator:write` |
 
+`ListSessions` and `CloseSession` (and the REST session routes) serve the
+system tenant only: any other caller, or a caller with no tenant, gets
+`PermissionDenied`. The embedded orchestrator cannot yet scope sessions to
+a caller's tenant.
+
 ## Messages
 
 | Message | Fields |
