@@ -14,6 +14,7 @@
 package rpinetboot
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -153,6 +154,42 @@ func tftpTree(t *testing.T, dir string) int {
 		require.NoError(t, <-served)
 	})
 	return conn.LocalAddr().(*net.UDPAddr).Port
+}
+
+// Server.Serve reads a PacketConn that is not a *net.UDPConn through processRequest,
+// and Server.Shutdown closes the conn and cancels, so Serve's loop returns nil.
+func TestTFTPTree_PlainPacketConnServesAndShutsDownCleanly(t *testing.T) {
+	dir := stageTree(t)
+	srv := tftp.NewServer(func(filename string, rf io.ReaderFrom) error {
+		f, err := os.Open(filepath.Join(dir, filepath.FromSlash(filename)))
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		_, err = rf.ReadFrom(f)
+		return err
+	}, nil)
+	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	require.NoError(t, err)
+	served := make(chan error, 1)
+	go func() { served <- srv.Serve(plainPacketConn{conn}) }()
+
+	client, err := tftp.NewClient(conn.LocalAddr().String())
+	require.NoError(t, err)
+	wt, err := client.Receive("config.txt", "octet")
+	require.NoError(t, err)
+	var got bytes.Buffer
+	_, err = wt.WriteTo(&got)
+	require.NoError(t, err)
+	assert.Equal(t, mustRead(t, filepath.Join(dir, "config.txt")), got.Bytes())
+
+	srv.Shutdown()
+	select {
+	case err := <-served:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve did not return within 5s of Shutdown")
+	}
 }
 
 // stageTree writes a minimal Pi 4 boot tree: start4.elf in the device
