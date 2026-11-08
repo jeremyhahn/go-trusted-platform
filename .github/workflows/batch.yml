@@ -1,10 +1,8 @@
 # batch-template: v1.1 — token-free CPU work on the batch runners: fuzz,
 # race-full, soak, bench. Dispatch only; never in a merge gate.
 #
-# Owner order 2026-10-12 10:43 EDT (relayed by the Company Agent 17:24Z):
-# "the fleet is still not working hard. omega is 21%, both dell servers are
-# under 50%. we need to give them more work!" Lanes are bound by Claude
-# accounts; this workflow is work that needs none and still finds defects in
+# Lanes are bound by Claude accounts; the batch runners have CPU left over,
+# and this workflow is work that needs no account and still finds defects in
 # the release-candidate products.
 #
 # WHO RUNS IT. The project's coordinator dispatches it on `main` when the
