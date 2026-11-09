@@ -25,17 +25,54 @@ function renderMTLSStep() {
   );
 }
 
+// The wizard opens on upload; generation is the second choice.
+function selectGenerate() {
+  fireEvent.click(screen.getByRole("radio", { name: "Generate new cert" }));
+}
+
+const PREREQUISITE =
+  /needs a platform client certificate already installed in this browser.*upload a certificate your administrator issued/i;
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("AddFactorWizard mTLS source", () => {
+  it("starts on upload and states the existing-certificate prerequisite for generation", () => {
+    renderMTLSStep();
+
+    expect((screen.getByRole("radio", { name: "Upload existing cert" }) as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByText(PREREQUISITE)).toBeTruthy();
+  });
+});
+
 describe("AddFactorWizard mTLS generate", () => {
+  it("explains the existing-certificate prerequisite when issue-cert answers 401", async () => {
+    vi.mocked(generateMTLSCredential).mockResolvedValue({ csrPEM: CSR_PEM, privateKeyPEM: KEY_PEM });
+    vi.spyOn(authFactorsApi, "issueMTLSCert").mockResolvedValue({
+      ok: false,
+      error: "HTTP 401",
+      status: 401,
+    });
+    renderMTLSStep();
+    selectGenerate();
+
+    fireEvent.click(screen.getByRole("button", { name: /generate certificate/i }));
+
+    const refusal = await screen.findByText(/refused generation/i);
+    expect(refusal.textContent).toMatch(PREREQUISITE);
+    expect(screen.queryByText("HTTP 401")).toBeNull();
+    expect(screen.queryByRole("link", { name: /download private key/i })).toBeNull();
+    expect(screen.getByRole("button", { name: /generate certificate/i })).toBeTruthy();
+  });
+
   it("sends a CSR for the user and offers the browser-held key for download", async () => {
     vi.mocked(generateMTLSCredential).mockResolvedValue({ csrPEM: CSR_PEM, privateKeyPEM: KEY_PEM });
     const issue = vi
       .spyOn(authFactorsApi, "issueMTLSCert")
       .mockResolvedValue({ ok: true, data: { cert_pem: CERT_PEM } });
     renderMTLSStep();
+    selectGenerate();
 
     fireEvent.click(screen.getByRole("button", { name: /generate certificate/i }));
 
@@ -55,6 +92,7 @@ describe("AddFactorWizard mTLS generate", () => {
       status: 403,
     });
     renderMTLSStep();
+    selectGenerate();
 
     fireEvent.click(screen.getByRole("button", { name: /generate certificate/i }));
 
