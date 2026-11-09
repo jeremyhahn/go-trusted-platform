@@ -581,7 +581,7 @@ names, replace them. Requires `device:write`.
   "name": "profile_create_from_template",
   "arguments": {
     "template_id": 9000,
-    "overrides": {"name": "gw-01", "ek_serial": "1234567890"}
+    "overrides": {"name": "edge-01", "ek_serial": "1234567890"}
   }
 }
 ```
