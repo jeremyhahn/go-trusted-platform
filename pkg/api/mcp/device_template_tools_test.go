@@ -324,7 +324,7 @@ func TestDeviceProfileFromTemplate(t *testing.T) {
 	result, err := registry.ExecuteTool(context.Background(), "profile_create_from_template", map[string]interface{}{
 		"template_id": "5",
 		"overrides": map[string]interface{}{
-			"name":        "gw-01",
+			"name":        "edge-01",
 			"ek_serial":   "EK-MCP",
 			"ek_cert":     certPEM,
 			"mac_address": "00:25:90:aa:bb:01",
@@ -343,7 +343,7 @@ func TestDeviceProfileFromTemplate(t *testing.T) {
 	}
 
 	got := stub.lastOverrides
-	if got.Name != "gw-01" || got.EKSerial != "EK-MCP" || got.EKCert != certPEM || got.MACAddress != "00:25:90:aa:bb:01" {
+	if got.Name != "edge-01" || got.EKSerial != "EK-MCP" || got.EKCert != certPEM || got.MACAddress != "00:25:90:aa:bb:01" {
 		t.Errorf("overrides handed to the backend = %+v", got)
 	}
 }
