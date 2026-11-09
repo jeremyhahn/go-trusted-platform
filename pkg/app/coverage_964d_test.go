@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
@@ -209,9 +210,14 @@ func TestCoverage964d_FetchDisklessIdentity(t *testing.T) {
 	t.Run("the control plane has no recorded certificate", func(t *testing.T) {
 		app := newIDevIDApp(t, newSimulatedIDevID(t))
 		_, server, roots := startBootServer(t, "")
-		var paths []string
+		var (
+			mu    sync.Mutex
+			paths []string
+		)
 		missing := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
 			paths = append(paths, r.URL.Path)
+			mu.Unlock()
 			http.Error(w, "no such node", http.StatusInternalServerError)
 		}))
 		missing.TLS = server.TLS
@@ -222,7 +228,10 @@ func TestCoverage964d_FetchDisklessIdentity(t *testing.T) {
 		resp, err := app.fetchDisklessIdentity(ctx, target, roots)
 		assert.Nil(t, resp)
 		require.ErrorIs(t, err, provisioning.ErrServerError)
-		assert.Equal(t, []string{provisioning.BootCertificatePath}, paths,
+		mu.Lock()
+		recorded := append([]string(nil), paths...)
+		mu.Unlock()
+		assert.Equal(t, []string{provisioning.BootCertificatePath}, recorded,
 			"no delivery is attempted without a recorded certificate")
 	})
 }
