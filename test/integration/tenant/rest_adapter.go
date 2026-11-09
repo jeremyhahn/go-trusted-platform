@@ -21,10 +21,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
@@ -189,6 +194,21 @@ func decodePayload(body []byte, v interface{}) error {
 	return json.Unmarshal(payload, v)
 }
 
+// decodeProtoPayload unwraps the response envelope and decodes its payload
+// into a protobuf message. The webservice handlers write their replies with
+// protojson (camelCase field names), so they do not fit the snake_case JSON
+// tags of the harness result types.
+func decodeProtoPayload(body []byte, m proto.Message) error {
+	payload, err := unwrapPayload(body)
+	if err != nil {
+		return err
+	}
+	if payload == nil {
+		return errors.New("empty response body")
+	}
+	return protojson.UnmarshalOptions{DiscardUnknown: true}.Unmarshal(payload, m)
+}
+
 // =============================================================================
 // Tenant CRUD Operations
 // =============================================================================
@@ -200,8 +220,8 @@ func (a *RESTAdapter) CreateTenant(ctx context.Context, opts CreateTenantOptions
 		return nil, err
 	}
 
-	var tenant TenantData
-	if err := decodePayload(body, &tenant); err != nil {
+	var resp platformv1.CreateTenantResponse
+	if err := decodeProtoPayload(body, &resp); err != nil {
 		return nil, ErrRESTRequestFailed{
 			Operation: "CreateTenant",
 			Message:   "failed to parse response: " + err.Error(),
@@ -209,7 +229,7 @@ func (a *RESTAdapter) CreateTenant(ctx context.Context, opts CreateTenantOptions
 		}
 	}
 
-	return &CreateTenantResult{Tenant: &tenant}, nil
+	return &CreateTenantResult{Tenant: pbTenantToData(resp.GetTenant())}, nil
 }
 
 // GetTenant retrieves a tenant by ID
@@ -221,8 +241,8 @@ func (a *RESTAdapter) GetTenant(ctx context.Context, opts GetTenantOptions) (*Ge
 		return nil, err
 	}
 
-	var tenant TenantData
-	if err := decodePayload(body, &tenant); err != nil {
+	var resp platformv1.GetTenantResponse
+	if err := decodeProtoPayload(body, &resp); err != nil {
 		return nil, ErrRESTRequestFailed{
 			Operation: "GetTenant",
 			Message:   "failed to parse response: " + err.Error(),
@@ -230,20 +250,20 @@ func (a *RESTAdapter) GetTenant(ctx context.Context, opts GetTenantOptions) (*Ge
 		}
 	}
 
-	return &GetTenantResult{Tenant: &tenant}, nil
+	return &GetTenantResult{Tenant: pbTenantToData(resp.GetTenant())}, nil
 }
 
 // GetTenantByName retrieves a tenant by name
 func (a *RESTAdapter) GetTenantByName(ctx context.Context, opts GetTenantByNameOptions) (*GetTenantByNameResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/name/%s", opts.Name)
+	path := fmt.Sprintf("/api/v1/tenants/by-name/%s", opts.Name)
 
 	body, err := a.doRequest(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	var tenant TenantData
-	if err := decodePayload(body, &tenant); err != nil {
+	var resp platformv1.GetTenantByNameResponse
+	if err := decodeProtoPayload(body, &resp); err != nil {
 		return nil, ErrRESTRequestFailed{
 			Operation: "GetTenantByName",
 			Message:   "failed to parse response: " + err.Error(),
@@ -251,7 +271,7 @@ func (a *RESTAdapter) GetTenantByName(ctx context.Context, opts GetTenantByNameO
 		}
 	}
 
-	return &GetTenantByNameResult{Tenant: &tenant}, nil
+	return &GetTenantByNameResult{Tenant: pbTenantToData(resp.GetTenant())}, nil
 }
 
 // UpdateTenant updates an existing tenant
@@ -274,8 +294,8 @@ func (a *RESTAdapter) UpdateTenant(ctx context.Context, opts UpdateTenantOptions
 		return nil, err
 	}
 
-	var tenant TenantData
-	if err := decodePayload(body, &tenant); err != nil {
+	var resp platformv1.UpdateTenantResponse
+	if err := decodeProtoPayload(body, &resp); err != nil {
 		return nil, ErrRESTRequestFailed{
 			Operation: "UpdateTenant",
 			Message:   "failed to parse response: " + err.Error(),
@@ -283,7 +303,7 @@ func (a *RESTAdapter) UpdateTenant(ctx context.Context, opts UpdateTenantOptions
 		}
 	}
 
-	return &UpdateTenantResult{Tenant: &tenant}, nil
+	return &UpdateTenantResult{Tenant: pbTenantToData(resp.GetTenant())}, nil
 }
 
 // DeleteTenant removes a tenant
@@ -448,7 +468,7 @@ func (a *RESTAdapter) GetUsage(ctx context.Context, opts GetUsageOptions) (*GetU
 
 // CheckQuota checks if a resource request can be fulfilled
 func (a *RESTAdapter) CheckQuota(ctx context.Context, opts CheckQuotaOptions) (*CheckQuotaResult, error) {
-	path := fmt.Sprintf("/api/v1/tenants/%s/check-quota", opts.TenantID)
+	path := fmt.Sprintf("/api/v1/tenants/%s/quota-check", opts.TenantID)
 
 	reqBody := map[string]interface{}{
 		"resource": opts.Resource,
@@ -462,8 +482,8 @@ func (a *RESTAdapter) CheckQuota(ctx context.Context, opts CheckQuotaOptions) (*
 		return nil, err
 	}
 
-	var result CheckQuotaResult
-	if err := decodePayload(body, &result); err != nil {
+	var resp platformv1.CheckQuotaResponse
+	if err := decodeProtoPayload(body, &resp); err != nil {
 		return nil, ErrRESTRequestFailed{
 			Operation: "CheckQuota",
 			Message:   "failed to parse response: " + err.Error(),
@@ -471,7 +491,13 @@ func (a *RESTAdapter) CheckQuota(ctx context.Context, opts CheckQuotaOptions) (*
 		}
 	}
 
-	return &result, nil
+	return &CheckQuotaResult{
+		TenantID: resp.GetTenantId(),
+		Resource: resp.GetResource(),
+		Amount:   resp.GetAmount(),
+		Allowed:  resp.GetAvailable(),
+		Message:  resp.GetMessage(),
+	}, nil
 }
 
 // =============================================================================
@@ -598,21 +624,15 @@ func (a *RESTAdapter) TenantBarrierStatus(ctx context.Context, opts TenantBarrie
 		return nil, ErrRESTRequestFailed{Operation: "TenantBarrierStatus", Message: "tenant_id is required"}
 	}
 
-	path := fmt.Sprintf("/api/v1/tenants/%s/barrier/status", opts.TenantID)
+	path := fmt.Sprintf("/api/v1/tenants/%s/barrier", opts.TenantID)
 
 	body, err := a.doRequest(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	var resp struct {
-		TenantID       string `json:"tenant_id"`
-		Sealed         bool   `json:"sealed"`
-		Initialized    bool   `json:"initialized"`
-		Strategy       string `json:"strategy"`
-		HardwareBacked bool   `json:"hardware_backed"`
-	}
-	if err := decodePayload(body, &resp); err != nil {
+	var resp platformv1.GetTenantBarrierStatusResponse
+	if err := decodeProtoPayload(body, &resp); err != nil {
 		return nil, ErrRESTRequestFailed{
 			Operation: "TenantBarrierStatus",
 			Message:   "failed to parse response: " + err.Error(),
@@ -620,12 +640,13 @@ func (a *RESTAdapter) TenantBarrierStatus(ctx context.Context, opts TenantBarrie
 		}
 	}
 
+	status := resp.GetBarrierStatus()
 	return &TenantBarrierStatusResult{
-		TenantID:       resp.TenantID,
-		Sealed:         resp.Sealed,
-		Initialized:    resp.Initialized,
-		Strategy:       resp.Strategy,
-		HardwareBacked: resp.HardwareBacked,
+		TenantID:       status.GetTenantId(),
+		Sealed:         status.GetSealed(),
+		Initialized:    status.GetInitialized(),
+		Strategy:       status.GetStrategy(),
+		HardwareBacked: status.GetHardwareBacked(),
 	}, nil
 }
 
