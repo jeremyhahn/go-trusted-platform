@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/calleradmission"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -98,6 +99,24 @@ func TestSetAttestationRouterHandlers_MountsFailClosedReportingWithoutACache(t *
 	callers := serveIAM(s, http.MethodGet, "/api/v1/attestation/callers", "attestation-reader")
 	assert.Equal(t, http.StatusOK, callers.Code, callers.Body.String())
 	reports := serveIAM(s, http.MethodGet, "/api/v1/attestation/reports", "attestation-reader")
+	assert.Equal(t, http.StatusServiceUnavailable, reports.Code, reports.Body.String())
+}
+
+// A node without a collector still has a caller policy: the callers route
+// describes it, while the reports routes stay 503.
+func TestSetAttestationRouterHandlers_DescribesThePolicyWithoutACache(t *testing.T) {
+	with := &RESTServer{router: mux.NewRouter(), logger: slog.Default()}
+	guard := restapi.NewScopeGuard(attestationRESTCallers, nil, nil)
+	policy := stubDescriber{d: calleradmission.Description{
+		Strategy: calleradmission.StrategyAllowlist, Identities: []string{"a"}, ListValid: true, AnchorsConfigured: true, AnchorSource: "x",
+	}}
+	require.NoError(t, with.SetAttestationRouterHandlers(logging.DefaultLogger(), &recordingAttestationServer{},
+		ReportingHandles{Policy: policy}, guard))
+	callers := serveIAM(with, http.MethodGet, "/api/v1/attestation/callers", "attestation-reader")
+	require.Equal(t, http.StatusOK, callers.Code, callers.Body.String())
+	assert.Contains(t, callers.Body.String(), `"allowlist"`)
+	assert.NotContains(t, callers.Body.String(), `"admits_nobody":true`)
+	reports := serveIAM(with, http.MethodGet, "/api/v1/attestation/reports", "attestation-reader")
 	assert.Equal(t, http.StatusServiceUnavailable, reports.Code, reports.Body.String())
 }
 
