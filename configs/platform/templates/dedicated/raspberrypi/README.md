@@ -75,7 +75,7 @@ A Pi netbooted diskless (`boot_model: diskless` or `diskless-nbd`) also needs
 `install-target: disk`: its installer runs on the Pi, and bootstrap refuses
 the template's `image`. `eth0` stays `manual` for a diskless Pi too; the
 compute role holds no provisioning (VLAN 405) address. The
-[tgw-01 example](../../../../bootstrap/tgw01-vlan405.example.yaml) does both
+[edge-01 example](../../../../bootstrap/edge-01-vlan405.example.yaml) does both
 for three Pis.
 
 ## A Pi on a flat DHCP network
@@ -305,7 +305,7 @@ What the desk control plane does without a gateway (lines of
 - **Lost — the route out:** the public DNS forwarders `1.1.1.1` and `8.8.8.8`
   (:363-364) and the resolver fallback (:314-315); the preferred NTP upstream
   `10.4.6.1` (:510), which is the gateway's control-plane address and is not on
-  the desk; `pool.ntp.org` (:516); the BMC at `10.4.2.20` (:677).
+  the desk; `pool.ntp.org` (:516); the BMC at `198.51.100.148` (:677).
 - **NTP warns and carries on:** the startup gate blocks for 120 s (:523-524),
   then `on-timeout: warn-and-continue` (:528) boots the node flagged
   time-unsynced in health; `orphan-fallback: true` (:531) keeps it serving its
