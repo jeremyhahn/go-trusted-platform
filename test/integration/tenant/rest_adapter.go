@@ -412,8 +412,8 @@ func (a *RESTAdapter) GetQuotas(ctx context.Context, opts GetQuotasOptions) (*Ge
 		return nil, err
 	}
 
-	var result GetQuotasResult
-	if err := decodePayload(body, &result); err != nil {
+	var resp platformv1.GetQuotasResponse
+	if err := decodeProtoPayload(body, &resp); err != nil {
 		return nil, ErrRESTRequestFailed{
 			Operation: "GetQuotas",
 			Message:   "failed to parse response: " + err.Error(),
@@ -421,28 +421,72 @@ func (a *RESTAdapter) GetQuotas(ctx context.Context, opts GetQuotasOptions) (*Ge
 		}
 	}
 
-	return &result, nil
+	return &GetQuotasResult{
+		TenantID: resp.GetTenantId(),
+		Compute:  pbToComputeQuotaData(resp.GetCompute()),
+		Network:  pbToNetworkQuotaData(resp.GetNetwork()),
+		Storage:  pbToStorageQuotaData(resp.GetStorage()),
+	}, nil
 }
 
 // UpdateQuotas updates tenant quotas
 func (a *RESTAdapter) UpdateQuotas(ctx context.Context, opts UpdateQuotasOptions) (*UpdateQuotasResult, error) {
 	path := fmt.Sprintf("/api/v1/tenants/%s/quotas", opts.TenantID)
 
-	body, err := a.doRequest(ctx, http.MethodPut, path, opts)
+	req := &platformv1.UpdateQuotasRequest{
+		TenantId: opts.TenantID,
+	}
+
+	if opts.Compute != nil {
+		req.Compute = &platformv1.ComputeQuota{
+			MaxVms:        opts.Compute.MaxVMs,
+			MaxContainers: opts.Compute.MaxContainers,
+			MaxVcpus:      opts.Compute.MaxVCPUs,
+			MaxMemoryMb:   opts.Compute.MaxMemoryMB,
+		}
+	}
+
+	if opts.Network != nil {
+		req.Network = &platformv1.NetworkQuota{
+			MaxBridges:       opts.Network.MaxBridges,
+			MaxPorts:         opts.Network.MaxPorts,
+			MaxBandwidthMbps: opts.Network.MaxBandwidthMbps,
+		}
+	}
+
+	if opts.Storage != nil {
+		req.Storage = &platformv1.StorageQuota{
+			MaxVolumesGb: opts.Storage.MaxVolumesGB,
+			MaxSnapshots: opts.Storage.MaxSnapshots,
+		}
+	}
+
+	// The webservice decodes the body with protojson; json.RawMessage passes
+	// the protojson bytes through doRequest unchanged.
+	reqBody, err := protojson.Marshal(req)
+	if err != nil {
+		return nil, ErrRESTRequestFailed{
+			Operation: "UpdateQuotas",
+			Message:   "failed to marshal request: " + err.Error(),
+		}
+	}
+
+	if _, err := a.doRequest(ctx, http.MethodPut, path, json.RawMessage(reqBody)); err != nil {
+		return nil, err
+	}
+
+	// UpdateQuotasResponse carries only a status: fetch the updated quotas.
+	quotas, err := a.GetQuotas(ctx, GetQuotasOptions{TenantID: opts.TenantID})
 	if err != nil {
 		return nil, err
 	}
 
-	var result UpdateQuotasResult
-	if err := decodePayload(body, &result); err != nil {
-		return nil, ErrRESTRequestFailed{
-			Operation: "UpdateQuotas",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
-	}
-
-	return &result, nil
+	return &UpdateQuotasResult{
+		TenantID: quotas.TenantID,
+		Compute:  quotas.Compute,
+		Network:  quotas.Network,
+		Storage:  quotas.Storage,
+	}, nil
 }
 
 // GetUsage retrieves tenant resource usage
@@ -454,8 +498,8 @@ func (a *RESTAdapter) GetUsage(ctx context.Context, opts GetUsageOptions) (*GetU
 		return nil, err
 	}
 
-	var result GetUsageResult
-	if err := decodePayload(body, &result); err != nil {
+	var resp platformv1.GetUsageResponse
+	if err := decodeProtoPayload(body, &resp); err != nil {
 		return nil, ErrRESTRequestFailed{
 			Operation: "GetUsage",
 			Message:   "failed to parse response: " + err.Error(),
@@ -463,7 +507,20 @@ func (a *RESTAdapter) GetUsage(ctx context.Context, opts GetUsageOptions) (*GetU
 		}
 	}
 
-	return &result, nil
+	usage := resp.GetUsage()
+	return &GetUsageResult{
+		TenantID:      usage.GetTenantId(),
+		VMs:           usage.GetVms(),
+		Containers:    usage.GetContainers(),
+		VCPUs:         usage.GetVcpus(),
+		MemoryMB:      usage.GetMemoryMb(),
+		DiskGB:        usage.GetDiskGb(),
+		Bridges:       usage.GetBridges(),
+		Ports:         usage.GetPorts(),
+		BandwidthMbps: usage.GetBandwidthMbps(),
+		Volumes:       usage.GetVolumes(),
+		Snapshots:     usage.GetSnapshots(),
+	}, nil
 }
 
 // CheckQuota checks if a resource request can be fulfilled

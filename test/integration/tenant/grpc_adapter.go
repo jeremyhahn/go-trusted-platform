@@ -310,9 +310,9 @@ func (a *GRPCAdapter) GetQuotas(ctx context.Context, opts GetQuotasOptions) (*Ge
 
 	return &GetQuotasResult{
 		TenantID: resp.GetTenantId(),
-		Compute:  a.pbToComputeQuotaData(resp.GetCompute()),
-		Network:  a.pbToNetworkQuotaData(resp.GetNetwork()),
-		Storage:  a.pbToStorageQuotaData(resp.GetStorage()),
+		Compute:  pbToComputeQuotaData(resp.GetCompute()),
+		Network:  pbToNetworkQuotaData(resp.GetNetwork()),
+		Storage:  pbToStorageQuotaData(resp.GetStorage()),
 	}, nil
 }
 
@@ -359,9 +359,9 @@ func (a *GRPCAdapter) UpdateQuotas(ctx context.Context, opts UpdateQuotasOptions
 
 	return &UpdateQuotasResult{
 		TenantID: quotasResp.GetTenantId(),
-		Compute:  a.pbToComputeQuotaData(quotasResp.GetCompute()),
-		Network:  a.pbToNetworkQuotaData(quotasResp.GetNetwork()),
-		Storage:  a.pbToStorageQuotaData(quotasResp.GetStorage()),
+		Compute:  pbToComputeQuotaData(quotasResp.GetCompute()),
+		Network:  pbToNetworkQuotaData(quotasResp.GetNetwork()),
+		Storage:  pbToStorageQuotaData(quotasResp.GetStorage()),
 	}, nil
 }
 
@@ -453,15 +453,15 @@ func (a *GRPCAdapter) pbToTenantData(pb *platformv1.Tenant) *TenantData {
 	}
 
 	if pb.GetComputeQuota() != nil {
-		data.ComputeQuota = a.pbToComputeQuotaData(pb.GetComputeQuota())
+		data.ComputeQuota = pbToComputeQuotaData(pb.GetComputeQuota())
 	}
 
 	if pb.GetNetworkQuota() != nil {
-		data.NetworkQuota = a.pbToNetworkQuotaData(pb.GetNetworkQuota())
+		data.NetworkQuota = pbToNetworkQuotaData(pb.GetNetworkQuota())
 	}
 
 	if pb.GetStorageQuota() != nil {
-		data.StorageQuota = a.pbToStorageQuotaData(pb.GetStorageQuota())
+		data.StorageQuota = pbToStorageQuotaData(pb.GetStorageQuota())
 	}
 
 	if pb.GetCreatedAt() != nil {
@@ -494,7 +494,7 @@ func (a *GRPCAdapter) pbToTenantState(state platformv1.TenantState) tenant.State
 }
 
 // pbToComputeQuotaData converts protobuf ComputeQuota to ComputeQuotaData
-func (a *GRPCAdapter) pbToComputeQuotaData(pb *platformv1.ComputeQuota) *ComputeQuotaData {
+func pbToComputeQuotaData(pb *platformv1.ComputeQuota) *ComputeQuotaData {
 	if pb == nil {
 		return nil
 	}
@@ -507,7 +507,7 @@ func (a *GRPCAdapter) pbToComputeQuotaData(pb *platformv1.ComputeQuota) *Compute
 }
 
 // pbToNetworkQuotaData converts protobuf NetworkQuota to NetworkQuotaData
-func (a *GRPCAdapter) pbToNetworkQuotaData(pb *platformv1.NetworkQuota) *NetworkQuotaData {
+func pbToNetworkQuotaData(pb *platformv1.NetworkQuota) *NetworkQuotaData {
 	if pb == nil {
 		return nil
 	}
@@ -519,7 +519,7 @@ func (a *GRPCAdapter) pbToNetworkQuotaData(pb *platformv1.NetworkQuota) *Network
 }
 
 // pbToStorageQuotaData converts protobuf StorageQuota to StorageQuotaData
-func (a *GRPCAdapter) pbToStorageQuotaData(pb *platformv1.StorageQuota) *StorageQuotaData {
+func pbToStorageQuotaData(pb *platformv1.StorageQuota) *StorageQuotaData {
 	if pb == nil {
 		return nil
 	}
