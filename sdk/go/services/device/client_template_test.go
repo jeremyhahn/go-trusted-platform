@@ -87,13 +87,13 @@ func TestClient_CreateTemplate_Error(t *testing.T) {
 func TestClient_CreateProfileFromTemplate(t *testing.T) {
 	fake := &fakeTemplateServiceClient{
 		fromResp: &platformv1.CreateProfileResponse{
-			Profile: &platformv1.DeviceProfile{Id: 77, Name: "gw-01"},
+			Profile: &platformv1.DeviceProfile{Id: 77, Name: "edge-01"},
 		},
 	}
 	client := NewClientFromGRPC(fake)
 
 	profile, err := client.CreateProfileFromTemplate(context.Background(), 9000,
-		&platformv1.DeviceProfile{Name: "gw-01", EkSerial: "EK-1"})
+		&platformv1.DeviceProfile{Name: "edge-01", EkSerial: "EK-1"})
 	if err != nil {
 		t.Fatalf("CreateProfileFromTemplate: %v", err)
 	}
