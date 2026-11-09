@@ -455,7 +455,7 @@ func agentsTable(agents []*platformv1.OrchestratorAgent) *cli.TableData {
 			agent.GetBackend(),
 			agent.GetModel(),
 			agent.GetStatus(),
-			formatUnix(agent.GetLastSeen()),
+			formatUnixNano(agent.GetLastSeen()),
 		)
 	}
 	return table
@@ -471,7 +471,7 @@ func sessionsTable(sessions []*platformv1.OrchestratorSession) *cli.TableData {
 			session.GetBackend(),
 			session.GetModel(),
 			session.GetStatus(),
-			formatUnix(session.GetLastActive()),
+			formatUnixNano(session.GetLastActive()),
 		)
 	}
 	return table
@@ -486,7 +486,7 @@ func jobsTable(jobs []*platformv1.OrchestratorJob) *cli.TableData {
 			strconv.FormatInt(int64(job.GetTaskCount()), 10),
 			strconv.FormatInt(int64(job.GetCompleted()), 10),
 			strconv.FormatInt(int64(job.GetFailed()), 10),
-			formatUnix(job.GetUpdatedAt()),
+			formatUnixNano(job.GetUpdatedAt()),
 			strings.TrimSpace(job.GetDescription()),
 		)
 	}
@@ -499,4 +499,14 @@ func formatUnix(seconds int64) string {
 		return "-"
 	}
 	return time.Unix(seconds, 0).UTC().Format(time.RFC3339)
+}
+
+// formatUnixNano renders a Unix time in nanoseconds in UTC, or "-" when it
+// is unset. Agent LastSeen, session LastActive and job UpdatedAt arrive in
+// nanoseconds from the embedded orchestrator.
+func formatUnixNano(nanos int64) string {
+	if nanos <= 0 {
+		return "-"
+	}
+	return time.Unix(0, nanos).UTC().Format(time.RFC3339)
 }
