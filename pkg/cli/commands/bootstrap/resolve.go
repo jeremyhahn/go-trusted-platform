@@ -57,7 +57,7 @@ Examples:
   platformctl bootstrap resolve --config bootstrap.yaml
 
   # Print two nodes
-  platformctl bootstrap resolve --config bootstrap.yaml --node cp-01 --node gw-01
+  platformctl bootstrap resolve --config bootstrap.yaml --node cp-01 --node edge-01
 
   # Write every node's config for a diff
   platformctl bootstrap resolve --config bootstrap.yaml --dump /tmp/resolved`,
