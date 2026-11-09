@@ -1180,7 +1180,7 @@ func TestProfileService_FindProfileForDevice_BoundProfileWins(t *testing.T) {
 	assert.Equal(t, uint64(4631), profile.ID, "the bound profile must win over a rule match")
 	assert.Equal(t, "compute.example.internal", profile.TLSServerName)
 
-	unbound := &entities.Device{ID: 971641861439490, Serial: "node-01-gw-01", Model: "SuperMicro X10"}
+	unbound := &entities.Device{ID: 971641861439490, Serial: "node-01-edge-01", Model: "SuperMicro X10"}
 	profile, err = service.FindProfileForDevice(ctx, unbound)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(4632), profile.ID, "with no EK identity the match rules decide")
@@ -1210,7 +1210,7 @@ func TestProfileService_FindProfileForDevice_NotFound(t *testing.T) {
 	// through to the match rules rather than failing the resolution.
 	require.NoError(t, service.Save(ctx, &entities.DeviceProfile{ID: 4634, Name: "rules", Role: entities.DeviceRoleWorker,
 		MatchRules: &entities.ProfileMatchRules{SerialPrefix: "NODE-01"}}))
-	profile, err := service.FindProfileForDevice(ctx, &entities.Device{ID: 9, Serial: "node-01-gw-01", EKCert: "garbage"})
+	profile, err := service.FindProfileForDevice(ctx, &entities.Device{ID: 9, Serial: "node-01-edge-01", EKCert: "garbage"})
 	require.NoError(t, err)
 	assert.Equal(t, uint64(4634), profile.ID)
 }

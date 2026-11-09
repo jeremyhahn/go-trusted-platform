@@ -1,7 +1,7 @@
-# Per-node overrides for the rack Pis in tgw01-vlan405.example.yaml, merged
+# Per-node overrides for the rack Pis in edge-01-vlan405.example.yaml, merged
 # over the rpi4 compute template (nodes[].overrides_file; inline overrides
 # win). The template is written for the reference network, where the control
-# plane is 10.4.6.10; here it is tgw-01 at 192.0.2.1.
+# plane is 10.4.6.10; here it is edge-01 at 192.0.2.1.
 #
 # network.dns.upstream-dns is not set here: the bootstrap derives it from the
 # control plane's static address and internal DNS port.
