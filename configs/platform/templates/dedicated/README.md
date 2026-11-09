@@ -18,7 +18,7 @@ For single-box or cluster topologies, see the sibling profiles:
                   ISP A ─────┴───── ISP B         (1G WAN ports, gateway only)
                            │
                     ┌──────▼──────┐
-                    │    gw-01    │  gatewayd + platformd (client)
+                    │   edge-01   │  gatewayd + platformd (client)
                     │   gateway   │  role: gateway (routes, NATs)
                     └──────┬──────┘
                            │ bond0 → br-fabric, port class gateway
@@ -47,7 +47,7 @@ integration bridge, **`br-int`**, which never carries the trunk.
 | Role | Binaries | Owns |
 |------|----------|------|
 | **Control plane** (`cp-01`) | `platformd` (server mode) | CA + ACME server, authoritative DNS zones (internal + public), IAM, KMS, QuicBaaS storage, OVS master |
-| **Gateway** (`gw-01`) | `platformd` (client), `gatewayd` | BGP edge, the only router on the platform tier, firewall, NAT, load balancer, L3 egress, WAN-side TLS termination |
+| **Gateway** (`edge-01`) | `platformd` (client), `gatewayd` | BGP edge, the only router on the platform tier, firewall, NAT, load balancer, L3 egress, WAN-side TLS termination |
 | **Compute** (`compute-01`) | `platformd` (client) | QEMU/KVM VMs, Podman containers, local workload storage |
 
 **Gateway and compute are ACME-enrolled clients of the control plane's
@@ -106,7 +106,7 @@ A host holds an address only on the zones it uses (reference network,
 
 | Node | Role | Zone addresses | Platform VRF |
 |------|------|----------------|--------------|
-| gw-01 | `gateway` | `.2` on transit, fabric, quarantine, provisioning, control-plane, backup; answers for `.1` | `10.4.144.2/32` |
+| edge-01 | `gateway` | `.2` on transit, fabric, quarantine, provisioning, control-plane, backup; answers for `.1` | `10.4.144.2/32` |
 | cp-01 | `control-plane` | fabric `10.4.1.10`, control-plane `10.4.6.10` | `10.4.144.10/32` |
 | compute-01 | `compute` | fabric `10.4.1.20`, hypervisor `10.4.3.20`, storage `10.4.7.20` | `10.4.144.20/32` |
 
@@ -162,7 +162,7 @@ other static hosts, `.50`–`.254` DHCP where the zone serves it.
 |------|------|------|---------|
 | transit | 400 | 10.4.0.0/24 | Gateway edge: upstream handoff and peering (gateway ports only) |
 | fabric | 401 | 10.4.1.0/24 | VXLAN underlay: VTEPs and EVPN |
-| management | 402 | 10.4.2.0/24 | BMCs only (BMC access ports only) |
+| management | 402 | 198.51.100.128/25 | BMCs only (BMC access ports only) |
 | hypervisor | 403 | 10.4.3.0/24 | Live migration |
 | quarantine | 404 | 10.4.4.0/24 | Non-compliant nodes: authentication and remediation |
 | provisioning | 405 | 192.0.2.0/24 | Onboarding: DHCP, PXE, DNS, ACME (the hypervisor trunk's native VLAN) |
@@ -312,9 +312,9 @@ sdn:
     peers:
       - {switch-a: switch-01, switch-b: switch-02, peer-link-ports: [Ethernet1/49, Ethernet1/50]}
     ports:
-      - {switch-id: switch-01, port: Ethernet1/3, class: gateway, description: gw-01 data}
+      - {switch-id: switch-01, port: Ethernet1/3, class: gateway, description: edge-01 data}
       - {switch-id: switch-01, port: Ethernet1/25, class: hypervisor, description: cp-01 data}
-      - {switch-id: switch-01, port: Ethernet1/41, class: bmc, description: gw-01 BMC}
+      - {switch-id: switch-01, port: Ethernet1/41, class: bmc, description: edge-01 BMC}
 ```
 
 ### `dns.internal.port: 9053` + `dns.public.port: 8053`
