@@ -62,8 +62,8 @@ var gatewaydConfigs = map[string]bool{
 // bootstrap config has `nodes:`, and every other entry is named by an
 // exempted bootstrap config's overrides_file.
 var bootstrapConfigs = map[string]bool{
-	"bootstrap/tgw01-vlan405.example.yaml":      true,
-	"bootstrap/tgw01-vlan405-pi.overrides.yaml": true,
+	"bootstrap/edge-01-vlan405.example.yaml":      true,
+	"bootstrap/edge-01-vlan405-pi.overrides.yaml": true,
 }
 
 // overrideExamples are the --overrides files shipped beside the templates,
