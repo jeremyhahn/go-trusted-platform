@@ -58,6 +58,14 @@ func (k *recordingKVClient) List(_ context.Context, req *service.ListRequest) (*
 	return k.listResp, nil
 }
 
+// kvOnlyClient is an SDK client that serves only KV().
+type kvOnlyClient struct {
+	quicbaassdk.Client
+	kv quicbaassdk.KVClient
+}
+
+func (c *kvOnlyClient) KV() quicbaassdk.KVClient { return c.kv }
+
 func TestCoverage964e_SDKIPAMClientIsStarted(t *testing.T) {
 	if (&sdkIPAMClient{}).IsStarted() {
 		t.Fatal("IsStarted() = true without an SDK client")
