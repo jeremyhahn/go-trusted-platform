@@ -265,8 +265,22 @@ func guardedRouter(guard *ScopeGuard) *mux.Router {
 	NewNTPHandlers(nil, guard, nil).RegisterRoutes(router)
 	NewAppServiceHandlers(AppServiceServers{}, guard, nil).RegisterRoutes(router)
 	NewComputeHandlers(nil, guard, nil).RegisterRoutes(router)
-	NewOrchestratorHandlers(nil, guard, "", nil).RegisterRoutes(router)
+	NewOrchestratorHandlers(nil, guard, scopeTestSystemTenant, nil).RegisterRoutes(router)
 	return router
+}
+
+// scopeTestSystemTenant is the system tenant guardedRouter mounts the
+// orchestrator routes with.
+const scopeTestSystemTenant = "system"
+
+// routeCallerTenant is the tenant of a caller that route admits once its
+// scope is held: the orchestrator session routes serve only the system
+// tenant, every other route here serves t1, the tenant it names.
+func routeCallerTenant(route guardedRoute) string {
+	if strings.HasPrefix(route.path, "/api/v1/orchestrator/sessions") {
+		return scopeTestSystemTenant
+	}
+	return "t1"
 }
 
 func serveWithToken(router http.Handler, route guardedRoute, token string) *httptest.ResponseRecorder {
@@ -293,14 +307,15 @@ func TestScopeGuard_EachRouteAdmitsItsScopeAndRefusesOthers(t *testing.T) {
 	} {
 		t.Run(group.name, func(t *testing.T) {
 			for _, route := range group.routes {
-				// The granted caller is a member of t1, the tenant every
-				// tenant-naming route below asks for.
+				// The granted caller is a member of the tenant the route
+				// admits: t1 for a tenant-naming route, the system tenant
+				// for a session route.
 				router := guardedRouter(NewScopeGuard(&scopedAuthorizer{
 					scopes: map[string][]string{
 						"granted": {route.scope},
 						"missing": {group.other},
 					},
-					tenants: map[string]string{"granted": "t1"},
+					tenants: map[string]string{"granted": routeCallerTenant(route), "missing": routeCallerTenant(route)},
 				}, nil, nil))
 
 				granted := serveWithToken(router, route, "granted")
@@ -345,14 +360,14 @@ func TestScopeGuard_OrchestratorTenantRoutesNeedTheCallersTenant(t *testing.T) {
 }
 
 func TestScopeGuard_ReadScopeDoesNotOpenWriteOrAdminRoutes(t *testing.T) {
-	// The reader is a member of t1, the tenant every tenant-naming route asks for.
-	router := guardedRouter(NewScopeGuard(&scopedAuthorizer{
-		scopes: map[string][]string{
-			"reader": {"vpn:read", "ntp:read", "cache:read", "scheduler:read", "messaging:read", "vm:read", "container:read", "orchestrator:read"},
-		},
-		tenants: map[string]string{"reader": "t1"},
-	}, nil, nil))
 	for _, route := range slices.Concat(vpnRouteScopes, ntpRouteScopes, appServiceRouteScopes, computeRouteScopes, orchestratorRouteScopes) {
+		// The reader is a member of the tenant the route admits.
+		router := guardedRouter(NewScopeGuard(&scopedAuthorizer{
+			scopes: map[string][]string{
+				"reader": {"vpn:read", "ntp:read", "cache:read", "scheduler:read", "messaging:read", "vm:read", "container:read", "orchestrator:read"},
+			},
+			tenants: map[string]string{"reader": routeCallerTenant(route)},
+		}, nil, nil))
 		recorder := serveWithToken(router, route, "reader")
 		if strings.HasSuffix(route.scope, ":read") {
 			assert.Equal(t, http.StatusServiceUnavailable, recorder.Code, "%s %s", route.method, route.path)
@@ -407,9 +422,9 @@ func certificateRequest(method, target, cn string) *http.Request {
 }
 
 func TestScopeGuard_VerifiedClientCertificateIsTheCredential(t *testing.T) {
-	// The peer is a member of t1, the tenant every tenant-naming route asks for.
-	router := guardedRouter(NewScopeGuard(nil, grantingPeers{scopes: []string{"*:*"}, tenantID: "t1"}, nil))
 	for _, route := range slices.Concat(vpnRouteScopes, ntpRouteScopes, computeRouteScopes, orchestratorRouteScopes) {
+		// The peer is a member of the tenant the route admits.
+		router := guardedRouter(NewScopeGuard(nil, grantingPeers{scopes: []string{"*:*"}, tenantID: routeCallerTenant(route)}, nil))
 		recorder := httptest.NewRecorder()
 		router.ServeHTTP(recorder, certificateRequest(route.method, route.path, "operator"))
 		assert.Equal(t, http.StatusServiceUnavailable, recorder.Code, "%s %s", route.method, route.path)
