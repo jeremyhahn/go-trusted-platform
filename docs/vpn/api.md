@@ -63,7 +63,7 @@ reports telemetry.
 { "tenant_id": "acme", "name": "corp", "module": "package vpn.posture\n…", "updated_at_unix": 1760300000 }
 
 // VPNGatewayStatus
-{ "gateway_id": "gw-01", "reported_at_unix": 1760300000, "reporting": true, "running": true,
+{ "gateway_id": "edge-01", "reported_at_unix": 1760300000, "reporting": true, "running": true,
   "admissions": 12, "refusals": 1, "last_refusal": "posture violation", "enrolled_peers": 3,
   "leases_by_data_plane": {"masque": 2}, "leases": [{"id": "…", "tenant_id": "acme",
   "device_id": "laptop-1", "address": "10.8.0.2", "data_plane": "masque", "zones": ["management"],

@@ -38,15 +38,19 @@ import (
 )
 
 // newSDNTestApp builds the minimal App needed for initIPAMPools tests: an
-// environment-4 SDN section, validated so its plan exists.
+// environment-4 SDN section, validated so its plan exists. Management and
+// provisioning carry the documentation reference ranges as overrides.
 func newSDNTestApp(t *testing.T, ipamCfg *sdn.IPAMConfig) *App {
 	t.Helper()
 	app := &App{
 		Logger: logging.NewLoggerWithFormat(slog.LevelDebug, logging.FormatJSON, io.Discard),
 		SDNConfig: &sdn.Config{
-			Enabled:     true,
-			Environment: &netplan.Environment{ID: 4},
-			IPAM:        ipamCfg,
+			Enabled: true,
+			Environment: &netplan.Environment{ID: 4, Overrides: []netplan.Override{
+				{Zone: sdnzone.ZoneManagement, Subnet: netip.MustParsePrefix("198.51.100.0/24")},
+				{Zone: sdnzone.ZoneProvisioning, Subnet: netip.MustParsePrefix("192.0.2.0/24")},
+			}},
+			IPAM: ipamCfg,
 		},
 	}
 	if err := app.SDNConfig.Validate(); err != nil {
@@ -196,11 +200,11 @@ func TestInitIPAMPools_ExplicitPoolReservesGateway(t *testing.T) {
 		Backend: "memory",
 		Pools: []sdn.PoolConfig{{
 			Name:       "lab",
-			CIDR:       netip.MustParsePrefix("198.51.100.0/24"),
-			Gateway:    netip.MustParseAddr("198.51.100.1"),
+			CIDR:       netip.MustParsePrefix("203.0.113.0/24"),
+			Gateway:    netip.MustParseAddr("203.0.113.1"),
 			Zone:       "storage",
-			RangeStart: netip.MustParseAddr("198.51.100.100"),
-			RangeEnd:   netip.MustParseAddr("198.51.100.200"),
+			RangeStart: netip.MustParseAddr("203.0.113.100"),
+			RangeEnd:   netip.MustParseAddr("203.0.113.200"),
 		}},
 	})
 	if err := app.initIPAMPools(ctx); err != nil {
@@ -210,10 +214,10 @@ func TestInitIPAMPools_ExplicitPoolReservesGateway(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetPoolByName: %v", err)
 	}
-	if pool.Zone != "storage" || pool.RangeStart.String() != "198.51.100.100" {
+	if pool.Zone != "storage" || pool.RangeStart.String() != "203.0.113.100" {
 		t.Errorf("pool = %+v", pool)
 	}
-	if len(pool.Reserved) != 1 || pool.Reserved[0].String() != "198.51.100.1/32" {
+	if len(pool.Reserved) != 1 || pool.Reserved[0].String() != "203.0.113.1/32" {
 		t.Errorf("reserved = %v", pool.Reserved)
 	}
 }
