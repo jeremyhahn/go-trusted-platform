@@ -49,6 +49,15 @@ var callerCheckedDaemonMethodRoutes = map[string]struct{}{
 	http.MethodPost + " /api/v1/users/{id}/factors/mtls/issue-cert": {},
 }
 
+// clientCertExemptDaemonMethodRoutes lists, keyed "METHOD template", the
+// replayed daemon routes the client-certificate gate admits without a
+// certificate. A user's first mTLS enrollment has no certificate yet: it is
+// gated by the session (callerCheckedDaemonMethodRoutes) and by the
+// handler's CSR binding.
+var clientCertExemptDaemonMethodRoutes = map[string]struct{}{
+	http.MethodPost + " /api/v1/users/{id}/factors/mtls/issue-cert": {},
+}
+
 // privilegedDaemonRoutes maps each daemon CA route that mutates the CA or
 // enumerates what it issued to the scope its webservice twin requires on
 // top of the admin role (pkg/webservice/v1/rest/ca/router.go); an empty
@@ -493,7 +502,10 @@ func (ErrDaemonRouteNoSession) Error() string {
 // the admin gate and the scope their MCP and gRPC operation takes, the
 // caller-checked routes and the daemon-scoped groups an authenticated
 // session (caller), and the certificate-only routes nothing more. A method
-// no table classifies is denied with ErrDaemonRouteUnclassified.
+// no table classifies is denied with ErrDaemonRouteUnclassified. The one
+// exception to the certificate gate is first mTLS enrollment
+// (clientCertExemptDaemonMethodRoutes): the user has no certificate yet, so
+// without one the session gate and the handler's CSR binding decide.
 // ErrDaemonRouteUnclassified is the 403 a replayed daemon route answers a
 // method no authorization table classifies (classifyDaemonRoute): a route
 // the daemon adds is denied on the webservice listener until it is
@@ -532,7 +544,8 @@ func MountDaemonRESTRoutes(api *mux.Router, routes DaemonRESTRoutes, writer resp
 // route takes nothing more, and an unclassified method answers 403
 // ErrDaemonRouteUnclassified without reaching the daemon handler. The guard
 // runs after the client-certificate gate, so a gated route needs both
-// credentials.
+// credentials, except a client-certificate-exempt route
+// (clientCertExemptDaemonMethodRoutes), which a session alone may reach.
 func guardPrivilegedDaemonRoutes(group *mux.Router, writer response.HttpWriter, authorize DaemonRouteAuthorizer, caller DaemonCallerAuthenticator) error {
 	gates := map[daemonRouteKind]func(scope string) func(http.Handler) http.Handler{
 		daemonRouteOperator:    authorize,
@@ -645,11 +658,17 @@ func daemonRouteGroup(template string) string {
 // verified no client certificate chain, and, with 403, a verified
 // certificate that does not chain to roots. VerifiedChains, not
 // PeerCertificates, decides "presented": only a chain the TLS stack built
-// authenticates the caller at all.
+// authenticates the caller at all. A request to a client-certificate-exempt
+// route (clientCertExemptDaemonMethodRoutes) that presents no chain passes
+// on to its session gate; one that presents a chain is still verified.
 func requireDaemonClientCert(writer response.HttpWriter, roots *x509.CertPool) mux.MiddlewareFunc {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 || len(r.TLS.PeerCertificates) == 0 {
+				if clientCertExemptDaemonRoute(r) {
+					next.ServeHTTP(w, r)
+					return
+				}
 				writer.Error401(w, r, ErrDaemonRouteClientCertRequired{})
 				return
 			}
@@ -660,6 +679,22 @@ func requireDaemonClientCert(writer response.HttpWriter, roots *x509.CertPool) m
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// clientCertExemptDaemonRoute reports whether the route r matched is one
+// the client-certificate gate admits without a certificate. gorilla/mux runs
+// the group middleware after matching, so the matched route is known here.
+func clientCertExemptDaemonRoute(r *http.Request) bool {
+	route := mux.CurrentRoute(r)
+	if route == nil {
+		return false
+	}
+	template, err := route.GetPathTemplate()
+	if err != nil {
+		return false
+	}
+	_, ok := clientCertExemptDaemonMethodRoutes[r.Method+" "+template]
+	return ok
 }
 
 // verifyDaemonClient verifies the peer's leaf, with the peer's other
