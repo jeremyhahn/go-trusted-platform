@@ -226,8 +226,9 @@ func TestCoverage964b_HeartbeatIDevIDClient(t *testing.T) {
 	stranger, _, _ := writeSelfSignedPair(t, t.TempDir(), "stranger")
 	pool, err = a.heartbeatServerPool(stranger)
 	require.NoError(t, err)
-	_, err = stranger.Verify(x509.VerifyOptions{Roots: pool})
-	require.Error(t, err, "an unknown issuer falls back to the OS store, which does not trust it")
+	_, err = stranger.Verify(x509.VerifyOptions{Roots: pool, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}})
+	var unknown x509.UnknownAuthorityError
+	require.ErrorAs(t, err, &unknown, "an unknown issuer falls back to the OS store, which does not trust it")
 }
 
 func TestCoverage964b_ParsePINsFromConfig(t *testing.T) {
