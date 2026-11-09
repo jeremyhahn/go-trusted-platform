@@ -307,6 +307,40 @@ func TestRegisterRoutes_DaemonMFAPolicyPutTakesAdmin(t *testing.T) {
 	}
 }
 
+// TestRegisterRoutes_DaemonMFAPolicyPutStaysInTheCallersTenant: the admin
+// role says the caller administers a tenant, not which one. A tenant-A
+// administrator naming tenant B in the path is refused before the daemon
+// handler runs; its own tenant, and the system tenant acting on any tenant,
+// are admitted, as the tenant router admits them.
+func TestRegisterRoutes_DaemonMFAPolicyPutStaysInTheCallersTenant(t *testing.T) {
+	platform := testutil.GenerateTestTLSBundle(t)
+
+	tests := []struct {
+		name   string
+		caller string
+		path   string
+		want   int
+	}{
+		{"tenant-a admin writing tenant-b", "tenant-a", "/api/v1/tenants/tenant-b/security/mfa-policy", http.StatusForbidden},
+		{"tenant-a admin writing tenant-a", "tenant-a", "/api/v1/tenants/tenant-a/security/mfa-policy", http.StatusOK},
+		{"system admin writing tenant-b", "system", "/api/v1/tenants/tenant-b/security/mfa-policy", http.StatusOK},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			daemon := &authFactorDaemonRoutes{roots: platform.CAPool}
+			auth := &sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: tt.caller}
+			root := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: auth, daemonRoutes: daemon, tenantID: "system"})
+
+			assert.Equal(t, tt.want, serveWithTLS(root, http.MethodPut, tt.path, verifiedClientState(t, platform)))
+			if tt.want == http.StatusOK {
+				assert.Equal(t, []string{http.MethodPut + " " + mfaPolicyTemplate}, daemon.served)
+			} else {
+				assert.Empty(t, daemon.served, "the daemon MFA policy handler must not run")
+			}
+		})
+	}
+}
+
 // Only the named method of a method entry takes the authorizer: with every
 // caller refused, PUT on the MFA policy is refused while GET on the same
 // template reaches the daemon. Cert issuance takes the login check instead
