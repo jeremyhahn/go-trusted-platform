@@ -211,6 +211,13 @@ func TestServeUntilUnsealed_ServesUntilUnsealThenReleases(t *testing.T) {
 	if code != http.StatusOK || !strings.Contains(body, `"state":"sealed"`) || !strings.Contains(body, `"ready":false`) {
 		t.Fatalf("GET /healthz = %d %s, want 200 with state sealed and ready false", code, body)
 	}
+	// The daemon binds its production transports only after the gate
+	// returns, so a sealed barrier must keep the gate holding.
+	select {
+	case err := <-done:
+		t.Fatalf("serveUntilUnsealed returned while sealed: %v", err)
+	default:
+	}
 
 	code, body = unixRequest(t, client, http.MethodPost, "/unseal", `{"secret":"unseal-key"}`)
 	if code != http.StatusOK || !strings.Contains(body, `"sealed":false`) {

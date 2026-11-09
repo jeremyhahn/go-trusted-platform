@@ -189,7 +189,7 @@ list:
 
 ```
 ntp  degraded  nts-name-unreachable: cp.example.internal resolves to
-                10.4.2.140, which no serve.listen-networks entry covers
+                198.51.100.140, which no serve.listen-networks entry covers
                 (10.4.6.0/24, 192.0.2.0/24); clients will complete the
                 NTS-KE handshake and then be refused time
 ```
@@ -228,7 +228,7 @@ choose.**
        listen-networks:
          - 10.4.6.0/24
          - 192.0.2.0/24
-         - 10.4.2.0/24     # the segment `cp` resolves on
+         - 198.51.100.0/24     # the segment `cp` resolves on
    ```
 
    It widens who can ask this node for time, so keep it to segments you

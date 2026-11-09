@@ -101,7 +101,7 @@ func TestCallersRouter_ReportsTheEffectivePolicy(t *testing.T) {
 
 func withClientCert(req *http.Request) *http.Request {
 	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{{Subject: pkix.Name{CommonName: "cp.example.internal"}}}}
-	req.RemoteAddr = "10.4.2.140:41000"
+	req.RemoteAddr = "198.51.100.140:41000"
 	return req
 }
 
@@ -157,7 +157,7 @@ func TestCallerGate_AdmittedMachineCallerSkipsTheOperatorChain(t *testing.T) {
 	assert.Equal(t, 0, *operator)
 	assert.Equal(t, "cp.example.internal", w.Header().Get("X-Admitted"))
 	require.Len(t, policy.peers, 1)
-	assert.Equal(t, "10.4.2.140:41000", policy.peers[0].RemoteAddr)
+	assert.Equal(t, "198.51.100.140:41000", policy.peers[0].RemoteAddr)
 }
 
 func TestCallerGate_RefusedMachineCallerGetsNoSecondChance(t *testing.T) {
