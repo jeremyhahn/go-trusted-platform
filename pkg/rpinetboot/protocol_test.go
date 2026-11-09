@@ -144,7 +144,7 @@ func TestPrefix(t *testing.T) {
 }
 
 func TestLookupModel(t *testing.T) {
-	assert.Equal(t, []string{"cm4", "rpi3b+", "rpi4", "rpi400", "rpi5"}, Models())
+	assert.Equal(t, []string{"cm4", "rpi3b+", "rpi4", "rpi400", "rpi5"}, Models()) // lab-string-ok: Raspberry Pi model name, not a lab host
 	m, err := LookupModel("rpi5")
 	require.NoError(t, err)
 	assert.Empty(t, m.FirstStage, "the Pi 5 EEPROM is the firmware")
