@@ -19,6 +19,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
@@ -330,6 +331,42 @@ func TestFormatUnixRendersUTCAndAPlaceholderForUnset(t *testing.T) {
 	}
 	if got := formatUnix(1700000000); got != "2023-11-14T22:13:20Z" {
 		t.Fatalf("formatUnix(1700000000) = %q, want 2023-11-14T22:13:20Z", got)
+	}
+}
+
+func TestFormatUnixNanoRendersUTCAndAPlaceholderForUnset(t *testing.T) {
+	if got := formatUnixNano(0); got != "-" {
+		t.Fatalf("formatUnixNano(0) = %q, want -", got)
+	}
+	if got := formatUnixNano(-5); got != "-" {
+		t.Fatalf("formatUnixNano(-5) = %q, want -", got)
+	}
+	nanos := time.Date(2023, 11, 14, 22, 13, 20, 123456789, time.UTC).UnixNano()
+	if got := formatUnixNano(nanos); got != "2023-11-14T22:13:20Z" {
+		t.Fatalf("formatUnixNano(%d) = %q, want 2023-11-14T22:13:20Z", nanos, got)
+	}
+}
+
+func TestOrchestratorTablesRenderNanosecondTimestamps(t *testing.T) {
+	ts := time.Date(2023, 11, 14, 22, 13, 20, 0, time.UTC).UnixNano()
+	// column is the timestamp cell's index from the end of the row: the jobs
+	// table puts DESCRIPTION after UPDATED.
+	tables := map[string]struct {
+		table  *cli.TableData
+		column int
+	}{
+		"agents":   {agentsTable([]*platformv1.OrchestratorAgent{{LastSeen: ts}}), 1},
+		"sessions": {sessionsTable([]*platformv1.OrchestratorSession{{LastActive: ts}}), 1},
+		"jobs":     {jobsTable([]*platformv1.OrchestratorJob{{UpdatedAt: ts}}), 2},
+	}
+	for name, tc := range tables {
+		if len(tc.table.Rows) != 1 {
+			t.Fatalf("%s rows = %v, want one row", name, tc.table.Rows)
+		}
+		row := tc.table.Rows[0]
+		if got := row[len(row)-tc.column]; got != "2023-11-14T22:13:20Z" {
+			t.Fatalf("%s timestamp cell = %q, want 2023-11-14T22:13:20Z", name, got)
+		}
 	}
 }
 
