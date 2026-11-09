@@ -291,6 +291,78 @@ func TestMTLSProbe_WithCert_NoCA_Returns204(t *testing.T) {
 	assert.Equal(t, http.StatusNoContent, rr.Code)
 }
 
+// A clientAuth leaf issued by an intermediate verifies against a root-only
+// pool when the client presents the intermediate after the leaf.
+func TestMTLSProbe_IntermediateIssuedCert(t *testing.T) {
+	now := time.Now()
+	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	rootTmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Test Root CA"},
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+		NotBefore:             now.Add(-time.Hour),
+		NotAfter:              now.Add(24 * time.Hour),
+	}
+	rootDER, err := x509.CreateCertificate(rand.Reader, rootTmpl, rootTmpl, &rootKey.PublicKey, rootKey)
+	require.NoError(t, err)
+	rootCert, err := x509.ParseCertificate(rootDER)
+	require.NoError(t, err)
+
+	intKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	intTmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(2),
+		Subject:               pkix.Name{CommonName: "Test Intermediate CA"},
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+		NotBefore:             now.Add(-time.Hour),
+		NotAfter:              now.Add(24 * time.Hour),
+	}
+	intDER, err := x509.CreateCertificate(rand.Reader, intTmpl, rootCert, &intKey.PublicKey, rootKey)
+	require.NoError(t, err)
+	intCert, err := x509.ParseCertificate(intDER)
+	require.NoError(t, err)
+
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	leafTmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(3),
+		Subject:      pkix.Name{CommonName: "leaf-client"},
+		NotBefore:    now.Add(-time.Hour),
+		NotAfter:     now.Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, intCert, &leafKey.PublicKey, intKey)
+	require.NoError(t, err)
+	leafCert, err := x509.ParseCertificate(leafDER)
+	require.NoError(t, err)
+
+	rootOnly := x509.NewCertPool()
+	rootOnly.AddCert(rootCert)
+	router := registerRoutes(newHandlerWithCA(&authTestCA{rootPool: rootOnly}))
+
+	probe := func(peers ...*x509.Certificate) int {
+		req := httptest.NewRequest(http.MethodHead, "/api/v1/auth/mtls/probe", nil)
+		req.TLS = &tls.ConnectionState{PeerCertificates: peers}
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		return rr.Code
+	}
+
+	t.Run("leaf with its intermediate", func(t *testing.T) {
+		assert.Equal(t, http.StatusNoContent, probe(leafCert, intCert))
+	})
+
+	t.Run("leaf without its intermediate", func(t *testing.T) {
+		assert.Equal(t, http.StatusUnauthorized, probe(leafCert))
+	})
+}
+
 // =============================================================================
 // Gap 3 — cert issuance from CSR tests
 // =============================================================================
