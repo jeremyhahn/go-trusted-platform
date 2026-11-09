@@ -395,7 +395,7 @@ platformctl --transport unix --server /run/platformd.sock device list
 platformctl --transport unix --server /run/platformd.sock \
     device profile assign <compute-profile-id> --device <node-05-device-id>
 platformctl --transport unix --server /run/platformd.sock \
-    device profile assign <gateway-profile-id> --device <gw-01-device-id>
+    device profile assign <gateway-profile-id> --device <edge-01-device-id>
 
 platformctl --transport unix --server /run/platformd.sock \
     device profile update <compute-profile-id> \

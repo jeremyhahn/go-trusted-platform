@@ -1,21 +1,21 @@
-# tgw-01 as the boot node for the Raspberry Pi rack on VLAN 405.
+# edge-01 as the boot node for the Raspberry Pi rack on VLAN 405.
 #
-# tgw-01 keeps the platform-pxeboot container running on bond0.405
+# edge-01 keeps the platform-pxeboot container running on bond0.405
 # (192.0.2.1) after the run (deployer.boot_node) and netboots the rack Pis
 # diskless as workers: their root is the media set's verified squashfs, so
 # the netboot media build must carry a diskless root for the Pi set. VLAN 405
-# is isolated and tgw-01 does not route it, so DHCP advertises no gateway
+# is isolated and edge-01 does not route it, so DHCP advertises no gateway
 # (deployer.bootstrap_no_router). The Pis hold no VLAN 405 address once
 # installed: the compute role addresses only fabric, hypervisor and storage
 # (docs/architecture/reference-network.md, "Host addressing"), so eth0 stays
 # manual and 405 serves only their netboot.
 #
-# The control plane is platformd standalone on tgw-01 itself, at 192.0.2.1,
-# until the CM4 control plane is proven. tgw-01 is not installed by this run
+# The control plane is platformd standalone on edge-01 itself, at 192.0.2.1,
+# until the CM4 control plane is proven. edge-01 is not installed by this run
 # (skip_install: true); it runs
 # configs/platform/templates/single-node/standalone-cp.example.yaml, the
 # control-plane template below. The orchestrator dials it at 192.0.2.1:8443,
-# so `platformctl bootstrap` runs on tgw-01 or on a host on VLAN 405.
+# so `platformctl bootstrap` runs on edge-01 or on a host on VLAN 405.
 #
 # Values marked PLACEHOLDER must be replaced before a run. The DNS server
 # and the APK mirror belong to Infrastructure. Their placeholders are
@@ -24,7 +24,7 @@
 # Docs: docs/bootstrap/user.md, build/docker/bootstrap/README.md.
 
 deployer:
-  host: 198.51.100.60                        # tgw-01, reached over SSH
+  host: 198.51.100.60                        # edge-01, reached over SSH
   user: <deploy-user>                         # PLACEHOLDER
   ssh_key: <path-to-ssh-private-key>          # PLACEHOLDER
   known_hosts_path: <install-dir>/known_hosts # PLACEHOLDER: pinned host keys
@@ -65,9 +65,9 @@ templates:
   worker: ../platform/templates/dedicated/raspberrypi/rpi4/compute.yaml
 
 nodes:
-  # The control plane: platformd standalone on tgw-01, on the same address
+  # The control plane: platformd standalone on edge-01, on the same address
   # as the boot server. It is not installed by this run.
-  - hostname: tgw-01
+  - hostname: edge-01
     role: control-plane
     skip_install: true
     interfaces:
@@ -76,7 +76,7 @@ nodes:
         ipv4-address: 192.0.2.1/24
 
   # The CM4 becomes the control plane once it is proven: it then replaces
-  # tgw-01 above (a deployment has one control plane, or an odd number of
+  # edge-01 above (a deployment has one control plane, or an odd number of
   # three or more), boots from its own SD card and is not installed by this
   # run either.
   # - hostname: cm4-01
@@ -106,13 +106,13 @@ nodes:
   # boot with the name it derives from the Pi's TPM EK, so each Pi's IDevID
   # certificate names that Pi. Bootstrap refuses two nodes on one IDevID
   # model and serial only for nodes that keep it (not diskless).
-  - hostname: rpi4-01
+  - hostname: node-01
     role: worker
     macs: ["dc:a6:32:50:76:60"]
     platform: raspberrypi
     model: rpi4
     boot_model: diskless
-    overrides_file: tgw01-vlan405-pi.overrides.yaml
+    overrides_file: edge-01-vlan405-pi.overrides.yaml
     # serial: <serial>        # PLACEHOLDER
     overrides:
       network:
@@ -123,13 +123,13 @@ nodes:
           - {name: zone403, zone: hypervisor, parent: eth0, ipv4-address: 10.4.3.20/24, auto-start: true}
           - {name: zone407, zone: storage, parent: eth0, ipv4-address: 10.4.7.20/24, auto-start: true}
 
-  - hostname: rpi4-02
+  - hostname: node-02
     role: worker
     macs: ["dc:a6:32:50:76:18"]
     platform: raspberrypi
     model: rpi4
     boot_model: diskless
-    overrides_file: tgw01-vlan405-pi.overrides.yaml
+    overrides_file: edge-01-vlan405-pi.overrides.yaml
     # serial: <serial>        # PLACEHOLDER
     overrides:
       network:
@@ -140,13 +140,13 @@ nodes:
           - {name: zone403, zone: hypervisor, parent: eth0, ipv4-address: 10.4.3.21/24, auto-start: true}
           - {name: zone407, zone: storage, parent: eth0, ipv4-address: 10.4.7.21/24, auto-start: true}
 
-  - hostname: rpi4-03
+  - hostname: node-03
     role: worker
     macs: ["dc:a6:32:50:75:43"]
     platform: raspberrypi
     model: rpi4
     boot_model: diskless
-    overrides_file: tgw01-vlan405-pi.overrides.yaml
+    overrides_file: edge-01-vlan405-pi.overrides.yaml
     # serial: <serial>        # PLACEHOLDER
     overrides:
       network:
