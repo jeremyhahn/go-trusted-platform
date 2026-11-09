@@ -171,8 +171,8 @@ unknown — the two cases where `TPM2_Clear` cannot work. If the auto-reboot
 fails it tells you to reboot manually; the clear is already scheduled either way.
 
 `TPM2_Clear` is TPM 2.0 Library Part 3; the hierarchy and provisioning model is
-the TCG TPM v2.0 Provisioning Guidance. Both are in
-[docs/reference/tpm2/](../reference/tpm2/).
+the TCG TPM v2.0 Provisioning Guidance. Both are TCG publications, available
+from the Trusted Computing Group.
 
 ---
 

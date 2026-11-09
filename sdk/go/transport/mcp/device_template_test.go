@@ -275,10 +275,10 @@ func TestDeviceTemplateMCP_CreateProfileFromTemplate(t *testing.T) {
 	a := provisioningTestServer(t, map[string]interface{}{
 		"profile_create_from_template": map[string]interface{}{
 			"id":        "9007199254740993",
-			"name":      "gw-01",
+			"name":      "edge-01",
 			"role":      "gateway",
 			"ek_serial": "EK-1",
-			"config":    map[string]interface{}{"hostname": "gw-01"},
+			"config":    map[string]interface{}{"hostname": "edge-01"},
 		},
 	}, &calls)
 
@@ -287,7 +287,7 @@ func TestDeviceTemplateMCP_CreateProfileFromTemplate(t *testing.T) {
 		&platformv1.CreateProfileFromTemplateRequest{
 			TemplateId: 18446744073709551615,
 			Overrides: &platformv1.DeviceProfile{
-				Name:       "gw-01",
+				Name:       "edge-01",
 				EkSerial:   "EK-1",
 				MacAddress: "00:25:90:aa:bb:01",
 				EventLog:   []byte{0x01, 0x02},
@@ -302,7 +302,7 @@ func TestDeviceTemplateMCP_CreateProfileFromTemplate(t *testing.T) {
 		t.Errorf("template_id = %v (%T), want decimal string", args["template_id"], args["template_id"])
 	}
 	overrides, _ := args["overrides"].(map[string]interface{})
-	if overrides["name"] != "gw-01" || overrides["ek_serial"] != "EK-1" || overrides["mac_address"] != "00:25:90:aa:bb:01" {
+	if overrides["name"] != "edge-01" || overrides["ek_serial"] != "EK-1" || overrides["mac_address"] != "00:25:90:aa:bb:01" {
 		t.Errorf("overrides = %v", overrides)
 	}
 	if overrides["event_log"] != "AQI=" {

@@ -180,7 +180,7 @@ func TestQUICDeviceProfileFromTemplate(t *testing.T) {
 	req := encodeQUICCategoryRequest(t, quicwire.OpProvisioningCategory, quicwire.DeviceSubProfileFromTemplate,
 		&platformv1.CreateProfileFromTemplateRequest{
 			TemplateId: template.ID,
-			Overrides:  &platformv1.DeviceProfile{Name: "gw-01", EkSerial: "EK-QUIC"},
+			Overrides:  &platformv1.DeviceProfile{Name: "edge-01", EkSerial: "EK-QUIC"},
 		})
 	var resp platformv1.CreateProfileResponse
 	decodeQUICResponse(t, handler.HandleRequest(ctx, req), &resp)
@@ -188,7 +188,7 @@ func TestQUICDeviceProfileFromTemplate(t *testing.T) {
 
 	stored, err := svcs.profiles.Get(ctx, resp.GetProfile().GetId())
 	require.NoError(t, err)
-	assert.Equal(t, "gw-01", stored.Name)
+	assert.Equal(t, "edge-01", stored.Name)
 	assert.Equal(t, "EK-QUIC", stored.EKSerial)
 	assert.Equal(t, entities.DeviceRoleGateway, stored.Role, "role comes from the template")
 }
