@@ -18,7 +18,10 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"sync/atomic"
 	"testing"
+
+	api "github.com/osrg/gobgp/v4/api"
 )
 
 // EVPN Benchmarks
@@ -458,4 +461,136 @@ func BenchmarkDampeningManager_IsSuppressed_Parallel(b *testing.B) {
 			i++
 		}
 	})
+}
+
+// benchBGPServer is the unit-suite mock with path storage dropped, so a
+// benchmark's memory does not grow with b.N.
+type benchBGPServer struct {
+	*mockBGPServer
+}
+
+func (s *benchBGPServer) AddPath(ctx context.Context, req *api.AddPathRequest) (*api.AddPathResponse, error) {
+	return &api.AddPathResponse{}, nil
+}
+
+func (s *benchBGPServer) DeletePath(ctx context.Context, req *api.DeletePathRequest) error {
+	return nil
+}
+
+func newBenchSpeaker(b *testing.B) *Speaker {
+	b.Helper()
+	speaker, err := NewSpeaker(speakerTestConfig(), slog.Default(),
+		WithBGPServer(&benchBGPServer{mockBGPServer: newMockBGPServer()}))
+	if err != nil {
+		b.Fatal(err)
+	}
+	if err := speaker.Start(context.Background()); err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() {
+		if err := speaker.Stop(context.Background()); err != nil {
+			b.Logf("failed to stop speaker: %v", err)
+		}
+	})
+	return speaker
+}
+
+func benchPrefix(n uint64, bits int) netip.Prefix {
+	return netip.PrefixFrom(netip.AddrFrom4([4]byte{10 + byte(n%10), byte(n >> 16), byte(n >> 8), byte(n)}), bits).Masked()
+}
+
+// BenchmarkSpeaker_RouteChurn_Parallel announces distinct prefixes and
+// withdraws every third, from parallel goroutines.
+func BenchmarkSpeaker_RouteChurn_Parallel(b *testing.B) {
+	speaker := newBenchSpeaker(b)
+	ctx := context.Background()
+	nextHop := netip.MustParseAddr("10.0.0.1")
+	var counter atomic.Uint64
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			n := counter.Add(1)
+			path := &Path{Family: AFamilyIPv4Unicast, Prefix: benchPrefix(n, 32), NextHop: nextHop, Origin: OriginIGP, LocalPref: 100}
+			var err error
+			if n%3 == 0 {
+				err = speaker.DeletePath(ctx, path)
+			} else {
+				err = speaker.AddPath(ctx, path)
+			}
+			if err != nil {
+				b.Error(err)
+			}
+		}
+	})
+}
+
+// BenchmarkSpeaker_LargeTable_Parallel injects distinct /24s with an AS
+// path from parallel goroutines.
+func BenchmarkSpeaker_LargeTable_Parallel(b *testing.B) {
+	speaker := newBenchSpeaker(b)
+	ctx := context.Background()
+	nextHop := netip.MustParseAddr("10.0.0.1")
+	var counter atomic.Uint64
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			path := &Path{
+				Family: AFamilyIPv4Unicast, Prefix: benchPrefix(counter.Add(1), 24), NextHop: nextHop,
+				Origin: OriginIGP, LocalPref: 100, ASPath: []uint32{65001, 65002, 65003},
+			}
+			if err := speaker.AddPath(ctx, path); err != nil {
+				b.Error(err)
+			}
+		}
+	})
+}
+
+// BenchmarkSpeaker_Convergence_Parallel re-announces 1000 prefixes with
+// changing LOCAL_PREF and MED; ns/op is the per-update convergence cost.
+func BenchmarkSpeaker_Convergence_Parallel(b *testing.B) {
+	speaker := newBenchSpeaker(b)
+	ctx := context.Background()
+	nextHop := netip.MustParseAddr("10.0.0.1")
+	var counter atomic.Uint64
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			n := counter.Add(1)
+			path := &Path{
+				Family: AFamilyIPv4Unicast, Prefix: benchPrefix(n%1000, 32), NextHop: nextHop,
+				Origin: OriginIGP, LocalPref: uint32(100 + n%50), MED: uint32(n % 100),
+			}
+			if err := speaker.AddPath(ctx, path); err != nil {
+				b.Error(err)
+			}
+		}
+	})
+}
+
+// BenchmarkSpeaker_PeerFlap adds and deletes a peer per iteration.
+func BenchmarkSpeaker_PeerFlap(b *testing.B) {
+	speaker := newBenchSpeaker(b)
+	ctx := context.Background()
+	cfg := &NeighborConfig{
+		Address:         netip.MustParseAddr("192.168.1.1"),
+		ASN:             65002,
+		EnabledFamilies: []AddressFamily{AFamilyIPv4Unicast},
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := speaker.AddPeer(ctx, cfg); err != nil {
+			b.Fatal(err)
+		}
+		if err := speaker.DeletePeer(ctx, cfg.Address); err != nil {
+			b.Fatal(err)
+		}
+	}
 }
