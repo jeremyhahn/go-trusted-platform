@@ -12,6 +12,9 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
@@ -104,6 +107,55 @@ func (webserviceTenantServer) CheckQuota(context.Context, *platformv1.CheckQuota
 	}, nil
 }
 
+func knownComputeQuota() *platformv1.ComputeQuota {
+	return &platformv1.ComputeQuota{MaxVms: 10, MaxContainers: 20, MaxVcpus: 32, MaxMemoryMb: 65536}
+}
+
+func knownNetworkQuota() *platformv1.NetworkQuota {
+	return &platformv1.NetworkQuota{MaxBridges: 3, MaxPorts: 48, MaxBandwidthMbps: 1000}
+}
+
+func knownStorageQuota() *platformv1.StorageQuota {
+	return &platformv1.StorageQuota{MaxVolumesGb: 500, MaxSnapshots: 25}
+}
+
+func (webserviceTenantServer) GetQuotas(context.Context, *platformv1.GetQuotasRequest) (*platformv1.GetQuotasResponse, error) {
+	return &platformv1.GetQuotasResponse{
+		TenantId: "t-known",
+		Compute:  knownComputeQuota(),
+		Network:  knownNetworkQuota(),
+		Storage:  knownStorageQuota(),
+	}, nil
+}
+
+// UpdateQuotas accepts only the known quotas, so a request body the
+// webservice cannot decode into UpdateQuotasRequest fails the round trip.
+func (webserviceTenantServer) UpdateQuotas(_ context.Context, req *platformv1.UpdateQuotasRequest) (*platformv1.UpdateQuotasResponse, error) {
+	if req.GetTenantId() != "t-known" ||
+		!proto.Equal(req.GetCompute(), knownComputeQuota()) ||
+		!proto.Equal(req.GetNetwork(), knownNetworkQuota()) ||
+		!proto.Equal(req.GetStorage(), knownStorageQuota()) {
+		return nil, status.Errorf(codes.InvalidArgument, "unexpected quotas: %v", req)
+	}
+	return &platformv1.UpdateQuotasResponse{}, nil
+}
+
+func (webserviceTenantServer) GetUsage(context.Context, *platformv1.GetUsageRequest) (*platformv1.GetUsageResponse, error) {
+	return &platformv1.GetUsageResponse{Usage: &platformv1.TenantUsage{
+		TenantId:      "t-known",
+		Vms:           2,
+		Containers:    5,
+		Vcpus:         8,
+		MemoryMb:      16384,
+		DiskGb:        120,
+		Bridges:       1,
+		Ports:         6,
+		BandwidthMbps: 250,
+		Volumes:       4,
+		Snapshots:     3,
+	}}, nil
+}
+
 func (webserviceTenantServer) GetTenantBarrierStatus(context.Context, *platformv1.GetTenantBarrierStatusRequest) (*platformv1.GetTenantBarrierStatusResponse, error) {
 	return &platformv1.GetTenantBarrierStatusResponse{BarrierStatus: &platformv1.TenantBarrierStatus{
 		TenantId:       "t-known",
@@ -176,6 +228,55 @@ func TestRESTAdapter_WebserviceResponses(t *testing.T) {
 			Amount:   4,
 			Allowed:  true,
 			Message:  "within quota",
+		}, res)
+	})
+
+	knownCompute := &ComputeQuotaData{MaxVMs: 10, MaxContainers: 20, MaxVCPUs: 32, MaxMemoryMB: 65536}
+	knownNetwork := &NetworkQuotaData{MaxBridges: 3, MaxPorts: 48, MaxBandwidthMbps: 1000}
+	knownStorage := &StorageQuotaData{MaxVolumesGB: 500, MaxSnapshots: 25}
+
+	t.Run("GetQuotas", func(t *testing.T) {
+		res, err := a.GetQuotas(ctx, GetQuotasOptions{TenantID: "t-known"})
+		require.NoError(t, err)
+		require.Equal(t, &GetQuotasResult{
+			TenantID: "t-known",
+			Compute:  knownCompute,
+			Network:  knownNetwork,
+			Storage:  knownStorage,
+		}, res)
+	})
+
+	t.Run("UpdateQuotas", func(t *testing.T) {
+		res, err := a.UpdateQuotas(ctx, UpdateQuotasOptions{
+			TenantID: "t-known",
+			Compute:  &ComputeQuotaUpdate{MaxVMs: 10, MaxContainers: 20, MaxVCPUs: 32, MaxMemoryMB: 65536},
+			Network:  &NetworkQuotaUpdate{MaxBridges: 3, MaxPorts: 48, MaxBandwidthMbps: 1000},
+			Storage:  &StorageQuotaUpdate{MaxVolumesGB: 500, MaxSnapshots: 25},
+		})
+		require.NoError(t, err)
+		require.Equal(t, &UpdateQuotasResult{
+			TenantID: "t-known",
+			Compute:  knownCompute,
+			Network:  knownNetwork,
+			Storage:  knownStorage,
+		}, res)
+	})
+
+	t.Run("GetUsage", func(t *testing.T) {
+		res, err := a.GetUsage(ctx, GetUsageOptions{TenantID: "t-known"})
+		require.NoError(t, err)
+		require.Equal(t, &GetUsageResult{
+			TenantID:      "t-known",
+			VMs:           2,
+			Containers:    5,
+			VCPUs:         8,
+			MemoryMB:      16384,
+			DiskGB:        120,
+			Bridges:       1,
+			Ports:         6,
+			BandwidthMbps: 250,
+			Volumes:       4,
+			Snapshots:     3,
 		}, res)
 	})
 
