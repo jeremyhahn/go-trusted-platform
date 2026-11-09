@@ -30,7 +30,7 @@ provisioning, LUKS sealing, platformd enrollment and attestation).
   assemble       - the in-container step create runs (not for direct use)
 
 Targets:
-  rpi        Raspberry Pi SD-card image (models: rpi4, rpi400, cm4, rpi3b+, rpi5 experimental)
+  rpi        Raspberry Pi SD-card image (models: see create --model; rpi5 experimental)
   qemu-virt  the QEMU virt stand-in the integration tests boot`,
 	}
 	cmd.AddCommand(newCreateCommand(getFlags))

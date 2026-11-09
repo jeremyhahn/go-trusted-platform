@@ -16,7 +16,7 @@ experimental Pi 5 compute template lists what differs there).
 |---|---|---|---|
 | `rpi4/` | Raspberry Pi 4 Model B | `bcm2711-rpi-4-b.dtb` | Image builds and boots on the QEMU virt stand-in; hardware validation per the runbook |
 
-Without `--role`, the other boards the image builder knows (`--model rpi400`,
+Without `--role`, the other boards the image builder knows (the Pi 400,
 `cm4`, `rpi3b+`, `rpi5`) fall back to `single-node/default.yaml` until they
 get a directory here; copy `rpi4/default.yaml` and change `hardware-model` and
 `os.hostname`. With `--role` nothing falls back: `--model cm4 --role
