@@ -229,11 +229,11 @@ func TestParseDebugSinkFromCmdline(t *testing.T) {
 		wantSink string
 		wantOK   bool
 	}{
-		{"present", "root=/dev/sda1 platform_debug_sink=10.4.2.91:8080 quiet\n", "10.4.2.91:8080", true},
+		{"present", "root=/dev/sda1 platform_debug_sink=192.0.2.91:8080 quiet\n", "192.0.2.91:8080", true},
 		{"absent", "root=/dev/sda1 quiet\n", "", false},
 		{"empty value", "root=/dev/sda1 platform_debug_sink= quiet\n", "", false},
-		{"empty value then a value", "platform_debug_sink= platform_debug_sink=10.4.2.91:8080\n", "10.4.2.91:8080", true},
-		{"prefix of another parameter", "platform_debug_sinks=10.4.2.91:8080\n", "", false},
+		{"empty value then a value", "platform_debug_sink= platform_debug_sink=192.0.2.91:8080\n", "192.0.2.91:8080", true},
+		{"prefix of another parameter", "platform_debug_sinks=192.0.2.91:8080\n", "", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -518,7 +518,7 @@ func TestBootstrapRegistrationPayloadFields(t *testing.T) {
 
 	reg := BootstrapRegistration{
 		Hostname:  "host-02",
-		IP:        "10.4.2.239",
+		IP:        "192.0.2.239",
 		MAC:       "00:25:90:00:02:aa",
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 		Services: map[string]string{
@@ -549,12 +549,12 @@ func TestErrBootstrapRegistration(t *testing.T) {
 	t.Parallel()
 
 	cause := &ErrBootstrapRegistrationStatus{
-		Endpoint:   "http://10.4.2.91:8080/installs/host-02/registration.json",
+		Endpoint:   "http://192.0.2.91:8080/installs/host-02/registration.json",
 		StatusCode: 500,
 	}
 
 	err := ErrBootstrapRegistration{
-		Endpoint: "http://10.4.2.91:8080/installs/host-02/registration.json",
+		Endpoint: "http://192.0.2.91:8080/installs/host-02/registration.json",
 		Cause:    cause,
 	}
 
@@ -570,7 +570,7 @@ func TestErrBootstrapRegistrationStatus(t *testing.T) {
 	t.Parallel()
 
 	err := ErrBootstrapRegistrationStatus{
-		Endpoint:   "http://10.4.2.91:8080/installs/host-02/registration.json",
+		Endpoint:   "http://192.0.2.91:8080/installs/host-02/registration.json",
 		StatusCode: 404,
 	}
 
