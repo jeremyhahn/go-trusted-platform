@@ -118,7 +118,7 @@ Examples:
 			"or \"host:port\" for non-standard ports. Trusted Platform CPs "+
 			"intentionally do NOT bind privileged port 53 (platformd runs "+
 			"as a non-root user); the canonical DANE resolver port for a "+
-			"control plane is 8053. Example: --dns-server 10.4.2.140:8053")
+			"control plane is 8053. Example: --dns-server 192.0.2.140:8053")
 	cmd.Flags().StringVar(&flags.hostname, "hostname", "", "server hostname for DANE TLSA lookups")
 	cmd.Flags().StringVar(&flags.noiseKey, "noise-key", "", "Noise_NK server static key (hex)")
 	cmd.Flags().StringVar(&flags.noiseAddr, "noise-addr", "", "Noise server address (host:port)")
