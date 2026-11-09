@@ -122,7 +122,8 @@ export default function AccountSecurityPage() {
     setMFAPolicyBusy(true);
     const result = await authFactorsApi.setMFAPolicy({
       tenant_id: user.tenantId,
-      require_factor_count: checked ? 2 : 1,
+      require_multiple_factors: checked,
+      min_factor_count: checked ? 2 : 1,
     });
     setMFAPolicyBusy(false);
     if (!result.ok) {

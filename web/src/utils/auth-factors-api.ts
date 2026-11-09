@@ -165,7 +165,8 @@ export const authFactorsApi = {
       {
         method: "PUT",
         body: JSON.stringify({
-          require_factor_count: req.require_factor_count,
+          require_multiple_factors: req.require_multiple_factors,
+          min_factor_count: req.min_factor_count,
         }),
       }
     );

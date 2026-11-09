@@ -43,6 +43,28 @@ describe("authFactorsApi.issueMTLSCert", () => {
   });
 });
 
+describe("authFactorsApi.setMFAPolicy", () => {
+  it("puts the handler's MFAPolicyUpdateRequest fields to the tenant's mfa-policy route", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, { tenant_id: "tenant/a", require_multiple_factors: true, min_factor_count: 2 })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await authFactorsApi.setMFAPolicy({
+      tenant_id: "tenant/a",
+      require_multiple_factors: true,
+      min_factor_count: 2,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toMatch(/\/api\/v1\/tenants\/tenant%2Fa\/security\/mfa-policy$/);
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(init.body as string)).toEqual({ require_multiple_factors: true, min_factor_count: 2 });
+  });
+});
+
 describe("toApiResponse", () => {
   it("carries the data of a successful result", () => {
     const data = { factors: [], total: 0 };

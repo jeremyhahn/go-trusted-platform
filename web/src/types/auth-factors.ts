@@ -53,7 +53,8 @@ export interface RelabelAuthFactorRequest {
 
 export interface MFAPolicyRequest {
   tenant_id: string;
-  require_factor_count: number;
+  require_multiple_factors: boolean;
+  min_factor_count: number;
 }
 
 /** Body of POST /api/v1/users/{id}/factors/mtls/issue-cert. */
