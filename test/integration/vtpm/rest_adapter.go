@@ -160,7 +160,25 @@ func (a *RESTAdapter) doRequest(ctx context.Context, method, path string, body i
 		}
 	}
 
-	return respBody, nil
+	return unwrapPayload(respBody)
+}
+
+// unwrapPayload returns the resource a vTPM route answered with: the payload
+// of the webservice envelope ({code, success, payload}), or the daemon's bare
+// object. An empty body or a non-object body is returned as it is.
+func unwrapPayload(body []byte) ([]byte, error) {
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return body, nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &fields); err != nil {
+		return body, nil
+	}
+	if payload, ok := fields["payload"]; ok {
+		return payload, nil
+	}
+	return body, nil
 }
 
 // doStreamRequest performs an HTTP request that returns a streaming response.
