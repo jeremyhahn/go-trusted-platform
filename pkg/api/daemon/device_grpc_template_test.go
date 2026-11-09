@@ -254,7 +254,7 @@ func TestDeviceGRPCCreateProfileFromTemplate_Transports(t *testing.T) {
 
 			resp, err := client.CreateProfileFromTemplate(ctx, &platformv1.CreateProfileFromTemplateRequest{
 				TemplateId: tmpl.GetTemplate().GetId(),
-				Overrides:  &platformv1.DeviceProfile{Name: "gw-01", EkSerial: "EK-" + name},
+				Overrides:  &platformv1.DeviceProfile{Name: "edge-01", EkSerial: "EK-" + name},
 			})
 			require.NoError(t, err)
 			require.True(t, resp.GetStatus().GetSuccess())
@@ -262,7 +262,7 @@ func TestDeviceGRPCCreateProfileFromTemplate_Transports(t *testing.T) {
 
 			stored, err := svcs.profiles.Get(ctx, resp.GetProfile().GetId())
 			require.NoError(t, err)
-			assert.Equal(t, "gw-01", stored.Name)
+			assert.Equal(t, "edge-01", stored.Name)
 			assert.Equal(t, "EK-"+name, stored.EKSerial)
 			assert.Equal(t, entities.DeviceRoleGateway, stored.Role, "role comes from the template")
 			assert.Equal(t, map[string]interface{}{"hostname": "edge-01", "domain": "example.com"}, stored.Config,
