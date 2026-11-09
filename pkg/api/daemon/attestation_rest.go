@@ -42,11 +42,14 @@ func (s *RESTServer) SetAttestationRouterHandlers(logger *logging.Logger, server
 	// The attestation routers' /attestation base path is relative to the
 	// /api/v1 parent.
 	restattestation.NewAttestationServerRouter(logger, server, respWriter).RegisterRoutes(parent)
+	// Without a report cache the routers still mount with a nil Reporting:
+	// the reports routes answer 503 and the caller policy admits nobody.
+	var rep *restattestation.Reporting
 	if reporting.Reports != nil {
-		rep := &restattestation.Reporting{Reports: reporting.Reports, Refresher: reporting.Refresher, Policy: reporting.Policy}
-		restattestation.NewReportsRouter(logger, rep, respWriter).RegisterRoutes(parent)
-		restattestation.NewCallersRouter(rep, respWriter).RegisterRoutes(parent)
+		rep = &restattestation.Reporting{Reports: reporting.Reports, Refresher: reporting.Refresher, Policy: reporting.Policy}
 	}
+	restattestation.NewReportsRouter(logger, rep, respWriter).RegisterRoutes(parent)
+	restattestation.NewCallersRouter(rep, respWriter).RegisterRoutes(parent)
 	s.logger.Info("Attestation REST routes registered", "reports", reporting.Reports != nil)
 	return nil
 }
