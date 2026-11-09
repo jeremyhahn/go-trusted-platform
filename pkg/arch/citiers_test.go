@@ -40,8 +40,9 @@ import (
 // (ci-template v1.26): every job's `if:` carries the draft guard, and the gate
 // fails on a draft. The nightly tier (ci-template v1.27, ruling 135) runs on
 // main's schedule and on a dispatch: its soak may skip only when the gate's
-// NIGHTLY flag is not `true`. FIPS is the one ungated job (#853): it runs on
-// main, the schedule and dispatch, never on a pull request (DS-4613), and appears in neither the gate's `needs` nor its `check` lines.
+// NIGHTLY flag is not `true`. The main tier (#1411, ruling 297) runs on main,
+// the schedule and dispatch, never on a pull request (DS-4613): FIPS is gated
+// there, and its skip passes only when the gate's PULL_REQUEST flag is `true`.
 
 const (
 	ciWorkflowFile = ".github/workflows/ci.yml"
@@ -98,6 +99,16 @@ const (
 	nightlyEnv      = "NIGHTLY"
 	nightlyEnvValue = nightlyIf
 
+	// tierMain is the tier of a job that runs on every event but a pull
+	// request: push to main, the schedule and dispatch (#1411, ruling 297).
+	// The gate lets its skip through only on a pull request.
+	tierMain = "main"
+
+	// pullRequestEnv is the gate's pull-request flag: the gate lets a
+	// main-tier job's skip through only when it reads exactly `true`.
+	pullRequestEnv      = "PULL_REQUEST"
+	pullRequestEnvValue = "${{ github.event_name == 'pull_request' }}"
+
 	// changesJobID is the job whose docs_only output selects the docs tier.
 	changesJobID = "changes"
 
@@ -127,9 +138,9 @@ const (
 	// character for character.
 	fullTierIf = "${{ (" + fullTierExpr + ") && " + draftGuard + " }}"
 
-	// mainOnlyIf is the `if:` of every ungated job: push to main, the schedule
-	// and workflow_dispatch, never a pull request, `ci:full` or not
-	// (m1355 / DS-3878, DS-4613). It is no tier: the gate never reads it.
+	// mainOnlyIf is the `if:` of every main-tier job: push to main, the
+	// schedule and workflow_dispatch, never a pull request, `ci:full` or not
+	// (m1355 / DS-3878, DS-4613; gated since #1411, ruling 297).
 	mainOnlyIf = "${{ github.event_name != 'pull_request' }}"
 
 	// ciFullTierEnv is the workflow-level env the steps and the gate read.
@@ -156,11 +167,6 @@ const (
 	supersededGroup = "${{ github.workflow }}-${{ github.event_name == 'schedule' && format('schedule-{0}', github.repository) || github.ref == 'refs/heads/main' && format('main-{0}-{1}', github.event_name, github.sha) || github.ref }}"
 )
 
-// ungatedJobs run under mainOnlyIf and report without feeding CI Gate (#853):
-// FIPS, still red on causes this repository cannot close (nightly.yml's
-// header lists them).
-var ungatedJobs = []string{"fips"}
-
 // prTriggerTypes are ci.yml's pull_request activity types. `ci:full` takes
 // effect on the PR's next push or update-branch: there is no `labeled`, see
 // labelTypes. There is no `ready_for_review` or `edited` either: a draft
@@ -183,6 +189,7 @@ var tierByIf = map[string]string{
 	docsOnlyIf: tierDocs,
 	fullTierIf: tierFull,
 	nightlyIf:  tierNightly,
+	mainOnlyIf: tierMain,
 
 	prTierGuardedIf:   tierPR,
 	fullTierGuardedIf: tierFull,
@@ -197,7 +204,7 @@ var scheduleGuardedIf = map[string]bool{
 }
 
 // gatedTiers are the tiers a gate `check` line may carry.
-var gatedTiers = []string{tierPR, tierDocs, tierFull, tierNightly}
+var gatedTiers = []string{tierPR, tierDocs, tierFull, tierNightly, tierMain}
 
 // tierLabel names a gated tier in a finding.
 var tierLabel = map[string]string{
@@ -205,6 +212,7 @@ var tierLabel = map[string]string{
 	tierDocs:    "docs",
 	tierFull:    "full",
 	tierNightly: "nightly",
+	tierMain:    "main",
 }
 
 var (
@@ -487,6 +495,10 @@ func gateFindings(wf ciWorkflow, gate ciJob, jobs map[string]ciJob) (map[string]
 	if got := step.Env[nightlyEnv]; nightlyTagged && got != nightlyEnvValue {
 		fail(step.RunLine, fmt.Sprintf("$%s is %q, want %q: without it a nightly run passes on a skipped soak", nightlyEnv, got, nightlyEnvValue))
 	}
+	mainTagged := slices.ContainsFunc(checks, func(c ciGateCheck) bool { return c.Tier == tierMain })
+	if got := step.Env[pullRequestEnv]; mainTagged && got != pullRequestEnvValue {
+		fail(step.RunLine, fmt.Sprintf("$%s is %q, want %q: without it a push passes on a skipped main-tier job", pullRequestEnv, got, pullRequestEnvValue))
+	}
 	return checked, findings
 }
 
@@ -528,14 +540,14 @@ func ciTierFindings(wf ciWorkflow) []error {
 	tiers := make(map[string]string, len(wf.Jobs))
 	docsTier := false
 	for _, j := range wf.Jobs {
-		if j.ID == ciGateJobID || slices.Contains(ungatedJobs, j.ID) {
+		if j.ID == ciGateJobID {
 			continue
 		}
 		tier, known := tierByIf[j.If]
 		if !known {
 			findings = append(findings, CITierError{
 				File: wf.File, Line: j.Line, Job: j.ID,
-				Reason: fmt.Sprintf("if: %q is no tier: a PR-tier job has exactly %q, a docs-tier job exactly %q, a full-tier job exactly %q, a nightly-tier job exactly %q", j.If, prTierIf, docsOnlyIf, fullTierIf, nightlyIf),
+				Reason: fmt.Sprintf("if: %q is no tier: a PR-tier job has exactly %q, a docs-tier job exactly %q, a full-tier job exactly %q, a nightly-tier job exactly %q, a main-tier job exactly %q", j.If, prTierIf, docsOnlyIf, fullTierIf, nightlyIf, mainOnlyIf),
 			})
 			continue
 		}
@@ -562,18 +574,6 @@ func ciTierFindings(wf ciWorkflow) []error {
 		if guarded && !slices.Contains(j.Needs, scheduleGuardJobID) {
 			fail(j.Line, "its if: reads the schedule guard, so it needs "+scheduleGuardJobID+": without it the verdict does not render and a schedule run skips the job")
 		}
-		if slices.Contains(ungatedJobs, j.ID) {
-			if j.If != mainOnlyIf {
-				fail(j.Line, fmt.Sprintf("an ungated job runs on main, the schedule and dispatch only, never on a pull request: if: %q, want %q", j.If, mainOnlyIf))
-			}
-			if slices.Contains(gate.Needs, j.ID) {
-				fail(j.Line, "an ungated job: remove it from ci-gate's needs")
-			}
-			if gated {
-				fail(c.Line, "an ungated job: remove its check line from ci-gate")
-			}
-			continue
-		}
 		if !slices.Contains(gate.Needs, j.ID) {
 			fail(j.Line, "not in ci-gate's needs: the gate cannot see its result")
 		}
@@ -586,8 +586,8 @@ func ciTierFindings(wf ciWorkflow) []error {
 			fail(j.Line, "a docs-tier job needs "+changesJobID+": without it, docs_only does not render and the job always runs")
 		}
 		for _, need := range j.Needs {
-			if slices.Contains(ungatedJobs, need) {
-				fail(j.Line, "a gated job needs ungated job "+need+": a red ungated job would skip this one and turn the gate red")
+			if tier != tierMain && tiers[need] == tierMain {
+				fail(j.Line, "a "+tierLabel[tier]+"-tier job needs main-tier job "+need+": skipped on every PR, it would skip this job too")
 			}
 			if (tier == tierPR || tier == tierDocs) && tiers[need] == tierFull {
 				fail(j.Line, "a "+tierLabel[tier]+"-tier job needs full-tier job "+need+": skipped on every ordinary PR, it would skip this job too")
@@ -812,29 +812,75 @@ func TestCIGateScriptPassesASkipOnlyForAnUnselectedTier(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			env := []string{
-				"PATH=" + os.Getenv("PATH"),
 				fullTierEnv + "=" + tc.fullTier,
 				docsOnlyEnv + "=" + tc.docsOnly,
 				draftEnv + "=" + strconv.FormatBool(tc.draft),
 				nightlyEnv + "=" + tc.nightly,
 			}
-			for _, c := range checks {
-				result, set := tc.results[c.EnvVar]
-				if !set {
-					result = "success"
-				}
-				env = append(env, c.EnvVar+"="+result)
+			runGateScript(t, bash, step, checks, env, tc.results, tc.wantPass)
+		})
+	}
+}
+
+// runGateScript runs the gate's script under env, every check's result
+// reading `success` unless results sets it, and asserts its verdict.
+func runGateScript(t *testing.T, bash string, step ciStep, checks []ciGateCheck, env []string, results map[string]string, wantPass bool) {
+	t.Helper()
+	env = append([]string{"PATH=" + os.Getenv("PATH")}, env...)
+	for _, c := range checks {
+		result, set := results[c.EnvVar]
+		if !set {
+			result = "success"
+		}
+		env = append(env, c.EnvVar+"="+result)
+	}
+	// -eo pipefail is the runner's default bash invocation for `run:`.
+	cmd := exec.CommandContext(t.Context(), bash, "-eo", "pipefail", "-c", step.Run)
+	cmd.Env = env
+	out, runErr := cmd.CombinedOutput()
+	if wantPass {
+		require.NoError(t, runErr, string(out))
+		return
+	}
+	var exitErr *exec.ExitError
+	require.ErrorAs(t, runErr, &exitErr, "the gate passed:\n%s", out)
+}
+
+// TestCIGateScriptPassesAMainTierSkipOnlyOnAPullRequest runs the gate's
+// script over a main-tier job (#1411): it skips on every pull request, so
+// its skip passes there and nowhere else, and its failure never passes.
+func TestCIGateScriptPassesAMainTierSkipOnlyOnAPullRequest(t *testing.T) {
+	step, checks := loadGateStep(t)
+	idx := slices.IndexFunc(checks, func(c ciGateCheck) bool { return c.Tier == tierMain })
+	require.GreaterOrEqual(t, idx, 0, "the gate checks no main-tier job")
+	mainVar := checks[idx].EnvVar
+
+	bash, err := exec.LookPath("bash")
+	require.NoError(t, err)
+
+	cases := []struct {
+		name        string
+		pullRequest string
+		result      string
+		wantPass    bool
+	}{
+		{"a main-tier job skipped on a pull request", "true", "skipped", true},
+		{"a main-tier job skipped on a push", "false", "skipped", false},
+		{"a main-tier job skipped while PULL_REQUEST did not render", "", "skipped", false},
+		{"a main-tier job failed on a push", "false", "failure", false},
+		{"a main-tier job failed on a pull request", "true", "failure", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Every other job succeeds, so the tier flags read as on a push.
+			env := []string{
+				fullTierEnv + "=true",
+				docsOnlyEnv + "=false",
+				draftEnv + "=false",
+				nightlyEnv + "=false",
+				pullRequestEnv + "=" + tc.pullRequest,
 			}
-			// -eo pipefail is the runner's default bash invocation for `run:`.
-			cmd := exec.CommandContext(t.Context(), bash, "-eo", "pipefail", "-c", step.Run)
-			cmd.Env = env
-			out, runErr := cmd.CombinedOutput()
-			if tc.wantPass {
-				require.NoError(t, runErr, string(out))
-				return
-			}
-			var exitErr *exec.ExitError
-			require.ErrorAs(t, runErr, &exitErr, "the gate passed:\n%s", out)
+			runGateScript(t, bash, step, checks, env, map[string]string{mainVar: tc.result}, tc.wantPass)
 		})
 	}
 }
@@ -875,13 +921,14 @@ jobs:
     runs-on: ${{ github.server_url == 'https://github.com' && 'ubuntu-latest' || 'bigdisk' }}
   ci-gate:
     if: ` + ciGateIf + `
-    needs: [lint, changes, build, race, soak, schedule-guard, image]
+    needs: [lint, changes, build, race, fips, soak, schedule-guard, image]
     steps:
       - env:
           FULL_TIER: ` + fullTierEnvValue + `
           DOCS_ONLY: ` + docsOnlyEnvValue + `
           DRAFT: ` + draftEnvValue + `
           NIGHTLY: ` + nightlyEnvValue + `
+          PULL_REQUEST: ` + pullRequestEnvValue + `
           SCHEDULE: ` + scheduleEnvValue + `
           SCHEDULE_GUARD: ` + scheduleGuardEnvValue + `
           RESULT_LINT: ${{ needs.lint.result }}
@@ -890,6 +937,7 @@ jobs:
           RESULT_IMAGE: ${{ needs.image.result }}
           RESULT_BUILD: ${{ needs.build.result }}
           RESULT_RACE: ${{ needs.race.result }}
+          RESULT_FIPS: ${{ needs.fips.result }}
           RESULT_SOAK: ${{ needs.soak.result }}
         run: |
           check pr lint "$RESULT_LINT"
@@ -899,6 +947,7 @@ jobs:
           check docs build "$RESULT_BUILD"
           check full race "$RESULT_RACE"
           check nightly soak "$RESULT_SOAK"
+          check main fips "$RESULT_FIPS"
 `
 
 func parseFixture(t *testing.T, data string) ciWorkflow {
@@ -926,7 +975,7 @@ func TestCITierFindingsRejectEachInconsistency(t *testing.T) {
 		{"an untagged check line", `check pr lint "$RESULT_LINT"`, `check lint "$RESULT_LINT"`, "check line is not"},
 		{"an unknown tier tag", `check pr lint`, `check fast lint`, `tier tag "fast" is none of`},
 		{"a job with no check line", "          check pr lint \"$RESULT_LINT\"\n", "", "lint: no check line in ci-gate"},
-		{"a job missing from the gate's needs", `race, soak,`, `soak,`, "race: not in ci-gate's needs"},
+		{"a job missing from the gate's needs", `race, fips,`, `fips,`, "race: not in ci-gate's needs"},
 		{"a docs-tier job tagged pr", `check docs build`, `check pr build`, "build: tagged pr in ci-gate, but its if: puts it in the docs tier"},
 		{"a pr-tier job tagged docs", `check pr lint`, `check docs lint`, "lint: tagged docs in ci-gate, but its if: puts it in the pr tier"},
 		{"a docs-only if: that drifted", "!= 'true' &&", "!= true &&", "build: if: "},
@@ -965,16 +1014,18 @@ func TestCITierFindingsRejectEachInconsistency(t *testing.T) {
 		{"pull_request with the labeled type", `reopened]`, `reopened, labeled]`, "not on a label event"},
 		{"pull_request with the ready_for_review type", `reopened]`, `reopened, ready_for_review]`, "not on a label event"},
 		{"pull_request without the synchronize type", `synchronize, `, ``, "types are [opened reopened]"},
-		{"an ungated job in the gate's needs", `race, soak,`, `race, fips, soak,`, "fips: an ungated job: remove it from ci-gate's needs"},
-		{"an ungated job with a check line", `check full race "$RESULT_RACE"`, "check full race \"$RESULT_RACE\"\n          check full fips \"$RESULT_RACE\"", "fips: an ungated job: remove its check line"},
-		{"an ungated job on the full tier (the ci:full PR leak, DS-4613)", "  fips:\n    if: " + mainOnlyIf + "\n", "  fips:\n    if: " + fullTierIf + "\n", "fips: an ungated job runs on main, the schedule and dispatch only, never on a pull request"},
-		{"an ungated job on the PR tier", "  fips:\n    if: " + mainOnlyIf + "\n", "  fips:\n    if: " + prTierIf + "\n", "fips: an ungated job runs on main, the schedule and dispatch only, never on a pull request"},
-		{"an ungated job whose if: drifted", "  fips:\n    if: " + mainOnlyIf + "\n", "  fips:\n    if: github.event_name == 'push'\n", "fips: an ungated job runs on main, the schedule and dispatch only, never on a pull request"},
-		{"a gated job needing an ungated job", "    needs: lint\n  fips:", "    needs: [lint, fips]\n  fips:", "race: a gated job needs ungated job fips"},
+		{"a main-tier job missing from the gate's needs", `race, fips, soak,`, `race, soak,`, "fips: not in ci-gate's needs"},
+		{"a main-tier job without a check line", "          check main fips \"$RESULT_FIPS\"\n", "", "fips: no check line in ci-gate"},
+		{"a main-tier job tagged full", `check main fips`, `check full fips`, "fips: tagged full in ci-gate, but its if: puts it in the main tier"},
+		{"a full-tier job tagged main", `check full race`, `check main race`, "race: tagged main in ci-gate, but its if: puts it in the full tier"},
+		{"a main if: that drifted", "  fips:\n    if: " + mainOnlyIf + "\n", "  fips:\n    if: github.event_name == 'push'\n", "fips: if: "},
+		{"a gate without the pull-request flag", "          PULL_REQUEST: " + pullRequestEnvValue + "\n", "", "$PULL_REQUEST is \"\""},
+		{"a pull-request flag that reads another event", "PULL_REQUEST: " + pullRequestEnvValue, "PULL_REQUEST: ${{ github.event_name == 'push' }}", "$PULL_REQUEST is"},
+		{"a full-tier job needing a main-tier job", "    needs: lint\n  fips:", "    needs: [lint, fips]\n  fips:", "race: a full-tier job needs main-tier job fips"},
 		{"a nightly-tier job tagged full", `check nightly soak`, `check full soak`, "soak: tagged full in ci-gate, but its if: puts it in the nightly tier"},
 		{"a full-tier job tagged nightly", `check full race`, `check nightly race`, "race: tagged nightly in ci-gate, but its if: puts it in the full tier"},
 		{"a nightly if: that drifted", "  soak:\n    if: " + nightlyIf + "\n", "  soak:\n    if: ${{ github.event_name == 'schedule' }}\n", "soak: if: "},
-		{"a nightly-tier job missing from the gate's needs", `race, soak,`, `race,`, "soak: not in ci-gate's needs"},
+		{"a nightly-tier job missing from the gate's needs", `fips, soak,`, `fips,`, "soak: not in ci-gate's needs"},
 		{"a gate without the nightly flag", "          NIGHTLY: " + nightlyEnvValue + "\n", "", "$NIGHTLY is \"\""},
 		{"a nightly flag that reads another event", "NIGHTLY: " + nightlyEnvValue, "NIGHTLY: ${{ github.event_name == 'push' }}", "$NIGHTLY is"},
 		{"a full-tier job needing a nightly-tier job", "    needs: lint\n  fips:", "    needs: [lint, soak]\n  fips:", "a full-tier job needs nightly-tier job soak"},
@@ -1003,8 +1054,9 @@ func TestCITierFindingsPointAtTheMisTaggedLine(t *testing.T) {
 	require.Len(t, findings, 1)
 	var tierErr CITierError
 	require.ErrorAs(t, findings[0], &tierErr)
-	// The race check is the fixture's next-to-last line; the soak check follows it.
-	require.Equal(t, strings.Count(fixtureTieredCI, "\n")-1, tierErr.Line)
+	// The race check is the fixture's third-to-last line; the soak and fips
+	// checks follow it.
+	require.Equal(t, strings.Count(fixtureTieredCI, "\n")-2, tierErr.Line)
 }
 
 func TestConcurrencyFindingsRejectAnUncancellableGroup(t *testing.T) {
