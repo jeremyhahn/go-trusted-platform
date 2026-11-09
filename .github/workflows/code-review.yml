@@ -1,4 +1,4 @@
-# code-review-template: v5.10.0 -- the code review in Gitea or GitHub CI for a pull request
+# code-review-template: v5.10.1 -- the code review in Gitea or GitHub CI for a pull request
 # that carries `code-review` and `task:ready`, routed by its labels through
 # route-labels (labels.md §2). Codex on the `codex` runner reviews every such
 # PR; `agent:opencode` adds an advisory COMMENT review by the opencode job on
@@ -28,6 +28,17 @@
 #   COORDINATOR_TURNS         the codex rounds the project coordinator has
 #                             on a `needs-coordinator` PR after the two-round
 #                             stop (v5.9.8, Company Agent m2185); default 3
+#
+# v5.10.1 (2026-11-09, Infrastructure's review of go-xkms #2026 under Company
+# Agent m2274, ruling 394): two v5.10.0 defects Codex found. (a) The review key
+# is `git patch-id --verbatim`: `--stable` ignores whitespace, so an approval
+# carried to a head whose only change was whitespace, which alters YAML, Python
+# or a Makefile. A marker keyed by a `--stable` id no longer matches, so each
+# open PR is reviewed once more. (b) The TWIN WAIT runs before the GitHub
+# identity probe: GitHub keeps one PENDING review per author, so twins probing
+# at once failed one of them as "not filed as a PENDING review" (a false red,
+# never a bypass). (c) The DEPS env comment describes v5.10.0's module zips,
+# not v4.2's per-repository tag archives.
 #
 # v5.10.0 (2026-11-09, Company Agent m2268 (1), ruling 392): the first-party
 # modules come from proxy.golang.org as module zips, never as forge tag
@@ -395,8 +406,10 @@ env:
   # uid 1000's only writable directory outside the checkout: codex writes its
   # final message here, and root copies it into $WORK reading it as uid 1000.
   OUT: /tmp/codex-review-out
-  # Root's, read-only to uid 1000: the source of the first-party modules the
-  # change requires, one directory per repository and ref (v4.2).
+  # Root's, read-only to uid 1000: one directory per module and version, each
+  # a module zip from proxy.golang.org checked against go.sum: the first-party
+  # modules the change requires, also against sum.golang.org (v5.10.0), and
+  # under proxy/ the public modules whose require version it changes (v5.8).
   DEPS: /tmp/codex-review-deps
   FORGE_API: ${{ github.server_url == 'https://github.com' && 'https://api.github.com' || format('{0}/api/v1', github.server_url) }}
   REPO_API: ${{ github.server_url == 'https://github.com' && format('https://api.github.com/repos/{0}', github.repository) || format('{0}/api/v1/repos/{1}', github.server_url, github.repository) }}
@@ -718,6 +731,65 @@ jobs:
           fi
           echo "requested=true" >> "$GITHUB_OUTPUT"
 
+          # TWIN WAIT (v5.9.7, GitHub; ahead of the identity probe since v5.10.1):
+          # every twin of a head runs, so one
+          # whose older twin's codex job is still reviewing this head waits
+          # for that verdict and then reads it below. Only an in-progress codex
+          # job is waited for: a queued one may be waiting for this runner.
+          twin_waited=0
+          if [ "$FORGE" = github ]; then
+            printf 'Authorization: Bearer %s\n' "$ACTIONS_TOKEN" > "$WORK/gha.hdr"
+            gha() { # GET path with the job's own token -> body; dies unless 2xx
+              local code
+              code=$(curl -sS --proto '=https' --max-time 60 --retry 3 --retry-all-errors \
+                       -o "$WORK/gha.json" -w '%{http_code}' -H @"$WORK/gha.hdr" \
+                       -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28' \
+                       "$REPO_API$1") || die "cannot reach $REPO_API$1"
+              case "$code" in
+                2??) cat "$WORK/gha.json" ;;
+                *)   die "GET $1 answered HTTP $code" ;;
+              esac
+            }
+            wf=$(gha "/actions/runs/$GITHUB_RUN_ID" | jq -r '.workflow_id // empty')
+            [ -n "$wf" ] || die "could not read the workflow of run $GITHUB_RUN_ID"
+            while :; do
+              older=$(gha "/actions/workflows/$wf/runs?head_sha=$EVENT_SHA&status=in_progress&per_page=100" |
+                      jq -r --argjson me "$GITHUB_RUN_ID" '.workflow_runs[]? | select(.id < $me) | .id')
+              busy=0
+              for id in $older; do
+                if gha "/actions/runs/$id/jobs?per_page=100" |
+                   jq -e 'any(.jobs[]?; .name == "Code Review (codex)" and .status == "in_progress")' >/dev/null; then
+                  busy=1
+                fi
+              done
+              [ "$busy" = 1 ] || break
+              [ "$twin_waited" -gt 0 ] || echo "An older run's codex job is reviewing $EVENT_SHA; waiting for its verdict."
+              [ "$twin_waited" -lt 2700 ] ||
+                die "an older run's codex job on $EVENT_SHA is still in progress after 2700 s; re-run this job when it ends"
+              sleep 30
+              twin_waited=$((twin_waited + 30))
+            done
+            rm -f "$WORK/gha.hdr"
+            # A twin that waited ends on the older run's verdict, before any
+            # route or label case: its approval ends skip=reviewed, its
+            # rejection fails, and only no verdict asks for a re-run. Too little
+            # of this job's budget is left to review after a wait.
+            if [ "$twin_waited" -gt 0 ]; then
+              mine=$(my_verdicts)
+              if jq -e 'any(.[]; .state == "REQUEST_CHANGES")' <<<"$mine" >/dev/null; then
+                touch "$WORK/verdict"
+                echo "::error::$REVIEWER has REQUEST_CHANGES standing on $EVENT_SHA. Push a new head that addresses it."
+                exit 1
+              fi
+              if jq -e 'any(.[]; .state == "APPROVED")' <<<"$mine" >/dev/null; then
+                echo "$REVIEWER approved $EVENT_SHA in the older run after a $twin_waited s wait. Not reviewing it twice."
+                echo "skip=reviewed" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              die "the older run on $EVENT_SHA ended with no verdict after a $twin_waited s wait; re-run this job"
+            fi
+          fi
+
           # GITHUB IDENTITY (v5.9.0): a PENDING review, visible to its author
           # alone and no verdict, names the token's login; it is deleted at
           # once. Anyone but the reviewer is refused before codex runs. GitHub
@@ -777,64 +849,6 @@ jobs:
           esac
           { echo "codex_model=$codex_model"; echo "codex_effort=$codex_effort"; } >> "$GITHUB_OUTPUT"
 
-          # TWIN WAIT (v5.9.7, GitHub): every twin of a head runs, so one
-          # whose older twin's codex job is still reviewing this head waits
-          # for that verdict and then reads it below. Only an in-progress codex
-          # job is waited for: a queued one may be waiting for this runner.
-          twin_waited=0
-          if [ "$FORGE" = github ]; then
-            printf 'Authorization: Bearer %s\n' "$ACTIONS_TOKEN" > "$WORK/gha.hdr"
-            gha() { # GET path with the job's own token -> body; dies unless 2xx
-              local code
-              code=$(curl -sS --proto '=https' --max-time 60 --retry 3 --retry-all-errors \
-                       -o "$WORK/gha.json" -w '%{http_code}' -H @"$WORK/gha.hdr" \
-                       -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28' \
-                       "$REPO_API$1") || die "cannot reach $REPO_API$1"
-              case "$code" in
-                2??) cat "$WORK/gha.json" ;;
-                *)   die "GET $1 answered HTTP $code" ;;
-              esac
-            }
-            wf=$(gha "/actions/runs/$GITHUB_RUN_ID" | jq -r '.workflow_id // empty')
-            [ -n "$wf" ] || die "could not read the workflow of run $GITHUB_RUN_ID"
-            while :; do
-              older=$(gha "/actions/workflows/$wf/runs?head_sha=$EVENT_SHA&status=in_progress&per_page=100" |
-                      jq -r --argjson me "$GITHUB_RUN_ID" '.workflow_runs[]? | select(.id < $me) | .id')
-              busy=0
-              for id in $older; do
-                if gha "/actions/runs/$id/jobs?per_page=100" |
-                   jq -e 'any(.jobs[]?; .name == "Code Review (codex)" and .status == "in_progress")' >/dev/null; then
-                  busy=1
-                fi
-              done
-              [ "$busy" = 1 ] || break
-              [ "$twin_waited" -gt 0 ] || echo "An older run's codex job is reviewing $EVENT_SHA; waiting for its verdict."
-              [ "$twin_waited" -lt 2700 ] ||
-                die "an older run's codex job on $EVENT_SHA is still in progress after 2700 s; re-run this job when it ends"
-              sleep 30
-              twin_waited=$((twin_waited + 30))
-            done
-            rm -f "$WORK/gha.hdr"
-            # A twin that waited ends on the older run's verdict, before any
-            # route or label case: its approval ends skip=reviewed, its
-            # rejection fails, and only no verdict asks for a re-run. Too little
-            # of this job's budget is left to review after a wait.
-            if [ "$twin_waited" -gt 0 ]; then
-              mine=$(my_verdicts)
-              if jq -e 'any(.[]; .state == "REQUEST_CHANGES")' <<<"$mine" >/dev/null; then
-                touch "$WORK/verdict"
-                echo "::error::$REVIEWER has REQUEST_CHANGES standing on $EVENT_SHA. Push a new head that addresses it."
-                exit 1
-              fi
-              if jq -e 'any(.[]; .state == "APPROVED")' <<<"$mine" >/dev/null; then
-                echo "$REVIEWER approved $EVENT_SHA in the older run after a $twin_waited s wait. Not reviewing it twice."
-                echo "skip=reviewed" >> "$GITHUB_OUTPUT"
-                exit 0
-              fi
-              die "the older run on $EVENT_SHA ended with no verdict after a $twin_waited s wait; re-run this job"
-            fi
-          fi
-
           # A REJECTION STANDS until the head moves: nothing on this head may
           # replace it with a pass, and a later approval cannot retract it.
           # Fail with it rather than review again.
@@ -878,14 +892,14 @@ jobs:
           esac
 
           # THE REVIEW KEY (v5.9.8, Company Agent m2179 (1)): the patch-id of
-          # the PR's change, merge base to head (`git patch-id --stable`). A
+          # the PR's change, merge base to head (`git patch-id --verbatim`, v5.10.1). A
           # head that only merged main in (ruling 107) keeps it, so codex does
           # not review the same change twice. No diff from the forge (GitHub
           # refuses one over its size limit) leaves it empty: the head is the
           # key, as before v5.9.8.
           patch_id=""
           if pr_diff "$WORK/pr.diff"; then
-            patch_id=$(git patch-id --stable < "$WORK/pr.diff" | awk 'NR == 1 {print $1}') || patch_id=""
+            patch_id=$(git patch-id --verbatim < "$WORK/pr.diff" | awk 'NR == 1 {print $1}') || patch_id=""
           fi
           [[ $patch_id =~ ^[0-9a-f]{40}$ ]] || patch_id=""
           rm -f "$WORK/pr.diff"
