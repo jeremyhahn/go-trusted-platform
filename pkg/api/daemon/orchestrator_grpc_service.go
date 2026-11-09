@@ -18,6 +18,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/orchestrator"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	sdkorch "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/orchestrator"
 	"google.golang.org/grpc/codes"
@@ -100,15 +101,22 @@ func orchestratorCall[Req, Resp any](ctx context.Context, s *OrchestratorGRPCSer
 }
 
 // authorizeSystemOnly refuses the session RPCs to every caller but the system
-// tenant. The SDK cannot carry the caller's tenant into the embedded
-// orchestrator, which then lists and closes sessions across all tenants.
+// tenant and the trusted local operator. The SDK cannot carry the caller's
+// tenant into the embedded orchestrator, which then lists and closes sessions
+// across all tenants. A tenant-bound caller is admitted only as the system
+// tenant; a caller with no tenant-bound identity only when it carries Unix
+// peer credentials, the operator on the daemon's Unix socket.
 func (s *OrchestratorGRPCService) authorizeSystemOnly(ctx context.Context, req any) error {
 	switch req.(type) {
 	case *platformv1.ListOrchestratorSessionsRequest, *platformv1.CloseOrchestratorSessionRequest:
 	default:
 		return nil
 	}
-	if caller, bound := callerTenant(ctx); bound && tenant.IsSystemTenant(s.systemTenantID, caller) {
+	if caller, bound := callerTenant(ctx); bound {
+		if tenant.IsSystemTenant(s.systemTenantID, caller) {
+			return nil
+		}
+	} else if _, ok := peercred.UnixCredentialsFromContext(ctx); ok {
 		return nil
 	}
 	return status.Error(codes.PermissionDenied, "orchestrator sessions are served to the system tenant only")
