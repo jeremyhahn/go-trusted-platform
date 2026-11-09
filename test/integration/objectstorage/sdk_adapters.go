@@ -130,12 +130,16 @@ func (a *SDKAdapter) Name() string { return a.name }
 
 // Setup connects the SDK client.
 func (a *SDKAdapter) Setup(ctx context.Context) error {
-	options := a.options()
+	var token string
 	if a.bearer != nil {
-		token, err := a.bearer(ctx)
+		t, err := a.bearer(ctx)
 		if err != nil {
 			return ErrConnectionFailed{Protocol: a.name, Endpoint: a.endpoint, Err: err}
 		}
+		token = t
+	}
+	options := a.options()
+	if a.bearer != nil {
 		options.BearerToken = token
 	}
 	client, err := platform.Connect(ctx, options)

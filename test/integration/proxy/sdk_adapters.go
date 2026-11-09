@@ -133,15 +133,19 @@ func (a *SDKAdapter) Name() string { return a.name }
 
 // Setup connects the platform SDK client over the selected transport.
 func (a *SDKAdapter) Setup(ctx context.Context) error {
+	var token string
+	if a.bearer != nil {
+		t, err := a.bearer(ctx)
+		if err != nil {
+			return ErrConnectionFailed{Protocol: a.name, Endpoint: a.endpoint, Err: err}
+		}
+		token = t
+	}
 	opts, err := a.options()
 	if err != nil {
 		return ErrConnectionFailed{Protocol: a.name, Endpoint: a.endpoint, Err: err}
 	}
 	if a.bearer != nil {
-		token, err := a.bearer(ctx)
-		if err != nil {
-			return ErrConnectionFailed{Protocol: a.name, Endpoint: a.endpoint, Err: err}
-		}
 		opts.BearerToken = token
 	}
 	client, err := platform.Connect(ctx, opts)

@@ -60,16 +60,20 @@ func (r *RESTAdapter) Name() string {
 
 // Setup connects the platform SDK client over REST.
 func (r *RESTAdapter) Setup(ctx context.Context) error {
+	var token string
+	if r.bearer != nil {
+		t, err := r.bearer(ctx)
+		if err != nil {
+			return ErrConnectionFailed{Protocol: "REST", Endpoint: r.endpoint, Err: err}
+		}
+		token = t
+	}
 	options := platform.NewOptions(
 		platform.WithOnlyProtocol(platform.ProtocolREST),
 		platform.WithRESTAddr(r.endpoint),
 		platform.WithTLSConfig(helpers.TLSConfigOrInsecure()),
 	)
 	if r.bearer != nil {
-		token, err := r.bearer(ctx)
-		if err != nil {
-			return ErrConnectionFailed{Protocol: "REST", Endpoint: r.endpoint, Err: err}
-		}
 		options.BearerToken = token
 	}
 	client, err := platform.Connect(ctx, options)
