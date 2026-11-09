@@ -46,7 +46,7 @@ func NewRESTAdapter() *RESTAdapter {
 	if endpoint == "" {
 		endpoint = GetServiceEndpoints().PlatformREST
 	}
-	return &RESTAdapter{endpoint: endpoint, bearer: helpers.HarnessAdminSession().Bearer}
+	return &RESTAdapter{endpoint: endpoint, bearer: func(ctx context.Context) (string, error) { return helpers.HarnessAdminSession().Bearer(ctx) }}
 }
 
 // Name returns "REST".

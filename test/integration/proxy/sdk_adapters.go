@@ -76,7 +76,7 @@ func NewRESTAdapter() *SDKAdapter {
 				platform.WithTLSConfig(helpers.TLSConfigOrInsecure()),
 			), nil
 		},
-		bearer: helpers.HarnessAdminSession().Bearer,
+		bearer: func(ctx context.Context) (string, error) { return helpers.HarnessAdminSession().Bearer(ctx) },
 	}
 }
 
