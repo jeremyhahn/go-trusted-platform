@@ -340,6 +340,36 @@ func TestMountDaemonRESTRoutes_CallerCheckedRouteSkipsTheAuthorizer(t *testing.T
 	assert.Equal(t, []string{http.MethodPost + " /api/v1/users/{id}/factors/mtls/issue-cert"}, daemon.served)
 }
 
+// TestMountDaemonRESTRoutes_IssueCertEnrollsWithoutAClientCert proves a user
+// enrolling a first mTLS credential reaches issue-cert on the session alone,
+// while every other replayed route still needs a verified client certificate.
+func TestMountDaemonRESTRoutes_IssueCertEnrollsWithoutAClientCert(t *testing.T) {
+	platform := testutil.GenerateTestTLSBundle(t)
+	noCert := &tls.ConnectionState{}
+
+	daemon := &authFactorDaemonRoutes{roots: platform.CAPool}
+	api := mux.NewRouter().PathPrefix("/api/v1").Subrouter()
+	writer := response.NewResponseWriter(testLogger(), nil)
+	require.NoError(t, MountDaemonRESTRoutes(api, daemon, writer, permitAll, permitCaller))
+
+	assert.Equal(t, http.StatusOK, serveWithTLS(api, http.MethodPost, "/api/v1/users/alice/factors/mtls/issue-cert", noCert))
+	assert.Equal(t, []string{http.MethodPost + " /api/v1/users/{id}/factors/mtls/issue-cert"}, daemon.served)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/tenants/system/security/mfa-policy", nil)
+	req.TLS = noCert
+	rec := httptest.NewRecorder()
+	api.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Contains(t, rec.Body.String(), ErrDaemonRouteClientCertRequired{}.Error())
+	assert.Len(t, daemon.served, 1)
+
+	refused := &authFactorDaemonRoutes{roots: platform.CAPool}
+	sessionless := mux.NewRouter().PathPrefix("/api/v1").Subrouter()
+	require.NoError(t, MountDaemonRESTRoutes(sessionless, refused, writer, permitAll, refuseCaller))
+	assert.Equal(t, http.StatusUnauthorized, serveWithTLS(sessionless, http.MethodPost, "/api/v1/users/alice/factors/mtls/issue-cert", noCert))
+	assert.Empty(t, refused.served)
+}
+
 // Every method entry names a route the daemon's auth-factor table really
 // registers, so a renamed daemon route cannot silently drop its gate.
 // gateCase is one caller sent to a gated daemon route: the status the gate
