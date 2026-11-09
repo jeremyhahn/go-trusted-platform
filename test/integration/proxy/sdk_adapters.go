@@ -39,8 +39,12 @@ type SDKAdapter struct {
 	name     string
 	options  func() (*platform.Options, error)
 	endpoint string
-	client   platform.Client
-	proxy    *sdkproxy.Client
+	// bearer, when set, supplies the bearer the transport presents: the
+	// REST adapter reaches the admin-gated webservice routes with the
+	// harness admin session's bearer.
+	bearer func(ctx context.Context) (string, error)
+	client platform.Client
+	proxy  *sdkproxy.Client
 }
 
 // NewGRPCAdapter drives the proxy service over TLS gRPC.
@@ -72,6 +76,7 @@ func NewRESTAdapter() *SDKAdapter {
 				platform.WithTLSConfig(helpers.TLSConfigOrInsecure()),
 			), nil
 		},
+		bearer: helpers.HarnessAdminSession().Bearer,
 	}
 }
 
@@ -131,6 +136,13 @@ func (a *SDKAdapter) Setup(ctx context.Context) error {
 	opts, err := a.options()
 	if err != nil {
 		return ErrConnectionFailed{Protocol: a.name, Endpoint: a.endpoint, Err: err}
+	}
+	if a.bearer != nil {
+		token, err := a.bearer(ctx)
+		if err != nil {
+			return ErrConnectionFailed{Protocol: a.name, Endpoint: a.endpoint, Err: err}
+		}
+		opts.BearerToken = token
 	}
 	client, err := platform.Connect(ctx, opts)
 	if err != nil {
