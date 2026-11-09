@@ -30,28 +30,28 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 )
 
-// tgw01Example is the shipped VLAN 405 boot-node example.
-const tgw01Example = "../../configs/bootstrap/tgw01-vlan405.example.yaml"
+// bootNodeExample is the shipped VLAN 405 boot-node example.
+const bootNodeExample = "../../configs/bootstrap/edge-01-vlan405.example.yaml"
 
-// tgw01Address is tgw-01's address on VLAN 405: the boot server and, until
+// bootNodeAddress is edge-01's address on VLAN 405: the boot server and, until
 // the CM4 is proven, the control plane.
-const tgw01Address = "192.0.2.1"
+const bootNodeAddress = "192.0.2.1"
 
-// loadTGW01Example loads the example and completes it with a netboot media
+// loadBootNodeExample loads the example and completes it with a netboot media
 // build whose Pi set carries a diskless root, the one thing the example
 // cannot carry, so Validate runs as it would before a run.
-func loadTGW01Example(t *testing.T) *BootstrapConfig {
+func loadBootNodeExample(t *testing.T) *BootstrapConfig {
 	t.Helper()
-	cfg, err := LoadBootstrapConfig(tgw01Example)
+	cfg, err := LoadBootstrapConfig(bootNodeExample)
 	require.NoError(t, err)
 	cfg.Deployer.NetbootMediaDir = netbootBuild(t, true, false, container.MediaSetRaspberryPi)
 	markMediaSetDiskless(t, cfg.Deployer.NetbootMediaDir, container.MediaSetRaspberryPi)
 	return cfg
 }
 
-// tgw01Orchestrator builds an orchestrator over cfg loaded from configPath,
+// bootNodeOrchestrator builds an orchestrator over cfg loaded from configPath,
 // so templates and overrides files resolve against that file's directory.
-func tgw01Orchestrator(t *testing.T, cfg *BootstrapConfig, configPath string) *Orchestrator {
+func bootNodeOrchestrator(t *testing.T, cfg *BootstrapConfig, configPath string) *Orchestrator {
 	t.Helper()
 	o, err := NewOrchestrator(OrchestratorParams{
 		Config:     cfg,
@@ -63,19 +63,19 @@ func tgw01Orchestrator(t *testing.T, cfg *BootstrapConfig, configPath string) *O
 	return o
 }
 
-// writeTGW01Variant writes the example with old replaced by repl to a temp
+// writeBootNodeVariant writes the example with old replaced by repl to a temp
 // dir and returns its path. The example's relative template and overrides
 // paths are made absolute so they still resolve from there.
-func writeTGW01Variant(t *testing.T, old, repl string) string {
+func writeBootNodeVariant(t *testing.T, old, repl string) string {
 	t.Helper()
-	raw, err := os.ReadFile(tgw01Example)
+	raw, err := os.ReadFile(bootNodeExample)
 	require.NoError(t, err)
 	require.Contains(t, string(raw), old)
 	variant := strings.Replace(string(raw), old, repl, 1)
 
-	exampleDir, err := filepath.Abs(filepath.Dir(tgw01Example))
+	exampleDir, err := filepath.Abs(filepath.Dir(bootNodeExample))
 	require.NoError(t, err)
-	for _, rel := range []string{"../platform/templates/", "tgw01-vlan405-pi.overrides.yaml"} {
+	for _, rel := range []string{"../platform/templates/", "edge-01-vlan405-pi.overrides.yaml"} {
 		require.Contains(t, variant, rel)
 		abs := filepath.Join(exampleDir, rel)
 		if strings.HasSuffix(rel, "/") {
@@ -89,16 +89,16 @@ func writeTGW01Variant(t *testing.T, old, repl string) string {
 	return path
 }
 
-// TestTGW01VLAN405Example loads the shipped example through the real loader
+// TestBootNodeVLAN405Example loads the shipped example through the real loader
 // and validation, so an edit to either that would break the file an operator
 // copies fails here first.
-func TestTGW01VLAN405Example(t *testing.T) {
-	cfg := loadTGW01Example(t)
+func TestBootNodeVLAN405Example(t *testing.T) {
+	cfg := loadBootNodeExample(t)
 	require.NoError(t, cfg.ValidateDefinition())
 	require.NoError(t, cfg.Validate())
 
 	d := cfg.Deployer
-	assert.True(t, d.BootNode, "tgw-01 keeps serving VLAN 405")
+	assert.True(t, d.BootNode, "edge-01 keeps serving VLAN 405")
 	assert.True(t, d.BootstrapNoRouter, "VLAN 405 is isolated: no router option")
 	assert.Empty(t, d.BootstrapGateway)
 	assert.False(t, d.ProxyDHCP, "the only DHCP server on the VLAN")
@@ -133,33 +133,33 @@ func TestTGW01VLAN405Example(t *testing.T) {
 	}
 	require.Len(t, controlPlanes, 1)
 	cp := controlPlanes[0]
-	assert.Equal(t, "tgw-01", cp.Hostname)
-	assert.True(t, cp.SkipInstall, "tgw-01 runs the control plane already; this run does not install it")
-	assert.Empty(t, cp.Platform, "tgw-01 is a generic server")
-	assert.Equal(t, []string{tgw01Address}, cp.StaticIPv4s())
+	assert.Equal(t, "edge-01", cp.Hostname)
+	assert.True(t, cp.SkipInstall, "edge-01 runs the control plane already; this run does not install it")
+	assert.Empty(t, cp.Platform, "edge-01 is a generic server")
+	assert.Equal(t, []string{bootNodeAddress}, cp.StaticIPv4s())
 	assert.Equal(t, d.BootstrapServerIP, cp.StaticIPv4s()[0], "the control plane shares the boot server's address")
 	assert.Equal(t, map[string][]string{
-		"rpi4-01": {"dc:a6:32:50:76:60"},
-		"rpi4-02": {"dc:a6:32:50:76:18"},
-		"rpi4-03": {"dc:a6:32:50:75:43"},
+		"node-01": {"dc:a6:32:50:76:60"},
+		"node-02": {"dc:a6:32:50:76:18"},
+		"node-03": {"dc:a6:32:50:75:43"},
 	}, workers)
 
 	// Both templates the example names ship beside it.
 	for _, role := range []string{RoleControlPlane, RoleWorker} {
-		template, ok := cfg.TemplatePath(role, filepath.Dir(tgw01Example))
+		template, ok := cfg.TemplatePath(role, filepath.Dir(bootNodeExample))
 		require.True(t, ok, "the example names a %s template", role)
 		_, err := os.Stat(template)
 		require.NoError(t, err, role)
 	}
 }
 
-// TestTGW01VLAN405Example_NodeConfigsResolve resolves every node's merged
+// TestBootNodeVLAN405Example_NodeConfigsResolve resolves every node's merged
 // config as a run stages it (stagePerMACConfig: the Pis have no BMC, so no
-// hardware identity) and checks each Pi is pointed at tgw-01 for DNS, the
+// hardware identity) and checks each Pi is pointed at edge-01 for DNS, the
 // control plane's internal and public zones, and that nothing still names the
 // reference network's control plane.
-func TestTGW01VLAN405Example_NodeConfigsResolve(t *testing.T) {
-	o := tgw01Orchestrator(t, loadTGW01Example(t), tgw01Example)
+func TestBootNodeVLAN405Example_NodeConfigsResolve(t *testing.T) {
+	o := bootNodeOrchestrator(t, loadBootNodeExample(t), bootNodeExample)
 
 	resolved, err := o.ResolveNodeConfigs()
 	require.NoError(t, err)
@@ -167,7 +167,7 @@ func TestTGW01VLAN405Example_NodeConfigsResolve(t *testing.T) {
 	for _, r := range resolved {
 		hosts = append(hosts, r.Hostname)
 	}
-	require.Equal(t, []string{"tgw-01", "rpi4-01", "rpi4-02", "rpi4-03"}, hosts)
+	require.Equal(t, []string{"edge-01", "node-01", "node-02", "node-03"}, hosts)
 
 	for _, r := range resolved[1:] {
 		var merged struct {
@@ -203,19 +203,19 @@ func TestTGW01VLAN405Example_NodeConfigsResolve(t *testing.T) {
 
 		assert.Equal(t, r.Hostname, merged.OS.Hostname)
 		assert.Equal(t, "disk", merged.InstallTarget, "%s: the installer runs on the Pi, not on a build host", r.Hostname)
-		assert.Equal(t, tgw01Address+"#9053", merged.Network.DNS.UpstreamDNS,
+		assert.Equal(t, bootNodeAddress+"#9053", merged.Network.DNS.UpstreamDNS,
 			"%s: the bootstrap points the Pi at the control plane's internal zone", r.Hostname)
-		assert.Equal(t, []string{"/example.internal/" + tgw01Address + "#9053", tgw01Address + "#8053"},
+		assert.Equal(t, []string{"/example.internal/" + bootNodeAddress + "#9053", bootNodeAddress + "#8053"},
 			merged.Network.Dnsmasq.UpstreamServers, r.Hostname)
 		require.Len(t, merged.DNS.Resolver.Servers, 1, r.Hostname)
-		assert.Equal(t, tgw01Address, merged.DNS.Resolver.Servers[0].Address, r.Hostname)
+		assert.Equal(t, bootNodeAddress, merged.DNS.Resolver.Servers[0].Address, r.Hostname)
 		assert.Equal(t, 8053, merged.DNS.Resolver.Servers[0].Port, r.Hostname)
-		assert.Equal(t, tgw01Address+":8053", merged.Trust.BMC.DANE.DNSServer, r.Hostname)
+		assert.Equal(t, bootNodeAddress+":8053", merged.Trust.BMC.DANE.DNSServer, r.Hostname)
 		assert.NotContains(t, r.Config, "10.4.6.10", "%s still names the reference network's control plane", r.Hostname)
 	}
 
 	// Each Pi has its own address in the platform VRF and in each zone
-	// VLAN (.20/.21/.22), and tgw-01 alone holds 192.0.2.1, the address
+	// VLAN (.20/.21/.22), and edge-01 alone holds 192.0.2.1, the address
 	// every Pi takes DNS from.
 	owners := map[string]string{}
 	for i, r := range resolved {
@@ -228,7 +228,7 @@ func TestTGW01VLAN405Example_NodeConfigsResolve(t *testing.T) {
 			got[a.where] = a.addr.String()
 		}
 		if i == 0 {
-			assert.Equal(t, map[string]string{"interface bond0.405": tgw01Address}, got)
+			assert.Equal(t, map[string]string{"interface bond0.405": bootNodeAddress}, got)
 			continue
 		}
 		host := strconv.Itoa(19 + i)
@@ -239,7 +239,7 @@ func TestTGW01VLAN405Example_NodeConfigsResolve(t *testing.T) {
 			"vlan zone407": "10.4.7." + host,
 		}, got, r.Hostname)
 	}
-	assert.Equal(t, "tgw-01", owners[tgw01Address])
+	assert.Equal(t, "edge-01", owners[bootNodeAddress])
 
 	// The Pis are diskless, so all three keep the template's IDevID serial
 	// and still resolve: platformd replaces it with each Pi's EK-derived name
@@ -264,9 +264,9 @@ func TestTGW01VLAN405Example_NodeConfigsResolve(t *testing.T) {
 	assert.Equal(t, "cp.example.com", name)
 }
 
-// TestTGW01VLAN405Example_SecondControlPlaneRefused: the commented CM4 cannot
-// be added beside tgw-01; it replaces it.
-func TestTGW01VLAN405Example_SecondControlPlaneRefused(t *testing.T) {
+// TestBootNodeVLAN405Example_SecondControlPlaneRefused: the commented CM4 cannot
+// be added beside edge-01; it replaces it.
+func TestBootNodeVLAN405Example_SecondControlPlaneRefused(t *testing.T) {
 	const cm4 = "  # - hostname: cm4-01\n" +
 		"  #   role: control-plane\n" +
 		"  #   skip_install: true\n" +
@@ -277,7 +277,7 @@ func TestTGW01VLAN405Example_SecondControlPlaneRefused(t *testing.T) {
 		"  #       type: static\n" +
 		"  #       ipv4-address: 192.0.2.10/24\n"
 	uncommented := strings.ReplaceAll(cm4, "  # ", "  ")
-	cfg, err := LoadBootstrapConfig(writeTGW01Variant(t, cm4, uncommented))
+	cfg, err := LoadBootstrapConfig(writeBootNodeVariant(t, cm4, uncommented))
 	require.NoError(t, err)
 
 	var count ErrInvalidControlPlaneCount
@@ -285,30 +285,30 @@ func TestTGW01VLAN405Example_SecondControlPlaneRefused(t *testing.T) {
 	assert.Equal(t, 2, count.Count)
 }
 
-// TestTGW01VLAN405Example_NoControlPlaneTemplate: the Pis' DNS comes from the
+// TestBootNodeVLAN405Example_NoControlPlaneTemplate: the Pis' DNS comes from the
 // control plane's merged config, so without a control-plane template no Pi
 // resolves.
-func TestTGW01VLAN405Example_NoControlPlaneTemplate(t *testing.T) {
+func TestBootNodeVLAN405Example_NoControlPlaneTemplate(t *testing.T) {
 	const cpTemplate = "  control-plane: ../platform/templates/single-node/standalone-cp.example.yaml\n"
-	path := writeTGW01Variant(t, cpTemplate, "")
+	path := writeBootNodeVariant(t, cpTemplate, "")
 	cfg, err := LoadBootstrapConfig(path)
 	require.NoError(t, err)
 
-	_, err = tgw01Orchestrator(t, cfg, path).ResolveNodeConfigs("rpi4-01")
+	_, err = bootNodeOrchestrator(t, cfg, path).ResolveNodeConfigs("node-01")
 	var failed ErrNodeConfigResolveFailed
 	require.ErrorAs(t, err, &failed)
-	assert.Equal(t, "rpi4-01", failed.Hostname)
+	assert.Equal(t, "node-01", failed.Hostname)
 	var noTemplate ErrTemplateNotFoundForRole
 	require.ErrorAs(t, err, &noTemplate)
 	assert.Equal(t, RoleControlPlane, noTemplate.Role)
 }
 
-// TestTGW01VLAN405Example_GatewayRefused: the example's no-router setting is
+// TestBootNodeVLAN405Example_GatewayRefused: the example's no-router setting is
 // enforced through the loader, so a gateway added to the file is refused
 // rather than silently advertised on the isolated VLAN.
-func TestTGW01VLAN405Example_GatewayRefused(t *testing.T) {
+func TestBootNodeVLAN405Example_GatewayRefused(t *testing.T) {
 	const noRouter = "  bootstrap_no_router: true"
-	cfg, err := LoadBootstrapConfig(writeTGW01Variant(t, noRouter, noRouter+"\n  bootstrap_gateway: 192.0.2.1"))
+	cfg, err := LoadBootstrapConfig(writeBootNodeVariant(t, noRouter, noRouter+"\n  bootstrap_gateway: 192.0.2.1"))
 	require.NoError(t, err)
 
 	var conflict deployer.ErrNoRouterWithGateway
@@ -316,26 +316,26 @@ func TestTGW01VLAN405Example_GatewayRefused(t *testing.T) {
 	assert.Equal(t, "192.0.2.1", conflict.Gateway)
 }
 
-// TestTGW01VLAN405Example_DuplicateAddressRefused: two Pis given the same
+// TestBootNodeVLAN405Example_DuplicateAddressRefused: two Pis given the same
 // zone address are refused when the configs resolve, before a run touches
 // anything, naming both nodes.
-func TestTGW01VLAN405Example_DuplicateAddressRefused(t *testing.T) {
-	path := writeTGW01Variant(t, "ipv4-address: 10.4.1.21/24", "ipv4-address: 10.4.1.20/24")
+func TestBootNodeVLAN405Example_DuplicateAddressRefused(t *testing.T) {
+	path := writeBootNodeVariant(t, "ipv4-address: 10.4.1.21/24", "ipv4-address: 10.4.1.20/24")
 	cfg, err := LoadBootstrapConfig(path)
 	require.NoError(t, err)
 	cfg.Deployer.NetbootMediaDir = netbootBuild(t, true, false, container.MediaSetRaspberryPi)
 	markMediaSetDiskless(t, cfg.Deployer.NetbootMediaDir, container.MediaSetRaspberryPi)
 	require.NoError(t, cfg.Validate())
-	o := tgw01Orchestrator(t, cfg, path)
+	o := bootNodeOrchestrator(t, cfg, path)
 
-	_, err = o.ResolveNodeConfigs("rpi4-01")
+	_, err = o.ResolveNodeConfigs("node-01")
 	var dup ErrDuplicateNodeAddress
 	require.ErrorAs(t, err, &dup, "the clash is refused even when only one of the nodes is asked for")
 	assert.Equal(t, ErrDuplicateNodeAddress{
 		Address:       "10.4.1.20",
-		Hostname:      "rpi4-02",
+		Hostname:      "node-02",
 		Where:         "vlan zone401",
-		OtherHostname: "rpi4-01",
+		OtherHostname: "node-01",
 		OtherWhere:    "vlan zone401",
 	}, dup)
 
@@ -351,14 +351,14 @@ func TestTGW01VLAN405Example_DuplicateAddressRefused(t *testing.T) {
 	assert.Empty(t, result.Nodes, "refused before discovery")
 }
 
-// tgw01SDVariant writes the example with every Pi booting from its SD card
+// bootNodeSDVariant writes the example with every Pi booting from its SD card
 // instead of diskless, and each of edits' keys replaced by its value, and
 // loads it with a netboot media build. An SD Pi keeps its config's IDevID
 // serial.
-func tgw01SDVariant(t *testing.T, edits map[string]string) (*BootstrapConfig, string) {
+func bootNodeSDVariant(t *testing.T, edits map[string]string) (*BootstrapConfig, string) {
 	t.Helper()
 	const diskless, sd = "    boot_model: diskless\n", "    boot_model: sd\n"
-	path := writeTGW01Variant(t, diskless, sd)
+	path := writeBootNodeVariant(t, diskless, sd)
 	raw, err := os.ReadFile(path)
 	require.NoError(t, err)
 	variant := strings.ReplaceAll(string(raw), diskless, sd)
@@ -375,22 +375,22 @@ func tgw01SDVariant(t *testing.T, edits map[string]string) (*BootstrapConfig, st
 	return cfg, path
 }
 
-// TestTGW01VLAN405Example_DuplicateSerialRefused: Pis that keep their
+// TestBootNodeVLAN405Example_DuplicateSerialRefused: Pis that keep their
 // config's IDevID serial all take the template's rpi4-compute-01, so their
 // certificates would name one device. They are refused when the configs
 // resolve, before a run touches anything, naming both nodes.
-func TestTGW01VLAN405Example_DuplicateSerialRefused(t *testing.T) {
-	cfg, path := tgw01SDVariant(t, nil)
-	o := tgw01Orchestrator(t, cfg, path)
+func TestBootNodeVLAN405Example_DuplicateSerialRefused(t *testing.T) {
+	cfg, path := bootNodeSDVariant(t, nil)
+	o := bootNodeOrchestrator(t, cfg, path)
 
-	_, err := o.ResolveNodeConfigs("rpi4-03")
+	_, err := o.ResolveNodeConfigs("node-03")
 	var dup ErrDuplicateIDevIDSerial
 	require.ErrorAs(t, err, &dup, "the clash is refused even when only another node is asked for")
 	assert.Equal(t, ErrDuplicateIDevIDSerial{
 		Model:         "Raspberry Pi 4 Model B",
 		Serial:        "rpi4-compute-01",
-		Hostname:      "rpi4-02",
-		OtherHostname: "rpi4-01",
+		Hostname:      "node-02",
+		OtherHostname: "node-01",
 	}, dup)
 
 	dry, err := o.DryRun(t.Context())
@@ -405,18 +405,18 @@ func TestTGW01VLAN405Example_DuplicateSerialRefused(t *testing.T) {
 	assert.Empty(t, result.Nodes, "refused before discovery")
 }
 
-// TestTGW01VLAN405Example_SerialPerModel: a serial names a device within its
+// TestBootNodeVLAN405Example_SerialPerModel: a serial names a device within its
 // model, so Pis of two models may share one, and a Pi given its own serial
 // in its overrides is accepted beside them.
-func TestTGW01VLAN405Example_SerialPerModel(t *testing.T) {
+func TestBootNodeVLAN405Example_SerialPerModel(t *testing.T) {
 	const rpi02 = "    overrides:\n      network:\n        platform-vrf:\n          address: 10.4.144.21/32\n"
 	const rpi03 = "    overrides:\n      network:\n        platform-vrf:\n          address: 10.4.144.22/32\n"
-	cfg, path := tgw01SDVariant(t, map[string]string{
+	cfg, path := bootNodeSDVariant(t, map[string]string{
 		rpi02: "    overrides:\n      tpm:\n        idevid:\n          model: Raspberry Pi 400\n" + rpi02[len("    overrides:\n"):],
 		rpi03: "    overrides:\n      tpm:\n        idevid:\n          serial: rpi4-compute-03\n" + rpi03[len("    overrides:\n"):],
 	})
 
-	resolved, err := tgw01Orchestrator(t, cfg, path).ResolveNodeConfigs()
+	resolved, err := bootNodeOrchestrator(t, cfg, path).ResolveNodeConfigs()
 	require.NoError(t, err)
 	got := map[string]nodeIDevID{}
 	for _, r := range resolved[1:] {
@@ -425,37 +425,37 @@ func TestTGW01VLAN405Example_SerialPerModel(t *testing.T) {
 		got[r.Hostname] = idevid
 	}
 	assert.Equal(t, map[string]nodeIDevID{
-		"rpi4-01": {Model: "Raspberry Pi 4 Model B", Serial: "rpi4-compute-01"},
-		"rpi4-02": {Model: "Raspberry Pi 400", Serial: "rpi4-compute-01"},
-		"rpi4-03": {Model: "Raspberry Pi 4 Model B", Serial: "rpi4-compute-03"},
+		"node-01": {Model: "Raspberry Pi 4 Model B", Serial: "rpi4-compute-01"},
+		"node-02": {Model: "Raspberry Pi 400", Serial: "rpi4-compute-01"},
+		"node-03": {Model: "Raspberry Pi 4 Model B", Serial: "rpi4-compute-03"},
 	}, got)
 }
 
-// TestTGW01VLAN405Example_DisklessImageRefused: a diskless Pi left on the
+// TestBootNodeVLAN405Example_DisklessImageRefused: a diskless Pi left on the
 // template's install-target: image is refused at resolve time; the
 // installer runs on the Pi and needs the disk target.
-func TestTGW01VLAN405Example_DisklessImageRefused(t *testing.T) {
+func TestBootNodeVLAN405Example_DisklessImageRefused(t *testing.T) {
 	const overrides = "    overrides:\n      network:\n        platform-vrf:\n          address: 10.4.144.20/32\n"
-	path := writeTGW01Variant(t, overrides, "    overrides:\n      install-target: image\n"+overrides[len("    overrides:\n"):])
+	path := writeBootNodeVariant(t, overrides, "    overrides:\n      install-target: image\n"+overrides[len("    overrides:\n"):])
 	cfg, err := LoadBootstrapConfig(path)
 	require.NoError(t, err)
 
-	_, err = tgw01Orchestrator(t, cfg, path).ResolveNodeConfigs("rpi4-02")
+	_, err = bootNodeOrchestrator(t, cfg, path).ResolveNodeConfigs("node-02")
 	var failed ErrNodeConfigResolveFailed
 	require.ErrorAs(t, err, &failed)
-	assert.Equal(t, "rpi4-01", failed.Hostname)
+	assert.Equal(t, "node-01", failed.Hostname)
 	var image ErrDisklessImageTarget
 	require.ErrorAs(t, err, &image)
-	assert.Equal(t, ErrDisklessImageTarget{Hostname: "rpi4-01", BootModel: BootModelDiskless}, image)
+	assert.Equal(t, ErrDisklessImageTarget{Hostname: "node-01", BootModel: BootModelDiskless}, image)
 }
 
-// TestTGW01VLAN405Example_SDPiKeepsManualTrunk: a Pi that is not diskless
+// TestBootNodeVLAN405Example_SDPiKeepsManualTrunk: a Pi that is not diskless
 // is unchanged: its trunk eth0 stays manual, with no address, and the image
 // target is not refused for it.
-func TestTGW01VLAN405Example_SDPiKeepsManualTrunk(t *testing.T) {
+func TestBootNodeVLAN405Example_SDPiKeepsManualTrunk(t *testing.T) {
 	const overrides = "    overrides:\n      network:\n        platform-vrf:\n          address: 10.4.144.20/32\n"
 	variant := "    overrides:\n      install-target: image\n" + overrides[len("    overrides:\n"):]
-	path := writeTGW01Variant(t, overrides, variant)
+	path := writeBootNodeVariant(t, overrides, variant)
 	raw, err := os.ReadFile(path)
 	require.NoError(t, err)
 	sd := strings.Replace(string(raw), "    boot_model: diskless\n", "    boot_model: sd\n", 1)
@@ -464,7 +464,7 @@ func TestTGW01VLAN405Example_SDPiKeepsManualTrunk(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, BootModelSD, cfg.Nodes[1].BootModel)
 
-	resolved, err := tgw01Orchestrator(t, cfg, path).ResolveNodeConfigs("rpi4-01")
+	resolved, err := bootNodeOrchestrator(t, cfg, path).ResolveNodeConfigs("node-01")
 	require.NoError(t, err)
 	require.Len(t, resolved, 1)
 	var merged struct {

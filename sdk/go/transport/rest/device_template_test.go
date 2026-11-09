@@ -187,13 +187,13 @@ func TestDeviceTemplateCRUD_REST(t *testing.T) {
 }
 
 func TestDeviceCreateProfileFromTemplate_REST(t *testing.T) {
-	a, captured := templateServer(t, `{"id": "77", "name": "gw-01", "role": "gateway", "ek_serial": "EK-1"}`)
+	a, captured := templateServer(t, `{"id": "77", "name": "edge-01", "role": "gateway", "ek_serial": "EK-1"}`)
 
 	resp := &platformv1.CreateProfileResponse{}
 	err := a.Connection().Invoke(context.Background(), platformv1.DeviceService_CreateProfileFromTemplate_FullMethodName,
 		&platformv1.CreateProfileFromTemplateRequest{
 			TemplateId: 9000,
-			Overrides:  &platformv1.DeviceProfile{Name: "gw-01", EkSerial: "EK-1"},
+			Overrides:  &platformv1.DeviceProfile{Name: "edge-01", EkSerial: "EK-1"},
 		}, resp)
 	if err != nil {
 		t.Fatalf("Invoke: %v", err)
@@ -206,7 +206,7 @@ func TestDeviceCreateProfileFromTemplate_REST(t *testing.T) {
 		t.Errorf("body = %v, template_id must travel in the path only", captured.body)
 	}
 	overrides, _ := captured.body["overrides"].(map[string]interface{})
-	if overrides["name"] != "gw-01" || overrides["ek_serial"] != "EK-1" {
+	if overrides["name"] != "edge-01" || overrides["ek_serial"] != "EK-1" {
 		t.Errorf("overrides = %v, fields not mapped", overrides)
 	}
 
