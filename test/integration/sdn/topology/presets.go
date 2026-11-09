@@ -460,7 +460,7 @@ func MultiGatewayTopology() *Topology {
 //
 // Topology:
 //
-//	            [transit: 10.254.0.0/24]
+//	           [transit: 203.0.113.0/24]
 //	                     |
 //	       +-------------|-------------+
 //	       |                           |
@@ -481,8 +481,8 @@ func BGPTransitTopology() *Topology {
 		// Transit network for eBGP peering
 		AddNetwork(NewNetworkBuilder().
 			SetName(TransitNetwork).
-			SetSubnet("10.254.0.0/24").
-			SetGateway("10.254.0.1").
+			SetSubnet("203.0.113.0/24").
+			SetGateway("203.0.113.1").
 			SetDriver(NetworkDriverBridge).
 			AddLabel("type", "transit").
 			Build()).
@@ -520,7 +520,7 @@ func BGPTransitTopology() *Topology {
 			SetEnvironment("EVPN_ENABLED", "true").
 			SetEnvironment("TRANSIT_ENABLED", "true").
 			SetEnvironment("NODE_IP", "10.100.0.10").
-			SetEnvironment("TRANSIT_IP", "10.254.0.10").
+			SetEnvironment("TRANSIT_IP", "203.0.113.10").
 			SetHealthCheck(DefaultHealthCheck()).
 			AddLabel("role", "gateway").
 			AddLabel("transit", "enabled").
@@ -536,8 +536,8 @@ func BGPTransitTopology() *Topology {
 			AddCapability("NET_ADMIN").
 			AddCapability("SYS_ADMIN").
 			SetEnvironment("BGP_ASN", "64496").
-			SetEnvironment("ROUTER_ID", "10.254.0.100").
-			SetEnvironment("NEIGHBOR_IP", "10.254.0.10").
+			SetEnvironment("ROUTER_ID", "203.0.113.100").
+			SetEnvironment("NEIGHBOR_IP", "203.0.113.10").
 			SetEnvironment("NEIGHBOR_ASN", "64512").
 			SetHealthCheck(&HealthCheck{
 				Command:     []string{"vtysh", "-c", "show bgp summary"},
@@ -570,8 +570,8 @@ func BGPTransitTopology() *Topology {
 			SetName("isp-peer").
 			SetLocalASN(DefaultLocalASN).
 			SetRemoteASN(DefaultMockISPASN).
-			SetLocalAddress(netip.MustParseAddr("10.254.0.10")).
-			SetRemoteAddress(netip.MustParseAddr("10.254.0.100")).
+			SetLocalAddress(netip.MustParseAddr("203.0.113.10")).
+			SetRemoteAddress(netip.MustParseAddr("203.0.113.100")).
 			SetLocalNodeName("gateway-1").
 			SetRemoteNodeName("mock-isp").
 			SetEnableEVPN(false).

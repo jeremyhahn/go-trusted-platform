@@ -29,7 +29,7 @@ func dryRunSELConfig() *BootstrapConfig {
 		Platform:    PlatformGlobalConfig{Domain: "test.local"},
 		Nodes: []NodeConfig{{
 			Hostname: "node-02", Role: RoleControlPlane,
-			BMCAddress: "10.4.2.102", BMCUser: "admin", BMCPassword: "pass", BMCProtocol: "ipmi",
+			BMCAddress: "198.51.100.102", BMCUser: "admin", BMCPassword: "pass", BMCProtocol: "ipmi",
 		}},
 	}
 }
