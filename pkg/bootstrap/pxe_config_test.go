@@ -638,8 +638,8 @@ nodes:
     interfaces:
       - name: eth0
         type: static
-        ipv4-address: 10.4.2.140/24
-        ipv4-gateway: 10.4.2.1
+        ipv4-address: 198.51.100.140/24
+        ipv4-gateway: 198.51.100.1
       - name: eth1
         type: dhcp
 `
@@ -662,11 +662,11 @@ nodes:
 	if ifaces[0].Type != installer.InterfaceTypeStatic {
 		t.Errorf("interfaces[0].Type = %q, want static", ifaces[0].Type)
 	}
-	if ifaces[0].IPv4Address != "10.4.2.140/24" {
-		t.Errorf("interfaces[0].IPv4Address = %q, want 10.4.2.140/24", ifaces[0].IPv4Address)
+	if ifaces[0].IPv4Address != "198.51.100.140/24" {
+		t.Errorf("interfaces[0].IPv4Address = %q, want 198.51.100.140/24", ifaces[0].IPv4Address)
 	}
-	if ifaces[0].IPv4Gateway != "10.4.2.1" {
-		t.Errorf("interfaces[0].IPv4Gateway = %q, want 10.4.2.1", ifaces[0].IPv4Gateway)
+	if ifaces[0].IPv4Gateway != "198.51.100.1" {
+		t.Errorf("interfaces[0].IPv4Gateway = %q, want 198.51.100.1", ifaces[0].IPv4Gateway)
 	}
 	if ifaces[1].Type != installer.InterfaceTypeDHCP {
 		t.Errorf("interfaces[1].Type = %q, want dhcp", ifaces[1].Type)
@@ -687,9 +687,9 @@ func TestNodeConfig_StaticIPv4s(t *testing.T) {
 		{
 			name: "CIDR suffix stripped",
 			node: NodeConfig{Interfaces: []installer.InterfaceConfig{
-				{Name: "eth0", Type: installer.InterfaceTypeStatic, IPv4Address: "10.4.2.140/24"},
+				{Name: "eth0", Type: installer.InterfaceTypeStatic, IPv4Address: "198.51.100.140/24"},
 			}},
-			want: []string{"10.4.2.140"},
+			want: []string{"198.51.100.140"},
 		},
 		{
 			name: "plain address preserved",
