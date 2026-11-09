@@ -588,13 +588,28 @@ func (ops *TPMOperations) Seal(ctx context.Context, data []byte, pcrs []int, aut
 
 	// Build TPM policy for PCR binding
 	var tpmPolicy *xkmssdk.TPMSealPolicy
+	var pcrSelect []byte
 	if len(pcrs) > 0 {
-		pcrSelection := tpm2.TPMLPCRSelection{
-			PCRSelections: []tpm2.TPMSPCRSelection{
-				{
-					Hash:      tpm2.TPMAlgSHA256,
-					PCRSelect: pcrBitmask(pcrs),
-				},
+		pcrSelect = pcrBitmask(pcrs)
+		pcrSelection := sealPCRSelection(pcrSelect)
+
+		// The SDK copies PCRSelection onto the key attributes but never makes
+		// it the sealed object's authPolicy, and its template keeps
+		// UserWithAuth set, so a plain password session would unseal the data
+		// whatever the PCRs hold. Bind the template here instead: PolicyPCR
+		// (then PolicyAuthValue when a password is set) as the authPolicy,
+		// with UserWithAuth cleared so only that policy authorizes Unseal.
+		digest, err := ops.pcrPolicyDigest(pcrSelection, keyAttrs.Password != nil)
+		if err != nil {
+			return nil, &WrappedError{Msg: "failed to compute the PCR seal policy", Err: err}
+		}
+		keyAttrs.TPMAttributes.Template = tpm2.TPMTPublic{
+			Type:       tpm2.TPMAlgKeyedHash,
+			NameAlg:    tpm2.TPMAlgSHA256,
+			AuthPolicy: tpm2.TPM2BDigest{Buffer: digest},
+			ObjectAttributes: tpm2.TPMAObject{
+				FixedTPM:    true,
+				FixedParent: true,
 			},
 		}
 		tpmPolicy = &xkmssdk.TPMSealPolicy{
@@ -608,7 +623,17 @@ func (ops *TPMOperations) Seal(ctx context.Context, data []byte, pcrs []int, aut
 		TPMPolicy:     tpmPolicy,
 	}
 
-	return ops.tpm.Seal(ctx, data, sealOpts)
+	sealed, err := ops.tpm.Seal(ctx, data, sealOpts)
+	if err != nil {
+		return nil, err
+	}
+	if pcrSelect != nil {
+		if sealed.Metadata == nil {
+			sealed.Metadata = make(map[string][]byte)
+		}
+		sealed.Metadata[sealPCRSelectMetadataKey] = pcrSelect
+	}
+	return sealed, nil
 }
 
 // Unseal decrypts data from the TPM using go-xkms's Unseal method.
@@ -637,6 +662,14 @@ func (ops *TPMOperations) Unseal(ctx context.Context, sealed *xkmssdk.SealedData
 			return nil, &WrappedError{Msg: "failed to hold the key authorization value", Err: err}
 		}
 		password = held
+	}
+
+	// A PCR-bound object accepts only its PCR policy session, which the SDK's
+	// Unseal cannot build, so it is loaded and unsealed here.
+	if sealed != nil {
+		if pcrSelect, ok := sealed.Metadata[sealPCRSelectMetadataKey]; ok {
+			return ops.unsealPCRBound(keyAttrs, sealed, pcrSelect, password)
+		}
 	}
 
 	unsealOpts := &xkmssdk.UnsealOptions{
@@ -670,6 +703,118 @@ func pcrBitmask(pcrs []int) []byte {
 		}
 	}
 	return mask
+}
+
+// sealPCRSelectMetadataKey names the SealedData metadata entry that records
+// the PCR bitmask a sealed object's authPolicy is bound to.
+const sealPCRSelectMetadataKey = "vtpm:pcr-select"
+
+// sealPCRSelection returns the SHA-256 bank selection for a PCR bitmask.
+func sealPCRSelection(pcrSelect []byte) tpm2.TPMLPCRSelection {
+	return tpm2.TPMLPCRSelection{
+		PCRSelections: []tpm2.TPMSPCRSelection{
+			{
+				Hash:      tpm2.TPMAlgSHA256,
+				PCRSelect: pcrSelect,
+			},
+		},
+	}
+}
+
+// applyPCRPolicy runs the seal policy on a policy session: PolicyPCR over the
+// selection, then PolicyAuthValue when the object carries a password. Seal
+// computes the authPolicy and Unseal satisfies it with the same sequence.
+func applyPCRPolicy(t transport.TPM, session tpm2.TPMHandle, sel tpm2.TPMLPCRSelection, withAuth bool) error {
+	if _, err := (tpm2.PolicyPCR{PolicySession: session, Pcrs: sel}).Execute(t); err != nil {
+		return err
+	}
+	if withAuth {
+		if _, err := (tpm2.PolicyAuthValue{PolicySession: session}).Execute(t); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// pcrPolicyDigest computes, in a trial session, the authPolicy that binds a
+// sealed object to the current values of the selected PCRs.
+func (ops *TPMOperations) pcrPolicyDigest(sel tpm2.TPMLPCRSelection, withAuth bool) ([]byte, error) {
+	t := ops.tpm.Transport()
+	session, closeSession, err := tpm2.PolicySession(t, tpm2.TPMAlgSHA256, 16, tpm2.Trial())
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = closeSession() }()
+
+	if err := applyPCRPolicy(t, session.Handle(), sel, withAuth); err != nil {
+		return nil, err
+	}
+	rsp, err := tpm2.PolicyGetDigest{PolicySession: session.Handle()}.Execute(t)
+	if err != nil {
+		return nil, err
+	}
+	return rsp.PolicyDigest.Buffer, nil
+}
+
+// unsealPCRBound loads a PCR-bound sealed object under its parent and unseals
+// it through a policy session, which fails once a selected PCR has changed.
+func (ops *TPMOperations) unsealPCRBound(keyAttrs *xkmssdk.KeyAttributes, sealed *xkmssdk.SealedData, pcrSelect []byte, password xkmssdk.Password) ([]byte, error) {
+	t := ops.tpm.Transport()
+	parent := keyAttrs.Parent.TPMAttributes
+	parentName, _, err := ops.tpm.ReadHandle(parent.Handle)
+	if err != nil {
+		return nil, &WrappedError{Msg: "failed to read the sealing parent", Err: err}
+	}
+
+	parentSession, closeParent, err := ops.tpm.CreateSession(keyAttrs)
+	if err != nil {
+		if closeParent != nil {
+			_ = closeParent()
+		}
+		return nil, &WrappedError{Msg: "failed to open the sealing parent session", Err: err}
+	}
+	loaded, err := tpm2.Load{
+		ParentHandle: tpm2.AuthHandle{
+			Handle: parent.Handle,
+			Name:   parentName,
+			Auth:   parentSession,
+		},
+		InPrivate: tpm2.TPM2BPrivate{Buffer: sealed.TPMPrivate},
+		InPublic:  tpm2.BytesAs2B[tpm2.TPMTPublic](sealed.TPMPublic),
+	}.Execute(t)
+	closeErr := closeParent()
+	if err != nil {
+		return nil, &WrappedError{Msg: "failed to load the sealed object", Err: err}
+	}
+	defer ops.tpm.Flush(loaded.ObjectHandle)
+	if closeErr != nil {
+		return nil, &WrappedError{Msg: "failed to close the sealing parent session", Err: closeErr}
+	}
+
+	var authOpts []tpm2.AuthOption
+	if password != nil {
+		authOpts = append(authOpts, tpm2.Auth(password.Bytes()))
+	}
+	session, closeSession, err := tpm2.PolicySession(t, tpm2.TPMAlgSHA256, 16, authOpts...)
+	if err != nil {
+		return nil, &WrappedError{Msg: "failed to open the PCR policy session", Err: err}
+	}
+	defer func() { _ = closeSession() }()
+
+	if err := applyPCRPolicy(t, session.Handle(), sealPCRSelection(pcrSelect), password != nil); err != nil {
+		return nil, &WrappedError{Msg: "PCR policy not satisfied", Err: err}
+	}
+	unsealed, err := tpm2.Unseal{
+		ItemHandle: tpm2.AuthHandle{
+			Handle: loaded.ObjectHandle,
+			Name:   loaded.Name,
+			Auth:   session,
+		},
+	}.Execute(t)
+	if err != nil {
+		return nil, &WrappedError{Msg: "failed to unseal the PCR-bound object", Err: err}
+	}
+	return unsealed.OutData.Buffer, nil
 }
 
 // certFingerprint calculates the SHA-256 fingerprint of a certificate.

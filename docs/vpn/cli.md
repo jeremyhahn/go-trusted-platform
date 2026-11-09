@@ -54,7 +54,7 @@ Examples:
 platformctl vpn peer enrol laptop-1 --tenant acme --zone management
 platformctl vpn peer list --tenant acme --output json
 platformctl vpn posture-policy set corp --tenant acme --file vpn_posture.rego
-platformctl vpn status --gateway gw-01
+platformctl vpn status --gateway edge-01
 platformctl vpn peer revoke laptop-1 --tenant acme
 ```
 
