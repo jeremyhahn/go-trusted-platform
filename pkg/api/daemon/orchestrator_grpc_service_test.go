@@ -16,8 +16,11 @@ package daemon
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/gorilla/mux"
@@ -25,9 +28,12 @@ import (
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/orchestrator"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	sdkorch "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/orchestrator"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 )
 
@@ -159,6 +165,55 @@ func TestOrchestratorGRPC_SessionsServeOnlySystemTenant(t *testing.T) {
 	}
 	if !closed.GetClosed() || closed.GetSessionId() != "s1" {
 		t.Fatalf("system CloseSession = %v, want s1 closed", closed)
+	}
+}
+
+// The Unix socket's operator carries peer credentials, not a tenant-bound
+// identity: it is the trusted local operator, so a session listing or close
+// over the socket reaches the service with no token.
+func TestOrchestratorGRPC_UnixOperatorReachesSessions(t *testing.T) {
+	svc := orchestratorGRPCOver(&orchestratorTestClient{})
+	svc.SetSystemTenant("sys")
+
+	dir, err := os.MkdirTemp("", "orch")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "platformd.sock")
+	lis, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	server := grpc.NewServer(
+		grpc.Creds(peercred.NewUnixTransportCredentials()),
+		grpc.UnaryInterceptor(peercred.UnixCredentialsUnaryInterceptor()),
+		grpc.StreamInterceptor(peercred.UnixCredentialsStreamInterceptor()),
+	)
+	platformv1.RegisterOrchestratorServiceServer(server, svc)
+	go server.Serve(lis)
+	t.Cleanup(server.Stop)
+
+	conn, err := grpc.NewClient("unix://"+socket, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	client := platformv1.NewOrchestratorServiceClient(conn)
+
+	list, err := client.ListSessions(context.Background(), &platformv1.ListOrchestratorSessionsRequest{})
+	if err != nil {
+		t.Fatalf("Unix ListSessions: %v", err)
+	}
+	if len(list.GetSessions()) != 1 || list.GetSessions()[0].GetSessionId() != "s1" {
+		t.Fatalf("Unix ListSessions = %v, want session s1", list.GetSessions())
+	}
+	closed, err := client.CloseSession(context.Background(), &platformv1.CloseOrchestratorSessionRequest{SessionId: "s1"})
+	if err != nil {
+		t.Fatalf("Unix CloseSession: %v", err)
+	}
+	if !closed.GetClosed() || closed.GetSessionId() != "s1" {
+		t.Fatalf("Unix CloseSession = %v, want s1 closed", closed)
 	}
 }
 
