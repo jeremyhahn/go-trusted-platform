@@ -64,7 +64,7 @@ func (r *InstallLogResult) Success() bool {
 //     that pre-date the MAC-based upload path.
 type InstallLogPoller struct {
 	// BaseURL is the HTTP base of the pxeboot container, e.g.
-	// "http://10.4.2.91:8080". No trailing slash.
+	// "http://198.51.100.91:8080". No trailing slash.
 	BaseURL string
 	// Hostname is the sanitized hostname key used in the upload path.
 	// Kept for fallback / human-readable URLs; prefer MACs when set.

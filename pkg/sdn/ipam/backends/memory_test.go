@@ -9,6 +9,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/netip"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -2583,6 +2584,156 @@ func TestMemoryBackend_ConcurrentAccess(t *testing.T) {
 		wg.Wait()
 		// No crash = success
 	})
+}
+
+// TestMemoryBackend_ConcurrentStatsAcrossPools allocates and releases from
+// many goroutines across several pools: afterwards each pool's stats must
+// count exactly the addresses granted and not released, with none lost or
+// counted twice.
+func TestMemoryBackend_ConcurrentStatsAcrossPools(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	backend := NewMemoryBackend()
+	defer backend.Close()
+
+	const pools = 4
+	const workersPerPool = 4
+	const allocsPerWorker = 40
+
+	for p := 0; p < pools; p++ {
+		pool := &ipam.Pool{
+			ID:   "pool-" + strconv.Itoa(p),
+			Name: "pool-" + strconv.Itoa(p),
+			CIDR: netip.PrefixFrom(netip.AddrFrom4([4]byte{10, 1, byte(p), 0}), 24),
+		}
+		require.NoError(t, backend.CreatePool(ctx, pool))
+	}
+
+	type counts struct{ pool, granted, released int }
+	results := make(chan counts, pools*workersPerPool)
+	errs := make(chan error, pools*workersPerPool*allocsPerWorker*2)
+
+	var wg sync.WaitGroup
+	for p := 0; p < pools; p++ {
+		for w := 0; w < workersPerPool; w++ {
+			wg.Add(1)
+			go func(p, w int) {
+				defer wg.Done()
+				c := counts{pool: p}
+				for i := 0; i < allocsPerWorker; i++ {
+					alloc, err := backend.Allocate(ctx, &ipam.AllocationRequest{
+						PoolID:   "pool-" + strconv.Itoa(p),
+						DeviceID: "dev-" + strconv.Itoa(p) + "-" + strconv.Itoa(w) + "-" + strconv.Itoa(i),
+					})
+					if err != nil {
+						errs <- err
+						continue
+					}
+					c.granted++
+					if i%3 == 0 {
+						if err := backend.Release(ctx, alloc.IP); err != nil {
+							errs <- err
+							continue
+						}
+						c.released++
+					}
+				}
+				results <- c
+			}(p, w)
+		}
+	}
+	wg.Wait()
+	close(errs)
+	close(results)
+	for err := range errs {
+		t.Errorf("allocate/release error = %v", err)
+	}
+
+	held := make(map[int]uint64, pools)
+	for c := range results {
+		held[c.pool] += uint64(c.granted - c.released)
+	}
+
+	for p := 0; p < pools; p++ {
+		stats, err := backend.GetPoolStats(ctx, "pool-"+strconv.Itoa(p))
+		require.NoError(t, err)
+		if stats.AllocatedIPs != held[p] {
+			t.Errorf("pool-%d AllocatedIPs = %d, want granted minus released %d", p, stats.AllocatedIPs, held[p])
+		}
+		if stats.AvailableIPs != stats.TotalIPs-held[p] {
+			t.Errorf("pool-%d AvailableIPs = %d, want %d", p, stats.AvailableIPs, stats.TotalIPs-held[p])
+		}
+	}
+}
+
+// TestMemoryBackend_ConcurrentExhaustion races more allocations than a small
+// pool holds: exactly its capacity is granted, every address once, and every
+// refusal carries the typed ErrPoolExhausted.
+func TestMemoryBackend_ConcurrentExhaustion(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	backend := NewMemoryBackend()
+	defer backend.Close()
+
+	pool := &ipam.Pool{
+		ID:   "small",
+		Name: "small",
+		CIDR: netip.MustParsePrefix("10.0.0.0/28"), // 14 usable IPs
+	}
+	require.NoError(t, backend.CreatePool(ctx, pool))
+
+	const capacity = 14
+	const racers = 40
+
+	granted := make(chan netip.Addr, racers)
+	refused := make(chan error, racers)
+	var wg sync.WaitGroup
+	for r := 0; r < racers; r++ {
+		wg.Add(1)
+		go func(r int) {
+			defer wg.Done()
+			alloc, err := backend.Allocate(ctx, &ipam.AllocationRequest{
+				PoolID:   "small",
+				DeviceID: "racer-" + strconv.Itoa(r),
+			})
+			if err != nil {
+				refused <- err
+				return
+			}
+			granted <- alloc.IP
+		}(r)
+	}
+	wg.Wait()
+	close(granted)
+	close(refused)
+
+	seen := make(map[netip.Addr]bool)
+	for ip := range granted {
+		if seen[ip] {
+			t.Errorf("address %v granted twice", ip)
+		}
+		seen[ip] = true
+	}
+	if len(seen) != capacity {
+		t.Errorf("granted %d addresses, want the pool capacity %d", len(seen), capacity)
+	}
+
+	refusals := 0
+	for err := range refused {
+		refusals++
+		if !errors.Is(err, ipam.ErrPoolExhausted) {
+			t.Errorf("refusal error = %v, want ErrPoolExhausted", err)
+		}
+	}
+	if refusals != racers-capacity {
+		t.Errorf("%d refusals, want %d", refusals, racers-capacity)
+	}
+
+	stats, err := backend.GetPoolStats(ctx, "small")
+	require.NoError(t, err)
+	if stats.AllocatedIPs != capacity || stats.AvailableIPs != 0 {
+		t.Errorf("stats allocated=%d available=%d, want %d and 0", stats.AllocatedIPs, stats.AvailableIPs, capacity)
+	}
 }
 
 func TestMemoryBackend_IPv6(t *testing.T) {

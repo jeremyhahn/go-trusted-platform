@@ -49,11 +49,11 @@ func TestParseServerAddr(t *testing.T) {
 func TestParseServerAddr_Malformed(t *testing.T) {
 	for _, value := range []string{
 		"",
-		"192.0.2.1",              // no default port
-		"192.0.2.1:",             // empty port
-		"192.0.2.1:0",            // port zero
-		"192.0.2.1:65536",        // out of range
-		"192.0.2.1:nbd",          // a service name is not a port
+		"192.0.2.1",             // no default port
+		"192.0.2.1:",            // empty port
+		"192.0.2.1:0",           // port zero
+		"192.0.2.1:65536",       // out of range
+		"192.0.2.1:nbd",         // a service name is not a port
 		":10809",                // no host
 		"fd00::1:10809",         // IPv6 without brackets
 		"[fe80::1%eth0]:10809",  // a zone names no server
@@ -108,7 +108,7 @@ func TestServerFromCmdline(t *testing.T) {
 func TestServerFromCmdline_OtherBootModelsAreNotRead(t *testing.T) {
 	for _, cmdline := range []string{
 		"ro console=ttyAMA0",
-		ParamServer + "=192.0.2.1:10809",                  // no selector
+		ParamServer + "=192.0.2.1:10809",                 // no selector
 		ParamServer + "=bogus " + ParamServer + "=twice", // not read, so not refused
 		disklessroot.ParamBootModel + "=diskless " + ParamServer + "=192.0.2.1:10809",
 		disklessroot.ParamBootModel + "=diskless-nbd-extra " + ParamServer + "=192.0.2.1:10809",
