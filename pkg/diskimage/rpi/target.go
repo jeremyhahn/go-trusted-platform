@@ -69,7 +69,7 @@ type Model struct {
 // models is the supported board table, keyed by --model.
 var models = map[string]Model{
 	"rpi4":   {Name: "rpi4", Description: "Raspberry Pi 4 Model B", DTB: "bcm2711-rpi-4-b.dtb", Firmware: pi4Firmware, SoC: "2711"},
-	"rpi400": {Name: "rpi400", Description: "Raspberry Pi 400", DTB: "bcm2711-rpi-400.dtb", Firmware: pi4Firmware, SoC: "2711"},
+	"rpi400": {Name: "rpi400", Description: "Raspberry Pi 400", DTB: "bcm2711-rpi-400.dtb", Firmware: pi4Firmware, SoC: "2711"}, // lab-string-ok: Raspberry Pi model name, not a lab host
 	"cm4":    {Name: "cm4", Description: "Raspberry Pi Compute Module 4", DTB: "bcm2711-rpi-cm4.dtb", Firmware: pi4Firmware, SoC: "2711"},
 	"rpi3b+": {Name: "rpi3b+", Description: "Raspberry Pi 3 Model B+", DTB: "bcm2710-rpi-3-b-plus.dtb", Firmware: []string{"bootcode.bin", "start.elf", "fixup.dat"}},
 	"rpi5":   {Name: "rpi5", Description: "Raspberry Pi 5", DTB: "bcm2712-rpi-5-b.dtb", Experimental: true, SoC: "2712"},
