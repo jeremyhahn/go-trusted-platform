@@ -76,7 +76,7 @@
 #     tier (pkg/arch/citiers_test.go holds the format).
 #   - integration needs image (isolation, see there) and applies the
 #     foreign-failure baseline (ruling 125); soak applies it per iteration.
-#   - FIPS is kept and ungated (#853, see its comment).
+#   - FIPS is kept and gated in the `main` tier (#853, #1411, see its comment).
 #   - trivy image keeps --ignore-unfixed, --skip-dirs /gomodcache and its
 #     ignorefile. The SARIF upload is gone with the runner security job:
 #     Gitea has no code-scanning ingest.
@@ -181,6 +181,11 @@ env:
   # release.yml set the same).
   GOWORK: "off"
   GOFLAGS: "-buildvcs=false"
+  # The jeremyhahn/* modules resolve direct from GitHub, never through
+  # proxy.golang.org or sum.golang.org: the history rewrite moved published
+  # tags, and the public proxy and checksum database keep the old zips
+  # and hashes for good, so go.sum (the rewritten bits) cannot verify there.
+  GOPRIVATE: "github.com/jeremyhahn/*"
   # The full-tier selection (v1.23): every event but pull_request, and a PR
   # labelled ci:full. Steps and ci-gate read it; a job-level `if:` cannot.
   CI_FULL_TIER: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full') }}
@@ -322,8 +327,8 @@ jobs:
     # schedule guard's `run`.
     if: ${{ !github.event.pull_request.draft && (github.event_name != 'schedule' || needs.schedule-guard.outputs.verdict == 'run') }}
     needs: [changes, schedule-guard]   # v1.29.3
-    # CUSTOMIZE: lint (up to GOLANGCI_LINT_TIMEOUT, 45m, #426), the unit suite
-    # and the race suite run one after another here.
+    # CUSTOMIZE: lint (up to GOLANGCI_LINT_TIMEOUT, 45m, #426) and the unit
+    # suite run one after another here; the race suite is the race job.
     timeout-minutes: 240
     env:
       # CUSTOMIZE (ruling 108 (b)): the project's own BuildKit builder
@@ -562,16 +567,6 @@ jobs:
           IN_IMAGE_GOMAXPROCS: 16
         run: scripts/in-toolchain-image.sh "$TOOLCHAIN_IMAGE" make test test-sdk-go
 
-      # CUSTOMIZE (race): the unit suite under the race detector, minus
-      # RACE_EXCLUDE (#37). Race detection is sampling, not proof: a ratchet
-      # against reintroduction.
-      - name: make test-race
-        if: ${{ !cancelled() && env.TOOLCHAIN_IMAGE != '' && needs.changes.outputs.docs_only != 'true' }}
-        env:
-          IN_IMAGE_MEMORY: 16g
-          IN_IMAGE_GOMAXPROCS: 8
-        run: scripts/in-toolchain-image.sh "$TOOLCHAIN_IMAGE" make test-race
-
       # make security: gosec, govulncheck, go mod verify and `trivy fs`
       # (devops.md §8), with GOSEC_EXCLUDE, the govulncheck module list and
       # GOVULN_ALLOW single-sourced in the Makefile. security and trivy are
@@ -667,6 +662,91 @@ jobs:
         if: ${{ steps.probe.outputs.has_target == 'true' }}
         run: make lint-gates
 
+      # v1.32 (2026-11-08, Company Agent m2098 item 2, InfoSec finding): the
+      # internal-name gate. Its patterns are internal values, so they never
+      # live in this repository: the Actions secret RELEASABILITY_PATTERNS
+      # carries the private pattern file (source in platform-configs). Blank
+      # and `#` lines are skipped; every other line is `class<TAB>regex`, a
+      # class of coord-host, internal-email, lab-address, lab-host or
+      # owner-path (v1.33; an `/i` suffix is allowed) and a POSIX extended regex. A malformed line, an unknown
+      # class or a regex grep -E refuses fails the step, which prints the line
+      # number only. v1.31 grepped whole lines with -F, so no line matched and
+      # the gate was green for a false reason. The step prints path and line
+      # of a match, never the value. A run without the secret (a fork PR)
+      # skips with a notice; a push to main without it fails. A matched line
+      # that carries the InfoSec waiver marker with its reason,
+      # "lab-string-ok: <reason>", is not reported (DS-7563, CA m2110); a bare
+      # marker without the colon and a reason still fails (CA m2113 (3)).
+      - name: Releasability (private patterns)
+        if: ${{ !cancelled() }}
+        env:
+          RELEASABILITY_PATTERNS: ${{ secrets.RELEASABILITY_PATTERNS }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ -z "$RELEASABILITY_PATTERNS" ]; then
+            if [ "$EVENT" = push ]; then
+              echo "::error::RELEASABILITY_PATTERNS is not set; the gate needs the private pattern file (public-hygiene.md)"
+              exit 1
+            fi
+            echo "::notice::RELEASABILITY_PATTERNS is not available to this run; pushes to main run the gate"
+            exit 0
+          fi
+          pf=$(mktemp)
+          chmod 600 "$pf"
+          trap 'rm -f "$pf"' EXIT
+          tab=$(printf '\t')
+          n=0 bad=0 count=0
+          while IFS= read -r line || [ -n "$line" ]; do
+            n=$((n + 1))
+            line=${line%$'\r'}
+            trimmed=${line#"${line%%[![:space:]]*}"}
+            case $trimmed in ''|'#'*) continue ;; esac
+            case $line in
+              *"$tab"*) ;;
+              *) echo "::error::pattern line $n is not class<TAB>regex"; bad=1; continue ;;
+            esac
+            class=${line%%"$tab"*}
+            re=${line#*"$tab"}
+            case $class in
+              coord-host|internal-email|lab-address|lab-host|owner-path) ;;
+              coord-host/i|internal-email/i|lab-address/i|lab-host/i|owner-path/i) ;;
+              *) echo "::error::pattern line $n has an unknown class"; bad=1; continue ;;
+            esac
+            if [ -z "$re" ]; then
+              echo "::error::pattern line $n has an empty regex"; bad=1; continue
+            fi
+            rc=0
+            grep -E -e "$re" /dev/null > /dev/null 2>&1 || rc=$?
+            if [ "$rc" -ge 2 ]; then
+              echo "::error::pattern line $n has a regex grep -E refuses"; bad=1; continue
+            fi
+            printf '%s\n' "$re" >> "$pf"
+            count=$((count + 1))
+          done <<< "$RELEASABILITY_PATTERNS"
+          if [ "$bad" != 0 ]; then
+            echo "::error::the private pattern file is malformed (line numbers above; the values are not shown)"
+            exit 1
+          fi
+          if [ "$count" = 0 ]; then
+            echo "::error::RELEASABILITY_PATTERNS holds no class<TAB>regex line"
+            exit 1
+          fi
+          rc=0
+          out=$(git grep -n -I -i -E -f "$pf" -- .) || rc=$?
+          case $rc in
+            0|1) ;;
+            *)
+              echo "::error::git grep failed (rc $rc)"
+              exit 1 ;;
+          esac
+          hits=$(printf '%s\n' "$out" | grep -v -E 'lab-string-ok:[[:space:]]*[[:alnum:]]' | grep -v '^$' | cut -d: -f1,2 || true)
+          if [ -n "$hits" ]; then
+            echo "::error::internal names in the tracked tree (path:line; the values are not shown):"
+            printf '%s\n' "$hits"
+            exit 1
+          fi
+          echo "releasability: $count private patterns, 0 matches"
+
   # v1.29.2 (ruling 239(8)): a CUSTOMIZE job that runs only when certain
   # paths change (the changes job gains an output for them, `optee` here)
   # needs the image job as well, and its `if:` tests an image job output
@@ -742,6 +822,37 @@ jobs:
 
       - name: JavaScript SDK lint
         run: make lint-sdk-js
+
+  # CUSTOMIZE (race): the unit suite under the race detector, minus
+  # RACE_EXCLUDE (#37). Race detection is sampling, not proof: a ratchet
+  # against reintroduction. Hosted runners (CA m2061): four shards, each a
+  # round-robin quarter of test-race's package list (Makefile SHARD/SHARDS),
+  # to fit a hosted job's 4 cores and 6 hours.
+  race:
+    name: Race (shard ${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    if: ${{ needs.changes.outputs.docs_only != 'true' && !github.event.pull_request.draft }}
+    needs: [changes]
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      # cpio: pkg/diskimage/netboot repacks an initramfs with it. libssl-dev:
+      # pkg/app's IDevID mTLS tests run go-tpm-tools' simulator, which
+      # compiles the reference TPM with cgo against OpenSSL (#149).
+      - name: Install cpio and the OpenSSL headers
+        run: sudo apt-get update && sudo apt-get install -y cpio libssl-dev
+
+      - name: make test-race
+        run: make test-race SHARD=${{ matrix.shard }} SHARDS=4
 
   # ==========================================================================
   # The full tier. These gate every push to main, the schedule, and a PR
@@ -981,7 +1092,7 @@ jobs:
     # only on the schedule guard's `run`.
     if: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')) && !github.event.pull_request.draft && (github.event_name != 'schedule' || needs.schedule-guard.outputs.verdict == 'run') }}
     # CUSTOMIZE (isolation, not staging): the privileged integration suite and
-    # the image job's unit and race suites starve a shared runner when they
+    # the image job's unit suite starve a shared runner when they
     # overlap. Neither consumes the other's output. `needs: image` holds
     # through integration-image, whose image every leg runs in. v1.29.3:
     # schedule-guard as the template has it; the image job skips with the
@@ -1392,24 +1503,32 @@ jobs:
           [ -z "${IT_LEASE:-}" ] || docker rm "$IT_LEASE" >/dev/null 2>&1 || true
           docker buildx prune --builder "$BUILDX_BUILDER" --force --keep-storage "$BUILDKIT_KEEP_STORAGE" || true
 
-  # CUSTOMIZE (FIPS 140-3, #853): the ungated job. It runs on push to main,
-  # the schedule and workflow_dispatch, and never on a pull request, `ci:full`
-  # or not (m1355 / DS-3878, DS-4613): its `if:` is not the full tier's.
+  # CUSTOMIZE (FIPS 140-3, #853): the one `main`-tier job. It runs on push to
+  # main, the schedule and workflow_dispatch, and never on a pull request,
+  # `ci:full` or not (m1355 / DS-3878, DS-4613): its `if:` is not the full tier's.
   #
-  # It is deliberately NOT in ci-gate's `needs`: it is still red on causes
-  # this repository cannot close (the header of nightly.yml lists them), so
-  # it reports `CI / FIPS` without turning CI Gate red.
-  # pkg/arch/citiers_test.go fails `make test` if it is ever gated, if a gated
-  # job needs it, or if its `if:` is not exactly the one below. Its steps match nightly.yml's `fips` job;
+  # It is in ci-gate's `needs` (#1411, ruling 297): a push whose FIPS fails
+  # (any of its four shards) reads CI Gate failure, and its skip passes only on
+  # a pull request.
+  # pkg/arch/citiers_test.go fails `make test` if it leaves the gate, if a
+  # non-main job needs it, or if its `if:` is not exactly the one below. Its steps match nightly.yml's `fips` job;
   # change the suite in the Makefile (`make test-fips`), not here. That target
   # also applies the FIPS foreign-failure baseline (ruling 125,
   # .github/foreign-failures-fips.tsv); nightly.yml's header lists what it
   # tolerates.
   fips:
-    name: FIPS
+    name: FIPS (shard ${{ matrix.shard }}/4)
+    # Hosted runners (CA m2061): four shards of `make test-fips`, each a
+    # round-robin quarter of the package list (Makefile SHARD/SHARDS), to fit
+    # a hosted job's 4 cores and 6 hours. The job carries no module
+    # credential and no proxy setting.
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
     if: ${{ github.event_name != 'pull_request' }}
-    timeout-minutes: 60
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
@@ -1421,7 +1540,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y cpio libssl-dev
 
       - name: FIPS build and unit tests
-        run: make test-fips
+        run: make test-fips SHARD=${{ matrix.shard }} SHARDS=4
 
   # ==========================================================================
   # The gate
@@ -1450,7 +1569,7 @@ jobs:
     # skipped job as `skipped`, not `success`), never a green nightly. Every
     # other verdict, an empty one included, runs it.
     if: ${{ always() && (github.event_name != 'schedule' || needs.schedule-guard.outputs.verdict != 'busy') }}
-    needs: [changes, schedule-guard, image, lint-gates, arch-gates, sdkjs, web, integration-image, integration, soak]
+    needs: [changes, schedule-guard, image, lint-gates, arch-gates, sdkjs, race, web, integration-image, integration, soak, fips]
     steps:
       - name: Verify every job succeeded
         env:
@@ -1462,16 +1581,20 @@ jobs:
           # v1.24: a `nightly` job runs on schedule and workflow_dispatch only.
           NIGHTLY: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
           DRAFT: ${{ github.event.pull_request.draft == true }}
+          # #1411 (ruling 297): a `main` job runs on every event but a pull request.
+          PULL_REQUEST: ${{ github.event_name == 'pull_request' }}
           RESULT_CHANGES: ${{ needs.changes.result }}
           RESULT_SCHEDULE_GUARD: ${{ needs.schedule-guard.result }}
           RESULT_IMAGE: ${{ needs.image.result }}
           RESULT_LINT_GATES: ${{ needs.lint-gates.result }}
           RESULT_ARCH_GATES: ${{ needs.arch-gates.result }}
           RESULT_SDK_JS: ${{ needs.sdkjs.result }}
+          RESULT_RACE: ${{ needs.race.result }}
           RESULT_WEB: ${{ needs.web.result }}
           RESULT_INTEGRATION_IMAGE: ${{ needs.integration-image.result }}
           RESULT_INTEGRATION: ${{ needs.integration.result }}
           RESULT_SOAK: ${{ needs.soak.result }}
+          RESULT_FIPS: ${{ needs.fips.result }}
         run: |
           # skipped != failed, and a skipped job fails the gate: it means the
           # job did not run (go-qrdb#42). The exceptions: a `full` job skipped
@@ -1479,7 +1602,9 @@ jobs:
           # reading exactly `false`; a `docs` job skipped on a docs-only PR
           # (v1.24), DOCS_ONLY reading exactly `true` and FULL_TIER exactly
           # `false`; and a `nightly` job skipped off the schedule and dispatch
-          # (v1.24), NIGHTLY not reading `true`. Anything else fails closed. A
+          # (v1.24), NIGHTLY not reading `true`; and a `main` job skipped on a
+          # pull request (#1411), PULL_REQUEST reading exactly `true`. Anything
+          # else fails closed. A
           # draft PR fails first (v1.26): its jobs all skip, and a gate that
           # passed on those skips would let a draft merge untested.
           if [ "${DRAFT}" = true ]; then
@@ -1493,7 +1618,7 @@ jobs:
             name="$2"
             result="$3"
             case "$tier" in
-              pr|docs|full|nightly) ;;
+              pr|docs|full|nightly|main) ;;
               *) echo "FAIL $name (unknown tier '$tier' - failing closed)"; status=1; return ;;
             esac
             case "$result" in
@@ -1506,6 +1631,8 @@ jobs:
                   echo "SKIP $name (docs-only PR - passes)"
                 elif [ "$tier" = nightly ] && [ "$NIGHTLY" != true ]; then
                   echo "SKIP $name (nightly and dispatch only - passes)"
+                elif [ "$tier" = main ] && [ "$PULL_REQUEST" = true ]; then
+                  echo "SKIP $name (never on a pull request - passes)"
                 else
                   echo "FAIL $name (skipped in the $tier tier - see its job)"; status=1
                 fi
@@ -1525,8 +1652,10 @@ jobs:
           check pr lint-gates "$RESULT_LINT_GATES"
           check pr arch-gates "$RESULT_ARCH_GATES"
           check docs sdkjs "$RESULT_SDK_JS"
+          check docs race "$RESULT_RACE"
           check full web "$RESULT_WEB"
           check full integration-image "$RESULT_INTEGRATION_IMAGE"
           check full integration "$RESULT_INTEGRATION"
           check nightly soak "$RESULT_SOAK"
+          check main fips "$RESULT_FIPS"
           exit $status

@@ -32,7 +32,7 @@ const mockDevices = [
     name: 'Edge-Gateway-01',
     type: 'physical',
     status: 'offline',
-    hostname: 'edge-gw-01.local',
+    hostname: 'edge-01.local',
     lastSeen: '2024-01-10T08:00:00Z',
     createdAt: '2024-01-02T00:00:00Z',
   },

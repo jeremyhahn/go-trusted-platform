@@ -324,7 +324,7 @@ dns:
           mname: ns1.dev.example.internal.
           min-ttl: 3600
           name: dev.example.internal.
-          rname: hostmaster@dev.example.internal
+          rname: hostmaster@dev.example.com
           refresh: 86400
           retry: 7200
           serial: 1

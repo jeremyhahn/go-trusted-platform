@@ -14,8 +14,10 @@
 package dhcp
 
 import (
+	"fmt"
 	"net"
 	"net/netip"
+	"sync"
 	"testing"
 	"time"
 
@@ -636,4 +638,169 @@ func TestLeaseStore_ConcurrentAccess(t *testing.T) {
 			<-done
 		}
 	})
+}
+
+// clientLease builds the lease of DHCP client n: a distinct IP and MAC per n.
+func clientLease(n int) *Lease {
+	now := time.Now()
+	return &Lease{
+		IP:        netip.AddrFrom4([4]byte{10, 1, byte(n >> 8), byte(n)}),
+		MAC:       net.HardwareAddr{0x52, 0x54, 0x00, 0x01, byte(n >> 8), byte(n)},
+		Hostname:  fmt.Sprintf("client-%d", n),
+		PoolID:    "pool-1",
+		Interface: "eth0",
+		LeasedAt:  now,
+		ExpiresAt: now.Add(time.Hour),
+		State:     LeaseStateActive,
+	}
+}
+
+func TestLeaseStore_ConcurrentRenewalStorm(t *testing.T) {
+	const clients = 500
+	const workers = 50
+
+	ls := NewLeaseStore()
+	for n := 0; n < clients; n++ {
+		require.NoError(t, ls.Add(clientLease(n)))
+	}
+	stormStart := time.Now()
+
+	errs := make(chan error, clients*workers)
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func(offset int) {
+			defer wg.Done()
+			for i := 0; i < clients; i++ {
+				lease := clientLease((i + offset) % clients)
+				errs <- ls.Renew(lease.IP, 24*time.Hour)
+			}
+		}(w * 10)
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		require.NoError(t, err, "every renewal of a live lease must succeed")
+	}
+
+	assert.Equal(t, clients, ls.Count(), "a renewal must neither add nor drop a lease")
+	for n := 0; n < clients; n++ {
+		want := clientLease(n)
+		byIP, ok := ls.GetByIP(want.IP)
+		require.True(t, ok, "lease %d lost by IP during the storm", n)
+		assert.Equal(t, want.MAC, byIP.MAC, "lease %d changed owner", n)
+		assert.False(t, byIP.RenewedAt.Before(stormStart), "lease %d was not renewed", n)
+		assert.True(t, byIP.ExpiresAt.After(stormStart.Add(time.Hour)), "lease %d expiry was not extended", n)
+
+		byMAC, ok := ls.GetByMAC(want.MAC)
+		require.True(t, ok, "lease %d lost by MAC during the storm", n)
+		assert.Equal(t, want.IP, byMAC.IP, "lease %d MAC index points at another IP", n)
+	}
+}
+
+func TestLeaseStore_ConcurrentClientChurn(t *testing.T) {
+	const clients = 1000
+
+	ls := NewLeaseStore()
+	errs := make(chan error, clients*3)
+	var wg sync.WaitGroup
+	for n := 0; n < clients; n++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			lease := clientLease(n)
+			errs <- ls.Add(lease)
+			errs <- ls.Renew(lease.IP, 24*time.Hour)
+			// One client in ten releases its lease, as in a DHCP RELEASE.
+			if n%10 == 9 {
+				errs <- ls.Remove(lease.IP)
+			}
+		}(n)
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		require.NoError(t, err)
+	}
+
+	assert.Equal(t, clients-clients/10, ls.Count())
+
+	seenIPs := make(map[netip.Addr]string, clients)
+	for _, lease := range ls.All() {
+		owner, dup := seenIPs[lease.IP]
+		require.False(t, dup, "IP %s leased to both %s and %s", lease.IP, owner, lease.MAC)
+		seenIPs[lease.IP] = lease.MAC.String()
+	}
+
+	for n := 0; n < clients; n++ {
+		want := clientLease(n)
+		byIP, okIP := ls.GetByIP(want.IP)
+		byMAC, okMAC := ls.GetByMAC(want.MAC)
+		if n%10 == 9 {
+			assert.False(t, okIP, "released lease %d still found by IP", n)
+			assert.False(t, okMAC, "released lease %d still found by MAC", n)
+			continue
+		}
+		require.True(t, okIP, "lease %d missing by IP", n)
+		require.True(t, okMAC, "lease %d missing by MAC", n)
+		assert.Equal(t, want.MAC, byIP.MAC)
+		assert.Equal(t, want.IP, byMAC.IP)
+	}
+}
+
+func TestLeaseStore_ConcurrentFailedRequestsLeaveStoreConsistent(t *testing.T) {
+	const clients = 200
+
+	ls := NewLeaseStore()
+	type result struct {
+		n   int
+		err error
+	}
+	results := make(chan result, clients)
+	var wg sync.WaitGroup
+	for n := 0; n < clients; n++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			lease := clientLease(n)
+			// Every fifth request is malformed, alternating a missing IP and a
+			// missing MAC, so failures interleave with good requests.
+			switch n % 10 {
+			case 4:
+				lease.IP = netip.Addr{}
+			case 9:
+				lease.MAC = nil
+			}
+			results <- result{n: n, err: ls.Add(lease)}
+		}(n)
+	}
+	wg.Wait()
+	close(results)
+
+	for r := range results {
+		switch r.n % 10 {
+		case 4:
+			assert.ErrorIs(t, r.err, ErrInvalidIP, "request %d", r.n)
+		case 9:
+			assert.ErrorIs(t, r.err, ErrInvalidMAC, "request %d", r.n)
+		default:
+			assert.NoError(t, r.err, "request %d", r.n)
+		}
+	}
+
+	assert.Equal(t, clients-clients/5, ls.Count(), "only the good requests hold a lease")
+	for n := 0; n < clients; n++ {
+		want := clientLease(n)
+		_, okIP := ls.GetByIP(want.IP)
+		_, okMAC := ls.GetByMAC(want.MAC)
+		failed := n%10 == 4 || n%10 == 9
+		assert.Equal(t, !failed, okIP, "lease %d by IP", n)
+		assert.Equal(t, !failed, okMAC, "lease %d by MAC", n)
+	}
+
+	// A renewal for a client whose request failed is refused and adds nothing.
+	assert.ErrorIs(t, ls.Renew(clientLease(4).IP, time.Hour), ErrLeaseNotFound)
+	assert.Equal(t, clients-clients/5, ls.Count())
 }
