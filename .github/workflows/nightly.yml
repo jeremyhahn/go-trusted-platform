@@ -170,6 +170,11 @@ env:
   # Gitea tags (conventions/dependency-resolution.md §2).
   GOWORK: "off"
   GOFLAGS: "-buildvcs=false"
+  # The jeremyhahn/* modules resolve direct from GitHub, never through
+  # proxy.golang.org or sum.golang.org: the history rewrite moved published
+  # tags, and the public proxy and checksum database keep the old zips
+  # and hashes for good, so go.sum (the rewritten bits) cannot verify there.
+  GOPRIVATE: "github.com/jeremyhahn/*"
 
 jobs:
   # The same job runs in ci.yml on push to main. Its definition — tags,
@@ -177,10 +182,18 @@ jobs:
   # the steps here and there are only checkout, toolchain and cpio, so keep
   # the two jobs' steps identical and change the FIPS suite in the Makefile.
   fips:
-    name: FIPS
+    name: FIPS (shard ${{ matrix.shard }}/4)
+    # Hosted runners (CA m2061): four shards of `make test-fips`, each a
+    # round-robin quarter of the package list (Makefile SHARD/SHARDS), to fit
+    # a hosted job's 4 cores and 6 hours. The job carries no module
+    # credential and no proxy setting.
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
     # needs: none — nightly runs standalone; build health is ci.yml's job.
-    timeout-minutes: 60
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v6
 
@@ -205,7 +218,7 @@ jobs:
       # package scope, same exclusions — with ONLY the FIPS build tag and
       # environment added (template v1.4.1). The Makefile carries the why.
       - name: FIPS build and unit tests
-        run: make test-fips
+        run: make test-fips SHARD=${{ matrix.shard }} SHARDS=4
 
   # rpi-image — the Raspberry Pi factory image (docs/factory-image/). It is
   # nightly because it needs what a push job cannot afford: binfmt for the

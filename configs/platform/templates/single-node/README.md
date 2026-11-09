@@ -27,16 +27,16 @@ this template implements.
 ## Standalone control plane (`standalone-cp.example.yaml`)
 
 `standalone-cp.example.yaml` runs `platformd` standalone as the control
-plane on a host that already runs its own network: tgw-01, the VLAN 405
+plane on a host that already runs its own network: edge-01, the VLAN 405
 boot node (`bond0.405`, `192.0.2.1`), serves the rack Raspberry Pi workers
 until the CM4 control plane is proven. The bootstrap config that names it is
-`configs/bootstrap/tgw01-vlan405.example.yaml` (`templates.control-plane`).
+`configs/bootstrap/edge-01-vlan405.example.yaml` (`templates.control-plane`).
 
 It is `default.yaml` made plan-free:
 
 - `network:` carries only `dns`. No role, forwarding, platform VRF,
   interfaces, bridges, bonds or VLANs: platformd configures no host
-  network, and the gateway configuration keeps owning tgw-01's.
+  network, and the gateway configuration keeps owning edge-01's.
 - `sdn.enabled: false`, so no reference-network plan is built and
   `NetworkConfig.Validate` runs with none. A role, platform VRF, bond VLAN
   or zone VLAN added here is refused at load (`ErrNetworkPlanRequired`).

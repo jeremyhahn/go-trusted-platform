@@ -219,19 +219,19 @@ advertises no gateway at all, instead of the default `192.0.2.1`. It cannot be
 combined with `deployer.bootstrap_gateway`; the file is refused at load if both
 are set.
 
-**Example: tgw-01 serving the Pi rack on VLAN 405.**
-[`configs/bootstrap/tgw01-vlan405.example.yaml`](../../configs/bootstrap/tgw01-vlan405.example.yaml)
+**Example: edge-01 serving the Pi rack on VLAN 405.**
+[`configs/bootstrap/edge-01-vlan405.example.yaml`](../../configs/bootstrap/edge-01-vlan405.example.yaml)
 puts both settings together: a boot node on `bond0.405` (`192.0.2.1`), DHCP
 `192.0.2.100`–`192.0.2.200` with no router, and the rack Pis netbooted diskless
 as workers from the rpi4 compute template, so the netboot media build needs a
 diskless root for the Pi set. Until the CM4 control plane is proven, the control
-plane is tgw-01 itself: platformd standalone at `192.0.2.1` from
+plane is edge-01 itself: platformd standalone at `192.0.2.1` from
 [`standalone-cp.example.yaml`](../../configs/platform/templates/single-node/standalone-cp.example.yaml)
 (`templates.control-plane`), listed with `skip_install: true` because this run
-does not install it. The CM4 entry is kept commented out; it replaces tgw-01
+does not install it. The CM4 entry is kept commented out; it replaces edge-01
 when it takes over, since a deployment has one control plane or an odd number
 of three or more. The Pis share
-[`tgw01-vlan405-pi.overrides.yaml`](../../configs/bootstrap/tgw01-vlan405-pi.overrides.yaml),
+[`edge-01-vlan405-pi.overrides.yaml`](../../configs/bootstrap/edge-01-vlan405-pi.overrides.yaml),
 which points the template's DNS at `192.0.2.1` and sets `install-target: disk`,
 because the template is the factory SD image and its `image` target would
 ignore the boot server's `platform_boot_model=diskless`. Bootstrap refuses a
@@ -252,7 +252,7 @@ each Pi's IDevID certificate names that Pi. The nodes' `serial:` field is a
 different value, the Pi bootloader's `/proc/cpuinfo` serial that selects its
 boot directory. The orchestrator
 fetches the control plane's CA bundle from `192.0.2.1:8443`, so run
-`platformctl bootstrap` on tgw-01 or a host on VLAN 405. Values marked
+`platformctl bootstrap` on edge-01 or a host on VLAN 405. Values marked
 `PLACEHOLDER` (SSH access, DNS, APK mirror, domains, Pi serials) must be
 replaced first.
 
