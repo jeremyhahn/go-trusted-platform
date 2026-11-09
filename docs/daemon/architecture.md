@@ -174,6 +174,11 @@ and `vtpm` (`adminDaemonGroups`, scope by method), and the daemon-scoped groups
 webservice answers 403 `ErrDaemonRouteUnclassified` and the daemon handler never
 runs, so a group the daemon gains is closed until it is classified.
 
+Because issue-cert requires an existing platform client certificate, a user's
+first mTLS factor is enrolled by uploading an administrator-issued certificate;
+the console's add-factor wizard opens on upload and generates a certificate
+only from a browser that already presents one.
+
 The scope of each non-CA route is the scope its MCP and gRPC operation takes
 (`pkg/api/mcp/authz.go`). The admin-group and table daemon handlers check no
 authorization themselves, so the replay gate is the only check on the

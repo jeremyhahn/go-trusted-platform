@@ -56,6 +56,11 @@ type WizardStep = 1 | 2 | 3 | 4;
 
 type MTLSMode = "generate" | "upload";
 
+// issue-cert sits behind the daemon's client-certificate guard, so a browser
+// without a platform client certificate cannot generate its first one.
+const MTLS_GENERATE_PREREQUISITE =
+  "Generating a certificate needs a platform client certificate already installed in this browser. For your first mTLS factor, upload a certificate your administrator issued.";
+
 interface WizardState {
   step: WizardStep;
   type: AuthFactorType | null;
@@ -81,7 +86,7 @@ const INITIAL: WizardState = {
   step: 1,
   type: null,
   label: "",
-  mtlsMode: "generate",
+  mtlsMode: "upload",
   mtlsCertPEM: "",
   mtlsKeyPEM: "",
   fido2Response: null,
@@ -156,7 +161,7 @@ function StepPickType({
       type: "mtls",
       icon: <Key className="h-5 w-5 text-blue-500" />,
       title: "mTLS Certificate",
-      description: "Generate a new client cert or upload an existing PEM.",
+      description: "Upload an issued PEM, or generate a new client cert from a browser that already holds a platform client certificate.",
     },
     {
       type: "fido2",
@@ -262,7 +267,11 @@ function StepMTLS({
       const { csrPEM, privateKeyPEM } = await generateMTLSCredential(userId);
       const result = await authFactorsApi.issueMTLSCert(userId, csrPEM);
       if (!result.ok) {
-        onError(result.error);
+        onError(
+          result.status === 401
+            ? `The platform refused generation: this browser presents no platform client certificate. ${MTLS_GENERATE_PREREQUISITE}`
+            : result.error
+        );
         return;
       }
       onGenerated(result.data.cert_pem, privateKeyPEM);
@@ -311,6 +320,7 @@ function StepMTLS({
           <span className="text-sm">Upload existing cert</span>
         </label>
       </div>
+      <p className="text-xs text-muted-foreground">{MTLS_GENERATE_PREREQUISITE}</p>
 
       {mode === "generate" && (
         <div className="space-y-3">
