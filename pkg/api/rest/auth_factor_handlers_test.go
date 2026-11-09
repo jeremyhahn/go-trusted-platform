@@ -714,6 +714,41 @@ func TestMFAPolicy_PutValid_ThenGet(t *testing.T) {
 	assert.Equal(t, 2, resp.MinFactorCount)
 }
 
+// The console once sent {"require_factor_count":2}, a field the handler does
+// not know: it is refused rather than silently storing a policy of false/0,
+// and the request body the console sends now is stored as sent.
+func TestMFAPolicy_PutConsoleBody(t *testing.T) {
+	const path = "/api/v1/tenants/tenant-x/security/mfa-policy"
+	tests := []struct {
+		name        string
+		body        string
+		wantCode    int
+		wantRequire bool
+		wantMin     int
+	}{
+		{"unknown field", `{"require_factor_count":2}`, http.StatusBadRequest, false, 1},
+		{"console body", `{"require_multiple_factors":true,"min_factor_count":2}`, http.StatusOK, true, 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			router := registerRoutes(NewAuthFactorHandlers(nil, nil))
+			putReq := httptest.NewRequest(http.MethodPut, path, strings.NewReader(tt.body))
+			putReq.Header.Set("Content-Type", "application/json")
+			putRR := httptest.NewRecorder()
+			router.ServeHTTP(putRR, putReq)
+			assert.Equal(t, tt.wantCode, putRR.Code)
+
+			getRR := httptest.NewRecorder()
+			router.ServeHTTP(getRR, httptest.NewRequest(http.MethodGet, path, nil))
+			require.Equal(t, http.StatusOK, getRR.Code)
+			var resp MFAPolicyResponse
+			require.NoError(t, json.NewDecoder(getRR.Body).Decode(&resp))
+			assert.Equal(t, tt.wantRequire, resp.RequireMultipleFactors)
+			assert.Equal(t, tt.wantMin, resp.MinFactorCount)
+		})
+	}
+}
+
 func TestMFAPolicy_PutNegativeMinFactor_Returns400(t *testing.T) {
 	router := registerRoutes(NewAuthFactorHandlers(nil, nil))
 	body, _ := json.Marshal(MFAPolicyUpdateRequest{RequireMultipleFactors: true, MinFactorCount: -1})
