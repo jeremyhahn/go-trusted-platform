@@ -1,4 +1,4 @@
-# code-review-template: v5.10.3 -- the code review in Gitea or GitHub CI for a pull request
+# code-review-template: v5.10.5 -- the code review in Gitea or GitHub CI for a pull request
 # that carries `code-review` and `task:ready`, routed by its labels through
 # route-labels (labels.md §2). Codex on the `codex` runner reviews every such
 # PR; `agent:opencode` adds an advisory COMMENT review by the opencode job on
@@ -28,6 +28,26 @@
 #   COORDINATOR_TURNS         the codex rounds the project coordinator has
 #                             on a `needs-coordinator` PR after the two-round
 #                             stop (v5.9.8, Company Agent m2185); default 3
+#
+# v5.10.5 (2026-11-09, Codex's P1 on v5.10.4 at go-xkms #2026): the TWIN
+# WAIT fails closed. Each GitHub lookup it makes is assigned first and its
+# failure stops the job, as does a body jq cannot read (jq -e exit other
+# than 0 or 1). v5.10.4 read an older run's jobs inside an `if`
+# condition, where `set -e` does not apply, so a failed lookup read as "no
+# codex job in progress" and let a same-head twin review beside its older
+# twin.
+# v5.10.4 (2026-11-09, Codex's P1 on v5.10.3 at go-xkms #2026; Company Agent
+# m2301 (2), ruling 402): the review key's ctx= is the sha1 of each hunk's whole `@@` line with
+# its file's path, the line numbers included. v5.10.2 hashed the function
+# context alone, so an edit moved within one function (between repeated
+# blocks with the same diff lines), or in a file with no function context,
+# kept both halves of the key and carried an approval to code Codex had not
+# read. A verdict now carries only to the same patch at the same lines: a
+# head that merged main in without moving the PR's lines carries, and one
+# whose lines moved is reviewed again. A v5.10.3 ctx= can never match, so
+# each open PR is reviewed once more. The twin wait is unchanged: a
+# pull_request_target run carries the PR head as head_sha.
+# testdata/code-review-modzip-tests.py part D checks the moved edits.
 #
 # v5.10.3 (2026-11-09, Company Agent m2295 (2), ruling 400): the module fetch
 # on go-trusted-platform #1580, which replaced three go.sum h1: lines at the
@@ -784,14 +804,25 @@ jobs:
             wf=$(gha "/actions/runs/$GITHUB_RUN_ID" | jq -r '.workflow_id // empty')
             [ -n "$wf" ] || die "could not read the workflow of run $GITHUB_RUN_ID"
             while :; do
-              older=$(gha "/actions/workflows/$wf/runs?head_sha=$EVENT_SHA&status=in_progress&per_page=100" |
-                      jq -r --argjson me "$GITHUB_RUN_ID" '.workflow_runs[]? | select(.id < $me) | .id')
+              # v5.10.5: each lookup is assigned before jq reads it. In an `if`
+              # condition `set -e` does not apply, so a failed lookup there
+              # would read as no codex job in progress on this head.
+              runs=$(gha "/actions/workflows/$wf/runs?head_sha=$EVENT_SHA&status=in_progress&per_page=100") ||
+                die "could not list the in-progress runs on $EVENT_SHA"
+              older=$(jq -r --argjson me "$GITHUB_RUN_ID" '.workflow_runs[]? | select(.id < $me) | .id' <<<"$runs") ||
+                die "could not read the in-progress runs on $EVENT_SHA"
               busy=0
               for id in $older; do
-                if gha "/actions/runs/$id/jobs?per_page=100" |
-                   jq -e 'any(.jobs[]?; .name == "Code Review (codex)" and .status == "in_progress")' >/dev/null; then
-                  busy=1
-                fi
+                jobs=$(gha "/actions/runs/$id/jobs?per_page=100") ||
+                  die "could not read the jobs of run $id"
+                # jq -e exits 1 for false; any other non-zero is an unreadable body.
+                jrc=0
+                jq -e 'any(.jobs[]?; .name == "Code Review (codex)" and .status == "in_progress")' >/dev/null <<<"$jobs" || jrc=$?
+                case $jrc in
+                  0) busy=1 ;;
+                  1) ;;
+                  *) die "could not read the jobs of run $id" ;;
+                esac
               done
               [ "$busy" = 1 ] || break
               [ "$twin_waited" -gt 0 ] || echo "An older run's codex job is reviewing $EVENT_SHA; waiting for its verdict."
@@ -929,17 +960,19 @@ jobs:
           # refuses one over its size limit) leaves it empty: the head is the
           # key, as before v5.9.8.
           # v5.10.2 (Company Agent m2286 (3)): the patch-id leaves out the
-          # whole `@@` line, so the same edit moved to another function keeps
-          # it. hunk_ctx is the second half of the key: the sha1 of one
-          # "<path><TAB><function context>" line per hunk, in diff order. The
-          # function context is the text after the second `@@`; the line
-          # numbers are not in it, so merging main in keeps it.
+          # whole `@@` line, so the same edit moved elsewhere keeps it.
+          # hunk_ctx is the second half of the key: the sha1 of one
+          # "<path><TAB><@@ line>" line per hunk, in diff order. v5.10.4: the
+          # whole `@@` line, its line numbers with the function context, so
+          # an edit moved within a function, or in a file with no function
+          # context, changes it. Merging main in keeps it while the PR's
+          # lines stay where they were; a merge that moves them reviews again.
           patch_id=""
           hunk_ctx=""
           if pr_diff "$WORK/pr.diff"; then
             patch_id=$(git patch-id --verbatim < "$WORK/pr.diff" | awk 'NR == 1 {print $1}') || patch_id=""
             hunk_ctx=$(awk '/^diff --git / { f = $NF; next }
-                            /^@@ / { c = $0; sub(/^@@ [^@]* @@ ?/, "", c); print f "\t" c }' "$WORK/pr.diff" |
+                            /^@@ / { print f "\t" $0 }' "$WORK/pr.diff" |
                        sha1sum | awk '{print $1}') || hunk_ctx=""
           fi
           [[ $patch_id =~ ^[0-9a-f]{40}$ ]] || patch_id=""
@@ -971,11 +1004,12 @@ jobs:
               | sort_by(.id)' <<<"$all")
 
           # SAME PATCH: the latest standing verdict on another head with this
-          # patch and these function contexts (v5.10.2) carries to this head
+          # patch at these hunk lines (v5.10.2; the whole `@@` line since
+          # v5.10.4) carries to this head
           # without a codex run. An approval is posted again on $EVENT_SHA (the
           # confirm step and automerge read a verdict on the head); a rejection
-          # fails this run, as on its own head. The same patch with other
-          # contexts is a moved edit: codex reviews it. A label just added to
+          # fails this run, as on its own head. The same patch at other lines
+          # is a moved edit: codex reviews it. A label just added to
           # change the route reviews again (above).
           round=""
           if [ -n "$patch_id" ] && [ -n "$hunk_ctx" ] && [ -z "$again" ]; then
@@ -992,7 +1026,7 @@ jobs:
               round=$(jq -r '.round // empty' <<<"$prev")
               jq -r --arg s "$EVENT_SHA" --arg p "$patch_id" --arg x "$hunk_ctx" --arg r "$round" --arg o "$psha" '
                   "<!-- codex-review:verdict head=\($s) patch=\($p) ctx=\($x)\(if $r == "" then "" else " round=\($r)" end) carried=\($o) -->\n"
-                  + "Carried from `\($o)`: head `\($s)` is the same patch (`\($p)`) in the same functions, so codex did not review it again.\n\n"
+                  + "Carried from `\($o)`: head `\($s)` is the same patch (`\($p)`) at the same lines, so codex did not review it again.\n\n"
                   + (.body | sub("<!-- codex-review:verdict [^>]*-->\n?"; ""))' <<<"$prev" > "$WORK/body.md"
               send=APPROVED
               [ "$FORGE" != github ] || send=APPROVE
