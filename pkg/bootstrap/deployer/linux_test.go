@@ -615,7 +615,7 @@ func TestErrImageShipFailed(t *testing.T) {
 // entrypoint's own default takes effect rather than a bare `-e
 // BOOTSTRAP_HTTP_PORT=0` pinning the server to port 0.
 func TestBootstrapEnvFlags_PortsOmittedWhenZero(t *testing.T) {
-	got := bootstrapEnvFlags(&DeployConfig{BootstrapServerIP: "10.4.2.91"})
+	got := bootstrapEnvFlags(&DeployConfig{BootstrapServerIP: "198.51.100.91"})
 
 	for _, name := range []string{"BOOTSTRAP_HTTP_PORT", "BOOTSTRAP_DEVICE_SCRIPT_PORT"} {
 		if strings.Contains(got, name) {
@@ -629,7 +629,7 @@ func TestBootstrapEnvFlags_PortsOmittedWhenZero(t *testing.T) {
 // bootstrap.yaml field is decorative.
 func TestBootstrapEnvFlags_PortsEmittedWhenSet(t *testing.T) {
 	got := bootstrapEnvFlags(&DeployConfig{
-		BootstrapServerIP:         "10.4.2.91",
+		BootstrapServerIP:         "198.51.100.91",
 		BootstrapHTTPPort:         18080,
 		BootstrapDeviceScriptPort: 18081,
 	})
@@ -646,13 +646,13 @@ func TestBootstrapEnvFlags_PortsEmittedWhenSet(t *testing.T) {
 // configured host reaches the container, and an unset one leaves the
 // entrypoint's every-interface default alone.
 func TestBootstrapEnvFlags_BindHost(t *testing.T) {
-	unset := bootstrapEnvFlags(&DeployConfig{BootstrapServerIP: "10.4.2.91"})
+	unset := bootstrapEnvFlags(&DeployConfig{BootstrapServerIP: "198.51.100.91"})
 	if strings.Contains(unset, "BOOTSTRAP_BIND_HOST") {
 		t.Fatalf("env flags = %q, must not mention BOOTSTRAP_BIND_HOST when unset", unset)
 	}
 
-	got := bootstrapEnvFlags(&DeployConfig{BootstrapServerIP: "10.4.2.91", BootstrapBindHost: "10.4.2.91"})
-	if want := "-e BOOTSTRAP_BIND_HOST='10.4.2.91'"; !strings.Contains(got, want) {
+	got := bootstrapEnvFlags(&DeployConfig{BootstrapServerIP: "198.51.100.91", BootstrapBindHost: "198.51.100.91"})
+	if want := "-e BOOTSTRAP_BIND_HOST='198.51.100.91'"; !strings.Contains(got, want) {
 		t.Fatalf("env flags = %q, want it to contain %q", got, want)
 	}
 }
