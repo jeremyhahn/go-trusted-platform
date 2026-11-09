@@ -1,4 +1,4 @@
-# code-review-template: v5.10.1 -- the code review in Gitea or GitHub CI for a pull request
+# code-review-template: v5.10.3 -- the code review in Gitea or GitHub CI for a pull request
 # that carries `code-review` and `task:ready`, routed by its labels through
 # route-labels (labels.md §2). Codex on the `codex` runner reviews every such
 # PR; `agent:opencode` adds an advisory COMMENT review by the opencode job on
@@ -28,6 +28,37 @@
 #   COORDINATOR_TURNS         the codex rounds the project coordinator has
 #                             on a `needs-coordinator` PR after the two-round
 #                             stop (v5.9.8, Company Agent m2185); default 3
+#
+# v5.10.3 (2026-11-09, Company Agent m2295 (2), ruling 400): the module fetch
+# on go-trusted-platform #1580, which replaced three go.sum h1: lines at the
+# same version (go-luks2 v0.2.0-alpha in go.sum, go-quicraft v0.13.1-alpha in
+# go.sum and sdk/go/go.sum). (a) THE CHANGED go.sum LINES: each module line a
+# change adds to or replaces in a go.sum beside one of its go.mod files is
+# selected from the PR diff, whether or not a require changed; a /go.mod line
+# and a line the same file also removes word for word are not. A first-party
+# module joins the first-party loop, a public one the public loop. (b) Both
+# loops take only proxy.golang.org zips, checked against the go.sum h1: line
+# and sum.golang.org's line before the zip is requested, and modzip.py checks
+# the zip against them; never a forge archive or codeload. A module version
+# the proxy or sum.golang.org does not have is listed as not fetched, never
+# replaced by another source or version. (c) Each loop keys a module by its
+# go.sum h1: as well as module@version, so a second go.sum with another hash
+# for the same version is checked too, not skipped. getsum() moves into the
+# functions. testdata/code-review-modzip-tests.py part D runs the parser and
+# the selection on #1580's diff (testdata/gtp-1580-gosum.diff); parts B and E
+# check the sum.golang.org step of each loop, and part F that the fetch step
+# names no forge archive.
+#
+# v5.10.2 (2026-11-09, Company Agent m2286 (3), ruling 398): Codex's P1 on
+# go-xkms #2026. The patch-id leaves out the whole `@@` line, so the same
+# edit moved to another function kept the key and carried an approval to a
+# change Codex had not read. The guard now keys a review by two values: the
+# patch-id, and `ctx`, the sha1 of each file's `@@` function-context lines in
+# order (the text after the second `@@`, with the file's path; never the
+# line numbers). A verdict carries only when both match, so a head that only
+# merged main in still carries and a moved edit runs Codex. A marker without
+# ctx= (v5.10.1 or before) carries nothing, so each open PR is reviewed once
+# more. testdata/code-review-modzip-tests.py part D checks the moved edit.
 #
 # v5.10.1 (2026-11-09, Infrastructure's review of go-xkms #2026 under Company
 # Agent m2274, ruling 394): two v5.10.0 defects Codex found. (a) The review key
@@ -897,19 +928,32 @@ jobs:
           # not review the same change twice. No diff from the forge (GitHub
           # refuses one over its size limit) leaves it empty: the head is the
           # key, as before v5.9.8.
+          # v5.10.2 (Company Agent m2286 (3)): the patch-id leaves out the
+          # whole `@@` line, so the same edit moved to another function keeps
+          # it. hunk_ctx is the second half of the key: the sha1 of one
+          # "<path><TAB><function context>" line per hunk, in diff order. The
+          # function context is the text after the second `@@`; the line
+          # numbers are not in it, so merging main in keeps it.
           patch_id=""
+          hunk_ctx=""
           if pr_diff "$WORK/pr.diff"; then
             patch_id=$(git patch-id --verbatim < "$WORK/pr.diff" | awk 'NR == 1 {print $1}') || patch_id=""
+            hunk_ctx=$(awk '/^diff --git / { f = $NF; next }
+                            /^@@ / { c = $0; sub(/^@@ [^@]* @@ ?/, "", c); print f "\t" c }' "$WORK/pr.diff" |
+                       sha1sum | awk '{print $1}') || hunk_ctx=""
           fi
           [[ $patch_id =~ ^[0-9a-f]{40}$ ]] || patch_id=""
+          [[ $hunk_ctx =~ ^[0-9a-f]{40}$ ]] && [ -n "$patch_id" ] || hunk_ctx=""
           rm -f "$WORK/pr.diff"
           echo "patch_id=$patch_id" >> "$GITHUB_OUTPUT"
-          echo "Review key: patch ${patch_id:-unknown (keyed by head)}."
+          echo "hunk_ctx=$hunk_ctx" >> "$GITHUB_OUTPUT"
+          echo "Review key: patch ${patch_id:-unknown (keyed by head)}${hunk_ctx:+, ctx $hunk_ctx}."
 
           # This reviewer's verdicts on every head of the PR, oldest first,
           # read from the marker the posting step writes:
-          #   <!-- codex-review:verdict head=<sha> patch=<patch-id> round=<n> -->
-          # A marker from v5.9.6 or before has head= alone. A dismissed
+          #   <!-- codex-review:verdict head=<sha> patch=<patch-id> ctx=<sha1> round=<n> -->
+          # A marker from v5.9.6 or before has head= alone; one from v5.10.1
+          # or before has no ctx=. A dismissed
           # verdict still counts as a round; it no longer stands.
           all=$(api_all "/pulls/$PR_NUM/reviews?")
           hist=$(jq -c --arg u "$REVIEWER" '
@@ -922,18 +966,21 @@ jobs:
                         stands: ((.state != "DISMISSED") and (.dismissed | not)),
                         state: (if .state == "DISMISSED" then "DISMISSED" else .state end),
                         patch: (($m.a | capture("\\bpatch=(?<p>[0-9a-f]{40})\\b") | .p) // ""),
+                        ctx: (($m.a | capture("\\bctx=(?<c>[0-9a-f]{40})\\b") | .c) // ""),
                         round: (($m.a | capture("\\bround=(?<r>[0-9]+)\\b") | .r | tonumber) // null) } ]
               | sort_by(.id)' <<<"$all")
 
           # SAME PATCH: the latest standing verdict on another head with this
-          # patch carries to this head without a codex run. An approval is
-          # posted again on $EVENT_SHA (the confirm step and automerge read a
-          # verdict on the head); a rejection fails this run, as on its own head.
-          # A label just added to change the route reviews again (above).
+          # patch and these function contexts (v5.10.2) carries to this head
+          # without a codex run. An approval is posted again on $EVENT_SHA (the
+          # confirm step and automerge read a verdict on the head); a rejection
+          # fails this run, as on its own head. The same patch with other
+          # contexts is a moved edit: codex reviews it. A label just added to
+          # change the route reviews again (above).
           round=""
-          if [ -n "$patch_id" ] && [ -z "$again" ]; then
-            prev=$(jq -c --arg p "$patch_id" --arg s "$EVENT_SHA" '
-                [ .[] | select(.stands and .patch == $p and .commit_id != $s) ] | last // empty' <<<"$hist")
+          if [ -n "$patch_id" ] && [ -n "$hunk_ctx" ] && [ -z "$again" ]; then
+            prev=$(jq -c --arg p "$patch_id" --arg x "$hunk_ctx" --arg s "$EVENT_SHA" '
+                [ .[] | select(.stands and .patch == $p and .ctx == $x and .commit_id != $s) ] | last // empty' <<<"$hist")
             if [ -n "$prev" ]; then
               psha=$(jq -r '.commit_id' <<<"$prev")
               echo "skip=same-patch" >> "$GITHUB_OUTPUT"
@@ -943,9 +990,9 @@ jobs:
                 exit 1
               fi
               round=$(jq -r '.round // empty' <<<"$prev")
-              jq -r --arg s "$EVENT_SHA" --arg p "$patch_id" --arg r "$round" --arg o "$psha" '
-                  "<!-- codex-review:verdict head=\($s) patch=\($p)\(if $r == "" then "" else " round=\($r)" end) carried=\($o) -->\n"
-                  + "Carried from `\($o)`: head `\($s)` is the same patch (`\($p)`), so codex did not review it again.\n\n"
+              jq -r --arg s "$EVENT_SHA" --arg p "$patch_id" --arg x "$hunk_ctx" --arg r "$round" --arg o "$psha" '
+                  "<!-- codex-review:verdict head=\($s) patch=\($p) ctx=\($x)\(if $r == "" then "" else " round=\($r)" end) carried=\($o) -->\n"
+                  + "Carried from `\($o)`: head `\($s)` is the same patch (`\($p)`) in the same functions, so codex did not review it again.\n\n"
                   + (.body | sub("<!-- codex-review:verdict [^>]*-->\n?"; ""))' <<<"$prev" > "$WORK/body.md"
               send=APPROVED
               [ "$FORGE" != github ] || send=APPROVE
@@ -1078,7 +1125,8 @@ jobs:
       # strict shapes below. A fetch that fails is a line in the prompt, never
       # a failed job: the review runs without that module, as v4.1 did. The
       # public modules the change adds or bumps (v5.8) come from the module
-      # proxy with no token, and only after their go.sum h1: hash matches.
+      # proxy with no token, and only after their go.sum h1: hash matches
+      # sum.golang.org's (v5.10.3). No module comes from a forge archive.
       - name: Fetch the first-party modules the change requires
         id: deps
         if: steps.guard.outputs.requested == 'true' && steps.guard.outputs.skip == ''
@@ -1101,8 +1149,9 @@ jobs:
 
           # get URL FILE -> the HTTP code; the body goes to FILE. Never dies.
           # GitHub (v5.9.0): the API headers, and redirects followed over https
-          # (a tarball answers 302 to codeload; curl keeps the Authorization
-          # header to the API host only). Further arguments go to curl.
+          # (curl keeps the Authorization header to the API host only). This
+          # step reads only the base go.mod files through it: no module comes
+          # from a forge archive (v5.10.3). Further arguments go to curl.
           gh=()
           [ "$FORGE" != github ] ||
             gh=(-L --max-redirs 3 --proto-redir '=https' -H 'X-GitHub-Api-Version: 2022-11-28')
@@ -1148,6 +1197,33 @@ jobs:
               done
           }
 
+          # getsum MODULE VERSION -> sum.golang.org's h1: line for it, or a
+          # reason and status 1 (v5.10.0; both loops since v5.10.3).
+          getsum() {
+            # shellcheck disable=SC2001  # ${var//} cannot lower-case with \L
+            code=$(getpub "https://sum.golang.org/lookup/$(sed 's/[A-Z]/!\L&/g' <<<"$1@$2")" "$WORK/sumdb.txt")
+            [ "$code" = 200 ] || { echo "sum.golang.org answered HTTP $code (a private module is not on it)"; return 1; }
+            db=$(awk -v m="$1" -v v="$2" '$1 == m && $2 == v && $3 ~ /^h1:[A-Za-z0-9+\/]+=*$/ { print $3; exit }' "$WORK/sumdb.txt")
+            [ -n "$db" ] || { echo "sum.golang.org has no h1: line for it"; return 1; }
+            echo "$db"
+          }
+          # The module lines PR diff file $1 adds to a go.sum (v5.10.3): one
+          # "go.sum-path module version h1:hash" line each, from the hunks of
+          # a file whose new path ends in go.sum. A /go.mod line is left out,
+          # and so is a line the same file also removes word for word (moved).
+          changed_sum_lines() {
+            awk '/^diff --git / { hdr = 1; f = ""; next }
+                 hdr && /^\+\+\+ / { f = substr($0, 5); sub(/^b\//, "", f); next }
+                 /^@@ / { hdr = 0; next }
+                 hdr || f !~ /(^|\/)go\.sum$/ { next }
+                 /^[-+]/ && NF == 3 && $2 !~ /\/go\.mod$/ && $3 ~ /^h1:[A-Za-z0-9+\/]+=*$/ {
+                   l = substr($0, 2)
+                   if (substr($0, 1, 1) == "-") { gone[f SUBSEP l] = 1; next }
+                   n++; file[n] = f; line[n] = l
+                 }
+                 END { for (i = 1; i <= n; i++) if (!((file[i] SUBSEP line[i]) in gone)) print file[i], line[i] }' "$1"
+          }
+
           # THE HEAD'S go.mod files, at most 50, none over 1 MiB, no links.
           mapfile -t mods < <(cd "$SRC" && find . -name .git -prune -o -path '*/vendor' -prune \
                                 -o -path '*/testdata' -prune -o -type f -name go.mod -size -1024k -print |
@@ -1160,8 +1236,35 @@ jobs:
             requires "$SRC/$f" | sed "s|^|$f |" >> "$WORK/deps.want"
             public_requires "$SRC/$f" "$f" >> "$WORK/deps.pubhead"
           done
+          # THE CHANGED go.sum LINES (v5.10.3, Company Agent m2295 (2)): a module
+          # line the change adds to or replaces in the go.sum beside one of
+          # those go.mod files is fetched too, whether or not a require changed
+          # (go-trusted-platform #1580 replaced three h1: lines at the same
+          # version). A first-party module joins the first-party loop, a public
+          # one the public loop after the bumps; each is checked like the rest.
+          : > "$WORK/deps.pubsum"
+          declare -A inmods=()
+          for f in "${mods[@]}"; do inmods[$f]=1; done
+          if pr_diff "$WORK/sums.diff"; then
+            while read -r s m v _; do
+              [[ $s =~ ^[A-Za-z0-9_./-]+$ ]] || continue
+              f=${s%go.sum}go.mod
+              [ -n "${inmods[$f]:-}" ] || continue
+              [[ $v =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]*)?$ ]] || continue
+              if [[ $m == "$prefix"* ]]; then
+                if [[ $m =~ ^github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$ ]]; then
+                  printf '%s %s %s\n' "$f" "$m" "$v" >> "$WORK/deps.want"
+                fi
+              elif [[ $m =~ ^[a-z0-9-]+(\.[a-z0-9-]+)+(/[A-Za-z0-9_.~-]+)*$ && /$m/ != */./* && /$m/ != */../* ]]; then
+                printf '%s %s %s\n' "$f" "$m" "$v" >> "$WORK/deps.pubsum"
+              fi
+            done < <(changed_sum_lines "$WORK/sums.diff")
+          else
+            echo "- the change's go.sum lines: not read, the forge gave no PR diff" >> "$WORK/deps.missing"
+          fi
+          rm -f "$WORK/sums.diff"
           sort -u -o "$WORK/deps.want" "$WORK/deps.want"
-          if [ ! -s "$WORK/deps.want" ] && [ ! -s "$WORK/deps.pubhead" ]; then
+          if [ ! -s "$WORK/deps.want" ] && [ ! -s "$WORK/deps.pubhead" ] && [ ! -s "$WORK/deps.pubsum" ]; then
             echo "The change's go.mod files require no module; nothing to fetch."
             exit 0
           fi
@@ -1257,27 +1360,21 @@ jobs:
           # the go.sum beside that go.mod must equal sum.golang.org's line for
           # the module, and modzip.py checks the zip against it before anything
           # is unpacked under $DEPS. A private module is not on the proxy, so it
-          # is listed as not fetched.
-          getsum() {
-            # shellcheck disable=SC2001  # ${var//} cannot lower-case with \L
-            code=$(getpub "https://sum.golang.org/lookup/$(sed 's/[A-Z]/!\L&/g' <<<"$1@$2")" "$WORK/sumdb.txt")
-            [ "$code" = 200 ] || { echo "sum.golang.org answered HTTP $code (a private module is not on it)"; return 1; }
-            db=$(awk -v m="$1" -v v="$2" '$1 == m && $2 == v && $3 ~ /^h1:[A-Za-z0-9+\/]+=*$/ { print $3; exit }' "$WORK/sumdb.txt")
-            [ -n "$db" ] || { echo "sum.golang.org has no h1: line for it"; return 1; }
-            echo "$db"
-          }
+          # is listed as not fetched. A module is keyed by its go.sum h1: too
+          # (v5.10.3): a second go.sum with another hash for the same version
+          # is checked against sum.golang.org, not skipped.
           declare -A firsts=()
           while read -r f m v; do
-            [ -z "${firsts[$m@$v]:-}" ] || continue
-            firsts[$m@$v]=1
-            if [ "$(date +%s)" -ge "$deadline" ] || [ "$total" -ge "$max_total" ]; then
-              echo "- $m@$v: not fetched, the fetch budget (240 s, 1 GiB) ran out" >> "$WORK/deps.missing"
-              continue
-            fi
             sum="$SRC/${f%go.mod}go.sum"
             h1=""
             if [ -f "$sum" ] && [ ! -L "$sum" ] && [ "$(stat -c %s "$sum")" -le $(( 16 * 1024 * 1024 )) ]; then
               h1=$(awk -v m="$m" -v v="$v" '$1 == m && $2 == v && $3 ~ /^h1:[A-Za-z0-9+\/]+=*$/ { print $3; exit }' "$sum")
+            fi
+            [ -z "${firsts["$m@$v $h1"]:-}" ] || continue
+            firsts["$m@$v $h1"]=1
+            if [ "$(date +%s)" -ge "$deadline" ] || [ "$total" -ge "$max_total" ]; then
+              echo "- $m@$v: not fetched, the fetch budget (240 s, 1 GiB) ran out" >> "$WORK/deps.missing"
+              continue
             fi
             if [ -z "$h1" ]; then
               echo "- $m@$v: not fetched, no h1: hash for it in the go.sum beside $f" >> "$WORK/deps.missing"
@@ -1315,12 +1412,19 @@ jobs:
           done < "$WORK/deps.want"
           sort -u "$WORK/deps.pubbase" -o "$WORK/deps.pubbase"
           grep -vxF -f "$WORK/deps.pubbase" "$WORK/deps.pubhead" | sort -u > "$WORK/deps.pub" || true
+          # The changed go.sum lines' public modules, after the bumps (v5.10.3).
+          [ ! -s "$WORK/deps.pubsum" ] || sort -u "$WORK/deps.pubsum" >> "$WORK/deps.pub"
           install -d -m 0755 "$DEPS/proxy"
           declare -A tried=()
           npub=0
           while read -r f m v; do
-            [ -z "${tried[$m@$v]:-}" ] || continue
-            tried[$m@$v]=1
+            sum="$SRC/${f%go.mod}go.sum"
+            h1=""
+            if [ -f "$sum" ] && [ ! -L "$sum" ] && [ "$(stat -c %s "$sum")" -le $(( 16 * 1024 * 1024 )) ]; then
+              h1=$(awk -v m="$m" -v v="$v" '$1 == m && $2 == v && $3 ~ /^h1:[A-Za-z0-9+\/]+=*$/ { print $3; exit }' "$sum")
+            fi
+            [ -z "${tried["$m@$v $h1"]:-}" ] || continue
+            tried["$m@$v $h1"]=1
             npub=$(( npub + 1 ))
             if [ "$npub" -gt 20 ]; then
               echo "- $m@$v: not fetched, over the 20 public-module limit per review" >> "$WORK/deps.missing"
@@ -1330,13 +1434,20 @@ jobs:
               echo "- $m@$v: not fetched, the fetch budget (240 s, 1 GiB) ran out" >> "$WORK/deps.missing"
               continue
             fi
-            sum="$SRC/${f%go.mod}go.sum"
-            h1=""
-            if [ -f "$sum" ] && [ ! -L "$sum" ] && [ "$(stat -c %s "$sum")" -le $(( 16 * 1024 * 1024 )) ]; then
-              h1=$(awk -v m="$m" -v v="$v" '$1 == m && $2 == v && $3 ~ /^h1:[A-Za-z0-9+\/]+=*$/ { print $3; exit }' "$sum")
-            fi
             if [ -z "$h1" ]; then
               echo "- $m@$v: not fetched, no h1: hash for it in the go.sum beside $f" >> "$WORK/deps.missing"
+              continue
+            fi
+            # sum.golang.org's line first (v5.10.3), as in the first-party loop:
+            # the zip is requested only when the go.sum agrees with it.
+            if ! db=$(getsum "$m" "$v"); then
+              echo "- $m@$v: not fetched, $db" >> "$WORK/deps.missing"
+              rm -f "$WORK/sumdb.txt"
+              continue
+            fi
+            rm -f "$WORK/sumdb.txt"
+            if [ "$db" != "$h1" ]; then
+              echo "- $m@$v: not fetched, the go.sum beside $f has an h1: hash that is not sum.golang.org's" >> "$WORK/deps.missing"
               continue
             fi
             dest="$DEPS/proxy/${m//\//_}@$v"
@@ -1358,7 +1469,7 @@ jobs:
             fi
             total=$(( total + $(stat -c %s "$WORK/pub.zip") ))
             if python3 -I "$WORK/modzip.py" "$WORK/pub.zip" "$dest" "$m@$v" "$h1" 2> "$WORK/pub.err"; then
-              echo "- $m@$v: $dest (public, from the module proxy, go.sum h1: verified)" >> "$WORK/deps.ok"
+              echo "- $m@$v: $dest (public, from the module proxy, go.sum and sum.golang.org h1: verified)" >> "$WORK/deps.ok"
             else
               rm -rf "$dest"
               echo "- $m@$v: not fetched, $(head -n 1 "$WORK/pub.err" | tr -cd 'A-Za-z0-9 :./@-' | head -c 120)" >> "$WORK/deps.missing"
@@ -1478,8 +1589,8 @@ jobs:
             printf 'is unpacked read-only under %s, one directory per module and version,\n' "$DEPS"
             printf 'from the Go module proxy: the published module, checked against the go.sum\n'
             printf 'and sum.golang.org h1: hashes, never a forge tag tree. So is each public\n'
-            printf 'module whose require version the change adds or changes, under %s/proxy,\n' "$DEPS"
-            printf 'checked against the go.sum h1: hash. Read them to check calls into those\n'
+            printf 'module whose require version or go.sum h1: line the change adds or changes,\n'
+            printf 'under %s/proxy, checked the same way. Read them to check calls into those\n' "$DEPS"
             printf 'modules, including a public API the bump adds. Public modules the change\n'
             printf 'does not bump are not fetched.\n\n'
             if [ -s "$WORK/deps.ok" ]; then cat "$WORK/deps.ok"; else printf -- '- none fetched\n'; fi
@@ -1567,6 +1678,7 @@ jobs:
           MODEL: ${{ steps.guard.outputs.codex_model }}
           EFFORT: ${{ steps.guard.outputs.codex_effort }}
           PATCH_ID: ${{ steps.guard.outputs.patch_id }}
+          HUNK_CTX: ${{ steps.guard.outputs.hunk_ctx }}
           ROUND: ${{ steps.guard.outputs.round }}
           LIMIT: ${{ steps.guard.outputs.limit }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -1599,8 +1711,10 @@ jobs:
             event=APPROVED
           fi
           # The marker (v5.9.8) carries the review key and the round, which
-          # the guard reads on the next head: head=<sha> patch=<patch-id> round=<n>.
+          # the guard reads on the next head: head=<sha> patch=<patch-id>
+          # ctx=<sha1> round=<n> (ctx= since v5.10.2).
           [[ $PATCH_ID =~ ^[0-9a-f]{40}$ ]] || PATCH_ID=""
+          [[ $HUNK_CTX =~ ^[0-9a-f]{40}$ ]] && [ -n "$PATCH_ID" ] || HUNK_CTX=""
           [[ $ROUND =~ ^[0-9]+$ ]] || die "the guard gave no round number"
           [[ $LIMIT =~ ^[0-9]+$ ]] || die "the guard gave no round limit"
           # v5.9.8: a rejection at the round limit hands the PR on (THE
@@ -1611,11 +1725,11 @@ jobs:
             [ "$ROUND" -lt $((2 + COORDINATOR_TURNS)) ] || stop=needs-owner
           fi
           jq -r --arg e "$event" --arg s "$EVENT_SHA" --arg m "$MODEL" --arg f "$EFFORT" --arg u "$RUN_URL" \
-                --arg p "$PATCH_ID" --arg r "$ROUND" --arg t "$stop" '
+                --arg p "$PATCH_ID" --arg x "$HUNK_CTX" --arg r "$ROUND" --arg t "$stop" '
               def where: if .file == "" then "" elif .line > 0 then " (`\(.file):\(.line)`)" else " (`\(.file)`)" end;
               def item: "- **\(.priority)** \(.title)\(where)\n\n  \(.body | gsub("\n"; "\n  "))\n";
               (if $e == "APPROVED" then "Approve" else "Request changes" end) as $v
-              | "<!-- codex-review:verdict head=\($s)\(if $p == "" then "" else " patch=\($p)" end) round=\($r) -->\n## Codex review: \($v)\n\n"
+              | "<!-- codex-review:verdict head=\($s)\(if $p == "" then "" else " patch=\($p)" end)\(if $x == "" or $p == "" then "" else " ctx=\($x)" end) round=\($r) -->\n## Codex review: \($v)\n\n"
                 + "Head `\($s)`, model `\($m)`, effort `\($f)`, round \($r), [run](\($u)).\n\n\(.summary)\n\n"
                 + (if (.findings | length) == 0 then "No findings.\n"
                    else "### Findings\n\n" + (.findings | sort_by(.priority) | map(item) | join("\n")) end)
