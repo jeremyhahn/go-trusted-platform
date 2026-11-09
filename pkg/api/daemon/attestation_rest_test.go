@@ -89,11 +89,19 @@ func TestSetAttestationRouterHandlers_MountsNothingWithoutAServer(t *testing.T) 
 }
 
 // The report and caller routes are mounted only with a report cache.
-func TestSetAttestationRouterHandlers_MountsReportsWithACache(t *testing.T) {
-	without := attestationRESTServer(t, &recordingAttestationServer{})
-	assert.NotContains(t, restRouteTemplates(t, without, "/api/v1/attestation"), "/api/v1/attestation/reports")
-	assert.NotContains(t, restRouteTemplates(t, without, "/api/v1/attestation"), "/api/v1/attestation/callers")
+// Without a report cache the reporting routes still mount and fail closed:
+// the caller policy admits nobody and the report list answers 503.
+func TestSetAttestationRouterHandlers_MountsFailClosedReportingWithoutACache(t *testing.T) {
+	s := attestationRESTServer(t, &recordingAttestationServer{})
+	assert.Contains(t, restRouteTemplates(t, s, "/api/v1/attestation"), "/api/v1/attestation/reports")
+	assert.Contains(t, restRouteTemplates(t, s, "/api/v1/attestation"), "/api/v1/attestation/callers")
+	callers := serveIAM(s, http.MethodGet, "/api/v1/attestation/callers", "attestation-reader")
+	assert.Equal(t, http.StatusOK, callers.Code, callers.Body.String())
+	reports := serveIAM(s, http.MethodGet, "/api/v1/attestation/reports", "attestation-reader")
+	assert.Equal(t, http.StatusServiceUnavailable, reports.Code, reports.Body.String())
+}
 
+func TestSetAttestationRouterHandlers_MountsReportsWithACache(t *testing.T) {
 	with := &RESTServer{router: mux.NewRouter(), logger: slog.Default()}
 	guard := restapi.NewScopeGuard(attestationRESTCallers, nil, nil)
 	require.NoError(t, with.SetAttestationRouterHandlers(logging.DefaultLogger(), &recordingAttestationServer{},
