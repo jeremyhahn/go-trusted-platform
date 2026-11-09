@@ -114,7 +114,9 @@ const (
 var privilegedDaemonMethodRoutes = map[string]string{
 	// Changing a tenant's MFA policy is a tenant-administration act; reading
 	// it stays on the certificate gate, as the login flow does. No scope
-	// names it.
+	// names it. The admin role does not say which tenant the caller
+	// administers, so the PUT, and only the PUT, also takes the
+	// own-tenant-or-system guard (ownTenantDaemonMethodRoutes).
 	http.MethodPut + " /api/v1/tenants/{id}/security/mfa-policy": "",
 
 	// Daemon core. The health report names every component with its failure
@@ -276,6 +278,15 @@ var privilegedDaemonMethodRoutes = map[string]string{
 	// takes the sdn group's method scopes (adminDaemonGroups).
 	http.MethodDelete + " /api/v1/sdn/gateway/bgp/prefixes/{prefix:.+}": sdnWriteScope,
 	http.MethodDelete + " /api/v1/sdn/gateway/ipam/allocations/{ip}":    sdnWriteScope,
+}
+
+// ownTenantDaemonMethodRoutes are the operator routes, by template and
+// method, whose {id} path variable names the tenant they act on. Each takes
+// the tenant router's RequireOwnTenantOrSystem guard after its admin gate,
+// so a tenant-A administrator cannot reach tenant B by changing the path.
+// GET on the same template, and every other replayed route, is unchanged.
+var ownTenantDaemonMethodRoutes = map[string]map[string]struct{}{
+	"/api/v1/tenants/{id}/security/mfa-policy": {http.MethodPut: {}},
 }
 
 // certificateOnlyDaemonMethodRoutes lists, keyed "METHOD template", the
@@ -707,9 +718,60 @@ func (v1Router *Router) daemonRoutes() {
 	if routes == nil {
 		return
 	}
+	// The tenant-bound routes take the tenant router's own guard; when it
+	// cannot be built they are denied rather than left on the admin gate.
+	var ownTenant func(http.Handler) http.Handler
+	if _, guard, err := v1Router.authorization(); err != nil {
+		ownTenant = v1Router.denyAll(err)
+	} else {
+		ownTenant = guard.RequireOwnTenantOrSystem(
+			v1Router.restHandlerRegistry.TenantID(),
+			func(r *http.Request) string { return mux.Vars(r)["id"] })
+	}
+	routes = tenantBoundDaemonRoutes{DaemonRESTRoutes: routes, ownTenant: ownTenant}
 	if err := MountDaemonRESTRoutes(v1Router.router, routes, v1Router.responseWriter, v1Router.daemonRouteAuthorizer(), v1Router.daemonCallerAuthenticator()); err != nil {
 		v1Router.logger.Error(err, "Daemon REST routes not mounted")
 	}
+}
+
+// tenantBoundDaemonRoutes mounts the daemon's routes and puts ownTenant on
+// the handler of each ownTenantDaemonMethodRoutes route. A route handler
+// runs inside the group's middleware, so the guard runs after the admin
+// gate and sees the session it verified.
+type tenantBoundDaemonRoutes struct {
+	DaemonRESTRoutes
+	ownTenant func(http.Handler) http.Handler
+}
+
+// MountRESTRoutes mounts the daemon's routes on api, then binds the
+// tenant-bound ones to the caller's tenant.
+func (t tenantBoundDaemonRoutes) MountRESTRoutes(api *mux.Router) error {
+	if err := t.DaemonRESTRoutes.MountRESTRoutes(api); err != nil {
+		return err
+	}
+	return api.Walk(func(route *mux.Route, _ *mux.Router, _ []*mux.Route) error {
+		next := route.GetHandler()
+		if next == nil {
+			return nil
+		}
+		template, err := route.GetPathTemplate()
+		if err != nil {
+			return nil
+		}
+		methods, ok := ownTenantDaemonMethodRoutes[template]
+		if !ok {
+			return nil
+		}
+		guarded := t.ownTenant(next)
+		route.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if _, bound := methods[r.Method]; bound {
+				guarded.ServeHTTP(w, r)
+				return
+			}
+			next.ServeHTTP(w, r)
+		}))
+		return nil
+	})
 }
 
 // daemonRouteAuthorizer is the authorization the webservice's own CA routes
