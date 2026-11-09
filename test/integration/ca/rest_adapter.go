@@ -86,17 +86,6 @@ func (e ErrRESTResponseParseFailed) Unwrap() error {
 // REST API Response Types (matching pkg/api/rest/ca_handlers.go)
 // =============================================================================
 
-type restCAInfoResponse struct {
-	CommonName       string                     `json:"common_name"`
-	IsInitialized    bool                       `json:"is_initialized"`
-	IsIntermediate   bool                       `json:"is_intermediate"`
-	RootCert         *restCACertificateSummary  `json:"root_cert,omitempty"`
-	Intermediates    []restCACertificateSummary `json:"intermediates,omitempty"`
-	DefaultAlgorithm string                     `json:"default_algorithm,omitempty"`
-	DefaultValidity  int                        `json:"default_validity_days,omitempty"`
-	Timestamp        int64                      `json:"timestamp"`
-}
-
 type restCACertificateSummary struct {
 	Serial       string `json:"serial"`
 	CommonName   string `json:"common_name"`
@@ -425,25 +414,38 @@ func (r *RESTAdapter) send(ctx context.Context, method, path string, reqBody []b
 
 // Info retrieves CA information via REST.
 func (r *RESTAdapter) Info(ctx context.Context) (*InfoResult, error) {
-	var resp restCAInfoResponse
-	if err := r.doGet(ctx, "/api/v1/ca/info", &resp); err != nil {
+	resp := &pb.GetCAInfoResponse{}
+	if err := r.doProto(ctx, http.MethodGet, "/api/v1/ca/info", nil, resp); err != nil {
 		return nil, ErrCallFailed{Protocol: "REST", Method: "GetCAInfo", Err: err}
 	}
 
-	result := &InfoResult{
-		CommonName:          resp.CommonName,
-		IsInitialized:       resp.IsInitialized,
-		IsIntermediate:      resp.IsIntermediate,
-		DefaultAlgorithm:    resp.DefaultAlgorithm,
-		DefaultValidityDays: int32(resp.DefaultValidity),
-	}
+	result := &InfoResult{}
+	if resp.CaInfo != nil {
+		result.CommonName = resp.CaInfo.CommonName
+		result.IsInitialized = resp.CaInfo.IsInitialized
+		result.IsIntermediate = resp.CaInfo.IsIntermediate
+		result.DefaultAlgorithm = resp.CaInfo.DefaultAlgorithm
+		result.DefaultValidityDays = resp.CaInfo.DefaultValidityDays
 
-	if resp.RootCert != nil {
-		result.RootCertificate = convertRESTCertSummary(resp.RootCert)
-	}
+		if resp.CaInfo.RootCert != nil {
+			result.RootCertificate = convertCertificateSummary(resp.CaInfo.RootCert)
+		}
 
-	for i := range resp.Intermediates {
-		result.Intermediates = append(result.Intermediates, *convertRESTCertSummary(&resp.Intermediates[i]))
+		for _, intermediate := range resp.CaInfo.Intermediates {
+			if intermediate != nil {
+				result.Intermediates = append(result.Intermediates, *convertCertificateSummary(intermediate))
+			}
+		}
+
+		for _, ks := range resp.CaInfo.KeyStores {
+			if ks != nil {
+				result.KeyStores = append(result.KeyStores, KeyStoreInfo{
+					Type:         ks.Type,
+					Available:    ks.Available,
+					Capabilities: ks.Capabilities,
+				})
+			}
+		}
 	}
 
 	return result, nil
