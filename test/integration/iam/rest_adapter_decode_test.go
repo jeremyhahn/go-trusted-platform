@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	pb "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // TestRESTAdapterDecode checks that the adapter unwraps the
@@ -123,5 +125,41 @@ func TestRESTAdapterDecode(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		checkNamed(t, "role", res.Role.ID, res.Role.Name, "r-1", "Role One")
+	})
+}
+
+// TestDecodeListReplyEnvelope checks that decodeListReply unwraps the
+// envelope protorest.WriteSuccessStatus writes around list replies, and
+// still decodes a flat protojson body.
+func TestDecodeListReplyEnvelope(t *testing.T) {
+	t.Run("UsersEnvelope", func(t *testing.T) {
+		body := []byte(`{"code":200,"error":"","success":true,"payload":{"users":[{"id":"u-1","email":"u1@example.com"},{"id":"u-2","email":"u2@example.com"}],"pagination":{},"total":2}}`)
+		var resp pb.ListIAMUsersResponse
+		if err := decodeListReply("ListUsers", body, &resp); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(resp.GetUsers()) != 2 || resp.GetUsers()[0].GetId() != "u-1" || resp.GetTotal() != 2 {
+			t.Fatalf("users did not decode: got %d users, total %d", len(resp.GetUsers()), resp.GetTotal())
+		}
+	})
+	t.Run("GroupsEnvelope", func(t *testing.T) {
+		body := []byte(`{"code":200,"error":"","success":true,"payload":{"groups":[{"id":"g-1","name":"Group One"}],"pagination":{},"total":1}}`)
+		var resp pb.ListIAMGroupsResponse
+		if err := decodeListReply("ListGroups", body, &resp); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(resp.GetGroups()) != 1 || resp.GetGroups()[0].GetId() != "g-1" || resp.GetTotal() != 1 {
+			t.Fatalf("groups did not decode: got %d groups, total %d", len(resp.GetGroups()), resp.GetTotal())
+		}
+	})
+	t.Run("FlatBody", func(t *testing.T) {
+		body := []byte(`{"users":[{"id":"u-1"}],"total":1}`)
+		var resp pb.ListIAMUsersResponse
+		if err := decodeListReply("ListUsers", body, &resp); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(resp.GetUsers()) != 1 || resp.GetUsers()[0].GetId() != "u-1" || resp.GetTotal() != 1 {
+			t.Fatalf("flat body did not decode: got %d users, total %d", len(resp.GetUsers()), resp.GetTotal())
+		}
 	})
 }
