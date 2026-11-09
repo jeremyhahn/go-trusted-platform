@@ -116,10 +116,10 @@ address is not currently admitted.
 ```bash
 platformctl sdn gateway status --output json
 platformctl sdn gateway snapshot
-platformctl sdn gateway snapshot --gateway-id gw-01-gateway
+platformctl sdn gateway snapshot --gateway-id edge-01-gateway
 platformctl sdn gateway snapshot --all --output json
-platformctl sdn gateway overlay vteps --gateway-id gw-01-gateway
-platformctl sdn gateway overlay vteps get 10.255.0.10 --gateway-id gw-01-gateway
+platformctl sdn gateway overlay vteps --gateway-id edge-01-gateway
+platformctl sdn gateway overlay vteps get 10.255.0.10 --gateway-id edge-01-gateway
 platformctl sdn gateway bgp peers
 platformctl sdn gateway bgp announce --prefix 203.0.113.0/24 --next-hop 198.51.100.1
 platformctl sdn gateway bgp withdraw --prefix 203.0.113.0/24
