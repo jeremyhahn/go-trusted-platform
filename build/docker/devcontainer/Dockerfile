@@ -67,7 +67,7 @@ RUN set -eu; \
     esac; \
     v="${TRIVY_VERSION#v}"; \
     f="trivy_${v}_Linux-${arch}.tar.gz"; \
-    curl -fsSL -o "/tmp/${f}" "https://github.com/aquasecurity/trivy/releases/download/${TRIVY_VERSION}/${f}"; \
+    curl -fsSL --retry 12 --retry-delay 20 --retry-max-time 300 -o "/tmp/${f}" "https://github.com/aquasecurity/trivy/releases/download/${TRIVY_VERSION}/${f}"; \
     echo "${sum}  /tmp/${f}" > /tmp/trivy.sha256; \
     sha256sum -c /tmp/trivy.sha256; \
     tar -xzf "/tmp/${f}" -C /out trivy; \
@@ -90,7 +90,7 @@ WORKDIR /src
 # The cache is opened for reading by any uid (the toolchain image runs as the
 # invoking user) in this same RUN, while its files are still in the layer
 # being written. A chmod -R in a later layer copies every file of the cache up
-# into a new layer: 107 s on ci-node-2 and 1468 to 2287 s on omega
+# into a new layer: 107 s on one runner and 1468 to 2287 s on another
 # (go-trusted-platform run 70307, CA m1594). COPY --from keeps the modes.
 COPY go.mod go.sum ./
 COPY sdk/go/go.mod sdk/go/go.sum ./sdk/go/
@@ -305,7 +305,7 @@ RUN set -eu; \
       *) echo "no node pin for ${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
     f="node-${NODE_VERSION}-linux-${arch}.tar.xz"; \
-    curl -fsSL -o "/tmp/${f}" "https://nodejs.org/dist/${NODE_VERSION}/${f}"; \
+    curl -fsSL --retry 12 --retry-delay 20 --retry-max-time 300 -o "/tmp/${f}" "https://nodejs.org/dist/${NODE_VERSION}/${f}"; \
     echo "${sum}  /tmp/${f}" > /tmp/node.sha256; \
     sha256sum -c /tmp/node.sha256; \
     tar -xJf "/tmp/${f}" -C /usr/local --strip-components=1 --no-same-owner; \
