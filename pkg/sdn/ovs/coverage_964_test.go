@@ -33,11 +33,20 @@ func TestClient_AddBond(t *testing.T) {
 		assert.Equal(t, "balance-slb", rows[0]["bond_mode"])
 		assert.Equal(t, "active", rows[0]["lacp"])
 
+		// The bridge holds the bond port.
+		br, err := client.GetBridge(ctx, "br-port-test")
+		require.NoError(t, err)
+		assert.Contains(t, br.Ports, port.UUID)
+
+		// The bond's interface references are exactly the requested members.
+		var memberUUIDs []string
 		for _, member := range []string{"eth10", "eth11"} {
 			iface, err := client.GetInterface(ctx, member)
 			require.NoError(t, err)
 			assert.Equal(t, member, iface.Name)
+			memberUUIDs = append(memberUUIDs, iface.UUID)
 		}
+		assert.ElementsMatch(t, memberUUIDs, port.Interfaces)
 	})
 
 	t.Run("refuses a bond that already exists", func(t *testing.T) {
