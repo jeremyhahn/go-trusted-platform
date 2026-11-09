@@ -374,8 +374,8 @@ bmc:
 				{
 					Name:        "eth0",
 					Type:        installer.InterfaceTypeStatic,
-					IPv4Address: "10.4.2.140/24",
-					IPv4Gateway: "10.4.2.1",
+					IPv4Address: "198.51.100.140/24",
+					IPv4Gateway: "198.51.100.1",
 				},
 			},
 		},
@@ -442,11 +442,11 @@ bmc:
 	if iface["type"] != "static" {
 		t.Errorf("interface type = %v, want static", iface["type"])
 	}
-	if iface["ipv4-address"] != "10.4.2.140/24" {
-		t.Errorf("interface ipv4-address = %v, want 10.4.2.140/24 (YAML-tag key)", iface["ipv4-address"])
+	if iface["ipv4-address"] != "198.51.100.140/24" {
+		t.Errorf("interface ipv4-address = %v, want 198.51.100.140/24 (YAML-tag key)", iface["ipv4-address"])
 	}
-	if iface["ipv4-gateway"] != "10.4.2.1" {
-		t.Errorf("interface ipv4-gateway = %v, want 10.4.2.1", iface["ipv4-gateway"])
+	if iface["ipv4-gateway"] != "198.51.100.1" {
+		t.Errorf("interface ipv4-gateway = %v, want 198.51.100.1", iface["ipv4-gateway"])
 	}
 
 	// The injected tenant key must use the device-schema spelling.
@@ -484,7 +484,7 @@ func TestBuildMergedConfig_OverrideBeatsGlobalIdentity(t *testing.T) {
 
 	node := &DiscoveredNode{
 		NodeConfig: NodeConfig{
-			Hostname: "gw-01",
+			Hostname: "edge-01",
 			Role:     RoleGateway,
 			Overrides: map[string]interface{}{
 				"domain": "gw.example.com",
