@@ -261,6 +261,27 @@ type successResponse struct {
 	Message string `json:"message,omitempty"`
 }
 
+// decodeEnvelope unmarshals a Create/Get/Update reply into v. The IAM REST
+// handlers wrap these in {"code","error","success","payload"}; a body
+// without a payload is decoded flat.
+func decodeEnvelope(operation string, body []byte, v interface{}) error {
+	var env struct {
+		Payload json.RawMessage `json:"payload"`
+	}
+	data := body
+	if err := json.Unmarshal(body, &env); err == nil && len(env.Payload) > 0 && string(env.Payload) != "null" {
+		data = env.Payload
+	}
+	if err := json.Unmarshal(data, v); err != nil {
+		return &RESTAdapterError{
+			Operation: operation,
+			Message:   "failed to parse response: " + err.Error(),
+			Body:      string(body),
+		}
+	}
+	return nil
+}
+
 // ============================================================================
 // User CRUD Operations
 // ============================================================================
@@ -292,12 +313,8 @@ func (a *RESTAdapter) CreateUser(ctx context.Context, opts CreateUserOptions) (*
 	}
 
 	var resp userResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, &RESTAdapterError{
-			Operation: "CreateUser",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
+	if err := decodeEnvelope("CreateUser", body, &resp); err != nil {
+		return nil, err
 	}
 
 	return &CreateUserResult{User: resp.toUser()}, nil
@@ -313,12 +330,8 @@ func (a *RESTAdapter) GetUser(ctx context.Context, opts GetUserOptions) (*GetUse
 	}
 
 	var resp userResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, &RESTAdapterError{
-			Operation: "GetUser",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
+	if err := decodeEnvelope("GetUser", body, &resp); err != nil {
+		return nil, err
 	}
 
 	return &GetUserResult{User: resp.toUser()}, nil
@@ -351,12 +364,8 @@ func (a *RESTAdapter) UpdateUser(ctx context.Context, opts UpdateUserOptions) (*
 	}
 
 	var resp userResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, &RESTAdapterError{
-			Operation: "UpdateUser",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
+	if err := decodeEnvelope("UpdateUser", body, &resp); err != nil {
+		return nil, err
 	}
 
 	return &UpdateUserResult{User: resp.toUser()}, nil
@@ -504,12 +513,8 @@ func (a *RESTAdapter) CreateGroup(ctx context.Context, opts CreateGroupOptions) 
 	}
 
 	var resp groupResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, &RESTAdapterError{
-			Operation: "CreateGroup",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
+	if err := decodeEnvelope("CreateGroup", body, &resp); err != nil {
+		return nil, err
 	}
 
 	return &CreateGroupResult{Group: resp.toGroup()}, nil
@@ -525,12 +530,8 @@ func (a *RESTAdapter) GetGroup(ctx context.Context, opts GetGroupOptions) (*GetG
 	}
 
 	var resp groupResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, &RESTAdapterError{
-			Operation: "GetGroup",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
+	if err := decodeEnvelope("GetGroup", body, &resp); err != nil {
+		return nil, err
 	}
 
 	return &GetGroupResult{Group: resp.toGroup()}, nil
@@ -557,12 +558,8 @@ func (a *RESTAdapter) UpdateGroup(ctx context.Context, opts UpdateGroupOptions) 
 	}
 
 	var resp groupResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, &RESTAdapterError{
-			Operation: "UpdateGroup",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
+	if err := decodeEnvelope("UpdateGroup", body, &resp); err != nil {
+		return nil, err
 	}
 
 	return &UpdateGroupResult{Group: resp.toGroup()}, nil
@@ -703,12 +700,8 @@ func (a *RESTAdapter) CreateRole(ctx context.Context, opts CreateRoleOptions) (*
 	}
 
 	var resp roleResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, &RESTAdapterError{
-			Operation: "CreateRole",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
+	if err := decodeEnvelope("CreateRole", body, &resp); err != nil {
+		return nil, err
 	}
 
 	return &CreateRoleResult{Role: resp.toRole()}, nil
@@ -724,12 +717,8 @@ func (a *RESTAdapter) GetRole(ctx context.Context, opts GetRoleOptions) (*GetRol
 	}
 
 	var resp roleResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, &RESTAdapterError{
-			Operation: "GetRole",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
+	if err := decodeEnvelope("GetRole", body, &resp); err != nil {
+		return nil, err
 	}
 
 	return &GetRoleResult{Role: resp.toRole()}, nil
@@ -758,12 +747,8 @@ func (a *RESTAdapter) UpdateRole(ctx context.Context, opts UpdateRoleOptions) (*
 	}
 
 	var resp roleResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, &RESTAdapterError{
-			Operation: "UpdateRole",
-			Message:   "failed to parse response: " + err.Error(),
-			Body:      string(body),
-		}
+	if err := decodeEnvelope("UpdateRole", body, &resp); err != nil {
+		return nil, err
 	}
 
 	return &UpdateRoleResult{Role: resp.toRole()}, nil
