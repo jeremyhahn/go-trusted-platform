@@ -14,12 +14,12 @@
 package rpibootsig
 
 import (
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
-	"crypto/x509"
-	"encoding/pem"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,13 +27,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The testdata is the upstream tools' own output for a fixed key and image:
+// The testdata is the upstream tools' own output for a fixed image, signed
+// with a throwaway key that is not kept in the tree:
 //
-//	SOURCE_DATE_EPOCH=1790856000 rpi-eeprom-digest -k fleet-test-key.pem -i boot.img -o boot.sig
-//	SOURCE_DATE_EPOCH=1790856000 rpi-eeprom-digest -c 2712 -k fleet-test-key.pem -i boot.img -o boot-2712.sig
+//	SOURCE_DATE_EPOCH=1790856000 rpi-eeprom-digest -k throwaway-key.pem -i boot.img -o boot.sig
+//	SOURCE_DATE_EPOCH=1790856000 rpi-eeprom-digest -c 2712 -k throwaway-key.pem -i boot.img -o boot-2712.sig
 //	pubkey.bin: pemtobin() from rpi-eeprom-config (N as 256 little-endian bytes, then E as 8)
-//
-// fleet-test-key.pem is a throwaway key that protects nothing.
 const goldenEpoch = 1790856000
 
 func golden(t *testing.T, name string) []byte {
@@ -43,41 +42,58 @@ func golden(t *testing.T, name string) []byte {
 	return data
 }
 
-func goldenKey(t *testing.T) *rsa.PrivateKey {
+func goldenPublicKey(t *testing.T) *rsa.PublicKey {
 	t.Helper()
-	block, _ := pem.Decode(golden(t, "fleet-test-key.pem"))
-	require.NotNil(t, block)
-	key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	pub, err := ParseKeyBlob(golden(t, "pubkey.bin"))
 	require.NoError(t, err)
-	rsaKey, ok := key.(*rsa.PrivateKey)
-	require.True(t, ok)
-	return rsaKey
+	return pub
 }
 
+// The upstream signature belongs to the throwaway key, so Sign with a fresh
+// key must reproduce every line of the upstream file but the signature, and
+// Verify must accept what it wrote.
 func TestGolden_SignReproducesTheUpstreamFile(t *testing.T) {
-	key := goldenKey(t)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
 	img := golden(t, "boot.img")
+	otp, err := KeyHash(&key.PublicKey)
+	require.NoError(t, err)
 
-	t.Run("without target-soc", func(t *testing.T) {
-		sig, err := Sign(key, img, SignOptions{Timestamp: time.Unix(goldenEpoch, 0)})
-		require.NoError(t, err)
-		assert.Equal(t, string(golden(t, "boot.sig")), string(sig))
-	})
-	t.Run("with target-soc", func(t *testing.T) {
-		sig, err := Sign(key, img, SignOptions{Timestamp: time.Unix(goldenEpoch, 0), TargetSoC: "2712"})
-		require.NoError(t, err)
-		assert.Equal(t, string(golden(t, "boot-2712.sig")), string(sig))
-	})
+	for name, tc := range map[string]struct{ file, soc string }{
+		"without target-soc": {"boot.sig", ""},
+		"with target-soc":    {"boot-2712.sig", "2712"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sig, err := Sign(key, img, SignOptions{Timestamp: time.Unix(goldenEpoch, 0), TargetSoC: tc.soc})
+			require.NoError(t, err)
+
+			want := strings.Split(string(golden(t, tc.file)), "\n")
+			got := strings.Split(string(sig), "\n")
+			require.Len(t, got, len(want))
+			for i := range want {
+				if strings.HasPrefix(want[i], signaturePrefix) {
+					assert.True(t, strings.HasPrefix(got[i], signaturePrefix), "line %d: %q", i, got[i])
+					continue
+				}
+				assert.Equal(t, want[i], got[i], "line %d", i)
+			}
+
+			parsed, err := Verify(sig, img, &key.PublicKey, otp)
+			require.NoError(t, err)
+			assert.Equal(t, int64(goldenEpoch), parsed.Timestamp.Unix())
+			assert.Equal(t, tc.soc, parsed.TargetSoC)
+		})
+	}
 }
 
 func TestGolden_VerifyAcceptsTheUpstreamFile(t *testing.T) {
-	key := goldenKey(t)
+	pub := goldenPublicKey(t)
 	img := golden(t, "boot.img")
 	otp := sha256.Sum256(golden(t, "pubkey.bin"))
 
 	for name, soc := range map[string]string{"boot.sig": "", "boot-2712.sig": "2712"} {
 		t.Run(name, func(t *testing.T) {
-			parsed, err := Verify(golden(t, name), img, &key.PublicKey, otp)
+			parsed, err := Verify(golden(t, name), img, pub, otp)
 			require.NoError(t, err)
 			assert.Equal(t, int64(goldenEpoch), parsed.Timestamp.Unix())
 			assert.Equal(t, soc, parsed.TargetSoC)
@@ -86,27 +102,23 @@ func TestGolden_VerifyAcceptsTheUpstreamFile(t *testing.T) {
 }
 
 func TestGolden_KeyBlobAndHashMatchPemtobin(t *testing.T) {
-	key := goldenKey(t)
-	blob, err := KeyBlob(&key.PublicKey)
+	pub := goldenPublicKey(t)
+	blob, err := KeyBlob(pub)
 	require.NoError(t, err)
 	assert.Equal(t, golden(t, "pubkey.bin"), blob)
 
-	hash, err := KeyHash(&key.PublicKey)
+	hash, err := KeyHash(pub)
 	require.NoError(t, err)
 	assert.Equal(t, sha256.Sum256(golden(t, "pubkey.bin")), hash)
-
-	parsed, err := ParseKeyBlob(golden(t, "pubkey.bin"))
-	require.NoError(t, err)
-	assert.True(t, key.PublicKey.Equal(parsed))
 }
 
 func TestGolden_UpstreamFileRefusedWhenTampered(t *testing.T) {
-	key := goldenKey(t)
+	pub := goldenPublicKey(t)
 	img := golden(t, "boot.img")
 	otp := sha256.Sum256(golden(t, "pubkey.bin"))
 
 	img[0] ^= 0xff
-	_, err := Verify(golden(t, "boot.sig"), img, &key.PublicKey, otp)
+	_, err := Verify(golden(t, "boot.sig"), img, pub, otp)
 	var mismatch *DigestMismatchError
 	assert.ErrorAs(t, err, &mismatch)
 }

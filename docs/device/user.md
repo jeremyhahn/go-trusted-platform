@@ -231,7 +231,7 @@ curl https://cp.example.com:8443/api/v1/device/templates
 # Turn a template into a profile
 curl -X POST https://cp.example.com:8443/api/v1/device/templates/7/create-profile \
      -H 'Content-Type: application/json' \
-     --data '{"name":"gw-02","role":"gateway"}'
+     --data '{"name":"edge-02","role":"gateway"}'
 ```
 
 Creating a profile from a template deep-copies the template's config and match

@@ -149,8 +149,8 @@ func TestRouterEndToEnd_CreateProfile(t *testing.T) {
 func TestRouterEndToEnd_GetConfig(t *testing.T) {
 	profile := &entities.DeviceProfile{
 		ID:     99,
-		Name:   "gw-01",
-		Config: map[string]interface{}{"hostname": "gw-01"},
+		Name:   "edge-01",
+		Config: map[string]interface{}{"hostname": "edge-01"},
 	}
 	profSvc := &mockProfileService{findByMAC: profile}
 	deviceRouter := NewDeviceRouter(testLogger(), testResponseWriter(), nil, profSvc)
@@ -165,5 +165,5 @@ func TestRouterEndToEnd_GetConfig(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rr.Code)
 	assert.Equal(t, "application/x-yaml", rr.Header().Get("Content-Type"))
-	assert.Contains(t, rr.Body.String(), "hostname: gw-01")
+	assert.Contains(t, rr.Body.String(), "hostname: edge-01")
 }
