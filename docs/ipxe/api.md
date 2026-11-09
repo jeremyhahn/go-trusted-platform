@@ -162,7 +162,7 @@ get wrong here.**
 {"data_dir":"/data","since":"…","sampled_at":"…","interval":250000000,
  "files":[{"path":"/data/x.iso","opens":1,"max_pos":1048576,"open_samples":812,
            "first_seen":"…","last_seen":"…",
-           "openers":[{"name":"smbd","client":"10.4.2.103","opens":1,"open_samples":812,"open_events":1,
+           "openers":[{"name":"smbd","client":"198.51.100.103","opens":1,"open_samples":812,"open_events":1,
                        "pos_changes":640,"max_pos":1048576,
                        "first_seen":"…","last_seen":"…","last_activity":"…"}]}]}
 ```

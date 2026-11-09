@@ -1,6 +1,6 @@
 # AVR Attestation Provider
 
-> **Status: REFERENCE** · Last verified: 2026-10-18
+> **Status: REFERENCE** · Last verified: 2026-10-26
 > The AVR attestation provider in `pkg/firmware/avr/attestation`.
 
 The platform-side attestation provider for trusted-firmware AVR devices. It
@@ -207,6 +207,74 @@ make test-avr-attestation
 make coverage-avr-attestation
 make bench-avr-attestation
 ```
+
+## Physical-board enrollment run (trusted-firmware#7)
+
+trusted-firmware#7 runs a real board through ACME `device-attest-01` (#1093
+asks where). **No bench lane can run it yet. No documented command exists.**
+This section records what main has and what is missing. Line numbers are
+against the commit that added this section.
+
+### Where the ACME server and control plane run
+
+The only ACME server is platformd's REST route group,
+`pkg/webservice/v1/router/acme.go` ([../ca/api.md §3](../ca/api.md)). No test
+binary, make target or fixture hosts one for a board. `make
+integration-test-acme` runs platformd in the devcontainer and drives
+`platformctl acme`, but it has no serial port and no `device-attest-01`.
+
+A deployed platformd does not serve `device-attest-01` either:
+
+- `buildChallengeMap` (`pkg/daemon/commands/serve.go:249-276`) maps
+  `http-01`, `dns-01`, `enroll-01` and `endorse-01` only. Listing
+  `device-attest-01` under `webservices[].acme.challenges`, as
+  [../ca/acme.md](../ca/acme.md) shows, adds no verifier for it.
+- The pinned SDK, go-quicbaas `sdk/go` v0.12.0-alpha (`go.mod:54-55`, held for
+  #906/#937), exports the constant `ACMEChallengeTypeDeviceAttest01` but no
+  `device-attest-01` verifier, and has no `xkms.DICEVerify`. That arrives in
+  v0.14.0-alpha ([Non-goals](#non-goals)). The verifier is go-xkms's to
+  implement ([../ca/api.md §3](../ca/api.md)).
+- `platformctl acme renew --challenge device-attest-01`
+  (`pkg/cli/commands/acme/renew.go:142`) is a client that holds a TPM. It does
+  not hold a board.
+
+**How the server reaches the board.** Nothing on main reaches it. Only this
+package's own tests import `pkg/firmware/avr/attestation`. `New`
+(`pkg/firmware/avr/attestation/provider.go:84`) takes a `*tfw.Device` over
+an `io.ReadWriter`, so today it can only run in process on the host that holds
+the serial port. There is no gateway relay yet (#696). The SPEC `firmware` row
+(#771) requires the platform to reach the device through the go-quicbaas SDK,
+with trusted-firmware's `xkms` adapter composed into go-xkms. The pinned SDK
+does not carry that adapter.
+
+### Which issue owns it
+
+- **#772** owns the run itself. It is the SPEC `device-enrollment` row's "a
+  DICE AVR enrolled end to end", and its finalize uses the CSR the device
+  builds.
+- **#696** owns what the run needs first: the enrolment driver (`AttestCert`
+  into `device-attest-01`), the device registry and the gateway relay.
+- **Upstream** owns the `device-attest-01` verifier and DICE chain
+  verification (go-xkms, re-exported through go-quicbaas), and with them the
+  SDK bump.
+
+### The calls, in order, and what each is missing
+
+| # | Call | On main | Missing |
+|---|------|---------|---------|
+| 1 | Device profile | `platformctl device profile create` ([../device/cli.md §3.2](../device/cli.md)) | The profile is keyed by EK serial, MAC and EK certificate. It has no field for a DICE device id or the golden `FWHash`. That is #696's registry. |
+| 2 | EAB, if required | `webservices[].acme.external-account-required` (`pkg/webservice/v1/config.go:105`, passed through at `pkg/webservice/v1/registry.go:1900`). Create a credential with `POST /api/v1/eab/credentials` (`pkg/webservice/v1/rest/eab/router.go:59`). | Nothing. A bench may leave EAB off. |
+| 3 | `newAccount`, then `newOrder` for a `permanent-identifier` | The ACME routes ([../ca/api.md §3](../ca/api.md)) | Nothing on the order. |
+| 4 | Respond to the `device-attest-01` challenge | `AttestCert` (`provider.go:189`) signs the 32-byte SHA-256 of the key authorization | A server-side verifier (`buildChallengeMap`) and a client that carries the alias certificate to the challenge (#696). |
+| 5 | `finalizeOrder` with the CSR the device built | The `finalizeOrder` route | The device-built CSR path (#772). |
+| 6 | Download the issued certificate | The `certificate` route | Nothing once step 5 succeeds. |
+
+**The verifier policy knob.** No setting admits a `notSecure` soft-rooted
+device: the term does not appear in `pkg/` or `docs/` outside
+`docs/reference/`, and `Policy` here has no security-level field. The knob
+belongs to the `device-attest-01` verifier, which does not exist yet, so it
+lands with that verifier upstream, and the platform's ACME configuration
+exposes it.
 
 ## Following work
 
