@@ -45,7 +45,8 @@ type Environment struct {
 	ULA netip.Prefix `yaml:"ula,omitempty" json:"ula,omitempty" mapstructure:"ula"`
 
 	// Overrides replace derived numbers for individual zones. The reference
-	// needs none; the dev fleet and other non-reference sites use them.
+	// uses them for management and provisioning; the dev fleet and other
+	// non-reference sites use them too.
 	Overrides []Override `yaml:"overrides,omitempty" json:"overrides,omitempty" mapstructure:"overrides"`
 }
 

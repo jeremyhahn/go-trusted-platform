@@ -857,7 +857,7 @@ func TestHeartbeat_Success(t *testing.T) {
 	handler := NewHandler(newTestLogger(), newTestResponseWriter(), nil, nil,
 		WithHeartbeatRecorder(recorder))
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/device/heartbeat", nil)
-	req.RemoteAddr = "10.4.2.143:51234"
+	req.RemoteAddr = "198.51.100.143:51234"
 	req = req.WithContext(context.WithValue(req.Context(), ContextKeyDeviceSerial, "DEVICE-12345"))
 	w := httptest.NewRecorder()
 
@@ -871,7 +871,7 @@ func TestHeartbeat_Success(t *testing.T) {
 	assert.Equal(t, now, resp.ReceivedAt)
 	// The transport peer address — never anything from the body — is what
 	// the recorder receives (#377).
-	assert.Equal(t, "10.4.2.143:51234", recorder.peerAddr)
+	assert.Equal(t, "198.51.100.143:51234", recorder.peerAddr)
 	recorder.AssertExpectations(t)
 }
 

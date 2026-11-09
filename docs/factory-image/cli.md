@@ -52,7 +52,7 @@ and the staged media directory.
 | Flag | Type | Default | Meaning |
 |---|---|---|---|
 | `--target` | string | `rpi` | `rpi` or `qemu-virt` |
-| `--model` | string | `rpi4` for `rpi` | `rpi4`, `rpi400`, `cm4`, `rpi3b+`, `rpi5` (experimental) |
+| `--model` | string | `rpi4` for `rpi` | `rpi4`, `rpi400`, `cm4`, `rpi3b+`, `rpi5` (experimental) | <!-- lab-string-ok: Raspberry Pi model name, not a lab host -->
 | `--role` | string | | dedicated-profile role for `--target rpi`: builds `configs/platform/templates/dedicated/raspberrypi/<model>/<role>.yaml` (today `compute` on `rpi4`, and on `rpi5` as an experimental template; `control-plane` on `cm4` and `rpi4`). Empty builds the single-node image. Refused with `ErrRoleTemplate` beside `--platform-config`, on `qemu-virt`, for a model the builder does not know, or when that file does not exist; there is no fallback |
 | `--size` | int | `4096` | image size in MB; minimum `2048` |
 | `--output` | string | `<work-dir>/trusted-platform-<target>.img` | output image path |
