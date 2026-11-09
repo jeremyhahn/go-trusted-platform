@@ -138,7 +138,7 @@ it gets `403` ([api.md §7](api.md#7-authorization)).
 ### POST `/device/templates/{id}/create-profile`
 
 ```json
-{"overrides": {"name": "gw-01", "ek_serial": "1234567890"}}
+{"overrides": {"name": "edge-01", "ek_serial": "1234567890"}}
 ```
 
 `overrides` is a full profile request
