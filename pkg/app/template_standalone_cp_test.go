@@ -32,7 +32,7 @@ import (
 )
 
 // standaloneCPTemplate is the plan-free control plane template: platformd
-// standalone on an existing host whose network it does not own (tgw-01 on
+// standalone on an existing host whose network it does not own (edge-01 on
 // VLAN 405).
 var standaloneCPTemplate = filepath.Join(templateRoot, "single-node", "standalone-cp.example.yaml")
 

@@ -300,8 +300,8 @@ func TestStatusTableNamesAnUnreachableServeName(t *testing.T) {
 		ServeNameFindings: []*platformv1.NTSServeNameFinding{{
 			Kind:           string(ntp.ServeNameUnreachable),
 			Name:           "cp.example.internal",
-			Address:        "10.4.2.140",
-			ListenNetworks: []string{"10.4.200.0/24", "192.0.2.0/24"},
+			Address:        "192.0.2.140",
+			ListenNetworks: []string{"10.4.200.0/24", "198.51.100.0/24"},
 		}},
 	})
 
@@ -314,7 +314,7 @@ func TestStatusTableNamesAnUnreachableServeName(t *testing.T) {
 	if line == "" {
 		t.Fatal("the advertised-name mismatch is missing from the status table")
 	}
-	for _, want := range []string{"cp.example.internal", "10.4.2.140", "10.4.200.0/24"} {
+	for _, want := range []string{"cp.example.internal", "192.0.2.140", "10.4.200.0/24"} {
 		if !strings.Contains(line, want) {
 			t.Errorf("row %q does not name %q", line, want)
 		}

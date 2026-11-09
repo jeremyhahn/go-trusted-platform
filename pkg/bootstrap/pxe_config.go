@@ -279,7 +279,7 @@ type DeployerConfig struct {
 	// unset. Override when the orchestrator and the BMC reach the deployer
 	// on different interfaces -- e.g. orchestrator SSHes via mgmt
 	// (10.4.6.91) but the BMC's L3 path lands on the bootstrap-net
-	// interface (10.4.2.91). The SMB URL becomes
+	// interface (198.51.100.91). The SMB URL becomes
 	// smb://<smb_host>/boot/<iso>.
 	SMBHost string `yaml:"smb_host,omitempty"`
 
@@ -774,7 +774,7 @@ func (n *NodeConfig) StaticIPv4s() []string {
 		if addr == "" {
 			continue
 		}
-		// Strip CIDR suffix if present ("10.4.2.140/24" -> "10.4.2.140").
+		// Strip CIDR suffix if present ("198.51.100.140/24" -> "198.51.100.140").
 		if slash := strings.Index(addr, "/"); slash > 0 {
 			addr = addr[:slash]
 		}
