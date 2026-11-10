@@ -379,7 +379,7 @@ func TestQuicBaaSIAMAdapter_RequireUnchangedUserRoles_PassesTheHeldRoles(t *test
 	t.Parallel()
 	client := userHolding("0b5e-admin")
 
-	require.NoError(t, NewQuicBaaSIAMAdapter(client).RequireUnchangedUserRoles(context.Background(), "tenant-a", "user-1", []string{"admin"}))
+	require.NoError(t, NewQuicBaaSIAMAdapter(client).SetUserRoles(context.Background(), "tenant-a", "user-1", []string{"admin"}))
 
 	assert.Empty(t, client.users.assigned)
 	assert.Empty(t, client.users.revoked)
@@ -389,7 +389,7 @@ func TestQuicBaaSIAMAdapter_RequireUnchangedUserRoles_RefusesARoleChange(t *test
 	t.Parallel()
 	client := userHolding()
 
-	err := NewQuicBaaSIAMAdapter(client).RequireUnchangedUserRoles(context.Background(), "tenant-a", "user-1", []string{"admin"})
+	err := NewQuicBaaSIAMAdapter(client).SetUserRoles(context.Background(), "tenant-a", "user-1", []string{"admin"})
 
 	require.ErrorIs(t, err, ErrRoleChangeUnsupported{})
 	assert.Empty(t, client.users.assigned)
@@ -561,7 +561,7 @@ func TestCreateTenant_WithoutSettingsCreates(t *testing.T) {
 func TestQuicBaaSIAMAdapter_RequireUnchangedUserRoles_RefusesUnknownRole(t *testing.T) {
 	client := userHolding()
 
-	err := NewQuicBaaSIAMAdapter(client).RequireUnchangedUserRoles(context.Background(), "tenant-a", "user-1", []string{"owner"})
+	err := NewQuicBaaSIAMAdapter(client).SetUserRoles(context.Background(), "tenant-a", "user-1", []string{"owner"})
 
 	var notFound ErrRoleNotFound
 	require.ErrorAs(t, err, &notFound)

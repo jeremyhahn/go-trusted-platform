@@ -48,6 +48,10 @@ type memIAM struct {
 	roles   map[string]*sdkiam.Role
 	groups  map[string]*sdkiam.Group
 	tenants map[string]*sdkiam.Tenant
+	// apps is the application store the application route tests use.
+	apps *memApps
+	// policies holds the ABAC policies, keyed by tenant and policy name.
+	policies map[string]*sdkiam.Policy
 
 	// tenantUpdates counts the tenant updates that reached the client.
 	tenantUpdates int
@@ -59,6 +63,9 @@ func newMemIAM() *memIAM {
 		roles:   map[string]*sdkiam.Role{},
 		groups:  map[string]*sdkiam.Group{},
 		tenants: map[string]*sdkiam.Tenant{},
+		apps:    &memApps{apps: map[string]*sdkiam.Application{}},
+
+		policies: map[string]*sdkiam.Policy{},
 	}
 }
 
@@ -67,6 +74,8 @@ func (m *memIAM) Role() sdkiam.RoleClient     { return memRoles{m: m} }
 func (m *memIAM) Group() sdkiam.GroupClient   { return memGroups{m: m} }
 func (m *memIAM) Tenant() sdkiam.TenantClient { return memTenants{m: m} }
 func (m *memIAM) PEP() sdkiam.PEPClient       { return memPEP{m: m} }
+func (m *memIAM) App() sdkiam.AppClient       { return m.apps }
+func (m *memIAM) Policy() sdkiam.PolicyClient { return memPolicies{m: m} }
 
 func memKey(tenantID, id string) string { return tenantID + "/" + id }
 
@@ -262,6 +271,102 @@ func (r memRoles) List(_ context.Context, tenantID string, _ *sdkiam.ListRolesRe
 	defer r.m.mu.Unlock()
 	roles := memList(r.m.roles, tenantID)
 	return &sdkiam.ListRolesResponse{Roles: roles, Pagination: sdkiam.PaginationInfo{TotalCount: len(roles)}}, nil
+}
+
+type memPolicies struct {
+	sdkiam.PolicyClient
+	m *memIAM
+}
+
+func (p memPolicies) Create(_ context.Context, tenantID string, req *sdkiam.CreatePolicyRequest) (*sdkiam.Policy, error) {
+	p.m.mu.Lock()
+	defer p.m.mu.Unlock()
+	policy := &sdkiam.Policy{
+		Name: req.Name, TenantID: tenantID, Description: req.Description, Version: 1,
+		Enabled: req.Enabled, Priority: req.Priority, Rules: req.Rules,
+		Targets: req.Targets, Conditions: req.Conditions, Effect: req.Effect,
+	}
+	p.m.policies[memKey(tenantID, policy.Name)] = policy
+	copied := *policy
+	return &copied, nil
+}
+
+func (p memPolicies) Get(_ context.Context, tenantID, policyName string) (*sdkiam.Policy, error) {
+	p.m.mu.Lock()
+	defer p.m.mu.Unlock()
+	policy, err := memFind(p.m.policies, "iam.policy.get", tenantID, policyName)
+	if err != nil {
+		return nil, err
+	}
+	copied := *policy
+	return &copied, nil
+}
+
+// Update applies the fields the request sets, as the SDK's partial update
+// does.
+func (p memPolicies) Update(_ context.Context, tenantID, policyName string, req *sdkiam.UpdatePolicyRequest) (*sdkiam.Policy, error) {
+	p.m.mu.Lock()
+	defer p.m.mu.Unlock()
+	policy, err := memFind(p.m.policies, "iam.policy.update", tenantID, policyName)
+	if err != nil {
+		return nil, err
+	}
+	if req.Description != nil {
+		policy.Description = *req.Description
+	}
+	if req.Enabled != nil {
+		policy.Enabled = *req.Enabled
+	}
+	if req.Priority != nil {
+		policy.Priority = *req.Priority
+	}
+	if req.Rules != nil {
+		policy.Rules = req.Rules
+	}
+	if req.Targets != nil {
+		policy.Targets = req.Targets
+	}
+	if req.Conditions != nil {
+		policy.Conditions = req.Conditions
+	}
+	if req.Effect != nil {
+		policy.Effect = *req.Effect
+	}
+	policy.Version++
+	copied := *policy
+	return &copied, nil
+}
+
+func (p memPolicies) Delete(_ context.Context, tenantID, policyName string) error {
+	p.m.mu.Lock()
+	defer p.m.mu.Unlock()
+	if _, err := memFind(p.m.policies, "iam.policy.delete", tenantID, policyName); err != nil {
+		return err
+	}
+	delete(p.m.policies, memKey(tenantID, policyName))
+	return nil
+}
+
+func (p memPolicies) List(_ context.Context, tenantID string, _ *sdkiam.ListPoliciesRequest) (*sdkiam.ListPoliciesResponse, error) {
+	p.m.mu.Lock()
+	defer p.m.mu.Unlock()
+	policies := memList(p.m.policies, tenantID)
+	return &sdkiam.ListPoliciesResponse{Policies: policies, TotalCount: int64(len(policies))}, nil
+}
+
+// Validate accepts every policy that carries a name.
+func (p memPolicies) Validate(_ context.Context, _ string, policy *sdkiam.Policy) (*sdkiam.ValidationResult, error) {
+	return &sdkiam.ValidationResult{Valid: policy != nil && policy.Name != ""}, nil
+}
+
+// Test runs no test cases: it answers for a stored policy only.
+func (p memPolicies) Test(_ context.Context, tenantID string, req *sdkiam.TestPolicyRequest) (*sdkiam.TestPolicyResponse, error) {
+	p.m.mu.Lock()
+	defer p.m.mu.Unlock()
+	if _, err := memFind(p.m.policies, "iam.policy.test", tenantID, req.PolicyName); err != nil {
+		return nil, err
+	}
+	return &sdkiam.TestPolicyResponse{Results: []sdkiam.TestCaseResult{}}, nil
 }
 
 type memGroups struct {

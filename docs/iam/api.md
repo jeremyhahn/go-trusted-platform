@@ -226,7 +226,7 @@ SDN and `0xF0`–`0xF5` are reserved `OpDEK*` bytes the daemon does not serve
 | Create token | refused by the SDK: `ErrNoRESTRoute` | refused, `Unimplemented` | `0xF9`, refused, `StatusNotImplemented` | `iam_create_token`, `iam:write`, refused | refused |
 | Verify token | refused by the SDK: `ErrNoRESTRoute` | ✅ | `0xFB` | `iam_verify_token`, `iam:read` | ✅ |
 | Revoke token | refused by the SDK: `ErrNoRESTRoute` | refused, `Unimplemented` | `0xFA`, refused, `StatusNotImplemented` | `iam_revoke_token`, `iam:write`, refused | refused |
-| Check permission | `POST /api/v1/iam/permissions/check`, `/tenants/{tenant}/permissions/check` (not mounted on the daemon, see below) | ✅ | `0xF7` | `iam_check_permission`, `iam:read` | ✅ |
+| Check permission | `POST /api/v1/iam/permissions/check`, `/tenants/{tenant}/permissions/check` (not mounted on a daemon with an embedded backend, see below) | ✅ | `0xF7` | `iam_check_permission`, `iam:read` | ✅ |
 
 **`iam_authenticate` is refused** with `ErrIAMAuthenticationViaOIDC`
 (`Unimplemented`): `PlatformIAMService` has no Authenticate RPC and the IAM
@@ -339,8 +339,8 @@ the `*:*` operator. `RequireAdmin` requires the scope for the method:
 | `GET` | `iam:read` |
 | `POST`, `PUT`, `PATCH` | `iam:write` |
 | `DELETE` | `iam:delete` |
-| `DELETE .../users/{id}/roles/{role}`, `DELETE .../groups/{id}/members/{user}` (flat and tenant-scoped) | `iam:write`, as gRPC `RevokeRole` and `RemoveGroupMember` — not mounted on the daemon yet, `404` (below) |
-| `POST .../policies/validate`, `POST .../policies/test`, `POST .../permissions/check` (flat and tenant-scoped) | `iam:read` — they evaluate the body and change nothing; not mounted on the daemon yet, `404` (below) |
+| `DELETE .../users/{id}/roles/{role}`, `DELETE .../groups/{id}/members/{user}` (flat and tenant-scoped) | `iam:write`, as gRPC `RevokeRole` and `RemoveGroupMember` — not mounted on a daemon with an embedded backend yet, `404` (below) |
+| `POST .../policies/validate`, `POST .../policies/test`, `POST .../permissions/check` (flat and tenant-scoped) | `iam:read` — they evaluate the body and change nothing; not mounted on a daemon with an embedded backend yet, `404` (below) |
 | any other method | refused, `403` |
 
 `RequireSystemTenant` and `RequireOwnTenant` apply the gRPC tenant rules in
@@ -371,13 +371,19 @@ A rule's `effect` must be exactly `allow` or `deny`. A missing effect, `DENY`,
 `ErrInvalidPolicySpec` and nothing is stored, because defaulting it to allow
 would turn a wildcard rule into a tenant-wide grant.
 
-The daemon mounts only the routes whose operation the pinned go-quicbaas SDK
+With an embedded QuicBaaS backend (no `quicbaas` configuration, or an embedded
+one) the daemon mounts only the routes whose operation the pinned go-quicbaas SDK
 (v0.12.0-alpha) embedded transport dispatches (`iamOperationsAwaitingSDK`,
 `pkg/api/daemon/iam_rest.go`). The routes below are left out under both the flat
 `/api/v1/iam` and the `/api/v1/iam/tenants/{tenant}` form. They have no handler
 and answer `404` like any unknown path, and so does a method a mounted path does
 not serve. The Go SDK's REST AssignRole, RevokeRole, AddGroupMember and
 RemoveGroupMember (above) reach the webservice, not the daemon.
+On an embedded backend a user update whose `roles` differ from the user's
+current roles is refused with `400` `ErrRoleChangeUnsupported` before anything
+is written.
+A remote (gRPC or Unix) backend serves these operations: the daemon mounts every
+route, and a user update assigns and revokes the changed roles.
 
 Waiting on the SDK v0.16 adoption (#906):
 

@@ -154,11 +154,21 @@ func hasSubjectSelector(subjects interface{}) bool {
 // delegation.
 type QuicBaaSIAMAdapter struct {
 	client iamsdk.Client
+	// embedded marks a client on the embedded transport, which cannot
+	// assign or revoke a user's roles.
+	embedded bool
 }
 
-// NewQuicBaaSIAMAdapter wraps the supplied SDK client. Callers should
-// pass quicbaassdk.IAMClient (which is a type alias for iamsdk.Client).
+// NewQuicBaaSIAMAdapter wraps the supplied SDK client on the embedded
+// transport, which refuses role changes. Callers should pass
+// quicbaassdk.IAMClient (which is a type alias for iamsdk.Client).
 func NewQuicBaaSIAMAdapter(client quicbaassdk.IAMClient) *QuicBaaSIAMAdapter {
+	return &QuicBaaSIAMAdapter{client: client, embedded: true}
+}
+
+// NewRemoteQuicBaaSIAMAdapter wraps an SDK client on a remote (gRPC or Unix)
+// transport, which assigns and revokes roles.
+func NewRemoteQuicBaaSIAMAdapter(client quicbaassdk.IAMClient) *QuicBaaSIAMAdapter {
 	return &QuicBaaSIAMAdapter{client: client}
 }
 
@@ -207,11 +217,15 @@ func (a *QuicBaaSIAMAdapter) DeleteUser(ctx context.Context, tenantID, userID st
 	return a.client.User().Delete(ctx, tenantID, userID)
 }
 
-// RequireUnchangedUserRoles refuses referenced roles that differ from the
-// user's current roles (RequireUnchangedUserRoles); no references leaves them
-// alone.
-func (a *QuicBaaSIAMAdapter) RequireUnchangedUserRoles(ctx context.Context, tenantID, userID string, roles []string) error {
-	return RequireUnchangedUserRoles(ctx, a.client, tenantID, userID, roles)
+// SetUserRoles replaces the user's roles with the referenced roles
+// (SetUserRoles). On the embedded transport it refuses referenced roles that
+// differ from the user's current roles instead (RequireUnchangedUserRoles).
+// No references leaves the roles alone.
+func (a *QuicBaaSIAMAdapter) SetUserRoles(ctx context.Context, tenantID, userID string, roles []string) error {
+	if a.embedded {
+		return RequireUnchangedUserRoles(ctx, a.client, tenantID, userID, roles)
+	}
+	return SetUserRoles(ctx, a.client, tenantID, userID, roles)
 }
 
 // AssignRole delegates to iamsdk.UserClient.AssignRole, first resolving the

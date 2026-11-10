@@ -109,7 +109,7 @@ func iamRESTServerWithApps(t *testing.T) (*RESTServer, *memApps) {
 	apps := &memApps{apps: map[string]*sdkiam.Application{}}
 	s := &RESTServer{router: mux.NewRouter(), logger: slog.Default()}
 	guard := restapi.NewScopeGuard(iamRESTCallers, nil, nil)
-	require.NoError(t, s.SetIAMHandlers(logging.DefaultLogger(), restiam.NewQuicBaaSIAMAdapter(memAppsIAM{memIAM: iam, apps: apps}), restiam.NewQuicBaaSPEPAdapter(iam.PEP()), guard, iamRESTSystemTenant))
+	require.NoError(t, s.SetIAMHandlers(logging.DefaultLogger(), restiam.NewQuicBaaSIAMAdapter(memAppsIAM{memIAM: iam, apps: apps}), restiam.NewQuicBaaSPEPAdapter(iam.PEP()), guard, iamRESTSystemTenant, true))
 	return s, apps
 }
 

@@ -63,7 +63,7 @@ func iamRESTServerOn(t *testing.T, iam *memIAM) *RESTServer {
 	t.Helper()
 	s := &RESTServer{router: mux.NewRouter(), logger: slog.Default()}
 	guard := restapi.NewScopeGuard(iamRESTCallers, nil, nil)
-	require.NoError(t, s.SetIAMHandlers(logging.DefaultLogger(), restiam.NewQuicBaaSIAMAdapter(iam), restiam.NewQuicBaaSPEPAdapter(iam.PEP()), guard, iamRESTSystemTenant))
+	require.NoError(t, s.SetIAMHandlers(logging.DefaultLogger(), restiam.NewQuicBaaSIAMAdapter(iam), restiam.NewQuicBaaSPEPAdapter(iam.PEP()), guard, iamRESTSystemTenant, true))
 	return s
 }
 
@@ -126,7 +126,7 @@ func TestSetIAMHandlers_RefusesAMissingDependency(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := &RESTServer{router: mux.NewRouter(), logger: slog.Default()}
-			err := s.SetIAMHandlers(tc.logger, tc.client, tc.pep, tc.guard, iamRESTSystemTenant)
+			err := s.SetIAMHandlers(tc.logger, tc.client, tc.pep, tc.guard, iamRESTSystemTenant, true)
 			var unavailable ErrIAMRESTUnavailable
 			require.ErrorAs(t, err, &unavailable)
 			assert.Equal(t, tc.reason, unavailable.Reason)

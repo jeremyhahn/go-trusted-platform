@@ -163,7 +163,7 @@ func TestDaemonREST_EveryMountedRouteIsGuarded(t *testing.T) {
 	guard := restapi.NewScopeGuard(nil, nil, nil)
 	s, _ := daemonRouteTable(t, guard)
 	iam := newMemIAM()
-	require.NoError(t, s.SetIAMHandlers(logging.DefaultLogger(), restiam.NewQuicBaaSIAMAdapter(iam), restiam.NewQuicBaaSPEPAdapter(iam.PEP()), guard, iamRESTSystemTenant))
+	require.NoError(t, s.SetIAMHandlers(logging.DefaultLogger(), restiam.NewQuicBaaSIAMAdapter(iam), restiam.NewQuicBaaSPEPAdapter(iam.PEP()), guard, iamRESTSystemTenant, true))
 
 	var unguarded []string
 	checked := 0

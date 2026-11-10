@@ -33,7 +33,13 @@ func TestIAMREST_RemoteBackendServesRoutesAwaitingSDK(t *testing.T) {
 	for key := range iamRoutesAwaitingSDK {
 		t.Run(key.method+" "+key.template, func(t *testing.T) {
 			path := placeholders.Replace(key.template)
-			assertReachedHandler(t, serveIAM(s, key.method, path, "operator"))
+			if !strings.Contains(key.template, "{tenant}") {
+				// The flat form names its tenant in the query, as the
+				// served flat routes do.
+				path += "?tenant_id=" + iamRESTTenantA
+			}
+			recorder := serveIAM(s, key.method, path, "operator")
+			assertReachedHandler(t, recorder)
 			assert.Equal(t, http.StatusUnauthorized, serveIAM(s, key.method, path, "").Code)
 		})
 	}

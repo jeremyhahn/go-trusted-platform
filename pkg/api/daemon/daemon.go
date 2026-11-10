@@ -1602,7 +1602,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 			if sdkPEP := iamService.PEP(); sdkPEP != nil {
 				iamRESTPEP = restiam.NewQuicBaaSPEPAdapter(sdkPEP)
 			}
-			iamErr := daemon.concreteRestServer.SetIAMHandlers(logger, restiam.NewQuicBaaSIAMAdapter(iamService.Client()), iamRESTPEP, restGuard, config.PlatformTenantID)
+			iamErr := daemon.concreteRestServer.SetIAMHandlers(logger, iamRESTAdapter(iamService.Client(), config.quicbaasEmbedded()), iamRESTPEP, restGuard, config.PlatformTenantID, config.quicbaasEmbedded())
 			if iamErr != nil {
 				constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: iamErr}
 				logger.Error(constructErr, "component", "rest_server")

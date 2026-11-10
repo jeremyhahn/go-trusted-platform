@@ -51,9 +51,11 @@ type iamRouteKey struct {
 // whose SDK operation the pinned go-quicbaas SDK (v0.12.0-alpha) cannot
 // dispatch on its embedded transport: transport/embedded/iam_dispatch.go
 // carries no handler for them, so mounted they answer 500 with
-// UnknownMethodError. The daemon leaves them out until the SDK v0.16 adoption
-// (#906) brings the operations. The last two are dispatched but cannot be
-// served correctly, so they are left out for the same adoption.
+// UnknownMethodError. On an embedded backend the daemon leaves them out until
+// the SDK v0.16 adoption (#906) brings the operations. The last two are
+// dispatched but cannot be served correctly, so they are left out for the same
+// adoption. A remote (gRPC or Unix) backend serves them all, so there they are
+// mounted.
 var iamOperationsAwaitingSDK = []iamRouteKey{
 	{http.MethodPost, "/users/{id}/roles/{role}"},      // quicbaas.IAM.User/AssignRole
 	{http.MethodDelete, "/users/{id}/roles/{role}"},    // quicbaas.IAM.User/RevokeRole
@@ -97,7 +99,7 @@ type iamRESTCallerKey struct{}
 // platform ScopeGuard authenticates the caller, the caller's iam:* scope
 // gates each method, and the tenant rules are the ones the gRPC, QUIC and
 // MCP IAM transports apply.
-func (s *RESTServer) SetIAMHandlers(logger *logging.Logger, iamClient restiam.IAMClient, pepClient restiam.PEPClient, guard *restapi.ScopeGuard, systemTenantID string) error {
+func (s *RESTServer) SetIAMHandlers(logger *logging.Logger, iamClient restiam.IAMClient, pepClient restiam.PEPClient, guard *restapi.ScopeGuard, systemTenantID string, embedded bool) error {
 	switch {
 	case logger == nil:
 		return ErrIAMRESTUnavailable{Reason: "no logger"}
@@ -119,11 +121,20 @@ func (s *RESTServer) SetIAMHandlers(logger *logging.Logger, iamClient restiam.IA
 	if err != nil {
 		return ErrIAMRESTUnavailable{Reason: err.Error()}
 	}
-	if err := s.mountIAMRoutes(router, authz); err != nil {
+	if err := s.mountIAMRoutes(router, authz, embedded); err != nil {
 		return ErrIAMRESTUnavailable{Reason: err.Error()}
 	}
 	s.logger.Info("IAM REST routes registered")
 	return nil
+}
+
+// iamRESTAdapter adapts the QuicBaaS IAM client for the REST handlers; only the
+// embedded transport refuses role changes.
+func iamRESTAdapter(client sdkiam.Client, embedded bool) restiam.IAMClient {
+	if embedded {
+		return restiam.NewQuicBaaSIAMAdapter(client)
+	}
+	return restiam.NewRemoteQuicBaaSIAMAdapter(client)
 }
 
 // mountIAMRoutes mounts every IAM route on the daemon router. The IAM router registers its whole table, with its
@@ -141,7 +152,9 @@ func (s *RESTServer) SetIAMHandlers(logger *logging.Logger, iamClient restiam.IA
 // answer 404 like any unknown path. A route awaiting the SDK keeps mux's
 // Methods matcher, so a walk of the daemon router reads its method; several of
 // those paths serve no method at all.
-func (s *RESTServer) mountIAMRoutes(iamRouter *restiam.IAMRouter, authz iamRESTAuthorization) error {
+// On a remote (gRPC or Unix) backend, which serves them, a route in
+// iamRoutesAwaitingSDK is mounted like every other route.
+func (s *RESTServer) mountIAMRoutes(iamRouter *restiam.IAMRouter, authz iamRESTAuthorization, embedded bool) error {
 	awaitingSDK := authz.authenticate(http.NotFoundHandler())
 	routes := mux.NewRouter()
 	// The IAM router's base path is relative to the /api/v1 parent.
@@ -160,7 +173,7 @@ func (s *RESTServer) mountIAMRoutes(iamRouter *restiam.IAMRouter, authz iamRESTA
 			return err
 		}
 		for _, method := range methods {
-			if _, awaiting := iamRoutesAwaitingSDK[iamRouteKey{method: method, template: template}]; awaiting {
+			if _, awaiting := iamRoutesAwaitingSDK[iamRouteKey{method: method, template: template}]; awaiting && embedded {
 				s.router.Handle(template, awaitingSDK).Methods(method)
 				continue
 			}
