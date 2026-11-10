@@ -19,7 +19,7 @@
 # Gitea API on a schedule run only whether ci.yml has a push run on main in
 # progress or waiting, and sets `verdict`: `run`, `busy` or `unreadable`; off
 # schedule, and on the github.com mirror, it sets `run` without a call. On a
-# schedule run every bigdisk job here (image, lint-gates, integration, soak)
+# schedule run every bigdisk job here (image, lint-gates, integration, vuln, soak)
 # runs only on `run`. On `busy` CI Gate skips too, so the schedule's Gate
 # posts `skipped`, never a green nightly; on `unreadable` it fails, naming
 # the guard. The guard is a `pr` job in the gate: it runs on every event and
@@ -77,12 +77,15 @@
 #   - integration needs image (isolation, see there) and applies the
 #     foreign-failure baseline (ruling 125); soak applies it per iteration.
 #   - FIPS is kept and gated in the `main` tier (#853, #1411, see its comment).
+#   - The image job's security step runs make security-novuln; govulncheck
+#     runs as the full-tier vuln job at 20g, which builds its own toolchain
+#     image (#1425, see there).
 #   - trivy image keeps --ignore-unfixed, --skip-dirs /gomodcache and its
 #     ignorefile. The SARIF upload is gone with the runner security job:
 #     Gitea has no code-scanning ingest.
 #
-# Stage order. lint-gates, arch-gates, web, fips and soak start at once
-# (ci-template v1.14). image and sdkjs (the docs tier, v1.24) start after the
+# Stage order. lint-gates, arch-gates, web, fips, vuln and soak start at once
+# (ci-template v1.14; vuln after schedule-guard, #1425). image and sdkjs (the docs tier, v1.24) start after the
 # seconds-long `changes` job. integration starts after image (isolation, see
 # there) and runs as five parallel legs, one job per leg of the suite runner
 # (#1119). A run takes as long as changes, image and the slowest integration
@@ -92,8 +95,9 @@
 #
 # The five CI-standard stages (handbook ci-standard.md §1) run in this
 # project's devcontainer image (§2): `image` runs lint, build and test in the
-# toolchain image, plus deps-check (v1.28, every event) and security and
-# trivy in the full tier;
+# toolchain image, plus deps-check (v1.28, every event) and security (without
+# govulncheck) and trivy in the full tier; `vuln` runs govulncheck in its own
+# toolchain container (#1425);
 # `integration` and `soak` run the integration suite in the integration image.
 #
 # Tiers (handbook ci-standard.md §8):
@@ -103,8 +107,8 @@
 #                 included), lint-gates, arch-gates, and the docs tier:
 #                 sdkjs, and the image job's build and test steps.
 #   Full tier     push to main, workflow_dispatch, the schedule, or a PR
-#                 labelled `ci:full`. web, integration, fips, and the image
-#                 job's security and trivy steps.
+#                 labelled `ci:full`. web, integration, fips, vuln, and the
+#                 image job's security and trivy steps.
 #   Nightly tier  the schedule and workflow_dispatch (v1.24). soak.
 #
 # CI_FULL_TIER (workflow env) is the full-tier selection; a job-level `if:`
@@ -562,20 +566,21 @@ jobs:
           IN_IMAGE_GOMAXPROCS: 16
         run: scripts/in-toolchain-image.sh "$TOOLCHAIN_IMAGE" make test test-sdk-go
 
-      # make security: gosec, govulncheck, go mod verify and `trivy fs`
-      # (devops.md §8), with GOSEC_EXCLUDE, the govulncheck module list and
-      # GOVULN_ALLOW single-sourced in the Makefile. security and trivy are
-      # full-tier steps (v1.23, ci-standard.md §8), with a network for the
-      # vulnerability databases. Unbounded it reached 17.0 GB; GOMAXPROCS 8 (the
-      # go list compiles gosec loads through) and GOSEC_CONCURRENCY 2 keep it
-      # under 16g (#1178).
-      - name: make security
+      # make security-novuln: make security (devops.md §8) without
+      # govulncheck, i.e. gosec, go mod verify and `trivy fs`, with
+      # GOSEC_EXCLUDE single-sourced in the Makefile. govulncheck runs in the
+      # vuln job at 20g: its symbol scan reached 16.7 GB under this step's 16g
+      # (#1425). security and trivy are full-tier steps (v1.23,
+      # ci-standard.md §8), with a network for the vulnerability databases.
+      # Unbounded it reached 17.0 GB; GOMAXPROCS 8 (the go list compiles gosec
+      # loads through) and GOSEC_CONCURRENCY 2 keep it under 16g (#1178).
+      - name: make security-novuln
         if: ${{ !cancelled() && env.TOOLCHAIN_IMAGE != '' && env.CI_FULL_TIER == 'true' }}
         env:
           IN_IMAGE_NETWORK: bridge
           IN_IMAGE_MEMORY: 16g
           IN_IMAGE_GOMAXPROCS: 8
-        run: scripts/in-toolchain-image.sh "$TOOLCHAIN_IMAGE" make security GOSEC_CONCURRENCY=2
+        run: scripts/in-toolchain-image.sh "$TOOLCHAIN_IMAGE" make security-novuln GOSEC_CONCURRENCY=2
 
       # Fails when a library, first-party or third-party, is behind its latest
       # release without devops.md §9's documented reason (ci-standard.md §1).
@@ -614,6 +619,95 @@ jobs:
         run: |
           rm -f "$RUNNER_TEMP/gomodauth.env" "$RUNNER_TEMP/it-image.tar"
           [ -z "${IT_LEASE:-}" ] || docker rm "$IT_LEASE" >/dev/null 2>&1 || true
+          docker buildx prune --builder "$BUILDX_BUILDER" --force --keep-storage "$BUILDKIT_KEEP_STORAGE" || true
+
+  # CUSTOMIZE (#1425): govulncheck, the `vuln` part of make security, as its
+  # own full-tier job. Its symbol scan of the root module reached 16.7 GB and
+  # was OOM-killed under the image job's 16g security step (run 370010), and
+  # GOVULN_MODULES cannot split the root module. Here it runs alone at 20g
+  # with GOMEMLIMIT 18GiB below the cap, so the GC works before the cgroup
+  # kills it. The job builds the toolchain image as the image job does: a
+  # TOOLCHAIN_IMAGE lives only on its builder's daemon, and the project's
+  # BuildKit cache keeps a second build warm. It runs beside the image job,
+  # not after it, so the scan never waits on lint and the suites.
+  vuln:
+    name: Vulnerability scan (govulncheck)
+    runs-on: ${{ github.server_url == 'https://github.com' && 'ubuntu-latest' || 'bigdisk' }}
+    # Full tier only, as the security step was (v1.23); a job-level `if:`
+    # cannot read CI_FULL_TIER, so it repeats the selection. v1.29.3: on a
+    # schedule run, only on the schedule guard's `run`.
+    if: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')) && !github.event.pull_request.draft && (github.event_name != 'schedule' || needs.schedule-guard.outputs.verdict == 'run') }}
+    needs: schedule-guard     # v1.29.3
+    timeout-minutes: 120
+    env:
+      # The image job's builder (see there).
+      BUILDX_BUILDER: go-trusted-platform-ci
+      BUILDKIT_KEEP_STORAGE: 40gb
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Mask the module credentials
+        run: |
+          for v in GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; do
+            val=${!v:-}
+            [ -n "$val" ] || continue
+            echo "::add-mask::$val"
+            case $val in *://*:*@*) t=${val#*://}; t=${t%%@*}; echo "::add-mask::${t#*:}" ;; esac
+          done
+
+      - name: Reap stale CI stacks
+        run: scripts/reap-stale-ci-stacks.sh go-trusted-platform-ci-
+
+      # The package keys the toolchain build hashes, as in the image job.
+      - name: Read the package indexes
+        run: |
+          base=$(sed -n 's/^GO_IMAGE=//p' scripts/tool-pins.sh)
+          echo "APK_INDEX_SUM=$(APK_BASE_IMAGES="$base" scripts/apk-index-sum.sh)" >> "$GITHUB_ENV"
+          echo "APT_REFRESH=$(scripts/apt-refresh-key.sh)" >> "$GITHUB_ENV"
+
+      - name: Prepare the project's BuildKit builder
+        run: |
+          docker buildx inspect "$BUILDX_BUILDER" >/dev/null 2>&1 ||
+            docker buildx create --name "$BUILDX_BUILDER" --driver docker-container >/dev/null ||
+            docker buildx inspect "$BUILDX_BUILDER" >/dev/null
+          docker buildx inspect --bootstrap "$BUILDX_BUILDER" >/dev/null ||
+            docker buildx inspect --bootstrap "$BUILDX_BUILDER" >/dev/null
+          docker buildx prune --builder "$BUILDX_BUILDER" --force --keep-storage "$BUILDKIT_KEEP_STORAGE"
+
+      - name: Write the module credential file
+        run: |
+          umask 077
+          : > "$RUNNER_TEMP/gomodauth.env"
+          for v in GOPRIVATE GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; do
+            if [ -n "${!v:-}" ]; then printf '%s=%s\n' "$v" "${!v}" >> "$RUNNER_TEMP/gomodauth.env"; fi
+          done
+
+      - name: Build the toolchain image
+        run: |
+          # v1.29.4 and v1.29.5: Athens first when the runner sets DEVCACHE_GOPROXY
+          # and the cache answers, `|` so any error falls through to the public
+          # proxy; "$bp" is one quoted make argument and the Makefile quotes it.
+          bp=
+          if [ -n "${DEVCACHE_GOPROXY:-}" ] && curl -s -o /dev/null --max-time 5 "$DEVCACHE_GOPROXY/"; then
+            bp="GO_BUILD_PROXY=$DEVCACHE_GOPROXY|https://proxy.golang.org|direct"
+          fi
+          make docker-build-toolchain ${bp:+"$bp"} MODULE_ENV_FILE="$RUNNER_TEMP/gomodauth.env"
+          echo "TOOLCHAIN_IMAGE=$(make -s toolchain-image)" >> "$GITHUB_ENV"
+
+      # make vuln: govulncheck over GOVULN_MODULES with GOVULN_ALLOW, both
+      # single-sourced in the Makefile, with a network for the database.
+      - name: make vuln
+        env:
+          IN_IMAGE_NETWORK: bridge
+          IN_IMAGE_MEMORY: 20g
+          IN_IMAGE_GOMEMLIMIT: 18GiB
+          IN_IMAGE_GOMAXPROCS: 8
+        run: scripts/in-toolchain-image.sh "$TOOLCHAIN_IMAGE" make vuln
+
+      - name: Tear down
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/gomodauth.env"
           docker buildx prune --builder "$BUILDX_BUILDER" --force --keep-storage "$BUILDKIT_KEEP_STORAGE" || true
 
   # v1.27 (lint-gates): the repo's grep gates (`make lint-gates`; today the
@@ -1575,7 +1669,7 @@ jobs:
     # skipped job as `skipped`, not `success`), never a green nightly. Every
     # other verdict, an empty one included, runs it.
     if: ${{ always() && (github.event_name != 'schedule' || needs.schedule-guard.outputs.verdict != 'busy') }}
-    needs: [changes, schedule-guard, image, lint-gates, arch-gates, sdkjs, race, web, integration-image, integration, soak, fips]
+    needs: [changes, schedule-guard, image, lint-gates, arch-gates, sdkjs, race, web, integration-image, integration, soak, vuln, fips]
     steps:
       - name: Verify every job succeeded
         env:
@@ -1600,6 +1694,7 @@ jobs:
           RESULT_INTEGRATION_IMAGE: ${{ needs.integration-image.result }}
           RESULT_INTEGRATION: ${{ needs.integration.result }}
           RESULT_SOAK: ${{ needs.soak.result }}
+          RESULT_VULN: ${{ needs.vuln.result }}
           RESULT_FIPS: ${{ needs.fips.result }}
         run: |
           # skipped != failed, and a skipped job fails the gate: it means the
@@ -1662,6 +1757,7 @@ jobs:
           check full web "$RESULT_WEB"
           check full integration-image "$RESULT_INTEGRATION_IMAGE"
           check full integration "$RESULT_INTEGRATION"
+          check full vuln "$RESULT_VULN"
           check nightly soak "$RESULT_SOAK"
           check main fips "$RESULT_FIPS"
           exit $status
