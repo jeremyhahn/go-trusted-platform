@@ -2,11 +2,14 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/gorilla/mux"
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
@@ -306,52 +309,73 @@ func iamScopeAction(method, route string) (string, error) {
 // tenant. The pinned SDK looks an application's client ID up across every
 // tenant for Get, Update, Delete and RotateSecret, so the URL tenant check
 // alone would let a caller reach another tenant's application by its
-// client ID. Each call first confirms, through the tenant-scoped List, that
-// the client ID belongs to the tenant; a foreign client ID gets the same
-// not-found as a missing one, and nothing is changed.
+// client ID. Each call first retrieves the application and confirms the
+// tenant it is stored under; a foreign client ID gets the same not-found as
+// a missing one, and nothing is changed.
+//
+// The tenant is confirmed on the retrieved application and not on the
+// tenant's application list: the pinned SDK's list is one page, of at most
+// 100 applications on a remote backend, and a truncated list cannot
+// establish that an application is absent.
 type iamTenantApps struct {
 	restiam.IAMClient
 }
 
 func (c iamTenantApps) GetApp(ctx context.Context, tenantID, clientID string) (*sdkiam.Application, error) {
-	if err := c.requireTenantApp(ctx, tenantID, clientID); err != nil {
-		return nil, err
-	}
-	return c.IAMClient.GetApp(ctx, tenantID, clientID)
+	return c.tenantApp(ctx, tenantID, clientID)
 }
 
 func (c iamTenantApps) UpdateApp(ctx context.Context, tenantID, clientID string, req *sdkiam.UpdateAppRequest) (*sdkiam.Application, error) {
-	if err := c.requireTenantApp(ctx, tenantID, clientID); err != nil {
+	if _, err := c.tenantApp(ctx, tenantID, clientID); err != nil {
 		return nil, err
 	}
 	return c.IAMClient.UpdateApp(ctx, tenantID, clientID, req)
 }
 
 func (c iamTenantApps) DeleteApp(ctx context.Context, tenantID, clientID string) error {
-	if err := c.requireTenantApp(ctx, tenantID, clientID); err != nil {
+	if _, err := c.tenantApp(ctx, tenantID, clientID); err != nil {
 		return err
 	}
 	return c.IAMClient.DeleteApp(ctx, tenantID, clientID)
 }
 
 func (c iamTenantApps) RotateAppSecret(ctx context.Context, tenantID, clientID string) (*restiam.RotateSecretResponse, error) {
-	if err := c.requireTenantApp(ctx, tenantID, clientID); err != nil {
+	if _, err := c.tenantApp(ctx, tenantID, clientID); err != nil {
 		return nil, err
 	}
 	return c.IAMClient.RotateAppSecret(ctx, tenantID, clientID)
 }
 
-// requireTenantApp returns restiam.ErrAppNotFound unless the tenant's own
-// application list holds the client ID.
-func (c iamTenantApps) requireTenantApp(ctx context.Context, tenantID, clientID string) error {
-	apps, err := c.ListApps(ctx, tenantID, 0, 0)
+// tenantApp retrieves the application with the client ID and returns it only
+// when it is stored under the tenant. An application of another tenant, one
+// without a tenant, and a missing one all return the same
+// restiam.ErrAppNotFound; any other lookup failure is returned unchanged.
+func (c iamTenantApps) tenantApp(ctx context.Context, tenantID, clientID string) (*sdkiam.Application, error) {
+	notFound := restiam.ErrAppNotFound{TenantID: tenantID, AppID: clientID}
+	app, err := c.IAMClient.GetApp(ctx, tenantID, clientID)
 	if err != nil {
-		return err
-	}
-	for i := range apps.Apps {
-		if apps.Apps[i].ClientID == clientID {
-			return nil
+		if isAppLookupNotFound(err) {
+			return nil, notFound
 		}
+		return nil, err
 	}
-	return restiam.ErrAppNotFound{TenantID: tenantID, AppID: clientID}
+	if app == nil || app.TenantID == "" || app.TenantID != tenantID {
+		return nil, notFound
+	}
+	return app, nil
+}
+
+// isAppLookupNotFound reports whether an application lookup failed because
+// there is no such application: the SDK's NotFound on the gRPC and Unix
+// transports, a database not-found on the embedded transport, or an error
+// whose text says "not found", which is the IAM handler's own 404 rule.
+func isAppLookupNotFound(err error) bool {
+	if sdkerrors.IsNotFound(err) {
+		return true
+	}
+	var dbErr *quicbaassdk.DatabaseError
+	if errors.As(err, &dbErr) && dbErr.Code == quicbaassdk.ErrNotFound {
+		return true
+	}
+	return strings.Contains(err.Error(), "not found")
 }
