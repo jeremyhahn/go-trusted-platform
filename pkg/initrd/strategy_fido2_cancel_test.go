@@ -131,3 +131,12 @@ func TestFIDO2StrategyUnlockCancelledDuringTouch(t *testing.T) {
 	close(u.device.release)
 	u.requireNeverOpened(t, <-u.result)
 }
+
+// A cancelled unlock does not wait for the touch: Unlock returns while the
+// authenticator still blocks, and the key of the later touch is zeroed.
+func TestFIDO2StrategyUnlockCancelledBeforeTouch(t *testing.T) {
+	u := startCancelledFIDO2Unlock(t)
+	err := <-u.result
+	close(u.device.release)
+	u.requireNeverOpened(t, err)
+}

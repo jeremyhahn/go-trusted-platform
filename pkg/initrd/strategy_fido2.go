@@ -118,6 +118,9 @@ func (s *FIDO2Strategy) Unlock(ctx context.Context, volume *luks.VolumeConfig) e
 		}
 
 		if err := s.unlockSlot(ctx, volume, target); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 			s.logger.Warnf("FIDO2 slot %d (token %d) failed: %v", target.slot, target.tokenID, err)
 			slotErrs = append(slotErrs, err)
 			continue
@@ -149,8 +152,16 @@ func (s *FIDO2Strategy) unlockSlot(ctx context.Context, volume *luks.VolumeConfi
 	s.logger.Debugf("Trying FIDO2 slot %d from token %d", target.slot, target.tokenID)
 	s.logger.Info("Please touch your security key...")
 
-	key, err := s.platform.FIDO2.UnlockWithKey(authConfig)
+	key, err := s.awaitKey(ctx, func() ([]byte, error) {
+		return s.platform.FIDO2.UnlockWithKey(authConfig)
+	})
 	if err != nil {
+		return err
+	}
+	// The touch and the cancellation can arrive together, and Open does not
+	// watch ctx: a cancelled unlock must not map the volume.
+	if err := ctx.Err(); err != nil {
+		s.discardLateKey(key)
 		return err
 	}
 
@@ -166,6 +177,42 @@ func (s *FIDO2Strategy) unlockSlot(ctx context.Context, volume *luks.VolumeConfi
 		return target.rawSecretError(volume.DevicePath, err)
 	}
 	return err
+}
+
+// awaitKey returns the key of an authenticator call, or ctx.Err() as soon as
+// ctx ends. The SDK cannot stop the HID request, so an abandoned call runs on
+// in a drain that zeroes the key a late touch yields; done is buffered, so
+// neither goroutine outlives the call.
+func (s *FIDO2Strategy) awaitKey(ctx context.Context, call func() ([]byte, error)) ([]byte, error) {
+	type outcome struct {
+		key []byte
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		key, err := call()
+		done <- outcome{key: key, err: err}
+	}()
+	select {
+	case result := <-done:
+		return result.key, result.err
+	case <-ctx.Done():
+		go func() {
+			result := <-done
+			s.discardLateKey(result.key)
+		}()
+		return nil, ctx.Err()
+	}
+}
+
+// discardLateKey zeroes a key the authenticator returned after the unlock
+// was cancelled.
+func (s *FIDO2Strategy) discardLateKey(key []byte) {
+	if key == nil {
+		return
+	}
+	clear(key)
+	s.logger.Debug("Discarded a late FIDO2 key after cancellation")
 }
 
 // Install performs installation-time setup for FIDO2 strategy
