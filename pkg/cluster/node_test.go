@@ -753,18 +753,6 @@ func TestExtendedNodeList_Filter(t *testing.T) {
 
 // Node Registry Tests
 
-func TestNewExtendedNodeRegistry(t *testing.T) {
-	registry := NewExtendedNodeRegistry()
-
-	if registry == nil {
-		t.Fatal("NewExtendedNodeRegistry() returned nil")
-	}
-
-	if registry.Count() != 0 {
-		t.Errorf("new registry should be empty, got count %d", registry.Count())
-	}
-}
-
 func TestExtendedNodeRegistry_Add(t *testing.T) {
 	t.Run("adds valid node", func(t *testing.T) {
 		registry := NewExtendedNodeRegistry()

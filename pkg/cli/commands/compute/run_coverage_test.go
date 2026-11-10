@@ -14,286 +14,49 @@
 package compute
 
 import (
+	"errors"
 	"testing"
+
+	"github.com/spf13/cobra"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 )
 
-// TestRunCreate_NoContext verifies that runCreate propagates the error from
-// NewBaseCommand when no context is configured.
-func TestRunCreate_NoContext(t *testing.T) {
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatTable,
+// TestCommandRunE_NoContext drives each command's RunE closure into its run
+// function and asserts the missing CLI context surfaces as ErrNoContextSet.
+func TestCommandRunE_NoContext(t *testing.T) {
+	getFlags := func() *cli.CommonFlags {
+		return &cli.CommonFlags{OutputFormat: cli.OutputFormatTable}
 	}
 
-	opts := &createOptions{
-		name:     "test-vm",
-		firmware: "uefi",
+	cases := []struct {
+		name  string
+		cmd   *cobra.Command
+		args  []string
+		flags map[string]string
+	}{
+		{name: "create", cmd: newCreateCommand(getFlags), flags: map[string]string{"name": "test-vm"}},
+		{name: "start", cmd: newStartCommand(getFlags), args: []string{"test-vm"}},
+		{name: "stop", cmd: newStopCommand(getFlags), args: []string{"test-vm"}},
+		{name: "delete", cmd: newDeleteCommand(getFlags), args: []string{"test-vm"}},
+		{name: "get", cmd: newGetCommand(getFlags), args: []string{"test-vm"}},
+		{name: "list", cmd: newListCommand(getFlags)},
 	}
 
-	err := runCreate(flags, opts)
-	if err == nil {
-		t.Fatal("expected error when no context is set")
-	}
-
-	if _, ok := err.(cli.ErrNoContextSet); !ok {
-		t.Errorf("expected ErrNoContextSet, got %T: %v", err, err)
-	}
-}
-
-// TestRunCreate_InvalidFirmware verifies that runCreate returns an error for
-// an invalid firmware type before attempting to connect.
-func TestRunCreate_InvalidFirmware(t *testing.T) {
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatTable,
-		// GetContext is nil, but we should fail on firmware validation first
-		// Actually, firmware validation happens after NewBaseCommand, so this
-		// will fail at NewBaseCommand. Testing with a context that returns error.
-	}
-
-	opts := &createOptions{
-		name:     "test-vm",
-		firmware: "invalid-fw",
-	}
-
-	// Will fail at NewBaseCommand since no GetContext
-	err := runCreate(flags, opts)
-	if err == nil {
-		t.Fatal("expected error")
-	}
-}
-
-// TestRunStart_NoContext verifies that runStart propagates the error from
-// NewBaseCommand when no context is configured.
-func TestRunStart_NoContext(t *testing.T) {
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatTable,
-	}
-
-	err := runStart(flags, "test-vm-id")
-	if err == nil {
-		t.Fatal("expected error when no context is set")
-	}
-
-	if _, ok := err.(cli.ErrNoContextSet); !ok {
-		t.Errorf("expected ErrNoContextSet, got %T: %v", err, err)
-	}
-}
-
-// TestRunStop_NoContext verifies that runStop propagates the error from
-// NewBaseCommand when no context is configured.
-func TestRunStop_NoContext(t *testing.T) {
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatTable,
-	}
-
-	opts := &stopOptions{
-		force:   false,
-		timeout: 30,
-	}
-
-	err := runStop(flags, "test-vm-id", opts)
-	if err == nil {
-		t.Fatal("expected error when no context is set")
-	}
-
-	if _, ok := err.(cli.ErrNoContextSet); !ok {
-		t.Errorf("expected ErrNoContextSet, got %T: %v", err, err)
-	}
-}
-
-// TestRunDelete_NoContext verifies that runDelete propagates the error from
-// NewBaseCommand when no context is configured.
-func TestRunDelete_NoContext(t *testing.T) {
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatTable,
-	}
-
-	opts := &deleteOptions{
-		force:       false,
-		deleteDisks: false,
-	}
-
-	err := runDelete(flags, "test-vm-id", opts)
-	if err == nil {
-		t.Fatal("expected error when no context is set")
-	}
-
-	if _, ok := err.(cli.ErrNoContextSet); !ok {
-		t.Errorf("expected ErrNoContextSet, got %T: %v", err, err)
-	}
-}
-
-// TestRunGet_NoContext verifies that runGet propagates the error from
-// NewBaseCommand when no context is configured.
-func TestRunGet_NoContext(t *testing.T) {
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatTable,
-	}
-
-	err := runGet(flags, "test-vm-id")
-	if err == nil {
-		t.Fatal("expected error when no context is set")
-	}
-
-	if _, ok := err.(cli.ErrNoContextSet); !ok {
-		t.Errorf("expected ErrNoContextSet, got %T: %v", err, err)
-	}
-}
-
-// TestRunList_NoContext verifies that runList propagates the error from
-// NewBaseCommand when no context is configured.
-func TestRunList_NoContext(t *testing.T) {
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatTable,
-	}
-
-	opts := &listOptions{
-		all:      false,
-		pageSize: 100,
-	}
-
-	err := runList(flags, opts)
-	if err == nil {
-		t.Fatal("expected error when no context is set")
-	}
-
-	if _, ok := err.(cli.ErrNoContextSet); !ok {
-		t.Errorf("expected ErrNoContextSet, got %T: %v", err, err)
-	}
-}
-
-// TestRunList_NoContext_WithFilters verifies that runList propagates the error
-// from NewBaseCommand even when filters are configured.
-func TestRunList_NoContext_WithFilters(t *testing.T) {
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatJSON,
-	}
-
-	opts := &listOptions{
-		all:      true,
-		filter:   []string{"state=running"},
-		pageSize: 50,
-	}
-
-	err := runList(flags, opts)
-	if err == nil {
-		t.Fatal("expected error when no context is set")
-	}
-
-	if _, ok := err.(cli.ErrNoContextSet); !ok {
-		t.Errorf("expected ErrNoContextSet, got %T: %v", err, err)
-	}
-}
-
-// TestCommandRunE_Closures verifies that the RunE closures in command
-// constructors correctly delegate to the run functions.
-func TestCommandRunE_CreateClosure(t *testing.T) {
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatTable,
-	}
-	getFlags := func() *cli.CommonFlags { return flags }
-
-	cmd := newCreateCommand(getFlags)
-	if cmd.RunE == nil {
-		t.Fatal("create command should have RunE set")
-	}
-
-	// Execute without required flag set - cobra validation should catch this
-	// But since we call RunE directly, it bypasses cobra flag parsing
-	err := cmd.RunE(cmd, []string{})
-	if err == nil {
-		t.Fatal("expected error from RunE")
-	}
-}
-
-// TestCommandRunE_StartClosure verifies the start command RunE closure.
-func TestCommandRunE_StartClosure(t *testing.T) {
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatTable,
-	}
-	getFlags := func() *cli.CommonFlags { return flags }
-
-	cmd := newStartCommand(getFlags)
-	if cmd.RunE == nil {
-		t.Fatal("start command should have RunE set")
-	}
-
-	// RunE with a valid arg should fail at NewBaseCommand
-	err := cmd.RunE(cmd, []string{"test-vm"})
-	if err == nil {
-		t.Fatal("expected error from RunE")
-	}
-}
-
-// TestCommandRunE_StopClosure verifies the stop command RunE closure.
-func TestCommandRunE_StopClosure(t *testing.T) {
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatTable,
-	}
-	getFlags := func() *cli.CommonFlags { return flags }
-
-	cmd := newStopCommand(getFlags)
-	if cmd.RunE == nil {
-		t.Fatal("stop command should have RunE set")
-	}
-
-	err := cmd.RunE(cmd, []string{"test-vm"})
-	if err == nil {
-		t.Fatal("expected error from RunE")
-	}
-}
-
-// TestCommandRunE_DeleteClosure verifies the delete command RunE closure.
-func TestCommandRunE_DeleteClosure(t *testing.T) {
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatTable,
-	}
-	getFlags := func() *cli.CommonFlags { return flags }
-
-	cmd := newDeleteCommand(getFlags)
-	if cmd.RunE == nil {
-		t.Fatal("delete command should have RunE set")
-	}
-
-	err := cmd.RunE(cmd, []string{"test-vm"})
-	if err == nil {
-		t.Fatal("expected error from RunE")
-	}
-}
-
-// TestCommandRunE_GetClosure verifies the get command RunE closure.
-func TestCommandRunE_GetClosure(t *testing.T) {
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatTable,
-	}
-	getFlags := func() *cli.CommonFlags { return flags }
-
-	cmd := newGetCommand(getFlags)
-	if cmd.RunE == nil {
-		t.Fatal("get command should have RunE set")
-	}
-
-	err := cmd.RunE(cmd, []string{"test-vm"})
-	if err == nil {
-		t.Fatal("expected error from RunE")
-	}
-}
-
-// TestCommandRunE_ListClosure verifies the list command RunE closure.
-func TestCommandRunE_ListClosure(t *testing.T) {
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatTable,
-	}
-	getFlags := func() *cli.CommonFlags { return flags }
-
-	cmd := newListCommand(getFlags)
-	if cmd.RunE == nil {
-		t.Fatal("list command should have RunE set")
-	}
-
-	err := cmd.RunE(cmd, []string{})
-	if err == nil {
-		t.Fatal("expected error from RunE")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.cmd.RunE == nil {
+				t.Fatalf("%s command should have RunE set", tc.name)
+			}
+			for k, v := range tc.flags {
+				if err := tc.cmd.Flags().Set(k, v); err != nil {
+					t.Fatalf("set --%s: %v", k, err)
+				}
+			}
+			err := tc.cmd.RunE(tc.cmd, tc.args)
+			if !errors.As(err, new(cli.ErrNoContextSet)) {
+				t.Errorf("expected ErrNoContextSet, got %T: %v", err, err)
+			}
+		})
 	}
 }

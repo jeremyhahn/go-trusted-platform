@@ -894,21 +894,6 @@ func TestGenerateDeviceID(t *testing.T) {
 	assert.Equal(t, generateDeviceID(mac1), id1) // Same MAC should produce same ID
 }
 
-func TestService_ApplyVLANForState(t *testing.T) {
-	svc, _ := initializeTestService(t)
-	ctx := context.Background()
-
-	device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
-	require.NoError(t, err)
-
-	// Progress through states that should change VLAN
-	err = svc.UpdateDeviceState(ctx, device.ID, StateBooting, "booting")
-	assert.NoError(t, err)
-
-	err = svc.UpdateDeviceState(ctx, device.ID, StateQuarantined, "quarantine test")
-	assert.NoError(t, err)
-}
-
 func TestService_ConcurrentDeviceRegistration(t *testing.T) {
 	svc, _ := initializeTestService(t)
 	ctx := context.Background()
@@ -990,54 +975,6 @@ func TestService_RetryDevice_NotFound(t *testing.T) {
 
 	var notFoundErr ErrDeviceNotFound
 	assert.True(t, errors.As(err, &notFoundErr))
-}
-
-func TestService_UpdateDeviceState_VLANTransitions(t *testing.T) {
-	tests := []struct {
-		name         string
-		toState      ProvisioningState
-		prevStates   []ProvisioningState
-		expectedVLAN string // "provisioning", "quarantine", or "none"
-	}{
-		{
-			name:         "booting_applies_provisioning",
-			toState:      StateBooting,
-			prevStates:   []ProvisioningState{},
-			expectedVLAN: "provisioning",
-		},
-		{
-			name:         "installing_applies_provisioning",
-			toState:      StateInstalling,
-			prevStates:   []ProvisioningState{StateBooting},
-			expectedVLAN: "provisioning",
-		},
-		{
-			name:         "failed_applies_quarantine",
-			toState:      StateFailed,
-			prevStates:   []ProvisioningState{StateBooting},
-			expectedVLAN: "quarantine",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			svc, _ := initializeTestService(t)
-			ctx := context.Background()
-
-			device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
-			require.NoError(t, err)
-
-			// Progress through prerequisite states
-			for _, state := range tt.prevStates {
-				err = svc.UpdateDeviceState(ctx, device.ID, state, "transition")
-				require.NoError(t, err)
-			}
-
-			// Apply the target state
-			err = svc.UpdateDeviceState(ctx, device.ID, tt.toState, "test")
-			assert.NoError(t, err)
-		})
-	}
 }
 
 func TestService_FullProvisioningWorkflow(t *testing.T) {

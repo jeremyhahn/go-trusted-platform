@@ -36,7 +36,15 @@ type Manager struct {
 	keyBackend xkmssdk.TPMKeyBackend
 	config     *Config
 	volumes    map[string]*VolumeState
+
+	// devicePathFor resolves a partition to its block device. NewManager
+	// sets it to partLabelDevicePath; unit tests point it at a LUKS2 image.
+	devicePathFor func(part *drive.PartitionConfig) string
 }
+
+// makeFilesystem runs mkfs on an unlocked mapping. Unit tests replace it so
+// MakeFilesystem runs without device-mapper or an mkfs binary.
+var makeFilesystem = goluks.MakeFilesystem
 
 // Config contains manager configuration
 type Config struct {
@@ -98,6 +106,8 @@ func NewManager(
 		keyBackend: keyBackend,
 		config:     config,
 		volumes:    make(map[string]*VolumeState),
+
+		devicePathFor: partLabelDevicePath,
 	}, nil
 }
 
@@ -441,7 +451,7 @@ func (m *Manager) MakeFilesystem(ctx context.Context, part *drive.PartitionConfi
 	m.logger.Infof("Creating %s filesystem on %s (label: %s)", fsType, mappingName, label)
 
 	// Create filesystem using go-luks2
-	if err := goluks.MakeFilesystem(mappingName, fsType, label); err != nil {
+	if err := makeFilesystem(mappingName, fsType, label); err != nil {
 		return &WrappedError{Msg: "failed to create filesystem", Err: err}
 	}
 
@@ -529,6 +539,11 @@ func (m *Manager) IsUnlocked(part *drive.PartitionConfig) bool {
 
 // getDevicePath constructs the device path for a partition
 func (m *Manager) getDevicePath(part *drive.PartitionConfig) string {
+	return m.devicePathFor(part)
+}
+
+// partLabelDevicePath is the production device path resolver.
+func partLabelDevicePath(part *drive.PartitionConfig) string {
 	// This would typically be set by the drive manager based on the parent drive
 	// For now, assume it's stored in the partition config or use a placeholder
 	// In practice, this would be something like /dev/sda2 or /dev/nvme0n1p2
