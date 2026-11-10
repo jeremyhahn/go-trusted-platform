@@ -237,8 +237,9 @@ func TestDeviceProfile_YAMLSerialization(t *testing.T) {
 			Version:    "2.0.0",
 		},
 		MatchRules: &ProfileMatchRules{
-			ModelPattern: "^TestModel-.*$",
-			TPMVendor:    "NTC",
+			ModelPattern:     "^TestModel-.*$",
+			TPMVendor:        "NTC",
+			CustomAttributes: map[string]string{"sensor-type": "temperature"},
 		},
 	}
 
@@ -271,6 +272,8 @@ func TestDeviceProfile_YAMLSerialization(t *testing.T) {
 	require.NotNil(t, decoded.MatchRules)
 	assert.Equal(t, original.MatchRules.ModelPattern, decoded.MatchRules.ModelPattern)
 	assert.Equal(t, original.MatchRules.TPMVendor, decoded.MatchRules.TPMVendor)
+	require.Len(t, decoded.MatchRules.CustomAttributes, 1)
+	assert.Equal(t, "temperature", decoded.MatchRules.CustomAttributes["sensor-type"])
 }
 
 func TestDeviceProfile_JSONSerialization(t *testing.T) {

@@ -756,6 +756,58 @@ func TestEnforcer_Release_AlreadyCommitted(t *testing.T) {
 	}
 }
 
+func TestEnforcer_CommitThenRelease(t *testing.T) {
+	// This test verifies commit and release work correctly in sequence.
+	// Note: The Enforcer's Reservation struct has a data race when accessing
+	// the Committed field during concurrent operations. This test uses
+	// sequential operations to avoid triggering that race.
+	store := newMockQuotaStore()
+	store.setQuota("tenant-1", &TenantQuotas{
+		TenantID: "tenant-1",
+		Compute:  ComputeQuota{MaxVMs: 100},
+	})
+
+	enforcer, err := NewEnforcer(store, testLogger())
+	if err != nil {
+		t.Fatalf("NewEnforcer() error = %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Create and commit some reservations
+	for i := 0; i < 10; i++ {
+		res, err := enforcer.Reserve(ctx, "tenant-1", ResourceVMs, 1)
+		if err != nil {
+			t.Fatalf("Reserve() error = %v", err)
+		}
+		err = enforcer.Commit(ctx, res.ID)
+		if err != nil {
+			t.Fatalf("Commit() error = %v", err)
+		}
+	}
+
+	// Create and release some reservations
+	for i := 0; i < 10; i++ {
+		res, err := enforcer.Reserve(ctx, "tenant-1", ResourceVMs, 1)
+		if err != nil {
+			t.Fatalf("Reserve() error = %v", err)
+		}
+		err = enforcer.Release(ctx, res.ID)
+		if err != nil {
+			t.Fatalf("Release() error = %v", err)
+		}
+	}
+
+	// Verify usage - should be 10 (committed only)
+	usage, err := store.GetUsage(ctx, "tenant-1")
+	if err != nil {
+		t.Fatalf("GetUsage() error = %v", err)
+	}
+	if usage.VMs != 10 {
+		t.Errorf("VMs = %d, expected 10", usage.VMs)
+	}
+}
+
 func TestEnforcer_ReleaseUsage_DecreasesUsage(t *testing.T) {
 	store := newMockQuotaStore()
 	store.setQuota("tenant-1", &TenantQuotas{
