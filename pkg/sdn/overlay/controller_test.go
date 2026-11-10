@@ -15,8 +15,11 @@ package overlay
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/netip"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 )
@@ -1101,9 +1104,9 @@ func TestController_StartFromInvalidState(t *testing.T) {
 	}
 }
 
-// newTestController creates a controller for testing.
-func newTestController(t *testing.T) *Controller {
-	t.Helper()
+// newTestController creates a controller for testing and benchmarks.
+func newTestController(tb testing.TB, opts ...Option) *Controller {
+	tb.Helper()
 
 	config := &Config{
 		NodeID:              "test-node",
@@ -1114,10 +1117,151 @@ func newTestController(t *testing.T) *Controller {
 		MACExpiration:       1 * time.Hour,
 	}
 
-	ctrl, err := New(config)
+	ctrl, err := New(config, opts...)
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		tb.Fatalf("New() error = %v", err)
 	}
 
 	return ctrl
+}
+
+// testMAC returns a locally administered MAC address unique to n.
+func testMAC(n uint64) net.HardwareAddr {
+	return net.HardwareAddr{0x02, 0x00, byte(n >> 24), byte(n >> 16), byte(n >> 8), byte(n)}
+}
+
+// testVTEPIP returns a remote VTEP address unique to n, outside the local
+// VTEP's 10.0.0.0/24.
+func testVTEPIP(n uint64) netip.Addr {
+	return netip.AddrFrom4([4]byte{100, byte(n >> 16), byte(n >> 8), byte(n)})
+}
+
+// TestController_ConcurrentMACChurn learns MACs from many goroutines across
+// several VNIs and forgets half of them: every VNI's table must hold exactly
+// the MACs that were learned and not forgotten, with none lost or duplicated.
+func TestController_ConcurrentMACChurn(t *testing.T) {
+	t.Parallel()
+
+	ctrl := newTestController(t)
+	ctx := context.Background()
+	if err := ctrl.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	defer ctrl.Stop(ctx)
+
+	vnis := []uint32{100, 101, 102, 103, 104, 105}
+	for i, vni := range vnis {
+		if err := ctrl.AddVNI(ctx, &VNIConfig{VNI: vni, VLAN: uint16(10 + i)}); err != nil {
+			t.Fatalf("AddVNI(%d) error = %v", vni, err)
+		}
+	}
+
+	const workers = 8
+	const macsPerWorker = 60
+
+	var wg sync.WaitGroup
+	errs := make(chan error, workers*macsPerWorker*2)
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			for i := 0; i < macsPerWorker; i++ {
+				n := uint64(w*macsPerWorker + i)
+				vni := vnis[n%uint64(len(vnis))]
+				if err := ctrl.LearnMAC(ctx, testMAC(n), vni, testVTEPIP(n%254+1)); err != nil {
+					errs <- err
+					continue
+				}
+				if i%2 == 1 {
+					if err := ctrl.ForgetMAC(ctx, testMAC(n), vni); err != nil {
+						errs <- err
+					}
+				}
+			}
+		}(w)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("MAC churn error = %v", err)
+	}
+
+	held := 0
+	for _, vni := range vnis {
+		macs, err := ctrl.GetRemoteMACs(ctx, vni)
+		if err != nil {
+			t.Fatalf("GetRemoteMACs(%d) error = %v", vni, err)
+		}
+		held += len(macs)
+	}
+	if want := workers * macsPerWorker / 2; held != want {
+		t.Errorf("VNIs hold %d MACs after churn, want %d", held, want)
+	}
+	if got := len(ctrl.GetState().RemoteMACs); got != held {
+		t.Errorf("state holds %d remote MACs, VNI tables hold %d", got, held)
+	}
+}
+
+// TestController_ConcurrentVTEPAddRemove races many goroutines to add, then
+// remove, the same VTEP: exactly one of each wins, and every loser gets the
+// typed ErrVTEPAlreadyExists or ErrVTEPNotFound cause, so a caller can tell
+// a lost race from a real failure.
+func TestController_ConcurrentVTEPAddRemove(t *testing.T) {
+	t.Parallel()
+
+	ctrl := newTestController(t)
+	ctx := context.Background()
+	if err := ctrl.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	defer ctrl.Stop(ctx)
+
+	const racers = 16
+	ip := testVTEPIP(2)
+
+	race := func(op func(n int) error, loserCause error) {
+		t.Helper()
+		var wg sync.WaitGroup
+		results := make(chan error, racers)
+		for n := 0; n < racers; n++ {
+			wg.Add(1)
+			go func(n int) {
+				defer wg.Done()
+				results <- op(n)
+			}(n)
+		}
+		wg.Wait()
+		close(results)
+
+		winners := 0
+		for err := range results {
+			if err == nil {
+				winners++
+				continue
+			}
+			var opErr *ErrVTEPOperationFailed
+			if !errors.As(err, &opErr) || !errors.Is(err, loserCause) {
+				t.Errorf("losing racer error = %v, want *ErrVTEPOperationFailed caused by %v", err, loserCause)
+			}
+		}
+		if winners != 1 {
+			t.Errorf("%d racers succeeded, want exactly 1", winners)
+		}
+	}
+
+	race(func(n int) error {
+		return ctrl.AddVTEP(ctx, &VTEPInfo{NodeID: "remote-" + strconv.Itoa(n), IP: ip, Healthy: true})
+	}, ErrVTEPAlreadyExists)
+
+	race(func(int) error {
+		return ctrl.RemoveVTEP(ctx, ip)
+	}, ErrVTEPNotFound)
+
+	vteps, err := ctrl.ListVTEPs(ctx)
+	if err != nil {
+		t.Fatalf("ListVTEPs() error = %v", err)
+	}
+	if len(vteps) != 1 {
+		t.Errorf("len(VTEPs) after add/remove race = %d, want 1 (the local VTEP)", len(vteps))
+	}
 }
