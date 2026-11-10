@@ -365,10 +365,13 @@ var mtlsServiceRoles = map[string]map[string]struct{}{
 	},
 }
 
+// mtlsServiceKind is the CA's SPIFFE kind for a service.
+const mtlsServiceKind = "svc"
+
 // mtlsServicePrincipal returns the service a certificate names when it is a
 // service principal: its subject O is exactly the system tenant and a URI
-// SAN is spiffe://<trust domain>/service/<name> for a service in
-// mtlsServiceRoles. An empty trust domain makes no certificate a service.
+// SAN is spiffe://<trust domain>/tenant/<system tenant>/svc/<name>, the
+// form the CA issues for a service, for a service in mtlsServiceRoles. An empty trust domain makes no certificate a service.
 func mtlsServicePrincipal(leaf *x509.Certificate, trustDomain string) (string, bool) {
 	if leaf == nil || trustDomain == "" {
 		return "", false
@@ -383,7 +386,7 @@ func mtlsServicePrincipal(leaf *x509.Certificate, trustDomain string) (string, b
 		if uri.RawQuery != "" || uri.Fragment != "" {
 			continue
 		}
-		name, ok := strings.CutPrefix(uri.Path, "/service/")
+		name, ok := strings.CutPrefix(uri.Path, "/tenant/"+app.SystemTenantID+"/"+mtlsServiceKind+"/")
 		if !ok {
 			continue
 		}

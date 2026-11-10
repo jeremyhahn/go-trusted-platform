@@ -182,7 +182,9 @@ its fingerprint is the one SetDeviceInstalling bound, as REST does. On every
 other method such a certificate is refused as unauthenticated. A verified client
 certificate falls in one of four classes (Codex 8279 P1-f, 8537 P1-1). A
 **service principal** (subject O the system tenant and SPIFFE ID
-`spiffe://<td>/service/<name>`, such as gatewayd) reaches only the gRPC methods
+`spiffe://<td>/tenant/<system tenant>/svc/<name>`, such as gatewayd, which
+the CA issues with the tenant set to the system tenant, the kind `svc` and the
+name `gatewayd`) reaches only the gRPC methods
 its role's catalog scopes cover. The **operator**
 (subject O the system tenant and SPIFFE ID
 `spiffe://<td>/tenant/system/user/admin`) and a **tenant principal** (exactly

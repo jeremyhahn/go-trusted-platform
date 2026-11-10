@@ -151,15 +151,17 @@ apart in `isMTLSOperator` (`pkg/api/daemon/transport_auth.go:275`),
 |---|---|---|---|
 | **Operator** | The subject O is exactly the system tenant, and a URI SAN is `spiffe://<trust domain>/tenant/<system tenant>/user/<admin>` | every method | `*:*` |
 | **Tenant principal** | The subject has exactly one O, which is not the system tenant, and a URI SAN is `spiffe://<trust domain>/tenant/<that O>/user/<name>` | every method, limited by tenant authorization | `*:*`, limited by tenant authorization |
-| **Service principal** | The subject O is exactly the system tenant, and a URI SAN is `spiffe://<trust domain>/service/<name>` for a service in `mtlsServiceRoles` | only the methods whose catalog scope (`ScopeForMethod`, `pkg/api/grpc/method_permissions.go`) the service's role holds; gatewayd holds `proxy:read`, `attestation:read`, `sdn:read` and `device:read`, so it reaches `ProxyService/GetProxyConfig` and `GetZoneMatrix`. Any other method returns `PermissionDenied` with `ErrMTLSServiceMethodDenied` | no scope, as an installer |
+| **Service principal** | The subject O is exactly the system tenant, and a URI SAN is `spiffe://<trust domain>/tenant/<system tenant>/svc/<name>` for a service in `mtlsServiceRoles` | only the methods whose catalog scope (`ScopeForMethod`, `pkg/api/grpc/method_permissions.go`) the service's role holds; gatewayd holds `proxy:read`, `attestation:read`, `sdn:read` and `device:read`, so it reaches `ProxyService/GetProxyConfig` and `GetZoneMatrix`. Any other method returns `PermissionDenied` with `ErrMTLSServiceMethodDenied` | no scope, as an installer |
 | **Installer** | Any other certificate that chains to the client CA, every machine certificate included | only `PXEService/WebhookComplete` (`mtlsInstallerMethods`) | no scope, so every scope-guarded operation refuses it; REST admits it only on `installerMachineRoutes` |
 
 A subject O alone never grants a scope: without the matching `/user/` SPIFFE
 ID a certificate is an installer. The daemon's own client certificate carries
 O "Trusted Platform" and no `/user/` URI, so it stays an installer.
 gatewayd's node certificate (`proxy.platformd.cert-file`) must be issued with
-O set to the system tenant and the URI SAN `spiffe://<trust domain>/service/gatewayd`;
-without that SAN it is an installer and its proxy sync is refused.
+O set to the system tenant and the URI SAN
+`spiffe://<trust domain>/tenant/<system tenant>/svc/gatewayd`, which the CA
+issues with the tenant set to the system tenant, the kind `svc` and the name
+`gatewayd`; without that SAN it is an installer and its proxy sync is refused.
 
 The trust domain is `Config.MTLSOperatorTrustDomain`, which `platformd` sets
 from the platform admin identity (`pkg/daemon/commands/serve.go:580`). If it is
