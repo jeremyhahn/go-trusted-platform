@@ -105,133 +105,6 @@ func TestDeviceProfile_SetEntityID(t *testing.T) {
 	}
 }
 
-func TestDeviceProfile_FieldValues(t *testing.T) {
-	eventLog := []byte("profile-event-log-data")
-	profile := &DeviceProfile{
-		ID:       67890,
-		Name:     "Test Profile",
-		Model:    "ProfileModel123",
-		Role:     DeviceRoleServer,
-		EventLog: eventLog,
-	}
-
-	assert.Equal(t, uint64(67890), profile.ID)
-	assert.Equal(t, "Test Profile", profile.Name)
-	assert.Equal(t, "ProfileModel123", profile.Model)
-	assert.Equal(t, DeviceRoleServer, profile.Role)
-	assert.Equal(t, eventLog, profile.EventLog)
-}
-
-func TestDeviceProfile_EmptyProfile(t *testing.T) {
-	profile := &DeviceProfile{}
-
-	assert.Equal(t, uint64(0), profile.ID)
-	assert.Equal(t, "", profile.Name)
-	assert.Equal(t, "", profile.Model)
-	assert.Equal(t, DeviceRole(""), profile.Role)
-	assert.Nil(t, profile.EventLog)
-	assert.Nil(t, profile.GetEnrollmentNetworkConfig())
-	assert.Nil(t, profile.GetPostEnrollmentNetworkConfig())
-	assert.Nil(t, profile.GetFailureNetworkConfig())
-	assert.Nil(t, profile.PlatformdConfig)
-	assert.Nil(t, profile.MatchRules)
-}
-
-func TestDeviceProfile_NilEventLog(t *testing.T) {
-	profile := &DeviceProfile{
-		ID:       12345,
-		Model:    "TestModel",
-		EventLog: nil,
-	}
-
-	assert.Nil(t, profile.EventLog)
-	assert.Equal(t, "TestModel", profile.Model)
-}
-
-func TestDeviceProfile_EmptyEventLog(t *testing.T) {
-	profile := &DeviceProfile{
-		ID:       12345,
-		Model:    "TestModel",
-		EventLog: []byte{},
-	}
-
-	require.NotNil(t, profile.EventLog)
-	assert.Len(t, profile.EventLog, 0)
-}
-
-func TestDeviceProfile_LargeEventLog(t *testing.T) {
-	largeLog := make([]byte, 2*1024*1024) // 2MB
-	for i := range largeLog {
-		largeLog[i] = byte(i % 256)
-	}
-
-	profile := &DeviceProfile{
-		ID:       12345,
-		Model:    "HighThroughputDevice",
-		EventLog: largeLog,
-	}
-
-	assert.Len(t, profile.EventLog, 2*1024*1024)
-	assert.Equal(t, largeLog, profile.EventLog)
-	assert.Equal(t, "HighThroughputDevice", profile.Model)
-}
-
-func TestDeviceProfile_MultipleIDOperations(t *testing.T) {
-	profile := &DeviceProfile{}
-
-	assert.Equal(t, uint64(0), profile.EntityID())
-
-	profile.SetEntityID(1000)
-	assert.Equal(t, uint64(1000), profile.EntityID())
-	assert.Equal(t, uint64(1000), profile.ID)
-
-	profile.SetEntityID(2000)
-	assert.Equal(t, uint64(2000), profile.EntityID())
-	assert.Equal(t, uint64(2000), profile.ID)
-
-	profile.ID = 3000
-	assert.Equal(t, uint64(3000), profile.EntityID())
-}
-
-func TestDeviceProfile_ModelVariations(t *testing.T) {
-	tests := []struct {
-		name  string
-		model string
-	}{
-		{
-			name:  "simple model name",
-			model: "Model123",
-		},
-		{
-			name:  "model with spaces",
-			model: "Model Name With Spaces",
-		},
-		{
-			name:  "model with special characters",
-			model: "Model-2000_v1.5",
-		},
-		{
-			name:  "empty model",
-			model: "",
-		},
-		{
-			name:  "long model name",
-			model: "ThisIsAVeryLongModelNameThatExceedsNormalLengthsButShouldStillBeHandledCorrectly",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			profile := &DeviceProfile{
-				ID:    12345,
-				Model: tt.model,
-			}
-
-			assert.Equal(t, tt.model, profile.Model)
-		})
-	}
-}
-
 func TestDeviceRole_Values(t *testing.T) {
 	tests := []struct {
 		name string
@@ -340,86 +213,14 @@ func TestDeviceProfile_NilNetworkConfiguration(t *testing.T) {
 	assert.Nil(t, profile.GetFailureNetworkConfig())
 }
 
-func TestDeviceProfile_PlatformdConfig(t *testing.T) {
-	profile := &DeviceProfile{
-		ID:   12345,
-		Name: "Platformd Config Test",
-		PlatformdConfig: &PlatformdConfigRef{
-			ConfigName: "production-server",
-			ConfigPath: "/etc/platformd/configs/prod-server.yaml",
-			Version:    "1.2.3",
-		},
-	}
-
-	require.NotNil(t, profile.PlatformdConfig)
-	assert.Equal(t, "production-server", profile.PlatformdConfig.ConfigName)
-	assert.Equal(t, "/etc/platformd/configs/prod-server.yaml", profile.PlatformdConfig.ConfigPath)
-	assert.Equal(t, "1.2.3", profile.PlatformdConfig.Version)
-}
-
-func TestDeviceProfile_NilPlatformdConfig(t *testing.T) {
-	profile := &DeviceProfile{
-		ID:              12345,
-		PlatformdConfig: nil,
-	}
-
-	assert.Nil(t, profile.PlatformdConfig)
-}
-
-func TestDeviceProfile_MatchRules(t *testing.T) {
-	profile := &DeviceProfile{
-		ID:   12345,
-		Name: "Match Rules Test",
-		MatchRules: &ProfileMatchRules{
-			ModelPattern:      "^Server-[0-9]+$",
-			SerialPattern:     "^SN[A-Z]{3}[0-9]{6}$",
-			ManufacturerMatch: "Dell",
-			TPMVendor:         "IFX",
-			CustomAttributes: map[string]string{
-				"datacenter": "us-east-1",
-				"rack":       "A1",
-			},
-		},
-	}
-
-	require.NotNil(t, profile.MatchRules)
-	assert.Equal(t, "^Server-[0-9]+$", profile.MatchRules.ModelPattern)
-	assert.Equal(t, "^SN[A-Z]{3}[0-9]{6}$", profile.MatchRules.SerialPattern)
-	assert.Equal(t, "Dell", profile.MatchRules.ManufacturerMatch)
-	assert.Equal(t, "IFX", profile.MatchRules.TPMVendor)
-	assert.Len(t, profile.MatchRules.CustomAttributes, 2)
-	assert.Equal(t, "us-east-1", profile.MatchRules.CustomAttributes["datacenter"])
-	assert.Equal(t, "A1", profile.MatchRules.CustomAttributes["rack"])
-}
-
-func TestDeviceProfile_NilMatchRules(t *testing.T) {
-	profile := &DeviceProfile{
-		ID:         12345,
-		MatchRules: nil,
-	}
-
-	assert.Nil(t, profile.MatchRules)
-}
-
-func TestDeviceProfile_EmptyMatchRulesMap(t *testing.T) {
-	profile := &DeviceProfile{
-		ID: 12345,
-		MatchRules: &ProfileMatchRules{
-			CustomAttributes: map[string]string{},
-		},
-	}
-
-	require.NotNil(t, profile.MatchRules)
-	assert.Empty(t, profile.MatchRules.CustomAttributes)
-}
-
 func TestDeviceProfile_YAMLSerialization(t *testing.T) {
 	vlan := 200
 	original := &DeviceProfile{
-		ID:    12345,
-		Name:  "YAML Test Profile",
-		Model: "TestModel-2000",
-		Role:  DeviceRoleGateway,
+		ID:       12345,
+		Name:     "YAML Test Profile",
+		Model:    "TestModel-2000",
+		Role:     DeviceRoleGateway,
+		EventLog: []byte("yaml-event-log"),
 		Networks: map[string]*NetworkPhaseConfig{
 			DefaultEnrollmentNetwork: {
 				VLAN:       uint16(vlan),
@@ -436,8 +237,9 @@ func TestDeviceProfile_YAMLSerialization(t *testing.T) {
 			Version:    "2.0.0",
 		},
 		MatchRules: &ProfileMatchRules{
-			ModelPattern: "^TestModel-.*$",
-			TPMVendor:    "NTC",
+			ModelPattern:     "^TestModel-.*$",
+			TPMVendor:        "NTC",
+			CustomAttributes: map[string]string{"sensor-type": "temperature"},
 		},
 	}
 
@@ -453,6 +255,7 @@ func TestDeviceProfile_YAMLSerialization(t *testing.T) {
 	assert.Equal(t, original.Name, decoded.Name)
 	assert.Equal(t, original.Model, decoded.Model)
 	assert.Equal(t, original.Role, decoded.Role)
+	assert.Equal(t, original.EventLog, decoded.EventLog)
 
 	require.NotNil(t, decoded.GetEnrollmentNetworkConfig())
 
@@ -469,15 +272,18 @@ func TestDeviceProfile_YAMLSerialization(t *testing.T) {
 	require.NotNil(t, decoded.MatchRules)
 	assert.Equal(t, original.MatchRules.ModelPattern, decoded.MatchRules.ModelPattern)
 	assert.Equal(t, original.MatchRules.TPMVendor, decoded.MatchRules.TPMVendor)
+	require.Len(t, decoded.MatchRules.CustomAttributes, 1)
+	assert.Equal(t, "temperature", decoded.MatchRules.CustomAttributes["sensor-type"])
 }
 
 func TestDeviceProfile_JSONSerialization(t *testing.T) {
 	vlan := 300
 	original := &DeviceProfile{
-		ID:    54321,
-		Name:  "JSON Test Profile",
-		Model: "JSONModel-3000",
-		Role:  DeviceRoleEdge,
+		ID:       54321,
+		Name:     "JSON Test Profile",
+		Model:    "JSONModel-3000",
+		Role:     DeviceRoleEdge,
+		EventLog: []byte("json-event-log"),
 		Networks: map[string]*NetworkPhaseConfig{
 			DefaultPostEnrollmentNetwork: {
 				VLAN:       uint16(vlan),
@@ -499,9 +305,11 @@ func TestDeviceProfile_JSONSerialization(t *testing.T) {
 		},
 		PlatformdConfig: &PlatformdConfigRef{
 			ConfigName: "edge-config",
+			ConfigPath: "/etc/platformd/edge.yaml",
 		},
 		MatchRules: &ProfileMatchRules{
-			SerialPattern: "^EDGE[0-9]{8}$",
+			SerialPattern:     "^EDGE[0-9]{8}$",
+			ManufacturerMatch: "EdgeSystems",
 			CustomAttributes: map[string]string{
 				"location": "remote-site-1",
 			},
@@ -520,6 +328,7 @@ func TestDeviceProfile_JSONSerialization(t *testing.T) {
 	assert.Equal(t, original.Name, decoded.Name)
 	assert.Equal(t, original.Model, decoded.Model)
 	assert.Equal(t, original.Role, decoded.Role)
+	assert.Equal(t, original.EventLog, decoded.EventLog)
 
 	require.NotNil(t, decoded.GetPostEnrollmentNetworkConfig())
 
@@ -534,9 +343,11 @@ func TestDeviceProfile_JSONSerialization(t *testing.T) {
 
 	require.NotNil(t, decoded.PlatformdConfig)
 	assert.Equal(t, original.PlatformdConfig.ConfigName, decoded.PlatformdConfig.ConfigName)
+	assert.Equal(t, original.PlatformdConfig.ConfigPath, decoded.PlatformdConfig.ConfigPath)
 
 	require.NotNil(t, decoded.MatchRules)
 	assert.Equal(t, original.MatchRules.SerialPattern, decoded.MatchRules.SerialPattern)
+	assert.Equal(t, original.MatchRules.ManufacturerMatch, decoded.MatchRules.ManufacturerMatch)
 	assert.Equal(t, original.MatchRules.CustomAttributes["location"], decoded.MatchRules.CustomAttributes["location"])
 }
 
@@ -582,282 +393,6 @@ func TestDeviceProfile_JSONOmitEmpty(t *testing.T) {
 	assert.NotContains(t, dataStr, `"match_rules"`)
 }
 
-func TestDeviceProfile_CompleteConfiguration(t *testing.T) {
-	vlan1 := 100
-	vlan2 := 200
-	vlan3 := 999
-
-	profile := &DeviceProfile{
-		ID:       99999,
-		Name:     "Complete Test Profile",
-		Model:    "CompleteModel-5000",
-		Role:     DeviceRoleLoadBalancer,
-		EventLog: []byte("complete-event-log"),
-		Networks: map[string]*NetworkPhaseConfig{
-			DefaultEnrollmentNetwork: {
-				VLAN:       uint16(vlan1),
-				Subnet:     "10.1.0.0/16",
-				Gateway:    "10.1.0.1",
-				DNSServers: []string{"10.1.0.53"},
-				DHCP:       true,
-				Zone:       "provision",
-			},
-			DefaultPostEnrollmentNetwork: {
-				VLAN:       uint16(vlan2),
-				Subnet:     "10.2.0.0/16",
-				Gateway:    "10.2.0.1",
-				DNSServers: []string{"10.2.0.53", "10.2.0.54"},
-				DHCP:       false,
-				StaticIP:   "10.2.100.100",
-				Zone:       "prod",
-			},
-			DefaultFailureNetwork: {
-				VLAN:       uint16(vlan3),
-				Subnet:     "10.99.0.0/16",
-				Gateway:    "10.99.0.1",
-				DNSServers: []string{"10.99.0.53"},
-				DHCP:       true,
-				Zone:       "quarantine",
-			},
-		},
-		PlatformdConfig: &PlatformdConfigRef{
-			ConfigName: "lb-production",
-			ConfigPath: "/etc/platformd/lb-prod.yaml",
-			Version:    "3.1.4",
-		},
-		MatchRules: &ProfileMatchRules{
-			ModelPattern:      "^CompleteModel-.*$",
-			SerialPattern:     "^LB[0-9]{10}$",
-			ManufacturerMatch: "HPE",
-			TPMVendor:         "STM",
-			CustomAttributes: map[string]string{
-				"environment": "production",
-				"criticality": "high",
-				"compliance":  "pci-dss",
-			},
-		},
-	}
-
-	assert.Equal(t, uint64(99999), profile.ID)
-	assert.Equal(t, "Complete Test Profile", profile.Name)
-	assert.Equal(t, "CompleteModel-5000", profile.Model)
-	assert.Equal(t, DeviceRoleLoadBalancer, profile.Role)
-	assert.Equal(t, []byte("complete-event-log"), profile.EventLog)
-
-	require.NotNil(t, profile.GetEnrollmentNetworkConfig())
-	require.NotNil(t, profile.GetPostEnrollmentNetworkConfig())
-	require.NotNil(t, profile.GetFailureNetworkConfig())
-	require.NotNil(t, profile.PlatformdConfig)
-	require.NotNil(t, profile.MatchRules)
-
-	assert.Equal(t, uint16(vlan1), profile.GetEnrollmentNetworkConfig().VLAN)
-	assert.Equal(t, uint16(vlan2), profile.GetPostEnrollmentNetworkConfig().VLAN)
-	assert.Equal(t, uint16(vlan3), profile.GetFailureNetworkConfig().VLAN)
-
-	assert.Len(t, profile.MatchRules.CustomAttributes, 3)
-	assert.Equal(t, "production", profile.MatchRules.CustomAttributes["environment"])
-}
-
-func TestNetworkPhaseConfig_AllFieldsPopulated(t *testing.T) {
-	vlan := 42
-	config := &NetworkPhaseConfig{
-		VLAN:       uint16(vlan),
-		Subnet:     "10.42.0.0/16",
-		Gateway:    "10.42.0.1",
-		DNSServers: []string{"10.42.0.53", "10.42.0.54", "10.42.0.55"},
-		DHCP:       true,
-		StaticIP:   "10.42.100.200",
-		Zone:       "dmz",
-	}
-
-	assert.Equal(t, uint16(42), config.VLAN)
-	assert.Equal(t, "10.42.0.0/16", config.Subnet)
-	assert.Equal(t, "10.42.0.1", config.Gateway)
-	assert.Len(t, config.DNSServers, 3)
-	assert.True(t, config.DHCP)
-	assert.Equal(t, "10.42.100.200", config.StaticIP)
-	assert.Equal(t, "dmz", config.Zone)
-}
-
-func TestNetworkPhaseConfig_EmptyConfiguration(t *testing.T) {
-	config := &NetworkPhaseConfig{}
-
-	assert.Equal(t, uint16(0), config.VLAN)
-	assert.Empty(t, config.Subnet)
-	assert.Empty(t, config.Gateway)
-	assert.Nil(t, config.DNSServers)
-	assert.False(t, config.DHCP)
-	assert.Empty(t, config.StaticIP)
-	assert.Empty(t, config.Zone)
-}
-
-func TestPlatformdConfigRef_AllFields(t *testing.T) {
-	config := &PlatformdConfigRef{
-		ConfigName: "test-config",
-		ConfigPath: "/path/to/config.yaml",
-		Version:    "1.0.0",
-	}
-
-	assert.Equal(t, "test-config", config.ConfigName)
-	assert.Equal(t, "/path/to/config.yaml", config.ConfigPath)
-	assert.Equal(t, "1.0.0", config.Version)
-}
-
-func TestPlatformdConfigRef_EmptyConfiguration(t *testing.T) {
-	config := &PlatformdConfigRef{}
-
-	assert.Empty(t, config.ConfigName)
-	assert.Empty(t, config.ConfigPath)
-	assert.Empty(t, config.Version)
-}
-
-func TestProfileMatchRules_AllFields(t *testing.T) {
-	rules := &ProfileMatchRules{
-		ModelPattern:      "^Model.*$",
-		SerialPattern:     "^SN[0-9]{8}$",
-		ManufacturerMatch: "ACME",
-		TPMVendor:         "VND",
-		CustomAttributes: map[string]string{
-			"key1": "value1",
-			"key2": "value2",
-		},
-	}
-
-	assert.Equal(t, "^Model.*$", rules.ModelPattern)
-	assert.Equal(t, "^SN[0-9]{8}$", rules.SerialPattern)
-	assert.Equal(t, "ACME", rules.ManufacturerMatch)
-	assert.Equal(t, "VND", rules.TPMVendor)
-	assert.Len(t, rules.CustomAttributes, 2)
-}
-
-func TestProfileMatchRules_EmptyConfiguration(t *testing.T) {
-	rules := &ProfileMatchRules{}
-
-	assert.Empty(t, rules.ModelPattern)
-	assert.Empty(t, rules.SerialPattern)
-	assert.Empty(t, rules.ManufacturerMatch)
-	assert.Empty(t, rules.TPMVendor)
-	assert.Nil(t, rules.CustomAttributes)
-}
-
-func TestDeviceProfile_RoundTripYAMLWithComplexData(t *testing.T) {
-	vlan := 777
-	original := &DeviceProfile{
-		ID:       88888,
-		Name:     "RoundTrip Profile",
-		Model:    "RT-2000",
-		Role:     DeviceRoleIoT,
-		EventLog: []byte("roundtrip-event-data"),
-		Networks: map[string]*NetworkPhaseConfig{
-			DefaultEnrollmentNetwork: {
-				VLAN:    uint16(vlan),
-				Subnet:  "192.168.100.0/24",
-				Gateway: "192.168.100.1",
-				DNSServers: []string{
-					"192.168.100.53",
-					"8.8.8.8",
-				},
-				DHCP: true,
-				Zone: "iot-provision",
-			},
-		},
-		PlatformdConfig: &PlatformdConfigRef{
-			ConfigName: "iot-minimal",
-			Version:    "0.5.0",
-		},
-		MatchRules: &ProfileMatchRules{
-			ModelPattern: "^RT-[0-9]+$",
-			TPMVendor:    "IOT",
-			CustomAttributes: map[string]string{
-				"sensor-type": "temperature",
-			},
-		},
-	}
-
-	yamlData, err := yaml.Marshal(original)
-	require.NoError(t, err)
-
-	var decoded DeviceProfile
-	err = yaml.Unmarshal(yamlData, &decoded)
-	require.NoError(t, err)
-
-	assert.Equal(t, original.ID, decoded.ID)
-	assert.Equal(t, original.Name, decoded.Name)
-	assert.Equal(t, original.Model, decoded.Model)
-	assert.Equal(t, original.Role, decoded.Role)
-	assert.Equal(t, original.EventLog, decoded.EventLog)
-
-	require.NotNil(t, decoded.GetEnrollmentNetworkConfig())
-	assert.Equal(t, original.GetEnrollmentNetworkConfig().VLAN, decoded.GetEnrollmentNetworkConfig().VLAN)
-	assert.Equal(t, original.GetEnrollmentNetworkConfig().DNSServers, decoded.GetEnrollmentNetworkConfig().DNSServers)
-
-	require.NotNil(t, decoded.PlatformdConfig)
-	assert.Equal(t, original.PlatformdConfig.ConfigName, decoded.PlatformdConfig.ConfigName)
-
-	require.NotNil(t, decoded.MatchRules)
-	assert.Equal(t, original.MatchRules.CustomAttributes["sensor-type"], decoded.MatchRules.CustomAttributes["sensor-type"])
-}
-
-func TestDeviceProfile_RoundTripJSONWithComplexData(t *testing.T) {
-	vlan := 555
-	original := &DeviceProfile{
-		ID:       77777,
-		Name:     "JSON RoundTrip",
-		Model:    "JRT-3000",
-		Role:     DeviceRoleServer,
-		EventLog: []byte("json-roundtrip-event"),
-		Networks: map[string]*NetworkPhaseConfig{
-			DefaultPostEnrollmentNetwork: {
-				VLAN:       uint16(vlan),
-				Subnet:     "172.31.0.0/16",
-				Gateway:    "172.31.0.1",
-				DNSServers: []string{"172.31.0.53"},
-				DHCP:       false,
-				StaticIP:   "172.31.50.100",
-				Zone:       "secure-prod",
-			},
-		},
-		PlatformdConfig: &PlatformdConfigRef{
-			ConfigName: "server-high-security",
-			ConfigPath: "/etc/platformd/hs-server.yaml",
-			Version:    "2.5.1",
-		},
-		MatchRules: &ProfileMatchRules{
-			ModelPattern:      "^JRT-.*$",
-			SerialPattern:     "^HS[0-9]{12}$",
-			ManufacturerMatch: "SecureSystems",
-			TPMVendor:         "SEC",
-			CustomAttributes: map[string]string{
-				"security-level": "high",
-				"compliance":     "fedramp",
-			},
-		},
-	}
-
-	jsonData, err := json.Marshal(original)
-	require.NoError(t, err)
-
-	var decoded DeviceProfile
-	err = json.Unmarshal(jsonData, &decoded)
-	require.NoError(t, err)
-
-	assert.Equal(t, original.ID, decoded.ID)
-	assert.Equal(t, original.Name, decoded.Name)
-	assert.Equal(t, original.Model, decoded.Model)
-	assert.Equal(t, original.Role, decoded.Role)
-	assert.Equal(t, original.EventLog, decoded.EventLog)
-
-	require.NotNil(t, decoded.GetPostEnrollmentNetworkConfig())
-	assert.Equal(t, original.GetPostEnrollmentNetworkConfig().VLAN, decoded.GetPostEnrollmentNetworkConfig().VLAN)
-	assert.Equal(t, original.GetPostEnrollmentNetworkConfig().StaticIP, decoded.GetPostEnrollmentNetworkConfig().StaticIP)
-
-	require.NotNil(t, decoded.PlatformdConfig)
-	assert.Equal(t, original.PlatformdConfig.ConfigPath, decoded.PlatformdConfig.ConfigPath)
-
-	require.NotNil(t, decoded.MatchRules)
-	assert.Equal(t, original.MatchRules.ManufacturerMatch, decoded.MatchRules.ManufacturerMatch)
-	assert.Equal(t, original.MatchRules.CustomAttributes["security-level"], decoded.MatchRules.CustomAttributes["security-level"])
-}
 func TestDeviceRole_String(t *testing.T) {
 	tests := []struct {
 		name string

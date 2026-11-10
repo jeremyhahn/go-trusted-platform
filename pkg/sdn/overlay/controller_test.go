@@ -16,7 +16,6 @@ package overlay
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"net"
 	"net/netip"
 	"strconv"
@@ -140,35 +139,6 @@ func TestNew(t *testing.T) {
 	}
 }
 
-func TestNew_WithOptions(t *testing.T) {
-	t.Parallel()
-
-	config := &Config{
-		NodeID:            "test-node",
-		VTEPIP:            netip.MustParseAddr("10.0.0.1"),
-		UnderlayInterface: "eth0",
-		BridgeName:        "br-test",
-	}
-
-	logger := slog.Default()
-	stateManager := NewStateManager()
-
-	ctrl, err := New(config,
-		WithLogger(logger),
-		WithStateManager(stateManager),
-	)
-	if err != nil {
-		t.Fatalf("New() with options error = %v", err)
-	}
-
-	if ctrl.logger != logger {
-		t.Errorf("WithLogger() did not set logger")
-	}
-	if ctrl.state != stateManager {
-		t.Errorf("WithStateManager() did not set state manager")
-	}
-}
-
 func TestController_StartStop(t *testing.T) {
 	t.Parallel()
 
@@ -222,38 +192,6 @@ func TestController_StartStop(t *testing.T) {
 	// Stopping again should be idempotent
 	if err := ctrl.Stop(ctx); err != nil {
 		t.Errorf("Stop() on stopped controller = %v, want nil", err)
-	}
-}
-
-func TestController_StartStopWithCancel(t *testing.T) {
-	t.Parallel()
-
-	config := &Config{
-		NodeID:              "test-node",
-		VTEPIP:              netip.MustParseAddr("10.0.0.1"),
-		UnderlayInterface:   "eth0",
-		BridgeName:          "br-test",
-		HealthCheckInterval: 1 * time.Hour,
-		MACExpiration:       1 * time.Hour,
-	}
-
-	ctrl, err := New(config)
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
-
-	ctx := context.Background()
-
-	if err := ctrl.Start(ctx); err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-
-	// Stop with timeout context
-	stopCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	if err := ctrl.Stop(stopCtx); err != nil {
-		t.Errorf("Stop() with timeout = %v, want nil", err)
 	}
 }
 

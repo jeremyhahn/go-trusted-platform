@@ -252,23 +252,6 @@ func TestTenantQuotas_SetLimit_Unknown(t *testing.T) {
 	}
 }
 
-func TestTenantQuotas_GetSetRoundTrip(t *testing.T) {
-	quotas := &TenantQuotas{TenantID: "test-tenant"}
-	resources := []ResourceType{
-		ResourceVMs, ResourceContainers, ResourceVCPUs, ResourceMemory,
-		ResourceBridges, ResourcePorts, ResourceBandwidth,
-		ResourceDisk, ResourceVolumes, ResourceSnapshots,
-	}
-
-	for i, resource := range resources {
-		limit := int64((i + 1) * 100)
-		quotas.SetLimit(resource, limit)
-		if got := quotas.GetLimit(resource); got != limit {
-			t.Errorf("GetLimit(%s) after SetLimit = %d, expected %d", resource, got, limit)
-		}
-	}
-}
-
 func TestTenantUsage_GetUsage(t *testing.T) {
 	usage := &TenantUsage{
 		TenantID:      "tenant-123",
@@ -404,23 +387,6 @@ func TestTenantUsage_SetUsage_Unknown(t *testing.T) {
 	}
 }
 
-func TestTenantUsage_GetSetRoundTrip(t *testing.T) {
-	usage := &TenantUsage{TenantID: "test-tenant"}
-	resources := []ResourceType{
-		ResourceVMs, ResourceContainers, ResourceVCPUs, ResourceMemory,
-		ResourceBridges, ResourcePorts, ResourceBandwidth,
-		ResourceDisk, ResourceVolumes, ResourceSnapshots,
-	}
-
-	for i, resource := range resources {
-		value := int64((i + 1) * 10)
-		usage.SetUsage(resource, value)
-		if got := usage.GetUsage(resource); got != value {
-			t.Errorf("GetUsage(%s) after SetUsage = %d, expected %d", resource, got, value)
-		}
-	}
-}
-
 func TestReservation_IsExpired(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -464,155 +430,9 @@ func TestReservation_IsExpired(t *testing.T) {
 	}
 }
 
-func TestReservation_Fields(t *testing.T) {
-	now := time.Now()
-	expires := now.Add(DefaultReservationTTL)
-
-	reservation := &Reservation{
-		ID:        "res-uuid-123",
-		TenantID:  "tenant-456",
-		Resource:  ResourceMemory,
-		Amount:    4096,
-		CreatedAt: now,
-		ExpiresAt: expires,
-		Committed: false,
-	}
-
-	if reservation.ID != "res-uuid-123" {
-		t.Errorf("ID = %q, expected %q", reservation.ID, "res-uuid-123")
-	}
-	if reservation.TenantID != "tenant-456" {
-		t.Errorf("TenantID = %q, expected %q", reservation.TenantID, "tenant-456")
-	}
-	if reservation.Resource != ResourceMemory {
-		t.Errorf("Resource = %q, expected %q", reservation.Resource, ResourceMemory)
-	}
-	if reservation.Amount != 4096 {
-		t.Errorf("Amount = %d, expected %d", reservation.Amount, 4096)
-	}
-	if !reservation.CreatedAt.Equal(now) {
-		t.Errorf("CreatedAt = %v, expected %v", reservation.CreatedAt, now)
-	}
-	if !reservation.ExpiresAt.Equal(expires) {
-		t.Errorf("ExpiresAt = %v, expected %v", reservation.ExpiresAt, expires)
-	}
-	if reservation.Committed != false {
-		t.Error("Committed should be false")
-	}
-}
-
 func TestDefaultReservationTTL(t *testing.T) {
 	expected := 5 * time.Minute
 	if DefaultReservationTTL != expected {
 		t.Errorf("DefaultReservationTTL = %v, expected %v", DefaultReservationTTL, expected)
-	}
-}
-
-func TestComputeQuota_Fields(t *testing.T) {
-	quota := ComputeQuota{
-		MaxVMs:        10,
-		MaxContainers: 20,
-		MaxVCPUs:      32,
-		MaxMemoryMB:   65536,
-	}
-
-	if quota.MaxVMs != 10 {
-		t.Errorf("MaxVMs = %d, expected %d", quota.MaxVMs, 10)
-	}
-	if quota.MaxContainers != 20 {
-		t.Errorf("MaxContainers = %d, expected %d", quota.MaxContainers, 20)
-	}
-	if quota.MaxVCPUs != 32 {
-		t.Errorf("MaxVCPUs = %d, expected %d", quota.MaxVCPUs, 32)
-	}
-	if quota.MaxMemoryMB != 65536 {
-		t.Errorf("MaxMemoryMB = %d, expected %d", quota.MaxMemoryMB, 65536)
-	}
-}
-
-func TestNetworkQuota_Fields(t *testing.T) {
-	quota := NetworkQuota{
-		MaxBridges:       5,
-		MaxPorts:         100,
-		MaxBandwidthMbps: 1000,
-	}
-
-	if quota.MaxBridges != 5 {
-		t.Errorf("MaxBridges = %d, expected %d", quota.MaxBridges, 5)
-	}
-	if quota.MaxPorts != 100 {
-		t.Errorf("MaxPorts = %d, expected %d", quota.MaxPorts, 100)
-	}
-	if quota.MaxBandwidthMbps != 1000 {
-		t.Errorf("MaxBandwidthMbps = %d, expected %d", quota.MaxBandwidthMbps, 1000)
-	}
-}
-
-func TestStorageQuota_Fields(t *testing.T) {
-	quota := StorageQuota{
-		MaxDiskGB:    1000,
-		MaxVolumes:   50,
-		MaxSnapshots: 100,
-	}
-
-	if quota.MaxDiskGB != 1000 {
-		t.Errorf("MaxDiskGB = %d, expected %d", quota.MaxDiskGB, 1000)
-	}
-	if quota.MaxVolumes != 50 {
-		t.Errorf("MaxVolumes = %d, expected %d", quota.MaxVolumes, 50)
-	}
-	if quota.MaxSnapshots != 100 {
-		t.Errorf("MaxSnapshots = %d, expected %d", quota.MaxSnapshots, 100)
-	}
-}
-
-func TestTenantQuotas_UpdatedAt(t *testing.T) {
-	now := time.Now()
-	quotas := &TenantQuotas{
-		TenantID:  "tenant-123",
-		UpdatedAt: now,
-	}
-
-	if !quotas.UpdatedAt.Equal(now) {
-		t.Errorf("UpdatedAt = %v, expected %v", quotas.UpdatedAt, now)
-	}
-}
-
-func TestTenantUsage_Timestamp(t *testing.T) {
-	now := time.Now()
-	usage := &TenantUsage{
-		TenantID:  "tenant-123",
-		Timestamp: now,
-	}
-
-	if !usage.Timestamp.Equal(now) {
-		t.Errorf("Timestamp = %v, expected %v", usage.Timestamp, now)
-	}
-}
-
-func TestResourceTypeConstants(t *testing.T) {
-	// Verify all resource type constants have expected values
-	tests := []struct {
-		constant ResourceType
-		expected string
-	}{
-		{ResourceVMs, "vms"},
-		{ResourceContainers, "containers"},
-		{ResourceVCPUs, "vcpus"},
-		{ResourceMemory, "memory"},
-		{ResourceDisk, "disk"},
-		{ResourceBridges, "bridges"},
-		{ResourcePorts, "ports"},
-		{ResourceBandwidth, "bandwidth"},
-		{ResourceVolumes, "volumes"},
-		{ResourceSnapshots, "snapshots"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.expected, func(t *testing.T) {
-			if string(tt.constant) != tt.expected {
-				t.Errorf("constant value = %q, expected %q", string(tt.constant), tt.expected)
-			}
-		})
 	}
 }

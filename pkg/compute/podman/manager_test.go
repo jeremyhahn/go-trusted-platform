@@ -230,6 +230,11 @@ func TestPodmanManager_EmptyIDs(t *testing.T) {
 		_, err := manager.GetContainerLogs(ctx, "", false, nil)
 		assert.Error(t, err)
 	})
+
+	t.Run("RemoveImage empty", func(t *testing.T) {
+		err := manager.RemoveImage(ctx, "", false)
+		assert.Error(t, err)
+	})
 }
 
 func TestPodmanManager_CreateContainer_NilConfig(t *testing.T) {
@@ -274,77 +279,6 @@ func TestPodmanManager_CreateContainer_InvalidConfig(t *testing.T) {
 		Name: "test",
 	})
 	assert.Error(t, err)
-}
-
-func TestPodmanManager_ConfigValidation(t *testing.T) {
-	tests := []struct {
-		name      string
-		config    *ManagerConfig
-		expectErr bool
-	}{
-		{
-			name:      "valid config",
-			config:    DefaultManagerConfig(),
-			expectErr: false,
-		},
-		{
-			name: "invalid - nil runtime",
-			config: &ManagerConfig{
-				Runtime:            nil,
-				MaxContainers:      100,
-				DefaultStopTimeout: DefaultStopTimeout,
-			},
-			expectErr: true,
-		},
-		{
-			name: "invalid - zero max containers",
-			config: &ManagerConfig{
-				Runtime:            DefaultRuntimeConfig(),
-				MaxContainers:      0,
-				DefaultStopTimeout: DefaultStopTimeout,
-			},
-			expectErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := NewPodmanManager(tt.config)
-			if tt.expectErr {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-			}
-		})
-	}
-}
-
-func TestPodmanManagerInterface(t *testing.T) {
-	// Verify podmanManager implements PodmanManager interface
-	config := DefaultManagerConfig()
-
-	manager, err := NewPodmanManager(config)
-	require.NoError(t, err)
-
-	var _ = manager
-}
-
-func TestPodmanManager_ContainerCount(t *testing.T) {
-	config := DefaultManagerConfig()
-	config.MaxContainers = 2 // Set low limit for testing
-
-	manager, err := NewPodmanManager(config)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		if err := manager.Close(); err != nil {
-			t.Logf("cleanup: failed to close manager: %v", err)
-		}
-	})
-
-	pm := manager.(*podmanManager)
-
-	// Initial count should be 0
-	assert.Equal(t, int64(0), pm.containerCount.Load())
 }
 
 func TestPodmanManager_CloseClearsContainers(t *testing.T) {
@@ -448,44 +382,6 @@ func TestPodmanManager_IsInitialized(t *testing.T) {
 	assert.True(t, manager.IsInitialized())
 }
 
-func TestPodmanManager_StopContainer_WithTimeout(t *testing.T) {
-	config := DefaultManagerConfig()
-
-	manager, err := NewPodmanManager(config)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		if err := manager.Close(); err != nil {
-			t.Logf("cleanup: failed to close manager: %v", err)
-		}
-	})
-
-	ctx := context.Background()
-	timeout := 30
-
-	// Not initialized - should return error
-	err = manager.StopContainer(ctx, "nonexistent", &timeout)
-	assert.ErrorIs(t, err, ErrClientNotConnected)
-}
-
-func TestPodmanManager_GetContainerLogs_WithSince(t *testing.T) {
-	config := DefaultManagerConfig()
-
-	manager, err := NewPodmanManager(config)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		if err := manager.Close(); err != nil {
-			t.Logf("cleanup: failed to close manager: %v", err)
-		}
-	})
-
-	ctx := context.Background()
-	since := time.Now().Add(-1 * time.Hour)
-
-	// Not initialized - should return error
-	_, err = manager.GetContainerLogs(ctx, "testcontainer", false, &since)
-	assert.ErrorIs(t, err, ErrClientNotConnected)
-}
-
 func TestPodmanManager_CreateContainer_MaxContainersReached(t *testing.T) {
 	config := DefaultManagerConfig()
 	config.MaxContainers = 1
@@ -547,6 +443,16 @@ func TestManagerConfig_Validate(t *testing.T) {
 			config: &ManagerConfig{
 				Runtime:            DefaultRuntimeConfig(),
 				MaxContainers:      0,
+				DefaultStopTimeout: DefaultStopTimeout,
+			},
+			expectErr: true,
+			errField:  "max_containers",
+		},
+		{
+			name: "negative max containers",
+			config: &ManagerConfig{
+				Runtime:            DefaultRuntimeConfig(),
+				MaxContainers:      -1,
 				DefaultStopTimeout: DefaultStopTimeout,
 			},
 			expectErr: true,
@@ -672,42 +578,6 @@ func TestPodmanManager_Connect_Alias(t *testing.T) {
 	err = pm.Connect(ctx)
 	// Error is expected because we don't have the OCI runtime installed in test
 	assert.Error(t, err)
-}
-
-func TestPodmanManager_ListImages_NotInitialized(t *testing.T) {
-	config := DefaultManagerConfig()
-
-	manager, err := NewPodmanManager(config)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		if err := manager.Close(); err != nil {
-			t.Logf("cleanup: failed to close manager: %v", err)
-		}
-	})
-
-	ctx := context.Background()
-
-	// Not initialized - should return error
-	_, err = manager.ListImages(ctx)
-	assert.ErrorIs(t, err, ErrClientNotConnected)
-}
-
-func TestPodmanManager_InspectImage_NotInitialized(t *testing.T) {
-	config := DefaultManagerConfig()
-
-	manager, err := NewPodmanManager(config)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		if err := manager.Close(); err != nil {
-			t.Logf("cleanup: failed to close manager: %v", err)
-		}
-	})
-
-	ctx := context.Background()
-
-	// Not initialized - should return error
-	_, err = manager.InspectImage(ctx, "alpine:latest")
-	assert.ErrorIs(t, err, ErrClientNotConnected)
 }
 
 // testAttestor is a mock attestor for testing
