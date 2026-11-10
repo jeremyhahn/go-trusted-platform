@@ -286,14 +286,14 @@ func TestMediaReadProbe_ClientAttribution(t *testing.T) {
 	now := time.Now()
 	// Two BMCs read the same ISO. Node B's probe must see only B's worker.
 	shared := ipxe.MediaOpen{Openers: []ipxe.MediaOpener{
-		{Name: "smbd", Client: "10.4.2.103", OpenEvents: 1, PosChanges: 300, LastActivity: now},
-		{Name: "smbd", Client: "10.4.2.104", OpenEvents: 1, PosChanges: 0, LastActivity: now.Add(-time.Hour)},
+		{Name: "smbd", Client: "198.51.100.103", OpenEvents: 1, PosChanges: 300, LastActivity: now},
+		{Name: "smbd", Client: "198.51.100.104", OpenEvents: 1, PosChanges: 0, LastActivity: now.Add(-time.Hour)},
 	}}
-	nodeB := &MediaReadProbe{Client: "10.4.2.104", Since: now, Baseline: &MediaReadBaseline{Supported: true, Activity: 1}}
+	nodeB := &MediaReadProbe{Client: "198.51.100.104", Since: now, Baseline: &MediaReadBaseline{Supported: true, Activity: 1}}
 	if activity, _, ok := nodeB.observed(shared, time.Time{}); ok || activity != 1 {
 		t.Errorf("node A's reads must not count for node B: activity=%d ok=%v", activity, ok)
 	}
-	nodeA := &MediaReadProbe{Client: "10.4.2.103", Since: now, Baseline: &MediaReadBaseline{Supported: true, Activity: 1}}
+	nodeA := &MediaReadProbe{Client: "198.51.100.103", Since: now, Baseline: &MediaReadBaseline{Supported: true, Activity: 1}}
 	if activity, _, ok := nodeA.observed(shared, time.Time{}); !ok || activity != 301 {
 		t.Errorf("node A's own reads count for node A: activity=%d ok=%v", activity, ok)
 	}
@@ -404,11 +404,11 @@ func TestSameClient(t *testing.T) {
 		a, b string
 		want bool
 	}{
-		{"10.4.2.103", "10.4.2.103", true},
-		{"10.4.2.103:445", "10.4.2.103", true},
+		{"198.51.100.103", "198.51.100.103", true},
+		{"198.51.100.103:445", "198.51.100.103", true},
 		{"[fe80::1]:445", "fe80::1", true},
 		{"fe80:0:0:0:0:0:0:1", "fe80::1", true},
-		{"10.4.2.103", "10.4.2.104", false},
+		{"198.51.100.103", "198.51.100.104", false},
 		{"bmc-02.mgmt", "bmc-02.mgmt", true},
 		{"bmc-02.mgmt", "bmc-03.mgmt", false},
 	}
@@ -420,7 +420,7 @@ func TestSameClient(t *testing.T) {
 }
 
 func TestWorkerServesClient(t *testing.T) {
-	full := &ipxe.MediaOpener{Name: "smbd", Client: "10.4.2.103"}
+	full := &ipxe.MediaOpener{Name: "smbd", Client: "198.51.100.103"}
 	trunc := &ipxe.MediaOpener{Name: "smbd[198.51.100", Client: "198.51.100", ClientTruncated: true}
 	cases := []struct {
 		name   string
@@ -428,8 +428,8 @@ func TestWorkerServesClient(t *testing.T) {
 		bmc    string
 		want   bool
 	}{
-		{"full match", full, "10.4.2.103", true},
-		{"full mismatch", full, "10.4.2.104", false},
+		{"full match", full, "198.51.100.103", true},
+		{"full mismatch", full, "198.51.100.104", false},
 		{"truncated prefix match", trunc, "198.51.100.103", true},
 		{"truncated prefix match, port on the BMC side", trunc, "[198.51.100.103]:445", true},
 		// The disclosed limit of truncation: every BMC sharing the
@@ -472,9 +472,9 @@ func TestMediaReadProbe_MixedTaggingIsFailSafe(t *testing.T) {
 	now := time.Now()
 	mixed := ipxe.MediaOpen{Openers: []ipxe.MediaOpener{
 		{Name: "smbd", OpenEvents: 1, PosChanges: 50, LastActivity: now},
-		{Name: "smbd", Client: "10.4.2.103", OpenEvents: 1, LastActivity: now},
+		{Name: "smbd", Client: "198.51.100.103", OpenEvents: 1, LastActivity: now},
 	}}
-	p := &MediaReadProbe{Client: "10.4.2.104", Since: now}
+	p := &MediaReadProbe{Client: "198.51.100.104", Since: now}
 	if activity, _, ok := p.observed(mixed, time.Time{}); ok || activity != 0 {
 		t.Errorf("an untagged worker must not stand in for a node's own: activity=%d ok=%v", activity, ok)
 	}

@@ -57,6 +57,10 @@ self-hosted-runner:
   labels:
     - ubuntu-latest
     - ubuntu-22.04
+    # 2026-11-10, m2406: the bigdisk runner's set [self-hosted, linux, x64, bigdisk] (ci.yml race).
+    - self-hosted
+    - linux
+    - x64
     - codex
     - codex-task
     - claude
