@@ -1331,8 +1331,15 @@ var templatedRouteTable = map[string]templatedRoute{
 	// tenant guard (restiam.RequestedTenant) reads the tenant from the path
 	// or the tenant_id query, never the body, so a flat path with the
 	// tenant in the body was refused with 403 before the handler ran.
-	"/platform.v1.PlatformIAMService/CreateUser":      tenantItemRoute("/api/v1/iam/tenants/{tenant}/users", http.MethodPost),
-	"/platform.v1.PlatformIAMService/ListUsers":       tenantItemRoute("/api/v1/iam/tenants/{tenant}/users", http.MethodGet),
+	//
+	// The user-list handler reads its filters from the query only, so
+	// ListUsers sends them as email, role and group and not in the GET body,
+	// where they were ignored and the caller got every user of the tenant.
+	"/platform.v1.PlatformIAMService/CreateUser": tenantItemRoute("/api/v1/iam/tenants/{tenant}/users", http.MethodPost),
+	"/platform.v1.PlatformIAMService/ListUsers": tenantListRoute("/api/v1/iam/tenants/{tenant}/users",
+		queryParam{name: "email", field: "email_filter"},
+		queryParam{name: "role", field: "role_filter"},
+		queryParam{name: "group", field: "group_filter"}),
 	"/platform.v1.PlatformIAMService/CreateRole":      tenantItemRoute("/api/v1/iam/tenants/{tenant}/roles", http.MethodPost),
 	"/platform.v1.PlatformIAMService/ListRoles":       tenantItemRoute("/api/v1/iam/tenants/{tenant}/roles", http.MethodGet),
 	"/platform.v1.PlatformIAMService/CreateGroup":     tenantItemRoute("/api/v1/iam/tenants/{tenant}/groups", http.MethodPost),
@@ -1385,6 +1392,15 @@ func tenantItemRoute(path, method string, items ...pathParam) templatedRoute {
 		method:     method,
 		pathParams: append([]pathParam{{placeholder: "{tenant}", field: "tenant_id"}}, items...),
 	}
+}
+
+// tenantListRoute is tenantItemRoute for a tenant-scoped IAM collection GET
+// whose handler reads its filters from the query string: each filter's field
+// leaves the body for its query parameter, and an empty filter is omitted.
+func tenantListRoute(path string, filters ...queryParam) templatedRoute {
+	route := tenantItemRoute(path, http.MethodGet)
+	route.queryParams = filters
+	return route
 }
 
 // bmcRoute constructs a templated route that pulls profile_id from a
