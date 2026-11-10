@@ -204,6 +204,21 @@ func TestInvoke_ChannelBinding(t *testing.T) {
 				assert.True(t, errors.As(err, &unavailable), "err = %v, want ErrChannelBindingUnavailable", err)
 			},
 		},
+		{
+			name: "an adapter over a caller's RoundTripper has no TLS connection to bind to, even over https",
+			adapter: func(t *testing.T) *Adapter {
+				a, err := NewWithRoundTripper("https://daemon.invalid", handlerTransport{handler: server.Config.Handler}, "")
+				require.NoError(t, err)
+				return a
+			},
+			option: func(*platformv1.ListIAMUsersRequest) grpc.CallOption {
+				return transport.WithChannelBinding(func(context.Context, []byte) error { return nil })
+			},
+			check: func(t *testing.T, err error, _ *platformv1.ListIAMUsersResponse) {
+				var unavailable *transport.ErrChannelBindingUnavailable
+				assert.True(t, errors.As(err, &unavailable), "err = %v, want ErrChannelBindingUnavailable", err)
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
