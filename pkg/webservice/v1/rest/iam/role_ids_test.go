@@ -454,6 +454,24 @@ func TestUpdateUser_UnchangedRolesUpdateTheOtherFields(t *testing.T) {
 	assert.Empty(t, client.users.revoked)
 }
 
+// TestUpdateUser_RemoteBackendSetsChangedRoles drives the handler through the
+// adapter for a remote backend, which assigns and revokes roles.
+func TestUpdateUser_RemoteBackendSetsChangedRoles(t *testing.T) {
+	client := userHolding("0b5e-admin")
+	writer := &mockHttpWriter{}
+	handlers := NewIAMHandlers(newTestLogger(), NewRemoteQuicBaaSIAMAdapter(client), &mockPEPClient{}, writer)
+
+	body := UpdateUserRequest{Name: "Renamed", Roles: []string{"operator"}}
+	req := createRequestWithVars(http.MethodPut, "/api/v1/iam/tenants/tenant-a/users/user-1", body, map[string]string{"tenant": "tenant-a", "id": "user-1"})
+	handlers.UpdateUser(httptest.NewRecorder(), req)
+
+	assert.Equal(t, http.StatusOK, writer.lastStatus)
+	assert.Equal(t, []string{"0b5e-operator"}, client.users.assigned)
+	assert.Equal(t, []string{"0b5e-admin"}, client.users.revoked)
+	require.NotNil(t, client.users.updated, "the update must reach the SDK")
+	assert.Equal(t, "Renamed", client.users.updated.DisplayName)
+}
+
 func TestQuicBaaSIAMAdapter_UpdateTenant_SendsTheNameAsDisplayName(t *testing.T) {
 	client := &adapterSDKClient{tenants: &recordingTenantClient{}}
 
