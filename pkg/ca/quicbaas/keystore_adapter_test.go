@@ -483,6 +483,46 @@ func TestQuicBaaSKeyStore_GenerateECDSA(t *testing.T) {
 		require.NotNil(t, key)
 	})
 
+	t.Run("generates ECDSA P-384 key", func(t *testing.T) {
+		// Generate a test ECDSA key for the public key response
+		ecdsaKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+		require.NoError(t, err)
+		pubKeyDER, err := x509.MarshalPKIXPublicKey(&ecdsaKey.PublicKey)
+		require.NoError(t, err)
+
+		mockKMS := &mockSDKKMSClient{
+			generateKeyFunc: func(ctx context.Context, req *kms.GenerateKeyRequest) (*kms.GenerateKeyResponse, error) {
+				assert.Equal(t, kms.AlgorithmECDSAP384, req.Algorithm)
+				return &kms.GenerateKeyResponse{
+					KeyID:     "ecdsa-key",
+					Algorithm: kms.AlgorithmECDSAP384,
+					Version:   1,
+				}, nil
+			},
+			getPublicKeyFunc: func(ctx context.Context, keyID string) (*kms.GetPublicKeyResponse, error) {
+				return &kms.GetPublicKeyResponse{
+					KeyID:     keyID,
+					PublicKey: pubKeyDER,
+					Algorithm: kms.AlgorithmECDSAP384,
+				}, nil
+			},
+		}
+		mockCrypto := &mockSDKCryptoClient{}
+
+		ks, _ := NewQuicBaaSKeyStore(&QuicBaaSKeyStoreConfig{
+			KMS:    mockKMS,
+			Crypto: mockCrypto,
+		})
+
+		key, err := ks.GenerateECDSA(context.Background(), &xkmssdk.KeyAttributes{
+			CN:            "ecdsa-test",
+			ECCAttributes: &xkmssdk.ECCAttributes{Curve: elliptic.P384()},
+		})
+
+		require.NoError(t, err)
+		require.NotNil(t, key)
+	})
+
 	t.Run("nil attrs returns error", func(t *testing.T) {
 		mockKMS := &mockSDKKMSClient{}
 		mockCrypto := &mockSDKCryptoClient{}
