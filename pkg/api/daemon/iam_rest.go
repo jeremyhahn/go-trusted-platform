@@ -142,7 +142,7 @@ func (s *RESTServer) SetIAMHandlers(logger *logging.Logger, iamClient restiam.IA
 // Methods matcher, so a walk of the daemon router reads its method; several of
 // those paths serve no method at all.
 func (s *RESTServer) mountIAMRoutes(iamRouter *restiam.IAMRouter, authz iamRESTAuthorization) error {
-	awaitingSDK := authz.authenticate(http.HandlerFunc(http.NotFound))
+	awaitingSDK := authz.authenticate(http.NotFoundHandler())
 	routes := mux.NewRouter()
 	// The IAM router's base path is relative to the /api/v1 parent.
 	iamRouter.RegisterRoutes(routes.PathPrefix(iamRESTParentPath).Subrouter())
