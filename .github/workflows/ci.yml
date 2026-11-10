@@ -72,6 +72,13 @@
 #     need no toolchain image.
 #   - sdkjs and web run on the runner with setup-node: the toolchain image
 #     has no Node (the Dockerfile installs it in the integration stage only).
+#   - The jobs that need no Docker daemon (race, lint-gates, arch-gates,
+#     sdkjs, web; #1589 and its follow-up) take race's runs-on: a push to main
+#     and a pull_request from this repository run on the bigdisk runner
+#     [self-hosted, linux, x64, bigdisk], everything else on ubuntu-latest.
+#     Each needs schedule-guard and carries the guard in its `if:`, its
+#     checkout persists no token, and any apt step is hosted-only. fips stays
+#     hosted: its main-tier `if:` has no guarded form yet (see there).
 #   - The gate's check lines are `check <tier> <job> "$RESULT"` with a docs
 #     tier (pkg/arch/citiers_test.go holds the format).
 #   - integration needs image (isolation, see there) and applies the
@@ -85,7 +92,8 @@
 #     Gitea has no code-scanning ingest.
 #
 # Stage order. lint-gates, arch-gates, web, fips, vuln and soak start at once
-# (ci-template v1.14; vuln after schedule-guard, #1425). image and sdkjs (the docs tier, v1.24) start after the
+# (ci-template v1.14; vuln after schedule-guard, #1425; arch-gates and web
+# after it too, as bigdisk jobs). image and sdkjs (the docs tier, v1.24) start after the
 # seconds-long `changes` job. integration starts after image (isolation, see
 # there) and runs as five parallel legs, one job per leg of the suite runner
 # (#1119). A run takes as long as changes, image and the slowest integration
@@ -726,10 +734,14 @@ jobs:
     # v1.26: never on a draft. v1.29.3: on a schedule run, only on the
     # schedule guard's `run`.
     if: ${{ !github.event.pull_request.draft && (github.event_name != 'schedule' || needs.schedule-guard.outputs.verdict == 'run') }}
-    runs-on: ${{ github.server_url == 'https://github.com' && 'ubuntu-latest' || 'bigdisk' }}
+    # Race's runs-on (#1589 follow-up): the bigdisk runner for a push to main
+    # and a same-repository PR, ubuntu-latest otherwise.
+    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
       - name: Is there a lint-gates target?
         id: probe
@@ -855,14 +867,19 @@ jobs:
   # v1.26 (arch-gates): go-objstore is imported only in the storage seam.
   # This repo has no seam and no import, so OBJSTORE_SEAMS is empty and any
   # import fails.
+  # Race's runs-on (#1589 follow-up): a grep needs no Docker and no Go. As a
+  # bigdisk job it needs schedule-guard and its if: carries the guard.
   arch-gates:
     name: Architecture Gates
-    if: ${{ !github.event.pull_request.draft }}
-    runs-on: ubuntu-latest
+    if: ${{ !github.event.pull_request.draft && (github.event_name != 'schedule' || needs.schedule-guard.outputs.verdict == 'run') }}
+    needs: schedule-guard
+    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}
     env:
       OBJSTORE_SEAMS: ''
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
 
       - name: No direct go-objstore import outside the storage seam
         run: |
@@ -884,14 +901,19 @@ jobs:
   #
   # Job id is `sdkjs`, deliberately without a hyphen: ci-gate dereferences it
   # as `needs.sdkjs.result`. Do not "tidy" this to `sdk-js`.
+  #
+  # Race's runs-on (#1589 follow-up): npm needs no Docker. As a bigdisk job it
+  # needs schedule-guard and its if: carries the guard.
   sdkjs:
     name: SDK JavaScript
-    runs-on: ubuntu-latest
-    if: ${{ needs.changes.outputs.docs_only != 'true' && !github.event.pull_request.draft }}
-    needs: [changes]
+    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}
+    if: ${{ needs.changes.outputs.docs_only != 'true' && !github.event.pull_request.draft && (github.event_name != 'schedule' || needs.schedule-guard.outputs.verdict == 'run') }}
+    needs: [changes, schedule-guard]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
       # Go is not used by the tests: the root Makefile evaluates `go env` at
       # parse time for every target, and without a toolchain the log opens
@@ -966,13 +988,19 @@ jobs:
   # Node.
   #
   # Job id is `web`, one word, for the same reason `sdkjs` is.
+  #
+  # Race's runs-on (#1589 follow-up): npm and next build need no Docker. As a
+  # bigdisk job it needs schedule-guard and its if: carries the guard.
   web:
     name: Web Console
-    runs-on: ubuntu-latest
-    if: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')) && !github.event.pull_request.draft }}
+    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}
+    if: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')) && !github.event.pull_request.draft && (github.event_name != 'schedule' || needs.schedule-guard.outputs.verdict == 'run') }}
+    needs: schedule-guard
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -1622,6 +1650,10 @@ jobs:
     # round-robin quarter of the package list (Makefile SHARD/SHARDS), to fit
     # a hosted job's 4 cores and 6 hours. The job carries no module
     # credential and no proxy setting.
+    # It stays hosted (#1589 follow-up): a job whose runs-on names bigdisk
+    # must carry the schedule guard in its if:, and pkg/arch/citiers_test.go
+    # has no guarded form of the main-tier if: below, so moving it needs that
+    # test changed first.
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
