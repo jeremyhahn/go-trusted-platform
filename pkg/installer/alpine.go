@@ -2487,7 +2487,7 @@ func (ai *alpineInstaller) installNetworkPackages(ctx context.Context, rootPath 
 	var packages []string
 
 	// Always install ifupdown-ng. busybox's built-in /sbin/ifup cannot
-	// parse CIDR notation (`address 10.4.2.139/24`) and fails with
+	// parse CIDR notation (`address 192.0.2.139/24`) and fails with
 	// `ifup: don't have all variables for X/inet`. ifupdown-ng handles
 	// CIDR natively. /sbin/ifup is whichever package wins last during
 	// install; explicitly installing ifupdown-ng makes it the provider.
