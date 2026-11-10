@@ -84,6 +84,17 @@ renewal leaves the old certificate and key in place:
 | pathLen n > 0 | `max_path_len` ≥ n, or negative (no limit) | refused, `SubordinatePathLenError` (issuer, requested, allowed) |
 | no pathLen | any | issued as requested |
 
+Every CA certificate above the issuing CA bounds the request as well (RFC 5280
+§6.1.4). A certificate k steps above the issuing CA (its own issuer is step 1)
+with pathLen n already has k CA certificates beneath it, so the subordinate's
+path length is at most n - k - 1; below zero, or for a request without a
+limit, the request is refused with `AncestorPathLenError` (issuer, ancestor,
+requested, allowed). The preflight reads the chain from the CA's bundle
+(issuing certificate first, root last). If the bundle cannot be read, or does
+not lead from the issuing certificate up to a self-issued one, the request is
+refused with `IssuerChainError`, a server failure, and nothing is signed or
+revoked. A self-issued issuing certificate has no certificate above it.
+
 The same preflight refuses an `is_ca` request with a non-empty
 `ext_key_usage`, and the renewal of a CA certificate that has one, with
 `ErrCAExtKeyUsageUnsupported`. The pinned SDK issues a CA only through the

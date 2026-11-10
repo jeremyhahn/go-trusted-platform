@@ -1,8 +1,10 @@
 package issuance
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
+	"encoding/pem"
 
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 )
@@ -33,6 +35,10 @@ type Issuer interface {
 	// CACertificate is the certificate the CA signs with, whose path length
 	// bounds the subordinate CAs it may issue.
 	CACertificate() (*x509.Certificate, error)
+	// CABundle is the CA's chain in PEM, the issuing certificate first and
+	// the root last. Every certificate above the issuing one bounds the
+	// subordinate CAs as well (checkAncestorPathLen).
+	CABundle() ([]byte, error)
 }
 
 // Issue issues the certificate req describes. go-xkms IssueCertificate picks
@@ -64,7 +70,8 @@ func Issue(ctx context.Context, ca Issuer, req *quicbaasca.CACertificateRequest)
 // anything is signed. Issue runs it, and Renew runs it before it revokes the
 // certificate it replaces, so both refuse the same requests. An isCA request
 // may carry no extended key usage restriction (ErrCAExtKeyUsageUnsupported)
-// and must fit the issuer's path length (checkIssuerPathLen).
+// and must fit the issuer's path length (checkIssuerPathLen) and every path
+// length above the issuer (checkAncestorPathLen).
 func preflight(ca Issuer, req *quicbaasca.CACertificateRequest) error {
 	if req == nil {
 		return ErrNilCertificateRequest{}
@@ -84,7 +91,10 @@ func preflight(ca Issuer, req *quicbaasca.CACertificateRequest) error {
 	if err != nil {
 		return &IssuerCertificateError{Err: err}
 	}
-	return checkIssuerPathLen(issuer, req.MaxPathLen)
+	if err := checkIssuerPathLen(issuer, req.MaxPathLen); err != nil {
+		return err
+	}
+	return checkAncestorPathLen(ca, issuer, req.MaxPathLen)
 }
 
 // checkIssuerPathLen refuses a subordinate CA the issuer's pathLenConstraint
@@ -108,6 +118,93 @@ func checkIssuerPathLen(issuer *x509.Certificate, requested int) error {
 	allowed := issuer.MaxPathLen - 1
 	if requested < 0 || requested > allowed {
 		return &SubordinatePathLenError{Issuer: subject, Requested: requested, Allowed: allowed}
+	}
+	return nil
+}
+
+// pathLenLimited reports whether cert carries a pathLenConstraint: crypto/x509
+// reads a certificate without one as MaxPathLen -1, or 0 without
+// MaxPathLenZero.
+func pathLenLimited(cert *x509.Certificate) bool {
+	return cert.MaxPathLen > 0 || (cert.MaxPathLen == 0 && cert.MaxPathLenZero)
+}
+
+// selfIssued reports whether cert's issuer and subject are the same name
+// (RFC 5280 §3.2): the top of its chain.
+func selfIssued(cert *x509.Certificate) bool {
+	return bytes.Equal(cert.RawIssuer, cert.RawSubject)
+}
+
+// checkAncestorPathLen refuses a subordinate CA that a pathLenConstraint above
+// the issuer does not allow (RFC 5280 §6.1.4). A certificate depth steps above
+// the issuer (the issuer's own issuer is step 1) with pathLen n already has
+// depth CA certificates beneath it, so the subordinate's own pathLen is at
+// most n-depth-1, and below zero no subordinate CA fits at all. The chain is
+// read from the CA's bundle. If it does not lead from the issuer up to a
+// self-issued certificate the request is refused (IssuerChainError), because
+// an ancestor that cannot be seen may carry a limit. A self-issued issuer has
+// no certificate above it, and the bundle is not read.
+func checkAncestorPathLen(ca Issuer, issuer *x509.Certificate, requested int) error {
+	if selfIssued(issuer) {
+		return nil
+	}
+	issuerName := issuer.Subject.String()
+	bundle, err := ca.CABundle()
+	if err != nil {
+		return &IssuerChainError{Subject: issuerName, Err: err}
+	}
+	chain, err := bundleCertificates(bundle)
+	if err != nil {
+		return &IssuerChainError{Subject: issuerName, Err: err}
+	}
+	current := issuer
+	for depth := 1; !selfIssued(current); depth++ {
+		parent := issuerOf(current, chain)
+		// depth beyond the bundle's length means its names form a loop.
+		if parent == nil || depth > len(chain) {
+			return &IssuerChainError{Subject: current.Subject.String()}
+		}
+		if pathLenLimited(parent) {
+			allowed := parent.MaxPathLen - depth - 1
+			if allowed < 0 || requested < 0 || requested > allowed {
+				return &AncestorPathLenError{
+					Issuer:    issuerName,
+					Ancestor:  parent.Subject.String(),
+					Requested: requested,
+					Allowed:   allowed,
+				}
+			}
+		}
+		current = parent
+	}
+	return nil
+}
+
+// bundleCertificates parses the certificates of a PEM bundle, in order.
+func bundleCertificates(bundle []byte) ([]*x509.Certificate, error) {
+	var certs []*x509.Certificate
+	for {
+		var block *pem.Block
+		block, bundle = pem.Decode(bundle)
+		if block == nil {
+			return certs, nil
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		certs = append(certs, cert)
+	}
+}
+
+// issuerOf returns the certificate of chain whose subject is cert's issuer,
+// or nil when chain holds none. The bundle is the CA's own, so the names
+// decide; no signature is checked here.
+func issuerOf(cert *x509.Certificate, chain []*x509.Certificate) *x509.Certificate {
+	for _, candidate := range chain {
+		if bytes.Equal(candidate.RawSubject, cert.RawIssuer) {
+			return candidate
+		}
 	}
 	return nil
 }

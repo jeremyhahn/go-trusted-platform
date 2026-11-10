@@ -249,6 +249,56 @@ func (e *SubordinatePathLenError) Error() string {
 
 func (e *SubordinatePathLenError) invalidRequest() {}
 
+// AncestorPathLenError is an isCA request that a pathLenConstraint above the
+// issuing CA does not allow: every CA certificate of a chain counts against
+// the path length of each certificate above it (RFC 5280 §6.1.4). Allowed is
+// the largest path length the subordinate may have; below zero the
+// ancestor's path length is used up and the issuer may sign no subordinate CA.
+type AncestorPathLenError struct {
+	// Issuer is the issuing CA's subject.
+	Issuer string
+	// Ancestor is the subject of the certificate above the issuer whose
+	// path length refuses the request.
+	Ancestor  string
+	Requested int
+	Allowed   int
+}
+
+func (e *AncestorPathLenError) Error() string {
+	if e.Allowed < 0 {
+		return "issuer " + strconv.Quote(e.Issuer) + " may issue no subordinate CA: the path length of " +
+			strconv.Quote(e.Ancestor) + " above it is used up"
+	}
+	requested := strconv.Itoa(e.Requested)
+	if e.Requested < 0 {
+		requested = "unlimited"
+	}
+	return "a subordinate CA of issuer " + strconv.Quote(e.Issuer) + " may have path length at most " +
+		strconv.Itoa(e.Allowed) + " under the path length of " + strconv.Quote(e.Ancestor) + ", not " + requested
+}
+
+func (e *AncestorPathLenError) invalidRequest() {}
+
+// IssuerChainError is an isCA request whose issuer's chain could not be read
+// from the CA bundle up to a self-issued certificate, so the path lengths
+// above the issuer cannot be checked and no CA certificate is issued.
+type IssuerChainError struct {
+	// Subject is the certificate whose issuer the bundle does not hold, or
+	// the issuing CA's subject when the bundle could not be read.
+	Subject string
+	Err     error
+}
+
+func (e *IssuerChainError) Error() string {
+	if e.Err == nil {
+		return "the CA bundle holds no certificate that issued " + strconv.Quote(e.Subject) +
+			", so the path lengths above it cannot be checked"
+	}
+	return "read the CA bundle to check the path lengths above " + strconv.Quote(e.Subject) + ": " + e.Err.Error()
+}
+
+func (e *IssuerChainError) Unwrap() error { return e.Err }
+
 // ErrCAExtKeyUsageUnsupported is an isCA request, or the renewal of a CA
 // certificate, that carries an extended key usage restriction. The SDK issues
 // a CA certificate only through the named go-xkms "ca" profile
