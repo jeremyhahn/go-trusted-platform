@@ -214,24 +214,6 @@ func catalogRouteScope(method, route string) (string, error) {
 	return scope, nil
 }
 
-// catalogGuardedAPI returns a restBasePath subrouter whose routes each run
-// behind guard and need the scope catalogRouteScope gives them.
-func (s *RESTServer) catalogGuardedAPI(guard *restapi.ScopeGuard) *mux.Router {
-	api := s.router.PathPrefix(restBasePath).Subrouter()
-	api.Use(s.catalogAuthorization(guard).authorize)
-	return api
-}
-
-// catalogGuardedRoot returns a matcher-less subrouter of the root router for
-// registrars that mount absolute /api/v1 paths. Its routes run behind guard
-// like catalogGuardedAPI's; gorilla/mux runs its middleware only when one of
-// its own routes matched, so it guards no other path.
-func (s *RESTServer) catalogGuardedRoot(guard *restapi.ScopeGuard) *mux.Router {
-	root := s.router.NewRoute().Subrouter()
-	root.Use(s.catalogAuthorization(guard).authorize)
-	return root
-}
-
 func (s *RESTServer) catalogAuthorization(guard *restapi.ScopeGuard) restScopeAuthorization {
 	return restScopeAuthorization{
 		guard:      guard,

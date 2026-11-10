@@ -621,10 +621,11 @@ method without a catalog scope, is refused for every caller
 `SetVTPMService` (`rest_vtpm.go`), `SetProxyService` (`proxy_rest.go`) and
 `SetClusterService` (`rest_service.go`) mount `/api/v1/vtpm`, `/api/v1/proxy`
 and `/api/v1/cluster` behind the same guard. The vTPM and proxy registrars in
-`pkg/api/rest` register absolute `/api/v1` paths, so they mount on a
-matcher-less guarded subrouter of the root router (`catalogGuardedRoot`): its
-guard runs only for its own routes. Without a cluster backend the cluster
-routes still mount, behind the guard, and answer 503.
+`pkg/api/rest` register absolute `/api/v1` paths, so they mount through
+`mountOwnedAbsoluteBehind` (`rest_service.go`), on a matcher-less guarded
+subrouter of the daemon router and of the webservice router alike: its guard
+runs only for its own routes. Without a cluster backend the cluster routes
+still mount, behind the guard, and answer 503.
 
 | Routes | Scope |
 |--------|-------|
@@ -645,7 +646,8 @@ scope guard: `ErrCeremonyRESTUnavailable`, `ErrPIVRESTUnavailable`,
 **The SDN overlay and gateway routes take the same map (#997).**
 `SetOverlayHandlers` (`rest_service.go`) and `SetGatewayIPAMService`
 (`rest_sdn.go`) mount `/api/v1/sdn/overlay` and `/api/v1/sdn/gateway` (IPAM,
-status, mode, BGP, admitted VTEPs, LB, NAT64 and perf) on `catalogGuardedRoot`.
+status, mode, BGP, admitted VTEPs, LB, NAT64 and perf) through
+`mountOwnedAbsoluteBehind`, behind the same guard.
 Three `DELETE`s are writes in the gRPC catalog, so the HTTP method does not
 name the action. `SetGatewaySnapshotService`, `SetGatewayBGPService` and
 `SetGatewayBackends` only wire a service into the mounted gateway routes: called
