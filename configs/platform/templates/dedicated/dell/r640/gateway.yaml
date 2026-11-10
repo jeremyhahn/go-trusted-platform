@@ -334,7 +334,7 @@ trust:
 # =============================================================================
 
 bmc:
-  address: 10.4.2.22  # management (VLAN 402) carries BMCs only
+  address: 198.51.100.150  # management (VLAN 402) carries BMCs only
   port: 623
   username: admin
   password: "kms://bmc/password?ensure=true&len=16&enc=base64"
@@ -371,6 +371,10 @@ sdn:
     # The deployment's RFC 4193 ULA /48. Generate your own random global
     # ID; this one is the reference document's example.
     ula: fd12:3456:789a::/48
+    # Management and provisioning use the documentation reference ranges.
+    overrides:
+      - {zone: management, subnet: 198.51.100.0/24}
+      - {zone: provisioning, subnet: 192.0.2.0/24}
   # zones: the built-in zones (transit, fabric, management, hypervisor,
   # quarantine, provisioning, control-plane, storage, backup) need no entry.
   # An entry tunes a built-in's policy or declares an owner-defined zone at
@@ -447,7 +451,7 @@ tpm:
     signature-algorithm: SHA256-RSA
   idevid:
     model: r640
-    serial: DELL-R640-GW-01
+    serial: DELL-R640-EDGE-01
     cert-handle: 0x01C90000
     debug: true
     handle: 0x81020000

@@ -284,7 +284,7 @@ func TestCheckNTSServeNamesIsInertWhenNotServingNTS(t *testing.T) {
 func TestCheckNTSServeNamesReportsTheMismatch(t *testing.T) {
 	fake := &fakeNTPService{serveNameResult: []ntp.ServeNameFinding{{
 		Name:           "cp.example.internal",
-		Address:        "10.4.2.140",
+		Address:        "192.0.2.140",
 		ListenNetworks: []string{"10.4.200.0/24"},
 	}}}
 	withFakeNTPService(t, fake)

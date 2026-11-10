@@ -173,14 +173,14 @@ func TestMCPDeviceProfileFromTemplate(t *testing.T) {
 
 	result, err := registry.ExecuteTool(ctx, "profile_create_from_template", map[string]interface{}{
 		"template_id": strconv.FormatUint(template.ID, 10),
-		"overrides":   map[string]interface{}{"name": "gw-01", "ek_serial": "EK-MCP"},
+		"overrides":   map[string]interface{}{"name": "edge-01", "ek_serial": "EK-MCP"},
 	})
 	require.NoError(t, err)
 	id := toolResultID(t, result)
 
 	stored, err := svcs.profiles.Get(ctx, id)
 	require.NoError(t, err)
-	assert.Equal(t, "gw-01", stored.Name)
+	assert.Equal(t, "edge-01", stored.Name)
 	assert.Equal(t, "EK-MCP", stored.EKSerial)
 	assert.Equal(t, entities.DeviceRoleGateway, stored.Role, "role comes from the template")
 	assert.Equal(t, map[string]interface{}{"hostname": "edge-01", "domain": "example.com"}, stored.Config,
