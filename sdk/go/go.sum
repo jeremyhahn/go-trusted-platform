@@ -365,7 +365,7 @@ github.com/jeremyhahn/go-quicbaas v0.12.0-alpha h1:3lE5HScx2NQ5bYHbwoNMlm235Hydh
 github.com/jeremyhahn/go-quicbaas v0.12.0-alpha/go.mod h1:fSVcxFiSvl1ekDc8CKhENBoMpqqjkhNPYee2WCQiqGU=
 github.com/jeremyhahn/go-quicbaas/sdk/go v0.12.0-alpha h1:w21WO0StcCPp6qPA4skMr/+zXfadaeXr4LQzwSBOhto=
 github.com/jeremyhahn/go-quicbaas/sdk/go v0.12.0-alpha/go.mod h1:w3xVaig/esJYT7MQiaQQNQG0Uva7WED4yrF8PKB2ckE=
-github.com/jeremyhahn/go-quicraft v0.13.1-alpha h1:yQEb2Of3kJRHRz7wX9UelRAAUOCpwKunumkdmX3pxto=
+github.com/jeremyhahn/go-quicraft v0.13.1-alpha h1:h99iqMoI9h394nOjzYT4662OwMS45pp0h6XrxN4Bsbg=
 github.com/jeremyhahn/go-quicraft v0.13.1-alpha/go.mod h1:GCHFzqQlA4yWBo6nVHFHT4TFjRZz73i2Iud5LsER/PE=
 github.com/jeremyhahn/go-truststrap v0.4.0-alpha h1:+wdClsnTdB57Aoex8Ky/leLJf0X5Vcbx+lxMSTihayE=
 github.com/jeremyhahn/go-truststrap v0.4.0-alpha/go.mod h1:+rRL4vynf2D1jh5PzesnjvdD3LPO89w4ENhvwastKwE=
