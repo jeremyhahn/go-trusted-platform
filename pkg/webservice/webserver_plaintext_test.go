@@ -112,7 +112,7 @@ func TestPlaintextHandler_LoopbackOnlyMayServeTheRouter(t *testing.T) {
 }
 
 func TestPlaintextHandler_RefusesAnExposedPlaintextOnlyListener(t *testing.T) {
-	for _, host := range []string{"", "0.0.0.0", "::", "10.4.2.140", "cp.example.internal"} {
+	for _, host := range []string{"", "0.0.0.0", "::", "198.51.100.140", "cp.example.internal"} {
 		t.Run("bind-host="+host, func(t *testing.T) {
 			server := newPlaintextTestServer(&v1.Config{Name: "internal", Port: 9080, BindHost: host})
 			_, err := server.plaintextHandler()
@@ -175,7 +175,7 @@ func TestRedirectToTLS_RefusesAnUnknownHost(t *testing.T) {
 func TestServedHosts_CollectsEveryConfiguredName(t *testing.T) {
 	vhosts := []v1.VirtualHost{{Hosts: []string{"app.example.com", "*.apps.example.com"}}}
 	server := newPlaintextTestServer(&v1.Config{
-		BindHost: "10.4.2.140",
+		BindHost: "198.51.100.140",
 		Certificate: v1.Identity{
 			Subject: ca.CASubject{CommonName: "cp.example.com"},
 			SANS:    &ca.CASubjectAlternativeNames{DNS: []string{"cp", "cp.example.internal"}, IPs: []string{"10.4.200.10"}},
@@ -185,7 +185,7 @@ func TestServedHosts_CollectsEveryConfiguredName(t *testing.T) {
 		CORS:         &v1.CORSConfig{AllowedOrigins: []string{"https://ui.example.com", "not a url"}},
 	})
 	hosts := server.servedHosts()
-	for _, want := range []string{"localhost", "127.0.0.1", "::1", "10.4.2.140", "cp.example.com", "cp",
+	for _, want := range []string{"localhost", "127.0.0.1", "::1", "198.51.100.140", "cp.example.com", "cp",
 		"cp.example.internal", "10.4.200.10", "app.example.com", "*.apps.example.com", "example.com",
 		"console.example.com", "ui.example.com"} {
 		assert.Contains(t, hosts, want)
