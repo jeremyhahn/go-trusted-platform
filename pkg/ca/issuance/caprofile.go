@@ -130,22 +130,32 @@ func pathLenLimited(cert *x509.Certificate) bool {
 }
 
 // selfIssued reports whether cert's issuer and subject are the same name
-// (RFC 5280 §3.2): the top of its chain.
+// (RFC 5280 §3.2). Equal names do not make cert the top of its chain: a
+// key-rollover CA certificate is self-issued but signed by an older key.
 func selfIssued(cert *x509.Certificate) bool {
 	return bytes.Equal(cert.RawIssuer, cert.RawSubject)
 }
 
+// selfSigned reports whether cert is self-issued and verifies under its own
+// key: the top of its chain.
+func selfSigned(cert *x509.Certificate) bool {
+	return selfIssued(cert) && cert.CheckSignatureFrom(cert) == nil
+}
+
 // checkAncestorPathLen refuses a subordinate CA that a pathLenConstraint above
-// the issuer does not allow (RFC 5280 §6.1.4). A certificate depth steps above
-// the issuer (the issuer's own issuer is step 1) with pathLen n already has
-// depth CA certificates beneath it, so the subordinate's own pathLen is at
-// most n-depth-1, and below zero no subordinate CA fits at all. The chain is
-// read from the CA's bundle. If it does not lead from the issuer up to a
-// self-issued certificate the request is refused (IssuerChainError), because
-// an ancestor that cannot be seen may carry a limit. A self-issued issuer has
-// no certificate above it, and the bundle is not read.
+// the issuer does not allow (RFC 5280 §6.1.4). Only a certificate that is not
+// self-issued counts toward an ancestor's limit (§6.1.4 (l)): an ancestor
+// with pathLen n that has steps such CA certificates beneath it, from the
+// issuer up to the ancestor, leaves the subordinate a pathLen of at most
+// n-steps-1, and below zero no subordinate CA fits at all. The chain is read
+// from the CA's bundle and walked by signature up to a self-signed
+// certificate; a self-issued certificate signed by another key (a key
+// rollover) does not end the walk. If the chain does not lead from the issuer
+// up to a self-signed certificate the request is refused (IssuerChainError),
+// because an ancestor that cannot be seen may carry a limit. A self-signed
+// issuer has no certificate above it, and the bundle is not read.
 func checkAncestorPathLen(ca Issuer, issuer *x509.Certificate, requested int) error {
-	if selfIssued(issuer) {
+	if selfSigned(issuer) {
 		return nil
 	}
 	issuerName := issuer.Subject.String()
@@ -158,14 +168,18 @@ func checkAncestorPathLen(ca Issuer, issuer *x509.Certificate, requested int) er
 		return &IssuerChainError{Subject: issuerName, Err: err}
 	}
 	current := issuer
-	for depth := 1; !selfIssued(current); depth++ {
+	steps := 0
+	for depth := 1; !selfSigned(current); depth++ {
 		parent := issuerOf(current, chain)
-		// depth beyond the bundle's length means its names form a loop.
+		// depth beyond the bundle's length means its certificates form a loop.
 		if parent == nil || depth > len(chain) {
 			return &IssuerChainError{Subject: current.Subject.String()}
 		}
+		if !selfIssued(current) {
+			steps++
+		}
 		if pathLenLimited(parent) {
-			allowed := parent.MaxPathLen - depth - 1
+			allowed := parent.MaxPathLen - steps - 1
 			if allowed < 0 || requested < 0 || requested > allowed {
 				return &AncestorPathLenError{
 					Issuer:    issuerName,
@@ -197,12 +211,15 @@ func bundleCertificates(bundle []byte) ([]*x509.Certificate, error) {
 	}
 }
 
-// issuerOf returns the certificate of chain whose subject is cert's issuer,
-// or nil when chain holds none. The bundle is the CA's own, so the names
-// decide; no signature is checked here.
+// issuerOf returns the certificate of chain that issued cert: its subject is
+// cert's issuer, it is not cert itself, and cert's signature verifies under
+// its key. It returns nil when chain holds none.
 func issuerOf(cert *x509.Certificate, chain []*x509.Certificate) *x509.Certificate {
 	for _, candidate := range chain {
-		if bytes.Equal(candidate.RawSubject, cert.RawIssuer) {
+		if !bytes.Equal(candidate.RawSubject, cert.RawIssuer) || bytes.Equal(candidate.Raw, cert.Raw) {
+			continue
+		}
+		if cert.CheckSignatureFrom(candidate) == nil {
 			return candidate
 		}
 	}
