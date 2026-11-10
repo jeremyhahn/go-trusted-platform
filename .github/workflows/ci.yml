@@ -76,7 +76,7 @@
 #     tier (pkg/arch/citiers_test.go holds the format).
 #   - integration needs image (isolation, see there) and applies the
 #     foreign-failure baseline (ruling 125); soak applies it per iteration.
-#   - FIPS is kept and ungated (#853, see its comment).
+#   - FIPS is kept and gated in the `main` tier (#853, #1411, see its comment).
 #   - The image job's security step runs make security-novuln; govulncheck
 #     runs as the full-tier vuln job at 20g, which builds its own toolchain
 #     image (#1425, see there).
@@ -185,11 +185,6 @@ env:
   # release.yml set the same).
   GOWORK: "off"
   GOFLAGS: "-buildvcs=false"
-  # The jeremyhahn/* modules resolve direct from GitHub, never through
-  # proxy.golang.org or sum.golang.org: the history rewrite moved published
-  # tags, and the public proxy and checksum database keep the old zips
-  # and hashes for good, so go.sum (the rewritten bits) cannot verify there.
-  GOPRIVATE: "github.com/jeremyhahn/*"
   # The full-tier selection (v1.23): every event but pull_request, and a PR
   # labelled ci:full. Steps and ci-gate read it; a job-level `if:` cannot.
   CI_FULL_TIER: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full') }}
@@ -401,7 +396,7 @@ jobs:
         run: |
           umask 077
           : > "$RUNNER_TEMP/gomodauth.env"
-          for v in GOPRIVATE GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; do
+          for v in GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; do
             if [ -n "${!v:-}" ]; then printf '%s=%s\n' "$v" "${!v}" >> "$RUNNER_TEMP/gomodauth.env"; fi
           done
 
@@ -921,12 +916,19 @@ jobs:
   # RACE_EXCLUDE (#37). Race detection is sampling, not proof: a ratchet
   # against reintroduction. Hosted runners (CA m2061): four shards, each a
   # round-robin quarter of test-race's package list (Makefile SHARD/SHARDS),
-  # to fit a hosted job's 4 cores and 6 hours.
+  # to fit a hosted job's 4 cores and 6 hours. The one exception to the
+  # hosted runners (m2403 (2), m2406 (1), 2026-11-10): a push to main and a
+  # pull_request from this repository run on the bigdisk runner
+  # [self-hosted, linux, x64, bigdisk]; fork PRs, other branches,
+  # workflow_dispatch and the schedule stay on ubuntu-latest. As on every
+  # bigdisk job, it needs schedule-guard and its if: carries the guard. The
+  # runner image carries cpio and libssl-dev, so the apt step is hosted-only,
+  # and the checkout token is not persisted.
   race:
     name: Race (shard ${{ matrix.shard }}/4)
-    runs-on: ubuntu-latest
-    if: ${{ needs.changes.outputs.docs_only != 'true' && !github.event.pull_request.draft }}
-    needs: [changes]
+    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}
+    if: ${{ needs.changes.outputs.docs_only != 'true' && !github.event.pull_request.draft && (github.event_name != 'schedule' || needs.schedule-guard.outputs.verdict == 'run') }}
+    needs: [changes, schedule-guard]
     timeout-minutes: 360
     strategy:
       fail-fast: false
@@ -934,6 +936,8 @@ jobs:
         shard: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -941,8 +945,10 @@ jobs:
 
       # cpio: pkg/diskimage/netboot repacks an initramfs with it. libssl-dev:
       # pkg/app's IDevID mTLS tests run go-tpm-tools' simulator, which
-      # compiles the reference TPM with cgo against OpenSSL (#149).
+      # compiles the reference TPM with cgo against OpenSSL (#149). The
+      # bigdisk runner's image carries both: hosted runners only.
       - name: Install cpio and the OpenSSL headers
+        if: runner.environment == 'github-hosted'
         run: sudo apt-get update && sudo apt-get install -y cpio libssl-dev
 
       - name: make test-race
@@ -1064,7 +1070,7 @@ jobs:
         run: |
           umask 077
           : > "$RUNNER_TEMP/gomodauth.env"
-          for v in GOPRIVATE GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; do
+          for v in GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; do
             if [ -n "${!v:-}" ]; then printf '%s=%s\n' "$v" "${!v}" >> "$RUNNER_TEMP/gomodauth.env"; fi
           done
 
@@ -1259,7 +1265,7 @@ jobs:
         run: |
           umask 077
           : > "$RUNNER_TEMP/gomodauth.env"
-          for v in GOPRIVATE GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; do
+          for v in GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; do
             if [ -n "${!v:-}" ]; then printf '%s=%s\n' "$v" "${!v}" >> "$RUNNER_TEMP/gomodauth.env"; fi
           done
 
@@ -1497,7 +1503,7 @@ jobs:
         run: |
           umask 077
           : > "$RUNNER_TEMP/gomodauth.env"
-          for v in GOPRIVATE GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; do
+          for v in GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; do
             if [ -n "${!v:-}" ]; then printf '%s=%s\n' "$v" "${!v}" >> "$RUNNER_TEMP/gomodauth.env"; fi
           done
 
@@ -1597,15 +1603,15 @@ jobs:
           [ -z "${IT_LEASE:-}" ] || docker rm "$IT_LEASE" >/dev/null 2>&1 || true
           docker buildx prune --builder "$BUILDX_BUILDER" --force --keep-storage "$BUILDKIT_KEEP_STORAGE" || true
 
-  # CUSTOMIZE (FIPS 140-3, #853): the ungated job. It runs on push to main,
-  # the schedule and workflow_dispatch, and never on a pull request, `ci:full`
-  # or not (m1355 / DS-3878, DS-4613): its `if:` is not the full tier's.
+  # CUSTOMIZE (FIPS 140-3, #853): the one `main`-tier job. It runs on push to
+  # main, the schedule and workflow_dispatch, and never on a pull request,
+  # `ci:full` or not (m1355 / DS-3878, DS-4613): its `if:` is not the full tier's.
   #
-  # It is deliberately NOT in ci-gate's `needs`: it is still red on causes
-  # this repository cannot close (the header of nightly.yml lists them), so
-  # its four shards report `CI / FIPS (shard n/4)` without turning CI Gate red.
-  # pkg/arch/citiers_test.go fails `make test` if it is ever gated, if a gated
-  # job needs it, or if its `if:` is not exactly the one below. Its steps match nightly.yml's `fips` job;
+  # It is in ci-gate's `needs` (#1411, ruling 297): a push whose FIPS fails
+  # (any of its four shards) reads CI Gate failure, and its skip passes only on
+  # a pull request.
+  # pkg/arch/citiers_test.go fails `make test` if it leaves the gate, if a
+  # non-main job needs it, or if its `if:` is not exactly the one below. Its steps match nightly.yml's `fips` job;
   # change the suite in the Makefile (`make test-fips`), not here. That target
   # also applies the FIPS foreign-failure baseline (ruling 125,
   # .github/foreign-failures-fips.tsv); nightly.yml's header lists what it
@@ -1663,7 +1669,7 @@ jobs:
     # skipped job as `skipped`, not `success`), never a green nightly. Every
     # other verdict, an empty one included, runs it.
     if: ${{ always() && (github.event_name != 'schedule' || needs.schedule-guard.outputs.verdict != 'busy') }}
-    needs: [changes, schedule-guard, image, lint-gates, arch-gates, sdkjs, race, web, integration-image, integration, soak, vuln]
+    needs: [changes, schedule-guard, image, lint-gates, arch-gates, sdkjs, race, web, integration-image, integration, soak, vuln, fips]
     steps:
       - name: Verify every job succeeded
         env:
@@ -1675,6 +1681,8 @@ jobs:
           # v1.24: a `nightly` job runs on schedule and workflow_dispatch only.
           NIGHTLY: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
           DRAFT: ${{ github.event.pull_request.draft == true }}
+          # #1411 (ruling 297): a `main` job runs on every event but a pull request.
+          PULL_REQUEST: ${{ github.event_name == 'pull_request' }}
           RESULT_CHANGES: ${{ needs.changes.result }}
           RESULT_SCHEDULE_GUARD: ${{ needs.schedule-guard.result }}
           RESULT_IMAGE: ${{ needs.image.result }}
@@ -1687,6 +1695,7 @@ jobs:
           RESULT_INTEGRATION: ${{ needs.integration.result }}
           RESULT_SOAK: ${{ needs.soak.result }}
           RESULT_VULN: ${{ needs.vuln.result }}
+          RESULT_FIPS: ${{ needs.fips.result }}
         run: |
           # skipped != failed, and a skipped job fails the gate: it means the
           # job did not run (go-qrdb#42). The exceptions: a `full` job skipped
@@ -1694,7 +1703,9 @@ jobs:
           # reading exactly `false`; a `docs` job skipped on a docs-only PR
           # (v1.24), DOCS_ONLY reading exactly `true` and FULL_TIER exactly
           # `false`; and a `nightly` job skipped off the schedule and dispatch
-          # (v1.24), NIGHTLY not reading `true`. Anything else fails closed. A
+          # (v1.24), NIGHTLY not reading `true`; and a `main` job skipped on a
+          # pull request (#1411), PULL_REQUEST reading exactly `true`. Anything
+          # else fails closed. A
           # draft PR fails first (v1.26): its jobs all skip, and a gate that
           # passed on those skips would let a draft merge untested.
           if [ "${DRAFT}" = true ]; then
@@ -1708,7 +1719,7 @@ jobs:
             name="$2"
             result="$3"
             case "$tier" in
-              pr|docs|full|nightly) ;;
+              pr|docs|full|nightly|main) ;;
               *) echo "FAIL $name (unknown tier '$tier' - failing closed)"; status=1; return ;;
             esac
             case "$result" in
@@ -1721,6 +1732,8 @@ jobs:
                   echo "SKIP $name (docs-only PR - passes)"
                 elif [ "$tier" = nightly ] && [ "$NIGHTLY" != true ]; then
                   echo "SKIP $name (nightly and dispatch only - passes)"
+                elif [ "$tier" = main ] && [ "$PULL_REQUEST" = true ]; then
+                  echo "SKIP $name (never on a pull request - passes)"
                 else
                   echo "FAIL $name (skipped in the $tier tier - see its job)"; status=1
                 fi
@@ -1746,4 +1759,5 @@ jobs:
           check full integration "$RESULT_INTEGRATION"
           check full vuln "$RESULT_VULN"
           check nightly soak "$RESULT_SOAK"
+          check main fips "$RESULT_FIPS"
           exit $status

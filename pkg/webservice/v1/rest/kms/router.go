@@ -108,6 +108,11 @@ func NewKMSRouter(
 //	PUT    /api/v1/kms/secrets/{name}/policy         - SetRotationPolicy
 func (r *KMSRouter) RegisterRoutes(parent *mux.Router) {
 	sr := parent.PathPrefix(basePath).Subrouter()
+	// Secret paths and DEK paths contain slashes ("db/password"), which a
+	// client sends escaped as %2F. Matching on the encoded path keeps such a
+	// name inside its single {name} or {path} segment; the handlers unescape
+	// the variable (Handlers.pathVar).
+	sr.UseEncodedPath()
 
 	// Keys
 	sr.HandleFunc("/keys/import", r.handlers.ImportKey).Methods("POST")

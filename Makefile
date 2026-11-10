@@ -392,6 +392,7 @@ PACKAGE                 ?= go-trusted-platform
 APPNAME                 ?= trusted-platform
 PLATFORMD               ?= bin/platformd
 PLATFORMCTL             ?= bin/platformctl
+PLATFORMCTL_STATIC      ?= bin/platformctl-static
 PLATFORM_INITRD         ?= bin/platform-initrd
 GATEWAYD                ?= bin/gatewayd
 DEPLOYER_PIN            ?= bin/deployer-pin
@@ -852,7 +853,10 @@ build-check:
 	@echo "$(GREEN)✓ both modules compile, tagged and untagged$(RESET)"
 
 # Native local build (builds both platformd and platformctl)
-# Produces static binaries with embedded web frontend
+# Produces static binaries with embedded web frontend. platformctl-static is
+# the name a netboot set or disk image takes the media's static installer
+# from (pkg/iso ISOBuildConfig.UseBinariesDir); with CGO disabled it is
+# byte-identical to platformctl, so it is a copy, as in build-arm64.
 # Set WITH_WEB=0 to skip web frontend embedding (default is enabled)
 # Set WITH_P2P=1 to include P2P/libp2p support in gatewayd
 .PHONY: build
@@ -863,6 +867,7 @@ build: _web-embed-prepare
 	@mkdir -p bin
 	CGO_ENABLED=0 $(GOBIN)/go build -tags "osusergo netgo $(BUILD_TAGS)" -v -o $(PLATFORMD) --ldflags '-w -s ${LDFLAGS}' ./cmd/platformd
 	CGO_ENABLED=0 $(GOBIN)/go build -tags "osusergo netgo $(BUILD_TAGS)" -v -o $(PLATFORMCTL) --ldflags '-w -s ${LDFLAGS}' ./cmd/platformctl
+	cp -f $(PLATFORMCTL) $(PLATFORMCTL_STATIC)
 	CGO_ENABLED=0 $(GOBIN)/go build -tags "osusergo netgo $(BUILD_TAGS)" -v -o $(GATEWAYD) --ldflags '-w -s ${LDFLAGS}' ./cmd/gatewayd
 	CGO_ENABLED=0 $(GOBIN)/go build -tags "osusergo netgo $(BUILD_TAGS)" -v -o $(DEPLOYER_PIN) --ldflags '-w -s ${LDFLAGS}' ./cmd/deployer-pin
 
@@ -2247,7 +2252,7 @@ FIPS_LOG ?= $(or $(TMPDIR),/tmp)/go-trusted-platform-fips.log
 FIPS_FOREIGN_BASELINE ?= .github/foreign-failures-fips.tsv
 
 # A KEY=value file with the forge credentials the module download needs
-# (GOPRIVATE and the GIT_CONFIG_* triple, dependency-resolution.md §6). It
+# (the GIT_CONFIG_* triple, dependency-resolution.md §6). It
 # reaches the build only as the gomodauth BuildKit secret, never as a layer or
 # a build argument; .dockerignore keeps the default path out of the context.
 MODULE_ENV_FILE ?= .devcontainer/.env
@@ -2413,6 +2418,9 @@ bench-sdn:
 	@echo "$(CYAN)→ IPAM benchmarks$(RESET)"
 	# tag-independent
 	go test -bench=. -benchmem -run=^$$ ./pkg/sdn/ipam/...
+	@echo "$(CYAN)→ Overlay benchmarks$(RESET)"
+	# tag-independent
+	go test -bench=. -benchmem -run=^$$ ./pkg/sdn/overlay/...
 	@echo "$(CYAN)→ DHCP benchmarks$(RESET)"
 	# tag-independent
 	go test -bench=. -benchmem -run=^$$ ./pkg/sdn/dhcp/...
@@ -2448,6 +2456,13 @@ bench-sdn-ipam:
 	@echo "$(CYAN)Running IPAM benchmarks...$(RESET)"
 	# tag-independent
 	go test -bench=. -benchmem -run=^$$ ./pkg/sdn/ipam/...
+
+.PHONY: bench-sdn-overlay
+## bench-sdn-overlay: Run overlay package benchmarks
+bench-sdn-overlay:
+	@echo "$(CYAN)Running overlay benchmarks...$(RESET)"
+	# tag-independent
+	go test -bench=. -benchmem -run=^$$ ./pkg/sdn/overlay/...
 
 .PHONY: bench-sdn-dhcp
 ## bench-sdn-dhcp: Run DHCP package benchmarks
@@ -2542,61 +2557,6 @@ stress-sdn: build-devcontainer
 		-w /workspace/test/integration/sdn \
 		$(DEVCONTAINER_IMAGE) \
 		go test -v $(TEST_BUILD_TAGS_ARG) -timeout=30m ./stress/...
-
-.PHONY: stress-sdn-ipam
-## stress-sdn-ipam: Run IPAM stress tests
-stress-sdn-ipam: build-devcontainer
-	@echo "Running IPAM stress tests..."
-	@docker run --rm --privileged \
-		--name go-trusted-platform-ipam-stress \
-		-e CGO_ENABLED=0 \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace/test/integration/sdn \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -timeout=15m -run TestIPAM ./stress/...
-
-.PHONY: stress-sdn-bgp
-## stress-sdn-bgp: Run BGP stress tests
-stress-sdn-bgp: build-devcontainer
-	@echo "Running BGP stress tests..."
-	@docker run --rm --privileged \
-		--name go-trusted-platform-bgp-stress \
-		-e CGO_ENABLED=0 \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace/test/integration/sdn \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -timeout=15m -run TestBGP ./stress/...
-
-.PHONY: stress-sdn-dhcp
-## stress-sdn-dhcp: Run DHCP stress tests
-stress-sdn-dhcp: build-devcontainer
-	@echo "Running DHCP stress tests..."
-	@docker run --rm --privileged \
-		--name go-trusted-platform-dhcp-stress \
-		-e CGO_ENABLED=0 \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace/test/integration/sdn \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -timeout=15m -run TestDHCP ./stress/...
-
-.PHONY: stress-sdn-overlay
-## stress-sdn-overlay: Run overlay stress tests
-stress-sdn-overlay: build-devcontainer
-	@echo "Running overlay stress tests..."
-	@docker run --rm --privileged \
-		--name go-trusted-platform-overlay-stress \
-		--device /dev/net/tun:/dev/net/tun \
-		--cap-add=NET_ADMIN \
-		-e AUTO_START_OVS=true \
-		-e CGO_ENABLED=0 \
-		-v $(PWD):/workspace \
-		$(DOCKER_MODULE_MOUNTS) \
-		-w /workspace/test/integration/sdn \
-		$(DEVCONTAINER_IMAGE) \
-		go test -v $(TEST_BUILD_TAGS_ARG) -timeout=15m -run TestOverlay ./stress/...
 
 .PHONY: stress-sdn-cluster
 ## stress-sdn-cluster: Run cluster state stress tests

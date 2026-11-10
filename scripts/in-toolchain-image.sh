@@ -65,7 +65,7 @@
 # tmpfs, and removed with the container. A scratch directory that is missing or not writable fails
 # the stage by name. A bridge stage's GOPROXY puts DEVCACHE_GOPROXY (Athens)
 # first when the runner sets it: <DEVCACHE_GOPROXY>|https://proxy.golang.org|direct,
-# so any error falls through to the public proxy; GOPRIVATE travels with it.
+# so any error falls through to the public proxy.
 #
 set -euo pipefail
 
@@ -154,7 +154,7 @@ if [ "$network" = bridge ]; then
   # its whole graph (gigabytes): it goes beside the build cache on disk, not
   # in the 3g /tmp tmpfs, where it left no room for trivy's DB (#933).
   args+=(--env "GOPROXY=${DEVCACHE_GOPROXY:+$DEVCACHE_GOPROXY|}https://proxy.golang.org|direct" --env GOMODCACHE=/gocache/mod)
-  for v in GOPRIVATE GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; do
+  for v in GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; do
     if [ -n "${!v:-}" ]; then args+=(--env "$v"); fi
   done
 fi
