@@ -834,6 +834,99 @@ func TestHandleVerifyManifest(t *testing.T) {
 	})
 }
 
+// recordingManifestService holds one stored manifest and records the
+// manifest the handler hands to VerifyManifest. An unknown id answers
+// (nil, nil), the shape the daemon's service gives for a missing manifest.
+type recordingManifestService struct {
+	AttestationServiceInterface
+	stored   *manifest.HostManifest
+	verified *manifest.HostManifest
+}
+
+func (r *recordingManifestService) GetManifest(_ context.Context, id string) (*manifest.HostManifest, error) {
+	if id != r.stored.ID {
+		return nil, nil
+	}
+	return r.stored, nil
+}
+
+func (r *recordingManifestService) VerifyManifest(_ context.Context, m *manifest.HostManifest, _ *AttestationVerifyManifestOptions) (*manifest.VerificationResult, error) {
+	r.verified = m
+	return &manifest.VerificationResult{
+		Status:          manifest.VerificationStatusVerified,
+		SignatureValid:  true,
+		MerkleRootValid: true,
+		VerifiedAt:      time.Now(),
+	}, nil
+}
+
+// TestHandleManifest_GetThenVerifyRoundTrip pins the QUIC manifest wire
+// shape a client speaks (#964 step b, from the attestation QUIC adapter
+// tests): GetManifest decodes a GetManifestRequest and answers the stored
+// manifest, VerifyManifest receives exactly the manifest GetManifest
+// returned, and an unknown id is StatusNotFound that never reaches the
+// verifier.
+func TestHandleManifest_GetThenVerifyRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	newService := func() *recordingManifestService {
+		return &recordingManifestService{stored: &manifest.HostManifest{
+			ID:         "manifest-1",
+			HostID:     "host-1",
+			Timestamp:  time.Unix(1700000000, 0),
+			MerkleRoot: []byte("merkle-root"),
+		}}
+	}
+	call := func(t *testing.T, h *AttestationHandler, opcode uint8, msg any) *quicwire.Response {
+		t.Helper()
+		payload, err := quicwire.EncodePayload(msg)
+		require.NoError(t, err)
+		return h.HandleRequest(ctx, &quicwire.Request{Opcode: opcode, Payload: payload})
+	}
+	getManifest := func(t *testing.T, h *AttestationHandler, id string) *ManifestData {
+		t.Helper()
+		resp := call(t, h, quicwire.OpAttestGetManifest, &GetManifestRequest{ID: id})
+		require.Equal(t, quicwire.StatusOK, resp.Status, string(resp.Payload))
+		var got GetManifestResponse
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &got))
+		require.NotNil(t, got.Manifest)
+		return got.Manifest
+	}
+
+	t.Run("get answers the stored manifest", func(t *testing.T) {
+		got := getManifest(t, NewAttestationHandler(newAttestTestLogger(), newService()), "manifest-1")
+		assert.Equal(t, "manifest-1", got.ID)
+		assert.Equal(t, "host-1", got.HostID)
+		assert.Equal(t, []byte("merkle-root"), got.MerkleRoot)
+		assert.Equal(t, int64(1700000000), got.Timestamp)
+	})
+
+	t.Run("verify receives the stored manifest", func(t *testing.T) {
+		service := newService()
+		h := NewAttestationHandler(newAttestTestLogger(), service)
+
+		resp := call(t, h, quicwire.OpAttestVerifyManifest, &VerifyManifestRequest{Manifest: getManifest(t, h, "manifest-1")})
+		require.Equal(t, quicwire.StatusOK, resp.Status, string(resp.Payload))
+		require.NotNil(t, service.verified, "the service never received a manifest to verify")
+		assert.Equal(t, "manifest-1", service.verified.ID)
+		assert.Equal(t, []byte("merkle-root"), service.verified.MerkleRoot)
+
+		var got VerifyManifestResponse
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &got))
+		assert.True(t, got.Valid)
+		assert.True(t, got.SignatureValid)
+		assert.True(t, got.MerkleRootValid)
+	})
+
+	t.Run("unknown id is not found and never reaches the verifier", func(t *testing.T) {
+		service := newService()
+		h := NewAttestationHandler(newAttestTestLogger(), service)
+
+		resp := call(t, h, quicwire.OpAttestGetManifest, &GetManifestRequest{ID: "absent"})
+		assert.Equal(t, quicwire.StatusNotFound, resp.Status, string(resp.Payload))
+		assert.Nil(t, service.verified, "an unknown manifest reached the verifier")
+	})
+}
+
 // =============================================================================
 // Test: CollectHostAttestation
 // =============================================================================

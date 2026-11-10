@@ -68,10 +68,10 @@ services:
       - "9053:9053"   # Internal DNS
     volumes:
       - ../../../:/workspace:cached
-      - /home/jhahn/sources/go-trusted-ca:/home/jhahn/sources/go-trusted-ca:cached
-      - /home/jhahn/sources/go-quicbaas:/home/jhahn/sources/go-quicbaas:cached
-      - /home/jhahn/sources/go-xkms:/home/jhahn/sources/go-xkms:cached
-      - /home/jhahn/sources/go-objstore:/home/jhahn/sources/go-objstore:cached
+      - ../../../../go-trusted-ca:/sources/go-trusted-ca:cached
+      - ../../../../go-quicbaas:/sources/go-quicbaas:cached
+      - ../../../../go-xkms:/sources/go-xkms:cached
+      - ../../../../go-objstore:/sources/go-objstore:cached
       - go-mod-cache:/go/pkg/mod
       - go-build-cache:/root/.cache/go-build
       - server-data:/var/lib/trusted-platform
@@ -104,10 +104,10 @@ services:
       - "443:443"     # HTTPS
     volumes:
       - ../../../:/workspace:cached
-      - /home/jhahn/sources/go-trusted-ca:/home/jhahn/sources/go-trusted-ca:cached
-      - /home/jhahn/sources/go-quicbaas:/home/jhahn/sources/go-quicbaas:cached
-      - /home/jhahn/sources/go-xkms:/home/jhahn/sources/go-xkms:cached
-      - /home/jhahn/sources/go-objstore:/home/jhahn/sources/go-objstore:cached
+      - ../../../../go-trusted-ca:/sources/go-trusted-ca:cached
+      - ../../../../go-quicbaas:/sources/go-quicbaas:cached
+      - ../../../../go-xkms:/sources/go-xkms:cached
+      - ../../../../go-objstore:/sources/go-objstore:cached
       - go-mod-cache:/go/pkg/mod
       - go-build-cache:/root/.cache/go-build
       - gateway-data:/var/lib/trusted-platform
@@ -143,10 +143,10 @@ services:
       - "9444:9443"   # HTTPS (mapped to 9444 to avoid conflict with server)
     volumes:
       - ../../../:/workspace:cached
-      - /home/jhahn/sources/go-trusted-ca:/home/jhahn/sources/go-trusted-ca:cached
-      - /home/jhahn/sources/go-quicbaas:/home/jhahn/sources/go-quicbaas:cached
-      - /home/jhahn/sources/go-xkms:/home/jhahn/sources/go-xkms:cached
-      - /home/jhahn/sources/go-objstore:/home/jhahn/sources/go-objstore:cached
+      - ../../../../go-trusted-ca:/sources/go-trusted-ca:cached
+      - ../../../../go-quicbaas:/sources/go-quicbaas:cached
+      - ../../../../go-xkms:/sources/go-xkms:cached
+      - ../../../../go-objstore:/sources/go-objstore:cached
       - go-mod-cache:/go/pkg/mod
       - go-build-cache:/root/.cache/go-build
       - client-data:/var/lib/trusted-platform
