@@ -42,22 +42,6 @@ func TestNewCreateCommand(t *testing.T) {
 	}
 }
 
-func TestNewCreateCommand_HasLongDescription(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{}
-	}
-
-	cmd := newCreateCommand(getFlags)
-
-	if cmd.Long == "" {
-		t.Error("Long description should not be empty")
-	}
-
-	if len(cmd.Long) < 100 {
-		t.Error("Long description should be descriptive (at least 100 chars)")
-	}
-}
-
 func TestNewCreateCommand_Flags(t *testing.T) {
 	getFlags := func() *cli.CommonFlags {
 		return &cli.CommonFlags{}

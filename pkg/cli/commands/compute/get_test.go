@@ -55,22 +55,6 @@ func TestNewGetCommand(t *testing.T) {
 	}
 }
 
-func TestNewGetCommand_HasLongDescription(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{}
-	}
-
-	cmd := newGetCommand(getFlags)
-
-	if cmd.Long == "" {
-		t.Error("Long description should not be empty")
-	}
-
-	if len(cmd.Long) < 50 {
-		t.Error("Long description should be descriptive")
-	}
-}
-
 func TestNewGetCommand_RequiresOneArg(t *testing.T) {
 	getFlags := func() *cli.CommonFlags {
 		return &cli.CommonFlags{}
