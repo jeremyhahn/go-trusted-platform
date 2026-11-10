@@ -223,7 +223,7 @@ func TestRedfishCert_ReplaceWebCertificate_HappyPath(t *testing.T) {
 	m := newFastCertManager(t, bmc.cfg())
 	defer m.Close()
 
-	key := memguard.NewMemoryEnclave([]byte("-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n"))
+	key := memguard.NewMemoryEnclave([]byte(genTestKeyPEM()))
 	defer key.Destroy()
 	cert := []byte("-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n")
 

@@ -142,9 +142,10 @@ func TestPIVService_Import_DestroyedEnclaveSurfacesErrDestroyed(t *testing.T) {
 }
 
 func TestPIVImportRequest_WithPrivateKeyPEM_PrefersEnclave(t *testing.T) {
+	keyPEM := genTestKeyPEM()
 	req := &PIVImportRequest{
 		PrivateKeyPEM: "plain-should-lose",
-		PrivateKey:    memguard.NewMemoryEnclaveFromString("-----BEGIN PRIVATE KEY-----"),
+		PrivateKey:    memguard.NewMemoryEnclaveFromString(keyPEM),
 		PINEnclave:    memguard.NewMemoryEnclaveFromString("111111"),
 	}
 	defer req.Destroy()
@@ -156,7 +157,7 @@ func TestPIVImportRequest_WithPrivateKeyPEM_PrefersEnclave(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("WithPrivateKeyPEM: %v", err)
 	}
-	if got != "-----BEGIN PRIVATE KEY-----" {
+	if got != keyPEM {
 		t.Errorf("WithPrivateKeyPEM saw %q, want the enclave value", got)
 	}
 }
