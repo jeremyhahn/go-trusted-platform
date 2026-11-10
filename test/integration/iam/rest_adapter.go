@@ -38,7 +38,14 @@ var listReplyJSON = protojson.UnmarshalOptions{DiscardUnknown: true}
 // decodeListReply decodes an IAM list reply (the items, pagination, total
 // and timestamp, camelCase protojson) into reply.
 func decodeListReply(operation string, body []byte, reply proto.Message) error {
-	if err := listReplyJSON.Unmarshal(body, reply); err != nil {
+	var env struct {
+		Payload json.RawMessage `json:"payload"`
+	}
+	data := body
+	if err := json.Unmarshal(body, &env); err == nil && len(env.Payload) > 0 && string(env.Payload) != "null" {
+		data = env.Payload
+	}
+	if err := listReplyJSON.Unmarshal(data, reply); err != nil {
 		return &RESTAdapterError{
 			Operation: operation,
 			Message:   "failed to parse response: " + err.Error(),
