@@ -2,6 +2,8 @@ package iam
 
 import (
 	"context"
+	"fmt"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -260,6 +262,219 @@ func TestListRepliesOverSDKREST_FiltersAndPagination(t *testing.T) {
 		assert.EqualValues(t, 10, got.PageSize)
 		assert.Equal(t, uint32(3), reply.GetPagination().GetPage())
 		assert.Equal(t, uint32(10), reply.GetPagination().GetPageSize())
+	})
+}
+
+// pagedRecordTotal is how many records the paging mock backend holds.
+const pagedRecordTotal = 25
+
+// pagedRecordID is the ID of the n-th record (from 1) of the paging mock
+// backend.
+func pagedRecordID(n int) string {
+	return fmt.Sprintf("item-%02d", n)
+}
+
+// pagedRecordIDs is the IDs of the records first to last, both included.
+func pagedRecordIDs(first, last int) []string {
+	ids := make([]string, 0, last-first+1)
+	for n := first; n <= last; n++ {
+		ids = append(ids, pagedRecordID(n))
+	}
+	return ids
+}
+
+// pagedBackendPage serves one page of the mock backend as the IAM client
+// does: pageSize records from the position the opaque page token names, with
+// the token of the next page while there is one.
+func pagedBackendPage(pageSize int, pageToken string) ([]string, iamsdk.PaginationInfo) {
+	start := 0
+	if pageToken != "" {
+		parsed, err := strconv.Atoi(pageToken)
+		if err != nil {
+			panic(fmt.Sprintf("page token %q was not issued by the mock backend", pageToken))
+		}
+		start = parsed
+	}
+	if pageSize <= 0 {
+		pageSize = pagedRecordTotal
+	}
+	end := min(start+pageSize, pagedRecordTotal)
+	info := iamsdk.PaginationInfo{TotalCount: pagedRecordTotal}
+	if end < pagedRecordTotal {
+		info.HasMore = true
+		info.NextPageToken = strconv.Itoa(end)
+	}
+	if start >= end {
+		return nil, info
+	}
+	return pagedRecordIDs(start+1, end), info
+}
+
+// TestListRepliesOverSDKREST_PagesCarryDistinctRecords asks the tenant-scoped
+// list routes for consecutive pages through the SDK REST adapter. The backend
+// pages by opaque token, so the handlers have to serve the requested offset
+// from its pages: every page carries its own records, and a page past the end
+// is empty.
+func TestListRepliesOverSDKREST_PagesCarryDistinctRecords(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	type pageReply struct {
+		ids      []string
+		page     uint32
+		pageSize uint32
+		total    int64
+	}
+	pages := []struct {
+		page uint32
+		want []string
+	}{
+		{page: 1, want: pagedRecordIDs(1, 10)},
+		{page: 2, want: pagedRecordIDs(11, 20)},
+		{page: 3, want: pagedRecordIDs(21, 25)},
+		{page: 4, want: []string{}},
+	}
+	assertPages := func(t *testing.T, list func(page uint32) (pageReply, error)) {
+		t.Helper()
+		seen := map[string]uint32{}
+		for _, tc := range pages {
+			reply, err := list(tc.page)
+			require.NoError(t, err, "page %d", tc.page)
+
+			got := reply.ids
+			if got == nil {
+				got = []string{}
+			}
+			assert.Equal(t, tc.want, got, "records of page %d", tc.page)
+			for _, id := range got {
+				if first, dup := seen[id]; dup {
+					assert.Failf(t, "record on two pages", "%s is on page %d and page %d", id, first, tc.page)
+					continue
+				}
+				seen[id] = tc.page
+			}
+			assert.Equal(t, tc.page, reply.page, "page of page %d", tc.page)
+			assert.Equal(t, uint32(10), reply.pageSize, "page size of page %d", tc.page)
+			assert.EqualValues(t, pagedRecordTotal, reply.total, "total of page %d", tc.page)
+		}
+	}
+	pagination := func(page uint32) *platformv1.PaginationRequest {
+		return &platformv1.PaginationRequest{Page: page, PageSize: 10}
+	}
+
+	t.Run("ListUsers", func(t *testing.T) {
+		var calls []iamsdk.ListUsersRequest
+		iamClient := &mockIAMClient{
+			listUsersFn: func(_ context.Context, _ string, req *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
+				calls = append(calls, *req)
+				ids, info := pagedBackendPage(req.PageSize, req.PageToken)
+				users := make([]iamsdk.User, 0, len(ids))
+				for _, id := range ids {
+					users = append(users, iamsdk.User{ID: id})
+				}
+				return &iamsdk.ListUsersResponse{Users: users, Pagination: info}, nil
+			},
+		}
+		client := platformv1.NewPlatformIAMServiceClient(
+			sdkRESTConnection(t, adminSessionIAMServerIn(t, "tenant-a", iamClient, &mockPEPClient{})))
+
+		assertPages(t, func(page uint32) (pageReply, error) {
+			reply, err := client.ListUsers(ctx, &platformv1.ListIAMUsersRequest{
+				TenantId:    "tenant-a",
+				Pagination:  pagination(page),
+				EmailFilter: "alice@example.com",
+				RoleFilter:  "role-1",
+				GroupFilter: "group-1",
+			})
+			if err != nil {
+				return pageReply{}, err
+			}
+			out := pageReply{
+				page:     reply.GetPagination().GetPage(),
+				pageSize: reply.GetPagination().GetPageSize(),
+				total:    int64(reply.GetTotal()),
+			}
+			for _, user := range reply.GetUsers() {
+				out.ids = append(out.ids, user.GetId())
+			}
+			return out, nil
+		})
+
+		// Pages 2 to 4 each need more than one backend page.
+		assert.Greater(t, len(calls), len(pages))
+		for i, call := range calls {
+			assert.EqualValues(t, "alice@example.com", call.Filter, "backend call %d", i)
+			assert.EqualValues(t, "role-1", call.RoleID, "backend call %d", i)
+			assert.EqualValues(t, "group-1", call.GroupID, "backend call %d", i)
+		}
+	})
+
+	t.Run("ListRoles", func(t *testing.T) {
+		iamClient := &mockIAMClient{
+			listRolesFn: func(_ context.Context, _ string, req *iamsdk.ListRolesRequest) (*iamsdk.ListRolesResponse, error) {
+				ids, info := pagedBackendPage(req.PageSize, req.PageToken)
+				roles := make([]iamsdk.Role, 0, len(ids))
+				for _, id := range ids {
+					roles = append(roles, iamsdk.Role{ID: id})
+				}
+				return &iamsdk.ListRolesResponse{Roles: roles, Pagination: info}, nil
+			},
+		}
+		client := platformv1.NewPlatformIAMServiceClient(
+			sdkRESTConnection(t, adminSessionIAMServerIn(t, "tenant-a", iamClient, &mockPEPClient{})))
+
+		assertPages(t, func(page uint32) (pageReply, error) {
+			reply, err := client.ListRoles(ctx, &platformv1.ListIAMRolesRequest{
+				TenantId:   "tenant-a",
+				Pagination: pagination(page),
+			})
+			if err != nil {
+				return pageReply{}, err
+			}
+			out := pageReply{
+				page:     reply.GetPagination().GetPage(),
+				pageSize: reply.GetPagination().GetPageSize(),
+				total:    int64(reply.GetTotal()),
+			}
+			for _, role := range reply.GetRoles() {
+				out.ids = append(out.ids, role.GetId())
+			}
+			return out, nil
+		})
+	})
+
+	t.Run("ListGroups", func(t *testing.T) {
+		iamClient := &mockIAMClient{
+			listGroupsFn: func(_ context.Context, _ string, req *iamsdk.ListGroupsRequest) (*iamsdk.ListGroupsResponse, error) {
+				ids, info := pagedBackendPage(req.PageSize, req.PageToken)
+				groups := make([]iamsdk.Group, 0, len(ids))
+				for _, id := range ids {
+					groups = append(groups, iamsdk.Group{ID: id})
+				}
+				return &iamsdk.ListGroupsResponse{Groups: groups, Pagination: info}, nil
+			},
+		}
+		client := platformv1.NewPlatformIAMServiceClient(
+			sdkRESTConnection(t, adminSessionIAMServerIn(t, "tenant-a", iamClient, &mockPEPClient{})))
+
+		assertPages(t, func(page uint32) (pageReply, error) {
+			reply, err := client.ListGroups(ctx, &platformv1.ListIAMGroupsRequest{
+				TenantId:   "tenant-a",
+				Pagination: pagination(page),
+			})
+			if err != nil {
+				return pageReply{}, err
+			}
+			out := pageReply{
+				page:     reply.GetPagination().GetPage(),
+				pageSize: reply.GetPagination().GetPageSize(),
+				total:    int64(reply.GetTotal()),
+			}
+			for _, group := range reply.GetGroups() {
+				out.ids = append(out.ids, group.GetId())
+			}
+			return out, nil
+		})
 	})
 }
 
