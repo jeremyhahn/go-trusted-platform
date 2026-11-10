@@ -139,7 +139,9 @@ func (ErrNilRoundTripper) Error() string {
 // with baseURL as the URL prefix. It skips Connect's TLS dialing and health
 // probe, so it suits an in-process caller that serves the daemon's REST
 // handler directly, such as a test that exercises the real route table
-// against the real handler without a listener.
+// against the real handler without a listener. A channel-bound call on such
+// an adapter is refused with ErrChannelBindingUnavailable: rt owns its
+// connections, so the adapter has none to bind to.
 func NewWithRoundTripper(baseURL string, rt http.RoundTripper, token string) (*Adapter, error) {
 	if baseURL == "" {
 		return nil, platform.ErrEmptyAddress

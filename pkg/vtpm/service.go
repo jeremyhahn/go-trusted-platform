@@ -560,6 +560,7 @@ func (s *Service) generateManifest(bundleID, bundlePath string, opts *CreateBund
 		ID:                bundleID,
 		Mode:              opts.Mode,
 		Hostname:          opts.Hostname,
+		DeviceProfileID:   opts.DeviceProfileID,
 		CreatedAt:         now,
 		EKCertificate:     ekCertInfo,
 		EKAlgorithm:       opts.EKAlgorithm,
