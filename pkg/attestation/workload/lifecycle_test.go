@@ -531,21 +531,5 @@ func TestLifecycleManager_Close(t *testing.T) {
 	})
 }
 
-func TestLifecycleHook_Interface(t *testing.T) {
-	// Verify LifecycleManager implements LifecycleHook interface (compile-time check)
-	var _ LifecycleHook = (*LifecycleManager)(nil)
-
-	lm, _ := setupLifecycleManager(t, true)
-	if lm == nil {
-		t.Fatal("LifecycleManager should not be nil")
-	}
-}
-
-func TestWorkloadEventType(t *testing.T) {
-	if WorkloadEventStart != "start" {
-		t.Errorf("WorkloadEventStart = %s, want start", WorkloadEventStart)
-	}
-	if WorkloadEventStop != "stop" {
-		t.Errorf("WorkloadEventStop = %s, want stop", WorkloadEventStop)
-	}
-}
+// LifecycleManager must satisfy LifecycleHook (compile-time check).
+var _ LifecycleHook = (*LifecycleManager)(nil)

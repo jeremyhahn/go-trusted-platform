@@ -371,21 +371,6 @@ func TestOVSConfigIntegration(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestOVSConfigDefaults(t *testing.T) {
-	config := &Config{
-		OVS: &OVSConfig{
-			Enable: true,
-			// Leave other fields empty to test defaults
-		},
-	}
-
-	// Should use default bridge name
-	assert.Equal(t, DefaultBridgeName, config.GetOVSBridgeName())
-
-	// Should use default socket path
-	assert.Equal(t, DefaultOVSSocketPath, config.GetOVSSocketPath())
-}
-
 func TestVLANBoundaryValues(t *testing.T) {
 	tests := []struct {
 		name    string

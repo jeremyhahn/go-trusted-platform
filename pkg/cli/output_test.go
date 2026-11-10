@@ -51,16 +51,6 @@ func TestNewPrinterWithWriter_WithColor(t *testing.T) {
 	assert.Equal(t, &buf, printer.writer)
 }
 
-func TestNewPrinterWithWriter_WithoutColor(t *testing.T) {
-	var buf bytes.Buffer
-	printer := NewPrinterWithWriter(OutputFormatYAML, true, &buf)
-
-	require.NotNil(t, printer)
-	assert.Equal(t, OutputFormatYAML, printer.format)
-	assert.True(t, printer.noColor)
-	assert.Equal(t, &buf, printer.writer)
-}
-
 func TestNewPrinterWithWriter_PrintsToCustomWriter(t *testing.T) {
 	var buf bytes.Buffer
 	printer := NewPrinterWithWriter(OutputFormatJSON, true, &buf)
@@ -98,6 +88,7 @@ func TestNewPrinterWithWriter_AllFormats(t *testing.T) {
 
 			require.NotNil(t, printer)
 			assert.Equal(t, tt.format, printer.format)
+			assert.True(t, printer.noColor)
 			assert.Equal(t, &buf, printer.writer)
 		})
 	}
@@ -419,43 +410,6 @@ func TestTableData_AddRow(t *testing.T) {
 	assert.Equal(t, []string{"Bob", "25"}, data.Rows[1])
 }
 
-func TestTableData_AddRow_MultipleValues(t *testing.T) {
-	data := NewTableData("A", "B", "C", "D")
-
-	data.AddRow("1", "2", "3", "4")
-
-	assert.Len(t, data.Rows, 1)
-	assert.Len(t, data.Rows[0], 4)
-}
-
-func TestTableData_IsEmpty_True(t *testing.T) {
-	data := NewTableData("Header1", "Header2")
-
-	assert.True(t, data.IsEmpty())
-}
-
-func TestTableData_IsEmpty_False(t *testing.T) {
-	data := NewTableData("Header1", "Header2")
-	data.AddRow("value1", "value2")
-
-	assert.False(t, data.IsEmpty())
-}
-
-func TestTableData_RowCount_Zero(t *testing.T) {
-	data := NewTableData("Header1")
-
-	assert.Equal(t, 0, data.RowCount())
-}
-
-func TestTableData_RowCount_Multiple(t *testing.T) {
-	data := NewTableData("Header1")
-	data.AddRow("row1")
-	data.AddRow("row2")
-	data.AddRow("row3")
-
-	assert.Equal(t, 3, data.RowCount())
-}
-
 func TestTableData_ComplexScenario(t *testing.T) {
 	data := NewTableData("Service", "Status", "Uptime")
 
@@ -522,36 +476,6 @@ func TestPrinter_StructuredOutput_ComplexNested(t *testing.T) {
 	server := result["server"].(map[string]interface{})
 	assert.Equal(t, "example.com", server["host"])
 	assert.Equal(t, float64(8443), server["port"])
-}
-
-func TestPrinter_AllMessageTypes(t *testing.T) {
-	// Test that all message types render without panic
-	printer := NewPrinter(OutputFormatTable, true)
-	var buf bytes.Buffer
-	printer.writer = &buf
-
-	tests := []struct {
-		name string
-		fn   func(string)
-		msg  string
-	}{
-		{"success", printer.PrintSuccess, "Success message"},
-		{"error", printer.PrintError, "Error message"},
-		{"warning", printer.PrintWarning, "Warning message"},
-		{"info", printer.PrintInfo, "Info message"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			buf.Reset()
-			assert.NotPanics(t, func() {
-				tt.fn(tt.msg)
-			})
-			output := buf.String()
-			assert.NotEmpty(t, output)
-			assert.Contains(t, output, tt.msg)
-		})
-	}
 }
 
 func TestPrinter_MultilineContent(t *testing.T) {

@@ -221,8 +221,13 @@ func TestNewAuthChain(t *testing.T) {
 }
 
 func TestChainCapabilities(t *testing.T) {
+	phase3 := phase3Chain(t, &fakeTokenAuth{}, &fakeGate{}, &fakeEvaluator{})
+	caps := phase3.Capabilities()
+	if !caps.MTLS || !caps.Zones || !caps.Token || !caps.Attestation || !caps.OPA {
+		t.Errorf("phase 3 chain caps = %+v, want all true", caps)
+	}
 	full := newTestChain(t, &fakeMTLSAuth{})
-	caps := full.Capabilities()
+	caps = full.Capabilities()
 	if !caps.MTLS || !caps.Zones {
 		t.Errorf("full chain caps = %+v, want MTLS and Zones", caps)
 	}

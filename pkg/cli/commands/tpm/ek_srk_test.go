@@ -377,46 +377,6 @@ func TestRunEKDeleteWithClient_Error(t *testing.T) {
 	assert.IsType(t, ErrEKDeleteFailed{}, err)
 }
 
-func TestRunEKDeleteWithClient_StatusNil(t *testing.T) {
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatJSON,
-		NoColor:      true,
-	}
-
-	// SDK domain methods return an error when the gRPC call fails;
-	// they never return a response with nil Status.
-	mockClient := &mockTPMServiceClient{
-		deleteEKFunc: func(ctx context.Context, req *platformv1.DeleteEKRequest, opts ...grpc.CallOption) (*platformv1.DeleteEKResponse, error) {
-			return nil, errors.New("delete failed: nil status")
-		},
-	}
-
-	base := newMockTPMBaseCommand(flags, mockClient)
-	err := runEKDeleteWithClient(base, 0x81010001, "")
-	require.Error(t, err)
-	assert.IsType(t, ErrEKDeleteFailed{}, err)
-}
-
-func TestRunEKDeleteWithClient_StatusFailed(t *testing.T) {
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatJSON,
-		NoColor:      true,
-	}
-
-	// SDK domain methods return an error when the gRPC call fails;
-	// they never return a response with Status.Success=false.
-	mockClient := &mockTPMServiceClient{
-		deleteEKFunc: func(ctx context.Context, req *platformv1.DeleteEKRequest, opts ...grpc.CallOption) (*platformv1.DeleteEKResponse, error) {
-			return nil, errors.New("not found")
-		},
-	}
-
-	base := newMockTPMBaseCommand(flags, mockClient)
-	err := runEKDeleteWithClient(base, 0x81010001, "")
-	require.Error(t, err)
-	assert.IsType(t, ErrEKDeleteFailed{}, err)
-}
-
 func TestRunEKDeleteWithClient_TableFormat(t *testing.T) {
 	flags := &cli.CommonFlags{
 		OutputFormat: cli.OutputFormatTable,
@@ -723,46 +683,6 @@ func TestRunSRKDeleteWithClient_Error(t *testing.T) {
 	mockClient := &mockTPMServiceClient{
 		deleteSRKFunc: func(ctx context.Context, req *platformv1.DeleteSRKRequest, opts ...grpc.CallOption) (*platformv1.DeleteSRKResponse, error) {
 			return nil, errors.New("auth failed")
-		},
-	}
-
-	base := newMockTPMBaseCommand(flags, mockClient)
-	err := runSRKDeleteWithClient(base, 0x81000001, "")
-	require.Error(t, err)
-	assert.IsType(t, ErrSRKDeleteFailed{}, err)
-}
-
-func TestRunSRKDeleteWithClient_StatusNil(t *testing.T) {
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatJSON,
-		NoColor:      true,
-	}
-
-	// SDK domain methods return an error when the gRPC call fails;
-	// they never return a response with nil Status.
-	mockClient := &mockTPMServiceClient{
-		deleteSRKFunc: func(ctx context.Context, req *platformv1.DeleteSRKRequest, opts ...grpc.CallOption) (*platformv1.DeleteSRKResponse, error) {
-			return nil, errors.New("delete failed: nil status")
-		},
-	}
-
-	base := newMockTPMBaseCommand(flags, mockClient)
-	err := runSRKDeleteWithClient(base, 0x81000001, "")
-	require.Error(t, err)
-	assert.IsType(t, ErrSRKDeleteFailed{}, err)
-}
-
-func TestRunSRKDeleteWithClient_StatusFailed(t *testing.T) {
-	flags := &cli.CommonFlags{
-		OutputFormat: cli.OutputFormatJSON,
-		NoColor:      true,
-	}
-
-	// SDK domain methods return an error when the gRPC call fails;
-	// they never return a response with Status.Success=false.
-	mockClient := &mockTPMServiceClient{
-		deleteSRKFunc: func(ctx context.Context, req *platformv1.DeleteSRKRequest, opts ...grpc.CallOption) (*platformv1.DeleteSRKResponse, error) {
-			return nil, errors.New("not found")
 		},
 	}
 

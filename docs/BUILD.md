@@ -77,7 +77,9 @@ CI runs the five stages of the handbook's `ci-standard.md` §1, each a `make`
 target (`devops.md` §4). The `image` job runs `make build` and `make test`
 (`.github/workflows/ci.yml:294-319`), `make deps-check` on every event, a
 docs-only PR included (ci-template v1.28, `:344-348`), and in the full tier
-`make security` (`:333-337`); the `integration` job runs
+`make security-novuln`, which is `make security` without govulncheck; the
+full-tier `vuln` job runs `make vuln` on its own at 20g (#1425); the
+`integration` job runs
 `make integration-test` (`:591`). [test/integration.md](test/integration.md#ci)
 lists every job and tier.
 

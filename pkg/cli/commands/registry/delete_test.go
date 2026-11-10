@@ -162,41 +162,6 @@ func TestRunDelete_InvalidImageReference(t *testing.T) {
 	}
 }
 
-func TestDeleteResult_Fields(t *testing.T) {
-	result := DeleteResultCLI{
-		Reference:  "myrepo/myimage:v1.0",
-		Digest:     "sha256:abc123",
-		Deleted:    true,
-		Message:    "Successfully deleted",
-		BytesFreed: 1024,
-		Timestamp:  1234567890,
-	}
-
-	if result.Reference != "myrepo/myimage:v1.0" {
-		t.Errorf("unexpected Reference: %q", result.Reference)
-	}
-
-	if result.Digest != "sha256:abc123" {
-		t.Errorf("unexpected Digest: %q", result.Digest)
-	}
-
-	if !result.Deleted {
-		t.Error("expected Deleted to be true")
-	}
-
-	if result.Message != "Successfully deleted" {
-		t.Errorf("unexpected Message: %q", result.Message)
-	}
-
-	if result.BytesFreed != 1024 {
-		t.Errorf("unexpected BytesFreed: %d", result.BytesFreed)
-	}
-
-	if result.Timestamp != 1234567890 {
-		t.Errorf("unexpected Timestamp: %d", result.Timestamp)
-	}
-}
-
 func TestNewDeleteCommand_DefaultFlagValues(t *testing.T) {
 	getFlags := func() *cli.CommonFlags {
 		return &cli.CommonFlags{}

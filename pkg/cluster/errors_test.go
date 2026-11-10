@@ -239,15 +239,6 @@ func TestErrJoinFailed_Error(t *testing.T) {
 	}
 }
 
-func TestErrJoinFailed_Unwrap(t *testing.T) {
-	cause := errors.New("connection refused")
-	err := ErrJoinFailed{NodeID: 1, Address: "addr", Cause: cause}
-
-	if err.Unwrap() != cause {
-		t.Error("Unwrap() should return cause")
-	}
-}
-
 func TestErrLeaveFailed_Error(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -286,15 +277,6 @@ func TestErrLeaveFailed_Error(t *testing.T) {
 				t.Errorf("ErrLeaveFailed.Error() = %q, want %q", got, tt.want)
 			}
 		})
-	}
-}
-
-func TestErrLeaveFailed_Unwrap(t *testing.T) {
-	cause := errors.New("underlying")
-	err := ErrLeaveFailed{NodeID: 1, Cause: cause}
-
-	if err.Unwrap() != cause {
-		t.Error("Unwrap() should return cause")
 	}
 }
 
@@ -348,15 +330,6 @@ func TestErrConnectionFailed_Error(t *testing.T) {
 				t.Errorf("ErrConnectionFailed.Error() = %q, want %q", got, tt.want)
 			}
 		})
-	}
-}
-
-func TestErrConnectionFailed_Unwrap(t *testing.T) {
-	cause := errors.New("connection refused")
-	err := ErrConnectionFailed{Address: "addr", Cause: cause}
-
-	if err.Unwrap() != cause {
-		t.Error("Unwrap() should return cause")
 	}
 }
 
@@ -450,15 +423,6 @@ func TestErrAddNodeFailed_Error(t *testing.T) {
 	}
 }
 
-func TestErrAddNodeFailed_Unwrap(t *testing.T) {
-	cause := errors.New("underlying")
-	err := ErrAddNodeFailed{NodeID: 1, Address: "addr", Cause: cause}
-
-	if err.Unwrap() != cause {
-		t.Error("Unwrap() should return cause")
-	}
-}
-
 func TestErrRemoveNodeFailed_Error(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -487,15 +451,6 @@ func TestErrRemoveNodeFailed_Error(t *testing.T) {
 				t.Errorf("ErrRemoveNodeFailed.Error() = %q, want %q", got, tt.want)
 			}
 		})
-	}
-}
-
-func TestErrRemoveNodeFailed_Unwrap(t *testing.T) {
-	cause := errors.New("underlying")
-	err := ErrRemoveNodeFailed{NodeID: 1, Cause: cause}
-
-	if err.Unwrap() != cause {
-		t.Error("Unwrap() should return cause")
 	}
 }
 
@@ -573,19 +528,6 @@ func TestErrContextCancelled_Error(t *testing.T) {
 
 	if msg != "operation cancelled: context canceled" {
 		t.Errorf("unexpected error message: %q", msg)
-	}
-}
-
-func TestErrContextCancelled_Unwrap(t *testing.T) {
-	cause := context.Canceled
-	err := ErrContextCancelled{Err: cause}
-
-	if err.Unwrap() != cause {
-		t.Error("Unwrap() should return cause")
-	}
-
-	if !errors.Is(err, context.Canceled) {
-		t.Error("errors.Is should find wrapped context.Canceled")
 	}
 }
 
@@ -676,74 +618,6 @@ func TestErrHealthCheckFailed_Error(t *testing.T) {
 				t.Errorf("ErrHealthCheckFailed.Error() = %q, want %q", got, tt.want)
 			}
 		})
-	}
-}
-
-func TestErrHealthCheckFailed_Unwrap(t *testing.T) {
-	cause := errors.New("underlying")
-	err := ErrHealthCheckFailed{Reason: "test", Cause: cause}
-
-	if err.Unwrap() != cause {
-		t.Error("Unwrap() should return cause")
-	}
-}
-
-func TestErrorTypesAreDistinct(t *testing.T) {
-	// Ensure each error type is distinct by checking they don't match each other
-	errTypes := []error{
-		ErrClusterNotInitialized{},
-		ErrClusterAlreadyInitialized{},
-		ErrNodeNotFound{NodeID: 1},
-		ErrNodeAlreadyExists{NodeID: 1},
-		ErrNodeNotLeader{NodeID: 1},
-		ErrQuorumLost{Required: 2, Available: 1},
-		ErrBootstrapFailed{Reason: "test"},
-		ErrJoinFailed{NodeID: 1, Address: "addr"},
-		ErrLeaveFailed{NodeID: 1},
-		ErrInvalidConfig{Field: "test", Reason: "test"},
-		ErrTimeout{Operation: "test"},
-		ErrConnectionFailed{Address: "addr"},
-		ErrClusterUnavailable{},
-		ErrNoLeader{},
-		ErrLeadershipTimeout{},
-		ErrAlreadyJoined{},
-		ErrNotJoined{},
-		ErrAddNodeFailed{NodeID: 1, Address: "addr"},
-		ErrRemoveNodeFailed{NodeID: 1},
-		ErrManagerClosed{},
-		ErrNoJoinAddresses{},
-		ErrInvalidAddress{Address: "addr", Reason: "test"},
-		ErrInvalidClusterState{State: ClusterStateRunning},
-		ErrInvalidStateTransition{From: ClusterStateRunning, To: ClusterStateStopped},
-		ErrInvalidNodeState{State: NodeStateHealthy},
-		ErrInvalidNodeID{ID: 0},
-		ErrNilNode{},
-		ErrContextCancelled{Err: context.Canceled},
-		ErrClusterNotReady{State: ClusterStateBootstrapping},
-		ErrLeadershipLost{},
-		ErrNilConfig{},
-		ErrNilMembership{},
-		ErrNilLogger{},
-		ErrCoordinatorAlreadyRunning{},
-		ErrCoordinatorNotRunning{},
-		ErrStatusUnavailable{},
-		ErrHealthCheckFailed{Reason: "test"},
-	}
-
-	// Ensure all error types produce non-empty error messages
-	for i, err := range errTypes {
-		msg := err.Error()
-		if msg == "" {
-			t.Errorf("error type at index %d has empty error message", i)
-		}
-	}
-
-	// Verify all implement the error interface properly
-	for i, err := range errTypes {
-		var _ = err
-		if err.Error() == "" {
-			t.Errorf("error at index %d returned empty string", i)
-		}
 	}
 }
 

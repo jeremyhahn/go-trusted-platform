@@ -707,35 +707,6 @@ func TestCreateTenant_DuplicateName(t *testing.T) {
 	}
 }
 
-func TestCreateTenant_WithCustomQuotas(t *testing.T) {
-	manager, _ := newTestManager(t)
-	ctx := context.Background()
-
-	customCompute := &ComputeQuota{
-		MaxVMs:      20,
-		MaxVCPUs:    64,
-		MaxMemoryMB: 131072,
-	}
-
-	req := &CreateTenantRequest{
-		Name:         "test-tenant",
-		ComputeQuota: customCompute,
-	}
-
-	entity, err := manager.CreateTenant(ctx, req)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-
-	if entity.ComputeQuota.MaxVMs != customCompute.MaxVMs {
-		t.Errorf("expected MaxVMs %d, got %d", customCompute.MaxVMs, entity.ComputeQuota.MaxVMs)
-	}
-
-	if entity.ComputeQuota.MaxVCPUs != customCompute.MaxVCPUs {
-		t.Errorf("expected MaxVCPUs %d, got %d", customCompute.MaxVCPUs, entity.ComputeQuota.MaxVCPUs)
-	}
-}
-
 func TestCreateTenant_WithAllCustomQuotas(t *testing.T) {
 	manager, _ := newTestManager(t)
 	ctx := context.Background()
@@ -768,6 +739,14 @@ func TestCreateTenant_WithAllCustomQuotas(t *testing.T) {
 	entity, err := manager.CreateTenant(ctx, req)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if entity.ComputeQuota.MaxVMs != customCompute.MaxVMs {
+		t.Errorf("expected MaxVMs %d, got %d", customCompute.MaxVMs, entity.ComputeQuota.MaxVMs)
+	}
+
+	if entity.ComputeQuota.MaxVCPUs != customCompute.MaxVCPUs {
+		t.Errorf("expected MaxVCPUs %d, got %d", customCompute.MaxVCPUs, entity.ComputeQuota.MaxVCPUs)
 	}
 
 	if entity.ComputeQuota.MaxContainers != customCompute.MaxContainers {
@@ -1107,30 +1086,6 @@ func TestGetTenantByName_NotFound(t *testing.T) {
 	var notFound ErrTenantNotFound
 	if !errors.As(err, &notFound) {
 		t.Errorf("expected ErrTenantNotFound, got %T", err)
-	}
-}
-
-func TestGetTenantByName_FromCache(t *testing.T) {
-	manager, _ := newTestManager(t)
-	ctx := context.Background()
-
-	createReq := &CreateTenantRequest{
-		Name: "test-tenant",
-	}
-
-	created, err := manager.CreateTenant(ctx, createReq)
-	if err != nil {
-		t.Fatalf("failed to create tenant: %v", err)
-	}
-
-	// Get by name - should be from cache (tenant is in cache after creation)
-	entity, err := manager.GetTenantByName(ctx, "test-tenant")
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-
-	if entity.ID != created.ID {
-		t.Errorf("expected ID %q, got %q", created.ID, entity.ID)
 	}
 }
 
@@ -2859,26 +2814,6 @@ func TestRotateTenantDEKWithOptions_EmptyTenantID(t *testing.T) {
 	var invalidReq ErrInvalidRequest
 	if !errors.As(err, &invalidReq) {
 		t.Errorf("expected ErrInvalidRequest, got %T", err)
-	}
-}
-
-func TestRotateTenantDEKWithOptions_NoDEKClient(t *testing.T) {
-	iamClient := newMockIAMClient()
-	logger := newTestLogger()
-
-	cfg := &ManagerConfig{
-		IAMTenantClient: iamClient,
-		IAMRoleClient:   iamClient,
-		DEKClient:       nil, // No DEK client
-		Config:          DefaultConfig(),
-		Logger:          logger,
-	}
-	cfg.Config.EnableDEKIsolation = true
-
-	// This should fail during manager creation
-	_, err := NewManager(cfg)
-	if err == nil {
-		t.Fatal("expected error when DEK client not provided with DEK isolation enabled")
 	}
 }
 

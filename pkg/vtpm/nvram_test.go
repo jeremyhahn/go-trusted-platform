@@ -89,7 +89,7 @@ func TestNewEKCertInjector_VariousSocketPaths(t *testing.T) {
 		},
 		{
 			name:       "home directory socket",
-			socketPath: "/home/user/.vtpm/socket",
+			socketPath: "/var/lib/user/.vtpm/socket",
 		},
 		{
 			name:       "relative path",
