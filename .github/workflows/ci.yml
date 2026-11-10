@@ -214,16 +214,20 @@ jobs:
   # ci-gate passes their skip only when docs_only reads exactly `true`. Off
   # pull_request, or on a ci:full PR, docs_only is always false. Any doubt (a
   # failed diff, an empty list) reads as false.
+  # Routing (m2475): a push to main and a pull_request from this repository
+  # run on the bigdisk pool; fork PRs, dispatch and the schedule stay on
+  # ubuntu-latest. The job needs git, curl and jq only.
   changes:
     name: Changed files
     if: ${{ !github.event.pull_request.draft }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}
     outputs:
       docs_only: ${{ steps.diff.outputs.docs_only }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         if: ${{ github.event_name == 'pull_request' && env.CI_FULL_TIER != 'true' }}
         with:
+          persist-credentials: false
           fetch-depth: 0
       - name: Is every changed file docs or markdown?
         id: diff
@@ -255,9 +259,12 @@ jobs:
   # bigdisk job's `needs` meets a skipped job off schedule; off schedule it
   # makes no call. It checks nothing out, so no repository code runs beside
   # the tokens.
+  # Routing (m2475): a push to main and a pull_request from this repository
+  # run on the bigdisk pool; fork PRs, dispatch and the schedule stay on
+  # ubuntu-latest. The job needs git, curl and jq only.
   schedule-guard:
     name: Schedule guard
-    runs-on: ubuntu-latest
+    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}
     # v1.26: a draft PR runs no CI (as the changes job).
     if: ${{ !github.event.pull_request.draft }}
     permissions:
@@ -1650,25 +1657,30 @@ jobs:
     # round-robin quarter of the package list (Makefile SHARD/SHARDS), to fit
     # a hosted job's 4 cores and 6 hours. The job carries no module
     # credential and no proxy setting.
-    # It stays hosted (#1589 follow-up): a job whose runs-on names bigdisk
-    # must carry the schedule guard in its if:, and pkg/arch/citiers_test.go
-    # has no guarded form of the main-tier if: below, so moving it needs that
-    # test changed first.
-    runs-on: ubuntu-latest
+    # Routing (m2475): a push to main runs on the bigdisk pool, which has
+    # cpio and libssl-dev, so the apt step is hosted-only; the schedule and
+    # workflow_dispatch stay on ubuntu-latest. A bigdisk job carries the
+    # schedule guard, so the if: is the guarded main tier
+    # (pkg/arch/citiers_test.go mainOnlyGuardedIf).
+    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
         shard: [0, 1, 2, 3]
-    if: ${{ github.event_name != 'pull_request' }}
+    needs: schedule-guard
+    if: ${{ github.event_name != 'pull_request' && (github.event_name != 'schedule' || needs.schedule-guard.outputs.verdict == 'run') }}
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: ${{ env.GO_VERSION }}
 
       - name: Install cpio and the OpenSSL headers
+        if: runner.environment == 'github-hosted'
         run: sudo apt-get update && sudo apt-get install -y cpio libssl-dev
 
       - name: FIPS build and unit tests
