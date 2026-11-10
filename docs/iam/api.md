@@ -355,17 +355,20 @@ The SDK finds an app by client ID in any tenant, so the daemon checks
 `.../apps/{id}` against the URL tenant's app list before a get or delete runs (`iamTenantApps`, `pkg/api/daemon/iam_rest.go`). A
 client ID of another tenant gets the `404` a missing app gets, and nothing is
 changed.
-The SDK's policy create keeps no rule conditions, so a policy spec with a
-`when` or `unless` rule is refused with `400` `ErrPolicyConditionUnsupported`
-(`pkg/webservice/v1/rest/iam/errors.go`), which names the rule and the
-condition, and nothing is stored. A conditional rule is never stored as an
-unconditional one.
-The create keeps no subject selector either, and an empty selector matches
-every subject in the tenant, so a policy whose `spec.subjects` (or top-level
-`subjects`) names any role, group, user or other selector is refused with
-`400` `ErrInvalidPolicySpec`, whose message names the SDK gap, and nothing is
-stored. An admin-only grant is never stored as a grant to everyone; an empty
+On an embedded backend the SDK's policy create keeps no rule conditions, so a
+policy spec with a `when` or `unless` rule is refused with `400`
+`ErrPolicyConditionUnsupported` (`pkg/webservice/v1/rest/iam/errors.go`), which
+names the rule and the condition, and nothing is stored. A conditional rule is
+never stored as an unconditional one.
+The embedded create keeps no subject selector either, and an empty selector
+matches every subject in the tenant, so a policy whose `spec.subjects` (or
+top-level `subjects`) names any role, group, user or other selector is refused
+with `400` `ErrInvalidPolicySpec`, whose message names the SDK gap, and nothing
+is stored. An admin-only grant is never stored as a grant to everyone; an empty
 `subjects` restricts nothing and is accepted.
+A remote (gRPC or Unix) backend parses the policy document itself and stores its
+conditions and subject selectors, so neither refusal applies there: the document
+reaches the backend unchanged.
 A rule's `effect` must be exactly `allow` or `deny`. A missing effect, `DENY`,
 `Allow`, `permit` or any other value is refused with `400`
 `ErrInvalidPolicySpec` and nothing is stored, because defaulting it to allow

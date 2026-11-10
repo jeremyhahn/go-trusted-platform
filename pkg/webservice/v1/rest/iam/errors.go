@@ -143,9 +143,10 @@ func (e ErrInvalidPolicySpec) Error() string {
 	return fmt.Sprintf("invalid policy spec: %s", e.Reason)
 }
 
-// ErrPolicyConditionUnsupported refuses a policy rule that carries a
-// `when` or `unless` condition: the IAM SDK's policy create cannot carry
-// conditions, and storing the rule without them would widen it.
+// ErrPolicyConditionUnsupported refuses, on an embedded backend, a policy
+// rule that carries a `when` or `unless` condition: the embedded IAM SDK's
+// policy create cannot carry conditions, and storing the rule without them
+// would widen it. A remote backend stores the conditions and is not refused.
 type ErrPolicyConditionUnsupported struct {
 	Rule      string
 	Condition string

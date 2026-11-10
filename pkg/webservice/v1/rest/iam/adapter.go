@@ -23,17 +23,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// parsePolicyRulesFromYAML extracts the rules slice from the canonical
-// IAM Policy YAML document. Returns nil when the YAML cannot be parsed;
-// callers should treat that as "no rules" and substitute a default.
-//
-// The SDK's embedded policy create keeps only each rule's name, effect,
-// priority, actions and resources, so a `when` or `unless` condition would
-// be dropped and a conditional rule stored as unconditional. A rule that
-// carries either is refused with ErrPolicyConditionUnsupported instead.
-// The create keeps no subject selector either, and an empty selector
-// matches every subject, so a policy whose `subjects` names any role, group
-// or user is refused with ErrInvalidPolicySpec rather than widened.
 // policyRuleEffects maps the only two effect spellings a policy rule may
 // carry onto the engine's effects. Anything else — an omitted effect,
 // "DENY", "Allow", "permit" — is refused rather than defaulted, because a
@@ -43,7 +32,23 @@ var policyRuleEffects = map[string]iamsdk.Effect{
 	"deny":  iamsdk.EffectDeny,
 }
 
-func parsePolicyRulesFromYAML(specYAML string) ([]iamsdk.Rule, error) {
+// parsePolicyRulesFromYAML extracts the rules slice from the canonical
+// IAM Policy YAML document. Returns nil when the YAML cannot be parsed;
+// callers should treat that as "no rules" and substitute a default.
+//
+// With embedded set, the document is checked for what the SDK's embedded
+// policy create cannot store. That create keeps only each rule's name,
+// effect, priority, actions and resources, so a `when` or `unless` condition
+// would be dropped and a conditional rule stored as unconditional. A rule
+// that carries either is refused with ErrPolicyConditionUnsupported instead.
+// The create keeps no subject selector either, and an empty selector
+// matches every subject, so a policy whose `subjects` names any role, group
+// or user is refused with ErrInvalidPolicySpec rather than widened.
+//
+// A remote (gRPC or Unix) backend receives the document itself and stores
+// its conditions and subject selectors, so neither refusal applies there.
+// The effect rule applies to both.
+func parsePolicyRulesFromYAML(specYAML string, embedded bool) ([]iamsdk.Rule, error) {
 	if specYAML == "" {
 		return nil, nil
 	}
@@ -74,7 +79,7 @@ func parsePolicyRulesFromYAML(specYAML string) ([]iamsdk.Rule, error) {
 	if err := yaml.Unmarshal([]byte(specYAML), &doc); err != nil {
 		return nil, nil
 	}
-	if hasSubjectSelector(doc.Spec.Subjects) || hasSubjectSelector(doc.Subjects) {
+	if embedded && (hasSubjectSelector(doc.Spec.Subjects) || hasSubjectSelector(doc.Subjects)) {
 		return nil, ErrInvalidPolicySpec{Reason: "spec.subjects restricts which subjects the policy applies to, " +
 			"and the pinned IAM SDK's policy create does not carry subject selectors; " +
 			"stored without them the policy would apply to every subject in the tenant"}
@@ -88,10 +93,10 @@ func parsePolicyRulesFromYAML(specYAML string) ([]iamsdk.Rule, error) {
 	}
 	out := make([]iamsdk.Rule, 0, len(src))
 	for _, r := range src {
-		if len(r.When) > 0 {
+		if embedded && len(r.When) > 0 {
 			return nil, ErrPolicyConditionUnsupported{Rule: r.Name, Condition: "when"}
 		}
-		if len(r.Unless) > 0 {
+		if embedded && len(r.Unless) > 0 {
 			return nil, ErrPolicyConditionUnsupported{Rule: r.Name, Condition: "unless"}
 		}
 		effect, ok := policyRuleEffects[r.Effect]
@@ -155,7 +160,8 @@ func hasSubjectSelector(subjects interface{}) bool {
 type QuicBaaSIAMAdapter struct {
 	client iamsdk.Client
 	// embedded marks a client on the embedded transport, which cannot
-	// assign or revoke a user's roles.
+	// assign or revoke a user's roles and whose policy create keeps no
+	// rule condition and no subject selector.
 	embedded bool
 }
 
@@ -397,7 +403,7 @@ func (a *QuicBaaSIAMAdapter) CreatePolicy(ctx context.Context, tenantID string, 
 	// flat Rules slice so validation passes. Falls back to a minimal
 	// placeholder rule when the YAML cannot be parsed so callers
 	// supplying just a name + description still succeed.
-	rules, err := parsePolicyRulesFromYAML(req.SpecYAML)
+	rules, err := parsePolicyRulesFromYAML(req.SpecYAML, a.embedded)
 	if err != nil {
 		return nil, err
 	}
