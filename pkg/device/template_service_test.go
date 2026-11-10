@@ -688,7 +688,7 @@ func TestTemplateService_ToProfile_UnknownRoleKeepsTemplateRole(t *testing.T) {
 	require.NoError(t, service.Save(ctx, template))
 
 	kept, err := service.ToProfile(ctx, template.ID, &entities.DeviceProfile{
-		Name: "gw-01",
+		Name: "edge-01",
 		Role: entities.DeviceRoleUnknown,
 	})
 	require.NoError(t, err)

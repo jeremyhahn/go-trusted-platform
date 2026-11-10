@@ -66,9 +66,9 @@ sdn:
         switch-b: sw-02
         peer-link-ports: [Ethernet1/50, Ethernet1/52]
     ports:
-      - {switch-id: sw-01, port: Ethernet1/3, class: gateway, description: gw-01}
+      - {switch-id: sw-01, port: Ethernet1/3, class: gateway, description: edge-01}
       - {switch-id: sw-01, port: Ethernet1/25, class: hypervisor, description: cp-01}
-      - {switch-id: sw-01, port: Ethernet1/41, class: bmc, description: gw-01 bmc}
+      - {switch-id: sw-01, port: Ethernet1/41, class: bmc, description: edge-01 bmc}
 ```
 
 ## Status
