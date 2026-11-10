@@ -143,10 +143,12 @@ type installerScopeFixture struct {
 
 func newInstallerScopeFixture(t *testing.T) *installerScopeFixture {
 	t.Helper()
-	f := newWebhookFixture(t)
+	// The fixture's own installers carry only a common name: the tests of a
+	// certificate without organization present them.
+	f := newWebhookFixtureNamed(t, pkix.Name{CommonName: "node"})
 	operator := f.issuerA.issueOperator(t, 100)
-	installer := f.issuerA.issueClient(t, 101,
-		pkix.Name{CommonName: "installer", Organization: []string{"installer"}}, nil)
+	installer := f.issuerA.issueInstallerNamed(t, 101,
+		pkix.Name{CommonName: "installer", Organization: []string{"installer"}})
 	f.install(t, installerMAC, installer)
 
 	config := failClosedConfig()
@@ -688,7 +690,7 @@ func TestMTLSInstallerScope_InstallerIsRefusedOtherMCPPXEWrites(t *testing.T) {
 // organization from the fixture's trusted issuer, bound to no device.
 func (f *installerScopeFixture) unboundWithoutOrganization(t *testing.T) *x509.Certificate {
 	t.Helper()
-	cert := f.issuerA.issue(t, 900)
+	cert := f.issuerA.issueInstallerNamed(t, 900, pkix.Name{CommonName: "node"})
 	require.Empty(t, cert.Subject.Organization)
 	return cert
 }

@@ -117,11 +117,35 @@ func (i *webhookIssuer) issueInstallerTLS(t *testing.T, serial int64) tls.Certif
 
 func (i *webhookIssuer) issueWith(t *testing.T, serial int64, extra ...pkix.Extension) (*x509.Certificate, *ecdsa.PrivateKey) {
 	t.Helper()
+	return i.issueSubject(t, serial, webhookNodeSubject(), extra...)
+}
+
+// webhookNodeSubject is the subject of the fixture's installer certificates.
+func webhookNodeSubject() pkix.Name {
+	return pkix.Name{CommonName: "node", Organization: []string{"Test Platform Client"}}
+}
+
+// issueInstallerNamed signs an installer certificate, carrying the installer
+// marker, with subject. A subject with only a common name gives the
+// certificate without organization the mTLS rules treat as an installer and
+// never as a tenant user.
+func (i *webhookIssuer) issueInstallerNamed(t *testing.T, serial int64, subject pkix.Name) *x509.Certificate {
+	t.Helper()
+	marker, err := issuance.InstallerMarkerExtension()
+	require.NoError(t, err)
+	cert, _ := i.issueSubject(t, serial, subject, marker)
+	return cert
+}
+
+// issueSubject signs a client certificate with subject and the extra
+// extensions, and returns it with its key.
+func (i *webhookIssuer) issueSubject(t *testing.T, serial int64, subject pkix.Name, extra ...pkix.Extension) (*x509.Certificate, *ecdsa.PrivateKey) {
+	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(serial),
-		Subject:      pkix.Name{CommonName: "node", Organization: []string{"Test Platform Client"}},
+		Subject:      subject,
 		NotBefore:    i.cert.NotBefore,
 		NotAfter:     i.cert.NotAfter,
 		KeyUsage:     x509.KeyUsageDigitalSignature,
@@ -151,6 +175,13 @@ type webhookFixture struct {
 
 func newWebhookFixture(t *testing.T) *webhookFixture {
 	t.Helper()
+	return newWebhookFixtureNamed(t, webhookNodeSubject())
+}
+
+// newWebhookFixtureNamed is newWebhookFixture with subject as the subject of
+// both installer certificates.
+func newWebhookFixtureNamed(t *testing.T, subject pkix.Name) *webhookFixture {
+	t.Helper()
 	plan, err := netplan.New(netplan.Environment{ID: 4}, zone.Defaults())
 	require.NoError(t, err)
 	cfg, err := pxe.NewServiceConfig(plan)
@@ -177,8 +208,8 @@ func newWebhookFixture(t *testing.T) *webhookFixture {
 		issuerA: newWebhookIssuer(t, "issuer A"),
 		issuerB: newWebhookIssuer(t, "issuer B"),
 	}
-	f.node = f.issuerA.issue(t, webhookSerial)
-	f.other = f.issuerA.issue(t, webhookSerial+1)
+	f.node = f.issuerA.issueInstallerNamed(t, webhookSerial, subject)
+	f.other = f.issuerA.issueInstallerNamed(t, webhookSerial+1, subject)
 	f.install(t, webhookNodeMAC, f.node)
 	f.install(t, webhookOtherMAC, f.other)
 	return f

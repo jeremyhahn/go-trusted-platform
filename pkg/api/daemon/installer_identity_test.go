@@ -163,6 +163,7 @@ func grpcMTLSAuth(t *testing.T, f *webhookFixture, pool *x509.CertPool) grpcAuth
 	config.EnableMTLS = true
 	config.CAService = routeTableCA{}
 	config.MTLSClientCAPool = pool
+	config.MTLSOperatorTrustDomain = testOperatorTrustDomain
 	sel, err := selectGRPCTCPAuth(config, nil, nil, pxeInstallBindings{service: f.svc}, logging.DefaultLogger(), grpcTCPSkipMethods)
 	require.NoError(t, err)
 	return sel

@@ -91,6 +91,7 @@ func guardedCARouter(t *testing.T, clientCAs *x509.CertPool, installs installCer
 	config := failClosedConfig()
 	config.EnableMTLS = true
 	config.MTLSClientCAPool = clientCAs
+	config.MTLSOperatorTrustDomain = testOperatorTrustDomain
 	guard, err := newRESTScopeGuard(config, nil, installs, logging.DefaultLogger())
 	require.NoError(t, err)
 	router := mux.NewRouter()
@@ -134,10 +135,10 @@ func TestNewRESTScopeGuard_MTLS_InstallerCertificateReachesNoCAIssuance(t *testi
 // reaches CA issuance and renewal.
 func TestNewRESTScopeGuard_MTLS_OperatorCertificateStillReachesCAIssuance(t *testing.T) {
 	t.Parallel()
-	trusted := testutil.GenerateTestTLSBundle(t)
+	trusted := newWebhookIssuer(t, "admin CA")
 	other := testutil.GenerateTestTLSBundle(t)
-	router := guardedCARouter(t, trusted.CAPool, pxeBindingsFor(leafOf(t, other.ClientCert)))
-	chain := []*x509.Certificate{leafOf(t, trusted.ClientCert), trusted.CACert}
+	router := guardedCARouter(t, trusted.pool(), pxeBindingsFor(leafOf(t, other.ClientCert)))
+	chain := []*x509.Certificate{trusted.issueOperator(t, 100), trusted.cert}
 
 	for _, target := range []string{"/api/v1/ca/certificates", "/api/v1/ca/certificates/01/renew"} {
 		code := serveWithChain(router, http.MethodPost, target, chain)
