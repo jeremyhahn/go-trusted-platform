@@ -115,13 +115,13 @@ func (f *fakeProfiles) FindProfileForDevice(context.Context, *entities.Device) (
 
 func TestDeviceRecordsAdapter(t *testing.T) {
 	devices := &fakeDevices{byID: map[uint64]*entities.Device{
-		42: {ID: 42, Serial: "SN-42", Model: "X10", Hostname: "host-05-compute-01", LastHeartbeatAddr: "10.4.2.143:5"},
+		42: {ID: 42, Serial: "SN-42", Model: "X10", Hostname: "host-05-compute-01", LastHeartbeatAddr: "198.51.100.143:5"},
 	}}
 	a := &deviceRecordsAdapter{devices: devices, profiles: &fakeProfiles{profile: &entities.DeviceProfile{TLSServerName: "compute.example.internal"}}}
 	rec, err := a.AddressRecord(context.Background(), " 42 ")
 	require.NoError(t, err)
 	assert.Equal(t, "host-05-compute-01", rec.Hostname)
-	assert.Equal(t, "10.4.2.143:5", rec.HeartbeatAddr)
+	assert.Equal(t, "198.51.100.143:5", rec.HeartbeatAddr)
 	assert.Equal(t, "compute.example.internal", rec.TLSServerName)
 
 	_, err = a.AddressRecord(context.Background(), "not-a-number")
@@ -313,7 +313,7 @@ func TestDeviceRecordsAdapter_ResolvesTheBoundProfile(t *testing.T) {
 	require.NoError(t, err)
 	certPEM := reportingTestEKCertPEM(t)
 	dev := &entities.Device{ID: 970392025956353, Serial: "host-05-compute-01", Model: "SuperMicro X10", EKCert: certPEM}
-	devices := &fakeDevices{byID: map[uint64]*entities.Device{dev.ID: dev, 2: {ID: 2, Serial: "host-01-gw-01", Model: "SuperMicro X10"}}}
+	devices := &fakeDevices{byID: map[uint64]*entities.Device{dev.ID: dev, 2: {ID: 2, Serial: "host-01-edge-01", Model: "SuperMicro X10"}}}
 	require.NoError(t, profiles.Save(ctx, &entities.DeviceProfile{ID: 4631, Name: "host-05", Role: entities.DeviceRoleWorker, TLSServerName: "compute.example.internal"}))
 	a := &deviceRecordsAdapter{devices: devices, profiles: profiles}
 

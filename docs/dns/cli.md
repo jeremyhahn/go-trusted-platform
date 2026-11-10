@@ -1,6 +1,6 @@
 # DNS — CLI
 
-> **Status: NORMATIVE** · Scope: DNS verbs in `platformctl` · Last verified: 2026-10-26
+> **Status: NORMATIVE** · Scope: DNS verbs in `platformctl` · Last verified: 2026-10-27
 > Conflicts with this document are defects. Fix them here first.
 
 ---
