@@ -441,8 +441,8 @@ hostname.
 
 **The CN is used verbatim and never normalized.** A certificate whose CN
 has leading or trailing whitespace is refused (401) rather than trimmed:
-trimming would make a certificate issued for `" gw-01 "` authenticate
-as `gw-01`, which is an aliasing path into another gateway's record —
+trimming would make a certificate issued for `" edge-01 "` authenticate
+as `edge-01`, which is an aliasing path into another gateway's record —
 precisely what an exact binding exists to close. A CN that is only
 whitespace falls under the same rule. gatewayd reads its own certificate
 CN verbatim for the startup check for the matching reason: trimming there
