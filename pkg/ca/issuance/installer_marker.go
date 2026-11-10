@@ -36,8 +36,13 @@ var oidExtKeyUsageClientAuth = asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 3, 2}
 // InstallerMarkerExtension is the extended key usage extension an installer
 // certificate is signed with: critical, carrying id-kp-clientAuth, so TLS
 // client verification still accepts the certificate, and tp-pxeInstaller.
-// Being critical, a relying party that does not know the marker rejects the
-// certificate rather than treating it as an unrestricted client.
+// The critical flag covers the extension as a whole, and every X.509
+// verifier processes extended key usage, so it does not make a relying
+// party that is unaware of tp-pxeInstaller reject the certificate: such a
+// party sees an ordinary client certificate. The installer restriction
+// holds only where the consumer checks the marker itself
+// (HasInstallerMarker); every consumer that admits client certificates of
+// this CA must make that check.
 func InstallerMarkerExtension() (pkix.Extension, error) {
 	value, err := asn1.Marshal([]asn1.ObjectIdentifier{oidExtKeyUsageClientAuth, OIDPXEInstaller})
 	if err != nil {
@@ -48,6 +53,8 @@ func InstallerMarkerExtension() (pkix.Extension, error) {
 
 // HasInstallerMarker reports whether cert's extended key usage carries
 // tp-pxeInstaller. Every caller that classifies or admits an installer uses it.
+// This check, not the extension's critical flag, is what restricts an
+// installer.
 func HasInstallerMarker(cert *x509.Certificate) bool {
 	if cert == nil {
 		return false

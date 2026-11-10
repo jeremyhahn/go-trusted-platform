@@ -126,6 +126,12 @@ extended key usage is refused with 400 / `InvalidArgument` and
 `ErrInstallerExtKeyUsage`, and an `is_ca` request naming it is refused with
 `ErrCAExtKeyUsageUnsupported`. The daemon classifies installers by this marker
 (`issuance.HasInstallerMarker`), not by binding history (`docs/ipxe/api.md`).
+The critical flag does not enforce the marker: it covers the extended key
+usage extension as a whole, which every X.509 verifier processes, so a relying
+party that does not know tp-pxeInstaller accepts an installer certificate as
+an ordinary client certificate. The installer restriction holds only where the
+consumer checks the marker (`issuance.HasInstallerMarker`); every service that
+admits client certificates of this CA must make that check.
 
 Renewal also refuses a CA certificate that carries name constraints (any
 permitted or excluded DNS, IP, email or URI subtree, RFC 5280 §4.2.1.10) or an
