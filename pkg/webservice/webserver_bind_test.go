@@ -47,7 +47,7 @@ func TestWebServerV1_Listener_BindHostPinsTheFamily(t *testing.T) {
 		wantTCP  string
 		wantUDP  string
 	}{
-		"ipv4 literal": {"10.4.2.140", "10.4.2.140:8443", "tcp4", "udp4"},
+		"ipv4 literal": {"198.51.100.140", "198.51.100.140:8443", "tcp4", "udp4"},
 		"ipv6 literal": {"fd00::1", "[fd00::1]:8443", "tcp6", "udp6"},
 		"hostname":     {"cp.platform.internal", "cp.platform.internal:8443", "tcp", "udp"},
 	}
