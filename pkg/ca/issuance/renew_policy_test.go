@@ -61,10 +61,11 @@ func (c *renewCA) IssueCertificateWithProfile(ctx context.Context, req *quicbaas
 	return c.IssueCertificate(ctx, req)
 }
 
-func policyRenewalCA() *renewIssuerCA {
+func policyRenewalCA(t *testing.T) *renewIssuerCA {
+	t.Helper()
 	return &renewIssuerCA{
 		renewCA: newRenewCA(),
-		issuer:  &x509.Certificate{Subject: pkix.Name{CommonName: "Root"}, IsCA: true, BasicConstraintsValid: true, MaxPathLen: -1},
+		issuer:  newCACert(t, "Root", -1, newECKey(t), nil, nil),
 	}
 }
 
@@ -73,7 +74,7 @@ func policyRenewalCA() *renewIssuerCA {
 // replacement CA that validates chains the original prohibited (Codex 8652
 // P1-3). The renewal is refused before anything is revoked.
 func TestRenew_APolicyConstrainedCAIsRefusedBeforeRevocation(t *testing.T) {
-	ca := policyRenewalCA()
+	ca := policyRenewalCA(t)
 	// PolicyConstraints ::= SEQUENCE { requireExplicitPolicy [0] SkipCerts }
 	// with requireExplicitPolicy = 0.
 	requireExplicitPolicyZero := []byte{0x30, 0x03, 0x80, 0x01, 0x00}
@@ -120,7 +121,7 @@ func TestRenew_ACAWithACertificatePolicyExtensionIsRefusedBeforeRevocation(t *te
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			ca := policyRenewalCA()
+			ca := policyRenewalCA(t)
 			existing := encodedCACert(t, withCriticalExtension(tc.oid, tc.value(t)))
 
 			_, err := Renew(context.Background(), ca, existing, RenewOptions{ValidDays: 30})
@@ -137,7 +138,7 @@ func TestRenew_ACAWithACertificatePolicyExtensionIsRefusedBeforeRevocation(t *te
 // A CA carrying none of the policy extensions still renews: the refusal is
 // keyed on the extensions, not on the certificate being a CA.
 func TestRenew_ACAWithoutPolicyExtensionsRenews(t *testing.T) {
-	ca := policyRenewalCA()
+	ca := policyRenewalCA(t)
 	existing := encodedCACert(t, func(*x509.Certificate) {})
 
 	renewed, err := Renew(context.Background(), ca, existing, RenewOptions{ValidDays: 30})
@@ -155,7 +156,7 @@ func TestRenew_ACAWithoutPolicyExtensionsRenews(t *testing.T) {
 // one (Codex 8673 P1-2). The renewal is refused before anything is revoked,
 // rotated or issued, and the refusal names the OID.
 func TestRenew_ACAWithAnUnhandledCriticalExtensionIsRefusedBeforeRevocation(t *testing.T) {
-	ca := policyRenewalCA()
+	ca := policyRenewalCA(t)
 	unknownOID := asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 99999, 7, 1}
 	existing := encodedCACert(t, withCriticalExtension(unknownOID, marshalExtensionValue(t, true)))
 	require.Len(t, existing.UnhandledCriticalExtensions, 1, "the test certificate carries the unknown extension")
