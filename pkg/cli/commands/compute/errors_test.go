@@ -183,25 +183,3 @@ func TestErrInvalidFilter_EmptyFilter(t *testing.T) {
 		t.Error("error message should contain 'invalid filter'")
 	}
 }
-
-func TestErrorTypes_ImplementErrorInterface(t *testing.T) {
-	tests := []struct {
-		name string
-		err  error
-	}{
-		{name: "ErrComputeClientNotInitialized", err: ErrComputeClientNotInitialized{}},
-		{name: "ErrVMOperationFailed", err: ErrVMOperationFailed{Operation: "test", ID: "id", Err: errors.New("inner")}},
-		{name: "ErrVMNotFound", err: ErrVMNotFound{ID: "vm"}},
-		{name: "ErrInvalidVMConfig", err: ErrInvalidVMConfig{Field: "f", Reason: "r"}},
-		{name: "ErrInvalidVMState", err: ErrInvalidVMState{State: "s"}},
-		{name: "ErrInvalidFilter", err: ErrInvalidFilter{Filter: "f"}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.err.Error() == "" {
-				t.Error("Error() should return non-empty string")
-			}
-		})
-	}
-}

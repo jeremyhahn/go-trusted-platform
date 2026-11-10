@@ -416,6 +416,8 @@ func TestMASQUEPlane_Lifecycle(t *testing.T) {
 	}, dev, nil, nil)
 	require.NoError(t, err)
 	ctx := context.Background()
+	assert.True(t, DataPlaneMASQUE.Known(), "MASQUE is offered in every build")
+	assert.Equal(t, DataPlaneMASQUE, plane.Kind())
 
 	var notStarted *ErrDataPlaneNotStarted
 	assert.True(t, errors.As(plane.InstallPeer(ctx, masqueLease("l1", "10.9.0.23/32", pki.clientCert)), &notStarted))
@@ -495,12 +497,6 @@ func TestMASQUEConfig_Validate(t *testing.T) {
 		var unavailable *ErrDataPlaneUnavailable
 		assert.True(t, errors.As(plane.Start(context.Background()), &unavailable))
 	})
-}
-
-func TestMASQUEPlane_KindIsOfferedInEveryBuild(t *testing.T) {
-	assert.True(t, DataPlaneMASQUE.Known())
-	h := newMASQUEHarness(t)
-	assert.Equal(t, DataPlaneMASQUE, h.plane.Kind())
 }
 
 func TestMASQUEPlane_RefusesARequestThatIsNotConnectIP(t *testing.T) {

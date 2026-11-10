@@ -63,9 +63,6 @@ var (
 // when --disk is not given.
 const DefaultPXEDiskName = "pxe-client.qcow2"
 
-// pxeServerReadyTimeout bounds the wait for the PXE server's listeners.
-const pxeServerReadyTimeout = 10 * time.Second
-
 // newTestPXECommand creates the pxe subcommand for PXE boot testing
 func newTestPXECommand(getFlags func() *cli.CommonFlags) *cobra.Command {
 	cmd := &cobra.Command{
@@ -157,7 +154,7 @@ Examples:
 // runTestPXE executes the PXE boot test
 func runTestPXE(commonFlags *cli.CommonFlags, cmd *cobra.Command, args []string) error {
 	// Check for root privileges
-	if os.Geteuid() != 0 {
+	if hostEUID() != 0 {
 		return &MessageError{Msg: "pxe boot test requires root privileges for network setup: " +
 			"please run with sudo: sudo platformctl iso test pxe"}
 	}
@@ -226,7 +223,7 @@ func runTestPXE(commonFlags *cli.CommonFlags, cmd *cobra.Command, args []string)
 	}
 	envConfig.BootEntries = []ipxe.BootEntry{bootEntry}
 
-	env, err := ipxe.NewTestEnv(envConfig, logger)
+	env, err := newPXETestEnv(envConfig, logger)
 	if err != nil {
 		return &WrappedError{Msg: "failed to create PXE test environment", Err: err}
 	}
@@ -466,7 +463,7 @@ func extractISOContents(isoPath, destDir string) error {
 	var lastErr error
 	for _, ex := range extractors {
 		cmd := exec.CommandContext(context.Background(), ex.command, ex.args...)
-		if err := cmd.Run(); err != nil {
+		if err := runHostCommand(cmd); err != nil {
 			lastErr = err
 			continue
 		}
@@ -484,20 +481,20 @@ func extractISOContents(isoPath, destDir string) error {
 // runQEMUPXE runs QEMU with PXE boot mode
 func runQEMUPXE(ctx context.Context, logger *logging.Logger, config *qemu.Config) error {
 	// Create QEMU VM
-	vm, err := qemu.NewVM(config, logger)
+	vm, err := newQEMUVM(config, logger)
 	if err != nil {
 		return &WrappedError{Msg: "failed to create VM", Err: err}
 	}
 
 	// An absent disk is created empty; an existing one is kept (a second
 	// run boots what the first installed).
-	if err := vm.CreateDisk(); err != nil {
+	if err := vmCreateDisk(vm); err != nil {
 		return &WrappedError{Msg: "preparing the client disk", Err: err}
 	}
 
 	// Start VM in PXE boot mode
 	logger.Info("Starting QEMU in PXE boot mode...")
-	if err := vm.Start(ctx, string(qemu.BootModePXE)); err != nil {
+	if err := vmStart(vm, ctx, string(qemu.BootModePXE)); err != nil {
 		return &WrappedError{Msg: "failed to start VM", Err: err}
 	}
 
@@ -505,7 +502,7 @@ func runQEMUPXE(ctx context.Context, logger *logging.Logger, config *qemu.Config
 		// Automated: the milestone in the serial log ends the run.
 		logger.Info("VM started; waiting for the milestone", "expect", pxeExpect, "serial_log", pxeSerialLog)
 		waitErr := harness.WaitForSerial(ctx, pxeSerialLog, pxeExpect)
-		if err := vm.Stop(); err != nil {
+		if err := vmStop(vm); err != nil {
 			logger.Warnf("failed to stop the VM: %v", err)
 		}
 		if waitErr != nil {
@@ -517,7 +514,7 @@ func runQEMUPXE(ctx context.Context, logger *logging.Logger, config *qemu.Config
 
 	// Wait for VM to complete
 	logger.Info("VM started, waiting for PXE boot to complete (press Ctrl+C to exit)...")
-	if err := vm.Wait(); err != nil {
+	if err := vmWait(vm); err != nil {
 		// PXE boot failures are not necessarily fatal
 		// The VM may be waiting for user interaction
 		logger.Warnf("VM execution completed with status: %v", err)

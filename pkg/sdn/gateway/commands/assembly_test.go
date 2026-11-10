@@ -161,16 +161,23 @@ proxy:
 }
 
 func TestLoadServeConfigAbsentSections(t *testing.T) {
+	// platformd's own `secrets:` switchboard shares the file; gatewayd
+	// must not read it as its store address.
+	yaml := []byte(`
+secrets:
+  enabled: true
+  local-kms: true
+`)
 	v := viper.New()
 	v.SetConfigType("yaml")
-	if err := v.ReadConfig(bytes.NewReader([]byte("debug: true\n"))); err != nil {
+	if err := v.ReadConfig(bytes.NewReader(yaml)); err != nil {
 		t.Fatalf("ReadConfig: %v", err)
 	}
 	cfg, err := LoadServeConfig(v)
 	if err != nil {
 		t.Fatalf("LoadServeConfig: %v", err)
 	}
-	if cfg.Gateway != nil || cfg.Proxy != nil || cfg.Trust != nil {
+	if cfg.Gateway != nil || cfg.Proxy != nil || cfg.Trust != nil || cfg.Secrets != nil {
 		t.Fatalf("sections must be nil when absent: %+v", cfg)
 	}
 }
@@ -1025,6 +1032,9 @@ func TestBuildHostRuntimeWithoutProxy(t *testing.T) {
 			if host.Logger == nil {
 				t.Fatal("Logger must be set")
 			}
+			if host.SecretResolver != nil {
+				t.Fatal("no secret-store section must leave every reference failing closed")
+			}
 		})
 	}
 }
@@ -1070,38 +1080,6 @@ secret-store:
 	var sectionErr *ErrConfigSection
 	if !errors.As(err, &sectionErr) || sectionErr.Section != "secret-store" {
 		t.Fatalf("err = %v, want *ErrConfigSection for secret-store", err)
-	}
-}
-
-func TestLoadServeConfigPlatformSecretsSectionIsNotTheStore(t *testing.T) {
-	// platformd's own `secrets:` switchboard shares the file; gatewayd
-	// must not read it as its store address.
-	yaml := []byte(`
-secrets:
-  enabled: true
-  local-kms: true
-`)
-	v := viper.New()
-	v.SetConfigType("yaml")
-	if err := v.ReadConfig(bytes.NewReader(yaml)); err != nil {
-		t.Fatalf("ReadConfig: %v", err)
-	}
-	cfg, err := LoadServeConfig(v)
-	if err != nil {
-		t.Fatalf("LoadServeConfig: %v", err)
-	}
-	if cfg.Secrets != nil {
-		t.Fatalf("platformd's secrets section decoded as the store: %+v", cfg.Secrets)
-	}
-}
-
-func TestBuildHostRuntimeWithoutSecretStoreHasNoResolver(t *testing.T) {
-	host, err := buildHostRuntime(&ServeConfig{}, nil, testLogger())
-	if err != nil {
-		t.Fatalf("buildHostRuntime: %v", err)
-	}
-	if host.SecretResolver != nil {
-		t.Fatal("no secret-store section must leave every reference failing closed")
 	}
 }
 

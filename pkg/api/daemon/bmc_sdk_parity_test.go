@@ -136,7 +136,7 @@ func bmcSDKRequests() map[string]proto.Message {
 			ProfileId: bmcSDKProfile, IsoUrl: "https://images.example/install.iso",
 		},
 		platformv1.BMCService_ReplaceWebCertificate_FullMethodName: &platformv1.BMCReplaceWebCertificateRequest{
-			ProfileId: bmcSDKProfile, CertPem: []byte("-----BEGIN CERTIFICATE-----"), KeyPem: []byte("-----BEGIN EC PRIVATE KEY-----"),
+			ProfileId: bmcSDKProfile, CertPem: []byte("-----BEGIN CERTIFICATE-----"), KeyPem: []byte(genTestKeyPEM()),
 		},
 		platformv1.BMCService_EnrollBMC_FullMethodName: &platformv1.BMCEnrollRequest{
 			ProfileId: bmcSDKProfile, ReplaceCertificate: proto.Bool(true), DanePublish: proto.Bool(false),

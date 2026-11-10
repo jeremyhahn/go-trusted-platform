@@ -133,26 +133,6 @@ func TestRunPowerStatus_TableOutput(t *testing.T) {
 // runSetBootDevice Integration Tests
 // =============================================================================
 
-func TestRunSetBootDevice_Success(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(bootDeviceResponse{
-			ProfileID:  "server-01",
-			Device:     "pxe",
-			Persistent: true,
-		})
-	}))
-	defer server.Close()
-
-	flags := &bmcFlags{serverURL: server.URL, profileID: "server-01"}
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{OutputFormat: cli.OutputFormatJSON}
-	}
-
-	err := runSetBootDevice(flags, "pxe", true, getFlags)
-	require.NoError(t, err)
-}
-
 func TestRunSetBootDevice_TableOutput(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

@@ -103,37 +103,6 @@ func TestServeCommandFlags(t *testing.T) {
 	}
 }
 
-func TestServeCommandNoModesFlag(t *testing.T) {
-	// Explicitly test that --modes is gone
-	flag := serveCmd.Flags().Lookup("modes")
-	if flag != nil {
-		t.Error("--modes flag should have been removed; services are config-driven")
-	}
-}
-
-func TestSentinelErrors(t *testing.T) {
-	tests := []struct {
-		name string
-		err  error
-	}{
-		{"ErrMissingBGPConfig", ErrMissingBGPConfig},
-		{"ErrGatewayStartFailed", ErrGatewayStartFailed},
-		{"ErrGatewayShutdownFailed", ErrGatewayShutdownFailed},
-		{"ErrConfigLoadFailed", ErrConfigLoadFailed},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.err == nil {
-				t.Fatal("error should not be nil")
-			}
-			if tt.err.Error() == "" {
-				t.Error("error message should not be empty")
-			}
-		})
-	}
-}
-
 func TestSentinelErrorsAreDistinct(t *testing.T) {
 	allErrors := []error{
 		ErrMissingBGPConfig,

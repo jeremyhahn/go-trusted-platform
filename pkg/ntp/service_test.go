@@ -301,7 +301,7 @@ func TestApplyRendersEnablesAndRestartsChrony(t *testing.T) {
 	// Simulate the secrets engine having already substituted the kms://
 	// URIs with real PEM material.
 	cfg.Serve.NTS.CertURI = "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n"
-	cfg.Serve.NTS.KeyURI = "-----BEGIN PRIVATE KEY-----\nBBBB\n-----END PRIVATE KEY-----\n"
+	cfg.Serve.NTS.KeyURI = genTestKeyPEM()
 
 	fs := newMemFS()
 	runner := newFakeRunner(map[string]fakeResponse{
@@ -363,7 +363,7 @@ func TestAssertResolvedRefusesAnyLeftoverReference(t *testing.T) {
 // reference; an empty value is missing material.
 func TestAssertResolvedAcceptsMaterialAndRefusesEmpty(t *testing.T) {
 	for _, value := range []string{
-		"-----BEGIN PRIVATE KEY-----\nBBBB\n-----END PRIVATE KEY-----\n",
+		genTestKeyPEM(),
 		"://no-scheme",
 		"1kms://digit-first",
 		"km s://space-in-scheme",
@@ -385,7 +385,7 @@ func TestAssertResolvedAcceptsMaterialAndRefusesEmpty(t *testing.T) {
 func TestApplyRestartsWhenNTSMaterialRotates(t *testing.T) {
 	cfg := controlPlaneConfig()
 	cfg.Serve.NTS.CertURI = "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n"
-	cfg.Serve.NTS.KeyURI = "-----BEGIN PRIVATE KEY-----\nBBBB\n-----END PRIVATE KEY-----\n"
+	cfg.Serve.NTS.KeyURI = genTestKeyPEM()
 
 	fs := newMemFS()
 	runner := newFakeRunner(map[string]fakeResponse{
@@ -423,7 +423,7 @@ func TestApplyRestartsWhenNTSMaterialRotates(t *testing.T) {
 
 	// Renewal rotates the resolved material in place.
 	cfg.Serve.NTS.CertURI = "-----BEGIN CERTIFICATE-----\nCCCC\n-----END CERTIFICATE-----\n"
-	cfg.Serve.NTS.KeyURI = "-----BEGIN PRIVATE KEY-----\nDDDD\n-----END PRIVATE KEY-----\n"
+	cfg.Serve.NTS.KeyURI = genTestKeyPEM()
 	if err := svc.Apply(ctx); err != nil {
 		t.Fatalf("post-rotation Apply() error = %v", err)
 	}
@@ -770,7 +770,7 @@ func TestServiceAccessorsExposeConfiguration(t *testing.T) {
 func TestRotateNTSMaterialDeploysWithoutConfigMutation(t *testing.T) {
 	cfg := controlPlaneConfig()
 	cfg.Serve.NTS.CertURI = "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n"
-	cfg.Serve.NTS.KeyURI = "-----BEGIN PRIVATE KEY-----\nBBBB\n-----END PRIVATE KEY-----\n"
+	cfg.Serve.NTS.KeyURI = genTestKeyPEM()
 
 	fs := newMemFS()
 	runner := newFakeRunner(map[string]fakeResponse{
@@ -785,7 +785,7 @@ func TestRotateNTSMaterialDeploysWithoutConfigMutation(t *testing.T) {
 		t.Fatalf("Apply() error = %v", err)
 	}
 
-	newKey := []byte("-----BEGIN PRIVATE KEY-----\nDDDD\n-----END PRIVATE KEY-----\n")
+	newKey := []byte(genTestKeyPEM())
 	newCert := []byte("-----BEGIN CERTIFICATE-----\nCCCC\n-----END CERTIFICATE-----\n")
 	if err := svc.RotateNTSMaterial(ctx, ntsKeyEnclave(t, newKey), newCert); err != nil {
 		t.Fatalf("RotateNTSMaterial() error = %v", err)
@@ -867,7 +867,7 @@ func TestRotateNTSMaterialDeploysWithoutConfigMutation(t *testing.T) {
 func TestRotateNTSMaterialConcurrency(t *testing.T) {
 	cfg := controlPlaneConfig()
 	cfg.Serve.NTS.CertURI = "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n"
-	cfg.Serve.NTS.KeyURI = "-----BEGIN PRIVATE KEY-----\nBBBB\n-----END PRIVATE KEY-----\n"
+	cfg.Serve.NTS.KeyURI = genTestKeyPEM()
 	svc := newTestService(t, cfg, &fakeController{}, newFakeRunner(map[string]fakeResponse{
 		"default": {Output: ""}, "restart": {Output: ""}, "status": {Output: "started"},
 	}), newMemFS())
@@ -879,7 +879,7 @@ func TestRotateNTSMaterialConcurrency(t *testing.T) {
 		go func(n int) {
 			defer wg.Done()
 			key := memguard.NewMemoryEnclave(
-				[]byte(fmt.Sprintf("-----BEGIN PRIVATE KEY-----\nK%d\n-----END PRIVATE KEY-----\n", n)))
+				[]byte(genTestKeyPEM()))
 			defer key.Destroy()
 			cert := []byte(fmt.Sprintf("-----BEGIN CERTIFICATE-----\nC%d\n-----END CERTIFICATE-----\n", n))
 			_ = svc.RotateNTSMaterial(ctx, key, cert)
@@ -904,8 +904,8 @@ func TestRotateNTSMaterialConcurrency(t *testing.T) {
 // mismatched certificate/key pair (#57 review, rounds 6 and 7).
 func TestNTSMaterialDeployIsAtomic(t *testing.T) {
 	oldCert := "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n"
-	oldKey := "-----BEGIN PRIVATE KEY-----\nBBBB\n-----END PRIVATE KEY-----\n"
-	newKey := []byte("-----BEGIN PRIVATE KEY-----\nDDDD\n-----END PRIVATE KEY-----\n")
+	oldKey := genTestKeyPEM()
+	newKey := []byte(genTestKeyPEM())
 	newCert := []byte("-----BEGIN CERTIFICATE-----\nCCCC\n-----END CERTIFICATE-----\n")
 	currentLink := testPaths().NTSMaterialDir + "/" + ntsCurrentLink
 	fakeRunnerResponses := map[string]fakeResponse{
