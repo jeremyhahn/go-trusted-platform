@@ -123,7 +123,7 @@ func runDownload(ctx context.Context, commonFlags *cli.CommonFlags, flags *downl
 		removeExistingISOFiles(isoConfig)
 	}
 
-	if err := pkgiso.DownloadISO(ctx, isoConfig); err != nil {
+	if err := isoDownload(ctx, isoConfig); err != nil {
 		return &WrappedError{Msg: "failed to download ISO", Err: err}
 	}
 
