@@ -90,9 +90,9 @@ func TestAdmittedVTEPRoutes_ServeTheSDK(t *testing.T) {
 	}}
 	client := sdkGatewayAgainstRoutes(t, svc)
 
-	got, err := client.GetAdmittedVTEP(context.Background(), "gw-01", "2001:db8::10")
+	got, err := client.GetAdmittedVTEP(context.Background(), "edge-01", "2001:db8::10")
 	require.NoError(t, err)
-	require.Equal(t, "gw-01", svc.gatewayID)
+	require.Equal(t, "edge-01", svc.gatewayID)
 	require.Equal(t, "2001:db8::10", svc.vtep)
 	require.Equal(t, "2001:db8::10", got.GetVtep())
 	require.Equal(t, uint64(42), got.GetDeviceId())
