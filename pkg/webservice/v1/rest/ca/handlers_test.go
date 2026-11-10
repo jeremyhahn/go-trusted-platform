@@ -39,6 +39,7 @@ import (
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	xkmsca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1121,9 +1122,14 @@ func TestRevokeCertificate_Success(t *testing.T) {
 			},
 		}
 
+		var captured xkmsca.RevokeOptions
 		mockCA := &mockCertificateAuthority{
 			initialized: true,
 			certStore:   mockCertStore,
+			revokeFn: func(_ context.Context, _ *x509.Certificate, opts xkmsca.RevokeOptions) error {
+				captured = opts
+				return nil
+			},
 		}
 		handlers, writer := newTestHandlers(mockCA)
 
@@ -1140,6 +1146,7 @@ func TestRevokeCertificate_Success(t *testing.T) {
 		assert.Equal(t, http.StatusOK, writer.lastStatus)
 		payload := decodeProtoBody(t, rec)
 		assert.Equal(t, "REVOCATION_REASON_KEY_COMPROMISE", payload["reason"])
+		assert.EqualValues(t, 1, captured.Reason)
 	})
 
 	t.Run("revokes certificate and deletes keys", func(t *testing.T) {
@@ -1173,6 +1180,85 @@ func TestRevokeCertificate_Success(t *testing.T) {
 		assert.Equal(t, http.StatusOK, writer.lastStatus)
 		assert.True(t, capturedDeleteKeys)
 	})
+}
+
+// TestRevokeCertificate_ForwardsReason checks that every revocation reason
+// reaches the CA as its RFC 5280 code.
+func TestRevokeCertificate_ForwardsReason(t *testing.T) {
+	for number, name := range platformv1.RevocationReason_name {
+		t.Run(name, func(t *testing.T) {
+			testCert := createTestCertificate("revoke.example.com")
+			mockCertStore := &mockCertStore{
+				getCertificateFn: func(cn string) (*x509.Certificate, error) {
+					return testCert, nil
+				},
+			}
+
+			revoked := false
+			var captured xkmsca.RevokeOptions
+			mockCA := &mockCertificateAuthority{
+				initialized: true,
+				certStore:   mockCertStore,
+				revokeFn: func(_ context.Context, _ *x509.Certificate, opts xkmsca.RevokeOptions) error {
+					revoked = true
+					captured = opts
+					return nil
+				},
+			}
+			handlers, writer := newTestHandlers(mockCA)
+
+			body := []byte(`{"reason":"` + name + `"}`)
+
+			req := httptest.NewRequest(http.MethodDelete, "/api/v1/ca/certificates/abc123", bytes.NewReader(body))
+			req = mux.SetURLVars(req, map[string]string{"serial": "abc123"})
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+
+			handlers.RevokeCertificate(rec, req)
+
+			assert.Equal(t, http.StatusOK, writer.lastStatus)
+			require.True(t, revoked, "the CA was not asked to revoke")
+			assert.EqualValues(t, number, captured.Reason)
+			payload := decodeProtoBody(t, rec)
+			assert.Equal(t, name, payload["reason"])
+		})
+	}
+}
+
+// TestRevokeCertificate_InvalidReason checks that a reason code RFC 5280 does
+// not define is refused before the CA is asked to revoke.
+func TestRevokeCertificate_InvalidReason(t *testing.T) {
+	for _, body := range []string{`{"reason":7}`, `{"reason":99}`} {
+		t.Run(body, func(t *testing.T) {
+			testCert := createTestCertificate("revoke.example.com")
+			mockCertStore := &mockCertStore{
+				getCertificateFn: func(cn string) (*x509.Certificate, error) {
+					return testCert, nil
+				},
+			}
+
+			revoked := false
+			mockCA := &mockCertificateAuthority{
+				initialized: true,
+				certStore:   mockCertStore,
+				revokeFn: func(_ context.Context, _ *x509.Certificate, _ xkmsca.RevokeOptions) error {
+					revoked = true
+					return nil
+				},
+			}
+			handlers, _ := newTestHandlers(mockCA)
+
+			req := httptest.NewRequest(http.MethodDelete, "/api/v1/ca/certificates/abc123", bytes.NewReader([]byte(body)))
+			req = mux.SetURLVars(req, map[string]string{"serial": "abc123"})
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+
+			handlers.RevokeCertificate(rec, req)
+
+			assert.Equal(t, http.StatusBadRequest, rec.Code)
+			assert.False(t, revoked, "the CA was asked to revoke with an invalid reason")
+		})
+	}
 }
 
 func TestRevokeCertificate_Error(t *testing.T) {
