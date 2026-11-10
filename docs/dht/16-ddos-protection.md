@@ -225,7 +225,7 @@ The gateway mesh consists of 10,000+ geographically distributed gateway nodes th
        |       |       |   |       |       |   |       |       |
        v       v       v   v       v       v   v       v       v
     +----+  +----+  +----+ +----+  +----+  +----+ +----+  +----+  +----+
-    |GW01|  |GW02|  |GW03| |GW04|  |GW05|  |GW06| |GW07|  |GW08|  |GW09|
+    | G1 |  | G2 |  | G3 | | G4 |  | G5 |  | G6 | | G7 |  | G8 |  | G9 |
     +----+  +----+  +----+ +----+  +----+  +----+ +----+  +----+  +----+
 
                         Total: 10,000+ Gateway Nodes

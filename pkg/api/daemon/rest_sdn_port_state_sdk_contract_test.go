@@ -73,14 +73,15 @@ func sdkSDNAgainstRoutes(t *testing.T) (*ConfigurableMockOVSClient, *sdksdn.Clie
 		portType: platformv1.PortType_PORT_TYPE_INTERNAL, createdAt: time.Now(),
 	}
 	rest := newTestRESTServerForPhase35(t)
-	rest.SetSDNService(svc)
+	require.NoError(t, rest.SetSDNService(svc, sdnRESTGuard()))
 	rest.router.HandleFunc("/health/live", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	server := httptest.NewTLSServer(rest.router)
 	t.Cleanup(server.Close)
 
 	// The SDK refuses plaintext REST; trust the test server's certificate.
 	trustServer := platform.WithTLSConfig(server.Client().Transport.(*http.Transport).TLSClientConfig.Clone())
-	adapter, err := sdkrest.Connect(context.Background(), platform.NewOptions(platform.WithRESTAddr(server.URL), trustServer))
+	adapter, err := sdkrest.Connect(context.Background(), platform.NewOptions(platform.WithRESTAddr(server.URL), trustServer,
+		platform.WithBearerToken("sdn-operator")))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = adapter.Close() })
 	return mock, sdksdn.NewClientFromGRPC(platformv1.NewSDNServiceClient(adapter.Connection()))

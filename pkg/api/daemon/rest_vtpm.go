@@ -19,14 +19,20 @@ import (
 )
 
 // SetVTPMService sets the vTPM service for REST handlers.
-// This allows vTPM bundle management operations via REST API.
-func (s *RESTServer) SetVTPMService(svc vtpm.VTPMService) {
+// This allows vTPM bundle management operations via REST API. Each route
+// runs behind guard and needs the scope the gRPC catalog gives its rpc; a
+// nil guard is refused with ErrVTPMRESTUnavailable.
+func (s *RESTServer) SetVTPMService(svc vtpm.VTPMService, guard *rest.ScopeGuard) error {
+	if guard == nil {
+		return ErrVTPMRESTUnavailable{Reason: "no REST scope guard"}
+	}
 	s.vtpmService = svc
 	if svc != nil {
-		// Create vTPM REST handlers and register routes on the existing router.
-		// The vtpm.VTPMService interface satisfies rest.VTPMServiceInterface.
+		// Create vTPM REST handlers and register routes behind guard. The
+		// vtpm.VTPMService interface satisfies rest.VTPMServiceInterface.
 		vtpmHandlers := rest.NewVTPMHandlers(svc, s.logger)
-		vtpmHandlers.RegisterRoutes(s.router)
+		vtpmHandlers.RegisterRoutes(s.catalogGuardedRoot(guard))
 		s.logger.Info("vTPM REST routes registered")
 	}
+	return nil
 }

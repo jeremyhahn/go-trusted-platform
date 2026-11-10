@@ -1,10 +1,10 @@
 # =============================================================================
-# Standalone Control Plane — tgw-01 on VLAN 405 (example)
+# Standalone Control Plane — edge-01 on VLAN 405 (example)
 #
 # platformd standalone on an existing host that already runs the network:
-# tgw-01, the VLAN 405 boot node, serves as the control plane for the rack
+# edge-01, the VLAN 405 boot node, serves as the control plane for the rack
 # Raspberry Pi workers (bond0.405, 192.0.2.1) until the CM4 control plane is
-# proven (configs/bootstrap/tgw01-vlan405.example.yaml).
+# proven (configs/bootstrap/edge-01-vlan405.example.yaml).
 #
 # It is the single-node default (default.yaml) made PLAN-FREE: platformd
 # configures no host network on this box. The host's interfaces, VLANs,
@@ -98,7 +98,7 @@ disk:
       #
       # See: docs/installer/factory-reset.md
       #
-      # Off here: tgw-01 is an existing host nothing installs, and its TPM
+      # Off here: edge-01 is an existing host nothing installs, and its TPM
       # is not this platform's to clear.
       factory-reset-on-firstboot: false
 
@@ -107,7 +107,7 @@ os:
   os: alpine
   version: "3.22.2"
   architecture: x86_64
-  hostname: tgw-01
+  hostname: edge-01
   packages:
     - bash
     - vim
@@ -151,7 +151,7 @@ os:
 #
 # Plan-free: only `dns` is set. platformd configures no interface, bridge,
 # bond, VLAN, VRF or forwarding on this host; bond0.405 (192.0.2.1/24) and
-# everything else on tgw-01 belong to the gateway configuration that
+# everything else on edge-01 belong to the gateway configuration that
 # already runs it. A role, platform-vrf, bond VLAN or VLAN zone here would
 # need a reference-network plan, which sdn.enabled: false does not build.
 network:
@@ -208,7 +208,7 @@ fido2:
 dns:
   # The address the internal zone's ${PRIVATE_IPv4} records (cp, ns1, the
   # apex, this host) and every registered webservice record carry. Left
-  # unset it is the host's default-route address, which on tgw-01 is the
+  # unset it is the host's default-route address, which on edge-01 is the
   # uplink, not the VLAN the Pis are on.
   private-ipv4: 192.0.2.1
   resolver:
@@ -476,7 +476,7 @@ trust:
 # =============================================================================
 
 bmc:
-  address: 10.4.2.10  # management (VLAN 402); .1 is the gateway VIP
+  address: 198.51.100.138  # management (VLAN 402); .129 is the gateway VIP
   port: 623
   username: admin
   password: "kms://bmc/password?ensure=true&len=16&enc=base64"
