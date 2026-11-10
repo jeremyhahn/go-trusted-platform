@@ -41,7 +41,7 @@ func gatewaydSPIFFEID(trustDomain string) *url.URL {
 func (f *installerScopeFixture) issueGatewayd(t *testing.T, serial int64) *x509.Certificate {
 	t.Helper()
 	return f.issuerA.issueClient(t, serial,
-		pkix.Name{CommonName: "gw-01", Organization: []string{app.SystemTenantID}},
+		pkix.Name{CommonName: "service-client", Organization: []string{app.SystemTenantID}},
 		[]*url.URL{gatewaydSPIFFEID(testOperatorTrustDomain)})
 }
 
@@ -125,7 +125,7 @@ func TestMTLSServicePrincipal_InstallerIsStillRefusedProxySync(t *testing.T) {
 func TestMTLSServicePrincipal_Classification(t *testing.T) {
 	f := newInstallerScopeFixture(t)
 	td := testOperatorTrustDomain
-	system := pkix.Name{CommonName: "gw-01", Organization: []string{app.SystemTenantID}}
+	system := pkix.Name{CommonName: "service-client", Organization: []string{app.SystemTenantID}}
 	spiffeID := func(raw string) *url.URL {
 		uri, err := url.Parse(raw)
 		require.NoError(t, err)
@@ -142,15 +142,15 @@ func TestMTLSServicePrincipal_Classification(t *testing.T) {
 		{"gatewayd, SPIFFE in caps", system, []*url.URL{spiffeID("SPIFFE://platform.test/tenant/system/svc/gatewayd")}, td, true},
 		{"unknown service", system, []*url.URL{spiffeID("spiffe://platform.test/tenant/system/svc/other")}, td, false},
 		{"other trust domain", system, []*url.URL{gatewaydSPIFFEID("other.test")}, td, false},
-		{"tenant organization", pkix.Name{CommonName: "gw-01", Organization: []string{"acme"}}, []*url.URL{gatewaydSPIFFEID(td)}, td, false},
-		{"two organizations", pkix.Name{CommonName: "gw-01", Organization: []string{app.SystemTenantID, "acme"}}, []*url.URL{gatewaydSPIFFEID(td)}, td, false},
+		{"tenant organization", pkix.Name{CommonName: "service-client", Organization: []string{"acme"}}, []*url.URL{gatewaydSPIFFEID(td)}, td, false},
+		{"two organizations", pkix.Name{CommonName: "service-client", Organization: []string{app.SystemTenantID, "acme"}}, []*url.URL{gatewaydSPIFFEID(td)}, td, false},
 		{"no URI SAN", system, nil, td, false},
 		{"query", system, []*url.URL{spiffeID("spiffe://platform.test/tenant/system/svc/gatewayd?x=1")}, td, false},
 		{"nested name", system, []*url.URL{spiffeID("spiffe://platform.test/tenant/system/svc/gatewayd/x")}, td, false},
 		{"empty trust domain", system, []*url.URL{gatewaydSPIFFEID(td)}, "", false},
 		{"no tenant segment", system, []*url.URL{spiffeID("spiffe://platform.test/service/gatewayd")}, td, false},
 		{"other tenant's service", system, []*url.URL{spiffeID("spiffe://platform.test/tenant/acme/svc/gatewayd")}, td, false},
-		{"other tenant's service, tenant organization", pkix.Name{CommonName: "gw-01", Organization: []string{"acme"}}, []*url.URL{spiffeID("spiffe://platform.test/tenant/acme/svc/gatewayd")}, td, false},
+		{"other tenant's service, tenant organization", pkix.Name{CommonName: "service-client", Organization: []string{"acme"}}, []*url.URL{spiffeID("spiffe://platform.test/tenant/acme/svc/gatewayd")}, td, false},
 		{"empty name", system, []*url.URL{spiffeID("spiffe://platform.test/tenant/system/svc/")}, td, false},
 	}
 	for i, row := range rows {

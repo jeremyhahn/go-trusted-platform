@@ -75,7 +75,7 @@ func issueGatewaydFromPlatformCA(t *testing.T, trustDomain string) (*x509.Certif
 	require.NotNil(t, root)
 
 	csrPEM := issuancetest.CSRFrom(t, newECKey(t), &x509.CertificateRequest{
-		Subject: pkix.Name{CommonName: "gw-01", Organization: []string{app.SystemTenantID}},
+		Subject: pkix.Name{CommonName: "service-client", Organization: []string{app.SystemTenantID}},
 	})
 	leaf, err := root.SignCSR(ctx, csrPEM, &xkmsca.SignOptions{
 		ValidityDays:      1,
