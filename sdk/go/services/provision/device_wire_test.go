@@ -23,10 +23,10 @@ import (
 func TestDecodeProfileJSON(t *testing.T) {
 	profile, err := DecodeProfileJSON([]byte(`{
 		"id": "9007199254740993",
-		"name": "gw-01",
+		"name": "edge-01",
 		"role": "gateway",
 		"ek_serial": "EK-1",
-		"config": {"hostname": "gw-01"},
+		"config": {"hostname": "edge-01"},
 		"created_at": "0001-01-01T00:00:00Z",
 		"domain_only": true
 	}`))
@@ -39,7 +39,7 @@ func TestDecodeProfileJSON(t *testing.T) {
 	if profile.GetRole() != platformv1.DeviceRole_DEVICE_ROLE_GATEWAY {
 		t.Errorf("role = %v, want gateway", profile.GetRole())
 	}
-	if profile.GetName() != "gw-01" || profile.GetEkSerial() != "EK-1" {
+	if profile.GetName() != "edge-01" || profile.GetEkSerial() != "EK-1" {
 		t.Errorf("profile = %v", profile)
 	}
 }

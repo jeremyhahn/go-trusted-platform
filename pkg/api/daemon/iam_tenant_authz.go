@@ -42,10 +42,24 @@ func callerTenant(ctx context.Context) (string, bool) {
 // tenant-bound caller from another tenant.
 func authorizeIAMTenant(ctx context.Context, requested string) error {
 	caller, bound := callerTenant(ctx)
-	if !bound || caller == requested {
+	if !bound {
 		return nil
 	}
-	return status.Error(codes.PermissionDenied, ErrIAMTenantForbidden{Requested: requested}.Error())
+	if err := iamTenantDecision(caller, requested); err != nil {
+		return status.Error(codes.PermissionDenied, err.Error())
+	}
+	return nil
+}
+
+// iamTenantDecision is the own-tenant rule every transport applies to a
+// bound caller: the request may name only the caller's tenant. gRPC, QUIC
+// and MCP reach it through authorizeIAMTenant; REST calls it directly with
+// the tenant of the authenticated caller.
+func iamTenantDecision(caller, requested string) error {
+	if caller == requested {
+		return nil
+	}
+	return ErrIAMTenantForbidden{Requested: requested}
 }
 
 // authorizeSystemCaller refuses a cross-tenant request — creating or listing
@@ -59,8 +73,14 @@ func authorizeSystemCaller(ctx context.Context, systemTenantID, method string) e
 	if !bound {
 		return nil
 	}
-	if err := tenant.AuthorizeCrossTenant(tenant.IsSystemTenant(systemTenantID, caller), method); err != nil {
+	if err := systemCallerDecision(systemTenantID, caller, method); err != nil {
 		return status.Error(codes.PermissionDenied, err.Error())
 	}
 	return nil
+}
+
+// systemCallerDecision is the system-tenant rule every transport applies to
+// a bound caller: only the system tenant may run a cross-tenant method.
+func systemCallerDecision(systemTenantID, caller, method string) error {
+	return tenant.AuthorizeCrossTenant(tenant.IsSystemTenant(systemTenantID, caller), method)
 }
