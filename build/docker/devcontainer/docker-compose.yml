@@ -40,7 +40,7 @@ services:
       - ../../../:/workspace:cached
 
       # Mount sibling projects for local go.mod replace directives
-      # These match the paths in go.mod: replace ... => /sources/go-*
+      # Sibling module checkouts, mounted under /sources for a local go.work.
       - ../../../../go-trusted-ca:/sources/go-trusted-ca:cached
       - ../../../../go-quicbaas:/sources/go-quicbaas:cached
       - ../../../../go-xkms:/sources/go-xkms:cached
