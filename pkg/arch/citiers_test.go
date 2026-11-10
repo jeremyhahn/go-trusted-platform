@@ -145,6 +145,19 @@ const (
 	// (m1355 / DS-3878, DS-4613; gated since #1411, ruling 297).
 	mainOnlyIf = "${{ github.event_name != 'pull_request' }}"
 
+	// mainOnlyGuardedIf is the `if:` of a main-tier job on the bigdisk pool:
+	// mainOnlyIf and the schedule guard (m2475).
+	mainOnlyGuardedIf = "${{ github.event_name != 'pull_request' && (" + scheduleGuardExpr + ") }}"
+
+	// bigdiskRoute is the `runs-on:` that sends a push to main and a pull
+	// request from this repository to the bigdisk pool, and every other
+	// event (a fork's pull request, the schedule, workflow_dispatch) to
+	// ubuntu-latest. The changes and schedule-guard jobs cannot carry the
+	// schedule guard: schedule-guard cannot need itself, and changes feeds
+	// the docs tier. On exactly this expression they need none, because a
+	// schedule run never reaches the pool (m2475).
+	bigdiskRoute = `${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}`
+
 	// ciFullTierEnv is the workflow-level env the steps and the gate read.
 	ciFullTierEnv      = "CI_FULL_TIER"
 	ciFullTierEnvValue = "${{ " + fullTierExpr + " }}"
@@ -196,6 +209,7 @@ var tierByIf = map[string]string{
 	prTierGuardedIf:   tierPR,
 	docsOnlyGuardedIf: tierDocs,
 	fullTierGuardedIf: tierFull,
+	mainOnlyGuardedIf: tierMain,
 	nightlyGuardedIf:  tierNightly,
 }
 
@@ -204,6 +218,7 @@ var scheduleGuardedIf = map[string]bool{
 	prTierGuardedIf:   true,
 	docsOnlyGuardedIf: true,
 	fullTierGuardedIf: true,
+	mainOnlyGuardedIf: true,
 	nightlyGuardedIf:  true,
 }
 
@@ -551,7 +566,7 @@ func ciTierFindings(wf ciWorkflow) []error {
 		if !known {
 			findings = append(findings, CITierError{
 				File: wf.File, Line: j.Line, Job: j.ID,
-				Reason: fmt.Sprintf("if: %q is no tier: a PR-tier job has exactly %q, a docs-tier job exactly %q, a full-tier job exactly %q, a nightly-tier job exactly %q, a main-tier job exactly %q", j.If, prTierIf, docsOnlyIf, fullTierIf, nightlyIf, mainOnlyIf),
+				Reason: fmt.Sprintf("if: %q is no tier: a PR-tier job has exactly %q, a docs-tier job exactly %q, a full-tier job exactly %q, a nightly-tier job exactly %q, a main-tier job exactly %q, or on bigdisk %q", j.If, prTierIf, docsOnlyIf, fullTierIf, nightlyIf, mainOnlyIf, mainOnlyGuardedIf),
 			})
 			continue
 		}
@@ -572,7 +587,10 @@ func ciTierFindings(wf ciWorkflow) []error {
 		tier, known := tiers[j.ID]
 		c, gated := checked[j.ID]
 		guarded := scheduleGuardedIf[j.If]
-		if strings.Contains(j.RunsOn, bigdiskLabel) && !guarded {
+		// changes and schedule-guard cannot carry the guard; on bigdiskRoute,
+		// and only on it, a schedule run never reaches the pool.
+		routed := (j.ID == changesJobID || j.ID == scheduleGuardJobID) && j.RunsOn == bigdiskRoute
+		if strings.Contains(j.RunsOn, bigdiskLabel) && !guarded && !routed {
 			fail(j.Line, "a bigdisk job's if: carries the schedule guard `("+scheduleGuardExpr+")`: without it a schedule run fills the runner while main is busy")
 		}
 		if guarded && !slices.Contains(j.Needs, scheduleGuardJobID) {
@@ -967,6 +985,36 @@ func TestCITierFindingsAcceptAConsistentWorkflow(t *testing.T) {
 	require.Empty(t, concurrencyFindings(wf))
 }
 
+// The fixture's fips, changes and schedule-guard jobs, as the bigdisk rows
+// replace them.
+const (
+	fixtureFipsJob    = "  fips:\n    if: " + mainOnlyIf + "\n"
+	fixtureChangesJob = "  changes:\n    if: " + prTierIf + "\n    runs-on: x\n"
+	fixtureGuardJob   = "  schedule-guard:\n    if: " + prTierIf + "\n    runs-on: x\n"
+)
+
+// A main-tier job on the bigdisk route carries the guarded main `if:` and
+// needs schedule-guard; changes and schedule-guard ride the same route with
+// no guard, because a schedule run never reaches the pool on it (m2475).
+func TestCITierFindingsAcceptTheBigdiskRoute(t *testing.T) {
+	cases := []struct {
+		name string
+		old  string
+		new  string
+	}{
+		{"a guarded main-tier job", fixtureFipsJob, "  fips:\n    needs: schedule-guard\n    if: " + mainOnlyGuardedIf + "\n    runs-on: " + bigdiskRoute + "\n"},
+		{"the changes job", fixtureChangesJob, "  changes:\n    if: " + prTierIf + "\n    runs-on: " + bigdiskRoute + "\n"},
+		{"the schedule guard", fixtureGuardJob, "  schedule-guard:\n    if: " + prTierIf + "\n    runs-on: " + bigdiskRoute + "\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mutated := strings.Replace(fixtureTieredCI, tc.old, tc.new, 1)
+			require.NotEqual(t, fixtureTieredCI, mutated, "the mutation did not apply")
+			require.Empty(t, ciTierFindings(parseFixture(t, mutated)))
+		})
+	}
+}
+
 func TestCITierFindingsRejectEachInconsistency(t *testing.T) {
 	cases := []struct {
 		name string
@@ -1032,6 +1080,11 @@ func TestCITierFindingsRejectEachInconsistency(t *testing.T) {
 		{"a nightly-tier job missing from the gate's needs", `fips, soak,`, `fips,`, "soak: not in ci-gate's needs"},
 		{"a gate without the nightly flag", "          NIGHTLY: " + nightlyEnvValue + "\n", "", "$NIGHTLY is \"\""},
 		{"a nightly flag that reads another event", "NIGHTLY: " + nightlyEnvValue, "NIGHTLY: ${{ github.event_name == 'push' }}", "$NIGHTLY is"},
+		{"a main-tier job routed to bigdisk without the schedule guard", fixtureFipsJob, "  fips:\n    if: " + mainOnlyIf + "\n    runs-on: " + bigdiskRoute + "\n", "fips: a bigdisk job's if: carries the schedule guard"},
+		{"a guarded main-tier job that does not need the schedule guard", fixtureFipsJob, "  fips:\n    if: " + mainOnlyGuardedIf + "\n    runs-on: " + bigdiskRoute + "\n", "fips: its if: reads the schedule guard, so it needs schedule-guard"},
+		{"a changes job on a literal bigdisk runner", fixtureChangesJob, "  changes:\n    if: " + prTierIf + "\n    runs-on: bigdisk\n", "changes: a bigdisk job's if: carries the schedule guard"},
+		{"a schedule guard on a bigdisk label list", fixtureGuardJob, "  schedule-guard:\n    if: " + prTierIf + "\n    runs-on: [self-hosted, bigdisk]\n", "schedule-guard: a bigdisk job's if: carries the schedule guard"},
+		{"another unguarded job on the bigdisk route", "  lint:\n    if: " + prTierIf + "\n    runs-on: x\n", "  lint:\n    if: " + prTierIf + "\n    runs-on: " + bigdiskRoute + "\n", "lint: a bigdisk job's if: carries the schedule guard"},
 		{"a full-tier job needing a nightly-tier job", "    needs: lint\n  fips:", "    needs: [lint, soak]\n  fips:", "a full-tier job needs nightly-tier job soak"},
 	}
 	for _, tc := range cases {

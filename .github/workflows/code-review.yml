@@ -540,17 +540,27 @@ jobs:
       # as before (continue-on-error: a failure here leaves skip unset). Every
       # later step of the job tests steps.scope.outputs.skip, so the job ends
       # green without a review. No file name is printed.
+      # InfoSec Y-1: the skip is only for a PR whose head repository is this
+      # repository. A fork's PR (or one whose head repository is gone) is
+      # reviewed as usual, whatever it touches, and the file list is not read.
       - name: Is every changed file under .github/?
         id: scope
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           FILES_ROUTE: repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
         run: |
           set +e
           set -uo pipefail
           msg="CI/SDLC-only change: no review (owner 2026-11-10)"
           skip=false ok=false n=0
+          if [ -z "$HEAD_REPO" ] || [ "$HEAD_REPO" != "$BASE_REPO" ]; then
+            echo "review as usual: the head repository is not this repository (InfoSec Y-1)"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           list=$(mktemp) || { echo "skip=false" >> "$GITHUB_OUTPUT"; exit 0; }
           # One line per entry, filename<TAB>previous_filename; @tsv escapes a
           # tab or a newline inside a name, so an entry is one line.
@@ -2060,17 +2070,27 @@ jobs:
       # as before (continue-on-error: a failure here leaves skip unset). Every
       # later step of the job tests steps.scope.outputs.skip, so the job ends
       # green without a review. No file name is printed.
+      # InfoSec Y-1: the skip is only for a PR whose head repository is this
+      # repository. A fork's PR (or one whose head repository is gone) is
+      # reviewed as usual, whatever it touches, and the file list is not read.
       - name: Is every changed file under .github/?
         id: scope
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           FILES_ROUTE: repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
         run: |
           set +e
           set -uo pipefail
           msg="CI/SDLC-only change: no review (owner 2026-11-10)"
           skip=false ok=false n=0
+          if [ -z "$HEAD_REPO" ] || [ "$HEAD_REPO" != "$BASE_REPO" ]; then
+            echo "review as usual: the head repository is not this repository (InfoSec Y-1)"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           list=$(mktemp) || { echo "skip=false" >> "$GITHUB_OUTPUT"; exit 0; }
           # One line per entry, filename<TAB>previous_filename; @tsv escapes a
           # tab or a newline inside a name, so an entry is one line.
