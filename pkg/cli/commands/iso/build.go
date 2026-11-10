@@ -104,14 +104,13 @@ func runBuild(ctx context.Context, commonFlags *cli.CommonFlags, flags *buildFla
 		return ErrVolumeLabelTooLong{Label: flags.volumeID, MaxLength: maxVolumeLabelLength}
 	}
 
-	builder := pkgiso.NewBuilder(newVerbLogger(flags.debug))
 	isoConfig := &pkgiso.ISOConfig{
 		ISODir:    flags.sourceDir,
 		OutputISO: flags.output,
 		VolumeID:  flags.volumeID,
 		Debug:     flags.debug,
 	}
-	if err := builder.BuildISO(ctx, isoConfig); err != nil {
+	if err := isoBuild(ctx, newVerbLogger(flags.debug), isoConfig); err != nil {
 		return ErrBuildFailed{Reason: err.Error()}
 	}
 

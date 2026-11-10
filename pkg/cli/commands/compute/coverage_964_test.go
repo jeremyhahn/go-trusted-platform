@@ -215,9 +215,7 @@ func TestRunCreate_Embedded_Errors(t *testing.T) {
 			}
 		})
 	}
-}
 
-func TestRunCreate_Embedded_InvalidOutputFormat(t *testing.T) {
 	flags, _ := embeddedFlags(&fakeComputeServer{}, cli.OutputFormat("xml"))
 	err := runCreate(flags, &createOptions{name: "web", firmware: "bios", bootDevice: "disk"})
 	assertInvalidOutputFormat(t, err)

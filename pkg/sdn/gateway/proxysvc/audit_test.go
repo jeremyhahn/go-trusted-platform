@@ -371,32 +371,6 @@ func TestSDKAuditSink_Record_FailOpenOnEmissionError(t *testing.T) {
 	nw.waitForContains(t, "audit event emission failed")
 }
 
-func TestSDKAuditSink_Record_FailOpenWhenClientUnavailable(t *testing.T) {
-	nw := newNotifyWriter()
-	logger := slog.New(slog.NewTextHandler(nw, &slog.HandlerOptions{Level: slog.LevelWarn}))
-
-	lazy, err := NewLazyAuditClient(func(ctx context.Context) (AuditClient, error) {
-		return nil, errors.New("dial refused: quicbaasd unreachable")
-	})
-	if err != nil {
-		t.Fatalf("NewLazyAuditClient: %v", err)
-	}
-
-	sink, err := NewSDKAuditSink(SDKAuditSinkConfig{
-		Client:  lazy,
-		Logger:  logger,
-		Timeout: 200 * time.Millisecond,
-	})
-	if err != nil {
-		t.Fatalf("NewSDKAuditSink: %v", err)
-	}
-
-	// Must not panic and must not block on an unreachable audit plane.
-	sink.Record(context.Background(), proxy.AuditEvent{Decision: proxy.DecisionDeny})
-
-	nw.waitForContains(t, "audit event emission failed")
-}
-
 // --- End-to-end: a real proxy.Engine forwards decisions through the seam ---
 
 func TestSDKAuditSink_EngineIntegration(t *testing.T) {

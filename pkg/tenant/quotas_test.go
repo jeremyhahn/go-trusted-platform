@@ -877,37 +877,3 @@ func TestStorageQuota_LargeValues(t *testing.T) {
 		t.Error("Should not have capacity for 2 GB")
 	}
 }
-
-func TestQuotaSummary_Types(t *testing.T) {
-	// Verify all summary types are properly structured
-	summary := QuotaSummary{}
-
-	// ComputeQuotaSummary
-	summary.Compute.VMsUsed = 1
-	summary.Compute.VMsTotal = 10
-	summary.Compute.ContainersUsed = 5
-	summary.Compute.ContainersTotal = 50
-	summary.Compute.VCPUsUsed = 4
-	summary.Compute.VCPUsTotal = 32
-	summary.Compute.MemoryUsedMB = 1024
-	summary.Compute.MemoryTotalMB = 65536
-	summary.Compute.DiskUsedGB = 100
-	summary.Compute.DiskTotalGB = 1024
-
-	// NetworkQuotaSummary
-	summary.Network.BridgesUsed = 1
-	summary.Network.BridgesTotal = 5
-	summary.Network.PortsUsed = 10
-	summary.Network.PortsTotal = 100
-
-	// StorageQuotaSummary
-	summary.Storage.VolumesUsedGB = 512
-	summary.Storage.VolumesTotalGB = 2048
-	summary.Storage.SnapshotsUsed = 10
-	summary.Storage.SnapshotsTotal = 100
-
-	// Verify types compile correctly
-	if summary.Compute.VMsUsed != 1 {
-		t.Error("QuotaSummary.Compute.VMsUsed not set correctly")
-	}
-}

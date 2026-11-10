@@ -87,6 +87,10 @@ func TestNewInspectCommand(t *testing.T) {
 	if cmd.Short != "Inspect an image manifest" {
 		t.Errorf("unexpected Short description: %q", cmd.Short)
 	}
+
+	if cmd.RunE == nil {
+		t.Error("RunE should be set")
+	}
 }
 
 func TestNewInspectCommand_HasAliases(t *testing.T) {
@@ -158,248 +162,22 @@ func TestNewInspectCommand_HasFlags(t *testing.T) {
 
 	cmd := NewInspectCommand(getFlags)
 
-	tests := []struct {
-		name      string
-		shorthand string
-	}{
-		{name: "layers", shorthand: ""},
-		{name: "signature", shorthand: ""},
-		{name: "encryption", shorthand: ""},
-		{name: "raw", shorthand: ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			flag := cmd.Flags().Lookup(tt.name)
-			if flag == nil {
-				t.Errorf("expected flag %q to exist", tt.name)
-				return
-			}
-			if tt.shorthand != "" && flag.Shorthand != tt.shorthand {
-				t.Errorf("expected shorthand %q for flag %q, got %q",
-					tt.shorthand, tt.name, flag.Shorthand)
-			}
-		})
-	}
-}
-
-func TestImageManifest_Fields(t *testing.T) {
-	manifest := ImageManifest{
-		Reference: "myrepo/myimage:v1.0",
-		Digest:    "sha256:abc123",
-		MediaType: "application/vnd.oci.image.manifest.v1+json",
-		SchemaVer: 2,
-		Config: &ManifestConfig{
-			Digest:    "sha256:config123",
-			Size:      1024,
-			MediaType: "application/vnd.oci.image.config.v1+json",
-		},
-		Layers: []*LayerInfo{
-			{
-				Digest:    "sha256:layer1",
-				Size:      10240,
-				MediaType: "application/vnd.oci.image.layer.v1.tar+gzip",
-				Encrypted: false,
-			},
-		},
-		Annotations: map[string]string{"key": "value"},
-		CreatedAt:   1234567890,
-		PushedAt:    1234567900,
-		PushedBy:    "user@example.com",
-	}
-
-	if manifest.Reference != "myrepo/myimage:v1.0" {
-		t.Errorf("unexpected Reference: %q", manifest.Reference)
-	}
-
-	if manifest.Digest != "sha256:abc123" {
-		t.Errorf("unexpected Digest: %q", manifest.Digest)
-	}
-
-	if manifest.MediaType != "application/vnd.oci.image.manifest.v1+json" {
-		t.Errorf("unexpected MediaType: %q", manifest.MediaType)
-	}
-
-	if manifest.SchemaVer != 2 {
-		t.Errorf("unexpected SchemaVer: %d", manifest.SchemaVer)
-	}
-
-	if manifest.Config == nil {
-		t.Fatal("Config should not be nil")
-	}
-
-	if len(manifest.Layers) != 1 {
-		t.Errorf("expected 1 layer, got %d", len(manifest.Layers))
-	}
-
-	if manifest.PushedBy != "user@example.com" {
-		t.Errorf("unexpected PushedBy: %q", manifest.PushedBy)
-	}
-}
-
-func TestManifestConfig_Fields(t *testing.T) {
-	config := ManifestConfig{
-		Digest:    "sha256:config123",
-		Size:      2048,
-		MediaType: "application/vnd.oci.image.config.v1+json",
-	}
-
-	if config.Digest != "sha256:config123" {
-		t.Errorf("unexpected Digest: %q", config.Digest)
-	}
-
-	if config.Size != 2048 {
-		t.Errorf("unexpected Size: %d", config.Size)
-	}
-
-	if config.MediaType != "application/vnd.oci.image.config.v1+json" {
-		t.Errorf("unexpected MediaType: %q", config.MediaType)
-	}
-}
-
-func TestLayerInfo_Fields(t *testing.T) {
-	layer := LayerInfo{
-		Digest:    "sha256:layer123",
-		Size:      10240,
-		MediaType: "application/vnd.oci.image.layer.v1.tar+gzip",
-		Encrypted: true,
-	}
-
-	if layer.Digest != "sha256:layer123" {
-		t.Errorf("unexpected Digest: %q", layer.Digest)
-	}
-
-	if layer.Size != 10240 {
-		t.Errorf("unexpected Size: %d", layer.Size)
-	}
-
-	if layer.MediaType != "application/vnd.oci.image.layer.v1.tar+gzip" {
-		t.Errorf("unexpected MediaType: %q", layer.MediaType)
-	}
-
-	if !layer.Encrypted {
-		t.Error("expected Encrypted to be true")
-	}
-}
-
-func TestSignatureInfo_Fields(t *testing.T) {
-	sig := SignatureInfo{
-		Signed:      true,
-		SignedBy:    "user@example.com",
-		KeyID:       "key-123",
-		Algorithm:   "ECDSA-P256",
-		ValidatedAt: 1234567890,
-		Valid:       true,
-	}
-
-	if !sig.Signed {
-		t.Error("expected Signed to be true")
-	}
-
-	if sig.SignedBy != "user@example.com" {
-		t.Errorf("unexpected SignedBy: %q", sig.SignedBy)
-	}
-
-	if sig.KeyID != "key-123" {
-		t.Errorf("unexpected KeyID: %q", sig.KeyID)
-	}
-
-	if sig.Algorithm != "ECDSA-P256" {
-		t.Errorf("unexpected Algorithm: %q", sig.Algorithm)
-	}
-
-	if sig.ValidatedAt != 1234567890 {
-		t.Errorf("unexpected ValidatedAt: %d", sig.ValidatedAt)
-	}
-
-	if !sig.Valid {
-		t.Error("expected Valid to be true")
-	}
-}
-
-func TestEncryptionInfo_Fields(t *testing.T) {
-	enc := EncryptionInfo{
-		Encrypted:  true,
-		KeyIDs:     []string{"key-1", "key-2"},
-		Algorithm:  "AES-256-GCM",
-		LayerCount: 3,
-	}
-
-	if !enc.Encrypted {
-		t.Error("expected Encrypted to be true")
-	}
-
-	if len(enc.KeyIDs) != 2 {
-		t.Errorf("expected 2 key IDs, got %d", len(enc.KeyIDs))
-	}
-
-	if enc.Algorithm != "AES-256-GCM" {
-		t.Errorf("unexpected Algorithm: %q", enc.Algorithm)
-	}
-
-	if enc.LayerCount != 3 {
-		t.Errorf("unexpected LayerCount: %d", enc.LayerCount)
-	}
-}
-
-func TestNewInspectCommand_DefaultFlagValues(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{}
-	}
-
-	cmd := NewInspectCommand(getFlags)
-
-	flags := []string{"layers", "signature", "encryption", "raw"}
-
-	for _, name := range flags {
+	for _, name := range []string{"layers", "signature", "encryption", "raw"} {
 		t.Run(name, func(t *testing.T) {
 			flag := cmd.Flags().Lookup(name)
 			if flag == nil {
 				t.Fatalf("flag %q not found", name)
+			}
+			if flag.Value.Type() != "bool" {
+				t.Errorf("expected %s flag to be bool, got %s", name, flag.Value.Type())
 			}
 			if flag.DefValue != "false" {
 				t.Errorf("expected default value 'false' for %q, got %q", name, flag.DefValue)
-			}
-		})
-	}
-}
-
-func TestNewInspectCommand_FlagUsage(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{}
-	}
-
-	cmd := NewInspectCommand(getFlags)
-
-	flags := []string{"layers", "signature", "encryption", "raw"}
-
-	for _, name := range flags {
-		t.Run(name, func(t *testing.T) {
-			flag := cmd.Flags().Lookup(name)
-			if flag == nil {
-				t.Fatalf("flag %q not found", name)
 			}
 			if flag.Usage == "" {
 				t.Errorf("flag %q should have usage text", name)
 			}
 		})
-	}
-}
-
-func TestInspectResult_Fields(t *testing.T) {
-	result := InspectResult{
-		Manifest: &ImageManifest{
-			Reference: "myrepo/myimage:v1.0",
-			Digest:    "sha256:abc123",
-		},
-	}
-
-	if result.Manifest == nil {
-		t.Fatal("Manifest should not be nil")
-	}
-
-	if result.Manifest.Reference != "myrepo/myimage:v1.0" {
-		t.Errorf("unexpected Reference: %q", result.Manifest.Reference)
 	}
 }
 
@@ -521,74 +299,6 @@ func TestPrintInspectTable_WithAnnotations(t *testing.T) {
 	err := printInspectTable(printer, manifest, false, false, false)
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
-	}
-}
-
-func TestNewInspectCommand_RunEExists(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{
-			OutputFormat: cli.OutputFormatTable,
-		}
-	}
-
-	cmd := NewInspectCommand(getFlags)
-
-	if cmd.RunE == nil {
-		t.Error("RunE should be set")
-	}
-}
-
-func TestNewInspectCommand_FlagTypes(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{}
-	}
-
-	cmd := NewInspectCommand(getFlags)
-
-	flags := []string{"layers", "signature", "encryption", "raw"}
-
-	for _, name := range flags {
-		t.Run(name, func(t *testing.T) {
-			flag := cmd.Flags().Lookup(name)
-			if flag == nil {
-				t.Fatalf("flag %q not found", name)
-			}
-			if flag.Value.Type() != "bool" {
-				t.Errorf("expected %s flag to be bool, got %s", name, flag.Value.Type())
-			}
-		})
-	}
-}
-
-func TestInspectResult_ZeroValues(t *testing.T) {
-	var result InspectResult
-
-	if result.Manifest != nil {
-		t.Error("expected nil Manifest")
-	}
-}
-
-func TestImageManifest_ZeroValues(t *testing.T) {
-	var manifest ImageManifest
-
-	if manifest.Reference != "" {
-		t.Errorf("expected empty Reference, got %q", manifest.Reference)
-	}
-
-	if manifest.Digest != "" {
-		t.Errorf("expected empty Digest, got %q", manifest.Digest)
-	}
-
-	if manifest.SchemaVer != 0 {
-		t.Errorf("expected SchemaVer 0, got %d", manifest.SchemaVer)
-	}
-
-	if manifest.Config != nil {
-		t.Error("expected nil Config")
-	}
-
-	if manifest.Layers != nil {
-		t.Error("expected nil Layers")
 	}
 }
 
