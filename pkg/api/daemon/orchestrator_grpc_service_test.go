@@ -33,7 +33,7 @@ import (
 	sdkorch "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/orchestrator"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/credentials/local"
 	"google.golang.org/grpc/status"
 )
 
@@ -194,7 +194,7 @@ func TestOrchestratorGRPC_UnixOperatorReachesSessions(t *testing.T) {
 	go server.Serve(lis)
 	t.Cleanup(server.Stop)
 
-	conn, err := grpc.NewClient("unix://"+socket, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient("unix://"+socket, grpc.WithTransportCredentials(local.NewCredentials()))
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
