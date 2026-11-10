@@ -2252,7 +2252,7 @@ FIPS_LOG ?= $(or $(TMPDIR),/tmp)/go-trusted-platform-fips.log
 FIPS_FOREIGN_BASELINE ?= .github/foreign-failures-fips.tsv
 
 # A KEY=value file with the forge credentials the module download needs
-# (GOPRIVATE and the GIT_CONFIG_* triple, dependency-resolution.md §6). It
+# (the GIT_CONFIG_* triple, dependency-resolution.md §6). It
 # reaches the build only as the gomodauth BuildKit secret, never as a layer or
 # a build argument; .dockerignore keeps the default path out of the context.
 MODULE_ENV_FILE ?= .devcontainer/.env
