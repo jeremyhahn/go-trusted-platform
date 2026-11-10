@@ -6,8 +6,10 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
 	"math/big"
+	"strconv"
 	"testing"
 	"time"
 
@@ -25,10 +27,18 @@ type x509Issuer struct {
 	key     *ecdsa.PrivateKey
 	certErr error
 	signed  int
+	// bundle is the PEM chain CABundle returns, the issuing certificate
+	// first and the root last, as a real CA gives it.
+	bundle    []byte
+	bundleErr error
 }
 
 func (f *x509Issuer) CACertificate() (*x509.Certificate, error) {
 	return f.cert, f.certErr
+}
+
+func (f *x509Issuer) CABundle() ([]byte, error) {
+	return f.bundle, f.bundleErr
 }
 
 func (f *x509Issuer) IssueCertificate(_ context.Context, req *quicbaasca.CACertificateRequest) (*quicbaasca.IssuedCertificate, error) {
@@ -107,6 +117,51 @@ func newTestChain(t *testing.T, interPathLen int) testChain {
 	return testChain{root: root, rootKey: rootKey, intermediate: inter, interKey: interKey}
 }
 
+// pemBundle encodes certs as a CA bundle, in the order given.
+func pemBundle(certs ...*x509.Certificate) []byte {
+	var bundle []byte
+	for _, cert := range certs {
+		bundle = append(bundle, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})...)
+	}
+	return bundle
+}
+
+// intermediateIssuer issues from the chain's intermediate and carries the
+// bundle a real CA gives: the intermediate, then the root.
+func (c testChain) intermediateIssuer() *x509Issuer {
+	return &x509Issuer{cert: c.intermediate, key: c.interKey, bundle: pemBundle(c.intermediate, c.root)}
+}
+
+// newCAChain builds a chain of CA certificates, root first, one for each
+// entry of pathLens (below zero: no pathLenConstraint), named inherit-ca-0
+// (the root), inherit-ca-1 and so on. It returns the certificates and the
+// key of the last one.
+func newCAChain(t *testing.T, pathLens ...int) ([]*x509.Certificate, *ecdsa.PrivateKey) {
+	t.Helper()
+	var (
+		certs     []*x509.Certificate
+		parent    *x509.Certificate
+		parentKey *ecdsa.PrivateKey
+	)
+	for i, pathLen := range pathLens {
+		key := newECKey(t)
+		cert := newCACert(t, "inherit-ca-"+strconv.Itoa(i), pathLen, key, parent, parentKey)
+		certs = append(certs, cert)
+		parent, parentKey = cert, key
+	}
+	return certs, parentKey
+}
+
+// chainIssuer issues from the last certificate of a newCAChain chain and
+// carries the whole chain as its bundle, the issuing certificate first.
+func chainIssuer(certs []*x509.Certificate, key *ecdsa.PrivateKey) *x509Issuer {
+	ordered := make([]*x509.Certificate, 0, len(certs))
+	for i := len(certs) - 1; i >= 0; i-- {
+		ordered = append(ordered, certs[i])
+	}
+	return &x509Issuer{cert: certs[len(certs)-1], key: key, bundle: pemBundle(ordered...)}
+}
+
 // TestIssue_SubordinatePathLen issues beneath issuers of each path length and
 // checks the refusals and the issued basic constraints (RFC 5280 §4.2.1.9).
 func TestIssue_SubordinatePathLen(t *testing.T) {
@@ -133,7 +188,7 @@ func TestIssue_SubordinatePathLen(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			chain := newTestChain(t, tt.interPathLen)
-			issuer := &x509Issuer{cert: chain.intermediate, key: chain.interKey}
+			issuer := chain.intermediateIssuer()
 			if tt.unconstrained {
 				issuer = &x509Issuer{cert: chain.root, key: chain.rootKey}
 			}
@@ -182,6 +237,115 @@ func TestIssue_SubordinatePathLen(t *testing.T) {
 			roots.AddCert(chain.root)
 			intermediates := x509.NewCertPool()
 			intermediates.AddCert(chain.intermediate)
+			intermediates.AddCert(cert)
+			_, err = signLeafWith(t, cert, key).Verify(x509.VerifyOptions{
+				Roots:         roots,
+				Intermediates: intermediates,
+				KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
+			})
+			require.NoError(t, err)
+		})
+	}
+}
+
+// Every pathLenConstraint above the issuing CA bounds a subordinate CA, not
+// only the issuing CA's own (RFC 5280 §6.1.4; Codex round 3 on #1544).
+func TestIssue_InheritedPathLen(t *testing.T) {
+	tests := []struct {
+		name string
+		// pathLens is the chain, root first; the last one is the issuing CA.
+		pathLens  []int
+		requested int
+		// wantAncestor is the common name of the certificate that refuses;
+		// empty when the request is issued.
+		wantAncestor string
+		wantText     string
+		wantPathLen  int
+	}{
+		{
+			name:     "root-pathlen-1-leaves-an-unlimited-intermediate-no-ca",
+			pathLens: []int{1, -1}, requested: 0,
+			wantAncestor: "inherit-ca-0", wantText: "may issue no subordinate CA",
+		},
+		{
+			name:     "root-pathlen-1-bounds-an-intermediate-that-claims-1",
+			pathLens: []int{1, 1}, requested: 0,
+			wantAncestor: "inherit-ca-0", wantText: "may issue no subordinate CA",
+		},
+		{
+			name:     "root-pathlen-2-allows-pathlen-0",
+			pathLens: []int{2, -1}, requested: 0,
+			wantPathLen: 0,
+		},
+		{
+			name:     "root-pathlen-2-refuses-pathlen-1",
+			pathLens: []int{2, -1}, requested: 1,
+			wantAncestor: "inherit-ca-0", wantText: "at most 0",
+		},
+		{
+			name:     "root-pathlen-2-refuses-unlimited",
+			pathLens: []int{2, -1}, requested: -1,
+			wantAncestor: "inherit-ca-0", wantText: "not unlimited",
+		},
+		{
+			name:     "root-pathlen-2-is-used-up-two-levels-down",
+			pathLens: []int{2, -1, -1}, requested: 0,
+			wantAncestor: "inherit-ca-0", wantText: "may issue no subordinate CA",
+		},
+		{
+			name:     "root-pathlen-3-allows-pathlen-0-two-levels-down",
+			pathLens: []int{3, -1, -1}, requested: 0,
+			wantPathLen: 0,
+		},
+		{
+			name:     "a-middle-pathlen-1-bounds-the-ca-beneath-it",
+			pathLens: []int{-1, 1, -1}, requested: 0,
+			wantAncestor: "inherit-ca-1", wantText: "may issue no subordinate CA",
+		},
+		{
+			name:     "an-unlimited-chain-issues-as-requested",
+			pathLens: []int{-1, -1, -1}, requested: 2,
+			wantPathLen: 2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			certs, issuerKey := newCAChain(t, tt.pathLens...)
+			issuer := chainIssuer(certs, issuerKey)
+			key := newECKey(t)
+			issued, err := Issue(context.Background(), issuer, &quicbaasca.CACertificateRequest{
+				Subject:    quicbaasca.CASubject{CommonName: tt.name, Organization: "Test Org", Country: "US"},
+				Valid:      1,
+				IsCA:       true,
+				MaxPathLen: tt.requested,
+				Signer:     key,
+			})
+
+			if tt.wantAncestor != "" {
+				require.Error(t, err, "a path length above the issuing CA must refuse the request")
+				assert.Nil(t, issued)
+				assert.Zero(t, issuer.signed, "a refused request must not be signed")
+				assert.True(t, IsInvalidRequest(err), "a path-length refusal is the caller's to fix")
+				assert.ErrorContains(t, err, tt.wantAncestor)
+				assert.ErrorContains(t, err, tt.wantText)
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, issued)
+			cert := issued.Certificate
+			assert.True(t, cert.IsCA)
+			assert.Equal(t, tt.wantPathLen, cert.MaxPathLen)
+			assert.Equal(t, tt.wantPathLen == 0, cert.MaxPathLenZero)
+
+			// The issued CA must sign a leaf the standard chain verifier, which
+			// enforces every pathLenConstraint on the way, accepts.
+			roots := x509.NewCertPool()
+			roots.AddCert(certs[0])
+			intermediates := x509.NewCertPool()
+			for _, ancestor := range certs[1:] {
+				intermediates.AddCert(ancestor)
+			}
 			intermediates.AddCert(cert)
 			_, err = signLeafWith(t, cert, key).Verify(x509.VerifyOptions{
 				Roots:         roots,
@@ -249,13 +413,66 @@ func TestIssue_IssuerCertificateUnavailable(t *testing.T) {
 	}
 }
 
+// An isCA request is refused, unsigned, when the chain above the issuing CA
+// cannot be read, so the path lengths above it cannot be checked. A
+// self-issued issuing certificate has no chain above it and its bundle is not
+// read.
+func TestIssue_IssuerChainUnavailable(t *testing.T) {
+	readErr := errors.New("bundle store offline")
+	chain := newTestChain(t, -1)
+	request := func(t *testing.T) *quicbaasca.CACertificateRequest {
+		t.Helper()
+		return &quicbaasca.CACertificateRequest{
+			Subject:    quicbaasca.CASubject{CommonName: "sub-ca", Organization: "Test Org", Country: "US"},
+			Valid:      1,
+			IsCA:       true,
+			MaxPathLen: 0,
+			Signer:     newECKey(t),
+		}
+	}
+	tests := []struct {
+		name      string
+		bundle    []byte
+		bundleErr error
+	}{
+		{name: "read-error", bundleErr: readErr},
+		{name: "empty-bundle"},
+		{name: "bundle-without-the-root", bundle: pemBundle(chain.intermediate)},
+		{
+			name:   "unparsable-certificate",
+			bundle: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("not a certificate")}),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			issuer := &x509Issuer{cert: chain.intermediate, key: chain.interKey, bundle: tt.bundle, bundleErr: tt.bundleErr}
+			issued, err := Issue(context.Background(), issuer, request(t))
+			require.Error(t, err, "an unreadable chain must refuse the request")
+			assert.Nil(t, issued)
+			assert.Zero(t, issuer.signed, "a refused request must not be signed")
+			assert.False(t, IsInvalidRequest(err), "an unreadable chain is a server failure")
+			assert.ErrorContains(t, err, "pathlen-intermediate")
+			if tt.bundleErr != nil {
+				assert.ErrorIs(t, err, readErr)
+			}
+		})
+	}
+
+	t.Run("a-self-issued-issuer-reads-no-bundle", func(t *testing.T) {
+		issuer := &x509Issuer{cert: chain.root, key: chain.rootKey, bundleErr: readErr}
+		issued, err := Issue(context.Background(), issuer, request(t))
+		require.NoError(t, err)
+		assert.True(t, issued.Certificate.IsCA)
+	})
+}
+
 // The SDK's CA profile drops ExtKeyUsage (Codex 8615 P1): a CA restricted to
 // serverAuth must be refused, never issued unrestricted, while a restricted
 // leaf and an unrestricted CA are still issued.
 func TestIssue_CAExtKeyUsageRestriction(t *testing.T) {
 	chain := newTestChain(t, 2)
 
-	issuer := &x509Issuer{cert: chain.intermediate, key: chain.interKey}
+	issuer := chain.intermediateIssuer()
 	issued, err := Issue(context.Background(), issuer, &quicbaasca.CACertificateRequest{
 		Subject:     quicbaasca.CASubject{CommonName: "eku-restricted-ca", Organization: "Test Org", Country: "US"},
 		Valid:       1,
@@ -271,7 +488,7 @@ func TestIssue_CAExtKeyUsageRestriction(t *testing.T) {
 	assert.Zero(t, issuer.signed, "a refused request must not be signed")
 	assert.Contains(t, err.Error(), "ca.NewCAProfile", "the refusal names the upstream gap")
 
-	leafIssuer := &x509Issuer{cert: chain.intermediate, key: chain.interKey}
+	leafIssuer := chain.intermediateIssuer()
 	leaf, err := Issue(context.Background(), leafIssuer, &quicbaasca.CACertificateRequest{
 		Subject:     quicbaasca.CASubject{CommonName: "eku-leaf", Organization: "Test Org", Country: "US"},
 		Valid:       1,
@@ -282,7 +499,7 @@ func TestIssue_CAExtKeyUsageRestriction(t *testing.T) {
 	require.NotNil(t, leaf)
 	assert.Equal(t, 1, leafIssuer.signed, "a leaf's EKU restriction is not refused")
 
-	caIssuer := &x509Issuer{cert: chain.intermediate, key: chain.interKey}
+	caIssuer := chain.intermediateIssuer()
 	ca, err := Issue(context.Background(), caIssuer, &quicbaasca.CACertificateRequest{
 		Subject:    quicbaasca.CASubject{CommonName: "eku-free-ca", Organization: "Test Org", Country: "US"},
 		Valid:      1,

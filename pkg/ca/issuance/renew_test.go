@@ -203,11 +203,14 @@ func TestRenew_AFailedIssueIsARenewError(t *testing.T) {
 type renewIssuerCA struct {
 	*renewCA
 	issuer *x509.Certificate
+	bundle []byte
 }
 
 func (c *renewIssuerCA) CACertificate() (*x509.Certificate, error) {
 	return c.issuer, nil
 }
+
+func (c *renewIssuerCA) CABundle() ([]byte, error) { return c.bundle, nil }
 
 func renewableCACert(maxPathLen int) *x509.Certificate {
 	existing := renewableCert()
@@ -251,6 +254,26 @@ func TestRenew_APathLenRefusalLeavesTheOldCertificate(t *testing.T) {
 	assert.Equal(t, 1, exceeded.Requested)
 	assert.Equal(t, 0, exceeded.Allowed)
 	assert.True(t, IsInvalidRequest(err))
+	assertRenewalUntouched(t, ca.renewCA)
+}
+
+// A path length above the issuing CA refuses a CA certificate's renewal like
+// the issuing CA's own, before anything is revoked (Codex round 3 on #1544).
+func TestRenew_AnInheritedPathLenRefusalLeavesTheOldCertificate(t *testing.T) {
+	certs, _ := newCAChain(t, 1, -1)
+	ca := &renewIssuerCA{
+		renewCA: newRenewCA(),
+		issuer:  certs[1],
+		bundle:  pemBundle(certs[1], certs[0]),
+	}
+
+	_, err := Renew(context.Background(), ca, renewableCACert(0), RenewOptions{ValidDays: 30})
+
+	var renewErr *RenewError
+	require.ErrorAs(t, err, &renewErr)
+	assert.Equal(t, "check the renewal against the issuer", renewErr.Step)
+	assert.True(t, IsInvalidRequest(err))
+	assert.ErrorContains(t, err, "inherit-ca-0")
 	assertRenewalUntouched(t, ca.renewCA)
 }
 
