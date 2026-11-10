@@ -148,7 +148,7 @@ func TestGatewayConfig_HasEnabledServices_TransitEnabled(t *testing.T) {
 
 	cfg := &GatewayConfig{
 		Enabled: true,
-		ID:      "gw-01",
+		ID:      "edge-01",
 		Transit: &TransitServiceConfig{Enabled: true},
 	}
 	if !cfg.HasEnabledServices() {
@@ -161,7 +161,7 @@ func TestGatewayConfig_HasEnabledServices_ManagementVPNEnabled(t *testing.T) {
 
 	cfg := &GatewayConfig{
 		Enabled:       true,
-		ID:            "gw-01",
+		ID:            "edge-01",
 		ManagementVPN: validVPNServiceConfig(),
 	}
 	if !cfg.HasEnabledServices() {
@@ -174,7 +174,7 @@ func TestGatewayConfig_HasEnabledServices_BothDisabled_ReturnsFalse(t *testing.T
 
 	cfg := &GatewayConfig{
 		Enabled:       true,
-		ID:            "gw-01",
+		ID:            "edge-01",
 		Transit:       &TransitServiceConfig{Enabled: false},
 		ManagementVPN: &ManagementVPNServiceConfig{Enabled: false},
 	}
@@ -188,7 +188,7 @@ func TestGatewayConfig_Validate_WithTransitAndManagementVPN_NoError(t *testing.T
 
 	cfg := &GatewayConfig{
 		Enabled:       true,
-		ID:            "gw-01",
+		ID:            "edge-01",
 		Transit:       &TransitServiceConfig{Enabled: true},
 		ManagementVPN: validVPNServiceConfig(),
 	}

@@ -61,7 +61,7 @@ func TestNewDeviceAddressResolver_FailsClosed(t *testing.T) {
 
 func TestEndpoints_PrefersPlatformDNSThenHeartbeatPeer(t *testing.T) {
 	devices := &stubDevices{records: map[string]*DeviceAddressRecord{
-		"42": {Hostname: "Host-05-Compute-01", HeartbeatAddr: "10.4.2.143:51234"},
+		"42": {Hostname: "Host-05-Compute-01", HeartbeatAddr: "192.0.2.143:51234"},
 	}}
 	names := &stubNames{answers: map[string][]string{
 		"A host-05-compute-01.example.internal":    {"10.4.200.24"},
@@ -77,12 +77,12 @@ func TestEndpoints_PrefersPlatformDNSThenHeartbeatPeer(t *testing.T) {
 	require.Len(t, eps, 3)
 	assert.Equal(t, Endpoint{Address: "10.4.200.24:9443", ServerName: "host-05-compute-01.example.internal", Source: SourcePlatformDNS}, eps[0])
 	assert.Equal(t, Endpoint{Address: "[2001:db8::24]:9443", ServerName: "host-05-compute-01.example.internal", Source: SourcePlatformDNS}, eps[1])
-	assert.Equal(t, Endpoint{Address: "10.4.2.143:9443", ServerName: "host-05-compute-01.example.internal", Source: SourceHeartbeatPeer}, eps[2])
+	assert.Equal(t, Endpoint{Address: "192.0.2.143:9443", ServerName: "host-05-compute-01.example.internal", Source: SourceHeartbeatPeer}, eps[2])
 }
 
 func TestEndpoints_HeartbeatOnlyWhenDNSHasNoRecord(t *testing.T) {
 	devices := &stubDevices{records: map[string]*DeviceAddressRecord{
-		"7": {Hostname: "gw-01.example.internal", HeartbeatAddr: "10.4.2.139"},
+		"7": {Hostname: "edge-01.example.internal", HeartbeatAddr: "192.0.2.139"},
 	}}
 	names := &stubNames{}
 	r, err := NewDeviceAddressResolver(DeviceAddressResolverConfig{
@@ -92,11 +92,11 @@ func TestEndpoints_HeartbeatOnlyWhenDNSHasNoRecord(t *testing.T) {
 	eps, err := r.Endpoints(context.Background(), "7")
 	require.NoError(t, err)
 	require.Len(t, eps, 1)
-	assert.Equal(t, "10.4.2.139:9443", eps[0].Address)
+	assert.Equal(t, "192.0.2.139:9443", eps[0].Address)
 	assert.Equal(t, SourceHeartbeatPeer, eps[0].Source)
 	// The hostname already carried the zone: it is not appended twice.
-	assert.Equal(t, "gw-01.example.internal", eps[0].ServerName)
-	assert.Contains(t, names.asked, "A gw-01.example.internal")
+	assert.Equal(t, "edge-01.example.internal", eps[0].ServerName)
+	assert.Contains(t, names.asked, "A edge-01.example.internal")
 }
 
 func TestEndpoints_FailsClosedWithoutAnyTrustworthyAddress(t *testing.T) {
@@ -134,7 +134,7 @@ func TestEndpoints_DeviceLookupErrorIsNotAnAddress(t *testing.T) {
 
 func TestEndpoints_ProfileServerNameOverridesFQDN(t *testing.T) {
 	devices := &stubDevices{records: map[string]*DeviceAddressRecord{
-		"9": {Hostname: "host-05-compute-01", HeartbeatAddr: "10.4.2.143:1", TLSServerName: " Compute.Example.Internal "},
+		"9": {Hostname: "host-05-compute-01", HeartbeatAddr: "192.0.2.143:1", TLSServerName: " Compute.Example.Internal "},
 	}}
 	r, err := NewDeviceAddressResolver(DeviceAddressResolverConfig{Devices: devices, InternalDomain: "example.internal", Port: 9443})
 	require.NoError(t, err)
@@ -146,7 +146,7 @@ func TestEndpoints_ProfileServerNameOverridesFQDN(t *testing.T) {
 
 func TestEndpoints_NoNameToVerifyAgainstFailsClosed(t *testing.T) {
 	devices := &stubDevices{records: map[string]*DeviceAddressRecord{
-		"9": {HeartbeatAddr: "10.4.2.143:1"},
+		"9": {HeartbeatAddr: "192.0.2.143:1"},
 	}}
 	r, err := NewDeviceAddressResolver(DeviceAddressResolverConfig{Devices: devices, Port: 9443})
 	require.NoError(t, err)
@@ -228,7 +228,7 @@ func TestEndpoints_SelfEndpointDefaultsHostAndPort(t *testing.T) {
 
 func TestEndpoints_SelfEndpointComesFirstAndKeepsTheOtherCandidates(t *testing.T) {
 	devices := &stubDevices{records: map[string]*DeviceAddressRecord{
-		"7": {Hostname: "host-02-idevid", HeartbeatAddr: "10.4.2.140:44321"},
+		"7": {Hostname: "host-02-idevid", HeartbeatAddr: "192.0.2.140:44321"},
 	}}
 	names := &stubNames{answers: map[string][]string{
 		"A host-02-idevid.example.internal": {"10.4.200.2"},

@@ -33,7 +33,7 @@ const policy = {
 };
 
 const gateway = {
-  gatewayId: "gw-01",
+  gatewayId: "gateway-a",
   reportedAtUnix: "1760300000",
   reporting: true,
   running: true,
@@ -124,7 +124,7 @@ describe("VPNPage", () => {
     renderPage();
 
     expect(await screen.findByText("10.8.0.2")).toBeTruthy();
-    expect(screen.getByText("gw-01 refused acme/laptop-9")).toBeTruthy();
+    expect(screen.getByText("gateway-a refused acme/laptop-9")).toBeTruthy();
     expect(screen.getByText("posture violation")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Revoke laptop-1" })).toBeTruthy();
     expect(screen.getByText("corp")).toBeTruthy();
