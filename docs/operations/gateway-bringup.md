@@ -73,7 +73,7 @@ sessions this procedure establishes are the thing they will later improve.
    a refused session is harmless, but you will be debugging the wrong end.
 6. **You know the addressing.** In this runbook's example addressing
    (environment 4 of the [reference network](../architecture/reference-network.md))
-   the gateway (`gw-01`) holds node address `10.4.6.2` on the control-plane
+   the gateway (`edge-01`) holds node address `10.4.6.2` on the control-plane
    zone (VLAN 406), takes its tunnel `/31`s from the tunnel point-to-point range
    `10.4.128.0/22`, and uses `203.0.113.4` as its public identity until the
    cutover (ruling R2, #553); any existing routers' addresses stay untouched.
