@@ -32,7 +32,7 @@ import (
 
 // gatewaydSPIFFEID is gatewayd's service SPIFFE ID in trustDomain.
 func gatewaydSPIFFEID(trustDomain string) *url.URL {
-	return &url.URL{Scheme: "spiffe", Host: trustDomain, Path: "/service/gatewayd"}
+	return &url.URL{Scheme: "spiffe", Host: trustDomain, Path: "/tenant/" + app.SystemTenantID + "/svc/gatewayd"}
 }
 
 // issueGatewayd signs a certificate in gatewayd's node certificate shape: the
@@ -139,15 +139,19 @@ func TestMTLSServicePrincipal_Classification(t *testing.T) {
 		want    bool
 	}{
 		{"gatewayd", system, []*url.URL{gatewaydSPIFFEID(td)}, td, true},
-		{"gatewayd, SPIFFE in caps", system, []*url.URL{spiffeID("SPIFFE://platform.test/service/gatewayd")}, td, true},
-		{"unknown service", system, []*url.URL{spiffeID("spiffe://platform.test/service/other")}, td, false},
+		{"gatewayd, SPIFFE in caps", system, []*url.URL{spiffeID("SPIFFE://platform.test/tenant/system/svc/gatewayd")}, td, true},
+		{"unknown service", system, []*url.URL{spiffeID("spiffe://platform.test/tenant/system/svc/other")}, td, false},
 		{"other trust domain", system, []*url.URL{gatewaydSPIFFEID("other.test")}, td, false},
 		{"tenant organization", pkix.Name{CommonName: "gw-01", Organization: []string{"acme"}}, []*url.URL{gatewaydSPIFFEID(td)}, td, false},
 		{"two organizations", pkix.Name{CommonName: "gw-01", Organization: []string{app.SystemTenantID, "acme"}}, []*url.URL{gatewaydSPIFFEID(td)}, td, false},
 		{"no URI SAN", system, nil, td, false},
-		{"query", system, []*url.URL{spiffeID("spiffe://platform.test/service/gatewayd?x=1")}, td, false},
-		{"nested name", system, []*url.URL{spiffeID("spiffe://platform.test/service/gatewayd/x")}, td, false},
+		{"query", system, []*url.URL{spiffeID("spiffe://platform.test/tenant/system/svc/gatewayd?x=1")}, td, false},
+		{"nested name", system, []*url.URL{spiffeID("spiffe://platform.test/tenant/system/svc/gatewayd/x")}, td, false},
 		{"empty trust domain", system, []*url.URL{gatewaydSPIFFEID(td)}, "", false},
+		{"no tenant segment", system, []*url.URL{spiffeID("spiffe://platform.test/service/gatewayd")}, td, false},
+		{"other tenant's service", system, []*url.URL{spiffeID("spiffe://platform.test/tenant/acme/svc/gatewayd")}, td, false},
+		{"other tenant's service, tenant organization", pkix.Name{CommonName: "gw-01", Organization: []string{"acme"}}, []*url.URL{spiffeID("spiffe://platform.test/tenant/acme/svc/gatewayd")}, td, false},
+		{"empty name", system, []*url.URL{spiffeID("spiffe://platform.test/tenant/system/svc/")}, td, false},
 	}
 	for i, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
@@ -160,6 +164,11 @@ func TestMTLSServicePrincipal_Classification(t *testing.T) {
 			assert.False(t, isMTLSPrincipal(leaf, row.td), "a service principal gets no platform grant")
 		})
 	}
+	t.Run("user kind", func(t *testing.T) {
+		leaf := f.issuerA.issueClient(t, 440, system, []*url.URL{spiffeID("spiffe://platform.test/tenant/system/user/gatewayd")})
+		_, ok := mtlsServicePrincipal(leaf, td)
+		assert.False(t, ok)
+	})
 	t.Run("nil certificate", func(t *testing.T) {
 		_, ok := mtlsServicePrincipal(nil, td)
 		assert.False(t, ok)
