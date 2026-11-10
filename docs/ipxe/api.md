@@ -304,6 +304,25 @@ and gRPC through the mTLS interceptors (`pkg/api/daemon/mtls_interceptor.go`),
 which refuse a method whose scope (`grpccreds.ScopeForMethod`) the certificate
 does not hold with `PermissionDenied` before the handler runs (Codex 8662).
 
+**Any other certificate that is not a principal may call the webhook and
+nothing else (Codex 8200).** Beside the installer, the mTLS listeners know
+three principals by the operator trust domain: the operator's admin
+certificate, which carries the system tenant as O and the admin SPIFFE ID and
+gets the full API ([auth architecture](../auth/architecture.md) §5); a tenant
+principal, which gets the full API within its tenant; and a service principal,
+which the gRPC interceptor admits to the methods of its role alone
+(`ErrMTLSServiceMethodDenied` otherwise). A certificate that is none of these
+and carries no installer marker or binding is granted no scope (`mtlsGrantFor`,
+`pkg/api/daemon/transport_auth.go`), so every scope-guarded operation refuses
+it; the gRPC mTLS interceptor refuses it with `PermissionDenied`
+(`ErrMTLSInstallerMethodDenied`, `pkg/api/daemon/mtls_interceptor.go`). The one
+exception is the webhook itself: gRPC `WebhookComplete`, QUIC `0xCF` sub `0x36`
+and the MCP tool `pxe_webhook_complete` admit it through the
+`PeerMethodAdmitter` exception (`pkg/api/quic/peer_auth.go`,
+`pkg/api/mcp/peer_auth.go`), including a certificate without an organization,
+and the webhook then applies the marker and binding checks above. Every other
+method stays refused to it on every transport.
+
 **One installer certificate is bound to one device at a time.** Binding a
 fingerprint another device is installing under is refused with
 `ErrInstallCertificateInUse`, `AlreadyExists` on gRPC

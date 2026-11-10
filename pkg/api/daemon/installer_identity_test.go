@@ -31,7 +31,7 @@ func installerPeer(t *testing.T, f *webhookFixture) (mtlsPeerAuthenticator, *x50
 	pool.AddCert(f.issuerA.cert)
 	adapter, err := auth.NewMTLSAdapterFromRoots(logging.DefaultLogger(), pool)
 	require.NoError(t, err)
-	return newMTLSPeerAuthenticator(adapter, pxeInstallBindings{service: f.svc}), pool
+	return newMTLSPeerAuthenticator(adapter, pxeInstallBindings{service: f.svc}, testOperatorTrustDomain), pool
 }
 
 // An installer certificate stays an installer's after its installation ends:
@@ -272,7 +272,7 @@ func TestInstallerCertificate_IsRestrictedByItsMarkerWithoutBindingHistory(t *te
 	_, pool := installerPeer(t, f)
 	adapter, err := auth.NewMTLSAdapterFromRoots(logging.DefaultLogger(), pool)
 	require.NoError(t, err)
-	peer := newMTLSPeerAuthenticator(adapter, bindings)
+	peer := newMTLSPeerAuthenticator(adapter, bindings, testOperatorTrustDomain)
 	grpcAuth := grpcMTLSAuth(t, restarted, pool)
 	operator := f.issuerA.issueOperator(t, webhookSerial+100)
 	caIssue := pxeOperation{platformv1.CAService_IssueCertificate_FullMethodName, quicwire.OpCAIssue, nil, "ca_issue"}

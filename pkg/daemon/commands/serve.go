@@ -566,7 +566,7 @@ func applyDaemonTLSIdentity(ctx context.Context, logger *logging.Logger, a *app.
 	// credential from here. A production binary mints no admin key.
 	if harnessAdminBundle != nil {
 		issuer := appbackends.PlatformCertIssuer(a.CA, a.QuicBaaSSDKClient())
-		if harnessErr := harnessAdminBundle(ctx, logger, issuer, tlsDir); harnessErr != nil {
+		if harnessErr := harnessAdminBundle(ctx, logger, issuer, appbackends.PlatformAdminIdentity(a), tlsDir); harnessErr != nil {
 			return harnessErr
 		}
 	}
@@ -578,6 +578,7 @@ func applyDaemonTLSIdentity(ctx context.Context, logger *logging.Logger, a *app.
 	}
 	cfg.TLSIdentity = serving
 	cfg.MTLSClientCAPool = identity.AdminTrustPool
+	cfg.MTLSOperatorTrustDomain = appbackends.PlatformAdminIdentity(a).TrustDomain
 	cfg.MTLSClientCAFile = identity.CABundlePath
 	if cfg.QUICConfig != nil && cfg.QUICConfig.TLSConfig != nil {
 		// Certificates stays empty: crypto/tls prefers it over
@@ -1794,8 +1795,9 @@ func daemonTLSDir(platformDir string) string {
 	return filepath.Join(platformDir, daemonTLSDirName)
 }
 
-// harnessAdminBundleFunc mints an admin client bundle into dir.
-type harnessAdminBundleFunc func(ctx context.Context, logger *logging.Logger, issuer appbackends.CertIssuer, dir string) error
+// harnessAdminBundleFunc mints an admin client bundle into dir; identity is
+// the operator SPIFFE identity the system bundle carries.
+type harnessAdminBundleFunc func(ctx context.Context, logger *logging.Logger, issuer appbackends.CertIssuer, identity appbackends.AdminIdentity, dir string) error
 
 // harnessAdminBundle is nil in every production build. Only the
 // integration build tag sets it (harness_admin_bundle_integration.go).

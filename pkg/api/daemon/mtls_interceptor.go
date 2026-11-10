@@ -56,6 +56,12 @@ type MTLSInterceptorConfig struct {
 	// SkipMethods lists gRPC method names that bypass mTLS authentication.
 	// Health check endpoints are typically skipped.
 	SkipMethods []string
+
+	// OperatorTrustDomain is the SPIFFE trust domain of the operator's admin
+	// certificate. A certificate that is not the operator may call only the
+	// methods in mtlsInstallerMethods. Empty means no certificate is the
+	// operator.
+	OperatorTrustDomain string
 }
 
 // MTLSPeerAuthorizer classifies a verified client certificate chain into the
@@ -84,6 +90,16 @@ type ErrMTLSNoCertificates struct{}
 
 func (e ErrMTLSNoCertificates) Error() string {
 	return "mtls: no client certificates presented"
+}
+
+// ErrMTLSInstallerMethodDenied indicates a client certificate that is not the
+// operator's called a method other than the install-completion webhook.
+type ErrMTLSInstallerMethodDenied struct {
+	Method string
+}
+
+func (e ErrMTLSInstallerMethodDenied) Error() string {
+	return "mtls: an installer certificate may not call " + e.Method
 }
 
 // MTLSUnaryInterceptor returns a gRPC unary server interceptor that validates
@@ -145,8 +161,11 @@ func MTLSStreamInterceptor(cfg *MTLSInterceptorConfig) grpc.StreamServerIntercep
 }
 
 // authenticateFromPeer extracts the client certificate from the gRPC peer state,
-// validates it using the Authenticator, and returns an enriched context with the identity.
-func authenticateFromPeer(ctx context.Context, cfg *MTLSInterceptorConfig, fullMethod string) (context.Context, error) {
+// validates it using the Authenticator, holds an installer certificate to the
+// scope it carries, admits a service principal to the methods of its role and
+// any other certificate that is not a principal to the install-completion
+// webhook alone, and returns an enriched context with the identity.
+func authenticateFromPeer(ctx context.Context, cfg *MTLSInterceptorConfig, method string) (context.Context, error) {
 	// Extract peer from context
 	p, ok := peer.FromContext(ctx)
 	if !ok {
@@ -174,8 +193,10 @@ func authenticateFromPeer(ctx context.Context, cfg *MTLSInterceptorConfig, fullM
 		return nil, status.Error(codes.Unauthenticated, ErrMTLSNoCertificates{}.Error())
 	}
 
-	// Authenticate the leaf certificate
-	identity, err := cfg.Authenticator.Authenticate(ctx, certs[0])
+	// Authenticate the leaf certificate. An installer certificate has no
+	// tenant; it is admitted without one on the installer methods only.
+	_, installerMethod := mtlsInstallerMethods[method]
+	identity, err := authenticateMTLSCertificate(ctx, cfg.Authenticator, certs[0], installerMethod)
 	if err != nil {
 		if cfg.Logger != nil {
 			cfg.Logger.Debug("mtls: authentication failed", "error", err)
@@ -183,8 +204,28 @@ func authenticateFromPeer(ctx context.Context, cfg *MTLSInterceptorConfig, fullM
 		return nil, status.Errorf(codes.Unauthenticated, "mtls: %v", err)
 	}
 	if cfg.Peers != nil {
-		if err := authorizePeerMethod(ctx, cfg, certs, fullMethod); err != nil {
+		if err := authorizePeerMethod(ctx, cfg, certs, method, installerMethod); err != nil {
 			return nil, err
+		}
+	}
+
+	// Four classes: the operator and a tenant principal may call any method
+	// (tenant authorization limits the latter); a service principal may call
+	// the methods its role has scopes for; an installer certificate, which is
+	// every other one, may call only the install-completion webhook.
+	if !isMTLSPrincipal(certs[0], cfg.OperatorTrustDomain) && !installerMethod {
+		if service, ok := mtlsServicePrincipal(certs[0], cfg.OperatorTrustDomain); ok {
+			if !mtlsServiceAdmitsMethod(service, method) {
+				if cfg.Logger != nil {
+					cfg.Logger.Debug("mtls: service principal refused", "service", service, "method", method)
+				}
+				return nil, status.Error(codes.PermissionDenied, ErrMTLSServiceMethodDenied{Service: service, Method: method}.Error())
+			}
+		} else {
+			if cfg.Logger != nil {
+				cfg.Logger.Debug("mtls: installer certificate refused", "method", method)
+			}
+			return nil, status.Error(codes.PermissionDenied, ErrMTLSInstallerMethodDenied{Method: method}.Error())
 		}
 	}
 
@@ -196,16 +237,34 @@ func authenticateFromPeer(ctx context.Context, cfg *MTLSInterceptorConfig, fullM
 	return context.WithValue(ctx, ContextKeyIdentity, identity), nil
 }
 
+// mtlsInstallerPeerAuthorizer is an MTLSPeerAuthorizer that classifies a chain
+// on an installer method, where a certificate without a subject organization
+// is admitted with no tenant (authenticateMTLSCertificate).
+type mtlsInstallerPeerAuthorizer interface {
+	AuthenticateInstallerPeer(ctx context.Context, chain []*x509.Certificate) (*platformtoken.AuthorizedContext, error)
+}
+
 // authorizePeerMethod classifies the verified chain through cfg.Peers and
 // refuses the call with PermissionDenied unless the class holds the scope the
-// method requires. A chain whose class cannot be read gets no access.
-func authorizePeerMethod(ctx context.Context, cfg *MTLSInterceptorConfig, certs []*x509.Certificate, fullMethod string) error {
-	authCtx, err := cfg.Peers.AuthenticatePeer(ctx, certs)
+// method requires. A chain whose class cannot be read gets no access. A class
+// that holds no scope at all is neither an installer nor the operator nor a
+// tenant principal: the scope check has nothing to decide for it, and the
+// class gate of authenticateFromPeer admits it only as a service principal
+// to the methods of its role, or to an installer method.
+func authorizePeerMethod(ctx context.Context, cfg *MTLSInterceptorConfig, certs []*x509.Certificate, fullMethod string, installerMethod bool) error {
+	classify := cfg.Peers.AuthenticatePeer
+	if installerPeers, ok := cfg.Peers.(mtlsInstallerPeerAuthorizer); ok && installerMethod {
+		classify = installerPeers.AuthenticateInstallerPeer
+	}
+	authCtx, err := classify(ctx, certs)
 	if err != nil {
 		if cfg.Logger != nil {
 			cfg.Logger.Debug("mtls: peer classification failed", "error", err)
 		}
 		return status.Errorf(codes.Unauthenticated, "mtls: %v", err)
+	}
+	if len(authCtx.Scopes) == 0 {
+		return nil
 	}
 	if err := authCtx.RequireScope(grpccreds.ScopeForMethod(fullMethod)); err != nil {
 		return status.Error(codes.PermissionDenied, err.Error())

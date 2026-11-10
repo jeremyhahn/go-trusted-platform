@@ -112,13 +112,8 @@ func (i *webhookIssuer) issueInstallerTLS(t *testing.T, serial int64) tls.Certif
 	return tls.Certificate{Certificate: [][]byte{cert.Raw}, PrivateKey: key, Leaf: cert}
 }
 
-// issueOperator signs a plain client certificate, without the installer
-// marker: an operator's.
-func (i *webhookIssuer) issueOperator(t *testing.T, serial int64) *x509.Certificate {
-	t.Helper()
-	cert, _ := i.issueWith(t, serial)
-	return cert
-}
+// The operator's certificate, which carries no installer marker, is
+// issueOperator (mtls_installer_scope_test.go).
 
 func (i *webhookIssuer) issueWith(t *testing.T, serial int64, extra ...pkix.Extension) (*x509.Certificate, *ecdsa.PrivateKey) {
 	t.Helper()

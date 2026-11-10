@@ -12,6 +12,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// goneClientWriter is an event-stream writer whose client has disconnected:
+// every write fails, and flushes are counted.
+type goneClientWriter struct {
+	header  http.Header
+	flushes int
+}
+
+func (w *goneClientWriter) Header() http.Header       { return w.header }
+func (w *goneClientWriter) WriteHeader(int)           {}
+func (w *goneClientWriter) Write([]byte) (int, error) { return 0, errors.New("client gone") }
+func (w *goneClientWriter) Flush()                    { w.flushes++ }
+
 func TestContainerAPIRest_EmptyID(t *testing.T) {
 	h := NewContainerHandlers(newMockOrchestrator(), slog.Default())
 
@@ -38,18 +50,6 @@ func TestContainerAPIRest_EmptyID(t *testing.T) {
 // A writer that cannot flush must be refused with a 500 the client sees; the
 // SSE 200 used to be sent first, so the refusal arrived as a successful
 // event stream carrying a JSON error.
-// goneClientWriter is an event-stream writer whose client has disconnected:
-// every write fails, and flushes are counted.
-type goneClientWriter struct {
-	header  http.Header
-	flushes int
-}
-
-func (w *goneClientWriter) Header() http.Header       { return w.header }
-func (w *goneClientWriter) WriteHeader(int)           {}
-func (w *goneClientWriter) Write([]byte) (int, error) { return 0, errors.New("client gone") }
-func (w *goneClientWriter) Flush()                    { w.flushes++ }
-
 func TestContainerAPIRest_WriteJSONEncodeFailure(t *testing.T) {
 	h := NewContainerHandlers(newMockOrchestrator(), slog.Default())
 	rec := httptest.NewRecorder()
