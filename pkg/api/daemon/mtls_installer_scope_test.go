@@ -41,6 +41,7 @@ import (
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -108,6 +109,33 @@ func (i *webhookIssuer) issueClientTLS(t *testing.T, serial int64, subject pkix.
 	cert, err := x509.ParseCertificate(der)
 	require.NoError(t, err)
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: cert}
+}
+
+// issueMarkedClient signs a client certificate that carries the installer
+// marker together with subject and URI SANs: an installer certificate whose
+// identity fields name a principal.
+func (i *webhookIssuer) issueMarkedClient(t *testing.T, serial int64, subject pkix.Name, uris []*url.URL) *x509.Certificate {
+	t.Helper()
+	marker, err := issuance.InstallerMarkerExtension()
+	require.NoError(t, err)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	template := &x509.Certificate{
+		SerialNumber:    big.NewInt(serial),
+		Subject:         subject,
+		URIs:            uris,
+		NotBefore:       i.cert.NotBefore,
+		NotAfter:        i.cert.NotAfter,
+		KeyUsage:        x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		ExtraExtensions: []pkix.Extension{marker},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, i.cert, &key.PublicKey, i.key)
+	require.NoError(t, err)
+	cert, err := x509.ParseCertificate(der)
+	require.NoError(t, err)
+	require.True(t, issuance.HasInstallerMarker(cert), "the certificate must carry the installer marker")
+	return cert
 }
 
 // operatorTLSBundle is a test TLS bundle whose client certificate is the
@@ -885,6 +913,38 @@ func TestIsMTLSOperator(t *testing.T) {
 			} else {
 				assert.Nil(t, mtlsGrantFor(tc.leaf, trustDomain))
 			}
+		})
+	}
+}
+
+// An installer certificate stays an installer on the REST listener whatever
+// its subject and URI SAN name (Codex, #1544): the boundary reads the
+// installer marker before it treats a certificate as a principal, as
+// peerScopes does.
+func TestMTLSInstallerScope_RESTRefusesAMarkedInstallerNamingAPrincipal(t *testing.T) {
+	f := newInstallerScopeFixture(t)
+	operator := f.issuerA.issueMarkedClient(t, 400,
+		pkix.Name{CommonName: common.AdminUsername, Organization: []string{app.SystemTenantID}},
+		[]*url.URL{operatorSPIFFEID(testOperatorTrustDomain)})
+	tenantUser := f.issuerA.issueMarkedClient(t, 401,
+		pkix.Name{CommonName: "alice", Organization: []string{"acme"}},
+		[]*url.URL{{Scheme: "spiffe", Host: testOperatorTrustDomain, Path: "/tenant/acme/user/alice"}})
+	for name, leaf := range map[string]*x509.Certificate{"names the operator": operator, "names a tenant user": tenantUser} {
+		t.Run(name, func(t *testing.T) {
+			require.True(t, isMTLSPrincipal(leaf, testOperatorTrustDomain), "the identity fields alone name a principal")
+			server, managed, kms := newInstallerBoundaryServer(t, f)
+
+			stop := serveAs(server, leaf, http.MethodPost, "/api/v1/services/boundary-svc/stop")
+			assert.Equal(t, http.StatusForbidden, stop.Code, "a marked installer must not stop a service")
+			assert.Zero(t, managed.stopCount.Load(), "a refused stop must leave the service running")
+
+			del := serveAs(server, leaf, http.MethodDelete, "/api/v1/kms/keys/k1")
+			assert.Equal(t, http.StatusForbidden, del.Code, "a marked installer must not delete a key")
+			assert.Empty(t, kms.deleted, "a refused delete must leave the key in place")
+
+			health, _ := serveRecovering(server, leaf, http.MethodGet, "/api/v1/health")
+			refusal := ErrInstallerRouteForbidden{Method: http.MethodGet, Path: "/api/v1/health"}.Error()
+			assert.NotContains(t, health.Body.String(), refusal, "a marked installer must still reach a machine-facing route")
 		})
 	}
 }
