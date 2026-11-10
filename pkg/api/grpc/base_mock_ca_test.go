@@ -16,10 +16,15 @@ package grpc
 import (
 	"context"
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"io"
 	"math/big"
+	"time"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	xkmsbackend "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/backend"
@@ -62,7 +67,39 @@ func (m *baseMockCA) IssueCertificateWithProfile(_ context.Context, _ *xkmsca.CA
 // CACertificate is an issuer without a pathLenConstraint, so issuance.Issue
 // lets an isCA request through as a real root CA would (RFC 5280 §4.2.1.9).
 func (m *baseMockCA) CACertificate() (*x509.Certificate, error) {
-	return &x509.Certificate{BasicConstraintsValid: true, IsCA: true, MaxPathLen: -1}, nil
+	root := *mockSelfSignedRoot
+	return &root, nil
+}
+
+// mockSelfSignedRoot is a real self-signed CA certificate without a path
+// length constraint: the ancestor path-length walk ends only at a
+// certificate that verifies under its own key.
+var mockSelfSignedRoot = newMockSelfSignedRoot()
+
+func newMockSelfSignedRoot() *x509.Certificate {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Mock Root CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		MaxPathLen:            -1,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		panic(err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		panic(err)
+	}
+	return cert
 }
 func (m *baseMockCA) CABundle() ([]byte, error) { return nil, nil }
 func (m *baseMockCA) CABundleFiltered(_ xkmssdk.StoreType, _ x509.PublicKeyAlgorithm) ([]byte, error) {

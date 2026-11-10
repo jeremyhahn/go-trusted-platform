@@ -15,9 +15,13 @@ package rest
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
+	"math/big"
 	"testing"
 	"time"
 
@@ -112,7 +116,39 @@ func (f *fakeProdCA) CACertificate() (*x509.Certificate, error) {
 	if f.caCert != nil {
 		return f.caCert, nil
 	}
-	return &x509.Certificate{BasicConstraintsValid: true, IsCA: true, MaxPathLen: -1}, nil
+	root := *fakeProdCARoot
+	return &root, nil
+}
+
+// fakeProdCARoot is a real self-signed CA certificate without a path
+// length constraint: the ancestor path-length walk ends only at a
+// certificate that verifies under its own key.
+var fakeProdCARoot = newFakeProdCARoot()
+
+func newFakeProdCARoot() *x509.Certificate {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Fake Root CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		MaxPathLen:            -1,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		panic(err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		panic(err)
+	}
+	return cert
 }
 
 // =============================================================================
