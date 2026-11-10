@@ -65,7 +65,7 @@ func sdkGatewayOverQUIC(t *testing.T, wireResp interface{}) (*sdkgateway.Client,
 func TestGatewayAdmittedVTEP_SDKOverQUIC(t *testing.T) {
 	client, sender := sdkGatewayOverQUIC(t, &quicwire.GatewayAdmittedVTEPResponse{VTEP: admittedWire("198.51.100.10")})
 
-	got, err := client.GetAdmittedVTEP(context.Background(), "gw-01", "198.51.100.10")
+	got, err := client.GetAdmittedVTEP(context.Background(), "edge-01", "198.51.100.10")
 	if err != nil {
 		t.Fatalf("GetAdmittedVTEP: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestGatewayAdmittedVTEP_SDKOverQUIC(t *testing.T) {
 	if err := quicwire.DecodePayload(sender.rawPayload[1:], &req); err != nil {
 		t.Fatalf("daemon-side decode: %v", err)
 	}
-	if req.GatewayID != "gw-01" || req.VTEP != "198.51.100.10" {
+	if req.GatewayID != "edge-01" || req.VTEP != "198.51.100.10" {
 		t.Fatalf("the daemon must see the gateway and VTEP the caller named, got %+v", req)
 	}
 	if !proto.Equal(got, admittedPB("198.51.100.10")) {
@@ -91,7 +91,7 @@ func TestListGatewayAdmittedVTEPs_SDKOverQUIC(t *testing.T) {
 		Count: 2,
 	})
 
-	got, err := client.ListAdmittedVTEPs(context.Background(), "gw-01")
+	got, err := client.ListAdmittedVTEPs(context.Background(), "edge-01")
 	if err != nil {
 		t.Fatalf("ListAdmittedVTEPs: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestListGatewayAdmittedVTEPs_SDKOverQUIC(t *testing.T) {
 	if err := quicwire.DecodePayload(sender.rawPayload[1:], &req); err != nil {
 		t.Fatalf("daemon-side decode: %v", err)
 	}
-	if req.GatewayID != "gw-01" {
+	if req.GatewayID != "edge-01" {
 		t.Fatalf("the daemon must see the gateway the caller named, got %+v", req)
 	}
 	if len(got) != 2 || !proto.Equal(got[0], admittedPB("198.51.100.10")) {

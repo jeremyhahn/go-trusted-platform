@@ -111,17 +111,17 @@ Default template: configs/platform/templates/single-node/default.yaml
                       │
       ┌───────────────┼───────────────┐
       │               │               │
-   ┌──▼───┐      ┌────▼───┐      ┌────▼─────┐
-   │gw-01 │      │ cp-01  │      │compute-01│
-   │      │      │        │      │          │
-   │ptfmd │      │ ptfmd  │      │  ptfmd   │
-   │gtwyd │      │ (SRV)  │      │ (CLIENT) │
-   │(CLNT)│      │        │      │          │
-   └──────┘      └────────┘      └──────────┘
+   ┌──▼─────┐    ┌────▼───┐      ┌────▼─────┐
+   │edge-01 │    │ cp-01  │      │compute-01│
+   │        │    │        │      │          │
+   │ptfmd   │    │ ptfmd  │      │  ptfmd   │
+   │gtwyd   │    │ (SRV)  │      │ (CLIENT) │
+   │(CLNT)  │    │        │      │          │
+   └────────┘    └────────┘      └──────────┘
 ```
 
 - cp-01 (SERVER): CA, ACME, DNS authoritative, IAM, KMS, QuicBaaS
-- gw-01 (CLIENT): platformd client + gatewayd (BGP, DHCP, NAT, firewall)
+- edge-01 (CLIENT): platformd client + gatewayd (BGP, DHCP, NAT, firewall)
 - compute-01 (CLIENT): platformd client + QEMU/KVM workloads
 
 Templates: `configs/platform/templates/dedicated/<vendor>/<model>/{control-plane,gateway,compute}.yaml`
@@ -370,13 +370,13 @@ nodes:                              /config/mac/aa-bb-cc-11-22-33/
     overrides_file:                   installer.yaml  (CP config)
       node-02.control-plane.yaml      hostname        ("node-02")
                                     (all MACs of node-02 map to same config)
-  - hostname: gw-01
+  - hostname: edge-01
     role: gateway                   /config/mac/dd-ee-ff-44-55-66/
     macs: [dd:ee:ff:44:55:66]         installer.yaml  (GW config)
-    overrides_file:                   hostname        ("gw-01")
-      gw-01.gateway.yaml            /config/mac/dd-ee-ff-44-55-77/
+    overrides_file:                   hostname        ("edge-01")
+      edge-01.gateway.yaml          /config/mac/dd-ee-ff-44-55-77/
                                       installer.yaml  (GW config)
-                                      hostname        ("gw-01")
+                                      hostname        ("edge-01")
 ```
 
 At install, `autoinstall.sh` enumerates every NIC on the target node,
