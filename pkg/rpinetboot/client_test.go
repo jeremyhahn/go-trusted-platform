@@ -14,6 +14,7 @@
 package rpinetboot
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -120,7 +121,24 @@ func (s *fakeDHCPServer) serve() {
 	}
 }
 
+// plainPacketConn hides the *net.UDPConn from the TFTP server. Given a
+// UDPConn, pin/tftp v3.1.0 server.go Serve turns on control messages
+// (214-226) and server.go processRequest4 calls net.InterfaceByIndex for
+// each request (272), a netlink dump of every link that waits on the
+// kernel's RTNL lock; on a CI host busy creating and removing containers
+// that wait outlasts the client's retry budget (#1174). Without it Serve
+// reads through server.go processRequest (299), which looks up no
+// interface, and the server answers from the address the kernel routes to
+// the client.
+type plainPacketConn struct {
+	net.PacketConn
+}
+
 // tftpTree serves dir on a loopback TFTP server and returns its port.
+// Cleanup requires Serve to return nil after Shutdown: pin/tftp v3.1.0
+// server.go Shutdown closes the conn then cancels, and Serve's loop
+// returns nil on the cancel (see
+// TestTFTPTree_PlainPacketConnServesAndShutsDownCleanly).
 func tftpTree(t *testing.T, dir string) int {
 	t.Helper()
 	srv := tftp.NewServer(func(filename string, rf io.ReaderFrom) error {
@@ -132,11 +150,61 @@ func tftpTree(t *testing.T, dir string) int {
 		_, err = rf.ReadFrom(f)
 		return err
 	}, nil)
-	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	// The socket is bound before Serve starts, so a request sent before
+	// Serve reads it waits in the socket buffer: the server is ready now.
+	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	require.NoError(t, err)
-	go func() { _ = srv.Serve(conn) }()
-	t.Cleanup(srv.Shutdown)
+	served := make(chan error, 1)
+	go func() { served <- srv.Serve(plainPacketConn{conn}) }()
+	t.Cleanup(func() {
+		srv.Shutdown()
+		require.NoError(t, <-served)
+	})
 	return conn.LocalAddr().(*net.UDPAddr).Port
+}
+
+// The pin/tftp v3.1.0 contracts the plainPacketConn harness relies on:
+//   - server.go Serve (198) wraps conn in an ipv4/ipv6 control-message
+//     PacketConn only when it is a *net.UDPConn (214-226); any other
+//     PacketConn reads through server.go processRequest (243, 299), which
+//     calls conn.ReadFrom and handlePacket (328) with a nil local IP and
+//     calls no interface lookup and no control-message API.
+//   - server.go Shutdown (312) closes the conn (318), then cancels (322).
+//     processRequest's ReadFrom error (303) only reaches the hook (245) and
+//     Serve's loop returns nil once it sees the cancel (233-235), so Serve
+//     returns nil, never "use of closed network connection".
+func TestTFTPTree_PlainPacketConnServesAndShutsDownCleanly(t *testing.T) {
+	dir := stageTree(t)
+	srv := tftp.NewServer(func(filename string, rf io.ReaderFrom) error {
+		f, err := os.Open(filepath.Join(dir, filepath.FromSlash(filename)))
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		_, err = rf.ReadFrom(f)
+		return err
+	}, nil)
+	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	require.NoError(t, err)
+	served := make(chan error, 1)
+	go func() { served <- srv.Serve(plainPacketConn{conn}) }()
+
+	client, err := tftp.NewClient(conn.LocalAddr().String())
+	require.NoError(t, err)
+	wt, err := client.Receive("config.txt", "octet")
+	require.NoError(t, err)
+	var got bytes.Buffer
+	_, err = wt.WriteTo(&got)
+	require.NoError(t, err)
+	assert.Equal(t, mustRead(t, filepath.Join(dir, "config.txt")), got.Bytes())
+
+	srv.Shutdown()
+	select {
+	case err := <-served:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve did not return within 5s of Shutdown")
+	}
 }
 
 // stageTree writes a minimal Pi 4 boot tree: start4.elf in the device
@@ -172,10 +240,14 @@ func loopbackOptions(t *testing.T, server *fakeDHCPServer, tftpPort int) Options
 		TFTPPort:           tftpPort,
 		DHCPTimeout:        3 * time.Second,
 		DHCPRequestTimeout: 300 * time.Millisecond,
-		TFTPFileTimeout:    5 * time.Second,
-		TFTPRetries:        1,
-		TFTPRetryInterval:  time.Second,
-		DHCPServerAddr:     server.addr(),
+		// The bootloader's TFTP budget, not a tighter one: these bound a
+		// failure, never a pass, so a late reply on a loaded runner is
+		// retransmitted instead of failing the file (#1174). A test that
+		// wants a TFTP failure sets its own timeout.
+		TFTPFileTimeout:   TFTPFileTimeout,
+		TFTPRetries:       TFTPRetries,
+		TFTPRetryInterval: TFTPRetryInterval,
+		DHCPServerAddr:    server.addr(),
 		DialDHCP: func(string) (net.PacketConn, error) {
 			return net.ListenPacket("udp4", "127.0.0.1:0")
 		},
