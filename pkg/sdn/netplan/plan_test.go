@@ -26,9 +26,14 @@ import (
 )
 
 // referencePlan is environment 4 of the reference with the built-in zones.
+// Management and provisioning carry the documentation reference ranges as
+// overrides.
 func referencePlan(t *testing.T) *netplan.Plan {
 	t.Helper()
-	p, err := netplan.New(netplan.Environment{ID: 4, ULA: ula}, zone.Defaults())
+	p, err := netplan.New(netplan.Environment{ID: 4, ULA: ula, Overrides: []netplan.Override{
+		{Zone: zone.ZoneManagement, Subnet: netip.MustParsePrefix("198.51.100.0/24")},
+		{Zone: zone.ZoneProvisioning, Subnet: netip.MustParsePrefix("192.0.2.0/24")},
+	}}, zone.Defaults())
 	require.NoError(t, err)
 	return p
 }
@@ -43,7 +48,7 @@ func TestNew_WorkedExample(t *testing.T) {
 	}{
 		{zone.ZoneTransit, 400, "10.4.0.0/24", "fd12:3456:789a:400::/64", "10.4.0.1"},
 		{zone.ZoneFabric, 401, "10.4.1.0/24", "fd12:3456:789a:401::/64", "10.4.1.1"},
-		{zone.ZoneManagement, 402, "10.4.2.0/24", "fd12:3456:789a:402::/64", "10.4.2.1"},
+		{zone.ZoneManagement, 402, "198.51.100.0/24", "fd12:3456:789a:402::/64", "198.51.100.1"},
 		{zone.ZoneHypervisor, 403, "10.4.3.0/24", "fd12:3456:789a:403::/64", "10.4.3.1"},
 		{zone.ZoneQuarantine, 404, "10.4.4.0/24", "fd12:3456:789a:404::/64", "10.4.4.1"},
 		{zone.ZoneProvisioning, 405, "192.0.2.0/24", "fd12:3456:789a:405::/64", "192.0.2.1"},
