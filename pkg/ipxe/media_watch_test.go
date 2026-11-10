@@ -112,8 +112,8 @@ func TestMediaWatcher_KeepsClientsApart(t *testing.T) {
 	data := t.TempDir()
 	iso := filepath.Join(data, "platform.iso")
 	w := newMediaWatcher(proc.root, data, 999, time.Hour, nil)
-	proc.openFor("smbd", "10.4.2.103", 301, 5, iso, 1000)
-	proc.openFor("smbd", "10.4.2.104", 302, 5, iso, 2000)
+	proc.openFor("smbd", "192.0.2.103", 301, 5, iso, 1000)
+	proc.openFor("smbd", "192.0.2.104", 302, 5, iso, 2000)
 	require.NoError(t, w.sample())
 	// Only the first client reads further.
 	require.NoError(t, os.WriteFile(filepath.Join(proc.root, "301", "fdinfo", "5"), []byte("pos:\t5000\n"), 0o644))
@@ -121,9 +121,9 @@ func TestMediaWatcher_KeepsClientsApart(t *testing.T) {
 
 	openers := w.status().Files[0].OpenersNamed("smbd")
 	require.Len(t, openers, 2)
-	assert.Equal(t, "10.4.2.103", openers[0].Client)
+	assert.Equal(t, "192.0.2.103", openers[0].Client)
 	assert.Equal(t, 2, openers[0].Activity(), "open event plus one position change")
-	assert.Equal(t, "10.4.2.104", openers[1].Client)
+	assert.Equal(t, "192.0.2.104", openers[1].Client)
 	assert.Equal(t, 1, openers[1].Activity(), "open event only")
 	assert.Nil(t, w.status().Files[0].Opener("smbd"), "no client-less smbd record")
 }
