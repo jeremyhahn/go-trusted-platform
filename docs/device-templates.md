@@ -589,7 +589,7 @@ IPMI 2.0 RMCP+ and Redfish APIs.
 
 ```yaml
 bmc:
-  address: 10.4.2.20
+  address: 198.51.100.20
   username: admin
   password: "kms://bmc/password?ensure=true&len=16&enc=base64"
   protocol: ipmi
@@ -742,7 +742,7 @@ nodes:
         idevid:
           serial: CP01-CHASSIS-SERIAL
 
-  - hostname: gw-01
+  - hostname: edge-01
     role: gateway
     template: dedicated/supermicro/x10/gateway.yaml
 ```

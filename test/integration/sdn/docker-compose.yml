@@ -1,11 +1,47 @@
 version: '3.8'
 
 services:
+  # OVS runs in its own container; the entrypoint (AUTO_START_OVS=true)
+  # starts ovsdb-server and ovs-vswitchd, and the shared ovs-db volume
+  # hands their sockets to sdn-test. The healthcheck asks ovsdb through
+  # ovs-vsctl and ovs-vswitchd through its control socket, so sdn-test
+  # starts on a working switch rather than after a fixed sleep (#964).
+  ovs:
+    # Built by `make build-devcontainer`, never here.
+    image: trusted-platform-dev:latest
+    pull_policy: never
+    container_name: go-trusted-platform-sdn-ovs
+    privileged: true
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:ro
+      - ovs-db:/var/run/openvswitch
+      - ovs-log:/var/log/openvswitch
+    environment:
+      - AUTO_START_OVS=true
+    command: ["tail", "-f", "/dev/null"]
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - ovs-vsctl --db=unix:/var/run/openvswitch/db.sock --timeout=2 show >/dev/null && ovs-appctl -t ovs-vswitchd version >/dev/null
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
   sdn-test:
     # Built by `make build-devcontainer`, never here.
     image: trusted-platform-dev:latest
     pull_policy: never
     container_name: go-trusted-platform-sdn-test
+    depends_on:
+      ovs:
+        condition: service_healthy
     privileged: true
     network_mode: host
     cap_add:
@@ -28,8 +64,6 @@ services:
     working_dir: /workspace/test/integration/sdn
     command: >
       sh -c "
-        echo 'Waiting for OVS to start...';
-        sleep 5;
         echo 'Running integration tests...';
         TAGS=$${BUILD_TAGS:-integration $$(make -s -C /workspace print-build-tags)};
         go test -v -tags \"$$TAGS\" -timeout 10m ./...

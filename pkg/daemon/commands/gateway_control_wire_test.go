@@ -85,20 +85,20 @@ func TestWireGatewayControlPlane_MountsGatewayRoutesOnDaemonREST(t *testing.T) {
 
 	wireGatewayControlPlane(logger, restOnlyDaemon{rest: rest}, gw)
 
-	body, err := json.Marshal(&gwstate.Snapshot{GatewayID: "gw-01", Hostname: "gw.example.com"})
+	body, err := json.Marshal(&gwstate.Snapshot{GatewayID: "edge-01", Hostname: "gw.example.com"})
 	require.NoError(t, err)
 	post := httptest.NewRequest(http.MethodPost, "/api/v1/gateway/telemetry", bytes.NewReader(body))
 	post.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
-	rest.Router().ServeHTTP(rec, asGateway(post, "gw-01"))
+	rest.Router().ServeHTTP(rec, asGateway(post, "edge-01"))
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	snap, err := gw.Store.Get("gw-01")
+	snap, err := gw.Store.Get("edge-01")
 	require.NoError(t, err)
 	assert.Equal(t, "gw.example.com", snap.Hostname)
 
-	get := httptest.NewRequest(http.MethodGet, "/api/v1/gateway/desired-config/gw-01", nil)
+	get := httptest.NewRequest(http.MethodGet, "/api/v1/gateway/desired-config/edge-01", nil)
 	rec = httptest.NewRecorder()
-	rest.Router().ServeHTTP(rec, asGateway(get, "gw-01"))
+	rest.Router().ServeHTTP(rec, asGateway(get, "edge-01"))
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	assert.Contains(t, rec.Body.String(), "rev-7")
 }
@@ -112,9 +112,9 @@ func TestWireGatewayControlPlane_NilControlPlaneMountsNothing(t *testing.T) {
 
 	wireGatewayControlPlane(logger, restOnlyDaemon{rest: rest}, nil)
 
-	get := httptest.NewRequest(http.MethodGet, "/api/v1/gateway/desired-config/gw-01", nil)
+	get := httptest.NewRequest(http.MethodGet, "/api/v1/gateway/desired-config/edge-01", nil)
 	rec := httptest.NewRecorder()
-	rest.Router().ServeHTTP(rec, asGateway(get, "gw-01"))
+	rest.Router().ServeHTTP(rec, asGateway(get, "edge-01"))
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 }
 

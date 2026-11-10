@@ -40,19 +40,19 @@ services:
       - ../../../:/workspace:cached
 
       # Mount sibling projects for local go.mod replace directives
-      # These match the paths in go.mod: replace ... => /home/jhahn/sources/go-*
-      - ../../../../go-trusted-ca:/home/jhahn/sources/go-trusted-ca:cached
-      - ../../../../go-quicbaas:/home/jhahn/sources/go-quicbaas:cached
-      - ../../../../go-xkms:/home/jhahn/sources/go-xkms:cached
-      - ../../../../go-objstore:/home/jhahn/sources/go-objstore:cached
-      - ../../../../go-qrdb:/home/jhahn/sources/go-qrdb:cached
-      - ../../../../go-quicraft:/home/jhahn/sources/go-quicraft:cached
-      - ../../../../go-truststrap:/home/jhahn/sources/go-truststrap:cached
-      - ../../../../go-frost:/home/jhahn/sources/go-frost:cached
-      - ../../../../go-auth:/home/jhahn/sources/go-auth:cached
-      - ../../../../go-codec:/home/jhahn/sources/go-codec:cached
-      - ../../../../go-luks2:/home/jhahn/sources/go-luks2:cached
-      - ../../../../go-signal:/home/jhahn/sources/go-signal:cached
+      # Sibling module checkouts, mounted under /sources for a local go.work.
+      - ../../../../go-trusted-ca:/sources/go-trusted-ca:cached
+      - ../../../../go-quicbaas:/sources/go-quicbaas:cached
+      - ../../../../go-xkms:/sources/go-xkms:cached
+      - ../../../../go-objstore:/sources/go-objstore:cached
+      - ../../../../go-qrdb:/sources/go-qrdb:cached
+      - ../../../../go-quicraft:/sources/go-quicraft:cached
+      - ../../../../go-truststrap:/sources/go-truststrap:cached
+      - ../../../../go-frost:/sources/go-frost:cached
+      - ../../../../go-auth:/sources/go-auth:cached
+      - ../../../../go-codec:/sources/go-codec:cached
+      - ../../../../go-luks2:/sources/go-luks2:cached
+      - ../../../../go-signal:/sources/go-signal:cached
 
       # Go module cache for faster builds
       - trusted-platform-go-mod-cache:/go/pkg/mod

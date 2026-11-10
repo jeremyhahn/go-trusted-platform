@@ -1,0 +1,29 @@
+# Per-node overrides for the rack Pis in edge-01-vlan405.example.yaml, merged
+# over the rpi4 compute template (nodes[].overrides_file; inline overrides
+# win). The template is written for the reference network, where the control
+# plane is 10.4.6.10; here it is edge-01 at 192.0.2.1.
+#
+# network.dns.upstream-dns is not set here: the bootstrap derives it from the
+# control plane's static address and internal DNS port.
+
+# The template is the factory SD image, built on a build host
+# (install-target: image). These Pis netboot the installer and it runs on the
+# Pi itself, so it must clear the Pi's TPM and read the boot server's
+# platform_boot_model=diskless from the live command line; an image target
+# does neither.
+install-target: disk
+
+network:
+  dnsmasq:
+    upstream-servers:
+      - "/example.internal/192.0.2.1#9053" # internal zone
+      - "192.0.2.1#8053"                    # everything else
+dns:
+  resolver:
+    servers:
+      - address: "192.0.2.1"
+        port: 8053
+trust:
+  bmc:
+    dane:
+      dns-server: "192.0.2.1:8053"
