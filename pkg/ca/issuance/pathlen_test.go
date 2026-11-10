@@ -357,6 +357,73 @@ func TestIssue_InheritedPathLen(t *testing.T) {
 	}
 }
 
+// TestIssue_RolloverSelfIssuedIssuer: a key-rollover CA has the same name as
+// the root that signed it (self-issued) but is not self-signed, so it is not a
+// trust anchor and the root's pathLenConstraint still binds. A self-issued
+// certificate does not count toward that limit (RFC 5280 §6.1.4 (l)).
+func TestIssue_RolloverSelfIssuedIssuer(t *testing.T) {
+	rootKey := newECKey(t)
+	root := newCACert(t, "rollover-ca", 1, rootKey, nil, nil)
+	rolloverKey := newECKey(t)
+	rollover := newCACert(t, "rollover-ca", -1, rolloverKey, root, rootKey)
+
+	tests := []struct {
+		name        string
+		issuer      *x509Issuer
+		requested   int
+		wantRefused bool
+	}{
+		{
+			name:      "requested 2",
+			issuer:    &x509Issuer{cert: rollover, key: rolloverKey, bundle: pemBundle(rollover, root)},
+			requested: 2, wantRefused: true,
+		},
+		{
+			name:      "requested 1",
+			issuer:    &x509Issuer{cert: rollover, key: rolloverKey, bundle: pemBundle(rollover, root)},
+			requested: 1, wantRefused: true,
+		},
+		{
+			name:      "requested 0",
+			issuer:    &x509Issuer{cert: rollover, key: rolloverKey, bundle: pemBundle(rollover, root)},
+			requested: 0,
+		},
+		{
+			name:      "self-signed root issuer still needs no bundle",
+			issuer:    &x509Issuer{cert: root, key: rootKey, bundle: pemBundle(root)},
+			requested: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			issued, err := Issue(context.Background(), tt.issuer, &quicbaasca.CACertificateRequest{
+				Subject:    quicbaasca.CASubject{CommonName: "rollover-sub", Organization: "Test Org", Country: "US"},
+				Valid:      1,
+				IsCA:       true,
+				MaxPathLen: tt.requested,
+				Signer:     newECKey(t),
+			})
+
+			if tt.wantRefused {
+				require.Error(t, err, "the root's pathLenConstraint must bind beneath a self-issued rollover")
+				assert.Nil(t, issued)
+				assert.Zero(t, tt.issuer.signed, "a refused request must not be signed")
+				var pathErr *AncestorPathLenError
+				require.ErrorAs(t, err, &pathErr)
+				assert.Equal(t, root.Subject.String(), pathErr.Ancestor)
+				assert.Equal(t, 0, pathErr.Allowed)
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, issued)
+			assert.True(t, issued.Certificate.IsCA)
+			assert.Equal(t, 0, issued.Certificate.MaxPathLen)
+			assert.True(t, issued.Certificate.MaxPathLenZero)
+		})
+	}
+}
+
 // TestIssue_IssuerZeroPathLenWithoutZeroFlagIsUnconstrained checks that an
 // issuer whose MaxPathLen is 0 without MaxPathLenZero, which crypto/x509 reads
 // as no pathLenConstraint, does not bound the subordinate.
