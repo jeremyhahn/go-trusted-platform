@@ -141,6 +141,13 @@ func (e ErrInvalidRevocationReason) Error() string {
 	return fmt.Sprintf("invalid revocation reason code: %d", e.Reason)
 }
 
+// ErrRemoveFromCRLNotAccepted is returned when a revocation asks for the removeFromCRL reason, which RFC 5280 allows only in a delta CRL
+type ErrRemoveFromCRLNotAccepted struct{}
+
+func (e ErrRemoveFromCRLNotAccepted) Error() string {
+	return "revocation reason removeFromCRL is not accepted: RFC 5280 allows it only in a delta CRL"
+}
+
 // ErrBundleNotFound is returned when the CA bundle cannot be found
 type ErrBundleNotFound struct{}
 

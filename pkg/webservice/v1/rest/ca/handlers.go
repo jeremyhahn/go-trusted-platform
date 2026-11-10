@@ -393,6 +393,7 @@ func (h *CAHandlers) revocationReasonToProto(reason int) platformv1.RevocationRe
 }
 
 // protoRevocationReasonToRFC5280 converts a proto RevocationReason to its RFC 5280 reason code.
+// removeFromCRL is refused.
 func (h *CAHandlers) protoRevocationReasonToRFC5280(reason platformv1.RevocationReason) (int, error) {
 	switch reason {
 	case platformv1.RevocationReason_REVOCATION_REASON_UNSPECIFIED:
@@ -410,7 +411,9 @@ func (h *CAHandlers) protoRevocationReasonToRFC5280(reason platformv1.Revocation
 	case platformv1.RevocationReason_REVOCATION_REASON_CERTIFICATE_HOLD:
 		return 6, nil
 	case platformv1.RevocationReason_REVOCATION_REASON_REMOVE_FROM_CRL:
-		return 8, nil
+		// RFC 5280 allows removeFromCRL only in a delta CRL. This CA publishes
+		// complete CRLs and has no hold-release operation, so the reason is refused.
+		return 0, ErrRemoveFromCRLNotAccepted{}
 	case platformv1.RevocationReason_REVOCATION_REASON_PRIVILEGE_WITHDRAWN:
 		return 9, nil
 	case platformv1.RevocationReason_REVOCATION_REASON_AA_COMPROMISE:
