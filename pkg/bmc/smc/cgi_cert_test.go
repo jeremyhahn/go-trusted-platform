@@ -348,7 +348,7 @@ func TestReplace_HappyPath_CookieAuth(t *testing.T) {
 	m := newFastCertManager(t, f.cfg())
 	defer m.Close()
 
-	key := memguard.NewMemoryEnclave([]byte("-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n"))
+	key := memguard.NewMemoryEnclave([]byte(genTestKeyPEM()))
 	defer key.Destroy()
 	cert := []byte("-----BEGIN CERTIFICATE-----\ndef\n-----END CERTIFICATE-----\n")
 

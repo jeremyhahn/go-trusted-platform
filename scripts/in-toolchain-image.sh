@@ -41,6 +41,9 @@
 # container: GOMAXPROCS is the default of `go build -p` and `go test -p`, so
 # it bounds how many packages compile, link and test at once, which on an
 # 80-thread host is otherwise 80. It changes no package set and no test.
+# IN_IMAGE_GOMEMLIMIT (default unset) sets GOMEMLIMIT in the container, so the
+# Go GC works hard before the cgroup limit kills a large process; govulncheck's
+# symbol scan reached 16.7 GB under 16g (#1425).
 # CI_CGROUP_PARENT (default ci.slice) is the container's --cgroup-parent, so
 # the runner host's ci.slice bounds every CI container together; without it a
 # container runs in system.slice, outside that bound (#1178). Set it empty to
@@ -92,6 +95,11 @@ if ! [[ $gomaxprocs =~ ^[1-9][0-9]*$ ]]; then
   echo "IN_IMAGE_GOMAXPROCS must be a positive integer: $gomaxprocs" >&2
   exit 2
 fi
+gomemlimit=${IN_IMAGE_GOMEMLIMIT:-}
+if [ -n "$gomemlimit" ] && ! [[ $gomemlimit =~ ^[1-9][0-9]*(B|KiB|MiB|GiB|TiB)$ ]]; then
+  echo "IN_IMAGE_GOMEMLIMIT must be a Go memory limit such as 18GiB, or empty: $gomemlimit" >&2
+  exit 2
+fi
 cgroup_parent=${CI_CGROUP_PARENT-ci.slice}
 if [ -n "$cgroup_parent" ] && ! [[ $cgroup_parent =~ ^[A-Za-z0-9][A-Za-z0-9_.@:/-]*$ ]]; then
   echo "CI_CGROUP_PARENT must be a cgroup name such as ci.slice, or empty: $cgroup_parent" >&2
@@ -135,6 +143,7 @@ args=(
   --env CI="${CI:-}"
   --env GOMAXPROCS="$gomaxprocs"
 )
+[ -n "$gomemlimit" ] && args+=(--env GOMEMLIMIT="$gomemlimit")
 if [ -n "$cgroup_parent" ]; then
   args+=(--cgroup-parent "$cgroup_parent")
 fi

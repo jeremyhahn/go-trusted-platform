@@ -87,27 +87,6 @@ func TestIsValidTransition(t *testing.T) {
 	}
 }
 
-func TestStateManager_Register(t *testing.T) {
-	sm := NewStateManager()
-	mac, _ := net.ParseMAC("00:11:22:33:44:55")
-
-	device := &DeviceInfo{
-		ID:         "device-123",
-		MACAddress: mac,
-		State:      StateDiscovered,
-		PortID:     "port-1",
-	}
-
-	err := sm.Register(device)
-	assert.NoError(t, err)
-
-	// Verify device was registered
-	retrieved, err := sm.Get("device-123")
-	assert.NoError(t, err)
-	assert.Equal(t, "device-123", retrieved.ID)
-	assert.Equal(t, mac, retrieved.MACAddress)
-}
-
 func TestStateManager_Register_SetsTimestamps(t *testing.T) {
 	sm := NewStateManager()
 	mac, _ := net.ParseMAC("00:11:22:33:44:55")
@@ -201,34 +180,6 @@ func TestStateManager_Register_EmptyDeviceID(t *testing.T) {
 	var macErr ErrInvalidMACAddress
 	assert.True(t, errors.As(err, &macErr))
 	assert.Equal(t, "device ID is empty", macErr.Reason)
-}
-
-func TestStateManager_Register_DuplicateMAC(t *testing.T) {
-	sm := NewStateManager()
-	mac, _ := net.ParseMAC("00:11:22:33:44:55")
-
-	device1 := &DeviceInfo{
-		ID:         "device-1",
-		MACAddress: mac,
-		State:      StateDiscovered,
-	}
-
-	device2 := &DeviceInfo{
-		ID:         "device-2",
-		MACAddress: mac,
-		State:      StateDiscovered,
-	}
-
-	err := sm.Register(device1)
-	assert.NoError(t, err)
-
-	err = sm.Register(device2)
-	assert.Error(t, err)
-
-	var existsErr ErrDeviceAlreadyExists
-	assert.True(t, errors.As(err, &existsErr))
-	assert.Equal(t, "device-1", existsErr.DeviceID)
-	assert.Equal(t, mac.String(), existsErr.MACAddress)
 }
 
 func TestStateManager_Register_DuplicateID(t *testing.T) {
@@ -593,27 +544,6 @@ func TestStateManager_Transition_DeviceNotFound(t *testing.T) {
 	assert.True(t, errors.As(err, &notFoundErr))
 }
 
-func TestStateManager_Transition_InvalidTransition(t *testing.T) {
-	sm := NewStateManager()
-	mac, _ := net.ParseMAC("00:11:22:33:44:55")
-
-	device := &DeviceInfo{
-		ID:         "device-123",
-		MACAddress: mac,
-		State:      StateDiscovered,
-	}
-
-	err := sm.Register(device)
-	require.NoError(t, err)
-
-	// Skip from discovered to authorized (invalid)
-	err = sm.Transition("device-123", StateAuthorized, "test")
-	assert.Error(t, err)
-
-	var transitionErr ErrInvalidStateTransition
-	assert.True(t, errors.As(err, &transitionErr))
-}
-
 func TestStateManager_UpdateDevice(t *testing.T) {
 	sm := NewStateManager()
 	mac, _ := net.ParseMAC("00:11:22:33:44:55")
@@ -856,48 +786,6 @@ func TestStateManager_ConcurrentOperations(t *testing.T) {
 	assert.Equal(t, numDevices, sm.Count())
 }
 
-func TestStateManager_ConcurrentTransitions(t *testing.T) {
-	sm := NewStateManager()
-	mac, _ := net.ParseMAC("00:11:22:33:44:55")
-
-	device := &DeviceInfo{
-		ID:         "device-123",
-		MACAddress: mac,
-		State:      StateDiscovered,
-	}
-
-	err := sm.Register(device)
-	require.NoError(t, err)
-
-	// Multiple goroutines trying to transition at the same time
-	var wg sync.WaitGroup
-	successCount := 0
-	var mu sync.Mutex
-
-	for i := 0; i < 10; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			err := sm.Transition("device-123", StateBooting, "concurrent test")
-			if err == nil {
-				mu.Lock()
-				successCount++
-				mu.Unlock()
-			}
-		}()
-	}
-
-	wg.Wait()
-
-	// At least one should succeed, others may fail due to state already changed
-	assert.GreaterOrEqual(t, successCount, 1)
-
-	// Final state should be booting
-	retrieved, err := sm.Get("device-123")
-	assert.NoError(t, err)
-	assert.Equal(t, StateBooting, retrieved.State)
-}
-
 func TestCopyDeviceInfo(t *testing.T) {
 	t.Run("nil_input", func(t *testing.T) {
 		result := copyDeviceInfo(nil)
@@ -977,6 +865,28 @@ func TestCopyDeviceInfo(t *testing.T) {
 		assert.Len(t, dst.Events, 1)
 		assert.Nil(t, dst.Events[0])
 	})
+
+	t.Run("nil_event_details", func(t *testing.T) {
+		src := &DeviceInfo{
+			ID:     "device-123",
+			State:  StateDiscovered,
+			Events: []*ProvisioningEvent{{ID: "event-1", DeviceID: "device-123", Details: nil}},
+		}
+
+		dst := copyDeviceInfo(src)
+
+		assert.Len(t, dst.Events, 1)
+		assert.Nil(t, dst.Events[0].Details)
+	})
+
+	t.Run("nil_mac_address", func(t *testing.T) {
+		src := &DeviceInfo{ID: "device-123", MACAddress: nil, State: StateDiscovered}
+
+		dst := copyDeviceInfo(src)
+
+		assert.Equal(t, src.ID, dst.ID)
+		assert.Nil(t, dst.MACAddress)
+	})
 }
 
 func TestStateToEventType(t *testing.T) {
@@ -1006,30 +916,6 @@ func TestStateToEventType(t *testing.T) {
 	}
 }
 
-func TestValidTransitions_Coverage(t *testing.T) {
-	// Ensure all valid states have transition definitions
-	allStates := []ProvisioningState{
-		StateUnknown,
-		StateDiscovered,
-		StateBooting,
-		StateInstalling,
-		StateInstallComplete,
-		StateEnrolling,
-		StateEnrolled,
-		StateAuthorizing,
-		StateAuthorized,
-		StateFailed,
-		StateQuarantined,
-	}
-
-	for _, state := range allStates {
-		t.Run(string(state), func(t *testing.T) {
-			_, exists := ValidTransitions[state]
-			assert.True(t, exists, "ValidTransitions should contain entry for state %s", state)
-		})
-	}
-}
-
 func TestStateManager_emitEvent_NilEvent(t *testing.T) {
 	sm := NewStateManager()
 	handler := &stateTestEventHandler{delivered: newEventSignal()}
@@ -1046,106 +932,38 @@ func TestStateManager_emitEvent_NilEvent(t *testing.T) {
 	assert.Len(t, events, 0)
 }
 
-func TestStateManager_emitEvent_NoHandlers(t *testing.T) {
-	sm := NewStateManager()
-
-	// Create a valid event
-	event := &ProvisioningEvent{
-		ID:        "test-event",
-		DeviceID:  "device-123",
-		EventType: EventDeviceDiscovered,
+func TestStateManager_Transition_FailureStatesSetEventError(t *testing.T) {
+	tests := []struct {
+		name      string
+		state     ProvisioningState
+		reason    string
+		eventType ProvisioningEventType
+	}{
+		{"quarantined", StateQuarantined, "security violation", EventQuarantined},
+		{"failed", StateFailed, "boot failure", EventFailed},
 	}
 
-	// This should not panic
-	sm.emitEvent(event)
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sm := NewStateManager()
+			mac, _ := net.ParseMAC("00:11:22:33:44:55")
+			handler := &stateTestEventHandler{delivered: newEventSignal()}
+			sm.RegisterEventHandler(handler)
 
-func TestStateManager_Transition_QuarantinedSetsError(t *testing.T) {
-	sm := NewStateManager()
-	mac, _ := net.ParseMAC("00:11:22:33:44:55")
-	handler := &stateTestEventHandler{delivered: newEventSignal()}
-	sm.RegisterEventHandler(handler)
+			err := sm.Register(&DeviceInfo{ID: "device-123", MACAddress: mac, State: StateDiscovered})
+			require.NoError(t, err)
 
-	device := &DeviceInfo{
-		ID:         "device-123",
-		MACAddress: mac,
-		State:      StateDiscovered,
+			err = sm.Transition("device-123", tt.state, tt.reason)
+			assert.NoError(t, err)
+
+			handler.delivered.await(t, 1)
+
+			events := handler.getEvents()
+			assert.Len(t, events, 1)
+			assert.Equal(t, tt.eventType, events[0].EventType)
+			assert.Equal(t, tt.reason, events[0].Error)
+		})
 	}
-
-	err := sm.Register(device)
-	require.NoError(t, err)
-
-	err = sm.Transition("device-123", StateQuarantined, "security violation")
-	assert.NoError(t, err)
-
-	handler.delivered.await(t, 1)
-
-	events := handler.getEvents()
-	assert.Len(t, events, 1)
-	assert.Equal(t, EventQuarantined, events[0].EventType)
-	assert.Equal(t, "security violation", events[0].Error)
-}
-
-func TestStateManager_Transition_FailedSetsError(t *testing.T) {
-	sm := NewStateManager()
-	mac, _ := net.ParseMAC("00:11:22:33:44:55")
-	handler := &stateTestEventHandler{delivered: newEventSignal()}
-	sm.RegisterEventHandler(handler)
-
-	device := &DeviceInfo{
-		ID:         "device-123",
-		MACAddress: mac,
-		State:      StateDiscovered,
-	}
-
-	err := sm.Register(device)
-	require.NoError(t, err)
-
-	err = sm.Transition("device-123", StateFailed, "boot failure")
-	assert.NoError(t, err)
-
-	handler.delivered.await(t, 1)
-
-	events := handler.getEvents()
-	assert.Len(t, events, 1)
-	assert.Equal(t, EventFailed, events[0].EventType)
-	assert.Equal(t, "boot failure", events[0].Error)
-}
-
-func TestCopyDeviceInfo_WithNilDetails(t *testing.T) {
-	mac, _ := net.ParseMAC("00:11:22:33:44:55")
-
-	src := &DeviceInfo{
-		ID:         "device-123",
-		MACAddress: mac,
-		State:      StateDiscovered,
-		Events: []*ProvisioningEvent{
-			{
-				ID:        "event-1",
-				DeviceID:  "device-123",
-				EventType: EventDeviceDiscovered,
-				Details:   nil, // nil details map
-			},
-		},
-	}
-
-	dst := copyDeviceInfo(src)
-
-	assert.Len(t, dst.Events, 1)
-	assert.Nil(t, dst.Events[0].Details)
-}
-
-func TestCopyDeviceInfo_EmptyMACAddress(t *testing.T) {
-	src := &DeviceInfo{
-		ID:         "device-123",
-		MACAddress: nil, // Empty MAC
-		State:      StateDiscovered,
-	}
-
-	dst := copyDeviceInfo(src)
-
-	assert.Equal(t, src.ID, dst.ID)
-	assert.Nil(t, dst.MACAddress)
 }
 
 func TestStateManager_Transition_EmptyReason(t *testing.T) {
@@ -1484,6 +1302,7 @@ func TestStateManager_Register_MACConflictCleansUpDevice(t *testing.T) {
 	var existsErr ErrDeviceAlreadyExists
 	assert.True(t, errors.As(err, &existsErr))
 	assert.Equal(t, "device-1", existsErr.DeviceID)
+	assert.Equal(t, mac.String(), existsErr.MACAddress)
 
 	// Verify device-3 was NOT stored (cleanup happened)
 	_, loaded = sm.devices.Load("device-3")

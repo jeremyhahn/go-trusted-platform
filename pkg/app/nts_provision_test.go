@@ -240,7 +240,7 @@ func TestRegisterNTSCertTarget_SurvivesSecretResolution(t *testing.T) {
 
 	// ProcessSecrets replaces the kms:// URIs with resolved PEM in place.
 	app.NTPConfig.Serve.NTS.CertURI = "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n"
-	app.NTPConfig.Serve.NTS.KeyURI = "-----BEGIN PRIVATE KEY-----\nBBBB\n-----END PRIVATE KEY-----\n"
+	app.NTPConfig.Serve.NTS.KeyURI = genTestKeyPEM()
 
 	app.RegisterNTSCertTarget(context.Background())
 	_, ok := app.certTargets().Get("nts-server")
@@ -350,7 +350,7 @@ func (f *fakeNTPApplier) CheckServeNames(context.Context, ntp.NameResolver) []nt
 // NTPConfig — and that a deployment that cannot happen is a renewal
 // failure, never a silent success.
 func TestDeployNTSMaterial(t *testing.T) {
-	keyPEM := []byte("-----BEGIN PRIVATE KEY-----\nNEW\n-----END PRIVATE KEY-----\n")
+	keyPEM := []byte(genTestKeyPEM())
 	certPEM := []byte("-----BEGIN CERTIFICATE-----\nNEW\n-----END CERTIFICATE-----\n")
 	// The enclave wipes the slice it is handed, so each subtest builds its
 	// own from an untouched copy.
@@ -442,8 +442,8 @@ func TestEnclaveNTSKey(t *testing.T) {
 	// regresses to passing the borrow through.
 	t.Run("the stored key outlives the enclave that produced it", func(t *testing.T) {
 		store := newFakeSecretStore()
-		enclave := memguard.NewMemoryEnclave(
-			[]byte("-----BEGIN PRIVATE KEY-----\nSTORED\n-----END PRIVATE KEY-----\n"))
+		storedKey := genTestKeyPEM()
+		enclave := memguard.NewMemoryEnclave([]byte(storedKey))
 		meta := map[string]string{"kind": "private-key"}
 
 		require.NoError(t, storeNTSKey(context.Background(), store,
@@ -453,7 +453,7 @@ func TestEnclaveNTSKey(t *testing.T) {
 		data, ok := store.get("platform/ntp/nts-key")
 		require.True(t, ok)
 		assert.Equal(t,
-			"-----BEGIN PRIVATE KEY-----\nSTORED\n-----END PRIVATE KEY-----\n",
+			storedKey,
 			string(data))
 	})
 

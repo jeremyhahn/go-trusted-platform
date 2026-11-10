@@ -355,6 +355,28 @@ func TestResolveDefaultISO_NotFound(t *testing.T) {
 	assert.Contains(t, result, ".iso")
 }
 
+func TestResolveDefaultISO_FromVersionFile(t *testing.T) {
+	tests := []struct {
+		name  string
+		files []string
+		want  string
+	}{
+		{"standard image", []string{"trusted-alpine-1.2.3-x86_64.iso", "trusted-alpine-1.2.3-x86_64-fips.iso"}, "trusted-alpine-1.2.3-x86_64.iso"},
+		{"FIPS image only", []string{"trusted-alpine-1.2.3-x86_64-fips.iso"}, "trusted-alpine-1.2.3-x86_64-fips.iso"},
+		{"no image yet", nil, "trusted-alpine-1.2.3-x86_64.iso"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			require.NoError(t, os.WriteFile("VERSION", []byte("1.2.3 \r\n"), 0o600))
+			for _, name := range tt.files {
+				require.NoError(t, os.WriteFile(name, []byte("iso"), 0o600))
+			}
+			assert.Equal(t, tt.want, resolveDefaultISO())
+		})
+	}
+}
+
 func TestCopyTestFile_FileNotFound(t *testing.T) {
 	err := copyTestFile("/nonexistent/source", "/tmp/dest")
 	assert.Error(t, err)

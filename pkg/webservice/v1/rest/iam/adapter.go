@@ -518,16 +518,20 @@ func (a *QuicBaaSIAMAdapter) TestPolicy(ctx context.Context, tenantID string, re
 	if err != nil {
 		return nil, err
 	}
+	return testPolicyResponseFromSDK(resp), nil
+}
+
+// testPolicyResponseFromSDK maps the inline case's result to the REST shape.
+// Allowed is the actual authorization decision: the SDK's Passed only says
+// whether the case met its expected result, so a passing deny case is denied.
+func testPolicyResponseFromSDK(resp *iamsdk.TestPolicyResponse) *TestPolicyResponse {
 	out := &TestPolicyResponse{}
-	if resp.Passed > 0 {
-		out.Allowed = true
-	}
 	if len(resp.Results) > 0 {
 		first := resp.Results[0]
 		out.MatchedRule = first.MatchedRule
-		out.Allowed = first.Passed
+		out.Allowed = first.ActualResult == iamsdk.EffectAllow
 	}
-	return out, nil
+	return out
 }
 
 // -----------------------------------------------------------------------------

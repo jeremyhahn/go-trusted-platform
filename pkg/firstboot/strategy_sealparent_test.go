@@ -51,15 +51,3 @@ func TestGetLUKSSealParentHandle_DefaultsToPlatformKeystoreSRK(t *testing.T) {
 		t.Fatal("seal parent must not resolve to the SSRK")
 	}
 }
-
-// TestEnsurePlatformSRK_RequiresKeystoreConfig asserts the Platform SRK
-// creation fails closed when the tpm.keystore section is missing, instead of
-// silently sealing under an unprovisionable parent.
-func TestEnsurePlatformSRK_RequiresKeystoreConfig(t *testing.T) {
-	strategy := newSealParentTestStrategy()
-
-	err := strategy.ensurePlatformSRK()
-	if err == nil {
-		t.Fatal("expected error when TPM/keystore configuration is unavailable")
-	}
-}

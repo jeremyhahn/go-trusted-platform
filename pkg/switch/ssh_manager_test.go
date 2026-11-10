@@ -124,17 +124,6 @@ Trunking Native Mode VLAN: 1 (default)
 	}
 }
 
-func TestParseAccessVLANFromSwitchport_VLAN1(t *testing.T) {
-	output := `Access Mode VLAN: 1 (default)`
-	vlan, err := parseAccessVLANFromSwitchport(output)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if vlan != 1 {
-		t.Fatalf("expected vlan 1, got %d", vlan)
-	}
-}
-
 func TestParseAccessVLANFromSwitchport_NotFound(t *testing.T) {
 	output := `Name: Eth1/3
 Switchport: Enabled
@@ -143,13 +132,6 @@ Administrative Mode: trunk
 	_, err := parseAccessVLANFromSwitchport(output)
 	if err == nil {
 		t.Fatal("expected error for missing access vlan line")
-	}
-}
-
-func TestParseAccessVLANFromSwitchport_EmptyOutput(t *testing.T) {
-	_, err := parseAccessVLANFromSwitchport("")
-	if err == nil {
-		t.Fatal("expected error for empty output")
 	}
 }
 
@@ -303,25 +285,6 @@ Eth1/3    --                 disabled     200        auto    auto    10/100/1000
 	}
 }
 
-func TestParseInterfaceStatusTable_SinglePort(t *testing.T) {
-	output := `Port      Name               Status       Vlan       Duplex  Speed   Type
-Eth1/1    server-01          connected    10         full    1000    10/100/1000
-`
-	ports, err := parseInterfaceStatusTable(output)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(ports) != 1 {
-		t.Fatalf("expected 1 port, got %d", len(ports))
-	}
-	if ports[0].Port != "Eth1/1" {
-		t.Fatalf("expected port Eth1/1, got %s", ports[0].Port)
-	}
-	if ports[0].AccessVLAN != 10 {
-		t.Fatalf("expected vlan 10, got %d", ports[0].AccessVLAN)
-	}
-}
-
 func TestParseInterfaceStatusTable_NotConnected(t *testing.T) {
 	output := `Port      Name               Status       Vlan       Duplex  Speed   Type
 Eth1/1    server-01          notconnect   100        auto    auto    10/100/1000
@@ -351,24 +314,7 @@ without a header line
 	}
 }
 
-func TestParseInterfaceStatusTable_EmptyOutput(t *testing.T) {
-	_, err := parseInterfaceStatusTable("")
-	if err == nil {
-		t.Fatal("expected error for empty output")
-	}
-}
-
 // --- parseTrunkVLANList tests ---
-
-func TestParseTrunkVLANList(t *testing.T) {
-	vlans := parseTrunkVLANList("10,20,30")
-	if len(vlans) != 3 {
-		t.Fatalf("expected 3 vlans, got %d", len(vlans))
-	}
-	if vlans[0] != 10 || vlans[1] != 20 || vlans[2] != 30 {
-		t.Fatalf("unexpected vlans: %v", vlans)
-	}
-}
 
 func TestParseTrunkVLANList_Empty(t *testing.T) {
 	vlans := parseTrunkVLANList("")

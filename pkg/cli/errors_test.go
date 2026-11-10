@@ -138,22 +138,6 @@ func TestErrCompletionGenerationFailed(t *testing.T) {
 	}
 }
 
-func TestErrorTypesImplementErrorInterface(t *testing.T) {
-	// Verify all error types implement the error interface
-	var _ error = ErrConfigFileNotFound{}
-	var _ error = ErrInvalidContext{}
-	var _ error = ErrContextNotFound{}
-	var _ error = ErrNoContextSet{}
-	var _ error = ErrInvalidOutputFormat{}
-	var _ error = ErrConnectionFailed{}
-	var _ error = ErrInvalidServiceType{}
-	var _ error = ErrOperationFailed{}
-	var _ error = ErrInsufficientPermissions{}
-	var _ error = ErrAutoDetectionFailed{}
-	var _ error = ErrInvalidShellType{}
-	var _ error = ErrCompletionGenerationFailed{}
-}
-
 func TestErrorWrapping(t *testing.T) {
 	tests := []struct {
 		name     string

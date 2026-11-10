@@ -39,6 +39,14 @@ func TestNewCommand(t *testing.T) {
 	if cmd.Short == "" {
 		t.Error("Short description should not be empty")
 	}
+
+	if len(cmd.Long) < 100 {
+		t.Error("Long description should be descriptive (at least 100 chars)")
+	}
+
+	if cmd.RunE != nil {
+		t.Error("compute root command should not have RunE set (it's a grouping command)")
+	}
 }
 
 func TestNewCommand_Subcommands(t *testing.T) {
@@ -84,38 +92,6 @@ func TestNewCommand_Subcommands(t *testing.T) {
 	}
 }
 
-func TestNewCommand_HasLongDescription(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{}
-	}
-
-	cmd := NewCommand(getFlags)
-
-	if cmd.Long == "" {
-		t.Error("Long description should not be empty")
-	}
-
-	if len(cmd.Long) < 100 {
-		t.Error("Long description should be descriptive (at least 100 chars)")
-	}
-}
-
-func TestNewCommand_IsGroupingCommand(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{}
-	}
-
-	cmd := NewCommand(getFlags)
-
-	if cmd.RunE != nil {
-		t.Error("compute root command should not have RunE set (it's a grouping command)")
-	}
-
-	if !cmd.HasSubCommands() {
-		t.Error("compute command should have subcommands")
-	}
-}
-
 func TestNewCommand_GetFlagsNotCalledDuringCreation(t *testing.T) {
 	callCount := 0
 	getFlags := func() *cli.CommonFlags {
@@ -146,16 +122,17 @@ func TestNewCommand_SubcommandDetails(t *testing.T) {
 	tests := []struct {
 		name          string
 		expectedShort string
+		minLong       int
 	}{
-		{name: "create", expectedShort: "Create a new virtual machine"},
-		{name: "start", expectedShort: "Start a virtual machine"},
-		{name: "stop", expectedShort: "Stop a running virtual machine"},
+		{name: "create", expectedShort: "Create a new virtual machine", minLong: 100},
+		{name: "start", expectedShort: "Start a virtual machine", minLong: 50},
+		{name: "stop", expectedShort: "Stop a running virtual machine", minLong: 50},
 		{name: "reboot", expectedShort: "Reboot a virtual machine"},
 		{name: "suspend", expectedShort: "Suspend a running virtual machine"},
 		{name: "resume", expectedShort: "Resume a suspended virtual machine"},
-		{name: "delete", expectedShort: "Delete a virtual machine"},
-		{name: "get", expectedShort: "Get virtual machine details"},
-		{name: "list", expectedShort: "List virtual machines"},
+		{name: "delete", expectedShort: "Delete a virtual machine", minLong: 50},
+		{name: "get", expectedShort: "Get virtual machine details", minLong: 50},
+		{name: "list", expectedShort: "List virtual machines", minLong: 50},
 	}
 
 	for _, tt := range tests {
@@ -167,6 +144,9 @@ func TestNewCommand_SubcommandDetails(t *testing.T) {
 					if subcmd.Short != tt.expectedShort {
 						t.Errorf("subcommand %q: expected Short %q, got %q",
 							tt.name, tt.expectedShort, subcmd.Short)
+					}
+					if len(subcmd.Long) < tt.minLong {
+						t.Errorf("subcommand %q: Long description shorter than %d chars", tt.name, tt.minLong)
 					}
 					break
 				}

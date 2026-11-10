@@ -41,6 +41,7 @@ func TestErrorMessages(t *testing.T) {
 		{&ErrConfigInvalid{Field: "f", Reason: "r"}, "invalid configuration field f: r"},
 		{&ErrCertificateLoadFailed{CertFile: "/c.pem", Cause: cause}, "/c.pem"},
 		{&ErrClientCALoadFailed{Path: "/ca.pem", Cause: cause}, "/ca.pem"},
+		{&ErrAuditDialFailed{Cause: cause}, "dialing quicbaasd audit client: boom"},
 		{&ErrClientCALoadFailed{Path: "/ca.pem"}, "no certificates"},
 		{&ErrDialFailed{Cause: cause}, "dialing platformd"},
 		{&ErrNilDialFunc{}, "nil dial function"},
