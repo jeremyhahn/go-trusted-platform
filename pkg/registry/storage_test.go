@@ -101,30 +101,25 @@ func (m *mockStorageClient) List(ctx context.Context, entityType, prefix string,
 
 // Tests for NewQuicBaaSStorage
 
-func TestNewQuicBaaSStorage_Success(t *testing.T) {
-	client := newMockStorageClient()
-
-	storage, err := NewQuicBaaSStorage(client)
-	if err != nil {
-		t.Fatalf("expected no error, got: %v", err)
+func TestNewQuicBaaSStorage_Namespace(t *testing.T) {
+	tests := []struct {
+		name string
+		opts []StorageOption
+		want string
+	}{
+		{name: "default", want: "registry"},
+		{name: "custom", opts: []StorageOption{WithStorageNamespace("custom-ns")}, want: "custom-ns"},
 	}
-	if storage == nil {
-		t.Fatal("expected storage to be non-nil")
-	}
-	if storage.namespace != "registry" {
-		t.Errorf("expected default namespace 'registry', got %s", storage.namespace)
-	}
-}
-
-func TestNewQuicBaaSStorage_WithOptions(t *testing.T) {
-	client := newMockStorageClient()
-
-	storage, err := NewQuicBaaSStorage(client, WithStorageNamespace("custom-ns"))
-	if err != nil {
-		t.Fatalf("expected no error, got: %v", err)
-	}
-	if storage.namespace != "custom-ns" {
-		t.Errorf("expected namespace 'custom-ns', got %s", storage.namespace)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			storage, err := NewQuicBaaSStorage(newMockStorageClient(), tt.opts...)
+			if err != nil {
+				t.Fatalf("expected no error, got: %v", err)
+			}
+			if storage.namespace != tt.want {
+				t.Errorf("expected namespace %q, got %q", tt.want, storage.namespace)
+			}
+		})
 	}
 }
 
@@ -164,17 +159,57 @@ func TestStoreBlob_Success(t *testing.T) {
 	}
 }
 
-func TestStoreBlob_NilContext(t *testing.T) {
-	client := newMockStorageClient()
-	storage, _ := NewQuicBaaSStorage(client)
-
-	err := storage.StoreBlob(nil, "sha256:test", []byte("content")) //nolint:staticcheck // testing nil context handling
-	if err == nil {
-		t.Fatal("expected error for nil context")
+// TestStorage_NilContext checks that every operation refuses a nil context
+// with an ErrNilContext naming the operation.
+func TestStorage_NilContext(t *testing.T) {
+	var nilCtx context.Context
+	ops := map[string]func(s *QuicBaaSStorage) error{
+		"StoreBlob": func(s *QuicBaaSStorage) error {
+			return s.StoreBlob(nilCtx, "sha256:test", []byte("content"))
+		},
+		"GetBlob": func(s *QuicBaaSStorage) error {
+			_, err := s.GetBlob(nilCtx, "sha256:test123")
+			return err
+		},
+		"DeleteBlob": func(s *QuicBaaSStorage) error {
+			return s.DeleteBlob(nilCtx, "sha256:test123")
+		},
+		"BlobExists": func(s *QuicBaaSStorage) error {
+			_, err := s.BlobExists(nilCtx, "sha256:test123")
+			return err
+		},
+		"StoreManifest": func(s *QuicBaaSStorage) error {
+			return s.StoreManifest(nilCtx, "test:latest", &ImageManifest{SchemaVersion: 2})
+		},
+		"GetManifest": func(s *QuicBaaSStorage) error {
+			_, err := s.GetManifest(nilCtx, "test:latest")
+			return err
+		},
+		"DeleteManifest": func(s *QuicBaaSStorage) error {
+			return s.DeleteManifest(nilCtx, "test:latest")
+		},
+		"ManifestExists": func(s *QuicBaaSStorage) error {
+			_, err := s.ManifestExists(nilCtx, "test:latest")
+			return err
+		},
+		"ListManifests": func(s *QuicBaaSStorage) error {
+			_, err := s.ListManifests(nilCtx, ListOptions{})
+			return err
+		},
 	}
-	var nilCtxErr ErrNilContext
-	if !errors.As(err, &nilCtxErr) {
-		t.Errorf("expected ErrNilContext, got %T", err)
+	for name, op := range ops {
+		t.Run(name, func(t *testing.T) {
+			storage, _ := NewQuicBaaSStorage(newMockStorageClient())
+
+			err := op(storage)
+			var nilCtxErr ErrNilContext
+			if !errors.As(err, &nilCtxErr) {
+				t.Fatalf("expected ErrNilContext, got %T (%v)", err, err)
+			}
+			if nilCtxErr.Operation != name {
+				t.Errorf("expected operation %q, got %q", name, nilCtxErr.Operation)
+			}
+		})
 	}
 }
 
@@ -221,19 +256,55 @@ func TestStoreBlob_StorageError(t *testing.T) {
 	}
 }
 
-func TestStoreBlob_Closed(t *testing.T) {
-	client := newMockStorageClient()
-	storage, _ := NewQuicBaaSStorage(client)
-	_ = storage.Close()
-
+// TestStorage_Closed checks that every operation refuses a closed storage
+// with ErrRegistryClosed.
+func TestStorage_Closed(t *testing.T) {
 	ctx := context.Background()
-	err := storage.StoreBlob(ctx, "sha256:test", []byte("content"))
-	if err == nil {
-		t.Fatal("expected error for closed storage")
+	ops := map[string]func(s *QuicBaaSStorage) error{
+		"StoreBlob": func(s *QuicBaaSStorage) error {
+			return s.StoreBlob(ctx, "sha256:test", []byte("content"))
+		},
+		"GetBlob": func(s *QuicBaaSStorage) error {
+			_, err := s.GetBlob(ctx, "sha256:test123")
+			return err
+		},
+		"DeleteBlob": func(s *QuicBaaSStorage) error {
+			return s.DeleteBlob(ctx, "sha256:test123")
+		},
+		"BlobExists": func(s *QuicBaaSStorage) error {
+			_, err := s.BlobExists(ctx, "sha256:test123")
+			return err
+		},
+		"StoreManifest": func(s *QuicBaaSStorage) error {
+			return s.StoreManifest(ctx, "test:latest", &ImageManifest{SchemaVersion: 2})
+		},
+		"GetManifest": func(s *QuicBaaSStorage) error {
+			_, err := s.GetManifest(ctx, "test:latest")
+			return err
+		},
+		"DeleteManifest": func(s *QuicBaaSStorage) error {
+			return s.DeleteManifest(ctx, "test:latest")
+		},
+		"ManifestExists": func(s *QuicBaaSStorage) error {
+			_, err := s.ManifestExists(ctx, "test:latest")
+			return err
+		},
+		"ListManifests": func(s *QuicBaaSStorage) error {
+			_, err := s.ListManifests(ctx, ListOptions{})
+			return err
+		},
 	}
-	var closedErr ErrRegistryClosed
-	if !errors.As(err, &closedErr) {
-		t.Errorf("expected ErrRegistryClosed, got %T", err)
+	for name, op := range ops {
+		t.Run(name, func(t *testing.T) {
+			storage, _ := NewQuicBaaSStorage(newMockStorageClient())
+			_ = storage.Close()
+
+			err := op(storage)
+			var closedErr ErrRegistryClosed
+			if !errors.As(err, &closedErr) {
+				t.Errorf("expected ErrRegistryClosed, got %T (%v)", err, err)
+			}
+		})
 	}
 }
 
@@ -268,20 +339,6 @@ func TestGetBlob_StorageError(t *testing.T) {
 	}
 }
 
-func TestGetBlob_NilContext(t *testing.T) {
-	client := newMockStorageClient()
-	storage, _ := NewQuicBaaSStorage(client)
-
-	_, err := storage.GetBlob(nil, "sha256:test123") //nolint:staticcheck // testing nil context handling
-	if err == nil {
-		t.Fatal("expected error for nil context")
-	}
-	var nilCtxErr ErrNilContext
-	if !errors.As(err, &nilCtxErr) {
-		t.Errorf("expected ErrNilContext, got %T", err)
-	}
-}
-
 func TestGetBlob_InvalidDigest(t *testing.T) {
 	client := newMockStorageClient()
 	storage, _ := NewQuicBaaSStorage(client)
@@ -305,22 +362,6 @@ func TestGetBlob_InvalidDigest(t *testing.T) {
 				t.Error("expected error for invalid digest")
 			}
 		})
-	}
-}
-
-func TestGetBlob_Closed(t *testing.T) {
-	client := newMockStorageClient()
-	storage, _ := NewQuicBaaSStorage(client)
-	_ = storage.Close()
-
-	ctx := context.Background()
-	_, err := storage.GetBlob(ctx, "sha256:test123")
-	if err == nil {
-		t.Fatal("expected error for closed storage")
-	}
-	var closedErr ErrRegistryClosed
-	if !errors.As(err, &closedErr) {
-		t.Errorf("expected ErrRegistryClosed, got %T", err)
 	}
 }
 
@@ -363,20 +404,6 @@ func TestDeleteBlob_StorageError(t *testing.T) {
 	}
 }
 
-func TestDeleteBlob_NilContext(t *testing.T) {
-	client := newMockStorageClient()
-	storage, _ := NewQuicBaaSStorage(client)
-
-	err := storage.DeleteBlob(nil, "sha256:test123") //nolint:staticcheck // testing nil context handling
-	if err == nil {
-		t.Fatal("expected error for nil context")
-	}
-	var nilCtxErr ErrNilContext
-	if !errors.As(err, &nilCtxErr) {
-		t.Errorf("expected ErrNilContext, got %T", err)
-	}
-}
-
 func TestDeleteBlob_InvalidDigest(t *testing.T) {
 	client := newMockStorageClient()
 	storage, _ := NewQuicBaaSStorage(client)
@@ -400,22 +427,6 @@ func TestDeleteBlob_InvalidDigest(t *testing.T) {
 				t.Error("expected error for invalid digest")
 			}
 		})
-	}
-}
-
-func TestDeleteBlob_Closed(t *testing.T) {
-	client := newMockStorageClient()
-	storage, _ := NewQuicBaaSStorage(client)
-	_ = storage.Close()
-
-	ctx := context.Background()
-	err := storage.DeleteBlob(ctx, "sha256:test123")
-	if err == nil {
-		t.Fatal("expected error for closed storage")
-	}
-	var closedErr ErrRegistryClosed
-	if !errors.As(err, &closedErr) {
-		t.Errorf("expected ErrRegistryClosed, got %T", err)
 	}
 }
 
@@ -448,20 +459,6 @@ func TestBlobExists_Success(t *testing.T) {
 	}
 }
 
-func TestBlobExists_NilContext(t *testing.T) {
-	client := newMockStorageClient()
-	storage, _ := NewQuicBaaSStorage(client)
-
-	_, err := storage.BlobExists(nil, "sha256:test123") //nolint:staticcheck // testing nil context handling
-	if err == nil {
-		t.Fatal("expected error for nil context")
-	}
-	var nilCtxErr ErrNilContext
-	if !errors.As(err, &nilCtxErr) {
-		t.Errorf("expected ErrNilContext, got %T", err)
-	}
-}
-
 func TestBlobExists_InvalidDigest(t *testing.T) {
 	client := newMockStorageClient()
 	storage, _ := NewQuicBaaSStorage(client)
@@ -485,22 +482,6 @@ func TestBlobExists_InvalidDigest(t *testing.T) {
 				t.Error("expected error for invalid digest")
 			}
 		})
-	}
-}
-
-func TestBlobExists_Closed(t *testing.T) {
-	client := newMockStorageClient()
-	storage, _ := NewQuicBaaSStorage(client)
-	_ = storage.Close()
-
-	ctx := context.Background()
-	_, err := storage.BlobExists(ctx, "sha256:test123")
-	if err == nil {
-		t.Fatal("expected error for closed storage")
-	}
-	var closedErr ErrRegistryClosed
-	if !errors.As(err, &closedErr) {
-		t.Errorf("expected ErrRegistryClosed, got %T", err)
 	}
 }
 
@@ -566,21 +547,6 @@ func TestStoreManifest_Success(t *testing.T) {
 	}
 }
 
-func TestStoreManifest_NilContext(t *testing.T) {
-	client := newMockStorageClient()
-	storage, _ := NewQuicBaaSStorage(client)
-
-	manifest := &ImageManifest{SchemaVersion: 2}
-	err := storage.StoreManifest(nil, "test:latest", manifest) //nolint:staticcheck // testing nil context handling
-	if err == nil {
-		t.Fatal("expected error for nil context")
-	}
-	var nilCtxErr ErrNilContext
-	if !errors.As(err, &nilCtxErr) {
-		t.Errorf("expected ErrNilContext, got %T", err)
-	}
-}
-
 func TestStoreManifest_NilManifest(t *testing.T) {
 	client := newMockStorageClient()
 	storage, _ := NewQuicBaaSStorage(client)
@@ -622,23 +588,6 @@ func TestStoreManifest_StorageError(t *testing.T) {
 	err := storage.StoreManifest(ctx, "test:latest", manifest)
 	if err == nil {
 		t.Fatal("expected error for storage failure")
-	}
-}
-
-func TestStoreManifest_Closed(t *testing.T) {
-	client := newMockStorageClient()
-	storage, _ := NewQuicBaaSStorage(client)
-	_ = storage.Close()
-
-	ctx := context.Background()
-	manifest := &ImageManifest{SchemaVersion: 2}
-	err := storage.StoreManifest(ctx, "test:latest", manifest)
-	if err == nil {
-		t.Fatal("expected error for closed storage")
-	}
-	var closedErr ErrRegistryClosed
-	if !errors.As(err, &closedErr) {
-		t.Errorf("expected ErrRegistryClosed, got %T", err)
 	}
 }
 
@@ -750,20 +699,6 @@ func TestGetManifest_NotFound(t *testing.T) {
 	}
 }
 
-func TestGetManifest_NilContext(t *testing.T) {
-	client := newMockStorageClient()
-	storage, _ := NewQuicBaaSStorage(client)
-
-	_, err := storage.GetManifest(nil, "test:latest") //nolint:staticcheck // testing nil context handling
-	if err == nil {
-		t.Fatal("expected error for nil context")
-	}
-	var nilCtxErr ErrNilContext
-	if !errors.As(err, &nilCtxErr) {
-		t.Errorf("expected ErrNilContext, got %T", err)
-	}
-}
-
 func TestGetManifest_EmptyReference(t *testing.T) {
 	client := newMockStorageClient()
 	storage, _ := NewQuicBaaSStorage(client)
@@ -776,22 +711,6 @@ func TestGetManifest_EmptyReference(t *testing.T) {
 	var refErr ErrInvalidImageRef
 	if !errors.As(err, &refErr) {
 		t.Errorf("expected ErrInvalidImageRef, got %T", err)
-	}
-}
-
-func TestGetManifest_Closed(t *testing.T) {
-	client := newMockStorageClient()
-	storage, _ := NewQuicBaaSStorage(client)
-	_ = storage.Close()
-
-	ctx := context.Background()
-	_, err := storage.GetManifest(ctx, "test:latest")
-	if err == nil {
-		t.Fatal("expected error for closed storage")
-	}
-	var closedErr ErrRegistryClosed
-	if !errors.As(err, &closedErr) {
-		t.Errorf("expected ErrRegistryClosed, got %T", err)
 	}
 }
 
@@ -854,20 +773,6 @@ func TestDeleteManifest_Success(t *testing.T) {
 	}
 }
 
-func TestDeleteManifest_NilContext(t *testing.T) {
-	client := newMockStorageClient()
-	storage, _ := NewQuicBaaSStorage(client)
-
-	err := storage.DeleteManifest(nil, "test:latest") //nolint:staticcheck // testing nil context handling
-	if err == nil {
-		t.Fatal("expected error for nil context")
-	}
-	var nilCtxErr ErrNilContext
-	if !errors.As(err, &nilCtxErr) {
-		t.Errorf("expected ErrNilContext, got %T", err)
-	}
-}
-
 func TestDeleteManifest_EmptyReference(t *testing.T) {
 	client := newMockStorageClient()
 	storage, _ := NewQuicBaaSStorage(client)
@@ -880,22 +785,6 @@ func TestDeleteManifest_EmptyReference(t *testing.T) {
 	var refErr ErrInvalidImageRef
 	if !errors.As(err, &refErr) {
 		t.Errorf("expected ErrInvalidImageRef, got %T", err)
-	}
-}
-
-func TestDeleteManifest_Closed(t *testing.T) {
-	client := newMockStorageClient()
-	storage, _ := NewQuicBaaSStorage(client)
-	_ = storage.Close()
-
-	ctx := context.Background()
-	err := storage.DeleteManifest(ctx, "test:latest")
-	if err == nil {
-		t.Fatal("expected error for closed storage")
-	}
-	var closedErr ErrRegistryClosed
-	if !errors.As(err, &closedErr) {
-		t.Errorf("expected ErrRegistryClosed, got %T", err)
 	}
 }
 
@@ -964,20 +853,6 @@ func TestManifestExists_Success(t *testing.T) {
 	}
 }
 
-func TestManifestExists_NilContext(t *testing.T) {
-	client := newMockStorageClient()
-	storage, _ := NewQuicBaaSStorage(client)
-
-	_, err := storage.ManifestExists(nil, "test:latest") //nolint:staticcheck // testing nil context handling
-	if err == nil {
-		t.Fatal("expected error for nil context")
-	}
-	var nilCtxErr ErrNilContext
-	if !errors.As(err, &nilCtxErr) {
-		t.Errorf("expected ErrNilContext, got %T", err)
-	}
-}
-
 func TestManifestExists_EmptyReference(t *testing.T) {
 	client := newMockStorageClient()
 	storage, _ := NewQuicBaaSStorage(client)
@@ -990,22 +865,6 @@ func TestManifestExists_EmptyReference(t *testing.T) {
 	var refErr ErrInvalidImageRef
 	if !errors.As(err, &refErr) {
 		t.Errorf("expected ErrInvalidImageRef, got %T", err)
-	}
-}
-
-func TestManifestExists_Closed(t *testing.T) {
-	client := newMockStorageClient()
-	storage, _ := NewQuicBaaSStorage(client)
-	_ = storage.Close()
-
-	ctx := context.Background()
-	_, err := storage.ManifestExists(ctx, "test:latest")
-	if err == nil {
-		t.Fatal("expected error for closed storage")
-	}
-	var closedErr ErrRegistryClosed
-	if !errors.As(err, &closedErr) {
-		t.Errorf("expected ErrRegistryClosed, got %T", err)
 	}
 }
 
@@ -1076,32 +935,6 @@ func TestListManifests_WithLimit(t *testing.T) {
 	}
 }
 
-func TestListManifests_NilContext(t *testing.T) {
-	client := newMockStorageClient()
-	storage, _ := NewQuicBaaSStorage(client)
-
-	_, err := storage.ListManifests(nil, ListOptions{}) //nolint:staticcheck // testing nil context handling
-	if err == nil {
-		t.Fatal("expected error for nil context")
-	}
-	var nilCtxErr ErrNilContext
-	if !errors.As(err, &nilCtxErr) {
-		t.Errorf("expected ErrNilContext, got %T", err)
-	}
-}
-
-func TestListManifests_Closed(t *testing.T) {
-	client := newMockStorageClient()
-	storage, _ := NewQuicBaaSStorage(client)
-	_ = storage.Close()
-
-	ctx := context.Background()
-	_, err := storage.ListManifests(ctx, ListOptions{})
-	if err == nil {
-		t.Fatal("expected error for closed storage")
-	}
-}
-
 func TestListManifests_StorageError(t *testing.T) {
 	client := newMockStorageClient()
 	client.listErr = errors.New("list failed")
@@ -1114,86 +947,28 @@ func TestListManifests_StorageError(t *testing.T) {
 	}
 }
 
-func TestListManifests_WithRepository(t *testing.T) {
-	client := newMockStorageClient()
-	storage, _ := NewQuicBaaSStorage(client)
-
-	ctx := context.Background()
-
-	// Store manifests in different repositories
-	refs := []string{
-		"myrepo/image1:latest",
-		"myrepo/image2:v1",
-		"otherrepo/image:latest",
+func TestListManifests_Filters(t *testing.T) {
+	tests := map[string]ListOptions{
+		"repository":            {Repository: "myrepo"},
+		"prefix":                {Prefix: "app"},
+		"repository and prefix": {Repository: "myrepo", Prefix: "app"},
 	}
-	for _, ref := range refs {
-		manifest := &ImageManifest{SchemaVersion: 2}
-		_ = storage.StoreManifest(ctx, ref, manifest)
-	}
+	for name, opts := range tests {
+		t.Run(name, func(t *testing.T) {
+			storage, _ := NewQuicBaaSStorage(newMockStorageClient())
+			ctx := context.Background()
+			for _, ref := range []string{"myrepo/app/image1:latest", "myrepo/other/image:latest", "app/image:v1"} {
+				_ = storage.StoreManifest(ctx, ref, &ImageManifest{SchemaVersion: 2})
+			}
 
-	// List with repository filter
-	result, err := storage.ListManifests(ctx, ListOptions{Repository: "myrepo"})
-	if err != nil {
-		t.Fatalf("expected no error, got: %v", err)
-	}
-	// Note: The actual filtering logic depends on how the mock client implements List
-	// This test exercises the Repository option path
-	if result == nil {
-		t.Fatal("expected non-nil result")
-	}
-}
-
-func TestListManifests_WithPrefix(t *testing.T) {
-	client := newMockStorageClient()
-	storage, _ := NewQuicBaaSStorage(client)
-
-	ctx := context.Background()
-
-	// Store manifests with different prefixes
-	refs := []string{
-		"app/image1:latest",
-		"app/image2:v1",
-		"other/image:latest",
-	}
-	for _, ref := range refs {
-		manifest := &ImageManifest{SchemaVersion: 2}
-		_ = storage.StoreManifest(ctx, ref, manifest)
-	}
-
-	// List with prefix filter
-	result, err := storage.ListManifests(ctx, ListOptions{Prefix: "app"})
-	if err != nil {
-		t.Fatalf("expected no error, got: %v", err)
-	}
-	if result == nil {
-		t.Fatal("expected non-nil result")
-	}
-}
-
-func TestListManifests_WithRepositoryAndPrefix(t *testing.T) {
-	client := newMockStorageClient()
-	storage, _ := NewQuicBaaSStorage(client)
-
-	ctx := context.Background()
-
-	// Store manifests
-	refs := []string{
-		"myrepo/app/image1:latest",
-		"myrepo/app/image2:v1",
-		"myrepo/other/image:latest",
-	}
-	for _, ref := range refs {
-		manifest := &ImageManifest{SchemaVersion: 2}
-		_ = storage.StoreManifest(ctx, ref, manifest)
-	}
-
-	// List with both repository and prefix filter
-	result, err := storage.ListManifests(ctx, ListOptions{Repository: "myrepo", Prefix: "app"})
-	if err != nil {
-		t.Fatalf("expected no error, got: %v", err)
-	}
-	if result == nil {
-		t.Fatal("expected non-nil result")
+			result, err := storage.ListManifests(ctx, opts)
+			if err != nil {
+				t.Fatalf("expected no error, got: %v", err)
+			}
+			if result == nil {
+				t.Fatal("expected non-nil result")
+			}
+		})
 	}
 }
 

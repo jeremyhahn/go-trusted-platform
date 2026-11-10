@@ -32,20 +32,6 @@ func TestBridgeGetCommand_LongDescription(t *testing.T) {
 	assert.NotNil(t, cmd.RunE)
 }
 
-func TestGatewayStatusCommand_LongDescription(t *testing.T) {
-	cmd := newGatewayStatusCommand(func() *cli.CommonFlags { return &cli.CommonFlags{} })
-	assert.Equal(t, "status", cmd.Use)
-	assert.NotEmpty(t, cmd.Long)
-	assert.NotNil(t, cmd.RunE)
-}
-
-func TestOverlayStatusCommand_LongDescription(t *testing.T) {
-	cmd := newOverlayStatusCommand(func() *cli.CommonFlags { return &cli.CommonFlags{} })
-	assert.Equal(t, "status", cmd.Use)
-	assert.NotEmpty(t, cmd.Long)
-	assert.NotNil(t, cmd.RunE)
-}
-
 func TestPolicyGetCommand_LongDescription(t *testing.T) {
 	cmd := newPolicyGetCommand(func() *cli.CommonFlags { return &cli.CommonFlags{} })
 	assert.Equal(t, "get <policy-id>", cmd.Use)

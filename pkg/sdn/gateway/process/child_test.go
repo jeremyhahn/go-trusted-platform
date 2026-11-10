@@ -237,10 +237,7 @@ func TestParseStatus_NormalisesWhitespaceAndSkipsMalformedLines(t *testing.T) {
 	assert.Equal(t, "0 0 0 0", fields["Uid"])
 	assert.Equal(t, "", fields["Groups"])
 	assert.Len(t, fields, 2)
-}
-
-func TestParseStatus_EmptyDocumentHasNoFields(t *testing.T) {
-	assert.Empty(t, parseStatus(""))
+	assert.Empty(t, parseStatus(""), "an empty document has no fields")
 }
 
 func TestCapabilityMask(t *testing.T) {
@@ -249,10 +246,7 @@ func TestCapabilityMask(t *testing.T) {
 	// A capability above 31 lands in the upper word, which capset sends as
 	// the second CapUserData.
 	assert.Equal(t, uint64(1)<<unix.CAP_BPF, capabilityMask([]uintptr{unix.CAP_BPF}))
-}
-
-func TestCapabilityMask_NoCapabilitiesIsTheEmptySet(t *testing.T) {
-	assert.Zero(t, capabilityMask(nil))
+	assert.Zero(t, capabilityMask(nil), "no capabilities is the empty set")
 }
 
 func TestTaskStatusesIn_ReadsEveryThreadAndSkipsOnesThatExited(t *testing.T) {

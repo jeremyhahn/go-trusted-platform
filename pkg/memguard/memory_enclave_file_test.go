@@ -34,7 +34,7 @@ func writeCredential(t *testing.T, name string, content []byte) string {
 }
 
 func TestNewMemoryEnclaveFromFile_HoldsTheFileContent(t *testing.T) {
-	content := []byte("-----BEGIN PRIVATE KEY-----\nc2VjcmV0\n-----END PRIVATE KEY-----\n")
+	content := []byte(genTestKeyPEM())
 	path := writeCredential(t, "admin.key", content)
 
 	enclave, err := NewMemoryEnclaveFromFile(path)

@@ -708,25 +708,23 @@ func TestOwnedSAShape_UnsetSelectorAddresses(t *testing.T) {
 // sets, is not the platform's: the sweep removes the rest of the pair and
 // leaves it.
 func TestManager_SweepIPsec_LeavesAForeignSAThatReplacedARecordedOne(t *testing.T) {
-	for name, mutate := range foreignSAFields() {
-		t.Run(name, func(t *testing.T) {
-			cfg := ipsecConfig()
-			mock, inv := leftIPsecRecorded(t, cfg)
-			recorded := stateBySPI(mock, cfg.IPsec.SPIIn)
-			require.NotNil(t, recorded)
-			foreign := *recorded
-			mutate(&foreign)
-			i := slices.Index(mock.xfrmStates, recorded)
-			mock.xfrmStates[i] = &foreign
-			relaunched := newManagerWithOps(testLogger(), mock, WithKeyProvider(keysFor(cfg)), WithIPsecInventory(inv.path))
+	// One foreign field proves the sweep asks ownedSAShape; TestOwnedSAShape
+	// runs every field in foreignSAFields through it.
+	cfg := ipsecConfig()
+	mock, inv := leftIPsecRecorded(t, cfg)
+	recorded := stateBySPI(mock, cfg.IPsec.SPIIn)
+	require.NotNil(t, recorded)
+	foreign := *recorded
+	foreign.OutputMark = &vnl.XfrmMark{Value: 1}
+	i := slices.Index(mock.xfrmStates, recorded)
+	mock.xfrmStates[i] = &foreign
+	relaunched := newManagerWithOps(testLogger(), mock, WithKeyProvider(keysFor(cfg)), WithIPsecInventory(inv.path))
 
-			require.NoError(t, relaunched.SweepIPsec())
+	require.NoError(t, relaunched.SweepIPsec())
 
-			assert.Equal(t, []*vnl.XfrmState{&foreign}, mock.xfrmStates,
-				"the recorded anchor is removed and the foreign SA under the recorded key is never touched")
-			assert.Empty(t, mock.xfrmPolicies, "the dropped tunnel's policies are removed")
-		})
-	}
+	assert.Equal(t, []*vnl.XfrmState{&foreign}, mock.xfrmStates,
+		"the recorded anchor is removed and the foreign SA under the recorded key is never touched")
+	assert.Empty(t, mock.xfrmPolicies, "the dropped tunnel's policies are removed")
 }
 
 func TestPairEndpoints(t *testing.T) {

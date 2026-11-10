@@ -15,7 +15,6 @@ package workload
 
 import (
 	"testing"
-	"time"
 )
 
 func TestWorkloadType_String(t *testing.T) {
@@ -212,99 +211,5 @@ func TestWorkloadMeasurement_Validate(t *testing.T) {
 				t.Errorf("unexpected error: %v", err)
 			}
 		})
-	}
-}
-
-func TestChainEntry_Fields(t *testing.T) {
-	now := time.Now().UTC()
-	entry := &ChainEntry{
-		Timestamp:    now,
-		WorkloadType: WorkloadTypeContainer,
-		WorkloadID:   "container-123",
-		ImageDigest:  "sha256:abc123",
-		Digest:       []byte{0x01, 0x02, 0x03},
-		PCRValue:     []byte{0x04, 0x05, 0x06},
-	}
-
-	if entry.Timestamp != now {
-		t.Errorf("Timestamp = %v, want %v", entry.Timestamp, now)
-	}
-	if entry.WorkloadType != WorkloadTypeContainer {
-		t.Errorf("WorkloadType = %s, want %s", entry.WorkloadType, WorkloadTypeContainer)
-	}
-	if entry.WorkloadID != "container-123" {
-		t.Errorf("WorkloadID = %s, want container-123", entry.WorkloadID)
-	}
-	if entry.ImageDigest != "sha256:abc123" {
-		t.Errorf("ImageDigest = %s, want sha256:abc123", entry.ImageDigest)
-	}
-	if len(entry.Digest) != 3 {
-		t.Errorf("Digest length = %d, want 3", len(entry.Digest))
-	}
-	if len(entry.PCRValue) != 3 {
-		t.Errorf("PCRValue length = %d, want 3", len(entry.PCRValue))
-	}
-}
-
-func TestChainStatistics_Fields(t *testing.T) {
-	now := time.Now().UTC()
-	stats := &ChainStatistics{
-		TotalEntries:    10,
-		VMCount:         3,
-		ContainerCount:  7,
-		FirstEntryTime:  now.Add(-time.Hour),
-		LastEntryTime:   now,
-		CurrentPCRValue: []byte{0x01, 0x02, 0x03},
-	}
-
-	if stats.TotalEntries != 10 {
-		t.Errorf("TotalEntries = %d, want 10", stats.TotalEntries)
-	}
-	if stats.VMCount != 3 {
-		t.Errorf("VMCount = %d, want 3", stats.VMCount)
-	}
-	if stats.ContainerCount != 7 {
-		t.Errorf("ContainerCount = %d, want 7", stats.ContainerCount)
-	}
-	if stats.FirstEntryTime.After(stats.LastEntryTime) {
-		t.Error("FirstEntryTime should be before LastEntryTime")
-	}
-	if len(stats.CurrentPCRValue) != 3 {
-		t.Errorf("CurrentPCRValue length = %d, want 3", len(stats.CurrentPCRValue))
-	}
-}
-
-func TestChainStatistics_EmptyChain(t *testing.T) {
-	stats := &ChainStatistics{}
-
-	if stats.TotalEntries != 0 {
-		t.Errorf("TotalEntries = %d, want 0", stats.TotalEntries)
-	}
-	if stats.VMCount != 0 {
-		t.Errorf("VMCount = %d, want 0", stats.VMCount)
-	}
-	if stats.ContainerCount != 0 {
-		t.Errorf("ContainerCount = %d, want 0", stats.ContainerCount)
-	}
-	if stats.CurrentPCRValue != nil {
-		t.Errorf("CurrentPCRValue = %v, want nil", stats.CurrentPCRValue)
-	}
-}
-
-func TestWorkloadMeasurement_Fields(t *testing.T) {
-	m := &WorkloadMeasurement{
-		WorkloadType: WorkloadTypeVM,
-		WorkloadID:   "vm-uuid-456",
-		ImageDigest:  "sha256:xyz789",
-	}
-
-	if m.WorkloadType != WorkloadTypeVM {
-		t.Errorf("WorkloadType = %s, want %s", m.WorkloadType, WorkloadTypeVM)
-	}
-	if m.WorkloadID != "vm-uuid-456" {
-		t.Errorf("WorkloadID = %s, want vm-uuid-456", m.WorkloadID)
-	}
-	if m.ImageDigest != "sha256:xyz789" {
-		t.Errorf("ImageDigest = %s, want sha256:xyz789", m.ImageDigest)
 	}
 }

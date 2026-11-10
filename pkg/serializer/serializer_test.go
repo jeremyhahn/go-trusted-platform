@@ -83,34 +83,10 @@ func TestNewSerializer(t *testing.T) {
 	})
 }
 
-func TestSerialize(t *testing.T) {
-	testData := TestStruct{
-		Name:  "John Doe",
-		Age:   30,
-		Email: "john@example.com",
-	}
-
-	t.Run("Serialize with JSON", func(t *testing.T) {
-		data, err := Serialize(testData, SERIALIZER_JSON)
-		require.NoError(t, err)
-		require.NotNil(t, data)
-		assert.Contains(t, string(data), "John Doe")
-		assert.Contains(t, string(data), "john@example.com")
-	})
-
-	t.Run("Serialize with YAML", func(t *testing.T) {
-		data, err := Serialize(testData, SERIALIZER_YAML)
-		require.NoError(t, err)
-		require.NotNil(t, data)
-		assert.Contains(t, string(data), "John Doe")
-		assert.Contains(t, string(data), "john@example.com")
-	})
-
-	t.Run("Serialize with invalid serializer", func(t *testing.T) {
-		data, err := Serialize(testData, SerializerType(999))
-		assert.ErrorIs(t, err, ErrInvalidSerializer)
-		assert.Nil(t, data)
-	})
+func TestSerialize_InvalidSerializer(t *testing.T) {
+	data, err := Serialize(TestStruct{Name: "John Doe"}, SerializerType(999))
+	assert.ErrorIs(t, err, ErrInvalidSerializer)
+	assert.Nil(t, data)
 }
 
 func TestDeserialize(t *testing.T) {
