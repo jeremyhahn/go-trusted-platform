@@ -97,7 +97,7 @@ keeps serving a netboot VLAN:
 `/run` or `/dev/shm`, and must not overlap. Setting `firmware_cache_dir`
 without `boot_node` is an error.
 
-[`configs/bootstrap/tgw01-vlan405.example.yaml`](../../../configs/bootstrap/tgw01-vlan405.example.yaml)
-is a boot node with no router: tgw-01 serving the Raspberry Pi rack on VLAN 405,
-netbooting the Pis diskless, with platformd standalone on tgw-01 as their
+[`configs/bootstrap/edge-01-vlan405.example.yaml`](../../../configs/bootstrap/edge-01-vlan405.example.yaml)
+is a boot node with no router: edge-01 serving the Raspberry Pi rack on VLAN 405,
+netbooting the Pis diskless, with platformd standalone on edge-01 as their
 control plane until the CM4 is proven.

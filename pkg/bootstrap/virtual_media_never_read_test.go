@@ -75,7 +75,7 @@ func newVmediaSink(t *testing.T) *vmediaSink {
 			for j := range f.Openers {
 				f.Openers[j].OpenSamples++
 				f.Openers[j].LastSeen = now
-				if s.reading && f.Openers[j].Name == "smbd" && (f.Openers[j].Client == "" || f.Openers[j].Client == "10.4.2.102") {
+				if s.reading && f.Openers[j].Name == "smbd" && (f.Openers[j].Client == "" || f.Openers[j].Client == "198.51.100.102") {
 					f.Openers[j].PosChanges++
 					f.Openers[j].LastActivity = now
 				}
@@ -129,7 +129,7 @@ func (s *vmediaSink) setMedia(files ...ipxe.MediaOpen) {
 	now := time.Now()
 	for i := range files {
 		if len(files[i].Openers) == 0 {
-			files[i].Openers = []ipxe.MediaOpener{{Name: "smbd", Client: "10.4.2.102", Opens: 1, OpenSamples: 1, OpenEvents: 1, MaxPos: files[i].MaxPos, LastActivity: now}}
+			files[i].Openers = []ipxe.MediaOpener{{Name: "smbd", Client: "198.51.100.102", Opens: 1, OpenSamples: 1, OpenEvents: 1, MaxPos: files[i].MaxPos, LastActivity: now}}
 		}
 		files[i].LastSeen = now
 	}
@@ -196,7 +196,7 @@ func vmediaOrchestrator(t *testing.T, sink *vmediaSink, client *bmc.MockClient, 
 		ISOPath:     "/isos/platform.iso",
 		Nodes: []NodeConfig{{
 			Hostname: "node-02", Role: RoleControlPlane, BootMethod: BootMethodVirtualMedia,
-			BMCAddress: "10.4.2.102", BMCUser: "admin", BMCPassword: "pass", BMCProtocol: "ipmi",
+			BMCAddress: "198.51.100.102", BMCUser: "admin", BMCPassword: "pass", BMCProtocol: "ipmi",
 			MACs: []string{"aa:bb:cc:dd:ee:02"},
 		}},
 	}
@@ -709,7 +709,7 @@ func TestBootNodeVirtualMedia_AnotherNodesReadsDoNotCount(t *testing.T) {
 	// be satisfied by the neighbour's traffic.
 	sink := newVmediaSink(t)
 	sink.setMedia(ipxe.MediaOpen{Path: "/data/platform.iso", Opens: 1,
-		Openers: []ipxe.MediaOpener{{Name: "smbd", Client: "10.4.2.103", Opens: 1, OpenSamples: 1, OpenEvents: 1, LastActivity: time.Now()}}})
+		Openers: []ipxe.MediaOpener{{Name: "smbd", Client: "198.51.100.103", Opens: 1, OpenSamples: 1, OpenEvents: 1, LastActivity: time.Now()}}})
 	orig := sink.srv.Config.Handler
 	sink.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == mediaStatusPath {
@@ -808,7 +808,7 @@ func TestBootNodeVirtualMedia_CancelledDuringLogPollDoesNotRetry(t *testing.T) {
 func TestOpenSOLConsole_Errors(t *testing.T) {
 	client := bmc.NewMockClient()
 	o := &Orchestrator{logger: orchTestLogger(), bmcFactory: &bmc.MockClientFactory{Client: client}}
-	cfg := &bmc.Config{Address: "10.4.2.102"}
+	cfg := &bmc.Config{Address: "198.51.100.102"}
 
 	// The mock has no SOL: the error is the client's, and the client is
 	// released.
