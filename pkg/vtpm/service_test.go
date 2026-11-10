@@ -3281,6 +3281,72 @@ func TestService_ListBundlesWithFilters(t *testing.T) {
 	}
 }
 
+// TestService_GenerateManifest_KeepsDeviceProfile covers the binding a
+// bundle is created with: the manifest that is persisted carries the device
+// profile, so the bundle reads back bound and a list filtered by that
+// profile finds it.
+func TestService_GenerateManifest_KeepsDeviceProfile(t *testing.T) {
+	config := createTestConfig(t)
+	service, err := NewService(config, nil, &mockCA{})
+	if err != nil {
+		t.Fatalf("NewService failed: %v", err)
+	}
+
+	const profileID uint64 = 9
+	created := []struct {
+		id      string
+		profile uint64
+	}{
+		{"profile-bundle-bound", profileID},
+		{"profile-bundle-other", 10},
+		{"profile-bundle-unbound", 0},
+	}
+	for _, c := range created {
+		bundlePath := config.BundlePath(c.id)
+		if err := os.MkdirAll(bundlePath, 0700); err != nil {
+			t.Fatalf("MkdirAll failed: %v", err)
+		}
+		manifest, err := service.generateManifest(c.id, bundlePath, &CreateBundleOptions{
+			Mode:            BundleModePreAssigned,
+			Hostname:        "vm1",
+			EKAlgorithm:     EKAlgorithmRSA,
+			DeviceProfileID: c.profile,
+		}, nil, nil)
+		if err != nil {
+			t.Fatalf("generateManifest failed: %v", err)
+		}
+		manifestData, err := json.Marshal(manifest)
+		if err != nil {
+			t.Fatalf("Marshal failed: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(bundlePath, "manifest.json"), manifestData, 0600); err != nil {
+			t.Fatalf("WriteFile failed: %v", err)
+		}
+	}
+
+	ctx := context.Background()
+
+	bundle, err := service.GetBundle(ctx, "profile-bundle-bound")
+	if err != nil {
+		t.Fatalf("GetBundle failed: %v", err)
+	}
+	if bundle.Manifest == nil || bundle.Manifest.DeviceProfileID != profileID {
+		t.Fatalf("bundle read back with manifest %+v, want DeviceProfileID %d", bundle.Manifest, profileID)
+	}
+
+	result, err := service.ListBundles(ctx, &ListOptions{DeviceProfileID: profileID})
+	if err != nil {
+		t.Fatalf("ListBundles failed: %v", err)
+	}
+	if len(result) != 1 || result[0].ID != "profile-bundle-bound" {
+		ids := make([]string, 0, len(result))
+		for _, b := range result {
+			ids = append(ids, b.ID)
+		}
+		t.Fatalf("ListBundles by profile %d = %v, want [profile-bundle-bound]", profileID, ids)
+	}
+}
+
 // =============================================================================
 // TPMProvider Tests
 // =============================================================================
