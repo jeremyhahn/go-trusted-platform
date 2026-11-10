@@ -111,9 +111,10 @@ func TestLUKSREST_EnrollFIDO2RequirePINRefused(t *testing.T) {
 
 	t.Run("HTTP", func(t *testing.T) {
 		s := newTestRESTServerForPhase35(t)
-		s.SetLUKSService(svc)
+		mustMountS6(t, s.SetLUKSService(svc, s6RESTGuard()))
 		body := `{"device":"/dev/sda","existing_passphrase":"` + luksTestExisting + `","credential_id":"cred-1","require_pin":true}`
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/luks/enroll/fido2", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+s6OperatorToken)
 		rec := httptest.NewRecorder()
 		s.router.ServeHTTP(rec, req)
 		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), ErrLUKSFIDO2PINUnsupported.Error()) {
