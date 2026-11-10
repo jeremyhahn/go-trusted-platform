@@ -1,4 +1,4 @@
-# code-review-template: v5.9.3 -- the code review in Gitea or GitHub CI for a pull request
+# code-review-template: v5.10.5 -- the code review in Gitea or GitHub CI for a pull request
 # that carries `code-review` and `task:ready`, routed by its labels through
 # route-labels (labels.md §2). Codex on the `codex` runner reviews every such
 # PR; `agent:opencode` adds an advisory COMMENT review by the opencode job on
@@ -25,7 +25,143 @@
 #   vars.OLLAMA_URL           repo Actions variable: the Ollama address the
 #                             opencode review uses (required since v5.7;
 #                             unset, the opencode job fails)
+#   COORDINATOR_TURNS         the codex rounds the project coordinator has
+#                             on a `needs-coordinator` PR after the two-round
+#                             stop (v5.9.8, Company Agent m2185); default 3
 #
+# v5.10.5 (2026-11-09, Codex's P1 on v5.10.4 at go-xkms #2026): the TWIN
+# WAIT fails closed. Each GitHub lookup it makes is assigned first and its
+# failure stops the job, as does a body jq cannot read (jq -e exit other
+# than 0 or 1). v5.10.4 read an older run's jobs inside an `if`
+# condition, where `set -e` does not apply, so a failed lookup read as "no
+# codex job in progress" and let a same-head twin review beside its older
+# twin.
+# v5.10.4 (2026-11-09, Codex's P1 on v5.10.3 at go-xkms #2026; Company Agent
+# m2301 (2), ruling 402): the review key's ctx= is the sha1 of each hunk's whole `@@` line with
+# its file's path, the line numbers included. v5.10.2 hashed the function
+# context alone, so an edit moved within one function (between repeated
+# blocks with the same diff lines), or in a file with no function context,
+# kept both halves of the key and carried an approval to code Codex had not
+# read. A verdict now carries only to the same patch at the same lines: a
+# head that merged main in without moving the PR's lines carries, and one
+# whose lines moved is reviewed again. A v5.10.3 ctx= can never match, so
+# each open PR is reviewed once more. The twin wait is unchanged: a
+# pull_request_target run carries the PR head as head_sha.
+# testdata/code-review-modzip-tests.py part D checks the moved edits.
+#
+# v5.10.3 (2026-11-09, Company Agent m2295 (2), ruling 400): the module fetch
+# on go-trusted-platform #1580, which replaced three go.sum h1: lines at the
+# same version (go-luks2 v0.2.0-alpha in go.sum, go-quicraft v0.13.1-alpha in
+# go.sum and sdk/go/go.sum). (a) THE CHANGED go.sum LINES: each module line a
+# change adds to or replaces in a go.sum beside one of its go.mod files is
+# selected from the PR diff, whether or not a require changed; a /go.mod line
+# and a line the same file also removes word for word are not. A first-party
+# module joins the first-party loop, a public one the public loop. (b) Both
+# loops take only proxy.golang.org zips, checked against the go.sum h1: line
+# and sum.golang.org's line before the zip is requested, and modzip.py checks
+# the zip against them; never a forge archive or codeload. A module version
+# the proxy or sum.golang.org does not have is listed as not fetched, never
+# replaced by another source or version. (c) Each loop keys a module by its
+# go.sum h1: as well as module@version, so a second go.sum with another hash
+# for the same version is checked too, not skipped. getsum() moves into the
+# functions. testdata/code-review-modzip-tests.py part D runs the parser and
+# the selection on #1580's diff (testdata/gtp-1580-gosum.diff); parts B and E
+# check the sum.golang.org step of each loop, and part F that the fetch step
+# names no forge archive.
+#
+# v5.10.2 (2026-11-09, Company Agent m2286 (3), ruling 398): Codex's P1 on
+# go-xkms #2026. The patch-id leaves out the whole `@@` line, so the same
+# edit moved to another function kept the key and carried an approval to a
+# change Codex had not read. The guard now keys a review by two values: the
+# patch-id, and `ctx`, the sha1 of each file's `@@` function-context lines in
+# order (the text after the second `@@`, with the file's path; never the
+# line numbers). A verdict carries only when both match, so a head that only
+# merged main in still carries and a moved edit runs Codex. A marker without
+# ctx= (v5.10.1 or before) carries nothing, so each open PR is reviewed once
+# more. testdata/code-review-modzip-tests.py part D checks the moved edit.
+#
+# v5.10.1 (2026-11-09, Infrastructure's review of go-xkms #2026 under Company
+# Agent m2274, ruling 394): two v5.10.0 defects Codex found. (a) The review key
+# is `git patch-id --verbatim`: `--stable` ignores whitespace, so an approval
+# carried to a head whose only change was whitespace, which alters YAML, Python
+# or a Makefile. A marker keyed by a `--stable` id no longer matches, so each
+# open PR is reviewed once more. (b) The TWIN WAIT runs before the GitHub
+# identity probe: GitHub keeps one PENDING review per author, so twins probing
+# at once failed one of them as "not filed as a PENDING review" (a false red,
+# never a bypass). (c) The DEPS env comment describes v5.10.0's module zips,
+# not v4.2's per-repository tag archives.
+#
+# v5.10.0 (2026-11-09, Company Agent m2268 (1), ruling 392): the first-party
+# modules come from proxy.golang.org as module zips, never as forge tag
+# archives. The tag tarball of a tag that moved after it was published is not
+# the module the build uses, so Codex read trees that disagreed with go.sum and
+# filed findings against correct hashes (go-trusted-platform #1580). Each
+# first-party module's go.sum h1: line must equal sum.golang.org's, and the zip
+# must match it, before modzip.py unpacks it under $DEPS. A private module is
+# not on the proxy and is listed as not fetched; v4.2's private-repository
+# rule and its repository API read are gone. testdata/code-review-modzip-tests.py
+# part E tests the loop.
+#
+# v5.9.8 (2026-11-08, Company Agent m2179 (1), m2185; dept-software
+# pm/sdlc-tune-up.md §3.3): the patch-id review key and the Codex two-round
+# stop with the coordinator step (sdlc.md §2b). The guard keys a review by
+# `git patch-id --stable` of the PR's diff from the forge (merge base to
+# head; no diff, as over GitHub's size limit, keys by head as before), and
+# the verdict marker records it with the round:
+#   <!-- codex-review:verdict head=<sha> patch=<patch-id> round=<n> -->
+# - Same patch, another head (only main merged in, ruling 107): no codex run.
+#   This reviewer's latest standing approval of that patch is posted again
+#   on the head, marked carried=<old sha>, and the run ends skip=same-patch
+#   and confirms it; a standing rejection of it fails the run as on its own
+#   head. A label just added to change the route still reviews again.
+# - Two rounds, then the coordinator (owner amendment, m2185): the round
+#   count is the latest marker's round= (a marker from v5.9.6 or before: one
+#   round per patch, or per head). When round 2 requests changes, the run
+#   labels the PR `needs-coordinator`: the lane ends and the project
+#   coordinator evaluates the findings. While the label is on, codex reviews
+#   COORDINATOR_TURNS more rounds (CUSTOMIZE, default 3), one per head the
+#   coordinator pushes. When the last of them requests changes, the run
+#   swaps `needs-coordinator` for `needs-owner`; with COORDINATOR_TURNS 0
+#   round 2 does. A head past the limit is not reviewed: the run ends
+#   skip=round-limit, red, posts nothing and sets the same label. A PR
+#   labelled `needs-owner` is not reviewed (skip=needs-owner, red) until
+#   the owner takes the label off. Removing and re-adding `code-review`
+#   starts the count over (round 1); re-running the run that added it
+#   replays its event and also starts over. `review:round-3` (unreleased)
+#   is gone. The labelling step re-reads the labels (Gitea can answer 200
+#   without applying one); Gitea takes the repository's label ids, so both
+#   labels must exist there. The opencode job is unchanged.
+#   `testdata/code-review-modzip-tests.py` part D tests the key, the
+#   marker, the stop and the labels.
+# v5.9.7 (2026-11-08, Company Agent m2149 item 4): on GitHub the job's
+# concurrency group carries the run id, so no same-head twin is dropped.
+# The opened and labeled events of one head can create three runs in one
+# second; under one group GitHub cancelled the third before it had a job, its
+# check suite was the newest and held no `Code Review (codex)` check-run, and
+# a ruleset requiring that context refused the merge (go-quicraft #683). Every
+# twin now runs. Before the verdict checks the guard waits while an older
+# run's codex job on the same head is in progress, then re-reads the verdict
+# at once, before any route or label case: it ends skip=reviewed on the
+# approval or fails on the rejection, so a head is reviewed once. Only a twin
+# that waited and finds no verdict fails and asks for a re-run rather than
+# reviewing past the job's time budget (Company Agent m2152 item 3). A route
+# label (agent:, model:, effort:) added while an older review of the head
+# runs ends on that review; add it again after it to review under the new
+# route. The guard reads the runs with the job's own token (`actions: read`).
+# Gitea is unchanged.
+# v5.9.6 (2026-11-08, Company Agent m2119 item 4): the review job's
+# `runs-on: codex` line carries a `lab-string-ok:` waiver, so a copy's
+# Releasability step reads 0 (go-signal #128). No behaviour change.
+# v5.9.5 (2026-11-08): the two `A && B || die` lines (the identity probe
+# check and the Codex refresh timeout) are if-statements, so shellcheck
+# SC2015 is clean in hosted Lint (go-signal #126 Lint failed on both at
+# v5.9.3). No behaviour change.
+# v5.9.4 (2026-11-08, Company Agent m2107 item 4): the review job's `if:`
+# tests the payload's state and labels (open, `code-review`, `task:ready`,
+# not `task:in-progress`), so a run the guard would end skip=closed or
+# skip=unrequested or skip=claimed takes no runner; the concurrency group
+# moves from the workflow to the job and is one per PR on GitHub. The guard
+# is unchanged.
 # v5.9.3 (2026-11-08, Company Agent m2101 item 2): comments only; the
 # internal token-variable name in WHO RUNS WHAT is gone. No behaviour change.
 # v5.9.2 (2026-11-07, Company Agent m2066 item 3): the GitHub token check
@@ -297,17 +433,19 @@ on:
   pull_request_target:
     types: [opened, reopened, synchronize, labeled]
 
-# One review per head (v5.3). The group is the PR and its head sha: a twin on
-# the same sha (opened plus labeled, a re-run, a route label) waits for the
-# review in flight instead of cancelling it, and its guard ends skip=reviewed.
-# A new push is a new group; Gitea cancels the replaced head's runs on the
-# push, and a run that still starts on it ends skip=stale.
-concurrency:
-  group: code-review-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
-  cancel-in-progress: false
+# v5.9.4: no workflow-level concurrency. A group there takes every run the
+# events create, a run whose job the `if:` skips among them, and a newer
+# pending run replaces an older one: a `ci:full` label could drop the
+# pending review of a new head. The group is the review job's own (below),
+# which a job its `if:` skips never enters.
 
 permissions:
   contents: read
+  # v5.9.7: the guard lists this workflow's runs on the head (twin wait).
+  actions: read
+  # Owner ruling 443: the scope step lists the PR's changed files with the
+  # job's own token.
+  pull-requests: read
 
 env:
   # v5.9.0: GitHub or Gitea, by the server this run is on.
@@ -322,13 +460,21 @@ env:
   # uid 1000's only writable directory outside the checkout: codex writes its
   # final message here, and root copies it into $WORK reading it as uid 1000.
   OUT: /tmp/codex-review-out
-  # Root's, read-only to uid 1000: the source of the first-party modules the
-  # change requires, one directory per repository and ref (v4.2).
+  # Root's, read-only to uid 1000: one directory per module and version, each
+  # a module zip from proxy.golang.org checked against go.sum: the first-party
+  # modules the change requires, also against sum.golang.org (v5.10.0), and
+  # under proxy/ the public modules whose require version it changes (v5.8).
   DEPS: /tmp/codex-review-deps
   FORGE_API: ${{ github.server_url == 'https://github.com' && 'https://api.github.com' || format('{0}/api/v1', github.server_url) }}
   REPO_API: ${{ github.server_url == 'https://github.com' && format('https://api.github.com/repos/{0}', github.repository) || format('{0}/api/v1/repos/{1}', github.server_url, github.repository) }}
   PR_NUM: ${{ github.event.pull_request.number }}
   EVENT_SHA: ${{ github.event.pull_request.head.sha }}
+  # CUSTOMIZE (v5.9.8, Company Agent m2185; sdlc.md §2b): the codex rounds the
+  # project coordinator has on a PR labelled `needs-coordinator` after the
+  # two-round stop, before the PR goes to the owner (`needs-owner`). The
+  # default is 3; 0 sends the PR to the owner at round 2. The coordinator
+  # reads its budget here.
+  COORDINATOR_TURNS: 3
 
 jobs:
   review:
@@ -340,14 +486,38 @@ jobs:
     # gates on the codex review. Keep the list equal to the guard's case.
     # No `container:` or `services:`: the `codex` label maps to the
     # codex-review image pinned by digest.
+    # v5.9.4: the event payload's state and labels are tested here too, so
+    # a closed PR, one without `code-review` and `task:ready` or one that is
+    # `task:in-progress` takes no codex runner slot: on GitHub the codex pool
+    # is one runner for every repository, and a guard that ended skip= in
+    # the job still held it about 95 s (Infra, Company Agent m2107 item 4).
+    # The guard reads the LIVE pull request again and stays the authority; a
+    # re-run replays this payload, as it did before.
     if: >-
-      github.event.action != 'labeled'
+      github.event.pull_request.state == 'open'
+      && contains(github.event.pull_request.labels.*.name, 'code-review')
+      && contains(github.event.pull_request.labels.*.name, 'task:ready')
+      && !contains(github.event.pull_request.labels.*.name, 'task:in-progress')
+      && (github.event.action != 'labeled'
       || github.event.label.name == 'code-review'
       || github.event.label.name == 'task:ready'
       || startsWith(github.event.label.name, 'agent:')
       || startsWith(github.event.label.name, 'model:')
-      || startsWith(github.event.label.name, 'effort:')
-    runs-on: codex
+      || startsWith(github.event.label.name, 'effort:'))
+    # v5.9.7: on GitHub the group is the PR, its head sha and the run id, so
+    # it never holds a pending run that a newer one could replace: a replaced
+    # run is cancelled with no `Code Review (codex)` check-run, and a ruleset
+    # requiring that context then refuses the merge (go-quicraft #683). Twins
+    # are serialized by the guard's twin wait instead, and a left-behind head
+    # ends skip=stale. (v5.9.4 had one group per PR on GitHub.) On Gitea the
+    # group stays
+    # v5.3's, the PR and its head sha: a twin on the same sha waits for the
+    # review in flight and its guard ends skip=reviewed, and Gitea cancels
+    # the replaced head's runs on the push.
+    concurrency:
+      group: ${{ github.server_url == 'https://github.com' && format('code-review-{0}-{1}-{2}', github.event.pull_request.number, github.event.pull_request.head.sha, github.run_id) || format('code-review-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha) }}
+      cancel-in-progress: false
+    runs-on: codex  # lab-string-ok: the public label of the Codex review runner, read by the review tier only
     # The route, for the opencode job.
     outputs:
       agent: ${{ steps.guard.outputs.agent }}
@@ -361,13 +531,70 @@ jobs:
     # the job.
     timeout-minutes: 75
     steps:
+      # Owner ruling 443 (2026-11-10): a PR whose every changed file is under
+      # .github/ gets no review. ROOT, first, before the guard and with no
+      # checkout: the PR's file list from the API with the job's own token,
+      # each entry's filename and previous_filename. Only a list that is read
+      # whole, non-empty, under 3000 entries and all under .github/ sets
+      # skip=true; any API error, an empty list or the 3000-file cap reviews
+      # as before (continue-on-error: a failure here leaves skip unset). Every
+      # later step of the job tests steps.scope.outputs.skip, so the job ends
+      # green without a review. No file name is printed.
+      - name: Is every changed file under .github/?
+        id: scope
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FILES_ROUTE: repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files
+        run: |
+          set +e
+          set -uo pipefail
+          msg="CI/SDLC-only change: no review (owner 2026-11-10)"
+          skip=false ok=false n=0
+          list=$(mktemp) || { echo "skip=false" >> "$GITHUB_OUTPUT"; exit 0; }
+          # One line per entry, filename<TAB>previous_filename; @tsv escapes a
+          # tab or a newline inside a name, so an entry is one line.
+          tsv='.[] | [(.filename // ""), (.previous_filename // "")] | @tsv'
+          if [ -n "$GH_TOKEN" ] && [ "$FORGE" = github ] && command -v gh >/dev/null 2>&1; then
+            gh api --paginate "$FILES_ROUTE?per_page=100" --jq "$tsv" > "$list" && ok=true
+          elif [ -n "$GH_TOKEN" ] && command -v jq >/dev/null 2>&1; then
+            # Gitea (or GitHub without gh): the same route page by page until
+            # an empty page; GitHub pages with per_page, Gitea with limit.
+            auth="token $GH_TOKEN" size=limit=50
+            [ "$FORGE" != github ] || { auth="Bearer $GH_TOKEN"; size=per_page=100; }
+            for page in $(seq 1 200); do
+              body=$(curl -sS --fail --proto '=http,https' --max-time 30 --retry 2 \
+                -H @<(printf 'Authorization: %s\n' "$auth") \
+                "$REPO_API/pulls/$PR_NUM/files?$size&page=$page") || break
+              lines=$(jq -r "if type == \"array\" then $tsv else error(\"not a list\") end" <<<"$body") || break
+              if [ -z "$lines" ]; then ok=true; break; fi
+              printf '%s\n' "$lines" >> "$list"
+            done
+          fi
+          [ "$ok" != true ] || n=$(wc -l < "$list") || ok=false
+          if [ "$ok" = true ] && [ "$n" -gt 0 ] && [ "$n" -lt 3000 ] &&
+            ! awk -F '\t' '$1 !~ /^\.github\// || ($2 != "" && $2 !~ /^\.github\//) { bad = 1 } END { exit !bad }' "$list"; then
+            skip=true
+          fi
+          rm -f "$list"
+          if [ "$skip" = true ]; then
+            echo "$msg"
+            [ -z "${GITHUB_STEP_SUMMARY:-}" ] || echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "review as usual: file list read=$ok, $n entries, not all under .github/ (or unread)"
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
       # ROOT. Before checkout, so a stale, duplicate or unrequested run costs a
       # few API calls rather than a clone and a review.
       - name: Check the container, the request, the head and any standing verdict
+        if: steps.scope.outputs.skip != 'true'
         id: guard
         env:
           EVENT_ACTION: ${{ github.event.action }}
           EVENT_LABEL: ${{ github.event.label.name }}
+          # v5.9.7: the job's own token, `actions: read`, for the twin wait.
+          ACTIONS_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           # v5.9.1: the reviewer is named by the repo, never defaulted.
@@ -409,6 +636,20 @@ jobs:
               *)   die "$1 $2 answered HTTP $code" ;;
             esac
           }
+          # The PR's change as a git diff, merge base to head, in file $1 (v5.9.8).
+          # A GET that never dies: it returns 1 when the forge gives no diff
+          # (GitHub refuses one over its size limit), and the caller goes on
+          # without it. GitHub: the PR in the diff media type; Gitea: .diff.
+          pr_diff() {
+            local code url=$REPO_API/pulls/$PR_NUM.diff gh=()
+            if [ "$FORGE" = github ]; then
+              url=$REPO_API/pulls/$PR_NUM
+              gh=(-H 'Accept: application/vnd.github.diff' -H 'X-GitHub-Api-Version: 2022-11-28')
+            fi
+            code=$(curl -sS --proto '=http,https' --max-time 60 --retry 3 --retry-all-errors \
+                     -o "$1" -w '%{http_code}' -H @"$HDR" "${gh[@]}" "$url") || return 1
+            case "$code" in 2??) [ -s "$1" ] ;; *) return 1 ;; esac
+          }
           # Every page of a list endpoint ($1 ends in `?...`), as one array.
           # GitHub pages with per_page (100 at most), Gitea with limit.
           api_all() {
@@ -436,6 +677,42 @@ jobs:
                 [ .[] | (if .state == "CHANGES_REQUESTED" then .state = "REQUEST_CHANGES" else . end)
                       | select(.user.login == $u and .commit_id == $s and (.dismissed | not)
                                and (.state == "APPROVED" or .state == "REQUEST_CHANGES")) ]' <<<"$all"
+          }
+          # The id of the repository's label $1 (Gitea's issue-label calls take
+          # ids). A label the repository lacks dies: create it (labels.md).
+          label_id() {
+            local id
+            id=$(api_all "/labels?" | jq -r --arg l "$1" '[ .[] | select(.name == $l) | .id ] | first // empty')
+            [[ $id =~ ^[0-9]+$ ]] || die "the repository has no $1 label; create it (labels.md)"
+            printf '%s\n' "$id"
+          }
+          # v5.9.8: put label $1 on the PR and take label $2, when given, off
+          # it, then read the PR's labels again: Gitea can answer 200 without
+          # applying a label. GitHub takes names, Gitea the label ids.
+          relabel() {
+            local add=$1 drop=${2:-} names id
+            names=$(api GET "/pulls/$PR_NUM" | jq -c '[.labels[]?.name]')
+            if ! jq -e --arg l "$add" 'index($l) != null' <<<"$names" >/dev/null; then
+              if [ "$FORGE" = github ]; then
+                jq -n --arg l "$add" '{labels: [$l]}' > "$WORK/label.json"
+              else
+                id=$(label_id "$add")
+                jq -n --argjson i "$id" '{labels: [$i]}' > "$WORK/label.json"
+              fi
+              api POST "/issues/$PR_NUM/labels" "$WORK/label.json" >/dev/null
+            fi
+            if [ -n "$drop" ] && jq -e --arg l "$drop" 'index($l) != null' <<<"$names" >/dev/null; then
+              if [ "$FORGE" = github ]; then
+                id=$(jq -rn --arg l "$drop" '$l | @uri')
+              else
+                id=$(label_id "$drop")
+              fi
+              api DELETE "/issues/$PR_NUM/labels/$id" >/dev/null
+            fi
+            names=$(api GET "/pulls/$PR_NUM" | jq -c '[.labels[]?.name]')
+            jq -e --arg a "$add" --arg d "$drop" 'index($a) != null and ($d == "" or index($d) == null)' \
+                <<<"$names" >/dev/null ||
+              die "PR $PR_NUM's labels are $names after adding $add${drop:+ and removing $drop}; the reviewer may lack the label permission"
           }
           # FAIL CLOSED on the credential: no token, no review, and no other
           # token to fall back to. Read into $HDR (root, 0600); never echoed.
@@ -563,6 +840,76 @@ jobs:
           fi
           echo "requested=true" >> "$GITHUB_OUTPUT"
 
+          # TWIN WAIT (v5.9.7, GitHub; ahead of the identity probe since v5.10.1):
+          # every twin of a head runs, so one
+          # whose older twin's codex job is still reviewing this head waits
+          # for that verdict and then reads it below. Only an in-progress codex
+          # job is waited for: a queued one may be waiting for this runner.
+          twin_waited=0
+          if [ "$FORGE" = github ]; then
+            printf 'Authorization: Bearer %s\n' "$ACTIONS_TOKEN" > "$WORK/gha.hdr"
+            gha() { # GET path with the job's own token -> body; dies unless 2xx
+              local code
+              code=$(curl -sS --proto '=https' --max-time 60 --retry 3 --retry-all-errors \
+                       -o "$WORK/gha.json" -w '%{http_code}' -H @"$WORK/gha.hdr" \
+                       -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28' \
+                       "$REPO_API$1") || die "cannot reach $REPO_API$1"
+              case "$code" in
+                2??) cat "$WORK/gha.json" ;;
+                *)   die "GET $1 answered HTTP $code" ;;
+              esac
+            }
+            wf=$(gha "/actions/runs/$GITHUB_RUN_ID" | jq -r '.workflow_id // empty')
+            [ -n "$wf" ] || die "could not read the workflow of run $GITHUB_RUN_ID"
+            while :; do
+              # v5.10.5: each lookup is assigned before jq reads it. In an `if`
+              # condition `set -e` does not apply, so a failed lookup there
+              # would read as no codex job in progress on this head.
+              runs=$(gha "/actions/workflows/$wf/runs?head_sha=$EVENT_SHA&status=in_progress&per_page=100") ||
+                die "could not list the in-progress runs on $EVENT_SHA"
+              older=$(jq -r --argjson me "$GITHUB_RUN_ID" '.workflow_runs[]? | select(.id < $me) | .id' <<<"$runs") ||
+                die "could not read the in-progress runs on $EVENT_SHA"
+              busy=0
+              for id in $older; do
+                jobs=$(gha "/actions/runs/$id/jobs?per_page=100") ||
+                  die "could not read the jobs of run $id"
+                # jq -e exits 1 for false; any other non-zero is an unreadable body.
+                jrc=0
+                jq -e 'any(.jobs[]?; .name == "Code Review (codex)" and .status == "in_progress")' >/dev/null <<<"$jobs" || jrc=$?
+                case $jrc in
+                  0) busy=1 ;;
+                  1) ;;
+                  *) die "could not read the jobs of run $id" ;;
+                esac
+              done
+              [ "$busy" = 1 ] || break
+              [ "$twin_waited" -gt 0 ] || echo "An older run's codex job is reviewing $EVENT_SHA; waiting for its verdict."
+              [ "$twin_waited" -lt 2700 ] ||
+                die "an older run's codex job on $EVENT_SHA is still in progress after 2700 s; re-run this job when it ends"
+              sleep 30
+              twin_waited=$((twin_waited + 30))
+            done
+            rm -f "$WORK/gha.hdr"
+            # A twin that waited ends on the older run's verdict, before any
+            # route or label case: its approval ends skip=reviewed, its
+            # rejection fails, and only no verdict asks for a re-run. Too little
+            # of this job's budget is left to review after a wait.
+            if [ "$twin_waited" -gt 0 ]; then
+              mine=$(my_verdicts)
+              if jq -e 'any(.[]; .state == "REQUEST_CHANGES")' <<<"$mine" >/dev/null; then
+                touch "$WORK/verdict"
+                echo "::error::$REVIEWER has REQUEST_CHANGES standing on $EVENT_SHA. Push a new head that addresses it."
+                exit 1
+              fi
+              if jq -e 'any(.[]; .state == "APPROVED")' <<<"$mine" >/dev/null; then
+                echo "$REVIEWER approved $EVENT_SHA in the older run after a $twin_waited s wait. Not reviewing it twice."
+                echo "skip=reviewed" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              die "the older run on $EVENT_SHA ended with no verdict after a $twin_waited s wait; re-run this job"
+            fi
+          fi
+
           # GITHUB IDENTITY (v5.9.0): a PENDING review, visible to its author
           # alone and no verdict, names the token's login; it is deleted at
           # once. Anyone but the reviewer is refused before codex runs. GitHub
@@ -577,9 +924,9 @@ jobs:
             fi
             me=$(jq -r '.user.login // empty' <<<"$probe")
             probe_id=$(jq -r '.id // empty' <<<"$probe")
-            # shellcheck disable=SC2015 # die and exit end the script, so C runs only when A && B fails.
-            [ "$(jq -r '.state // empty' <<<"$probe")" = PENDING ] && [[ $probe_id =~ ^[0-9]+$ ]] ||
+            if [ "$(jq -r '.state // empty' <<<"$probe")" != PENDING ] || ! [[ $probe_id =~ ^[0-9]+$ ]]; then
               die "the identity probe on PR $PR_NUM was not filed as a PENDING review"
+            fi
             api DELETE "/pulls/$PR_NUM/reviews/$probe_id" >/dev/null
             [ "$me" = "$REVIEWER" ] ||
               die "the token at $TOKEN_FILE belongs to '${me:-unknown}', not '$REVIEWER' (dept-infra#94)"
@@ -651,8 +998,10 @@ jobs:
           # label just added changes codex's route, which is what it is for.
           # Under agent:opencode only effort: does; agent: and model: route
           # the opencode job, which runs after this approval stands.
+          again=""
           case "${agent}:${EVENT_ACTION}:${EVENT_LABEL}" in
             codex:labeled:agent:*|codex:labeled:model:*|*:labeled:effort:*)
+              again=1
               echo "${EVENT_LABEL} was just added; reviewing $EVENT_SHA again under it." ;;
             *)
               if jq -e 'any(.[]; .state == "APPROVED")' <<<"$mine" >/dev/null; then
@@ -661,6 +1010,144 @@ jobs:
                 exit 0
               fi ;;
           esac
+
+          # THE REVIEW KEY (v5.9.8, Company Agent m2179 (1)): the patch-id of
+          # the PR's change, merge base to head (`git patch-id --verbatim`, v5.10.1). A
+          # head that only merged main in (ruling 107) keeps it, so codex does
+          # not review the same change twice. No diff from the forge (GitHub
+          # refuses one over its size limit) leaves it empty: the head is the
+          # key, as before v5.9.8.
+          # v5.10.2 (Company Agent m2286 (3)): the patch-id leaves out the
+          # whole `@@` line, so the same edit moved elsewhere keeps it.
+          # hunk_ctx is the second half of the key: the sha1 of one
+          # "<path><TAB><@@ line>" line per hunk, in diff order. v5.10.4: the
+          # whole `@@` line, its line numbers with the function context, so
+          # an edit moved within a function, or in a file with no function
+          # context, changes it. Merging main in keeps it while the PR's
+          # lines stay where they were; a merge that moves them reviews again.
+          patch_id=""
+          hunk_ctx=""
+          if pr_diff "$WORK/pr.diff"; then
+            patch_id=$(git patch-id --verbatim < "$WORK/pr.diff" | awk 'NR == 1 {print $1}') || patch_id=""
+            hunk_ctx=$(awk '/^diff --git / { f = $NF; next }
+                            /^@@ / { print f "\t" $0 }' "$WORK/pr.diff" |
+                       sha1sum | awk '{print $1}') || hunk_ctx=""
+          fi
+          [[ $patch_id =~ ^[0-9a-f]{40}$ ]] || patch_id=""
+          [[ $hunk_ctx =~ ^[0-9a-f]{40}$ ]] && [ -n "$patch_id" ] || hunk_ctx=""
+          rm -f "$WORK/pr.diff"
+          echo "patch_id=$patch_id" >> "$GITHUB_OUTPUT"
+          echo "hunk_ctx=$hunk_ctx" >> "$GITHUB_OUTPUT"
+          echo "Review key: patch ${patch_id:-unknown (keyed by head)}${hunk_ctx:+, ctx $hunk_ctx}."
+
+          # This reviewer's verdicts on every head of the PR, oldest first,
+          # read from the marker the posting step writes:
+          #   <!-- codex-review:verdict head=<sha> patch=<patch-id> ctx=<sha1> round=<n> -->
+          # A marker from v5.9.6 or before has head= alone; one from v5.10.1
+          # or before has no ctx=. A dismissed
+          # verdict still counts as a round; it no longer stands.
+          all=$(api_all "/pulls/$PR_NUM/reviews?")
+          hist=$(jq -c --arg u "$REVIEWER" '
+              [ .[] | select(.user.login == $u)
+                    | (if .state == "CHANGES_REQUESTED" then .state = "REQUEST_CHANGES" else . end)
+                    | select(.state == "APPROVED" or .state == "REQUEST_CHANGES" or .state == "DISMISSED")
+                    | (.body // "") as $b
+                    | ($b | capture("<!-- codex-review:verdict head=(?<h>[0-9a-f]{40})(?<a>[^>]*)-->")) as $m
+                    | { id, commit_id, body: $b, head: $m.h,
+                        stands: ((.state != "DISMISSED") and (.dismissed | not)),
+                        state: (if .state == "DISMISSED" then "DISMISSED" else .state end),
+                        patch: (($m.a | capture("\\bpatch=(?<p>[0-9a-f]{40})\\b") | .p) // ""),
+                        ctx: (($m.a | capture("\\bctx=(?<c>[0-9a-f]{40})\\b") | .c) // ""),
+                        round: (($m.a | capture("\\bround=(?<r>[0-9]+)\\b") | .r | tonumber) // null) } ]
+              | sort_by(.id)' <<<"$all")
+
+          # SAME PATCH: the latest standing verdict on another head with this
+          # patch at these hunk lines (v5.10.2; the whole `@@` line since
+          # v5.10.4) carries to this head
+          # without a codex run. An approval is posted again on $EVENT_SHA (the
+          # confirm step and automerge read a verdict on the head); a rejection
+          # fails this run, as on its own head. The same patch at other lines
+          # is a moved edit: codex reviews it. A label just added to
+          # change the route reviews again (above).
+          round=""
+          if [ -n "$patch_id" ] && [ -n "$hunk_ctx" ] && [ -z "$again" ]; then
+            prev=$(jq -c --arg p "$patch_id" --arg x "$hunk_ctx" --arg s "$EVENT_SHA" '
+                [ .[] | select(.stands and .patch == $p and .ctx == $x and .commit_id != $s) ] | last // empty' <<<"$hist")
+            if [ -n "$prev" ]; then
+              psha=$(jq -r '.commit_id' <<<"$prev")
+              echo "skip=same-patch" >> "$GITHUB_OUTPUT"
+              if [ "$(jq -r '.state' <<<"$prev")" = REQUEST_CHANGES ]; then
+                touch "$WORK/verdict"
+                echo "::error::$REVIEWER requested changes on $psha, the same patch ($patch_id) as $EVENT_SHA. Push a change that addresses them."
+                exit 1
+              fi
+              round=$(jq -r '.round // empty' <<<"$prev")
+              jq -r --arg s "$EVENT_SHA" --arg p "$patch_id" --arg x "$hunk_ctx" --arg r "$round" --arg o "$psha" '
+                  "<!-- codex-review:verdict head=\($s) patch=\($p) ctx=\($x)\(if $r == "" then "" else " round=\($r)" end) carried=\($o) -->\n"
+                  + "Carried from `\($o)`: head `\($s)` is the same patch (`\($p)`) at the same lines, so codex did not review it again.\n\n"
+                  + (.body | sub("<!-- codex-review:verdict [^>]*-->\n?"; ""))' <<<"$prev" > "$WORK/body.md"
+              send=APPROVED
+              [ "$FORGE" != github ] || send=APPROVE
+              jq -n --rawfile b "$WORK/body.md" --arg e "$send" --arg s "$EVENT_SHA" \
+                '{event: $e, body: $b, commit_id: $s}' > "$WORK/review.json"
+              posted=$(api POST "/pulls/$PR_NUM/reviews" "$WORK/review.json")
+              state=$(jq -r '.state // empty' <<<"$posted")
+              [ "$state" = APPROVED ] || die "$FORGE filed the carried review as '${state:-nothing}', not APPROVED"
+              who=$(jq -r '.user.login // empty' <<<"$posted")
+              [ "$who" = "$REVIEWER" ] || die "$FORGE filed the carried review as '${who:-unknown}', not $REVIEWER"
+              echo "review_id=$(jq -r '.id' <<<"$posted")" >> "$GITHUB_OUTPUT"
+              echo "Carried the $REVIEWER approval of $psha to $EVENT_SHA: the same patch."
+              exit 0
+            fi
+          fi
+
+          # THE TWO-ROUND STOP (v5.9.8, Company Agent m2179 (1) and m2185;
+          # sdlc.md §2b): codex reviews a labelled PR two rounds. A round is a
+          # codex verdict on a new review key; the marker carries its number.
+          # A round 2 that requests changes labels the PR `needs-coordinator`
+          # (the posting step, then the hand-on step): the lane ends and the
+          # project coordinator has COORDINATOR_TURNS more rounds, one per head
+          # it pushes, while the label is on. The last of them, rejected,
+          # swaps the label for `needs-owner`. A head past the limit with no
+          # standing approval ends red, skip=round-limit, posts nothing, and
+          # gets the label the count reached. A PR labelled `needs-owner` is
+          # not reviewed (skip=needs-owner) until the owner takes it off.
+          # Removing and re-adding `code-review` starts over (that run is
+          # round 1 again); re-running the run that added it replays its
+          # event and also starts over. A marker without round= (v5.9.6 or
+          # before) counts one round per patch, or per head.
+          [[ $COORDINATOR_TURNS =~ ^[0-9]+$ ]] ||
+            die "COORDINATOR_TURNS is '$COORDINATOR_TURNS', not a number of rounds (CUSTOMIZE; the default is 3)"
+          last_round=$((2 + COORDINATOR_TURNS))
+          if jq -e 'index("needs-owner") != null' <<<"$labels" >/dev/null; then
+            echo "skip=needs-owner" >> "$GITHUB_OUTPUT"
+            touch "$WORK/verdict"
+            echo "::error::PR $PR_NUM is labelled needs-owner: codex reviews no round until the owner takes the label off (sdlc.md §2b)."
+            exit 1
+          fi
+          limit=2
+          if jq -e 'index("needs-coordinator") != null' <<<"$labels" >/dev/null; then limit=$last_round; fi
+          if [ "${EVENT_ACTION}:${EVENT_LABEL}" = labeled:code-review ]; then
+            done_rounds=0
+          else
+            done_rounds=$(jq -r '
+                if length == 0 then 0
+                elif (last | .round) != null then last | .round
+                else [ .[] | if .patch != "" then .patch else .head end ] | unique | length end' <<<"$hist")
+          fi
+          [[ $done_rounds =~ ^[0-9]+$ ]] || die "could not count the $REVIEWER rounds on PR $PR_NUM"
+          latest=$(jq -r 'if length == 0 then "" elif (last | .stands) then last | .state else "DISMISSED" end' <<<"$hist")
+          if [ "$done_rounds" -ge "$limit" ] && [ "$latest" != APPROVED ]; then
+            stop=needs-coordinator
+            [ "$done_rounds" -lt "$last_round" ] || stop=needs-owner
+            { echo "skip=round-limit"; echo "stop=$stop"; } >> "$GITHUB_OUTPUT"
+            touch "$WORK/verdict"
+            echo "::error::$REVIEWER has reviewed PR $PR_NUM for $done_rounds rounds and the latest verdict is ${latest:-none}, not an approval: the round limit is $limit (sdlc.md §2b). The PR goes to $stop."
+            exit 1
+          fi
+          round=$((done_rounds + 1))
+          { echo "round=$round"; echo "limit=$limit"; } >> "$GITHUB_OUTPUT"
+          echo "Codex round $round of $limit on PR $PR_NUM."
 
           # THE PER-JOB CODEX LOGIN (dept-infra#18). The master stays
           # root-only and is only ever read here, before any untrusted code is
@@ -701,9 +1188,9 @@ jobs:
             rm -rf -- "${refresh_dir:?}"
             [ "$rc" != 75 ] ||
               die "timed out after 300 s waiting for $CODEX_MASTER/.review.lock to refresh the Codex login"
-            # shellcheck disable=SC2015 # die and exit end the script, so C runs only when A && B fails.
-            [ "$rc" != 124 ] && [ "$rc" != 137 ] ||
+            if [ "$rc" = 124 ] || [ "$rc" = 137 ]; then
               die "the Codex refresh call (\`codex exec\`) did not finish within 120 s; the Codex login was not refreshed"
+            fi
             copy_login
             exp=$(token_exp "$CODEX_COPY") || exp=""
             [[ $exp =~ ^[0-9]+$ ]] || exp=0
@@ -717,7 +1204,7 @@ jobs:
       # ROOT (a node action). Untrusted code from here on: no credential in
       # .git/config, and the next step hands the tree to uid 1000.
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        if: steps.guard.outputs.requested == 'true' && steps.guard.outputs.skip == ''
+        if: steps.scope.outputs.skip != 'true' && (steps.guard.outputs.requested == 'true' && steps.guard.outputs.skip == '')
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
@@ -730,10 +1217,11 @@ jobs:
       # strict shapes below. A fetch that fails is a line in the prompt, never
       # a failed job: the review runs without that module, as v4.1 did. The
       # public modules the change adds or bumps (v5.8) come from the module
-      # proxy with no token, and only after their go.sum h1: hash matches.
+      # proxy with no token, and only after their go.sum h1: hash matches
+      # sum.golang.org's (v5.10.3). No module comes from a forge archive.
       - name: Fetch the first-party modules the change requires
         id: deps
-        if: steps.guard.outputs.requested == 'true' && steps.guard.outputs.skip == ''
+        if: steps.scope.outputs.skip != 'true' && (steps.guard.outputs.requested == 'true' && steps.guard.outputs.skip == '')
         timeout-minutes: 6
         env:
           SRC: ${{ github.workspace }}/src
@@ -746,7 +1234,6 @@ jobs:
           : > "$WORK/deps.ok"
           : > "$WORK/deps.missing"
           owner=${GITHUB_REPOSITORY%%/*}
-          self=${GITHUB_REPOSITORY#*/}
           prefix="github.com/$owner/"
           deadline=$(( $(date +%s) + 240 ))
           total=0
@@ -754,8 +1241,9 @@ jobs:
 
           # get URL FILE -> the HTTP code; the body goes to FILE. Never dies.
           # GitHub (v5.9.0): the API headers, and redirects followed over https
-          # (a tarball answers 302 to codeload; curl keeps the Authorization
-          # header to the API host only). Further arguments go to curl.
+          # (curl keeps the Authorization header to the API host only). This
+          # step reads only the base go.mod files through it: no module comes
+          # from a forge archive (v5.10.3). Further arguments go to curl.
           gh=()
           [ "$FORGE" != github ] ||
             gh=(-L --max-redirs 3 --proto-redir '=https' -H 'X-GitHub-Api-Version: 2022-11-28')
@@ -801,6 +1289,33 @@ jobs:
               done
           }
 
+          # getsum MODULE VERSION -> sum.golang.org's h1: line for it, or a
+          # reason and status 1 (v5.10.0; both loops since v5.10.3).
+          getsum() {
+            # shellcheck disable=SC2001  # ${var//} cannot lower-case with \L
+            code=$(getpub "https://sum.golang.org/lookup/$(sed 's/[A-Z]/!\L&/g' <<<"$1@$2")" "$WORK/sumdb.txt")
+            [ "$code" = 200 ] || { echo "sum.golang.org answered HTTP $code (a private module is not on it)"; return 1; }
+            db=$(awk -v m="$1" -v v="$2" '$1 == m && $2 == v && $3 ~ /^h1:[A-Za-z0-9+\/]+=*$/ { print $3; exit }' "$WORK/sumdb.txt")
+            [ -n "$db" ] || { echo "sum.golang.org has no h1: line for it"; return 1; }
+            echo "$db"
+          }
+          # The module lines PR diff file $1 adds to a go.sum (v5.10.3): one
+          # "go.sum-path module version h1:hash" line each, from the hunks of
+          # a file whose new path ends in go.sum. A /go.mod line is left out,
+          # and so is a line the same file also removes word for word (moved).
+          changed_sum_lines() {
+            awk '/^diff --git / { hdr = 1; f = ""; next }
+                 hdr && /^\+\+\+ / { f = substr($0, 5); sub(/^b\//, "", f); next }
+                 /^@@ / { hdr = 0; next }
+                 hdr || f !~ /(^|\/)go\.sum$/ { next }
+                 /^[-+]/ && NF == 3 && $2 !~ /\/go\.mod$/ && $3 ~ /^h1:[A-Za-z0-9+\/]+=*$/ {
+                   l = substr($0, 2)
+                   if (substr($0, 1, 1) == "-") { gone[f SUBSEP l] = 1; next }
+                   n++; file[n] = f; line[n] = l
+                 }
+                 END { for (i = 1; i <= n; i++) if (!((file[i] SUBSEP line[i]) in gone)) print file[i], line[i] }' "$1"
+          }
+
           # THE HEAD'S go.mod files, at most 50, none over 1 MiB, no links.
           mapfile -t mods < <(cd "$SRC" && find . -name .git -prune -o -path '*/vendor' -prune \
                                 -o -path '*/testdata' -prune -o -type f -name go.mod -size -1024k -print |
@@ -809,23 +1324,49 @@ jobs:
           : > "$WORK/deps.want"
           : > "$WORK/deps.pubhead"
           for f in "${mods[@]}"; do
-            requires "$SRC/$f" >> "$WORK/deps.want"
-            [[ ! $f =~ ^[A-Za-z0-9_./-]+$ ]] || public_requires "$SRC/$f" "$f" >> "$WORK/deps.pubhead"
+            [[ $f =~ ^[A-Za-z0-9_./-]+$ ]] || continue
+            requires "$SRC/$f" | sed "s|^|$f |" >> "$WORK/deps.want"
+            public_requires "$SRC/$f" "$f" >> "$WORK/deps.pubhead"
           done
+          # THE CHANGED go.sum LINES (v5.10.3, Company Agent m2295 (2)): a module
+          # line the change adds to or replaces in the go.sum beside one of
+          # those go.mod files is fetched too, whether or not a require changed
+          # (go-trusted-platform #1580 replaced three h1: lines at the same
+          # version). A first-party module joins the first-party loop, a public
+          # one the public loop after the bumps; each is checked like the rest.
+          : > "$WORK/deps.pubsum"
+          declare -A inmods=()
+          for f in "${mods[@]}"; do inmods[$f]=1; done
+          if pr_diff "$WORK/sums.diff"; then
+            while read -r s m v _; do
+              [[ $s =~ ^[A-Za-z0-9_./-]+$ ]] || continue
+              f=${s%go.sum}go.mod
+              [ -n "${inmods[$f]:-}" ] || continue
+              [[ $v =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]*)?$ ]] || continue
+              if [[ $m == "$prefix"* ]]; then
+                if [[ $m =~ ^github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$ ]]; then
+                  printf '%s %s %s\n' "$f" "$m" "$v" >> "$WORK/deps.want"
+                fi
+              elif [[ $m =~ ^[a-z0-9-]+(\.[a-z0-9-]+)+(/[A-Za-z0-9_.~-]+)*$ && /$m/ != */./* && /$m/ != */../* ]]; then
+                printf '%s %s %s\n' "$f" "$m" "$v" >> "$WORK/deps.pubsum"
+              fi
+            done < <(changed_sum_lines "$WORK/sums.diff")
+          else
+            echo "- the change's go.sum lines: not read, the forge gave no PR diff" >> "$WORK/deps.missing"
+          fi
+          rm -f "$WORK/sums.diff"
           sort -u -o "$WORK/deps.want" "$WORK/deps.want"
-          if [ ! -s "$WORK/deps.want" ] && [ ! -s "$WORK/deps.pubhead" ]; then
+          if [ ! -s "$WORK/deps.want" ] && [ ! -s "$WORK/deps.pubhead" ] && [ ! -s "$WORK/deps.pubsum" ]; then
             echo "The change's go.mod files require no module; nothing to fetch."
             exit 0
           fi
 
-          # THE BASE BRANCH'S first-party repositories, read through the API,
-          # not git: a private repository is fetched only if one of these.
-          # Its public requires, per go.mod: a public module the base go.mod
-          # already requires at the same version is not fetched.
+          # THE BASE BRANCH'S public requires, per go.mod, read through the
+          # API, not git: a public module the base go.mod already requires at
+          # the same version is not fetched.
           base_ref=$(api GET "/pulls/$PR_NUM" | jq -r '.base.ref // empty')
           [ -n "$base_ref" ] || die "could not read the base branch of PR $PR_NUM"
           ref_q=$(jq -rn --arg r "$base_ref" '$r | @uri')
-          : > "$WORK/deps.base"
           : > "$WORK/deps.pubbase"
           for f in "${mods[@]}"; do
             [[ $f =~ ^[A-Za-z0-9_./-]+$ ]] || continue
@@ -835,73 +1376,9 @@ jobs:
               code=$(get "$REPO_API/raw/$f?ref=$ref_q" "$WORK/base.mod")
             fi
             [ "$code" = 200 ] || continue
-            requires "$WORK/base.mod" | awk '{ split($1, p, "/"); print p[3] }' >> "$WORK/deps.base"
             public_requires "$WORK/base.mod" "$f" >> "$WORK/deps.pubbase"
           done
           rm -f "$WORK/base.mod"
-
-          declare -A seen=()
-          while read -r m v; do
-            rest=${m#"$prefix"}
-            repo=${rest%%/*}
-            sub=""
-            [ "$repo" = "$rest" ] || sub=${rest#*/}
-            if [ "$(date +%s)" -ge "$deadline" ] || [ "$total" -ge "$max_total" ]; then
-              echo "- $m@$v: not fetched, the fetch budget (240 s, 1 GiB) ran out" >> "$WORK/deps.missing"
-              continue
-            fi
-            if [ "$repo" != "$self" ] && ! grep -qxF -- "$repo" "$WORK/deps.base"; then
-              code=$(get "$FORGE_API/repos/$owner/$repo" "$WORK/repo.json")
-              if [ "$code" != 200 ] || [ "$(jq -r '.private' "$WORK/repo.json" 2>/dev/null)" != false ]; then
-                echo "- $m@$v: not fetched, $owner/$repo is private (or unreadable) and the base branch does not require it" >> "$WORK/deps.missing"
-                continue
-              fi
-            fi
-            # The ref: a pseudo-version names a commit; a tag is the version,
-            # under the module's directory for a module below the root, or
-            # without a /vN major suffix (the major-branch layout).
-            v0=${v%+incompatible}
-            refs=()
-            if [[ $v0 =~ [.-]([0-9]{14})-([0-9a-f]{12})$ ]]; then
-              refs=("${BASH_REMATCH[2]}")
-            else
-              [ -z "$sub" ] || refs+=("$sub/$v0")
-              if [[ $sub =~ ^(.*/)?v[0-9]+$ ]]; then
-                trimmed=${sub%v*}; trimmed=${trimmed%/}
-                refs+=("${trimmed:+$trimmed/}$v0")
-              fi
-              [ -n "$sub" ] || refs+=("$v0")
-            fi
-            got=""
-            for r in "${refs[@]}"; do
-              dest="$DEPS/$repo@${r//\//_}"
-              if [ -n "${seen[$dest]:-}" ]; then got=$dest; break; fi
-              if [ "$FORGE" = github ]; then
-                code=$(get "$FORGE_API/repos/$owner/$repo/tarball/$r" "$WORK/dep.tgz")
-              else
-                code=$(get "$FORGE_API/repos/$owner/$repo/archive/$r.tar.gz" "$WORK/dep.tgz")
-              fi
-              [ "$code" = 200 ] || continue
-              total=$(( total + $(stat -c %s "$WORK/dep.tgz") ))
-              install -d -m 0755 "$dest"
-              if tar -xzf "$WORK/dep.tgz" -C "$dest" --strip-components=1 \
-                   --no-same-owner --no-same-permissions 2>/dev/null; then
-                chmod -R u+rwX,go+rX,go-w "$dest"
-                seen[$dest]=1
-                got=$dest
-                break
-              fi
-              rm -rf "$dest"
-            done
-            rm -f "$WORK/dep.tgz" "$WORK/repo.json"
-            if [ -z "$got" ]; then
-              echo "- $m@$v: not fetched, no archive of $owner/$repo at ${refs[*]}" >> "$WORK/deps.missing"
-              continue
-            fi
-            where=$got
-            [ -z "$sub" ] || [ ! -d "$got/$sub" ] || where=$got/$sub
-            echo "- $m@$v: $where" >> "$WORK/deps.ok"
-          done < "$WORK/deps.want"
 
           # THE PUBLIC MODULES the change adds or bumps (v5.8): a head require
           # that is not in the same base go.mod at the same version, at most
@@ -967,14 +1444,79 @@ jobs:
               print(err, file=sys.stderr)
               sys.exit(1)
           PY
+
+          # THE FIRST-PARTY MODULES (v5.10.0, Company Agent m2268 (1)): every
+          # first-party require of the head's go.mod files is a module zip from
+          # proxy.golang.org, never a forge tag archive: a tag that moved after
+          # it was published is not the module the build uses. Its h1: line in
+          # the go.sum beside that go.mod must equal sum.golang.org's line for
+          # the module, and modzip.py checks the zip against it before anything
+          # is unpacked under $DEPS. A private module is not on the proxy, so it
+          # is listed as not fetched. A module is keyed by its go.sum h1: too
+          # (v5.10.3): a second go.sum with another hash for the same version
+          # is checked against sum.golang.org, not skipped.
+          declare -A firsts=()
+          while read -r f m v; do
+            sum="$SRC/${f%go.mod}go.sum"
+            h1=""
+            if [ -f "$sum" ] && [ ! -L "$sum" ] && [ "$(stat -c %s "$sum")" -le $(( 16 * 1024 * 1024 )) ]; then
+              h1=$(awk -v m="$m" -v v="$v" '$1 == m && $2 == v && $3 ~ /^h1:[A-Za-z0-9+\/]+=*$/ { print $3; exit }' "$sum")
+            fi
+            [ -z "${firsts["$m@$v $h1"]:-}" ] || continue
+            firsts["$m@$v $h1"]=1
+            if [ "$(date +%s)" -ge "$deadline" ] || [ "$total" -ge "$max_total" ]; then
+              echo "- $m@$v: not fetched, the fetch budget (240 s, 1 GiB) ran out" >> "$WORK/deps.missing"
+              continue
+            fi
+            if [ -z "$h1" ]; then
+              echo "- $m@$v: not fetched, no h1: hash for it in the go.sum beside $f" >> "$WORK/deps.missing"
+              continue
+            fi
+            if ! db=$(getsum "$m" "$v"); then
+              echo "- $m@$v: not fetched, $db" >> "$WORK/deps.missing"
+              rm -f "$WORK/sumdb.txt"
+              continue
+            fi
+            rm -f "$WORK/sumdb.txt"
+            if [ "$db" != "$h1" ]; then
+              echo "- $m@$v: not fetched, the go.sum beside $f has an h1: hash that is not sum.golang.org's" >> "$WORK/deps.missing"
+              continue
+            fi
+            dest="$DEPS/${m//\//_}@$v"
+            # shellcheck disable=SC2001
+            esc_m=$(sed 's/[A-Z]/!\L&/g' <<<"$m")
+            # shellcheck disable=SC2001
+            esc_v=$(sed 's/[A-Z]/!\L&/g' <<<"$v")
+            code=$(getpub "https://proxy.golang.org/$esc_m/@v/$esc_v.zip" "$WORK/dep.zip")
+            if [ "$code" != 200 ]; then
+              echo "- $m@$v: not fetched, the module proxy answered HTTP $code" >> "$WORK/deps.missing"
+              rm -f "$WORK/dep.zip"
+              continue
+            fi
+            total=$(( total + $(stat -c %s "$WORK/dep.zip") ))
+            if python3 -I "$WORK/modzip.py" "$WORK/dep.zip" "$dest" "$m@$v" "$h1" 2> "$WORK/dep.err"; then
+              echo "- $m@$v: $dest (first-party, from the module proxy, go.sum and sum.golang.org h1: verified)" >> "$WORK/deps.ok"
+            else
+              rm -rf "$dest"
+              echo "- $m@$v: not fetched, $(head -n 1 "$WORK/dep.err" | tr -cd 'A-Za-z0-9 :./@-' | head -c 120)" >> "$WORK/deps.missing"
+            fi
+            rm -f "$WORK/dep.zip" "$WORK/dep.err"
+          done < "$WORK/deps.want"
           sort -u "$WORK/deps.pubbase" -o "$WORK/deps.pubbase"
           grep -vxF -f "$WORK/deps.pubbase" "$WORK/deps.pubhead" | sort -u > "$WORK/deps.pub" || true
+          # The changed go.sum lines' public modules, after the bumps (v5.10.3).
+          [ ! -s "$WORK/deps.pubsum" ] || sort -u "$WORK/deps.pubsum" >> "$WORK/deps.pub"
           install -d -m 0755 "$DEPS/proxy"
           declare -A tried=()
           npub=0
           while read -r f m v; do
-            [ -z "${tried[$m@$v]:-}" ] || continue
-            tried[$m@$v]=1
+            sum="$SRC/${f%go.mod}go.sum"
+            h1=""
+            if [ -f "$sum" ] && [ ! -L "$sum" ] && [ "$(stat -c %s "$sum")" -le $(( 16 * 1024 * 1024 )) ]; then
+              h1=$(awk -v m="$m" -v v="$v" '$1 == m && $2 == v && $3 ~ /^h1:[A-Za-z0-9+\/]+=*$/ { print $3; exit }' "$sum")
+            fi
+            [ -z "${tried["$m@$v $h1"]:-}" ] || continue
+            tried["$m@$v $h1"]=1
             npub=$(( npub + 1 ))
             if [ "$npub" -gt 20 ]; then
               echo "- $m@$v: not fetched, over the 20 public-module limit per review" >> "$WORK/deps.missing"
@@ -984,13 +1526,20 @@ jobs:
               echo "- $m@$v: not fetched, the fetch budget (240 s, 1 GiB) ran out" >> "$WORK/deps.missing"
               continue
             fi
-            sum="$SRC/${f%go.mod}go.sum"
-            h1=""
-            if [ -f "$sum" ] && [ ! -L "$sum" ] && [ "$(stat -c %s "$sum")" -le $(( 16 * 1024 * 1024 )) ]; then
-              h1=$(awk -v m="$m" -v v="$v" '$1 == m && $2 == v && $3 ~ /^h1:[A-Za-z0-9+\/]+=*$/ { print $3; exit }' "$sum")
-            fi
             if [ -z "$h1" ]; then
               echo "- $m@$v: not fetched, no h1: hash for it in the go.sum beside $f" >> "$WORK/deps.missing"
+              continue
+            fi
+            # sum.golang.org's line first (v5.10.3), as in the first-party loop:
+            # the zip is requested only when the go.sum agrees with it.
+            if ! db=$(getsum "$m" "$v"); then
+              echo "- $m@$v: not fetched, $db" >> "$WORK/deps.missing"
+              rm -f "$WORK/sumdb.txt"
+              continue
+            fi
+            rm -f "$WORK/sumdb.txt"
+            if [ "$db" != "$h1" ]; then
+              echo "- $m@$v: not fetched, the go.sum beside $f has an h1: hash that is not sum.golang.org's" >> "$WORK/deps.missing"
               continue
             fi
             dest="$DEPS/proxy/${m//\//_}@$v"
@@ -1012,7 +1561,7 @@ jobs:
             fi
             total=$(( total + $(stat -c %s "$WORK/pub.zip") ))
             if python3 -I "$WORK/modzip.py" "$WORK/pub.zip" "$dest" "$m@$v" "$h1" 2> "$WORK/pub.err"; then
-              echo "- $m@$v: $dest (public, from the module proxy, go.sum h1: verified)" >> "$WORK/deps.ok"
+              echo "- $m@$v: $dest (public, from the module proxy, go.sum and sum.golang.org h1: verified)" >> "$WORK/deps.ok"
             else
               rm -rf "$dest"
               echo "- $m@$v: not fetched, $(head -n 1 "$WORK/pub.err" | tr -cd 'A-Za-z0-9 :./@-' | head -c 120)" >> "$WORK/deps.missing"
@@ -1028,7 +1577,7 @@ jobs:
       # ROOT orchestrates; the git reads and codex run as uid 1000.
       - name: Review the head with codex as uid 1000
         id: codex
-        if: steps.guard.outputs.requested == 'true' && steps.guard.outputs.skip == ''
+        if: steps.scope.outputs.skip != 'true' && (steps.guard.outputs.requested == 'true' && steps.guard.outputs.skip == '')
         env:
           SRC: ${{ github.workspace }}/src
           MODEL: ${{ steps.guard.outputs.codex_model }}
@@ -1128,11 +1677,12 @@ jobs:
             printf 'END-PR-%s\n' "$mark"
             printf '\n## Dependencies\n\n'
             printf 'This job has no Go toolchain: you cannot build the code or run its tests, so\n'
-            printf 'review by reading. The source of each first-party module a go.mod in the\n'
-            printf 'change requires is unpacked read-only under %s, one directory per\n' "$DEPS"
-            printf 'repository and ref. So is each public module whose require version the\n'
-            printf 'change adds or changes, under %s/proxy, from the Go module proxy and\n' "$DEPS"
-            printf 'checked against the go.sum h1: hash. Read them to check calls into those\n'
+            printf 'review by reading. Each first-party module a go.mod in the change requires\n'
+            printf 'is unpacked read-only under %s, one directory per module and version,\n' "$DEPS"
+            printf 'from the Go module proxy: the published module, checked against the go.sum\n'
+            printf 'and sum.golang.org h1: hashes, never a forge tag tree. So is each public\n'
+            printf 'module whose require version or go.sum h1: line the change adds or changes,\n'
+            printf 'under %s/proxy, checked the same way. Read them to check calls into those\n' "$DEPS"
             printf 'modules, including a public API the bump adds. Public modules the change\n'
             printf 'does not bump are not fetched.\n\n'
             if [ -s "$WORK/deps.ok" ]; then cat "$WORK/deps.ok"; else printf -- '- none fetched\n'; fi
@@ -1201,7 +1751,7 @@ jobs:
       # happened. Every uid 1000 process is killed first, so nothing can swap
       # the file for a link while it is shredded; a link is never followed.
       - name: Shred codex's per-job login
-        if: always()
+        if: steps.scope.outputs.skip != 'true' && (always())
         run: |
           [ -e "$WORK/lib.sh" ] || exit 0
           # shellcheck source=/dev/null
@@ -1215,10 +1765,14 @@ jobs:
       # the model.
       - name: Post the verdict
         id: post
-        if: steps.guard.outputs.requested == 'true' && steps.guard.outputs.skip == ''
+        if: steps.scope.outputs.skip != 'true' && (steps.guard.outputs.requested == 'true' && steps.guard.outputs.skip == '')
         env:
           MODEL: ${{ steps.guard.outputs.codex_model }}
           EFFORT: ${{ steps.guard.outputs.codex_effort }}
+          PATCH_ID: ${{ steps.guard.outputs.patch_id }}
+          HUNK_CTX: ${{ steps.guard.outputs.hunk_ctx }}
+          ROUND: ${{ steps.guard.outputs.round }}
+          LIMIT: ${{ steps.guard.outputs.limit }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           # shellcheck source=/dev/null
@@ -1248,15 +1802,31 @@ jobs:
           else
             event=APPROVED
           fi
-          jq -r --arg e "$event" --arg s "$EVENT_SHA" --arg m "$MODEL" --arg f "$EFFORT" --arg u "$RUN_URL" '
+          # The marker (v5.9.8) carries the review key and the round, which
+          # the guard reads on the next head: head=<sha> patch=<patch-id>
+          # ctx=<sha1> round=<n> (ctx= since v5.10.2).
+          [[ $PATCH_ID =~ ^[0-9a-f]{40}$ ]] || PATCH_ID=""
+          [[ $HUNK_CTX =~ ^[0-9a-f]{40}$ ]] && [ -n "$PATCH_ID" ] || HUNK_CTX=""
+          [[ $ROUND =~ ^[0-9]+$ ]] || die "the guard gave no round number"
+          [[ $LIMIT =~ ^[0-9]+$ ]] || die "the guard gave no round limit"
+          # v5.9.8: a rejection at the round limit hands the PR on (THE
+          # TWO-ROUND STOP in the guard); the hand-on step sets the label.
+          stop=""
+          if [ "$event" = REQUEST_CHANGES ] && [ "$ROUND" -ge "$LIMIT" ]; then
+            stop=needs-coordinator
+            [ "$ROUND" -lt $((2 + COORDINATOR_TURNS)) ] || stop=needs-owner
+          fi
+          jq -r --arg e "$event" --arg s "$EVENT_SHA" --arg m "$MODEL" --arg f "$EFFORT" --arg u "$RUN_URL" \
+                --arg p "$PATCH_ID" --arg x "$HUNK_CTX" --arg r "$ROUND" --arg t "$stop" '
               def where: if .file == "" then "" elif .line > 0 then " (`\(.file):\(.line)`)" else " (`\(.file)`)" end;
               def item: "- **\(.priority)** \(.title)\(where)\n\n  \(.body | gsub("\n"; "\n  "))\n";
               (if $e == "APPROVED" then "Approve" else "Request changes" end) as $v
-              | "<!-- codex-review:verdict head=\($s) -->\n## Codex review: \($v)\n\n"
-                + "Head `\($s)`, model `\($m)`, effort `\($f)`, [run](\($u)).\n\n\(.summary)\n\n"
+              | "<!-- codex-review:verdict head=\($s)\(if $p == "" then "" else " patch=\($p)" end)\(if $x == "" or $p == "" then "" else " ctx=\($x)" end) round=\($r) -->\n## Codex review: \($v)\n\n"
+                + "Head `\($s)`, model `\($m)`, effort `\($f)`, round \($r), [run](\($u)).\n\n\(.summary)\n\n"
                 + (if (.findings | length) == 0 then "No findings.\n"
                    else "### Findings\n\n" + (.findings | sort_by(.priority) | map(item) | join("\n")) end)
-                + "\nP0 and P1 request changes; P2 and P3 are advisory.\n"' \
+                + "\nP0 and P1 request changes; P2 and P3 are advisory.\n"
+                + (if $t == "" then "" else "\nRound \($r) is the round limit: this pull request goes to `\($t)` (sdlc.md §2b).\n" end)' \
             "$WORK/findings.json" > "$WORK/body.md"
           # LEAK CHECK: a review is public, and codex could read its login.
           ! leaks "$WORK/body.md" ||
@@ -1295,7 +1865,7 @@ jobs:
           [ "$state" = "$want" ] || die "$FORGE filed the review as '${state:-nothing}', not $want"
           who=$(jq -r '.user.login // empty' <<<"$posted")
           [ "$who" = "$REVIEWER" ] || die "$FORGE filed the review as '${who:-unknown}', not $REVIEWER"
-          { echo "review_id=$(jq -r '.id' <<<"$posted")"; echo "verdict=$event"; } >> "$GITHUB_OUTPUT"
+          { echo "review_id=$(jq -r '.id' <<<"$posted")"; echo "verdict=$event"; echo "stop=$stop"; } >> "$GITHUB_OUTPUT"
           echo "Posted $event on $EVENT_SHA as $REVIEWER."
 
       # ROOT. THE JOB'S STATUS IS NOT A VERDICT. A step exiting 0 says nothing
@@ -1305,13 +1875,16 @@ jobs:
       # exact head -- the one this run posted, when it posted one -- and no
       # codex rejection. A rejection is red, so the run that files it cannot
       # read as a pass. A run that found the head already approved confirms
-      # that approval.
+      # that approval, and one that carried a same-patch approval (v5.9.8)
+      # confirms the approval it posted.
       - name: Confirm a codex verdict stands on this head
         if: >-
+          steps.scope.outputs.skip != 'true' && (
           steps.guard.outputs.requested == 'true' &&
-          (steps.guard.outputs.skip == '' || steps.guard.outputs.skip == 'reviewed')
+          (steps.guard.outputs.skip == '' || steps.guard.outputs.skip == 'reviewed' ||
+           steps.guard.outputs.skip == 'same-patch'))
         env:
-          REVIEW_ID: ${{ steps.post.outputs.review_id }}
+          REVIEW_ID: ${{ steps.post.outputs.review_id || steps.guard.outputs.review_id }}
         run: |
           # shellcheck source=/dev/null
           . "$WORK/lib.sh"
@@ -1339,24 +1912,58 @@ jobs:
             die "the $REVIEWER approval on $EVENT_SHA has an empty body"
           echo "$REVIEWER approved $EVENT_SHA."
 
-      # ROOT. A pipeline error is a comment, never a review: an unreviewed PR
-      # must not read as reviewed, and a crash is not a rejection either. A
-      # failure that IS the verdict (a codex rejection) leaves $WORK/verdict
-      # and is not reported here; every other failure is, in one comment per
-      # head, edited by a later failure on the same head.
-      - name: Report a pipeline error on the pull request
-        if: failure() && steps.guard.outputs.requested == 'true'
+      # ROOT. THE HAND-ON (v5.9.8, Company Agent m2185; sdlc.md §2b): a loop
+      # that reached its round limit without an approval goes to the project
+      # coordinator (`needs-coordinator`) or, after the coordinator's rounds,
+      # to the owner (`needs-owner`, which takes `needs-coordinator` off).
+      # The guard or the posting step names the label. A failure here is
+      # reported on the PR by the next step.
+      - name: Hand a stopped review loop on
+        if: >-
+          steps.scope.outputs.skip != 'true' && (
+          always() && steps.guard.outputs.requested == 'true' &&
+          (steps.guard.outputs.stop != '' || steps.post.outputs.stop != ''))
+        env:
+          STOP: ${{ steps.post.outputs.stop || steps.guard.outputs.stop }}
         run: |
           # shellcheck source=/dev/null
           . "$WORK/lib.sh"
-          [ ! -e "$WORK/verdict" ] || exit 0
+          [ "$FORGE" != github ] || load_token
+          printf '%s\n' "$STOP" > "$WORK/stop-error"
+          case "$STOP" in
+            needs-coordinator) relabel needs-coordinator ;;
+            needs-owner) relabel needs-owner needs-coordinator ;;
+            *) die "no hand-on label '$STOP'" ;;
+          esac
+          rm -f "$WORK/stop-error"
+          echo "PR $PR_NUM is labelled $STOP (sdlc.md §2b)."
+
+      # ROOT. A pipeline error is a comment, never a review: an unreviewed PR
+      # must not read as reviewed, and a crash is not a rejection either. A
+      # failure that IS the verdict (a codex rejection) leaves $WORK/verdict
+      # and is not reported here, unless the hand-on step then failed (v5.9.8);
+      # every other failure is, in one comment per head, edited by a later
+      # failure on the same head.
+      - name: Report a pipeline error on the pull request
+        if: steps.scope.outputs.skip != 'true' && (failure() && steps.guard.outputs.requested == 'true')
+        run: |
+          # shellcheck source=/dev/null
+          . "$WORK/lib.sh"
+          stop=$(head -c 64 "$WORK/stop-error" 2>/dev/null | head -n 1) || stop=""
+          [ ! -e "$WORK/verdict" ] || [ -n "$stop" ] || exit 0
           [ "$FORGE" != github ] || load_token
           marker="<!-- codex-review:error head=$EVENT_SHA -->"
           reason=$(cat "$WORK/error" 2>/dev/null || echo "see the Code Review job log")
-          jq -n --arg m "$marker" --arg r "$reason" --arg s "$EVENT_SHA" '{body: (
-              "\($m)\nCodex review of `\($s)` did not complete, so no verdict was posted and this pull request is unreviewed.\n\n"
-              + "```\n\($r)\n```\n\n"
-              + "Fix the cause, then push a new commit or remove and re-add the `code-review` label.")}' \
+          jq -n --arg m "$marker" --arg r "$reason" --arg s "$EVENT_SHA" --arg t "$stop" '{body: (
+              if $t == "" then
+                "\($m)\nCodex review of `\($s)` did not complete, so no verdict was posted and this pull request is unreviewed.\n\n"
+                + "```\n\($r)\n```\n\n"
+                + "Fix the cause, then push a new commit or remove and re-add the `code-review` label."
+              else
+                "\($m)\nCodex review of `\($s)` reached the round limit, but the `\($t)` label could not be set.\n\n"
+                + "```\n\($r)\n```\n\n"
+                + "Set `\($t)` by hand (sdlc.md §2b, labels.md)."
+              end)}' \
             > "$WORK/comment.json"
           # Gitea's issue-comments endpoint has no page/limit parameters and
           # returns every comment in one response, so api_all would never see
@@ -1377,7 +1984,7 @@ jobs:
       # ROOT. The header file and root's copy of the login go with the job, and
       # so does what uid 1000 wrote.
       - name: Remove the credential header and the review files
-        if: always()
+        if: steps.scope.outputs.skip != 'true' && (always())
         run: |
           if [ -f "$WORK/codex-auth.json" ]; then shred -u "$WORK/codex-auth.json"; fi
           rm -rf "$WORK" "$OUT" "$DEPS"
@@ -1444,7 +2051,62 @@ jobs:
       OC_DATA: /tmp/opencode-data
       ROUTED_MODEL: ${{ needs.review.outputs.model }}
     steps:
+      # Owner ruling 443 (2026-11-10): a PR whose every changed file is under
+      # .github/ gets no review. ROOT, first, before the guard and with no
+      # checkout: the PR's file list from the API with the job's own token,
+      # each entry's filename and previous_filename. Only a list that is read
+      # whole, non-empty, under 3000 entries and all under .github/ sets
+      # skip=true; any API error, an empty list or the 3000-file cap reviews
+      # as before (continue-on-error: a failure here leaves skip unset). Every
+      # later step of the job tests steps.scope.outputs.skip, so the job ends
+      # green without a review. No file name is printed.
+      - name: Is every changed file under .github/?
+        id: scope
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FILES_ROUTE: repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files
+        run: |
+          set +e
+          set -uo pipefail
+          msg="CI/SDLC-only change: no review (owner 2026-11-10)"
+          skip=false ok=false n=0
+          list=$(mktemp) || { echo "skip=false" >> "$GITHUB_OUTPUT"; exit 0; }
+          # One line per entry, filename<TAB>previous_filename; @tsv escapes a
+          # tab or a newline inside a name, so an entry is one line.
+          tsv='.[] | [(.filename // ""), (.previous_filename // "")] | @tsv'
+          if [ -n "$GH_TOKEN" ] && [ "$FORGE" = github ] && command -v gh >/dev/null 2>&1; then
+            gh api --paginate "$FILES_ROUTE?per_page=100" --jq "$tsv" > "$list" && ok=true
+          elif [ -n "$GH_TOKEN" ] && command -v jq >/dev/null 2>&1; then
+            # Gitea (or GitHub without gh): the same route page by page until
+            # an empty page; GitHub pages with per_page, Gitea with limit.
+            auth="token $GH_TOKEN" size=limit=50
+            [ "$FORGE" != github ] || { auth="Bearer $GH_TOKEN"; size=per_page=100; }
+            for page in $(seq 1 200); do
+              body=$(curl -sS --fail --proto '=http,https' --max-time 30 --retry 2 \
+                -H @<(printf 'Authorization: %s\n' "$auth") \
+                "$REPO_API/pulls/$PR_NUM/files?$size&page=$page") || break
+              lines=$(jq -r "if type == \"array\" then $tsv else error(\"not a list\") end" <<<"$body") || break
+              if [ -z "$lines" ]; then ok=true; break; fi
+              printf '%s\n' "$lines" >> "$list"
+            done
+          fi
+          [ "$ok" != true ] || n=$(wc -l < "$list") || ok=false
+          if [ "$ok" = true ] && [ "$n" -gt 0 ] && [ "$n" -lt 3000 ] &&
+            ! awk -F '\t' '$1 !~ /^\.github\// || ($2 != "" && $2 !~ /^\.github\//) { bad = 1 } END { exit !bad }' "$list"; then
+            skip=true
+          fi
+          rm -f "$list"
+          if [ "$skip" = true ]; then
+            echo "$msg"
+            [ -z "${GITHUB_STEP_SUMMARY:-}" ] || echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "review as usual: file list read=$ok, $n entries, not all under .github/ (or unread)"
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
       - name: Check the token, the request, the head, any standing verdict and the model
+        if: steps.scope.outputs.skip != 'true'
         id: guard
         run: |
           set -euo pipefail
@@ -1604,7 +2266,7 @@ jobs:
 
       # Root's, and it stays root's: never chowned (v5.2.2).
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        if: steps.guard.outputs.requested == 'true' && steps.guard.outputs.skip == ''
+        if: steps.scope.outputs.skip != 'true' && (steps.guard.outputs.requested == 'true' && steps.guard.outputs.skip == '')
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
@@ -1613,7 +2275,7 @@ jobs:
       # ROOT, before uid 1000 runs anything: the job config, the change as a
       # diff, the prompt, and uid 1000's directories.
       - name: Prepare the reviewer's config, the change and the prompt
-        if: steps.guard.outputs.requested == 'true' && steps.guard.outputs.skip == ''
+        if: steps.scope.outputs.skip != 'true' && (steps.guard.outputs.requested == 'true' && steps.guard.outputs.skip == '')
         env:
           REPO: ${{ github.event.repository.name }}
           DRAFT: ${{ steps.guard.outputs.draft }}
@@ -1696,7 +2358,7 @@ jobs:
       # model stops talking, so a run that ends with no marked body is resumed
       # ONCE with `--continue` (same session, context kept).
       - name: Review the head with opencode
-        if: steps.guard.outputs.requested == 'true' && steps.guard.outputs.skip == ''
+        if: steps.scope.outputs.skip != 'true' && (steps.guard.outputs.requested == 'true' && steps.guard.outputs.skip == '')
         run: |
           # shellcheck source=/dev/null
           . "$WORK/lib.sh"
@@ -1787,7 +2449,7 @@ jobs:
 
       # ROOT posts the one advisory review; the model never holds the token.
       - name: Post the advisory opencode review
-        if: steps.guard.outputs.requested == 'true' && steps.guard.outputs.skip == ''
+        if: steps.scope.outputs.skip != 'true' && (steps.guard.outputs.requested == 'true' && steps.guard.outputs.skip == '')
         run: |
           # shellcheck source=/dev/null
           . "$WORK/lib.sh"
@@ -1808,8 +2470,9 @@ jobs:
       # on this head and no decisive opencode review does (v5.1: advisory only).
       - name: Confirm an advisory opencode review stands on this head
         if: >-
+          steps.scope.outputs.skip != 'true' && (
           steps.guard.outputs.requested == 'true' &&
-          (steps.guard.outputs.skip == '' || steps.guard.outputs.skip == 'reviewed')
+          (steps.guard.outputs.skip == '' || steps.guard.outputs.skip == 'reviewed'))
         run: |
           # shellcheck source=/dev/null
           . "$WORK/lib.sh"
@@ -1832,7 +2495,7 @@ jobs:
       # posts reviews and nothing else, so it files no issue comment. The job
       # is advisory and not a required context; the Codex review is unaffected.
       - name: Remove the credential header, uid 1000's processes and the review files
-        if: always()
+        if: steps.scope.outputs.skip != 'true' && (always())
         run: |
           if [ -f "$WORK/lib.sh" ]; then
             # shellcheck source=/dev/null

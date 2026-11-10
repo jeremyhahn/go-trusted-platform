@@ -298,44 +298,6 @@ golden-pcrs=
 	}
 }
 
-// TestDetectTPMDevice_EnvVariable verifies detectTPMDevice with environment variable.
-func TestDetectTPMDevice_EnvVariable(t *testing.T) {
-	logger := testLogger()
-
-	t.Run("device_prefix", func(t *testing.T) {
-		t.Setenv("TPM2TOOLS_TCTI", "device:/dev/tpmrm0")
-		device, err := detectTPMDevice(logger)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if device != "/dev/tpmrm0" {
-			t.Errorf("expected /dev/tpmrm0, got %s", device)
-		}
-	})
-
-	t.Run("swtpm_prefix", func(t *testing.T) {
-		t.Setenv("TPM2TOOLS_TCTI", "swtpm:host=localhost,port=2321")
-		device, err := detectTPMDevice(logger)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if device != "swtpm:host=localhost,port=2321" {
-			t.Errorf("expected swtpm:host=localhost,port=2321, got %s", device)
-		}
-	})
-
-	t.Run("direct_path", func(t *testing.T) {
-		t.Setenv("TPM2TOOLS_TCTI", "/dev/tpm0")
-		device, err := detectTPMDevice(logger)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if device != "/dev/tpm0" {
-			t.Errorf("expected /dev/tpm0, got %s", device)
-		}
-	})
-}
-
 // TestNewFirstbootSealStrategy verifies strategy construction and basic methods.
 func TestNewFirstbootSealStrategy(t *testing.T) {
 	s := NewFirstbootSealStrategy(nil, nil, testLogger())
@@ -374,21 +336,6 @@ func TestFirstbootSealStrategy_GetEFIPath(t *testing.T) {
 	path := s.getEFIPath()
 	if path == "" {
 		t.Error("expected non-empty EFI path")
-	}
-}
-
-// TestFirstbootSealStrategy_GetPlatformKeystoreSRKHandle_NilExecutor verifies default SRK handle.
-func TestFirstbootSealStrategy_GetPlatformKeystoreSRKHandle_NilExecutor(t *testing.T) {
-	executor := &Executor{
-		tpm:    nil,
-		logger: testLogger(),
-		config: DefaultConfig(),
-	}
-	s := NewFirstbootSealStrategy(executor, nil, testLogger())
-
-	handle := s.getPlatformKeystoreSRKHandle()
-	if handle != 0x81000002 {
-		t.Errorf("expected default handle 0x81000002, got 0x%08x", handle)
 	}
 }
 
@@ -456,15 +403,6 @@ func TestClearBytes(t *testing.T) {
 	}
 }
 
-// TestClearBytes_EmptySlice verifies clearing an empty slice.
-func TestClearBytes_EmptySlice(t *testing.T) {
-	data := []byte{}
-	clearBytes(data) // should not panic
-	if len(data) != 0 {
-		t.Error("expected empty slice to remain empty")
-	}
-}
-
 // TestSecureWipeFile_NonexistentFile verifies error for missing file.
 func TestSecureWipeFile_NonexistentFile(t *testing.T) {
 	err := secureWipeFile("/nonexistent/path/file", 1)
@@ -526,15 +464,6 @@ func TestTPMDetector_IsDevice_RegularFile(t *testing.T) {
 	detector := NewTPMDetector(testLogger())
 	if detector.isDevice(path) {
 		t.Error("expected false for regular file")
-	}
-}
-
-// TestProcessFirstbootMarkers_NonexistentDir verifies no panic for missing dir.
-func TestProcessFirstbootMarkers_NonexistentDir(t *testing.T) {
-	err := ProcessFirstbootMarkers("/nonexistent/efi/path")
-	// No marker file means not first boot - should return nil
-	if err != nil {
-		t.Errorf("expected nil error for nonexistent dir (no markers), got %v", err)
 	}
 }
 

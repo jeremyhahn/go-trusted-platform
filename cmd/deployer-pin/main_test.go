@@ -1707,7 +1707,7 @@ func TestCheckStoreDirAcceptsRootOwnedSystemAncestors(t *testing.T) {
 }
 
 // TestCheckStoreAncestorsRejectsAncestorOwnedByAnotherUser is the /home/alice
-// case: root provisions into /home/alice/known_hosts.d, the leaf is 0700, and
+// case: root provisions into known_hosts.d under /home/alice, the leaf is 0700, and
 // alice — who owns /home/alice at 0755 — can still rename it aside and put her
 // own store there afterwards. Mode alone never catches this, because 0755 is
 // not "writable by others" in the mode sense.

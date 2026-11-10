@@ -1209,57 +1209,6 @@ func TestGetOVSSocketPath(t *testing.T) {
 	}
 }
 
-func TestOVSConfig(t *testing.T) {
-	t.Run("full OVS config", func(t *testing.T) {
-		config := &Config{
-			OVS: &OVSConfig{
-				Enable:     true,
-				BridgeName: "br-int",
-				SocketPath: "/var/run/openvswitch/db.sock",
-				PortName:   "vm-port-1",
-				VLAN:       100,
-				Trunks:     []uint16{100, 200, 300},
-				VLANMode:   "trunk",
-				QoS: &OVSQoSConfig{
-					MaxRate:  1000000000, // 1 Gbps
-					MinRate:  100000000,  // 100 Mbps
-					Burst:    10000,
-					Priority: 5,
-				},
-				ExternalIDs: map[string]string{
-					"vm-id":     "test-vm-1",
-					"tenant-id": "tenant-1",
-				},
-			},
-		}
-
-		assert.True(t, config.OVSEnabled())
-		assert.Equal(t, "br-int", config.GetOVSBridgeName())
-		assert.Equal(t, "/var/run/openvswitch/db.sock", config.GetOVSSocketPath())
-		assert.Equal(t, "vm-port-1", config.OVS.PortName)
-		assert.Equal(t, uint16(100), config.OVS.VLAN)
-		assert.Equal(t, []uint16{100, 200, 300}, config.OVS.Trunks)
-		assert.Equal(t, "trunk", config.OVS.VLANMode)
-		assert.NotNil(t, config.OVS.QoS)
-		assert.Equal(t, int64(1000000000), config.OVS.QoS.MaxRate)
-		assert.Equal(t, "test-vm-1", config.OVS.ExternalIDs["vm-id"])
-	})
-}
-
-func TestOVSQoSConfig(t *testing.T) {
-	qos := &OVSQoSConfig{
-		MaxRate:  1000000000,
-		MinRate:  100000000,
-		Burst:    10000,
-		Priority: 7,
-	}
-
-	assert.Equal(t, int64(1000000000), qos.MaxRate)
-	assert.Equal(t, int64(100000000), qos.MinRate)
-	assert.Equal(t, int64(10000), qos.Burst)
-	assert.Equal(t, 7, qos.Priority)
-}
-
 // TestVMBuildQEMUCommandDiskCacheModes asserts the -drive cache= argument
 // follows Config.DiskCache, defaulting to writethrough when unset (#49).
 func TestVMBuildQEMUCommandDiskCacheModes(t *testing.T) {

@@ -2285,7 +2285,7 @@ FIPS_LOG ?= $(or $(TMPDIR),/tmp)/go-trusted-platform-fips.log
 FIPS_FOREIGN_BASELINE ?= .github/foreign-failures-fips.tsv
 
 # A KEY=value file with the forge credentials the module download needs
-# (GOPRIVATE and the GIT_CONFIG_* triple, dependency-resolution.md §6). It
+# (the GIT_CONFIG_* triple, dependency-resolution.md §6). It
 # reaches the build only as the gomodauth BuildKit secret, never as a layer or
 # a build argument; .dockerignore keeps the default path out of the context.
 MODULE_ENV_FILE ?= .devcontainer/.env
@@ -3579,6 +3579,11 @@ mod-verify:
 # is not on PATH: a suite that silently skips a scanner is not a passing suite.
 security: gosec vuln mod-verify trivy
 	@echo "$(GREEN)$(BOLD)✓ Security suite passed!$(RESET)"
+
+.PHONY: security-novuln
+## security-novuln: make security without govulncheck; CI runs vuln as its own job at 20g (#1425)
+security-novuln: gosec mod-verify trivy
+	@echo "$(GREEN)$(BOLD)✓ Security suite (without govulncheck) passed!$(RESET)"
 
 .PHONY: check
 ## check: Run all code quality and security checks

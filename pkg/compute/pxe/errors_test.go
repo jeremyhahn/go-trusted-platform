@@ -718,32 +718,3 @@ func TestErrTimeout_Unwrap(t *testing.T) {
 	assert.Equal(t, cause, err.Unwrap())
 	assert.True(t, errors.Is(err, cause))
 }
-
-func TestErrorsIs_Compatibility(t *testing.T) {
-	// Test that typed errors work with errors.Is and errors.As
-	cause := errors.New("root cause")
-
-	provErr := ErrProvisioningFailed{Cause: cause}
-	assert.True(t, errors.Is(provErr, cause))
-
-	enrollErr := ErrEnrollmentFailed{Cause: cause}
-	assert.True(t, errors.Is(enrollErr, cause))
-
-	authErr := ErrAuthorizationFailed{Cause: cause}
-	assert.True(t, errors.Is(authErr, cause))
-
-	vlanErr := ErrVLANTransitionFailed{Cause: cause}
-	assert.True(t, errors.Is(vlanErr, cause))
-
-	fwErr := ErrFirmwareVerificationFailed{Cause: cause}
-	assert.True(t, errors.Is(fwErr, cause))
-
-	webhookErr := ErrWebhookValidationFailed{Cause: cause}
-	assert.True(t, errors.Is(webhookErr, cause))
-
-	maxRetryErr := ErrMaxRetriesExceeded{Cause: cause}
-	assert.True(t, errors.Is(maxRetryErr, cause))
-
-	timeoutErr := ErrTimeout{Cause: cause}
-	assert.True(t, errors.Is(timeoutErr, cause))
-}

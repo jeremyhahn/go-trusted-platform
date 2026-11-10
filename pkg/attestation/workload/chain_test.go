@@ -39,24 +39,11 @@ func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 }
 
-func TestNewChainManager(t *testing.T) {
+func TestNewChainManager_DefaultLogger(t *testing.T) {
+	// No options: Initialize logs, so it needs the default logger.
 	cm := NewChainManager()
-	if cm == nil {
-		t.Fatal("NewChainManager returned nil")
-	}
-}
-
-func TestNewChainManager_WithOptions(t *testing.T) {
-	tpm := NewSoftwareTPM()
-	logger := testLogger()
-
-	cm := NewChainManager(
-		WithTPMDevice(tpm),
-		WithLogger(logger),
-	)
-
-	if cm == nil {
-		t.Fatal("NewChainManager returned nil")
+	if err := cm.Initialize(context.Background(), testConfig()); err != nil {
+		t.Fatalf("Initialize failed: %v", err)
 	}
 }
 
@@ -134,17 +121,6 @@ func TestChainManager_Initialize(t *testing.T) {
 		_, ok := err.(ErrContextCanceled)
 		if !ok {
 			t.Errorf("expected ErrContextCanceled, got %T", err)
-		}
-	})
-
-	t.Run("software only mode", func(t *testing.T) {
-		// No TPM device configured
-		cm := NewChainManager(WithLogger(testLogger()))
-
-		ctx := context.Background()
-		err := cm.Initialize(ctx, testConfig())
-		if err != nil {
-			t.Fatalf("Initialize failed: %v", err)
 		}
 	})
 }
@@ -581,32 +557,6 @@ func TestChainManager_GetCurrentPCRValue(t *testing.T) {
 		_, err := cm.GetCurrentPCRValue(ctx)
 		if err == nil {
 			t.Error("expected error when not initialized")
-		}
-	})
-
-	t.Run("software only mode", func(t *testing.T) {
-		// No TPM device
-		cm := NewChainManager(WithLogger(testLogger()))
-
-		ctx := context.Background()
-		if err := cm.Initialize(ctx, testConfig()); err != nil {
-			t.Fatalf("Initialize failed: %v", err)
-		}
-
-		measurement := &WorkloadMeasurement{
-			WorkloadType: WorkloadTypeContainer,
-			WorkloadID:   "container-123",
-			ImageDigest:  "sha256:abc123",
-		}
-		entry, _ := cm.ExtendPCR(ctx, measurement)
-
-		value, err := cm.GetCurrentPCRValue(ctx)
-		if err != nil {
-			t.Fatalf("GetCurrentPCRValue failed: %v", err)
-		}
-
-		if !bytes.Equal(value, entry.PCRValue) {
-			t.Error("PCR value should match entry in software mode")
 		}
 	})
 }

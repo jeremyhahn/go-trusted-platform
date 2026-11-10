@@ -277,7 +277,7 @@ func runCreate(commonFlags *cli.CommonFlags, flags *createFlags, out io.Writer) 
 	// config decides: a remote/KMS db signing reference must never run
 	// local key generation — its contract is that no local private
 	// signing key is needed, or produced (round-16 review).
-	decision, err := pkgiso.EnsureSecureBootKeys(ctx, logger, buildConfig)
+	decision, err := isoEnsureSecureBootKeys(ctx, logger, buildConfig)
 	if err != nil {
 		return ErrBuildFailed{Reason: fmt.Sprintf("failed to generate Secure Boot keys: %v", err)}
 	}
@@ -553,7 +553,7 @@ func downloadAlpineISO(ctx context.Context, logger *logging.Logger, config *pkgi
 		removeExistingISOFiles(isoConfig)
 	}
 
-	if err := pkgiso.DownloadISO(ctx, isoConfig); err != nil {
+	if err := isoDownload(ctx, isoConfig); err != nil {
 		return "", err
 	}
 
@@ -581,7 +581,7 @@ func extractAlpineISO(ctx context.Context, logger *logging.Logger, config *pkgis
 
 	printInfo(fmt.Sprintf("Extracting to: %s", isoConfig.ISODir))
 
-	if err := pkgiso.ExtractISO(ctx, isoConfig); err != nil {
+	if err := isoExtract(ctx, isoConfig); err != nil {
 		return err
 	}
 
@@ -597,8 +597,7 @@ func customizeISO(ctx context.Context, logger *logging.Logger, config *pkgiso.IS
 
 	printInfo("Integrating platform components...")
 
-	customizer := pkgiso.NewCustomizer(pkgiso.NewPlatformISOConfig(config, workDir), logger)
-	if err := customizer.CustomizeAll(ctx); err != nil {
+	if err := isoCustomize(ctx, pkgiso.NewPlatformISOConfig(config, workDir), logger); err != nil {
 		return err
 	}
 
@@ -610,8 +609,6 @@ func buildFinalISO(ctx context.Context, logger *logging.Logger, config *pkgiso.I
 	printInfo(fmt.Sprintf("Building ISO: %s", config.OutputISO))
 	printInfo(fmt.Sprintf("Volume label: %s", config.OutputLabel))
 
-	builder := pkgiso.NewBuilder(logger)
-
 	// Convert to ISOConfig for BuildISO
 	isoConfig := &pkgiso.ISOConfig{
 		ISODir:    filepath.Join(workDir, "iso"),
@@ -621,7 +618,7 @@ func buildFinalISO(ctx context.Context, logger *logging.Logger, config *pkgiso.I
 		Debug:     config.Debug,
 	}
 
-	if err := builder.BuildISO(ctx, isoConfig); err != nil {
+	if err := isoBuild(ctx, logger, isoConfig); err != nil {
 		return "", err
 	}
 

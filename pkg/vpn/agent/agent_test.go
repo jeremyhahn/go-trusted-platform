@@ -630,9 +630,22 @@ func TestDisconnect_RevokesTearsDownAndForgets(t *testing.T) {
 	assert.Nil(t, f.state.st)
 }
 
-func TestDisconnect_WithoutALeaseIsNotConnected(t *testing.T) {
-	_, err := newFixture(t).agent(t).Disconnect(context.Background())
-	assert.Equal(t, ExitNotConnected, ExitCode(err))
+func TestAgent_EveryLeaseOperationWithoutALeaseIsNotConnected(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(a *Agent) error
+	}{
+		{"disconnect", func(a *Agent) error { _, err := a.Disconnect(context.Background()); return err }},
+		{"lease", func(a *Agent) error { _, err := a.Lease(); return err }},
+		{"renew", func(a *Agent) error { _, err := a.Renew(context.Background()); return err }},
+		{"keep alive", func(a *Agent) error { return a.KeepAlive(context.Background()) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.call(newFixture(t).agent(t))
+			assert.Equal(t, ExitNotConnected, ExitCode(err))
+		})
+	}
 }
 
 func TestDisconnect_ALeaseTheGatewayNoLongerHoldsIsGone(t *testing.T) {
@@ -718,11 +731,6 @@ func TestLease_ReturnsTheHeldLease(t *testing.T) {
 	assert.Equal(t, int64(1760325200), st.Lease.RenewAtUnix)
 }
 
-func TestLease_WithoutALeaseIsNotConnected(t *testing.T) {
-	_, err := newFixture(t).agent(t).Lease()
-	assert.Equal(t, ExitNotConnected, ExitCode(err))
-}
-
 func TestPosture_ReturnsTheReportConnectSends(t *testing.T) {
 	f := newFixture(t)
 
@@ -764,11 +772,6 @@ func TestRenew_PresentsFreshEvidenceForTheHeldLease(t *testing.T) {
 	assert.Equal(t, 1, st.Lease.Renewals)
 	assert.Equal(t, renewedLease(1).ExpiresAtUnix, f.state.st.Lease.ExpiresAtUnix, "the renewed lease is saved")
 	assert.Empty(t, f.masque.down)
-}
-
-func TestRenew_WithoutALeaseIsNotConnected(t *testing.T) {
-	_, err := newFixture(t).agent(t).Renew(context.Background())
-	assert.Equal(t, ExitNotConnected, ExitCode(err))
 }
 
 func TestRenew_ARefusalThatEndsTheLeaseTearsItDown(t *testing.T) {
@@ -963,11 +966,6 @@ func TestKeepAlive_StopsWhenTheLeaseIsForgotten(t *testing.T) {
 
 	assert.Equal(t, ExitNotConnected, ExitCode(err))
 	assert.Empty(t, f.gateway.renewedIDs)
-}
-
-func TestKeepAlive_WithoutALeaseIsNotConnected(t *testing.T) {
-	err := newFixture(t).agent(t).KeepAlive(context.Background())
-	assert.Equal(t, ExitNotConnected, ExitCode(err))
 }
 
 func TestErrLeaseLapsed_NamesTheLeaseAndUnwrapsToTheCause(t *testing.T) {

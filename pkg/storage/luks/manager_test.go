@@ -175,6 +175,18 @@ func TestBuildFormatOptions(t *testing.T) {
 	if opts.KDFType != "argon2id" {
 		t.Errorf("expected KDF argon2id, got %s", opts.KDFType)
 	}
+
+	if opts.Cipher != "aes" {
+		t.Errorf("expected cipher aes, got %s", opts.Cipher)
+	}
+
+	if opts.CipherMode != "xts-plain64" {
+		t.Errorf("expected mode xts-plain64, got %s", opts.CipherMode)
+	}
+
+	if opts.Argon2Memory != 1048576 || opts.Argon2Time != 4 || opts.Argon2Parallel != 4 {
+		t.Errorf("expected argon2 1048576/4/4, got %d/%d/%d", opts.Argon2Memory, opts.Argon2Time, opts.Argon2Parallel)
+	}
 }
 
 func TestBuildFormatOptionsMinimal(t *testing.T) {
@@ -309,34 +321,6 @@ func TestUnlockWithTPMDisabled(t *testing.T) {
 	err := m.UnlockWithTPM(context.TODO(), part)
 	if err == nil {
 		t.Error("expected error when TPM sealing disabled")
-	}
-}
-
-func TestVolumeState(t *testing.T) {
-	state := &VolumeState{
-		Config: &drive.PartitionConfig{
-			ID: "root",
-		},
-		DevicePath:  "/dev/sda2",
-		MappingName: "crypt-root",
-		IsUnlocked:  true,
-		IsMounted:   false,
-	}
-
-	if state.Config.ID != "root" {
-		t.Errorf("expected partition ID root, got %s", state.Config.ID)
-	}
-
-	if state.DevicePath != "/dev/sda2" {
-		t.Errorf("expected device path /dev/sda2, got %s", state.DevicePath)
-	}
-
-	if !state.IsUnlocked {
-		t.Error("expected volume to be unlocked")
-	}
-
-	if state.IsMounted {
-		t.Error("expected volume to not be mounted")
 	}
 }
 

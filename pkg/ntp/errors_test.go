@@ -144,7 +144,7 @@ func TestOSFileSystemWriteFileEnforcesModeOnAnExistingPath(t *testing.T) {
 		t.Fatalf("seed WriteFile() error = %v", err)
 	}
 
-	key := []byte("-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n")
+	key := []byte(genTestKeyPEM())
 	if err := fs.WriteFile(path, key, keyFileMode); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
@@ -191,7 +191,7 @@ func TestOSFileSystemWriteFileDoesNotFollowASymlink(t *testing.T) {
 		t.Fatalf("Symlink() error = %v", err)
 	}
 
-	key := []byte("-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n")
+	key := []byte(genTestKeyPEM())
 	if err := fs.WriteFile(path, key, keyFileMode); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}

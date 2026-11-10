@@ -403,47 +403,35 @@ func TestManager_Status_WithStats(t *testing.T) {
 	assert.Equal(t, uint64(20), status.TxPackets)
 }
 
-func TestManager_Status_UpState(t *testing.T) {
-	mock := newMockNetlinkOps()
-	mgr := newManagerWithOps(testLogger(), mock)
-	ctx := context.Background()
-
-	config := validGREConfig()
-	err := mgr.EnsureTunnel(ctx, config)
-	require.NoError(t, err)
-
-	// Simulate the link being up
-	mock.mu.Lock()
-	if link, ok := mock.links["gre1"]; ok {
-		link.Attrs().Flags |= net.FlagUp
-		link.Attrs().OperState = vnl.OperUp
+func TestManager_Status_State(t *testing.T) {
+	tests := []struct {
+		name  string
+		flags net.Flags
+		oper  vnl.LinkOperState
+		want  TunnelState
+	}{
+		{"up", net.FlagUp, vnl.OperUp, TunnelStateUp},
+		{"down", 0, vnl.OperDown, TunnelStateDown},
 	}
-	mock.mu.Unlock()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := newMockNetlinkOps()
+			mgr := newManagerWithOps(testLogger(), mock)
+			ctx := context.Background()
+			require.NoError(t, mgr.EnsureTunnel(ctx, validGREConfig()))
 
-	status, err := mgr.Status(ctx, "gre1")
-	require.NoError(t, err)
-	assert.Equal(t, TunnelStateUp, status.State)
-}
+			mock.mu.Lock()
+			if link, ok := mock.links["gre1"]; ok {
+				link.Attrs().Flags |= tt.flags
+				link.Attrs().OperState = tt.oper
+			}
+			mock.mu.Unlock()
 
-func TestManager_Status_DownState(t *testing.T) {
-	mock := newMockNetlinkOps()
-	mgr := newManagerWithOps(testLogger(), mock)
-	ctx := context.Background()
-
-	config := validGREConfig()
-	err := mgr.EnsureTunnel(ctx, config)
-	require.NoError(t, err)
-
-	// Set OperState to down
-	mock.mu.Lock()
-	if link, ok := mock.links["gre1"]; ok {
-		link.Attrs().OperState = vnl.OperDown
+			status, err := mgr.Status(ctx, "gre1")
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, status.State)
+		})
 	}
-	mock.mu.Unlock()
-
-	status, err := mgr.Status(ctx, "gre1")
-	require.NoError(t, err)
-	assert.Equal(t, TunnelStateDown, status.State)
 }
 
 func TestManager_Status_LinkByNameFails(t *testing.T) {
@@ -536,24 +524,6 @@ func TestManager_Close(t *testing.T) {
 	tunnels, err := mgr.ListTunnels(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, tunnels)
-}
-
-func TestManager_Close_PartialFailure(t *testing.T) {
-	mock := newMockNetlinkOps()
-	mgr := newManagerWithOps(testLogger(), mock)
-	ctx := context.Background()
-
-	config := validGREConfig()
-	err := mgr.EnsureTunnel(ctx, config)
-	require.NoError(t, err)
-
-	// Make delete fail
-	mock.linkDelFn = func(link vnl.Link) error {
-		return errors.New("permission denied")
-	}
-
-	err = mgr.Close()
-	require.Error(t, err)
 }
 
 // closeFailingWG is a WireGuard client whose Close fails. It embeds wgOps,

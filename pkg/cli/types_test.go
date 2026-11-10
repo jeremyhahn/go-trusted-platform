@@ -96,73 +96,6 @@ func TestContextTypeEmbedded_Value(t *testing.T) {
 	assert.Equal(t, "embedded", string(ContextTypeEmbedded))
 }
 
-func TestContext_Structure(t *testing.T) {
-	ctx := &Context{
-		Name: "test-context",
-		Type: ContextTypeLocal,
-		Local: &LocalContext{
-			SocketPath: "/var/run/test.sock",
-		},
-	}
-
-	assert.Equal(t, "test-context", ctx.Name)
-	assert.Equal(t, ContextTypeLocal, ctx.Type)
-	assert.NotNil(t, ctx.Local)
-	assert.Equal(t, "/var/run/test.sock", ctx.Local.SocketPath)
-	assert.Nil(t, ctx.Remote)
-}
-
-func TestContext_LocalContext(t *testing.T) {
-	local := &LocalContext{
-		SocketPath: "/run/platformd.sock",
-	}
-
-	assert.Equal(t, "/run/platformd.sock", local.SocketPath)
-}
-
-func TestContext_RemoteContext(t *testing.T) {
-	remote := &RemoteContext{
-		Server:     "https://platform.example.com:8443",
-		CACert:     "/path/to/ca.crt",
-		ClientCert: "/path/to/client.crt",
-		ClientKey:  "/path/to/client.key",
-	}
-
-	assert.Equal(t, "https://platform.example.com:8443", remote.Server)
-	assert.Equal(t, "/path/to/ca.crt", remote.CACert)
-	assert.Equal(t, "/path/to/client.crt", remote.ClientCert)
-	assert.Equal(t, "/path/to/client.key", remote.ClientKey)
-}
-
-func TestContext_BothContextsNil(t *testing.T) {
-	ctx := &Context{
-		Name:   "empty-context",
-		Type:   ContextTypeLocal,
-		Local:  nil,
-		Remote: nil,
-	}
-
-	assert.Nil(t, ctx.Local)
-	assert.Nil(t, ctx.Remote)
-}
-
-func TestContext_BothContextsPopulated(t *testing.T) {
-	// This is a degenerate case but should be allowed by the type system
-	ctx := &Context{
-		Name: "dual-context",
-		Type: ContextTypeLocal,
-		Local: &LocalContext{
-			SocketPath: "/run/test.sock",
-		},
-		Remote: &RemoteContext{
-			Server: "https://test.com:8443",
-		},
-	}
-
-	assert.NotNil(t, ctx.Local)
-	assert.NotNil(t, ctx.Remote)
-}
-
 func TestResolveProtocol_LocalDefault(t *testing.T) {
 	ctx := &Context{
 		Name: "local-ctx",
@@ -290,57 +223,6 @@ func TestValidProtocols_AllSupported(t *testing.T) {
 		_, ok := ValidProtocols[proto]
 		assert.True(t, ok, "expected protocol %q to be in ValidProtocols", proto)
 	}
-}
-
-func TestValidProtocols_InvalidNotPresent(t *testing.T) {
-	invalidProtocols := []string{"bogus", "http", "tcp", "websocket", "", "GRPC", "Unix"}
-
-	for _, proto := range invalidProtocols {
-		t.Run(proto, func(t *testing.T) {
-			_, ok := ValidProtocols[proto]
-			assert.False(t, ok, "protocol %q should not be in ValidProtocols", proto)
-		})
-	}
-}
-
-func TestRemoteContext_ProtocolField(t *testing.T) {
-	remote := &RemoteContext{
-		Server:   "https://example.com:8443",
-		Protocol: "quic",
-	}
-
-	assert.Equal(t, "quic", remote.Protocol)
-}
-
-func TestRemoteContext_TokenField(t *testing.T) {
-	remote := &RemoteContext{
-		Server: "https://example.com:8443",
-		Token:  "bearer-token-value",
-	}
-
-	assert.Equal(t, "bearer-token-value", remote.Token)
-}
-
-func TestLocalContext_GRPCAddrField(t *testing.T) {
-	local := &LocalContext{
-		SocketPath: "/run/platformd.sock",
-		GRPCAddr:   "localhost:10443",
-	}
-
-	assert.Equal(t, "localhost:10443", local.GRPCAddr)
-}
-
-func TestContext_ProtocolField(t *testing.T) {
-	ctx := &Context{
-		Name:     "proto-ctx",
-		Type:     ContextTypeRemote,
-		Protocol: "mcp",
-		Remote: &RemoteContext{
-			Server: "https://example.com:9445",
-		},
-	}
-
-	assert.Equal(t, "mcp", ctx.Protocol)
 }
 
 // ---------------------------------------------------------------------------

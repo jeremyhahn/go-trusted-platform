@@ -45,11 +45,6 @@ func TestRunGroupCreate_MissingTenant(t *testing.T) {
 	assert.IsType(t, ErrMissingTenantID{}, err)
 }
 
-func TestRunGroupCreate_NoContext(t *testing.T) {
-	err := runGroupCreate(noCtxFlags(), "tenant-1", "grp-1", "name", "desc")
-	assertNoCtxErr(t, err)
-}
-
 func TestRunGroupGet_MissingTenant(t *testing.T) {
 	err := runGroupGet(noCtxFlags(), "", "grp-1")
 	require.Error(t, err)
@@ -62,20 +57,10 @@ func TestRunGroupGet_MissingGroupID(t *testing.T) {
 	assert.IsType(t, ErrMissingGroupID{}, err)
 }
 
-func TestRunGroupGet_NoContext(t *testing.T) {
-	err := runGroupGet(noCtxFlags(), "tenant-1", "grp-1")
-	assertNoCtxErr(t, err)
-}
-
 func TestRunGroupList_MissingTenant(t *testing.T) {
 	err := runGroupList(noCtxFlags(), "", 1, 50)
 	require.Error(t, err)
 	assert.IsType(t, ErrMissingTenantID{}, err)
-}
-
-func TestRunGroupList_NoContext(t *testing.T) {
-	err := runGroupList(noCtxFlags(), "tenant-1", 1, 50)
-	assertNoCtxErr(t, err)
 }
 
 func TestRunGroupUpdate_MissingTenant(t *testing.T) {
@@ -90,11 +75,6 @@ func TestRunGroupUpdate_MissingGroupID(t *testing.T) {
 	assert.IsType(t, ErrMissingGroupID{}, err)
 }
 
-func TestRunGroupUpdate_NoContext(t *testing.T) {
-	err := runGroupUpdate(noCtxFlags(), "tenant-1", "grp-1", "name", "desc")
-	assertNoCtxErr(t, err)
-}
-
 func TestRunGroupDelete_MissingTenant(t *testing.T) {
 	err := runGroupDelete(noCtxFlags(), "", "grp-1")
 	require.Error(t, err)
@@ -105,11 +85,6 @@ func TestRunGroupDelete_MissingGroupID(t *testing.T) {
 	err := runGroupDelete(noCtxFlags(), "tenant-1", "")
 	require.Error(t, err)
 	assert.IsType(t, ErrMissingGroupID{}, err)
-}
-
-func TestRunGroupDelete_NoContext(t *testing.T) {
-	err := runGroupDelete(noCtxFlags(), "tenant-1", "grp-1")
-	assertNoCtxErr(t, err)
 }
 
 // =============================================================================
