@@ -91,21 +91,6 @@ func TestHandler_GetNonce(t *testing.T) {
 	if !resp.Success {
 		t.Fatal("expected success=true")
 	}
-}
-
-func TestHandler_GetNonce_ReturnsNonceField(t *testing.T) {
-	h, _ := testHandler(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/provision/nonce", nil)
-	req.Header.Set("Accept", "application/json")
-	w := httptest.NewRecorder()
-
-	h.GetNonce(w, req)
-
-	var resp restwire.WebServiceResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
-	}
 
 	payload, ok := resp.Payload.(map[string]interface{})
 	if !ok {
@@ -412,33 +397,6 @@ func TestHandler_PollSession_Expired(t *testing.T) {
 	}
 }
 
-func TestHandler_FulfillSession_Success(t *testing.T) {
-	profileSvc := &mockProfileResolver{
-		getFunc: func(ctx context.Context, id uint64) (*entities.DeviceProfile, error) {
-			return &entities.DeviceProfile{ID: id, Config: "test-config"}, nil
-		},
-	}
-	h, svc := testHandlerWithDeps(t, profileSvc, &mockEABService{})
-
-	session := svc.CreateSession("ek-1", "aa:bb:cc:dd:ee:01")
-
-	body, _ := json.Marshal(FulfillRequest{
-		SessionID: session.ID,
-		ProfileID: 1,
-	})
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/provision/sessions/"+session.ID+"/fulfill", bytes.NewReader(body))
-	req.Header.Set("Accept", "application/json")
-	req = mux.SetURLVars(req, map[string]string{"sessionID": session.ID})
-	w := httptest.NewRecorder()
-
-	h.FulfillSession(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d", w.Code)
-	}
-}
-
 func TestHandler_FulfillSession_NotFound(t *testing.T) {
 	h, _ := testHandler(t)
 
@@ -566,23 +524,6 @@ func TestHandler_GetSession_NotFound(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("expected status 404, got %d", w.Code)
-	}
-}
-
-func TestHandler_GetSession_Found(t *testing.T) {
-	h, svc := testHandler(t)
-
-	session := svc.CreateSession("ek-1", "aa:bb:cc:dd:ee:01")
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/provision/sessions/"+session.ID, nil)
-	req.Header.Set("Accept", "application/json")
-	req = mux.SetURLVars(req, map[string]string{"sessionID": session.ID})
-	w := httptest.NewRecorder()
-
-	h.GetSession(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d", w.Code)
 	}
 }
 

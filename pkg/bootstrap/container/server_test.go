@@ -14,7 +14,6 @@
 package container
 
 import (
-	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -537,41 +536,11 @@ func TestServerConfig_Validate_PathsMustBeServed(t *testing.T) {
 	assert.NoError(t, cfg.Validate())
 }
 
-func TestNewServer_NilConfig(t *testing.T) {
-	_, err := NewServer(nil, testLogger())
-	if err == nil {
-		t.Fatal("expected error for nil config")
-	}
-	var target ErrInvalidServerConfig
-	if !errors.As(err, &target) {
-		t.Errorf("expected ErrInvalidServerConfig, got %T: %v", err, err)
-	}
-}
-
-func TestNewServer_NilLogger(t *testing.T) {
-	_, err := NewServer(&ServerConfig{}, nil)
-	if err == nil {
-		t.Fatal("expected error for nil logger")
-	}
-	var target ErrInvalidServerConfig
-	if !errors.As(err, &target) {
-		t.Errorf("expected ErrInvalidServerConfig, got %T: %v", err, err)
-	}
-}
-
-func TestNewServer_InvalidConfig(t *testing.T) {
-	_, err := NewServer(&ServerConfig{ManifestPath: ""}, testLogger())
-	if err == nil {
-		t.Fatal("expected error for invalid config")
-	}
-	var target ErrInvalidServerConfig
-	if !errors.As(err, &target) {
-		t.Errorf("expected ErrInvalidServerConfig, got %T: %v", err, err)
-	}
-}
-
-func TestNewServer_ManifestNotFound(t *testing.T) {
-	_, err := NewServer(&ServerConfig{
+// TestNewServer_Errors covers each refusal before the iPXE server is built:
+// a nil config, a nil logger, a config that fails Validate, and a manifest
+// path that does not exist.
+func TestNewServer_Errors(t *testing.T) {
+	missingManifest := &ServerConfig{
 		ManifestPath: "/nonexistent/manifest.yaml",
 		DataDir:      "/tmp",
 		MediaDir:     "/tmp/media",
@@ -581,19 +550,38 @@ func TestNewServer_ManifestNotFound(t *testing.T) {
 			RangeEnd:   "192.168.1.200",
 			SubnetMask: "255.255.255.0",
 		},
-	}, testLogger())
-	if err == nil {
-		t.Fatal("expected error for missing manifest")
 	}
-	var target ErrManifestNotFound
-	if !errors.As(err, &target) {
-		t.Errorf("expected ErrManifestNotFound, got %T: %v", err, err)
+	tests := []struct {
+		name      string
+		config    *ServerConfig
+		logger    *slog.Logger
+		wantField string // the ErrInvalidServerConfig field; empty means ErrManifestNotFound
+	}{
+		{name: "nil config", config: nil, logger: testLogger(), wantField: "config"},
+		{name: "nil logger", config: &ServerConfig{}, logger: nil, wantField: "logger"},
+		{name: "invalid config", config: &ServerConfig{ManifestPath: ""}, logger: testLogger(), wantField: "manifest_path"},
+		{name: "manifest not found", config: missingManifest, logger: testLogger()},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewServer(tc.config, tc.logger)
+			if tc.wantField == "" {
+				var notFound ErrManifestNotFound
+				require.ErrorAs(t, err, &notFound)
+				return
+			}
+			var invalid ErrInvalidServerConfig
+			require.ErrorAs(t, err, &invalid)
+			assert.Equal(t, tc.wantField, invalid.Field)
+		})
 	}
 }
 
 func TestExtractMACFromPath(t *testing.T) {
 	tests := []struct {
 		name     string
+		route    string // empty means the device script route and suffix
+		suffix   string
 		path     string
 		expected string
 	}{
@@ -632,28 +620,23 @@ func TestExtractMACFromPath(t *testing.T) {
 			path:     "/boot/device/00:11:22:33:44:55:66:77.ipxe",
 			expected: "",
 		},
+		{name: "installed UKI dash separated", route: installedUKIRoute, suffix: installedUKISuffix, path: "/boot/uki/DC-A6-32-01-36-C2.efi", expected: "dc:a6:32:01:36:c2"},
+		{name: "installed UKI colon separated", route: installedUKIRoute, suffix: installedUKISuffix, path: "/boot/uki/dc:a6:32:01:36:c2.efi", expected: "dc:a6:32:01:36:c2"},
+		{name: "installed UKI wrong suffix", route: installedUKIRoute, suffix: installedUKISuffix, path: "/boot/uki/dc:a6:32:01:36:c2.ipxe", expected: ""},
+		{name: "installed UKI path traversal", route: installedUKIRoute, suffix: installedUKISuffix, path: "/boot/uki/../tpm2/installer.luks", expected: ""},
+		{name: "installed UKI wrong route", route: installedUKIRoute, suffix: installedUKISuffix, path: "/boot/device/dc:a6:32:01:36:c2.efi", expected: ""},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			result := extractMACFromPath(tc.path, deviceScriptRoute, deviceScriptSuffix)
+			route, suffix := deviceScriptRoute, deviceScriptSuffix
+			if tc.route != "" {
+				route, suffix = tc.route, tc.suffix
+			}
+			result := extractMACFromPath(tc.path, route, suffix)
 			if result != tc.expected {
 				t.Errorf("extractMACFromPath(%q) = %q, want %q", tc.path, result, tc.expected)
 			}
 		})
-	}
-}
-
-func TestExtractMACFromPath_InstalledUKIRoute(t *testing.T) {
-	for path, want := range map[string]string{
-		"/boot/uki/DC-A6-32-01-36-C2.efi":    "dc:a6:32:01:36:c2",
-		"/boot/uki/dc:a6:32:01:36:c2.efi":    "dc:a6:32:01:36:c2",
-		"/boot/uki/dc:a6:32:01:36:c2.ipxe":   "",
-		"/boot/uki/../tpm2/installer.luks":   "",
-		"/boot/device/dc:a6:32:01:36:c2.efi": "",
-	} {
-		if got := extractMACFromPath(path, installedUKIRoute, installedUKISuffix); got != want {
-			t.Errorf("extractMACFromPath(%q) = %q, want %q", path, got, want)
-		}
 	}
 }

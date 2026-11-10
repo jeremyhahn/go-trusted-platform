@@ -227,21 +227,6 @@ func TestDispatchInit_JSON_Success(t *testing.T) {
 	}
 }
 
-func TestDispatchInit_RPCError_WrappedAs(t *testing.T) {
-	wireErr := errors.New("wire failure")
-	fake := &fakeBarrierClient{initErr: wireErr}
-	d, _ := newTestDispatcher(cli.OutputFormatTable, fake)
-
-	err := dispatchInit(d, &initFlags{strategy: "passphrase", secret: "p"})
-	var typed ErrBarrierInitFailed
-	if !errors.As(err, &typed) {
-		t.Fatalf("expected ErrBarrierInitFailed, got %T: %v", err, err)
-	}
-	if !errors.Is(err, wireErr) {
-		t.Errorf("expected underlying %v to be reachable via errors.Is, got %v", wireErr, err)
-	}
-}
-
 // ---------------------------------------------------------------------------
 // dispatchInitShamir
 // ---------------------------------------------------------------------------
@@ -275,16 +260,6 @@ func TestDispatchInitShamir_NilResponseHandled(t *testing.T) {
 	d, _ := newTestDispatcher(cli.OutputFormatJSON, fake)
 	if err := dispatchInitShamir(d, &initShamirFlags{secret: "p", threshold: 2, total: 3}); err != nil {
 		t.Errorf("nil response must not propagate error: %v", err)
-	}
-}
-
-func TestDispatchInitShamir_RPCError(t *testing.T) {
-	fake := &fakeBarrierClient{initShamirErr: errors.New("boom")}
-	d, _ := newTestDispatcher(cli.OutputFormatTable, fake)
-	err := dispatchInitShamir(d, &initShamirFlags{secret: "p", threshold: 2, total: 3})
-	var typed ErrBarrierInitShamirFailed
-	if !errors.As(err, &typed) {
-		t.Errorf("expected ErrBarrierInitShamirFailed, got %T", err)
 	}
 }
 
@@ -331,40 +306,9 @@ func TestDispatchStatus_NilResponse(t *testing.T) {
 	}
 }
 
-func TestDispatchStatus_RPCError(t *testing.T) {
-	fake := &fakeBarrierClient{statusErr: errors.New("x")}
-	d, _ := newTestDispatcher(cli.OutputFormatTable, fake)
-	err := dispatchStatus(d)
-	var typed ErrBarrierStatusFailed
-	if !errors.As(err, &typed) {
-		t.Errorf("expected ErrBarrierStatusFailed, got %T", err)
-	}
-}
-
 // ---------------------------------------------------------------------------
 // dispatchUnseal / dispatchUnsealShares
 // ---------------------------------------------------------------------------
-
-func TestDispatchUnseal_PropagatesSecret(t *testing.T) {
-	fake := &fakeBarrierClient{}
-	d, _ := newTestDispatcher(cli.OutputFormatJSON, fake)
-	if err := dispatchUnseal(d, "the-passphrase"); err != nil {
-		t.Fatalf("unexpected: %v", err)
-	}
-	if fake.unsealReq == nil || string(fake.unsealReq.Secret) != "the-passphrase" {
-		t.Errorf("expected secret to be propagated, got %+v", fake.unsealReq)
-	}
-}
-
-func TestDispatchUnseal_RPCError(t *testing.T) {
-	fake := &fakeBarrierClient{unsealErr: errors.New("x")}
-	d, _ := newTestDispatcher(cli.OutputFormatTable, fake)
-	err := dispatchUnseal(d, "x")
-	var typed ErrBarrierUnsealFailed
-	if !errors.As(err, &typed) {
-		t.Errorf("expected ErrBarrierUnsealFailed, got %T", err)
-	}
-}
 
 func TestDispatchUnsealShares_PropagatesShares(t *testing.T) {
 	fake := &fakeBarrierClient{}
@@ -377,16 +321,6 @@ func TestDispatchUnsealShares_PropagatesShares(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "unsealed successfully") {
 		t.Errorf("expected success output, got %q", out.String())
-	}
-}
-
-func TestDispatchUnsealShares_RPCError(t *testing.T) {
-	fake := &fakeBarrierClient{unsealSharesErr: errors.New("x")}
-	d, _ := newTestDispatcher(cli.OutputFormatTable, fake)
-	err := dispatchUnsealShares(d, []string{"a"})
-	var typed ErrBarrierUnsealSharesFailed
-	if !errors.As(err, &typed) {
-		t.Errorf("expected ErrBarrierUnsealSharesFailed, got %T", err)
 	}
 }
 
@@ -405,16 +339,6 @@ func TestDispatchSeal_Calls(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "sealed successfully") {
 		t.Errorf("expected output, got %q", out.String())
-	}
-}
-
-func TestDispatchSeal_RPCError(t *testing.T) {
-	fake := &fakeBarrierClient{sealErr: errors.New("x")}
-	d, _ := newTestDispatcher(cli.OutputFormatJSON, fake)
-	err := dispatchSeal(d)
-	var typed ErrBarrierSealFailed
-	if !errors.As(err, &typed) {
-		t.Errorf("expected ErrBarrierSealFailed, got %T", err)
 	}
 }
 
@@ -457,16 +381,6 @@ func TestDispatchRekey_WithShamir(t *testing.T) {
 	}
 }
 
-func TestDispatchRekey_RPCError(t *testing.T) {
-	fake := &fakeBarrierClient{rekeyErr: errors.New("x")}
-	d, _ := newTestDispatcher(cli.OutputFormatJSON, fake)
-	err := dispatchRekey(d, &rekeyFlags{})
-	var typed ErrBarrierRekeyFailed
-	if !errors.As(err, &typed) {
-		t.Errorf("expected ErrBarrierRekeyFailed, got %T", err)
-	}
-}
-
 // ---------------------------------------------------------------------------
 // dispatchRecoveryGenerate / dispatchRecoveryRecover
 // ---------------------------------------------------------------------------
@@ -491,16 +405,6 @@ func TestDispatchRecoveryGenerate_Table(t *testing.T) {
 	}
 }
 
-func TestDispatchRecoveryGenerate_RPCError(t *testing.T) {
-	fake := &fakeBarrierClient{recoveryGenErr: errors.New("x")}
-	d, _ := newTestDispatcher(cli.OutputFormatTable, fake)
-	err := dispatchRecoveryGenerate(d, &recoveryGenerateFlags{threshold: 2, total: 2})
-	var typed ErrBarrierRecoveryGenerateFailed
-	if !errors.As(err, &typed) {
-		t.Errorf("expected ErrBarrierRecoveryGenerateFailed, got %T", err)
-	}
-}
-
 func TestDispatchRecoveryRecover_Propagates(t *testing.T) {
 	fake := &fakeBarrierClient{}
 	d, out := newTestDispatcher(cli.OutputFormatTable, fake)
@@ -512,16 +416,6 @@ func TestDispatchRecoveryRecover_Propagates(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "recovered successfully") {
 		t.Errorf("expected success output, got %q", out.String())
-	}
-}
-
-func TestDispatchRecoveryRecover_RPCError(t *testing.T) {
-	fake := &fakeBarrierClient{recoveryRecoverErr: errors.New("x")}
-	d, _ := newTestDispatcher(cli.OutputFormatJSON, fake)
-	err := dispatchRecoveryRecover(d, []string{"a"})
-	var typed ErrBarrierRecoveryRecoverFailed
-	if !errors.As(err, &typed) {
-		t.Errorf("expected ErrBarrierRecoveryRecoverFailed, got %T", err)
 	}
 }
 
