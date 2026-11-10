@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -472,6 +473,188 @@ func TestFIDO2EnrollmentCancellation(t *testing.T) {
 			}
 		})
 	}
+}
+
+// fakeFIDO2Cred replaces the libfido2 tool seam with a fido2-cred that
+// records its calls and answers with run.
+type fakeFIDO2Cred struct {
+	mu    sync.Mutex
+	calls [][]string
+	stdin []string
+	run   func(ctx context.Context) ([]byte, error)
+}
+
+func useFakeFIDO2Cred(t *testing.T, run func(ctx context.Context) ([]byte, error)) *fakeFIDO2Cred {
+	t.Helper()
+	tool := &fakeFIDO2Cred{run: run}
+	oldCommand := fido2Command
+	t.Cleanup(func() { fido2Command = oldCommand })
+	fido2Command = func(ctx context.Context, stdin string, name string, args ...string) ([]byte, error) {
+		tool.mu.Lock()
+		tool.calls = append(tool.calls, append([]string{name}, args...))
+		tool.stdin = append(tool.stdin, stdin)
+		tool.mu.Unlock()
+		return tool.run(ctx)
+	}
+	return tool
+}
+
+// fido2CredOutput is what fido2-cred -M prints: the credential ID is line 4.
+func fido2CredOutput(credentialID string) []byte {
+	return []byte(strings.Join([]string{"challenge", "rp.example", "packed", "authdata", credentialID, "signature", "certificate"}, "\n") + "\n")
+}
+
+// An authenticator with a client PIN set answers MakeCredential without a
+// PIN with PIN_REQUIRED, so the installer creates the credential with
+// fido2-cred, which asks for the PIN itself, and never calls EnrollKey.
+func TestFIDO2EnrollmentClientPIN(t *testing.T) {
+	const devicePath = "/dev/hidraw-fake"
+	newPINEnrollment := func(t *testing.T, device *sdkFakeFIDO2) (*FIDO2Enrollment, *[]string) {
+		t.Helper()
+		ops := &[]string{}
+		device.touch = func(op string) { *ops = append(*ops, op) }
+		enrollment := newTestFIDO2Enrollment(t)
+		enrollment.devicePath = devicePath
+		enrollment.clientPIN = true
+		return enrollment, ops
+	}
+
+	t.Run("success", func(t *testing.T) {
+		header := useFakeLUKSHeader(t)
+		device := newSDKFakeFIDO2()
+		enrollment, ops := newPINEnrollment(t, device)
+		credentialB64 := base64.StdEncoding.EncodeToString(device.credential)
+		tool := useFakeFIDO2Cred(t, func(context.Context) ([]byte, error) {
+			return fido2CredOutput(credentialB64), nil
+		})
+
+		require.NoError(t, enrollment.enrollWithHandler(context.Background(), device))
+
+		assert.NotContains(t, *ops, "enroll", "EnrollKey was called for an authenticator with a PIN set")
+		require.Len(t, tool.calls, 1, "fido2-cred did not run exactly once")
+		assert.Equal(t, []string{"fido2-cred", "-M", "-h", devicePath}, tool.calls[0])
+		stdin := strings.Split(strings.TrimSuffix(tool.stdin[0], "\n"), "\n")
+		require.Len(t, stdin, 4)
+		challenge := sha256.Sum256([]byte("luks-enrollment-challenge"))
+		assert.Equal(t, base64.StdEncoding.EncodeToString(challenge[:]), stdin[0])
+		assert.Equal(t, enrollment.config.RelyingPartyID, stdin[1])
+		assert.Equal(t, enrollment.config.UserName, stdin[2])
+		userID, err := base64.StdEncoding.DecodeString(stdin[3])
+		require.NoError(t, err)
+		assert.Len(t, userID, 32)
+
+		require.Len(t, device.unlocks, 1)
+		assert.Equal(t, device.credential, device.unlocks[0].CredentialID)
+		assert.Equal(t, enrollment.config.RelyingPartyID, device.unlocks[0].RelyingPartyID)
+
+		stored, ok := header.slots[enrollment.config.TargetKeyslot]
+		require.True(t, ok, "no key added to slot %d", enrollment.config.TargetKeyslot)
+		require.Len(t, header.tokens, 1)
+		token := header.tokens[0]
+		assert.Equal(t, credentialB64, token.FIDO2Credential)
+		assert.Equal(t, enrollment.config.RelyingPartyID, token.FIDO2RP)
+		salt, err := base64.StdEncoding.DecodeString(token.FIDO2Salt)
+		require.NoError(t, err)
+		assert.Len(t, salt, 32)
+		assert.Equal(t, initrdKeyFor(t, device, token), stored, "the installer's slot key differs from the initrd's")
+	})
+
+	errTool := errors.New("fido2-cred: FIDO_ERR_PIN_INVALID")
+	for _, tc := range []struct {
+		name   string
+		output []byte
+		err    error
+		check  func(t *testing.T, err error)
+	}{
+		{
+			name: "the tool fails",
+			err:  errTool,
+			check: func(t *testing.T, err error) {
+				assert.ErrorIs(t, err, errTool)
+				assert.ErrorAs(t, err, new(*FIDO2EnrollKeyError))
+			},
+		},
+		{
+			name:   "fewer than 5 lines",
+			output: []byte("challenge\nrp.example\npacked\nauthdata\n"),
+			check: func(t *testing.T, err error) {
+				assert.ErrorAs(t, err, new(*MessageError))
+			},
+		},
+		{
+			name:   "credential ID not base64",
+			output: fido2CredOutput("not base64!"),
+			check: func(t *testing.T, err error) {
+				assert.ErrorAs(t, err, new(*WrappedError))
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			header := useFakeLUKSHeader(t)
+			device := newSDKFakeFIDO2()
+			enrollment, ops := newPINEnrollment(t, device)
+			tool := useFakeFIDO2Cred(t, func(context.Context) ([]byte, error) {
+				return tc.output, tc.err
+			})
+
+			err := enrollment.enrollWithHandler(context.Background(), device)
+
+			require.Error(t, err)
+			tc.check(t, err)
+			assert.NotErrorAs(t, err, new(*FIDO2CanceledError))
+			assert.Len(t, tool.calls, 1)
+			assert.Empty(t, *ops, "the authenticator was used after the ceremony failed")
+			assert.Empty(t, header.passedKeys, "a failed ceremony added a keyslot")
+			assert.Empty(t, header.tokens, "a failed ceremony wrote a token")
+		})
+	}
+
+	t.Run("cancelled while the tool runs", func(t *testing.T) {
+		header := useFakeLUKSHeader(t)
+		device := newSDKFakeFIDO2()
+		enrollment, ops := newPINEnrollment(t, device)
+		waiting := make(chan struct{})
+		useFakeFIDO2Cred(t, func(ctx context.Context) ([]byte, error) {
+			close(waiting)
+			<-ctx.Done()
+			return nil, errors.New("signal: killed")
+		})
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { done <- enrollment.enrollWithHandler(ctx, device) }()
+
+		select {
+		case <-waiting:
+		case err := <-done:
+			t.Fatalf("the enrolment ended before fido2-cred ran: %v", err)
+		}
+		cancel()
+		err := <-done
+
+		var canceled *FIDO2CanceledError
+		require.ErrorAs(t, err, &canceled)
+		assert.ErrorIs(t, err, context.Canceled)
+		assert.Empty(t, *ops, "a cancelled ceremony used the authenticator")
+		assert.Empty(t, header.passedKeys, "a cancelled enrolment added a keyslot")
+		assert.Empty(t, header.tokens, "a cancelled enrolment wrote a token")
+	})
+
+	t.Run("no PIN set", func(t *testing.T) {
+		header := useFakeLUKSHeader(t)
+		device := newSDKFakeFIDO2()
+		enrollment, ops := newPINEnrollment(t, device)
+		enrollment.clientPIN = false
+		tool := useFakeFIDO2Cred(t, func(context.Context) ([]byte, error) {
+			return nil, errors.New("fido2-cred ran for an authenticator without a PIN")
+		})
+
+		require.NoError(t, enrollment.enrollWithHandler(context.Background(), device))
+
+		assert.Equal(t, []string{"enroll", "unlock"}, *ops)
+		assert.Empty(t, tool.calls, "fido2-cred ran for an authenticator without a PIN")
+		assert.Len(t, header.slots, 1)
+		assert.Len(t, header.tokens, 1)
+	})
 }
 
 func TestFIDO2EnrollmentRetryWaitsForAbandonedOperation(t *testing.T) {

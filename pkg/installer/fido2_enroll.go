@@ -49,6 +49,10 @@ var (
 // is keyed with the derivation the initrd FIDO2 strategy unlocks with.
 type FIDO2Enrollment struct {
 	config *FIDO2EnrollmentConfig
+	// devicePath is the authenticator DetectDevice selected.
+	devicePath string
+	// clientPIN reports that the authenticator has a client PIN set.
+	clientPIN bool
 }
 
 // FIDO2EnrollmentConfig contains enrollment parameters
