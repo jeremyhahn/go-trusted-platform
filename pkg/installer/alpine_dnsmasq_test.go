@@ -40,11 +40,11 @@ func TestBuildDNSMasqConf_LoopbackUpstreamForwards(t *testing.T) {
 func TestBuildDNSMasqConf_RemoteUpstreamForwardsInternalDomain(t *testing.T) {
 	conf := BuildDNSMasqConf(&DNSMasqConfig{
 		Enabled:         true,
-		UpstreamServers: []string{"10.4.2.140#9053"},
+		UpstreamServers: []string{"192.0.2.140#9053"},
 		LocalDomain:     "example.internal",
 	})
 
-	assert.Contains(t, conf, "server=10.4.2.140#9053\n")
+	assert.Contains(t, conf, "server=192.0.2.140#9053\n")
 	assert.Contains(t, conf, "domain=example.internal\n")
 	assert.NotContains(t, conf, "local=")
 }
@@ -119,7 +119,7 @@ func TestBuildDNSMasqConf_NoLocalDomain(t *testing.T) {
 func TestBuildDNSMasqConf_BaseDirectivesAlwaysPresent(t *testing.T) {
 	for _, upstreams := range [][]string{
 		{"127.0.0.1#9053"},
-		{"10.4.2.140#9053"},
+		{"192.0.2.140#9053"},
 		nil,
 	} {
 		conf := BuildDNSMasqConf(&DNSMasqConfig{
@@ -184,13 +184,13 @@ func TestBuildDNSMasqConf_MalformedEntryWrittenVerbatim(t *testing.T) {
 		Enabled: true,
 		UpstreamServers: []string{
 			"/unterminated-scope",
-			"10.4.2.140#9053#extra",
+			"192.0.2.140#9053#extra",
 		},
 		LocalDomain: "example.internal",
 	})
 
 	assert.Contains(t, conf, "server=/unterminated-scope\n")
-	assert.Contains(t, conf, "server=10.4.2.140#9053#extra\n")
+	assert.Contains(t, conf, "server=192.0.2.140#9053#extra\n")
 	assert.NotContains(t, conf, "local=")
 }
 
@@ -202,7 +202,7 @@ func TestNormalizeDNSMasqUpstream(t *testing.T) {
 		entry string
 		want  string
 	}{
-		{"hash form unchanged", "10.4.2.140#9053", "10.4.2.140#9053"},
+		{"hash form unchanged", "192.0.2.140#9053", "192.0.2.140#9053"},
 		{"colon form rewritten", "10.0.1.1:9053", "10.0.1.1#9053"},
 		{"bare ipv4 unchanged", "1.1.1.1", "1.1.1.1"},
 		{"bare ipv6 unchanged", "::1", "::1"},
@@ -210,7 +210,7 @@ func TestNormalizeDNSMasqUpstream(t *testing.T) {
 		{"bracketed ipv6 hash form unbracketed", "[::1]#9053", "::1#9053"},
 		{"domain-scoped bracketed hash form", "/example.internal/[::1]#9053", "/example.internal/::1#9053"},
 		{"bare bracketed ipv6 unbracketed", "[::1]", "::1"},
-		{"double hash passed through", "10.4.2.140#9053#extra", "10.4.2.140#9053#extra"},
+		{"double hash passed through", "192.0.2.140#9053#extra", "192.0.2.140#9053#extra"},
 		{"domain-scoped hash unchanged", "/example.internal/10.4.200.10#9053", "/example.internal/10.4.200.10#9053"},
 		{"domain-scoped colon rewritten", "/example.internal/10.4.200.10:9053", "/example.internal/10.4.200.10#9053"},
 		{"hostname colon rewritten", "cp.example.internal:9053", "cp.example.internal#9053"},
@@ -238,7 +238,7 @@ func TestDnsmasqZoneHasUpstreamRoute(t *testing.T) {
 		upstreams []string
 		want      bool
 	}{
-		{"unscoped remote routes the zone", "example.internal", []string{"10.4.2.140#9053"}, true},
+		{"unscoped remote routes the zone", "example.internal", []string{"192.0.2.140#9053"}, true},
 		{"unscoped loopback routes the zone", "example.internal", []string{"127.0.0.1#9053"}, true},
 		{"unscoped colon shorthand routes the zone", "example.internal", []string{"10.0.1.1:9053"}, true},
 		{"scoped exact match routes the zone", "example.internal", []string{"/example.internal/10.4.200.10#9053"}, true},
