@@ -46,17 +46,17 @@ func TestPlatformdLoadNetworkConf_ParsesWhatTheInstallerWrites(t *testing.T) {
 
 INTERFACE=eth0
 TYPE=static
-IPV4_ADDRESS=10.4.2.140
+IPV4_ADDRESS=192.0.2.140
 IPV4_PREFIX=24
 IPV4_NETMASK=255.255.255.0
-IPV4_GATEWAY=10.4.2.1
-DNS="10.4.2.1 1.1.1.1"
+IPV4_GATEWAY=192.0.2.1
+DNS="192.0.2.1 1.1.1.1"
 HOSTNAME=node-1.example.com
 `)
 	assert.Equal(t, 0, exit, stderr)
 	assert.Empty(t, stderr)
-	assert.Equal(t, "INTERFACE=eth0\nTYPE=static\nIPV4_ADDRESS=10.4.2.140\nIPV4_PREFIX=24\n"+
-		"IPV4_NETMASK=255.255.255.0\nIPV4_GATEWAY=10.4.2.1\nDNS=10.4.2.1 1.1.1.1\nHOSTNAME=node-1.example.com\n", vars)
+	assert.Equal(t, "INTERFACE=eth0\nTYPE=static\nIPV4_ADDRESS=192.0.2.140\nIPV4_PREFIX=24\n"+
+		"IPV4_NETMASK=255.255.255.0\nIPV4_GATEWAY=192.0.2.1\nDNS=192.0.2.1 1.1.1.1\nHOSTNAME=node-1.example.com\n", vars)
 }
 
 // TestPlatformdLoadNetworkConf_NeverExecutesTheFile: command substitution,
