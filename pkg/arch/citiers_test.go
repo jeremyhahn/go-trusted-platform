@@ -64,10 +64,12 @@ const (
 	// schedule it is true, on a schedule run only on the guard's `run`.
 	scheduleGuardExpr = "github.event_name != 'schedule' || needs.schedule-guard.outputs.verdict == 'run'"
 
-	// prTierGuardedIf, fullTierGuardedIf and nightlyGuardedIf are the tier
-	// `if:`s of a bigdisk job, character for character: the tier's own
-	// condition and the schedule guard.
+	// prTierGuardedIf, docsOnlyGuardedIf, fullTierGuardedIf and
+	// nightlyGuardedIf are the tier `if:`s of a bigdisk job, character for
+	// character: the tier's own condition and the schedule guard.
+	// docsOnlyGuardedIf (2026-11-10, m2406): race on the bigdisk runner.
 	prTierGuardedIf   = "${{ " + draftGuard + " && (" + scheduleGuardExpr + ") }}"
+	docsOnlyGuardedIf = "${{ needs.changes.outputs.docs_only != 'true' && " + draftGuard + " && (" + scheduleGuardExpr + ") }}"
 	fullTierGuardedIf = "${{ (" + fullTierExpr + ") && " + draftGuard + " && (" + scheduleGuardExpr + ") }}"
 	nightlyGuardedIf  = "${{ (github.event_name == 'schedule' && needs.schedule-guard.outputs.verdict == 'run') || github.event_name == 'workflow_dispatch' }}"
 
@@ -192,6 +194,7 @@ var tierByIf = map[string]string{
 	mainOnlyIf: tierMain,
 
 	prTierGuardedIf:   tierPR,
+	docsOnlyGuardedIf: tierDocs,
 	fullTierGuardedIf: tierFull,
 	nightlyGuardedIf:  tierNightly,
 }
@@ -199,6 +202,7 @@ var tierByIf = map[string]string{
 // scheduleGuardedIf holds the `if:`s that read the schedule guard's verdict.
 var scheduleGuardedIf = map[string]bool{
 	prTierGuardedIf:   true,
+	docsOnlyGuardedIf: true,
 	fullTierGuardedIf: true,
 	nightlyGuardedIf:  true,
 }
