@@ -73,14 +73,15 @@ func TestIssueCertificate_KeySizeAndCurve(t *testing.T) {
 		wantAlg      x509.PublicKeyAlgorithm
 		wantKeySize  int
 		wantCurve    string
+		wantRefused  bool
 	}{
 		{name: "unspecified defaults to P-256", wantAlg: x509.ECDSA, wantCurve: "P-256"},
 		{name: "RSA 2048", keyAlgorithm: "KEY_ALGORITHM_RSA_2048", wantAlg: x509.RSA, wantKeySize: 2048},
-		{name: "RSA 3072", keyAlgorithm: "KEY_ALGORITHM_RSA_3072", wantAlg: x509.RSA, wantKeySize: 3072},
+		{name: "RSA 3072", keyAlgorithm: "KEY_ALGORITHM_RSA_3072", wantRefused: true},
 		{name: "RSA 4096", keyAlgorithm: "KEY_ALGORITHM_RSA_4096", wantAlg: x509.RSA, wantKeySize: 4096},
 		{name: "ECDSA P-256", keyAlgorithm: "KEY_ALGORITHM_ECDSA_P256", wantAlg: x509.ECDSA, wantCurve: "P-256"},
 		{name: "ECDSA P-384", keyAlgorithm: "KEY_ALGORITHM_ECDSA_P384", wantAlg: x509.ECDSA, wantCurve: "P-384"},
-		{name: "ECDSA P-521", keyAlgorithm: "KEY_ALGORITHM_ECDSA_P521", wantAlg: x509.ECDSA, wantCurve: "P-521"},
+		{name: "ECDSA P-521", keyAlgorithm: "KEY_ALGORITHM_ECDSA_P521", wantRefused: true},
 		{name: "Ed25519", keyAlgorithm: "KEY_ALGORITHM_ED25519", wantAlg: x509.Ed25519},
 	}
 
@@ -107,6 +108,12 @@ func TestIssueCertificate_KeySizeAndCurve(t *testing.T) {
 			req.Header.Set("Content-Type", "application/json")
 			rec := httptest.NewRecorder()
 			router.ServeHTTP(rec, req)
+
+			if tt.wantRefused {
+				assert.Equal(t, http.StatusBadRequest, rec.Code)
+				assert.Nil(t, issued, "the CA was asked to issue a refused key algorithm")
+				return
+			}
 
 			assert.Equal(t, http.StatusCreated, rec.Code)
 			require.NotNil(t, issued, "the CA was not asked to issue")
