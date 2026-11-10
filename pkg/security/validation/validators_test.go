@@ -952,6 +952,56 @@ func TestCompositeValidator_MixedErrorTypes(t *testing.T) {
 	}
 }
 
+func TestCompositeValidator_ForwardsInput(t *testing.T) {
+	// Each wrapped validator records the value it receives; the first
+	// one rejects only "bad", so the result depends on the input
+	var gotFirst, gotSecond any
+	first := ValidatorFunc(func(value any) error {
+		gotFirst = value
+		if value == "bad" {
+			return errors.New("bad value")
+		}
+		return nil
+	})
+	second := ValidatorFunc(func(value any) error {
+		gotSecond = value
+		return nil
+	})
+
+	// ValidatorFunc.Validate passes its argument to the function
+	if err := first.Validate("good"); err != nil {
+		t.Errorf("expected nil for good, got %v", err)
+	}
+	if gotFirst != "good" {
+		t.Errorf("expected callback to receive good, got %v", gotFirst)
+	}
+	if err := first.Validate("bad"); err == nil {
+		t.Error("expected error for bad, got nil")
+	}
+	if gotFirst != "bad" {
+		t.Errorf("expected callback to receive bad, got %v", gotFirst)
+	}
+
+	validator := NewCompositeValidator(first, second)
+
+	gotFirst, gotSecond = nil, nil
+	if err := validator.Validate("good"); err != nil {
+		t.Errorf("expected nil for good, got %v", err)
+	}
+	if gotFirst != "good" || gotSecond != "good" {
+		t.Errorf("expected both validators to receive good, got %v and %v", gotFirst, gotSecond)
+	}
+
+	gotFirst, gotSecond = nil, nil
+	var validationErr ErrValidationFailed
+	if err := validator.Validate("bad"); !errors.As(err, &validationErr) {
+		t.Errorf("expected ErrValidationFailed for bad, got %v", err)
+	}
+	if gotFirst != "bad" || gotSecond != "bad" {
+		t.Errorf("expected both validators to receive bad, got %v and %v", gotFirst, gotSecond)
+	}
+}
+
 func TestCompositeValidator_NoErrors(t *testing.T) {
 	validator := NewCompositeValidator(
 		NewStringValidator("field", StringConstraints{}),
