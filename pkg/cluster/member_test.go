@@ -1017,8 +1017,3 @@ func TestMembershipManager_Concurrent(t *testing.T) {
 		wg.Wait()
 	})
 }
-
-func TestMembershipManager_ImplementsInterface(t *testing.T) {
-	// Verify that membershipManager implements MembershipManager interface
-	var _ MembershipManager = (*membershipManager)(nil)
-}

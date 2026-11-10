@@ -12,6 +12,9 @@
 # next.js
 /.next/
 /out/
+# #224: next dev writes these agent files and re-adds its nextjs-agent-rules block.
+/AGENTS.md
+/CLAUDE.md
 
 # production
 /build

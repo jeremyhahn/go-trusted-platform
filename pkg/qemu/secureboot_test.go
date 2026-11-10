@@ -15,8 +15,9 @@ package qemu
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/binary"
@@ -38,7 +39,7 @@ import (
 func generateTestCertificate(t *testing.T, cn string) []byte {
 	t.Helper()
 
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 
 	template := &x509.Certificate{
@@ -777,7 +778,7 @@ func TestLoadCertificate_DER(t *testing.T) {
 	defer cleanup()
 
 	// Create a DER-encoded certificate
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 
 	template := &x509.Certificate{

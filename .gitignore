@@ -109,11 +109,19 @@ build/docker/bootstrap/pxeboot
 # output/.gitignore. The ISO build reruns the builder; nothing reads these.
 /build/docker/fips-kernel-builder/output/
 /build/docker/openssl-fips-provider/output/
-.serena/cache/
 /provisioning-client
 examples/provisioning-client/provisioning-client
 /iso.test
 /test.log
+
+# Local tooling state
+.serena/
+.claude/
+scheduled_tasks.lock
+lane-records/
+
+# WebUI tarball, built by make build-public-html
+/public_html.tar.gz
 
 # CI security-scan reports (devops.md §8)
 trivy-results.sarif

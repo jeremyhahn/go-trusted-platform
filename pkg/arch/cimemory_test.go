@@ -8,7 +8,7 @@ package arch
 //
 //   - scripts/in-toolchain-image.sh, which every toolchain step of ci.yml's
 //     image job calls: --memory and --memory-swap from IN_IMAGE_MEMORY, which
-//     each such step sets, at 16g or less;
+//     each such step sets, at 16g or less (20g for the vuln job, #1425);
 //   - compose.yaml's integration service, which the integration legs and the
 //     soak job run through `make integration-test`: mem_limit and
 //     memswap_limit from the Makefile's IT_MEMORY, which those jobs set;
@@ -35,7 +35,8 @@ const (
 	// devcontainerCompose holds the integration service the legs run.
 	devcontainerCompose = "build/docker/devcontainer/compose.yaml"
 
-	// ciMemoryCeilingMiB is the most memory any CI container may be given.
+	// ciMemoryCeilingMiB is the most memory a CI container may be given,
+	// unless its job is in ciJobMemoryCeilingMiB.
 	ciMemoryCeilingMiB = 16 * 1024
 
 	// fakeToolchainDocker records each docker call's arguments, one call per
@@ -46,6 +47,20 @@ if [ "$1" = cp ]; then cat > /dev/null; fi
 exit 0
 `
 )
+
+// ciJobMemoryCeilingMiB raises the ceiling for the named ci.yml jobs. vuln
+// runs govulncheck alone at 20g: its symbol scan reached 16.7 GB (#1425).
+var ciJobMemoryCeilingMiB = map[string]int{
+	"vuln": 20 * 1024,
+}
+
+// jobMemoryCeilingMiB is the ceiling for a ci.yml job's containers.
+func jobMemoryCeilingMiB(jobID string) int {
+	if ceiling, ok := ciJobMemoryCeilingMiB[jobID]; ok {
+		return ceiling
+	}
+	return ciMemoryCeilingMiB
+}
 
 // memorySizePattern is a docker or compose memory size in MiB or GiB.
 var memorySizePattern = regexp.MustCompile(`^([1-9][0-9]*)([mg])$`)
@@ -95,7 +110,7 @@ func memorySizeMiB(size string) (int, bool) {
 }
 
 // memoryLimitFinding reports a missing, malformed or over-ceiling size.
-func memoryLimitFinding(where, variable, size string) error {
+func memoryLimitFinding(where, variable, size string, ceilingMiB int) error {
 	if size == "" {
 		return &CIMemoryError{Where: where, Reason: "sets no " + variable}
 	}
@@ -103,8 +118,8 @@ func memoryLimitFinding(where, variable, size string) error {
 	if !ok {
 		return &CIMemoryError{Where: where, Reason: variable + " " + strconv.Quote(size) + " is not a size in m or g"}
 	}
-	if mib > ciMemoryCeilingMiB {
-		return &CIMemoryError{Where: where, Reason: variable + " " + size + " is above the 16g ceiling"}
+	if mib > ceilingMiB {
+		return &CIMemoryError{Where: where, Reason: variable + " " + size + " is above the " + strconv.Itoa(ceilingMiB/1024) + "g ceiling"}
 	}
 	return nil
 }
@@ -129,7 +144,7 @@ func ciMemoryFindings(wf ciMemoryWorkflow) []error {
 			launchesIntegration := strings.Contains(step.Run, "make integration-test") || strings.Contains(step.Run, "$SOAK_TARGET")
 			if launchesToolchain {
 				toolchainSteps++
-				if err := memoryLimitFinding(where, "IN_IMAGE_MEMORY", step.Env["IN_IMAGE_MEMORY"]); err != nil {
+				if err := memoryLimitFinding(where, "IN_IMAGE_MEMORY", step.Env["IN_IMAGE_MEMORY"], jobMemoryCeilingMiB(id)); err != nil {
 					findings = append(findings, err)
 				}
 			}
@@ -138,7 +153,7 @@ func ciMemoryFindings(wf ciMemoryWorkflow) []error {
 				if size == "" {
 					size = job.Env["IT_MEMORY"]
 				}
-				if err := memoryLimitFinding(where, "IT_MEMORY", size); err != nil {
+				if err := memoryLimitFinding(where, "IT_MEMORY", size, ciMemoryCeilingMiB); err != nil {
 					findings = append(findings, err)
 				}
 			}
@@ -314,6 +329,12 @@ func TestCIMemoryFindingsRejectEachGap(t *testing.T) {
 			}}}},
 			reason: "above the 16g ceiling",
 		},
+		"vuln step above its job ceiling": {
+			wf: ciMemoryWorkflow{Jobs: map[string]ciMemoryJob{"vuln": {Steps: []ciMemoryStep{
+				{Name: "make vuln", Run: toolchainRun, Env: map[string]string{"IN_IMAGE_MEMORY": "21g"}},
+			}}}},
+			reason: "above the 20g ceiling",
+		},
 		"toolchain step with a malformed size": {
 			wf: ciMemoryWorkflow{Jobs: map[string]ciMemoryJob{"image": {Steps: []ciMemoryStep{
 				{Name: "make test", Run: toolchainRun, Env: map[string]string{"IN_IMAGE_MEMORY": "16GB"}},
@@ -372,6 +393,7 @@ func TestCIMemoryFindingsAcceptBoundedSteps(t *testing.T) {
 		}},
 		"soak": {Env: map[string]string{"IT_MEMORY": "16g", "CI_CGROUP_PARENT": "ci-soak.slice"}, Steps: []ciMemoryStep{{Name: "soak", Run: `make "$SOAK_TARGET"`}}},
 		"web":  {Steps: []ciMemoryStep{{Name: "web", Run: "make web-test-unit CI_CGROUP_PARENT="}}},
+		"vuln": {Env: map[string]string{"CI_CGROUP_PARENT": "ci.slice"}, Steps: []ciMemoryStep{{Name: "make vuln", Run: toolchainScript + " img make vuln", Env: map[string]string{"IN_IMAGE_MEMORY": "20g"}}}},
 	}}
 	require.Empty(t, ciMemoryFindings(wf))
 }
@@ -422,6 +444,15 @@ func TestToolchainScriptTakesTheStepsLimits(t *testing.T) {
 	create := dockerCreateCall(t, calls)
 	require.Contains(t, create, "--memory 16g --memory-swap 16g")
 	require.Contains(t, create, "--env GOMAXPROCS=8")
+	require.NotContains(t, create, "GOMEMLIMIT", "an unset IN_IMAGE_GOMEMLIMIT sets no GOMEMLIMIT")
+}
+
+func TestToolchainScriptTakesTheStepsGOMEMLIMIT(t *testing.T) {
+	out, calls, err := runToolchainScript(t, "IN_IMAGE_MEMORY=20g", "IN_IMAGE_GOMEMLIMIT=18GiB")
+	require.NoError(t, err, out)
+	create := dockerCreateCall(t, calls)
+	require.Contains(t, create, "--memory 20g --memory-swap 20g")
+	require.Contains(t, create, "--env GOMEMLIMIT=18GiB")
 }
 
 func TestToolchainScriptRejectsABadLimit(t *testing.T) {
@@ -434,6 +465,9 @@ func TestToolchainScriptRejectsABadLimit(t *testing.T) {
 		"zero memory":                {env: "IN_IMAGE_MEMORY=0g", reason: "IN_IMAGE_MEMORY must be a size"},
 		"zero GOMAXPROCS":            {env: "IN_IMAGE_GOMAXPROCS=0", reason: "IN_IMAGE_GOMAXPROCS must be a positive integer"},
 		"word GOMAXPROCS":            {env: "IN_IMAGE_GOMAXPROCS=all", reason: "IN_IMAGE_GOMAXPROCS must be a positive integer"},
+		"GOMEMLIMIT without a unit":  {env: "IN_IMAGE_GOMEMLIMIT=18", reason: "IN_IMAGE_GOMEMLIMIT must be a Go memory limit"},
+		"GOMEMLIMIT in docker units": {env: "IN_IMAGE_GOMEMLIMIT=18g", reason: "IN_IMAGE_GOMEMLIMIT must be a Go memory limit"},
+		"GOMEMLIMIT as an option":    {env: "IN_IMAGE_GOMEMLIMIT=--privileged", reason: "IN_IMAGE_GOMEMLIMIT must be a Go memory limit"},
 		"cgroup parent with a space": {env: "CI_CGROUP_PARENT=ci slice", reason: "CI_CGROUP_PARENT must be a cgroup name"},
 		"cgroup parent as an option": {env: "CI_CGROUP_PARENT=--privileged", reason: "CI_CGROUP_PARENT must be a cgroup name"},
 	}

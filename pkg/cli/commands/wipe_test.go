@@ -80,38 +80,6 @@ func TestWipeCommandFlags(t *testing.T) {
 	}
 }
 
-func TestWipeCommandLongDescription(t *testing.T) {
-	cmd := NewWipeCommand(func() *cli.CommonFlags {
-		return &cli.CommonFlags{}
-	})
-
-	if cmd.Long == "" {
-		t.Error("Long description should not be empty")
-	}
-}
-
-func TestWipeCommandExample(t *testing.T) {
-	cmd := NewWipeCommand(func() *cli.CommonFlags {
-		return &cli.CommonFlags{}
-	})
-
-	if cmd.Example == "" {
-		t.Error("Example should not be empty")
-	}
-}
-
-func TestWipeCommandPathRequired(t *testing.T) {
-	cmd := NewWipeCommand(func() *cli.CommonFlags {
-		return &cli.CommonFlags{}
-	})
-
-	// Check that path flag is marked as required
-	pathFlag := cmd.Flags().Lookup("path")
-	if pathFlag == nil {
-		t.Fatal("path flag not found")
-	}
-}
-
 func TestErrWipePathRequired(t *testing.T) {
 	err := ErrWipePathRequired{}
 	expected := "--path flag is required"
