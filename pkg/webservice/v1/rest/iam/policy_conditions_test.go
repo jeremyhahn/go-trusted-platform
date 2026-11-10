@@ -51,6 +51,18 @@ func createPolicyFromYAML(t *testing.T, specYAML string) (*recordingPolicyClient
 	return policies, err
 }
 
+// createRemotePolicyFromYAML is createPolicyFromYAML on the adapter of a
+// remote (gRPC or Unix) backend.
+func createRemotePolicyFromYAML(t *testing.T, specYAML string) (*recordingPolicyClient, error) {
+	t.Helper()
+	policies := &recordingPolicyClient{}
+	_, err := NewRemoteQuicBaaSIAMAdapter(policySDKClient{policies: policies}).CreatePolicy(context.Background(), "tenant-a", &CreatePolicyRequest{
+		Name:     "conditional",
+		SpecYAML: specYAML,
+	})
+	return policies, err
+}
+
 // A conditional allow must never be stored as an unconditional one: the
 // SDK's create keeps no condition, so the adapter refuses the policy.
 func TestQuicBaaSIAMAdapter_CreatePolicy_RefusesConditions(t *testing.T) {
@@ -160,4 +172,42 @@ func TestQuicBaaSIAMAdapter_CreatePolicy_KeepsAllowAndDeny(t *testing.T) {
 			assert.Equal(t, want, policies.created[0].Rules[0].Effect)
 		})
 	}
+}
+
+// A remote (gRPC or Unix) backend parses the policy document itself and
+// stores its conditions and subject selectors, so the adapter hands the
+// document over unchanged instead of refusing it.
+func TestQuicBaaSIAMAdapter_CreatePolicy_RemoteKeepsConditionsAndSubjects(t *testing.T) {
+	cases := []struct {
+		name     string
+		specYAML string
+		rule     string
+	}{
+		{"a when condition on a flat document", "rules:\n- name: office-hours\n  effect: allow\n  actions: [read]\n  resources: ['*']\n  when:\n  - expression: business-hours\n", "office-hours"},
+		{"an unless condition on a flat document", "rules:\n- name: not-quarantined\n  effect: allow\n  actions: [read]\n  resources: ['*']\n  unless:\n  - expression: quarantined\n", "not-quarantined"},
+		{"roles on a flat document", "subjects:\n  roles: [admin]\nrules:\n- name: admins\n  effect: allow\n  actions: ['*']\n  resources: ['*']\n", "admins"},
+		{"users and a condition in a full document", "apiVersion: v1\nkind: Policy\nspec:\n  subjects:\n    users: [alice]\n  rules:\n  - name: alice\n    effect: allow\n    actions: [read]\n    resources: ['*']\n    when:\n    - expression: business-hours\n", "alice"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			policies, err := createRemotePolicyFromYAML(t, tc.specYAML)
+
+			require.NoError(t, err)
+			require.Len(t, policies.created, 1)
+			assert.Equal(t, tc.specYAML, string(policies.created[0].SpecYAML), "the backend must receive the document unchanged")
+			require.Len(t, policies.created[0].Rules, 1)
+			assert.Equal(t, tc.rule, policies.created[0].Rules[0].Name)
+		})
+	}
+}
+
+// The effect rule is not an embedded-only one: a remote backend refuses the
+// same effects, so the adapter still refuses them before anything is sent.
+func TestQuicBaaSIAMAdapter_CreatePolicy_RemoteRefusesAnyOtherEffect(t *testing.T) {
+	policies, err := createRemotePolicyFromYAML(t, "rules:\n- name: everything\n  effect: permit\n  actions: ['*']\n  resources: ['*']\n")
+
+	var invalid ErrInvalidPolicySpec
+	require.ErrorAs(t, err, &invalid)
+	assert.Contains(t, err.Error(), `must be exactly "allow" or "deny"`)
+	assert.Empty(t, policies.created, "a refused policy must not be stored")
 }
