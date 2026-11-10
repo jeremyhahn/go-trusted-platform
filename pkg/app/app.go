@@ -3222,13 +3222,25 @@ func (app *App) LoadCA(ctx context.Context, soPIN, userPIN xkmssdk.Password) err
 	// objectstores per CA (root, intermediate) at platformDir/ca/<ca-cn>/.
 	storeFactory := NewCAStoreFactory(app, app.PlatformDir, app.Storage, soPIN, userPIN)
 
-	// Build the issuing CA from params.Identity via the native NewCA
-	// constructor (root + optional intermediate) and select the appropriate
-	// TrustedCA per config.SelectedCA. The returned CAs are uninitialized
-	// when built via NewParentCA/NewIntermediateCA directly, so we route
-	// through NewCA which auto-initializes both. We then re-load from
-	// storage via Load() to match the "lazy" (load existing) contract of
-	// this function.
+	// Load only an existing CA: the root certificate must already be in its
+	// certstore. A missing root returns an error wrapping
+	// xkmssdk.ErrCertNotFound, so LoadOrInitCA falls through to InitCA.
+	rootCN := app.CAConfig.Identity[0].Subject.CommonName
+	rootStore, err := storeFactory.CreateCertStore(rootCN)
+	if err != nil {
+		return &WrappedError{Msg: "failed to open root CA certstore", Err: err}
+	}
+	rootCertStore, ok := rootStore.(localcertstore.CertificateStorer)
+	if !ok {
+		return &MessageError{Msg: "root CA certstore has an unexpected type"}
+	}
+	if _, err := rootCertStore.GetCertificate(rootCN); err != nil {
+		return &WrappedError{Msg: "failed to load root CA certificate", Err: err}
+	}
+
+	// NewCA reuses the CA found in storage (root + optional intermediate) and
+	// returns both initialized, so no separate Load is needed; select the
+	// issuing TrustedCA per config.SelectedCA.
 	root, intermediate, err := quicbaasca.NewCA(ctx, app.caParams(storeFactory))
 	if err != nil {
 		return &WrappedError{Msg: "failed to create CA", Err: err}
@@ -3237,13 +3249,6 @@ func (app *App) LoadCA(ctx context.Context, soPIN, userPIN xkmssdk.Password) err
 	caInstance := selectIssuingCA(app.CAConfig, root, intermediate)
 	if caInstance == nil {
 		return &MessageError{Msg: "failed to select issuing CA from multi-identity config"}
-	}
-
-	// Load existing CA from storage to honor the "load existing" contract
-	// previously expressed via LazyInitialization=true. Errors here are
-	// surfaced to the caller so misconfigured deployments fail fast.
-	if err := caInstance.Load(ctx); err != nil {
-		return &WrappedError{Msg: "failed to load CA", Err: err}
 	}
 
 	// Set TPM for enrollment operations
