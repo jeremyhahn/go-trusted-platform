@@ -172,6 +172,96 @@ func TestListRepliesOverSDKREST_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestListRepliesOverSDKREST_FiltersAndPagination sends nonzero pagination
+// and filters through the SDK's REST adapter to the real router: the
+// handlers read them from the query string only, so they must reach the IAM
+// client and the reply must report the page that was asked for.
+func TestListRepliesOverSDKREST_FiltersAndPagination(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	pagination := func() *platformv1.PaginationRequest {
+		return &platformv1.PaginationRequest{Page: 3, PageSize: 10}
+	}
+
+	t.Run("ListUsers", func(t *testing.T) {
+		var got iamsdk.ListUsersRequest
+		iamClient := &mockIAMClient{
+			listUsersFn: func(_ context.Context, _ string, req *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
+				got = *req
+				return &iamsdk.ListUsersResponse{
+					Users:      []iamsdk.User{{ID: "item-1"}},
+					Pagination: iamsdk.PaginationInfo{TotalCount: 21},
+				}, nil
+			},
+		}
+		conn := sdkRESTConnection(t, adminSessionIAMServerIn(t, "tenant-a", iamClient, &mockPEPClient{}))
+
+		reply, err := platformv1.NewPlatformIAMServiceClient(conn).ListUsers(ctx, &platformv1.ListIAMUsersRequest{
+			TenantId:    "tenant-a",
+			Pagination:  pagination(),
+			EmailFilter: "alice@example.com",
+			RoleFilter:  "role-1",
+			GroupFilter: "group-1",
+		})
+		require.NoError(t, err)
+
+		assert.EqualValues(t, 10, got.PageSize)
+		assert.EqualValues(t, "alice@example.com", got.Filter)
+		assert.EqualValues(t, "role-1", got.RoleID)
+		assert.EqualValues(t, "group-1", got.GroupID)
+		assert.Equal(t, uint32(3), reply.GetPagination().GetPage())
+		assert.Equal(t, uint32(10), reply.GetPagination().GetPageSize())
+	})
+
+	t.Run("ListRoles", func(t *testing.T) {
+		var got iamsdk.ListRolesRequest
+		iamClient := &mockIAMClient{
+			listRolesFn: func(_ context.Context, _ string, req *iamsdk.ListRolesRequest) (*iamsdk.ListRolesResponse, error) {
+				got = *req
+				return &iamsdk.ListRolesResponse{
+					Roles:      []iamsdk.Role{{ID: "item-1"}},
+					Pagination: iamsdk.PaginationInfo{TotalCount: 21},
+				}, nil
+			},
+		}
+		conn := sdkRESTConnection(t, adminSessionIAMServerIn(t, "tenant-a", iamClient, &mockPEPClient{}))
+
+		reply, err := platformv1.NewPlatformIAMServiceClient(conn).ListRoles(ctx, &platformv1.ListIAMRolesRequest{
+			TenantId:   "tenant-a",
+			Pagination: pagination(),
+		})
+		require.NoError(t, err)
+
+		assert.EqualValues(t, 10, got.PageSize)
+		assert.Equal(t, uint32(3), reply.GetPagination().GetPage())
+		assert.Equal(t, uint32(10), reply.GetPagination().GetPageSize())
+	})
+
+	t.Run("ListGroups", func(t *testing.T) {
+		var got iamsdk.ListGroupsRequest
+		iamClient := &mockIAMClient{
+			listGroupsFn: func(_ context.Context, _ string, req *iamsdk.ListGroupsRequest) (*iamsdk.ListGroupsResponse, error) {
+				got = *req
+				return &iamsdk.ListGroupsResponse{
+					Groups:     []iamsdk.Group{{ID: "item-1"}},
+					Pagination: iamsdk.PaginationInfo{TotalCount: 21},
+				}, nil
+			},
+		}
+		conn := sdkRESTConnection(t, adminSessionIAMServerIn(t, "tenant-a", iamClient, &mockPEPClient{}))
+
+		reply, err := platformv1.NewPlatformIAMServiceClient(conn).ListGroups(ctx, &platformv1.ListIAMGroupsRequest{
+			TenantId:   "tenant-a",
+			Pagination: pagination(),
+		})
+		require.NoError(t, err)
+
+		assert.EqualValues(t, 10, got.PageSize)
+		assert.Equal(t, uint32(3), reply.GetPagination().GetPage())
+		assert.Equal(t, uint32(10), reply.GetPagination().GetPageSize())
+	})
+}
+
 // TestListRepliesOverSDKREST_ServiceErrors checks a NotFound from the IAM
 // client reaches the SDK caller as codes.NotFound with no reply.
 func TestListRepliesOverSDKREST_ServiceErrors(t *testing.T) {
