@@ -1695,7 +1695,10 @@ jobs:
     name: CI Gate
     # The reserved 1-CPU ci-gate runners (DS-2273), so the gate does not queue
     # behind ubuntu-latest jobs: never add a checkout or a `uses:` step here.
-    runs-on: ${{ github.server_url == 'https://github.com' && 'ubuntu-latest' || 'ci-gate' }}
+    # CA m2475 (2h): the gate runs on the self-hosted bigdisk pool (main pushes
+    # and same-repo PRs), so it never waits in the hosted queue and always
+    # reports; it needs no Docker. Fork PRs stay on ubuntu-latest.
+    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}
     # v1.29.3: on a schedule run the schedule guard decides. `busy` skips the
     # gate, so `CI / CI Gate (schedule)` posts `skipped` (Gitea 1.27.1 posts a
     # skipped job as `skipped`, not `success`), never a green nightly. Every
