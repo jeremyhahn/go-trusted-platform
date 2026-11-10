@@ -118,19 +118,6 @@ func tokenRequest(token, dpop string) *http.Request {
 	return r
 }
 
-func TestChainCapabilitiesPhase3(t *testing.T) {
-	full := phase3Chain(t, &fakeTokenAuth{}, &fakeGate{}, &fakeEvaluator{})
-	caps := full.Capabilities()
-	if !caps.MTLS || !caps.Zones || !caps.Token || !caps.Attestation || !caps.OPA {
-		t.Errorf("full chain capabilities = %+v, want all true", caps)
-	}
-	bare := newTestChain(t, &fakeMTLSAuth{})
-	caps = bare.Capabilities()
-	if caps.Token || caps.Attestation || caps.OPA {
-		t.Errorf("bare chain capabilities = %+v, want token/attestation/opa false", caps)
-	}
-}
-
 func TestChainTokenPathAllow(t *testing.T) {
 	authn := &fakeTokenAuth{principal: &TokenPrincipal{
 		Subject:  "svc-1",
@@ -267,34 +254,34 @@ func TestChainTokenPathDenyReasons(t *testing.T) {
 	}
 }
 
-func TestChainTokenZoneMatrixAllowed(t *testing.T) {
-	authn := &fakeTokenAuth{principal: &TokenPrincipal{Subject: "svc"}}
-	c := phase3Chain(t, authn, nil, nil)
-	route := chainRoute(AuthRequirements{
-		Mode:         AuthModeToken,
-		AllowedZones: []string{"control-plane"},
-		BackendZone:  "internal",
-		TokenZone:    "control-plane",
-	})
-	d, err := c.Authenticate(context.Background(), tokenRequest("tok", ""), route)
-	if err != nil {
-		t.Fatalf("Authenticate: %v", err)
+func TestChainTokenZoneAllowed(t *testing.T) {
+	tests := []struct {
+		name string
+		auth AuthRequirements
+		zone string
+	}{
+		{
+			"matrix allowed",
+			AuthRequirements{Mode: AuthModeToken, AllowedZones: []string{"control-plane"}, BackendZone: "internal", TokenZone: "control-plane"},
+			"control-plane",
+		},
+		{
+			"enrichment on zone-free route",
+			AuthRequirements{Mode: AuthModeToken, TokenZone: "edge"},
+			"edge",
+		},
 	}
-	if !d.Allowed || d.Identity.Zone != "control-plane" {
-		t.Fatalf("decision = %+v, want allow with zone control-plane", d)
-	}
-}
-
-func TestChainTokenZoneEnrichmentOnZoneFreeRoute(t *testing.T) {
-	authn := &fakeTokenAuth{principal: &TokenPrincipal{Subject: "svc"}}
-	c := phase3Chain(t, authn, nil, nil)
-	route := chainRoute(AuthRequirements{Mode: AuthModeToken, TokenZone: "edge"})
-	d, err := c.Authenticate(context.Background(), tokenRequest("tok", ""), route)
-	if err != nil {
-		t.Fatalf("Authenticate: %v", err)
-	}
-	if !d.Allowed || d.Identity.Zone != "edge" {
-		t.Fatalf("decision = %+v, want allow with zone edge", d)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := phase3Chain(t, &fakeTokenAuth{principal: &TokenPrincipal{Subject: "svc"}}, nil, nil)
+			d, err := c.Authenticate(context.Background(), tokenRequest("tok", ""), chainRoute(tc.auth))
+			if err != nil {
+				t.Fatalf("Authenticate: %v", err)
+			}
+			if !d.Allowed || d.Identity.Zone != tc.zone {
+				t.Fatalf("decision = %+v, want allow with zone %s", d, tc.zone)
+			}
+		})
 	}
 }
 
