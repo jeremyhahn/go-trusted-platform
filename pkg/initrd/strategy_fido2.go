@@ -180,10 +180,16 @@ func (s *FIDO2Strategy) unlockSlot(ctx context.Context, volume *luks.VolumeConfi
 }
 
 // awaitKey returns the key of an authenticator call, or ctx.Err() as soon as
-// ctx ends. The SDK cannot stop the HID request, so an abandoned call runs on
-// in a drain that zeroes the key a late touch yields; done is buffered, so
-// neither goroutine outlives the call.
+// ctx ends. It holds the process-wide authenticator gate for the call; when
+// the gate cannot be taken the call never runs. The SDK cannot stop the HID
+// request, so an abandoned call runs on in a drain that zeroes the key a late
+// touch yields and only then frees the gate: a retry waits for it and never
+// overlaps it on the shared handler. done is buffered, so neither goroutine
+// outlives the call.
 func (s *FIDO2Strategy) awaitKey(ctx context.Context, call func() ([]byte, error)) ([]byte, error) {
+	if err := s.acquireFIDO2Operation(ctx); err != nil {
+		return nil, err
+	}
 	type outcome struct {
 		key []byte
 		err error
@@ -195,14 +201,55 @@ func (s *FIDO2Strategy) awaitKey(ctx context.Context, call func() ([]byte, error
 	}()
 	select {
 	case result := <-done:
+		releaseFIDO2Operation()
 		return result.key, result.err
 	case <-ctx.Done():
 		go func() {
 			result := <-done
 			s.discardLateKey(result.key)
+			releaseFIDO2Operation()
 		}()
 		return nil, ctx.Err()
 	}
+}
+
+// fido2Operation admits one authenticator operation at a time in the process.
+// It is package-level and not a field of FIDO2Strategy because the SDK handler
+// (Platform.FIDO2) is shared by every strategy built on a platform, and a
+// retry is a new strategy value over that same handler. The handler's calls
+// take no context and write its shared timeout without a lock, so two calls
+// at once are a data race and compete for the user's touch. An abandoned call
+// therefore keeps the gate after its unlock was cancelled: it still runs on
+// the handler until the touch or the SDK timeout ends it.
+var fido2Operation = make(chan struct{}, 1)
+
+// acquireFIDO2Operation takes the authenticator gate, or returns ctx.Err()
+// when ctx has ended before or while it waits; it then holds nothing.
+func (s *FIDO2Strategy) acquireFIDO2Operation(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case fido2Operation <- struct{}{}:
+	default:
+		s.logger.Info("Waiting for the previous security key operation to end (touch or remove the key)...")
+		select {
+		case fido2Operation <- struct{}{}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	// The gate and the cancellation can arrive together.
+	if err := ctx.Err(); err != nil {
+		releaseFIDO2Operation()
+		return err
+	}
+	return nil
+}
+
+// releaseFIDO2Operation frees the authenticator gate for the next operation.
+func releaseFIDO2Operation() {
+	<-fido2Operation
 }
 
 // discardLateKey zeroes a key the authenticator returned after the unlock
@@ -258,11 +305,19 @@ func (s *FIDO2Strategy) Install(ctx context.Context, volume *luks.VolumeConfig, 
 		Timeout: time.Duration(s.platform.Config.UnlockTimeout) * time.Second,
 	}
 
+	// The enrolment is one authenticator operation: the gate is held from
+	// the credential creation until the key derivation has returned, and
+	// nothing is written to the volume when it cannot be taken.
+	if err := s.acquireFIDO2Operation(ctx); err != nil {
+		return err
+	}
+
 	s.logger.Info("Please touch your security key to enroll...")
 
 	// Enroll FIDO2 credential
 	result, err := s.platform.FIDO2.EnrollKey(enrollConfig)
 	if err != nil {
+		releaseFIDO2Operation()
 		return &WrappedError{Msg: "failed to enroll FIDO2 key", Err: err}
 	}
 
@@ -270,6 +325,7 @@ func (s *FIDO2Strategy) Install(ctx context.Context, volume *luks.VolumeConfig, 
 	if len(salt) == 0 {
 		salt, err = newFIDO2Salt()
 		if err != nil {
+			releaseFIDO2Operation()
 			return err
 		}
 	}
@@ -291,6 +347,7 @@ func (s *FIDO2Strategy) Install(ctx context.Context, volume *luks.VolumeConfig, 
 
 	s.logger.Info("Please touch your security key again to derive the volume key...")
 	key, err := s.platform.FIDO2.UnlockWithKey(authConfig)
+	releaseFIDO2Operation()
 	if err != nil {
 		return &WrappedError{Msg: "failed to derive the FIDO2 hmac-secret key", Err: err}
 	}

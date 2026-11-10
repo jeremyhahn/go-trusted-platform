@@ -94,7 +94,12 @@ handler and only then admits the next FIDO2 operation, so a retry cannot race
 it for the touch ([installer engineering](../installer/engineering.md)). The
 `fido2-assert` of a `fido2-manual` unlock is one of those operations: it waits
 for the slot (a cancelled wait never launches it) and holds it until the tool
-exits.
+exits. The initrd strategy does the same at boot: one gate for the process
+admits one authenticator operation at a time, an unlock or the whole of an
+enrolment. A call abandoned by a cancelled unlock keeps the gate until it has
+ended and its late key is zeroed. A retry waits for the gate, honours its own
+context while it waits, and never asks the authenticator when that context ends
+first.
 
 At boot the strategy takes its slots from the header, not from the volume
 config: every token that carries a credential and a salt names its slots in
