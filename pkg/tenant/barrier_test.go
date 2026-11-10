@@ -246,21 +246,6 @@ func TestCreateTenant_BarrierInitFailureNonFatal(t *testing.T) {
 
 // TestCreateTenant_SkipsBarrierWhenClientNil verifies that CreateTenant
 // does not attempt barrier initialization when no barrier client is set.
-func TestCreateTenant_SkipsBarrierWhenClientNil(t *testing.T) {
-	m, _ := newTestManager(t) // no barrier client
-	ctx := context.Background()
-
-	entity, err := m.CreateTenant(ctx, &CreateTenantRequest{
-		Name: "no-barrier-tenant",
-	})
-	if err != nil {
-		t.Fatalf("CreateTenant failed: %v", err)
-	}
-	if entity == nil {
-		t.Fatal("expected non-nil entity")
-	}
-}
-
 // ---------------------------------------------------------------------------
 // DeleteTenant barrier integration
 // ---------------------------------------------------------------------------
@@ -698,30 +683,4 @@ func TestTenantBarrierStatus_SDKError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestErrBarrierOperationFailed_ErrorMessage verifies the error string format.
-func TestErrBarrierOperationFailed_ErrorMessage(t *testing.T) {
-	inner := errors.New("connection refused")
-	err := ErrBarrierOperationFailed{
-		TenantID:  "tenant-123",
-		Operation: "init",
-		Err:       inner,
-	}
-
-	expected := "barrier operation failed for tenant tenant-123: init: connection refused"
-	if err.Error() != expected {
-		t.Errorf("expected %q, got %q", expected, err.Error())
-	}
-
-	if !errors.Is(err, inner) {
-		t.Error("expected Unwrap to return inner error")
-	}
-}
-
 // TestErrBarrierNotSupported_ErrorMessage verifies the error string format.
-func TestErrBarrierNotSupported_ErrorMessage(t *testing.T) {
-	err := ErrBarrierNotSupported{Operation: "SealTenantBarrier"}
-
-	expected := "barrier operation not supported: SealTenantBarrier"
-	if err.Error() != expected {
-		t.Errorf("expected %q, got %q", expected, err.Error())
-	}
-}

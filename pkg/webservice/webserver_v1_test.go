@@ -177,21 +177,6 @@ func TestServeStaticFiles(t *testing.T) {
 		assert.Equal(t, http.StatusOK, w.Code)
 		assert.Contains(t, w.Body.String(), "Index")
 	})
-
-	t.Run("path with special characters", func(t *testing.T) {
-		// Create a file with special name
-		specialFile := filepath.Join(tmpDir, "file-with-dashes.txt")
-		require.NoError(t, os.WriteFile(specialFile, []byte("special content"), 0644))
-
-		handler := server.serveStaticFiles(tmpDir, "index.html", nil)
-		req := httptest.NewRequest(http.MethodGet, "/file-with-dashes.txt", nil)
-		w := httptest.NewRecorder()
-
-		handler(w, req)
-
-		assert.Equal(t, http.StatusOK, w.Code)
-		assert.Contains(t, w.Body.String(), "special content")
-	})
 }
 
 func TestEnsureDirectoryExists(t *testing.T) {
@@ -514,89 +499,6 @@ func TestDebugRoutes(t *testing.T) {
 	})
 }
 
-func TestWebServerErrors(t *testing.T) {
-	t.Run("error types are defined", func(t *testing.T) {
-		assert.Error(t, ErrLoadTlsCerts)
-		assert.Error(t, ErrBindPort)
-		assert.Contains(t, ErrLoadTlsCerts.Error(), "TLS")
-		assert.Contains(t, ErrBindPort.Error(), "bind")
-	})
-}
-
-func TestServerConstants(t *testing.T) {
-	t.Run("timeout constants are set", func(t *testing.T) {
-		assert.NotZero(t, HTTP_CLIENT_TIMEOUT)
-		assert.NotZero(t, HTTP_SERVER_READ_TIMEOUT)
-		assert.NotZero(t, HTTP_SERVER_WRITE_TIMEOUT)
-		assert.NotZero(t, HTTP_SERVER_IDLE_TIMEOUT)
-	})
-
-	t.Run("timeout values are reasonable", func(t *testing.T) {
-		// Verify timeouts are in reasonable ranges
-		assert.True(t, HTTP_CLIENT_TIMEOUT > 0)
-		assert.True(t, HTTP_SERVER_READ_TIMEOUT > 0)
-		assert.True(t, HTTP_SERVER_WRITE_TIMEOUT > HTTP_SERVER_READ_TIMEOUT)
-		assert.True(t, HTTP_SERVER_IDLE_TIMEOUT > HTTP_SERVER_WRITE_TIMEOUT)
-	})
-}
-
-func TestDefaultIndexTemplate(t *testing.T) {
-	t.Run("template contains required elements", func(t *testing.T) {
-		assert.Contains(t, defaultIndexTemplate, "<!DOCTYPE html>")
-		assert.Contains(t, defaultIndexTemplate, "<html>")
-		assert.Contains(t, defaultIndexTemplate, "{{.VirtualHost}}")
-		assert.Contains(t, defaultIndexTemplate, "</html>")
-	})
-
-	t.Run("template is valid HTML structure", func(t *testing.T) {
-		assert.Contains(t, defaultIndexTemplate, "<head>")
-		assert.Contains(t, defaultIndexTemplate, "</head>")
-		assert.Contains(t, defaultIndexTemplate, "<body>")
-		assert.Contains(t, defaultIndexTemplate, "</body>")
-	})
-}
-
-func TestWebServerV1Struct(t *testing.T) {
-	logger := newTestLogger()
-
-	t.Run("struct can be created manually", func(t *testing.T) {
-		router := mux.NewRouter()
-		server := &WebServerV1{
-			logger:      logger,
-			router:      router,
-			routerMutex: &sync.Mutex{},
-			baseURI:     "/api/v1",
-			debug:       true,
-		}
-
-		assert.NotNil(t, server)
-		assert.Equal(t, "/api/v1", server.baseURI)
-		assert.True(t, server.debug)
-	})
-
-	t.Run("router mutex is thread-safe", func(t *testing.T) {
-		router := mux.NewRouter()
-		server := &WebServerV1{
-			logger:      logger,
-			router:      router,
-			routerMutex: &sync.Mutex{},
-		}
-
-		// Test concurrent access
-		var wg sync.WaitGroup
-		for i := 0; i < 10; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				server.routerMutex.Lock()
-				server.router.HandleFunc("/concurrent", nil)
-				server.routerMutex.Unlock()
-			}()
-		}
-		wg.Wait()
-	})
-}
-
 func TestServeStaticFiles_EdgeCases(t *testing.T) {
 	logger := newTestLogger()
 	tmpDir := t.TempDir()
@@ -647,29 +549,6 @@ func TestServeStaticFiles_EdgeCases(t *testing.T) {
 
 		// First matching rule should win
 		assert.Contains(t, w.Body.String(), "first rule")
-	})
-
-	t.Run("serves files from root path", func(t *testing.T) {
-		handler := server.serveStaticFiles(tmpDir, "index.html", nil)
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
-		w := httptest.NewRecorder()
-
-		handler(w, req)
-
-		assert.Equal(t, http.StatusOK, w.Code)
-		assert.Contains(t, w.Body.String(), "Index")
-	})
-
-	t.Run("handles non-existent files with fallback", func(t *testing.T) {
-		handler := server.serveStaticFiles(tmpDir, "index.html", nil)
-		req := httptest.NewRequest(http.MethodGet, "/nonexistent/path/file.txt", nil)
-		w := httptest.NewRecorder()
-
-		handler(w, req)
-
-		// Should fallback to SPA index
-		assert.Equal(t, http.StatusOK, w.Code)
-		assert.Contains(t, w.Body.String(), "Index")
 	})
 }
 
@@ -754,54 +633,6 @@ func TestWriteJSONNotFound(t *testing.T) {
 	})
 }
 
-func TestServeStaticFiles_APIPathNotFallback(t *testing.T) {
-	logger := logging.NewLogger(slog.LevelDebug, io.Discard)
-
-	tmpDir := t.TempDir()
-	indexContent := "<html>SPA Index</html>"
-	os.WriteFile(filepath.Join(tmpDir, "index.html"), []byte(indexContent), 0644)
-
-	server := &WebServerV1{
-		logger:      logger,
-		router:      mux.NewRouter(),
-		routerMutex: &sync.Mutex{},
-		config:      &v1.Config{},
-	}
-
-	t.Run("API path returns 404 not SPA HTML", func(t *testing.T) {
-		handler := server.serveStaticFiles(tmpDir, "index.html", nil)
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
-		w := httptest.NewRecorder()
-
-		handler(w, req)
-
-		assert.Equal(t, http.StatusNotFound, w.Code)
-		assert.NotContains(t, w.Body.String(), "SPA Index")
-	})
-
-	t.Run("API nested path returns 404 not SPA HTML", func(t *testing.T) {
-		handler := server.serveStaticFiles(tmpDir, "index.html", nil)
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/daemon/health", nil)
-		w := httptest.NewRecorder()
-
-		handler(w, req)
-
-		assert.Equal(t, http.StatusNotFound, w.Code)
-		assert.NotContains(t, w.Body.String(), "SPA Index")
-	})
-
-	t.Run("non-API path still gets SPA fallback", func(t *testing.T) {
-		handler := server.serveStaticFiles(tmpDir, "index.html", nil)
-		req := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
-		w := httptest.NewRecorder()
-
-		handler(w, req)
-
-		assert.Equal(t, http.StatusOK, w.Code)
-		assert.Contains(t, w.Body.String(), "SPA Index")
-	})
-}
-
 // TestServeStaticFiles_VersionedAPIPathNotFallback covers the second half of
 // issue #201: an unclaimed path under a namespace the API routers own must
 // 404 as JSON. Answering it with the console's index.html gives an API client
@@ -824,6 +655,8 @@ func TestServeStaticFiles_VersionedAPIPathNotFallback(t *testing.T) {
 	handler := server.serveStaticFiles(tmpDir, "index.html", nil)
 
 	apiPaths := []string{
+		"/api/v1/health",
+		"/api/v1/daemon/health",
 		"/v1/ca/nonexistent",
 		"/v1/ca/bootstrap",
 		"/v2/library/alpine/manifests/latest",

@@ -200,96 +200,34 @@ func TestHandleUploadTemplate_Success(t *testing.T) {
 	assert.Equal(t, json.RawMessage(`{"key":"value"}`), json.RawMessage(tmplSvc.saved.Config))
 }
 
-// TestHandleUploadTemplate_MissingRole verifies a 400 response when role is empty.
-func TestHandleUploadTemplate_MissingRole(t *testing.T) {
-	tmplSvc := &mockTemplateService{}
-	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), tmplSvc, nil)
-
-	body := templateRequest{
-		Role:     "",
-		Template: json.RawMessage(`{"key":"value"}`),
+// TestHandleUploadTemplate_Errors verifies each rejected upload maps to its
+// status: a bad request is a 400, a missing or failing service a 500.
+func TestHandleUploadTemplate_Errors(t *testing.T) {
+	tests := []struct {
+		name    string
+		tmplSvc device.DeviceTemplateService
+		body    string
+		want    int
+	}{
+		{"missing role", &mockTemplateService{}, `{"role":"","template":{"key":"value"}}`, http.StatusBadRequest},
+		{"missing template", &mockTemplateService{}, `{"role":"server","template":null}`, http.StatusBadRequest},
+		{"invalid JSON", &mockTemplateService{}, "not json", http.StatusBadRequest},
+		{"save error", &mockTemplateService{saveErr: ErrTemplateSaveFailed{Cause: ErrMissingRole{}}}, `{"role":"server","template":{"key":"value"}}`, http.StatusInternalServerError},
+		{"nil template service", nil, "{}", http.StatusInternalServerError},
 	}
-	payload, err := json.Marshal(body)
-	require.NoError(t, err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), tt.tmplSvc, nil)
 
-	req := httptest.NewRequest(http.MethodPost, "/devices/templates", bytes.NewReader(payload))
-	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/devices/templates", bytes.NewReader([]byte(tt.body)))
+			req.Header.Set("Content-Type", "application/json")
+			rr := httptest.NewRecorder()
 
-	handler.HandleUploadTemplate(rr, req)
+			handler.HandleUploadTemplate(rr, req)
 
-	assert.Equal(t, http.StatusBadRequest, rr.Code)
-}
-
-// TestHandleUploadTemplate_MissingTemplate verifies a 400 response when template is empty.
-func TestHandleUploadTemplate_MissingTemplate(t *testing.T) {
-	tmplSvc := &mockTemplateService{}
-	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), tmplSvc, nil)
-
-	body := templateRequest{
-		Role:     "server",
-		Template: nil,
+			assert.Equal(t, tt.want, rr.Code)
+		})
 	}
-	payload, err := json.Marshal(body)
-	require.NoError(t, err)
-
-	req := httptest.NewRequest(http.MethodPost, "/devices/templates", bytes.NewReader(payload))
-	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
-
-	handler.HandleUploadTemplate(rr, req)
-
-	assert.Equal(t, http.StatusBadRequest, rr.Code)
-}
-
-// TestHandleUploadTemplate_InvalidJSON verifies a 400 response for malformed JSON.
-func TestHandleUploadTemplate_InvalidJSON(t *testing.T) {
-	tmplSvc := &mockTemplateService{}
-	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), tmplSvc, nil)
-
-	req := httptest.NewRequest(http.MethodPost, "/devices/templates", bytes.NewReader([]byte("not json")))
-	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
-
-	handler.HandleUploadTemplate(rr, req)
-
-	assert.Equal(t, http.StatusBadRequest, rr.Code)
-}
-
-// TestHandleUploadTemplate_SaveError verifies a 500 response when template service Save fails.
-func TestHandleUploadTemplate_SaveError(t *testing.T) {
-	tmplSvc := &mockTemplateService{
-		saveErr: ErrTemplateSaveFailed{Cause: ErrMissingRole{}},
-	}
-	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), tmplSvc, nil)
-
-	body := templateRequest{
-		Role:     "server",
-		Template: json.RawMessage(`{"key":"value"}`),
-	}
-	payload, err := json.Marshal(body)
-	require.NoError(t, err)
-
-	req := httptest.NewRequest(http.MethodPost, "/devices/templates", bytes.NewReader(payload))
-	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
-
-	handler.HandleUploadTemplate(rr, req)
-
-	assert.Equal(t, http.StatusInternalServerError, rr.Code)
-}
-
-// TestHandleUploadTemplate_NilTemplateService verifies a 500 response when
-// the template service is nil.
-func TestHandleUploadTemplate_NilTemplateService(t *testing.T) {
-	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), nil, nil)
-
-	req := httptest.NewRequest(http.MethodPost, "/devices/templates", bytes.NewReader([]byte("{}")))
-	rr := httptest.NewRecorder()
-
-	handler.HandleUploadTemplate(rr, req)
-
-	assert.Equal(t, http.StatusInternalServerError, rr.Code)
 }
 
 // TestHandleCreateProfile_Success verifies a profile is created from a template.
@@ -570,135 +508,37 @@ func TestHandleCreateProfile_WithConfigOverrides(t *testing.T) {
 	assert.Equal(t, "host-03", osOverrides["hostname"])
 }
 
-// TestHandleCreateProfile_MissingHostname verifies a 400 response when hostname is empty.
-func TestHandleCreateProfile_MissingHostname(t *testing.T) {
-	templateID := util.NewID([]byte("gateway"))
-	tmplSvc := &mockTemplateService{}
-	profSvc := &mockProfileService{}
-	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), tmplSvc, profSvc)
-
-	body := profileRequest{
-		MAC:  "aa:bb:cc:dd:ee:ff",
-		Role: "gateway",
+// TestHandleCreateProfile_Errors verifies each rejected create-profile request
+// maps to its status: a bad request is a 400, a missing or failing service a 500.
+func TestHandleCreateProfile_Errors(t *testing.T) {
+	tests := []struct {
+		name    string
+		id      string
+		body    string
+		tmplSvc device.DeviceTemplateService
+		profSvc device.DeviceProfileService
+		want    int
+	}{
+		{"missing hostname", "1", `{"mac":"aa:bb:cc:dd:ee:ff","role":"gateway"}`, &mockTemplateService{}, &mockProfileService{}, http.StatusBadRequest},
+		{"invalid template id", "abc", "{}", &mockTemplateService{}, &mockProfileService{}, http.StatusBadRequest},
+		{"invalid JSON", "1", "bad json", &mockTemplateService{}, &mockProfileService{}, http.StatusBadRequest},
+		{"to profile error", "1", `{"hostname":"node-01","role":"gateway"}`, &mockTemplateService{toErr: ErrProfileCreateFailed{}}, &mockProfileService{}, http.StatusInternalServerError},
+		{"nil template service", "123", "{}", nil, &mockProfileService{}, http.StatusInternalServerError},
+		{"nil profile service", "123", "{}", &mockTemplateService{}, nil, http.StatusInternalServerError},
 	}
-	payload, err := json.Marshal(body)
-	require.NoError(t, err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), tt.tmplSvc, tt.profSvc)
 
-	req := httptest.NewRequest(http.MethodPost, "/devices/templates/"+strconv.FormatUint(templateID, 10)+"/create-profile", bytes.NewReader(payload))
-	req = mux.SetURLVars(req, map[string]string{"id": strconv.FormatUint(templateID, 10)})
-	rr := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/devices/templates/"+tt.id+"/create-profile", bytes.NewReader([]byte(tt.body)))
+			req = mux.SetURLVars(req, map[string]string{"id": tt.id})
+			rr := httptest.NewRecorder()
 
-	handler.HandleCreateProfile(rr, req)
+			handler.HandleCreateProfile(rr, req)
 
-	assert.Equal(t, http.StatusBadRequest, rr.Code)
-}
-
-// TestHandleCreateProfile_InvalidTemplateID verifies a 400 response for non-numeric template ID.
-func TestHandleCreateProfile_InvalidTemplateID(t *testing.T) {
-	tmplSvc := &mockTemplateService{}
-	profSvc := &mockProfileService{}
-	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), tmplSvc, profSvc)
-
-	req := httptest.NewRequest(http.MethodPost, "/devices/templates/abc/create-profile", bytes.NewReader([]byte("{}")))
-	req = mux.SetURLVars(req, map[string]string{"id": "abc"})
-	rr := httptest.NewRecorder()
-
-	handler.HandleCreateProfile(rr, req)
-
-	assert.Equal(t, http.StatusBadRequest, rr.Code)
-}
-
-// TestHandleCreateProfile_ToProfileError verifies a 500 response when ToProfile fails.
-func TestHandleCreateProfile_ToProfileError(t *testing.T) {
-	templateID := util.NewID([]byte("gateway"))
-	tmplSvc := &mockTemplateService{toErr: ErrProfileCreateFailed{}}
-	profSvc := &mockProfileService{}
-	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), tmplSvc, profSvc)
-
-	body := profileRequest{
-		Hostname: "node-01",
-		Role:     "gateway",
+			assert.Equal(t, tt.want, rr.Code)
+		})
 	}
-	payload, err := json.Marshal(body)
-	require.NoError(t, err)
-
-	req := httptest.NewRequest(http.MethodPost, "/devices/templates/"+strconv.FormatUint(templateID, 10)+"/create-profile", bytes.NewReader(payload))
-	req = mux.SetURLVars(req, map[string]string{"id": strconv.FormatUint(templateID, 10)})
-	rr := httptest.NewRecorder()
-
-	handler.HandleCreateProfile(rr, req)
-
-	assert.Equal(t, http.StatusInternalServerError, rr.Code)
-}
-
-// TestHandleCreateProfile_SaveError verifies a 500 response when profile save fails.
-func TestHandleCreateProfile_SaveError(t *testing.T) {
-	templateID := util.NewID([]byte("gateway"))
-	profile := &entities.DeviceProfile{
-		ID:   util.NewID([]byte("node-01")),
-		Name: "node-01",
-	}
-	tmplSvc := &mockTemplateService{profile: profile}
-	profSvc := &mockProfileService{saveErr: ErrProfileSaveFailed{}}
-	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), tmplSvc, profSvc)
-
-	body := profileRequest{
-		Hostname: "node-01",
-		Role:     "gateway",
-	}
-	payload, err := json.Marshal(body)
-	require.NoError(t, err)
-
-	req := httptest.NewRequest(http.MethodPost, "/devices/templates/"+strconv.FormatUint(templateID, 10)+"/create-profile", bytes.NewReader(payload))
-	req = mux.SetURLVars(req, map[string]string{"id": strconv.FormatUint(templateID, 10)})
-	rr := httptest.NewRecorder()
-
-	handler.HandleCreateProfile(rr, req)
-
-	assert.Equal(t, http.StatusInternalServerError, rr.Code)
-}
-
-// TestHandleCreateProfile_NilTemplateService verifies a 500 response when template service is nil.
-func TestHandleCreateProfile_NilTemplateService(t *testing.T) {
-	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), nil, &mockProfileService{})
-
-	req := httptest.NewRequest(http.MethodPost, "/devices/templates/123/create-profile", bytes.NewReader([]byte("{}")))
-	req = mux.SetURLVars(req, map[string]string{"id": "123"})
-	rr := httptest.NewRecorder()
-
-	handler.HandleCreateProfile(rr, req)
-
-	assert.Equal(t, http.StatusInternalServerError, rr.Code)
-}
-
-// TestHandleCreateProfile_NilProfileService verifies a 500 response when profile service is nil.
-func TestHandleCreateProfile_NilProfileService(t *testing.T) {
-	tmplSvc := &mockTemplateService{}
-	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), tmplSvc, nil)
-
-	req := httptest.NewRequest(http.MethodPost, "/devices/templates/123/create-profile", bytes.NewReader([]byte("{}")))
-	req = mux.SetURLVars(req, map[string]string{"id": "123"})
-	rr := httptest.NewRecorder()
-
-	handler.HandleCreateProfile(rr, req)
-
-	assert.Equal(t, http.StatusInternalServerError, rr.Code)
-}
-
-// TestHandleCreateProfile_InvalidJSON verifies a 400 response for malformed JSON body.
-func TestHandleCreateProfile_InvalidJSON(t *testing.T) {
-	templateID := util.NewID([]byte("gateway"))
-	tmplSvc := &mockTemplateService{}
-	profSvc := &mockProfileService{}
-	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), tmplSvc, profSvc)
-
-	req := httptest.NewRequest(http.MethodPost, "/devices/templates/"+strconv.FormatUint(templateID, 10)+"/create-profile", bytes.NewReader([]byte("bad json")))
-	req = mux.SetURLVars(req, map[string]string{"id": strconv.FormatUint(templateID, 10)})
-	rr := httptest.NewRecorder()
-
-	handler.HandleCreateProfile(rr, req)
-
-	assert.Equal(t, http.StatusBadRequest, rr.Code)
 }
 
 // TestHandleGetConfig_ByMAC verifies that a config is returned as raw YAML
@@ -762,23 +602,6 @@ func TestHandleGetConfig_StoredNumbersArePlainYAML(t *testing.T) {
 	assert.NotContains(t, body, `"`)
 }
 
-// A stored config whose json.Number holds no number cannot be delivered.
-func TestHandleGetConfig_InvalidStoredNumber(t *testing.T) {
-	profile := &entities.DeviceProfile{
-		ID:     42,
-		Config: map[string]interface{}{"port": json.Number("not-a-number")},
-	}
-	profSvc := &mockProfileService{findByMAC: profile}
-	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), nil, profSvc)
-
-	req := httptest.NewRequest(http.MethodGet, "/devices/config?mac=aa:bb:cc:dd:ee:ff", nil)
-	rr := httptest.NewRecorder()
-
-	handler.HandleGetConfig(rr, req)
-
-	assert.Equal(t, http.StatusInternalServerError, rr.Code)
-}
-
 // TestHandleGetConfig_BySerial verifies that a config is returned when
 // looking up a profile by serial number (MAC not found).
 func TestHandleGetConfig_BySerial(t *testing.T) {
@@ -831,35 +654,35 @@ func TestHandleGetConfig_ByMatchRules(t *testing.T) {
 	assert.Contains(t, rr.Body.String(), "hostname: node-03")
 }
 
-// TestHandleGetConfig_MissingQueryParams verifies a 400 response when neither
-// mac nor serial query parameters are provided.
-func TestHandleGetConfig_MissingQueryParams(t *testing.T) {
-	profSvc := &mockProfileService{}
-	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), nil, profSvc)
-
-	req := httptest.NewRequest(http.MethodGet, "/devices/config", nil)
-	rr := httptest.NewRecorder()
-
-	handler.HandleGetConfig(rr, req)
-
-	assert.Equal(t, http.StatusBadRequest, rr.Code)
-}
-
-// TestHandleGetConfig_ProfileNotFound verifies a 404 response when no profile
-// matches the provided identifiers.
-func TestHandleGetConfig_ProfileNotFound(t *testing.T) {
-	profSvc := &mockProfileService{
-		findByMACErr:    ErrProfileNotFound{MAC: "aa:bb:cc:dd:ee:ff"},
-		findMatchingErr: ErrProfileNotFound{MAC: "aa:bb:cc:dd:ee:ff"},
+// TestHandleGetConfig_Errors verifies each failed config lookup maps to its
+// status: no identifier is a 400, no profile a 404, and a missing service or
+// an undeliverable stored config a 500.
+func TestHandleGetConfig_Errors(t *testing.T) {
+	notFound := ErrProfileNotFound{MAC: "aa:bb:cc:dd:ee:ff"}
+	tests := []struct {
+		name    string
+		url     string
+		profSvc device.DeviceProfileService
+		want    int
+	}{
+		{"missing query params", "/devices/config", &mockProfileService{}, http.StatusBadRequest},
+		{"profile not found", "/devices/config?mac=aa:bb:cc:dd:ee:ff", &mockProfileService{findByMACErr: notFound, findMatchingErr: notFound}, http.StatusNotFound},
+		{"nil profile service", "/devices/config?mac=aa:bb:cc:dd:ee:ff", nil, http.StatusInternalServerError},
+		{"invalid stored number", "/devices/config?mac=aa:bb:cc:dd:ee:ff", &mockProfileService{findByMAC: &entities.DeviceProfile{
+			ID:     42,
+			Config: map[string]interface{}{"port": json.Number("not-a-number")},
+		}}, http.StatusInternalServerError},
 	}
-	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), nil, profSvc)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), nil, tt.profSvc)
 
-	req := httptest.NewRequest(http.MethodGet, "/devices/config?mac=aa:bb:cc:dd:ee:ff", nil)
-	rr := httptest.NewRecorder()
+			rr := httptest.NewRecorder()
+			handler.HandleGetConfig(rr, httptest.NewRequest(http.MethodGet, tt.url, nil))
 
-	handler.HandleGetConfig(rr, req)
-
-	assert.Equal(t, http.StatusNotFound, rr.Code)
+			assert.Equal(t, tt.want, rr.Code)
+		})
+	}
 }
 
 // TestHandleGetConfig_ProfileConfigEmpty verifies a 404 response when the
@@ -880,19 +703,6 @@ func TestHandleGetConfig_ProfileConfigEmpty(t *testing.T) {
 
 	assert.Equal(t, http.StatusNotFound, rr.Code)
 	assert.Contains(t, rr.Body.String(), "no config")
-}
-
-// TestHandleGetConfig_NilProfileService verifies a 500 response when the
-// profile service is not initialized.
-func TestHandleGetConfig_NilProfileService(t *testing.T) {
-	handler := NewDeviceTemplateHandlers(testLogger(), testResponseWriter(), nil, nil)
-
-	req := httptest.NewRequest(http.MethodGet, "/devices/config?mac=aa:bb:cc:dd:ee:ff", nil)
-	rr := httptest.NewRecorder()
-
-	handler.HandleGetConfig(rr, req)
-
-	assert.Equal(t, http.StatusInternalServerError, rr.Code)
 }
 
 // TestHandleGetConfig_MACTakesPriorityOverSerial verifies that when both mac

@@ -125,7 +125,7 @@ func runPIVScenario(t *testing.T, ctx context.Context, cmd PIVCommands) {
 		defer cancel()
 		_, err := cmd.Import(cctx, &pivsdk.ImportRequest{
 			Slot:          "9a",
-			PrivateKeyPEM: "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n",
+			PrivateKeyPEM: genTestKeyPEM(),
 			PIN:           "123456",
 		})
 		// Import fails closed (ErrPIVKeyImportUnsupported): reporting

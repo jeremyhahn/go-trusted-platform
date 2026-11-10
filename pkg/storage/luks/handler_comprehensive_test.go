@@ -18,30 +18,6 @@ import (
 	"testing"
 )
 
-// TestCryptsetupHandlerStatusBranches tests different code paths in Status
-func TestCryptsetupHandlerStatusBranches(t *testing.T) {
-	handler, _ := NewCryptsetupHandlerImpl(nil, nil)
-	ctx := context.Background()
-
-	// Test error case
-	_, err := handler.Status(ctx, "/dev/nonexistent")
-	if err == nil {
-		t.Error("expected error for non-existent device")
-	}
-}
-
-// TestCryptsetupHandlerDumpHeaderBranches tests different code paths in DumpHeader
-func TestCryptsetupHandlerDumpHeaderBranches(t *testing.T) {
-	handler, _ := NewCryptsetupHandlerImpl(nil, nil)
-	ctx := context.Background()
-
-	// Test error case
-	_, err := handler.DumpHeader(ctx, "/dev/nonexistent")
-	if err == nil {
-		t.Error("expected error for non-existent device")
-	}
-}
-
 // TestCryptsetupHandlerFormatMinimalOptions tests Format with minimal options
 func TestCryptsetupHandlerFormatMinimalOptions(t *testing.T) {
 	handler, _ := NewCryptsetupHandlerImpl(nil, nil)

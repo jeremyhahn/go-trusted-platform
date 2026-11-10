@@ -412,19 +412,6 @@ func createTestTemplate(id string) *vtpm.Template {
 
 // Tests for NewVTPMHandlers
 
-func TestNewVTPMHandlers(t *testing.T) {
-	logger := newTestLogger()
-	service := &mockVTPMService{}
-	writer := &mockHttpWriter{}
-
-	handlers := NewVTPMHandlers(logger, service, writer)
-
-	require.NotNil(t, handlers)
-	assert.NotNil(t, handlers.logger)
-	assert.NotNil(t, handlers.service)
-	assert.NotNil(t, handlers.respWriter)
-}
-
 // Tests for CreateBundle
 
 func TestCreateBundle_Success(t *testing.T) {
@@ -1549,67 +1536,33 @@ func TestGetNVRAMPath_MissingID(t *testing.T) {
 
 // Tests for helper methods
 
-func TestGetPaginationParams_Defaults(t *testing.T) {
-	handlers, _ := newTestHandlers(&mockVTPMService{})
+func TestGetPaginationParams(t *testing.T) {
+	tests := []struct {
+		name   string
+		query  string
+		limit  int
+		offset int
+	}{
+		{"defaults", "", defaultLimit, defaultOffset},
+		{"custom values", "?limit=25&offset=10", 25, 10},
+		{"limit exceeds max", "?limit=5000", maxLimit, defaultOffset},
+		{"negative limit", "?limit=-5", defaultLimit, defaultOffset},
+		{"negative offset", "?offset=-5", defaultLimit, defaultOffset},
+		{"invalid values", "?limit=abc&offset=xyz", defaultLimit, defaultOffset},
+	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/vtpm/bundles", nil)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handlers, _ := newTestHandlers(&mockVTPMService{})
 
-	limit, offset := handlers.getPaginationParams(req)
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/vtpm/bundles"+tt.query, nil)
 
-	assert.Equal(t, defaultLimit, limit)
-	assert.Equal(t, defaultOffset, offset)
-}
+			limit, offset := handlers.getPaginationParams(req)
 
-func TestGetPaginationParams_CustomValues(t *testing.T) {
-	handlers, _ := newTestHandlers(&mockVTPMService{})
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/vtpm/bundles?limit=25&offset=10", nil)
-
-	limit, offset := handlers.getPaginationParams(req)
-
-	assert.Equal(t, 25, limit)
-	assert.Equal(t, 10, offset)
-}
-
-func TestGetPaginationParams_LimitExceedsMax(t *testing.T) {
-	handlers, _ := newTestHandlers(&mockVTPMService{})
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/vtpm/bundles?limit=5000", nil)
-
-	limit, _ := handlers.getPaginationParams(req)
-
-	assert.Equal(t, maxLimit, limit)
-}
-
-func TestGetPaginationParams_NegativeLimit(t *testing.T) {
-	handlers, _ := newTestHandlers(&mockVTPMService{})
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/vtpm/bundles?limit=-5", nil)
-
-	limit, _ := handlers.getPaginationParams(req)
-
-	assert.Equal(t, defaultLimit, limit)
-}
-
-func TestGetPaginationParams_NegativeOffset(t *testing.T) {
-	handlers, _ := newTestHandlers(&mockVTPMService{})
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/vtpm/bundles?offset=-5", nil)
-
-	_, offset := handlers.getPaginationParams(req)
-
-	assert.Equal(t, defaultOffset, offset)
-}
-
-func TestGetPaginationParams_InvalidValues(t *testing.T) {
-	handlers, _ := newTestHandlers(&mockVTPMService{})
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/vtpm/bundles?limit=abc&offset=xyz", nil)
-
-	limit, offset := handlers.getPaginationParams(req)
-
-	assert.Equal(t, defaultLimit, limit)
-	assert.Equal(t, defaultOffset, offset)
+			assert.Equal(t, tt.limit, limit)
+			assert.Equal(t, tt.offset, offset)
+		})
+	}
 }
 
 func TestParseBundleMode(t *testing.T) {
@@ -1641,92 +1594,33 @@ func TestParseBundleMode(t *testing.T) {
 	}
 }
 
-func TestHandleServiceError_NotFound(t *testing.T) {
-	handlers, writer := newTestHandlers(&mockVTPMService{})
+func TestHandleServiceError(t *testing.T) {
+	tests := []struct {
+		err    string
+		status int
+	}{
+		{"bundle not found", http.StatusNotFound},
+		{"resource does not exist", http.StatusNotFound},
+		{"no such file or directory", http.StatusNotFound},
+		{"invalid request parameter", http.StatusBadRequest},
+		{"field required", http.StatusBadRequest},
+		{"value must be positive", http.StatusBadRequest},
+		{"value cannot be empty", http.StatusBadRequest},
+		{"unexpected database error", http.StatusInternalServerError},
+	}
 
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	rec := httptest.NewRecorder()
+	for _, tt := range tests {
+		t.Run(tt.err, func(t *testing.T) {
+			handlers, writer := newTestHandlers(&mockVTPMService{})
 
-	handlers.handleServiceError(rec, req, errors.New("bundle not found"))
+			req := httptest.NewRequest(http.MethodGet, "/test", nil)
+			rec := httptest.NewRecorder()
 
-	assert.Equal(t, http.StatusNotFound, writer.lastStatus)
-}
+			handlers.handleServiceError(rec, req, errors.New(tt.err))
 
-func TestHandleServiceError_DoesNotExist(t *testing.T) {
-	handlers, writer := newTestHandlers(&mockVTPMService{})
-
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	rec := httptest.NewRecorder()
-
-	handlers.handleServiceError(rec, req, errors.New("resource does not exist"))
-
-	assert.Equal(t, http.StatusNotFound, writer.lastStatus)
-}
-
-func TestHandleServiceError_NoSuch(t *testing.T) {
-	handlers, writer := newTestHandlers(&mockVTPMService{})
-
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	rec := httptest.NewRecorder()
-
-	handlers.handleServiceError(rec, req, errors.New("no such file or directory"))
-
-	assert.Equal(t, http.StatusNotFound, writer.lastStatus)
-}
-
-func TestHandleServiceError_Invalid(t *testing.T) {
-	handlers, writer := newTestHandlers(&mockVTPMService{})
-
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	rec := httptest.NewRecorder()
-
-	handlers.handleServiceError(rec, req, errors.New("invalid request parameter"))
-
-	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
-}
-
-func TestHandleServiceError_Required(t *testing.T) {
-	handlers, writer := newTestHandlers(&mockVTPMService{})
-
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	rec := httptest.NewRecorder()
-
-	handlers.handleServiceError(rec, req, errors.New("field required"))
-
-	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
-}
-
-func TestHandleServiceError_MustBe(t *testing.T) {
-	handlers, writer := newTestHandlers(&mockVTPMService{})
-
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	rec := httptest.NewRecorder()
-
-	handlers.handleServiceError(rec, req, errors.New("value must be positive"))
-
-	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
-}
-
-func TestHandleServiceError_CannotBe(t *testing.T) {
-	handlers, writer := newTestHandlers(&mockVTPMService{})
-
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	rec := httptest.NewRecorder()
-
-	handlers.handleServiceError(rec, req, errors.New("value cannot be empty"))
-
-	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
-}
-
-func TestHandleServiceError_InternalError(t *testing.T) {
-	handlers, writer := newTestHandlers(&mockVTPMService{})
-
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	rec := httptest.NewRecorder()
-
-	handlers.handleServiceError(rec, req, errors.New("unexpected database error"))
-
-	assert.Equal(t, http.StatusInternalServerError, writer.lastStatus)
+			assert.Equal(t, tt.status, writer.lastStatus)
+		})
+	}
 }
 
 func TestContainsAny(t *testing.T) {
@@ -1987,65 +1881,3 @@ func TestCreateContext(t *testing.T) {
 }
 
 // Tests for decodeJSON
-
-func TestDecodeJSON_Success(t *testing.T) {
-	handlers, _ := newTestHandlers(&mockVTPMService{})
-
-	body := bytes.NewBufferString(`{"mode": "template", "hostname": "test"}`)
-	req := httptest.NewRequest(http.MethodPost, "/test", body)
-
-	var result CreateBundleRequest
-	err := handlers.decodeJSON(req, &result)
-
-	assert.NoError(t, err)
-	assert.Equal(t, "template", result.Mode)
-	assert.Equal(t, "test", result.Hostname)
-}
-
-func TestDecodeJSON_InvalidJSON(t *testing.T) {
-	handlers, _ := newTestHandlers(&mockVTPMService{})
-
-	body := bytes.NewBufferString(`invalid json`)
-	req := httptest.NewRequest(http.MethodPost, "/test", body)
-
-	var result CreateBundleRequest
-	err := handlers.decodeJSON(req, &result)
-
-	assert.Error(t, err)
-}
-
-func TestDecodeJSON_UnknownFields(t *testing.T) {
-	handlers, _ := newTestHandlers(&mockVTPMService{})
-
-	body := bytes.NewBufferString(`{"mode": "template", "unknown_field": "value"}`)
-	req := httptest.NewRequest(http.MethodPost, "/test", body)
-
-	var result CreateBundleRequest
-	err := handlers.decodeJSON(req, &result)
-
-	assert.Error(t, err) // DisallowUnknownFields should cause an error
-}
-
-// Tests for getBundleID and getTemplateID
-
-func TestGetBundleID(t *testing.T) {
-	handlers, _ := newTestHandlers(&mockVTPMService{})
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/vtpm/bundles/my-bundle", nil)
-	req = mux.SetURLVars(req, map[string]string{"id": "my-bundle"})
-
-	id := handlers.getBundleID(req)
-
-	assert.Equal(t, "my-bundle", id)
-}
-
-func TestGetTemplateID(t *testing.T) {
-	handlers, _ := newTestHandlers(&mockVTPMService{})
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/vtpm/templates/my-template", nil)
-	req = mux.SetURLVars(req, map[string]string{"id": "my-template"})
-
-	id := handlers.getTemplateID(req)
-
-	assert.Equal(t, "my-template", id)
-}

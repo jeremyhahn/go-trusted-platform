@@ -123,8 +123,7 @@ func runCustomize(ctx context.Context, commonFlags *cli.CommonFlags, flags *cust
 		platformConfig.Directories.Overlay = flags.overlay
 	}
 
-	customizer := pkgiso.NewCustomizer(platformConfig, newVerbLogger(flags.debug))
-	if err := customizer.CustomizeAll(ctx); err != nil {
+	if err := isoCustomize(ctx, platformConfig, newVerbLogger(flags.debug)); err != nil {
 		return ErrCustomizationFailed{Reason: err.Error()}
 	}
 
