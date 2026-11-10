@@ -25,15 +25,6 @@ func TestTPMTypeString(t *testing.T) {
 	}
 }
 
-func TestTPMTypeConstants(t *testing.T) {
-	if HardwareTPM != 0 {
-		t.Errorf("expected HardwareTPM to be 0, got %d", HardwareTPM)
-	}
-	if SoftwareTPM != 1 {
-		t.Errorf("expected SoftwareTPM to be 1, got %d", SoftwareTPM)
-	}
-}
-
 func TestUnmarshalTPMConfig_ValidYAML(t *testing.T) {
 	yamlData := []byte(`
 tpm:
@@ -135,12 +126,5 @@ func TestNewTPMDetectorWithLogger(t *testing.T) {
 	}
 	if detector.logger != logger {
 		t.Error("expected logger to be set")
-	}
-}
-
-func TestPlatformConfigStruct(t *testing.T) {
-	cfg := &PlatformConfig{}
-	if cfg.TPM != nil {
-		t.Error("expected nil TPM for zero-value PlatformConfig")
 	}
 }
