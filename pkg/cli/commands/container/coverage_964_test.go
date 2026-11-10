@@ -8,17 +8,14 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -35,7 +32,6 @@ type fakeComputeServer struct {
 	err       error
 	container *platformv1.Container
 	status    *platformv1.Status
-	logs      []*platformv1.LogEntry
 
 	createReq *platformv1.CreateContainerRequest
 	stopReq   *platformv1.StopContainerRequest
@@ -108,22 +104,6 @@ func (f *fakeComputeServer) ListContainers(_ context.Context, req *platformv1.Li
 		containers = append(containers, f.container)
 	}
 	return &platformv1.ListContainersResponse{Containers: containers}, nil
-}
-
-func (f *fakeComputeServer) GetContainerLogs(req *platformv1.GetContainerLogsRequest, stream grpc.ServerStreamingServer[platformv1.LogEntry]) error {
-	f.mu.Lock()
-	f.lastID = req.GetId()
-	err, logs := f.err, f.logs
-	f.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	for _, entry := range logs {
-		if sendErr := stream.Send(entry); sendErr != nil {
-			return sendErr
-		}
-	}
-	return nil
 }
 
 func (f *fakeComputeServer) requestedID() string {
@@ -556,50 +536,4 @@ func TestRunAttest(t *testing.T) {
 	srv.err = errDaemon
 	_, err = runCaptured(t, func() error { return runAttest(computeFlags(sock, cli.OutputFormatJSON), "c-404", &attestOptions{}) })
 	assert.ErrorAs(t, err, &ErrContainerNotFound{})
-}
-
-func TestRunLogs(t *testing.T) {
-	stamp := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
-	srv := &fakeComputeServer{logs: []*platformv1.LogEntry{
-		{Timestamp: timestamppb.New(stamp), Message: "first", Source: "stdout"},
-		{Message: "second", Source: "stderr"},
-	}}
-	sock := startComputeServer(t, srv)
-
-	out, err := runCaptured(t, func() error {
-		return runLogs(computeFlags(sock, cli.OutputFormatTable), "c-964", &logsOptions{timestamps: true, stdout: true})
-	})
-	require.NoError(t, err)
-	assert.Equal(t, "2026-10-30T12:00:00Z first\nsecond\n", out, "an entry without a time prints bare")
-	assert.Equal(t, "c-964", srv.requestedID())
-
-	out, err = runCaptured(t, func() error {
-		return runLogs(computeFlags(sock, cli.OutputFormatTable), "c-964", &logsOptions{})
-	})
-	require.NoError(t, err)
-	assert.Equal(t, "first\nsecond\n", out)
-
-	out, err = runCaptured(t, func() error {
-		return runLogs(computeFlags(sock, cli.OutputFormatJSON), "c-964", &logsOptions{})
-	})
-	require.NoError(t, err)
-	var batch struct {
-		Count int `json:"count"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(out), &batch))
-	assert.Equal(t, 2, batch.Count)
-
-	srv.err = errDaemon
-	_, err = runCaptured(t, func() error {
-		return runLogs(computeFlags(sock, cli.OutputFormatJSON), "c-964", &logsOptions{})
-	})
-	var opErr ErrContainerOperationFailed
-	require.ErrorAs(t, err, &opErr)
-	assert.Equal(t, "logs", opErr.Operation)
-
-	_, err = runCaptured(t, func() error {
-		return runLogs(computeFlags(sock, cli.OutputFormatTable), "c-964", &logsOptions{})
-	})
-	require.Error(t, err)
-	assert.True(t, strings.Contains(err.Error(), "daemon refused"))
 }
