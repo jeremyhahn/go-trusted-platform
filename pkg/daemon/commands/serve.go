@@ -1177,7 +1177,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		if platformDaemon != nil {
 			if iamSvc := platformDaemon.IAMService(); iamSvc != nil {
 				if c := iamSvc.Client(); c != nil {
-					iamClient = restiam.NewQuicBaaSIAMAdapter(c)
+					iamClient = webserviceIAMClient(c, App.QuicBaaSConfig)
 				}
 				if p := iamSvc.PEP(); p != nil {
 					pepClient = restiam.NewQuicBaaSPEPAdapter(p)
