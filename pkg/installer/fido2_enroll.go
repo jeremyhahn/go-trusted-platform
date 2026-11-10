@@ -15,6 +15,7 @@ package installer
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -215,6 +216,10 @@ func (f *FIDO2Enrollment) DetectDevice() (string, error) {
 		return "", &MessageError{Msg: "FIDO2 device does not support hmac-secret extension. This device cannot be used for LUKS encryption"}
 	}
 
+	// An authenticator with a PIN set needs the PIN to create a credential.
+	f.devicePath = devicePath
+	f.clientPIN = fido2ClientPINSet(string(infoOutput))
+
 	return devicePath, nil
 }
 
@@ -330,13 +335,22 @@ func (f *FIDO2Enrollment) enrollWithHandler(ctx context.Context, handler fido2.H
 		return &WrappedError{Msg: "failed to generate user ID", Err: err}
 	}
 
-	fmt.Println("Creating FIDO2 credential (touch your security key)...")
-	result, err := awaitAuthenticator(ctx, session, "create the credential", func(handler fido2.Handler) (*fido2.EnrollmentResult, error) {
-		return handler.EnrollKey(&fido2.EnrollmentConfig{
-			RelyingParty: fido2.RelyingParty{ID: f.config.RelyingPartyID, Name: f.config.RelyingPartyID},
-			User:         fido2.User{ID: userID, Name: f.config.UserName, DisplayName: f.config.UserName},
-		})
-	}, discardNothing[*fido2.EnrollmentResult])
+	var result *fido2.EnrollmentResult
+	var err error
+	if f.clientPIN {
+		// MakeCredential without a PIN answers PIN_REQUIRED once a PIN is
+		// set, and the SDK's EnrollKey has no PIN input.
+		fmt.Println("Creating FIDO2 credential (your security key will ask for its PIN, then touch it)...")
+		result, err = f.createCredentialWithPIN(ctx, userID)
+	} else {
+		fmt.Println("Creating FIDO2 credential (touch your security key)...")
+		result, err = awaitAuthenticator(ctx, session, fido2CreateStep, func(handler fido2.Handler) (*fido2.EnrollmentResult, error) {
+			return handler.EnrollKey(&fido2.EnrollmentConfig{
+				RelyingParty: fido2.RelyingParty{ID: f.config.RelyingPartyID, Name: f.config.RelyingPartyID},
+				User:         fido2.User{ID: userID, Name: f.config.UserName, DisplayName: f.config.UserName},
+			})
+		}, discardNothing[*fido2.EnrollmentResult])
+	}
 	if errors.As(err, new(*FIDO2CanceledError)) {
 		return err
 	}
@@ -439,6 +453,71 @@ func (f *FIDO2Enrollment) enrollWithHandler(ctx context.Context, handler fido2.H
 	fmt.Printf("Your LUKS device can now be unlocked with your security key (slot %d)\n", f.config.TargetKeyslot)
 
 	return nil
+}
+
+// fido2CreateStep names the credential creation in a cancellation error.
+const fido2CreateStep = "create the credential"
+
+// fido2ClientPINSet reports whether the fido2-token -I output lists the
+// clientPin option as set. An option that is off is printed with the prefix
+// "no" (noclientPin).
+func fido2ClientPINSet(info string) bool {
+	for _, line := range strings.Split(info, "\n") {
+		options, ok := strings.CutPrefix(strings.TrimSpace(line), "options:")
+		if !ok {
+			continue
+		}
+		for _, option := range strings.Split(options, ",") {
+			if strings.TrimSpace(option) == "clientPin" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// createCredentialWithPIN creates the credential with fido2-cred, which asks
+// for the authenticator's PIN on the terminal itself: the installer never
+// reads, stores or prints the PIN. The tool runs under ctx and holds the
+// authenticator like any other operation.
+func (f *FIDO2Enrollment) createCredentialWithPIN(ctx context.Context, userID []byte) (*fido2.EnrollmentResult, error) {
+	challengeHash := sha256.Sum256([]byte("luks-enrollment-challenge"))
+	challengeB64 := base64.StdEncoding.EncodeToString(challengeHash[:])
+	userIDB64 := base64.StdEncoding.EncodeToString(userID)
+	credParams := fmt.Sprintf("%s\n%s\n%s\n%s\n", challengeB64, f.config.RelyingPartyID, f.config.UserName, userIDB64)
+	if f.config.Debug {
+		fmt.Printf("fido2-cred parameters:\n%s\n", credParams)
+	}
+
+	if err := acquireFIDO2Operation(ctx, fido2CreateStep); err != nil {
+		return nil, err
+	}
+	// -h asks for the hmac-secret extension.
+	credOutput, err := fido2Command(ctx, credParams, "fido2-cred", "-M", "-h", f.devicePath)
+	<-fido2Operation
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, &FIDO2CanceledError{Step: fido2CreateStep, Err: ctxErr}
+	}
+	if err != nil {
+		return nil, &WrappedError{Msg: "fido2-cred failed to create the credential", Err: err}
+	}
+	if f.config.Debug {
+		fmt.Printf("fido2-cred output:\n%s\n", string(credOutput))
+	}
+
+	credLines := strings.Split(strings.TrimSpace(string(credOutput)), "\n")
+	if len(credLines) < 5 {
+		return nil, &MessageError{Msg: fmt.Sprintf("failed to extract credential from fido2-cred output: expected at least 5 lines, got %d", len(credLines))}
+	}
+	// Line 4 is the credential ID.
+	credentialID, err := base64.StdEncoding.DecodeString(strings.TrimSpace(credLines[4]))
+	if err != nil {
+		return nil, &WrappedError{Msg: "invalid credential ID (not valid base64)", Err: err}
+	}
+	return &fido2.EnrollmentResult{
+		CredentialID: credentialID,
+		RelyingParty: fido2.RelyingParty{ID: f.config.RelyingPartyID, Name: f.config.RelyingPartyID},
+	}, nil
 }
 
 // rollbackKeyslot removes the keyslot this enrolment added and returns

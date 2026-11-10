@@ -144,8 +144,13 @@ under the platform keyslot policy, zeroes it, and writes a LUKS2 token of type
 `fido2-credential` and `fido2-salt`, `fido2-rp` and `fido2-up-required`. The
 initrd finds the slot from this token's `keyslots`, not from its own
 configured slot index ([`docs/luks/architecture.md`](../luks/architecture.md) §3).
-Enrolment does not use `fido2-cred` or `fido2-assert`; `fido2-token` still
-detects the device. `Enroll` honours its context: it checks the context before
+`fido2-token` detects the device, and its `-I` output tells whether a client
+PIN is set (the option `clientPin`; `noclientPin` when it is not). With a PIN
+set, MakeCredential without one answers PIN_REQUIRED and `EnrollKey` has no
+PIN input, so the installer creates the credential with `fido2-cred -M -h`,
+which asks for the PIN on the terminal itself; the installer never reads it.
+Without a PIN, enrolment does not use `fido2-cred`. It never uses
+`fido2-assert`. `Enroll` honours its context: it checks the context before
 each authenticator call, before the keyslot is added and before the token is
 written. It runs each blocking authenticator call in a goroutine and returns
 as soon as the context ends. A cancelled enrolment returns

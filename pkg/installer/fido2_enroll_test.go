@@ -657,6 +657,25 @@ func TestFIDO2EnrollmentClientPIN(t *testing.T) {
 	})
 }
 
+func TestFIDO2ClientPINSet(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		info string
+		want bool
+	}{
+		{name: "clientPin", info: "extension strings: hmac-secret\noptions: rk, up, noplat, clientPin, credentialMgmtPreview\nmaxmsgsiz: 1200\n", want: true},
+		{name: "noclientPin", info: "extension strings: hmac-secret\noptions: rk, up, noplat, noclientPin\n"},
+		{name: "no options line", info: "extension strings: hmac-secret\nmaxmsgsiz: 1200\n"},
+		{name: "clientPin as the last token", info: "options: rk, up, clientPin\n", want: true},
+		{name: "clientPin inside another word", info: "options: rk, up, clientPinUvAuthToken, noclientPin\n"},
+		{name: "clientPin outside the options line", info: "extension strings: clientPin\noptions: rk, up\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, fido2ClientPINSet(tc.info))
+		})
+	}
+}
+
 func TestFIDO2EnrollmentRetryWaitsForAbandonedOperation(t *testing.T) {
 	useFakeLUKSHeader(t)
 	busy := useFIDO2OperationBusy(t)
