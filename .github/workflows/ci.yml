@@ -768,6 +768,12 @@ jobs:
       # v1.29.1: no -k; the first failing gate ends the step (ruling 226(15)).
       - name: make lint-gates
         if: ${{ steps.probe.outputs.has_target == 'true' }}
+        # InfoSec O-2: the public proxy alone, no direct fallback, and
+        # read-only module mode, as go-quicbaas's pool test jobs set them.
+        # -buildvcs=false is kept from the workflow env this GOFLAGS replaces.
+        env:
+          GOFLAGS: -mod=readonly -buildvcs=false
+          GOPROXY: https://proxy.golang.org
         run: make lint-gates
 
       # v1.32 (2026-11-08, Company Agent m2098 item 2, InfoSec finding): the
@@ -931,7 +937,7 @@ jobs:
 
       # Pinned, like GO_VERSION. sdk/javascript declares only
       # `engines: >=18.0.0`; 22 is the active LTS line.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
 
@@ -989,6 +995,12 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y cpio libssl-dev
 
       - name: make test-race
+        # InfoSec O-2: the public proxy alone, no direct fallback, and
+        # read-only module mode, as go-quicbaas's pool test jobs set them.
+        # -buildvcs=false is kept from the workflow env this GOFLAGS replaces.
+        env:
+          GOFLAGS: -mod=readonly -buildvcs=false
+          GOPROXY: https://proxy.golang.org
         run: make test-race SHARD=${{ matrix.shard }} SHARDS=4
 
   # ==========================================================================
@@ -1021,7 +1033,7 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
 
