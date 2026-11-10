@@ -14,6 +14,7 @@
 package ca
 
 import (
+	"crypto/elliptic"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
@@ -388,6 +389,34 @@ func (h *CAHandlers) revocationReasonToProto(reason int) platformv1.RevocationRe
 		return platformv1.RevocationReason_REVOCATION_REASON_AA_COMPROMISE
 	default:
 		return platformv1.RevocationReason_REVOCATION_REASON_UNSPECIFIED
+	}
+}
+
+// protoRevocationReasonToRFC5280 converts a proto RevocationReason to its RFC 5280 reason code.
+func (h *CAHandlers) protoRevocationReasonToRFC5280(reason platformv1.RevocationReason) (int, error) {
+	switch reason {
+	case platformv1.RevocationReason_REVOCATION_REASON_UNSPECIFIED:
+		return 0, nil
+	case platformv1.RevocationReason_REVOCATION_REASON_KEY_COMPROMISE:
+		return 1, nil
+	case platformv1.RevocationReason_REVOCATION_REASON_CA_COMPROMISE:
+		return 2, nil
+	case platformv1.RevocationReason_REVOCATION_REASON_AFFILIATION_CHANGED:
+		return 3, nil
+	case platformv1.RevocationReason_REVOCATION_REASON_SUPERSEDED:
+		return 4, nil
+	case platformv1.RevocationReason_REVOCATION_REASON_CESSATION_OF_OPERATION:
+		return 5, nil
+	case platformv1.RevocationReason_REVOCATION_REASON_CERTIFICATE_HOLD:
+		return 6, nil
+	case platformv1.RevocationReason_REVOCATION_REASON_REMOVE_FROM_CRL:
+		return 8, nil
+	case platformv1.RevocationReason_REVOCATION_REASON_PRIVILEGE_WITHDRAWN:
+		return 9, nil
+	case platformv1.RevocationReason_REVOCATION_REASON_AA_COMPROMISE:
+		return 10, nil
+	default:
+		return 0, ErrInvalidRevocationReason{Reason: int(reason)}
 	}
 }
 
@@ -831,11 +860,14 @@ func (h *CAHandlers) IssueCertificate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	rsaAttrs, eccAttrs := h.protoKeyAlgorithmParams(certReq.GetKeyAlgorithm())
 	caReq.KeyAttributes = &xkmssdk.KeyAttributes{
-		CN:           subject.GetCommonName(),
-		KeyAlgorithm: keyAlg,
-		StoreType:    storeType,
-		KeyType:      xkmssdk.KeyTypeTLS,
+		CN:            subject.GetCommonName(),
+		KeyAlgorithm:  keyAlg,
+		StoreType:     storeType,
+		KeyType:       xkmssdk.KeyTypeTLS,
+		RSAAttributes: rsaAttrs,
+		ECCAttributes: eccAttrs,
 	}
 
 	issued, err := h.ca.IssueCertificate(r.Context(), caReq)
@@ -933,6 +965,28 @@ func (h *CAHandlers) protoKeyAlgorithmToX509(alg platformv1.KeyAlgorithm) (x509.
 	}
 }
 
+// protoKeyAlgorithmParams returns the RSA key size or the ECDSA curve a proto
+// KeyAlgorithm requests. Both are nil for an algorithm that has neither.
+func (h *CAHandlers) protoKeyAlgorithmParams(alg platformv1.KeyAlgorithm) (*xkmssdk.RSAAttributes, *xkmssdk.ECCAttributes) {
+	switch alg {
+	case platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048:
+		return &xkmssdk.RSAAttributes{KeySize: 2048}, nil
+	case platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_3072:
+		return &xkmssdk.RSAAttributes{KeySize: 3072}, nil
+	case platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096:
+		return &xkmssdk.RSAAttributes{KeySize: 4096}, nil
+	case platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED,
+		platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256:
+		return nil, &xkmssdk.ECCAttributes{Curve: elliptic.P256()}
+	case platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384:
+		return nil, &xkmssdk.ECCAttributes{Curve: elliptic.P384()}
+	case platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P521:
+		return nil, &xkmssdk.ECCAttributes{Curve: elliptic.P521()}
+	default:
+		return nil, nil
+	}
+}
+
 // RevokeCertificate handles DELETE /api/v1/ca/certificates/{serial}.
 //
 // Decodes platformv1.RevokeCertificateRequest from the optional body
@@ -960,6 +1014,12 @@ func (h *CAHandlers) RevokeCertificate(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Serial = serial
 
+	reason, err := h.protoRevocationReasonToRFC5280(req.GetReason())
+	if err != nil {
+		protorest.WriteError(w, r, h.respWriter, status.Error(codes.InvalidArgument, err.Error()))
+		return
+	}
+
 	var cert *x509.Certificate
 	if certStore := h.ca.CertStore(); certStore != nil {
 		if foundCert, err := certStore.GetCertificate(serial); err == nil {
@@ -972,7 +1032,7 @@ func (h *CAHandlers) RevokeCertificate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.ca.RevokeCert(r.Context(), cert, quicbaasca.RevokeOptions{DeleteKeys: req.GetDeleteKeys()}); err != nil {
+	if err := h.ca.RevokeCert(r.Context(), cert, quicbaasca.RevokeOptions{Reason: reason, DeleteKeys: req.GetDeleteKeys()}); err != nil {
 		protorest.WriteError(w, r, h.respWriter,
 			status.Error(codes.Internal, err.Error()))
 		return
