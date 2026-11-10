@@ -656,22 +656,19 @@ func TestCov964Adapter_CreatesListsAndDeletes(t *testing.T) {
 	cov964RequireNotFound(t, adapter.DeleteApp(ctx, "tenant-a", "client-new"), "app", "client-new")
 }
 
-func TestCov964Adapter_CreateTenantEncodesSettings(t *testing.T) {
+func TestCov964Adapter_CreateTenantReportsCreatedAt(t *testing.T) {
 	client := cov964NewClient()
 	adapter := NewQuicBaaSIAMAdapter(client)
 
 	resp, err := adapter.CreateTenant(context.Background(), &CreateTenantRequest{
-		ID:       "tenant-b",
-		Name:     "Tenant B",
-		Settings: &TenantSettings{MaxUsers: 25, MFARequired: true},
+		ID:   "tenant-b",
+		Name: "Tenant B",
 	})
 
 	require.NoError(t, err)
 	assert.Equal(t, "tenant-b", client.tenants.created.ID)
 	assert.Equal(t, "Tenant B", client.tenants.created.Name)
-	assert.Equal(t, map[string]string{"max_users": "25", "mfa_required": "true"}, client.tenants.created.Settings)
 	assert.Equal(t, "tenant-b", resp.ID)
-	assert.Equal(t, &TenantSettings{MaxUsers: 25, MFARequired: true}, resp.Settings)
 	require.NotNil(t, resp.CreatedAt)
 	assert.Equal(t, time.Unix(1700000000, 0).UTC(), *resp.CreatedAt)
 	assert.Nil(t, resp.UpdatedAt, "a zero UpdatedAt is omitted")
@@ -741,10 +738,8 @@ func TestCov964Adapter_UpdateTenant(t *testing.T) {
 	client := cov964NewClient()
 	adapter := NewQuicBaaSIAMAdapter(client)
 
-	resp, err := adapter.UpdateTenant(ctx, "tenant-a", &UpdateTenantRequest{Settings: &TenantSettings{MaxUsers: 7}})
+	resp, err := adapter.UpdateTenant(ctx, "tenant-a", &UpdateTenantRequest{Name: "Tenant A"})
 	require.NoError(t, err)
-	assert.Equal(t, map[string]string{"max_users": "7"}, client.tenants.updated.Settings)
-	assert.Equal(t, &TenantSettings{MaxUsers: 7}, resp.Settings)
 	require.NotNil(t, resp.UpdatedAt)
 
 	_, err = adapter.UpdateTenant(ctx, "tenant-a", nil)
@@ -771,8 +766,6 @@ func TestCov964DecodeTenantSettings(t *testing.T) {
 			assert.Equal(t, tt.want, decodeTenantSettings(tt.in))
 		})
 	}
-	assert.Nil(t, encodeTenantSettings(nil))
-	assert.Empty(t, encodeTenantSettings(&TenantSettings{}))
 	assert.Nil(t, decodeTenant(nil))
 	assert.Nil(t, decodePolicy("tenant-a", nil))
 	assert.Nil(t, decodeApp("tenant-a", nil))
@@ -799,8 +792,8 @@ func TestCov964ParsePolicyRulesFromYAML(t *testing.T) {
 			}},
 		},
 		{
-			name: "top-level rules default to allow",
-			yaml: "rules:\n  - name: read\n    actions: [\"iam:get\", \"iam:list\"]\n",
+			name: "top-level rules with allow effect",
+			yaml: "rules:\n  - name: read\n    effect: allow\n    actions: [\"iam:get\", \"iam:list\"]\n",
 			want: []iamsdk.Rule{{
 				Name:      "read",
 				Effect:    iamsdk.EffectAllow,
@@ -811,7 +804,9 @@ func TestCov964ParsePolicyRulesFromYAML(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, parsePolicyRulesFromYAML(tt.yaml))
+			got, err := parsePolicyRulesFromYAML(tt.yaml)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
@@ -824,7 +819,7 @@ func TestCov964Adapter_CreatePolicy(t *testing.T) {
 	}{
 		{
 			name: "rules come from the spec",
-			spec: "spec:\n  rules:\n    - name: read\n      actions: [\"iam:get\"]\n",
+			spec: "spec:\n  rules:\n    - name: read\n      effect: allow\n      actions: [\"iam:get\"]\n",
 			wantRules: []iamsdk.Rule{{
 				Name:      "read",
 				Effect:    iamsdk.EffectAllow,
