@@ -139,7 +139,9 @@ func (ErrNilRoundTripper) Error() string {
 // with baseURL as the URL prefix. It skips Connect's TLS dialing and health
 // probe, so it suits an in-process caller that serves the daemon's REST
 // handler directly, such as a test that exercises the real route table
-// against the real handler without a listener.
+// against the real handler without a listener. A channel-bound call on such
+// an adapter is refused with ErrChannelBindingUnavailable: rt owns its
+// connections, so the adapter has none to bind to.
 func NewWithRoundTripper(baseURL string, rt http.RoundTripper, token string) (*Adapter, error) {
 	if baseURL == "" {
 		return nil, platform.ErrEmptyAddress
@@ -1331,12 +1333,20 @@ var templatedRouteTable = map[string]templatedRoute{
 	// tenant guard (restiam.RequestedTenant) reads the tenant from the path
 	// or the tenant_id query, never the body, so a flat path with the
 	// tenant in the body was refused with 403 before the handler ran.
-	"/platform.v1.PlatformIAMService/CreateUser":      tenantItemRoute("/api/v1/iam/tenants/{tenant}/users", http.MethodPost),
-	"/platform.v1.PlatformIAMService/ListUsers":       tenantItemRoute("/api/v1/iam/tenants/{tenant}/users", http.MethodGet),
+	//
+	// The list handlers read their parameters from the query only, so the
+	// three lists send pagination as limit and offset, and ListUsers sends
+	// its filters as email, role and group. sort_by and ascending have no
+	// handler counterpart and are dropped.
+	"/platform.v1.PlatformIAMService/CreateUser": tenantItemRoute("/api/v1/iam/tenants/{tenant}/users", http.MethodPost),
+	"/platform.v1.PlatformIAMService/ListUsers": tenantListRoute("/api/v1/iam/tenants/{tenant}/users",
+		queryParam{name: "email", field: "email_filter"},
+		queryParam{name: "role", field: "role_filter"},
+		queryParam{name: "group", field: "group_filter"}),
 	"/platform.v1.PlatformIAMService/CreateRole":      tenantItemRoute("/api/v1/iam/tenants/{tenant}/roles", http.MethodPost),
-	"/platform.v1.PlatformIAMService/ListRoles":       tenantItemRoute("/api/v1/iam/tenants/{tenant}/roles", http.MethodGet),
+	"/platform.v1.PlatformIAMService/ListRoles":       tenantListRoute("/api/v1/iam/tenants/{tenant}/roles"),
 	"/platform.v1.PlatformIAMService/CreateGroup":     tenantItemRoute("/api/v1/iam/tenants/{tenant}/groups", http.MethodPost),
-	"/platform.v1.PlatformIAMService/ListGroups":      tenantItemRoute("/api/v1/iam/tenants/{tenant}/groups", http.MethodGet),
+	"/platform.v1.PlatformIAMService/ListGroups":      tenantListRoute("/api/v1/iam/tenants/{tenant}/groups"),
 	"/platform.v1.PlatformIAMService/CheckPermission": tenantItemRoute("/api/v1/iam/tenants/{tenant}/permissions/check", http.MethodPost),
 }
 
@@ -1385,6 +1395,49 @@ func tenantItemRoute(path, method string, items ...pathParam) templatedRoute {
 		method:     method,
 		pathParams: append([]pathParam{{placeholder: "{tenant}", field: "tenant_id"}}, items...),
 	}
+}
+
+// iamListDefaultLimit and iamListMaxLimit mirror the default and the cap the
+// REST handlers apply to limit (pkg/webservice/v1/rest/iam/handlers.go), so
+// the offset sent for a page matches the page size the handler serves.
+const (
+	iamListDefaultLimit = 50
+	iamListMaxLimit     = 1000
+)
+
+// tenantListRoute constructs the GET route of a tenant-scoped IAM
+// collection. The handlers read list parameters from the query only:
+// pagination travels as limit and offset, after the filters the list takes.
+func tenantListRoute(path string, filters ...queryParam) templatedRoute {
+	route := tenantItemRoute(path, http.MethodGet)
+	route.queryParams = append(filters,
+		queryParam{name: "limit", field: "pagination.page_size"},
+		queryParam{name: "offset", field: "pagination", encode: encodeIAMListOffset},
+	)
+	return route
+}
+
+// encodeIAMListOffset renders a PaginationRequest as the offset of its
+// page, counted in the page size the handler serves. The first page, and an
+// unset pagination, send no offset.
+func encodeIAMListOffset(v protoreflect.Value) string {
+	m, ok := v.Interface().(protoreflect.Message)
+	if !ok || !m.IsValid() {
+		return ""
+	}
+	fields := m.Descriptor().Fields()
+	page := m.Get(fields.ByName("page")).Uint()
+	if page <= 1 {
+		return ""
+	}
+	size := m.Get(fields.ByName("page_size")).Uint()
+	if size == 0 {
+		size = iamListDefaultLimit
+	}
+	if size > iamListMaxLimit {
+		size = iamListMaxLimit
+	}
+	return strconv.FormatUint((page-1)*size, 10)
 }
 
 // bmcRoute constructs a templated route that pulls profile_id from a

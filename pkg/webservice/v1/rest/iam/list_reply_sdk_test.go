@@ -40,8 +40,9 @@ type listReplyCase struct {
 	invoke        func(client platformv1.PlatformIAMServiceClient) ([]string, listReply, error)
 }
 
-// The SDK REST routes for the IAM lists send no query parameters, so the
-// handler applies its default page: page 1, 50 per page, offset 0.
+// These requests set no pagination and no filter, so the SDK REST routes
+// send no query parameters and the handler applies its default page: page 1,
+// 50 per page, offset 0.
 func listReplyCases() []listReplyCase {
 	ctx := context.Background()
 	return []listReplyCase{
