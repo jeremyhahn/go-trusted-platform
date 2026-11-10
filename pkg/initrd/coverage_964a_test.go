@@ -695,12 +695,54 @@ func TestCov964aFIDO2CanUnlock(t *testing.T) {
 	})
 }
 
+// cov964aTokenLUKS is the round-trip tokenLUKS with AddKey and Open routed
+// back to its testify mock, so a case can make them fail and inspect their
+// arguments. The LUKS2 tokens stay in the tokenLUKS.
+type cov964aTokenLUKS struct {
+	*tokenLUKS
+}
+
+func (l *cov964aTokenLUKS) AddKey(ctx context.Context, devicePath string, existingPassword, newPassword []byte, opts *luks.AddKeyOptions) error {
+	return l.MockLUKSHandler.AddKey(ctx, devicePath, existingPassword, newPassword, opts)
+}
+
+func (l *cov964aTokenLUKS) Open(ctx context.Context, devicePath, mappingName string, password []byte, opts *luks.OpenOptions) error {
+	return l.MockLUKSHandler.Open(ctx, devicePath, mappingName, password, opts)
+}
+
+// cov964aTokenPlatform is cov964aPlatform with a token-capable LUKS handler.
+// Each enrolled slot is installed through the strategy first, so the header
+// holds the token Unlock reads; the fake's recorded calls start empty.
+func cov964aTokenPlatform(t *testing.T, fido *cov964aFIDO2, enrolled ...luks.KeySlot) (*Platform, *cov964aTokenLUKS) {
+	t.Helper()
+	p, _ := cov964aPlatform(t, nil, fido)
+	header := newTokenLUKS()
+	p.LUKS = header
+	for _, slot := range enrolled {
+		// Install zeroes the key the fake hands out.
+		key := bytes.Clone(fido.key)
+		err := NewFIDO2Strategy(p, logging.DefaultLogger()).Install(context.Background(), cov964aVolume(p, slot), []byte("install-password"))
+		if err != nil {
+			t.Fatalf("Install slot %d: %v", slot.Index, err)
+		}
+		fido.key = key
+	}
+	if fido != nil {
+		fido.enrollConfig = nil
+		fido.unlockConfigs = nil
+	}
+	volume := &cov964aTokenLUKS{tokenLUKS: header}
+	p.LUKS = volume
+	return p, volume
+}
+
 func TestCov964aFIDO2Unlock(t *testing.T) {
 	key := bytes.Repeat([]byte{0xa5}, 32)
+	credentialID := bytes.Repeat([]byte{0x11, 0x22}, 24) // 48 bytes
 
 	t.Run("cancelled context", func(t *testing.T) {
-		fido := &cov964aFIDO2{key: key}
-		p, _ := cov964aPlatform(t, nil, fido)
+		fido := &cov964aFIDO2{credentialID: credentialID, key: bytes.Clone(key)}
+		p, _ := cov964aTokenPlatform(t, fido, cov964aFIDO2Slot)
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		err := NewFIDO2Strategy(p, logging.DefaultLogger()).Unlock(ctx, cov964aVolume(p, cov964aFIDO2Slot))
@@ -713,19 +755,21 @@ func TestCov964aFIDO2Unlock(t *testing.T) {
 	})
 
 	t.Run("every slot fails authentication", func(t *testing.T) {
-		fido := &cov964aFIDO2{unlockErr: &cov964aError{op: "assertion"}}
-		p, _ := cov964aPlatform(t, nil, fido)
-		volume := cov964aVolume(p, cov964aFIDO2Slot, luks.KeySlot{Index: 4, Type: luks.UnlockFIDO2})
+		fido := &cov964aFIDO2{credentialID: credentialID, key: bytes.Clone(key)}
+		secondSlot := luks.KeySlot{Index: 4, Type: luks.UnlockFIDO2}
+		p, _ := cov964aTokenPlatform(t, fido, cov964aFIDO2Slot, secondSlot)
+		fido.unlockErr = &cov964aError{op: "assertion"}
+		volume := cov964aVolume(p, cov964aFIDO2Slot, secondSlot)
 		err := NewFIDO2Strategy(p, logging.DefaultLogger()).Unlock(context.Background(), volume)
-		cov964aWantErr(t, err, "all FIDO2 slots failed", nil)
+		cov964aWantErr(t, err, "all FIDO2 slots failed", fido.unlockErr)
 		if len(fido.unlockConfigs) != 2 {
 			t.Errorf("UnlockWithKey calls = %d, want 2", len(fido.unlockConfigs))
 		}
 	})
 
 	t.Run("Open fails", func(t *testing.T) {
-		fido := &cov964aFIDO2{key: key}
-		p, luksMock := cov964aPlatform(t, nil, fido)
+		fido := &cov964aFIDO2{credentialID: credentialID, key: bytes.Clone(key)}
+		p, luksMock := cov964aTokenPlatform(t, fido, cov964aFIDO2Slot)
 		luksMock.On("Open", mock.Anything, p.Config.RootDevice, "cov964a-root", key, mock.Anything).
 			Return(&cov964aError{op: "open"})
 		err := NewFIDO2Strategy(p, logging.DefaultLogger()).Unlock(context.Background(), cov964aVolume(p, cov964aFIDO2Slot))
@@ -734,8 +778,8 @@ func TestCov964aFIDO2Unlock(t *testing.T) {
 	})
 
 	t.Run("success opens the FIDO2 slot", func(t *testing.T) {
-		fido := &cov964aFIDO2{key: key}
-		p, luksMock := cov964aPlatform(t, nil, fido)
+		fido := &cov964aFIDO2{credentialID: credentialID, key: bytes.Clone(key)}
+		p, luksMock := cov964aTokenPlatform(t, fido, cov964aFIDO2Slot)
 		var openOpts *luks.OpenOptions
 		luksMock.On("Open", mock.Anything, p.Config.RootDevice, "cov964a-root", key, mock.Anything).
 			Run(func(args mock.Arguments) { openOpts = args.Get(4).(*luks.OpenOptions) }).Return(nil)
@@ -780,18 +824,21 @@ func TestCov964aFIDO2Install(t *testing.T) {
 
 	t.Run("EnrollKey error", func(t *testing.T) {
 		enrollErr := &cov964aError{op: "enroll"}
-		p, _ := cov964aPlatform(t, nil, &cov964aFIDO2{enrollErr: enrollErr})
+		p, _ := cov964aTokenPlatform(t, &cov964aFIDO2{enrollErr: enrollErr})
 		err := NewFIDO2Strategy(p, logging.DefaultLogger()).Install(ctx, cov964aVolume(p, cov964aFIDO2Slot), password)
 		cov964aWantErr(t, err, "failed to enroll FIDO2 key", enrollErr)
 	})
 
 	t.Run("AddKey error", func(t *testing.T) {
 		addErr := &cov964aError{op: "add key"}
-		p, luksMock := cov964aPlatform(t, nil, &cov964aFIDO2{credentialID: credentialID})
+		p, luksMock := cov964aTokenPlatform(t, &cov964aFIDO2{credentialID: credentialID, key: bytes.Repeat([]byte{0xa5}, 32)})
 		luksMock.On("AddKey", mock.Anything, p.Config.RootDevice, password, mock.Anything, mock.Anything).Return(addErr)
 		err := NewFIDO2Strategy(p, logging.DefaultLogger()).Install(ctx, cov964aVolume(p, cov964aFIDO2Slot), password)
 		cov964aWantErr(t, err, "failed to add key to LUKS slot 2", addErr)
 		luksMock.AssertExpectations(t)
+		if len(luksMock.tokens) != 0 {
+			t.Errorf("%d token(s) written after a failed AddKey", len(luksMock.tokens))
+		}
 	})
 }
 
