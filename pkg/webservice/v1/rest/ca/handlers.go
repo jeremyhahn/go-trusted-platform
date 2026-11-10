@@ -828,6 +828,11 @@ func (h *CAHandlers) IssueCertificate(w http.ResponseWriter, r *http.Request) {
 			status.Error(codes.InvalidArgument, err.Error()))
 		return
 	}
+	if err := h.issuableKeyAlgorithm(certReq.GetKeyAlgorithm()); err != nil {
+		protorest.WriteError(w, r, h.respWriter,
+			status.Error(codes.InvalidArgument, err.Error()))
+		return
+	}
 
 	caReq := &quicbaasca.CACertificateRequest{
 		Subject: quicbaasca.CASubject{
@@ -968,14 +973,35 @@ func (h *CAHandlers) protoKeyAlgorithmToX509(alg platformv1.KeyAlgorithm) (x509.
 	}
 }
 
+// issuableKeyAlgorithm refuses a proto KeyAlgorithm the CA key store cannot
+// issue exactly. The key store's KMS issues RSA-2048, RSA-4096, P-256, P-384
+// and Ed25519 only; any other size or curve would be issued smaller than
+// requested, so IssueCertificate refuses it before issuance.
+func (h *CAHandlers) issuableKeyAlgorithm(alg platformv1.KeyAlgorithm) error {
+	switch alg {
+	case platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED,
+		platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048,
+		platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096,
+		platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256,
+		platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384,
+		platformv1.KeyAlgorithm_KEY_ALGORITHM_ED25519:
+		return nil
+	default:
+		return ErrInvalidKeyAlgorithm{
+			Algorithm: alg.String(),
+			Reason:    "the CA key store cannot issue this key size or curve exactly",
+		}
+	}
+}
+
 // protoKeyAlgorithmParams returns the RSA key size or the ECDSA curve a proto
 // KeyAlgorithm requests. Both are nil for an algorithm that has neither.
+// RSA-3072 and P-521 have no case: IssueCertificate refuses them first
+// through issuableKeyAlgorithm.
 func (h *CAHandlers) protoKeyAlgorithmParams(alg platformv1.KeyAlgorithm) (*xkmssdk.RSAAttributes, *xkmssdk.ECCAttributes) {
 	switch alg {
 	case platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048:
 		return &xkmssdk.RSAAttributes{KeySize: 2048}, nil
-	case platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_3072:
-		return &xkmssdk.RSAAttributes{KeySize: 3072}, nil
 	case platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096:
 		return &xkmssdk.RSAAttributes{KeySize: 4096}, nil
 	case platformv1.KeyAlgorithm_KEY_ALGORITHM_UNSPECIFIED,
@@ -983,8 +1009,6 @@ func (h *CAHandlers) protoKeyAlgorithmParams(alg platformv1.KeyAlgorithm) (*xkms
 		return nil, &xkmssdk.ECCAttributes{Curve: elliptic.P256()}
 	case platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384:
 		return nil, &xkmssdk.ECCAttributes{Curve: elliptic.P384()}
-	case platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P521:
-		return nil, &xkmssdk.ECCAttributes{Curve: elliptic.P521()}
 	default:
 		return nil, nil
 	}
