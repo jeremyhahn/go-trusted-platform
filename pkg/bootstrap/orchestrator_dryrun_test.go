@@ -54,15 +54,15 @@ func TestOrchestrator_DryRun_AllBMCReachable(t *testing.T) {
 			{
 				Hostname:    "cp-01",
 				Role:        RoleControlPlane,
-				BMCAddress:  "10.4.2.103",
+				BMCAddress:  "198.51.100.103",
 				BMCUser:     "admin",
 				BMCPassword: "pass",
 				BMCProtocol: "ipmi",
 			},
 			{
-				Hostname:    "gw-01",
+				Hostname:    "edge-01",
 				Role:        RoleGateway,
-				BMCAddress:  "10.4.2.102",
+				BMCAddress:  "198.51.100.102",
 				BMCUser:     "admin",
 				BMCPassword: "pass",
 				BMCProtocol: "ipmi",
@@ -70,7 +70,7 @@ func TestOrchestrator_DryRun_AllBMCReachable(t *testing.T) {
 			{
 				Hostname:    "compute-01",
 				Role:        RoleWorker,
-				BMCAddress:  "10.4.2.104",
+				BMCAddress:  "198.51.100.104",
 				BMCUser:     "admin",
 				BMCPassword: "pass",
 				BMCProtocol: "ipmi",
@@ -167,13 +167,13 @@ func TestOrchestrator_DryRun_BMCUnreachable(t *testing.T) {
 			{
 				Hostname:    "cp-01",
 				Role:        RoleControlPlane,
-				BMCAddress:  "10.4.2.100",
+				BMCAddress:  "198.51.100.100",
 				BMCProtocol: "ipmi",
 			},
 			{
-				Hostname:    "gw-01",
+				Hostname:    "edge-01",
 				Role:        RoleGateway,
-				BMCAddress:  "10.4.2.101",
+				BMCAddress:  "198.51.100.101",
 				BMCProtocol: "ipmi",
 			},
 		},
@@ -186,7 +186,7 @@ func TestOrchestrator_DryRun_BMCUnreachable(t *testing.T) {
 
 	factory := &bmc.MockClientFactory{
 		ClientFn: func(config *bmc.Config) (bmc.Client, error) {
-			if config.Address == "10.4.2.101" {
+			if config.Address == "198.51.100.101" {
 				return unreachableClient, nil
 			}
 			return reachableClient, nil
@@ -220,7 +220,7 @@ func TestOrchestrator_DryRun_BMCUnreachable(t *testing.T) {
 	var unreachableNode *DryRunNodeResult
 	var reachableNode *DryRunNodeResult
 	for i := range result.Nodes {
-		if result.Nodes[i].Hostname == "gw-01" {
+		if result.Nodes[i].Hostname == "edge-01" {
 			unreachableNode = &result.Nodes[i]
 		}
 		if result.Nodes[i].Hostname == "cp-01" {
@@ -229,16 +229,16 @@ func TestOrchestrator_DryRun_BMCUnreachable(t *testing.T) {
 	}
 
 	if unreachableNode == nil {
-		t.Fatal("gw-01 node result not found")
+		t.Fatal("edge-01 node result not found")
 	}
 	if unreachableNode.BMCReachable {
-		t.Error("gw-01 should not be BMC reachable")
+		t.Error("edge-01 should not be BMC reachable")
 	}
 	if unreachableNode.Status != dryRunStatusUnreachable {
-		t.Errorf("gw-01 expected status unreachable, got %s", unreachableNode.Status)
+		t.Errorf("edge-01 expected status unreachable, got %s", unreachableNode.Status)
 	}
 	if unreachableNode.Error == "" {
-		t.Error("gw-01 should have an error message")
+		t.Error("edge-01 should have an error message")
 	}
 
 	if reachableNode == nil {
@@ -263,7 +263,7 @@ func TestOrchestrator_DryRun_BMCFactoryError(t *testing.T) {
 			{
 				Hostname:    "cp-01",
 				Role:        RoleControlPlane,
-				BMCAddress:  "10.4.2.100",
+				BMCAddress:  "198.51.100.100",
 				BMCProtocol: "ipmi",
 			},
 		},
@@ -429,7 +429,7 @@ func TestOrchestrator_DryRun_WithSwitch(t *testing.T) {
 		},
 		Switch: &SwitchConfig{
 			Vendor: "cisco-nexus",
-			Host:   "10.4.2.4",
+			Host:   "198.51.100.4",
 			PortAssignments: []PortAssignment{
 				{Port: "Eth1/1", Class: zone.PortClassGateway},
 			},
@@ -485,11 +485,11 @@ func TestOrchestrator_DryRun_MixedNodes(t *testing.T) {
 			{
 				Hostname:    "cp-01",
 				Role:        RoleControlPlane,
-				BMCAddress:  "10.4.2.100",
+				BMCAddress:  "198.51.100.100",
 				BMCProtocol: "ipmi",
 			},
 			{
-				Hostname: "gw-01",
+				Hostname: "edge-01",
 				Role:     RoleGateway,
 				MACs:     []string{"aa:bb:cc:dd:ee:02"},
 			},
@@ -540,10 +540,10 @@ func TestOrchestrator_DryRun_MixedNodes(t *testing.T) {
 	// Verify manual nodes.
 	gwNode := result.Nodes[1]
 	if gwNode.BMCManaged {
-		t.Error("gw-01 should not be BMC managed")
+		t.Error("edge-01 should not be BMC managed")
 	}
 	if gwNode.Status != dryRunStatusManual {
-		t.Errorf("gw-01 expected status manual, got %s", gwNode.Status)
+		t.Errorf("edge-01 expected status manual, got %s", gwNode.Status)
 	}
 
 	wNode := result.Nodes[2]
@@ -572,10 +572,10 @@ func TestDryRunErrors(t *testing.T) {
 			name: "ErrDryRunBMCUnreachable",
 			err: ErrDryRunBMCUnreachable{
 				Hostname:   "cp-01",
-				BMCAddress: "10.4.2.100",
+				BMCAddress: "198.51.100.100",
 				Cause:      errors.New("connection refused"),
 			},
-			want: "bootstrap: dry-run: bmc unreachable for cp-01 at 10.4.2.100: connection refused",
+			want: "bootstrap: dry-run: bmc unreachable for cp-01 at 198.51.100.100: connection refused",
 		},
 		{
 			name: "ErrDryRunNoNodes",
@@ -1029,11 +1029,11 @@ func TestOrchestrator_DryRun_SwitchPlan(t *testing.T) {
 		},
 		Switch: &SwitchConfig{
 			Vendor: "cisco-nexus",
-			Host:   "10.4.2.4",
+			Host:   "198.51.100.4",
 			PortAssignments: []PortAssignment{
-				{Port: "Eth1/3", Class: zone.PortClassGateway, Description: "gw-01"},
+				{Port: "Eth1/3", Class: zone.PortClassGateway, Description: "edge-01"},
 				{Port: "Eth1/25", Class: zone.PortClassHypervisor, Description: "cp-01"},
-				{Port: "Eth1/41", Class: zone.PortClassBMC, Description: "gw-01 bmc"},
+				{Port: "Eth1/41", Class: zone.PortClassBMC, Description: "edge-01 bmc"},
 			},
 		},
 		Nodes: []NodeConfig{
@@ -1069,8 +1069,8 @@ func TestOrchestrator_DryRun_SwitchPlan(t *testing.T) {
 	if plan.Vendor != "cisco-nexus" {
 		t.Errorf("expected vendor cisco-nexus, got %s", plan.Vendor)
 	}
-	if plan.Host != "10.4.2.4" {
-		t.Errorf("expected host 10.4.2.4, got %s", plan.Host)
+	if plan.Host != "198.51.100.4" {
+		t.Errorf("expected host 198.51.100.4, got %s", plan.Host)
 	}
 
 	// One VLAN per zone of environment 4, sorted by ID and named after the
@@ -1101,8 +1101,8 @@ func TestOrchestrator_DryRun_SwitchPlan(t *testing.T) {
 	if bmcPort.Mode != "access" || len(bmcPort.VLANs) != 1 || bmcPort.VLANs[0] != 402 {
 		t.Errorf("unexpected bmc port %+v", bmcPort)
 	}
-	if gw.Description != "gw-01" {
-		t.Errorf("expected description gw-01, got %s", gw.Description)
+	if gw.Description != "edge-01" {
+		t.Errorf("expected description edge-01, got %s", gw.Description)
 	}
 }
 

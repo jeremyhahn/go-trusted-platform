@@ -696,8 +696,8 @@ networks:
     driver: bridge
     ipam:
       config:
-        - subnet: 10.254.0.0/24
-          gateway: 10.254.0.1
+        - subnet: 203.0.113.0/24
+          gateway: 203.0.113.1
   underlay:
     driver: bridge
     ipam:
@@ -732,7 +732,7 @@ services:
       - EVPN_ENABLED=true
       - TRANSIT_ENABLED=true
       - NODE_IP=10.100.0.10
-      - TRANSIT_IP=10.254.0.10
+      - TRANSIT_IP=203.0.113.10
     healthcheck:
       test: ["CMD", "ovs-vsctl", "show"]
       interval: 10s
@@ -753,8 +753,8 @@ services:
       - management
     environment:
       - BGP_ASN=64496
-      - ROUTER_ID=10.254.0.100
-      - NEIGHBOR_IP=10.254.0.10
+      - ROUTER_ID=203.0.113.100
+      - NEIGHBOR_IP=203.0.113.10
       - NEIGHBOR_ASN=64512
     healthcheck:
       test: ["CMD", "vtysh", "-c", "show bgp summary"]
