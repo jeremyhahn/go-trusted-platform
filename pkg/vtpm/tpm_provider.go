@@ -761,7 +761,7 @@ func (ops *TPMOperations) pcrPolicyDigest(sel tpm2.TPMLPCRSelection, withAuth bo
 func (ops *TPMOperations) unsealPCRBound(keyAttrs *xkmssdk.KeyAttributes, sealed *xkmssdk.SealedData, pcrSelect []byte, password xkmssdk.Password) ([]byte, error) {
 	t := ops.tpm.Transport()
 	parent := keyAttrs.Parent.TPMAttributes
-	parentName, _, err := ops.tpm.ReadHandle(parent.Handle)
+	parentName, parentPub, err := ops.tpm.ReadHandle(parent.Handle)
 	if err != nil {
 		return nil, &WrappedError{Msg: "failed to read the sealing parent", Err: err}
 	}
@@ -791,7 +791,9 @@ func (ops *TPMOperations) unsealPCRBound(keyAttrs *xkmssdk.KeyAttributes, sealed
 		return nil, &WrappedError{Msg: "failed to close the sealing parent session", Err: closeErr}
 	}
 
-	var authOpts []tpm2.AuthOption
+	// Salt the session to the sealing parent so the Unseal HMAC key is
+	// never empty (crypto/hmac refuses short keys under fips140=only).
+	authOpts := []tpm2.AuthOption{tpm2.Salted(parent.Handle, parentPub)}
 	if password != nil {
 		authOpts = append(authOpts, tpm2.Auth(password.Bytes()))
 	}
