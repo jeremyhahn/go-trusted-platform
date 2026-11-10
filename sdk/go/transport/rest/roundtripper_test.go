@@ -66,6 +66,25 @@ func TestNewWithRoundTripper_RefusesMissingInputs(t *testing.T) {
 	assert.True(t, errors.As(err, &nilRT), "got %v", err)
 }
 
+// TestNewWithRoundTripper_RefusesPlaintext shows that the in-process
+// constructor refuses a plain http base URL the same way Connect does: the
+// adapter attaches the bearer token to every request, so a plaintext base URL
+// over a network RoundTripper would send the credential in the clear.
+func TestNewWithRoundTripper_RefusesPlaintext(t *testing.T) {
+	rt := handlerTransport{handler: http.NotFoundHandler()}
+
+	for _, token := range []string{"tok", ""} {
+		a, err := NewWithRoundTripper("http://daemon.invalid", rt, token)
+		var insecure platform.ErrInsecureTransport
+		assert.True(t, errors.As(err, &insecure), "token %q: got %v, want ErrInsecureTransport", token, err)
+		assert.Nil(t, a, "token %q", token)
+	}
+
+	_, err := NewWithRoundTripper("daemon.invalid", rt, "tok")
+	var insecure platform.ErrInsecureTransport
+	assert.True(t, errors.As(err, &insecure), "a base URL without a scheme: got %v, want ErrInsecureTransport", err)
+}
+
 // errBindRefused is the error a BindFunc returns when it cannot complete
 // the request with the binding it was handed.
 type errBindRefused struct{}
@@ -187,21 +206,6 @@ func TestInvoke_ChannelBinding(t *testing.T) {
 			},
 			check: func(t *testing.T, err error, _ *platformv1.ListIAMUsersResponse) {
 				assert.True(t, errors.As(err, new(errBindRefused)), "err = %v, want errBindRefused", err)
-			},
-		},
-		{
-			name: "a plain http address has no TLS connection to bind to",
-			adapter: func(t *testing.T) *Adapter {
-				a, err := NewWithRoundTripper("http://daemon.invalid", handlerTransport{handler: server.Config.Handler}, "")
-				require.NoError(t, err)
-				return a
-			},
-			option: func(*platformv1.ListIAMUsersRequest) grpc.CallOption {
-				return transport.WithChannelBinding(func(context.Context, []byte) error { return nil })
-			},
-			check: func(t *testing.T, err error, _ *platformv1.ListIAMUsersResponse) {
-				var unavailable *transport.ErrChannelBindingUnavailable
-				assert.True(t, errors.As(err, &unavailable), "err = %v, want ErrChannelBindingUnavailable", err)
 			},
 		},
 		{

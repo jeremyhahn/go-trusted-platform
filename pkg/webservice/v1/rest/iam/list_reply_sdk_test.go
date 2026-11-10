@@ -181,7 +181,7 @@ func TestListRepliesOverSDKREST_FiltersAndPagination(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	pagination := func() *platformv1.PaginationRequest {
-		return &platformv1.PaginationRequest{Page: 3, PageSize: 10}
+		return &platformv1.PaginationRequest{Page: 1, PageSize: 10}
 	}
 
 	t.Run("ListUsers", func(t *testing.T) {
@@ -210,7 +210,7 @@ func TestListRepliesOverSDKREST_FiltersAndPagination(t *testing.T) {
 		assert.EqualValues(t, "alice@example.com", got.Filter)
 		assert.EqualValues(t, "role-1", got.RoleID)
 		assert.EqualValues(t, "group-1", got.GroupID)
-		assert.Equal(t, uint32(3), reply.GetPagination().GetPage())
+		assert.Equal(t, uint32(1), reply.GetPagination().GetPage())
 		assert.Equal(t, uint32(10), reply.GetPagination().GetPageSize())
 	})
 
@@ -234,7 +234,7 @@ func TestListRepliesOverSDKREST_FiltersAndPagination(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.EqualValues(t, 10, got.PageSize)
-		assert.Equal(t, uint32(3), reply.GetPagination().GetPage())
+		assert.Equal(t, uint32(1), reply.GetPagination().GetPage())
 		assert.Equal(t, uint32(10), reply.GetPagination().GetPageSize())
 	})
 
@@ -258,9 +258,91 @@ func TestListRepliesOverSDKREST_FiltersAndPagination(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.EqualValues(t, 10, got.PageSize)
-		assert.Equal(t, uint32(3), reply.GetPagination().GetPage())
+		assert.Equal(t, uint32(1), reply.GetPagination().GetPage())
 		assert.Equal(t, uint32(10), reply.GetPagination().GetPageSize())
 	})
+}
+
+// TestListRepliesOverSDKREST_LaterPagesRefused shows that the list handlers
+// whose IAM call takes no offset (ListUsers, ListGroups, ListRoles) refuse a
+// later page with 400 before IAM is asked, instead of answering the first
+// page labelled as the requested one; the first page and a request without
+// pagination are still served.
+func TestListRepliesOverSDKREST_LaterPagesRefused(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	type invoke func(client platformv1.PlatformIAMServiceClient, p *platformv1.PaginationRequest) error
+	cases := []struct {
+		name   string
+		mock   func(calls *int) *mockIAMClient
+		invoke invoke
+	}{
+		{
+			name: "ListUsers",
+			mock: func(calls *int) *mockIAMClient {
+				return &mockIAMClient{
+					listUsersFn: func(context.Context, string, *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
+						*calls++
+						return &iamsdk.ListUsersResponse{Users: []iamsdk.User{{ID: "item-1"}}}, nil
+					},
+				}
+			},
+			invoke: func(client platformv1.PlatformIAMServiceClient, p *platformv1.PaginationRequest) error {
+				_, err := client.ListUsers(ctx, &platformv1.ListIAMUsersRequest{TenantId: "tenant-a", Pagination: p})
+				return err
+			},
+		},
+		{
+			name: "ListGroups",
+			mock: func(calls *int) *mockIAMClient {
+				return &mockIAMClient{
+					listGroupsFn: func(context.Context, string, *iamsdk.ListGroupsRequest) (*iamsdk.ListGroupsResponse, error) {
+						*calls++
+						return &iamsdk.ListGroupsResponse{Groups: []iamsdk.Group{{ID: "item-1"}}}, nil
+					},
+				}
+			},
+			invoke: func(client platformv1.PlatformIAMServiceClient, p *platformv1.PaginationRequest) error {
+				_, err := client.ListGroups(ctx, &platformv1.ListIAMGroupsRequest{TenantId: "tenant-a", Pagination: p})
+				return err
+			},
+		},
+		{
+			name: "ListRoles",
+			mock: func(calls *int) *mockIAMClient {
+				return &mockIAMClient{
+					listRolesFn: func(context.Context, string, *iamsdk.ListRolesRequest) (*iamsdk.ListRolesResponse, error) {
+						*calls++
+						return &iamsdk.ListRolesResponse{Roles: []iamsdk.Role{{ID: "item-1"}}}, nil
+					},
+				}
+			},
+			invoke: func(client platformv1.PlatformIAMServiceClient, p *platformv1.PaginationRequest) error {
+				_, err := client.ListRoles(ctx, &platformv1.ListIAMRolesRequest{TenantId: "tenant-a", Pagination: p})
+				return err
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var calls int
+			conn := sdkRESTConnection(t, adminSessionIAMServerIn(t, "tenant-a", tc.mock(&calls), &mockPEPClient{}))
+			client := platformv1.NewPlatformIAMServiceClient(conn)
+
+			// Page 2 of 10 is offset=10.
+			err := tc.invoke(client, &platformv1.PaginationRequest{Page: 2, PageSize: 10})
+			require.Error(t, err)
+			assert.Equal(t, codes.InvalidArgument, status.Code(err), "err = %v", err)
+			assert.Zero(t, calls, "IAM was asked for a page the handler cannot serve")
+
+			require.NoError(t, tc.invoke(client, &platformv1.PaginationRequest{Page: 1, PageSize: 10}))
+			require.NoError(t, tc.invoke(client, nil))
+			assert.Equal(t, 2, calls)
+		})
+	}
 }
 
 // TestListRepliesOverSDKREST_ServiceErrors checks a NotFound from the IAM
