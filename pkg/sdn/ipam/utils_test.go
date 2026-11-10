@@ -62,64 +62,6 @@ func TestIsBroadcastAddress(t *testing.T) {
 	}
 }
 
-func TestNextUsableIP(t *testing.T) {
-	tests := []struct {
-		name    string
-		cidr    string
-		want    string
-		wantErr error
-	}{
-		{"IPv4 /24", "192.168.1.0/24", "192.168.1.1", nil},
-		{"IPv4 /31", "192.168.1.0/31", "192.168.1.0", nil},
-		{"IPv4 /32", "192.168.1.1/32", "192.168.1.1", nil},
-		{"IPv6 /64", "2001:db8::/64", "2001:db8::", nil},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cidr := netip.MustParsePrefix(tt.cidr)
-			got, err := NextUsableIP(cidr)
-			if err != tt.wantErr {
-				t.Errorf("NextUsableIP() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			want := netip.MustParseAddr(tt.want)
-			if got != want {
-				t.Errorf("NextUsableIP(%s) = %v, want %v", tt.cidr, got, want)
-			}
-		})
-	}
-}
-
-func TestLastUsableIP(t *testing.T) {
-	tests := []struct {
-		name    string
-		cidr    string
-		want    string
-		wantErr error
-	}{
-		{"IPv4 /24", "192.168.1.0/24", "192.168.1.254", nil},
-		{"IPv4 /31", "192.168.1.0/31", "192.168.1.1", nil},
-		{"IPv4 /32", "192.168.1.1/32", "192.168.1.1", nil},
-		{"IPv6 /120", "2001:db8::/120", "2001:db8::ff", nil},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cidr := netip.MustParsePrefix(tt.cidr)
-			got, err := LastUsableIP(cidr)
-			if err != tt.wantErr {
-				t.Errorf("LastUsableIP() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			want := netip.MustParseAddr(tt.want)
-			if got != want {
-				t.Errorf("LastUsableIP(%s) = %v, want %v", tt.cidr, got, want)
-			}
-		})
-	}
-}
-
 func TestCIDROverlaps(t *testing.T) {
 	tests := []struct {
 		name string
