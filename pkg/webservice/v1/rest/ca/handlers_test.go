@@ -1183,9 +1183,13 @@ func TestRevokeCertificate_Success(t *testing.T) {
 }
 
 // TestRevokeCertificate_ForwardsReason checks that every revocation reason
-// reaches the CA as its RFC 5280 code.
+// the route accepts reaches the CA as its RFC 5280 code. removeFromCRL is
+// refused (see TestRevokeCertificate_RefusesRemoveFromCRL).
 func TestRevokeCertificate_ForwardsReason(t *testing.T) {
 	for number, name := range platformv1.RevocationReason_name {
+		if number == int32(platformv1.RevocationReason_REVOCATION_REASON_REMOVE_FROM_CRL) {
+			continue
+		}
 		t.Run(name, func(t *testing.T) {
 			testCert := createTestCertificate("revoke.example.com")
 			mockCertStore := &mockCertStore{
@@ -1259,6 +1263,92 @@ func TestRevokeCertificate_InvalidReason(t *testing.T) {
 			assert.False(t, revoked, "the CA was asked to revoke with an invalid reason")
 		})
 	}
+}
+
+// TestRevokeCertificate_RefusesRemoveFromCRL checks that the route refuses the
+// removeFromCRL reason before the CA is asked. RFC 5280 allows removeFromCRL
+// only in a delta CRL, and this CA publishes complete CRLs.
+func TestRevokeCertificate_RefusesRemoveFromCRL(t *testing.T) {
+	for _, body := range []string{
+		`{"reason":"REVOCATION_REASON_REMOVE_FROM_CRL"}`,
+		`{"reason":8}`,
+		`{"reason":"REVOCATION_REASON_REMOVE_FROM_CRL","deleteKeys":true}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			testCert := createTestCertificate("revoke.example.com")
+			mockCertStore := &mockCertStore{
+				getCertificateFn: func(cn string) (*x509.Certificate, error) {
+					return testCert, nil
+				},
+			}
+
+			revoked := false
+			mockCA := &mockCertificateAuthority{
+				initialized: true,
+				certStore:   mockCertStore,
+				revokeFn: func(_ context.Context, _ *x509.Certificate, _ xkmsca.RevokeOptions) error {
+					revoked = true
+					return nil
+				},
+			}
+			handlers, _ := newTestHandlers(mockCA)
+
+			req := httptest.NewRequest(http.MethodDelete, "/api/v1/ca/certificates/abc123", bytes.NewReader([]byte(body)))
+			req = mux.SetURLVars(req, map[string]string{"serial": "abc123"})
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+
+			handlers.RevokeCertificate(rec, req)
+
+			assert.Equal(t, http.StatusBadRequest, rec.Code)
+			assert.False(t, revoked, "the CA was asked to revoke with removeFromCRL")
+		})
+	}
+}
+
+// TestRevokeCertificate_ReasonConversion checks the conversion of a request's
+// revocation reason to its RFC 5280 code: the accepted reasons keep their
+// codes, an undefined code is refused, and removeFromCRL is refused.
+func TestRevokeCertificate_ReasonConversion(t *testing.T) {
+	handlers, _ := newTestHandlers(&mockCertificateAuthority{initialized: true})
+
+	t.Run("accepted", func(t *testing.T) {
+		for _, tc := range []struct {
+			reason platformv1.RevocationReason
+			code   int
+		}{
+			{platformv1.RevocationReason_REVOCATION_REASON_UNSPECIFIED, 0},
+			{platformv1.RevocationReason_REVOCATION_REASON_KEY_COMPROMISE, 1},
+			{platformv1.RevocationReason_REVOCATION_REASON_CA_COMPROMISE, 2},
+			{platformv1.RevocationReason_REVOCATION_REASON_AFFILIATION_CHANGED, 3},
+			{platformv1.RevocationReason_REVOCATION_REASON_SUPERSEDED, 4},
+			{platformv1.RevocationReason_REVOCATION_REASON_CESSATION_OF_OPERATION, 5},
+			{platformv1.RevocationReason_REVOCATION_REASON_CERTIFICATE_HOLD, 6},
+			{platformv1.RevocationReason_REVOCATION_REASON_PRIVILEGE_WITHDRAWN, 9},
+			{platformv1.RevocationReason_REVOCATION_REASON_AA_COMPROMISE, 10},
+		} {
+			code, err := handlers.protoRevocationReasonToRFC5280(tc.reason)
+			require.NoError(t, err, tc.reason.String())
+			assert.Equal(t, tc.code, code, tc.reason.String())
+		}
+	})
+
+	t.Run("undefined", func(t *testing.T) {
+		for _, reason := range []platformv1.RevocationReason{
+			platformv1.RevocationReason(7),
+			platformv1.RevocationReason(99),
+		} {
+			_, err := handlers.protoRevocationReasonToRFC5280(reason)
+			var invalid ErrInvalidRevocationReason
+			assert.ErrorAs(t, err, &invalid)
+		}
+	})
+
+	t.Run("removeFromCRL", func(t *testing.T) {
+		_, err := handlers.protoRevocationReasonToRFC5280(platformv1.RevocationReason_REVOCATION_REASON_REMOVE_FROM_CRL)
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "removeFromCRL")
+	})
 }
 
 func TestRevokeCertificate_Error(t *testing.T) {
