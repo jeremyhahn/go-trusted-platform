@@ -413,18 +413,27 @@ func (h *IAMHandlers) ListUsers(w http.ResponseWriter, r *http.Request) {
 		GroupID:  r.URL.Query().Get("group"),
 	}
 
-	resp, err := h.iamClient.ListUsers(ctx, tenantID, sdkReq)
+	// The backend pages by token, so the requested offset is served by
+	// walking its pages.
+	found, total, err := listOffsetPage(limit, offset,
+		func(pageToken string) ([]iamsdk.User, iamsdk.PaginationInfo, error) {
+			sdkReq.PageToken = pageToken
+			resp, err := h.iamClient.ListUsers(ctx, tenantID, sdkReq)
+			if err != nil {
+				return nil, iamsdk.PaginationInfo{}, err
+			}
+			return resp.Users, resp.Pagination, nil
+		})
 	if err != nil {
 		h.handleError(w, r, err)
 		return
 	}
 
-	users := make([]*platformv1.IAMUser, 0, len(resp.Users))
-	for i := range resp.Users {
-		users = append(users, UserToProto(&resp.Users[i]))
+	users := make([]*platformv1.IAMUser, 0, len(found))
+	for i := range found {
+		users = append(users, UserToProto(&found[i]))
 	}
 
-	total := int64(resp.Pagination.TotalCount)
 	protorest.WriteSuccess(w, r, h.respWriter, &platformv1.ListIAMUsersResponse{
 		Users:      users,
 		Pagination: ListPagination(limit, offset, total),
@@ -688,18 +697,27 @@ func (h *IAMHandlers) ListGroups(w http.ResponseWriter, r *http.Request) {
 		PageSize: int(limit),
 	}
 
-	resp, err := h.iamClient.ListGroups(ctx, tenantID, sdkReq)
+	// The backend pages by token, so the requested offset is served by
+	// walking its pages.
+	found, total, err := listOffsetPage(limit, offset,
+		func(pageToken string) ([]iamsdk.Group, iamsdk.PaginationInfo, error) {
+			sdkReq.PageToken = pageToken
+			resp, err := h.iamClient.ListGroups(ctx, tenantID, sdkReq)
+			if err != nil {
+				return nil, iamsdk.PaginationInfo{}, err
+			}
+			return resp.Groups, resp.Pagination, nil
+		})
 	if err != nil {
 		h.handleError(w, r, err)
 		return
 	}
 
-	groups := make([]*platformv1.IAMGroup, 0, len(resp.Groups))
-	for i := range resp.Groups {
-		groups = append(groups, GroupToProto(&resp.Groups[i]))
+	groups := make([]*platformv1.IAMGroup, 0, len(found))
+	for i := range found {
+		groups = append(groups, GroupToProto(&found[i]))
 	}
 
-	total := int64(resp.Pagination.TotalCount)
 	protorest.WriteSuccess(w, r, h.respWriter, &platformv1.ListIAMGroupsResponse{
 		Groups:     groups,
 		Pagination: ListPagination(limit, offset, total),
@@ -939,18 +957,27 @@ func (h *IAMHandlers) ListRoles(w http.ResponseWriter, r *http.Request) {
 		PageSize: int(limit),
 	}
 
-	resp, err := h.iamClient.ListRoles(ctx, tenantID, sdkReq)
+	// The backend pages by token, so the requested offset is served by
+	// walking its pages.
+	found, total, err := listOffsetPage(limit, offset,
+		func(pageToken string) ([]iamsdk.Role, iamsdk.PaginationInfo, error) {
+			sdkReq.PageToken = pageToken
+			resp, err := h.iamClient.ListRoles(ctx, tenantID, sdkReq)
+			if err != nil {
+				return nil, iamsdk.PaginationInfo{}, err
+			}
+			return resp.Roles, resp.Pagination, nil
+		})
 	if err != nil {
 		h.handleError(w, r, err)
 		return
 	}
 
-	roles := make([]*platformv1.IAMRole, 0, len(resp.Roles))
-	for i := range resp.Roles {
-		roles = append(roles, RoleToProto(&resp.Roles[i]))
+	roles := make([]*platformv1.IAMRole, 0, len(found))
+	for i := range found {
+		roles = append(roles, RoleToProto(&found[i]))
 	}
 
-	total := int64(resp.Pagination.TotalCount)
 	protorest.WriteSuccess(w, r, h.respWriter, &platformv1.ListIAMRolesResponse{
 		Roles:      roles,
 		Pagination: ListPagination(limit, offset, total),
