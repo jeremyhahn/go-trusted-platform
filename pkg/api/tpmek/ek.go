@@ -93,6 +93,27 @@ func (e ErrNotConfigured) GRPCStatus() *status.Status {
 	return status.New(codes.FailedPrecondition, e.Error())
 }
 
+// ErrHandleMismatch is returned when Delete is asked to evict a handle
+// other than the configured EK, including a missing (zero) handle. Delete
+// evicts only tpm.ek, so any other request is refused before the TPM is
+// touched rather than silently evicting the configured EK. It is
+// InvalidArgument on every transport.
+type ErrHandleMismatch struct {
+	Requested  uint32
+	Configured uint32
+}
+
+// Error returns the message.
+func (e ErrHandleMismatch) Error() string {
+	return fmt.Sprintf("invalid EK handle 0x%08X: only the configured endorsement key 0x%08X can be deleted",
+		e.Requested, e.Configured)
+}
+
+// GRPCStatus classifies the error as InvalidArgument.
+func (e ErrHandleMismatch) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
 // ErrAlgorithm is returned when tpm.ek names a key algorithm an EK cannot
 // use (the TCG EK Credential Profile defines only RSA and ECC templates).
 // It is FailedPrecondition on every transport.
@@ -222,10 +243,12 @@ func Create(tpm xkmssdk.TrustedPlatformModule) (*xkmssdk.KeyAttributes, error) {
 // transport. It evicts the EK the TPM configuration names (tpm.ek) from its
 // persistent handle with TPM2_EvictControl (TPM 2.0 Library Part 3 §28.5),
 // authorised by the hierarchy auth it was persisted with, so a following
-// Create at the same handle succeeds. It returns the evicted handle. An
-// empty handle is ErrNotFound and a missing tpm.ek handle ErrNotConfigured;
-// a nil TPM is ErrTPMUnavailable.
-func Delete(tpm xkmssdk.TrustedPlatformModule) (uint32, error) {
+// Create at the same handle succeeds. It returns the evicted handle. A
+// requested handle other than tpm.ek's, a missing (zero) handle included,
+// is ErrHandleMismatch and evicts nothing. An empty handle is ErrNotFound
+// and a missing tpm.ek handle ErrNotConfigured; a nil TPM is
+// ErrTPMUnavailable.
+func Delete(tpm xkmssdk.TrustedPlatformModule, requested uint32) (uint32, error) {
 	if tpm == nil {
 		return 0, ErrTPMUnavailable{}
 	}
@@ -234,6 +257,9 @@ func Delete(tpm xkmssdk.TrustedPlatformModule) (uint32, error) {
 		return 0, ErrNotConfigured{}
 	}
 	handle := cfg.EK.Handle
+	if requested != handle {
+		return 0, ErrHandleMismatch{Requested: requested, Configured: handle}
+	}
 
 	name, _, err := tpm.ReadHandle(xkmssdk.TPMHandle(handle))
 	if errors.Is(err, libtpm2.TPMRCHandle) {
