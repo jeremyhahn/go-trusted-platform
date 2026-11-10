@@ -74,6 +74,27 @@ func TestInstallerMarkerExtension_ParsesBackAsACriticalClientAuthEKU(t *testing.
 	assert.True(t, HasInstallerMarker(cert))
 }
 
+// The critical flag is on the extended key usage extension, which every X.509
+// verifier processes, not on tp-pxeInstaller inside it (Codex round 2 on
+// #1544). A relying party that does not know the marker therefore accepts an
+// installer certificate as an ordinary client certificate, as the standard
+// verifier does here. The installer restriction holds only where the consumer
+// checks HasInstallerMarker.
+func TestInstallerMarkerExtension_AVerifierUnawareOfTheMarkerAcceptsTheCertificate(t *testing.T) {
+	marker, err := InstallerMarkerExtension()
+	require.NoError(t, err)
+	cert := signTestClientCertificate(t, marker)
+	require.True(t, HasInstallerMarker(cert))
+
+	roots := x509.NewCertPool()
+	roots.AddCert(cert)
+	_, err = cert.Verify(x509.VerifyOptions{Roots: roots, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}})
+	assert.NoError(t, err, "the standard verifier accepts an installer certificate for client authentication")
+
+	_, err = cert.Verify(x509.VerifyOptions{Roots: roots, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}})
+	assert.Error(t, err, "the extension still limits the certificate to the purposes it lists")
+}
+
 func TestHasInstallerMarker_RefusesCertificatesWithoutTheMarker(t *testing.T) {
 	assert.False(t, HasInstallerMarker(signTestClientCertificate(t)), "a plain client certificate")
 	assert.False(t, HasInstallerMarker(nil))
