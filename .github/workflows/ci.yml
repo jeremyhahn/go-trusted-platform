@@ -936,9 +936,17 @@ jobs:
           node-version: "22"
 
       - name: JavaScript SDK unit tests
+        # InfoSec O-3: on the pool, npm ci runs no install script (npm's
+        # ignore-scripts config, the --ignore-scripts flag as an environment
+        # setting). npm test and npm run still run the script they name.
+        env:
+          npm_config_ignore_scripts: ${{ runner.environment == 'self-hosted' }}
         run: make test-sdk-js
 
       - name: JavaScript SDK lint
+        # InfoSec O-3: as in the sdkjs job.
+        env:
+          npm_config_ignore_scripts: ${{ runner.environment == 'self-hosted' }}
         run: make lint-sdk-js
 
   # CUSTOMIZE (race): the unit suite under the race detector, minus
@@ -1018,6 +1026,9 @@ jobs:
           node-version: "22"
 
       - name: Install from lockfiles and build the SDK the console consumes
+        # InfoSec O-3: as in the sdkjs job.
+        env:
+          npm_config_ignore_scripts: ${{ runner.environment == 'self-hosted' }}
         run: make web-deps
 
       - name: Web console unit tests
