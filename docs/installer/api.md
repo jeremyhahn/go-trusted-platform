@@ -215,7 +215,13 @@ config-delivery routes (`provisioning/config/nonce`, `provisioning/config`,
 authenticate the device themselves. A bearer header does not lift the refusal.
 A request with no verified certificate goes to the route's own checks as
 before. The completion webhook is served by the webservice listener, not this
-one.
+one. The middleware applies the installer classification the scope guard
+applies (`isInstallerCertificate`, `pkg/api/daemon/transport_auth.go`) before
+it treats a certificate as a principal: a certificate that carries the
+`tp-pxeInstaller` marker, or was ever bound as a device's install certificate,
+is an installer here even when its subject and URI SAN name the operator or a
+tenant user. If the binding history cannot be read, the certificate is not
+treated as a principal: the refusal fails closed.
 
 ## 8. Errors as they would cross a transport
 

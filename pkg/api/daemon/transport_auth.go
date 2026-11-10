@@ -534,25 +534,38 @@ func (a mtlsPeerAuthenticator) authenticate(ctx context.Context, chain []*x509.C
 // other certificate holds what mtlsGrantFor decides: every operation for the
 // operator and a tenant principal of the trust domain, nothing for the rest.
 func (a mtlsPeerAuthenticator) peerScopes(ctx context.Context, leaf *x509.Certificate) ([]string, error) {
-	// The marker is read from the certificate itself, before any binding
-	// lookup, so a daemon that has restarted, or another instance, without
-	// the binding history still restricts an installer (Codex 8673, #1362).
-	if issuance.HasInstallerMarker(leaf) {
-		return []string{installerScope}, nil
-	}
-	if a.installs == nil {
-		return mtlsGrantFor(leaf, a.trustDomain), nil
-	}
-	fingerprint := pxe.CertificateSHA256(leaf.Raw)
-	bound, err := a.installs.IsInstallCertificate(ctx, fingerprint)
+	installer, err := isInstallerCertificate(ctx, a.installs, leaf)
 	if err != nil {
 		// Fail closed: a certificate whose role cannot be read gets no scope.
-		return nil, &InstallBindingLookupError{CertificateSHA256: fingerprint, Err: err}
+		return nil, err
 	}
-	if bound {
+	if installer {
 		return []string{installerScope}, nil
 	}
 	return mtlsGrantFor(leaf, a.trustDomain), nil
+}
+
+// isInstallerCertificate is the installer classification peerScopes and the
+// REST listener boundary share: leaf is an installer's when it carries the
+// tp-pxeInstaller marker or was ever bound as a device's install certificate.
+// The marker is read from the certificate itself, before any binding lookup,
+// so a daemon that has restarted, or another instance, without the binding
+// history still restricts an installer (Codex 8673, #1362). A nil installs
+// knows no binding. A binding that cannot be read is an
+// *InstallBindingLookupError: the caller fails closed.
+func isInstallerCertificate(ctx context.Context, installs installCertificateBindings, leaf *x509.Certificate) (bool, error) {
+	if issuance.HasInstallerMarker(leaf) {
+		return true, nil
+	}
+	if installs == nil {
+		return false, nil
+	}
+	fingerprint := pxe.CertificateSHA256(leaf.Raw)
+	bound, err := installs.IsInstallCertificate(ctx, fingerprint)
+	if err != nil {
+		return false, &InstallBindingLookupError{CertificateSHA256: fingerprint, Err: err}
+	}
+	return bound, nil
 }
 
 // authenticateMTLSCertificate authenticates cert. The installer certificate

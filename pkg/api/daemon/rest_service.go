@@ -93,6 +93,7 @@ type RESTServer struct {
 	gatewayHandlers       *restapi.GatewayHandlers
 	gatewayService        *gatewayRESTService
 	idevidService         *IDevIDGRPCService
+	installs              installCertificateBindings
 }
 
 // NewRESTServer creates a new REST server for the daemon
@@ -605,18 +606,20 @@ var installerMachineRoutes = map[string]bool{
 }
 
 // installerBoundaryMiddleware refuses a verified client certificate that is
-// not the operator on every route outside installerMachineRoutes. A request
-// with no verified certificate (no mTLS, or a bearer-only listener) passes
-// unchanged to the route's own checks. A bearer header does not lift the
-// refusal: most routes here never validate one, so honouring its mere
-// presence would let the installer through.
+// not a principal on every route outside installerMachineRoutes. A principal
+// is the operator or a tenant principal whose certificate is not an
+// installer's (isBoundaryPrincipal): identity fields never lift an
+// installer's restriction. A request with no verified certificate (no mTLS,
+// or a bearer-only listener) passes unchanged to the route's own checks. A
+// bearer header does not lift the refusal: most routes here never validate
+// one, so honouring its mere presence would let the installer through.
 func (s *RESTServer) installerBoundaryMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 || len(r.TLS.VerifiedChains[0]) == 0 {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if isMTLSPrincipal(r.TLS.VerifiedChains[0][0], s.config.MTLSOperatorTrustDomain) {
+		if s.isBoundaryPrincipal(r) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -629,6 +632,35 @@ func (s *RESTServer) installerBoundaryMiddleware(next http.Handler) http.Handler
 		}
 		s.writeError(w, http.StatusForbidden, ErrInstallerRouteForbidden{Method: r.Method, Path: r.URL.Path})
 	})
+}
+
+// setInstallBindings gives the listener boundary the PXE install binding
+// history the scope guard reads. It is called once, before the server
+// serves. Without it an installer is known by its marker alone.
+func (s *RESTServer) setInstallBindings(installs installCertificateBindings) {
+	s.installs = installs
+}
+
+// isBoundaryPrincipal reports whether the request's verified client
+// certificate may go beyond installerMachineRoutes: it names the operator or
+// a tenant principal and is not an installer's. The installer classification
+// is the one peerScopes applies (isInstallerCertificate), so a certificate
+// with the tp-pxeInstaller marker, or one ever bound as a device's install
+// certificate, is never a principal here, whatever its subject and URI SANs
+// name. It is read only for a certificate that names a principal: any other
+// certificate is refused already. A binding that cannot be read fails
+// closed: the certificate is not a principal.
+func (s *RESTServer) isBoundaryPrincipal(r *http.Request) bool {
+	leaf := r.TLS.VerifiedChains[0][0]
+	if !isMTLSPrincipal(leaf, s.config.MTLSOperatorTrustDomain) {
+		return false
+	}
+	installer, err := isInstallerCertificate(r.Context(), s.installs, leaf)
+	if err != nil {
+		s.logger.Warn("REST boundary: the install certificate binding is unreadable, the certificate is not treated as a principal", "error", err)
+		return false
+	}
+	return !installer
 }
 
 func (s *RESTServer) applyMiddleware(handler http.Handler) http.Handler {

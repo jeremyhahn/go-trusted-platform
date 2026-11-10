@@ -1490,7 +1490,9 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	var restGuard *restapi.ScopeGuard
 	if daemon.concreteRestServer != nil {
 		var guardErr error
-		restGuard, guardErr = newRESTScopeGuard(config, platformTokenValidatorShared, pxeInstallBindings{service: pxeGRPCService}, logger)
+		installBindings := pxeInstallBindings{service: pxeGRPCService}
+		daemon.concreteRestServer.setInstallBindings(installBindings)
+		restGuard, guardErr = newRESTScopeGuard(config, platformTokenValidatorShared, installBindings, logger)
 		if guardErr != nil {
 			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: guardErr}
 			logger.Error(constructErr, "component", "rest_server")

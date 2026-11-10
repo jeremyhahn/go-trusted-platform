@@ -948,3 +948,84 @@ func TestMTLSInstallerScope_RESTRefusesAMarkedInstallerNamingAPrincipal(t *testi
 		})
 	}
 }
+
+// failingInstallBindings is a PXE install binding history that cannot be read.
+type failingInstallBindings struct{}
+
+func (failingInstallBindings) IsInstallCertificate(context.Context, string) (bool, error) {
+	return false, assert.AnError
+}
+
+// A certificate bound as a device's install certificate is an installer on
+// the REST listener even without the marker and even when it names the
+// operator; the operator's own certificate, never bound, keeps its access.
+func TestMTLSInstallerScope_RESTRefusesABoundInstallCertificateNamingTheOperator(t *testing.T) {
+	f := newInstallerScopeFixture(t)
+	server, managed, kms := newInstallerBoundaryServer(t, f)
+	server.setInstallBindings(pxeInstallBindings{service: f.svc})
+
+	bound := f.issuerA.issueOperator(t, 410)
+	require.False(t, issuance.HasInstallerMarker(bound))
+	// A device of its own, next to installerMAC.
+	f.install(t, installerMAC[:len(installerMAC)-1]+"9", bound)
+
+	stop := serveAs(server, bound, http.MethodPost, "/api/v1/services/boundary-svc/stop")
+	assert.Equal(t, http.StatusForbidden, stop.Code, "a bound install certificate must not stop a service")
+	assert.Zero(t, managed.stopCount.Load(), "a refused stop must leave the service running")
+
+	del := serveAs(server, bound, http.MethodDelete, "/api/v1/kms/keys/k1")
+	assert.Equal(t, http.StatusForbidden, del.Code, "a bound install certificate must not delete a key")
+	assert.Empty(t, kms.deleted, "a refused delete must leave the key in place")
+
+	stop = serveAs(server, f.operator, http.MethodPost, "/api/v1/services/boundary-svc/stop")
+	assert.Equal(t, http.StatusOK, stop.Code, "the operator, never bound, stops the service: %s", stop.Body.String())
+	assert.Equal(t, int32(1), managed.stopCount.Load())
+}
+
+// A binding history that cannot be read fails closed: a certificate that
+// names the operator is refused on a privileged route rather than trusted,
+// and still reaches a machine-facing route, as every verified certificate
+// does.
+func TestMTLSInstallerScope_RESTFailsClosedWhenTheBindingHistoryCannotBeRead(t *testing.T) {
+	f := newInstallerScopeFixture(t)
+	server, managed, kms := newInstallerBoundaryServer(t, f)
+	server.setInstallBindings(failingInstallBindings{})
+
+	stop := serveAs(server, f.operator, http.MethodPost, "/api/v1/services/boundary-svc/stop")
+	assert.Equal(t, http.StatusForbidden, stop.Code, "an unreadable binding must not be read as no binding")
+	assert.Zero(t, managed.stopCount.Load(), "a refused stop must leave the service running")
+
+	del := serveAs(server, f.operator, http.MethodDelete, "/api/v1/kms/keys/k1")
+	assert.Equal(t, http.StatusForbidden, del.Code, "an unreadable binding must not be read as no binding")
+	assert.Empty(t, kms.deleted, "a refused delete must leave the key in place")
+
+	health, _ := serveRecovering(server, f.operator, http.MethodGet, "/api/v1/health")
+	refusal := ErrInstallerRouteForbidden{Method: http.MethodGet, Path: "/api/v1/health"}.Error()
+	assert.NotContains(t, health.Body.String(), refusal, "a machine-facing route stays reachable")
+}
+
+// isInstallerCertificate reads the marker before the binding history, and
+// names the certificate whose history it could not read.
+func TestMTLSInstallerScope_InstallerClassification(t *testing.T) {
+	f := newInstallerScopeFixture(t)
+	ctx := context.Background()
+
+	installer, err := isInstallerCertificate(ctx, failingInstallBindings{}, f.installer)
+	require.NoError(t, err, "the marker is read before the history")
+	assert.True(t, installer)
+
+	installer, err = isInstallerCertificate(ctx, nil, f.operator)
+	require.NoError(t, err)
+	assert.False(t, installer, "no history knows no binding")
+
+	installer, err = isInstallerCertificate(ctx, pxeInstallBindings{service: f.svc}, f.operator)
+	require.NoError(t, err)
+	assert.False(t, installer, "the operator's certificate was never bound")
+
+	installer, err = isInstallerCertificate(ctx, failingInstallBindings{}, f.operator)
+	var lookup *InstallBindingLookupError
+	require.ErrorAs(t, err, &lookup)
+	assert.False(t, installer)
+	assert.Equal(t, pxe.CertificateSHA256(f.operator.Raw), lookup.CertificateSHA256)
+	assert.ErrorIs(t, err, assert.AnError)
+}
