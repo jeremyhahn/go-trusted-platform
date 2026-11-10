@@ -66,6 +66,12 @@ func (a *Adapter) bindChannel(ctx context.Context, bind transport.ChannelBinder)
 	if a.closed.Load() {
 		return nil, ErrClientClosed{}
 	}
+	if a.tlsConfig == nil {
+		return nil, &transport.ErrChannelBindingUnavailable{
+			Transport: platform.ProtocolREST.String(),
+			Reason:    "the adapter sends through a caller-supplied RoundTripper, which owns its connections; there is no TLS connection to bind to",
+		}
+	}
 	address, err := a.boundAddress()
 	if err != nil {
 		return nil, err
