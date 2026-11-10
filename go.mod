@@ -12,7 +12,7 @@ replace github.com/mattn/go-ieproxy => github.com/mattn/go-ieproxy v0.0.12
 replace github.com/armon/go-metrics => github.com/armon/go-metrics v0.4.1 // held: v0.7.0 declares its module path as github.com/hashicorp/go-metrics
 
 // Cross-repo dependencies resolve as normal Go modules fetched from the dev
-// Gitea server during development (gitconfig insteadOf + GOPRIVATE) and from
+// Gitea server during development (gitconfig insteadOf) and from
 // GitHub for public builds — see software/conventions/dependency-resolution.md
 // in the handbook. The only local-path replace is the intra-repo sdk/go
 // reference below, so the root builds against the SDK in this tree. The
@@ -82,7 +82,7 @@ require (
 	github.com/yosida95/uritemplate/v3 v3.0.2
 	golang.org/x/crypto v0.58.0
 	golang.org/x/net v0.62.0
-	golang.org/x/sync v0.24.0
+	golang.org/x/sync v0.25.0
 	golang.org/x/sys v0.49.0
 	golang.org/x/term v0.47.0
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20241231184526-a9ab2273dd10

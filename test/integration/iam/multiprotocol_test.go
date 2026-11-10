@@ -1148,7 +1148,7 @@ func TestIAMMultiProtocol_ErrorHandling(t *testing.T) {
 				opts := CreateRoleOptions{
 					TenantID:    DefaultTenantID(),
 					ID:          roleID,
-					Name:        "Test Role Dup 1",
+					Name:        "Test Role Dup 1 " + testID,
 					Description: "First role",
 					Permissions: []string{permSecretsRead},
 				}
@@ -1159,7 +1159,7 @@ func TestIAMMultiProtocol_ErrorHandling(t *testing.T) {
 				}
 
 				// Try to create second role with same ID
-				opts.Name = "Test Role Dup 2"
+				opts.Name = "Test Role Dup 2 " + testID
 				_, err = adapter.CreateRole(ctx, opts)
 				if err == nil {
 					t.Error("CreateRole should fail for duplicate ID")

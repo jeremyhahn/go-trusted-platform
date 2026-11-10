@@ -181,11 +181,6 @@ env:
   # release.yml set the same).
   GOWORK: "off"
   GOFLAGS: "-buildvcs=false"
-  # The jeremyhahn/* modules resolve direct from GitHub, never through
-  # proxy.golang.org or sum.golang.org: the history rewrite moved published
-  # tags, and the public proxy and checksum database keep the old zips
-  # and hashes for good, so go.sum (the rewritten bits) cannot verify there.
-  GOPRIVATE: "github.com/jeremyhahn/*"
   # The full-tier selection (v1.23): every event but pull_request, and a PR
   # labelled ci:full. Steps and ci-gate read it; a job-level `if:` cannot.
   CI_FULL_TIER: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full') }}
@@ -397,7 +392,7 @@ jobs:
         run: |
           umask 077
           : > "$RUNNER_TEMP/gomodauth.env"
-          for v in GOPRIVATE GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; do
+          for v in GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; do
             if [ -n "${!v:-}" ]; then printf '%s=%s\n' "$v" "${!v}" >> "$RUNNER_TEMP/gomodauth.env"; fi
           done
 
@@ -827,12 +822,19 @@ jobs:
   # RACE_EXCLUDE (#37). Race detection is sampling, not proof: a ratchet
   # against reintroduction. Hosted runners (CA m2061): four shards, each a
   # round-robin quarter of test-race's package list (Makefile SHARD/SHARDS),
-  # to fit a hosted job's 4 cores and 6 hours.
+  # to fit a hosted job's 4 cores and 6 hours. The one exception to the
+  # hosted runners (m2403 (2), m2406 (1), 2026-11-10): a push to main and a
+  # pull_request from this repository run on the bigdisk runner
+  # [self-hosted, linux, x64, bigdisk]; fork PRs, other branches,
+  # workflow_dispatch and the schedule stay on ubuntu-latest. As on every
+  # bigdisk job, it needs schedule-guard and its if: carries the guard. The
+  # runner image carries cpio and libssl-dev, so the apt step is hosted-only,
+  # and the checkout token is not persisted.
   race:
     name: Race (shard ${{ matrix.shard }}/4)
-    runs-on: ubuntu-latest
-    if: ${{ needs.changes.outputs.docs_only != 'true' && !github.event.pull_request.draft }}
-    needs: [changes]
+    runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}
+    if: ${{ needs.changes.outputs.docs_only != 'true' && !github.event.pull_request.draft && (github.event_name != 'schedule' || needs.schedule-guard.outputs.verdict == 'run') }}
+    needs: [changes, schedule-guard]
     timeout-minutes: 360
     strategy:
       fail-fast: false
@@ -840,6 +842,8 @@ jobs:
         shard: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -847,8 +851,10 @@ jobs:
 
       # cpio: pkg/diskimage/netboot repacks an initramfs with it. libssl-dev:
       # pkg/app's IDevID mTLS tests run go-tpm-tools' simulator, which
-      # compiles the reference TPM with cgo against OpenSSL (#149).
+      # compiles the reference TPM with cgo against OpenSSL (#149). The
+      # bigdisk runner's image carries both: hosted runners only.
       - name: Install cpio and the OpenSSL headers
+        if: runner.environment == 'github-hosted'
         run: sudo apt-get update && sudo apt-get install -y cpio libssl-dev
 
       - name: make test-race
@@ -970,7 +976,7 @@ jobs:
         run: |
           umask 077
           : > "$RUNNER_TEMP/gomodauth.env"
-          for v in GOPRIVATE GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; do
+          for v in GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; do
             if [ -n "${!v:-}" ]; then printf '%s=%s\n' "$v" "${!v}" >> "$RUNNER_TEMP/gomodauth.env"; fi
           done
 
@@ -1165,7 +1171,7 @@ jobs:
         run: |
           umask 077
           : > "$RUNNER_TEMP/gomodauth.env"
-          for v in GOPRIVATE GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; do
+          for v in GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; do
             if [ -n "${!v:-}" ]; then printf '%s=%s\n' "$v" "${!v}" >> "$RUNNER_TEMP/gomodauth.env"; fi
           done
 
@@ -1403,7 +1409,7 @@ jobs:
         run: |
           umask 077
           : > "$RUNNER_TEMP/gomodauth.env"
-          for v in GOPRIVATE GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; do
+          for v in GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; do
             if [ -n "${!v:-}" ]; then printf '%s=%s\n' "$v" "${!v}" >> "$RUNNER_TEMP/gomodauth.env"; fi
           done
 
