@@ -307,6 +307,39 @@ func TestRegisterRoutes_DaemonMFAPolicyPutTakesAdmin(t *testing.T) {
 	}
 }
 
+// TestDaemonRoutes_MFAPolicyPutNotMounted: login does not enforce the
+// tenant MFA policy, so the webservice must not accept an update to it,
+// not even from an admin; reading it stays open to the login flow.
+func TestDaemonRoutes_MFAPolicyPutNotMounted(t *testing.T) {
+	platform := testutil.GenerateTestTLSBundle(t)
+	const policyPath = "/api/v1/tenants/system/security/mfa-policy"
+
+	tests := []struct {
+		name   string
+		auth   jwt.TokenHandler
+		method string
+		want   int
+	}{
+		{"PUT with the admin role", &sessionAuth{roles: []string{common.ROLE_ADMIN}, tenantID: "system"}, http.MethodPut, http.StatusForbidden},
+		{"PUT with the user role", &sessionAuth{roles: []string{"user"}, tenantID: "system"}, http.MethodPut, http.StatusForbidden},
+		{"GET without a session", &anonymousAuth{}, http.MethodGet, http.StatusOK},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			daemon := &authFactorDaemonRoutes{roots: platform.CAPool}
+			root := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: tt.auth, daemonRoutes: daemon})
+
+			assert.Equal(t, tt.want, serveWithTLS(root, tt.method, policyPath, verifiedClientState(t, platform)))
+			if tt.want == http.StatusOK {
+				assert.Equal(t, []string{tt.method + " " + mfaPolicyTemplate}, daemon.served)
+			} else {
+				assert.Empty(t, daemon.served, "the daemon MFA policy PUT handler must not run")
+			}
+			assert.NotContains(t, privilegedDaemonMethodRoutes, http.MethodPut+" "+mfaPolicyTemplate)
+		})
+	}
+}
+
 // TestRegisterRoutes_DaemonMFAPolicyPutStaysInTheCallersTenant: the admin
 // role says the caller administers a tenant, not which one. A tenant-A
 // administrator naming tenant B in the path is refused before the daemon
