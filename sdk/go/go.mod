@@ -7,7 +7,7 @@ require (
 	github.com/jeremyhahn/go-codec v1.4.0 // held: v1.5.0-alpha is not in the module cache and cannot be fetched offline in #933; go-quicbaas, go-xkms and go-qrdb (every cached tag) still require v1.4.0
 	github.com/jeremyhahn/go-quicbaas v0.12.0-alpha // held: the v0.16.0-alpha adoption is #906/#937 (fix-qbsdk16)
 	github.com/jeremyhahn/go-quicbaas/sdk/go v0.12.0-alpha // held: the v0.16.0-alpha adoption is #906/#937 (fix-qbsdk16)
-	github.com/quic-go/quic-go v0.62.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	github.com/quic-go/quic-go v0.64.1 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	github.com/stretchr/testify v1.12.1
 	google.golang.org/grpc v1.83.2 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	google.golang.org/protobuf v1.36.12
@@ -140,12 +140,12 @@ require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jackc/pgx/v5 v5.10.0 // indirect
 	github.com/jeremyhahn/go-auth v0.2.0-alpha // indirect
-	github.com/jeremyhahn/go-enclave v0.5.0-alpha // indirect
+	github.com/jeremyhahn/go-enclave v0.10.0-alpha // indirect
 	github.com/jeremyhahn/go-frost v0.3.0-alpha // indirect
 	github.com/jeremyhahn/go-objstore v0.3.0-alpha // indirect
 	github.com/jeremyhahn/go-qrdb v0.19.0-alpha // indirect
 	github.com/jeremyhahn/go-qrdb/sdk/go v0.19.0-alpha // indirect
-	github.com/jeremyhahn/go-quicraft v0.13.1-alpha // indirect
+	github.com/jeremyhahn/go-quicraft v0.24.3-alpha // indirect
 	github.com/jeremyhahn/go-truststrap v0.4.0-alpha // indirect
 	github.com/jeremyhahn/go-xkms v0.17.0-alpha // indirect
 	github.com/jeremyhahn/go-xkms/sdk/go v0.17.0-alpha // indirect
@@ -180,10 +180,10 @@ require (
 	github.com/planetscale/vtprotobuf v0.6.1-0.20250313105119-ba97887b0a25 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/pquerna/otp v1.5.0 // indirect
-	github.com/prometheus/client_golang v1.24.1 // indirect
+	github.com/prometheus/client_golang v1.25.0 // indirect
 	github.com/prometheus/client_model v0.6.3 // indirect
-	github.com/prometheus/common v0.70.1 // indirect
-	github.com/prometheus/procfs v0.21.1 // indirect
+	github.com/prometheus/common v0.72.0 // indirect
+	github.com/prometheus/procfs v0.22.0 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/redis/go-redis/v9 v9.18.0 // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
@@ -227,10 +227,10 @@ require (
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/arch v0.30.0 // indirect
 	golang.org/x/crypto v0.58.0 // indirect
-	golang.org/x/exp v0.0.0-20260813180055-c1d0aacb2297 // indirect
+	golang.org/x/exp v0.0.0-20260908205506-85c1c2202aba // indirect
 	golang.org/x/mod v0.41.0 // indirect
 	golang.org/x/net v0.62.0 // indirect
-	golang.org/x/oauth2 v0.36.0 // indirect
+	golang.org/x/oauth2 v0.37.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/telemetry v0.0.0-20260924152758-ed294f943157 // indirect

@@ -67,9 +67,9 @@ require (
 	github.com/osrg/gobgp/v4 v4.9.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	github.com/ovn-org/libovsdb v0.0.0-20250702120510-8a0705fef3ad
 	github.com/pin/tftp/v3 v3.1.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
-	github.com/prometheus/client_golang v1.24.1 // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	github.com/prometheus/client_golang v1.25.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	github.com/quic-go/connect-ip-go v0.2.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
-	github.com/quic-go/quic-go v0.62.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	github.com/quic-go/quic-go v0.64.1 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.1.0
 	github.com/spf13/viper v1.21.0
@@ -244,12 +244,12 @@ require (
 	github.com/jbenet/go-temp-err-catcher v0.1.0 // indirect
 	github.com/jchv/go-winloader v0.0.0-20250406163304-c1995be93bd1 // indirect
 	github.com/jeremyhahn/go-auth v0.2.0-alpha // indirect
-	github.com/jeremyhahn/go-enclave v0.5.0-alpha // indirect
+	github.com/jeremyhahn/go-enclave v0.10.0-alpha // indirect
 	github.com/jeremyhahn/go-frost v0.3.0-alpha // indirect
 	github.com/jeremyhahn/go-objstore v0.3.0-alpha // indirect
 	github.com/jeremyhahn/go-qrdb v0.19.0-alpha // indirect
 	github.com/jeremyhahn/go-qrdb/sdk/go v0.19.0-alpha // indirect
-	github.com/jeremyhahn/go-quicraft v0.13.1-alpha // indirect
+	github.com/jeremyhahn/go-quicraft v0.24.3-alpha // indirect
 	github.com/jeremyhahn/go-truststrap v0.4.0-alpha // indirect
 	github.com/jeremyhahn/go-xkms v0.17.0-alpha // indirect
 	github.com/jeremyhahn/go-xkms/sdk/go v0.17.0-alpha // indirect
@@ -354,9 +354,9 @@ require (
 	github.com/polydawn/refmt v0.89.0 // indirect
 	github.com/pquerna/otp v1.5.0 // indirect
 	github.com/prometheus/client_model v0.6.3 // indirect
-	github.com/prometheus/common v0.70.1 // indirect
+	github.com/prometheus/common v0.72.0 // indirect
 	github.com/prometheus/exporter-toolkit v0.17.1 // indirect
-	github.com/prometheus/procfs v0.21.1 // indirect
+	github.com/prometheus/procfs v0.22.0 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/webtransport-go v0.13.0 // indirect
 	github.com/rcrowley/go-metrics v0.0.0-20250401214520-65e299d6c5c9 // indirect
@@ -428,9 +428,9 @@ require (
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/arch v0.30.0 // indirect
-	golang.org/x/exp v0.0.0-20260813180055-c1d0aacb2297 // indirect
+	golang.org/x/exp v0.0.0-20260908205506-85c1c2202aba // indirect
 	golang.org/x/mod v0.41.0 // indirect
-	golang.org/x/oauth2 v0.36.0 // indirect
+	golang.org/x/oauth2 v0.37.0 // indirect
 	golang.org/x/telemetry v0.0.0-20260924152758-ed294f943157 // indirect
 	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
