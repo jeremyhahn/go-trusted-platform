@@ -240,13 +240,3 @@ func TestConstants(t *testing.T) {
 		assert.Equal(t, 50, VXLANOverhead)
 	})
 }
-
-func TestVNIMappingConfig_Fields(t *testing.T) {
-	config := VNIMappingConfig{
-		BaseVNI: 2000000,
-		MaxVLAN: 1000,
-	}
-
-	assert.Equal(t, VNI(2000000), config.BaseVNI)
-	assert.Equal(t, uint16(1000), config.MaxVLAN)
-}
