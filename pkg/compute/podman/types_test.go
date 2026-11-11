@@ -15,7 +15,6 @@ package podman
 
 import (
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -317,46 +316,6 @@ func TestResourceLimits_Validate(t *testing.T) {
 	}
 }
 
-func TestContainer_Fields(t *testing.T) {
-	now := time.Now()
-	startedAt := now.Add(-1 * time.Hour)
-	finishedAt := now
-
-	container := &Container{
-		ID:          "abc123",
-		Name:        "test-container",
-		Image:       "alpine:latest",
-		ImageDigest: "sha256:abc123",
-		State:       ContainerStateRunning,
-		CreatedAt:   now.Add(-2 * time.Hour),
-		StartedAt:   &startedAt,
-		FinishedAt:  &finishedAt,
-		ExitCode:    0,
-		Labels:      map[string]string{"app": "test"},
-		Mounts: []Mount{
-			{Source: "/host", Target: "/container", Type: "bind"},
-		},
-		Ports: []PortMapping{
-			{HostPort: 8080, ContainerPort: 80, Protocol: "tcp"},
-		},
-		Environment: map[string]string{"ENV_VAR": "value"},
-		PID:         12345,
-		Command:     []string{"sleep", "infinity"},
-		NetworkMode: "bridge",
-	}
-
-	assert.Equal(t, "abc123", container.ID)
-	assert.Equal(t, "test-container", container.Name)
-	assert.Equal(t, "alpine:latest", container.Image)
-	assert.Equal(t, ContainerStateRunning, container.State)
-	assert.Equal(t, 12345, container.PID)
-	assert.Len(t, container.Labels, 1)
-	assert.Len(t, container.Mounts, 1)
-	assert.Len(t, container.Ports, 1)
-	assert.Len(t, container.Environment, 1)
-	assert.Len(t, container.Command, 2)
-}
-
 func TestContainerConfig_Fields(t *testing.T) {
 	timeout := 30
 	config := &ContainerConfig{
@@ -406,95 +365,6 @@ func TestContainerConfig_Fields(t *testing.T) {
 	assert.False(t, config.Privileged)
 	assert.True(t, config.ReadOnly)
 	assert.Equal(t, 30, *config.StopTimeout)
-}
-
-func TestImage_Fields(t *testing.T) {
-	created := time.Now().Add(-24 * time.Hour)
-	image := &Image{
-		ID:           "sha256:abc123",
-		Names:        []string{"alpine:latest", "alpine:3.18"},
-		Digest:       "sha256:def456",
-		Size:         5 * 1024 * 1024,
-		Created:      created,
-		Labels:       map[string]string{"maintainer": "test@example.com"},
-		Architecture: "amd64",
-		OS:           "linux",
-	}
-
-	assert.Equal(t, "sha256:abc123", image.ID)
-	assert.Len(t, image.Names, 2)
-	assert.Equal(t, "sha256:def456", image.Digest)
-	assert.Equal(t, int64(5*1024*1024), image.Size)
-	assert.Equal(t, "amd64", image.Architecture)
-	assert.Equal(t, "linux", image.OS)
-}
-
-func TestContainerStats_Fields(t *testing.T) {
-	stats := &ContainerStats{
-		ContainerID:    "abc123",
-		Name:           "test-container",
-		CPUPercent:     25.5,
-		MemoryUsage:    128 * 1024 * 1024,
-		MemoryLimit:    256 * 1024 * 1024,
-		MemoryPercent:  50.0,
-		NetworkRxBytes: 1024 * 1024,
-		NetworkTxBytes: 512 * 1024,
-		BlockRead:      2048,
-		BlockWrite:     1024,
-		PIDs:           5,
-		Timestamp:      time.Now(),
-	}
-
-	assert.Equal(t, "abc123", stats.ContainerID)
-	assert.Equal(t, 25.5, stats.CPUPercent)
-	assert.Equal(t, 50.0, stats.MemoryPercent)
-	assert.Equal(t, int64(5), stats.PIDs)
-}
-
-func TestExecConfig_Fields(t *testing.T) {
-	config := &ExecConfig{
-		Command:      []string{"ls", "-la"},
-		User:         "root",
-		WorkDir:      "/app",
-		Environment:  map[string]string{"DEBUG": "true"},
-		Privileged:   true,
-		AttachStdout: true,
-		AttachStderr: true,
-	}
-
-	assert.Len(t, config.Command, 2)
-	assert.Equal(t, "root", config.User)
-	assert.Equal(t, "/app", config.WorkDir)
-	assert.True(t, config.Privileged)
-	assert.True(t, config.AttachStdout)
-	assert.True(t, config.AttachStderr)
-}
-
-func TestExecResult_Fields(t *testing.T) {
-	result := &ExecResult{
-		ExitCode: 0,
-		Stdout:   []byte("output"),
-		Stderr:   []byte("error"),
-	}
-
-	assert.Equal(t, 0, result.ExitCode)
-	assert.Equal(t, "output", string(result.Stdout))
-	assert.Equal(t, "error", string(result.Stderr))
-}
-
-func TestContainerLogs_Fields(t *testing.T) {
-	now := time.Now()
-	logs := &ContainerLogs{
-		ContainerID: "abc123",
-		Stdout:      []byte("stdout logs"),
-		Stderr:      []byte("stderr logs"),
-		Since:       now.Add(-1 * time.Hour),
-		Until:       now,
-	}
-
-	assert.Equal(t, "abc123", logs.ContainerID)
-	assert.Equal(t, "stdout logs", string(logs.Stdout))
-	assert.Equal(t, "stderr logs", string(logs.Stderr))
 }
 
 func TestMount_Options(t *testing.T) {

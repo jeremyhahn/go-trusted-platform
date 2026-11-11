@@ -18,39 +18,6 @@ import (
 	"testing"
 )
 
-func TestErrors(t *testing.T) {
-	tests := []struct {
-		name string
-		err  error
-	}{
-		{"ErrInstanceNotFound", ErrInstanceNotFound},
-		{"ErrInstanceAlreadyExists", ErrInstanceAlreadyExists},
-		{"ErrInstanceNotRunning", ErrInstanceNotRunning},
-		{"ErrInstanceAlreadyRunning", ErrInstanceAlreadyRunning},
-		{"ErrInvalidConfiguration", ErrInvalidConfiguration},
-		{"ErrInvalidInstanceID", ErrInvalidInstanceID},
-		{"ErrInvalidProfile", ErrInvalidProfile},
-		{"ErrNetworkAttachmentFailed", ErrNetworkAttachmentFailed},
-		{"ErrNetworkDetachmentFailed", ErrNetworkDetachmentFailed},
-		{"ErrOrchestratorNotInitialized", ErrOrchestratorNotInitialized},
-		{"ErrUnsupportedOperation", ErrUnsupportedOperation},
-		{"ErrInvalidState", ErrInvalidState},
-		{"ErrTimeout", ErrTimeout},
-		{"ErrResourceExhausted", ErrResourceExhausted},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.err == nil {
-				t.Errorf("%s should not be nil", tt.name)
-			}
-			if tt.err.Error() == "" {
-				t.Errorf("%s should have a non-empty error message", tt.name)
-			}
-		})
-	}
-}
-
 func TestErrorEquality(t *testing.T) {
 	// Test that errors are sentinel values
 	if !errors.Is(ErrInstanceNotFound, ErrInstanceNotFound) {

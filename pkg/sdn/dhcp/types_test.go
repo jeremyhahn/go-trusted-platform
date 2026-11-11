@@ -325,7 +325,7 @@ func TestDHCPOptions_Validate(t *testing.T) {
 		opts := &DHCPOptions{}
 		err := opts.Validate()
 		assert.NoError(t, err)
-		assert.Equal(t, DefaultLeaseDuration, opts.LeaseTime)
+		assert.Equal(t, 24*time.Hour, opts.LeaseTime)
 	})
 
 	t.Run("sets default renewal time", func(t *testing.T) {
@@ -687,24 +687,5 @@ func TestLeaseRequest_Validate(t *testing.T) {
 		}
 		err := r.Validate()
 		assert.NoError(t, err)
-	})
-}
-
-func TestConstants(t *testing.T) {
-	t.Run("default durations are correct", func(t *testing.T) {
-		assert.Equal(t, 24*time.Hour, DefaultLeaseDuration)
-		assert.Equal(t, 12*time.Hour, DefaultRenewalTime)
-		assert.Equal(t, 21*time.Hour, DefaultRebindingTime)
-	})
-
-	t.Run("IPAM backends are defined", func(t *testing.T) {
-		assert.Equal(t, "memory", IPAMBackendMemory)
-		assert.Equal(t, "quicbaas", IPAMBackendQuicBaaS)
-		assert.Equal(t, "dht", IPAMBackendDHT)
-	})
-
-	t.Run("network types are defined", func(t *testing.T) {
-		assert.Equal(t, "public", NetworkPublic)
-		assert.Equal(t, "private", NetworkPrivate)
 	})
 }

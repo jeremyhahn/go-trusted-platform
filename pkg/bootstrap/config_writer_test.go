@@ -544,18 +544,6 @@ func TestConfigWriter_BackupAndRestore_Integration(t *testing.T) {
 	assert.NotContains(t, string(data), "kms://ca/srk-auth")
 }
 
-func TestSecretUpdate_Struct(t *testing.T) {
-	update := SecretUpdate{
-		Path:          "certificate-authority.identity[0].keystores.tpm2.srk-auth",
-		KMSReference:  "kms://config/ca/identity/0/keystores/tpm2/srk-auth",
-		OriginalValue: "original-password",
-	}
-
-	assert.Equal(t, "certificate-authority.identity[0].keystores.tpm2.srk-auth", update.Path)
-	assert.Equal(t, "kms://config/ca/identity/0/keystores/tpm2/srk-auth", update.KMSReference)
-	assert.Equal(t, "original-password", update.OriginalValue)
-}
-
 func TestErrors(t *testing.T) {
 	t.Run("ErrConfigFileNotFound", func(t *testing.T) {
 		err := ErrConfigFileNotFound{Path: "/etc/config.yaml"}

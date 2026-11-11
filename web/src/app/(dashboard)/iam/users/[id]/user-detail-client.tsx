@@ -12,6 +12,21 @@ import { resolveDynamicId } from '@/utils/dynamic-route';
 import { useAuth } from '@/contexts/AuthContext';
 import { useIAM, useApi, useMutation, useToast } from '@/hooks';
 import { LegacyUser, UpdateUserInput, LegacyRole, ActivityLogEntry } from '@/types/iam';
+
+// User record as the REST API sends it: camelCase or snake_case keys (#445).
+interface UserWire {
+  id?: string;
+  email?: string;
+  name?: string;
+  roles?: string[];
+  role_ids?: string[];
+  createdAt?: string;
+  created_at?: string;
+  updatedAt?: string;
+  updated_at?: string;
+  lastAuth?: string;
+  last_auth?: string;
+}
 import { UserForm } from '@/components/features/iam/user-form';
 import { Button } from '@/components/ui/button';
 import {
@@ -91,11 +106,12 @@ export default function UserDetailPage() {
   // envelope with camelCase. Tolerate both shapes so the page works
   // regardless of which envelope the SDK returns.
   // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-  const userRecord: any = (user as any)?.user ?? user ?? null;
+  const rawUser = user as unknown as (UserWire & { user?: UserWire }) | null | undefined;
+  const userRecord: UserWire | null = rawUser?.user ?? rawUser ?? null;
   const legacyUser: LegacyUser | null = userRecord ? {
-    id: userRecord.id,
-    email: userRecord.email,
-    name: userRecord.name,
+    id: userRecord.id ?? '',
+    email: userRecord.email ?? '',
+    name: userRecord.name ?? '',
     roles: ((userRecord.roles || userRecord.role_ids || []) as string[]).map((roleId: string) => {
       const roleData = allRoles.find((r: LegacyRole) => r.id === roleId);
       return roleData || {
@@ -110,8 +126,8 @@ export default function UserDetailPage() {
     }),
     permissions: [],
     status: 'active',
-    createdAt: userRecord.createdAt ?? userRecord.created_at,
-    updatedAt: userRecord.updatedAt ?? userRecord.updated_at,
+    createdAt: userRecord.createdAt ?? userRecord.created_at ?? '',
+    updatedAt: userRecord.updatedAt ?? userRecord.updated_at ?? '',
     lastLoginAt: userRecord.lastAuth ?? userRecord.last_auth,
     avatarUrl: undefined
   } : null;

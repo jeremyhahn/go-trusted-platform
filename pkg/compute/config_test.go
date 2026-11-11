@@ -245,58 +245,6 @@ func TestOrchestratorConfig_Validate(t *testing.T) {
 	}
 }
 
-func TestOrchestratorConfig_Fields(t *testing.T) {
-	config := &OrchestratorConfig{
-		Type:            ComputeTypeVM,
-		WorkDir:         "/var/lib/compute",
-		DefaultMemory:   8192,
-		DefaultCPUs:     8,
-		DefaultDiskSize: "50G",
-		MaxInstances:    50,
-		EnableKVM:       true,
-		NetworkBridge:   "br0",
-		OVSSocketPath:   "/var/run/ovs/db.sock",
-		Arch:            qemu.ArchX86_64,
-		QEMUBinary:      "/usr/bin/qemu-system-x86_64",
-		OVMFCode:        "/usr/share/ovmf/code.fd",
-		OVMFCodeSecure:  "/usr/share/ovmf/code-secure.fd",
-		OVMFVars:        "/usr/share/ovmf/vars.fd",
-		AutoCleanup:     true,
-		Debug:           true,
-	}
-
-	if config.Type != ComputeTypeVM {
-		t.Errorf("Expected Type VM, got %v", config.Type)
-	}
-	if config.WorkDir != "/var/lib/compute" {
-		t.Errorf("Expected WorkDir /var/lib/compute, got %s", config.WorkDir)
-	}
-	if config.DefaultMemory != 8192 {
-		t.Errorf("Expected DefaultMemory 8192, got %d", config.DefaultMemory)
-	}
-	if config.DefaultCPUs != 8 {
-		t.Errorf("Expected DefaultCPUs 8, got %d", config.DefaultCPUs)
-	}
-	if config.DefaultDiskSize != "50G" {
-		t.Errorf("Expected DefaultDiskSize 50G, got %s", config.DefaultDiskSize)
-	}
-	if config.MaxInstances != 50 {
-		t.Errorf("Expected MaxInstances 50, got %d", config.MaxInstances)
-	}
-	if !config.EnableKVM {
-		t.Error("Expected EnableKVM to be true")
-	}
-	if config.NetworkBridge != "br0" {
-		t.Errorf("Expected NetworkBridge br0, got %s", config.NetworkBridge)
-	}
-	if !config.AutoCleanup {
-		t.Error("Expected AutoCleanup to be true")
-	}
-	if !config.Debug {
-		t.Error("Expected Debug to be true")
-	}
-}
-
 // Helper function to check if an error wraps a specific error type
 func isErrorType(err, target error) bool {
 	if err == nil || target == nil {

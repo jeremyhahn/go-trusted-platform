@@ -101,7 +101,13 @@ func (r *ToolRegistry) executeTPMCreateEK(ctx context.Context, args map[string]i
 
 // executeTPMDeleteEK deletes the Endorsement Key.
 func (r *ToolRegistry) executeTPMDeleteEK(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	result, err := r.service.TPMDeleteEK(ctx)
+	// The handle names the EK to evict; the daemon refuses any handle but
+	// the configured EK, so an omitted handle evicts nothing.
+	handle, err := optionalUint32Arg(args, "handle")
+	if err != nil {
+		return nil, err
+	}
+	result, err := r.service.TPMDeleteEK(ctx, handle)
 	if err != nil {
 		return nil, err
 	}
@@ -186,7 +192,13 @@ func (r *ToolRegistry) executeTPMCreateSRK(ctx context.Context, args map[string]
 
 // executeTPMDeleteSRK deletes the Storage Root Key.
 func (r *ToolRegistry) executeTPMDeleteSRK(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	result, err := r.service.TPMDeleteSRK(ctx)
+	// The handle names the SRK to evict; the daemon refuses any handle but
+	// the configured Shared SRK, so an omitted handle evicts nothing.
+	handle, err := optionalUint32Arg(args, "handle")
+	if err != nil {
+		return nil, err
+	}
+	result, err := r.service.TPMDeleteSRK(ctx, handle)
 	if err != nil {
 		return nil, err
 	}

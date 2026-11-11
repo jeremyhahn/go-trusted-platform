@@ -1,6 +1,6 @@
 module github.com/jeremyhahn/go-trusted-platform/sdk/go
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/google/go-tpm v0.9.8

@@ -31,6 +31,20 @@ import { useKMS, useApi, useMutation, useToast } from "@/hooks";
 import type { Key, GenerateKeyInput } from "@/types/security";
 import { Plus, AlertCircle, RefreshCw } from "lucide-react";
 
+// A key as the platform KMS REST handler emits it: snake_case or camelCase
+// names and ISO-string or epoch-second timestamps, which differs from the
+// SDK/proto declaration (#445).
+interface KeyWire {
+  keyId?: string;
+  key_id?: string;
+  name?: string;
+  algorithm: string;
+  status?: string;
+  createdAt?: string | number;
+  created_at?: string | number;
+  version?: number;
+}
+
 export default function KMSKeysPage() {
   const router = useRouter();
   const { toast } = useToast();
@@ -91,8 +105,7 @@ export default function KMSKeysPage() {
   // handler emits snake_case (`key_id`, `created_at`) and ISO-string
   // timestamps; the SDK type uses camelCase. Tolerate both.
   const keys: Key[] = React.useMemo(() => {
-    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-    const list = (keysData?.keys ?? []) as any[];
+    const list = (keysData?.keys ?? []) as unknown as KeyWire[];
     const toIso = (v: unknown): string => {
       if (!v) return new Date().toISOString();
       if (typeof v === "number") return new Date(v * 1000).toISOString();
@@ -101,8 +114,7 @@ export default function KMSKeysPage() {
       if (s.startsWith("0001-")) return new Date().toISOString();
       return s;
     };
-    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-    return list.map((key: any) => {
+    return list.map((key: KeyWire) => {
       const id = key.keyId ?? key.key_id ?? "";
       return {
         id,

@@ -988,13 +988,13 @@ type ServiceProvider interface {
 	TPMGetEKCert(ctx context.Context) (interface{}, error)
 	TPMImportEKCert(ctx context.Context, certDER []byte) (interface{}, error)
 	TPMCreateEK(ctx context.Context) (interface{}, error)
-	TPMDeleteEK(ctx context.Context) (interface{}, error)
+	TPMDeleteEK(ctx context.Context, handle uint32) (interface{}, error)
 	// TPMGetSRK returns the storage root key named by handle.
 	// Handle 0 means the SSRK; a handle naming neither platform SRK
 	// is an error rather than a fall-through to the SSRK (#475).
 	TPMGetSRK(ctx context.Context, handle uint32) (interface{}, error)
 	TPMCreateSRK(ctx context.Context) (interface{}, error)
-	TPMDeleteSRK(ctx context.Context) (interface{}, error)
+	TPMDeleteSRK(ctx context.Context, handle uint32) (interface{}, error)
 	TPMGetIAK(ctx context.Context) (interface{}, error)
 	TPMCreateIAK(ctx context.Context) (interface{}, error)
 	TPMQuote(ctx context.Context, nonce []byte, pcrs []int) (interface{}, error)
