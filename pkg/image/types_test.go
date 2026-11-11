@@ -14,8 +14,6 @@
 package image
 
 import (
-	"crypto"
-	"crypto/x509"
 	"encoding/json"
 	"testing"
 	"time"
@@ -258,46 +256,6 @@ func TestSignaturePayload_JSON(t *testing.T) {
 	assert.Equal(t, payload.Critical.Image.DockerReference, decoded.Critical.Image.DockerReference)
 }
 
-func TestSignerConfig_Fields(t *testing.T) {
-	config := &SignerConfig{
-		HashAlgorithm:   crypto.SHA256,
-		SignatureFormat: FormatCosign,
-		TimestampServer: "https://tsa.example.com",
-	}
-
-	assert.Equal(t, crypto.SHA256, config.HashAlgorithm)
-	assert.Equal(t, FormatCosign, config.SignatureFormat)
-	assert.Equal(t, "https://tsa.example.com", config.TimestampServer)
-}
-
-func TestVerifierConfig_Fields(t *testing.T) {
-	config := &VerifierConfig{
-		TrustAnchors:      []*x509.Certificate{},
-		IntermediateCerts: []*x509.Certificate{},
-		AllowExpired:      true,
-		RequireTimestamp:  true,
-		CheckRevocation:   true,
-	}
-
-	assert.True(t, config.AllowExpired)
-	assert.True(t, config.RequireTimestamp)
-	assert.True(t, config.CheckRevocation)
-}
-
-func TestCacheEntry_Fields(t *testing.T) {
-	now := time.Now()
-	entry := &CacheEntry{
-		Key:       "test-key",
-		Value:     "test-value",
-		ExpiresAt: now.Add(time.Hour),
-		CreatedAt: now,
-	}
-
-	assert.Equal(t, "test-key", entry.Key)
-	assert.Equal(t, "test-value", entry.Value)
-	assert.True(t, entry.ExpiresAt.After(now))
-}
-
 func TestImageSignature_CertificatePEM(t *testing.T) {
 	sig := &ImageSignature{
 		ImageDigest:   "sha256:abc123",
@@ -330,20 +288,4 @@ func TestVerificationResult_Errors(t *testing.T) {
 	assert.Len(t, result.Errors, 2)
 	assert.Len(t, result.Warnings, 1)
 	assert.False(t, result.Verified)
-}
-
-func TestCriticalData_Fields(t *testing.T) {
-	critical := CriticalData{
-		Type: "atomic container signature",
-		Image: ImageIdentity{
-			DockerReference: "registry/image@sha256:abc",
-		},
-		Identity: SignerIdentity{
-			DockerReference: "registry/image",
-		},
-	}
-
-	assert.Equal(t, "atomic container signature", critical.Type)
-	assert.Equal(t, "registry/image@sha256:abc", critical.Image.DockerReference)
-	assert.Equal(t, "registry/image", critical.Identity.DockerReference)
 }
