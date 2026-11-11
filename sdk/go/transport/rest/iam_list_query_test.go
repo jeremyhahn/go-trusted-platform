@@ -21,6 +21,8 @@ import (
 	"reflect"
 	"testing"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -136,6 +138,66 @@ func TestIAMListRoutes_ParametersTravelInTheQuery(t *testing.T) {
 				if _, has := captured.body[field]; has {
 					t.Errorf("field %q travels in the body as well as the URL: %v", field, captured.body)
 				}
+			}
+		})
+	}
+}
+
+// TestIAMListRoutes_RefusePagesBeyondTheFirst pins that the adapter refuses
+// a page past the first instead of sending it: the REST handlers apply the
+// limit but not the offset to the IAM lookup, so page 3 would come back
+// holding the records of page 1 under page 3's metadata.
+func TestIAMListRoutes_RefusePagesBeyondTheFirst(t *testing.T) {
+	tests := []struct {
+		name       string
+		grpcMethod string
+		req        proto.Message
+		resp       proto.Message
+	}{
+		{
+			name:       "ListUsers",
+			grpcMethod: "/platform.v1.PlatformIAMService/ListUsers",
+			req: &platformv1.ListIAMUsersRequest{
+				TenantId:   "tenant-a",
+				Pagination: &platformv1.PaginationRequest{Page: 3, PageSize: 10},
+			},
+			resp: &platformv1.ListIAMUsersResponse{},
+		},
+		{
+			name:       "ListRoles",
+			grpcMethod: "/platform.v1.PlatformIAMService/ListRoles",
+			req: &platformv1.ListIAMRolesRequest{
+				TenantId:   "tenant-a",
+				Pagination: &platformv1.PaginationRequest{Page: 2, PageSize: 10},
+			},
+			resp: &platformv1.ListIAMRolesResponse{},
+		},
+		{
+			name:       "ListGroups",
+			grpcMethod: "/platform.v1.PlatformIAMService/ListGroups",
+			req: &platformv1.ListIAMGroupsRequest{
+				TenantId:   "tenant-a",
+				Pagination: &platformv1.PaginationRequest{Page: 3},
+			},
+			resp: &platformv1.ListIAMGroupsResponse{},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			reached := false
+			a := iamAdapterReplying(t, func(w http.ResponseWriter, r *http.Request) {
+				reached = true
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"success":true,"payload":{}}`))
+			})
+
+			err := a.Connection().Invoke(context.Background(), tc.grpcMethod, tc.req, tc.resp)
+			if status.Code(err) != codes.Unimplemented {
+				t.Fatalf("Invoke error = %v, want code %v", err, codes.Unimplemented)
+			}
+			if reached {
+				t.Errorf("a page beyond the first reached the server")
 			}
 		})
 	}
