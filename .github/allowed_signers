@@ -1,0 +1,14 @@
+# .github/allowed_signers for jeremyhahn/go-trusted-platform (ci-template v1.35).
+# Synced from handbook software/templates/signing/go-trusted-platform.allowed_signers; edit it there.
+# One line per identity allowed to write here: the principal is the exact
+# committer email, then the public SSH signing key. Public keys only.
+# The Signatures job (ci.yml v1.35) reads this file from the base commit.
+# The project App agent:
+353751189+go-trusted-platform-agent[bot]@users.noreply.github.com namespaces="git" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGkdbCT7Z1rxDSxep9xcmPiL7Xws+T9oGMnpax4bZbi2
+# The Software Department App:
+353752029+dept-software-agent[bot]@users.noreply.github.com namespaces="git" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDONrnV9HxcAWzvhZqdawCIo0FUXjFiGEuRz5PxctD8D
+# Process pushes (the company App):
+353751782+automatethethings-agent[bot]@users.noreply.github.com namespaces="git" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDdAJIk+ACTKGgpxUubKLV+4sSRJlnf603Ol5pMIF29F
+# The owner (his own signing keys, as GitHub publishes them):
+mail@jeremyhahn.com namespaces="git" sk-ssh-ed25519@openssh.com AAAAGnNrLXNzaC1lZDI1NTE5QG9wZW5zc2guY29tAAAAIAXF+uBefcyO4+CK50RXV+5/CYpgDEjgReAjgkpLIPI0AAAABHNzaDo=
+mail@jeremyhahn.com namespaces="git" sk-ssh-ed25519@openssh.com AAAAGnNrLXNzaC1lZDI1NTE5QG9wZW5zc2guY29tAAAAIO5xkmGqBayuctNyPGFqB3k87XDY0EwtcNtZuSQ56LEoAAAABHNzaDo=

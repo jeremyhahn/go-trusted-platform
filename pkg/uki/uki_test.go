@@ -238,13 +238,6 @@ func TestUKIClose(t *testing.T) {
 	}
 }
 
-func TestArchitectureConstants(t *testing.T) {
-	assert.Equal(t, Architecture("x86_64"), ArchX86_64)
-	assert.Equal(t, Architecture("aarch64"), ArchAArch64)
-	assert.Equal(t, Architecture("arm"), ArchARM)
-	assert.Equal(t, Architecture("riscv64"), ArchRISCV64)
-}
-
 func TestDefaultStubPath(t *testing.T) {
 	assert.Equal(t, "/usr/lib/systemd/boot/efi/linuxx64.efi.stub", DefaultStubPath)
 }

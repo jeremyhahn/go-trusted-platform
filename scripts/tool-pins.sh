@@ -22,7 +22,7 @@
 # The Go toolchain: the version go.mod names, on Debian bookworm (glibc). The
 # integration suite needs Debian's swtpm, Open vSwitch, qemu and tpm2-tss
 # packages, which Alpine does not carry (devops.md §9a).
-GO_IMAGE=golang:1.27.3-bookworm
+GO_IMAGE=golang:1.27.4-bookworm
 
 GOVULNCHECK_VERSION=v1.8.0
 

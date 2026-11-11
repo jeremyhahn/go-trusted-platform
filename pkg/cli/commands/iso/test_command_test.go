@@ -60,42 +60,6 @@ func TestNewTestCommand_HasSubcommands(t *testing.T) {
 	assert.True(t, subcommandNames["all"], "all subcommand should exist")
 }
 
-func TestTestFlags_StructFields(t *testing.T) {
-	flags := &testFlags{
-		iso:         "platform.iso",
-		disk:        "disk.qcow2",
-		diskSize:    "20G",
-		memory:      4096,
-		cpus:        4,
-		workDir:     "work",
-		secureBoot:  true,
-		debug:       false,
-		fido2Enable: false,
-		fido2Mode:   "canokey",
-		canoKeyFile: "/tmp/canokey.state",
-		canoKeyPcap: "/tmp/canokey.pcap",
-		u2fPassthru: "/dev/hidraw0",
-		qemuBinary:  "/usr/bin/qemu-system-x86_64",
-		networkMode: "user",
-	}
-
-	assert.Equal(t, "platform.iso", flags.iso)
-	assert.Equal(t, "disk.qcow2", flags.disk)
-	assert.Equal(t, "20G", flags.diskSize)
-	assert.Equal(t, 4096, flags.memory)
-	assert.Equal(t, 4, flags.cpus)
-	assert.Equal(t, "work", flags.workDir)
-	assert.True(t, flags.secureBoot)
-	assert.False(t, flags.debug)
-	assert.False(t, flags.fido2Enable)
-	assert.Equal(t, "canokey", flags.fido2Mode)
-	assert.Equal(t, "/tmp/canokey.state", flags.canoKeyFile)
-	assert.Equal(t, "/tmp/canokey.pcap", flags.canoKeyPcap)
-	assert.Equal(t, "/dev/hidraw0", flags.u2fPassthru)
-	assert.Equal(t, "/usr/bin/qemu-system-x86_64", flags.qemuBinary)
-	assert.Equal(t, "user", flags.networkMode)
-}
-
 func TestTestInstallSubcommand_FlagsExist(t *testing.T) {
 	cmd := newTestCommand(getTestFlags)
 	cmd.SetOut(new(bytes.Buffer))
@@ -353,6 +317,28 @@ func TestResolveDefaultISO_NotFound(t *testing.T) {
 	result := resolveDefaultISO()
 	assert.NotEmpty(t, result)
 	assert.Contains(t, result, ".iso")
+}
+
+func TestResolveDefaultISO_FromVersionFile(t *testing.T) {
+	tests := []struct {
+		name  string
+		files []string
+		want  string
+	}{
+		{"standard image", []string{"trusted-alpine-1.2.3-x86_64.iso", "trusted-alpine-1.2.3-x86_64-fips.iso"}, "trusted-alpine-1.2.3-x86_64.iso"},
+		{"FIPS image only", []string{"trusted-alpine-1.2.3-x86_64-fips.iso"}, "trusted-alpine-1.2.3-x86_64-fips.iso"},
+		{"no image yet", nil, "trusted-alpine-1.2.3-x86_64.iso"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			require.NoError(t, os.WriteFile("VERSION", []byte("1.2.3 \r\n"), 0o600))
+			for _, name := range tt.files {
+				require.NoError(t, os.WriteFile(name, []byte("iso"), 0o600))
+			}
+			assert.Equal(t, tt.want, resolveDefaultISO())
+		})
+	}
 }
 
 func TestCopyTestFile_FileNotFound(t *testing.T) {

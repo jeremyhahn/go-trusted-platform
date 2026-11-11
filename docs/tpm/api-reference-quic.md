@@ -277,14 +277,18 @@ type TPM2KeyResponse struct {
 
 **Request Payload:**
 ```messagepack
-{}
+{"handle": <uint32>}
 ```
 
 The EK that `tpm.ek` configures is evicted from its persistent handle
 (`TPM2_EvictControl`, TPM 2.0 Library Part 3 §28.5) with the `tpm.ek`
-hierarchy auth; the message is `EK evicted`. An empty handle is NotFound.
+hierarchy auth; the message is `EK evicted`. The handle must name the
+configured `tpm.ek` handle: any other handle, or an absent payload, is
+InvalidArgument and evicts nothing. An empty handle is NotFound.
 DeleteSRK (`0x0B`) does the same for the Shared SRK `tpm.ssrk` configures,
-answering `SRK evicted`.
+answering `SRK evicted`. Its payload is `{"handle": <uint32>}` and the handle
+must name the configured `tpm.ssrk` handle: any other handle, or an absent
+payload, is InvalidArgument and evicts nothing.
 
 **Response Payload:**
 ```go

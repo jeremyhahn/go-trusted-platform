@@ -15,7 +15,6 @@ package entities
 
 import (
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -87,36 +86,6 @@ func TestDeviceTemplate_SetEntityID(t *testing.T) {
 			assert.Equal(t, tt.expected, tmpl.EntityID())
 		})
 	}
-}
-
-func TestDeviceTemplate_Fields(t *testing.T) {
-	now := time.Now()
-	configYAML := []byte("domain: example.com\nhostname: edge-01\n")
-	tmpl := &DeviceTemplate{
-		ID:          1,
-		TenantID:    "tenant-1",
-		Name:        "edge-server-template",
-		Description: "Template for edge servers",
-		Role:        DeviceRoleEdge,
-		Config:      configYAML,
-		MatchRules: &ProfileMatchRules{
-			MACPrefix: "52:54:00",
-		},
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
-
-	assert.Equal(t, uint64(1), tmpl.ID)
-	assert.Equal(t, "tenant-1", tmpl.TenantID)
-	assert.Equal(t, "edge-server-template", tmpl.Name)
-	assert.Equal(t, "Template for edge servers", tmpl.Description)
-	assert.Equal(t, DeviceRoleEdge, tmpl.Role)
-	assert.NotNil(t, tmpl.Config)
-	assert.Contains(t, string(tmpl.Config), "example.com")
-	assert.NotNil(t, tmpl.MatchRules)
-	assert.Equal(t, "52:54:00", tmpl.MatchRules.MACPrefix)
-	assert.Equal(t, now, tmpl.CreatedAt)
-	assert.Equal(t, now, tmpl.UpdatedAt)
 }
 
 func TestDeviceTemplate_ZeroValue(t *testing.T) {

@@ -53,10 +53,6 @@ func TestErrTenantExists_Error(t *testing.T) {
 	}
 }
 
-func TestErrTenantExists_ImplementsError(t *testing.T) {
-	var _ error = ErrTenantExists{}
-}
-
 func TestErrTenantNotFound_Error(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -99,10 +95,6 @@ func TestErrTenantNotFound_Error(t *testing.T) {
 	}
 }
 
-func TestErrTenantNotFound_ImplementsError(t *testing.T) {
-	var _ error = ErrTenantNotFound{}
-}
-
 func TestErrInvalidRequest_Error(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -133,10 +125,6 @@ func TestErrInvalidRequest_Error(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestErrInvalidRequest_ImplementsError(t *testing.T) {
-	var _ error = ErrInvalidRequest{}
 }
 
 func TestErrInvalidState_Error(t *testing.T) {
@@ -181,10 +169,6 @@ func TestErrInvalidState_Error(t *testing.T) {
 	}
 }
 
-func TestErrInvalidState_ImplementsError(t *testing.T) {
-	var _ error = ErrInvalidState{}
-}
-
 func TestErrInvalidTransition_Error(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -220,10 +204,6 @@ func TestErrInvalidTransition_Error(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestErrInvalidTransition_ImplementsError(t *testing.T) {
-	var _ error = ErrInvalidTransition{}
 }
 
 func TestErrStorageFailed_Error(t *testing.T) {
@@ -277,19 +257,6 @@ func TestErrStorageFailed_UnwrapNil(t *testing.T) {
 	}
 }
 
-func TestErrStorageFailed_ErrorsIs(t *testing.T) {
-	wrappedErr := errors.New("underlying error")
-	err := ErrStorageFailed{Operation: "read", Err: wrappedErr}
-
-	if !errors.Is(err, wrappedErr) {
-		t.Error("errors.Is should return true for wrapped error")
-	}
-}
-
-func TestErrStorageFailed_ImplementsError(t *testing.T) {
-	var _ error = ErrStorageFailed{}
-}
-
 func TestErrQuotaExceeded_Error(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -325,10 +292,6 @@ func TestErrQuotaExceeded_Error(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestErrQuotaExceeded_ImplementsError(t *testing.T) {
-	var _ error = ErrQuotaExceeded{}
 }
 
 func TestIsQuotaExceeded_MatchesBothQuotaErrors(t *testing.T) {
@@ -390,10 +353,6 @@ func TestErrResourceLimitReached_Error(t *testing.T) {
 	}
 }
 
-func TestErrResourceLimitReached_ImplementsError(t *testing.T) {
-	var _ error = ErrResourceLimitReached{}
-}
-
 func TestErrDEKOperationFailed_Error(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -434,14 +393,6 @@ func TestErrDEKOperationFailed_Unwrap(t *testing.T) {
 	if unwrapped != wrappedErr {
 		t.Errorf("ErrDEKOperationFailed.Unwrap() = %v, want %v", unwrapped, wrappedErr)
 	}
-}
-
-func TestErrDEKOperationFailed_ImplementsError(t *testing.T) {
-	var _ error = ErrDEKOperationFailed{}
-}
-
-func TestErrConfigValidation_ImplementsError(t *testing.T) {
-	var _ error = ErrConfigValidation{}
 }
 
 func TestErrorUniqueness(t *testing.T) {

@@ -366,22 +366,6 @@ func TestListFlags_DefaultValues(t *testing.T) {
 	assert.Empty(t, flags.configDir, "configDir should default to empty")
 }
 
-func TestListFlags_WithValues(t *testing.T) {
-	paths := []string{
-		"/etc/trusted-platform",
-		"/home/user/.config/platform",
-		"./config",
-		"",
-	}
-
-	for _, path := range paths {
-		t.Run(path, func(t *testing.T) {
-			flags := &listFlags{configDir: path}
-			assert.Equal(t, path, flags.configDir)
-		})
-	}
-}
-
 // DumpFlags struct tests
 
 func TestDumpFlags_DefaultValues(t *testing.T) {

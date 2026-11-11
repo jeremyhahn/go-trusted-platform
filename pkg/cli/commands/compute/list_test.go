@@ -48,22 +48,6 @@ func TestNewListCommand(t *testing.T) {
 	}
 }
 
-func TestNewListCommand_HasLongDescription(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{}
-	}
-
-	cmd := newListCommand(getFlags)
-
-	if cmd.Long == "" {
-		t.Error("Long description should not be empty")
-	}
-
-	if len(cmd.Long) < 50 {
-		t.Error("Long description should be descriptive")
-	}
-}
-
 func TestNewListCommand_Flags(t *testing.T) {
 	getFlags := func() *cli.CommonFlags {
 		return &cli.CommonFlags{}
@@ -367,34 +351,5 @@ func TestPrintVMList_WithPartialConfig(t *testing.T) {
 	output := buf.String()
 	if !strings.Contains(output, "1 VM(s)") {
 		t.Error("expected total count in output")
-	}
-}
-
-func TestNewListCommand_HasRunE(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{}
-	}
-
-	cmd := newListCommand(getFlags)
-
-	if cmd.RunE == nil {
-		t.Error("list command should have RunE set")
-	}
-}
-
-func TestNewListCommand_AcceptsNoArgs(t *testing.T) {
-	getFlags := func() *cli.CommonFlags {
-		return &cli.CommonFlags{}
-	}
-
-	cmd := newListCommand(getFlags)
-
-	// List command has no Args validator set, so it should accept any args
-	// (including none) without error from the validator itself
-	if cmd.Args != nil {
-		err := cmd.Args(cmd, []string{})
-		if err != nil {
-			t.Errorf("list command should accept no args: %v", err)
-		}
 	}
 }

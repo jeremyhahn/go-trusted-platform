@@ -37,6 +37,23 @@ import {
 } from '@/lib/device-lifecycle';
 import type { DeviceDetail, AttestationRecord, DeviceCertificate } from '@/types/device';
 
+// Device as the REST endpoint emits it: snake_case enrollment fields (#329).
+interface DeviceWire {
+  id: string | number;
+  attest_pub?: string;
+  attest_cert?: string;
+  ek_cert?: string;
+  event_log?: string;
+  signing_pub?: string;
+  created_at?: string;
+  updated_at?: string;
+  last_heartbeat_at?: string;
+  last_heartbeat_addr?: string;
+  state?: string;
+  serial?: string;
+  model?: string;
+}
+
 export default function DeviceDetailPage() {
   const params = useParams();
   const pathname = usePathname();
@@ -52,10 +69,10 @@ export default function DeviceDetailPage() {
     setIsLoading(true);
     try {
       // Wire field names differ from the SDK Device type — #329 follow-ups.
-      const response = await deviceService.getDevice(deviceId as any);
+      const response = await deviceService.getDevice(deviceId);
 
       if (response.data) {
-        setDevice(normalizeDevice(response.data));
+        setDevice(normalizeDevice(response.data as unknown as DeviceWire));
       } else {
         throw new Error('Failed to fetch device');
       }
@@ -80,7 +97,7 @@ export default function DeviceDetailPage() {
   // the only one, and the dual reads collapsed. The list page does the same
   // reshaping — keep them in sync.
   // Wire field names differ from the SDK Device type — #329 follow-ups.
-  function normalizeDevice(raw: any): DeviceDetail {
+  function normalizeDevice(raw: DeviceWire): DeviceDetail {
     const attestPub = raw.attest_pub;
     const attestCert: string | undefined = raw.attest_cert || undefined;
     const ekCert = raw.ek_cert;
@@ -136,9 +153,9 @@ export default function DeviceDetailPage() {
       attestationHistory: [],
       certificates: [],
       // Carry through the raw enrollment blobs in case downstream
-      // components need them. Cast as any to widen DeviceDetail without
+      // components need them. The cast widens DeviceDetail without DeviceDetail without
       // touching its declared shape; the local type is permissive enough
-      // because the page already passes `device as any` in places.
+      // because the page already carries the extra fields through.
       ...(eventLog ? { eventLog } : {}),
       ...(signingPub ? { signingPub } : {}),
     } as DeviceDetail;
@@ -171,7 +188,7 @@ export default function DeviceDetailPage() {
   const deleteMutation = useMutation(
     async (_: void) => {
       // Wire field names differ from the SDK Device type — #329 follow-ups.
-      return await deviceService.deleteDevice(deviceId as any);
+      return await deviceService.deleteDevice(deviceId);
     },
     {
       onSuccess: () => {

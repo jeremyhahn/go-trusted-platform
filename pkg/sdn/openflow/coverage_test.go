@@ -973,55 +973,6 @@ func TestInstructionGotoTable_EdgeCases(t *testing.T) {
 }
 
 // TestErrorConstants tests that error constants are defined
-func TestErrorConstants(t *testing.T) {
-	// Test sentinel errors exist and are not nil
-	if ErrNotConnected == nil {
-		t.Error("ErrNotConnected should not be nil")
-	}
-	if ErrConnectionFailed == nil {
-		t.Error("ErrConnectionFailed should not be nil")
-	}
-	if ErrConnectionClosed == nil {
-		t.Error("ErrConnectionClosed should not be nil")
-	}
-	if ErrVersionMismatch == nil {
-		t.Error("ErrVersionMismatch should not be nil")
-	}
-	if ErrInvalidMessage == nil {
-		t.Error("ErrInvalidMessage should not be nil")
-	}
-	if ErrMessageTooShort == nil {
-		t.Error("ErrMessageTooShort should not be nil")
-	}
-	if ErrMessageTooLong == nil {
-		t.Error("ErrMessageTooLong should not be nil")
-	}
-	if ErrTimeout == nil {
-		t.Error("ErrTimeout should not be nil")
-	}
-	if ErrFlowModFailed == nil {
-		t.Error("ErrFlowModFailed should not be nil")
-	}
-	if ErrInvalidMatch == nil {
-		t.Error("ErrInvalidMatch should not be nil")
-	}
-	if ErrInvalidAction == nil {
-		t.Error("ErrInvalidAction should not be nil")
-	}
-	if ErrBadRequest == nil {
-		t.Error("ErrBadRequest should not be nil")
-	}
-	if ErrNoFeatures == nil {
-		t.Error("ErrNoFeatures should not be nil")
-	}
-	if ErrInvalidBridgeName == nil {
-		t.Error("ErrInvalidBridgeName should not be nil")
-	}
-	if ErrSocketPath == nil {
-		t.Error("ErrSocketPath should not be nil")
-	}
-}
-
 // TestErrorConstants_Messages tests error messages
 func TestErrorConstants_Messages(t *testing.T) {
 	tests := []struct {

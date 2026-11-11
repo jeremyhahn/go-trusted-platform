@@ -35,18 +35,18 @@ func TestErrConfigMarshalFailed(t *testing.T) {
 
 func TestErrConfigWriteFailed(t *testing.T) {
 	cause := errors.New("disk full")
-	err := ErrConfigWriteFailed{Path: "/home/user/.platformctl/config.yaml", Err: cause}
+	err := ErrConfigWriteFailed{Path: "/var/lib/user/.platformctl/config.yaml", Err: cause}
 
-	assert.Contains(t, err.Error(), "/home/user/.platformctl/config.yaml")
+	assert.Contains(t, err.Error(), "/var/lib/user/.platformctl/config.yaml")
 	assert.Contains(t, err.Error(), "disk full")
 	assert.Equal(t, cause, err.Unwrap())
 }
 
 func TestErrConfigDirCreateFailed(t *testing.T) {
 	cause := errors.New("permission denied")
-	err := ErrConfigDirCreateFailed{Path: "/home/user/.platformctl", Err: cause}
+	err := ErrConfigDirCreateFailed{Path: "/var/lib/user/.platformctl", Err: cause}
 
-	assert.Contains(t, err.Error(), "/home/user/.platformctl")
+	assert.Contains(t, err.Error(), "/var/lib/user/.platformctl")
 	assert.Contains(t, err.Error(), "permission denied")
 	assert.Equal(t, cause, err.Unwrap())
 }

@@ -41,6 +41,9 @@
 # container: GOMAXPROCS is the default of `go build -p` and `go test -p`, so
 # it bounds how many packages compile, link and test at once, which on an
 # 80-thread host is otherwise 80. It changes no package set and no test.
+# IN_IMAGE_GOMEMLIMIT (default unset) sets GOMEMLIMIT in the container, so the
+# Go GC works hard before the cgroup limit kills a large process; govulncheck's
+# symbol scan reached 16.7 GB under 16g (#1425).
 # CI_CGROUP_PARENT (default ci.slice) is the container's --cgroup-parent, so
 # the runner host's ci.slice bounds every CI container together; without it a
 # container runs in system.slice, outside that bound (#1178). Set it empty to
@@ -61,8 +64,11 @@
 # (IN_IMAGE_SCRATCH overrides), on the daemon's data disk, not the 3 GB /tmp
 # tmpfs, and removed with the container. A scratch directory that is missing or not writable fails
 # the stage by name. A bridge stage's GOPROXY puts DEVCACHE_GOPROXY (Athens)
-# first when the runner sets it: <DEVCACHE_GOPROXY>|https://proxy.golang.org|direct,
+# first when the runner sets it: <DEVCACHE_GOPROXY>|https://proxy.golang.org,
 # so any error falls through to the public proxy.
+# v5 (ci-template v1.34.1): no `direct` entry in that chain
+# (dependency-resolution.md, "No direct fetch, anywhere"); a private path is
+# fetched by GOPRIVATE/GONOPROXY, never through GOPROXY.
 #
 set -euo pipefail
 
@@ -90,6 +96,11 @@ esac
 gomaxprocs=${IN_IMAGE_GOMAXPROCS:-16}
 if ! [[ $gomaxprocs =~ ^[1-9][0-9]*$ ]]; then
   echo "IN_IMAGE_GOMAXPROCS must be a positive integer: $gomaxprocs" >&2
+  exit 2
+fi
+gomemlimit=${IN_IMAGE_GOMEMLIMIT:-}
+if [ -n "$gomemlimit" ] && ! [[ $gomemlimit =~ ^[1-9][0-9]*(B|KiB|MiB|GiB|TiB)$ ]]; then
+  echo "IN_IMAGE_GOMEMLIMIT must be a Go memory limit such as 18GiB, or empty: $gomemlimit" >&2
   exit 2
 fi
 cgroup_parent=${CI_CGROUP_PARENT-ci.slice}
@@ -135,6 +146,7 @@ args=(
   --env CI="${CI:-}"
   --env GOMAXPROCS="$gomaxprocs"
 )
+[ -n "$gomemlimit" ] && args+=(--env GOMEMLIMIT="$gomemlimit")
 if [ -n "$cgroup_parent" ]; then
   args+=(--cgroup-parent "$cgroup_parent")
 fi
@@ -144,7 +156,7 @@ if [ "$network" = bridge ]; then
   # further fetch more. The writable one starts empty, so a stage downloads
   # its whole graph (gigabytes): it goes beside the build cache on disk, not
   # in the 3g /tmp tmpfs, where it left no room for trivy's DB (#933).
-  args+=(--env "GOPROXY=${DEVCACHE_GOPROXY:+$DEVCACHE_GOPROXY|}https://proxy.golang.org|direct" --env GOMODCACHE=/gocache/mod)
+  args+=(--env "GOPROXY=${DEVCACHE_GOPROXY:+$DEVCACHE_GOPROXY|}https://proxy.golang.org" --env GOMODCACHE=/gocache/mod)
   for v in GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; do
     if [ -n "${!v:-}" ]; then args+=(--env "$v"); fi
   done
