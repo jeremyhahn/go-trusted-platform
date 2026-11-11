@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jeremyhahn/go-quicbaas/pkg/orchestration"
 	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	sdktransport "github.com/jeremyhahn/go-quicbaas/sdk/go/transport"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -38,6 +39,9 @@ type fakeClient struct {
 	// ctxTenant is the tenant the last tenant-scoped call carried on its
 	// context, where the go-quicbaas transport reads it.
 	ctxTenant string
+	// orchTenant is the tenant the last call carried under the embedded
+	// orchestrator's own context key, which its TenantGuard reads.
+	orchTenant string
 }
 
 var disabledAt = time.Unix(1700000000, 0)
@@ -55,6 +59,7 @@ func (f *fakeClient) Health(context.Context) (*sdkorch.HealthCheckReport, error)
 
 func (f *fakeClient) ListAgents(ctx context.Context, req *sdkorch.ListAgentsRequest) (*sdkorch.ListAgentsResponse, error) {
 	f.ctxTenant = sdktransport.TenantFromContext(ctx)
+	f.orchTenant = orchestration.TenantFromContext(ctx)
 	f.listAgentsReq = req
 	if f.err != nil {
 		return nil, f.err
@@ -66,6 +71,7 @@ func (f *fakeClient) ListAgents(ctx context.Context, req *sdkorch.ListAgentsRequ
 
 func (f *fakeClient) GetAgent(ctx context.Context, req *sdkorch.GetAgentRequest) (*sdkorch.AgentRegistration, error) {
 	f.ctxTenant = sdktransport.TenantFromContext(ctx)
+	f.orchTenant = orchestration.TenantFromContext(ctx)
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -74,6 +80,7 @@ func (f *fakeClient) GetAgent(ctx context.Context, req *sdkorch.GetAgentRequest)
 
 func (f *fakeClient) DisableAgent(ctx context.Context, req *sdkorch.DisableAgentRequest) (*sdkorch.DisableAgentResponse, error) {
 	f.ctxTenant = sdktransport.TenantFromContext(ctx)
+	f.orchTenant = orchestration.TenantFromContext(ctx)
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -82,6 +89,7 @@ func (f *fakeClient) DisableAgent(ctx context.Context, req *sdkorch.DisableAgent
 
 func (f *fakeClient) EnableAgent(ctx context.Context, req *sdkorch.EnableAgentRequest) (*sdkorch.EnableAgentResponse, error) {
 	f.ctxTenant = sdktransport.TenantFromContext(ctx)
+	f.orchTenant = orchestration.TenantFromContext(ctx)
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -98,7 +106,9 @@ func (f *fakeClient) ListSessions(_ context.Context, req *sdkorch.ListSessionsRe
 	return resp, nil
 }
 
-func (f *fakeClient) CloseSession(_ context.Context, req *sdkorch.CloseSessionRequest) (*sdkorch.CloseSessionResponse, error) {
+func (f *fakeClient) CloseSession(ctx context.Context, req *sdkorch.CloseSessionRequest) (*sdkorch.CloseSessionResponse, error) {
+	f.ctxTenant = sdktransport.TenantFromContext(ctx)
+	f.orchTenant = orchestration.TenantFromContext(ctx)
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -107,6 +117,7 @@ func (f *fakeClient) CloseSession(_ context.Context, req *sdkorch.CloseSessionRe
 
 func (f *fakeClient) ListJobs(ctx context.Context, req *sdkorch.ListJobsRequest) (*sdkorch.ListJobsResponse, error) {
 	f.ctxTenant = sdktransport.TenantFromContext(ctx)
+	f.orchTenant = orchestration.TenantFromContext(ctx)
 	f.listJobsReq = req
 	if f.err != nil {
 		return nil, f.err
@@ -118,6 +129,7 @@ func (f *fakeClient) ListJobs(ctx context.Context, req *sdkorch.ListJobsRequest)
 
 func (f *fakeClient) GetJobStatus(ctx context.Context, req *sdkorch.GetJobStatusRequest) (*sdkorch.JobStatus, error) {
 	f.ctxTenant = sdktransport.TenantFromContext(ctx)
+	f.orchTenant = orchestration.TenantFromContext(ctx)
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -126,6 +138,7 @@ func (f *fakeClient) GetJobStatus(ctx context.Context, req *sdkorch.GetJobStatus
 
 func (f *fakeClient) CancelJob(ctx context.Context, req *sdkorch.CancelJobRequest) (*sdkorch.CancelJobResponse, error) {
 	f.ctxTenant = sdktransport.TenantFromContext(ctx)
+	f.orchTenant = orchestration.TenantFromContext(ctx)
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -286,6 +299,40 @@ func TestService_TenantScopedCallsCarryTheTenant(t *testing.T) {
 				t.Fatalf("SDK context tenant = %q, want t1", fake.ctxTenant)
 			}
 		})
+	}
+}
+
+// TestService_TenantScopedCallsAlsoSetOrchestrationTenant pins the bridge to
+// the embedded backend: its TenantGuard reads the orchestration package's
+// context key, not the SDK transport's.
+func TestService_TenantScopedCallsAlsoSetOrchestrationTenant(t *testing.T) {
+	scoped := []string{"ListAgents", "GetAgent", "DisableAgent", "EnableAgent", "ListJobs", "GetJob", "CancelJob"}
+	for _, name := range scoped {
+		t.Run(name, func(t *testing.T) {
+			fake := &fakeClient{}
+			if err := validCalls[name](context.Background(), serviceOver(fake)); err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			if fake.orchTenant != "t1" {
+				t.Fatalf("orchestration context tenant = %q, want t1", fake.orchTenant)
+			}
+		})
+	}
+}
+
+// TestService_CloseSessionCarriesSystemTenant: every session route is
+// system-only, so CloseSession must reach the backend as the system tenant
+// on both context keys.
+func TestService_CloseSessionCarriesSystemTenant(t *testing.T) {
+	fake := &fakeClient{}
+	if err := validCalls["CloseSession"](context.Background(), serviceOver(fake)); err != nil {
+		t.Fatalf("CloseSession: %v", err)
+	}
+	if fake.orchTenant != orchestration.SystemTenantID {
+		t.Fatalf("orchestration context tenant = %q, want %q", fake.orchTenant, orchestration.SystemTenantID)
+	}
+	if fake.ctxTenant != orchestration.SystemTenantID {
+		t.Fatalf("SDK context tenant = %q, want %q", fake.ctxTenant, orchestration.SystemTenantID)
 	}
 }
 
