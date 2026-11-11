@@ -1,6 +1,6 @@
 module example.com/app
 
-go 1.27.2
+go 1.27.4
 
 replace example.com/gone => example.com/gone v0.4.1
 

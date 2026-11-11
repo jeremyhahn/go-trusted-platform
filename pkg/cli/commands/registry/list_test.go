@@ -165,89 +165,6 @@ func TestNewListCommand_DefaultFlagValues(t *testing.T) {
 	}
 }
 
-func TestImageListItem_Fields(t *testing.T) {
-	item := ImageListItem{
-		Reference:   "myrepo/myimage:v1.0",
-		Digest:      "sha256:abc123",
-		Size:        1024,
-		Encrypted:   true,
-		Signed:      true,
-		CreatedAt:   1234567890,
-		PushedAt:    1234567900,
-		Platform:    "linux/amd64",
-		LayerCount:  5,
-		Annotations: map[string]string{"key": "value"},
-	}
-
-	if item.Reference != "myrepo/myimage:v1.0" {
-		t.Errorf("unexpected Reference: %q", item.Reference)
-	}
-
-	if item.Digest != "sha256:abc123" {
-		t.Errorf("unexpected Digest: %q", item.Digest)
-	}
-
-	if item.Size != 1024 {
-		t.Errorf("unexpected Size: %d", item.Size)
-	}
-
-	if !item.Encrypted {
-		t.Error("expected Encrypted to be true")
-	}
-
-	if !item.Signed {
-		t.Error("expected Signed to be true")
-	}
-
-	if item.CreatedAt != 1234567890 {
-		t.Errorf("unexpected CreatedAt: %d", item.CreatedAt)
-	}
-
-	if item.PushedAt != 1234567900 {
-		t.Errorf("unexpected PushedAt: %d", item.PushedAt)
-	}
-
-	if item.Platform != "linux/amd64" {
-		t.Errorf("unexpected Platform: %q", item.Platform)
-	}
-
-	if item.LayerCount != 5 {
-		t.Errorf("unexpected LayerCount: %d", item.LayerCount)
-	}
-
-	if len(item.Annotations) != 1 || item.Annotations["key"] != "value" {
-		t.Errorf("unexpected Annotations: %v", item.Annotations)
-	}
-}
-
-func TestListResult_Fields(t *testing.T) {
-	result := ListResult{
-		Images: []*ImageListItem{
-			{Reference: "image1:v1"},
-			{Reference: "image2:v2"},
-		},
-		TotalCount: 2,
-		HasMore:    true,
-		NextCursor: "cursor123",
-	}
-
-	if len(result.Images) != 2 {
-		t.Errorf("expected 2 images, got %d", len(result.Images))
-	}
-
-	if result.TotalCount != 2 {
-		t.Errorf("expected TotalCount 2, got %d", result.TotalCount)
-	}
-
-	if !result.HasMore {
-		t.Error("expected HasMore to be true")
-	}
-
-	if result.NextCursor != "cursor123" {
-		t.Errorf("unexpected NextCursor: %q", result.NextCursor)
-	}
-}
-
 func TestListResult_EmptyImages(t *testing.T) {
 	result := ListResult{
 		Images:     []*ImageListItem{},
@@ -292,38 +209,6 @@ func TestNewListCommand_FlagUsage(t *testing.T) {
 				t.Errorf("flag %q should have usage text", name)
 			}
 		})
-	}
-}
-
-func TestImageListItem_ZeroValues(t *testing.T) {
-	var item ImageListItem
-
-	if item.Reference != "" {
-		t.Errorf("expected empty Reference, got %q", item.Reference)
-	}
-
-	if item.Digest != "" {
-		t.Errorf("expected empty Digest, got %q", item.Digest)
-	}
-
-	if item.Size != 0 {
-		t.Errorf("expected zero Size, got %d", item.Size)
-	}
-
-	if item.Encrypted {
-		t.Error("expected Encrypted to be false")
-	}
-
-	if item.Signed {
-		t.Error("expected Signed to be false")
-	}
-
-	if item.LayerCount != 0 {
-		t.Errorf("expected zero LayerCount, got %d", item.LayerCount)
-	}
-
-	if item.Annotations != nil {
-		t.Errorf("expected nil Annotations, got %v", item.Annotations)
 	}
 }
 
@@ -424,26 +309,6 @@ func TestNewListCommand_HasAliases(t *testing.T) {
 	if len(cmd.Aliases) > 0 {
 		// Just verify they exist, don't enforce specific aliases
 		t.Logf("list command has aliases: %v", cmd.Aliases)
-	}
-}
-
-func TestListResult_ZeroValues(t *testing.T) {
-	var result ListResult
-
-	if result.Images != nil {
-		t.Errorf("expected nil Images, got %v", result.Images)
-	}
-
-	if result.TotalCount != 0 {
-		t.Errorf("expected zero TotalCount, got %d", result.TotalCount)
-	}
-
-	if result.HasMore {
-		t.Error("expected HasMore to be false")
-	}
-
-	if result.NextCursor != "" {
-		t.Errorf("expected empty NextCursor, got %q", result.NextCursor)
 	}
 }
 

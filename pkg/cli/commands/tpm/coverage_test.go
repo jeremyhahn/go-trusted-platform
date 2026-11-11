@@ -85,14 +85,6 @@ func TestRunEventlogWithClient_TableText(t *testing.T) {
 // Command Creation Tests
 // =============================================================================
 
-func TestNewClearCommand_Fields(t *testing.T) {
-	cmd := newClearCommand(func() *cli.CommonFlags { return &cli.CommonFlags{OutputFormat: cli.OutputFormatJSON} })
-	require.NotNil(t, cmd)
-	assert.Equal(t, "clear", cmd.Use)
-	require.NotNil(t, cmd.Flag("owner-password"))
-	require.NotNil(t, cmd.Flag("confirm"))
-}
-
 func TestNewClearCommand_WithoutConfirm(t *testing.T) {
 	cmd := newClearCommand(func() *cli.CommonFlags { return &cli.CommonFlags{OutputFormat: cli.OutputFormatJSON} })
 	cmd.SetArgs([]string{})
@@ -120,21 +112,6 @@ func TestNewExtendCommand_ReturnsError(t *testing.T) {
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.IsType(t, ErrDaemonConnectionRequired{}, err)
-}
-
-func TestNewEKCommand_Subcommands(t *testing.T) {
-	cmd := newEKCommand(func() *cli.CommonFlags { return &cli.CommonFlags{} })
-	require.NotNil(t, cmd)
-	assert.Equal(t, "ek", cmd.Use)
-	assert.Len(t, cmd.Commands(), 4)
-}
-
-func TestNewEventlogCommand_Flags(t *testing.T) {
-	cmd := newEventlogCommand(func() *cli.CommonFlags { return &cli.CommonFlags{} })
-	require.NotNil(t, cmd)
-	formatFlag := cmd.Flag("format")
-	require.NotNil(t, formatFlag)
-	assert.Equal(t, "text", formatFlag.DefValue)
 }
 
 func TestKeyAlgorithmStringValues(t *testing.T) {

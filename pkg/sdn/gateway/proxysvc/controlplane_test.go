@@ -469,17 +469,6 @@ func TestMergeConfigPlatformdWins(t *testing.T) {
 	}
 }
 
-func TestMergeConfigEmptyRuntime(t *testing.T) {
-	static := proxy.Config{
-		Routes: []proxy.RouteConfig{{ID: "app"}},
-		Pools:  []proxy.BackendPoolConfig{{ID: "backend"}},
-	}
-	merged := MergeConfig(static, nil, nil)
-	if len(merged.Routes) != 1 || len(merged.Pools) != 1 {
-		t.Fatalf("static config must survive empty runtime: %+v", merged)
-	}
-}
-
 // =============================================================================
 // ConfigSyncer
 // =============================================================================

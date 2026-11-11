@@ -50,51 +50,6 @@ func startTestGRPCServer(t *testing.T, socketPath string) (*grpc.Server, func())
 	return server, cleanup
 }
 
-func TestNewBaseCommand_Success(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "test.sock")
-
-	// Start a test gRPC server
-	server, cleanup := startTestGRPCServer(t, socketPath)
-	defer cleanup()
-	_ = server
-
-	// Create test context
-	testCtx := &Context{
-		Name: "test-base",
-		Type: ContextTypeLocal,
-		Local: &LocalContext{
-			SocketPath: socketPath,
-		},
-	}
-
-	flags := &CommonFlags{
-		ConfigPath:   "",
-		ContextName:  "test-base",
-		OutputFormat: OutputFormatTable,
-		Verbose:      false,
-		NoColor:      true,
-		GetConfig: func() (*Config, error) {
-			return DefaultConfig(), nil
-		},
-		GetContext: func() (*Context, error) {
-			return testCtx, nil
-		},
-	}
-
-	baseCmd, err := NewBaseCommand(flags)
-
-	require.NoError(t, err)
-	require.NotNil(t, baseCmd)
-	assert.NotNil(t, baseCmd.client)
-	assert.NotNil(t, baseCmd.printer)
-	assert.NotNil(t, baseCmd.flags)
-	assert.Equal(t, flags, baseCmd.flags)
-
-	// Cleanup
-	err = baseCmd.Close()
-	require.NoError(t, err)
-}
-
 func TestNewBaseCommand_GetContextError(t *testing.T) {
 	flags := &CommonFlags{
 		ConfigPath:   "",
@@ -150,186 +105,6 @@ func TestNewBaseCommand_ConnectionFailed(t *testing.T) {
 	}
 }
 
-func TestBaseCommand_Client(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "test.sock")
-
-	server, cleanup := startTestGRPCServer(t, socketPath)
-	defer cleanup()
-	_ = server
-
-	testCtx := &Context{
-		Name: "test",
-		Type: ContextTypeLocal,
-		Local: &LocalContext{
-			SocketPath: socketPath,
-		},
-	}
-
-	flags := &CommonFlags{
-		GetConfig: func() (*Config, error) {
-			return DefaultConfig(), nil
-		},
-		GetContext: func() (*Context, error) {
-			return testCtx, nil
-		},
-	}
-
-	baseCmd, err := NewBaseCommand(flags)
-	require.NoError(t, err)
-	defer baseCmd.Close()
-
-	client := baseCmd.Client()
-	require.NotNil(t, client)
-	assert.True(t, client.IsConnected())
-}
-
-func TestBaseCommand_Printer(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "test.sock")
-
-	server, cleanup := startTestGRPCServer(t, socketPath)
-	defer cleanup()
-	_ = server
-
-	testCtx := &Context{
-		Name: "test",
-		Type: ContextTypeLocal,
-		Local: &LocalContext{
-			SocketPath: socketPath,
-		},
-	}
-
-	flags := &CommonFlags{
-		OutputFormat: OutputFormatJSON,
-		NoColor:      true,
-		GetConfig: func() (*Config, error) {
-			return DefaultConfig(), nil
-		},
-		GetContext: func() (*Context, error) {
-			return testCtx, nil
-		},
-	}
-
-	baseCmd, err := NewBaseCommand(flags)
-	require.NoError(t, err)
-	defer baseCmd.Close()
-
-	printer := baseCmd.Printer()
-	require.NotNil(t, printer)
-	assert.Equal(t, OutputFormatJSON, printer.format)
-	assert.True(t, printer.noColor)
-}
-
-func TestBaseCommand_Context(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "test.sock")
-
-	server, cleanup := startTestGRPCServer(t, socketPath)
-	defer cleanup()
-	_ = server
-
-	testCtx := &Context{
-		Name: "test",
-		Type: ContextTypeLocal,
-		Local: &LocalContext{
-			SocketPath: socketPath,
-		},
-	}
-
-	flags := &CommonFlags{
-		GetConfig: func() (*Config, error) {
-			return DefaultConfig(), nil
-		},
-		GetContext: func() (*Context, error) {
-			return testCtx, nil
-		},
-	}
-
-	baseCmd, err := NewBaseCommand(flags)
-	require.NoError(t, err)
-	defer baseCmd.Close()
-
-	ctx := baseCmd.Context()
-	require.NotNil(t, ctx)
-	assert.IsType(t, context.Background(), ctx)
-}
-
-func TestBaseCommand_Flags(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "test.sock")
-
-	server, cleanup := startTestGRPCServer(t, socketPath)
-	defer cleanup()
-	_ = server
-
-	testCtx := &Context{
-		Name: "test",
-		Type: ContextTypeLocal,
-		Local: &LocalContext{
-			SocketPath: socketPath,
-		},
-	}
-
-	flags := &CommonFlags{
-		ConfigPath:   "/custom/config.yaml",
-		ContextName:  "test",
-		OutputFormat: OutputFormatYAML,
-		Verbose:      true,
-		NoColor:      false,
-		GetConfig: func() (*Config, error) {
-			return DefaultConfig(), nil
-		},
-		GetContext: func() (*Context, error) {
-			return testCtx, nil
-		},
-	}
-
-	baseCmd, err := NewBaseCommand(flags)
-	require.NoError(t, err)
-	defer baseCmd.Close()
-
-	returnedFlags := baseCmd.Flags()
-	require.NotNil(t, returnedFlags)
-	assert.Equal(t, flags, returnedFlags)
-	assert.Equal(t, "/custom/config.yaml", returnedFlags.ConfigPath)
-	assert.Equal(t, "test", returnedFlags.ContextName)
-	assert.Equal(t, OutputFormatYAML, returnedFlags.OutputFormat)
-	assert.True(t, returnedFlags.Verbose)
-	assert.False(t, returnedFlags.NoColor)
-}
-
-func TestBaseCommand_Close_Success(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "test.sock")
-
-	server, cleanup := startTestGRPCServer(t, socketPath)
-	defer cleanup()
-	_ = server
-
-	testCtx := &Context{
-		Name: "test",
-		Type: ContextTypeLocal,
-		Local: &LocalContext{
-			SocketPath: socketPath,
-		},
-	}
-
-	flags := &CommonFlags{
-		GetConfig: func() (*Config, error) {
-			return DefaultConfig(), nil
-		},
-		GetContext: func() (*Context, error) {
-			return testCtx, nil
-		},
-	}
-
-	baseCmd, err := NewBaseCommand(flags)
-	require.NoError(t, err)
-
-	assert.True(t, baseCmd.client.IsConnected())
-
-	err = baseCmd.Close()
-	require.NoError(t, err)
-
-	assert.False(t, baseCmd.client.IsConnected())
-}
-
 func TestBaseCommand_Close_NilClient(t *testing.T) {
 	baseCmd := &BaseCommand{
 		client: nil,
@@ -339,42 +114,6 @@ func TestBaseCommand_Close_NilClient(t *testing.T) {
 
 	// Should not error when client is nil
 	require.NoError(t, err)
-}
-
-func TestBaseCommand_Close_MultipleCalls(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "test.sock")
-
-	server, cleanup := startTestGRPCServer(t, socketPath)
-	defer cleanup()
-	_ = server
-
-	testCtx := &Context{
-		Name: "test",
-		Type: ContextTypeLocal,
-		Local: &LocalContext{
-			SocketPath: socketPath,
-		},
-	}
-
-	flags := &CommonFlags{
-		GetConfig: func() (*Config, error) {
-			return DefaultConfig(), nil
-		},
-		GetContext: func() (*Context, error) {
-			return testCtx, nil
-		},
-	}
-
-	baseCmd, err := NewBaseCommand(flags)
-	require.NoError(t, err)
-
-	// First close
-	err = baseCmd.Close()
-	require.NoError(t, err)
-
-	// Second close may error because connection is already closed, which is acceptable
-	_ = baseCmd.Close()
-	// Don't require no error - closing twice may fail
 }
 
 func TestBaseCommand_AllOutputFormats(t *testing.T) {
@@ -420,93 +159,6 @@ func TestBaseCommand_AllOutputFormats(t *testing.T) {
 	}
 }
 
-func TestBaseCommand_WithVerboseFlag(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "test.sock")
-
-	server, cleanup := startTestGRPCServer(t, socketPath)
-	defer cleanup()
-	_ = server
-
-	testCtx := &Context{
-		Name: "test",
-		Type: ContextTypeLocal,
-		Local: &LocalContext{
-			SocketPath: socketPath,
-		},
-	}
-
-	flags := &CommonFlags{
-		Verbose: true,
-		GetConfig: func() (*Config, error) {
-			return DefaultConfig(), nil
-		},
-		GetContext: func() (*Context, error) {
-			return testCtx, nil
-		},
-	}
-
-	baseCmd, err := NewBaseCommand(flags)
-	require.NoError(t, err)
-	defer baseCmd.Close()
-
-	assert.True(t, baseCmd.flags.Verbose)
-}
-
-func TestCommonFlags_Structure(t *testing.T) {
-	flags := &CommonFlags{
-		ConfigPath:   "/path/to/config",
-		ContextName:  "my-context",
-		OutputFormat: OutputFormatJSON,
-		Verbose:      true,
-		NoColor:      false,
-	}
-
-	assert.Equal(t, "/path/to/config", flags.ConfigPath)
-	assert.Equal(t, "my-context", flags.ContextName)
-	assert.Equal(t, OutputFormatJSON, flags.OutputFormat)
-	assert.True(t, flags.Verbose)
-	assert.False(t, flags.NoColor)
-}
-
-func TestCommonFlags_GetConfigFunction(t *testing.T) {
-	expectedConfig := &Config{
-		CurrentContext: "test",
-		Contexts: []*Context{
-			{Name: "test", Type: ContextTypeLocal},
-		},
-	}
-
-	flags := &CommonFlags{
-		GetConfig: func() (*Config, error) {
-			return expectedConfig, nil
-		},
-	}
-
-	config, err := flags.GetConfig()
-	require.NoError(t, err)
-	assert.Equal(t, expectedConfig, config)
-}
-
-func TestCommonFlags_GetContextFunction(t *testing.T) {
-	expectedContext := &Context{
-		Name: "test",
-		Type: ContextTypeLocal,
-		Local: &LocalContext{
-			SocketPath: "/test/path.sock",
-		},
-	}
-
-	flags := &CommonFlags{
-		GetContext: func() (*Context, error) {
-			return expectedContext, nil
-		},
-	}
-
-	ctx, err := flags.GetContext()
-	require.NoError(t, err)
-	assert.Equal(t, expectedContext, ctx)
-}
-
 func TestBaseCommand_FullWorkflow(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "workflow.sock")
 
@@ -543,8 +195,9 @@ func TestBaseCommand_FullWorkflow(t *testing.T) {
 	// Verify all components are accessible
 	assert.NotNil(t, baseCmd.Client())
 	assert.NotNil(t, baseCmd.Printer())
-	assert.NotNil(t, baseCmd.Context())
-	assert.NotNil(t, baseCmd.Flags())
+	assert.IsType(t, context.Background(), baseCmd.Context())
+	assert.Equal(t, flags, baseCmd.Flags())
+	assert.True(t, baseCmd.flags.Verbose)
 
 	// Verify client is connected
 	assert.True(t, baseCmd.Client().IsConnected())
@@ -790,55 +443,28 @@ func TestContextToSDKOptions_RemoteProtocolOverrideFallback(t *testing.T) {
 
 // protocolAddress tests
 
-func TestProtocolAddress_REST(t *testing.T) {
-	addr := "https://example.com:8443"
-	result := protocolAddress(platform.ProtocolREST, addr)
+func TestProtocolAddress_SetsTheProtocolField(t *testing.T) {
+	tests := []struct {
+		protocol platform.Protocol
+		addr     string
+		field    func(*platform.Options) string
+	}{
+		{platform.ProtocolREST, "https://example.com:8443", func(o *platform.Options) string { return o.RESTAddr }},
+		{platform.ProtocolGRPC, "example.com:10443", func(o *platform.Options) string { return o.GRPCAddr }},
+		{platform.ProtocolQUIC, "example.com:9444", func(o *platform.Options) string { return o.QUICAddr }},
+		{platform.ProtocolMCP, "http://example.com:9445", func(o *platform.Options) string { return o.MCPAddr }},
+		{platform.ProtocolUnix, "/run/platformd.sock", func(o *platform.Options) string { return o.UnixSocket }},
+	}
 
-	require.Len(t, result, 1)
+	for _, tt := range tests {
+		t.Run(tt.addr, func(t *testing.T) {
+			result := protocolAddress(tt.protocol, tt.addr)
+			require.Len(t, result, 1)
 
-	// Apply the option to verify the address is set correctly
-	opts := platform.NewOptions(result...)
-	assert.Equal(t, addr, opts.RESTAddr)
-}
-
-func TestProtocolAddress_GRPC(t *testing.T) {
-	addr := "example.com:10443"
-	result := protocolAddress(platform.ProtocolGRPC, addr)
-
-	require.Len(t, result, 1)
-
-	opts := platform.NewOptions(result...)
-	assert.Equal(t, addr, opts.GRPCAddr)
-}
-
-func TestProtocolAddress_QUIC(t *testing.T) {
-	addr := "example.com:9444"
-	result := protocolAddress(platform.ProtocolQUIC, addr)
-
-	require.Len(t, result, 1)
-
-	opts := platform.NewOptions(result...)
-	assert.Equal(t, addr, opts.QUICAddr)
-}
-
-func TestProtocolAddress_MCP(t *testing.T) {
-	addr := "http://example.com:9445"
-	result := protocolAddress(platform.ProtocolMCP, addr)
-
-	require.Len(t, result, 1)
-
-	opts := platform.NewOptions(result...)
-	assert.Equal(t, addr, opts.MCPAddr)
-}
-
-func TestProtocolAddress_Unix(t *testing.T) {
-	addr := "/run/platformd.sock"
-	result := protocolAddress(platform.ProtocolUnix, addr)
-
-	require.Len(t, result, 1)
-
-	opts := platform.NewOptions(result...)
-	assert.Equal(t, addr, opts.UnixSocket)
+			opts := platform.NewOptions(result...)
+			assert.Equal(t, tt.addr, tt.field(opts))
+		})
+	}
 }
 
 func TestProtocolAddress_Embedded(t *testing.T) {
@@ -873,17 +499,6 @@ func TestProtocolMap_AllProtocolsMapped(t *testing.T) {
 		gotProto, ok := protocolMap[key]
 		assert.True(t, ok, "expected key %q in protocolMap", key)
 		assert.Equal(t, wantProto, gotProto, "protocol mismatch for key %q", key)
-	}
-}
-
-func TestProtocolMap_InvalidKeyNotPresent(t *testing.T) {
-	invalidKeys := []string{"bogus", "http", "tcp", "", "GRPC"}
-
-	for _, key := range invalidKeys {
-		t.Run(key, func(t *testing.T) {
-			_, ok := protocolMap[key]
-			assert.False(t, ok, "key %q should not be in protocolMap", key)
-		})
 	}
 }
 

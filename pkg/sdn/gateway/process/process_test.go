@@ -1011,13 +1011,6 @@ func TestServiceHealthAndActive_FollowTheChildNotTheParent(t *testing.T) {
 	assert.Contains(t, notActive.Detail, "flow install failed")
 }
 
-func TestServiceHealth_ReportsAProcessThatWasNeverStarted(t *testing.T) {
-	supervisor, _, _ := newSupervisor(t, nil)
-	var down *ErrProcessDown
-	require.ErrorAs(t, supervisor.ServiceHealth(gateway.ServiceProxy), &down)
-	assert.False(t, supervisor.ServiceActive(gateway.ServiceProxy))
-}
-
 func TestServiceSnapshot_ReadsTheChildOverItsControlSocket(t *testing.T) {
 	supervisor, _, _ := newSupervisor(t, nil)
 	ctx := testContext(t)
@@ -3204,6 +3197,7 @@ func TestServiceHealth_ANeverStartedProcessIsNotAStoppedSupervisor(t *testing.T)
 	var never *ErrProcessNeverStarted
 	require.ErrorAs(t, err, &never, "a process nobody started is not a shutdown")
 	assert.Equal(t, "proxy", never.Process)
+	assert.False(t, supervisor.ServiceActive(gateway.ServiceProxy))
 
 	// After Shutdown the cause is the shutdown, which is a different thing
 	// for an operator reading a health report.

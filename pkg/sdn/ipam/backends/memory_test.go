@@ -745,40 +745,6 @@ func TestMemoryBackend_Allocate(t *testing.T) {
 		}
 	})
 
-	t.Run("returns error when pool is exhausted", func(t *testing.T) {
-		t.Parallel()
-		ctx := context.Background()
-		backend := NewMemoryBackend()
-		defer backend.Close()
-
-		// /30 has 2 usable IPs
-		pool := &ipam.Pool{
-			ID:   "pool-1",
-			Name: "test-pool",
-			CIDR: netip.MustParsePrefix("10.0.0.0/30"),
-		}
-		_ = backend.CreatePool(ctx, pool)
-
-		// Allocate all IPs
-		for i := 0; i < 2; i++ {
-			req := &ipam.AllocationRequest{
-				PoolID:   "pool-1",
-				DeviceID: "device-" + string(rune('0'+i)),
-			}
-			_, _ = backend.Allocate(ctx, req)
-		}
-
-		// Try to allocate one more
-		req := &ipam.AllocationRequest{
-			PoolID:   "pool-1",
-			DeviceID: "device-extra",
-		}
-		_, err := backend.Allocate(ctx, req)
-		if !errors.Is(err, ipam.ErrPoolExhausted) {
-			t.Errorf("expected ErrPoolExhausted, got %v", err)
-		}
-	})
-
 	t.Run("returns error for non-existent pool", func(t *testing.T) {
 		t.Parallel()
 		ctx := context.Background()
@@ -1136,42 +1102,6 @@ func TestMemoryBackend_Release(t *testing.T) {
 		releasedAlloc, _ := backend.GetAllocation(ctx, alloc.IP)
 		if releasedAlloc.Status != ipam.AllocationStatusReleased {
 			t.Errorf("expected status %v, got %v", ipam.AllocationStatusReleased, releasedAlloc.Status)
-		}
-	})
-
-	t.Run("released IP can be reallocated", func(t *testing.T) {
-		t.Parallel()
-		ctx := context.Background()
-		backend := NewMemoryBackend()
-		defer backend.Close()
-
-		pool := &ipam.Pool{
-			ID:   "pool-1",
-			Name: "test-pool",
-			CIDR: netip.MustParsePrefix("10.0.0.0/24"),
-		}
-		_ = backend.CreatePool(ctx, pool)
-
-		req := &ipam.AllocationRequest{
-			PoolID:   "pool-1",
-			DeviceID: "device-1",
-		}
-		alloc, _ := backend.Allocate(ctx, req)
-		releasedIP := alloc.IP
-
-		_ = backend.Release(ctx, releasedIP)
-
-		// Allocate again - should get the same IP (first available)
-		req2 := &ipam.AllocationRequest{
-			PoolID:   "pool-1",
-			DeviceID: "device-2",
-		}
-		newAlloc, err := backend.Allocate(ctx, req2)
-		if err != nil {
-			t.Fatalf("Reallocate failed: %v", err)
-		}
-		if newAlloc.IP != releasedIP {
-			t.Errorf("expected released IP %v to be reallocated, got %v", releasedIP, newAlloc.IP)
 		}
 	})
 

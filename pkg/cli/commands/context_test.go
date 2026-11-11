@@ -14,7 +14,6 @@
 package commands
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -72,24 +71,6 @@ func TestContextCommandSubcommands(t *testing.T) {
 	}
 }
 
-func TestNewContextListCommand(t *testing.T) {
-	cmd := newContextListCommand(func() (*cli.Config, error) {
-		return cli.DefaultConfig(), nil
-	})
-
-	if cmd == nil {
-		t.Fatal("newContextListCommand returned nil")
-	}
-
-	if cmd.Use != "list" {
-		t.Errorf("expected Use to be 'list', got %s", cmd.Use)
-	}
-
-	if cmd.RunE == nil {
-		t.Error("RunE should not be nil")
-	}
-}
-
 func TestNewContextListCommandRunE(t *testing.T) {
 	cmd := newContextListCommand(func() (*cli.Config, error) {
 		return &cli.Config{
@@ -109,24 +90,6 @@ func TestNewContextListCommandRunE(t *testing.T) {
 	err := cmd.RunE(cmd, []string{})
 	if err != nil {
 		t.Errorf("RunE failed: %v", err)
-	}
-}
-
-func TestNewContextUseCommand(t *testing.T) {
-	cmd := newContextUseCommand(func() (*cli.Config, error) {
-		return cli.DefaultConfig(), nil
-	})
-
-	if cmd == nil {
-		t.Fatal("newContextUseCommand returned nil")
-	}
-
-	if cmd.Use != "use <context-name>" {
-		t.Errorf("expected Use to be 'use <context-name>', got %s", cmd.Use)
-	}
-
-	if cmd.RunE == nil {
-		t.Error("RunE should not be nil")
 	}
 }
 
@@ -167,24 +130,6 @@ func TestNewContextUseCommandRunE(t *testing.T) {
 	}
 }
 
-func TestNewContextCurrentCommand(t *testing.T) {
-	cmd := newContextCurrentCommand(func() (*cli.Config, error) {
-		return cli.DefaultConfig(), nil
-	})
-
-	if cmd == nil {
-		t.Fatal("newContextCurrentCommand returned nil")
-	}
-
-	if cmd.Use != "current" {
-		t.Errorf("expected Use to be 'current', got %s", cmd.Use)
-	}
-
-	if cmd.RunE == nil {
-		t.Error("RunE should not be nil")
-	}
-}
-
 func TestNewContextCurrentCommandRunE(t *testing.T) {
 	cmd := newContextCurrentCommand(func() (*cli.Config, error) {
 		return &cli.Config{
@@ -207,46 +152,6 @@ func TestNewContextCurrentCommandRunE(t *testing.T) {
 	}
 }
 
-func TestNewContextAddCommand(t *testing.T) {
-	cmd := newContextAddCommand(func() (*cli.Config, error) {
-		return cli.DefaultConfig(), nil
-	})
-
-	if cmd == nil {
-		t.Fatal("newContextAddCommand returned nil")
-	}
-
-	if cmd.Use != "add <context-name>" {
-		t.Errorf("expected Use to be 'add <context-name>', got %s", cmd.Use)
-	}
-
-	// Verify flags
-	requiredFlags := []struct {
-		name         string
-		shorthand    string
-		defaultValue string
-	}{
-		{"type", "t", "local"},
-		{"socket-path", "", "/run/platformd.sock"},
-		{"server", "", ""},
-		{"ca-cert", "", ""},
-		{"client-cert", "", ""},
-		{"client-key", "", ""},
-	}
-
-	for _, rf := range requiredFlags {
-		flag := cmd.Flags().Lookup(rf.name)
-		if flag == nil {
-			t.Errorf("flag %s not found", rf.name)
-			continue
-		}
-		if rf.shorthand != "" && flag.Shorthand != rf.shorthand {
-			t.Errorf("flag %s: expected shorthand %s, got %s",
-				rf.name, rf.shorthand, flag.Shorthand)
-		}
-	}
-}
-
 func TestNewContextAddCommandRunE(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.yaml")
@@ -263,24 +168,6 @@ func TestNewContextAddCommandRunE(t *testing.T) {
 	err := cmd.RunE(cmd, []string{"new-context"})
 	if err != nil {
 		t.Errorf("RunE failed: %v", err)
-	}
-}
-
-func TestNewContextDeleteCommand(t *testing.T) {
-	cmd := newContextDeleteCommand(func() (*cli.Config, error) {
-		return cli.DefaultConfig(), nil
-	})
-
-	if cmd == nil {
-		t.Fatal("newContextDeleteCommand returned nil")
-	}
-
-	if cmd.Use != "delete <context-name>" {
-		t.Errorf("expected Use to be 'delete <context-name>', got %s", cmd.Use)
-	}
-
-	if cmd.RunE == nil {
-		t.Error("RunE should not be nil")
 	}
 }
 
@@ -702,6 +589,7 @@ func TestContextCommandStructures(t *testing.T) {
 		name    string
 		cmdFunc func(func() (*cli.Config, error)) *cobra.Command
 	}{
+		{"context", NewContextCommand},
 		{"list", newContextListCommand},
 		{"use", newContextUseCommand},
 		{"current", newContextCurrentCommand},
@@ -828,15 +716,16 @@ func TestContextAddCommandFlagDefaults(t *testing.T) {
 	})
 
 	tests := []struct {
-		name     string
-		defValue string
+		name      string
+		shorthand string
+		defValue  string
 	}{
-		{"type", "local"},
-		{"socket-path", "/run/platformd.sock"},
-		{"server", ""},
-		{"ca-cert", ""},
-		{"client-cert", ""},
-		{"client-key", ""},
+		{"type", "t", "local"},
+		{"socket-path", "", "/run/platformd.sock"},
+		{"server", "", ""},
+		{"ca-cert", "", ""},
+		{"client-cert", "", ""},
+		{"client-key", "", ""},
 	}
 
 	for _, tt := range tests {
@@ -845,6 +734,10 @@ func TestContextAddCommandFlagDefaults(t *testing.T) {
 			t.Errorf("flag %s not found", tt.name)
 			continue
 		}
+		if flag.Shorthand != tt.shorthand {
+			t.Errorf("flag %s: expected shorthand %q, got %q",
+				tt.name, tt.shorthand, flag.Shorthand)
+		}
 		if flag.DefValue != tt.defValue {
 			t.Errorf("flag %s: expected default %s, got %s",
 				tt.name, tt.defValue, flag.DefValue)
@@ -852,49 +745,33 @@ func TestContextAddCommandFlagDefaults(t *testing.T) {
 	}
 }
 
-func TestContextCommandLongDescription(t *testing.T) {
-	cmd := NewContextCommand(func() (*cli.Config, error) {
-		return cli.DefaultConfig(), nil
-	})
-
-	expectedLong := "Manage connection contexts for local and remote platform connections"
-	if cmd.Long != expectedLong {
-		t.Errorf("unexpected Long description: got %s, want %s", cmd.Long, expectedLong)
+// TestContextCommandArgs pins the exactly-one-name rule of the
+// commands that take a context name.
+func TestContextCommandArgs(t *testing.T) {
+	tests := []struct {
+		name    string
+		cmdFunc func(func() (*cli.Config, error)) *cobra.Command
+	}{
+		{"use", newContextUseCommand},
+		{"add", newContextAddCommand},
+		{"delete", newContextDeleteCommand},
 	}
-}
 
-func TestContextUseCommandArgs(t *testing.T) {
-	cmd := newContextUseCommand(func() (*cli.Config, error) {
-		return cli.DefaultConfig(), nil
-	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := tt.cmdFunc(func() (*cli.Config, error) {
+				return cli.DefaultConfig(), nil
+			})
 
-	if cmd.Args == nil {
-		t.Error("Args should not be nil")
+			if err := cmd.Args(cmd, []string{"ctx"}); err != nil {
+				t.Errorf("one name rejected: %v", err)
+			}
+			if err := cmd.Args(cmd, []string{}); err == nil {
+				t.Error("no name accepted")
+			}
+			if err := cmd.Args(cmd, []string{"a", "b"}); err == nil {
+				t.Error("two names accepted")
+			}
+		})
 	}
-}
-
-func TestContextDeleteCommandArgs(t *testing.T) {
-	cmd := newContextDeleteCommand(func() (*cli.Config, error) {
-		return cli.DefaultConfig(), nil
-	})
-
-	if cmd.Args == nil {
-		t.Error("Args should not be nil")
-	}
-}
-
-func TestContextAddCommandArgs(t *testing.T) {
-	cmd := newContextAddCommand(func() (*cli.Config, error) {
-		return cli.DefaultConfig(), nil
-	})
-
-	if cmd.Args == nil {
-		t.Error("Args should not be nil")
-	}
-}
-
-// Cleanup function to reset environment after tests
-func TestMain(m *testing.M) {
-	code := m.Run()
-	os.Exit(code)
 }

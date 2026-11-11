@@ -546,12 +546,13 @@ func TestNewISOStager_AcceptsValidConfig(t *testing.T) {
 }
 
 func TestExpandTilde(t *testing.T) {
-	t.Setenv("HOME", "/home/test")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	cases := []struct {
 		in, want string
 	}{
-		{"~", "/home/test"},
-		{"~/.ssh/id_rsa", "/home/test/.ssh/id_rsa"},
+		{"~", home},
+		{"~/.ssh/id_rsa", home + "/.ssh/id_rsa"},
 		{"/abs/path", "/abs/path"},
 		{"relative/path", "relative/path"},
 	}

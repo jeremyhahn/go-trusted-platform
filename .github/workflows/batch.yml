@@ -69,7 +69,7 @@ permissions:
 
 env:
   # In lockstep with ci.yml's GO_VERSION.
-  GO_VERSION: '1.27.3'
+  GO_VERSION: '1.27.4'
   # FUZZ_TAGS, RACE_TAGS, RACE_SKIP, RACE_PKGS, BENCH_TAGS and BENCH_PKGS are
   # resolved from the Makefile by each job's "Resolve" step (see above).
   SOAK_CMD: 'make test-race'  # CUSTOMIZE

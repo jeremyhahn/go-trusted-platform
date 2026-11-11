@@ -1,6 +1,6 @@
 module github.com/jeremyhahn/go-trusted-platform/build/tools-src/swag
 
-go 1.27.3
+go 1.27.4
 
 tool github.com/swaggo/swag/cmd/swag
 

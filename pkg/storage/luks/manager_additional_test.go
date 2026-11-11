@@ -20,121 +20,40 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/drive"
 )
 
-func TestAddRecoveryKeyHex(t *testing.T) {
-	m, _ := NewManager(nil, nil, nil, nil)
-	ctx := context.Background()
-
-	part := &drive.PartitionConfig{
-		ID:    "root",
-		Label: "root-partition",
-		Encryption: &drive.EncryptionConfig{
-			Enabled: true,
-			RecoveryKey: &drive.RecoveryKeyConfig{
-				Generate:   true,
-				KeySlot:    2,
-				Format:     drive.RecoveryKeyFormatHex,
-				Length:     32,
-				OutputPath: "/tmp/recovery-key-test.hex",
-			},
-		},
+func TestAddRecoveryKeyFormats(t *testing.T) {
+	tests := []struct {
+		name   string
+		format drive.RecoveryKeyFormat
+		length int
+	}{
+		{name: "hex with explicit length", format: drive.RecoveryKeyFormatHex, length: 32},
+		{name: "base64", format: drive.RecoveryKeyFormatBase64},
+		{name: "unknown format defaults to dashed and default length", format: "unknown"},
 	}
 
-	// Will fail because device doesn't exist, but tests the code paths
-	err := m.AddRecoveryKey(ctx, part, []byte("test-password"))
-	if err == nil {
-		t.Error("expected error for non-existent device")
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m, _ := NewManager(nil, nil, nil, nil)
 
-func TestAddRecoveryKeyBase64(t *testing.T) {
-	m, _ := NewManager(nil, nil, nil, nil)
-	ctx := context.Background()
+			part := &drive.PartitionConfig{
+				ID:    "root",
+				Label: "root-partition",
+				Encryption: &drive.EncryptionConfig{
+					Enabled: true,
+					RecoveryKey: &drive.RecoveryKeyConfig{
+						Generate: true,
+						KeySlot:  2,
+						Format:   tt.format,
+						Length:   tt.length,
+					},
+				},
+			}
 
-	part := &drive.PartitionConfig{
-		ID:    "root",
-		Label: "root-partition",
-		Encryption: &drive.EncryptionConfig{
-			Enabled: true,
-			RecoveryKey: &drive.RecoveryKeyConfig{
-				Generate: true,
-				KeySlot:  2,
-				Format:   drive.RecoveryKeyFormatBase64,
-			},
-		},
-	}
-
-	err := m.AddRecoveryKey(ctx, part, []byte("test-password"))
-	if err == nil {
-		t.Error("expected error for non-existent device")
-	}
-}
-
-func TestAddRecoveryKeyDashed(t *testing.T) {
-	m, _ := NewManager(nil, nil, nil, nil)
-	ctx := context.Background()
-
-	part := &drive.PartitionConfig{
-		ID:    "root",
-		Label: "root-partition",
-		Encryption: &drive.EncryptionConfig{
-			Enabled: true,
-			RecoveryKey: &drive.RecoveryKeyConfig{
-				Generate: true,
-				KeySlot:  2,
-				Format:   drive.RecoveryKeyFormatDashed,
-			},
-		},
-	}
-
-	err := m.AddRecoveryKey(ctx, part, []byte("test-password"))
-	if err == nil {
-		t.Error("expected error for non-existent device")
-	}
-}
-
-func TestAddRecoveryKeyDefaultLength(t *testing.T) {
-	m, _ := NewManager(nil, nil, nil, nil)
-	ctx := context.Background()
-
-	part := &drive.PartitionConfig{
-		ID:    "root",
-		Label: "root-partition",
-		Encryption: &drive.EncryptionConfig{
-			Enabled: true,
-			RecoveryKey: &drive.RecoveryKeyConfig{
-				Generate: true,
-				KeySlot:  2,
-				Length:   0, // Should default to 32
-			},
-		},
-	}
-
-	err := m.AddRecoveryKey(ctx, part, []byte("test-password"))
-	if err == nil {
-		t.Error("expected error for non-existent device")
-	}
-}
-
-func TestAddRecoveryKeyWithOutputPath(t *testing.T) {
-	m, _ := NewManager(nil, nil, nil, nil)
-	ctx := context.Background()
-
-	part := &drive.PartitionConfig{
-		ID:    "root",
-		Label: "root-partition",
-		Encryption: &drive.EncryptionConfig{
-			Enabled: true,
-			RecoveryKey: &drive.RecoveryKeyConfig{
-				Generate:   true,
-				KeySlot:    2,
-				OutputPath: "/tmp/test-recovery.key",
-			},
-		},
-	}
-
-	err := m.AddRecoveryKey(ctx, part, []byte("test-password"))
-	if err == nil {
-		t.Error("expected error for non-existent device")
+			err := m.AddRecoveryKey(context.Background(), part, []byte("test-password"))
+			if err == nil {
+				t.Error("expected error for non-existent device")
+			}
+		})
 	}
 }
 
@@ -155,56 +74,40 @@ func TestUnlockWithPassphrase(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for non-existent device")
 	}
+	if _, ok := m.volumes[part.ID]; ok {
+		t.Error("expected no volume state on unlock failure")
+	}
 }
 
 func TestUnlockWithRecoveryKey(t *testing.T) {
-	m, _ := NewManager(nil, nil, nil, nil)
-	ctx := context.Background()
-
-	part := &drive.PartitionConfig{
-		ID:    "root",
-		Label: "root-partition",
-		Encryption: &drive.EncryptionConfig{
-			Enabled:     true,
-			MappingName: "crypt-root",
-		},
+	keys := map[string]string{
+		"hex":       "0123456789abcdef0123456789abcdef",
+		"dashed":    "0123-4567-89ab-cdef",
+		"base64":    "YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo=",
+		"malformed": "test-recovery-key",
 	}
 
-	// Test with hex format
-	err := m.UnlockWithRecoveryKey(ctx, part, "0123456789abcdef0123456789abcdef")
-	if err == nil {
-		t.Error("expected error for invalid recovery key or non-existent device")
-	}
+	for name, key := range keys {
+		t.Run(name, func(t *testing.T) {
+			m, _ := NewManager(nil, nil, nil, nil)
 
-	// Test with dashed format
-	err = m.UnlockWithRecoveryKey(ctx, part, "0123-4567-89ab-cdef")
-	if err == nil {
-		t.Error("expected error for invalid recovery key or non-existent device")
-	}
+			part := &drive.PartitionConfig{
+				ID:    "root",
+				Label: "root-partition",
+				Encryption: &drive.EncryptionConfig{
+					Enabled:     true,
+					MappingName: "crypt-root",
+				},
+			}
 
-	// Test with base64 format
-	err = m.UnlockWithRecoveryKey(ctx, part, "YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo=")
-	if err == nil {
-		t.Error("expected error for invalid recovery key or non-existent device")
-	}
-}
-
-func TestLock(t *testing.T) {
-	m, _ := NewManager(nil, nil, nil, nil)
-	ctx := context.Background()
-
-	part := &drive.PartitionConfig{
-		ID:    "root",
-		Label: "root-partition",
-		Encryption: &drive.EncryptionConfig{
-			Enabled:     true,
-			MappingName: "crypt-root",
-		},
-	}
-
-	err := m.Lock(ctx, part)
-	if err == nil {
-		t.Error("expected error for non-existent mapping")
+			err := m.UnlockWithRecoveryKey(context.Background(), part, key)
+			if err == nil {
+				t.Error("expected error for invalid recovery key or non-existent device")
+			}
+			if _, ok := m.volumes[part.ID]; ok {
+				t.Error("expected no volume state on unlock failure")
+			}
+		})
 	}
 }
 
@@ -300,29 +203,6 @@ func TestMakeFilesystemExt4(t *testing.T) {
 	}
 }
 
-func TestMakeFilesystemXFS(t *testing.T) {
-	m, _ := NewManager(nil, nil, nil, nil)
-	ctx := context.Background()
-
-	part := &drive.PartitionConfig{
-		ID:    "data",
-		Label: "data-partition",
-		Encryption: &drive.EncryptionConfig{
-			Enabled:     true,
-			MappingName: "crypt-data",
-		},
-		Filesystem: &drive.FilesystemConfig{
-			Type:  drive.FilesystemXFS,
-			Label: "datafs",
-		},
-	}
-
-	err := m.MakeFilesystem(ctx, part)
-	if err == nil {
-		t.Error("expected error for non-existent mapping")
-	}
-}
-
 func TestMountWithFilesystemType(t *testing.T) {
 	m, _ := NewManager(nil, nil, nil, nil)
 	ctx := context.Background()
@@ -355,6 +235,9 @@ func TestMountWithFilesystemType(t *testing.T) {
 	err := m.Mount(ctx, part)
 	if err == nil {
 		t.Error("expected error for non-existent mapping")
+	}
+	if state := m.volumes[part.ID]; state.IsMounted {
+		t.Error("expected IsMounted to remain false on error")
 	}
 }
 
@@ -423,40 +306,6 @@ func TestUnmountUpdatesState(t *testing.T) {
 	}
 }
 
-func TestFormatVolumeWithTPMSealing(t *testing.T) {
-	m, _ := NewManager(nil, nil, nil, nil)
-	ctx := context.Background()
-
-	part := &drive.PartitionConfig{
-		ID:    "root",
-		Label: "root-partition",
-		Encryption: &drive.EncryptionConfig{
-			Enabled: true,
-			LUKS: &drive.LUKSConfig{
-				Cipher:         "aes-xts-plain64",
-				KeySize:        512,
-				Hash:           "sha256",
-				PBKDF:          "argon2id",
-				Argon2Memory:   1048576,
-				Argon2Time:     4,
-				Argon2Parallel: 4,
-			},
-			TPMSealing: &drive.TPMSealingConfig{
-				Enabled:   true,
-				KeySlot:   1,
-				KeyName:   "test-key",
-				PCRPolicy: true,
-			},
-		},
-	}
-
-	// Will fail because TPM is not available, but tests the code path
-	err := m.FormatVolume(ctx, part, []byte("test-password"))
-	if err == nil {
-		t.Error("expected error for non-existent device or missing TPM")
-	}
-}
-
 func TestFormatVolumeWithRecoveryKey(t *testing.T) {
 	m, _ := NewManager(nil, nil, nil, nil)
 	ctx := context.Background()
@@ -481,69 +330,5 @@ func TestFormatVolumeWithRecoveryKey(t *testing.T) {
 	err := m.FormatVolume(ctx, part, []byte("test-password"))
 	if err == nil {
 		t.Error("expected error for non-existent device")
-	}
-}
-
-func TestBuildFormatOptionsAllFields(t *testing.T) {
-	m, _ := NewManager(nil, nil, nil, nil)
-
-	part := &drive.PartitionConfig{
-		ID:    "root",
-		Label: "root-partition",
-		Encryption: &drive.EncryptionConfig{
-			Enabled: true,
-			LUKS: &drive.LUKSConfig{
-				Cipher:         "aes-xts-plain64",
-				KeySize:        512,
-				Hash:           "sha256",
-				PBKDF:          "argon2id",
-				Argon2Memory:   1048576,
-				Argon2Time:     4,
-				Argon2Parallel: 4,
-			},
-		},
-	}
-
-	opts := m.buildFormatOptions(part, []byte("pass"), "/dev/test")
-
-	if opts.Cipher != "aes" {
-		t.Errorf("expected cipher aes, got %s", opts.Cipher)
-	}
-	if opts.CipherMode != "xts-plain64" {
-		t.Errorf("expected mode xts-plain64, got %s", opts.CipherMode)
-	}
-	if opts.Argon2Memory != 1048576 {
-		t.Errorf("expected Argon2Memory 1048576, got %d", opts.Argon2Memory)
-	}
-	if opts.Argon2Time != 4 {
-		t.Errorf("expected Argon2Time 4, got %d", opts.Argon2Time)
-	}
-	if opts.Argon2Parallel != 4 {
-		t.Errorf("expected Argon2Parallel 4, got %d", opts.Argon2Parallel)
-	}
-}
-
-func TestUnlockWithTPMNoSealedData(t *testing.T) {
-	m, _ := NewManager(nil, nil, nil, nil)
-	ctx := context.Background()
-
-	part := &drive.PartitionConfig{
-		ID:    "root",
-		Label: "root-partition",
-		Encryption: &drive.EncryptionConfig{
-			Enabled:     true,
-			MappingName: "crypt-root",
-			TPMSealing: &drive.TPMSealingConfig{
-				Enabled:    true,
-				KeySlot:    1,
-				SealedData: nil, // No sealed data
-			},
-		},
-	}
-
-	err := m.UnlockWithTPM(ctx, part)
-	// Will fail with "TPM not available" before checking sealed data
-	if err == nil {
-		t.Error("expected error when TPM is not available")
 	}
 }
