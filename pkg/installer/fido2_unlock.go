@@ -149,7 +149,7 @@ func (f *FIDO2Unlock) GetTokenInfo() (*FIDO2Token, error) {
 // user verification) the key was enrolled with.
 func (f *FIDO2Unlock) DeriveKey(ctx context.Context, token *FIDO2Token) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, &FIDO2CanceledError{Step: fido2DeriveStep, Err: err}
+		return nil, &fido2CanceledError{Step: fido2DeriveStep, Err: err}
 	}
 	decode, ok := fido2TokenDecoders[token.Type]
 	if !ok {
@@ -165,7 +165,7 @@ func (f *FIDO2Unlock) DeriveKey(ctx context.Context, token *FIDO2Token) ([]byte,
 	if deadline, ok := ctx.Deadline(); ok {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			return nil, &FIDO2CanceledError{Step: fido2DeriveStep, Err: context.DeadlineExceeded}
+			return nil, &fido2CanceledError{Step: fido2DeriveStep, Err: context.DeadlineExceeded}
 		}
 		authConfig.Timeout = remaining
 	}
@@ -184,7 +184,7 @@ func (f *FIDO2Unlock) DeriveKey(ctx context.Context, token *FIDO2Token) ([]byte,
 	key, err := awaitAuthenticator(ctx, session, fido2DeriveStep, func(handler fido2.Handler) ([]byte, error) {
 		return handler.UnlockWithKey(authConfig)
 	}, clearKey)
-	if errors.As(err, new(*FIDO2CanceledError)) {
+	if errors.As(err, new(*fido2CanceledError)) {
 		return nil, err
 	}
 	if err != nil {
@@ -303,7 +303,7 @@ func (f *FIDO2Unlock) openWith(ctx context.Context, token *FIDO2Token, key []byt
 	// The key may arrive after the caller gave up; a cancelled unlock never
 	// maps the volume.
 	if err := ctx.Err(); err != nil {
-		return &FIDO2CanceledError{Step: "open the volume", Err: err}
+		return &fido2CanceledError{Step: "open the volume", Err: err}
 	}
 	if err := luksUnlock(f.luksDevice, key, mappedName); err != nil {
 		return &FIDO2KeyRejectedError{Device: f.luksDevice, Keyslots: token.Keyslots, Err: err}

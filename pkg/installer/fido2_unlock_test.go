@@ -238,7 +238,7 @@ func TestFIDO2UnlockCanceled(t *testing.T) {
 
 			err := NewFIDO2Unlock("/dev/fake-luks", false).Unlock(tc.ctx, "cryptroot")
 
-			var canceledErr *FIDO2CanceledError
+			var canceledErr *fido2CanceledError
 			require.ErrorAs(t, err, &canceledErr)
 			assert.ErrorIs(t, err, tc.want)
 			assert.Len(t, device.unlocks, 1, "only the enrolment derived a key")
@@ -259,7 +259,7 @@ func TestFIDO2UnlockCanceled(t *testing.T) {
 		cancel()
 		err := <-done
 
-		var canceledErr *FIDO2CanceledError
+		var canceledErr *fido2CanceledError
 		require.ErrorAs(t, err, &canceledErr)
 		assert.ErrorIs(t, err, context.Canceled)
 
@@ -282,7 +282,7 @@ func TestFIDO2UnlockCanceled(t *testing.T) {
 
 		err = unlock.openWith(canceled, token, key, "cryptroot")
 
-		var canceledErr *FIDO2CanceledError
+		var canceledErr *fido2CanceledError
 		require.ErrorAs(t, err, &canceledErr)
 		assert.ErrorIs(t, err, context.Canceled)
 		assert.Empty(t, fake.mapped, "a key that arrived after the cancel opened the volume")
@@ -453,7 +453,7 @@ func TestFIDO2UnlockRawSecretWaitsForOperation(t *testing.T) {
 		cancel()
 		err := <-done
 
-		var canceledErr *FIDO2CanceledError
+		var canceledErr *fido2CanceledError
 		require.ErrorAs(t, err, &canceledErr)
 		assert.ErrorIs(t, err, context.Canceled)
 		assert.Equal(t, "get the hmac-secret", canceledErr.Step)

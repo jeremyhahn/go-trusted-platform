@@ -352,11 +352,11 @@ func (f *FIDO2Enrollment) enrollWithHandler(ctx context.Context, handler fido2.H
 			})
 		}, discardNothing[*fido2.EnrollmentResult])
 	}
-	if errors.As(err, new(*FIDO2CanceledError)) {
+	if errors.As(err, new(*fido2CanceledError)) {
 		return err
 	}
 	if err != nil {
-		return &FIDO2EnrollKeyError{Err: err}
+		return &fido2EnrollKeyError{Err: err}
 	}
 
 	salt := result.Salt
@@ -379,7 +379,7 @@ func (f *FIDO2Enrollment) enrollWithHandler(ctx context.Context, handler fido2.H
 			Salt:           salt,
 		})
 	}, clearKey)
-	if errors.As(err, new(*FIDO2CanceledError)) {
+	if errors.As(err, new(*fido2CanceledError)) {
 		return err
 	}
 	if err != nil {
@@ -409,7 +409,7 @@ func (f *FIDO2Enrollment) enrollWithHandler(ctx context.Context, handler fido2.H
 	}
 
 	if err := ctx.Err(); err != nil {
-		return &FIDO2CanceledError{Step: "add the keyslot", Err: err}
+		return &fido2CanceledError{Step: "add the keyslot", Err: err}
 	}
 	if err := luksAddKey(f.config.LUKSDevice, []byte(f.config.LUKSPassphrase), key, addKeyOpts); err != nil {
 		return &FIDO2AddKeyError{Slot: f.config.TargetKeyslot, Err: err}
@@ -420,7 +420,7 @@ func (f *FIDO2Enrollment) enrollWithHandler(ctx context.Context, handler fido2.H
 	}
 
 	if err := ctx.Err(); err != nil {
-		return f.rollbackKeyslot(&FIDO2CanceledError{Step: "store the token", Err: err})
+		return f.rollbackKeyslot(&fido2CanceledError{Step: "store the token", Err: err})
 	}
 	fmt.Println("Storing FIDO2 metadata in LUKS token...")
 
@@ -428,7 +428,7 @@ func (f *FIDO2Enrollment) enrollWithHandler(ctx context.Context, handler fido2.H
 	// The lookup reads the header without a context, so a cancellation that
 	// arrived during it is checked again before the token is imported.
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return f.rollbackKeyslot(&FIDO2CanceledError{Step: "import the token", Err: ctxErr})
+		return f.rollbackKeyslot(&fido2CanceledError{Step: "import the token", Err: ctxErr})
 	}
 	// Boot finds the slot and reproduces its key only from the token, so a
 	// keyslot without one is rolled back (docs/luks/architecture.md).
@@ -497,7 +497,7 @@ func (f *FIDO2Enrollment) createCredentialWithPIN(ctx context.Context, userID []
 	credOutput, err := fido2Command(ctx, credParams, "fido2-cred", "-M", "-h", f.devicePath)
 	<-fido2Operation
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return nil, &FIDO2CanceledError{Step: fido2CreateStep, Err: ctxErr}
+		return nil, &fido2CanceledError{Step: fido2CreateStep, Err: ctxErr}
 	}
 	if err != nil {
 		return nil, &WrappedError{Msg: "fido2-cred failed to create the credential", Err: err}
@@ -522,12 +522,12 @@ func (f *FIDO2Enrollment) createCredentialWithPIN(ctx context.Context, userID []
 }
 
 // rollbackKeyslot removes the keyslot this enrolment added and returns
-// cause, joined with a FIDO2RollbackError when the slot could not be
+// cause, joined with a fido2RollbackError when the slot could not be
 // removed. go-luks2 takes no context, so the removal still runs after the
 // enrolment's context has ended.
 func (f *FIDO2Enrollment) rollbackKeyslot(cause error) error {
 	if err := luksKillSlot(f.config.LUKSDevice, []byte(f.config.LUKSPassphrase), f.config.TargetKeyslot); err != nil {
-		return errors.Join(cause, &FIDO2RollbackError{Slot: f.config.TargetKeyslot, Err: err})
+		return errors.Join(cause, &fido2RollbackError{Slot: f.config.TargetKeyslot, Err: err})
 	}
 	return cause
 }
@@ -569,7 +569,7 @@ func awaitAuthenticator[T any](ctx context.Context, session *fido2Session, step 
 			closeFIDO2Handler(handler)
 			<-fido2Operation
 		}()
-		return zero, &FIDO2CanceledError{Step: step, Err: ctx.Err()}
+		return zero, &fido2CanceledError{Step: step, Err: ctx.Err()}
 	}
 }
 
@@ -587,11 +587,11 @@ func awaitAuthenticator[T any](ctx context.Context, session *fido2Session, step 
 // the touch. Stopping the request itself is an SDK gap.
 // acquireFIDO2Operation takes the fido2Operation slot, waiting while an
 // abandoned operation still holds it. When ctx ends first it returns a
-// FIDO2CanceledError for step and holds nothing; otherwise the caller frees
+// fido2CanceledError for step and holds nothing; otherwise the caller frees
 // the slot with <-fido2Operation once its operation has ended.
 func acquireFIDO2Operation(ctx context.Context, step string) error {
 	if err := ctx.Err(); err != nil {
-		return &FIDO2CanceledError{Step: step, Err: err}
+		return &fido2CanceledError{Step: step, Err: err}
 	}
 	select {
 	case fido2Operation <- struct{}{}:
@@ -600,12 +600,12 @@ func acquireFIDO2Operation(ctx context.Context, step string) error {
 		select {
 		case fido2Operation <- struct{}{}:
 		case <-ctx.Done():
-			return &FIDO2CanceledError{Step: step, Err: ctx.Err()}
+			return &fido2CanceledError{Step: step, Err: ctx.Err()}
 		}
 	}
 	if err := ctx.Err(); err != nil {
 		<-fido2Operation
-		return &FIDO2CanceledError{Step: step, Err: err}
+		return &fido2CanceledError{Step: step, Err: err}
 	}
 	return nil
 }
@@ -644,36 +644,36 @@ func discardNothing[T any](T) {}
 // clearKey is the discard of an operation that derives a key.
 func clearKey(key []byte) { clear(key) }
 
-// FIDO2CanceledError reports that the enrolment stopped because its context
+// fido2CanceledError reports that the enrolment stopped because its context
 // ended before Step.
-type FIDO2CanceledError struct {
+type fido2CanceledError struct {
 	Step string
 	Err  error
 }
 
 // Error implements the error interface.
-func (e *FIDO2CanceledError) Error() string {
+func (e *fido2CanceledError) Error() string {
 	return fmt.Sprintf("fido2: enrolment cancelled before it could %s: %v", e.Step, e.Err)
 }
 
 // Unwrap returns the context error.
-func (e *FIDO2CanceledError) Unwrap() error {
+func (e *fido2CanceledError) Unwrap() error {
 	return e.Err
 }
 
-// FIDO2EnrollKeyError reports that the SDK handler could not create the
+// fido2EnrollKeyError reports that the SDK handler could not create the
 // FIDO2 credential.
-type FIDO2EnrollKeyError struct {
+type fido2EnrollKeyError struct {
 	Err error
 }
 
 // Error implements the error interface.
-func (e *FIDO2EnrollKeyError) Error() string {
+func (e *fido2EnrollKeyError) Error() string {
 	return fmt.Sprintf("fido2: failed to create the credential: %v", e.Err)
 }
 
 // Unwrap returns the handler error.
-func (e *FIDO2EnrollKeyError) Unwrap() error {
+func (e *fido2EnrollKeyError) Unwrap() error {
 	return e.Err
 }
 
@@ -693,20 +693,20 @@ func (e *FIDO2DeriveKeyError) Unwrap() error {
 	return e.Err
 }
 
-// FIDO2RollbackError reports that the keyslot a cancelled enrolment added
+// fido2RollbackError reports that the keyslot a cancelled enrolment added
 // could not be removed again.
-type FIDO2RollbackError struct {
+type fido2RollbackError struct {
 	Slot int
 	Err  error
 }
 
 // Error implements the error interface.
-func (e *FIDO2RollbackError) Error() string {
+func (e *fido2RollbackError) Error() string {
 	return fmt.Sprintf("fido2: failed to remove LUKS key slot %d after the enrolment was cancelled: %v", e.Slot, e.Err)
 }
 
 // Unwrap returns the go-luks2 error.
-func (e *FIDO2RollbackError) Unwrap() error {
+func (e *fido2RollbackError) Unwrap() error {
 	return e.Err
 }
 

@@ -265,7 +265,7 @@ func abandonFIDO2Enrollment(t *testing.T) (device *sdkFakeFIDO2, finish func()) 
 	go func() { done <- enrollment.enrollWithHandler(ctx, device) }()
 	<-waiting
 	cancel()
-	require.ErrorAs(t, <-done, new(*FIDO2CanceledError))
+	require.ErrorAs(t, <-done, new(*fido2CanceledError))
 	return device, finish
 }
 
@@ -408,7 +408,7 @@ func TestFIDO2EnrollmentFailures(t *testing.T) {
 			name:   "enroll fails",
 			setup:  func(d *sdkFakeFIDO2, _ *fakeLUKSHeader) { d.enrollErr = errFakeEnroll },
 			cause:  errFakeEnroll,
-			target: new(*FIDO2EnrollKeyError),
+			target: new(*fido2EnrollKeyError),
 		},
 		{
 			name:   "unlock fails",
@@ -458,7 +458,7 @@ func TestFIDO2EnrollmentCancellation(t *testing.T) {
 			cancel()
 			err := <-done
 
-			var canceled *FIDO2CanceledError
+			var canceled *fido2CanceledError
 			require.ErrorAs(t, err, &canceled)
 			assert.ErrorIs(t, err, context.Canceled)
 			assert.Empty(t, header.passedKeys, "a cancelled enrolment added a keyslot")
@@ -577,7 +577,7 @@ func TestFIDO2EnrollmentClientPIN(t *testing.T) {
 			err:  errTool,
 			check: func(t *testing.T, err error) {
 				assert.ErrorIs(t, err, errTool)
-				assert.ErrorAs(t, err, new(*FIDO2EnrollKeyError))
+				assert.ErrorAs(t, err, new(*fido2EnrollKeyError))
 			},
 		},
 		{
@@ -607,7 +607,7 @@ func TestFIDO2EnrollmentClientPIN(t *testing.T) {
 
 			require.Error(t, err)
 			tc.check(t, err)
-			assert.NotErrorAs(t, err, new(*FIDO2CanceledError))
+			assert.NotErrorAs(t, err, new(*fido2CanceledError))
 			assert.Len(t, tool.calls, 1)
 			assert.Empty(t, *ops, "the authenticator was used after the ceremony failed")
 			assert.Empty(t, header.passedKeys, "a failed ceremony added a keyslot")
@@ -637,7 +637,7 @@ func TestFIDO2EnrollmentClientPIN(t *testing.T) {
 		cancel()
 		err := <-done
 
-		var canceled *FIDO2CanceledError
+		var canceled *fido2CanceledError
 		require.ErrorAs(t, err, &canceled)
 		assert.ErrorIs(t, err, context.Canceled)
 		assert.Empty(t, *ops, "a cancelled ceremony used the authenticator")
@@ -719,7 +719,7 @@ func TestFIDO2EnrollmentRetryCanceledWhileWaiting(t *testing.T) {
 	cancel()
 	err := <-retried
 
-	var canceled *FIDO2CanceledError
+	var canceled *fido2CanceledError
 	require.ErrorAs(t, err, &canceled)
 	assert.ErrorIs(t, err, context.Canceled)
 	assert.Equal(t, "create the credential", canceled.Step)
@@ -739,7 +739,7 @@ func TestFIDO2EnrollmentCanceledBeforeWrites(t *testing.T) {
 		cancel()
 
 		err := newTestFIDO2Enrollment(t).enrollWithHandler(ctx, device)
-		var canceled *FIDO2CanceledError
+		var canceled *fido2CanceledError
 		require.ErrorAs(t, err, &canceled)
 		assert.Equal(t, "create the credential", canceled.Step)
 		assert.ErrorIs(t, err, context.Canceled)
@@ -763,7 +763,7 @@ func TestFIDO2EnrollmentCanceledBeforeWrites(t *testing.T) {
 		header := useFakeLUKSHeader(t)
 
 		err := cancelAfterAddKey(t, header)
-		var canceled *FIDO2CanceledError
+		var canceled *fido2CanceledError
 		require.ErrorAs(t, err, &canceled)
 		assert.Equal(t, "store the token", canceled.Step)
 		assert.ErrorIs(t, err, context.Canceled)
@@ -790,7 +790,7 @@ func TestFIDO2EnrollmentCanceledBeforeWrites(t *testing.T) {
 		}
 
 		err := newTestFIDO2Enrollment(t).enrollWithHandler(ctx, newSDKFakeFIDO2())
-		var canceled *FIDO2CanceledError
+		var canceled *fido2CanceledError
 		require.ErrorAs(t, err, &canceled)
 		assert.Equal(t, "import the token", canceled.Step)
 		assert.ErrorIs(t, err, context.Canceled)
@@ -803,10 +803,10 @@ func TestFIDO2EnrollmentCanceledBeforeWrites(t *testing.T) {
 		header.killErr = errFakeKillSlot
 
 		err := cancelAfterAddKey(t, header)
-		var canceled *FIDO2CanceledError
+		var canceled *fido2CanceledError
 		require.ErrorAs(t, err, &canceled)
 		assert.ErrorIs(t, err, context.Canceled)
-		var rollback *FIDO2RollbackError
+		var rollback *fido2RollbackError
 		require.ErrorAs(t, err, &rollback)
 		assert.Equal(t, 3, rollback.Slot)
 		assert.ErrorIs(t, err, errFakeKillSlot)
