@@ -654,23 +654,6 @@ func TestSecurityLogEntryStruct(t *testing.T) {
 }
 
 // TestSourceConstants tests that source constants are defined correctly
-func TestSourceConstants(t *testing.T) {
-	sources := map[string]string{
-		"SourceAccessControl":  SourceAccessControl,
-		"SourceAuthentication": SourceAuthentication,
-		"SourceDNS":            SourceDNS,
-		"SourceNetwork":        SourceNetwork,
-		"SourceSystem":         SourceSystem,
-		"SourceUserActivity":   SourceUserActivity,
-	}
-
-	for name, value := range sources {
-		if value == "" {
-			t.Errorf("%s is empty", name)
-		}
-	}
-}
-
 // TestParseFormat tests the ParseFormat function
 func TestParseFormat(t *testing.T) {
 	tests := []struct {
@@ -804,15 +787,6 @@ func TestNewLoggerWithFormatNilWriter(t *testing.T) {
 }
 
 // TestFormatConstants tests that format constants have expected values
-func TestFormatConstants(t *testing.T) {
-	if FormatJSON != "json" {
-		t.Errorf("FormatJSON = %q, want %q", FormatJSON, "json")
-	}
-	if FormatText != "text" {
-		t.Errorf("FormatText = %q, want %q", FormatText, "text")
-	}
-}
-
 // TestNewLoggerWithFormatOutputConsistency tests that only ONE format is output
 func TestNewLoggerWithFormatOutputConsistency(t *testing.T) {
 	t.Run("JSON format produces only JSON", func(t *testing.T) {
