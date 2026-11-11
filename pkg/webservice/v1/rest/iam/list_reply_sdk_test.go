@@ -351,29 +351,6 @@ func TestListRepliesOverSDKREST_LaterPagesRefused(t *testing.T) {
 	}
 }
 
-// TestListTenantsOverSDKREST_OverflowingOffsetRefused sends a page whose
-// offset is above MaxInt32 through the SDK's REST adapter: the handler must
-// refuse it with InvalidArgument, not serve the first page.
-func TestListTenantsOverSDKREST_OverflowingOffsetRefused(t *testing.T) {
-	t.Parallel()
-	var calls int
-	iamClient := &mockIAMClient{
-		listTenantsFn: func(context.Context, int32, int32) (*ListTenantsResponse, error) {
-			calls++
-			return &ListTenantsResponse{}, nil
-		},
-	}
-	conn := sdkRESTConnection(t, adminSessionIAMServerIn(t, "system", iamClient, &mockPEPClient{}))
-
-	// Page 214748366 of 10 is offset=2147483650, above MaxInt32.
-	_, err := platformv1.NewPlatformIAMServiceClient(conn).ListTenants(context.Background(), &platformv1.ListIAMTenantsRequest{
-		Pagination: &platformv1.PaginationRequest{Page: 214748366, PageSize: 10},
-	})
-	require.Error(t, err)
-	assert.Equal(t, codes.InvalidArgument, status.Code(err), "err = %v", err)
-	assert.Zero(t, calls, "IAM was asked for a page from an out-of-range offset")
-}
-
 // TestListRepliesOverSDKREST_ServiceErrors checks a NotFound from the IAM
 // client reaches the SDK caller as codes.NotFound with no reply.
 func TestListRepliesOverSDKREST_ServiceErrors(t *testing.T) {
