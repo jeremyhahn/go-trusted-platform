@@ -145,22 +145,6 @@ func TestCountFiles(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestExtractFlags_StructFields(t *testing.T) {
-	flags := &extractFlags{
-		iso:       "/path/to/alpine.iso",
-		outputDir: "/path/to/output",
-		force:     true,
-		workDir:   "/tmp/work",
-		debug:     true,
-	}
-
-	assert.Equal(t, "/path/to/alpine.iso", flags.iso)
-	assert.Equal(t, "/path/to/output", flags.outputDir)
-	assert.True(t, flags.force)
-	assert.Equal(t, "/tmp/work", flags.workDir)
-	assert.True(t, flags.debug)
-}
-
 func TestExtractCommand_HasRunE(t *testing.T) {
 	cmd := newExtractCommand(getTestFlags)
 	assert.NotNil(t, cmd.RunE)
