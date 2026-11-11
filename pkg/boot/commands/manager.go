@@ -27,6 +27,7 @@ import (
 	googleLogger "github.com/google/logger"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/fido2"
+	"github.com/jeremyhahn/go-trusted-platform/internal/fido2hid"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	platforminitrd "github.com/jeremyhahn/go-trusted-platform/pkg/initrd"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -308,8 +309,13 @@ func CreateManager(ctx context.Context, logger *logging.Logger, config *platform
 // newBootFIDO2Handler opens the SDK FIDO2 handler on the HID transport.
 // Tests replace it with a fake authenticator.
 var newBootFIDO2Handler = func(cfg *fido2.Config) (fido2.Handler, error) {
-	return fido2.NewHandler(cfg, fido2.NewDefaultEnumerator())
+	return fido2.NewHandler(cfg, bootFIDO2Enumerator())
 }
+
+// bootFIDO2Enumerator is the HID transport boot unlocks through: the one the
+// installer enrols through, which prefixes the hidraw report ID on Linux so
+// a frame whose channel ID begins with zero is not truncated.
+var bootFIDO2Enumerator = fido2hid.NewEnumerator
 
 // newBootManager sets the platform's FIDO2 handler, so that the manager
 // registers the FIDO2 strategy when FallbackMethods names it, and builds the

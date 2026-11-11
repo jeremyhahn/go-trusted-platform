@@ -19,15 +19,14 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
-	"runtime"
 	"strings"
 
 	"github.com/jeremyhahn/go-luks2/pkg/luks2"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/fido2"
 
+	"github.com/jeremyhahn/go-trusted-platform/internal/fido2hid"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/fips"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
 )
@@ -35,65 +34,7 @@ import (
 // newFIDO2Handler opens the SDK FIDO2 handler on the HID transport. Tests
 // replace it with a fake authenticator.
 var newFIDO2Handler = func(cfg *fido2.Config) (fido2.Handler, error) {
-	return fido2.NewHandler(cfg, newFIDO2HIDEnumerator())
-}
-
-// newFIDO2HIDEnumerator returns the platform's HID enumerator; on Linux its
-// devices are wrapped so every CTAPHID frame reaches hidraw intact.
-func newFIDO2HIDEnumerator() fido2.HIDDeviceEnumerator {
-	enum := fido2.NewDefaultEnumerator()
-	if runtime.GOOS == "linux" {
-		return hidrawEnumerator{enum}
-	}
-	return enum
-}
-
-// hidrawEnumerator wraps every device it yields in hidrawDevice. The SDK's
-// Linux device writes the 64-byte frame to hidraw unchanged, and hidraw takes
-// the first byte as the report ID, so a channel ID beginning with zero would
-// lose that byte and the device would receive a truncated 63-byte report.
-type hidrawEnumerator struct {
-	fido2.HIDDeviceEnumerator
-}
-
-func (e hidrawEnumerator) Enumerate(vendorID, productID uint16) ([]fido2.HIDDevice, error) {
-	devs, err := e.HIDDeviceEnumerator.Enumerate(vendorID, productID)
-	if err != nil {
-		return nil, err
-	}
-	wrapped := make([]fido2.HIDDevice, len(devs))
-	for i, dev := range devs {
-		wrapped[i] = hidrawDevice{dev}
-	}
-	return wrapped, nil
-}
-
-func (e hidrawEnumerator) Open(path string) (fido2.HIDDevice, error) {
-	dev, err := e.HIDDeviceEnumerator.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	return hidrawDevice{dev}, nil
-}
-
-// hidrawDevice writes each frame as a hidraw output report: the unnumbered
-// report ID (zero), then the complete frame. A report hidraw takes only in
-// part is an error, never a silently truncated frame.
-type hidrawDevice struct {
-	fido2.HIDDevice
-}
-
-func (d hidrawDevice) Write(frame []byte) (int, error) {
-	report := make([]byte, len(frame)+1)
-	copy(report[1:], frame)
-	n, err := d.HIDDevice.Write(report)
-	if n > 0 {
-		n--
-	}
-	if err == nil && n < len(frame) {
-		err = io.ErrShortWrite
-	}
-	return n, err
+	return fido2.NewHandler(cfg, fido2hid.NewEnumerator())
 }
 
 // The go-luks2 header writes of the enrolment. Tests replace them with an
