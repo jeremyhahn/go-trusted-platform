@@ -8,7 +8,7 @@
  */
 
 import { useState } from "react";
-import { Plus, Shield, ShieldCheck, Loader2 } from "lucide-react";
+import { Plus, Shield, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -36,9 +36,9 @@ export default function AccountSecurityPage() {
   const [wizardOpen, setWizardOpen] = useState(false);
   const [rotateTarget, setRotateTarget] = useState<AuthFactor | null>(null);
 
-  // MFA policy state (tenant admin only)
-  const [requireMFA, setRequireMFA] = useState(false);
-  const [mfaPolicyBusy, setMFAPolicyBusy] = useState(false);
+  // MFA policy state (tenant admin only). Read-only: the server refuses to
+  // store a policy until sign-in enforces it, so the page offers no toggle.
+  const [requireMFA] = useState(false);
 
   const isTenantAdmin = user?.isTenantOwner ?? false;
   const userId = user?.id;
@@ -117,28 +117,6 @@ export default function AccountSecurityPage() {
     });
   }
 
-  async function handleMFAPolicyToggle(checked: boolean) {
-    if (!user?.tenantId) return;
-    setMFAPolicyBusy(true);
-    const result = await authFactorsApi.setMFAPolicy({
-      tenant_id: user.tenantId,
-      require_multiple_factors: checked,
-      min_factor_count: checked ? 2 : 1,
-    });
-    setMFAPolicyBusy(false);
-    if (!result.ok) {
-      toast({ title: "Error updating MFA policy", description: result.error, variant: "destructive" });
-      return;
-    }
-    setRequireMFA(checked);
-    toast({
-      title: checked ? "MFA required" : "MFA optional",
-      description: checked
-        ? "Users must present at least 2 factors per session."
-        : "Single factor is sufficient for a session.",
-    });
-  }
-
   return (
     <div className="container max-w-2xl py-8 space-y-6">
       <div className="flex items-center justify-between">
@@ -208,8 +186,8 @@ export default function AccountSecurityPage() {
           <CardHeader>
             <CardTitle>Session policy</CardTitle>
             <CardDescription>
-              As a tenant administrator you can require users in your tenant to
-              present multiple factors per session.
+              Requiring multiple factors per session is not available until
+              sign-in enforces the policy.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -217,16 +195,12 @@ export default function AccountSecurityPage() {
               <Switch
                 id="require-mfa"
                 checked={requireMFA}
-                onCheckedChange={handleMFAPolicyToggle}
-                disabled={mfaPolicyBusy}
+                disabled
                 aria-label="Require 2 factors per session"
               />
               <Label htmlFor="require-mfa" className="cursor-pointer">
                 Require 2 or more factors per session
               </Label>
-              {mfaPolicyBusy && (
-                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-              )}
             </div>
           </CardContent>
         </Card>
