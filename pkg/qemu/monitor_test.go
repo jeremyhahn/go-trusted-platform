@@ -154,16 +154,16 @@ func TestParseVMStatus(t *testing.T) {
 		input    string
 		expected VMStatus
 	}{
-		{"running", "running", VMStatusRunning},
-		{"paused", "paused", VMStatusPaused},
-		{"shutdown", "shutdown", VMStatusShutdown},
-		{"prelaunch", "prelaunch", VMStatusPrelaunch},
-		{"io-error", "io-error", VMStatusIOError},
-		{"internal-error", "internal-error", VMStatusInternalError},
-		{"suspended", "suspended", VMStatusSuspended},
-		{"guest-panicked", "guest-panicked", VMStatusGuestPanicked},
-		{"unknown status", "some-random-status", VMStatusUnknown},
-		{"empty string", "", VMStatusUnknown},
+		{"running", "running", VMStatus("running")},
+		{"paused", "paused", VMStatus("paused")},
+		{"shutdown", "shutdown", VMStatus("shutdown")},
+		{"prelaunch", "prelaunch", VMStatus("prelaunch")},
+		{"io-error", "io-error", VMStatus("io-error")},
+		{"internal-error", "internal-error", VMStatus("internal-error")},
+		{"suspended", "suspended", VMStatus("suspended")},
+		{"guest-panicked", "guest-panicked", VMStatus("guest-panicked")},
+		{"unknown status", "some-random-status", VMStatus("unknown")},
+		{"empty string", "", VMStatus("unknown")},
 	}
 
 	for _, tt := range tests {
