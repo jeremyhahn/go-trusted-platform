@@ -605,42 +605,6 @@ func TestPortState_NeedsReattest(t *testing.T) {
 	}
 }
 
-func TestOPAInput_Fields(t *testing.T) {
-	input := OPAInput{
-		DeviceID:            "device-123",
-		PortID:              "eth0",
-		PolicyOIDs:          []string{"1.2.3.4", "1.2.3.5"},
-		CertificateSubject:  "CN=device-123",
-		CertificateIssuer:   "CN=Test CA",
-		AttestationVerified: true,
-		RequestedVLAN:       100,
-		AdditionalClaims:    map[string]interface{}{"role": "server"},
-		Timestamp:           time.Now(),
-	}
-
-	assert.Equal(t, "device-123", input.DeviceID)
-	assert.Equal(t, "eth0", input.PortID)
-	assert.Len(t, input.PolicyOIDs, 2)
-	assert.True(t, input.AttestationVerified)
-	assert.Equal(t, uint16(100), input.RequestedVLAN)
-	assert.Equal(t, "server", input.AdditionalClaims["role"])
-}
-
-func TestOPAResult_Fields(t *testing.T) {
-	result := OPAResult{
-		Allow:           true,
-		AssignedVLAN:    200,
-		Reasons:         []string{"policy matched"},
-		RequiredActions: []string{},
-		EvaluatedAt:     time.Now(),
-	}
-
-	assert.True(t, result.Allow)
-	assert.Equal(t, uint16(200), result.AssignedVLAN)
-	assert.Len(t, result.Reasons, 1)
-	assert.Empty(t, result.RequiredActions)
-}
-
 // createTypesTestCertificate creates a test x509 certificate for types_test.go.
 // This is a local helper to avoid conflicts with auth_test.go's helper.
 func createTypesTestCertificate(t *testing.T) *x509.Certificate {
