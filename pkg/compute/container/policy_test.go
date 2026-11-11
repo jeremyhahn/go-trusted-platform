@@ -626,24 +626,6 @@ func TestOPAPolicyInput_Serialization(t *testing.T) {
 	}
 }
 
-func TestOPAPolicyDecision_Fields(t *testing.T) {
-	decision := OPAPolicyDecision{
-		Allow:    false,
-		Denied:   []string{"reason1", "reason2"},
-		Warnings: []string{"warning1"},
-	}
-
-	if decision.Allow {
-		t.Error("Allow should be false")
-	}
-	if len(decision.Denied) != 2 {
-		t.Errorf("expected 2 denial reasons, got %d", len(decision.Denied))
-	}
-	if len(decision.Warnings) != 1 {
-		t.Errorf("expected 1 warning, got %d", len(decision.Warnings))
-	}
-}
-
 func TestOPAPolicyDecision_ToLegacyDecision(t *testing.T) {
 	decision := OPAPolicyDecision{
 		Allow:    false,
