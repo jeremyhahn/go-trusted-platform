@@ -12,6 +12,18 @@ import { resolveDynamicId } from '@/utils/dynamic-route';
 import { useAuth } from '@/contexts/AuthContext';
 import { useIAM, useApi, useMutation, useToast } from '@/hooks';
 import { LegacyRole, UpdateRoleInput, LegacyUser, Permission } from '@/types/iam';
+
+// Role record as the REST API sends it: camelCase or snake_case keys (#445).
+interface RoleWire {
+  id?: string;
+  name?: string;
+  description?: string;
+  permissions?: string[];
+  createdAt?: string;
+  created_at?: string;
+  updatedAt?: string;
+  updated_at?: string;
+}
 import { PermissionTree } from '@/components/features/iam/permission-tree';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -66,10 +78,11 @@ export default function RoleDetailPage() {
   // Tolerate both the legacy {role: …} envelope and the current direct
   // payload shape; also accept snake_case timestamps from the server.
   // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-  const roleRecord: any = (role as any)?.role ?? role ?? null;
+  const rawRole = role as unknown as (RoleWire & { role?: RoleWire }) | null | undefined;
+  const roleRecord: RoleWire | null = rawRole?.role ?? rawRole ?? null;
   const legacyRole: LegacyRole | null = roleRecord ? {
-    id: roleRecord.id,
-    name: roleRecord.name,
+    id: roleRecord.id ?? '',
+    name: roleRecord.name ?? '',
     description: roleRecord.description || '',
     permissions: ((roleRecord.permissions || []) as string[]).map((p: string) => ({
       id: p,

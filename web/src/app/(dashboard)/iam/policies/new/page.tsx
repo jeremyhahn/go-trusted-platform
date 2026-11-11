@@ -24,6 +24,8 @@ import {
 } from '@/components/ui/select';
 import { Loader2 } from 'lucide-react';
 
+import type { CreateIAMPolicyRequest } from 'trusted-platform-sdk';
+
 export default function NewPolicyPage() {
   const router = useRouter();
   const { toast } = useToast();
@@ -65,7 +67,11 @@ export default function NewPolicyPage() {
       // the call works regardless of how the SDK serializes the
       // request shape.
       // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-      return iam.createPolicy({ tenantId, name, description, specYaml: yaml, spec: yaml, spec_yaml: yaml } as any);
+      // The SDK request plus the spec keys the REST API also reads.
+      const request: CreateIAMPolicyRequest & { spec: string; spec_yaml: string } = {
+        tenantId, name, description, specYaml: yaml, spec: yaml, spec_yaml: yaml,
+      };
+      return iam.createPolicy(request);
     },
     {
       onSuccess: () => {
