@@ -16,6 +16,7 @@ package orchestrator
 import (
 	"errors"
 
+	"github.com/jeremyhahn/go-quicbaas/pkg/orchestration"
 	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 )
 
@@ -97,10 +98,34 @@ func Classify(err error) ErrorKind {
 	case errors.Is(err, ErrNotConfigured{}):
 		return KindUnavailable
 	}
+	// The embedded transport returns native orchestration errors unchanged;
+	// the SDK predicates below recognise only QBErrors.
+	if kind, ok := classifyNative(err); ok {
+		return kind
+	}
 	for _, entry := range sdkKinds {
 		if entry.is(err) {
 			return entry.kind
 		}
 	}
 	return KindInternal
+}
+
+// classifyNative maps the go-quicbaas orchestration package's own errors,
+// which the embedded backend returns without converting them to QBErrors.
+func classifyNative(err error) (ErrorKind, bool) {
+	var (
+		agentMissing   *orchestration.AgentNotFoundError
+		sessionMissing *orchestration.SessionNotFoundError
+		jobMissing     *orchestration.JobNotFoundError
+		badFilter      *orchestration.InvalidFilterParamError
+	)
+	switch {
+	case errors.As(err, &agentMissing), errors.As(err, &sessionMissing), errors.As(err, &jobMissing),
+		errors.Is(err, orchestration.ErrSessionNotFound), errors.Is(err, orchestration.ErrJobNotFound):
+		return KindNotFound, true
+	case errors.As(err, &badFilter), errors.Is(err, orchestration.ErrFilterParamInvalid):
+		return KindInvalidArgument, true
+	}
+	return KindInternal, false
 }
