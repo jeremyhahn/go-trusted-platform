@@ -112,12 +112,11 @@ const (
 // certificate holder. Each value is the scope the operation takes on the
 // MCP and gRPC transports; an empty scope means the admin role alone.
 var privilegedDaemonMethodRoutes = map[string]string{
-	// Changing a tenant's MFA policy is a tenant-administration act; reading
-	// it stays on the certificate gate, as the login flow does. No scope
-	// names it. The admin role does not say which tenant the caller
-	// administers, so the PUT, and only the PUT, also takes the
-	// own-tenant-or-system guard (ownTenantDaemonMethodRoutes).
-	http.MethodPut + " /api/v1/tenants/{id}/security/mfa-policy": "",
+	// PUT /api/v1/tenants/{id}/security/mfa-policy is deliberately absent:
+	// login does not enforce the stored policy yet, so the webservice
+	// leaves the PUT unclassified and refuses it (403) rather than report
+	// a policy that is not applied. Reading it stays on the certificate
+	// gate (certificateOnlyDaemonMethodRoutes).
 
 	// Daemon core. The health report names every component with its failure
 	// message, the reconnaissance the platform:read scope gates on gRPC.
@@ -285,9 +284,8 @@ var privilegedDaemonMethodRoutes = map[string]string{
 // the tenant router's RequireOwnTenantOrSystem guard after its admin gate,
 // so a tenant-A administrator cannot reach tenant B by changing the path.
 // GET on the same template, and every other replayed route, is unchanged.
-var ownTenantDaemonMethodRoutes = map[string]map[string]struct{}{
-	"/api/v1/tenants/{id}/security/mfa-policy": {http.MethodPut: {}},
-}
+// None is listed while the MFA-policy PUT is refused.
+var ownTenantDaemonMethodRoutes = map[string]map[string]struct{}{}
 
 // certificateOnlyDaemonMethodRoutes lists, keyed "METHOD template", the
 // replayed daemon routes the verified client certificate alone admits.
@@ -629,13 +627,25 @@ func (m methodGatedDaemonRoute) serve(w http.ResponseWriter, r *http.Request, ne
 	m.writer.Error403(w, r, ErrDaemonRouteUnclassified{Method: r.Method, Template: m.template}, nil)
 }
 
+// refusedDaemonMethodRoutes lists, keyed "METHOD template", daemon routes
+// the webservice refuses outright as unclassified even though their group
+// is session-scoped. The MFA-policy PUT is here because login does not
+// enforce the stored policy yet.
+var refusedDaemonMethodRoutes = map[string]struct{}{
+	"PUT /api/v1/tenants/{id}/security/mfa-policy": {},
+}
+
 // classifyDaemonRoute returns how the webservice gates method on a replayed
-// daemon route with template, checking in order: the CA template table
+// daemon route with template, checking in order: the refused routes
+// (refusedDaemonMethodRoutes), the CA template table
 // (privilegedDaemonRoutes), the per-method operator table
 // (privilegedDaemonMethodRoutes), the caller-checked routes, the
 // certificate-only routes, the admin groups and the daemon-scoped groups.
 // A method none of them names is unclassified, and denied.
 func classifyDaemonRoute(method, template string) daemonRouteAccess {
+	if _, ok := refusedDaemonMethodRoutes[method+" "+template]; ok {
+		return daemonRouteAccess{kind: daemonRouteUnclassified}
+	}
 	if scope, ok := privilegedDaemonRoutes[template]; ok {
 		return daemonRouteAccess{kind: daemonRouteOperator, scope: scope}
 	}

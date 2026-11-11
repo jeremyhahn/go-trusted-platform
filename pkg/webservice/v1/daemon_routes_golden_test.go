@@ -336,6 +336,11 @@ func TestMountDaemonRESTRoutes_EveryDaemonEndpointIsGatedOrPublic(t *testing.T) 
 				assert.Empty(t, rec.Header().Values(refusedScopeHeader), "a public endpoint reached the webservice gate")
 				assert.Empty(t, rec.Header().Values(refusedSessionHeader), "a public endpoint reached the session gate")
 			default:
+				if route == "PUT /api/v1/tenants/{id}/security/mfa-policy" {
+					// Refused on purpose until login enforces the policy.
+					assert.Equal(t, http.StatusForbidden, rec.Code, "the refused MFA-policy PUT passed the gate")
+					return
+				}
 				assert.Failf(t, "unclassified daemon endpoint", "%s has no authorization classification and is denied", route)
 			}
 		})
