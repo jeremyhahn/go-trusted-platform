@@ -89,6 +89,27 @@ func (e ErrNotFound) GRPCStatus() *status.Status {
 	return status.New(codes.NotFound, e.Error())
 }
 
+// ErrHandleMismatch is returned when Delete is asked to evict a handle
+// other than the configured Shared SRK, including a missing (zero) handle.
+// Delete evicts only tpm.ssrk, so any other request is refused before the
+// TPM is touched rather than silently evicting the SSRK and orphaning its
+// sealed children. It is InvalidArgument on every transport.
+type ErrHandleMismatch struct {
+	Requested  uint32
+	Configured uint32
+}
+
+// Error returns the message.
+func (e ErrHandleMismatch) Error() string {
+	return fmt.Sprintf("invalid SRK handle 0x%08X: only the configured shared SRK 0x%08X can be deleted",
+		e.Requested, e.Configured)
+}
+
+// GRPCStatus maps the error to InvalidArgument.
+func (e ErrHandleMismatch) GRPCStatus() *status.Status {
+	return status.New(codes.InvalidArgument, e.Error())
+}
+
 // AttributesFromConfig builds the creation attributes of the Shared SRK
 // from tpm.ssrk: the TCG SRK template for its algorithm, a primary under
 // the owner hierarchy, persisted at the configured handle, with no
@@ -204,9 +225,12 @@ func Create(tpm xkmssdk.TrustedPlatformModule) (*xkmssdk.KeyAttributes, error) {
 // (tpm.ssrk) from its persistent handle with TPM2_EvictControl (TPM 2.0
 // Library Part 3 §28.5), authorised by the owner hierarchy auth it was
 // persisted with, so a following Create at the same handle succeeds. It
-// returns the evicted handle. An empty handle is ErrNotFound and a missing
-// tpm.ssrk handle ErrNotConfigured; a nil TPM is ErrTPMUnavailable.
-func Delete(tpm xkmssdk.TrustedPlatformModule) (uint32, error) {
+// returns the evicted handle. The caller names the handle it means to
+// evict: anything but the configured tpm.ssrk handle, a missing (zero)
+// handle included, is ErrHandleMismatch and evicts nothing. An empty
+// handle is ErrNotFound and a missing tpm.ssrk handle ErrNotConfigured; a
+// nil TPM is ErrTPMUnavailable.
+func Delete(tpm xkmssdk.TrustedPlatformModule, requested uint32) (uint32, error) {
 	if tpm == nil {
 		return 0, ErrTPMUnavailable{}
 	}
@@ -215,6 +239,9 @@ func Delete(tpm xkmssdk.TrustedPlatformModule) (uint32, error) {
 		return 0, ErrNotConfigured{}
 	}
 	handle := cfg.SSRK.Handle
+	if requested != handle {
+		return 0, ErrHandleMismatch{Requested: requested, Configured: handle}
+	}
 
 	name, _, err := tpm.ReadHandle(xkmssdk.TPMHandle(handle))
 	if errors.Is(err, libtpm2.TPMRCHandle) {

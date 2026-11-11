@@ -225,8 +225,14 @@ func (r *ToolRegistry) registerTPMTools() {
 		Name:        "platform_tpm_ek_delete",
 		Description: "Evict the Endorsement Key (EK) from its persistent handle",
 		InputSchema: map[string]interface{}{
-			"type":       "object",
-			"properties": map[string]interface{}{},
+			"type": "object",
+			"properties": map[string]interface{}{
+				"handle": map[string]interface{}{
+					"type":        "integer",
+					"description": "Persistent handle of the configured Endorsement Key, for example 2164326401 (0x81010001). Any other handle is refused.",
+				},
+			},
+			"required": []string{"handle"},
 		},
 	})
 
@@ -260,8 +266,14 @@ func (r *ToolRegistry) registerTPMTools() {
 		Name:        "platform_tpm_srk_delete",
 		Description: "Evict the Shared Storage Root Key (SRK) from its persistent handle",
 		InputSchema: map[string]interface{}{
-			"type":       "object",
-			"properties": map[string]interface{}{},
+			"type": "object",
+			"properties": map[string]interface{}{
+				"handle": map[string]interface{}{
+					"type":        "integer",
+					"description": "Persistent handle of the configured Shared SRK, for example 2164260865 (0x81000001). Any other handle is refused.",
+				},
+			},
+			"required": []string{"handle"},
 		},
 	})
 
