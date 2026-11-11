@@ -743,10 +743,20 @@ type queryParam struct {
 	name   string
 	field  string
 	encode fieldEncoder
+	// refuse, when set, rejects a value the route cannot serve faithfully,
+	// before any request is sent.
+	refuse func(protoreflect.Value) error
 }
 
 // render returns the parameter's raw query values; none when it is unset.
 func (q queryParam) render(rm protoreflect.Message) ([]string, error) {
+	if q.refuse != nil {
+		if v, _, ok := fieldPathValue(rm, q.field); ok {
+			if err := q.refuse(v); err != nil {
+				return nil, err
+			}
+		}
+	}
 	if q.encode == nil {
 		return encodeQueryField(rm, q.field)
 	}
@@ -1412,9 +1422,27 @@ func tenantListRoute(path string, filters ...queryParam) templatedRoute {
 	route := tenantItemRoute(path, http.MethodGet)
 	route.queryParams = append(filters,
 		queryParam{name: "limit", field: "pagination.page_size"},
-		queryParam{name: "offset", field: "pagination", encode: encodeIAMListOffset},
+		queryParam{name: "offset", field: "pagination", encode: encodeIAMListOffset,
+			refuse: refuseIAMListPageBeyondFirst},
 	)
 	return route
+}
+
+// refuseIAMListPageBeyondFirst refuses a page past the first. The REST
+// handlers (pkg/webservice/v1/rest/iam/handlers.go) apply limit to the IAM
+// lookup but use offset only for the response's pagination metadata, so a
+// later page would come back holding the first page's records. Lift this
+// once the handlers advance the lookup.
+func refuseIAMListPageBeyondFirst(v protoreflect.Value) error {
+	m, ok := v.Interface().(protoreflect.Message)
+	if !ok || !m.IsValid() {
+		return nil
+	}
+	if page := m.Get(m.Descriptor().Fields().ByName("page")).Uint(); page > 1 {
+		return status.Errorf(codes.Unimplemented,
+			"REST adapter: IAM list page %d: the REST server serves only the first page", page)
+	}
+	return nil
 }
 
 // encodeIAMListOffset renders a PaginationRequest as the offset of its

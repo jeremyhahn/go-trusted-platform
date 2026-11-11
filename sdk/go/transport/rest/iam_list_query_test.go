@@ -46,7 +46,7 @@ func TestIAMListRoutes_ParametersTravelInTheQuery(t *testing.T) {
 			grpcMethod: "/platform.v1.PlatformIAMService/ListUsers",
 			req: &platformv1.ListIAMUsersRequest{
 				TenantId:    "tenant-a",
-				Pagination:  &platformv1.PaginationRequest{Page: 3, PageSize: 10},
+				Pagination:  &platformv1.PaginationRequest{Page: 1, PageSize: 10},
 				EmailFilter: "alice@example.com",
 				RoleFilter:  "role-1",
 				GroupFilter: "group-1",
@@ -54,11 +54,10 @@ func TestIAMListRoutes_ParametersTravelInTheQuery(t *testing.T) {
 			resp:     &platformv1.ListIAMUsersResponse{},
 			wantPath: "/api/v1/iam/tenants/tenant-a/users",
 			wantQuery: url.Values{
-				"limit":  {"10"},
-				"offset": {"20"},
-				"email":  {"alice@example.com"},
-				"role":   {"role-1"},
-				"group":  {"group-1"},
+				"limit": {"10"},
+				"email": {"alice@example.com"},
+				"role":  {"role-1"},
+				"group": {"group-1"},
 			},
 		},
 		{
@@ -66,33 +65,22 @@ func TestIAMListRoutes_ParametersTravelInTheQuery(t *testing.T) {
 			grpcMethod: "/platform.v1.PlatformIAMService/ListRoles",
 			req: &platformv1.ListIAMRolesRequest{
 				TenantId:   "tenant-a",
-				Pagination: &platformv1.PaginationRequest{Page: 3, PageSize: 10},
+				Pagination: &platformv1.PaginationRequest{Page: 1, PageSize: 10},
 			},
 			resp:      &platformv1.ListIAMRolesResponse{},
 			wantPath:  "/api/v1/iam/tenants/tenant-a/roles",
-			wantQuery: url.Values{"limit": {"10"}, "offset": {"20"}},
+			wantQuery: url.Values{"limit": {"10"}},
 		},
 		{
 			name:       "ListGroups sends pagination",
 			grpcMethod: "/platform.v1.PlatformIAMService/ListGroups",
 			req: &platformv1.ListIAMGroupsRequest{
 				TenantId:   "tenant-a",
-				Pagination: &platformv1.PaginationRequest{Page: 3, PageSize: 10},
+				Pagination: &platformv1.PaginationRequest{Page: 1, PageSize: 10},
 			},
 			resp:      &platformv1.ListIAMGroupsResponse{},
 			wantPath:  "/api/v1/iam/tenants/tenant-a/groups",
-			wantQuery: url.Values{"limit": {"10"}, "offset": {"20"}},
-		},
-		{
-			name:       "a page without a page size is offset by the handlers' default limit",
-			grpcMethod: "/platform.v1.PlatformIAMService/ListUsers",
-			req: &platformv1.ListIAMUsersRequest{
-				TenantId:   "tenant-a",
-				Pagination: &platformv1.PaginationRequest{Page: 3},
-			},
-			resp:      &platformv1.ListIAMUsersResponse{},
-			wantPath:  "/api/v1/iam/tenants/tenant-a/users",
-			wantQuery: url.Values{"offset": {"100"}},
+			wantQuery: url.Values{"limit": {"10"}},
 		},
 		{
 			name:       "no pagination and no filters sends no query",
