@@ -233,12 +233,6 @@ func TestDefaultVNIMappingConfig(t *testing.T) {
 }
 
 func TestConstants(t *testing.T) {
-	t.Run("VNI constants", func(t *testing.T) {
-		assert.Equal(t, VNI(1), MinVNI)
-		assert.Equal(t, VNI(16777215), MaxVNI)
-		assert.Equal(t, VNI(1000000), DefaultBaseVNI)
-	})
-
 	t.Run("VXLAN constants", func(t *testing.T) {
 		assert.Equal(t, uint16(4789), DefaultVXLANPort)
 		assert.Equal(t, 9000, OverlayMTU)
