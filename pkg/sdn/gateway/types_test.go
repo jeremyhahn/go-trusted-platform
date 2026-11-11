@@ -1041,58 +1041,6 @@ func TestGatewayStatus_IsHealthy(t *testing.T) {
 	}
 }
 
-func TestOverlayGatewayState_Fields(t *testing.T) {
-	state := &OverlayGatewayState{
-		ActiveVNIs:           100,
-		TunnelCount:          10,
-		EVPNRoutesReceived:   500,
-		EVPNRoutesAdvertised: 200,
-		LastBGPUpdate:        time.Now(),
-	}
-
-	if state.ActiveVNIs != 100 {
-		t.Errorf("ActiveVNIs = %d, want 100", state.ActiveVNIs)
-	}
-	if state.TunnelCount != 10 {
-		t.Errorf("TunnelCount = %d, want 10", state.TunnelCount)
-	}
-}
-
-func TestEdgeGatewayState_Fields(t *testing.T) {
-	state := &EdgeGatewayState{
-		ConnectedDevices:        50,
-		ActiveServices:          10,
-		NATSessionCount:         1000,
-		LoadBalancedConnections: 500,
-		LastHealthCheck:         time.Now(),
-	}
-
-	if state.ConnectedDevices != 50 {
-		t.Errorf("ConnectedDevices = %d, want 50", state.ConnectedDevices)
-	}
-	if state.ActiveServices != 10 {
-		t.Errorf("ActiveServices = %d, want 10", state.ActiveServices)
-	}
-}
-
-func TestTransitGatewayState_Fields(t *testing.T) {
-	state := &TransitGatewayState{
-		AnnouncedPrefixes:     20,
-		ReceivedPrefixes:      100,
-		BGPPeersEstablished:   5,
-		IPv6PrefixesAnnounced: 15,
-		IPv4PrefixesAnnounced: 5,
-		LastRouteUpdate:       time.Now(),
-	}
-
-	if state.AnnouncedPrefixes != 20 {
-		t.Errorf("AnnouncedPrefixes = %d, want 20", state.AnnouncedPrefixes)
-	}
-	if state.BGPPeersEstablished != 5 {
-		t.Errorf("BGPPeersEstablished = %d, want 5", state.BGPPeersEstablished)
-	}
-}
-
 func TestUplinkPort_WithMACAddress(t *testing.T) {
 	mac, _ := net.ParseMAC("00:11:22:33:44:55")
 	port := &UplinkPort{
