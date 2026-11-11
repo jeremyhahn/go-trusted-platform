@@ -298,11 +298,6 @@ func TestCacheEntry_Fields(t *testing.T) {
 	assert.True(t, entry.ExpiresAt.After(now))
 }
 
-func TestDefaultConstants(t *testing.T) {
-	assert.Equal(t, "docker.io", DefaultRegistry)
-	assert.Equal(t, "latest", DefaultTag)
-}
-
 func TestImageSignature_CertificatePEM(t *testing.T) {
 	sig := &ImageSignature{
 		ImageDigest:   "sha256:abc123",

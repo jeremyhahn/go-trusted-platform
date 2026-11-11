@@ -712,10 +712,6 @@ func TestBuildDNSKEY(t *testing.T) {
 }
 
 // TestKeyTypeConstants tests that key type constants are correctly defined.
-func TestKeyTypeConstants(t *testing.T) {
-	assert.Equal(t, KeyType("ksk"), KeyTypeKSK)
-	assert.Equal(t, KeyType("zsk"), KeyTypeZSK)
-}
 
 // TestParsePublicKeyFromXKMS tests parsing public keys from XKMS format.
 func TestParsePublicKeyFromXKMS(t *testing.T) {

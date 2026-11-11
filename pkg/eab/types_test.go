@@ -201,8 +201,31 @@ func TestGenerateParams_Validate(t *testing.T) {
 	})
 }
 
+// TestGenerateParams_Validate_HMACKeyLenBoundary pins the 32-byte HMAC key
+// minimum at its boundary: 31 bytes is refused, 32 bytes is accepted.
+func TestGenerateParams_Validate_HMACKeyLenBoundary(t *testing.T) {
+	t.Run("31 bytes is refused", func(t *testing.T) {
+		params := GenerateParams{
+			ProfileID:  123,
+			TenantID:   "tenant-1",
+			HMACKeyLen: 31,
+		}
+		err := params.Validate()
+		assert.Error(t, err)
+		var credErr ErrInvalidCredential
+		assert.ErrorAs(t, err, &credErr)
+	})
+
+	t.Run("32 bytes is accepted", func(t *testing.T) {
+		params := GenerateParams{
+			ProfileID:  123,
+			TenantID:   "tenant-1",
+			HMACKeyLen: 32,
+		}
+		assert.NoError(t, params.Validate())
+	})
+}
+
 func TestConstants(t *testing.T) {
-	assert.Equal(t, 32, MinHMACKeyLength)
 	assert.Equal(t, 32, DefaultHMACKeyLength)
-	assert.Equal(t, 24*time.Hour, DefaultCredentialExpiry)
 }

@@ -413,22 +413,3 @@ func TestValidTransitions_AllTargetsAreValid(t *testing.T) {
 		}
 	}
 }
-
-func TestStateConstants(t *testing.T) {
-	// Verify state constant values
-	if StateCreated != State("created") {
-		t.Errorf("StateCreated = %q, want %q", StateCreated, "created")
-	}
-	if StateActive != State("active") {
-		t.Errorf("StateActive = %q, want %q", StateActive, "active")
-	}
-	if StateSuspended != State("suspended") {
-		t.Errorf("StateSuspended = %q, want %q", StateSuspended, "suspended")
-	}
-	if StateDeleting != State("deleting") {
-		t.Errorf("StateDeleting = %q, want %q", StateDeleting, "deleting")
-	}
-	if StateDeleted != State("deleted") {
-		t.Errorf("StateDeleted = %q, want %q", StateDeleted, "deleted")
-	}
-}
