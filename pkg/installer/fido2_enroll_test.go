@@ -276,6 +276,8 @@ type fakeLUKSHeader struct {
 	addErr     error
 	tokenErr   error
 	killErr    error
+	importErr  error
+	killed     []int
 	slots      map[int][]byte
 	passedKeys [][]byte
 	tokens     map[int]*luks2.Token
@@ -289,6 +291,7 @@ func useFakeLUKSHeader(t *testing.T) *fakeLUKSHeader {
 		luksAddKey, luksFindFreeTokenSlot, luksImportToken, luksKillSlot = oldAddKey, oldFind, oldImport, oldKill
 	})
 	luksKillSlot = func(device string, authPassphrase []byte, targetSlot int) error {
+		header.killed = append(header.killed, targetSlot)
 		if header.killErr != nil {
 			return header.killErr
 		}
@@ -310,6 +313,9 @@ func useFakeLUKSHeader(t *testing.T) *fakeLUKSHeader {
 		return len(header.tokens), nil
 	}
 	luksImportToken = func(device string, tokenID int, token *luks2.Token) error {
+		if header.importErr != nil {
+			return header.importErr
+		}
 		header.tokens[tokenID] = token
 		return nil
 	}
@@ -810,16 +816,33 @@ func TestFIDO2EnrollmentCanceledBeforeWrites(t *testing.T) {
 	})
 }
 
-// TestFIDO2EnrollmentTokenSlotUnavailable checks that a header with no free
-// token slot keeps the enrolled key and reports success, as before.
-func TestFIDO2EnrollmentTokenSlotUnavailable(t *testing.T) {
-	header := useFakeLUKSHeader(t)
-	header.tokenErr = errFakeNoTokenSlot
-	enrollment := newTestFIDO2Enrollment(t)
+// TestFIDO2EnrollmentTokenWriteFails checks that a failed token lookup or
+// import fails the enrolment and rolls the new keyslot back: boot needs the
+// token to find the slot and reproduce its key (docs/luks/architecture.md).
+func TestFIDO2EnrollmentTokenWriteFails(t *testing.T) {
+	errFakeImport := &fakeHandlerError{op: "import token"}
+	for _, tc := range []struct {
+		name  string
+		setup func(*fakeLUKSHeader)
+		cause error
+	}{
+		{name: "no free token slot", setup: func(h *fakeLUKSHeader) { h.tokenErr = errFakeNoTokenSlot }, cause: errFakeNoTokenSlot},
+		{name: "import fails", setup: func(h *fakeLUKSHeader) { h.importErr = errFakeImport }, cause: errFakeImport},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			header := useFakeLUKSHeader(t)
+			tc.setup(header)
+			enrollment := newTestFIDO2Enrollment(t)
 
-	require.NoError(t, enrollment.enrollWithHandler(context.Background(), newSDKFakeFIDO2()))
-	assert.Len(t, header.slots, 1)
-	assert.Empty(t, header.tokens)
+			err := enrollment.enrollWithHandler(context.Background(), newSDKFakeFIDO2())
+			require.Error(t, err)
+			assert.ErrorIs(t, err, tc.cause)
+			require.Len(t, header.passedKeys, 1, "the keyslot was not written before the token")
+			assert.Equal(t, []int{enrollment.config.TargetKeyslot}, header.killed, "the keyslot was not rolled back")
+			assert.Empty(t, header.slots, "a failed token write left its keyslot")
+			assert.Empty(t, header.tokens)
+		})
+	}
 }
 
 func TestFIDO2EnrollmentHandlerConfig(t *testing.T) {
