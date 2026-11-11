@@ -325,7 +325,7 @@ func TestDHCPOptions_Validate(t *testing.T) {
 		opts := &DHCPOptions{}
 		err := opts.Validate()
 		assert.NoError(t, err)
-		assert.Equal(t, DefaultLeaseDuration, opts.LeaseTime)
+		assert.Equal(t, 24*time.Hour, opts.LeaseTime)
 	})
 
 	t.Run("sets default renewal time", func(t *testing.T) {
