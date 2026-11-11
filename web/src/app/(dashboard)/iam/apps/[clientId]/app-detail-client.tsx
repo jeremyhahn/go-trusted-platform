@@ -15,6 +15,16 @@ import {
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 
+// Application record as the REST API sends it: camelCase or snake_case keys (#445).
+interface AppWire {
+  name?: string;
+  redirect_uris?: string[];
+  redirectUris?: string[];
+  grant_types?: string[];
+  grantTypes?: string[];
+  created_at?: string;
+}
+
 export default function AppDetailClient() {
   const params = useParams();
   const pathname = usePathname();
@@ -81,7 +91,8 @@ export default function AppDetailClient() {
   }
 
   // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-  const a: any = (app as any)?.app ?? app ?? null;
+  const rawApp = app as unknown as (AppWire & { app?: AppWire }) | null | undefined;
+  const a: AppWire | null = rawApp?.app ?? rawApp ?? null;
   const redirectUris: string[] = a?.redirect_uris ?? a?.redirectUris ?? [];
   const grantTypes: string[] = a?.grant_types ?? a?.grantTypes ?? [];
 

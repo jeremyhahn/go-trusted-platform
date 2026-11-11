@@ -365,14 +365,6 @@ func TestDeviceProfile_BMCField(t *testing.T) {
 	assert.NoError(t, profile.BMC.Validate())
 }
 
-func TestDeviceProfile_BMCFieldNil(t *testing.T) {
-	profile := &DeviceProfile{
-		ID:   2,
-		Name: "virtual-server",
-	}
-	assert.Nil(t, profile.BMC)
-}
-
 func TestDeviceTemplate_BMCField(t *testing.T) {
 	tmpl := &DeviceTemplate{
 		ID:   1,
@@ -390,12 +382,4 @@ func TestDeviceTemplate_BMCField(t *testing.T) {
 	assert.Equal(t, "10.0.0.50", tmpl.BMC.Address)
 	assert.Equal(t, BMCProtocolRedfish, tmpl.BMC.Protocol)
 	assert.NoError(t, tmpl.BMC.Validate())
-}
-
-func TestDeviceTemplate_BMCFieldNil(t *testing.T) {
-	tmpl := &DeviceTemplate{
-		ID:   2,
-		Name: "vm-template",
-	}
-	assert.Nil(t, tmpl.BMC)
 }

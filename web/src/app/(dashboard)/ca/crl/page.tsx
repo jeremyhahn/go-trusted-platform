@@ -32,6 +32,34 @@ import { errorMessage } from "@/utils/errors";
  * "Coming Soon" stub left this surface unusable even though the API
  * was live.
  */
+// The REST wire shape of the CRL, which carries camelCase or snake_case
+// field names and differs from the SDK/proto declaration (#445).
+interface RevokedCertWire {
+  serial?: string;
+  reason?: string | number;
+  revocationTime?: string;
+  revocation_time?: string;
+}
+
+interface CRLWire {
+  data?: string;
+  lastUpdate?: string;
+  last_update?: string;
+  nextUpdate?: string;
+  next_update?: string;
+  revokedCount?: number;
+  revoked_count?: number;
+  revokedCerts?: RevokedCertWire[];
+  revoked_certs?: RevokedCertWire[];
+}
+
+// useApi either unwraps the payload ({ crl }) or surfaces the full
+// envelope ({ payload: { crl } }).
+interface CRLResponseWire {
+  crl?: CRLWire;
+  payload?: { crl?: CRLWire };
+}
+
 export default function CRLPage() {
   const ca = useCA();
   const { toast } = useToast();
@@ -46,18 +74,15 @@ export default function CRLPage() {
   // Tolerate both shapes:
   //   - useApi unwrapping payload: { crl: {...}, timestamp }
   //   - or surfacing the full envelope: { payload: { crl: ... } }
-  // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-  const crl: any = React.useMemo(() => {
-    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-    const r = crlResponse as any;
+  const crl: CRLWire | null = React.useMemo(() => {
+    const r = crlResponse as unknown as CRLResponseWire | null | undefined;
     if (!r) return null;
     if (r.crl) return r.crl;
     if (r.payload?.crl) return r.payload.crl;
     return null;
   }, [crlResponse]);
 
-  // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-  const revokedCerts: any[] = crl?.revokedCerts ?? crl?.revoked_certs ?? [];
+  const revokedCerts: RevokedCertWire[] = crl?.revokedCerts ?? crl?.revoked_certs ?? [];
 
   const handleDownload = async (format: "pem" | "der") => {
     if (!crl?.data) {

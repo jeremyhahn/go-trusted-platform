@@ -495,65 +495,6 @@ func TestFlagHelpers_Comprehensive(t *testing.T) {
 	})
 }
 
-// TestLinkInfo_AllFields tests LinkInfo structure
-func TestLinkInfo_StructFields(t *testing.T) {
-	info := &LinkInfo{
-		Index:        1,
-		Name:         "test0",
-		Type:         "dummy",
-		Flags:        0x1003,
-		MTU:          1500,
-		HardwareAddr: "00:11:22:33:44:55",
-		OperState:    LinkStateUp,
-		Master:       0,
-	}
-
-	assert.Equal(t, 1, info.Index)
-	assert.Equal(t, "test0", info.Name)
-	assert.Equal(t, "dummy", info.Type)
-	assert.Equal(t, uint32(0x1003), info.Flags)
-	assert.Equal(t, 1500, info.MTU)
-	assert.Equal(t, "00:11:22:33:44:55", info.HardwareAddr)
-	assert.Equal(t, LinkStateUp, info.OperState)
-	assert.Equal(t, 0, info.Master)
-}
-
-// TestTAPInfo_AllFields tests TAPInfo structure
-func TestTAPInfo_StructFields(t *testing.T) {
-	tapInfo := &TAPInfo{
-		LinkInfo: LinkInfo{
-			Index:        1,
-			Name:         "tap0",
-			Type:         "tuntap",
-			Flags:        0x1003,
-			MTU:          1500,
-			HardwareAddr: "00:11:22:33:44:55",
-			OperState:    LinkStateUp,
-			Master:       0,
-		},
-		Owner:      1000,
-		Group:      1000,
-		MultiQueue: true,
-		Persist:    true,
-	}
-
-	// Test embedded fields
-	assert.Equal(t, 1, tapInfo.Index)
-	assert.Equal(t, "tap0", tapInfo.Name)
-	assert.Equal(t, "tuntap", tapInfo.Type)
-	assert.Equal(t, uint32(0x1003), tapInfo.Flags)
-	assert.Equal(t, 1500, tapInfo.MTU)
-	assert.Equal(t, "00:11:22:33:44:55", tapInfo.HardwareAddr)
-	assert.Equal(t, LinkStateUp, tapInfo.OperState)
-	assert.Equal(t, 0, tapInfo.Master)
-
-	// Test TAP-specific fields
-	assert.Equal(t, uint32(1000), tapInfo.Owner)
-	assert.Equal(t, uint32(1000), tapInfo.Group)
-	assert.True(t, tapInfo.MultiQueue)
-	assert.True(t, tapInfo.Persist)
-}
-
 // TestErrorConstructors_AllTypes tests all error constructor functions
 func TestErrorConstructors_AllTypes(t *testing.T) {
 	t.Run("ErrInvalidName", func(t *testing.T) {

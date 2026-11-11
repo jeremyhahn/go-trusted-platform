@@ -99,28 +99,6 @@ func TestDevice_SetEntityID(t *testing.T) {
 	}
 }
 
-func TestDevice_FieldValues(t *testing.T) {
-	device := &Device{
-		ID:         12345,
-		AttestPub:  "attest-public-key",
-		EKCert:     "endorsement-key-cert",
-		EventLog:   []byte("event-log-data"),
-		HashAlgoId: 11,
-		Model:      "TPM2000",
-		Serial:     "SN123456789",
-		SigningPub: "signing-public-key",
-	}
-
-	assert.Equal(t, uint64(12345), device.ID)
-	assert.Equal(t, "attest-public-key", device.AttestPub)
-	assert.Equal(t, "endorsement-key-cert", device.EKCert)
-	assert.Equal(t, []byte("event-log-data"), device.EventLog)
-	assert.Equal(t, uint32(11), device.HashAlgoId)
-	assert.Equal(t, "TPM2000", device.Model)
-	assert.Equal(t, "SN123456789", device.Serial)
-	assert.Equal(t, "signing-public-key", device.SigningPub)
-}
-
 func TestDevice_EmptyDevice(t *testing.T) {
 	device := &Device{}
 

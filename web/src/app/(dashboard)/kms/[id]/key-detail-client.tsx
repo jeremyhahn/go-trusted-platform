@@ -19,6 +19,25 @@ import {
 import { KeyOperations } from "@/components/features/kms/key-operations";
 import { useKMS, useApi, useMutation, useToast } from "@/hooks";
 import type { KeyDetail } from "@/types/security";
+
+// Key as the KMS REST endpoint emits it: camelCase or snake_case names,
+// timestamps as strings or epoch seconds (#445).
+interface KeyWire {
+  keyId?: string;
+  key_id?: string;
+  algorithm?: string;
+  name?: string;
+  status?: string;
+  createdAt?: string | number;
+  created_at?: string | number;
+  version?: number;
+  tags?: Record<string, string>;
+}
+
+interface KeyResponseWire extends KeyWire {
+  key?: KeyWire;
+  metadata?: KeyWire;
+}
 import { ArrowLeft, Loader2, AlertCircle, RefreshCw, Ban, Trash2 } from "lucide-react";
 
 /**
@@ -52,11 +71,9 @@ export default function KeyDetailPage({ params }: { params: Promise<{ id: string
     if (!response) return null;
 
     // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-    const r: any = response;
-    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-    const key: any = r.key ?? r;
-    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-    const metadata: any = r.metadata ?? key ?? {};
+    const r = response as unknown as KeyResponseWire;
+    const key: KeyWire = r.key ?? r;
+    const metadata: KeyWire = r.metadata ?? key ?? {};
     const keyId: string = key.keyId ?? key.key_id ?? '';
     const algorithm: string = key.algorithm ?? '';
     const toIso = (v: unknown): string => {
@@ -71,8 +88,7 @@ export default function KeyDetailPage({ params }: { params: Promise<{ id: string
     return {
       id: keyId,
       name: metadata.name || key.name || keyId,
-      // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-      algorithm: algorithm as any,
+      algorithm: algorithm as KeyDetail["algorithm"],
       type: algorithm.includes('AES') || algorithm.includes('HMAC') ? 'symmetric' as const : 'asymmetric' as const,
       status: (status === 'ENABLED' ? 'active' : status === 'DISABLED' ? 'disabled' : 'active') as 'active' | 'disabled' | 'pending_deletion',
       createdAt: toIso(createdRaw),

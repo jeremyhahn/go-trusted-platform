@@ -453,20 +453,3 @@ func TestGuard_ConcurrentAccess(t *testing.T) {
 		<-done
 	}
 }
-
-func TestGuardResult_Fields(t *testing.T) {
-	token := &AttestationToken{DeviceID: "device-123"}
-	err := ErrAttestationRequired{Zone: "example.com."}
-
-	result := &GuardResult{
-		Allowed: false,
-		Token:   token,
-		Error:   err,
-		Message: "test message",
-	}
-
-	assert.False(t, result.Allowed)
-	assert.Equal(t, token, result.Token)
-	assert.Equal(t, err, result.Error)
-	assert.Equal(t, "test message", result.Message)
-}

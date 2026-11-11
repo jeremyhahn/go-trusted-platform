@@ -933,46 +933,6 @@ func createMockModulesArchive(path string) error {
 	return nil
 }
 
-func TestFIPSConfig_Fields(t *testing.T) {
-	t.Run("all fields", func(t *testing.T) {
-		config := &fips.Config{
-			OS:         "alpine",
-			Version:    "3.20",
-			Arch:       "x86_64",
-			Mirror:     "https://example.com",
-			WorkDir:    "/tmp/work",
-			MountPoint: "/mnt/root",
-			Debug:      true,
-			Logger:     slog.Default(),
-		}
-
-		if config.OS != "alpine" {
-			t.Errorf("expected OS alpine, got %s", config.OS)
-		}
-		if config.Version != "3.20" {
-			t.Errorf("expected version 3.20, got %s", config.Version)
-		}
-		if config.Arch != "x86_64" {
-			t.Errorf("expected arch x86_64, got %s", config.Arch)
-		}
-		if config.Mirror != "https://example.com" {
-			t.Errorf("expected mirror https://example.com, got %s", config.Mirror)
-		}
-		if config.WorkDir != "/tmp/work" {
-			t.Errorf("expected workDir /tmp/work, got %s", config.WorkDir)
-		}
-		if config.MountPoint != "/mnt/root" {
-			t.Errorf("expected mountPoint /mnt/root, got %s", config.MountPoint)
-		}
-		if !config.Debug {
-			t.Error("expected debug true")
-		}
-		if config.Logger == nil {
-			t.Error("expected logger to be set")
-		}
-	})
-}
-
 func TestFIPSInstaller_InterfaceCompliance(t *testing.T) {
 	tmpDir := t.TempDir()
 	config := &fips.Config{

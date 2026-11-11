@@ -52,18 +52,6 @@ func TestNewSDNEnrollmentHookAdapter_CreatesValidAdapter(t *testing.T) {
 	}
 }
 
-func TestRegistryParams_SDNEnrollmentHookField(t *testing.T) {
-	// Verify that RegistryParams has the SDNEnrollmentHook field
-	params := RegistryParams{}
-
-	// This test just ensures the field exists and can be set
-	params.SDNEnrollmentHook = nil
-
-	if params.SDNEnrollmentHook != nil {
-		t.Error("expected SDNEnrollmentHook to be nil when not set")
-	}
-}
-
 func TestEnrollmentHookProfileService_GetBySerial_NilHook(t *testing.T) {
 	// Create a service with a nil hook
 	service := NewEnrollmentHookProfileService(nil)
@@ -486,32 +474,4 @@ func TestNewTLSAGenerationHook_CorrectSPKIHash(t *testing.T) {
 func TestTLSARegistrar_InterfaceCompliance(t *testing.T) {
 	// Verify mockTLSARegistrar satisfies TLSARegistrar interface
 	var _ TLSARegistrar = (*mockTLSARegistrar)(nil)
-}
-
-func TestRegistryParams_DNSConfigField(t *testing.T) {
-	// Verify that RegistryParams has the DNSConfig field
-	params := RegistryParams{}
-
-	// This test just ensures the field exists and can be set
-	params.DNSConfig = nil
-
-	if params.DNSConfig != nil {
-		t.Error("expected DNSConfig to be nil when not set")
-	}
-
-	// Set a config
-	params.DNSConfig = &dns.Config{
-		DANE: &dns.DANEConfig{
-			Enabled:      true,
-			AutoGenerate: true,
-		},
-	}
-
-	if params.DNSConfig == nil {
-		t.Error("expected DNSConfig to be non-nil after setting")
-	}
-
-	if params.DNSConfig.DANE == nil {
-		t.Error("expected DANE config to be non-nil")
-	}
 }

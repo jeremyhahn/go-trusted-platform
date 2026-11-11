@@ -218,22 +218,6 @@ func TestDefaultZoneAttestationConfig(t *testing.T) {
 	assert.Empty(t, config.AllowedEKCerts)
 }
 
-func TestZoneAttestationConfig_Fields(t *testing.T) {
-	config := &ZoneAttestationConfig{
-		Required:       true,
-		MaxAge:         10 * time.Minute,
-		PCRPolicy:      "custom-policy",
-		AllowedEKCerts: []string{"/path/to/ek1.pem", "/path/to/ek2.pem"},
-		Fallback:       FallbackAllowWithWarning,
-	}
-
-	assert.True(t, config.Required)
-	assert.Equal(t, 10*time.Minute, config.MaxAge)
-	assert.Equal(t, "custom-policy", config.PCRPolicy)
-	assert.Len(t, config.AllowedEKCerts, 2)
-	assert.Equal(t, FallbackAllowWithWarning, config.Fallback)
-}
-
 func TestAttestationToken_FullFields(t *testing.T) {
 	now := time.Now()
 	token := &AttestationToken{

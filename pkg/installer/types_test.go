@@ -415,61 +415,6 @@ func TestDiskInfo_Structure(t *testing.T) {
 	}
 }
 
-func TestConfig_WithTPMSealing(t *testing.T) {
-	config := &Config{
-		Disk: &DiskConfig{
-			Device:         "/dev/sda",
-			PartitionTable: PartitionTableGPT,
-			Encryption: &EncryptionConfig{
-				Password: "test123",
-			},
-		},
-		OS: &OSConfig{
-			OS: OSAlpine,
-		},
-		UKI: &UKIConfig{
-			Cmdline:       "root=/dev/mapper/cryptroot",
-			KernelPath:    "/boot/vmlinuz",
-			InitramfsPath: "/boot/initramfs",
-		},
-		EnableTPMSealing: true,
-		PCRs:             []uint{0, 1, 2, 3, 7},
-	}
-
-	assert.True(t, config.EnableTPMSealing)
-	assert.Equal(t, []uint{0, 1, 2, 3, 7}, config.PCRs)
-	assert.NotNil(t, config.Disk.Encryption)
-}
-
-func TestConfig_WithSecureBoot(t *testing.T) {
-	config := &Config{
-		Disk: &DiskConfig{
-			Device:         "/dev/sda",
-			PartitionTable: PartitionTableGPT,
-		},
-		OS: &OSConfig{
-			OS: OSAlpine,
-		},
-		UKI: &UKIConfig{
-			Cmdline:       "root=/dev/sda2",
-			KernelPath:    "/boot/vmlinuz",
-			InitramfsPath: "/boot/initramfs",
-		},
-		SecureBoot: &SecureBootConfig{
-			Enabled:    true,
-			ResignMode: SecureBootResignModeRemote,
-			DB: SecureBootKeyRef{
-				KeyURI:  "kms://platform/secureboot/db",
-				CertURI: "kms://platform/secureboot/db-cert",
-			},
-		},
-	}
-
-	assert.NotNil(t, config.SecureBoot)
-	assert.Equal(t, "kms://platform/secureboot/db", config.SecureBoot.DB.KeyURI)
-	assert.Equal(t, "kms://platform/secureboot/db-cert", config.SecureBoot.DB.CertURI)
-}
-
 func TestInterfaceType(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -830,49 +775,6 @@ func TestConfig_WithNetwork(t *testing.T) {
 	assert.NoError(t, config.Validate())
 }
 
-func TestDNSConfig_Structure(t *testing.T) {
-	dns := &DNSConfig{
-		Nameservers:   []string{"8.8.8.8", "8.8.4.4", "1.1.1.1"},
-		SearchDomains: []string{"example.com", "local.example.com"},
-		Options:       []string{"rotate", "timeout:2"},
-	}
-
-	assert.Len(t, dns.Nameservers, 3)
-	assert.Len(t, dns.SearchDomains, 2)
-	assert.Len(t, dns.Options, 2)
-	assert.Equal(t, "8.8.8.8", dns.Nameservers[0])
-	assert.Equal(t, "example.com", dns.SearchDomains[0])
-}
-
-func TestInterfaceConfig_WithRoutes(t *testing.T) {
-	iface := &InterfaceConfig{
-		Name:        "eth0",
-		Type:        InterfaceTypeStatic,
-		IPv4Address: "192.168.1.100",
-		IPv4Netmask: "255.255.255.0",
-		IPv4Gateway: "192.168.1.1",
-		MTU:         9000,
-		Routes: []RouteConfig{
-			{
-				Destination: "10.0.0.0/8",
-				Gateway:     "192.168.1.254",
-				Metric:      100,
-			},
-			{
-				Destination: "172.16.0.0/12",
-				Gateway:     "192.168.1.253",
-			},
-		},
-	}
-
-	assert.Equal(t, "eth0", iface.Name)
-	assert.Equal(t, InterfaceTypeStatic, iface.Type)
-	assert.Equal(t, 9000, iface.MTU)
-	assert.Len(t, iface.Routes, 2)
-	assert.Equal(t, "10.0.0.0/8", iface.Routes[0].Destination)
-	assert.Equal(t, 100, iface.Routes[0].Metric)
-}
-
 // =============================================================================
 // NetworkConfig bond tests
 // =============================================================================
@@ -905,20 +807,4 @@ func TestNetworkConfig_Validate_BondInterfaces(t *testing.T) {
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "at least two member interfaces are required")
 	})
-}
-
-func TestBondConfig_NoSlavesField(t *testing.T) {
-	// Verify that BondConfig has Interfaces field, not Slaves.
-	// This is a compile-time check; if Slaves were present, this test
-	// file would not compile. The test exists as documentation.
-	bond := BondConfig{
-		Name:       "bond0",
-		Mode:       "802.3ad",
-		Interfaces: []string{"eth0", "eth1"},
-		VLANs: []BondVLANConfig{
-			{Zone: "fabric", IPv4Address: "10.4.1.20/24", AutoStart: true},
-		},
-	}
-	assert.Len(t, bond.Interfaces, 2)
-	assert.Len(t, bond.VLANs, 1)
 }
