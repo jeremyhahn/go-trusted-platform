@@ -14,6 +14,7 @@
 package drive
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -605,5 +606,35 @@ func TestFilesystemTypeConstants(t *testing.T) {
 	}
 	if FilesystemFAT32 != "vfat" {
 		t.Errorf("expected 'vfat', got %s", FilesystemFAT32)
+	}
+}
+
+// TestStorageConfig_SystemRoleFromLiteralConfig decodes a literal config
+// document so the wire value "system" of the role field is pinned: the
+// system drive must be found by GetSystemDrive and Validate must not report
+// that no system drive is configured.
+func TestStorageConfig_SystemRoleFromLiteralConfig(t *testing.T) {
+	const doc = `{
+		"drives": [
+			{"id": "data-disk", "device": "/dev/sdb", "role": "data"},
+			{"id": "system-disk", "device": "/dev/sda", "role": "system"}
+		]
+	}`
+
+	var cfg StorageConfig
+	if err := json.Unmarshal([]byte(doc), &cfg); err != nil {
+		t.Fatalf("decode config: %v", err)
+	}
+
+	sys := cfg.GetSystemDrive()
+	if sys == nil {
+		t.Fatal("GetSystemDrive() = nil, want the drive with role \"system\"")
+	}
+	if sys.ID != "system-disk" || string(sys.Role) != "system" {
+		t.Fatalf("GetSystemDrive() = id %q role %q, want id \"system-disk\" role \"system\"", sys.ID, sys.Role)
+	}
+
+	if err := cfg.Validate(); errors.Is(err, ErrNoSystemDrive) {
+		t.Fatalf("Validate() = %v, want no ErrNoSystemDrive for a config with role \"system\"", err)
 	}
 }
