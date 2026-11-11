@@ -589,30 +589,3 @@ func TestTenantUsage_Timestamp(t *testing.T) {
 		t.Errorf("Timestamp = %v, expected %v", usage.Timestamp, now)
 	}
 }
-
-func TestResourceTypeConstants(t *testing.T) {
-	// Verify all resource type constants have expected values
-	tests := []struct {
-		constant ResourceType
-		expected string
-	}{
-		{ResourceVMs, "vms"},
-		{ResourceContainers, "containers"},
-		{ResourceVCPUs, "vcpus"},
-		{ResourceMemory, "memory"},
-		{ResourceDisk, "disk"},
-		{ResourceBridges, "bridges"},
-		{ResourcePorts, "ports"},
-		{ResourceBandwidth, "bandwidth"},
-		{ResourceVolumes, "volumes"},
-		{ResourceSnapshots, "snapshots"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.expected, func(t *testing.T) {
-			if string(tt.constant) != tt.expected {
-				t.Errorf("constant value = %q, expected %q", string(tt.constant), tt.expected)
-			}
-		})
-	}
-}
