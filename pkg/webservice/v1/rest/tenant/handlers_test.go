@@ -250,3 +250,27 @@ func TestHandlers_RotateDEKCarriesBackground(t *testing.T) {
 		})
 	}
 }
+
+func TestHandlers_ListTenantsForwardsPagination(t *testing.T) {
+	cases := []struct {
+		name       string
+		query      string
+		wantLimit  int32
+		wantOffset int32
+	}{
+		{"limit and offset", "?limit=2&offset=1", 2, 1},
+		{"none", "", 0, 0},
+		{"bad values ignored", "?limit=x&offset=-", 0, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := &fakeTenantServer{}
+			rec := serve(newRouterWithServer(t, srv), http.MethodGet, "/api/v1/tenants"+tc.query, "")
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			req, ok := srv.last.(*platformv1.ListTenantsRequest)
+			require.True(t, ok, "server received %T", srv.last)
+			assert.Equal(t, tc.wantLimit, req.GetLimit())
+			assert.Equal(t, tc.wantOffset, req.GetOffset())
+		})
+	}
+}
