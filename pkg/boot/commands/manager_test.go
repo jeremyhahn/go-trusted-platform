@@ -7,10 +7,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/fido2"
 
+	"github.com/jeremyhahn/go-trusted-platform/internal/fido2hid"
 	platforminitrd "github.com/jeremyhahn/go-trusted-platform/pkg/initrd"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	storageluks "github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
@@ -497,6 +499,35 @@ func TestNewBootManagerRegistersFIDO2(t *testing.T) {
 
 // TestNewBootManagerSDKHandler opens the real SDK handler on an HID bus with
 // no authenticator: the initrd can build it before a key is plugged in.
+// TestBootFIDO2HandlerUsesHIDRawEnumerator covers Codex review round 4 P1:
+// the production boot factory opens the handler on the enumerator the
+// installer enrols through, which prefixes the hidraw report ID on Linux.
+// The SDK's own Linux enumerator drops a leading zero byte of each frame.
+func TestBootFIDO2HandlerUsesHIDRawEnumerator(t *testing.T) {
+	if runtime.GOOS == "linux" {
+		if _, ok := bootFIDO2Enumerator().(fido2hid.Enumerator); !ok {
+			t.Fatalf("boot FIDO2 enumerator is %T, want the hidraw report-ID wrapper", bootFIDO2Enumerator())
+		}
+	}
+
+	old := bootFIDO2Enumerator
+	t.Cleanup(func() { bootFIDO2Enumerator = old })
+	var calls int
+	bootFIDO2Enumerator = func() fido2.HIDDeviceEnumerator {
+		calls++
+		return bootEnumerator{}
+	}
+	cfg := fido2.DefaultConfig
+	handler, err := newBootFIDO2Handler(&cfg)
+	if err != nil {
+		t.Fatalf("newBootFIDO2Handler: %v", err)
+	}
+	t.Cleanup(func() { _ = handler.Close() })
+	if calls != 1 {
+		t.Fatalf("newBootFIDO2Handler built %d enumerators from bootFIDO2Enumerator, want 1", calls)
+	}
+}
+
 func TestNewBootManagerSDKHandler(t *testing.T) {
 	useBootFIDO2Handler(t, func(cfg *fido2.Config) (fido2.Handler, error) {
 		return fido2.NewHandler(cfg, bootEnumerator{})
