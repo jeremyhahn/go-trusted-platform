@@ -464,105 +464,10 @@ func TestReservation_IsExpired(t *testing.T) {
 	}
 }
 
-func TestReservation_Fields(t *testing.T) {
-	now := time.Now()
-	expires := now.Add(DefaultReservationTTL)
-
-	reservation := &Reservation{
-		ID:        "res-uuid-123",
-		TenantID:  "tenant-456",
-		Resource:  ResourceMemory,
-		Amount:    4096,
-		CreatedAt: now,
-		ExpiresAt: expires,
-		Committed: false,
-	}
-
-	if reservation.ID != "res-uuid-123" {
-		t.Errorf("ID = %q, expected %q", reservation.ID, "res-uuid-123")
-	}
-	if reservation.TenantID != "tenant-456" {
-		t.Errorf("TenantID = %q, expected %q", reservation.TenantID, "tenant-456")
-	}
-	if reservation.Resource != ResourceMemory {
-		t.Errorf("Resource = %q, expected %q", reservation.Resource, ResourceMemory)
-	}
-	if reservation.Amount != 4096 {
-		t.Errorf("Amount = %d, expected %d", reservation.Amount, 4096)
-	}
-	if !reservation.CreatedAt.Equal(now) {
-		t.Errorf("CreatedAt = %v, expected %v", reservation.CreatedAt, now)
-	}
-	if !reservation.ExpiresAt.Equal(expires) {
-		t.Errorf("ExpiresAt = %v, expected %v", reservation.ExpiresAt, expires)
-	}
-	if reservation.Committed != false {
-		t.Error("Committed should be false")
-	}
-}
-
 func TestDefaultReservationTTL(t *testing.T) {
 	expected := 5 * time.Minute
 	if DefaultReservationTTL != expected {
 		t.Errorf("DefaultReservationTTL = %v, expected %v", DefaultReservationTTL, expected)
-	}
-}
-
-func TestComputeQuota_Fields(t *testing.T) {
-	quota := ComputeQuota{
-		MaxVMs:        10,
-		MaxContainers: 20,
-		MaxVCPUs:      32,
-		MaxMemoryMB:   65536,
-	}
-
-	if quota.MaxVMs != 10 {
-		t.Errorf("MaxVMs = %d, expected %d", quota.MaxVMs, 10)
-	}
-	if quota.MaxContainers != 20 {
-		t.Errorf("MaxContainers = %d, expected %d", quota.MaxContainers, 20)
-	}
-	if quota.MaxVCPUs != 32 {
-		t.Errorf("MaxVCPUs = %d, expected %d", quota.MaxVCPUs, 32)
-	}
-	if quota.MaxMemoryMB != 65536 {
-		t.Errorf("MaxMemoryMB = %d, expected %d", quota.MaxMemoryMB, 65536)
-	}
-}
-
-func TestNetworkQuota_Fields(t *testing.T) {
-	quota := NetworkQuota{
-		MaxBridges:       5,
-		MaxPorts:         100,
-		MaxBandwidthMbps: 1000,
-	}
-
-	if quota.MaxBridges != 5 {
-		t.Errorf("MaxBridges = %d, expected %d", quota.MaxBridges, 5)
-	}
-	if quota.MaxPorts != 100 {
-		t.Errorf("MaxPorts = %d, expected %d", quota.MaxPorts, 100)
-	}
-	if quota.MaxBandwidthMbps != 1000 {
-		t.Errorf("MaxBandwidthMbps = %d, expected %d", quota.MaxBandwidthMbps, 1000)
-	}
-}
-
-func TestStorageQuota_Fields(t *testing.T) {
-	quota := StorageQuota{
-		MaxDiskGB:    1000,
-		MaxVolumes:   50,
-		MaxSnapshots: 100,
-	}
-
-	if quota.MaxDiskGB != 1000 {
-		t.Errorf("MaxDiskGB = %d, expected %d", quota.MaxDiskGB, 1000)
-	}
-	if quota.MaxVolumes != 50 {
-		t.Errorf("MaxVolumes = %d, expected %d", quota.MaxVolumes, 50)
-	}
-	if quota.MaxSnapshots != 100 {
-		t.Errorf("MaxSnapshots = %d, expected %d", quota.MaxSnapshots, 100)
 	}
 }
 
