@@ -1,8 +1,9 @@
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AuthProvider } from "@/contexts/AuthContext";
 import type { AuthFactor } from "@/types/auth-factors";
+import { authFactorsApi } from "@/utils/auth-factors-api";
 import AccountSecurityPage from "./page";
 
 // #435: the page loads its factors through the SDK's useApi. These tests drive
@@ -97,5 +98,52 @@ describe("AccountSecurityPage factor loading", () => {
     expect(await screen.findByText("Desk YubiKey")).toBeTruthy();
     expect(screen.queryByText("Failed to load factors")).toBeNull();
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("AccountSecurityPage session policy", () => {
+  const fetchMock = vi.fn<typeof fetch>();
+
+  const ownerToken = jwtFor({
+    sub: "owner-1",
+    email: "owner@example.com",
+    tenant_id: "tenant-9",
+    is_tenant_owner: true,
+    roles: [],
+    exp: Math.floor(Date.now() / 1000) + 3600,
+  });
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    document.cookie = "jwt=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
+  });
+
+  it("offers no MFA-policy toggle while the server refuses it", async () => {
+    document.cookie = `jwt=${ownerToken}; path=/`;
+    fetchMock.mockResolvedValue(jsonResponse(200, { factors: [], total: 0 }));
+    const setPolicy = vi.spyOn(authFactorsApi, "setMFAPolicy");
+
+    renderPage();
+
+    await screen.findByText("Session policy");
+    const toggle = document.getElementById("require-mfa");
+    expect(toggle).not.toBeNull();
+    expect(toggle?.hasAttribute("disabled")).toBe(true);
+
+    await act(async () => {
+      fireEvent.click(toggle as HTMLElement);
+    });
+
+    expect(setPolicy).not.toHaveBeenCalled();
+    expect(
+      fetchMock.mock.calls.some(([url]) => String(url).includes("mfa-policy"))
+    ).toBe(false);
   });
 });
