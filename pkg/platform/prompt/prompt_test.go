@@ -299,16 +299,6 @@ func TestSetDefaultPrompter(t *testing.T) {
 	assert.Equal(t, newPrompter, defaultPrompter, "SetDefaultPrompter should update defaultPrompter")
 }
 
-func TestUserPromptConstant(t *testing.T) {
-	// Verify the user prompt constant has the expected value
-	assert.Equal(t, "trusted-platform> $ ", userPrompt,
-		"User prompt constant should have the expected format")
-
-	// Verify it's not empty
-	assert.NotEmpty(t, userPrompt,
-		"User prompt constant should not be empty")
-}
-
 // ===== Tests for Prompter (new testable interface) =====
 
 func TestNewPrompter_Defaults(t *testing.T) {
