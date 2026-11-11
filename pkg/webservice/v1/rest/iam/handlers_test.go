@@ -661,12 +661,8 @@ func TestListUsers_WithPagination(t *testing.T) {
 	t.Parallel()
 	iamClient := &mockIAMClient{
 		listUsersFn: func(ctx context.Context, tenantID string, req *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
-			assert.Equal(t, int32(25), int32(req.PageSize))
-			assert.Equal(t, int32(0), int32(0))
-			return &iamsdk.ListUsersResponse{
-				Users: []iamsdk.User{
-					{ID: "user-51", Email: "user51@example.com"},
-				}}, nil
+			t.Error("the IAM call must not run for a later page")
+			return nil, nil
 		},
 	}
 
@@ -678,12 +674,7 @@ func TestListUsers_WithPagination(t *testing.T) {
 
 	handlers.ListUsers(rec, req)
 
-	assert.Equal(t, http.StatusOK, writer.lastStatus)
-	reply := &platformv1.ListIAMUsersResponse{}
-	decodeProtoReply(t, writer, reply)
-	// offset 50 at 25 per page falls on page 3.
-	assert.Equal(t, uint32(25), reply.GetPagination().GetPageSize())
-	assert.Equal(t, uint32(3), reply.GetPagination().GetPage())
+	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
 }
 
 func TestListUsers_MissingTenantID(t *testing.T) {
