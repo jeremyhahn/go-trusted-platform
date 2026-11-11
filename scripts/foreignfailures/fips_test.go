@@ -508,8 +508,9 @@ func TestRepositoryFIPSBaselineParses(t *testing.T) {
 	assert.Contains(t, b.tests, testKey{Package: "pkg/app", Name: appHiddenPanic})
 	assert.Contains(t, b.tests, testKey{Package: "pkg/app", Name: "TestIDevIDSigner_NilPublicKey"})
 	assert.Contains(t, b.tests, testKey{Package: "pkg/app", Name: "TestTPMSigner_IDevIDSignsTLS13ClientCertificateVerify"})
+	assert.Contains(t, b.tests, testKey{Package: "pkg/app", Name: "TestInitWebServiceKeyAttributes_IDevIDReuseCarriesIDevIDSubject"})
 	assert.Contains(t, b.tests, testKey{Package: "pkg/api/daemon", Name: "TestTPMSimulator_ActivateCredentialRefusesAForeignCredential"})
-	assert.Equal(t, 4, b.rowsIn("pkg/app"), "the bound on a pkg/app rerun")
+	assert.Equal(t, 5, b.rowsIn("pkg/app"), "the bound on a pkg/app rerun")
 	assert.Equal(t, 1, b.rowsIn("pkg/api/daemon"), "the bound on a pkg/api/daemon rerun")
 	assert.Equal(t, 0, b.rowsIn("pkg/dns"))
 }
