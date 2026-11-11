@@ -4,7 +4,10 @@ package ca
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -101,5 +104,116 @@ func TestRESTAdapterInfoDecodesGetCAInfoResponse(t *testing.T) {
 	if len(info.KeyStores) != 1 || info.KeyStores[0].Type != "pkcs8" || !info.KeyStores[0].Available ||
 		len(info.KeyStores[0].Capabilities) != 1 || info.KeyStores[0].Capabilities[0] != "sign" {
 		t.Errorf("KeyStores = %+v, want one available pkcs8 store with sign", info.KeyStores)
+	}
+}
+
+func TestRESTAdapterListCertificatesDecodesProtoJSON(t *testing.T) {
+	notBefore := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	notAfter := notBefore.AddDate(1, 0, 0)
+
+	payload, err := protojson.Marshal(&pb.ListCertificatesResponse{
+		Certificates: []*pb.CertificateSummary{{
+			Serial:     "0a1b2c",
+			CommonName: "leaf.example.com",
+			Issuer:     "root-ca.example.com",
+			NotBefore:  timestamppb.New(notBefore),
+			NotAfter:   timestamppb.New(notAfter),
+		}},
+		Pagination: &pb.PaginationResponse{TotalItems: 7},
+		Timestamp:  timestamppb.Now(),
+	})
+	if err != nil {
+		t.Fatalf("marshal ListCertificatesResponse: %v", err)
+	}
+
+	var gotLimit string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method != http.MethodGet || req.URL.Path != "/api/v1/ca/certificates" {
+			http.NotFound(w, req)
+			return
+		}
+		gotLimit = req.URL.Query().Get("limit")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"code":200,"success":true,"payload":%s}`, payload)
+	}))
+	defer srv.Close()
+
+	adapter := &RESTAdapter{baseURL: srv.URL, httpClient: srv.Client()}
+	res, err := adapter.ListCertificates(context.Background(), ListCertificatesOptions{Limit: 2})
+	if err != nil {
+		t.Fatalf("ListCertificates: %v", err)
+	}
+	if gotLimit != "2" {
+		t.Errorf("limit query = %q, want 2", gotLimit)
+	}
+	if res.Total != 7 {
+		t.Errorf("Total = %d, want 7", res.Total)
+	}
+	if len(res.Certificates) != 1 || res.Certificates[0].Serial != "0a1b2c" ||
+		res.Certificates[0].CommonName != "leaf.example.com" {
+		t.Fatalf("Certificates = %+v, want one with serial 0a1b2c", res.Certificates)
+	}
+	if !res.Certificates[0].NotBefore.Equal(notBefore) || !res.Certificates[0].NotAfter.Equal(notAfter) {
+		t.Errorf("validity = %v..%v, want %v..%v",
+			res.Certificates[0].NotBefore, res.Certificates[0].NotAfter, notBefore, notAfter)
+	}
+}
+
+func TestRESTAdapterVerifyCertificateSendsBase64PEM(t *testing.T) {
+	certPEM := []byte("-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n")
+
+	payload, err := protojson.Marshal(&pb.VerifyCertificateResponse{
+		Valid:    true,
+		Chain:    []string{"leaf.example.com", "root-ca.example.com"},
+		Warnings: []string{"w1"},
+	})
+	if err != nil {
+		t.Fatalf("marshal VerifyCertificateResponse: %v", err)
+	}
+
+	var body map[string]any
+	var decoded pb.VerifyCertificateRequest
+	var decodeErr error
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method != http.MethodPost || req.URL.Path != "/api/v1/ca/certificates/verify" {
+			http.NotFound(w, req)
+			return
+		}
+		raw, _ := io.ReadAll(req.Body)
+		_ = json.Unmarshal(raw, &body)
+		decodeErr = protojson.Unmarshal(raw, &decoded)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"code":200,"success":true,"payload":%s}`, payload)
+	}))
+	defer srv.Close()
+
+	adapter := &RESTAdapter{baseURL: srv.URL, httpClient: srv.Client()}
+	res, err := adapter.VerifyCertificate(context.Background(), VerifyCertificateOptions{
+		CertificatePEM:  certPEM,
+		CheckExpiration: true,
+		CheckCRL:        true,
+	})
+	if err != nil {
+		t.Fatalf("VerifyCertificate: %v", err)
+	}
+
+	var field any
+	for _, k := range []string{"certificatePem", "certificate_pem"} {
+		if v, ok := body[k]; ok {
+			field = v
+		}
+	}
+	if field != base64.StdEncoding.EncodeToString(certPEM) {
+		t.Errorf("certificate_pem = %v, want base64 of the PEM", field)
+	}
+	if decodeErr != nil {
+		t.Fatalf("protojson decode of request: %v", decodeErr)
+	}
+	if string(decoded.GetCertificatePem()) != string(certPEM) ||
+		!decoded.GetVerifyExpiration() || !decoded.GetVerifyRevocation() {
+		t.Errorf("request = %+v, want the PEM with both checks", &decoded)
+	}
+	if !res.Valid || res.ChainLength != 2 || len(res.Warnings) != 1 {
+		t.Errorf("result = %+v, want valid with a 2-cert chain and one warning", res)
 	}
 }
