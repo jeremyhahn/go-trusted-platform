@@ -31,6 +31,43 @@ function isRevocationReason(value: string): value is RevocationReason {
   return (REVOCATION_REASONS as readonly string[]).includes(value);
 }
 
+// The certificate as the platform CA REST handler returns it: snake_case
+// or camelCase keys and Unix-second timestamps, which differs from the
+// SDK/proto declaration (#445).
+interface CertificateSubjectWire {
+  commonName?: string;
+  common_name?: string;
+  organization?: string;
+  O?: string;
+  country?: string;
+  C?: string;
+}
+
+interface CertificateWire {
+  serial?: string;
+  issuer?: string;
+  status?: string;
+  Status?: string;
+  isCA?: boolean;
+  is_ca?: boolean;
+  subject?: CertificateSubjectWire;
+  notBefore?: string | number;
+  not_before?: string | number;
+  notAfter?: string | number;
+  not_after?: string | number;
+  keyAlgorithm?: string;
+  key_algorithm?: string;
+  signatureAlgorithm?: string;
+  signature_algorithm?: string;
+  pem?: string;
+  der?: string;
+}
+
+// The response either wraps the certificate at `.certificate` or is it.
+interface CertificateResponseWire extends CertificateWire {
+  certificate?: CertificateWire;
+}
+
 export default function CertificateDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const resolved = use(params);
   const pathname = usePathname();
@@ -50,8 +87,8 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
   // (envelope) or directly on the payload, with snake_case keys and
   // numeric Unix-second timestamps. Tolerate both shapes and convert.
   const certificate = React.useMemo(() => {
-    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-    const cert: any = (response as any)?.certificate ?? response ?? null;
+    const wire = response as unknown as CertificateResponseWire | null | undefined;
+    const cert: CertificateWire | null = wire?.certificate ?? wire ?? null;
     if (!cert) return null;
 
     const status: string = cert.status ?? cert.Status ?? 'VALID';
@@ -65,7 +102,7 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
     const isCA: boolean = cert.isCA ?? cert.is_ca ?? false;
     const mapType = (b: boolean): 'root' | 'intermediate' | 'leaf' => (b ? 'intermediate' : 'leaf');
 
-    const subj = cert.subject || {};
+    const subj: CertificateSubjectWire = cert.subject || {};
     const subjectCN: string = subj.commonName ?? subj.common_name ?? '';
     const subjectParts = [
       subjectCN ? `CN=${subjectCN}` : '',

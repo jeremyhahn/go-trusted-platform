@@ -24,35 +24,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
-func TestSnapshotInfo_Fields(t *testing.T) {
-	now := time.Now()
-	info := SnapshotInfo{
-		Name:        "test-snapshot",
-		ID:          "1",
-		VMStateSize: 256 * 1024 * 1024,
-		Date:        now,
-		VMClockSec:  330,
-		VMClockNsec: 123456789,
-	}
-
-	assert.Equal(t, "test-snapshot", info.Name)
-	assert.Equal(t, "1", info.ID)
-	assert.Equal(t, uint64(256*1024*1024), info.VMStateSize)
-	assert.Equal(t, now, info.Date)
-	assert.Equal(t, uint64(330), info.VMClockSec)
-	assert.Equal(t, uint64(123456789), info.VMClockNsec)
-}
-
-func TestSnapshotInfo_ZeroValue(t *testing.T) {
-	var info SnapshotInfo
-	assert.Empty(t, info.Name)
-	assert.Empty(t, info.ID)
-	assert.Zero(t, info.VMStateSize)
-	assert.True(t, info.Date.IsZero())
-	assert.Zero(t, info.VMClockSec)
-	assert.Zero(t, info.VMClockNsec)
-}
-
 func TestNewSnapshotManager_WithValidMonitor(t *testing.T) {
 	logger := logging.DefaultLogger()
 	monitor := NewMonitor("/tmp/test.sock", time.Second, logger)

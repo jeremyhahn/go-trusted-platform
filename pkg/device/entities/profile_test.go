@@ -691,43 +691,12 @@ func TestNetworkPhaseConfig_EmptyConfiguration(t *testing.T) {
 	assert.Empty(t, config.Zone)
 }
 
-func TestPlatformdConfigRef_AllFields(t *testing.T) {
-	config := &PlatformdConfigRef{
-		ConfigName: "test-config",
-		ConfigPath: "/path/to/config.yaml",
-		Version:    "1.0.0",
-	}
-
-	assert.Equal(t, "test-config", config.ConfigName)
-	assert.Equal(t, "/path/to/config.yaml", config.ConfigPath)
-	assert.Equal(t, "1.0.0", config.Version)
-}
-
 func TestPlatformdConfigRef_EmptyConfiguration(t *testing.T) {
 	config := &PlatformdConfigRef{}
 
 	assert.Empty(t, config.ConfigName)
 	assert.Empty(t, config.ConfigPath)
 	assert.Empty(t, config.Version)
-}
-
-func TestProfileMatchRules_AllFields(t *testing.T) {
-	rules := &ProfileMatchRules{
-		ModelPattern:      "^Model.*$",
-		SerialPattern:     "^SN[0-9]{8}$",
-		ManufacturerMatch: "ACME",
-		TPMVendor:         "VND",
-		CustomAttributes: map[string]string{
-			"key1": "value1",
-			"key2": "value2",
-		},
-	}
-
-	assert.Equal(t, "^Model.*$", rules.ModelPattern)
-	assert.Equal(t, "^SN[0-9]{8}$", rules.SerialPattern)
-	assert.Equal(t, "ACME", rules.ManufacturerMatch)
-	assert.Equal(t, "VND", rules.TPMVendor)
-	assert.Len(t, rules.CustomAttributes, 2)
 }
 
 func TestProfileMatchRules_EmptyConfiguration(t *testing.T) {

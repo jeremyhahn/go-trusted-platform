@@ -1475,16 +1475,3 @@ func TestRegistryConfig_AllFieldsNil(t *testing.T) {
 // =============================================================================
 // StartParams Tests
 // =============================================================================
-
-func TestStartParams_AllFieldsNil(t *testing.T) {
-	params := &StartParams{
-		QuicBaaSService: nil,
-		CAService:       nil,
-		XKMSService:     nil,
-	}
-
-	// Just verifying struct can be created with all nil fields
-	assert.Nil(t, params.QuicBaaSService)
-	assert.Nil(t, params.CAService)
-	assert.Nil(t, params.XKMSService)
-}

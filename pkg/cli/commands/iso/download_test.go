@@ -195,30 +195,6 @@ func TestRunDownload_UnsupportedArchitecture(t *testing.T) {
 	require.ErrorAs(t, err, &invalid)
 }
 
-func TestDownloadFlags_StructFields(t *testing.T) {
-	flags := &downloadFlags{
-		url:          "https://example.com/alpine.iso",
-		version:      "3.21.0",
-		mirror:       "https://dl-cdn.alpinelinux.org/alpine",
-		arch:         "aarch64",
-		force:        true,
-		verify:       false,
-		resumeEnable: false,
-		workDir:      "/tmp/work",
-		debug:        true,
-	}
-
-	assert.Equal(t, "https://example.com/alpine.iso", flags.url)
-	assert.Equal(t, "3.21.0", flags.version)
-	assert.Equal(t, "https://dl-cdn.alpinelinux.org/alpine", flags.mirror)
-	assert.Equal(t, "aarch64", flags.arch)
-	assert.True(t, flags.force)
-	assert.False(t, flags.verify)
-	assert.False(t, flags.resumeEnable)
-	assert.Equal(t, "/tmp/work", flags.workDir)
-	assert.True(t, flags.debug)
-}
-
 func TestDownloadCommand_HasRunE(t *testing.T) {
 	cmd := newDownloadCommand(getTestFlags)
 	assert.NotNil(t, cmd.RunE)

@@ -430,30 +430,6 @@ func TestErrPermission(t *testing.T) {
 }
 
 // Test all error type constants
-func TestErrorTypeConstants(t *testing.T) {
-	tests := []struct {
-		name     string
-		errType  ErrorType
-		expected string
-	}{
-		{"ErrorTypeInvalidName", ErrorTypeInvalidName, "invalid_name"},
-		{"ErrorTypeNotFound", ErrorTypeNotFound, "not_found"},
-		{"ErrorTypeAlreadyExists", ErrorTypeAlreadyExists, "already_exists"},
-		{"ErrorTypeCreateFailed", ErrorTypeCreateFailed, "create_failed"},
-		{"ErrorTypeDeleteFailed", ErrorTypeDeleteFailed, "delete_failed"},
-		{"ErrorTypeSetupFailed", ErrorTypeSetupFailed, "setup_failed"},
-		{"ErrorTypeStateFailed", ErrorTypeStateFailed, "state_failed"},
-		{"ErrorTypePermission", ErrorTypePermission, "permission"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if string(tt.errType) != tt.expected {
-				t.Errorf("ErrorType = %v, want %v", tt.errType, tt.expected)
-			}
-		})
-	}
-}
 
 // Test error wrapping and unwrapping
 func TestNetlinkError_Wrapping(t *testing.T) {

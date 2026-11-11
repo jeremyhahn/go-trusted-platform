@@ -175,7 +175,7 @@ func TestDelete_EvictsThePersistedSSRK(t *testing.T) {
 	tpm := persistedSSRK()
 	tpm.name = name
 
-	handle, err := Delete(tpm)
+	handle, err := Delete(tpm, SSRKHandle)
 
 	require.NoError(t, err)
 	assert.Equal(t, uint32(testSSRKHandle), handle)
@@ -193,7 +193,7 @@ func TestDelete_EmptyHandleIsNotFound(t *testing.T) {
 	tpm := persistedSSRK()
 	tpm.readErr = fmt.Errorf("read public: %w", tpm2.TPMRCHandle)
 
-	_, err := Delete(tpm)
+	_, err := Delete(tpm, SSRKHandle)
 
 	require.ErrorAs(t, err, &ErrNotFound{})
 	assert.Equal(t, codes.NotFound, status.Code(err))
@@ -210,7 +210,7 @@ func TestDelete_NotConfigured(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			tpm := &createTPM{cfg: cfg}
 
-			_, err := Delete(tpm)
+			_, err := Delete(tpm, SSRKHandle)
 
 			require.ErrorAs(t, err, &ErrNotConfigured{})
 			assert.Equal(t, codes.FailedPrecondition, status.Code(err))
@@ -225,7 +225,7 @@ func TestDelete_PropagatesBackendErrors(t *testing.T) {
 		tpm := persistedSSRK()
 		tpm.readErr = readErr
 
-		_, err := Delete(tpm)
+		_, err := Delete(tpm, SSRKHandle)
 
 		require.ErrorIs(t, err, readErr)
 		assert.Nil(t, tpm.deleted)
@@ -235,16 +235,36 @@ func TestDelete_PropagatesBackendErrors(t *testing.T) {
 		tpm := persistedSSRK()
 		tpm.deleteErr = deleteErr
 
-		_, err := Delete(tpm)
+		_, err := Delete(tpm, SSRKHandle)
 
 		require.ErrorIs(t, err, deleteErr)
 	})
 }
 
 func TestDelete_NilTPM(t *testing.T) {
-	_, err := Delete(nil)
+	_, err := Delete(nil, SSRKHandle)
 
 	require.ErrorAs(t, err, &ErrTPMUnavailable{})
+}
+
+// TestDelete_RefusesAnotherHandle (Codex 8183): a handle other than the
+// configured SSRK, a missing one included, is InvalidArgument and evicts
+// nothing.
+func TestDelete_RefusesAnotherHandle(t *testing.T) {
+	for name, requested := range map[string]uint32{"PlatformSRK": 0x81000002, "missing": 0} {
+		t.Run(name, func(t *testing.T) {
+			tpm := persistedSSRK()
+
+			_, err := Delete(tpm, requested)
+
+			var mismatch ErrHandleMismatch
+			require.ErrorAs(t, err, &mismatch)
+			assert.Equal(t, requested, mismatch.Requested)
+			assert.Equal(t, uint32(testSSRKHandle), mismatch.Configured)
+			assert.Equal(t, codes.InvalidArgument, status.Code(err))
+			assert.Nil(t, tpm.deleted, "a mismatched handle must not evict the SSRK")
+		})
+	}
 }
 
 func TestAttributesFromConfig(t *testing.T) {

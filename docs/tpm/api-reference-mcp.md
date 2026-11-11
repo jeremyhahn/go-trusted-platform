@@ -270,14 +270,19 @@ Create an Endorsement Key (EK) using the platform's configured algorithm.
 Evict the Endorsement Key (EK) that `tpm.ek` configures from its persistent
 handle (`TPM2_EvictControl`, TPM 2.0 Library Part 3 §28.5), authorised by the
 `tpm.ek` hierarchy auth. The result is
-`{"success": true, "message": "EK evicted", "handle": <handle>}`. An empty
-handle is `NotFound`; a `tpm.ek` without a handle is `FailedPrecondition`.
+`{"success": true, "message": "EK evicted", "handle": <handle>}`. The
+required `handle` must name the configured `tpm.ek` handle; any other handle,
+or none, is `InvalidArgument` and evicts nothing. An empty handle is
+`NotFound`; a `tpm.ek` without a handle is `FailedPrecondition`.
 
 **Input Schema:**
 ```json
 {
   "type": "object",
-  "properties": {}
+  "properties": {
+    "handle": {"type": "integer"}
+  },
+  "required": ["handle"]
 }
 ```
 
@@ -316,14 +321,19 @@ Create a Storage Root Key (SRK) under the Endorsement Key.
 Evict the Shared SRK that `tpm.ssrk` configures from its persistent handle
 (`TPM2_EvictControl`, TPM 2.0 Library Part 3 §28.5), authorised by the
 `tpm.ssrk` hierarchy auth. The result is
-`{"success": true, "message": "SRK evicted", "handle": <handle>}`. An empty
-handle is `NotFound`; a `tpm.ssrk` without a handle is `FailedPrecondition`.
+`{"success": true, "message": "SRK evicted", "handle": <handle>}`. The
+required `handle` must name the configured `tpm.ssrk` handle; any other
+handle, or none, is `InvalidArgument` and evicts nothing. An empty handle is
+`NotFound`; a `tpm.ssrk` without a handle is `FailedPrecondition`.
 
 **Input Schema:**
 ```json
 {
   "type": "object",
-  "properties": {}
+  "properties": {
+    "handle": {"type": "integer"}
+  },
+  "required": ["handle"]
 }
 ```
 
