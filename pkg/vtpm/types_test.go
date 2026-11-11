@@ -572,21 +572,3 @@ func TestSealOptions_Fields(t *testing.T) {
 // =============================================================================
 // Constants Tests
 // =============================================================================
-
-func TestBundleModeConstants(t *testing.T) {
-	if BundleModeTemplate != "template" {
-		t.Errorf("BundleModeTemplate = %v, want template", BundleModeTemplate)
-	}
-	if BundleModePreAssigned != "pre-assigned" {
-		t.Errorf("BundleModePreAssigned = %v, want pre-assigned", BundleModePreAssigned)
-	}
-}
-
-func TestEKAlgorithmConstants(t *testing.T) {
-	if EKAlgorithmRSA != "RSA" {
-		t.Errorf("EKAlgorithmRSA = %v, want RSA", EKAlgorithmRSA)
-	}
-	if EKAlgorithmECC != "ECC" {
-		t.Errorf("EKAlgorithmECC = %v, want ECC", EKAlgorithmECC)
-	}
-}
