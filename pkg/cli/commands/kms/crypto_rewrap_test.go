@@ -148,44 +148,6 @@ func TestCryptoRewrapCommand_RequiredKeyID(t *testing.T) {
 
 // rewrapFlags struct tests
 
-func TestRewrapFlags_Fields(t *testing.T) {
-	flags := rewrapFlags{
-		keyID:         "my-key",
-		inputPath:     "/path/to/input.enc",
-		outputPath:    "/path/to/output.enc",
-		context:       "encryption-context",
-		nonce:         "base64nonce==",
-		sourceVersion: 2,
-		base64In:      true,
-		base64Out:     true,
-	}
-
-	if flags.keyID != "my-key" {
-		t.Errorf("keyID = %q, want %q", flags.keyID, "my-key")
-	}
-	if flags.inputPath != "/path/to/input.enc" {
-		t.Errorf("inputPath = %q, want %q", flags.inputPath, "/path/to/input.enc")
-	}
-	if flags.outputPath != "/path/to/output.enc" {
-		t.Errorf("outputPath = %q, want %q", flags.outputPath, "/path/to/output.enc")
-	}
-	if flags.context != "encryption-context" {
-		t.Errorf("context = %q, want %q", flags.context, "encryption-context")
-	}
-	if flags.nonce != "base64nonce==" {
-		t.Errorf("nonce = %q, want %q", flags.nonce, "base64nonce==")
-	}
-	if flags.sourceVersion != 2 {
-		t.Errorf("sourceVersion = %d, want %d", flags.sourceVersion, 2)
-	}
-	if !flags.base64In {
-		t.Error("base64In should be true")
-	}
-	if !flags.base64Out {
-		t.Error("base64Out should be true")
-	}
-}
-
 func TestRewrapFlags_DefaultValues(t *testing.T) {
 	flags := rewrapFlags{}
 

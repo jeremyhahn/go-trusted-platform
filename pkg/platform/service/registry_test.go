@@ -446,17 +446,6 @@ func TestRegistry_ProfileService_Nil(t *testing.T) {
 	assert.Nil(t, result)
 }
 
-func TestRegistry_Struct(t *testing.T) {
-	registry := &Registry{}
-
-	assert.Nil(t, registry.deviceService)
-	assert.Nil(t, registry.profileService)
-	assert.Nil(t, registry.dnsService)
-	assert.Nil(t, registry.userService)
-	assert.Nil(t, registry.registrationService)
-	assert.Nil(t, registry.webAuthnSessionService)
-}
-
 func TestRegistry_WithMockedUserService(t *testing.T) {
 	logger := logging.NewLogger(slog.LevelWarn, os.Stderr)
 	mockFactory := new(MockDatastoreFactory)

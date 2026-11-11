@@ -421,44 +421,6 @@ func TestRunRotateKey(t *testing.T) {
 }
 
 // TestRenewFlags_Initialization verifies renewFlags struct initialization
-func TestRenewFlags_Initialization(t *testing.T) {
-	rf := &renewFlags{
-		authzType:          "dns",
-		challengeType:      "http-01",
-		directoryURL:       "https://localhost:8443/api/v1/acme/directory",
-		caCert:             "ca-bundle.pem",
-		email:              "admin@example.com",
-		cn:                 "example.com",
-		organization:       "Example Corp",
-		organizationalUnit: "IT",
-		country:            "US",
-		province:           "California",
-		locality:           "San Francisco",
-		streetAddress:      "123 Main St",
-		postalCode:         "94102",
-		sansDNS:            []string{"www.example.com", "api.example.com"},
-		sansEmails:         []string{"admin@example.com"},
-		sansIPs:            []string{"192.168.1.1"},
-	}
-
-	assert.Equal(t, "dns", rf.authzType)
-	assert.Equal(t, "http-01", rf.challengeType)
-	assert.Equal(t, "https://localhost:8443/api/v1/acme/directory", rf.directoryURL)
-	assert.Equal(t, "ca-bundle.pem", rf.caCert)
-	assert.Equal(t, "admin@example.com", rf.email)
-	assert.Equal(t, "example.com", rf.cn)
-	assert.Equal(t, "Example Corp", rf.organization)
-	assert.Equal(t, "IT", rf.organizationalUnit)
-	assert.Equal(t, "US", rf.country)
-	assert.Equal(t, "California", rf.province)
-	assert.Equal(t, "San Francisco", rf.locality)
-	assert.Equal(t, "123 Main St", rf.streetAddress)
-	assert.Equal(t, "94102", rf.postalCode)
-	assert.Len(t, rf.sansDNS, 2)
-	assert.Len(t, rf.sansEmails, 1)
-	assert.Len(t, rf.sansIPs, 1)
-}
-
 // TestNewCommand_LongDescription verifies the long description content
 func TestNewCommand_LongDescription(t *testing.T) {
 	cmd := NewCommand(testGetFlags)

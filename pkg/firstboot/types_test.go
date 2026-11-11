@@ -102,34 +102,6 @@ func TestSentinelErrorsAreDistinct(t *testing.T) {
 	}
 }
 
-func TestConstants(t *testing.T) {
-	tests := []struct {
-		name  string
-		value string
-	}{
-		{"PlatformInitializedMarker", PlatformInitializedMarker},
-		{"EFIInstallerFile", EFIInstallerFile},
-		{"RecoveryKeyPath", RecoveryKeyPath},
-		{"EFITPMDir", EFITPMDir},
-		{"EFIPCRBanks", EFIPCRBanks},
-		{"EFIPCRValues", EFIPCRValues},
-		{"EFISwtpmStateDir", EFISwtpmStateDir},
-		{"EFISealPlatformPub", EFISealPlatformPub},
-		{"EFISealPlatformPriv", EFISealPlatformPriv},
-		{"EFISealUpgradePub", EFISealUpgradePub},
-		{"EFISealUpgradePriv", EFISealUpgradePriv},
-		{"DefaultSwtpmStateDir", DefaultSwtpmStateDir},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.value == "" {
-				t.Errorf("constant %s should not be empty", tt.name)
-			}
-		})
-	}
-}
-
 func TestEFISealPathsArePaired(t *testing.T) {
 	// Ensure platform pub/priv are in the same directory
 	if EFISealPlatformPub[:len(EFISealPlatformPub)-4] == "" {

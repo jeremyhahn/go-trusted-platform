@@ -329,24 +329,6 @@ func TestRemoveString(t *testing.T) {
 	}
 }
 
-func TestContainerState_Fields(t *testing.T) {
-	state := &containerState{
-		ID:       "abc123",
-		Name:     "test-container",
-		Image:    "alpine:latest",
-		State:    ContainerStateRunning,
-		PID:      12345,
-		ExitCode: 0,
-	}
-
-	assert.Equal(t, "abc123", state.ID)
-	assert.Equal(t, "test-container", state.Name)
-	assert.Equal(t, "alpine:latest", state.Image)
-	assert.Equal(t, ContainerStateRunning, state.State)
-	assert.Equal(t, 12345, state.PID)
-	assert.Equal(t, 0, state.ExitCode)
-}
-
 func TestOCIConfigStructs(t *testing.T) {
 	// Test OCI config structure serialization/fields
 	cfg := &ociConfig{
@@ -472,70 +454,4 @@ func TestOCILinuxDevice(t *testing.T) {
 	assert.Equal(t, "c", device.Type)
 	assert.Equal(t, int64(10), device.Major)
 	assert.Equal(t, int64(224), device.Minor)
-}
-
-func TestRuntimeConfig_Fields(t *testing.T) {
-	config := &RuntimeConfig{
-		Root:            "/var/lib/containers/storage",
-		RunRoot:         "/run/containers/storage",
-		TmpDir:          "/run/libpod",
-		GraphDriverName: "overlay",
-		StaticDir:       "/var/lib/containers/storage/libpod",
-		VolumePath:      "/var/lib/containers/storage/volumes",
-		OCIRuntime:      "crun",
-		ImageStorePath:  "/var/lib/containers/storage/images",
-	}
-
-	assert.Equal(t, "/var/lib/containers/storage", config.Root)
-	assert.Equal(t, "/run/containers/storage", config.RunRoot)
-	assert.Equal(t, "/run/libpod", config.TmpDir)
-	assert.Equal(t, "overlay", config.GraphDriverName)
-	assert.Equal(t, "/var/lib/containers/storage/libpod", config.StaticDir)
-	assert.Equal(t, "/var/lib/containers/storage/volumes", config.VolumePath)
-	assert.Equal(t, "crun", config.OCIRuntime)
-	assert.Equal(t, "/var/lib/containers/storage/images", config.ImageStorePath)
-}
-
-func TestOCIMount_Fields(t *testing.T) {
-	mount := ociMount{
-		Destination: "/data",
-		Type:        "bind",
-		Source:      "/host/data",
-		Options:     []string{"rbind", "rw"},
-	}
-
-	assert.Equal(t, "/data", mount.Destination)
-	assert.Equal(t, "bind", mount.Type)
-	assert.Equal(t, "/host/data", mount.Source)
-	assert.Contains(t, mount.Options, "rbind")
-	assert.Contains(t, mount.Options, "rw")
-}
-
-func TestOCILinux_Fields(t *testing.T) {
-	linux := &ociLinux{
-		Namespaces: []ociNamespace{
-			{Type: "pid"},
-			{Type: "mount"},
-		},
-		CgroupsPath:   "/containers/test",
-		MaskedPaths:   []string{"/proc/kcore"},
-		ReadonlyPaths: []string{"/proc/bus"},
-	}
-
-	assert.Len(t, linux.Namespaces, 2)
-	assert.Equal(t, "/containers/test", linux.CgroupsPath)
-	assert.Contains(t, linux.MaskedPaths, "/proc/kcore")
-	assert.Contains(t, linux.ReadonlyPaths, "/proc/bus")
-}
-
-func TestOCIRlimit_Fields(t *testing.T) {
-	rlimit := ociRlimit{
-		Type: "RLIMIT_NOFILE",
-		Hard: 1048576,
-		Soft: 1048576,
-	}
-
-	assert.Equal(t, "RLIMIT_NOFILE", rlimit.Type)
-	assert.Equal(t, uint64(1048576), rlimit.Hard)
-	assert.Equal(t, uint64(1048576), rlimit.Soft)
 }

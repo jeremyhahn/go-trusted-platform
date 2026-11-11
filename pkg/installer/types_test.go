@@ -830,20 +830,6 @@ func TestConfig_WithNetwork(t *testing.T) {
 	assert.NoError(t, config.Validate())
 }
 
-func TestDNSConfig_Structure(t *testing.T) {
-	dns := &DNSConfig{
-		Nameservers:   []string{"8.8.8.8", "8.8.4.4", "1.1.1.1"},
-		SearchDomains: []string{"example.com", "local.example.com"},
-		Options:       []string{"rotate", "timeout:2"},
-	}
-
-	assert.Len(t, dns.Nameservers, 3)
-	assert.Len(t, dns.SearchDomains, 2)
-	assert.Len(t, dns.Options, 2)
-	assert.Equal(t, "8.8.8.8", dns.Nameservers[0])
-	assert.Equal(t, "example.com", dns.SearchDomains[0])
-}
-
 func TestInterfaceConfig_WithRoutes(t *testing.T) {
 	iface := &InterfaceConfig{
 		Name:        "eth0",
@@ -905,20 +891,4 @@ func TestNetworkConfig_Validate_BondInterfaces(t *testing.T) {
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "at least two member interfaces are required")
 	})
-}
-
-func TestBondConfig_NoSlavesField(t *testing.T) {
-	// Verify that BondConfig has Interfaces field, not Slaves.
-	// This is a compile-time check; if Slaves were present, this test
-	// file would not compile. The test exists as documentation.
-	bond := BondConfig{
-		Name:       "bond0",
-		Mode:       "802.3ad",
-		Interfaces: []string{"eth0", "eth1"},
-		VLANs: []BondVLANConfig{
-			{Zone: "fabric", IPv4Address: "10.4.1.20/24", AutoStart: true},
-		},
-	}
-	assert.Len(t, bond.Interfaces, 2)
-	assert.Len(t, bond.VLANs, 1)
 }

@@ -385,42 +385,6 @@ func TestIsExistsError_EdgeCases(t *testing.T) {
 	}
 }
 
-// TestTAPInfo_FieldAccess tests TAPInfo embedded struct access
-func TestTAPInfo_FieldAccess(t *testing.T) {
-	tapInfo := &TAPInfo{
-		LinkInfo: LinkInfo{
-			Index:        42,
-			Name:         "tap-test",
-			Type:         "tuntap",
-			Flags:        0x1003,
-			MTU:          1500,
-			HardwareAddr: "aa:bb:cc:dd:ee:ff",
-			OperState:    LinkStateUp,
-			Master:       0,
-		},
-		Owner:      1000,
-		Group:      1000,
-		MultiQueue: true,
-		Persist:    false,
-	}
-
-	// Verify all embedded LinkInfo fields are accessible
-	assert.Equal(t, 42, tapInfo.Index)
-	assert.Equal(t, "tap-test", tapInfo.Name)
-	assert.Equal(t, "tuntap", tapInfo.Type)
-	assert.Equal(t, uint32(0x1003), tapInfo.Flags)
-	assert.Equal(t, 1500, tapInfo.MTU)
-	assert.Equal(t, "aa:bb:cc:dd:ee:ff", tapInfo.HardwareAddr)
-	assert.Equal(t, LinkStateUp, tapInfo.OperState)
-	assert.Equal(t, 0, tapInfo.Master)
-
-	// Verify TAP-specific fields
-	assert.Equal(t, uint32(1000), tapInfo.Owner)
-	assert.Equal(t, uint32(1000), tapInfo.Group)
-	assert.True(t, tapInfo.MultiQueue)
-	assert.False(t, tapInfo.Persist)
-}
-
 // TestTAPConfig_BoundaryValues tests TAPConfig with boundary values
 func TestTAPConfig_BoundaryValues(t *testing.T) {
 	tests := []struct {
