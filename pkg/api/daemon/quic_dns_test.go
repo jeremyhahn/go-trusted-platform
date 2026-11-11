@@ -177,14 +177,6 @@ func TestCountZoneRecords(t *testing.T) {
 // Wire struct + error behaviors
 // =============================================================================
 
-func TestDNSRecord_Fields(t *testing.T) {
-	record := &DNSRecord{Name: "mail", RecordType: "MX", Value: "mx.", TTL: 3600, Priority: 10}
-	assert.Equal(t, "mail", record.Name)
-	assert.Equal(t, "MX", record.RecordType)
-	assert.Equal(t, uint32(3600), record.TTL)
-	assert.Equal(t, uint16(10), record.Priority)
-}
-
 func TestDNSErrors(t *testing.T) {
 	assert.Equal(t, "DNS service not available", ErrDNSServiceNotAvailable{}.Error())
 	assert.Equal(t, "DNS zone not found: example.com", ErrDNSZoneNotFound{Zone: "example.com"}.Error())

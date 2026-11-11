@@ -40,20 +40,6 @@ func TestErrResetPasswordUnsupported(t *testing.T) {
 	assert.Equal(t, "service: reset password feature unsupported by auth store", ErrResetPasswordUnsupported.Error())
 }
 
-func TestUserCredential_Struct(t *testing.T) {
-	cred := UserCredential{
-		OrgID:    123,
-		Email:    "test@example.com",
-		Password: "secret123",
-		AuthType: 1,
-	}
-
-	assert.Equal(t, uint64(123), cred.OrgID)
-	assert.Equal(t, "test@example.com", cred.Email)
-	assert.Equal(t, "secret123", cred.Password)
-	assert.Equal(t, 1, cred.AuthType)
-}
-
 func TestUserCredential_Empty(t *testing.T) {
 	cred := UserCredential{}
 

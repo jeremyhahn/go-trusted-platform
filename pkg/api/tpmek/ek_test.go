@@ -156,7 +156,7 @@ func TestDelete_EvictsThePersistedEK(t *testing.T) {
 	name := tpm2.TPM2BName{Buffer: []byte{0x00, 0x0B, 0xEC}}
 	tpm := &fakeTPM{cfg: configuredEK(), name: name}
 
-	handle, err := Delete(tpm)
+	handle, err := Delete(tpm, uint32(testEKHandle))
 
 	require.NoError(t, err)
 	assert.Equal(t, uint32(testEKHandle), handle)
@@ -173,7 +173,7 @@ func TestDelete_EvictsThePersistedEK(t *testing.T) {
 func TestDelete_EmptyHandleIsNotFound(t *testing.T) {
 	tpm := &fakeTPM{cfg: configuredEK(), readErr: fmt.Errorf("read public: %w", tpm2.TPMRCHandle)}
 
-	_, err := Delete(tpm)
+	_, err := Delete(tpm, uint32(testEKHandle))
 
 	require.ErrorAs(t, err, &ErrNotFound{})
 	assert.Equal(t, codes.NotFound, status.Code(err))
@@ -190,7 +190,7 @@ func TestDelete_NotConfigured(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			tpm := &fakeTPM{cfg: cfg}
 
-			_, err := Delete(tpm)
+			_, err := Delete(tpm, uint32(testEKHandle))
 
 			require.ErrorAs(t, err, &ErrNotConfigured{})
 			assert.Equal(t, codes.FailedPrecondition, status.Code(err))
@@ -204,7 +204,7 @@ func TestDelete_PropagatesBackendErrors(t *testing.T) {
 		readErr := errors.New("TPM_RC_FAILURE")
 		tpm := &fakeTPM{cfg: configuredEK(), readErr: readErr}
 
-		_, err := Delete(tpm)
+		_, err := Delete(tpm, uint32(testEKHandle))
 
 		require.ErrorIs(t, err, readErr)
 		assert.Nil(t, tpm.deleted)
@@ -213,17 +213,38 @@ func TestDelete_PropagatesBackendErrors(t *testing.T) {
 		deleteErr := errors.New("TPM_RC_BAD_AUTH")
 		tpm := &fakeTPM{cfg: configuredEK(), deleteErr: deleteErr}
 
-		_, err := Delete(tpm)
+		_, err := Delete(tpm, uint32(testEKHandle))
 
 		require.ErrorIs(t, err, deleteErr)
 	})
 }
 
 func TestDelete_NilTPM(t *testing.T) {
-	_, err := Delete(nil)
+	_, err := Delete(nil, uint32(testEKHandle))
 
 	require.ErrorAs(t, err, &ErrTPMUnavailable{})
 	assert.Equal(t, codes.Unavailable, status.Code(err))
+}
+
+// TestDelete_RefusesAnotherHandle (Codex 8200): a handle other than the
+// configured EK, a missing one included, is InvalidArgument and evicts
+// nothing.
+func TestDelete_RefusesAnotherHandle(t *testing.T) {
+	for name, requested := range map[string]uint32{"SSRK": 0x81000001, "missing": 0} {
+		t.Run(name, func(t *testing.T) {
+			tpm := &fakeTPM{cfg: configuredEK()}
+
+			_, err := Delete(tpm, requested)
+
+			var mismatch ErrHandleMismatch
+			require.ErrorAs(t, err, &mismatch)
+			assert.Equal(t, requested, mismatch.Requested)
+			assert.Equal(t, uint32(testEKHandle), mismatch.Configured)
+			assert.Equal(t, codes.InvalidArgument, status.Code(err))
+			assert.Nil(t, tpm.deleted, "a mismatched handle must not evict the EK")
+			assert.Zero(t, tpm.readHandle, "a mismatched handle must be refused before the TPM is read")
+		})
+	}
 }
 
 func TestAttributesFromConfig(t *testing.T) {

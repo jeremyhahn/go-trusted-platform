@@ -33,6 +33,8 @@ var ErrMockServiceError = errors.New("mock service error")
 type mockServiceProvider struct {
 	// lastSRKHandle records the handle the last TPMGetSRK call carried.
 	lastSRKHandle uint32
+	// lastEKHandle records the handle the last TPMDeleteEK call carried.
+	lastEKHandle uint32
 
 	// lastZoneCreate and lastZoneUpdate record the last zone requests.
 	lastZoneCreate     *NetworkZoneCreateRequest
@@ -2663,7 +2665,8 @@ func (m *mockServiceProvider) TPMCreateEK(ctx context.Context) (interface{}, err
 	return map[string]interface{}{"success": true}, nil
 }
 
-func (m *mockServiceProvider) TPMDeleteEK(ctx context.Context) (interface{}, error) {
+func (m *mockServiceProvider) TPMDeleteEK(ctx context.Context, handle uint32) (interface{}, error) {
+	m.lastEKHandle = handle
 	return map[string]interface{}{"success": true}, nil
 }
 
@@ -2681,7 +2684,8 @@ func (m *mockServiceProvider) TPMCreateSRK(ctx context.Context) (interface{}, er
 	return map[string]interface{}{"success": true}, nil
 }
 
-func (m *mockServiceProvider) TPMDeleteSRK(ctx context.Context) (interface{}, error) {
+func (m *mockServiceProvider) TPMDeleteSRK(ctx context.Context, handle uint32) (interface{}, error) {
+	m.lastSRKHandle = handle
 	return map[string]interface{}{"success": true}, nil
 }
 

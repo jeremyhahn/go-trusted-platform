@@ -1228,11 +1228,13 @@ go-trusted-platform#937, removed by the go-quicbaas v0.16.0-alpha adoption):
 - `pkg/api/daemon` `TestTPMSimulator_ActivateCredentialRefusesAForeignCredential`
 - `pkg/app` `TestDeviceActivation_IDevIDOverMTLS`
 - `pkg/app` `TestFetchProfileAndActivate_IDevIDOverMTLS`,
-  `TestIDevIDSigner_NilPublicKey` and
-  `TestTPMSigner_IDevIDSignsTLS13ClientCertificateVerify`, which each run
-  after the one before and surface only in the rerun's rounds 1 to 3; all
-  four `pkg/app` rows reach `CreateIDevID` through `newSimulatedIDevID`, so
-  a `pkg/app` rerun is bounded at four rounds
+  `TestIDevIDSigner_NilPublicKey`,
+  `TestTPMSigner_IDevIDSignsTLS13ClientCertificateVerify` and
+  `TestInitWebServiceKeyAttributes_IDevIDReuseCarriesIDevIDSubject`, which
+  each run after the one before and surface only in the rerun's rounds 1 to
+  4; all five `pkg/app` rows reach `CreateIDevID`, the first four through
+  `newSimulatedIDevID` and the IDevID reuse test by calling it directly, so
+  a `pkg/app` rerun is bounded at five rounds
 
 ## Test Veths Have One Queue Per End
 
