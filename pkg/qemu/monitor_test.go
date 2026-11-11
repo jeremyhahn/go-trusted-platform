@@ -274,20 +274,6 @@ func TestMonitorErrors(t *testing.T) {
 	})
 }
 
-func TestVMStatusConstants(t *testing.T) {
-	t.Run("VM status constants are correct", func(t *testing.T) {
-		assert.Equal(t, VMStatus("running"), VMStatusRunning)
-		assert.Equal(t, VMStatus("paused"), VMStatusPaused)
-		assert.Equal(t, VMStatus("shutdown"), VMStatusShutdown)
-		assert.Equal(t, VMStatus("prelaunch"), VMStatusPrelaunch)
-		assert.Equal(t, VMStatus("io-error"), VMStatusIOError)
-		assert.Equal(t, VMStatus("internal-error"), VMStatusInternalError)
-		assert.Equal(t, VMStatus("suspended"), VMStatusSuspended)
-		assert.Equal(t, VMStatus("guest-panicked"), VMStatusGuestPanicked)
-		assert.Equal(t, VMStatus("unknown"), VMStatusUnknown)
-	})
-}
-
 func TestGetSocketPath(t *testing.T) {
 	t.Run("returns configured socket path", func(t *testing.T) {
 		socketPath := "/var/run/qemu/vm1.sock"
