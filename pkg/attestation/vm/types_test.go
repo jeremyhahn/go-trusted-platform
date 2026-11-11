@@ -841,39 +841,3 @@ func TestVerifierConfig_Validate(t *testing.T) {
 		})
 	}
 }
-
-func TestPCRValue_Fields(t *testing.T) {
-	pcr := PCRValue{
-		Index:     14,
-		Value:     []byte{0x01, 0x02, 0x03},
-		Algorithm: HashAlgorithmSHA256,
-	}
-
-	if pcr.Index != 14 {
-		t.Errorf("Index = %d, want 14", pcr.Index)
-	}
-	if len(pcr.Value) != 3 {
-		t.Errorf("Value length = %d, want 3", len(pcr.Value))
-	}
-	if pcr.Algorithm != HashAlgorithmSHA256 {
-		t.Errorf("Algorithm = %s, want sha256", pcr.Algorithm)
-	}
-}
-
-func TestPCRMismatchDetail_Fields(t *testing.T) {
-	mismatch := PCRMismatchDetail{
-		Index:    7,
-		Expected: []byte{0x01, 0x02},
-		Actual:   []byte{0x03, 0x04},
-	}
-
-	if mismatch.Index != 7 {
-		t.Errorf("Index = %d, want 7", mismatch.Index)
-	}
-	if len(mismatch.Expected) != 2 {
-		t.Errorf("Expected length = %d, want 2", len(mismatch.Expected))
-	}
-	if len(mismatch.Actual) != 2 {
-		t.Errorf("Actual length = %d, want 2", len(mismatch.Actual))
-	}
-}

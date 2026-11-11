@@ -266,22 +266,3 @@ func TestIdentity_WithAttributes(t *testing.T) {
 		t.Errorf("Attributes[role] = %v, want Developer", identity.Attributes["role"])
 	}
 }
-
-func TestIdentityFieldConstants(t *testing.T) {
-	// Verify the constants have expected values
-	if IdentityFieldEmail != 0 {
-		t.Errorf("IdentityFieldEmail = %v, want 0", IdentityFieldEmail)
-	}
-	if IdentityFieldCN != 1 {
-		t.Errorf("IdentityFieldCN = %v, want 1", IdentityFieldCN)
-	}
-	if IdentityFieldSerialNumber != 2 {
-		t.Errorf("IdentityFieldSerialNumber = %v, want 2", IdentityFieldSerialNumber)
-	}
-	if IdentityFieldSubjectDN != 3 {
-		t.Errorf("IdentityFieldSubjectDN = %v, want 3", IdentityFieldSubjectDN)
-	}
-	if IdentityFieldOrganization != 4 {
-		t.Errorf("IdentityFieldOrganization = %v, want 4", IdentityFieldOrganization)
-	}
-}

@@ -1,6 +1,6 @@
 module github.com/jeremyhahn/go-trusted-platform
 
-go 1.27.3
+go 1.27.4
 
 // VictoriaMetrics/metrics v1.18.1 requires deleted valyala/histogram repo
 replace github.com/VictoriaMetrics/metrics => github.com/VictoriaMetrics/metrics v1.35.1 // held: the latest version is not in the module cache and cannot be fetched offline in #933

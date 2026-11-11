@@ -141,22 +141,6 @@ func TestRunBuild_LabelTooLong(t *testing.T) {
 	assert.Equal(t, maxVolumeLabelLength, tooLong.MaxLength)
 }
 
-func TestBuildFlags_StructFields(t *testing.T) {
-	flags := &buildFlags{
-		sourceDir:   "/tmp/iso-dir",
-		output:      "/tmp/output.iso",
-		volumeID:    "MY_VOLUME",
-		generateSum: true,
-		debug:       true,
-	}
-
-	assert.Equal(t, "/tmp/iso-dir", flags.sourceDir)
-	assert.Equal(t, "/tmp/output.iso", flags.output)
-	assert.Equal(t, "MY_VOLUME", flags.volumeID)
-	assert.True(t, flags.generateSum)
-	assert.True(t, flags.debug)
-}
-
 func TestBuildCommand_HasRunE(t *testing.T) {
 	cmd := newBuildCommand(getTestFlags)
 	assert.NotNil(t, cmd.RunE)

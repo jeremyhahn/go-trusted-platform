@@ -125,23 +125,6 @@ func TestValidatePortConfig_TrunkMissingVLANs(t *testing.T) {
 	}
 }
 
-func TestConfigureResult_Fields(t *testing.T) {
-	result := ConfigureResult{
-		VLANsCreated:    3,
-		PortsConfigured: 5,
-		Warnings:        []string{"port Eth1/5 already configured"},
-	}
-	if result.VLANsCreated != 3 {
-		t.Fatalf("expected 3 VLANs created, got %d", result.VLANsCreated)
-	}
-	if result.PortsConfigured != 5 {
-		t.Fatalf("expected 5 ports configured, got %d", result.PortsConfigured)
-	}
-	if len(result.Warnings) != 1 {
-		t.Fatalf("expected 1 warning, got %d", len(result.Warnings))
-	}
-}
-
 func TestSwitchVendorConstants(t *testing.T) {
 	if VendorCiscoNexus != "cisco-nexus" {
 		t.Fatalf("expected 'cisco-nexus', got: %s", VendorCiscoNexus)

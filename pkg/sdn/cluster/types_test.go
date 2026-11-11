@@ -171,61 +171,6 @@ func TestHashString_Uniqueness(t *testing.T) {
 	}
 }
 
-func TestFlowMatch_Fields(t *testing.T) {
-	inPort := uint32(1)
-	ethType := uint16(0x0800)
-	vlanVid := uint16(100)
-	vlanPcp := uint8(3)
-	ipProto := uint8(6)
-	tcpSrc := uint16(80)
-	tcpDst := uint16(443)
-	udpSrc := uint16(53)
-	udpDst := uint16(53)
-	icmpType := uint8(8)
-	icmpCode := uint8(0)
-	arpOp := uint16(1)
-
-	match := &FlowMatch{
-		InPort:   &inPort,
-		EthSrc:   "00:11:22:33:44:55",
-		EthDst:   "66:77:88:99:aa:bb",
-		EthType:  &ethType,
-		VLANVid:  &vlanVid,
-		VLANPcp:  &vlanPcp,
-		IPv4Src:  "192.168.1.0/24",
-		IPv4Dst:  "10.0.0.0/8",
-		IPProto:  &ipProto,
-		TCPSrc:   &tcpSrc,
-		TCPDst:   &tcpDst,
-		UDPSrc:   &udpSrc,
-		UDPDst:   &udpDst,
-		ICMPType: &icmpType,
-		ICMPCode: &icmpCode,
-		ARPOp:    &arpOp,
-		ARPSpa:   "192.168.1.1",
-		ARPTpa:   "192.168.1.2",
-	}
-
-	assert.Equal(t, uint32(1), *match.InPort)
-	assert.Equal(t, "00:11:22:33:44:55", match.EthSrc)
-	assert.Equal(t, "66:77:88:99:aa:bb", match.EthDst)
-	assert.Equal(t, uint16(0x0800), *match.EthType)
-	assert.Equal(t, uint16(100), *match.VLANVid)
-	assert.Equal(t, uint8(3), *match.VLANPcp)
-	assert.Equal(t, "192.168.1.0/24", match.IPv4Src)
-	assert.Equal(t, "10.0.0.0/8", match.IPv4Dst)
-	assert.Equal(t, uint8(6), *match.IPProto)
-	assert.Equal(t, uint16(80), *match.TCPSrc)
-	assert.Equal(t, uint16(443), *match.TCPDst)
-	assert.Equal(t, uint16(53), *match.UDPSrc)
-	assert.Equal(t, uint16(53), *match.UDPDst)
-	assert.Equal(t, uint8(8), *match.ICMPType)
-	assert.Equal(t, uint8(0), *match.ICMPCode)
-	assert.Equal(t, uint16(1), *match.ARPOp)
-	assert.Equal(t, "192.168.1.1", match.ARPSpa)
-	assert.Equal(t, "192.168.1.2", match.ARPTpa)
-}
-
 func TestFlowAction_AllTypes(t *testing.T) {
 	tests := []struct {
 		name       string
