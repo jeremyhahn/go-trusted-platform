@@ -43,7 +43,7 @@ require (
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/go-tpm v0.9.8
-	github.com/google/go-tpm-tools v0.4.9 // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	github.com/google/go-tpm-tools v0.4.10 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	github.com/google/logger v1.1.1 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	github.com/google/nftables v0.3.0
 	github.com/google/uuid v1.6.0
@@ -51,10 +51,10 @@ require (
 	github.com/insomniacslk/dhcp v0.0.0-20251020182700-175e84fbb167 // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	github.com/jeremyhahn/go-codec v1.5.1-alpha // held: v1.5.0-alpha is not in the module cache and cannot be fetched offline in #933; go-quicbaas, go-xkms and go-qrdb (every cached tag) still require v1.4.0
 	github.com/jeremyhahn/go-luks2 v1.0.3-alpha
-	github.com/jeremyhahn/go-quicbaas v0.12.0-alpha // held: the v0.16.0-alpha adoption is #906/#937 (fix-qbsdk16)
-	github.com/jeremyhahn/go-quicbaas/sdk/go v0.12.0-alpha // held: the v0.16.0-alpha adoption is #906/#937 (fix-qbsdk16)
+	github.com/jeremyhahn/go-quicbaas v0.16.1-alpha
+	github.com/jeremyhahn/go-quicbaas/sdk/go v0.16.0-alpha
 	github.com/jeremyhahn/go-trusted-platform/sdk/go v0.1.0-alpha
-	github.com/jeremyhahn/trusted-firmware/sdk/go v0.3.0-alpha // held: the latest version is not in the module cache and cannot be fetched offline in #933
+	github.com/jeremyhahn/trusted-firmware/sdk/go v0.4.2-alpha // held: the latest version is not in the module cache and cannot be fetched offline in #933
 	github.com/klauspost/compress v1.20.2 // held: v1.20.3 is not in the module cache and cannot be fetched offline (m1985a: module lookup disabled by GOPROXY=off)
 	github.com/libp2p/go-libp2p v0.50.0 // held: v0.50.0 requires exactly quic-go v0.62.0 and webtransport-go v0.13.0; later versions are not in the module cache and cannot be fetched offline in #1140
 	github.com/libp2p/go-libp2p-kad-dht v0.37.0 // held: the latest version is not in the module cache and cannot be fetched offline in #933
@@ -211,7 +211,7 @@ require (
 	github.com/golang/snappy v1.0.0 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/gopacket v1.1.19 // indirect
-	github.com/google/jsonschema-go v0.4.2 // indirect
+	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/google/s2a-go v0.1.11 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.24 // indirect
 	github.com/googleapis/gax-go/v2 v2.27.0 // indirect
@@ -243,7 +243,7 @@ require (
 	github.com/jackpal/go-nat-pmp v1.0.2 // indirect
 	github.com/jbenet/go-temp-err-catcher v0.1.0 // indirect
 	github.com/jchv/go-winloader v0.0.0-20250406163304-c1995be93bd1 // indirect
-	github.com/jeremyhahn/go-auth v0.2.0-alpha // indirect
+	github.com/jeremyhahn/go-auth v0.4.0-alpha // indirect
 	github.com/jeremyhahn/go-enclave v0.11.1-alpha // indirect
 	github.com/jeremyhahn/go-frost v0.3.0-alpha // indirect
 	github.com/jeremyhahn/go-objstore v0.9.1-alpha // indirect
@@ -251,8 +251,8 @@ require (
 	github.com/jeremyhahn/go-qrdb/sdk/go v0.58.2-alpha // indirect
 	github.com/jeremyhahn/go-quicraft v0.24.3-alpha // indirect
 	github.com/jeremyhahn/go-truststrap v0.7.1-alpha // indirect
-	github.com/jeremyhahn/go-xkms v0.17.0-alpha // indirect
-	github.com/jeremyhahn/go-xkms/sdk/go v0.17.0-alpha // indirect
+	github.com/jeremyhahn/go-xkms v0.64.2-alpha // indirect
+	github.com/jeremyhahn/go-xkms/sdk/go v0.64.2-alpha // indirect
 	github.com/jeroenrinzema/psql-wire v0.20.0 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/josharian/native v1.1.0 // indirect
@@ -277,7 +277,10 @@ require (
 	github.com/lestrrat-go/dsig v1.0.0 // indirect
 	github.com/lestrrat-go/dsig-secp256k1 v1.0.0 // indirect
 	github.com/lestrrat-go/httpcc v1.0.1 // indirect
+	github.com/lestrrat-go/httprc v1.0.6 // indirect
 	github.com/lestrrat-go/httprc/v3 v3.0.1 // indirect
+	github.com/lestrrat-go/iter v1.0.2 // indirect
+	github.com/lestrrat-go/jwx/v2 v2.1.7 // indirect
 	github.com/lestrrat-go/jwx/v3 v3.0.12 // indirect
 	github.com/lestrrat-go/option v1.0.1 // indirect
 	github.com/lestrrat-go/option/v2 v2.0.0 // indirect
@@ -325,6 +328,7 @@ require (
 	github.com/opentracing/opentracing-go v1.2.0 // indirect
 	github.com/orcaman/concurrent-map/v2 v2.0.1 // indirect
 	github.com/pbnjay/memory v0.0.0-20210728143218-7b4eea64cf58 // indirect
+	github.com/pelletier/go-toml v1.9.5 // indirect
 	github.com/pelletier/go-toml/v2 v2.4.3 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.23 // indirect
@@ -367,10 +371,10 @@ require (
 	github.com/ryanuber/go-glob v1.0.0 // indirect
 	github.com/sagikazarmark/locafero v0.12.0 // indirect
 	github.com/samber/lo v1.53.0 // indirect
-	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
 	github.com/segmentio/fasthash v1.0.3 // indirect
-	github.com/sirupsen/logrus v1.10.1 // indirect
+	github.com/sirupsen/logrus v1.10.2 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	github.com/spf13/afero v1.15.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
@@ -389,12 +393,17 @@ require (
 	github.com/valyala/fastjson v1.6.4 // indirect
 	github.com/valyala/fasttemplate v1.2.2 // indirect
 	github.com/vektah/gqlparser/v2 v2.5.31 // indirect
+	github.com/veraison/corim v1.1.2 // indirect
+	github.com/veraison/eat v0.0.0-20210331113810-3da8a4dd42ff // indirect
+	github.com/veraison/go-cose v1.3.0 // indirect
+	github.com/veraison/swid v1.1.1-0.20230911094910-8ffdd07a22ca // indirect
 	github.com/viterin/partial v1.1.0 // indirect
 	github.com/viterin/vek v0.4.3 // indirect
 	github.com/vmihailenco/msgpack/v5 v5.4.1 // indirect
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	github.com/wailsapp/go-webview2 v1.0.23 // indirect
 	github.com/wailsapp/mimetype v1.4.1 // indirect
+	github.com/weppos/publicsuffix-go v0.50.4-0.20260821095816-b0fdb5c2d345 // indirect
 	github.com/whyrusleeping/go-keyspace v0.0.0-20160322163242-5b898ac5add1 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
@@ -402,6 +411,8 @@ require (
 	github.com/xeipuuv/gojsonreference v0.0.0-20180127040603-bd5ef7bd5415 // indirect
 	github.com/yashtewari/glob-intersection v0.2.0 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
+	github.com/zmap/zcrypto v0.0.0-20260906180147-3ed30b1e9340 // indirect
+	github.com/zmap/zlint/v3 v3.7.2 // indirect
 	gitlab.com/yawning/secp256k1-voi v0.0.0-20230925100816-f2616030848b // indirect
 	go.etcd.io/etcd/api/v3 v3.7.3 // indirect
 	go.mongodb.org/mongo-driver v1.17.10 // indirect
