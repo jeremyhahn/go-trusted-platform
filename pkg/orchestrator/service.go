@@ -202,7 +202,10 @@ func (s *Service) CloseSession(ctx context.Context, req *platformv1.CloseOrchest
 	if err := required("session_id", req.GetSessionId()); err != nil {
 		return nil, err
 	}
-	resp, err := client.CloseSession(ctx, &sdkorch.CloseSessionRequest{SessionID: req.GetSessionId()})
+	// Every session route is system-only (the REST and gRPC layers refuse
+	// other callers), and the embedded backend validates a tenant before it
+	// closes anything: close as the system tenant.
+	resp, err := client.CloseSession(tenantContext(ctx, orchestration.SystemTenantID), &sdkorch.CloseSessionRequest{SessionID: req.GetSessionId()})
 	if err != nil {
 		return nil, &OperationError{Op: "CloseSession", Err: err}
 	}
