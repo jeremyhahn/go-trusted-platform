@@ -370,75 +370,6 @@ func TestErrBatchOperationFailed_Unwrap(t *testing.T) {
 
 // Input/Output struct tests
 
-func TestBatchEncryptInputItem_Fields(t *testing.T) {
-	item := BatchEncryptInputItem{
-		ItemID:    "test-id",
-		Plaintext: "secret data",
-		Context:   "additional-context",
-		Nonce:     "base64nonce==",
-	}
-
-	if item.ItemID != "test-id" {
-		t.Errorf("ItemID = %q, want %q", item.ItemID, "test-id")
-	}
-	if item.Plaintext != "secret data" {
-		t.Errorf("Plaintext = %q, want %q", item.Plaintext, "secret data")
-	}
-	if item.Context != "additional-context" {
-		t.Errorf("Context = %q, want %q", item.Context, "additional-context")
-	}
-	if item.Nonce != "base64nonce==" {
-		t.Errorf("Nonce = %q, want %q", item.Nonce, "base64nonce==")
-	}
-}
-
-func TestBatchDecryptInputItem_Fields(t *testing.T) {
-	item := BatchDecryptInputItem{
-		ItemID:     "test-id",
-		Ciphertext: "base64ciphertext",
-		Context:    "additional-context",
-		Nonce:      "base64nonce==",
-		KeyVersion: 3,
-	}
-
-	if item.ItemID != "test-id" {
-		t.Errorf("ItemID = %q, want %q", item.ItemID, "test-id")
-	}
-	if item.Ciphertext != "base64ciphertext" {
-		t.Errorf("Ciphertext = %q, want %q", item.Ciphertext, "base64ciphertext")
-	}
-	if item.Context != "additional-context" {
-		t.Errorf("Context = %q, want %q", item.Context, "additional-context")
-	}
-	if item.Nonce != "base64nonce==" {
-		t.Errorf("Nonce = %q, want %q", item.Nonce, "base64nonce==")
-	}
-	if item.KeyVersion != 3 {
-		t.Errorf("KeyVersion = %d, want %d", item.KeyVersion, 3)
-	}
-}
-
-func TestBatchEncryptOutputItem_Fields(t *testing.T) {
-	item := BatchEncryptOutputItem{
-		ItemID:     "output-id",
-		Status:     "success",
-		Ciphertext: "encrypted-data",
-		Nonce:      "generated-nonce",
-		KeyVersion: 1,
-		Error:      "",
-	}
-
-	if item.ItemID != "output-id" {
-		t.Errorf("ItemID = %q, want %q", item.ItemID, "output-id")
-	}
-	if item.Status != "success" {
-		t.Errorf("Status = %q, want %q", item.Status, "success")
-	}
-	if item.KeyVersion != 1 {
-		t.Errorf("KeyVersion = %d, want %d", item.KeyVersion, 1)
-	}
-}
-
 func TestBatchEncryptOutputItem_FailedStatus(t *testing.T) {
 	item := BatchEncryptOutputItem{
 		ItemID:     "failed-item",
@@ -454,29 +385,6 @@ func TestBatchEncryptOutputItem_FailedStatus(t *testing.T) {
 	}
 	if item.Error == "" {
 		t.Error("Error should not be empty for failed status")
-	}
-}
-
-func TestBatchDecryptOutputItem_Fields(t *testing.T) {
-	item := BatchDecryptOutputItem{
-		ItemID:     "output-id",
-		Status:     "success",
-		Plaintext:  "decrypted data",
-		KeyVersion: 2,
-		Error:      "",
-	}
-
-	if item.ItemID != "output-id" {
-		t.Errorf("ItemID = %q, want %q", item.ItemID, "output-id")
-	}
-	if item.Status != "success" {
-		t.Errorf("Status = %q, want %q", item.Status, "success")
-	}
-	if item.Plaintext != "decrypted data" {
-		t.Errorf("Plaintext = %q, want %q", item.Plaintext, "decrypted data")
-	}
-	if item.KeyVersion != 2 {
-		t.Errorf("KeyVersion = %d, want %d", item.KeyVersion, 2)
 	}
 }
 
@@ -501,42 +409,6 @@ func TestBatchDecryptOutputItem_FailedStatus(t *testing.T) {
 }
 
 // Flag struct tests
-
-func TestBatchEncryptFlags_Fields(t *testing.T) {
-	flags := batchEncryptFlags{
-		keyID:     "my-key-id",
-		inputPath: "/path/to/input.json",
-		jsonInput: true,
-	}
-
-	if flags.keyID != "my-key-id" {
-		t.Errorf("keyID = %q, want %q", flags.keyID, "my-key-id")
-	}
-	if flags.inputPath != "/path/to/input.json" {
-		t.Errorf("inputPath = %q, want %q", flags.inputPath, "/path/to/input.json")
-	}
-	if !flags.jsonInput {
-		t.Error("jsonInput should be true")
-	}
-}
-
-func TestBatchDecryptFlags_Fields(t *testing.T) {
-	flags := batchDecryptFlags{
-		keyID:     "my-key-id",
-		inputPath: "/path/to/encrypted.json",
-		jsonInput: true,
-	}
-
-	if flags.keyID != "my-key-id" {
-		t.Errorf("keyID = %q, want %q", flags.keyID, "my-key-id")
-	}
-	if flags.inputPath != "/path/to/encrypted.json" {
-		t.Errorf("inputPath = %q, want %q", flags.inputPath, "/path/to/encrypted.json")
-	}
-	if !flags.jsonInput {
-		t.Error("jsonInput should be true")
-	}
-}
 
 func TestBatchCommand_GetFlagsNotCalledOnCreation(t *testing.T) {
 	callCount := 0

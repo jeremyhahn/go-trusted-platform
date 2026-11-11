@@ -531,69 +531,416 @@ jobs:
     # the job.
     timeout-minutes: 75
     steps:
-      # Owner ruling 443 (2026-11-10): a PR whose every changed file is under
-      # .github/ gets no review. ROOT, first, before the guard and with no
-      # checkout: the PR's file list from the API with the job's own token,
-      # each entry's filename and previous_filename. Only a list that is read
-      # whole, non-empty, under 3000 entries and all under .github/ sets
-      # skip=true; any API error, an empty list or the 3000-file cap reviews
-      # as before (continue-on-error: a failure here leaves skip unset). Every
-      # later step of the job tests steps.scope.outputs.skip, so the job ends
-      # green without a review. No file name is printed.
-      # InfoSec Y-1: the skip is only for a PR whose head repository is this
-      # repository. A fork's PR (or one whose head repository is gone) is
-      # reviewed as usual, whatever it touches, and the file list is not read.
-      - name: Is every changed file under .github/?
+      # Owner ruling 443 (2026-11-10): a pull request that changes only workflow
+      # files gets no review, and only when InfoSec's guard passes (Y-1 to Y-8,
+      # Y-10). FIRST, before the guard and any checkout: the step reads the event
+      # data and the pull request through the API with the job's own token, never
+      # the pull request's code. Every later step tests steps.scope.outputs.skip.
+      # A failed rule, an API error, missing data or a limit leaves skip=false, so
+      # the review runs as usual; the step always exits 0 and never fails the
+      # job. It prints one line per failed rule and path, never file contents.
+      #   Y-1  the head repository is this repository (event and live PR).
+      #   Y-2  every old and new path is .github/workflows/<name>.yml or .yaml;
+      #        composite actions, scripts, CODEOWNERS and the dependency bot
+      #        config take a normal round.
+      #   Y-3  no protected workflow: PROTECTED in the script (the review and
+      #        automerge workflows, every release, publish or nightly one).
+      #   Y-4  status added or modified only (never removed or renamed), and
+      #        every job in the CI gate's `needs` on main exists at the head
+      #        (CI_FILE and GATE_JOB, read at the base and head commits).
+      #   Y-5  no added line holds pull_request_target, push, workflow_run,
+      #        workflow_call, issue_comment, repository_dispatch, a YAML anchor
+      #        or alias, or a new or changed key under `on:` (an added workflow
+      #        file therefore takes a round); a missing or cut patch, or one that
+      #        disagrees with the head file, takes a round.
+      #   Y-6  no added line holds secrets, permissions, a write scope, id-token
+      #        or environment:.
+      #   Y-7  every added `uses:` ends in a 40-hex commit; no added line holds
+      #        container:, services:, docker, sudo, apt or a pipe into a shell.
+      #   Y-8  every added runs-on: value is, as a string, ubuntu-latest or the
+      #        approved routing expression (ROUTE); no runs-on from the matrix
+      #        or a job output.
+      #   Y-10 a job whose runs-on line changes, or a job that is added, takes
+      #        the Y-7 tests on every line of the job at the head.
+      - name: Is the change CI/SDLC-only and inside InfoSec's guard?
         id: scope
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
-          FILES_ROUTE: repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files
-          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-          BASE_REPO: ${{ github.repository }}
+          GUARD_SERVER: ${{ github.server_url }}
+          GUARD_REPO: ${{ github.repository }}
+          GUARD_PR: ${{ github.event.pull_request.number }}
+          GUARD_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          GUARD_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GUARD_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set +e
-          set -uo pipefail
-          msg="CI/SDLC-only change: no review (owner 2026-11-10)"
-          skip=false ok=false n=0
-          if [ -z "$HEAD_REPO" ] || [ "$HEAD_REPO" != "$BASE_REPO" ]; then
-            echo "review as usual: the head repository is not this repository (InfoSec Y-1)"
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            exit 0
+          skip=false
+          res=$(mktemp 2>/dev/null) || res=
+          if [ -n "$res" ] && command -v python3 >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; then
+            GUARD_RESULT="$res" timeout -k 10 240 python3 -I - <<'GUARD_PY'
+          # CUSTOMIZE (per repository; keep everything below this block verbatim).
+          # PROTECTED: the workflow file names (stems) that always take a review round
+          # (InfoSec Y-3): the review workflow(s), the automerge workflow and every
+          # release, publish or nightly workflow in .github/workflows/.
+          PROTECTED = ["code-review", "automerge", "nightly"]
+          # CI_FILE and GATE_JOB: the CI workflow and its gate job, whose `needs` list
+          # on main must still name jobs that exist at the head (InfoSec Y-4).
+          CI_FILE = ".github/workflows/ci.yml"
+          GATE_JOB = "ci-gate"
+          # End of CUSTOMIZE.
+
+          # Owner ruling 443 review skip, InfoSec guard Y-1 to Y-8 and Y-10. It reads the
+          # event data and the pull request through the API only (no checkout). Any
+          # failed rule, error, missing datum or limit gives skip=false (a normal review
+          # round). It prints one line per failed rule and path, never file contents.
+          import base64, json, os, re, urllib.error, urllib.parse, urllib.request
+
+          API = "https://api.github.com"
+          MAX_PAGES = 30          # 3000 entries: the API's own cap on pulls/{n}/files
+          MAX_WORKFLOWS = 50      # changed workflow files read at the head
+          MAX_BYTES = 1000000     # a workflow file larger than this takes a round
+          PROTECTED_WORDS = ("review", "automerge", "release", "publish", "nightly")
+          # The approved routing expression (m2466), split so that the runner does not
+          # evaluate it inside this script.
+          ROUTE = "$" + ("{{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || "
+                         "(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && "
+                         "fromJSON('[\"self-hosted\",\"linux\",\"x64\",\"bigdisk\"]') || 'ubuntu-latest' }}")
+          RUNNERS = ("ubuntu-latest", ROUTE)
+
+          WF_PATH = re.compile(r"\.github/workflows/[^/]+\.(?:yml|yaml)")
+          KEY = re.compile(r"""^( *)(["']?)([A-Za-z0-9_.-]+)\2[ \t]*:(?:[ \t]+(.*))?$""")
+          SHA = re.compile(r"[0-9a-f]{40}")
+          Y5 = re.compile(r"pull_request_target|workflow_run|workflow_call|issue_comment|repository_dispatch", re.I)
+          Y5_PUSH = re.compile(r"""^\s*(?:-\s*)?["']?push["']?\s*(?::|$)""")
+          Y5_YAML = re.compile(r"""<<\s*:|(?:^\s*-\s+|:\s+|[\[{,]\s*)[&*][A-Za-z0-9_-]""")
+          Y6 = re.compile(r"""\bsecrets\b|\bpermissions\b|\bwrite-all\b|:\s*["']?write\b|\bid-token\b|\benvironment\s*:""", re.I)
+          USES = re.compile(r"""(?:^|[\s{,-])["']?uses["']?\s*:\s*(.*)$""")
+          RUNS_ON = re.compile(r"""(?:^|[\s{,-])["']?runs-on["']?\s*:(.*)$""")
+          Y7 = re.compile(r"""(?:^|[\s{,-])["']?(?:container|services)["']?\s*:|docker|\bsudo\b|\bapt\b""", re.I)
+          SHELLS = r"(?:/usr/bin/|/bin/)?(?:ba|z|da|k|c|tc|fi|a)?sh\b|python[0-9.]*\b|perl\b|ruby\b|node\b|php\b|pwsh\b|powershell\b|iex\b|invoke-expression\b"
+          Y7_PIPE = re.compile(r"\|\s*(?:sudo\s+(?:-\S+\s+)*)?(?:env\s+(?:\S+=\S*\s+)*)?(?:" + SHELLS + ")", re.I)
+          Y7_SUBST = re.compile(r"(?:\b(?:ba|z|da|k)?sh\b|\bsource\b|\beval\b|\biex\b|^\s*\.)[^\n]*(?:<\(|\$\(|`)\s*(?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)\b", re.I)
+
+
+          class Stop(Exception):
+              pass
+
+
+          failed = []
+
+
+          def fail(rule, path="-"):
+              item = (rule, path)
+              if item not in failed:
+                  failed.append(item)
+                  if len(failed) <= 60:
+                      print("no skip: %s %s" % (rule, json.dumps(path[:200])), flush=True)
+
+
+          def get(url):
+              if not url.startswith(API + "/repos/"):
+                  raise Stop("url")
+              r = urllib.request.Request(url, headers={
+                  "Authorization": "Bearer " + TOKEN, "Accept": "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "code-review-scope-guard"})
+              with urllib.request.urlopen(r, timeout=30) as f:
+                  if f.status != 200:
+                      raise Stop("status")
+                  return json.loads(f.read().decode("utf-8")), f.headers.get("Link", "") or ""
+
+
+          def read_file(path, ref):
+              body, _ = get("%s/repos/%s/contents/%s?ref=%s" % (API, REPO, urllib.parse.quote(path, safe="/"), ref))
+              if not isinstance(body, dict) or body.get("type") != "file" or body.get("encoding") != "base64":
+                  raise Stop("contents")
+              raw = base64.b64decode(body.get("content") or "", validate=False)
+              if len(raw) > MAX_BYTES or len(raw) != body.get("size"):
+                  raise Stop("size")
+              return raw.decode("utf-8").split("\n")
+
+
+          def strip_comment(v):
+              return re.sub(r"(?:^|\s+)#.*$", "", v or "").strip()
+
+
+          def structure(lines):
+              """Line ranges (1-based, inclusive) of the top-level keys, of `on:` and of
+              each job and each job key, read by indentation only. None when the file
+              cannot be read that way."""
+              content = [i for i, l in enumerate(lines, 1) if l.strip() and not l.lstrip().startswith("#")]
+              if any("\t" in lines[i - 1][:len(lines[i - 1]) - len(lines[i - 1].lstrip())] for i in content):
+                  return None
+              ind = lambda i: len(lines[i - 1]) - len(lines[i - 1].lstrip(" "))
+              end = len(lines)
+              top = []
+              for i in content:
+                  if ind(i) == 0:
+                      if lines[i - 1].rstrip() in ("---", "..."):
+                          if i != content[0]:
+                              return None
+                          continue
+                      m = KEY.match(lines[i - 1].rstrip())
+                      if not m:
+                          return None
+                      top.append((m.group(3), i, m.group(4)))
+
+              def ranges(items, last):
+                  out = []
+                  for n, (k, s, v) in enumerate(items):
+                      out.append((k, s, (items[n + 1][1] - 1) if n + 1 < len(items) else last, v))
+                  return out
+
+              def children(s, e):
+                  sub = [i for i in content if s < i <= e]
+                  if not sub:
+                      return []
+                  ci = ind(sub[0])
+                  items = []
+                  for i in sub:
+                      if ind(i) < ci:
+                          raise Stop("indent")
+                      if ind(i) == ci:
+                          m = KEY.match(lines[i - 1].rstrip())
+                          if not m:
+                              raise Stop("key")
+                          items.append((m.group(3), i, m.group(4)))
+                  return ranges(items, e)
+
+              tops = ranges(top, end)
+              on = [t for t in tops if t[0] in ("on", "true")]
+              jobs = [t for t in tops if t[0] == "jobs"]
+              if len(on) != 1 or len(jobs) != 1:
+                  return None
+              try:
+                  on_kids = [] if strip_comment(on[0][3]) else children(on[0][1], on[0][2])
+                  if strip_comment(jobs[0][3]):
+                      return None
+                  job_list = []
+                  for k, s, e, v in children(jobs[0][1], jobs[0][2]):
+                      if strip_comment(v):
+                          return None
+                      job_list.append((k, s, e, children(s, e)))
+              except Stop:
+                  return None
+              return {"on": on[0], "on_kids": on_kids, "jobs": job_list}
+
+
+          def needs_of(st, lines, job):
+              for k, s, e, keys in st["jobs"]:
+                  if k != job:
+                      continue
+                  for kk, ks, ke, kv in keys:
+                      if kk != "needs":
+                          continue
+                      v = strip_comment(kv)
+                      if v.startswith("[") and v.endswith("]"):
+                          names = [x.strip().strip("'\"") for x in v[1:-1].split(",") if x.strip()]
+                      elif v:
+                          names = [v.strip("'\"")]
+                      else:
+                          names = []
+                          for i in range(ks + 1, ke + 1):
+                              t = strip_comment(lines[i - 1])
+                              if t:
+                                  if not t.startswith("- "):
+                                      return None
+                                  names.append(t[2:].strip().strip("'\""))
+                      if not all(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", n) for n in names):
+                          return None
+                      return names
+                  return []
+              return None
+
+
+          def y7(path, text):
+              m = USES.search(text)
+              if m:
+                  v = strip_comment(m.group(1)).strip("'\"")
+                  if not re.search(r"@[0-9a-f]{40}$", v):
+                      fail("Y-7 uses", path)
+              if Y7.search(text):
+                  fail("Y-7 container/docker/sudo/apt", path)
+              if Y7_PIPE.search(text) or Y7_SUBST.search(text):
+                  fail("Y-7 pipe to shell", path)
+
+
+          def check_patch(f):
+              path = f["filename"]
+              patch = f.get("patch")
+              if not isinstance(patch, str) or not patch:
+                  fail("Y-5 patch missing", path)
+                  return
+              added, removed_runs = {}, []
+              new = 0
+              plus = minus = 0
+              hunk = False
+              for l in patch.split("\n"):
+                  m = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", l)
+                  if m:
+                      new, hunk = int(m.group(1)), True
+                      continue
+                  if not hunk or l == "" or l.startswith("\\"):
+                      continue
+                  if l.startswith("+"):
+                      added[new] = l[1:]
+                      new += 1
+                      plus += 1
+                  elif l.startswith("-"):
+                      minus += 1
+                      if RUNS_ON.search(l[1:]):
+                          removed_runs.append(new)
+                  else:
+                      new += 1
+              if not hunk or plus != f.get("additions") or minus != f.get("deletions"):
+                  fail("Y-5 patch cut", path)
+                  return
+              lines = read_file(path, HEAD_SHA)
+              for n, t in added.items():
+                  if n < 1 or n > len(lines) or lines[n - 1] != t:
+                      fail("Y-5 patch does not match the head", path)
+                      return
+              st = structure(lines)
+              if st is None:
+                  fail("Y-5 on/jobs not readable", path)
+                  return
+              on_key, on_s, on_e, _ = st["on"]
+              push = [k for k in st["on_kids"] if k[0] == "push"]
+              for n, t in added.items():
+                  if Y5.search(t) or Y5_PUSH.search(t):
+                      fail("Y-5 trigger", path)
+                  if Y5_YAML.search(t):
+                      fail("Y-5 anchor/alias", path)
+                  if n == on_s or any(n == k[1] for k in st["on_kids"]) or any(k[1] <= n <= k[2] for k in push):
+                      fail("Y-5 on:", path)
+                  if Y6.search(t):
+                      fail("Y-6", path)
+                  y7(path, t)
+                  m = RUNS_ON.search(t)
+                  if m and strip_comment(m.group(1)) not in RUNNERS:
+                      fail("Y-8", path)
+              for job, s, e, keys in st["jobs"]:
+                  ro = [k for k in keys if k[0] == "runs-on"]
+                  if any(re.search(r"matrix|needs|strategy|inputs", kv or "", re.I) for k, ks, ke, kv in ro):
+                      fail("Y-8 runs-on from the matrix or a job output", path)
+                  touched = s in added or any(s <= n <= e for n in removed_runs)
+                  for k, ks, ke, kv in ro:
+                      if any(ks <= n <= ke for n in added):
+                          touched = True
+                          if strip_comment(kv) not in RUNNERS or any(strip_comment(lines[i - 1]) for i in range(ks + 1, ke + 1)):
+                              fail("Y-8", path)
+                  if touched:
+                      for i in range(s, e + 1):
+                          y7(path, lines[i - 1])
+
+
+          def main():
+              global TOKEN, REPO, HEAD_SHA
+              e = os.environ
+              if e.get("GUARD_SERVER") != "https://github.com":
+                  fail("forge: not github.com")
+                  return False
+              REPO, head_repo = e.get("GUARD_REPO", ""), e.get("GUARD_HEAD_REPO", "")
+              if not REPO or head_repo != REPO:
+                  fail("Y-1 head repository")
+                  return False
+              TOKEN, HEAD_SHA, base_sha = e.get("GH_TOKEN", ""), e.get("GUARD_HEAD_SHA", ""), e.get("GUARD_BASE_SHA", "")
+              pr = e.get("GUARD_PR", "")
+              if not TOKEN or not re.fullmatch(r"[1-9][0-9]*", pr) or not SHA.fullmatch(HEAD_SHA) or not SHA.fullmatch(base_sha):
+                  fail("event data missing")
+                  return False
+
+              def live_head():
+                  p, _ = get("%s/repos/%s/pulls/%s" % (API, REPO, pr))
+                  if p["head"]["sha"] != HEAD_SHA or (p["head"].get("repo") or {}).get("full_name") != REPO:
+                      fail("Y-1 live head")
+                      raise Stop("head")
+
+              live_head()
+              files, url = [], "%s/repos/%s/pulls/%s/files?per_page=100" % (API, REPO, pr)
+              for _ in range(MAX_PAGES + 1):
+                  page, link = get(url)
+                  if not isinstance(page, list):
+                      raise Stop("list")
+                  files += page
+                  m = re.search(r'<([^>]+)>;\s*rel="next"', link)
+                  if not m:
+                      break
+                  url = m.group(1)
+              else:
+                  fail("limit: pages")
+                  return False
+              live_head()
+              if not files or len(files) >= 3000:
+                  fail("limit: %d files" % len(files))
+                  return False
+              readable = []
+              for f in files:
+                  path, old = f.get("filename") or "", f.get("previous_filename")
+                  ok = True
+                  for p in [path] + ([old] if old is not None else []):
+                      if not WF_PATH.fullmatch(p):
+                          fail("Y-2", p)
+                          ok = False
+                          continue
+                      stem = p.rsplit("/", 1)[1].rsplit(".", 1)[0].lower()
+                      if stem in [x.lower() for x in PROTECTED] or any(w in stem for w in PROTECTED_WORDS):
+                          fail("Y-3", p)
+                          ok = False
+                  if f.get("status") not in ("added", "modified") or old is not None:
+                      fail("Y-4 status %s" % f.get("status"), path)
+                      ok = False
+                  if ok:
+                      readable.append(f)
+              if len(readable) > MAX_WORKFLOWS:
+                  fail("limit: workflow files")
+                  return False
+              for f in readable:
+                  check_patch(f)
+              base_ci, head_ci = read_file(CI_FILE, base_sha), read_file(CI_FILE, HEAD_SHA)
+              bst, hst = structure(base_ci), structure(head_ci)
+              gate = needs_of(bst, base_ci, GATE_JOB) if bst else None
+              if gate is None or hst is None:
+                  fail("Y-4 gate needs not readable", CI_FILE)
+              else:
+                  have = {j[0] for j in hst["jobs"]}
+                  for n in gate:
+                      if n not in have:
+                          fail("Y-4 gate job missing at the head", CI_FILE)
+              return not failed
+
+
+          ok = False
+          try:
+              ok = main() is True and not failed
+          except Exception as x:
+              why = type(x).__name__
+              if isinstance(x, urllib.error.HTTPError):
+                  why += " %d" % x.code
+              elif isinstance(x, Stop):
+                  why += " " + str(x)
+              print("no skip: guard stopped (%s)" % why, flush=True)
+              ok = False
+          try:
+              with open(os.environ["GUARD_RESULT"], "w") as out:
+                  out.write("true" if ok else "false")
+          except Exception:
+              pass
+          GUARD_PY
+            [ "$(cat "$res" 2>/dev/null)" != true ] || skip=true
+          else
+            echo "no skip: python3, timeout or a temporary file is missing"
           fi
-          list=$(mktemp) || { echo "skip=false" >> "$GITHUB_OUTPUT"; exit 0; }
-          # One line per entry, filename<TAB>previous_filename; @tsv escapes a
-          # tab or a newline inside a name, so an entry is one line.
-          tsv='.[] | [(.filename // ""), (.previous_filename // "")] | @tsv'
-          if [ -n "$GH_TOKEN" ] && [ "$FORGE" = github ] && command -v gh >/dev/null 2>&1; then
-            gh api --paginate "$FILES_ROUTE?per_page=100" --jq "$tsv" > "$list" && ok=true
-          elif [ -n "$GH_TOKEN" ] && command -v jq >/dev/null 2>&1; then
-            # Gitea (or GitHub without gh): the same route page by page until
-            # an empty page; GitHub pages with per_page, Gitea with limit.
-            auth="token $GH_TOKEN" size=limit=50
-            [ "$FORGE" != github ] || { auth="Bearer $GH_TOKEN"; size=per_page=100; }
-            for page in $(seq 1 200); do
-              body=$(curl -sS --fail --proto '=http,https' --max-time 30 --retry 2 \
-                -H @<(printf 'Authorization: %s\n' "$auth") \
-                "$REPO_API/pulls/$PR_NUM/files?$size&page=$page") || break
-              lines=$(jq -r "if type == \"array\" then $tsv else error(\"not a list\") end" <<<"$body") || break
-              if [ -z "$lines" ]; then ok=true; break; fi
-              printf '%s\n' "$lines" >> "$list"
-            done
-          fi
-          [ "$ok" != true ] || n=$(wc -l < "$list") || ok=false
-          if [ "$ok" = true ] && [ "$n" -gt 0 ] && [ "$n" -lt 3000 ] &&
-            ! awk -F '\t' '$1 !~ /^\.github\// || ($2 != "" && $2 !~ /^\.github\//) { bad = 1 } END { exit !bad }' "$list"; then
-            skip=true
-          fi
-          rm -f "$list"
+          [ -z "$res" ] || rm -f "$res"
           if [ "$skip" = true ]; then
+            msg="CI/SDLC-only change: no review (owner 2026-11-10; InfoSec guard passed)"
             echo "$msg"
             [ -z "${GITHUB_STEP_SUMMARY:-}" ] || echo "$msg" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "review as usual: file list read=$ok, $n entries, not all under .github/ (or unread)"
+            echo "review as usual"
           fi
           echo "skip=$skip" >> "$GITHUB_OUTPUT"
+          exit 0
 
       # ROOT. Before checkout, so a stale, duplicate or unrequested run costs a
       # few API calls rather than a clone and a review.
@@ -2061,69 +2408,416 @@ jobs:
       OC_DATA: /tmp/opencode-data
       ROUTED_MODEL: ${{ needs.review.outputs.model }}
     steps:
-      # Owner ruling 443 (2026-11-10): a PR whose every changed file is under
-      # .github/ gets no review. ROOT, first, before the guard and with no
-      # checkout: the PR's file list from the API with the job's own token,
-      # each entry's filename and previous_filename. Only a list that is read
-      # whole, non-empty, under 3000 entries and all under .github/ sets
-      # skip=true; any API error, an empty list or the 3000-file cap reviews
-      # as before (continue-on-error: a failure here leaves skip unset). Every
-      # later step of the job tests steps.scope.outputs.skip, so the job ends
-      # green without a review. No file name is printed.
-      # InfoSec Y-1: the skip is only for a PR whose head repository is this
-      # repository. A fork's PR (or one whose head repository is gone) is
-      # reviewed as usual, whatever it touches, and the file list is not read.
-      - name: Is every changed file under .github/?
+      # Owner ruling 443 (2026-11-10): a pull request that changes only workflow
+      # files gets no review, and only when InfoSec's guard passes (Y-1 to Y-8,
+      # Y-10). FIRST, before the guard and any checkout: the step reads the event
+      # data and the pull request through the API with the job's own token, never
+      # the pull request's code. Every later step tests steps.scope.outputs.skip.
+      # A failed rule, an API error, missing data or a limit leaves skip=false, so
+      # the review runs as usual; the step always exits 0 and never fails the
+      # job. It prints one line per failed rule and path, never file contents.
+      #   Y-1  the head repository is this repository (event and live PR).
+      #   Y-2  every old and new path is .github/workflows/<name>.yml or .yaml;
+      #        composite actions, scripts, CODEOWNERS and the dependency bot
+      #        config take a normal round.
+      #   Y-3  no protected workflow: PROTECTED in the script (the review and
+      #        automerge workflows, every release, publish or nightly one).
+      #   Y-4  status added or modified only (never removed or renamed), and
+      #        every job in the CI gate's `needs` on main exists at the head
+      #        (CI_FILE and GATE_JOB, read at the base and head commits).
+      #   Y-5  no added line holds pull_request_target, push, workflow_run,
+      #        workflow_call, issue_comment, repository_dispatch, a YAML anchor
+      #        or alias, or a new or changed key under `on:` (an added workflow
+      #        file therefore takes a round); a missing or cut patch, or one that
+      #        disagrees with the head file, takes a round.
+      #   Y-6  no added line holds secrets, permissions, a write scope, id-token
+      #        or environment:.
+      #   Y-7  every added `uses:` ends in a 40-hex commit; no added line holds
+      #        container:, services:, docker, sudo, apt or a pipe into a shell.
+      #   Y-8  every added runs-on: value is, as a string, ubuntu-latest or the
+      #        approved routing expression (ROUTE); no runs-on from the matrix
+      #        or a job output.
+      #   Y-10 a job whose runs-on line changes, or a job that is added, takes
+      #        the Y-7 tests on every line of the job at the head.
+      - name: Is the change CI/SDLC-only and inside InfoSec's guard?
         id: scope
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
-          FILES_ROUTE: repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files
-          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-          BASE_REPO: ${{ github.repository }}
+          GUARD_SERVER: ${{ github.server_url }}
+          GUARD_REPO: ${{ github.repository }}
+          GUARD_PR: ${{ github.event.pull_request.number }}
+          GUARD_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          GUARD_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GUARD_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set +e
-          set -uo pipefail
-          msg="CI/SDLC-only change: no review (owner 2026-11-10)"
-          skip=false ok=false n=0
-          if [ -z "$HEAD_REPO" ] || [ "$HEAD_REPO" != "$BASE_REPO" ]; then
-            echo "review as usual: the head repository is not this repository (InfoSec Y-1)"
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            exit 0
+          skip=false
+          res=$(mktemp 2>/dev/null) || res=
+          if [ -n "$res" ] && command -v python3 >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; then
+            GUARD_RESULT="$res" timeout -k 10 240 python3 -I - <<'GUARD_PY'
+          # CUSTOMIZE (per repository; keep everything below this block verbatim).
+          # PROTECTED: the workflow file names (stems) that always take a review round
+          # (InfoSec Y-3): the review workflow(s), the automerge workflow and every
+          # release, publish or nightly workflow in .github/workflows/.
+          PROTECTED = ["code-review", "automerge", "nightly"]
+          # CI_FILE and GATE_JOB: the CI workflow and its gate job, whose `needs` list
+          # on main must still name jobs that exist at the head (InfoSec Y-4).
+          CI_FILE = ".github/workflows/ci.yml"
+          GATE_JOB = "ci-gate"
+          # End of CUSTOMIZE.
+
+          # Owner ruling 443 review skip, InfoSec guard Y-1 to Y-8 and Y-10. It reads the
+          # event data and the pull request through the API only (no checkout). Any
+          # failed rule, error, missing datum or limit gives skip=false (a normal review
+          # round). It prints one line per failed rule and path, never file contents.
+          import base64, json, os, re, urllib.error, urllib.parse, urllib.request
+
+          API = "https://api.github.com"
+          MAX_PAGES = 30          # 3000 entries: the API's own cap on pulls/{n}/files
+          MAX_WORKFLOWS = 50      # changed workflow files read at the head
+          MAX_BYTES = 1000000     # a workflow file larger than this takes a round
+          PROTECTED_WORDS = ("review", "automerge", "release", "publish", "nightly")
+          # The approved routing expression (m2466), split so that the runner does not
+          # evaluate it inside this script.
+          ROUTE = "$" + ("{{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || "
+                         "(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && "
+                         "fromJSON('[\"self-hosted\",\"linux\",\"x64\",\"bigdisk\"]') || 'ubuntu-latest' }}")
+          RUNNERS = ("ubuntu-latest", ROUTE)
+
+          WF_PATH = re.compile(r"\.github/workflows/[^/]+\.(?:yml|yaml)")
+          KEY = re.compile(r"""^( *)(["']?)([A-Za-z0-9_.-]+)\2[ \t]*:(?:[ \t]+(.*))?$""")
+          SHA = re.compile(r"[0-9a-f]{40}")
+          Y5 = re.compile(r"pull_request_target|workflow_run|workflow_call|issue_comment|repository_dispatch", re.I)
+          Y5_PUSH = re.compile(r"""^\s*(?:-\s*)?["']?push["']?\s*(?::|$)""")
+          Y5_YAML = re.compile(r"""<<\s*:|(?:^\s*-\s+|:\s+|[\[{,]\s*)[&*][A-Za-z0-9_-]""")
+          Y6 = re.compile(r"""\bsecrets\b|\bpermissions\b|\bwrite-all\b|:\s*["']?write\b|\bid-token\b|\benvironment\s*:""", re.I)
+          USES = re.compile(r"""(?:^|[\s{,-])["']?uses["']?\s*:\s*(.*)$""")
+          RUNS_ON = re.compile(r"""(?:^|[\s{,-])["']?runs-on["']?\s*:(.*)$""")
+          Y7 = re.compile(r"""(?:^|[\s{,-])["']?(?:container|services)["']?\s*:|docker|\bsudo\b|\bapt\b""", re.I)
+          SHELLS = r"(?:/usr/bin/|/bin/)?(?:ba|z|da|k|c|tc|fi|a)?sh\b|python[0-9.]*\b|perl\b|ruby\b|node\b|php\b|pwsh\b|powershell\b|iex\b|invoke-expression\b"
+          Y7_PIPE = re.compile(r"\|\s*(?:sudo\s+(?:-\S+\s+)*)?(?:env\s+(?:\S+=\S*\s+)*)?(?:" + SHELLS + ")", re.I)
+          Y7_SUBST = re.compile(r"(?:\b(?:ba|z|da|k)?sh\b|\bsource\b|\beval\b|\biex\b|^\s*\.)[^\n]*(?:<\(|\$\(|`)\s*(?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)\b", re.I)
+
+
+          class Stop(Exception):
+              pass
+
+
+          failed = []
+
+
+          def fail(rule, path="-"):
+              item = (rule, path)
+              if item not in failed:
+                  failed.append(item)
+                  if len(failed) <= 60:
+                      print("no skip: %s %s" % (rule, json.dumps(path[:200])), flush=True)
+
+
+          def get(url):
+              if not url.startswith(API + "/repos/"):
+                  raise Stop("url")
+              r = urllib.request.Request(url, headers={
+                  "Authorization": "Bearer " + TOKEN, "Accept": "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "code-review-scope-guard"})
+              with urllib.request.urlopen(r, timeout=30) as f:
+                  if f.status != 200:
+                      raise Stop("status")
+                  return json.loads(f.read().decode("utf-8")), f.headers.get("Link", "") or ""
+
+
+          def read_file(path, ref):
+              body, _ = get("%s/repos/%s/contents/%s?ref=%s" % (API, REPO, urllib.parse.quote(path, safe="/"), ref))
+              if not isinstance(body, dict) or body.get("type") != "file" or body.get("encoding") != "base64":
+                  raise Stop("contents")
+              raw = base64.b64decode(body.get("content") or "", validate=False)
+              if len(raw) > MAX_BYTES or len(raw) != body.get("size"):
+                  raise Stop("size")
+              return raw.decode("utf-8").split("\n")
+
+
+          def strip_comment(v):
+              return re.sub(r"(?:^|\s+)#.*$", "", v or "").strip()
+
+
+          def structure(lines):
+              """Line ranges (1-based, inclusive) of the top-level keys, of `on:` and of
+              each job and each job key, read by indentation only. None when the file
+              cannot be read that way."""
+              content = [i for i, l in enumerate(lines, 1) if l.strip() and not l.lstrip().startswith("#")]
+              if any("\t" in lines[i - 1][:len(lines[i - 1]) - len(lines[i - 1].lstrip())] for i in content):
+                  return None
+              ind = lambda i: len(lines[i - 1]) - len(lines[i - 1].lstrip(" "))
+              end = len(lines)
+              top = []
+              for i in content:
+                  if ind(i) == 0:
+                      if lines[i - 1].rstrip() in ("---", "..."):
+                          if i != content[0]:
+                              return None
+                          continue
+                      m = KEY.match(lines[i - 1].rstrip())
+                      if not m:
+                          return None
+                      top.append((m.group(3), i, m.group(4)))
+
+              def ranges(items, last):
+                  out = []
+                  for n, (k, s, v) in enumerate(items):
+                      out.append((k, s, (items[n + 1][1] - 1) if n + 1 < len(items) else last, v))
+                  return out
+
+              def children(s, e):
+                  sub = [i for i in content if s < i <= e]
+                  if not sub:
+                      return []
+                  ci = ind(sub[0])
+                  items = []
+                  for i in sub:
+                      if ind(i) < ci:
+                          raise Stop("indent")
+                      if ind(i) == ci:
+                          m = KEY.match(lines[i - 1].rstrip())
+                          if not m:
+                              raise Stop("key")
+                          items.append((m.group(3), i, m.group(4)))
+                  return ranges(items, e)
+
+              tops = ranges(top, end)
+              on = [t for t in tops if t[0] in ("on", "true")]
+              jobs = [t for t in tops if t[0] == "jobs"]
+              if len(on) != 1 or len(jobs) != 1:
+                  return None
+              try:
+                  on_kids = [] if strip_comment(on[0][3]) else children(on[0][1], on[0][2])
+                  if strip_comment(jobs[0][3]):
+                      return None
+                  job_list = []
+                  for k, s, e, v in children(jobs[0][1], jobs[0][2]):
+                      if strip_comment(v):
+                          return None
+                      job_list.append((k, s, e, children(s, e)))
+              except Stop:
+                  return None
+              return {"on": on[0], "on_kids": on_kids, "jobs": job_list}
+
+
+          def needs_of(st, lines, job):
+              for k, s, e, keys in st["jobs"]:
+                  if k != job:
+                      continue
+                  for kk, ks, ke, kv in keys:
+                      if kk != "needs":
+                          continue
+                      v = strip_comment(kv)
+                      if v.startswith("[") and v.endswith("]"):
+                          names = [x.strip().strip("'\"") for x in v[1:-1].split(",") if x.strip()]
+                      elif v:
+                          names = [v.strip("'\"")]
+                      else:
+                          names = []
+                          for i in range(ks + 1, ke + 1):
+                              t = strip_comment(lines[i - 1])
+                              if t:
+                                  if not t.startswith("- "):
+                                      return None
+                                  names.append(t[2:].strip().strip("'\""))
+                      if not all(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", n) for n in names):
+                          return None
+                      return names
+                  return []
+              return None
+
+
+          def y7(path, text):
+              m = USES.search(text)
+              if m:
+                  v = strip_comment(m.group(1)).strip("'\"")
+                  if not re.search(r"@[0-9a-f]{40}$", v):
+                      fail("Y-7 uses", path)
+              if Y7.search(text):
+                  fail("Y-7 container/docker/sudo/apt", path)
+              if Y7_PIPE.search(text) or Y7_SUBST.search(text):
+                  fail("Y-7 pipe to shell", path)
+
+
+          def check_patch(f):
+              path = f["filename"]
+              patch = f.get("patch")
+              if not isinstance(patch, str) or not patch:
+                  fail("Y-5 patch missing", path)
+                  return
+              added, removed_runs = {}, []
+              new = 0
+              plus = minus = 0
+              hunk = False
+              for l in patch.split("\n"):
+                  m = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", l)
+                  if m:
+                      new, hunk = int(m.group(1)), True
+                      continue
+                  if not hunk or l == "" or l.startswith("\\"):
+                      continue
+                  if l.startswith("+"):
+                      added[new] = l[1:]
+                      new += 1
+                      plus += 1
+                  elif l.startswith("-"):
+                      minus += 1
+                      if RUNS_ON.search(l[1:]):
+                          removed_runs.append(new)
+                  else:
+                      new += 1
+              if not hunk or plus != f.get("additions") or minus != f.get("deletions"):
+                  fail("Y-5 patch cut", path)
+                  return
+              lines = read_file(path, HEAD_SHA)
+              for n, t in added.items():
+                  if n < 1 or n > len(lines) or lines[n - 1] != t:
+                      fail("Y-5 patch does not match the head", path)
+                      return
+              st = structure(lines)
+              if st is None:
+                  fail("Y-5 on/jobs not readable", path)
+                  return
+              on_key, on_s, on_e, _ = st["on"]
+              push = [k for k in st["on_kids"] if k[0] == "push"]
+              for n, t in added.items():
+                  if Y5.search(t) or Y5_PUSH.search(t):
+                      fail("Y-5 trigger", path)
+                  if Y5_YAML.search(t):
+                      fail("Y-5 anchor/alias", path)
+                  if n == on_s or any(n == k[1] for k in st["on_kids"]) or any(k[1] <= n <= k[2] for k in push):
+                      fail("Y-5 on:", path)
+                  if Y6.search(t):
+                      fail("Y-6", path)
+                  y7(path, t)
+                  m = RUNS_ON.search(t)
+                  if m and strip_comment(m.group(1)) not in RUNNERS:
+                      fail("Y-8", path)
+              for job, s, e, keys in st["jobs"]:
+                  ro = [k for k in keys if k[0] == "runs-on"]
+                  if any(re.search(r"matrix|needs|strategy|inputs", kv or "", re.I) for k, ks, ke, kv in ro):
+                      fail("Y-8 runs-on from the matrix or a job output", path)
+                  touched = s in added or any(s <= n <= e for n in removed_runs)
+                  for k, ks, ke, kv in ro:
+                      if any(ks <= n <= ke for n in added):
+                          touched = True
+                          if strip_comment(kv) not in RUNNERS or any(strip_comment(lines[i - 1]) for i in range(ks + 1, ke + 1)):
+                              fail("Y-8", path)
+                  if touched:
+                      for i in range(s, e + 1):
+                          y7(path, lines[i - 1])
+
+
+          def main():
+              global TOKEN, REPO, HEAD_SHA
+              e = os.environ
+              if e.get("GUARD_SERVER") != "https://github.com":
+                  fail("forge: not github.com")
+                  return False
+              REPO, head_repo = e.get("GUARD_REPO", ""), e.get("GUARD_HEAD_REPO", "")
+              if not REPO or head_repo != REPO:
+                  fail("Y-1 head repository")
+                  return False
+              TOKEN, HEAD_SHA, base_sha = e.get("GH_TOKEN", ""), e.get("GUARD_HEAD_SHA", ""), e.get("GUARD_BASE_SHA", "")
+              pr = e.get("GUARD_PR", "")
+              if not TOKEN or not re.fullmatch(r"[1-9][0-9]*", pr) or not SHA.fullmatch(HEAD_SHA) or not SHA.fullmatch(base_sha):
+                  fail("event data missing")
+                  return False
+
+              def live_head():
+                  p, _ = get("%s/repos/%s/pulls/%s" % (API, REPO, pr))
+                  if p["head"]["sha"] != HEAD_SHA or (p["head"].get("repo") or {}).get("full_name") != REPO:
+                      fail("Y-1 live head")
+                      raise Stop("head")
+
+              live_head()
+              files, url = [], "%s/repos/%s/pulls/%s/files?per_page=100" % (API, REPO, pr)
+              for _ in range(MAX_PAGES + 1):
+                  page, link = get(url)
+                  if not isinstance(page, list):
+                      raise Stop("list")
+                  files += page
+                  m = re.search(r'<([^>]+)>;\s*rel="next"', link)
+                  if not m:
+                      break
+                  url = m.group(1)
+              else:
+                  fail("limit: pages")
+                  return False
+              live_head()
+              if not files or len(files) >= 3000:
+                  fail("limit: %d files" % len(files))
+                  return False
+              readable = []
+              for f in files:
+                  path, old = f.get("filename") or "", f.get("previous_filename")
+                  ok = True
+                  for p in [path] + ([old] if old is not None else []):
+                      if not WF_PATH.fullmatch(p):
+                          fail("Y-2", p)
+                          ok = False
+                          continue
+                      stem = p.rsplit("/", 1)[1].rsplit(".", 1)[0].lower()
+                      if stem in [x.lower() for x in PROTECTED] or any(w in stem for w in PROTECTED_WORDS):
+                          fail("Y-3", p)
+                          ok = False
+                  if f.get("status") not in ("added", "modified") or old is not None:
+                      fail("Y-4 status %s" % f.get("status"), path)
+                      ok = False
+                  if ok:
+                      readable.append(f)
+              if len(readable) > MAX_WORKFLOWS:
+                  fail("limit: workflow files")
+                  return False
+              for f in readable:
+                  check_patch(f)
+              base_ci, head_ci = read_file(CI_FILE, base_sha), read_file(CI_FILE, HEAD_SHA)
+              bst, hst = structure(base_ci), structure(head_ci)
+              gate = needs_of(bst, base_ci, GATE_JOB) if bst else None
+              if gate is None or hst is None:
+                  fail("Y-4 gate needs not readable", CI_FILE)
+              else:
+                  have = {j[0] for j in hst["jobs"]}
+                  for n in gate:
+                      if n not in have:
+                          fail("Y-4 gate job missing at the head", CI_FILE)
+              return not failed
+
+
+          ok = False
+          try:
+              ok = main() is True and not failed
+          except Exception as x:
+              why = type(x).__name__
+              if isinstance(x, urllib.error.HTTPError):
+                  why += " %d" % x.code
+              elif isinstance(x, Stop):
+                  why += " " + str(x)
+              print("no skip: guard stopped (%s)" % why, flush=True)
+              ok = False
+          try:
+              with open(os.environ["GUARD_RESULT"], "w") as out:
+                  out.write("true" if ok else "false")
+          except Exception:
+              pass
+          GUARD_PY
+            [ "$(cat "$res" 2>/dev/null)" != true ] || skip=true
+          else
+            echo "no skip: python3, timeout or a temporary file is missing"
           fi
-          list=$(mktemp) || { echo "skip=false" >> "$GITHUB_OUTPUT"; exit 0; }
-          # One line per entry, filename<TAB>previous_filename; @tsv escapes a
-          # tab or a newline inside a name, so an entry is one line.
-          tsv='.[] | [(.filename // ""), (.previous_filename // "")] | @tsv'
-          if [ -n "$GH_TOKEN" ] && [ "$FORGE" = github ] && command -v gh >/dev/null 2>&1; then
-            gh api --paginate "$FILES_ROUTE?per_page=100" --jq "$tsv" > "$list" && ok=true
-          elif [ -n "$GH_TOKEN" ] && command -v jq >/dev/null 2>&1; then
-            # Gitea (or GitHub without gh): the same route page by page until
-            # an empty page; GitHub pages with per_page, Gitea with limit.
-            auth="token $GH_TOKEN" size=limit=50
-            [ "$FORGE" != github ] || { auth="Bearer $GH_TOKEN"; size=per_page=100; }
-            for page in $(seq 1 200); do
-              body=$(curl -sS --fail --proto '=http,https' --max-time 30 --retry 2 \
-                -H @<(printf 'Authorization: %s\n' "$auth") \
-                "$REPO_API/pulls/$PR_NUM/files?$size&page=$page") || break
-              lines=$(jq -r "if type == \"array\" then $tsv else error(\"not a list\") end" <<<"$body") || break
-              if [ -z "$lines" ]; then ok=true; break; fi
-              printf '%s\n' "$lines" >> "$list"
-            done
-          fi
-          [ "$ok" != true ] || n=$(wc -l < "$list") || ok=false
-          if [ "$ok" = true ] && [ "$n" -gt 0 ] && [ "$n" -lt 3000 ] &&
-            ! awk -F '\t' '$1 !~ /^\.github\// || ($2 != "" && $2 !~ /^\.github\//) { bad = 1 } END { exit !bad }' "$list"; then
-            skip=true
-          fi
-          rm -f "$list"
+          [ -z "$res" ] || rm -f "$res"
           if [ "$skip" = true ]; then
+            msg="CI/SDLC-only change: no review (owner 2026-11-10; InfoSec guard passed)"
             echo "$msg"
             [ -z "${GITHUB_STEP_SUMMARY:-}" ] || echo "$msg" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "review as usual: file list read=$ok, $n entries, not all under .github/ (or unread)"
+            echo "review as usual"
           fi
           echo "skip=$skip" >> "$GITHUB_OUTPUT"
+          exit 0
 
       - name: Check the token, the request, the head, any standing verdict and the model
         if: steps.scope.outputs.skip != 'true'

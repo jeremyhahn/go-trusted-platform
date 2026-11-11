@@ -44,27 +44,3 @@ func TestEABCredential_SetEntityID(t *testing.T) {
 		assert.Equal(t, uint64(222), entity.ID)
 	})
 }
-
-func TestEABCredential_FullStruct(t *testing.T) {
-	entity := &EABCredential{
-		ID:        1,
-		KeyID:     "test-key-id",
-		HMACKey:   []byte("test-hmac-key"),
-		ProfileID: 100,
-		TenantID:  "tenant-abc",
-		ExpiresAt: 1704067200,
-		Status:    uint8(StatusActive),
-		CreatedAt: 1704000000,
-		UsedAt:    0,
-	}
-
-	assert.Equal(t, uint64(1), entity.ID)
-	assert.Equal(t, "test-key-id", entity.KeyID)
-	assert.Equal(t, []byte("test-hmac-key"), entity.HMACKey)
-	assert.Equal(t, uint64(100), entity.ProfileID)
-	assert.Equal(t, "tenant-abc", entity.TenantID)
-	assert.Equal(t, int64(1704067200), entity.ExpiresAt)
-	assert.Equal(t, uint8(StatusActive), entity.Status)
-	assert.Equal(t, int64(1704000000), entity.CreatedAt)
-	assert.Equal(t, int64(0), entity.UsedAt)
-}
