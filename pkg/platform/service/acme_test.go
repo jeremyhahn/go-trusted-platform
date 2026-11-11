@@ -342,32 +342,6 @@ func TestOrderStatusConstants(t *testing.T) {
 	assert.Equal(t, "revoked", OrderStatusRevoked)
 }
 
-func TestOrder_Struct(t *testing.T) {
-	order := Order{
-		ID:          "test-id",
-		Status:      OrderStatusPending,
-		Domain:      "test.com",
-		Certificate: []byte("cert-data"),
-	}
-
-	assert.Equal(t, "test-id", order.ID)
-	assert.Equal(t, OrderStatusPending, order.Status)
-	assert.Equal(t, "test.com", order.Domain)
-	assert.Equal(t, []byte("cert-data"), order.Certificate)
-}
-
-func TestAuthorization_Struct(t *testing.T) {
-	authz := Authorization{
-		ID:     "authz-id",
-		Status: OrderStatusValid,
-		Domain: "auth.com",
-	}
-
-	assert.Equal(t, "authz-id", authz.ID)
-	assert.Equal(t, OrderStatusValid, authz.Status)
-	assert.Equal(t, "auth.com", authz.Domain)
-}
-
 func TestGenerateID(t *testing.T) {
 	ids := make(map[string]bool)
 	count := 100

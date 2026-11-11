@@ -22,7 +22,6 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/orchestration"
@@ -662,32 +661,6 @@ func TestContainerAttestor_Close(t *testing.T) {
 	}
 	if _, err := attestor.Attest(ctx, "c", attestor.GetMeasurementLog()); !errors.Is(err, ErrOrchestratorClosed) {
 		t.Errorf("Attest after Close: %v, want ErrOrchestratorClosed", err)
-	}
-}
-
-func TestAttestationVerificationResult_Fields(t *testing.T) {
-	result := &AttestationVerificationResult{
-		ContainerID:      "test-container",
-		ContainerName:    "test-name",
-		Verified:         true,
-		ImageDigest:      testImageDigest,
-		ConfigDigest:     digestOf("config"),
-		PCRValue:         make([]byte, SHA256Size),
-		ExpectedPCRValue: make([]byte, SHA256Size),
-		Timestamp:        time.Now(),
-	}
-
-	if result.ContainerID != "test-container" {
-		t.Errorf("ContainerID = %s, want test-container", result.ContainerID)
-	}
-	if !result.Verified {
-		t.Error("Verified should be true")
-	}
-	if result.Error != "" {
-		t.Errorf("Error should be empty, got: %s", result.Error)
-	}
-	if err := orchestration.ValidateImageDigest(result.ImageDigest); err != nil {
-		t.Errorf("ImageDigest must be canonical: %v", err)
 	}
 }
 

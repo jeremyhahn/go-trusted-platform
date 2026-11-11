@@ -1,6 +1,6 @@
 module example.com/parse
 
-go 1.27.2
+go 1.27.4
 
 // held: v2 drops the streaming API
 replace example.com/held => example.com/held v1.2.0

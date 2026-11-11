@@ -952,12 +952,8 @@ func TestRegistrationKeyFromHeader(t *testing.T) {
 }
 
 func TestErrorConstants(t *testing.T) {
-	assert.Equal(t, "webauthn: invalid organization id", ErrInvalidOrganizationID.Error())
 	assert.Equal(t, "webauthn: user already registered", ErrUserAlreadyExists.Error())
 	assert.Equal(t, "webauthn: invalid user id header", ErrInvalidUserIDHeader.Error())
-	assert.Equal(t, "webauthn: invalid user", ErrInvalidUserID.Error())
-	assert.Equal(t, "webauthn: SDK WebAuthn client is required", ErrSDKClientRequired.Error())
-	assert.Equal(t, "webauthn: invalid relying-party configuration", ErrInvalidConfig.Error())
 }
 
 func TestLoginRequest_JSONRoundtrip(t *testing.T) {

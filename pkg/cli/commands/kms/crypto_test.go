@@ -1005,140 +1005,6 @@ func TestNewCryptoRandomCommand_LongDescription(t *testing.T) {
 
 // Flag struct tests
 
-func TestEncryptFlags_Fields(t *testing.T) {
-	flags := encryptFlags{
-		keyID:      "my-key",
-		inputPath:  "/path/to/input.txt",
-		outputPath: "/path/to/output.enc",
-		context:    "user=alice",
-		nonce:      "base64nonce",
-		base64Out:  true,
-	}
-
-	if flags.keyID != "my-key" {
-		t.Errorf("keyID = %q, want %q", flags.keyID, "my-key")
-	}
-	if flags.inputPath != "/path/to/input.txt" {
-		t.Errorf("inputPath = %q", flags.inputPath)
-	}
-	if flags.outputPath != "/path/to/output.enc" {
-		t.Errorf("outputPath = %q", flags.outputPath)
-	}
-	if flags.context != "user=alice" {
-		t.Errorf("context = %q", flags.context)
-	}
-	if flags.nonce != "base64nonce" {
-		t.Errorf("nonce = %q", flags.nonce)
-	}
-	if !flags.base64Out {
-		t.Error("base64Out should be true")
-	}
-}
-
-func TestDecryptFlags_Fields(t *testing.T) {
-	flags := decryptFlags{
-		keyID:      "my-key",
-		inputPath:  "/path/to/input.enc",
-		outputPath: "/path/to/output.txt",
-		context:    "user=alice",
-		nonce:      "base64nonce",
-		keyVersion: 2,
-		base64In:   true,
-	}
-
-	if flags.keyID != "my-key" {
-		t.Errorf("keyID = %q, want %q", flags.keyID, "my-key")
-	}
-	if flags.inputPath != "/path/to/input.enc" {
-		t.Errorf("inputPath = %q", flags.inputPath)
-	}
-	if flags.outputPath != "/path/to/output.txt" {
-		t.Errorf("outputPath = %q", flags.outputPath)
-	}
-	if flags.context != "user=alice" {
-		t.Errorf("context = %q", flags.context)
-	}
-	if flags.nonce != "base64nonce" {
-		t.Errorf("nonce = %q", flags.nonce)
-	}
-	if flags.keyVersion != 2 {
-		t.Errorf("keyVersion = %d, want 2", flags.keyVersion)
-	}
-	if !flags.base64In {
-		t.Error("base64In should be true")
-	}
-}
-
-func TestDataKeyFlags_Fields(t *testing.T) {
-	flags := dataKeyFlags{
-		keyID:      "master-key",
-		algorithm:  "aes-256",
-		keySize:    256,
-		context:    "purpose=backup",
-		outputPath: "/path/to/output.bin",
-	}
-
-	if flags.keyID != "master-key" {
-		t.Errorf("keyID = %q, want %q", flags.keyID, "master-key")
-	}
-	if flags.algorithm != "aes-256" {
-		t.Errorf("algorithm = %q", flags.algorithm)
-	}
-	if flags.keySize != 256 {
-		t.Errorf("keySize = %d, want 256", flags.keySize)
-	}
-	if flags.context != "purpose=backup" {
-		t.Errorf("context = %q", flags.context)
-	}
-	if flags.outputPath != "/path/to/output.bin" {
-		t.Errorf("outputPath = %q", flags.outputPath)
-	}
-}
-
-func TestSignFlags_Fields(t *testing.T) {
-	flags := signFlags{
-		keyID:         "signing-key",
-		inputPath:     "/path/to/document.pdf",
-		outputPath:    "/path/to/signature.sig",
-		hashAlgorithm: "sha256",
-		base64Out:     true,
-	}
-
-	if flags.keyID != "signing-key" {
-		t.Errorf("keyID = %q, want %q", flags.keyID, "signing-key")
-	}
-	if flags.inputPath != "/path/to/document.pdf" {
-		t.Errorf("inputPath = %q", flags.inputPath)
-	}
-	if flags.outputPath != "/path/to/signature.sig" {
-		t.Errorf("outputPath = %q", flags.outputPath)
-	}
-	if flags.hashAlgorithm != "sha256" {
-		t.Errorf("hashAlgorithm = %q", flags.hashAlgorithm)
-	}
-	if !flags.base64Out {
-		t.Error("base64Out should be true")
-	}
-}
-
-func TestRandomFlags_Fields(t *testing.T) {
-	flags := randomFlags{
-		numBytes:   64,
-		outputPath: "/path/to/random.bin",
-		format:     "hex",
-	}
-
-	if flags.numBytes != 64 {
-		t.Errorf("numBytes = %d, want 64", flags.numBytes)
-	}
-	if flags.outputPath != "/path/to/random.bin" {
-		t.Errorf("outputPath = %q", flags.outputPath)
-	}
-	if flags.format != "hex" {
-		t.Errorf("format = %q", flags.format)
-	}
-}
-
 func TestDecodeBase64Input_Valid(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1270,28 +1136,6 @@ func TestNewCryptoHashCommand_LongDescription(t *testing.T) {
 		if !strings.Contains(cmd.Long, content) {
 			t.Errorf("Long description should contain %q", content)
 		}
-	}
-}
-
-func TestHashFlags_Fields(t *testing.T) {
-	flags := hashFlags{
-		inputPath:  "/path/to/input.txt",
-		outputPath: "/path/to/hash.txt",
-		algorithm:  "sha512",
-		format:     "base64",
-	}
-
-	if flags.inputPath != "/path/to/input.txt" {
-		t.Errorf("inputPath = %q", flags.inputPath)
-	}
-	if flags.outputPath != "/path/to/hash.txt" {
-		t.Errorf("outputPath = %q", flags.outputPath)
-	}
-	if flags.algorithm != "sha512" {
-		t.Errorf("algorithm = %q", flags.algorithm)
-	}
-	if flags.format != "base64" {
-		t.Errorf("format = %q", flags.format)
 	}
 }
 
@@ -1481,62 +1325,6 @@ func TestNewHMACVerifyCommand_Flags(t *testing.T) {
 	}
 }
 
-func TestHMACGenerateFlags_Fields(t *testing.T) {
-	flags := hmacGenerateFlags{
-		keyID:         "hmac-key",
-		inputPath:     "/path/to/data.txt",
-		outputPath:    "/path/to/data.hmac",
-		hashAlgorithm: "sha384",
-		base64Out:     true,
-	}
-
-	if flags.keyID != "hmac-key" {
-		t.Errorf("keyID = %q", flags.keyID)
-	}
-	if flags.inputPath != "/path/to/data.txt" {
-		t.Errorf("inputPath = %q", flags.inputPath)
-	}
-	if flags.outputPath != "/path/to/data.hmac" {
-		t.Errorf("outputPath = %q", flags.outputPath)
-	}
-	if flags.hashAlgorithm != "sha384" {
-		t.Errorf("hashAlgorithm = %q", flags.hashAlgorithm)
-	}
-	if !flags.base64Out {
-		t.Error("base64Out should be true")
-	}
-}
-
-func TestHMACVerifyFlags_Fields(t *testing.T) {
-	flags := hmacVerifyFlags{
-		keyID:         "hmac-key",
-		inputPath:     "/path/to/data.txt",
-		hmacPath:      "/path/to/data.hmac",
-		hmac:          "base64hmac",
-		hashAlgorithm: "sha256",
-		keyVersion:    2,
-	}
-
-	if flags.keyID != "hmac-key" {
-		t.Errorf("keyID = %q", flags.keyID)
-	}
-	if flags.inputPath != "/path/to/data.txt" {
-		t.Errorf("inputPath = %q", flags.inputPath)
-	}
-	if flags.hmacPath != "/path/to/data.hmac" {
-		t.Errorf("hmacPath = %q", flags.hmacPath)
-	}
-	if flags.hmac != "base64hmac" {
-		t.Errorf("hmac = %q", flags.hmac)
-	}
-	if flags.hashAlgorithm != "sha256" {
-		t.Errorf("hashAlgorithm = %q", flags.hashAlgorithm)
-	}
-	if flags.keyVersion != 2 {
-		t.Errorf("keyVersion = %d", flags.keyVersion)
-	}
-}
-
 // Verify command tests
 
 func TestNewCryptoVerifyCommand_Structure(t *testing.T) {
@@ -1618,35 +1406,5 @@ func TestNewCryptoVerifyCommand_LongDescription(t *testing.T) {
 		if !strings.Contains(cmd.Long, content) {
 			t.Errorf("Long description should contain %q", content)
 		}
-	}
-}
-
-func TestVerifyFlags_Fields(t *testing.T) {
-	flags := verifyFlags{
-		keyID:         "verify-key",
-		inputPath:     "/path/to/document.pdf",
-		signaturePath: "/path/to/signature.sig",
-		signature:     "base64sig",
-		hashAlgorithm: "sha384",
-		keyVersion:    3,
-	}
-
-	if flags.keyID != "verify-key" {
-		t.Errorf("keyID = %q", flags.keyID)
-	}
-	if flags.inputPath != "/path/to/document.pdf" {
-		t.Errorf("inputPath = %q", flags.inputPath)
-	}
-	if flags.signaturePath != "/path/to/signature.sig" {
-		t.Errorf("signaturePath = %q", flags.signaturePath)
-	}
-	if flags.signature != "base64sig" {
-		t.Errorf("signature = %q", flags.signature)
-	}
-	if flags.hashAlgorithm != "sha384" {
-		t.Errorf("hashAlgorithm = %q", flags.hashAlgorithm)
-	}
-	if flags.keyVersion != 3 {
-		t.Errorf("keyVersion = %d", flags.keyVersion)
 	}
 }

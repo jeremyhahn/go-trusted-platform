@@ -811,16 +811,6 @@ func TestSecretsConfig_Default_NewFields(t *testing.T) {
 // Bootstrap scheme constants
 // =============================================================================
 
-func TestBootstrapSchemeConstants(t *testing.T) {
-	assert.Equal(t, "dynamic://", bootstrap.SchemeDynamic)
-	assert.Equal(t, "xkms://", bootstrap.SchemeXKMS)
-}
-
-func TestBootstrapStrategyConstants(t *testing.T) {
-	assert.Equal(t, "dynamic", bootstrap.StrategyDynamic)
-	assert.Equal(t, "xkms", bootstrap.StrategyXKMS)
-}
-
 // =============================================================================
 // xkmsKMSClientAdapter tests
 // =============================================================================

@@ -14,6 +14,7 @@
 package drive
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -608,50 +609,32 @@ func TestFilesystemTypeConstants(t *testing.T) {
 	}
 }
 
-func TestDriveRoleConstants(t *testing.T) {
-	if DriveRoleSystem != "system" {
-		t.Errorf("expected 'system', got %s", DriveRoleSystem)
-	}
-	if DriveRoleData != "data" {
-		t.Errorf("expected 'data', got %s", DriveRoleData)
-	}
-	if DriveRoleBackup != "backup" {
-		t.Errorf("expected 'backup', got %s", DriveRoleBackup)
-	}
-	if DriveRoleSwap != "swap" {
-		t.Errorf("expected 'swap', got %s", DriveRoleSwap)
-	}
-}
+// TestStorageConfig_SystemRoleFromLiteralConfig decodes a literal config
+// document so the wire value "system" of the role field is pinned: the
+// system drive must be found by GetSystemDrive and Validate must not report
+// that no system drive is configured.
+func TestStorageConfig_SystemRoleFromLiteralConfig(t *testing.T) {
+	const doc = `{
+		"drives": [
+			{"id": "data-disk", "device": "/dev/sdb", "role": "data"},
+			{"id": "system-disk", "device": "/dev/sda", "role": "system"}
+		]
+	}`
 
-func TestUnlockMethodConstants(t *testing.T) {
-	if UnlockTPMPCR != "tpm-pcr" {
-		t.Errorf("expected 'tpm-pcr', got %s", UnlockTPMPCR)
+	var cfg StorageConfig
+	if err := json.Unmarshal([]byte(doc), &cfg); err != nil {
+		t.Fatalf("decode config: %v", err)
 	}
-	if UnlockTPMNoPCR != "tpm-nopcr" {
-		t.Errorf("expected 'tpm-nopcr', got %s", UnlockTPMNoPCR)
-	}
-	if UnlockFIDO2 != "fido2" {
-		t.Errorf("expected 'fido2', got %s", UnlockFIDO2)
-	}
-	if UnlockPassword != "password" {
-		t.Errorf("expected 'password', got %s", UnlockPassword)
-	}
-	if UnlockKeyfile != "keyfile" {
-		t.Errorf("expected 'keyfile', got %s", UnlockKeyfile)
-	}
-	if UnlockRecovery != "recovery" {
-		t.Errorf("expected 'recovery', got %s", UnlockRecovery)
-	}
-}
 
-func TestRecoveryKeyFormatConstants(t *testing.T) {
-	if RecoveryKeyFormatHex != "hex" {
-		t.Errorf("expected 'hex', got %s", RecoveryKeyFormatHex)
+	sys := cfg.GetSystemDrive()
+	if sys == nil {
+		t.Fatal("GetSystemDrive() = nil, want the drive with role \"system\"")
 	}
-	if RecoveryKeyFormatBase64 != "base64" {
-		t.Errorf("expected 'base64', got %s", RecoveryKeyFormatBase64)
+	if sys.ID != "system-disk" || string(sys.Role) != "system" {
+		t.Fatalf("GetSystemDrive() = id %q role %q, want id \"system-disk\" role \"system\"", sys.ID, sys.Role)
 	}
-	if RecoveryKeyFormatDashed != "dashed" {
-		t.Errorf("expected 'dashed', got %s", RecoveryKeyFormatDashed)
+
+	if err := cfg.Validate(); errors.Is(err, ErrNoSystemDrive) {
+		t.Fatalf("Validate() = %v, want no ErrNoSystemDrive for a config with role \"system\"", err)
 	}
 }

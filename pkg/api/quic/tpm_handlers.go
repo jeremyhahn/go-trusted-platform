@@ -215,16 +215,16 @@ type TPM2GetSRKRequest struct {
 
 // TPM2DeleteEKRequest names the EK handle to evict. Only the configured EK
 // handle is accepted; an absent payload is handle 0 and is refused, never
-// read as "the configured EK".
+// read as "the configured EK". The MessagePack wire key is `handle`.
 type TPM2DeleteEKRequest struct {
-	Handle uint32 `codec:"handle"`
+	Handle uint32 `codec:"handle" msgpack:"handle"`
 }
 
 // TPM2DeleteSRKRequest names the SRK handle to evict. Only the configured
 // Shared SRK handle is accepted; an absent payload is handle 0 and is
-// refused, never read as "the SSRK".
+// refused, never read as "the SSRK". The MessagePack wire key is `handle`.
 type TPM2DeleteSRKRequest struct {
-	Handle uint32 `codec:"handle"`
+	Handle uint32 `codec:"handle" msgpack:"handle"`
 }
 
 // TPM2MakeCredentialRequest represents a TPM2_MakeCredential request. When

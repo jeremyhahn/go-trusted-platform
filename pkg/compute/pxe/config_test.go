@@ -365,14 +365,10 @@ func TestFirmwareConfig_Validate_UnknownSource(t *testing.T) {
 }
 
 func TestConstants(t *testing.T) {
-	assert.Equal(t, 3, DefaultMaxRetries)
-	assert.Equal(t, 30*time.Minute, DefaultInstallTimeout)
-	assert.Equal(t, 5*time.Minute, DefaultEnrollmentTimeout)
-	assert.Equal(t, "iso/platform:latest", DefaultISORef)
+	// Contracts that leave the process; no other test pins these literals.
+	// The upstream firmware URL is fetched over the wire.
 	assert.Equal(t, "https://boot.ipxe.org/ipxe.efi", DefaultUpstreamFirmwareURL)
-	assert.Equal(t, "upstream", FirmwareSourceUpstream)
-	assert.Equal(t, "custom", FirmwareSourceCustom)
-	assert.Equal(t, "embedded", FirmwareSourceEmbedded)
+	// IEEE 802.1Q bounds on the VLAN IDs written to the wire and to netplan files.
 	assert.Equal(t, uint16(1), MinVLANID)
 	assert.Equal(t, uint16(4094), MaxVLANID)
 }

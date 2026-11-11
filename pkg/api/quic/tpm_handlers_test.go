@@ -586,6 +586,34 @@ func TestTPM2Handler_HandleDeleteEK(t *testing.T) {
 		assert.Equal(t, tpm2.TPMHandle(0x81010001), mock.deleted.TPMAttributes.Handle)
 		assert.Equal(t, tpm2.TPMHTPersistent, mock.deleted.TPMAttributes.HandleType)
 	})
+	// The API reference gives the payload as {"handle": <uint32>}.
+	t.Run("a literal lowercase handle key evicts", func(t *testing.T) {
+		h := NewTPM2Handler(logging.DefaultLogger())
+		mock := newMockTPM()
+		mock.persisted = true
+		h.SetTPM2Service(mock)
+		encoded, err := quicwire.EncodePayload(map[string]any{"handle": uint32(0x81010001)})
+		require.NoError(t, err)
+		payload := append([]byte{quicwire.SubOpTPM2DeleteEK}, encoded...)
+
+		resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: payload})
+
+		require.Equal(t, quicwire.StatusOK, resp.Status)
+		var st TPM2StatusResponse
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &st))
+		assert.Equal(t, "EK evicted", st.Message)
+		require.NotNil(t, mock.deleted, "DeleteEK must evict through TPM2_EvictControl")
+		assert.Equal(t, tpm2.TPMHandle(0x81010001), mock.deleted.TPMAttributes.Handle)
+	})
+	t.Run("the request encodes the documented key", func(t *testing.T) {
+		encoded, err := quicwire.EncodePayload(TPM2DeleteEKRequest{Handle: 0x81010001})
+		require.NoError(t, err)
+		var wire map[string]any
+		require.NoError(t, quicwire.DecodePayload(encoded, &wire))
+
+		assert.Contains(t, wire, "handle")
+		assert.NotContains(t, wire, "Handle")
+	})
 	// Codex 8200: a request naming another handle must not evict the EK.
 	t.Run("mismatched handle is refused", func(t *testing.T) {
 		mock := newMockTPM()
@@ -719,6 +747,34 @@ func TestTPM2Handler_HandleDeleteSRK(t *testing.T) {
 		require.NotNil(t, mock.deleted, "DeleteSRK must evict through TPM2_EvictControl")
 		assert.Equal(t, tpm2.TPMHandle(0x81000001), mock.deleted.TPMAttributes.Handle)
 		assert.Equal(t, tpm2.TPMHTPersistent, mock.deleted.TPMAttributes.HandleType)
+	})
+	// The API reference gives the payload as {"handle": <uint32>}.
+	t.Run("a literal lowercase handle key evicts", func(t *testing.T) {
+		h := NewTPM2Handler(logging.DefaultLogger())
+		mock := newSSRKMockTPM()
+		mock.persisted = true
+		h.SetTPM2Service(mock)
+		encoded, err := quicwire.EncodePayload(map[string]any{"handle": uint32(0x81000001)})
+		require.NoError(t, err)
+		payload := append([]byte{quicwire.SubOpTPM2DeleteSRK}, encoded...)
+
+		resp := h.HandleMessage(context.Background(), &quicwire.Request{Payload: payload})
+
+		require.Equal(t, quicwire.StatusOK, resp.Status)
+		var st TPM2StatusResponse
+		require.NoError(t, quicwire.DecodePayload(resp.Payload, &st))
+		assert.Equal(t, "SRK evicted", st.Message)
+		require.NotNil(t, mock.deleted, "DeleteSRK must evict through TPM2_EvictControl")
+		assert.Equal(t, tpm2.TPMHandle(0x81000001), mock.deleted.TPMAttributes.Handle)
+	})
+	t.Run("the request encodes the documented key", func(t *testing.T) {
+		encoded, err := quicwire.EncodePayload(TPM2DeleteSRKRequest{Handle: 0x81000001})
+		require.NoError(t, err)
+		var wire map[string]any
+		require.NoError(t, quicwire.DecodePayload(encoded, &wire))
+
+		assert.Contains(t, wire, "handle")
+		assert.NotContains(t, wire, "Handle")
 	})
 	// Codex 8183: a request naming another handle must not evict the SSRK.
 	t.Run("mismatched handle is refused", func(t *testing.T) {

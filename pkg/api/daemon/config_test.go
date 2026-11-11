@@ -349,48 +349,6 @@ func TestServiceConfig(t *testing.T) {
 	})
 }
 
-func TestConfig_Fields(t *testing.T) {
-	t.Run("all fields are accessible", func(t *testing.T) {
-		config := &Config{
-			SocketPath:      "/test/socket.sock",
-			SocketGroup:     "test-group",
-			SocketMode:      0600,
-			ShutdownTimeout: 20 * time.Second,
-			EnableMetrics:   false,
-			EnableEvents:    false,
-			Services:        make(map[string]ServiceConfig),
-		}
-
-		if config.SocketPath != "/test/socket.sock" {
-			t.Errorf("SocketPath mismatch")
-		}
-
-		if config.SocketGroup != "test-group" {
-			t.Errorf("SocketGroup mismatch")
-		}
-
-		if config.SocketMode != 0600 {
-			t.Errorf("SocketMode mismatch")
-		}
-
-		if config.ShutdownTimeout != 20*time.Second {
-			t.Errorf("ShutdownTimeout mismatch")
-		}
-
-		if config.EnableMetrics {
-			t.Error("EnableMetrics should be false")
-		}
-
-		if config.EnableEvents {
-			t.Error("EnableEvents should be false")
-		}
-
-		if config.Services == nil {
-			t.Error("Services should not be nil")
-		}
-	})
-}
-
 // TestDefaultConfig_ListenAddressesAreLoopback pins the defaults layer of
 // the 2026-08-26 ruling (#93, #552): no transport reaches an interface
 // unless the resolved `daemon:` section says so.

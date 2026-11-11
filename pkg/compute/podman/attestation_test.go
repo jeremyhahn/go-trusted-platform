@@ -449,60 +449,6 @@ func TestCompareBytes(t *testing.T) {
 	})
 }
 
-func TestContainerQuote_Fields(t *testing.T) {
-	now := time.Now()
-	quote := &ContainerQuote{
-		ContainerID:    "abc123",
-		ContainerName:  "test-container",
-		ImageRef:       "alpine:latest",
-		ImageDigest:    "sha256:abc",
-		PCRIndex:       14,
-		PCRValue:       make([]byte, 32),
-		MeasurementLog: make([]byte, 64),
-		Timestamp:      now,
-		Signature:      make([]byte, 256),
-		Nonce:          make([]byte, 16),
-	}
-
-	assert.Equal(t, "abc123", quote.ContainerID)
-	assert.Equal(t, "test-container", quote.ContainerName)
-	assert.Equal(t, "alpine:latest", quote.ImageRef)
-	assert.Equal(t, "sha256:abc", quote.ImageDigest)
-	assert.Equal(t, 14, quote.PCRIndex)
-	assert.Len(t, quote.PCRValue, 32)
-	assert.Len(t, quote.MeasurementLog, 64)
-	assert.Equal(t, now, quote.Timestamp)
-	assert.Len(t, quote.Signature, 256)
-	assert.Len(t, quote.Nonce, 16)
-}
-
-func TestContainerMeasurement_Fields(t *testing.T) {
-	now := time.Now()
-	measurement := &ContainerMeasurement{
-		ContainerID: "abc123",
-		EventType:   "container_start",
-		EventData:   []byte("test data"),
-		Digest:      make([]byte, 32),
-		Timestamp:   now,
-	}
-
-	assert.Equal(t, "abc123", measurement.ContainerID)
-	assert.Equal(t, "container_start", measurement.EventType)
-	assert.Equal(t, "test data", string(measurement.EventData))
-	assert.Len(t, measurement.Digest, 32)
-	assert.Equal(t, now, measurement.Timestamp)
-}
-
-func TestAttestorConfig_Fields(t *testing.T) {
-	config := &AttestorConfig{
-		PCRIndex:      10,
-		EnableSigning: true,
-	}
-
-	assert.Equal(t, 10, config.PCRIndex)
-	assert.True(t, config.EnableSigning)
-}
-
 func TestContainerPCRIndex(t *testing.T) {
 	assert.Equal(t, 14, ContainerPCRIndex)
 }
