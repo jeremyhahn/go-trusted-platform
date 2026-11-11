@@ -243,6 +243,21 @@ func laterPageRequested(r *http.Request) bool {
 	return err != nil || n != 0
 }
 
+// errInvalidOffset refuses a list request whose offset is not an integer in
+// [0, MaxInt32], rather than serving the first page in its place.
+var errInvalidOffset = errors.New("offset must be an integer between 0 and 2147483647")
+
+// offsetValid reports whether the request's offset, when present, is one
+// getPaginationParams can carry to IAM unchanged.
+func offsetValid(r *http.Request) bool {
+	v := r.URL.Query().Get("offset")
+	if v == "" {
+		return true
+	}
+	n, err := strconv.ParseInt(v, 10, 32)
+	return err == nil && n >= 0
+}
+
 func (h *IAMHandlers) createContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), requestTimeout)
 }
@@ -415,6 +430,10 @@ func (h *IAMHandlers) ListUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !h.decodeListBodyTenant(w, r, tenantID) {
+		return
+	}
+	if !offsetValid(r) {
+		h.respWriter.Error400(w, r, errInvalidOffset)
 		return
 	}
 
@@ -699,6 +718,10 @@ func (h *IAMHandlers) ListGroups(w http.ResponseWriter, r *http.Request) {
 	if !h.decodeListBodyTenant(w, r, tenantID) {
 		return
 	}
+	if !offsetValid(r) {
+		h.respWriter.Error400(w, r, errInvalidOffset)
+		return
+	}
 
 	limit, offset := h.getPaginationParams(r)
 	if laterPageRequested(r) {
@@ -954,6 +977,10 @@ func (h *IAMHandlers) ListRoles(w http.ResponseWriter, r *http.Request) {
 	if !h.decodeListBodyTenant(w, r, tenantID) {
 		return
 	}
+	if !offsetValid(r) {
+		h.respWriter.Error400(w, r, errInvalidOffset)
+		return
+	}
 
 	limit, offset := h.getPaginationParams(r)
 	if laterPageRequested(r) {
@@ -1128,6 +1155,10 @@ func (h *IAMHandlers) CreateTenant(w http.ResponseWriter, r *http.Request) {
 
 // ListTenants handles GET /api/v1/iam/tenants
 func (h *IAMHandlers) ListTenants(w http.ResponseWriter, r *http.Request) {
+	if !offsetValid(r) {
+		h.respWriter.Error400(w, r, errInvalidOffset)
+		return
+	}
 	limit, offset := h.getPaginationParams(r)
 
 	ctx, cancel := h.createContext()
@@ -1265,6 +1296,10 @@ func (h *IAMHandlers) ListPolicies(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !h.decodeListBodyTenant(w, r, tenantID) {
+		return
+	}
+	if !offsetValid(r) {
+		h.respWriter.Error400(w, r, errInvalidOffset)
 		return
 	}
 
@@ -1572,6 +1607,10 @@ func (h *IAMHandlers) ListApps(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !h.decodeListBodyTenant(w, r, tenantID) {
+		return
+	}
+	if !offsetValid(r) {
+		h.respWriter.Error400(w, r, errInvalidOffset)
 		return
 	}
 
