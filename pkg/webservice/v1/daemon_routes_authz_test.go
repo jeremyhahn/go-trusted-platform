@@ -274,9 +274,6 @@ func serveWithTLS(root http.Handler, method, path string, state *tls.ConnectionS
 	return rec.Code
 }
 
-// Changing a tenant's MFA policy through the webservice takes the admin
-// role, as the client certificate gate admits every user the platform
-// anchor issued; reading it stays on the certificate gate.
 // TestDaemonRoutes_MFAPolicyPutNotMounted: login does not enforce the
 // tenant MFA policy, so the webservice must not accept an update to it,
 // not even from an admin; reading it stays open to the login flow.
@@ -310,11 +307,6 @@ func TestDaemonRoutes_MFAPolicyPutNotMounted(t *testing.T) {
 	}
 }
 
-// TestRegisterRoutes_DaemonMFAPolicyPutStaysInTheCallersTenant: the admin
-// role says the caller administers a tenant, not which one. A tenant-A
-// administrator naming tenant B in the path is refused before the daemon
-// handler runs; its own tenant, and the system tenant acting on any tenant,
-// are admitted, as the tenant router admits them.
 // Only the named method of a method entry takes the authorizer: with every
 // caller refused, PUT on the MFA policy is refused while GET on the same
 // template reaches the daemon. Cert issuance takes the login check instead
