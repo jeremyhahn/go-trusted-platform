@@ -677,6 +677,94 @@ func TestListUsers_WithPagination(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
 }
 
+// TestListHandlers_OffsetOtherThanZeroRefused: an offset that is out of
+// range, malformed or negative is a later page the user, group and role
+// list handlers cannot serve; only a plain zero offset is served.
+func TestListHandlers_OffsetOtherThanZeroRefused(t *testing.T) {
+	t.Parallel()
+
+	type handlerCase struct {
+		name   string
+		path   string
+		mock   func(t *testing.T, refuse bool) *mockIAMClient
+		handle func(h *IAMHandlers, w http.ResponseWriter, r *http.Request)
+	}
+	handlerCases := []handlerCase{
+		{
+			name: "ListUsers",
+			path: "/api/v1/iam/tenants/tenant-1/users",
+			mock: func(t *testing.T, refuse bool) *mockIAMClient {
+				return &mockIAMClient{
+					listUsersFn: func(context.Context, string, *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
+						if refuse {
+							t.Error("the IAM call must not run for a refused offset")
+						}
+						return &iamsdk.ListUsersResponse{}, nil
+					},
+				}
+			},
+			handle: func(h *IAMHandlers, w http.ResponseWriter, r *http.Request) { h.ListUsers(w, r) },
+		},
+		{
+			name: "ListGroups",
+			path: "/api/v1/iam/tenants/tenant-1/groups",
+			mock: func(t *testing.T, refuse bool) *mockIAMClient {
+				return &mockIAMClient{
+					listGroupsFn: func(context.Context, string, *iamsdk.ListGroupsRequest) (*iamsdk.ListGroupsResponse, error) {
+						if refuse {
+							t.Error("the IAM call must not run for a refused offset")
+						}
+						return &iamsdk.ListGroupsResponse{}, nil
+					},
+				}
+			},
+			handle: func(h *IAMHandlers, w http.ResponseWriter, r *http.Request) { h.ListGroups(w, r) },
+		},
+		{
+			name: "ListRoles",
+			path: "/api/v1/iam/tenants/tenant-1/roles",
+			mock: func(t *testing.T, refuse bool) *mockIAMClient {
+				return &mockIAMClient{
+					listRolesFn: func(context.Context, string, *iamsdk.ListRolesRequest) (*iamsdk.ListRolesResponse, error) {
+						if refuse {
+							t.Error("the IAM call must not run for a refused offset")
+						}
+						return &iamsdk.ListRolesResponse{}, nil
+					},
+				}
+			},
+			handle: func(h *IAMHandlers, w http.ResponseWriter, r *http.Request) { h.ListRoles(w, r) },
+		},
+	}
+	offsetCases := []struct {
+		offset string
+		want   int
+	}{
+		{offset: "2147483650", want: http.StatusBadRequest},
+		{offset: "abc", want: http.StatusBadRequest},
+		{offset: "-5", want: http.StatusBadRequest},
+		{offset: "0", want: http.StatusOK},
+	}
+
+	for _, hc := range handlerCases {
+		for _, oc := range offsetCases {
+			t.Run(hc.name+"/offset="+oc.offset, func(t *testing.T) {
+				t.Parallel()
+				refuse := oc.want != http.StatusOK
+				handlers, writer := newTestHandlers(hc.mock(t, refuse), &mockPEPClient{})
+
+				req := httptest.NewRequest(http.MethodGet, hc.path+"?limit=10&offset="+oc.offset, nil)
+				req = mux.SetURLVars(req, map[string]string{"tenant": "tenant-1"})
+				rec := httptest.NewRecorder()
+
+				hc.handle(handlers, rec, req)
+
+				assert.Equal(t, oc.want, writer.lastStatus)
+			})
+		}
+	}
+}
+
 func TestListUsers_MissingTenantID(t *testing.T) {
 	t.Parallel()
 	handlers, writer := newTestHandlers(&mockIAMClient{}, &mockPEPClient{})

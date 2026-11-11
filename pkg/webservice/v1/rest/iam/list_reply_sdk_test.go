@@ -338,6 +338,12 @@ func TestListRepliesOverSDKREST_LaterPagesRefused(t *testing.T) {
 			assert.Equal(t, codes.InvalidArgument, status.Code(err), "err = %v", err)
 			assert.Zero(t, calls, "IAM was asked for a page the handler cannot serve")
 
+			// Page 214748366 of 10 is offset=2147483650, above MaxInt32.
+			err = tc.invoke(client, &platformv1.PaginationRequest{Page: 214748366, PageSize: 10})
+			require.Error(t, err)
+			assert.Equal(t, codes.InvalidArgument, status.Code(err), "err = %v", err)
+			assert.Zero(t, calls, "IAM was asked for an out-of-range page the handler cannot serve")
+
 			require.NoError(t, tc.invoke(client, &platformv1.PaginationRequest{Page: 1, PageSize: 10}))
 			require.NoError(t, tc.invoke(client, nil))
 			assert.Equal(t, 2, calls)
