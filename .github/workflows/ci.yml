@@ -188,7 +188,7 @@ env:
   # sdkjs and web for the Makefile's parse-time `go env`, fips, and
   # scripts/foreignfailures in integration and soak). An exact patch release,
   # never "stable". The `go` directive in every go.mod must not exceed it.
-  GO_VERSION: "1.27.3"
+  GO_VERSION: "1.27.4"
   # Modules resolve from tags, never from a workspace (the Makefile and
   # release.yml set the same).
   GOWORK: "off"
