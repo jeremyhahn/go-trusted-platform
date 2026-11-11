@@ -1,4 +1,10 @@
-# ci-template: v1.34.1 (customized)
+# ci-template: v1.35.1 (customized)
+#
+# v1.35.1 (DS-8433, CA m2557): the Signatures job of handbook cd17d28
+# (ci-template v1.35.1) is adopted as is, in CI Gate's needs, env block and a
+# `pr` check line, with .github/allowed_signers synced from handbook
+# software/templates/signing/go-trusted-platform.allowed_signers. Every other
+# job is v1.34.1's as customized below.
 #
 # Template ref: handbook 027caea, software/templates/github-actions/ci.yml
 # at 027caea (v1.34.1), adopted over v1.29.5 (handbook f9730b11f), itself
@@ -1950,6 +1956,126 @@ jobs:
   # `join(needs.*.result)` is a GitHub extension that is empty on Gitea, so
   # every result is named. The one exception is `fips`: it is in none of the
   # three.
+  # v1.35 (Company Agent m2557, owner ruling on commit signing, 2026-11-11):
+  # every commit that reaches main is signed by a registered identity. Each
+  # agent keeps its own App identity (<repo>-agent[bot]) and its own SSH
+  # signing key, and agent work is never attributed to the owner's account.
+  # The registry is .github/allowed_signers (ssh allowed_signers format: the
+  # principal is the exact committer email, then the public key), synced from
+  # the handbook's software/templates/signing/<repo>.allowed_signers. The job
+  # reads it from the BASE commit, so a pull request cannot add the key that
+  # signs it; only the first adoption, with no registry at the base, reads it
+  # from the head, with a warning. It checks every commit in the range: base..head
+  # on a pull request, before..after on a push to main, the one commit on a
+  # schedule or dispatch run or a new branch. A commit passes when
+  # `git verify-commit` (gpg.format=ssh, gpg.ssh.allowedSignersFile) accepts it
+  # AND the key's registered principal is the committer email; a commit GitHub
+  # made (committer noreply@github.com: a squash merge, an update-branch merge)
+  # passes when the API reports it verified with committer web-flow. It fails
+  # closed on an unsigned commit, an unknown key, a principal mismatch and an
+  # unreadable API, printing the commit and why; an email outside the registry
+  # and GitHub's noreply forms is never printed. Nothing but git and the API
+  # runs: no repository code, no token beyond github.token (contents: read).
+  signatures:
+    name: Signatures
+    runs-on: ubuntu-latest
+    if: ${{ !github.event.pull_request.draft }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify commit signatures against .github/allowed_signers
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          BEFORE: ${{ github.event.before }}
+          REPO: ${{ github.repository }}
+          API: ${{ github.api_url }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          zero() { [ -z "$1" ] || printf '%s' "$1" | grep -qE '^0+$'; }
+          isrev() { ! zero "$1" && git cat-file -e "$1^{commit}" 2>/dev/null; }
+          ASF="${RUNNER_TEMP:-/tmp}/allowed_signers"
+          # The registry is read from the base, so a pull request cannot add the key
+          # that signs it. Only the first adoption, with no registry at the base,
+          # reads it from the head.
+          REG=""
+          if [ "$EVENT" = pull_request ]; then REG="$BASE_SHA"; elif [ "$EVENT" = push ]; then REG="$BEFORE"; fi
+          # v1.35.1: a named base that is not in the clone (a push after a force
+          # push, a base the checkout did not bring) is fetched; if it still cannot
+          # be read the job fails, never falling back to the head's registry or to
+          # the head commit alone.
+          if [ "$EVENT" = pull_request ] && [ -z "$REG" ]; then
+            echo "FAIL a pull_request run with no base SHA"; exit 1
+          fi
+          if ! zero "$REG" && ! isrev "$REG"; then
+            git fetch -q --no-tags origin "$REG" 2>/dev/null || true
+            isrev "$REG" || { echo "FAIL the base ${REG:0:12} cannot be read, so neither the registry nor the range can be checked"; exit 1; }
+          fi
+          if isrev "$REG" && git cat-file -e "$REG:.github/allowed_signers" 2>/dev/null; then
+            git show "$REG:.github/allowed_signers" > "$ASF"
+            echo "registry: .github/allowed_signers at ${REG:0:12}"
+          elif git cat-file -e "$HEAD_SHA:.github/allowed_signers" 2>/dev/null; then
+            git show "$HEAD_SHA:.github/allowed_signers" > "$ASF"
+            echo "::warning::no registry at the base: .github/allowed_signers read from the head (first adoption only)"
+          else
+            echo "FAIL no .github/allowed_signers in this repository"; exit 1
+          fi
+          # The range: base..head on a pull request, before..after on a push to main,
+          # and the one commit otherwise (a new branch, a schedule or dispatch run).
+          if [ "$EVENT" = pull_request ] && isrev "$BASE_SHA"; then RANGE="$BASE_SHA..$HEAD_SHA"
+          elif [ "$EVENT" = push ] && isrev "$BEFORE"; then RANGE="$BEFORE..$HEAD_SHA"
+          else RANGE="$HEAD_SHA -1"; fi
+          # shellcheck disable=SC2086 # RANGE is one or two words on purpose
+          COMMITS=$(git rev-list --reverse $RANGE) || { echo "FAIL cannot list the range $RANGE"; exit 1; }
+          N=$(printf '%s\n' "$COMMITS" | grep -c . || true)
+          echo "checking $N commit(s) in $RANGE"
+          reg_principals=$(awk '!/^[[:space:]]*(#|$)/ {print $1}' "$ASF")
+          shown() { # print an email only when it is public: a registry principal or a GitHub noreply
+            if printf '%s\n' "$reg_principals" | grep -qxF -- "$1" || printf '%s' "$1" | grep -qE '@users\.noreply\.github\.com$|^noreply@github\.com$'; then
+              printf '%s' "$1"; else printf 'an address not in the registry'; fi
+          }
+          BAD=0
+          for c in $COMMITS; do
+            ce=$(git log -1 --format=%ce "$c")
+            s=$(git log -1 --format=%s "$c" | cut -c1-60)
+            if [ "$ce" = noreply@github.com ]; then
+              # GitHub made it (a squash merge, an update-branch merge): accept it only
+              # when the API says GitHub signed and verified it as web-flow.
+              v=$(curl -fsS --retry 3 -H "Authorization: Bearer ${GH_TOKEN}" -H 'Accept: application/vnd.github+json' \
+                  "${API}/repos/${REPO}/commits/${c}" | jq -r '[(.commit.verification.verified|tostring), .commit.verification.reason, (.committer.login // "none")] | @tsv') \
+                || { echo "FAIL ${c:0:12} committed by GitHub, and the API could not be read: $s"; BAD=1; continue; }
+              IFS=$'\t' read -r ok reason login <<<"$v"
+              if [ "$ok" = true ] && [ "$login" = web-flow ]; then
+                echo "OK   ${c:0:12} GitHub web-flow, verified: $s"
+              else
+                echo "FAIL ${c:0:12} committed as GitHub but not verified (verified=$ok reason=$reason committer=$login): $s"; BAD=1
+              fi
+              continue
+            fi
+            # v1.35.1: grep reads the whole object (no -q), so under pipefail a
+            # long commit message never ends the pipeline with SIGPIPE.
+            if ! git cat-file commit "$c" | grep '^gpgsig' >/dev/null; then
+              echo "FAIL ${c:0:12} unsigned, committer $(shown "$ce"): $s"; BAD=1; continue
+            fi
+            g() { git -c gpg.format=ssh -c gpg.ssh.allowedSignersFile="$ASF" "$@"; }
+            if ! g verify-commit "$c" >/dev/null 2>&1; then
+              echo "FAIL ${c:0:12} signed by a key not in the registry (or a bad signature), committer $(shown "$ce"): $s"; BAD=1; continue
+            fi
+            signer=$(g log -1 --format=%GS "$c")
+            if [ "$signer" != "$ce" ]; then
+              echo "FAIL ${c:0:12} principal mismatch: the key is registered to $signer, the committer is $(shown "$ce"): $s"; BAD=1; continue
+            fi
+            echo "OK   ${c:0:12} signed by $signer: $s"
+          done
+          exit $BAD
+
   # ==========================================================================
 
   ci-gate:
@@ -1965,7 +2091,7 @@ jobs:
     # skipped job as `skipped`, not `success`), never a green nightly. Every
     # other verdict, an empty one included, runs it.
     if: ${{ always() && (github.event_name != 'schedule' || needs.preflight.outputs.verdict != 'busy') }}
-    needs: [preflight, lint, image, lint-gates, sdkjs, race, web, integration-image, integration, soak, vuln, fips]   # v1.34, v1.30 lint
+    needs: [preflight, lint, image, lint-gates, sdkjs, race, web, integration-image, integration, soak, vuln, fips, signatures]   # v1.34, v1.30 lint, v1.35 signatures
     steps:
       - name: Verify every job succeeded
         env:
@@ -1994,6 +2120,7 @@ jobs:
           RESULT_SOAK: ${{ needs.soak.result }}
           RESULT_VULN: ${{ needs.vuln.result }}
           RESULT_FIPS: ${{ needs.fips.result }}
+          RESULT_SIGNATURES: ${{ needs.signatures.result }}
         run: |
           # skipped != failed, and a skipped job fails the gate: it means the
           # job did not run (go-qrdb#42). The exceptions: a `full` job skipped
@@ -2063,4 +2190,5 @@ jobs:
           check full vuln "$RESULT_VULN"
           check nightly soak "$RESULT_SOAK"
           check main fips "$RESULT_FIPS"
+          check pr signatures "$RESULT_SIGNATURES"   # v1.35
           exit $status
