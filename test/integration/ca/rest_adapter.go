@@ -135,32 +135,6 @@ type restCACertificateResponse struct {
 	PEM                string               `json:"pem,omitempty"`
 }
 
-type restCACertificateListResponse struct {
-	Certificates []restCACertificateSummary `json:"certificates"`
-	Page         int                        `json:"page"`
-	PageSize     int                        `json:"page_size"`
-	TotalItems   int                        `json:"total_items"`
-	TotalPages   int                        `json:"total_pages"`
-	Timestamp    int64                      `json:"timestamp"`
-}
-
-type restCertificateVerifyRequest struct {
-	CertificatePEM   string `json:"certificate_pem,omitempty"`
-	VerifyExpiration bool   `json:"verify_expiration,omitempty"`
-	VerifyRevocation bool   `json:"verify_revocation,omitempty"`
-}
-
-type restCAVerifyCertificateResponse struct {
-	Success   bool     `json:"success"`
-	Message   string   `json:"message"`
-	Valid     bool     `json:"valid"`
-	Revoked   bool     `json:"revoked"`
-	Chain     []string `json:"chain,omitempty"`
-	Errors    []string `json:"errors,omitempty"`
-	Warnings  []string `json:"warnings,omitempty"`
-	Timestamp int64    `json:"timestamp"`
-}
-
 type restCertificateRevokeRequest struct {
 	Reason     int  `json:"reason,omitempty"`
 	DeleteKeys bool `json:"delete_keys,omitempty"`
@@ -521,30 +495,31 @@ func (r *RESTAdapter) GetCertificate(ctx context.Context, opts GetCertificateOpt
 func (r *RESTAdapter) ListCertificates(ctx context.Context, opts ListCertificatesOptions) (*ListCertificatesResult, error) {
 	path := "/api/v1/ca/certificates"
 
+	// The webservice CA handler reads limit (and a cursor); it has no
+	// offset parameter.
 	params := url.Values{}
 	if opts.Limit > 0 {
-		params.Set("page_size", fmt.Sprintf("%d", opts.Limit))
-	}
-	if opts.Offset > 0 && opts.Limit > 0 {
-		page := (opts.Offset / opts.Limit) + 1
-		params.Set("page", fmt.Sprintf("%d", page))
+		params.Set("limit", fmt.Sprintf("%d", opts.Limit))
 	}
 	if len(params) > 0 {
 		path += "?" + params.Encode()
 	}
 
-	var resp restCACertificateListResponse
-	if err := r.doGet(ctx, path, &resp); err != nil {
+	resp := &pb.ListCertificatesResponse{}
+	if err := r.doProto(ctx, http.MethodGet, path, nil, resp); err != nil {
 		return nil, ErrCallFailed{Protocol: "REST", Method: "ListCertificates", Err: err}
 	}
 
 	result := &ListCertificatesResult{
 		Certificates: make([]CertificateSummary, 0, len(resp.Certificates)),
-		Total:        int32(resp.TotalItems),
 	}
-
-	for i := range resp.Certificates {
-		result.Certificates = append(result.Certificates, *convertRESTCertSummary(&resp.Certificates[i]))
+	for _, cert := range resp.Certificates {
+		if cert != nil {
+			result.Certificates = append(result.Certificates, *convertCertificateSummary(cert))
+		}
+	}
+	if resp.Pagination != nil {
+		result.Total = int32(resp.Pagination.TotalItems)
 	}
 
 	return result, nil
@@ -556,14 +531,14 @@ func (r *RESTAdapter) ListCertificates(ctx context.Context, opts ListCertificate
 
 // VerifyCertificate verifies a certificate via REST.
 func (r *RESTAdapter) VerifyCertificate(ctx context.Context, opts VerifyCertificateOptions) (*VerifyCertificateResult, error) {
-	reqBody := restCertificateVerifyRequest{
-		CertificatePEM:   string(opts.CertificatePEM),
+	req := &pb.VerifyCertificateRequest{
+		CertificatePem:   opts.CertificatePEM,
 		VerifyExpiration: opts.CheckExpiration,
 		VerifyRevocation: opts.CheckCRL,
 	}
 
-	var resp restCAVerifyCertificateResponse
-	if err := r.doPost(ctx, "/api/v1/ca/certificates/verify", reqBody, &resp); err != nil {
+	resp := &pb.VerifyCertificateResponse{}
+	if err := r.doProto(ctx, http.MethodPost, "/api/v1/ca/certificates/verify", req, resp); err != nil {
 		return nil, ErrCallFailed{Protocol: "REST", Method: "VerifyCertificate", Err: err}
 	}
 
@@ -577,8 +552,8 @@ func (r *RESTAdapter) VerifyCertificate(ctx context.Context, opts VerifyCertific
 		Warnings:      resp.Warnings,
 	}
 
-	if !resp.Success {
-		result.ValidationError = resp.Message
+	if resp.Status != nil && !resp.Status.Success {
+		result.ValidationError = resp.Status.Message
 	}
 
 	return result, nil
@@ -761,22 +736,6 @@ func (r *RESTAdapter) UninstallCACertificates(ctx context.Context) (*UninstallCA
 // =============================================================================
 // Conversion Helpers
 // =============================================================================
-
-// convertRESTCertSummary converts a REST certificate summary to the adapter type.
-func convertRESTCertSummary(s *restCACertificateSummary) *CertificateSummary {
-	if s == nil {
-		return nil
-	}
-	return &CertificateSummary{
-		Serial:       s.Serial,
-		CommonName:   s.CommonName,
-		Issuer:       s.Issuer,
-		NotBefore:    time.Unix(s.NotBefore, 0),
-		NotAfter:     time.Unix(s.NotAfter, 0),
-		Status:       restStatusToCertStatus(s.Status),
-		KeyAlgorithm: s.KeyAlgorithm,
-	}
-}
 
 // convertRESTCertificate converts a REST certificate response to the adapter type.
 func convertRESTCertificate(c *restCACertificateResponse) *Certificate {
