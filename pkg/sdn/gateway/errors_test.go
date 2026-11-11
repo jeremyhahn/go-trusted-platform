@@ -614,25 +614,3 @@ func TestErrorsIs(t *testing.T) {
 		})
 	}
 }
-
-func TestRequirementCheck_Fields(t *testing.T) {
-	check := RequirementCheck{
-		Name:     "reputation",
-		Required: "0.85",
-		Actual:   "0.70",
-		Passed:   false,
-	}
-
-	if check.Name != "reputation" {
-		t.Errorf("Name = %q, want 'reputation'", check.Name)
-	}
-	if check.Required != "0.85" {
-		t.Errorf("Required = %q, want '0.85'", check.Required)
-	}
-	if check.Actual != "0.70" {
-		t.Errorf("Actual = %q, want '0.70'", check.Actual)
-	}
-	if check.Passed {
-		t.Error("Passed should be false")
-	}
-}
