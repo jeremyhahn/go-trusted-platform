@@ -15,6 +15,18 @@ import {
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 
+// Group record as the REST API sends it: camelCase or snake_case keys (#445).
+interface GroupWire {
+  name?: string;
+  description?: string;
+  member_ids?: string[];
+  members?: string[];
+  memberIds?: string[];
+  role_ids?: string[];
+  roles?: string[];
+  roleIds?: string[];
+}
+
 export default function GroupDetailClient() {
   const params = useParams();
   const pathname = usePathname();
@@ -80,7 +92,8 @@ export default function GroupDetailClient() {
   }
 
   // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-  const g: any = (group as any)?.group ?? group ?? null;
+  const rawGroup = group as unknown as (GroupWire & { group?: GroupWire }) | null | undefined;
+  const g: GroupWire | null = rawGroup?.group ?? rawGroup ?? null;
   const members: string[] = g?.member_ids ?? g?.members ?? g?.memberIds ?? [];
   const roles: string[] = g?.role_ids ?? g?.roles ?? g?.roleIds ?? [];
 

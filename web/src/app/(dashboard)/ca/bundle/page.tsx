@@ -21,6 +21,23 @@ import { useCA, useApi, useToast } from "@/hooks";
  * placeholder so the xkey + dashboard CA bundle workflows have a
  * working surface.
  */
+// One level of the CA bundle REST envelope, which differs from the
+// SDK/proto declaration (#445): a flat (base64-)PEM string, or an object
+// carrying the PEM as `pem`, `pemData` or a nested `bundle`.
+type BundleNodeWire =
+  | string
+  | {
+      pem?: unknown;
+      pemData?: unknown;
+      bundle?: BundleNodeWire;
+    };
+
+// The response either unwrapped by useApi or the full envelope with
+// its `payload`.
+type BundleResponseWire = Exclude<BundleNodeWire, string> & {
+  payload?: BundleNodeWire;
+};
+
 export default function CABundlePage() {
   const ca = useCA();
   const { toast } = useToast();
@@ -46,8 +63,7 @@ export default function CABundlePage() {
       if (s.startsWith("-----")) return s;
       try { return atob(s); } catch { return s; }
     };
-    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-    const tryNode = (n: any): string => {
+    const tryNode = (n: BundleNodeWire | undefined): string => {
       if (!n) return "";
       if (typeof n === "string") return decode(n);
       if (typeof n.pem === "string") return decode(n.pem);
@@ -56,8 +72,7 @@ export default function CABundlePage() {
       if (n.bundle) return tryNode(n.bundle);
       return "";
     };
-    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-    const r = bundleResponse as any;
+    const r = bundleResponse as unknown as BundleResponseWire | null | undefined;
     if (!r) return "";
     return tryNode(r.payload) || tryNode(r);
   }, [bundleResponse]);

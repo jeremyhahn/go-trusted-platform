@@ -30,6 +30,37 @@ import type { SystemHealth, ServiceHealth } from "@/types/platform";
  * - usePlatform(): Access to PlatformService
  * - useApi(): Declarative data fetching with auto-refresh support
  */
+// The REST envelope of the metrics and system-info endpoints, which carries
+// camelCase or snake_case field names and differs from the SDK/proto
+// declaration (#445). Every field is optional: the page falls back to 0.
+interface SystemInfoWire {
+  num_cpus?: number;
+  numCpus?: number;
+  cpuCores?: number;
+  total_memory_mb?: number;
+  totalMemoryMb?: number;
+}
+
+interface MetricsWire {
+  cpuUsagePercent?: number;
+  cpu_usage_percent?: number;
+  memoryUsagePercent?: number;
+  memory_usage_percent?: number;
+  diskUsagePercent?: number;
+  disk_usage_percent?: number;
+  activeConnections?: number;
+  active_connections?: number;
+  system?: SystemInfoWire;
+}
+
+interface MetricsResponseWire {
+  metrics?: MetricsWire;
+}
+
+interface SystemInfoResponseWire {
+  system?: SystemInfoWire;
+}
+
 export default function HealthPage() {
   const { toast } = useToast();
   const platform = usePlatform();
@@ -97,12 +128,11 @@ export default function HealthPage() {
     // field anywhere. We synthesize totals from the percent so progress
     // bars track real usage while values stay calibrated against a unit
     // that the user understands.
-    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-    const m = (metricsResponse as any)?.metrics ?? {};
-    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-    const sys = (metricsResponse as any)?.metrics?.system
-              ?? (systemResponse as any)?.system
+    const metricsWire = metricsResponse as unknown as MetricsResponseWire | null | undefined;
+    const systemWire = systemResponse as unknown as SystemInfoResponseWire | null | undefined;
+    const m: MetricsWire = metricsWire?.metrics ?? {};
+    const sys: SystemInfoWire = metricsWire?.metrics?.system
+              ?? systemWire?.system
               ?? {};
     const cpuPct = Number(m.cpuUsagePercent ?? m.cpu_usage_percent ?? 0);
     const memPct = Number(m.memoryUsagePercent ?? m.memory_usage_percent ?? 0);

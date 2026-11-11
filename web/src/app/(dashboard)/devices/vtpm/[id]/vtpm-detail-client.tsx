@@ -75,8 +75,9 @@ export default function VTPMDetailPage() {
       const response = await vtpmService.getBundle(vtpmId);
 
       if (response.data) {
-        // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-        setVTPM(response.data as any);
+        // The REST payload carries the VTPMDetail fields, which differ from
+        // the SDK/proto declaration of the bundle (#445).
+        setVTPM(response.data as unknown as VTPMDetail);
       } else {
         throw new Error('Failed to fetch vTPM');
       }

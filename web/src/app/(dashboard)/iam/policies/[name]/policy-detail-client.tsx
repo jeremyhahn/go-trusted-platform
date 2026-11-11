@@ -23,6 +23,15 @@ import {
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 
+// Policy record as the REST API sends it: camelCase or snake_case keys (#445).
+interface PolicyWire {
+  description?: string;
+  priority?: number;
+  spec_yaml?: string;
+  specYaml?: string;
+  spec?: string;
+}
+
 export default function PolicyDetailClient() {
   const params = useParams();
   const pathname = usePathname();
@@ -90,7 +99,8 @@ export default function PolicyDetailClient() {
   }
 
   // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-  const p: any = (policy as any)?.policy ?? policy ?? null;
+  const rawPolicy = policy as unknown as (PolicyWire & { policy?: PolicyWire }) | null | undefined;
+  const p: PolicyWire | null = rawPolicy?.policy ?? rawPolicy ?? null;
   const yaml: string = p?.spec_yaml ?? p?.specYaml ?? p?.spec ?? '';
 
   return (
