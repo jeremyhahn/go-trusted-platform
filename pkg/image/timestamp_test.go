@@ -628,26 +628,6 @@ func TestAlgorithmIdentifier_OIDs(t *testing.T) {
 	assert.Equal(t, asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 3}, oidSHA512)
 }
 
-func TestTimestampInfo_Fields(t *testing.T) {
-	info := &TimestampInfo{
-		SerialNumber:   []byte{0x01, 0x02, 0x03},
-		HashAlgorithm:  "SHA256",
-		TSAName:        "Test TSA",
-		PolicyID:       "1.2.3.4.5",
-		MessageImprint: []byte{0x01, 0x02, 0x03, 0x04},
-		Nonce:          []byte{0x05, 0x06},
-		Accuracy:       time.Second + 500*time.Millisecond,
-	}
-
-	assert.Equal(t, []byte{0x01, 0x02, 0x03}, info.SerialNumber)
-	assert.Equal(t, "SHA256", info.HashAlgorithm)
-	assert.Equal(t, "Test TSA", info.TSAName)
-	assert.Equal(t, "1.2.3.4.5", info.PolicyID)
-	assert.Equal(t, []byte{0x01, 0x02, 0x03, 0x04}, info.MessageImprint)
-	assert.Equal(t, []byte{0x05, 0x06}, info.Nonce)
-	assert.Equal(t, time.Second+500*time.Millisecond, info.Accuracy)
-}
-
 func TestAccuracy_ToDuration(t *testing.T) {
 	tests := []struct {
 		name     string
