@@ -64,8 +64,11 @@
 # (IN_IMAGE_SCRATCH overrides), on the daemon's data disk, not the 3 GB /tmp
 # tmpfs, and removed with the container. A scratch directory that is missing or not writable fails
 # the stage by name. A bridge stage's GOPROXY puts DEVCACHE_GOPROXY (Athens)
-# first when the runner sets it: <DEVCACHE_GOPROXY>|https://proxy.golang.org|direct,
+# first when the runner sets it: <DEVCACHE_GOPROXY>|https://proxy.golang.org,
 # so any error falls through to the public proxy.
+# v5 (ci-template v1.34.1): no `direct` entry in that chain
+# (dependency-resolution.md, "No direct fetch, anywhere"); a private path is
+# fetched by GOPRIVATE/GONOPROXY, never through GOPROXY.
 #
 set -euo pipefail
 
@@ -153,7 +156,7 @@ if [ "$network" = bridge ]; then
   # further fetch more. The writable one starts empty, so a stage downloads
   # its whole graph (gigabytes): it goes beside the build cache on disk, not
   # in the 3g /tmp tmpfs, where it left no room for trivy's DB (#933).
-  args+=(--env "GOPROXY=${DEVCACHE_GOPROXY:+$DEVCACHE_GOPROXY|}https://proxy.golang.org|direct" --env GOMODCACHE=/gocache/mod)
+  args+=(--env "GOPROXY=${DEVCACHE_GOPROXY:+$DEVCACHE_GOPROXY|}https://proxy.golang.org" --env GOMODCACHE=/gocache/mod)
   for v in GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; do
     if [ -n "${!v:-}" ]; then args+=(--env "$v"); fi
   done
