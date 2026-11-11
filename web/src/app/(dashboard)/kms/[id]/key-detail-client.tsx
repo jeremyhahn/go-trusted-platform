@@ -72,9 +72,7 @@ export default function KeyDetailPage({ params }: { params: Promise<{ id: string
 
     // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
     const r = response as unknown as KeyResponseWire;
-    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
     const key: KeyWire = r.key ?? r;
-    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
     const metadata: KeyWire = r.metadata ?? key ?? {};
     const keyId: string = key.keyId ?? key.key_id ?? '';
     const algorithm: string = key.algorithm ?? '';
@@ -90,7 +88,6 @@ export default function KeyDetailPage({ params }: { params: Promise<{ id: string
     return {
       id: keyId,
       name: metadata.name || key.name || keyId,
-      // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
       algorithm: algorithm as KeyDetail["algorithm"],
       type: algorithm.includes('AES') || algorithm.includes('HMAC') ? 'symmetric' as const : 'asymmetric' as const,
       status: (status === 'ENABLED' ? 'active' : status === 'DISABLED' ? 'disabled' : 'active') as 'active' | 'disabled' | 'pending_deletion',

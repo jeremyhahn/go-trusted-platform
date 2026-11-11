@@ -66,7 +66,6 @@ export default function NewPolicyPage() {
       // snake_case `spec_yaml` field; send all three known names so
       // the call works regardless of how the SDK serializes the
       // request shape.
-      // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
       // The SDK request plus the spec keys the REST API also reads.
       const request: CreateIAMPolicyRequest & { spec: string; spec_yaml: string } = {
         tenantId, name, description, specYaml: yaml, spec: yaml, spec_yaml: yaml,

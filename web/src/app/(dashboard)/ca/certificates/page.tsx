@@ -100,7 +100,7 @@ export default function CertificatesPage() {
   // The CertificateSummary proto does not (yet) carry is_ca, so we derive
   // the type column from the data we have:
   //   - root          : commonName == issuer (self-signed)
-  //   - intermediate  : any other cert in the list lists this cert's
+  //   - intermediate  : some other cert in the list lists this cert's
   //                     commonName as its issuer (i.e. this cert signed
   //                     another cert that we can see)
   //   - leaf          : everything else
@@ -113,10 +113,8 @@ export default function CertificatesPage() {
       if (typeof v === "number") return new Date(v * 1000).toISOString();
       return String(v);
     };
-    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
     const subjectOf = (c: CertificateWire): string =>
       c.commonName ?? c.common_name ?? c.subject?.common_name ?? c.subject?.commonName ?? "Unknown";
-    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
     const issuerOf = (c: CertificateWire): string => c.issuer ?? "Unknown";
 
     // Pre-compute the set of CN's that appear as someone's issuer; those CN's
@@ -127,7 +125,6 @@ export default function CertificatesPage() {
       if (iss && iss !== "Unknown") issuingCNs.add(iss);
     }
 
-    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
     const resolveType = (c: CertificateWire): "root" | "intermediate" | "leaf" => {
       const isCAField = c.is_ca ?? c.isCA;
       const subj = subjectOf(c);
@@ -139,7 +136,6 @@ export default function CertificatesPage() {
       return "leaf";
     };
 
-    // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
     return certs.map((cert: CertificateWire) => ({
       id: cert.serial,
       serialNumber: cert.serial,

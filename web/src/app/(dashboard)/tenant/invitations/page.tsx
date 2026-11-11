@@ -83,18 +83,13 @@ export default function InvitationsPage() {
     return raw.map((inv) => {
       const s = String(inv.status || '').toUpperCase();
       const status: Invitation["status"] = s.endsWith("PENDING")
-        // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
         ? "pending"
         : s.endsWith("ACCEPTED")
-          // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
           ? "accepted"
           : s.endsWith("REVOKED") || s.endsWith("CANCELLED")
-            // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
             ? "revoked"
             : s.endsWith("EXPIRED")
-              // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
               ? "expired"
-              // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
               : (inv.status as InvitationStatus);
       return { ...inv, status } as Invitation;
     });
