@@ -369,7 +369,7 @@ func TestListFlags_DefaultValues(t *testing.T) {
 func TestListFlags_WithValues(t *testing.T) {
 	paths := []string{
 		"/etc/trusted-platform",
-		"/home/user/.config/platform",
+		"/var/lib/user/.config/platform",
 		"./config",
 		"",
 	}

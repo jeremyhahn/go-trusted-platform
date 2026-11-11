@@ -371,7 +371,7 @@ func TestPIVBackend_ImplementsInterface(t *testing.T) {
 // accessors rather than the deprecated plain fields.
 
 func TestPIVBackend_Import_FailsClosedWithoutWriting(t *testing.T) {
-	const pem = "-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----\n"
+	pem := genTestKeyPEM()
 	cases := map[string]*daemon.PIVImportRequest{
 		"enclave": {Slot: "9a", PrivateKey: memguard.NewMemoryEnclaveFromString(pem)},
 		"plain":   {Slot: "9a", PrivateKeyPEM: pem}, //nolint:staticcheck // SA1019: the compat path must fail closed too.

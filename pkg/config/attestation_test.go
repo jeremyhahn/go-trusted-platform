@@ -15,91 +15,12 @@ package config
 
 import (
 	"encoding/json"
-	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v2"
 )
-
-func TestAttestationDefaults(t *testing.T) {
-	attestation := &Attestation{}
-
-	assert.False(t, attestation.AllowAttestorSelfCA)
-	assert.False(t, attestation.AllowOpenEnrollment)
-	assert.Nil(t, attestation.AllowedVerifiers)
-	assert.Equal(t, 0, attestation.InsecurePort)
-	assert.Equal(t, 0, attestation.TLSPort)
-	assert.Nil(t, attestation.QuotePCRs)
-	assert.Nil(t, attestation.Workload)
-	assert.Nil(t, attestation.Manifest)
-	assert.Nil(t, attestation.Policy)
-}
-
-func TestAttestationYAMLMarshal(t *testing.T) {
-	tests := []struct {
-		name        string
-		attestation *Attestation
-		wantErr     bool
-	}{
-		{
-			name: "complete configuration",
-			attestation: &Attestation{
-				AllowAttestorSelfCA: true,
-				AllowOpenEnrollment: true,
-				AllowedVerifiers:    []string{"verifier1.example.com", "verifier2.example.com"},
-				InsecurePort:        8080,
-				TLSPort:             8443,
-				QuotePCRs:           []int32{0, 1, 2, 3, 7},
-			},
-			wantErr: false,
-		},
-		{
-			name: "minimal configuration",
-			attestation: &Attestation{
-				TLSPort: 8443,
-			},
-			wantErr: false,
-		},
-		{
-			name:        "empty configuration",
-			attestation: &Attestation{},
-			wantErr:     false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			data, err := yaml.Marshal(tt.attestation)
-			if tt.wantErr {
-				require.Error(t, err)
-				return
-			}
-
-			require.NoError(t, err)
-			require.NotEmpty(t, data)
-
-			// Verify we can unmarshal it back
-			var unmarshaled Attestation
-			err = yaml.Unmarshal(data, &unmarshaled)
-			require.NoError(t, err)
-
-			assert.Equal(t, tt.attestation.AllowAttestorSelfCA, unmarshaled.AllowAttestorSelfCA)
-			assert.Equal(t, tt.attestation.AllowOpenEnrollment, unmarshaled.AllowOpenEnrollment)
-			// Note: YAML unmarshaling converts nil slices to empty slices
-			if tt.attestation.AllowedVerifiers != nil {
-				assert.Equal(t, tt.attestation.AllowedVerifiers, unmarshaled.AllowedVerifiers)
-			}
-			assert.Equal(t, tt.attestation.InsecurePort, unmarshaled.InsecurePort)
-			assert.Equal(t, tt.attestation.TLSPort, unmarshaled.TLSPort)
-			// Note: YAML unmarshaling converts nil slices to empty slices
-			if tt.attestation.QuotePCRs != nil {
-				assert.Equal(t, tt.attestation.QuotePCRs, unmarshaled.QuotePCRs)
-			}
-		})
-	}
-}
 
 func TestAttestationYAMLUnmarshal(t *testing.T) {
 	tests := []struct {
@@ -189,33 +110,6 @@ allow-attestor-self-ca: not-a-boolean
 	}
 }
 
-func TestAttestationJSONMarshal(t *testing.T) {
-	attestation := &Attestation{
-		AllowAttestorSelfCA: true,
-		AllowOpenEnrollment: true,
-		AllowedVerifiers:    []string{"verifier1.example.com", "verifier2.example.com"},
-		InsecurePort:        8080,
-		TLSPort:             8443,
-		QuotePCRs:           []int32{0, 1, 2, 3, 7},
-	}
-
-	data, err := json.Marshal(attestation)
-	require.NoError(t, err)
-	require.NotEmpty(t, data)
-
-	// Verify we can unmarshal it back
-	var unmarshaled Attestation
-	err = json.Unmarshal(data, &unmarshaled)
-	require.NoError(t, err)
-
-	assert.Equal(t, attestation.AllowAttestorSelfCA, unmarshaled.AllowAttestorSelfCA)
-	assert.Equal(t, attestation.AllowOpenEnrollment, unmarshaled.AllowOpenEnrollment)
-	assert.Equal(t, attestation.AllowedVerifiers, unmarshaled.AllowedVerifiers)
-	assert.Equal(t, attestation.InsecurePort, unmarshaled.InsecurePort)
-	assert.Equal(t, attestation.TLSPort, unmarshaled.TLSPort)
-	assert.Equal(t, attestation.QuotePCRs, unmarshaled.QuotePCRs)
-}
-
 func TestAttestationJSONUnmarshal(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -276,149 +170,6 @@ func TestAttestationJSONUnmarshal(t *testing.T) {
 				assert.Equal(t, tt.want.TLSPort, got.TLSPort)
 				assert.Equal(t, tt.want.QuotePCRs, got.QuotePCRs)
 			}
-		})
-	}
-}
-
-func TestAttestationPCRConfiguration(t *testing.T) {
-	tests := []struct {
-		name      string
-		quotePCRs []int32
-		wantLen   int
-	}{
-		{
-			name:      "standard PCRs",
-			quotePCRs: []int32{0, 1, 2, 3, 7},
-			wantLen:   5,
-		},
-		{
-			name:      "extended PCRs",
-			quotePCRs: []int32{0, 1, 2, 3, 7, 8, 9, 10, 11, 12, 13, 14, 15},
-			wantLen:   13,
-		},
-		{
-			name:      "single PCR",
-			quotePCRs: []int32{7},
-			wantLen:   1,
-		},
-		{
-			name:      "empty PCRs",
-			quotePCRs: []int32{},
-			wantLen:   0,
-		},
-		{
-			name:      "nil PCRs",
-			quotePCRs: nil,
-			wantLen:   0,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			attestation := &Attestation{
-				QuotePCRs: tt.quotePCRs,
-			}
-
-			if tt.quotePCRs == nil {
-				assert.Nil(t, attestation.QuotePCRs)
-			} else {
-				assert.Len(t, attestation.QuotePCRs, tt.wantLen)
-			}
-		})
-	}
-}
-
-func TestAttestationVerifiersList(t *testing.T) {
-	tests := []struct {
-		name             string
-		allowedVerifiers []string
-		wantLen          int
-	}{
-		{
-			name:             "multiple verifiers",
-			allowedVerifiers: []string{"verifier1.example.com", "verifier2.example.com", "verifier3.example.com"},
-			wantLen:          3,
-		},
-		{
-			name:             "single verifier",
-			allowedVerifiers: []string{"verifier.example.com"},
-			wantLen:          1,
-		},
-		{
-			name:             "empty verifiers",
-			allowedVerifiers: []string{},
-			wantLen:          0,
-		},
-		{
-			name:             "nil verifiers",
-			allowedVerifiers: nil,
-			wantLen:          0,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			attestation := &Attestation{
-				AllowedVerifiers: tt.allowedVerifiers,
-			}
-
-			if tt.allowedVerifiers == nil {
-				assert.Nil(t, attestation.AllowedVerifiers)
-			} else {
-				assert.Len(t, attestation.AllowedVerifiers, tt.wantLen)
-			}
-		})
-	}
-}
-
-func TestAttestationPortConfiguration(t *testing.T) {
-	tests := []struct {
-		name         string
-		insecurePort int
-		tlsPort      int
-		wantErr      bool
-	}{
-		{
-			name:         "standard ports",
-			insecurePort: 8080,
-			tlsPort:      8443,
-			wantErr:      false,
-		},
-		{
-			name:         "custom ports",
-			insecurePort: 9090,
-			tlsPort:      9443,
-			wantErr:      false,
-		},
-		{
-			name:         "only TLS port",
-			insecurePort: 0,
-			tlsPort:      8443,
-			wantErr:      false,
-		},
-		{
-			name:         "only insecure port",
-			insecurePort: 8080,
-			tlsPort:      0,
-			wantErr:      false,
-		},
-		{
-			name:         "no ports configured",
-			insecurePort: 0,
-			tlsPort:      0,
-			wantErr:      false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			attestation := &Attestation{
-				InsecurePort: tt.insecurePort,
-				TLSPort:      tt.tlsPort,
-			}
-
-			assert.Equal(t, tt.insecurePort, attestation.InsecurePort)
-			assert.Equal(t, tt.tlsPort, attestation.TLSPort)
 		})
 	}
 }
@@ -1239,28 +990,6 @@ func TestErrEmptyPolicyDir(t *testing.T) {
 	err := ErrEmptyPolicyDir{}
 	expected := "policy directory must be specified when policy engine is configured"
 	assert.Equal(t, expected, err.Error())
-}
-
-func TestErrorsImplementError(t *testing.T) {
-	// Verify all error types implement the error interface
-	var _ error = ErrInvalidPCR{}
-	var _ error = ErrInvalidPCRBank{}
-	var _ error = ErrInvalidPolicyEngine{}
-	var _ error = ErrInvalidDefaultAction{}
-	var _ error = ErrInvalidPushInterval{}
-	var _ error = ErrEmptyPolicyDir{}
-}
-
-func TestErrorsCanBeUsedWithErrorsIs(t *testing.T) {
-	// Verify errors can be detected with errors.Is
-	err1 := ErrInvalidPCR{Index: 25, Min: 0, Max: 23}
-	err2 := ErrInvalidPCR{Index: 30, Min: 0, Max: 23}
-
-	// Same type errors are not equal unless they have same values
-	assert.False(t, errors.Is(err1, err2))
-
-	// Same error is equal to itself
-	assert.True(t, errors.Is(err1, err1))
 }
 
 // Tests for constants

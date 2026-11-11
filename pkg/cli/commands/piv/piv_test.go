@@ -266,7 +266,7 @@ func TestRunImport_Validation(t *testing.T) {
 func TestRunImport_ReadsValidFile(t *testing.T) {
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "key.pem")
-	if err := os.WriteFile(path, []byte("-----BEGIN PRIVATE KEY-----\nxx\n-----END PRIVATE KEY-----\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(genTestKeyPEM()), 0o600); err != nil {
 		t.Fatalf("write key: %v", err)
 	}
 	err := runImport(&cli.CommonFlags{OutputFormat: cli.OutputFormatJSON}, &importFlags{

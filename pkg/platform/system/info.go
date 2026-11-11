@@ -18,6 +18,7 @@ import (
 	"crypto"
 	"crypto/x509"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"runtime"
@@ -27,6 +28,17 @@ import (
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
+)
+
+// Host seams. Each defaults to the real host call and production code never
+// changes it; unit tests swap one to reach the root-only and host-dependent
+// branches without touching the host.
+var (
+	geteuid        = os.Geteuid
+	readHostFile   = os.ReadFile
+	openCPUInfo    = func() (io.ReadCloser, error) { return os.Open("/proc/cpuinfo") }
+	netInterfaces  = net.Interfaces
+	interfaceAddrs = func(iface net.Interface) ([]net.Addr, error) { return iface.Addrs() }
 )
 
 func PrintSystemInfo() error {
@@ -71,7 +83,7 @@ func CPUInfo() (entities.CPUInfo, error) {
 	var cpuInfo entities.CPUInfo
 	totalThreads := 0
 
-	file, err := os.Open("/proc/cpuinfo")
+	file, err := openCPUInfo()
 	if err != nil {
 		return cpuInfo, err
 	}
@@ -151,7 +163,7 @@ func SystemInfo() (entities.System, error) {
 	}
 	systemInfo.CPU = &cpuInfo
 
-	if os.Geteuid() == 0 {
+	if geteuid() == 0 {
 		bios, err := BIOS()
 		if err != nil {
 			return entities.System{}, err
@@ -180,7 +192,7 @@ func SystemInfo() (entities.System, error) {
 // readDMIFile reads a DMI file and returns empty string if it doesn't exist.
 // This allows the system info functions to work in VMs where DMI files may be missing.
 func readDMIFile(path string) string {
-	data, err := os.ReadFile(path)
+	data, err := readHostFile(path)
 	if err != nil {
 		return ""
 	}
@@ -446,7 +458,7 @@ func NetworkInfoDetails() *entities.NetworkInfo {
 	}
 
 	// Get network interfaces
-	interfaces, err := net.Interfaces()
+	interfaces, err := netInterfaces()
 	if err != nil {
 		return info
 	}
@@ -463,7 +475,7 @@ func NetworkInfoDetails() *entities.NetworkInfo {
 		info.Interfaces = append(info.Interfaces, iface.Name)
 
 		// Get addresses for this interface
-		addrs, err := iface.Addrs()
+		addrs, err := interfaceAddrs(iface)
 		if err != nil {
 			continue
 		}

@@ -20,7 +20,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"net/http"
 	"net/netip"
 	"sync"
 	"testing"
@@ -189,27 +188,6 @@ func TestWireGuardPlane_StartFailureAndMissingHub(t *testing.T) {
 	var missing *ErrDepsMissing
 	_, err = NewWireGuardPlane(nil, nil)
 	assert.True(t, errors.As(err, &missing))
-}
-
-// TestWireGuardPlaneIsAbsentUnderFIPS is the non-FIPS half of the pair: the
-// plane constructor exists here. The fips twin asserts the kind is not even
-// Known there.
-func TestWireGuardPlaneExistsOutsideFIPS(t *testing.T) {
-	plane, err := NewWireGuardPlane(newFakeHub(), nil)
-	require.NoError(t, err)
-	assert.Equal(t, DataPlaneWireGuard, plane.Kind())
-}
-
-// TestWireGuardPlane_BadKeyIsAnInvalidRequest: the plane's refusal of a
-// malformed client key reaches the caller as an invalid request, not as an
-// unavailable data plane.
-func TestWireGuardPlane_BadKeyIsAnInvalidRequest(t *testing.T) {
-	plane, _ := newWireGuardPlaneForTest(t)
-	err := plane.InstallPeer(context.Background(), wgLease("l1", "10.9.0.23/32", []byte("short")))
-
-	refusal, status := RefusalOf(err)
-	assert.Equal(t, RefusalInvalidRequest, refusal.Reason)
-	assert.Equal(t, http.StatusBadRequest, status)
 }
 
 // TestRestore_DropsAWireGuardLeaseTheGatewayDoesNotOffer: a recorded

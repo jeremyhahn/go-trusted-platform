@@ -36,7 +36,7 @@ func TestLoadBootstrapConfig_Valid(t *testing.T) {
 	yamlContent := `deployer:
   host: deploy.example.com
   user: deployer
-  ssh_key: /home/deployer/.ssh/id_ed25519
+  ssh_key: testdata/id_ed25519
   container_runtime: podman
 environment:
   id: 4

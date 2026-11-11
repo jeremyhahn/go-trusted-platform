@@ -538,9 +538,7 @@ func TestTPM2CertStoreAdapter_ImportCertificate(t *testing.T) {
 		adapter := NewTPM2CertStoreAdapter(logger, mockCS)
 
 		attrs := &xkmssdk.KeyAttributes{CN: "test.example.com"}
-		wrongTypePEM := []byte(`-----BEGIN PRIVATE KEY-----
-MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg
------END PRIVATE KEY-----`)
+		wrongTypePEM := []byte(genTestKeyPEM())
 
 		importedCert, err := adapter.ImportCertificate(attrs, wrongTypePEM)
 		assert.ErrorIs(t, err, ErrInvalidPEM)
@@ -694,9 +692,7 @@ func TestObjectStorageAdapter_GetCert(t *testing.T) {
 		}
 
 		// Valid PEM but wrong type
-		wrongTypePEM := []byte(`-----BEGIN PRIVATE KEY-----
-MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg
------END PRIVATE KEY-----`)
+		wrongTypePEM := []byte(genTestKeyPEM())
 
 		mockObjStore.On("Get", []byte("test-cert.pem")).Return(wrongTypePEM, nil)
 
@@ -857,10 +853,7 @@ bm90IGEgdmFsaWQgY2VydGlmaWNhdGU=
 		certPEM, err := EncodePEM(cert1.Raw)
 		require.NoError(t, err)
 
-		privateKeyPEM := []byte(`-----BEGIN PRIVATE KEY-----
-MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg
------END PRIVATE KEY-----
-`)
+		privateKeyPEM := []byte(genTestKeyPEM())
 		mixedPEM := append(privateKeyPEM, certPEM...)
 
 		mockObjStore.On("Get", []byte("test-chain.chain.pem")).Return(mixedPEM, nil)

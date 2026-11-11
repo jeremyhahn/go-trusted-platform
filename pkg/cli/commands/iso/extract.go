@@ -109,7 +109,7 @@ func runExtract(ctx context.Context, commonFlags *cli.CommonFlags, flags *extrac
 	cfg.ISODir = outputDir
 	cfg.Debug = flags.debug
 
-	if err := pkgiso.ExtractISO(ctx, cfg); err != nil {
+	if err := isoExtract(ctx, cfg); err != nil {
 		return ErrExtractionFailed{Reason: err.Error()}
 	}
 
