@@ -2005,6 +2005,54 @@ func TestGetPaginationParams_InvalidValues(t *testing.T) {
 	assert.Equal(t, defaultOffset, offset)
 }
 
+// TestListHandlers_BadOffsetRefused shows that the list handlers whose IAM
+// call takes an offset (ListTenants, ListPolicies, ListApps) refuse a
+// malformed, negative or above-MaxInt32 offset with 400 before IAM is asked,
+// instead of serving the first page.
+func TestListHandlers_BadOffsetRefused(t *testing.T) {
+	t.Parallel()
+	tenantVars := map[string]string{"tenant": "tenant-1"}
+	cases := []struct {
+		name   string
+		path   string
+		vars   map[string]string
+		handle func(h *IAMHandlers) http.HandlerFunc
+	}{
+		{"ListTenants", "/api/v1/iam/tenants", nil, func(h *IAMHandlers) http.HandlerFunc { return h.ListTenants }},
+		{"ListPolicies", "/api/v1/iam/tenants/tenant-1/policies", tenantVars, func(h *IAMHandlers) http.HandlerFunc { return h.ListPolicies }},
+		{"ListApps", "/api/v1/iam/tenants/tenant-1/apps", tenantVars, func(h *IAMHandlers) http.HandlerFunc { return h.ListApps }},
+	}
+	for _, tc := range cases {
+		for _, offset := range []string{"2147483650", "xyz", "-10"} {
+			t.Run(tc.name+"/"+offset, func(t *testing.T) {
+				t.Parallel()
+				var calls int
+				iamClient := &mockIAMClient{
+					listTenantsFn: func(context.Context, int32, int32) (*ListTenantsResponse, error) {
+						calls++
+						return &ListTenantsResponse{}, nil
+					},
+					listPoliciesFn: func(context.Context, string, int32, int32) (*ListPoliciesResponse, error) {
+						calls++
+						return &ListPoliciesResponse{}, nil
+					},
+					listAppsFn: func(context.Context, string, int32, int32) (*ListAppsResponse, error) {
+						calls++
+						return &ListAppsResponse{}, nil
+					},
+				}
+				handlers, writer := newTestHandlers(iamClient, &mockPEPClient{})
+
+				req := createRequestWithVars(http.MethodGet, tc.path+"?offset="+offset, nil, tc.vars)
+				tc.handle(handlers)(httptest.NewRecorder(), req)
+
+				assert.Equal(t, http.StatusBadRequest, writer.lastStatus)
+				assert.Zero(t, calls, "IAM was asked for a page from a bad offset")
+			})
+		}
+	}
+}
+
 // Tests for GRPC error handling
 
 func TestHandleGRPCError_NotFound(t *testing.T) {
