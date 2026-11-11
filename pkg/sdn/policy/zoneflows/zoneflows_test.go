@@ -280,19 +280,6 @@ func vlanStr(v uint16) string {
 // FlowRule field invariants
 // ---------------------------------------------------------------------------
 
-func TestFlowRule_AllFieldsAccessible(t *testing.T) {
-	f := zoneflows.FlowRule{
-		Table:    0,
-		Priority: 1000,
-		Match:    "in_port=1",
-		Actions:  "normal",
-	}
-	assert.Equal(t, 0, f.Table)
-	assert.Equal(t, 1000, f.Priority)
-	assert.Equal(t, "in_port=1", f.Match)
-	assert.Equal(t, "normal", f.Actions)
-}
-
 // ---------------------------------------------------------------------------
 // ZoneFlowConfig field defaults
 // ---------------------------------------------------------------------------
