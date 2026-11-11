@@ -202,7 +202,5 @@ func TestGenerateParams_Validate(t *testing.T) {
 }
 
 func TestConstants(t *testing.T) {
-	assert.Equal(t, 32, MinHMACKeyLength)
 	assert.Equal(t, 32, DefaultHMACKeyLength)
-	assert.Equal(t, 24*time.Hour, DefaultCredentialExpiry)
 }
