@@ -79,6 +79,15 @@ func TestSignaturesVerifier(t *testing.T) {
 			wants: []string{"FAIL", "unsigned"},
 		},
 		{
+			name: "unsigned ancestor beneath a signed head",
+			head: func(t *testing.T, f fixture) string {
+				f.repo.commit(alice, sigKey{}, "unsigned intermediate", change)
+				return f.repo.commit(alice, f.alice, "signed head", map[string]string{"README2": "another change\n"})
+			},
+			rc:    1,
+			wants: []string{"FAIL", "unsigned", "unsigned intermediate", "signed by " + alice},
+		},
+		{
 			name: "key not in the registry",
 			head: func(t *testing.T, f fixture) string {
 				return f.repo.commit(alice, f.mallory, "signed by mallory as alice", change)
