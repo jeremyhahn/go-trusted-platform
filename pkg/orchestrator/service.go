@@ -22,6 +22,7 @@ package orchestrator
 import (
 	"context"
 
+	"github.com/jeremyhahn/go-quicbaas/pkg/orchestration"
 	sdktransport "github.com/jeremyhahn/go-quicbaas/sdk/go/transport"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -279,5 +280,8 @@ func tenantAndID(tenantID, idField, id string) error {
 // fido2Context): the go-quicbaas orchestration service checks the context's
 // tenant, not only the request body's, and refuses an unscoped call.
 func tenantContext(ctx context.Context, tenantID string) context.Context {
-	return sdktransport.ContextWithTenant(ctx, tenantID)
+	// The SDK transport key serves remote transports; the embedded backend's
+	// TenantGuard reads the orchestration package's own key, so set both.
+	ctx = sdktransport.ContextWithTenant(ctx, tenantID)
+	return orchestration.ContextWithTenant(ctx, tenantID)
 }
