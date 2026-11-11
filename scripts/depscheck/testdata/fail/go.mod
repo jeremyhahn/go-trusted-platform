@@ -1,6 +1,6 @@
 module example.com/app
 
-go 1.27.2
+go 1.27.4
 
 // forked to drop cgo; unpin when upstream merges the pure-Go build
 replace example.com/forked => example.com/fork v1.0.0
