@@ -46,6 +46,10 @@ const roleIcons: Record<string, React.ElementType> = {
   viewer: User,
 };
 
+// Invitation as the REST endpoint emits it: the status arrives as an
+// enum name such as "INVITATION_STATUS_PENDING" (#445).
+type InvitationWire = Omit<Invitation, "status"> & { status?: string };
+
 const statusColors: Record<InvitationStatus, "secondary" | "default" | "destructive" | "outline"> = {
   pending: "secondary",
   accepted: "default",
@@ -75,23 +79,23 @@ export default function InvitationsPage() {
   // for filtering, badge colors, and per-row actions.
   const invitations: Invitation[] = React.useMemo(() => {
     // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-    const raw = (invitationsResponse?.invitations || []) as any[];
+    const raw = (invitationsResponse?.invitations || []) as unknown as InvitationWire[];
     return raw.map((inv) => {
       const s = String(inv.status || '').toUpperCase();
       const status: Invitation["status"] = s.endsWith("PENDING")
         // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-        ? ("pending" as any)
+        ? "pending"
         : s.endsWith("ACCEPTED")
           // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-          ? ("accepted" as any)
+          ? "accepted"
           : s.endsWith("REVOKED") || s.endsWith("CANCELLED")
             // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-            ? ("cancelled" as any)
+            ? "revoked"
             : s.endsWith("EXPIRED")
               // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-              ? ("expired" as any)
+              ? "expired"
               // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-              : (inv.status as any);
+              : (inv.status as InvitationStatus);
       return { ...inv, status } as Invitation;
     });
   }, [invitationsResponse]);

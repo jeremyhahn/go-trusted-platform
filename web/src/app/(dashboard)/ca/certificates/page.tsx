@@ -17,6 +17,27 @@ import { useCA, useApi, useMutation, useToast } from "@/hooks";
 import type { Certificate, IssueCertInput } from "@/types/security";
 
 // SDK types (from sdk/javascript/src/types/ca.ts)
+// Certificate summary as the REST endpoint emits it: camelCase or
+// snake_case field names, timestamps as strings or epoch seconds (#445).
+interface CertificateWire {
+  serial: string;
+  commonName?: string;
+  common_name?: string;
+  subject?: { commonName?: string; common_name?: string };
+  issuer?: string;
+  is_ca?: boolean;
+  isCA?: boolean;
+  status?: string;
+  notBefore?: string | number;
+  not_before?: string | number;
+  notAfter?: string | number;
+  not_after?: string | number;
+  keyAlgorithm?: string;
+  key_algorithm?: string;
+  signatureAlgorithm?: string;
+  signature_algorithm?: string;
+}
+
 type RevocationReason =
   | 'UNSPECIFIED'
   | 'KEY_COMPROMISE'
@@ -86,17 +107,17 @@ export default function CertificatesPage() {
   // When the backend starts emitting is_ca on the summary, prefer it.
   const certificates: Certificate[] = React.useMemo(() => {
     // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-    const certs = (certificatesResponse?.certificates ?? []) as any[];
+    const certs = (certificatesResponse?.certificates ?? []) as unknown as CertificateWire[];
     const toIso = (v: unknown): string => {
       if (!v && v !== 0) return "";
       if (typeof v === "number") return new Date(v * 1000).toISOString();
       return String(v);
     };
     // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-    const subjectOf = (c: any): string =>
+    const subjectOf = (c: CertificateWire): string =>
       c.commonName ?? c.common_name ?? c.subject?.common_name ?? c.subject?.commonName ?? "Unknown";
     // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-    const issuerOf = (c: any): string => c.issuer ?? "Unknown";
+    const issuerOf = (c: CertificateWire): string => c.issuer ?? "Unknown";
 
     // Pre-compute the set of CN's that appear as someone's issuer; those CN's
     // are CAs we have visibility into.
@@ -107,7 +128,7 @@ export default function CertificatesPage() {
     }
 
     // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-    const resolveType = (c: any): "root" | "intermediate" | "leaf" => {
+    const resolveType = (c: CertificateWire): "root" | "intermediate" | "leaf" => {
       const isCAField = c.is_ca ?? c.isCA;
       const subj = subjectOf(c);
       const iss = issuerOf(c);
@@ -119,7 +140,7 @@ export default function CertificatesPage() {
     };
 
     // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-    return certs.map((cert: any) => ({
+    return certs.map((cert: CertificateWire) => ({
       id: cert.serial,
       serialNumber: cert.serial,
       subject: subjectOf(cert),
@@ -189,7 +210,7 @@ export default function CertificatesPage() {
       key_algorithm: mapKeyAlgorithm(data.keyAlgorithm),
       is_ca: data.type === "root" || data.type === "intermediate",
     // Reads the REST wire shape, which differs from the SDK/proto declaration — #445; typed once that contract is decided.
-    } as any),
+    } as unknown as Parameters<typeof ca.issueCertificate>[0]),
     {
       onSuccess: () => {
         alert("Certificate issued successfully");
