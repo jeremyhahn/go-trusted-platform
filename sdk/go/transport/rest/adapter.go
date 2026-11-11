@@ -141,13 +141,21 @@ func (ErrNilRoundTripper) Error() string {
 // handler directly, such as a test that exercises the real route table
 // against the real handler without a listener. A channel-bound call on such
 // an adapter is refused with ErrChannelBindingUnavailable: rt owns its
-// connections, so the adapter has none to bind to.
+// connections, so the adapter has none to bind to. A baseURL that does not
+// start with https:// is refused with ErrInsecureTransport.
 func NewWithRoundTripper(baseURL string, rt http.RoundTripper, token string) (*Adapter, error) {
 	if baseURL == "" {
 		return nil, platform.ErrEmptyAddress
 	}
 	if rt == nil {
 		return nil, ErrNilRoundTripper{}
+	}
+	if !strings.HasPrefix(baseURL, "https://") {
+		return nil, platform.ErrInsecureTransport{
+			Protocol: platform.ProtocolREST,
+			Target:   baseURL,
+			Reason:   "the REST server only offers TLS; use https://",
+		}
 	}
 	a := &Adapter{
 		httpClient: &http.Client{Transport: rt},

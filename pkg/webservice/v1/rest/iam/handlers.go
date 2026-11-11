@@ -37,6 +37,10 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 )
 
+// errLaterPagesUnsupported refuses a list request for a page past the first,
+// which ListUsers, ListGroups and ListRoles cannot serve.
+var errLaterPagesUnsupported = errors.New("later pages are not supported; use offset 0")
+
 const (
 	defaultLimit  int32 = 50
 	maxLimit      int32 = 1000
@@ -402,6 +406,10 @@ func (h *IAMHandlers) ListUsers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	limit, offset := h.getPaginationParams(r)
+	if offset > 0 {
+		h.respWriter.Error400(w, r, errLaterPagesUnsupported)
+		return
+	}
 
 	ctx, cancel := h.createContext()
 	defer cancel()
@@ -680,6 +688,10 @@ func (h *IAMHandlers) ListGroups(w http.ResponseWriter, r *http.Request) {
 	}
 
 	limit, offset := h.getPaginationParams(r)
+	if offset > 0 {
+		h.respWriter.Error400(w, r, errLaterPagesUnsupported)
+		return
+	}
 
 	ctx, cancel := h.createContext()
 	defer cancel()
@@ -931,6 +943,10 @@ func (h *IAMHandlers) ListRoles(w http.ResponseWriter, r *http.Request) {
 	}
 
 	limit, offset := h.getPaginationParams(r)
+	if offset > 0 {
+		h.respWriter.Error400(w, r, errLaterPagesUnsupported)
+		return
+	}
 
 	ctx, cancel := h.createContext()
 	defer cancel()
