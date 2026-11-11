@@ -15,6 +15,7 @@ package tenant
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/gorilla/mux"
 
@@ -53,7 +54,15 @@ func (h *Handlers) ListTenants(w http.ResponseWriter, r *http.Request) {
 	if !h.ensure(w, r) {
 		return
 	}
-	resp, err := h.server.ListTenants(r.Context(), &platformv1.ListTenantsRequest{})
+	req := &platformv1.ListTenantsRequest{}
+	q := r.URL.Query()
+	if v, err := strconv.ParseInt(q.Get("limit"), 10, 32); err == nil && v > 0 {
+		req.Limit = int32(v)
+	}
+	if v, err := strconv.ParseInt(q.Get("offset"), 10, 32); err == nil && v > 0 {
+		req.Offset = int32(v)
+	}
+	resp, err := h.server.ListTenants(r.Context(), req)
 	if err != nil {
 		protorest.WriteError(w, r, h.respWriter, err)
 		return
