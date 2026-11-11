@@ -230,6 +230,19 @@ func (h *IAMHandlers) getPaginationParams(r *http.Request) (int32, int32) {
 	return limit, offset
 }
 
+// laterPageRequested reports whether the request asks for a page the user,
+// group and role list handlers cannot serve. Any offset other than a plain
+// zero (a later page, a malformed, negative or out-of-range value) is such a
+// page; an absent or empty offset is the first page.
+func laterPageRequested(r *http.Request) bool {
+	v := r.URL.Query().Get("offset")
+	if v == "" {
+		return false
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	return err != nil || n != 0
+}
+
 func (h *IAMHandlers) createContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), requestTimeout)
 }
@@ -406,7 +419,7 @@ func (h *IAMHandlers) ListUsers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	limit, offset := h.getPaginationParams(r)
-	if offset > 0 {
+	if laterPageRequested(r) {
 		h.respWriter.Error400(w, r, errLaterPagesUnsupported)
 		return
 	}
@@ -688,7 +701,7 @@ func (h *IAMHandlers) ListGroups(w http.ResponseWriter, r *http.Request) {
 	}
 
 	limit, offset := h.getPaginationParams(r)
-	if offset > 0 {
+	if laterPageRequested(r) {
 		h.respWriter.Error400(w, r, errLaterPagesUnsupported)
 		return
 	}
@@ -943,7 +956,7 @@ func (h *IAMHandlers) ListRoles(w http.ResponseWriter, r *http.Request) {
 	}
 
 	limit, offset := h.getPaginationParams(r)
-	if offset > 0 {
+	if laterPageRequested(r) {
 		h.respWriter.Error400(w, r, errLaterPagesUnsupported)
 		return
 	}
