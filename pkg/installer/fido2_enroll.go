@@ -489,24 +489,24 @@ func (f *FIDO2Enrollment) enrollWithHandler(ctx context.Context, handler fido2.H
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return f.rollbackKeyslot(&FIDO2CanceledError{Step: "import the token", Err: ctxErr})
 	}
+	// Boot finds the slot and reproduces its key only from the token, so a
+	// keyslot without one is rolled back (docs/luks/architecture.md).
 	if err != nil {
-		fmt.Printf("Warning: %v\n", err)
-		fmt.Println("FIDO2 key enrolled but metadata not stored - manual unlock required")
-	} else {
-		luksToken := &luks2.Token{
-			Type:            luks.TokenTypeFIDO2,
-			Keyslots:        []string{fmt.Sprintf("%d", f.config.TargetKeyslot)},
-			FIDO2Credential: base64.StdEncoding.EncodeToString(result.CredentialID),
-			FIDO2Salt:       base64.StdEncoding.EncodeToString(salt),
-			FIDO2RP:         rpID,
-			FIDO2UPRequired: true,
-		}
-		if err := luksImportToken(f.config.LUKSDevice, tokenID, luksToken); err != nil {
-			fmt.Printf("Warning: Failed to store FIDO2 metadata in token: %v\n", err)
-			fmt.Println("FIDO2 key enrolled but metadata not stored - manual unlock required")
-		} else if f.config.Debug {
-			fmt.Printf("FIDO2 metadata stored in token %d\n", tokenID)
-		}
+		return f.rollbackKeyslot(&WrappedError{Msg: "failed to find a free LUKS token slot", Err: err})
+	}
+	luksToken := &luks2.Token{
+		Type:            luks.TokenTypeFIDO2,
+		Keyslots:        []string{fmt.Sprintf("%d", f.config.TargetKeyslot)},
+		FIDO2Credential: base64.StdEncoding.EncodeToString(result.CredentialID),
+		FIDO2Salt:       base64.StdEncoding.EncodeToString(salt),
+		FIDO2RP:         rpID,
+		FIDO2UPRequired: true,
+	}
+	if err := luksImportToken(f.config.LUKSDevice, tokenID, luksToken); err != nil {
+		return f.rollbackKeyslot(&WrappedError{Msg: "failed to store the FIDO2 metadata in the LUKS token", Err: err})
+	}
+	if f.config.Debug {
+		fmt.Printf("FIDO2 metadata stored in token %d\n", tokenID)
 	}
 
 	fmt.Println("FIDO2 enrollment complete!")
