@@ -2190,5 +2190,5 @@ jobs:
           check full vuln "$RESULT_VULN"
           check nightly soak "$RESULT_SOAK"
           check main fips "$RESULT_FIPS"
-          check pr signatures "$RESULT_SIGNATURES"   # v1.35
+          check pr signatures "$RESULT_SIGNATURES"
           exit $status
