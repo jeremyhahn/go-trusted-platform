@@ -40,7 +40,11 @@ export function useVTPMRuntime(bundleId: string) {
   );
   const readPCR = useMutation((pcrIndex: number) => vtpm.readBundlePCR(bundleId, pcrIndex));
 
-  return { runState, start, stop, quote, seal, unseal, extendPCR, readPCR };
+  // Start and stop write the same running state: while either is pending,
+  // neither may be sent, so a late reply cannot overwrite a newer one.
+  const lifecycleBusy = start.isLoading || stop.isLoading;
+
+  return { runState, lifecycleBusy, start, stop, quote, seal, unseal, extendPCR, readPCR };
 }
 
 /** Text to base64 (UTF-8). */

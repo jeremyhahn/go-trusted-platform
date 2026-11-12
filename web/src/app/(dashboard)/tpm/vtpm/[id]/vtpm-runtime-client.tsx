@@ -132,10 +132,12 @@ function BundleRuntimePanel({ bundleId }: { bundleId: string }) {
     }
   };
 
-  const handleStart = () =>
-    run("Error starting vTPM", async () => {
+  const handleStart = () => {
+    if (rt.lifecycleBusy) return;
+    void run("Error starting vTPM", async () => {
       await rt.start.mutateAsync(undefined);
     });
+  };
 
   const handleQuote = () =>
     run("Error quoting vTPM", async () => {
@@ -175,6 +177,7 @@ function BundleRuntimePanel({ bundleId }: { bundleId: string }) {
     const action = pending;
     setPending(null);
     if (action === "stop") {
+      if (rt.lifecycleBusy) return;
       void run("Error stopping vTPM", async () => {
         await rt.stop.mutateAsync(undefined);
       });
@@ -211,14 +214,14 @@ function BundleRuntimePanel({ bundleId }: { bundleId: string }) {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex gap-2">
-            <Button onClick={handleStart} disabled={noBundle || rt.start.isLoading}>
+            <Button onClick={handleStart} disabled={noBundle || rt.lifecycleBusy}>
               {rt.start.isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}
               Start vTPM
             </Button>
             <Button
               variant="destructive"
               onClick={() => setPending("stop")}
-              disabled={noBundle || rt.stop.isLoading}
+              disabled={noBundle || rt.lifecycleBusy}
             >
               <Square className="mr-2 h-4 w-4" />
               Stop vTPM

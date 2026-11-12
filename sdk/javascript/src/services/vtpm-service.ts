@@ -249,14 +249,19 @@ export class VTPMService extends BaseService {
     );
   }
 
-  /** Extend a PCR of a running bundle (POST /bundles/{id}/pcrs/extend) */
+  /**
+   * Extend a PCR of a running bundle (POST /bundles/{id}/pcrs/extend).
+   * A PCR extend is irreversible and never retried: a replay after a lost
+   * response would extend the PCR twice.
+   */
   async extendBundlePCR(
     id: string,
     request: ExtendBundlePCRRequest
   ): Promise<ApiResponse<ExtendBundlePCRResponse>> {
     return this.client.post<ExtendBundlePCRResponse>(
       this.buildUrl(`/bundles/${this.encodePathSegment(id)}/pcrs/extend`),
-      request
+      request,
+      { retry: { enabled: false } }
     );
   }
 
