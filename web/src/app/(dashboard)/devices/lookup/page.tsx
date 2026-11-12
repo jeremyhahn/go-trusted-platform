@@ -117,6 +117,10 @@ export default function DeviceLookupPage() {
   };
 
   const findDevice = async () => {
+    // A new lookup may select another device: drop the previous verdict and
+    // evidence so no device ever shows another device's attestation.
+    lookup.attestDevice.reset();
+    setEvidence('');
     try {
       const result = await lookup.findDeviceBySerial.mutateAsync(deviceSerial.trim());
       showDevice(result);
@@ -223,7 +227,7 @@ export default function DeviceLookupPage() {
                   Attest device
                 </Button>
               </div>
-              {attestResult && (
+              {lookup.attestDevice.isSuccess && attestResult && String(attestResult.device_id) === String(device.id) && (
                 <p className="text-sm" data-testid="attest-result">
                   {attestResult.verified ? 'Verified' : 'Not verified'}: {attestResult.attestation_status}
                   {attestResult.message ? ` (${attestResult.message})` : ''}
