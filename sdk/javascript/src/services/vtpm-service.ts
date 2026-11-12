@@ -31,6 +31,7 @@ import type {
   GetBundlePathResponse,
   GetTPMSocketPathResponse,
   GetNVRAMPathResponse,
+  VTPMBundle,
 } from '../types/vtpm.js';
 
 /**
@@ -249,5 +250,17 @@ export class VTPMService extends BaseService {
       this.buildUrl(`/templates/${this.encodePathSegment(request.options.templateId)}/clone`),
       { hostname: request.options.hostname, labels: request.options.labels }
     );
+  }
+
+
+  /**
+   * Import a bundle archive.
+   *
+   * POST /api/v1/vtpm/bundles/import reads the raw request body as the
+   * gzip tar that GET /bundles/{id}/export writes (at most 100 MB), so the
+   * Blob is sent unchanged.
+   */
+  async importBundle(archive: Blob): Promise<ApiResponse<VTPMBundle>> {
+    return this.client.post<VTPMBundle>(this.buildUrl('/bundles/import'), archive);
   }
 }
