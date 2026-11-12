@@ -722,13 +722,15 @@ export interface CAOperationsMockConfig {
  * - POST /api/v1/ca/sign-csr - Certify the key a CSR names
  * - POST /api/v1/ca/certificates/verify - Verify a certificate
  *
- * @returns the request bodies the pages posted, for assertions
+ * @returns the request bodies the pages posted, and the Authorization
+ *   header of each sign request, for assertions
  */
 export async function mockCAOperationsApi(
   page: Page,
   config: CAOperationsMockConfig = {}
-): Promise<{ signRequests: unknown[]; verifyRequests: unknown[] }> {
+): Promise<{ signRequests: unknown[]; signAuthorizations: string[]; verifyRequests: unknown[] }> {
   const signRequests: unknown[] = [];
+  const signAuthorizations: string[] = [];
   const verifyRequests: unknown[] = [];
   const now = new Date().toISOString();
 
@@ -772,6 +774,18 @@ export async function mockCAOperationsApi(
       return;
     }
     signRequests.push(request.postDataJSON());
+    // SignCSR needs a platform token granting ca:sign-csr, sent as a Bearer
+    // Authorization header: the session cookie alone is refused.
+    const authorization = request.headers()['authorization'] ?? '';
+    signAuthorizations.push(authorization);
+    if (!/^Bearer \S+$/.test(authorization)) {
+      await route.fulfill({
+        status: 403,
+        contentType: 'application/json',
+        body: errorEnvelope({ status: 403, error: 'platform token with scope ca:sign-csr required' }),
+      });
+      return;
+    }
     if (config.signError) {
       await route.fulfill({
         status: config.signError.status,
@@ -855,7 +869,7 @@ export async function mockCAOperationsApi(
     });
   });
 
-  return { signRequests, verifyRequests };
+  return { signRequests, signAuthorizations, verifyRequests };
 }
 
 // ============================================================================

@@ -3,6 +3,7 @@ import { createTenantOwnerSession } from './fixtures/auth-setup';
 import { mockTenantApi, mockCAOperationsApi, errorEnvelope } from './fixtures/api-mock';
 
 const CSR_PEM = '-----BEGIN CERTIFICATE REQUEST-----\nCSR\n-----END CERTIFICATE REQUEST-----';
+const SIGN_TOKEN = 'tp_sign_csr_test_token';
 const CERT_PEM = '-----BEGIN CERTIFICATE-----\nCERT\n-----END CERTIFICATE-----';
 
 test.describe('CA operations', () => {
@@ -48,12 +49,15 @@ test.describe('CA operations', () => {
 
     await expect(page.getByRole('heading', { name: 'Sign CSR', exact: true })).toBeVisible();
     await page.getByLabel('CSR (PEM)').fill(CSR_PEM);
+    await page.getByLabel('Platform token').fill(SIGN_TOKEN);
     await page.getByLabel('Validity (days)').fill('30');
     await page.getByRole('button', { name: 'Sign CSR' }).click();
 
     await expect(page.getByTestId('signed-serial')).toHaveText('0a1b2c');
     await expect(page.getByTestId('signed-pem')).toContainText('BEGIN CERTIFICATE');
     expect(mock.signRequests).toEqual([{ csrPem: CSR_PEM, validDays: 30 }]);
+    // The server refuses a session without a ca:sign-csr platform token.
+    expect(mock.signAuthorizations).toEqual([`Bearer ${SIGN_TOKEN}`]);
   });
 
   test('SignCSR: the sign page shows a refusal', async ({ page }) => {
@@ -63,6 +67,7 @@ test.describe('CA operations', () => {
     await page.goto('/ca/sign');
 
     await page.getByLabel('CSR (PEM)').fill(CSR_PEM);
+    await page.getByLabel('Platform token').fill(SIGN_TOKEN);
     await page.getByRole('button', { name: 'Sign CSR' }).click();
 
     await expect(page.getByText('token lacks scope ca:sign-csr')).toBeVisible();
@@ -73,6 +78,7 @@ test.describe('CA operations', () => {
     await page.goto('/ca/sign');
 
     await page.getByLabel('CSR (PEM)').fill(CSR_PEM);
+    await page.getByLabel('Platform token').fill(SIGN_TOKEN);
     await page.getByRole('button', { name: 'Sign CSR' }).click();
     await expect(page.getByTestId('signed-serial')).toHaveText('0a1b2c');
 
@@ -86,6 +92,7 @@ test.describe('CA operations', () => {
     await page.goto('/ca/sign');
 
     await page.getByLabel('CSR (PEM)').fill(CSR_PEM);
+    await page.getByLabel('Platform token').fill(SIGN_TOKEN);
     await page.getByRole('button', { name: 'Sign CSR' }).click();
     await expect(page.getByTestId('signed-serial')).toHaveText('0a1b2c');
 
