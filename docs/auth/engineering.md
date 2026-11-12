@@ -472,13 +472,16 @@ vocabulary for callers; do not assume `Authenticate` produces them.
 
 ### Fail-open paths — know these
 
-1. **Nil `TrustedRoots` skips chain verification.** `Authenticate` guards the
-   chain check with `if m.config.TrustedRoots != nil`. `NewMTLSAdapter` can
-   produce exactly that state when `ca.CABundleCertPool()` fails, because it
-   logs a warning and proceeds.
-2. **Non-revocation CA errors are ignored.** `checkRevocation` maps only errors
-   whose text contains `"revoked"`; everything else is logged at debug and the
-   certificate is treated as good.
+1. **Nil `TrustedRoots` fails closed.** `Authenticate` returns
+   `ErrMissingTrustedRoots` when `m.config.TrustedRoots` is nil, rather than
+   skipping the chain check. `NewMTLSAdapter` can still produce that state when
+   `ca.CABundleCertPool()` fails (it logs a warning and proceeds), but every
+   authentication through such an adapter is refused until roots are set.
+2. **Non-revocation CA errors fail closed.** `checkRevocation` maps errors
+   whose text contains `"revoked"` to `ErrCertificateRevoked`; any other `Verify`
+   error is returned as `ErrRevocationCheckFailed`, whose `Err` field (and
+   `Unwrap`) carries the CA error. An unknown revocation status never admits
+   the certificate.
 3. **`checkRevocation` returns nil immediately when `m.ca == nil`.** Reachable
    only via `NewMTLSAdapterFromRoots`, which already rejects
    `RequireRevocation` — so this is defence in depth rather than a live hole.
