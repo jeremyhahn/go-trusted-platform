@@ -2,14 +2,13 @@
 
 import * as React from "react";
 import { useAttestation } from "trusted-platform-sdk";
-import type { ApiResponse, VerifyManifestRequest } from "trusted-platform-sdk";
+import type { ApiResponse } from "trusted-platform-sdk";
 
 /** One attestation operation the collect page can run (#1732). */
 export type AttestationCollectOperation =
   | "collectHost"
   | "collectVM"
   | "collectContainer"
-  | "verifyManifest"
   | "deleteManifest";
 
 export interface AttestationCollectState {
@@ -25,7 +24,6 @@ export interface UseAttestationCollectResult extends AttestationCollectState {
   collectHost: () => Promise<boolean>;
   collectVM: (vmId: string) => Promise<boolean>;
   collectContainer: (containerId: string) => Promise<boolean>;
-  verifyManifest: (request: VerifyManifestRequest) => Promise<boolean>;
   deleteManifest: (id: string) => Promise<boolean>;
 }
 
@@ -41,7 +39,7 @@ export function newAttestationNonce(): string {
 }
 
 /**
- * The attestation collect, manifest verify and manifest delete operations,
+ * The attestation collect and manifest delete operations,
  * with the outcome of the last one run.
  */
 export function useAttestationCollect(): UseAttestationCollectResult {
@@ -88,8 +86,6 @@ export function useAttestationCollect(): UseAttestationCollectResult {
       ),
     collectContainer: (containerId) =>
       run("collectContainer", () => attestation.collectContainerAttestation({ containerId })),
-    verifyManifest: (request) =>
-      run("verifyManifest", () => attestation.verifyManifest(request)),
     deleteManifest: (id) => run("deleteManifest", () => attestation.deleteManifest(id)),
   };
 }

@@ -1,11 +1,9 @@
 "use client";
 import * as React from "react";
 import { Loader2, Trash2 } from "lucide-react";
-import type { VerifyManifestRequest } from "trusted-platform-sdk";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import {
   Card,
   CardContent,
@@ -29,44 +27,23 @@ const operationTitles: Record<AttestationCollectOperation, string> = {
   collectHost: "Host attestation",
   collectVM: "VM attestation",
   collectContainer: "Container attestation",
-  verifyManifest: "Manifest verification",
   deleteManifest: "Manifest deletion",
 };
 
 /**
  * Attestation collect (#1732): collect host, VM and container attestation,
- * verify a manifest and delete one (behind a confirm dialog).
+ * and delete a manifest (behind a confirm dialog). Manifest verification is
+ * not offered until the verifier fails closed.
  */
 export default function AttestationCollectPage() {
   const { toast } = useToast();
   const ops = useAttestationCollect();
   const [vmId, setVmId] = React.useState("");
   const [containerId, setContainerId] = React.useState("");
-  const [manifestJson, setManifestJson] = React.useState("");
   const [manifestId, setManifestId] = React.useState("");
   const [confirmDelete, setConfirmDelete] = React.useState(false);
 
   const busy = ops.pending !== undefined;
-
-  const verify = async () => {
-    let request: VerifyManifestRequest;
-    try {
-      const parsed: unknown = JSON.parse(manifestJson);
-      request = (
-        parsed && typeof parsed === "object" && "manifest" in parsed
-          ? parsed
-          : { manifest: parsed }
-      ) as VerifyManifestRequest;
-    } catch {
-      toast({
-        title: "Invalid manifest",
-        description: "The manifest is not valid JSON",
-        variant: "destructive",
-      });
-      return;
-    }
-    await ops.verifyManifest(request);
-  };
 
   const remove = async () => {
     setConfirmDelete(false);
@@ -82,7 +59,7 @@ export default function AttestationCollectPage() {
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Attestation Collect</h1>
         <p className="text-muted-foreground">
-          Collect host, VM and container attestation, and verify or delete manifests
+          Collect host, VM and container attestation, and delete manifests
         </p>
       </div>
 
@@ -141,30 +118,6 @@ export default function AttestationCollectPage() {
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Verify manifest</CardTitle>
-            <CardDescription>
-              Paste a manifest, or a full verify request with a manifest field
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-2">
-            <Label htmlFor="manifest-json">Manifest JSON</Label>
-            <Textarea
-              id="manifest-json"
-              rows={6}
-              value={manifestJson}
-              onChange={(e) => setManifestJson(e.target.value)}
-            />
-            <Button onClick={verify} disabled={busy || !manifestJson.trim()}>
-              {ops.pending === "verifyManifest" && (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              )}
-              Verify manifest
-            </Button>
-          </CardContent>
-        </Card>
-
         <Card>
           <CardHeader>
             <CardTitle>Delete manifest</CardTitle>
