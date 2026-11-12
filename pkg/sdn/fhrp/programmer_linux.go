@@ -69,6 +69,7 @@ var (
 	netlinkLinkByName  = vnl.LinkByName
 	netlinkAddrReplace = vnl.AddrReplace
 	netlinkAddrDel     = vnl.AddrDel
+	netlinkAddrList    = vnl.AddrList
 	listenARP          = func(ifi *net.Interface) (frameWriter, error) {
 		conn, err := packet.Listen(ifi, packet.Raw, unix.ETH_P_ARP, nil)
 		if err != nil {
@@ -127,6 +128,42 @@ func (p *netlinkProgrammer) DeleteAddress(iface string, prefix netip.Prefix, _ n
 		return nil
 	}
 	return err
+}
+
+// HasAddress implements AddressReader: true when iface holds an address
+// with prefix's IP and prefix length.
+func (p *netlinkProgrammer) HasAddress(iface string, prefix netip.Prefix) (bool, error) {
+	link, err := p.linkByName(iface)
+	if err != nil {
+		return false, err
+	}
+	family := vnl.FAMILY_V6
+	if prefix.Addr().Is4() {
+		family = vnl.FAMILY_V4
+	}
+	var addrs []vnl.Addr
+	if p.handle != nil {
+		addrs, err = p.handle.AddrList(link, family)
+	} else {
+		addrs, err = netlinkAddrList(link, family)
+	}
+	if err != nil {
+		return false, err
+	}
+	for _, a := range addrs {
+		if a.IPNet == nil {
+			continue
+		}
+		ip, ok := netip.AddrFromSlice(a.IP)
+		if !ok {
+			continue
+		}
+		ones, _ := a.Mask.Size()
+		if ip.Unmap() == prefix.Addr() && ones == prefix.Bits() {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // Announce implements Programmer. The raw sockets it opens live in the

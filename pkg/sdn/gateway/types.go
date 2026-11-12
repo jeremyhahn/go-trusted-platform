@@ -1646,6 +1646,10 @@ func (c *GatewayConfig) HasEnabledServices() bool {
 // It is exported so the process model's class table can be checked
 // against it: a section here with no process is one the supervisor cannot
 // start (#631 review).
+//
+// Tunnels precede fhrp because a group may name a tunnel interface, so it
+// must exist before the speaker opens its socket and outlive it on the
+// reverse stop.
 func (c *GatewayConfig) EnabledServices() []string {
 	var out []string
 	add := func(on bool, name string) {
@@ -1658,8 +1662,8 @@ func (c *GatewayConfig) EnabledServices() []string {
 	add(c.LoadBalancer != nil && c.LoadBalancer.Enabled, ServiceLoadBalancer)
 	add(c.NAT64 != nil && c.NAT64.Enabled, ServiceNAT64)
 	add(c.HostFW != nil && c.HostFW.Enabled, ServiceHostFW)
-	add(c.FHRP != nil && c.FHRP.Enabled, ServiceFHRP)
 	add(len(c.Tunnels) > 0 || len(c.RoutingUplinks) > 0, ServiceTunnels)
+	add(c.FHRP != nil && c.FHRP.Enabled, ServiceFHRP)
 	add(c.BGP != nil || (c.Transit != nil && c.Transit.Enabled), ServiceTransit)
 	add(c.Overlay != nil && c.Overlay.Enabled, ServiceOverlay)
 	add(c.Edge != nil && c.Edge.Enabled, ServiceEdge)

@@ -230,6 +230,9 @@ type runner struct {
 	// timer is armed in startGroup, before the run loop exists, so the
 	// first deadline is computed from the same instant Startup used.
 	timer Timer
+	// owned holds the prefixes this runner added itself; Release deletes
+	// only these, so an address found on the interface stays (#1716).
+	owned map[netip.Prefix]bool
 }
 
 type event struct {
@@ -244,6 +247,7 @@ func (s *Speaker) startGroup(ctx context.Context, gc GroupConfig) (*runner, erro
 		events:  make(chan event, 16),
 		stopCh:  make(chan struct{}),
 		done:    make(chan struct{}),
+		owned:   make(map[netip.Prefix]bool),
 	}
 	// The group validates the config, so build it before opening a socket
 	// and open on the source address it parsed.
@@ -461,10 +465,25 @@ func (r *runner) Advertise(g *Group, priority uint8) error {
 // Claim implements Actuator.
 func (r *runner) Claim(g *Group) error {
 	hw := VirtualMAC(g.family, g.cfg.VRID)
+	if r.owned == nil {
+		r.owned = make(map[netip.Prefix]bool)
+	}
+	reader, _ := r.speaker.deps.Programmer.(AddressReader)
 	for _, p := range g.prefixes {
+		if !r.owned[p] && reader != nil {
+			present, err := reader.HasAddress(g.cfg.Interface, p)
+			if err != nil {
+				return &ErrAddressOperationFailed{VRID: g.cfg.VRID, Interface: g.cfg.Interface, Operation: "list", Address: p, Cause: err}
+			}
+			if present {
+				// Preexisting, not ours: leave it to its owner.
+				continue
+			}
+		}
 		if err := r.speaker.deps.Programmer.AddAddress(g.cfg.Interface, p, hw); err != nil {
 			return &ErrAddressOperationFailed{VRID: g.cfg.VRID, Interface: g.cfg.Interface, Operation: "add", Address: p, Cause: err}
 		}
+		r.owned[p] = true
 	}
 	for _, p := range g.prefixes {
 		if err := r.speaker.deps.Programmer.Announce(g.cfg.Interface, p.Addr(), hw); err != nil {
@@ -478,10 +497,20 @@ func (r *runner) Claim(g *Group) error {
 func (r *runner) Release(g *Group) error {
 	hw := VirtualMAC(g.family, g.cfg.VRID)
 	var first error
+	_, reads := r.speaker.deps.Programmer.(AddressReader)
 	for _, p := range g.prefixes {
-		if err := r.speaker.deps.Programmer.DeleteAddress(g.cfg.Interface, p, hw); err != nil && first == nil {
-			first = &ErrAddressOperationFailed{VRID: g.cfg.VRID, Interface: g.cfg.Interface, Operation: "delete", Address: p, Cause: err}
+		// A preexisting prefix is never ours to delete. Without an
+		// AddressReader every prefix counts as owned, as before.
+		if reads && !r.owned[p] {
+			continue
 		}
+		if err := r.speaker.deps.Programmer.DeleteAddress(g.cfg.Interface, p, hw); err != nil {
+			if first == nil {
+				first = &ErrAddressOperationFailed{VRID: g.cfg.VRID, Interface: g.cfg.Interface, Operation: "delete", Address: p, Cause: err}
+			}
+			continue
+		}
+		delete(r.owned, p)
 	}
 	return first
 }
