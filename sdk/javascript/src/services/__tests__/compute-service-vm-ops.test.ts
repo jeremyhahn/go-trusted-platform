@@ -66,4 +66,20 @@ describe('ComputeService VM operations', () => {
     expect(url).toMatch(/\/compute\/migrations\/rx-9\/finalize$/);
     expect(body).toEqual({ commit: false });
   });
+
+  it('migrateVM forwards a per-request timeout to the client', async () => {
+    await service.migrateVM(
+      { vmId: 'vm-1', destinationHost: 'dest', liveMigration: true },
+      { timeoutMs: 3600000 }
+    );
+    const call = vi.mocked(mockClient.post).mock.calls[0]!;
+    expect(call[0]).toMatch(/\/compute\/vms\/vm-1\/migrate$/);
+    expect(call[1]).toEqual({ destinationHost: 'dest', liveMigration: true, bandwidthLimitMbps: undefined });
+    expect(call[2]).toEqual({ timeout: 3600000 });
+  });
+
+  it('migrateVM without options passes no request options', async () => {
+    await service.migrateVM({ vmId: 'vm-1', destinationHost: 'dest', liveMigration: false });
+    expect(vi.mocked(mockClient.post).mock.calls[0]![2]).toBeUndefined();
+  });
 });

@@ -49,3 +49,41 @@ describe("MigrationsPage receiver spec", () => {
     expect(ops.prepareMigration.mock.calls[0][0].spec.enableKvm).toBe(false);
   });
 });
+
+// #1727: each receiver holds a QEMU process until finalized, so the page keeps
+// one outstanding receiver and refuses another prepare until it is finalized.
+describe("MigrationsPage receivers", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it("disables Prepare Migration while a receiver is outstanding", async () => {
+    render(<MigrationsPage />);
+    fillSpec();
+    const prepare = screen.getByRole("button", { name: "Prepare Migration" }) as HTMLButtonElement;
+    fireEvent.click(prepare);
+
+    await waitFor(() => expect(screen.getByTestId("migration-receiver").textContent).toContain("rx-1"));
+    expect(prepare.disabled).toBe(true);
+    fireEvent.click(prepare);
+    expect(ops.prepareMigration).toHaveBeenCalledTimes(1);
+  });
+
+  it("enables Prepare Migration again once the receiver is finalized", async () => {
+    ops.finalizeMigration.mockResolvedValue({});
+    render(<MigrationsPage />);
+    fillSpec();
+    const prepare = screen.getByRole("button", { name: "Prepare Migration" }) as HTMLButtonElement;
+    fireEvent.click(prepare);
+    await waitFor(() => expect(prepare.disabled).toBe(true));
+
+    fireEvent.click(screen.getByRole("button", { name: "Commit Migration" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
+
+    await waitFor(() => expect(ops.finalizeMigration).toHaveBeenCalledWith("rx-1", true));
+    await waitFor(() => expect(prepare.disabled).toBe(false));
+    fireEvent.click(prepare);
+    await waitFor(() => expect(ops.prepareMigration).toHaveBeenCalledTimes(2));
+  });
+});
