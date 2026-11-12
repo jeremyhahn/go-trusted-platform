@@ -53,9 +53,12 @@ type manifestGetWire struct {
 }
 
 type manifestWire struct {
-	ID                 string                `codec:"id"`
-	HostID             string                `codec:"host_id"`
-	Timestamp          int64                 `codec:"timestamp"`
+	ID        string `codec:"id"`
+	HostID    string `codec:"host_id"`
+	Timestamp int64  `codec:"timestamp"`
+	// TimestampNanos is the sub-second part (0-999999999) of the manifest
+	// time, which the signed digest covers; Timestamp keeps whole seconds.
+	TimestampNanos     int64                 `codec:"timestamp_nanos"`
 	Nonce              []byte                `codec:"nonce"`
 	Host               *hostAttestationWire  `codec:"host"`
 	VMs                []vmAttestationWire   `codec:"vms"`
@@ -118,7 +121,7 @@ func (w *manifestWire) toProto() *platformv1.HostManifest {
 	m := &platformv1.HostManifest{
 		Id:                 w.ID,
 		HostId:             w.HostID,
-		Timestamp:          unixSecondsTimestamp(w.Timestamp),
+		Timestamp:          unixSecNanoTimestamp(w.Timestamp, w.TimestampNanos),
 		Nonce:              w.Nonce,
 		Host:               w.Host.toProto(),
 		MerkleRoot:         w.MerkleRoot,
@@ -211,6 +214,15 @@ func unixSecondsTimestamp(ts int64) *timestamppb.Timestamp {
 		return nil
 	}
 	return timestamppb.New(time.Unix(ts, 0))
+}
+
+// unixSecNanoTimestamp builds a timestamp from whole seconds and their sub-second
+// nanoseconds; it is nil only when both are 0.
+func unixSecNanoTimestamp(sec, nsec int64) *timestamppb.Timestamp {
+	if sec == 0 && nsec == 0 {
+		return nil
+	}
+	return timestamppb.New(time.Unix(sec, nsec))
 }
 
 // attestationHashAlgorithm maps the server's hash-algorithm string to the enum.

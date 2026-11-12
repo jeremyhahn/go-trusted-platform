@@ -130,11 +130,12 @@ Examples:
 	}
 }
 
-// parseManifestID refuses an empty or whitespace-only id before a connection
-// is made.
+// parseManifestID refuses, before a connection is made, an id that is not one
+// non-empty path segment: empty or whitespace-only, "." or "..", or
+// containing "/" or "\".
 func parseManifestID(arg string) (string, error) {
 	id := strings.TrimSpace(arg)
-	if id == "" {
+	if id == "" || id == "." || id == ".." || strings.ContainsAny(id, `/\`) {
 		return "", ErrInvalidManifestID{ID: arg}
 	}
 	return id, nil

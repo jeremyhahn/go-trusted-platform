@@ -190,6 +190,31 @@ func (s *FileStore) manifestPath(id string) string {
 	return filepath.Join(s.manifests, id+".json")
 }
 
+// validManifestID refuses an id that is not one non-empty path segment:
+// empty, "." or "..", or containing "/", "\" or a NUL byte.
+func validManifestID(id string) error {
+	switch {
+	case id == "":
+		return errInvalidStoreConfig{Field: "manifest.id", Reason: "empty"}
+	case id == "." || id == "..", strings.ContainsAny(id, "/\\\x00"):
+		return errInvalidStoreConfig{Field: "manifest.id", Reason: "must be one non-empty path segment"}
+	}
+	return nil
+}
+
+// checkedManifestPath is manifestPath after validManifestID, refusing any
+// path that does not sit directly in the manifest directory.
+func (s *FileStore) checkedManifestPath(id string) (string, error) {
+	if err := validManifestID(id); err != nil {
+		return "", err
+	}
+	p := s.manifestPath(id)
+	if filepath.Dir(p) != filepath.Clean(s.manifests) {
+		return "", errInvalidStoreConfig{Field: "manifest.id", Reason: "outside the manifest directory"}
+	}
+	return p, nil
+}
+
 func (s *FileStore) eventPath(id string) string {
 	return filepath.Join(s.events, id+".json")
 }
@@ -206,7 +231,10 @@ func (s *FileStore) PutManifest(m *manifest.HostManifest) error {
 	if err != nil {
 		return err
 	}
-	path := s.manifestPath(m.ID)
+	path, err := s.checkedManifestPath(m.ID)
+	if err != nil {
+		return err
+	}
 	tmp := path + ".tmp"
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -218,9 +246,13 @@ func (s *FileStore) PutManifest(m *manifest.HostManifest) error {
 
 // GetManifest loads a manifest by ID.
 func (s *FileStore) GetManifest(id string) (*manifest.HostManifest, error) {
+	path, err := s.checkedManifestPath(id)
+	if err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	data, err := os.ReadFile(s.manifestPath(id))
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, ErrManifestNotFound{ID: id}
@@ -276,9 +308,13 @@ func (s *FileStore) ListManifests(filter ListFilter) ([]*manifest.HostManifest, 
 
 // DeleteManifest removes a manifest.
 func (s *FileStore) DeleteManifest(id string) error {
+	path, err := s.checkedManifestPath(id)
+	if err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := os.Remove(s.manifestPath(id)); err != nil {
+	if err := os.Remove(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return ErrManifestNotFound{ID: id}
 		}

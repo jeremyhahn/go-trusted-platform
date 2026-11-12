@@ -302,9 +302,12 @@ type GetManifestResponse struct {
 
 // ManifestData represents attestation manifest data for QUIC transport
 type ManifestData struct {
-	ID                 string                `codec:"id"`
-	HostID             string                `codec:"host_id"`
-	Timestamp          int64                 `codec:"timestamp"`
+	ID        string `codec:"id"`
+	HostID    string `codec:"host_id"`
+	Timestamp int64  `codec:"timestamp"`
+	// TimestampNanos is the sub-second part (0-999999999) of the manifest
+	// time, which the signed digest covers; Timestamp keeps whole seconds.
+	TimestampNanos     int64                 `codec:"timestamp_nanos"`
 	Nonce              []byte                `codec:"nonce"`
 	Host               *HostAttestationData  `codec:"host"`
 	VMs                []VMAttestationData   `codec:"vms"`
@@ -1238,6 +1241,7 @@ func (h *AttestationHandler) manifestToData(m *manifest.HostManifest) *ManifestD
 		ID:                 m.ID,
 		HostID:             m.HostID,
 		Timestamp:          m.Timestamp.Unix(),
+		TimestampNanos:     int64(m.Timestamp.Nanosecond()),
 		Nonce:              m.Nonce,
 		MerkleRoot:         m.MerkleRoot,
 		Signature:          m.Signature,
@@ -1276,7 +1280,7 @@ func (h *AttestationHandler) dataToManifest(data *ManifestData) (*manifest.HostM
 	m := &manifest.HostManifest{
 		ID:                 data.ID,
 		HostID:             data.HostID,
-		Timestamp:          time.Unix(data.Timestamp, 0),
+		Timestamp:          time.Unix(data.Timestamp, data.TimestampNanos),
 		Nonce:              data.Nonce,
 		MerkleRoot:         data.MerkleRoot,
 		Signature:          data.Signature,

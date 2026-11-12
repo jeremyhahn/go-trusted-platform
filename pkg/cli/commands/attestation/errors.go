@@ -88,14 +88,15 @@ func (e ErrFollowVerdictsFailed) Error() string {
 	return "failed to follow device verdicts: " + e.Reason
 }
 
-// ErrInvalidManifestID reports a manifest id that is empty or only
-// whitespace. It is refused before any connection is made.
+// ErrInvalidManifestID reports a manifest id that is not one non-empty
+// path segment: empty or only whitespace, "." or "..", or containing "/"
+// or "\". It is refused before any connection is made.
 type ErrInvalidManifestID struct {
 	ID string
 }
 
 func (e ErrInvalidManifestID) Error() string {
-	return fmt.Sprintf("invalid manifest id %q: a manifest id must not be empty", e.ID)
+	return fmt.Sprintf("invalid manifest id %q: a manifest id must be one non-empty path segment", e.ID)
 }
 
 // ErrListManifestsFailed reports a failed attestation manifest listing.
