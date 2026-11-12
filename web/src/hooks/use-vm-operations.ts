@@ -23,6 +23,9 @@ import type {
 import { useToast } from "./use-toast";
 
 /** A random base64 nonce for an attestation request. */
+// MigrateVM returns only after the transfer and finalization; the client default (providers.tsx) is 30 s.
+export const MIGRATION_TIMEOUT_MS = 60 * 60 * 1000;
+
 export function attestationNonce(): string {
   const bytes = new Uint8Array(32);
   globalThis.crypto.getRandomValues(bytes);
@@ -102,7 +105,7 @@ export function useVMOperations(): UseVMOperationsResult {
     getSnapshot: (vmId, snapshotId) =>
       run("Get snapshot", () => compute.getSnapshot(vmId, snapshotId)),
     migrate: (vmId, destinationHost, liveMigration) =>
-      ok(run("Migrate", () => compute.migrateVM({ vmId, destinationHost, liveMigration }))),
+      ok(run("Migrate", () => compute.migrateVM({ vmId, destinationHost, liveMigration }, { timeoutMs: MIGRATION_TIMEOUT_MS }))),
     prepareMigration: (request) => run("Prepare migration", () => compute.prepareMigration(request)),
     finalizeMigration: (receiverId, commit) =>
       run("Finalize migration", () => compute.finalizeMigration({ receiverId, commit })),
