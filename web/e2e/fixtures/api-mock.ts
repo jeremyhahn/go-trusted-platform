@@ -490,6 +490,7 @@ export interface MockAnnouncedPrefix {
 export interface MockIPAllocation {
   ip: string;
   pool_id: string;
+  device_id?: string;
   hostname?: string;
   status?: string;
 }
@@ -500,6 +501,8 @@ export interface GatewayBgpApiMockConfig {
   allocations?: MockIPAllocation[];
   /** The address the next allocation hands out. */
   nextIP?: string;
+  /** Sections the node has not configured: every route under them answers 503. */
+  unavailable?: Array<'bgp' | 'ipam'>;
 }
 
 /** One mutating request the gateway mock received. */
@@ -523,9 +526,30 @@ export async function mockGatewayBgpApi(
   const peers = [...(config.peers ?? [])];
   let prefixes = [...(config.prefixes ?? [])];
   let allocations = [...(config.allocations ?? [])];
+  const unavailable = new Set(config.unavailable ?? []);
   const calls: GatewayBgpCall[] = [];
   const json = (route: Route, status: number, body: unknown) =>
     route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+  // The server wraps every message in restwire.WebServiceResponse, with the
+  // protojson payload in lowerCamelCase.
+  const ok = (route: Route, status: number, payload: unknown) =>
+    json(route, status, { code: status, success: true, payload });
+  const fail = (route: Route, status: number, error: string) =>
+    json(route, status, { code: status, success: false, error, payload: null });
+  const peerOut = (p: MockBGPPeer) => ({
+    address: p.address,
+    asn: p.asn,
+    state: p.state,
+    prefixesReceived: p.prefixes_received ?? 0,
+  });
+  const prefixOut = (p: MockAnnouncedPrefix) => ({ prefix: p.prefix, nextHop: p.next_hop ?? '' });
+  const allocOut = (a: MockIPAllocation) => ({
+    ip: a.ip,
+    poolId: a.pool_id,
+    deviceId: a.device_id ?? '',
+    hostname: a.hostname ?? '',
+    status: a.status ?? '',
+  });
 
   await page.route(/\/api\/v1\/gateway\/(bgp|ipam)\//, async (route: Route, request: Request) => {
     const url = new URL(request.url());
@@ -542,32 +566,46 @@ export async function mockGatewayBgpApi(
     }
     if (method !== 'GET') calls.push({ method, path, query, body });
 
-    if (path === '/bgp/peers' && method === 'GET') return json(route, 200, { peers });
-    if (path === '/bgp/prefixes' && method === 'GET') return json(route, 200, { prefixes });
+    if (path.startsWith('/bgp/') && unavailable.has('bgp')) {
+      return fail(route, 503, 'BGP speaker not configured on this node');
+    }
+    if (path.startsWith('/ipam/') && unavailable.has('ipam')) {
+      return fail(route, 503, 'IPAM not configured on this node');
+    }
+
+    if (path === '/bgp/peers' && method === 'GET') return ok(route, 200, { peers: peers.map(peerOut) });
+    if (path === '/bgp/prefixes' && method === 'GET') {
+      return ok(route, 200, { prefixes: prefixes.map(prefixOut) });
+    }
     if (path === '/bgp/prefixes' && method === 'POST') {
       prefixes = [...prefixes, { prefix: String(body?.prefix ?? ''), next_hop: String(body?.next_hop ?? '') }];
-      return json(route, 201, { status: { success: true, message: 'announced' } });
+      return ok(route, 201, { status: { success: true, message: 'announced' } });
     }
     if (path === '/bgp/prefixes' && method === 'DELETE') {
       prefixes = prefixes.filter((p) => p.prefix !== query.prefix);
-      return json(route, 200, { status: { success: true, message: 'withdrawn' } });
+      return ok(route, 200, { status: { success: true, message: 'withdrawn' } });
     }
-    if (path === '/ipam/allocations' && method === 'GET') return json(route, 200, { allocations });
+    if (path === '/ipam/allocations' && method === 'GET') {
+      return ok(route, 200, { allocations: allocations.map(allocOut) });
+    }
     if (path === '/ipam/allocations' && method === 'POST') {
+      const deviceId = String(body?.device_id ?? body?.deviceId ?? '');
+      if (!deviceId) return fail(route, 400, 'device_id is required');
       const alloc: MockIPAllocation = {
         ip: config.nextIP ?? '10.0.0.11',
         pool_id: String(body?.pool_id ?? ''),
+        device_id: deviceId,
         hostname: String(body?.hostname ?? ''),
         status: 'active',
       };
       allocations = [...allocations, alloc];
-      return json(route, 201, { allocation: alloc });
+      return ok(route, 201, { status: { success: true }, allocation: allocOut(alloc) });
     }
     if (path === '/ipam/allocations' && method === 'DELETE') {
       allocations = allocations.filter((a) => a.ip !== query.ip);
-      return json(route, 200, { status: { success: true, message: 'released' } });
+      return ok(route, 200, { status: { success: true, message: 'released' } });
     }
-    return json(route, 404, { error: 'not found' });
+    return fail(route, 404, 'not found');
   });
 
   return { calls };

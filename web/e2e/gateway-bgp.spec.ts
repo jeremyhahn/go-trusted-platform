@@ -77,6 +77,7 @@ test.describe('Gateway BGP and IPAM', () => {
     await page.goto(PAGE);
 
     await page.getByLabel('Pool ID').fill('prod-v4');
+    await page.getByLabel('Device ID').fill('dev-7');
     await page.getByLabel('Hostname').fill('node-04');
     await page.getByRole('button', { name: 'Allocate' }).click();
 
@@ -84,13 +85,24 @@ test.describe('Gateway BGP and IPAM', () => {
     const row = table.getByRole('row', { name: /10\.0\.0\.11/ });
     await expect(row).toBeVisible();
     await expect(row).toContainText('node-04');
+    await expect(row).toContainText('dev-7');
     expect(calls).toContainEqual(
       expect.objectContaining({
         method: 'POST',
         path: '/ipam/allocations',
-        body: { pool_id: 'prod-v4', hostname: 'node-04' },
+        body: { pool_id: 'prod-v4', device_id: 'dev-7', hostname: 'node-04' },
       })
     );
+  });
+
+  test('allocate needs a device id', async ({ page }) => {
+    const { calls } = await mockGatewayBgpApi(page);
+    await page.goto(PAGE);
+
+    await page.getByLabel('Pool ID').fill('prod-v4');
+    await page.getByLabel('Hostname').fill('node-04');
+    await expect(page.getByRole('button', { name: 'Allocate' })).toBeDisabled();
+    expect(calls.filter((c) => c.method === 'POST')).toHaveLength(0);
   });
 
   test('releases an IP after confirming', async ({ page }) => {
@@ -130,16 +142,39 @@ test.describe('Gateway BGP and IPAM', () => {
     await expect(table).toContainText('reserved');
   });
 
-  test('shows the error when a list fails', async ({ page }) => {
-    await page.route(/\/api\/v1\/gateway\/(bgp|ipam)\//, (route) =>
-      route.fulfill({
-        status: 503,
-        contentType: 'application/json',
-        body: JSON.stringify({ error: 'gateway is not running' }),
-      })
-    );
+  test('a node without a BGP speaker still lists and releases allocations', async ({ page }) => {
+    const { calls } = await mockGatewayBgpApi(page, {
+      unavailable: ['bgp'],
+      allocations: [{ ip: '10.0.0.10', pool_id: 'prod-v4', device_id: 'dev-3', hostname: 'node-03', status: 'active' }],
+    });
     await page.goto(PAGE);
-    await expect(page.getByText('Could not load gateway data')).toBeVisible();
-    await expect(page.getByText('gateway is not running')).toBeVisible();
+
+    await expect(page.getByText('Could not load BGP peers')).toBeVisible();
+    await expect(page.getByText('Could not load announced prefixes')).toBeVisible();
+    await expect(page.getByText('BGP speaker not configured on this node').first()).toBeVisible();
+    await expect(page.getByText('Could not load IP allocations')).toHaveCount(0);
+
+    const table = page.getByRole('table', { name: 'IP allocations' });
+    await expect(table.getByRole('row', { name: /10\.0\.0\.10.*dev-3.*node-03/ })).toBeVisible();
+    await table.getByRole('button', { name: 'Release 10.0.0.10' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Confirm' }).click();
+    await expect(table.getByText('No allocations.')).toBeVisible();
+    expect(calls).toContainEqual(
+      expect.objectContaining({ method: 'DELETE', path: '/ipam/allocations', query: { ip: '10.0.0.10' } })
+    );
+  });
+
+  test('a node without IPAM still lists BGP peers', async ({ page }) => {
+    await mockGatewayBgpApi(page, {
+      unavailable: ['ipam'],
+      peers: [{ address: '10.0.0.2', asn: 64513, state: 'established', prefixes_received: 4 }],
+    });
+    await page.goto(PAGE);
+
+    await expect(page.getByText('Could not load IP allocations')).toBeVisible();
+    await expect(page.getByText('IPAM not configured on this node')).toBeVisible();
+    await expect(page.getByText('Could not load BGP peers')).toHaveCount(0);
+    const table = page.getByRole('table', { name: 'BGP peers' });
+    await expect(table.getByRole('row', { name: /10\.0\.0\.2/ })).toBeVisible();
   });
 });
