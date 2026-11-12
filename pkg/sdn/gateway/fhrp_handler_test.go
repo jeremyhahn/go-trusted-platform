@@ -254,6 +254,69 @@ func TestBuildHostFW_AdmitsVRRPOnFHRPInterfaces(t *testing.T) {
 	assert.NotContains(t, text(t, nil), "l4proto 112")
 }
 
+// accept-mode false on a non-owner group (RFC 5798 §6.4.3) is enforced by
+// host-filter drop rules for the group's VIPs (Codex #1716 round 3 P1).
+func TestBuildHostFW_DeniesVIPsWithoutAcceptMode(t *testing.T) {
+	text := func(t *testing.T, f *fhrp.Config) string {
+		t.Helper()
+		cfg := baseGatewayConfig("fhrp-gw")
+		cfg.FHRP = f
+		cfg.HostFW = &hostfw.Config{Enabled: true}
+		cfg.Host = &HostRuntime{HostFWApplier: &fakeHostFWApplier{}}
+		svc, err := buildHostFW(&Gateway{config: cfg})
+		require.NoError(t, err)
+		require.NoError(t, svc.Start(context.Background()))
+		t.Cleanup(func() { _ = svc.Stop(context.Background()) })
+		backend, ok := svc.(hostFWBackend)
+		require.True(t, ok)
+		rendered := backend.Rendered()
+		require.NotNil(t, rendered)
+		return rendered.Text
+	}
+	deny := `iifname "trusted0" ip daddr 192.0.2.1 drop`
+
+	backup := ownerFHRPConfig()
+	backup.Groups[0].Priority = 100
+	backup.Groups[0].Source = "192.0.2.2"
+	assert.Contains(t, text(t, backup), deny, "accept-mode false on a backup drops traffic to the VIP")
+
+	byDefault := ownerFHRPConfig()
+	byDefault.Groups[0].Priority = 0
+	byDefault.Groups[0].Source = "192.0.2.2"
+	assert.Contains(t, text(t, byDefault), deny, "priority 0 means the default 100, not the owner")
+
+	accepting := ownerFHRPConfig()
+	accepting.Groups[0].Priority = 100
+	accepting.Groups[0].Source = "192.0.2.2"
+	accepting.Groups[0].AcceptMode = true
+	assert.NotContains(t, text(t, accepting), "accept-mode off", "accept-mode true admits the VIP")
+
+	assert.NotContains(t, text(t, ownerFHRPConfig()), "accept-mode off", "the owner always accepts its own address")
+}
+
+func TestGatewayConfig_FHRPAcceptModeOffNeedsHostFW(t *testing.T) {
+	cfg := baseGatewayConfig("fhrp-gw")
+	cfg.FHRP = ownerFHRPConfig()
+	cfg.FHRP.Groups[0].Priority = 100
+	cfg.FHRP.Groups[0].Source = "192.0.2.2"
+
+	var section *ErrFHRPConfigInvalid
+	require.ErrorAs(t, cfg.Validate(), &section, "accept-mode false cannot be enforced without hostfw")
+	assert.Contains(t, section.Error(), "hostfw")
+
+	cfg.HostFW = &hostfw.Config{Enabled: true}
+	assert.NoError(t, cfg.Validate(), "hostfw enforces accept-mode false")
+
+	cfg.HostFW = nil
+	cfg.FHRP.Groups[0].AcceptMode = true
+	assert.NoError(t, cfg.Validate(), "accept-mode true needs no filter")
+
+	cfg.FHRP.Groups[0].AcceptMode = false
+	cfg.FHRP.Groups[0].Priority = 255
+	cfg.FHRP.Groups[0].Source = "192.0.2.1"
+	assert.NoError(t, cfg.Validate(), "the owner always accepts its own address")
+}
+
 // A claim failure keeps the gateway unhealthy even after a later successful
 // advertisement has cleared LastError.
 func TestFHRPHealthy_ClaimErrorKeepsItUnhealthy(t *testing.T) {

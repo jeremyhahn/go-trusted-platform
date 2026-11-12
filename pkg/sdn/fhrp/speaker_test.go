@@ -579,6 +579,51 @@ func TestSpeaker_RollbackKeepsThePreexistingOwnerAddress(t *testing.T) {
 	assert.True(t, prog.holds("br-int", "10.4.200.1/24"), "the rollback leaves the owner's preexisting address in place")
 }
 
+// A master that crashed leaves its VIP on the interface. Only a
+// priority-255 owner holds a VIP as its own address, so a restarted
+// non-owner runner adopts the stale VIP and releases it on demotion and on
+// Stop (Codex #1716 round 3 P1).
+func TestSpeaker_AdoptsAStaleVIPAfterRestart(t *testing.T) {
+	t.Run("demotion", func(t *testing.T) {
+		seg := newSegment()
+		clock := newFakeClock(t0)
+		sink := newEventSink()
+		prog := newFakeProgrammer()
+		prog.addrs["br-int/10.4.200.1/24"] = nil
+		s, err := New(speakerConfig(200, "10.4.200.10"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: prog, Clock: clock, Logger: quietLogger(), Observer: sink})
+		require.NoError(t, err)
+		require.NoError(t, s.Start(context.Background()))
+		defer func() { _ = s.Stop(context.Background()) }()
+		clock.Advance(3600 * time.Millisecond)
+		sink.await(t, func(ev Event) bool { return ev.Kind == EventTransition && ev.Status.State == StateMaster })
+
+		progHigh := newFakeProgrammer()
+		high, err := New(speakerConfig(PriorityOwner, "10.4.200.2"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: progHigh, Clock: clock, Logger: quietLogger()})
+		require.NoError(t, err)
+		require.NoError(t, high.Start(context.Background()))
+		defer func() { _ = high.Stop(context.Background()) }()
+		sink.await(t, func(ev Event) bool {
+			return ev.Kind == EventTransition && ev.Status.State == StateBackup && ev.Status.Priority == 200
+		})
+		assert.False(t, prog.holds("br-int", "10.4.200.1/24"), "the demoted master deleted the stale VIP it adopted")
+	})
+	t.Run("stop", func(t *testing.T) {
+		seg := newSegment()
+		clock := newFakeClock(t0)
+		sink := newEventSink()
+		prog := newFakeProgrammer()
+		prog.addrs["br-int/10.4.200.1/24"] = nil
+		s, err := New(speakerConfig(200, "10.4.200.10"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: prog, Clock: clock, Logger: quietLogger(), Observer: sink})
+		require.NoError(t, err)
+		require.NoError(t, s.Start(context.Background()))
+		clock.Advance(3600 * time.Millisecond)
+		sink.await(t, func(ev Event) bool { return ev.Kind == EventTransition && ev.Status.State == StateMaster })
+		<-prog.claimed
+		require.NoError(t, s.Stop(context.Background()))
+		assert.False(t, prog.holds("br-int", "10.4.200.1/24"), "Stop deleted the stale VIP the master adopted")
+	})
+}
+
 func TestWallClock(t *testing.T) {
 	c := wallClock{}
 	assert.WithinDuration(t, time.Now(), c.Now(), time.Second)

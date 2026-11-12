@@ -211,6 +211,12 @@ func TestBuildExprs_Shapes(t *testing.T) {
 		"tunnel bfd": {Rule{Kind: RuleTunnelPort, Interface: "gre1", Protocol: ProtocolUDP, Port: PortBFD},
 			[]string{"meta", "cmp", "meta", "cmp", "payload", "cmp", "verdict"}},
 		"vrrp": {Rule{Kind: RuleVRRP, Interface: "eth1", IPProto: ipProtoVRRP}, []string{"meta", "cmp", "meta", "cmp", "verdict"}},
+		"vip deny v4": {Rule{Kind: RuleVIPDeny, Interface: "br-int", Family: 4, Destination: netip.MustParseAddr("10.4.200.1")},
+			[]string{"meta", "cmp", "meta", "cmp", "payload", "cmp", "verdict"}},
+		"vip deny v6": {Rule{Kind: RuleVIPDeny, Interface: "br-int", Family: 6, Destination: netip.MustParseAddr("2001:db8::1")},
+			[]string{"meta", "cmp", "meta", "cmp", "payload", "cmp", "meta", "cmp", "verdict"}},
+		"vip deny icmpv6": {Rule{Kind: RuleVIPDenyICMPv6, Interface: "br-int", Family: 6, Destination: netip.MustParseAddr("2001:db8::1")},
+			[]string{"meta", "cmp", "meta", "cmp", "payload", "cmp", "meta", "cmp", "payload", "cmp", "cmp", "verdict"}},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
