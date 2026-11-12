@@ -863,10 +863,15 @@ group's `LastError` and the state still advances (so the peer does not also
 claim); a socket that cannot be opened fails `Start` and stops the groups
 already started.
 
-The handler wiring in `node.go` (a `backedServiceHandler` building
-`fhrp.New(cfg, fhrp.Deps{Transport: fhrp.NewRawTransport(), Programmer:
-fhrp.NewNetlinkProgrammer()})`) is not in gatewayd yet; it is tracked in #596,
-together with stateless NAT failover. Conntrack/NAT state sync is #710.
+gatewayd runs the speaker as the `fhrp` service (#1696): an enabled `fhrp:`
+section (`GatewayConfig.FHRP`, validated with the rest of the gateway config,
+`ErrFHRPConfigInvalid`) is built by `buildFHRP` in
+`pkg/sdn/gateway/handlers.go` as `fhrp.New(cfg, fhrp.Deps{...})` over
+`HostRuntime.FHRPTransport` and `HostRuntime.FHRPProgrammer`; nil falls back
+to `fhrp.NewRawTransport()` and `fhrp.NewNetlinkProgrammer()`. It runs in the
+`datapath` process, the one that keeps `CAP_NET_RAW` and `CAP_NET_ADMIN`.
+The service is healthy while started with no group's last actuation failed.
+Stateless NAT failover is tracked in #596; conntrack/NAT state sync is #710.
 
 ### The process model — `pkg/sdn/gateway/process` (#557)
 
