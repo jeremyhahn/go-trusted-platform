@@ -191,9 +191,9 @@ const (
 
 // prTriggerTypes are ci.yml's pull_request activity types. `ci:full` takes
 // effect on the PR's next push or update-branch: there is no `labeled`, see
-// labelTypes. There is no `ready_for_review` or `edited` either: a draft
-// marked ready starts its run on the next push.
-var prTriggerTypes = []string{"opened", "synchronize", "reopened"}
+// labelTypes. `ready_for_review` (handbook v1.35.3, DS-8545) starts the run
+// when a draft is marked ready; there is no `edited`.
+var prTriggerTypes = []string{"opened", "synchronize", "reopened", "ready_for_review"}
 
 // labelTypes are the pull_request activity types a label change matches. Gitea
 // 1.27.1 sends every label add AND remove as `label_updated`, which its
@@ -970,7 +970,7 @@ func TestCIGateScriptPassesAMainTierSkipOnlyOnAPullRequest(t *testing.T) {
 // below each break in one place.
 const fixtureTieredCI = `on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review]
 concurrency:
   group: ` + supersededGroup + `
   cancel-in-progress: true
@@ -1115,9 +1115,9 @@ func TestCITierFindingsRejectEachInconsistency(t *testing.T) {
 		{"a gate without the schedule guard's verdict", "          SCHEDULE_GUARD: " + scheduleGuardEnvValue + "\n", "", "$SCHEDULE_GUARD is \"\""},
 		{"a verdict that reads the guard's result", "SCHEDULE_GUARD: " + scheduleGuardEnvValue, "SCHEDULE_GUARD: ${{ needs.preflight.result }}", "$SCHEDULE_GUARD is"},
 		{"a gate checking an undefined job", `check full race "$RESULT_RACE"`, "check full race \"$RESULT_RACE\"\n          check pr ghost \"$RESULT_RACE\"", "ghost: ci-gate checks a job the workflow does not define"},
-		{"pull_request with the labeled type", `reopened]`, `reopened, labeled]`, "not on a label event"},
-		{"pull_request with the ready_for_review type", `reopened]`, `reopened, ready_for_review]`, "not on a label event"},
-		{"pull_request without the synchronize type", `synchronize, `, ``, "types are [opened reopened]"},
+		{"pull_request with the labeled type", `ready_for_review]`, `ready_for_review, labeled]`, "not on a label event"},
+		{"pull_request without the ready_for_review type", `, ready_for_review]`, `]`, "types are [opened synchronize reopened]"},
+		{"pull_request without the synchronize type", `synchronize, `, ``, "types are [opened reopened ready_for_review]"},
 		{"a main-tier job missing from the gate's needs", `race, fips, soak,`, `race, soak,`, "fips: not in ci-gate's needs"},
 		{"a main-tier job without a check line", "          check main fips \"$RESULT_FIPS\"\n", "", "fips: no check line in ci-gate"},
 		{"a main-tier job tagged full", `check main fips`, `check full fips`, "fips: tagged full in ci-gate, but its if: puts it in the main tier"},
@@ -1189,8 +1189,8 @@ func TestConcurrencyFindingsRejectAnUncancellableGroup(t *testing.T) {
 		{"a schedule group keyed by commit", "format('schedule-{0}', github.repository)", "format('schedule-{0}-{1}', github.repository, github.sha)", "group must be"},
 		{"a schedule group tested after the main group", supersededGroup, `${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && format('main-{0}-{1}', github.event_name, github.sha) || github.event_name == 'schedule' && format('schedule-{0}', github.repository) || github.ref }}`, "group must be"},
 		{"no concurrency block", "concurrency:\n  group: " + supersededGroup + "\n  cancel-in-progress: true\n", "", "has no concurrency block"},
-		{"a labeled trigger", `reopened]`, `reopened, labeled]`, "types include labeled"},
-		{"an unlabeled trigger", `reopened]`, `reopened, unlabeled]`, "types include unlabeled"},
+		{"a labeled trigger", `ready_for_review]`, `ready_for_review, labeled]`, "types include labeled"},
+		{"an unlabeled trigger", `ready_for_review]`, `ready_for_review, unlabeled]`, "types include unlabeled"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
