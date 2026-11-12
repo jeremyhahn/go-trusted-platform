@@ -83,6 +83,8 @@ export { useToast, toast, dismissToast } from './use-toast';
 export type { Toast, UseToastReturn } from './use-toast';
 
 export { useReportedGateways } from './use-reported-gateways';
+export { usePolicyTools, splitList } from './use-policy-tools';
+export type { ValidatePolicyInput, TestPolicyInput } from './use-policy-tools';
 export type {
   ReportedGateway,
   UseReportedGatewaysOptions,
