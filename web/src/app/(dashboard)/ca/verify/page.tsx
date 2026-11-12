@@ -18,14 +18,25 @@ export default function VerifyCertificatePage() {
   const ca = useCA();
   const [certificatePem, setCertificatePem] = React.useState("");
 
-  const verifyMutation = useMutation((pem: string) => ca.verifyCertificate({ certificatePem: pemToBase64(pem) }));
+  // The PEM whose verification succeeded; a verdict is shown only for it.
+  const [verifiedPem, setVerifiedPem] = React.useState<string | null>(null);
+
+  const verifyMutation = useMutation(
+    (pem: string) => ca.verifyCertificate({ certificatePem: pemToBase64(pem), verifyRevocation: true }),
+    { onSuccess: (_data, pem) => setVerifiedPem(pem) }
+  );
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    verifyMutation.reset();
+    setVerifiedPem(null);
     verifyMutation.mutate(certificatePem.trim());
   };
 
-  const result = verifyMutation.data;
+  const result =
+    !verifyMutation.error && !verifyMutation.isLoading && verifiedPem === certificatePem.trim()
+      ? verifyMutation.data
+      : undefined;
 
   return (
     <div className="flex flex-col gap-6">
@@ -48,7 +59,11 @@ export default function VerifyCertificatePage() {
                 rows={10}
                 className="font-mono text-xs"
                 value={certificatePem}
-                onChange={(e) => setCertificatePem(e.target.value)}
+                onChange={(e) => {
+                  setCertificatePem(e.target.value);
+                  verifyMutation.reset();
+                  setVerifiedPem(null);
+                }}
                 placeholder="-----BEGIN CERTIFICATE-----"
               />
             </div>
@@ -76,6 +91,9 @@ export default function VerifyCertificatePage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-2 text-sm">
+            <p data-testid="verify-revocation" className="text-muted-foreground">
+              Revocation status checked
+            </p>
             {(result.chain ?? []).length > 0 && (
               <div data-testid="verify-chain">
                 <span className="text-muted-foreground">Chain: </span>
