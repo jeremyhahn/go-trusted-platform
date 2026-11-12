@@ -471,6 +471,98 @@ export async function mockAllApis(
   return { invitation, tenant };
 }
 
+
+// ============================================================================
+// KMS operations API mock (#1734)
+// ============================================================================
+
+/** One request the KMS operations mock answered. */
+export interface KmsOpsCall {
+  method: string;
+  /** Path below /api/v1/kms, without a trailing slash. */
+  path: string;
+  body: Record<string, unknown> | null;
+}
+
+export interface KmsOpsApiMockConfig {
+  /** Answers POST /hmac/{name}/verify. */
+  hmacValid?: boolean;
+  /** Fails every request to this path (below /api/v1/kms) with a 500. */
+  failPath?: string;
+}
+
+/**
+ * Mocks the KMS REST routes the operations page drives. Byte fields are
+ * base64, as Go's encoding/json writes []byte. Encrypt answers
+ * `ct:<plaintext base64>`, decrypt strips the prefix again, so a test can
+ * round-trip through both.
+ */
+export async function mockKmsOpsApi(
+  page: Page,
+  config: KmsOpsApiMockConfig = {}
+): Promise<{ calls: KmsOpsCall[] }> {
+  const calls: KmsOpsCall[] = [];
+  const b64 = (s: string) => Buffer.from(s, 'utf8').toString('base64');
+
+  await page.route('**/api/v1/kms/**', async (route: Route, request: Request) => {
+    const url = new URL(request.url());
+    const path = url.pathname.replace(/^.*\/api\/v1\/kms/, '').replace(/\/$/, '');
+    const method = request.method();
+    let body: Record<string, unknown> | null = null;
+    try {
+      body = request.postDataJSON() as Record<string, unknown> | null;
+    } catch {
+      body = null;
+    }
+    calls.push({ method, path, body });
+
+    const reply = (status: number, payload: unknown) =>
+      route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(payload) });
+
+    if (config.failPath && path === config.failPath) {
+      await reply(500, { message: 'backend unavailable' });
+      return;
+    }
+
+    let m: RegExpMatchArray | null;
+    if (method === 'POST' && path === '/keys/import') {
+      await reply(200, { key_id: body?.name, version: 1, algorithm: body?.algorithm });
+    } else if (method === 'PUT' && (m = path.match(/^\/keys\/([^/]+)\/status$/))) {
+      await reply(200, { key_id: decodeURIComponent(m[1]), version: 2, status: body?.status });
+    } else if (method === 'GET' && (m = path.match(/^\/keys\/([^/]+)\/versions$/))) {
+      await reply(200, {
+        versions: [
+          { version: 1, status: 'disabled', algorithm: 'aes-256-gcm' },
+          { version: 2, status: 'enabled', algorithm: 'aes-256-gcm' },
+        ],
+      });
+    } else if (method === 'POST' && /^\/encrypt\/[^/]+$/.test(path)) {
+      await reply(200, { key_id: 'k', version: 1, ciphertext: b64(`ct:${body?.plaintext}`) });
+    } else if (method === 'POST' && /^\/decrypt\/[^/]+$/.test(path)) {
+      const ct = Buffer.from(String(body?.ciphertext ?? ''), 'base64').toString('utf8');
+      await reply(200, { plaintext: ct.replace(/^ct:/, '') });
+    } else if (method === 'POST' && path === '/hash') {
+      await reply(200, { hash: body?.hash, digest: b64('digest-of-data') });
+    } else if (method === 'POST' && /^\/hmac\/[^/]+\/verify$/.test(path)) {
+      await reply(200, { valid: config.hmacValid ?? true });
+    } else if (method === 'POST' && /^\/hmac\/[^/]+$/.test(path)) {
+      await reply(200, { key_id: 'k', hmac: b64('mac-of-data') });
+    } else if (method === 'POST' && path === '/random') {
+      await reply(200, { bytes: b64('r'.repeat(Number(body?.num_bytes ?? 0))) });
+    } else if (method === 'POST' && path === '/data-keys/wrapped') {
+      await reply(200, { wrapping_key_id: body?.wrapping_key_id, wrapped_key: b64('wrapped-dek') });
+    } else if (method === 'POST' && path === '/data-keys') {
+      await reply(200, { key_id: body?.key_id, plaintext_key: b64('plain-dek'), encrypted_key: b64('enc-dek') });
+    } else if (method === 'GET' && path === '/backend/status') {
+      await reply(200, { backend_type: 'tpm2', status: 'healthy', capabilities: { sign: true, export: false } });
+    } else {
+      await route.continue();
+    }
+  });
+
+  return { calls };
+}
+
 /**
  * Create a mock WebAuthn registration flow.
  * Mocks the registration begin and finish endpoints.
