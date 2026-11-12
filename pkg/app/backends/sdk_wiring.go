@@ -14,6 +14,8 @@
 package backends
 
 import (
+	"context"
+	"fmt"
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 
@@ -94,9 +96,37 @@ func WireSDKBackends(target SDKBackendTarget, src SDKBackendSources, logger *log
 	// consumes the slot.
 	luks := NewLUKSBackend(logger, WithDefaultLUKSHandlers())
 	luks.SetFIDO2Handler(nil)
+	luks.SetTPMHandler(pcrCheckedTPMHandler(luks.tpm))
 	target.SetLUKSBackend(luks)
 	target.SetLUKSRootChecker(DefaultRootChecker())
 	return nil
+}
+
+// maxTPMPCRIndex is the highest PCR index a TPM 2.0 PC-client bank holds.
+const maxTPMPCRIndex = 23
+
+// pcrCheckedTPMHandler wraps h so Seal refuses an empty PCR list and any
+// index outside 0..maxTPMPCRIndex before the sealer runs or a slot is
+// written. A nil h stays nil, so TPM enrollment stays off.
+func pcrCheckedTPMHandler(h LUKSTPMHandler) LUKSTPMHandler {
+	if h == nil {
+		return nil
+	}
+	return pcrCheckedTPM{next: h}
+}
+
+type pcrCheckedTPM struct{ next LUKSTPMHandler }
+
+func (p pcrCheckedTPM) Seal(ctx context.Context, handle string, pcrs []int32) ([]byte, []byte, error) {
+	if len(pcrs) == 0 {
+		return nil, nil, fmt.Errorf("%w: at least one pcr index is required", daemon.ErrLUKSPCRInvalid)
+	}
+	for _, idx := range pcrs {
+		if idx < 0 || idx > maxTPMPCRIndex {
+			return nil, nil, fmt.Errorf("%w: pcr index %d is outside 0..%d", daemon.ErrLUKSPCRInvalid, idx, maxTPMPCRIndex)
+		}
+	}
+	return p.next.Seal(ctx, handle, pcrs)
 }
 
 // WireEmbeddedHost is the daemon.EmbeddedHostOptions.WireBackends of every
