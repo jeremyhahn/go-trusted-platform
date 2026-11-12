@@ -60,11 +60,11 @@ export function base64ToText(b64: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-/** Hex digest to base64; throws on odd length or a non-hex digit. */
+/** Hex data to base64; throws on odd length or a non-hex digit. */
 export function hexToBase64(hex: string): string {
   const clean = hex.trim().replace(/^0x/i, "");
   if (clean.length === 0 || clean.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(clean)) {
-    throw new Error("Digest must be an even number of hex digits");
+    throw new Error("Data must be an even number of hex digits");
   }
   let bin = "";
   for (let i = 0; i < clean.length; i += 2) {

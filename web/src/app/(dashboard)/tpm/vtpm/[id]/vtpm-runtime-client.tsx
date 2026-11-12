@@ -101,6 +101,13 @@ export default function VTPMRuntimeClient({ params }: { params: Promise<{ id: st
 function BundleRuntimePanel({ bundleId }: { bundleId: string }) {
   const { toast } = useToast();
   const rt = useVTPMRuntime(bundleId);
+  const alive = React.useRef(true);
+  React.useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
 
   const [pending, setPending] = React.useState<PendingAction>(null);
   const [quoteNonce, setQuoteNonce] = React.useState("");
@@ -120,7 +127,8 @@ function BundleRuntimePanel({ bundleId }: { bundleId: string }) {
     try {
       await fn();
     } catch (err) {
-      fail(title)(err as Error);
+      // A panel for a previous bundle drops its late replies, including the SDK's "Component unmounted during mutation" rejection.
+      if (alive.current) fail(title)(err as Error);
     }
   };
 
