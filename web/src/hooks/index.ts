@@ -92,6 +92,7 @@ export {
 export type { UseContainerOpsResult } from './use-container-ops';
 
 export { useReportedGateways } from './use-reported-gateways';
+export { useOverlayVteps } from './use-overlay-vteps';
 export type {
   ReportedGateway,
   UseReportedGatewaysOptions,
