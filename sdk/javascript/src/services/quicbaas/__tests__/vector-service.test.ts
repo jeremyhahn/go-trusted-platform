@@ -234,7 +234,7 @@ describe('VectorService', () => {
         includeMetadata: true,
       });
 
-      expect(result.data?.results[0].metadata).toBeDefined();
+      expect(result.data?.results[0]?.metadata).toBeDefined();
     });
 
     it('should handle namespace not found error', async () => {
@@ -422,7 +422,7 @@ describe('VectorService', () => {
       });
 
       expect(result.success).toBe(true);
-      expect(result.data?.name).toBe('embeddings');
+      expect(result.data).toMatchObject({ name: 'embeddings' });
       expect(mockClient.post).toHaveBeenCalledWith('/v1/quicbaas/vector/namespaces', {
         name: 'embeddings',
         dimension: 1536,
@@ -561,7 +561,7 @@ describe('VectorService', () => {
 
       await service.listNamespaces({ limit: 10, cursor: 'page-2' });
 
-      const call = vi.mocked(mockClient.get).mock.calls[0][0];
+      const call = vi.mocked(mockClient.get).mock.calls[0]?.[0];
       expect(call).toContain('limit=10');
       expect(call).toContain('cursor=page-2');
     });
