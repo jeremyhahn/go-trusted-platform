@@ -504,16 +504,7 @@ export async function mockTenantLifecycleApi(
           path: `tenants/${tenant.id}/dek`,
           version: dekVersion,
           algorithm: 'AES-256-GCM',
-          status: 'active',
-          isDefault: false,
           createdAt: now,
-          usageCount: 10,
-          bytesUsed: 2048,
-          maxUsageCount: 1000,
-          maxBytesUsed: 1048576,
-          warningPercent: 80,
-          usagePercent: 1,
-          needsRotation: false,
         },
       });
     }

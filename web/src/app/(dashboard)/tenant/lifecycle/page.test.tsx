@@ -85,7 +85,14 @@ beforeEach(() => {
     ok({ tenantId: "t1", oldVersion: 3, newVersion: 4, timestamp: "2026-11-12T00:00:00Z" })
   );
   service.getDEKStatus.mockImplementation(() =>
-    ok({ dekStatus: { version: 4, algorithm: "AES-256-GCM", status: "active", usagePercent: 1 } })
+    ok({
+      dekStatus: {
+        path: "tenants/t1/dek",
+        version: 4,
+        algorithm: "AES-256-GCM",
+        createdAt: "2026-11-01T00:00:00Z",
+      },
+    })
   );
 });
 
@@ -118,6 +125,9 @@ describe("TenantLifecyclePage", () => {
     await lookUp();
     fireEvent.click(screen.getByRole("button", { name: "Suspend" }));
     expect(service.suspendTenant).not.toHaveBeenCalled();
+    const text = dialog().textContent ?? "";
+    expect(text).toContain("changes its state only");
+    expect(text).not.toContain("lose access");
     fireEvent.click(within(dialog()).getByRole("button", { name: "Suspend" }));
     expect(await screen.findByText("Tenant suspended")).toBeTruthy();
     expect(service.suspendTenant).toHaveBeenCalledTimes(1);
@@ -134,6 +144,16 @@ describe("TenantLifecyclePage", () => {
     expect(service.rotateDEK).toHaveBeenCalledTimes(1);
     expect(service.rotateDEK).toHaveBeenCalledWith({ tenantId: "t1" });
     expect(screen.getByTestId("dek-version").textContent).toBe("4");
+  });
+
+  it("DEK panel shows no usage the server does not report", async () => {
+    await lookUp();
+    fireEvent.click(screen.getByRole("button", { name: "Load DEK status" }));
+    const panel = await screen.findByTestId("dek-status");
+    expect(panel.textContent).toContain("AES-256-GCM");
+    expect(panel.textContent).toContain("2026-11-01T00:00:00Z");
+    expect(panel.textContent).not.toContain("%");
+    expect(screen.getByTestId("dek-usage-note")).toBeTruthy();
   });
 
   it("save quotas sends the entered limits and keeps the other compute limits", async () => {

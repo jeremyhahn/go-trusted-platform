@@ -85,6 +85,7 @@ test.describe('Tenant lifecycle', () => {
     await lookUp(page);
     await page.getByRole('button', { name: 'Suspend' }).click();
     expect(called(mock, 'POST', '/tenant-abc-123/suspend')).toHaveLength(0);
+    await expect(page.getByRole('dialog')).toContainText('changes its state only');
     await confirmDialog(page, 'Suspend tenant', 'Suspend');
     await expect(page.getByTestId('tenant-state')).toHaveText('SUSPENDED');
     expect(called(mock, 'POST', '/tenant-abc-123/suspend')).toHaveLength(1);
@@ -159,6 +160,8 @@ test.describe('Tenant lifecycle', () => {
     await page.getByRole('button', { name: 'Load DEK status' }).click();
     await expect(page.getByTestId('dek-status')).toContainText('AES-256-GCM');
     await expect(page.getByTestId('dek-version')).toHaveText('1');
+    await expect(page.getByTestId('dek-usage-note')).toBeVisible();
+    await expect(page.getByTestId('dek-status')).not.toContainText('%');
     expect(called(mock, 'GET', '/tenant-abc-123/dek')).toHaveLength(1);
   });
 });
