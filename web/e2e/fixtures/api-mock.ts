@@ -460,6 +460,8 @@ export interface SwitchPortStatus {
 export interface SwitchApiMockConfig {
   switchName?: string;
   ports?: SwitchPortStatus[];
+  /** Operations answered 403 (recorded, port state unchanged): 'status', 'enable', 'disable', 'vlan'. */
+  failActions?: string[];
 }
 
 /** One request the switch mock answered: verb, decoded port, action and body. */
@@ -508,6 +510,12 @@ export async function mockSwitchApi(
     const status = ports.get(port);
     if (!status) {
       await route.fulfill({ status: 404, contentType: 'application/json', body: errorEnvelope({ error: 'port not found', status: 404 }) });
+      return;
+    }
+    const op = action ?? (request.method() === 'GET' ? 'status' : undefined);
+    if (op && config.failActions?.includes(op)) {
+      // 403, not 503: the SDK retries a 503.
+      await route.fulfill({ status: 403, contentType: 'application/json', body: errorEnvelope({ error: 'denied', status: 403 }) });
       return;
     }
     if (!action && request.method() === 'GET') {

@@ -23,8 +23,8 @@ function ports(): SwitchPortStatus[] {
   ];
 }
 
-async function openSwitch(page: Page): Promise<SwitchApiCall[]> {
-  const calls = await mockSwitchApi(page, { switchName: SWITCH, ports: ports() });
+async function openSwitch(page: Page, failActions: string[] = []): Promise<SwitchApiCall[]> {
+  const calls = await mockSwitchApi(page, { switchName: SWITCH, ports: ports(), failActions });
   await mockTenantApi(page);
   await page.goto(`/networking/switches/${SWITCH}`);
   await expect(page.getByRole('heading', { name: `Switch ${SWITCH}` })).toBeVisible();
@@ -108,6 +108,60 @@ test.describe('Switch ports', () => {
     await dialog.getByRole('button', { name: 'Save' }).click();
 
     await expect(row).toContainText('200');
+    expect(calls).toContainEqual(
+      expect.objectContaining({ method: 'POST', port: 'Eth1/1', action: 'vlan', body: { vlan_id: 200 } })
+    );
+  });
+
+  test('GetPortStatus: a failed response shows an error and no status', async ({ page }) => {
+    const calls = await openSwitch(page, ['status']);
+
+    await page.getByTestId('port-row-Eth1/2').getByRole('button', { name: 'Status' }).click();
+
+    await expect(page.getByText('Error loading port status').first()).toBeVisible();
+    await expect(page.getByTestId('port-status')).toHaveCount(0);
+    expect(calls).toContainEqual(expect.objectContaining({ method: 'GET', port: 'Eth1/2', action: undefined }));
+  });
+
+  test('EnablePort: a failed response shows an error and the port stays disabled', async ({ page }) => {
+    const calls = await openSwitch(page, ['enable']);
+    const row = page.getByTestId('port-row-Eth1/2');
+
+    await row.getByRole('button', { name: 'Enable' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Confirm' }).click();
+
+    await expect(page.getByText('Failed to enable port').first()).toBeVisible();
+    await expect(page.getByText('Port Eth1/2 enabled')).toHaveCount(0);
+    await expect(row).toContainText('disabled');
+    expect(calls).toContainEqual(expect.objectContaining({ method: 'POST', port: 'Eth1/2', action: 'enable' }));
+  });
+
+  test('DisablePort: a failed response shows an error and the port stays enabled', async ({ page }) => {
+    const calls = await openSwitch(page, ['disable']);
+    const row = page.getByTestId('port-row-Eth1/1');
+
+    await row.getByRole('button', { name: 'Disable' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Confirm' }).click();
+
+    await expect(page.getByText('Failed to disable port').first()).toBeVisible();
+    await expect(page.getByText('Port Eth1/1 disabled')).toHaveCount(0);
+    await expect(row).toContainText('enabled');
+    expect(calls).toContainEqual(expect.objectContaining({ method: 'POST', port: 'Eth1/1', action: 'disable' }));
+  });
+
+  test('SetPortVLAN: a failed response shows an error and the VLAN is unchanged', async ({ page }) => {
+    const calls = await openSwitch(page, ['vlan']);
+    const row = page.getByTestId('port-row-Eth1/1');
+
+    await row.getByRole('button', { name: 'Set VLAN' }).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByLabel('VLAN ID').fill('200');
+    await dialog.getByRole('button', { name: 'Save' }).click();
+
+    await expect(page.getByText('Failed to set VLAN').first()).toBeVisible();
+    await expect(page.getByText('Port Eth1/1 set to VLAN 200')).toHaveCount(0);
+    await expect(row).toContainText('100');
+    await expect(row).not.toContainText('200');
     expect(calls).toContainEqual(
       expect.objectContaining({ method: 'POST', port: 'Eth1/1', action: 'vlan', body: { vlan_id: 200 } })
     );
