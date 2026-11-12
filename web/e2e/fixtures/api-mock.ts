@@ -526,6 +526,12 @@ export async function mockKmsOpsApi(
     if (method === 'POST' && path === '/keys/import') {
       await reply(200, { key_id: body?.name, version: 1, algorithm: body?.algorithm });
     } else if (method === 'PUT' && (m = path.match(/^\/keys\/([^/]+)\/status$/))) {
+      // The KMS service sets only ENABLED or DISABLED here; deletion,
+      // rotation and revocation have dedicated operations.
+      if (body?.status !== 'ENABLED' && body?.status !== 'DISABLED') {
+        await reply(400, { message: 'use dedicated operations for deletion, rotation, or revocation' });
+        return;
+      }
       await reply(200, { key_id: decodeURIComponent(m[1]), version: 2, status: body?.status });
     } else if (method === 'GET' && (m = path.match(/^\/keys\/([^/]+)\/versions$/))) {
       await reply(200, {

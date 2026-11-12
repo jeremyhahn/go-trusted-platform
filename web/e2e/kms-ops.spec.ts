@@ -52,6 +52,13 @@ test.describe("KMS operations", () => {
     expect(call?.body).toEqual({ status: "DISABLED" });
   });
 
+  test("offers only the statuses the KMS service accepts", async ({ page }) => {
+    await openPage(page);
+    const card = page.getByTestId("op-status");
+    const options = await card.getByLabel("New status").locator("option").allTextContents();
+    expect(options).toEqual(["ENABLED", "DISABLED"]);
+  });
+
   test("lists key versions", async ({ page }) => {
     const mock = await openPage(page);
     const card = page.getByTestId("op-versions");

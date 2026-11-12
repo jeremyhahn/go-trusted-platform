@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
-import { base64ToText, textToBase64, useKmsOps } from './use-kms-ops';
+import { KMS_SETTABLE_KEY_STATUSES, base64ToText, textToBase64, useKmsOps } from './use-kms-ops';
 
 interface Seen {
   url: string;
@@ -81,5 +81,21 @@ describe('useKmsOps', () => {
     });
     expect(out).toBeNull();
     expect(result.current.error).toBe('backend unavailable');
+  });
+
+  it('offers only ENABLED and DISABLED as settable key statuses', () => {
+    expect(KMS_SETTABLE_KEY_STATUSES).toEqual(['ENABLED', 'DISABLED']);
+  });
+
+  it('refuses a status the KMS service rejects without a request', async () => {
+    const seen = stubFetch(() => ({ status: 200, json: {} }));
+    const { result } = renderHook(() => useKmsOps());
+    let out: unknown = 'unset';
+    await act(async () => {
+      out = await result.current.updateKeyStatus('k', 'PENDING_DELETION');
+    });
+    expect(out).toBeNull();
+    expect(seen).toEqual([]);
+    expect(result.current.error).toContain('ENABLED or DISABLED');
   });
 });
