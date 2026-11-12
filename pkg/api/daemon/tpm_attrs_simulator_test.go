@@ -31,6 +31,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -280,7 +281,7 @@ func TestTPMSimulator_ActivateCredentialRefusesAForeignCredential(t *testing.T) 
 // dereferences it, so CreateIAKCSR must refuse before calling the library.
 func TestTPMSimulator_IAKCSRRefusesMissingIDevIDConfig(t *testing.T) {
 	tpm := newSimulatedTPM(t)
-	svc := createIDevIDTestService(t)
+	svc := NewIDevIDGRPCService(logging.DefaultLogger())
 	svc.SetTPM2Service(tpm)
 
 	var err error
