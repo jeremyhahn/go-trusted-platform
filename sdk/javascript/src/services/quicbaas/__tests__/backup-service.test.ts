@@ -462,7 +462,7 @@ describe('BackupService', () => {
         endTime: 1700086400000,
       });
 
-      const call = vi.mocked(mockClient.get).mock.calls[0][0];
+      const call = vi.mocked(mockClient.get).mock.calls[0]![0];
       expect(call).toContain('startTime=1700000000000');
       expect(call).toContain('endTime=1700086400000');
     });
@@ -479,7 +479,7 @@ describe('BackupService', () => {
 
       await service.list({ limit: 10, cursor: 'current-page' });
 
-      const call = vi.mocked(mockClient.get).mock.calls[0][0];
+      const call = vi.mocked(mockClient.get).mock.calls[0]![0];
       expect(call).toContain('limit=10');
       expect(call).toContain('cursor=current-page');
     });
@@ -514,7 +514,7 @@ describe('BackupService', () => {
       });
 
       expect(result.success).toBe(true);
-      expect(result.data?.deleted).toBe(true);
+      expect(result.data).toMatchObject({ deleted: true });
       expect(mockClient.delete).toHaveBeenCalledWith('/v1/quicbaas/backups/backup-old-123');
     });
 
@@ -615,7 +615,7 @@ describe('BackupService', () => {
       });
 
       expect(result.success).toBe(true);
-      expect(result.data?.backup.progress).toBe(75);
+      expect(result.data?.backup).toMatchObject({ progress: 75 });
       expect(mockClient.get).toHaveBeenCalledWith('/v1/quicbaas/backups/backup-123/status');
     });
 
