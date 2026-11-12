@@ -69,12 +69,14 @@ sdk/go/services/luks  (Service)          pkg/api/daemon transport adapters
   and applies the platform FIPS keyslot policy. FIDO2 and TPM enrollment go
   through pluggable handlers built on the go-xkms re-exports.
 
-**As shipped, the chain is not connected at the server end** (see
-[engineering.md](engineering.md) §6): the platformd startup path injects
-neither the go-luks2 backend nor a root checker, so every server transport
-answers *backend not configured* or *root required*. `platformctl luks` builds
-the SDK's `GRPCClient` from `platform.Client.LUKS()` and reaches that refusal
-over whichever transport is active.
+**The chain is connected at the server end by `backends.WireSDKBackends`** (see
+[engineering.md](engineering.md) §6): on the platformd startup path it injects
+the go-luks2 backend (`NewLUKSBackend` with the default FIDO2 and TPM handlers)
+and the effective-UID root checker into `LUKSService`, next to the ceremony
+backend. When that wiring is refused (no SDK client), nothing is injected and
+every server transport answers *backend not configured* or *root required*.
+`platformctl luks` builds the SDK's `GRPCClient` from `platform.Client.LUKS()`
+and reaches the service over whichever transport is active.
 
 ---
 
