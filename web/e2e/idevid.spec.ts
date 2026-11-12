@@ -82,7 +82,8 @@ test.describe('TPM IDevID and IAK', () => {
     const { calls } = await openPage(page);
     await page.getByRole('button', { name: 'Create IAK CSR' }).click();
     await expect.poll(called(calls, 'POST', '/iak/csr')).toBe(1);
-    await expect(page.getByTestId('idevid-result')).toContainText('IAKCSR');
+    // The binary CSR bytes survive export as base64.
+    await expect(page.getByTestId('idevid-result').locator('pre')).toHaveText('AAEC/xCA');
   });
 
   test('CreateLDevID creates an LDevID', async ({ page }) => {

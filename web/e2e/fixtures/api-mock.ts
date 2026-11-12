@@ -533,7 +533,8 @@ export async function mockIDevIDApi(
         code: 'FAILED_PRECONDITION',
       },
     },
-    'POST /iak/csr': { body: { status: idevidOk, csrPem: '-----BEGIN CERTIFICATE REQUEST-----\nIAKCSR\n-----END CERTIFICATE REQUEST-----' } },
+    // The server returns binary TCG_CSR_IDEVID bytes, base64 in protobuf JSON.
+    'POST /iak/csr': { body: { status: idevidOk, csrPem: Buffer.from([0x00, 0x01, 0x02, 0xff, 0x10, 0x80]).toString('base64') } },
     'POST /ldevid': { status: 201, body: { status: idevidOk, certificatePem: '-----BEGIN CERTIFICATE-----\nLDEVIDCERT\n-----END CERTIFICATE-----' } },
     'POST /certificate': { body: { status: idevidOk } },
     'POST /iak/certificate': { body: { status: idevidOk } },

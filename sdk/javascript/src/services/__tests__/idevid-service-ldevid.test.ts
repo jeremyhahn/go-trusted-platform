@@ -66,6 +66,19 @@ describe('IDevIDService.createLDevID', () => {
     expect(postedBody()).toEqual({ algorithm: 'DEVICE_KEY_ALGORITHM_RSA_3072' });
   });
 
+  it('sends nondefault algorithms as protobuf enum names', async () => {
+    vi.mocked(mockClient.post).mockResolvedValue({ success: true, data: { status: { success: true } } });
+
+    await service.createLDevID({ algorithm: 'ECDSA_P384' });
+    await service.createLDevID({ algorithm: 'RSA_3072' });
+
+    const bodies = vi.mocked(mockClient.post).mock.calls.map((call) => call[1]);
+    expect(bodies).toEqual([
+      { algorithm: 'DEVICE_KEY_ALGORITHM_ECDSA_P384' },
+      { algorithm: 'DEVICE_KEY_ALGORITHM_RSA_3072' },
+    ]);
+  });
+
   it('posts no algorithm key when none is given', async () => {
     vi.mocked(mockClient.post).mockResolvedValue({ success: true, data: { status: { success: true } } });
 
