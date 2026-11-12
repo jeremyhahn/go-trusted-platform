@@ -174,9 +174,9 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `ConfigDeliveryService.FetchConfig` | - | - | - | - | not-UI: device-side pre-enrollment protocol |
 | `ConfigDeliveryService.SignDigest` | - | - | - | - | not-UI: device-side pre-enrollment protocol |
 | `ConfigDeliveryService.PollSession` | - | - | - | - | not-UI: device-side pre-enrollment protocol |
-| `ConfigDeliveryService.FulfillSession` | - | - | - | - | not-UI: device-side pre-enrollment protocol |
+| `ConfigDeliveryService.FulfillSession` | - | `(dashboard)/provisioning/sessions/[sessionId]/page.tsx` | - | - | partial |
 | `ConfigDeliveryService.ListSessions` | - | `(dashboard)/provisioning/sessions/page.tsx` | - | `provisioning.spec.ts` | covered |
-| `ConfigDeliveryService.GetSession` | - | - | - | - | not-UI: device-side pre-enrollment protocol |
+| `ConfigDeliveryService.GetSession` | - | `(dashboard)/provisioning/sessions/[sessionId]/page.tsx` | - | - | partial |
 
 ## PlatformDaemon (`daemon.proto`)
 
@@ -737,7 +737,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | CeremonyService | 7 | 0 | 0 | 7 | 0 | 0 |
 | ClusterService | 5 | 0 | 0 | 5 | 0 | 0 |
 | ComputeService | 37 | 14 | 2 | 16 | 5 | 0 |
-| ConfigDeliveryService | 7 | 1 | 0 | 0 | 6 | 0 |
+| ConfigDeliveryService | 7 | 1 | 2 | 0 | 4 | 0 |
 | PlatformDaemon | 19 | 1 | 6 | 8 | 4 | 0 |
 | DeviceService | 32 | 10 | 7 | 15 | 0 | 0 |
 | EABService | 11 | 0 | 0 | 11 | 0 | 0 |
@@ -765,44 +765,72 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | TPMService | 31 | 11 | 8 | 12 | 0 | 0 |
 | VPNService | 8 | 0 | 8 | 0 | 0 | 0 |
 | VTPMService | 23 | 3 | 2 | 17 | 1 | 0 |
-| **Total** | **529** | **122** | **59** | **265** | **52** | **31** |
+| **Total** | **529** | **122** | **61** | **265** | **50** | **31** |
 
 ## Proposed slices
 
 Each slice builds the missing pages and the missing specs for at most 15 operations of one area. `missing` rows need a page and a spec; `partial` rows need a spec, or the write added to an existing read-only page. Slices are listed in proto order; within an area, operations on the same resource stay together.
 
 1. **AttestationService: Manifest, AttestationQuote, HostAttestation, VMAttestation, ContainerAttestation, CallerPolicy…**: 9 operations (8 missing, 1 partial): VerifyManifest, DeleteManifest, GetAttestationQuote, VerifyAttestationQuote, CollectHostAttestation, CollectVMAttestation, CollectContainerAttestation, DescribeCallerPolicy, PollDeviceVerdicts.
-2. **BMCService (1/2): On, Off, Reset, Cycle, Statu, BootDevice…**: 15 operations (15 missing, 0 partial): PowerOn, PowerOff, PowerReset, PowerCycle, PowerStatus, ProvisionStatus, SetBootDevice, GetBootDevice, MountISO, UnmountISO, VirtualMediaStatus, GetSensors, GetSystemInfo, Provision, GetWebCertificate.
-3. **BMCService (2/2): ReplaceWebCertificate, BMC, FactoryCert, User, UserPassword, UserPrivilege**: 8 operations (8 missing, 0 partial): ReplaceWebCertificate, EnrollBMC, RestoreFactoryCert, ListUsers, CreateUser, DeleteUser, SetUserPassword, SetUserPrivilege.
+2. **BMCService (1/2): On, Off, Reset, Cycle, Status, BootDevice…**: 15 operations (15 missing, 0 partial): PowerOn, PowerOff, PowerReset, PowerCycle, PowerStatus, ProvisionStatus, SetBootDevice, GetBootDevice, MountISO, UnmountISO, VirtualMediaStatus, GetSensors, GetSystemInfo, Provision, GetWebCertificate.
+3. **BMCService (2/2): ReplaceWebCertificate, lBMC, FactoryCert, User, UserPassword, UserPrivilege**: 8 operations (8 missing, 0 partial): ReplaceWebCertificate, EnrollBMC, RestoreFactoryCert, ListUsers, CreateUser, DeleteUser, SetUserPassword, SetUserPrivilege.
 4. **CAService: CAInfo, CA, CACertificate, CSR, Certificate**: 6 operations (6 missing, 0 partial): GetCAInfo, InitCA, InstallCACertificates, UninstallCACertificates, SignCSR, VerifyCertificate.
-5. **CeremonyService: Init, Statu, Cert, Share, CSR**: 7 operations (7 missing, 0 partial): Init, Status, ClaimCertBegin, ClaimCertComplete, ClaimShareBegin, ClaimShareComplete, SignCSR.
-6. **ClusterService: Bootstrap, Join, Leave, Statu, Node**: 5 operations (5 missing, 0 partial): Bootstrap, Join, Leave, GetStatus, ListNodes.
+5. **CeremonyService: Init, Status, Cert, Share, CSR**: 7 operations (7 missing, 0 partial): Init, Status, ClaimCertBegin, ClaimCertComplete, ClaimShareBegin, ClaimShareComplete, SignCSR.
+6. **ClusterService: Bootstrap, Join, Leave, Status, Node**: 5 operations (5 missing, 0 partial): Bootstrap, Join, Leave, GetStatus, ListNodes.
 7. **ComputeService (1/2): VM, VMMetric, Disk, Snapshot, Migration**: 13 operations (11 missing, 2 partial): SuspendVM, ResumeVM, GetVM, MigrateVM, AttestVM, GetVMMetrics, AttachDisk, DetachDisk, ResizeDisk, CreateSnapshot, GetSnapshot, PrepareMigration, FinalizeMigration.
 8. **ComputeService (2/2): Container, ContainerMetric, VMAttestation**: 5 operations (5 missing, 0 partial): GetContainer, ExecContainer, AttestContainer, GetContainerMetrics, VerifyVMAttestation.
-9. **PlatformDaemon: Statu, Livene, ine, Shutdown, Version, Config…**: 14 operations (8 missing, 6 partial): GetStatus, Liveness, Readiness, Shutdown, GetVersion, GetConfig, UpdateConfig, ReloadConfig, StartService, StopService, RestartService, ListServices, GetServiceStatus, ListEntityTypes.
-10. **DeviceService (1/2): Device, DeviceBySerial, Profile, ProfileByMACAddre, ProfileBySerial, MatchingProfile…**: 14 operations (12 missing, 2 partial): UpdateDevice, CountDevices, ActivateDevice, AttestDevice, FindDeviceBySerial, GetProfile, UpdateProfile, CountProfiles, FindProfileByMACAddress, FindProfileBySerial, FindMatchingProfile, RecordAttestationCertificate, BootCertificate, BootDelivery.
-11. **DeviceService (2/2): Template, ProfileFromTemplate, ConfigForDevice, ProfileToDevice, ProfileFromDevice**: 8 operations (3 missing, 5 partial): CreateTemplate, GetTemplate, UpdateTemplate, DeleteTemplate, CreateProfileFromTemplate, FindConfigForDevice, AssignProfileToDevice, UnassignProfileFromDevice.
-12. **EABService: Credential, CredentialByKeyID, CredentialQRCode, EnrollmentURL, CredentialUsed, ExpiredCredential**: 11 operations (11 missing, 0 partial): CreateCredential, GetCredential, ListCredentials, RevokeCredential, ValidateCredential, DeleteCredential, GetCredentialByKeyID, GetCredentialQRCode, GetEnrollmentURL, MarkCredentialUsed, CleanupExpiredCredentials.
-13. **GatewayService (1/2): GatewayMode, GatewaySnapshot, GatewayAdmittedVTEP, BGPPeer, Prefix, IPAMPool…**: 15 operations (12 missing, 3 partial): SetGatewayMode, GetGatewaySnapshot, ListGatewaySnapshots, GetGatewayAdmittedVTEP, ListGatewayAdmittedVTEPs, ListBGPPeers, AnnouncePrefix, WithdrawPrefix, CreateIPAMPool, GetIPAMPool, UpdateIPAMPool, DeleteIPAMPool, AllocateIP, ReleaseIP, ListAllocations.
-14. **GatewayService (2/2): VIP, VIPBackend, LBStatu, NAT64Statu, PerfFlow, PerfDatapath…**: 10 operations (10 missing, 0 partial): AddVIP, RemoveVIP, GetVIP, ListVIPs, SetVIPBackends, GetLBStatus, GetNAT64Status, GetPerfFlows, GetPerfDatapath, GetPerfConntrack.
-15. **PlatformIAMService (1/2): Group, GroupMember, Permission, Token, Tenant**: 14 operations (11 missing, 3 partial): CreateGroup, GetGroup, UpdateGroup, AddGroupMember, RemoveGroupMember, CheckPermission, CreateToken, RevokeToken, VerifyToken, CreateTenant, GetTenant, ListTenants, UpdateTenant, DeleteTenant.
-16. **PlatformIAMService (2/2): Policy, App**: 7 operations (2 missing, 5 partial): CreatePolicy, GetPolicy, UpdatePolicy, ValidatePolicy, TestPolicy, GetApp, UpdateApp.
-17. **IDevIDService: IDevID, IAK, IAKCSR, LDevID, IDevIDCertificate, IAKCertificate…**: 12 operations (11 missing, 1 partial): HasIDevID, GenerateIAK, HasIAK, DeleteIAK, CreateIAKCSR, CreateLDevID, InstallIDevIDCertificate, InstallIAKCertificate, DeleteIAKCertificate, GetDeviceAttributes, FlushTransientContexts, ActivateCredential.
-18. **InvitationService: Invitation, InvitationByToken, AcceptInvitation**: 3 operations (3 missing, 0 partial): GetInvitation, GetInvitationByToken, AcceptInvitation.
-19. **KeyManagementService: Key, KeyStatu, KeyVersion, Encrypt, Decrypt, Rewrap…**: 13 operations (12 missing, 1 partial): ImportKey, UpdateKeyStatus, GetKeyVersions, BatchEncrypt, BatchDecrypt, Rewrap, Hash, HMAC, VerifyHMAC, GenerateRandom, GenerateDataKey, GenerateWrappedDataKey, BackendStatus.
-20. **NTPService: Statu, Source, Step**: 3 operations (3 missing, 0 partial): GetStatus, ListSources, Step.
-21. **OverlayService: VTEP, VNI, Tunnel, TunnelStat, RemoteMAC, MAC…**: 8 operations (7 missing, 1 partial): ListVTEPs, GetVTEP, DeleteVNI, ListTunnels, GetTunnelStats, ListRemoteMACs, ForgetMAC, GetOverlayStatus.
-22. **DNSService: Zone, Record, DNSSECStatu, Resolve, Register**: 10 operations (5 missing, 5 partial): GetZone, UpdateZone, SignZone, AddRecord, DeleteRecord, UpdateRecord, ListRecords, GetDNSSECStatus, Resolve, Register.
-23. **ProxyService: Route, Pool, ProxyConfig, ProxyStatu, ZoneMatrix**: 14 operations (14 missing, 0 partial): CreateRoute, GetRoute, UpdateRoute, DeleteRoute, ListRoutes, CreatePool, GetPool, UpdatePool, DeletePool, ListPools, GetProxyConfig, ReloadProxyConfig, GetProxyStatus, GetZoneMatrix.
-24. **PXEService: Device, DeviceByMAC, State, DeviceEnrolled, Authorize, Quarantine…**: 12 operations (11 missing, 1 partial): GetDevice, RemoveDevice, GetDeviceByMAC, UpdateState, SetDeviceEnrolled, Authorize, Quarantine, Retry, GetEvents, StartService, StopService, WebhookComplete.
-25. **RegistryService: List, Inspect, Delete, Statu**: 4 operations (4 missing, 0 partial): List, Inspect, Delete, Status.
-26. **SDNService (1/2): Bridge, Port, PortState, Flow, PortAuth, PortStat…**: 13 operations (12 missing, 1 partial): DeleteBridge, GetBridge, GetPort, AuthenticatePort, SetPortState, FlushFlows, RevokePortAuth, GetPortStats, GetFlowStats, ApplyPolicy, GetPolicy, ListPolicies, DeletePolicy.
-27. **SDNService (2/2): NetworkZone**: 4 operations (4 missing, 0 partial): CreateNetworkZone, UpdateNetworkZone, DeleteNetworkZone, ListNetworkZones.
-28. **SwitchService: Port, PortStatu, PortVLAN**: 5 operations (5 missing, 0 partial): ListPorts, EnablePort, DisablePort, GetPortStatus, SetPortVLAN.
-29. **TenantService: Tenant, TenantByName, Quota, Sync, TenantDEK, TenantDEKStatu…**: 15 operations (11 missing, 4 partial): ListTenants, CreateTenant, UpdateTenant, DeleteTenant, SuspendTenant, ResumeTenant, GetTenantByName, UpdateQuotas, CheckQuota, Sync, RotateTenantDEK, GetTenantDEKStatus, InitTenantBarrier, UnsealTenantBarrier, SealTenantBarrier.
-30. **TPMService (1/2): Provision, Clear, Capability, PlatformAttribute, EK, EKCertificate…**: 15 operations (8 missing, 7 partial): Provision, Clear, GetCapabilities, GetPlatformAttributes, CreateEK, DeleteEK, ImportEKCertificate, CreateSRK, DeleteSRK, CreateAK, GetAK, DeleteAK, Quote, VerifyQuote, Certify.
-31. **TPMService (2/2): EventLog, PCR, Credential, Random**: 5 operations (4 missing, 1 partial): GetEventLog, ExtendPCR, MakeCredential, ActivateCredential, GetRandom.
-32. **VPNService: EnrolPeer, Peer, Statu, PosturePolicy**: 8 operations (0 missing, 8 partial): EnrolPeer, ListPeers, RevokePeer, GetStatus, GetPosturePolicy, SetPosturePolicy, DeletePosturePolicy, ListPosturePolicies.
-33. **VTPMService (1/2): Bundle, Template, BundlePath, TPMSocketPath, NVRAMPath**: 11 operations (9 missing, 2 partial): GetBundle, ImportBundle, ValidateBundle, CreateTemplate, GetTemplate, DeleteTemplate, ListTemplates, CloneTemplate, GetBundlePath, GetTPMSocketPath, GetNVRAMPath.
-34. **VTPMService (2/2): VTPM, VTPMRunning, VTPMPCR**: 8 operations (8 missing, 0 partial): StartVTPM, StopVTPM, QuoteVTPM, SealVTPM, UnsealVTPM, IsVTPMRunning, ExtendVTPMPCR, ReadVTPMPCR.
+9. **ConfigDeliveryService: FulfillSession, Session**: 2 operations (0 missing, 2 partial): FulfillSession, GetSession.
+10. **PlatformDaemon: Status, Liveness, iness, Shutdown, Version, Config…**: 14 operations (8 missing, 6 partial): GetStatus, Liveness, Readiness, Shutdown, GetVersion, GetConfig, UpdateConfig, ReloadConfig, StartService, StopService, RestartService, ListServices, GetServiceStatus, ListEntityTypes.
+11. **DeviceService (1/2): Device, DeviceBySerial, Profile, ProfileByMACAddress, ProfileBySerial, MatchingProfile…**: 14 operations (12 missing, 2 partial): UpdateDevice, CountDevices, ActivateDevice, AttestDevice, FindDeviceBySerial, GetProfile, UpdateProfile, CountProfiles, FindProfileByMACAddress, FindProfileBySerial, FindMatchingProfile, RecordAttestationCertificate, BootCertificate, BootDelivery.
+12. **DeviceService (2/2): Template, ProfileFromTemplate, ConfigForDevice, ProfileToDevice, ProfileFromDevice**: 8 operations (3 missing, 5 partial): CreateTemplate, GetTemplate, UpdateTemplate, DeleteTemplate, CreateProfileFromTemplate, FindConfigForDevice, AssignProfileToDevice, UnassignProfileFromDevice.
+13. **EABService: Credential, CredentialByKeyID, CredentialQRCode, EnrollmentURL, CredentialUsed, ExpiredCredential**: 11 operations (11 missing, 0 partial): CreateCredential, GetCredential, ListCredentials, RevokeCredential, ValidateCredential, DeleteCredential, GetCredentialByKeyID, GetCredentialQRCode, GetEnrollmentURL, MarkCredentialUsed, CleanupExpiredCredentials.
+14. **GatewayService (1/2): GatewayMode, GatewaySnapshot, GatewayAdmittedVTEP, BGPPeer, Prefix, IPAMPool…**: 15 operations (12 missing, 3 partial): SetGatewayMode, GetGatewaySnapshot, ListGatewaySnapshots, GetGatewayAdmittedVTEP, ListGatewayAdmittedVTEPs, ListBGPPeers, AnnouncePrefix, WithdrawPrefix, CreateIPAMPool, GetIPAMPool, UpdateIPAMPool, DeleteIPAMPool, AllocateIP, ReleaseIP, ListAllocations.
+15. **GatewayService (2/2): VIP, VIPBackend, LBStatus, NAT64Status, PerfFlow, PerfDatapath…**: 10 operations (10 missing, 0 partial): AddVIP, RemoveVIP, GetVIP, ListVIPs, SetVIPBackends, GetLBStatus, GetNAT64Status, GetPerfFlows, GetPerfDatapath, GetPerfConntrack.
+16. **PlatformIAMService (1/2): Group, GroupMember, Permission, Token, Tenant**: 14 operations (11 missing, 3 partial): CreateGroup, GetGroup, UpdateGroup, AddGroupMember, RemoveGroupMember, CheckPermission, CreateToken, RevokeToken, VerifyToken, CreateTenant, GetTenant, ListTenants, UpdateTenant, DeleteTenant.
+17. **PlatformIAMService (2/2): Policy, App**: 7 operations (2 missing, 5 partial): CreatePolicy, GetPolicy, UpdatePolicy, ValidatePolicy, TestPolicy, GetApp, UpdateApp.
+18. **IDevIDService: IDevID, IAK, IAKCSR, LDevID, IDevIDCertificate, IAKCertificate…**: 12 operations (11 missing, 1 partial): HasIDevID, GenerateIAK, HasIAK, DeleteIAK, CreateIAKCSR, CreateLDevID, InstallIDevIDCertificate, InstallIAKCertificate, DeleteIAKCertificate, GetDeviceAttributes, FlushTransientContexts, ActivateCredential.
+19. **InvitationService: Invitation, InvitationByToken, AcceptInvitation**: 3 operations (3 missing, 0 partial): GetInvitation, GetInvitationByToken, AcceptInvitation.
+20. **KeyManagementService: Key, KeyStatus, KeyVersion, Encrypt, Decrypt, Rewrap…**: 13 operations (12 missing, 1 partial): ImportKey, UpdateKeyStatus, GetKeyVersions, BatchEncrypt, BatchDecrypt, Rewrap, Hash, HMAC, VerifyHMAC, GenerateRandom, GenerateDataKey, GenerateWrappedDataKey, BackendStatus.
+21. **NTPService: Status, Source, Step**: 3 operations (3 missing, 0 partial): GetStatus, ListSources, Step.
+22. **OverlayService: VTEP, VNI, Tunnel, TunnelStat, RemoteMAC, MAC…**: 8 operations (7 missing, 1 partial): ListVTEPs, GetVTEP, DeleteVNI, ListTunnels, GetTunnelStats, ListRemoteMACs, ForgetMAC, GetOverlayStatus.
+23. **DNSService: Zone, Record, DNSSECStatus, Resolve, Register**: 10 operations (5 missing, 5 partial): GetZone, UpdateZone, SignZone, AddRecord, DeleteRecord, UpdateRecord, ListRecords, GetDNSSECStatus, Resolve, Register.
+24. **ProxyService: Route, Pool, ProxyConfig, ProxyStatus, ZoneMatrix**: 14 operations (14 missing, 0 partial): CreateRoute, GetRoute, UpdateRoute, DeleteRoute, ListRoutes, CreatePool, GetPool, UpdatePool, DeletePool, ListPools, GetProxyConfig, ReloadProxyConfig, GetProxyStatus, GetZoneMatrix.
+25. **PXEService: Device, DeviceByMAC, State, DeviceEnrolled, Authorize, Quarantine…**: 12 operations (11 missing, 1 partial): GetDevice, RemoveDevice, GetDeviceByMAC, UpdateState, SetDeviceEnrolled, Authorize, Quarantine, Retry, GetEvents, StartService, StopService, WebhookComplete.
+26. **RegistryService: List, Inspect, Delete, Status**: 4 operations (4 missing, 0 partial): List, Inspect, Delete, Status.
+27. **SDNService (1/2): Bridge, Port, PortState, Flow, PortAuth, PortStat…**: 13 operations (12 missing, 1 partial): DeleteBridge, GetBridge, GetPort, AuthenticatePort, SetPortState, FlushFlows, RevokePortAuth, GetPortStats, GetFlowStats, ApplyPolicy, GetPolicy, ListPolicies, DeletePolicy.
+28. **SDNService (2/2): NetworkZone**: 4 operations (4 missing, 0 partial): CreateNetworkZone, UpdateNetworkZone, DeleteNetworkZone, ListNetworkZones.
+29. **SwitchService: Port, PortStatus, PortVLAN**: 5 operations (5 missing, 0 partial): ListPorts, EnablePort, DisablePort, GetPortStatus, SetPortVLAN.
+30. **TenantService: Tenant, TenantByName, Quota, Sync, TenantDEK, TenantDEKStatus…**: 15 operations (11 missing, 4 partial): ListTenants, CreateTenant, UpdateTenant, DeleteTenant, SuspendTenant, ResumeTenant, GetTenantByName, UpdateQuotas, CheckQuota, Sync, RotateTenantDEK, GetTenantDEKStatus, InitTenantBarrier, UnsealTenantBarrier, SealTenantBarrier.
+31. **TPMService (1/2): Provision, Clear, Capability, PlatformAttribute, EK, EKCertificate…**: 15 operations (8 missing, 7 partial): Provision, Clear, GetCapabilities, GetPlatformAttributes, CreateEK, DeleteEK, ImportEKCertificate, CreateSRK, DeleteSRK, CreateAK, GetAK, DeleteAK, Quote, VerifyQuote, Certify.
+32. **TPMService (2/2): EventLog, PCR, Credential, Random**: 5 operations (4 missing, 1 partial): GetEventLog, ExtendPCR, MakeCredential, ActivateCredential, GetRandom.
+33. **VPNService: Peer, Status, PosturePolicy**: 8 operations (0 missing, 8 partial): EnrolPeer, ListPeers, RevokePeer, GetStatus, GetPosturePolicy, SetPosturePolicy, DeletePosturePolicy, ListPosturePolicies.
+34. **VTPMService (1/2): Bundle, Template, BundlePath, TPMSocketPath, NVRAMPath**: 11 operations (9 missing, 2 partial): GetBundle, ImportBundle, ValidateBundle, CreateTemplate, GetTemplate, DeleteTemplate, ListTemplates, CloneTemplate, GetBundlePath, GetTPMSocketPath, GetNVRAMPath.
+35. **VTPMService (2/2): VTPM, VTPMRunning, VTPMPCR**: 8 operations (8 missing, 0 partial): StartVTPM, StopVTPM, QuoteVTPM, SealVTPM, UnsealVTPM, IsVTPMRunning, ExtendVTPMPCR, ReadVTPMPCR.
 
+## Method and limits
+
+- Operations: every `rpc` line of `pkg/api/grpc/proto/*.proto`, keyed by its enclosing `service`. The row count equals the proto `rpc` count.
+- REST: route registrations (`HandleFunc` / `Handle` with `Methods`) under `pkg/webservice`, matched to an operation by handler name (exact, `Get` prefix, or containment of at least six characters) within the area's router package. Routes with a differently named handler (for example the VPN router's `enrolPeer`) still match by containment; routes whose handler shares no name with the operation show `-`.
+- Web: a page performs an operation when it, or a feature component, `@/lib` module or sibling file it imports (three levels deep), calls the SDK method for that operation on a service hook (`useIAM()`, `useKMS()`, ...), on `usePlatformClient()`, or through the list hooks `useDeviceTemplates`, `useInvitationList`, `useProvisioningSessions`, `useDeviceToggle`, `useReportedGateways`. SDK methods match by name (with the area noun dropped, so `ca.getBundle` is `CAService.GetCABundle`) or by the SDK method's path ending in the matched REST route.
+- `PlatformDaemon` rows use the web SDK's `platform` service (`/platform/*` pages) and the platformctl `Dashboard.svelte` view (version, status, health, service list and start/stop/restart through the daemon binding).
+- Specs: a spec covers a page when it calls `page.goto` on the page's route (dynamic segments match any value). Specs that only mock an API route are not counted.
+- `not-UI` services: `ProvisioningGateway` (gatewayd to platformd), `ConfigDeliveryService` device-side calls (`GetNonce`, `FetchConfig`, `SignDigest`, `PollSession`), `BarrierService` (root unseal on the local socket), `FIDO2Service`, `PIVService` and `LUKSService` (host-local hardware and volumes), and server or bidirectional streams without a page.
+- The `/storage/*` pages call the go-quicbaas stub routes; their operations are `blocked: integration` and the pages are not listed against them.
+
+### Spot-checks
+
+Eleven rows were checked against the page source. Two disagreed and the join was fixed:
+
+| Row | Script said | Page source | Result |
+|---|---|---|---|
+| `OverlayService.ListVNIs`, `CreateVNI` | covered | `networking/overlays` calls `overlay.listVNIs` and `overlay.createVNI` | agrees |
+| `GatewayService.GetGatewayStatus` | missing | `networking/gateway` calls `gateway.getStatus` | fixed: the area noun is dropped before matching |
+| `CAService.GetCABundle` | covered | `ca/bundle` calls `ca.getBundle` | agrees |
+| `CAService.GetCAInfo` | missing | no page calls `ca.getInfo` | agrees |
+| `TenantService.ListTenants` | missing | `admin/tenant` is a landing page with a raw fetch and no SDK call | agrees |
+| `PXEService.RegisterDevice` | covered | `networking/pxe` calls `pxe.registerDevice` | agrees |
+| `ConfigDeliveryService.GetSession` | not-UI | `provisioning/sessions/[sessionId]` calls `device.getProvisioningSession` and `fulfillProvisioningSession` | fixed: mapped to `GetSession` and `FulfillSession` |
+| `KeyManagementService.ExportKey` | covered | `kms` calls `kms.exportKey` | agrees |
+| `PlatformDaemon.GetHealth` | covered | `platform/health` calls `platform.getHealth` | agrees |
+| `PlatformIAMService.CreateRole` | partial | `iam/roles/new` calls `iam.createRole`; no spec visits `/iam/roles/new` | agrees |
+| `TPMService.Quote` | partial | `tpm/quote` calls `tpm.quote`; no spec visits `/tpm/quote` | agrees |
