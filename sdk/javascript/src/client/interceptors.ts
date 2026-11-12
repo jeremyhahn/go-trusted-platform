@@ -164,10 +164,22 @@ export function createLoggingResponseInterceptor(
 /**
  * Creates an authorization header interceptor
  */
+/**
+ * Normalises any HeadersInit (Headers, array of pairs or record) to a
+ * plain record. Spreading an array of pairs would yield index keys.
+ */
+function toHeaderRecord(headers: HeadersInit | undefined): Record<string, string> {
+  if (headers === undefined) return {};
+  if (headers instanceof Headers || Array.isArray(headers)) {
+    return Object.fromEntries(new Headers(headers));
+  }
+  return headers;
+}
+
 export function createAuthInterceptor(getToken: () => string | Promise<string>): RequestInterceptor {
   return async (config, _context) => {
     const token = await getToken();
-    const headers = config.headers instanceof Headers ? Object.fromEntries(config.headers) : config.headers ?? {};
+    const headers = toHeaderRecord(config.headers);
 
     return {
       ...config,
@@ -187,7 +199,7 @@ export function createRequestIdInterceptor(generateId: () => string = () => cryp
     const requestId = generateId();
     context.metadata['requestId'] = requestId;
 
-    const headers = config.headers instanceof Headers ? Object.fromEntries(config.headers) : config.headers ?? {};
+    const headers = toHeaderRecord(config.headers);
 
     return {
       ...config,
@@ -214,7 +226,9 @@ export function createRetryAfterInterceptor(): ResponseInterceptor {
             ...response.error.details,
             context: {
               ...response.error.details?.context,
-              retryAfterSeconds: parseInt(retryAfter, 10) || retryAfter,
+              retryAfterSeconds: Number.isNaN(parseInt(retryAfter, 10))
+                ? retryAfter
+                : parseInt(retryAfter, 10),
             },
           };
         }

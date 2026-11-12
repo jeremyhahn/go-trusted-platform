@@ -42,5 +42,9 @@ export async function getClient(
     const { WailsPlatformClient: WailsClient } = await import('./wails-client.js');
     return new WailsClient();
   }
-  return new PlatformClient({ baseUrl: config?.baseUrl ?? '' });
+  // Leave an unset baseUrl to resolveConfig's default: an empty string
+  // fails validateConfig, so getClient() with no config used to throw.
+  return config?.baseUrl !== undefined
+    ? new PlatformClient({ baseUrl: config.baseUrl })
+    : new PlatformClient();
 }
