@@ -311,7 +311,14 @@ export class TPMService extends BaseService {
    * @returns Quote and signature
    */
   async quote(request: QuoteRequest): Promise<ApiResponse<QuoteResponse>> {
-    return this.client.post<QuoteResponse>(this.buildUrl('/quote'), request);
+    // The server decodes QuoteRequest with protojson, which requires the
+    // proto-canonical enum name for `pcrBank` ("PCR_BANK_SHA256"); the
+    // short `PCRBank` form ("SHA256") is translated here, as in getPCRs.
+    const wireRequest: Omit<QuoteRequest, 'pcrBank'> & { pcrBank?: string } = { ...request };
+    if (wireRequest.pcrBank !== undefined && !wireRequest.pcrBank.startsWith('PCR_BANK_')) {
+      wireRequest.pcrBank = `PCR_BANK_${wireRequest.pcrBank}`;
+    }
+    return this.client.post<QuoteResponse>(this.buildUrl('/quote'), wireRequest);
   }
 
   /**

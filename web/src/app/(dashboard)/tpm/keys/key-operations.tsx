@@ -45,6 +45,19 @@ export function parsePCRList(value: string): number[] {
     .filter((n) => n >= 0 && n <= 23);
 }
 
+/**
+ * The base64 DER payload of a PEM certificate: the body between the
+ * BEGIN/END CERTIFICATE markers, whitespace removed. Null when the markers
+ * are missing or the body is empty. The server's EK certificate store takes
+ * DER only, so the page never sends the PEM text itself.
+ */
+export function pemToBase64DER(pem: string): string | null {
+  const match = /-----BEGIN CERTIFICATE-----([\s\S]*?)-----END CERTIFICATE-----/.exec(pem);
+  if (!match) return null;
+  const body = (match[1] ?? "").replace(/\s+/g, "");
+  return body === "" ? null : body;
+}
+
 /** randomNonce returns 32 random bytes, base64. */
 function randomNonce(): string {
   const bytes = new Uint8Array(32);
@@ -71,6 +84,28 @@ interface PendingConfirm {
  * operation (#1735). Clear and the Delete* operations open a confirm
  * dialog first.
  */
+/** A security verdict carried in a successful answer (e.g. verifyQuote). */
+interface Verdict {
+  valid: boolean;
+  title: string;
+  message: string;
+}
+
+/**
+ * VerifyQuote answers 200 with verified:false for a bad signature, a nonce
+ * mismatch or a malformed attestation: only verified === true is valid, as
+ * on the TPM Quote page.
+ */
+function quoteVerdict(data: unknown): Verdict {
+  const { verified, message } = (data ?? {}) as { verified?: unknown; message?: unknown };
+  const valid = verified === true;
+  return {
+    valid,
+    title: valid ? "Quote VERIFIED" : "Quote INVALID",
+    message: typeof message === "string" ? message : "",
+  };
+}
+
 export function TPMKeyOperations({ onChanged }: { onChanged?: () => void }) {
   const { toast } = useToast();
   const { pending, results, errors, run } = useTPMKeyOperations();
@@ -81,17 +116,39 @@ export function TPMKeyOperations({ onChanged }: { onChanged?: () => void }) {
   const [akHandle, setAkHandle] = React.useState(DEFAULT_AK_HANDLE);
   const [ekCertificate, setEkCertificate] = React.useState("");
   const [pcrList, setPcrList] = React.useState("0,1,7");
-  const [quoteNonce, setQuoteNonce] = React.useState("");
   const [certifyHandle, setCertifyHandle] = React.useState(DEFAULT_SRK_HANDLE);
   const [confirm, setConfirm] = React.useState<PendingConfirm | null>(null);
 
+  // The nonce is kept with the quote it produced: a later failed attempt
+  // never pairs a retained quote with another nonce (#1751).
+  const [quoted, setQuoted] = React.useState<{ result: QuoteResult; nonce: string } | null>(null);
+  const [verdicts, setVerdicts] = React.useState<Partial<Record<TPMKeyOperation, Verdict>>>({});
+
   const execute = React.useCallback(
-    async (op: TPMKeyOperation, call: (client: TPMClient) => Promise<OperationResponse>, mutates = false) => {
+    async (
+      op: TPMKeyOperation,
+      call: (client: TPMClient) => Promise<OperationResponse>,
+      mutates = false,
+      check?: (data: unknown) => Verdict,
+    ): Promise<unknown | null> => {
+      setVerdicts((prev) => ({ ...prev, [op]: undefined }));
       const data = await run(op, call);
-      if (data !== null) {
+      if (data === null) return null;
+      if (check) {
+        // A security verdict travels in a 200 answer: report what it says,
+        // not that the request went through.
+        const verdict = check(data);
+        setVerdicts((prev) => ({ ...prev, [op]: verdict }));
+        toast({
+          title: verdict.title,
+          description: verdict.message,
+          variant: verdict.valid ? "success" : "destructive",
+        });
+      } else {
         toast({ title: "Done", description: `${op} succeeded`, variant: "success" });
-        if (mutates) onChanged?.();
       }
+      if (mutates) onChanged?.();
+      return data;
     },
     [run, toast, onChanged],
   );
@@ -118,25 +175,33 @@ export function TPMKeyOperations({ onChanged }: { onChanged?: () => void }) {
     });
   };
 
-  const runQuote = () => {
+  const runQuote = async () => {
     const handle = handleOrToast("quote", akHandle);
     if (handle === null) return;
     const nonce = randomNonce();
-    setQuoteNonce(nonce);
-    void execute("quote", (c) => c.quote({ akHandle: handle, pcrIndices: parsePCRList(pcrList), pcrBank: "SHA256", nonce }));
+    setQuoted(null);
+    setVerdicts((prev) => ({ ...prev, verifyQuote: undefined }));
+    const data = await execute("quote", (c) =>
+      c.quote({ akHandle: handle, pcrIndices: parsePCRList(pcrList), pcrBank: "SHA256", nonce }),
+    );
+    if (data !== null) setQuoted({ result: data as QuoteResult, nonce });
   };
 
-  const lastQuote = results.quote as QuoteResult | undefined;
   const runVerify = () => {
-    if (!lastQuote?.quote || !lastQuote.signature) return;
-    void execute("verifyQuote", (c) =>
-      c.verifyQuote({
-        quote: lastQuote.quote ?? "",
-        signature: lastQuote.signature ?? "",
-        signatureAlgorithm: lastQuote.signatureAlgorithm,
-        channelBinding: lastQuote.channelBinding,
-        nonce: quoteNonce,
-      }),
+    if (!quoted?.result.quote || !quoted.result.signature) return;
+    const { result, nonce } = quoted;
+    void execute(
+      "verifyQuote",
+      (c) =>
+        c.verifyQuote({
+          quote: result.quote ?? "",
+          signature: result.signature ?? "",
+          signatureAlgorithm: result.signatureAlgorithm,
+          channelBinding: result.channelBinding,
+          nonce,
+        }),
+      false,
+      quoteVerdict,
     );
   };
 
@@ -161,6 +226,15 @@ export function TPMKeyOperations({ onChanged }: { onChanged?: () => void }) {
 
   const outcome = (op: TPMKeyOperation) => (
     <>
+      {verdicts[op] && (
+        <p
+          data-testid={`tpm-verdict-${op}`}
+          className={verdicts[op]?.valid ? "text-xs text-green-600" : "text-xs text-destructive"}
+        >
+          {verdicts[op]?.valid ? "VERIFIED" : "INVALID"}
+          {verdicts[op]?.message ? `: ${verdicts[op]?.message}` : ""}
+        </p>
+      )}
       {errors[op] && (
         <p data-testid={`tpm-error-${op}`} className="text-xs text-destructive">
           {errors[op]}
@@ -258,12 +332,22 @@ export function TPMKeyOperations({ onChanged }: { onChanged?: () => void }) {
               {opButton(
                 "importEKCertificate",
                 "Import EK Certificate",
-                () =>
+                () => {
+                  const der = pemToBase64DER(ekCertificate);
+                  if (der === null) {
+                    toast({
+                      title: "Invalid certificate",
+                      description: "Paste one PEM certificate (BEGIN/END CERTIFICATE)",
+                      variant: "destructive",
+                    });
+                    return;
+                  }
                   void execute(
                     "importEKCertificate",
-                    (c) => c.importEKCertificate({ certificate: btoa(ekCertificate.trim()), format: "PEM" }),
+                    (c) => c.importEKCertificate({ certificate: der, format: "DER" }),
                     true,
-                  ),
+                  );
+                },
                 { disabled: ekCertificate.trim() === "" },
               )}
             </div>
@@ -302,8 +386,8 @@ export function TPMKeyOperations({ onChanged }: { onChanged?: () => void }) {
             {opButton("createAK", "Create AK", () => void execute("createAK", (c) => c.createAK({ persistent: true }), true))}
             {opButton("getAK", "Get AK", () => void execute("getAK", (c) => c.getAK()))}
             {opButton("deleteAK", "Delete AK", () => askDelete("deleteAK", "Attestation Key", akHandle), { destructive: true })}
-            {opButton("quote", "Quote", runQuote)}
-            {opButton("verifyQuote", "Verify Quote", runVerify, { disabled: !lastQuote?.quote })}
+            {opButton("quote", "Quote", () => void runQuote())}
+            {opButton("verifyQuote", "Verify Quote", runVerify, { disabled: !quoted?.result.quote })}
           </div>
           {outcome("createAK")}
           {outcome("getAK")}
