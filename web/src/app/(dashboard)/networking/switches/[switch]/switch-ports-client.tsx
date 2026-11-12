@@ -82,6 +82,8 @@ export default function SwitchPortsClient() {
   const listed = status ? ports.find((p) => p.port === status.port) : undefined;
   const statusLink = listed ? (listed.link_up ? 'up' : 'down') : 'unavailable';
   const statusAdmin = listed ? (listed.enabled ? 'enabled' : 'disabled') : 'unavailable';
+  // The SSH backend's single-port status never carries the description: the list's value wins.
+  const statusDescription = listed?.description || status?.description || '-';
 
   const vlanId = Number(vlanValue);
   const vlanValid = Number.isInteger(vlanId) && vlanId >= 1 && vlanId <= 4094;
@@ -232,7 +234,7 @@ export default function SwitchPortsClient() {
               <dt>Link</dt>
               <dd>{statusLink}</dd>
               <dt>Description</dt>
-              <dd>{status.description || '-'}</dd>
+              <dd>{statusDescription}</dd>
             </dl>
           )}
         </DialogContent>
