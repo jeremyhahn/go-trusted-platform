@@ -27,7 +27,24 @@ import (
 // protobuf HostManifest (timestamppb.Timestamp and enum fields). These
 // mirror structs carry the server's codec tags, which are the wire contract.
 func init() {
+	methodRequestEncoders[platformv1.AttestationService_GetManifest_FullMethodName] = encodeGetManifestRequest
 	methodResponseDecoders[platformv1.AttestationService_GetManifest_FullMethodName] = decodeGetManifestReply
+}
+
+// manifestGetRequestWire mirrors the server's GetManifestRequest in
+// pkg/api/quic: the Go field name ID and its codec tag are the wire contract.
+type manifestGetRequestWire struct {
+	ID string `codec:"id"`
+}
+
+// encodeGetManifestRequest maps the protobuf request (field Id) onto the
+// server's request shape (field ID).
+func encodeGetManifestRequest(args interface{}) (interface{}, error) {
+	in, ok := args.(*platformv1.GetManifestRequest)
+	if !ok {
+		return nil, ErrInvalidArgsType{Method: platformv1.AttestationService_GetManifest_FullMethodName}
+	}
+	return &manifestGetRequestWire{ID: in.GetId()}, nil
 }
 
 type manifestGetWire struct {
