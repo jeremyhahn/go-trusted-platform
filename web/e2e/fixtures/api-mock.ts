@@ -526,9 +526,9 @@ export async function mockKmsOpsApi(
 
     let m: RegExpMatchArray | null;
     if (method === 'POST' && path === '/keys/import') {
-      await reply(200, { key_id: body?.name, version: 1, algorithm: body?.algorithm });
+      await reply(201, { key_id: body?.name, version: 1, algorithm: body?.algorithm });
     } else if (method === 'PUT' && (m = path.match(/^\/keys\/([^/]+)\/status$/))) {
-      await reply(200, { key_id: decodeURIComponent(m[1]), version: 2, status: body?.status });
+      await reply(200, { key_id: decodeURIComponent(m[1]), version: body?.version, status: body?.status });
     } else if (method === 'GET' && (m = path.match(/^\/keys\/([^/]+)\/versions$/))) {
       await reply(200, {
         versions: [
@@ -536,11 +536,6 @@ export async function mockKmsOpsApi(
           { version: 2, status: 'enabled', algorithm: 'aes-256-gcm' },
         ],
       });
-    } else if (method === 'POST' && /^\/encrypt\/[^/]+$/.test(path)) {
-      await reply(200, { key_id: 'k', version: 1, ciphertext: b64(`ct:${body?.plaintext}`) });
-    } else if (method === 'POST' && /^\/decrypt\/[^/]+$/.test(path)) {
-      const ct = Buffer.from(String(body?.ciphertext ?? ''), 'base64').toString('utf8');
-      await reply(200, { plaintext: ct.replace(/^ct:/, '') });
     } else if (method === 'POST' && path === '/hash') {
       await reply(200, { hash: body?.hash, digest: b64('digest-of-data') });
     } else if (method === 'POST' && /^\/hmac\/[^/]+\/verify$/.test(path)) {
@@ -554,7 +549,7 @@ export async function mockKmsOpsApi(
     } else if (method === 'POST' && path === '/data-keys') {
       await reply(200, { key_id: body?.key_id, plaintext_key: b64('plain-dek'), encrypted_key: b64('enc-dek') });
     } else if (method === 'GET' && path === '/backend/status') {
-      await reply(200, { backend_type: 'tpm2', status: 'healthy', capabilities: { sign: true, export: false } });
+      await reply(200, { backend_type: 'tpm2', status: 'healthy' });
     } else {
       await route.continue();
     }

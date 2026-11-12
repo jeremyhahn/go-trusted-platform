@@ -41,12 +41,12 @@ describe('useKmsOps', () => {
     const seen = stubFetch(() => ({ status: 200, json: {} }));
     const { result } = renderHook(() => useKmsOps());
     await act(async () => {
-      await result.current.updateKeyStatus('a/b', 'disabled');
+      await result.current.updateKeyStatus('a/b', 'DISABLED', 3);
       await result.current.getKeyVersions('k');
-      await result.current.hmac('k', 'x');
-      await result.current.verifyHmac('k', 'x', 'bWFj');
-      await result.current.generateDataKey('k');
-      await result.current.generateWrappedDataKey('k');
+      await result.current.hmac('k', 'x', 'SHA256');
+      await result.current.verifyHmac('k', 'x', 'bWFj', 'SHA256');
+      await result.current.generateDataKey('k', 'AES', 256);
+      await result.current.generateWrappedDataKey('k', 'AES', 128);
       await result.current.getBackendStatus();
     });
     expect(seen.map((s) => `${s.method} ${s.url}`)).toEqual([
@@ -58,20 +58,11 @@ describe('useKmsOps', () => {
       'POST /api/v1/kms/data-keys/wrapped',
       'GET /api/v1/kms/backend/status',
     ]);
-    expect(seen[2].body).toEqual({ data: 'eA==' });
-    expect(seen[4].body).toEqual({ key_id: 'k' });
-  });
-
-  it('encrypts each plaintext with its own request', async () => {
-    const seen = stubFetch(() => ({ status: 200, json: { ciphertext: 'Y3Q=' } }));
-    const { result } = renderHook(() => useKmsOps());
-    let out: unknown;
-    await act(async () => {
-      out = await result.current.batchEncrypt('k', ['a', 'b']);
-    });
-    expect(seen).toHaveLength(2);
-    expect(seen.map((s) => s.body)).toEqual([{ plaintext: 'YQ==' }, { plaintext: 'Yg==' }]);
-    expect(out).toEqual([{ ciphertext: 'Y3Q=' }, { ciphertext: 'Y3Q=' }]);
+    expect(seen[0].body).toEqual({ status: 'DISABLED', version: 3 });
+    expect(seen[2].body).toEqual({ data: 'eA==', hash: 'SHA256' });
+    expect(seen[3].body).toEqual({ data: 'eA==', hmac: 'bWFj', hash: 'SHA256' });
+    expect(seen[4].body).toEqual({ key_id: 'k', algorithm: 'AES', key_size: 256 });
+    expect(seen[5].body).toEqual({ wrapping_key_id: 'k', key_algorithm: 'AES', key_size: 128 });
   });
 
   it('unwraps a payload envelope', async () => {

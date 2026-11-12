@@ -31,25 +31,34 @@ test.describe("KMS operations", () => {
     expect(call?.body).toMatchObject({ name: "imported", key_material: b64("material") });
   });
 
-  test("updates key status behind a confirm dialog", async ({ page }) => {
-    const mock = await openPage(page);
+  async function askStatusChange(page: Page) {
     const card = page.getByTestId("op-status");
     await card.getByLabel("Key name").fill("k1");
-    await card.getByLabel("New status").selectOption("disabled");
+    await card.getByLabel("New status").selectOption("DISABLED");
+    await card.getByLabel("Version").fill("2");
     await card.getByRole("button", { name: "Update status" }).click();
-
     const dialog = page.getByRole("dialog");
-    await expect(dialog).toContainText("Set k1 to disabled?");
-    await dialog.getByRole("button", { name: "Cancel" }).click();
-    await expect(dialog).toBeHidden();
-    expect(mock.calls.some((c) => c.path === "/keys/k1/status")).toBe(false);
+    await expect(dialog).toContainText("Set k1 to DISABLED?");
+    return dialog;
+  }
 
-    await card.getByRole("button", { name: "Update status" }).click();
-    await page.getByRole("dialog").getByRole("button", { name: "Confirm" }).click();
-    await expect(page.getByTestId("status-result")).toHaveText("k1 v2 is disabled");
+  test("updates key status after the confirm dialog is accepted", async ({ page }) => {
+    const mock = await openPage(page);
+    const dialog = await askStatusChange(page);
+    await dialog.getByRole("button", { name: "Confirm" }).click();
+    await expect(page.getByTestId("status-result")).toHaveText("k1 v2 is DISABLED");
     const call = mock.calls.find((c) => c.path === "/keys/k1/status");
     expect(call?.method).toBe("PUT");
-    expect(call?.body).toEqual({ status: "disabled" });
+    expect(call?.body).toEqual({ status: "DISABLED", version: 2 });
+  });
+
+  test("sends no status change when the confirm dialog is cancelled", async ({ page }) => {
+    const mock = await openPage(page);
+    const dialog = await askStatusChange(page);
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toBeHidden();
+    await expect(page.getByTestId("status-result")).toHaveCount(0);
+    expect(mock.calls.some((c) => c.path === "/keys/k1/status")).toBe(false);
   });
 
   test("lists key versions", async ({ page }) => {
@@ -61,31 +70,6 @@ test.describe("KMS operations", () => {
       "v1 disabled aes-256-gcm\nv2 enabled aes-256-gcm"
     );
     expect(mock.calls.find((c) => c.path === "/keys/k1/versions")?.method).toBe("GET");
-  });
-
-  test("batch encrypts", async ({ page }) => {
-    const mock = await openPage(page);
-    const card = page.getByTestId("op-encrypt");
-    await card.getByLabel("Key name").fill("k1");
-    await card.getByLabel("Plaintexts, one per line").fill("alpha\nbeta");
-    await card.getByRole("button", { name: "Encrypt" }).click();
-    await expect(page.getByTestId("encrypt-result")).toHaveText(
-      `${b64(`ct:${b64("alpha")}`)}\n${b64(`ct:${b64("beta")}`)}`
-    );
-    const calls = mock.calls.filter((c) => c.path === "/encrypt/k1");
-    expect(calls).toHaveLength(2);
-    expect(calls.map((c) => c.body?.plaintext).sort()).toEqual([b64("alpha"), b64("beta")]);
-  });
-
-  test("batch decrypts", async ({ page }) => {
-    const mock = await openPage(page);
-    const card = page.getByTestId("op-decrypt");
-    await card.getByLabel("Key name").fill("k1");
-    const ct = (p: string) => b64(`ct:${b64(p)}`);
-    await card.getByLabel("Ciphertexts, one per line").fill(`${ct("alpha")}\n${ct("beta")}`);
-    await card.getByRole("button", { name: "Decrypt" }).click();
-    await expect(page.getByTestId("decrypt-result")).toHaveText("alpha\nbeta");
-    expect(mock.calls.filter((c) => c.path === "/decrypt/k1")).toHaveLength(2);
   });
 
   test("hashes data", async ({ page }) => {
@@ -105,7 +89,7 @@ test.describe("KMS operations", () => {
     await card.getByLabel("Data", { exact: true }).fill("hello");
     await card.getByRole("button", { name: "Compute HMAC" }).click();
     await expect(page.getByTestId("hmac-result")).toHaveText(b64("mac-of-data"));
-    expect(mock.calls.find((c) => c.path === "/hmac/mac-key")?.body).toEqual({ data: b64("hello") });
+    expect(mock.calls.find((c) => c.path === "/hmac/mac-key")?.body).toEqual({ data: b64("hello"), hash: "SHA256" });
   });
 
   test("verifies an HMAC", async ({ page }) => {
@@ -114,11 +98,13 @@ test.describe("KMS operations", () => {
     await card.getByLabel("Key name").fill("mac-key");
     await card.getByLabel("Data", { exact: true }).fill("hello");
     await card.getByLabel("HMAC (base64)").fill(b64("bad"));
+    await card.getByLabel("Hash algorithm").fill("SHA512");
     await card.getByRole("button", { name: "Verify HMAC" }).click();
     await expect(page.getByTestId("verify-hmac-result")).toHaveText("HMAC invalid");
     expect(mock.calls.find((c) => c.path === "/hmac/mac-key/verify")?.body).toEqual({
       data: b64("hello"),
       hmac: b64("bad"),
+      hash: "SHA512",
     });
   });
 
@@ -135,11 +121,12 @@ test.describe("KMS operations", () => {
     const mock = await openPage(page);
     const card = page.getByTestId("op-data-key");
     await card.getByLabel("Key name").fill("kek");
+    await card.getByLabel("Key size").fill("128");
     await card.getByRole("button", { name: "Generate data key" }).click();
     await expect(page.getByTestId("data-key-result")).toHaveText(
       `plaintext: ${b64("plain-dek")}\nencrypted: ${b64("enc-dek")}`
     );
-    expect(mock.calls.find((c) => c.path === "/data-keys")?.body).toEqual({ key_id: "kek" });
+    expect(mock.calls.find((c) => c.path === "/data-keys")?.body).toEqual({ key_id: "kek", algorithm: "AES", key_size: 128 });
   });
 
   test("generates a wrapped data key", async ({ page }) => {
@@ -148,13 +135,17 @@ test.describe("KMS operations", () => {
     await card.getByLabel("Wrapping key name").fill("kek");
     await card.getByRole("button", { name: "Generate wrapped data key" }).click();
     await expect(page.getByTestId("wrapped-data-key-result")).toHaveText(`wrapped by kek: ${b64("wrapped-dek")}`);
-    expect(mock.calls.find((c) => c.path === "/data-keys/wrapped")?.body).toEqual({ wrapping_key_id: "kek" });
+    expect(mock.calls.find((c) => c.path === "/data-keys/wrapped")?.body).toEqual({
+      wrapping_key_id: "kek",
+      key_algorithm: "AES",
+      key_size: 256,
+    });
   });
 
   test("shows backend status", async ({ page }) => {
     await openPage(page);
     await page.getByTestId("op-backend").getByRole("button", { name: "Check backend" }).click();
-    await expect(page.getByTestId("backend-result")).toHaveText("tpm2: healthy\nsign: yes\nexport: no");
+    await expect(page.getByTestId("backend-result")).toHaveText("tpm2: healthy");
   });
 
   test("shows the error of a failed operation", async ({ page }) => {

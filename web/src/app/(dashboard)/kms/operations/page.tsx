@@ -4,8 +4,7 @@
  * KMS operations page (#1734, slice 20 of #1665).
  *
  * One card per KMS REST operation that has no page of its own: key import,
- * key status (behind a confirm dialog), key versions, batch encrypt and
- * decrypt, hash, HMAC and its verification, random bytes, data keys and the
+ * key status (behind a confirm dialog), key versions, hash, HMAC and its verification, random bytes, data keys and the
  * backend status.
  */
 
@@ -29,15 +28,13 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { useKmsOps } from "@/hooks";
-import type { KmsBackendStatus, KmsKeyVersion } from "@/hooks";
+import { KMS_KEY_STATUSES, useKmsOps } from "@/hooks";
+import type { KmsBackendStatus, KmsKeyStatus, KmsKeyVersion } from "@/hooks";
 import { AlertCircle } from "lucide-react";
 
-function lines(text: string): string[] {
-  return text
-    .split("\n")
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0);
+function toInt(text: string, fallback: number): number {
+  const n = Number.parseInt(text, 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
 function Field(props: {
@@ -106,21 +103,14 @@ export default function KmsOperationsPage() {
 
   // Status
   const [statusKey, setStatusKey] = React.useState("");
-  const [statusValue, setStatusValue] = React.useState("disabled");
+  const [statusValue, setStatusValue] = React.useState<KmsKeyStatus>("DISABLED");
+  const [statusVersion, setStatusVersion] = React.useState("1");
   const [statusConfirm, setStatusConfirm] = React.useState(false);
   const [statusResult, setStatusResult] = React.useState<string | null>(null);
 
   // Versions
   const [versionsKey, setVersionsKey] = React.useState("");
   const [versions, setVersions] = React.useState<KmsKeyVersion[] | null>(null);
-
-  // Batch encrypt / decrypt
-  const [encKey, setEncKey] = React.useState("");
-  const [encInput, setEncInput] = React.useState("");
-  const [encResult, setEncResult] = React.useState<string | null>(null);
-  const [decKey, setDecKey] = React.useState("");
-  const [decInput, setDecInput] = React.useState("");
-  const [decResult, setDecResult] = React.useState<string | null>(null);
 
   // Hash
   const [hashData, setHashData] = React.useState("");
@@ -130,18 +120,24 @@ export default function KmsOperationsPage() {
   // HMAC
   const [hmacKey, setHmacKey] = React.useState("");
   const [hmacData, setHmacData] = React.useState("");
+  const [hmacHash, setHmacHash] = React.useState("SHA256");
   const [hmacResult, setHmacResult] = React.useState<string | null>(null);
   const [vKey, setVKey] = React.useState("");
   const [vData, setVData] = React.useState("");
   const [vMac, setVMac] = React.useState("");
+  const [vHash, setVHash] = React.useState("SHA256");
   const [vResult, setVResult] = React.useState<string | null>(null);
 
   // Random and data keys
   const [randomBytes, setRandomBytes] = React.useState("32");
   const [randomResult, setRandomResult] = React.useState<string | null>(null);
   const [dkKey, setDkKey] = React.useState("");
+  const [dkAlg, setDkAlg] = React.useState("AES");
+  const [dkSize, setDkSize] = React.useState("256");
   const [dkResult, setDkResult] = React.useState<string | null>(null);
   const [wdkKey, setWdkKey] = React.useState("");
+  const [wdkAlg, setWdkAlg] = React.useState("AES");
+  const [wdkSize, setWdkSize] = React.useState("256");
   const [wdkResult, setWdkResult] = React.useState<string | null>(null);
 
   // Backend
@@ -160,7 +156,7 @@ export default function KmsOperationsPage() {
 
   const onStatusConfirmed = async () => {
     setStatusConfirm(false);
-    const res = await ops.updateKeyStatus(statusKey, statusValue);
+    const res = await ops.updateKeyStatus(statusKey, statusValue, toInt(statusVersion, 1));
     if (res) {
       setStatusResult(`${res.key_id} v${res.version} is ${res.status}`);
     }
@@ -168,20 +164,6 @@ export default function KmsOperationsPage() {
 
   const onVersions = async () => {
     setVersions(await ops.getKeyVersions(versionsKey));
-  };
-
-  const onEncrypt = async () => {
-    const res = await ops.batchEncrypt(encKey, lines(encInput));
-    if (res) {
-      setEncResult(res.map((r) => r.ciphertext).join("\n"));
-    }
-  };
-
-  const onDecrypt = async () => {
-    const res = await ops.batchDecrypt(decKey, lines(decInput));
-    if (res) {
-      setDecResult(res.join("\n"));
-    }
   };
 
   const onHash = async () => {
@@ -192,36 +174,35 @@ export default function KmsOperationsPage() {
   };
 
   const onHmac = async () => {
-    const res = await ops.hmac(hmacKey, hmacData);
+    const res = await ops.hmac(hmacKey, hmacData, hmacHash);
     if (res !== null) {
       setHmacResult(res);
     }
   };
 
   const onVerifyHmac = async () => {
-    const res = await ops.verifyHmac(vKey, vData, vMac);
+    const res = await ops.verifyHmac(vKey, vData, vMac, vHash);
     if (res !== null) {
       setVResult(res ? "HMAC valid" : "HMAC invalid");
     }
   };
 
   const onRandom = async () => {
-    const n = Number.parseInt(randomBytes, 10);
-    const res = await ops.generateRandom(Number.isFinite(n) && n > 0 ? n : 32);
+    const res = await ops.generateRandom(toInt(randomBytes, 32));
     if (res !== null) {
       setRandomResult(res);
     }
   };
 
   const onDataKey = async () => {
-    const res = await ops.generateDataKey(dkKey);
+    const res = await ops.generateDataKey(dkKey, dkAlg, toInt(dkSize, 256));
     if (res) {
       setDkResult(`plaintext: ${res.plaintext_key}\nencrypted: ${res.encrypted_key}`);
     }
   };
 
   const onWrappedDataKey = async () => {
-    const res = await ops.generateWrappedDataKey(wdkKey);
+    const res = await ops.generateWrappedDataKey(wdkKey, wdkAlg, toInt(wdkSize, 256));
     if (res) {
       setWdkResult(`wrapped by ${res.wrapping_key_id}: ${res.wrapped_key}`);
     }
@@ -236,7 +217,7 @@ export default function KmsOperationsPage() {
       <div>
         <h1 className="text-3xl font-bold tracking-tight">KMS Operations</h1>
         <p className="text-muted-foreground">
-          Key import, status and versions, batch encryption, hashing, HMAC,
+          Key import, status and versions, hashing, HMAC,
           random bytes, data keys and the backend status
         </p>
       </div>
@@ -285,12 +266,16 @@ export default function KmsOperationsPage() {
               id="status-value"
               className="h-9 rounded-md border bg-transparent px-3 text-sm"
               value={statusValue}
-              onChange={(e) => setStatusValue(e.target.value)}
+              onChange={(e) => setStatusValue(e.target.value as KmsKeyStatus)}
             >
-              <option value="enabled">enabled</option>
-              <option value="disabled">disabled</option>
+              {KMS_KEY_STATUSES.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
             </select>
           </div>
+          <Field id="status-version" label="Version" value={statusVersion} onChange={setStatusVersion} />
           <Button
             variant="destructive"
             onClick={() => setStatusConfirm(true)}
@@ -320,32 +305,6 @@ export default function KmsOperationsPage() {
           </Button>
         </OpCard>
 
-        <OpCard
-          id="encrypt"
-          title="Batch Encrypt"
-          description="Encrypt each line as its own plaintext"
-          result={encResult}
-        >
-          <Field id="encrypt-key" label="Key name" value={encKey} onChange={setEncKey} />
-          <Field id="encrypt-input" label="Plaintexts, one per line" value={encInput} onChange={setEncInput} multiline />
-          <Button onClick={onEncrypt} disabled={ops.busy || !encKey || lines(encInput).length === 0}>
-            Encrypt
-          </Button>
-        </OpCard>
-
-        <OpCard
-          id="decrypt"
-          title="Batch Decrypt"
-          description="Decrypt each line as its own base64 ciphertext"
-          result={decResult}
-        >
-          <Field id="decrypt-key" label="Key name" value={decKey} onChange={setDecKey} />
-          <Field id="decrypt-input" label="Ciphertexts, one per line" value={decInput} onChange={setDecInput} multiline />
-          <Button onClick={onDecrypt} disabled={ops.busy || !decKey || lines(decInput).length === 0}>
-            Decrypt
-          </Button>
-        </OpCard>
-
         <OpCard id="hash" title="Hash" description="Compute a digest of the data" result={hashResult}>
           <Field id="hash-data" label="Data" value={hashData} onChange={setHashData} />
           <Field id="hash-algorithm" label="Hash algorithm" value={hashAlg} onChange={setHashAlg} />
@@ -357,6 +316,7 @@ export default function KmsOperationsPage() {
         <OpCard id="hmac" title="HMAC" description="Compute an HMAC with a key" result={hmacResult}>
           <Field id="hmac-key" label="Key name" value={hmacKey} onChange={setHmacKey} />
           <Field id="hmac-data" label="Data" value={hmacData} onChange={setHmacData} />
+          <Field id="hmac-hash" label="Hash algorithm" value={hmacHash} onChange={setHmacHash} />
           <Button onClick={onHmac} disabled={ops.busy || !hmacKey || !hmacData}>
             Compute HMAC
           </Button>
@@ -371,6 +331,7 @@ export default function KmsOperationsPage() {
           <Field id="verify-hmac-key" label="Key name" value={vKey} onChange={setVKey} />
           <Field id="verify-hmac-data" label="Data" value={vData} onChange={setVData} />
           <Field id="verify-hmac-mac" label="HMAC (base64)" value={vMac} onChange={setVMac} />
+          <Field id="verify-hmac-hash" label="Hash algorithm" value={vHash} onChange={setVHash} />
           <Button onClick={onVerifyHmac} disabled={ops.busy || !vKey || !vData || !vMac}>
             Verify HMAC
           </Button>
@@ -395,6 +356,8 @@ export default function KmsOperationsPage() {
           result={dkResult}
         >
           <Field id="data-key-key" label="Key name" value={dkKey} onChange={setDkKey} />
+          <Field id="data-key-algorithm" label="Algorithm" value={dkAlg} onChange={setDkAlg} />
+          <Field id="data-key-size" label="Key size" value={dkSize} onChange={setDkSize} />
           <Button onClick={onDataKey} disabled={ops.busy || !dkKey}>
             Generate data key
           </Button>
@@ -407,6 +370,8 @@ export default function KmsOperationsPage() {
           result={wdkResult}
         >
           <Field id="wrapped-data-key-key" label="Wrapping key name" value={wdkKey} onChange={setWdkKey} />
+          <Field id="wrapped-data-key-algorithm" label="Algorithm" value={wdkAlg} onChange={setWdkAlg} />
+          <Field id="wrapped-data-key-size" label="Key size" value={wdkSize} onChange={setWdkSize} />
           <Button onClick={onWrappedDataKey} disabled={ops.busy || !wdkKey}>
             Generate wrapped data key
           </Button>
@@ -415,17 +380,8 @@ export default function KmsOperationsPage() {
         <OpCard
           id="backend"
           title="Backend Status"
-          description="The KMS backend and its capabilities"
-          result={
-            backend === null
-              ? null
-              : [
-                  `${backend.backend_type}: ${backend.status}`,
-                  ...Object.entries(backend.capabilities ?? {}).map(
-                    ([k, v]) => `${k}: ${v ? "yes" : "no"}`
-                  ),
-                ].join("\n")
-          }
+          description="The KMS backend type and its health"
+          result={backend === null ? null : `${backend.backend_type}: ${backend.status}`}
         >
           <Button onClick={onBackend} disabled={ops.busy}>
             Check backend
