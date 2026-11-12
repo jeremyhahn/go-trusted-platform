@@ -106,7 +106,8 @@ test.describe('TPM Keys operations', () => {
     await page.getByTestId('tpm-op-importEKCertificate').click();
 
     const call = await expectCall(calls, 'POST', '/ek/certificate');
-    expect(call.body).toMatchObject({ format: 'PEM', certificate: Buffer.from(pem).toString('base64') });
+    // The server stores DER only: the PEM body (base64 DER) is sent as DER.
+    expect(call.body).toMatchObject({ format: 'DER', certificate: 'TUlJQg==' });
     await expect(page.getByTestId('tpm-result-importEKCertificate')).toContainText('imported');
   });
 
@@ -160,7 +161,7 @@ test.describe('TPM Keys operations', () => {
     await page.getByTestId('tpm-op-quote').click();
 
     const call = await expectCall(calls, 'POST', '/quote');
-    expect(call.body).toMatchObject({ akHandle: AK_HANDLE, pcrIndices: [0, 7], pcrBank: 'SHA256' });
+    expect(call.body).toMatchObject({ akHandle: AK_HANDLE, pcrIndices: [0, 7], pcrBank: 'PCR_BANK_SHA256' });
     expect((call.body as { nonce?: string }).nonce).toBeTruthy();
     await expect(page.getByTestId('tpm-result-quote')).toContainText('cXVvdGU=');
   });
@@ -183,6 +184,19 @@ test.describe('TPM Keys operations', () => {
       nonce: (quoteCall.body as { nonce: string }).nonce,
     });
     await expect(page.getByTestId('tpm-result-verifyQuote')).toContainText('quote verified');
+  });
+
+  test('VerifyQuote shows an invalid verdict for verified: false', async ({ page }) => {
+    const calls = await openKeysPage(page, {
+      'POST /quote/verify': { status: 200, body: { verified: false, message: 'nonce mismatch' } },
+    });
+    await page.getByTestId('tpm-op-quote').click();
+    await expectCall(calls, 'POST', '/quote');
+    await expect(page.getByTestId('tpm-op-verifyQuote')).toBeEnabled();
+    await page.getByTestId('tpm-op-verifyQuote').click();
+
+    await expectCall(calls, 'POST', '/quote/verify');
+    await expect(page.getByTestId('tpm-verdict-verifyQuote')).toContainText('INVALID: nonce mismatch');
   });
 
   test('Certify posts to /tpm/certify', async ({ page }) => {

@@ -793,6 +793,18 @@ export async function mockTPMKeyOperationsApi(
     }
     calls.push({ method, path, body });
 
+    // The server decodes QuoteRequest with protojson: the bank must be the
+    // proto enum name ("PCR_BANK_SHA256"), anything else is a 400.
+    const bank = (body as { pcrBank?: unknown } | null)?.pcrBank;
+    if (method === 'POST' && path === '/quote' && bank !== undefined && !String(bank).startsWith('PCR_BANK_')) {
+      await route.fulfill({
+        status: 400,
+        contentType: 'application/json',
+        body: JSON.stringify({ message: `invalid value for enum field pcrBank: ${String(bank)}`, code: 'HTTP_400' }),
+      });
+      return;
+    }
+
     const reply = replies[`${method} ${path}`];
     await route.fulfill({
       status: reply ? reply.status ?? 200 : 404,

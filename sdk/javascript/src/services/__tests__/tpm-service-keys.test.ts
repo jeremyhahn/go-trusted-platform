@@ -61,3 +61,32 @@ describe('TPMService capabilities, platform and certify', () => {
     expect(call?.[1]).toEqual(request);
   });
 });
+
+// The REST handler decodes QuoteRequest with protojson, whose enum needs the
+// proto-canonical bank name; the short PCRBank form is a 400 there (#1751).
+describe('TPMService.quote bank translation', () => {
+  let service: TPMService;
+  let mockClient: ApiClient;
+
+  beforeEach(() => {
+    mockClient = createMockApiClient();
+    vi.mocked(mockClient.post).mockResolvedValue({ success: true, data: {} });
+    service = new TPMService(mockClient);
+  });
+
+  const postedBody = (): Record<string, unknown> =>
+    vi.mocked(mockClient.post).mock.calls[0]?.[1] as Record<string, unknown>;
+
+  it('posts the proto enum name for a short bank', async () => {
+    await service.quote({ akHandle: 1, pcrIndices: [0], pcrBank: 'SHA256', nonce: 'bg==' });
+
+    expect(vi.mocked(mockClient.post).mock.calls[0]?.[0]).toMatch(/\/quote$/);
+    expect(postedBody()).toMatchObject({ akHandle: 1, pcrIndices: [0], pcrBank: 'PCR_BANK_SHA256', nonce: 'bg==' });
+  });
+
+  it('passes an already canonical bank unchanged', async () => {
+    await service.quote({ akHandle: 1, pcrIndices: [0], pcrBank: 'PCR_BANK_SHA1' as never, nonce: 'bg==' });
+
+    expect(postedBody().pcrBank).toBe('PCR_BANK_SHA1');
+  });
+});
