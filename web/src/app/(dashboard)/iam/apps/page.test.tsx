@@ -103,7 +103,7 @@ const rows = () => screen.getAllByTestId("row");
 const stat = (title: string) =>
   screen.getByText(title).closest("div")!.parentElement!.textContent;
 
-let confirmSpy: ReturnType<typeof vi.spyOn>;
+const confirmSpy = vi.fn<(message?: string) => boolean>();
 
 beforeEach(() => {
   for (const f of [push, toast, refetch, listApps, deleteApp]) f.mockReset();
@@ -112,11 +112,13 @@ beforeEach(() => {
   api.data = { apps };
   api.isLoading = false;
   api.error = null;
-  confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+  confirmSpy.mockReset();
+  confirmSpy.mockReturnValue(true);
+  vi.stubGlobal("confirm", confirmSpy);
 });
 afterEach(() => {
   cleanup();
-  confirmSpy.mockRestore();
+  vi.unstubAllGlobals();
 });
 
 describe("AppsPage", () => {
