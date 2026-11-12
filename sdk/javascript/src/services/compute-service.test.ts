@@ -1,0 +1,30 @@
+import { describe, it } from 'vitest';
+
+describe('ComputeService', () => {
+  it.todo('listVMs');
+  it.todo('getVM');
+  it.todo('createVM');
+  it.todo('deleteVM');
+  it.todo('startVM');
+  it.todo('stopVM');
+  it.todo('rebootVM');
+  it.todo('migrateVM');
+  it.todo('attestVM');
+  it.todo('verifyVMAttestation');
+  it.todo('getVMMetrics');
+  it.todo('attachDisk');
+  it.todo('detachDisk');
+  it.todo('resizeDisk');
+  it.todo('listSnapshots');
+  it.todo('createSnapshot');
+  it.todo('deleteSnapshot');
+  it.todo('restoreSnapshot');
+  it.todo('listContainers');
+  it.todo('getContainer');
+  it.todo('createContainer');
+  it.todo('deleteContainer');
+  it.todo('startContainer');
+  it.todo('stopContainer');
+  it.todo('execContainer');
+  it.todo('getContainerMetrics');
+});
