@@ -73,6 +73,12 @@ describe('SDNTopology', () => {
     expect(screen.getAllByText(/Mbps/)).toHaveLength(1);
   });
 
+  it('renders nothing after a link with a bandwidth of 0, not a stray "0"', () => {
+    render(<SDNTopology nodes={[]} links={[{ source: 'a', target: 'b', bandwidth: 0 }]} />);
+    const row = screen.getByText('a → b').parentElement as HTMLElement;
+    expect(row.textContent).toBe('a → b');
+  });
+
   it('shows links without nodes and no empty-state message', () => {
     render(<SDNTopology nodes={[]} links={[{ source: 'a', target: 'b', bandwidth: 1 }]} />);
     expect(screen.queryByText('No topology data available')).toBeNull();
