@@ -371,7 +371,7 @@ func TestGenerateInstallConfigTPMDefaults(t *testing.T) {
 	}
 
 	// Check default PCRs
-	expectedPCRs := []uint{0, 7, 9}
+	expectedPCRs := []uint{7, 11}
 	if len(cfg.Security.TPM.SealPCRs) != len(expectedPCRs) {
 		t.Errorf("len(seal_pcrs) = %d, want %d", len(cfg.Security.TPM.SealPCRs), len(expectedPCRs))
 	}
