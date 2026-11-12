@@ -53,6 +53,7 @@ func buildHandlerMap(reg *ServiceRegistry) map[string]handlerFunc {
 	registerBMCHandlers(m, reg)
 	registerNTPHandlers(m, reg)
 	registerLUKSHandlers(m, reg)
+	registerBarrierHandlers(m, reg)
 	registerSwitchHandlers(m, reg)
 	registerCacheHandlers(m, reg)
 	registerSchedulerHandlers(m, reg)
@@ -1556,6 +1557,29 @@ func registerLUKSHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
 	}
 	m[platformv1.LUKSService_ChangePassphrase_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
 		return svc.ChangePassphrase(ctx, req.(*platformv1.LUKSChangePassphraseRequest))
+	}
+}
+
+func registerBarrierHandlers(m map[string]handlerFunc, reg *ServiceRegistry) {
+	if reg.Barrier == nil {
+		return
+	}
+	svc := reg.Barrier
+
+	m[platformv1.BarrierService_Init_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Init(ctx, req.(*platformv1.BarrierInitRequest))
+	}
+	m[platformv1.BarrierService_GetStatus_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.GetStatus(ctx, req.(*platformv1.BarrierStatusRequest))
+	}
+	m[platformv1.BarrierService_Unseal_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Unseal(ctx, req.(*platformv1.BarrierUnsealRequest))
+	}
+	m[platformv1.BarrierService_Seal_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Seal(ctx, req.(*platformv1.BarrierSealRequest))
+	}
+	m[platformv1.BarrierService_Rekey_FullMethodName] = func(ctx context.Context, req interface{}) (interface{}, error) {
+		return svc.Rekey(ctx, req.(*platformv1.BarrierRekeyRequest))
 	}
 }
 
