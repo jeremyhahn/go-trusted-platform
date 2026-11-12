@@ -79,4 +79,19 @@ describe('EABService', () => {
       });
     });
   });
+
+  describe('getEnrollmentURL', () => {
+    it('gets the registered /credentials/{id}/url route', async () => {
+      vi.mocked(mockClient.get).mockResolvedValue({
+        success: true,
+        data: { url: '/enroll?kid=kid-5', timestamp: '2026-01-01T00:00:00Z' },
+      });
+
+      const res = await service.getEnrollmentURL(5);
+
+      expect(mockClient.get).toHaveBeenCalledTimes(1);
+      expect(mockClient.get).toHaveBeenCalledWith('/v1/eab/credentials/5/url');
+      expect(res.data?.url).toBe('/enroll?kid=kid-5');
+    });
+  });
 });

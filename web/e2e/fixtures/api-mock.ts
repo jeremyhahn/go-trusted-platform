@@ -708,7 +708,12 @@ export async function mockInvitationValidation(
 // EAB credentials (#1667)
 // =============================================================================
 
-export type MockEABStatus = 'ACTIVE' | 'REVOKED' | 'EXPIRED' | 'USED';
+/** The REST handlers serialize protobuf enum names, so the mock does too. */
+export type MockEABStatus =
+  | 'EAB_CREDENTIAL_STATUS_ACTIVE'
+  | 'EAB_CREDENTIAL_STATUS_REVOKED'
+  | 'EAB_CREDENTIAL_STATUS_EXPIRED'
+  | 'EAB_CREDENTIAL_STATUS_USED';
 
 export interface MockEABCredential {
   id: number;
@@ -737,7 +742,7 @@ export function createMockEABCredential(
     profileId: 1,
     tenantId: 'tenant-test-123',
     expiresAt: '2030-01-01T00:00:00Z',
-    status: 'ACTIVE',
+    status: 'EAB_CREDENTIAL_STATUS_ACTIVE',
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -818,7 +823,7 @@ export async function mockEABApi(
       }
       if (method === 'POST' && path === '/cleanup') {
         const before = credentials.length;
-        credentials = credentials.filter((c) => c.status !== 'EXPIRED');
+        credentials = credentials.filter((c) => c.status !== 'EAB_CREDENTIAL_STATUS_EXPIRED');
         return json(route, 200, { status: ok, deletedCount: before - credentials.length });
       }
       if (method === 'GET' && (m = path.match(/^\/key\/([^/]+)$/))) {
@@ -836,20 +841,20 @@ export async function mockEABApi(
           return json(route, 200, { status: ok });
         }
         if (method === 'POST' && action === '/revoke') {
-          cred.status = 'REVOKED';
+          cred.status = 'EAB_CREDENTIAL_STATUS_REVOKED';
           return json(route, 200, { status: ok });
         }
         if (method === 'POST' && action === '/used') {
-          cred.status = 'USED';
+          cred.status = 'EAB_CREDENTIAL_STATUS_USED';
           return json(route, 200, { status: ok });
         }
         if (method === 'GET' && action === '/qrcode') {
           return json(route, 200, { qrCode: MOCK_QR_PNG, format: 'png', size: 256 });
         }
-        if (method === 'GET' && action === '/enrollment-url') {
+        if (method === 'GET' && action === '/url') {
           return json(route, 200, {
             url: `/enroll?kid=${encodeURIComponent(cred.keyId)}`,
-            expiresAt: '2030-01-01T00:00:00Z',
+            timestamp: '2026-01-01T00:00:00Z',
           });
         }
       }

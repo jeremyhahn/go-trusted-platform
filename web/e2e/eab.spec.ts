@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { createTenantOwnerSession } from './fixtures/auth-setup';
 import { createMockEABCredential, mockEABApi, mockTenantApi } from './fixtures/api-mock';
 
@@ -8,9 +8,20 @@ import { createMockEABCredential, mockEABApi, mockTenantApi } from './fixtures/a
  */
 
 const seed = () => [
-  createMockEABCredential({ id: 1, keyId: 'kid-active', status: 'ACTIVE' }),
-  createMockEABCredential({ id: 2, keyId: 'kid-expired', status: 'EXPIRED' }),
+  createMockEABCredential({ id: 1, keyId: 'kid-active', status: 'EAB_CREDENTIAL_STATUS_ACTIVE' }),
+  createMockEABCredential({ id: 2, keyId: 'kid-expired', status: 'EAB_CREDENTIAL_STATUS_EXPIRED' }),
 ];
+
+/**
+ * Open a detail page the way the platform's static server does: it serves the
+ * exported __placeholder__ HTML, and the client resolves the real id from the
+ * pathname.
+ */
+async function openPlaceholderDetail(page: Page, id: number) {
+  await page.goto('/ca/eab/__placeholder__/');
+  await page.waitForLoadState('networkidle');
+  await page.evaluate((credId) => window.history.pushState(null, '', `/ca/eab/${credId}/`), id);
+}
 
 test.describe('CA EAB credentials - list page', () => {
   test.beforeEach(async ({ page }) => {
@@ -129,6 +140,15 @@ test.describe('CA EAB credentials - detail page', () => {
     expect(api.calls.some((c) => c.method === 'GET' && c.path === '/1')).toBe(true);
   });
 
+  test('resolves the id from the pathname on the exported placeholder page', async ({ page }) => {
+    const api = await mockEABApi(page, seed());
+    await openPlaceholderDetail(page, 1);
+
+    await expect(page.getByRole('heading', { name: 'EAB Credential 1' })).toBeVisible();
+    await expect(page.getByTestId('eab-status')).toHaveText('ACTIVE');
+    expect(api.calls.some((c) => c.method === 'GET' && c.path === '/1')).toBe(true);
+  });
+
   test('opens the detail page from the list', async ({ page }) => {
     await mockEABApi(page, seed());
     await page.goto('/ca/eab');
@@ -155,7 +175,7 @@ test.describe('CA EAB credentials - detail page', () => {
     await page.getByRole('button', { name: 'Get Enrollment URL' }).click();
 
     await expect(page.getByTestId('eab-enrollment-url')).toHaveText('/enroll?kid=kid-active');
-    expect(api.calls.some((c) => c.method === 'GET' && c.path === '/1/enrollment-url')).toBe(true);
+    expect(api.calls.some((c) => c.method === 'GET' && c.path === '/1/url')).toBe(true);
   });
 
   test('marks a credential used (MarkCredentialUsed)', async ({ page }) => {
