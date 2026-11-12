@@ -83,9 +83,18 @@ func WireSDKBackends(target SDKBackendTarget, src SDKBackendSources, logger *log
 	}
 	target.SetCeremonyBackend(NewCeremonyBackend(logger, src.SDK, src.Admin))
 	// The LUKS backend needs no SDK: it drives go-luks2 on the host, with
-	// the FIDO2 and TPM handlers the host can open. The root checker reads
-	// the effective UID; without it the service refuses every mutation.
-	target.SetLUKSBackend(NewLUKSBackend(logger, WithDefaultLUKSHandlers()))
+	// the TPM handler the host can open. The root checker reads the
+	// effective UID; without it the service refuses every mutation.
+	//
+	// FIDO2 enrollment stays off: the default handler binds the 64-byte
+	// go-xkms derived key, which neither the fido2-manual reader (raw
+	// 32-byte hmac-secret) nor the initrd FIDO2 strategy (no credential or
+	// salt) can produce, so an enrolled slot would not unlock at boot.
+	// EnrollFIDO2 answers ErrLUKSHardwareUnavailable until a boot path
+	// consumes the slot.
+	luks := NewLUKSBackend(logger, WithDefaultLUKSHandlers())
+	luks.SetFIDO2Handler(nil)
+	target.SetLUKSBackend(luks)
 	target.SetLUKSRootChecker(DefaultRootChecker())
 	return nil
 }
