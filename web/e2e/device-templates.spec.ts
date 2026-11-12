@@ -2,10 +2,19 @@ import { test, expect, Page } from '@playwright/test';
 import { createTenantOwnerSession } from './fixtures/auth-setup';
 import {
   createMockDeviceTemplate,
+  DeviceTemplateMock,
+  errorEnvelope,
   mockDeviceTemplateApi,
   mockTenantApi,
   RecordedRequest,
 } from './fixtures/api-mock';
+
+// Generated platform ids exceed 2^53; Number() would round this one.
+const BIG_PROFILE_ID = '9007199254740993';
+// The server's config is bytes, so it travels as base64.
+const TEMPLATE_CONFIG = 'eyJyb2xlIjoiZWRnZSJ9';
+const TEMPLATE_MATCH_RULES = { mac_prefix: 'aa:bb', serial_prefix: 'EK' };
+const TEMPLATE_TENANT = 'tenant-abc-123';
 
 /**
  * Device templates, profile assignment and config lookup (#1737, slice 12
@@ -13,10 +22,16 @@ import {
  * answered by the mock in fixtures/api-mock.ts.
  */
 
-async function openTemplates(page: Page, findConfigNull = false) {
+async function openTemplates(page: Page) {
   const mock = await mockDeviceTemplateApi(page, {
-    templates: [createMockDeviceTemplate()],
-    ...(findConfigNull ? { findConfigResult: null } : {}),
+    templates: [
+      createMockDeviceTemplate({
+        tenant_id: TEMPLATE_TENANT,
+        config: TEMPLATE_CONFIG,
+        match_rules: TEMPLATE_MATCH_RULES,
+      } as unknown as Partial<DeviceTemplateMock>),
+    ],
+    profile: { id: BIG_PROFILE_ID, name: 'edge-node-profile', role: 'edge' },
   });
   await mockTenantApi(page);
   await page.goto('/devices/templates');
@@ -74,9 +89,16 @@ test.describe('Device templates', () => {
     await dialog.getByRole('button', { name: 'Save Changes' }).click();
 
     await expect.poll(() => lastRequest(mock.requests, 'PUT', '/api/v1/device/templates/42')).toBeTruthy();
-    expect(lastRequest(mock.requests, 'PUT', '/api/v1/device/templates/42')?.body).toMatchObject({
+    // PUT replaces the stored entity, so the fields the dialog does not edit
+    // must travel back unchanged under their server wire names.
+    const body = lastRequest(mock.requests, 'PUT', '/api/v1/device/templates/42')?.body;
+    expect(body).toMatchObject({
       name: 'edge-node-v2',
+      tenant_id: TEMPLATE_TENANT,
+      config: TEMPLATE_CONFIG,
+      match_rules: TEMPLATE_MATCH_RULES,
     });
+    expect(body).not.toHaveProperty('matchRules');
     await expect(page.getByText('Template updated').first()).toBeVisible();
   });
 
@@ -123,27 +145,59 @@ test.describe('Device templates', () => {
     const req = lastRequest(mock.requests, 'GET', '/api/v1/device/profiles/find-config');
     expect(req?.query).toContain('ek_serial=EK123');
     // The found profile fills the profile ID for assignment.
-    await expect(panel.getByLabel('Profile ID')).toHaveValue('7');
+    await expect(panel.getByLabel('Profile ID')).toHaveValue(BIG_PROFILE_ID);
   });
 
   test('FindConfigForDevice reports a device no profile matches', async ({ page }) => {
-    await openTemplates(page, true);
+    const mock = await openTemplates(page);
+    // The server answers an unmatched lookup with 404 (ErrNoMatchingConfig).
+    let noMatch = false;
+    await page.route('**/api/v1/device/profiles/find-config*', async (route) => {
+      if (!noMatch) {
+        return route.fallback();
+      }
+      return route.fulfill({
+        status: 404,
+        contentType: 'application/json',
+        body: errorEnvelope({ error: 'no matching config', status: 404 }),
+      });
+    });
     const panel = page.getByTestId('profile-assignment');
+
+    // A first lookup matches and fills the profile ID.
+    await panel.getByLabel('EK Serial Number').fill('EK123');
+    await panel.getByRole('button', { name: 'Find Config' }).click();
+    await expect(page.getByTestId('find-config-result')).toContainText('edge-node-profile');
+    await expect(panel.getByLabel('Profile ID')).toHaveValue(BIG_PROFILE_ID);
+
+    // A second, unmatched device clears the previous result and selection.
+    noMatch = true;
+    await panel.getByLabel('EK Serial Number').fill('');
     await panel.getByLabel('MAC Address').fill('aa:bb:cc:dd:ee:ff');
     await panel.getByRole('button', { name: 'Find Config' }).click();
-    await expect(page.getByTestId('find-config-result')).toContainText('No profile matches');
+    await expect(page.getByTestId('find-config-result')).toHaveText('No profile matches this device');
+    await expect(panel.getByLabel('Profile ID')).toHaveValue('');
+    await expect(page.getByText('Config lookup failed')).toHaveCount(0);
+    const first = lastRequest(mock.requests, 'GET', '/api/v1/device/profiles/find-config');
+    expect(first?.query).toContain('ek_serial=EK123');
   });
 
   test('AssignProfileToDevice assigns a profile to a device', async ({ page }) => {
     const mock = await openTemplates(page);
     const panel = page.getByTestId('profile-assignment');
     await panel.getByLabel('EK Serial Number').fill('EK123');
-    await panel.getByLabel('Profile ID').fill('7');
+    await panel.getByLabel('Profile ID').fill(BIG_PROFILE_ID);
     await panel.getByRole('button', { name: 'Assign Profile' }).click();
 
-    const path = '/api/v1/device/profiles/7/assign';
+    // The id travels exactly, in the path only; the body uses the wire names
+    // AssignProfileToDeviceRequest decodes.
+    const path = `/api/v1/device/profiles/${BIG_PROFILE_ID}/assign`;
     await expect.poll(() => lastRequest(mock.requests, 'POST', path)).toBeTruthy();
-    expect(lastRequest(mock.requests, 'POST', path)?.body).toMatchObject({ ekSerial: 'EK123' });
+    const body = lastRequest(mock.requests, 'POST', path)?.body;
+    expect(body).toEqual({ ek_serial: 'EK123' });
+    for (const key of ['ekSerial', 'macAddress', 'profileId', 'profile_id']) {
+      expect(body).not.toHaveProperty(key);
+    }
     await expect(page.getByText('Profile assigned').first()).toBeVisible();
   });
 
@@ -155,9 +209,11 @@ test.describe('Device templates', () => {
 
     const dialog = page.getByRole('dialog');
     await expect(dialog).toContainText('Unassign profile?');
+    const path = '/api/v1/device/profiles/7/unassign';
+    // Nothing is sent before the confirm dialog is confirmed.
+    expect(lastRequest(mock.requests, 'POST', path)).toBeUndefined();
     await dialog.getByRole('button', { name: 'Unassign' }).click();
 
-    const path = '/api/v1/device/profiles/7/unassign';
     await expect.poll(() => lastRequest(mock.requests, 'POST', path)).toBeTruthy();
     await expect(page.getByText('Profile unassigned').first()).toBeVisible();
   });
