@@ -351,7 +351,7 @@ describe('KVService', () => {
 
       await service.list({ startKey: 'a', endKey: 'z' });
 
-      const call = vi.mocked(mockClient.get).mock.calls[0]![0];
+      const call = vi.mocked(mockClient.get).mock.calls[0]?.[0];
       expect(call).toContain('startKey=a');
       expect(call).toContain('endKey=z');
     });
@@ -365,7 +365,7 @@ describe('KVService', () => {
 
       await service.list({ limit: 100, cursor: 'page-2' });
 
-      const call = vi.mocked(mockClient.get).mock.calls[0]![0];
+      const call = vi.mocked(mockClient.get).mock.calls[0]?.[0];
       expect(call).toContain('limit=100');
       expect(call).toContain('cursor=page-2');
     });
