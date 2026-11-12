@@ -228,3 +228,18 @@ func TestManifests_EmptyIDIsRefusedBeforeConnecting(t *testing.T) {
 		})
 	}
 }
+
+func TestManifests_PathIDIsRefusedBeforeConnecting(t *testing.T) {
+	for _, verb := range []string{"get", "delete"} {
+		for _, id := range []string{"../events/e1", "a/b", "..", ".", `a\b`} {
+			t.Run(verb+" "+id, func(t *testing.T) {
+				cmd := quietCommand()
+				cmd.SetArgs([]string{"manifests", verb, id})
+				err := cmd.Execute()
+				var typed ErrInvalidManifestID
+				require.ErrorAs(t, err, &typed)
+				require.Equal(t, id, typed.ID)
+			})
+		}
+	}
+}

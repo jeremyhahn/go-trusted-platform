@@ -49,15 +49,16 @@ type testContainerAttestData struct {
 }
 
 type testManifestData struct {
-	ID         string                    `codec:"id"`
-	HostID     string                    `codec:"host_id"`
-	Timestamp  int64                     `codec:"timestamp"`
-	Nonce      []byte                    `codec:"nonce"`
-	Host       *testHostAttestationData  `codec:"host"`
-	VMs        []testVMAttestationData   `codec:"vms"`
-	Containers []testContainerAttestData `codec:"containers"`
-	Signature  []byte                    `codec:"signature"`
-	Version    string                    `codec:"version"`
+	ID             string                    `codec:"id"`
+	HostID         string                    `codec:"host_id"`
+	Timestamp      int64                     `codec:"timestamp"`
+	TimestampNanos int64                     `codec:"timestamp_nanos"`
+	Nonce          []byte                    `codec:"nonce"`
+	Host           *testHostAttestationData  `codec:"host"`
+	VMs            []testVMAttestationData   `codec:"vms"`
+	Containers     []testContainerAttestData `codec:"containers"`
+	Signature      []byte                    `codec:"signature"`
+	Version        string                    `codec:"version"`
 }
 
 type testGetManifestResponse struct {
@@ -93,10 +94,11 @@ func (s *manifestSender) SendRequest(_ context.Context, opcode byte, payload []b
 	s.ids = append(s.ids, req.ID)
 	p, err := quicwire.EncodePayload(&testGetManifestResponse{
 		Manifest: &testManifestData{
-			ID:        req.ID,
-			HostID:    "host-a",
-			Timestamp: 1700000000,
-			Nonce:     []byte{1, 2},
+			ID:             req.ID,
+			HostID:         "host-a",
+			Timestamp:      1700000000,
+			TimestampNanos: 123456789,
+			Nonce:          []byte{1, 2},
 			Host: &testHostAttestationData{
 				QuoteData:     []byte{9},
 				PCRs:          []testPCRValueData{{Index: 7, Value: []byte{5}, Algorithm: "sha256"}},
@@ -139,8 +141,8 @@ func TestGetManifestOverQUIC(t *testing.T) {
 		string(m.GetNonce()) != "\x01\x02" || string(m.GetSignature()) != "\x03\x04" {
 		t.Fatalf("manifest = %+v", m)
 	}
-	if got := m.GetTimestamp().AsTime().Unix(); got != 1700000000 {
-		t.Fatalf("manifest timestamp = %d, want 1700000000", got)
+	if got, want := m.GetTimestamp().AsTime(), time.Unix(1700000000, 123456789); !got.Equal(want) {
+		t.Fatalf("manifest timestamp = %v, want %v", got, want)
 	}
 	h := m.GetHost()
 	if h.GetTimestamp().AsTime().Unix() != 1700000100 || string(h.GetQuoteData()) != "\x09" ||
