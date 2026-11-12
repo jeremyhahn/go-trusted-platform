@@ -218,6 +218,37 @@ type Deployer interface {
 	Teardown(ctx context.Context, config *DeployConfig) error
 }
 
+// RemoteStager is what staging needs from a deploy target: run a command
+// and stream a file to a path.
+type RemoteStager interface {
+	// Run runs command on the target and returns its output. A command that
+	// fails returns its output (stderr, else stdout) with a typed error.
+	Run(ctx context.Context, command string) (string, error)
+
+	// CopyFileStream streams the local file at localPath to remotePath on
+	// the target.
+	CopyFileStream(ctx context.Context, localPath, remotePath string) error
+}
+
+// RemoteHost is the deploy transport seam: a connection to a deploy target
+// that runs commands, streams files and stats remote paths. *SSHClient
+// implements it over SSH and quicagent.Client over QUIC (#1700).
+type RemoteHost interface {
+	RemoteStager
+
+	// Connect opens the connection to the target.
+	Connect(ctx context.Context) error
+
+	// Close closes the connection.
+	Close() error
+
+	// StatRemote returns the size and modification time (Unix seconds) of
+	// remotePath, or ErrRemoteFileNotFound when it does not exist.
+	StatRemote(ctx context.Context, remotePath string) (size int64, mtime int64, err error)
+}
+
+var _ RemoteHost = (*SSHClient)(nil)
+
 // ApplyDefaults fills in zero-valued fields with sensible defaults.
 func (c *DeployConfig) ApplyDefaults() {
 	if c.Port == 0 {
