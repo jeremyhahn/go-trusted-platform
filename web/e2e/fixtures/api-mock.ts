@@ -445,6 +445,92 @@ export async function mockHealthApi(
   });
 }
 
+/** Switch port status as the server sends it (`switchwire.PortStatus`). */
+export interface SwitchPortStatus {
+  port: string;
+  mode: 'access' | 'trunk';
+  access_vlan: number;
+  trunk_vlans?: number[];
+  native_vlan?: number;
+  enabled: boolean;
+  link_up: boolean;
+  description?: string;
+}
+
+export interface SwitchApiMockConfig {
+  switchName?: string;
+  ports?: SwitchPortStatus[];
+}
+
+/** One request the switch mock answered: verb, decoded port, action and body. */
+export interface SwitchApiCall {
+  method: string;
+  port?: string;
+  action?: string;
+  body?: unknown;
+}
+
+/**
+ * Mocks `/api/v1/switches/{switch}/ports[/{port}[/enable|/disable|/vlan]]`
+ * (docs/switch/api.md §5.1). Replies use the platform envelope, keep port
+ * state across calls, and every call is recorded in the returned array.
+ */
+export async function mockSwitchApi(
+  page: Page,
+  config: SwitchApiMockConfig = {}
+): Promise<SwitchApiCall[]> {
+  const switchName = config.switchName || 'core-1';
+  const ports = new Map<string, SwitchPortStatus>();
+  for (const p of config.ports || []) ports.set(p.port, { ...p });
+  const calls: SwitchApiCall[] = [];
+  const ok = (payload: unknown) => ({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ success: true, code: 200, payload }),
+  });
+
+  await page.route('**/api/v1/switches/**', async (route: Route, request: Request) => {
+    const path = new URL(request.url()).pathname;
+    const m = path.match(/\/api\/v1\/switches\/([^/]+)\/ports(?:\/([^/]+))?(?:\/(enable|disable|vlan))?\/?$/);
+    if (!m || decodeURIComponent(m[1]) !== switchName) {
+      await route.fulfill({ status: 404, contentType: 'application/json', body: errorEnvelope({ error: 'switch not found', status: 404 }) });
+      return;
+    }
+    const port = m[2] ? decodeURIComponent(m[2]) : undefined;
+    const action = m[3];
+    const body = request.postData() ? request.postDataJSON() : undefined;
+    calls.push({ method: request.method(), port, action, body });
+
+    if (!port) {
+      await route.fulfill(ok([...ports.values()]));
+      return;
+    }
+    const status = ports.get(port);
+    if (!status) {
+      await route.fulfill({ status: 404, contentType: 'application/json', body: errorEnvelope({ error: 'port not found', status: 404 }) });
+      return;
+    }
+    if (!action && request.method() === 'GET') {
+      await route.fulfill(ok(status));
+      return;
+    }
+    if (action === 'enable' || action === 'disable') {
+      status.enabled = action === 'enable';
+      await route.fulfill(ok({ switch: switchName, port, action, status: 'ok' }));
+      return;
+    }
+    if (action === 'vlan') {
+      const vlanId = (body as { vlan_id?: number } | undefined)?.vlan_id ?? 0;
+      status.access_vlan = vlanId;
+      await route.fulfill(ok({ switch: switchName, port, vlan_id: vlanId, status: 'ok' }));
+      return;
+    }
+    await route.continue();
+  });
+
+  return calls;
+}
+
 /**
  * Mock all common API endpoints with default configurations.
  *
