@@ -58,6 +58,26 @@ func TestWireSDKBackends_WiresLUKS(t *testing.T) {
 	}
 }
 
+// TestWireSDKBackends_LeavesFIDO2EnrollmentOff verifies the production
+// wiring does not offer LUKS FIDO2 enrollment: the enrollment handler binds
+// the 64-byte go-xkms derived key, while the shipped boot paths (the
+// fido2-manual reader and the initrd FIDO2 strategy) cannot derive it, so an
+// enrolled slot would not unlock the volume at boot (Codex round 3, #1852).
+func TestWireSDKBackends_LeavesFIDO2EnrollmentOff(t *testing.T) {
+	target := &recordingSDKTarget{}
+
+	if err := WireSDKBackends(target, SDKBackendSources{SDK: &fakeQuicbaasClient{}}, logging.DefaultLogger()); err != nil {
+		t.Fatalf("WireSDKBackends: %v", err)
+	}
+	lb, ok := target.luks.(*LUKSBackend)
+	if !ok || lb == nil {
+		t.Fatalf("LUKS backend = %T, want a non-nil *LUKSBackend", target.luks)
+	}
+	if lb.fido2 != nil {
+		t.Fatalf("LUKS FIDO2 handler = %T, want nil until a boot unlock path consumes the enrolled key", lb.fido2)
+	}
+}
+
 func TestWireSDKBackends_WiresCeremonyOnly(t *testing.T) {
 	target := &recordingSDKTarget{}
 	src := SDKBackendSources{SDK: &fakeQuicbaasClient{}}
