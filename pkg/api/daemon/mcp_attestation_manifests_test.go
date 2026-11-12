@@ -26,6 +26,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/manifest"
@@ -74,6 +75,12 @@ func (s *memoryManifestService) ListManifests(_ context.Context, filter *ListMan
 	out := make([]*manifest.HostManifest, 0, len(s.manifests))
 	for _, m := range s.manifests {
 		if filter != nil && filter.HostID != "" && m.HostID != filter.HostID {
+			continue
+		}
+		if filter != nil && filter.StartTime != 0 && m.Timestamp.Unix() < filter.StartTime {
+			continue
+		}
+		if filter != nil && filter.EndTime != 0 && m.Timestamp.Unix() > filter.EndTime {
 			continue
 		}
 		out = append(out, m)
@@ -185,6 +192,35 @@ func TestMCPManifestParity_ListHostFilter(t *testing.T) {
 
 	all, err := f.grpc.ListManifests(context.Background(), &platformv1.ListManifestsRequest{Limit: 5})
 	require.NoError(t, err)
+	assert.NotEqual(t, asToolResult(t, all), got)
+}
+
+// The MCP list keeps the start_time/end_time window the gRPC list applies
+// (#1686).
+func TestMCPManifestParity_ListTimeWindow(t *testing.T) {
+	f := newManifestParity()
+	later := manifestFixtureTime.Add(48 * time.Hour)
+	f.svc.manifests["m-2"] = &manifest.HostManifest{ID: "m-2", HostID: "host-a", Timestamp: later, Nonce: []byte{4}, MerkleRoot: []byte{8}, Version: "1"}
+
+	start := manifestFixtureTime.Add(-time.Hour)
+	end := manifestFixtureTime.Add(time.Hour)
+	got, err := f.mcp(t, "attestation_list_manifests", map[string]interface{}{
+		"start_time": start.Format(time.RFC3339),
+		"end_time":   end.Format(time.RFC3339),
+	})
+	require.NoError(t, err)
+	want, err := f.grpc.ListManifests(context.Background(), &platformv1.ListManifestsRequest{
+		StartTime: timestamppb.New(start),
+		EndTime:   timestamppb.New(end),
+	})
+	require.NoError(t, err)
+	require.Len(t, want.GetManifests(), 1)
+	assert.Equal(t, "m-1", want.GetManifests()[0].GetId())
+	assert.Equal(t, asToolResult(t, want), got)
+
+	all, err := f.grpc.ListManifests(context.Background(), &platformv1.ListManifestsRequest{})
+	require.NoError(t, err)
+	require.Len(t, all.GetManifests(), 2)
 	assert.NotEqual(t, asToolResult(t, all), got)
 }
 
