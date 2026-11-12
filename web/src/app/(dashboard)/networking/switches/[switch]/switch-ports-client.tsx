@@ -77,6 +77,10 @@ export default function SwitchPortsClient() {
     }
   };
 
+  // The single-port status never reports link state: take it from the port list.
+  const listed = status ? ports.find((p) => p.port === status.port) : undefined;
+  const statusLink = listed ? (listed.link_up ? 'up' : 'down') : 'unavailable';
+
   const vlanId = Number(vlanValue);
   const vlanValid = Number.isInteger(vlanId) && vlanId >= 1 && vlanId <= 4094;
 
@@ -177,16 +181,18 @@ export default function SwitchPortsClient() {
                           Enable
                         </Button>
                       )}
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => {
-                          setVlanPort(p.port);
-                          setVlanValue(String(p.access_vlan || ''));
-                        }}
-                      >
-                        Set VLAN
-                      </Button>
+                      {p.mode === 'access' && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            setVlanPort(p.port);
+                            setVlanValue(String(p.access_vlan || ''));
+                          }}
+                        >
+                          Set VLAN
+                        </Button>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -222,7 +228,7 @@ export default function SwitchPortsClient() {
               <dt>Admin</dt>
               <dd>{status.enabled ? 'enabled' : 'disabled'}</dd>
               <dt>Link</dt>
-              <dd>{status.link_up ? 'up' : 'down'}</dd>
+              <dd>{statusLink}</dd>
               <dt>Description</dt>
               <dd>{status.description || '-'}</dd>
             </dl>
@@ -262,7 +268,7 @@ export default function SwitchPortsClient() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Set VLAN on {vlanPort}</DialogTitle>
-            <DialogDescription>Access VLAN id, 1 to 4094.</DialogDescription>
+            <DialogDescription>Access VLAN id of this access port, 1 to 4094.</DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
             <Label htmlFor="vlan-id">VLAN ID</Label>
