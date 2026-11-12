@@ -196,7 +196,7 @@ test.describe('Device lookup, counts, profiles, activation and attestation (#174
     await expect
       .poll(call(calls, 'POST', '/device/activate-json'))
       .toEqual({ serial: 'SN-1', mac_address: 'aa:bb:cc:dd:ee:ff' });
-    await expect(page.getByTestId('activate-result')).toHaveText('activated (VLAN 20)');
+    await expect(page.getByTestId('activate-result')).toHaveText('Admitted VLAN 20 (status activated; switch not changed)');
   });
 
   test('GetProfile shows the device profile', async ({ page }) => {

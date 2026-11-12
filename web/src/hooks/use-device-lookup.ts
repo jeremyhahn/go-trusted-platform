@@ -82,7 +82,8 @@ export function useDeviceLookup(): DeviceLookup {
   );
   const activateDevice = useMutation(
     (request: ActivateDeviceRequest) => deviceService.activateDevice(request),
-    { ...failed('Activation failed'), ...done('Device activated', 'The device was activated', deviceCount.refetch) }
+    // /device/activate-json resolves the admitted VLAN; it programs no switch.
+    { ...failed('Activation failed'), ...done('Admitted VLAN resolved', 'The switch was not changed', deviceCount.refetch) }
   );
   const getDeviceProfile = useMutation<DeviceSelfServiceProfile, void>(
     () => deviceService.getDeviceProfile(),

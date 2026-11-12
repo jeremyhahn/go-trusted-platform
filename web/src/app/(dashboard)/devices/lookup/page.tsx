@@ -87,6 +87,10 @@ export default function DeviceLookupPage() {
 
   const [activateSerial, setActivateSerial] = useState('');
   const [activateMAC, setActivateMAC] = useState('');
+  // The target the shown activation result belongs to. The mutation keeps
+  // its data across a later failed or pending request, so a result shows
+  // only while this matches the inputs.
+  const [activatedFor, setActivatedFor] = useState<string | null>(null);
 
   const [profileMAC, setProfileMAC] = useState('');
   const [profileSerial, setProfileSerial] = useState('');
@@ -139,7 +143,14 @@ export default function DeviceLookupPage() {
 
   const deviceProfile = lookup.getDeviceProfile.data;
   const attestResult = lookup.attestDevice.data;
-  const activation = lookup.activateDevice.data;
+  const activateTarget = `${activateSerial.trim()}|${activateMAC.trim()}`;
+  const changeActivateTarget = (set: (value: string) => void) => (value: string) => {
+    set(value);
+    setActivatedFor(null);
+    lookup.activateDevice.reset();
+  };
+  const activation =
+    lookup.activateDevice.isSuccess && activatedFor === activateTarget ? lookup.activateDevice.data : undefined;
 
   return (
     <div className="flex flex-col gap-6">
@@ -241,36 +252,54 @@ export default function DeviceLookupPage() {
       <Card>
         <CardHeader>
           <CardTitle>Activate device</CardTitle>
-          <CardDescription>Move an enrolled device onto its admitted network</CardDescription>
+          <CardDescription>
+            Look up the admitted network VLAN an enrolled device&apos;s profile assigns. This does not program the
+            switch or change the device&apos;s state.
+          </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
           <div className="grid gap-2 md:grid-cols-2">
-            <Field id="activate-serial" label="Serial" value={activateSerial} onChange={setActivateSerial} />
-            <Field id="activate-mac" label="MAC address" value={activateMAC} onChange={setActivateMAC} />
+            <Field
+              id="activate-serial"
+              label="Serial"
+              value={activateSerial}
+              onChange={changeActivateTarget(setActivateSerial)}
+            />
+            <Field
+              id="activate-mac"
+              label="MAC address"
+              value={activateMAC}
+              onChange={changeActivateTarget(setActivateMAC)}
+            />
           </div>
           <div>
             <Button
               variant="destructive"
               disabled={!activateSerial.trim() || !activateMAC.trim()}
-              onClick={() =>
+              onClick={() => {
+                const target = activateTarget;
                 setPending({
                   title: 'Activate device',
-                  description: `Activate device ${activateSerial.trim()}? Its switch port moves to the admitted network.`,
-                  run: () =>
-                    lookup.activateDevice.mutateAsync({
+                  description: `Look up the admitted VLAN for device ${activateSerial.trim()}? This does not program the switch: the device stays on its current network.`,
+                  run: async () => {
+                    setActivatedFor(null);
+                    lookup.activateDevice.reset();
+                    await lookup.activateDevice.mutateAsync({
                       serial: activateSerial.trim(),
                       macAddress: activateMAC.trim(),
-                    }),
-                })
-              }
+                    });
+                    setActivatedFor(target);
+                  },
+                });
+              }}
             >
               Activate device
             </Button>
           </div>
           {activation && (
             <p className="text-sm" data-testid="activate-result">
-              {activation.status}
-              {activation.vlan !== undefined ? ` (VLAN ${activation.vlan})` : ''}
+              {activation.vlan !== undefined ? `Admitted VLAN ${activation.vlan}` : 'No admitted VLAN'} (status{' '}
+              {activation.status}; switch not changed)
             </p>
           )}
         </CardContent>
@@ -354,6 +383,8 @@ export default function DeviceLookupPage() {
                       run: async () => {
                         const result = await lookup.updateProfile.mutateAsync({
                           // The server replaces the whole profile: send every field it holds.
+                          // Fields the REST wire cannot carry (tenant, BMC, workload PCR)
+                          // are kept from the stored profile by ProfileService.Update.
                           ...profile,
                           name: profileName.trim(),
                         });
