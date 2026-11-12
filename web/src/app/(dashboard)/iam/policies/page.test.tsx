@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import * as React from "react";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 
 import PoliciesPage from "./page";
 
@@ -102,7 +102,7 @@ vi.mock("@/components/ui/data-table-row-actions", () => ({
 const statCard = (title: string) =>
   screen.getByText(title).parentElement?.parentElement?.textContent;
 
-let confirmSpy: ReturnType<typeof vi.spyOn>;
+let confirmSpy: MockInstance<(message?: string) => boolean>;
 
 beforeEach(() => {
   authResult = { tenantId: "t1", isLoading: false };
