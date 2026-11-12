@@ -158,6 +158,27 @@ describe("TenantLifecyclePage", () => {
     expect(screen.getByTestId("tenant-state").textContent).toBe("SUSPENDED");
   });
 
+  it("a failed lookup after a successful one leaves no tenant selected", async () => {
+    await lookUp();
+    service.getTenantByName.mockImplementationOnce(() =>
+      Promise.resolve({ success: false, error: { code: "NOT_FOUND", message: "tenant not found" } })
+    );
+    fireEvent.change(screen.getByLabelText("Tenant name"), { target: { value: "ghost" } });
+    fireEvent.click(screen.getByRole("button", { name: "Look up" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("tenant not found");
+    expect(screen.queryByTestId("tenant-details")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+  });
+
+  it("rotate DEK confirmation says data is not re-encrypted and names the tenant", async () => {
+    await lookUp();
+    fireEvent.click(screen.getByRole("button", { name: "Rotate DEK" }));
+    const text = dialog().textContent ?? "";
+    expect(text).not.toContain("re-encrypted with it");
+    expect(text).toContain("not re-encrypted");
+    expect(text).toContain("acme");
+  });
+
   it("sync shows the failure message when the status reports success=false", async () => {
     service.syncTenants.mockImplementation(() =>
       ok({ status: { success: false, message: "sync completed with errors: boom" } })
