@@ -50,6 +50,10 @@ func init() {
 	} {
 		mcpReplyDecoders[method] = decode
 	}
+	// The list's time window travels as RFC 3339 strings under proto
+	// names; the generic struct path would send {seconds,nanos} (#1686).
+	mcpArgBuilders[platformv1.AttestationService_ListManifests_FullMethodName] =
+		protoJSONArgs(platformv1.AttestationService_ListManifests_FullMethodName)
 }
 
 // reportJSON decodes the reporting cache's JSON into a pb message; unknown

@@ -138,6 +138,14 @@ func (r *ToolRegistry) registerAttestationTools() {
 					"type":        "string",
 					"description": "Only manifests of this host",
 				},
+				"start_time": map[string]interface{}{
+					"type":        "string",
+					"description": "Only manifests created at or after this RFC 3339 time",
+				},
+				"end_time": map[string]interface{}{
+					"type":        "string",
+					"description": "Only manifests created at or before this RFC 3339 time",
+				},
 				"limit": map[string]interface{}{
 					"type":        "integer",
 					"description": "Maximum number of manifests to return",
