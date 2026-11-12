@@ -190,7 +190,7 @@ describe('QuicBaaSSecretsService', () => {
       });
 
       expect(result.success).toBe(true);
-      expect(result.data?.data.username).toBe('dbuser');
+      expect(result.data?.data?.username).toBe('dbuser');
       expect(mockClient.get).toHaveBeenCalledWith('/v1/quicbaas/secrets/data/app%2Fconfig%2Fdatabase');
     });
 
@@ -361,7 +361,7 @@ describe('QuicBaaSSecretsService', () => {
       });
 
       expect(result.success).toBe(true);
-      expect(result.data?.deleted).toBe(true);
+      expect(result.data).toMatchObject({ deleted: true });
       expect(mockClient.delete).toHaveBeenCalledWith('/v1/quicbaas/secrets/data/app%2Fconfig%2Fdatabase');
     });
 
@@ -497,7 +497,7 @@ describe('QuicBaaSSecretsService', () => {
 
       await service.list({ page: 2, pageSize: 10 });
 
-      const call = vi.mocked(mockClient.get).mock.calls[0][0];
+      const call = vi.mocked(mockClient.get).mock.calls[0]![0];
       expect(call).toContain('page=2');
       expect(call).toContain('limit=10');
     });
@@ -546,7 +546,7 @@ describe('QuicBaaSSecretsService', () => {
       });
 
       expect(result.success).toBe(true);
-      expect(result.data?.version).toBe(1);
+      expect(result.data).toMatchObject({ version: 1 });
       expect(mockClient.get).toHaveBeenCalledWith(
         '/v1/quicbaas/secrets/data/app%2Fconfig%2Fdatabase/versions/1'
       );
@@ -618,7 +618,7 @@ describe('QuicBaaSSecretsService', () => {
         pageSize: 10,
       });
 
-      const call = vi.mocked(mockClient.get).mock.calls[0][0];
+      const call = vi.mocked(mockClient.get).mock.calls[0]![0];
       expect(call).toContain('page=2');
       expect(call).toContain('limit=10');
     });
