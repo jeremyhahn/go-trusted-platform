@@ -1002,17 +1002,17 @@ func TestDHCPServer_FindAvailableIP_WrapAroundLoop(t *testing.T) {
 
 		// Manually create leases for .102, .103, .104 (active)
 		server.mu.Lock()
-		server.leases["mac1"] = &lease{
+		server.leases["mac1"] = &Lease{
 			MAC:       net.HardwareAddr{0x00, 0x11, 0x22, 0x33, 0x44, 0x01},
 			IP:        net.ParseIP("192.168.1.102").To4(),
 			ExpiresAt: time.Now().Add(time.Hour),
 		}
-		server.leases["mac2"] = &lease{
+		server.leases["mac2"] = &Lease{
 			MAC:       net.HardwareAddr{0x00, 0x11, 0x22, 0x33, 0x44, 0x02},
 			IP:        net.ParseIP("192.168.1.103").To4(),
 			ExpiresAt: time.Now().Add(time.Hour),
 		}
-		server.leases["mac3"] = &lease{
+		server.leases["mac3"] = &Lease{
 			MAC:       net.HardwareAddr{0x00, 0x11, 0x22, 0x33, 0x44, 0x03},
 			IP:        net.ParseIP("192.168.1.104").To4(),
 			ExpiresAt: time.Now().Add(time.Hour),
@@ -1048,19 +1048,19 @@ func TestDHCPServer_FindAvailableIP_WrapAroundLoop(t *testing.T) {
 
 		server.mu.Lock()
 		// .100 is taken
-		server.leases["mac1"] = &lease{
+		server.leases["mac1"] = &Lease{
 			MAC:       net.HardwareAddr{0x00, 0x11, 0x22, 0x33, 0x44, 0x01},
 			IP:        net.ParseIP("192.168.1.100").To4(),
 			ExpiresAt: time.Now().Add(time.Hour),
 		}
 		// .103 is taken
-		server.leases["mac2"] = &lease{
+		server.leases["mac2"] = &Lease{
 			MAC:       net.HardwareAddr{0x00, 0x11, 0x22, 0x33, 0x44, 0x02},
 			IP:        net.ParseIP("192.168.1.103").To4(),
 			ExpiresAt: time.Now().Add(time.Hour),
 		}
 		// .104 is taken
-		server.leases["mac3"] = &lease{
+		server.leases["mac3"] = &Lease{
 			MAC:       net.HardwareAddr{0x00, 0x11, 0x22, 0x33, 0x44, 0x03},
 			IP:        net.ParseIP("192.168.1.104").To4(),
 			ExpiresAt: time.Now().Add(time.Hour),
@@ -1091,17 +1091,17 @@ func TestDHCPServer_FindAvailableIP_WrapAroundLoop(t *testing.T) {
 		require.NoError(t, err)
 
 		server.mu.Lock()
-		server.leases["mac1"] = &lease{
+		server.leases["mac1"] = &Lease{
 			MAC:       net.HardwareAddr{0x00, 0x11, 0x22, 0x33, 0x44, 0x01},
 			IP:        net.ParseIP("192.168.1.100").To4(),
 			ExpiresAt: time.Now().Add(time.Hour),
 		}
-		server.leases["mac2"] = &lease{
+		server.leases["mac2"] = &Lease{
 			MAC:       net.HardwareAddr{0x00, 0x11, 0x22, 0x33, 0x44, 0x02},
 			IP:        net.ParseIP("192.168.1.101").To4(),
 			ExpiresAt: time.Now().Add(time.Hour),
 		}
-		server.leases["mac3"] = &lease{
+		server.leases["mac3"] = &Lease{
 			MAC:       net.HardwareAddr{0x00, 0x11, 0x22, 0x33, 0x44, 0x03},
 			IP:        net.ParseIP("192.168.1.102").To4(),
 			ExpiresAt: time.Now().Add(time.Hour),
@@ -1131,25 +1131,25 @@ func TestDHCPServer_FindAvailableIP_WrapAroundLoop(t *testing.T) {
 
 		server.mu.Lock()
 		// .100 is expired
-		server.leases["mac1"] = &lease{
+		server.leases["mac1"] = &Lease{
 			MAC:       net.HardwareAddr{0x00, 0x11, 0x22, 0x33, 0x44, 0x01},
 			IP:        net.ParseIP("192.168.1.100").To4(),
 			ExpiresAt: time.Now().Add(-time.Hour), // Expired
 		}
 		// .101 is active
-		server.leases["mac2"] = &lease{
+		server.leases["mac2"] = &Lease{
 			MAC:       net.HardwareAddr{0x00, 0x11, 0x22, 0x33, 0x44, 0x02},
 			IP:        net.ParseIP("192.168.1.101").To4(),
 			ExpiresAt: time.Now().Add(time.Hour),
 		}
 		// .102 is active
-		server.leases["mac3"] = &lease{
+		server.leases["mac3"] = &Lease{
 			MAC:       net.HardwareAddr{0x00, 0x11, 0x22, 0x33, 0x44, 0x03},
 			IP:        net.ParseIP("192.168.1.102").To4(),
 			ExpiresAt: time.Now().Add(time.Hour),
 		}
 		// .103 is active
-		server.leases["mac4"] = &lease{
+		server.leases["mac4"] = &Lease{
 			MAC:       net.HardwareAddr{0x00, 0x11, 0x22, 0x33, 0x44, 0x04},
 			IP:        net.ParseIP("192.168.1.103").To4(),
 			ExpiresAt: time.Now().Add(time.Hour),
@@ -1180,12 +1180,12 @@ func TestDHCPServer_FindAvailableIP_WrapAroundLoop(t *testing.T) {
 		require.NoError(t, err)
 
 		server.mu.Lock()
-		server.leases["mac1"] = &lease{
+		server.leases["mac1"] = &Lease{
 			MAC:       net.HardwareAddr{0x00, 0x11, 0x22, 0x33, 0x44, 0x01},
 			IP:        net.ParseIP("192.168.1.103").To4(),
 			ExpiresAt: time.Now().Add(time.Hour),
 		}
-		server.leases["mac2"] = &lease{
+		server.leases["mac2"] = &Lease{
 			MAC:       net.HardwareAddr{0x00, 0x11, 0x22, 0x33, 0x44, 0x02},
 			IP:        net.ParseIP("192.168.1.104").To4(),
 			ExpiresAt: time.Now().Add(time.Hour),

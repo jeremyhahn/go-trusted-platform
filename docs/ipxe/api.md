@@ -65,9 +65,9 @@ repeat any of it.
 | Extract boot files from an ISO | `ipxe.ExtractBootFiles(isoPath)` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 | Build an isolated test network | `ipxe.NewTestEnv(*TestEnvConfig, logger)`; `Setup`, `Start`, `Stop`, `Cleanup`, `TapName`, `ServerIP`, `ServerConfig`, `Network`; `ipxe.DefaultTestEnvConfig()` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
 
-**One of these is not usable from outside the package.** `IPAllocator.GetLease`
-returns the unexported `*lease`, so no external type can satisfy the interface
-even though `WithIPAllocator` accepts it. See
+`IPAllocator.GetLease` returns the exported `*Lease` (`IP`, `MAC`,
+`ExpiresAt`), so a type outside the package can implement `IPAllocator` and be
+passed to `WithIPAllocator`. See
 [engineering.md](engineering.md) §2.
 
 ---
