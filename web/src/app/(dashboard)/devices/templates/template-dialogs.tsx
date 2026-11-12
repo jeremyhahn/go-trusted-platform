@@ -195,6 +195,11 @@ export function EditTemplateDialog({
       name: formData.get('name') as string,
       description: (formData.get('description') as string) ?? '',
       role: toDeviceRole(formData.get('role')),
+      // PUT replaces the stored template: send the unedited fields back
+      // unchanged, or the server erases them.
+      tenant_id: template.tenant_id,
+      config: template.config,
+      match_rules: template.match_rules,
     });
   };
 
@@ -338,6 +343,13 @@ export function ProfileAssignmentPanel() {
         setProfileId(String(result.id));
       }
     } catch (err) {
+      setProfileId('');
+      // No matching profile is a 404 (ErrNoMatchingConfig), not an error.
+      if ((err as { status?: number }).status === 404) {
+        setFound(null);
+        return;
+      }
+      setFound(undefined);
       toast({ title: 'Config lookup failed', description: errorMessage(err), variant: 'destructive' });
     }
   };
@@ -345,7 +357,8 @@ export function ProfileAssignmentPanel() {
   const handleAssign = async () => {
     try {
       await assign.mutateAsync({
-        profileId: Number(profileId),
+        // A decimal string: generated ids exceed 2^53 and Number() rounds them.
+        profileId: profileId.trim(),
         ekSerial: ekSerial || undefined,
         macAddress: macAddress || undefined,
       });
@@ -361,7 +374,7 @@ export function ProfileAssignmentPanel() {
 
   const handleUnassign = async () => {
     try {
-      await unassign.mutateAsync(profileId);
+      await unassign.mutateAsync(profileId.trim());
       toast({
         title: 'Profile unassigned',
         description: `Profile ${profileId} is back in the unassigned pool`,
