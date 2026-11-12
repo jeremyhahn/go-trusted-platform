@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { Page, Route, Request } from '@playwright/test';
 
 /**
@@ -723,9 +724,39 @@ export interface TPMKeyOperationReply {
 
 const TPM_EK_PUBLIC = '-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEek\n-----END PUBLIC KEY-----';
 
+/** The channel binding the mocked node echoes with its quote: 32 bytes of 0xa1. */
+export const TPM_QUOTE_CHANNEL_BINDING = Buffer.alloc(32, 0xa1).toString('base64');
+
+/**
+ * boundQuoteReply answers POST /tpm/quote as the node does (#482): a
+ * TPMS_ATTEST of type TPM_ST_ATTEST_QUOTE whose extraData is
+ * SHA-256(nonce || channelBinding), with that channelBinding echoed. The
+ * page refuses any quote not bound this way.
+ */
+export function boundQuoteReply(nonceB64: string) {
+  const binding = Buffer.from(TPM_QUOTE_CHANNEL_BINDING, 'base64');
+  const extraData = createHash('sha256')
+    .update(Buffer.concat([Buffer.from(nonceB64, 'base64'), binding]))
+    .digest();
+  const attest = Buffer.alloc(10 + extraData.length + 17);
+  attest.writeUInt32BE(0xff544347, 0);
+  attest.writeUInt16BE(0x8018, 4);
+  attest.writeUInt16BE(0, 6);
+  attest.writeUInt16BE(extraData.length, 8);
+  extraData.copy(attest, 10);
+  return {
+    quote: attest.toString('base64'),
+    signature: 'c2ln',
+    signatureAlgorithm: 'ECDSA-SHA256',
+    channelBinding: TPM_QUOTE_CHANNEL_BINDING,
+  };
+}
+
 /**
  * Default answers keyed by `METHOD /path` (path below /api/v1/tpm, no query).
  * A delete keys on the handle in decimal, the SDK puts it in the path.
+ * POST /quote has no static answer: without an override it is answered by
+ * boundQuoteReply for the request's nonce.
  */
 export const defaultTPMKeyReplies: Record<string, TPMKeyOperationReply> = {
   'GET /ek': { body: { publicKey: TPM_EK_PUBLIC, handle: 0x81010001, algorithm: 'ECDSA_P256' } },
@@ -762,9 +793,6 @@ export const defaultTPMKeyReplies: Record<string, TPMKeyOperationReply> = {
         'idevid: the IAK key is TPM-resident and is not evicted by this service; nothing was deleted (delete its certificate with DeleteIAKCertificate)',
       code: 'HTTP_409',
     },
-  },
-  'POST /quote': {
-    body: { quote: 'cXVvdGU=', signature: 'c2ln', signatureAlgorithm: 'ECDSA-SHA256', channelBinding: 'Y2I=' },
   },
   'POST /quote/verify': { body: { verified: true, message: 'quote verified' } },
   'POST /certify': { body: { certifyInfo: 'aW5mbw==', signature: 'c2ln', signatureAlgorithm: 'ECDSA-SHA256' } },
@@ -814,7 +842,11 @@ export async function mockTPMKeyOperationsApi(
       return;
     }
 
-    const reply = replies[`${method} ${path}`];
+    const reply =
+      replies[`${method} ${path}`] ??
+      (method === 'POST' && path === '/quote'
+        ? { body: boundQuoteReply(String((body as { nonce?: unknown } | null)?.nonce ?? '')) }
+        : undefined);
     await route.fulfill({
       status: reply ? reply.status ?? 200 : 404,
       contentType: 'application/json',

@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { pemToBase64DER, TPMKeyOperations } from "./key-operations";
+import { parsePCRList, pemToBase64DER, TPMKeyOperations } from "./key-operations";
 
 // Codex round 2 on #1751: the EK certificate goes to the DER-only store as
 // DER, a verified:false verdict is never announced as success, and Verify
@@ -27,7 +27,50 @@ vi.mock("@/hooks", async (importOriginal) => ({
   useToast: () => ({ toast }),
 }));
 
-const QUOTE = { quote: "cXVvdGU=", signature: "c2ln", signatureAlgorithm: "ECDSA-SHA256", channelBinding: "Y2I=" };
+// The node quotes SHA-256(nonce || channelBinding) and echoes channelBinding
+// (#482); the helpers below build such a quote, as in tpm/quote/page.test.tsx.
+const callerBinding = new Uint8Array(32).fill(0xa1);
+const relayBinding = new Uint8Array(32).fill(0xb2);
+
+function b64(bytes: Uint8Array): string {
+  return btoa(String.fromCharCode(...bytes));
+}
+
+function unb64(value: string): Uint8Array {
+  return Uint8Array.from(atob(value), (c) => c.charCodeAt(0));
+}
+
+/** A TPMS_ATTEST of type TPM_ST_ATTEST_QUOTE whose extraData is given. */
+function attest(extraData: Uint8Array): Uint8Array {
+  const out = new Uint8Array(10 + extraData.length + 17);
+  const view = new DataView(out.buffer);
+  view.setUint32(0, 0xff544347);
+  view.setUint16(4, 0x8018);
+  view.setUint16(6, 0);
+  view.setUint16(8, extraData.length);
+  out.set(extraData, 10);
+  return out;
+}
+
+function boundTo(binding: Uint8Array) {
+  return async (nonce: Uint8Array) =>
+    new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array([...nonce, ...binding])));
+}
+
+/** A quote answer over `quoted(nonce)`, echoing `echo` as the channel binding. */
+function quoteAnswer(quoted: (nonce: Uint8Array) => Promise<Uint8Array>, echo?: Uint8Array) {
+  return async (req: { nonce: string }) => ({
+    success: true,
+    data: {
+      quote: b64(attest(await quoted(unb64(req.nonce)))),
+      signature: "c2ln",
+      signatureAlgorithm: "ECDSA-SHA256",
+      ...(echo ? { channelBinding: b64(echo) } : {}),
+    },
+  });
+}
+
+const boundQuote = quoteAnswer(boundTo(callerBinding), callerBinding);
 
 function click(testId: string) {
   fireEvent.click(screen.getByTestId(testId));
@@ -59,7 +102,7 @@ describe("TPMKeyOperations", () => {
   });
 
   it("announces verified:false as an invalid quote, never as success", async () => {
-    tpm.quote.mockResolvedValue({ success: true, data: QUOTE });
+    tpm.quote.mockImplementation(boundQuote);
     tpm.verifyQuote.mockResolvedValue({ success: true, data: { verified: false, message: "nonce mismatch" } });
     render(<TPMKeyOperations />);
 
@@ -78,7 +121,7 @@ describe("TPMKeyOperations", () => {
   });
 
   it("never verifies a retained quote with a failed attempt's nonce", async () => {
-    tpm.quote.mockResolvedValueOnce({ success: true, data: QUOTE });
+    tpm.quote.mockImplementationOnce(boundQuote);
     tpm.quote.mockResolvedValueOnce({ success: false, error: { message: "quote refused" } });
     tpm.verifyQuote.mockResolvedValue({ success: true, data: { verified: true, message: "ok" } });
     render(<TPMKeyOperations />);
@@ -143,5 +186,66 @@ describe("TPMKeyOperations", () => {
     expect((await screen.findByTestId("tpm-error-deleteAK")).textContent).toContain("not evicted");
     expect(screen.queryByTestId("tpm-result-deleteAK")).toBeNull();
     expect(toast).not.toHaveBeenCalledWith(expect.objectContaining({ title: "Done" }));
+  });
+
+  // Codex round 4 on #1751: the quote must be bound to the nonce and the
+  // echoed channel binding, a bad PCR list is refused before any request,
+  // and the quote is always signed by the platform IAK.
+
+  async function expectQuoteRefused() {
+    await waitFor(() => expect(tpm.quote).toHaveBeenCalledTimes(1));
+    await screen.findByTestId("tpm-error-quote");
+    expect(screen.getByTestId("tpm-op-verifyQuote")).toHaveProperty("disabled", true);
+    const descriptions = toast.mock.calls.map((c) => String((c[0] as { description?: unknown }).description));
+    expect(descriptions.some((d) => d.includes("quote succeeded"))).toBe(false);
+  }
+
+  it("refuses a quote without a channel binding", async () => {
+    tpm.quote.mockImplementation(quoteAnswer(async (nonce) => nonce));
+    render(<TPMKeyOperations />);
+
+    click("tpm-op-quote");
+    await expectQuoteRefused();
+  });
+
+  it("refuses a quote bound to another binding", async () => {
+    tpm.quote.mockImplementation(quoteAnswer(boundTo(relayBinding), callerBinding));
+    render(<TPMKeyOperations />);
+
+    click("tpm-op-quote");
+    await expectQuoteRefused();
+  });
+
+  it.each(["0,7,11x", "0 7", "24", ""])("rejects malformed PCR input %j without a request", async (input) => {
+    tpm.quote.mockImplementation(boundQuote);
+    render(<TPMKeyOperations />);
+
+    fireEvent.change(screen.getByLabelText("PCRs to quote"), { target: { value: input } });
+    click("tpm-op-quote");
+
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Invalid PCR list", variant: "destructive" })),
+    );
+    expect(tpm.quote).not.toHaveBeenCalled();
+  });
+
+  it("quotes with the platform IAK whatever the AK handle field says", async () => {
+    tpm.quote.mockImplementation(boundQuote);
+    render(<TPMKeyOperations />);
+
+    fireEvent.change(screen.getByLabelText("AK handle (Delete AK)"), { target: { value: "0x81010099" } });
+    click("tpm-op-quote");
+
+    await waitFor(() => expect(tpm.quote).toHaveBeenCalledTimes(1));
+    expect(tpm.quote.mock.calls[0]?.[0]).toMatchObject({ akHandle: 0x81010002 });
+    expect(screen.getByTestId("tpm-quote-key").textContent).toContain("platform IAK");
+  });
+
+  it("parsePCRList reads indices 0-23 and refuses anything else", () => {
+    expect(parsePCRList("0, 1,7")).toEqual([0, 1, 7]);
+    expect(parsePCRList("0,7,11x")).toBeNull();
+    expect(parsePCRList("0 7")).toBeNull();
+    expect(parsePCRList("")).toBeNull();
+    expect(parsePCRList("24")).toBeNull();
   });
 });

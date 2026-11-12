@@ -1,10 +1,12 @@
 import { test, expect, Page } from '@playwright/test';
 import { createTenantOwnerSession } from './fixtures/auth-setup';
 import {
+  boundQuoteReply,
   mockTenantApi,
   mockTPMKeyOperationsApi,
   TPMKeyOperationCall,
   TPMKeyOperationReply,
+  TPM_QUOTE_CHANNEL_BINDING,
 } from './fixtures/api-mock';
 
 /**
@@ -164,7 +166,28 @@ test.describe('TPM Keys operations', () => {
     const call = await expectCall(calls, 'POST', '/quote');
     expect(call.body).toMatchObject({ akHandle: AK_HANDLE, pcrIndices: [0, 7], pcrBank: 'PCR_BANK_SHA256' });
     expect((call.body as { nonce?: string }).nonce).toBeTruthy();
-    await expect(page.getByTestId('tpm-result-quote')).toContainText('cXVvdGU=');
+    await expect(page.getByTestId('tpm-result-quote')).toBeVisible();
+  });
+
+  test('Quote rejects a malformed PCR list', async ({ page }) => {
+    const calls = await openKeysPage(page);
+    await page.getByLabel('PCRs to quote').fill('0,7,11x');
+    await page.getByTestId('tpm-op-quote').click();
+
+    await expect(page.getByText('Invalid PCR list').first()).toBeVisible();
+    expect(findCall(calls, 'POST', '/quote')).toBeUndefined();
+    await expect(page.getByTestId('tpm-op-verifyQuote')).toBeDisabled();
+  });
+
+  test('Quote refuses an unbound answer', async ({ page }) => {
+    const calls = await openKeysPage(page, {
+      'POST /quote': { body: { quote: 'cXVvdGU=', signature: 'c2ln', signatureAlgorithm: 'ECDSA-SHA256' } },
+    });
+    await page.getByTestId('tpm-op-quote').click();
+
+    await expectCall(calls, 'POST', '/quote');
+    await expect(page.getByTestId('tpm-error-quote')).toBeVisible();
+    await expect(page.getByTestId('tpm-op-verifyQuote')).toBeDisabled();
   });
 
   test('VerifyQuote posts to /tpm/quote/verify', async ({ page }) => {
@@ -177,12 +200,16 @@ test.describe('TPM Keys operations', () => {
     await page.getByTestId('tpm-op-verifyQuote').click();
 
     const call = await expectCall(calls, 'POST', '/quote/verify');
+    // The verify request carries the bound quote the mock answered for the
+    // quote call's nonce, its channel binding and that nonce.
+    const nonce = (quoteCall.body as { nonce: string }).nonce;
+    const answered = boundQuoteReply(nonce);
     expect(call.body).toMatchObject({
-      quote: 'cXVvdGU=',
+      quote: answered.quote,
       signature: 'c2ln',
       signatureAlgorithm: 'ECDSA-SHA256',
-      channelBinding: 'Y2I=',
-      nonce: (quoteCall.body as { nonce: string }).nonce,
+      channelBinding: TPM_QUOTE_CHANNEL_BINDING,
+      nonce,
     });
     await expect(page.getByTestId('tpm-result-verifyQuote')).toContainText('quote verified');
   });
