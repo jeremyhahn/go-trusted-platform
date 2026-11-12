@@ -471,6 +471,103 @@ export async function mockAllApis(
   return { invitation, tenant };
 }
 
+// =============================================================================
+// SDN bridge, port and policy mocks (#1745)
+// =============================================================================
+
+/** One request the SDN mock answered; `path` is relative to /api/v1/sdn. */
+export interface SdnApiCall {
+  method: string;
+  path: string;
+  body: unknown;
+}
+
+export const SDN_MOCK_BRIDGE = {
+  id: 'br-1',
+  config: { name: 'br-int', type: 'BRIDGE_TYPE_OVS' },
+  status: 'BRIDGE_STATUS_UP',
+  createdAt: '2026-11-01T00:00:00Z',
+  updatedAt: '2026-11-01T00:00:00Z',
+};
+
+export const SDN_MOCK_PORT = {
+  id: 'p-1',
+  bridgeId: 'br-1',
+  config: { name: 'eth1' },
+  status: 'PORT_STATUS_UP',
+  auth: { authenticated: false },
+};
+
+export const SDN_MOCK_POLICY = {
+  id: 'pol-1',
+  config: {
+    name: 'deny-telnet',
+    description: 'Drop telnet',
+    type: 'POLICY_TYPE_ACL',
+    rules: [{ ruleId: 'r1' }],
+  },
+  status: 'POLICY_STATUS_ACTIVE',
+  hitCount: '42',
+};
+
+/**
+ * Mock the SDN bridge br-1, its port p-1 and the policy pol-1 under
+ * /api/v1/sdn. Returns the list of calls the mock answered, so a test can
+ * assert the method, path and body the page sent.
+ */
+export async function mockSdnBridgeApi(page: Page): Promise<SdnApiCall[]> {
+  const calls: SdnApiCall[] = [];
+  await page.route('**/api/v1/sdn/**', async (route: Route) => {
+    const request = route.request();
+    const method = request.method();
+    const path = new URL(request.url()).pathname.replace(/^.*\/api\/v1\/sdn/, '');
+    let body: unknown = null;
+    try {
+      body = request.postDataJSON();
+    } catch {
+      body = request.postData();
+    }
+    calls.push({ method, path, body });
+
+    const reply = (data: unknown, status = 200) =>
+      route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(data) });
+    const portPath = '/bridges/br-1/ports/p-1';
+
+    if (path === '/bridges' && method === 'GET') return reply({ bridges: [SDN_MOCK_BRIDGE] });
+    if (path === '/bridges/br-1' && method === 'GET') return reply({ bridge: SDN_MOCK_BRIDGE });
+    if (path === '/bridges/br-1' && method === 'DELETE') return reply({ status: { success: true } });
+    if (path === '/bridges/br-1/ports' && method === 'GET') return reply({ ports: [SDN_MOCK_PORT] });
+    if (path === '/bridges/br-1/flows' && method === 'GET') return reply({ flows: [] });
+    if (path === `${portPath}/state` && method === 'GET') return reply({ port: SDN_MOCK_PORT });
+    if (path === `${portPath}/state` && method === 'PUT') {
+      return reply({ status: { success: true }, port: { ...SDN_MOCK_PORT, status: 'PORT_STATUS_DOWN' } });
+    }
+    if (path === `${portPath}/stats` && method === 'GET') {
+      return reply({
+        stats: {
+          packetsReceived: '1234',
+          packetsSent: '567',
+          bytesReceived: '89000',
+          bytesSent: '4500',
+          errors: '3',
+          dropped: '7',
+        },
+      });
+    }
+    if (path === `${portPath}/auth` && method === 'POST') {
+      return reply({ status: { success: true }, auth: { authenticated: true } });
+    }
+    if (path === `${portPath}/auth` && method === 'DELETE') return reply({ status: { success: true } });
+    if (path === '/policies' && method === 'GET') return reply({ policies: [SDN_MOCK_POLICY] });
+    if (path === '/policies' && method === 'POST') {
+      return reply({ status: { success: true }, policy: { id: 'pol-2' } }, 201);
+    }
+    if (path === '/policies/pol-1' && method === 'GET') return reply({ policy: SDN_MOCK_POLICY });
+    return reply({ message: `unmocked ${method} ${path}`, code: 'NOT_FOUND' }, 404);
+  });
+  return calls;
+}
+
 /**
  * Create a mock WebAuthn registration flow.
  * Mocks the registration begin and finish endpoints.

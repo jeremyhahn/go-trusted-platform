@@ -1,94 +1,15 @@
-import { test, expect, Page, Route } from '@playwright/test';
+import { test, expect, Page } from '@playwright/test';
 import { createTenantOwnerSession } from './fixtures/auth-setup';
-import { mockTenantApi } from './fixtures/api-mock';
+import { mockTenantApi, mockSdnBridgeApi, SdnApiCall } from './fixtures/api-mock';
 
 /**
  * SDN bridge detail, port state, port auth, port stats and policies (#1745).
- * Every operation is driven from /networking/sdn/[bridge] with mocked API responses.
+ * Every operation is driven from /networking/sdn/[bridge] with the mocked
+ * API responses of mockSdnBridgeApi (bridge br-1, port p-1, policy pol-1).
  */
 
-interface Call {
-  method: string;
-  path: string;
-  body: unknown;
-}
-
-const BRIDGE = {
-  id: 'br-1',
-  config: { name: 'br-int', type: 'BRIDGE_TYPE_OVS' },
-  status: 'BRIDGE_STATUS_UP',
-  createdAt: '2026-11-01T00:00:00Z',
-  updatedAt: '2026-11-01T00:00:00Z',
-};
-
-const PORT = {
-  id: 'p-1',
-  bridgeId: 'br-1',
-  config: { name: 'eth1' },
-  status: 'PORT_STATUS_UP',
-  auth: { authenticated: false },
-};
-
-const POLICY = {
-  id: 'pol-1',
-  config: { name: 'deny-telnet', description: 'Drop telnet', type: 'POLICY_TYPE_ACL', rules: [{ ruleId: 'r1' }] },
-  status: 'POLICY_STATUS_ACTIVE',
-  hitCount: '42',
-};
-
-async function mockSdnApi(page: Page): Promise<Call[]> {
-  const calls: Call[] = [];
-  await page.route('**/api/v1/sdn/**', async (route: Route) => {
-    const request = route.request();
-    const method = request.method();
-    const path = new URL(request.url()).pathname.replace(/^.*\/api\/v1\/sdn/, '');
-    let body: unknown = null;
-    try {
-      body = request.postDataJSON();
-    } catch {
-      body = request.postData();
-    }
-    calls.push({ method, path, body });
-
-    const reply = (data: unknown, status = 200) =>
-      route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(data) });
-
-    if (path === '/bridges' && method === 'GET') return reply({ bridges: [BRIDGE] });
-    if (path === '/bridges/br-1' && method === 'GET') return reply({ bridge: BRIDGE });
-    if (path === '/bridges/br-1' && method === 'DELETE') return reply({ status: { success: true } });
-    if (path === '/bridges/br-1/ports' && method === 'GET') return reply({ ports: [PORT] });
-    if (path === '/bridges/br-1/flows' && method === 'GET') return reply({ flows: [] });
-    if (path === '/bridges/br-1/ports/p-1/state' && method === 'GET') return reply({ port: PORT });
-    if (path === '/bridges/br-1/ports/p-1/state' && method === 'PUT') {
-      return reply({ status: { success: true }, port: { ...PORT, status: 'PORT_STATUS_DOWN' } });
-    }
-    if (path === '/bridges/br-1/ports/p-1/stats' && method === 'GET') {
-      return reply({
-        stats: {
-          packetsReceived: '1234',
-          packetsSent: '567',
-          bytesReceived: '89000',
-          bytesSent: '4500',
-          errors: '3',
-          dropped: '7',
-        },
-      });
-    }
-    if (path === '/bridges/br-1/ports/p-1/auth' && method === 'POST') {
-      return reply({ status: { success: true }, auth: { authenticated: true } });
-    }
-    if (path === '/bridges/br-1/ports/p-1/auth' && method === 'DELETE') {
-      return reply({ status: { success: true } });
-    }
-    if (path === '/policies' && method === 'GET') return reply({ policies: [POLICY] });
-    if (path === '/policies' && method === 'POST') {
-      return reply({ status: { success: true }, policy: { id: 'pol-2' } }, 201);
-    }
-    if (path === '/policies/pol-1' && method === 'GET') return reply({ policy: POLICY });
-    return reply({ message: `unmocked ${method} ${path}`, code: 'NOT_FOUND' }, 404);
-  });
-  return calls;
-}
+type Call = SdnApiCall;
+const mockSdnApi = mockSdnBridgeApi;
 
 function called(calls: Call[], method: string, path: string): Call | undefined {
   return calls.find((c) => c.method === method && c.path === path);
@@ -189,7 +110,7 @@ test.describe('SDN bridge detail and ports', () => {
     const calls = await openBridge(page);
     await page.getByRole('button', { name: 'Apply Policy' }).click();
     await page.getByLabel('Name *').fill('allow-ssh');
-    await page.getByLabel('Type').selectOption('POLICY_TYPE_FIREWALL');
+    await page.getByLabel('Type', { exact: true }).selectOption('POLICY_TYPE_FIREWALL');
     await page.getByRole('button', { name: 'Apply', exact: true }).click();
     await expect.poll(() => called(calls, 'POST', '/policies')?.body).toEqual({
       config: { name: 'allow-ssh', type: 'POLICY_TYPE_FIREWALL', enabled: true },
