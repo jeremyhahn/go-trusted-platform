@@ -307,8 +307,8 @@ export class IAMService extends BaseService {
    */
   async addGroupMember(request: AddGroupMemberRequest): Promise<ApiResponse<AddGroupMemberResponse>> {
     return this.client.post<AddGroupMemberResponse>(
-      this.buildUrl(`/tenants/${this.encodePathSegment(request.tenantId)}/groups/${this.encodePathSegment(request.groupId)}/members`),
-      { userId: request.userId }
+      this.buildUrl(`/tenants/${this.encodePathSegment(request.tenantId)}/groups/${this.encodePathSegment(request.groupId)}/members/${this.encodePathSegment(request.userId)}`),
+      {}
     );
   }
 
@@ -336,7 +336,10 @@ export class IAMService extends BaseService {
    * Check permission
    */
   async checkPermission(request: CheckIAMPermissionRequest): Promise<ApiResponse<CheckIAMPermissionResponse>> {
-    return this.client.post<CheckIAMPermissionResponse>(this.buildUrl('/auth/check'), request);
+    return this.client.post<CheckIAMPermissionResponse>(
+      this.buildUrl(`/tenants/${this.encodePathSegment(request.tenantId)}/permissions/check`),
+      request
+    );
   }
 
   /**
