@@ -359,7 +359,7 @@ describe('useApi', () => {
       const fetcher = vi.fn(() => Promise.resolve(ok('on')));
       const { result, rerender } = renderHook(
         (enabled: boolean) => useApi(fetcher, [], { enabled }),
-        false
+        false as boolean
       );
       await flush();
       expect(fetcher).not.toHaveBeenCalled();
@@ -404,7 +404,7 @@ describe('useApi', () => {
       const fetcher = vi.fn((id: string) => Promise.resolve(ok(`item-${id}`)));
       const { result, rerender } = renderHook(
         (id: string) => useApi(() => fetcher(id), [id]),
-        'a'
+        'a' as string
       );
       await flush();
       expect(fetcher).toHaveBeenCalledTimes(1);
