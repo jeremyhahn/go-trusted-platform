@@ -703,3 +703,182 @@ export async function mockInvitationValidation(
     });
   });
 }
+
+/**
+ * Calls the container-ops mock recorded, so a test can assert the page
+ * sent the request the operation needs.
+ */
+export interface ContainerOpsCalls {
+  getContainer: number;
+  getMetrics: number;
+  exec: unknown[];
+  attest: unknown[];
+  vmAttest: unknown[];
+  vmVerify: unknown[];
+}
+
+export interface ContainerOpsMockConfig {
+  containerId?: string;
+  containerName?: string;
+  vmId?: string;
+  vmName?: string;
+  /** Base64 stdout the exec mock answers. */
+  execStdout?: string;
+  execExitCode?: number;
+  /** Verified flag the VM verify mock answers. */
+  vmVerified?: boolean;
+}
+
+/**
+ * Mock the container detail operations of #1721 and the VM attest/verify
+ * round trip:
+ *
+ * - GET  /api/v1/compute/containers/:id          - GetContainer
+ * - GET  /api/v1/compute/containers/:id/metrics  - GetContainerMetrics
+ * - POST /api/v1/compute/containers/:id/exec     - ExecContainer
+ * - POST /api/v1/compute/containers/:id/attest   - AttestContainer
+ * - GET  /api/v1/compute/vms/:id                 - GetVM (detail page load)
+ * - POST /api/v1/compute/vms/:id/attest          - AttestVM
+ * - POST /api/v1/compute/vms/:id/attest/verify   - VerifyVMAttestation
+ */
+export async function mockContainerOpsApi(
+  page: Page,
+  config: ContainerOpsMockConfig = {}
+): Promise<ContainerOpsCalls> {
+  const containerId = config.containerId || 'ctr-1';
+  const vmId = config.vmId || 'vm-1';
+  const now = new Date().toISOString();
+  const calls: ContainerOpsCalls = {
+    getContainer: 0,
+    getMetrics: 0,
+    exec: [],
+    attest: [],
+    vmAttest: [],
+    vmVerify: [],
+  };
+  const json = (route: Route, body: unknown) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+
+  await page.route('**/api/v1/compute/containers/**', async (route: Route, request: Request) => {
+    const path = new URL(request.url()).pathname.replace(/\/+$/, '');
+    const match = path.match(/\/containers\/([^/]+)(?:\/(\w+))?$/);
+    if (!match || decodeURIComponent(match[1]) !== containerId) {
+      await route.fallback();
+      return;
+    }
+    const op = match[2];
+    const method = request.method();
+    if (method === 'GET' && !op) {
+      calls.getContainer++;
+      await json(route, {
+        container: {
+          id: containerId,
+          config: { name: config.containerName || 'web-frontend', image: 'nginx:1.27' },
+          state: 'CONTAINER_STATE_RUNNING',
+          createdAt: now,
+          startedAt: now,
+          hostId: 'host-a',
+        },
+      });
+      return;
+    }
+    if (method === 'GET' && op === 'metrics') {
+      calls.getMetrics++;
+      await json(route, {
+        metrics: {
+          cpuUsagePercent: 12.5,
+          memoryUsedMb: 256,
+          memoryLimitMb: 512,
+          diskReadBytes: 1024,
+          diskWriteBytes: 2048,
+          networkRxBytes: 4096,
+          networkTxBytes: 8192,
+          uptimeSeconds: 3600,
+        },
+      });
+      return;
+    }
+    if (method === 'POST' && op === 'exec') {
+      calls.exec.push(request.postDataJSON());
+      await json(route, {
+        status: { success: true },
+        exitCode: config.execExitCode ?? 0,
+        stdout: config.execStdout ?? Buffer.from('hello from container\n').toString('base64'),
+      });
+      return;
+    }
+    if (method === 'POST' && op === 'attest') {
+      calls.attest.push(request.postDataJSON());
+      await json(route, {
+        status: { success: true },
+        quote: 'cXVvdGU=',
+        signature: 'c2ln',
+        pcrValues: [{ index: 0, value: 'AAAA' }],
+        containerId,
+        imageDigest: 'aW1hZ2UtZGlnZXN0',
+        configDigest: 'Y29uZmlnLWRpZ2VzdA==',
+        verified: true,
+        timestamp: now,
+      });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await page.route('**/api/v1/compute/vms/**', async (route: Route, request: Request) => {
+    const path = new URL(request.url()).pathname.replace(/\/+$/, '');
+    const match = path.match(/\/vms\/([^/]+)((?:\/\w+)*)$/);
+    if (!match || decodeURIComponent(match[1]) !== vmId) {
+      await route.fallback();
+      return;
+    }
+    const op = match[2];
+    const method = request.method();
+    if (method === 'GET' && op === '') {
+      await json(route, {
+        vm: {
+          id: vmId,
+          name: config.vmName || 'build-vm',
+          state: 'VM_STATE_RUNNING',
+          vcpus: 2,
+          memoryMB: 2048,
+          storageMB: 20480,
+          osType: 'linux',
+          createdAt: now,
+          snapshots: [],
+          metrics: {
+            cpuUsagePercent: 10,
+            memoryUsagePercent: 20,
+            diskUsagePercent: 30,
+            networkInMbps: 1,
+            networkOutMbps: 2,
+          },
+        },
+      });
+      return;
+    }
+    if (method === 'POST' && op === '/attest') {
+      calls.vmAttest.push(request.postDataJSON());
+      await json(route, {
+        status: { success: true },
+        quote: 'cXVvdGU=',
+        signature: 'c2ln',
+        signatureAlgorithm: 'SHA256-RSAPSS',
+      });
+      return;
+    }
+    if (method === 'POST' && op === '/attest/verify') {
+      calls.vmVerify.push(request.postDataJSON());
+      const verified = config.vmVerified ?? true;
+      await json(route, {
+        status: { success: true },
+        verified,
+        message: verified ? 'quote signature and PCRs match' : 'PCR mismatch',
+      });
+      return;
+    }
+    await route.fallback();
+  });
+
+  return calls;
+}
