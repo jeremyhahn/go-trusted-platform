@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -70,12 +71,41 @@ func NewServer(tlsConf *tls.Config, logger *slog.Logger) (*Server, error) {
 		logger = slog.New(slog.DiscardHandler)
 	}
 	conf := tlsConf.Clone()
+	conf.GetConfigForClient = nil
+	hardenServerConfig(conf, tlsConf.ClientCAs)
+	if perClient := tlsConf.GetConfigForClient; perClient != nil {
+		base := conf.Clone()
+		conf.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+			c, err := perClient(hello)
+			if err != nil {
+				return nil, err
+			}
+			if c == nil {
+				return base, nil
+			}
+			c = c.Clone()
+			c.GetConfigForClient = nil
+			if len(c.Certificates) == 0 && c.GetCertificate == nil {
+				c.Certificates = base.Certificates
+				c.GetCertificate = base.GetCertificate
+			}
+			hardenServerConfig(c, base.ClientCAs)
+			return c, nil
+		}
+	}
+	return &Server{tlsConf: conf, logger: logger}, nil
+}
+
+// hardenServerConfig forces the agent's TLS policy on conf: TLS 1.3 only,
+// a client certificate verified against clientCAs, the agent ALPN and the
+// FIPS curves. A per-client configuration gets the same policy.
+func hardenServerConfig(conf *tls.Config, clientCAs *x509.CertPool) {
 	conf.MinVersion = tls.VersionTLS13
 	conf.MaxVersion = tls.VersionTLS13
 	conf.ClientAuth = tls.RequireAndVerifyClientCert
+	conf.ClientCAs = clientCAs
 	conf.NextProtos = []string{ALPN}
 	conf.CurvePreferences = fipsCurves
-	return &Server{tlsConf: conf, logger: logger}, nil
 }
 
 // Serve accepts deployer connections on pc until ctx ends or Close is
