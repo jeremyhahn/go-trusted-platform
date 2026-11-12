@@ -116,6 +116,25 @@ async function call(path: string, init?: RequestInit): Promise<unknown> {
  * allocate and release an IP. The web service takes the withdraw prefix and
  * the release IP as query parameters.
  */
+interface GatewayBgpData {
+  peers: GatewayBGPPeer[];
+  prefixes: GatewayAnnouncedPrefix[];
+  allocations: GatewayIPAllocation[];
+}
+
+async function fetchGatewayBgp(): Promise<GatewayBgpData> {
+  const [p, x, a] = await Promise.all([
+    call('/bgp/peers'),
+    call('/bgp/prefixes'),
+    call('/ipam/allocations'),
+  ]);
+  return {
+    peers: list(p, 'peers').map(toPeer),
+    prefixes: list(x, 'prefixes').map(toPrefix),
+    allocations: list(a, 'allocations').map(toAllocation),
+  };
+}
+
 export function useGatewayBgp(): UseGatewayBgpResult {
   const [peers, setPeers] = React.useState<GatewayBGPPeer[]>([]);
   const [prefixes, setPrefixes] = React.useState<GatewayAnnouncedPrefix[]>([]);
@@ -123,28 +142,43 @@ export function useGatewayBgp(): UseGatewayBgpResult {
   const [isLoading, setIsLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
 
-  const refetch = React.useCallback(async () => {
-    setIsLoading(true);
+  const apply = React.useCallback((d: GatewayBgpData) => {
+    setPeers(d.peers);
+    setPrefixes(d.prefixes);
+    setAllocations(d.allocations);
     setError(null);
-    try {
-      const [p, x, a] = await Promise.all([
-        call('/bgp/peers'),
-        call('/bgp/prefixes'),
-        call('/ipam/allocations'),
-      ]);
-      setPeers(list(p, 'peers').map(toPeer));
-      setPrefixes(list(x, 'prefixes').map(toPrefix));
-      setAllocations(list(a, 'allocations').map(toAllocation));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setIsLoading(false);
-    }
+    setIsLoading(false);
   }, []);
 
+  const fail = React.useCallback((e: unknown) => {
+    setError(e instanceof Error ? e.message : String(e));
+    setIsLoading(false);
+  }, []);
+
+  const refetch = React.useCallback(async () => {
+    setIsLoading(true);
+    try {
+      apply(await fetchGatewayBgp());
+    } catch (e) {
+      fail(e);
+    }
+  }, [apply, fail]);
+
+  // The mount fetch sets state only from the promise's callbacks.
   React.useEffect(() => {
-    void refetch();
-  }, [refetch]);
+    let live = true;
+    fetchGatewayBgp().then(
+      (d) => {
+        if (live) apply(d);
+      },
+      (e: unknown) => {
+        if (live) fail(e);
+      }
+    );
+    return () => {
+      live = false;
+    };
+  }, [apply, fail]);
 
   const announcePrefix = React.useCallback(
     async (prefix: string, nextHop: string) => {
