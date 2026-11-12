@@ -35,12 +35,11 @@ async function mockCollectApi(page: Page) {
       await route.fulfill({ status: 200, contentType: 'application/json', body: envelope({ status: { success: true }, attestation: { hostId: 'host-under-test' } }) });
       return;
     }
-    if (method === 'POST' && path.startsWith('/vm/')) {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: envelope({ vm_id: decodeURIComponent(path.slice(4)), host_id: 'host-under-test', verified: true, quote_data: 'cQ==', signature: 'cw==', signature_algorithm: 'RSASSA' }) });
-      return;
-    }
-    if (method === 'POST' && path.startsWith('/container/')) {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: envelope({ container_id: decodeURIComponent(path.slice(11)), verified: true, digest: 'sha256:abc', pcr_value: 'cA==' }) });
+    // The production service answers every VM and container collect with
+    // ErrTPMSessionNotConfigured (#1747 Codex round 2); mock that, not success.
+    if (method === 'POST' && (path.startsWith('/vm/') || path.startsWith('/container/'))) {
+      const op = path.startsWith('/vm/') ? 'CollectVMAttestation' : 'CollectContainerAttestation';
+      await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ success: false, error: { code: 500, message: `attestation/service: ${op} requires a daemon-managed TPM session which is not configured` } }) });
       return;
     }
     if (method === 'POST' && path === '/manifests/verify') {
@@ -113,26 +112,16 @@ test.describe('Attestation collect and manifests (#1732)', () => {
     expect(nonce.length).toBeGreaterThan(0);
   });
 
-  test('CollectVMAttestation: POST /vm/{id} shows the result', async ({ page }) => {
+  test('CollectVMAttestation and CollectContainerAttestation are gated as unavailable', async ({ page }) => {
     const calls = await openCollectPage(page);
-    await page.getByLabel('VM ID').fill('vm-7');
-    await page.getByRole('button', { name: 'Collect VM attestation' }).click();
 
-    const result = page.getByTestId('collect-result');
-    await expect(result).toContainText('VM attestation');
-    await expect(result).toContainText('vm-7');
-    expect(calls.find((c) => c.path === '/vm/vm-7')?.method).toBe('POST');
-  });
-
-  test('CollectContainerAttestation: POST /container/{id} shows the result', async ({ page }) => {
-    const calls = await openCollectPage(page);
-    await page.getByLabel('Container ID').fill('ctr-9');
-    await page.getByRole('button', { name: 'Collect container attestation' }).click();
-
-    const result = page.getByTestId('collect-result');
-    await expect(result).toContainText('Container attestation');
-    await expect(result).toContainText('ctr-9');
-    expect(calls.find((c) => c.path === '/container/ctr-9')?.method).toBe('POST');
+    await expect(page.getByTestId('workload-collect-unavailable')).toContainText('not available');
+    await expect(page.getByLabel('VM ID')).toBeDisabled();
+    await expect(page.getByLabel('Container ID')).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Collect VM attestation' })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Collect container attestation' })).toBeDisabled();
+    await expect(page.getByTestId('collect-result')).toHaveCount(0);
+    expect(calls.filter((c) => c.path.startsWith('/vm/') || c.path.startsWith('/container/'))).toHaveLength(0);
   });
 
   test('the sidebar lists the collect page', async ({ page }) => {
