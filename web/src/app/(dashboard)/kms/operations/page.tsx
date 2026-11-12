@@ -119,6 +119,7 @@ export default function KmsOperationsPage() {
   const [vData, setVData] = React.useState("");
   const [vMac, setVMac] = React.useState("");
   const [vResult, setVResult] = React.useState<string | null>(null);
+  const vSeq = React.useRef(0);
 
   // Random and data keys
   const [randomBytes, setRandomBytes] = React.useState("32");
@@ -169,10 +170,19 @@ export default function KmsOperationsPage() {
   };
 
   const onVerifyHmac = async () => {
+    // A verdict describes one set of inputs: drop the old one before asking
+    // again, and ignore a response once the inputs (or a newer request) moved on.
+    const seq = ++vSeq.current;
+    setVResult(null);
     const res = await ops.verifyHmac(vKey, vData, vMac);
-    if (res !== null) {
+    if (res !== null && vSeq.current === seq) {
       setVResult(res ? "HMAC valid" : "HMAC invalid");
     }
+  };
+  const editVerifyInput = (set: (v: string) => void) => (v: string) => {
+    set(v);
+    vSeq.current++;
+    setVResult(null);
   };
 
   const onRandom = async () => {
@@ -315,9 +325,9 @@ export default function KmsOperationsPage() {
           description="Check an HMAC (base64) against the data"
           result={vResult}
         >
-          <Field id="verify-hmac-key" label="Key name" value={vKey} onChange={setVKey} />
-          <Field id="verify-hmac-data" label="Data" value={vData} onChange={setVData} />
-          <Field id="verify-hmac-mac" label="HMAC (base64)" value={vMac} onChange={setVMac} />
+          <Field id="verify-hmac-key" label="Key name" value={vKey} onChange={editVerifyInput(setVKey)} />
+          <Field id="verify-hmac-data" label="Data" value={vData} onChange={editVerifyInput(setVData)} />
+          <Field id="verify-hmac-mac" label="HMAC (base64)" value={vMac} onChange={editVerifyInput(setVMac)} />
           <Button onClick={onVerifyHmac} disabled={ops.busy || !vKey || !vData || !vMac}>
             Verify HMAC
           </Button>
