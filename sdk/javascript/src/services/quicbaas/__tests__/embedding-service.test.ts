@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EmbeddingService } from '../embedding-service.js';
 import type { ApiClient } from '../../../client/api-client.js';
 import type { ApiResponse } from '../../../types/api.js';
+import type { EmbeddingProvider } from '../../../types/quicbaas/ai-ml.js';
 
 // Mock ApiClient
 function createMockApiClient(): ApiClient {
@@ -316,7 +317,7 @@ describe('EmbeddingService', () => {
 
       await service.listProviders({ configuredOnly: true, activeOnly: true });
 
-      const call = vi.mocked(mockClient.get).mock.calls[0][0];
+      const call = vi.mocked(mockClient.get).mock.calls[0]![0];
       expect(call).toContain('configuredOnly=true');
       expect(call).toContain('activeOnly=true');
     });
@@ -365,7 +366,7 @@ describe('EmbeddingService', () => {
       const result = await service.getProviderInfo({ provider: 'OPENAI' });
 
       expect(result.success).toBe(true);
-      expect(result.data?.provider.name).toBe('OPENAI');
+      expect(result.data?.provider).toMatchObject({ name: 'OPENAI' });
       expect(mockClient.get).toHaveBeenCalledWith('/v1/quicbaas/embedding/providers/OPENAI');
     });
 
@@ -376,7 +377,7 @@ describe('EmbeddingService', () => {
       };
       vi.mocked(mockClient.get).mockResolvedValue(mockResponse);
 
-      const result = await service.getProviderInfo({ provider: 'UNKNOWN' });
+      const result = await service.getProviderInfo({ provider: 'UNKNOWN' as EmbeddingProvider });
 
       expect(result.success).toBe(false);
       expect(result.error?.code).toBe('NOT_FOUND');
@@ -389,7 +390,7 @@ describe('EmbeddingService', () => {
       };
       vi.mocked(mockClient.get).mockResolvedValue(mockResponse);
 
-      await service.getProviderInfo({ provider: 'CUSTOM_PROVIDER' });
+      await service.getProviderInfo({ provider: 'CUSTOM_PROVIDER' as EmbeddingProvider });
 
       expect(mockClient.get).toHaveBeenCalledWith('/v1/quicbaas/embedding/providers/CUSTOM_PROVIDER');
     });
