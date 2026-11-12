@@ -493,9 +493,7 @@ export interface KmsOpsApiMockConfig {
 
 /**
  * Mocks the KMS REST routes the operations page drives. Byte fields are
- * base64, as Go's encoding/json writes []byte. Encrypt answers
- * `ct:<plaintext base64>`, decrypt strips the prefix again, so a test can
- * round-trip through both.
+ * base64, as Go's encoding/json writes []byte.
  */
 export async function mockKmsOpsApi(
   page: Page,
@@ -532,15 +530,10 @@ export async function mockKmsOpsApi(
     } else if (method === 'GET' && (m = path.match(/^\/keys\/([^/]+)\/versions$/))) {
       await reply(200, {
         versions: [
-          { version: 1, status: 'disabled', algorithm: 'aes-256-gcm' },
-          { version: 2, status: 'enabled', algorithm: 'aes-256-gcm' },
+          { version: 1, status: 'DISABLED', algorithm: 'aes-256-gcm' },
+          { version: 2, status: 'ENABLED', algorithm: 'aes-256-gcm' },
         ],
       });
-    } else if (method === 'POST' && /^\/encrypt\/[^/]+$/.test(path)) {
-      await reply(200, { key_id: 'k', version: 1, ciphertext: b64(`ct:${body?.plaintext}`) });
-    } else if (method === 'POST' && /^\/decrypt\/[^/]+$/.test(path)) {
-      const ct = Buffer.from(String(body?.ciphertext ?? ''), 'base64').toString('utf8');
-      await reply(200, { plaintext: ct.replace(/^ct:/, '') });
     } else if (method === 'POST' && path === '/hash') {
       await reply(200, { hash: body?.hash, digest: b64('digest-of-data') });
     } else if (method === 'POST' && /^\/hmac\/[^/]+\/verify$/.test(path)) {

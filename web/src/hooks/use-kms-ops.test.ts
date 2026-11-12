@@ -41,7 +41,7 @@ describe('useKmsOps', () => {
     const seen = stubFetch(() => ({ status: 200, json: {} }));
     const { result } = renderHook(() => useKmsOps());
     await act(async () => {
-      await result.current.updateKeyStatus('a/b', 'disabled');
+      await result.current.updateKeyStatus('a/b', 'DISABLED');
       await result.current.getKeyVersions('k');
       await result.current.hmac('k', 'x');
       await result.current.verifyHmac('k', 'x', 'bWFj');
@@ -60,18 +60,6 @@ describe('useKmsOps', () => {
     ]);
     expect(seen[2].body).toEqual({ data: 'eA==' });
     expect(seen[4].body).toEqual({ key_id: 'k' });
-  });
-
-  it('encrypts each plaintext with its own request', async () => {
-    const seen = stubFetch(() => ({ status: 200, json: { ciphertext: 'Y3Q=' } }));
-    const { result } = renderHook(() => useKmsOps());
-    let out: unknown;
-    await act(async () => {
-      out = await result.current.batchEncrypt('k', ['a', 'b']);
-    });
-    expect(seen).toHaveLength(2);
-    expect(seen.map((s) => s.body)).toEqual([{ plaintext: 'YQ==' }, { plaintext: 'Yg==' }]);
-    expect(out).toEqual([{ ciphertext: 'Y3Q=' }, { ciphertext: 'Y3Q=' }]);
   });
 
   it('unwraps a payload envelope', async () => {

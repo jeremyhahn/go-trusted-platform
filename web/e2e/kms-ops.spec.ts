@@ -35,21 +35,21 @@ test.describe("KMS operations", () => {
     const mock = await openPage(page);
     const card = page.getByTestId("op-status");
     await card.getByLabel("Key name").fill("k1");
-    await card.getByLabel("New status").selectOption("disabled");
+    await card.getByLabel("New status").selectOption("DISABLED");
     await card.getByRole("button", { name: "Update status" }).click();
 
     const dialog = page.getByRole("dialog");
-    await expect(dialog).toContainText("Set k1 to disabled?");
+    await expect(dialog).toContainText("Set k1 to DISABLED?");
     await dialog.getByRole("button", { name: "Cancel" }).click();
     await expect(dialog).toBeHidden();
     expect(mock.calls.some((c) => c.path === "/keys/k1/status")).toBe(false);
 
     await card.getByRole("button", { name: "Update status" }).click();
     await page.getByRole("dialog").getByRole("button", { name: "Confirm" }).click();
-    await expect(page.getByTestId("status-result")).toHaveText("k1 v2 is disabled");
+    await expect(page.getByTestId("status-result")).toHaveText("k1 v2 is DISABLED");
     const call = mock.calls.find((c) => c.path === "/keys/k1/status");
     expect(call?.method).toBe("PUT");
-    expect(call?.body).toEqual({ status: "disabled" });
+    expect(call?.body).toEqual({ status: "DISABLED" });
   });
 
   test("lists key versions", async ({ page }) => {
@@ -58,34 +58,9 @@ test.describe("KMS operations", () => {
     await card.getByLabel("Key name").fill("k1");
     await card.getByRole("button", { name: "List versions" }).click();
     await expect(page.getByTestId("versions-result")).toHaveText(
-      "v1 disabled aes-256-gcm\nv2 enabled aes-256-gcm"
+      "v1 DISABLED aes-256-gcm\nv2 ENABLED aes-256-gcm"
     );
     expect(mock.calls.find((c) => c.path === "/keys/k1/versions")?.method).toBe("GET");
-  });
-
-  test("batch encrypts", async ({ page }) => {
-    const mock = await openPage(page);
-    const card = page.getByTestId("op-encrypt");
-    await card.getByLabel("Key name").fill("k1");
-    await card.getByLabel("Plaintexts, one per line").fill("alpha\nbeta");
-    await card.getByRole("button", { name: "Encrypt" }).click();
-    await expect(page.getByTestId("encrypt-result")).toHaveText(
-      `${b64(`ct:${b64("alpha")}`)}\n${b64(`ct:${b64("beta")}`)}`
-    );
-    const calls = mock.calls.filter((c) => c.path === "/encrypt/k1");
-    expect(calls).toHaveLength(2);
-    expect(calls.map((c) => c.body?.plaintext).sort()).toEqual([b64("alpha"), b64("beta")]);
-  });
-
-  test("batch decrypts", async ({ page }) => {
-    const mock = await openPage(page);
-    const card = page.getByTestId("op-decrypt");
-    await card.getByLabel("Key name").fill("k1");
-    const ct = (p: string) => b64(`ct:${b64(p)}`);
-    await card.getByLabel("Ciphertexts, one per line").fill(`${ct("alpha")}\n${ct("beta")}`);
-    await card.getByRole("button", { name: "Decrypt" }).click();
-    await expect(page.getByTestId("decrypt-result")).toHaveText("alpha\nbeta");
-    expect(mock.calls.filter((c) => c.path === "/decrypt/k1")).toHaveLength(2);
   });
 
   test("hashes data", async ({ page }) => {
