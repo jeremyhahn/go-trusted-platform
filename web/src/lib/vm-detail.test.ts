@@ -59,6 +59,34 @@ describe('toVMDetail', () => {
     expect(vm.metrics.memoryUsagePercent).toBe(25);
   });
 
+  it('maps protojson uint64 strings', () => {
+    const vm = toVMDetail({
+      ...protoVM,
+      config: {
+        ...protoVM.config,
+        memory: { sizeMb: '4096' },
+        disks: [
+          { path: 'a', sizeGb: '10' },
+          { path: 'b', sizeGb: '2' },
+        ],
+      },
+      metrics: { cpuUsagePercent: 12, memoryUsedMb: '256', memoryAvailableMb: '768' },
+    } as unknown as VM);
+    expect(vm.memoryMB).toBe(4096);
+    expect(vm.storageMB).toBe(12 * 1024);
+    expect(vm.metrics.memoryUsagePercent).toBe(25);
+  });
+
+  it('maps a malformed integer string to 0', () => {
+    for (const sizeMb of ['4e3', '-1', '', ' 42', 'abc', '99999999999999999999']) {
+      const vm = toVMDetail({
+        ...protoVM,
+        config: { ...protoVM.config, memory: { sizeMb } },
+      } as unknown as VM);
+      expect(vm.memoryMB, sizeMb).toBe(0);
+    }
+  });
+
   it('tolerates a VM without config or metrics', () => {
     const vm = toVMDetail({ id: 'vm-2', state: 'VM_STATE_STOPPED' } as unknown as VM);
     expect(vm.name).toBe('');
