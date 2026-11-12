@@ -243,5 +243,36 @@ func (r *ToolRegistry) executeDaemonReloadConfig(ctx context.Context, args map[s
 	if err != nil {
 		return nil, &mcpwire.WrappedError{Msg: "daemon reload config", Err: err}
 	}
-	return marshalResult(result)
+	return marshalResult(reloadConfigResponseShape(result))
+}
+
+// reloadConfigResponseShape nests a flattened success/message answer under
+// "status", the field platformv1.ReloadConfigResponse carries, so the SDK MCP
+// adapter decodes the same status object the gRPC method returns. A result
+// that already carries "status", or is not a map, passes through unchanged.
+func reloadConfigResponseShape(result interface{}) interface{} {
+	m, ok := result.(map[string]interface{})
+	if !ok {
+		return result
+	}
+	if _, has := m["status"]; has {
+		return result
+	}
+	_, hasSuccess := m["success"]
+	_, hasMessage := m["message"]
+	if !hasSuccess && !hasMessage {
+		return result
+	}
+	shaped := make(map[string]interface{}, len(m))
+	status := map[string]interface{}{}
+	for k, v := range m {
+		switch k {
+		case "success", "message":
+			status[k] = v
+		default:
+			shaped[k] = v
+		}
+	}
+	shaped["status"] = status
+	return shaped
 }
