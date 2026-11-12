@@ -40,7 +40,14 @@ import { ASSIGNABLE_DEVICE_ROLES, deviceRoleLabel, toDeviceRole } from '@/lib/de
 import { profileOverrides } from '@/lib/device-profile-networks';
 
 function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : 'Unknown error';
+  // useMutation rejects with a plain MutationError object ({ message, code,
+  // status }), not an Error instance.
+  if (err instanceof Error) return err.message;
+  if (typeof err === 'object' && err !== null) {
+    const { message } = err as { message?: unknown };
+    if (typeof message === 'string' && message !== '') return message;
+  }
+  return 'Unknown error';
 }
 
 // ============================================================================
@@ -352,7 +359,12 @@ export function ProfileAssignmentPanel() {
   const [macAddress, setMacAddress] = useState('');
   const [profileId, setProfileId] = useState('');
   const [found, setFound] = useState<DeviceProfile | null | undefined>(undefined);
-  const [confirmUnassign, setConfirmUnassign] = useState(false);
+  // The profile the open unassign confirmation names, snapshotted on open.
+  const [unassignTarget, setUnassignTarget] = useState<string | null>(null);
+  const confirmUnassign = unassignTarget !== null;
+  const setConfirmUnassign = (open: boolean) => {
+    setUnassignTarget(open ? profileId.trim() : null);
+  };
   // Each lookup takes a sequence number; an identity edit bumps it, so a
   // response for an earlier lookup or an earlier identity is discarded.
   const lookupSeq = useRef(0);
@@ -411,11 +423,13 @@ export function ProfileAssignmentPanel() {
   };
 
   const handleUnassign = async () => {
+    const target = unassignTarget;
+    if (target === null) return;
     try {
-      await unassign.mutateAsync(profileId.trim());
+      await unassign.mutateAsync(target);
       toast({
         title: 'Profile unassigned',
-        description: `Profile ${profileId} is back in the unassigned pool`,
+        description: `Profile ${target} is back in the unassigned pool`,
         variant: 'success',
       });
     } catch (err) {
@@ -457,6 +471,9 @@ export function ProfileAssignmentPanel() {
           <div className="grid gap-2">
             <Label htmlFor="pa-profile-id">Profile ID</Label>
             <Input id="pa-profile-id" value={profileId} onChange={(e) => {
+                // The operator's entry wins: a pending lookup no longer
+                // selects a profile.
+                lookupSeq.current++;
                 autoProfile.current = false;
                 setProfileId(e.target.value);
               }}
@@ -492,7 +509,7 @@ export function ProfileAssignmentPanel() {
           open={confirmUnassign}
           onOpenChange={setConfirmUnassign}
           title="Unassign profile?"
-          description={`Profile ${profileId} loses its device binding and returns to the unassigned pool.`}
+          description={`Profile ${unassignTarget ?? ''} loses its device binding and returns to the unassigned pool.`}
           confirmLabel="Unassign"
           pending={unassign.isLoading}
           onConfirm={handleUnassign}
