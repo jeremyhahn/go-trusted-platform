@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { VM } from 'trusted-platform-sdk';
-import { toVMDetail } from './vm-detail';
+import type { VerifyVMAttestationResponse, VM } from 'trusted-platform-sdk';
+import { toVMDetail, VM_PCRS_NOT_APPRAISED, vmVerifyHeadline } from './vm-detail';
 
 const protoVM = {
   id: 'vm-1',
@@ -94,5 +94,27 @@ describe('toVMDetail', () => {
     expect(vm.storageMB).toBe(0);
     expect(vm.status).toBe('stopped');
     expect(vm.metrics.cpuUsagePercent).toBe(0);
+  });
+});
+
+describe('vmVerifyHeadline', () => {
+  const ok = { success: true } as unknown as VerifyVMAttestationResponse['status'];
+
+  it('names what was checked, even with unexpected PCR measurements', () => {
+    const headline = vmVerifyHeadline({
+      status: ok,
+      verified: true,
+      actualPcrs: [{ index: 0, value: '/////w==' }],
+    } as VerifyVMAttestationResponse);
+    expect(headline).toBe('Quote signature and nonce verified');
+    expect(headline).not.toMatch(/^Attestation verified$/);
+  });
+
+  it('reports a failed verification as not verified', () => {
+    expect(vmVerifyHeadline({ status: ok, verified: false })).toBe('Attestation not verified');
+  });
+
+  it('says the PCRs were not appraised', () => {
+    expect(VM_PCRS_NOT_APPRAISED).toMatch(/not appraised/);
   });
 });

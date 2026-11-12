@@ -727,6 +727,16 @@ export interface ContainerOpsMockConfig {
   execExitCode?: number;
   /** Verified flag the VM verify mock answers. */
   vmVerified?: boolean;
+  /**
+   * 1-based call number from which the VM verify POST answers 500
+   * { error: 'attestation unavailable' }; unset means never.
+   */
+  vmVerifyFailFrom?: number;
+  /**
+   * 1-based call number from which the container attest POST answers 500
+   * { error: 'attestation unavailable' }; unset means never.
+   */
+  attestFailFrom?: number;
 }
 
 /**
@@ -758,6 +768,14 @@ export async function mockContainerOpsApi(
   };
   const json = (route: Route, body: unknown) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+  const unavailable = (route: Route) =>
+    route.fulfill({
+      status: 500,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'attestation unavailable' }),
+    });
+  const failsAt = (failFrom: number | undefined, call: number) =>
+    failFrom !== undefined && call >= failFrom;
 
   await page.route('**/api/v1/compute/containers/**', async (route: Route, request: Request) => {
     const path = new URL(request.url()).pathname.replace(/\/+$/, '');
@@ -809,6 +827,10 @@ export async function mockContainerOpsApi(
     }
     if (method === 'POST' && op === 'attest') {
       calls.attest.push(request.postDataJSON());
+      if (failsAt(config.attestFailFrom, calls.attest.length)) {
+        await unavailable(route);
+        return;
+      }
       await json(route, {
         status: { success: true },
         quote: 'cXVvdGU=',
@@ -874,11 +896,15 @@ export async function mockContainerOpsApi(
     }
     if (method === 'POST' && op === '/attest/verify') {
       calls.vmVerify.push(request.postDataJSON());
+      if (failsAt(config.vmVerifyFailFrom, calls.vmVerify.length)) {
+        await unavailable(route);
+        return;
+      }
       const verified = config.vmVerified ?? true;
       await json(route, {
         status: { success: true },
         verified,
-        message: verified ? 'quote signature and PCRs match' : 'PCR mismatch',
+        message: verified ? 'quote signature and nonce valid' : 'quote signature invalid',
       });
       return;
     }

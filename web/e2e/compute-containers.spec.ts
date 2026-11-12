@@ -98,7 +98,10 @@ test.describe('Compute containers: detail, exec, metrics and attestation (#1721)
     await expect(dialog.getByText('Verify VM attestation?')).toBeVisible();
     await dialog.getByRole('button', { name: 'Confirm' }).click();
 
-    await expect(page.getByTestId('vm-verify-result').getByText('Attestation verified')).toBeVisible();
+    const verdict = page.getByTestId('vm-verify-result');
+    await expect(verdict.getByText('Quote signature and nonce verified')).toBeVisible();
+    await expect(verdict.getByText(/not appraised/)).toBeVisible();
+    await expect(verdict.getByText('Attestation verified', { exact: true })).toHaveCount(0);
     expect(calls.vmAttest).toHaveLength(1);
     const nonce = (calls.vmAttest[0] as { nonce: string }).nonce;
     expect(calls.vmVerify).toEqual([
@@ -109,6 +112,46 @@ test.describe('Compute containers: detail, exec, metrics and attestation (#1721)
         signatureAlgorithm: 'SHA256-RSAPSS',
       }),
     ]);
+  });
+
+  test('a failed VM re-verification replaces the earlier verdict', async ({ page }) => {
+    const calls = await mockContainerOpsApi(page, {
+      vmId: 'vm-1',
+      vmName: 'build-vm',
+      vmVerifyFailFrom: 2,
+    });
+
+    await page.goto('/compute/vms/vm-1');
+    await expect(page.getByRole('heading', { name: 'build-vm' })).toBeVisible();
+    const verdict = page.getByTestId('vm-verify-result');
+
+    await page.getByRole('button', { name: 'Verify Attestation' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Confirm' }).click();
+    await expect(verdict.getByText('Quote signature and nonce verified')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Verify Attestation' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Confirm' }).click();
+    await expect(verdict.getByText(/Verification failed/)).toBeVisible();
+    await expect(verdict.getByText('Quote signature and nonce verified')).toHaveCount(0);
+    await expect(verdict.getByText('quote signature and nonce valid')).toHaveCount(0);
+    expect(calls.vmVerify).toHaveLength(2);
+  });
+
+  test('a failed container re-attestation replaces the earlier result', async ({ page }) => {
+    const calls = await mockContainerOpsApi(page, { containerId: 'ctr-1', attestFailFrom: 2 });
+
+    await page.goto('/compute/containers/ctr-1');
+    const result = page.getByTestId('attest-result');
+
+    await page.getByRole('button', { name: 'Attest' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Confirm' }).click();
+    await expect(result.getByText('aW1hZ2UtZGlnZXN0')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Attest' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Confirm' }).click();
+    await expect(result.getByText(/Attestation failed/)).toBeVisible();
+    await expect(result.getByText('aW1hZ2UtZGlnZXN0')).toHaveCount(0);
+    expect(calls.attest).toHaveLength(2);
   });
 
   test('the containers list links each container to its detail page', async ({ page }) => {
