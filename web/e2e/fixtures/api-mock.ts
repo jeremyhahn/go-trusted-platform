@@ -519,8 +519,10 @@ export async function mockSwitchApi(
       return;
     }
     if (!action && request.method() === 'GET') {
-      // The server's single-port status never reports link state (always false).
-      await route.fulfill(ok({ ...status, link_up: false }));
+      // The server's single-port status never reports link state (always false),
+      // and its enabled reads `Switchport: Enabled`, which stays true for a
+      // shut-down port.
+      await route.fulfill(ok({ ...status, link_up: false, enabled: true }));
       return;
     }
     if (action === 'enable' || action === 'disable') {
