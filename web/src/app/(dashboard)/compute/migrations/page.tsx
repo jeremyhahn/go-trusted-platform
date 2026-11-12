@@ -51,7 +51,8 @@ export default function MigrationsPage() {
   const specValid = specMemoryMb > 0 && specCpus > 0;
 
   const handlePrepare = async () => {
-    if (!vmName || !specValid) return;
+    // One outstanding receiver at a time: each holds a QEMU process until finalized.
+    if (receiver || !vmName || !specValid) return;
     const spec: VMMigrationSpec = { memoryMb: specMemoryMb, cpus: specCpus };
     if (diskSize.trim()) spec.diskSize = diskSize.trim();
     if (bootMode.trim()) spec.bootMode = bootMode.trim();
@@ -78,6 +79,7 @@ export default function MigrationsPage() {
     const result = await ops.finalizeMigration(receiverId, commit);
     if (result) {
       setFinalizeResult(`Receiver ${receiverId} ${commit ? "committed" : "aborted"}`);
+      if (receiverId === receiver?.receiverId) setReceiver(null);
     }
   };
 
@@ -198,7 +200,8 @@ export default function MigrationsPage() {
                 </label>
               </div>
             </div>
-            <Button onClick={handlePrepare} disabled={busy || !vmName || !specValid}>
+            <Button onClick={handlePrepare} disabled={busy || receiver !== null || !vmName || !specValid}
+            >
               Prepare Migration
             </Button>
             {receiver && (
@@ -206,6 +209,9 @@ export default function MigrationsPage() {
                 <p>Receiver: {receiver.receiverId}</p>
                 <p>Port: {receiver.port}</p>
                 <p>TLS name: {receiver.tlsHostname}</p>
+                <p className="text-muted-foreground">
+                  Commit or abort this receiver before preparing another
+                </p>
               </div>
             )}
           </CardContent>

@@ -343,14 +343,18 @@ export class ComputeService extends BaseService {
    * @param request - Migration request
    * @returns Migration result
    */
-  async migrateVM(request: MigrateVMRequest): Promise<ApiResponse<MigrateVMResponse>> {
+  async migrateVM(
+    request: MigrateVMRequest,
+    options?: { timeoutMs?: number }
+  ): Promise<ApiResponse<MigrateVMResponse>> {
     return this.client.post<MigrateVMResponse>(
       this.buildUrl(`/vms/${this.encodePathSegment(request.vmId)}/migrate`),
       {
         destinationHost: request.destinationHost,
         liveMigration: request.liveMigration,
         bandwidthLimitMbps: request.bandwidthLimitMbps,
-      }
+      },
+      options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : undefined
     );
   }
 
