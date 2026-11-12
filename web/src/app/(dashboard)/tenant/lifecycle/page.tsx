@@ -35,7 +35,7 @@ const CONFIRM_TEXT: Record<ConfirmAction, { title: string; description: string; 
   },
   suspend: {
     title: "Suspend tenant",
-    description: "Members of the tenant lose access until it is resumed.",
+    description: "The tenant is marked suspended. This changes its state only: members keep their access and its traffic is not blocked.",
     label: "Suspend",
   },
   rotate: {
@@ -237,16 +237,21 @@ export default function TenantLifecyclePage() {
                 </Button>
               </div>
               {dekStatus && (
-                <dl data-testid="dek-status" className="grid grid-cols-2 gap-2 text-sm">
-                  <dt>Version</dt>
-                  <dd data-testid="dek-version">{dekStatus.version}</dd>
-                  <dt>Algorithm</dt>
-                  <dd>{dekStatus.algorithm}</dd>
-                  <dt>Status</dt>
-                  <dd>{dekStatus.status}</dd>
-                  <dt>Usage</dt>
-                  <dd>{dekStatus.usagePercent}%</dd>
-                </dl>
+                <>
+                  <dl data-testid="dek-status" className="grid grid-cols-2 gap-2 text-sm">
+                    <dt>Version</dt>
+                    <dd data-testid="dek-version">{dekStatus.version}</dd>
+                    <dt>Algorithm</dt>
+                    <dd>{dekStatus.algorithm}</dd>
+                    <dt>Created</dt>
+                    <dd>{dekStatus.createdAt}</dd>
+                    <dt>Last rotated</dt>
+                    <dd>{dekStatus.rotatedAt || "never"}</dd>
+                  </dl>
+                  <p data-testid="dek-usage-note" className="text-xs text-muted-foreground">
+                    The server does not report DEK usage yet.
+                  </p>
+                </>
               )}
             </CardContent>
           </Card>
