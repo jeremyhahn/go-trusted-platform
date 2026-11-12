@@ -108,6 +108,38 @@ func TestCanonicalDirect_InstallToCertPath(t *testing.T) {
 	assert.Equal(t, bundle, written)
 }
 
+// TestCanonicalDirect_RejectsCombinedCertAndKey proves a bundle that carries a
+// private key next to a valid CA certificate is refused before anything is
+// written: the key must never reach the world-readable trust directory.
+func TestCanonicalDirect_RejectsCombinedCertAndKey(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	require.NoError(t, err)
+	bundle := append(directTestCertPEM(t, true), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})...)
+	certPath := filepath.Join(t.TempDir(), "nested", "platform-ca.crt")
+	_, err = runDirect(t, bundle, "--install-to-system-trust", "--cert-path", certPath)
+	var nonCert ErrDirectBundleNonCertificateBlock
+	require.ErrorAs(t, err, &nonCert)
+	assert.Equal(t, "PRIVATE KEY", nonCert.Type)
+	_, statErr := os.Stat(certPath)
+	assert.True(t, os.IsNotExist(statErr), "cert path must not exist, stat: %v", statErr)
+}
+
+// TestCanonicalDirect_InstallsOnlyCertificates proves text around the PEM
+// blocks is not copied into the trust store: only the re-encoded
+// certificates are written.
+func TestCanonicalDirect_InstallsOnlyCertificates(t *testing.T) {
+	certPEM := directTestCertPEM(t, true)
+	bundle := append(append([]byte("# operator note\n"), certPEM...), []byte("# trailer\n")...)
+	certPath := filepath.Join(t.TempDir(), "platform-ca.crt")
+	_, err := runDirect(t, bundle, "--install-to-system-trust", "--cert-path", certPath)
+	require.NoError(t, err)
+	written, err := os.ReadFile(certPath)
+	require.NoError(t, err)
+	assert.Equal(t, certPEM, written)
+}
+
 func TestCanonicalDirect_NoInstallByDefault(t *testing.T) {
 	cmd := newCanonicalDirectCmd(func() *cli.CommonFlags { return &cli.CommonFlags{} })
 	installFlag := cmd.Flag("install-to-system-trust")
