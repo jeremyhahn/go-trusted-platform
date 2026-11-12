@@ -109,11 +109,62 @@ func TestManifestsGet_JSON(t *testing.T) {
 	assert.Equal(t, "m-1", got["id"])
 	assert.Equal(t, "host-a", got["host_id"])
 	assert.Equal(t, "2026-11-12T10:00:00Z", got["timestamp"])
-	assert.Equal(t, "abcd", got["merkle_root"])
+	// The stored manifest's wire shape: bytes as base64, evidence lists whole.
+	assert.Equal(t, "q80=", got["merkle_root"])
 	assert.Equal(t, "ECDSA-P256-SHA256", got["signature_algorithm"])
 	assert.Equal(t, "1", got["version"])
-	assert.EqualValues(t, 2, got["vms"])
-	assert.EqualValues(t, 1, got["containers"])
+	assert.Len(t, got["vms"], 2)
+	assert.Len(t, got["containers"], 1)
+}
+
+// evidenceManifest is sampleManifest with every evidence field populated,
+// so a projection that drops one is detected (#1686, Codex P1).
+func evidenceManifest() *platformv1.HostManifest {
+	m := sampleManifest()
+	m.Nonce = []byte{0x01, 0x02}
+	m.Signature = []byte{0x03, 0x04}
+	m.Metadata = map[string]string{"site": "lab"}
+	m.Host = &platformv1.HostAttestation{
+		QuoteData: []byte{0x05},
+		Signature: []byte{0x06},
+		Pcrs:      []*platformv1.AttestationPCRValue{{Index: 7, Value: []byte{0x07}}},
+		PcrDigest: []byte{0x08},
+		Nonce:     []byte{0x01, 0x02},
+	}
+	m.Vms = []*platformv1.VMAttestation{{VmId: "vm-1", QuoteData: []byte{0x09}}}
+	return m
+}
+
+func TestManifestsGet_JSONKeepsEvidence(t *testing.T) {
+	fake := &fakeManifestsClient{getResp: &platformv1.GetManifestResponse{Manifest: evidenceManifest()}}
+	r, out := newRunner(fake, cli.OutputFormatJSON)
+	require.NoError(t, r.getManifest("m-1"))
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(out.Bytes(), &got), out.String())
+	assert.Equal(t, "AQI=", got["nonce"])
+	assert.Equal(t, "AwQ=", got["signature"])
+	assert.Equal(t, map[string]any{"site": "lab"}, got["metadata"])
+	host, ok := got["host"].(map[string]any)
+	require.True(t, ok, "host evidence missing: %s", out.String())
+	assert.Equal(t, "BQ==", host["quote_data"])
+	assert.Equal(t, "Bg==", host["signature"])
+	assert.Equal(t, "CA==", host["pcr_digest"])
+	require.Len(t, host["pcrs"], 1)
+	vms, ok := got["vms"].([]any)
+	require.True(t, ok, "vm evidence missing: %s", out.String())
+	require.Len(t, vms, 1)
+	assert.Equal(t, "vm-1", vms[0].(map[string]any)["vm_id"])
+	assert.Equal(t, "CQ==", vms[0].(map[string]any)["quote_data"])
+}
+
+func TestManifestsGet_YAMLKeepsEvidence(t *testing.T) {
+	fake := &fakeManifestsClient{getResp: &platformv1.GetManifestResponse{Manifest: evidenceManifest()}}
+	r, out := newRunner(fake, cli.OutputFormatYAML)
+	require.NoError(t, r.getManifest("m-1"))
+	for _, want := range []string{"nonce: AQI=", "signature: AwQ=", "quote_data: BQ==", "pcr_digest: CA==", "vm_id: vm-1", "site: lab"} {
+		assert.Contains(t, out.String(), want)
+	}
 }
 
 func TestManifestsDelete_Success(t *testing.T) {
