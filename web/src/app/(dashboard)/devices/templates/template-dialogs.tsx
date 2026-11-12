@@ -108,22 +108,20 @@ export function TemplateDetailsDialog({
   onOpenPage,
 }: TemplateDetailsDialogProps) {
   const { getTemplate } = useDeviceTemplateActions();
-  const [template, setTemplate] = useState<DeviceTemplate | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const fetchTemplate = getTemplate.mutateAsync;
+  const fetchTemplate = getTemplate.mutate;
 
   useEffect(() => {
-    if (templateId === null) {
-      return;
+    if (templateId !== null) {
+      fetchTemplate(templateId);
     }
-    setTemplate(null);
-    setLoadError(null);
-    fetchTemplate(templateId)
-      .then((result) => setTemplate(result ?? null))
-      .catch((err: unknown) => setLoadError(errorMessage(err)));
     // fetchTemplate is stable per mount; refetch only when the id changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [templateId]);
+
+  // Show only the answer for the id on display, never a previous one.
+  const current = getTemplate.variables === templateId && !getTemplate.isLoading;
+  const template = current ? (getTemplate.data ?? null) : null;
+  const loadError = current && getTemplate.error ? getTemplate.error.message : null;
 
   return (
     <Dialog open={templateId !== null} onOpenChange={onOpenChange}>
