@@ -77,9 +77,11 @@ export default function SwitchPortsClient() {
     }
   };
 
-  // The single-port status never reports link state: take it from the port list.
+  // The single-port status never reports link state, and its enabled reports
+  // switchport (layer-2) mode, not shutdown state: take both from the port list.
   const listed = status ? ports.find((p) => p.port === status.port) : undefined;
   const statusLink = listed ? (listed.link_up ? 'up' : 'down') : 'unavailable';
+  const statusAdmin = listed ? (listed.enabled ? 'enabled' : 'disabled') : 'unavailable';
 
   const vlanId = Number(vlanValue);
   const vlanValid = Number.isInteger(vlanId) && vlanId >= 1 && vlanId <= 4094;
@@ -226,7 +228,7 @@ export default function SwitchPortsClient() {
               <dt>Trunk VLANs</dt>
               <dd>{status.trunk_vlans?.join(', ') || '-'}</dd>
               <dt>Admin</dt>
-              <dd>{status.enabled ? 'enabled' : 'disabled'}</dd>
+              <dd>{statusAdmin}</dd>
               <dt>Link</dt>
               <dd>{statusLink}</dd>
               <dt>Description</dt>
