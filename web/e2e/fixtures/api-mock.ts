@@ -561,6 +561,65 @@ export async function mockWebAuthnRegistration(
   });
 }
 
+/** One captured request to a mocked TPM operation route. */
+export interface TPMOpsCall {
+  path: string;
+  method: string;
+  body: unknown;
+}
+
+/** Responses the TPM operations mock returns (#1725). */
+export interface TPMOpsMockConfig {
+  eventLog?: Record<string, unknown>;
+  pcrValues?: Array<{ index: number; value: string }>;
+  makeCredential?: { credentialBlob: string; encryptedSecret: string; secret?: string };
+  activateSecret?: string;
+  randomBytes?: string;
+}
+
+/**
+ * Mock the TPM event log, PCR read and extend, MakeCredential,
+ * ActivateCredential and GetRandom routes. Returns the captured calls.
+ */
+export async function mockTPMOpsApi(
+  page: Page,
+  config: TPMOpsMockConfig = {}
+): Promise<TPMOpsCall[]> {
+  const calls: TPMOpsCall[] = [];
+  const zero = btoa(String.fromCharCode(...new Array(32).fill(0)));
+  const pcrValues =
+    config.pcrValues ?? Array.from({ length: 24 }, (_, index) => ({ index, value: zero }));
+
+  const reply = (path: string, body: unknown) => async (route: Route, request: Request) => {
+    const raw = request.postData();
+    calls.push({ path, method: request.method(), body: raw ? JSON.parse(raw) : undefined });
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+  };
+
+  await page.route(
+    '**/api/v1/tpm/eventlog**',
+    reply('/eventlog', config.eventLog ?? { eventLog: btoa('tcg2-log'), format: 'tcg2' })
+  );
+  await page.route('**/api/v1/tpm/pcrs/extend', reply('/pcrs/extend', { status: {} }));
+  await page.route(/\/api\/v1\/tpm\/pcrs(\?.*)?$/, reply('/pcrs', { pcrValues }));
+  await page.route(
+    '**/api/v1/tpm/make-credential',
+    reply(
+      '/make-credential',
+      config.makeCredential ?? { credentialBlob: btoa('blob'), encryptedSecret: btoa('enc') }
+    )
+  );
+  await page.route(
+    '**/api/v1/tpm/activate-credential',
+    reply('/activate-credential', { secret: config.activateSecret ?? btoa('\x01\x02\x03') })
+  );
+  await page.route(
+    '**/api/v1/tpm/random',
+    reply('/random', { randomBytes: config.randomBytes ?? btoa('\xde\xad\xbe\xef') })
+  );
+  return calls;
+}
+
 /**
  * Create a mock WebAuthn login flow.
  * Mocks the login begin and finish endpoints.
