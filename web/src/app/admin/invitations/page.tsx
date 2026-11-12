@@ -57,9 +57,11 @@ export default function InvitationsPage() {
     setTimeout(() => setNotification(null), 5000);
   };
 
-  // The effect reads the session, then settles the invitations read into
-  // state from its promise callbacks (no synchronous setState in the
-  // effect). A non-owner gets no read and the owner-only notice.
+  // The effect reads the session, settles ownership first (in a microtask,
+  // before any network read) and the invitations list second, all from
+  // promise callbacks (no synchronous setState in the effect). An owner gets
+  // the form while the list loads; a non-owner gets no read and the
+  // owner-only notice.
   useEffect(() => {
     const user = getUserFromToken();
     if (!user) {
@@ -68,40 +70,41 @@ export default function InvitationsPage() {
     }
 
     let active = true;
-    const request = user.isTenantOwner
-      ? loadInvitations()
-      : Promise.resolve(null);
-    void request.then(
-      (list) => {
-        if (!active) {
-          return;
-        }
-        if (list === null) {
-          setIsTenantOwner(false);
-          setNotification({
-            message: "Only tenant owners can manage invitations.",
-            type: "error",
-          });
-        } else {
-          setIsTenantOwner(true);
-          setInvitations(list);
-        }
-        setFetchingInvitations(false);
-      },
-      (error: unknown) => {
-        if (!active) {
-          return;
-        }
-        setIsTenantOwner(true);
+    void Promise.resolve(user.isTenantOwner).then((owner) => {
+      if (!active) {
+        return;
+      }
+      setIsTenantOwner(!!owner);
+      if (!owner) {
         setNotification({
-          message:
-            error instanceof Error ? error.message : "Failed to fetch invitations",
+          message: "Only tenant owners can manage invitations.",
           type: "error",
         });
-        setTimeout(() => setNotification(null), 5000);
         setFetchingInvitations(false);
+        return;
       }
-    );
+      return loadInvitations().then(
+        (list) => {
+          if (active) {
+            setInvitations(list);
+            setFetchingInvitations(false);
+          }
+        },
+        (error: unknown) => {
+          if (active) {
+            setNotification({
+              message:
+                error instanceof Error
+                  ? error.message
+                  : "Failed to fetch invitations",
+              type: "error",
+            });
+            setTimeout(() => setNotification(null), 5000);
+            setFetchingInvitations(false);
+          }
+        }
+      );
+    });
     return () => {
       active = false;
     };

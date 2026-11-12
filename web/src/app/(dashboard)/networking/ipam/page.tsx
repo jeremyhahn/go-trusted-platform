@@ -146,10 +146,16 @@ export default function IPAMPage() {
   const [allocationsLoading, setAllocationsLoading] = React.useState(false);
   const [allocationsOpen, setAllocationsOpen] = React.useState(false);
 
+  // Sequence of the latest pool read: a superseded read's answer is dropped.
+  const poolSeq = React.useRef(0);
+
   // settlePools applies one pool read from its promise callbacks, so the
-  // effect starts it without a synchronous setState; fetchPools adds the
-  // loading reset for a re-read.
+  // effect starts it without a synchronous setState. The zone handler sets
+  // loading in its event handler and fetchPools adds the loading reset for
+  // a re-read; an older read that answers late is dropped (it neither fills
+  // the table nor clears loading).
   const settlePools = React.useCallback((zone?: string) => {
+    const seq = ++poolSeq.current;
     const params = zone ? `?zone=${encodeURIComponent(zone)}` : '';
     return fetch(`/api/v1/sdn/gateway/ipam/pools${params}`, {
       credentials: 'include',
@@ -160,6 +166,7 @@ export default function IPAMPage() {
           throw new Error(body.error || `HTTP ${res.status}`);
         }
         const body = await res.json();
+        if (seq !== poolSeq.current) return;
         // The webservice wraps payloads in {payload}; the daemon REST
         // stack returns the body bare — accept both.
         const list: IPAMPoolResponse[] = body.payload?.pools ?? body.pools ?? [];
@@ -170,9 +177,13 @@ export default function IPAMPage() {
         setLoadError(null);
       })
       .catch((err: unknown) => {
+        if (seq !== poolSeq.current) return;
         setLoadError(err instanceof Error ? err.message : String(err));
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (seq !== poolSeq.current) return;
+        setLoading(false);
+      });
   }, []);
 
   const fetchPools = React.useCallback(
@@ -563,7 +574,12 @@ export default function IPAMPage() {
               <Filter className="h-4 w-4 text-muted-foreground" />
               <Select
                 value={zoneFilter || '__all__'}
-                onValueChange={(v) => setZoneFilter(v === '__all__' ? '' : v)}
+                onValueChange={(v) => {
+                  const next = v === '__all__' ? '' : v;
+                  if (next === zoneFilter) return;
+                  setLoading(true);
+                  setZoneFilter(next);
+                }}
               >
                 <SelectTrigger className="w-40">
                   <SelectValue placeholder="All zones" />
