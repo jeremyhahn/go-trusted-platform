@@ -82,6 +82,13 @@ export type { User, AuthContextType } from '@/contexts/AuthContext';
 export { useToast, toast, dismissToast } from './use-toast';
 export type { Toast, UseToastReturn } from './use-toast';
 
+export { useAttestationCollect, newAttestationNonce } from './use-attestation-collect';
+export type {
+  AttestationCollectOperation,
+  AttestationCollectState,
+  UseAttestationCollectResult,
+} from './use-attestation-collect';
+
 export { useReportedGateways } from './use-reported-gateways';
 export type {
   ReportedGateway,

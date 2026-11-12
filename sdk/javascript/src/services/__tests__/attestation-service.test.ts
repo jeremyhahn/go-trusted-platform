@@ -81,4 +81,10 @@ describe('AttestationService REST contract', () => {
     const [verifyUrl] = (client.post as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(verifyUrl).toBe('/v1/attestation/manifests/verify');
   });
+
+  it('deletes a manifest at /manifests/{id} with the id encoded (#1732)', async () => {
+    await service.deleteManifest('m/1?x');
+    const [url] = (client.delete as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(url).toBe('/v1/attestation/manifests/m%2F1%3Fx');
+  });
 });
