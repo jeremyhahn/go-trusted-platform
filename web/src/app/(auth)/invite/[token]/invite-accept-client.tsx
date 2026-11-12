@@ -4,7 +4,7 @@ import * as React from "react";
 import { use } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { AlertCircle, CheckCircle2, Loader2, Mail } from "lucide-react";
+import { AlertCircle, Loader2, Mail } from "lucide-react";
 import { resolveDynamicId } from "@/utils/dynamic-route";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,7 +15,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { toInvitationView, useInvitation, useInvitationByToken } from "@/hooks";
+import { toInvitationView, useInvitationByToken } from "@/hooks";
 import { useSessionToken } from "@/hooks/use-session-token";
 import { decodeJWT } from "@/utils/jwt";
 
@@ -25,26 +25,15 @@ function signedInUserId(sessionToken: string | null): string | null {
   if (!sessionToken) {
     return null;
   }
+  // The login issuer (pkg/webservice/v1/jwt/session_issuer.go) puts the
+  // principal's login name, normally an email, into both user_id and sub.
   const payload = decodeJWT(sessionToken);
   const id = payload?.user_id ?? payload?.sub;
-  return typeof id === "string" && /^[1-9][0-9]*$/.test(id) ? id : null;
+  return typeof id === "string" && id !== "" ? id : null;
 }
 
 // errorMessage reads the message of an SDK MutationError (a plain object,
 // not an Error instance), with a fallback for any other value.
-function errorMessage(err: unknown, fallback: string): string {
-  if (
-    err &&
-    typeof err === "object" &&
-    "message" in err &&
-    typeof (err as { message: unknown }).message === "string" &&
-    (err as { message: string }).message
-  ) {
-    return (err as { message: string }).message;
-  }
-  return fallback;
-}
-
 function passkeySignUpHref(token: string, tenantName?: string): string {
   let href = `/auth/webauthn?invitation=${encodeURIComponent(token)}`;
   if (tenantName) {
@@ -64,30 +53,9 @@ export default function InviteAcceptClient({ params }: { params: Promise<{ token
 
   const { data, isLoading, error } = useInvitationByToken(token);
   const invitation = React.useMemo(() => toInvitationView(data), [data]);
-  const { accept } = useInvitation();
 
   const sessionToken = useSessionToken();
-  const userId = React.useMemo(() => signedInUserId(sessionToken), [sessionToken]);
-  const [accepted, setAccepted] = React.useState(false);
-  const [acceptError, setAcceptError] = React.useState<string | null>(null);
-
-  const handleAccept = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!userId) {
-      return;
-    }
-    setAcceptError(null);
-    try {
-      const result = await accept.mutateAsync({ token, userId });
-      if (result && result.success === false) {
-        setAcceptError(result.message || "The invitation could not be accepted");
-        return;
-      }
-      setAccepted(true);
-    } catch (err) {
-      setAcceptError(errorMessage(err, "Failed to accept invitation"));
-    }
-  };
+  const signedInAs = React.useMemo(() => signedInUserId(sessionToken), [sessionToken]);
 
   if (isLoading) {
     return (
@@ -111,27 +79,13 @@ export default function InviteAcceptClient({ params }: { params: Promise<{ token
     );
   }
 
-  if (accepted) {
-    return (
-      <Card className="w-full max-w-md mx-auto">
-        <CardHeader className="text-center">
-          <CheckCircle2 className="h-12 w-12 mx-auto text-green-600" />
-          <CardTitle>Invitation accepted</CardTitle>
-          <CardDescription>
-            You have joined {invitation.tenantName || "the workspace"} as {invitation.role}.
-          </CardDescription>
-        </CardHeader>
-        <CardFooter className="justify-center">
-          <Button asChild>
-            <Link href="/auth/login">Continue to sign in</Link>
-          </Button>
-        </CardFooter>
-      </Card>
-    );
-  }
-
   const canAccept = invitation.status === "pending";
 
+  // Only the passkey sign-up (RegisterInvitedUser) joins the user to the
+  // tenant before it consumes the invitation. AcceptInvitation marks the
+  // invitation accepted without granting membership, so this page never
+  // calls it, and a signed-in session, which the sign-up would redirect to
+  // the dashboard, is told so instead of being offered a dead end.
   return (
     <Card className="w-full max-w-md mx-auto">
       <CardHeader>
@@ -145,38 +99,20 @@ export default function InviteAcceptClient({ params }: { params: Promise<{ token
           <span className="font-medium">{invitation.role}</span>.
         </CardDescription>
       </CardHeader>
-      {canAccept && userId ? (
-        <form onSubmit={handleAccept}>
-          {acceptError && (
-            <CardContent>
-              <p role="alert" className="text-sm text-destructive">
-                {acceptError}
-              </p>
-            </CardContent>
-          )}
-          <CardFooter>
-            <Button type="submit" className="w-full" disabled={accept.isLoading}>
-              {accept.isLoading ? "Accepting..." : "Accept Invitation"}
-            </Button>
-          </CardFooter>
-        </form>
+      {canAccept && signedInAs ? (
+        <CardContent>
+          <p role="status" className="text-sm text-muted-foreground">
+            You are signed in as {signedInAs}. An existing account cannot join this workspace from
+            an invitation link yet; ask the workspace administrator to add you, or sign out and
+            create an account with a passkey for {invitation.email}.
+          </p>
+        </CardContent>
       ) : canAccept ? (
-        <>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">
-              Already have an account?{" "}
-              <Link href="/auth/login" className="underline">
-                Sign in
-              </Link>
-              , then open this link again.
-            </p>
-          </CardContent>
-          <CardFooter>
-            <Button asChild className="w-full">
-              <Link href={passkeySignUpHref(token, invitation.tenantName)}>Create account with passkey</Link>
-            </Button>
-          </CardFooter>
-        </>
+        <CardFooter>
+          <Button asChild className="w-full">
+            <Link href={passkeySignUpHref(token, invitation.tenantName)}>Create account with passkey</Link>
+          </Button>
+        </CardFooter>
       ) : (
         <CardContent>
           <p role="alert" className="text-sm text-muted-foreground">
