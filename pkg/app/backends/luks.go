@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -26,6 +27,7 @@ import (
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/fido2"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/fips"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
 
@@ -65,6 +67,12 @@ var ErrLUKSTestUnlockUnverified = errors.New("luks backend: test unlock cannot v
 // the new keyslot. A FIDO2 or TPM keyslot without its token cannot be used by
 // any unlock strategy.
 var ErrLUKSTokenMissing = errors.New("luks backend: the handler returned no token for the new keyslot")
+
+// ErrLUKSRotationKDFNotApproved indicates ChangePassphrase refused to rotate
+// a keyslot whose KDF the FIPS keyslot policy does not approve: go-luks2
+// keeps the slot's KDF on rotation, so it would write another such slot.
+// The wrapped fips error names the KDF.
+var ErrLUKSRotationKDFNotApproved = errors.New("luks backend: passphrase rotation refused: the keyslot KDF is not FIPS-approved")
 
 // LUKSTokenWriteError reports that the token binding a newly added keyslot to
 // its unlock method could not be written — for example because the header's
@@ -148,12 +156,41 @@ type LUKSBackend struct {
 	// the map.
 	locksMu sync.Mutex
 	locks   map[string]*sync.Mutex
+
+	// fipsActive reports whether the platform FIPS keyslot policy applies.
+	// nil means luksFIPSActive; the package's tests set it as a seam.
+	fipsActive func() bool
+}
+
+// fipsPolicyActive reports whether the platform FIPS keyslot policy applies
+// to this backend's keyslot writes.
+func (b *LUKSBackend) fipsPolicyActive() bool {
+	if b.fipsActive != nil {
+		return b.fipsActive()
+	}
+	return luksFIPSActive()
+}
+
+// luksVolumeKey returns the key that selects a volume's mutation lock.
+// Aliases such as a /dev/disk/by-uuid link and the kernel name resolve to
+// the same node, so they share one mutex. When the path cannot be resolved
+// the cleaned text is used; the later go-luks2 call reports the bad path.
+func luksVolumeKey(device string) string {
+	resolved, err := filepath.EvalSymlinks(device)
+	if err != nil {
+		return filepath.Clean(device)
+	}
+	abs, err := filepath.Abs(resolved)
+	if err != nil {
+		return filepath.Clean(device)
+	}
+	return abs
 }
 
 // lockDevice takes the mutex of device (keyed by its cleaned path, created on
 // first use) and returns its unlock.
 func (b *LUKSBackend) lockDevice(device string) func() {
-	key := filepath.Clean(device)
+	key := luksVolumeKey(device)
 	b.locksMu.Lock()
 	if b.locks == nil {
 		b.locks = make(map[string]*sync.Mutex)
@@ -603,6 +640,23 @@ func (b *LUKSBackend) TestUnlock(ctx context.Context, req *daemon.LUKSTestUnlock
 // ChangePassphrase rotates the secret on an existing passphrase slot.
 func (b *LUKSBackend) ChangePassphrase(ctx context.Context, req *daemon.LUKSChangePassphraseRequest) error {
 	defer b.lockDevice(req.Device)()
+	if b.fipsPolicyActive() {
+		// go-luks2 ChangeKey keeps the slot's KDF, so rotating a slot whose
+		// KDF the FIPS policy refuses would write another such slot.
+		slots, err := luks2.ListKeyslots(req.Device)
+		if err != nil {
+			return err
+		}
+		for _, s := range slots {
+			if s.ID != int(req.Slot) {
+				continue
+			}
+			if err := fips.ValidateKDFForMode(s.KDFType, true); err != nil {
+				return fmt.Errorf("%w: keyslot %d: %w", ErrLUKSRotationKDFNotApproved, req.Slot, err)
+			}
+			break
+		}
+	}
 	return luks2.ChangeKey(
 		req.Device,
 		[]byte(req.OldPassphrase),
