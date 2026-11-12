@@ -228,6 +228,20 @@ describe('createAuthInterceptor', () => {
     expect(out.headers).toEqual({ Authorization: 'Bearer new' });
   });
 
+  it.each<[string, HeadersInit]>([
+    ['an array of pairs', [['Authorization', 'Bearer old']]],
+    ['a Headers object', new Headers({ Authorization: 'Bearer old' })],
+    ['a lower-case record key', { authorization: 'Bearer old' }],
+  ])('replaces an existing Authorization header given as %s', async (_name, headers) => {
+    const out = await createAuthInterceptor(() => 'new')({ headers }, reqCtx());
+    const h = new Headers(out.headers as HeadersInit);
+    expect(h.get('authorization')).toBe('Bearer new');
+    const keys = Object.keys(out.headers as Record<string, string>).filter(
+      (k) => k.toLowerCase() === 'authorization'
+    );
+    expect(keys).toHaveLength(1);
+  });
+
   it('does not mutate the input config', async () => {
     const config: RequestInit = { headers: { 'X-A': '1' } };
     await createAuthInterceptor(() => 'tok')(config, reqCtx());
@@ -288,6 +302,19 @@ describe('createRequestIdInterceptor', () => {
   it('keeps headers given as an array of pairs', async () => {
     const out = await createRequestIdInterceptor(() => 'id')({ headers: [['X-A', '1']] }, reqCtx());
     expect(out.headers).toEqual({ 'x-a': '1', 'X-Request-ID': 'id' });
+  });
+
+  it('replaces an existing x-request-id pair case-insensitively', async () => {
+    const out = await createRequestIdInterceptor(() => 'id')(
+      { headers: [['x-request-id', 'stale']] },
+      reqCtx()
+    );
+    const h = new Headers(out.headers as HeadersInit);
+    expect(h.get('x-request-id')).toBe('id');
+    const keys = Object.keys(out.headers as Record<string, string>).filter(
+      (k) => k.toLowerCase() === 'x-request-id'
+    );
+    expect(keys).toHaveLength(1);
   });
 
   it('throws when the id generator throws', () => {

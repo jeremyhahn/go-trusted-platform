@@ -160,6 +160,18 @@ describe("TPMSealPage", () => {
     expect(await screen.findByDisplayValue("schlüssel €")).toBeTruthy();
   });
 
+  it("decodes a secret sealed by the old Latin-1 encoder byte for byte", async () => {
+    // The previous encoder stored btoa(sealData): one byte per char, so "é" is E9, not UTF-8.
+    tpm.unseal.mockResolvedValue({ data: { data: btoa("café") } });
+    render(<TPMSealPage />);
+    openUnseal();
+
+    fireEvent.change(await screen.findByLabelText("Common Name"), { target: { value: "disk-key" } });
+    fireEvent.click(unsealButton());
+
+    expect(await screen.findByDisplayValue("café")).toBeTruthy();
+  });
+
   it("shows nothing when the unseal response carries no data", async () => {
     tpm.unseal.mockResolvedValue({ data: {} });
     render(<TPMSealPage />);
