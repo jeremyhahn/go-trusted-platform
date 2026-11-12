@@ -91,7 +91,7 @@ export function UserForm({
       newErrors.password = 'Password is required';
     }
 
-    if (!isEdit && formData.password && formData.password.length < 8) {
+    if (formData.password && formData.password.length < 8) {
       newErrors.password = 'Password must be at least 8 characters';
     }
 

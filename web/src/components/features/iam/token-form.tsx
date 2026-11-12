@@ -230,7 +230,15 @@ export function TokenForm({
                   <div
                     key={scope.value}
                     className="flex items-start space-x-2 p-2 rounded-md hover:bg-accent cursor-pointer"
-                    onClick={() => toggleScope(scope.value)}
+                    onClick={(e) => {
+                      // The checkbox toggles itself; its click (and the click
+                      // its hidden form input re-dispatches) must not toggle
+                      // the scope a second time.
+                      if ((e.target as HTMLElement).closest('button, input')) {
+                        return;
+                      }
+                      toggleScope(scope.value);
+                    }}
                   >
                     <Checkbox
                       checked={formData.scopes.includes(scope.value)}
