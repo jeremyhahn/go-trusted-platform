@@ -7,7 +7,7 @@ export type RegistryHealthCode = 0 | 1 | 2 | 3;
 
 export interface RegistryComponent {
   Name?: string;
-  Health?: RegistryHealthCode;
+  Status?: RegistryHealthCode;
   Message?: string;
 }
 

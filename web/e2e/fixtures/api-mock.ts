@@ -457,7 +457,7 @@ export interface RegistryApiMockConfig {
     Health: number;
     Version?: string;
     ReadOnly?: boolean;
-    Components?: { Name?: string; Health?: number }[];
+    Components?: { Name?: string; Status?: number }[];
   };
   statusError?: ApiError;
   deleteError?: ApiError;

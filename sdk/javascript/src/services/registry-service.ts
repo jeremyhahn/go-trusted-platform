@@ -19,7 +19,7 @@ export enum RegistryHealth {
 /** One component's health inside a registry status response. */
 export interface RegistryComponentHealth {
   Name?: string;
-  Health?: RegistryHealth;
+  Status?: RegistryHealth;
   Message?: string;
 }
 
@@ -69,7 +69,8 @@ export class RegistryService extends BaseService {
    */
   async listTags(name: string): Promise<ApiResponse<RegistryTagList>> {
     return this.client.get<RegistryTagList>(
-      this.buildUrlUnder(OCI_BASE, `/${this.encodeRepository(name)}/tags/list`)
+      `${OCI_BASE}/${this.encodeRepository(name)}/tags/list`,
+      { rootRelative: true }
     );
   }
 
@@ -79,12 +80,10 @@ export class RegistryService extends BaseService {
    * @param name - Repository name
    * @param reference - Tag or digest
    */
-  async deleteManifest(name: string, reference: string): Promise<ApiResponse<void>> {
-    return this.client.delete<void>(
-      this.buildUrlUnder(
-        OCI_BASE,
-        `/${this.encodeRepository(name)}/manifests/${this.encodePathSegment(reference)}`
-      )
+  async deleteManifest(name: string, reference: string): Promise<ApiResponse<undefined>> {
+    return this.client.delete<undefined>(
+      `${OCI_BASE}/${this.encodeRepository(name)}/manifests/${this.encodePathSegment(reference)}`,
+      { rootRelative: true }
     );
   }
 

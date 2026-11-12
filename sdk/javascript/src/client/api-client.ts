@@ -48,6 +48,23 @@ export interface RequestOptions {
   };
   /** Custom metadata to pass through interceptors */
   metadata?: Record<string, unknown>;
+  /**
+   * Resolve `path` against the host root, not under `baseUrl`; for routes
+   * mounted outside the API prefix such as OCI `/v2`.
+   */
+  rootRelative?: boolean;
+}
+
+/**
+ * Resolve a root-relative `path` against `base`: an absolute `base` (one with
+ * a scheme) gives its origin plus `path`; a relative `base` (such as the
+ * default `/api`) leaves `path` as it is.
+ */
+function rootUrl(base: string, path: string): string {
+  if (/^[a-z][a-z0-9+.-]*:/i.test(base)) {
+    return new URL(path, base).toString();
+  }
+  return path;
 }
 
 /**
@@ -304,7 +321,10 @@ export class ApiClient implements Transport {
     body?: RequestBody,
     options?: RequestOptions
   ): Promise<ApiResponse<T>> {
-    const url = appendQueryParams(`${this.config.baseUrl}${path}`, options?.params);
+    const base = options?.rootRelative
+      ? rootUrl(this.config.baseUrl, path)
+      : `${this.config.baseUrl}${path}`;
+    const url = appendQueryParams(base, options?.params);
     const startTime = Date.now();
 
     let attempt = 0;

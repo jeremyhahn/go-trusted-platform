@@ -63,7 +63,7 @@ test.describe('Container registry', () => {
 
   test('shows registry status', async ({ page }) => {
     await mockRegistryApi(page, {
-      status: { Health: 1, Version: '2.3.4', ReadOnly: true, Components: [{ Name: 'storage', Health: 1 }] },
+      status: { Health: 1, Version: '2.3.4', ReadOnly: true, Components: [{ Name: 'storage', Status: 1 }] },
     });
 
     await page.goto('/compute/registry');
