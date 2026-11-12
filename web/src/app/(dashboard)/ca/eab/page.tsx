@@ -87,10 +87,18 @@ export default function EABCredentialsPage() {
 
   const handleCreate = (e: React.FormEvent) => {
     e.preventDefault();
+    // Profile IDs are uint64 nanosecond timestamps, above Number.MAX_SAFE_INTEGER:
+    // send the decimal string unchanged, as protojson expects.
+    const profile = profileId.trim();
+    if (!/^[1-9][0-9]{0,19}$/.test(profile)) {
+      setMessage(null);
+      setActionError("Profile ID must be a positive integer");
+      return;
+    }
     void run(async () => {
       const seconds = Number.parseInt(expiresIn, 10);
       const res = await eab.create.mutateAsync({
-        profileId: Number.parseInt(profileId, 10),
+        profileId: profile,
         tenantId,
         ...(Number.isFinite(seconds) && seconds > 0 ? { expiresInSeconds: seconds } : {}),
       });
@@ -100,7 +108,7 @@ export default function EABCredentialsPage() {
     }, "Failed to create credential");
   };
 
-  const handleRevoke = (id: number) => {
+  const handleRevoke = (id: string) => {
     void run(async () => {
       await eab.revoke.mutateAsync(id);
       await list.refetch();
@@ -108,7 +116,7 @@ export default function EABCredentialsPage() {
     }, "Failed to revoke credential");
   };
 
-  const handleDelete = (id: number) => {
+  const handleDelete = (id: string) => {
     if (!confirm(`Delete EAB credential ${id}?`)) return;
     void run(async () => {
       await eab.deleteCredential.mutateAsync(id);
@@ -261,7 +269,8 @@ export default function EABCredentialsPage() {
                 <Label htmlFor="eab-profile-id">Profile ID</Label>
                 <Input
                   id="eab-profile-id"
-                  type="number"
+                  type="text"
+                  inputMode="numeric"
                   required
                   value={profileId}
                   onChange={(e) => setProfileId(e.target.value)}

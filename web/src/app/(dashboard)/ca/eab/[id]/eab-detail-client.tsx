@@ -35,8 +35,10 @@ export default function EABCredentialDetailClient() {
   const params = useParams();
   const pathname = usePathname();
   const rawId = resolveDynamicId(params, pathname, "eab");
-  const id = Number.parseInt(rawId, 10);
-  const validId = Number.isFinite(id) && id > 0;
+  // Credential IDs are uint64 nanosecond timestamps, above Number.MAX_SAFE_INTEGER:
+  // keep the decimal string exactly as the list link and protojson carry it.
+  const id = rawId;
+  const validId = /^[1-9][0-9]{0,19}$/.test(id);
 
   const eab = useEAB();
   const credential = useApi<GetEABCredentialResponse>(

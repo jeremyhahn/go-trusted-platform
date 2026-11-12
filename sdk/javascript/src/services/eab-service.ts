@@ -84,7 +84,7 @@ export class EABService extends BaseService {
    * @param id - Credential ID
    * @returns Credential information (without HMAC key)
    */
-  async get(id: number): Promise<ApiResponse<GetEABCredentialResponse>> {
+  async get(id: string): Promise<ApiResponse<GetEABCredentialResponse>> {
     return this.client.get<GetEABCredentialResponse>(
       this.buildUrl(`/credentials/${id}`)
     );
@@ -132,7 +132,7 @@ export class EABService extends BaseService {
    * @param id - Credential ID
    * @returns Revocation result
    */
-  async revoke(id: number): Promise<ApiResponse<RevokeEABCredentialResponse>> {
+  async revoke(id: string): Promise<ApiResponse<RevokeEABCredentialResponse>> {
     return this.client.post<RevokeEABCredentialResponse>(
       this.buildUrl(`/credentials/${id}/revoke`),
       {}
@@ -158,7 +158,7 @@ export class EABService extends BaseService {
    * @param id - Credential ID
    * @returns Deletion result
    */
-  async delete(id: number): Promise<ApiResponse<DeleteEABCredentialResponse>> {
+  async delete(id: string): Promise<ApiResponse<DeleteEABCredentialResponse>> {
     return this.client.delete<DeleteEABCredentialResponse>(
       this.buildUrl(`/credentials/${id}`)
     );
@@ -175,7 +175,7 @@ export class EABService extends BaseService {
    * @param size - QR code size in pixels (optional)
    * @returns Base64-encoded QR code image
    */
-  async getQRCode(id: number, size?: number): Promise<ApiResponse<GetEABQRCodeResponse>> {
+  async getQRCode(id: string, size?: number): Promise<ApiResponse<GetEABQRCodeResponse>> {
     const filters: Record<string, string | number | boolean | undefined> = {};
     if (size !== undefined) {
       filters.size = size;
@@ -193,7 +193,7 @@ export class EABService extends BaseService {
    *
    * @returns Enrollment URL and its timestamp
    */
-  async getEnrollmentURL(id: number): Promise<ApiResponse<GetEnrollmentURLResponse>> {
+  async getEnrollmentURL(id: string): Promise<ApiResponse<GetEnrollmentURLResponse>> {
     return this.client.get<GetEnrollmentURLResponse>(
       this.buildUrl(`/credentials/${id}/url`)
     );
@@ -205,7 +205,7 @@ export class EABService extends BaseService {
    * @param id - Credential ID
    * @returns Operation status
    */
-  async markUsed(id: number): Promise<ApiResponse<MarkEABCredentialUsedResponse>> {
+  async markUsed(id: string): Promise<ApiResponse<MarkEABCredentialUsedResponse>> {
     return this.client.post<MarkEABCredentialUsedResponse>(
       this.buildUrl(`/credentials/${id}/used`),
       {}
