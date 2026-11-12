@@ -83,6 +83,13 @@ export { useToast, toast, dismissToast } from './use-toast';
 export type { Toast, UseToastReturn } from './use-toast';
 
 export { useReportedGateways } from './use-reported-gateways';
+
+export {
+  useInvitationById,
+  useInvitationByToken,
+  toInvitationView,
+} from './use-invitation-detail';
+export type { InvitationView, InvitationWire } from './use-invitation-detail';
 export type {
   ReportedGateway,
   UseReportedGatewaysOptions,
