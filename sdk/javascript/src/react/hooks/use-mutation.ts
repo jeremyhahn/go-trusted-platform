@@ -245,6 +245,12 @@ export function useMutation<TData, TVariables>(
       // Call onMutate callback (can be used for optimistic updates)
       optionsRef.current?.onMutate?.(vars);
 
+      // The error this call has already reported, so the catch below
+      // rethrows it as is. Any other error, even one carrying a code
+      // (an ApiError thrown by the mutation function), is mapped and
+      // reported there.
+      let reported: MutationError | undefined;
+
       try {
         const response = await mutationFnRef.current(vars);
 
@@ -260,6 +266,7 @@ export function useMutation<TData, TVariables>(
           setStatus('error');
           optionsRef.current?.onError?.(mutationError, vars);
           optionsRef.current?.onSettled?.(undefined, mutationError, vars);
+          reported = mutationError;
           throw mutationError;
         }
 
@@ -281,6 +288,7 @@ export function useMutation<TData, TVariables>(
         setStatus('error');
         optionsRef.current?.onError?.(emptyError, vars);
         optionsRef.current?.onSettled?.(undefined, emptyError, vars);
+        reported = emptyError;
         throw emptyError;
       } catch (err) {
         // Check if component is still mounted
@@ -288,13 +296,8 @@ export function useMutation<TData, TVariables>(
           throw err;
         }
 
-        // Error already handled if it's a MutationError we created
-        if (
-          err !== null &&
-          typeof err === 'object' &&
-          'code' in err &&
-          (err as MutationError).code !== undefined
-        ) {
+        // Error already handled if it's the MutationError we reported
+        if (reported !== undefined && err === reported) {
           throw err;
         }
 
