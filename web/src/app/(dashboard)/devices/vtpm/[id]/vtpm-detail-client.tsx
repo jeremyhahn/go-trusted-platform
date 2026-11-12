@@ -69,41 +69,54 @@ export default function VTPMDetailPage() {
     pcrIndices: '0,1,2,7',
   });
 
-  const fetchVTPM = async () => {
-    setIsLoading(true);
-    try {
-      const response = await vtpmService.getBundle(vtpmId);
-
-      if (response.data) {
+  // The effect settles the bundle read into state from its promise
+  // callbacks (no synchronous setState in the effect).
+  useEffect(() => {
+    if (!vtpmId) {
+      return;
+    }
+    let active = true;
+    vtpmService
+      .getBundle(vtpmId)
+      .then((response) => {
+        if (!response.data) {
+          throw new Error('Failed to fetch vTPM');
+        }
+        if (active) {
         // The REST payload carries the VTPMDetail fields, which differ from
         // the SDK/proto declaration of the bundle (#445).
-        setVTPM(response.data as unknown as VTPMDetail);
-      } else {
-        throw new Error('Failed to fetch vTPM');
-      }
-    } catch (error) {
-      toast({
-        title: 'Error',
-        description: error instanceof Error ? error.message : 'Failed to fetch vTPM',
-        variant: 'destructive',
+          setVTPM(response.data as unknown as VTPMDetail);
+        }
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          toast({
+            title: 'Error',
+            description: error instanceof Error ? error.message : 'Failed to fetch vTPM',
+            variant: 'destructive',
+          });
+        }
+      })
+      .finally(() => {
+        if (active) {
+          setIsLoading(false);
+        }
       });
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (vtpmId) {
-      fetchVTPM();
-    }
+    return () => {
+      active = false;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vtpmId]);
 
-  useEffect(() => {
+  // Open the seal dialog when the query asks for it (state adjusted during
+  // render against the previous action, not in an effect).
+  const [actionSeen, setActionSeen] = useState<string | null | undefined>(undefined);
+  if (action !== actionSeen) {
+    setActionSeen(action);
     if (action === 'seal') {
       setIsSealDialogOpen(true);
     }
-  }, [action]);
+  }
 
   const deleteMutation = useMutation(
     async (_: void) => {
