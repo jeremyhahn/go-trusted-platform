@@ -26,7 +26,10 @@ import (
 	"testing"
 	"time"
 
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	xkmsbackend "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/backend"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
+	xkmscertstore "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/certstore"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
@@ -1018,6 +1021,138 @@ type verifyErrCA struct {
 
 func (c verifyErrCA) Verify(*x509.Certificate, ...crypto.Signer) ([][]*x509.Certificate, error) {
 	return nil, c.err
+}
+
+func (c verifyErrCA) IsRevoked(*big.Int) (bool, error) {
+	return false, c.err
+}
+
+// lookupErrCA is a real CA whose revocation lookup fails.
+type lookupErrCA struct {
+	quicbaasca.CACertificateAuthority
+	err error
+}
+
+func (c lookupErrCA) IsRevoked(*big.Int) (bool, error) {
+	return false, c.err
+}
+
+// newRealTestCA builds a real pinned go-xkms root CA over in-memory stores.
+func newRealTestCA(t *testing.T) quicbaasca.CACertificateAuthority {
+	t.Helper()
+	root, _, err := quicbaasca.NewCA(context.Background(), &quicbaasca.Params{
+		Identity: []quicbaasca.CAIdentity{{
+			Subject: quicbaasca.CASubject{CommonName: "auth-test-root", Organization: "Test Org", Country: "US"},
+			Valid:   1,
+			Keys: []*xkmssdk.KeyConfig{{
+				KeyAlgorithm:       "RSA",
+				Hash:               "SHA-256",
+				SignatureAlgorithm: "SHA256-RSAPSS",
+				RSAConfig:          &xkmssdk.KeyRSAConfig{KeySize: 2048},
+			}},
+			KeystoreType: xkmssdk.StoreSoftware,
+			IsRoot:       true,
+		}},
+		KeyStoreFactory: func(string) (xkmsbackend.Backend, error) {
+			pkcs8, err := xkmssdk.NewPKCS8Backend(&xkmssdk.PKCS8BackendConfig{
+				KeyStorage:         xkmssdk.NewStorageMemory(),
+				AllowPlaintextKeys: true,
+			})
+			if err != nil {
+				return nil, err
+			}
+			return xkmssdk.NewServiceBackend(&xkmssdk.ServiceBackendConfig{
+				Backend:     pkcs8,
+				CertStorage: xkmssdk.NewStorageMemory(),
+			})
+		},
+		CertStoreFactory: func(string) (xkmscertstore.CertStore, error) {
+			return xkmssdk.NewCertStore(&xkmssdk.CertStoreConfig{
+				CertStorage: xkmssdk.NewStorageCertAdapter(xkmssdk.NewStorageMemory()),
+			})
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewCA: %v", err)
+	}
+	full, ok := root.(quicbaasca.CACertificateAuthority)
+	if !ok {
+		t.Fatalf("NewCA returned %T, want a CACertificateAuthority", root)
+	}
+	return full
+}
+
+// issueClientAuthOnly issues a certificate carrying only ExtKeyUsageClientAuth.
+func issueClientAuthOnly(t *testing.T, ca quicbaasca.CACertificateAuthority, cn string) *x509.Certificate {
+	t.Helper()
+	issued, err := ca.IssueCertificate(context.Background(), &quicbaasca.CACertificateRequest{
+		Subject:     quicbaasca.CASubject{CommonName: cn, Organization: "Test Org", Country: "US"},
+		Valid:       1,
+		KeyUsage:    x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	})
+	if err != nil {
+		t.Fatalf("IssueCertificate: %v", err)
+	}
+	return issued.Certificate
+}
+
+// TestAuthenticate_RealCA_ClientAuthOnly_Revocation checks revocation against
+// the real pinned CA: a client-auth-only certificate authenticates while
+// unrevoked, is refused once revoked, and a failed lookup is refused.
+func TestAuthenticate_RealCA_ClientAuthOnly_Revocation(t *testing.T) {
+	ca := newRealTestCA(t)
+	roots, err := ca.CABundleCertPool()
+	if err != nil {
+		t.Fatalf("CABundleCertPool: %v", err)
+	}
+	opts := []MTLSOption{WithTrustedRoots(roots), WithRequireRevocation("")}
+
+	t.Run("unrevoked client-auth-only authenticates", func(t *testing.T) {
+		cert := issueClientAuthOnly(t, ca, "client-ok")
+		adapter, err := NewMTLSAdapter(logging.DefaultLogger(), ca, opts...)
+		if err != nil {
+			t.Fatalf("NewMTLSAdapter: %v", err)
+		}
+		identity, err := adapter.Authenticate(context.Background(), cert)
+		if err != nil {
+			t.Fatalf("Authenticate(unrevoked client-auth-only) = %v, want nil", err)
+		}
+		if identity == nil {
+			t.Fatal("identity = nil, want an identity")
+		}
+	})
+
+	t.Run("revoked is refused", func(t *testing.T) {
+		cert := issueClientAuthOnly(t, ca, "client-revoked")
+		if err := ca.RevokeCert(context.Background(), cert, quicbaasca.RevokeOptions{}); err != nil {
+			t.Fatalf("RevokeCert: %v", err)
+		}
+		adapter, err := NewMTLSAdapter(logging.DefaultLogger(), ca, opts...)
+		if err != nil {
+			t.Fatalf("NewMTLSAdapter: %v", err)
+		}
+		_, err = adapter.Authenticate(context.Background(), cert)
+		if !errors.As(err, new(ErrCertificateRevoked)) {
+			t.Fatalf("err = %T %v, want ErrCertificateRevoked", err, err)
+		}
+	})
+
+	t.Run("lookup error is refused", func(t *testing.T) {
+		cert := issueClientAuthOnly(t, ca, "client-lookup")
+		cause := errVerifyUnavailable{}
+		adapter, err := NewMTLSAdapter(logging.DefaultLogger(), lookupErrCA{CACertificateAuthority: ca, err: cause}, opts...)
+		if err != nil {
+			t.Fatalf("NewMTLSAdapter: %v", err)
+		}
+		_, err = adapter.Authenticate(context.Background(), cert)
+		if !errors.As(err, new(ErrRevocationCheckFailed)) {
+			t.Fatalf("err = %T %v, want ErrRevocationCheckFailed", err, err)
+		}
+		if !errors.Is(err, cause) {
+			t.Fatalf("err = %v does not wrap the lookup error", err)
+		}
+	})
 }
 
 // errVerifyUnavailable is a non-revocation failure from the CA.
