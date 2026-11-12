@@ -20,6 +20,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Loader2 } from "lucide-react";
+import { checkQuoteBinding } from "trusted-platform-sdk";
 import { useTPMKeyOperations, useToast } from "@/hooks";
 import type { OperationResponse, TPMClient, TPMKeyOperation } from "@/hooks";
 
@@ -28,6 +29,13 @@ const DEFAULT_EK_HANDLE = "0x81010001";
 const DEFAULT_SRK_HANDLE = "0x81000001";
 const DEFAULT_AK_HANDLE = "0x81010002";
 
+/**
+ * The handle of the platform IAK. The server's Quote ignores akHandle and
+ * always signs with the IAK it is configured with (#1751), so the page sends
+ * this handle and never an operator-chosen one.
+ */
+const PLATFORM_IAK_HANDLE = 0x81010002;
+
 /** parseHandle reads a decimal or 0x-prefixed hex handle; NaN when neither. */
 export function parseHandle(value: string): number {
   const trimmed = value.trim();
@@ -35,14 +43,20 @@ export function parseHandle(value: string): number {
   return Number(trimmed);
 }
 
-/** parsePCRList reads "0, 1,7" as [0, 1, 7], dropping what is not an index. */
-export function parsePCRList(value: string): number[] {
-  return value
-    .split(",")
-    .map((s) => s.trim())
-    .filter((s) => /^\d+$/.test(s))
-    .map(Number)
-    .filter((n) => n >= 0 && n <= 23);
+/**
+ * parsePCRList reads "0, 1,7" as [0, 1, 7] (duplicates removed, order kept).
+ * Null when the list is empty or any entry is not a PCR index 0-23: the
+ * quote is never taken over fewer PCRs than the operator asked for (#1751).
+ */
+export function parsePCRList(value: string): number[] | null {
+  const indices: number[] = [];
+  for (const token of value.split(",").map((s) => s.trim())) {
+    if (!/^\d+$/.test(token)) return null;
+    const n = Number(token);
+    if (n > 23) return null;
+    if (!indices.includes(n)) indices.push(n);
+  }
+  return indices.length === 0 ? null : indices;
 }
 
 /**
@@ -182,14 +196,29 @@ export function TPMKeyOperations({ onChanged }: { onChanged?: () => void }) {
   };
 
   const runQuote = async () => {
-    const handle = handleOrToast("quote", akHandle);
-    if (handle === null) return;
+    const pcrIndices = parsePCRList(pcrList);
+    if (pcrIndices === null) {
+      toast({
+        title: "Invalid PCR list",
+        description: "Enter PCR indices 0-23 separated by commas, e.g. 0,1,7",
+        variant: "destructive",
+      });
+      return;
+    }
     const nonce = randomNonce();
     setQuoted(null);
     setVerdicts((prev) => ({ ...prev, verifyQuote: undefined }));
-    const data = await execute("quote", (c) =>
-      c.quote({ akHandle: handle, pcrIndices: parsePCRList(pcrList), pcrBank: "SHA256", nonce }),
-    );
+    const data = await execute("quote", async (c) => {
+      const res = await c.quote({ akHandle: PLATFORM_IAK_HANDLE, pcrIndices, pcrBank: "SHA256", nonce });
+      if (res.success !== false) {
+        // Refuse a quote not bound to SHA-256(nonce || channelBinding), as
+        // the TPM Quote page does: a thrown QuoteBindingError lands in
+        // errors.quote, so nothing is announced and nothing can be verified.
+        const quote = (res.data ?? {}) as QuoteResult;
+        await checkQuoteBinding(quote.quote ?? "", nonce, quote.channelBinding);
+      }
+      return res;
+    });
     if (data !== null) setQuoted({ result: data as QuoteResult, nonce });
   };
 
@@ -397,12 +426,15 @@ export function TPMKeyOperations({ onChanged }: { onChanged?: () => void }) {
         <CardContent className="space-y-3">
           <div className="grid gap-2 md:grid-cols-2">
             <div className="grid gap-2">
-              <Label htmlFor="tpm-ak-handle">AK handle</Label>
+              <Label htmlFor="tpm-ak-handle">AK handle (Delete AK)</Label>
               <Input id="tpm-ak-handle" value={akHandle} onChange={(e) => setAkHandle(e.target.value)} />
             </div>
             <div className="grid gap-2">
               <Label htmlFor="tpm-quote-pcrs">PCRs to quote</Label>
               <Input id="tpm-quote-pcrs" value={pcrList} onChange={(e) => setPcrList(e.target.value)} />
+              <p data-testid="tpm-quote-key" className="text-xs text-muted-foreground">
+                Quotes are signed by the platform IAK the server is configured with; the key cannot be chosen here.
+              </p>
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
