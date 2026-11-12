@@ -719,6 +719,12 @@ export interface OverlayApiMockConfig {
     bytesTx: number;
     bytesRx: number;
   }>;
+  /**
+   * Requests to fail, keyed '<METHOD> <path>' (for example 'DELETE /vnis/5001'
+   * or 'GET /vteps'), with the HTTP status to answer. Use a status the client
+   * does not retry (403, not 503).
+   */
+  failures?: Record<string, number>;
 }
 
 /** One request the overlay mock answered: method, path and query. */
@@ -752,6 +758,10 @@ export async function mockOverlayApi(
       const json = (status: number, body: unknown) =>
         route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 
+      const failStatus = config.failures?.[`${method} ${path}`];
+      if (failStatus !== undefined) {
+        return json(failStatus, { error: { code: 'forbidden', message: 'denied' } });
+      }
       if (method === 'GET' && path === '/vteps') return json(200, { vteps });
       if (method === 'GET' && path.startsWith('/vteps/')) {
         const nodeId = decodeURIComponent(path.slice('/vteps/'.length));

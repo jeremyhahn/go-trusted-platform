@@ -17,9 +17,12 @@ const tunnels = [
   { localVtep: 'node-a', remoteVtep: 'node-b', vni: 5001, state: 'up', bytesTx: 4096, bytesRx: 8192 },
 ];
 
-async function openPage(page: Page): Promise<OverlayApiCall[]> {
+async function openPage(
+  page: Page,
+  failures: Record<string, number> = {}
+): Promise<OverlayApiCall[]> {
   await mockTenantApi(page);
-  const calls = await mockOverlayApi(page, { vteps, vnis, tunnels });
+  const calls = await mockOverlayApi(page, { vteps, vnis, tunnels, failures });
   await page.goto('/networking/overlays/vteps');
   await expect(page.getByRole('heading', { name: 'Overlay VTEPs' })).toBeVisible();
   return calls;
@@ -32,8 +35,9 @@ test.describe('Overlay VTEPs and tunnels', () => {
 
   test('ListVTEPs: lists VTEPs on the VTEPs page', async ({ page }) => {
     const calls = await openPage(page);
-    await expect(page.getByRole('cell', { name: 'node-a', exact: true })).toBeVisible();
-    await expect(page.getByRole('cell', { name: '10.0.0.2' })).toBeVisible();
+    const table = page.getByTestId('vteps-table');
+    await expect(table.getByRole('cell', { name: 'node-a', exact: true })).toBeVisible();
+    await expect(table.getByRole('cell', { name: '10.0.0.2' })).toBeVisible();
     expect(calls.some((c) => c.method === 'GET' && c.path === '/vteps')).toBe(true);
   });
 
@@ -108,5 +112,34 @@ test.describe('Overlay VTEPs and tunnels', () => {
           c.query.vni === '5001'
       )
     ).toBe(true);
+  });
+
+  test('DeleteVNI: a denied delete shows an error and keeps the VNI', async ({ page }) => {
+    const calls = await openPage(page, { 'DELETE /vnis/5001': 403 });
+    await page.getByRole('button', { name: 'Delete VNI 5001' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Delete' }).click();
+    await expect(page.getByText('Delete VNI failed').first()).toBeVisible();
+    await expect(page.getByText('VNI deleted')).toHaveCount(0);
+    await expect(page.getByRole('cell', { name: 'tenant-blue' })).toBeVisible();
+    expect(calls.some((c) => c.method === 'DELETE' && c.path === '/vnis/5001')).toBe(true);
+  });
+
+  test('ForgetMAC: a denied forget shows an error and keeps the inputs', async ({ page }) => {
+    const calls = await openPage(page, { 'DELETE /macs': 403 });
+    await page.getByLabel('MAC address').fill('aa:bb:cc:dd:ee:ff');
+    await page.getByLabel('VNI', { exact: true }).fill('5001');
+    await page.getByRole('button', { name: 'Forget MAC' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Forget' }).click();
+    await expect(page.getByText('Forget MAC failed').first()).toBeVisible();
+    await expect(page.getByText('MAC forgotten')).toHaveCount(0);
+    await expect(page.getByLabel('MAC address')).toHaveValue('aa:bb:cc:dd:ee:ff');
+    await expect(page.getByLabel('VNI', { exact: true })).toHaveValue('5001');
+    expect(calls.some((c) => c.method === 'DELETE' && c.path === '/macs')).toBe(true);
+  });
+
+  test('ListVTEPs: a denied list shows an error, not an empty inventory', async ({ page }) => {
+    await openPage(page, { 'GET /vteps': 403 });
+    await expect(page.getByTestId('overlay-list-error').first()).toBeVisible();
+    await expect(page.getByText('No VTEPs found')).toHaveCount(0);
   });
 });
