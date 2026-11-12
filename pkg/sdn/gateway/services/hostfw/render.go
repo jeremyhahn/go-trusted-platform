@@ -86,6 +86,8 @@ const (
 	RulePeer
 	// RuleTunnelPort accepts BGP/BFD on a tunnel interface.
 	RuleTunnelPort
+	// RuleVRRP accepts VRRP (IP protocol 112) on an FHRP interface.
+	RuleVRRP
 )
 
 // Render validates and normalises the ruleset and produces both forms.
@@ -160,6 +162,9 @@ func compile(rs Ruleset) []Rule {
 			Rule{Kind: RuleTunnelPort, Interface: t, Protocol: ProtocolUDP, Port: PortBFD, Comment: "bfd on " + t},
 		)
 	}
+	for _, ifc := range rs.VRRP {
+		rules = append(rules, Rule{Kind: RuleVRRP, Interface: ifc, IPProto: ipProtoVRRP, Comment: "vrrp on " + ifc})
+	}
 	return rules
 }
 
@@ -217,6 +222,9 @@ func ruleText(r Rule, icmp RateLimit) string {
 			name = "gre"
 		}
 		parts = append(parts, fmt.Sprintf("%s saddr %s meta l4proto %s accept", familyKeyword(r.Family), r.Peer, name))
+	case RuleVRRP:
+		// Numeric, so the boot-time nft -f does not depend on /etc/protocols.
+		parts = append(parts, "meta l4proto 112 accept")
 	}
 	return strings.Join(parts, " ") + fmt.Sprintf(" comment %q", r.Comment)
 }

@@ -202,6 +202,9 @@ func buildExprs(r Rule, icmp RateLimit) ([]expr.Any, error) {
 		e = append(e, exprSaddrPrefix(netip.PrefixFrom(r.Peer, r.Peer.BitLen()))...)
 		e = append(e, exprL4Proto(r.IPProto)...)
 		e = append(e, accept())
+	case RuleVRRP:
+		e = append(e, exprL4Proto(ipProtoVRRP)...)
+		e = append(e, accept())
 	default:
 		return nil, ErrUnknownProtocol
 	}

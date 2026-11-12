@@ -454,7 +454,8 @@ func (b hostFWBackend) Healthy() bool { return b.Service.Health().Active }
 
 // buildHostFW builds the nftables host packet filter from the `hostfw:`
 // section, the daemon-injected listener inventory and applier
-// (HostRuntime), and the tunnel interfaces the gateway itself configures.
+// (HostRuntime), the tunnel interfaces the gateway itself configures, and
+// the enabled FHRP groups' interfaces, on which VRRP is admitted.
 // Without an injected applier it opens the real netlink connection, which
 // needs CAP_NET_ADMIN — the gateway's normal privilege.
 func buildHostFW(g *Gateway) (backedService, error) {
@@ -480,6 +481,16 @@ func buildHostFW(g *Gateway) (backedService, error) {
 			rendered.Tunnels = append(rendered.Tunnels, g.config.Tunnels[i].Name)
 		}
 	}
+	// Every enabled FHRP group's interface carries its peers' VRRP
+	// advertisements; without them a backup never hears the master and
+	// claims the same addresses.
+	if f := g.config.FHRP; f != nil && f.Enabled {
+		for i := range f.Groups {
+			if !slices.Contains(rendered.VRRP, f.Groups[i].Interface) {
+				rendered.VRRP = append(rendered.VRRP, f.Groups[i].Interface)
+			}
+		}
+	}
 	svc, err := hostfw.New(hostfw.Deps{
 		Applier:   applier,
 		Inventory: inventory,
@@ -496,14 +507,18 @@ func buildHostFW(g *Gateway) (backedService, error) {
 type fhrpBackend struct{ *fhrp.Speaker }
 
 // Healthy reports a started speaker none of whose groups' last actuation
-// (advertise, claim, release) failed.
-func (b fhrpBackend) Healthy() bool {
-	h := b.Speaker.Health()
+// (advertise, claim, release) failed and none of which holds an unrepaired
+// address claim: a later successful advertisement does not hide it.
+func (b fhrpBackend) Healthy() bool { return fhrpHealthy(b.Speaker.Health()) }
+
+// fhrpHealthy reports a started speaker none of whose groups has a failed
+// last actuation or an unrepaired address claim.
+func fhrpHealthy(h fhrp.Health) bool {
 	if !h.Active {
 		return false
 	}
 	for _, g := range h.Groups {
-		if g.LastError != nil {
+		if g.LastError != nil || g.ClaimError != nil {
 			return false
 		}
 	}

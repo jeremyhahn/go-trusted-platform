@@ -125,6 +125,8 @@ type GroupStatus struct {
 	// Initialize).
 	NextDeadline time.Time
 	LastError    error
+	// ClaimError is the unrepaired address-claim failure; LastError can be nil while it is set.
+	ClaimError error
 }
 
 // Health is the speaker's health summary.
@@ -294,6 +296,7 @@ func (r *runner) status() GroupStatus {
 	return GroupStatus{
 		VRID: g.cfg.VRID, Interface: g.cfg.Interface, Family: g.family, State: g.state,
 		Priority: g.Priority(), Addresses: g.Addresses(), Transitions: g.transitions, LastError: g.lastErr,
+		ClaimError:   g.claimErr,
 		NextDeadline: g.NextDeadline(),
 	}
 }

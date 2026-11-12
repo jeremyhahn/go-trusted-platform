@@ -99,6 +99,7 @@ func (s *Service) ruleset() Ruleset {
 		Listeners:  listeners,
 		Peers:      cfg.Peers,
 		Tunnels:    cfg.Tunnels,
+		VRRP:       cfg.VRRP,
 		Unfiltered: cfg.Unfiltered,
 		ICMP:       cfg.ICMP,
 	}

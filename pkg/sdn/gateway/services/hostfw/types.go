@@ -67,6 +67,7 @@ const (
 
 	ipProtoGRE      uint8 = 47
 	ipProtoESP      uint8 = 50
+	ipProtoVRRP     uint8 = 112
 	ipProtoTCP      uint8 = 6
 	ipProtoUDP      uint8 = 17
 	ipProtoICMP     uint8 = 1
@@ -119,6 +120,8 @@ type Ruleset struct {
 	// are accepted from anyone reaching the tunnel — the tunnel itself
 	// bounds who that can be.
 	Tunnels []string
+	// VRRP are the interfaces on which VRRP advertisements (IP protocol 112) from FHRP peers are accepted.
+	VRRP []string
 	// Unfiltered are interfaces the filter deliberately leaves open. It is
 	// for a rollout that must not lock the operator out of the management
 	// leg before its listeners are in the inventory; the rendered ruleset
@@ -153,6 +156,8 @@ type Config struct {
 	Peers []PeerAllowance `yaml:"peers,omitempty" json:"peers,omitempty" mapstructure:"peers"`
 	// Tunnels are the tunnel interfaces carrying BGP and BFD.
 	Tunnels []string `yaml:"tunnels,omitempty" json:"tunnels,omitempty" mapstructure:"tunnels"`
+	// VRRP are the FHRP interfaces that admit VRRP advertisements.
+	VRRP []string `yaml:"vrrp,omitempty" json:"vrrp,omitempty" mapstructure:"vrrp"`
 	// Unfiltered are interfaces left open on purpose; see Ruleset.
 	Unfiltered []string `yaml:"unfiltered,omitempty" json:"unfiltered,omitempty" mapstructure:"unfiltered"`
 	// ICMP bounds ICMP; zero fields take DefaultICMPRateLimit.
@@ -165,7 +170,7 @@ type Config struct {
 
 // Validate checks the operator-declared part of the ruleset.
 func (c Config) Validate() error {
-	rs := Ruleset{Listeners: c.Extra, Peers: c.Peers, Tunnels: c.Tunnels, Unfiltered: c.Unfiltered, ICMP: c.ICMP}
+	rs := Ruleset{Listeners: c.Extra, Peers: c.Peers, Tunnels: c.Tunnels, Unfiltered: c.Unfiltered, VRRP: c.VRRP, ICMP: c.ICMP}
 	return rs.Validate()
 }
 
@@ -218,6 +223,11 @@ func (rs Ruleset) Validate() error {
 			return &ValidationError{Field: "tunnels", Index: i, Err: err}
 		}
 	}
+	for i, v := range rs.VRRP {
+		if err := validateInterface(v, false); err != nil {
+			return &ValidationError{Field: "vrrp", Index: i, Err: err}
+		}
+	}
 	for i, u := range rs.Unfiltered {
 		if err := validateInterface(u, false); err != nil {
 			return &ValidationError{Field: "unfiltered", Index: i, Err: err}
@@ -235,6 +245,7 @@ func (rs Ruleset) normalized() Ruleset {
 		Peers:      append([]PeerAllowance(nil), rs.Peers...),
 		Tunnels:    append([]string(nil), rs.Tunnels...),
 		Unfiltered: append([]string(nil), rs.Unfiltered...),
+		VRRP:       append([]string(nil), rs.VRRP...),
 		ICMP:       rs.ICMP,
 	}
 	if out.ICMP.Rate == 0 {
@@ -254,6 +265,7 @@ func (rs Ruleset) normalized() Ruleset {
 	})
 	sort.Strings(out.Tunnels)
 	sort.Strings(out.Unfiltered)
+	sort.Strings(out.VRRP)
 	return out
 }
 
