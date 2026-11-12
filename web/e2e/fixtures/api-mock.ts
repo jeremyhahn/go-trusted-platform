@@ -703,3 +703,115 @@ export async function mockInvitationValidation(
     });
   });
 }
+
+/**
+ * Mock the invitation detail, token lookup and accept endpoints (#1753).
+ *
+ * Handles:
+ * - GET  /api/v1/invitations/{id}           - GetInvitation
+ * - GET  /api/v1/invitations/token/{token}  - GetInvitationByToken
+ * - POST /api/v1/invitations/accept         - AcceptInvitation
+ *
+ * Register it after mockInvitationApi: Playwright tries the most recently
+ * added route first, so these specific paths win over the list handler.
+ *
+ * @returns the accept request bodies the page posted
+ */
+export async function mockInvitationLookupApi(
+  page: Page,
+  options: {
+    invitations?: Invitation[];
+    tenantName?: string;
+    getError?: ApiError | null;
+    tokenError?: ApiError | null;
+    acceptError?: ApiError | null;
+  } = {}
+): Promise<{ acceptBodies: () => Array<Record<string, unknown>> }> {
+  const invitations = options.invitations || [];
+  const accepted: Array<Record<string, unknown>> = [];
+
+  const fail = async (route: Route, err: ApiError) => {
+    await route.fulfill({
+      status: err.status,
+      contentType: 'application/json',
+      body: errorEnvelope(err),
+    });
+  };
+
+  await page.route('**/api/v1/invitations/**', async (route: Route, request: Request) => {
+    const url = new URL(request.url());
+    const path = url.pathname.replace(/\/+$/, '');
+    const method = request.method();
+
+    if (method === 'POST' && path.endsWith('/invitations/accept')) {
+      if (options.acceptError) {
+        await fail(route, options.acceptError);
+        return;
+      }
+      const body = (request.postDataJSON() || {}) as Record<string, unknown>;
+      accepted.push(body);
+      const inv = invitations.find((i) => i.token === body.token);
+      if (!inv) {
+        await fail(route, { error: 'Invitation not found', status: 404 });
+        return;
+      }
+      inv.status = 'accepted';
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: true,
+          tenantId: 'invited-tenant-123',
+          message: 'Invitation accepted',
+        }),
+      });
+      return;
+    }
+
+    const tokenMatch = path.match(/\/invitations\/token\/([^/]+)$/);
+    if (method === 'GET' && tokenMatch) {
+      if (options.tokenError) {
+        await fail(route, options.tokenError);
+        return;
+      }
+      const token = decodeURIComponent(tokenMatch[1]);
+      const inv = invitations.find((i) => i.token === token);
+      if (!inv) {
+        await fail(route, { error: 'Invalid or expired invitation', status: 404 });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          invitation: { ...inv, tenant_name: options.tenantName || 'Invited Workspace' },
+        }),
+      });
+      return;
+    }
+
+    const idMatch = path.match(/\/invitations\/([^/]+)$/);
+    if (method === 'GET' && idMatch && idMatch[1] !== 'validate') {
+      if (options.getError) {
+        await fail(route, options.getError);
+        return;
+      }
+      const id = decodeURIComponent(idMatch[1]);
+      const inv = invitations.find((i) => i.id === id);
+      if (!inv) {
+        await fail(route, { error: 'Invitation not found', status: 404 });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ invitation: inv }),
+      });
+      return;
+    }
+
+    await route.fallback();
+  });
+
+  return { acceptBodies: () => [...accepted] };
+}
