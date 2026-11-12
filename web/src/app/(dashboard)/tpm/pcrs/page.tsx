@@ -127,7 +127,7 @@ export default function TPMPCRsPage() {
     try {
       await extendPCR.mutateAsync({
         index: Number(extendIndex),
-        hashAlg: selectedAlgorithm,
+        hashAlg: selectedAlgorithm.toLowerCase(),
         data: textToBase64(extendData),
       });
       toast({

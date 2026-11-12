@@ -423,11 +423,19 @@ export class TPMService extends BaseService {
   /**
    * Extend a PCR with data
    *
+   * The bank name is sent lowercase: the TPM accepts sha1, sha256, sha384
+   * and sha512 only. The request is never retried, because a replayed
+   * extend changes the PCR again.
+   *
    * @param request - PCR index, bank and data (base64)
    * @returns Extend result
    */
   async extendPCR(request: ExtendPCRRequest): Promise<ApiResponse<ExtendPCRResponse>> {
-    return this.client.post<ExtendPCRResponse>(this.buildUrl('/pcrs/extend'), request);
+    return this.client.post<ExtendPCRResponse>(
+      this.buildUrl('/pcrs/extend'),
+      { ...request, hashAlg: request.hashAlg?.toLowerCase() },
+      { retry: { enabled: false } }
+    );
   }
 
   // =========================================================================
