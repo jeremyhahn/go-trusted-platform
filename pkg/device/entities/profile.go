@@ -402,6 +402,18 @@ type DeviceProfile struct {
 	// MACAddress is the exact MAC address for non-TPM device identification.
 	MACAddress string `yaml:"mac-address,omitempty" json:"mac_address,omitempty"`
 
+	// DICEDeviceID is the hex-encoded DICE device identifier of a
+	// DICE-capable (AVR) device bound to this profile: an even number of
+	// hex digits, 1 to MaxDICEDeviceIDBytes bytes. Empty means the profile
+	// is not bound to a DICE device. The profile store resolves a profile
+	// by it (FindByDICEDeviceID), case-insensitively.
+	DICEDeviceID string `yaml:"dice-device-id,omitempty" json:"dice_device_id,omitempty"`
+
+	// GoldenFWHash is the hex-encoded expected firmware measurement
+	// (FWHash, GoldenFWHashBytes bytes) of the device bound to this
+	// profile. Empty means no golden firmware hash is recorded.
+	GoldenFWHash string `yaml:"golden-fw-hash,omitempty" json:"golden_fw_hash,omitempty"`
+
 	// Assigned indicates whether this profile has been bound to a specific device.
 	Assigned bool `yaml:"assigned" json:"assigned"`
 
