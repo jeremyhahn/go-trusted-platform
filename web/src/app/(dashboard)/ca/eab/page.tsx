@@ -23,6 +23,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useEAB, useEABList } from "@/hooks";
+import { normalizeEABStatus } from "@/utils/eab-status";
 import type {
   CreateEABCredentialResponse,
   EABCredentialSummary,
@@ -39,7 +40,7 @@ function errorText(err: unknown, fallback: string): string {
 }
 
 function statusVariant(status: string): "default" | "secondary" | "destructive" | "outline" {
-  switch (status) {
+  switch (normalizeEABStatus(status)) {
     case "ACTIVE":
       return "default";
     case "REVOKED":
@@ -226,14 +227,14 @@ export default function EABCredentialsPage() {
                   <TableCell>{cred.tenantId}</TableCell>
                   <TableCell>{cred.profileId}</TableCell>
                   <TableCell>
-                    <Badge variant={statusVariant(cred.status)}>{cred.status}</Badge>
+                    <Badge variant={statusVariant(cred.status)}>{normalizeEABStatus(cred.status)}</Badge>
                   </TableCell>
                   <TableCell>{cred.expiresAt}</TableCell>
                   <TableCell className="flex gap-2">
                     <Button
                       size="sm"
                       variant="outline"
-                      disabled={cred.status !== "ACTIVE"}
+                      disabled={normalizeEABStatus(cred.status) !== "ACTIVE"}
                       onClick={() => handleRevoke(cred.id)}
                     >
                       Revoke
@@ -361,7 +362,7 @@ export default function EABCredentialsPage() {
                   </Link>
                 </div>
                 <div>Tenant: {lookupResult.tenantId}</div>
-                <div>Status: {lookupResult.status}</div>
+                <div>Status: {normalizeEABStatus(lookupResult.status)}</div>
               </div>
             )}
           </CardContent>

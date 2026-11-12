@@ -189,11 +189,13 @@ export class EABService extends BaseService {
    * Get enrollment URL for an EAB credential
    *
    * @param id - Credential ID
-   * @returns Enrollment URL with expiration
+   * Calls the registered `GET /credentials/{id}/url` route.
+   *
+   * @returns Enrollment URL and its timestamp
    */
   async getEnrollmentURL(id: number): Promise<ApiResponse<GetEnrollmentURLResponse>> {
     return this.client.get<GetEnrollmentURLResponse>(
-      this.buildUrl(`/credentials/${id}/enrollment-url`)
+      this.buildUrl(`/credentials/${id}/url`)
     );
   }
 
