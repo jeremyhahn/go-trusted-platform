@@ -83,6 +83,8 @@ export { useToast, toast, dismissToast } from './use-toast';
 export type { Toast, UseToastReturn } from './use-toast';
 
 export { useReportedGateways } from './use-reported-gateways';
+export { useTenantLifecycle } from './use-tenant-lifecycle';
+export type { UseTenantLifecycleResult } from './use-tenant-lifecycle';
 export type {
   ReportedGateway,
   UseReportedGatewaysOptions,

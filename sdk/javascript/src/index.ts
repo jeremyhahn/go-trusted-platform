@@ -1012,6 +1012,27 @@ export type {
   ListVPNPosturePoliciesResponse,
 } from './types/vpn.js';
 
+// Tenant lifecycle, quota and DEK types (#1758)
+export type {
+  Tenant,
+  TenantState,
+  TenantStatus,
+  TenantDEKStatus,
+  ComputeQuota,
+  NetworkQuota,
+  StorageQuota,
+  CheckQuotaRequest,
+  CheckQuotaResponse,
+  RotateTenantDEKRequest,
+  RotateTenantDEKResponse,
+  GetTenantDEKStatusResponse,
+  GetTenantByNameResponse,
+  UpdateTenantRequest,
+  UpdateTenantResponse,
+  UpdateQuotasRequest,
+  SyncTenantsResponse,
+} from './types/tenant.js';
+
 // =============================================================================
 // QuicBaaS Type Exports (28 services)
 // =============================================================================
