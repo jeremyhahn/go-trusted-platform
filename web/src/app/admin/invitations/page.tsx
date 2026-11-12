@@ -23,6 +23,25 @@ interface Notification {
   type: NotificationType;
 }
 
+/** loadInvitations reads the tenant's invitations; it throws on failure. */
+async function loadInvitations(): Promise<Invitation[]> {
+  const baseUrl = getBaseUrl();
+  const jwt = getCookie("jwt");
+
+  const response = await fetch(`${baseUrl}/api/v1/invitations`, {
+    headers: {
+      Authorization: `Bearer ${jwt}`,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error("Failed to fetch invitations");
+  }
+
+  const data = await response.json();
+  return data.invitations || [];
+}
+
 export default function InvitationsPage() {
   const router = useRouter();
   const [invitations, setInvitations] = useState<Invitation[]>([]);
@@ -33,6 +52,14 @@ export default function InvitationsPage() {
   const [notification, setNotification] = useState<Notification | null>(null);
   const [isTenantOwner, setIsTenantOwner] = useState(false);
 
+  const showNotification = (message: string, type: NotificationType) => {
+    setNotification({ message, type });
+    setTimeout(() => setNotification(null), 5000);
+  };
+
+  // The effect reads the session, then settles the invitations read into
+  // state from its promise callbacks (no synchronous setState in the
+  // effect). A non-owner gets no read and the owner-only notice.
   useEffect(() => {
     const user = getUserFromToken();
     if (!user) {
@@ -40,51 +67,45 @@ export default function InvitationsPage() {
       return;
     }
 
-    if (!user.isTenantOwner) {
-      setIsTenantOwner(false);
-      setNotification({
-        message: "Only tenant owners can manage invitations.",
-        type: "error",
-      });
-      setFetchingInvitations(false);
-      return;
-    }
-
-    setIsTenantOwner(true);
-    fetchInvitations();
-  }, [router]);
-
-  const showNotification = (message: string, type: NotificationType) => {
-    setNotification({ message, type });
-    setTimeout(() => setNotification(null), 5000);
-  };
-
-  const fetchInvitations = async () => {
-    try {
-      const baseUrl = getBaseUrl();
-      const jwt = getCookie("jwt");
-
-      const response = await fetch(`${baseUrl}/api/v1/invitations`, {
-        headers: {
-          Authorization: `Bearer ${jwt}`,
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to fetch invitations");
+    let active = true;
+    const request = user.isTenantOwner
+      ? loadInvitations()
+      : Promise.resolve(null);
+    void request.then(
+      (list) => {
+        if (!active) {
+          return;
+        }
+        if (list === null) {
+          setIsTenantOwner(false);
+          setNotification({
+            message: "Only tenant owners can manage invitations.",
+            type: "error",
+          });
+        } else {
+          setIsTenantOwner(true);
+          setInvitations(list);
+        }
+        setFetchingInvitations(false);
+      },
+      (error: unknown) => {
+        if (!active) {
+          return;
+        }
+        setIsTenantOwner(true);
+        setNotification({
+          message:
+            error instanceof Error ? error.message : "Failed to fetch invitations",
+          type: "error",
+        });
+        setTimeout(() => setNotification(null), 5000);
+        setFetchingInvitations(false);
       }
-
-      const data = await response.json();
-      setInvitations(data.invitations || []);
-    } catch (error) {
-      showNotification(
-        error instanceof Error ? error.message : "Failed to fetch invitations",
-        "error"
-      );
-    } finally {
-      setFetchingInvitations(false);
-    }
-  };
+    );
+    return () => {
+      active = false;
+    };
+  }, [router]);
 
   const handleCreateInvitation = async (e: React.FormEvent) => {
     e.preventDefault();
