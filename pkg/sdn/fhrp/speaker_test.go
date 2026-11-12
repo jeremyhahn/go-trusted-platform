@@ -628,6 +628,32 @@ func TestSpeaker_AdoptsAStaleVIPAfterRestart(t *testing.T) {
 	})
 }
 
+// A non-owner restarted while a peer stays master never runs Claim, so
+// the VIP its crashed predecessor left must go before it enters Backup:
+// otherwise it answers ARP/ND for the peer's VIP (Codex #1716 round 4 P1).
+func TestSpeaker_RestartedBackupRemovesAStaleVIP(t *testing.T) {
+	seg := newSegment()
+	clock := newFakeClock(t0)
+	progHigh := newFakeProgrammer()
+	high, err := New(speakerConfig(PriorityOwner, "10.4.200.2"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: progHigh, Clock: clock, Logger: quietLogger()})
+	require.NoError(t, err)
+	require.NoError(t, high.Start(context.Background()))
+	defer func() { _ = high.Stop(context.Background()) }()
+	<-progHigh.claimed
+
+	prog := newFakeProgrammer()
+	prog.addrs["br-int/10.4.200.1/24"] = nil
+	s, err := New(speakerConfig(200, "10.4.200.10"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: prog, Clock: clock, Logger: quietLogger()})
+	require.NoError(t, err)
+	require.NoError(t, s.Start(context.Background()))
+	defer func() { _ = s.Stop(context.Background()) }()
+	state, err := s.GroupState("br-int", 20)
+	require.NoError(t, err)
+	assert.Equal(t, StateBackup, state)
+	assert.False(t, prog.holds("br-int", "10.4.200.1/24"), "the restarted backup removed the stale VIP before entering Backup")
+	assert.True(t, progHigh.holds("br-int", "10.4.200.1/24"), "the peer master keeps its VIP")
+}
+
 func TestWallClock(t *testing.T) {
 	c := wallClock{}
 	assert.WithinDuration(t, time.Now(), c.Now(), time.Second)

@@ -172,27 +172,47 @@ func TestRender_VRRPOnInterfaces(t *testing.T) {
 	assert.Len(t, rendered.Rules, 8, "6 base rules plus 2 VRRP")
 }
 
-// accept-mode off (RFC 5798 §6.4.3): traffic to a VIP is dropped on its
-// interface before ICMP and the allowlist. For IPv6 neighbour discovery
-// to the VIP stays answered, so an IPv6 VIP takes two rules: one for every
-// non-ICMPv6 packet, one for ICMPv6 other than NS/NA (an `icmpv6 type`
-// match implies ICMPv6, so one rule alone would let TCP through).
+// accept-mode off (RFC 5798 §6.4.3): traffic to a VIP is dropped whatever
+// interface it arrives on (Linux delivers an installed VIP locally from any
+// ingress), and before the conntrack allowance, so an established flow or
+// a reply to VIP-sourced traffic is dropped too (Codex #1716 round 4). For
+// IPv6 neighbour discovery to the VIP stays answered, so an IPv6 VIP takes
+// two rules: one for every non-ICMPv6 packet, one for ICMPv6 other than
+// NS/NA (an `icmpv6 type` match implies ICMPv6, so one rule alone would
+// let TCP through).
 func TestRender_VIPDeny(t *testing.T) {
 	rendered, err := Render(Ruleset{VIPDeny: []VIPDeny{
 		{Interface: "br-int", Address: netip.MustParseAddr("2001:db8::1")},
 		{Interface: "br-int", Address: netip.MustParseAddr("10.4.200.1")},
 	}})
 	require.NoError(t, err)
-	v4 := `iifname "br-int" ip daddr 10.4.200.1 drop comment "vip 10.4.200.1 accept-mode off"`
-	v6 := `iifname "br-int" ip6 daddr 2001:db8::1 meta l4proto != ipv6-icmp drop comment "vip 2001:db8::1 accept-mode off"`
-	v6icmp := `iifname "br-int" ip6 daddr 2001:db8::1 icmpv6 type != { nd-neighbor-solicit, nd-neighbor-advert } drop comment "vip 2001:db8::1 accept-mode off"`
+	v4 := `ip daddr 10.4.200.1 drop comment "vip 10.4.200.1 accept-mode off"`
+	v6 := `ip6 daddr 2001:db8::1 meta l4proto != ipv6-icmp drop comment "vip 2001:db8::1 accept-mode off"`
+	v6icmp := `ip6 daddr 2001:db8::1 icmpv6 type != { nd-neighbor-solicit, nd-neighbor-advert } drop comment "vip 2001:db8::1 accept-mode off"`
 	for _, line := range []string{v4, v6, v6icmp} {
 		require.Contains(t, rendered.Text, line)
-		assert.Less(t, strings.Index(rendered.Text, "ct state invalid drop"), strings.Index(rendered.Text, line), "after the invalid rule")
-		assert.Less(t, strings.Index(rendered.Text, line), strings.Index(rendered.Text, "meta l4proto icmp limit"), "before the icmp rules")
+		assert.NotContains(t, rendered.Text, `iifname "br-int" `+line, "matches every ingress interface")
+		assert.Less(t, strings.Index(rendered.Text, "loopback"), strings.Index(rendered.Text, line), "after loopback")
+		assert.Less(t, strings.Index(rendered.Text, line), strings.Index(rendered.Text, "ct state established,related accept"), "before the established allowance")
+	}
+	for _, r := range rendered.Rules {
+		if r.Kind == RuleVIPDeny || r.Kind == RuleVIPDenyICMPv6 {
+			assert.Empty(t, r.Interface, "no ingress restriction")
+		}
 	}
 	assert.Less(t, strings.Index(rendered.Text, v4), strings.Index(rendered.Text, v6), "sorted")
 	assert.Len(t, rendered.Rules, 9, "6 base rules plus 3 VIP denies")
+}
+
+// The same VIP on two interfaces compiles to one set of deny rules, now
+// that the rules match every ingress.
+func TestRender_VIPDenyDeduplicatesAddresses(t *testing.T) {
+	rendered, err := Render(Ruleset{VIPDeny: []VIPDeny{
+		{Interface: "br-int", Address: netip.MustParseAddr("10.4.200.1")},
+		{Interface: "eth1", Address: netip.MustParseAddr("10.4.200.1")},
+	}})
+	require.NoError(t, err)
+	assert.Len(t, rendered.Rules, 7, "6 base rules plus 1 VIP deny")
 }
 
 func TestRuleset_ValidateVIPDeny(t *testing.T) {
