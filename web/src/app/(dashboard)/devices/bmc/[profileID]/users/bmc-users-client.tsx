@@ -42,6 +42,9 @@ type DialogKind = 'create' | 'password' | 'privilege' | 'delete' | 'cert' | null
 // factory administrator); new accounts start at slot 3.
 const FIRST_USER_SLOT = 3;
 
+/** IPMI v2.0 caps a user password at 20 bytes (Set User Password). */
+const IPMI_MAX_PASSWORD_BYTES = 20;
+
 /**
  * Lowest slot from FIRST_USER_SLOT up that no listed user occupies.
  * IPMI CreateUser overwrites whatever account holds the slot, so the
@@ -239,6 +242,10 @@ export default function BMCUsersClient() {
                 );
                 return;
               }
+              if (new TextEncoder().encode(createForm.password).length > IPMI_MAX_PASSWORD_BYTES) {
+                setCreateError('The password is longer than 20 bytes (UTF-8), the IPMI limit; shorten it.');
+                return;
+              }
               setCreateError(null);
               void run('User created', () =>
                 bmc.createUser({
@@ -289,6 +296,7 @@ export default function BMCUsersClient() {
                 onChange={(e) => setCreateForm({ ...createForm, password: e.target.value })}
                 required
               />
+              <p className="mt-1 text-xs text-muted-foreground">At most 20 bytes (IPMI limit).</p>
             </div>
             <div>
               <Label htmlFor="bmc-create-privilege">Privilege</Label>
