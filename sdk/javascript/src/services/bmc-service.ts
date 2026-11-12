@@ -87,8 +87,8 @@ export interface BMCOperationResult {
  *
  * @example
  * ```typescript
- * const power = await client.bmc.getPowerStatus('r640-01');
- * await client.bmc.setBootDevice('r640-01', { device: 'pxe' });
+ * const power = await client.bmc.getPowerStatus('1');
+ * await client.bmc.setBootDevice('1', { device: 'pxe' });
  * ```
  */
 export class BMCService extends BaseService {

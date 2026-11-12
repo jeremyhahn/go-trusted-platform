@@ -9,6 +9,9 @@ import { useBMC } from "./use-bmc";
  * with the iso_url the handler requires (#1736).
  */
 
+/** The numeric device-profile ID the server routes take. */
+const PROFILE_ID = "1";
+
 const PAYLOADS: Record<string, unknown> = {
   power: { state: "On" },
   "boot-device": { device: "disk" },
@@ -24,13 +27,13 @@ const PAYLOADS: Record<string, unknown> = {
   },
   provision: {
     provision_id: "p-1",
-    profile_id: "r640-01",
+    profile_id: PROFILE_ID,
     status: "installing",
     started_at: "2026-11-12T00:00:00Z",
     updated_at: "2026-11-12T00:05:00Z",
   },
   cert: {
-    subject: "CN=idrac-r640-01",
+    subject: "CN=bmc-1",
     issuer: "CN=Platform CA",
     serial_number: "01",
     not_before: "2026-11-12T00:00:00Z",
@@ -67,7 +70,7 @@ describe("useBMC", () => {
   });
 
   it("reads every part in the server's shapes", async () => {
-    const { result } = renderHook(() => useBMC("r640-01"));
+    const { result } = renderHook(() => useBMC(PROFILE_ID));
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     expect(result.current.errors).toEqual({});
     expect(result.current.sensors?.[0].value).toBe(42);
@@ -79,11 +82,11 @@ describe("useBMC", () => {
   });
 
   it("mountISO POSTs the iso_url", async () => {
-    const { result } = renderHook(() => useBMC("r640-01"));
+    const { result } = renderHook(() => useBMC(PROFILE_ID));
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     await act(() => result.current.mountISO("installer.iso"));
     const post = calls.find((c) => c.init?.method === "POST");
-    expect(post?.url).toBe("/api/v1/bmc/r640-01/virtual-media");
+    expect(post?.url).toBe("/api/v1/bmc/1/virtual-media");
     expect(post?.init?.body).toBe('{"iso_url":"installer.iso"}');
   });
 
@@ -120,7 +123,7 @@ describe("useBMC", () => {
       })
     );
 
-    const { result } = renderHook(() => useBMC("r640-01"));
+    const { result } = renderHook(() => useBMC(PROFILE_ID));
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     expect(result.current.virtualMedia?.mounted).toBe(false);
 

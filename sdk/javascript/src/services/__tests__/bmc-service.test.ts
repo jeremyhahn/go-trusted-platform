@@ -31,13 +31,13 @@ describe('BMCService', () => {
   });
 
   const gets: Array<[string, (s: BMCService) => Promise<unknown>, string]> = [
-    ['getPowerStatus', (s) => s.getPowerStatus('r640-01'), '/v1/bmc/r640-01/power'],
-    ['getBootDevice', (s) => s.getBootDevice('r640-01'), '/v1/bmc/r640-01/boot-device'],
-    ['getVirtualMediaStatus', (s) => s.getVirtualMediaStatus('r640-01'), '/v1/bmc/r640-01/virtual-media'],
-    ['getSensors', (s) => s.getSensors('r640-01'), '/v1/bmc/r640-01/sensors'],
-    ['getSystemInfo', (s) => s.getSystemInfo('r640-01'), '/v1/bmc/r640-01/system-info'],
-    ['getProvisionStatus', (s) => s.getProvisionStatus('r640-01'), '/v1/bmc/r640-01/provision'],
-    ['getWebCertificate', (s) => s.getWebCertificate('r640-01'), '/v1/bmc/r640-01/cert'],
+    ['getPowerStatus', (s) => s.getPowerStatus('1'), '/v1/bmc/1/power'],
+    ['getBootDevice', (s) => s.getBootDevice('1'), '/v1/bmc/1/boot-device'],
+    ['getVirtualMediaStatus', (s) => s.getVirtualMediaStatus('1'), '/v1/bmc/1/virtual-media'],
+    ['getSensors', (s) => s.getSensors('1'), '/v1/bmc/1/sensors'],
+    ['getSystemInfo', (s) => s.getSystemInfo('1'), '/v1/bmc/1/system-info'],
+    ['getProvisionStatus', (s) => s.getProvisionStatus('1'), '/v1/bmc/1/provision'],
+    ['getWebCertificate', (s) => s.getWebCertificate('1'), '/v1/bmc/1/cert'],
   ];
 
   it.each(gets)('%s GETs its route', async (_name, call, url) => {
@@ -48,32 +48,32 @@ describe('BMCService', () => {
   });
 
   it('setBootDevice POSTs the device to boot-device', async () => {
-    await service.setBootDevice('r640-01', { device: 'pxe', persistent: false });
-    expect(mockClient.post).toHaveBeenCalledWith('/v1/bmc/r640-01/boot-device', { device: 'pxe', persistent: false });
+    await service.setBootDevice('1', { device: 'pxe', persistent: false });
+    expect(mockClient.post).toHaveBeenCalledWith('/v1/bmc/1/boot-device', { device: 'pxe', persistent: false });
   });
 
   it('mountISO POSTs the iso_url to virtual-media', async () => {
-    await service.mountISO('r640-01', { iso_url: 'installer.iso' });
-    expect(mockClient.post).toHaveBeenCalledWith('/v1/bmc/r640-01/virtual-media', { iso_url: 'installer.iso' });
+    await service.mountISO('1', { iso_url: 'installer.iso' });
+    expect(mockClient.post).toHaveBeenCalledWith('/v1/bmc/1/virtual-media', { iso_url: 'installer.iso' });
   });
 
   it('getSensors returns the plain sensor array the server sends', async () => {
     const readings = [{ name: 'CPU1 Temp', value: 54, units: 'C', status: 'OK' }];
     vi.mocked(mockClient.get).mockResolvedValue({ success: true, data: readings });
-    const res = await service.getSensors('r640-01');
+    const res = await service.getSensors('1');
     expect(Array.isArray(res.data)).toBe(true);
     expect(res.data?.[0].value).toBe(54);
   });
 
   it('unmountISO DELETEs virtual-media', async () => {
-    await service.unmountISO('r640-01');
-    expect(mockClient.delete).toHaveBeenCalledWith('/v1/bmc/r640-01/virtual-media');
+    await service.unmountISO('1');
+    expect(mockClient.delete).toHaveBeenCalledWith('/v1/bmc/1/virtual-media');
     expect(mockClient.post).not.toHaveBeenCalled();
   });
 
   it('provision POSTs to provision', async () => {
-    await service.provision('r640-01');
-    expect(mockClient.post).toHaveBeenCalledWith('/v1/bmc/r640-01/provision', {});
+    await service.provision('1');
+    expect(mockClient.post).toHaveBeenCalledWith('/v1/bmc/1/provision', {});
   });
 
   it('encodes the profile ID as one path segment', async () => {
@@ -82,8 +82,8 @@ describe('BMCService', () => {
   });
 
   it('propagates a transport error unchanged', async () => {
-    const failure = new Error('404 Not Found: bmc: no profile r640-09');
+    const failure = new Error('404 Not Found: bmc: no profile 9');
     vi.mocked(mockClient.get).mockRejectedValue(failure);
-    await expect(service.getSensors('r640-09')).rejects.toBe(failure);
+    await expect(service.getSensors('9')).rejects.toBe(failure);
   });
 });

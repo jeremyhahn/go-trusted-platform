@@ -16,10 +16,16 @@ import { Label } from "@/components/ui/label";
 export default function BMCPage() {
   const router = useRouter();
   const [profileID, setProfileID] = useState("");
+  const [error, setError] = useState<string | null>(null);
 
   const open = (e: React.FormEvent) => {
     e.preventDefault();
     const id = profileID.trim();
+    if (id && !/^[0-9]+$/.test(id)) {
+      setError("The BMC profile ID is a number, such as 1.");
+      return;
+    }
+    setError(null);
     if (id) {
       router.push(`/devices/bmc/${encodeURIComponent(id)}/`);
     }
@@ -37,7 +43,7 @@ export default function BMCPage() {
             <Server className="h-5 w-5" />
             Open a BMC profile
           </CardTitle>
-          <CardDescription>Enter the ID of the BMC profile to manage</CardDescription>
+          <CardDescription>Enter the numeric ID of the device profile whose BMC to manage</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={open} className="flex items-end gap-2">
@@ -46,12 +52,21 @@ export default function BMCPage() {
               <Input
                 id="bmc-profile-id"
                 value={profileID}
-                onChange={(e) => setProfileID(e.target.value)}
-                placeholder="r640-01"
+                onChange={(e) => {
+                  setProfileID(e.target.value);
+                  setError(null);
+                }}
+                placeholder="1"
+                inputMode="numeric"
               />
             </div>
             <Button type="submit">Open</Button>
           </form>
+          {error && (
+            <p data-testid="bmc-profile-id-error" className="text-sm text-destructive">
+              {error}
+            </p>
+          )}
         </CardContent>
       </Card>
     </div>

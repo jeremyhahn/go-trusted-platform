@@ -522,13 +522,13 @@ export async function mockBmcApi(
     },
     provision: {
       provision_id: 'prov-0',
-      profile_id: 'r640-01',
+      profile_id: '1',
       status: 'complete',
       started_at: '2026-11-01T00:00:00Z',
       updated_at: '2026-11-01T00:40:00Z',
     },
     certificate: {
-      subject: 'CN=idrac-r640-01',
+      subject: 'CN=bmc-1',
       issuer: 'CN=Platform Intermediate CA',
       serial_number: '1736',
       not_before: '2026-11-12T00:00:00Z',

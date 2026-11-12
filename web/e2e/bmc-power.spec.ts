@@ -19,8 +19,8 @@ async function openProfile(page: Page, config: BmcApiMockConfig = {}) {
   // pushState is only router-integrated once the app has hydrated.
   await page.getByText("Select a BMC profile").waitFor();
   await page.waitForLoadState("networkidle");
-  await page.evaluate(() => window.history.pushState(null, "", "/devices/bmc/r640-01/"));
-  await expect(page.getByRole("heading", { name: "BMC r640-01" })).toBeVisible();
+  await page.evaluate((id) => window.history.pushState(null, "", `/devices/bmc/${id}/`), PROFILE_ID);
+  await expect(page.getByRole("heading", { name: `BMC ${PROFILE_ID}` })).toBeVisible();
   return mock;
 }
 
@@ -137,7 +137,7 @@ test.describe("BMC power, boot device, virtual media, sensors and provision (#17
       state: {
         provision: {
           provision_id: "prov-2",
-          profile_id: "r640-01",
+          profile_id: PROFILE_ID,
           status: "installing",
           message: "waiting for the OS install",
           started_at: "2026-11-12T00:00:00Z",
@@ -151,7 +151,7 @@ test.describe("BMC power, boot device, virtual media, sensors and provision (#17
   test("shows the web certificate", async ({ page }) => {
     await openProfile(page);
     const cert = page.getByTestId("bmc-certificate");
-    await expect(cert).toContainText("CN=idrac-r640-01");
+    await expect(cert).toContainText("CN=bmc-1");
     await expect(cert).toContainText("SHA256:5B:9D:3F:2E");
   });
 
