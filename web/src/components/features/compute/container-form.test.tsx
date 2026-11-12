@@ -139,7 +139,7 @@ describe('ContainerForm', () => {
 
   it('refuses memory under 128 MB and CPU shares over 1024', async () => {
     const sent = stubControlPlane({ [CREATE]: created });
-    mount();
+    const { onSuccess } = mount();
 
     type('Name', 'web');
     type('Image', 'nginx');
@@ -147,11 +147,13 @@ describe('ContainerForm', () => {
     type('CPU Shares', '2048');
     await submit();
 
-    await waitFor(() =>
-      expect(screen.getByLabelText('Memory (MB)').getAttribute('aria-invalid')).toBe('true')
-    );
-    expect(screen.getByLabelText('CPU Shares').getAttribute('aria-invalid')).toBe('true');
+    const memory = screen.getByLabelText('Memory (MB)') as HTMLInputElement;
+    const cpu = screen.getByLabelText('CPU Shares') as HTMLInputElement;
+    expect(memory.validity.rangeUnderflow).toBe(true);
+    expect(cpu.validity.rangeOverflow).toBe(true);
+    await new Promise((r) => setTimeout(r, 50));
     expect(sent).toEqual([]);
+    expect(onSuccess).not.toHaveBeenCalled();
   });
 
   it('refuses a port outside 1-65535', async () => {
