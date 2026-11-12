@@ -71,41 +71,40 @@ test.describe('Invitation lookup and accept', () => {
     await expect(page.getByText('Invalid invitation')).toBeVisible();
   });
 
-  test('AcceptInvitation: a signed-in user accepts with their user ID', async ({ page }) => {
+  // Codex round 2 (#1681): AcceptInvitation only marks the invitation accepted
+  // and never joins the user to the tenant, so the page must not call it.
+  test('AcceptInvitation: a numeric user ID session sends no accept', async ({ page }) => {
     await createCustomSession(page.context(), signedIn);
     const mock = await mockInvitationLookupApi(page, { invitation });
 
     await page.goto('/invite/tok-accept-1');
-    await page.getByRole('button', { name: 'Accept Invitation' }).click();
-
-    await expect(page.getByText('Invitation accepted')).toBeVisible();
-    expect(mock.acceptRequests()).toEqual([{ token: 'tok-accept-1', userId: '9' }]);
+    await expect(page.getByRole('status')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Accept Invitation' })).toHaveCount(0);
+    expect(mock.acceptRequests()).toEqual([]);
   });
 
-  test('AcceptInvitation: a refused accept shows the error', async ({ page }) => {
-    await createCustomSession(page.context(), signedIn);
-    await mockInvitationLookupApi(page, {
-      invitation,
-      acceptError: { status: 409, error: 'invitation already accepted', errorCode: 'CONFLICT' },
-    });
-
-    await page.goto('/invite/tok-accept-1');
-    await page.getByRole('button', { name: 'Accept Invitation' }).click();
-
-    await expect(page.getByRole('alert').filter({ hasText: 'invitation already accepted' })).toBeVisible();
-  });
-
-  test('AcceptInvitation: a non-numeric subject gets the passkey link and sends no accept', async ({ page }) => {
+  // A login-issued session carries the login name in user_id and sub; the
+  // passkey sign-up would redirect it to the dashboard, so it is not offered.
+  test('AcceptInvitation: a login-issued session gets no passkey dead end and sends no accept', async ({ page }) => {
     await createCustomSession(page.context(), {
       sub: 'operator@platform',
-      email: 'invitee@example.com',
+      user_id: 'operator@platform',
+      email: 'operator@platform',
       exp: Math.floor(Date.now() / 1000) + 3600,
     });
     const mock = await mockInvitationLookupApi(page, { invitation });
 
     await page.goto('/invite/tok-accept-1');
-    await expect(page.getByRole('link', { name: 'Create account with passkey' })).toBeVisible();
+    await expect(page.getByRole('status').filter({ hasText: 'operator@platform' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Create account with passkey' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Accept Invitation' })).toHaveCount(0);
     expect(mock.acceptRequests()).toEqual([]);
+  });
+
+  test('AcceptInvitation: a signed-out visitor gets the passkey sign-up link', async ({ page }) => {
+    await mockInvitationLookupApi(page, { invitation });
+
+    await page.goto('/invite/tok-accept-1');
+    await expect(page.getByRole('link', { name: 'Create account with passkey' })).toBeVisible();
   });
 });
