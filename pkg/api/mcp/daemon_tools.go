@@ -118,6 +118,26 @@ func (r *ToolRegistry) registerDaemonTools() {
 			"properties": map[string]interface{}{},
 		},
 	})
+
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "platform_daemon_get_config",
+		Description: "Get the daemon configuration, one section or all of them",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"section": map[string]interface{}{"type": "string", "description": "Config section; empty returns every section"},
+			},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "platform_daemon_reload_config",
+		Description: "Reload the daemon configuration from disk",
+		InputSchema: map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{},
+		},
+	})
 }
 
 // executeDaemonStatus returns the daemon status.
@@ -204,6 +224,24 @@ func (r *ToolRegistry) executeDaemonListProtocols(ctx context.Context, args map[
 	result, err := r.service.DaemonListProtocols(ctx)
 	if err != nil {
 		return nil, &mcpwire.WrappedError{Msg: "daemon list protocols", Err: err}
+	}
+	return marshalResult(result)
+}
+
+// executeDaemonGetConfig returns the daemon configuration.
+func (r *ToolRegistry) executeDaemonGetConfig(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	result, err := r.service.DaemonGetConfig(ctx, getString(args, "section"))
+	if err != nil {
+		return nil, &mcpwire.WrappedError{Msg: "daemon get config", Err: err}
+	}
+	return marshalResult(result)
+}
+
+// executeDaemonReloadConfig reloads the daemon configuration from disk.
+func (r *ToolRegistry) executeDaemonReloadConfig(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	result, err := r.service.DaemonReloadConfig(ctx)
+	if err != nil {
+		return nil, &mcpwire.WrappedError{Msg: "daemon reload config", Err: err}
 	}
 	return marshalResult(result)
 }
