@@ -600,6 +600,35 @@ func TestGRPCMethodToMCPToolMap_VTPM(t *testing.T) {
 	}
 }
 
+// GetConfig and ReloadConfig reach the daemon tools pkg/api/mcp registers,
+// instead of answering codes.Unimplemented (Codex round 4 on #1852).
+func TestGRPCMethodToMCPToolMap_DaemonConfig(t *testing.T) {
+	tests := []struct {
+		method string
+		tool   string
+		req    any
+		resp   any
+	}{
+		{"/platform.v1.PlatformDaemon/GetConfig", "platform_daemon_get_config", &platformv1.GetConfigRequest{}, &platformv1.GetConfigResponse{}},
+		{"/platform.v1.PlatformDaemon/ReloadConfig", "platform_daemon_reload_config", &platformv1.ReloadConfigRequest{}, &platformv1.ReloadConfigResponse{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.method, func(t *testing.T) {
+			if got := grpcMethodToMCPToolMap[tt.method]; got != tt.tool {
+				t.Fatalf("tool = %q, want %q", got, tt.tool)
+			}
+			var calls []toolCall
+			adapter := provisioningTestServer(t, map[string]interface{}{tt.tool: map[string]interface{}{}}, &calls)
+			if err := adapter.Connection().Invoke(context.Background(), tt.method, tt.req, tt.resp); err != nil {
+				t.Fatalf("Invoke(%s) = %v, want nil", tt.method, err)
+			}
+			if len(calls) != 1 || calls[0].Name != tt.tool {
+				t.Errorf("server calls = %+v, want one call to %s", calls, tt.tool)
+			}
+		})
+	}
+}
+
 func TestTranslateMCPErrorToGRPC(t *testing.T) {
 	tests := []struct {
 		name         string
