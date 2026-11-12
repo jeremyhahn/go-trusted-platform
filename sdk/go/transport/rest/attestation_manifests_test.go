@@ -18,6 +18,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -50,15 +53,22 @@ func TestAttestationManifests_List_RouteAndDecode(t *testing.T) {
 
 	resp := &platformv1.ListManifestsResponse{}
 	err := a.Connection().Invoke(context.Background(), platformv1.AttestationService_ListManifests_FullMethodName,
-		&platformv1.ListManifestsRequest{HostId: "h1", Limit: 10, Offset: 10}, resp)
+		&platformv1.ListManifestsRequest{
+			HostId:    "h1",
+			Limit:     10,
+			Offset:    10,
+			StartTime: timestamppb.New(time.Unix(1700000000, 0)),
+			EndTime:   timestamppb.New(time.Unix(1700003600, 0)),
+		}, resp)
 	if err != nil {
 		t.Fatalf("Invoke: %v", err)
 	}
 	if len(calls.seen) != 1 || calls.seen[0] != "GET /api/v1/attestation/manifests" {
 		t.Fatalf("requests = %q, want GET /api/v1/attestation/manifests", calls.seen)
 	}
-	if calls.query[0] != "host_id=h1&limit=10&offset=10" {
-		t.Fatalf("query = %q, want host_id, limit and offset", calls.query[0])
+	const wantQuery = "end_time=2023-11-14T23%3A13%3A20Z&host_id=h1&limit=10&offset=10&start_time=2023-11-14T22%3A13%3A20Z"
+	if calls.query[0] != wantQuery {
+		t.Fatalf("query = %q, want %q", calls.query[0], wantQuery)
 	}
 	if resp.GetTotal() != 30 || len(resp.GetManifests()) != 1 || resp.GetManifests()[0].GetId() != "m-11" {
 		t.Fatalf("resp = %+v", resp)

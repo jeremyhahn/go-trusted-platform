@@ -175,6 +175,17 @@ var attestationRoutes = []attestationRoute{
 		},
 	},
 	{
+		// The query carries the time window, as gRPC does (#1686).
+		name: "list manifests time window", method: http.MethodGet,
+		path:   "/api/v1/attestation/manifests?start_time=2023-11-14T22:13:20Z&end_time=2023-11-14T23:13:20Z",
+		status: http.StatusOK,
+		check: func(t *testing.T, req proto.Message, payload map[string]any) {
+			got := req.(*platformv1.ListManifestsRequest)
+			assert.Equal(t, int64(1700000000), got.GetStartTime().AsTime().Unix())
+			assert.Equal(t, int64(1700003600), got.GetEndTime().AsTime().Unix())
+		},
+	},
+	{
 		name: "build manifest", method: http.MethodPost, path: "/api/v1/attestation/manifests/build",
 		body: `{"nonce":"AQID","vmIds":["vm-1"],"sign":true}`, status: http.StatusCreated,
 		check: func(t *testing.T, req proto.Message, payload map[string]any) {
@@ -295,6 +306,20 @@ func TestAttestationServerRouter_MalformedBodyIs400(t *testing.T) {
 			rec := serveAttestationRoute(mountAllAttestationRoutes(server), rt, `{"nonce":`)
 			assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 			assert.Nil(t, server.req, "the server is not called with an undecoded request")
+		})
+	}
+}
+
+// A manifest list time bound that is not RFC 3339 is refused before the
+// server is called, not dropped (#1686).
+func TestAttestationServerRouter_ListManifestsMalformedTimeIs400(t *testing.T) {
+	for _, query := range []string{"start_time=yesterday", "end_time=yesterday"} {
+		t.Run(query, func(t *testing.T) {
+			server := &recordingAttestationServer{}
+			rt := attestationRoute{method: http.MethodGet, path: "/api/v1/attestation/manifests?" + query}
+			rec := serveAttestationRoute(mountAllAttestationRoutes(server), rt, "")
+			assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+			assert.Nil(t, server.req, "the server is not called with a malformed time bound")
 		})
 	}
 }

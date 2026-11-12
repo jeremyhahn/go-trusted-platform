@@ -82,14 +82,18 @@ func (s *manifestSender) SendRequest(_ context.Context, opcode byte, payload []b
 	if opcode != quicwire.OpAttestGetManifest {
 		return nil, &quicwire.ErrProtocol{Status: quicwire.StatusNotFound, Message: "unexpected opcode"}
 	}
-	var req platformv1.GetManifestRequest
+	// The server decodes into pkg/api/quic GetManifestRequest; decode the
+	// same shape so a protobuf-shaped payload (field Id) records "".
+	var req struct {
+		ID string `codec:"id"`
+	}
 	if err := quicwire.DecodePayload(payload, &req); err != nil {
 		return nil, err
 	}
-	s.ids = append(s.ids, req.GetId())
+	s.ids = append(s.ids, req.ID)
 	p, err := quicwire.EncodePayload(&testGetManifestResponse{
 		Manifest: &testManifestData{
-			ID:        req.GetId(),
+			ID:        req.ID,
 			HostID:    "host-a",
 			Timestamp: 1700000000,
 			Nonce:     []byte{1, 2},

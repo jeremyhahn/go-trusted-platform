@@ -16,6 +16,9 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
+
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -34,7 +37,12 @@ func TestAttestationManifestsMCP_List_ArgsAndDecode(t *testing.T) {
 
 	resp := &platformv1.ListManifestsResponse{}
 	err := a.Connection().Invoke(context.Background(), platformv1.AttestationService_ListManifests_FullMethodName,
-		&platformv1.ListManifestsRequest{HostId: "h1", Limit: 10, Offset: 10}, resp)
+		&platformv1.ListManifestsRequest{
+			HostId:    "h1",
+			Limit:     10,
+			Offset:    10,
+			StartTime: timestamppb.New(time.Unix(1700000000, 0)),
+		}, resp)
 	if err != nil {
 		t.Fatalf("Invoke: %v", err)
 	}
@@ -46,6 +54,9 @@ func TestAttestationManifestsMCP_List_ArgsAndDecode(t *testing.T) {
 	}
 	if calls[0].Arguments["host_id"] != "h1" {
 		t.Fatalf("arguments = %+v, want host_id h1", calls[0].Arguments)
+	}
+	if calls[0].Arguments["start_time"] != "2023-11-14T22:13:20Z" {
+		t.Fatalf("arguments = %+v, want start_time 2023-11-14T22:13:20Z", calls[0].Arguments)
 	}
 	if resp.GetTotal() != 30 || len(resp.GetManifests()) != 1 || resp.GetManifests()[0].GetHostId() != "h1" {
 		t.Fatalf("resp = %+v", resp)
