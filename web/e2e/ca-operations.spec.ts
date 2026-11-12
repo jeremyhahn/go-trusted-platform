@@ -35,10 +35,10 @@ test.describe('CA operations', () => {
     await mockCAOperationsApi(page);
     await page.goto('/ca');
 
-    await page.getByRole('link', { name: 'Sign CSR' }).click();
+    await page.getByTestId('ca-sign-link').click();
     await expect(page).toHaveURL(/\/ca\/sign/);
     await page.goto('/ca');
-    await page.getByRole('link', { name: 'Verify Certificate' }).click();
+    await page.getByTestId('ca-verify-link').click();
     await expect(page).toHaveURL(/\/ca\/verify/);
   });
 
