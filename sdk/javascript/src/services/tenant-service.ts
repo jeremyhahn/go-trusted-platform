@@ -120,10 +120,11 @@ export class TenantService extends BaseService {
         filters[`label_${k}`] = v;
       });
     }
+    // The REST handler reads limit and offset; it has no page parameter.
+    if (request?.offset !== undefined) {
+      filters.offset = String(request.offset);
+    }
     return this.client.get<ListTenantsResponse>(this.buildUrl('', {
-      page: request?.offset !== undefined && request?.limit !== undefined
-        ? Math.floor(request.offset / request.limit) + 1
-        : undefined,
       limit: request?.limit,
       filters,
     }));

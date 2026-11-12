@@ -67,7 +67,14 @@ export default function TenantDetailClient() {
 
   const saveDisplayName = async (e: React.FormEvent) => {
     e.preventDefault();
-    const res = await tenants.updateTenant({ tenantId, displayName: shownDisplayName });
+    // The server ignores an empty display name, so refuse it here rather
+    // than report a success that changes nothing.
+    const trimmed = shownDisplayName.trim();
+    if (trimmed === "") {
+      setStatus("Display name cannot be empty");
+      return;
+    }
+    const res = await tenants.updateTenant({ tenantId, displayName: trimmed });
     report(res, "Tenant updated", "Update failed");
     if (res.success) {
       setDisplayName(null);

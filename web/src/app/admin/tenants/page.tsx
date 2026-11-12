@@ -46,9 +46,20 @@ function TenantRow({ tenant, onDelete }: { tenant: Tenant; onDelete: (t: Tenant)
   );
 }
 
+/** Tenants per page of the All tenants table (the server's default limit). */
+const PAGE_SIZE = 100;
+
 export default function AdminTenantsPage() {
   const tenants = useTenant();
-  const { data, isLoading, error, refetch } = useApi(() => tenants.listTenants(), []);
+  const [offset, setOffset] = React.useState(0);
+  const { data, isLoading, error, refetch } = useApi(
+    () => tenants.listTenants({ limit: PAGE_SIZE, offset }),
+    [offset],
+  );
+  const total = Number(data?.total ?? 0);
+  const shown = data?.tenants?.length ?? 0;
+  const first = shown > 0 ? offset + 1 : 0;
+  const last = offset + shown;
   const [name, setName] = React.useState("");
   const [displayName, setDisplayName] = React.useState("");
   const [search, setSearch] = React.useState("");
@@ -174,6 +185,27 @@ export default function AdminTenantsPage() {
               </tbody>
             </table>
           )}
+          <div className="mt-4 flex items-center gap-3">
+            <p data-testid="tenant-page-info">
+              Showing {first}-{last} of {total}
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={offset === 0}
+              onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
+            >
+              Previous
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={offset + PAGE_SIZE >= total}
+              onClick={() => setOffset(offset + PAGE_SIZE)}
+            >
+              Next
+            </Button>
+          </div>
         </CardContent>
       </Card>
 
