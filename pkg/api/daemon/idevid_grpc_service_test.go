@@ -89,6 +89,7 @@ type idevIDTestTPM struct {
 	csrReached   bool
 	ekCertResult *x509.Certificate
 	ekCertErr    error
+	configResult *xkmssdk.TPMConfig
 
 	// Raw transport (nil in unit tests; a real/simulated transport is
 	// supplied by integration tests exercising FlushTransientContexts).
@@ -129,6 +130,7 @@ func newIDevIDTestTPM() *idevIDTestTPM {
 			FwMinor:      0,
 		},
 		activateCredResult: []byte("decrypted-secret"),
+		configResult:       &xkmssdk.TPMConfig{IDevID: &xkmssdk.IDevIDConfig{}},
 	}
 }
 
@@ -169,6 +171,10 @@ func (m *idevIDTestTPM) CreateTCG_CSR_IDEVID(ekCert *x509.Certificate, akAttrs *
 
 func (m *idevIDTestTPM) EKCertificate() (*x509.Certificate, error) {
 	return m.ekCertResult, m.ekCertErr
+}
+
+func (m *idevIDTestTPM) Config() *xkmssdk.TPMConfig {
+	return m.configResult
 }
 
 func (m *idevIDTestTPM) FixedProperties() (*xkmssdk.PropertiesFixed, error) {
@@ -1289,6 +1295,34 @@ func TestIDevIDGRPCService_CreateIAKCSR(t *testing.T) {
 		assert.Nil(t, resp)
 		require.Error(t, err)
 		assert.False(t, tpm.csrReached, "CreateTCG_CSR_IDEVID must not be called without an EK certificate")
+	})
+
+	t.Run("rejects a missing IDevID configuration", func(t *testing.T) {
+		svc, tpm := createIDevIDTestServiceWithTPM(t)
+		tpm.configResult = &xkmssdk.TPMConfig{}
+
+		resp, err := svc.CreateIAKCSR(ctx, &platformv1.CreateIAKCSRRequest{})
+
+		assert.Nil(t, resp)
+		require.Error(t, err)
+		st, ok := status.FromError(err)
+		require.True(t, ok)
+		assert.Equal(t, codes.FailedPrecondition, st.Code())
+		assert.False(t, tpm.csrReached, "CreateTCG_CSR_IDEVID must not be called without an IDevID configuration")
+	})
+
+	t.Run("rejects a missing TPM configuration", func(t *testing.T) {
+		svc, tpm := createIDevIDTestServiceWithTPM(t)
+		tpm.configResult = nil
+
+		resp, err := svc.CreateIAKCSR(ctx, &platformv1.CreateIAKCSRRequest{})
+
+		assert.Nil(t, resp)
+		require.Error(t, err)
+		st, ok := status.FromError(err)
+		require.True(t, ok)
+		assert.Equal(t, codes.FailedPrecondition, st.Code())
+		assert.False(t, tpm.csrReached, "CreateTCG_CSR_IDEVID must not be called without a TPM configuration")
 	})
 
 	t.Run("creates IAK CSR successfully", func(t *testing.T) {
