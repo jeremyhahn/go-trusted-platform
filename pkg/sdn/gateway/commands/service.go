@@ -29,6 +29,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/ipc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/process"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/perf"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/vpn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 )
 
@@ -90,6 +91,10 @@ type serviceDeps struct {
 	loadConfig      func() (*ServeConfig, error)
 	buildGateway    func(ctx context.Context, cfg *ServeConfig, logger *slog.Logger) (*gateway.Gateway, error)
 	vpnLeaseControl func(ctx context.Context, cfg *ServeConfig, gw *gateway.Gateway, logger *slog.Logger) (gateway.VPNLeaseControl, *gateway.RevocationJournal, error)
+	// vpnDataPlanes builds the VPN data planes the datapath child hosts
+	// for the vpn process's peer RPCs. Nil, or no planes, leaves every
+	// InstallVPNPeer refused.
+	vpnDataPlanes func(cfg *ServeConfig, gw *gateway.Gateway, logger *slog.Logger) ([]vpn.ManagedDataPlane, error)
 }
 
 func runService(cmd *cobra.Command, args []string) error {
@@ -108,6 +113,7 @@ func runService(cmd *cobra.Command, args []string) error {
 		loadConfig:      func() (*ServeConfig, error) { return LoadServeConfig(viper.GetViper()) },
 		buildGateway:    BuildGateway,
 		vpnLeaseControl: vpnLeaseControl,
+		vpnDataPlanes:   vpnDataPlanes,
 	}
 	return serveProcess(ctx, args[0], opts, deps, buildServeLogger())
 }
@@ -170,18 +176,33 @@ func serveProcess(ctx context.Context, name string, opts serviceOptions, deps se
 	if err != nil {
 		return err
 	}
+	vpnPlanes, err := deps.datapathVPNPlanes(def, cfg, gw, logger)
+	if err != nil {
+		return err
+	}
 	server := ipc.NewServer(gw, servicePolicy(def, opts, cfg.Process))
 	server.SetServices(services)
+	// The planes start with the child and before the socket is bound, so
+	// the first peer RPC finds them up; one that fails to start is reported
+	// to the supervisor with the services.
+	var planesErr error
+	if vpnPlanes != nil {
+		if planesErr = vpnPlanes.Start(ctx); planesErr == nil {
+			server.SetVPNPlanes(vpnPlanes)
+		} else {
+			vpnPlanes = nil
+		}
+	}
 	// Hardened already, so the kernel-class child holds no CAP_CHOWN and is
 	// not in the socket group: its socket takes the group from the
 	// supervisor's setgid runtime directory, and Listen only verifies it.
 	if err := server.Listen(opts.socket, serviceSocketMode, opts.socketGroup); err != nil {
-		return err
+		return errors.Join(err, stopVPNPlanes(vpnPlanes))
 	}
 	served := make(chan error, 1)
 	go func() { served <- server.Serve() }()
 
-	if err := gw.Start(ctx); err != nil {
+	if err := errors.Join(planesErr, gw.Start(ctx)); err != nil {
 		// The process keeps serving so the supervisor reads why; it stops
 		// the process when it gives up on the service.
 		server.SetStartError(err)
@@ -206,6 +227,7 @@ func serveProcess(ctx context.Context, name string, opts serviceOptions, deps se
 	defer stopCancel()
 	stopErr := gw.Stop(stopCtx)
 	server.Stop()
+	stopErr = errors.Join(stopErr, stopVPNPlanes(vpnPlanes))
 	if serveErr != nil {
 		return errors.Join(&ErrServiceIPCFailed{Process: def.Name, Cause: serveErr}, stopErr)
 	}
@@ -271,6 +293,51 @@ func datapathServices(def process.Definition, gw *gateway.Gateway) (ipc.Services
 	}
 	services.Perf = perfService
 	return services, nil
+}
+
+// datapathVPNPlanes is the plane host the datapath child serves the vpn
+// process's peer RPCs from (#1698): the planes the factory builds, wrapped
+// in a vpn.PlaneHost. Only the kernel-class child, which holds
+// CAP_NET_ADMIN, hosts planes, and only while the management VPN is
+// enabled; otherwise, or when the factory builds none, it returns nil and
+// every InstallVPNPeer keeps its refusal.
+func (d serviceDeps) datapathVPNPlanes(def process.Definition, cfg *ServeConfig, gw *gateway.Gateway, logger *slog.Logger) (*vpn.PlaneHost, error) {
+	if def.Class != process.ClassKernel || d.vpnDataPlanes == nil {
+		return nil, nil
+	}
+	if cfg.Gateway == nil || cfg.Gateway.ManagementVPN == nil || !cfg.Gateway.ManagementVPN.Enabled {
+		return nil, nil
+	}
+	planes, err := d.vpnDataPlanes(cfg, gw, logger)
+	if err != nil {
+		return nil, err
+	}
+	if len(planes) == 0 {
+		return nil, nil
+	}
+	return vpn.NewPlaneHost(planes...)
+}
+
+// stopVPNPlanes stops the hosted planes, if any, within the shutdown
+// timeout.
+func stopVPNPlanes(host *vpn.PlaneHost) error {
+	if host == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	return host.Stop(ctx)
+}
+
+// vpnDataPlanes is gatewayd's plane factory. The configuration does not yet
+// name what a kernel plane needs beyond its listen port (the WireGuard
+// hub's device key reference and its pool gateway address), so it builds
+// none and says so: the vpn process's peer RPCs keep their refusal.
+func vpnDataPlanes(cfg *ServeConfig, _ *gateway.Gateway, logger *slog.Logger) ([]vpn.ManagedDataPlane, error) {
+	offered := cfg.Gateway.ManagementVPN.Config.WithDefaults().DataPlanes
+	logger.Warn("The datapath hosts no VPN data plane: the configuration does not name the plane's key and address",
+		slog.Any("data_planes", offered))
+	return nil, nil
 }
 
 // closeGatewayRuntime releases the OVS runtime a gateway holds, if any.
