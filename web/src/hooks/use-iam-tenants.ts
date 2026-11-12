@@ -12,6 +12,18 @@ import type {
 } from "trusted-platform-sdk";
 
 /**
+ * The SDK client leaves throwOnError false, so an HTTP error resolves to
+ * { success: false, error } instead of rejecting. Turn it into a thrown
+ * Error so callers' catch paths run (#1757).
+ */
+export function expectOk<T>(response: ApiResponse<T>, operation: string): ApiResponse<T> {
+  if (response.error || response.success === false) {
+    throw new Error(response.error?.message || `${operation} failed`);
+  }
+  return response;
+}
+
+/**
  * Tenant administration over the IAM REST routes: GET/POST /tenants and
  * GET/PUT/DELETE /tenants/{tenant} (system scope, #1744).
  */
@@ -30,16 +42,22 @@ export function useIAMTenants(): UseIAMTenantsResult {
   const iam = useIAM();
   const { data, isLoading, error, refetch } = useApi(() => iam.listTenants(), [iam]);
 
-  const getTenant = useCallback((tenantId: string) => iam.getTenant(tenantId), [iam]);
+  const getTenant = useCallback(
+    async (tenantId: string) => expectOk(await iam.getTenant(tenantId), "Get tenant"),
+    [iam],
+  );
   const createTenant = useCallback(
-    (request: CreateIAMTenantRequest) => iam.createTenant(request),
+    async (request: CreateIAMTenantRequest) => expectOk(await iam.createTenant(request), "Create tenant"),
     [iam],
   );
   const updateTenant = useCallback(
-    (request: UpdateIAMTenantRequest) => iam.updateTenant(request),
+    async (request: UpdateIAMTenantRequest) => expectOk(await iam.updateTenant(request), "Update tenant"),
     [iam],
   );
-  const deleteTenant = useCallback((tenantId: string) => iam.deleteTenant(tenantId), [iam]);
+  const deleteTenant = useCallback(
+    async (tenantId: string) => expectOk(await iam.deleteTenant(tenantId), "Delete tenant"),
+    [iam],
+  );
 
   return {
     tenants: data?.tenants ?? [],

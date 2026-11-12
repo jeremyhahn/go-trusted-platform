@@ -67,9 +67,10 @@ export default function TenantsPage() {
 
   const onCreate = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newName.trim()) return;
+    // IAMHandlers.CreateTenant refuses an empty id with HTTP 400.
+    if (!newId.trim() || !newName.trim()) return;
     void run("create tenant", async () => {
-      await createTenant({ name: newName.trim(), ...(newId.trim() ? { id: newId.trim() } : {}) });
+      await createTenant({ id: newId.trim(), name: newName.trim() });
       toast({ title: "Tenant created", variant: "success" });
       setNewId("");
       setNewName("");
@@ -131,14 +132,14 @@ export default function TenantsPage() {
         <CardContent>
           <form onSubmit={onCreate} className="grid gap-4 md:grid-cols-3 items-end">
             <div className="space-y-2">
-              <Label htmlFor="tenant-new-id">Tenant ID (optional)</Label>
-              <Input id="tenant-new-id" value={newId} onChange={(e) => setNewId(e.target.value)} />
+              <Label htmlFor="tenant-new-id">Tenant ID</Label>
+              <Input id="tenant-new-id" required value={newId} onChange={(e) => setNewId(e.target.value)} />
             </div>
             <div className="space-y-2">
               <Label htmlFor="tenant-new-name">Tenant name</Label>
               <Input id="tenant-new-name" value={newName} onChange={(e) => setNewName(e.target.value)} />
             </div>
-            <Button type="submit" disabled={busy || !newName.trim()}>
+            <Button type="submit" disabled={busy || !newId.trim() || !newName.trim()}>
               <Plus className="h-4 w-4 mr-2" /> Create tenant
             </Button>
           </form>

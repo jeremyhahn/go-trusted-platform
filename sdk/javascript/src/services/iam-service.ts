@@ -336,9 +336,19 @@ export class IAMService extends BaseService {
    * Check permission
    */
   async checkPermission(request: CheckIAMPermissionRequest): Promise<ApiResponse<CheckIAMPermissionResponse>> {
+    // REST wire format of CheckPermissionRequest: subject_id; the tenant is the path, not the body.
+    const body = {
+      subject_id: request.subjectId,
+      roles: request.roles,
+      groups: request.groups,
+      action: request.action,
+      resource: request.resource,
+      context: request.context,
+      attributes: request.attributes,
+    };
     return this.client.post<CheckIAMPermissionResponse>(
       this.buildUrl(`/tenants/${this.encodePathSegment(request.tenantId)}/permissions/check`),
-      request
+      body
     );
   }
 

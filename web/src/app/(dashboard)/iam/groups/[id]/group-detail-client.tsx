@@ -79,6 +79,7 @@ export default function GroupDetailClient() {
   const [editName, setEditName] = useState<string | null>(null);
   const [editDescription, setEditDescription] = useState<string | null>(null);
   const [newMember, setNewMember] = useState('');
+  const [removeMember, setRemoveMember] = useState('');
   const [pendingRemove, setPendingRemove] = useState<string | null>(null);
 
   const failToast = (title: string) => (err: unknown) => {
@@ -127,6 +128,7 @@ export default function GroupDetailClient() {
       onSuccess: () => {
         toast({ title: 'Member removed', variant: 'success' });
         setPendingRemove(null);
+        setRemoveMember('');
         refetch();
       },
       onError: failToast('Failed to remove member'),
@@ -191,7 +193,7 @@ export default function GroupDetailClient() {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex items-center gap-4">
-            <Badge variant="outline">{members.length} members</Badge>
+            {members.length > 0 && <Badge variant="outline">{members.length} members</Badge>}
             <Badge variant="outline">{roles.length} roles</Badge>
           </div>
           {members.length > 0 && (
@@ -231,6 +233,30 @@ export default function GroupDetailClient() {
             </div>
             <Button type="submit" disabled={addMemberMutation.isLoading || !newMember.trim()}>
               <UserPlus className="h-4 w-4 mr-2" /> Add member
+            </Button>
+          </form>
+          {/* GET /groups/{id} carries no members list (groupToResponse), so removal goes by user ID. */}
+          <form
+            className="flex items-end gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (removeMember.trim()) setPendingRemove(removeMember.trim());
+            }}
+          >
+            <div className="space-y-2 flex-1">
+              <Label htmlFor="group-remove-member">User ID to remove</Label>
+              <Input
+                id="group-remove-member"
+                value={removeMember}
+                onChange={(e) => setRemoveMember(e.target.value)}
+              />
+            </div>
+            <Button
+              type="submit"
+              variant="outline"
+              disabled={removeMemberMutation.isLoading || !removeMember.trim()}
+            >
+              <UserMinus className="h-4 w-4 mr-2" /> Remove by user ID
             </Button>
           </form>
           {roles.length > 0 && (
