@@ -58,6 +58,12 @@ import type {
   ReadNVRAMResponse,
   UndefineNVRAMResponse,
   GetRandomResponse,
+  ExtendPCRRequest,
+  ExtendPCRResponse,
+  TPMMakeCredentialRequest,
+  TPMMakeCredentialResponse,
+  TPMActivateCredentialRequest,
+  TPMActivateCredentialResponse,
 } from '../types/tpm.js';
 
 /** Base path of the TPM REST API, under the client's `/api` base URL. */
@@ -412,5 +418,39 @@ export class TPMService extends BaseService {
    */
   async getRandom(request: GetRandomRequest): Promise<ApiResponse<GetRandomResponse>> {
     return this.client.post<GetRandomResponse>(this.buildUrl('/random'), request);
+  }
+
+  /**
+   * Extend a PCR with data
+   *
+   * @param request - PCR index, bank and data (base64)
+   * @returns Extend result
+   */
+  async extendPCR(request: ExtendPCRRequest): Promise<ApiResponse<ExtendPCRResponse>> {
+    return this.client.post<ExtendPCRResponse>(this.buildUrl('/pcrs/extend'), request);
+  }
+
+  // =========================================================================
+  // Credential Operations
+  // =========================================================================
+
+  /**
+   * Wrap a secret to an attestation key (TPM2_MakeCredential)
+   *
+   * @param request - AK name and optional secret
+   * @returns Credential blob and encrypted secret
+   */
+  async makeCredential(request: TPMMakeCredentialRequest): Promise<ApiResponse<TPMMakeCredentialResponse>> {
+    return this.client.post<TPMMakeCredentialResponse>(this.buildUrl('/make-credential'), request);
+  }
+
+  /**
+   * Recover the secret MakeCredential wrapped (TPM2_ActivateCredential)
+   *
+   * @param request - Credential blob and encrypted secret
+   * @returns The recovered secret
+   */
+  async activateCredential(request: TPMActivateCredentialRequest): Promise<ApiResponse<TPMActivateCredentialResponse>> {
+    return this.client.post<TPMActivateCredentialResponse>(this.buildUrl('/activate-credential'), request);
   }
 }
