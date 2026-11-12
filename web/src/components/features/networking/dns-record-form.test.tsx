@@ -22,7 +22,6 @@ vi.mock('@/hooks', () => ({
     fn: (v: V) => Promise<R>,
     opts?: { onSuccess?: (r: R) => void; onError?: (e: Error) => void },
   ) => {
-    // eslint-disable-next-line react-hooks/rules-of-hooks
     const [isLoading, setLoading] = useState(false);
     return {
       isLoading,
