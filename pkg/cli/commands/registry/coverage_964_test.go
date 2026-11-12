@@ -34,6 +34,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/registry"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil/socktest"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -154,7 +155,7 @@ func (s *fakeRegistryServer) received() fakeRegistryServer {
 // flags factory whose local context points the CLI at it.
 func startRegistryServer(t *testing.T, srv *fakeRegistryServer) func(format cli.OutputFormat) *cli.CommonFlags {
 	t.Helper()
-	sock := filepath.Join(t.TempDir(), "platformd.sock")
+	sock := filepath.Join(socktest.Dir(t), "platformd.sock")
 	lis, err := net.Listen("unix", sock)
 	require.NoError(t, err)
 	gs := grpc.NewServer()

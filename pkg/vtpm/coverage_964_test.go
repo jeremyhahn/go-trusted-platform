@@ -22,6 +22,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/swtpm"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil/socktest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/uefi"
 	"github.com/stretchr/testify/require"
 )
@@ -66,7 +67,7 @@ func newHangUpTPMOperations(t *testing.T) (*TPMOperations, string, func()) {
 	t.Helper()
 
 	tpm := transport.FromReadWriter(newSimulator(t))
-	socketPath := filepath.Join(t.TempDir(), "swtpm.sock")
+	socketPath := filepath.Join(socktest.Dir(t), "swtpm.sock")
 	listener, err := net.Listen("unix", socketPath)
 	require.NoError(t, err)
 
@@ -940,7 +941,7 @@ func undefineNVIndex(t *testing.T, tpm transport.TPM, nvIndex uint32) {
 func serveTPMOnSocket(t *testing.T, tpm transport.TPM) string {
 	t.Helper()
 
-	socketPath := filepath.Join(t.TempDir(), "swtpm.sock")
+	socketPath := filepath.Join(socktest.Dir(t), "swtpm.sock")
 	listener, err := net.Listen("unix", socketPath)
 	require.NoError(t, err)
 

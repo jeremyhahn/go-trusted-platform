@@ -36,6 +36,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil/socktest"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	ceremonysvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/ceremony"
 )
@@ -132,7 +133,7 @@ func (s *inProcCeremonyServer) SignCSR(_ context.Context, req *platformv1.Ceremo
 // and returns it with JSON-output flags whose local context points at it.
 func startCeremonyServer(t *testing.T) (*inProcCeremonyServer, *cli.CommonFlags) {
 	t.Helper()
-	sock := filepath.Join(t.TempDir(), "platformd.sock")
+	sock := filepath.Join(socktest.Dir(t), "platformd.sock")
 	lis, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatalf("listen: %v", err)

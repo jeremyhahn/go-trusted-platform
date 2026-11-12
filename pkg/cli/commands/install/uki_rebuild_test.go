@@ -23,6 +23,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil/socktest"
 )
 
 func TestIsFileURI(t *testing.T) {
@@ -178,7 +179,7 @@ func TestNewRemoteSignerSeam(t *testing.T) {
 	})
 
 	t.Run("a context yields a seam bound to the SDK client", func(t *testing.T) {
-		socket := filepath.Join(t.TempDir(), "platformd.sock")
+		socket := filepath.Join(socktest.Dir(t), "platformd.sock")
 		listener, err := net.Listen("unix", socket)
 		if err != nil {
 			t.Fatal(err)

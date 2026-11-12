@@ -23,6 +23,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil/socktest"
 )
 
 // mockOFServer represents a mock OpenFlow server for testing
@@ -119,8 +121,8 @@ type mockOFServer struct {
 func newMockOFServer(t *testing.T) (*mockOFServer, string) {
 	t.Helper()
 
-	// Use t.TempDir() for Unix socket
-	socketDir := t.TempDir()
+	// Short socket dir: t.TempDir() embeds the test name and can exceed sun_path's 108 bytes.
+	socketDir := socktest.Dir(t)
 	socketPath := filepath.Join(socketDir, "test-bridge.mgmt")
 
 	listener, err := net.Listen("unix", socketPath)
