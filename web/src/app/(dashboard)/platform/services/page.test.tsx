@@ -1,5 +1,5 @@
 import * as React from "react";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import ServicesPage from "./page";
@@ -106,6 +106,32 @@ describe("ServicesPage daemon controls", () => {
     fireEvent.click(screen.getByLabelText("Start pxe"));
     expect(screen.queryByRole("dialog")).toBeNull();
     await waitFor(() => expect(platform.startService).toHaveBeenCalledWith("pxe"));
+  });
+
+  it("a details read that completes during a service action keeps the lifecycle controls disabled", async () => {
+    let resolveStart: (v: unknown) => void = () => {};
+    platform.startService.mockImplementationOnce(
+      () => new Promise((resolve) => (resolveStart = resolve)) as never
+    );
+    await renderPage();
+    fireEvent.click(screen.getByLabelText("Start dns"));
+    await waitFor(() => expect(platform.startService).toHaveBeenCalledWith("dns"));
+    fireEvent.click(screen.getByLabelText("Details dns"));
+    await screen.findByTestId("service-detail");
+    const lifecycle = ["Start", "Stop", "Restart"].flatMap((verb) =>
+      ["dns", "pxe"].map((svc) => `${verb} ${svc}`)
+    );
+    for (const label of lifecycle) {
+      expect((screen.getByLabelText(label) as HTMLButtonElement).disabled).toBe(true);
+    }
+    await act(async () => {
+      resolveStart({ success: true, data: { service: "dns", action: "start", success: true, message: "start ok" } });
+    });
+    await waitFor(() => {
+      for (const label of lifecycle) {
+        expect((screen.getByLabelText(label) as HTMLButtonElement).disabled).toBe(false);
+      }
+    });
   });
 
   it("reload configuration calls reloadConfig", async () => {
