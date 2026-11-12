@@ -274,21 +274,21 @@ test.describe('VPN peers and posture policies', () => {
 
   test('sets a posture policy', async ({ page }) => {
     const state = await openVPNPage(page);
-    const module = 'package vpn.posture\n\ndeny contains "os" if input.os_version < 14\n';
+    const regoModule = 'package vpn.posture\n\ndeny contains "os" if input.os_version < 14\n';
 
     await page.getByRole('button', { name: 'New Policy' }).click();
     const dialog = page.getByRole('dialog');
     await expect(dialog.getByRole('heading', { name: 'New Posture Policy' })).toBeVisible();
     await dialog.locator('#vpn-policy-tenant').fill('tenant-b');
     await dialog.locator('#vpn-policy-name').fill('os-version');
-    await dialog.locator('#vpn-policy-module').fill(module);
+    await dialog.locator('#vpn-policy-module').fill(regoModule);
     await dialog.getByRole('button', { name: 'Save' }).click();
 
     await expect(dialog).toBeHidden();
     await expect(page.getByRole('cell', { name: 'os-version' })).toBeVisible();
     const puts = callsTo(state, 'PUT', '/posture-policies/os-version');
     expect(puts).toHaveLength(1);
-    expect(puts[0].body).toMatchObject({ tenantId: 'tenant-b', module });
+    expect(puts[0].body).toMatchObject({ tenantId: 'tenant-b', module: regoModule });
 
     // Editing a stored policy writes it back under the same name.
     await page.getByRole('button', { name: 'Edit disk-encryption' }).click();
