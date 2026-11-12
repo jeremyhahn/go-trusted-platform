@@ -113,9 +113,11 @@ func newCanonicalDirectCmd(getFlags func() *cli.CommonFlags) *cobra.Command {
 		Use:   "direct",
 		Short: "Direct CA bundle copy (operator-supplied trust root)",
 		Long: `Bootstrap trust from a CA bundle PEM file supplied out of band. The
-command decodes every PEM block in the file and requires at least one
-CERTIFICATE block that parses as an X.509 CA certificate. With
---install-to-system-trust it writes the bundle to --cert-path; run the OS
+command decodes every PEM block in the file; the bundle must hold only
+CERTIFICATE blocks (a private key or any other block is refused), and at
+least one must parse as an X.509 CA certificate. With
+--install-to-system-trust it writes only the certificates, re-encoded, to
+--cert-path; text around the blocks is not copied. Run the OS
 trust-store update command (e.g. update-ca-certificates) afterwards.
 
 Example:
@@ -137,14 +139,14 @@ Example:
 			if err != nil {
 				return ErrFileReadFailed{Path: bundlePath, Err: err}
 			}
-			caCount, err := validateDirectBundle(bundlePath, bundle)
+			certs, caCount, err := validateDirectBundle(bundlePath, bundle)
 			if err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Direct CA bundle accepted: %s (%d bytes, %d CA certificates)\n",
 				bundlePath, len(bundle), caCount)
 			if installToSystemTrust {
-				if err := trust.InstallToSystemTrust(bundle, certPath); err != nil {
+				if err := trust.InstallToSystemTrust(certs, certPath); err != nil {
 					return ErrTrustInstallFailed{Path: certPath, Cause: err}
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "CA bundle installed to %s\n", certPath)
@@ -162,8 +164,9 @@ Example:
 // CERTIFICATE block and returns the number of CA certificates found. It
 // fails when the bundle holds no PEM block, a CERTIFICATE block does not
 // parse, or no certificate is a CA.
-func validateDirectBundle(path string, bundle []byte) (int, error) {
+func validateDirectBundle(path string, bundle []byte) ([]byte, int, error) {
 	var blocks, caCount int
+	var certs []byte
 	rest := bundle
 	for {
 		var block *pem.Block
@@ -173,21 +176,22 @@ func validateDirectBundle(path string, bundle []byte) (int, error) {
 		}
 		blocks++
 		if block.Type != "CERTIFICATE" {
-			continue
+			return nil, 0, ErrDirectBundleNonCertificateBlock{Path: path, Type: block.Type}
 		}
 		cert, err := x509.ParseCertificate(block.Bytes)
 		if err != nil {
-			return 0, ErrDirectBundleInvalidCert{Path: path, Cause: err}
+			return nil, 0, ErrDirectBundleInvalidCert{Path: path, Cause: err}
 		}
 		if cert.IsCA {
 			caCount++
 		}
+		certs = append(certs, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: block.Bytes})...)
 	}
 	if blocks == 0 {
-		return 0, ErrDirectBundleNotPEM{Path: path}
+		return nil, 0, ErrDirectBundleNotPEM{Path: path}
 	}
 	if caCount == 0 {
-		return 0, ErrDirectBundleNoCA{Path: path}
+		return nil, 0, ErrDirectBundleNoCA{Path: path}
 	}
-	return caCount, nil
+	return certs, caCount, nil
 }
