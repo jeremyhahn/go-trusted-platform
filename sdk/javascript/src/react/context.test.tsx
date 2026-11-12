@@ -98,7 +98,10 @@ describe('PlatformProvider', () => {
 
   it('treats an explicit undefined client as absent', () => {
     recordMemo();
-    const el = PlatformProvider({ client: undefined, children: null }) as ProviderElement;
+    const el = PlatformProvider({
+      client: undefined,
+      children: null,
+    } as unknown as Parameters<typeof PlatformProvider>[0]) as ProviderElement;
 
     expect(el.props.value.client).toBeInstanceOf(PlatformClient);
   });
