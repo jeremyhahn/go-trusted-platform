@@ -20,6 +20,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 )
@@ -32,4 +33,21 @@ func TestClassTable_FHRPRunsInTheDatapath(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "datapath", def.Name)
 	assert.Equal(t, ClassKernel, def.Class)
+}
+
+// The datapath hosts the FHRP speaker, whose announcer sends the IPv4
+// takeover's gratuitous ARP over AF_PACKET; no other process may open it.
+func TestClassTable_DatapathOpensAFPacket(t *testing.T) {
+	def, err := DefinitionForService(gateway.ServiceFHRP)
+	require.NoError(t, err)
+	assert.Contains(t, def.AddressFamilies, uint32(unix.AF_PACKET))
+	program := seccompProgram(filterTable, def)
+	assert.Equal(t, int(seccompAllow), evaluate(t, program, filterTable.arch, filterTable.socket, unix.AF_PACKET),
+		"the announcer's AF_PACKET socket is allowed")
+	for _, other := range Definitions() {
+		if other.Name == def.Name {
+			continue
+		}
+		assert.NotContainsf(t, other.AddressFamilies, uint32(unix.AF_PACKET), "process %q", other.Name)
+	}
 }

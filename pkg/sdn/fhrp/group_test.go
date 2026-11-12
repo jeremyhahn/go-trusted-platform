@@ -242,6 +242,39 @@ func TestGroup_ActuatorFailuresAreReported(t *testing.T) {
 	assert.Equal(t, StateInitialize, g.State())
 }
 
+// A claim that fails at takeover stays reported, and is retried, until a
+// claim succeeds: a later successful advertisement must not hide it.
+func TestGroup_ClaimFailureSurvivesAdvertisement(t *testing.T) {
+	g, act := newGroupT(t, backupConfig())
+	act.failClm = errors.New("netlink EPERM")
+	require.NoError(t, g.Startup(t0))
+	require.Error(t, g.Tick(g.NextDeadline()))
+	require.Equal(t, StateMaster, g.State())
+	assert.ErrorIs(t, g.ClaimError(), act.failClm)
+
+	// The claim still fails: the next advertisement retries it and reports it.
+	require.Error(t, g.Tick(g.NextDeadline()))
+	assert.Equal(t, 2, act.claims)
+	assert.ErrorIs(t, g.ClaimError(), act.failClm)
+	assert.ErrorIs(t, g.LastError(), act.failClm)
+
+	// The claim is repaired: both errors clear.
+	act.failClm = nil
+	require.NoError(t, g.Tick(g.NextDeadline()))
+	assert.Equal(t, 3, act.claims)
+	assert.NoError(t, g.ClaimError())
+	assert.NoError(t, g.LastError())
+
+	// Leaving Master drops an unrepaired claim failure.
+	g2, act2 := newGroupT(t, backupConfig())
+	act2.failClm = errors.New("netlink EPERM")
+	require.NoError(t, g2.Startup(t0))
+	require.Error(t, g2.Tick(g2.NextDeadline()))
+	require.Error(t, g2.ClaimError())
+	_ = g2.Shutdown(t0.Add(time.Hour))
+	assert.NoError(t, g2.ClaimError())
+}
+
 func TestGroup_Accessors(t *testing.T) {
 	g, _ := newGroupT(t, backupConfig())
 	assert.Equal(t, FamilyIPv4, g.Family())

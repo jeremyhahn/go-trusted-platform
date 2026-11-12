@@ -210,6 +210,7 @@ func TestBuildExprs_Shapes(t *testing.T) {
 			[]string{"meta", "cmp", "meta", "cmp", "payload", "bitwise", "cmp", "meta", "cmp", "verdict"}},
 		"tunnel bfd": {Rule{Kind: RuleTunnelPort, Interface: "gre1", Protocol: ProtocolUDP, Port: PortBFD},
 			[]string{"meta", "cmp", "meta", "cmp", "payload", "cmp", "verdict"}},
+		"vrrp": {Rule{Kind: RuleVRRP, Interface: "eth1", IPProto: ipProtoVRRP}, []string{"meta", "cmp", "meta", "cmp", "verdict"}},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

@@ -15,6 +15,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/netip"
 	"sync"
@@ -24,6 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/fhrp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/hostfw"
 )
 
 // fakeFHRPTransport opens in-memory group sockets and records each open.
@@ -160,4 +162,40 @@ func TestEnabledServices_FHRP(t *testing.T) {
 	cfg.FHRP.Enabled = true
 	assert.Contains(t, cfg.EnabledServices(), ServiceFHRP)
 	assert.Contains(t, serviceBuilders, ServiceFHRP, "an enabled section has a builder")
+}
+
+// The host filter admits the FHRP peers' VRRP advertisements on every
+// enabled group's interface, and on none when FHRP is off.
+func TestBuildHostFW_AdmitsVRRPOnFHRPInterfaces(t *testing.T) {
+	text := func(t *testing.T, f *fhrp.Config) string {
+		t.Helper()
+		cfg := baseGatewayConfig("fhrp-gw")
+		cfg.FHRP = f
+		cfg.HostFW = &hostfw.Config{Enabled: true}
+		cfg.Host = &HostRuntime{HostFWApplier: &fakeHostFWApplier{}}
+		svc, err := buildHostFW(&Gateway{config: cfg})
+		require.NoError(t, err)
+		require.NoError(t, svc.Start(context.Background()))
+		t.Cleanup(func() { _ = svc.Stop(context.Background()) })
+		backend, ok := svc.(hostFWBackend)
+		require.True(t, ok)
+		rendered := backend.Rendered()
+		require.NotNil(t, rendered)
+		return rendered.Text
+	}
+	assert.Contains(t, text(t, ownerFHRPConfig()), `iifname "trusted0" meta l4proto 112 accept`)
+	off := ownerFHRPConfig()
+	off.Enabled = false
+	assert.NotContains(t, text(t, off), "l4proto 112")
+	assert.NotContains(t, text(t, nil), "l4proto 112")
+}
+
+// A claim failure keeps the gateway unhealthy even after a later successful
+// advertisement has cleared LastError.
+func TestFHRPHealthy_ClaimErrorKeepsItUnhealthy(t *testing.T) {
+	assert.True(t, fhrpHealthy(fhrp.Health{Active: true, Groups: []fhrp.GroupStatus{{VRID: 10}}}))
+	assert.False(t, fhrpHealthy(fhrp.Health{Active: true, Groups: []fhrp.GroupStatus{
+		{VRID: 10, ClaimError: errors.New("netlink EPERM")},
+	}}))
+	assert.False(t, fhrpHealthy(fhrp.Health{Active: false}))
 }

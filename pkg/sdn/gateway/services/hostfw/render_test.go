@@ -140,6 +140,7 @@ func TestRender_ValidationErrors(t *testing.T) {
 		"peer unspecified":   {Ruleset{Peers: []PeerAllowance{{Interface: "wan0", Protocol: PeerProtocolGRE, Addresses: []netip.Addr{netip.IPv4Unspecified()}}}}, ErrInvalidAddress, "peers"},
 		"tunnel empty":       {Ruleset{Tunnels: []string{""}}, ErrEmptyInterface, "tunnels"},
 		"unfiltered bad":     {Ruleset{Unfiltered: []string{"a/b"}}, ErrInvalidInterface, "unfiltered"},
+		"vrrp bad":           {Ruleset{VRRP: []string{"a/b"}}, ErrInvalidInterface, "vrrp"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -157,6 +158,18 @@ func TestConfig_Validate(t *testing.T) {
 	assert.NoError(t, Config{}.Validate())
 	assert.NoError(t, Config{Extra: []Listener{{Interface: "eth0", Protocol: ProtocolTCP, Port: 22}}, Tunnels: []string{"gre1"}}.Validate())
 	assert.ErrorIs(t, Config{Extra: []Listener{{Protocol: ProtocolTCP}}}.Validate(), ErrZeroPort)
+	assert.ErrorIs(t, Config{VRRP: []string{""}}.Validate(), ErrEmptyInterface)
+}
+
+func TestRender_VRRPOnInterfaces(t *testing.T) {
+	rendered, err := Render(Ruleset{VRRP: []string{"eth2", "eth1"}})
+	require.NoError(t, err)
+	eth1 := `iifname "eth1" meta l4proto 112 accept comment "vrrp on eth1"`
+	eth2 := `iifname "eth2" meta l4proto 112 accept comment "vrrp on eth2"`
+	assert.Contains(t, rendered.Text, eth1)
+	assert.Contains(t, rendered.Text, eth2)
+	assert.Less(t, strings.Index(rendered.Text, eth1), strings.Index(rendered.Text, eth2), "sorted")
+	assert.Len(t, rendered.Rules, 8, "6 base rules plus 2 VRRP")
 }
 
 func TestErrors_Messages(t *testing.T) {
