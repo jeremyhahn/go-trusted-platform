@@ -525,7 +525,14 @@ export async function mockIDevIDApi(
       },
     },
     'POST /iak/generate': { status: 201, body: { status: idevidOk } },
-    'DELETE /iak': { body: { status: idevidOk } },
+    'DELETE /iak': {
+      status: 409,
+      body: {
+        message:
+          'idevid: the IAK key is TPM-resident and is not evicted by this service; nothing was deleted (delete its certificate with DeleteIAKCertificate)',
+        code: 'FAILED_PRECONDITION',
+      },
+    },
     'POST /iak/csr': { body: { status: idevidOk, csrPem: '-----BEGIN CERTIFICATE REQUEST-----\nIAKCSR\n-----END CERTIFICATE REQUEST-----' } },
     'POST /ldevid': { status: 201, body: { status: idevidOk, certificatePem: '-----BEGIN CERTIFICATE-----\nLDEVIDCERT\n-----END CERTIFICATE-----' } },
     'POST /certificate': { body: { status: idevidOk } },

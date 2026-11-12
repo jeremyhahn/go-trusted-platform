@@ -61,16 +61,21 @@ test.describe('TPM IDevID and IAK', () => {
     await expect.poll(called(calls, 'POST', '/iak/generate')).toBe(1);
   });
 
-  test('DeleteIAK deletes the IAK after confirmation', async ({ page }) => {
+  test('DeleteIAK is refused by the service after confirmation', async ({ page }) => {
     const { calls } = await openPage(page);
-    // Cancel first: nothing is deleted.
+    // Cancel first: no request is sent.
     await page.getByRole('button', { name: 'Delete IAK', exact: true }).click();
-    await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click();
-    await expect(page.getByRole('dialog')).toBeHidden();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toContainText('does not evict it');
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+    await expect(dialog).toBeHidden();
     expect(called(calls, 'DELETE', '/iak')()).toBe(0);
 
     await confirm(page, 'Delete IAK');
     await expect.poll(called(calls, 'DELETE', '/iak')).toBe(1);
+    const toast = page.getByText('Error deleting IAK').first();
+    await expect(toast).toBeVisible();
+    await expect(page.getByText(/nothing was deleted/).first()).toBeVisible();
   });
 
   test('CreateIAKCSR creates an IAK CSR', async ({ page }) => {
