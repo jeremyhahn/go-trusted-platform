@@ -51,10 +51,10 @@ function createButton(): HTMLButtonElement {
   return screen.getByRole('button', { name: 'Create User' }) as HTMLButtonElement;
 }
 
-function fillAndSubmit() {
+function fillAndSubmit(password = 'pw-123456') {
   const dialog = screen.getByRole('dialog');
   fireEvent.change(dialog.querySelector('#bmc-create-username')!, { target: { value: 'auditor' } });
-  fireEvent.change(dialog.querySelector('#bmc-create-password')!, { target: { value: 'pw-123456' } });
+  fireEvent.change(dialog.querySelector('#bmc-create-password')!, { target: { value: password } });
   fireEvent.submit(dialog.querySelector('form')!);
 }
 
@@ -102,5 +102,26 @@ describe('BMCUsersClient Create User', () => {
     expect(screen.getByTestId('bmc-create-slot-error').textContent).toContain(
       'The user list has not loaded; reload it before creating a user.'
     );
+  });
+
+  it('refuses a password over 20 bytes', () => {
+    hook = state({ users: listedUsers, listed: true });
+    render(<BMCUsersClient />);
+    fireEvent.click(createButton());
+    fillAndSubmit('x'.repeat(21));
+    expect(createUser).not.toHaveBeenCalled();
+    expect(screen.getByTestId('bmc-create-slot-error').textContent).toContain('longer than 20 bytes');
+  });
+
+  it('counts UTF-8 bytes, not characters', () => {
+    hook = state({ users: listedUsers, listed: true });
+    render(<BMCUsersClient />);
+    fireEvent.click(createButton());
+    // 11 characters, 22 bytes in UTF-8.
+    fillAndSubmit('é'.repeat(11));
+    expect(createUser).not.toHaveBeenCalled();
+    expect(screen.getByTestId('bmc-create-slot-error').textContent).toContain('longer than 20 bytes');
+    fillAndSubmit('y'.repeat(20));
+    expect(createUser).toHaveBeenCalledTimes(1);
   });
 });

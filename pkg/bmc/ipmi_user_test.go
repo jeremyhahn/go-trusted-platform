@@ -289,6 +289,49 @@ func TestCreateUser_HappyPath(t *testing.T) {
 	}
 }
 
+// TestCreateUser_OversizedPasswordWritesNothing pins that a password over
+// the IPMI 20-byte limit is refused before the first BMC write: a refusal
+// after SetUserName would leave a named slot without its password or access.
+func TestCreateUser_OversizedPasswordWritesNothing(t *testing.T) {
+	m := newMock()
+	um := newUM(m)
+	pwd := memguard.NewMemoryEnclave([]byte("abcdefghijklmnopqrstu")) // 21 bytes
+	defer pwd.Destroy()
+
+	err := um.CreateUser(context.Background(), User{
+		Slot:      2,
+		Username:  "alice",
+		Enabled:   true,
+		Privilege: PrivilegeAdministrator,
+	}, pwd)
+	var want ErrInvalidConfig
+	if !errors.As(err, &want) || want.Field != "password" {
+		t.Fatalf("err = %v, want ErrInvalidConfig{Field: password}", err)
+	}
+	if len(m.calls) != 0 {
+		t.Fatalf("want 0 BMC calls, got %d", len(m.calls))
+	}
+
+	t.Run("exactly 20 bytes is accepted", func(t *testing.T) {
+		m := newMock()
+		um := newUM(m)
+		pwd := memguard.NewMemoryEnclave([]byte("abcdefghijklmnopqrst")) // 20 bytes
+		defer pwd.Destroy()
+		err := um.CreateUser(context.Background(), User{
+			Slot:      2,
+			Username:  "alice",
+			Enabled:   true,
+			Privilege: PrivilegeAdministrator,
+		}, pwd)
+		if err != nil {
+			t.Fatalf("CreateUser: %v", err)
+		}
+		if len(m.calls) != 3 {
+			t.Fatalf("want 3 calls, got %d", len(m.calls))
+		}
+	})
+}
+
 func TestCreateUser_DisabledFlags(t *testing.T) {
 	m := newMock()
 	um := newUM(m)

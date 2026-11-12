@@ -328,6 +328,7 @@ func newGatedTestRouter(t *testing.T, registry *testHandlerRegistry) *mux.Router
 	registry.overlayService = &stubOverlayServer{}
 	registry.switchService = &stubSwitchService{}
 	registry.sdnService = &stubSDNServer{}
+	registry.bmcHandler = stubBMCHandler{}
 	registry.gatewayService = &stubGatewayServer{}
 	registry.gatewayStore = &stubGatewayStore{}
 	registry.configDelivery = &stubConfigDelivery{}
@@ -677,11 +678,7 @@ var pendingRoutes = map[string]string{
 // fixture did not build the services. That is the sharpest form of the rule
 // below: a nil in a fixture can hide a route that production always serves.
 //
-// Slice 1 also named /bmc here. That was wrong: the webservice serves no
-// /bmc route. pkg/webservice/v1/router/bmc.go exists but NewBMCRouter has
-// no non-test caller, and the live BMC surface belongs to the second REST
-// server tracked on #232. It is not this audit's blind spot, and the
-// unreferenced router is filed separately.
+// /bmc is now mounted admin-gated by bmcRoutes, and is covered by this walk.
 func TestRegisterRoutes_EveryRouteDeniesWithoutCredential(t *testing.T) {
 	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
 
