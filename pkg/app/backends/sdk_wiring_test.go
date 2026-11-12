@@ -15,6 +15,7 @@ package backends
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -28,10 +29,34 @@ import (
 type recordingSDKTarget struct {
 	ceremony daemon.CeremonyBackend
 	fido2    daemon.FIDO2Backend
+	luks     daemon.LUKSBackend
+	root     daemon.RootChecker
 }
 
 func (r *recordingSDKTarget) SetCeremonyBackend(b daemon.CeremonyBackend) { r.ceremony = b }
 func (r *recordingSDKTarget) SetFIDO2Backend(b daemon.FIDO2Backend)       { r.fido2 = b }
+func (r *recordingSDKTarget) SetLUKSBackend(b daemon.LUKSBackend)         { r.luks = b }
+func (r *recordingSDKTarget) SetLUKSRootChecker(rc daemon.RootChecker)    { r.root = rc }
+
+// TestWireSDKBackends_WiresLUKS verifies the SDK wiring gives the daemon a
+// LUKS backend and a root checker, so the LUKS service answers on every
+// transport instead of "not configured" (#1692).
+func TestWireSDKBackends_WiresLUKS(t *testing.T) {
+	target := &recordingSDKTarget{}
+
+	if err := WireSDKBackends(target, SDKBackendSources{SDK: &fakeQuicbaasClient{}}, logging.DefaultLogger()); err != nil {
+		t.Fatalf("WireSDKBackends: %v", err)
+	}
+	if lb, ok := target.luks.(*LUKSBackend); !ok || lb == nil {
+		t.Errorf("LUKS backend = %T, want a non-nil *LUKSBackend", target.luks)
+	}
+	if target.root == nil {
+		t.Fatal("LUKS root checker was not wired")
+	}
+	if got, want := target.root.IsRoot(), os.Geteuid() == 0; got != want {
+		t.Errorf("root checker IsRoot = %v, want %v (the effective UID)", got, want)
+	}
+}
 
 func TestWireSDKBackends_WiresCeremonyOnly(t *testing.T) {
 	target := &recordingSDKTarget{}
@@ -79,7 +104,7 @@ func TestWireSDKBackends_NoSDKClientIsFatal(t *testing.T) {
 	if !errors.As(err, &noClient) {
 		t.Fatalf("want ErrCeremonyBackendRequiresSDK, got %T: %v", err, err)
 	}
-	if target.ceremony != nil || target.fido2 != nil {
+	if target.ceremony != nil || target.fido2 != nil || target.luks != nil || target.root != nil {
 		t.Errorf("a failed wiring wired %+v", target)
 	}
 }
