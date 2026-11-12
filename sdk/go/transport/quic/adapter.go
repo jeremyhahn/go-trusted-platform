@@ -891,6 +891,7 @@ var grpcMethodToOpcodeMap = map[string]byte{
 	"/platform.v1.AttestationService/VerifyAttestationQuote": quicwire.OpAttestVerify,
 	"/platform.v1.AttestationService/CollectHostAttestation": quicwire.OpAttestCollectHost,
 	"/platform.v1.AttestationService/PollDeviceVerdicts":     quicwire.OpAttestPollVerdicts,
+	"/platform.v1.AttestationService/GetManifest":            quicwire.OpAttestGetManifest,
 
 	// IDevID Service — proto: pkg/api/grpc/proto/idevid.proto
 	"/platform.v1.IDevIDService/GetIDevID":                quicwire.OpIDevIDInfo,
