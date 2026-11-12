@@ -52,9 +52,17 @@ describe('BMCService', () => {
     expect(mockClient.post).toHaveBeenCalledWith('/v1/bmc/r640-01/boot-device', { device: 'pxe', persistent: false });
   });
 
-  it('mountISO POSTs the image to virtual-media', async () => {
-    await service.mountISO('r640-01', { image: 'installer.iso' });
-    expect(mockClient.post).toHaveBeenCalledWith('/v1/bmc/r640-01/virtual-media', { image: 'installer.iso' });
+  it('mountISO POSTs the iso_url to virtual-media', async () => {
+    await service.mountISO('r640-01', { iso_url: 'installer.iso' });
+    expect(mockClient.post).toHaveBeenCalledWith('/v1/bmc/r640-01/virtual-media', { iso_url: 'installer.iso' });
+  });
+
+  it('getSensors returns the plain sensor array the server sends', async () => {
+    const readings = [{ name: 'CPU1 Temp', value: 54, units: 'C', status: 'OK' }];
+    vi.mocked(mockClient.get).mockResolvedValue({ success: true, data: readings });
+    const res = await service.getSensors('r640-01');
+    expect(Array.isArray(res.data)).toBe(true);
+    expect(res.data?.[0].value).toBe(54);
   });
 
   it('unmountISO DELETEs virtual-media', async () => {

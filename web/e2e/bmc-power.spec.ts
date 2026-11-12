@@ -53,6 +53,23 @@ test.describe("BMC power, boot device, virtual media, sensors and provision (#17
     await expect(page.getByTestId("bmc-boot-device")).toHaveText("pxe");
   });
 
+  test("boot device offers exactly the server's devices", async ({ page }) => {
+    await openProfile(page);
+    const options = page.getByLabel("New boot device").locator("option");
+    await expect(options).toHaveText(["none", "pxe", "disk", "cdrom", "virtual_media"]);
+  });
+
+  test("sets the virtual_media boot device", async ({ page }) => {
+    const { requests } = await openProfile(page);
+    await page.getByLabel("New boot device").selectOption("virtual_media");
+    await page.getByRole("button", { name: "Set boot device" }).click();
+    await confirmDialog(page, "Set boot device");
+    expect(requests).toEqual([
+      { method: "POST", op: "boot-device", body: { device: "virtual_media", persistent: false } },
+    ]);
+    await expect(page.getByTestId("bmc-boot-device")).toHaveText("virtual_media");
+  });
+
   test("cancelling the confirm dialog sends nothing", async ({ page }) => {
     const { requests } = await openProfile(page);
     await page.getByRole("button", { name: "Provision" }).click();
@@ -62,26 +79,28 @@ test.describe("BMC power, boot device, virtual media, sensors and provision (#17
   });
 
   test("shows the virtual media status", async ({ page }) => {
-    await openProfile(page, { state: { virtualMedia: { inserted: true, image: "rescue.iso" } } });
-    await expect(page.getByTestId("bmc-virtual-media")).toHaveText("Mounted: rescue.iso");
+    await openProfile(page, { state: { virtualMedia: { mounted: true, image_url: "rescue.iso" } } });
+    await expect(page.getByTestId("bmc-virtual-media")).toHaveText("rescue.iso");
+    await expect(page.getByRole("button", { name: "Unmount ISO" })).toBeEnabled();
   });
 
   test("mounts an ISO after confirmation", async ({ page }) => {
     const { requests } = await openProfile(page);
-    await expect(page.getByTestId("bmc-virtual-media")).toHaveText("No media mounted");
-    await page.getByLabel("ISO image").fill("installer.iso");
+    await expect(page.getByTestId("bmc-virtual-media")).toHaveText("No media");
+    await expect(page.getByRole("button", { name: "Unmount ISO" })).toBeDisabled();
+    await page.getByLabel("ISO URL").fill("installer.iso");
     await page.getByRole("button", { name: "Mount ISO", exact: true }).click();
     await confirmDialog(page, "Mount ISO");
-    expect(requests).toEqual([{ method: "POST", op: "virtual-media", body: { image: "installer.iso" } }]);
-    await expect(page.getByTestId("bmc-virtual-media")).toHaveText("Mounted: installer.iso");
+    expect(requests).toEqual([{ method: "POST", op: "virtual-media", body: { iso_url: "installer.iso" } }]);
+    await expect(page.getByTestId("bmc-virtual-media")).toHaveText("installer.iso");
   });
 
   test("unmounts the ISO after confirmation", async ({ page }) => {
-    const { requests } = await openProfile(page, { state: { virtualMedia: { inserted: true, image: "rescue.iso" } } });
+    const { requests } = await openProfile(page, { state: { virtualMedia: { mounted: true, image_url: "rescue.iso" } } });
     await page.getByRole("button", { name: "Unmount ISO" }).click();
     await confirmDialog(page, "Unmount ISO");
     expect(requests).toEqual([{ method: "DELETE", op: "virtual-media", body: null }]);
-    await expect(page.getByTestId("bmc-virtual-media")).toHaveText("No media mounted");
+    await expect(page.getByTestId("bmc-virtual-media")).toHaveText("No media");
   });
 
   test("shows the sensors", async ({ page }) => {
@@ -99,24 +118,38 @@ test.describe("BMC power, boot device, virtual media, sensors and provision (#17
     await expect(info).toContainText("SN-R640-01");
   });
 
-  test("provisions after confirmation", async ({ page }) => {
+  test("provisions the host after a confirmation that names the shutdown and OS install", async ({ page }) => {
     const { requests } = await openProfile(page);
     await page.getByRole("button", { name: "Provision" }).click();
-    await confirmDialog(page, "Provision BMC");
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toContainText("powers the host off");
+    await expect(dialog).toContainText("installs an operating system");
+    await confirmDialog(page, "Provision host");
     expect(requests).toEqual([{ method: "POST", op: "provision", body: {} }]);
-    await expect(page.getByTestId("bmc-provision-state")).toHaveText("provisioning");
+    await expect(page.getByTestId("bmc-provision-state")).toHaveText("pending");
   });
 
   test("shows the provision status", async ({ page }) => {
-    await openProfile(page, { state: { provision: { state: "provisioned", message: "done" } } });
-    await expect(page.getByTestId("bmc-provision-state")).toHaveText("provisioned");
+    await openProfile(page, {
+      state: {
+        provision: {
+          provision_id: "prov-2",
+          profile_id: "r640-01",
+          status: "installing",
+          message: "waiting for the OS install",
+          started_at: "2026-11-12T00:00:00Z",
+          updated_at: "2026-11-12T00:10:00Z",
+        },
+      },
+    });
+    await expect(page.getByTestId("bmc-provision-state")).toHaveText("installing");
   });
 
   test("shows the web certificate", async ({ page }) => {
     await openProfile(page);
     const cert = page.getByTestId("bmc-certificate");
     await expect(cert).toContainText("CN=idrac-r640-01");
-    await expect(cert).toContainText("MIIBbmcweb");
+    await expect(cert).toContainText("SHA256:5B:9D:3F:2E");
   });
 
   test("a failing part shows its error and leaves the rest", async ({ page }) => {
