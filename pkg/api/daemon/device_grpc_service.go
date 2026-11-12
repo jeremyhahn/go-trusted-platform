@@ -736,6 +736,8 @@ func (s *DeviceGRPCService) pbToProfile(pb *platformv1.DeviceProfile) (*entities
 		EKSerial:              pb.GetEkSerial(),
 		MACAddress:            pb.GetMacAddress(),
 		TLSServerName:         pb.GetTlsServerName(),
+		DICEDeviceID:          pb.GetDiceDeviceId(),
+		GoldenFWHash:          pb.GetGoldenFwHash(),
 		Assigned:              pb.GetAssigned(),
 		// PCRBaseline is deliberately NOT mapped: the baseline is read-only
 		// on every transport (#373, #448). A caller-supplied expected state
@@ -843,6 +845,8 @@ func (s *DeviceGRPCService) profileToPb(p *entities.DeviceProfile) *platformv1.D
 		EkCert:                p.EKCert,
 		MacAddress:            p.MACAddress,
 		TlsServerName:         p.TLSServerName,
+		DiceDeviceId:          p.DICEDeviceID,
+		GoldenFwHash:          p.GoldenFWHash,
 		Assigned:              p.Assigned,
 		PcrBaseline:           grpcapi.EntityPCRBaselineToProto(p.PCRBaseline),
 	}
