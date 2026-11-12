@@ -139,7 +139,44 @@ test.describe('Overlay VTEPs and tunnels', () => {
 
   test('ListVTEPs: a denied list shows an error, not an empty inventory', async ({ page }) => {
     await openPage(page, { 'GET /vteps': 403 });
-    await expect(page.getByTestId('overlay-list-error').first()).toBeVisible();
+    await expect(page.getByTestId('vteps-list-error')).toBeVisible();
     await expect(page.getByText('No VTEPs found')).toHaveCount(0);
+  });
+
+  test('ListTunnels: a denied tunnel list keeps VTEPs and VNIs usable', async ({ page }) => {
+    await openPage(page, { 'GET /tunnels': 403 });
+    await expect(page.getByTestId('tunnels-list-error')).toBeVisible();
+    await expect(page.getByTestId('vteps-list-error')).toHaveCount(0);
+    await expect(page.getByTestId('vnis-list-error')).toHaveCount(0);
+    await expect(page.getByRole('cell', { name: 'node-a', exact: true })).toBeVisible();
+    const del = page.getByRole('button', { name: 'Delete VNI 5001' });
+    await expect(del).toBeVisible();
+    await expect(del).toBeEnabled();
+  });
+
+  test('ForgetMAC: an exponential VNI is read whole', async ({ page }) => {
+    const calls = await openPage(page);
+    await page.getByLabel('MAC address').fill('aa:bb:cc:dd:ee:ff');
+    await page.getByLabel('VNI', { exact: true }).fill('1e4');
+    await page.getByRole('button', { name: 'Forget MAC' }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByText('Forget MAC aa:bb:cc:dd:ee:ff on VNI 10000?')).toBeVisible();
+    await dialog.getByRole('button', { name: 'Forget' }).click();
+    await expect(dialog).toBeHidden();
+    expect(
+      calls.some((c) => c.method === 'DELETE' && c.path === '/macs' && c.query.vni === '10000')
+    ).toBe(true);
+  });
+
+  test('ForgetMAC: a fractional VNI is refused before any request', async ({ page }) => {
+    const calls = await openPage(page);
+    await page.getByLabel('MAC address').fill('aa:bb:cc:dd:ee:ff');
+    await page.getByLabel('VNI', { exact: true }).fill('5001.9');
+    await page.getByRole('button', { name: 'Forget MAC' }).click();
+    await expect(
+      page.getByText('Enter a MAC address and a whole VNI from 1 to 16777215').first()
+    ).toBeVisible();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
   });
 });
