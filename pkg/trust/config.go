@@ -32,8 +32,8 @@
 //
 // Strategy dispatch, caching, install, and all per-strategy fetch logic live
 // in go-xkms pkg/trust/resolver, reached through the QuicBaaS SDK re-export
-// per the SDK-consumption invariant in CLAUDE.md. This package owns the class
-// constants, their strategy allowlists, and Anchor.
+// per the SDK-consumption invariant (pkg/arch enforces it). This package owns
+// the class constants, their strategy allowlists, and Anchor.
 package trust
 
 import (

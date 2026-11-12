@@ -686,7 +686,7 @@ func (e *RotationRollbackError) Unwrap() error { return e.Err }
 // InvalidFingerprintError reports an --expect-fingerprint entry that is not a
 // SHA-256 fingerprint. Value is the offending entry and Reason says how it is
 // malformed, so a caller classifies the failure by type rather than by
-// matching on message text (AGENTS.md, conventions/errors.md §2: no new
+// matching on message text (conventions/errors.md §2: no new
 // fmt.Errorf under cmd/).
 type InvalidFingerprintError struct {
 	Value  string

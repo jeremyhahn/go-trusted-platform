@@ -56,8 +56,7 @@ var gatewayAllowedPrefixes = []string{
 	"pkg/sdn",
 
 	// The in-process L7 data plane. A forwarder cannot forward through an
-	// RPC client; pkg/proxy is the sanctioned in-process exception (see
-	// cmd/gatewayd/CLAUDE.md).
+	// RPC client; pkg/proxy is the sanctioned in-process exception.
 	"pkg/proxy",
 
 	// Trusted-computing collaborators of the proxy auth chain.

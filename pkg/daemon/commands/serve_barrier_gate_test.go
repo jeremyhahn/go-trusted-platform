@@ -1366,7 +1366,7 @@ func TestInvokeBarrierGate_PropagatesError(t *testing.T) {
 // assertion is impractical because runWithWebservices requires a fully
 // initialized App (CA, web services, SDK client) before the gate is
 // reached, and standing all of that up in a unit test would violate the
-// "never run heavy logic in unit tests" rule from CLAUDE.md.
+// "never run heavy logic in unit tests" rule.
 //
 // The check uses Go's parser so a comment containing the text doesn't
 // produce a false positive. We walk the function body and look for an

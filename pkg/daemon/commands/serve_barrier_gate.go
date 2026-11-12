@@ -783,7 +783,7 @@ type barrierGateConfig struct {
 }
 
 // defaultBarrierGateConfig returns sensible defaults aligned with the
-// canonical port assignments documented in CLAUDE.md.
+// canonical port assignments.
 func defaultBarrierGateConfig() barrierGateConfig {
 	return barrierGateConfig{
 		socketPath: "/run/platformd.sock",

@@ -62,7 +62,7 @@ func TestWatchdogDoesNotFireWhenRunUnwindsWithinGrace(t *testing.T) {
 	// returns because its context ended, so waiting on ctx.Done() models the
 	// real thing and is deterministic under any scheduler. A wall-clock sleep
 	// here would race the grace period and flake exactly when CI is saturated
-	// (AGENTS.md forbids time.Sleep for synchronization) — and a watchdog test
+	// (time.Sleep is forbidden for synchronization) — and a watchdog test
 	// that flakes under load would be reporting the very condition it exists to
 	// distinguish from a real hang.
 	got := runWatchdog(ctx, 2*time.Second, func(c context.Context) error {
