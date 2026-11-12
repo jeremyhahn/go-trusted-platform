@@ -40,6 +40,7 @@ type manifestProvider struct {
 	*mockServiceProvider
 	calls  int
 	id     string
+	hostID string
 	limit  uint32
 	offset uint32
 	build  ManifestBuildRequest
@@ -64,8 +65,8 @@ func (p *manifestProvider) AttestationGetManifest(_ context.Context, id string) 
 	return p.answer()
 }
 
-func (p *manifestProvider) AttestationListManifests(_ context.Context, limit, offset uint32) (any, error) {
-	p.limit, p.offset = limit, offset
+func (p *manifestProvider) AttestationListManifests(_ context.Context, hostID string, limit, offset uint32) (any, error) {
+	p.hostID, p.limit, p.offset = hostID, limit, offset
 	return p.answer()
 }
 
@@ -162,8 +163,9 @@ func TestAttestationManifestTools_DecodeArguments(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "m-2", p.id)
 
-	_, err = r.ExecuteTool(ctx, "attestation_list_manifests", map[string]interface{}{"limit": float64(10), "offset": float64(20)})
+	_, err = r.ExecuteTool(ctx, "attestation_list_manifests", map[string]interface{}{"host_id": "host-a", "limit": float64(10), "offset": float64(20)})
 	require.NoError(t, err)
+	assert.Equal(t, "host-a", p.hostID)
 	assert.Equal(t, uint32(10), p.limit)
 	assert.Equal(t, uint32(20), p.offset)
 

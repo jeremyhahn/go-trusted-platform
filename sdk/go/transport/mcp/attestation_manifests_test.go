@@ -34,7 +34,7 @@ func TestAttestationManifestsMCP_List_ArgsAndDecode(t *testing.T) {
 
 	resp := &platformv1.ListManifestsResponse{}
 	err := a.Connection().Invoke(context.Background(), platformv1.AttestationService_ListManifests_FullMethodName,
-		&platformv1.ListManifestsRequest{Limit: 10, Offset: 10}, resp)
+		&platformv1.ListManifestsRequest{HostId: "h1", Limit: 10, Offset: 10}, resp)
 	if err != nil {
 		t.Fatalf("Invoke: %v", err)
 	}
@@ -43,6 +43,9 @@ func TestAttestationManifestsMCP_List_ArgsAndDecode(t *testing.T) {
 	}
 	if fmt.Sprint(calls[0].Arguments["limit"]) != "10" || fmt.Sprint(calls[0].Arguments["offset"]) != "10" {
 		t.Fatalf("arguments = %+v, want limit 10 and offset 10", calls[0].Arguments)
+	}
+	if calls[0].Arguments["host_id"] != "h1" {
+		t.Fatalf("arguments = %+v, want host_id h1", calls[0].Arguments)
 	}
 	if resp.GetTotal() != 30 || len(resp.GetManifests()) != 1 || resp.GetManifests()[0].GetHostId() != "h1" {
 		t.Fatalf("resp = %+v", resp)
