@@ -18,7 +18,21 @@ export interface AttestationCollectState {
   operation?: AttestationCollectOperation;
   result?: unknown;
   error?: string;
+  /** True when the service answered that the operation is not available on this node. */
+  unavailable?: boolean;
 }
+
+/**
+ * VM and container collection always fail on the attestation service today:
+ * it has no daemon-managed TPM session for workloads and answers
+ * ErrTPMSessionNotConfigured (#1747 Codex round 2). The page gates both.
+ */
+export const WORKLOAD_COLLECTION_AVAILABLE: boolean = false;
+
+export const WORKLOAD_COLLECTION_UNAVAILABLE =
+  "VM and container attestation collection is not available yet: the attestation service has no daemon-managed TPM session for workloads.";
+
+const TPM_SESSION_NOT_CONFIGURED = "requires a daemon-managed TPM session which is not configured";
 
 export interface UseAttestationCollectResult extends AttestationCollectState {
   collectHost: () => Promise<boolean>;
@@ -55,10 +69,13 @@ export function useAttestationCollect(): UseAttestationCollectResult {
       try {
         const response = await call();
         if (!response.success) {
-          setState({
-            operation,
-            error: response.error?.message ?? "The request failed",
-          });
+          const message = response.error?.message ?? "The request failed";
+          const workload = operation === "collectVM" || operation === "collectContainer";
+          if (workload && message.includes(TPM_SESSION_NOT_CONFIGURED)) {
+            setState({ operation, unavailable: true, error: WORKLOAD_COLLECTION_UNAVAILABLE });
+            return false;
+          }
+          setState({ operation, error: message });
           return false;
         }
         setState({ operation, result: response.data ?? {} });

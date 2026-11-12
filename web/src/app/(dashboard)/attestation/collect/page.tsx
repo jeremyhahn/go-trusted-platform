@@ -22,6 +22,10 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useAttestationCollect, useToast } from "@/hooks";
 import type { AttestationCollectOperation } from "@/hooks";
+import {
+  WORKLOAD_COLLECTION_AVAILABLE,
+  WORKLOAD_COLLECTION_UNAVAILABLE,
+} from "@/hooks/use-attestation-collect";
 
 const operationTitles: Record<AttestationCollectOperation, string> = {
   collectHost: "Host attestation",
@@ -31,9 +35,10 @@ const operationTitles: Record<AttestationCollectOperation, string> = {
 };
 
 /**
- * Attestation collect (#1732): collect host, VM and container attestation,
- * and delete a manifest (behind a confirm dialog). Manifest verification is
- * not offered until the verifier fails closed.
+ * Attestation collect (#1732): collect host attestation and delete a manifest
+ * (behind a confirm dialog). VM and container collection are shown but gated
+ * as unavailable until the service supports them (#1747 Codex round 2).
+ * Manifest verification is not offered until the verifier fails closed.
  */
 export default function AttestationCollectPage() {
   const { toast } = useToast();
@@ -44,6 +49,7 @@ export default function AttestationCollectPage() {
   const [confirmDelete, setConfirmDelete] = React.useState(false);
 
   const busy = ops.pending !== undefined;
+  const workloadGated = !WORKLOAD_COLLECTION_AVAILABLE;
 
   const remove = async () => {
     setConfirmDelete(false);
@@ -59,9 +65,16 @@ export default function AttestationCollectPage() {
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Attestation Collect</h1>
         <p className="text-muted-foreground">
-          Collect host, VM and container attestation, and delete manifests
+          Collect host attestation and delete manifests
         </p>
       </div>
+
+      {workloadGated && (
+        <Alert data-testid="workload-collect-unavailable">
+          <AlertTitle>VM and container collection unavailable</AlertTitle>
+          <AlertDescription>{WORKLOAD_COLLECTION_UNAVAILABLE}</AlertDescription>
+        </Alert>
+      )}
 
       <div className="grid gap-4 md:grid-cols-3">
         <Card>
@@ -84,8 +97,16 @@ export default function AttestationCollectPage() {
           </CardHeader>
           <CardContent className="flex flex-col gap-2">
             <Label htmlFor="vm-id">VM ID</Label>
-            <Input id="vm-id" value={vmId} onChange={(e) => setVmId(e.target.value)} />
-            <Button onClick={() => ops.collectVM(vmId.trim())} disabled={busy || !vmId.trim()}>
+            <Input
+              id="vm-id"
+              value={vmId}
+              onChange={(e) => setVmId(e.target.value)}
+              disabled={workloadGated}
+            />
+            <Button
+              onClick={() => ops.collectVM(vmId.trim())}
+              disabled={workloadGated || busy || !vmId.trim()}
+            >
               {ops.pending === "collectVM" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Collect VM attestation
             </Button>
@@ -103,10 +124,11 @@ export default function AttestationCollectPage() {
               id="container-id"
               value={containerId}
               onChange={(e) => setContainerId(e.target.value)}
+              disabled={workloadGated}
             />
             <Button
               onClick={() => ops.collectContainer(containerId.trim())}
-              disabled={busy || !containerId.trim()}
+              disabled={workloadGated || busy || !containerId.trim()}
             >
               {ops.pending === "collectContainer" && (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
