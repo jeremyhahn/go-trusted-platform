@@ -212,7 +212,7 @@ export default function ServicesPage() {
             variant="outline"
             size="sm"
             onClick={handleReload}
-            disabled={daemon.pending === "reload"}
+            disabled={daemon.isPending("reload")}
           >
             <FileCog className="h-4 w-4 mr-2" />
             Reload Config
@@ -291,7 +291,7 @@ export default function ServicesPage() {
                           variant="ghost"
                           size="sm"
                           aria-label={`Start ${svc.name}`}
-                          disabled={daemon.pending !== null}
+                          disabled={daemon.lifecyclePending}
                           onClick={() => runAction(svc.name, "start")}
                         >
                           <Play className="h-4 w-4" />
@@ -300,7 +300,7 @@ export default function ServicesPage() {
                           variant="ghost"
                           size="sm"
                           aria-label={`Stop ${svc.name}`}
-                          disabled={daemon.pending !== null}
+                          disabled={daemon.lifecyclePending}
                           onClick={() => setConfirm({ name: svc.name, action: "stop" })}
                         >
                           <Square className="h-4 w-4" />
@@ -309,7 +309,7 @@ export default function ServicesPage() {
                           variant="ghost"
                           size="sm"
                           aria-label={`Restart ${svc.name}`}
-                          disabled={daemon.pending !== null}
+                          disabled={daemon.lifecyclePending}
                           onClick={() => setConfirm({ name: svc.name, action: "restart" })}
                         >
                           <RotateCcw className="h-4 w-4" />

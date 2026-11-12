@@ -23,12 +23,18 @@ export function usePlatformDaemon() {
   const config = useApi(() => platform.getConfig(), []);
   const services = useApi(() => platform.listServices(), []);
 
-  const [pending, setPending] = React.useState<string | null>(null);
+  // Every request in flight, by key. Each request adds its key on start and
+  // removes exactly one occurrence on completion, so an overlapping request
+  // never clears another request's pending state.
+  const [active, setActive] = React.useState<string[]>([]);
 
-  /** Run a call, tracking it as pending under `key`; throws on failure. */
+  /**
+   * Run a call, adding `key` to the active requests until it settles;
+   * throws on failure.
+   */
   const run = React.useCallback(
     async <T,>(key: string, call: () => Promise<ApiResponse<T>>): Promise<T | undefined> => {
-      setPending(key);
+      setActive((a) => [...a, key]);
       try {
         const res = await call();
         if (!res.success) {
@@ -36,7 +42,10 @@ export function usePlatformDaemon() {
         }
         return res.data;
       } finally {
-        setPending(null);
+        setActive((a) => {
+          const i = a.indexOf(key);
+          return i < 0 ? a : [...a.slice(0, i), ...a.slice(i + 1)];
+        });
       }
     },
     []
@@ -78,7 +87,10 @@ export function usePlatformDaemon() {
     version,
     config,
     services,
-    pending,
+    /** Whether a request under `key` is in flight. */
+    isPending: (key: string) => active.includes(key),
+    /** Whether any start, stop or restart is in flight. */
+    lifecyclePending: active.some((k) => /^(start|stop|restart):/.test(k)),
     reloadConfig,
     serviceAction,
     getServiceStatus,
