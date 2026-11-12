@@ -264,6 +264,41 @@ func TestShippedClusterExamples_ServersFormOneCluster(t *testing.T) {
 	}
 }
 
+// haTemplateRoot holds the three-node HA control plane: cp1..cp3 are the
+// three Raft members of one QuicBaaS cluster (#1702).
+var haTemplateRoot = filepath.Join(templateRoot, "high-availability", "supermicro", "x10")
+
+// TestShippedHATemplates_FormOneCluster decodes the three HA control-plane
+// templates the way platformd does and asserts that their quicbaas sections
+// form one Raft cluster: each validates and is clustered, node-ids are 1, 2
+// and 3, the member list, deployment-id and Raft CA are shared, and each
+// node's routable raft-address is its own member entry.
+func TestShippedHATemplates_FormOneCluster(t *testing.T) {
+	var first *quicbaas.Config
+	for id := uint64(1); id <= 3; id++ {
+		path := filepath.Join(haTemplateRoot, fmt.Sprintf("cp%d", id), "control-plane.yaml")
+		c := loadTemplate(t, path).QuicBaaSConfig
+		require.NotNil(t, c, "%s: quicbaas section", path)
+		require.NoError(t, c.Validate(), path)
+		require.True(t, c.IsClustered(), path)
+		assert.Equal(t, id, c.NodeID, path)
+		assert.EqualValues(t, "pebble", c.StorageBackend, path)
+		assert.Len(t, c.JoinAddresses, 3, path)
+		assert.True(t, quicbaas.IsRoutableRaftAddress(c.RaftAddress), "%s: raft-address %q", path, c.RaftAddress)
+		assert.Contains(t, c.JoinAddresses, fmt.Sprintf("%d=%s", id, c.RaftAddress), path)
+		assert.NotEmpty(t, c.RaftTLSCertFile, path)
+		assert.NotEmpty(t, c.RaftTLSKeyFile, path)
+		assert.NotEmpty(t, c.RaftTLSCAFile, path)
+		if first == nil {
+			first = c
+			continue
+		}
+		assert.Equal(t, first.JoinAddresses, c.JoinAddresses, path)
+		assert.Equal(t, first.DeploymentID, c.DeploymentID, path)
+		assert.Equal(t, first.RaftTLSCAFile, c.RaftTLSCAFile, path)
+	}
+}
+
 // TestShippedClusterExamples_ServersForwardToTheirInternalDNS pins the
 // servers' dnsmasq forwarder where platformd decodes it, network.dnsmasq:
 // under dns: the key is never read, and the resolver at 127.0.0.1 the
