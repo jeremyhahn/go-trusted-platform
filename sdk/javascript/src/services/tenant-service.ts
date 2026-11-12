@@ -9,6 +9,11 @@ import type { Transport } from '../transport/transport.js';
 import type { ApiResponse } from '../types/api.js';
 import { BaseService } from './base-service.js';
 import type {
+  InitTenantBarrierRequest,
+  InitTenantBarrierResponse,
+  UnsealTenantBarrierRequest,
+  UnsealTenantBarrierResponse,
+  SealTenantBarrierResponse,
   ListTenantsRequest,
   ListTenantsResponse,
   GetTenantResponse,
@@ -277,5 +282,48 @@ export class TenantService extends BaseService {
    */
   async syncTenants(): Promise<ApiResponse<SyncTenantsResponse>> {
     return this.client.post<SyncTenantsResponse>(this.buildUrl('/sync'), {});
+  }
+
+  // =========================================================================
+  // Barrier Operations
+  // =========================================================================
+
+  /**
+   * Initialise a tenant's barrier
+   *
+   * @param request - Init request (threshold and shares)
+   * @returns Init result
+   */
+  async initBarrier(request: InitTenantBarrierRequest): Promise<ApiResponse<InitTenantBarrierResponse>> {
+    return this.client.post<InitTenantBarrierResponse>(
+      this.buildUrl(`/${this.encodePathSegment(request.tenantId)}/barrier/init`),
+      { threshold: request.threshold, shares: request.shares }
+    );
+  }
+
+  /**
+   * Unseal a tenant's barrier
+   *
+   * @param request - Unseal request (base64 key)
+   * @returns Unseal result
+   */
+  async unsealBarrier(request: UnsealTenantBarrierRequest): Promise<ApiResponse<UnsealTenantBarrierResponse>> {
+    return this.client.post<UnsealTenantBarrierResponse>(
+      this.buildUrl(`/${this.encodePathSegment(request.tenantId)}/barrier/unseal`),
+      { key: request.key }
+    );
+  }
+
+  /**
+   * Seal a tenant's barrier
+   *
+   * @param tenantId - Tenant ID
+   * @returns Seal result
+   */
+  async sealBarrier(tenantId: string): Promise<ApiResponse<SealTenantBarrierResponse>> {
+    return this.client.post<SealTenantBarrierResponse>(
+      this.buildUrl(`/${this.encodePathSegment(tenantId)}/barrier/seal`),
+      {}
+    );
   }
 }
