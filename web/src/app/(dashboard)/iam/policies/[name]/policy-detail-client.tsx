@@ -13,7 +13,6 @@ import { useParams, usePathname, useRouter } from 'next/navigation';
 import { ArrowLeft, Loader2, Pencil, Trash2 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
 import type { UpdateIAMPolicyRequest } from 'trusted-platform-sdk';
 import { resolveDynamicId } from '@/utils/dynamic-route';
 import { useAuth } from '@/contexts/AuthContext';
@@ -52,7 +51,6 @@ export default function PolicyDetailClient() {
   const [editing, setEditing] = useState(false);
   const [draftDescription, setDraftDescription] = useState('');
   const [draftPriority, setDraftPriority] = useState('0');
-  const [draftYaml, setDraftYaml] = useState('');
 
   const { data: policy, isLoading, error, refetch } = useApi(
     () => {
@@ -85,14 +83,12 @@ export default function PolicyDetailClient() {
   const updateMutation = useMutation(
     async () => {
       if (!tenantId) throw new Error('No tenant ID');
-      // The SDK request plus the spec key the REST API also reads.
-      const request: UpdateIAMPolicyRequest & { spec_yaml: string } = {
+      // Metadata only: the IAM adapter rejects any spec YAML on update.
+      const request: UpdateIAMPolicyRequest = {
         tenantId,
         policyName,
         description: draftDescription,
         priority: Number(draftPriority) || 0,
-        specYaml: draftYaml,
-        spec_yaml: draftYaml,
       };
       return iam.updatePolicy(request);
     },
@@ -156,7 +152,6 @@ export default function PolicyDetailClient() {
             onClick={() => {
               setDraftDescription(p?.description ?? '');
               setDraftPriority(String(p?.priority ?? 0));
-              setDraftYaml(yaml);
               setEditing(true);
             }}
           >
@@ -205,16 +200,6 @@ export default function PolicyDetailClient() {
                   onChange={(e) => setDraftPriority(e.target.value)}
                 />
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="policy-yaml">Spec (YAML)</Label>
-                <Textarea
-                  id="policy-yaml"
-                  value={draftYaml}
-                  onChange={(e) => setDraftYaml(e.target.value)}
-                  rows={12}
-                  className="font-mono text-xs"
-                />
-              </div>
               <div className="flex justify-end gap-2">
                 <Button variant="outline" onClick={() => setEditing(false)}>
                   Cancel
@@ -235,6 +220,9 @@ export default function PolicyDetailClient() {
           )}
           <div>
             <h3 className="text-sm font-medium mb-2">Spec (YAML)</h3>
+            <p className="text-xs text-muted-foreground mb-2">
+              The spec cannot be changed in place: delete and re-create the policy to change it.
+            </p>
             <pre className="rounded-md border bg-muted p-4 text-xs overflow-auto max-h-[500px]">
               {yaml || '(no spec returned)'}
             </pre>

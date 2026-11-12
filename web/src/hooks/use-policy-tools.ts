@@ -43,8 +43,21 @@ export function usePolicyTools() {
     },
   );
 
-  const test = useMutation<TestIAMPolicyResponse, TestPolicyInput>((request) =>
-    iam.testPolicy(request),
+  const test = useMutation<TestIAMPolicyResponse, TestPolicyInput>(
+    ({ tenantId, subjectId, roles, groups, action, resource, context, attributes }) => {
+      // The REST handler decodes only `subject_id`; send that key alone.
+      const request = {
+        tenantId,
+        subject_id: subjectId,
+        roles,
+        groups,
+        action,
+        resource,
+        context,
+        attributes,
+      } as unknown as TestIAMPolicyRequest & { subject_id: string };
+      return iam.testPolicy(request);
+    },
   );
 
   return { validate, test };
