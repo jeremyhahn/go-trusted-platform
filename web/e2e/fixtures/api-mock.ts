@@ -391,6 +391,196 @@ export async function mockTenantApi(
   };
 }
 
+// ============================================================================
+// IAM groups, group members, permission check and tenants (#1744)
+// ============================================================================
+
+export interface MockIAMGroup {
+  id: string;
+  name: string;
+  description?: string;
+  members: string[];
+}
+
+export interface MockIAMTenant {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RecordedIAMCall {
+  method: string;
+  path: string;
+  body: unknown;
+}
+
+export interface IAMGroupsTenantsMockConfig {
+  groups?: MockIAMGroup[];
+  tenants?: MockIAMTenant[];
+  /** Reply of POST /tenants/{tenant}/permissions/check */
+  permissionAllowed?: boolean;
+}
+
+/**
+ * Stateful mock of the IAM group, member, permission check and tenant
+ * routes, as pkg/webservice/v1/rest/iam/router.go registers them. Every
+ * request is recorded in `calls` so a test can assert the method and path.
+ */
+export async function mockIAMGroupsTenantsApi(
+  page: Page,
+  config: IAMGroupsTenantsMockConfig = {}
+): Promise<{
+  calls: RecordedIAMCall[];
+  groups: () => MockIAMGroup[];
+  tenants: () => MockIAMTenant[];
+}> {
+  const groups = new Map<string, MockIAMGroup>(
+    (config.groups ?? []).map((g) => [g.id, { ...g, members: [...g.members] }])
+  );
+  const tenants = new Map<string, MockIAMTenant>(
+    (config.tenants ?? []).map((t) => [t.id, { ...t }])
+  );
+  const calls: RecordedIAMCall[] = [];
+  const now = () => new Date().toISOString();
+  const json = (route: Route, status: number, body: unknown) =>
+    route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+  const record = (request: Request, path: string): unknown => {
+    let body: unknown = null;
+    try {
+      body = request.postDataJSON();
+    } catch {
+      body = request.postData();
+    }
+    calls.push({ method: request.method(), path, body });
+    return body;
+  };
+
+  // Lists the permissions page also loads.
+  await page.route(/\/api\/v1\/iam\/tenants\/[^/]+\/(roles|policies)\/?(\?.*)?$/, async (route) => {
+    await json(route, 200, { roles: [], policies: [], total: 0, timestamp: now() });
+  });
+
+  await page.route(
+    /\/api\/v1\/iam\/tenants\/[^/]+\/permissions\/check\/?(\?.*)?$/,
+    async (route: Route, request: Request) => {
+      record(request, new URL(request.url()).pathname);
+      await json(route, 200, {
+        allowed: config.permissionAllowed ?? true,
+        matchedPolicy: config.permissionAllowed === false ? '' : 'devices-readers',
+        reason: config.permissionAllowed === false ? 'no matching policy' : 'policy matched',
+        timestamp: now(),
+      });
+    }
+  );
+
+  await page.route(
+    /\/api\/v1\/iam\/tenants\/[^/]+\/groups(\/[^/?]+)?(\/members\/[^/?]+)?\/?(\?.*)?$/,
+    async (route: Route, request: Request) => {
+      const path = new URL(request.url()).pathname.replace(/\/$/, '');
+      const m = path.match(/\/groups(?:\/([^/]+))?(?:\/members\/([^/]+))?$/);
+      const groupId = m?.[1] ? decodeURIComponent(m[1]) : undefined;
+      const userId = m?.[2] ? decodeURIComponent(m[2]) : undefined;
+      const method = request.method();
+      const body = record(request, path) as Record<string, string> | null;
+
+      if (!groupId) {
+        if (method === 'GET') {
+          await json(route, 200, { groups: [...groups.values()], total: groups.size, timestamp: now() });
+          return;
+        }
+        if (method === 'POST') {
+          const id = body?.id || `group-${groups.size + 1}`;
+          const g: MockIAMGroup = { id, name: body?.name ?? id, description: body?.description, members: [] };
+          groups.set(id, g);
+          await json(route, 201, { group: g, timestamp: now() });
+          return;
+        }
+      }
+      const g = groupId ? groups.get(groupId) : undefined;
+      if (!g) {
+        await json(route, 404, { message: 'group not found', code: 'NOT_FOUND' });
+        return;
+      }
+      if (userId && method === 'POST') {
+        if (!g.members.includes(userId)) g.members.push(userId);
+        await json(route, 200, { status: { code: 0 }, timestamp: now() });
+        return;
+      }
+      if (userId && method === 'DELETE') {
+        g.members = g.members.filter((u) => u !== userId);
+        await json(route, 200, { status: { code: 0 }, timestamp: now() });
+        return;
+      }
+      if (method === 'GET') {
+        await json(route, 200, { group: g, timestamp: now() });
+        return;
+      }
+      if (method === 'PUT') {
+        if (body?.name !== undefined) g.name = body.name;
+        if (body?.description !== undefined) g.description = body.description;
+        await json(route, 200, { group: g, timestamp: now() });
+        return;
+      }
+      if (method === 'DELETE') {
+        groups.delete(g.id);
+        await json(route, 200, { status: { code: 0 }, timestamp: now() });
+        return;
+      }
+      await route.continue();
+    }
+  );
+
+  await page.route(/\/api\/v1\/iam\/tenants(\/[^/?]+)?\/?(\?.*)?$/, async (route: Route, request: Request) => {
+    const path = new URL(request.url()).pathname.replace(/\/$/, '');
+    const m = path.match(/\/tenants(?:\/([^/]+))?$/);
+    const tenantId = m?.[1] ? decodeURIComponent(m[1]) : undefined;
+    const method = request.method();
+    const body = record(request, path) as Record<string, string> | null;
+
+    if (!tenantId) {
+      if (method === 'GET') {
+        await json(route, 200, { tenants: [...tenants.values()], total: tenants.size, timestamp: now() });
+        return;
+      }
+      if (method === 'POST') {
+        const id = body?.id || `tenant-${tenants.size + 1}`;
+        const t: MockIAMTenant = { id, name: body?.name ?? id, createdAt: now(), updatedAt: now() };
+        tenants.set(id, t);
+        await json(route, 201, { tenant: t, timestamp: now() });
+        return;
+      }
+    }
+    const t = tenantId ? tenants.get(tenantId) : undefined;
+    if (!t) {
+      await json(route, 404, { message: 'tenant not found', code: 'NOT_FOUND' });
+      return;
+    }
+    if (method === 'GET') {
+      await json(route, 200, { tenant: t, timestamp: now() });
+      return;
+    }
+    if (method === 'PUT') {
+      if (body?.name) t.name = body.name;
+      t.updatedAt = now();
+      await json(route, 200, { tenant: t, timestamp: now() });
+      return;
+    }
+    if (method === 'DELETE') {
+      tenants.delete(t.id);
+      await json(route, 200, { status: { code: 0 }, timestamp: now() });
+      return;
+    }
+    await route.continue();
+  });
+
+  return {
+    calls,
+    groups: () => [...groups.values()],
+    tenants: () => [...tenants.values()],
+  };
+}
+
 /**
  * Mock the health API endpoint.
  *
