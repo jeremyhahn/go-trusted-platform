@@ -83,6 +83,13 @@ export { useToast, toast, dismissToast } from './use-toast';
 export type { Toast, UseToastReturn } from './use-toast';
 
 export { useReportedGateways } from './use-reported-gateways';
+export { useDeviceLookup } from './use-device-lookup';
+export type {
+  DeviceLookup,
+  DeviceUpdate,
+  ProfileUpdate,
+  DeviceAttestVariables,
+} from './use-device-lookup';
 export type {
   ReportedGateway,
   UseReportedGatewaysOptions,

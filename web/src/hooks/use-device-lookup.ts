@@ -1,0 +1,124 @@
+"use client";
+import { useApi, useDevice, useMutation } from 'trusted-platform-sdk';
+import type {
+  ActivateDeviceRequest,
+  ActivateDeviceResponse,
+  Device,
+  DeviceAttestRequest,
+  DeviceAttestResponse,
+  DeviceProfile,
+  DeviceSelfServiceProfile,
+  FindDeviceBySerialResponse,
+  FindMatchingProfileRequest,
+  FindMatchingProfileResponse,
+  FindProfileByMACAddressResponse,
+  FindProfileBySerialResponse,
+  UpdateDeviceResponse,
+  UpdateProfileResponse,
+  UseApiResult,
+  UseMutationResult,
+} from 'trusted-platform-sdk';
+
+import { useToast } from './use-toast';
+
+/** A partial device update: the id plus only the fields that change. */
+export type DeviceUpdate = Partial<Device> & { id: string };
+
+/** A partial profile update: the id plus only the fields that change. */
+export type ProfileUpdate = Partial<DeviceProfile> & { id: string };
+
+export interface DeviceAttestVariables {
+  id: string;
+  request: DeviceAttestRequest;
+}
+
+export interface DeviceLookup {
+  deviceCount: UseApiResult<{ count: number }>;
+  profileCount: UseApiResult<{ count: number }>;
+  findDeviceBySerial: UseMutationResult<FindDeviceBySerialResponse, string>;
+  updateDevice: UseMutationResult<UpdateDeviceResponse, DeviceUpdate>;
+  attestDevice: UseMutationResult<DeviceAttestResponse, DeviceAttestVariables>;
+  activateDevice: UseMutationResult<ActivateDeviceResponse, ActivateDeviceRequest>;
+  getDeviceProfile: UseMutationResult<DeviceSelfServiceProfile, void>;
+  findProfileByMAC: UseMutationResult<FindProfileByMACAddressResponse, string>;
+  findProfileBySerial: UseMutationResult<FindProfileBySerialResponse, string>;
+  findMatchingProfile: UseMutationResult<FindMatchingProfileResponse, FindMatchingProfileRequest>;
+  updateProfile: UseMutationResult<UpdateProfileResponse, ProfileUpdate>;
+}
+
+/**
+ * Device and profile lookups, counts, partial updates, activation and
+ * attestation for the devices lookup page (#1743). Every failure raises a
+ * destructive toast titled with the operation that failed.
+ */
+export function useDeviceLookup(): DeviceLookup {
+  const deviceService = useDevice();
+  const { toast } = useToast();
+
+  const failed = (title: string) => ({
+    onError: (error: { message: string }) => {
+      toast({ title, description: error.message, variant: 'destructive' });
+    },
+  });
+  const done = (title: string, description: string, refetch?: () => Promise<void>) => ({
+    onSuccess: () => {
+      toast({ title, description, variant: 'success' });
+      void refetch?.();
+    },
+  });
+
+  const deviceCount = useApi(() => deviceService.countDevices(), [], failed('Device count failed'));
+  const profileCount = useApi(() => deviceService.countProfiles(), [], failed('Profile count failed'));
+
+  const findDeviceBySerial = useMutation(
+    (serial: string) => deviceService.findDeviceBySerial(serial),
+    failed('Device lookup failed')
+  );
+  const updateDevice = useMutation(
+    // The server applies only the fields present: a partial device is the request.
+    (update: DeviceUpdate) => deviceService.updateDevice({ device: update as Device }),
+    { ...failed('Device update failed'), ...done('Device updated', 'The device was saved') }
+  );
+  const attestDevice = useMutation(
+    ({ id, request }: DeviceAttestVariables) => deviceService.attestDevice(id, request),
+    failed('Attestation failed')
+  );
+  const activateDevice = useMutation(
+    (request: ActivateDeviceRequest) => deviceService.activateDevice(request),
+    { ...failed('Activation failed'), ...done('Device activated', 'The device was activated', deviceCount.refetch) }
+  );
+  const getDeviceProfile = useMutation<DeviceSelfServiceProfile, void>(
+    () => deviceService.getDeviceProfile(),
+    failed('Device profile failed')
+  );
+  const findProfileByMAC = useMutation(
+    (mac: string) => deviceService.findProfileByMACAddress(mac),
+    failed('Profile lookup failed')
+  );
+  const findProfileBySerial = useMutation(
+    (serial: string) => deviceService.findProfileBySerial(serial),
+    failed('Profile lookup failed')
+  );
+  const findMatchingProfile = useMutation(
+    (request: FindMatchingProfileRequest) => deviceService.findMatchingProfile(request),
+    failed('Profile match failed')
+  );
+  const updateProfile = useMutation(
+    (update: ProfileUpdate) => deviceService.updateProfile({ profile: update as DeviceProfile }),
+    { ...failed('Profile update failed'), ...done('Profile updated', 'The profile was saved', profileCount.refetch) }
+  );
+
+  return {
+    deviceCount,
+    profileCount,
+    findDeviceBySerial,
+    updateDevice,
+    attestDevice,
+    activateDevice,
+    getDeviceProfile,
+    findProfileByMAC,
+    findProfileBySerial,
+    findMatchingProfile,
+    updateProfile,
+  };
+}
