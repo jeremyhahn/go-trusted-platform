@@ -14,11 +14,13 @@ package attestation
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
+	"google.golang.org/protobuf/encoding/protojson"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -207,13 +209,26 @@ func (r *runner) getManifest(id string) error {
 	if err != nil {
 		return ErrGetManifestFailed{ID: id, Reason: err.Error()}
 	}
-	v := manifestViewFromProto(m)
 	if r.format == cli.OutputFormatTable {
-		printManifestDetails(r.printer, v)
+		printManifestDetails(r.printer, manifestViewFromProto(m))
 		return nil
 	}
-	return r.output(v)
+	// JSON and YAML carry the stored manifest whole (nonce, signature,
+	// metadata, host/VM/container evidence), not the table summary.
+	raw, err := manifestJSON.Marshal(m)
+	if err != nil {
+		return ErrManifestEncodeFailed{ID: id, Reason: err.Error()}
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return ErrManifestEncodeFailed{ID: id, Reason: err.Error()}
+	}
+	return r.output(doc)
 }
+
+// manifestJSON renders a stored manifest with its proto field names, the
+// names the dns and appsvc commands print.
+var manifestJSON = protojson.MarshalOptions{UseProtoNames: true}
 
 func (r *runner) deleteManifest(id string) error {
 	if err := r.client.DeleteManifest(r.ctx, id); err != nil {

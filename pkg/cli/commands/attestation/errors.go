@@ -117,6 +117,17 @@ func (e ErrGetManifestFailed) Error() string {
 	return fmt.Sprintf("failed to get attestation manifest %s: %s", e.ID, e.Reason)
 }
 
+// ErrManifestEncodeFailed reports a stored attestation manifest that could
+// not be rendered as JSON or YAML.
+type ErrManifestEncodeFailed struct {
+	ID     string
+	Reason string
+}
+
+func (e ErrManifestEncodeFailed) Error() string {
+	return fmt.Sprintf("failed to encode attestation manifest %s: %s", e.ID, e.Reason)
+}
+
 // ErrDeleteManifestFailed reports a failed removal of one attestation
 // manifest.
 type ErrDeleteManifestFailed struct {
