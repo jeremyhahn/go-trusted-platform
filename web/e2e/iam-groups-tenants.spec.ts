@@ -42,7 +42,6 @@ test.describe('IAM groups, members, permission check and tenants', () => {
     await page.goto('/iam/groups/group-1');
     await expect(page.getByText('Engineering').first()).toBeVisible();
     await expect(page.getByText('Builds things')).toBeVisible();
-    await expect(page.getByText('user-alice')).toBeVisible();
     expect(api.calls.some((c) => c.method === 'GET' && /\/groups\/group-1$/.test(c.path))).toBe(true);
   });
 
@@ -63,20 +62,23 @@ test.describe('IAM groups, members, permission check and tenants', () => {
   test('AddGroupMember: POST /groups/{id}/members/{user}', async ({ page }) => {
     const api = await mockIAMGroupsTenantsApi(page, { groups: [engineering()] });
     await page.goto('/iam/groups/group-1');
-    await page.getByLabel('User ID').fill('user-bob');
+    await page.getByLabel('User ID', { exact: true }).fill('user-bob');
     await page.getByRole('button', { name: 'Add member' }).click();
     await expect
       .poll(() =>
         api.calls.find((c) => c.method === 'POST' && /\/groups\/group-1\/members\/user-bob$/.test(c.path))
       )
       .toBeTruthy();
-    await expect(page.getByText('user-bob')).toBeVisible();
+    await expect(page.getByText('Member added').first()).toBeVisible();
+    expect(api.groups()[0]?.members).toContain('user-bob');
   });
 
-  test('RemoveGroupMember: DELETE /groups/{id}/members/{user} behind a confirm', async ({ page }) => {
+  test('RemoveGroupMember: DELETE /groups/{id}/members/{user} by user ID behind a confirm', async ({ page }) => {
+    // The real GET /groups/{id} carries no members list, so removal goes by user ID.
     const api = await mockIAMGroupsTenantsApi(page, { groups: [engineering()] });
     await page.goto('/iam/groups/group-1');
-    await page.getByRole('button', { name: 'Remove member user-alice' }).click();
+    await page.getByLabel('User ID to remove').fill('user-alice');
+    await page.getByRole('button', { name: 'Remove by user ID' }).click();
     const dialog = page.getByRole('dialog');
     await expect(dialog.getByText('Remove member?')).toBeVisible();
     expect(api.calls.some((c) => c.method === 'DELETE')).toBe(false);
@@ -86,7 +88,8 @@ test.describe('IAM groups, members, permission check and tenants', () => {
         api.calls.find((c) => c.method === 'DELETE' && /\/groups\/group-1\/members\/user-alice$/.test(c.path))
       )
       .toBeTruthy();
-    await expect(page.getByText('user-alice')).toHaveCount(0);
+    await expect(page.getByText('Member removed').first()).toBeVisible();
+    expect(api.groups()[0]?.members).not.toContain('user-alice');
   });
 
   test('CheckPermission: POST /permissions/check', async ({ page }) => {
@@ -99,7 +102,8 @@ test.describe('IAM groups, members, permission check and tenants', () => {
     await expect(page.getByRole('status').getByText('Allowed')).toBeVisible();
     const call = api.calls.find((c) => /\/permissions\/check$/.test(c.path));
     expect(call?.method).toBe('POST');
-    expect(call?.body).toMatchObject({ subjectId: 'user-alice', action: 'read', resource: 'devices' });
+    expect(call?.body).toMatchObject({ subject_id: 'user-alice', action: 'read', resource: 'devices' });
+    expect(call?.body).not.toHaveProperty('subjectId');
   });
 
   test('ListTenants: GET /tenants', async ({ page }) => {
@@ -117,12 +121,49 @@ test.describe('IAM groups, members, permission check and tenants', () => {
     const api = await mockIAMGroupsTenantsApi(page);
     await page.goto('/iam/tenants');
     await expect(page.getByText('No tenants.')).toBeVisible();
-    await page.getByLabel('Tenant ID (optional)').fill('initech');
+    await page.getByLabel('Tenant ID').fill('initech');
     await page.getByLabel('Tenant name').fill('Initech');
     await page.getByRole('button', { name: 'Create tenant' }).click();
     await expect(page.getByRole('cell', { name: 'Initech' })).toBeVisible();
     const post = api.calls.find((c) => c.method === 'POST' && /\/tenants$/.test(c.path));
     expect(post?.body).toMatchObject({ id: 'initech', name: 'Initech' });
+  });
+
+  test('Create tenant stays disabled without an ID', async ({ page }) => {
+    const api = await mockIAMGroupsTenantsApi(page);
+    await page.goto('/iam/tenants');
+    await expect(page.getByText('No tenants.')).toBeVisible();
+    await page.getByLabel('Tenant name').fill('Initech');
+    await expect(page.getByRole('button', { name: 'Create tenant' })).toBeDisabled();
+    expect(api.calls.some((c) => c.method === 'POST' && /\/tenants$/.test(c.path))).toBe(false);
+  });
+
+  test('a failed tenant create keeps the form and shows the error', async ({ page }) => {
+    const api = await mockIAMGroupsTenantsApi(page, { tenantFailOps: ['create'] });
+    await page.goto('/iam/tenants');
+    await expect(page.getByText('No tenants.')).toBeVisible();
+    await page.getByLabel('Tenant ID').fill('initech');
+    await page.getByLabel('Tenant name').fill('Initech');
+    await page.getByRole('button', { name: 'Create tenant' }).click();
+    await expect(page.getByText('Failed to create tenant').first()).toBeVisible();
+    await expect(page.getByLabel('Tenant name')).toHaveValue('Initech');
+    await expect(page.getByText('Tenant created')).toHaveCount(0);
+    expect(api.tenants()).toHaveLength(0);
+  });
+
+  test('a failed tenant delete keeps the confirmation open', async ({ page }) => {
+    const api = await mockIAMGroupsTenantsApi(page, {
+      tenants: [tenant('globex', 'Globex')],
+      tenantFailOps: ['delete'],
+    });
+    await page.goto('/iam/tenants');
+    await page.getByRole('button', { name: 'Delete tenant globex' }).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByRole('button', { name: 'Delete tenant' }).click();
+    await expect(page.getByText('Failed to delete tenant').first()).toBeVisible();
+    await expect(dialog.getByText('Delete tenant?')).toBeVisible();
+    await expect(page.getByText('Tenant deleted')).toHaveCount(0);
+    expect(api.tenants().map((t) => t.id)).toContain('globex');
   });
 
   test('GetTenant: GET /tenants/{tenant}', async ({ page }) => {

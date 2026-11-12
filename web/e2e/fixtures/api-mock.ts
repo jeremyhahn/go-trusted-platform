@@ -420,6 +420,8 @@ export interface IAMGroupsTenantsMockConfig {
   tenants?: MockIAMTenant[];
   /** Reply of POST /tenants/{tenant}/permissions/check */
   permissionAllowed?: boolean;
+  /** Tenant operations that answer HTTP 500 (failure paths, #1757). */
+  tenantFailOps?: Array<'create' | 'update' | 'delete'>;
 }
 
 /**
@@ -442,6 +444,7 @@ export async function mockIAMGroupsTenantsApi(
     (config.tenants ?? []).map((t) => [t.id, { ...t }])
   );
   const calls: RecordedIAMCall[] = [];
+  const failOps = config.tenantFailOps ?? [];
   const now = () => new Date().toISOString();
   const json = (route: Route, status: number, body: unknown) =>
     route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
@@ -464,7 +467,12 @@ export async function mockIAMGroupsTenantsApi(
   await page.route(
     /\/api\/v1\/iam\/tenants\/[^/]+\/permissions\/check\/?(\?.*)?$/,
     async (route: Route, request: Request) => {
-      record(request, new URL(request.url()).pathname);
+      const body = record(request, new URL(request.url()).pathname) as Record<string, unknown> | null;
+      // The REST handler decodes CheckPermissionRequest.SubjectID from subject_id.
+      if (typeof body?.subject_id !== 'string' || body.subject_id === '') {
+        await json(route, 400, { error: 'subject_id is required' });
+        return;
+      }
       await json(route, 200, {
         allowed: config.permissionAllowed ?? true,
         matchedPolicy: config.permissionAllowed === false ? '' : 'devices-readers',
@@ -513,7 +521,10 @@ export async function mockIAMGroupsTenantsApi(
         return;
       }
       if (method === 'GET') {
-        await json(route, 200, { group: g, timestamp: now() });
+        // groupToResponse never fills members: the real GET carries no members list.
+        const wire: Omit<MockIAMGroup, 'members'> & { members?: string[] } = { ...g };
+        delete wire.members;
+        await json(route, 200, { group: wire, timestamp: now() });
         return;
       }
       if (method === 'PUT') {
@@ -544,7 +555,16 @@ export async function mockIAMGroupsTenantsApi(
         return;
       }
       if (method === 'POST') {
-        const id = body?.id || `tenant-${tenants.size + 1}`;
+        if (failOps.includes('create')) {
+          await json(route, 500, { error: 'tenant store unavailable' });
+          return;
+        }
+        // IAMHandlers.CreateTenant refuses an empty id with HTTP 400.
+        const id = body?.id ?? '';
+        if (!id) {
+          await json(route, 400, { error: 'tenant id is required' });
+          return;
+        }
         const t: MockIAMTenant = { id, name: body?.name ?? id, createdAt: now(), updatedAt: now() };
         tenants.set(id, t);
         await json(route, 201, { tenant: t, timestamp: now() });
@@ -561,12 +581,20 @@ export async function mockIAMGroupsTenantsApi(
       return;
     }
     if (method === 'PUT') {
+      if (failOps.includes('update')) {
+        await json(route, 500, { error: 'tenant store unavailable' });
+        return;
+      }
       if (body?.name) t.name = body.name;
       t.updatedAt = now();
       await json(route, 200, { tenant: t, timestamp: now() });
       return;
     }
     if (method === 'DELETE') {
+      if (failOps.includes('delete')) {
+        await json(route, 500, { error: 'tenant store unavailable' });
+        return;
+      }
       tenants.delete(t.id);
       await json(route, 200, { status: { code: 0 }, timestamp: now() });
       return;

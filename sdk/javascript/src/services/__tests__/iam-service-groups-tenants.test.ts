@@ -73,7 +73,11 @@ describe('IAMService groups, members, permission check and tenants', () => {
     await service.checkPermission(request);
     expect(calledPath(mockClient.post)).toMatch(/\/tenants\/t1\/permissions\/check$/);
     expect(calledPath(mockClient.post)).not.toContain('/auth/check');
-    expect(vi.mocked(mockClient.post).mock.calls[0]?.[1]).toEqual(request);
+    // The REST handler decodes CheckPermissionRequest.SubjectID from subject_id; the tenant is the path.
+    const body = vi.mocked(mockClient.post).mock.calls[0]?.[1];
+    expect(body).toEqual({ subject_id: 'u1', action: 'read', resource: 'devices' });
+    expect(body).not.toHaveProperty('subjectId');
+    expect(body).not.toHaveProperty('tenantId');
   });
 
   it('tenant CRUD uses /tenants and /tenants/{tenant}', async () => {
