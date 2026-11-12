@@ -11,6 +11,8 @@ const tpm = {
   quote: vi.fn(),
   verifyQuote: vi.fn(),
   importEKCertificate: vi.fn(),
+  certify: vi.fn(),
+  deleteAK: vi.fn(),
 };
 const toast = vi.fn();
 
@@ -96,5 +98,50 @@ describe("TPMKeyOperations", () => {
     click("tpm-op-verifyQuote");
     await waitFor(() => expect(tpm.verifyQuote).toHaveBeenCalledTimes(1));
     expect((tpm.verifyQuote.mock.calls[0]?.[0] as { nonce: string }).nonce).toBe(firstNonce);
+  });
+
+  // Codex round 3 on #1751: Certify forwards the target key's password, and
+  // DeleteAK shows the server's refusal to evict the platform AK.
+
+  it("Certify sends the key password the operator typed", async () => {
+    tpm.certify.mockResolvedValue({ success: true, data: { certifyInfo: "aW5mbw==" } });
+    render(<TPMKeyOperations />);
+
+    fireEvent.change(screen.getByLabelText("Key handle to certify"), { target: { value: "0x81000001" } });
+    fireEvent.change(screen.getByLabelText("Key password (optional)"), { target: { value: "s3cret" } });
+    click("tpm-op-certify");
+
+    await waitFor(() => expect(tpm.certify).toHaveBeenCalledTimes(1));
+    expect(tpm.certify.mock.calls[0]?.[0]).toMatchObject({ keyHandle: 0x81000001, keyPassword: "s3cret" });
+  });
+
+  it("Certify omits keyPassword when the password is blank", async () => {
+    tpm.certify.mockResolvedValue({ success: true, data: { certifyInfo: "aW5mbw==" } });
+    render(<TPMKeyOperations />);
+
+    fireEvent.change(screen.getByLabelText("Key handle to certify"), { target: { value: "0x81000001" } });
+    click("tpm-op-certify");
+
+    await waitFor(() => expect(tpm.certify).toHaveBeenCalledTimes(1));
+    const req = tpm.certify.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(req.keyHandle).toBe(0x81000001);
+    expect("keyPassword" in req).toBe(false);
+  });
+
+  it("DeleteAK shows the server's refusal and never announces success", async () => {
+    tpm.deleteAK.mockResolvedValue({
+      success: false,
+      error: { message: "idevid: the IAK key is TPM-resident and is not evicted by this service" },
+    });
+    render(<TPMKeyOperations />);
+
+    click("tpm-op-deleteAK");
+    expect(screen.getByTestId("tpm-confirm-dialog").textContent).toContain("refuses to evict");
+    click("tpm-confirm-ok");
+
+    await waitFor(() => expect(tpm.deleteAK).toHaveBeenCalledTimes(1));
+    expect((await screen.findByTestId("tpm-error-deleteAK")).textContent).toContain("not evicted");
+    expect(screen.queryByTestId("tpm-result-deleteAK")).toBeNull();
+    expect(toast).not.toHaveBeenCalledWith(expect.objectContaining({ title: "Done" }));
   });
 });

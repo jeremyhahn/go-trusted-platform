@@ -149,10 +149,11 @@ test.describe('TPM Keys operations', () => {
     await expect(page.getByTestId('tpm-result-getAK')).toContainText(String(AK_HANDLE));
   });
 
-  test('DeleteAK asks for confirmation and deletes /tpm/ak', async ({ page }) => {
+  test("DeleteAK asks for confirmation and shows the server's refusal", async ({ page }) => {
     const calls = await openKeysPage(page);
     await confirmDestructive(page, calls, 'deleteAK', 'DELETE', `/ak/${AK_HANDLE}`);
-    await expect(page.getByTestId('tpm-result-deleteAK')).toContainText('ak deleted');
+    await expect(page.getByTestId('tpm-error-deleteAK')).toContainText('not evicted');
+    await expect(page.getByTestId('tpm-result-deleteAK')).toHaveCount(0);
   });
 
   test('Quote posts to /tpm/quote', async ({ page }) => {
@@ -202,10 +203,11 @@ test.describe('TPM Keys operations', () => {
   test('Certify posts to /tpm/certify', async ({ page }) => {
     const calls = await openKeysPage(page);
     await page.getByLabel('Key handle to certify').fill('0x81000001');
+    await page.getByLabel('Key password (optional)').fill('key-secret');
     await page.getByTestId('tpm-op-certify').click();
 
     const call = await expectCall(calls, 'POST', '/certify');
-    expect(call.body).toMatchObject({ keyHandle: SRK_HANDLE });
+    expect(call.body).toMatchObject({ keyHandle: SRK_HANDLE, keyPassword: 'key-secret' });
     await expect(page.getByTestId('tpm-result-certify')).toContainText('aW5mbw==');
   });
 
