@@ -82,6 +82,14 @@ export type { User, AuthContextType } from '@/contexts/AuthContext';
 export { useToast, toast, dismissToast } from './use-toast';
 export type { Toast, UseToastReturn } from './use-toast';
 
+export { useBMCUsers, bmcPrivilegeLabel, BMC_PRIVILEGES } from './use-bmc-users';
+export type {
+  BMCPrivilege,
+  BMCUserSlot,
+  CreateBMCUserInput,
+  UseBMCUsersResult,
+} from './use-bmc-users';
+
 export { useReportedGateways } from './use-reported-gateways';
 export type {
   ReportedGateway,
