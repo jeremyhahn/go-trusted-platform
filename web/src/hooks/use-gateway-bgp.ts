@@ -182,6 +182,11 @@ export function useGatewayBgp(): UseGatewayBgpResult {
   const [isLoading, setIsLoading] = React.useState(true);
   const [errors, setErrors] = React.useState<GatewayBgpErrors>(NO_ERRORS);
 
+  // Every load takes a generation; only the newest one may set state, so a
+  // slow older load (the mount fetch, or a refresh overlapping a mutation's
+  // refetch) never overwrites newer data. Unmount bumps it past them all.
+  const generation = React.useRef(0);
+
   const apply = React.useCallback((d: GatewayBgpData) => {
     setPeers(d.peers);
     setPrefixes(d.prefixes);
@@ -190,21 +195,24 @@ export function useGatewayBgp(): UseGatewayBgpResult {
     setIsLoading(false);
   }, []);
 
+  const load = React.useCallback(async () => {
+    const gen = ++generation.current;
+    const d = await fetchGatewayBgp();
+    if (gen === generation.current) apply(d);
+  }, [apply]);
+
   const refetch = React.useCallback(async () => {
     setIsLoading(true);
-    apply(await fetchGatewayBgp());
-  }, [apply]);
+    await load();
+  }, [load]);
 
   // The mount fetch sets state only from the promise's callback.
   React.useEffect(() => {
-    let live = true;
-    void fetchGatewayBgp().then((d) => {
-      if (live) apply(d);
-    });
+    void load();
     return () => {
-      live = false;
+      generation.current += 1;
     };
-  }, [apply]);
+  }, [load]);
 
   const announcePrefix = React.useCallback(
     async (prefix: string, nextHop: string) => {
