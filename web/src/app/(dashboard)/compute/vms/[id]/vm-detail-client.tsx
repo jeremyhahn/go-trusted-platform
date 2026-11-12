@@ -76,10 +76,9 @@ export default function VMDetailPage() {
   const { toast } = useToast();
 
   const fetchVM = async () => {
-    if (!vmId) {
-      setLoading(false);
-      return;
-    }
+    // No state is set before the first await: the poll effect calls this, and
+    // without a vmId the page shows the spinner anyway (vm stays null).
+    if (!vmId) return;
     // No setLoading(true) here: loading starts true and only the first fetch
     // clears it, so the 5 s refresh keeps the detail tree (and the stateful
     // VMOperations panel) mounted (#1727).
@@ -100,10 +99,14 @@ export default function VMDetailPage() {
   };
 
   useEffect(() => {
-    fetchVM();
     if (!vmId) return;
+    // Timers, not a direct call: no state is set in the effect body.
+    const first = setTimeout(fetchVM, 0);
     const interval = setInterval(fetchVM, 5000);
-    return () => clearInterval(interval);
+    return () => {
+      clearTimeout(first);
+      clearInterval(interval);
+    };
   }, [vmId]);
 
   const startVMMutation = useMutation(
