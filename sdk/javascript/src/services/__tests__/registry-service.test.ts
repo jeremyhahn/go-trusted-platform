@@ -4,7 +4,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { RegistryService, RegistryHealth } from '../registry-service.js';
-import type { ApiClient } from '../../client/api-client.js';
+import { ApiClient } from '../../client/api-client.js';
 
 function createMockClient(): ApiClient {
   return {
@@ -36,7 +36,7 @@ describe('RegistryService', () => {
 
     const res = await service.listTags('team/app');
 
-    expect(mockClient.get).toHaveBeenCalledWith('/v2/team/app/tags/list');
+    expect(mockClient.get).toHaveBeenCalledWith('/v2/team/app/tags/list', { rootRelative: true });
     expect(res.data?.tags).toEqual(['v1', 'latest']);
   });
 
@@ -45,7 +45,7 @@ describe('RegistryService', () => {
 
     await service.listTags('a b/c');
 
-    expect(mockClient.get).toHaveBeenCalledWith('/v2/a%20b/c/tags/list');
+    expect(mockClient.get).toHaveBeenCalledWith('/v2/a%20b/c/tags/list', { rootRelative: true });
   });
 
   it('deleteManifest deletes by tag', async () => {
@@ -53,7 +53,7 @@ describe('RegistryService', () => {
 
     await service.deleteManifest('team/app', 'v1');
 
-    expect(mockClient.delete).toHaveBeenCalledWith('/v2/team/app/manifests/v1');
+    expect(mockClient.delete).toHaveBeenCalledWith('/v2/team/app/manifests/v1', { rootRelative: true });
   });
 
   it('deleteManifest encodes a digest reference', async () => {
@@ -61,7 +61,7 @@ describe('RegistryService', () => {
 
     await service.deleteManifest('app', 'sha256:abc');
 
-    expect(mockClient.delete).toHaveBeenCalledWith('/v2/app/manifests/sha256%3Aabc');
+    expect(mockClient.delete).toHaveBeenCalledWith('/v2/app/manifests/sha256%3Aabc', { rootRelative: true });
   });
 
   it('getStatus gets the registry status', async () => {
@@ -74,5 +74,57 @@ describe('RegistryService', () => {
 
     expect(mockClient.get).toHaveBeenCalledWith('/v1/compute/images/status');
     expect(res.data?.Health).toBe(RegistryHealth.Healthy);
+  });
+});
+
+describe('RegistryService with a real ApiClient', () => {
+  /** Builds a service over a real ApiClient whose fetch records each call. */
+  function serviceWith(baseUrl: string) {
+    const calls: Array<{ url: string; method: string }> = [];
+    const fetchImpl = ((input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), method: init?.method ?? 'GET' });
+      return Promise.resolve(
+        new Response(JSON.stringify({ name: 'team/app', tags: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      );
+    }) as unknown as typeof fetch;
+    const client = new ApiClient({ baseUrl, fetch: fetchImpl, retry: { maxRetries: 0 } });
+    return { service: new RegistryService(client), calls };
+  }
+
+  it('listTags requests the host-root /v2 route, not under /api', async () => {
+    const { service, calls } = serviceWith('/api');
+
+    await service.listTags('team/app');
+
+    expect(calls).toEqual([{ url: '/v2/team/app/tags/list', method: 'GET' }]);
+  });
+
+  it('deleteManifest sends DELETE to the host-root /v2 route', async () => {
+    const { service, calls } = serviceWith('/api');
+
+    await service.deleteManifest('team/app', 'v1');
+
+    expect(calls).toEqual([{ url: '/v2/team/app/manifests/v1', method: 'DELETE' }]);
+  });
+
+  it('getStatus keeps the API prefix', async () => {
+    const { service, calls } = serviceWith('/api');
+
+    await service.getStatus();
+
+    expect(calls).toEqual([{ url: '/api/v1/compute/images/status', method: 'GET' }]);
+  });
+
+  it('listTags resolves against the host root of an absolute baseUrl', async () => {
+    const { service, calls } = serviceWith('https://platform.test/api');
+
+    await service.listTags('team/app');
+
+    expect(calls).toEqual([
+      { url: 'https://platform.test/v2/team/app/tags/list', method: 'GET' },
+    ]);
   });
 });
