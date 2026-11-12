@@ -397,9 +397,15 @@ export class IAMService extends BaseService {
    * List tenants
    */
   async listTenants(request?: ListIAMTenantsRequest): Promise<ApiResponse<ListIAMTenantsResponse>> {
+    // The server pages tenants by limit and offset; it ignores page.
+    const pageSize = request?.pageSize;
+    const page = request?.page;
+    const offset = pageSize !== undefined && page !== undefined && page > 1
+      ? (page - 1) * pageSize
+      : undefined;
     return this.client.get<ListIAMTenantsResponse>(this.buildUrl('/tenants', {
-      page: request?.page,
-      limit: request?.pageSize,
+      limit: pageSize,
+      filters: { offset },
     }));
   }
 

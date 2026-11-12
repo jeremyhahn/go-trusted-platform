@@ -206,4 +206,37 @@ test.describe('IAM groups, members, permission check and tenants', () => {
     expect(api.calls.some((c) => c.method === 'DELETE' && /\/tenants\/globex$/.test(c.path))).toBe(true);
     await expect(page.getByRole('cell', { name: 'Acme Corp' })).toBeVisible();
   });
+
+  test('ListTenants pages by limit and offset past the first 50', async ({ page }) => {
+    // The REST handler defaults limit to 50; tenants 51-60 are on page 2 (#1757).
+    const many = Array.from({ length: 60 }, (_, i) => {
+      const n = String(i + 1).padStart(2, '0');
+      return tenant(`t-${n}`, `Tenant ${n}`);
+    });
+    const api = await mockIAMGroupsTenantsApi(page, { tenants: many });
+    await page.goto('/iam/tenants');
+    await expect(page.getByRole('cell', { name: 'Tenant 50', exact: true })).toBeVisible();
+    await expect(page.getByRole('cell', { name: 'Tenant 51', exact: true })).toHaveCount(0);
+    await expect(page.getByText('Page 1 of 2')).toBeVisible();
+    await expect(page.getByTestId('tenants-prev')).toBeDisabled();
+
+    const second = page.waitForRequest(
+      (r) => r.method() === 'GET' && /\/tenants\?/.test(r.url()) && new URL(r.url()).searchParams.get('offset') === '50'
+    );
+    await page.getByTestId('tenants-next').click();
+    const req = await second;
+    expect(new URL(req.url()).searchParams.get('limit')).toBe('50');
+    await expect(page.getByRole('cell', { name: 'Tenant 51', exact: true })).toBeVisible();
+    await expect(page.getByRole('cell', { name: 'Tenant 60', exact: true })).toBeVisible();
+    await expect(page.getByRole('cell', { name: 'Tenant 50', exact: true })).toHaveCount(0);
+    await expect(page.getByText('Page 2 of 2')).toBeVisible();
+    await expect(page.getByTestId('tenants-next')).toBeDisabled();
+
+    await page.getByRole('button', { name: 'View tenant t-55' }).click();
+    await page.getByLabel('New name').fill('Tenant 55 Renamed');
+    await page.getByRole('button', { name: 'Save tenant' }).click();
+    await expect(page.getByRole('cell', { name: 'Tenant 55 Renamed' })).toBeVisible();
+    const put = api.calls.find((c) => c.method === 'PUT' && /\/tenants\/t-55$/.test(c.path));
+    expect(put?.body).toMatchObject({ name: 'Tenant 55 Renamed' });
+  });
 });

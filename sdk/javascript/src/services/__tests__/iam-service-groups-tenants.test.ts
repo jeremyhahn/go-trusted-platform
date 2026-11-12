@@ -95,4 +95,12 @@ describe('IAMService groups, members, permission check and tenants', () => {
     await service.listTenants();
     expect(calledPath(mockClient.get)).toMatch(/\/tenants(\?.*)?$/);
   });
+
+  it('listTenants sends limit and offset for a page, as the server reads them', async () => {
+    await service.listTenants({ page: 2, pageSize: 50 });
+    const path = calledPath(mockClient.get);
+    expect(path).toContain('limit=50');
+    expect(path).toContain('offset=50');
+    expect(path).not.toContain('page=');
+  });
 });

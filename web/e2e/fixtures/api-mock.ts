@@ -551,7 +551,19 @@ export async function mockIAMGroupsTenantsApi(
 
     if (!tenantId) {
       if (method === 'GET') {
-        await json(route, 200, { tenants: [...tenants.values()], total: tenants.size, timestamp: now() });
+        // IAMHandlers.ListTenants reads limit (default 50) and offset; the
+        // adapter answers the window with the real total (#1757).
+        const query = new URL(request.url()).searchParams;
+        const limit = Number(query.get('limit') ?? '50') || 50;
+        const offset = Number(query.get('offset') ?? '0') || 0;
+        const all = [...tenants.values()].sort((a, b) => a.id.localeCompare(b.id));
+        await json(route, 200, {
+          tenants: all.slice(offset, offset + limit),
+          total: all.length,
+          limit,
+          offset,
+          timestamp: now(),
+        });
         return;
       }
       if (method === 'POST') {
@@ -585,6 +597,8 @@ export async function mockIAMGroupsTenantsApi(
         await json(route, 500, { error: 'tenant store unavailable' });
         return;
       }
+      // QuicBaaSIAMAdapter.UpdateTenant sends name as the SDK's DisplayName,
+      // which the embedded handler stores as the tenant name (#1757).
       if (body?.name) t.name = body.name;
       t.updatedAt = now();
       await json(route, 200, { tenant: t, timestamp: now() });
