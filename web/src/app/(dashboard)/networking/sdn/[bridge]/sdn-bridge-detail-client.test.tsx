@@ -122,3 +122,90 @@ describe('SDNBridgeDetailClient refused calls and certificate encoding', () => {
     expect(body.format).toBe('PEM');
   });
 });
+
+// #1755 Codex round 3: a refused read is a failure, not an absent resource,
+// and the port panel only shows the answer for the port that is selected.
+describe('SDNBridgeDetailClient read failures and port identity', () => {
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    push.mockReset();
+  });
+
+  it('a refused bridge read is a failure, not a missing bridge', async () => {
+    stubControlPlane({
+      [`GET ${SDN}/bridges/br-1`]: refused(403, 'forbidden'),
+      [`GET ${SDN}/bridges/br-1/ports`]: ok({ ports: [] }),
+      [`GET ${SDN}/policies`]: ok({ policies: [] }),
+    });
+    render(withControlPlane(<SDNBridgeDetailClient />));
+
+    expect((await screen.findByTestId('sdn-bridge-error')).textContent).toContain('forbidden');
+    expect(screen.queryByText('Bridge not found')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Retry bridge' })).toBeTruthy();
+  });
+
+  it('refused port and policy lists are failures, not empty lists', async () => {
+    await renderPage({
+      [`GET ${SDN}/bridges/br-1/ports`]: refused(503, 'service unavailable'),
+      [`GET ${SDN}/policies`]: refused(503, 'service unavailable'),
+    });
+
+    expect((await screen.findByTestId('sdn-ports-error')).textContent).toContain('service unavailable');
+    expect((await screen.findByTestId('sdn-policies-error')).textContent).toContain('service unavailable');
+    expect(screen.queryByText('No ports found')).toBeNull();
+    expect(screen.queryByText('No policies found')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Retry ports' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Retry policies' })).toBeTruthy();
+  });
+
+  it("switching ports never shows the previous port's state", async () => {
+    const port = (id: string, name: string) => ({
+      id,
+      bridgeId: 'br-1',
+      config: { name },
+      status: 'PORT_STATUS_UP',
+      auth: { authenticated: false },
+    });
+    stubControlPlane({
+      [`GET ${SDN}/bridges/br-1`]: ok({
+        bridge: { id: 'br-1', config: { name: 'br-int' }, status: 'BRIDGE_STATUS_UP' },
+      }),
+      [`GET ${SDN}/bridges/br-1/ports`]: ok({ ports: [port('p-1', 'eth1'), port('p-2', 'eth2')] }),
+      [`GET ${SDN}/policies`]: ok({ policies: [] }),
+      [`GET ${SDN}/bridges/br-1/ports/p-1/state`]: ok({ port: { id: 'p-1', status: 'PORT_STATUS_DOWN' } }),
+      [`GET ${SDN}/bridges/br-1/ports/p-1/stats`]: ok({ stats: { packetsReceived: 111 } }),
+      [`GET ${SDN}/bridges/br-1/ports/p-2/state`]: ok({ port: { id: 'p-2', status: 'PORT_STATUS_UP' } }),
+      [`GET ${SDN}/bridges/br-1/ports/p-2/stats`]: ok({ stats: { packetsReceived: 222 } }),
+    });
+    const stubbed = globalThis.fetch;
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
+      if (path.endsWith('/ports/p-1/state') || path.endsWith('/ports/p-1/stats')) await held;
+      return stubbed(input, init);
+    });
+
+    render(withControlPlane(<SDNBridgeDetailClient />));
+    await screen.findByRole('heading', { level: 1, name: 'br-int' });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Manage port eth1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Manage port eth2' }));
+
+    await waitFor(() => expect(screen.getByTestId('port-state').textContent).toContain('PORT_STATUS_UP'));
+    await waitFor(() => expect(screen.getByTestId('port-stats').textContent).toContain('222'));
+
+    await act(async () => {
+      release();
+      await held;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+
+    expect(screen.getByTestId('port-state').textContent).toContain('PORT_STATUS_UP');
+    expect(screen.queryByText(/PORT_STATUS_DOWN/)).toBeNull();
+    expect(screen.getByTestId('port-stats').textContent).not.toContain('111');
+  });
+});
