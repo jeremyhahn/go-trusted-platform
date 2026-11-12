@@ -156,6 +156,16 @@ func TestManifests_SDKError(t *testing.T) {
 	})
 }
 
+func TestManifests_Surface(t *testing.T) {
+	manifests, _, err := quietCommand().Find([]string{"manifests"})
+	require.NoError(t, err)
+	verbs := map[string]bool{}
+	for _, sub := range manifests.Commands() {
+		verbs[sub.Name()] = true
+	}
+	assert.Equal(t, map[string]bool{"list": true, "get": true, "delete": true}, verbs)
+}
+
 func TestManifests_EmptyIDIsRefusedBeforeConnecting(t *testing.T) {
 	for _, verb := range []string{"get", "delete"} {
 		t.Run(verb, func(t *testing.T) {

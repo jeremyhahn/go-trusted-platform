@@ -87,3 +87,43 @@ type ErrFollowVerdictsFailed struct {
 func (e ErrFollowVerdictsFailed) Error() string {
 	return "failed to follow device verdicts: " + e.Reason
 }
+
+// ErrInvalidManifestID reports a manifest id that is empty or only
+// whitespace. It is refused before any connection is made.
+type ErrInvalidManifestID struct {
+	ID string
+}
+
+func (e ErrInvalidManifestID) Error() string {
+	return fmt.Sprintf("invalid manifest id %q: a manifest id must not be empty", e.ID)
+}
+
+// ErrListManifestsFailed reports a failed attestation manifest listing.
+type ErrListManifestsFailed struct {
+	Reason string
+}
+
+func (e ErrListManifestsFailed) Error() string {
+	return "failed to list attestation manifests: " + e.Reason
+}
+
+// ErrGetManifestFailed reports a failed read of one attestation manifest.
+type ErrGetManifestFailed struct {
+	ID     string
+	Reason string
+}
+
+func (e ErrGetManifestFailed) Error() string {
+	return fmt.Sprintf("failed to get attestation manifest %s: %s", e.ID, e.Reason)
+}
+
+// ErrDeleteManifestFailed reports a failed removal of one attestation
+// manifest.
+type ErrDeleteManifestFailed struct {
+	ID     string
+	Reason string
+}
+
+func (e ErrDeleteManifestFailed) Error() string {
+	return fmt.Sprintf("failed to delete attestation manifest %s: %s", e.ID, e.Reason)
+}
