@@ -20,7 +20,7 @@ describe("decodeJWT", () => {
     const payload: JWTPayload = {
       sub: "user-1",
       user_id: "uid-1",
-      email: "a@example.test",
+      email: "user-a@tenant-a",
       tenant_id: "t-1",
       is_tenant_owner: true,
       roles: ["admin", "viewer"],
@@ -103,14 +103,14 @@ describe("getUserFromToken", () => {
   it("maps a full payload to a user", () => {
     setToken({
       sub: "user-1",
-      email: "a@example.test",
+      email: "user-a@tenant-a",
       tenant_id: "t-1",
       is_tenant_owner: true,
       roles: ["admin"],
     });
     expect(getUserFromToken()).toEqual({
       id: "user-1",
-      email: "a@example.test",
+      email: "user-a@tenant-a",
       tenantId: "t-1",
       isTenantOwner: true,
       roles: ["admin"],
@@ -118,20 +118,20 @@ describe("getUserFromToken", () => {
   });
 
   it("prefers sub over user_id", () => {
-    setToken({ sub: "from-sub", user_id: "from-uid", email: "a@example.test" });
+    setToken({ sub: "from-sub", user_id: "from-uid", email: "user-a@tenant-a" });
     expect(getUserFromToken()?.id).toBe("from-sub");
   });
 
   it("falls back to user_id when sub is missing", () => {
-    setToken({ user_id: "from-uid", email: "a@example.test" });
+    setToken({ user_id: "from-uid", email: "user-a@tenant-a" });
     expect(getUserFromToken()?.id).toBe("from-uid");
   });
 
   it("defaults tenantId, isTenantOwner and roles", () => {
-    setToken({ sub: "u", email: "a@example.test" });
+    setToken({ sub: "u", email: "user-a@tenant-a" });
     expect(getUserFromToken()).toEqual({
       id: "u",
-      email: "a@example.test",
+      email: "user-a@tenant-a",
       tenantId: null,
       isTenantOwner: false,
       roles: [],
@@ -139,12 +139,12 @@ describe("getUserFromToken", () => {
   });
 
   it("returns null without a user id", () => {
-    setToken({ email: "a@example.test" });
+    setToken({ email: "user-a@tenant-a" });
     expect(getUserFromToken()).toBeNull();
   });
 
   it("returns null with an empty user id", () => {
-    setToken({ sub: "", user_id: "", email: "a@example.test" });
+    setToken({ sub: "", user_id: "", email: "user-a@tenant-a" });
     expect(getUserFromToken()).toBeNull();
   });
 
