@@ -57,6 +57,8 @@ func profileRequestToEntity(req *ProfileRequest) (*entities.DeviceProfile, error
 	if req.TLSServerName != nil {
 		profile.TLSServerName = *req.TLSServerName
 	}
+	profile.DICEDeviceID = req.DICEDeviceID
+	profile.GoldenFWHash = req.GoldenFWHash
 
 	profile.Zone = req.Zone
 	profile.EnrollmentNetwork = req.EnrollmentNetwork
@@ -155,6 +157,8 @@ func profileToResponse(p *entities.DeviceProfile) *ProfileFullResponse {
 		Assigned:      p.Assigned,
 		AssignedAt:    p.AssignedAt,
 		TLSServerName: p.TLSServerName,
+		DICEDeviceID:  p.DICEDeviceID,
+		GoldenFWHash:  p.GoldenFWHash,
 	}
 
 	resp.Zone = p.Zone
