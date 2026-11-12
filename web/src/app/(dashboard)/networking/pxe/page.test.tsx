@@ -122,7 +122,7 @@ describe("PXEBootPage", () => {
           gateway_id: "gw-1",
           hostname: "edge-1",
           reported_at: minutesAgo(1),
-          pxe: { status: "running", listen_address: "0.0.0.0:67", boots_served: 4 },
+          pxe: { status: "running", listen_address: ":67", boots_served: 4 },
         },
         { gateway_id: "gw-2", reported_at: minutesAgo(1) },
       ],
@@ -134,7 +134,7 @@ describe("PXEBootPage", () => {
     expect(await screen.findByText("edge-1")).toBeTruthy();
     expect(reported).toHaveBeenLastCalledWith({ enabled: true });
     expect(screen.getByText("running")).toBeTruthy();
-    expect(screen.getByText("0.0.0.0:67")).toBeTruthy();
+    expect(screen.getByText(":67")).toBeTruthy();
     expect(screen.getByText("4")).toBeTruthy();
     // A gateway without a hostname or a PXE section.
     expect(screen.getByText("gw-2")).toBeTruthy();
