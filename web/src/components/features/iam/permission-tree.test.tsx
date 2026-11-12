@@ -119,7 +119,7 @@ describe('PermissionTree', () => {
   it('collapses a group and expands it again from its header', () => {
     render(<PermissionTree permissions={[...permissions]} selectedPermissionIds={[]} onChange={vi.fn()} />);
 
-    const header = screen.getByRole('button', { name: 'users(2)' });
+    const header = screen.getByRole('button', { name: /^users/ });
     fireEvent.click(header);
     expect(header.getAttribute('aria-expanded')).toBe('false');
     expect(screen.queryByText('List users')).toBeNull();
