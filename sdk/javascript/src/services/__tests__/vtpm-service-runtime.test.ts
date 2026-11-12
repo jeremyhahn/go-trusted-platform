@@ -63,6 +63,99 @@ describe('VTPMService bundle runtime', () => {
     expect(r.data).toEqual(reply);
   });
 
+  it('stopBundle gives a daemon stop reply a status block', async () => {
+    vi.mocked(mockClient.post).mockResolvedValue({
+      success: true,
+      data: { bundle_id: 'vm-1', action: 'stop', success: true, message: 'bundle stopped' },
+    });
+    const r = await service.stopBundle('vm-1');
+    expect(r.data?.status.success).toBe(true);
+    expect(r.data?.status.message).toBe('bundle stopped');
+    expect(r.data?.stopped).toBe(true);
+  });
+
+  it('startBundle gives a daemon start reply a status block', async () => {
+    vi.mocked(mockClient.post).mockResolvedValue({
+      success: true,
+      data: {
+        bundle_id: 'vm-1',
+        action: 'start',
+        success: true,
+        message: 'bundle started',
+        running: true,
+        socket_path: '/run/vtpm/vm-1.sock',
+      },
+    });
+    const r = await service.startBundle('vm-1');
+    expect(r.data?.status.success).toBe(true);
+    expect(r.data?.status.message).toBe('bundle started');
+    expect(r.data?.running).toBe(true);
+  });
+
+  it('startBundle passes a webservice reply with status unchanged', async () => {
+    const reply = {
+      status: { success: true, message: 'ok' },
+      bundle_id: 'vm-1',
+      running: true,
+      socket_path: '/run/vtpm/vm-1.sock',
+    };
+    vi.mocked(mockClient.post).mockResolvedValue({ success: true, data: reply });
+    const r = await service.startBundle('vm-1');
+    expect(r.data).toEqual(reply);
+  });
+
+  it('quoteBundle gives a daemon quote reply a status block', async () => {
+    vi.mocked(mockClient.post).mockResolvedValue({
+      success: true,
+      data: {
+        bundle_id: 'vm-1',
+        quote: 'cQ==',
+        signature: 'cw==',
+        pcr_values: { '0': 'AA==' },
+        hash_algorithm: 'SHA256',
+        timestamp: '2026-11-12T00:00:00Z',
+      },
+    });
+    const r = await service.quoteBundle('vm-1', { nonce: 'bg==' });
+    expect(r.data?.status.success).toBe(true);
+    expect(r.data?.quote).toBe('cQ==');
+  });
+
+  it('sealBundle gives a daemon seal reply a status block', async () => {
+    vi.mocked(mockClient.post).mockResolvedValue({
+      success: true,
+      data: { bundle_id: 'vm-1', sealed_data: 'c2Vh', timestamp: '2026-11-12T00:00:00Z' },
+    });
+    const r = await service.sealBundle('vm-1', { data: 'ZA==' });
+    expect(r.data?.status.success).toBe(true);
+    expect(r.data?.sealed_data).toBe('c2Vh');
+  });
+
+  it('unsealBundle gives a daemon unseal reply a status block', async () => {
+    vi.mocked(mockClient.post).mockResolvedValue({
+      success: true,
+      data: { bundle_id: 'vm-1', data: 'ZA==', timestamp: '2026-11-12T00:00:00Z' },
+    });
+    const r = await service.unsealBundle('vm-1', { sealed_data: 'c2Vh' });
+    expect(r.data?.status.success).toBe(true);
+    expect(r.data?.data).toBe('ZA==');
+  });
+
+  it('readBundlePCR gives a daemon /pcr/{index} reply a status block', async () => {
+    vi.mocked(mockClient.get)
+      .mockResolvedValueOnce({
+        success: false,
+        error: { code: 'NOT_FOUND', message: '404', status: 404 },
+      } as never)
+      .mockResolvedValueOnce({
+        success: true,
+        data: { bundle_id: 'vm-1', pcr_index: 7, value: '3q2+7w==' },
+      } as never);
+    const r = await service.readBundlePCR('vm-1', 7);
+    expect(r.data?.status.success).toBe(true);
+    expect(r.data?.value).toBe('3q2+7w==');
+  });
+
   it('readBundlePCR falls back to /pcr/{index} on 404', async () => {
     vi.mocked(mockClient.get)
       .mockResolvedValueOnce({
