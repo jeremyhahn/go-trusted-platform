@@ -90,6 +90,7 @@ export {
   toInvitationView,
 } from './use-invitation-detail';
 export type { InvitationView, InvitationWire } from './use-invitation-detail';
+export { useOverlayVteps } from './use-overlay-vteps';
 export type {
   ReportedGateway,
   UseReportedGatewaysOptions,
