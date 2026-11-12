@@ -116,6 +116,7 @@ var definitions = []Definition{
 			gateway.ServiceLoadBalancer,
 			gateway.ServiceNAT64,
 			gateway.ServiceHostFW,
+			gateway.ServiceFHRP,
 			gateway.ServiceTunnels,
 			gateway.ServiceOverlay,
 		},

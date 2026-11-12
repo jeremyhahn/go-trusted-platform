@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/fhrp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/modes"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/secrets"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/firewall"
@@ -64,6 +65,7 @@ var serviceBuilders = map[string]serviceBuilder{
 	ServiceNAT:           buildNAT,
 	ServiceNAT64:         buildNAT64,
 	ServiceHostFW:        buildHostFW,
+	ServiceFHRP:          buildFHRP,
 	ServiceTunnels:       buildTunnels,
 	ServiceOverlay:       buildOverlay,
 	ServiceTransit:       buildTransit,
@@ -488,6 +490,48 @@ func buildHostFW(g *Gateway) (backedService, error) {
 		return nil, &ErrServiceStartFailed{Service: ServiceHostFW, Cause: err}
 	}
 	return hostFWBackend{svc}, nil
+}
+
+// fhrpBackend adapts *fhrp.Speaker.
+type fhrpBackend struct{ *fhrp.Speaker }
+
+// Healthy reports a started speaker none of whose groups' last actuation
+// (advertise, claim, release) failed.
+func (b fhrpBackend) Healthy() bool {
+	h := b.Speaker.Health()
+	if !h.Active {
+		return false
+	}
+	for _, g := range h.Groups {
+		if g.LastError != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// buildFHRP builds the VRRPv3 speaker from the `fhrp:` section over the
+// daemon-injected transport and address programmer; without them it opens
+// raw sockets and programs addresses over netlink.
+func buildFHRP(g *Gateway) (backedService, error) {
+	host := g.config.hostRuntime()
+	transport := host.FHRPTransport
+	if transport == nil {
+		transport = fhrp.NewRawTransport()
+	}
+	programmer := host.FHRPProgrammer
+	if programmer == nil {
+		programmer = fhrp.NewNetlinkProgrammer()
+	}
+	speaker, err := fhrp.New(*g.config.FHRP, fhrp.Deps{
+		Transport:  transport,
+		Programmer: programmer,
+		Logger:     host.Logger,
+	})
+	if err != nil {
+		return nil, &ErrServiceStartFailed{Service: ServiceFHRP, Cause: err}
+	}
+	return fhrpBackend{speaker}, nil
 }
 
 // TunnelManager is the tunnel-manager surface the tunnels service drives.

@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/fhrp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/hostfw"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/loadbalancer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/nat64"
@@ -1465,6 +1466,10 @@ type GatewayConfig struct {
 	// interfaces; the daemon's own listeners come from HostRuntime.
 	HostFW *hostfw.Config `yaml:"hostfw,omitempty" json:"hostfw,omitempty" mapstructure:"hostfw"`
 
+	// FHRP is the VRRPv3 first-hop redundancy speaker: the virtual
+	// router groups this gateway holds a default-gateway address in.
+	FHRP *fhrp.Config `yaml:"fhrp,omitempty" json:"fhrp,omitempty" mapstructure:"fhrp"`
+
 	// Runtime carries daemon-injected runtime dependencies (OVS client,
 	// flow controller, zone providers). Never serialized; nil when the
 	// gateway is constructed from configuration alone.
@@ -1571,6 +1576,11 @@ func (c *GatewayConfig) Validate() error {
 			return &ErrHostFWConfigInvalid{Cause: err}
 		}
 	}
+	if c.FHRP != nil && c.FHRP.Enabled {
+		if err := c.FHRP.Validate(); err != nil {
+			return &ErrFHRPConfigInvalid{Cause: err}
+		}
+	}
 	return c.validateTunnels()
 }
 
@@ -1648,6 +1658,7 @@ func (c *GatewayConfig) EnabledServices() []string {
 	add(c.LoadBalancer != nil && c.LoadBalancer.Enabled, ServiceLoadBalancer)
 	add(c.NAT64 != nil && c.NAT64.Enabled, ServiceNAT64)
 	add(c.HostFW != nil && c.HostFW.Enabled, ServiceHostFW)
+	add(c.FHRP != nil && c.FHRP.Enabled, ServiceFHRP)
 	add(len(c.Tunnels) > 0 || len(c.RoutingUplinks) > 0, ServiceTunnels)
 	add(c.BGP != nil || (c.Transit != nil && c.Transit.Enabled), ServiceTransit)
 	add(c.Overlay != nil && c.Overlay.Enabled, ServiceOverlay)

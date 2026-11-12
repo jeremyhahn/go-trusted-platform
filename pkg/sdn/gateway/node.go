@@ -47,6 +47,8 @@ const (
 	ServiceProxy   = "proxy"
 	// ServiceHostFW is the nftables host packet filter (#569).
 	ServiceHostFW = "hostfw"
+	// ServiceFHRP is the VRRPv3 first-hop redundancy speaker (pkg/sdn/fhrp).
+	ServiceFHRP = "fhrp"
 	// ServiceManagementVPN is the attested remote-access VPN (docs/vpn/).
 	// It runs over the assembly's VPNRuntime; without one it is refused.
 	ServiceManagementVPN = "management-vpn"
