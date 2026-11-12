@@ -703,3 +703,117 @@ export async function mockInvitationValidation(
     });
   });
 }
+
+// CA operations (GetCAInfo, SignCSR, VerifyCertificate)
+
+export interface CAOperationsMockConfig {
+  infoError?: ApiError | null;
+  signError?: ApiError | null;
+  verifyValid?: boolean;
+}
+
+/**
+ * Mock the CA operation endpoints.
+ *
+ * Handles:
+ * - GET /api/v1/ca/info - CA identity, defaults and chain summaries
+ * - POST /api/v1/ca/sign-csr - Certify the key a CSR names
+ * - POST /api/v1/ca/certificates/verify - Verify a certificate
+ *
+ * @returns the request bodies the pages posted, for assertions
+ */
+export async function mockCAOperationsApi(
+  page: Page,
+  config: CAOperationsMockConfig = {}
+): Promise<{ signRequests: unknown[]; verifyRequests: unknown[] }> {
+  const signRequests: unknown[] = [];
+  const verifyRequests: unknown[] = [];
+  const now = new Date().toISOString();
+
+  await page.route('**/api/v1/ca/info*', async (route: Route, request: Request) => {
+    if (request.method() !== 'GET') {
+      await route.continue();
+      return;
+    }
+    if (config.infoError) {
+      await route.fulfill({
+        status: config.infoError.status,
+        contentType: 'application/json',
+        body: errorEnvelope(config.infoError),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        caInfo: {
+          commonName: 'Platform Intermediate CA',
+          isInitialized: true,
+          isIntermediate: true,
+          rootCert: { serial: '01', commonName: 'Platform Root CA', issuer: 'Platform Root CA' },
+          intermediates: [
+            { serial: '02', commonName: 'Platform Intermediate CA', issuer: 'Platform Root CA' },
+          ],
+          keyStores: [],
+          defaultAlgorithm: 'ECDSA-P256',
+          defaultValidityDays: 397,
+        },
+        timestamp: now,
+      }),
+    });
+  });
+
+  await page.route('**/api/v1/ca/sign-csr*', async (route: Route, request: Request) => {
+    if (request.method() !== 'POST') {
+      await route.continue();
+      return;
+    }
+    signRequests.push(request.postDataJSON());
+    if (config.signError) {
+      await route.fulfill({
+        status: config.signError.status,
+        contentType: 'application/json',
+        body: errorEnvelope(config.signError),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: { success: true, message: 'certificate issued successfully' },
+        certificate: {
+          serial: '0a1b2c',
+          commonName: 'release-signer',
+          issuer: 'Platform Intermediate CA',
+          pem: '-----BEGIN CERTIFICATE-----\nSIGNED\n-----END CERTIFICATE-----\n',
+        },
+        timestamp: now,
+      }),
+    });
+  });
+
+  await page.route('**/api/v1/ca/certificates/verify*', async (route: Route, request: Request) => {
+    if (request.method() !== 'POST') {
+      await route.continue();
+      return;
+    }
+    verifyRequests.push(request.postDataJSON());
+    const valid = config.verifyValid !== false;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: { success: true },
+        valid,
+        chain: valid ? ['0a1b2c', '02', '01'] : [],
+        errors: valid ? [] : ['certificate has expired'],
+        warnings: [],
+        timestamp: now,
+      }),
+    });
+  });
+
+  return { signRequests, verifyRequests };
+}
