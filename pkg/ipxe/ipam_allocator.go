@@ -34,7 +34,7 @@ type IPAllocator interface {
 	Release(ctx context.Context, mac net.HardwareAddr) error
 
 	// GetLease gets the current lease for a MAC address.
-	GetLease(ctx context.Context, mac net.HardwareAddr) (*lease, error)
+	GetLease(ctx context.Context, mac net.HardwareAddr) (*Lease, error)
 
 	// Renew renews a lease.
 	Renew(ctx context.Context, mac net.HardwareAddr) error
@@ -43,7 +43,7 @@ type IPAllocator interface {
 // InMemoryAllocator is an in-memory lease table and allocates IPs sequentially from a range.
 // It is useful for testing and standalone PXE boot scenarios without an external IPAM backend.
 type InMemoryAllocator struct {
-	leases     map[string]*lease
+	leases     map[string]*Lease
 	nextIP     net.IP
 	rangeStart net.IP
 	rangeEnd   net.IP
@@ -68,7 +68,7 @@ func NewInMemoryAllocator(rangeStart, rangeEnd net.IP, leaseTime time.Duration) 
 	copy(startIP, rangeStart)
 
 	return &InMemoryAllocator{
-		leases:     make(map[string]*lease),
+		leases:     make(map[string]*Lease),
 		nextIP:     startIP,
 		rangeStart: rangeStart,
 		rangeEnd:   rangeEnd,
@@ -100,7 +100,7 @@ func (a *InMemoryAllocator) Allocate(ctx context.Context, mac net.HardwareAddr, 
 	}
 
 	// Create lease
-	a.leases[macStr] = &lease{
+	a.leases[macStr] = &Lease{
 		IP:        ip,
 		MAC:       mac,
 		ExpiresAt: a.now().Add(a.leaseTime),
@@ -120,7 +120,7 @@ func (a *InMemoryAllocator) Release(ctx context.Context, mac net.HardwareAddr) e
 }
 
 // GetLease gets the current lease for a MAC address.
-func (a *InMemoryAllocator) GetLease(ctx context.Context, mac net.HardwareAddr) (*lease, error) {
+func (a *InMemoryAllocator) GetLease(ctx context.Context, mac net.HardwareAddr) (*Lease, error) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
@@ -128,7 +128,7 @@ func (a *InMemoryAllocator) GetLease(ctx context.Context, mac net.HardwareAddr) 
 	if l, exists := a.leases[macStr]; exists {
 		if a.now().Before(l.ExpiresAt) {
 			// Return a copy to prevent external modification
-			leaseCopy := &lease{
+			leaseCopy := &Lease{
 				IP:        make(net.IP, len(l.IP)),
 				MAC:       make(net.HardwareAddr, len(l.MAC)),
 				ExpiresAt: l.ExpiresAt,
@@ -218,7 +218,7 @@ type IPAMAllocator struct {
 	allocator ipam.Allocator
 	poolID    string
 	leaseTime time.Duration
-	leases    map[string]*lease // Local cache for quick lookups
+	leases    map[string]*Lease // Local cache for quick lookups
 	clk       clock
 	mu        sync.RWMutex
 }
@@ -246,7 +246,7 @@ func NewIPAMAllocator(allocator ipam.Allocator, poolID string, leaseTime time.Du
 		poolID:    poolID,
 		leaseTime: leaseTime,
 		clk:       realClock{},
-		leases:    make(map[string]*lease),
+		leases:    make(map[string]*Lease),
 	}, nil
 }
 
@@ -305,7 +305,7 @@ func (a *IPAMAllocator) Allocate(ctx context.Context, mac net.HardwareAddr, host
 	}
 
 	// Cache locally
-	a.leases[macStr] = &lease{
+	a.leases[macStr] = &Lease{
 		IP:        ip,
 		MAC:       mac,
 		ExpiresAt: a.now().Add(a.leaseTime),
@@ -350,7 +350,7 @@ func (a *IPAMAllocator) Release(ctx context.Context, mac net.HardwareAddr) error
 }
 
 // GetLease gets the current lease for a MAC address.
-func (a *IPAMAllocator) GetLease(ctx context.Context, mac net.HardwareAddr) (*lease, error) {
+func (a *IPAMAllocator) GetLease(ctx context.Context, mac net.HardwareAddr) (*Lease, error) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
@@ -365,7 +365,7 @@ func (a *IPAMAllocator) GetLease(ctx context.Context, mac net.HardwareAddr) (*le
 	}
 
 	// Return a copy to prevent external modification
-	leaseCopy := &lease{
+	leaseCopy := &Lease{
 		IP:        make(net.IP, len(l.IP)),
 		MAC:       make(net.HardwareAddr, len(l.MAC)),
 		ExpiresAt: l.ExpiresAt,
@@ -443,7 +443,7 @@ func (a *IPAMAllocator) SyncFromIPAM(ctx context.Context) error {
 	defer a.mu.Unlock()
 
 	// Clear existing cache
-	a.leases = make(map[string]*lease)
+	a.leases = make(map[string]*Lease)
 
 	// Populate from IPAM allocations
 	for _, alloc := range allocations {
@@ -473,7 +473,7 @@ func (a *IPAMAllocator) SyncFromIPAM(ctx context.Context) error {
 			expiresAt = a.now().Add(a.leaseTime)
 		}
 
-		a.leases[mac.String()] = &lease{
+		a.leases[mac.String()] = &Lease{
 			IP:        ip,
 			MAC:       mac,
 			ExpiresAt: expiresAt,

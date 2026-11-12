@@ -112,8 +112,9 @@ type DHCPConfig struct {
 	Port int
 }
 
-// lease represents a DHCP IP lease.
-type lease struct {
+// Lease represents a DHCP IP lease. It is exported so an IPAllocator can be
+// implemented outside this package.
+type Lease struct {
 	IP        net.IP
 	MAC       net.HardwareAddr
 	ExpiresAt time.Time
@@ -191,7 +192,7 @@ type DHCPServer struct {
 	serverIP    net.IP
 	broadcastIP net.IP
 	logger      *logging.Logger
-	leases      map[string]*lease
+	leases      map[string]*Lease
 	mu          sync.RWMutex
 	nextIP      net.IP
 	connFactory PacketConnFactory
@@ -244,7 +245,7 @@ func NewDHCPServer(cfg *DHCPConfig, logger *logging.Logger, opts ...DHCPServerOp
 		serverIP:    cfg.ServerIP,
 		broadcastIP: cfg.BroadcastIP,
 		logger:      logger,
-		leases:      make(map[string]*lease),
+		leases:      make(map[string]*Lease),
 		nextIP:      cfg.RangeStart,
 		connFactory: &DefaultPacketConnFactory{Port: cfg.Port},
 		clk:         realClock{},
@@ -774,7 +775,7 @@ func (s *DHCPServer) getOrAssignIP(mac net.HardwareAddr) (net.IP, error) {
 	}
 
 	// Create lease
-	s.leases[macStr] = &lease{
+	s.leases[macStr] = &Lease{
 		IP:        ip,
 		MAC:       mac,
 		ExpiresAt: s.now().Add(s.config.LeaseTime),
@@ -837,7 +838,7 @@ func (s *DHCPServer) confirmLease(mac net.HardwareAddr, requestedIP net.IP) (net
 	}
 
 	// Create lease
-	s.leases[macStr] = &lease{
+	s.leases[macStr] = &Lease{
 		IP:        ip,
 		MAC:       mac,
 		ExpiresAt: s.now().Add(s.config.LeaseTime),
