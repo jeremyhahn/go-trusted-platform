@@ -159,8 +159,6 @@ func TestPXEOptions_NilMap(t *testing.T) {
 	})
 }
 
-// TestServerStats_Fields tests all ServerStats fields.
-// TestInterfaceConfig_FullOptions tests InterfaceConfig with full options set.
 func TestInterfaceConfig_FullOptions(t *testing.T) {
 	t.Run("clone handles full options", func(t *testing.T) {
 		cfg := &InterfaceConfig{
