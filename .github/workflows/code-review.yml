@@ -431,7 +431,7 @@ on:
   # same head when an `agent:*`, `model:*` or `effort:*` label changes codex's
   # route, and starts the opencode review when `agent:opencode` is added.
   pull_request_target:
-    types: [opened, reopened, synchronize, labeled]
+    types: [opened, reopened, synchronize, ready_for_review, labeled]
 
 # v5.9.4: no workflow-level concurrency. A group there takes every run the
 # events create, a run whose job the `if:` skips among them, and a newer
