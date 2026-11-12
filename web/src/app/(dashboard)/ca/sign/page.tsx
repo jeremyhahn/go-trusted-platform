@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useCA, useMutation } from "@/hooks";
+import { base64ToPem } from "@/utils/pem-base64";
 
 /** The issued certificate as the REST layer sends it. */
 interface IssuedCertWire {
@@ -105,7 +106,7 @@ export default function SignCSRPage() {
               <span data-testid="signed-serial">{issued.serial ?? ""}</span>
             </div>
             <pre data-testid="signed-pem" className="overflow-x-auto rounded bg-muted p-2 font-mono text-xs">
-              {issued.pem ?? ""}
+              {issued.pem ? base64ToPem(issued.pem) : ""}
             </pre>
           </CardContent>
         </Card>

@@ -7,16 +7,18 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useCA, useMutation } from "@/hooks";
+import { pemToBase64 } from "@/utils/pem-base64";
 
 /**
  * Verify Certificate: POST /v1/ca/certificates/verify. The certificate
- * travels as PEM; it need not be one this CA issued.
+ * travels as the base64 of its PEM (a proto bytes field); it need not be
+ * one this CA issued.
  */
 export default function VerifyCertificatePage() {
   const ca = useCA();
   const [certificatePem, setCertificatePem] = React.useState("");
 
-  const verifyMutation = useMutation((pem: string) => ca.verifyCertificate({ certificatePem: pem }));
+  const verifyMutation = useMutation((pem: string) => ca.verifyCertificate({ certificatePem: pemToBase64(pem) }));
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
