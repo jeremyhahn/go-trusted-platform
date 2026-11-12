@@ -92,6 +92,7 @@ export {
 export type { VTPMRunState } from './use-vtpm-runtime';
 
 export { useReportedGateways } from './use-reported-gateways';
+export { useOverlayVteps } from './use-overlay-vteps';
 export type {
   ReportedGateway,
   UseReportedGatewaysOptions,
