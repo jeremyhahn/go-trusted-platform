@@ -493,17 +493,17 @@ export class ComputeService extends BaseService {
   /**
    * Attest a container: a TPM quote over its measured image and config
    *
+   * The daemon's container attestation takes no caller nonce, PCR selection
+   * or PCR bank: it chooses them itself, so the report is not bound to a
+   * caller challenge. The request body is empty.
+   *
    * @param request - Attestation request
    * @returns Quote, PCR values and the container digests
    */
   async attestContainer(request: AttestContainerRequest): Promise<ApiResponse<AttestContainerResponse>> {
     return this.client.post<AttestContainerResponse>(
       this.buildUrl(`/containers/${this.encodePathSegment(request.id)}/attest`),
-      {
-        nonce: request.nonce,
-        pcrIndices: request.pcrIndices,
-        pcrBank: request.pcrBank === undefined ? undefined : protoEnumName('PCR_BANK_', request.pcrBank),
-      }
+      {}
     );
   }
 }

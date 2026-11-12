@@ -742,12 +742,6 @@ export interface AttestVMRequest {
 export interface AttestContainerRequest {
   /** Container ID */
   id: string;
-  /** Nonce (base64) */
-  nonce: string;
-  /** PCR indices */
-  pcrIndices?: number[];
-  /** PCR bank */
-  pcrBank?: PCRBank;
 }
 
 /**

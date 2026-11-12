@@ -56,6 +56,7 @@ export default function ContainerDetailPage() {
   const [pending, setPending] = useState<PendingAction>(null);
   const [busy, setBusy] = useState(false);
   const [execResult, setExecResult] = useState<ExecContainerResponse | null>(null);
+  const [execError, setExecError] = useState<string | null>(null);
   const [attestResult, setAttestResult] = useState<AttestContainerResponse | null>(null);
   const [attestError, setAttestError] = useState<string | null>(null);
 
@@ -67,6 +68,9 @@ export default function ContainerDetailPage() {
     if (action === 'attest') {
       setAttestResult(null);
       setAttestError(null);
+    } else {
+      setExecResult(null);
+      setExecError(null);
     }
     try {
       if (action === 'exec') {
@@ -78,6 +82,8 @@ export default function ContainerDetailPage() {
       const message = err instanceof Error ? err.message : String(err);
       if (action === 'attest') {
         setAttestError(message);
+      } else {
+        setExecError(message);
       }
       toast({
         title: 'Error',
@@ -214,16 +220,26 @@ export default function ContainerDetailPage() {
               Run
             </Button>
           </form>
-          {execResult && (
+          {(execResult || execError) && (
             <div data-testid="exec-result" className="space-y-2">
-              <p>Exit code: {execResult.exitCode ?? 0}</p>
-              <pre className="rounded bg-muted p-3 text-sm whitespace-pre-wrap">
-                {decodeOutput(execResult.stdout)}
-              </pre>
-              {execResult.stderr && (
-                <pre className="rounded bg-muted p-3 text-sm text-destructive whitespace-pre-wrap">
-                  {decodeOutput(execResult.stderr)}
-                </pre>
+              {execError ? (
+                <p role="alert" className="text-destructive">
+                  Exec failed: {execError}
+                </p>
+              ) : (
+                execResult && (
+                  <>
+                    <p>Exit code: {execResult.exitCode ?? 0}</p>
+                    <pre className="rounded bg-muted p-3 text-sm whitespace-pre-wrap">
+                      {decodeOutput(execResult.stdout)}
+                    </pre>
+                    {execResult.stderr && (
+                      <pre className="rounded bg-muted p-3 text-sm text-destructive whitespace-pre-wrap">
+                        {decodeOutput(execResult.stderr)}
+                      </pre>
+                    )}
+                  </>
+                )
               )}
             </div>
           )}
@@ -249,6 +265,9 @@ export default function ContainerDetailPage() {
                     <span className="font-mono text-xs">{attestResult.configDigest || '-'}</span>
                   </Row>
                   <Row label="PCR values">{attestResult.pcrValues?.length ?? 0}</Row>
+                  <p className="text-sm text-muted-foreground">
+                    Not bound to a caller nonce; the daemon selects the PCRs.
+                  </p>
                 </>
               )
             )}

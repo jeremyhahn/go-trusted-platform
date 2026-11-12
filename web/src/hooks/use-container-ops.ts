@@ -176,7 +176,7 @@ export function useContainerOps(containerId: string): UseContainerOpsResult {
   const attest = useCallback(
     async () =>
       unwrap(
-        await compute.attestContainer({ id: containerId, nonce: randomNonce() }),
+        await compute.attestContainer({ id: containerId }),
         'AttestContainer'
       ),
     [compute, containerId]
