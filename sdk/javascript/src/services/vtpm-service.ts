@@ -119,6 +119,8 @@ export class VTPMService extends BaseService {
    * @param request - List request with filters (mode, labels, pagination, and
    *                  optional deviceProfileId to return only the bundle bound
    *                  to a given device profile)
+   *                  The REST handler pages by `limit` and `offset`; both
+   *                  are sent as-is.
    * @returns List of bundles
    */
   async listBundles(request?: ListBundlesRequest): Promise<ApiResponse<ListBundlesResponse>> {
@@ -134,11 +136,11 @@ export class VTPMService extends BaseService {
     if (request?.options?.deviceProfileId !== undefined) {
       filters.device_profile_id = request.options.deviceProfileId;
     }
+    if (request?.options?.offset !== undefined) {
+      filters.offset = request.options.offset;
+    }
     return this.client.get<ListBundlesResponse>(this.buildUrl('/bundles', {
       limit: request?.options?.limit,
-      page: request?.options?.offset !== undefined
-        ? Math.floor(request.options.offset / (request.options.limit ?? 10)) + 1
-        : undefined,
       filters,
     }));
   }
