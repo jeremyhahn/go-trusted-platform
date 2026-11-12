@@ -21,7 +21,7 @@ vi.mock('@/components/ui/dialog', () => ({
 }));
 
 const hook = vi.hoisted(() => ({
-  ports: [{ port: 'Eth1/2', mode: 'access', access_vlan: 10, enabled: false, link_up: false }],
+  ports: [{ port: 'Eth1/2', mode: 'access', access_vlan: 10, enabled: false, link_up: false, description: 'uplink' }],
   isLoading: false,
   error: null,
   refetch: vi.fn(),
@@ -51,5 +51,16 @@ describe('SwitchPortsClient status dialog', () => {
     const admin = Array.from(status.querySelectorAll('dt')).find((dt) => dt.textContent === 'Admin');
     expect(admin?.nextElementSibling?.tagName).toBe('DD');
     expect(admin?.nextElementSibling?.textContent).toBe('disabled');
+  });
+
+  it("the status dialog shows the list's description, absent from the single-port reply", async () => {
+    render(<SwitchPortsClient />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Status' }));
+
+    const status = await waitFor(() => screen.getByTestId('port-status'));
+    const description = Array.from(status.querySelectorAll('dt')).find((dt) => dt.textContent === 'Description');
+    expect(description?.nextElementSibling?.tagName).toBe('DD');
+    expect(description?.nextElementSibling?.textContent).toBe('uplink');
   });
 });

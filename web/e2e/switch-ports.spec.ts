@@ -147,6 +147,21 @@ test.describe('Switch ports', () => {
     expect(calls).toContainEqual(expect.objectContaining({ method: 'GET', port: 'Eth1/2', action: undefined }));
   });
 
+  test('GetPortStatus: description comes from the port list', async ({ page }) => {
+    const calls = await openSwitch(page);
+
+    // Eth1/1 has description 'uplink' in the list; the single-port reply omits it.
+    await page.getByTestId('port-row-Eth1/1').getByRole('button', { name: 'Status' }).click();
+
+    const status = page.getByTestId('port-status');
+    await expect(status).toBeVisible();
+    const description = status
+      .getByText('Description', { exact: true })
+      .locator('xpath=following-sibling::dd[1]');
+    await expect(description).toHaveText('uplink');
+    expect(calls).toContainEqual(expect.objectContaining({ method: 'GET', port: 'Eth1/1', action: undefined }));
+  });
+
   test('GetPortStatus: a failed response shows an error and no status', async ({ page }) => {
     const calls = await openSwitch(page, ['status']);
 
