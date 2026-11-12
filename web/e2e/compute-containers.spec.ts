@@ -84,7 +84,12 @@ test.describe('Compute containers: detail, exec, metrics and attestation (#1721)
     await expect(result.getByText('Verified', { exact: true })).toBeVisible();
     await expect(result.getByText('aW1hZ2UtZGlnZXN0')).toBeVisible();
     expect(calls.attest).toHaveLength(1);
-    expect((calls.attest[0] as { nonce?: string }).nonce).toMatch(/^[A-Za-z0-9+/]+=*$/);
+    // The daemon takes no caller nonce, PCR selection or bank: none is sent,
+    // and the result says so.
+    expect(calls.attest).toEqual([{}]);
+    await expect(
+      result.getByText('Not bound to a caller nonce; the daemon selects the PCRs.')
+    ).toBeVisible();
   });
 
   test('VerifyVMAttestation verifies a VM attestation from the VM detail page', async ({ page }) => {
@@ -152,6 +157,26 @@ test.describe('Compute containers: detail, exec, metrics and attestation (#1721)
     await expect(result.getByText(/Attestation failed/)).toBeVisible();
     await expect(result.getByText('aW1hZ2UtZGlnZXN0')).toHaveCount(0);
     expect(calls.attest).toHaveLength(2);
+  });
+
+  test('a failed exec replaces the earlier exec result', async ({ page }) => {
+    const calls = await mockContainerOpsApi(page, { containerId: 'ctr-1', execFailFrom: 2 });
+
+    await page.goto('/compute/containers/ctr-1');
+    const result = page.getByTestId('exec-result');
+
+    await page.getByLabel('Command').fill('echo hello');
+    await page.getByRole('button', { name: 'Run' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Confirm' }).click();
+    await expect(result.getByText('hello from container')).toBeVisible();
+
+    await page.getByLabel('Command').fill('false');
+    await page.getByRole('button', { name: 'Run' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Confirm' }).click();
+    await expect(result.getByRole('alert')).toContainText('Exec failed');
+    await expect(result.getByText('hello from container')).toHaveCount(0);
+    await expect(result.getByText(/Exit code/)).toHaveCount(0);
+    expect(calls.exec).toHaveLength(2);
   });
 
   test('the containers list links each container to its detail page', async ({ page }) => {

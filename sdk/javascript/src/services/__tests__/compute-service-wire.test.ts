@@ -127,22 +127,12 @@ describe('ComputeService wire shapes', () => {
     expect((postedBody(mockClient) as { pcrBank?: string }).pcrBank).toBeUndefined();
   });
 
-  it('posts a container attestation to the container attest path with the proto PCR bank', async () => {
-    await service.attestContainer({ id: 'ctr 1', nonce: 'bm9uY2U=', pcrIndices: [0, 7], pcrBank: 'SHA256' });
+  it('posts a container attestation to the container attest path with an empty body', async () => {
+    await service.attestContainer({ id: 'ctr 1' });
 
     expect(String(vi.mocked(mockClient.post).mock.calls[0]?.[0])).toContain('/containers/ctr%201/attest');
-    expect(postedBody(mockClient)).toEqual({
-      nonce: 'bm9uY2U=',
-      pcrIndices: [0, 7],
-      pcrBank: 'PCR_BANK_SHA256',
-    });
-  });
-
-  it('omits the PCR bank of a container attestation when the caller supplied none', async () => {
-    await service.attestContainer({ id: 'ctr-1', nonce: 'bm9uY2U=' });
-
-    const body = postedBody(mockClient) as { pcrBank?: string; id?: string };
-    expect(body.pcrBank).toBeUndefined();
-    expect(body.id).toBeUndefined();
+    // The daemon's container attestation takes no caller nonce, PCR selection
+    // or bank, so the SDK posts none.
+    expect(postedBody(mockClient)).toEqual({});
   });
 });

@@ -737,6 +737,8 @@ export interface ContainerOpsMockConfig {
    * { error: 'attestation unavailable' }; unset means never.
    */
   attestFailFrom?: number;
+  /** Exec calls from this 1-based index on answer 500. */
+  execFailFrom?: number;
 }
 
 /**
@@ -818,6 +820,14 @@ export async function mockContainerOpsApi(
     }
     if (method === 'POST' && op === 'exec') {
       calls.exec.push(request.postDataJSON());
+      if (failsAt(config.execFailFrom, calls.exec.length)) {
+        await route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'exec unavailable' }),
+        });
+        return;
+      }
       await json(route, {
         status: { success: true },
         exitCode: config.execExitCode ?? 0,
