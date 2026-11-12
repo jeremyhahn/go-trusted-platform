@@ -13,6 +13,14 @@ export { CAService } from './ca-service.js';
 export { ComputeService } from './compute-service.js';
 export { DeviceService } from './device-service.js';
 export { DNSService } from './dns-service.js';
+export { BMCService, BMC_PRIVILEGE_CODES, bmcPrivilegeName } from './bmc-service.js';
+export type {
+  BMCPrivilegeName,
+  BMCUser,
+  CreateBMCUserRequest,
+  ReplaceBMCWebCertificateRequest,
+  BMCStatusResponse,
+} from './bmc-service.js';
 export { GatewayService } from './gateway-service.js';
 export { IAMService } from './iam-service.js';
 export { IDevIDService } from './idevid-service.js';
