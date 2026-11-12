@@ -199,11 +199,21 @@ export class VTPMService extends BaseService {
   /**
    * Create a vTPM template
    *
+   * Posts the REST handler's flat body `{ id, description?, ek_algorithm?,
+   * secure_boot_enabled }`; the handler rejects unknown fields, so the
+   * request's `options` wrapper is never sent.
+   *
    * @param request - Template creation request
    * @returns Created template
    */
   async createTemplate(request: CreateTemplateRequest): Promise<ApiResponse<CreateTemplateResponse>> {
-    return this.client.post<CreateTemplateResponse>(this.buildUrl('/templates'), request);
+    const o = request.options;
+    return this.client.post<CreateTemplateResponse>(this.buildUrl('/templates'), {
+      id: o.id,
+      ...(o.description !== undefined ? { description: o.description } : {}),
+      ...(o.ekAlgorithm !== undefined ? { ek_algorithm: o.ekAlgorithm } : {}),
+      secure_boot_enabled: o.secureBootEnabled ?? false,
+    });
   }
 
   /**

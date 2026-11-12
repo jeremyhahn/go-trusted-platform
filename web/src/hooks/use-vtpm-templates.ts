@@ -102,7 +102,6 @@ export function useVTPMTemplates() {
 
   const createTemplate = useMutation(
     async (input: CreateTemplateInput) =>
-      // Kept in the SDK's request shape so it compiles before and after #1590.
       wire<VTPMTemplateWire>(
         await vtpm.createTemplate({
           options: {
