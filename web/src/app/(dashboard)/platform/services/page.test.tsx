@@ -114,6 +114,67 @@ describe("ServicesPage daemon controls", () => {
     await waitFor(() => expect(platform.reloadConfig).toHaveBeenCalledTimes(1));
   });
 
+  it("a failed restart still refetches the service list", async () => {
+    platform.listServices
+      .mockImplementationOnce(() =>
+        ok({ services: [{ name: "dns", status: "running" }, { name: "pxe", status: "stopped" }], count: 2 })
+      )
+      .mockImplementationOnce(() =>
+        ok({ services: [{ name: "dns", status: "stopped" }, { name: "pxe", status: "stopped" }], count: 2 })
+      );
+    platform.restartService.mockImplementationOnce(
+      () => Promise.resolve({ success: false, error: { message: "start failed" } }) as never
+    );
+    await renderPage();
+    fireEvent.click(screen.getByLabelText("Restart dns"));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    await waitFor(() => expect(platform.listServices).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByTestId("service-row-dns").textContent).toContain("stopped"));
+    expect(toastResult.toast).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Restart dns failed", variant: "destructive" })
+    );
+  });
+
+  it("details opened before a stop are refreshed after it", async () => {
+    platform.getServiceStatus
+      .mockImplementationOnce(() => ok({ name: "dns", status: "running", uptime: "5m" }))
+      .mockImplementationOnce(() => ok({ name: "dns", status: "stopped", stop_count: 1 }) as never);
+    await renderPage();
+    fireEvent.click(screen.getByLabelText("Details dns"));
+    await waitFor(() => expect(screen.getByTestId("service-detail").textContent).toContain("running"));
+    fireEvent.click(await screen.findByLabelText("Stop dns"));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    await waitFor(() => expect(screen.getByTestId("service-detail").textContent).toContain("stopped"));
+    expect(screen.getByTestId("service-detail").textContent).toContain("Stops: 1");
+  });
+
+  it("Refresh re-reads the open details", async () => {
+    platform.getServiceStatus
+      .mockImplementationOnce(() => ok({ name: "dns", status: "running", uptime: "5m" }))
+      .mockImplementationOnce(() => ok({ name: "dns", status: "stopped", uptime: "" }));
+    await renderPage();
+    fireEvent.click(screen.getByLabelText("Details dns"));
+    await waitFor(() => expect(screen.getByTestId("service-detail").textContent).toContain("Uptime: 5m"));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(platform.getServiceStatus).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByTestId("service-detail").textContent).toContain("stopped"));
+    expect(screen.getByTestId("service-detail").textContent).not.toContain("Uptime: 5m");
+  });
+
+  it("a failed detail re-read clears the panel", async () => {
+    platform.getServiceStatus
+      .mockImplementationOnce(() => ok({ name: "dns", status: "running", uptime: "5m" }))
+      .mockImplementationOnce(
+        () => Promise.resolve({ success: false, error: { message: "gone" } }) as never
+      );
+    await renderPage();
+    fireEvent.click(screen.getByLabelText("Details dns"));
+    await screen.findByTestId("service-detail");
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(platform.getServiceStatus).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByTestId("service-detail")).toBeNull());
+  });
+
   it("shows daemon status and version", async () => {
     await renderPage();
     await waitFor(() => expect(screen.getByTestId("daemon-status").textContent).toContain("running"));
