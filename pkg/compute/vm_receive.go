@@ -282,7 +282,10 @@ func (o *QEMUOrchestrator) ReceiveIncoming(ctx context.Context, spec MigrationSp
 		return nil, &SentinelCauseError{Sentinel: ErrMigrationReceiveFailed, Cause: &WrappedError{Msg: "materialize server migration TLS creds", Err: err}}
 	}
 
-	recv, err := newIncomingReceiver(ctx, &incomingReceiverParams{
+	// The receiver lives until FinalizeIncoming commits or aborts it, not until
+	// the prepare request ends: the transfer arrives on a later request, so the
+	// receiving QEMU must not be killed when this request's context is cancelled.
+	recv, err := newIncomingReceiver(context.WithoutCancel(ctx), &incomingReceiverParams{
 		orchestrator: o,
 		spec:         spec,
 		credsDir:     credsDir,

@@ -40,6 +40,10 @@ export default function MigrationsPage() {
   const [secureBoot, setSecureBoot] = useState(false);
   const [tpmEnabled, setTpmEnabled] = useState(false);
   const [enableKvm, setEnableKvm] = useState(true);
+  // The receiver's NIC must match the source guest's or its migration state
+  // does not load; the daemon defaults an empty mode to bridge.
+  const [networkMode, setNetworkMode] = useState<"bridge" | "user" | "none">("bridge");
+  const [macAddress, setMacAddress] = useState("");
 
   const [receiverId, setReceiverId] = useState("");
   const [confirmCommit, setConfirmCommit] = useState<boolean | null>(null);
@@ -60,6 +64,8 @@ export default function MigrationsPage() {
     spec.secureBoot = secureBoot;
     spec.tpmEnabled = tpmEnabled;
     spec.enableKvm = enableKvm;
+    spec.networkMode = networkMode;
+    if (macAddress.trim()) spec.macAddress = macAddress.trim();
     const result = await ops.prepareMigration({
       vmName,
       vmId: sourceVmId || undefined,
@@ -199,7 +205,36 @@ export default function MigrationsPage() {
                   KVM acceleration
                 </label>
               </div>
+              <div>
+                <Label htmlFor="migration-network-mode">Network mode</Label>
+                <select
+                  id="migration-network-mode"
+                  className="block w-full rounded-md border px-2 py-1 text-sm bg-background"
+                  value={networkMode}
+                  onChange={(e) =>
+                    setNetworkMode(
+                      e.target.value === "user" ? "user" : e.target.value === "none" ? "none" : "bridge",
+                    )
+                  }
+                >
+                  <option value="bridge">bridge</option>
+                  <option value="user">user</option>
+                  <option value="none">none</option>
+                </select>
+              </div>
+              <div>
+                <Label htmlFor="migration-mac-address">MAC address</Label>
+                <Input
+                  id="migration-mac-address"
+                  placeholder="MAC address"
+                  value={macAddress}
+                  onChange={(e) => setMacAddress(e.target.value)}
+                />
+              </div>
             </div>
+            <p className="text-xs text-muted-foreground">
+              Enter the source guest&apos;s network mode and MAC address so the received VM keeps the same NIC
+            </p>
             <Button onClick={handlePrepare} disabled={busy || receiver !== null || !vmName || !specValid}>
               Prepare Migration
             </Button>
