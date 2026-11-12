@@ -53,6 +53,22 @@ func init() {
 		},
 	}
 
+	// Host manifests (#1686): the server answers the pb replies as
+	// protojson, which decodes generically.
+	templatedRouteTable[platformv1.AttestationService_ListManifests_FullMethodName] = templatedRoute{
+		path:   "/api/v1/attestation/manifests",
+		method: http.MethodGet,
+		queryParams: []queryParam{
+			{name: "host_id", field: "host_id"},
+			{name: "limit", field: "limit"},
+			{name: "offset", field: "offset"},
+		},
+	}
+	templatedRouteTable[platformv1.AttestationService_GetManifest_FullMethodName] =
+		itemRoute("/api/v1/attestation/manifests/{id}", http.MethodGet, "{id}", "id")
+	templatedRouteTable[platformv1.AttestationService_DeleteManifest_FullMethodName] =
+		itemRoute("/api/v1/attestation/manifests/{id}", http.MethodDelete, "{id}", "id")
+
 	restResponseDecoders[platformv1.AttestationService_GetDeviceReport_FullMethodName] = decodeDeviceReport
 	restResponseDecoders[platformv1.AttestationService_ListDeviceReports_FullMethodName] = decodeDeviceReports
 	restResponseDecoders[platformv1.AttestationService_DescribeCallerPolicy_FullMethodName] = decodeCallerPolicy
