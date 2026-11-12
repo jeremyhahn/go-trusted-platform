@@ -31,6 +31,17 @@ import type {
   GetBundlePathResponse,
   GetTPMSocketPathResponse,
   GetNVRAMPathResponse,
+  StartBundleResponse,
+  StopBundleResponse,
+  QuoteBundleRequest,
+  QuoteBundleResponse,
+  SealBundleRequest,
+  SealBundleResponse,
+  UnsealBundleRequest,
+  UnsealBundleResponse,
+  ExtendBundlePCRRequest,
+  ExtendBundlePCRResponse,
+  ReadBundlePCRResponse,
 } from '../types/vtpm.js';
 
 /**
@@ -188,6 +199,71 @@ export class VTPMService extends BaseService {
   async getNVRAMPath(id: string): Promise<ApiResponse<GetNVRAMPathResponse>> {
     return this.client.get<GetNVRAMPathResponse>(
       this.buildUrl(`/bundles/${this.encodePathSegment(id)}/nvram`)
+    );
+  }
+
+  // =========================================================================
+  // Bundle Runtime Operations
+  //
+  // IsVTPMRunning has no REST route: callers track the running state from
+  // the start and stop results.
+  // =========================================================================
+
+  /** Start the vTPM of a bundle (POST /bundles/{id}/start) */
+  async startBundle(id: string): Promise<ApiResponse<StartBundleResponse>> {
+    return this.client.post<StartBundleResponse>(
+      this.buildUrl(`/bundles/${this.encodePathSegment(id)}/start`),
+      {}
+    );
+  }
+
+  /** Stop the vTPM of a bundle (POST /bundles/{id}/stop) */
+  async stopBundle(id: string): Promise<ApiResponse<StopBundleResponse>> {
+    return this.client.post<StopBundleResponse>(
+      this.buildUrl(`/bundles/${this.encodePathSegment(id)}/stop`),
+      {}
+    );
+  }
+
+  /** Quote PCRs of a running bundle (POST /bundles/{id}/quote) */
+  async quoteBundle(id: string, request: QuoteBundleRequest): Promise<ApiResponse<QuoteBundleResponse>> {
+    return this.client.post<QuoteBundleResponse>(
+      this.buildUrl(`/bundles/${this.encodePathSegment(id)}/quote`),
+      request
+    );
+  }
+
+  /** Seal data to a running bundle (POST /bundles/{id}/seal) */
+  async sealBundle(id: string, request: SealBundleRequest): Promise<ApiResponse<SealBundleResponse>> {
+    return this.client.post<SealBundleResponse>(
+      this.buildUrl(`/bundles/${this.encodePathSegment(id)}/seal`),
+      request
+    );
+  }
+
+  /** Unseal a blob with a running bundle (POST /bundles/{id}/unseal) */
+  async unsealBundle(id: string, request: UnsealBundleRequest): Promise<ApiResponse<UnsealBundleResponse>> {
+    return this.client.post<UnsealBundleResponse>(
+      this.buildUrl(`/bundles/${this.encodePathSegment(id)}/unseal`),
+      request
+    );
+  }
+
+  /** Extend a PCR of a running bundle (POST /bundles/{id}/pcrs/extend) */
+  async extendBundlePCR(
+    id: string,
+    request: ExtendBundlePCRRequest
+  ): Promise<ApiResponse<ExtendBundlePCRResponse>> {
+    return this.client.post<ExtendBundlePCRResponse>(
+      this.buildUrl(`/bundles/${this.encodePathSegment(id)}/pcrs/extend`),
+      request
+    );
+  }
+
+  /** Read one PCR of a running bundle (GET /bundles/{id}/pcrs?pcr_index=N) */
+  async readBundlePCR(id: string, pcrIndex: number): Promise<ApiResponse<ReadBundlePCRResponse>> {
+    return this.client.get<ReadBundlePCRResponse>(
+      `${this.buildUrl(`/bundles/${this.encodePathSegment(id)}/pcrs`)}?pcr_index=${encodeURIComponent(String(pcrIndex))}`
     );
   }
 

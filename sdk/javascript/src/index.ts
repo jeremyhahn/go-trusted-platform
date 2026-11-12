@@ -989,6 +989,18 @@ export type {
   GetVTPMInstanceStatusResponse,
   GetVTPMInstanceEKCertResponse,
   GetVTPMInstanceEKFingerprintResponse,
+  VTPMRuntimeStatus,
+  StartBundleResponse,
+  StopBundleResponse,
+  QuoteBundleRequest,
+  QuoteBundleResponse,
+  SealBundleRequest,
+  SealBundleResponse,
+  UnsealBundleRequest,
+  UnsealBundleResponse,
+  ExtendBundlePCRRequest,
+  ExtendBundlePCRResponse,
+  ReadBundlePCRResponse,
 } from './types/vtpm.js';
 
 // VPN types
