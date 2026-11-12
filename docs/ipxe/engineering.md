@@ -70,7 +70,7 @@ func DefaultBootFilenameByArch() map[uint16]string
 type IPAllocator interface {
     Allocate(ctx context.Context, mac net.HardwareAddr, hostname string) (net.IP, error)
     Release(ctx context.Context, mac net.HardwareAddr) error
-    GetLease(ctx context.Context, mac net.HardwareAddr) (*lease, error)
+    GetLease(ctx context.Context, mac net.HardwareAddr) (*Lease, error)
     Renew(ctx context.Context, mac net.HardwareAddr) error
 }
 
@@ -80,11 +80,11 @@ func NewIPAMAllocator(allocator ipam.Allocator, poolID string, leaseTime time.Du
 
 `IPAMAllocator` adds `PoolID()`, `LeaseCount()` and `SyncFromIPAM(ctx)`.
 
-**`IPAllocator` cannot be implemented outside this package.** `GetLease`
-returns `*lease`, and `lease` is unexported. The interface is exported, the
-option that accepts it (`WithIPAllocator`) is exported, and no external caller
-can satisfy it. Either `lease` should be exported or `GetLease` should leave
-the interface — recorded as a defect, not resolved here.
+`GetLease` returns `*Lease`, an exported struct with the fields `IP`
+(`net.IP`), `MAC` (`net.HardwareAddr`) and `ExpiresAt` (`time.Time`). A type
+outside this package can implement `IPAllocator` and be passed to
+`WithIPAllocator`; `TestIPAllocator_ExternalImplementation` in
+`allocator_external_test.go` (package `ipxe_test`) holds that.
 
 ### HTTP
 
@@ -400,8 +400,8 @@ Seams for fault injection:
 
 - `PacketConnFactory` — `WithPacketConnFactory` or `SetConnFactory` substitutes
   the DHCP socket without a network.
-- `IPAllocator` — `WithIPAllocator` or `SetAllocator`, though see §2 on the
-  unexported `lease`.
+- `IPAllocator` — `WithIPAllocator` or `SetAllocator`; `GetLease` returns the
+  exported `*Lease`, so a fake can live outside the package (§2).
 - `DeviceLookup` — a plain func, so a test supplies a table.
 - `ServerConfig.ProxyCACertPool` — point the proxy at a test CA.
 - `TestEnv` — `NewTestEnv` / `Setup` / `Start` / `Stop` / `Cleanup` builds and
