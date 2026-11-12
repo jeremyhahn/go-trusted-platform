@@ -20,7 +20,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useVMOperations } from "@/hooks";
-import type { PrepareMigrationResponse } from "trusted-platform-sdk";
+import type { PrepareMigrationResponse, VMMigrationSpec } from "trusted-platform-sdk";
 
 export default function MigrationsPage() {
   const ops = useVMOperations();
@@ -31,16 +31,37 @@ export default function MigrationsPage() {
   const [mode, setMode] = useState<"cold" | "live">("live");
   const [receiver, setReceiver] = useState<PrepareMigrationResponse | null>(null);
 
+  // The source guest's configuration: the daemon refuses a prepare without it.
+  const [memoryMb, setMemoryMb] = useState("");
+  const [cpus, setCpus] = useState("");
+  const [diskSize, setDiskSize] = useState("");
+  const [bootMode, setBootMode] = useState("");
+  const [arch, setArch] = useState<"x86_64" | "aarch64">("x86_64");
+  const [secureBoot, setSecureBoot] = useState(false);
+  const [tpmEnabled, setTpmEnabled] = useState(false);
+
   const [receiverId, setReceiverId] = useState("");
   const [confirmCommit, setConfirmCommit] = useState<boolean | null>(null);
   const [finalizeResult, setFinalizeResult] = useState("");
 
+  const positiveInt = (value: string) => (/^[1-9][0-9]*$/.test(value.trim()) ? Number(value.trim()) : 0);
+  const specMemoryMb = positiveInt(memoryMb);
+  const specCpus = positiveInt(cpus);
+  const specValid = specMemoryMb > 0 && specCpus > 0;
+
   const handlePrepare = async () => {
-    if (!vmName) return;
+    if (!vmName || !specValid) return;
+    const spec: VMMigrationSpec = { memoryMb: specMemoryMb, cpus: specCpus };
+    if (diskSize.trim()) spec.diskSize = diskSize.trim();
+    if (bootMode.trim()) spec.bootMode = bootMode.trim();
+    spec.arch = arch;
+    spec.secureBoot = secureBoot;
+    spec.tpmEnabled = tpmEnabled;
     const result = await ops.prepareMigration({
       vmName,
       vmId: sourceVmId || undefined,
       mode,
+      spec,
     });
     if (result) {
       setReceiver(result);
@@ -97,7 +118,76 @@ export default function MigrationsPage() {
                 <option value="cold">cold</option>
               </select>
             </div>
-            <Button onClick={handlePrepare} disabled={busy}>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label htmlFor="migration-memory-mb">Memory MB</Label>
+                <Input
+                  id="migration-memory-mb"
+                  inputMode="numeric"
+                  value={memoryMb}
+                  onChange={(e) => setMemoryMb(e.target.value)}
+                />
+              </div>
+              <div>
+                <Label htmlFor="migration-cpus">CPUs</Label>
+                <Input
+                  id="migration-cpus"
+                  inputMode="numeric"
+                  value={cpus}
+                  onChange={(e) => setCpus(e.target.value)}
+                />
+              </div>
+              <div>
+                <Label htmlFor="migration-disk-size">Disk size</Label>
+                <Input
+                  id="migration-disk-size"
+                  placeholder="20G"
+                  value={diskSize}
+                  onChange={(e) => setDiskSize(e.target.value)}
+                />
+              </div>
+              <div>
+                <Label htmlFor="migration-boot-mode">Boot mode</Label>
+                <Input
+                  id="migration-boot-mode"
+                  value={bootMode}
+                  onChange={(e) => setBootMode(e.target.value)}
+                />
+              </div>
+              <div>
+                <Label htmlFor="migration-arch">Arch</Label>
+                <select
+                  id="migration-arch"
+                  className="block w-full rounded-md border px-2 py-1 text-sm bg-background"
+                  value={arch}
+                  onChange={(e) => setArch(e.target.value === "aarch64" ? "aarch64" : "x86_64")}
+                >
+                  <option value="x86_64">x86_64</option>
+                  <option value="aarch64">aarch64</option>
+                </select>
+              </div>
+              <div className="flex flex-col justify-end gap-1 text-sm">
+                <label className="flex items-center gap-2" htmlFor="migration-secure-boot">
+                  <input
+                    id="migration-secure-boot"
+                    type="checkbox"
+                    checked={secureBoot}
+                    onChange={(e) => setSecureBoot(e.target.checked)}
+                  />
+                  Secure boot
+                </label>
+                <label className="flex items-center gap-2" htmlFor="migration-tpm">
+                  <input
+                    id="migration-tpm"
+                    type="checkbox"
+                    checked={tpmEnabled}
+                    onChange={(e) => setTpmEnabled(e.target.checked)}
+                  />
+                  TPM
+                </label>
+              </div>
+            </div>
+            <Button onClick={handlePrepare} disabled={busy || !vmName || !specValid}>
               Prepare Migration
             </Button>
             {receiver && (

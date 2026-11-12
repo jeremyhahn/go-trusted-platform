@@ -936,6 +936,30 @@ export interface GetSnapshotResponse {
 }
 
 /** Prepare migration request (run on the destination host) */
+/** The source guest's configuration a migration receiver needs (proto VMMigrationSpec) */
+export interface VMMigrationSpec {
+  /** Memory in MB */
+  memoryMb: number;
+  /** Number of vCPUs */
+  cpus: number;
+  /** Disk size, e.g. "20G" */
+  diskSize?: string;
+  /** Boot mode */
+  bootMode?: string;
+  /** Secure Boot enabled */
+  secureBoot?: boolean;
+  /** KVM acceleration enabled */
+  enableKvm?: boolean;
+  /** vTPM enabled */
+  tpmEnabled?: boolean;
+  /** Network mode */
+  networkMode?: string;
+  /** MAC address */
+  macAddress?: string;
+  /** Source guest arch: "x86_64" or "aarch64"; empty means x86_64 */
+  arch?: string;
+}
+
 export interface PrepareMigrationRequest {
   /** Source instance ID (informational) */
   vmId?: string;
@@ -943,8 +967,8 @@ export interface PrepareMigrationRequest {
   vmName: string;
   /** Migration mode */
   mode: 'cold' | 'live';
-  /** VM migration spec */
-  spec?: Record<string, unknown>;
+  /** VM migration spec (required: the daemon refuses a request without one) */
+  spec: VMMigrationSpec;
 }
 
 /** Prepare migration response */

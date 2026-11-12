@@ -28,7 +28,8 @@ import {
 } from '@/components/ui/table';
 import { VMMetricsCard } from '@/components/features/compute/vm-metrics';
 import { useCompute, useMutation, useToast, type MutationError } from '@/hooks';
-import type { VMDetail } from '@/types/infrastructure';
+import type { VMDetail, VMMetrics } from '@/types/infrastructure';
+import type { VM as SdkVM } from 'trusted-platform-sdk';
 import { vmStatus } from '@/lib/compute-state';
 import { VMOperations } from './vm-operations';
 
@@ -39,12 +40,36 @@ const statusColors = {
   creating: 'bg-blue-500/10 text-blue-500 border-blue-500/20',
 };
 
+// GetVM answers the daemon's VM shape (instanceToVMProto): the name lives in
+// config, and metrics and snapshots are usually absent.
+type VMDetailView = Omit<VMDetail, 'metrics'> & { metrics?: VMMetrics };
+
+function toVMDetail(vm: SdkVM): VMDetailView {
+  const config = vm.config as Partial<SdkVM['config']> | undefined;
+  return {
+    id: vm.id,
+    name: config?.name ?? vm.id,
+    description: config?.description,
+    status: vmStatus(vm.state),
+    vcpus: config?.cpu?.cores ?? 0,
+    memoryMB: config?.memory?.sizeMb ?? 0,
+    storageMB: 0,
+    createdAt: vm.createdAt,
+    osType: '',
+    bootOrder: [],
+    snapshots: [],
+    metrics: vm.metrics ? (vm.metrics as unknown as VMMetrics) : undefined,
+    disks: [],
+    networkInterfaces: [],
+  };
+}
+
 export default function VMDetailPage() {
   const params = useParams();
   const pathname = usePathname();
   const router = useRouter();
   const vmId = resolveDynamicId(params, pathname, 'vms');
-  const [vm, setVM] = useState<VMDetail | null>(null);
+  const [vm, setVM] = useState<VMDetailView | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const compute = useCompute();
@@ -55,16 +80,13 @@ export default function VMDetailPage() {
       setLoading(false);
       return;
     }
+    // No setLoading(true) here: loading starts true and only the first fetch
+    // clears it, so the 5 s refresh keeps the detail tree (and the stateful
+    // VMOperations panel) mounted (#1727).
     try {
-      setLoading(true);
       const response = await compute.getVM(vmId);
       if (response.success && response.data) {
-        // SDK returns { vm: VM }, but we need VMDetail
-        // For now, cast to VMDetail - proper type mapping would be handled by backend
-        setVM({
-          ...(response.data.vm as unknown as VMDetail),
-          status: vmStatus(response.data.vm.state),
-        });
+        setVM(toVMDetail(response.data.vm));
       }
     } catch (error) {
       toast({
@@ -399,7 +421,7 @@ export default function VMDetailPage() {
           </CardContent>
         </Card>
 
-        <VMMetricsCard metrics={vm.metrics} />
+        {vm.metrics && <VMMetricsCard metrics={vm.metrics} />}
       </div>
 
       <VMOperations vmId={vmId} />

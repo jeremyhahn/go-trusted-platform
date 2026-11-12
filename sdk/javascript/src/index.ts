@@ -634,6 +634,7 @@ export type {
   SuspendVMResponse,
   ResumeVMResponse,
   GetSnapshotResponse,
+  VMMigrationSpec,
   PrepareMigrationRequest,
   PrepareMigrationResponse,
   FinalizeMigrationRequest,
