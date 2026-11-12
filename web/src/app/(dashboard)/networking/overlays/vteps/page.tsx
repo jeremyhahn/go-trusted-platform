@@ -47,6 +47,7 @@ export default function OverlayVtepsPage() {
     vnis,
     tunnels,
     isLoading,
+    error,
     refetchAll,
     getVTEP,
     getTunnelStats,
@@ -60,6 +61,19 @@ export default function OverlayVtepsPage() {
   const [submitting, setSubmitting] = useState(false);
   const [macAddress, setMacAddress] = useState('');
   const [macVni, setMacVni] = useState('');
+
+  const listError = error && !isLoading ? error.message || 'Failed to load overlay data' : null;
+  const errorRow = (colSpan: number) => (
+    <TableRow>
+      <TableCell
+        colSpan={colSpan}
+        className="text-center text-destructive"
+        data-testid="overlay-list-error"
+      >
+        {listError}
+      </TableCell>
+    </TableRow>
+  );
 
   const showVtep = async (nodeId: string) => {
     try {
@@ -135,7 +149,7 @@ export default function OverlayVtepsPage() {
       <section className="space-y-2">
         <h2 className="text-xl font-semibold">VTEPs</h2>
         <div className="rounded-md border border-border">
-          <Table>
+          <Table data-testid="vteps-table">
             <TableHeader>
               <TableRow>
                 <TableHead>Node</TableHead>
@@ -145,7 +159,9 @@ export default function OverlayVtepsPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {vteps.length === 0 ? (
+              {listError ? (
+                errorRow(4)
+              ) : vteps.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={4} className="text-center text-muted-foreground">
                     No VTEPs found
@@ -190,7 +206,9 @@ export default function OverlayVtepsPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {vnis.length === 0 ? (
+              {listError ? (
+                errorRow(4)
+              ) : vnis.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={4} className="text-center text-muted-foreground">
                     No VNIs found
@@ -242,7 +260,9 @@ export default function OverlayVtepsPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {tunnels.length === 0 ? (
+              {listError ? (
+                errorRow(5)
+              ) : tunnels.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={5} className="text-center text-muted-foreground">
                     No tunnels found

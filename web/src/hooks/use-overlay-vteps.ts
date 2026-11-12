@@ -10,6 +10,11 @@ import type {
   VTEPInfo,
 } from 'trusted-platform-sdk';
 
+/** The client resolves failed requests as { success: false }; turn them into a rejection. */
+function failure(message: string | undefined): Error {
+  return new Error(message || 'Request failed');
+}
+
 /**
  * Overlay data for the VTEPs page (#1722): VTEPs, VNIs and tunnels, plus
  * the per-item reads and the destructive actions the page offers.
@@ -24,6 +29,7 @@ export function useOverlayVteps() {
   const getVTEP = React.useCallback(
     async (nodeId: string): Promise<VTEPInfo | undefined> => {
       const res = await overlay.getVTEP(nodeId);
+      if (!res.success) throw failure(res.error?.message);
       return res.data?.vtep;
     },
     [overlay]
@@ -32,6 +38,7 @@ export function useOverlayVteps() {
   const getTunnelStats = React.useCallback(
     async (remoteVtep: string, vni: number): Promise<TunnelInfo | undefined> => {
       const res = await overlay.getTunnelStats({ remoteVtep, vni });
+      if (!res.success) throw failure(res.error?.message);
       return res.data?.tunnel;
     },
     [overlay]
@@ -43,7 +50,8 @@ export function useOverlayVteps() {
 
   const deleteVNI = React.useCallback(
     async (vni: number) => {
-      await overlay.deleteVNI(vni);
+      const res = await overlay.deleteVNI(vni);
+      if (!res.success) throw failure(res.error?.message);
       await refetchVnis();
     },
     [overlay, refetchVnis]
@@ -51,7 +59,8 @@ export function useOverlayVteps() {
 
   const forgetMAC = React.useCallback(
     async (mac: string, vni: number) => {
-      await overlay.forgetMAC({ mac, vni });
+      const res = await overlay.forgetMAC({ mac, vni });
+      if (!res.success) throw failure(res.error?.message);
     },
     [overlay]
   );
