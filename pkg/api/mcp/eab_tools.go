@@ -146,14 +146,14 @@ func (r *ToolRegistry) registerEABTools() {
 				},
 				"expires_in_seconds": map[string]interface{}{
 					"type":        "integer",
-					"description": "Expiration duration in seconds (0 = no expiration)",
+					"description": "Expiration duration in seconds (required, must be positive)",
 				},
 				"hmac_key_length": map[string]interface{}{
 					"type":        "integer",
 					"description": "HMAC key length in bytes (minimum 32, default 32)",
 				},
 			},
-			"required": []string{"profile_id", "tenant_id"},
+			"required": []string{"profile_id", "tenant_id", "expires_in_seconds"},
 		},
 	})
 

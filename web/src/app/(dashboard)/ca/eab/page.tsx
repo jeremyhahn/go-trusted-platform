@@ -99,14 +99,14 @@ export default function EABCredentialsPage() {
     const exp = parseExpiresIn(expiresIn);
     if (!exp.ok) {
       setMessage(null);
-      setActionError("Expires in must be a positive whole number of seconds, or blank");
+      setActionError("Expires in must be a positive whole number of seconds");
       return;
     }
     void run(async () => {
       const res = await eab.create.mutateAsync({
         profileId: profile,
         tenantId,
-        ...(exp.seconds !== undefined ? { expiresInSeconds: exp.seconds } : {}),
+        expiresInSeconds: exp.seconds,
       });
       setCreated(res);
       await list.refetch();
