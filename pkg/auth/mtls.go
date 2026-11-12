@@ -301,15 +301,16 @@ func (m *MTLSAdapter) checkRevocation(ctx context.Context, cert *x509.Certificat
 		return nil // No CA configured, skip revocation check
 	}
 
-	// Check if certificate is revoked by attempting to verify against CA
-	_, err := m.ca.Verify(cert, nil)
+	// Ask the CA directly whether the serial is revoked. CA.Verify is not
+	// used here: it verifies for server auth and so rejects valid
+	// client-auth-only certificates.
+	revoked, err := m.ca.IsRevoked(cert.SerialNumber)
 	if err != nil {
-		// Check if this is a revocation error
-		if strings.Contains(err.Error(), "revoked") {
-			return ErrCertificateRevoked{}
-		}
-		// Any other CA failure means revocation status is unknown: fail closed.
-		return ErrRevocationCheckFailed{Reason: "certificate authority verify failed", Err: err}
+		// Revocation status is unknown: fail closed.
+		return ErrRevocationCheckFailed{Reason: "certificate authority revocation lookup failed", Err: err}
+	}
+	if revoked {
+		return ErrCertificateRevoked{}
 	}
 
 	return nil
