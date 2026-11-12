@@ -82,7 +82,7 @@ export type { User, AuthContextType } from '@/contexts/AuthContext';
 export { useToast, toast, dismissToast } from './use-toast';
 export type { Toast, UseToastReturn } from './use-toast';
 
-export { useKmsOps, textToBase64, base64ToText } from './use-kms-ops';
+export { useKmsOps, textToBase64, base64ToText, KMS_SETTABLE_KEY_STATUSES } from './use-kms-ops';
 export type {
   UseKmsOpsResult,
   KmsKeyVersion,

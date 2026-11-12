@@ -83,6 +83,13 @@ export function base64ToText(b64: string): string {
   return new TextDecoder().decode(bytes);
 }
 
+/**
+ * Key statuses the KMS service accepts on PUT /keys/{name}/status. Deletion,
+ * rotation and revocation have dedicated operations; the service rejects
+ * those states here.
+ */
+export const KMS_SETTABLE_KEY_STATUSES = ['ENABLED', 'DISABLED'] as const;
+
 const BASE = '/api/v1/kms';
 
 function seg(name: string): string {
@@ -164,9 +171,12 @@ export function useKmsOps(): UseKmsOpsResult {
       busy,
       importKey: (input) => run(() => call<KmsImportKeyResult>('POST', '/keys/import', input)),
       updateKeyStatus: (name, status, version) =>
-        run(() =>
-          call<KmsKeyStatusResult>('PUT', `/keys/${seg(name)}/status`, version ? { status, version } : { status })
-        ),
+        run(() => {
+          if (!(KMS_SETTABLE_KEY_STATUSES as readonly string[]).includes(status)) {
+            throw new Error(`${status} cannot be set here: the KMS service accepts only ENABLED or DISABLED`);
+          }
+          return call<KmsKeyStatusResult>('PUT', `/keys/${seg(name)}/status`, version ? { status, version } : { status });
+        }),
       getKeyVersions: (name) =>
         run(async () => {
           const res = await call<{ versions?: KmsKeyVersion[] }>('GET', `/keys/${seg(name)}/versions`);

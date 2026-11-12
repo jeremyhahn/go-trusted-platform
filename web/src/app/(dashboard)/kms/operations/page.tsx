@@ -28,12 +28,9 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { useKmsOps } from "@/hooks";
+import { KMS_SETTABLE_KEY_STATUSES, useKmsOps } from "@/hooks";
 import type { KmsBackendStatus, KmsKeyVersion } from "@/hooks";
 import { AlertCircle } from "lucide-react";
-
-// Key states the v1 KMS router accepts on PUT /keys/{name}/status.
-const KEY_STATUSES = ["ENABLED", "DISABLED", "PENDING_DELETION", "DELETED", "ROTATING", "COMPROMISED"];
 
 function Field(props: {
   id: string;
@@ -260,7 +257,7 @@ export default function KmsOperationsPage() {
               value={statusValue}
               onChange={(e) => setStatusValue(e.target.value)}
             >
-              {KEY_STATUSES.map((s) => (
+              {KMS_SETTABLE_KEY_STATUSES.map((s) => (
                 <option key={s} value={s}>
                   {s}
                 </option>
