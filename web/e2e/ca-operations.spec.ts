@@ -1,6 +1,6 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Request, type Route } from '@playwright/test';
 import { createTenantOwnerSession } from './fixtures/auth-setup';
-import { mockTenantApi, mockCAOperationsApi } from './fixtures/api-mock';
+import { mockTenantApi, mockCAOperationsApi, errorEnvelope } from './fixtures/api-mock';
 
 const CSR_PEM = '-----BEGIN CERTIFICATE REQUEST-----\nCSR\n-----END CERTIFICATE REQUEST-----';
 const CERT_PEM = '-----BEGIN CERTIFICATE-----\nCERT\n-----END CERTIFICATE-----';
@@ -68,6 +68,46 @@ test.describe('CA operations', () => {
     await expect(page.getByText('token lacks scope ca:sign-csr')).toBeVisible();
   });
 
+  test('SignCSR: editing the CSR hides the issued certificate', async ({ page }) => {
+    await mockCAOperationsApi(page);
+    await page.goto('/ca/sign');
+
+    await page.getByLabel('CSR (PEM)').fill(CSR_PEM);
+    await page.getByRole('button', { name: 'Sign CSR' }).click();
+    await expect(page.getByTestId('signed-serial')).toHaveText('0a1b2c');
+
+    await page.getByLabel('CSR (PEM)').fill(`${CSR_PEM}\n# other`);
+    await expect(page.getByTestId('signed-serial')).toHaveCount(0);
+    await expect(page.getByTestId('signed-pem')).toHaveCount(0);
+  });
+
+  test('SignCSR: a refusal after an issued certificate hides the old certificate', async ({ page }) => {
+    await mockCAOperationsApi(page);
+    await page.goto('/ca/sign');
+
+    await page.getByLabel('CSR (PEM)').fill(CSR_PEM);
+    await page.getByRole('button', { name: 'Sign CSR' }).click();
+    await expect(page.getByTestId('signed-serial')).toHaveText('0a1b2c');
+
+    // A later route takes precedence: the next sign request is refused.
+    await page.route('**/api/v1/ca/sign-csr*', async (route: Route, request: Request) => {
+      if (request.method() !== 'POST') {
+        await route.continue();
+        return;
+      }
+      await route.fulfill({
+        status: 403,
+        contentType: 'application/json',
+        body: errorEnvelope({ error: 'token lacks scope ca:sign-csr', status: 403 }),
+      });
+    });
+    await page.getByRole('button', { name: 'Sign CSR' }).click();
+
+    await expect(page.getByText('token lacks scope ca:sign-csr')).toBeVisible();
+    await expect(page.getByTestId('signed-serial')).toHaveCount(0);
+    await expect(page.getByTestId('signed-pem')).toHaveCount(0);
+  });
+
   test('VerifyCertificate: the verify page reports a valid certificate', async ({ page }) => {
     const mock = await mockCAOperationsApi(page);
     await page.goto('/ca/verify');
@@ -78,7 +118,8 @@ test.describe('CA operations', () => {
 
     await expect(page.getByTestId('verify-result')).toHaveText('Certificate is valid');
     await expect(page.getByTestId('verify-chain')).toContainText('0a1b2c');
-    await expect(page.getByTestId('verify-revocation')).toBeVisible();
+    await expect(page.getByTestId('verify-revocation')).toContainText('does not report whether');
+    await expect(page.getByText('Revocation status checked')).toHaveCount(0);
     expect(mock.verifyRequests).toEqual([
       { certificatePem: Buffer.from(CERT_PEM).toString('base64'), verifyRevocation: true },
     ]);
