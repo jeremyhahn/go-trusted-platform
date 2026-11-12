@@ -1580,6 +1580,16 @@ func (c *GatewayConfig) Validate() error {
 		if err := c.FHRP.Validate(); err != nil {
 			return &ErrFHRPConfigInvalid{Cause: err}
 		}
+		// accept-mode false on a non-owner group is enforced by the host
+		// filter's VIP drop rules (RFC 5798 §6.4.3); without hostfw a
+		// master would answer on the VIPs.
+		if c.HostFW == nil || !c.HostFW.Enabled {
+			for _, grp := range c.FHRP.Groups {
+				if !grp.AcceptMode && !fhrpAddressOwner(grp) {
+					return &ErrFHRPConfigInvalid{Cause: fmt.Errorf("group vrid %d: accept-mode false needs hostfw enabled to drop traffic to the virtual addresses (or set accept-mode: true)", grp.VRID)}
+				}
+			}
+		}
 	}
 	return c.validateTunnels()
 }

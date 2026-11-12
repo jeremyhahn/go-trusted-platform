@@ -481,6 +481,7 @@ func buildHostFW(g *Gateway) (backedService, error) {
 			rendered.Tunnels = append(rendered.Tunnels, g.config.Tunnels[i].Name)
 		}
 	}
+	var vipDeny []hostfw.VIPDeny
 	// Every enabled FHRP group's interface carries its peers' VRRP
 	// advertisements; without them a backup never hears the master and
 	// claims the same addresses.
@@ -490,17 +491,38 @@ func buildHostFW(g *Gateway) (backedService, error) {
 				rendered.VRRP = append(rendered.VRRP, f.Groups[i].Interface)
 			}
 		}
+		// accept-mode false (RFC 5798 §6.4.3): a non-owner master holds
+		// the VIPs as local addresses, so the filter drops traffic to
+		// them. The owner always accepts its own address.
+		for i := range f.Groups {
+			grp := f.Groups[i]
+			if grp.AcceptMode || fhrpAddressOwner(grp) {
+				continue
+			}
+			for _, raw := range grp.Addresses {
+				if pfx, err := netip.ParsePrefix(raw); err == nil {
+					vipDeny = append(vipDeny, hostfw.VIPDeny{Interface: grp.Interface, Address: pfx.Addr()})
+				}
+			}
+		}
 	}
 	svc, err := hostfw.New(hostfw.Deps{
 		Applier:   applier,
 		Inventory: inventory,
 		Config:    rendered,
+		VIPDeny:   vipDeny,
 		Logger:    host.Logger,
 	})
 	if err != nil {
 		return nil, &ErrServiceStartFailed{Service: ServiceHostFW, Cause: err}
 	}
 	return hostFWBackend{svc}, nil
+}
+
+// fhrpAddressOwner reports whether the group runs at the address-owner
+// priority 255; priority 0 means the RFC default 100, not the owner.
+func fhrpAddressOwner(grp fhrp.GroupConfig) bool {
+	return grp.Priority == fhrp.PriorityOwner
 }
 
 // fhrpBackend adapts *fhrp.Speaker.

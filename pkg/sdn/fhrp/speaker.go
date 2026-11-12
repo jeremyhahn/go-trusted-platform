@@ -230,8 +230,10 @@ type runner struct {
 	// timer is armed in startGroup, before the run loop exists, so the
 	// first deadline is computed from the same instant Startup used.
 	timer Timer
-	// owned holds the prefixes this runner added itself; Release deletes
-	// only these, so an address found on the interface stays (#1716).
+	// owned holds the prefixes this runner added or adopted; Release
+	// deletes only these. A priority-255 owner's preexisting address is
+	// never in it, so it stays; a non-owner adopts any VIP it finds (one a
+	// crashed master left), so it is released on demotion and Stop (#1716).
 	owned map[netip.Prefix]bool
 }
 
@@ -470,13 +472,17 @@ func (r *runner) Claim(g *Group) error {
 	}
 	reader, _ := r.speaker.deps.Programmer.(AddressReader)
 	for _, p := range g.prefixes {
-		if !r.owned[p] && reader != nil {
+		// Only a priority-255 address owner holds a VIP as its own
+		// permanent address. For any other group a VIP already on the
+		// interface is one a crashed master left behind: adopt it
+		// (AddAddress replaces idempotently) so it is released later.
+		if !r.owned[p] && reader != nil && g.Priority() == PriorityOwner {
 			present, err := reader.HasAddress(g.cfg.Interface, p)
 			if err != nil {
 				return &ErrAddressOperationFailed{VRID: g.cfg.VRID, Interface: g.cfg.Interface, Operation: "list", Address: p, Cause: err}
 			}
 			if present {
-				// Preexisting, not ours: leave it to its owner.
+				// The owner's preexisting address: leave it in place.
 				continue
 			}
 		}
@@ -499,7 +505,8 @@ func (r *runner) Release(g *Group) error {
 	var first error
 	_, reads := r.speaker.deps.Programmer.(AddressReader)
 	for _, p := range g.prefixes {
-		// A preexisting prefix is never ours to delete. Without an
+		// The owner's preexisting prefix is never ours to delete (Claim
+		// adopts a stale VIP for any other group). Without an
 		// AddressReader every prefix counts as owned, as before.
 		if reads && !r.owned[p] {
 			continue

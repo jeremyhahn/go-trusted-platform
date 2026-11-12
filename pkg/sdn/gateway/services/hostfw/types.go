@@ -65,13 +65,17 @@ const (
 	// PortBFD is the UDP port allowed on tunnel interfaces for single-hop BFD.
 	PortBFD uint16 = 3784
 
-	ipProtoGRE      uint8 = 47
-	ipProtoESP      uint8 = 50
-	ipProtoVRRP     uint8 = 112
-	ipProtoTCP      uint8 = 6
-	ipProtoUDP      uint8 = 17
-	ipProtoICMP     uint8 = 1
-	ipProtoIPv6ICMP uint8 = 58
+	ipProtoGRE  uint8 = 47
+	ipProtoESP  uint8 = 50
+	ipProtoVRRP uint8 = 112
+	// icmpv6NeighborSolicit and icmpv6NeighborAdvert stay answered on an
+	// accept-mode-off virtual address.
+	icmpv6NeighborSolicit uint8 = 135
+	icmpv6NeighborAdvert  uint8 = 136
+	ipProtoTCP            uint8 = 6
+	ipProtoUDP            uint8 = 17
+	ipProtoICMP           uint8 = 1
+	ipProtoIPv6ICMP       uint8 = 58
 
 	// Neighbour-discovery ICMPv6 types (RFC 4861): router solicitation
 	// through redirect. Without them an IPv6 host cannot resolve anything.
@@ -129,6 +133,20 @@ type Ruleset struct {
 	Unfiltered []string
 	// ICMP bounds ICMP and ICMPv6 (other than neighbour discovery).
 	ICMP RateLimit
+	// VIPDeny are FHRP virtual addresses held with accept-mode off (RFC
+	// 5798 §6.4.3): traffic addressed to them is dropped on their
+	// interface. The gateway derives them from its FHRP groups; they are
+	// not operator configuration.
+	VIPDeny []VIPDeny
+}
+
+// VIPDeny drops input traffic to a virtual address on an interface; IPv6
+// neighbour discovery to it stays answered.
+type VIPDeny struct {
+	// Interface is the FHRP interface carrying the virtual address.
+	Interface string
+	// Address is the virtual address.
+	Address netip.Addr
 }
 
 // ListenerInventory is what gatewayd and platformd implement: the sockets
@@ -233,6 +251,14 @@ func (rs Ruleset) Validate() error {
 			return &ValidationError{Field: "unfiltered", Index: i, Err: err}
 		}
 	}
+	for i, v := range rs.VIPDeny {
+		if err := validateInterface(v.Interface, false); err != nil {
+			return &ValidationError{Field: "vip-deny", Index: i, Err: err}
+		}
+		if !v.Address.IsValid() || v.Address.IsUnspecified() {
+			return &ValidationError{Field: "vip-deny", Index: i, Err: ErrInvalidAddress}
+		}
+	}
 	return nil
 }
 
@@ -266,6 +292,13 @@ func (rs Ruleset) normalized() Ruleset {
 	sort.Strings(out.Tunnels)
 	sort.Strings(out.Unfiltered)
 	sort.Strings(out.VRRP)
+	out.VIPDeny = append([]VIPDeny(nil), rs.VIPDeny...)
+	sort.SliceStable(out.VIPDeny, func(i, j int) bool {
+		if out.VIPDeny[i].Interface != out.VIPDeny[j].Interface {
+			return out.VIPDeny[i].Interface < out.VIPDeny[j].Interface
+		}
+		return out.VIPDeny[i].Address.Less(out.VIPDeny[j].Address)
+	})
 	return out
 }
 

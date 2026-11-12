@@ -205,6 +205,22 @@ func buildExprs(r Rule, icmp RateLimit) ([]expr.Any, error) {
 	case RuleVRRP:
 		e = append(e, exprL4Proto(ipProtoVRRP)...)
 		e = append(e, accept())
+	case RuleVIPDeny:
+		e = append(e, exprNFProto(r.Family)...)
+		e = append(e, exprDaddr(r.Destination)...)
+		if r.Family == 6 {
+			e = append(e, exprNotL4Proto(ipProtoIPv6ICMP)...)
+		}
+		e = append(e, drop())
+	case RuleVIPDenyICMPv6:
+		e = append(e, exprNFProto(6)...)
+		e = append(e, exprDaddr(r.Destination)...)
+		e = append(e, exprL4Proto(ipProtoIPv6ICMP)...)
+		e = append(e,
+			&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 0, Len: 1},
+			&expr.Cmp{Op: expr.CmpOpNeq, Register: 1, Data: []byte{icmpv6NeighborSolicit}},
+			&expr.Cmp{Op: expr.CmpOpNeq, Register: 1, Data: []byte{icmpv6NeighborAdvert}},
+			drop())
 	default:
 		return nil, ErrUnknownProtocol
 	}
@@ -298,5 +314,17 @@ func exprSaddrPrefix(p netip.Prefix) []expr.Any {
 		&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: offset, Len: length},
 		&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: length, Mask: mask, Xor: make([]byte, length)},
 		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: raw},
+	}
+}
+
+// exprDaddr matches the destination address exactly.
+func exprDaddr(a netip.Addr) []expr.Any {
+	var offset, length uint32 = 16, 4
+	if a.Is6() {
+		offset, length = 24, 16
+	}
+	return []expr.Any{
+		&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: offset, Len: length},
+		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: a.AsSlice()},
 	}
 }

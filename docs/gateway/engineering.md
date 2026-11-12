@@ -832,7 +832,7 @@ families in one group (one group per family), a missing or wrong-family
 | `groups[].priority` | 1–255 | `100` | 255 = address owner (master at once); otherwise the election priority |
 | `groups[].advert-interval-cs` | 1–4095 | `100` | Master_Adver_Interval in centiseconds |
 | `groups[].preempt` | bool | `true` | A higher-priority backup takes over a lower-priority master |
-| `groups[].accept-mode` | bool | `false` | Master answers packets addressed to virtual addresses it does not own |
+| `groups[].accept-mode` | bool | `false` | Master answers packets addressed to virtual addresses it does not own. `false` on a group below priority 255 is enforced by hostfw drop rules for the virtual addresses (IPv6 neighbour discovery still answered), so it needs `hostfw.enabled: true`; the gateway refuses the config otherwise (set `accept-mode: true` instead) |
 | `groups[].addresses[]` | `addr/len` | — | Virtual addresses, one family per group |
 | `groups[].source` | address | — | Source of advertisements and the §6.4.3 tie-breaker; an address of `interface` in the group's family |
 

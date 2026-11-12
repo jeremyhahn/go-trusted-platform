@@ -594,8 +594,12 @@ func TestSpeaker_AdoptsAStaleVIPAfterRestart(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, s.Start(context.Background()))
 		defer func() { _ = s.Stop(context.Background()) }()
+		// Consume the startup Backup transition so the demotion wait below
+		// cannot match it.
+		sink.await(t, func(ev Event) bool { return ev.Kind == EventTransition && ev.Status.State == StateBackup })
 		clock.Advance(3600 * time.Millisecond)
 		sink.await(t, func(ev Event) bool { return ev.Kind == EventTransition && ev.Status.State == StateMaster })
+		<-prog.claimed
 
 		progHigh := newFakeProgrammer()
 		high, err := New(speakerConfig(PriorityOwner, "10.4.200.2"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: progHigh, Clock: clock, Logger: quietLogger()})
