@@ -117,6 +117,7 @@ export function TPMKeyOperations({ onChanged }: { onChanged?: () => void }) {
   const [ekCertificate, setEkCertificate] = React.useState("");
   const [pcrList, setPcrList] = React.useState("0,1,7");
   const [certifyHandle, setCertifyHandle] = React.useState(DEFAULT_SRK_HANDLE);
+  const [certifyKeyPassword, setCertifyKeyPassword] = React.useState("");
   const [confirm, setConfirm] = React.useState<PendingConfirm | null>(null);
 
   // The nonce is kept with the quote it produced: a later failed attempt
@@ -170,7 +171,12 @@ export function TPMKeyOperations({ onChanged }: { onChanged?: () => void }) {
     setConfirm({
       op,
       title: `Delete ${label}?`,
-      description: `The ${label} at handle ${raw} is evicted from the TPM. This cannot be undone.`,
+      // DeleteAK names the platform IAK, which the server never evicts: the
+      // request is still sent so the operator sees its refusal (#1751).
+      description:
+        op === "deleteAK"
+          ? `The server refuses to evict the platform Attestation Key at handle ${raw}: it is the device identity key. The request is sent and its refusal is shown.`
+          : `The ${label} at handle ${raw} is evicted from the TPM. This cannot be undone.`,
       call,
     });
   };
@@ -208,7 +214,15 @@ export function TPMKeyOperations({ onChanged }: { onChanged?: () => void }) {
   const runCertify = () => {
     const handle = handleOrToast("certify", certifyHandle);
     if (handle === null) return;
-    void execute("certify", (c) => c.certify({ keyHandle: handle, nonce: randomNonce() }));
+    // The target key's authValue: TPM2_Certify needs it for a
+    // password-protected key (#1751).
+    void execute("certify", (c) =>
+      c.certify({
+        keyHandle: handle,
+        nonce: randomNonce(),
+        ...(certifyKeyPassword ? { keyPassword: certifyKeyPassword } : {}),
+      }),
+    );
   };
 
   const opButton = (op: TPMKeyOperation, label: string, onClick: () => void, opts: { destructive?: boolean; disabled?: boolean } = {}) => (
@@ -355,6 +369,13 @@ export function TPMKeyOperations({ onChanged }: { onChanged?: () => void }) {
           <div className="grid gap-2 max-w-sm">
             <Label htmlFor="tpm-certify-handle">Key handle to certify</Label>
             <Input id="tpm-certify-handle" value={certifyHandle} onChange={(e) => setCertifyHandle(e.target.value)} />
+            <Label htmlFor="tpm-certify-key-password">Key password (optional)</Label>
+            <Input
+              id="tpm-certify-key-password"
+              type="password"
+              value={certifyKeyPassword}
+              onChange={(e) => setCertifyKeyPassword(e.target.value)}
+            />
             <div>{opButton("certify", "Certify", runCertify)}</div>
           </div>
           {outcome("createEK")}
@@ -369,7 +390,9 @@ export function TPMKeyOperations({ onChanged }: { onChanged?: () => void }) {
       <Card>
         <CardHeader>
           <CardTitle>Attestation Key and Quotes</CardTitle>
-          <CardDescription>Create, read and delete the AK; quote PCRs and verify the quote</CardDescription>
+          <CardDescription>
+            Create and read the AK; quote PCRs and verify the quote. The server refuses to evict the platform AK (IAK).
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="grid gap-2 md:grid-cols-2">

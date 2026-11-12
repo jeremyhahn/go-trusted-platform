@@ -753,7 +753,16 @@ export const defaultTPMKeyReplies: Record<string, TPMKeyOperationReply> = {
   [`DELETE /srk/${0x81000001}`]: { body: { status: { code: 0, message: 'srk deleted' } } },
   'POST /ak': { status: 201, body: { handle: 0x81010002, publicKey: 'QUs=' } },
   'GET /ak': { body: { handle: 0x81010002, publicKey: 'QUs=', algorithm: 'ECDSA_P256' } },
-  [`DELETE /ak/${0x81010002}`]: { body: { status: { code: 0, message: 'ak deleted' } } },
+  // TPMGRPCService.DeleteAK always refuses: the handle names the platform
+  // IAK (ErrDeviceIdentityKeyNotDeletable), which REST maps to 409.
+  [`DELETE /ak/${0x81010002}`]: {
+    status: 409,
+    body: {
+      message:
+        'idevid: the IAK key is TPM-resident and is not evicted by this service; nothing was deleted (delete its certificate with DeleteIAKCertificate)',
+      code: 'HTTP_409',
+    },
+  },
   'POST /quote': {
     body: { quote: 'cXVvdGU=', signature: 'c2ln', signatureAlgorithm: 'ECDSA-SHA256', channelBinding: 'Y2I=' },
   },

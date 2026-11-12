@@ -409,6 +409,11 @@ export type {
   ReadNVRAMResponse,
   UndefineNVRAMResponse,
   GetRandomResponse,
+  TPMCapabilitiesResponse,
+  TPMKeyRef,
+  TPMPlatformAttributesResponse,
+  CertifyRequest,
+  CertifyResponse,
 } from './types/tpm.js';
 
 // Device values: the server's network phase selector defaults and their resolver
