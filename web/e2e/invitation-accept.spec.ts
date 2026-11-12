@@ -64,12 +64,12 @@ test.describe("Invitation accept flow", () => {
     await expect(page.getByTestId("invite-accept")).toHaveCount(0);
   });
 
-  test("AcceptInvitation: accept behind a confirm dialog posts the token", async ({ page }) => {
+  test("AcceptInvitation: accept behind a confirm dialog posts the token and user_id", async ({ page }) => {
+    await createTenantOwnerSession(page.context(), { userId: "invitee-user-1" });
     const inv = createMockInvitation({ id: "inv-acc-1", token: "tok-accept" });
     const mock = await mockInvitationLookupApi(page, { invitations: [inv] });
 
     await page.goto("/invite/?token=tok-accept");
-    await page.getByLabel("Your name (optional)").fill("Ada");
     await page.getByTestId("invite-accept").click();
 
     // Cancelling the dialog posts nothing.
@@ -82,11 +82,28 @@ test.describe("Invitation accept flow", () => {
     await page.getByTestId("invite-confirm").click();
 
     await expect(page.getByTestId("invite-accepted")).toHaveText("Invitation accepted");
-    expect(mock.acceptBodies()).toEqual([{ token: "tok-accept", name: "Ada" }]);
+    expect(mock.acceptBodies()).toEqual([{ token: "tok-accept", user_id: "invitee-user-1" }]);
     await expect(page.getByTestId("invite-accept")).toHaveCount(0);
   });
 
+  test("AcceptInvitation: signed out, the page links to sign-in and posts nothing", async ({ page }) => {
+    const inv = createMockInvitation({ id: "inv-acc-3", token: "tok-signin" });
+    const mock = await mockInvitationLookupApi(page, { invitations: [inv] });
+
+    await page.goto("/invite/?token=tok-signin");
+
+    const signIn = page.getByTestId("invite-sign-in");
+    await expect(signIn).toBeVisible();
+    await expect(signIn).toHaveAttribute(
+      "href",
+      `/auth/login/?redirect=${encodeURIComponent("/invite/?token=tok-signin")}`
+    );
+    await expect(page.getByTestId("invite-accept")).toHaveCount(0);
+    expect(mock.acceptBodies()).toHaveLength(0);
+  });
+
   test("AcceptInvitation: a refused accept shows the error", async ({ page }) => {
+    await createTenantOwnerSession(page.context());
     const inv = createMockInvitation({ id: "inv-acc-2", token: "tok-refused" });
     await mockInvitationLookupApi(page, {
       invitations: [inv],

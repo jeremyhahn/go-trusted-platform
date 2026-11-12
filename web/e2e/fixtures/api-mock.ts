@@ -808,6 +808,15 @@ export async function mockOverlayApi(
  *
  * @returns the accept request bodies the page posted
  */
+/** The gateway's REST envelope around a GetInvitation(ByToken) response. */
+function invitationEnvelope(invitation: object): string {
+  return JSON.stringify({
+    code: 200,
+    success: true,
+    payload: { invitation, timestamp: new Date().toISOString() },
+  });
+}
+
 export async function mockInvitationLookupApi(
   page: Page,
   options: {
@@ -841,6 +850,12 @@ export async function mockInvitationLookupApi(
       }
       const body = (request.postDataJSON() || {}) as Record<string, unknown>;
       accepted.push(body);
+      // AcceptInvitationRequest is {token, user_id}: the server rejects a
+      // request without user_id.
+      if (typeof body.user_id !== 'string' || body.user_id === '') {
+        await fail(route, { error: 'user_id is required', status: 400 });
+        return;
+      }
       const inv = invitations.find((i) => i.token === body.token);
       if (!inv) {
         await fail(route, { error: 'Invitation not found', status: 404 });
@@ -874,8 +889,11 @@ export async function mockInvitationLookupApi(
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({
-          invitation: { ...inv, tenant_name: options.tenantName || 'Invited Workspace' },
+        // The REST envelope; the status is the protobuf enum string.
+        body: invitationEnvelope({
+          ...inv,
+          status: `INVITATION_STATUS_${inv.status.toUpperCase()}`,
+          tenant_name: options.tenantName || 'Invited Workspace',
         }),
       });
       return;
@@ -896,7 +914,7 @@ export async function mockInvitationLookupApi(
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ invitation: inv }),
+        body: invitationEnvelope(inv),
       });
       return;
     }
