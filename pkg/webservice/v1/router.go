@@ -199,6 +199,7 @@ func (v1Router *Router) RegisterRoutes(router *mux.Router) {
 	v1Router.webAuthnRoutes()
 	v1Router.acmeRoutes()
 	v1Router.attestationRoutes()
+	v1Router.bmcRoutes()
 	v1Router.caRoutes()
 	// computeImagesRoutes MUST register before computeRoutes: mux matches
 	// in registration order, and when compute is unconfigured its
@@ -705,6 +706,18 @@ func (v1Router *Router) computeImagesRoutes() {
 			r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 		},
 	)
+}
+
+// bmcRoutes mounts the BMC management surface on the console router,
+// admin-gated (#1720). A daemon without a BMC service mounts nothing.
+func (v1Router *Router) bmcRoutes() {
+	h := v1Router.restHandlerRegistry.BMCRestHandler()
+	if h == nil {
+		v1Router.logger.Debug("BMC REST handler is nil - BMC routes not registered")
+		return
+	}
+	// Remote power, boot and media control of the host.
+	router.NewBMCRouter(h).RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 }
 
 func (v1Router *Router) eabRoutes() {

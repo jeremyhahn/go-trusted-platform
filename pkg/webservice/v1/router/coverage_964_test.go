@@ -197,7 +197,8 @@ func TestCov964BMCRouter_RejectsWrongMethodAndBadPath(t *testing.T) {
 		{"privilege post", http.MethodPost, "/bmc/7/users/3/privilege", http.StatusMethodNotAllowed},
 		{"non-numeric profile", http.MethodGet, "/bmc/abc/power", http.StatusNotFound},
 		{"non-numeric slot", http.MethodDelete, "/bmc/7/users/admin", http.StatusNotFound},
-		{"enroll not mounted", http.MethodPost, "/bmc/7/enroll", http.StatusNotFound},
+		{"enroll get", http.MethodGet, "/bmc/7/enroll", http.StatusMethodNotAllowed},
+		{"cert restore get", http.MethodGet, "/bmc/7/cert/restore", http.StatusMethodNotAllowed},
 	}
 
 	for _, tt := range tests {

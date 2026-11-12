@@ -30,11 +30,10 @@ type BMCRouter struct {
 //
 // # The caller MUST pass a gated router (#237)
 //
-// This router is currently unreferenced: nothing in
-// pkg/webservice/v1/router.go registers it, and the live BMC surface is
-// served by pkg/api/daemon.RESTServer (#232). Whoever wires it into the
-// webservice — most likely while moving BMC off that server — must register
-// it on an AUTHENTICATED, role-gated router:
+// v1Router.bmcRoutes in pkg/webservice/v1/router.go mounts this router on
+// the console listener (#1720); the daemon RESTServer mounts the same
+// handler when it runs (#232). It must stay on an AUTHENTICATED, role-gated
+// router:
 //
 //	bmcRouter.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 //
@@ -96,7 +95,15 @@ func (r *BMCRouter) RegisterRoutes(router *mux.Router) {
 	// GET /api/v1/bmc/{profileID}/provision - Get provisioning status
 	router.HandleFunc("/bmc/{profileID:[0-9]+}/provision", r.handler.ProvisionStatus).Methods("GET")
 
+	// Enrollment
+	// POST /api/v1/bmc/{profileID}/enroll - Enroll the BMC with the platform CA
+	router.HandleFunc("/bmc/{profileID:[0-9]+}/enroll", r.handler.EnrollBMC).Methods("POST")
+
 	// Certificate management
+	// POST /api/v1/bmc/{profileID}/cert/restore - Restore the BMC web certificate.
+	// Registered before the /cert routes, as the daemon REST server does.
+	router.HandleFunc("/bmc/{profileID:[0-9]+}/cert/restore", r.handler.RestoreBMC).Methods("POST")
+
 	// GET /api/v1/bmc/{profileID}/cert - Get web TLS certificate metadata
 	router.HandleFunc("/bmc/{profileID:[0-9]+}/cert", r.handler.GetWebCertificate).Methods("GET")
 
