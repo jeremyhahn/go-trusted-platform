@@ -446,6 +446,126 @@ export async function mockHealthApi(
 }
 
 /**
+ * BMC API mock (#1736): the `/api/v1/bmc/{profileID}/...` routes with the
+ * platform envelope. Mutations change the state the next read returns, and
+ * every mutating request is recorded in order.
+ */
+export interface BmcApiMockState {
+  power: { state: string };
+  bootDevice: { device: string; persistent?: boolean };
+  virtualMedia: { inserted: boolean; image?: string };
+  sensors: Array<{ name: string; reading: number; units?: string; status?: string }>;
+  systemInfo: Record<string, string>;
+  provision: { state: string; message?: string };
+  certificate: { certificate: string; subject?: string; not_after?: string };
+}
+
+export interface BmcApiMockRequest {
+  method: string;
+  op: string;
+  body: unknown;
+}
+
+export interface BmcApiMockConfig {
+  state?: Partial<BmcApiMockState>;
+  /** Answers every request to this op with the error */
+  errors?: Record<string, ApiError>;
+}
+
+export async function mockBmcApi(
+  page: Page,
+  config: BmcApiMockConfig = {}
+): Promise<{ state: BmcApiMockState; requests: BmcApiMockRequest[] }> {
+  const state: BmcApiMockState = {
+    power: { state: 'On' },
+    bootDevice: { device: 'disk', persistent: true },
+    virtualMedia: { inserted: false },
+    sensors: [
+      { name: 'CPU1 Temp', reading: 54, units: 'C', status: 'OK' },
+      { name: 'Fan1', reading: 7200, units: 'RPM', status: 'OK' },
+    ],
+    systemInfo: {
+      manufacturer: 'Dell Inc.',
+      model: 'PowerEdge R640',
+      serial_number: 'SN-R640-01',
+      bios_version: '2.19.1',
+      bmc_firmware: '7.00.00',
+    },
+    provision: { state: 'unprovisioned' },
+    certificate: {
+      certificate: '-----BEGIN CERTIFICATE-----\nMIIBbmcweb\n-----END CERTIFICATE-----\n',
+      subject: 'CN=idrac-r640-01',
+      not_after: '2027-11-12T00:00:00Z',
+    },
+    ...config.state,
+  };
+  const requests: BmcApiMockRequest[] = [];
+
+  const ok = (payload: unknown) => ({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ code: 200, success: true, payload }),
+  });
+
+  await page.route('**/api/v1/bmc/*/*', async (route: Route, request: Request) => {
+    const segments = new URL(request.url()).pathname.split('/').filter(Boolean);
+    const op = segments[segments.length - 1];
+    const method = request.method();
+    const error = config.errors?.[op];
+    if (error) {
+      await route.fulfill({ status: error.status, contentType: 'application/json', body: errorEnvelope(error) });
+      return;
+    }
+    if (method !== 'GET') {
+      requests.push({ method, op, body: request.postData() ? request.postDataJSON() : null });
+    }
+    switch (`${method} ${op}`) {
+      case 'GET power':
+        await route.fulfill(ok(state.power));
+        return;
+      case 'GET boot-device':
+        await route.fulfill(ok(state.bootDevice));
+        return;
+      case 'POST boot-device':
+        state.bootDevice = request.postDataJSON() as BmcApiMockState['bootDevice'];
+        await route.fulfill(ok({ success: true }));
+        return;
+      case 'GET virtual-media':
+        await route.fulfill(ok(state.virtualMedia));
+        return;
+      case 'POST virtual-media':
+        state.virtualMedia = { inserted: true, image: (request.postDataJSON() as { image: string }).image };
+        await route.fulfill(ok({ success: true }));
+        return;
+      case 'DELETE virtual-media':
+        state.virtualMedia = { inserted: false };
+        await route.fulfill(ok({ success: true }));
+        return;
+      case 'GET sensors':
+        await route.fulfill(ok({ sensors: state.sensors }));
+        return;
+      case 'GET system-info':
+        await route.fulfill(ok(state.systemInfo));
+        return;
+      case 'GET provision':
+        await route.fulfill(ok(state.provision));
+        return;
+      case 'POST provision':
+        state.provision = { state: 'provisioning', message: 'started' };
+        await route.fulfill(ok({ success: true }));
+        return;
+      case 'GET cert':
+        await route.fulfill(ok(state.certificate));
+        return;
+      default:
+        await route.fulfill({ status: 404, contentType: 'application/json', body: errorEnvelope({ status: 404, error: `no route ${method} ${op}` }) });
+    }
+  });
+
+  return { state, requests };
+}
+
+/**
  * Mock all common API endpoints with default configurations.
  *
  * @param page - Playwright page object
