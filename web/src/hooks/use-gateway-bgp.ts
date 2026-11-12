@@ -19,8 +19,16 @@ export interface GatewayAnnouncedPrefix {
 export interface GatewayIPAllocation {
   ip: string;
   poolId: string;
+  deviceId: string;
   hostname: string;
   status: string;
+}
+
+/** The load error of each page section, null when that section loaded. */
+export interface GatewayBgpErrors {
+  peers: string | null;
+  prefixes: string | null;
+  allocations: string | null;
 }
 
 export interface UseGatewayBgpResult {
@@ -28,15 +36,21 @@ export interface UseGatewayBgpResult {
   prefixes: GatewayAnnouncedPrefix[];
   allocations: GatewayIPAllocation[];
   isLoading: boolean;
-  error: string | null;
+  errors: GatewayBgpErrors;
   refetch: () => Promise<void>;
   announcePrefix: (prefix: string, nextHop: string) => Promise<void>;
   withdrawPrefix: (prefix: string) => Promise<void>;
-  allocateIP: (poolId: string, hostname: string) => Promise<GatewayIPAllocation | null>;
+  allocateIP: (
+    poolId: string,
+    deviceId: string,
+    hostname: string
+  ) => Promise<GatewayIPAllocation | null>;
   releaseIP: (ip: string) => Promise<void>;
 }
 
 const BASE = '/api/v1/gateway';
+
+const NO_ERRORS: GatewayBgpErrors = { peers: null, prefixes: null, allocations: null };
 
 type Raw = Record<string, unknown>;
 
@@ -63,6 +77,18 @@ function list(body: unknown, key: string): Raw[] {
   return [];
 }
 
+/**
+ * The web service wraps every response in {code, success, error, payload};
+ * return the payload. A body without the envelope is returned unchanged.
+ */
+export function unwrapPayload(body: unknown): unknown {
+  if (body && typeof body === 'object' && !Array.isArray(body)) {
+    const o = body as Raw;
+    if ('payload' in o || typeof o.success === 'boolean') return o.payload;
+  }
+  return body;
+}
+
 export function toPeer(r: Raw): GatewayBGPPeer {
   return {
     address: str(r.address),
@@ -80,6 +106,7 @@ export function toAllocation(r: Raw): GatewayIPAllocation {
   return {
     ip: str(r.ip),
     poolId: str(field(r, 'poolId', 'pool_id')),
+    deviceId: str(field(r, 'deviceId', 'device_id')),
     hostname: str(r.hostname),
     status: str(r.status),
   };
@@ -107,31 +134,44 @@ async function call(path: string, init?: RequestInit): Promise<unknown> {
         : '';
     throw new Error(msg || `request failed with status ${res.status}`);
   }
-  return body;
+  return unwrapPayload(body);
 }
 
 /**
  * The gateway's BGP peers, announced prefixes and IPAM allocations, with the
  * four mutations the web service routes: announce and withdraw a prefix,
  * allocate and release an IP. The web service takes the withdraw prefix and
- * the release IP as query parameters.
+ * the release IP as query parameters. Each section loads on its own: a node
+ * with IPAM but no BGP speaker (or the reverse) still shows what it has.
  */
 interface GatewayBgpData {
   peers: GatewayBGPPeer[];
   prefixes: GatewayAnnouncedPrefix[];
   allocations: GatewayIPAllocation[];
+  errors: GatewayBgpErrors;
+}
+
+function reason(r: PromiseRejectedResult): string {
+  const e: unknown = r.reason;
+  return e instanceof Error ? e.message : String(e);
 }
 
 async function fetchGatewayBgp(): Promise<GatewayBgpData> {
-  const [p, x, a] = await Promise.all([
+  const [p, x, a] = await Promise.allSettled([
     call('/bgp/peers'),
     call('/bgp/prefixes'),
     call('/ipam/allocations'),
   ]);
   return {
-    peers: list(p, 'peers').map(toPeer),
-    prefixes: list(x, 'prefixes').map(toPrefix),
-    allocations: list(a, 'allocations').map(toAllocation),
+    peers: p.status === 'fulfilled' ? list(p.value, 'peers').map(toPeer) : [],
+    prefixes: x.status === 'fulfilled' ? list(x.value, 'prefixes').map(toPrefix) : [],
+    allocations:
+      a.status === 'fulfilled' ? list(a.value, 'allocations').map(toAllocation) : [],
+    errors: {
+      peers: p.status === 'rejected' ? reason(p) : null,
+      prefixes: x.status === 'rejected' ? reason(x) : null,
+      allocations: a.status === 'rejected' ? reason(a) : null,
+    },
   };
 }
 
@@ -140,45 +180,31 @@ export function useGatewayBgp(): UseGatewayBgpResult {
   const [prefixes, setPrefixes] = React.useState<GatewayAnnouncedPrefix[]>([]);
   const [allocations, setAllocations] = React.useState<GatewayIPAllocation[]>([]);
   const [isLoading, setIsLoading] = React.useState(true);
-  const [error, setError] = React.useState<string | null>(null);
+  const [errors, setErrors] = React.useState<GatewayBgpErrors>(NO_ERRORS);
 
   const apply = React.useCallback((d: GatewayBgpData) => {
     setPeers(d.peers);
     setPrefixes(d.prefixes);
     setAllocations(d.allocations);
-    setError(null);
-    setIsLoading(false);
-  }, []);
-
-  const fail = React.useCallback((e: unknown) => {
-    setError(e instanceof Error ? e.message : String(e));
+    setErrors(d.errors);
     setIsLoading(false);
   }, []);
 
   const refetch = React.useCallback(async () => {
     setIsLoading(true);
-    try {
-      apply(await fetchGatewayBgp());
-    } catch (e) {
-      fail(e);
-    }
-  }, [apply, fail]);
+    apply(await fetchGatewayBgp());
+  }, [apply]);
 
-  // The mount fetch sets state only from the promise's callbacks.
+  // The mount fetch sets state only from the promise's callback.
   React.useEffect(() => {
     let live = true;
-    fetchGatewayBgp().then(
-      (d) => {
-        if (live) apply(d);
-      },
-      (e: unknown) => {
-        if (live) fail(e);
-      }
-    );
+    void fetchGatewayBgp().then((d) => {
+      if (live) apply(d);
+    });
     return () => {
       live = false;
     };
-  }, [apply, fail]);
+  }, [apply]);
 
   const announcePrefix = React.useCallback(
     async (prefix: string, nextHop: string) => {
@@ -200,10 +226,10 @@ export function useGatewayBgp(): UseGatewayBgpResult {
   );
 
   const allocateIP = React.useCallback(
-    async (poolId: string, hostname: string) => {
+    async (poolId: string, deviceId: string, hostname: string) => {
       const body = await call('/ipam/allocations', {
         method: 'POST',
-        body: JSON.stringify({ pool_id: poolId, hostname }),
+        body: JSON.stringify({ pool_id: poolId, device_id: deviceId, hostname }),
       });
       await refetch();
       const alloc = body && typeof body === 'object' ? (body as Raw).allocation : undefined;
@@ -225,7 +251,7 @@ export function useGatewayBgp(): UseGatewayBgpResult {
     prefixes,
     allocations,
     isLoading,
-    error,
+    errors,
     refetch,
     announcePrefix,
     withdrawPrefix,
