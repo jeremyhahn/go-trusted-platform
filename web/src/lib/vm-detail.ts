@@ -1,4 +1,4 @@
-import type { VM } from 'trusted-platform-sdk';
+import type { VerifyVMAttestationResponse, VM } from 'trusted-platform-sdk';
 import type { VMDetail } from '@/types/infrastructure';
 import { vmStatus } from '@/lib/compute-state';
 
@@ -53,4 +53,22 @@ export function toVMDetail(vm: VM): VMDetail {
       networkOutMbps: 0,
     },
   };
+}
+
+
+/**
+ * VM_PCRS_NOT_APPRAISED is shown under every VM verification verdict: the
+ * page sends no expected PCRs (the platform has no trusted reference values
+ * for a VM), and VerifyVMAttestation then treats the PCRs as valid.
+ */
+export const VM_PCRS_NOT_APPRAISED =
+  'Boot measurements (PCRs) were not appraised: no reference values were supplied.';
+
+/**
+ * vmVerifyHeadline names what a VerifyVMAttestation verdict checked: the
+ * quote signature and nonce only. It never claims a full attestation,
+ * whatever actualPcrs holds.
+ */
+export function vmVerifyHeadline(result: VerifyVMAttestationResponse): string {
+  return result.verified ? 'Quote signature and nonce verified' : 'Attestation not verified';
 }

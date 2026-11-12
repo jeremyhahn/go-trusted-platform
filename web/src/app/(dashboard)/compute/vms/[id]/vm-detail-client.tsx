@@ -40,7 +40,7 @@ import {
 import { VMMetricsCard } from '@/components/features/compute/vm-metrics';
 import { useCompute, useMutation, useToast, type MutationError } from '@/hooks';
 import type { VMDetail } from '@/types/infrastructure';
-import { toVMDetail } from '@/lib/vm-detail';
+import { toVMDetail, VM_PCRS_NOT_APPRAISED, vmVerifyHeadline } from '@/lib/vm-detail';
 
 const statusColors = {
   running: 'bg-green-500/10 text-green-500 border-green-500/20',
@@ -62,16 +62,21 @@ export default function VMDetailPage() {
   const verifyAttestation = useVMAttestationVerify(vmId);
   const [verifyConfirmOpen, setVerifyConfirmOpen] = useState(false);
   const [verifyResult, setVerifyResult] = useState<VerifyVMAttestationResponse | null>(null);
+  const [verifyError, setVerifyError] = useState<string | null>(null);
 
   const handleVerifyAttestation = async () => {
     setVerifyConfirmOpen(false);
     setActionLoading(true);
+    setVerifyResult(null);
+    setVerifyError(null);
     try {
       setVerifyResult(await verifyAttestation());
     } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      setVerifyError(message);
       toast({
         title: 'Error',
-        description: `Failed to verify VM attestation: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        description: `Failed to verify VM attestation: ${message}`,
         variant: 'destructive',
       });
     } finally {
@@ -425,17 +430,24 @@ export default function VMDetailPage() {
         <VMMetricsCard metrics={vm.metrics} />
       </div>
 
-      {verifyResult && (
+      {(verifyResult || verifyError) && (
         <Card data-testid="vm-verify-result">
           <CardHeader>
             <CardTitle>Attestation Verification</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
-            <p className="font-medium">
-              {verifyResult.verified ? 'Attestation verified' : 'Attestation not verified'}
-            </p>
-            {verifyResult.message && (
-              <p className="text-muted-foreground">{verifyResult.message}</p>
+            {verifyError ? (
+              <p className="font-medium text-destructive">Verification failed: {verifyError}</p>
+            ) : (
+              verifyResult && (
+                <>
+                  <p className="font-medium">{vmVerifyHeadline(verifyResult)}</p>
+                  <p className="text-muted-foreground">{VM_PCRS_NOT_APPRAISED}</p>
+                  {verifyResult.message && (
+                    <p className="text-muted-foreground">{verifyResult.message}</p>
+                  )}
+                </>
+              )
             )}
           </CardContent>
         </Card>
@@ -446,7 +458,8 @@ export default function VMDetailPage() {
           <DialogHeader>
             <DialogTitle>Verify VM attestation?</DialogTitle>
             <DialogDescription>
-              This requests a fresh TPM quote from {vm.name} and verifies it.
+              This requests a fresh TPM quote from {vm.name} and verifies it. It checks the quote
+              signature and nonce; boot measurements are not compared with reference values.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

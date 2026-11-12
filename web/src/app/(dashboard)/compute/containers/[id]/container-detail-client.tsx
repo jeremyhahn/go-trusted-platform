@@ -57,12 +57,17 @@ export default function ContainerDetailPage() {
   const [busy, setBusy] = useState(false);
   const [execResult, setExecResult] = useState<ExecContainerResponse | null>(null);
   const [attestResult, setAttestResult] = useState<AttestContainerResponse | null>(null);
+  const [attestError, setAttestError] = useState<string | null>(null);
 
   const runPending = async () => {
     const action = pending;
     setPending(null);
     if (!action) return;
     setBusy(true);
+    if (action === 'attest') {
+      setAttestResult(null);
+      setAttestError(null);
+    }
     try {
       if (action === 'exec') {
         setExecResult(await exec(splitCommand(command)));
@@ -70,11 +75,13 @@ export default function ContainerDetailPage() {
         setAttestResult(await attest());
       }
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (action === 'attest') {
+        setAttestError(message);
+      }
       toast({
         title: 'Error',
-        description: `${action === 'exec' ? 'Exec' : 'Attestation'} failed: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
+        description: `${action === 'exec' ? 'Exec' : 'Attestation'} failed: ${message}`,
         variant: 'destructive',
       });
     } finally {
@@ -223,20 +230,28 @@ export default function ContainerDetailPage() {
         </CardContent>
       </Card>
 
-      {attestResult && (
+      {(attestResult || attestError) && (
         <Card data-testid="attest-result">
           <CardHeader>
             <CardTitle>Attestation</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <Row label="Verified">{attestResult.verified ? 'Verified' : 'Not verified'}</Row>
-            <Row label="Image digest">
-              <span className="font-mono text-xs">{attestResult.imageDigest || '-'}</span>
-            </Row>
-            <Row label="Config digest">
-              <span className="font-mono text-xs">{attestResult.configDigest || '-'}</span>
-            </Row>
-            <Row label="PCR values">{attestResult.pcrValues?.length ?? 0}</Row>
+            {attestError ? (
+              <p className="font-medium text-destructive">Attestation failed: {attestError}</p>
+            ) : (
+              attestResult && (
+                <>
+                  <Row label="Verified">{attestResult.verified ? 'Verified' : 'Not verified'}</Row>
+                  <Row label="Image digest">
+                    <span className="font-mono text-xs">{attestResult.imageDigest || '-'}</span>
+                  </Row>
+                  <Row label="Config digest">
+                    <span className="font-mono text-xs">{attestResult.configDigest || '-'}</span>
+                  </Row>
+                  <Row label="PCR values">{attestResult.pcrValues?.length ?? 0}</Row>
+                </>
+              )
+            )}
           </CardContent>
         </Card>
       )}
