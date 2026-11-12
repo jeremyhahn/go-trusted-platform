@@ -86,4 +86,58 @@ describe("useBMC", () => {
     expect(post?.url).toBe("/api/v1/bmc/r640-01/virtual-media");
     expect(post?.init?.body).toBe('{"iso_url":"installer.iso"}');
   });
+
+  it("an older refresh that finishes last does not overwrite the state read after a mount", async () => {
+    let mounted = false;
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    let holdNext = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const op = url.split("/").pop() ?? "";
+        const method = init?.method ?? "GET";
+        let payload: unknown;
+        if (method !== "GET") {
+          if (op === "virtual-media" && method === "POST") {
+            mounted = true;
+          }
+          payload = { success: true };
+        } else if (op === "virtual-media") {
+          const snapshot = { mounted, image_url: mounted ? "installer.iso" : undefined };
+          if (holdNext) {
+            holdNext = false;
+            await held;
+          }
+          payload = snapshot;
+        } else {
+          payload = PAYLOADS[op];
+        }
+        return new Response(JSON.stringify({ success: true, payload }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      })
+    );
+
+    const { result } = renderHook(() => useBMC("r640-01"));
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.virtualMedia?.mounted).toBe(false);
+
+    holdNext = true;
+    let stale!: Promise<void>;
+    act(() => {
+      stale = result.current.refetch();
+    });
+
+    await act(() => result.current.mountISO("installer.iso"));
+    expect(result.current.virtualMedia?.mounted).toBe(true);
+
+    release();
+    await act(async () => {
+      await stale;
+    });
+    expect(result.current.virtualMedia?.mounted).toBe(true);
+    expect(result.current.virtualMedia?.image_url).toBe("installer.iso");
+  });
 });
