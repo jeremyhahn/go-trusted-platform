@@ -40,7 +40,7 @@ const CONFIRM_TEXT: Record<ConfirmAction, { title: string; description: string; 
   },
   rotate: {
     title: "Rotate tenant DEK",
-    description: "A new data encryption key version is created and data is re-encrypted with it.",
+    description: "A new data encryption key version is created and becomes the active version. Existing data is not re-encrypted by this action.",
     label: "Rotate",
   },
 };
@@ -259,7 +259,7 @@ export default function TenantLifecyclePage() {
             <>
               <DialogHeader>
                 <DialogTitle>{CONFIRM_TEXT[confirm].title}</DialogTitle>
-                <DialogDescription>{CONFIRM_TEXT[confirm].description}</DialogDescription>
+                <DialogDescription>{`${CONFIRM_TEXT[confirm].description} Tenant: ${tenant?.name ?? ""}.`}</DialogDescription>
               </DialogHeader>
               <DialogFooter>
                 <Button variant="outline" onClick={() => setConfirm(null)}>

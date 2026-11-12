@@ -83,10 +83,13 @@ export function useTenantLifecycle(): UseTenantLifecycleResult {
   const lookup = useCallback(
     (name: string) =>
       run(async () => {
-        const found = unwrap(await service.getTenantByName(name)).tenant;
-        setTenant(normalizeTenant(found));
+        // Clear the previous selection first: a failed lookup must not leave
+        // the earlier tenant as the target of delete, suspend or rotation.
+        setTenant(null);
         setDEKStatus(null);
         setQuotaCheck(null);
+        const found = unwrap(await service.getTenantByName(name)).tenant;
+        setTenant(normalizeTenant(found));
         return null;
       }),
     [run, service]
