@@ -131,6 +131,8 @@ type mockServiceProvider struct {
 	daemonStopServiceFunc    func(ctx context.Context, name string) (interface{}, error)
 	daemonRestartServiceFunc func(ctx context.Context, name string) (interface{}, error)
 	daemonListProtocolsFunc  func(ctx context.Context) (interface{}, error)
+	daemonGetConfigFunc      func(ctx context.Context, section string) (interface{}, error)
+	daemonReloadConfigFunc   func(ctx context.Context) (interface{}, error)
 
 	// CA
 	caInfoFunc    func(ctx context.Context) (interface{}, error)
@@ -1398,6 +1400,20 @@ func (m *mockServiceProvider) DaemonListProtocols(ctx context.Context) (interfac
 		return m.daemonListProtocolsFunc(ctx)
 	}
 	return nil, nil
+}
+
+func (m *mockServiceProvider) DaemonGetConfig(ctx context.Context, section string) (interface{}, error) {
+	if m.daemonGetConfigFunc != nil {
+		return m.daemonGetConfigFunc(ctx, section)
+	}
+	return map[string]interface{}{}, nil
+}
+
+func (m *mockServiceProvider) DaemonReloadConfig(ctx context.Context) (interface{}, error) {
+	if m.daemonReloadConfigFunc != nil {
+		return m.daemonReloadConfigFunc(ctx)
+	}
+	return map[string]interface{}{}, nil
 }
 
 // CA implementations
