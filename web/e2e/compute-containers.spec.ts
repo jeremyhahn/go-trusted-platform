@@ -40,7 +40,7 @@ test.describe('Compute containers: detail, exec, metrics and attestation (#1721)
     const calls = await mockContainerOpsApi(page, { containerId: 'ctr-1' });
 
     await page.goto('/compute/containers/ctr-1');
-    await page.getByLabel('Command').fill('echo hello');
+    await page.getByLabel('Command').fill(`sh -c 'echo hello' ""`);
     await page.getByRole('button', { name: 'Run' }).click();
 
     const dialog = page.getByRole('dialog');
@@ -52,7 +52,9 @@ test.describe('Compute containers: detail, exec, metrics and attestation (#1721)
     const result = page.getByTestId('exec-result');
     await expect(result.getByText('hello from container')).toBeVisible();
     await expect(result.getByText('Exit code: 0')).toBeVisible();
-    expect(calls.exec).toEqual([expect.objectContaining({ command: ['echo', 'hello'] })]);
+    expect(calls.exec).toEqual([
+      expect.objectContaining({ command: ['sh', '-c', 'echo hello', ''] }),
+    ]);
   });
 
   test('ExecContainer is not sent when the confirm dialog is cancelled', async ({ page }) => {
