@@ -273,7 +273,8 @@ func TestBuildHostFW_DeniesVIPsWithoutAcceptMode(t *testing.T) {
 		require.NotNil(t, rendered)
 		return rendered.Text
 	}
-	deny := `iifname "trusted0" ip daddr 192.0.2.1 drop`
+	// Every ingress, not only the group's interface (Codex #1716 round 4).
+	deny := "\tip daddr 192.0.2.1 drop"
 
 	backup := ownerFHRPConfig()
 	backup.Groups[0].Priority = 100

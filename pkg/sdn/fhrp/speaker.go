@@ -263,6 +263,7 @@ func (s *Speaker) startGroup(ctx context.Context, gc GroupConfig) (*runner, erro
 		return nil, &ErrTransportFailed{VRID: gc.VRID, Interface: gc.Interface, Operation: "open", Cause: err}
 	}
 	r.conn = conn
+	r.dropStaleVIPs(g)
 	now := s.clock.Now()
 	r.mu.Lock()
 	err = g.Startup(now)
@@ -280,6 +281,35 @@ func (s *Speaker) startGroup(ctx context.Context, gc GroupConfig) (*runner, erro
 	go r.receive(recvCtx)
 	go r.run()
 	return r, nil
+}
+
+// dropStaleVIPs removes, before Startup, every VIP a non-owner finds on
+// its interface: a fresh runner owns nothing, so such an address is one a
+// crashed master left. A non-owner starts in Backup and, while a peer stays
+// master, never claims, so a stale VIP would keep answering ARP/ND for the
+// peer's address (Codex #1716 round 4). A priority-255 owner's address is
+// its own and stays. Without an AddressReader nothing can be seen, so
+// nothing is removed. A failed removal is logged; Startup still runs.
+func (r *runner) dropStaleVIPs(g *Group) {
+	reader, ok := r.speaker.deps.Programmer.(AddressReader)
+	if !ok || g.Priority() == PriorityOwner {
+		return
+	}
+	stale := false
+	for _, p := range g.prefixes {
+		present, err := reader.HasAddress(g.cfg.Interface, p)
+		if err != nil {
+			r.logErr("stale vip check", &ErrAddressOperationFailed{VRID: g.cfg.VRID, Interface: g.cfg.Interface, Operation: "list", Address: p, Cause: err})
+			continue
+		}
+		if present {
+			r.owned[p] = true
+			stale = true
+		}
+	}
+	if stale {
+		r.logErr("stale vip removal", r.Release(g))
+	}
 }
 
 // stop ends the loops, performs the group's Shutdown and closes the socket.

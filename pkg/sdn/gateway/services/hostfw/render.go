@@ -122,22 +122,33 @@ func compile(rs Ruleset) []Rule {
 	var rules []Rule
 	rules = append(rules,
 		Rule{Kind: RuleLoopback, Interface: "lo", Comment: "loopback"},
-		Rule{Kind: RuleEstablished, Comment: "established/related"},
-		Rule{Kind: RuleInvalid, Comment: "invalid"},
 	)
 	// Input chain only: traffic forwarded through the VIP as a gateway is
 	// unaffected. ARP is not in the inet family, so the VIP still resolves.
+	// No ingress match: Linux delivers an installed VIP locally whatever
+	// interface the packet arrives on. Ahead of the conntrack allowance, so
+	// an established flow to the VIP, or a reply to VIP-sourced traffic,
+	// is dropped once accept-mode is off (Codex #1716 round 4).
+	seen := make(map[netip.Addr]bool, len(rs.VIPDeny))
 	for _, v := range rs.VIPDeny {
+		if seen[v.Address] {
+			continue
+		}
+		seen[v.Address] = true
 		comment := fmt.Sprintf("vip %s accept-mode off", v.Address)
 		if v.Address.Is4() {
-			rules = append(rules, Rule{Kind: RuleVIPDeny, Interface: v.Interface, Family: 4, Destination: v.Address, Comment: comment})
+			rules = append(rules, Rule{Kind: RuleVIPDeny, Family: 4, Destination: v.Address, Comment: comment})
 			continue
 		}
 		rules = append(rules,
-			Rule{Kind: RuleVIPDeny, Interface: v.Interface, Family: 6, Destination: v.Address, Comment: comment},
-			Rule{Kind: RuleVIPDenyICMPv6, Interface: v.Interface, Family: 6, Destination: v.Address, Comment: comment},
+			Rule{Kind: RuleVIPDeny, Family: 6, Destination: v.Address, Comment: comment},
+			Rule{Kind: RuleVIPDenyICMPv6, Family: 6, Destination: v.Address, Comment: comment},
 		)
 	}
+	rules = append(rules,
+		Rule{Kind: RuleEstablished, Comment: "established/related"},
+		Rule{Kind: RuleInvalid, Comment: "invalid"},
+	)
 	for _, ifc := range rs.Unfiltered {
 		rules = append(rules, Rule{Kind: RuleUnfiltered, Interface: ifc, Comment: "unfiltered: " + ifc})
 	}
