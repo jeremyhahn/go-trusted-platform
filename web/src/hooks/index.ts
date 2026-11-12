@@ -80,6 +80,17 @@ export { useAuth, useOptionalAuth, AuthProvider } from '@/contexts/AuthContext';
 export type { User, AuthContextType } from '@/contexts/AuthContext';
 
 export { useToast, toast, dismissToast } from './use-toast';
+export {
+  useInvitationLookup,
+  fetchInvitation,
+  fetchInvitationByToken,
+  acceptInvitation,
+} from './use-invitation-lookup';
+export type {
+  InvitationDetail,
+  AcceptInvitationResult,
+  InvitationLookupState,
+} from './use-invitation-lookup';
 export type { Toast, UseToastReturn } from './use-toast';
 
 export { useReportedGateways } from './use-reported-gateways';
