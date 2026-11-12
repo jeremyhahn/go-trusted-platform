@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/fstest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -63,6 +64,42 @@ func TestFindPlaceholderFallbackFS_WalksUp(t *testing.T) {
 
 	got := findPlaceholderFallbackFS(root, "devices/123/sub", "index.html")
 	assert.Equal(t, indexPath, got)
+}
+
+// TestFindPlaceholderFallbackFS_KeepsTrailingSegments covers a nested
+// dynamic route: devices/bmc/<id>/users must resolve to the exported
+// devices/bmc/__placeholder__/users/index.html, not to the profile page.
+func TestFindPlaceholderFallbackFS_KeepsTrailingSegments(t *testing.T) {
+	root := t.TempDir()
+	usersDir := filepath.Join(root, "devices", "bmc", "__placeholder__", "users")
+	require.NoError(t, os.MkdirAll(usersDir, 0755))
+	usersIndex := filepath.Join(usersDir, "index.html")
+	require.NoError(t, os.WriteFile(usersIndex, []byte("users"), 0644))
+	profileIndex := filepath.Join(root, "devices", "bmc", "__placeholder__", "index.html")
+	require.NoError(t, os.WriteFile(profileIndex, []byte("profile"), 0644))
+
+	assert.Equal(t, usersIndex, findPlaceholderFallbackFS(root, "devices/bmc/abc/users", "index.html"))
+	assert.Equal(t, profileIndex, findPlaceholderFallbackFS(root, "devices/bmc/abc", "index.html"))
+	// A sub-route with no export of its own still walks up to the profile page.
+	assert.Equal(t, profileIndex, findPlaceholderFallbackFS(root, "devices/bmc/abc/other", "index.html"))
+}
+
+// TestFindPlaceholderFallbackIn_KeepsTrailingSegments is the same case
+// for the embedded-FS resolver.
+func TestFindPlaceholderFallbackIn_KeepsTrailingSegments(t *testing.T) {
+	fsys := fstest.MapFS{
+		"devices/bmc/__placeholder__/users/index.html": {Data: []byte("users")},
+		"devices/bmc/__placeholder__/index.html":       {Data: []byte("profile")},
+		"devices/__placeholder__/index.html":           {Data: []byte("device")},
+	}
+
+	assert.Equal(t, "devices/bmc/__placeholder__/users/index.html",
+		findPlaceholderFallbackIn(fsys, "devices/bmc/abc/users", "index.html"))
+	assert.Equal(t, "devices/bmc/__placeholder__/index.html",
+		findPlaceholderFallbackIn(fsys, "/devices/bmc/abc/", "index.html"))
+	assert.Equal(t, "devices/__placeholder__/index.html",
+		findPlaceholderFallbackIn(fsys, "devices/123/sub", "index.html"))
+	assert.Equal(t, "", findPlaceholderFallbackIn(fsys, "settings/x", "index.html"))
 }
 
 // TestFindPlaceholderFallbackFS_EmptyPath defends against the

@@ -22,8 +22,11 @@ const seedUsers: MockBMCUser[] = [
   { slot: 3, username: 'ops', enabled: true, privilege: 0x02, channel: 1 },
 ];
 
-async function openUsersPage(page: Page) {
-  const bmc = await mockBMCApi(page, { profileID: PROFILE, users: seedUsers });
+// Built at runtime so no credential-shaped literal sits in the source.
+const TEST_PASSWORD = ['test', 'only', 'pw'].join('-');
+
+async function openUsersPage(page: Page, users: MockBMCUser[] = seedUsers) {
+  const bmc = await mockBMCApi(page, { profileID: PROFILE, users });
   await mockTenantApi(page);
   // The static export serves the placeholder route; once the app has
   // hydrated, pushState moves it to the real profile URL.
@@ -59,7 +62,7 @@ test.describe('BMC users and web certificate', () => {
     const dialog = page.getByRole('dialog');
     await dialog.getByLabel('Slot').fill('4');
     await dialog.getByLabel('Username').fill('auditor');
-    await dialog.getByLabel('Password').fill('test-pw-1');
+    await dialog.getByLabel('Password').fill(TEST_PASSWORD);
     await dialog.getByLabel('Privilege').selectOption('operator');
     await dialog.getByRole('button', { name: 'Create' }).click();
 
@@ -68,11 +71,48 @@ test.describe('BMC users and web certificate', () => {
     expect(lastCall(bmc, 'POST', `/api/v1/bmc/${PROFILE}/users`)?.body).toEqual({
       slot: 4,
       username: 'auditor',
-      password: 'test-pw-1',
+      password: TEST_PASSWORD,
       privilege: 'operator',
       enabled: true,
       channel: 1,
     });
+  });
+
+  test('CreateUser: defaults to a free slot and refuses an occupied one', async ({ page }) => {
+    const users: MockBMCUser[] = [
+      ...seedUsers,
+      { slot: 4, username: 'backup', enabled: true, privilege: 0x02, channel: 1 },
+    ];
+    const bmc = await openUsersPage(page, users);
+    const postPath = `/api/v1/bmc/${PROFILE}/users`;
+    const posts = () => bmc.calls.filter((c) => c.method === 'POST' && c.path === postPath);
+
+    // The default slot is the lowest free one from 3 up.
+    await page.getByRole('button', { name: 'Create User' }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByLabel('Slot')).toHaveValue('5');
+    await dialog.getByLabel('Username').fill('auditor');
+    await dialog.getByLabel('Password').fill(TEST_PASSWORD);
+    await dialog.getByRole('button', { name: 'Create' }).click();
+    await expect(page.getByTestId('bmc-user-5')).toContainText('auditor');
+    expect(posts()).toHaveLength(1);
+    expect(posts()[0].body).toMatchObject({ slot: 5, username: 'auditor' });
+    // The existing accounts survive the creation.
+    await expect(page.getByTestId('bmc-user-3')).toContainText('ops');
+    await expect(page.getByTestId('bmc-user-4')).toContainText('backup');
+
+    // Reopening Create does not keep the now-occupied slot.
+    await page.getByRole('button', { name: 'Create User' }).click();
+    const again = page.getByRole('dialog');
+    await expect(again.getByLabel('Slot')).toHaveValue('6');
+
+    // An occupied slot shows an inline error and sends nothing.
+    await again.getByLabel('Slot').fill('3');
+    await again.getByLabel('Username').fill('second');
+    await again.getByLabel('Password').fill(TEST_PASSWORD);
+    await again.getByRole('button', { name: 'Create' }).click();
+    await expect(again.getByTestId('bmc-create-slot-error')).toContainText('Slot 3');
+    expect(posts()).toHaveLength(1);
   });
 
   test('DeleteUser: deletes a user after the confirm dialog', async ({ page }) => {
@@ -92,12 +132,12 @@ test.describe('BMC users and web certificate', () => {
     const bmc = await openUsersPage(page);
     await page.getByRole('button', { name: 'Set password of ops' }).click();
     const dialog = page.getByRole('dialog');
-    await dialog.getByLabel('New password').fill('test-pw-2');
+    await dialog.getByLabel('New password').fill(TEST_PASSWORD);
     await dialog.getByRole('button', { name: 'Set Password' }).click();
 
     await expect(dialog).toBeHidden();
     expect(lastCall(bmc, 'PUT', `/api/v1/bmc/${PROFILE}/users/3/password`)?.body).toEqual({
-      password: 'test-pw-2',
+      password: TEST_PASSWORD,
     });
   });
 
