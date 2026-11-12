@@ -7,14 +7,18 @@
     "dev": "vite dev",
     "build": "vite build",
     "preview": "vite preview",
-    "check": "svelte-check --tsconfig ./tsconfig.json"
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "test": "vitest run"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^5.0.0",
+    "@testing-library/svelte": "^5.4.2",
     "@tsconfig/svelte": "^5.0.0",
+    "jsdom": "^31.0.0",
     "svelte": "^5.0.0",
     "svelte-check": "^4.0.0",
     "typescript": "^5.5.0",
-    "vite": "^6.0.0"
+    "vite": "^6.0.0",
+    "vitest": "^5.1.0"
   }
 }
