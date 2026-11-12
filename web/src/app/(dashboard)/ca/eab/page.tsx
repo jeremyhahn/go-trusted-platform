@@ -23,6 +23,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useEAB, useEABList } from "@/hooks";
+import { parseExpiresIn } from "@/utils/eab-expiry";
 import { normalizeEABStatus } from "@/utils/eab-status";
 import type {
   CreateEABCredentialResponse,
@@ -95,12 +96,17 @@ export default function EABCredentialsPage() {
       setActionError("Profile ID must be a positive integer");
       return;
     }
+    const exp = parseExpiresIn(expiresIn);
+    if (!exp.ok) {
+      setMessage(null);
+      setActionError("Expires in must be a positive whole number of seconds, or blank");
+      return;
+    }
     void run(async () => {
-      const seconds = Number.parseInt(expiresIn, 10);
       const res = await eab.create.mutateAsync({
         profileId: profile,
         tenantId,
-        ...(Number.isFinite(seconds) && seconds > 0 ? { expiresInSeconds: seconds } : {}),
+        ...(exp.seconds !== undefined ? { expiresInSeconds: exp.seconds } : {}),
       });
       setCreated(res);
       await list.refetch();
@@ -290,6 +296,7 @@ export default function EABCredentialsPage() {
                 <Input
                   id="eab-expires-in"
                   type="number"
+                  step={1}
                   value={expiresIn}
                   onChange={(e) => setExpiresIn(e.target.value)}
                 />
