@@ -16,8 +16,14 @@ caller-admission policy (#226, #429). None of its verbs reaches a device; they
 read the reporting cache or enqueue work with the collector, exactly like the
 REST, gRPC/Unix and MCP routes they sit on ([api.md](api.md) §5.3).
 
-Everything else in the feature (manifests, quotes, host and VM attestation,
-workload reports, policies, events) still has no verb beyond
+`platformctl attestation manifests list [--host-id] [--limit] [--offset]`,
+`manifests get <id>` and `manifests delete <id>` (#1686) read and remove the
+stored attestation manifests through the Go SDK client (`ListManifests`,
+`GetManifest`, `DeleteManifest`), with table, json and yaml output. An empty
+id is refused before any connection is made.
+
+Everything else in the feature (building and verifying manifests, quotes, host
+and VM attestation, workload reports, policies, events) still has no verb beyond
 `platformctl container attest` (§4). That remains a gap, not a design decision:
 attestation is a Tier 1 capability, and a capability with no CLI cannot be
 exercised or debugged by an operator at a shell. §6 lists what is missing.
@@ -303,7 +309,7 @@ Recorded explicitly so the next agent does not go looking:
 
 | Capability | Reachable via |
 |---|---|
-| Build / verify / list / delete manifests | REST, gRPC, QUIC, MCP, SDK |
+| Build / verify manifests | REST, gRPC, QUIC, MCP, SDK |
 | Get / verify a quote | REST, gRPC, QUIC, SDK — getting one is over TLS only; the quote is bound to the connection ([api.md](api.md) §5.1a) |
 | Collect host attestation | REST, gRPC, QUIC, SDK — over TLS only; the quote is bound to the connection ([api.md](api.md) §5.1a) |
 | Collect VM attestation | REST, gRPC, QUIC, SDK |
@@ -312,7 +318,8 @@ Recorded explicitly so the next agent does not go looking:
 | Attestation events | REST |
 
 Device attestation reports, the refresh trigger and the caller policy (#226)
-left this table with #429 (§3).
+left this table with #429 (§3). Listing, getting and deleting manifests left
+it with #1686 (§1).
 
 ---
 
