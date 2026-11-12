@@ -5,6 +5,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { RegistryService, RegistryHealth } from '../registry-service.js';
 import { ApiClient } from '../../client/api-client.js';
+import * as sdk from '../../index.js';
+
+describe('RegistryService package entry point', () => {
+  it('is exported from the package entry point', () => {
+    expect(sdk.RegistryService).toBe(RegistryService);
+    expect(sdk.RegistryHealth).toBeDefined();
+    expect(sdk.RegistryHealth).toBe(RegistryHealth);
+  });
+});
 
 function createMockClient(): ApiClient {
   return {
