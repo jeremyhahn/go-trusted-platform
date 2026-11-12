@@ -185,14 +185,14 @@ describe('IDevIDTable', () => {
   });
 
   it('shows a refused revocation', async () => {
-    stubControlPlane({ 'DELETE /api/v1/idevid/certificate': refused(403, 'admin role required') });
+    stubControlPlane({ 'DELETE /api/v1/idevid/certificate': refused(403, 'revocation not permitted') });
     vi.stubGlobal('confirm', () => true);
     const onChange = vi.fn();
     render(withControlPlane(<IDevIDTable idevids={[cert()]} onIDevIDChange={onChange} />));
 
     await choose('Revoke Certificate');
 
-    const toast = await screen.findByText('Error: admin role required');
+    const toast = await screen.findByText('Error: revocation not permitted');
     expect(toast.getAttribute('data-variant')).toBe('destructive');
     expect(onChange).not.toHaveBeenCalled();
   });
