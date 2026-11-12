@@ -82,6 +82,13 @@ export type { User, AuthContextType } from '@/contexts/AuthContext';
 export { useToast, toast, dismissToast } from './use-toast';
 export type { Toast, UseToastReturn } from './use-toast';
 
+export { useGatewayBgp } from './use-gateway-bgp';
+export type {
+  GatewayBGPPeer,
+  GatewayAnnouncedPrefix,
+  GatewayIPAllocation,
+  UseGatewayBgpResult,
+} from './use-gateway-bgp';
 export { useReportedGateways } from './use-reported-gateways';
 export type {
   ReportedGateway,

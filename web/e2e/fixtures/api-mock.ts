@@ -471,6 +471,108 @@ export async function mockAllApis(
   return { invitation, tenant };
 }
 
+// =============================================================================
+// Gateway BGP and IPAM (#1746)
+// =============================================================================
+
+export interface MockBGPPeer {
+  address: string;
+  asn: number;
+  state: string;
+  prefixes_received?: number;
+}
+
+export interface MockAnnouncedPrefix {
+  prefix: string;
+  next_hop?: string;
+}
+
+export interface MockIPAllocation {
+  ip: string;
+  pool_id: string;
+  hostname?: string;
+  status?: string;
+}
+
+export interface GatewayBgpApiMockConfig {
+  peers?: MockBGPPeer[];
+  prefixes?: MockAnnouncedPrefix[];
+  allocations?: MockIPAllocation[];
+  /** The address the next allocation hands out. */
+  nextIP?: string;
+}
+
+/** One mutating request the gateway mock received. */
+export interface GatewayBgpCall {
+  method: string;
+  path: string;
+  query: Record<string, string>;
+  body: Record<string, unknown> | null;
+}
+
+/**
+ * Mock the web service's gateway BGP and IPAM routes under
+ * `/api/v1/gateway`. The mock keeps state: an announced prefix or an
+ * allocation shows in the next list, a withdrawn or released one leaves it.
+ * Every mutating request is recorded in `calls`.
+ */
+export async function mockGatewayBgpApi(
+  page: Page,
+  config: GatewayBgpApiMockConfig = {}
+): Promise<{ calls: GatewayBgpCall[] }> {
+  const peers = [...(config.peers ?? [])];
+  let prefixes = [...(config.prefixes ?? [])];
+  let allocations = [...(config.allocations ?? [])];
+  const calls: GatewayBgpCall[] = [];
+  const json = (route: Route, status: number, body: unknown) =>
+    route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+
+  await page.route(/\/api\/v1\/gateway\/(bgp|ipam)\//, async (route: Route, request: Request) => {
+    const url = new URL(request.url());
+    const path = url.pathname.replace(/^\/api\/v1\/gateway/, '');
+    const method = request.method();
+    const query = Object.fromEntries(url.searchParams.entries());
+    let body: Record<string, unknown> | null = null;
+    if (method === 'POST') {
+      try {
+        body = request.postDataJSON() as Record<string, unknown>;
+      } catch {
+        body = null;
+      }
+    }
+    if (method !== 'GET') calls.push({ method, path, query, body });
+
+    if (path === '/bgp/peers' && method === 'GET') return json(route, 200, { peers });
+    if (path === '/bgp/prefixes' && method === 'GET') return json(route, 200, { prefixes });
+    if (path === '/bgp/prefixes' && method === 'POST') {
+      prefixes = [...prefixes, { prefix: String(body?.prefix ?? ''), next_hop: String(body?.next_hop ?? '') }];
+      return json(route, 201, { status: { success: true, message: 'announced' } });
+    }
+    if (path === '/bgp/prefixes' && method === 'DELETE') {
+      prefixes = prefixes.filter((p) => p.prefix !== query.prefix);
+      return json(route, 200, { status: { success: true, message: 'withdrawn' } });
+    }
+    if (path === '/ipam/allocations' && method === 'GET') return json(route, 200, { allocations });
+    if (path === '/ipam/allocations' && method === 'POST') {
+      const alloc: MockIPAllocation = {
+        ip: config.nextIP ?? '10.0.0.11',
+        pool_id: String(body?.pool_id ?? ''),
+        hostname: String(body?.hostname ?? ''),
+        status: 'active',
+      };
+      allocations = [...allocations, alloc];
+      return json(route, 201, { allocation: alloc });
+    }
+    if (path === '/ipam/allocations' && method === 'DELETE') {
+      allocations = allocations.filter((a) => a.ip !== query.ip);
+      return json(route, 200, { status: { success: true, message: 'released' } });
+    }
+    return json(route, 404, { error: 'not found' });
+  });
+
+  return { calls };
+}
+
 /**
  * Create a mock WebAuthn registration flow.
  * Mocks the registration begin and finish endpoints.
