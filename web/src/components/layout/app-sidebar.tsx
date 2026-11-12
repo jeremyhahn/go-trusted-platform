@@ -114,6 +114,7 @@ const navigation = [
       { title: "Lockout", href: "/tpm/lockout" },
       { title: "NVRAM", href: "/tpm/nvram" },
       { title: "Seal/Unseal", href: "/tpm/seal" },
+      { title: "vTPM Runtime", href: "/tpm/vtpm/__placeholder__" },
     ],
   },
   {

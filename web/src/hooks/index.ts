@@ -82,6 +82,15 @@ export type { User, AuthContextType } from '@/contexts/AuthContext';
 export { useToast, toast, dismissToast } from './use-toast';
 export type { Toast, UseToastReturn } from './use-toast';
 
+export {
+  useVTPMRuntime,
+  textToBase64,
+  base64ToText,
+  hexToBase64,
+  base64ToHex,
+} from './use-vtpm-runtime';
+export type { VTPMRunState } from './use-vtpm-runtime';
+
 export { useReportedGateways } from './use-reported-gateways';
 export type {
   ReportedGateway,
