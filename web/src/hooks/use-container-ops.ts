@@ -42,7 +42,47 @@ export function decodeOutput(b64?: string): string {
 
 /** Split a command line on whitespace into argv. */
 export function splitCommand(line: string): string[] {
-  return line.trim().split(/\s+/).filter((s) => s.length > 0);
+  const args: string[] = [];
+  let current = '';
+  let inArg = false;
+  let quote: "'" | '"' | null = null;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      else current += ch;
+    } else if (quote === '"') {
+      if (ch === '"') {
+        quote = null;
+      } else if (ch === '\\' && (line[i + 1] === '"' || line[i + 1] === '\\')) {
+        current += line[++i];
+      } else {
+        current += ch;
+      }
+    } else if (ch === "'" || ch === '"') {
+      quote = ch;
+      inArg = true;
+    } else if (ch === '\\') {
+      if (i + 1 < line.length) current += line[++i];
+      inArg = true;
+    } else if (/\s/.test(ch)) {
+      if (inArg) {
+        args.push(current);
+        current = '';
+        inArg = false;
+      }
+    } else {
+      current += ch;
+      inArg = true;
+    }
+  }
+
+  if (quote) {
+    throw new Error(`unterminated ${quote === "'" ? 'single' : 'double'} quote in command`);
+  }
+  if (inArg) args.push(current);
+  return args;
 }
 
 function unwrap<T>(response: ApiResponse<T>, what: string): T {

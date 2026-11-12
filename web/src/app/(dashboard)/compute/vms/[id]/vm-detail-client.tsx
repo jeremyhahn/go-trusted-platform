@@ -40,7 +40,7 @@ import {
 import { VMMetricsCard } from '@/components/features/compute/vm-metrics';
 import { useCompute, useMutation, useToast, type MutationError } from '@/hooks';
 import type { VMDetail } from '@/types/infrastructure';
-import { vmStatus } from '@/lib/compute-state';
+import { toVMDetail } from '@/lib/vm-detail';
 
 const statusColors = {
   running: 'bg-green-500/10 text-green-500 border-green-500/20',
@@ -88,12 +88,7 @@ export default function VMDetailPage() {
       setLoading(true);
       const response = await compute.getVM(vmId);
       if (response.success && response.data) {
-        // SDK returns { vm: VM }, but we need VMDetail
-        // For now, cast to VMDetail - proper type mapping would be handled by backend
-        setVM({
-          ...(response.data.vm as unknown as VMDetail),
-          status: vmStatus(response.data.vm.state),
-        });
+        setVM(toVMDetail(response.data.vm));
       }
     } catch (error) {
       toast({

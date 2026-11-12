@@ -190,7 +190,7 @@ export default function ContainerDetailPage() {
             className="flex items-end gap-2"
             onSubmit={(e) => {
               e.preventDefault();
-              if (splitCommand(command).length > 0) setPending('exec');
+              if (command.trim().length > 0) setPending('exec');
             }}
           >
             <div className="flex-1 space-y-2">
@@ -202,7 +202,7 @@ export default function ContainerDetailPage() {
                 onChange={(e) => setCommand(e.target.value)}
               />
             </div>
-            <Button type="submit" disabled={busy || splitCommand(command).length === 0}>
+            <Button type="submit" disabled={busy || command.trim().length === 0}>
               <Terminal className="mr-2 h-4 w-4" />
               Run
             </Button>
