@@ -47,7 +47,9 @@ export default function OverlayVtepsPage() {
     vnis,
     tunnels,
     isLoading,
-    error,
+    vtepsError,
+    vnisError,
+    tunnelsError,
     refetchAll,
     getVTEP,
     getTunnelStats,
@@ -62,15 +64,19 @@ export default function OverlayVtepsPage() {
   const [macAddress, setMacAddress] = useState('');
   const [macVni, setMacVni] = useState('');
 
-  const listError = error && !isLoading ? error.message || 'Failed to load overlay data' : null;
-  const errorRow = (colSpan: number) => (
+  const listErrorText = (e: Error | null | undefined) =>
+    e && !isLoading ? e.message || 'Failed to load overlay data' : null;
+  const vtepsListError = listErrorText(vtepsError);
+  const vnisListError = listErrorText(vnisError);
+  const tunnelsListError = listErrorText(tunnelsError);
+  const errorRow = (colSpan: number, text: string, testId: string) => (
     <TableRow>
       <TableCell
         colSpan={colSpan}
         className="text-center text-destructive"
-        data-testid="overlay-list-error"
+        data-testid={testId}
       >
-        {listError}
+        {text}
       </TableCell>
     </TableRow>
   );
@@ -94,9 +100,10 @@ export default function OverlayVtepsPage() {
   };
 
   const askForgetMac = () => {
-    const vni = Number.parseInt(macVni, 10);
-    if (!macAddress || !Number.isFinite(vni) || vni < 1) {
-      toast({ title: 'Enter a MAC address and a VNI', variant: 'destructive' });
+    const raw = macVni.trim();
+    const vni = Number(raw);
+    if (!macAddress || raw === '' || !Number.isInteger(vni) || vni < 1 || vni > 16777215) {
+      toast({ title: 'Enter a MAC address and a whole VNI from 1 to 16777215', variant: 'destructive' });
       return;
     }
     setPending({
@@ -159,8 +166,8 @@ export default function OverlayVtepsPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {listError ? (
-                errorRow(4)
+              {vtepsListError ? (
+                errorRow(4, vtepsListError, 'vteps-list-error')
               ) : vteps.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={4} className="text-center text-muted-foreground">
@@ -206,8 +213,8 @@ export default function OverlayVtepsPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {listError ? (
-                errorRow(4)
+              {vnisListError ? (
+                errorRow(4, vnisListError, 'vnis-list-error')
               ) : vnis.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={4} className="text-center text-muted-foreground">
@@ -260,8 +267,8 @@ export default function OverlayVtepsPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {listError ? (
-                errorRow(5)
+              {tunnelsListError ? (
+                errorRow(5, tunnelsListError, 'tunnels-list-error')
               ) : tunnels.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={5} className="text-center text-muted-foreground">
@@ -313,6 +320,8 @@ export default function OverlayVtepsPage() {
               id="forget-vni"
               type="number"
               min={1}
+              max={16777215}
+              step={1}
               value={macVni}
               onChange={(e) => setMacVni(e.target.value)}
               placeholder="10000"
