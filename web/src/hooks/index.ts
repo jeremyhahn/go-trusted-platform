@@ -90,6 +90,7 @@ export type {
   UseGatewayBgpResult,
 } from './use-gateway-bgp';
 export { useReportedGateways } from './use-reported-gateways';
+export { useOverlayVteps } from './use-overlay-vteps';
 export type {
   ReportedGateway,
   UseReportedGatewaysOptions,
