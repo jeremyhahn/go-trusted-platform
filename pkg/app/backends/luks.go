@@ -18,7 +18,9 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"strconv"
+	"sync"
 
 	"github.com/jeremyhahn/go-luks2/pkg/luks2"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/fido2"
@@ -53,6 +55,11 @@ var ErrLUKSHardwareUnavailable = errors.New("luks backend: hardware unavailable"
 // than guess one: the highest existing slot is not the new one when the free
 // slots are not contiguous.
 var ErrLUKSNewSlotNotFound = errors.New("luks backend: no new keyslot appeared after adding the key")
+
+// ErrLUKSTestUnlockUnverified is returned by TestUnlock: the request carries
+// no credential, so the backend cannot derive the keyslot's key and verify
+// the master key, and it never reports success from slot metadata alone.
+var ErrLUKSTestUnlockUnverified = errors.New("luks backend: test unlock cannot verify a keyslot without its credential")
 
 // ErrLUKSTokenMissing indicates an enrollment handler returned no token for
 // the new keyslot. A FIDO2 or TPM keyslot without its token cannot be used by
@@ -130,6 +137,35 @@ type LUKSBackend struct {
 	// the host; the package's unit tests set it so a keyslot write does not
 	// spend seconds in the KDF.
 	kdfCost *luksKDFCost
+
+	// locks serializes keyslot and token mutations per device. go-luks2
+	// takes its header lock for one call only and releases it after each
+	// AddKey or ImportToken, so the backend's snapshot, add, detect-new-slot,
+	// token-write and rollback sequence is not atomic on its own: two
+	// concurrent enrollments could detect the same new slot, bind a token to
+	// the other's slot, or roll back the other's credential. Every mutating
+	// method holds the device's mutex for its whole sequence; locksMu guards
+	// the map.
+	locksMu sync.Mutex
+	locks   map[string]*sync.Mutex
+}
+
+// lockDevice takes the mutex of device (keyed by its cleaned path, created on
+// first use) and returns its unlock.
+func (b *LUKSBackend) lockDevice(device string) func() {
+	key := filepath.Clean(device)
+	b.locksMu.Lock()
+	if b.locks == nil {
+		b.locks = make(map[string]*sync.Mutex)
+	}
+	mu, ok := b.locks[key]
+	if !ok {
+		mu = &sync.Mutex{}
+		b.locks[key] = mu
+	}
+	b.locksMu.Unlock()
+	mu.Lock()
+	return mu.Unlock
 }
 
 // luksKDFCost is a fixed keyslot KDF cost (see LUKSBackend.kdfCost): the
@@ -356,6 +392,8 @@ func volumeKeyBits(info *luks2.VolumeInfo, slots []daemon.LUKSKeyslot) int32 {
 
 // EnrollPassphrase adds a new passphrase keyslot.
 func (b *LUKSBackend) EnrollPassphrase(ctx context.Context, req *daemon.LUKSEnrollPassphraseRequest) (*daemon.LUKSEnrollPassphraseResult, error) {
+	defer b.lockDevice(req.Device)()
+
 	before, err := luks2.ListKeyslots(req.Device)
 	if err != nil {
 		return nil, err
@@ -417,6 +455,9 @@ func (b *LUKSBackend) EnrollFIDO2(ctx context.Context, req *daemon.LUKSEnrollFID
 	}
 	defer clearBytes(key)
 
+	// The FIDO2 derivation (a touch) stays outside the device lock.
+	defer b.lockDevice(req.Device)()
+
 	before, err := luks2.ListKeyslots(req.Device)
 	if err != nil {
 		return nil, err
@@ -469,6 +510,9 @@ func (b *LUKSBackend) EnrollTPM(ctx context.Context, req *daemon.LUKSEnrollTPMRe
 	}
 	defer clearBytes(passphrase)
 
+	// The TPM seal stays outside the device lock.
+	defer b.lockDevice(req.Device)()
+
 	before, err := luks2.ListKeyslots(req.Device)
 	if err != nil {
 		return nil, err
@@ -509,6 +553,7 @@ func (b *LUKSBackend) EnrollRecovery(ctx context.Context, req *daemon.LUKSEnroll
 		return nil, err
 	}
 	b.kdfCost.applyRecovery(recoveryOpts)
+	defer b.lockDevice(req.Device)()
 	recoveryKey, err := luks2.AddRecoveryKey(
 		req.Device,
 		[]byte(req.ExistingPassphrase),
@@ -536,30 +581,28 @@ func (b *LUKSBackend) EnrollRecovery(ctx context.Context, req *daemon.LUKSEnroll
 
 // RemoveKey kills a keyslot. The slot index must be an existing, active slot.
 func (b *LUKSBackend) RemoveKey(ctx context.Context, req *daemon.LUKSRemoveKeyRequest) error {
+	defer b.lockDevice(req.Device)()
 	return luks2.KillKeyslot(req.Device, int(req.Slot))
 }
 
-// TestUnlock verifies that a keyslot is reachable via its stored digest. It
-// does not prompt the user for credentials — the service layer is trusted to
-// have the passphrase pre-staged when calling from an automation path. For
-// passphrase slots the caller would invoke luks2.TestKey directly; this entry
-// point covers the generic "is this slot OK" question by reading keyslot
-// metadata and confirming it parses.
+// TestUnlock does not report a successful unlock it cannot prove. The
+// request carries no credential, so the backend can neither derive the
+// keyslot's key (a passphrase, a FIDO2 assertion or a TPM unseal) nor verify
+// the master key against the volume digest; a keyslot that is listed in the
+// header may still be corrupt or its credential unavailable. It therefore
+// never returns true: a device that is not a LUKS2 volume returns its read
+// error, and every other request returns false with
+// ErrLUKSTestUnlockUnverified until credential verification is available.
 func (b *LUKSBackend) TestUnlock(ctx context.Context, req *daemon.LUKSTestUnlockRequest) (bool, error) {
-	slots, err := luks2.ListKeyslots(req.Device)
-	if err != nil {
+	if _, err := luks2.ListKeyslots(req.Device); err != nil {
 		return false, err
 	}
-	for _, s := range slots {
-		if int32(s.ID) == req.Slot {
-			return true, nil
-		}
-	}
-	return false, nil
+	return false, ErrLUKSTestUnlockUnverified
 }
 
 // ChangePassphrase rotates the secret on an existing passphrase slot.
 func (b *LUKSBackend) ChangePassphrase(ctx context.Context, req *daemon.LUKSChangePassphraseRequest) error {
+	defer b.lockDevice(req.Device)()
 	return luks2.ChangeKey(
 		req.Device,
 		[]byte(req.OldPassphrase),
