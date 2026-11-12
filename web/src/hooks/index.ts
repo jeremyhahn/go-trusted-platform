@@ -82,6 +82,7 @@ export type { User, AuthContextType } from '@/contexts/AuthContext';
 export { useToast, toast, dismissToast } from './use-toast';
 export type { Toast, UseToastReturn } from './use-toast';
 
+export { useTPMOps, textToBase64, base64ToHex } from './use-tpm-ops';
 export { useAttestationCollect, newAttestationNonce } from './use-attestation-collect';
 export type {
   AttestationCollectOperation,
