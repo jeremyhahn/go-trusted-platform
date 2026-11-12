@@ -39,7 +39,7 @@ test.describe('TPM operations', () => {
     await expect.poll(() => callsTo('/pcrs/extend').length).toBe(1);
     expect(callsTo('/pcrs/extend')[0].body).toEqual({
       index: 16,
-      hashAlg: 'SHA256',
+      hashAlg: 'sha256',
       data: btoa('measure-me'),
     });
   });

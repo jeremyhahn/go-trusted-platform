@@ -4,7 +4,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { TPMService } from '../tpm-service.js';
-import type { ApiClient } from '../../client/api-client.js';
+import { ApiClient } from '../../client/api-client.js';
 
 function createMockApiClient(): ApiClient {
   return {
@@ -36,12 +36,12 @@ describe('TPMService operations', () => {
   }
 
   it('extendPCR posts to /pcrs/extend', async () => {
-    const request = { index: 16, hashAlg: 'SHA256', data: 'AAEC' };
-    await service.extendPCR(request);
+    await service.extendPCR({ index: 16, hashAlg: 'SHA256', data: 'AAEC' });
 
     const [url, body] = posted();
     expect(url).toMatch(/\/v1\/tpm\/pcrs\/extend$/);
-    expect(body).toEqual(request);
+    expect(body).toEqual({ index: 16, hashAlg: 'sha256', data: 'AAEC' });
+    expect(vi.mocked(mockClient.post).mock.calls[0]?.[2]).toEqual({ retry: { enabled: false } });
   });
 
   it('makeCredential posts to /make-credential', async () => {
@@ -68,5 +68,22 @@ describe('TPMService operations', () => {
     const [url, body] = posted();
     expect(url).toMatch(/\/v1\/tpm\/random$/);
     expect(body).toEqual({ numBytes: 32 });
+  });
+});
+
+describe('extendPCR with a real ApiClient', () => {
+  it('does not resend the extend when the response is lost', async () => {
+    const spy = vi.fn(() => Promise.reject(new TypeError('network')));
+    const client = new ApiClient({
+      baseUrl: '/api',
+      fetch: spy as unknown as typeof fetch,
+      retry: { maxRetries: 3 },
+    });
+    const service = new TPMService(client);
+
+    const response = await service.extendPCR({ index: 16, hashAlg: 'sha256', data: 'AAEC' });
+
+    expect(response.success).toBe(false);
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 });
