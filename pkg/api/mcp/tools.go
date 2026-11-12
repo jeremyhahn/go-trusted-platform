@@ -1586,6 +1586,10 @@ func (r *ToolRegistry) ExecuteTool(ctx context.Context, name string, args map[st
 		return r.executeDaemonRestartService(ctx, args)
 	case "platform_daemon_list_protocols":
 		return r.executeDaemonListProtocols(ctx, args)
+	case "platform_daemon_get_config":
+		return r.executeDaemonGetConfig(ctx, args)
+	case "platform_daemon_reload_config":
+		return r.executeDaemonReloadConfig(ctx, args)
 
 	// CA Operations
 	case "ca_info":
