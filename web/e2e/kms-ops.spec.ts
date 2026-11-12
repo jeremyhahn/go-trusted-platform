@@ -104,6 +104,37 @@ test.describe("KMS operations", () => {
     });
   });
 
+  test("clears the HMAC verdict when inputs change or verification fails", async ({ page }) => {
+    await openPage(page, { hmacValid: true });
+    const card = page.getByTestId("op-verify-hmac");
+    const result = page.getByTestId("verify-hmac-result");
+    const verify = card.getByRole("button", { name: "Verify HMAC" });
+    await card.getByLabel("Key name").fill("mac-key");
+    await card.getByLabel("Data", { exact: true }).fill("hello");
+    await card.getByLabel("HMAC (base64)").fill(b64("good"));
+    await verify.click();
+    await expect(result).toHaveText("HMAC valid");
+
+    // An edit makes the verdict stale: it no longer describes these inputs.
+    await card.getByLabel("HMAC (base64)").fill(b64("other"));
+    await expect(result).not.toBeVisible();
+
+    await verify.click();
+    await expect(result).toHaveText("HMAC valid");
+
+    // A later verification that fails must not leave the earlier success.
+    await page.route("**/api/v1/kms/hmac/mac-key/verify**", (route) =>
+      route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ message: "backend unavailable" }),
+      }),
+    );
+    await verify.click();
+    await expect(page.getByTestId("kms-ops-error")).toContainText("backend unavailable");
+    await expect(result).not.toBeVisible();
+  });
+
   test("generates random bytes", async ({ page }) => {
     const mock = await openPage(page);
     const card = page.getByTestId("op-random");
