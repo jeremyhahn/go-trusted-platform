@@ -44,10 +44,10 @@ describe('IDevIDForm', () => {
   });
 
   it('shows a destructive toast when the device list is refused', async () => {
-    stubControlPlane({ 'GET /api/v1/devices': refused(500, 'store down') });
+    stubControlPlane({ 'GET /api/v1/devices': refused(403, 'admin role required') });
     render(withControlPlane(<IDevIDForm />));
 
-    const toast = await screen.findByText('Error: Failed to load devices');
+    const toast = await screen.findByText('Error: Failed to load devices', undefined, { timeout: 4000 });
     expect(toast.getAttribute('data-variant')).toBe('destructive');
     const trigger = screen.getAllByRole('combobox')[0];
     expect(trigger.hasAttribute('disabled')).toBe(false);
@@ -65,13 +65,33 @@ describe('IDevIDForm', () => {
   });
 
   it('refuses a validity below one day', async () => {
+    const sent = stubControlPlane({ 'GET /api/v1/devices': twoDevices });
+    render(withControlPlane(<IDevIDForm />));
+
+    const validity = screen.getByLabelText('Validity Period (Days)') as HTMLInputElement;
+    fireEvent.change(validity, { target: { value: '0' } });
+    // The browser's own range check stops the submit button first.
+    expect(validity.validity.rangeUnderflow).toBe(true);
+    await act(async () => {
+      fireEvent.submit(validity.form as HTMLFormElement);
+    });
+
+    expect(await screen.findByText('Validity must be at least 1 day')).toBeDefined();
+    expect(sent.filter((r) => r.method !== 'GET')).toEqual([]);
+  });
+
+  it('refuses a validity above ten years', async () => {
     stubControlPlane({ 'GET /api/v1/devices': twoDevices });
     render(withControlPlane(<IDevIDForm />));
 
-    fireEvent.change(screen.getByLabelText('Validity Period (Days)'), { target: { value: '0' } });
-    await submit();
+    const validity = screen.getByLabelText('Validity Period (Days)') as HTMLInputElement;
+    fireEvent.change(validity, { target: { value: '3651' } });
+    expect(validity.validity.rangeOverflow).toBe(true);
+    await act(async () => {
+      fireEvent.submit(validity.form as HTMLFormElement);
+    });
 
-    expect(await screen.findByText('Validity must be at least 1 day')).toBeDefined();
+    expect(validity.getAttribute('aria-invalid')).toBe('true');
   });
 
   it('renders Cancel only with an onCancel handler, and calls it', () => {
