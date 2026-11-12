@@ -60,6 +60,9 @@ func NewClient(addr string, tlsConf *tls.Config) (*Client, error) {
 	if tlsConf.RootCAs == nil {
 		return nil, ErrInvalidTLSConfig{Reason: "no root CAs to verify the agent"}
 	}
+	if tlsConf.InsecureSkipVerify {
+		return nil, ErrInvalidTLSConfig{Reason: "InsecureSkipVerify would accept any agent certificate"}
+	}
 	conf := tlsConf.Clone()
 	conf.MinVersion = tls.VersionTLS13
 	conf.MaxVersion = tls.VersionTLS13
@@ -174,7 +177,7 @@ func (c *Client) StatRemote(ctx context.Context, remotePath string) (int64, int6
 // roundTrip runs one operation on its own stream: the request frame, the
 // body (when body is not nil), the end of the send side, then the response
 // frame.
-func (c *Client) roundTrip(ctx context.Context, req request, body func(io.Writer) error) (response, error) {
+func (c *Client) roundTrip(ctx context.Context, req request, body func(io.Writer) error) (resp response, err error) {
 	c.mu.Lock()
 	conn := c.conn
 	c.mu.Unlock()
@@ -191,24 +194,37 @@ func (c *Client) roundTrip(ctx context.Context, req request, body func(io.Writer
 		stream.CancelWrite(streamCancelled)
 	})
 	defer stop()
+	// Release both sides of the stream on every failed exit, so neither
+	// peer waits on it.
+	defer func() {
+		if err != nil {
+			stream.CancelWrite(streamCancelled)
+			stream.CancelRead(streamCancelled)
+		}
+	}()
 
-	sendErr := writeFrame(stream, req)
+	sw := &streamWriter{w: stream}
+	sendErr := writeFrame(sw, req)
 	if sendErr == nil && body != nil {
-		sendErr = body(stream)
+		sendErr = body(sw)
+	}
+	if sendErr != nil && sw.err == nil {
+		// The failure is local (an oversized frame, a failing body
+		// source): the agent has nothing to answer, so do not wait.
+		return response{}, ErrStream{Op: req.Op, Cause: sendErr}
 	}
 	if sendErr == nil {
 		sendErr = stream.Close()
 	}
 
-	var resp response
-	if err := readFrame(stream, &resp); err != nil {
+	if rerr := readFrame(stream, &resp); rerr != nil {
 		if sendErr != nil {
-			err = sendErr
+			rerr = sendErr
 		}
 		if ctx.Err() != nil {
-			err = ctx.Err()
+			rerr = ctx.Err()
 		}
-		return response{}, ErrStream{Op: req.Op, Cause: err}
+		return response{}, ErrStream{Op: req.Op, Cause: rerr}
 	}
 	// The agent can answer (with an error) before it has read the whole
 	// body; its answer explains the failed send.
@@ -216,4 +232,20 @@ func (c *Client) roundTrip(ctx context.Context, req request, body func(io.Writer
 		return response{}, ErrStream{Op: req.Op, Cause: sendErr}
 	}
 	return resp, nil
+}
+
+// streamWriter records the first error the stream itself returned, so
+// roundTrip can tell a transport failure (the agent may still answer) from
+// a local one.
+type streamWriter struct {
+	w   io.Writer
+	err error
+}
+
+func (s *streamWriter) Write(p []byte) (int, error) {
+	n, err := s.w.Write(p)
+	if err != nil && s.err == nil {
+		s.err = err
+	}
+	return n, err
 }
