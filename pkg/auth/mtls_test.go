@@ -20,9 +20,12 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"errors"
 	"math/big"
 	"testing"
 	"time"
+
+	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
@@ -522,6 +525,7 @@ func TestMTLSAdapter_Authenticate(t *testing.T) {
 		config := DefaultMTLSConfig()
 		config.DefaultTenant = "default-tenant"
 		config.TenantField = IdentityFieldSerialNumber
+		config.TrustedRoots = selfRoots(cert)
 
 		adapter := &MTLSAdapter{
 			logger: logger,
@@ -547,6 +551,7 @@ func TestMTLSAdapter_Authenticate(t *testing.T) {
 		config := DefaultMTLSConfig()
 		config.DefaultTenant = ""
 		config.TenantField = IdentityFieldSerialNumber
+		config.TrustedRoots = selfRoots(cert)
 
 		adapter := &MTLSAdapter{
 			logger: logger,
@@ -565,9 +570,11 @@ func TestMTLSAdapter_Authenticate(t *testing.T) {
 		opts.organization = []string{"Acme Corp"}
 		cert := createTestCertificate(t, opts)
 
+		config := DefaultMTLSConfig()
+		config.TrustedRoots = selfRoots(cert)
 		adapter := &MTLSAdapter{
 			logger: logger,
-			config: DefaultMTLSConfig(),
+			config: config,
 		}
 
 		identity, err := adapter.Authenticate(context.Background(), cert)
@@ -597,6 +604,7 @@ func TestMTLSAdapter_Authenticate(t *testing.T) {
 
 		config := DefaultMTLSConfig()
 		config.ValidateIDevID = true
+		config.TrustedRoots = selfRoots(cert)
 
 		adapter := &MTLSAdapter{
 			logger: logger,
@@ -990,5 +998,74 @@ func TestMTLSAdapterFromRoots_Authenticate(t *testing.T) {
 	}
 	if ident.TenantID != "default" {
 		t.Fatalf("TenantID = %q, want default", ident.TenantID)
+	}
+}
+
+// selfRoots returns a pool that trusts the given self-signed certificate.
+func selfRoots(cert *x509.Certificate) *x509.CertPool {
+	pool := x509.NewCertPool()
+	pool.AddCert(cert)
+	return pool
+}
+
+// verifyErrCA is a CA whose Verify always fails with err; every other
+// method panics through the nil embedded interface.
+type verifyErrCA struct {
+	quicbaasca.CACertificateAuthority
+	err error
+}
+
+func (c verifyErrCA) Verify(*x509.Certificate, map[uint64]*x509.Certificate) (bool, error) {
+	return false, c.err
+}
+
+// errVerifyUnavailable is a non-revocation failure from the CA.
+type errVerifyUnavailable struct{}
+
+func (errVerifyUnavailable) Error() string { return "ca: certificate store unavailable" }
+
+func TestAuthenticate_NilTrustedRoots_FailsClosed(t *testing.T) {
+	cert := createTestCertificate(t, defaultTestCertOptions())
+	adapter := &MTLSAdapter{
+		logger: logging.DefaultLogger(),
+		config: DefaultMTLSConfig(),
+	}
+	if adapter.config.TrustedRoots != nil {
+		t.Fatal("precondition: TrustedRoots must be nil")
+	}
+
+	identity, err := adapter.Authenticate(context.Background(), cert)
+	if err == nil {
+		t.Fatalf("Authenticate with nil TrustedRoots returned identity %+v, want error", identity)
+	}
+	if !errors.As(err, new(ErrMissingTrustedRoots)) {
+		t.Fatalf("err = %T %v, want ErrMissingTrustedRoots", err, err)
+	}
+	if identity != nil {
+		t.Fatalf("identity = %+v, want nil", identity)
+	}
+}
+
+func TestCheckRevocation_NonRevocationError_FailsClosed(t *testing.T) {
+	cert := createTestCertificate(t, defaultTestCertOptions())
+	cause := errVerifyUnavailable{}
+	adapter := &MTLSAdapter{
+		logger: logging.DefaultLogger(),
+		ca:     verifyErrCA{err: cause},
+		config: DefaultMTLSConfig(),
+	}
+
+	err := adapter.checkRevocation(context.Background(), cert)
+	if err == nil {
+		t.Fatal("checkRevocation returned nil for a failed CA Verify, want error")
+	}
+	if !errors.As(err, new(ErrRevocationCheckFailed)) {
+		t.Fatalf("err = %T %v, want ErrRevocationCheckFailed", err, err)
+	}
+	if !errors.Is(err, cause) {
+		t.Fatalf("err = %v does not wrap the CA error", err)
+	}
+	if errors.As(err, new(ErrCertificateRevoked)) {
+		t.Fatalf("err = %v, a non-revocation failure must not read as revoked", err)
 	}
 }
