@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 
 import type { GenerateKeyInput, Key } from "@/types/security";
 
@@ -116,7 +116,7 @@ const key = (over: Partial<Key> = {}): Key =>
   }) as Key;
 
 describe("KMSKeysPage", () => {
-  let confirmSpy: ReturnType<typeof vi.spyOn>;
+  let confirmSpy: MockInstance<(message?: string) => boolean>;
 
   beforeEach(() => {
     h.api.data = undefined;
