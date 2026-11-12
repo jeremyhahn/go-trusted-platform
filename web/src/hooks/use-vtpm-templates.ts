@@ -12,6 +12,10 @@
 import type { ApiResponse } from 'trusted-platform-sdk';
 import { useVTPM, useApi, useMutation } from '@/hooks';
 import { useToast } from '@/hooks/use-toast';
+import { useState } from 'react';
+
+/** Bundles fetched per page of the bundle list (the REST handler pages by limit and offset). */
+export const VTPM_BUNDLE_PAGE_SIZE = 100;
 
 export interface VTPMTemplateWire {
   id: string;
@@ -91,12 +95,15 @@ export function useVTPMTemplates() {
     { onError }
   );
 
+  const [bundleOffset, setBundleOffset] = useState(0);
   const bundles = useApi(
     async () =>
       wire<{ bundles?: VTPMBundleWire[]; total?: number }>(
-        await vtpm.listBundles({ options: { limit: 100 } })
+        await vtpm.listBundles({
+          options: { limit: VTPM_BUNDLE_PAGE_SIZE, offset: bundleOffset },
+        })
       ),
-    [],
+    [bundleOffset],
     { onError }
   );
 
@@ -173,6 +180,10 @@ export function useVTPMTemplates() {
     bundles: bundles.data?.bundles ?? [],
     bundlesLoading: bundles.isLoading,
     refetchBundles: bundles.refetch,
+    bundleOffset,
+    hasNextBundlePage: (bundles.data?.bundles?.length ?? 0) === VTPM_BUNDLE_PAGE_SIZE,
+    nextBundlePage: () => setBundleOffset((o) => o + VTPM_BUNDLE_PAGE_SIZE),
+    prevBundlePage: () => setBundleOffset((o) => Math.max(0, o - VTPM_BUNDLE_PAGE_SIZE)),
     createTemplate,
     getTemplate,
     cloneTemplate,

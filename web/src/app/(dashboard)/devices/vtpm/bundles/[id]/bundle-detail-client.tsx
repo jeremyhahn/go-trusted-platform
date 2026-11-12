@@ -5,7 +5,7 @@
  * TPM socket and NVRAM paths.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, usePathname } from 'next/navigation';
 import { resolveDynamicId } from '@/utils/dynamic-route';
 import { Button } from '@/components/ui/button';
@@ -29,26 +29,45 @@ export default function BundleDetailClient() {
   const [socketPath, setSocketPath] = useState<string | null>(null);
   const [nvramPath, setNvramPath] = useState<string | null>(null);
 
-  // The bundle shown is the last one fetched for the id in the URL.
-  const bundle: VTPMBundleWire | null =
-    getBundle.data && getBundle.variables === bundleId ? getBundle.data : null;
+  // Results are keyed to the ID that produced them: a response for an ID the
+  // URL has since left is dropped, so bundle A never shows under bundle B.
+  const [loaded, setLoaded] = useState<{ id: string; bundle: VTPMBundleWire } | null>(null);
+  const [failedId, setFailedId] = useState<string | null>(null);
+  const currentId = useRef(bundleId);
+  currentId.current = bundleId;
 
   useEffect(() => {
-    if (bundleId) {
-      getBundle.mutate(bundleId);
-    }
+    setLoaded(null);
+    setFailedId(null);
+    setValidation(null);
+    setBundlePath(null);
+    setSocketPath(null);
+    setNvramPath(null);
+    if (!bundleId) return;
+    const id = bundleId;
+    getBundle.mutateAsync(id).then(
+      (result) => {
+        if (currentId.current === id) setLoaded({ id, bundle: result });
+      },
+      () => {
+        if (currentId.current === id) setFailedId(id);
+      }
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bundleId]);
 
-  const run = async <T,>(call: () => Promise<T>, set: (value: T) => void) => {
+  const bundle: VTPMBundleWire | null = loaded && loaded.id === bundleId ? loaded.bundle : null;
+
+  const run = async <T,>(id: string, call: () => Promise<T>, set: (value: T) => void) => {
     try {
-      set(await call());
+      const value = await call();
+      if (currentId.current === id) set(value);
     } catch {
       // onError already shows a toast
     }
   };
 
-  if (!bundleId || (!bundle && !(getBundle.isError && getBundle.variables === bundleId))) {
+  if (!bundleId || (!bundle && failedId !== bundleId)) {
     return <p className="text-muted-foreground">Loading bundle</p>;
   }
 
@@ -94,14 +113,14 @@ export default function BundleDetailClient() {
             <Button
               variant="outline"
               disabled={vt.validateBundle.isLoading}
-              onClick={() => run(() => vt.validateBundle.mutateAsync(bundleId), setValidation)}
+              onClick={() => run(bundleId, () => vt.validateBundle.mutateAsync(bundleId), setValidation)}
             >
               Validate bundle
             </Button>
             <Button
               variant="outline"
               onClick={() =>
-                run(() => vt.getBundlePath.mutateAsync(bundleId), (r) => setBundlePath(r.path))
+                run(bundleId, () => vt.getBundlePath.mutateAsync(bundleId), (r) => setBundlePath(r.path))
               }
             >
               Get bundle path
@@ -109,7 +128,7 @@ export default function BundleDetailClient() {
             <Button
               variant="outline"
               onClick={() =>
-                run(() => vt.getTPMSocketPath.mutateAsync(bundleId), (r) => setSocketPath(r.path))
+                run(bundleId, () => vt.getTPMSocketPath.mutateAsync(bundleId), (r) => setSocketPath(r.path))
               }
             >
               Get TPM socket path
@@ -117,7 +136,7 @@ export default function BundleDetailClient() {
             <Button
               variant="outline"
               onClick={() =>
-                run(() => vt.getNVRAMPath.mutateAsync(bundleId), (r) => setNvramPath(r.path))
+                run(bundleId, () => vt.getNVRAMPath.mutateAsync(bundleId), (r) => setNvramPath(r.path))
               }
             >
               Get NVRAM path

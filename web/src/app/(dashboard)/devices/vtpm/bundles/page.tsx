@@ -84,7 +84,7 @@ export default function VTPMBundlesPage() {
         <CardHeader>
           <CardTitle>Bundles</CardTitle>
           <CardDescription>
-            {vt.bundlesLoading ? 'Loading bundles' : `${vt.bundles.length} bundle(s)`}
+            {vt.bundlesLoading ? 'Loading bundles' : `${vt.bundles.length} bundle(s) on this page`}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -119,6 +119,29 @@ export default function VTPMBundlesPage() {
               )}
             </TableBody>
           </Table>
+          <div className="mt-4 flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={vt.bundleOffset === 0 || vt.bundlesLoading}
+              onClick={vt.prevBundlePage}
+            >
+              Previous
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!vt.hasNextBundlePage || vt.bundlesLoading}
+              onClick={vt.nextBundlePage}
+            >
+              Next
+            </Button>
+            <span data-testid="vtpm-bundle-range" className="text-sm text-muted-foreground">
+              {vt.bundles.length === 0
+                ? 'No bundles'
+                : `Bundles ${vt.bundleOffset + 1}-${vt.bundleOffset + vt.bundles.length}`}
+            </span>
+          </div>
         </CardContent>
       </Card>
     </div>
