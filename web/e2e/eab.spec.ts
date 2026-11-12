@@ -61,6 +61,22 @@ test.describe('CA EAB credentials - list page', () => {
     expect(create?.body).toEqual({ profileId: '7', tenantId: 'tenant-new', expiresInSeconds: 3600 });
   });
 
+  test('refuses a non-positive expiration (CreateCredential)', async ({ page }) => {
+    const api = await mockEABApi(page, seed());
+    await page.goto('/ca/eab');
+
+    await page.getByLabel('Profile ID').fill('7');
+    await page.getByLabel('Tenant ID').fill('tenant-new');
+    await page.getByLabel('Expires in (seconds)').fill('-1');
+    await page.getByRole('button', { name: 'Create' }).click();
+
+    await expect(
+      page.getByText('Expires in must be a positive whole number of seconds, or blank'),
+    ).toBeVisible();
+    expect(api.calls.find((c) => c.method === 'POST' && c.path === '')).toBeUndefined();
+    await expect(page.getByTestId('eab-created')).not.toBeVisible();
+  });
+
   test('creates a credential with a profile ID above MAX_SAFE_INTEGER (CreateCredential)', async ({
     page,
   }) => {
