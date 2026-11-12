@@ -110,10 +110,6 @@ export default function ImagesPage() {
     void applyImages(loadImages());
   }, [applyImages, loadImages]);
 
-  React.useEffect(() => {
-    void loadImages();
-  }, [loadImages]);
-
   const handleDelete = async (img: ImageSummary) => {
     const ref = img.tag ? `${img.repository}:${img.tag}` : img.repository;
     if (!confirm(`Delete ${ref}? This cannot be undone.`)) return;
