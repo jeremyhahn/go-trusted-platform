@@ -36,6 +36,8 @@ func (ErrCeremonyBackendRequiresSDK) Error() string {
 // SDKBackendTarget is the daemon surface the SDK backend wiring writes to.
 type SDKBackendTarget interface {
 	SetCeremonyBackend(b daemon.CeremonyBackend)
+	SetLUKSBackend(b daemon.LUKSBackend)
+	SetLUKSRootChecker(rc daemon.RootChecker)
 }
 
 // SDKBackendSources is what the ceremony backend is built from.
@@ -69,8 +71,9 @@ func PlatformAdminIdentity(a *app.App) AdminIdentity {
 	return identity
 }
 
-// WireSDKBackends gives a daemon's ceremony service its production backend on
-// every transport. Runtime FIDO2 is intentionally left unwired until the SDK
+// WireSDKBackends gives a daemon's ceremony and LUKS services their production
+// backends on every transport, and the LUKS service its effective-UID root
+// checker. A refused wiring (no SDK client) wires nothing. Runtime FIDO2 is intentionally left unwired until the SDK
 // exposes the daemon backend shape; callers receive daemon.ErrFIDO2NotConfigured
 // instead of a local CTAP2/KV implementation.
 func WireSDKBackends(target SDKBackendTarget, src SDKBackendSources, logger *logging.Logger) error {
@@ -78,6 +81,11 @@ func WireSDKBackends(target SDKBackendTarget, src SDKBackendSources, logger *log
 		return ErrCeremonyBackendRequiresSDK{}
 	}
 	target.SetCeremonyBackend(NewCeremonyBackend(logger, src.SDK, src.Admin))
+	// The LUKS backend needs no SDK: it drives go-luks2 on the host, with
+	// the FIDO2 and TPM handlers the host can open. The root checker reads
+	// the effective UID; without it the service refuses every mutation.
+	target.SetLUKSBackend(NewLUKSBackend(logger, WithDefaultLUKSHandlers()))
+	target.SetLUKSRootChecker(DefaultRootChecker())
 	return nil
 }
 
