@@ -80,7 +80,7 @@ func ErrPlatformConfigRead(path string, cause error) error {
 func ErrPlatformConfigMissingSealPCRs(path string) error {
 	return &ISOError{
 		Type:    ErrorTypePlatform,
-		Message: fmt.Sprintf("platform config missing required 'seal-pcrs' field: %s - config MUST have 'seal-pcrs: [7, 9]' at root level for TPM sealing", path),
+		Message: fmt.Sprintf("platform config missing required 'seal-pcrs' field: %s - config MUST have 'seal-pcrs: [7, 11]' at root level for TPM sealing", path),
 	}
 }
 

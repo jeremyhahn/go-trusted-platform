@@ -5660,7 +5660,7 @@ func (c *Customizer) buildInstallerConfig() (*installer.Config, error) {
 		pcrs, err := parsePCRSelection(c.config.Security.TPM.SealPCR)
 		if err != nil {
 			c.logger.Warn("Invalid PCR selection, using defaults", "error", err)
-			pcrs = []uint{0, 7, 9}
+			pcrs = installer.SealPCRsDefault()
 		}
 		config.PCRs = pcrs
 	}
