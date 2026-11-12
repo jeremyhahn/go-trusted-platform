@@ -122,36 +122,43 @@ async function call<T>(url: string, init?: RequestInit): Promise<T> {
 
 /**
  * useBMC reads and drives one BMC profile through the
- * `/api/v1/bmc/{profileID}/...` routes.
+ * `/api/v1/bmc/{profileID}/...` routes. Only the newest load is applied, and
+ * a mutation drops every read started before it, so an older refresh that
+ * finishes last never overwrites the state read after the mutation.
  */
 export function useBMC(profileID: string): UseBMCResult {
   const [loaded, setLoaded] = React.useState<LoadedBMC | null>(null);
+  const generation = React.useRef(0);
 
   const apply = React.useCallback((next: LoadedBMC) => setLoaded(next), []);
+
+  const load = React.useCallback(async () => {
+    const g = ++generation.current;
+    const next = await loadBMC(profileID);
+    if (g === generation.current) {
+      apply(next);
+    }
+  }, [profileID, apply]);
 
   React.useEffect(() => {
     if (!profileID) {
       return;
     }
-    let cancelled = false;
-    void loadBMC(profileID).then((next) => {
-      if (!cancelled) {
-        apply(next);
-      }
-    });
+    void load();
     return () => {
-      cancelled = true;
+      generation.current++;
     };
-  }, [profileID, apply]);
+  }, [profileID, load]);
 
   const refetch = React.useCallback(async () => {
     if (profileID) {
-      apply(await loadBMC(profileID));
+      await load();
     }
-  }, [profileID, apply]);
+  }, [profileID, load]);
 
   const mutate = React.useCallback(
     async (op: string, method: "POST" | "DELETE", body?: unknown) => {
+      generation.current++;
       await call<unknown>(bmcUrl(profileID, op), {
         method,
         body: body === undefined ? undefined : JSON.stringify(body),
