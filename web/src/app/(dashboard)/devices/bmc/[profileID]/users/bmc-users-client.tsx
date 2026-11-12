@@ -38,6 +38,22 @@ const selectClass =
 
 type DialogKind = 'create' | 'password' | 'privilege' | 'delete' | 'cert' | null;
 
+// Slots 0-2 are reserved by the BMC (0 and 1 anonymous/null, 2 the
+// factory administrator); new accounts start at slot 3.
+const FIRST_USER_SLOT = 3;
+
+/**
+ * Lowest slot from FIRST_USER_SLOT up that no listed user occupies.
+ * IPMI CreateUser overwrites whatever account holds the slot, so the
+ * caller must pick an unused one.
+ */
+function firstFreeSlot(users: BMCUserSlot[]): number {
+  const taken = new Set(users.map((u) => u.slot));
+  let slot = FIRST_USER_SLOT;
+  while (taken.has(slot)) slot++;
+  return slot;
+}
+
 export default function BMCUsersClient() {
   const params = useParams();
   const pathname = usePathname();
@@ -50,7 +66,7 @@ export default function BMCUsersClient() {
   const [busy, setBusy] = useState(false);
 
   const [createForm, setCreateForm] = useState({
-    slot: '3',
+    slot: String(FIRST_USER_SLOT),
     username: '',
     password: '',
     privilege: 'user' as BMCPrivilege,
@@ -62,9 +78,14 @@ export default function BMCUsersClient() {
   const [channel, setChannel] = useState('1');
   const [certPem, setCertPem] = useState('');
   const [keyPem, setKeyPem] = useState('');
+  const [createError, setCreateError] = useState<string | null>(null);
 
   const open = (kind: DialogKind, user: BMCUserSlot | null = null) => {
     setTarget(user);
+    if (kind === 'create') {
+      setCreateForm((f) => ({ ...f, slot: String(firstFreeSlot(bmc.users)) }));
+      setCreateError(null);
+    }
     if (kind === 'password') setPassword('');
     if (kind === 'privilege' && user) {
       const name = bmcPrivilegeLabel(user.privilege);
@@ -203,9 +224,18 @@ export default function BMCUsersClient() {
             className="space-y-4"
             onSubmit={(e) => {
               e.preventDefault();
+              const slot = Number(createForm.slot);
+              const holder = bmc.users.find((u) => u.slot === slot);
+              if (holder) {
+                setCreateError(
+                  `Slot ${slot} is already held by ${holder.username}; pick a free slot.`
+                );
+                return;
+              }
+              setCreateError(null);
               void run('User created', () =>
                 bmc.createUser({
-                  slot: Number(createForm.slot),
+                  slot,
                   username: createForm.username,
                   password: createForm.password,
                   privilege: createForm.privilege,
@@ -222,9 +252,17 @@ export default function BMCUsersClient() {
                 type="number"
                 min={0}
                 value={createForm.slot}
-                onChange={(e) => setCreateForm({ ...createForm, slot: e.target.value })}
+                onChange={(e) => {
+                  setCreateForm({ ...createForm, slot: e.target.value });
+                  setCreateError(null);
+                }}
                 required
               />
+              {createError && (
+                <p role="alert" className="mt-1 text-sm text-destructive" data-testid="bmc-create-slot-error">
+                  {createError}
+                </p>
+              )}
             </div>
             <div>
               <Label htmlFor="bmc-create-username">Username</Label>
