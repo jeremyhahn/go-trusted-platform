@@ -36,6 +36,24 @@ function recordingClient(): { client: ApiClient; calls: Call[] } {
   return { client, calls };
 }
 
+describe('TenantService listTenants paging', () => {
+  it('sends limit and offset and no page parameter', async () => {
+    const { client, calls } = recordingClient();
+    await new TenantService(client).listTenants({ limit: 100, offset: 200 });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.method).toBe('GET');
+    expect(calls[0]?.url).toContain('limit=100');
+    expect(calls[0]?.url).toContain('offset=200');
+    expect(calls[0]?.url).not.toContain('page=');
+  });
+
+  it('sends offset 0 when it is given', async () => {
+    const { client, calls } = recordingClient();
+    await new TenantService(client).listTenants({ limit: 100, offset: 0 });
+    expect(calls[0]?.url).toContain('offset=0');
+  });
+});
+
 describe('TenantService barrier operations', () => {
   it('initBarrier posts threshold and shares to barrier/init', async () => {
     const { client, calls } = recordingClient();

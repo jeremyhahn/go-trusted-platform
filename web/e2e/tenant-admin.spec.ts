@@ -44,6 +44,24 @@ test.describe('Admin tenant lifecycle, quota and DEK (#1673)', () => {
       await expect(page.getByTestId('tenant-row-tenant-2')).toContainText('SUSPENDED');
     });
 
+    test('ListTenants pages past the first 100 tenants', async ({ page }) => {
+      const many = Array.from({ length: 120 }, (_, i) =>
+        createMockAdminTenant({ id: `tenant-${i + 1}`, name: `t${String(i + 1).padStart(3, '0')}` }),
+      );
+      const api = await mockAdminTenantsApi(page, { tenants: many });
+      await page.goto('/admin/tenants/');
+      const list = page.getByTestId('tenant-list');
+      await expect(list.getByRole('link', { name: 't001' })).toBeVisible();
+      await expect(list.getByRole('link', { name: 't101' })).toHaveCount(0);
+      await expect(page.getByTestId('tenant-page-info')).toContainText('of 120');
+
+      await page.getByRole('button', { name: 'Next' }).click();
+      await expect(list.getByRole('link', { name: 't120' })).toBeVisible();
+      const query = lastCall(api.calls, 'GET', '/api/v1/tenants')?.query ?? '';
+      expect(query).toContain('limit=100');
+      expect(query).toContain('offset=100');
+    });
+
     test('CreateTenant adds a tenant', async ({ page }) => {
       const api = await mockAdminTenantsApi(page);
       await page.goto('/admin/tenants/');
@@ -98,6 +116,17 @@ test.describe('Admin tenant lifecycle, quota and DEK (#1673)', () => {
       await page.getByRole('button', { name: 'Save', exact: true }).click();
       await expect(page.getByTestId('action-result')).toHaveText('Tenant updated');
       expect(lastCall(api.calls, 'PUT', '/tenant-1')?.body).toMatchObject({ displayName: 'Acme Industries' });
+    });
+
+    test('UpdateTenant refuses an empty display name', async ({ page }) => {
+      const api = await mockAdminTenantsApi(page);
+      await page.goto(DETAIL);
+      const field = page.getByLabel('Display name');
+      await expect(field).toHaveValue('Acme Corp');
+      await field.fill('');
+      await page.getByRole('button', { name: 'Save', exact: true }).click();
+      await expect(page.getByTestId('action-result')).toHaveText('Display name cannot be empty');
+      expect(lastCall(api.calls, 'PUT', '/tenant-1')).toBeUndefined();
     });
 
     test('SuspendTenant suspends after confirm', async ({ page }) => {

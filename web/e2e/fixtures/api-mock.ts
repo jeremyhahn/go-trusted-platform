@@ -416,6 +416,8 @@ export interface AdminTenant {
 export interface AdminTenantCall {
   method: string;
   path: string;
+  /** The request's query string, e.g. `?limit=100&offset=0`. */
+  query: string;
   body: unknown;
 }
 
@@ -468,12 +470,17 @@ export async function mockAdminTenantsApi(
     } catch {
       body = undefined;
     }
-    calls.push({ method, path, body });
+    calls.push({ method, path, query: url.search, body });
     const parts = path.replace(/^.*\/api\/v1\/tenants/, '').split('/').filter(Boolean).map(decodeURIComponent);
     const input = (body ?? {}) as Record<string, unknown>;
 
     if (parts.length === 0) {
-      if (method === 'GET') return reply(route, 200, { tenants, total: tenants.length });
+      if (method === 'GET') {
+        // The server pages the list: limit defaults to 100, offset to 0.
+        const limit = Number(url.searchParams.get('limit') ?? '') || 100;
+        const offset = Number(url.searchParams.get('offset') ?? '') || 0;
+        return reply(route, 200, { tenants: tenants.slice(offset, offset + limit), total: tenants.length });
+      }
       if (method === 'POST') {
         const created = createMockAdminTenant({
           id: `tenant-${tenants.length + 1}`,
@@ -502,7 +509,14 @@ export async function mockAdminTenantsApi(
       case 'GET ':
         return reply(route, 200, { tenant });
       case 'PUT ':
-        return reply(route, 200, { status: ok, tenant: update({ displayName: input.displayName as string }) });
+      {
+        // The server ignores an empty display name and keeps the old one.
+        const submitted = input.displayName as string | undefined;
+        return reply(route, 200, {
+          status: ok,
+          tenant: submitted ? update({ displayName: submitted }) : tenant,
+        });
+      }
       case 'DELETE ':
         tenants = tenants.filter((t) => t.id !== tenant.id);
         return reply(route, 200, { status: ok });
