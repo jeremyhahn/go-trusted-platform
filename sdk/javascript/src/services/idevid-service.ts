@@ -246,7 +246,17 @@ export class IDevIDService extends BaseService {
    * @returns CSR and issued certificate
    */
   async createLDevID(request?: CreateLDevIDRequest): Promise<ApiResponse<CreateLDevIDResponse>> {
-    return this.client.post<CreateLDevIDResponse>(this.buildUrl('/ldevid'), request ?? {});
+    // The REST handler decodes protobuf JSON: the algorithm must carry the
+    // proto enum name (DeviceKeyAlgorithm in idevid.proto), or the decoder
+    // drops it and the service falls back to its default algorithm.
+    const { algorithm, ...rest } = request ?? {};
+    const body: Omit<CreateLDevIDRequest, 'algorithm'> & { algorithm?: string } = { ...rest };
+    if (algorithm) {
+      body.algorithm = algorithm.startsWith('DEVICE_KEY_ALGORITHM_')
+        ? algorithm
+        : `DEVICE_KEY_ALGORITHM_${algorithm}`;
+    }
+    return this.client.post<CreateLDevIDResponse>(this.buildUrl('/ldevid'), body);
   }
 
   // =========================================================================

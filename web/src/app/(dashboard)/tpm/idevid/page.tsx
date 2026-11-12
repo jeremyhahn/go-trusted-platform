@@ -205,7 +205,7 @@ export default function TPMIDevIDPage() {
             <ConfirmAction
               label="Delete IAK"
               title="Delete the IAK?"
-              description="The IAK key is removed from the TPM. Attestation with it stops until a new IAK is generated."
+              description="The IAK is TPM-resident and this service does not evict it: the request is refused and nothing changes. Remove the IAK certificate with Delete IAK certificate."
               onConfirm={() => deleteIAK.mutate(undefined)}
               disabled={deleteIAK.isLoading}
             />
