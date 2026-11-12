@@ -2,7 +2,8 @@
 
 import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { acceptInvitation, useInvitationLookup } from "@/hooks";
+import { acceptInvitation, isPendingInvitation, useInvitationLookup } from "@/hooks";
+import { AuthProvider, useOptionalAuth } from "@/contexts/AuthContext";
 import {
   Button,
   Card,
@@ -16,8 +17,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  Input,
-  Label,
 } from "@/components/ui";
 
 /**
@@ -31,18 +30,21 @@ function InviteAccept() {
   const params = useSearchParams();
   const token = params.get("token");
   const { invitation, loading, error } = useInvitationLookup({ token });
-  const [name, setName] = useState("");
+  const userId = useOptionalAuth()?.user?.id ?? null;
+  const signInHref = `/auth/login/?redirect=${encodeURIComponent(
+    `/invite/?token=${encodeURIComponent(token ?? "")}`
+  )}`;
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [accepting, setAccepting] = useState(false);
   const [acceptError, setAcceptError] = useState<string | null>(null);
   const [accepted, setAccepted] = useState<string | null>(null);
 
   const onConfirm = async () => {
-    if (!token) return;
+    if (!token || !userId) return;
     setAccepting(true);
     setAcceptError(null);
     try {
-      const result = await acceptInvitation(token, name.trim() || undefined);
+      const result = await acceptInvitation(token, userId);
       setAccepted(result.message || "Invitation accepted");
       setConfirmOpen(false);
     } catch (err) {
@@ -93,14 +95,13 @@ function InviteAccept() {
               {acceptError}
             </p>
           )}
-          {!loading && invitation && invitation.status === "pending" && !accepted && (
+          {!loading && invitation && isPendingInvitation(invitation.status) && !accepted && !userId && (
+            <a href={signInHref} data-testid="invite-sign-in" className="underline">
+              Sign in to accept
+            </a>
+          )}
+          {!loading && invitation && isPendingInvitation(invitation.status) && !accepted && userId && (
             <div className="space-y-2">
-              <Label htmlFor="invite-name">Your name (optional)</Label>
-              <Input
-                id="invite-name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-              />
               <Button onClick={() => setConfirmOpen(true)} data-testid="invite-accept">
                 Accept invitation
               </Button>
@@ -134,8 +135,10 @@ function InviteAccept() {
 
 export default function InvitePage() {
   return (
-    <Suspense fallback={<p>Loading invitation...</p>}>
-      <InviteAccept />
-    </Suspense>
+    <AuthProvider>
+      <Suspense fallback={<p>Loading invitation...</p>}>
+        <InviteAccept />
+      </Suspense>
+    </AuthProvider>
   );
 }

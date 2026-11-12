@@ -40,8 +40,28 @@ async function readError(response: Response): Promise<string> {
 }
 
 function unwrapInvitation(body: unknown): InvitationDetail {
-  const record = body as { invitation?: InvitationDetail };
-  return record.invitation ?? (body as InvitationDetail);
+  // The gateway answers with its REST envelope
+  // {code, success, payload: {invitation, timestamp}}; a bare {invitation}
+  // is accepted too. The envelope itself is never the invitation.
+  const record = (body ?? {}) as {
+    invitation?: InvitationDetail;
+    payload?: { invitation?: InvitationDetail };
+  };
+  const invitation = record.payload?.invitation ?? record.invitation;
+  if (!invitation) {
+    throw new Error("The server returned no invitation");
+  }
+  return invitation;
+}
+
+/**
+ * True when an invitation can still be accepted. The wire carries the
+ * protobuf enum string (INVITATION_STATUS_PENDING); older mocks and views
+ * use "pending".
+ */
+export function isPendingInvitation(status: string | undefined | null): boolean {
+  const s = (status ?? "").toLowerCase();
+  return s === "pending" || s === "invitation_status_pending";
 }
 
 /** GetInvitation: reads one invitation by its id with the session bearer. */
@@ -71,12 +91,10 @@ export async function fetchInvitationByToken(token: string): Promise<InvitationD
 /** AcceptInvitation: public accept of the invitation a token names. */
 export async function acceptInvitation(
   token: string,
-  name?: string
+  userId: string
 ): Promise<AcceptInvitationResult> {
-  const body: { token: string; name?: string } = { token };
-  if (name) {
-    body.name = name;
-  }
+  // AcceptInvitationRequest is {token, user_id}.
+  const body = { token, user_id: userId };
   const response = await fetch(`${getBaseUrl()}/api/v1/invitations/accept`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

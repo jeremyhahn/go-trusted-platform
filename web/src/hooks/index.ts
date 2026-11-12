@@ -85,6 +85,7 @@ export {
   fetchInvitation,
   fetchInvitationByToken,
   acceptInvitation,
+  isPendingInvitation,
 } from './use-invitation-lookup';
 export type {
   InvitationDetail,
