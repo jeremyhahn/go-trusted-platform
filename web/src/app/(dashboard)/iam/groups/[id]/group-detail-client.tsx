@@ -1,7 +1,18 @@
 'use client';
 
 import { useParams, usePathname, useRouter } from 'next/navigation';
-import { ArrowLeft, Loader2, Trash2 } from 'lucide-react';
+import { useState } from 'react';
+import { ArrowLeft, Loader2, Trash2, UserMinus, UserPlus } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { resolveDynamicId } from '@/utils/dynamic-route';
 import { useAuth } from '@/contexts/AuthContext';
 import { useIAM, useApi, useMutation, useToast } from '@/hooks';
@@ -37,7 +48,7 @@ export default function GroupDetailClient() {
 
   const groupId = resolveDynamicId(params, pathname, 'groups');
 
-  const { data: group, isLoading, error } = useApi(
+  const { data: group, isLoading, error, refetch } = useApi(
     () => {
       if (!tenantId) return Promise.reject(new Error('No tenant ID'));
       return iam.getGroup(tenantId, groupId);
@@ -62,6 +73,63 @@ export default function GroupDetailClient() {
           variant: 'destructive',
         });
       },
+    },
+  );
+
+  const [editName, setEditName] = useState<string | null>(null);
+  const [editDescription, setEditDescription] = useState<string | null>(null);
+  const [newMember, setNewMember] = useState('');
+  const [pendingRemove, setPendingRemove] = useState<string | null>(null);
+
+  const failToast = (title: string) => (err: unknown) => {
+    toast({
+      title,
+      description: err instanceof Error ? err.message : 'Unknown error',
+      variant: 'destructive',
+    });
+  };
+
+  const updateMutation = useMutation(
+    async (vars: { name: string; description: string }) => {
+      if (!tenantId) throw new Error('No tenant ID');
+      return iam.updateGroup({ tenantId, groupId, ...vars });
+    },
+    {
+      onSuccess: () => {
+        toast({ title: 'Group updated', variant: 'success' });
+        refetch();
+      },
+      onError: failToast('Failed to update group'),
+    },
+  );
+
+  const addMemberMutation = useMutation(
+    async (userId: string) => {
+      if (!tenantId) throw new Error('No tenant ID');
+      return iam.addGroupMember({ tenantId, groupId, userId });
+    },
+    {
+      onSuccess: () => {
+        toast({ title: 'Member added', variant: 'success' });
+        setNewMember('');
+        refetch();
+      },
+      onError: failToast('Failed to add member'),
+    },
+  );
+
+  const removeMemberMutation = useMutation(
+    async (userId: string) => {
+      if (!tenantId) throw new Error('No tenant ID');
+      return iam.removeGroupMember({ tenantId, groupId, userId });
+    },
+    {
+      onSuccess: () => {
+        toast({ title: 'Member removed', variant: 'success' });
+        setPendingRemove(null);
+        refetch();
+      },
+      onError: failToast('Failed to remove member'),
     },
   );
 
@@ -131,13 +199,40 @@ export default function GroupDetailClient() {
               <h3 className="text-sm font-medium mb-2">Members</h3>
               <ul className="text-sm space-y-1">
                 {members.map((m) => (
-                  <li key={m} className="font-mono text-xs">
-                    {m}
+                  <li key={m} className="font-mono text-xs flex items-center gap-2">
+                    <span>{m}</span>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      aria-label={`Remove member ${m}`}
+                      onClick={() => setPendingRemove(m)}
+                    >
+                      <UserMinus className="h-4 w-4" />
+                    </Button>
                   </li>
                 ))}
               </ul>
             </div>
           )}
+          <form
+            className="flex items-end gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (newMember.trim()) addMemberMutation.mutate(newMember.trim());
+            }}
+          >
+            <div className="space-y-2 flex-1">
+              <Label htmlFor="group-new-member">User ID</Label>
+              <Input
+                id="group-new-member"
+                value={newMember}
+                onChange={(e) => setNewMember(e.target.value)}
+              />
+            </div>
+            <Button type="submit" disabled={addMemberMutation.isLoading || !newMember.trim()}>
+              <UserPlus className="h-4 w-4 mr-2" /> Add member
+            </Button>
+          </form>
           {roles.length > 0 && (
             <div>
               <h3 className="text-sm font-medium mb-2">Roles</h3>
@@ -152,6 +247,67 @@ export default function GroupDetailClient() {
           )}
         </CardContent>
       </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Edit group</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form
+            className="space-y-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              updateMutation.mutate({
+                name: editName ?? g?.name ?? '',
+                description: editDescription ?? g?.description ?? '',
+              });
+            }}
+          >
+            <div className="space-y-2">
+              <Label htmlFor="group-edit-name">Name</Label>
+              <Input
+                id="group-edit-name"
+                value={editName ?? g?.name ?? ''}
+                onChange={(e) => setEditName(e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="group-edit-description">Description</Label>
+              <Input
+                id="group-edit-description"
+                value={editDescription ?? g?.description ?? ''}
+                onChange={(e) => setEditDescription(e.target.value)}
+              />
+            </div>
+            <Button type="submit" disabled={updateMutation.isLoading}>
+              Save group
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+
+      <Dialog open={pendingRemove !== null} onOpenChange={(open) => !open && setPendingRemove(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Remove member?</DialogTitle>
+            <DialogDescription>
+              Remove {pendingRemove} from group &quot;{g?.name || groupId}&quot;.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPendingRemove(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={removeMemberMutation.isLoading}
+              onClick={() => pendingRemove && removeMemberMutation.mutate(pendingRemove)}
+            >
+              Remove member
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

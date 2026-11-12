@@ -82,6 +82,9 @@ export type { User, AuthContextType } from '@/contexts/AuthContext';
 export { useToast, toast, dismissToast } from './use-toast';
 export type { Toast, UseToastReturn } from './use-toast';
 
+export { useIAMTenants } from './use-iam-tenants';
+export type { UseIAMTenantsResult } from './use-iam-tenants';
+
 export { useReportedGateways } from './use-reported-gateways';
 export type {
   ReportedGateway,

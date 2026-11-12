@@ -65,6 +65,8 @@ const navigation = [
       { title: "Users", href: "/iam/users" },
       { title: "Roles", href: "/iam/roles" },
       { title: "Groups", href: "/iam/groups" },
+      { title: "Permissions", href: "/iam/permissions" },
+      { title: "Tenants", href: "/iam/tenants" },
       { title: "Policies", href: "/iam/policies" },
       { title: "Applications", href: "/iam/apps" },
       { title: "API Tokens", href: "/iam/tokens" },
