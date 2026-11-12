@@ -542,7 +542,7 @@ export interface UnsealBundleResponse {
 /** Body of POST /bundles/{id}/pcrs/extend */
 export interface ExtendBundlePCRRequest {
   pcr_index: number;
-  /** Digest to extend, base64 */
+  /** Data to extend, base64; the TPM hashes it with SHA-256 before extending */
   data: string;
 }
 

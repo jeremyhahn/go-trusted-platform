@@ -50,6 +50,16 @@ function parsePCRList(text: string): number[] | undefined {
   });
 }
 
+/** Exactly one PCR index 0-23; anything else (empty, a list, a non-integer) throws. */
+function parseSinglePCR(text: string): number {
+  const t = text.trim();
+  const n = Number(t);
+  if (!/^\d+$/.test(t) || !Number.isInteger(n) || n < 0 || n > 23) {
+    throw new Error("Enter exactly one PCR index (0-23)");
+  }
+  return n;
+}
+
 /**
  * vTPM Runtime Page (#1726)
  *
@@ -61,6 +71,34 @@ export default function VTPMRuntimeClient({ params }: { params: Promise<{ id: st
   const pathname = usePathname();
   const routeId = resolveDynamicId(resolved, pathname, "vtpm");
   const [bundleId, setBundleId] = React.useState(routeId);
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight">vTPM Runtime</h1>
+        <p className="text-muted-foreground">
+          Start, stop, quote, seal and measure a vTPM bundle
+        </p>
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="vtpm-bundle-id">Bundle ID</Label>
+        <Input
+          id="vtpm-bundle-id"
+          value={bundleId}
+          onChange={(e) => setBundleId(e.target.value)}
+          placeholder="Bundle identifier"
+        />
+      </div>
+
+      {/* Keyed on the bundle: a change remounts the hook, its run state and
+          every mutation, so a reply for the previous bundle is dropped. */}
+      <BundleRuntimePanel key={bundleId} bundleId={bundleId} />
+    </div>
+  );
+}
+
+function BundleRuntimePanel({ bundleId }: { bundleId: string }) {
   const { toast } = useToast();
   const rt = useVTPMRuntime(bundleId);
 
@@ -72,7 +110,7 @@ export default function VTPMRuntimeClient({ params }: { params: Promise<{ id: st
   const [sealedBlob, setSealedBlob] = React.useState("");
   const [unsealBlob, setUnsealBlob] = React.useState("");
   const [extendIndex, setExtendIndex] = React.useState("16");
-  const [extendDigest, setExtendDigest] = React.useState("");
+  const [extendData, setExtendData] = React.useState("");
   const [readIndex, setReadIndex] = React.useState("0");
 
   const fail = (title: string) => (error: Error) =>
@@ -111,9 +149,19 @@ export default function VTPMRuntimeClient({ params }: { params: Promise<{ id: st
 
   const handleRead = () =>
     run("Error reading PCR", async () => {
-      const idx = parsePCRList(readIndex)?.[0] ?? 0;
+      const idx = parseSinglePCR(readIndex);
       await rt.readPCR.mutateAsync(idx);
     });
+
+  const requestExtend = () => {
+    try {
+      parseSinglePCR(extendIndex);
+    } catch (err) {
+      fail("Error extending PCR")(err as Error);
+      return;
+    }
+    setPending("extend");
+  };
 
   const confirmPending = () => {
     const action = pending;
@@ -124,52 +172,36 @@ export default function VTPMRuntimeClient({ params }: { params: Promise<{ id: st
       });
     } else if (action === "extend") {
       void run("Error extending PCR", async () => {
-        const idx = parsePCRList(extendIndex)?.[0] ?? 0;
-        await rt.extendPCR.mutateAsync({ pcr_index: idx, data: hexToBase64(extendDigest) });
+        const idx = parseSinglePCR(extendIndex);
+        await rt.extendPCR.mutateAsync({ pcr_index: idx, data: hexToBase64(extendData) });
       });
     }
   };
 
   const quoteData = rt.quote.data;
   const unsealData = rt.unseal.data;
-  const extendData = rt.extendPCR.data;
+  const extendResult = rt.extendPCR.data;
   const readData = rt.readPCR.data;
   const noBundle = bundleId.trim() === "";
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">vTPM Runtime</h1>
-          <p className="text-muted-foreground">
-            Start, stop, quote, seal and measure a vTPM bundle
-          </p>
-        </div>
-        <Badge
-          data-testid="vtpm-run-state"
-          variant={rt.runState === "running" ? "default" : "secondary"}
-        >
-          {rt.runState === "running" ? "Running" : rt.runState === "stopped" ? "Stopped" : "Unknown"}
-        </Badge>
-      </div>
-
       <Card>
         <CardHeader>
-          <CardTitle>Bundle</CardTitle>
+          <div className="flex items-center justify-between">
+            <CardTitle>Bundle</CardTitle>
+            <Badge
+              data-testid="vtpm-run-state"
+              variant={rt.runState === "running" ? "default" : "secondary"}
+            >
+              {rt.runState === "running" ? "Running" : rt.runState === "stopped" ? "Stopped" : "Unknown"}
+            </Badge>
+          </div>
           <CardDescription>
-            The running state comes from the last start or stop result.
+            The running state comes from the last start or stop result for this bundle.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="vtpm-bundle-id">Bundle ID</Label>
-            <Input
-              id="vtpm-bundle-id"
-              value={bundleId}
-              onChange={(e) => setBundleId(e.target.value)}
-              placeholder="Bundle identifier"
-            />
-          </div>
           <div className="flex gap-2">
             <Button onClick={handleStart} disabled={noBundle || rt.start.isLoading}>
               {rt.start.isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}
@@ -284,20 +316,28 @@ export default function VTPMRuntimeClient({ params }: { params: Promise<{ id: st
               <Input id="vtpm-extend-index" value={extendIndex} onChange={(e) => setExtendIndex(e.target.value)} />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="vtpm-extend-digest">Digest (hex)</Label>
-              <Input id="vtpm-extend-digest" value={extendDigest} onChange={(e) => setExtendDigest(e.target.value)} />
+              <Label htmlFor="vtpm-extend-data">Data to extend (hex)</Label>
+              <Input
+                id="vtpm-extend-data"
+                aria-describedby="vtpm-extend-data-help"
+                value={extendData}
+                onChange={(e) => setExtendData(e.target.value)}
+              />
+              <p id="vtpm-extend-data-help" className="text-xs text-muted-foreground">
+                The TPM hashes this data with SHA-256 before extending; it is not a precomputed digest.
+              </p>
             </div>
           </div>
           <Button
             variant="destructive"
-            onClick={() => setPending("extend")}
-            disabled={noBundle || !extendDigest || rt.extendPCR.isLoading}
+            onClick={requestExtend}
+            disabled={noBundle || !extendData || rt.extendPCR.isLoading}
           >
             Extend PCR
           </Button>
-          {extendData?.extended && (
+          {extendResult?.extended && (
             <p className="text-sm" data-testid="vtpm-extend-result">
-              PCR {extendData.pcr_index} extended
+              PCR {extendResult.pcr_index} extended
             </p>
           )}
         </CardContent>
