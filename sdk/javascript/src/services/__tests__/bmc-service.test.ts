@@ -6,6 +6,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ApiClient } from '../../client/api-client.js';
 import { BMCService, bmcPrivilegeName } from '../bmc-service.js';
+import {
+  BMCService as RootBMCService,
+  BMC_PRIVILEGE_CODES as RootBMCPrivilegeCodes,
+  bmcPrivilegeName as rootBMCPrivilegeName,
+  PlatformClient,
+} from '../../index.js';
 
 function createMockApiClient(): ApiClient {
   return {
@@ -82,5 +88,18 @@ describe('BMCService', () => {
     expect(bmcPrivilegeName(0x0f)).toBe('no-access');
     expect(bmcPrivilegeName('operator')).toBe('operator');
     expect(bmcPrivilegeName(0x09)).toBe('unknown');
+  });
+});
+
+describe('BMC through the package root', () => {
+  it('exports BMCService and its helpers from the root entry point', () => {
+    expect(RootBMCService).toBe(BMCService);
+    expect(rootBMCPrivilegeName).toBe(bmcPrivilegeName);
+    expect(RootBMCPrivilegeCodes.administrator).toBe(4);
+  });
+
+  it('constructs client.bmc as a BMCService', () => {
+    const client = new PlatformClient({ baseUrl: 'https://api.example.com' });
+    expect(client.bmc).toBeInstanceOf(RootBMCService);
   });
 });
