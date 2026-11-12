@@ -703,3 +703,94 @@ export async function mockInvitationValidation(
     });
   });
 }
+
+// ============================================================================
+// Overlay API mock (#1722): VTEPs, VNIs, tunnels, tunnel stats, MAC forget
+// ============================================================================
+
+export interface OverlayApiMockConfig {
+  vteps?: Array<{ nodeId: string; ip: string; healthy: boolean; lastSeen: string }>;
+  vnis?: Array<{ id: string; config: { vni: number; name?: string }; createdAt: string; macCount: number }>;
+  tunnels?: Array<{
+    localVtep: string;
+    remoteVtep: string;
+    vni: number;
+    state: string;
+    bytesTx: number;
+    bytesRx: number;
+  }>;
+  /**
+   * Requests to fail, keyed '<METHOD> <path>' (for example 'DELETE /vnis/5001'
+   * or 'GET /vteps'), with the HTTP status to answer. Use a status the client
+   * does not retry (403, not 503).
+   */
+  failures?: Record<string, number>;
+}
+
+/** One request the overlay mock answered: method, path and query. */
+export interface OverlayApiCall {
+  method: string;
+  path: string;
+  query: Record<string, string>;
+}
+
+/**
+ * Mock every /api/v1/overlay route the VTEPs page calls. Returns the list
+ * of calls, in order, so tests can assert on the destructive requests.
+ */
+export async function mockOverlayApi(
+  page: Page,
+  config: OverlayApiMockConfig = {}
+): Promise<OverlayApiCall[]> {
+  const calls: OverlayApiCall[] = [];
+  const vteps = [...(config.vteps ?? [])];
+  let vnis = [...(config.vnis ?? [])];
+  const tunnels = [...(config.tunnels ?? [])];
+
+  await page.route(
+    (url) => url.pathname.startsWith('/api/v1/overlay/'),
+    async (route: Route, request: Request) => {
+      const url = new URL(request.url());
+      const method = request.method();
+      const path = url.pathname.replace('/api/v1/overlay', '');
+      const query = Object.fromEntries(url.searchParams.entries());
+      calls.push({ method, path, query });
+      const json = (status: number, body: unknown) =>
+        route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+
+      const failStatus = config.failures?.[`${method} ${path}`];
+      if (failStatus !== undefined) {
+        return json(failStatus, { error: { code: 'forbidden', message: 'denied' } });
+      }
+      if (method === 'GET' && path === '/vteps') return json(200, { vteps });
+      if (method === 'GET' && path.startsWith('/vteps/')) {
+        const nodeId = decodeURIComponent(path.slice('/vteps/'.length));
+        const vtep = vteps.find((v) => v.nodeId === nodeId);
+        return vtep
+          ? json(200, { vtep })
+          : json(404, { error: { code: 'not_found', message: 'vtep not found' } });
+      }
+      if (method === 'GET' && path === '/vnis') return json(200, { vnis });
+      if (method === 'DELETE' && path.startsWith('/vnis/')) {
+        const vni = Number(path.slice('/vnis/'.length));
+        vnis = vnis.filter((v) => v.config.vni !== vni);
+        return json(200, { status: { success: true, message: 'deleted' } });
+      }
+      if (method === 'GET' && path === '/tunnels') return json(200, { tunnels });
+      if (method === 'GET' && path === '/tunnels/stats') {
+        const tunnel = tunnels.find(
+          (t) => t.remoteVtep === query.remote_vtep && String(t.vni) === query.vni
+        );
+        return tunnel
+          ? json(200, { tunnel })
+          : json(404, { error: { code: 'not_found', message: 'tunnel not found' } });
+      }
+      if (method === 'DELETE' && path === '/macs') {
+        return json(200, { status: { success: true, message: 'forgotten' } });
+      }
+      return route.continue();
+    }
+  );
+
+  return calls;
+}
