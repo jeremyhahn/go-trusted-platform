@@ -39,9 +39,11 @@ const availablePCRs = [
 ];
 
 /**
- * The secret travels as base64 of its UTF-8 bytes. btoa alone refuses any
+ * New seals carry base64 of the secret's UTF-8 bytes. btoa alone refuses any
  * character above U+00FF, and that DOMException never reached onError, so
- * sealing such text silently did nothing (#1824).
+ * sealing such text silently did nothing (#1824). Secrets sealed by the old
+ * btoa(sealData) encoder hold Latin-1 bytes; decodeUnsealed still decodes
+ * those byte for byte.
  */
 function utf8ToBase64(text: string): string {
   let bin = "";
@@ -49,8 +51,18 @@ function utf8ToBase64(text: string): string {
   return btoa(bin);
 }
 
-function base64ToUtf8(value: string): string {
-  return new TextDecoder().decode(Uint8Array.from(atob(value), (c) => c.charCodeAt(0)));
+/**
+ * Decodes unsealed base64 as UTF-8. Bytes that are not valid UTF-8 come from
+ * the old Latin-1 encoder (the server stores no encoding marker), so they fall
+ * back to one char per byte instead of being replaced with U+FFFD.
+ */
+function decodeUnsealed(value: string): string {
+  const bin = atob(value);
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)));
+  } catch {
+    return bin;
+  }
 }
 
 /**
@@ -128,7 +140,7 @@ export default function TPMSealPage() {
     {
       onSuccess: (response) => {
         if (response.data) {
-          setUnsealedResult(base64ToUtf8(response.data));
+          setUnsealedResult(decodeUnsealed(response.data));
           toast({
             title: "Data unsealed successfully",
             description: "Data has been successfully unsealed",
