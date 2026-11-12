@@ -15,6 +15,7 @@ package auth
 
 import (
 	"context"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -1015,8 +1016,8 @@ type verifyErrCA struct {
 	err error
 }
 
-func (c verifyErrCA) Verify(*x509.Certificate, map[uint64]*x509.Certificate) (bool, error) {
-	return false, c.err
+func (c verifyErrCA) Verify(*x509.Certificate, ...crypto.Signer) ([][]*x509.Certificate, error) {
+	return nil, c.err
 }
 
 // errVerifyUnavailable is a non-revocation failure from the CA.
