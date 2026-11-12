@@ -167,8 +167,9 @@
 # the gates only. `ci:full` overrides it.
 #
 # Draft PRs run no CI (v1.26): every PR-reachable job's `if:` carries
-# `!github.event.pull_request.draft` and CI Gate fails on a draft. There is no
-# `ready_for_review` trigger: mark the PR ready, then push.
+# `!github.event.pull_request.draft` and CI Gate fails on a draft. The
+# `ready_for_review` trigger (handbook v1.35.3, DS-8545) starts the PR's run
+# when a draft is marked ready, without a push.
 #
 # Each tier's `if:` is spelled out per job because Gitea's workflow parser
 # does not expand YAML anchors. ci-gate passes a job that its tier skipped and
@@ -187,7 +188,7 @@ on:
     # No `labeled` (#853): adding `ci:full` takes effect on the next push, not
     # on the label event, so a label never re-runs the PR tier on the same
     # commit. pkg/arch/citiers_test.go holds the list.
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
   # v1.23: main's full tier nightly as well as after every merge, and the
   # soak (ruling 135: ci.yml is the one scheduler; nightly.yml and batch.yml
