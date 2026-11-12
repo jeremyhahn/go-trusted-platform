@@ -19,12 +19,15 @@
 package bootstrap
 
 import (
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 )
 
 // PendingBootstrapBackendError is emitted by canonical TOFU modes that
@@ -101,16 +104,23 @@ func newCanonicalSPKICmd(getFlags func() *cli.CommonFlags) *cobra.Command {
 // bundle path out of band; the command validates the bundle and
 // stages it for ingestion by the trust bootstrap pipeline.
 func newCanonicalDirectCmd(getFlags func() *cli.CommonFlags) *cobra.Command {
-	var bundlePath string
+	var (
+		bundlePath           string
+		installToSystemTrust bool
+		certPath             string
+	)
 	cmd := &cobra.Command{
 		Use:   "direct",
 		Short: "Direct CA bundle copy (operator-supplied trust root)",
-		Long: `Bootstrap trust by copying a CA bundle PEM file directly. The operator
-supplies the CA bundle out of band; the command validates the file and
-records it as the active trust root for subsequent calls.
+		Long: `Bootstrap trust from a CA bundle PEM file supplied out of band. The
+command decodes every PEM block in the file and requires at least one
+CERTIFICATE block that parses as an X.509 CA certificate. With
+--install-to-system-trust it writes the bundle to --cert-path; run the OS
+trust-store update command (e.g. update-ca-certificates) afterwards.
 
 Example:
-  platformctl bootstrap direct --bundle /path/to/ca.pem`,
+  platformctl bootstrap direct --bundle /path/to/ca.pem
+  platformctl bootstrap direct --bundle /path/to/ca.pem --install-to-system-trust`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if bundlePath == "" {
@@ -123,10 +133,61 @@ Example:
 			if info.IsDir() {
 				return &MessageError{Msg: fmt.Sprintf("bootstrap direct: %s is a directory", bundlePath)}
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Direct CA bundle accepted: %s (%d bytes)\n", bundlePath, info.Size())
+			bundle, err := os.ReadFile(bundlePath)
+			if err != nil {
+				return ErrFileReadFailed{Path: bundlePath, Err: err}
+			}
+			caCount, err := validateDirectBundle(bundlePath, bundle)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Direct CA bundle accepted: %s (%d bytes, %d CA certificates)\n",
+				bundlePath, len(bundle), caCount)
+			if installToSystemTrust {
+				if err := trust.InstallToSystemTrust(bundle, certPath); err != nil {
+					return ErrTrustInstallFailed{Path: certPath, Cause: err}
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "CA bundle installed to %s\n", certPath)
+			}
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&bundlePath, "bundle", "", "Path to the CA bundle PEM file")
+	cmd.Flags().BoolVar(&installToSystemTrust, "install-to-system-trust", false, "install the CA bundle into the system trust store")
+	cmd.Flags().StringVar(&certPath, "cert-path", defaultCertPath, "system trust store certificate path")
 	return cmd
+}
+
+// validateDirectBundle decodes every PEM block in bundle, parses each
+// CERTIFICATE block and returns the number of CA certificates found. It
+// fails when the bundle holds no PEM block, a CERTIFICATE block does not
+// parse, or no certificate is a CA.
+func validateDirectBundle(path string, bundle []byte) (int, error) {
+	var blocks, caCount int
+	rest := bundle
+	for {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		blocks++
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return 0, ErrDirectBundleInvalidCert{Path: path, Cause: err}
+		}
+		if cert.IsCA {
+			caCount++
+		}
+	}
+	if blocks == 0 {
+		return 0, ErrDirectBundleNotPEM{Path: path}
+	}
+	if caCount == 0 {
+		return 0, ErrDirectBundleNoCA{Path: path}
+	}
+	return caCount, nil
 }
