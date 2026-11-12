@@ -261,14 +261,16 @@ export default function KVStorePage() {
       }
     }
 
-    await putMutation.mutateAsync(formData);
+    // A refusal is reported by the mutation's onError toast; mutateAsync
+    // still rethrows it, so catch it here rather than leak a rejection.
+    await putMutation.mutateAsync(formData).catch(() => undefined);
   };
 
   const handleDelete = async (entry: KVEntryUI) => {
     if (!confirm(`Delete key "${entry.key}"? This action cannot be undone.`)) {
       return;
     }
-    await deleteMutation.mutateAsync(entry.key);
+    await deleteMutation.mutateAsync(entry.key).catch(() => undefined);
   };
 
   const handleEdit = (entry: KVEntryUI) => {
@@ -697,7 +699,7 @@ export default function KVStorePage() {
                     )
                   ) {
                     for (const row of rows) {
-                      await deleteMutation.mutateAsync(row.key);
+                      await deleteMutation.mutateAsync(row.key).catch(() => undefined);
                     }
                   }
                 },
