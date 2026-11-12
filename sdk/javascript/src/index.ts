@@ -1020,7 +1020,6 @@ export type {
   BMCMountISORequest,
   BMCVirtualMediaStatus,
   BMCSensor,
-  BMCSensorsResponse,
   BMCSystemInfo,
   BMCProvisionStatus,
   BMCWebCertificate,

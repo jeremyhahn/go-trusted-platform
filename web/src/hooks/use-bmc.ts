@@ -12,31 +12,48 @@ export interface BMCBootDevice {
   device: string;
   persistent?: boolean;
 }
+/** VirtualMediaInfo (pkg/bmc/types.go) */
 export interface BMCVirtualMediaStatus {
-  inserted: boolean;
-  image?: string;
+  mounted: boolean;
+  image_url?: string;
+  media_type?: string;
 }
+/** SensorReading (pkg/bmc/types.go); GET sensors returns a plain array */
 export interface BMCSensor {
   name: string;
-  reading: number;
-  units?: string;
-  status?: string;
+  value: number;
+  units: string;
+  status: string;
 }
+/** SystemInfo (pkg/bmc/types.go) */
 export interface BMCSystemInfo {
-  manufacturer?: string;
-  model?: string;
-  serial_number?: string;
-  bios_version?: string;
-  bmc_firmware?: string;
+  manufacturer: string;
+  product: string;
+  serial_number: string;
+  firmware_version: string;
+  bios_version: string;
+  power_state: string;
 }
+/** ProvisionResult (pkg/provisioning/baremetal) */
 export interface BMCProvisionStatus {
-  state: string;
+  provision_id: string;
+  profile_id: string;
+  /** pending, connecting, setting_boot, mounting_iso, powering_on, installing, finalizing, complete or failed */
+  status: string;
   message?: string;
+  started_at: string;
+  updated_at: string;
 }
+/** CertificateInfo (pkg/webservice/v1/bmc/types.go): metadata, no PEM */
 export interface BMCWebCertificate {
-  certificate: string;
-  subject?: string;
-  not_after?: string;
+  subject: string;
+  issuer: string;
+  serial_number: string;
+  not_before: string;
+  not_after: string;
+  days_remaining: number;
+  subject_alternative_names?: string[];
+  fingerprint: string;
 }
 
 /**
@@ -62,7 +79,7 @@ export interface UseBMCResult extends BMCState {
   errors: Partial<Record<BMCPart, string>>;
   refetch: () => Promise<void>;
   setBootDevice: (request: BMCBootDevice) => Promise<void>;
-  mountISO: (image: string) => Promise<void>;
+  mountISO: (isoURL: string) => Promise<void>;
   unmountISO: () => Promise<void>;
   provision: () => Promise<void>;
 }
@@ -152,7 +169,7 @@ export function useBMC(profileID: string): UseBMCResult {
     errors: current?.errors ?? {},
     refetch,
     setBootDevice: (request) => mutate("boot-device", "POST", request),
-    mountISO: (image) => mutate("virtual-media", "POST", { image }),
+    mountISO: (isoURL) => mutate("virtual-media", "POST", { iso_url: isoURL }),
     unmountISO: () => mutate("virtual-media", "DELETE"),
     provision: () => mutate("provision", "POST", {}),
   };
@@ -170,7 +187,7 @@ async function loadBMC(profileID: string): Promise<LoadedBMC> {
     ["power", "power", (v) => v],
     ["bootDevice", "boot-device", (v) => v],
     ["virtualMedia", "virtual-media", (v) => v],
-    ["sensors", "sensors", (v) => (v as { sensors?: BMCSensor[] } | null)?.sensors ?? []],
+    ["sensors", "sensors", (v) => (Array.isArray(v) ? (v as BMCSensor[]) : [])],
     ["systemInfo", "system-info", (v) => v],
     ["provisionStatus", "provision", (v) => v],
     ["certificate", "cert", (v) => v],

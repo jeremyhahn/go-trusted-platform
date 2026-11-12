@@ -23,49 +23,57 @@ export interface BMCBootDevice {
   persistent?: boolean;
 }
 
-/** POST /bmc/{profileID}/virtual-media */
+/** POST /bmc/{profileID}/virtual-media: MountISORequest (400 when iso_url is empty) */
 export interface BMCMountISORequest {
-  image: string;
+  iso_url: string;
 }
 
-/** GET /bmc/{profileID}/virtual-media */
+/** GET /bmc/{profileID}/virtual-media: VirtualMediaInfo */
 export interface BMCVirtualMediaStatus {
-  inserted: boolean;
-  image?: string;
+  mounted: boolean;
+  image_url?: string;
+  media_type?: string;
 }
 
+/** One SensorReading; GET /bmc/{profileID}/sensors returns a plain array of them */
 export interface BMCSensor {
   name: string;
-  reading: number;
-  units?: string;
-  status?: string;
+  value: number;
+  units: string;
+  status: string;
 }
 
-/** GET /bmc/{profileID}/sensors */
-export interface BMCSensorsResponse {
-  sensors: BMCSensor[];
-}
-
-/** GET /bmc/{profileID}/system-info */
+/** GET /bmc/{profileID}/system-info: SystemInfo */
 export interface BMCSystemInfo {
-  manufacturer?: string;
-  model?: string;
-  serial_number?: string;
-  bios_version?: string;
-  bmc_firmware?: string;
+  manufacturer: string;
+  product: string;
+  serial_number: string;
+  firmware_version: string;
+  bios_version: string;
+  power_state: string;
 }
 
-/** GET /bmc/{profileID}/provision */
+/** POST (201) and GET /bmc/{profileID}/provision: ProvisionResult */
 export interface BMCProvisionStatus {
-  state: string;
+  provision_id: string;
+  profile_id: string;
+  /** pending, connecting, setting_boot, mounting_iso, powering_on, installing, finalizing, complete or failed */
+  status: string;
   message?: string;
+  started_at: string;
+  updated_at: string;
 }
 
-/** GET /bmc/{profileID}/cert */
+/** GET /bmc/{profileID}/cert: CertificateInfo (metadata, no PEM) */
 export interface BMCWebCertificate {
-  certificate: string;
-  subject?: string;
-  not_after?: string;
+  subject: string;
+  issuer: string;
+  serial_number: string;
+  not_before: string;
+  not_after: string;
+  days_remaining: number;
+  subject_alternative_names?: string[];
+  fingerprint: string;
 }
 
 /** The result of a mutating BMC call */
@@ -123,8 +131,8 @@ export class BMCService extends BaseService {
   }
 
   /** GetSensors: GET /bmc/{profileID}/sensors */
-  async getSensors(profileID: string): Promise<ApiResponse<BMCSensorsResponse>> {
-    return this.client.get<BMCSensorsResponse>(this.path(profileID, 'sensors'));
+  async getSensors(profileID: string): Promise<ApiResponse<BMCSensor[]>> {
+    return this.client.get<BMCSensor[]>(this.path(profileID, 'sensors'));
   }
 
   /** GetSystemInfo: GET /bmc/{profileID}/system-info */
@@ -132,9 +140,14 @@ export class BMCService extends BaseService {
     return this.client.get<BMCSystemInfo>(this.path(profileID, 'system-info'));
   }
 
-  /** Provision: POST /bmc/{profileID}/provision */
-  async provision(profileID: string): Promise<ApiResponse<BMCOperationResult>> {
-    return this.client.post<BMCOperationResult>(this.path(profileID, 'provision'), {});
+  /**
+   * Provision: POST /bmc/{profileID}/provision. Starts bare-metal host
+   * provisioning: the host is powered off, booted once from the network
+   * (PXE), an operating system is installed, then disk boot is set and the
+   * host power-cycled. The host's disks can be overwritten.
+   */
+  async provision(profileID: string): Promise<ApiResponse<BMCProvisionStatus>> {
+    return this.client.post<BMCProvisionStatus>(this.path(profileID, 'provision'), {});
   }
 
   /** ProvisionStatus: GET /bmc/{profileID}/provision */

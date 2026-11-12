@@ -28,7 +28,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { useBMC, useToast } from "@/hooks";
 import type { BMCPart } from "@/hooks";
 
-const BOOT_DEVICES = ["none", "pxe", "disk", "cdrom", "bios", "usb"];
+// The boot devices the server accepts (pkg/bmc/types.go); any other is a 400.
+const BOOT_DEVICES = ["none", "pxe", "disk", "cdrom", "virtual_media"];
 
 interface PendingAction {
   title: string;
@@ -140,14 +141,14 @@ export default function BMCProfileClient() {
               <dl className="grid grid-cols-2 gap-2 text-sm" data-testid="bmc-system-info">
                 <dt className="text-muted-foreground">Manufacturer</dt>
                 <dd>{bmc.systemInfo.manufacturer || "-"}</dd>
-                <dt className="text-muted-foreground">Model</dt>
-                <dd>{bmc.systemInfo.model || "-"}</dd>
+                <dt className="text-muted-foreground">Product</dt>
+                <dd>{bmc.systemInfo.product || "-"}</dd>
                 <dt className="text-muted-foreground">Serial number</dt>
                 <dd>{bmc.systemInfo.serial_number || "-"}</dd>
+                <dt className="text-muted-foreground">Firmware</dt>
+                <dd>{bmc.systemInfo.firmware_version || "-"}</dd>
                 <dt className="text-muted-foreground">BIOS</dt>
                 <dd>{bmc.systemInfo.bios_version || "-"}</dd>
-                <dt className="text-muted-foreground">BMC firmware</dt>
-                <dd>{bmc.systemInfo.bmc_firmware || "-"}</dd>
               </dl>
             )}
             <PartError errors={bmc.errors} part="systemInfo" />
@@ -213,18 +214,18 @@ export default function BMCProfileClient() {
           <CardContent className="space-y-3">
             {bmc.virtualMedia && (
               <p className="text-sm" data-testid="bmc-virtual-media">
-                {bmc.virtualMedia.inserted ? `Mounted: ${bmc.virtualMedia.image ?? ""}` : "No media mounted"}
+                {bmc.virtualMedia.mounted ? bmc.virtualMedia.image_url ?? "" : "No media"}
               </p>
             )}
             <PartError errors={bmc.errors} part="virtualMedia" />
             <div className="flex items-end gap-2">
               <div className="flex-1">
-                <Label htmlFor="bmc-iso-image">ISO image</Label>
+                <Label htmlFor="bmc-iso-url">ISO URL</Label>
                 <Input
-                  id="bmc-iso-image"
+                  id="bmc-iso-url"
                   value={image}
                   onChange={(e) => setImage(e.target.value)}
-                  placeholder="installer.iso"
+                  placeholder="ISO URL"
                 />
               </div>
               <Button
@@ -242,7 +243,7 @@ export default function BMCProfileClient() {
               </Button>
               <Button
                 variant="outline"
-                disabled={!bmc.virtualMedia?.inserted}
+                disabled={!bmc.virtualMedia?.mounted}
                 onClick={() =>
                   ask({
                     title: "Unmount ISO",
@@ -262,14 +263,17 @@ export default function BMCProfileClient() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Rocket className="h-5 w-5" />
-              Provisioning
+              Host provisioning
             </CardTitle>
-            <CardDescription>Provision the BMC with the platform</CardDescription>
+            <CardDescription>
+              Installs an operating system on this host over the network. The host is shut down and its disks can be
+              overwritten.
+            </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             {bmc.provisionStatus && (
               <p className="text-sm">
-                State: <span data-testid="bmc-provision-state">{bmc.provisionStatus.state}</span>
+                Status: <span data-testid="bmc-provision-state">{bmc.provisionStatus.status}</span>
                 {bmc.provisionStatus.message ? ` — ${bmc.provisionStatus.message}` : ""}
               </p>
             )}
@@ -278,10 +282,13 @@ export default function BMCProfileClient() {
               variant="destructive"
               onClick={() =>
                 ask({
-                  title: "Provision BMC",
-                  description: "Provisioning reconfigures the BMC of this server.",
+                  title: "Provision host",
+                  description:
+                    "Provisioning powers the host off, boots it once from the network (PXE), installs an operating " +
+                    "system, then sets disk boot and power-cycles it. Running workloads stop and the host's disks " +
+                    "can be overwritten.",
                   run: () => bmc.provision(),
-                  done: "Provisioning started",
+                  done: "Host provisioning started",
                 })
               }
             >
@@ -301,11 +308,12 @@ export default function BMCProfileClient() {
           <CardContent className="space-y-2">
             {bmc.certificate && (
               <div data-testid="bmc-certificate" className="space-y-1 text-sm">
-                {bmc.certificate.subject && <p>Subject: {bmc.certificate.subject}</p>}
-                {bmc.certificate.not_after && <p>Expires: {bmc.certificate.not_after}</p>}
-                <pre className="max-h-40 overflow-auto rounded bg-muted p-2 font-mono text-xs">
-                  {bmc.certificate.certificate}
-                </pre>
+                <p>Subject: {bmc.certificate.subject || "-"}</p>
+                <p>Issuer: {bmc.certificate.issuer || "-"}</p>
+                <p>
+                  Expires: {bmc.certificate.not_after || "-"} ({bmc.certificate.days_remaining} days remaining)
+                </p>
+                <p className="break-all font-mono text-xs">Fingerprint: {bmc.certificate.fingerprint || "-"}</p>
               </div>
             )}
             <PartError errors={bmc.errors} part="certificate" />
@@ -344,9 +352,9 @@ export default function BMCProfileClient() {
                     <TableRow key={s.name}>
                       <TableCell>{s.name}</TableCell>
                       <TableCell>
-                        {s.reading} {s.units ?? ""}
+                        {s.value} {s.units}
                       </TableCell>
-                      <TableCell>{s.status ?? "-"}</TableCell>
+                      <TableCell>{s.status || "-"}</TableCell>
                     </TableRow>
                   ))
                 )}
