@@ -78,7 +78,49 @@ test.describe('CA operations', () => {
 
     await expect(page.getByTestId('verify-result')).toHaveText('Certificate is valid');
     await expect(page.getByTestId('verify-chain')).toContainText('0a1b2c');
-    expect(mock.verifyRequests).toEqual([{ certificatePem: Buffer.from(CERT_PEM).toString('base64') }]);
+    await expect(page.getByTestId('verify-revocation')).toBeVisible();
+    expect(mock.verifyRequests).toEqual([
+      { certificatePem: Buffer.from(CERT_PEM).toString('base64'), verifyRevocation: true },
+    ]);
+  });
+
+  test('VerifyCertificate: a revoked certificate is reported as not valid', async ({ page }) => {
+    await mockCAOperationsApi(page, { verifyRevoked: true });
+    await page.goto('/ca/verify');
+
+    await page.getByLabel('Certificate (PEM)').fill(CERT_PEM);
+    await page.getByRole('button', { name: 'Verify' }).click();
+
+    await expect(page.getByTestId('verify-result')).toHaveText('Certificate is not valid');
+    await expect(page.getByText('certificate is revoked')).toBeVisible();
+  });
+
+  test('VerifyCertificate: a failed request after a valid one hides the old verdict', async ({ page }) => {
+    await mockCAOperationsApi(page);
+    await page.goto('/ca/verify');
+
+    await page.getByLabel('Certificate (PEM)').fill(CERT_PEM);
+    await page.getByRole('button', { name: 'Verify' }).click();
+    await expect(page.getByTestId('verify-result')).toHaveText('Certificate is valid');
+
+    await page.getByLabel('Certificate (PEM)').fill('not a certificate');
+    await page.getByRole('button', { name: 'Verify' }).click();
+
+    await expect(page.getByText('certificatePem must be base64')).toBeVisible();
+    await expect(page.getByTestId('verify-result')).toHaveCount(0);
+    await expect(page.getByTestId('verify-chain')).toHaveCount(0);
+  });
+
+  test('VerifyCertificate: editing the input hides the previous verdict', async ({ page }) => {
+    await mockCAOperationsApi(page);
+    await page.goto('/ca/verify');
+
+    await page.getByLabel('Certificate (PEM)').fill(CERT_PEM);
+    await page.getByRole('button', { name: 'Verify' }).click();
+    await expect(page.getByTestId('verify-result')).toHaveText('Certificate is valid');
+
+    await page.getByLabel('Certificate (PEM)').fill(`${CERT_PEM}\n# edited`);
+    await expect(page.getByTestId('verify-result')).toHaveCount(0);
   });
 
   test('VerifyCertificate: the verify page reports an invalid certificate', async ({ page }) => {

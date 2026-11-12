@@ -710,6 +710,8 @@ export interface CAOperationsMockConfig {
   infoError?: ApiError | null;
   signError?: ApiError | null;
   verifyValid?: boolean;
+  /** The certificate is revoked: only a request with verifyRevocation true sees it. */
+  verifyRevoked?: boolean;
 }
 
 /**
@@ -802,7 +804,7 @@ export async function mockCAOperationsApi(
       await route.continue();
       return;
     }
-    const verifyBody = request.postDataJSON() as { certificatePem?: unknown } | null;
+    const verifyBody = request.postDataJSON() as { certificatePem?: unknown; verifyRevocation?: unknown } | null;
     verifyRequests.push(verifyBody);
     // VerifyCertificateRequest.certificate_pem is proto bytes: the server's
     // protojson decode needs standard base64 and fails on plain PEM.
@@ -817,6 +819,23 @@ export async function mockCAOperationsApi(
         body: errorEnvelope({
           status: 400,
           error: 'invalid request body: certificatePem must be base64',
+        }),
+      });
+      return;
+    }
+    // The backend checks revocation only when verifyRevocation is true; a
+    // revoked certificate with a valid chain passes plain X.509 verification.
+    if (config.verifyRevoked && verifyBody?.verifyRevocation === true) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          status: { success: true },
+          valid: false,
+          chain: [],
+          errors: ['certificate is revoked'],
+          warnings: [],
+          timestamp: now,
         }),
       });
       return;
