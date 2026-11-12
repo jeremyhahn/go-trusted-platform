@@ -18,6 +18,7 @@ import {
   Label,
 } from "@/components/ui";
 import { ConfirmDialog, errorText, type PendingAction } from "./confirm-dialog";
+import { tenantStateName } from "./tenant-state";
 
 /** The SDK's tenant record (the SDK root does not export the type). */
 type Tenant = NonNullable<
@@ -32,7 +33,9 @@ function TenantRow({ tenant, onDelete }: { tenant: Tenant; onDelete: (t: Tenant)
       </td>
       <td>{tenant.displayName ?? ""}</td>
       <td>
-        <Badge variant={tenant.state === "ACTIVE" ? "default" : "secondary"}>{tenant.state}</Badge>
+        <Badge variant={tenantStateName(tenant.state) === "ACTIVE" ? "default" : "secondary"}>
+          {tenantStateName(tenant.state)}
+        </Badge>
       </td>
       <td>
         <Button variant="destructive" size="sm" onClick={() => onDelete(tenant)}>
