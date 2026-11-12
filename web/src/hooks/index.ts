@@ -82,6 +82,14 @@ export type { User, AuthContextType } from '@/contexts/AuthContext';
 export { useToast, toast, dismissToast } from './use-toast';
 export type { Toast, UseToastReturn } from './use-toast';
 
+export { useKmsOps, textToBase64, base64ToText } from './use-kms-ops';
+export type {
+  UseKmsOpsResult,
+  KmsKeyVersion,
+  KmsBackendStatus,
+  KmsImportKeyInput,
+} from './use-kms-ops';
+
 export { useReportedGateways } from './use-reported-gateways';
 export type {
   ReportedGateway,

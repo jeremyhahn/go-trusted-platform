@@ -90,6 +90,7 @@ const navigation = [
       { title: "CRL", href: "/ca/crl" },
       { title: "Key Management", href: "/kms" },
       { title: "Key Encryption", href: "/kms/encrypt" },
+      { title: "Key Operations", href: "/kms/operations" },
     ],
   },
   {
