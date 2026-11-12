@@ -40,7 +40,11 @@ describe('IDevIDService.createLDevID', () => {
     const result = await service.createLDevID(request);
 
     expect(mockClient.post).toHaveBeenCalledTimes(1);
-    const [url, body] = vi.mocked(mockClient.post).mock.calls[0]!;
+    const call = vi.mocked(mockClient.post).mock.calls[0];
+    if (!call) {
+      throw new Error('post was not called');
+    }
+    const [url, body] = call;
     expect(url).toMatch(/\/v1\/idevid\/ldevid$/);
     expect(body).toEqual(request);
     expect(result.data?.certificatePem).toBe('PEM');
@@ -51,7 +55,11 @@ describe('IDevIDService.createLDevID', () => {
 
     await service.createLDevID();
 
-    const [url, body] = vi.mocked(mockClient.post).mock.calls[0]!;
+    const call = vi.mocked(mockClient.post).mock.calls[0];
+    if (!call) {
+      throw new Error('post was not called');
+    }
+    const [url, body] = call;
     expect(url).toMatch(/\/v1\/idevid\/ldevid$/);
     expect(body).toEqual({});
   });
