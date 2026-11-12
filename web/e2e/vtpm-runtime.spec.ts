@@ -194,5 +194,23 @@ test.describe('vTPM runtime page', () => {
     await expect(page.getByTestId('vtpm-socket')).toHaveCount(0);
     await expect(page.getByTestId('vtpm-quote-result')).toHaveCount(0);
     await expect(page.getByTestId('vtpm-pcr-value')).toHaveCount(0);
+    await expect(page.getByText('Error starting vTPM')).toHaveCount(0);
+  });
+
+  test('a late error for the previous bundle shows no toast on the new bundle', async ({ page }) => {
+    const calls = await openRuntimePage(page, {
+      delayMs: { start: 1500 },
+      error: { error: 'bundle vm-1 failed to start', status: 409 },
+    });
+
+    await page.getByRole('button', { name: 'Start vTPM' }).click();
+    await expect.poll(() => lastCall(calls, 'start')?.method).toBe('POST');
+
+    // Bundle B before A's start fails.
+    await page.getByLabel('Bundle ID').fill('vm-2');
+    await page.waitForTimeout(2000);
+
+    await expect(page.getByText('Error starting vTPM')).toHaveCount(0);
+    await expect(page.getByText('bundle vm-1 failed to start')).toHaveCount(0);
   });
 });

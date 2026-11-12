@@ -67,7 +67,7 @@ describe('VTPMService bundle runtime', () => {
     });
   });
 
-  it('extendBundlePCR POSTs the index and digest to /bundles/{id}/pcrs/extend', async () => {
+  it('extendBundlePCR POSTs the index and data to /bundles/{id}/pcrs/extend', async () => {
     await service.extendBundlePCR('vm-1', { pcr_index: 16, data: 'AAAA' });
     expect(mockClient.post).toHaveBeenCalledWith('/v1/vtpm/bundles/vm-1/pcrs/extend', {
       pcr_index: 16,
