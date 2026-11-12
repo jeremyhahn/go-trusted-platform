@@ -20,6 +20,7 @@ import (
 	"errors"
 	"reflect"
 	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/jeremyhahn/go-luks2/pkg/luks2"
@@ -543,22 +544,114 @@ func TestLUKSBackend_RemoveKey(t *testing.T) {
 	}
 }
 
-func TestLUKSBackend_TestUnlock(t *testing.T) {
+func TestLUKSBackend_TestUnlockRefusesWithoutVerification(t *testing.T) {
 	device := newLUKSImage(t)
 	b := newTestLUKSBackend()
-	tests := []struct {
-		slot int32
-		want bool
-	}{
-		{slot: 0, want: true},
-		{slot: 5, want: false},
+	ok, err := b.TestUnlock(context.Background(), &daemon.LUKSTestUnlockRequest{Device: device, Slot: 0})
+	if ok || !errors.Is(err, ErrLUKSTestUnlockUnverified) {
+		t.Fatalf("TestUnlock(slot 0) = %v, %v; want false and ErrLUKSTestUnlockUnverified", ok, err)
 	}
-	for _, tc := range tests {
-		got, err := b.TestUnlock(context.Background(), &daemon.LUKSTestUnlockRequest{Device: device, Slot: tc.slot})
-		if err != nil || got != tc.want {
-			t.Fatalf("TestUnlock(slot %d) = %v, %v; want %v", tc.slot, got, err, tc.want)
+}
+
+// perCredentialFIDO2Key derives a distinct key per credential ID and returns
+// a fresh slice on every call, since the backend wipes the returned key.
+type perCredentialFIDO2Key struct{}
+
+func (perCredentialFIDO2Key) EnrollCredential(_ context.Context, credentialID string, _, _ bool) ([]byte, error) {
+	return []byte("fido2-key-" + credentialID), nil
+}
+
+func TestLUKSBackend_ConcurrentEnrollmentGetsDistinctSlots(t *testing.T) {
+	const n = 4
+
+	t.Run("passphrase", func(t *testing.T) {
+		device := newLUKSImage(t)
+		b := newTestLUKSBackend()
+		start := make(chan struct{})
+		slots := make([]int32, n)
+		errs := make([]error, n)
+		var wg sync.WaitGroup
+		for i := 0; i < n; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				<-start
+				res, err := b.EnrollPassphrase(context.Background(), &daemon.LUKSEnrollPassphraseRequest{
+					Device:             device,
+					ExistingPassphrase: testLUKSPassphrase,
+					NewPassphrase:      "concurrent-pass-" + strconv.Itoa(i),
+				})
+				errs[i] = err
+				if res != nil {
+					slots[i] = res.Slot
+				}
+			}(i)
 		}
-	}
+		close(start)
+		wg.Wait()
+
+		seen := map[int32]int{}
+		ids := keyslotIDs(t, device)
+		for i := 0; i < n; i++ {
+			if errs[i] != nil {
+				t.Fatalf("EnrollPassphrase %d: %v", i, errs[i])
+			}
+			if j, dup := seen[slots[i]]; dup {
+				t.Fatalf("enrollments %d and %d both reported slot %d", j, i, slots[i])
+			}
+			seen[slots[i]] = i
+			if !ids[int(slots[i])] {
+				t.Fatalf("slot %d of enrollment %d is not on the device (%v)", slots[i], i, ids)
+			}
+			if err := luks2.TestKey(device, []byte("concurrent-pass-"+strconv.Itoa(i))); err != nil {
+				t.Fatalf("passphrase %d does not open the volume: %v", i, err)
+			}
+		}
+	})
+
+	t.Run("fido2", func(t *testing.T) {
+		device := newLUKSImage(t)
+		b := newTestLUKSBackend(WithLUKSFIDO2Handler(perCredentialFIDO2Key{}))
+		start := make(chan struct{})
+		results := make([]*daemon.LUKSEnrollFIDO2Result, n)
+		errs := make([]error, n)
+		var wg sync.WaitGroup
+		for i := 0; i < n; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				<-start
+				results[i], errs[i] = b.EnrollFIDO2(context.Background(), &daemon.LUKSEnrollFIDO2Request{
+					Device:             device,
+					ExistingPassphrase: testLUKSPassphrase,
+					CredentialID:       "cred" + strconv.Itoa(i),
+				})
+			}(i)
+		}
+		close(start)
+		wg.Wait()
+
+		slotSeen := map[int32]int{}
+		tokenSeen := map[string]int{}
+		for i := 0; i < n; i++ {
+			if errs[i] != nil {
+				t.Fatalf("EnrollFIDO2 %d: %v", i, errs[i])
+			}
+			res := results[i]
+			if j, dup := slotSeen[res.Slot]; dup {
+				t.Fatalf("enrollments %d and %d both reported slot %d", j, i, res.Slot)
+			}
+			slotSeen[res.Slot] = i
+			if j, dup := tokenSeen[res.TokenID]; dup {
+				t.Fatalf("enrollments %d and %d both reported token %s", j, i, res.TokenID)
+			}
+			tokenSeen[res.TokenID] = i
+			assertKeyslots(t, tokenByID(t, device, res.TokenID), strconv.Itoa(int(res.Slot)))
+			if err := luks2.TestKey(device, []byte("fido2-key-cred"+strconv.Itoa(i))); err != nil {
+				t.Fatalf("credential %d does not open the volume: %v", i, err)
+			}
+		}
+	})
 }
 
 func TestLUKSBackend_ChangePassphraseWrongOldPassphrase(t *testing.T) {

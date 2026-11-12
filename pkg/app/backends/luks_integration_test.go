@@ -23,6 +23,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -69,11 +70,10 @@ func TestLUKSBackend_LoopbackEnrollAndTest(t *testing.T) {
 		Device: loop,
 		Slot:   enrollRes.Slot,
 	})
-	if err != nil {
-		t.Fatalf("TestUnlock: %v", err)
-	}
-	if !ok {
-		t.Fatalf("TestUnlock returned false for valid slot")
+	// TestUnlock has no credential to verify the keyslot with, so it must
+	// refuse rather than claim success from the slot's metadata.
+	if !errors.Is(err, ErrLUKSTestUnlockUnverified) || ok {
+		t.Fatalf("TestUnlock = %v, %v; want false and ErrLUKSTestUnlockUnverified", ok, err)
 	}
 }
 
