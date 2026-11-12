@@ -47,12 +47,6 @@ export interface KmsKeyStatusResult {
   status: string;
 }
 
-export interface KmsEncryptResult {
-  key_id: string;
-  version: number;
-  ciphertext: string;
-}
-
 export interface KmsHashResult {
   hash: string;
   digest: string;
@@ -130,8 +124,6 @@ export interface UseKmsOpsResult {
   importKey: (input: KmsImportKeyInput) => Promise<KmsImportKeyResult | null>;
   updateKeyStatus: (name: string, status: string, version?: number) => Promise<KmsKeyStatusResult | null>;
   getKeyVersions: (name: string) => Promise<KmsKeyVersion[] | null>;
-  batchEncrypt: (name: string, plaintexts: string[]) => Promise<KmsEncryptResult[] | null>;
-  batchDecrypt: (name: string, ciphertexts: string[]) => Promise<string[] | null>;
   hash: (data: string, algorithm: string) => Promise<KmsHashResult | null>;
   hmac: (name: string, data: string) => Promise<string | null>;
   verifyHmac: (name: string, data: string, mac: string) => Promise<boolean | null>;
@@ -143,8 +135,7 @@ export interface UseKmsOpsResult {
 
 /**
  * useKmsOps drives the KMS operations that have a REST route but no page of
- * their own (#1734): key import, status and versions, batch encrypt and
- * decrypt, hash, HMAC, random bytes, data keys and the backend status.
+ * their own (#1734): key import, status and versions, hash, HMAC, random bytes, data keys and the backend status.
  *
  * The calls go straight to the REST routes, as useReportedGateways does,
  * because the SDK's KMSService is built from the gRPC surface and some of
@@ -181,23 +172,6 @@ export function useKmsOps(): UseKmsOpsResult {
           const res = await call<{ versions?: KmsKeyVersion[] }>('GET', `/keys/${seg(name)}/versions`);
           return res?.versions ?? [];
         }),
-      batchEncrypt: (name, plaintexts) =>
-        run(() =>
-          Promise.all(
-            plaintexts.map((p) =>
-              call<KmsEncryptResult>('POST', `/encrypt/${seg(name)}`, { plaintext: textToBase64(p) })
-            )
-          )
-        ),
-      batchDecrypt: (name, ciphertexts) =>
-        run(() =>
-          Promise.all(
-            ciphertexts.map(async (c) => {
-              const res = await call<{ plaintext: string }>('POST', `/decrypt/${seg(name)}`, { ciphertext: c });
-              return base64ToText(res.plaintext);
-            })
-          )
-        ),
       hash: (data, algorithm) =>
         run(() => call<KmsHashResult>('POST', '/hash', { data: textToBase64(data), hash: algorithm })),
       hmac: (name, data) =>

@@ -4,8 +4,7 @@
  * KMS operations page (#1734, slice 20 of #1665).
  *
  * One card per KMS REST operation that has no page of its own: key import,
- * key status (behind a confirm dialog), key versions, batch encrypt and
- * decrypt, hash, HMAC and its verification, random bytes, data keys and the
+ * key status (behind a confirm dialog), key versions, hash, HMAC and its verification, random bytes, data keys and the
  * backend status.
  */
 
@@ -33,12 +32,8 @@ import { useKmsOps } from "@/hooks";
 import type { KmsBackendStatus, KmsKeyVersion } from "@/hooks";
 import { AlertCircle } from "lucide-react";
 
-function lines(text: string): string[] {
-  return text
-    .split("\n")
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0);
-}
+// Key states the v1 KMS router accepts on PUT /keys/{name}/status.
+const KEY_STATUSES = ["ENABLED", "DISABLED", "PENDING_DELETION", "DELETED", "ROTATING", "COMPROMISED"];
 
 function Field(props: {
   id: string;
@@ -106,21 +101,13 @@ export default function KmsOperationsPage() {
 
   // Status
   const [statusKey, setStatusKey] = React.useState("");
-  const [statusValue, setStatusValue] = React.useState("disabled");
+  const [statusValue, setStatusValue] = React.useState("DISABLED");
   const [statusConfirm, setStatusConfirm] = React.useState(false);
   const [statusResult, setStatusResult] = React.useState<string | null>(null);
 
   // Versions
   const [versionsKey, setVersionsKey] = React.useState("");
   const [versions, setVersions] = React.useState<KmsKeyVersion[] | null>(null);
-
-  // Batch encrypt / decrypt
-  const [encKey, setEncKey] = React.useState("");
-  const [encInput, setEncInput] = React.useState("");
-  const [encResult, setEncResult] = React.useState<string | null>(null);
-  const [decKey, setDecKey] = React.useState("");
-  const [decInput, setDecInput] = React.useState("");
-  const [decResult, setDecResult] = React.useState<string | null>(null);
 
   // Hash
   const [hashData, setHashData] = React.useState("");
@@ -168,20 +155,6 @@ export default function KmsOperationsPage() {
 
   const onVersions = async () => {
     setVersions(await ops.getKeyVersions(versionsKey));
-  };
-
-  const onEncrypt = async () => {
-    const res = await ops.batchEncrypt(encKey, lines(encInput));
-    if (res) {
-      setEncResult(res.map((r) => r.ciphertext).join("\n"));
-    }
-  };
-
-  const onDecrypt = async () => {
-    const res = await ops.batchDecrypt(decKey, lines(decInput));
-    if (res) {
-      setDecResult(res.join("\n"));
-    }
   };
 
   const onHash = async () => {
@@ -236,7 +209,7 @@ export default function KmsOperationsPage() {
       <div>
         <h1 className="text-3xl font-bold tracking-tight">KMS Operations</h1>
         <p className="text-muted-foreground">
-          Key import, status and versions, batch encryption, hashing, HMAC,
+          Key import, status and versions, hashing, HMAC,
           random bytes, data keys and the backend status
         </p>
       </div>
@@ -287,8 +260,11 @@ export default function KmsOperationsPage() {
               value={statusValue}
               onChange={(e) => setStatusValue(e.target.value)}
             >
-              <option value="enabled">enabled</option>
-              <option value="disabled">disabled</option>
+              {KEY_STATUSES.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
             </select>
           </div>
           <Button
@@ -317,32 +293,6 @@ export default function KmsOperationsPage() {
           <Field id="versions-key" label="Key name" value={versionsKey} onChange={setVersionsKey} />
           <Button onClick={onVersions} disabled={ops.busy || !versionsKey}>
             List versions
-          </Button>
-        </OpCard>
-
-        <OpCard
-          id="encrypt"
-          title="Batch Encrypt"
-          description="Encrypt each line as its own plaintext"
-          result={encResult}
-        >
-          <Field id="encrypt-key" label="Key name" value={encKey} onChange={setEncKey} />
-          <Field id="encrypt-input" label="Plaintexts, one per line" value={encInput} onChange={setEncInput} multiline />
-          <Button onClick={onEncrypt} disabled={ops.busy || !encKey || lines(encInput).length === 0}>
-            Encrypt
-          </Button>
-        </OpCard>
-
-        <OpCard
-          id="decrypt"
-          title="Batch Decrypt"
-          description="Decrypt each line as its own base64 ciphertext"
-          result={decResult}
-        >
-          <Field id="decrypt-key" label="Key name" value={decKey} onChange={setDecKey} />
-          <Field id="decrypt-input" label="Ciphertexts, one per line" value={decInput} onChange={setDecInput} multiline />
-          <Button onClick={onDecrypt} disabled={ops.busy || !decKey || lines(decInput).length === 0}>
-            Decrypt
           </Button>
         </OpCard>
 
