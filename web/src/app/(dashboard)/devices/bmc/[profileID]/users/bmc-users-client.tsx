@@ -81,6 +81,9 @@ export default function BMCUsersClient() {
   const [createError, setCreateError] = useState<string | null>(null);
 
   const open = (kind: DialogKind, user: BMCUserSlot | null = null) => {
+    // CreateUser overwrites whatever holds the slot, so a free slot is only
+    // known once the current profile's listing has succeeded.
+    if (kind === 'create' && !bmc.listed) return;
     setTarget(user);
     if (kind === 'create') {
       setCreateForm((f) => ({ ...f, slot: String(firstFreeSlot(bmc.users)) }));
@@ -126,7 +129,7 @@ export default function BMCUsersClient() {
             <ShieldCheck className="mr-2 h-4 w-4" />
             Replace Web Certificate
           </Button>
-          <Button onClick={() => open('create')}>
+          <Button onClick={() => open('create')} disabled={!bmc.listed}>
             <Plus className="mr-2 h-4 w-4" />
             Create User
           </Button>
@@ -224,6 +227,10 @@ export default function BMCUsersClient() {
             className="space-y-4"
             onSubmit={(e) => {
               e.preventDefault();
+              if (!bmc.listed) {
+                setCreateError('The user list has not loaded; reload it before creating a user.');
+                return;
+              }
               const slot = Number(createForm.slot);
               const holder = bmc.users.find((u) => u.slot === slot);
               if (holder) {
@@ -324,7 +331,7 @@ export default function BMCUsersClient() {
               <Button type="button" variant="outline" onClick={() => setDialog(null)}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={busy}>
+              <Button type="submit" disabled={busy || !bmc.listed}>
                 Create
               </Button>
             </DialogFooter>

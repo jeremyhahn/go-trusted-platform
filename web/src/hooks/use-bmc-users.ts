@@ -48,6 +48,12 @@ export interface UseBMCUsersResult {
   users: BMCUserSlot[];
   isLoading: boolean;
   error: string | null;
+  /**
+   * True only once a listing of the current profile has succeeded and no
+   * reload is in flight. CreateUser writes the slot it is given without an
+   * occupancy check, so creation must wait for this.
+   */
+  listed: boolean;
   refetch: () => Promise<void>;
   createUser: (input: CreateBMCUserInput) => Promise<void>;
   deleteUser: (slot: number) => Promise<void>;
@@ -103,6 +109,8 @@ export function useBMCUsers(profileID: string): UseBMCUsersResult {
   const [users, setUsers] = React.useState<BMCUserSlot[]>([]);
   const [isLoading, setIsLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
+  // The base whose listing last succeeded; null while none has.
+  const [listedFor, setListedFor] = React.useState<string | null>(null);
 
   // load sets state only once the request settles, so the mount effect
   // below never sets state synchronously (react-hooks/set-state-in-effect).
@@ -111,7 +119,10 @@ export function useBMCUsers(profileID: string): UseBMCUsersResult {
       const list = unwrap<BMCUserSlot[]>(await call('GET', `${base}/users`));
       setUsers(Array.isArray(list) ? list : []);
       setError(null);
+      setListedFor(base);
     } catch (e: unknown) {
+      setUsers([]);
+      setListedFor(null);
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setIsLoading(false);
@@ -119,6 +130,7 @@ export function useBMCUsers(profileID: string): UseBMCUsersResult {
   }, [base]);
 
   const refetch = React.useCallback(async () => {
+    setListedFor(null);
     setIsLoading(true);
     await load();
   }, [load]);
@@ -180,6 +192,7 @@ export function useBMCUsers(profileID: string): UseBMCUsersResult {
     users,
     isLoading,
     error,
+    listed: listedFor === base && !isLoading && error === null,
     refetch,
     createUser,
     deleteUser,
