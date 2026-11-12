@@ -106,6 +106,13 @@ function submit(name: string) {
   fireEvent.click(screen.getByRole('button', { name }));
 }
 
+// Submits the form past the browser's constraint check, so the zod schema
+// is what decides.
+function forceSubmit() {
+  const form = screen.getByRole('button', { name: 'Create' }).closest('form');
+  fireEvent.submit(form as HTMLFormElement);
+}
+
 beforeEach(() => {
   addRecord.mockReset().mockResolvedValue({ success: true });
   updateRecord.mockReset().mockResolvedValue({ success: true });
@@ -143,11 +150,20 @@ describe('DNSRecordForm (create)', () => {
     type('Name', 'www');
     type('Value', '192.0.2.1');
     type('TTL (seconds)', '30');
+    const input = screen.getByLabelText('TTL (seconds)') as HTMLInputElement;
+    // The browser's own range check stops the click first...
+    expect(input.validity.rangeUnderflow).toBe(true);
     submit('Create');
-    await waitFor(() => expect(screen.getAllByText(/>=60|at least 60|too small/i).length).toBeGreaterThan(0));
+    // ...and the schema refuses it when the form is submitted anyway.
+    forceSubmit();
+    const ttl = () => input.getAttribute('aria-invalid');
+    await waitFor(() => expect(ttl()).toBe('true'));
+    type('TTL (seconds)', '60');
+    await waitFor(() => expect(ttl()).toBe('false'));
     type('TTL (seconds)', '90000');
-    submit('Create');
-    await waitFor(() => expect(screen.getAllByText(/<=86400|at most 86400|too big/i).length).toBeGreaterThan(0));
+    expect(input.validity.rangeOverflow).toBe(true);
+    forceSubmit();
+    await waitFor(() => expect(ttl()).toBe('true'));
     expect(addRecord).not.toHaveBeenCalled();
   });
 
@@ -248,8 +264,9 @@ describe('DNSRecordForm (create)', () => {
     type('Name', '_sip._tcp');
     type('Value', 'sip.example.test');
     type('Port', '70000');
-    submit('Create');
-    await waitFor(() => expect(screen.getAllByText(/65535|too big/i).length).toBeGreaterThan(0));
+    expect((screen.getByLabelText('Port') as HTMLInputElement).validity.rangeOverflow).toBe(true);
+    forceSubmit();
+    await waitFor(() => expect(screen.getByLabelText('Port').getAttribute('aria-invalid')).toBe('true'));
     expect(addRecord).not.toHaveBeenCalled();
   });
 
