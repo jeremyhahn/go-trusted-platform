@@ -222,7 +222,7 @@ func GenerateInstallConfig(buildConfig *Config) ([]byte, error) {
 
 	// Set default PCRs if TPM is enabled but no PCRs specified
 	if yamlConfig.Security.TPM.Enabled && len(yamlConfig.Security.TPM.SealPCRs) == 0 {
-		yamlConfig.Security.TPM.SealPCRs = []uint{0, 7, 9}
+		yamlConfig.Security.TPM.SealPCRs = SealPCRsDefault()
 	}
 
 	// Marshal to YAML
