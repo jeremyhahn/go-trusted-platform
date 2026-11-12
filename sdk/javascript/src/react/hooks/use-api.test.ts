@@ -27,7 +27,10 @@ const runtime = vi.hoisted(() => {
     deps: readonly unknown[];
   }
 
-  const depsEqual = (a: readonly unknown[] | undefined, b: readonly unknown[] | undefined): boolean =>
+  const depsEqual = (
+    a: readonly unknown[] | undefined,
+    b: readonly unknown[] | undefined
+  ): boolean =>
     a !== undefined &&
     b !== undefined &&
     a.length === b.length &&
@@ -46,11 +49,11 @@ const runtime = vi.hoisted(() => {
     render(): void {
       this.index = 0;
       this.queued = [];
-      active = this;
+      setActive(this);
       try {
         this.body();
       } finally {
-        active = undefined;
+        setActive(undefined);
       }
       this.renders += 1;
       const effects = this.queued;
@@ -92,7 +95,12 @@ const runtime = vi.hoisted(() => {
     }
   }
 
+  type EffectCallback = () => unknown;
+
   let active: Instance | undefined;
+  function setActive(inst: Instance | undefined): void {
+    active = inst;
+  }
   const current = (): Instance => {
     if (active === undefined) {
       throw new Error('hook called outside a render');
@@ -133,7 +141,7 @@ const runtime = vi.hoisted(() => {
       }
       return slot.value as F;
     },
-    useEffect(fn: () => void | (() => void), deps?: readonly unknown[]): void {
+    useEffect(fn: EffectCallback, deps?: readonly unknown[]): void {
       const inst = current();
       let fresh = false;
       const slot = inst.slot<EffectSlot>(() => {
@@ -145,7 +153,7 @@ const runtime = vi.hoisted(() => {
         inst.queued.push(() => {
           slot.cleanup?.();
           const cleanup = fn();
-          slot.cleanup = typeof cleanup === 'function' ? cleanup : undefined;
+          slot.cleanup = typeof cleanup === 'function' ? (cleanup as () => void) : undefined;
         });
       }
     },

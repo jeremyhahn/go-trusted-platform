@@ -28,7 +28,10 @@ const runtime = vi.hoisted(() => {
     deps: readonly unknown[];
   }
 
-  const depsEqual = (a: readonly unknown[] | undefined, b: readonly unknown[] | undefined): boolean =>
+  const depsEqual = (
+    a: readonly unknown[] | undefined,
+    b: readonly unknown[] | undefined
+  ): boolean =>
     a !== undefined &&
     b !== undefined &&
     a.length === b.length &&
@@ -46,11 +49,11 @@ const runtime = vi.hoisted(() => {
     render(): void {
       this.index = 0;
       this.queued = [];
-      active = this;
+      setActive(this);
       try {
         this.body();
       } finally {
-        active = undefined;
+        setActive(undefined);
       }
       const effects = this.queued;
       this.queued = [];
@@ -91,7 +94,12 @@ const runtime = vi.hoisted(() => {
     }
   }
 
+  type EffectCallback = () => unknown;
+
   let active: Instance | undefined;
+  function setActive(inst: Instance | undefined): void {
+    active = inst;
+  }
   const current = (): Instance => {
     if (active === undefined) {
       throw new Error('hook called outside a render');
@@ -132,7 +140,7 @@ const runtime = vi.hoisted(() => {
       }
       return slot.value as F;
     },
-    useEffect(fn: () => void | (() => void), deps?: readonly unknown[]): void {
+    useEffect(fn: EffectCallback, deps?: readonly unknown[]): void {
       const inst = current();
       let fresh = false;
       const slot = inst.slot<EffectSlot>(() => {
@@ -144,7 +152,7 @@ const runtime = vi.hoisted(() => {
         inst.queued.push(() => {
           slot.cleanup?.();
           const cleanup = fn();
-          slot.cleanup = typeof cleanup === 'function' ? cleanup : undefined;
+          slot.cleanup = typeof cleanup === 'function' ? (cleanup as () => void) : undefined;
         });
       }
     },
@@ -280,7 +288,12 @@ describe('useMutation', () => {
       const { result } = setup(fn, { onMutate, onSuccess, onSettled, onError });
 
       await result.current.mutateAsync('abc');
-      expect(order).toEqual(['onMutate:abc', 'fn:abc', 'onSuccess:3:abc', 'onSettled:3:undefined:abc']);
+      expect(order).toEqual([
+        'onMutate:abc',
+        'fn:abc',
+        'onSuccess:3:abc',
+        'onSettled:3:undefined:abc',
+      ]);
       expect(onError).not.toHaveBeenCalled();
     });
 
@@ -299,14 +312,22 @@ describe('useMutation', () => {
       const onError = vi.fn();
       const onSettled = vi.fn();
       const onSuccess = vi.fn();
-      const { result } = setup((_: number) => Promise.resolve<ApiResponse<string>>({ error: body, success: false }), {
-        onError,
-        onSettled,
-        onSuccess,
-      });
+      const { result } = setup(
+        (_: number) => Promise.resolve<ApiResponse<string>>({ error: body, success: false }),
+        {
+          onError,
+          onSettled,
+          onSuccess,
+        }
+      );
 
       const err = await rejection(result.current.mutateAsync(5));
-      const expected: MutationError = { code: 'CONFLICT', message: 'exists', status: 409, cause: body };
+      const expected: MutationError = {
+        code: 'CONFLICT',
+        message: 'exists',
+        status: 409,
+        cause: body,
+      };
       expect(err).toEqual(expected);
       await flush();
       expect(result.current.error).toEqual(expected);
@@ -331,7 +352,9 @@ describe('useMutation', () => {
 
     it('stringifies a non-string code and message', async () => {
       const body = { code: 500, message: 42 } as unknown as { code: string; message: string };
-      const { result } = setup(() => Promise.resolve<ApiResponse<string>>({ error: body, success: false }));
+      const { result } = setup(() =>
+        Promise.resolve<ApiResponse<string>>({ error: body, success: false })
+      );
       const err = (await rejection(result.current.mutateAsync(undefined))) as MutationError;
       expect(err.code).toBe('500');
       expect(err.message).toBe('42');
@@ -339,7 +362,9 @@ describe('useMutation', () => {
 
     it('rejects an empty response with EMPTY_RESPONSE', async () => {
       const onError = vi.fn();
-      const { result } = setup<string, number>(() => Promise.resolve({ success: true }), { onError });
+      const { result } = setup<string, number>(() => Promise.resolve({ success: true }), {
+        onError,
+      });
       const err = await rejection(result.current.mutateAsync(1));
       const expected: MutationError = {
         code: 'EMPTY_RESPONSE',
@@ -359,9 +384,16 @@ describe('useMutation', () => {
       const thrown = new Error('socket closed');
       const onError = vi.fn();
       const onSettled = vi.fn();
-      const { result } = setup<string, number>(() => Promise.reject(thrown), { onError, onSettled });
+      const { result } = setup<string, number>(() => Promise.reject(thrown), {
+        onError,
+        onSettled,
+      });
       const err = await rejection(result.current.mutateAsync(2));
-      const expected: MutationError = { code: 'MUTATION_ERROR', message: 'socket closed', cause: thrown };
+      const expected: MutationError = {
+        code: 'MUTATION_ERROR',
+        message: 'socket closed',
+        cause: thrown,
+      };
       expect(err).toEqual(expected);
       await flush();
       expect(result.current.error).toEqual(expected);
@@ -397,7 +429,10 @@ describe('useMutation', () => {
       const thrown = new ApiError('unavailable', 'SERVICE_UNAVAILABLE', { status: 503 });
       const onError = vi.fn();
       const onSettled = vi.fn();
-      const { result } = setup<string, number>(() => Promise.reject(thrown), { onError, onSettled });
+      const { result } = setup<string, number>(() => Promise.reject(thrown), {
+        onError,
+        onSettled,
+      });
       const err = await rejection(result.current.mutateAsync(4));
       const expected: MutationError = {
         code: 'SERVICE_UNAVAILABLE',
@@ -430,7 +465,9 @@ describe('useMutation', () => {
   describe('mutate', () => {
     it('does not reject on error and reports through state and onError', async () => {
       const onError = vi.fn();
-      const { result } = setup<string, number>(() => Promise.reject(new Error('nope')), { onError });
+      const { result } = setup<string, number>(() => Promise.reject(new Error('nope')), {
+        onError,
+      });
       expect(result.current.mutate(1)).toBeUndefined();
       await flush();
       expect(result.current.isError).toBe(true);
@@ -476,7 +513,8 @@ describe('useMutation', () => {
   it('clears the previous error when a new mutation starts', async () => {
     let fail = true;
     const d = deferred<ApiResponse<number>>();
-    const fn = (): Promise<ApiResponse<number>> => (fail ? Promise.reject(new Error('first')) : d.promise);
+    const fn = (): Promise<ApiResponse<number>> =>
+      fail ? Promise.reject(new Error('first')) : d.promise;
     const { result } = setup(fn);
     await rejection(result.current.mutateAsync(undefined));
     await flush();
