@@ -183,9 +183,10 @@ func (s *Service) VerifyManifest(
 // ListManifests returns manifests matching the filter newest-first.
 func (s *Service) ListManifests(ctx context.Context, filter *daemon.ListManifestsFilter) ([]*manifest.HostManifest, int, error) {
 	f := store.ListFilter{}
+	limit, offset := 0, 0
 	if filter != nil {
 		f.HostID = filter.HostID
-		f.Limit = filter.Limit
+		limit, offset = filter.Limit, filter.Offset
 		if filter.StartTime > 0 {
 			f.Since = time.Unix(filter.StartTime, 0)
 		}
@@ -193,11 +194,25 @@ func (s *Service) ListManifests(ctx context.Context, filter *daemon.ListManifest
 			f.Until = time.Unix(filter.EndTime, 0)
 		}
 	}
+	// The store lists every match, newest first; total counts them all
+	// before the page is cut, so a caller can page through with offset
+	// (#1686).
 	manifests, err := s.store.ListManifests(f)
 	if err != nil {
 		return nil, 0, err
 	}
-	return manifests, len(manifests), nil
+	total := len(manifests)
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= total {
+		return []*manifest.HostManifest{}, total, nil
+	}
+	manifests = manifests[offset:]
+	if limit > 0 && limit < len(manifests) {
+		manifests = manifests[:limit]
+	}
+	return manifests, total, nil
 }
 
 // DeleteManifest removes a stored manifest and emits a deletion

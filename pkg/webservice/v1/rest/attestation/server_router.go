@@ -130,7 +130,21 @@ func (r *AttestationServerRouter) listManifests(w http.ResponseWriter, req *http
 	if !r.ensure(w, req) {
 		return
 	}
-	pbReq := &platformv1.ListManifestsRequest{}
+	limit, err := protorest.QueryUint32(req, "limit")
+	if err != nil {
+		r.respWriter.Error400(w, req, err)
+		return
+	}
+	offset, err := protorest.QueryUint32(req, "offset")
+	if err != nil {
+		r.respWriter.Error400(w, req, err)
+		return
+	}
+	pbReq := &platformv1.ListManifestsRequest{
+		HostId: req.URL.Query().Get("host_id"),
+		Limit:  limit,
+		Offset: offset,
+	}
 	resp, err := r.server.ListManifests(req.Context(), pbReq)
 	if err != nil {
 		protorest.WriteError(w, req, r.respWriter, err)
