@@ -49,35 +49,43 @@ export default function VMDetailPage() {
   const compute = useCompute();
   const { toast } = useToast();
 
-  const fetchVM = async () => {
-    if (!vmId) {
-      setLoading(false);
-      return;
-    }
-    try {
-      setLoading(true);
-      const response = await compute.getVM(vmId);
-      if (response.success && response.data) {
-        // SDK returns { vm: VM }, but we need VMDetail
-        // For now, cast to VMDetail - proper type mapping would be handled by backend
-        setVM({
-          ...(response.data.vm as unknown as VMDetail),
-          status: vmStatus(response.data.vm.state),
+  // settleVM applies one VM read from its promise callbacks, so the mount
+  // effect starts it without a synchronous setState; fetchVM adds the
+  // loading flag for a re-read.
+  const settleVM = () => {
+    const request: Promise<Awaited<ReturnType<typeof compute.getVM>> | null> = vmId
+      ? compute.getVM(vmId)
+      : Promise.resolve(null);
+    return request
+      .then((response) => {
+        if (response?.success && response.data) {
+          // SDK returns { vm: VM }, but we need VMDetail
+          // For now, cast to VMDetail - proper type mapping would be handled by backend
+          setVM({
+            ...(response.data.vm as unknown as VMDetail),
+            status: vmStatus(response.data.vm.state),
+          });
+        }
+      })
+      .catch((error: unknown) => {
+        toast({
+          title: 'Error',
+          description: `Failed to fetch VM details: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          variant: 'destructive',
         });
-      }
-    } catch (error) {
-      toast({
-        title: 'Error',
-        description: `Failed to fetch VM details: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        variant: 'destructive',
-      });
-    } finally {
-      setLoading(false);
+      })
+      .finally(() => setLoading(false));
+  };
+
+  const fetchVM = async () => {
+    if (vmId) {
+      setLoading(true);
     }
+    await settleVM();
   };
 
   useEffect(() => {
-    fetchVM();
+    void settleVM();
     if (!vmId) return;
     const interval = setInterval(fetchVM, 5000);
     return () => clearInterval(interval);

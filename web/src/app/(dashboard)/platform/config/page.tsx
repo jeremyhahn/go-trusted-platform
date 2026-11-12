@@ -82,45 +82,58 @@ export default function ConfigPage() {
     [],
   );
 
+  // The settle functions apply one read from their promise callbacks, so
+  // the mount effect starts them without a synchronous setState;
+  // fetchConfig adds the loading reset for a re-read.
+  const settleConfig = React.useCallback(
+    () =>
+      fetch("/api/v1/platform/config", fetchOpts)
+        .then(async (res) => {
+          if (!res.ok) {
+            throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+          }
+          const body = await res.json();
+          const tree: ConfigTree =
+            body.payload && typeof body.payload === "object"
+              ? (body.payload as ConfigTree)
+              : (body as ConfigTree);
+          setConfig(tree);
+          setError(null);
+        })
+        .catch((e: unknown) => {
+          const msg = e instanceof Error ? e.message : String(e);
+          setError(msg);
+        })
+        .finally(() => setIsLoading(false)),
+    [fetchOpts]
+  );
+
   const fetchConfig = React.useCallback(async () => {
     setIsLoading(true);
     setError(null);
-    try {
-      const res = await fetch("/api/v1/platform/config", fetchOpts);
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}: ${await res.text()}`);
-      }
-      const body = await res.json();
-      const tree: ConfigTree =
-        body.payload && typeof body.payload === "object"
-          ? (body.payload as ConfigTree)
-          : (body as ConfigTree);
-      setConfig(tree);
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setError(msg);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [fetchOpts]);
+    await settleConfig();
+  }, [settleConfig]);
 
-  const fetchSnapshots = React.useCallback(async () => {
-    try {
-      const res = await fetch("/api/v1/platform/config/snapshots", fetchOpts);
-      if (!res.ok) return; // 503 when store isn't configured — non-fatal
-      const body = await res.json();
-      const list: SnapshotSummary[] =
-        body.payload?.snapshots ?? body.snapshots ?? [];
-      setSnapshots(list);
-    } catch {
-      // snapshot listing is best-effort; failure shouldn't block the page
-    }
-  }, [fetchOpts]);
+  const fetchSnapshots = React.useCallback(
+    () =>
+      fetch("/api/v1/platform/config/snapshots", fetchOpts)
+        .then(async (res) => {
+          if (!res.ok) return; // 503 when store isn't configured — non-fatal
+          const body = await res.json();
+          const list: SnapshotSummary[] =
+            body.payload?.snapshots ?? body.snapshots ?? [];
+          setSnapshots(list);
+        })
+        .catch(() => {
+          // snapshot listing is best-effort; failure shouldn't block the page
+        }),
+    [fetchOpts]
+  );
 
   React.useEffect(() => {
-    void fetchConfig();
+    void settleConfig();
     void fetchSnapshots();
-  }, [fetchConfig, fetchSnapshots]);
+  }, [settleConfig, fetchSnapshots]);
 
   const handleCaptureSnapshot = async () => {
     setIsCapturing(true);

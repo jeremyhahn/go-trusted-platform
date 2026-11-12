@@ -146,36 +146,47 @@ export default function IPAMPage() {
   const [allocationsLoading, setAllocationsLoading] = React.useState(false);
   const [allocationsOpen, setAllocationsOpen] = React.useState(false);
 
-  const fetchPools = React.useCallback(async (zone?: string) => {
-    setLoading(true);
-    setLoadError(null);
-    try {
-      const params = zone ? `?zone=${encodeURIComponent(zone)}` : '';
-      const res = await fetch(`/api/v1/sdn/gateway/ipam/pools${params}`, {
-        credentials: 'include',
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `HTTP ${res.status}`);
-      }
-      const body = await res.json();
-      // The webservice wraps payloads in {payload}; the daemon REST
-      // stack returns the body bare — accept both.
-      const list: IPAMPoolResponse[] = body.payload?.pools ?? body.pools ?? [];
-      setPools(list);
-      // Collect unique zone values for the filter dropdown
-      const seenZones = Array.from(new Set(list.map((p) => p.zone).filter(Boolean)));
-      setZoneOptions(seenZones);
-    } catch (err) {
-      setLoadError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
+  // settlePools applies one pool read from its promise callbacks, so the
+  // effect starts it without a synchronous setState; fetchPools adds the
+  // loading reset for a re-read.
+  const settlePools = React.useCallback((zone?: string) => {
+    const params = zone ? `?zone=${encodeURIComponent(zone)}` : '';
+    return fetch(`/api/v1/sdn/gateway/ipam/pools${params}`, {
+      credentials: 'include',
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.error || `HTTP ${res.status}`);
+        }
+        const body = await res.json();
+        // The webservice wraps payloads in {payload}; the daemon REST
+        // stack returns the body bare — accept both.
+        const list: IPAMPoolResponse[] = body.payload?.pools ?? body.pools ?? [];
+        setPools(list);
+        // Collect unique zone values for the filter dropdown
+        const seenZones = Array.from(new Set(list.map((p) => p.zone).filter(Boolean)));
+        setZoneOptions(seenZones);
+        setLoadError(null);
+      })
+      .catch((err: unknown) => {
+        setLoadError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => setLoading(false));
   }, []);
 
+  const fetchPools = React.useCallback(
+    async (zone?: string) => {
+      setLoading(true);
+      setLoadError(null);
+      await settlePools(zone);
+    },
+    [settlePools]
+  );
+
   React.useEffect(() => {
-    void fetchPools(zoneFilter || undefined);
-  }, [fetchPools, zoneFilter]);
+    void settlePools(zoneFilter || undefined);
+  }, [settlePools, zoneFilter]);
 
   const fetchAllocations = React.useCallback(async (pool: IPAMPoolResponse) => {
     setAllocationsPool(pool);
