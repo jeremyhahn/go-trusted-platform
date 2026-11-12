@@ -40,6 +40,12 @@ function unwrap<T>(response: ApiResponse<T>): T {
   return response.data;
 }
 
+// The REST handlers serialize TenantState through protojson, which emits the
+// proto enum name (TENANT_STATE_SUSPENDED); the page compares the short name.
+function normalizeTenant(t: Tenant): Tenant {
+  return { ...t, state: String(t.state ?? '').replace(/^TENANT_STATE_/, '') as Tenant['state'] };
+}
+
 export function useTenantLifecycle(): UseTenantLifecycleResult {
   const service = useTenant();
   const [tenant, setTenant] = useState<Tenant | null>(null);
@@ -69,7 +75,7 @@ export function useTenantLifecycle(): UseTenantLifecycleResult {
 
   const refresh = useCallback(
     async (id: string) => {
-      setTenant(unwrap(await service.getTenant(id)).tenant);
+      setTenant(normalizeTenant(unwrap(await service.getTenant(id)).tenant));
     },
     [service]
   );
@@ -78,7 +84,7 @@ export function useTenantLifecycle(): UseTenantLifecycleResult {
     (name: string) =>
       run(async () => {
         const found = unwrap(await service.getTenantByName(name)).tenant;
-        setTenant(found);
+        setTenant(normalizeTenant(found));
         setDEKStatus(null);
         setQuotaCheck(null);
         return null;
@@ -91,7 +97,7 @@ export function useTenantLifecycle(): UseTenantLifecycleResult {
       run(async () => {
         const t = requireTenant();
         const updated = unwrap(await service.updateTenant({ tenantId: t.id, displayName })).tenant;
-        setTenant(updated ?? { ...t, displayName });
+        setTenant(updated ? normalizeTenant(updated) : { ...t, displayName });
         return 'Tenant updated';
       }),
     [run, service, requireTenant]
@@ -135,7 +141,10 @@ export function useTenantLifecycle(): UseTenantLifecycleResult {
     (compute: ComputeQuota) =>
       run(async () => {
         const t = requireTenant();
-        unwrap(await service.updateQuotas({ tenantId: t.id, compute }));
+        // UpdateQuotas replaces every limit of a supplied compute section, so
+        // merge the change into the current limits to keep the others.
+        const current = unwrap(await service.getQuotas(t.id)).compute ?? {};
+        unwrap(await service.updateQuotas({ tenantId: t.id, compute: { ...current, ...compute } }));
         return 'Quotas updated';
       }),
     [run, service, requireTenant]
@@ -154,7 +163,9 @@ export function useTenantLifecycle(): UseTenantLifecycleResult {
   const sync = useCallback(
     () =>
       run(async () => {
-        unwrap(await service.syncTenants());
+        // Sync reports a failed run in status (HTTP 200), not as an RPC error.
+        const res = unwrap(await service.syncTenants());
+        if (res.status?.success === false) throw new Error(res.status.message || 'Tenant sync failed');
         return 'Tenant sync started';
       }),
     [run, service]
