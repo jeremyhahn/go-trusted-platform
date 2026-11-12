@@ -125,15 +125,26 @@ func (e ErrMissingTrustedRoots) Error() string {
 }
 
 // ErrRevocationCheckFailed indicates a certificate revocation check failed.
+// Err, when set, is the underlying failure (for example the CA Verify error).
 type ErrRevocationCheckFailed struct {
 	Reason string
+	Err    error
+}
+
+// Unwrap returns the underlying failure.
+func (e ErrRevocationCheckFailed) Unwrap() error {
+	return e.Err
 }
 
 func (e ErrRevocationCheckFailed) Error() string {
-	if e.Reason == "" {
-		return "auth: revocation check failed"
+	msg := "auth: revocation check failed"
+	if e.Reason != "" {
+		msg = fmt.Sprintf("%s: %s", msg, e.Reason)
 	}
-	return fmt.Sprintf("auth: revocation check failed: %s", e.Reason)
+	if e.Err != nil {
+		return fmt.Sprintf("%s: %v", msg, e.Err)
+	}
+	return msg
 }
 
 // ErrInvalidKeyUsage indicates the certificate does not have required key usage.
