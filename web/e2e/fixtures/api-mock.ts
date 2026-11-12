@@ -703,3 +703,103 @@ export async function mockInvitationValidation(
     });
   });
 }
+
+// =============================================================================
+// TPM key lifecycle (#1735)
+// =============================================================================
+
+/** One request the TPM key mock answered: method, path below /api/v1/tpm, JSON body. */
+export interface TPMKeyOperationCall {
+  method: string;
+  path: string;
+  body: unknown;
+}
+
+/** A canned answer: HTTP status (200 when absent) and the JSON body. */
+export interface TPMKeyOperationReply {
+  status?: number;
+  body: unknown;
+}
+
+const TPM_EK_PUBLIC = '-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEek\n-----END PUBLIC KEY-----';
+
+/**
+ * Default answers keyed by `METHOD /path` (path below /api/v1/tpm, no query).
+ * A delete keys on the handle in decimal, the SDK puts it in the path.
+ */
+export const defaultTPMKeyReplies: Record<string, TPMKeyOperationReply> = {
+  'GET /ek': { body: { publicKey: TPM_EK_PUBLIC, handle: 0x81010001, algorithm: 'ECDSA_P256' } },
+  'GET /srk': { body: { publicKey: TPM_EK_PUBLIC, handle: 0x81000001, algorithm: 'ECDSA_P256' } },
+  'POST /provision': { body: { status: { code: 0, message: 'provisioned' }, ekPublic: 'RUs=' } },
+  'POST /clear': { body: { status: { code: 0, message: 'cleared' } } },
+  'GET /capabilities': {
+    body: { algorithms: ['RSA', 'ECC', 'SHA256'], commands: ['TPM2_Quote', 'TPM2_Certify'], eccCurves: ['NIST_P256'] },
+  },
+  'GET /platform': {
+    body: {
+      device: '/dev/tpmrm0',
+      isFips: false,
+      canSeal: true,
+      manufacturer: 'Mock TPM Vendor',
+      ek: { handle: 0x81010001, algorithm: 'ECDSA_P256' },
+      srk: { handle: 0x81000001, algorithm: 'ECDSA_P256' },
+      iak: { handle: 0x81010002, algorithm: 'ECDSA_P256' },
+    },
+  },
+  'POST /ek': { status: 201, body: { handle: 0x81010001, publicKey: 'RUs=' } },
+  'POST /ek/certificate': { status: 201, body: { status: { code: 0, message: 'imported' } } },
+  [`DELETE /ek/${0x81010001}`]: { body: { status: { code: 0, message: 'ek deleted' } } },
+  'POST /srk': { status: 201, body: { handle: 0x81000001, publicKey: 'U1JL' } },
+  [`DELETE /srk/${0x81000001}`]: { body: { status: { code: 0, message: 'srk deleted' } } },
+  'POST /ak': { status: 201, body: { handle: 0x81010002, publicKey: 'QUs=' } },
+  'GET /ak': { body: { handle: 0x81010002, publicKey: 'QUs=', algorithm: 'ECDSA_P256' } },
+  [`DELETE /ak/${0x81010002}`]: { body: { status: { code: 0, message: 'ak deleted' } } },
+  'POST /quote': {
+    body: { quote: 'cXVvdGU=', signature: 'c2ln', signatureAlgorithm: 'ECDSA-SHA256', channelBinding: 'Y2I=' },
+  },
+  'POST /quote/verify': { body: { verified: true, message: 'quote verified' } },
+  'POST /certify': { body: { certifyInfo: 'aW5mbw==', signature: 'c2ln', signatureAlgorithm: 'ECDSA-SHA256' } },
+};
+
+/**
+ * mockTPMKeyOperationsApi answers every /api/v1/tpm request from
+ * `defaultTPMKeyReplies` merged with `overrides`, and every IDevID request
+ * with 404. It returns the list the answered requests are appended to.
+ */
+export async function mockTPMKeyOperationsApi(
+  page: Page,
+  overrides: Record<string, TPMKeyOperationReply> = {},
+): Promise<TPMKeyOperationCall[]> {
+  const replies = { ...defaultTPMKeyReplies, ...overrides };
+  const calls: TPMKeyOperationCall[] = [];
+
+  await page.route(/\/api\/v1\/idevid\//, async (route: Route) => {
+    await route.fulfill({
+      status: 404,
+      contentType: 'application/json',
+      body: JSON.stringify({ message: 'not found', code: 'HTTP_404' }),
+    });
+  });
+
+  await page.route(/\/api\/v1\/tpm\//, async (route: Route, request: Request) => {
+    const url = new URL(request.url());
+    const path = url.pathname.replace(/^.*\/api\/v1\/tpm/, '');
+    const method = request.method();
+    let body: unknown = null;
+    try {
+      body = request.postDataJSON();
+    } catch {
+      body = request.postData();
+    }
+    calls.push({ method, path, body });
+
+    const reply = replies[`${method} ${path}`];
+    await route.fulfill({
+      status: reply ? reply.status ?? 200 : 404,
+      contentType: 'application/json',
+      body: JSON.stringify(reply ? reply.body : { message: 'not found', code: 'HTTP_404' }),
+    });
+  });
+
+  return calls;
+}
