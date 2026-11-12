@@ -59,9 +59,12 @@ export function TokenForm({
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [customScope, setCustomScope] = useState('');
 
-  React.useEffect(() => {
+  // Reset the form each time the dialog opens: state adjusted during
+  // render against the previous open value, not in an effect.
+  const [wasOpen, setWasOpen] = useState(false);
+  if (open !== wasOpen) {
+    setWasOpen(open);
     if (open) {
-      // Reset form when dialog opens
       const oneMonthFromNow = new Date();
       oneMonthFromNow.setMonth(oneMonthFromNow.getMonth() + 1);
 
@@ -73,7 +76,7 @@ export function TokenForm({
       setErrors({});
       setCustomScope('');
     }
-  }, [open]);
+  }
 
   const validate = (): boolean => {
     const newErrors: Record<string, string> = {};
