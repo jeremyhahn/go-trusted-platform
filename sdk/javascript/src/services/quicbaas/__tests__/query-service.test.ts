@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { QueryService } from '../query-service.js';
 import type { ApiClient } from '../../../client/api-client.js';
 import type { ApiResponse } from '../../../types/api.js';
+import type { QueryOperator } from '../../../types/quicbaas/core-data.js';
 
 // Mock ApiClient
 function createMockApiClient(): ApiClient {
@@ -143,14 +144,14 @@ describe('QueryService', () => {
 
       await service.query({
         prefix: 'users/',
-        projection: ['name', 'email'],
+        projection: { include: ['name', 'email'] },
       });
 
       expect(mockClient.post).toHaveBeenCalledWith('/v1/quicbaas/query', {
         prefix: 'users/',
         filters: undefined,
         sorts: undefined,
-        projection: ['name', 'email'],
+        projection: { include: ['name', 'email'] },
         limit: undefined,
         offset: undefined,
         cursor: undefined,
@@ -244,7 +245,7 @@ describe('QueryService', () => {
 
       const result = await service.query({
         prefix: 'users/',
-        filters: [{ field: 'invalid', operator: 'BAD', value: 'x' }],
+        filters: [{ field: 'invalid', operator: 'BAD' as QueryOperator, value: 'x' }],
       });
 
       expect(result.success).toBe(false);
@@ -280,7 +281,7 @@ describe('QueryService', () => {
       });
 
       expect(result.success).toBe(true);
-      expect(result.data?.name).toBe('users_by_email');
+      expect(result.data).toMatchObject({ name: 'users_by_email' });
       expect(mockClient.post).toHaveBeenCalledWith('/v1/quicbaas/indexes', {
         name: 'users_by_email',
         prefix: 'users/',
@@ -437,7 +438,7 @@ describe('QueryService', () => {
       });
 
       expect(result.success).toBe(true);
-      expect(result.data?.deleted).toBe(true);
+      expect(result.data).toMatchObject({ deleted: true });
       expect(mockClient.delete).toHaveBeenCalledWith('/v1/quicbaas/indexes/users_by_email');
     });
 
@@ -541,7 +542,7 @@ describe('QueryService', () => {
 
       await service.listIndexes({ limit: 10, cursor: 'current-cursor' });
 
-      const call = vi.mocked(mockClient.get).mock.calls[0][0];
+      const call = vi.mocked(mockClient.get).mock.calls[0]![0];
       expect(call).toContain('limit=10');
       expect(call).toContain('cursor=current-cursor');
     });
