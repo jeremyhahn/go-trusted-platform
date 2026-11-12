@@ -32,6 +32,9 @@ func init() {
 		platformv1.AttestationService_RefreshDeviceReport_FullMethodName:  "attestation_device_refresh",
 		platformv1.AttestationService_DescribeCallerPolicy_FullMethodName: "attestation_caller_policy",
 		platformv1.AttestationService_PollDeviceVerdicts_FullMethodName:   "attestation_device_verdicts_poll",
+		platformv1.AttestationService_GetManifest_FullMethodName:          "attestation_get_manifest",
+		platformv1.AttestationService_ListManifests_FullMethodName:        "attestation_list_manifests",
+		platformv1.AttestationService_DeleteManifest_FullMethodName:       "attestation_delete_manifest",
 	} {
 		grpcMethodToMCPToolMap[method] = tool
 	}
@@ -41,6 +44,9 @@ func init() {
 		platformv1.AttestationService_RefreshDeviceReport_FullMethodName:  decodeDeviceRefreshResult,
 		platformv1.AttestationService_DescribeCallerPolicy_FullMethodName: decodeCallerPolicyResult,
 		platformv1.AttestationService_PollDeviceVerdicts_FullMethodName:   decodeDeviceVerdictsResult,
+		platformv1.AttestationService_GetManifest_FullMethodName:          decodeManifestResult(platformv1.AttestationService_GetManifest_FullMethodName),
+		platformv1.AttestationService_ListManifests_FullMethodName:        decodeManifestResult(platformv1.AttestationService_ListManifests_FullMethodName),
+		platformv1.AttestationService_DeleteManifest_FullMethodName:       decodeManifestResult(platformv1.AttestationService_DeleteManifest_FullMethodName),
 	} {
 		mcpReplyDecoders[method] = decode
 	}
@@ -130,4 +136,16 @@ func decodeDeviceVerdictsResult(result interface{}, reply interface{}) error {
 		return ErrUnexpectedReplyType{Method: platformv1.AttestationService_PollDeviceVerdicts_FullMethodName}
 	}
 	return decodeReportJSON(result, out)
+}
+
+// decodeManifestResult decodes the manifest tools' results: the server
+// answers each with its gRPC reply as protojson (#1686).
+func decodeManifestResult(method string) mcpReplyDecoder {
+	return func(result interface{}, reply interface{}) error {
+		out, ok := reply.(proto.Message)
+		if !ok {
+			return ErrUnexpectedReplyType{Method: method}
+		}
+		return decodeReportJSON(result, out)
+	}
 }
