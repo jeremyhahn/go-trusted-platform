@@ -20,6 +20,11 @@ import type {
   GetMetricsRequest,
   GetMetricsResponse,
   ReloadConfigResponse,
+  DaemonStatusResponse,
+  DaemonServiceInfo,
+  ListDaemonServicesResponse,
+  DaemonServiceAction,
+  DaemonServiceActionResponse,
 } from '../types/platform.js';
 
 /**
@@ -151,5 +156,75 @@ export class PlatformService extends BaseService {
   // =========================================================================
   // Lifecycle Operations
   // =========================================================================
+
+  /**
+   * Get the daemon status
+   *
+   * @returns Daemon status
+   */
+  async getStatus(): Promise<ApiResponse<DaemonStatusResponse>> {
+    return this.client.get<DaemonStatusResponse>(this.buildUrl('/status'));
+  }
+
+  /**
+   * List the daemon services
+   *
+   * @returns Services and their status
+   */
+  async listServices(): Promise<ApiResponse<ListDaemonServicesResponse>> {
+    return this.client.get<ListDaemonServicesResponse>(this.buildUrl('/services'));
+  }
+
+  /**
+   * Get one daemon service's status
+   *
+   * @param service - Service name
+   * @returns Service status
+   */
+  async getServiceStatus(service: string): Promise<ApiResponse<DaemonServiceInfo>> {
+    return this.client.get<DaemonServiceInfo>(
+      this.buildUrl(`/services/${encodeURIComponent(service)}`)
+    );
+  }
+
+  /**
+   * Start a daemon service
+   *
+   * @param service - Service name
+   * @returns Action result
+   */
+  async startService(service: string): Promise<ApiResponse<DaemonServiceActionResponse>> {
+    return this.serviceAction(service, 'start');
+  }
+
+  /**
+   * Stop a daemon service
+   *
+   * @param service - Service name
+   * @returns Action result
+   */
+  async stopService(service: string): Promise<ApiResponse<DaemonServiceActionResponse>> {
+    return this.serviceAction(service, 'stop');
+  }
+
+  /**
+   * Restart a daemon service
+   *
+   * @param service - Service name
+   * @returns Action result
+   */
+  async restartService(service: string): Promise<ApiResponse<DaemonServiceActionResponse>> {
+    return this.serviceAction(service, 'restart');
+  }
+
+  private async serviceAction(
+    service: string,
+    action: DaemonServiceAction
+  ): Promise<ApiResponse<DaemonServiceActionResponse>> {
+    return this.client.post<DaemonServiceActionResponse>(
+      this.buildUrl(`/services/${encodeURIComponent(service)}/${action}`),
+      {}
+    );
+  }
 
 }
