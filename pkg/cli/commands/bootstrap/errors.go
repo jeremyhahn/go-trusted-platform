@@ -266,6 +266,41 @@ func (e ErrTrustInstallFailed) Unwrap() error {
 	return e.Cause
 }
 
+// ErrDirectBundleNotPEM is returned by `bootstrap direct` when the bundle
+// file holds no PEM block.
+type ErrDirectBundleNotPEM struct {
+	Path string
+}
+
+func (e ErrDirectBundleNotPEM) Error() string {
+	return fmt.Sprintf("bootstrap direct: %s contains no PEM block", e.Path)
+}
+
+// ErrDirectBundleInvalidCert is returned by `bootstrap direct` when a
+// CERTIFICATE block in the bundle does not parse as an X.509 certificate.
+type ErrDirectBundleInvalidCert struct {
+	Path  string
+	Cause error
+}
+
+func (e ErrDirectBundleInvalidCert) Error() string {
+	return fmt.Sprintf("bootstrap direct: %s holds an invalid certificate: %v", e.Path, e.Cause)
+}
+
+func (e ErrDirectBundleInvalidCert) Unwrap() error {
+	return e.Cause
+}
+
+// ErrDirectBundleNoCA is returned by `bootstrap direct` when the bundle
+// holds no CA certificate.
+type ErrDirectBundleNoCA struct {
+	Path string
+}
+
+func (e ErrDirectBundleNoCA) Error() string {
+	return fmt.Sprintf("bootstrap direct: %s contains no CA certificate", e.Path)
+}
+
 // MessageError is a typed error carrying a fully formatted message with no
 // underlying cause. It replaces inline formatted-error constructions that do not wrap
 // another error.
