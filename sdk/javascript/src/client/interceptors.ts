@@ -162,12 +162,27 @@ export function createLoggingResponseInterceptor(
 }
 
 /**
+ * Turns any HeadersInit (a Headers object, an array of pairs or a plain
+ * record) into a plain record that can be spread. Plain records keep their
+ * key case; the other forms come back with lower-case names.
+ */
+function normalizeHeaders(init: HeadersInit | undefined): Record<string, string> {
+  if (init === undefined || init === null) {
+    return {};
+  }
+  if (init instanceof Headers || Array.isArray(init)) {
+    return Object.fromEntries(new Headers(init));
+  }
+  return init as Record<string, string>;
+}
+
+/**
  * Creates an authorization header interceptor
  */
 export function createAuthInterceptor(getToken: () => string | Promise<string>): RequestInterceptor {
   return async (config, _context) => {
     const token = await getToken();
-    const headers = config.headers instanceof Headers ? Object.fromEntries(config.headers) : config.headers ?? {};
+    const headers = normalizeHeaders(config.headers);
 
     return {
       ...config,
@@ -187,7 +202,7 @@ export function createRequestIdInterceptor(generateId: () => string = () => cryp
     const requestId = generateId();
     context.metadata['requestId'] = requestId;
 
-    const headers = config.headers instanceof Headers ? Object.fromEntries(config.headers) : config.headers ?? {};
+    const headers = normalizeHeaders(config.headers);
 
     return {
       ...config,
@@ -214,7 +229,7 @@ export function createRetryAfterInterceptor(): ResponseInterceptor {
             ...response.error.details,
             context: {
               ...response.error.details?.context,
-              retryAfterSeconds: parseInt(retryAfter, 10) || retryAfter,
+              retryAfterSeconds: Number.isNaN(parseInt(retryAfter, 10)) ? retryAfter : parseInt(retryAfter, 10),
             },
           };
         }
