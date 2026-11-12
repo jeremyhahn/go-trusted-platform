@@ -310,6 +310,12 @@ func (s *IDevIDGRPCService) CreateIAKCSR(ctx context.Context, req *platformv1.Cr
 		return nil, status.Error(codes.FailedPrecondition, "TPM2 service not initialized")
 	}
 
+	// The TPM library's TCG CSR builder reads the IDevID configuration
+	// unconditionally; refuse here rather than let it dereference nil.
+	if cfg := s.tpm2Service.Config(); cfg == nil || cfg.IDevID == nil {
+		return nil, status.Error(codes.FailedPrecondition, "IAK CSR requires an IDevID configuration")
+	}
+
 	// Get IAK attributes
 	iakAttrs, err := s.tpm2Service.IAKAttributes()
 	if err != nil {
