@@ -29,6 +29,10 @@ var ErrLUKSNotConfigured = errors.New("luks: backend not configured")
 // ErrLUKSDeviceRequired indicates the caller omitted the device path.
 var ErrLUKSDeviceRequired = errors.New("luks: device path is required")
 
+// ErrLUKSPCRInvalid indicates a TPM enrollment named no PCR or an index
+// outside 0..23.
+var ErrLUKSPCRInvalid = errors.New("luks: invalid tpm pcr selection")
+
 // ErrLUKSPassphraseRequired indicates a required passphrase was missing.
 var ErrLUKSPassphraseRequired = errors.New("luks: passphrase is required")
 
