@@ -192,6 +192,9 @@ func (s *ProfileService) saveValidated(ctx context.Context, profile *entities.De
 	if err := validateNetworkPhases(profile); err != nil {
 		return err
 	}
+	if err := profile.ValidateDICEFields(); err != nil {
+		return err
+	}
 
 	return s.save(ctx, profile, msg)
 }

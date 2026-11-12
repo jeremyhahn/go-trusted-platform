@@ -280,6 +280,45 @@ func (d *DeviceProfileDAO) FindByEKSerial(ctx context.Context, ekSerial string) 
 	return nil, ErrNotFoundByIndex{EntityType: entityTypeDeviceProfile, IndexField: "EKSerial", Value: ekSerial}
 }
 
+// FindByDICEDeviceID finds a profile by exact DICE device id. The
+// comparison is case-insensitive (the id is hex).
+func (d *DeviceProfileDAO) FindByDICEDeviceID(ctx context.Context, diceDeviceID string) (*entities.DeviceProfile, error) {
+	ctx, cancel := context.WithTimeout(ctx, d.requestTimeout)
+	defer cancel()
+
+	if diceDeviceID == "" {
+		return nil, ErrNotFoundByIndex{EntityType: entityTypeDeviceProfile, IndexField: "DICEDeviceID", Value: diceDeviceID}
+	}
+
+	pageToken := ""
+
+	for {
+		svcEntities, nextToken, err := d.storage.List(ctx, entityTypeDeviceProfile, 1000, pageToken, d.shardID)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, entity := range svcEntities {
+			var profile entities.DeviceProfile
+			if err := datastore.DecodeEntity(entity.Data, &profile); err != nil {
+				d.logger.Warn("Failed to deserialize device profile", "id", entity.ID, "error", err)
+				continue
+			}
+
+			if strings.EqualFold(profile.DICEDeviceID, diceDeviceID) {
+				return &profile, nil
+			}
+		}
+
+		if nextToken == "" {
+			break
+		}
+		pageToken = nextToken
+	}
+
+	return nil, ErrNotFoundByIndex{EntityType: entityTypeDeviceProfile, IndexField: "DICEDeviceID", Value: diceDeviceID}
+}
+
 // FindByExactMAC finds a profile by exact MAC address.
 // The comparison is case-insensitive.
 func (d *DeviceProfileDAO) FindByExactMAC(ctx context.Context, mac string) (*entities.DeviceProfile, error) {
