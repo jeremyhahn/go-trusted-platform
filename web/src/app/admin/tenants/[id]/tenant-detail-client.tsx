@@ -22,6 +22,7 @@ import {
   Label,
 } from "@/components/ui";
 import { ConfirmDialog, errorText, type PendingAction } from "../confirm-dialog";
+import { tenantStateName } from "../tenant-state";
 
 function toNumber(v: string): number | undefined {
   if (v.trim() === "") return undefined;
@@ -55,8 +56,6 @@ export default function TenantDetailClient() {
   const [maxMemoryMb, setMaxMemoryMb] = React.useState("");
   const [checkResource, setCheckResource] = React.useState("vms");
   const [checkAmount, setCheckAmount] = React.useState("1");
-  const [threshold, setThreshold] = React.useState("3");
-  const [shares, setShares] = React.useState("5");
   const [unsealKey, setUnsealKey] = React.useState("");
 
   const tenant = tenantData?.tenant;
@@ -96,16 +95,26 @@ export default function TenantDetailClient() {
 
   const saveQuotas = async (e: React.FormEvent) => {
     e.preventDefault();
+    // The server replaces every limit of a supplied compute section, so send
+    // the current limits for the fields that were not edited.
+    const cur: Record<string, unknown> = { ...(tenant?.computeQuota ?? {}) };
+    const keep = (edited: string, current: unknown) => toNumber(edited) ?? (Number(current ?? 0) || 0);
     const res = await tenants.updateQuotas({
       tenantId,
       compute: {
-        maxVms: toNumber(maxVms),
-        maxVcpus: toNumber(maxVcpus),
-        maxMemoryMb: toNumber(maxMemoryMb),
+        maxVms: keep(maxVms, cur.maxVms),
+        maxContainers: keep("", cur.maxContainers),
+        maxVcpus: keep(maxVcpus, cur.maxVcpus),
+        maxMemoryMb: keep(maxMemoryMb, cur.maxMemoryMb),
       },
     });
     report(res, "Quotas updated", "Quota update failed");
-    if (res.success) await refetch();
+    if (res.success) {
+      setMaxVms("");
+      setMaxVcpus("");
+      setMaxMemoryMb("");
+      await refetch();
+    }
   };
 
   const checkQuota = async (e: React.FormEvent) => {
@@ -149,11 +158,7 @@ export default function TenantDetailClient() {
 
   const initBarrier = async (e: React.FormEvent) => {
     e.preventDefault();
-    const res = await tenants.initBarrier({
-      tenantId,
-      threshold: toNumber(threshold),
-      shares: toNumber(shares),
-    });
+    const res = await tenants.initBarrier({ tenantId });
     report(res, "Barrier initialised", "Barrier init failed");
   };
 
@@ -177,14 +182,15 @@ export default function TenantDetailClient() {
 
   if (isLoading) return <p>Loading tenant...</p>;
   if (error || !tenant) return <p role="alert">Failed to load tenant: {error?.message ?? "not found"}</p>;
+  const stateName = tenantStateName(tenant.state);
 
   return (
     <div className="space-y-6">
       <Link href="/admin/tenants/">Back to tenants</Link>
       <div className="flex items-center gap-3">
         <h2 className="text-2xl font-semibold">{tenant.name}</h2>
-        <Badge data-testid="tenant-state" variant={tenant.state === "ACTIVE" ? "default" : "secondary"}>
-          {tenant.state}
+        <Badge data-testid="tenant-state" variant={stateName === "ACTIVE" ? "default" : "secondary"}>
+          {stateName}
         </Badge>
       </div>
       <p role="status" data-testid="action-result">
@@ -208,7 +214,7 @@ export default function TenantDetailClient() {
             <Button type="submit">Save</Button>
           </form>
           <div className="flex gap-3">
-            {tenant.state === "SUSPENDED" ? (
+            {stateName === "SUSPENDED" ? (
               <Button onClick={resume}>Resume</Button>
             ) : (
               <Button variant="destructive" onClick={suspend}>
@@ -293,14 +299,9 @@ export default function TenantDetailClient() {
         </CardHeader>
         <CardContent className="space-y-4">
           <form onSubmit={initBarrier} className="flex flex-wrap items-end gap-3">
-            <div>
-              <Label htmlFor="barrier-threshold">Threshold</Label>
-              <Input id="barrier-threshold" value={threshold} onChange={(e) => setThreshold(e.target.value)} />
-            </div>
-            <div>
-              <Label htmlFor="barrier-shares">Shares</Label>
-              <Input id="barrier-shares" value={shares} onChange={(e) => setShares(e.target.value)} />
-            </div>
+            <p className="text-sm text-muted-foreground">
+              Shamir threshold and shares are not supported for tenant barriers.
+            </p>
             <Button type="submit">Initialise barrier</Button>
           </form>
           <form onSubmit={unsealBarrier} className="flex flex-wrap items-end gap-3">

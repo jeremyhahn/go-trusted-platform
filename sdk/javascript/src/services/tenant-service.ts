@@ -237,7 +237,7 @@ export class TenantService extends BaseService {
    */
   async checkQuota(request: CheckQuotaRequest): Promise<ApiResponse<CheckQuotaResponse>> {
     return this.client.post<CheckQuotaResponse>(
-      this.buildUrl(`/${this.encodePathSegment(request.tenantId)}/quotas/check`),
+      this.buildUrl(`/${this.encodePathSegment(request.tenantId)}/quota-check`),
       { resource: request.resource, amount: request.amount }
     );
   }
@@ -267,7 +267,7 @@ export class TenantService extends BaseService {
    */
   async getDEKStatus(tenantId: string): Promise<ApiResponse<GetTenantDEKStatusResponse>> {
     return this.client.get<GetTenantDEKStatusResponse>(
-      this.buildUrl(`/${this.encodePathSegment(tenantId)}/dek/status`)
+      this.buildUrl(`/${this.encodePathSegment(tenantId)}/dek`)
     );
   }
 
