@@ -83,6 +83,14 @@ export { useToast, toast, dismissToast } from './use-toast';
 export type { Toast, UseToastReturn } from './use-toast';
 
 export { useReportedGateways } from './use-reported-gateways';
+export { useRegistry, encodeRepository } from './use-registry';
+export type {
+  RegistryHealthCode,
+  RegistryComponent,
+  RegistryStatus,
+  RegistryTags,
+  UseRegistryResult,
+} from './use-registry';
 export type {
   ReportedGateway,
   UseReportedGatewaysOptions,

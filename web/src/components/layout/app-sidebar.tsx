@@ -142,6 +142,7 @@ const navigation = [
       { title: "Containers", href: "/compute/containers" },
       { title: "Snapshots", href: "/compute/snapshots" },
       { title: "Images", href: "/compute/images" },
+      { title: "Registry", href: "/compute/registry" },
     ],
   },
   {
