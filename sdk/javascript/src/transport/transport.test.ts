@@ -78,7 +78,7 @@ describe('Transport interface', () => {
     const t: Transport = new MemoryTransport();
     expectTypeOf(t.get<{ id: number }>('/x')).toEqualTypeOf<Promise<ApiResponse<{ id: number }>>>();
     expectTypeOf(t.post<string>('/x')).toEqualTypeOf<Promise<ApiResponse<string>>>();
-    expectTypeOf(t.delete<void>('/x')).toEqualTypeOf<Promise<ApiResponse<void>>>();
+    expectTypeOf(t.delete<undefined>('/x')).toEqualTypeOf<Promise<ApiResponse<undefined>>>();
   });
 
   it('is satisfied structurally by the REST ApiClient', () => {
@@ -91,10 +91,10 @@ describe('Transport interface', () => {
 
   it('rejects an object missing a verb or with a wrong path type', () => {
     const partial = {
-      get: async () => ({ success: true }),
-      post: async () => ({ success: true }),
-      put: async () => ({ success: true }),
-      patch: async () => ({ success: true }),
+      get: () => Promise.resolve({ success: true }),
+      post: () => Promise.resolve({ success: true }),
+      put: () => Promise.resolve({ success: true }),
+      patch: () => Promise.resolve({ success: true }),
     };
     // @ts-expect-error delete is missing
     const missing: Transport = partial;

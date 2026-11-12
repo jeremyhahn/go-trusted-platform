@@ -39,33 +39,6 @@ const availablePCRs = [
 ];
 
 /**
- * New seals carry base64 of the secret's UTF-8 bytes. btoa alone refuses any
- * character above U+00FF, and that DOMException never reached onError, so
- * sealing such text silently did nothing (#1824). Secrets sealed by the old
- * btoa(sealData) encoder hold Latin-1 bytes; decodeUnsealed still decodes
- * those byte for byte.
- */
-function utf8ToBase64(text: string): string {
-  let bin = "";
-  for (const b of new TextEncoder().encode(text)) bin += String.fromCharCode(b);
-  return btoa(bin);
-}
-
-/**
- * Decodes unsealed base64 as UTF-8. Bytes that are not valid UTF-8 come from
- * the old Latin-1 encoder (the server stores no encoding marker), so they fall
- * back to one char per byte instead of being replaced with U+FFFD.
- */
-function decodeUnsealed(value: string): string {
-  const bin = atob(value);
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)));
-  } catch {
-    return bin;
-  }
-}
-
-/**
  * TPM Seal/Unseal Operations Page
  *
  * Features:
@@ -100,8 +73,16 @@ export default function TPMSealPage() {
       if (!sealCn) {
         throw new Error("Common name is required");
       }
+      // Every existing seal holds one Latin-1 byte per character and the server
+      // stores no encoding marker. UTF-8 bytes are also valid Latin-1, so an
+      // unseal decoder cannot tell the two apart: keep Latin-1 and refuse what
+      // it cannot encode. A plain Error reaches onError; btoa's DOMException
+      // carries a code and useMutation would drop it silently.
+      if (Array.from(sealData).some((c) => c.charCodeAt(0) > 0xff)) {
+        throw new Error("Data to seal must be Latin-1 text: characters above U+00FF cannot be sealed from this page");
+      }
       return tpm.seal({
-        data: utf8ToBase64(sealData),
+        data: btoa(sealData),
         cn: sealCn,
         pcrIndices: selectedPCRs,
       });
@@ -140,7 +121,7 @@ export default function TPMSealPage() {
     {
       onSuccess: (response) => {
         if (response.data) {
-          setUnsealedResult(decodeUnsealed(response.data));
+          setUnsealedResult(atob(response.data));
           toast({
             title: "Data unsealed successfully",
             description: "Data has been successfully unsealed",

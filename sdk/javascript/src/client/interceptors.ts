@@ -173,7 +173,7 @@ function normalizeHeaders(init: HeadersInit | undefined): Record<string, string>
   if (init instanceof Headers || Array.isArray(init)) {
     return Object.fromEntries(new Headers(init));
   }
-  return init as Record<string, string>;
+  return init;
 }
 
 /**
@@ -186,7 +186,9 @@ function withHeader(init: HeadersInit | undefined, name: string, value: string):
   const lower = name.toLowerCase();
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(normalizeHeaders(init))) {
-    if (k.toLowerCase() !== lower) out[k] = v;
+    if (k.toLowerCase() !== lower) {
+      out[k] = v;
+    }
   }
   out[name] = value;
   return out;

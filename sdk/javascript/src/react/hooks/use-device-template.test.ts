@@ -46,8 +46,11 @@ function mutationFn(result: unknown): Fn {
 
 function apiCall(): { fetcher: Fn; deps: unknown[]; options: unknown } {
   const calls = vi.mocked(useApi).mock.calls;
-  const last = calls[calls.length - 1]!;
-  return { fetcher: last[0] as Fn, deps: last[1] as unknown[], options: last[2] };
+  const last = calls[calls.length - 1];
+  if (!last) {
+    throw new Error('useApi was not called');
+  }
+  return { fetcher: last[0] as Fn, deps: last[1], options: last[2] };
 }
 
 const tplA = { id: 'a', name: 'A' };

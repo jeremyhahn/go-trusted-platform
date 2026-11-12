@@ -32,7 +32,9 @@ function resCtx<T>(
   durationMs = 12
 ): ResponseContext<T> {
   const ctx: ResponseContext<T> = { request: reqCtx(), response, durationMs };
-  if (rawResponse !== undefined) ctx.rawResponse = rawResponse;
+  if (rawResponse !== undefined) {
+    ctx.rawResponse = rawResponse;
+  }
   return ctx;
 }
 
@@ -42,7 +44,9 @@ function errorResp(): ApiResponse<unknown> {
 
 function retryAfterRaw(value: string | null): Response {
   const headers = new Headers();
-  if (value !== null) headers.set('Retry-After', value);
+  if (value !== null) {
+    headers.set('Retry-After', value);
+  }
   return new Response(null, { status: 429, headers });
 }
 
@@ -136,7 +140,7 @@ describe('createLoggingRequestInterceptor', () => {
 
     it('logs to console.log', () => {
       const spy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
-      createLoggingRequestInterceptor()({}, reqCtx());
+      void createLoggingRequestInterceptor()({}, reqCtx());
       expect(spy).toHaveBeenCalledTimes(1);
       expect(spy.mock.calls[0]?.[0]).toBe('[API Request] GET /api/v1/kms/keys');
     });
@@ -159,7 +163,7 @@ describe('createLoggingResponseInterceptor', () => {
   it('logs an error with its error body', () => {
     const logger = vi.fn();
     const response = errorResp();
-    createLoggingResponseInterceptor(logger)(response, resCtx(response));
+    void createLoggingResponseInterceptor(logger)(response, resCtx(response));
     expect(logger).toHaveBeenCalledWith('[API Response] ERROR GET /api/v1/kms/keys', {
       success: false,
       durationMs: 12,
@@ -175,7 +179,7 @@ describe('createLoggingResponseInterceptor', () => {
     it('logs to console.log', () => {
       const spy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
       const response: ApiResponse<number> = { success: true, data: 1 };
-      createLoggingResponseInterceptor()(response, resCtx(response));
+      void createLoggingResponseInterceptor()(response, resCtx(response));
       expect(spy).toHaveBeenCalledTimes(1);
     });
   });
@@ -192,7 +196,7 @@ describe('createAuthInterceptor', () => {
   });
 
   it('awaits an async getter', async () => {
-    const out = await createAuthInterceptor(async () => 'async-tok')({}, reqCtx());
+    const out = await createAuthInterceptor(() => Promise.resolve('async-tok'))({}, reqCtx());
     expect(out.headers).toEqual({ Authorization: 'Bearer async-tok' });
   });
 
@@ -355,7 +359,10 @@ describe('createRetryAfterInterceptor', () => {
 
   it('keeps existing details and context fields', () => {
     const r = errorResp();
-    r.error!.details = { field: 'name', context: { tenant: 't1' } } as never;
+    if (!r.error) {
+      throw new Error('errorResp() carries no error');
+    }
+    r.error.details = { field: 'name', context: { tenant: 't1' } } as never;
     const out = i(r, resCtx(r, retryAfterRaw('5')));
     expect(out.error?.details).toEqual({
       field: 'name',
