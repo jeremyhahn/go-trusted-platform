@@ -85,8 +85,9 @@ describe('SDNBridgeDetailClient refused calls and certificate encoding', () => {
     });
 
     await waitFor(() => {
-      const failed = toasts().find((t) => t.getAttribute('data-variant') === 'destructive');
-      expect(failed?.textContent).toContain('Bridge deleted failed');
+      // The toast store is module-wide: pick this action's toast by its title.
+      const failed = toasts().find((t) => t.textContent?.startsWith('Bridge deleted failed'));
+      expect(failed?.getAttribute('data-variant')).toBe('destructive');
       expect(failed?.textContent).toContain('bridge busy');
     });
     expect(toasts().some((t) => t.getAttribute('data-variant') === 'success')).toBe(false);
@@ -99,8 +100,9 @@ describe('SDNBridgeDetailClient refused calls and certificate encoding', () => {
     await authenticate(PEM);
 
     await waitFor(() => {
-      const failed = toasts().find((t) => t.getAttribute('data-variant') === 'destructive');
-      expect(failed?.textContent).toContain('Port authenticated failed');
+      // The toast store is module-wide: pick this action's toast by its title.
+      const failed = toasts().find((t) => t.textContent?.startsWith('Port authenticated failed'));
+      expect(failed?.getAttribute('data-variant')).toBe('destructive');
       expect(failed?.textContent).toContain('port authentication is not enforced');
     });
     expect(toasts().some((t) => t.textContent?.startsWith('Port authenticated:'))).toBe(false);

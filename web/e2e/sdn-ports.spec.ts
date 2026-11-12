@@ -78,12 +78,15 @@ test.describe('SDN bridge detail and ports', () => {
 
   test('AuthenticatePort authenticates a port', async ({ page }) => {
     const calls = await openPort(page);
-    await page.getByLabel('Certificate (PEM)').fill('-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----');
+    const pem = '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----';
+    await page.getByLabel('Certificate (PEM)').fill(pem);
     await page.getByRole('button', { name: 'Authenticate Port' }).click();
     await expect.poll(() => called(calls, 'POST', '/bridges/br-1/ports/p-1/auth')?.body).toEqual({
-      certificate: '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----',
+      certificate: Buffer.from(pem).toString('base64'),
       format: 'PEM',
     });
+    const body = called(calls, 'POST', '/bridges/br-1/ports/p-1/auth')?.body as { certificate: string };
+    expect(Buffer.from(body.certificate, 'base64').toString()).toBe(pem);
     await expect(page.getByText('Port authenticated').first()).toBeVisible();
   });
 

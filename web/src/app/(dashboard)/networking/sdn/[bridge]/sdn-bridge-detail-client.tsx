@@ -41,6 +41,13 @@ function errorText(err: unknown): string {
   return err instanceof Error ? err.message : 'Unknown error';
 }
 
+// AuthenticatePortRequest.certificate is a protobuf bytes field, so protojson wants the PEM bytes base64-encoded.
+function pemToBase64(pem: string): string {
+  let bin = '';
+  for (const b of new TextEncoder().encode(pem)) bin += String.fromCharCode(b);
+  return btoa(bin);
+}
+
 /**
  * SDN bridge detail (#1745): bridge info and delete, per-port state, auth and
  * statistics, and the SDN policies.
@@ -84,9 +91,21 @@ export default function SDNBridgeDetailClient() {
     [viewPolicyId]
   );
 
-  const run = async (label: string, action: () => Promise<unknown>, after?: () => void) => {
+  const run = async (
+    label: string,
+    action: () => Promise<{ success: boolean; error?: { message?: string } }>,
+    after?: () => void
+  ) => {
     try {
-      await action();
+      const res = await action();
+      if (!res.success) {
+        toast({
+          title: `${label} failed`,
+          description: res.error?.message ?? 'Request failed',
+          variant: 'destructive',
+        });
+        return;
+      }
       toast({ title: label, variant: 'success' });
       after?.();
     } catch (err) {
@@ -288,7 +307,7 @@ export default function SDNBridgeDetailClient() {
                         sdn.authenticatePort({
                           bridgeId,
                           portId: selectedPort,
-                          certificate,
+                          certificate: pemToBase64(certificate),
                           format: 'PEM',
                         }),
                       refreshPort
