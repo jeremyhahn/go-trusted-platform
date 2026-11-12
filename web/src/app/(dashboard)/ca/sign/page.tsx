@@ -7,7 +7,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { useCA, useMutation } from "@/hooks";
+import { createPlatformClient } from "trusted-platform-sdk";
+import { useMutation, usePlatformClient } from "@/hooks";
 import { base64ToPem } from "@/utils/pem-base64";
 
 /** The issued certificate as the REST layer sends it. */
@@ -20,21 +21,29 @@ interface IssuedCertWire {
 
 /**
  * Sign CSR: POST /v1/ca/sign-csr. The CA certifies, for code signing, the
- * KMS key the CSR names; the caller's token needs the ca:sign-csr scope.
+ * KMS key the CSR names. The server refuses a session alone: the request
+ * carries a platform token with the ca:sign-csr scope as a Bearer header,
+ * so it goes through a per-call client (CAService.signCSR takes no
+ * per-request headers).
  */
 export default function SignCSRPage() {
-  const ca = useCA();
+  const { baseUrl } = usePlatformClient();
   const [csrPem, setCsrPem] = React.useState("");
+  const [token, setToken] = React.useState("");
   const [validDays, setValidDays] = React.useState("");
 
-  // The CSR and validity the shown certificate was issued for; a certificate
-  // is shown only while the form still holds that input.
+  // The CSR, token and validity the shown certificate was issued for; a
+  // certificate is shown only while the form still holds that input.
   const [signedFor, setSignedFor] = React.useState<string | null>(null);
-  const inputKey = (csr: string, days: string) => `${csr}\n${days}`;
+  const inputKey = (csr: string, tok: string, days: string) => `${csr}\n${tok}\n${days}`;
 
   const signMutation = useMutation(
-    (req: { csrPem: string; validDays?: number; key: string }) =>
-      ca.signCSR({
+    (req: { csrPem: string; token: string; validDays?: number; key: string }) =>
+      createPlatformClient({
+        baseUrl,
+        credentials: "include",
+        headers: { Authorization: `Bearer ${req.token}` },
+      }).ca.signCSR({
         csrPem: req.csrPem,
         ...(req.validDays !== undefined ? { validDays: req.validDays } : {}),
       }),
@@ -52,13 +61,14 @@ export default function SignCSRPage() {
     const days = Number.parseInt(validDays, 10);
     signMutation.mutate({
       csrPem: csrPem.trim(),
+      token: token.trim(),
       ...(Number.isFinite(days) && days > 0 ? { validDays: days } : {}),
-      key: inputKey(csrPem, validDays),
+      key: inputKey(csrPem, token, validDays),
     });
   };
 
   const issued =
-    !signMutation.error && !signMutation.isLoading && signedFor === inputKey(csrPem, validDays)
+    !signMutation.error && !signMutation.isLoading && signedFor === inputKey(csrPem, token, validDays)
       ? (signMutation.data as unknown as { certificate?: IssuedCertWire } | undefined)?.certificate
       : undefined;
 
@@ -93,6 +103,21 @@ export default function SignCSRPage() {
               />
             </div>
             <div className="flex flex-col gap-2">
+              <Label htmlFor="platform-token">Platform token</Label>
+              <Input
+                id="platform-token"
+                type="password"
+                required
+                autoComplete="off"
+                value={token}
+                onChange={(e) => {
+                  setToken(e.target.value);
+                  clearResult();
+                }}
+                placeholder="A token with the ca:sign-csr scope"
+              />
+            </div>
+            <div className="flex flex-col gap-2">
               <Label htmlFor="valid-days">Validity (days)</Label>
               <Input
                 id="valid-days"
@@ -107,7 +132,7 @@ export default function SignCSRPage() {
               />
             </div>
             <div>
-              <Button type="submit" disabled={!csrPem.trim() || signMutation.isLoading}>
+              <Button type="submit" disabled={!csrPem.trim() || !token.trim() || signMutation.isLoading}>
                 Sign CSR
               </Button>
             </div>
