@@ -40,7 +40,17 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { useApi, useTPM, useToast } from "@/hooks";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { textToBase64, useApi, useTPM, useTPMOps, useToast } from "@/hooks";
 import type { PCRBank as SDKPCRBank } from "trusted-platform-sdk";
 
 /**
@@ -106,6 +116,34 @@ export default function TPMPCRsPage() {
       },
     }
   );
+
+  const { extendPCR } = useTPMOps();
+  const [extendIndex, setExtendIndex] = React.useState("16");
+  const [extendData, setExtendData] = React.useState("");
+  const [extendConfirmOpen, setExtendConfirmOpen] = React.useState(false);
+
+  const onExtend = async () => {
+    setExtendConfirmOpen(false);
+    try {
+      await extendPCR.mutateAsync({
+        index: Number(extendIndex),
+        hashAlg: selectedAlgorithm.toLowerCase(),
+        data: textToBase64(extendData),
+      });
+      toast({
+        title: "PCR extended",
+        description: `PCR ${extendIndex} (${selectedAlgorithm}) extended`,
+        variant: "success",
+      });
+      refetch();
+    } catch (err) {
+      toast({
+        title: "Extend PCR failed",
+        description: err instanceof Error ? err.message : String(err),
+        variant: "destructive",
+      });
+    }
+  };
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -337,6 +375,67 @@ export default function TPMPCRsPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Extend PCR */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Extend PCR</CardTitle>
+          <CardDescription>
+            Extend a PCR in the {selectedAlgorithm} bank with data. A PCR
+            cannot be rolled back until the next reset.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap items-end gap-4">
+          <div className="space-y-2">
+            <Label htmlFor="extend-index">PCR index</Label>
+            <Input
+              id="extend-index"
+              type="number"
+              min={0}
+              max={23}
+              className="w-24"
+              value={extendIndex}
+              onChange={(e) => setExtendIndex(e.target.value)}
+            />
+          </div>
+          <div className="space-y-2 flex-1 min-w-[200px]">
+            <Label htmlFor="extend-data">Data</Label>
+            <Input
+              id="extend-data"
+              value={extendData}
+              onChange={(e) => setExtendData(e.target.value)}
+            />
+          </div>
+          <Button
+            variant="destructive"
+            onClick={() => setExtendConfirmOpen(true)}
+            disabled={!extendData || extendIndex === "" || extendPCR.isLoading}
+          >
+            {extendPCR.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            Extend PCR
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Dialog open={extendConfirmOpen} onOpenChange={setExtendConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Extend PCR {extendIndex}?</DialogTitle>
+            <DialogDescription>
+              The new value cannot be undone until the platform resets, and
+              secrets sealed to this PCR stop unsealing.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setExtendConfirmOpen(false)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={onExtend}>
+              Confirm
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* PCR Documentation */}
       <Card>
