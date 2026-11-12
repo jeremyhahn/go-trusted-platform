@@ -35,6 +35,8 @@ const actions = vi.hoisted(() => {
   };
 });
 
+const toast = vi.hoisted(() => vi.fn());
+
 vi.mock('@/components/ui/dialog', () => ({
   Dialog: ({ open, children }: { open: boolean; children?: React.ReactNode }) =>
     open ? <div role="dialog">{children}</div> : null,
@@ -46,7 +48,7 @@ vi.mock('@/components/ui/dialog', () => ({
 }));
 
 vi.mock('@/hooks', () => ({
-  useToast: () => ({ toast: vi.fn() }),
+  useToast: () => ({ toast }),
   useDeviceTemplateActions: () => actions,
 }));
 
@@ -122,5 +124,42 @@ describe('template dialogs reject superseded responses', () => {
 
     expect((screen.getByLabelText('Profile ID') as HTMLInputElement).value).toBe('42');
     expect(screen.getByTestId('find-config-result').textContent).toContain('prof-a');
+  });
+
+  // #1754 review round 4 (P1): a lookup answered after the operator typed a
+  // Profile ID never replaces it, and the unassign confirmation acts on the
+  // profile it named when it opened.
+  it('a lookup answered after a manual Profile ID edit leaves the unassign target alone', async () => {
+    render(<ProfileAssignmentPanel />);
+    fireEvent.change(screen.getByLabelText('EK Serial Number'), { target: { value: 'ek-a' } });
+    fireEvent.click(screen.getByRole('button', { name: /Find Config/ }));
+    fireEvent.change(screen.getByLabelText('Profile ID'), { target: { value: '7' } });
+    fireEvent.click(screen.getByRole('button', { name: /Unassign Profile/ }));
+
+    await act(async () => {
+      lookupCalls[0]?.resolve({ id: '42', name: 'prof-a' });
+    });
+
+    expect((screen.getByLabelText('Profile ID') as HTMLInputElement).value).toBe('7');
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^Unassign$/ }));
+    });
+    expect(actions.unassign.mutateAsync).toHaveBeenCalledWith('7');
+  });
+
+  // #1754 review round 4 (P2): useMutation rejects with a plain MutationError
+  // object ({ message, code, status }), not an Error; its message is shown.
+  it('a rejected lookup shows the MutationError message', async () => {
+    render(<ProfileAssignmentPanel />);
+    fireEvent.change(screen.getByLabelText('EK Serial Number'), { target: { value: 'ek-a' } });
+    fireEvent.click(screen.getByRole('button', { name: /Find Config/ }));
+
+    await act(async () => {
+      lookupCalls[0]?.reject({ message: 'ek serial is malformed', code: 'BAD_REQUEST', status: 400 });
+    });
+
+    expect(toast).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Config lookup failed', description: 'ek serial is malformed' }),
+    );
   });
 });
