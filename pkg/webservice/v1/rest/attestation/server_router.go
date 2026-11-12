@@ -14,9 +14,12 @@
 package attestation
 
 import (
+	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/gorilla/mux"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/channelbind"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -140,10 +143,22 @@ func (r *AttestationServerRouter) listManifests(w http.ResponseWriter, req *http
 		r.respWriter.Error400(w, req, err)
 		return
 	}
+	start, err := queryTimestamp(req, "start_time")
+	if err != nil {
+		r.respWriter.Error400(w, req, err)
+		return
+	}
+	end, err := queryTimestamp(req, "end_time")
+	if err != nil {
+		r.respWriter.Error400(w, req, err)
+		return
+	}
 	pbReq := &platformv1.ListManifestsRequest{
-		HostId: req.URL.Query().Get("host_id"),
-		Limit:  limit,
-		Offset: offset,
+		HostId:    req.URL.Query().Get("host_id"),
+		Limit:     limit,
+		Offset:    offset,
+		StartTime: start,
+		EndTime:   end,
 	}
 	resp, err := r.server.ListManifests(req.Context(), pbReq)
 	if err != nil {
@@ -151,6 +166,20 @@ func (r *AttestationServerRouter) listManifests(w http.ResponseWriter, req *http
 		return
 	}
 	protorest.WriteSuccess(w, req, r.respWriter, resp)
+}
+
+// queryTimestamp parses an optional RFC 3339 query value; an absent or
+// empty value is no bound (nil), a malformed one is an error.
+func queryTimestamp(req *http.Request, name string) (*timestamppb.Timestamp, error) {
+	raw := req.URL.Query().Get(name)
+	if raw == "" {
+		return nil, nil
+	}
+	t, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return nil, fmt.Errorf("invalid %s: %w", name, err)
+	}
+	return timestamppb.New(t), nil
 }
 
 func (r *AttestationServerRouter) buildManifest(w http.ResponseWriter, req *http.Request) {

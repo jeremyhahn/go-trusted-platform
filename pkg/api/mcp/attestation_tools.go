@@ -148,6 +148,14 @@ func (r *ToolRegistry) registerAttestationTools() {
 					"description": "Number of manifests to skip for pagination",
 					"default":     0,
 				},
+				"start_time": map[string]interface{}{
+					"type":        "string",
+					"description": "Only manifests created at or after this RFC 3339 time",
+				},
+				"end_time": map[string]interface{}{
+					"type":        "string",
+					"description": "Only manifests created at or before this RFC 3339 time",
+				},
 			},
 		},
 	})

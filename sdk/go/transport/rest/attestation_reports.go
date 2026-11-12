@@ -14,8 +14,11 @@ package rest
 
 import (
 	"net/http"
+	"time"
 
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -62,6 +65,8 @@ func init() {
 			{name: "host_id", field: "host_id"},
 			{name: "limit", field: "limit"},
 			{name: "offset", field: "offset"},
+			{name: "start_time", field: "start_time", encode: timestampQueryField},
+			{name: "end_time", field: "end_time", encode: timestampQueryField},
 		},
 	}
 	templatedRouteTable[platformv1.AttestationService_GetManifest_FullMethodName] =
@@ -72,6 +77,21 @@ func init() {
 	restResponseDecoders[platformv1.AttestationService_GetDeviceReport_FullMethodName] = decodeDeviceReport
 	restResponseDecoders[platformv1.AttestationService_ListDeviceReports_FullMethodName] = decodeDeviceReports
 	restResponseDecoders[platformv1.AttestationService_DescribeCallerPolicy_FullMethodName] = decodeCallerPolicy
+}
+
+// timestampQueryField renders a google.protobuf.Timestamp query field as
+// RFC 3339 in UTC, the form the REST server parses; an unset field is
+// left out of the query.
+func timestampQueryField(v protoreflect.Value) string {
+	m := v.Message()
+	if !m.IsValid() {
+		return ""
+	}
+	ts, ok := m.Interface().(*timestamppb.Timestamp)
+	if !ok || ts == nil || !ts.IsValid() {
+		return ""
+	}
+	return ts.AsTime().UTC().Format(time.RFC3339Nano)
 }
 
 // reportJSON decodes the reporting cache's JSON (snake_case names, RFC 3339
