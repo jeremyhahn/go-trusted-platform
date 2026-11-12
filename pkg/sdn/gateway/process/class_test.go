@@ -16,6 +16,7 @@
 package process
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -33,6 +34,19 @@ func TestClassTable_FHRPRunsInTheDatapath(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "datapath", def.Name)
 	assert.Equal(t, ClassKernel, def.Class)
+}
+
+// A group may name a tunnel interface: the datapath starts tunnels before
+// fhrp, and ServicesFor keeps that order (Codex #1716 P1).
+func TestClassTable_DatapathStartsTunnelsBeforeFHRP(t *testing.T) {
+	def, err := DefinitionForService(gateway.ServiceFHRP)
+	require.NoError(t, err)
+	assert.Less(t, slices.Index(def.Services, gateway.ServiceTunnels), slices.Index(def.Services, gateway.ServiceFHRP))
+	require.GreaterOrEqual(t, slices.Index(def.Services, gateway.ServiceTunnels), 0)
+
+	got := def.ServicesFor([]string{gateway.ServiceFHRP, gateway.ServiceTunnels})
+	assert.Less(t, slices.Index(got, gateway.ServiceTunnels), slices.Index(got, gateway.ServiceFHRP), "ServicesFor order: %v", got)
+	require.GreaterOrEqual(t, slices.Index(got, gateway.ServiceTunnels), 0)
 }
 
 // The datapath hosts the FHRP speaker, whose announcer sends the IPv4

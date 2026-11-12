@@ -73,6 +73,9 @@ func (c *fakeFHRPConn) Close() error {
 type fakeFHRPProgrammer struct {
 	mu    sync.Mutex
 	added []netip.Prefix
+	// present holds the addresses found on the interface before Start.
+	present map[netip.Prefix]bool
+	deleted []netip.Prefix
 }
 
 func (p *fakeFHRPProgrammer) AddAddress(_ string, prefix netip.Prefix, _ net.HardwareAddr) error {
@@ -82,8 +85,24 @@ func (p *fakeFHRPProgrammer) AddAddress(_ string, prefix netip.Prefix, _ net.Har
 	return nil
 }
 
-func (p *fakeFHRPProgrammer) DeleteAddress(string, netip.Prefix, net.HardwareAddr) error {
+func (p *fakeFHRPProgrammer) DeleteAddress(_ string, prefix netip.Prefix, _ net.HardwareAddr) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.deleted = append(p.deleted, prefix)
 	return nil
+}
+
+// HasAddress makes fakeFHRPProgrammer an fhrp.AddressReader.
+func (p *fakeFHRPProgrammer) HasAddress(_ string, prefix netip.Prefix) (bool, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.present[prefix], nil
+}
+
+func (p *fakeFHRPProgrammer) Deleted() []netip.Prefix {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]netip.Prefix(nil), p.deleted...)
 }
 
 func (p *fakeFHRPProgrammer) Announce(string, netip.Addr, net.HardwareAddr) error { return nil }
@@ -162,6 +181,51 @@ func TestEnabledServices_FHRP(t *testing.T) {
 	cfg.FHRP.Enabled = true
 	assert.Contains(t, cfg.EnabledServices(), ServiceFHRP)
 	assert.Contains(t, serviceBuilders, ServiceFHRP, "an enabled section has a builder")
+}
+
+// The owner's source is also its virtual address: when the node already
+// holds it, Start and Stop leave it in place (Codex #1716 P1).
+func TestBuildFHRP_StopKeepsThePreexistingOwnerAddress(t *testing.T) {
+	cfg := baseGatewayConfig("fhrp-gw")
+	cfg.FHRP = ownerFHRPConfig()
+	programmer := &fakeFHRPProgrammer{present: map[netip.Prefix]bool{netip.MustParsePrefix("192.0.2.1/24"): true}}
+	cfg.Host = &HostRuntime{FHRPTransport: &fakeFHRPTransport{}, FHRPProgrammer: programmer}
+
+	svc, err := buildFHRP(&Gateway{config: cfg})
+	require.NoError(t, err)
+	require.NoError(t, svc.Start(context.Background()))
+	require.NoError(t, svc.Stop(context.Background()))
+	assert.Empty(t, programmer.Deleted(), "a preexisting owner address is never deleted")
+}
+
+// A group may name a tunnel interface, so tunnels come up before fhrp and
+// the reverse stop takes fhrp down first (Codex #1716 P1).
+func TestEnabledServices_TunnelsStartBeforeFHRP(t *testing.T) {
+	cfg := baseGatewayConfig("fhrp-gw")
+	cfg.FHRP = ownerFHRPConfig()
+	cfg.Tunnels = []TunnelConfig{{Name: "gre-a", Type: "gre", Local: "198.51.100.6", Remote: "203.0.113.100", TunnelIP: "10.4.128.2/31"}}
+
+	before := func(t *testing.T, order []string) {
+		t.Helper()
+		tun, fh := indexOf(order, ServiceTunnels), indexOf(order, ServiceFHRP)
+		require.GreaterOrEqual(t, tun, 0, "tunnels is in %v", order)
+		require.GreaterOrEqual(t, fh, 0, "fhrp is in %v", order)
+		assert.Less(t, tun, fh, "tunnels precede fhrp in %v", order)
+	}
+	before(t, cfg.EnabledServices())
+
+	g := &Gateway{config: cfg, serviceHandlers: make(map[string]ServiceHandler)}
+	g.registerConfiguredServices()
+	before(t, g.serviceOrder)
+}
+
+func indexOf(list []string, name string) int {
+	for i, s := range list {
+		if s == name {
+			return i
+		}
+	}
+	return -1
 }
 
 // The host filter admits the FHRP peers' VRRP advertisements on every
