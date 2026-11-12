@@ -251,4 +251,30 @@ test.describe('vTPM runtime page', () => {
     await expect(stopButton).toBeEnabled();
     expect(calls.filter((c) => c.path === 'start')).toHaveLength(1);
   });
+
+  test('daemon listener: stop shows Stopped, PCR read and extend use /pcr/{index}', async ({ page }) => {
+    const calls = await openRuntimePage(page, { listener: 'daemon' });
+
+    await page.getByRole('button', { name: 'Start vTPM' }).click();
+    await expect(page.getByTestId('vtpm-run-state')).toHaveText('Running');
+    await page.getByRole('button', { name: 'Stop vTPM' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Confirm' }).click();
+    await expect(page.getByTestId('vtpm-run-state')).toHaveText('Stopped');
+
+    await page.getByLabel('Read PCR index').fill('7');
+    await page.getByRole('button', { name: 'Read PCR' }).click();
+    await expect(page.getByTestId('vtpm-pcr-value')).toHaveText('PCR 7: deadbeef');
+    expect(lastCall(calls, 'pcr/7')?.method).toBe('GET');
+
+    await page.getByLabel('Extend PCR index').fill('16');
+    await page.getByLabel('Data to extend (hex)').fill('00ff');
+    await page.getByRole('button', { name: 'Extend PCR' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Confirm' }).click();
+    await expect(page.getByTestId('vtpm-extend-result')).toHaveText('PCR 16 extended');
+    expect(lastCall(calls, 'pcr/16/extend')?.body).toEqual({
+      data: Buffer.from([0x00, 0xff]).toString('base64'),
+    });
+    // The webservice extend was tried once and answered 404; it is not replayed.
+    expect(calls.filter((c) => c.path === 'pcrs/extend')).toHaveLength(1);
+  });
 });
