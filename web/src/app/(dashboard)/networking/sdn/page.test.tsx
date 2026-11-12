@@ -163,7 +163,7 @@ describe("SDNPage", () => {
 
     expect(await screen.findByText("br-prod")).toBeTruthy();
     expect(screen.getByText("No flow rules found")).toBeTruthy();
-    expect(warn).toHaveBeenCalledWith("Failed to fetch flows:", "flows unavailable");
+    await waitFor(() => expect(warn).toHaveBeenCalledWith("Failed to fetch flows:", "flows unavailable"));
     expect(toast).not.toHaveBeenCalled();
     warn.mockRestore();
   });
