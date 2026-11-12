@@ -91,9 +91,28 @@ test.describe('Compute VM operations', () => {
     await page.getByLabel('Disk path').fill('/var/lib/disks/data.qcow2')
     await page.getByLabel('Size GB', { exact: true }).fill('25')
     await page.getByRole('button', { name: 'Attach Disk' }).click()
-    await expect(page.getByTestId('vm-disk-result')).toHaveText('Attached /var/lib/disks/data.qcow2')
+    await expect(page.getByTestId('vm-disk-result')).toHaveText(/^Attached \/var\/lib\/disks\/data\.qcow2 as disk-/)
     const call = lastCall(api, 'POST', `/vms/${VM_ID}/disks`)
-    expect(call?.body).toEqual({ disk: { path: '/var/lib/disks/data.qcow2', sizeGb: 25 } })
+    expect(call?.body).toEqual({
+      disk: { id: expect.stringMatching(/^disk-[0-9a-f]{16}$/), path: '/var/lib/disks/data.qcow2', sizeGb: 25 },
+    })
+  })
+
+  test('AttachDisk then ResizeDisk and DetachDisk use the attached ID', async ({ page }) => {
+    const api = await openVM(page)
+    await page.getByLabel('Disk path').fill('/var/lib/disks/data.qcow2')
+    await page.getByRole('button', { name: 'Attach Disk' }).click()
+    await expect(page.getByTestId('vm-disk-result')).toHaveText(/^Attached \/var\/lib\/disks\/data\.qcow2 as disk-/)
+    const id = await page.getByLabel('Disk ID').inputValue()
+    expect(id).toMatch(/^disk-[0-9a-f]{16}$/)
+    await page.getByLabel('New size GB').fill('64')
+    await page.getByRole('button', { name: 'Resize Disk' }).click()
+    await expect(page.getByTestId('vm-disk-result')).toHaveText(`Resized ${id} to 64 GB`)
+    expect(lastCall(api, 'PATCH', `/vms/${VM_ID}/disks/${id}`)?.body).toEqual({ newSizeGb: 64 })
+    await page.getByRole('button', { name: 'Detach Disk' }).click()
+    await page.getByRole('dialog').getByRole('button', { name: 'Confirm' }).click()
+    await expect(page.getByTestId('vm-disk-result')).toHaveText(`Detached ${id}`)
+    expect(lastCall(api, 'DELETE', `/vms/${VM_ID}/disks/${id}`)).toBeTruthy()
   })
 
   test('DetachDisk detaches a disk after confirm', async ({ page }) => {
@@ -182,6 +201,7 @@ test.describe('Compute VM operations', () => {
         bootMode: 'uefi',
         arch: 'aarch64',
         secureBoot: true,
+        enableKvm: true,
         tpmEnabled: true,
       },
     })
