@@ -841,6 +841,17 @@ export type {
   AuthenticatePortResponse,
   RevokePortAuthResponse,
   GetPortStatsResponse,
+  SetPortStateRequest,
+  SetPortStateResponse,
+  SDNPolicyType,
+  SDNPolicyStatus,
+  SDNPolicyRule,
+  SDNPolicyConfig,
+  SDNPolicy,
+  ApplyPolicyRequest,
+  ApplyPolicyResponse,
+  GetPolicyResponse,
+  ListPoliciesResponse,
   GetFlowStatsResponse,
 } from './types/sdn.js';
 

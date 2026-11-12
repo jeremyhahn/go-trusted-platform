@@ -816,6 +816,136 @@ export interface GetPortStatsResponse {
   stats: PortStats;
 }
 
+// =============================================================================
+// Port State (#1745)
+// =============================================================================
+
+/**
+ * Set port state request (PUT /bridges/{name}/ports/{port}/state)
+ */
+export interface SetPortStateRequest {
+  /** Bridge ID */
+  bridgeId: string;
+  /** Port ID */
+  portId: string;
+  /** Administrative state, e.g. "up" or "down" */
+  adminState?: string;
+  /** Ingress rate limit (uint64: a decimal string in protojson) */
+  ingressRate?: string;
+  /** Egress rate limit */
+  egressRate?: string;
+  /** Ingress burst */
+  ingressBurst?: string;
+  /** Egress burst */
+  egressBurst?: string;
+}
+
+/**
+ * Set port state response
+ */
+export interface SetPortStateResponse {
+  /** Status */
+  status?: SDNStatus;
+  /** Port after the change */
+  port?: Port;
+}
+
+// =============================================================================
+// Policies (#1745)
+// =============================================================================
+
+/**
+ * Policy type
+ */
+export type SDNPolicyType =
+  | 'POLICY_TYPE_UNSPECIFIED'
+  | 'POLICY_TYPE_ACL'
+  | 'POLICY_TYPE_QOS'
+  | 'POLICY_TYPE_NAT'
+  | 'POLICY_TYPE_FIREWALL'
+  | 'POLICY_TYPE_ROUTING';
+
+/**
+ * Policy status
+ */
+export type SDNPolicyStatus =
+  | 'POLICY_STATUS_UNSPECIFIED'
+  | 'POLICY_STATUS_ACTIVE'
+  | 'POLICY_STATUS_INACTIVE'
+  | 'POLICY_STATUS_ERROR'
+  | 'POLICY_STATUS_PENDING';
+
+/**
+ * Policy rule
+ */
+export interface SDNPolicyRule {
+  ruleId?: string;
+  priority?: number;
+  match?: Record<string, unknown>;
+  action?: string;
+  actionValue?: string;
+  log?: boolean;
+  counter?: boolean;
+}
+
+/**
+ * Policy configuration
+ */
+export interface SDNPolicyConfig {
+  name: string;
+  description?: string;
+  type?: SDNPolicyType;
+  priority?: number;
+  enabled?: boolean;
+  rules?: SDNPolicyRule[];
+  targets?: Record<string, unknown>[];
+}
+
+/**
+ * Policy
+ */
+export interface SDNPolicy {
+  id: string;
+  config?: SDNPolicyConfig;
+  status?: SDNPolicyStatus;
+  /** uint64: a decimal string in protojson */
+  hitCount?: string;
+  byteCount?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/**
+ * Apply policy request (POST /policies)
+ */
+export interface ApplyPolicyRequest {
+  policyId?: string;
+  config: SDNPolicyConfig;
+}
+
+/**
+ * Apply policy response
+ */
+export interface ApplyPolicyResponse {
+  status?: SDNStatus;
+  policy?: SDNPolicy;
+}
+
+/**
+ * Get policy response (GET /policies/{id})
+ */
+export interface GetPolicyResponse {
+  policy?: SDNPolicy;
+}
+
+/**
+ * List policies response (GET /policies)
+ */
+export interface ListPoliciesResponse {
+  policies?: SDNPolicy[];
+  pagination?: SDNPaginationResponse;
+}
+
 /**
  * Get flow stats response
  */

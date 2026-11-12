@@ -39,6 +39,12 @@ import type {
   GetPortStatsResponse,
   GetFlowStatsResponse,
   SDNLabelSelector,
+  SetPortStateRequest,
+  SetPortStateResponse,
+  ApplyPolicyRequest,
+  ApplyPolicyResponse,
+  GetPolicyResponse,
+  ListPoliciesResponse,
 } from '../types/sdn.js';
 
 /**
@@ -178,8 +184,23 @@ export class SDNService extends BaseService {
    * @returns Port information
    */
   async getPort(bridgeId: string, portId: string): Promise<ApiResponse<GetPortResponse>> {
+    // The server routes GetPort at .../ports/{port}/state (#1745).
     return this.client.get<GetPortResponse>(
-      this.buildUrl(`/bridges/${this.encodePathSegment(bridgeId)}/ports/${this.encodePathSegment(portId)}`)
+      this.buildUrl(`/bridges/${this.encodePathSegment(bridgeId)}/ports/${this.encodePathSegment(portId)}/state`)
+    );
+  }
+
+  /**
+   * Set port state (admin state and rate limits)
+   *
+   * @param request - Port state request; the path names the bridge and port
+   * @returns The port after the change
+   */
+  async setPortState(request: SetPortStateRequest): Promise<ApiResponse<SetPortStateResponse>> {
+    const { bridgeId, portId, ...state } = request;
+    return this.client.put<SetPortStateResponse>(
+      this.buildUrl(`/bridges/${this.encodePathSegment(bridgeId)}/ports/${this.encodePathSegment(portId)}/state`),
+      state
     );
   }
 
@@ -251,6 +272,41 @@ export class SDNService extends BaseService {
     return this.client.delete<RevokePortAuthResponse>(
       this.buildUrl(`/bridges/${this.encodePathSegment(bridgeId)}/ports/${this.encodePathSegment(portId)}/auth`)
     );
+  }
+
+  // =========================================================================
+  // Policy Operations
+  // =========================================================================
+
+  /**
+   * Apply a policy
+   *
+   * @param request - Policy to apply
+   * @returns Applied policy
+   */
+  async applyPolicy(request: ApplyPolicyRequest): Promise<ApiResponse<ApplyPolicyResponse>> {
+    return this.client.post<ApplyPolicyResponse>(this.buildUrl('/policies'), request);
+  }
+
+  /**
+   * Get a policy by ID
+   *
+   * @param id - Policy ID
+   * @returns Policy
+   */
+  async getPolicy(id: string): Promise<ApiResponse<GetPolicyResponse>> {
+    return this.client.get<GetPolicyResponse>(
+      this.buildUrl(`/policies/${this.encodePathSegment(id)}`)
+    );
+  }
+
+  /**
+   * List policies
+   *
+   * @returns Policies
+   */
+  async listPolicies(): Promise<ApiResponse<ListPoliciesResponse>> {
+    return this.client.get<ListPoliciesResponse>(this.buildUrl('/policies'));
   }
 
   // =========================================================================

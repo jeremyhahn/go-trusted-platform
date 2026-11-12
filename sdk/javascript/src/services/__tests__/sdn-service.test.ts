@@ -33,6 +33,48 @@ function requested(client: ApiClient): { path: string; query: URLSearchParams } 
   return { path, query: new URLSearchParams(query) };
 }
 
+describe('SDNService port state and policies (#1745)', () => {
+  let service: SDNService;
+  let mockClient: ApiClient;
+
+  beforeEach(() => {
+    mockClient = createMockApiClient();
+    for (const m of ['get', 'post', 'put', 'delete'] as const) {
+      vi.mocked(mockClient[m]).mockResolvedValue({ success: true, data: {} });
+    }
+    service = new SDNService(mockClient);
+  });
+
+  it('getPort reads the port state route', async () => {
+    await service.getPort('br 0', 'p1');
+    expect(mockClient.get).toHaveBeenCalledWith('/v1/sdn/bridges/br%200/ports/p1/state');
+  });
+
+  it('setPortState PUTs the state without the path fields', async () => {
+    await service.setPortState({ bridgeId: 'br0', portId: 'p1', adminState: 'down', ingressRate: '1000' });
+    expect(mockClient.put).toHaveBeenCalledWith('/v1/sdn/bridges/br0/ports/p1/state', {
+      adminState: 'down',
+      ingressRate: '1000',
+    });
+  });
+
+  it('applyPolicy POSTs to /policies', async () => {
+    const request = { config: { name: 'deny-all', type: 'POLICY_TYPE_ACL' as const } };
+    await service.applyPolicy(request);
+    expect(mockClient.post).toHaveBeenCalledWith('/v1/sdn/policies', request);
+  });
+
+  it('getPolicy GETs /policies/{id} with the id encoded', async () => {
+    await service.getPolicy('pol/1');
+    expect(mockClient.get).toHaveBeenCalledWith('/v1/sdn/policies/pol%2F1');
+  });
+
+  it('listPolicies GETs /policies', async () => {
+    await service.listPolicies();
+    expect(mockClient.get).toHaveBeenCalledWith('/v1/sdn/policies');
+  });
+});
+
 describe('SDNService list query encoding', () => {
   let service: SDNService;
   let mockClient: ApiClient;
