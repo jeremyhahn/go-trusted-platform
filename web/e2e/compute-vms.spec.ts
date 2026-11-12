@@ -43,10 +43,26 @@ test.describe('Compute VM operations', () => {
   })
 
   test('ResumeVM resumes a suspended VM', async ({ page }) => {
-    const api = await openVM(page, 'VM_STATE_SUSPENDED')
+    const api = await openVM(page, 'VM_STATE_PAUSED')
     await page.getByRole('button', { name: 'Resume' }).click()
     await expect(page.getByRole('button', { name: 'Suspend' })).toBeVisible()
     expect(lastCall(api, 'POST', `/vms/${VM_ID}/resume`)).toBeTruthy()
+  })
+
+  test('the 5 s refresh keeps VM operations forms and dialogs', async ({ page }) => {
+    const api = await openVM(page)
+    await page.getByLabel('Snapshot name').fill('kept-across-refresh')
+    await page.getByLabel('Destination host').fill('dest-node')
+    await page.getByRole('button', { name: 'Migrate VM' }).click()
+    const dialog = page.getByRole('dialog')
+    await expect(dialog).toContainText('Migrate this VM to dest-node (live)?')
+    const fetchesBefore = api.calls().filter((c) => c.method === 'GET' && c.path === `/vms/${VM_ID}`).length
+    await page.waitForTimeout(6000)
+    const fetchesAfter = api.calls().filter((c) => c.method === 'GET' && c.path === `/vms/${VM_ID}`).length
+    expect(fetchesAfter).toBeGreaterThan(fetchesBefore)
+    await expect(dialog).toBeVisible()
+    await expect(dialog).toContainText('Migrate this VM to dest-node (live)?')
+    await expect(page.getByLabel('Snapshot name')).toHaveValue('kept-across-refresh')
   })
 
   test('AttestVM shows the attestation result', async ({ page }) => {
@@ -142,13 +158,33 @@ test.describe('Compute VM operations', () => {
     await page.goto('/compute/migrations')
     await expect(page.getByRole('heading', { name: 'VM Migrations' })).toBeVisible()
     await page.getByLabel('Guest name').fill('ops-vm')
-    await page.getByLabel('Mode').selectOption('cold')
+    await page.getByLabel('Mode', { exact: true }).selectOption('cold')
+    await expect(page.getByRole('button', { name: 'Prepare Migration' })).toBeDisabled()
+    await page.getByLabel('Memory MB').fill('4096')
+    await page.getByLabel('CPUs').fill('4')
+    await page.getByLabel('Disk size').fill('40G')
+    await page.getByLabel('Boot mode').fill('uefi')
+    await page.getByLabel('Arch').selectOption('aarch64')
+    await page.getByLabel('Secure boot').check()
+    await page.getByLabel('TPM').check()
     await page.getByRole('button', { name: 'Prepare Migration' }).click()
     const receiver = page.getByTestId('migration-receiver')
     await expect(receiver).toContainText('Receiver: rx-42')
     await expect(receiver).toContainText('Port: 49152')
     await expect(page.getByLabel('Receiver ID')).toHaveValue('rx-42')
-    expect(lastCall(api, 'POST', '/migrations/prepare')?.body).toEqual({ vmName: 'ops-vm', mode: 'cold' })
+    expect(lastCall(api, 'POST', '/migrations/prepare')?.body).toEqual({
+      vmName: 'ops-vm',
+      mode: 'cold',
+      spec: {
+        memoryMb: 4096,
+        cpus: 4,
+        diskSize: '40G',
+        bootMode: 'uefi',
+        arch: 'aarch64',
+        secureBoot: true,
+        tpmEnabled: true,
+      },
+    })
   })
 
   test('FinalizeMigration finalizes a receiver', async ({ page }) => {

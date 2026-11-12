@@ -424,24 +424,20 @@ export async function mockVMOperationsApi(
   const now = new Date().toISOString();
   const ok = (message: string) => ({ status: { success: true, message } });
 
+  // The real GetVM shape (instanceToVMProto): config carries the name, and
+  // there are no metrics, no snapshots and no flattened fields.
   const vm = () => ({
     id: vmId,
-    name: config.vmName ?? 'ops-vm',
+    config: {
+      name: config.vmName ?? 'ops-vm',
+      cpu: { cores: 2 },
+      memory: { sizeMb: 2048 },
+      disks: [],
+      networks: [],
+    },
     state,
-    vcpus: 2,
-    memoryMB: 2048,
-    storageMB: 20480,
-    osType: 'linux',
     createdAt: now,
     updatedAt: now,
-    snapshots: [],
-    metrics: {
-      cpuUsagePercent: 10,
-      memoryUsagePercent: 20,
-      diskUsagePercent: 30,
-      networkInMbps: 1,
-      networkOutMbps: 2,
-    },
   });
 
   const snapshot = (id: string, name: string) => ({
@@ -473,7 +469,7 @@ export async function mockVMOperationsApi(
       return json(200, { vms: [vm()], pagination: { page: 1, pageSize: 100, totalPages: 1, totalItems: 1 } });
     }
     if (method === 'POST' && path === `${vmBase}/suspend`) {
-      state = 'VM_STATE_SUSPENDED';
+      state = 'VM_STATE_PAUSED';
       return json(200, ok('VM suspended'));
     }
     if (method === 'POST' && path === `${vmBase}/resume`) {
@@ -517,6 +513,11 @@ export async function mockVMOperationsApi(
     }
     if (method === 'POST' && path === `${vmBase}/migrate`) return json(200, ok('Migration started'));
     if (method === 'POST' && path === '/migrations/prepare') {
+      const spec = (body as { spec?: unknown } | null)?.spec as { memoryMb?: unknown; cpus?: unknown } | undefined;
+      const positive = (n: unknown) => typeof n === 'number' && Number.isInteger(n) && n > 0;
+      if (!spec || typeof spec !== 'object' || !positive(spec.memoryMb) || !positive(spec.cpus)) {
+        return json(400, { message: 'migration spec is required', code: 'INVALID_ARGUMENT' });
+      }
       return json(200, { ...ok('Receiver ready'), receiverId: 'rx-42', port: 49152, tlsHostname: 'rx-42-tls' });
     }
     if (method === 'POST' && /^\/migrations\/[^/]+\/finalize$/.test(path)) {

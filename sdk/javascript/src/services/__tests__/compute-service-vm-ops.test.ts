@@ -52,11 +52,12 @@ describe('ComputeService VM operations', () => {
     expect(url).toMatch(/\/compute\/vms\/vm-1\/snapshots\/snap%2F2$/);
   });
 
-  it('prepares a migration by POST /migrations/prepare with name and mode', async () => {
-    await service.prepareMigration({ vmId: 'vm-1', vmName: 'web', mode: 'live' });
+  it('prepares a migration by POST /migrations/prepare with name, mode and spec', async () => {
+    const spec = { memoryMb: 2048, cpus: 2, diskSize: '20G', bootMode: 'uefi', arch: 'x86_64', tpmEnabled: true };
+    await service.prepareMigration({ vmId: 'vm-1', vmName: 'web', mode: 'live', spec });
     const [url, body] = vi.mocked(mockClient.post).mock.calls[0]!;
     expect(url).toMatch(/\/compute\/migrations\/prepare$/);
-    expect(body).toEqual({ vmId: 'vm-1', vmName: 'web', mode: 'live', spec: undefined });
+    expect(body).toEqual({ vmId: 'vm-1', vmName: 'web', mode: 'live', spec });
   });
 
   it('finalizes a migration by POST /migrations/{receiverId}/finalize with commit', async () => {

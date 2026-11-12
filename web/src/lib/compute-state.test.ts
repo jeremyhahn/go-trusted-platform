@@ -17,6 +17,12 @@ describe("compute state", () => {
     expect(vmStatus("VM_STATE_STOPPED")).toBe("stopped");
   });
 
+  // #1727: the daemon reports a suspended VM as VM_STATE_PAUSED; the console
+  // calls it suspended so the Resume button shows.
+  it("reads VM_STATE_PAUSED as suspended", () => {
+    expect(vmStatus("VM_STATE_PAUSED")).toBe("suspended");
+  });
+
   it("reads container states into console statuses", () => {
     expect(containerStatus("CONTAINER_STATE_RUNNING")).toBe("running");
     expect(containerStatus("CONTAINER_STATE_ERROR")).toBe("error");
