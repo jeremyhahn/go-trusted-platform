@@ -101,40 +101,52 @@ export interface InvitationLookupState {
  */
 export function useInvitationLookup(key: { id?: string | null; token?: string | null }): InvitationLookupState {
   const { id, token } = key;
-  const [invitation, setInvitation] = useState<InvitationDetail | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
+  // The settled answer, tagged with the request it answers, so loading is
+  // derived (no synchronous setState in the effect).
+  const [result, setResult] = useState<{
+    requestKey: string;
+    invitation: InvitationDetail | null;
+    error: string | null;
+  } | null>(null);
+
+  const named = Boolean(id || token);
+  const requestKey = `${id ?? ""}|${token ?? ""}|${nonce}`;
 
   const reload = useCallback(() => setNonce((n) => n + 1), []);
 
   useEffect(() => {
-    let cancelled = false;
     if (!id && !token) {
-      setLoading(false);
-      setError("No invitation was named");
       return;
     }
-    setLoading(true);
-    setError(null);
+    let cancelled = false;
     const request = id ? fetchInvitation(id) : fetchInvitationByToken(token as string);
     request
       .then((found) => {
-        if (!cancelled) setInvitation(found);
+        if (!cancelled) setResult({ requestKey, invitation: found, error: null });
       })
       .catch((err: unknown) => {
         if (!cancelled) {
-          setInvitation(null);
-          setError(err instanceof Error ? err.message : "Failed to load invitation");
+          setResult({
+            requestKey,
+            invitation: null,
+            error: err instanceof Error ? err.message : "Failed to load invitation",
+          });
         }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [id, token, nonce]);
+  }, [id, token, requestKey]);
 
-  return { invitation, loading, error, reload };
+  if (!named) {
+    return { invitation: null, loading: false, error: "No invitation was named", reload };
+  }
+  const settled = result !== null && result.requestKey === requestKey;
+  return {
+    invitation: settled ? result.invitation : null,
+    loading: !settled,
+    error: settled ? result.error : null,
+    reload,
+  };
 }
