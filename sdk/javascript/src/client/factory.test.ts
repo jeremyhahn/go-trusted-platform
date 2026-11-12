@@ -41,7 +41,7 @@ describe('isDesktop', () => {
 describe('getClient', () => {
   it('returns a REST PlatformClient outside the desktop runtime', async () => {
     vi.stubGlobal('window', undefined);
-    const client = await getClient();
+    const client = await getClient({ baseUrl: '/api' });
     expect(client).toBeInstanceOf(PlatformClient);
   });
 
@@ -52,9 +52,9 @@ describe('getClient', () => {
     expect(client).not.toBeInstanceOf(WailsPlatformClient);
   });
 
-  it('accepts an empty config object', async () => {
+  it('rejects an empty config object outside the desktop runtime', async () => {
     vi.stubGlobal('window', undefined);
-    await expect(getClient({})).resolves.toBeInstanceOf(PlatformClient);
+    await expect(getClient({})).rejects.toThrow('baseUrl cannot be empty');
   });
 
   it('returns a WailsPlatformClient inside the desktop runtime', async () => {
@@ -66,8 +66,8 @@ describe('getClient', () => {
 
   it('returns a fresh client on every call', async () => {
     vi.stubGlobal('window', undefined);
-    const a = await getClient();
-    const b = await getClient();
+    const a = await getClient({ baseUrl: '/api' });
+    const b = await getClient({ baseUrl: '/api' });
     expect(a).not.toBe(b);
   });
 });
