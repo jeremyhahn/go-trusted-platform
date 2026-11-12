@@ -87,6 +87,7 @@ export { useToast, toast, dismissToast } from './use-toast';
 export type { Toast, UseToastReturn } from './use-toast';
 
 export { useReportedGateways } from './use-reported-gateways';
+export { useOverlayVteps } from './use-overlay-vteps';
 export type {
   ReportedGateway,
   UseReportedGatewaysOptions,
