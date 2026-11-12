@@ -1,8 +1,90 @@
-import { test } from "@playwright/test";
+import { test, expect } from '@playwright/test';
+import {
+  createMockInvitation,
+  mockAllApis,
+  mockInvitationLookupApi,
+} from './fixtures/api-mock';
+import { setupTenantOwnerPage } from './fixtures/auth-setup';
 
 // Slice 19 of epic #1665: invitation lookup and accept pages (#1671).
-test.describe("Invitation lookup and accept", () => {
-  test.fixme("GetInvitation: detail page shows an invitation by id", async () => {});
-  test.fixme("GetInvitationByToken: invite page shows the invitation for a token", async () => {});
-  test.fixme("AcceptInvitation: invite page accepts the invitation", async () => {});
+test.describe('Invitation lookup and accept', () => {
+  const invitation = createMockInvitation({
+    id: 'inv-detail-1',
+    email: 'invitee@example.com',
+    role: 'admin',
+    status: 'pending',
+    token: 'tok-accept-1',
+  });
+
+  test('GetInvitation: detail page shows an invitation by id', async ({ page }) => {
+    await setupTenantOwnerPage(page);
+    await mockAllApis(page, { invitation: { initialInvitations: [invitation] } });
+    await mockInvitationLookupApi(page, { invitation });
+
+    const lookup = page.waitForRequest(
+      (req) => req.method() === 'GET' && /\/api\/v1\/invitations\/inv-detail-1\/?(\?|$)/.test(req.url())
+    );
+    await page.goto('/tenant/invitations/inv-detail-1');
+    await lookup;
+
+    await expect(page.getByRole('heading', { name: 'Invitation Details' })).toBeVisible();
+    await expect(page.getByText('invitee@example.com').first()).toBeVisible();
+    await expect(page.getByTestId('invitation-status')).toHaveText('Pending');
+  });
+
+  test('GetInvitation: unknown id shows an error', async ({ page }) => {
+    await setupTenantOwnerPage(page);
+    await mockAllApis(page);
+    await mockInvitationLookupApi(page, { invitation });
+
+    await page.goto('/tenant/invitations/inv-missing');
+    await expect(page.getByText('Error loading invitation')).toBeVisible();
+  });
+
+  test('GetInvitationByToken: invite page shows the invitation for a token', async ({ page }) => {
+    await mockInvitationLookupApi(page, { invitation });
+
+    const lookup = page.waitForRequest((req) =>
+      /\/api\/v1\/invitations\/token\/tok-accept-1\/?(\?|$)/.test(req.url())
+    );
+    await page.goto('/invite/tok-accept-1');
+    await lookup;
+
+    await expect(page.getByText('You have been invited')).toBeVisible();
+    await expect(page.getByText(/invitee@example\.com is invited/)).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Accept Invitation' })).toBeEnabled();
+  });
+
+  test('GetInvitationByToken: unknown token shows an invalid invitation', async ({ page }) => {
+    await mockInvitationLookupApi(page, { invitation });
+
+    await page.goto('/invite/tok-unknown');
+    await expect(page.getByText('Invalid invitation')).toBeVisible();
+  });
+
+  test('AcceptInvitation: invite page accepts the invitation', async ({ page }) => {
+    const mock = await mockInvitationLookupApi(page, { invitation });
+
+    await page.goto('/invite/tok-accept-1');
+    await page.getByLabel('Name').fill('New Member');
+    await page.getByLabel('Password (new accounts only)').fill('correct horse battery');
+    await page.getByRole('button', { name: 'Accept Invitation' }).click();
+
+    await expect(page.getByText('Invitation accepted')).toBeVisible();
+    expect(mock.acceptRequests()).toEqual([
+      { token: 'tok-accept-1', name: 'New Member', password: 'correct horse battery' },
+    ]);
+  });
+
+  test('AcceptInvitation: a refused accept shows the error', async ({ page }) => {
+    await mockInvitationLookupApi(page, {
+      invitation,
+      acceptError: { status: 409, error: 'invitation already accepted', errorCode: 'CONFLICT' },
+    });
+
+    await page.goto('/invite/tok-accept-1');
+    await page.getByRole('button', { name: 'Accept Invitation' }).click();
+
+    await expect(page.getByRole('alert').filter({ hasText: 'invitation already accepted' })).toBeVisible();
+  });
 });
