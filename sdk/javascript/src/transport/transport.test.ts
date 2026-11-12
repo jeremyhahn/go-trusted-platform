@@ -15,8 +15,8 @@ import { ApiClient, type RequestOptions } from '../client/api-client.js';
 interface RecordedCall {
   method: 'get' | 'post' | 'put' | 'patch' | 'delete';
   path: string;
-  body?: RequestBody;
-  options?: RequestOptions;
+  body?: RequestBody | undefined;
+  options?: RequestOptions | undefined;
 }
 
 /** MemoryTransport records every call and answers from a route table. */
@@ -132,8 +132,8 @@ describe('Transport contract through an in-memory transport', () => {
 
     const calls = (t as MemoryTransport).calls;
     expect(calls.map((c) => c.method)).toEqual(['get', 'post', 'put', 'patch', 'delete']);
-    expect(calls[0].options).toBe(opts);
-    expect(calls[1].body).toEqual({ alg: 'ecdsa' });
+    expect(calls[0]?.options).toBe(opts);
+    expect(calls[1]?.body).toEqual({ alg: 'ecdsa' });
   });
 
   it('allows every RequestBody shape and an absent body', async () => {
