@@ -164,6 +164,17 @@ var attestationRoutes = []attestationRoute{
 		},
 	},
 	{
+		// The query carries the page and the host filter (#1686).
+		name: "list manifests paged", method: http.MethodGet,
+		path: "/api/v1/attestation/manifests?host_id=h1&limit=10&offset=20", status: http.StatusOK,
+		check: func(t *testing.T, req proto.Message, payload map[string]any) {
+			got := req.(*platformv1.ListManifestsRequest)
+			assert.Equal(t, "h1", got.GetHostId())
+			assert.Equal(t, uint32(10), got.GetLimit())
+			assert.Equal(t, uint32(20), got.GetOffset())
+		},
+	},
+	{
 		name: "build manifest", method: http.MethodPost, path: "/api/v1/attestation/manifests/build",
 		body: `{"nonce":"AQID","vmIds":["vm-1"],"sign":true}`, status: http.StatusCreated,
 		check: func(t *testing.T, req proto.Message, payload map[string]any) {
