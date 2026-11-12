@@ -42,6 +42,7 @@ import type {
   ExtendBundlePCRRequest,
   ExtendBundlePCRResponse,
   ReadBundlePCRResponse,
+  VTPMRuntimeStatus,
 } from '../types/vtpm.js';
 
 /** A request's outcome: the reply it returned, or the error it threw. */
@@ -218,19 +219,45 @@ export class VTPMService extends BaseService {
    * would answer 409 for a start that ran, or undo another caller's stop.
    */
   async startBundle(id: string): Promise<ApiResponse<StartBundleResponse>> {
-    return this.client.post<StartBundleResponse>(
-      this.buildUrl(`/bundles/${this.encodePathSegment(id)}/start`),
-      {},
-      { retry: { enabled: false } }
+    return this.withStatus(
+      await this.client.post<StartBundleResponse>(
+        this.buildUrl(`/bundles/${this.encodePathSegment(id)}/start`),
+        {},
+        { retry: { enabled: false } }
+      )
     );
+  }
+
+  /**
+   * Gives a daemon REST listener reply, which has no `status` block, the
+   * `status` its exported type declares: `success` from the daemon's own
+   * `success` flag when it has one (else true), `message` when the daemon sent
+   * one. A reply that already carries `status` (the webservice shape) and a
+   * failed call pass unchanged.
+   */
+  private withStatus<T extends { status: VTPMRuntimeStatus }>(r: ApiResponse<T>): ApiResponse<T> {
+    const data = r.data as unknown;
+    if (r.success !== true || typeof data !== 'object' || data === null) {
+      return r;
+    }
+    const d = data as { status?: unknown; success?: unknown; message?: unknown };
+    if (typeof d.status === 'object' && d.status !== null) {
+      return r;
+    }
+    const status: VTPMRuntimeStatus = {
+      success: typeof d.success === 'boolean' ? d.success : true,
+      ...(typeof d.message === 'string' ? { message: d.message } : {}),
+    };
+    return { ...r, data: { ...(data as T), status } };
   }
 
   /**
    * Stop the vTPM of a bundle (POST /bundles/{id}/stop).
    * A lifecycle change is never replayed after a lost response. The daemon
    * REST listener answers a BundleActionResponse ({ bundle_id, action,
-   * success, message }) without `stopped`; its `success` is read as
-   * `stopped` (#452). A webservice reply passes unchanged.
+   * success, message }) without `stopped` or `status`; its `success` is read
+   * as `stopped` (#452) and the reply is given a `status` block (withStatus).
+   * A webservice reply passes unchanged.
    */
   async stopBundle(id: string): Promise<ApiResponse<StopBundleResponse>> {
     const r = await this.client.post<StopBundleResponse>(
@@ -240,32 +267,38 @@ export class VTPMService extends BaseService {
     );
     const data = r.data as (Partial<StopBundleResponse> & { success?: boolean }) | undefined;
     if (r.success === true && data && typeof data.stopped !== 'boolean') {
-      return { ...r, data: { ...data, stopped: data.success === true } as StopBundleResponse };
+      return this.withStatus({ ...r, data: { ...data, stopped: data.success === true } as StopBundleResponse });
     }
-    return r;
+    return this.withStatus(r);
   }
 
   /** Quote PCRs of a running bundle (POST /bundles/{id}/quote) */
   async quoteBundle(id: string, request: QuoteBundleRequest): Promise<ApiResponse<QuoteBundleResponse>> {
-    return this.client.post<QuoteBundleResponse>(
-      this.buildUrl(`/bundles/${this.encodePathSegment(id)}/quote`),
-      request
+    return this.withStatus(
+      await this.client.post<QuoteBundleResponse>(
+        this.buildUrl(`/bundles/${this.encodePathSegment(id)}/quote`),
+        request
+      )
     );
   }
 
   /** Seal data to a running bundle (POST /bundles/{id}/seal) */
   async sealBundle(id: string, request: SealBundleRequest): Promise<ApiResponse<SealBundleResponse>> {
-    return this.client.post<SealBundleResponse>(
-      this.buildUrl(`/bundles/${this.encodePathSegment(id)}/seal`),
-      request
+    return this.withStatus(
+      await this.client.post<SealBundleResponse>(
+        this.buildUrl(`/bundles/${this.encodePathSegment(id)}/seal`),
+        request
+      )
     );
   }
 
   /** Unseal a blob with a running bundle (POST /bundles/{id}/unseal) */
   async unsealBundle(id: string, request: UnsealBundleRequest): Promise<ApiResponse<UnsealBundleResponse>> {
-    return this.client.post<UnsealBundleResponse>(
-      this.buildUrl(`/bundles/${this.encodePathSegment(id)}/unseal`),
-      request
+    return this.withStatus(
+      await this.client.post<UnsealBundleResponse>(
+        this.buildUrl(`/bundles/${this.encodePathSegment(id)}/unseal`),
+        request
+      )
     );
   }
 
@@ -327,7 +360,7 @@ export class VTPMService extends BaseService {
       this.client.get<ReadBundlePCRResponse>(`${this.buildUrl(`${bundle}/pcrs`)}?pcr_index=${index}`)
     );
     if (!this.isRouteMissing(first)) {
-      return this.unsettle(first);
+      return this.withStatus(this.unsettle(first));
     }
     const second = await this.settle(
       this.client.get<ReadBundlePCRResponse>(this.buildUrl(`${bundle}/pcr/${index}`))
@@ -335,7 +368,7 @@ export class VTPMService extends BaseService {
     if (this.isRouteMissing(second)) {
       return this.unsettle(first);
     }
-    return this.unsettle(second);
+    return this.withStatus(this.unsettle(second));
   }
 
   /** Captures a request's reply or thrown error, so a 404 of either kind can be tested. */
