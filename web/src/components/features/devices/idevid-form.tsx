@@ -71,6 +71,10 @@ export function IDevIDForm({ onSuccess, onCancel }: IDevIDFormProps) {
     const fetchDevices = async () => {
       try {
         const response = await deviceService.listDevices();
+        // The SDK client returns a refusal as success false; it does not throw.
+        if (!response.success) {
+          throw new Error('device list refused');
+        }
         if (response.data?.devices) {
           setDevices(response.data.devices.map((d) => ({ id: d.id.toString(), name: d.serial || d.id.toString() })));
         }
