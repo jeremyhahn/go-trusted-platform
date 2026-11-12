@@ -448,7 +448,9 @@ export async function mockHealthApi(
 /**
  * BMC API mock (#1736): the `/api/v1/bmc/{profileID}/...` routes with the
  * platform envelope. Mutations change the state the next read returns, and
- * every mutating request is recorded in order.
+ * every mutating request is recorded in order. A non-numeric profile ID is
+ * answered 404 and not recorded, as the server routes (`{profileID:[0-9]+}`)
+ * do.
  */
 export interface BmcApiMockState {
   power: { state: string };
@@ -555,6 +557,15 @@ export async function mockBmcApi(
     const op = segments[segments.length - 1];
     const profileID = decodeURIComponent(segments[segments.length - 2] ?? '');
     const method = request.method();
+    // The server routes take {profileID:[0-9]+} and parse it as uint64, so a non-numeric ID matches no route.
+    if (!/^[0-9]+$/.test(profileID)) {
+      await route.fulfill({
+        status: 404,
+        contentType: 'application/json',
+        body: errorEnvelope({ status: 404, error: `no route ${method} bmc/${profileID}/${op}` }),
+      });
+      return;
+    }
     const error = config.errors?.[op];
     if (error) {
       await route.fulfill({ status: error.status, contentType: 'application/json', body: errorEnvelope(error) });

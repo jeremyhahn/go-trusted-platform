@@ -3,6 +3,9 @@ import { createTenantOwnerSession } from "./fixtures/auth-setup";
 import { mockBmcApi, mockTenantApi } from "./fixtures/api-mock";
 import type { BmcApiMockConfig } from "./fixtures/api-mock";
 
+/** The numeric device-profile ID every test uses. */
+const PROFILE_ID = "1";
+
 /**
  * BMC profile page (#1736): every BMC operation with a REST route is
  * reachable from the page, with the API mocked at the route layer through
@@ -156,5 +159,45 @@ test.describe("BMC power, boot device, virtual media, sensors and provision (#17
     await openProfile(page, { errors: { sensors: { status: 503, error: "bmc: sensors unavailable" } } });
     await expect(page.getByTestId("bmc-sensors-error")).toHaveText("bmc: sensors unavailable");
     await expect(page.getByTestId("bmc-power-state")).toHaveText("On");
+  });
+});
+
+test.describe("BMC profile ID is the numeric device-profile ID (#1736)", () => {
+  test.beforeEach(async ({ page }) => {
+    await createTenantOwnerSession(page.context());
+  });
+
+  test("the landing page opens the profile page for a numeric ID", async ({ page }) => {
+    await mockBmcApi(page);
+    await mockTenantApi(page);
+    await page.goto("/devices/bmc/");
+    await page.getByLabel("BMC profile ID").fill(PROFILE_ID);
+    await page.getByRole("button", { name: "Open" }).click();
+    await expect(page).toHaveURL(new RegExp(`/devices/bmc/${PROFILE_ID}/$`));
+  });
+
+  test("the landing page refuses a non-numeric ID", async ({ page }) => {
+    await mockBmcApi(page);
+    await mockTenantApi(page);
+    await page.goto("/devices/bmc/");
+    await page.getByLabel("BMC profile ID").fill("abc");
+    await page.getByRole("button", { name: "Open" }).click();
+    await expect(page.getByTestId("bmc-profile-id-error")).toContainText("number");
+    await expect(page).toHaveURL(/\/devices\/bmc\/$/);
+  });
+
+  test("the mock answers 404 for a non-numeric profile ID, as the server routes do", async ({ page }) => {
+    const { requests } = await mockBmcApi(page);
+    await mockTenantApi(page);
+    await page.goto("/devices/bmc/");
+    const statuses = await page.evaluate(
+      async (id) =>
+        Promise.all(
+          [`/api/v1/bmc/abc/power`, `/api/v1/bmc/${id}/power`].map(async (u) => (await fetch(u)).status)
+        ),
+      PROFILE_ID
+    );
+    expect(statuses).toEqual([404, 200]);
+    expect(requests).toEqual([]);
   });
 });
