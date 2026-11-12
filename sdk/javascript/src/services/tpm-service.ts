@@ -10,6 +10,10 @@ import type { ApiResponse } from '../types/api.js';
 import { BaseService } from './base-service.js';
 import type {
   TPMProvisionRequest,
+  TPMCapabilitiesResponse,
+  TPMPlatformAttributesResponse,
+  CertifyRequest,
+  CertifyResponse,
   TPMClearRequest,
   CreateEKRequest,
   GetEKRequest,
@@ -102,6 +106,24 @@ export class TPMService extends BaseService {
    */
   async getInfo(): Promise<ApiResponse<TPMInfoResponse>> {
     return this.client.get<TPMInfoResponse>(this.buildUrl('/info'));
+  }
+
+  /**
+   * Get TPM capabilities (algorithms, commands, ECC curves)
+   *
+   * @returns TPM capabilities
+   */
+  async getCapabilities(): Promise<ApiResponse<TPMCapabilitiesResponse>> {
+    return this.client.get<TPMCapabilitiesResponse>(this.buildUrl('/capabilities'));
+  }
+
+  /**
+   * Get platform attributes: the TPM device and its provisioned identity keys
+   *
+   * @returns Platform attributes
+   */
+  async getPlatformAttributes(): Promise<ApiResponse<TPMPlatformAttributesResponse>> {
+    return this.client.get<TPMPlatformAttributesResponse>(this.buildUrl('/platform'));
   }
 
   /**
@@ -300,6 +322,16 @@ export class TPMService extends BaseService {
    */
   async verifyQuote(request: VerifyQuoteRequest): Promise<ApiResponse<VerifyQuoteResponse>> {
     return this.client.post<VerifyQuoteResponse>(this.buildUrl('/quote/verify'), request);
+  }
+
+  /**
+   * Certify, under the IAK, that the key at a persistent handle is resident in this TPM
+   *
+   * @param request - Certify request
+   * @returns Certification and signature
+   */
+  async certify(request: CertifyRequest): Promise<ApiResponse<CertifyResponse>> {
+    return this.client.post<CertifyResponse>(this.buildUrl('/certify'), request);
   }
 
   // =========================================================================
