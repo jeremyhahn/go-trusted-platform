@@ -83,6 +83,8 @@ export { useToast, toast, dismissToast } from './use-toast';
 export type { Toast, UseToastReturn } from './use-toast';
 
 export { useReportedGateways } from './use-reported-gateways';
+export { useSwitchPorts } from './use-switch-ports';
+export type { UseSwitchPortsResult } from './use-switch-ports';
 export type {
   ReportedGateway,
   UseReportedGatewaysOptions,
