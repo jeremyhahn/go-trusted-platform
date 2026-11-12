@@ -317,7 +317,7 @@ describe('EmbeddingService', () => {
 
       await service.listProviders({ configuredOnly: true, activeOnly: true });
 
-      const call = vi.mocked(mockClient.get).mock.calls[0]![0];
+      const call = vi.mocked(mockClient.get).mock.calls[0]?.[0];
       expect(call).toContain('configuredOnly=true');
       expect(call).toContain('activeOnly=true');
     });

@@ -497,7 +497,7 @@ describe('QuicBaaSSecretsService', () => {
 
       await service.list({ page: 2, pageSize: 10 });
 
-      const call = vi.mocked(mockClient.get).mock.calls[0]![0];
+      const call = vi.mocked(mockClient.get).mock.calls[0]?.[0];
       expect(call).toContain('page=2');
       expect(call).toContain('limit=10');
     });
@@ -618,7 +618,7 @@ describe('QuicBaaSSecretsService', () => {
         pageSize: 10,
       });
 
-      const call = vi.mocked(mockClient.get).mock.calls[0]![0];
+      const call = vi.mocked(mockClient.get).mock.calls[0]?.[0];
       expect(call).toContain('page=2');
       expect(call).toContain('limit=10');
     });

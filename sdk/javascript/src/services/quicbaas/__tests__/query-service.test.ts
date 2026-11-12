@@ -542,7 +542,7 @@ describe('QueryService', () => {
 
       await service.listIndexes({ limit: 10, cursor: 'current-cursor' });
 
-      const call = vi.mocked(mockClient.get).mock.calls[0]![0];
+      const call = vi.mocked(mockClient.get).mock.calls[0]?.[0];
       expect(call).toContain('limit=10');
       expect(call).toContain('cursor=current-cursor');
     });

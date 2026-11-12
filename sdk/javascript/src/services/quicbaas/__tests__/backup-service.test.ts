@@ -462,7 +462,7 @@ describe('BackupService', () => {
         endTime: 1700086400000,
       });
 
-      const call = vi.mocked(mockClient.get).mock.calls[0]![0];
+      const call = vi.mocked(mockClient.get).mock.calls[0]?.[0];
       expect(call).toContain('startTime=1700000000000');
       expect(call).toContain('endTime=1700086400000');
     });
@@ -479,7 +479,7 @@ describe('BackupService', () => {
 
       await service.list({ limit: 10, cursor: 'current-page' });
 
-      const call = vi.mocked(mockClient.get).mock.calls[0]![0];
+      const call = vi.mocked(mockClient.get).mock.calls[0]?.[0];
       expect(call).toContain('limit=10');
       expect(call).toContain('cursor=current-page');
     });
