@@ -151,13 +151,15 @@ describe('SDNBridgeDetailClient read failures and port identity', () => {
       [`GET ${SDN}/policies`]: refused(503, 'service unavailable'),
     });
 
-    expect((await screen.findByTestId('sdn-ports-error')).textContent).toContain('service unavailable');
-    expect((await screen.findByTestId('sdn-policies-error')).textContent).toContain('service unavailable');
+    // The SDK retries a 503 with backoff (3 retries from 1 s): the failure shows once they are spent.
+    const wait = { timeout: 15000 };
+    expect((await screen.findByTestId('sdn-ports-error', {}, wait)).textContent).toContain('service unavailable');
+    expect((await screen.findByTestId('sdn-policies-error', {}, wait)).textContent).toContain('service unavailable');
     expect(screen.queryByText('No ports found')).toBeNull();
     expect(screen.queryByText('No policies found')).toBeNull();
     expect(screen.getByRole('button', { name: 'Retry ports' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Retry policies' })).toBeTruthy();
-  });
+  }, 20000);
 
   it("switching ports never shows the previous port's state", async () => {
     const port = (id: string, name: string) => ({

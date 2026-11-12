@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, usePathname, useRouter } from 'next/navigation';
 import { ArrowLeft, RefreshCw, Trash2, Plus } from 'lucide-react';
 import { resolveDynamicId } from '@/utils/dynamic-route';
@@ -27,7 +27,14 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { useApi, useSDN, useSDNBridge, useToast } from '@/hooks';
-import type { SDNPolicy, SDNPolicyType } from 'trusted-platform-sdk';
+import type { Port, PortStats, SDNPolicy, SDNPolicyType } from 'trusted-platform-sdk';
+
+interface PortView {
+  id: string;
+  port?: Port;
+  stats?: PortStats;
+  error?: string;
+}
 
 const POLICY_TYPES: SDNPolicyType[] = [
   'POLICY_TYPE_ACL',
@@ -59,8 +66,18 @@ export default function SDNBridgeDetailClient() {
   const { toast } = useToast();
   const sdn = useSDN();
   const bridgeId = resolveDynamicId(params, pathname, 'sdn', 'bridge');
-  const { bridge, ports, policies, loading, refetchBridge, refetchPorts, refetchPolicies } =
-    useSDNBridge(bridgeId);
+  const {
+    bridge,
+    ports,
+    policies,
+    loading,
+    bridgeError,
+    portsError,
+    policiesError,
+    refetchBridge,
+    refetchPorts,
+    refetchPolicies,
+  } = useSDNBridge(bridgeId);
 
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [selectedPort, setSelectedPort] = useState('');
@@ -72,20 +89,33 @@ export default function SDNBridgeDetailClient() {
   const [policyType, setPolicyType] = useState<SDNPolicyType>('POLICY_TYPE_ACL');
   const [viewPolicyId, setViewPolicyId] = useState('');
 
-  const portState = useApi(
-    () =>
-      selectedPort
-        ? sdn.getPort(bridgeId, selectedPort)
-        : Promise.resolve({ success: true, data: null }),
-    [bridgeId, selectedPort]
-  );
-  const portStats = useApi(
-    () =>
-      selectedPort
-        ? sdn.getPortStats(bridgeId, selectedPort)
-        : Promise.resolve({ success: true, data: null }),
-    [bridgeId, selectedPort]
-  );
+  // The port panel keeps each answer with the port it was asked for, and
+  // drops an answer that arrives after the selection moved on (#1755).
+  const [portView, setPortView] = useState<PortView | null>(null);
+  const [portReload, setPortReload] = useState(0);
+  useEffect(() => {
+    setPortView(null);
+    if (!selectedPort) return;
+    let current = true;
+    const id = selectedPort;
+    (async () => {
+      try {
+        const [state, stats] = await Promise.all([sdn.getPort(bridgeId, id), sdn.getPortStats(bridgeId, id)]);
+        if (!current) return;
+        setPortView({
+          id,
+          port: state.data?.port,
+          stats: stats.data?.stats,
+          error: state.error?.message ?? stats.error?.message,
+        });
+      } catch (err) {
+        if (current) setPortView({ id, error: errorText(err) });
+      }
+    })();
+    return () => {
+      current = false;
+    };
+  }, [sdn, bridgeId, selectedPort, portReload]);
   const policyDetail = useApi(
     () => (viewPolicyId ? sdn.getPolicy(viewPolicyId) : Promise.resolve({ success: true, data: null })),
     [viewPolicyId]
@@ -113,13 +143,12 @@ export default function SDNBridgeDetailClient() {
     }
   };
 
-  const port = portState.data?.port;
-  const stats = portStats.data?.stats;
+  const shown = portView?.id === selectedPort ? portView : null;
+  const port = shown?.port;
+  const stats = shown?.stats;
+  const portError = shown?.error;
   const policy: SDNPolicy | undefined = policyDetail.data?.policy;
-  const refreshPort = () => {
-    void portState.refetch();
-    void portStats.refetch();
-  };
+  const refreshPort = () => setPortReload((n) => n + 1);
 
   return (
     <div className="space-y-6">
@@ -189,6 +218,15 @@ export default function SDNBridgeDetailClient() {
                 <Badge variant="outline">{bridge.status ?? '-'}</Badge>
               </div>
             </>
+          ) : bridgeError ? (
+            <div className="flex items-center justify-between gap-2">
+              <div role="alert" data-testid="sdn-bridge-error" className="text-destructive">
+                Bridge could not be loaded: {bridgeError}
+              </div>
+              <Button size="sm" variant="outline" aria-label="Retry bridge" onClick={refetchBridge}>
+                Retry
+              </Button>
+            </div>
           ) : (
             <p className="text-muted-foreground">{loading ? 'Loading bridge' : 'Bridge not found'}</p>
           )}
@@ -209,7 +247,18 @@ export default function SDNBridgeDetailClient() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {ports.length === 0 ? (
+              {portsError ? (
+                <TableRow>
+                  <TableCell colSpan={3} className="text-center">
+                    <span role="alert" data-testid="sdn-ports-error" className="text-destructive">
+                      Ports could not be loaded: {portsError}
+                    </span>{' '}
+                    <Button size="sm" variant="outline" aria-label="Retry ports" onClick={refetchPorts}>
+                      Retry
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ) : ports.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={3} className="text-center text-muted-foreground">
                     No ports found
@@ -247,6 +296,11 @@ export default function SDNBridgeDetailClient() {
             <CardTitle>Port {selectedPort}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+            {portError && (
+              <p role="alert" data-testid="port-error" className="text-destructive">
+                Port could not be loaded: {portError}
+              </p>
+            )}
             <div className="grid gap-2 md:grid-cols-2" data-testid="port-state">
               <div>Status: <span className="font-mono">{port?.status ?? '-'}</span></div>
               <div>
@@ -367,7 +421,18 @@ export default function SDNBridgeDetailClient() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {policies.length === 0 ? (
+              {policiesError ? (
+                <TableRow>
+                  <TableCell colSpan={4} className="text-center">
+                    <span role="alert" data-testid="sdn-policies-error" className="text-destructive">
+                      Policies could not be loaded: {policiesError}
+                    </span>{' '}
+                    <Button size="sm" variant="outline" aria-label="Retry policies" onClick={refetchPolicies}>
+                      Retry
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ) : policies.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={4} className="text-center text-muted-foreground">
                     No policies found

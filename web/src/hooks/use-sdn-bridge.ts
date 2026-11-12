@@ -12,6 +12,9 @@ export interface UseSDNBridgeResult {
   ports: Port[];
   policies: SDNPolicy[];
   loading: boolean;
+  bridgeError: string | null;
+  portsError: string | null;
+  policiesError: string | null;
   refetchBridge: () => void;
   refetchPorts: () => void;
   refetchPolicies: () => void;
@@ -35,6 +38,9 @@ export function useSDNBridge(bridgeId: string): UseSDNBridgeResult {
     ports: portsQuery.data?.ports ?? [],
     policies: policiesQuery.data?.policies ?? [],
     loading: bridgeQuery.isLoading,
+    bridgeError: bridgeQuery.isError ? bridgeQuery.error?.message || 'Request failed' : null,
+    portsError: portsQuery.isError ? portsQuery.error?.message || 'Request failed' : null,
+    policiesError: policiesQuery.isError ? policiesQuery.error?.message || 'Request failed' : null,
     refetchBridge: () => {
       void bridgeQuery.refetch();
     },
