@@ -631,6 +631,13 @@ export type {
   ExecContainerResponse,
   AttestVMResponse,
   VerifyVMAttestationResponse,
+  SuspendVMResponse,
+  ResumeVMResponse,
+  GetSnapshotResponse,
+  PrepareMigrationRequest,
+  PrepareMigrationResponse,
+  FinalizeMigrationRequest,
+  FinalizeMigrationResponse,
 } from './types/compute.js';
 
 // IAM types
