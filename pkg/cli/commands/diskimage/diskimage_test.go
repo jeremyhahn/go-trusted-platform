@@ -224,6 +224,7 @@ func TestBuildConfigRoleBuildsTheDedicatedTemplate(t *testing.T) {
 		{"rpi5", "compute"},
 		{"cm4", "control-plane"},
 		{"rpi4", "control-plane"},
+		{"rpi5", "control-plane"},
 	}
 	for _, b := range builds {
 		t.Run(b.model+"/"+b.role, func(t *testing.T) {
