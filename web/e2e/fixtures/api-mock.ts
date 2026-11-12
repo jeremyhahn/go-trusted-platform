@@ -787,7 +787,10 @@ export async function mockCAOperationsApi(
           serial: '0a1b2c',
           commonName: 'release-signer',
           issuer: 'Platform Intermediate CA',
-          pem: '-----BEGIN CERTIFICATE-----\nSIGNED\n-----END CERTIFICATE-----\n',
+          // Certificate.pem is proto bytes: protojson carries it as base64.
+          pem: Buffer.from('-----BEGIN CERTIFICATE-----\nSIGNED\n-----END CERTIFICATE-----\n').toString(
+            'base64'
+          ),
         },
         timestamp: now,
       }),
@@ -799,7 +802,25 @@ export async function mockCAOperationsApi(
       await route.continue();
       return;
     }
-    verifyRequests.push(request.postDataJSON());
+    const verifyBody = request.postDataJSON() as { certificatePem?: unknown } | null;
+    verifyRequests.push(verifyBody);
+    // VerifyCertificateRequest.certificate_pem is proto bytes: the server's
+    // protojson decode needs standard base64 and fails on plain PEM.
+    const wirePem = verifyBody?.certificatePem;
+    const isBase64 =
+      typeof wirePem === 'string' && wirePem.length % 4 === 0 && /^[A-Za-z0-9+/]*={0,2}$/.test(wirePem);
+    const decoded = isBase64 ? Buffer.from(wirePem as string, 'base64').toString('utf8') : '';
+    if (!decoded.startsWith('-----BEGIN CERTIFICATE-----')) {
+      await route.fulfill({
+        status: 400,
+        contentType: 'application/json',
+        body: errorEnvelope({
+          status: 400,
+          error: 'invalid request body: certificatePem must be base64',
+        }),
+      });
+      return;
+    }
     const valid = config.verifyValid !== false;
     await route.fulfill({
       status: 200,

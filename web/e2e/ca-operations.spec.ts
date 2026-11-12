@@ -78,7 +78,7 @@ test.describe('CA operations', () => {
 
     await expect(page.getByTestId('verify-result')).toHaveText('Certificate is valid');
     await expect(page.getByTestId('verify-chain')).toContainText('0a1b2c');
-    expect(mock.verifyRequests).toEqual([{ certificatePem: CERT_PEM }]);
+    expect(mock.verifyRequests).toEqual([{ certificatePem: Buffer.from(CERT_PEM).toString('base64') }]);
   });
 
   test('VerifyCertificate: the verify page reports an invalid certificate', async ({ page }) => {
