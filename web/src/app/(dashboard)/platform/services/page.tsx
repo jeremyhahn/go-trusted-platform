@@ -85,6 +85,11 @@ export default function ServicesPage() {
   const daemon = usePlatformDaemon();
   const [confirm, setConfirm] = React.useState<{ name: string; action: DaemonServiceAction } | null>(null);
   const [detail, setDetail] = React.useState<DaemonServiceInfo | null>(null);
+  // runAction reads the open panel after an await; the ref holds its current value.
+  const detailRef = React.useRef<DaemonServiceInfo | null>(null);
+  React.useEffect(() => {
+    detailRef.current = detail;
+  }, [detail]);
 
   const services = daemon.services.data?.services ?? [];
 
@@ -93,6 +98,7 @@ export default function ServicesPage() {
     daemon.version.refetch();
     daemon.config.refetch();
     daemon.services.refetch();
+    if (detail) void refreshDetail(detail.name);
   };
 
   const fail = (title: string, err: unknown) =>
@@ -120,6 +126,8 @@ export default function ServicesPage() {
       });
     } catch (err) {
       fail(`${ACTION_LABEL[action]} ${name} failed`, err);
+    } finally {
+      if (detailRef.current?.name === name) void refreshDetail(name);
     }
   };
 
@@ -129,6 +137,17 @@ export default function ServicesPage() {
       setDetail(info ?? null);
     } catch (err) {
       fail(`Status of ${name} failed`, err);
+    }
+  };
+
+  // Re-read the open details; a failed re-read clears the panel so stale
+  // status never stays on screen.
+  const refreshDetail = async (name: string) => {
+    try {
+      const info = await daemon.getServiceStatus(name);
+      setDetail(info ?? null);
+    } catch {
+      setDetail(null);
     }
   };
 

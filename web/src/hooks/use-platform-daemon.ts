@@ -56,9 +56,13 @@ export function usePlatformDaemon() {
           : action === "stop"
             ? () => platform.stopService(name)
             : () => platform.restartService(name);
-      const data = await run(`${action}:${name}`, call);
-      services.refetch();
-      return data;
+      // A failed lifecycle call can still change server state (a restart can
+      // stop and then fail to start), so the list is re-read either way.
+      try {
+        return await run(`${action}:${name}`, call);
+      } finally {
+        services.refetch();
+      }
     },
     [run, platform, services]
   );
