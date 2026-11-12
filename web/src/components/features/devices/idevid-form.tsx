@@ -95,12 +95,16 @@ export function IDevIDForm({ onSuccess, onCancel }: IDevIDFormProps) {
   const issueMutation = useMutation(
     async (values: IDevIDFormValues) => {
       // Generate IDevID key pair
-      await idevid.generateIDevID({
+      const generateResponse = await idevid.generateIDevID({
         config: {
           algorithm: values.keyAlgorithm === 'RSA' ? 'RSA_2048' : 'ECDSA_P256',
           hierarchy: 'endorsement',
         }
       });
+
+      if (generateResponse.error) {
+        throw new Error(generateResponse.error.message || 'Failed to generate IDevID');
+      }
 
       // Create CSR
       const csrResponse = await idevid.createIDevIDCSR({
@@ -124,7 +128,7 @@ export function IDevIDForm({ onSuccess, onCancel }: IDevIDFormProps) {
       onError: (error) => {
         toast({
           title: 'Error',
-          description: error instanceof Error ? error.message : 'Failed to issue certificate',
+          description: error.message || 'Failed to issue certificate',
           variant: 'destructive',
         });
       },
