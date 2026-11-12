@@ -725,7 +725,21 @@ export async function mockInvitationLookupApi(
     const method = request.method();
 
     if (method === 'POST' && path.endsWith('/invitations/accept')) {
-      accepted.push((request.postDataJSON() as Record<string, unknown>) ?? {});
+      const body = (request.postDataJSON() as Record<string, unknown>) ?? {};
+      accepted.push(body);
+      const present = (v: unknown) => v !== undefined && v !== null && String(v) !== '';
+      if (!present(body.token) || !(present(body.userId) || present(body.user_id))) {
+        await route.fulfill({
+          status: 400,
+          contentType: 'application/json',
+          body: errorEnvelope({
+            status: 400,
+            error: 'invitation: user ID is required',
+            errorCode: 'INVALID_ARGUMENT',
+          }),
+        });
+        return;
+      }
       if (options.acceptError) {
         await route.fulfill({
           status: options.acceptError.status,

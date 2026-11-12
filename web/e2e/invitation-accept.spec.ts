@@ -4,7 +4,7 @@ import {
   mockAllApis,
   mockInvitationLookupApi,
 } from './fixtures/api-mock';
-import { setupTenantOwnerPage } from './fixtures/auth-setup';
+import { createCustomSession, setupTenantOwnerPage } from './fixtures/auth-setup';
 
 // Slice 19 of epic #1665: invitation lookup and accept pages (#1671).
 test.describe('Invitation lookup and accept', () => {
@@ -15,6 +15,12 @@ test.describe('Invitation lookup and accept', () => {
     status: 'pending',
     token: 'tok-accept-1',
   });
+  const signedIn = {
+    sub: '9',
+    user_id: '9',
+    email: 'invitee@example.com',
+    exp: Math.floor(Date.now() / 1000) + 3600,
+  };
 
   test('GetInvitation: detail page shows an invitation by id', async ({ page }) => {
     await setupTenantOwnerPage(page);
@@ -52,7 +58,10 @@ test.describe('Invitation lookup and accept', () => {
 
     await expect(page.getByText('You have been invited')).toBeVisible();
     await expect(page.getByText(/invitee@example\.com is invited/)).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Accept Invitation' })).toBeEnabled();
+    const signUp = page.getByRole('link', { name: 'Create account with passkey' });
+    await expect(signUp).toBeVisible();
+    await expect(signUp).toHaveAttribute('href', /\/auth\/webauthn\?invitation=tok-accept-1/);
+    await expect(page.getByRole('button', { name: 'Accept Invitation' })).toHaveCount(0);
   });
 
   test('GetInvitationByToken: unknown token shows an invalid invitation', async ({ page }) => {
@@ -62,21 +71,19 @@ test.describe('Invitation lookup and accept', () => {
     await expect(page.getByText('Invalid invitation')).toBeVisible();
   });
 
-  test('AcceptInvitation: invite page accepts the invitation', async ({ page }) => {
+  test('AcceptInvitation: a signed-in user accepts with their user ID', async ({ page }) => {
+    await createCustomSession(page.context(), signedIn);
     const mock = await mockInvitationLookupApi(page, { invitation });
 
     await page.goto('/invite/tok-accept-1');
-    await page.getByLabel('Name').fill('New Member');
-    await page.getByLabel('Password (new accounts only)').fill('correct horse battery');
     await page.getByRole('button', { name: 'Accept Invitation' }).click();
 
     await expect(page.getByText('Invitation accepted')).toBeVisible();
-    expect(mock.acceptRequests()).toEqual([
-      { token: 'tok-accept-1', name: 'New Member', password: 'correct horse battery' },
-    ]);
+    expect(mock.acceptRequests()).toEqual([{ token: 'tok-accept-1', userId: '9' }]);
   });
 
   test('AcceptInvitation: a refused accept shows the error', async ({ page }) => {
+    await createCustomSession(page.context(), signedIn);
     await mockInvitationLookupApi(page, {
       invitation,
       acceptError: { status: 409, error: 'invitation already accepted', errorCode: 'CONFLICT' },
@@ -86,5 +93,19 @@ test.describe('Invitation lookup and accept', () => {
     await page.getByRole('button', { name: 'Accept Invitation' }).click();
 
     await expect(page.getByRole('alert').filter({ hasText: 'invitation already accepted' })).toBeVisible();
+  });
+
+  test('AcceptInvitation: a non-numeric subject gets the passkey link and sends no accept', async ({ page }) => {
+    await createCustomSession(page.context(), {
+      sub: 'operator@platform',
+      email: 'invitee@example.com',
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    });
+    const mock = await mockInvitationLookupApi(page, { invitation });
+
+    await page.goto('/invite/tok-accept-1');
+    await expect(page.getByRole('link', { name: 'Create account with passkey' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Accept Invitation' })).toHaveCount(0);
+    expect(mock.acceptRequests()).toEqual([]);
   });
 });
