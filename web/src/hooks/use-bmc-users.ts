@@ -124,6 +124,11 @@ export function useBMCUsers(profileID: string): UseBMCUsersResult {
   }, [load]);
 
   React.useEffect(() => {
+    // An empty ID is the static-export placeholder before the client has
+    // read the real profile ID from the URL: there is nothing to fetch yet.
+    if (!profileID) {
+      return;
+    }
     let cancelled = false;
     Promise.resolve().then(() => {
       if (!cancelled) void load();
@@ -131,7 +136,7 @@ export function useBMCUsers(profileID: string): UseBMCUsersResult {
     return () => {
       cancelled = true;
     };
-  }, [load]);
+  }, [load, profileID]);
 
   const createUser = React.useCallback(
     async (input: CreateBMCUserInput) => {
