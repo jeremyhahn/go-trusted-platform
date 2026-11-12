@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useIAM, useApi } from "trusted-platform-sdk";
 import type {
   ApiResponse,
@@ -23,12 +23,27 @@ export function expectOk<T>(response: ApiResponse<T>, operation: string): ApiRes
   return response;
 }
 
+/** Tenants per page; the REST handler's default limit is also 50. */
+export const TENANTS_PAGE_SIZE = 50;
+
+/** Number of tenant pages for a server total, at least one. */
+export function tenantPageCount(total: number | undefined, pageSize: number): number {
+  if (!total || total <= 0 || pageSize <= 0) return 1;
+  return Math.ceil(total / pageSize);
+}
+
 /**
  * Tenant administration over the IAM REST routes: GET/POST /tenants and
  * GET/PUT/DELETE /tenants/{tenant} (system scope, #1744).
  */
 export interface UseIAMTenantsResult {
   tenants: IAMTenant[];
+  /** Tenants on the server, across every page. */
+  total: number;
+  /** Current page, 1-indexed. */
+  page: number;
+  pageCount: number;
+  setPage: (page: number) => void;
   isLoading: boolean;
   error: Error | undefined;
   refetch: () => void;
@@ -40,7 +55,17 @@ export interface UseIAMTenantsResult {
 
 export function useIAMTenants(): UseIAMTenantsResult {
   const iam = useIAM();
-  const { data, isLoading, error, refetch } = useApi(() => iam.listTenants(), [iam]);
+  const [page, setPage] = useState(1);
+  const { data, isLoading, error, refetch } = useApi(
+    () => iam.listTenants({ page, pageSize: TENANTS_PAGE_SIZE }),
+    [iam, page],
+  );
+  const total = data?.total ?? 0;
+  const pageCount = tenantPageCount(total, TENANTS_PAGE_SIZE);
+  // A delete can empty the last page: step back to the new last page.
+  useEffect(() => {
+    if (data && page > pageCount) setPage(pageCount);
+  }, [data, page, pageCount]);
 
   const getTenant = useCallback(
     async (tenantId: string) => expectOk(await iam.getTenant(tenantId), "Get tenant"),
@@ -61,6 +86,10 @@ export function useIAMTenants(): UseIAMTenantsResult {
 
   return {
     tenants: data?.tenants ?? [],
+    total,
+    page,
+    pageCount,
+    setPage,
     isLoading,
     error,
     refetch: () => {

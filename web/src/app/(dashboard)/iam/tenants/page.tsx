@@ -43,8 +43,19 @@ function unwrapTenant(data: unknown): IAMTenant | null {
 }
 
 export default function TenantsPage() {
-  const { tenants, isLoading, error, refetch, getTenant, createTenant, updateTenant, deleteTenant } =
-    useIAMTenants();
+  const {
+    tenants,
+    page,
+    pageCount,
+    setPage,
+    isLoading,
+    error,
+    refetch,
+    getTenant,
+    createTenant,
+    updateTenant,
+    deleteTenant,
+  } = useIAMTenants();
   const { toast } = useToast();
 
   const [newId, setNewId] = useState("");
@@ -202,6 +213,29 @@ export default function TenantsPage() {
               </TableBody>
             </Table>
           )}
+          <div className="flex items-center justify-end gap-2 pt-4">
+            <span className="text-sm text-muted-foreground" data-testid="tenants-page">
+              Page {page} of {pageCount}
+            </span>
+            <Button
+              size="sm"
+              variant="outline"
+              data-testid="tenants-prev"
+              disabled={isLoading || page <= 1}
+              onClick={() => setPage(page - 1)}
+            >
+              Previous
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              data-testid="tenants-next"
+              disabled={isLoading || page >= pageCount}
+              onClick={() => setPage(page + 1)}
+            >
+              Next
+            </Button>
+          </div>
         </CardContent>
       </Card>
 
