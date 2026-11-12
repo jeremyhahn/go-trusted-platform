@@ -216,6 +216,9 @@ func (r *runner) authorizeCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if targetVLAN < minTargetVLAN || targetVLAN > maxTargetVLAN {
+				return &ErrInvalidTargetVLAN{Value: targetVLAN}
+			}
 			return r.call(cmd, "Authorize", func(ctx context.Context, c platformv1.PXEServiceClient) (any, *cli.TableData, error) {
 				resp, err := c.Authorize(ctx, &platformv1.AuthorizePXEDeviceRequest{DeviceId: id, TargetVlan: targetVLAN})
 				if err != nil {
@@ -225,7 +228,7 @@ func (r *runner) authorizeCommand() *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().Uint32Var(&targetVLAN, "target-vlan", 0, "VLAN to move the device to (0 for the one its profile names)")
+	cmd.Flags().Uint32Var(&targetVLAN, "target-vlan", 0, "VLAN to move the device to (required, 1-4094)")
 	return cmd
 }
 

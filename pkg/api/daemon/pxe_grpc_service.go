@@ -285,10 +285,16 @@ func (s *PXEGRPCService) Authorize(ctx context.Context, req *platformv1.Authoriz
 		return nil, status.Error(codes.InvalidArgument, "device ID is required")
 	}
 
-	targetVLAN := uint16(req.GetTargetVlan())
-	if targetVLAN == 0 {
+	// Validate the wire uint32 before narrowing: uint16(65556) would
+	// silently become VLAN 20.
+	rawVLAN := req.GetTargetVlan()
+	if rawVLAN == 0 {
 		return nil, status.Error(codes.InvalidArgument, "target VLAN is required")
 	}
+	if rawVLAN > 4094 {
+		return nil, status.Errorf(codes.InvalidArgument, "target VLAN %d out of range (1-4094)", rawVLAN)
+	}
+	targetVLAN := uint16(rawVLAN)
 
 	if err := s.pxeService.AuthorizeDevice(ctx, deviceID, targetVLAN); err != nil {
 		s.logger.Error(err, "Failed to authorize device", "device_id", deviceID, "target_vlan", targetVLAN)

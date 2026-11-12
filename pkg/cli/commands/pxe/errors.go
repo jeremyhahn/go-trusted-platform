@@ -17,6 +17,25 @@ import "fmt"
 
 // ErrDeviceIDRequired is returned when a verb that names one device is given
 // an empty device ID.
+// minTargetVLAN and maxTargetVLAN bound --target-vlan: 802.1Q VLAN IDs
+// 0 and 4095 are reserved.
+const (
+	minTargetVLAN = 1
+	maxTargetVLAN = 4094
+)
+
+// ErrInvalidTargetVLAN reports a missing or out-of-range --target-vlan.
+type ErrInvalidTargetVLAN struct {
+	Value uint32
+}
+
+func (e *ErrInvalidTargetVLAN) Error() string {
+	if e.Value == 0 {
+		return "--target-vlan is required (1-4094)"
+	}
+	return fmt.Sprintf("--target-vlan %d is out of range (1-4094)", e.Value)
+}
+
 type ErrDeviceIDRequired struct {
 	Verb string
 }
