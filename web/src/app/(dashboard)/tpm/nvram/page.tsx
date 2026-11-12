@@ -96,6 +96,23 @@ const asciiOf = (b64: string): string => {
   }
 };
 
+// The SDK resolves a failed call with `{ error }` rather than rejecting;
+// raise it so each operation reports the failure instead of a success (#1824).
+const raiseError = <T extends { error?: { message?: string } }>(resp: T): T => {
+  if (resp?.error) throw new Error(resp.error.message || "Request failed");
+  return resp;
+};
+
+// The write payload is the UTF-8 bytes of the text; btoa alone throws on
+// any character above U+00FF (#1824).
+const utf8Bytes = (text: string): Uint8Array => new TextEncoder().encode(text);
+
+const bytesToBase64 = (bytes: Uint8Array): string => {
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin);
+};
+
 /**
  * TPM NVRAM Management Page
  *
@@ -178,11 +195,13 @@ export default function TPMNVRAMPage() {
   const doRead = async () => {
     setReadState((s) => ({ ...s, loading: true, err: null, data: null }));
     try {
-      const resp = await tpm.readNVRAM({
-        index: readState.handle,
-        size: readState.size,
-        ...(readState.password ? { password: readState.password } : {}),
-      });
+      const resp = raiseError(
+        await tpm.readNVRAM({
+          index: readState.handle,
+          size: readState.size,
+          ...(readState.password ? { password: readState.password } : {}),
+        })
+      );
       setReadState((s) => ({ ...s, loading: false, data: resp.data?.data ?? "" }));
     } catch (e) {
       setReadState((s) => ({ ...s, loading: false, err: errorMessage(e, "Read failed") }));
@@ -211,13 +230,15 @@ export default function TPMNVRAMPage() {
     }
     setDefineState((s) => ({ ...s, loading: true, err: null }));
     try {
-      await tpm.defineNVRAM({
-        index: handle,
-        size: defineState.size,
-        attributes: defineState.attrs,
-        ...(defineState.password ? { password: defineState.password } : {}),
-        ...(defineState.parentPassword ? { parentPassword: defineState.parentPassword } : {}),
-      });
+      raiseError(
+        await tpm.defineNVRAM({
+          index: handle,
+          size: defineState.size,
+          attributes: defineState.attrs,
+          ...(defineState.password ? { password: defineState.password } : {}),
+          ...(defineState.parentPassword ? { parentPassword: defineState.parentPassword } : {}),
+        })
+      );
       toast({ title: "NV index defined", description: formatHandle(handle), variant: "success" });
       setDefineState((s) => ({ ...s, open: false, loading: false }));
       refetch();
@@ -257,13 +278,15 @@ export default function TPMNVRAMPage() {
       // Encode as base64 — proto bytes field; protojson decodes it
       // server-side. Truncate to the index size if the operator
       // pasted more bytes than the index can hold.
-      const bin = writeState.text.slice(0, writeState.size);
-      const b64 = btoa(bin);
-      await tpm.writeNVRAM({
-        index: writeState.handle,
-        data: b64,
-        ...(writeState.password ? { password: writeState.password } : {}),
-      });
+      const bin = utf8Bytes(writeState.text).slice(0, writeState.size);
+      const b64 = bytesToBase64(bin);
+      raiseError(
+        await tpm.writeNVRAM({
+          index: writeState.handle,
+          data: b64,
+          ...(writeState.password ? { password: writeState.password } : {}),
+        })
+      );
       toast({
         title: "NV index written",
         description: `${bin.length} bytes → ${formatHandle(writeState.handle)}`,
@@ -286,7 +309,7 @@ export default function TPMNVRAMPage() {
     }
     setUndefineBusy(ix.handle);
     try {
-      await tpm.undefineNVRAM({ index: ix.handle });
+      raiseError(await tpm.undefineNVRAM({ index: ix.handle }));
       toast({ title: "NV index undefined", description: formatHandle(ix.handle), variant: "success" });
       refetch();
     } catch (e) {
@@ -649,7 +672,7 @@ export default function TPMNVRAMPage() {
                 placeholder="payload bytes…"
               />
               <p className="text-xs text-muted-foreground mt-1">
-                {writeState.text.length} / {writeState.size} bytes
+                {utf8Bytes(writeState.text).length} / {writeState.size} bytes
               </p>
             </div>
             <div>
