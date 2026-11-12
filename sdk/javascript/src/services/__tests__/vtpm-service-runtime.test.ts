@@ -75,7 +75,7 @@ describe('VTPMService bundle runtime', () => {
       } as never);
     const r = await service.readBundlePCR('vm-1', 7);
     expect(mockClient.get).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(mockClient.get).mock.calls[1][0]).toBe('/v1/vtpm/bundles/vm-1/pcr/7');
+    expect(vi.mocked(mockClient.get).mock.calls[1]?.[0]).toBe('/v1/vtpm/bundles/vm-1/pcr/7');
     expect(r.success).toBe(true);
     expect(r.data?.value).toBe('3q2+7w==');
   });
@@ -88,7 +88,7 @@ describe('VTPMService bundle runtime', () => {
         data: { bundle_id: 'vm-1', pcr_index: 7, value: 'AA==' },
       } as never);
     const r = await service.readBundlePCR('vm-1', 7);
-    expect(vi.mocked(mockClient.get).mock.calls[1][0]).toBe('/v1/vtpm/bundles/vm-1/pcr/7');
+    expect(vi.mocked(mockClient.get).mock.calls[1]?.[0]).toBe('/v1/vtpm/bundles/vm-1/pcr/7');
     expect(r.data?.value).toBe('AA==');
   });
 
