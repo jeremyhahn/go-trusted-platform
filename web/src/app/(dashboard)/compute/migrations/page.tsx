@@ -39,6 +39,7 @@ export default function MigrationsPage() {
   const [arch, setArch] = useState<"x86_64" | "aarch64">("x86_64");
   const [secureBoot, setSecureBoot] = useState(false);
   const [tpmEnabled, setTpmEnabled] = useState(false);
+  const [enableKvm, setEnableKvm] = useState(true);
 
   const [receiverId, setReceiverId] = useState("");
   const [confirmCommit, setConfirmCommit] = useState<boolean | null>(null);
@@ -57,6 +58,7 @@ export default function MigrationsPage() {
     spec.arch = arch;
     spec.secureBoot = secureBoot;
     spec.tpmEnabled = tpmEnabled;
+    spec.enableKvm = enableKvm;
     const result = await ops.prepareMigration({
       vmName,
       vmId: sourceVmId || undefined,
@@ -184,6 +186,15 @@ export default function MigrationsPage() {
                     onChange={(e) => setTpmEnabled(e.target.checked)}
                   />
                   TPM
+                </label>
+                <label className="flex items-center gap-2" htmlFor="migration-kvm">
+                  <input
+                    id="migration-kvm"
+                    type="checkbox"
+                    checked={enableKvm}
+                    onChange={(e) => setEnableKvm(e.target.checked)}
+                  />
+                  KVM acceleration
                 </label>
               </div>
             </div>

@@ -3,6 +3,8 @@
 /**
  * VM operations on the VM detail page (#1727): attestation, metrics, disks,
  * snapshots and migration. Detach and migrate ask for confirmation first.
+ * Attach sends the Disk ID field, or a generated ID, and leaves it in the
+ * field, since the daemon returns no disk ID and GetVM lists no disks.
  */
 
 import { useState } from "react";
@@ -25,6 +27,12 @@ interface PendingConfirm {
   title: string;
   description: string;
   action: () => Promise<unknown>;
+}
+
+function newDiskId(): string {
+  const b = new Uint8Array(8);
+  globalThis.crypto.getRandomValues(b);
+  return "disk-" + Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
 }
 
 export function VMOperations({ vmId }: { vmId: string }) {
@@ -63,8 +71,10 @@ export function VMOperations({ vmId }: { vmId: string }) {
   const handleAttach = async () => {
     if (!diskPath) return;
     const sizeGb = Number(diskSize) || undefined;
-    if (await ops.attachDisk(vmId, { path: diskPath, sizeGb })) {
-      setDiskResult(`Attached ${diskPath}`);
+    const id = diskId.trim() || newDiskId();
+    if (await ops.attachDisk(vmId, { id, path: diskPath, sizeGb })) {
+      setDiskId(id);
+      setDiskResult(`Attached ${diskPath} as ${id}`);
     }
   };
 
