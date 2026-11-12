@@ -152,7 +152,10 @@ endif
 # so the pure-Go implementation must be selected explicitly or the
 # build fails with "build constraints exclude all Go files" in
 # go-mysql-server/internal/regex.
-BUILD_TAGS := iam rest quic mcp cluster gms_pure_go
+#
+# opa: the OPA policy engines (pkg/policy/opa, pkg/compute/container).
+# Without it they compile to stubs returning ErrOPANotBuilt (#1691).
+BUILD_TAGS := iam rest quic mcp cluster gms_pure_go opa
 
 # go-quicbaas tags.
 #
