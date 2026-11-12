@@ -31,7 +31,7 @@ import (
 // rendered as JSON.
 type AttestationManifestProvider interface {
 	AttestationGetManifest(ctx context.Context, id string) (any, error)
-	AttestationListManifests(ctx context.Context, limit, offset uint32) (any, error)
+	AttestationListManifests(ctx context.Context, hostID string, limit, offset uint32) (any, error)
 	AttestationBuildManifest(ctx context.Context, req ManifestBuildRequest) (any, error)
 	AttestationVerifyManifest(ctx context.Context, req ManifestVerifyRequest) (any, error)
 	AttestationDeleteManifest(ctx context.Context, id string) (any, error)
@@ -135,7 +135,7 @@ func (r *ToolRegistry) executeAttestationListManifests(ctx context.Context, p At
 	if err != nil {
 		return nil, err
 	}
-	return p.AttestationListManifests(ctx, limit, offset)
+	return p.AttestationListManifests(ctx, getString(args, "host_id"), limit, offset)
 }
 
 func (r *ToolRegistry) executeAttestationCreateManifest(ctx context.Context, p AttestationManifestProvider, args map[string]interface{}) (interface{}, error) {

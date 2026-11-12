@@ -70,9 +70,12 @@ func (s *memoryManifestService) GetManifest(_ context.Context, id string) (*mani
 	return m, nil
 }
 
-func (s *memoryManifestService) ListManifests(_ context.Context, _ *ListManifestsFilter) ([]*manifest.HostManifest, int, error) {
+func (s *memoryManifestService) ListManifests(_ context.Context, filter *ListManifestsFilter) ([]*manifest.HostManifest, int, error) {
 	out := make([]*manifest.HostManifest, 0, len(s.manifests))
 	for _, m := range s.manifests {
+		if filter != nil && filter.HostID != "" && m.HostID != filter.HostID {
+			continue
+		}
 		out = append(out, m)
 	}
 	return out, len(out), nil
@@ -164,6 +167,25 @@ func TestMCPManifestParity_List(t *testing.T) {
 	got, err := f.mcp(t, "attestation_list_manifests", map[string]interface{}{"limit": float64(5)})
 	require.NoError(t, err)
 	assert.Equal(t, asToolResult(t, want), got)
+}
+
+func TestMCPManifestParity_ListHostFilter(t *testing.T) {
+	f := newManifestParity()
+	f.svc.manifests["m-2"] = &manifest.HostManifest{ID: "m-2", HostID: "host-b", Timestamp: manifestFixtureTime, Nonce: []byte{4}, MerkleRoot: []byte{8}, Version: "1"}
+	f.svc.manifests["m-3"] = &manifest.HostManifest{ID: "m-3", HostID: "host-b", Timestamp: manifestFixtureTime, Nonce: []byte{5}, MerkleRoot: []byte{7}, Version: "1"}
+
+	got, err := f.mcp(t, "attestation_list_manifests", map[string]interface{}{"host_id": "host-a", "limit": float64(5)})
+	require.NoError(t, err)
+	want, err := f.grpc.ListManifests(context.Background(), &platformv1.ListManifestsRequest{HostId: "host-a", Limit: 5})
+	require.NoError(t, err)
+	require.Len(t, want.GetManifests(), 1)
+	assert.Equal(t, "host-a", want.GetManifests()[0].GetHostId())
+	assert.Equal(t, int32(1), int32(want.GetTotal()))
+	assert.Equal(t, asToolResult(t, want), got)
+
+	all, err := f.grpc.ListManifests(context.Background(), &platformv1.ListManifestsRequest{Limit: 5})
+	require.NoError(t, err)
+	assert.NotEqual(t, asToolResult(t, all), got)
 }
 
 func TestMCPManifestParity_Delete(t *testing.T) {

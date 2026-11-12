@@ -52,11 +52,12 @@ func (p *MCPServiceProvider) AttestationGetManifest(ctx context.Context, id stri
 }
 
 // AttestationListManifests serves attestation_list_manifests.
-func (p *MCPServiceProvider) AttestationListManifests(ctx context.Context, limit, offset uint32) (any, error) {
+func (p *MCPServiceProvider) AttestationListManifests(ctx context.Context, hostID string, limit, offset uint32) (any, error) {
 	if p.attestationServer == nil {
 		return nil, mcp.ErrAttestationManifestsNotConfigured
 	}
 	return protoResult(p.attestationServer.ListManifests(ctx, &platformv1.ListManifestsRequest{
+		HostId: hostID,
 		Limit:  limit,
 		Offset: offset,
 	}))
