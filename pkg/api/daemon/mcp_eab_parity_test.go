@@ -82,11 +82,27 @@ func TestEABParity_ErrorClass(t *testing.T) {
 			name:    "create invalid tenant",
 			arrange: func(f eabParityFixture) { f.svc.errGenerate = eab.ErrInvalidTenantID{} },
 			grpc: func(f eabParityFixture) error {
-				_, err := f.grpc.CreateCredential(ctx, &platformv1.CreateEABCredentialRequest{ProfileId: 1})
+				_, err := f.grpc.CreateCredential(ctx, &platformv1.CreateEABCredentialRequest{
+					ProfileId: 1, ExpiresInSeconds: 3600,
+				})
 				return err
 			},
 			mcp: func(f eabParityFixture) error {
-				_, err := f.mcp.EABCreateCredential(ctx, 1, "", 0, 0)
+				_, err := f.mcp.EABCreateCredential(ctx, 1, "", 3600, 0)
+				return err
+			},
+			want: codes.InvalidArgument,
+		},
+		{
+			name: "create missing expiry",
+			grpc: func(f eabParityFixture) error {
+				_, err := f.grpc.CreateCredential(ctx, &platformv1.CreateEABCredentialRequest{
+					ProfileId: 1, TenantId: "t",
+				})
+				return err
+			},
+			mcp: func(f eabParityFixture) error {
+				_, err := f.mcp.EABCreateCredential(ctx, 1, "t", 0, 0)
 				return err
 			},
 			want: codes.InvalidArgument,

@@ -194,18 +194,32 @@ func TestEABGRPCService_CreateCredential_Errors(t *testing.T) {
 		t.Errorf("negative expiry: expected InvalidArgument, got %v", err)
 	}
 
+	// A missing (zero) expiry is refused before Generate: no credential is
+	// ever issued without an expiration.
+	if _, err := service.CreateCredential(ctx, &platformv1.CreateEABCredentialRequest{
+		ProfileId: 1,
+		TenantId:  "t",
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("missing expiry: expected InvalidArgument, got %v", err)
+	}
+	if svc.lastGenerate.ProfileID != 0 {
+		t.Errorf("missing expiry: Generate must not be reached, got %+v", svc.lastGenerate)
+	}
+
 	// Typed domain errors map through the matcher table.
 	svc.errGenerate = eab.ErrInvalidProfileID{ProfileID: 0}
 	if _, err := service.CreateCredential(ctx, &platformv1.CreateEABCredentialRequest{
-		TenantId: "t",
+		TenantId:         "t",
+		ExpiresInSeconds: 3600,
 	}); status.Code(err) != codes.InvalidArgument {
 		t.Errorf("invalid profile: expected InvalidArgument, got %v", err)
 	}
 
 	svc.errGenerate = eab.ErrKeyGenerationFailed{Cause: context.Canceled}
 	if _, err := service.CreateCredential(ctx, &platformv1.CreateEABCredentialRequest{
-		ProfileId: 1,
-		TenantId:  "t",
+		ProfileId:        1,
+		TenantId:         "t",
+		ExpiresInSeconds: 3600,
 	}); status.Code(err) != codes.Internal {
 		t.Errorf("keygen failure: expected Internal, got %v", err)
 	}

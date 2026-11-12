@@ -71,7 +71,22 @@ test.describe('CA EAB credentials - list page', () => {
     await page.getByRole('button', { name: 'Create' }).click();
 
     await expect(
-      page.getByText('Expires in must be a positive whole number of seconds, or blank'),
+      page.getByText('Expires in must be a positive whole number of seconds'),
+    ).toBeVisible();
+    expect(api.calls.find((c) => c.method === 'POST' && c.path === '')).toBeUndefined();
+    await expect(page.getByTestId('eab-created')).not.toBeVisible();
+  });
+
+  test('refuses a blank expiration (CreateCredential)', async ({ page }) => {
+    const api = await mockEABApi(page, seed());
+    await page.goto('/ca/eab');
+
+    await page.getByLabel('Profile ID').fill('7');
+    await page.getByLabel('Tenant ID').fill('tenant-new');
+    await page.getByRole('button', { name: 'Create' }).click();
+
+    await expect(
+      page.getByText('Expires in must be a positive whole number of seconds'),
     ).toBeVisible();
     expect(api.calls.find((c) => c.method === 'POST' && c.path === '')).toBeUndefined();
     await expect(page.getByTestId('eab-created')).not.toBeVisible();
