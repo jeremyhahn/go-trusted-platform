@@ -79,6 +79,7 @@ export {
   listOptionsToParams,
   type ListOptions,
   AttestationService,
+  BMCService,
   CAService,
   ComputeService,
   DeviceService,
@@ -1011,6 +1012,20 @@ export type {
   DeleteVPNPosturePolicyResponse,
   ListVPNPosturePoliciesResponse,
 } from './types/vpn.js';
+
+// BMC types (#1736)
+export type {
+  BMCPowerStatus,
+  BMCBootDevice,
+  BMCMountISORequest,
+  BMCVirtualMediaStatus,
+  BMCSensor,
+  BMCSensorsResponse,
+  BMCSystemInfo,
+  BMCProvisionStatus,
+  BMCWebCertificate,
+  BMCOperationResult,
+} from './services/bmc-service.js';
 
 // =============================================================================
 // QuicBaaS Type Exports (28 services)
