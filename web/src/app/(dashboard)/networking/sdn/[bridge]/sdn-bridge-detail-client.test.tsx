@@ -211,3 +211,71 @@ describe('SDNBridgeDetailClient read failures and port identity', () => {
     expect(screen.getByTestId('port-stats').textContent).not.toContain('111');
   });
 });
+
+// #1755 Codex round 4: Apply Policy binds a rule and this bridge as the
+// target (ApplyPolicy installs flows per bridge target times rules), and the
+// policy dialog only shows the answer for the policy it was opened for.
+describe('SDNBridgeDetailClient policy apply and policy identity', () => {
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    push.mockReset();
+  });
+
+  it('apply policy submits a rule and a bridge target', async () => {
+    const sent = await renderPage({ [`POST ${SDN}/policies`]: ok({ policy: { id: 'pol-9' } }) });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Policy' }));
+    fireEvent.change(screen.getByLabelText('Name *'), { target: { value: 'deny-telnet' } });
+    expect((screen.getByRole('button', { name: 'Apply' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText('Action *'), { target: { value: 'POLICY_RULE_ACTION_DENY' } });
+    fireEvent.change(screen.getByLabelText('Protocol'), { target: { value: 'tcp' } });
+    fireEvent.change(screen.getByLabelText('Destination port'), { target: { value: '23' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    });
+
+    await waitFor(() => expect(sent.some((r) => r.method === 'POST' && r.path === `${SDN}/policies`)).toBe(true));
+    const body = sent.find((r) => r.method === 'POST' && r.path === `${SDN}/policies`)?.body as {
+      config: {
+        name: string;
+        rules: { ruleId: string; priority: number; action: string; match: Record<string, unknown> }[];
+        targets: { type: string; id: string }[];
+      };
+    };
+    expect(body.config.name).toBe('deny-telnet');
+    expect(body.config.rules.length).toBe(1);
+    expect(body.config.rules[0].action).toBe('POLICY_RULE_ACTION_DENY');
+    expect(body.config.rules[0].priority).toBe(100);
+    expect(body.config.rules[0].match).toEqual({ protocol: 'tcp', destinationPort: 23 });
+    expect(body.config.targets[0]).toEqual({ type: 'POLICY_TARGET_TYPE_BRIDGE', id: 'br-1' });
+  });
+
+  it('a refused policy read after viewing another policy shows the error, not the old policy', async () => {
+    await renderPage({
+      [`GET ${SDN}/policies`]: ok({
+        policies: [
+          { id: 'pol-a', config: { name: 'allow-a' }, status: 'POLICY_STATUS_ACTIVE' },
+          { id: 'pol-b', config: { name: 'allow-b' }, status: 'POLICY_STATUS_ACTIVE' },
+        ],
+      }),
+      [`GET ${SDN}/policies/pol-a`]: ok({
+        policy: {
+          id: 'pol-a',
+          config: { name: 'policy-a-detail', rules: [{ ruleId: 'r1' }, { ruleId: 'r2' }] },
+          hitCount: '7',
+        },
+      }),
+      [`GET ${SDN}/policies/pol-b`]: refused(403, 'policy read forbidden'),
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'View policy allow-a' }));
+    await waitFor(() => expect(screen.getByTestId('policy-detail').textContent).toContain('Rules: 2'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'View policy allow-b' }));
+    expect((await screen.findByTestId('policy-detail-error')).textContent).toContain('policy read forbidden');
+    expect(screen.queryByText(/policy-a-detail/)).toBeNull();
+    expect(screen.queryByText('Rules: 2')).toBeNull();
+    expect(screen.queryByTestId('policy-detail')).toBeNull();
+  });
+});

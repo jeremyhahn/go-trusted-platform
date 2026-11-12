@@ -114,9 +114,28 @@ test.describe('SDN bridge detail and ports', () => {
     await page.getByRole('button', { name: 'Apply Policy' }).click();
     await page.getByLabel('Name *').fill('allow-ssh');
     await page.getByLabel('Type', { exact: true }).selectOption('POLICY_TYPE_FIREWALL');
+    await expect(page.getByRole('button', { name: 'Apply', exact: true })).toBeDisabled();
+    await page.getByLabel('Action *').selectOption('POLICY_RULE_ACTION_ALLOW');
+    await page.getByLabel('Protocol').selectOption('tcp');
+    await page.getByLabel('Destination port').fill('22');
     await page.getByRole('button', { name: 'Apply', exact: true }).click();
+    // ApplyPolicy installs flows per bridge target times rules (#1755 Codex round 4).
     await expect.poll(() => called(calls, 'POST', '/policies')?.body).toEqual({
-      config: { name: 'allow-ssh', type: 'POLICY_TYPE_FIREWALL', enabled: true },
+      config: {
+        name: 'allow-ssh',
+        type: 'POLICY_TYPE_FIREWALL',
+        enabled: true,
+        priority: 100,
+        rules: [
+          {
+            ruleId: 'rule-1',
+            priority: 100,
+            action: 'POLICY_RULE_ACTION_ALLOW',
+            match: { protocol: 'tcp', destinationPort: 22 },
+          },
+        ],
+        targets: [{ type: 'POLICY_TARGET_TYPE_BRIDGE', id: 'br-1' }],
+      },
     });
     await expect(page.getByText('Policy applied').first()).toBeVisible();
   });
