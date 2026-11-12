@@ -34,7 +34,7 @@ test.describe('Admin tenant lifecycle, quota and DEK (#1673)', () => {
       await mockAdminTenantsApi(page, {
         tenants: [
           createMockAdminTenant(),
-          createMockAdminTenant({ id: 'tenant-2', name: 'globex', displayName: 'Globex', state: 'SUSPENDED' }),
+          createMockAdminTenant({ id: 'tenant-2', name: 'globex', displayName: 'Globex', state: 'TENANT_STATE_SUSPENDED' }),
         ],
       });
       await page.goto('/admin/tenants/');
@@ -107,11 +107,12 @@ test.describe('Admin tenant lifecycle, quota and DEK (#1673)', () => {
       await confirm(page);
       await expect(page.getByTestId('action-result')).toHaveText('Tenant suspended');
       await expect(page.getByTestId('tenant-state')).toHaveText('SUSPENDED');
+      await expect(page.getByRole('button', { name: 'Resume' })).toBeVisible();
       expect(lastCall(api.calls, 'POST', '/tenant-1/suspend')).toBeDefined();
     });
 
     test('ResumeTenant resumes a suspended tenant', async ({ page }) => {
-      const api = await mockAdminTenantsApi(page, { tenants: [createMockAdminTenant({ state: 'SUSPENDED' })] });
+      const api = await mockAdminTenantsApi(page, { tenants: [createMockAdminTenant({ state: 'TENANT_STATE_SUSPENDED' })] });
       await page.goto(DETAIL);
       await page.getByRole('button', { name: 'Resume' }).click();
       await expect(page.getByTestId('action-result')).toHaveText('Tenant resumed');
@@ -123,13 +124,15 @@ test.describe('Admin tenant lifecycle, quota and DEK (#1673)', () => {
       const api = await mockAdminTenantsApi(page);
       await page.goto(DETAIL);
       await expect(page.getByTestId('current-quota')).toContainText('VMs 10');
+      // Only Max VMs is edited: the other limits, maxContainers included,
+      // must be sent with their current values, because the server replaces
+      // the whole compute section.
       await page.getByLabel('Max VMs').fill('20');
-      await page.getByLabel('Max vCPUs').fill('80');
       await page.getByRole('button', { name: 'Save quotas' }).click();
       await expect(page.getByTestId('action-result')).toHaveText('Quotas updated');
-      await expect(page.getByTestId('current-quota')).toContainText('VMs 20, vCPUs 80');
-      expect(lastCall(api.calls, 'PUT', '/tenant-1/quotas')?.body).toMatchObject({
-        compute: { maxVms: 20, maxVcpus: 80 },
+      await expect(page.getByTestId('current-quota')).toContainText('VMs 20, vCPUs 40, memory 65536 MB');
+      expect(lastCall(api.calls, 'PUT', '/tenant-1/quotas')?.body).toEqual({
+        compute: { maxVms: 20, maxContainers: 5, maxVcpus: 40, maxMemoryMb: 65536 },
       });
     });
 
@@ -140,7 +143,7 @@ test.describe('Admin tenant lifecycle, quota and DEK (#1673)', () => {
       await page.getByLabel('Amount').fill('8');
       await page.getByRole('button', { name: 'Check quota' }).click();
       await expect(page.getByTestId('action-result')).toHaveText('Quota exceeded for 8 vcpus');
-      expect(lastCall(api.calls, 'POST', '/tenant-1/quotas/check')?.body).toEqual({ resource: 'vcpus', amount: 8 });
+      expect(lastCall(api.calls, 'POST', '/tenant-1/quota-check')?.body).toEqual({ resource: 'vcpus', amount: 8 });
     });
 
     test('Sync syncs the tenant', async ({ page }) => {
@@ -165,17 +168,19 @@ test.describe('Admin tenant lifecycle, quota and DEK (#1673)', () => {
       const api = await mockAdminTenantsApi(page);
       await page.goto(DETAIL);
       await expect(page.getByTestId('dek-status')).toContainText('Version 1, AES-256-GCM, ACTIVE, usage 1%');
-      expect(lastCall(api.calls, 'GET', '/tenant-1/dek/status')).toBeDefined();
+      expect(lastCall(api.calls, 'GET', '/tenant-1/dek')).toBeDefined();
     });
 
     test('InitTenantBarrier initialises the barrier', async ({ page }) => {
       const api = await mockAdminTenantsApi(page);
       await page.goto(DETAIL);
-      await page.getByLabel('Threshold').fill('2');
-      await page.getByLabel('Shares').fill('3');
+      // Tenant barriers take no Shamir settings: the server refuses any
+      // non-zero threshold or shares.
+      await expect(page.getByLabel('Threshold')).toHaveCount(0);
+      await expect(page.getByLabel('Shares')).toHaveCount(0);
       await page.getByRole('button', { name: 'Initialise barrier' }).click();
       await expect(page.getByTestId('action-result')).toHaveText('Barrier initialised');
-      expect(lastCall(api.calls, 'POST', '/tenant-1/barrier/init')?.body).toEqual({ threshold: 2, shares: 3 });
+      expect(lastCall(api.calls, 'POST', '/tenant-1/barrier/init')?.body).toEqual({});
     });
 
     test('UnsealTenantBarrier unseals the barrier', async ({ page }) => {

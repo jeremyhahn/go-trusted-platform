@@ -64,3 +64,20 @@ describe('TenantService barrier operations', () => {
     expect(calls[0]?.url).toContain('/v1/tenants/t1/barrier/seal');
   });
 });
+
+describe('TenantService quota-check and DEK routes', () => {
+  it('checkQuota posts resource and amount to quota-check', async () => {
+    const { client, calls } = recordingClient();
+    await new TenantService(client).checkQuota({ tenantId: 't1', resource: 'vcpus', amount: 8 });
+    expect(calls[0]?.method).toBe('POST');
+    expect(calls[0]?.url).toMatch(/\/v1\/tenants\/t1\/quota-check$/);
+    expect(calls[0]?.body).toEqual({ resource: 'vcpus', amount: 8 });
+  });
+
+  it('getDEKStatus gets the dek route', async () => {
+    const { client, calls } = recordingClient();
+    await new TenantService(client).getDEKStatus('t1');
+    expect(calls[0]?.method).toBe('GET');
+    expect(calls[0]?.url).toMatch(/\/v1\/tenants\/t1\/dek$/);
+  });
+});
