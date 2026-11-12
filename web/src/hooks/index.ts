@@ -82,10 +82,12 @@ export type { User, AuthContextType } from '@/contexts/AuthContext';
 export { useToast, toast, dismissToast } from './use-toast';
 export type { Toast, UseToastReturn } from './use-toast';
 
+export { useTPMOps, textToBase64, base64ToHex } from './use-tpm-ops';
 export { useVMOperations, attestationNonce } from './use-vm-operations';
 export type { UseVMOperationsResult } from './use-vm-operations';
 
 export { useReportedGateways } from './use-reported-gateways';
+export { useOverlayVteps } from './use-overlay-vteps';
 export type {
   ReportedGateway,
   UseReportedGatewaysOptions,
