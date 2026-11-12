@@ -24,7 +24,7 @@ describe('devices/templates/[id] page', () => {
   describe('Page', () => {
     it('renders the template detail client component', () => {
       render(<Page />);
-      expect(screen.getByTestId('template-detail-client')).toBeInTheDocument();
+      expect(screen.getByTestId('template-detail-client').textContent).toBe('template detail');
     });
 
     it('renders only the client component', () => {
