@@ -155,6 +155,7 @@ const navigation = [
       { title: "Flows", href: "/networking/flows" },
       { title: "VLANs", href: "/networking/vlans" },
       { title: "DNS Zones", href: "/networking/dns" },
+      { title: "NTP", href: "/networking/ntp" },
       { title: "Overlays", href: "/networking/overlays" },
       { title: "Gateway", href: "/networking/gateway" },
       { title: "VPN", href: "/networking/vpn" },
