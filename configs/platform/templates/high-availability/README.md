@@ -1,4 +1,4 @@
-# High-Availability Deployment Profile (Planned)
+# High-Availability Deployment Profile
 
 Full HA cluster layout:
 
@@ -8,8 +8,12 @@ Full HA cluster layout:
 
 ## Status
 
-Not implemented yet. Will be populated once the `dedicated/` profile is
-proven end-to-end.
+The three control-plane templates are under `supermicro/x10/cp1..cp3`
+(`cp1/control-plane.yaml`, `cp2/control-plane.yaml`, `cp3/control-plane.yaml`):
+the x10 dedicated control plane with node-id 1, 2 and 3, one shared
+`deployment-id`, all three members in `join-addresses`, `pebble` storage and
+Raft mutual TLS. The gateway pair (#710) and the compute pair are not provided
+yet.
 
 ## Intended Use
 
