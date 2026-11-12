@@ -1,6 +1,6 @@
 import { test, expect, Page } from '@playwright/test';
 import { createTenantOwnerSession } from './fixtures/auth-setup';
-import { mockTenantApi, mockHealthApi, mockVTPMRuntimeApi, VTPMRuntimeCall } from './fixtures/api-mock';
+import { mockTenantApi, mockHealthApi, mockVTPMRuntimeApi, VTPMRuntimeCall, VTPMRuntimeApiMockConfig } from './fixtures/api-mock';
 
 /**
  * vTPM runtime page (#1726): every bundle runtime operation is reachable
@@ -12,10 +12,13 @@ import { mockTenantApi, mockHealthApi, mockVTPMRuntimeApi, VTPMRuntimeCall } fro
 
 const BUNDLE = 'vm-1';
 
-async function openRuntimePage(page: Page): Promise<VTPMRuntimeCall[]> {
+async function openRuntimePage(
+  page: Page,
+  config: VTPMRuntimeApiMockConfig = {}
+): Promise<VTPMRuntimeCall[]> {
   await mockTenantApi(page);
   await mockHealthApi(page);
-  const { calls } = await mockVTPMRuntimeApi(page);
+  const { calls } = await mockVTPMRuntimeApi(page, config);
   await page.goto('/tpm/vtpm/__placeholder__/');
   await expect(page.getByRole('heading', { name: 'vTPM Runtime' })).toBeVisible();
   await page.getByLabel('Bundle ID').fill(BUNDLE);
@@ -109,7 +112,7 @@ test.describe('vTPM runtime page', () => {
   test('ExtendVTPMPCR extends a PCR after the confirm dialog', async ({ page }) => {
     const calls = await openRuntimePage(page);
     await page.getByLabel('Extend PCR index').fill('16');
-    await page.getByLabel('Digest (hex)').fill('00ff');
+    await page.getByLabel('Data to extend (hex)').fill('00ff');
 
     await page.getByRole('button', { name: 'Extend PCR' }).click();
     const dialog = page.getByRole('dialog');
@@ -134,5 +137,62 @@ test.describe('vTPM runtime page', () => {
     const call = lastCall(calls, 'pcrs');
     expect(call?.method).toBe('GET');
     expect(call?.query).toBe('?pcr_index=7');
+  });
+
+  test('an empty extend index shows an error and sends no extend', async ({ page }) => {
+    const calls = await openRuntimePage(page);
+    await page.getByLabel('Extend PCR index').fill('');
+    await page.getByLabel('Data to extend (hex)').fill('00ff');
+
+    await page.getByRole('button', { name: 'Extend PCR' }).click();
+
+    await expect(page.getByText('Enter exactly one PCR index (0-23)').first()).toBeVisible();
+    await expect(page.getByRole('dialog')).toBeHidden();
+    expect(lastCall(calls, 'pcrs/extend')).toBeUndefined();
+  });
+
+  test('a list as the extend index shows an error and sends no extend', async ({ page }) => {
+    const calls = await openRuntimePage(page);
+    await page.getByLabel('Extend PCR index').fill('1,2');
+    await page.getByLabel('Data to extend (hex)').fill('00ff');
+
+    await page.getByRole('button', { name: 'Extend PCR' }).click();
+
+    await expect(page.getByText('Enter exactly one PCR index (0-23)').first()).toBeVisible();
+    await expect(page.getByRole('dialog')).toBeHidden();
+    expect(lastCall(calls, 'pcrs/extend')).toBeUndefined();
+  });
+
+  test('an empty read index shows an error and sends no read', async ({ page }) => {
+    const calls = await openRuntimePage(page);
+    await page.getByLabel('Read PCR index').fill('');
+
+    await page.getByRole('button', { name: 'Read PCR' }).click();
+
+    await expect(page.getByText('Enter exactly one PCR index (0-23)').first()).toBeVisible();
+    expect(lastCall(calls, 'pcrs')).toBeUndefined();
+    await expect(page.getByTestId('vtpm-pcr-value')).toHaveCount(0);
+  });
+
+  test('switching bundles drops the previous bundle results and late replies', async ({ page }) => {
+    const calls = await openRuntimePage(page, { delayMs: { start: 1500 } });
+
+    // Bundle A: quote and read a PCR, then start with a held reply.
+    await page.getByRole('button', { name: 'Quote', exact: true }).click();
+    await expect(page.getByTestId('vtpm-quote-result')).toBeVisible();
+    await page.getByLabel('Read PCR index').fill('7');
+    await page.getByRole('button', { name: 'Read PCR' }).click();
+    await expect(page.getByTestId('vtpm-pcr-value')).toBeVisible();
+    await page.getByRole('button', { name: 'Start vTPM' }).click();
+    await expect.poll(() => lastCall(calls, 'start')?.method).toBe('POST');
+
+    // Bundle B before A's start answers.
+    await page.getByLabel('Bundle ID').fill('vm-2');
+    await page.waitForTimeout(2000);
+
+    await expect(page.getByTestId('vtpm-run-state')).toHaveText('Unknown');
+    await expect(page.getByTestId('vtpm-socket')).toHaveCount(0);
+    await expect(page.getByTestId('vtpm-quote-result')).toHaveCount(0);
+    await expect(page.getByTestId('vtpm-pcr-value')).toHaveCount(0);
   });
 });

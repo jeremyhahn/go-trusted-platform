@@ -717,6 +717,8 @@ export interface VTPMRuntimeCall {
 export interface VTPMRuntimeApiMockConfig {
   /** Error to return for every runtime route (e.g. bundle not running) */
   error?: ApiError;
+  /** Per-operation reply delay in ms, keyed by operation ('start', 'quote', 'pcrs/extend', 'pcrs', ...) */
+  delayMs?: Record<string, number>;
 }
 
 /**
@@ -752,6 +754,11 @@ export async function mockVTPMRuntimeApi(
     const method = request.method();
     const body = method === 'POST' ? (request.postDataJSON() as Record<string, unknown> | null) : null;
     calls.push({ method, path: `${op}`, query: url.search, body });
+
+    const delay = config.delayMs?.[op] ?? 0;
+    if (delay > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
 
     if (config.error) {
       await route.fulfill({
