@@ -19,6 +19,9 @@ import type {
   DeleteEABCredentialResponse,
   GetEABQRCodeResponse,
   GetEnrollmentURLResponse,
+  MarkEABCredentialUsedResponse,
+  CleanupExpiredEABCredentialsRequest,
+  CleanupExpiredEABCredentialsResponse,
 } from '../../types/eab.js';
 import type { ApiResponse } from '../../types/api.js';
 import { usePlatformClient } from '../context.js';
@@ -51,6 +54,15 @@ export interface UseEABResult {
 
   /** Mutation for getting enrollment URL */
   getEnrollmentURL: UseMutationResult<GetEnrollmentURLResponse, number>;
+
+  /** Mutation for marking a credential used */
+  markUsed: UseMutationResult<MarkEABCredentialUsedResponse, number>;
+
+  /** Mutation for deleting expired credentials */
+  cleanupExpired: UseMutationResult<
+    CleanupExpiredEABCredentialsResponse,
+    CleanupExpiredEABCredentialsRequest | undefined
+  >;
 }
 
 /**
@@ -127,6 +139,21 @@ export function useEAB(): UseEABResult {
       service.getEnrollmentURL(id)
   );
 
+  const markUsed = useMutation<MarkEABCredentialUsedResponse, number>(
+    (id: number): Promise<ApiResponse<MarkEABCredentialUsedResponse>> =>
+      service.markUsed(id)
+  );
+
+  const cleanupExpired = useMutation<
+    CleanupExpiredEABCredentialsResponse,
+    CleanupExpiredEABCredentialsRequest | undefined
+  >(
+    (
+      request: CleanupExpiredEABCredentialsRequest | undefined
+    ): Promise<ApiResponse<CleanupExpiredEABCredentialsResponse>> =>
+      service.cleanupExpired(request)
+  );
+
   return {
     service,
     create,
@@ -135,6 +162,8 @@ export function useEAB(): UseEABResult {
     deleteCredential,
     getQRCode,
     getEnrollmentURL,
+    markUsed,
+    cleanupExpired,
   };
 }
 

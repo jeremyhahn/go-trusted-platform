@@ -22,6 +22,9 @@ import type {
   DeleteEABCredentialResponse,
   GetEABQRCodeResponse,
   GetEnrollmentURLResponse,
+  MarkEABCredentialUsedResponse,
+  CleanupExpiredEABCredentialsRequest,
+  CleanupExpiredEABCredentialsResponse,
 } from '../types/eab.js';
 
 /**
@@ -191,6 +194,34 @@ export class EABService extends BaseService {
   async getEnrollmentURL(id: number): Promise<ApiResponse<GetEnrollmentURLResponse>> {
     return this.client.get<GetEnrollmentURLResponse>(
       this.buildUrl(`/credentials/${id}/enrollment-url`)
+    );
+  }
+
+  /**
+   * Mark an EAB credential as used
+   *
+   * @param id - Credential ID
+   * @returns Operation status
+   */
+  async markUsed(id: number): Promise<ApiResponse<MarkEABCredentialUsedResponse>> {
+    return this.client.post<MarkEABCredentialUsedResponse>(
+      this.buildUrl(`/credentials/${id}/used`),
+      {}
+    );
+  }
+
+  /**
+   * Delete expired EAB credentials
+   *
+   * @param request - Optional tenant filter (empty means all tenants)
+   * @returns Number of credentials deleted
+   */
+  async cleanupExpired(
+    request?: CleanupExpiredEABCredentialsRequest
+  ): Promise<ApiResponse<CleanupExpiredEABCredentialsResponse>> {
+    return this.client.post<CleanupExpiredEABCredentialsResponse>(
+      this.buildUrl('/credentials/cleanup'),
+      request ?? {}
     );
   }
 }
