@@ -53,17 +53,11 @@ func expandTilde(path string) string {
 	return filepath.Join(home, path[2:])
 }
 
-// remoteISOClient is the small, testable subset of *deployer.SSHClient used
+// remoteISOClient is the deploy transport seam (deployer.RemoteHost) used
 // by sshISOStager. Pulling it out as an interface keeps the freshness logic
 // (size + sha256 comparison) unit-testable without spinning up a real SSH
 // server, while production code still drives a real SSH connection.
-type remoteISOClient interface {
-	Connect(ctx context.Context) error
-	Close() error
-	Run(ctx context.Context, command string) (string, error)
-	StatRemote(ctx context.Context, remotePath string) (size int64, mtime int64, err error)
-	CopyFileStream(ctx context.Context, localPath, remotePath string) error
-}
+type remoteISOClient = deployer.RemoteHost
 
 // newRemoteISOClient is the factory used by sshISOStager to obtain its
 // remote client. Tests override it via the exported test hook to inject a

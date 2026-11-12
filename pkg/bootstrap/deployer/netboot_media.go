@@ -31,11 +31,8 @@ import (
 const containerDataDir = "/data"
 
 // remoteHost is what staging needs from the deploy target: run a command,
-// and stream a file to a path. *SSHClient provides both.
-type remoteHost interface {
-	Run(ctx context.Context, command string) (string, error)
-	CopyFileStream(ctx context.Context, localPath, remotePath string) error
-}
+// and stream a file to a path. Every RemoteHost provides both.
+type remoteHost = RemoteStager
 
 // netbootMediaPaths are the container-side paths the staged build's index
 // names, which the container is configured with.
