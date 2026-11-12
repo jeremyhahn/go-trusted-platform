@@ -25,6 +25,21 @@ export interface UseSwitchPortsResult {
  * Every action resolves to the response payload, or throws the transport
  * error so the caller can show it.
  */
+/**
+ * The PlatformProvider leaves throwOnError off, so a failed request resolves
+ * to { success: false, error }. Throw it, so callers never read a failure as
+ * success.
+ */
+function unwrap<T>(
+  res: { success: boolean; data?: T; error?: { message?: string } },
+  op: string
+): T | undefined {
+  if (!res.success) {
+    throw new Error(res.error?.message || `${op} failed`);
+  }
+  return res.data;
+}
+
 export function useSwitchPorts(switchName: string): UseSwitchPortsResult {
   const client = usePlatformClient();
   const service = client.switches;
@@ -35,20 +50,20 @@ export function useSwitchPorts(switchName: string): UseSwitchPortsResult {
   );
 
   const getPortStatus = useCallback(
-    async (port: string) => (await service.getPortStatus(switchName, port)).data,
+    async (port: string) => unwrap(await service.getPortStatus(switchName, port), 'Get port status'),
     [service, switchName]
   );
   const enablePort = useCallback(
-    async (port: string) => (await service.enablePort(switchName, port)).data,
+    async (port: string) => unwrap(await service.enablePort(switchName, port), 'Enable port'),
     [service, switchName]
   );
   const disablePort = useCallback(
-    async (port: string) => (await service.disablePort(switchName, port)).data,
+    async (port: string) => unwrap(await service.disablePort(switchName, port), 'Disable port'),
     [service, switchName]
   );
   const setPortVLAN = useCallback(
     async (port: string, vlanId: number) =>
-      (await service.setPortVLAN(switchName, port, vlanId)).data,
+      unwrap(await service.setPortVLAN(switchName, port, vlanId), 'Set port VLAN'),
     [service, switchName]
   );
 
