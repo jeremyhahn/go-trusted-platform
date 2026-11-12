@@ -84,11 +84,13 @@ func (m *MTLSAdapter) Authenticate(ctx context.Context, cert *x509.Certificate) 
 		return nil, ErrCertificateExpired{}
 	}
 
-	// Validate against trusted roots
-	if m.config.TrustedRoots != nil {
-		if err := m.validateCertificate(ctx, cert); err != nil {
-			return nil, err
-		}
+	// Validate against trusted roots. Without roots the chain cannot be
+	// verified, so authentication fails closed.
+	if m.config.TrustedRoots == nil {
+		return nil, ErrMissingTrustedRoots{}
+	}
+	if err := m.validateCertificate(ctx, cert); err != nil {
+		return nil, err
 	}
 
 	// Check revocation if enabled
@@ -306,8 +308,8 @@ func (m *MTLSAdapter) checkRevocation(ctx context.Context, cert *x509.Certificat
 		if strings.Contains(err.Error(), "revoked") {
 			return ErrCertificateRevoked{}
 		}
-		// Log but don't fail for other verification issues during revocation check
-		m.logger.Debugf("auth: certificate verification during revocation check: %v", err)
+		// Any other CA failure means revocation status is unknown: fail closed.
+		return ErrRevocationCheckFailed{Reason: "certificate authority verify failed", Err: err}
 	}
 
 	return nil
