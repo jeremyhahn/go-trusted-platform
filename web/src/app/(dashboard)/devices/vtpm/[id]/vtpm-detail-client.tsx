@@ -83,8 +83,8 @@ export default function VTPMDetailPage() {
           throw new Error('Failed to fetch vTPM');
         }
         if (active) {
-        // The REST payload carries the VTPMDetail fields, which differ from
-        // the SDK/proto declaration of the bundle (#445).
+          // The REST payload carries the VTPMDetail fields, which differ from
+          // the SDK/proto declaration of the bundle (#445).
           setVTPM(response.data as unknown as VTPMDetail);
         }
       })
