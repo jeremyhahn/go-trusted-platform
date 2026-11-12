@@ -113,6 +113,27 @@ test.describe('Switch ports', () => {
     );
   });
 
+  test('SetPortVLAN: a trunk port offers no VLAN form', async ({ page }) => {
+    await openSwitch(page);
+
+    await expect(page.getByTestId('port-row-Eth1/1').getByRole('button', { name: 'Set VLAN' })).toHaveCount(1);
+    await expect(page.getByTestId('port-row-Eth1/2').getByRole('button', { name: 'Set VLAN' })).toHaveCount(0);
+  });
+
+  test('GetPortStatus: link state comes from the port list', async ({ page }) => {
+    const calls = await openSwitch(page);
+
+    // Eth1/1 is up in the list; the single-port reply always says link_up false.
+    await page.getByTestId('port-row-Eth1/1').getByRole('button', { name: 'Status' }).click();
+
+    const status = page.getByTestId('port-status');
+    await expect(status).toBeVisible();
+    const link = status.getByText('Link', { exact: true }).locator('xpath=following-sibling::dd[1]');
+    await expect(link).toHaveText('up');
+    await expect(link).not.toHaveText('down');
+    expect(calls).toContainEqual(expect.objectContaining({ method: 'GET', port: 'Eth1/1', action: undefined }));
+  });
+
   test('GetPortStatus: a failed response shows an error and no status', async ({ page }) => {
     const calls = await openSwitch(page, ['status']);
 

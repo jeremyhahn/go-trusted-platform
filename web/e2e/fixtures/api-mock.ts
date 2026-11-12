@@ -519,7 +519,8 @@ export async function mockSwitchApi(
       return;
     }
     if (!action && request.method() === 'GET') {
-      await route.fulfill(ok(status));
+      // The server's single-port status never reports link state (always false).
+      await route.fulfill(ok({ ...status, link_up: false }));
       return;
     }
     if (action === 'enable' || action === 'disable') {
@@ -529,6 +530,8 @@ export async function mockSwitchApi(
     }
     if (action === 'vlan') {
       const vlanId = (body as { vlan_id?: number } | undefined)?.vlan_id ?? 0;
+      // The server forces access mode before it sets the VLAN.
+      status.mode = 'access';
       status.access_vlan = vlanId;
       await route.fulfill(ok({ switch: switchName, port, vlan_id: vlanId, status: 'ok' }));
       return;
