@@ -85,6 +85,7 @@ export type { Toast, UseToastReturn } from './use-toast';
 export { useTPMOps, textToBase64, base64ToHex } from './use-tpm-ops';
 
 export { useReportedGateways } from './use-reported-gateways';
+export { useOverlayVteps } from './use-overlay-vteps';
 export type {
   ReportedGateway,
   UseReportedGatewaysOptions,
