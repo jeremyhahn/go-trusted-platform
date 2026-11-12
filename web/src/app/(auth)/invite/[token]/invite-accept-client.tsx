@@ -7,8 +7,6 @@ import { usePathname } from "next/navigation";
 import { AlertCircle, CheckCircle2, Loader2, Mail } from "lucide-react";
 import { resolveDynamicId } from "@/utils/dynamic-route";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   Card,
   CardContent,
@@ -18,6 +16,42 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { toInvitationView, useInvitation, useInvitationByToken } from "@/hooks";
+import { useSessionToken } from "@/hooks/use-session-token";
+import { decodeJWT } from "@/utils/jwt";
+
+// signedInUserId returns the numeric user ID of the signed-in session, or
+// null when there is no session or its subject is not a decimal user ID.
+function signedInUserId(sessionToken: string | null): string | null {
+  if (!sessionToken) {
+    return null;
+  }
+  const payload = decodeJWT(sessionToken);
+  const id = payload?.user_id ?? payload?.sub;
+  return typeof id === "string" && /^[1-9][0-9]*$/.test(id) ? id : null;
+}
+
+// errorMessage reads the message of an SDK MutationError (a plain object,
+// not an Error instance), with a fallback for any other value.
+function errorMessage(err: unknown, fallback: string): string {
+  if (
+    err &&
+    typeof err === "object" &&
+    "message" in err &&
+    typeof (err as { message: unknown }).message === "string" &&
+    (err as { message: string }).message
+  ) {
+    return (err as { message: string }).message;
+  }
+  return fallback;
+}
+
+function passkeySignUpHref(token: string, tenantName?: string): string {
+  let href = `/auth/webauthn?invitation=${encodeURIComponent(token)}`;
+  if (tenantName) {
+    href += `&tenant_name=${encodeURIComponent(tenantName)}`;
+  }
+  return href;
+}
 
 /**
  * Invitation accept page: looks the invitation up by its token
@@ -32,27 +66,26 @@ export default function InviteAcceptClient({ params }: { params: Promise<{ token
   const invitation = React.useMemo(() => toInvitationView(data), [data]);
   const { accept } = useInvitation();
 
-  const [name, setName] = React.useState("");
-  const [password, setPassword] = React.useState("");
+  const sessionToken = useSessionToken();
+  const userId = React.useMemo(() => signedInUserId(sessionToken), [sessionToken]);
   const [accepted, setAccepted] = React.useState(false);
   const [acceptError, setAcceptError] = React.useState<string | null>(null);
 
   const handleAccept = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (!userId) {
+      return;
+    }
     setAcceptError(null);
     try {
-      const result = await accept.mutateAsync({
-        token,
-        ...(name ? { name } : {}),
-        ...(password ? { password } : {}),
-      });
+      const result = await accept.mutateAsync({ token, userId });
       if (result && result.success === false) {
         setAcceptError(result.message || "The invitation could not be accepted");
         return;
       }
       setAccepted(true);
     } catch (err) {
-      setAcceptError(err instanceof Error ? err.message : "Failed to accept invitation");
+      setAcceptError(errorMessage(err, "Failed to accept invitation"));
     }
   };
 
@@ -112,40 +145,38 @@ export default function InviteAcceptClient({ params }: { params: Promise<{ token
           <span className="font-medium">{invitation.role}</span>.
         </CardDescription>
       </CardHeader>
-      {canAccept ? (
+      {canAccept && userId ? (
         <form onSubmit={handleAccept}>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="invite-name">Name</Label>
-              <Input
-                id="invite-name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                autoComplete="name"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="invite-password">Password (new accounts only)</Label>
-              <Input
-                id="invite-password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                autoComplete="new-password"
-              />
-            </div>
-            {acceptError && (
+          {acceptError && (
+            <CardContent>
               <p role="alert" className="text-sm text-destructive">
                 {acceptError}
               </p>
-            )}
-          </CardContent>
+            </CardContent>
+          )}
           <CardFooter>
             <Button type="submit" className="w-full" disabled={accept.isLoading}>
               {accept.isLoading ? "Accepting..." : "Accept Invitation"}
             </Button>
           </CardFooter>
         </form>
+      ) : canAccept ? (
+        <>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">
+              Already have an account?{" "}
+              <Link href="/auth/login" className="underline">
+                Sign in
+              </Link>
+              , then open this link again.
+            </p>
+          </CardContent>
+          <CardFooter>
+            <Button asChild className="w-full">
+              <Link href={passkeySignUpHref(token, invitation.tenantName)}>Create account with passkey</Link>
+            </Button>
+          </CardFooter>
+        </>
       ) : (
         <CardContent>
           <p role="alert" className="text-sm text-muted-foreground">
