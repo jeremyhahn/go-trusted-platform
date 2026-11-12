@@ -2,8 +2,9 @@ import { test, expect, Page } from '@playwright/test';
 import { createTenantOwnerSession } from './fixtures/auth-setup';
 import { mockTenantApi, errorEnvelope } from './fixtures/api-mock';
 
-// #1732 (epic #1665, slice 1): attestation collect, manifest verify and
-// manifest delete, every REST operation reachable from the dashboard.
+// #1732 (epic #1665, slice 1): attestation collect and manifest delete from
+// the dashboard. Manifest verification is not offered until the verifier
+// fails closed (#1732 review).
 
 interface Call {
   method: string;
@@ -16,7 +17,7 @@ function envelope(payload: unknown, code = 200): string {
 }
 
 /** Mocks the attestation routes this page drives and records each call. */
-async function mockCollectApi(page: Page, options: { failVerify?: boolean } = {}) {
+async function mockCollectApi(page: Page) {
   const calls: Call[] = [];
   await page.route('**/api/v1/attestation/**', async (route) => {
     const request = route.request();
@@ -43,11 +44,9 @@ async function mockCollectApi(page: Page, options: { failVerify?: boolean } = {}
       return;
     }
     if (method === 'POST' && path === '/manifests/verify') {
-      if (options.failVerify) {
-        await route.fulfill({ status: 400, contentType: 'application/json', body: errorEnvelope({ status: 400, error: 'attestation: manifest signature does not verify' }) });
-        return;
-      }
-      await route.fulfill({ status: 200, contentType: 'application/json', body: envelope({ status: { success: true }, result: { valid: true, verdict: 'manifest-verified' } }) });
+      // The page must not offer manifest verification until the verifier
+      // fails closed (#1732 review); a call here is recorded and refused.
+      await route.fulfill({ status: 500, contentType: 'application/json', body: errorEnvelope({ status: 500, error: 'manifest verification is not offered' }) });
       return;
     }
     if (method === 'DELETE' && path.startsWith('/manifests/')) {
@@ -59,34 +58,29 @@ async function mockCollectApi(page: Page, options: { failVerify?: boolean } = {}
   return calls;
 }
 
-async function openCollectPage(page: Page, options: { failVerify?: boolean } = {}) {
+async function openCollectPage(page: Page) {
   await createTenantOwnerSession(page.context());
   await mockTenantApi(page);
-  const calls = await mockCollectApi(page, options);
+  const calls = await mockCollectApi(page);
   await page.goto('/attestation/collect');
   await expect(page.getByRole('heading', { name: 'Attestation Collect' })).toBeVisible();
   return calls;
 }
 
 test.describe('Attestation collect and manifests (#1732)', () => {
-  test('VerifyManifest: POST /manifests/verify shows the verdict', async ({ page }) => {
+  test('the page offers no manifest verification (#1732 review)', async ({ page }) => {
     const calls = await openCollectPage(page);
-    await page.getByLabel('Manifest JSON').fill(JSON.stringify({ id: 'm-1', hostId: 'host-under-test' }));
-    await page.getByRole('button', { name: 'Verify manifest' }).click();
+    await expect(page.getByLabel('Manifest JSON')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Verify manifest' })).toHaveCount(0);
 
-    const result = page.getByTestId('collect-result');
-    await expect(result).toContainText('Manifest verification');
-    await expect(result).toContainText('manifest-verified');
-    const call = calls.find((c) => c.path === '/manifests/verify');
-    expect(call?.method).toBe('POST');
-    expect(call?.body).toMatchObject({ manifest: { id: 'm-1' } });
-  });
+    await page.getByRole('button', { name: 'Collect host attestation' }).click();
+    await expect(page.getByTestId('collect-result')).toContainText('host-under-test');
+    await page.getByLabel('Manifest ID').fill('m-1');
+    await page.getByRole('button', { name: 'Delete manifest' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Confirm delete' }).click();
+    await expect(page.getByTestId('collect-result')).toContainText('Manifest deletion');
 
-  test('VerifyManifest: a refused manifest shows the error', async ({ page }) => {
-    await openCollectPage(page, { failVerify: true });
-    await page.getByLabel('Manifest JSON').fill('{"manifest": {"id": "m-bad"}}');
-    await page.getByRole('button', { name: 'Verify manifest' }).click();
-    await expect(page.getByTestId('collect-error')).toContainText('does not verify');
+    expect(calls.filter((c) => c.path === '/manifests/verify')).toHaveLength(0);
   });
 
   test('DeleteManifest: DELETE /manifests/{id} after confirm', async ({ page }) => {
