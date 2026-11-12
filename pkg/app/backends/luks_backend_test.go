@@ -18,6 +18,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"sync"
@@ -652,6 +654,138 @@ func TestLUKSBackend_ConcurrentEnrollmentGetsDistinctSlots(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestLUKSVolumeKey_AliasesShareAKey proves a symlink to a volume and the
+// volume's own path select the same mutation lock.
+func TestLUKSVolumeKey_AliasesShareAKey(t *testing.T) {
+	device := newLUKSImage(t)
+	link := filepath.Join(t.TempDir(), "by-uuid-alias")
+	if err := os.Symlink(device, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	if got, want := luksVolumeKey(link), luksVolumeKey(device); got != want {
+		t.Fatalf("alias key %q differs from device key %q", got, want)
+	}
+}
+
+// TestLUKSBackend_ConcurrentEnrollmentThroughAliasesGetsDistinctSlots proves
+// enrollments that name one volume by two paths are still serialized.
+func TestLUKSBackend_ConcurrentEnrollmentThroughAliasesGetsDistinctSlots(t *testing.T) {
+	const n = 4
+	device := newLUKSImage(t)
+	link := filepath.Join(t.TempDir(), "by-uuid-alias")
+	if err := os.Symlink(device, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	b := newTestLUKSBackend()
+	start := make(chan struct{})
+	slots := make([]int32, n)
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			path := device
+			if i%2 == 1 {
+				path = link
+			}
+			res, err := b.EnrollPassphrase(context.Background(), &daemon.LUKSEnrollPassphraseRequest{
+				Device:             path,
+				ExistingPassphrase: testLUKSPassphrase,
+				NewPassphrase:      "alias-pass-" + strconv.Itoa(i),
+			})
+			errs[i] = err
+			if res != nil {
+				slots[i] = res.Slot
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	seen := map[int32]int{}
+	ids := keyslotIDs(t, device)
+	for i := 0; i < n; i++ {
+		if errs[i] != nil {
+			t.Fatalf("EnrollPassphrase %d: %v", i, errs[i])
+		}
+		if j, dup := seen[slots[i]]; dup {
+			t.Fatalf("enrollments %d and %d both reported slot %d", j, i, slots[i])
+		}
+		seen[slots[i]] = i
+		if !ids[int(slots[i])] {
+			t.Fatalf("slot %d of enrollment %d is not on the device (%v)", slots[i], i, ids)
+		}
+		if err := luks2.TestKey(device, []byte("alias-pass-"+strconv.Itoa(i))); err != nil {
+			t.Fatalf("passphrase %d does not open the volume: %v", i, err)
+		}
+	}
+}
+
+// TestLUKSBackend_ChangePassphraseRefusesArgon2SlotUnderFIPS proves rotation
+// does not carry a non-approved KDF forward when the FIPS policy is active.
+func TestLUKSBackend_ChangePassphraseRefusesArgon2SlotUnderFIPS(t *testing.T) {
+	device := newLUKSImage(t)
+	before, err := luks2.ListKeyslots(device)
+	if err != nil {
+		t.Fatalf("list keyslots: %v", err)
+	}
+	if err := luks2.AddKey(device, []byte(testLUKSPassphrase), []byte("argon-pass"), &luks2.AddKeyOptions{
+		KDFType:        "argon2id",
+		Argon2Time:     1,
+		Argon2Memory:   1024,
+		Argon2Parallel: 1,
+	}); err != nil {
+		t.Skipf("argon2id keyslot refused in this environment (Go FIPS mode?): %v", err)
+	}
+	slot, err := detectNewSlot(device, before)
+	if err != nil {
+		t.Fatalf("detect new slot: %v", err)
+	}
+
+	b := newTestLUKSBackend()
+	b.fipsActive = func() bool { return true }
+	err = b.ChangePassphrase(context.Background(), &daemon.LUKSChangePassphraseRequest{
+		Device:        device,
+		Slot:          int32(slot),
+		OldPassphrase: "argon-pass",
+		NewPassphrase: "rotated-pass",
+	})
+	if !errors.Is(err, ErrLUKSRotationKDFNotApproved) {
+		t.Fatalf("ChangePassphrase error = %v, want ErrLUKSRotationKDFNotApproved", err)
+	}
+	var notApproved fips.ErrKDFNotApproved
+	if !errors.As(err, &notApproved) {
+		t.Fatalf("ChangePassphrase error = %v, want a fips.ErrKDFNotApproved in its chain", err)
+	}
+	if err := luks2.TestKey(device, []byte("argon-pass")); err != nil {
+		t.Fatalf("old passphrase no longer opens the volume: %v", err)
+	}
+	if err := luks2.TestKey(device, []byte("rotated-pass")); err == nil {
+		t.Fatal("refused rotation still installed the new passphrase")
+	}
+}
+
+// TestLUKSBackend_ChangePassphraseRotatesPBKDF2SlotUnderFIPS proves an
+// approved PBKDF2 slot still rotates under the FIPS policy.
+func TestLUKSBackend_ChangePassphraseRotatesPBKDF2SlotUnderFIPS(t *testing.T) {
+	device := newLUKSImage(t)
+	b := newTestLUKSBackend()
+	b.fipsActive = func() bool { return true }
+	if err := b.ChangePassphrase(context.Background(), &daemon.LUKSChangePassphraseRequest{
+		Device:        device,
+		Slot:          0,
+		OldPassphrase: testLUKSPassphrase,
+		NewPassphrase: "rotated-pass",
+	}); err != nil {
+		t.Fatalf("ChangePassphrase: %v", err)
+	}
+	if err := luks2.TestKey(device, []byte("rotated-pass")); err != nil {
+		t.Fatalf("new passphrase does not open the volume: %v", err)
+	}
 }
 
 func TestLUKSBackend_ChangePassphraseWrongOldPassphrase(t *testing.T) {
