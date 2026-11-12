@@ -8,16 +8,23 @@ import { createMockEABCredential, mockEABApi, mockTenantApi } from './fixtures/a
  */
 
 const seed = () => [
-  createMockEABCredential({ id: 1, keyId: 'kid-active', status: 'EAB_CREDENTIAL_STATUS_ACTIVE' }),
-  createMockEABCredential({ id: 2, keyId: 'kid-expired', status: 'EAB_CREDENTIAL_STATUS_EXPIRED' }),
+  createMockEABCredential({ id: '1', keyId: 'kid-active', status: 'EAB_CREDENTIAL_STATUS_ACTIVE' }),
+  createMockEABCredential({ id: '2', keyId: 'kid-expired', status: 'EAB_CREDENTIAL_STATUS_EXPIRED' }),
 ];
+
+/**
+ * uint64 nanosecond-timestamp IDs as GenericDAO assigns them; both are above
+ * Number.MAX_SAFE_INTEGER, so a Number conversion would round them.
+ */
+const BIG_ID = '1762905600123456789';
+const BIG_PROFILE = '1762905600987654321';
 
 /**
  * Open a detail page the way the platform's static server does: it serves the
  * exported __placeholder__ HTML, and the client resolves the real id from the
  * pathname.
  */
-async function openPlaceholderDetail(page: Page, id: number) {
+async function openPlaceholderDetail(page: Page, id: string) {
   await page.goto('/ca/eab/__placeholder__/');
   await page.waitForLoadState('networkidle');
   await page.evaluate((credId) => window.history.pushState(null, '', `/ca/eab/${credId}/`), id);
@@ -51,7 +58,23 @@ test.describe('CA EAB credentials - list page', () => {
     await expect(page.getByTestId('eab-created')).toContainText('hmac-secret-value');
     await expect(page.getByTestId('eab-row-3')).toContainText('tenant-new');
     const create = api.calls.find((c) => c.method === 'POST' && c.path === '');
-    expect(create?.body).toEqual({ profileId: 7, tenantId: 'tenant-new', expiresInSeconds: 3600 });
+    expect(create?.body).toEqual({ profileId: '7', tenantId: 'tenant-new', expiresInSeconds: 3600 });
+  });
+
+  test('creates a credential with a profile ID above MAX_SAFE_INTEGER (CreateCredential)', async ({
+    page,
+  }) => {
+    const api = await mockEABApi(page, seed());
+    await page.goto('/ca/eab');
+
+    await page.getByLabel('Profile ID').fill(BIG_PROFILE);
+    await page.getByLabel('Tenant ID').fill('tenant-big');
+    await page.getByLabel('Expires in (seconds)').fill('3600');
+    await page.getByRole('button', { name: 'Create' }).click();
+
+    await expect(page.getByTestId('eab-created')).toContainText('hmac-secret-value');
+    const create = api.calls.find((c) => c.method === 'POST' && c.path === '');
+    expect((create?.body as { profileId?: unknown } | undefined)?.profileId).toBe(BIG_PROFILE);
   });
 
   test('revokes a credential (RevokeCredential)', async ({ page }) => {
@@ -142,7 +165,7 @@ test.describe('CA EAB credentials - detail page', () => {
 
   test('resolves the id from the pathname on the exported placeholder page', async ({ page }) => {
     const api = await mockEABApi(page, seed());
-    await openPlaceholderDetail(page, 1);
+    await openPlaceholderDetail(page, '1');
 
     await expect(page.getByRole('heading', { name: 'EAB Credential 1' })).toBeVisible();
     await expect(page.getByTestId('eab-status')).toHaveText('ACTIVE');
@@ -156,6 +179,39 @@ test.describe('CA EAB credentials - detail page', () => {
     await page.getByTestId('eab-row-1').getByRole('link', { name: '1' }).click();
     await expect(page).toHaveURL(/\/ca\/eab\/1\/?$/);
     await expect(page.getByRole('heading', { name: 'EAB Credential 1' })).toBeVisible();
+  });
+
+  test('opens a timestamp-sized credential id from the list (GetCredential)', async ({ page }) => {
+    const api = await mockEABApi(page, [
+      createMockEABCredential({ id: BIG_ID, keyId: 'kid-big', profileId: BIG_PROFILE }),
+    ]);
+    await page.goto('/ca/eab');
+
+    await page.getByTestId(`eab-row-${BIG_ID}`).getByRole('link', { name: BIG_ID }).click();
+    await expect(page).toHaveURL(new RegExp(`/ca/eab/${BIG_ID}/?$`));
+    await expect(page.getByRole('heading', { name: `EAB Credential ${BIG_ID}` })).toBeVisible();
+    expect(api.calls.some((c) => c.method === 'GET' && c.path === `/${BIG_ID}`)).toBe(true);
+  });
+
+  test('QR code, enrollment URL and mark used keep a timestamp-sized id', async ({ page }) => {
+    const api = await mockEABApi(page, [
+      createMockEABCredential({ id: BIG_ID, keyId: 'kid-big', profileId: BIG_PROFILE }),
+    ]);
+    await page.goto(`/ca/eab/${BIG_ID}`);
+    await expect(page.getByRole('heading', { name: `EAB Credential ${BIG_ID}` })).toBeVisible();
+
+    await page.getByRole('button', { name: 'Show QR Code' }).click();
+    await expect(page.getByAltText('EAB enrollment QR code')).toBeVisible();
+    await page.getByRole('button', { name: 'Get Enrollment URL' }).click();
+    await expect(page.getByTestId('eab-enrollment-url')).toHaveText('/enroll?kid=kid-big');
+    await page.getByRole('button', { name: 'Mark Used' }).click();
+    await expect(page.getByTestId('eab-status')).toHaveText('USED');
+
+    const seen = (method: string, path: string) =>
+      api.calls.some((c) => c.method === method && c.path === path);
+    expect(seen('GET', `/${BIG_ID}/qrcode`)).toBe(true);
+    expect(seen('GET', `/${BIG_ID}/url`)).toBe(true);
+    expect(seen('POST', `/${BIG_ID}/used`)).toBe(true);
   });
 
   test('shows the QR code (GetCredentialQRCode)', async ({ page }) => {

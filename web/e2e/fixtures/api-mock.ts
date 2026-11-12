@@ -716,9 +716,11 @@ export type MockEABStatus =
   | 'EAB_CREDENTIAL_STATUS_USED';
 
 export interface MockEABCredential {
-  id: number;
+  /** uint64 credential ID; protojson serializes it as a decimal string. */
+  id: string;
   keyId: string;
-  profileId: number;
+  /** uint64 device profile ID, a decimal string like id. */
+  profileId: string;
   tenantId: string;
   expiresAt: string;
   status: MockEABStatus;
@@ -735,11 +737,11 @@ export interface EABApiCall {
 export function createMockEABCredential(
   overrides: Partial<MockEABCredential> = {}
 ): MockEABCredential {
-  const id = overrides.id ?? 1;
+  const id = overrides.id ?? '1';
   return {
     id,
     keyId: `kid-${id}`,
-    profileId: 1,
+    profileId: '1',
     tenantId: 'tenant-test-123',
     expiresAt: '2030-01-01T00:00:00Z',
     status: 'EAB_CREDENTIAL_STATUS_ACTIVE',
@@ -766,7 +768,10 @@ export async function mockEABApi(
   getCredentials: () => MockEABCredential[];
 }> {
   let credentials = initial.map((c) => ({ ...c }));
-  let nextId = credentials.reduce((max, c) => Math.max(max, c.id), 0) + 1;
+  // BigInt keeps timestamp-sized ids above Number.MAX_SAFE_INTEGER exact.
+  let nextId =
+    credentials.reduce((max, c) => (BigInt(c.id) > max ? BigInt(c.id) : max), BigInt(0)) +
+    BigInt(1);
   const calls: EABApiCall[] = [];
   const ok = { success: true, message: 'ok' };
 
@@ -791,7 +796,7 @@ export async function mockEABApi(
       }
       calls.push({ method, path, body });
 
-      const byId = (raw: string) => credentials.find((c) => c.id === Number(raw));
+      const byId = (raw: string) => credentials.find((c) => c.id === raw);
       let m: RegExpMatchArray | null;
 
       if (method === 'GET' && path === '') {
@@ -806,10 +811,10 @@ export async function mockEABApi(
         });
       }
       if (method === 'POST' && path === '') {
-        const req = (body ?? {}) as { profileId?: number; tenantId?: string };
+        const req = (body ?? {}) as { profileId?: string; tenantId?: string };
         const cred = createMockEABCredential({
-          id: nextId++,
-          profileId: req.profileId ?? 0,
+          id: (nextId++).toString(),
+          profileId: req.profileId ?? '0',
           tenantId: req.tenantId ?? '',
         });
         cred.keyId = `kid-created-${cred.id}`;

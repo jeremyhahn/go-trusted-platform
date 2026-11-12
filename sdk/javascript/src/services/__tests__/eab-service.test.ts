@@ -36,7 +36,7 @@ describe('EABService', () => {
         data: { status: { success: true, message: 'ok' } },
       });
 
-      const res = await service.markUsed(42);
+      const res = await service.markUsed('42');
 
       expect(mockClient.post).toHaveBeenCalledTimes(1);
       expect(mockClient.post).toHaveBeenCalledWith('/v1/eab/credentials/42/used', {});
@@ -47,7 +47,7 @@ describe('EABService', () => {
       const failure = new Error('boom');
       vi.mocked(mockClient.post).mockRejectedValue(failure);
 
-      await expect(service.markUsed(7)).rejects.toBe(failure);
+      await expect(service.markUsed('7')).rejects.toBe(failure);
       expect(mockClient.post).toHaveBeenCalledWith('/v1/eab/credentials/7/used', {});
     });
   });
@@ -87,11 +87,22 @@ describe('EABService', () => {
         data: { url: '/enroll?kid=kid-5', timestamp: '2026-01-01T00:00:00Z' },
       });
 
-      const res = await service.getEnrollmentURL(5);
+      const res = await service.getEnrollmentURL('5');
 
       expect(mockClient.get).toHaveBeenCalledTimes(1);
       expect(mockClient.get).toHaveBeenCalledWith('/v1/eab/credentials/5/url');
       expect(res.data?.url).toBe('/enroll?kid=kid-5');
+    });
+  });
+
+  describe('uint64 ids', () => {
+    it('keeps a uint64 id above MAX_SAFE_INTEGER in the path', async () => {
+      vi.mocked(mockClient.get).mockResolvedValue({ success: true, data: {} });
+
+      await service.get('1762905600123456789');
+
+      expect(mockClient.get).toHaveBeenCalledTimes(1);
+      expect(mockClient.get).toHaveBeenCalledWith('/v1/eab/credentials/1762905600123456789');
     });
   });
 });
