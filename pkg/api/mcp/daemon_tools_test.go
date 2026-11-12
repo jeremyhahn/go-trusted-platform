@@ -15,6 +15,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
 
@@ -258,6 +259,131 @@ func TestDaemonToolExecution(t *testing.T) {
 			t.Fatal("expected error")
 		}
 	})
+}
+
+// TestDaemonGetConfigTool checks that platform_daemon_get_config passes
+// the section argument to the provider and returns its result (#1689).
+func TestDaemonGetConfigTool(t *testing.T) {
+	ctx := context.Background()
+	log := newTestLogger()
+
+	t.Run("passes the section", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		var got string
+		svc.daemonGetConfigFunc = func(ctx context.Context, section string) (interface{}, error) {
+			got = section
+			return map[string]interface{}{"section": section}, nil
+		}
+		registry := NewToolRegistry(svc, log)
+
+		result, err := registry.ExecuteTool(ctx, "platform_daemon_get_config", map[string]interface{}{
+			"section": "daemon",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result == nil {
+			t.Fatal("result should not be nil")
+		}
+		if got != "daemon" {
+			t.Fatalf("section = %q, want %q", got, "daemon")
+		}
+	})
+
+	t.Run("empty section asks for every section", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		got := "unset"
+		svc.daemonGetConfigFunc = func(ctx context.Context, section string) (interface{}, error) {
+			got = section
+			return map[string]interface{}{}, nil
+		}
+		registry := NewToolRegistry(svc, log)
+
+		if _, err := registry.ExecuteTool(ctx, "platform_daemon_get_config", map[string]interface{}{}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "" {
+			t.Fatalf("section = %q, want empty", got)
+		}
+	})
+
+	t.Run("service error", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		svc.daemonGetConfigFunc = func(ctx context.Context, section string) (interface{}, error) {
+			return nil, ErrMockServiceError
+		}
+		registry := NewToolRegistry(svc, log)
+
+		_, err := registry.ExecuteTool(ctx, "platform_daemon_get_config", map[string]interface{}{})
+		if !errors.Is(err, ErrMockServiceError) {
+			t.Fatalf("err = %v, want ErrMockServiceError", err)
+		}
+	})
+
+	t.Run("registered", func(t *testing.T) {
+		registry := NewToolRegistry(newMockServiceProvider(), log)
+		if !hasDaemonTool(registry, "platform_daemon_get_config") {
+			t.Fatal("platform_daemon_get_config is not registered")
+		}
+	})
+}
+
+// TestDaemonReloadConfigTool checks that platform_daemon_reload_config
+// calls the provider and returns its result (#1689).
+func TestDaemonReloadConfigTool(t *testing.T) {
+	ctx := context.Background()
+	log := newTestLogger()
+
+	t.Run("success", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		called := false
+		svc.daemonReloadConfigFunc = func(ctx context.Context) (interface{}, error) {
+			called = true
+			return map[string]interface{}{"success": true}, nil
+		}
+		registry := NewToolRegistry(svc, log)
+
+		result, err := registry.ExecuteTool(ctx, "platform_daemon_reload_config", map[string]interface{}{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result == nil {
+			t.Fatal("result should not be nil")
+		}
+		if !called {
+			t.Fatal("DaemonReloadConfig was not called")
+		}
+	})
+
+	t.Run("service error", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		svc.daemonReloadConfigFunc = func(ctx context.Context) (interface{}, error) {
+			return nil, ErrMockServiceError
+		}
+		registry := NewToolRegistry(svc, log)
+
+		_, err := registry.ExecuteTool(ctx, "platform_daemon_reload_config", map[string]interface{}{})
+		if !errors.Is(err, ErrMockServiceError) {
+			t.Fatalf("err = %v, want ErrMockServiceError", err)
+		}
+	})
+
+	t.Run("registered", func(t *testing.T) {
+		registry := NewToolRegistry(newMockServiceProvider(), log)
+		if !hasDaemonTool(registry, "platform_daemon_reload_config") {
+			t.Fatal("platform_daemon_reload_config is not registered")
+		}
+	})
+}
+
+// hasDaemonTool reports whether the registry lists a tool by name.
+func hasDaemonTool(r *ToolRegistry, name string) bool {
+	for _, tool := range r.ListTools() {
+		if tool.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func TestErrDaemonServiceNameRequired(t *testing.T) {
