@@ -124,6 +124,8 @@ const navigation = [
       { title: "Device Profiles", href: "/devices/profiles" },
       { title: "Device Templates", href: "/devices/templates" },
       { title: "vTPM Bundles", href: "/devices/vtpm" },
+      { title: "vTPM Templates", href: "/devices/vtpm/templates" },
+      { title: "vTPM Bundle Import", href: "/devices/vtpm/bundles" },
       { title: "IDevID/IAK", href: "/devices/idevid" },
     ],
   },
