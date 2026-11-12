@@ -106,9 +106,26 @@ async function mockVTPM(page: Page): Promise<VTPMMock> {
     if (parts[0] === 'templates') {
       if (parts.length === 1 && method === 'GET') return fulfill({ templates });
       if (parts.length === 1 && method === 'POST') {
-        const sent = JSON.stringify(body);
-        const id = (sent.match(/"id":"([^"]+)"/) ?? [])[1] ?? 'unknown';
-        const created = template(id, 'RSA', false);
+        // The handler decodes with DisallowUnknownFields into a flat body.
+        const allowed = ['id', 'description', 'ek_algorithm', 'secure_boot_enabled'];
+        const sent = (body ?? {}) as Record<string, unknown>;
+        if (
+          typeof body !== 'object' ||
+          body === null ||
+          Object.keys(sent).some((k) => !allowed.includes(k)) ||
+          typeof sent.id !== 'string'
+        ) {
+          return route.fulfill({
+            status: 400,
+            contentType: 'application/json',
+            body: JSON.stringify({ success: false, error: 'unknown field' }),
+          });
+        }
+        const created = template(
+          sent.id,
+          typeof sent.ek_algorithm === 'string' ? sent.ek_algorithm : 'RSA',
+          sent.secure_boot_enabled === true
+        );
         templates.push(created);
         return fulfill(created);
       }
@@ -210,10 +227,12 @@ test.describe('vTPM bundles and templates', () => {
     await expect(page.getByTestId('vtpm-template-list')).toContainText('tmpl-new');
     const create = last(mock, 'POST', '/api/v1/vtpm/templates');
     expect(create).toBeDefined();
-    // The body's shape changes with #1590; only its values are asserted here.
-    const sent = JSON.stringify(create?.body);
-    expect(sent).toContain('tmpl-new');
-    expect(sent).toContain('a fresh template');
+    expect(create?.body).toEqual({
+      id: 'tmpl-new',
+      description: 'a fresh template',
+      ek_algorithm: 'ECC',
+      secure_boot_enabled: true,
+    });
     expect(count(mock, 'GET', '/api/v1/vtpm/templates')).toBeGreaterThan(listsBefore);
   });
 
