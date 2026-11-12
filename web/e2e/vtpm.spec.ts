@@ -14,6 +14,8 @@ import { mockTenantApi } from './fixtures/api-mock';
 interface RecordedRequest {
   method: string;
   path: string;
+  /** Query string of the request URL, without the leading '?' */
+  query: string;
   body: unknown;
   raw: Buffer | null;
 }
@@ -73,9 +75,11 @@ function ok(payload: unknown): string {
   return JSON.stringify({ code: 200, success: true, payload });
 }
 
-async function mockVTPM(page: Page): Promise<VTPMMock> {
+async function mockVTPM(page: Page, bundleCount = 1): Promise<VTPMMock> {
   const templates: TemplateWire[] = [template('tmpl-a', 'RSA', true), template('tmpl-b', 'ECC', false)];
-  const bundles = [bundle('bundle-1', 'host-one')];
+  const bundles = Array.from({ length: bundleCount }, (_, i) =>
+    bundle(`bundle-${i + 1}`, i === 0 ? 'host-one' : `host-${i + 1}`)
+  );
   const mock: VTPMMock = { requests: [], validateAnswers: [] };
 
   await mockTenantApi(page);
@@ -83,7 +87,9 @@ async function mockVTPM(page: Page): Promise<VTPMMock> {
   await page.route('**/api/v1/vtpm/**', async (route) => {
     const request = route.request();
     const method = request.method();
-    const path = new URL(request.url()).pathname.replace(/\/+$/, '');
+    const url = new URL(request.url());
+    const path = url.pathname.replace(/\/+$/, '');
+    const query = url.search.replace(/^\?/, '');
     let body: unknown = null;
     let raw: Buffer | null = null;
     if (method === 'POST') {
@@ -96,7 +102,7 @@ async function mockVTPM(page: Page): Promise<VTPMMock> {
         }
       }
     }
-    mock.requests.push({ method, path, body, raw });
+    mock.requests.push({ method, path, query, body, raw });
 
     const fulfill = (payload: unknown) =>
       route.fulfill({ status: 200, contentType: 'application/json', body: ok(payload) });
@@ -143,14 +149,22 @@ async function mockVTPM(page: Page): Promise<VTPMMock> {
     }
 
     if (parts[0] === 'bundles') {
-      if (parts.length === 1 && method === 'GET') return fulfill({ bundles, total: bundles.length });
+      if (parts.length === 1 && method === 'GET') {
+        // The handler pages by limit (default 50) and offset; total is the page length.
+        const limit = Number(url.searchParams.get('limit') ?? 50);
+        const offset = Number(url.searchParams.get('offset') ?? 0);
+        const pageOfBundles = bundles.slice(offset, offset + limit);
+        return fulfill({ bundles: pageOfBundles, total: pageOfBundles.length });
+      }
       if (parts[1] === 'import' && method === 'POST') {
         const imported = bundle('bundle-imported-9', 'host-imported');
         bundles.push(imported);
         return fulfill(imported);
       }
       const id = parts[1];
-      if (parts.length === 2 && method === 'GET') return fulfill(bundle(id, 'host-one'));
+      if (parts.length === 2 && method === 'GET' && id !== 'bundle-missing') {
+        return fulfill(bundle(id, 'host-one'));
+      }
       if (parts[2] === 'validate' && method === 'POST') {
         return fulfill(mock.validateAnswers.shift() ?? { valid: true });
       }
@@ -298,6 +312,33 @@ test.describe('vTPM bundles and templates', () => {
     await expect(page.getByTestId('vtpm-bundle-detail')).toContainText('host-one');
     await expect(page.getByTestId('vtpm-bundle-detail')).toContainText('RSA');
     expect(count(mock, 'GET', '/api/v1/vtpm/bundles/bundle-1')).toBeGreaterThanOrEqual(1);
+  });
+
+  test('GetBundle switches ID', async ({ page }) => {
+    await openBundle(page, 'bundle-1');
+    await expect(page.getByRole('heading', { name: 'vTPM bundle bundle-1' })).toBeVisible();
+    await page.evaluate(
+      (target) => window.history.pushState(null, '', target),
+      '/devices/vtpm/bundles/bundle-missing/'
+    );
+    await expect(page.getByText('Bundle bundle-missing could not be loaded.')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'vTPM bundle bundle-1' })).toHaveCount(0);
+    await expect(page.getByTestId('vtpm-bundle-detail')).toHaveCount(0);
+  });
+
+  test('BundleList pages by offset', async ({ page }) => {
+    const mock = await mockVTPM(page, 101);
+    await page.goto('/devices/vtpm/bundles/');
+    await expect(page.getByTestId('vtpm-bundle-range')).toHaveText('Bundles 1-100');
+    await expect(page.getByTestId('vtpm-bundle-list')).toContainText('bundle-100');
+
+    await page.getByRole('button', { name: 'Next' }).click();
+    await expect(page.getByTestId('vtpm-bundle-range')).toHaveText('Bundles 101-101');
+    await expect(page.getByTestId('vtpm-bundle-list')).toContainText('bundle-101');
+    const lastList = last(mock, 'GET', '/api/v1/vtpm/bundles');
+    expect(new URLSearchParams(lastList?.query ?? '').get('offset')).toBe('100');
+    expect(lastList?.query ?? '').not.toContain('page=');
+    await expect(page.getByRole('button', { name: 'Next' })).toBeDisabled();
   });
 
   test('ValidateBundle', async ({ page }) => {

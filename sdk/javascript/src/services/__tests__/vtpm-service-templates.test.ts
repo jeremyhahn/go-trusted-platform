@@ -59,3 +59,26 @@ describe('VTPMService.createTemplate', () => {
     expect(body).not.toHaveProperty('options');
   });
 });
+
+// The REST ListBundles handler pages by `limit` and `offset`; it has no
+// `page` parameter.
+describe('VTPMService.listBundles', () => {
+  let mockClient: ApiClient;
+  let service: VTPMService;
+
+  beforeEach(() => {
+    mockClient = createMockApiClient();
+    service = new VTPMService(mockClient);
+    vi.mocked(mockClient.get).mockResolvedValue({ data: { bundles: [] } } as never);
+  });
+
+  it('sends limit and offset, never page', async () => {
+    await service.listBundles({ options: { limit: 100, offset: 200 } });
+
+    expect(mockClient.get).toHaveBeenCalledTimes(1);
+    const [path] = vi.mocked(mockClient.get).mock.calls[0];
+    expect(path).toContain('limit=100');
+    expect(path).toContain('offset=200');
+    expect(path).not.toContain('page=');
+  });
+});

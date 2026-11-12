@@ -775,6 +775,123 @@ func TestArchiver_ImportFromFile_WithOVMFAndSecureBootFiles(t *testing.T) {
 	}
 }
 
+// TestArchiver_ExportImport_RoundTripRestoresState exports a full bundle and
+// imports it from a plain io.Reader (as the REST handler does): every state
+// file comes back with the same bytes and no temporary file is left behind.
+func TestArchiver_ExportImport_RoundTripRestoresState(t *testing.T) {
+	bundleID := "round-trip"
+	srcDir := t.TempDir()
+	srcBundle := filepath.Join(srcDir, "bundles", bundleID)
+	for _, d := range []string{"tpm", "ovmf", "secure-boot-keys"} {
+		if err := os.MkdirAll(filepath.Join(srcBundle, d), 0700); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+	manifest := &Manifest{
+		Version:           ManifestVersion,
+		ID:                bundleID,
+		Mode:              BundleModePreAssigned,
+		CreatedAt:         time.Now(),
+		SecureBootEnabled: true,
+	}
+	manifestData, _ := json.Marshal(manifest)
+	contents := map[string][]byte{
+		"manifest.json":           manifestData,
+		"tpm/tpm2-00.permall":     []byte("round-trip-tpm-state"),
+		"ovmf/OVMF_VARS.fd":       []byte("round-trip-ovmf-nvram"),
+		"secure-boot-keys/PK.key": []byte("round-trip-pk-key"),
+	}
+	for rel, data := range contents {
+		if err := os.WriteFile(filepath.Join(srcBundle, rel), data, 0600); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+
+	ctx := context.Background()
+	var buf bytes.Buffer
+	if err := NewArchiver(&Config{BaseDir: srcDir}, nil).Export(ctx, bundleID, &buf); err != nil {
+		t.Fatalf("Export failed: %v", err)
+	}
+
+	dstConfig := &Config{BaseDir: t.TempDir()}
+	bundle, err := NewArchiver(dstConfig, nil).Import(ctx, io.Reader(&buf))
+	if err != nil {
+		t.Fatalf("Import failed: %v", err)
+	}
+	if bundle.SecureBootKeys == nil {
+		t.Fatal("SecureBootKeys should be set for a secure boot bundle")
+	}
+
+	checks := map[string]string{
+		bundle.TPMState.PermallFile: "tpm/tpm2-00.permall",
+		bundle.OVMFState.NVRAMFile:  "ovmf/OVMF_VARS.fd",
+		bundle.SecureBootKeys.PKKey: "secure-boot-keys/PK.key",
+	}
+	for path, rel := range checks {
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Errorf("%s not restored: %v", rel, err)
+			continue
+		}
+		if !bytes.Equal(got, contents[rel]) {
+			t.Errorf("%s = %q, want %q", rel, got, contents[rel])
+		}
+	}
+
+	entries, err := os.ReadDir(dstConfig.BundlesDir())
+	if err != nil {
+		t.Fatalf("read bundles dir: %v", err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".import-") {
+			t.Errorf("temporary import file left behind: %s", e.Name())
+		}
+	}
+}
+
+// TestArchiver_ImportFromFile_RejectsSiblingPrefix checks that an entry
+// escaping into a sibling directory whose name starts with the bundle ID is
+// not written.
+func TestArchiver_ImportFromFile_RejectsSiblingPrefix(t *testing.T) {
+	bundleID := "x"
+	archivePath := filepath.Join(t.TempDir(), "evil.tar.gz")
+	f, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatalf("create archive: %v", err)
+	}
+	gzw := gzip.NewWriter(f)
+	tw := tar.NewWriter(gzw)
+
+	manifestData, _ := json.Marshal(&Manifest{
+		Version:   ManifestVersion,
+		ID:        bundleID,
+		Mode:      BundleModePreAssigned,
+		CreatedAt: time.Now(),
+	})
+	for _, file := range []struct {
+		name    string
+		content []byte
+	}{
+		{"vtpm-bundle-x/manifest.json", manifestData},
+		{"vtpm-bundle-x/../x-evil/f", []byte("evil")},
+	} {
+		tw.WriteHeader(&tar.Header{Name: file.name, Mode: 0600, Size: int64(len(file.content)), Typeflag: tar.TypeReg})
+		tw.Write(file.content)
+	}
+	tw.Close()
+	gzw.Close()
+	f.Close()
+
+	config := &Config{BaseDir: t.TempDir()}
+	if _, err := NewArchiver(config, nil).ImportFromFile(context.Background(), archivePath); err != nil {
+		t.Fatalf("ImportFromFile failed: %v", err)
+	}
+	evil := filepath.Join(config.BundlesDir(), "x-evil")
+	if _, err := os.Stat(evil); !os.IsNotExist(err) {
+		t.Errorf("entry outside the bundle was written to %s (stat err %v)", evil, err)
+	}
+}
+
 func TestArchiver_Export_EmptyBundle(t *testing.T) {
 	tmpDir := t.TempDir()
 	bundleID := "empty-bundle"
