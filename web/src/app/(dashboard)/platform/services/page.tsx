@@ -85,21 +85,14 @@ export default function ServicesPage() {
   const daemon = usePlatformDaemon();
   const [confirm, setConfirm] = React.useState<{ name: string; action: DaemonServiceAction } | null>(null);
   const [detail, setDetail] = React.useState<DaemonServiceInfo | null>(null);
-  // runAction reads the open panel after an await; the ref holds its current value.
-  const detailRef = React.useRef<DaemonServiceInfo | null>(null);
-  React.useEffect(() => {
-    detailRef.current = detail;
-  }, [detail]);
+  // The service whose details the operator asked for, set before any await,
+  // and the generation of detail reads: a read applies its answer only while
+  // it is still the latest read for the still-selected service. A lifecycle
+  // action bumps the generation, so a read begun before it never lands.
+  const selectedRef = React.useRef<string | null>(null);
+  const detailSeq = React.useRef(0);
 
   const services = daemon.services.data?.services ?? [];
-
-  const refreshAll = () => {
-    daemon.status.refetch();
-    daemon.version.refetch();
-    daemon.config.refetch();
-    daemon.services.refetch();
-    if (detail) void refreshDetail(detail.name);
-  };
 
   const fail = (title: string, err: unknown) =>
     toast({
@@ -107,6 +100,38 @@ export default function ServicesPage() {
       description: err instanceof Error ? err.message : String(err),
       variant: "destructive",
     });
+
+  const readDetail = async (name: string, onError: (err: unknown) => void) => {
+    const seq = ++detailSeq.current;
+    const current = () => seq === detailSeq.current && selectedRef.current === name;
+    try {
+      const info = await daemon.getServiceStatus(name);
+      if (current()) setDetail(info ?? null);
+    } catch (err) {
+      if (current()) onError(err);
+    }
+  };
+
+  const showDetail = async (name: string) => {
+    selectedRef.current = name;
+    await readDetail(name, (err) => fail(`Status of ${name} failed`, err));
+  };
+
+  // Re-read the open details; a failed re-read clears the panel so stale
+  // status never stays on screen.
+  const refreshDetail = (name: string) =>
+    readDetail(name, () => {
+      setDetail(null);
+      selectedRef.current = null;
+    });
+
+  const refreshAll = () => {
+    daemon.status.refetch();
+    daemon.version.refetch();
+    daemon.config.refetch();
+    daemon.services.refetch();
+    if (selectedRef.current) void refreshDetail(selectedRef.current);
+  };
 
   const handleReload = async () => {
     try {
@@ -118,6 +143,9 @@ export default function ServicesPage() {
   };
 
   const runAction = async (name: string, action: DaemonServiceAction) => {
+    // Drop every detail read in flight for this service: it may hold the
+    // pre-action status. The finally below re-reads it.
+    if (selectedRef.current === name) detailSeq.current++;
     try {
       const res = await daemon.serviceAction(name, action);
       toast({
@@ -127,27 +155,7 @@ export default function ServicesPage() {
     } catch (err) {
       fail(`${ACTION_LABEL[action]} ${name} failed`, err);
     } finally {
-      if (detailRef.current?.name === name) void refreshDetail(name);
-    }
-  };
-
-  const showDetail = async (name: string) => {
-    try {
-      const info = await daemon.getServiceStatus(name);
-      setDetail(info ?? null);
-    } catch (err) {
-      fail(`Status of ${name} failed`, err);
-    }
-  };
-
-  // Re-read the open details; a failed re-read clears the panel so stale
-  // status never stays on screen.
-  const refreshDetail = async (name: string) => {
-    try {
-      const info = await daemon.getServiceStatus(name);
-      setDetail(info ?? null);
-    } catch {
-      setDetail(null);
+      if (selectedRef.current === name) void refreshDetail(name);
     }
   };
 
