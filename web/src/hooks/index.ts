@@ -82,6 +82,15 @@ export type { User, AuthContextType } from '@/contexts/AuthContext';
 export { useToast, toast, dismissToast } from './use-toast';
 export type { Toast, UseToastReturn } from './use-toast';
 
+export {
+  useContainerOps,
+  useVMAttestationVerify,
+  randomNonce,
+  decodeOutput,
+  splitCommand,
+} from './use-container-ops';
+export type { UseContainerOpsResult } from './use-container-ops';
+
 export { useReportedGateways } from './use-reported-gateways';
 export type {
   ReportedGateway,

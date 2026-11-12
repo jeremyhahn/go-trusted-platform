@@ -13,7 +13,18 @@ import {
   Camera,
   RefreshCw,
   Pause,
+  ShieldCheck,
 } from 'lucide-react';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { useVMAttestationVerify } from '@/hooks';
+import type { VerifyVMAttestationResponse } from 'trusted-platform-sdk';
 import { formatDistanceToNow } from 'date-fns';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -48,6 +59,25 @@ export default function VMDetailPage() {
   const [actionLoading, setActionLoading] = useState(false);
   const compute = useCompute();
   const { toast } = useToast();
+  const verifyAttestation = useVMAttestationVerify(vmId);
+  const [verifyConfirmOpen, setVerifyConfirmOpen] = useState(false);
+  const [verifyResult, setVerifyResult] = useState<VerifyVMAttestationResponse | null>(null);
+
+  const handleVerifyAttestation = async () => {
+    setVerifyConfirmOpen(false);
+    setActionLoading(true);
+    try {
+      setVerifyResult(await verifyAttestation());
+    } catch (error) {
+      toast({
+        title: 'Error',
+        description: `Failed to verify VM attestation: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        variant: 'destructive',
+      });
+    } finally {
+      setActionLoading(false);
+    }
+  };
 
   const fetchVM = async () => {
     if (!vmId) {
@@ -333,6 +363,14 @@ export default function VMDetailPage() {
               Resume
             </Button>
           )}
+          <Button
+            variant="outline"
+            onClick={() => setVerifyConfirmOpen(true)}
+            disabled={actionLoading}
+          >
+            <ShieldCheck className="mr-2 h-4 w-4" />
+            Verify Attestation
+          </Button>
           <Button variant="outline" onClick={handleClone} disabled={actionLoading}>
             <Copy className="mr-2 h-4 w-4" />
             Clone
@@ -391,6 +429,39 @@ export default function VMDetailPage() {
 
         <VMMetricsCard metrics={vm.metrics} />
       </div>
+
+      {verifyResult && (
+        <Card data-testid="vm-verify-result">
+          <CardHeader>
+            <CardTitle>Attestation Verification</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <p className="font-medium">
+              {verifyResult.verified ? 'Attestation verified' : 'Attestation not verified'}
+            </p>
+            {verifyResult.message && (
+              <p className="text-muted-foreground">{verifyResult.message}</p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      <Dialog open={verifyConfirmOpen} onOpenChange={setVerifyConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Verify VM attestation?</DialogTitle>
+            <DialogDescription>
+              This requests a fresh TPM quote from {vm.name} and verifies it.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setVerifyConfirmOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={() => void handleVerifyAttestation()}>Confirm</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Card>
         <CardHeader>
