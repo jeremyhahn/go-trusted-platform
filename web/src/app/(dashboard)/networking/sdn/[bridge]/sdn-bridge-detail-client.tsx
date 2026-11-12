@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Dialog,
@@ -26,14 +27,50 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { useApi, useSDN, useSDNBridge, useToast } from '@/hooks';
-import type { Port, PortStats, SDNPolicy, SDNPolicyType } from 'trusted-platform-sdk';
+import { useSDN, useSDNBridge, useToast } from '@/hooks';
+import type {
+  Port,
+  PortStats,
+  SDNPolicy,
+  SDNPolicyRuleAction,
+  SDNPolicyRuleMatch,
+  SDNPolicyType,
+} from 'trusted-platform-sdk';
 
 interface PortView {
   id: string;
   port?: Port;
   stats?: PortStats;
   error?: string;
+}
+
+// The policy dialog keeps each answer with the policy it was asked for (#1755).
+interface PolicyView {
+  id: string;
+  policy?: SDNPolicy;
+  error?: string;
+}
+
+const RULE_ACTIONS: SDNPolicyRuleAction[] = [
+  'POLICY_RULE_ACTION_ALLOW',
+  'POLICY_RULE_ACTION_DENY',
+  'POLICY_RULE_ACTION_RATE_LIMIT',
+  'POLICY_RULE_ACTION_REDIRECT',
+  'POLICY_RULE_ACTION_MIRROR',
+  'POLICY_RULE_ACTION_LOG',
+];
+
+const RULE_PROTOCOLS = ['any', 'tcp', 'udp', 'icmp'];
+
+// ApplyPolicy installs flows only for bridge targets times config.rules
+// (SDNService.ApplyPolicy), so the form always sends one rule bound to this bridge.
+function ruleMatch(protocol: string, sourceIp: string, destinationIp: string, destinationPort: string) {
+  const match: SDNPolicyRuleMatch = {};
+  if (protocol && protocol !== 'any') match.protocol = protocol;
+  if (sourceIp.trim()) match.sourceIp = sourceIp.trim();
+  if (destinationIp.trim()) match.destinationIp = destinationIp.trim();
+  if (destinationPort.trim()) match.destinationPort = Number(destinationPort);
+  return match;
 }
 
 const POLICY_TYPES: SDNPolicyType[] = [
@@ -88,6 +125,12 @@ export default function SDNBridgeDetailClient() {
   const [policyName, setPolicyName] = useState('');
   const [policyType, setPolicyType] = useState<SDNPolicyType>('POLICY_TYPE_ACL');
   const [viewPolicyId, setViewPolicyId] = useState('');
+  const [ruleAction, setRuleAction] = useState<SDNPolicyRuleAction | ''>('');
+  const [rulePriority, setRulePriority] = useState('100');
+  const [ruleProtocol, setRuleProtocol] = useState('any');
+  const [ruleSourceIp, setRuleSourceIp] = useState('');
+  const [ruleDestinationIp, setRuleDestinationIp] = useState('');
+  const [ruleDestinationPort, setRuleDestinationPort] = useState('');
 
   // The port panel keeps each answer with the port it was asked for, and
   // drops an answer that arrives after the selection moved on (#1755).
@@ -116,10 +159,31 @@ export default function SDNBridgeDetailClient() {
       current = false;
     };
   }, [sdn, bridgeId, selectedPort, portReload]);
-  const policyDetail = useApi(
-    () => (viewPolicyId ? sdn.getPolicy(viewPolicyId) : Promise.resolve({ success: true, data: null })),
-    [viewPolicyId]
-  );
+  // Same identity rule for the policy dialog: a failure or a late answer for
+  // another policy is never shown as this policy's data (#1755 Codex round 4).
+  const [policyView, setPolicyView] = useState<PolicyView | null>(null);
+  useEffect(() => {
+    setPolicyView(null);
+    if (!viewPolicyId) return;
+    let current = true;
+    const id = viewPolicyId;
+    (async () => {
+      try {
+        const res = await sdn.getPolicy(id);
+        if (!current) return;
+        if (!res.success) {
+          setPolicyView({ id, error: res.error?.message ?? 'Request failed' });
+          return;
+        }
+        setPolicyView({ id, policy: res.data?.policy });
+      } catch (err) {
+        if (current) setPolicyView({ id, error: errorText(err) });
+      }
+    })();
+    return () => {
+      current = false;
+    };
+  }, [sdn, viewPolicyId]);
 
   const run = async (
     label: string,
@@ -147,7 +211,36 @@ export default function SDNBridgeDetailClient() {
   const port = shown?.port;
   const stats = shown?.stats;
   const portError = shown?.error;
-  const policy: SDNPolicy | undefined = policyDetail.data?.policy;
+  const policyShown = policyView?.id === viewPolicyId ? policyView : null;
+  const policy: SDNPolicy | undefined = policyShown?.policy;
+  const resetRule = () => {
+    setRuleAction('');
+    setRulePriority('100');
+    setRuleProtocol('any');
+    setRuleSourceIp('');
+    setRuleDestinationIp('');
+    setRuleDestinationPort('');
+  };
+  const applyPolicy = () => {
+    const priority = Number(rulePriority) || 100;
+    return sdn.applyPolicy({
+      config: {
+        name: policyName,
+        type: policyType,
+        enabled: true,
+        priority,
+        rules: [
+          {
+            ruleId: 'rule-1',
+            priority,
+            action: ruleAction as SDNPolicyRuleAction,
+            match: ruleMatch(ruleProtocol, ruleSourceIp, ruleDestinationIp, ruleDestinationPort),
+          },
+        ],
+        targets: [{ type: 'POLICY_TARGET_TYPE_BRIDGE', id: bridgeId }],
+      },
+    });
+  };
   const refreshPort = () => setPortReload((n) => n + 1);
 
   return (
@@ -468,13 +561,21 @@ export default function SDNBridgeDetailClient() {
             <DialogTitle>Policy {policy?.config?.name || viewPolicyId}</DialogTitle>
             <DialogDescription>{policy?.config?.description || 'SDN policy detail'}</DialogDescription>
           </DialogHeader>
-          <div className="space-y-1" data-testid="policy-detail">
-            <div>ID: <span className="font-mono">{policy?.id ?? viewPolicyId}</span></div>
-            <div>Type: {policy?.config?.type ?? '-'}</div>
-            <div>Status: {policy?.status ?? '-'}</div>
-            <div>Rules: {policy?.config?.rules?.length ?? 0}</div>
-            <div>Hits: {policy?.hitCount ?? '0'}</div>
-          </div>
+          {!policyShown ? (
+            <p className="text-muted-foreground" data-testid="policy-detail-loading">Loading policy...</p>
+          ) : policyShown.error ? (
+            <Alert variant="destructive" data-testid="policy-detail-error">
+              <AlertDescription>Policy could not be loaded: {policyShown.error}</AlertDescription>
+            </Alert>
+          ) : (
+            <div className="space-y-1" data-testid="policy-detail">
+              <div>ID: <span className="font-mono">{policy?.id ?? viewPolicyId}</span></div>
+              <div>Type: {policy?.config?.type ?? '-'}</div>
+              <div>Status: {policy?.status ?? '-'}</div>
+              <div>Rules: {policy?.config?.rules?.length ?? 0}</div>
+              <div>Hits: {policy?.hitCount ?? '0'}</div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
 
@@ -502,18 +603,84 @@ export default function SDNBridgeDetailClient() {
                 ))}
               </select>
             </div>
+            <p className="text-sm text-muted-foreground">
+              Rule applied to bridge <span className="font-mono">{bridgeId}</span>
+            </p>
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-1">
+                <Label htmlFor="rule-action">Action *</Label>
+                <select
+                  id="rule-action"
+                  className="h-9 w-full rounded-md border border-input bg-background px-2"
+                  value={ruleAction}
+                  onChange={(e) => setRuleAction(e.target.value as SDNPolicyRuleAction | '')}
+                >
+                  <option value="">Select action</option>
+                  {RULE_ACTIONS.map((a) => (
+                    <option key={a} value={a}>{a.replace('POLICY_RULE_ACTION_', '')}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="rule-priority">Priority</Label>
+                <Input
+                  id="rule-priority"
+                  type="number"
+                  min={0}
+                  value={rulePriority}
+                  onChange={(e) => setRulePriority(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="rule-protocol">Protocol</Label>
+                <select
+                  id="rule-protocol"
+                  className="h-9 w-full rounded-md border border-input bg-background px-2"
+                  value={ruleProtocol}
+                  onChange={(e) => setRuleProtocol(e.target.value)}
+                >
+                  {RULE_PROTOCOLS.map((p) => (
+                    <option key={p} value={p}>{p}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="rule-destination-port">Destination port</Label>
+                <Input
+                  id="rule-destination-port"
+                  type="number"
+                  min={0}
+                  max={65535}
+                  value={ruleDestinationPort}
+                  onChange={(e) => setRuleDestinationPort(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="rule-source-ip">Source IP</Label>
+                <Input id="rule-source-ip" value={ruleSourceIp} onChange={(e) => setRuleSourceIp(e.target.value)} />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="rule-destination-ip">Destination IP</Label>
+                <Input
+                  id="rule-destination-ip"
+                  value={ruleDestinationIp}
+                  onChange={(e) => setRuleDestinationIp(e.target.value)}
+                />
+              </div>
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setApplyOpen(false)}>Cancel</Button>
             <Button
-              disabled={!policyName}
+              disabled={!policyName || !ruleAction}
               onClick={() =>
                 run(
                   'Policy applied',
-                  () => sdn.applyPolicy({ config: { name: policyName, type: policyType, enabled: true } }),
+                  applyPolicy,
                   () => {
                     setApplyOpen(false);
                     setPolicyName('');
+                    resetRule();
                     refetchPolicies();
                   }
                 )

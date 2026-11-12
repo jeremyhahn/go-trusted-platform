@@ -881,11 +881,51 @@ export type SDNPolicyStatus =
 export interface SDNPolicyRule {
   ruleId?: string;
   priority?: number;
-  match?: Record<string, unknown>;
-  action?: string;
+  match?: SDNPolicyRuleMatch;
+  action?: SDNPolicyRuleAction;
   actionValue?: string;
   log?: boolean;
   counter?: boolean;
+}
+
+/** PolicyRuleAction (sdn.proto) */
+export type SDNPolicyRuleAction =
+  | 'POLICY_RULE_ACTION_UNSPECIFIED'
+  | 'POLICY_RULE_ACTION_ALLOW'
+  | 'POLICY_RULE_ACTION_DENY'
+  | 'POLICY_RULE_ACTION_RATE_LIMIT'
+  | 'POLICY_RULE_ACTION_REDIRECT'
+  | 'POLICY_RULE_ACTION_MIRROR'
+  | 'POLICY_RULE_ACTION_LOG';
+
+/** PolicyRuleMatch (sdn.proto) in protojson camelCase */
+export interface SDNPolicyRuleMatch {
+  sourceIp?: string;
+  destinationIp?: string;
+  sourcePort?: number;
+  destinationPort?: number;
+  protocol?: string;
+  direction?: string;
+  interface?: string;
+  vlanId?: number;
+  dscp?: number;
+  application?: string;
+}
+
+/** PolicyTargetType (sdn.proto) */
+export type SDNPolicyTargetType =
+  | 'POLICY_TARGET_TYPE_UNSPECIFIED'
+  | 'POLICY_TARGET_TYPE_BRIDGE'
+  | 'POLICY_TARGET_TYPE_PORT'
+  | 'POLICY_TARGET_TYPE_VLAN'
+  | 'POLICY_TARGET_TYPE_INTERFACE';
+
+/** PolicyTarget (sdn.proto): ApplyPolicy installs flows on bridge targets */
+export interface SDNPolicyTarget {
+  type: SDNPolicyTargetType;
+  id: string;
+  direction?: string;
+  zone?: string;
 }
 
 /**
@@ -898,7 +938,7 @@ export interface SDNPolicyConfig {
   priority?: number;
   enabled?: boolean;
   rules?: SDNPolicyRule[];
-  targets?: Record<string, unknown>[];
+  targets?: SDNPolicyTarget[];
 }
 
 /**
