@@ -121,6 +121,18 @@ Plus the ten `PolicyEngine` methods. `NewOPAEngine` takes no arguments and
 initialises `policies` and an `inmem.New()` store; everything else comes from
 `Initialize`.
 
+### Build tag `opa` (#1691)
+
+The OPA runtime links only under the `opa` build tag, which the `Makefile`
+puts in `BUILD_TAGS`, so default builds keep OPA. `engine.go` (here) and
+`pkg/compute/container/opa_engine.go` carry `//go:build opa`. A build without
+the tag compiles `engine_noopa.go` / `opa_engine_noopa.go` instead: the same
+exported API, refusing every operation with `ErrOPANotBuilt` (a typed
+`ErrOPANotBuilt{}` here, the `container.ErrOPANotBuilt` sentinel there).
+`Close` returns nil, `IsInitialized` false, `Stats` zero, and
+`container.NewOPAEngine` returns `nil, ErrOPANotBuilt`. Both builds fail
+closed: `proxysvc.NewOPAEvaluator` propagates the `Initialize` error.
+
 Unexported behaviour worth knowing:
 
 | Symbol | Value / effect |
