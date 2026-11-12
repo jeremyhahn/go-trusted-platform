@@ -23,6 +23,8 @@ import type {
   CreateIDevIDCSRResponse,
   CreateIAKCSRRequest,
   CreateIAKCSRResponse,
+  CreateLDevIDRequest,
+  CreateLDevIDResponse,
   InstallIDevIDCertificateRequest,
   InstallIDevIDCertificateResponse,
   InstallIAKCertificateRequest,
@@ -234,6 +236,17 @@ export class IDevIDService extends BaseService {
    */
   async deleteIAKCertificate(): Promise<ApiResponse<DeleteIAKCertificateResponse>> {
     return this.client.delete<DeleteIAKCertificateResponse>(this.buildUrl('/iak/certificate'));
+  }
+
+  /**
+   * Create an LDevID: the platform generates the key, builds a CSR and has
+   * the platform CA issue the certificate
+   *
+   * @param request - LDevID creation request
+   * @returns CSR and issued certificate
+   */
+  async createLDevID(request?: CreateLDevIDRequest): Promise<ApiResponse<CreateLDevIDResponse>> {
+    return this.client.post<CreateLDevIDResponse>(this.buildUrl('/ldevid'), request ?? {});
   }
 
   // =========================================================================
