@@ -28,12 +28,16 @@ import { RefreshCw } from "lucide-react";
 import { useApi, useIDevID, useMutation, useToast } from "@/hooks";
 import { ConfirmAction } from "@/components/features/tpm/confirm-action";
 
-/** Proto bytes fields arrive base64-encoded; show PEM text when they decode to it. */
+/**
+ * Proto bytes fields arrive base64-encoded. PEM bytes are shown as text;
+ * binary bytes (a TCG_CSR_IDEVID) stay base64 so they can be exported intact.
+ */
 const decodePem = (value?: string): string => {
   if (!value) return "";
   if (value.startsWith("-----BEGIN")) return value;
   try {
-    return atob(value);
+    const decoded = atob(value);
+    return decoded.startsWith("-----BEGIN") ? decoded : value;
   } catch {
     return value;
   }
@@ -98,7 +102,7 @@ export default function TPMIDevIDPage() {
     onError: onError("Error deleting IAK"),
   });
   const createIAKCSR = useMutation(() => idevid.createIAKCSR(), {
-    onSuccess: (r) => done("IAK CSR created", decodePem(r.csrPem)),
+    onSuccess: (r) => done("IAK CSR created (TCG_CSR_IDEVID, base64)", decodePem(r.csrPem)),
     onError: onError("Error creating IAK CSR"),
   });
   const createLDevID = useMutation(
