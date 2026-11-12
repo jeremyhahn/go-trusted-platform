@@ -149,6 +149,12 @@ const routes: RouteCase[] = [
     path: '/v1/device/profiles/7/assign',
     call: (s) => s.assignProfileToDevice({ profileId: 7 } as never),
   },
+  {
+    method: 'unassignProfileFromDevice',
+    verb: 'post',
+    path: '/v1/device/profiles/7/unassign',
+    call: (s) => s.unassignProfileFromDevice(7),
+  },
   // Templates: singular.
   { method: 'createTemplate', verb: 'post', path: '/v1/device/templates', call: (s) => s.createTemplate({} as never) },
   { method: 'getTemplate', verb: 'get', path: '/v1/device/templates/42', call: (s) => s.getTemplate('42') },

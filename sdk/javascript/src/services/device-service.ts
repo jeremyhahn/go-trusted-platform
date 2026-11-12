@@ -523,6 +523,22 @@ export class DeviceService extends BaseService {
     );
   }
 
+  /**
+   * Unassign a profile from its device
+   *
+   * Server route: `POST /api/v1/device/profiles/{id}/unassign`. The route
+   * reads no body; it clears the profile's device binding and returns the
+   * updated profile.
+   * @param profileId - Profile ID
+   * @returns The updated profile
+   */
+  async unassignProfileFromDevice(profileId: number | string): Promise<ApiResponse<DeviceProfile>> {
+    return this.client.post<DeviceProfile>(
+      this.singularUrl(`/profiles/${profileId}/unassign`),
+      {}
+    );
+  }
+
   // =========================================================================
   // Provisioning Session Operations
   // =========================================================================
