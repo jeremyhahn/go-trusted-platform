@@ -30,6 +30,7 @@ import { VMMetricsCard } from '@/components/features/compute/vm-metrics';
 import { useCompute, useMutation, useToast, type MutationError } from '@/hooks';
 import type { VMDetail } from '@/types/infrastructure';
 import { vmStatus } from '@/lib/compute-state';
+import { VMOperations } from './vm-operations';
 
 const statusColors = {
   running: 'bg-green-500/10 text-green-500 border-green-500/20',
@@ -149,14 +150,17 @@ export default function VMDetailPage() {
     }
   );
 
-  // TODO: Suspend/Resume functionality not available in SDK yet
-  // SDK only provides start/stop/reboot operations
-  // Placeholder mutations for future implementation
   const suspendVMMutation = useMutation(
-    async (vmId: string) => {
-      throw new Error('Suspend operation not yet implemented in SDK');
-    },
+    (vmId: string) => compute.suspendVM(vmId),
     {
+      onSuccess: () => {
+        toast({
+          title: 'Success',
+          description: 'VM suspended successfully',
+        });
+        setActionLoading(false);
+        fetchVM();
+      },
       onError: (error: MutationError) => {
         toast({
           title: 'Error',
@@ -169,10 +173,16 @@ export default function VMDetailPage() {
   );
 
   const resumeVMMutation = useMutation(
-    async (vmId: string) => {
-      throw new Error('Resume operation not yet implemented in SDK');
-    },
+    (vmId: string) => compute.resumeVM(vmId),
     {
+      onSuccess: () => {
+        toast({
+          title: 'Success',
+          description: 'VM resumed successfully',
+        });
+        setActionLoading(false);
+        fetchVM();
+      },
       onError: (error: MutationError) => {
         toast({
           title: 'Error',
@@ -392,6 +402,8 @@ export default function VMDetailPage() {
         <VMMetricsCard metrics={vm.metrics} />
       </div>
 
+      <VMOperations vmId={vmId} />
+
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
@@ -403,7 +415,7 @@ export default function VMDetailPage() {
           </div>
         </CardHeader>
         <CardContent>
-          {vm.snapshots.length === 0 ? (
+          {!vm.snapshots || vm.snapshots.length === 0 ? (
             <p className="text-center text-muted-foreground py-8">No snapshots</p>
           ) : (
             <Table>
