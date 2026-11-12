@@ -17,6 +17,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 )
 
 func TestDaemonToolExecution(t *testing.T) {
@@ -326,6 +328,10 @@ func TestDaemonGetConfigTool(t *testing.T) {
 			t.Fatal("platform_daemon_get_config is not registered")
 		}
 	})
+
+	t.Run("scope matches gRPC", func(t *testing.T) {
+		assertDaemonConfigScope(t, "platform_daemon_get_config")
+	})
 }
 
 // TestDaemonReloadConfigTool checks that platform_daemon_reload_config
@@ -374,6 +380,10 @@ func TestDaemonReloadConfigTool(t *testing.T) {
 			t.Fatal("platform_daemon_reload_config is not registered")
 		}
 	})
+
+	t.Run("scope matches gRPC", func(t *testing.T) {
+		assertDaemonConfigScope(t, "platform_daemon_reload_config")
+	})
 }
 
 // hasDaemonTool reports whether the registry lists a tool by name.
@@ -384,6 +394,30 @@ func hasDaemonTool(r *ToolRegistry, name string) bool {
 		}
 	}
 	return false
+}
+
+// daemonConfigGRPCTwins maps each daemon config tool to the gRPC method
+// whose scope it carries.
+var daemonConfigGRPCTwins = map[string]string{
+	"platform_daemon_get_config":    "/platform.v1.PlatformDaemon/GetConfig",
+	"platform_daemon_reload_config": "/platform.v1.PlatformDaemon/ReloadConfig",
+}
+
+// assertDaemonConfigScope checks that the MCP tool needs the scope its gRPC
+// twin needs.
+func assertDaemonConfigScope(t *testing.T, tool string) {
+	t.Helper()
+	want := grpcapi.ScopeForMethod(daemonConfigGRPCTwins[tool])
+	if want == "" {
+		t.Fatalf("gRPC twin of %s has no scope", tool)
+	}
+	got, ok := toolPermissionCatalog()[tool]
+	if !ok {
+		t.Fatalf("MCP %s is not classified", tool)
+	}
+	if got != want {
+		t.Fatalf("MCP %s scope = %q, want %q", tool, got, want)
+	}
 }
 
 func TestErrDaemonServiceNameRequired(t *testing.T) {
