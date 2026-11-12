@@ -27,18 +27,40 @@ export default function SignCSRPage() {
   const [csrPem, setCsrPem] = React.useState("");
   const [validDays, setValidDays] = React.useState("");
 
-  const signMutation = useMutation((req: { csrPem: string; validDays?: number }) => ca.signCSR(req));
+  // The CSR and validity the shown certificate was issued for; a certificate
+  // is shown only while the form still holds that input.
+  const [signedFor, setSignedFor] = React.useState<string | null>(null);
+  const inputKey = (csr: string, days: string) => `${csr}\n${days}`;
+
+  const signMutation = useMutation(
+    (req: { csrPem: string; validDays?: number; key: string }) =>
+      ca.signCSR({
+        csrPem: req.csrPem,
+        ...(req.validDays !== undefined ? { validDays: req.validDays } : {}),
+      }),
+    { onSuccess: (_data, req) => setSignedFor(req.key) }
+  );
+
+  const clearResult = () => {
+    signMutation.reset();
+    setSignedFor(null);
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    clearResult();
     const days = Number.parseInt(validDays, 10);
     signMutation.mutate({
       csrPem: csrPem.trim(),
       ...(Number.isFinite(days) && days > 0 ? { validDays: days } : {}),
+      key: inputKey(csrPem, validDays),
     });
   };
 
-  const issued = (signMutation.data as unknown as { certificate?: IssuedCertWire } | undefined)?.certificate;
+  const issued =
+    !signMutation.error && !signMutation.isLoading && signedFor === inputKey(csrPem, validDays)
+      ? (signMutation.data as unknown as { certificate?: IssuedCertWire } | undefined)?.certificate
+      : undefined;
 
   return (
     <div className="flex flex-col gap-6">
@@ -63,7 +85,10 @@ export default function SignCSRPage() {
                 rows={10}
                 className="font-mono text-xs"
                 value={csrPem}
-                onChange={(e) => setCsrPem(e.target.value)}
+                onChange={(e) => {
+                  setCsrPem(e.target.value);
+                  clearResult();
+                }}
                 placeholder="-----BEGIN CERTIFICATE REQUEST-----"
               />
             </div>
@@ -74,7 +99,10 @@ export default function SignCSRPage() {
                 type="number"
                 min={1}
                 value={validDays}
-                onChange={(e) => setValidDays(e.target.value)}
+                onChange={(e) => {
+                  setValidDays(e.target.value);
+                  clearResult();
+                }}
                 placeholder="CA default"
               />
             </div>

@@ -92,7 +92,8 @@ export default function VerifyCertificatePage() {
           </CardHeader>
           <CardContent className="flex flex-col gap-2 text-sm">
             <p data-testid="verify-revocation" className="text-muted-foreground">
-              Revocation status checked
+              Revocation checking was requested. The server does not report whether the revocation
+              lookup completed, so a valid verdict does not prove the certificate is unrevoked.
             </p>
             {(result.chain ?? []).length > 0 && (
               <div data-testid="verify-chain">
