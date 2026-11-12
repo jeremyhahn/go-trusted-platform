@@ -301,6 +301,18 @@ func (e ErrDirectBundleNoCA) Error() string {
 	return fmt.Sprintf("bootstrap direct: %s contains no CA certificate", e.Path)
 }
 
+// ErrDirectBundleNonCertificateBlock is returned by `bootstrap direct` when
+// the bundle holds a PEM block that is not a certificate, such as a private
+// key. The block bytes are never part of the message.
+type ErrDirectBundleNonCertificateBlock struct {
+	Path string
+	Type string
+}
+
+func (e ErrDirectBundleNonCertificateBlock) Error() string {
+	return fmt.Sprintf("bootstrap direct: %s holds a %q PEM block; the bundle must contain only certificates", e.Path, e.Type)
+}
+
 // MessageError is a typed error carrying a fully formatted message with no
 // underlying cause. It replaces inline formatted-error constructions that do not wrap
 // another error.
