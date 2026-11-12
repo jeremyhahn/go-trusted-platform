@@ -122,6 +122,40 @@ func TestReceiveIncoming_HappyPath(t *testing.T) {
 	assert.Equal(t, netip.MustParseAddrPort(DefaultMigrationListenAddress), gotParams.listen)
 }
 
+// The receiver serves a separate transfer after the prepare request has
+// returned, so its QEMU process must not be bound to that request's context:
+// it lives until FinalizeIncoming commits or aborts it.
+func TestReceiveIncoming_ReceiverOutlivesTheRequest(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	tlsProv := &fakeServerTLS{dir: t.TempDir()}
+	orch.config.MigrationTLS = tlsProv
+
+	recv := &fakeIncomingReceiver{port: 49201}
+	var launchCtx context.Context
+	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
+		launchCtx = ctx
+		return recv, nil
+	})
+
+	reqCtx, cancel := context.WithCancel(context.Background())
+	handle, err := orch.ReceiveIncoming(reqCtx, MigrationSpec{
+		Arch:   orch.config.Arch,
+		VMName: "guest",
+		Config: &InstanceConfig{Memory: 1024},
+	})
+	require.NoError(t, err)
+	cancel()
+
+	require.NotNil(t, launchCtx)
+	assert.NoError(t, launchCtx.Err(), "the receiver must outlive the prepare request")
+	assert.False(t, recv.aborted)
+	assert.False(t, tlsProv.cleanedUp)
+
+	require.NoError(t, orch.FinalizeIncoming(context.Background(), handle.ReceiverID, false))
+	assert.True(t, recv.aborted)
+	assert.True(t, tlsProv.cleanedUp, "finalize must clean the receiver's creds up")
+}
+
 func TestReceiveIncoming_ListensOnTheConfiguredAddress(t *testing.T) {
 	orch := newOpsOrchestrator(t)
 	orch.config.MigrationTLS = &fakeServerTLS{dir: t.TempDir()}

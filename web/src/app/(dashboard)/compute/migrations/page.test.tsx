@@ -48,6 +48,32 @@ describe("MigrationsPage receiver spec", () => {
     await waitFor(() => expect(ops.prepareMigration).toHaveBeenCalledTimes(1));
     expect(ops.prepareMigration.mock.calls[0][0].spec.enableKvm).toBe(false);
   });
+
+  // The receiver's NIC must match the source guest's, or its migration state
+  // does not load: the daemon defaults an empty network mode to bridge.
+  it("sends network mode bridge and no MAC address by default", async () => {
+    render(<MigrationsPage />);
+    fillSpec();
+    fireEvent.click(screen.getByRole("button", { name: "Prepare Migration" }));
+
+    await waitFor(() => expect(ops.prepareMigration).toHaveBeenCalledTimes(1));
+    const spec = ops.prepareMigration.mock.calls[0][0].spec;
+    expect(spec.networkMode).toBe("bridge");
+    expect(spec).not.toHaveProperty("macAddress");
+  });
+
+  it("sends the source guest's network mode and MAC address", async () => {
+    render(<MigrationsPage />);
+    fillSpec();
+    fireEvent.change(screen.getByLabelText("Network mode"), { target: { value: "none" } });
+    fireEvent.change(screen.getByLabelText("MAC address"), { target: { value: " 52:54:00:12:34:56 " } });
+    fireEvent.click(screen.getByRole("button", { name: "Prepare Migration" }));
+
+    await waitFor(() => expect(ops.prepareMigration).toHaveBeenCalledTimes(1));
+    const spec = ops.prepareMigration.mock.calls[0][0].spec;
+    expect(spec.networkMode).toBe("none");
+    expect(spec.macAddress).toBe("52:54:00:12:34:56");
+  });
 });
 
 // #1727: each receiver holds a QEMU process until finalized, so the page keeps
