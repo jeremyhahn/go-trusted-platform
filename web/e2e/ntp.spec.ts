@@ -49,6 +49,7 @@ interface NTPMockConfig {
   status?: ReturnType<typeof mockStatus>;
   sources?: ReturnType<typeof mockSource>[];
   stepError?: ApiError;
+  sourcesError?: ApiError;
 }
 
 async function mockNTPApi(page: Page, config: NTPMockConfig = {}) {
@@ -63,6 +64,14 @@ async function mockNTPApi(page: Page, config: NTPMockConfig = {}) {
 
   await page.route('**/api/v1/ntp/sources', async (route: Route) => {
     calls.sources++;
+    if (config.sourcesError) {
+      await route.fulfill({
+        status: config.sourcesError.status,
+        contentType: 'application/json',
+        body: errorEnvelope(config.sourcesError),
+      });
+      return;
+    }
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ sources }) });
   });
 
@@ -118,6 +127,19 @@ test.describe('NTP', () => {
     await expect(table.getByText('ntp-src-a')).toBeVisible();
     await expect(table.getByText('ntp-src-b')).toBeVisible();
     await expect(table.getByText('unreachable')).toBeVisible();
+    expect(calls.sources).toBeGreaterThan(0);
+  });
+
+  test('shows an error, not an empty configuration, when ListSources fails (503)', async ({ page }) => {
+    const calls = await mockNTPApi(page, {
+      sourcesError: { status: 503, error: 'ntp: chronyd unavailable', errorCode: 'UNAVAILABLE' } as ApiError,
+    });
+
+    await page.goto('/networking/ntp');
+
+    const table = page.getByTestId('ntp-sources-table');
+    await expect(table.getByTestId('ntp-sources-error')).toBeVisible();
+    await expect(table.getByText('No sources configured')).toHaveCount(0);
     expect(calls.sources).toBeGreaterThan(0);
   });
 

@@ -5,6 +5,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NTPService } from '../ntp-service.js';
 import { NTPService as IndexedNTPService } from '../index.js';
+import { NTPService as RootNTPService } from '../../index.js';
+import type { GetNTPStatusResponse, ListNTPSourcesResponse, StepNTPClockResponse } from '../../index.js';
 import type { ApiClient } from '../../client/api-client.js';
 
 function createMockApiClient(): ApiClient {
@@ -32,6 +34,16 @@ describe('NTPService', () => {
 
   it('is exported from the services index', () => {
     expect(IndexedNTPService).toBe(NTPService);
+  });
+
+  it('is exported from the package root with its response types', () => {
+    expect(RootNTPService).toBe(NTPService);
+    const rooted = new RootNTPService(mockClient);
+    expect(rooted).toBeInstanceOf(NTPService);
+    const status: GetNTPStatusResponse | undefined = undefined;
+    const sources: ListNTPSourcesResponse | undefined = undefined;
+    const stepped: StepNTPClockResponse | undefined = undefined;
+    expect([status, sources, stepped]).toEqual([undefined, undefined, undefined]);
   });
 
   it('getStatus gets /v1/ntp/status', async () => {
