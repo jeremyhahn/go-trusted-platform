@@ -119,15 +119,15 @@ export default function DeviceLookupPage() {
   const findDevice = async () => {
     try {
       const result = await lookup.findDeviceBySerial.mutateAsync(deviceSerial.trim());
-      showDevice(result.device);
+      showDevice(result);
     } catch {
       showDevice(undefined);
     }
   };
 
-  const runProfileLookup = async (lookupFn: () => Promise<{ profile?: DeviceProfile }>) => {
+  const runProfileLookup = async (lookupFn: () => Promise<DeviceProfile>) => {
     try {
-      showProfile((await lookupFn()).profile);
+      showProfile(await lookupFn());
     } catch {
       showProfile(undefined);
     }
@@ -196,7 +196,7 @@ export default function DeviceLookupPage() {
                       description: `Save the model of device ${device.id}?`,
                       run: async () => {
                         const result = await lookup.updateDevice.mutateAsync({ id: device.id, model: deviceModel });
-                        if (result.device) showDevice(result.device);
+                        showDevice(result);
                       },
                     })
                   }
@@ -265,7 +265,7 @@ export default function DeviceLookupPage() {
           </div>
           {activation && (
             <p className="text-sm" data-testid="activate-result">
-              {activation.activationStatus ?? activation.status.message}
+              {activation.status}
               {activation.vlan !== undefined ? ` (VLAN ${activation.vlan})` : ''}
             </p>
           )}
@@ -349,10 +349,11 @@ export default function DeviceLookupPage() {
                       description: `Save the name of profile ${profile.id}?`,
                       run: async () => {
                         const result = await lookup.updateProfile.mutateAsync({
-                          id: profile.id,
+                          // The server replaces the whole profile: send every field it holds.
+                          ...profile,
                           name: profileName.trim(),
                         });
-                        if (result.profile) showProfile(result.profile);
+                        showProfile(result);
                       },
                     })
                   }
