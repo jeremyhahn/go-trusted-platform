@@ -326,8 +326,8 @@ see [engineering.md](engineering.md) §6.
 - **It does not implement BMC hardware attestation.** `pkg/bmc/attestation`
   defines `AttestationProvider`, `Evidence`, `Policy`, `Verifier`, a vendor
   dispatch registry and three backends — and **nothing in the platform imports
-  it**. `pkg/bmc/CLAUDE.md` calls it "preserved scaffolding, no real
-  implementation until RoT-capable hardware available".
+  it**. It is preserved scaffolding, with no real implementation until
+  RoT-capable hardware is available.
 
 ## 7. Vendor quirks — how a board gets supported
 
