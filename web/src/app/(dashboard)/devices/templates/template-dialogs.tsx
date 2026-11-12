@@ -8,7 +8,7 @@
  * lookup / assign / unassign panel (FindConfigForDevice,
  * AssignProfileToDevice, UnassignProfileFromDevice).
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Loader2, Search, Link2, Unlink } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -108,20 +108,39 @@ export function TemplateDetailsDialog({
   onOpenPage,
 }: TemplateDetailsDialogProps) {
   const { getTemplate } = useDeviceTemplateActions();
-  const fetchTemplate = getTemplate.mutate;
+  const fetchTemplate = getTemplate.mutateAsync;
+  // The answer the dialog owns, tagged with the id it was requested for.
+  const [shown, setShown] = useState<{ id: string; template?: DeviceTemplate; error?: string } | null>(
+    null,
+  );
 
   useEffect(() => {
-    if (templateId !== null) {
-      fetchTemplate(templateId);
+    if (templateId === null) {
+      return undefined;
     }
+    // A superseded request (the dialog closed or moved to another id) is
+    // ignored when it completes, whatever order the responses arrive in.
+    let active = true;
+    fetchTemplate(templateId).then(
+      (t) => {
+        if (active) setShown({ id: templateId, template: t });
+      },
+      (err) => {
+        if (active) setShown({ id: templateId, error: errorMessage(err) });
+      },
+    );
+    return () => {
+      active = false;
+    };
     // fetchTemplate is stable per mount; refetch only when the id changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [templateId]);
 
   // Show only the answer for the id on display, never a previous one.
-  const current = getTemplate.variables === templateId && !getTemplate.isLoading;
-  const template = current ? (getTemplate.data ?? null) : null;
-  const loadError = current && getTemplate.error ? getTemplate.error.message : null;
+  const current = shown !== null && shown.id === templateId ? shown : null;
+  const template =
+    current?.template && String(current.template.id) === templateId ? current.template : null;
+  const loadError = current?.error ?? null;
 
   return (
     <Dialog open={templateId !== null} onOpenChange={onOpenChange}>
@@ -334,16 +353,35 @@ export function ProfileAssignmentPanel() {
   const [profileId, setProfileId] = useState('');
   const [found, setFound] = useState<DeviceProfile | null | undefined>(undefined);
   const [confirmUnassign, setConfirmUnassign] = useState(false);
+  // Each lookup takes a sequence number; an identity edit bumps it, so a
+  // response for an earlier lookup or an earlier identity is discarded.
+  const lookupSeq = useRef(0);
+  // True while profileId holds the lookup's answer, not the operator's entry.
+  const autoProfile = useRef(false);
+
+  const identityChanged = () => {
+    lookupSeq.current++;
+    setFound(undefined);
+    if (autoProfile.current) {
+      autoProfile.current = false;
+      setProfileId('');
+    }
+  };
 
   const handleFind = async () => {
+    const seq = ++lookupSeq.current;
     try {
       const result = await findConfig.mutateAsync({ ekSerial, macAddress });
+      if (seq !== lookupSeq.current) return;
       setFound(result ?? null);
       if (result?.id) {
         setProfileId(String(result.id));
+        autoProfile.current = true;
       }
     } catch (err) {
+      if (seq !== lookupSeq.current) return;
       setProfileId('');
+      autoProfile.current = false;
       // No matching profile is a 404 (ErrNoMatchingConfig), not an error.
       if ((err as { status?: number }).status === 404) {
         setFound(null);
@@ -402,15 +440,27 @@ export function ProfileAssignmentPanel() {
         <div className="grid gap-4 md:grid-cols-3">
           <div className="grid gap-2">
             <Label htmlFor="pa-ek-serial">EK Serial Number</Label>
-            <Input id="pa-ek-serial" value={ekSerial} onChange={(e) => setEkSerial(e.target.value)} />
+            <Input id="pa-ek-serial" value={ekSerial} onChange={(e) => {
+                setEkSerial(e.target.value);
+                identityChanged();
+              }}
+            />
           </div>
           <div className="grid gap-2">
             <Label htmlFor="pa-mac">MAC Address</Label>
-            <Input id="pa-mac" value={macAddress} onChange={(e) => setMacAddress(e.target.value)} />
+            <Input id="pa-mac" value={macAddress} onChange={(e) => {
+                setMacAddress(e.target.value);
+                identityChanged();
+              }}
+            />
           </div>
           <div className="grid gap-2">
             <Label htmlFor="pa-profile-id">Profile ID</Label>
-            <Input id="pa-profile-id" value={profileId} onChange={(e) => setProfileId(e.target.value)} />
+            <Input id="pa-profile-id" value={profileId} onChange={(e) => {
+                autoProfile.current = false;
+                setProfileId(e.target.value);
+              }}
+            />
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
