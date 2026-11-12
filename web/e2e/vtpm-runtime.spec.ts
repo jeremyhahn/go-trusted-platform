@@ -213,4 +213,42 @@ test.describe('vTPM runtime page', () => {
     await expect(page.getByText('Error starting vTPM')).toHaveCount(0);
     await expect(page.getByText('bundle vm-1 failed to start')).toHaveCount(0);
   });
+
+  test('start and stop are serialized while either is pending', async ({ page }) => {
+    const calls = await openRuntimePage(page, { delayMs: { start: 1500 } });
+    const startButton = page.getByRole('button', { name: 'Start vTPM' });
+    const stopButton = page.getByRole('button', { name: 'Stop vTPM' });
+
+    await startButton.click();
+    await expect.poll(() => lastCall(calls, 'start')?.method).toBe('POST');
+    // While the start is held, neither lifecycle control accepts a click.
+    await expect(startButton).toBeDisabled();
+    await expect(stopButton).toBeDisabled();
+
+    await expect(page.getByTestId('vtpm-run-state')).toHaveText('Running');
+    await expect(stopButton).toBeEnabled();
+    await expect(startButton).toBeEnabled();
+    expect(lastCall(calls, 'stop')).toBeUndefined();
+  });
+
+  test('stop and start are serialized while a stop is pending', async ({ page }) => {
+    const calls = await openRuntimePage(page, { delayMs: { stop: 1500 } });
+    const startButton = page.getByRole('button', { name: 'Start vTPM' });
+    const stopButton = page.getByRole('button', { name: 'Stop vTPM' });
+
+    await startButton.click();
+    await expect(page.getByTestId('vtpm-run-state')).toHaveText('Running');
+
+    await stopButton.click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Confirm' }).click();
+    await expect.poll(() => lastCall(calls, 'stop')?.method).toBe('POST');
+    // While the stop is held, neither lifecycle control accepts a click.
+    await expect(startButton).toBeDisabled();
+    await expect(stopButton).toBeDisabled();
+
+    await expect(page.getByTestId('vtpm-run-state')).toHaveText('Stopped');
+    await expect(startButton).toBeEnabled();
+    await expect(stopButton).toBeEnabled();
+    expect(calls.filter((c) => c.path === 'start')).toHaveLength(1);
+  });
 });

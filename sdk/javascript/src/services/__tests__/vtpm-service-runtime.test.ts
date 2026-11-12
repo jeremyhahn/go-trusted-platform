@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { VTPMService } from '../vtpm-service.js';
-import type { ApiClient } from '../../client/api-client.js';
+import { ApiClient } from '../../client/api-client.js';
 
 function createMockApiClient(): ApiClient {
   return {
@@ -69,10 +69,11 @@ describe('VTPMService bundle runtime', () => {
 
   it('extendBundlePCR POSTs the index and data to /bundles/{id}/pcrs/extend', async () => {
     await service.extendBundlePCR('vm-1', { pcr_index: 16, data: 'AAAA' });
-    expect(mockClient.post).toHaveBeenCalledWith('/v1/vtpm/bundles/vm-1/pcrs/extend', {
-      pcr_index: 16,
-      data: 'AAAA',
-    });
+    expect(mockClient.post).toHaveBeenCalledWith(
+      '/v1/vtpm/bundles/vm-1/pcrs/extend',
+      { pcr_index: 16, data: 'AAAA' },
+      { retry: { enabled: false } }
+    );
   });
 
   it('readBundlePCR GETs /bundles/{id}/pcrs with the pcr_index query', async () => {
@@ -85,5 +86,35 @@ describe('VTPMService bundle runtime', () => {
     const failure = new Error('409 Conflict: vtpm: bundle not running');
     vi.mocked(mockClient.post).mockRejectedValue(failure);
     await expect(service.quoteBundle('vm-1', { nonce: 'AA==' })).rejects.toBe(failure);
+  });
+});
+
+describe('extendBundlePCR transport', () => {
+  it('sends a PCR extend once when the response is lost', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValue(
+        new Response(JSON.stringify({ pcr_index: 16, value: 'AAAA' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      );
+    const client = new ApiClient({
+      baseUrl: 'https://platform.test/api/v1',
+      fetch: fetchImpl as unknown as typeof fetch,
+      retry: { maxRetries: 3, initialDelayMs: 1, maxDelayMs: 1 },
+    });
+
+    let result: Awaited<ReturnType<VTPMService['extendBundlePCR']>> | undefined;
+    let thrown: unknown;
+    try {
+      result = await new VTPMService(client).extendBundlePCR('vm-1', { pcr_index: 16, data: 'AAAA' });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(thrown !== undefined || result?.success === false).toBe(true);
   });
 });
