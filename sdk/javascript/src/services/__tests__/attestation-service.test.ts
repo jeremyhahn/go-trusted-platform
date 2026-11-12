@@ -43,42 +43,42 @@ describe('AttestationService REST contract', () => {
 
   it('collects host attestation from /attestation/host', async () => {
     await service.collectHostAttestation({ config: {}, nonce: 'bm9uY2U=' } as never);
-    const [url] = (client.post as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    const url = vi.mocked(client.post).mock.calls[0]?.[0];
     expect(url).toBe('/v1/attestation/host');
     expect(url).not.toContain('/collect/');
   });
 
   it('puts the VM id in the path, because the server reads it from mux vars', async () => {
     await service.collectVMAttestation({ vmId: 'vm-42', config: {}, nonce: 'bm9uY2U=' } as never);
-    const [url] = (client.post as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    const url = vi.mocked(client.post).mock.calls[0]?.[0];
     expect(url).toBe('/v1/attestation/vm/vm-42');
   });
 
   it('puts the container id in the path', async () => {
     await service.collectContainerAttestation({ containerId: 'ctr-7' } as never);
-    const [url] = (client.post as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    const url = vi.mocked(client.post).mock.calls[0]?.[0];
     expect(url).toBe('/v1/attestation/container/ctr-7');
   });
 
   it('encodes identifiers that would otherwise break out of the path segment', async () => {
     await service.collectVMAttestation({ vmId: 'a/b?c', config: {}, nonce: 'bm9uY2U=' } as never);
-    const [url] = (client.post as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    const url = vi.mocked(client.post).mock.calls[0]?.[0];
     expect(url).toBe('/v1/attestation/vm/a%2Fb%3Fc');
   });
 
   it('builds manifests at /manifests/build, not the list route', async () => {
     await service.buildManifest({} as never);
-    const [url] = (client.post as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    const url = vi.mocked(client.post).mock.calls[0]?.[0];
     expect(url).toBe('/v1/attestation/manifests/build');
   });
 
   it('still lists and verifies manifests at their documented routes', async () => {
     await service.listManifests();
-    const [listUrl] = (client.get as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    const listUrl = vi.mocked(client.get).mock.calls[0]?.[0];
     expect(listUrl).toContain('/v1/attestation/manifests');
 
     await service.verifyManifest({} as never);
-    const [verifyUrl] = (client.post as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    const verifyUrl = vi.mocked(client.post).mock.calls[0]?.[0];
     expect(verifyUrl).toBe('/v1/attestation/manifests/verify');
   });
 });
