@@ -157,6 +157,15 @@ func (p *fakeProgrammer) holds(iface string, prefix string) bool {
 	return ok
 }
 
+// HasAddress makes fakeProgrammer an AddressReader: an address seeded in
+// addrs before Start is one the speaker found on the interface.
+func (p *fakeProgrammer) HasAddress(iface string, prefix netip.Prefix) (bool, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	_, ok := p.addrs[iface+"/"+prefix.String()]
+	return ok, nil
+}
+
 // fakeClock fires timers when the test advances it.
 type fakeClock struct {
 	mu     sync.Mutex
@@ -529,6 +538,45 @@ func TestSpeaker_ClaimFailureIsReportedInHealth(t *testing.T) {
 	var ao *ErrAddressOperationFailed
 	require.True(t, errors.As(h.Groups[0].LastError, &ao))
 	require.NoError(t, s.Stop(context.Background()))
+}
+
+// An owner whose source is its virtual address finds that address on the
+// interface before it claims: Stop must leave it there (Codex #1716 P1).
+func TestSpeaker_StopKeepsThePreexistingOwnerAddress(t *testing.T) {
+	seg := newSegment()
+	prog := newFakeProgrammer()
+	prog.addrs["br-int/10.4.200.1/24"] = nil
+	s, err := New(speakerConfig(PriorityOwner, "10.4.200.1"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: prog, Logger: quietLogger()})
+	require.NoError(t, err)
+	require.NoError(t, s.Start(context.Background()))
+	require.Equal(t, StateMaster, s.Health().Groups[0].State)
+	require.NoError(t, s.Stop(context.Background()))
+	assert.True(t, prog.holds("br-int", "10.4.200.1/24"), "the owner's preexisting address survives Stop")
+}
+
+func TestSpeaker_StopDeletesTheAddressItAdded(t *testing.T) {
+	seg := newSegment()
+	prog := newFakeProgrammer()
+	s, err := New(speakerConfig(PriorityOwner, "10.4.200.2"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: prog, Logger: quietLogger()})
+	require.NoError(t, err)
+	require.NoError(t, s.Start(context.Background()))
+	require.True(t, prog.holds("br-int", "10.4.200.1/24"))
+	require.NoError(t, s.Stop(context.Background()))
+	assert.False(t, prog.holds("br-int", "10.4.200.1/24"), "an address the speaker added is deleted on Stop")
+}
+
+func TestSpeaker_RollbackKeepsThePreexistingOwnerAddress(t *testing.T) {
+	seg := newSegment()
+	prog := newFakeProgrammer()
+	prog.addrs["br-int/10.4.200.1/24"] = nil
+	cfg := speakerConfig(PriorityOwner, "10.4.200.1")
+	cfg.Groups = append(cfg.Groups, GroupConfig{VRID: 21, Interface: "public0", Priority: 100, Addresses: []string{"203.0.113.1/24"}, Source: "203.0.113.4"})
+	s, err := New(cfg, Deps{Transport: &failOnSecondOpen{seg: seg}, Programmer: prog, Logger: quietLogger()})
+	require.NoError(t, err)
+	var tf *ErrTransportFailed
+	require.True(t, errors.As(s.Start(context.Background()), &tf))
+	assert.False(t, s.Active())
+	assert.True(t, prog.holds("br-int", "10.4.200.1/24"), "the rollback leaves the owner's preexisting address in place")
 }
 
 func TestWallClock(t *testing.T) {
