@@ -73,9 +73,10 @@ func PlatformAdminIdentity(a *app.App) AdminIdentity {
 
 // WireSDKBackends gives a daemon's ceremony and LUKS services their production
 // backends on every transport, and the LUKS service its effective-UID root
-// checker. A refused wiring (no SDK client) wires nothing. Runtime FIDO2 is intentionally left unwired until the SDK
-// exposes the daemon backend shape; callers receive daemon.ErrFIDO2NotConfigured
-// instead of a local CTAP2/KV implementation.
+// checker. A refused wiring (no SDK client) wires nothing. Runtime FIDO2 is
+// intentionally left unwired until the SDK exposes the daemon backend shape;
+// callers receive daemon.ErrFIDO2NotConfigured instead of a local CTAP2/KV
+// implementation.
 func WireSDKBackends(target SDKBackendTarget, src SDKBackendSources, logger *logging.Logger) error {
 	if src.SDK == nil {
 		return ErrCeremonyBackendRequiresSDK{}
