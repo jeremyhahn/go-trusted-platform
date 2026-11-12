@@ -133,6 +133,53 @@ test.describe('Device lookup, counts, profiles, activation and attestation (#174
     await expect(page.getByTestId('attest-result')).toHaveText('Verified: trusted');
   });
 
+  const DEVICE_B = { id: '6', serial: 'SN-2', model: 'Board-B', hash_algo_id: 11 };
+  const ATTEST_A = {
+    'POST /devices/5/attest': {
+      device_id: '5',
+      verified: true,
+      signature_valid: true,
+      nonce_valid: true,
+      pcrs_valid: true,
+      attestation_status: 'trusted',
+      attested_at: '2026-11-12T00:00:00Z',
+    },
+  };
+
+  async function attestFirstThenFindSecond(page: Page) {
+    await findDevice(page);
+    await page.getByLabel('Attestation evidence (base64)').fill('ZXZpZGVuY2U=');
+    await page.getByRole('button', { name: 'Attest device' }).click();
+    await confirm(page);
+    await expect(page.getByTestId('attest-result')).toHaveText('Verified: trusted');
+
+    await page.getByLabel('Device serial').fill('SN-2');
+    await page.getByRole('button', { name: 'Find device' }).click();
+    await expect(page.getByTestId('device-result')).toContainText('SN-2');
+  }
+
+  test('a verdict does not follow the lookup to another device', async ({ page }) => {
+    await openLookup(page, { ...FIND_DEVICE, 'GET /devices/serial/SN-2': DEVICE_B, ...ATTEST_A });
+    await attestFirstThenFindSecond(page);
+    await expect(page.getByTestId('attest-result')).toHaveCount(0);
+    await expect(page.getByLabel('Attestation evidence (base64)')).toHaveValue('');
+  });
+
+  test('a failed attest of the next device shows no earlier verdict', async ({ page }) => {
+    const calls = await openLookup(page, {
+      ...FIND_DEVICE,
+      'GET /devices/serial/SN-2': DEVICE_B,
+      ...ATTEST_A,
+      'POST /devices/6/attest': { status: 500, error: 'quote rejected' },
+    });
+    await attestFirstThenFindSecond(page);
+    await page.getByLabel('Attestation evidence (base64)').fill('ZXZpZGVuY2UtQg==');
+    await page.getByRole('button', { name: 'Attest device' }).click();
+    await confirm(page);
+    await expect.poll(call(calls, 'POST', '/devices/6/attest')).toEqual({ evidence: 'ZXZpZGVuY2UtQg==' });
+    await expect(page.getByTestId('attest-result')).toHaveCount(0);
+  });
+
   test('ActivateDevice activates a device after confirm', async ({ page }) => {
     const calls = await openLookup(page, {
       'POST /device/activate-json': { status: 'activated', vlan: 20, transitioned_at: '2026-11-12T00:00:00Z' },
