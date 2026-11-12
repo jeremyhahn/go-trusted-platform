@@ -80,6 +80,8 @@ export { useAuth, useOptionalAuth, AuthProvider } from '@/contexts/AuthContext';
 export type { User, AuthContextType } from '@/contexts/AuthContext';
 
 export { useToast, toast, dismissToast } from './use-toast';
+export { usePlatformDaemon } from './use-platform-daemon';
+export type { DaemonServiceAction } from './use-platform-daemon';
 export type { Toast, UseToastReturn } from './use-toast';
 
 export { useReportedGateways } from './use-reported-gateways';
