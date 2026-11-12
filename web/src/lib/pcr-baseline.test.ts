@@ -30,7 +30,9 @@ describe("baselineSourceLabel", () => {
   });
 
   it("does not read inherited object keys as labels", () => {
-    expect(baselineSourceLabel("toString")).not.toBe("Signed manifest");
+    expect(baselineSourceLabel("toString")).toBe("toString");
+    expect(baselineSourceLabel("constructor")).toBe("constructor");
+    expect(baselineSourceLabel("__proto__")).toBe("__proto__");
   });
 });
 

@@ -116,17 +116,31 @@ describe("TPMSealPage", () => {
     expect(screen.queryByText("Sealed Data (Base64)")).toBeNull();
   });
 
-  // btoa refuses a character above U+00FF, and useMutation drops that
-  // DOMException without onError, so the click did nothing at all.
-  it("seals non-Latin-1 text as its UTF-8 bytes", async () => {
-    tpm.seal.mockResolvedValue({ data: { sealedData: "YmxvYg==" } });
+  // Every existing seal holds Latin-1 bytes and carries no encoding marker, so
+  // the page keeps that encoding and refuses what it cannot encode, with a toast.
+  it("refuses text above U+00FF with an error and seals nothing", async () => {
     render(<TPMSealPage />);
     fillSeal("disk-key", "price: 5 €");
 
     fireEvent.click(sealButton());
 
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Error sealing data", variant: "destructive" })
+      )
+    );
+    expect(tpm.seal).not.toHaveBeenCalled();
+  });
+
+  it("seals Latin-1 text byte for byte", async () => {
+    tpm.seal.mockResolvedValue({ data: { sealedData: "YmxvYg==" } });
+    render(<TPMSealPage />);
+    fillSeal("disk-key", "café");
+
+    fireEvent.click(sealButton());
+
     await waitFor(() => expect(tpm.seal).toHaveBeenCalledTimes(1));
-    expect(tpm.seal.mock.calls[0]?.[0].data).toBe(Buffer.from("price: 5 €", "utf8").toString("base64"));
+    expect(tpm.seal.mock.calls[0]?.[0].data).toBe(btoa("café"));
   });
 
   it("needs a name to unseal", () => {
@@ -149,15 +163,17 @@ describe("TPMSealPage", () => {
     expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Data unsealed successfully" }));
   });
 
-  it("decodes unsealed data as UTF-8", async () => {
-    tpm.unseal.mockResolvedValue({ data: { data: Buffer.from("schlüssel €", "utf8").toString("base64") } });
+  it("unseals bytes that are also valid UTF-8 one char per byte, never guessing", async () => {
+    // C3 A9 is "é" in UTF-8 but two Latin-1 chars; the page must show the latter.
+    tpm.unseal.mockResolvedValue({ data: { data: Buffer.from([0x63, 0x61, 0x66, 0xc3, 0xa9]).toString("base64") } });
     render(<TPMSealPage />);
     openUnseal();
 
     fireEvent.change(await screen.findByLabelText("Common Name"), { target: { value: "disk-key" } });
     fireEvent.click(unsealButton());
 
-    expect(await screen.findByDisplayValue("schlüssel €")).toBeTruthy();
+    expect(await screen.findByDisplayValue("cafÃ©")).toBeTruthy();
+    expect(screen.queryByDisplayValue("café")).toBeNull();
   });
 
   it("decodes a secret sealed by the old Latin-1 encoder byte for byte", async () => {
