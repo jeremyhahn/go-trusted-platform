@@ -814,6 +814,14 @@ export async function mockIAMPolicyAppApi(
       return json(route, 200, { ...(config.validateResponse ?? { valid: true }), timestamp: now() });
     }
     if (id === 'test' && method === 'POST') {
+      // The REST TestPolicyRequest decodes only `subject_id`.
+      if (typeof body?.subject_id !== 'string' || body.subject_id === '') {
+        return route.fulfill({
+          status: 400,
+          contentType: 'application/json',
+          body: errorEnvelope({ error: 'subject_id is required', status: 400 }),
+        });
+      }
       return json(route, 200, { ...(config.testResponse ?? { allowed: true }), timestamp: now() });
     }
 
@@ -823,12 +831,23 @@ export async function mockIAMPolicyAppApi(
       return json(route, 200, { policy: state.policies[index], timestamp: now() });
     }
     if (method === 'PUT') {
+      // The production adapter rejects every nonempty spec YAML on update.
+      const specYaml = body?.spec_yaml ?? body?.specYaml;
+      if (typeof specYaml === 'string' && specYaml !== '') {
+        return route.fulfill({
+          status: 400,
+          contentType: 'application/json',
+          body: errorEnvelope({
+            error: 'update via spec_yaml not supported by IAM SDK; delete and re-create instead',
+            status: 400,
+          }),
+        });
+      }
       const current = state.policies[index];
       state.policies[index] = {
         ...current,
         description: typeof body?.description === 'string' ? body.description : current.description,
         priority: typeof body?.priority === 'number' ? body.priority : current.priority,
-        spec_yaml: String(body?.spec_yaml ?? body?.specYaml ?? current.spec_yaml ?? ''),
       };
       return json(route, 200, { policy: state.policies[index], timestamp: now() });
     }

@@ -75,12 +75,13 @@ test.describe('IAM policies and apps (#1728)', () => {
     const calls = api.find('POST', '/policies/test');
     expect(calls).toHaveLength(1);
     expect(calls[0].body).toMatchObject({
-      subjectId: 'user-1',
+      subject_id: 'user-1',
       action: 'read',
       resource: 'kv://config/a',
       roles: ['admin', 'ops'],
       groups: [],
     });
+    expect(calls[0].body).not.toHaveProperty('subjectId');
   });
 
   test('CreatePolicy: POST /policies from the new policy page', async ({ page }) => {
@@ -119,6 +120,8 @@ test.describe('IAM policies and apps (#1728)', () => {
     await expect(page.getByText('Read access')).toBeVisible();
 
     await page.getByRole('button', { name: 'Edit', exact: true }).click();
+    await expect(page.locator('#policy-description')).toBeVisible();
+    await expect(page.locator('#policy-yaml')).toHaveCount(0);
     await page.locator('#policy-description').fill('Read access for operators');
     await page.locator('#policy-priority').fill('20');
     await page.getByRole('button', { name: 'Save', exact: true }).click();
@@ -133,6 +136,8 @@ test.describe('IAM policies and apps (#1728)', () => {
       description: 'Read access for operators',
       priority: 20,
     });
+    expect(calls[0].body).not.toHaveProperty('spec_yaml');
+    expect(calls[0].body).not.toHaveProperty('specYaml');
   });
 
   test('UpdatePolicy: dismissing the confirm sends nothing', async ({ page }) => {
