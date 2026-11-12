@@ -157,6 +157,7 @@ const navigation = [
       { title: "VLANs", href: "/networking/vlans" },
       { title: "DNS Zones", href: "/networking/dns" },
       { title: "Overlays", href: "/networking/overlays" },
+      { title: "VTEPs", href: "/networking/overlays/vteps" },
       { title: "Gateway", href: "/networking/gateway" },
       { title: "VPN", href: "/networking/vpn" },
       { title: "PXE Boot", href: "/networking/pxe" },
