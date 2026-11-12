@@ -417,14 +417,14 @@ export interface TenantLifecycleCall {
  */
 export async function mockTenantLifecycleApi(
   page: Page,
-  config: { tenant?: Partial<LifecycleTenant>; quotaAvailable?: boolean } = {}
+  config: { tenant?: Partial<LifecycleTenant>; quotaAvailable?: boolean; syncFails?: boolean } = {}
 ): Promise<{ calls: TenantLifecycleCall[]; tenant: () => LifecycleTenant }> {
   const now = new Date().toISOString();
   let tenant: LifecycleTenant = {
     id: 'tenant-abc-123',
     name: 'acme',
     displayName: 'Acme Corp',
-    state: 'ACTIVE',
+    state: 'TENANT_STATE_ACTIVE',
     createdAt: now,
     updatedAt: now,
     ...config.tenant,
@@ -448,7 +448,12 @@ export async function mockTenantLifecycleApi(
       route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(data) });
     const ok = { status: { success: true, message: 'ok' } };
 
-    if (method === 'POST' && path === '/sync') return json(ok);
+    if (method === 'POST' && path === '/sync') {
+      if (config.syncFails) {
+        return json({ status: { success: false, message: 'sync completed with errors: boom' } });
+      }
+      return json(ok);
+    }
     if (method === 'GET' && path.startsWith('/by-name/')) {
       const name = decodeURIComponent(path.slice('/by-name/'.length));
       if (name !== tenant.name) return json({ message: 'tenant not found', code: 'NOT_FOUND' }, 404);
@@ -463,12 +468,18 @@ export async function mockTenantLifecycleApi(
     }
     if (path === id && method === 'DELETE') return json(ok);
     if (path === `${id}/suspend` && method === 'POST') {
-      tenant = { ...tenant, state: 'SUSPENDED' };
+      tenant = { ...tenant, state: 'TENANT_STATE_SUSPENDED' };
       return json(ok);
     }
     if (path === `${id}/resume` && method === 'POST') {
-      tenant = { ...tenant, state: 'ACTIVE' };
+      tenant = { ...tenant, state: 'TENANT_STATE_ACTIVE' };
       return json(ok);
+    }
+    if (path === `${id}/quotas` && method === 'GET') {
+      return json({
+        tenantId: tenant.id,
+        compute: { maxVms: 2, maxContainers: 5, maxVcpus: 8, maxMemoryMb: 4096 },
+      });
     }
     if (path === `${id}/quotas` && method === 'PUT') return json(ok);
     if (path === `${id}/quota-check` && method === 'POST') {

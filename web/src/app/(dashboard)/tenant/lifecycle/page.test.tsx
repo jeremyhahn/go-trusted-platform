@@ -20,6 +20,7 @@ const service = {
   deleteTenant: vi.fn(),
   suspendTenant: vi.fn(),
   resumeTenant: vi.fn(),
+  getQuotas: vi.fn(),
   updateQuotas: vi.fn(),
   checkQuota: vi.fn(),
   syncTenants: vi.fn(),
@@ -68,10 +69,17 @@ function dialog() {
 }
 
 beforeEach(() => {
-  service.getTenant.mockImplementation(() => ok({ tenant: { ...tenant, state: "SUSPENDED" } }));
+  service.getTenant.mockImplementation(() =>
+    ok({ tenant: { ...tenant, state: "TENANT_STATE_SUSPENDED" } })
+  );
   service.getTenantByName.mockImplementation(() => ok({ tenant }));
   service.deleteTenant.mockImplementation(() => ok({}));
-  service.suspendTenant.mockImplementation(() => ok({ tenant: { ...tenant, state: "SUSPENDED" } }));
+  service.suspendTenant.mockImplementation(() =>
+    ok({ tenant: { ...tenant, state: "TENANT_STATE_SUSPENDED" } })
+  );
+  service.getQuotas.mockImplementation(() =>
+    ok({ tenantId: "t1", compute: { maxVms: 2, maxContainers: 5, maxVcpus: 8, maxMemoryMb: 4096 } })
+  );
   service.updateQuotas.mockImplementation(() => ok({}));
   service.rotateDEK.mockImplementation(() =>
     ok({ tenantId: "t1", oldVersion: 3, newVersion: 4, timestamp: "2026-11-12T00:00:00Z" })
@@ -128,11 +136,43 @@ describe("TenantLifecyclePage", () => {
     expect(screen.getByTestId("dek-version").textContent).toBe("4");
   });
 
-  it("save quotas sends the entered limits", async () => {
+  it("save quotas sends the entered limits and keeps the other compute limits", async () => {
     await lookUp();
     fireEvent.change(screen.getByLabelText("Maximum VMs"), { target: { value: "12" } });
     fireEvent.click(screen.getByRole("button", { name: "Save quotas" }));
     expect(await screen.findByText("Quotas updated")).toBeTruthy();
-    expect(service.updateQuotas).toHaveBeenCalledWith({ tenantId: "t1", compute: { maxVms: 12 } });
+    expect(service.getQuotas).toHaveBeenCalledWith("t1");
+    expect(service.updateQuotas).toHaveBeenCalledWith({
+      tenantId: "t1",
+      compute: { maxVms: 12, maxContainers: 5, maxVcpus: 8, maxMemoryMb: 4096 },
+    });
+  });
+
+  it("a TENANT_STATE_SUSPENDED tenant offers Resume, not Suspend", async () => {
+    service.getTenantByName.mockImplementation(() =>
+      ok({ tenant: { ...tenant, state: "TENANT_STATE_SUSPENDED" } })
+    );
+    await lookUp();
+    expect(screen.getByRole("button", { name: "Resume" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Suspend" })).toBeNull();
+    expect(screen.getByTestId("tenant-state").textContent).toBe("SUSPENDED");
+  });
+
+  it("sync shows the failure message when the status reports success=false", async () => {
+    service.syncTenants.mockImplementation(() =>
+      ok({ status: { success: false, message: "sync completed with errors: boom" } })
+    );
+    render(<TenantLifecyclePage />);
+    fireEvent.click(screen.getByRole("button", { name: "Sync tenants" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("sync completed with errors: boom");
+    expect(screen.queryByText("Tenant sync started")).toBeNull();
+  });
+
+  it("sync reports started when the status reports success", async () => {
+    service.syncTenants.mockImplementation(() => ok({ status: { success: true, message: "ok" } }));
+    render(<TenantLifecyclePage />);
+    fireEvent.click(screen.getByRole("button", { name: "Sync tenants" }));
+    expect(await screen.findByText("Tenant sync started")).toBeTruthy();
   });
 });

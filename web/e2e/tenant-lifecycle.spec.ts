@@ -91,7 +91,7 @@ test.describe('Tenant lifecycle', () => {
   });
 
   test('ResumeTenant resumes a suspended tenant', async ({ page }) => {
-    const mock = await openLifecycle(page, { tenant: { state: 'SUSPENDED' } });
+    const mock = await openLifecycle(page, { tenant: { state: 'TENANT_STATE_SUSPENDED' } });
     await lookUp(page);
     await expect(page.getByTestId('tenant-state')).toHaveText('SUSPENDED');
     await page.getByRole('button', { name: 'Resume' }).click();
@@ -107,7 +107,12 @@ test.describe('Tenant lifecycle', () => {
     await expect(page.getByRole('status')).toHaveText('Quotas updated');
     const puts = called(mock, 'PUT', '/tenant-abc-123/quotas');
     expect(puts).toHaveLength(1);
-    expect(puts[0]?.body).toMatchObject({ compute: { maxVms: 12 } });
+    expect((puts[0]?.body as { compute?: unknown })?.compute).toEqual({
+      maxVms: 12,
+      maxContainers: 5,
+      maxVcpus: 8,
+      maxMemoryMb: 4096,
+    });
   });
 
   test('CheckQuota reports whether a request fits', async ({ page }) => {
@@ -126,6 +131,14 @@ test.describe('Tenant lifecycle', () => {
     const mock = await openLifecycle(page);
     await page.getByRole('button', { name: 'Sync tenants' }).click();
     await expect(page.getByRole('status')).toHaveText('Tenant sync started');
+    expect(called(mock, 'POST', '/sync')).toHaveLength(1);
+  });
+
+  test('Sync shows a failed sync status', async ({ page }) => {
+    const mock = await openLifecycle(page, { syncFails: true });
+    await page.getByRole('button', { name: 'Sync tenants' }).click();
+    await expect(page.getByRole('alert')).toContainText('sync completed with errors: boom');
+    await expect(page.getByText('Tenant sync started')).toHaveCount(0);
     expect(called(mock, 'POST', '/sync')).toHaveLength(1);
   });
 
