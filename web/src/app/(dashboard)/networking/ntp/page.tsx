@@ -68,6 +68,7 @@ export default function NTPPage() {
 
   const {
     data: sourcesData,
+    error: sourcesError,
     isLoading: sourcesLoading,
     refetch: fetchSources,
   } = useApi(() => ntp.listSources(), [], {
@@ -230,7 +231,13 @@ export default function NTPPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {sources.length === 0 ? (
+              {sourcesError && !sourcesLoading ? (
+                <TableRow data-testid="ntp-sources-error">
+                  <TableCell colSpan={7} className="text-center text-destructive">
+                    Failed to load NTP sources: {sourcesError.message}
+                  </TableCell>
+                </TableRow>
+              ) : sources.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={7} className="text-center text-muted-foreground">
                     {sourcesLoading ? 'Loading…' : 'No sources configured'}
