@@ -1,6 +1,6 @@
 import { test, expect, Page } from '@playwright/test';
 import { mockBMCApi, mockTenantApi } from './fixtures/api-mock';
-import type { MockBMCUser } from './fixtures/api-mock';
+import type { BMCApiMockConfig, MockBMCUser } from './fixtures/api-mock';
 import { createTenantOwnerSession } from './fixtures/auth-setup';
 
 /**
@@ -25,8 +25,8 @@ const seedUsers: MockBMCUser[] = [
 // Built at runtime so no credential-shaped literal sits in the source.
 const TEST_PASSWORD = ['test', 'only', 'pw'].join('-');
 
-async function openUsersPage(page: Page, users: MockBMCUser[] = seedUsers) {
-  const bmc = await mockBMCApi(page, { profileID: PROFILE, users });
+async function gotoUsersPage(page: Page, config: BMCApiMockConfig) {
+  const bmc = await mockBMCApi(page, { profileID: PROFILE, ...config });
   await mockTenantApi(page);
   // The static export serves the placeholder route; once the app has
   // hydrated, pushState moves it to the real profile URL.
@@ -34,6 +34,11 @@ async function openUsersPage(page: Page, users: MockBMCUser[] = seedUsers) {
   await page.getByText('Loading users...').waitFor();
   await page.waitForLoadState('networkidle');
   await page.evaluate((id) => window.history.pushState(null, '', `/devices/bmc/${id}/users/`), PROFILE);
+  return bmc;
+}
+
+async function openUsersPage(page: Page, users: MockBMCUser[] = seedUsers) {
+  const bmc = await gotoUsersPage(page, { users });
   await expect(page.getByTestId('bmc-user-2')).toBeVisible();
   return bmc;
 }
@@ -113,6 +118,24 @@ test.describe('BMC users and web certificate', () => {
     await again.getByRole('button', { name: 'Create' }).click();
     await expect(again.getByTestId('bmc-create-slot-error')).toContainText('Slot 3');
     expect(posts()).toHaveLength(1);
+  });
+
+  test('CreateUser: a failed listing leaves Create User disabled', async ({ page }) => {
+    const bmc = await gotoUsersPage(page, { users: seedUsers, listStatus: 500 });
+    await expect(page.getByText('No users found')).toBeVisible();
+    // A failed listing must not read as "every slot is free".
+    await expect(page.getByRole('button', { name: 'Create User' })).toBeDisabled();
+    expect(bmc.calls.some((c) => c.method === 'POST' && c.path === `/api/v1/bmc/${PROFILE}/users`)).toBe(
+      false
+    );
+  });
+
+  test('CreateUser: a delayed listing keeps Create User disabled until the rows appear', async ({ page }) => {
+    await gotoUsersPage(page, { users: seedUsers, listDelayMs: 1500 });
+    const create = page.getByRole('button', { name: 'Create User' });
+    await expect(create).toBeDisabled();
+    await expect(page.getByTestId('bmc-user-2')).toBeVisible();
+    await expect(create).toBeEnabled();
   });
 
   test('DeleteUser: deletes a user after the confirm dialog', async ({ page }) => {

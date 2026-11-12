@@ -726,6 +726,10 @@ export interface BMCApiCall {
 export interface BMCApiMockConfig {
   profileID?: string;
   users?: MockBMCUser[];
+  /** When set and not 200, GET /users answers this status with an error envelope. */
+  listStatus?: number;
+  /** GET /users waits this many milliseconds before answering. */
+  listDelayMs?: number;
 }
 
 /**
@@ -766,6 +770,17 @@ export async function mockBMCApi(
     const slotMatch = rest.match(/^\/users\/(\d+)(\/(password|privilege))?$/);
 
     if (rest === '/users' && method === 'GET') {
+      if (config.listDelayMs) {
+        await new Promise((resolve) => setTimeout(resolve, config.listDelayMs));
+      }
+      if (config.listStatus !== undefined && config.listStatus !== 200) {
+        await route.fulfill({
+          status: config.listStatus,
+          contentType: 'application/json',
+          body: JSON.stringify({ message: 'BMC listing failed' }),
+        });
+        return;
+      }
       await ok(route, users);
       return;
     }
