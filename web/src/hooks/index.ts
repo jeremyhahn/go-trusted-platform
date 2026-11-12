@@ -83,6 +83,8 @@ export { useToast, toast, dismissToast } from './use-toast';
 export type { Toast, UseToastReturn } from './use-toast';
 
 export { useReportedGateways } from './use-reported-gateways';
+export { useSDNBridge } from './use-sdn-bridge';
+export type { UseSDNBridgeResult } from './use-sdn-bridge';
 export type {
   ReportedGateway,
   UseReportedGatewaysOptions,
