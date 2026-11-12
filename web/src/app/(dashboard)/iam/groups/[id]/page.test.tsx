@@ -1,5 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+
+afterEach(() => cleanup());
 
 vi.mock("./group-detail-client", () => ({
   default: () => <div data-testid="group-detail-client" />,
@@ -24,6 +26,6 @@ describe("iam/groups/[id] page", () => {
 
   it("Page renders the group detail client", () => {
     render(<Page />);
-    expect(screen.getByTestId("group-detail-client")).toBeInTheDocument();
+    expect(screen.getByTestId("group-detail-client")).toBeTruthy();
   });
 });

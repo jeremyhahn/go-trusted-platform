@@ -1,5 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+
+afterEach(() => cleanup());
 
 vi.mock("./app-detail-client", () => ({
   default: () => <div data-testid="app-detail-client" />,
@@ -24,6 +26,6 @@ describe("iam/apps/[clientId] page", () => {
 
   it("Page renders the app detail client", () => {
     render(<Page />);
-    expect(screen.getByTestId("app-detail-client")).toBeInTheDocument();
+    expect(screen.getByTestId("app-detail-client")).toBeTruthy();
   });
 });
