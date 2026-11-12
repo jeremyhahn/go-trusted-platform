@@ -174,6 +174,25 @@ describe("ServicesPage daemon controls", () => {
     expect(screen.getByTestId("service-detail").textContent).toContain("Stops: 1");
   });
 
+  it("a details read that resolves after a stop never restores the old status", async () => {
+    let resolveFirst: (v: unknown) => void = () => {};
+    platform.getServiceStatus
+      .mockImplementationOnce(() => new Promise((r) => (resolveFirst = r)) as never)
+      .mockImplementationOnce(() => ok({ name: "dns", status: "stopped", stop_count: 1 }) as never);
+    await renderPage();
+    fireEvent.click(screen.getByLabelText("Details dns"));
+    fireEvent.click(screen.getByLabelText("Stop dns"));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    await waitFor(() => expect(platform.stopService).toHaveBeenCalledWith("dns"));
+    await waitFor(() => expect(screen.getByTestId("service-detail").textContent).toContain("stopped"));
+    await act(async () => {
+      resolveFirst({ success: true, data: { name: "dns", status: "running", uptime: "5m" } });
+    });
+    const panel = screen.getByTestId("service-detail").textContent;
+    expect(panel).toContain("stopped");
+    expect(panel).not.toContain("Uptime: 5m");
+  });
+
   it("Refresh re-reads the open details", async () => {
     platform.getServiceStatus
       .mockImplementationOnce(() => ok({ name: "dns", status: "running", uptime: "5m" }))
