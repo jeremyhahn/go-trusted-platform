@@ -254,7 +254,9 @@ export class GatewayService extends BaseService {
    * @returns List of allocations
    */
   async listAllocations(request?: ListAllocationsRequest): Promise<ApiResponse<ListAllocationsResponse>> {
-    if (request?.poolId !== undefined) {
+    // An empty poolId means every pool (ListAllocationsRequest), not a
+    // request for `/ipam/pools//allocations`.
+    if (request?.poolId !== undefined && request.poolId !== '') {
       return this.client.get<ListAllocationsResponse>(
         this.buildUrl(`/ipam/pools/${this.encodePathSegment(request.poolId)}/allocations`)
       );
