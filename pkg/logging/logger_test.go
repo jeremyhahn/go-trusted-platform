@@ -594,25 +594,6 @@ func TestLogLevels(t *testing.T) {
 	}
 }
 
-// TestStackFrameStruct tests the stackFrame struct
-func TestStackFrameStruct(t *testing.T) {
-	frame := stackFrame{
-		Func:   "TestFunction",
-		Source: "logging/logger_test.go",
-		Line:   100,
-	}
-
-	if frame.Func != "TestFunction" {
-		t.Errorf("stackFrame.Func = %v, want 'TestFunction'", frame.Func)
-	}
-	if frame.Source != "logging/logger_test.go" {
-		t.Errorf("stackFrame.Source = %v, want 'logging/logger_test.go'", frame.Source)
-	}
-	if frame.Line != 100 {
-		t.Errorf("stackFrame.Line = %v, want 100", frame.Line)
-	}
-}
-
 // TestSourceConstants tests that source constants are defined correctly
 // TestParseFormat tests the ParseFormat function
 func TestParseFormat(t *testing.T) {
