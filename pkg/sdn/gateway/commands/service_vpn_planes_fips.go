@@ -33,6 +33,10 @@ func vpnDataPlanes(cfg *ServeConfig, _ *gateway.Gateway, logger *slog.Logger) ([
 	return nil, nil
 }
 
+// removeStaleVPNHub does nothing in a FIPS build: it never creates the
+// WireGuard hub, so it has none to remove.
+func removeStaleVPNHub(*slog.Logger) error { return nil }
+
 // vpnHubListeners is empty in a FIPS build: it builds no WireGuard hub,
 // so there is no hub port for the host filter to admit.
 func vpnHubListeners(*ServeConfig, bool) []hostfw.Listener { return nil }

@@ -70,6 +70,12 @@ func vpnDataPlanes(cfg *ServeConfig, gw *gateway.Gateway, logger *slog.Logger) (
 	return []vpn.ManagedDataPlane{plane}, nil
 }
 
+// removeStaleVPNHub removes the hub device of vpnHubInterface a killed
+// predecessor left in the kernel, for a datapath that builds no plane.
+func removeStaleVPNHub(logger *slog.Logger) error {
+	return tunnel.RemoveStaleWireGuardHub(logger, vpnHubInterface)
+}
+
 // vpnHubListeners is the WireGuard hub's UDP listener for the host
 // filter's inventory: the hub binds its effective listen-port on every
 // interface, and a default-drop input chain admits only declared

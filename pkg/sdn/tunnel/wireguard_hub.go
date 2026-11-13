@@ -176,14 +176,30 @@ func (h *WireGuardHub) Up(ctx context.Context) error {
 // predecessor. A device of another type is not the hub's and is left for
 // addLink to refuse; a failed lookup means there is nothing to remove.
 func (h *WireGuardHub) removeStale() error {
-	stale, err := h.nl.LinkByName(h.cfg.Name)
+	return removeStaleWireGuardHub(h.logger, h.nl, h.cfg.Name)
+}
+
+// RemoveStaleWireGuardHub deletes a WireGuard device named name that a
+// predecessor left in the kernel, with every peer on it. A datapath that
+// restarts with no hub to bring up calls it, since no hub's Up will. A
+// device of another type is not a hub's and is left in place; no device is
+// not an error.
+func RemoveStaleWireGuardHub(logger *slog.Logger, name string) error {
+	return removeStaleWireGuardHub(logger, &realNetlinkOps{}, name)
+}
+
+func removeStaleWireGuardHub(logger *slog.Logger, nl netlinkOps, name string) error {
+	stale, err := nl.LinkByName(name)
 	if err != nil || stale == nil || stale.Type() != (&vnl.Wireguard{}).Type() {
 		return nil
 	}
-	if err := h.nl.LinkDel(stale); err != nil {
-		return fmt.Errorf("removing the stale hub device: %w", err)
+	if err := nl.LinkDel(stale); err != nil {
+		return &ErrTunnelRemoveFailed{Name: name, Cause: fmt.Errorf("removing the stale hub device: %w", err)}
 	}
-	h.logger.Warn("wireguard hub removed a stale device of its name", slog.String("device", h.cfg.Name))
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.Warn("wireguard hub removed a stale device of its name", slog.String("device", name))
 	return nil
 }
 
