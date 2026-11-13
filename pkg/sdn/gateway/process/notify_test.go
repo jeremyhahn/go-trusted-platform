@@ -15,11 +15,16 @@ package process
 
 import (
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // notifyHelperEnv makes the test binary act as a supervised child that sends
@@ -174,7 +179,7 @@ func TestNotifySocket_RefusesForeignPid(t *testing.T) {
 	path := shortSocketPath(t)
 	// Expect a pid that is not this process: the datagram this process sends
 	// carries its own pid and must be dropped.
-	s, err := ListenNotify(path, os.Getpid()+1)
+	s, err := ListenNotify(path, os.Getpid()+1, -1)
 	if err != nil {
 		t.Fatalf("ListenNotify: %v", err)
 	}
@@ -212,7 +217,7 @@ func TestNotifySocket_RefusesForeignPid(t *testing.T) {
 
 func TestNotifySocket_AcceptsChildReady(t *testing.T) {
 	path := shortSocketPath(t)
-	s, err := ListenNotify(path, 0)
+	s, err := ListenNotify(path, 0, -1)
 	if err != nil {
 		t.Fatalf("ListenNotify: %v", err)
 	}
@@ -256,10 +261,177 @@ func TestNotifySocket_ListenOnExistingPathFails(t *testing.T) {
 	if err := os.WriteFile(path, nil, 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	_, err := ListenNotify(path, 1)
+	_, err := ListenNotify(path, 1, -1)
 	var want *ErrNotifySocket
 	if !errors.As(err, &want) {
 		t.Fatalf("ListenNotify error = %v, want *ErrNotifySocket", err)
+	}
+}
+
+// withUmask runs the rest of the test under mask, as a root supervisor with
+// the usual umask 022 does.
+func withUmask(t *testing.T, mask int) {
+	t.Helper()
+	old := unix.Umask(mask)
+	t.Cleanup(func() { unix.Umask(old) })
+}
+
+func TestNotifySocket_ModeIsGroupWritable(t *testing.T) {
+	withUmask(t, 0o022)
+	path := shortSocketPath(t)
+	s, err := ListenNotify(path, 0, -1)
+	if err != nil {
+		t.Fatalf("ListenNotify: %v", err)
+	}
+	defer func() { _ = s.Close() }()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if info.Mode().Type() != os.ModeSocket {
+		t.Fatalf("type = %v, want a socket", info.Mode().Type())
+	}
+	if got := info.Mode().Perm(); got != 0o660 {
+		t.Fatalf("mode = %#o, want 0660 under umask 022", got)
+	}
+}
+
+// ownedOtherGID returns a group the test may chown to that is not its
+// effective group: nobody's group as root, else a supplementary group.
+func ownedOtherGID(t *testing.T) int {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		return 65534
+	}
+	groups, err := os.Getgroups()
+	if err != nil {
+		t.Fatalf("Getgroups: %v", err)
+	}
+	for _, g := range groups {
+		if g != os.Getegid() {
+			return g
+		}
+	}
+	t.Skip("needs root or a supplementary group to chown the socket to")
+	return -1
+}
+
+func TestNotifySocket_GroupIsServiceGroup(t *testing.T) {
+	withUmask(t, 0o022)
+	gid := ownedOtherGID(t)
+	path := shortSocketPath(t)
+	s, err := ListenNotify(path, 0, gid)
+	if err != nil {
+		t.Fatalf("ListenNotify: %v", err)
+	}
+	defer func() { _ = s.Close() }()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if got := info.Sys().(*syscall.Stat_t).Gid; got != uint32(gid) {
+		t.Fatalf("socket gid = %d, want %d", got, gid)
+	}
+	if got := info.Mode().Perm(); got != 0o660 {
+		t.Fatalf("mode = %#o, want 0660", got)
+	}
+}
+
+func TestNotifySocket_ChownRefusedIsTypedAndCleansUp(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root may chown to any group")
+	}
+	groups, err := os.Getgroups()
+	if err != nil {
+		t.Fatalf("Getgroups: %v", err)
+	}
+	if os.Getegid() == 0 || slices.Contains(groups, 0) {
+		t.Skip("the test is in group 0")
+	}
+	path := shortSocketPath(t)
+	_, err = ListenNotify(path, 0, 0)
+	var want *ErrNotifySocket
+	if !errors.As(err, &want) || want.Op != "chown" {
+		t.Fatalf("ListenNotify error = %v, want *ErrNotifySocket for chown", err)
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Fatalf("socket left behind after a failed chown: %v", err)
+	}
+}
+
+// copyExecutable copies the test binary to dir so a child running with
+// other credentials can execute it.
+func copyExecutable(t *testing.T, dir string) string {
+	t.Helper()
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("Executable: %v", err)
+	}
+	src, err := os.Open(self)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = src.Close() }()
+	dst := filepath.Join(dir, "helper.test")
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o755)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	if _, err := io.Copy(out, src); err != nil {
+		_ = out.Close()
+		t.Fatalf("copy: %v", err)
+	}
+	if err := out.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	return dst
+}
+
+// TestNotifySocket_AcceptsUnprivilegedChild sends READY=1 from a child that
+// has dropped to another UID and the service group, as a parser child does.
+func TestNotifySocket_AcceptsUnprivilegedChild(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root to start a child under another UID")
+	}
+	withUmask(t, 0o022)
+	const uid, gid = 65534, 65534
+	path := shortSocketPath(t)
+	dir := filepath.Dir(path)
+	if err := os.Chmod(dir, 0o711); err != nil {
+		t.Fatalf("Chmod dir: %v", err)
+	}
+	helper := copyExecutable(t, dir)
+	s, err := ListenNotify(path, 0, gid)
+	if err != nil {
+		t.Fatalf("ListenNotify: %v", err)
+	}
+	defer func() { _ = s.Close() }()
+
+	cmd := exec.Command(helper, "-test.run=^TestNotifyHelperChild$")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		notifyHelperEnv+"=READY=1",
+		"NOTIFY_SOCKET="+path,
+	)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Credential: &syscall.Credential{Uid: uid, Gid: gid, Groups: []uint32{}},
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start child: %v", err)
+	}
+	s.SetPid(cmd.Process.Pid)
+
+	m, err := s.Receive(time.Now().Add(10 * time.Second))
+	if err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		t.Fatalf("Receive: %v", err)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("child: %v", err)
+	}
+	if !m.Ready {
+		t.Fatalf("got %+v, want Ready", m)
 	}
 }
 
