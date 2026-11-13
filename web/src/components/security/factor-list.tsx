@@ -90,6 +90,9 @@ function FactorRow({
   function commitLabel() {
     if (labelDraft.trim() && labelDraft !== factor.label) {
       onRelabel(factor, labelDraft.trim());
+    } else {
+      // A blank or unchanged draft is dropped; the next edit starts from the label.
+      setLabelDraft(factor.label);
     }
     setEditing(false);
   }
