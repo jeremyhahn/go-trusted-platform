@@ -25,8 +25,10 @@ import (
 
 	pb "github.com/jeremyhahn/go-quicbaas/api/proto"
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	cryptoclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/crypto"
 	dekclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/dek"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
+	secretsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/errclass"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	dbfactory "github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
@@ -102,6 +104,15 @@ func (s *KMSService) initializeServers() error {
 
 	s.initialized.Store(true)
 	return nil
+}
+
+// RESTClients returns the SDK clients the KMS server adapters hold, for the
+// daemon REST KMS router. It builds no second SDK client.
+func (s *KMSService) RESTClients() (kms.Client, cryptoclient.Client, dekclient.Client, secretsclient.Client, error) {
+	if err := s.initializeServers(); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	return s.kmsAdapter.client, s.cryptoServer.client, s.dekServer.client, s.secretsServer.client, nil
 }
 
 // RegisterGRPCServices registers all KMS-related gRPC services with a gRPC server.
