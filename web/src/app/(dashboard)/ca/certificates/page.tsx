@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import { CertTable } from "@/components/features/ca/cert-table";
 import { IssueCertForm } from "@/components/features/ca/issue-cert-form";
-import { useCA, useApi, useMutation, useToast } from "@/hooks";
+import { useCA, useApi, useMutation } from "@/hooks";
 import type { Certificate, IssueCertInput } from "@/types/security";
 
 // SDK types (from sdk/javascript/src/types/ca.ts)

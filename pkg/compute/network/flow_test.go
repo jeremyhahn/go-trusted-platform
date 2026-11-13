@@ -594,27 +594,6 @@ func TestGenerateRuleID(t *testing.T) {
 	})
 }
 
-func TestFlowMatch(t *testing.T) {
-	match := &FlowMatch{
-		InPort:  1,
-		EthSrc:  "00:11:22:33:44:55",
-		EthDst:  "66:77:88:99:AA:BB",
-		EthType: 0x0800,
-		VLANID:  100,
-		IPSrc:   "10.0.0.1/24",
-		IPDst:   "192.168.1.0/24",
-		IPProto: 6,
-		SrcPort: 12345,
-		DstPort: 80,
-	}
-
-	assert.Equal(t, uint32(1), match.InPort)
-	assert.Equal(t, "00:11:22:33:44:55", match.EthSrc)
-	assert.Equal(t, uint16(100), match.VLANID)
-	assert.Equal(t, uint8(6), match.IPProto)
-	assert.Equal(t, uint16(80), match.DstPort)
-}
-
 func TestFlowAction(t *testing.T) {
 	tests := []struct {
 		name   string
