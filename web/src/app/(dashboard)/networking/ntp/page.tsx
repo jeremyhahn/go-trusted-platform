@@ -54,6 +54,7 @@ export default function NTPPage() {
 
   const {
     data: statusData,
+    error: statusError,
     isLoading: statusLoading,
     refetch: fetchStatus,
   } = useApi(() => ntp.getStatus(), [], {
@@ -82,6 +83,10 @@ export default function NTPPage() {
   });
 
   const status = steppedStatus ?? statusData?.status;
+  // useApi keeps the last good data when a refresh fails (and clears error on
+  // the next success): mark that cached status stale so a failed clock service
+  // never reads as synchronised. A status returned by Step is fresh.
+  const statusStale = Boolean(statusError && !statusLoading && status && !steppedStatus);
   const sources = sourcesData?.sources ?? [];
   const loading = statusLoading || sourcesLoading;
 
@@ -168,11 +173,21 @@ export default function NTPPage() {
                 {status.synced ? 'Synced' : 'Not synced'}
               </Badge>
             )}
+            {statusStale && (
+              <Badge variant="destructive" data-testid="ntp-status-stale">
+                Stale
+              </Badge>
+            )}
             {status?.anomaly && <Badge variant="destructive">Anomaly</Badge>}
           </CardTitle>
           <CardDescription>{status?.anomalyReason || 'Reported by chronyd on this node'}</CardDescription>
         </CardHeader>
         <CardContent>
+          {statusStale && statusError && (
+            <p className="mb-4 text-sm text-destructive">
+              Status refresh failed: {statusError.message}. The values shown are from the last successful read.
+            </p>
+          )}
           {status ? (
             <dl className="grid grid-cols-2 gap-4 md:grid-cols-4">
               <div>
