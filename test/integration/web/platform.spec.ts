@@ -328,7 +328,7 @@ test.describe('Platform Services Page', () => {
 
       if ((await searchInput.count()) > 0) {
         await searchInput.first().fill('api');
-        await authenticatedPage.waitForTimeout(300);
+        await expect(searchInput.first()).toHaveValue('api');
         await expect(authenticatedPage.locator('main')).toBeVisible();
       }
     });
@@ -580,8 +580,7 @@ test.describe('Platform Metrics Page', () => {
     test('should display system overview cards', async ({ authenticatedPage }) => {
       await authenticatedPage.goto('/platform/metrics');
 
-      // Wait for internal mock data to load
-      await authenticatedPage.waitForTimeout(1000);
+      await expect(authenticatedPage.locator('main')).toBeVisible();
 
       // Look for system metric cards or any card-like containers
       const cards = authenticatedPage.locator('[class*="card"], [class*="rounded-lg border"]');
@@ -592,8 +591,7 @@ test.describe('Platform Metrics Page', () => {
     test('should show uptime information', async ({ authenticatedPage }) => {
       await authenticatedPage.goto('/platform/metrics');
 
-      // Wait for internal mock data to load
-      await authenticatedPage.waitForTimeout(1000);
+      await expect(authenticatedPage.locator('main')).toBeVisible();
 
       // Look for uptime text - the page shows uptime in cards
       const uptimeText = authenticatedPage.locator('text=/uptime/i');
@@ -632,8 +630,7 @@ test.describe('Platform Metrics Page', () => {
     test('should show progress bars for resource usage', async ({ authenticatedPage }) => {
       await authenticatedPage.goto('/platform/metrics');
 
-      // Wait for internal mock data to load
-      await authenticatedPage.waitForTimeout(1000);
+      await expect(authenticatedPage.locator('main')).toBeVisible();
 
       // Look for progress bars or resource usage indicators
       const progressBars = authenticatedPage.locator('[role="progressbar"], [class*="progress"], [class*="bg-primary"]');
@@ -646,8 +643,7 @@ test.describe('Platform Metrics Page', () => {
     test('should display service metrics section', async ({ authenticatedPage }) => {
       await authenticatedPage.goto('/platform/metrics');
 
-      // Wait for internal mock data to load
-      await authenticatedPage.waitForTimeout(1000);
+      await expect(authenticatedPage.locator('main')).toBeVisible();
 
       // Look for service metrics section or service names
       const serviceMetricsSection = authenticatedPage.locator('text=/service metrics|api server|tpm service/i');
@@ -658,8 +654,7 @@ test.describe('Platform Metrics Page', () => {
     test('should show service performance data', async ({ authenticatedPage }) => {
       await authenticatedPage.goto('/platform/metrics');
 
-      // Wait for internal mock data to load
-      await authenticatedPage.waitForTimeout(1000);
+      await expect(authenticatedPage.locator('main')).toBeVisible();
 
       // Look for performance metrics - the page shows latency, requests/sec, error rate
       const perfText = authenticatedPage.locator('text=/latency|requests|error/i');
