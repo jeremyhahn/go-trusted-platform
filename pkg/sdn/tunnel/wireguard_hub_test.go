@@ -124,6 +124,48 @@ func TestWireGuardHub_UpKeysDeviceAndKeepsOnlyPublicKey(t *testing.T) {
 	}
 }
 
+// A predecessor killed with SIGKILL leaves its hub device, address and
+// peers in the kernel; the successor's Up replaces that device rather
+// than failing on EEXIST, so none of the predecessor's state survives.
+func TestWireGuardHub_UpReplacesAStaleHubDevice(t *testing.T) {
+	hub, nl, wg, _ := newTestHub(t)
+	stale := &vnl.Wireguard{LinkAttrs: vnl.LinkAttrs{Name: "wg-vpn0", MTU: 1280}}
+	nl.links["wg-vpn0"] = stale
+	nl.addrs["wg-vpn0"] = []vnl.Addr{{IPNet: prefixToIPNet(netip.MustParsePrefix("10.99.0.1/24"))}}
+	if err := hub.Up(context.Background()); err != nil {
+		t.Fatalf("Up over a stale hub: %v", err)
+	}
+	link := nl.links["wg-vpn0"]
+	if link == vnl.Link(stale) {
+		t.Fatal("the stale hub device was kept")
+	}
+	if link.Attrs().MTU != DefaultMTU {
+		t.Fatalf("mtu = %d", link.Attrs().MTU)
+	}
+	if len(nl.addrs["wg-vpn0"]) != 1 || nl.addrs["wg-vpn0"][0].IPNet.String() != "10.9.0.1/24" {
+		t.Fatalf("addresses = %v", nl.addrs["wg-vpn0"])
+	}
+	if len(wg.calls) != 1 || !wg.calls[0].ReplacePeers {
+		t.Fatalf("device config = %+v", wg.calls)
+	}
+}
+
+// A device of the hub's name that is not a WireGuard device is not the
+// hub's own: Up refuses it and leaves it in place.
+func TestWireGuardHub_UpRefusesAForeignDeviceOfItsName(t *testing.T) {
+	hub, nl, _, _ := newTestHub(t)
+	foreign := &vnl.Dummy{LinkAttrs: vnl.LinkAttrs{Name: "wg-vpn0"}}
+	nl.links["wg-vpn0"] = foreign
+	err := hub.Up(context.Background())
+	var create *ErrTunnelCreateFailed
+	if !errors.As(err, &create) {
+		t.Fatalf("Up over a foreign device: err = %v", err)
+	}
+	if nl.links["wg-vpn0"] != vnl.Link(foreign) {
+		t.Fatal("the foreign device was replaced")
+	}
+}
+
 func TestWireGuardHub_SetAndRemovePeerTouchOnlyThatPeer(t *testing.T) {
 	hub, _, wg, _ := newTestHub(t)
 	if err := hub.Up(context.Background()); err != nil {

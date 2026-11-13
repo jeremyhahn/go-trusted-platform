@@ -83,7 +83,7 @@ func (m *mockNetlinkOps) LinkAdd(link vnl.Link) error {
 	defer m.mu.Unlock()
 	name := link.Attrs().Name
 	if _, ok := m.links[name]; ok {
-		return errors.New("file exists")
+		return syscall.EEXIST
 	}
 	m.links[name] = link
 	return nil
