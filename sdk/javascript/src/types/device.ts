@@ -37,6 +37,17 @@ export type AuthMethod =
   | 'NONE'
   | '802_1X';
 
+/**
+ * Maps each auth method to the spelling the REST handler parses
+ * (pkg/webservice/v1/device/profile_mapping.go); it reads anything else,
+ * '802_1X' included, as no authentication. UNSPECIFIED is sent as no method.
+ */
+export const AUTH_METHOD_WIRE_NAMES: Readonly<Record<AuthMethod, string | undefined>> = {
+  UNSPECIFIED: undefined,
+  NONE: 'none',
+  '802_1X': '802.1x',
+};
+
 // =============================================================================
 // Data Types
 // =============================================================================
