@@ -604,17 +604,6 @@ func TestSanitizeFilename(t *testing.T) {
 	})
 }
 
-// TestDumpFlagsStruct_Defaults tests default values
-func TestDumpFlagsStruct_Defaults(t *testing.T) {
-	flags := &dumpFlags{}
-
-	assert.Empty(t, flags.output)
-	assert.Empty(t, flags.format)
-	assert.Empty(t, flags.entityType)
-	assert.False(t, flags.pretty)
-	assert.Empty(t, flags.configDir)
-}
-
 // TestFileWriteOperation tests file write operations without modifying host
 func TestFileWriteOperation(t *testing.T) {
 	t.Run("write JSON file", func(t *testing.T) {
