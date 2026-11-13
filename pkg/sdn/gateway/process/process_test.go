@@ -1595,6 +1595,41 @@ func TestRelaunch_ADatapathRestartRelaunchesTheVPNSoItsLeasesAreReinstalled(t *t
 	require.NoError(t, supervisor.ServiceHealth(gateway.ServiceNAT))
 }
 
+func TestRelaunch_ADatapathCrashDuringTheVPNRelaunchRelaunchesTheVPNAgain(t *testing.T) {
+	// The datapath crashes again while the vpn child it caused to relaunch
+	// is still starting: that start may already have restored its leases
+	// into the datapath that is gone. The vpn child is relaunched once more
+	// after its start completes, so its leases reach the fresh hub.
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) { c.RestartBackoff = time.Millisecond })
+	ctx := testContext(t)
+	startDatapath(t, ctx, supervisor, launcher, "v1")
+	datapathChild := launcher.lastChild()
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceManagementVPN))
+	vpn := launcher.node("vpn", nil)
+
+	// Hold the relaunched vpn child's start mid-flight: its readiness
+	// answer, which a real vpn child gives once its Restore is done.
+	restore := newHeldCall()
+	vpn.mu.Lock()
+	vpn.holdStatus = restore
+	vpn.mu.Unlock()
+	datapathChild.exit(errors.New("signal: killed"))
+	secondDatapath := awaitRelaunch(t, supervisor, launcher, "datapath", 3)
+	restore.awaitEntered(t, ctx)
+
+	// The fresh datapath crashes while that vpn start is held.
+	secondDatapath.exit(errors.New("signal: killed"))
+	awaitRelaunch(t, supervisor, launcher, "datapath", 5)
+	close(restore.release)
+
+	awaitRelaunch(t, supervisor, launcher, "vpn", 6)
+	require.Eventually(t, func() bool {
+		return supervisor.ServiceHealth(gateway.ServiceManagementVPN) == nil
+	}, 5*time.Second, 10*time.Millisecond, "the vpn child is reported up after its second relaunch")
+	assert.Equal(t, []string{"v1", "v1", "v1"}, vpn.appliedVersions(),
+		"each vpn start restores the document, the last one into the third datapath")
+}
+
 func TestClassTable_OnlyTheVPNFollowsTheDatapath(t *testing.T) {
 	for _, def := range Definitions() {
 		assert.Equalf(t, def.Name == "vpn", def.FollowsDatapath, "process %q", def.Name)
