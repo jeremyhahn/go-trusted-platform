@@ -130,6 +130,38 @@ func TestAuthorize_RequiresDeviceID(t *testing.T) {
 	}
 }
 
+// TestAuthorize_TargetVLANRange refuses a missing or out-of-range
+// --target-vlan before any RPC, and sends 1 and 4094 unchanged.
+func TestAuthorize_TargetVLANRange(t *testing.T) {
+	for _, vlan := range []string{"0", "4095", "65556"} {
+		t.Run("reject "+vlan, func(t *testing.T) {
+			fake := &fakePXEClient{}
+			_, err := run(t, fake, "authorize", "dev-1", "--target-vlan", vlan)
+			var want *ErrInvalidTargetVLAN
+			if !errors.As(err, &want) {
+				t.Fatalf("err = %v, want *ErrInvalidTargetVLAN", err)
+			}
+			if fake.calls != 0 {
+				t.Errorf("RPC called %d times, want 0", fake.calls)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		arg  string
+		want uint32
+	}{{"1", 1}, {"4094", 4094}} {
+		t.Run("accept "+tc.arg, func(t *testing.T) {
+			fake := &fakePXEClient{}
+			if _, err := run(t, fake, "authorize", "dev-1", "--target-vlan", tc.arg); err != nil {
+				t.Fatalf("authorize --target-vlan %s: %v", tc.arg, err)
+			}
+			if got := fake.authorizeReq.GetTargetVlan(); got != tc.want {
+				t.Errorf("TargetVlan = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestQuarantine_RequiresReason(t *testing.T) {
 	fake := &fakePXEClient{}
 	_, err := run(t, fake, "quarantine", "dev-1")
