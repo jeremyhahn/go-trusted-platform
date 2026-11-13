@@ -11,5 +11,8 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     include: ['src/**/*.test.ts'],
+    // Node 26's built-in localStorage global is undefined without
+    // --localstorage-file and shadows jsdom's window.localStorage (#1871).
+    execArgv: ['--no-experimental-webstorage'],
   },
 });

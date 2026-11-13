@@ -14,6 +14,12 @@ export default defineConfig({
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     exclude: ["node_modules", ".next", "out", "e2e"],
     testTimeout: 10000,
+    // Node 26's built-in localStorage global is undefined without
+    // --localstorage-file and shadows jsdom's window.localStorage (#1871).
+    poolOptions: {
+      forks: { execArgv: ["--no-experimental-webstorage"] },
+      threads: { execArgv: ["--no-experimental-webstorage"] },
+    },
     // The SDK is linked from ../sdk/javascript, which has its own dev copy of
     // react. Externalized, its hooks would import that second React and fail
     // with "Invalid hook call". Inlining runs it through Vite, where `dedupe`
