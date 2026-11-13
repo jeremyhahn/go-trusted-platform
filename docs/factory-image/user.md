@@ -35,7 +35,8 @@ Three things to know before you start:
 > registered. A node's quote is checked against its device profile's
 > `PCRBaseline` table instead. The registration verbs ship in
 > go-quicbaas v0.14.0-alpha; the platform pins v0.12.0-alpha (#720). The
-> plan is [docs/plans/669.md](../plans/669.md).
+> design is [architecture.md §8](architecture.md#8-measurement-manifest), and
+> the plan is [docs/plans/669.md](../plans/669.md).
 
 ## Prerequisites
 

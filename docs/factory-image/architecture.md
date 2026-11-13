@@ -328,3 +328,91 @@ What persists: the image, the staged media directory, the U-Boot output
   whether PCRs 0, 4, 7 and 9 are measured — is unknown; the console and the
   RP1 Ethernet are unvalidated too. The detail is in
   [`dedicated/raspberrypi/README.md`](../../configs/platform/templates/dedicated/raspberrypi/README.md).
+
+## 8. Measurement manifest
+
+> **Designed, not built.** Nothing below exists in the code yet. It is the
+> design that slices 3-6 of [docs/plans/669.md](../plans/669.md) build, and
+> it needs approval before slice 3 starts. Today a node's quote is checked
+> against its device profile's `PCRBaseline` table.
+
+The SPEC row says every image, an upgrade included, is built and signed
+centrally. It also says every image carries a **measurement manifest**: a
+signed CoRIM ([draft-ietf-rats-corim-11](../reference/rats/draft-ietf-rats-corim-11.txt))
+of the PCR values the image determines, registered in the go-quicbaas
+reference-values store. The verifier then knows what a node booted from
+that image must quote, before the node first boots. It does not have to
+learn the values from the node.
+
+**What the image determines.** A PCR goes in the manifest only when the
+image fixes every event extended into it. The build has every input that
+the boot chain in §2 measures:
+
+| PCR | Events | Build input |
+|---|---|---|
+| 0 | `EV_S_CRTM_VERSION`, U-Boot's version string | the U-Boot build (`uboot.Build`'s `manifest.json`) |
+| 4 | the Authenticode digests of the UKI and of the db-signed kernel the stub hands to `LoadImage`, and their separators and actions | the signed UKI and kernel |
+| 7 | `SecureBoot`, `PK`, `KEK`, `db`, `dbx` as U-Boot preseeds them, and the `db` entry that verified each image | `<work-dir>/secure-boot-certs` |
+| 9 | the initrd, measured by the Linux EFI stub | the UKI's `.initrd` section |
+| 11 | the UKI's sections, measured by systemd-stub | the UKI |
+
+PCRs 1, 2 and 5 hold events that U-Boot's own code fixes: boot variables,
+drivers, and `ExitBootServices`. They go in the manifest only if slice 5's
+event-log replay shows that two boots of one image give the same value.
+PCR 11 is in the table on the same condition: the replay must show that
+systemd-stub measures under U-Boot's TCG2 protocol. The manifest never
+carries a PCR that is extended at runtime: 10 (IMA, absent on `linux-rpi`),
+12-15, or 16-23. PCR 0 is in the manifest, but §6 boundary 2 still holds: it
+proves the U-Boot version, not the firmware before it.
+
+**How the values are computed.** The values are predicted, not measured.
+The build replays the event sequence that the boot chain extends, from the
+same bytes it writes to the card, for each configured bank (`sha256` by
+default). The bank list is a build input. A missing input fails the build;
+the build never writes a partial manifest. Slice 5 proves the prediction:
+`make integration-test-diskimage` boots the image on the QEMU `virt` stand-in
+and checks that the live TCG event log, replayed, gives the manifest's
+values. The x86 ISO path gets the same check.
+
+**The CoRIM.** One `signed-corim` (`#6.18`, COSE_Sign1, content type
+`application/rim+cbor`) per build, written as `measurements.corim` beside the
+image. It holds one CoMID (`#6.506`):
+
+- `tag-identity`: a UUID derived from the image's SHA-256. An upgrade is a
+  new build, so it gets a new tag.
+- one `reference-triple-record`. Its environment is a `class-map` with
+  vendor `go-trusted-platform` and model `<target>/<model>`, for example
+  `rpi/rpi4` or `qemu-virt/virt`.
+- one `measurement-map` per PCR. `mkey` is the PCR index (`uint`), and
+  `mval.digests` holds one digest per bank.
+
+The COSE protected header carries `corim-meta` (signer name and validity)
+and the signing certificate's `x5chain`.
+
+**Signed centrally.** The build host never holds the manifest's signing key.
+The key is a KMS key, given as a `kms://` reference, as the DB key in
+`resign-mode: remote` and the HTTP boot fleet key already are. Its
+certificate chains to the platform CA. A media-staged `file://` key is
+refused for the manifest, as `refusePrivateKeys` refuses one for a network
+set. Every build that produces a UKI writes a manifest: the SD-card image,
+a netboot media set, and an upgrade.
+
+**Registered.** `platformctl diskimage` registers the manifest with
+`Security().Attestation().PutReferenceValues`, keyed by the CoMID's
+`tag-identity`, after the build succeeds. A registration failure fails the
+command, and the image is still left on disk. The verb ships in go-quicbaas
+v0.14.0-alpha, and the platform pins v0.12.0-alpha (#720), so registration
+is the last code slice.
+
+**Open questions for approval:**
+
+1. A node mid-upgrade may quote either its old image or its new one. The
+   current proposal is that both manifests stay registered until the new
+   image is confirmed, and the old one is then deleted
+   (`DeleteReferenceValues`). That matches the `.prev` refusal in the luks
+   row.
+2. Signing algorithm: ES384 on a P-384 KMS key is proposed, rather than
+   reusing the EEPROM's RSA-2048 fleet key. The EEPROM key's format is fixed
+   by the Pi firmware; the manifest's is not.
+3. The banks: `sha256` alone, or `sha256` and `sha384` where the TPM enables
+   both. The SLB9670 has no `sha384` bank.
