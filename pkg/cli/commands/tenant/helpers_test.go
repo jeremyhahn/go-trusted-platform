@@ -163,20 +163,3 @@ func TestToUsageSummary_NilQuotasAndUsage(t *testing.T) {
 	assert.Equal(t, UsageItem{}, summary.Compute.VMs)
 	assert.Equal(t, UsageItem{}, summary.Storage.Snapshots)
 }
-
-func TestTenantSummaryStruct(t *testing.T) {
-	summary := TenantSummary{
-		ID:          "t1",
-		Name:        "test",
-		DisplayName: "Test Tenant",
-		State:       "active",
-		Labels:      map[string]string{"env": "prod"},
-		Annotations: map[string]string{"note": "test"},
-		CreatedAt:   "2025-01-15T12:00:00Z",
-		UpdatedAt:   "2025-01-16T12:00:00Z",
-	}
-
-	assert.Equal(t, "t1", summary.ID)
-	assert.Equal(t, "test", summary.Name)
-	assert.Equal(t, "Test Tenant", summary.DisplayName)
-}

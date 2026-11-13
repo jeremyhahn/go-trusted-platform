@@ -242,16 +242,6 @@ func TestDefaultStubPath(t *testing.T) {
 	assert.Equal(t, "/usr/lib/systemd/boot/efi/linuxx64.efi.stub", DefaultStubPath)
 }
 
-func TestSectionStruct(t *testing.T) {
-	section := Section{
-		Name: ".cmdline",
-		Data: []byte("root=/dev/sda1"),
-	}
-
-	assert.Equal(t, ".cmdline", section.Name)
-	assert.Equal(t, []byte("root=/dev/sda1"), section.Data)
-}
-
 func TestFromFilesWithRealFiles(t *testing.T) {
 	tmpDir := t.TempDir()
 
