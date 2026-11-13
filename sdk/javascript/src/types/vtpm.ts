@@ -25,6 +25,27 @@ export type EKAlgorithm =
   | 'RSA'
   | 'ECC';
 
+/**
+ * Maps each bundle mode to the string the REST handler parses
+ * (pkg/vtpm/types.go); UNSPECIFIED is sent as no mode, so the server default
+ * applies.
+ */
+export const BUNDLE_MODE_WIRE_NAMES: Readonly<Record<BundleMode, string | undefined>> = {
+  UNSPECIFIED: undefined,
+  TEMPLATE: 'template',
+  PRE_ASSIGNED: 'pre-assigned',
+};
+
+/**
+ * Maps each EK algorithm to the string the REST handler parses; UNSPECIFIED
+ * is sent as no algorithm, so the server default applies.
+ */
+export const EK_ALGORITHM_WIRE_NAMES: Readonly<Record<EKAlgorithm, string | undefined>> = {
+  UNSPECIFIED: undefined,
+  RSA: 'RSA',
+  ECC: 'ECC',
+};
+
 // =============================================================================
 // Data Types
 // =============================================================================
@@ -367,14 +388,82 @@ export interface VTPMStatus {
   };
 }
 
+/** EK certificate summary as pkg/webservice/v1/rest/vtpm EKCertInfoResponse sends it. */
+export interface WireEKCertInfo {
+  subject: string;
+  issuer: string;
+  serial_number: string;
+  not_before?: string;
+  not_after?: string;
+  fingerprint: string;
+}
+
+/** Secure Boot key fingerprints as SecureBootKeyInfoResponse sends them. */
+export interface WireSecureBootKeyInfo {
+  pk_fingerprint: string;
+  kek_fingerprint: string;
+  db_fingerprint: string;
+  owner_guid: string;
+}
+
+/** Secure Boot key paths as SecureBootKeyPathsResponse sends them. */
+export interface WireSecureBootKeyPaths {
+  dir: string;
+  pk_key: string;
+  pk_crt: string;
+  kek_key: string;
+  kek_crt: string;
+  db_key: string;
+  db_crt: string;
+}
+
+/** Bundle manifest as ManifestResponse sends it. */
+export interface WireManifest {
+  version: string;
+  id: string;
+  /** Wire mode spelling, e.g. 'pre-assigned'; createBundle accepts it back. */
+  mode: string;
+  hostname?: string;
+  created_at?: string;
+  ek_certificate?: WireEKCertInfo;
+  /** Wire EK algorithm spelling; createBundle accepts it back. */
+  ek_algorithm: string;
+  ek_handle: number;
+  secure_boot_enabled: boolean;
+  secure_boot_keys?: WireSecureBootKeyInfo;
+  checksums?: Record<string, string>;
+  labels?: Record<string, string>;
+  cloned_from?: string;
+  /**
+   * The bound device profile (a uint64). JSON.parse reads it as a number, so
+   * an ID above 2^53 - 1 is not exact here; listBundles filters by the digits.
+   */
+  device_profile_id?: number;
+}
+
 /**
- * Create bundle response
+ * Create bundle response: the bundle itself, exactly as the daemon writes it
+ * (pkg/webservice/v1/rest/vtpm BundleResponse) — flat, snake_case, with the
+ * omitempty fields optional. There is no status wrapper; a failure is the
+ * ApiResponse error.
  */
 export interface CreateBundleResponse {
-  /** Operation status */
-  status: VTPMStatus;
-  /** Created bundle */
-  bundle?: VTPMBundle;
+  /** Generated bundle ID */
+  id: string;
+  /** Wire mode spelling, e.g. 'pre-assigned' */
+  mode: string;
+  manifest?: WireManifest;
+  tpm_state?: {
+    state_dir: string;
+    permall_file: string;
+    volatile_file?: string;
+  };
+  ovmf_state?: {
+    nvram_file: string;
+  };
+  secure_boot_keys?: WireSecureBootKeyPaths;
+  created_at?: string;
+  cloned_from?: string;
 }
 
 /**
@@ -404,13 +493,21 @@ export interface ListBundlesResponse {
 }
 
 /**
- * Create template response
+ * Create template response: the template itself, exactly as the daemon writes
+ * it (pkg/webservice/v1/rest/vtpm TemplateResponse). There is no status
+ * wrapper; a failure is the ApiResponse error.
  */
 export interface CreateTemplateResponse {
-  /** Operation status */
-  status: VTPMStatus;
-  /** Created template */
-  template?: VTPMTemplate;
+  /** Template ID */
+  id: string;
+  description?: string;
+  tpm_state_dir: string;
+  nvram_path: string;
+  secure_boot_keys_dir?: string;
+  /** Wire EK algorithm spelling */
+  ek_algorithm: string;
+  secure_boot_enabled: boolean;
+  created_at?: string;
 }
 
 /**
