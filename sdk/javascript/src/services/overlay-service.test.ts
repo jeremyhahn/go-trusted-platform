@@ -182,7 +182,7 @@ describe('OverlayService', () => {
   });
 
   describe('getTunnelStats', () => {
-    it('GETs /v1/overlay/tunnels/{remoteVtep}/{vni}/stats with no query or body', async () => {
+    it('GETs /v1/overlay/tunnels/stats with remote_vtep and vni query parameters', async () => {
       const response = { success: true, data: { stats: {} } };
       vi.mocked(mockClient.get).mockResolvedValue(response);
 
@@ -191,15 +191,17 @@ describe('OverlayService', () => {
       );
 
       expect(mockClient.get).toHaveBeenCalledTimes(1);
-      expect(mockClient.get).toHaveBeenCalledWith('/v1/overlay/tunnels/vtep-b/5001/stats');
+      expect(mockClient.get).toHaveBeenCalledWith('/v1/overlay/tunnels/stats?remote_vtep=vtep-b&vni=5001');
     });
 
-    it('percent-encodes the remote VTEP as one path segment', async () => {
+    it('percent-encodes the remote VTEP as a query value', async () => {
       vi.mocked(mockClient.get).mockResolvedValue({ success: true, data: {} });
 
       await service.getTunnelStats({ remoteVtep: 'fd00::1/64', vni: 7 });
 
-      expect(mockClient.get).toHaveBeenCalledWith('/v1/overlay/tunnels/fd00%3A%3A1%2F64/7/stats');
+      expect(mockClient.get).toHaveBeenCalledWith(
+        '/v1/overlay/tunnels/stats?remote_vtep=fd00%3A%3A1%2F64&vni=7'
+      );
     });
 
     it('propagates a transport error', async () => {
@@ -240,7 +242,7 @@ describe('OverlayService', () => {
   });
 
   describe('forgetMAC', () => {
-    it('DELETEs /v1/overlay/macs/{mac}/{vni} with the MAC percent-encoded', async () => {
+    it('DELETEs /v1/overlay/macs with the MAC percent-encoded in the query', async () => {
       const response = { success: true, data: {} };
       vi.mocked(mockClient.delete).mockResolvedValue(response);
 
@@ -250,7 +252,7 @@ describe('OverlayService', () => {
 
       expect(mockClient.delete).toHaveBeenCalledTimes(1);
       expect(mockClient.delete).toHaveBeenCalledWith(
-        '/v1/overlay/macs/02%3A00%3A00%3Aaa%3Abb%3Acc/5001'
+        '/v1/overlay/macs?mac=02%3A00%3A00%3Aaa%3Abb%3Acc&vni=5001'
       );
     });
 

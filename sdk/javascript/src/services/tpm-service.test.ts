@@ -39,6 +39,8 @@ interface CallCase {
   url: string;
   /** Body the method must send; omitted for verbs that carry none. */
   body?: unknown;
+  /** Request options the method must pass as the third transport argument. */
+  options?: unknown;
 }
 
 const cases: CallCase[] = [
@@ -212,6 +214,29 @@ const cases: CallCase[] = [
     url: '/v1/tpm/random',
     body: { numBytes: 32 },
   },
+  {
+    name: 'extendPCR',
+    invoke: (s) => s.extendPCR({ index: 16, hashAlg: 'SHA256', data: 'ZXh0ZW5k' }),
+    verb: 'post',
+    url: '/v1/tpm/pcrs/extend',
+    body: { index: 16, hashAlg: 'sha256', data: 'ZXh0ZW5k' },
+    // A retried extend would extend the PCR twice, so retries must be off.
+    options: { retry: { enabled: false } },
+  },
+  {
+    name: 'makeCredential',
+    invoke: (s) => s.makeCredential({ akName: 'YWtuYW1l', secret: 'c2VjcmV0', ekCert: 'ZWtjZXJ0' }),
+    verb: 'post',
+    url: '/v1/tpm/make-credential',
+    body: { akName: 'YWtuYW1l', secret: 'c2VjcmV0', ekCert: 'ZWtjZXJ0' },
+  },
+  {
+    name: 'activateCredential',
+    invoke: (s) => s.activateCredential({ credentialBlob: 'YmxvYg==', encryptedSecret: 'ZW5j' }),
+    verb: 'post',
+    url: '/v1/tpm/activate-credential',
+    body: { credentialBlob: 'YmxvYg==', encryptedSecret: 'ZW5j' },
+  },
 ];
 
 const VERBS: Verb[] = ['get', 'post', 'put', 'delete'];
@@ -239,13 +264,15 @@ describe('TPMService', () => {
     expect(cases.map((c) => c.name).sort()).toEqual(methods);
   });
 
-  describe.each(cases)('$name', ({ invoke, verb, url, body }) => {
+  describe.each(cases)('$name', ({ invoke, verb, url, body, options }) => {
     it(`sends ${verb.toUpperCase()} to the expected path, query and body`, async () => {
       await invoke(service);
 
       const calls = vi.mocked(mockClient[verb]).mock.calls;
       expect(calls).toHaveLength(1);
-      if (body === undefined) {
+      if (options !== undefined) {
+        expect(mockClient[verb]).toHaveBeenCalledWith(url, body, options);
+      } else if (body === undefined) {
         expect(calls[0]).toEqual([url]);
       } else {
         expect(calls[0]).toEqual([url, body]);
