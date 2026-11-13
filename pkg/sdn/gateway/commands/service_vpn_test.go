@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"sync"
@@ -22,6 +23,7 @@ import (
 // It is a MASQUE plane so the test runs in every build.
 type fakeVPNPlane struct {
 	mu        sync.Mutex
+	startErr  error
 	started   bool
 	stopped   bool
 	installed []vpn.LeaseID
@@ -33,7 +35,7 @@ func (p *fakeVPNPlane) Start(context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.started = true
-	return nil
+	return p.startErr
 }
 
 func (p *fakeVPNPlane) Stop(context.Context) error {
@@ -138,6 +140,33 @@ func TestServeProcess_DatapathHostsVPNPlanes(t *testing.T) {
 	require.NoError(t, <-done)
 	_, stopped, _ := plane.state()
 	assert.True(t, stopped, "the plane stops with the child")
+}
+
+// A plane that fails to start (an unresolvable key, a hub that cannot be
+// created) keeps the child's hosted services from starting: the
+// supervisor accepts an active service before it reads the start error,
+// so a started datapath would report ready while refusing every peer RPC.
+func TestServeProcess_PlaneFailureKeepsServicesInactive(t *testing.T) {
+	plane := &fakeVPNPlane{startErr: errors.New("wireguard hub key unresolvable")}
+	factory := &vpnPlaneFactory{planes: []vpn.ManagedDataPlane{plane}}
+	run := newDatapathRun(true)
+	opts, cancel, done := startDatapathProcess(t, run, factory)
+
+	var startErr string
+	var active map[string]bool
+	require.Eventually(t, func() bool {
+		var ok bool
+		startErr, active, ok = processStatus(t, opts.socket)
+		return ok && startErr != ""
+	}, 5*time.Second, 10*time.Millisecond, "the child must report the plane's start error")
+	assert.Contains(t, startErr, "wireguard hub key unresolvable")
+	for name, on := range active {
+		assert.False(t, on, "service %s must not be active after a plane failure", name)
+	}
+	assert.False(t, run.handler.active.Load(), "the gateway's services must not start after a plane failure")
+
+	cancel()
+	<-done
 }
 
 func TestDatapathVPNPlanes_DisabledLeavesRefusal(t *testing.T) {
