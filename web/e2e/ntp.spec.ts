@@ -232,6 +232,40 @@ test.describe('NTP', () => {
     expect(calls.step).toBe(1);
   });
 
+  test('starts no overlapping refresh while a status read is pending', async ({ page }) => {
+    let hold = false;
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const calls = await mockNTPApi(page, {
+      statusResponder: async () => {
+        if (hold) await held;
+        return null;
+      },
+    });
+
+    await page.goto('/networking/ntp');
+    const card = page.getByTestId('ntp-status-card');
+    await expect(card.getByText('Synced', { exact: true })).toBeVisible();
+    const refresh = page.getByRole('button', { name: 'Refresh' });
+    await expect(refresh).toBeEnabled();
+
+    // The first refresh is held: a second one must not start, or the older
+    // response could land after the newer one and overwrite it.
+    hold = true;
+    const before = calls.status;
+    await refresh.click();
+    await expect.poll(() => calls.status).toBe(before + 1);
+    await expect(refresh).toBeDisabled();
+    await refresh.click({ force: true });
+    expect(calls.status).toBe(before + 1);
+
+    release();
+    await expect(refresh).toBeEnabled();
+    expect(calls.status).toBe(before + 1);
+  });
+
   test('keeps the dialog open when the step is refused (Step, 409)', async ({ page }) => {
     const calls = await mockNTPApi(page, {
       stepError: { status: 409, error: 'ntp: no reachable source', errorCode: 'ABORTED' } as ApiError,
