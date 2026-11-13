@@ -71,6 +71,41 @@ func TestNewRouter_WithNilComponents(t *testing.T) {
 	})
 }
 
+func TestRouterStruct(t *testing.T) {
+	t.Run("struct has all required fields", func(t *testing.T) {
+		router := &Router{}
+
+		// Verify struct can be created with zero values
+		assert.NotNil(t, router)
+		assert.Nil(t, router.logger)
+		assert.Nil(t, router.ca)
+		assert.Nil(t, router.caConfig)
+		assert.Nil(t, router.restHandlerRegistry)
+		assert.Empty(t, router.baseURI)
+		assert.Empty(t, router.baseServiceURI)
+		assert.Nil(t, router.router)
+		assert.Nil(t, router.responseWriter)
+		assert.Nil(t, router.serverKeyAttributes)
+	})
+
+	t.Run("struct fields are accessible", func(t *testing.T) {
+		logger := testLogger()
+		responseWriter := response.NewResponseWriter(logger, nil)
+
+		router := &Router{
+			baseURI:        "/api/v1",
+			baseServiceURI: "/service",
+			logger:         logger,
+			responseWriter: responseWriter,
+		}
+
+		assert.Equal(t, "/api/v1", router.baseURI)
+		assert.Equal(t, "/service", router.baseServiceURI)
+		assert.Equal(t, logger, router.logger)
+		assert.Equal(t, responseWriter, router.responseWriter)
+	})
+}
+
 func TestRouterInterface(t *testing.T) {
 	t.Run("implements WebServiceRouter interface", func(t *testing.T) {
 		logger := testLogger()
