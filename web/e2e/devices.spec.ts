@@ -353,16 +353,12 @@ test.describe('Devices Management', () => {
       const openMenuButton = page.getByRole('button', { name: /open menu/i }).first();
       if (await openMenuButton.isVisible({ timeout: 2000 }).catch(() => false)) {
         await openMenuButton.click();
-        await page.waitForTimeout(500); // Allow dropdown animation
 
         const viewDetailsMenuItem = page.getByRole('menuitem', { name: /view details/i });
-        if (await viewDetailsMenuItem.isVisible({ timeout: 2000 }).catch(() => false)) {
-          await viewDetailsMenuItem.click();
-          await page.waitForTimeout(1000); // Wait for navigation
-          if (page.url().includes('/devices/1')) {
-            navigated = true;
-          }
-        }
+        await expect(viewDetailsMenuItem).toBeVisible();
+        await viewDetailsMenuItem.click();
+        await page.waitForURL(/\/devices\/1/);
+        navigated = true;
       }
 
       // Approach 2: Try clicking on a direct link in the row
@@ -370,10 +366,8 @@ test.describe('Devices Management', () => {
         const rowLink = page.locator('a[href*="/devices/1"]').first();
         if (await rowLink.isVisible({ timeout: 1000 }).catch(() => false)) {
           await rowLink.click();
-          await page.waitForTimeout(1000);
-          if (page.url().includes('/devices/1')) {
-            navigated = true;
-          }
+          await page.waitForURL(/\/devices\/1/);
+          navigated = true;
         }
       }
 
@@ -724,9 +718,6 @@ test.describe('Devices Management', () => {
 
       await page.goto('/devices');
 
-      // Wait for loading state to complete (either error or empty state)
-      await page.waitForTimeout(2000);
-
       // Check for various error indicators:
       // 1. Toast notification with error message
       // 2. Alert role with error
@@ -737,17 +728,8 @@ test.describe('Devices Management', () => {
         .or(page.locator('[data-sonner-toast]'))
         .or(page.getByText(/no devices/i)); // Fallback to empty state
 
-      // If no error is shown, the page might show empty state instead
-      // This is acceptable behavior when the API returns an error
-      const visibleIndicator = await errorIndicator.first().isVisible().catch(() => false);
-
-      if (!visibleIndicator) {
-        // Check if page has moved past loading state
-        const loadingGone = await page.getByText(/loading devices/i).isVisible().catch(() => false);
-        // If loading is still shown after 2s with a 500 error, something is wrong with the mock
-        // Otherwise, page may just show empty state
-        expect(loadingGone).toBe(false);
-      }
+      // Loading has completed once an error indicator or the empty state shows
+      await expect(errorIndicator.first()).toBeVisible();
     });
 
     test('should handle fetch device details error', async ({ page }) => {
@@ -1313,7 +1295,9 @@ test.describe('Device Profiles', () => {
       await viewDetailsItem.click();
 
       // Wait for either navigation or menu to close
-      await page.waitForTimeout(500);
+      await expect
+        .poll(async () => /\/devices\/profiles/.test(page.url()) || !(await page.getByRole('menu').isVisible()))
+        .toBe(true);
 
       // The test passes if either:
       // 1. Navigation happened to profile details page
@@ -1342,7 +1326,9 @@ test.describe('Device Profiles', () => {
       await page.getByRole('menuitem', { name: /edit profile/i }).click();
 
       // Wait for action to process
-      await page.waitForTimeout(500);
+      await expect
+        .poll(async () => /\/edit|\/profiles\//.test(page.url()) || !(await page.getByRole('menu').isVisible()))
+        .toBe(true);
 
       // Test passes if either:
       // 1. Navigated to edit page
@@ -3629,7 +3615,9 @@ test.describe('Device vTPM', () => {
       await page.getByRole('menuitem', { name: /view details/i }).click();
 
       // Wait for action to process
-      await page.waitForTimeout(500);
+      await expect
+        .poll(async () => /\/devices\/vtpm\//.test(page.url()) || !(await page.getByRole('menu').isVisible()))
+        .toBe(true);
 
       // Test passes if either:
       // 1. Navigated to detail page
