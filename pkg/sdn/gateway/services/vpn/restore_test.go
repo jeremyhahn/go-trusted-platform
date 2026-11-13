@@ -157,6 +157,26 @@ func TestRestore_ReinstatesRecordedLeases(t *testing.T) {
 	assert.Equal(t, first.Keys, stored.Keys, "the restored lease keeps its peer keys")
 }
 
+// TestRestore_RemovesAHostedPeerWhoseLeaseIsGone covers a vpn child that
+// dies after a revoke deleted the lease record but before it removed the
+// peer: the datapath's plane outlives the child and still hosts the peer.
+// The replacement child's Restore reconciles the plane's peers against the
+// stored leases, so the revoked key stops passing traffic.
+func TestRestore_RemovesAHostedPeerWhoseLeaseIsGone(t *testing.T) {
+	h := newRestoreHarness(t)
+	kept := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
+	h.plane.installed[kept.ID] = kept
+	h.plane.installed["lease-revoked"] = &Lease{ID: "lease-revoked", DataPlane: DataPlaneMASQUE}
+	h.start(t)
+
+	require.NoError(t, h.svc.Restore(context.Background()))
+
+	h.plane.mu.Lock()
+	defer h.plane.mu.Unlock()
+	assert.NotContains(t, h.plane.installed, LeaseID("lease-revoked"), "the revoked lease's peer is removed")
+	assert.Contains(t, h.plane.installed, kept.ID, "the stored lease's peer stays")
+}
+
 func TestRestore_DropsLeasesItCannotReinstate(t *testing.T) {
 	cases := map[string]struct {
 		prepare func(*testing.T, *restoreHarness, *Lease)

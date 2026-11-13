@@ -199,6 +199,24 @@ func (p *fakePlane) RemovePeer(_ context.Context, id LeaseID) error {
 	return p.removeErr
 }
 
+// ReconcilePeers removes every installed peer whose lease is not in keep,
+// as a hosted plane does when the vpn child restarts.
+func (p *fakePlane) ReconcilePeers(_ context.Context, keep []LeaseID) error {
+	want := make(map[LeaseID]bool, len(keep))
+	for _, id := range keep {
+		want[id] = true
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for id := range p.installed {
+		if !want[id] {
+			delete(p.installed, id)
+			p.removed = append(p.removed, id)
+		}
+	}
+	return p.removeErr
+}
+
 func (p *fakePlane) count() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
