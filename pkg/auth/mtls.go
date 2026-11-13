@@ -84,11 +84,13 @@ func (m *MTLSAdapter) Authenticate(ctx context.Context, cert *x509.Certificate) 
 		return nil, ErrCertificateExpired{}
 	}
 
-	// Validate against trusted roots
-	if m.config.TrustedRoots != nil {
-		if err := m.validateCertificate(ctx, cert); err != nil {
-			return nil, err
-		}
+	// Validate against trusted roots. Without roots the chain cannot be
+	// verified, so authentication fails closed.
+	if m.config.TrustedRoots == nil {
+		return nil, ErrMissingTrustedRoots{}
+	}
+	if err := m.validateCertificate(ctx, cert); err != nil {
+		return nil, err
 	}
 
 	// Check revocation if enabled
@@ -299,15 +301,16 @@ func (m *MTLSAdapter) checkRevocation(ctx context.Context, cert *x509.Certificat
 		return nil // No CA configured, skip revocation check
 	}
 
-	// Check if certificate is revoked by attempting to verify against CA
-	_, err := m.ca.Verify(cert, nil)
+	// Ask the CA directly whether the serial is revoked. CA.Verify is not
+	// used here: it verifies for server auth and so rejects valid
+	// client-auth-only certificates.
+	revoked, err := m.ca.IsRevoked(cert.SerialNumber)
 	if err != nil {
-		// Check if this is a revocation error
-		if strings.Contains(err.Error(), "revoked") {
-			return ErrCertificateRevoked{}
-		}
-		// Log but don't fail for other verification issues during revocation check
-		m.logger.Debugf("auth: certificate verification during revocation check: %v", err)
+		// Revocation status is unknown: fail closed.
+		return ErrRevocationCheckFailed{Reason: "certificate authority revocation lookup failed", Err: err}
+	}
+	if revoked {
+		return ErrCertificateRevoked{}
 	}
 
 	return nil

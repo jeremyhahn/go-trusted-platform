@@ -14,6 +14,8 @@
 package backends
 
 import (
+	"context"
+	"fmt"
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 
@@ -73,20 +75,58 @@ func PlatformAdminIdentity(a *app.App) AdminIdentity {
 
 // WireSDKBackends gives a daemon's ceremony and LUKS services their production
 // backends on every transport, and the LUKS service its effective-UID root
-// checker. A refused wiring (no SDK client) wires nothing. Runtime FIDO2 is intentionally left unwired until the SDK
-// exposes the daemon backend shape; callers receive daemon.ErrFIDO2NotConfigured
-// instead of a local CTAP2/KV implementation.
+// checker. A refused wiring (no SDK client) wires nothing. Runtime FIDO2 is
+// intentionally left unwired until the SDK exposes the daemon backend shape;
+// callers receive daemon.ErrFIDO2NotConfigured instead of a local CTAP2/KV
+// implementation.
 func WireSDKBackends(target SDKBackendTarget, src SDKBackendSources, logger *logging.Logger) error {
 	if src.SDK == nil {
 		return ErrCeremonyBackendRequiresSDK{}
 	}
 	target.SetCeremonyBackend(NewCeremonyBackend(logger, src.SDK, src.Admin))
 	// The LUKS backend needs no SDK: it drives go-luks2 on the host, with
-	// the FIDO2 and TPM handlers the host can open. The root checker reads
-	// the effective UID; without it the service refuses every mutation.
-	target.SetLUKSBackend(NewLUKSBackend(logger, WithDefaultLUKSHandlers()))
+	// the TPM handler the host can open. The root checker reads the
+	// effective UID; without it the service refuses every mutation.
+	//
+	// FIDO2 enrollment stays off: the default handler binds the 64-byte
+	// go-xkms derived key, which neither the fido2-manual reader (raw
+	// 32-byte hmac-secret) nor the initrd FIDO2 strategy (no credential or
+	// salt) can produce, so an enrolled slot would not unlock at boot.
+	// EnrollFIDO2 answers ErrLUKSHardwareUnavailable until a boot path
+	// consumes the slot.
+	luks := NewLUKSBackend(logger, WithDefaultLUKSHandlers())
+	luks.SetFIDO2Handler(nil)
+	luks.SetTPMHandler(pcrCheckedTPMHandler(luks.tpm))
+	target.SetLUKSBackend(luks)
 	target.SetLUKSRootChecker(DefaultRootChecker())
 	return nil
+}
+
+// maxTPMPCRIndex is the highest PCR index a TPM 2.0 PC-client bank holds.
+const maxTPMPCRIndex = 23
+
+// pcrCheckedTPMHandler wraps h so Seal refuses an empty PCR list and any
+// index outside 0..maxTPMPCRIndex before the sealer runs or a slot is
+// written. A nil h stays nil, so TPM enrollment stays off.
+func pcrCheckedTPMHandler(h LUKSTPMHandler) LUKSTPMHandler {
+	if h == nil {
+		return nil
+	}
+	return pcrCheckedTPM{next: h}
+}
+
+type pcrCheckedTPM struct{ next LUKSTPMHandler }
+
+func (p pcrCheckedTPM) Seal(ctx context.Context, handle string, pcrs []int32) ([]byte, []byte, error) {
+	if len(pcrs) == 0 {
+		return nil, nil, fmt.Errorf("%w: at least one pcr index is required", daemon.ErrLUKSPCRInvalid)
+	}
+	for _, idx := range pcrs {
+		if idx < 0 || idx > maxTPMPCRIndex {
+			return nil, nil, fmt.Errorf("%w: pcr index %d is outside 0..%d", daemon.ErrLUKSPCRInvalid, idx, maxTPMPCRIndex)
+		}
+	}
+	return p.next.Seal(ctx, handle, pcrs)
 }
 
 // WireEmbeddedHost is the daemon.EmbeddedHostOptions.WireBackends of every

@@ -167,20 +167,29 @@ platform stores nothing about the volume.
 ## 6. Wiring as shipped
 
 `daemon.go` constructs `NewLUKSService(logger, nil, nil)` and registers it on
-REST, gRPC (TCP and Unix), QUIC and MCP. **No production code calls
-`SetLUKSBackend`, `SetLUKSRootChecker`, `NewLUKSBackend` or
-`DefaultRootChecker`.** The consequences on every server transport:
+REST, gRPC (TCP and Unix), QUIC and MCP. The platformd startup path then calls
+`backends.WireSDKBackends` (`pkg/app/backends/sdk_wiring.go`), which, after the
+ceremony backend, injects the production LUKS pieces through the
+`SDKBackendTarget` interface (implemented by `*daemon.Daemon`):
 
-- mutating operations return `ErrLUKSRootRequired` (the nil root checker reports
-  non-root), before the backend is ever consulted;
-- `status`, `list-slots`, `info` and `test-unlock` return `ErrLUKSNotConfigured`.
+- `SetLUKSBackend(NewLUKSBackend(logger, WithDefaultLUKSHandlers()))`: the
+  go-luks2 backend with the FIDO2 and TPM handlers the host can open;
+- `SetLUKSRootChecker(DefaultRootChecker())`: the effective-UID root gate for
+  mutating operations.
+
+The LUKS backend needs no SDK client, but it is wired only when
+`WireSDKBackends` succeeds: if the SDK client is missing it returns
+`ErrCeremonyBackendRequiresSDK` and wires nothing, so every server transport
+keeps answering as before (mutations `ErrLUKSRootRequired`, reads
+`ErrLUKSNotConfigured`).
 
 On the client side, every `platformctl luks` verb reaches the server through
-`platform.Client.LUKS()`, so after its local checks it returns the server's
-refusal above.
+`platform.Client.LUKS()`, so after its local checks it runs against the wired
+backend on whichever transport is active.
 
-The working pieces are the backend (exercised by its loopback tests) and the
-server-side transport adapters (exercised against a stub backend).
+`TestWireSDKBackends_WiresLUKS` (`pkg/app/backends/sdk_wiring_test.go`) checks
+that a fake target receives a non-nil `*LUKSBackend` and a root checker, and
+`TestWireSDKBackends_NoSDKClientIsFatal` that a refused wiring sets neither.
 
 ---
 

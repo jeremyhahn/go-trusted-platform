@@ -62,6 +62,12 @@ create body's `mode` accepts the same. A `labels` value without `=` or an
 empty key, or a `device_profile_id` that is not an unsigned integer, is 400.
 Create takes `device_profile_id`, and every manifest returns it.
 
+The REST create bodies are flat and snake_case (`mode`, `hostname`,
+`ek_algorithm`, `secure_boot_enabled`, `labels`, `template_id`,
+`device_profile_id`; a template takes `id`, `description`, `ek_algorithm`,
+`secure_boot_enabled`), and an unknown field is 400. The JavaScript SDK maps
+its `options` object onto that body, sending `UNSPECIFIED` as an omitted field.
+
 ---
 
 ## 4. Runtime operations

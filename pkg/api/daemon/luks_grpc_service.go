@@ -60,6 +60,7 @@ func luksErrorToGRPC(err error) error {
 		errors.Is(err, ErrLUKSNewPassphraseRequired),
 		errors.Is(err, ErrLUKSCredentialIDRequired),
 		errors.Is(err, ErrLUKSSlotRequired),
+		errors.Is(err, ErrLUKSPCRInvalid),
 		errors.Is(err, ErrLUKSFIDO2PINUnsupported):
 		return status.Error(codes.InvalidArgument, err.Error())
 	}

@@ -14,6 +14,7 @@
 package backends
 
 import (
+	"context"
 	"errors"
 	"os"
 	"strings"
@@ -55,6 +56,74 @@ func TestWireSDKBackends_WiresLUKS(t *testing.T) {
 	}
 	if got, want := target.root.IsRoot(), os.Geteuid() == 0; got != want {
 		t.Errorf("root checker IsRoot = %v, want %v (the effective UID)", got, want)
+	}
+}
+
+// TestWireSDKBackends_LeavesFIDO2EnrollmentOff verifies the production
+// wiring does not offer LUKS FIDO2 enrollment: the enrollment handler binds
+// the 64-byte go-xkms derived key, while the shipped boot paths (the
+// fido2-manual reader and the initrd FIDO2 strategy) cannot derive it, so an
+// enrolled slot would not unlock the volume at boot (Codex round 3, #1852).
+func TestWireSDKBackends_LeavesFIDO2EnrollmentOff(t *testing.T) {
+	target := &recordingSDKTarget{}
+
+	if err := WireSDKBackends(target, SDKBackendSources{SDK: &fakeQuicbaasClient{}}, logging.DefaultLogger()); err != nil {
+		t.Fatalf("WireSDKBackends: %v", err)
+	}
+	lb, ok := target.luks.(*LUKSBackend)
+	if !ok || lb == nil {
+		t.Fatalf("LUKS backend = %T, want a non-nil *LUKSBackend", target.luks)
+	}
+	if lb.fido2 != nil {
+		t.Fatalf("LUKS FIDO2 handler = %T, want nil until a boot unlock path consumes the enrolled key", lb.fido2)
+	}
+}
+
+// countingTPMSealer records every Seal call the PCR check lets through.
+type countingTPMSealer struct{ calls int }
+
+func (s *countingTPMSealer) Seal(_ context.Context, _ string, _ []int32) ([]byte, []byte, error) {
+	s.calls++
+	return []byte("passphrase"), []byte(`{"type":"tpm2"}`), nil
+}
+
+// The wired TPM handler refuses an empty PCR list and every index outside
+// 0..23 before it seals anything (Codex round 4 on #1852).
+func TestPCRCheckedTPMHandler_RefusesBadIndexesBeforeSealing(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		pcrs []int32
+		bad  string
+	}{
+		{"empty", nil, "at least one"},
+		{"invalid only", []int32{24}, "24"},
+		{"mixed", []int32{7, 24}, "24"},
+		{"negative", []int32{-1}, "-1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sealer := &countingTPMSealer{}
+			_, _, err := pcrCheckedTPMHandler(sealer).Seal(context.Background(), "0x81000001", tc.pcrs)
+			if !errors.Is(err, daemon.ErrLUKSPCRInvalid) {
+				t.Fatalf("Seal(%v) error = %v, want ErrLUKSPCRInvalid", tc.pcrs, err)
+			}
+			if !strings.Contains(err.Error(), tc.bad) {
+				t.Errorf("error %q does not name %q", err, tc.bad)
+			}
+			if sealer.calls != 0 {
+				t.Errorf("sealer called %d times, want 0", sealer.calls)
+			}
+		})
+	}
+
+	sealer := &countingTPMSealer{}
+	if _, _, err := pcrCheckedTPMHandler(sealer).Seal(context.Background(), "0x81000001", []int32{0, 7}); err != nil {
+		t.Fatalf("Seal([0 7]) = %v, want nil", err)
+	}
+	if sealer.calls != 1 {
+		t.Errorf("sealer called %d times, want 1", sealer.calls)
+	}
+	if pcrCheckedTPMHandler(nil) != nil {
+		t.Error("pcrCheckedTPMHandler(nil) should stay nil so TPM enrollment stays off")
 	}
 }
 
