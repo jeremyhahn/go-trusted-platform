@@ -104,13 +104,10 @@ describe('BMC through the package root', () => {
   });
 });
 /**
- * Unit tests for the BMC service routes (#1736): each method hits
+ * BMC service routes (#1736): each method hits
  * `/v1/bmc/{profileID}/...` with the verb the server registers.
  */
-
-import { BMCService } from '../bmc-service.js';
-
-function createMockApiClient(): ApiClient {
+function createRouteMockApiClient(): ApiClient {
   return {
     get: vi.fn().mockResolvedValue({ success: true, data: {} }),
     post: vi.fn().mockResolvedValue({ success: true, data: {} }),
@@ -124,12 +121,12 @@ function createMockApiClient(): ApiClient {
   } as unknown as ApiClient;
 }
 
-describe('BMCService', () => {
+describe('BMCService routes (#1736)', () => {
   let service: BMCService;
   let mockClient: ApiClient;
 
   beforeEach(() => {
-    mockClient = createMockApiClient();
+    mockClient = createRouteMockApiClient();
     service = new BMCService(mockClient);
   });
 
@@ -165,7 +162,7 @@ describe('BMCService', () => {
     vi.mocked(mockClient.get).mockResolvedValue({ success: true, data: readings });
     const res = await service.getSensors('1');
     expect(Array.isArray(res.data)).toBe(true);
-    expect(res.data?.[0].value).toBe(54);
+    expect(res.data?.[0]?.value).toBe(54);
   });
 
   it('unmountISO DELETEs virtual-media', async () => {

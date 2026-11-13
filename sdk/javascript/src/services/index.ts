@@ -9,7 +9,6 @@ export { BaseService, listOptionsToParams, type ListOptions } from './base-servi
 
 // Service classes
 export { AttestationService } from './attestation-service.js';
-export { BMCService } from './bmc-service.js';
 export { CAService } from './ca-service.js';
 export { ComputeService } from './compute-service.js';
 export { DeviceService } from './device-service.js';
@@ -24,6 +23,7 @@ export type {
   StepNTPClockResponse,
 } from './ntp-service.js';
 export { BMCService, BMC_PRIVILEGE_CODES, bmcPrivilegeName } from './bmc-service.js';
+export type {
   BMCPrivilegeName,
   BMCUser,
   CreateBMCUserRequest,

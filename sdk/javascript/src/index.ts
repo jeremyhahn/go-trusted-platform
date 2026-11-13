@@ -79,7 +79,6 @@ export {
   listOptionsToParams,
   type ListOptions,
   AttestationService,
-  BMCService,
   CAService,
   ComputeService,
   DeviceService,
@@ -1110,6 +1109,7 @@ export type {
 } from './services/bmc-service.js';
 
 // Tenant lifecycle, quota and DEK types (#1758)
+export type {
   Tenant,
   TenantState,
   TenantStatus,

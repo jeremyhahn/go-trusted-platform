@@ -44,10 +44,10 @@ describe('InvitationService', () => {
   });
 
   it('accept posts the request to /v1/invitations/accept', async () => {
-    await service.accept({ token: 'tok-1', name: 'Ada' });
+    await service.accept({ token: 'tok-1', userId: '42' });
     expect(client.post).toHaveBeenCalledWith('/v1/invitations/accept', {
       token: 'tok-1',
-      name: 'Ada',
+      userId: '42',
     });
   });
 });
