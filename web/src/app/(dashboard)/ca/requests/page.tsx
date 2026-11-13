@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { CSRViewer } from "@/components/features/ca/csr-viewer";
-import { useCA, useApi, useMutation, useToast, type MutationError } from "@/hooks";
+import { useMutation, useToast, type MutationError } from "@/hooks";
 import type { CertificateRequest } from "@/types/security";
 import type { TypedFilterColumn, TypedRowAction } from "@/components/ui/data-table.types";
 import { AlertCircle, CheckCircle, XCircle, RefreshCw } from "lucide-react";
@@ -30,7 +30,6 @@ import { AlertCircle, CheckCircle, XCircle, RefreshCw } from "lucide-react";
  * - Filter by status
  */
 export default function CertificateRequestsPage() {
-  const ca = useCA();
   const { toast } = useToast();
   const [selectedRequest, setSelectedRequest] = React.useState<CertificateRequest | null>(null);
   const [isCSRDialogOpen, setIsCSRDialogOpen] = React.useState(false);
