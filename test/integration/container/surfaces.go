@@ -25,8 +25,8 @@ const (
 
 // Why a transport has no surface for an operation.
 const (
-	reasonRESTLogs = "platformd serves no REST container logs route: the SDK maps GetContainerLogs to " +
-		"GET /api/v1/compute/containers/logs, which pkg/api/rest/compute_handlers.go does not register"
+	reasonRESTLogs = "container logs is a server stream: the SDK REST transport carries no GetContainerLogs claim " +
+		"(DS-3803, #454) and pkg/api/rest/compute_handlers.go registers no logs route"
 	reasonQUICAttest = "the SDK QUIC transport maps no AttestContainer RPC (sdk/go/transport/quic/adapter.go); " +
 		"the daemon's OpContainerAttest is reached only by the flat container handler"
 	reasonMCPAttest = "the SDK MCP transport maps no AttestContainer RPC (sdk/go/transport/mcp/adapter.go); " +
