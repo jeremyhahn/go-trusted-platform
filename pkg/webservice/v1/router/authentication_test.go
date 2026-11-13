@@ -66,6 +66,44 @@ func TestAuthenticationRouter_MountsLogoutOnPOST(t *testing.T) {
 	assert.Equal(t, 1, middleware.calls)
 }
 
+// probeMiddleware is a JWT middleware that can probe certificate sign-in
+// (#201).
+type probeMiddleware struct {
+	MockJsonWebTokenMiddleware
+	calls int
+}
+
+func (m *probeMiddleware) ProbeMTLS(w http.ResponseWriter, _ *http.Request) {
+	m.calls++
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func TestAuthenticationRouter_MountsTheMTLSProbe(t *testing.T) {
+	middleware := &probeMiddleware{}
+	r := mux.NewRouter()
+	NewAuthenticationRouter(middleware).RegisterRoutes(r)
+
+	for _, method := range []string{http.MethodHead, http.MethodGet} {
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(method, "/auth/mtls/probe", nil))
+		assert.Equal(t, http.StatusNoContent, rec.Code, method)
+	}
+	assert.Equal(t, 2, middleware.calls)
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/auth/mtls/probe", nil))
+	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+}
+
+func TestAuthenticationRouter_NoMTLSProbeWithoutAProbeHandler(t *testing.T) {
+	r := mux.NewRouter()
+	NewAuthenticationRouter(&MockJsonWebTokenMiddleware{}).RegisterRoutes(r)
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodHead, "/auth/mtls/probe", nil))
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
 func TestAuthenticationRouter_NoLogoutRouteWithoutALogoutHandler(t *testing.T) {
 	r := mux.NewRouter()
 	NewAuthenticationRouter(&MockJsonWebTokenMiddleware{}).RegisterRoutes(r)

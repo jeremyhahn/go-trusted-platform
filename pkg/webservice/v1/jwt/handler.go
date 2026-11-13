@@ -246,6 +246,56 @@ func (handler *RestHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	handler.responseWriter.Success200(w, r, nil)
 }
 
+// ProbeMTLS answers HEAD/GET /api/v1/auth/mtls/probe: whether "Sign in
+// with mTLS" on the login page would start a login for this caller
+// (#201). Before this route existed on the webservice, the console's
+// probe got a 404 and the probe handler sat on the daemon REST server,
+// where nothing it said related to the login the console actually runs.
+//
+// It answers from the same login driver /login runs, so it cannot offer
+// a sign-in that /login then refuses:
+//
+//   - 501 when this deployment cannot sign in with a certificate at all:
+//     no backbone is wired, or the mTLS binder declines the ceremony
+//     (it does until go-quicbaas#857 lets the caller's certificate be
+//     bound). Nothing the user can fix, so the console says "not
+//     supported" rather than "load a certificate".
+//   - 401 when certificate sign-in is possible but the TLS handshake
+//     carried no client certificate.
+//   - 204 when the login would start. Whether the certificate maps to a
+//     principal is the ceremony's answer, not the probe's: the probe
+//     never contacts the backbone, so it is no oracle for which
+//     certificates are enrolled.
+//
+// The answer depends on the connection, so it is never cached.
+func (handler *RestHandler) ProbeMTLS(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+
+	if handler.loginDriver == nil {
+		w.WriteHeader(http.StatusNotImplemented)
+		return
+	}
+	if err := handler.loginDriver.Probe(r, quicbaas.FactorTypeMTLS); err != nil {
+		var (
+			unavailable *login.UnavailableError
+			declined    *login.FactorUnavailableError
+			unsupported *login.UnsupportedFactorError
+		)
+		if errors.As(err, &unavailable) || errors.As(err, &declined) || errors.As(err, &unsupported) {
+			handler.logger.Debugf("rest/jwt: mTLS sign-in unavailable: %v", err)
+			w.WriteHeader(http.StatusNotImplemented)
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // Validates the raw JWT token to ensure it's not expired or contains invalid claims. This
 // is used by the negroni middleware to enforce authenticated access to procted resources.
 //

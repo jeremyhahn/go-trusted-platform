@@ -38,6 +38,21 @@ func (authenticationRouter *AuthenticationRouter) RegisterRoutes(router *mux.Rou
 	authenticationRouter.login(router)
 	authenticationRouter.refreshToken(router)
 	authenticationRouter.logout(router)
+	authenticationRouter.mtlsProbe(router)
+}
+
+// @Summary Probe certificate sign-in
+// @Description Reports whether signing in with the TLS client certificate would start a login: 204 yes, 401 no client certificate, 501 not supported on this deployment
+// @Tags Authentication
+// @Success 204
+// @Failure 401
+// @Failure 501
+// @Router /auth/mtls/probe [head]
+func (authenticationRouter *AuthenticationRouter) mtlsProbe(router *mux.Router) {
+	if handler, ok := authenticationRouter.middleware.(middleware.MTLSProbeHandler); ok {
+		router.HandleFunc("/auth/mtls/probe", handler.ProbeMTLS).
+			Methods(http.MethodHead, http.MethodGet)
+	}
 }
 
 // @Summary Sign out

@@ -189,12 +189,16 @@ export type MTLSAvailability =
 /**
  * Probe whether mTLS sign-in can be used, and why not when it cannot.
  *
- * `404` is treated as "not supported" rather than as a failure to detect a
- * certificate. The probe handler exists (pkg/api/rest/auth_factor_handlers.go)
- * but is registered on the daemon REST server rather than the webservice that
- * serves this console, so it currently answers 404 here. If it later becomes
- * reachable on this surface, the 404 branch simply stops firing and callers
- * begin getting the certificate-based answer with no change here.
+ * The webservice answers from the same login driver `/api/v1/login` runs
+ * (pkg/webservice/v1/jwt/handler.go ProbeMTLS, #201), so the button is
+ * offered exactly when the login it leads to would start:
+ *
+ * - `204` the login would start;
+ * - `401` / `403` the handshake carried no acceptable client certificate;
+ * - `501` this deployment cannot sign in with a certificate (no backbone,
+ *   or the ceremony cannot bind the caller's certificate yet), which is not
+ *   something the operator can fix by loading one;
+ * - `404` a server older than the route: also "not supported".
  */
 export async function probeMTLS(): Promise<MTLSAvailability> {
   let resp: Response;
@@ -213,7 +217,7 @@ export async function probeMTLS(): Promise<MTLSAvailability> {
   if (resp.ok) {
     return { status: "available" };
   }
-  if (resp.status === 404) {
+  if (resp.status === 404 || resp.status === 501) {
     return { status: "not-supported" };
   }
   if (resp.status === 401 || resp.status === 403) {

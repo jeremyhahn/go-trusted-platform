@@ -147,6 +147,30 @@ func (d *Driver) Begin(w http.ResponseWriter, r *http.Request, factorType quicba
 	d.finish(w, r, binder, begin.SessionID)
 }
 
+// Probe reports whether a login with factorType would start for this
+// request, without starting one. It makes every check Begin makes before
+// Begin reaches the backbone, in the same order, and contacts nothing: a
+// binder's Begin only builds the begin request from the HTTP request.
+//
+// The console's mTLS sign-in probe answers from it (#201), so the console
+// offers a factor exactly when the login it leads to would open a
+// ceremony. The two cannot drift: when a binder stops declining
+// (go-quicbaas#857 for mTLS), the probe follows with no change here.
+//
+// A nil error means the ceremony would open; otherwise the error is the
+// one Begin would have answered with.
+func (d *Driver) Probe(r *http.Request, factorType quicbaas.FactorType) error {
+	binder, err := d.binder(factorType)
+	if err != nil {
+		return err
+	}
+	if d.client == nil {
+		return &UnavailableError{}
+	}
+	_, err = binder.Begin(r)
+	return err
+}
+
 // Finish completes a challenge factor's ceremony with the proof the
 // client produced from the Begin challenge, and answers with the session
 // the platform issued for the principal the backbone resolved.
