@@ -64,8 +64,10 @@ export function ConfigSection({
         } else if (value === "off") {
           data[key] = false;
         } else {
-          // Try to parse as number if possible
-          const numValue = Number(value);
+          // Try to parse as number if possible; an empty or blank field
+          // stays a string (Number("") is 0, which would save a cleared field as 0).
+          const numValue =
+            typeof value === "string" && value.trim() !== "" ? Number(value) : NaN;
           data[key] = isNaN(numValue) ? value : numValue;
         }
       });
