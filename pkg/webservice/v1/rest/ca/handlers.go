@@ -14,6 +14,7 @@
 package ca
 
 import (
+	"crypto/elliptic"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
@@ -831,11 +832,14 @@ func (h *CAHandlers) IssueCertificate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	rsaAttrs, eccAttrs := protoKeyParameters(certReq.GetKeyAlgorithm())
 	caReq.KeyAttributes = &xkmssdk.KeyAttributes{
-		CN:           subject.GetCommonName(),
-		KeyAlgorithm: keyAlg,
-		StoreType:    storeType,
-		KeyType:      xkmssdk.KeyTypeTLS,
+		CN:            subject.GetCommonName(),
+		KeyAlgorithm:  keyAlg,
+		StoreType:     storeType,
+		KeyType:       xkmssdk.KeyTypeTLS,
+		RSAAttributes: rsaAttrs,
+		ECCAttributes: eccAttrs,
 	}
 
 	issued, err := h.ca.IssueCertificate(r.Context(), caReq)
@@ -930,6 +934,30 @@ func (h *CAHandlers) protoKeyAlgorithmToX509(alg platformv1.KeyAlgorithm) (x509.
 		return x509.Ed25519, nil
 	default:
 		return 0, ErrInvalidKeyAlgorithm{Algorithm: alg.String()}
+	}
+}
+
+// protoKeyParameters returns the RSA key size or ECDSA curve the proto key
+// algorithm selects, for the issued KeyAttributes. Without them the keystore
+// falls back to RSA-2048 or P-256, silently issuing a weaker key than the one
+// requested. Both are nil for KEY_ALGORITHM_UNSPECIFIED (the CA default) and
+// for Ed25519, which has no parameters.
+func protoKeyParameters(alg platformv1.KeyAlgorithm) (*xkmssdk.RSAAttributes, *xkmssdk.ECCAttributes) {
+	switch alg {
+	case platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_2048:
+		return &xkmssdk.RSAAttributes{KeySize: 2048}, nil
+	case platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_3072:
+		return &xkmssdk.RSAAttributes{KeySize: 3072}, nil
+	case platformv1.KeyAlgorithm_KEY_ALGORITHM_RSA_4096:
+		return &xkmssdk.RSAAttributes{KeySize: 4096}, nil
+	case platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P256:
+		return nil, &xkmssdk.ECCAttributes{Curve: elliptic.P256()}
+	case platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P384:
+		return nil, &xkmssdk.ECCAttributes{Curve: elliptic.P384()}
+	case platformv1.KeyAlgorithm_KEY_ALGORITHM_ECDSA_P521:
+		return nil, &xkmssdk.ECCAttributes{Curve: elliptic.P521()}
+	default:
+		return nil, nil
 	}
 }
 
