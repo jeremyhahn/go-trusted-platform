@@ -57,12 +57,17 @@ export interface RequestOptions {
 
 /**
  * Resolve a root-relative `path` against `base`: an absolute `base` (one with
- * a scheme) gives its origin plus `path`; a relative `base` (such as the
- * default `/api`) leaves `path` as it is.
+ * a scheme) gives its origin plus `path`; a protocol-relative `base`
+ * (`//host/api`) gives its authority plus `path`; a relative `base` (such as
+ * the default `/api`) leaves `path` as it is.
  */
 function rootUrl(base: string, path: string): string {
   if (/^[a-z][a-z0-9+.-]*:/i.test(base)) {
     return new URL(path, base).toString();
+  }
+  const protocolRelative = /^\/\/[^/?#]+/.exec(base);
+  if (protocolRelative) {
+    return `${protocolRelative[0]}${path}`;
   }
   return path;
 }

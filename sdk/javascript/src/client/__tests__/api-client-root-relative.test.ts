@@ -32,7 +32,7 @@ function clientFor(baseUrl: string, fetchImpl: ReturnType<typeof stubFetch>): Ap
 }
 
 function calledUrl(fetchImpl: ReturnType<typeof stubFetch>): string {
-  return String(fetchImpl.mock.calls[0][0]);
+  return String(fetchImpl.mock.calls[0]?.[0]);
 }
 
 describe('ApiClient rootRelative with a protocol-relative baseUrl', () => {
@@ -50,7 +50,7 @@ describe('ApiClient rootRelative with a protocol-relative baseUrl', () => {
     const registry = new RegistryService(clientFor(base, fetchImpl));
     await registry.deleteManifest('team/app', 'v1');
     expect(calledUrl(fetchImpl)).toBe('//registry.example.test/v2/team/app/manifests/v1');
-    const init = fetchImpl.mock.calls[0][1] as RequestInit | undefined;
+    const init = fetchImpl.mock.calls[0]?.[1] as RequestInit | undefined;
     expect(init?.method).toBe('DELETE');
   });
 
