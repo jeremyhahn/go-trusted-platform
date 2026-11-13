@@ -18,12 +18,6 @@ export interface KmsKeyVersion {
 export interface KmsBackendStatus {
   backend_type: string;
   status: string;
-  device?: string;
-  region?: string;
-  key_id?: string;
-  pcr_banks?: string[];
-  pcr_registers?: number[];
-  capabilities?: Record<string, boolean>;
 }
 
 export interface KmsImportKeyInput {
@@ -47,11 +41,17 @@ export interface KmsKeyStatusResult {
   status: string;
 }
 
-export interface KmsEncryptResult {
-  key_id: string;
-  version: number;
-  ciphertext: string;
-}
+/** Key statuses the v1 KMS router accepts on PUT /keys/{name}/status. */
+export const KMS_KEY_STATUSES = [
+  'ENABLED',
+  'DISABLED',
+  'PENDING_DELETION',
+  'DELETED',
+  'ROTATING',
+  'COMPROMISED',
+] as const;
+
+export type KmsKeyStatus = (typeof KMS_KEY_STATUSES)[number];
 
 export interface KmsHashResult {
   hash: string;
@@ -128,23 +128,20 @@ export interface UseKmsOpsResult {
   /** True while an operation is in flight. */
   busy: boolean;
   importKey: (input: KmsImportKeyInput) => Promise<KmsImportKeyResult | null>;
-  updateKeyStatus: (name: string, status: string, version?: number) => Promise<KmsKeyStatusResult | null>;
+  updateKeyStatus: (name: string, status: KmsKeyStatus, version: number) => Promise<KmsKeyStatusResult | null>;
   getKeyVersions: (name: string) => Promise<KmsKeyVersion[] | null>;
-  batchEncrypt: (name: string, plaintexts: string[]) => Promise<KmsEncryptResult[] | null>;
-  batchDecrypt: (name: string, ciphertexts: string[]) => Promise<string[] | null>;
   hash: (data: string, algorithm: string) => Promise<KmsHashResult | null>;
-  hmac: (name: string, data: string) => Promise<string | null>;
-  verifyHmac: (name: string, data: string, mac: string) => Promise<boolean | null>;
+  hmac: (name: string, data: string, hash: string) => Promise<string | null>;
+  verifyHmac: (name: string, data: string, mac: string, hash: string) => Promise<boolean | null>;
   generateRandom: (numBytes: number) => Promise<string | null>;
-  generateDataKey: (keyId: string, keySize?: number) => Promise<KmsDataKeyResult | null>;
-  generateWrappedDataKey: (wrappingKeyId: string, keySize?: number) => Promise<KmsWrappedDataKeyResult | null>;
+  generateDataKey: (keyId: string, algorithm: string, keySize: number) => Promise<KmsDataKeyResult | null>;
+  generateWrappedDataKey: (wrappingKeyId: string, keyAlgorithm: string, keySize: number) => Promise<KmsWrappedDataKeyResult | null>;
   getBackendStatus: () => Promise<KmsBackendStatus | null>;
 }
 
 /**
  * useKmsOps drives the KMS operations that have a REST route but no page of
- * their own (#1734): key import, status and versions, batch encrypt and
- * decrypt, hash, HMAC, random bytes, data keys and the backend status.
+ * their own (#1734): key import, status and versions, hash, HMAC, random bytes, data keys and the backend status.
  *
  * The calls go straight to the REST routes, as useReportedGateways does,
  * because the SDK's KMSService is built from the gRPC surface and some of
@@ -173,43 +170,25 @@ export function useKmsOps(): UseKmsOpsResult {
       busy,
       importKey: (input) => run(() => call<KmsImportKeyResult>('POST', '/keys/import', input)),
       updateKeyStatus: (name, status, version) =>
-        run(() =>
-          call<KmsKeyStatusResult>('PUT', `/keys/${seg(name)}/status`, version ? { status, version } : { status })
-        ),
+        run(() => call<KmsKeyStatusResult>('PUT', `/keys/${seg(name)}/status`, { status, version })),
       getKeyVersions: (name) =>
         run(async () => {
           const res = await call<{ versions?: KmsKeyVersion[] }>('GET', `/keys/${seg(name)}/versions`);
           return res?.versions ?? [];
         }),
-      batchEncrypt: (name, plaintexts) =>
-        run(() =>
-          Promise.all(
-            plaintexts.map((p) =>
-              call<KmsEncryptResult>('POST', `/encrypt/${seg(name)}`, { plaintext: textToBase64(p) })
-            )
-          )
-        ),
-      batchDecrypt: (name, ciphertexts) =>
-        run(() =>
-          Promise.all(
-            ciphertexts.map(async (c) => {
-              const res = await call<{ plaintext: string }>('POST', `/decrypt/${seg(name)}`, { ciphertext: c });
-              return base64ToText(res.plaintext);
-            })
-          )
-        ),
       hash: (data, algorithm) =>
         run(() => call<KmsHashResult>('POST', '/hash', { data: textToBase64(data), hash: algorithm })),
-      hmac: (name, data) =>
+      hmac: (name, data, hash) =>
         run(async () => {
-          const res = await call<{ hmac: string }>('POST', `/hmac/${seg(name)}`, { data: textToBase64(data) });
+          const res = await call<{ hmac: string }>('POST', `/hmac/${seg(name)}`, { data: textToBase64(data), hash });
           return res.hmac;
         }),
-      verifyHmac: (name, data, mac) =>
+      verifyHmac: (name, data, mac, hash) =>
         run(async () => {
           const res = await call<{ valid: boolean }>('POST', `/hmac/${seg(name)}/verify`, {
             data: textToBase64(data),
             hmac: mac,
+            hash,
           });
           return res.valid;
         }),
@@ -218,17 +197,15 @@ export function useKmsOps(): UseKmsOpsResult {
           const res = await call<{ bytes: string }>('POST', '/random', { num_bytes: numBytes });
           return res.bytes;
         }),
-      generateDataKey: (keyId, keySize) =>
+      generateDataKey: (keyId, algorithm, keySize) =>
+        run(() => call<KmsDataKeyResult>('POST', '/data-keys', { key_id: keyId, algorithm, key_size: keySize })),
+      generateWrappedDataKey: (wrappingKeyId, keyAlgorithm, keySize) =>
         run(() =>
-          call<KmsDataKeyResult>('POST', '/data-keys', keySize ? { key_id: keyId, key_size: keySize } : { key_id: keyId })
-        ),
-      generateWrappedDataKey: (wrappingKeyId, keySize) =>
-        run(() =>
-          call<KmsWrappedDataKeyResult>(
-            'POST',
-            '/data-keys/wrapped',
-            keySize ? { wrapping_key_id: wrappingKeyId, key_size: keySize } : { wrapping_key_id: wrappingKeyId }
-          )
+          call<KmsWrappedDataKeyResult>('POST', '/data-keys/wrapped', {
+            wrapping_key_id: wrappingKeyId,
+            key_algorithm: keyAlgorithm,
+            key_size: keySize,
+          })
         ),
       getBackendStatus: () => run(() => call<KmsBackendStatus>('GET', '/backend/status')),
     }),
