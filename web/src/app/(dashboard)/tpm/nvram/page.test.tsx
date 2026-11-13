@@ -286,7 +286,7 @@ describe("TPMNVRAMPage", () => {
     expect(toast).not.toHaveBeenCalledWith(expect.objectContaining({ title: "NV index defined" }));
   });
 
-  it("writes the text truncated to the index size", async () => {
+  it("refuses text larger than the index size", async () => {
     tpm.writeNVRAM.mockResolvedValue({ data: {} });
     await loaded();
 
@@ -297,6 +297,11 @@ describe("TPMNVRAMPage", () => {
     expect(screen.getByText("6 / 4 bytes")).toBeTruthy();
     fireEvent.click(dialogButton(/^Write$/));
 
+    expect(await screen.findByText("Text is 6 bytes; this index holds 4")).toBeTruthy();
+    expect(tpm.writeNVRAM).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByPlaceholderText("payload bytes…"), { target: { value: "abcd" } });
+    fireEvent.click(dialogButton(/^Write$/));
     await waitFor(() =>
       expect(toast).toHaveBeenCalledWith(
         expect.objectContaining({ title: "NV index written", description: "4 bytes → 0x01500001", variant: "success" })

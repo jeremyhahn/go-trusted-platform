@@ -276,9 +276,17 @@ export default function TPMNVRAMPage() {
     setWriteState((s) => ({ ...s, loading: true, err: null }));
     try {
       // Encode as base64 — proto bytes field; protojson decodes it
-      // server-side. Truncate to the index size if the operator
-      // pasted more bytes than the index can hold.
-      const bin = utf8Bytes(writeState.text).slice(0, writeState.size);
+      // server-side. Refuse text larger than the index: cutting the
+      // bytes could split a multibyte UTF-8 character.
+      const bin = utf8Bytes(writeState.text);
+      if (bin.length > writeState.size) {
+        setWriteState((s) => ({
+          ...s,
+          loading: false,
+          err: `Text is ${bin.length} bytes; this index holds ${writeState.size}`,
+        }));
+        return;
+      }
       const b64 = bytesToBase64(bin);
       raiseError(
         await tpm.writeNVRAM({
@@ -658,7 +666,7 @@ export default function TPMNVRAMPage() {
               Write NV Index {formatHandle(writeState.handle)}
             </DialogTitle>
             <DialogDescription>
-              Up to {writeState.size} bytes will be written. Excess input is truncated.
+              Up to {writeState.size} bytes can be written. Larger input is refused.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
