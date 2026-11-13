@@ -334,41 +334,7 @@ func TestPXEPlugin_Close(t *testing.T) {
 }
 
 func TestPXEArchitectureConstants(t *testing.T) {
-	t.Run("architecture constants are defined", func(t *testing.T) {
-		constants := []struct {
-			name  string
-			value uint16
-		}{
-			{"PXEArchIntelX86", PXEArchIntelX86},
-			{"PXEArchNECPC98", PXEArchNECPC98},
-			{"PXEArchEFIItanium", PXEArchEFIItanium},
-			{"PXEArchDECAlpha", PXEArchDECAlpha},
-			{"PXEArchArcX86", PXEArchArcX86},
-			{"PXEArchIntelLeanClient", PXEArchIntelLeanClient},
-			{"PXEArchEFIIA32", PXEArchEFIIA32},
-			{"PXEArchEFIX8664", PXEArchEFIX8664},
-			{"PXEArchEFIXscale", PXEArchEFIXscale},
-			{"PXEArchEFIBC", PXEArchEFIBC},
-			{"PXEArchARMUEFI32", PXEArchARMUEFI32},
-			{"PXEArchARMUEFI64", PXEArchARMUEFI64},
-			{"PXEArchPowerPCOpenFirmware", PXEArchPowerPCOpenFirmware},
-			{"PXEArchPowerPCePAPR", PXEArchPowerPCePAPR},
-			{"PXEArchPowerPCOPAL", PXEArchPowerPCOPAL},
-			{"PXEArchX8664HTTP", PXEArchX8664HTTP},
-			{"PXEArchX8632HTTP", PXEArchX8632HTTP},
-			{"PXEArchRISCVUEFI32", PXEArchRISCVUEFI32},
-			{"PXEArchRISCVUEFI64", PXEArchRISCVUEFI64},
-			{"PXEArchRISCVUEFI128", PXEArchRISCVUEFI128},
-		}
-
-		for _, c := range constants {
-			t.Run(c.name, func(t *testing.T) {
-				// Just verify the constant exists
-				assert.IsType(t, uint16(0), c.value)
-			})
-		}
-	})
-
+	// RFC 4578 option 93 client architecture codes are wire values.
 	t.Run("common architectures have expected values", func(t *testing.T) {
 		assert.Equal(t, uint16(0), PXEArchIntelX86)
 		assert.Equal(t, uint16(7), PXEArchEFIX8664)

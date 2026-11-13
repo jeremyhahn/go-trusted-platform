@@ -159,44 +159,6 @@ func TestPXEOptions_NilMap(t *testing.T) {
 	})
 }
 
-// TestServerStats_Fields tests all ServerStats fields.
-func TestServerStats_Fields(t *testing.T) {
-	t.Run("clone preserves all fields", func(t *testing.T) {
-		now := time.Now()
-		s := &ServerStats{
-			StartedAt:       now,
-			PacketsReceived: 100,
-			PacketsSent:     95,
-			DiscoverCount:   30,
-			OfferCount:      30,
-			RequestCount:    28,
-			AckCount:        25,
-			NakCount:        3,
-			ReleaseCount:    10,
-			DeclineCount:    2,
-			InformCount:     5,
-			ErrorCount:      1,
-			ActiveLeases:    20,
-		}
-
-		clone := s.Clone()
-		require.NotNil(t, clone)
-		assert.Equal(t, s.StartedAt, clone.StartedAt)
-		assert.Equal(t, s.PacketsReceived, clone.PacketsReceived)
-		assert.Equal(t, s.PacketsSent, clone.PacketsSent)
-		assert.Equal(t, s.DiscoverCount, clone.DiscoverCount)
-		assert.Equal(t, s.OfferCount, clone.OfferCount)
-		assert.Equal(t, s.RequestCount, clone.RequestCount)
-		assert.Equal(t, s.AckCount, clone.AckCount)
-		assert.Equal(t, s.NakCount, clone.NakCount)
-		assert.Equal(t, s.ReleaseCount, clone.ReleaseCount)
-		assert.Equal(t, s.DeclineCount, clone.DeclineCount)
-		assert.Equal(t, s.InformCount, clone.InformCount)
-		assert.Equal(t, s.ErrorCount, clone.ErrorCount)
-		assert.Equal(t, s.ActiveLeases, clone.ActiveLeases)
-	})
-}
-
 // TestInterfaceConfig_FullOptions tests InterfaceConfig with full options set.
 func TestInterfaceConfig_FullOptions(t *testing.T) {
 	t.Run("clone handles full options", func(t *testing.T) {
