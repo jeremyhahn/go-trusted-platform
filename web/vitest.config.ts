@@ -4,6 +4,11 @@ import { defineConfig } from "vitest/config";
 // Unit tests for hooks, stores and contexts. Playwright (`npm test`) owns the
 // browser flows; this runner owns the pieces that can be exercised in jsdom
 // without a server. Mirrors sdk/javascript/vitest.config.ts.
+const webStorageFlag = "--no-experimental-webstorage";
+const webStorageExecArgv = process.allowedNodeEnvironmentFlags.has(webStorageFlag)
+  ? [webStorageFlag]
+  : [];
+
 export default defineConfig({
   test: {
     environment: "jsdom",
@@ -16,9 +21,11 @@ export default defineConfig({
     testTimeout: 10000,
     // Node 26's built-in localStorage global is undefined without
     // --localstorage-file and shadows jsdom's window.localStorage (#1871).
+    // The flag is gated: Node 20 does not know it and refuses to start the
+    // worker, so it is passed only where the running Node accepts it.
     poolOptions: {
-      forks: { execArgv: ["--no-experimental-webstorage"] },
-      threads: { execArgv: ["--no-experimental-webstorage"] },
+      forks: { execArgv: webStorageExecArgv },
+      threads: { execArgv: webStorageExecArgv },
     },
     // The SDK is linked from ../sdk/javascript, which has its own dev copy of
     // react. Externalized, its hooks would import that second React and fail
