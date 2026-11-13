@@ -188,6 +188,45 @@ func TestTheSamePanicInAnUnlistedTestGates(t *testing.T) {
 	requireGates(t, v, "pkg/vpn/agent TestXKMSTPM_Unlisted: panicked and is not in the FIPS baseline: "+fipsPanic)
 }
 
+// subtestPanic is the fixture with the pkg/app panic moved into a subtest
+// of parent, whose goroutine runs parent's closure.
+func subtestPanic(t *testing.T, parent string) string {
+	t.Helper()
+	text := readFixture(t, "fips-panics.log")
+	text = strings.Replace(text, "--- FAIL: "+appPanic+" (0.09s)\n",
+		"=== RUN   "+appPanic+"/sub\n--- FAIL: "+appPanic+" (0.09s)\n    --- FAIL: "+appPanic+"/sub (0.09s)\n", 1)
+	text = strings.Replace(text, "pkg/app."+appPanic+"(0x2d32a369e008)", "pkg/app."+appPanic+".func1(0x2d32a369e008)", 1)
+	return strings.ReplaceAll(text, appPanic, parent)
+}
+
+func TestASubtestPanicIsItsListedParentsRow(t *testing.T) {
+	cases := map[string]struct {
+		text, want string
+	}{
+		"a subtest of a listed parent": {subtestPanic(t, appPanic), ""},
+		"a subtest of an unlisted parent": {subtestPanic(t, "TestUnlistedParent"),
+			"pkg/app TestUnlistedParent/sub: panicked and is not in the FIPS baseline: " + fipsPanic},
+		"a listed parent's subtest panicking in another test's closure": {
+			strings.Replace(subtestPanic(t, appPanic), "pkg/app."+appPanic+".func1(", "pkg/app.TestOther.func1(", 1),
+			"does not pass through " + app + "." + appPanic + ": the panic is not the listed test's"},
+		"a listed parent's name as another test's prefix": {
+			strings.Replace(subtestPanic(t, appPanic), "pkg/app."+appPanic+".func1(", "pkg/app."+appPanic+"X.func1(", 1),
+			"the panic is not the listed test's"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			v, reruns := decideFIPSText(t, tc.text)
+			if tc.want != "" {
+				requireGates(t, v, tc.want)
+				return
+			}
+			assert.False(t, v.gating(), "verdict: %+v", v)
+			assert.Len(t, v.Hits, 2)
+			assert.Equal(t, []rerun{{Package: "pkg/vpn/agent", Exclude: vpnPanic}, {Package: "pkg/app", Exclude: appPanic}}, reruns)
+		})
+	}
+}
+
 func TestAListedPanicInAnotherPackageGates(t *testing.T) {
 	text := strings.ReplaceAll(readFixture(t, "fips-panics.log"), "go-trusted-platform/pkg/app", "go-trusted-platform/pkg/other")
 	v, _ := decideFIPSText(t, text)
@@ -495,7 +534,7 @@ func TestParseFIPSBaselineRejectsMalformedRows(t *testing.T) {
 
 func TestRepositoryFIPSBaselineParses(t *testing.T) {
 	b := repositoryFIPSBaseline(t)
-	require.Len(t, b.entries, 8)
+	require.Len(t, b.entries, 11)
 	for _, e := range b.entries {
 		assert.Equal(t, kindPanic, e.Kind)
 		assert.Equal(t, fipsPanic, e.Message)
@@ -510,8 +549,11 @@ func TestRepositoryFIPSBaselineParses(t *testing.T) {
 	assert.Contains(t, b.tests, testKey{Package: "pkg/app", Name: "TestTPMSigner_IDevIDSignsTLS13ClientCertificateVerify"})
 	assert.Contains(t, b.tests, testKey{Package: "pkg/app", Name: "TestInitWebServiceKeyAttributes_IDevIDReuseCarriesIDevIDSubject"})
 	assert.Contains(t, b.tests, testKey{Package: "pkg/app", Name: "TestCoverage964_ProvisionPlatformIdentity"})
+	assert.Contains(t, b.tests, testKey{Package: "pkg/app", Name: "TestCoverage964_InitWebServiceKeyAttributes"})
+	assert.Contains(t, b.tests, testKey{Package: "pkg/app", Name: "TestCoverage964c_FetchDisklessIdentity"})
+	assert.Contains(t, b.tests, testKey{Package: "pkg/app", Name: "TestCoverage964d_FetchDisklessIdentity"})
 	assert.Contains(t, b.tests, testKey{Package: "pkg/api/daemon", Name: "TestTPMSimulator_ActivateCredentialRefusesAForeignCredential"})
-	assert.Equal(t, 6, b.rowsIn("pkg/app"), "the bound on a pkg/app rerun")
+	assert.Equal(t, 9, b.rowsIn("pkg/app"), "the bound on a pkg/app rerun")
 	assert.Equal(t, 1, b.rowsIn("pkg/api/daemon"), "the bound on a pkg/api/daemon rerun")
 	assert.Equal(t, 0, b.rowsIn("pkg/dns"))
 }
