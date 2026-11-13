@@ -79,6 +79,32 @@ func TestWireSDKBackends_LeavesFIDO2EnrollmentOff(t *testing.T) {
 	}
 }
 
+// TestWireSDKBackends_LeavesTPMEnrollmentOff: the SDK TPM sealer stores its
+// sealed passphrase in a systemd-tpm2 header token that no boot unlock path
+// reads, so production wiring leaves the TPM handler unset and EnrollTPM
+// refuses before touching the device instead of adding a slot boot cannot
+// open.
+func TestWireSDKBackends_LeavesTPMEnrollmentOff(t *testing.T) {
+	target := &recordingSDKTarget{}
+
+	if err := WireSDKBackends(target, SDKBackendSources{SDK: &fakeQuicbaasClient{}}, logging.DefaultLogger()); err != nil {
+		t.Fatalf("WireSDKBackends: %v", err)
+	}
+	lb, ok := target.luks.(*LUKSBackend)
+	if !ok || lb == nil {
+		t.Fatalf("LUKS backend = %T, want a non-nil *LUKSBackend", target.luks)
+	}
+	if lb.tpm != nil {
+		t.Fatalf("LUKS TPM handler = %T, want nil until a boot unlock path consumes the enrolled token", lb.tpm)
+	}
+	_, err := lb.EnrollTPM(context.Background(), &daemon.LUKSEnrollTPMRequest{
+		Device: "/dev/null", ExistingPassphrase: "existing", PCRs: []int32{7},
+	})
+	if !errors.Is(err, ErrLUKSTPMNotWired) {
+		t.Fatalf("EnrollTPM error = %v, want ErrLUKSTPMNotWired", err)
+	}
+}
+
 // countingTPMSealer records every Seal call the PCR check lets through.
 type countingTPMSealer struct{ calls int }
 
