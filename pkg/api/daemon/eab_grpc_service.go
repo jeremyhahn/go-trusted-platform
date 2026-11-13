@@ -103,11 +103,6 @@ var eabErrorMatchers = []configDeliveryErrorMatcher{
 // credential.
 var errEABNegativeExpiry = eab.ErrInvalidExpiresAt{Reason: "expiration duration cannot be negative"}
 
-// errEABMissingExpiry refuses a create request whose expires_in_seconds
-// is zero or omitted; an expiry is required so no credential is ever
-// issued without an expiration.
-var errEABMissingExpiry = eab.ErrInvalidExpiresAt{Reason: "expiration duration is required and must be positive"}
-
 // eabErrorToStatus maps a typed eab error to a gRPC status error using
 // the eabErrorMatchers table.
 func eabErrorToStatus(err error) error {
@@ -172,9 +167,7 @@ func eabCredentialToPb(cred *eab.Credential, includeHMACKey bool) *platformv1.EA
 
 // CreateCredential creates a new EAB credential for device enrollment.
 // The response includes the HMAC key — the only time it is ever
-// returned — per RFC 8555 §7.3.4. An expiry is required:
-// expires_in_seconds must be positive, and a zero (omitted) or negative
-// value is refused with InvalidArgument.
+// returned — per RFC 8555 §7.3.4.
 func (s *EABGRPCService) CreateCredential(
 	ctx context.Context,
 	req *platformv1.CreateEABCredentialRequest,
@@ -192,8 +185,6 @@ func (s *EABGRPCService) CreateCredential(
 		params.ExpiresIn = time.Duration(secs) * time.Second
 	} else if secs < 0 {
 		return nil, status.Error(codes.InvalidArgument, errEABNegativeExpiry.Error())
-	} else {
-		return nil, status.Error(codes.InvalidArgument, errEABMissingExpiry.Error())
 	}
 
 	cred, err := s.service.Generate(ctx, params)

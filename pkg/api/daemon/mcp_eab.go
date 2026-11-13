@@ -185,8 +185,6 @@ func (p *MCPServiceProvider) EABCreateCredential(
 		params.ExpiresIn = time.Duration(expiresInSeconds) * time.Second
 	} else if expiresInSeconds < 0 {
 		return nil, eabServiceFailure(errEABNegativeExpiry)
-	} else {
-		return nil, eabServiceFailure(errEABMissingExpiry)
 	}
 	cred, err := p.eabService.Generate(ctx, params)
 	if err != nil {
