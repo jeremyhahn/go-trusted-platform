@@ -1598,6 +1598,134 @@ export async function mockInvitationLookupApi(
 }
 
 // ============================================================================
+// BMC users and web certificate (#1720)
+// ============================================================================
+
+export interface MockBMCUser {
+  slot: number;
+  username: string;
+  enabled: boolean;
+  /** IPMI privilege code: 0x01 callback, 0x02 user, 0x03 operator, 0x04 administrator, 0x0f no-access. */
+  privilege: number;
+  channel: number;
+}
+
+export interface BMCApiCall {
+  method: string;
+  path: string;
+  body: unknown;
+}
+
+export interface BMCApiMockConfig {
+  profileID?: string;
+  users?: MockBMCUser[];
+  /** When set and not 200, GET /users answers this status with an error envelope. */
+  listStatus?: number;
+  /** GET /users waits this many milliseconds before answering. */
+  listDelayMs?: number;
+}
+
+/**
+ * mockBMCApi serves /api/v1/bmc/{profileID}/users... and /cert from an
+ * in-memory user table and records every call, so a spec can assert the
+ * verb, path and body the page sent.
+ */
+export async function mockBMCApi(
+  page: Page,
+  config: BMCApiMockConfig = {}
+): Promise<{ calls: BMCApiCall[]; users: () => MockBMCUser[] }> {
+  const profileID = config.profileID ?? '7';
+  let users: MockBMCUser[] = (config.users ?? []).map((u) => ({ ...u }));
+  const calls: BMCApiCall[] = [];
+  const privilegeCodes: Record<string, number> = {
+    'no-access': 0x0f,
+    callback: 0x01,
+    user: 0x02,
+    operator: 0x03,
+    administrator: 0x04,
+  };
+  const ok = (route: Route, payload: unknown) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ payload }),
+    });
+
+  await page.route(`**/api/v1/bmc/${profileID}/**`, async (route: Route, request: Request) => {
+    const method = request.method();
+    const path = new URL(request.url()).pathname.replace(/\/$/, '');
+    const raw = request.postData();
+    const body: unknown = raw ? JSON.parse(raw) : undefined;
+    calls.push({ method, path, body });
+
+    const prefix = `/api/v1/bmc/${profileID}`;
+    const rest = path.slice(prefix.length);
+    const slotMatch = rest.match(/^\/users\/(\d+)(\/(password|privilege))?$/);
+
+    if (rest === '/users' && method === 'GET') {
+      if (config.listDelayMs) {
+        await new Promise((resolve) => setTimeout(resolve, config.listDelayMs));
+      }
+      if (config.listStatus !== undefined && config.listStatus !== 200) {
+        await route.fulfill({
+          status: config.listStatus,
+          contentType: 'application/json',
+          body: JSON.stringify({ message: 'BMC listing failed' }),
+        });
+        return;
+      }
+      await ok(route, users);
+      return;
+    }
+    if (rest === '/users' && method === 'POST') {
+      const b = body as { slot: number; username: string; enabled: boolean; privilege: string; channel: number };
+      const created: MockBMCUser = {
+        slot: b.slot,
+        username: b.username,
+        enabled: b.enabled,
+        privilege: privilegeCodes[b.privilege] ?? 0x02,
+        channel: b.channel,
+      };
+      users = [...users.filter((u) => u.slot !== created.slot), created];
+      await ok(route, created);
+      return;
+    }
+    if (rest === '/cert' && method === 'PUT') {
+      await ok(route, { status: 'ok' });
+      return;
+    }
+    if (slotMatch) {
+      const slot = Number(slotMatch[1]);
+      const sub = slotMatch[3];
+      if (!sub && method === 'DELETE') {
+        users = users.filter((u) => u.slot !== slot);
+        await ok(route, { status: 'ok' });
+        return;
+      }
+      if (sub === 'password' && method === 'PUT') {
+        await ok(route, { status: 'ok' });
+        return;
+      }
+      if (sub === 'privilege' && method === 'PUT') {
+        const b = body as { privilege: string; channel: number };
+        users = users.map((u) =>
+          u.slot === slot ? { ...u, privilege: privilegeCodes[b.privilege] ?? u.privilege, channel: b.channel } : u
+        );
+        await ok(route, { status: 'ok' });
+        return;
+      }
+    }
+    await route.fulfill({
+      status: 404,
+      contentType: 'application/json',
+      body: JSON.stringify({ message: 'not found' }),
+    });
+  });
+
+  return { calls, users: () => users.map((u) => ({ ...u })) };
+}
+
+// ============================================================================
 // Overlay API mock (#1722): VTEPs, VNIs, tunnels, tunnel stats, MAC forget
 // ============================================================================
 

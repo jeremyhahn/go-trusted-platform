@@ -46,6 +46,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/adminclaim"
+	bmcweb "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/login"
@@ -823,6 +824,9 @@ type RestHandlerRegistry interface {
 	GatewayVPNLeases() restgateway.VPNLeaseSink
 	ResponseWriter() response.HttpWriter
 	SDNService() platformv1.SDNServiceServer
+	// BMCRestHandler returns the BMC REST handler the console mounts
+	// admin-gated, or nil when the daemon built no BMC service.
+	BMCRestHandler() bmcweb.RestHandler
 	TenantServiceServer() platformv1.TenantServiceServer
 	TPM() xkmssdk.TrustedPlatformModule
 	TPMServiceServer() platformv1.TPMServiceServer
@@ -1047,6 +1051,7 @@ type RegistryParams struct {
 	// network zone into every issued DEVICE certificate via OIDTPNetworkZone.
 	SDNIdentityConfig   *sdn.IdentityConfig
 	SDNService          platformv1.SDNServiceServer
+	BMCRestHandler      bmcweb.RestHandler
 	ServerKeyAttributes *xkmssdk.KeyAttributes
 	ServiceRegistry     *service.Registry
 	// PublicRegistrationEnabled mirrors the canonical
@@ -1429,6 +1434,11 @@ func (registry *HandlerRegistry) ResponseWriter() response.HttpWriter {
 
 func (registry *HandlerRegistry) SDNService() platformv1.SDNServiceServer {
 	return registry.params.SDNService
+}
+
+// BMCRestHandler returns the BMC REST handler, or nil.
+func (registry *HandlerRegistry) BMCRestHandler() bmcweb.RestHandler {
+	return registry.params.BMCRestHandler
 }
 
 // WebAuthnRestService returns the WebAuthn REST handler, or nil if

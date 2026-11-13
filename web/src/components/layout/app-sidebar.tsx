@@ -130,6 +130,7 @@ const navigation = [
       { title: "vTPM Templates", href: "/devices/vtpm/templates" },
       { title: "vTPM Bundle Import", href: "/devices/vtpm/bundles" },
       { title: "IDevID/IAK", href: "/devices/idevid" },
+      { title: "BMC Users", href: "/devices/bmc" },
     ],
   },
   {
