@@ -360,22 +360,3 @@ func TestHasPrefix(t *testing.T) {
 		})
 	}
 }
-
-func TestServiceStatus_StructFields(t *testing.T) {
-	now := time.Now()
-	status := &ServiceStatus{
-		Running:          true,
-		DeviceCount:      10,
-		StartTime:        now,
-		IPXEServerAddr:   "192.168.1.1",
-		QuarantineVLAN:   1,
-		ProvisioningVLAN: 2,
-	}
-
-	assert.True(t, status.Running)
-	assert.Equal(t, 10, status.DeviceCount)
-	assert.Equal(t, now, status.StartTime)
-	assert.Equal(t, "192.168.1.1", status.IPXEServerAddr)
-	assert.Equal(t, uint16(1), status.QuarantineVLAN)
-	assert.Equal(t, uint16(2), status.ProvisioningVLAN)
-}

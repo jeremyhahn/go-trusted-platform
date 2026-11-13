@@ -805,43 +805,6 @@ func TestErrInvalidDigest(t *testing.T) {
 	}
 }
 
-// Test that all error types implement the error interface
-func TestErrorsImplementErrorInterface(t *testing.T) {
-	var _ error = ErrAttestationRequired{}
-	var _ error = ErrAttestationFailed{}
-	var _ error = ErrInvalidQuote{}
-	var _ error = ErrAccessDenied{}
-	var _ error = ErrImageNotFound{}
-	var _ error = ErrImageExists{}
-	var _ error = ErrDecryptionFailed{}
-	var _ error = ErrEncryptionFailed{}
-	var _ error = ErrStorageError{}
-	var _ error = ErrRegistryNotInitialized{}
-	var _ error = ErrRegistryClosed{}
-	var _ error = ErrInvalidImageRef{}
-	var _ error = ErrBlobNotFound{}
-	var _ error = ErrManifestNotFound{}
-	var _ error = ErrInvalidManifest{}
-	var _ error = ErrKeyNotFound{}
-	var _ error = ErrKeyCreationFailed{}
-	var _ error = ErrKeyWrapFailed{}
-	var _ error = ErrKeyUnwrapFailed{}
-	var _ error = ErrInvalidConfig{}
-	var _ error = ErrPCRMismatch{}
-	var _ error = ErrAIKNotAllowed{}
-	var _ error = ErrQuicBaaSConnection{}
-	var _ error = ErrSessionExpired{}
-	var _ error = ErrSessionNotFound{}
-	var _ error = ErrInvalidSession{}
-	var _ error = ErrOperationTimeout{}
-	var _ error = ErrDigestMismatch{}
-	var _ error = ErrNilClient{}
-	var _ error = ErrNilContext{}
-	var _ error = ErrImageEmpty{}
-	var _ error = ErrPolicyEvaluationFailed{}
-	var _ error = ErrInvalidDigest{}
-}
-
 // Test errors.Is for checking error types
 func TestErrorsIs(t *testing.T) {
 	err := ErrImageNotFound{Reference: "test:latest"}

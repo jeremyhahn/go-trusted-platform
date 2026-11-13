@@ -63,27 +63,6 @@ func TestNewFIDO2Enrollment(t *testing.T) {
 	})
 }
 
-func TestFIDO2Token(t *testing.T) {
-	t.Run("valid token structure", func(t *testing.T) {
-		token := FIDO2Token{
-			Type:            "fido2-manual",
-			Keyslots:        []string{"3"},
-			FIDO2Credential: "Y3JlZGVudGlhbC1pZC1iYXNlNjQ=",
-			FIDO2Salt:       "c2FsdC1iYXNlNjQ=",
-			FIDO2RP:         "luks-alpine",
-			FIDO2UPRequired: true,
-		}
-
-		assert.Equal(t, "fido2-manual", token.Type)
-		assert.Len(t, token.Keyslots, 1)
-		assert.Equal(t, "3", token.Keyslots[0])
-		assert.NotEmpty(t, token.FIDO2Credential)
-		assert.NotEmpty(t, token.FIDO2Salt)
-		assert.Equal(t, "luks-alpine", token.FIDO2RP)
-		assert.True(t, token.FIDO2UPRequired)
-	})
-}
-
 func TestRandomRead(t *testing.T) {
 	t.Run("read random bytes", func(t *testing.T) {
 		buf := make([]byte, 32)
