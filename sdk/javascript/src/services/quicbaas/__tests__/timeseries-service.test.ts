@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { TimeSeriesService } from '../timeseries-service.js';
 import type { ApiClient } from '../../../client/api-client.js';
 import type { ApiResponse } from '../../../types/api.js';
+import type { TimeBucket } from '../../../types/quicbaas/core-data.js';
 
 // Mock ApiClient
 function createMockApiClient(): ApiClient {
@@ -308,7 +309,7 @@ describe('TimeSeriesService', () => {
       });
 
       expect(result.success).toBe(true);
-      expect(result.data?.buckets).toHaveLength(2);
+      expect(result.data).toHaveProperty(['buckets', 'length'], 2);
       expect(mockClient.post).toHaveBeenCalledWith('/v1/quicbaas/timeseries/aggregate', {
         metric: 'cpu.usage',
         startTime: 1700000000000,
@@ -419,7 +420,7 @@ describe('TimeSeriesService', () => {
         metric: 'cpu.usage',
         startTime: 1700000000000,
         endTime: 1700086400000,
-        bucket: 'CUSTOM',
+        bucket: 'CUSTOM' as TimeBucket,
         bucketSize: 300000, // 5 minutes
         aggregations: [{ function: 'AVG' }],
       });
