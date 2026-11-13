@@ -109,7 +109,7 @@ func TestErrNoRESTRoute_OnlyForRefusedMethods(t *testing.T) {
 	})
 
 	_, err := platformv1.NewPlatformIAMServiceClient(a.Connection()).CheckPermission(
-		context.Background(), &platformv1.CheckIAMPermissionRequest{})
+		context.Background(), &platformv1.CheckIAMPermissionRequest{TenantId: "tenant-a"})
 
 	require.Error(t, err)
 	var refused ErrNoRESTRoute
