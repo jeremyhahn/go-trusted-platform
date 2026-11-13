@@ -166,6 +166,39 @@ func TestWireGuardHub_UpRefusesAForeignDeviceOfItsName(t *testing.T) {
 	}
 }
 
+// TestWireGuardHub_UpRemovesAStaleHubWhenTheKeyStoreFails covers a
+// restart after an ungraceful exit while the key store is unavailable: the
+// predecessor's device, with every peer it still holds, is removed before
+// the key is resolved, so no stale peer keeps accepting traffic. A foreign
+// device of the hub's name is still left alone.
+func TestWireGuardHub_UpRemovesAStaleHubWhenTheKeyStoreFails(t *testing.T) {
+	boom := errors.New("key store unavailable")
+	for name, tc := range map[string]struct {
+		dev  vnl.Link
+		kept bool
+	}{
+		"stale hub":      {dev: &vnl.Wireguard{LinkAttrs: vnl.LinkAttrs{Name: "wg-vpn0"}}},
+		"foreign device": {dev: &vnl.Dummy{LinkAttrs: vnl.LinkAttrs{Name: "wg-vpn0"}}, kept: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			nl := newMockNetlinkOps()
+			nl.links["wg-vpn0"] = tc.dev
+			hub, err := newWireGuardHubWithOps(nil, hubConfig(), &mockKeys{err: boom}, nl, &recordingWG{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var km *ErrKeyMaterial
+			if err := hub.Up(context.Background()); !errors.As(err, &km) {
+				t.Fatalf("err = %v", err)
+			}
+			_, ok := nl.links["wg-vpn0"]
+			if ok != tc.kept {
+				t.Fatalf("device kept = %v, want %v", ok, tc.kept)
+			}
+		})
+	}
+}
+
 func TestWireGuardHub_SetAndRemovePeerTouchOnlyThatPeer(t *testing.T) {
 	hub, _, wg, _ := newTestHub(t)
 	if err := hub.Up(context.Background()); err != nil {
