@@ -52,6 +52,8 @@ interface NTPMockConfig {
   sourcesError?: ApiError;
   /** Per-call status responses: null answers 200, an ApiError answers that error; the last entry repeats. */
   statusSequence?: (ApiError | null)[];
+  /** Called per status request (statusSequence is then ignored): null answers 200, an ApiError answers that error. May be async to hold the response. */
+  statusResponder?: () => ApiError | null | Promise<ApiError | null>;
 }
 
 async function mockNTPApi(page: Page, config: NTPMockConfig = {}) {
@@ -62,7 +64,11 @@ async function mockNTPApi(page: Page, config: NTPMockConfig = {}) {
   await page.route('**/api/v1/ntp/status', async (route: Route) => {
     calls.status++;
     const seq = config.statusSequence;
-    const statusError = seq && seq.length > 0 ? seq[Math.min(calls.status, seq.length) - 1] : null;
+    const statusError = config.statusResponder
+      ? await config.statusResponder()
+      : seq && seq.length > 0
+        ? seq[Math.min(calls.status, seq.length) - 1]
+        : null;
     if (statusError) {
       await route.fulfill({
         status: statusError.status,
@@ -155,22 +161,52 @@ test.describe('NTP', () => {
     expect(calls.sources).toBeGreaterThan(0);
   });
 
-  test('marks the status stale when a refresh fails after a successful read (503)', async ({ page }) => {
+  test('keeps the status stale from a failed refresh (503) until a successful read', async ({ page }) => {
+    const unavailable = { status: 503, error: 'ntp: chronyd unavailable', errorCode: 'UNAVAILABLE' } as ApiError;
+    let phase: 'ok' | 'fail' | 'held' = 'ok';
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let heldCalls = 0;
     const calls = await mockNTPApi(page, {
-      statusSequence: [null, { status: 503, error: 'ntp: chronyd unavailable', errorCode: 'UNAVAILABLE' } as ApiError],
+      statusResponder: async () => {
+        if (phase === 'fail') return unavailable;
+        if (phase === 'held') {
+          heldCalls++;
+          await held;
+        }
+        return null;
+      },
     });
 
     await page.goto('/networking/ntp');
 
     const card = page.getByTestId('ntp-status-card');
+    const stale = card.getByTestId('ntp-status-stale');
     await expect(card.getByText('Synced', { exact: true })).toBeVisible();
-    await expect(card.getByTestId('ntp-status-stale')).toHaveCount(0);
+    await expect(stale).toHaveCount(0);
 
+    // The refresh fails (the client retries the 503 before giving up).
+    phase = 'fail';
     await page.getByRole('button', { name: 'Refresh' }).click();
-
-    await expect(card.getByTestId('ntp-status-stale')).toBeVisible();
+    await expect(stale).toBeVisible({ timeout: 20_000 });
     await expect(card.getByText(/Status refresh failed/)).toBeVisible();
-    expect(calls.status).toBeGreaterThan(1);
+
+    // A retry starts and is held: the cached status stays marked stale while it is pending.
+    phase = 'held';
+    await page.getByRole('button', { name: 'Refresh' }).click();
+    await expect.poll(() => heldCalls).toBeGreaterThan(0);
+    await expect(stale).toBeVisible();
+    await expect(card.getByText(/Status refresh failed/)).toBeVisible();
+    await expect(card.getByText('Synced', { exact: true })).toBeVisible();
+
+    // The retry succeeds: the stale mark clears.
+    release();
+    await expect(stale).toHaveCount(0);
+    await expect(card.getByText(/Status refresh failed/)).toHaveCount(0);
+    await expect(card.getByText('Synced', { exact: true })).toBeVisible();
+    expect(calls.status).toBeGreaterThan(2);
   });
 
   test('steps the clock after confirmation (Step)', async ({ page }) => {
