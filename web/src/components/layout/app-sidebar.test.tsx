@@ -35,6 +35,13 @@ function renderSidebar(props: React.ComponentProps<typeof AppSidebar> = {}) {
   );
 }
 
+// The menu buttons mark the active entry with the highlight class, not a
+// data attribute.
+function activeOf(el: Element | null): boolean {
+  if (!el) throw new Error("navigation link not found");
+  return el.classList.contains("bg-neutral-200");
+}
+
 function openAccountMenu() {
   const trigger = screen.getByTestId("sidebar-account-menu");
   fireEvent.keyDown(trigger, { key: "Enter" });
@@ -96,7 +103,7 @@ describe("AppSidebar", () => {
 
     const link = screen.getByText("Dashboard").closest("a");
     expect(link?.getAttribute("href")).toBe("/dashboard");
-    expect(link?.getAttribute("data-active")).toBe("true");
+    expect(activeOf(link)).toBe(true);
   });
 
   it("does not mark Dashboard active on another path", () => {
@@ -104,7 +111,7 @@ describe("AppSidebar", () => {
     renderSidebar();
 
     const link = screen.getByText("Dashboard").closest("a");
-    expect(link?.getAttribute("data-active")).toBe("false");
+    expect(activeOf(link)).toBe(false);
   });
 
   it("keeps groups closed when no child is active", () => {
@@ -120,11 +127,11 @@ describe("AppSidebar", () => {
 
     const users = screen.getByText("Users").closest("a");
     expect(users?.getAttribute("href")).toBe("/iam/users");
-    expect(users?.getAttribute("data-active")).toBe("true");
+    expect(activeOf(users)).toBe(true);
 
     const roles = screen.getByText("Roles").closest("a");
     expect(roles?.getAttribute("href")).toBe("/iam/roles");
-    expect(roles?.getAttribute("data-active")).toBe("false");
+    expect(activeOf(roles)).toBe(false);
 
     // Other groups stay closed.
     expect(screen.queryByText("Certificates")).toBeNull();
@@ -135,9 +142,9 @@ describe("AppSidebar", () => {
     renderSidebar();
 
     const vteps = screen.getByText("VTEPs").closest("a");
-    expect(vteps?.getAttribute("data-active")).toBe("true");
+    expect(activeOf(vteps)).toBe(true);
     const overlays = screen.getByText("Overlays").closest("a");
-    expect(overlays?.getAttribute("data-active")).toBe("false");
+    expect(activeOf(overlays)).toBe(false);
   });
 
   it("opens no group for an unknown path", () => {
@@ -145,9 +152,7 @@ describe("AppSidebar", () => {
     renderSidebar();
 
     expect(screen.queryByText("Users")).toBeNull();
-    expect(
-      screen.getByText("Dashboard").closest("a")?.getAttribute("data-active")
-    ).toBe("false");
+    expect(activeOf(screen.getByText("Dashboard").closest("a"))).toBe(false);
   });
 
   it("opens a closed group when its trigger is clicked", () => {
