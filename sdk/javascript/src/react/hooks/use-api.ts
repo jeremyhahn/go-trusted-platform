@@ -225,6 +225,11 @@ export function useApi<T>(
         isFirstFetchRef.current = false;
         setFetchCount((prev) => prev + 1);
         onSuccessRef.current?.(response.data);
+      } else {
+        // Neither data nor error: settle so the fetch does not look
+        // in progress for ever.
+        setIsLoading(false);
+        setIsFetching(false);
       }
     } catch (err) {
       if (!isMountedRef.current) {

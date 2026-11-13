@@ -258,7 +258,7 @@ export default function VectorDatabasePage() {
       });
       return;
     }
-    await createMutation.mutateAsync(formData);
+    await createMutation.mutateAsync(formData).catch(() => undefined);
   };
 
   const handleDelete = async (collection: VectorCollectionUI) => {
@@ -269,7 +269,7 @@ export default function VectorDatabasePage() {
     ) {
       return;
     }
-    await deleteMutation.mutateAsync(collection.name);
+    await deleteMutation.mutateAsync(collection.name).catch(() => undefined);
   };
 
   const handleSearch = async () => {
@@ -301,7 +301,7 @@ export default function VectorDatabasePage() {
     await searchMutation.mutateAsync({
       ...searchData,
       vector: parsedVector,
-    });
+    }).catch(() => undefined);
   };
 
   const handleSearchDialogClose = (open: boolean) => {
@@ -791,7 +791,7 @@ export default function VectorDatabasePage() {
                     )
                   ) {
                     for (const row of rows) {
-                      await deleteMutation.mutateAsync(row.name);
+                      await deleteMutation.mutateAsync(row.name).catch(() => undefined);
                     }
                   }
                 },

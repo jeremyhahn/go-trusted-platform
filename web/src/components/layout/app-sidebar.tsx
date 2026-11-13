@@ -110,6 +110,7 @@ const navigation = [
       { title: "NVRAM", href: "/tpm/nvram" },
       { title: "Seal/Unseal", href: "/tpm/seal" },
       { title: "Credential / Random", href: "/tpm/credential" },
+      { title: "vTPM Runtime", href: "/tpm/vtpm/__placeholder__" },
     ],
   },
   {
@@ -152,6 +153,7 @@ const navigation = [
       { title: "Flows", href: "/networking/flows" },
       { title: "VLANs", href: "/networking/vlans" },
       { title: "DNS Zones", href: "/networking/dns" },
+      { title: "NTP", href: "/networking/ntp" },
       { title: "Overlays", href: "/networking/overlays" },
       { title: "VTEPs", href: "/networking/overlays/vteps" },
       { title: "Gateway", href: "/networking/gateway" },
