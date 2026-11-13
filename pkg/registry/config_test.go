@@ -629,25 +629,6 @@ func TestRegistryConfigValidateWithEncryptionError(t *testing.T) {
 	}
 }
 
-func TestConfigStructTags(t *testing.T) {
-	// This test verifies the struct has proper YAML/JSON tags for serialization
-	cfg := RegistryConfig{
-		ListenAddr: ":5000",
-		TLS: TLSConfig{
-			Enabled:  true,
-			CertFile: "/path/to/cert",
-		},
-	}
-
-	if cfg.ListenAddr != ":5000" {
-		t.Error("unexpected ListenAddr value")
-	}
-
-	if !cfg.TLS.Enabled {
-		t.Error("unexpected TLS.Enabled value")
-	}
-}
-
 func TestStorageConfigNonEncrypted(t *testing.T) {
 	cfg := StorageConfig{
 		Addr:              "localhost:9000",
