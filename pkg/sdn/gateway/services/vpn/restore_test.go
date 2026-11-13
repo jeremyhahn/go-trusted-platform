@@ -264,6 +264,52 @@ func TestRestore_RemovesTheHostedPeerOfALeaseItRejects(t *testing.T) {
 	}
 }
 
+// A revoked lease's peer the datapath could not remove at Restore stays an
+// obligation: Sweep retries the reconciliation until it succeeds.
+func TestRestore_AFailedPeerReconciliationIsRetried(t *testing.T) {
+	h := newRestoreHarness(t)
+	h.plane.installed["lease-revoked"] = &Lease{ID: "lease-revoked", DataPlane: DataPlaneMASQUE}
+	h.plane.failRemovals(errors.New("datapath unreachable"))
+	h.start(t)
+
+	err := h.svc.Restore(context.Background())
+	var unavailable *ErrDataPlaneUnavailable
+	require.True(t, errors.As(err, &unavailable), "got %v", err)
+	require.True(t, h.plane.hosts("lease-revoked"))
+
+	h.svc.Sweep(context.Background())
+	require.True(t, h.plane.hosts("lease-revoked"), "the datapath is still unreachable")
+
+	h.plane.failRemovals(nil)
+	h.svc.Sweep(context.Background())
+	assert.False(t, h.plane.hosts("lease-revoked"), "the retried reconciliation removes the revoked peer")
+}
+
+// A rejected lease whose hosted peer the datapath could not remove keeps
+// its address until a retried removal succeeds.
+func TestRestore_AFailedRejectedPeerRemovalIsRetried(t *testing.T) {
+	h := newRestoreHarness(t)
+	lease := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
+	lease.Zones = []string{"fabric"}
+	require.NoError(t, h.store.Put(context.Background(), lease))
+	h.plane.installed[lease.ID] = lease
+	// The persistent IPAM still holds the address for the device.
+	h.allocate(t, "mini-1", lease.Address)
+	h.start(t)
+	h.plane.failRemovals(errors.New("datapath unreachable"))
+
+	err := h.svc.Restore(context.Background())
+	var dropped *ErrLeaseNotRestored
+	require.True(t, errors.As(err, &dropped), "got %v", err)
+	require.True(t, h.plane.hosts(lease.ID))
+	assert.Equal(t, "mini-1", h.holder(t, lease.Address), "the address stays held while the peer may route it")
+
+	h.plane.failRemovals(nil)
+	h.svc.Sweep(context.Background())
+	assert.False(t, h.plane.hosts(lease.ID), "the retried removal takes the peer down")
+	assert.NotEqual(t, "mini-1", h.holder(t, lease.Address), "then the address is released")
+}
+
 func TestRestore_LeavesAnotherDevicesAddressAlone(t *testing.T) {
 	h := newRestoreHarness(t)
 	lease := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
