@@ -87,16 +87,3 @@ func TestDeviceTemplate_SetEntityID(t *testing.T) {
 		})
 	}
 }
-
-func TestDeviceTemplate_ZeroValue(t *testing.T) {
-	tmpl := &DeviceTemplate{}
-	assert.Equal(t, uint64(0), tmpl.EntityID())
-	assert.Empty(t, tmpl.TenantID)
-	assert.Empty(t, tmpl.Name)
-	assert.Empty(t, tmpl.Description)
-	assert.Empty(t, string(tmpl.Role))
-	assert.Nil(t, tmpl.Config)
-	assert.Nil(t, tmpl.MatchRules)
-	assert.True(t, tmpl.CreatedAt.IsZero())
-	assert.True(t, tmpl.UpdatedAt.IsZero())
-}

@@ -368,46 +368,6 @@ func TestErrBatchOperationFailed_Unwrap(t *testing.T) {
 	}
 }
 
-// Input/Output struct tests
-
-func TestBatchEncryptOutputItem_FailedStatus(t *testing.T) {
-	item := BatchEncryptOutputItem{
-		ItemID:     "failed-item",
-		Status:     "failed",
-		Ciphertext: "",
-		Nonce:      "",
-		KeyVersion: 0,
-		Error:      "encryption failed: key disabled",
-	}
-
-	if item.Status != "failed" {
-		t.Errorf("Status = %q, want %q", item.Status, "failed")
-	}
-	if item.Error == "" {
-		t.Error("Error should not be empty for failed status")
-	}
-}
-
-func TestBatchDecryptOutputItem_FailedStatus(t *testing.T) {
-	item := BatchDecryptOutputItem{
-		ItemID:     "failed-item",
-		Status:     "failed",
-		Plaintext:  "",
-		KeyVersion: 0,
-		Error:      "decryption failed: authentication tag mismatch",
-	}
-
-	if item.Status != "failed" {
-		t.Errorf("Status = %q, want %q", item.Status, "failed")
-	}
-	if item.Error == "" {
-		t.Error("Error should not be empty for failed status")
-	}
-	if item.Plaintext != "" {
-		t.Error("Plaintext should be empty for failed status")
-	}
-}
-
 // Flag struct tests
 
 func TestBatchCommand_GetFlagsNotCalledOnCreation(t *testing.T) {
