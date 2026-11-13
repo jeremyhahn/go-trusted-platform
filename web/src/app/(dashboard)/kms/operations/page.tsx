@@ -120,6 +120,8 @@ export default function KmsOperationsPage() {
   const [vMac, setVMac] = React.useState("");
   const [vResult, setVResult] = React.useState<string | null>(null);
   const vSeq = React.useRef(0);
+  const dkSeq = React.useRef(0);
+  const wdkSeq = React.useRef(0);
 
   // Random and data keys
   const [randomBytes, setRandomBytes] = React.useState("32");
@@ -194,15 +196,19 @@ export default function KmsOperationsPage() {
   };
 
   const onDataKey = async () => {
+    const seq = ++dkSeq.current;
+    setDkResult(null);
     const res = await ops.generateDataKey(dkKey);
-    if (res) {
+    if (res && dkSeq.current === seq) {
       setDkResult(`plaintext: ${res.plaintext_key}\nencrypted: ${res.encrypted_key}`);
     }
   };
 
   const onWrappedDataKey = async () => {
+    const seq = ++wdkSeq.current;
+    setWdkResult(null);
     const res = await ops.generateWrappedDataKey(wdkKey);
-    if (res) {
+    if (res && wdkSeq.current === seq) {
       setWdkResult(`wrapped by ${res.wrapping_key_id}: ${res.wrapped_key}`);
     }
   };
@@ -351,7 +357,13 @@ export default function KmsOperationsPage() {
           description="Mint a data key, returned in plaintext and encrypted"
           result={dkResult}
         >
-          <Field id="data-key-key" label="Key name" value={dkKey} onChange={setDkKey} />
+          <Field id="data-key-key" label="Key name" value={dkKey}
+            onChange={(v) => {
+              setDkKey(v);
+              dkSeq.current++;
+              setDkResult(null);
+            }}
+          />
           <Button onClick={onDataKey} disabled={ops.busy || !dkKey}>
             Generate data key
           </Button>
@@ -363,7 +375,13 @@ export default function KmsOperationsPage() {
           description="Mint a data key returned only wrapped"
           result={wdkResult}
         >
-          <Field id="wrapped-data-key-key" label="Wrapping key name" value={wdkKey} onChange={setWdkKey} />
+          <Field id="wrapped-data-key-key" label="Wrapping key name" value={wdkKey}
+            onChange={(v) => {
+              setWdkKey(v);
+              wdkSeq.current++;
+              setWdkResult(null);
+            }}
+          />
           <Button onClick={onWrappedDataKey} disabled={ops.busy || !wdkKey}>
             Generate wrapped data key
           </Button>
