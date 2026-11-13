@@ -1114,6 +1114,15 @@ export type {
 // =============================================================================
 
 // QuicBaaS types are exported from the quicbaas types index
+// Platform daemon status and service lifecycle (#1752)
+export type {
+  DaemonStatusResponse,
+  DaemonServiceInfo,
+  ListDaemonServicesResponse,
+  DaemonServiceAction,
+  DaemonServiceActionResponse,
+} from './types/platform.js';
+
 export * from './types/quicbaas/index.js';
 
 // =============================================================================

@@ -270,3 +270,74 @@ export interface ReloadConfigResponse {
   /** Operation status */
   status: PlatformStatus;
 }
+
+/**
+ * Daemon status (`GET /v1/platform/status`), fields as on the wire.
+ */
+export interface DaemonStatusResponse {
+  /** Overall daemon status, e.g. "running" */
+  status: string;
+  /** Daemon version */
+  version: string;
+  /** Build time */
+  build_time?: string;
+  /** Git commit */
+  git_commit?: string;
+  /** Go version */
+  go_version?: string;
+  /** System information */
+  system?: Record<string, unknown>;
+  /** Unix timestamp */
+  timestamp?: number;
+}
+
+/**
+ * One daemon service (`GET /v1/platform/services/{service}`), fields as on the wire.
+ */
+export interface DaemonServiceInfo {
+  /** Service name */
+  name: string;
+  /** Service status, e.g. "running" or "stopped" */
+  status: string;
+  /** Start time */
+  started_at?: string;
+  /** Uptime */
+  uptime?: string;
+  /** Number of starts */
+  start_count?: number;
+  /** Number of stops */
+  stop_count?: number;
+  /** Last error */
+  last_error?: string;
+}
+
+/**
+ * Daemon service list (`GET /v1/platform/services`).
+ */
+export interface ListDaemonServicesResponse {
+  /** Services */
+  services: DaemonServiceInfo[];
+  /** Count */
+  count: number;
+  /** Unix timestamp */
+  timestamp?: number;
+}
+
+/**
+ * Daemon service lifecycle action.
+ */
+export type DaemonServiceAction = 'start' | 'stop' | 'restart';
+
+/**
+ * Result of a service start, stop or restart.
+ */
+export interface DaemonServiceActionResponse {
+  /** Service name */
+  service: string;
+  /** Action taken */
+  action: string;
+  /** Whether it succeeded */
+  success: boolean;
+  /** Message */
+  message: string;
+}

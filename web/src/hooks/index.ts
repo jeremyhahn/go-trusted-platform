@@ -96,6 +96,8 @@ export type {
   AcceptInvitationResult,
   InvitationLookupState,
 } from './use-invitation-lookup';
+export { usePlatformDaemon } from './use-platform-daemon';
+export type { DaemonServiceAction } from './use-platform-daemon';
 export type { Toast, UseToastReturn } from './use-toast';
 export { useTPMKeyOperations, operationError } from './use-tpm-key-operations';
 export type { TPMKeyOperation, OperationResponse, TPMClient } from './use-tpm-key-operations';
