@@ -31,7 +31,15 @@ import type {
   ResolveResponse,
   RegisterRequest,
   RegisterResponse,
+  DNSRecord,
 } from '../types/dns.js';
+import { RECORD_TYPE_PROTO_NAMES } from '../types/dns.js';
+import { encodeEnum } from './wire-enum.js';
+
+/** A record as the REST body carries it: the type as its protobuf name. */
+function toProtoRecord(record: DNSRecord) {
+  return { ...record, type: encodeEnum('type', RECORD_TYPE_PROTO_NAMES, record.type) };
+}
 
 /**
  * DNS Service class
@@ -150,7 +158,7 @@ export class DNSService extends BaseService {
   async addRecord(request: AddRecordRequest): Promise<ApiResponse<AddRecordResponse>> {
     return this.client.post<AddRecordResponse>(
       this.buildUrl(`/zones/${this.encodePathSegment(request.zoneName)}/records`),
-      { record: request.record }
+      { record: toProtoRecord(request.record) }
     );
   }
 
@@ -177,7 +185,7 @@ export class DNSService extends BaseService {
   async updateRecord(request: UpdateRecordRequest): Promise<ApiResponse<UpdateRecordResponse>> {
     return this.client.put<UpdateRecordResponse>(
       this.buildUrl(`/zones/${this.encodePathSegment(request.zoneName)}/records`),
-      { oldRecord: request.oldRecord, newRecord: request.newRecord }
+      { oldRecord: toProtoRecord(request.oldRecord), newRecord: toProtoRecord(request.newRecord) }
     );
   }
 
@@ -233,7 +241,12 @@ export class DNSService extends BaseService {
    * @returns Resolution result
    */
   async resolve(request: ResolveRequest): Promise<ApiResponse<ResolveResponse>> {
-    return this.client.post<ResolveResponse>(this.buildUrl('/resolve'), request);
+    // The router serves GET /resolve and reads fqdn and type from the query.
+    return this.client.get<ResolveResponse>(
+      this.buildUrl('/resolve', {
+        filters: { fqdn: request.fqdn, type: encodeEnum('type', RECORD_TYPE_PROTO_NAMES, request.type) },
+      })
+    );
   }
 
   /**
