@@ -391,6 +391,217 @@ export async function mockTenantApi(
   };
 }
 
+// ============================================================================
+// Admin tenant API mock (#1673): /api/v1/tenants and its sub-routes
+// ============================================================================
+
+/** A tenant record as the admin tenant pages read it. */
+export interface AdminTenant {
+  id: string;
+  name: string;
+  displayName?: string;
+  /** protojson enum names, as the webservice serialises Tenant.state */
+  state:
+    | 'TENANT_STATE_ACTIVE'
+    | 'TENANT_STATE_SUSPENDED'
+    | 'TENANT_STATE_PENDING'
+    | 'TENANT_STATE_DELETING'
+    | 'TENANT_STATE_DELETED';
+  computeQuota?: { maxVms?: number; maxContainers?: number; maxVcpus?: number; maxMemoryMb?: number };
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** One request the admin tenant mock answered. */
+export interface AdminTenantCall {
+  method: string;
+  path: string;
+  /** The request's query string, e.g. `?limit=100&offset=0`. */
+  query: string;
+  body: unknown;
+}
+
+export function createMockAdminTenant(overrides: Partial<AdminTenant> = {}): AdminTenant {
+  return {
+    id: 'tenant-1',
+    name: 'acme',
+    displayName: 'Acme Corp',
+    state: 'TENANT_STATE_ACTIVE',
+    computeQuota: { maxVms: 10, maxContainers: 5, maxVcpus: 40, maxMemoryMb: 65536 },
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    ...overrides,
+  };
+}
+
+/**
+ * Mock the admin tenant routes with an in-memory tenant store. Every
+ * request is recorded in calls, so a test can assert which operation ran.
+ */
+export async function mockAdminTenantsApi(
+  page: Page,
+  config: { tenants?: AdminTenant[]; quotaAvailable?: boolean } = {}
+): Promise<{ calls: AdminTenantCall[]; tenants: () => AdminTenant[] }> {
+  let tenants = [...(config.tenants ?? [createMockAdminTenant()])];
+  const calls: AdminTenantCall[] = [];
+  let dekVersion = 1;
+  const ok = { success: true, message: 'ok' };
+
+  const reply = (route: Route, status: number, payload: unknown) =>
+    route.fulfill({
+      status,
+      contentType: 'application/json',
+      body: JSON.stringify({ code: status, error: '', success: status < 400, payload }),
+    });
+  const notFound = (route: Route) =>
+    route.fulfill({
+      status: 404,
+      contentType: 'application/json',
+      body: JSON.stringify({ code: 404, error: 'tenant not found', success: false }),
+    });
+
+  await page.route('**/api/v1/tenants**', async (route: Route, request: Request) => {
+    const method = request.method();
+    const url = new URL(request.url());
+    const path = url.pathname.replace(/\/+$/, '');
+    let body: unknown;
+    try {
+      body = request.postDataJSON();
+    } catch {
+      body = undefined;
+    }
+    calls.push({ method, path, query: url.search, body });
+    const parts = path.replace(/^.*\/api\/v1\/tenants/, '').split('/').filter(Boolean).map(decodeURIComponent);
+    const input = (body ?? {}) as Record<string, unknown>;
+
+    if (parts.length === 0) {
+      if (method === 'GET') {
+        // The server pages the list: limit defaults to 100, offset to 0.
+        const limit = Number(url.searchParams.get('limit') ?? '') || 100;
+        const offset = Number(url.searchParams.get('offset') ?? '') || 0;
+        return reply(route, 200, { tenants: tenants.slice(offset, offset + limit), total: tenants.length });
+      }
+      if (method === 'POST') {
+        const created = createMockAdminTenant({
+          id: `tenant-${tenants.length + 1}`,
+          name: String(input.name ?? ''),
+          displayName: input.displayName as string | undefined,
+        });
+        tenants = [...tenants, created];
+        return reply(route, 201, { status: ok, tenant: created });
+      }
+    }
+    if (parts[0] === 'sync' && method === 'POST') return reply(route, 200, { status: ok });
+    if (parts[0] === 'by-name' && parts.length === 2 && method === 'GET') {
+      const found = tenants.find((t) => t.name === parts[1]);
+      return found ? reply(route, 200, { tenant: found }) : notFound(route);
+    }
+
+    const tenant = tenants.find((t) => t.id === parts[0]);
+    if (!tenant) return notFound(route);
+    const sub = parts.slice(1).join('/');
+    const update = (patch: Partial<AdminTenant>) => {
+      Object.assign(tenant, patch);
+      return tenant;
+    };
+
+    switch (`${method} ${sub}`) {
+      case 'GET ':
+        return reply(route, 200, { tenant });
+      case 'PUT ':
+      {
+        // The server ignores an empty display name and keeps the old one.
+        const submitted = input.displayName as string | undefined;
+        return reply(route, 200, {
+          status: ok,
+          tenant: submitted ? update({ displayName: submitted }) : tenant,
+        });
+      }
+      case 'DELETE ':
+        tenants = tenants.filter((t) => t.id !== tenant.id);
+        return reply(route, 200, { status: ok });
+      case 'POST suspend':
+        update({ state: 'TENANT_STATE_SUSPENDED' });
+        return reply(route, 200, { status: ok });
+      case 'POST resume':
+        update({ state: 'TENANT_STATE_ACTIVE' });
+        return reply(route, 200, { status: ok });
+      case 'PUT quotas': {
+        // Like TenantGRPCServer.UpdateQuotas: a supplied compute section
+        // replaces every limit, so an omitted field becomes zero.
+        const c = input.compute as Record<string, unknown> | undefined;
+        if (c) {
+          const num = (v: unknown) => Number(v ?? 0) || 0;
+          update({
+            computeQuota: {
+              maxVms: num(c.maxVms),
+              maxContainers: num(c.maxContainers),
+              maxVcpus: num(c.maxVcpus),
+              maxMemoryMb: num(c.maxMemoryMb),
+            },
+          });
+        }
+        return reply(route, 200, { status: ok });
+      }
+      case 'POST quota-check':
+        return reply(route, 200, {
+          tenantId: tenant.id,
+          resource: input.resource,
+          amount: input.amount,
+          available: config.quotaAvailable ?? true,
+        });
+      case 'GET dek':
+        return reply(route, 200, {
+          dekStatus: {
+            tenantId: tenant.id,
+            path: `tenants/${tenant.id}/dek`,
+            version: dekVersion,
+            algorithm: 'AES-256-GCM',
+            status: 'ACTIVE',
+            isDefault: true,
+            createdAt: tenant.createdAt,
+            usageCount: 10,
+            bytesUsed: 1024,
+            maxUsageCount: 1000,
+            maxBytesUsed: 1048576,
+            warningPercent: 80,
+            usagePercent: 1,
+            needsRotation: false,
+          },
+        });
+      case 'POST dek/rotate':
+        dekVersion += 1;
+        return reply(route, 200, {
+          tenantId: tenant.id,
+          oldVersion: dekVersion - 1,
+          newVersion: dekVersion,
+          timestamp: '2026-01-02T00:00:00Z',
+        });
+      case 'POST barrier/init':
+        // TenantGRPCServer.InitTenantBarrier refuses any Shamir setting.
+        if (Number(input.threshold ?? 0) !== 0 || Number(input.shares ?? 0) !== 0) {
+          return route.fulfill({
+            status: 400,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              code: 400,
+              error: 'tenant barrier: Shamir threshold/shares are not supported',
+              success: false,
+            }),
+          });
+        }
+        return reply(route, 200, { status: ok });
+      case 'POST barrier/unseal':
+      case 'POST barrier/seal':
+        return reply(route, 200, { status: ok });
+      default:
+        return route.continue();
+    }
+  });
+
+  return { calls, tenants: () => [...tenants] };
+}
+
 /**
  * Mock the health API endpoint.
  *
