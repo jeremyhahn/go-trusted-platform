@@ -447,8 +447,8 @@ describe('TransactionService', () => {
 
       await service.compareAndSwap({
         conditions: [
-          { key: 'balance/account-1', target: 'VALUE', operator: 'GTE', value: 100 },
-          { key: 'balance/account-2', target: 'EXISTS', operator: 'EQ', value: true },
+          { key: 'balance/account-1', target: 'VALUE', operator: 'GT', value: 99 },
+          { key: 'balance/account-2', target: 'VERSION', operator: 'GT', value: 0 },
         ],
         onSuccess: [
           { type: 'PUT', key: 'balance/account-1', value: '50' },
@@ -458,8 +458,8 @@ describe('TransactionService', () => {
 
       expect(mockClient.post).toHaveBeenCalledWith('/v1/quicbaas/transactions/cas', {
         conditions: [
-          { key: 'balance/account-1', target: 'VALUE', operator: 'GTE', value: 100 },
-          { key: 'balance/account-2', target: 'EXISTS', operator: 'EQ', value: true },
+          { key: 'balance/account-1', target: 'VALUE', operator: 'GT', value: 99 },
+          { key: 'balance/account-2', target: 'VERSION', operator: 'GT', value: 0 },
         ],
         onSuccess: [
           { type: 'PUT', key: 'balance/account-1', value: '50' },
