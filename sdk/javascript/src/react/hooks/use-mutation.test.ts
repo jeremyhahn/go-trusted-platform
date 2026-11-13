@@ -377,6 +377,37 @@ describe('useMutation', () => {
       expect(onError).toHaveBeenCalledTimes(1);
       expect(onError).toHaveBeenCalledWith(expected, 1);
     });
+
+    it('runs a rethrowing onError once on an error response', async () => {
+      const onError = vi.fn((e: MutationError) => {
+        throw e;
+      });
+      const { result } = setup(
+        (_: number) =>
+          Promise.resolve<ApiResponse<string>>({
+            error: { code: 'CONFLICT', message: 'exists' },
+            success: false,
+          }),
+        { onError }
+      );
+      const err = await rejection(result.current.mutateAsync(2));
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(err).toBe(onError.mock.calls[0]?.[0]);
+      expect((err as MutationError).code).toBe('CONFLICT');
+    });
+
+    it('runs a rethrowing onError once on an empty response', async () => {
+      const onError = vi.fn((e: MutationError) => {
+        throw e;
+      });
+      const { result } = setup<string, number>(() => Promise.resolve({ success: true }), {
+        onError,
+      });
+      const err = await rejection(result.current.mutateAsync(3));
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(err).toBe(onError.mock.calls[0]?.[0]);
+      expect((err as MutationError).code).toBe('EMPTY_RESPONSE');
+    });
   });
 
   describe('thrown errors', () => {
