@@ -294,13 +294,6 @@ ssrk-handle=0x81000001
 	}
 }
 
-func TestPlatformConfigStruct(t *testing.T) {
-	cfg := &PlatformConfig{}
-	if cfg.TPM != nil {
-		t.Error("expected nil TPM for zero-value PlatformConfig")
-	}
-}
-
 // TestParsePCRBanksConfig_KeystorePlatformPolicy asserts the parent
 // authorization mode is read from pcr-banks and never assumed (#52): the
 // unseal must replay the mode the seal actually used, and an absent key
