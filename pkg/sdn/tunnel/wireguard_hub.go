@@ -124,6 +124,12 @@ func (h *WireGuardHub) Up(ctx context.Context) error {
 	if h.up {
 		return nil
 	}
+	// A predecessor that exited without Down leaves its device, and every
+	// peer on it, in the kernel. Remove it before the key is resolved, so
+	// a key-store failure cannot leave those peers accepting traffic.
+	if err := h.removeStale(); err != nil {
+		return &ErrTunnelCreateFailed{Name: h.cfg.Name, Cause: err}
+	}
 	key, err := fetchKey(ctx, h.keys, h.cfg.Name, h.cfg.KeyRef, wireGuardKeyLen)
 	if err != nil {
 		return err
@@ -166,6 +172,21 @@ func (h *WireGuardHub) Up(ctx context.Context) error {
 // addresses and peers still installed: it is deleted and created afresh,
 // so none of that state survives. A device of the name that is not a
 // WireGuard device is not the hub's, and is refused.
+// removeStale deletes a WireGuard device of the hub's name left by a
+// predecessor. A device of another type is not the hub's and is left for
+// addLink to refuse; a failed lookup means there is nothing to remove.
+func (h *WireGuardHub) removeStale() error {
+	stale, err := h.nl.LinkByName(h.cfg.Name)
+	if err != nil || stale == nil || stale.Type() != (&vnl.Wireguard{}).Type() {
+		return nil
+	}
+	if err := h.nl.LinkDel(stale); err != nil {
+		return fmt.Errorf("removing the stale hub device: %w", err)
+	}
+	h.logger.Warn("wireguard hub removed a stale device of its name", slog.String("device", h.cfg.Name))
+	return nil
+}
+
 func (h *WireGuardHub) addLink(link vnl.Link) error {
 	err := h.nl.LinkAdd(link)
 	if !errors.Is(err, syscall.EEXIST) {
