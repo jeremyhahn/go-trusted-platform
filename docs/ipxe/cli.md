@@ -8,10 +8,9 @@
 
 ## 1. `pkg/ipxe` has no CLI of its own
 
-**There is no `platformctl pxe` and no `platformctl ipxe` command group.**
-Neither appears in the `rootCmd.AddCommand` list in
-`pkg/cli/commands/root.go` (read 2026-08-18); `pkg/ipxe` exports a library and
-nothing else.
+**There is no `platformctl ipxe` command group**; `pkg/ipxe` exports a library
+and nothing else. The `platformctl pxe` group belongs to provisioning, not to
+this package (below).
 
 Two command-line surfaces reach it, and they are for different audiences:
 
@@ -20,11 +19,11 @@ Two command-line surfaces reach it, and they are for different audiences:
 | `pxeboot` | An operator or an orchestrator running the bootstrap container | A container entrypoint with flags. Not a subcommand of anything. |
 | `platformctl iso test pxe` | An engineer | A test harness that stands up an isolated network, runs a PXE server on it, and boots a QEMU client. |
 
-Everything an operator would want to *do* to a PXE device — register, list,
-authorize, quarantine, retry, start or stop the service — is **API-only** and
-belongs to provisioning. There is no CLI for it at all; see
-[`docs/provisioning/cli.md`](../provisioning/cli.md) §5, which records the same
-absence.
+What an operator does to a PXE device belongs to provisioning:
+`platformctl pxe` lists, inspects, authorizes, quarantines and retries devices
+and reads their events
+([`docs/provisioning/cli.md`](../provisioning/cli.md) §5). Registering or
+removing a device and starting or stopping the service stay **API-only**.
 
 ---
 

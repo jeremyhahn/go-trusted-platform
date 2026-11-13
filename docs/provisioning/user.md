@@ -106,10 +106,19 @@ attestation is what actually establishes trust afterwards
 
 ---
 
-## Managing devices — API only
+## Managing devices
 
-**There is no `platformctl pxe` command group.** Every device-lifecycle
-operation is an API call:
+`platformctl pxe` lists, inspects, authorizes, quarantines and retries devices
+and reads their events ([cli.md](cli.md) §5):
+
+```bash
+platformctl pxe list --state enrolled
+platformctl pxe events <id>
+platformctl pxe authorize <id> --target-vlan 200
+```
+
+Registering or removing a device has no CLI verb. Every device-lifecycle
+operation is also an API call:
 
 ```bash
 curl -s        https://platform.example.com/api/v1/pxe/devices
