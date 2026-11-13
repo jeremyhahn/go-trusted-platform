@@ -19,6 +19,12 @@
 > code sketches, the signed `bootcode`/`start4.elf`/kernel chain, A/B slots,
 > OTA — is the design that has not been built, and nothing here should be
 > read as a description of the shipped image.
+>
+> The factory image does not yet carry the measurement manifest its SPEC row
+> requires: a signed CoRIM of the PCR values the image determines, registered
+> in the go-quicbaas reference-values store. That waits on the go-quicbaas pin
+> (#720). See the [user guide](../factory-image/user.md#what-this-is) and
+> [docs/plans/669.md](../plans/669.md).
 
 ## Overview
 

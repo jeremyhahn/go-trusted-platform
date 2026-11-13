@@ -28,6 +28,15 @@ Three things to know before you start:
 3. **Hardware validation is your step.** The pipeline is exercised under
    emulation; booting a real Pi with a real TPM is the verification below.
 
+> **Not built yet: the measurement manifest.** The SPEC row's
+> [acceptance](../SPEC.md#features) says every image carries a signed CoRIM of
+> the PCR values it determines, registered in the go-quicbaas
+> reference-values store. No image carries one today, and nothing is
+> registered. A node's quote is checked against its device profile's
+> `PCRBaseline` table instead. The registration verbs ship in
+> go-quicbaas v0.14.0-alpha; the platform pins v0.12.0-alpha (#720). The
+> plan is [docs/plans/669.md](../plans/669.md).
+
 ## Prerequisites
 
 On the build host:
