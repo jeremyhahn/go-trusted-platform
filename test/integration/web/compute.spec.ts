@@ -465,19 +465,19 @@ test.describe('Images Page', () => {
     test('should filter images by status', async ({ authenticatedPage }) => {
       await authenticatedPage.goto('/compute/images');
 
-      await authenticatedPage.waitForTimeout(1000);
+      await expect(authenticatedPage.locator('main')).toBeVisible();
 
       // Find and click the status filter dropdown (first combobox)
       const statusSelect = authenticatedPage.locator('button[role="combobox"]').first();
       await statusSelect.click();
 
-      await authenticatedPage.waitForTimeout(300);
+      await expect(statusSelect).toHaveAttribute('aria-expanded', 'true');
 
       // Select 'Available' option
       const availableOption = authenticatedPage.locator('div[role="option"]:has-text("Available")');
       if ((await availableOption.count()) > 0) {
         await availableOption.click();
-        await authenticatedPage.waitForTimeout(500);
+        await expect(statusSelect).toHaveAttribute('aria-expanded', 'false');
       }
 
       const main = authenticatedPage.locator('main');
@@ -487,19 +487,19 @@ test.describe('Images Page', () => {
     test('should filter images by type', async ({ authenticatedPage }) => {
       await authenticatedPage.goto('/compute/images');
 
-      await authenticatedPage.waitForTimeout(1000);
+      await expect(authenticatedPage.locator('main')).toBeVisible();
 
       // Find the type filter (second combobox)
       const typeSelect = authenticatedPage.locator('button[role="combobox"]').nth(1);
       await typeSelect.click();
 
-      await authenticatedPage.waitForTimeout(300);
+      await expect(typeSelect).toHaveAttribute('aria-expanded', 'true');
 
       // Select 'VM' option
       const vmOption = authenticatedPage.locator('div[role="option"]:has-text("VM")');
       if ((await vmOption.count()) > 0) {
         await vmOption.click();
-        await authenticatedPage.waitForTimeout(500);
+        await expect(typeSelect).toHaveAttribute('aria-expanded', 'false');
       }
 
       const main = authenticatedPage.locator('main');
@@ -509,19 +509,19 @@ test.describe('Images Page', () => {
     test('should filter images by architecture', async ({ authenticatedPage }) => {
       await authenticatedPage.goto('/compute/images');
 
-      await authenticatedPage.waitForTimeout(1000);
+      await expect(authenticatedPage.locator('main')).toBeVisible();
 
       // Find the architecture filter (third combobox)
       const archSelect = authenticatedPage.locator('button[role="combobox"]').nth(2);
       await archSelect.click();
 
-      await authenticatedPage.waitForTimeout(300);
+      await expect(archSelect).toHaveAttribute('aria-expanded', 'true');
 
       // Select 'amd64' option
       const amd64Option = authenticatedPage.locator('div[role="option"]:has-text("amd64")');
       if ((await amd64Option.count()) > 0) {
         await amd64Option.click();
-        await authenticatedPage.waitForTimeout(500);
+        await expect(archSelect).toHaveAttribute('aria-expanded', 'false');
       }
 
       const main = authenticatedPage.locator('main');
@@ -531,18 +531,18 @@ test.describe('Images Page', () => {
     test('should show empty state when filters return no results', async ({ authenticatedPage }) => {
       await authenticatedPage.goto('/compute/images');
 
-      await authenticatedPage.waitForTimeout(1000);
+      await expect(authenticatedPage.locator('main')).toBeVisible();
 
       // Filter by status 'Error' (may have few or no results)
       const statusSelect = authenticatedPage.locator('button[role="combobox"]').first();
       await statusSelect.click();
 
-      await authenticatedPage.waitForTimeout(300);
+      await expect(statusSelect).toHaveAttribute('aria-expanded', 'true');
 
       const errorOption = authenticatedPage.locator('div[role="option"]:has-text("Error")');
       if ((await errorOption.count()) > 0) {
         await errorOption.click();
-        await authenticatedPage.waitForTimeout(500);
+        await expect(statusSelect).toHaveAttribute('aria-expanded', 'false');
       }
 
       // Page should still be functional
