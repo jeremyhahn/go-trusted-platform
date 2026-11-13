@@ -78,21 +78,21 @@ func (s *Service) reconcilePeers(ctx context.Context, leases []*Lease) error {
 func (s *Service) restore(ctx context.Context, l *Lease) error {
 	unlock := s.devices.lock(deviceKey(l.TenantID, l.DeviceID))
 	defer unlock()
-	if l.Expired(s.deps.Clock.Now()) {
-		return s.dropLease(ctx, l, "expired", nil)
-	}
 	plane, ok := s.deps.DataPlanes[l.DataPlane]
+	if l.Expired(s.deps.Clock.Now()) {
+		return s.dropLease(ctx, l, plane, "expired", nil)
+	}
 	if !ok || !s.cfg.Offers(l.DataPlane) {
-		return s.dropLease(ctx, l, "data plane not offered", &ErrDataPlaneUnavailable{Kind: l.DataPlane})
+		return s.dropLease(ctx, l, plane, "data plane not offered", &ErrDataPlaneUnavailable{Kind: l.DataPlane})
 	}
 	if !s.ZonesAllowed(l.Zones) {
-		return s.dropLease(ctx, l, "zones not allowed", nil)
+		return s.dropLease(ctx, l, plane, "zones not allowed", nil)
 	}
 	if err := s.holdAddress(ctx, l); err != nil {
-		return s.dropLease(ctx, l, "address unavailable", err)
+		return s.dropLease(ctx, l, plane, "address unavailable", err)
 	}
 	if err := plane.InstallPeer(ctx, l); err != nil {
-		return s.dropLease(ctx, l, "data plane refused the peer", &ErrDataPlaneUnavailable{Kind: l.DataPlane, Cause: err})
+		return s.dropLease(ctx, l, plane, "data plane refused the peer", &ErrDataPlaneUnavailable{Kind: l.DataPlane, Cause: err})
 	}
 	s.logger.Info("vpn.restore",
 		slog.String("lease", string(l.ID)),
@@ -137,20 +137,27 @@ func (s *Service) holdsAddress(ctx context.Context, l *Lease) (bool, error) {
 // so the control plane forgets it too, and the address goes back to the pool
 // when the device holds it. A store that could not record the drop
 // (ErrRevocationNotRecorded) keeps the lease, and its address with it.
-func (s *Service) dropLease(ctx context.Context, l *Lease, reason string, cause error) error {
+func (s *Service) dropLease(ctx context.Context, l *Lease, plane DataPlane, reason string, cause error) error {
 	dropped := &ErrLeaseNotRestored{LeaseID: l.ID, Reason: reason, Cause: cause}
 	s.logger.Warn("vpn.restore: lease dropped",
 		slog.String("lease", string(l.ID)), slog.String("device", l.DeviceID), slog.String("reason", reason))
+	// A hosted plane may still carry the lease's peer from before the vpn
+	// child restarted: remove it before the address can go to another device.
+	removeErr := s.removeRejectedPeer(ctx, l, plane)
 	var storeErr error
 	if err := s.deps.Leases.Delete(ctx, l.ID); err != nil {
 		var nf *ErrLeaseNotFound
 		var unrecorded *ErrRevocationNotRecorded
 		if errors.As(err, &unrecorded) {
-			return errors.Join(dropped, err)
+			return errors.Join(dropped, removeErr, err)
 		}
 		if !errors.As(err, &nf) {
 			storeErr = err
 		}
+	}
+	if removeErr != nil {
+		// The peer may still route the address: keep it held.
+		return errors.Join(dropped, removeErr, storeErr)
 	}
 	if held, err := s.holdsAddress(ctx, l); err != nil {
 		s.logger.Warn("vpn.restore: could not tell who holds a dropped lease's address",
@@ -162,4 +169,23 @@ func (s *Service) dropLease(ctx context.Context, l *Lease, reason string, cause 
 		return errors.Join(dropped, storeErr)
 	}
 	return dropped
+}
+
+// removeRejectedPeer removes the peer a hosted plane (a PeerReconciler,
+// whose peers outlive the vpn child) may still carry for a lease Restore
+// rejects. Other planes start empty with the child and hold no such peer.
+func (s *Service) removeRejectedPeer(ctx context.Context, l *Lease, plane DataPlane) error {
+	if _, hosted := plane.(PeerReconciler); !hosted {
+		return nil
+	}
+	err := plane.RemovePeer(ctx, l.ID)
+	var nf *ErrLeaseNotFound
+	if err == nil || errors.As(err, &nf) {
+		return nil
+	}
+	var unavailable *ErrDataPlaneUnavailable
+	if errors.As(err, &unavailable) {
+		return err
+	}
+	return &ErrDataPlaneUnavailable{Kind: l.DataPlane, Cause: err}
 }
