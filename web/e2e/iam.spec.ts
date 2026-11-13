@@ -1762,8 +1762,8 @@ test.describe('IAM Management', () => {
         await addRoleButton.click();
       }
 
-      // Wait for navigation
-      await page.waitForTimeout(500);
+      // Wait for navigation (the page may also stay on /iam/roles)
+      await page.waitForURL(/\/iam\/roles\/new/, { timeout: 5000 }).catch(() => {});
 
       // Check what happened after clicking
       const currentUrl = page.url();
@@ -1790,11 +1790,10 @@ test.describe('IAM Management', () => {
           const submitButton = page.getByRole('button', { name: /create|save|submit/i }).last();
           if (await submitButton.isVisible({ timeout: 2000 }).catch(() => false)) {
             await submitButton.click();
-            await page.waitForTimeout(500);
 
             // Check for success
             const successVisible = await page.getByText(/role created|successfully/i)
-              .first().isVisible({ timeout: 3000 }).catch(() => false);
+              .first().waitFor({ state: 'visible', timeout: 3000 }).then(() => true, () => false);
 
             if (successVisible) {
               const roles = mockApi.getRoles();
@@ -1843,16 +1842,14 @@ test.describe('IAM Management', () => {
       const openMenuButton = page.getByRole('button', { name: /open menu/i }).first();
       await openMenuButton.click();
 
-      // Wait for dropdown animation
-      await page.waitForTimeout(300);
-
       // Click edit menu item - the actions are "View", "Edit", "Delete"
       const editMenuItem = page.getByRole('menuitem', { name: /^edit$/i });
-      const isEditVisible = await editMenuItem.isVisible().catch(() => false);
+      const isEditVisible = await editMenuItem
+        .waitFor({ state: 'visible', timeout: 3000 }).then(() => true, () => false);
       if (isEditVisible) {
         await editMenuItem.click();
         // Wait for navigation
-        await page.waitForTimeout(500);
+        await page.waitForURL(/\/iam\/roles\/role-1/, { timeout: 5000 }).catch(() => {});
       }
 
       // Check if navigation happened, if not navigate directly
@@ -1986,8 +1983,8 @@ test.describe('IAM Management', () => {
         await addGroupButton.click();
       }
 
-      // Wait for navigation
-      await page.waitForTimeout(500);
+      // Wait for navigation (the page may also stay on /iam/groups)
+      await page.waitForURL(/\/iam\/groups\/new/, { timeout: 5000 }).catch(() => {});
 
       // Check what happened after clicking
       const currentUrl = page.url();
@@ -2014,11 +2011,10 @@ test.describe('IAM Management', () => {
           const submitButton = page.getByRole('button', { name: /create|save|submit/i }).last();
           if (await submitButton.isVisible({ timeout: 2000 }).catch(() => false)) {
             await submitButton.click();
-            await page.waitForTimeout(500);
 
             // Check for success
             const successVisible = await page.getByText(/group created|successfully/i)
-              .first().isVisible({ timeout: 3000 }).catch(() => false);
+              .first().waitFor({ state: 'visible', timeout: 3000 }).then(() => true, () => false);
 
             if (successVisible) {
               const groups = mockApi.getGroups();
@@ -2067,12 +2063,9 @@ test.describe('IAM Management', () => {
       // Wait for network to settle
       await page.waitForLoadState('networkidle').catch(() => {});
 
-      // Wait for any loading state to complete
-      await page.waitForTimeout(500);
-
       // Verify groups page loaded - with fallback
       const headingVisible = await page.getByRole('heading', { name: 'Groups', exact: true })
-        .isVisible({ timeout: 10000 }).catch(() => false);
+        .waitFor({ state: 'visible', timeout: 10000 }).then(() => true, () => false);
 
       if (!headingVisible) {
         // Check for loading state or any IAM content
@@ -2100,7 +2093,7 @@ test.describe('IAM Management', () => {
         // No actions menu, test navigation by clicking the row
         try {
           await groupRow.click();
-          await page.waitForTimeout(500);
+          await page.waitForURL(/\/iam\/groups\/[^/?]+/, { timeout: 5000 }).catch(() => {});
         } catch {
           // Click failed, but groups page loaded successfully
           expect(true).toBe(true);
@@ -2108,21 +2101,21 @@ test.describe('IAM Management', () => {
         }
       } else {
         await actionsButton.click();
-        await page.waitForTimeout(300);
 
         // Try to find view/edit menu item
         const viewMenuItem = page.getByRole('menuitem', { name: /view|manage members|details|edit/i }).first();
-        const viewVisible = await viewMenuItem.isVisible({ timeout: 2000 }).catch(() => false);
+        const viewVisible = await viewMenuItem
+          .waitFor({ state: 'visible', timeout: 2000 }).then(() => true, () => false);
 
         if (viewVisible) {
           await viewMenuItem.click();
-          await page.waitForTimeout(500);
+          await page.waitForURL(/\/iam\/groups\/[^/?]+/, { timeout: 5000 }).catch(() => {});
         } else {
           // No view menu item, press escape and try row click
           await page.keyboard.press('Escape');
-          await page.waitForTimeout(200);
+          await expect(page.getByRole('menu')).toBeHidden();
           await groupRow.click().catch(() => {});
-          await page.waitForTimeout(500);
+          await page.waitForURL(/\/iam\/groups\/[^/?]+/, { timeout: 5000 }).catch(() => {});
         }
       }
 
