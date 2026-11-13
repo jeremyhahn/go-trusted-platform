@@ -768,8 +768,13 @@ func (s *Supervisor) restartLoop(ctx context.Context, proc *supervised, failure 
 			err = s.serveLaunched(ctx, proc)
 		}
 		s.mu.Lock()
-		proc.launching = false
 		proc.restoring = false
+		s.mu.Unlock()
+		if err == nil {
+			err = s.awaitWanted(ctx, proc)
+		}
+		s.mu.Lock()
+		proc.launching = false
 		s.mu.Unlock()
 		if err == nil {
 			if proc.def.Class == ClassKernel {
@@ -861,8 +866,13 @@ func (s *Supervisor) relaunchFollower(ctx context.Context, p *supervised) {
 		}
 	}
 	s.mu.Lock()
-	p.launching = false
 	p.restoring = false
+	s.mu.Unlock()
+	if stillWanted && err == nil {
+		err = s.awaitWanted(ctx, p)
+	}
+	s.mu.Lock()
+	p.launching = false
 	s.mu.Unlock()
 	if err != nil {
 		s.cfg.Logger.Error("gatewayd supervisor: relaunch after the datapath relaunch failed",
@@ -987,6 +997,28 @@ func (s *Supervisor) serveLaunched(ctx context.Context, proc *supervised) error 
 		s.stopUnservingChild(ctx, proc)
 	}
 	return ready
+}
+
+// awaitWanted waits, once a relaunched child has been given its document,
+// for every service still wanted of it to start. A child that answers its
+// socket and took its document has not recovered if its Gateway.Start
+// failed (a vpn child that could not fetch its lease projection during a
+// control-plane outage keeps serving that start error, VPN inactive): it is
+// stopped, and the caller retries it as a failed restart.
+func (s *Supervisor) awaitWanted(ctx context.Context, proc *supervised) error {
+	s.mu.Lock()
+	services := make([]string, 0, len(proc.wanted))
+	for service := range proc.wanted {
+		services = append(services, service)
+	}
+	s.mu.Unlock()
+	for _, service := range services {
+		if err := s.awaitService(ctx, proc, service); err != nil {
+			s.stopUnservingChild(ctx, proc)
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Supervisor) restoreDesired(ctx context.Context, proc *supervised) error {
