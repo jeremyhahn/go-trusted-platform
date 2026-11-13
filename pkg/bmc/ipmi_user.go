@@ -216,6 +216,11 @@ func (m *ipmiUserManager) CreateUser(_ context.Context, u User, password *memgua
 	if !u.Privilege.IsValid() {
 		return ErrInvalidConfig{Field: "privilege", Reason: "unrecognized privilege level"}
 	}
+	// Refuse an oversized password before the first BMC write: a refusal
+	// after SetUserName would leave a named slot with no password or access.
+	if password != nil && password.Size() > ipmiMaxPasswordLen {
+		return ErrInvalidConfig{Field: "password", Reason: "password exceeds 20 bytes"}
+	}
 	if err := m.setUserName(u.Slot, u.Username); err != nil {
 		return err
 	}

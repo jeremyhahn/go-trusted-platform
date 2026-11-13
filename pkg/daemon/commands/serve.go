@@ -1349,6 +1349,10 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 				// into IPAM pools.
 				seedSDNVLANsFromConfig(logger, App, svc)
 			}
+			// The console mounts the BMC routes admin-gated (#1720).
+			if h := platformDaemon.BMCRestHandler(); h != nil {
+				params.BMCRestHandler = h
+			}
 		}
 		// vtpm.VTPMService is wired by the daemon-only path (config.VTPMService)
 		// — surface the same instance to the REST router by reading it back
