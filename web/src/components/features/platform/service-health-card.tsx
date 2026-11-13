@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, Clock, Zap, AlertTriangle } from "lucide-react";
+import { Clock, Zap, AlertTriangle } from "lucide-react";
 import {
   Card,
   CardContent,
