@@ -113,6 +113,7 @@ honoured, and the token's `fido2-up-required` records it.
 | `ErrLUKSRootRequired` | 403 | `PermissionDenied` | `StatusPermissionDenied` |
 | `ErrLUKS{Device,Passphrase,NewPassphrase,CredentialID,Slot}Required` | 400 | `InvalidArgument` | `StatusInvalidArgument` |
 | `ErrLUKSFIDO2PINUnsupported` (EnrollFIDO2 with `require_pin`) | 400 | `InvalidArgument` | `StatusInvalidArgument`, message as payload |
+| `ErrLUKSPCRInvalid` (EnrollTPM with no PCR or an index above 23) | 400 | `InvalidArgument` | `StatusInvalidArgument` |
 | any other error | 500 | `Internal` | `StatusInternalError` |
 | `ErrLUKSMalformedBody` (REST body that is not valid JSON) | 400 | — | — |
 
