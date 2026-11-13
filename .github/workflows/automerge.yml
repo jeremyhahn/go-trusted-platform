@@ -153,6 +153,7 @@ concurrency:
 
 jobs:
   merge:
+    timeout-minutes: 10
     name: Merge when CI is green (code-review PRs also need an approval)
     # A red train must still be seen, to drop its newest PR.
     if: >-

@@ -642,7 +642,7 @@ jobs:
     needs: preflight   # v1.29.3
     # CUSTOMIZE: the build and the unit suite run one after another here;
     # the race suite is the race job and lint the lint job (v1.30).
-    timeout-minutes: 240
+    timeout-minutes: 120
     env:
       # CUSTOMIZE (ruling 108 (b)): the project's own BuildKit builder
       # (Makefile BUILDX_BUILDER). Its cache is this project's alone:
@@ -909,7 +909,7 @@ jobs:
     # schedule run, only on the schedule guard's `run`.
     if: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')) && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
     needs: preflight     # v1.29.3
-    timeout-minutes: 120
+    timeout-minutes: 60
     env:
       # The image job's builder (see there).
       BUILDX_BUILDER: go-trusted-platform-ci
@@ -1210,7 +1210,7 @@ jobs:
     runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}
     if: ${{ needs.preflight.outputs.docs_only != 'true' && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
     needs: preflight
-    timeout-minutes: 360
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -1935,7 +1935,7 @@ jobs:
         shard: [0, 1, 2, 3]
     needs: preflight
     if: ${{ github.event_name != 'pull_request' && (needs.preflight.outputs.verdict == 'run') }}
-    timeout-minutes: 360
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -2091,6 +2091,7 @@ jobs:
   # ==========================================================================
 
   ci-gate:
+    timeout-minutes: 10
     name: CI Gate
     # The reserved 1-CPU ci-gate runners (DS-2273), so the gate does not queue
     # behind ubuntu-latest jobs: never add a checkout or a `uses:` step here.
