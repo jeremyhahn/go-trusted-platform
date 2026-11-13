@@ -311,14 +311,10 @@ test.describe('Tenant Isolation', () => {
 
       await page.goto('/admin/invitations');
 
-      // Wait for API calls
-      await page.waitForTimeout(500);
-
       // Verify Authorization header is present (contains JWT with tenant info)
-      const hasAuthHeader = apiCalls.some(
-        (call) => call.headers['authorization']?.startsWith('Bearer ')
-      );
-      expect(hasAuthHeader).toBe(true);
+      await expect
+        .poll(() => apiCalls.some((call) => call.headers['authorization']?.startsWith('Bearer ')))
+        .toBe(true);
     });
 
     test('switching tenant context should refresh data', async ({ page, context }) => {
