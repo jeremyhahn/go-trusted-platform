@@ -117,6 +117,7 @@ type testHandlerRegistry struct {
 	configDelivery        configdelivery.RestHandler
 	pxeService            platformv1.PXEServiceServer
 	pxeWebhookEnabled     bool
+	pxeWebhookSecret      string
 	attestationService    platformv1.AttestationServiceServer
 	attestationReporting  *restattestation.Reporting
 	ociDistBackend        restregistry.OCIDistBackend
@@ -287,6 +288,10 @@ func (r *testHandlerRegistry) PXEServiceServer() platformv1.PXEServiceServer {
 
 func (r *testHandlerRegistry) PXEWebhookEnabled() bool {
 	return r.pxeWebhookEnabled
+}
+
+func (r *testHandlerRegistry) PXEWebhookSecret() string {
+	return r.pxeWebhookSecret
 }
 
 func (r *testHandlerRegistry) NTPServiceServer() platformv1.NTPServiceServer {

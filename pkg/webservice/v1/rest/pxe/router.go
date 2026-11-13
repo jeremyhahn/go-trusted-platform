@@ -41,6 +41,9 @@ type PXERouter struct {
 	// webhookEnabled is pxe.ServiceConfig.WebhookEnabled: whether the
 	// install-completion webhook is mounted at all.
 	webhookEnabled bool
+	// webhookSecret is pxe.ServiceConfig.WebhookSecret: the HMAC key every
+	// install-completion report is verified with (webhook_auth.go).
+	webhookSecret []byte
 	router.WebServiceRouter
 }
 
@@ -160,29 +163,23 @@ func (r *PXERouter) requireScope(scope string, handler http.HandlerFunc) http.Ha
 // an unknown path, answered 404, and the service's WebhookComplete is never
 // reached. Off is the default because of what follows.
 //
-// It is ungated because its caller is a booting node with no operator
-// session — and, unlike the gateway's telemetry pair or the EAB-authenticated
-// provisioning routes, **it presents no credential and the server checks
-// none**: the handler decodes the body and the service identifies the device
-// by a MAC address taken from it. `pkg/compute/pxe/config.go` declares and
-// REQUIRES a `WebhookSecret` described as "the HMAC secret for webhook
-// authentication" which nothing ever reads.
+// It is off the operator gate because its caller is a booting node with no
+// operator session. It authenticates the node instead (#240): every report
+// carries WebhookSignatureHeader, the HMAC-SHA256 of the body under
+// pxe.ServiceConfig.WebhookSecret (SetWebhookSecret), checked in constant
+// time before the body is decoded. A missing or wrong signature answers 401,
+// and an enabled webhook with no secret refuses every report.
 //
-// That is tracked as #238 and is deliberately not fixed here. Choosing what a
-// booting node presents — HMAC over the body with the secret that already
-// exists, IDevID over mTLS as gatewayd uses, or a provisioning-session token
-// — is an architecture decision, and inventing one inside a gating change
-// would build a second authentication mechanism nobody ratified.
-//
-// So this method is not an endorsement: it is the boundary of what #165 can
-// close, drawn explicitly so the route is not mistaken for one this campaign
-// has certified.
+// The HMAC proves the sender holds the shared secret; it does not bind the
+// report to one machine, and a captured report can be replayed. What a node
+// presents beyond that (IDevID over mTLS, a provisioning-session token) is
+// #238.
 func (r *PXERouter) RegisterMachineFacingRoutes(parent *mux.Router) {
 	if !r.webhookEnabled {
 		return
 	}
 	sr := parent.PathPrefix(basePath).Subrouter()
-	sr.HandleFunc("/webhook/complete", r.webhookComplete).Methods("POST")
+	sr.HandleFunc("/webhook/complete", r.verifyWebhook(r.webhookComplete)).Methods("POST")
 }
 
 func (r *PXERouter) ensure(w http.ResponseWriter, req *http.Request) bool {

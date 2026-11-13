@@ -120,6 +120,7 @@ func (s *operatorPXE) WebhookComplete(_ context.Context, req *platformv1.PXEWebh
 func handlerRoot(server platformv1.PXEServiceServer) *mux.Router {
 	logger := logging.NewLogger(slog.LevelError, io.Discard)
 	r := NewPXERouter(logger, server, response.NewResponseWriter(logger, nil), true)
+	r.SetWebhookSecret(handlerWebhookSecret)
 	root := mux.NewRouter()
 	sub := root.PathPrefix("/api/v1").Subrouter()
 	r.RegisterMachineFacingRoutes(sub)
@@ -127,13 +128,20 @@ func handlerRoot(server platformv1.PXEServiceServer) *mux.Router {
 	return root
 }
 
+// handlerWebhookSecret is the webhook key handlerRoot configures; every
+// request serveHandler sends is signed with it, as a booting node signs
+// (the operator routes ignore the header).
+const handlerWebhookSecret = "handler-test-webhook-secret"
+
 func serveHandler(router *mux.Router, method, path, body string) *httptest.ResponseRecorder {
 	var reader io.Reader
 	if body != "" {
 		reader = strings.NewReader(body)
 	}
+	req := httptest.NewRequest(method, path, reader)
+	req.Header.Set(WebhookSignatureHeader, SignWebhookBody([]byte(handlerWebhookSecret), []byte(body)))
 	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, httptest.NewRequest(method, path, reader))
+	router.ServeHTTP(rec, req)
 	return rec
 }
 

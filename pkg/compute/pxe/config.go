@@ -101,23 +101,18 @@ type ServiceConfig struct {
 
 	// WebhookEnabled mounts the install-completion webhook,
 	// POST /api/v1/pxe/webhook/complete (default: false). When false the
-	// route is not served at all. When true it is served WITHOUT
-	// authentication -- see WebhookSecret and #238.
+	// route is not served at all. When true it admits only reports signed
+	// with WebhookSecret.
 	WebhookEnabled bool
 
-	// WebhookSecret is reserved for authenticating install-completion
-	// webhooks. It is NOT CURRENTLY USED.
+	// WebhookSecret authenticates install-completion webhooks (#240). Each
+	// report carries X-PXE-Webhook-Signature: "sha256=" and the hex
+	// HMAC-SHA256 of the raw request body under this secret; a missing or
+	// wrong signature answers 401 (pkg/webservice/v1/rest/pxe/webhook_auth.go).
 	//
-	// Setting it protects nothing today: no code reads this field beyond the
-	// validation below, and POST /api/v1/pxe/webhook/complete authenticates
-	// nobody -- the handler identifies the device by a MAC address taken from
-	// the request body, and MACs are not secrets. Configuring a value here
-	// must not be read as evidence the endpoint is authenticated.
-	//
-	// The field is retained rather than removed because what a booting node
-	// should present -- an HMAC over the body using this secret, IDevID over
-	// mTLS, or a provisioning-session token -- is an open architecture
-	// decision. See #238.
+	// The HMAC proves the sender holds the secret. It does not bind a report
+	// to one machine, and a captured report can be replayed; what a node
+	// presents beyond a shared secret is #238.
 	WebhookSecret string
 }
 
@@ -231,21 +226,13 @@ func (c *ServiceConfig) Validate() error {
 		return &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: "MaxRetries must be non-negative"}}
 	}
 
-	// Require WebhookSecret when webhooks are enabled.
-	//
-	// This requirement is currently a placeholder, and the message says so.
-	// Demanding a credential the platform never checks tells an operator the
-	// endpoint is protected when it is not -- a false assurance is worse than
-	// an obviously open endpoint, because it stops the reader looking. The
-	// requirement is kept so that configurations already carrying a secret
-	// stay valid for whatever #238 decides.
+	// Require WebhookSecret when webhooks are enabled: it is the HMAC key
+	// every report is verified with, and an enabled webhook without one
+	// refuses every report.
 	if c.WebhookEnabled && c.WebhookSecret == "" {
 		return &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{
-			Msg: "WebhookSecret is required when WebhookEnabled is true. " +
-				"NOTE: this secret is not yet enforced -- the install-completion " +
-				"webhook currently authenticates no caller and identifies the device " +
-				"by a MAC address from the request body. Setting it does not protect " +
-				"the endpoint (see #238)"}}
+			Msg: "WebhookSecret is required when WebhookEnabled is true: it is the " +
+				"HMAC-SHA256 key every install-completion report is signed with"}}
 	}
 
 	return nil
