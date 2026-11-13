@@ -19,6 +19,7 @@
 package bootstrap
 
 import (
+	"bytes"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
@@ -160,20 +161,37 @@ Example:
 	return cmd
 }
 
+// pemBeginBoundary opens every PEM block.
+var pemBeginBoundary = []byte("-----BEGIN ")
+
 // validateDirectBundle decodes every PEM block in bundle, parses each
 // CERTIFICATE block and returns the number of CA certificates found. It
 // fails when the bundle holds no PEM block, a CERTIFICATE block does not
-// parse, or no certificate is a CA.
+// parse, a BEGIN boundary does not open a well-formed block, or no
+// certificate is a CA. Text outside the blocks is ignored.
 func validateDirectBundle(path string, bundle []byte) ([]byte, int, error) {
 	var blocks, caCount int
 	var certs []byte
 	rest := bundle
 	for {
-		var block *pem.Block
-		block, rest = pem.Decode(rest)
-		if block == nil {
+		// pem.Decode silently skips a malformed candidate and returns nil
+		// for an undecodable remainder, so locate each BEGIN boundary
+		// here and require that the block it opens decodes on its own.
+		start := bytes.Index(rest, pemBeginBoundary)
+		if start < 0 {
 			break
 		}
+		offset := len(bundle) - len(rest) + start
+		candidate := rest[start:]
+		block, next := pem.Decode(candidate)
+		if block == nil {
+			return nil, 0, ErrDirectBundleMalformedPEM{Path: path, Offset: offset}
+		}
+		consumed := candidate[:len(candidate)-len(next)]
+		if bytes.Contains(consumed[len(pemBeginBoundary):], pemBeginBoundary) {
+			return nil, 0, ErrDirectBundleMalformedPEM{Path: path, Offset: offset}
+		}
+		rest = next
 		blocks++
 		if block.Type != "CERTIFICATE" {
 			return nil, 0, ErrDirectBundleNonCertificateBlock{Path: path, Type: block.Type}
