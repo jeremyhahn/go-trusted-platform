@@ -94,6 +94,14 @@ export type { UseContainerOpsResult } from './use-container-ops';
 
 export { useReportedGateways } from './use-reported-gateways';
 export { useOverlayVteps } from './use-overlay-vteps';
+export { useRegistry, encodeRepository } from './use-registry';
+export type {
+  RegistryHealthCode,
+  RegistryComponent,
+  RegistryStatus,
+  RegistryTags,
+  UseRegistryResult,
+} from './use-registry';
 export type {
   ReportedGateway,
   UseReportedGatewaysOptions,

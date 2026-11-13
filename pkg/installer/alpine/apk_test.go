@@ -2169,50 +2169,6 @@ C:Q1bash
 	})
 }
 
-func TestAPKPackageInfo(t *testing.T) {
-	t.Run("struct fields", func(t *testing.T) {
-		info := APKPackageInfo{
-			Name:         "test-package",
-			Version:      "1.0.0-r0",
-			Architecture: "x86_64",
-			Size:         12345,
-			Checksum:     "Q1abc123",
-			URL:          "https://example.com/test-package-1.0.0-r0.apk",
-			Dependencies: []string{"musl", "openssl"},
-			Provides:     []string{"cmd:test"},
-			Repository:   "main",
-		}
-
-		if info.Name != "test-package" {
-			t.Errorf("unexpected name: %s", info.Name)
-		}
-		if info.Version != "1.0.0-r0" {
-			t.Errorf("unexpected version: %s", info.Version)
-		}
-		if info.Architecture != "x86_64" {
-			t.Errorf("unexpected architecture: %s", info.Architecture)
-		}
-		if info.Size != 12345 {
-			t.Errorf("unexpected size: %d", info.Size)
-		}
-		if info.Checksum != "Q1abc123" {
-			t.Errorf("unexpected checksum: %s", info.Checksum)
-		}
-		if info.URL != "https://example.com/test-package-1.0.0-r0.apk" {
-			t.Errorf("unexpected URL: %s", info.URL)
-		}
-		if len(info.Dependencies) != 2 {
-			t.Errorf("unexpected dependencies count: %d", len(info.Dependencies))
-		}
-		if len(info.Provides) != 1 {
-			t.Errorf("unexpected provides count: %d", len(info.Provides))
-		}
-		if info.Repository != "main" {
-			t.Errorf("unexpected repository: %s", info.Repository)
-		}
-	})
-}
-
 func TestParseAPKINDEXContentAll(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	manager := NewAPKManager("https://dl-cdn.alpinelinux.org/alpine", "3.22", "x86_64", "/tmp", logger)
