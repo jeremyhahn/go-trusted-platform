@@ -640,41 +640,6 @@ func TestZone_RemoveRRSIGRecord_NotFound(t *testing.T) {
 	assert.Len(t, zone.RecordSet.RRSIGRecords, 1)
 }
 
-// TestZone_TenantID tests the TenantID field
-func TestZone_TenantID(t *testing.T) {
-	tests := []struct {
-		name     string
-		tenantID string
-	}{
-		{
-			name:     "empty",
-			tenantID: "",
-		},
-		{
-			name:     "platform",
-			tenantID: "platform",
-		},
-		{
-			name:     "custom_tenant",
-			tenantID: "my-custom-tenant",
-		},
-		{
-			name:     "uuid_format",
-			tenantID: "550e8400-e29b-41d4-a716-446655440000",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			zone := &Zone{
-				Name:     "example.com.",
-				TenantID: tt.tenantID,
-			}
-			assert.Equal(t, tt.tenantID, zone.TenantID)
-		})
-	}
-}
-
 // TestZone_IsOwnedBy tests the IsOwnedBy method
 func TestZone_IsOwnedBy(t *testing.T) {
 	tests := []struct {

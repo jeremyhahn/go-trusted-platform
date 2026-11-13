@@ -445,6 +445,109 @@ export async function mockHealthApi(
   });
 }
 
+// ============================================================================
+// Container registry (#1723)
+// ============================================================================
+
+export interface RegistryApiMockConfig {
+  /** Repository name to its tags. Deleting a tag removes it here. */
+  repositories?: Record<string, string[]>;
+  /** Status payload; Health follows RegistryHealthStatus (1 = healthy). */
+  status?: {
+    Health: number;
+    Version?: string;
+    ReadOnly?: boolean;
+    Components?: { Name?: string; Status?: number }[];
+  };
+  statusError?: ApiError;
+  deleteError?: ApiError;
+}
+
+export interface RegistryApiMockState {
+  repositories: Record<string, string[]>;
+  deleted: string[];
+}
+
+/**
+ * Mock the registry status route and the OCI distribution tag list and
+ * manifest delete routes. Returns the live state so a test can assert
+ * which manifests were deleted.
+ */
+export async function mockRegistryApi(
+  page: Page,
+  config: RegistryApiMockConfig = {}
+): Promise<RegistryApiMockState> {
+  const state: RegistryApiMockState = {
+    repositories: Object.fromEntries(
+      Object.entries(config.repositories ?? {}).map(([k, v]) => [k, [...v]])
+    ),
+    deleted: [],
+  };
+  const status = config.status ?? { Health: 1, Version: '1.0.0', ReadOnly: false, Components: [] };
+
+  await page.route('**/api/v1/compute/images/status*', async (route: Route, request: Request) => {
+    if (request.method() !== 'GET') {
+      await route.continue();
+      return;
+    }
+    if (config.statusError) {
+      await route.fulfill({
+        status: config.statusError.status,
+        contentType: 'application/json',
+        body: errorEnvelope(config.statusError),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ payload: status }),
+    });
+  });
+
+  await page.route('**/v2/**', async (route: Route, request: Request) => {
+    const path = decodeURIComponent(new URL(request.url()).pathname).replace(/\/$/, '');
+    const tagsMatch = /^\/v2\/(.+)\/tags\/list$/.exec(path);
+    if (tagsMatch && request.method() === 'GET') {
+      const name = tagsMatch[1];
+      const tags = state.repositories[name];
+      if (!tags) {
+        await route.fulfill({
+          status: 404,
+          contentType: 'application/json',
+          body: JSON.stringify({ errors: [{ code: 'NAME_UNKNOWN', message: 'repository name not known to registry' }] }),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ name, tags }),
+      });
+      return;
+    }
+    const manifestMatch = /^\/v2\/(.+)\/manifests\/([^/]+)$/.exec(path);
+    if (manifestMatch && request.method() === 'DELETE') {
+      if (config.deleteError) {
+        await route.fulfill({
+          status: config.deleteError.status,
+          contentType: 'application/json',
+          body: errorEnvelope(config.deleteError),
+        });
+        return;
+      }
+      const [, name, reference] = manifestMatch;
+      state.repositories[name] = (state.repositories[name] ?? []).filter((t) => t !== reference);
+      state.deleted.push(`${name}:${reference}`);
+      await route.fulfill({ status: 202, body: '' });
+      return;
+    }
+    await route.continue();
+  });
+
+  return state;
+}
+
 /**
  * Mock all common API endpoints with default configurations.
  *
@@ -668,6 +771,65 @@ export async function mockWebAuthnRegistration(
   });
 }
 
+/** One captured request to a mocked TPM operation route. */
+export interface TPMOpsCall {
+  path: string;
+  method: string;
+  body: unknown;
+}
+
+/** Responses the TPM operations mock returns (#1725). */
+export interface TPMOpsMockConfig {
+  eventLog?: Record<string, unknown>;
+  pcrValues?: Array<{ index: number; value: string }>;
+  makeCredential?: { credentialBlob: string; encryptedSecret: string; secret?: string };
+  activateSecret?: string;
+  randomBytes?: string;
+}
+
+/**
+ * Mock the TPM event log, PCR read and extend, MakeCredential,
+ * ActivateCredential and GetRandom routes. Returns the captured calls.
+ */
+export async function mockTPMOpsApi(
+  page: Page,
+  config: TPMOpsMockConfig = {}
+): Promise<TPMOpsCall[]> {
+  const calls: TPMOpsCall[] = [];
+  const zero = btoa(String.fromCharCode(...new Array(32).fill(0)));
+  const pcrValues =
+    config.pcrValues ?? Array.from({ length: 24 }, (_, index) => ({ index, value: zero }));
+
+  const reply = (path: string, body: unknown) => async (route: Route, request: Request) => {
+    const raw = request.postData();
+    calls.push({ path, method: request.method(), body: raw ? JSON.parse(raw) : undefined });
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+  };
+
+  await page.route(
+    '**/api/v1/tpm/eventlog**',
+    reply('/eventlog', config.eventLog ?? { eventLog: btoa('tcg2-log'), format: 'tcg2' })
+  );
+  await page.route('**/api/v1/tpm/pcrs/extend', reply('/pcrs/extend', { status: {} }));
+  await page.route(/\/api\/v1\/tpm\/pcrs(\?.*)?$/, reply('/pcrs', { pcrValues }));
+  await page.route(
+    '**/api/v1/tpm/make-credential',
+    reply(
+      '/make-credential',
+      config.makeCredential ?? { credentialBlob: btoa('blob'), encryptedSecret: btoa('enc') }
+    )
+  );
+  await page.route(
+    '**/api/v1/tpm/activate-credential',
+    reply('/activate-credential', { secret: config.activateSecret ?? btoa('\x01\x02\x03') })
+  );
+  await page.route(
+    '**/api/v1/tpm/random',
+    reply('/random', { randomBytes: config.randomBytes ?? btoa('\xde\xad\xbe\xef') })
+  );
+  return calls;
+}
+
 /**
  * Create a mock WebAuthn login flow.
  * Mocks the login begin and finish endpoints.
@@ -809,4 +971,105 @@ export async function mockInvitationValidation(
       }),
     });
   });
+}
+
+// ============================================================================
+// Overlay API mock (#1722): VTEPs, VNIs, tunnels, tunnel stats, MAC forget
+// ============================================================================
+
+export interface OverlayApiMockConfig {
+  vteps?: Array<{ nodeId: string; ip: string; healthy: boolean; lastSeen: string }>;
+  vnis?: Array<{ id: string; config: { vni: number; name?: string }; createdAt: string; macCount: number }>;
+  tunnels?: Array<{
+    localVtep: string;
+    remoteVtep: string;
+    vni: number;
+    state: string;
+    bytesTx: number;
+    bytesRx: number;
+  }>;
+  macs?: Array<{ mac: string; vni: number; remoteVtep: string; learnedAt: string }>;
+  /**
+   * Requests to fail, keyed '<METHOD> <path>' (for example 'DELETE /vnis/5001'
+   * or 'GET /vteps'), with the HTTP status to answer. Use a status the client
+   * does not retry (403, not 503).
+   */
+  failures?: Record<string, number>;
+}
+
+/** One request the overlay mock answered: method, path and query. */
+export interface OverlayApiCall {
+  method: string;
+  path: string;
+  query: Record<string, string>;
+}
+
+/**
+ * Mock every /api/v1/overlay route the VTEPs page calls. Returns the list
+ * of calls, in order, so tests can assert on the destructive requests.
+ */
+export async function mockOverlayApi(
+  page: Page,
+  config: OverlayApiMockConfig = {}
+): Promise<OverlayApiCall[]> {
+  const calls: OverlayApiCall[] = [];
+  const vteps = [...(config.vteps ?? [])];
+  let vnis = [...(config.vnis ?? [])];
+  const tunnels = [...(config.tunnels ?? [])];
+  let macs = [...(config.macs ?? [])];
+
+  await page.route(
+    (url) => url.pathname.startsWith('/api/v1/overlay/'),
+    async (route: Route, request: Request) => {
+      const url = new URL(request.url());
+      const method = request.method();
+      const path = url.pathname.replace('/api/v1/overlay', '');
+      const query = Object.fromEntries(url.searchParams.entries());
+      calls.push({ method, path, query });
+      const json = (status: number, body: unknown) =>
+        route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+
+      const failStatus = config.failures?.[`${method} ${path}`];
+      if (failStatus !== undefined) {
+        return json(failStatus, { error: { code: 'forbidden', message: 'denied' } });
+      }
+      if (method === 'GET' && path === '/vteps') return json(200, { vteps });
+      if (method === 'GET' && path.startsWith('/vteps/')) {
+        const nodeId = decodeURIComponent(path.slice('/vteps/'.length));
+        const vtep = vteps.find((v) => v.nodeId === nodeId);
+        return vtep
+          ? json(200, { vtep })
+          : json(404, { error: { code: 'not_found', message: 'vtep not found' } });
+      }
+      if (method === 'GET' && path === '/vnis') return json(200, { vnis });
+      if (method === 'DELETE' && path.startsWith('/vnis/')) {
+        const vni = Number(path.slice('/vnis/'.length));
+        vnis = vnis.filter((v) => v.config.vni !== vni);
+        // Controller.RemoveVNI removes every remote MAC of the VNI too.
+        macs = macs.filter((m) => m.vni !== vni);
+        return json(200, { status: { success: true, message: 'deleted' } });
+      }
+      if (method === 'GET' && path === '/tunnels') return json(200, { tunnels });
+      if (method === 'GET' && path === '/tunnels/stats') {
+        const tunnel = tunnels.find(
+          (t) => t.remoteVtep === query.remote_vtep && String(t.vni) === query.vni
+        );
+        return tunnel
+          ? json(200, { tunnel })
+          : json(404, { error: { code: 'not_found', message: 'tunnel not found' } });
+      }
+      if (method === 'GET' && path === '/macs') {
+        const listed =
+          query.vni !== undefined ? macs.filter((m) => String(m.vni) === query.vni) : macs;
+        return json(200, { macs: listed });
+      }
+      if (method === 'DELETE' && path === '/macs') {
+        macs = macs.filter((m) => !(m.mac === query.mac && String(m.vni) === query.vni));
+        return json(200, { status: { success: true, message: 'forgotten' } });
+      }
+      return route.continue();
+    }
+  );
+
+  return calls;
 }
