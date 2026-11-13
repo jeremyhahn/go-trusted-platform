@@ -10,6 +10,7 @@ const ops = {
   pending: null,
   prepareMigration: vi.fn().mockResolvedValue({ receiverId: "rx-1" }),
   finalizeMigration: vi.fn(),
+  isRegistered: vi.fn().mockResolvedValue(true),
 };
 
 vi.mock("@/hooks", async (importOriginal) => ({
@@ -125,5 +126,51 @@ describe("MigrationsPage receivers", () => {
     await waitFor(() => expect(prepare.disabled).toBe(false));
     fireEvent.click(prepare);
     await waitFor(() => expect(ops.prepareMigration).toHaveBeenCalledTimes(2));
+  });
+});
+
+// #1742: finalize can answer success while the received guest is missing
+// from the host's VM registry, so Commit Migration reports success only when
+// finalize succeeded and ListVMs lists the guest.
+describe("MigrationsPage commit", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+    ops.isRegistered.mockResolvedValue(true);
+  });
+
+  async function prepareAndCommit() {
+    render(<MigrationsPage />);
+    fillSpec();
+    fireEvent.click(screen.getByRole("button", { name: "Prepare Migration" }));
+    await waitFor(() => expect(screen.getByTestId("migration-receiver").textContent).toContain("rx-1"));
+    fireEvent.click(screen.getByRole("button", { name: "Commit Migration" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
+    return screen.findByTestId("migration-finalize-result");
+  }
+
+  it("reports the commit once the guest is registered", async () => {
+    ops.finalizeMigration.mockResolvedValue({ status: { success: true, message: "" } });
+    const result = await prepareAndCommit();
+
+    await waitFor(() => expect(ops.isRegistered).toHaveBeenCalledWith("ops-vm"));
+    expect(result.textContent).toBe("Receiver rx-1 committed: VM ops-vm registered");
+  });
+
+  it("reports a failure when the committed guest is not registered", async () => {
+    ops.finalizeMigration.mockResolvedValue({ status: { success: true, message: "" } });
+    ops.isRegistered.mockResolvedValue(false);
+    const result = await prepareAndCommit();
+
+    await waitFor(() => expect(result.textContent).toContain("not registered"));
+    expect(result.textContent).not.toContain("committed:");
+  });
+
+  it("reports a failure when finalize answers an unsuccessful status", async () => {
+    ops.finalizeMigration.mockResolvedValue({ status: { success: false, message: "resume refused" } });
+    const result = await prepareAndCommit();
+
+    await waitFor(() => expect(result.textContent).toBe("Receiver rx-1 commit failed: resume refused"));
+    expect(ops.isRegistered).not.toHaveBeenCalled();
   });
 });

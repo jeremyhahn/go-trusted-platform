@@ -212,13 +212,17 @@ test.describe('Compute VM operations', () => {
     const api = await mockVMOperationsApi(page, { vmId: VM_ID })
     await mockTenantApi(page)
     await page.goto('/compute/migrations')
+    await page.getByLabel('Guest name').fill('ops-vm')
     await page.getByLabel('Receiver ID').fill('rx-42')
     await page.getByRole('button', { name: 'Commit Migration' }).click()
     const dialog = page.getByRole('dialog')
     await expect(dialog).toContainText('Register and resume the VM received by rx-42?')
     await dialog.getByRole('button', { name: 'Confirm' }).click()
-    await expect(page.getByTestId('migration-finalize-result')).toHaveText('Receiver rx-42 committed')
+    await expect(page.getByTestId('migration-finalize-result')).toHaveText(
+      'Receiver rx-42 committed: VM ops-vm registered',
+    )
     expect(lastCall(api, 'POST', '/migrations/rx-42/finalize')?.body).toEqual({ commit: true })
+    expect(lastCall(api, 'GET', '/vms')).toBeTruthy()
   })
 
   test('the sidebar lists the Migrations page', async ({ page }) => {

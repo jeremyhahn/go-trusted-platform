@@ -13,6 +13,7 @@ const compute = {
         setTimeout(() => resolve({ success: true, data: {} }), DELAY_MS);
       })
   ),
+  listVMs: vi.fn(),
 };
 
 vi.mock("trusted-platform-sdk", async (importOriginal) => ({
@@ -52,5 +53,43 @@ describe("useVMOperations migrate", () => {
     expect(compute.migrateVM).toHaveBeenCalledWith(expect.objectContaining({ vmId: "vm-1" }), {
       timeoutMs: MIGRATION_TIMEOUT_MS,
     });
+  });
+});
+
+// #1742: Commit Migration checks that the received guest is in the host's VM
+// registry; the daemon's VM carries its name in config, and ListVMs pages.
+describe("useVMOperations isRegistered", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const page = (names: string[], pageNo: number, totalPages: number) => ({
+    success: true,
+    data: {
+      vms: names.map((name) => ({ id: `id-${name}`, config: { name } })),
+      pagination: { page: pageNo, pageSize: 1, totalPages, totalItems: totalPages },
+    },
+  });
+
+  it("finds the guest on a later page", async () => {
+    compute.listVMs.mockResolvedValueOnce(page(["other"], 1, 2)).mockResolvedValueOnce(page(["ops-vm"], 2, 2));
+    const { result } = renderHook(() => useVMOperations());
+
+    await expect(result.current.isRegistered("ops-vm")).resolves.toBe(true);
+    expect(compute.listVMs).toHaveBeenCalledTimes(2);
+  });
+
+  it("answers false when no page lists the guest", async () => {
+    compute.listVMs.mockResolvedValueOnce(page(["other"], 1, 1));
+    const { result } = renderHook(() => useVMOperations());
+
+    await expect(result.current.isRegistered("ops-vm")).resolves.toBe(false);
+  });
+
+  it("answers false when ListVMs fails", async () => {
+    compute.listVMs.mockResolvedValueOnce({ success: false, error: { message: "down" } });
+    const { result } = renderHook(() => useVMOperations());
+
+    await expect(result.current.isRegistered("ops-vm")).resolves.toBe(false);
   });
 });
