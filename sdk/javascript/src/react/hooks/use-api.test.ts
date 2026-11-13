@@ -380,18 +380,20 @@ describe('useApi', () => {
   });
 
   describe('initialData', () => {
-    it('serves initialData without a loading state and replaces it after the fetch', async () => {
+    it('shows initialData while the first fetch is pending, then replaces it after the fetch', async () => {
       const d = deferred<ApiResponse<string>>();
       const { result } = renderHook(
         () => useApi(() => d.promise, [], { initialData: 'seed' }),
         undefined
       );
+      await flush();
       expect(result.current.data).toBe('seed');
-      expect(result.current.isLoading).toBe(false);
+      expect(result.current.isLoading).toBe(true);
       expect(result.current.isSuccess).toBe(false);
 
       d.resolve(ok('fresh'));
       await flush();
+      expect(result.current.isLoading).toBe(false);
       expect(result.current.data).toBe('fresh');
       expect(result.current.isSuccess).toBe(true);
     });
