@@ -157,6 +157,9 @@ func (r *runner) listCommand() *cobra.Command {
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if cmd.Flags().Changed("vlan") && (vlan < minTargetVLAN || vlan > maxTargetVLAN) {
+				return &ErrInvalidVLANFilter{Value: vlan}
+			}
 			filter := &platformv1.PXEDeviceFilter{MacAddress: mac, Vlan: vlan, Limit: limit, Offset: offset}
 			if state != "" {
 				parsed, err := parseState(state)
@@ -220,6 +223,24 @@ func (r *runner) authorizeCommand() *cobra.Command {
 				return &ErrInvalidTargetVLAN{Value: targetVLAN}
 			}
 			return r.call(cmd, "Authorize", func(ctx context.Context, c platformv1.PXEServiceClient) (any, *cli.TableData, error) {
+				// The service authorizes only a device in authorizing; an
+				// enrolled device is first moved there through UpdateState,
+				// which applies the service's own transition checks. Any
+				// other state goes to Authorize unchanged for the service
+				// to refuse.
+				cur, err := c.GetDevice(ctx, &platformv1.GetPXEDeviceRequest{DeviceId: id})
+				if err != nil {
+					return nil, nil, err
+				}
+				if cur.GetDevice().GetState() == platformv1.ProvisioningState_PROVISIONING_STATE_ENROLLED {
+					if _, err := c.UpdateState(ctx, &platformv1.UpdatePXEStateRequest{
+						DeviceId: id,
+						State:    platformv1.ProvisioningState_PROVISIONING_STATE_AUTHORIZING,
+						Reason:   "authorize requested via platformctl pxe",
+					}); err != nil {
+						return nil, nil, err
+					}
+				}
 				resp, err := c.Authorize(ctx, &platformv1.AuthorizePXEDeviceRequest{DeviceId: id, TargetVlan: targetVLAN})
 				if err != nil {
 					return nil, nil, err

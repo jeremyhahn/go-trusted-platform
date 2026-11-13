@@ -36,6 +36,17 @@ func (e *ErrInvalidTargetVLAN) Error() string {
 	return fmt.Sprintf("--target-vlan %d is out of range (1-4094)", e.Value)
 }
 
+// ErrInvalidVLANFilter is a list --vlan outside 1-4094. The daemon narrows
+// the filter VLAN to 16 bits, so an unchecked 65556 would select VLAN 20 and
+// 65536 would drop the filter.
+type ErrInvalidVLANFilter struct {
+	Value uint32
+}
+
+func (e *ErrInvalidVLANFilter) Error() string {
+	return fmt.Sprintf("--vlan %d is out of range (1-4094)", e.Value)
+}
+
 type ErrDeviceIDRequired struct {
 	Verb string
 }
