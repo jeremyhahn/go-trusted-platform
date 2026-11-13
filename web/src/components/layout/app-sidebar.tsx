@@ -18,12 +18,7 @@ import {
   LogOut,
   User,
   Database,
-  HardDrive,
-  Key,
   FileCheck,
-  Globe,
-  Radio,
-  Activity,
   Fingerprint,
   PackageCheck,
 } from "lucide-react";
