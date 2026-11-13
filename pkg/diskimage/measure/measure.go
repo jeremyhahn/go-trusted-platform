@@ -10,11 +10,14 @@
 package measure
 
 import (
+	"bytes"
 	"crypto"
 	_ "crypto/sha1"   // registers SHA-1 for crypto.Hash.Available
 	_ "crypto/sha256" // registers SHA-256 for crypto.Hash.Available
 	_ "crypto/sha512" // registers SHA-384 and SHA-512 for crypto.Hash.Available
 	"encoding/binary"
+	"fmt"
+	"regexp"
 	"unicode/utf16"
 )
 
@@ -185,4 +188,101 @@ func PredictPCR9(h crypto.Hash, loadOptions, initrd []byte) ([]byte, error) {
 		events = append(events, loadOptions)
 	}
 	return replayEvents(h, append(events, initrd)...)
+}
+
+// PredictPCR0 replays PCR 0 under U-Boot: the EV_S_CRTM_VERSION event of
+// U-Boot's version string with its NUL terminator (efi_append_scrtm_version),
+// then the separator U-Boot measures when it starts the boot application.
+func PredictPCR0(h crypto.Hash, ubootVersion string) ([]byte, error) {
+	if ubootVersion == "" {
+		return nil, &MissingInputError{PCR: 0, Input: "the U-Boot version"}
+	}
+	return replayEvents(h, append([]byte(ubootVersion), 0), separatorData)
+}
+
+// ubootVersionPattern matches U_BOOT_VERSION_STRING with its terminator:
+// "U-Boot <version> (<%b %d %Y> - <%T> <%z>)<CONFIG_IDENT_STRING>".
+var ubootVersionPattern = regexp.MustCompile(`U-Boot \d{4}\.\d{2}[^\x00 ]* \([A-Z][a-z]{2} \d{2} \d{4} - \d{2}:\d{2}:\d{2} [+-]\d{4}\)[^\x00]*\x00`)
+
+// UBootVersion reads U-Boot's version string, the data of its PCR 0
+// EV_S_CRTM_VERSION event, from a U-Boot binary. A binary without one, or
+// with two different ones, is refused.
+func UBootVersion(binary []byte) (string, error) {
+	matches := ubootVersionPattern.FindAll(binary, -1)
+	if len(matches) == 0 {
+		return "", &MalformedImageError{Reason: "no U-Boot version string"}
+	}
+	for _, m := range matches[1:] {
+		if !bytes.Equal(m, matches[0]) {
+			return "", &MalformedImageError{Reason: "two different U-Boot version strings"}
+		}
+	}
+	return string(matches[0][:len(matches[0])-1]), nil
+}
+
+// PredictPCR4 replays PCR 4 under U-Boot: the Authenticode digest of the
+// boot application U-Boot loads (the UKI), the "Calling EFI Application
+// from Boot Option" action and the separator U-Boot measures when it starts
+// it, then the Authenticode digest of each image the application loads, in
+// order (the kernel systemd-stub hands to LoadImage; see UKIKernel).
+func PredictPCR4(h crypto.Hash, bootApp []byte, loaded ...[]byte) ([]byte, error) {
+	if len(bootApp) == 0 {
+		return nil, &MissingInputError{PCR: 4, Input: "the boot application"}
+	}
+	app, err := AuthenticodeDigest(h, bootApp)
+	if err != nil {
+		return nil, err
+	}
+	action, _ := ActionDigest(h, ActionCallingEFIApplication)
+	separator, _ := SeparatorDigest(h)
+	digests := [][]byte{app, action, separator}
+	for _, image := range loaded {
+		d, err := AuthenticodeDigest(h, image)
+		if err != nil {
+			return nil, err
+		}
+		digests = append(digests, d)
+	}
+	return Replay(h, digests...)
+}
+
+// ukiMeasuredSections is the order in which systemd-stub measures UKI
+// sections into PCR 11: systemd's unified_sections[] up to .pcrpkey,
+// without .pcrsig, which the stub does not measure.
+var ukiMeasuredSections = []string{
+	".linux", ".osrel", ".cmdline", ".initrd", ".ucode", ".splash",
+	".dtb", ".uname", ".sbat", ".pcrpkey",
+}
+
+// ukiBootTimeSections are UKI sections among which the stub chooses at boot
+// (profiles, automatic device trees, hardware IDs). What it measures then
+// depends on the device, not on the image, so such a UKI is refused.
+var ukiBootTimeSections = []string{".profile", ".dtbauto", ".hwids", ".efifw"}
+
+// PredictPCR11 replays PCR 11 as systemd-stub extends it from a UKI: for
+// each section the UKI has, in the stub's order, the section name with its
+// NUL terminator, then the section's in-memory contents.
+func PredictPCR11(h crypto.Hash, uki []byte) ([]byte, error) {
+	if err := checkHash(h); err != nil {
+		return nil, err
+	}
+	sections, err := ukiSections(uki)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range ukiBootTimeSections {
+		if _, ok := sections[name]; ok {
+			return nil, &MalformedImageError{Reason: fmt.Sprintf("the UKI has a %s section, chosen among at boot", name)}
+		}
+	}
+	if _, ok := sections[".linux"]; !ok {
+		return nil, &MissingInputError{PCR: 11, Input: "the UKI's .linux section"}
+	}
+	var events [][]byte
+	for _, name := range ukiMeasuredSections {
+		if data, ok := sections[name]; ok {
+			events = append(events, append([]byte(name), 0), data)
+		}
+	}
+	return replayEvents(h, events...)
 }

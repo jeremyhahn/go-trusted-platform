@@ -34,3 +34,13 @@ type MissingInputError struct {
 func (e *MissingInputError) Error() string {
 	return fmt.Sprintf("measure: PCR %d cannot be predicted without %s", e.PCR, e.Input)
 }
+
+// MalformedImageError is a PE/COFF image, or a U-Boot binary, the
+// predictors cannot read.
+type MalformedImageError struct {
+	Reason string
+}
+
+func (e *MalformedImageError) Error() string {
+	return "measure: malformed image: " + e.Reason
+}

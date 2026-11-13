@@ -232,6 +232,7 @@ func TestErrorMessages(t *testing.T) {
 		&UnsupportedBankError{Hash: crypto.MD4},
 		&DigestSizeError{Hash: crypto.SHA256, Index: 2, Got: 20},
 		&MissingInputError{PCR: 7, Input: "PK"},
+		&MalformedImageError{Reason: "no MZ header"},
 	} {
 		if err.Error() == "" {
 			t.Fatalf("%T has an empty message", err)
