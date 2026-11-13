@@ -328,7 +328,9 @@ func newGatedTestRouter(t *testing.T, registry *testHandlerRegistry) *mux.Router
 	registry.overlayService = &stubOverlayServer{}
 	registry.switchService = &stubSwitchService{}
 	registry.sdnService = &stubSDNServer{}
-	registry.bmcHandler = stubBMCHandler{}
+	if registry.bmcHandler == nil {
+		registry.bmcHandler = stubBMCHandler{}
+	}
 	registry.gatewayService = &stubGatewayServer{}
 	registry.gatewayStore = &stubGatewayStore{}
 	registry.configDelivery = &stubConfigDelivery{}
@@ -339,7 +341,9 @@ func newGatedTestRouter(t *testing.T, registry *testHandlerRegistry) *mux.Router
 	registry.attestationService = &stubAttestationServer{}
 	registry.deviceGRPCService = &stubDeviceGRPCServer{}
 	registry.deviceTemplateService = &stubDeviceTemplateService{}
-	registry.deviceProfileService = &stubDeviceProfileService{}
+	if registry.deviceProfileService == nil {
+		registry.deviceProfileService = &stubDeviceProfileService{}
+	}
 	registry.invitationService = &stubInvitationServer{}
 	registry.iamClient = &probeIAM{}
 	registry.pepClient = &probePEP{}
