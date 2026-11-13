@@ -341,16 +341,19 @@ func TestEAB_CreateCredential_HappyPath(t *testing.T) {
 	}
 }
 
-func TestEAB_CreateCredential_RequiresExpiry(t *testing.T) {
+func TestEAB_CreateCredential_NoExpiry(t *testing.T) {
 	svc := newFakeEABService()
 	p := newEABProvider(svc, nil)
-	_, err := p.EABCreateCredential(context.Background(), 1, "t", 0, 0)
-	var target eab.ErrInvalidExpiresAt
-	if !errors.As(err, &target) {
-		t.Fatalf("expected ErrInvalidExpiresAt for a missing expiry, got %v", err)
+	result, err := p.EABCreateCredential(context.Background(), 1, "t", 0, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if svc.lastGenerate.ProfileID != 0 {
-		t.Errorf("Generate must not be called without an expiry, got %+v", svc.lastGenerate)
+	m := result.(map[string]interface{})
+	if _, has := m["expires_at"]; has {
+		t.Error("expected no expires_at field when expiresInSeconds=0")
+	}
+	if svc.lastGenerate.ExpiresIn != 0 {
+		t.Errorf("expected ExpiresIn=0, got %v", svc.lastGenerate.ExpiresIn)
 	}
 }
 
@@ -358,7 +361,7 @@ func TestEAB_CreateCredential_PropagatesError(t *testing.T) {
 	svc := newFakeEABService()
 	svc.errGenerate = eab.ErrInvalidProfileID{ProfileID: 0}
 	p := newEABProvider(svc, nil)
-	_, err := p.EABCreateCredential(context.Background(), 0, "", 3600, 0)
+	_, err := p.EABCreateCredential(context.Background(), 0, "", 0, 0)
 	if err == nil {
 		t.Fatal("expected error from underlying service")
 	}

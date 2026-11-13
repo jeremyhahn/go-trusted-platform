@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { parseExpiresIn } from "./eab-expiry";
 
 describe("parseExpiresIn", () => {
-  it("refuses a blank input: an expiry is required", () => {
-    expect(parseExpiresIn("")).toEqual({ ok: false });
-    expect(parseExpiresIn("   ")).toEqual({ ok: false });
+  it("leaves the expiry unset for a blank input", () => {
+    expect(parseExpiresIn("")).toEqual({ ok: true });
+    expect(parseExpiresIn("   ")).toEqual({ ok: true });
   });
 
   it("accepts a positive whole number of seconds", () => {

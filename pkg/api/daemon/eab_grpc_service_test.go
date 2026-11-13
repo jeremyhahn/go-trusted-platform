@@ -194,34 +194,36 @@ func TestEABGRPCService_CreateCredential_Errors(t *testing.T) {
 		t.Errorf("negative expiry: expected InvalidArgument, got %v", err)
 	}
 
-	// A missing (zero) expiry is refused before Generate: no credential is
-	// ever issued without an expiration.
-	if _, err := service.CreateCredential(ctx, &platformv1.CreateEABCredentialRequest{
-		ProfileId: 1,
-		TenantId:  "t",
-	}); status.Code(err) != codes.InvalidArgument {
-		t.Errorf("missing expiry: expected InvalidArgument, got %v", err)
-	}
-	if svc.lastGenerate.ProfileID != 0 {
-		t.Errorf("missing expiry: Generate must not be reached, got %+v", svc.lastGenerate)
-	}
-
 	// Typed domain errors map through the matcher table.
 	svc.errGenerate = eab.ErrInvalidProfileID{ProfileID: 0}
 	if _, err := service.CreateCredential(ctx, &platformv1.CreateEABCredentialRequest{
-		TenantId:         "t",
-		ExpiresInSeconds: 3600,
+		TenantId: "t",
 	}); status.Code(err) != codes.InvalidArgument {
 		t.Errorf("invalid profile: expected InvalidArgument, got %v", err)
 	}
 
 	svc.errGenerate = eab.ErrKeyGenerationFailed{Cause: context.Canceled}
 	if _, err := service.CreateCredential(ctx, &platformv1.CreateEABCredentialRequest{
-		ProfileId:        1,
-		TenantId:         "t",
-		ExpiresInSeconds: 3600,
+		ProfileId: 1,
+		TenantId:  "t",
 	}); status.Code(err) != codes.Internal {
 		t.Errorf("keygen failure: expected Internal, got %v", err)
+	}
+}
+
+// TestEABGRPCService_CreateCredential_NoExpiry pins the documented contract
+// (docs/eab/api.md §3): a request with only profile_id and tenant_id issues
+// a non-expiring credential.
+func TestEABGRPCService_CreateCredential_NoExpiry(t *testing.T) {
+	service, svc, _ := newEABGRPCFixture()
+	if _, err := service.CreateCredential(context.Background(), &platformv1.CreateEABCredentialRequest{
+		ProfileId: 1,
+		TenantId:  "t",
+	}); err != nil {
+		t.Fatalf("omitted expiry: unexpected error %v", err)
+	}
+	if svc.lastGenerate.ProfileID != 1 || svc.lastGenerate.ExpiresIn != 0 {
+		t.Errorf("omitted expiry: expected Generate with ProfileID=1 ExpiresIn=0, got %+v", svc.lastGenerate)
 	}
 }
 
