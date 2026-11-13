@@ -40,7 +40,7 @@ section from neither (see *Supervised handlers* below):
 
 | Table | Type | `Start` | `IsActive` / `Health` |
 |---|---|---|---|
-| `serviceBuilders` (`overlay`, `firewall`, `nat`, `load-balancer`, `hostfw`, `tunnels`, `transit`, `management-vpn`) | `backedServiceHandler` | builds the backend; a build or start failure returns the backend's error and leaves nothing registered | the built backend's own `Active` / `Healthy` |
+| `serviceBuilders` (`overlay`, `firewall`, `nat`, `nat64`, `load-balancer`, `hostfw`, `fhrp`, `tunnels`, `transit`, `management-vpn`) | `backedServiceHandler` | builds the backend; a build or start failure returns the backend's error and leaves nothing registered | the built backend's own `Active` / `Healthy` |
 | `serviceRefusals` (`edge`, `dhcp`, `pxe`) | `refusedServiceHandler` | `ErrServiceUnavailable{Service, Reason}` | `false` / `ErrServiceUnavailable` |
 
 Every refusal reason says the service is **planned**, cites no issue number
@@ -62,9 +62,9 @@ lifecycle does not already fit) — never a handler type of its own, and never a
 handler that reports active without a backend.
 
 The builder ordering is `EnabledServices()` in `types.go`: firewall, nat,
-load-balancer, nat64, hostfw, tunnels, transit, overlay, the refused sections
-(edge, dhcp, pxe), then management-vpn. Tunnels start before transit so BGP
-sessions have their interfaces. A section that fails to start, refused or not,
+load-balancer, nat64, hostfw, tunnels, fhrp, transit, overlay, the refused
+sections (edge, dhcp, pxe), then management-vpn. Tunnels start before fhrp and
+transit so VRRP groups and BGP sessions have their interfaces. A section that fails to start, refused or not,
 fails startup: the services already started are stopped again
 (`rollbackStartedServices`) and the base pipeline is removed.
 
