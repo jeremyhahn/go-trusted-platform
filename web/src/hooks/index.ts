@@ -107,6 +107,12 @@ export {
 export type { UseContainerOpsResult } from './use-container-ops';
 export { useVMOperations, attestationNonce } from './use-vm-operations';
 export type { UseVMOperationsResult } from './use-vm-operations';
+export { useAttestationCollect, newAttestationNonce } from './use-attestation-collect';
+export type {
+  AttestationCollectOperation,
+  AttestationCollectState,
+  UseAttestationCollectResult,
+} from './use-attestation-collect';
 
 export { useReportedGateways } from './use-reported-gateways';
 
