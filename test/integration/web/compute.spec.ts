@@ -142,9 +142,6 @@ test.describe('Snapshots Page', () => {
 
       await authenticatedPage.waitForLoadState('networkidle');
 
-      // Wait for loading to complete
-      await authenticatedPage.waitForTimeout(1000);
-
       // Should have statistics cards
       const totalSnapshotsCard = authenticatedPage.locator('text=Total Snapshots');
       await expect(totalSnapshotsCard).toBeVisible();
@@ -177,8 +174,7 @@ test.describe('Snapshots Page', () => {
     test('should display snapshot rows in table', async ({ authenticatedPage }) => {
       await authenticatedPage.goto('/compute/snapshots');
 
-      // Wait for data to load (internal mock data uses setTimeout)
-      await authenticatedPage.waitForTimeout(1000);
+      await expect(authenticatedPage.locator('main')).toBeVisible();
 
       const tableBody = authenticatedPage.locator('tbody');
       await expect(tableBody).toBeVisible();
@@ -192,7 +188,7 @@ test.describe('Snapshots Page', () => {
     test('should display snapshot status badges', async ({ authenticatedPage }) => {
       await authenticatedPage.goto('/compute/snapshots');
 
-      await authenticatedPage.waitForTimeout(1000);
+      await expect(authenticatedPage.locator('main')).toBeVisible();
 
       // Look for status text in badges
       const statusBadge = authenticatedPage.locator('text=/available|creating|restoring|error/i').first();
@@ -203,7 +199,7 @@ test.describe('Snapshots Page', () => {
     test('should display source type badges', async ({ authenticatedPage }) => {
       await authenticatedPage.goto('/compute/snapshots');
 
-      await authenticatedPage.waitForTimeout(1000);
+      await expect(authenticatedPage.locator('main')).toBeVisible();
 
       // Look for type text in badges (VM or CONTAINER)
       const typeBadge = authenticatedPage.locator('text=/VM|CONTAINER/').first();
@@ -214,7 +210,7 @@ test.describe('Snapshots Page', () => {
     test('should display action dropdown menu', async ({ authenticatedPage }) => {
       await authenticatedPage.goto('/compute/snapshots');
 
-      await authenticatedPage.waitForTimeout(1000);
+      await expect(authenticatedPage.locator('main')).toBeVisible();
 
       // Find action button in table row
       const actionButton = authenticatedPage.locator('tbody button').first();
@@ -246,20 +242,19 @@ test.describe('Snapshots Page', () => {
     test('should filter snapshots by status', async ({ authenticatedPage }) => {
       await authenticatedPage.goto('/compute/snapshots');
 
-      await authenticatedPage.waitForTimeout(1000);
+      await expect(authenticatedPage.locator('main')).toBeVisible();
 
       // Find and click the status filter dropdown
       const statusSelect = authenticatedPage.locator('button[role="combobox"]').first();
       await statusSelect.click();
 
-      // Wait for dropdown to open
-      await authenticatedPage.waitForTimeout(300);
+      await expect(statusSelect).toHaveAttribute('aria-expanded', 'true');
 
       // Select 'Available' option
       const availableOption = authenticatedPage.locator('div[role="option"]:has-text("Available")');
       if ((await availableOption.count()) > 0) {
         await availableOption.click();
-        await authenticatedPage.waitForTimeout(500);
+        await expect(statusSelect).toHaveAttribute('aria-expanded', 'false');
       }
 
       // Filter should be applied without crashing
@@ -270,19 +265,19 @@ test.describe('Snapshots Page', () => {
     test('should filter snapshots by type', async ({ authenticatedPage }) => {
       await authenticatedPage.goto('/compute/snapshots');
 
-      await authenticatedPage.waitForTimeout(1000);
+      await expect(authenticatedPage.locator('main')).toBeVisible();
 
       // Find the type filter (second combobox)
       const typeSelect = authenticatedPage.locator('button[role="combobox"]').nth(1);
       await typeSelect.click();
 
-      await authenticatedPage.waitForTimeout(300);
+      await expect(typeSelect).toHaveAttribute('aria-expanded', 'true');
 
       // Select 'VM' option
       const vmOption = authenticatedPage.locator('div[role="option"]:has-text("VM")');
       if ((await vmOption.count()) > 0) {
         await vmOption.click();
-        await authenticatedPage.waitForTimeout(500);
+        await expect(typeSelect).toHaveAttribute('aria-expanded', 'false');
       }
 
       const main = authenticatedPage.locator('main');
