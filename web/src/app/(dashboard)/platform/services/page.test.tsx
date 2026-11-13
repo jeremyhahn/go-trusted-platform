@@ -193,6 +193,33 @@ describe("ServicesPage daemon controls", () => {
     expect(panel).not.toContain("Uptime: 5m");
   });
 
+  it("a service list read started before a stop never overwrites the post-stop list", async () => {
+    let resolveRefresh: (v: unknown) => void = () => {};
+    platform.listServices
+      .mockImplementationOnce(() =>
+        ok({ services: [{ name: "dns", status: "running" }, { name: "pxe", status: "stopped" }], count: 2 })
+      )
+      .mockImplementationOnce(() => new Promise((r) => (resolveRefresh = r)) as never)
+      .mockImplementationOnce(() =>
+        ok({ services: [{ name: "dns", status: "stopped" }, { name: "pxe", status: "stopped" }], count: 2 })
+      );
+    await renderPage();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(platform.listServices).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByLabelText("Stop dns"));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    await waitFor(() => expect(platform.listServices).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(screen.getByTestId("service-row-dns").textContent).toContain("stopped"));
+    await act(async () => {
+      resolveRefresh({
+        success: true,
+        data: { services: [{ name: "dns", status: "running" }, { name: "pxe", status: "stopped" }], count: 2 },
+      });
+    });
+    expect(screen.getByTestId("service-row-dns").textContent).toContain("stopped");
+    expect(screen.getByTestId("service-row-dns").textContent).not.toContain("running");
+  });
+
   it("Refresh re-reads the open details", async () => {
     platform.getServiceStatus
       .mockImplementationOnce(() => ok({ name: "dns", status: "running", uptime: "5m" }))
