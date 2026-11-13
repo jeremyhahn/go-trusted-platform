@@ -1796,3 +1796,45 @@ func TestCAHandlers_RegisterRoutes(t *testing.T) {
 		})
 	}
 }
+
+// The two registrars split the CA routes between them: a caller that mounts
+// the certificate routes behind its own guard gets exactly the six, and the
+// authority registrar gets the rest.
+func TestCAHandlers_SplitRegistrarsPartitionTheRoutes(t *testing.T) {
+	walk := func(register func(*mux.Router)) []string {
+		router := mux.NewRouter()
+		register(router)
+		var routes []string
+		require.NoError(t, router.Walk(func(route *mux.Route, _ *mux.Router, _ []*mux.Route) error {
+			path, err := route.GetPathTemplate()
+			if err != nil {
+				return err
+			}
+			methods, err := route.GetMethods()
+			if err != nil {
+				return err
+			}
+			for _, method := range methods {
+				routes = append(routes, method+" "+path)
+			}
+			return nil
+		}))
+		return routes
+	}
+	handlers := NewCAHandlers(newMockCAService(), nil, nil)
+
+	assert.ElementsMatch(t, []string{
+		"POST /api/v1/ca/certificates",
+		"GET /api/v1/ca/certificates",
+		"GET /api/v1/ca/certificates/{serial}",
+		"POST /api/v1/ca/certificates/{serial}/revoke",
+		"POST /api/v1/ca/certificates/{serial}/renew",
+		"POST /api/v1/ca/certificates/verify",
+	}, walk(handlers.RegisterCertificateRoutes))
+	assert.ElementsMatch(t, []string{
+		"GET /api/v1/ca/info",
+		"POST /api/v1/ca/sign-csr",
+		"GET /api/v1/ca/crl",
+		"GET /api/v1/ca/bundle",
+	}, walk(handlers.RegisterAuthorityRoutes))
+}

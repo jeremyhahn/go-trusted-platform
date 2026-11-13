@@ -501,9 +501,30 @@ func NewCAHandlers(ca CAServiceInterface, logger *slog.Logger, objStorage object
 
 // RegisterRoutes registers all CA routes on the provided router.
 func (h *CAHandlers) RegisterRoutes(router *mux.Router) {
+	h.RegisterAuthorityRoutes(router)
+	h.RegisterCertificateRoutes(router)
+	h.logger.Info("CA REST routes registered")
+}
+
+// RegisterAuthorityRoutes registers the CA's own routes: its information,
+// CRL and bundle, and code-signing certification from a CSR. The sign-csr
+// route carries its own token guard.
+func (h *CAHandlers) RegisterAuthorityRoutes(router *mux.Router) {
 	// CA information
 	router.HandleFunc("/api/v1/ca/info", h.handleGetCAInfo).Methods(http.MethodGet)
 
+	// Code-signing certification of a KMS key from its CSR. A client
+	// certificate alone never certifies a code-signing key (#691).
+	router.HandleFunc("/api/v1/ca/sign-csr", h.guard.RequireToken(issuance.SignCSRScope, h.handleSignCSR)).Methods(http.MethodPost)
+
+	// CRL and bundle
+	router.HandleFunc("/api/v1/ca/crl", h.handleGetCRL).Methods(http.MethodGet)
+	router.HandleFunc("/api/v1/ca/bundle", h.handleGetCABundle).Methods(http.MethodGet)
+}
+
+// RegisterCertificateRoutes registers the certificate routes under
+// /api/v1/ca/certificates, so a caller can mount them behind its own guard.
+func (h *CAHandlers) RegisterCertificateRoutes(router *mux.Router) {
 	// Certificate CRUD operations
 	router.HandleFunc("/api/v1/ca/certificates", h.handleIssueCertificate).Methods(http.MethodPost)
 	router.HandleFunc("/api/v1/ca/certificates", h.handleListCertificates).Methods(http.MethodGet)
@@ -511,18 +532,8 @@ func (h *CAHandlers) RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/v1/ca/certificates/{serial}/revoke", h.handleRevokeCertificate).Methods(http.MethodPost)
 	router.HandleFunc("/api/v1/ca/certificates/{serial}/renew", h.handleRenewCertificate).Methods(http.MethodPost)
 
-	// Code-signing certification of a KMS key from its CSR. A client
-	// certificate alone never certifies a code-signing key (#691).
-	router.HandleFunc("/api/v1/ca/sign-csr", h.guard.RequireToken(issuance.SignCSRScope, h.handleSignCSR)).Methods(http.MethodPost)
-
 	// Certificate verification
 	router.HandleFunc("/api/v1/ca/certificates/verify", h.handleVerifyCertificate).Methods(http.MethodPost)
-
-	// CRL and bundle
-	router.HandleFunc("/api/v1/ca/crl", h.handleGetCRL).Methods(http.MethodGet)
-	router.HandleFunc("/api/v1/ca/bundle", h.handleGetCABundle).Methods(http.MethodGet)
-
-	h.logger.Info("CA REST routes registered")
 }
 
 // =============================================================================

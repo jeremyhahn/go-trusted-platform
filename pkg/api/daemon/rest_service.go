@@ -36,9 +36,11 @@ import (
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ca/issuance"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restgateway "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/gateway"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -266,21 +268,15 @@ func (s *RESTServer) registerRoutes() {
 
 	// Health and status endpoints (also available under /api/v1 for consistency)
 	api.HandleFunc("/health", s.handleHealth).Methods(http.MethodGet)
-	api.HandleFunc("/status", s.handleStatus).Methods(http.MethodGet)
-	api.HandleFunc("/version", s.handleVersion).Methods(http.MethodGet)
 
-	// Service management endpoints
-	api.HandleFunc("/services", s.handleListServices).Methods(http.MethodGet)
-	api.HandleFunc("/services/{service}", s.handleGetService).Methods(http.MethodGet)
-	api.HandleFunc("/services/{service}/start", s.handleStartService).Methods(http.MethodPost)
-	api.HandleFunc("/services/{service}/stop", s.handleStopService).Methods(http.MethodPost)
-	api.HandleFunc("/services/{service}/restart", s.handleRestartService).Methods(http.MethodPost)
+	// The status, version and service-control routes are mounted behind the
+	// scope guard by SetDaemonRoutes.
 
 	// Protocol status endpoint
 	api.HandleFunc("/protocols", s.handleProtocols).Methods(http.MethodGet)
 
-	// Register IDevID/IAK routes
-	s.registerIDevIDRoutes()
+	// The IDevID, IAK and LDevID routes are mounted behind the scope guard
+	// by SetIDevIDRoutes.
 
 	s.logger.Info("REST routes registered", "basePath", restBasePath)
 }
@@ -319,14 +315,43 @@ func (s *RESTServer) SetConfigDeliveryHandler(handler configdelivery.RestHandler
 }
 
 // SetBMCHandler sets the BMC handler and registers bare metal management
-// routes on the daemon's REST API.
-func (s *RESTServer) SetBMCHandler(handler bmcwebsvc.RestHandler) {
+// routes on the daemon's REST API behind guard, each needing the scope the
+// gRPC catalog gives its BMCService rpc. A nil handler mounts nothing; a
+// handler without a guard is refused with ErrBMCRESTUnavailable.
+// SetDaemonRoutes mounts the daemon's own status, version and service-control
+// routes behind guard. Each route needs the scope the gRPC catalog gives its
+// PlatformDaemon rpc. A nil guard mounts nothing and returns
+// ErrDaemonRESTUnavailable.
+func (s *RESTServer) SetDaemonRoutes(guard *restapi.ScopeGuard) error {
+	if guard == nil {
+		return ErrDaemonRESTUnavailable{Reason: "no REST scope guard"}
+	}
+
+	api := s.catalogGuardedAPI(guard)
+	api.HandleFunc("/status", s.handleStatus).Methods(http.MethodGet)
+	api.HandleFunc("/version", s.handleVersion).Methods(http.MethodGet)
+	api.HandleFunc("/services", s.handleListServices).Methods(http.MethodGet)
+	api.HandleFunc("/services/{service}", s.handleGetService).Methods(http.MethodGet)
+	api.HandleFunc("/services/{service}/start", s.handleStartService).Methods(http.MethodPost)
+	api.HandleFunc("/services/{service}/stop", s.handleStopService).Methods(http.MethodPost)
+	api.HandleFunc("/services/{service}/restart", s.handleRestartService).Methods(http.MethodPost)
+
+	s.logger.Info("daemon status and service routes registered")
+	return nil
+}
+
+func (s *RESTServer) SetBMCHandler(handler bmcwebsvc.RestHandler, guard *restapi.ScopeGuard) error {
 	if handler == nil {
-		return
+		return nil
+	}
+	if guard == nil {
+		return ErrBMCRESTUnavailable{Reason: "no REST scope guard"}
 	}
 	s.bmcHandler = handler
 
-	api := s.router.PathPrefix(restBasePath).Subrouter()
+	// Each route needs the scope the gRPC catalog gives its BMCService rpc;
+	// POST /power needs the scope of the rpc its body's action names.
+	api := s.catalogGuardedAPI(guard)
 	api.HandleFunc("/bmc/{profileID:[0-9]+}/power", handler.PowerAction).Methods(http.MethodPost)
 	api.HandleFunc("/bmc/{profileID:[0-9]+}/power", handler.PowerStatus).Methods(http.MethodGet)
 	api.HandleFunc("/bmc/{profileID:[0-9]+}/boot-device", handler.SetBootDevice).Methods(http.MethodPost)
@@ -349,6 +374,7 @@ func (s *RESTServer) SetBMCHandler(handler bmcwebsvc.RestHandler) {
 	api.HandleFunc("/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/privilege", handler.SetUserPrivilege).Methods(http.MethodPut)
 
 	s.logger.Info("BMC management routes registered")
+	return nil
 }
 
 // SetNTPHandlers wires the time-synchronization REST handlers onto the
@@ -419,21 +445,29 @@ func (s *RESTServer) SetAppServiceHandlers(servers restapi.AppServiceServers, gu
 // not registered at all. Before #403 the REST package carried its own
 // "verifier" that returned true for any input, so this route reported every
 // device attested.
-func (s *RESTServer) SetDeviceHandlers(
-	deviceSvc restapi.DeviceServiceInterface,
-	profileSvc restapi.ProfileServiceInterface,
-	attestSvc platformv1.DeviceServiceServer,
-) {
+//
+// Every route authenticates through guard and needs the device:* scope the
+// gRPC catalog gives its rpc; a nil guard is an ErrDeviceRESTUnavailable.
+// Without a device or profile service nothing is mounted.
+func (s *RESTServer) SetDeviceHandlers(deviceSvc restapi.DeviceServiceInterface, profileSvc restapi.ProfileServiceInterface, attestSvc platformv1.DeviceServiceServer, guard *restapi.ScopeGuard) error {
+	if guard == nil {
+		return ErrDeviceRESTUnavailable{Reason: "no REST scope guard"}
+	}
 	if deviceSvc == nil && profileSvc == nil {
-		return
+		return nil
 	}
 	opts := []restapi.DeviceHandlerOption{}
 	if attestSvc != nil {
 		opts = append(opts, restapi.WithDeviceAttestService(attestSvc))
 	}
 	handlers := restapi.NewDeviceHandlers(deviceSvc, profileSvc, s.logger, opts...)
-	handlers.RegisterRoutes(s.router)
+	respWriter := response.NewResponseWriter(logging.NewFromSlog(s.logger), nil)
+	authz := restScopeAuthorization{guard: guard, respWriter: respWriter, routeScope: deviceRouteScope}
+	sub := s.router.NewRoute().Subrouter()
+	sub.Use(authz.authorize)
+	handlers.RegisterRoutes(sub)
 	s.logger.Info("Device REST routes registered", "attestation", attestSvc != nil)
+	return nil
 }
 
 // SetTenantHandlers wires the tenant REST handlers onto the daemon's REST
@@ -466,14 +500,26 @@ func (s *RESTServer) SetTenantHandlers(manager restapi.TenantManagerInterface, g
 // /api/v1/kms/* endpoints are served. The service delegates to the same
 // QuicBaaS SDK KMS and Crypto clients used by the gRPC, QUIC, MCP, and
 // embedded transports, so keys created via REST are visible everywhere else
-// and vice-versa. Mirrors SetDeviceHandlers / SetTenantHandlers.
-func (s *RESTServer) SetKMSHandlers(service restapi.KMSService) {
+// and vice-versa. Every route runs behind guard, the kms:* scope check the KMS
+// router uses (kmsRouteScope). A nil service mounts nothing; a nil guard is
+// ErrKMSRESTUnavailable and mounts nothing, never an unguarded route.
+func (s *RESTServer) SetKMSHandlers(service restapi.KMSService, guard *restapi.ScopeGuard) error {
 	if service == nil {
-		return
+		return nil
 	}
-	handlers := restapi.NewKMSHandlers(service, s.logger)
-	handlers.RegisterRoutes(s.router)
+	if guard == nil {
+		return ErrKMSRESTUnavailable{Reason: "no REST scope guard"}
+	}
+	respWriter := response.NewResponseWriter(logging.NewFromSlog(s.logger), nil)
+	authz := restScopeAuthorization{guard: guard, respWriter: respWriter, routeScope: kmsRouteScope}
+	// A matcher-less subrouter matches only its own routes, so the KMS router
+	// mounted before it keeps every path the two share. RegisterRoutes
+	// registers full /api/v1/... paths, hence no /api/v1 prefix here.
+	sub := s.router.NewRoute().Subrouter()
+	sub.Use(authz.authorize)
+	restapi.NewKMSHandlers(service, s.logger).RegisterRoutes(sub)
 	s.logger.Info("KMS REST routes registered")
+	return nil
 }
 
 // SetComputeHandlers wires the compute (VM and container) REST handlers onto
@@ -492,13 +538,17 @@ func (s *RESTServer) SetComputeHandlers(compute platformv1.ComputeServiceServer,
 // method is a no-op — routes are not mounted, so callers that 404 get a clear
 // signal that the overlay feature is disabled rather than an internal error.
 // Mirrors SetDeviceHandlers / SetTenantHandlers.
-func (s *RESTServer) SetOverlayHandlers(svc restapi.OverlayServiceInterface) {
+func (s *RESTServer) SetOverlayHandlers(svc restapi.OverlayServiceInterface, guard *restapi.ScopeGuard) error {
+	if guard == nil {
+		return ErrOverlayRESTUnavailable{Reason: "no REST scope guard"}
+	}
 	if svc == nil {
-		return
+		return nil
 	}
 	handlers := restapi.NewOverlayHandlers(svc, s.logger)
-	handlers.RegisterRoutes(s.router)
+	handlers.RegisterRoutes(s.catalogGuardedRoot(guard))
 	s.logger.Info("Overlay REST routes registered")
+	return nil
 }
 
 // SetCAHandlers wires the CA REST handlers onto the daemon's REST router so
@@ -508,16 +558,21 @@ func (s *RESTServer) SetOverlayHandlers(svc restapi.OverlayServiceInterface) {
 // All transports therefore share state — certificates issued via gRPC are
 // visible via REST and vice-versa.
 //
-// guard authorizes POST /api/v1/ca/sign-csr, which needs a platform token
-// granting ca:sign-csr (a client certificate alone is refused); when it is
-// nil, sign-csr refuses every request.
-func (s *RESTServer) SetCAHandlers(ca quicbaasca.CACertificateAuthority, guard *restapi.ScopeGuard) {
+// guard authorizes every /api/v1/ca/certificates route with the scope the
+// gRPC catalog gives its CAService rpc, and POST /api/v1/ca/sign-csr, which
+// needs a platform token granting ca:sign-csr (a client certificate alone is
+// refused). /api/v1/ca/info, /crl and /bundle mount without it. A CA without a
+// guard is refused with ErrCARESTUnavailable and mounts nothing.
+func (s *RESTServer) SetCAHandlers(ca quicbaasca.CACertificateAuthority, guard *restapi.ScopeGuard) error {
 	if ca == nil {
-		return
+		return nil
+	}
+	if guard == nil {
+		return ErrCARESTUnavailable{Reason: "no REST scope guard"}
 	}
 	adapter := restapi.NewCAAuthorityAdapter(ca)
 	if adapter == nil {
-		return
+		return nil
 	}
 	var caObjStorage objectstorage.Client
 	var caKMS issuance.KMS
@@ -528,7 +583,8 @@ func (s *RESTServer) SetCAHandlers(ca quicbaasca.CACertificateAuthority, guard *
 		}
 	}
 	handlers := restapi.NewCAHandlers(adapter, s.logger, caObjStorage).WithKMS(caKMS).WithScopeGuard(guard)
-	handlers.RegisterRoutes(s.router)
+	handlers.RegisterAuthorityRoutes(s.router)
+	s.mountCACertificateRoutes(handlers, guard)
 	s.logger.Info("CA REST routes registered")
 
 	// Wire auth factor endpoints (AAGUID lookup, mTLS probe, cert issuance,
@@ -537,6 +593,13 @@ func (s *RESTServer) SetCAHandlers(ca quicbaasca.CACertificateAuthority, guard *
 	authFactorHandlers := restapi.NewAuthFactorHandlers(ca, s.logger)
 	authFactorHandlers.RegisterRoutes(s.router)
 	s.logger.Info("Auth factor REST routes registered")
+	return nil
+}
+
+// mountCACertificateRoutes mounts the /api/v1/ca/certificates routes behind
+// guard, each needing the scope catalogRouteRPCs and the gRPC catalog give it.
+func (s *RESTServer) mountCACertificateRoutes(handlers *restapi.CAHandlers, guard *restapi.ScopeGuard) {
+	handlers.RegisterCertificateRoutes(s.catalogGuardedRoot(guard))
 }
 
 // SetTPMHandlers mounts the physical TPM routes (/api/v1/tpm/...). Every
@@ -1180,60 +1243,76 @@ func getMCPAddress(config *Config) string {
 
 // SetCeremonyService wires the ceremony service into the REST server and
 // registers its routes.
-func (s *RESTServer) SetCeremonyService(svc *CeremonyService) {
-	if svc == nil {
-		return
+func (s *RESTServer) SetCeremonyService(svc *CeremonyService, guard *restapi.ScopeGuard) error {
+	if guard == nil {
+		return ErrCeremonyRESTUnavailable{Reason: "no REST scope guard"}
 	}
-	h := newCeremonyRESTHandlers(svc)
-	api := s.router.PathPrefix(restBasePath).Subrouter()
-	h.registerCeremonyRoutes(api)
+	if svc == nil {
+		return nil
+	}
+	newCeremonyRESTHandlers(svc).registerCeremonyRoutes(s.catalogGuardedAPI(guard))
 	s.logger.Info("Ceremony REST routes registered")
+	return nil
 }
 
-// SetPIVService wires the PIV service into the REST server and registers its routes.
-func (s *RESTServer) SetPIVService(svc *PIVService) {
-	if svc == nil {
-		return
+// SetPIVService mounts the PIV routes behind guard; each needs the scope the
+// gRPC catalog gives the PIVService method it serves.
+func (s *RESTServer) SetPIVService(svc *PIVService, guard *restapi.ScopeGuard) error {
+	if guard == nil {
+		return ErrPIVRESTUnavailable{Reason: "no REST scope guard"}
 	}
-	h := newPIVRESTHandlers(svc)
-	api := s.router.PathPrefix(restBasePath).Subrouter()
-	h.registerPIVRoutes(api)
+	if svc == nil {
+		return nil
+	}
+	newPIVRESTHandlers(svc).registerPIVRoutes(s.catalogGuardedAPI(guard))
 	s.logger.Info("PIV REST routes registered")
+	return nil
 }
 
-// SetLUKSService wires the LUKS service into the REST server and registers its routes.
-func (s *RESTServer) SetLUKSService(svc *LUKSService) {
-	if svc == nil {
-		return
+// SetLUKSService mounts the LUKS routes behind guard; each needs the scope
+// the gRPC catalog gives the LUKSService method it serves.
+func (s *RESTServer) SetLUKSService(svc *LUKSService, guard *restapi.ScopeGuard) error {
+	if guard == nil {
+		return ErrLUKSRESTUnavailable{Reason: "no REST scope guard"}
 	}
-	h := newLUKSRESTHandlers(svc)
-	api := s.router.PathPrefix(restBasePath).Subrouter()
-	h.registerLUKSRoutes(api)
+	if svc == nil {
+		return nil
+	}
+	newLUKSRESTHandlers(svc).registerLUKSRoutes(s.catalogGuardedAPI(guard))
 	s.logger.Info("LUKS REST routes registered")
+	return nil
 }
 
-// SetFIDO2Service wires the FIDO2 service into the REST server and registers its routes.
-func (s *RESTServer) SetFIDO2Service(svc *FIDO2Service) {
-	if svc == nil {
-		return
+// SetFIDO2Service mounts the FIDO2 routes behind guard; each needs the scope
+// the gRPC catalog gives the FIDO2Service method it serves.
+func (s *RESTServer) SetFIDO2Service(svc *FIDO2Service, guard *restapi.ScopeGuard) error {
+	if guard == nil {
+		return ErrFIDO2RESTUnavailable{Reason: "no REST scope guard"}
 	}
-	h := newFIDO2RESTHandlers(svc)
-	api := s.router.PathPrefix(restBasePath).Subrouter()
-	h.registerFIDO2Routes(api)
+	if svc == nil {
+		return nil
+	}
+	newFIDO2RESTHandlers(svc).registerFIDO2Routes(s.catalogGuardedAPI(guard))
 	s.logger.Info("FIDO2 REST routes registered")
+	return nil
 }
 
 // SetClusterService wires the Cluster gRPC service into the REST server
 // and mounts /api/v1/cluster routes. The handlers fall through to the
 // gRPC implementation, so REST and gRPC report identical state when the
-// underlying coordinator is missing (HTTP 503 + Unavailable code).
-func (s *RESTServer) SetClusterService(svc platformv1.ClusterServiceServer) {
+// underlying coordinator is missing (HTTP 503 + Unavailable code). Each
+// route runs behind guard and needs the scope the gRPC catalog gives its
+// rpc; a nil guard is refused with ErrClusterRESTUnavailable.
+func (s *RESTServer) SetClusterService(svc platformv1.ClusterServiceServer, guard *restapi.ScopeGuard) error {
+	if guard == nil {
+		return ErrClusterRESTUnavailable{Reason: "no REST scope guard"}
+	}
 	h := newClusterRESTHandlers(svc)
-	api := s.router.PathPrefix(restBasePath).Subrouter()
-	h.registerClusterRoutes(api)
+	h.registerClusterRoutes(s.catalogGuardedAPI(guard))
 	if svc == nil {
 		s.logger.Info("Cluster REST routes registered (no backend; will return 503)")
-		return
+		return nil
 	}
 	s.logger.Info("Cluster REST routes registered")
+	return nil
 }

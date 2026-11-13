@@ -220,7 +220,7 @@ func TestRESTHandlerStatus(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
 		w := httptest.NewRecorder()
 
-		server.router.ServeHTTP(w, req)
+		serveDaemonRouteAsOperator(t, server, w, req)
 
 		resp := w.Result()
 		defer resp.Body.Close()
@@ -250,7 +250,7 @@ func TestRESTHandlerVersion(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/version", nil)
 		w := httptest.NewRecorder()
 
-		server.router.ServeHTTP(w, req)
+		serveDaemonRouteAsOperator(t, server, w, req)
 
 		resp := w.Result()
 		defer resp.Body.Close()
@@ -276,7 +276,7 @@ func TestRESTHandlerListServices(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/services", nil)
 		w := httptest.NewRecorder()
 
-		server.router.ServeHTTP(w, req)
+		serveDaemonRouteAsOperator(t, server, w, req)
 
 		resp := w.Result()
 		defer resp.Body.Close()
@@ -303,7 +303,7 @@ func TestRESTHandlerGetService(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/services/nonexistent", nil)
 		w := httptest.NewRecorder()
 
-		server.router.ServeHTTP(w, req)
+		serveDaemonRouteAsOperator(t, server, w, req)
 
 		resp := w.Result()
 		defer resp.Body.Close()

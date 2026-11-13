@@ -16,8 +16,6 @@
 package daemon
 
 import (
-	"context"
-	"crypto/x509"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -25,40 +23,11 @@ import (
 	"testing"
 
 	"github.com/gorilla/mux"
-	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
-	xkmsca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// =============================================================================
-// Mock CA exposing the xkmsca.TCGCA surface SetCAHandlers needs.
-// =============================================================================
-
-type fakeRESTCA struct {
-	xkmsca.TCGCA // embed for any methods we don't override
-}
-
-func (f *fakeRESTCA) Identity() string                                { return "Test CA" }
-func (f *fakeRESTCA) IsInitialized() bool                             { return true }
-func (f *fakeRESTCA) DefaultKeyAlgorithm() x509.PublicKeyAlgorithm    { return x509.ECDSA }
-func (f *fakeRESTCA) DefaultValidityPeriod() int                      { return 365 }
-func (f *fakeRESTCA) TrustedRoot() (*x509.Certificate, error)         { return nil, nil }
-func (f *fakeRESTCA) TrustedIntermediate() (*x509.Certificate, error) { return nil, nil }
-func (f *fakeRESTCA) IssueCertificate(_ context.Context, req *xkmsca.CACertificateRequest) (*xkmsca.IssuedCertificate, error) {
-	return nil, nil
-}
-func (f *fakeRESTCA) RevokeCert(_ context.Context, _ *x509.Certificate, _ xkmsca.RevokeOptions) error {
-	return nil
-}
-func (f *fakeRESTCA) CABundle() ([]byte, error) { return []byte{}, nil }
-func (f *fakeRESTCA) CABundleFiltered(xkmssdk.StoreType, x509.PublicKeyAlgorithm) ([]byte, error) {
-	return []byte{}, nil
-}
-func (f *fakeRESTCA) ParseBundle([]byte) ([]*x509.Certificate, error) { return nil, nil }
-func (f *fakeRESTCA) CertStore() xkmssdk.CertStore                    { return nil }
 
 // =============================================================================
 // Tests
@@ -75,7 +44,7 @@ func TestRESTServer_SetCAHandlers_Nil(t *testing.T) {
 	require.NoError(t, err)
 
 	// Calling SetCAHandlers with nil should be a no-op (must not panic).
-	server.SetCAHandlers(nil, nil)
+	require.NoError(t, server.SetCAHandlers(nil, nil))
 
 	// /api/v1/ca/info should NOT be registered when CA is nil.
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/ca/info", nil)
@@ -94,7 +63,7 @@ func TestRESTServer_SetCAHandlers_RegistersRoutes(t *testing.T) {
 	server, err := NewRESTServer(config, service, slog.Default())
 	require.NoError(t, err)
 
-	server.SetCAHandlers(&fakeRESTCA{}, nil)
+	require.NoError(t, server.SetCAHandlers(&fakeRESTCA{}, tokenScopeGuard(nil)))
 
 	// /api/v1/ca/info should now be registered. The handler will respond
 	// (status will be 200 because the fake CA reports IsInitialized=true).
@@ -115,7 +84,7 @@ func TestRESTServer_SetCAHandlers_AllRoutesRegistered(t *testing.T) {
 	server, err := NewRESTServer(config, service, slog.Default())
 	require.NoError(t, err)
 
-	server.SetCAHandlers(&fakeRESTCA{}, nil)
+	require.NoError(t, server.SetCAHandlers(&fakeRESTCA{}, tokenScopeGuard(nil)))
 
 	// Walk the router and verify every CA route is present. We can't
 	// distinguish handler-returned 404 from router 404 by status code, so
@@ -171,7 +140,7 @@ func signCSRStatus(t *testing.T, tokens *platformTokenValidator, bearer string) 
 	require.NoError(t, err)
 	server, err := NewRESTServer(config, service, slog.Default())
 	require.NoError(t, err)
-	server.SetCAHandlers(&fakeRESTCA{}, tokenScopeGuard(tokens))
+	require.NoError(t, server.SetCAHandlers(&fakeRESTCA{}, tokenScopeGuard(tokens)))
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/ca/sign-csr", strings.NewReader(`{"csr_pem":"x"}`))
 	if bearer != "" {

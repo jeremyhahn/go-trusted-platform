@@ -296,16 +296,21 @@ power in one call: neither `bmc:media` nor `bmc:power` alone may confer the
 whole sequence. A caller without the scope is refused with `PermissionDenied`
 (gRPC) or `AuthErrorPermissionDenied` (MCP).
 
-The catalogs do not cover REST. Consequences, stated plainly because
-they are not obvious from the code:
+The daemon REST listener takes the same scopes from the gRPC catalog (#997
+s12). Every `/api/v1/bmc/{profileID}/...` route is mounted behind the REST scope
+guard: a request without a credential gets 401, and one without the scope of
+the route's RPC gets 403. Each route's RPC is its `catalogRouteRPCs` entry in
+`pkg/api/daemon/rest_scope.go`, and the scope is
+`grpcapi.ScopeForMethod(rpc)`, so REST cannot drift from gRPC.
 
-- **On REST, any principal with a valid platform token can power off
-  any node**, set its boot device, mount an installer ISO, replace or restore
-  its BMC certificate, and create a BMC administrator account. No `scp` claim
-  is checked on that path.
-- Because all four power mutators share `POST .../power` with the verb in the
-  body, even a path-based gateway policy in front of REST cannot separate
-  "status" from "power off" beyond method.
+`POST .../power` serves all four power RPCs, and its body's `action` picks
+which. The guard reads the body (at most 1 KiB), decodes only `action`, maps
+`on`, `off`, `reset`, `cycle` to `PowerOn`, `PowerOff`, `PowerReset`,
+`PowerCycle`, requires that RPC's scope, and hands the handler the same
+bytes. So `on` needs `bmc:write`, and the other three need `bmc:power`. A
+body over the limit, a body that is not JSON, or a missing or unknown action
+gets 403 (`ErrBMCPowerActionUnscoped`) before the handler runs. The guard
+never falls back to `bmc:write`.
 
 [`docs/daemon/api.md`](../daemon/api.md) §5 records the platform-wide picture
 and the catalog totals.
@@ -384,6 +389,5 @@ table are in [`docs/daemon/api.md`](../daemon/api.md) §4.
 | Password rotation and credential-store CRUD have no transport | 2 |
 | SDK REST adapter maps 14 of 23 RPCs | 9 |
 | `BMCRouter` omits enroll and cert-restore | 2 |
-| REST carries no BMC scope check (§8) | every REST route |
 
 All are recorded as `docs/13 G7` debt, not as design.

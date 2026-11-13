@@ -1,6 +1,6 @@
 # SDN REST API Reference
 
-> **Status: REFERENCE** · Last verified: 2026-10-26
+> **Status: REFERENCE** · Last verified: 2026-10-30
 > The `/api/v1/sdn` routes of platformd's two REST stacks.
 
 Base URL: `https://localhost:8443/api/v1/sdn`
@@ -12,7 +12,7 @@ platformd starts (the overlay has the same split, see
 | Property | Webservice | Daemon-only REST (`serve --enable-rest`) |
 |----------|------------|------------------------------------------|
 | Handlers | `pkg/webservice/v1/rest/sdn/` | `pkg/api/rest/sdn_handlers.go` |
-| Authentication | platform session, `admin` role on every route (`pkg/webservice/v1/router.go`) | mTLS |
+| Authentication | platform session, `admin` role on every route (`pkg/webservice/v1/router.go`) | mTLS, then the REST scope guard: a `Bearer` platform token or the operator certificate, holding the route's `sdn` scope (see Scopes) |
 | Response body | the platform envelope (`{code, error, success, payload}`) with the response message as `payload` | the response message itself |
 | Unknown body fields, query parameters | ignored | `400` |
 
@@ -67,6 +67,19 @@ service) `503`, and anything else `500`. The daemon's error body is
 | `GET /policies` | `ListPoliciesRequest` (optional) | `ListPoliciesResponse` | both |
 | `GET /policies/{policy_id}` | — | `GetPolicyResponse` | both |
 | `DELETE /policies/{policy_id}` | — | `DeletePolicyResponse` | daemon |
+
+### Scopes (daemon stack, #997)
+
+Every daemon route needs the `sdn` scope the gRPC catalog gives its
+`SDNService` rpc: no credential answers `401`, a credential without the scope
+`403`.
+
+| Route | Scope |
+|-------|-------|
+| every `GET` (bridges, ports, port state and stats, flows, VLANs, policies, zones) | `sdn:read` |
+| `POST /bridges`, `POST /bridges/{bridge_id}/ports`, `PUT .../ports/{port_id}/state`, `POST .../ports/{port_id}/auth`, `POST /flows`, `POST /vlans`, `POST /policies`, `POST /zones`, `PUT /zones/{name}` | `sdn:write` |
+| `DELETE /bridges/{bridge_id}/ports/{port_id}/auth` (`RevokePortAuth`) | `sdn:write` |
+| `DELETE /bridges/{id}`, `DELETE .../ports/{port_id}`, `DELETE /flows`, `DELETE /vlans/{vlan_id}`, `DELETE /policies/{policy_id}`, `DELETE /zones/{name}` | `sdn:delete` |
 
 Until #445 both stacks answered flat REST documents (a bridge as `name`,
 `type` `"ovs"` and `created_at`; a delete as `{success, message}`; the port

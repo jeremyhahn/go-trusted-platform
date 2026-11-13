@@ -324,6 +324,27 @@ directions by `pkg/webservice/v1/rest/ca/router_test.go`. Nothing that
 mutates CA state and nothing that enumerates issued certificates may join
 the public half. **This does not change the gRPC or MCP positions above.**
 
+### The platformd REST listener guards the certificate routes by scope (#997)
+
+On the daemon's own REST listener every `/api/v1/ca/certificates` route runs
+behind the listener's scope guard and needs exactly the scope the gRPC
+catalog gives its `CAService` rpc; a request with no credential answers 401
+and one without the scope 403:
+
+| Route | rpc | Scope |
+|---|---|---|
+| `POST /api/v1/ca/certificates` | `IssueCertificate` | `certs:generate` |
+| `GET /api/v1/ca/certificates` | `ListCertificates` | `certs:list` |
+| `GET /api/v1/ca/certificates/{serial}` | `GetCertificate` | `certs:read` |
+| `POST /api/v1/ca/certificates/{serial}/revoke` | `RevokeCertificate` | `certs:revoke` |
+| `POST /api/v1/ca/certificates/{serial}/renew` | `RenewCertificate` | `certs:generate` |
+| `POST /api/v1/ca/certificates/verify` | `VerifyCertificate` | `certs:read` |
+
+`CAHandlers.RegisterCertificateRoutes` mounts these; `RegisterAuthorityRoutes`
+mounts `/ca/info`, `/ca/crl`, `/ca/bundle` (still on the listener's mTLS
+alone) and `/ca/sign-csr` (its own `ca:sign-csr` guard, above).
+[`docs/daemon/api.md`](../daemon/api.md) describes the listener's guard.
+
 ---
 
 ## 5. Status and error mapping
