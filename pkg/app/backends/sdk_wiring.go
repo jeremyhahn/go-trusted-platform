@@ -84,19 +84,26 @@ func WireSDKBackends(target SDKBackendTarget, src SDKBackendSources, logger *log
 		return ErrCeremonyBackendRequiresSDK{}
 	}
 	target.SetCeremonyBackend(NewCeremonyBackend(logger, src.SDK, src.Admin))
-	// The LUKS backend needs no SDK: it drives go-luks2 on the host, with
-	// the TPM handler the host can open. The root checker reads the
+	// The LUKS backend needs no SDK: it drives go-luks2 on the host. The root checker reads the
 	// effective UID; without it the service refuses every mutation.
 	//
 	// FIDO2 enrollment stays off: the default handler binds the 64-byte
 	// go-xkms derived key, which neither the fido2-manual reader (raw
 	// 32-byte hmac-secret) nor the initrd FIDO2 strategy (no credential or
 	// salt) can produce, so an enrolled slot would not unlock at boot.
-	// EnrollFIDO2 answers ErrLUKSHardwareUnavailable until a boot path
-	// consumes the slot.
+	// EnrollFIDO2 answers ErrLUKSFIDO2NotWired until a boot path consumes
+	// the slot.
+	//
+	// TPM enrollment stays off for the same reason: the SDK sealer keeps
+	// the sealed passphrase in a systemd-tpm2 header token, while the
+	// initrd TPM strategies unseal the root key from the ESP
+	// (seal-platform.pub/priv and the .tpmpolicy record), so nothing at
+	// boot reads the token. EnrollTPM answers ErrLUKSTPMNotWired before
+	// touching the device. When a boot path consumes the token, wire the
+	// default handler through pcrCheckedTPMHandler.
 	luks := NewLUKSBackend(logger, WithDefaultLUKSHandlers())
 	luks.SetFIDO2Handler(nil)
-	luks.SetTPMHandler(pcrCheckedTPMHandler(luks.tpm))
+	luks.SetTPMHandler(nil)
 	target.SetLUKSBackend(luks)
 	target.SetLUKSRootChecker(DefaultRootChecker())
 	return nil
