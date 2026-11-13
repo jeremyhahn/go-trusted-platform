@@ -103,10 +103,11 @@ test.describe('WebAuthn Full Flow Integration', () => {
     // First, register
     await page.goto('/auth/webauthn?status=not_registered');
     await page.fill('input[placeholder="Enter your email"]', username);
+    const registered = page.waitForResponse((r) => r.url().endsWith('/api/v1/webauthn/registration/finish'));
     await page.click('button:has-text("Register")');
 
     // Wait for registration to complete
-    await page.waitForTimeout(3000);
+    await registered;
 
     // Clear cookies to simulate new session
     await page.context().clearCookies();
@@ -116,10 +117,11 @@ test.describe('WebAuthn Full Flow Integration', () => {
     await expect(page.locator('h2')).toContainText('Login');
 
     await page.fill('input[placeholder="Enter your email"]', username);
+    const loggedIn = page.waitForResponse((r) => r.url().endsWith('/api/v1/webauthn/login/finish'));
     await page.click('button:has-text("Log In")');
 
     // Wait for result
-    await page.waitForTimeout(5000);
+    await loggedIn;
 
     // Check if we got redirected or got an error
     const currentUrl = page.url();
@@ -148,11 +150,12 @@ test.describe('WebAuthn Full Flow Integration', () => {
 
     await page.goto('/auth/webauthn?status=not_registered');
     await page.fill('input[placeholder="Enter your email"]', username);
+    const beginRequest = page.waitForRequest((r) => r.url().endsWith('/api/v1/webauthn/registration/begin'));
     await page.click('button:has-text("Register")');
 
-    // Wait for response - WebAuthn requires browser interaction so we just verify
-    // the page handles the attempt without crashing
-    await page.waitForTimeout(2000);
+    // Wait for the begin request to settle - WebAuthn requires browser interaction so we just
+    // verify the page handles the attempt without crashing (response() is null when it fails)
+    await (await beginRequest).response().catch(() => null);
 
     // The page should either:
     // 1. Show an error message (backend unavailable or WebAuthn not supported)

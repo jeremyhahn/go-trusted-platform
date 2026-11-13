@@ -505,7 +505,6 @@ test.describe('Platform Management', () => {
 
       // Wait for page to load
       await page.waitForLoadState('networkidle');
-      await page.waitForTimeout(1000);
 
       // Check for various error indicators
       const errorIndicators = [
@@ -513,6 +512,7 @@ test.describe('Platform Management', () => {
         page.getByText(/error|unavailable|failed/i).first(),
         page.locator('[data-testid="error"]').first(),
       ];
+      await errorIndicators.slice(1).reduce((acc, l) => acc.or(l), errorIndicators[0]).first().waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
 
       let foundError = false;
       for (const indicator of errorIndicators) {
@@ -796,10 +796,7 @@ test.describe('Platform Management', () => {
           await autoRefreshToggle.click();
         }
 
-        // Wait for at least one auto-refresh (page uses 30 second interval)
-        const initialCount = callCount;
-        // Use shorter timeout for test - just verify the mechanism works
-        await page.waitForTimeout(1000);
+        await expect.poll(() => callCount).toBeGreaterThan(0);
 
         // The auto-refresh should be enabled (we can't wait 30s in tests)
         await expect(autoRefreshToggle).toBeChecked();

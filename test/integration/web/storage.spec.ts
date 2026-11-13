@@ -481,9 +481,7 @@ test.describe('Object Storage Page', () => {
 
       if ((await searchInput.count()) > 0) {
         await searchInput.first().fill('report');
-
-        // Wait for filter to apply
-        await authenticatedPage.waitForTimeout(500);
+        await expect(searchInput.first()).toHaveValue('report');
 
         // Should not crash
         await expect(authenticatedPage.locator('main')).toBeVisible();
@@ -503,7 +501,7 @@ test.describe('Object Storage Page', () => {
 
       if ((await searchInput.count()) > 0) {
         await searchInput.first().fill('test');
-        await authenticatedPage.waitForTimeout(300);
+        await expect(searchInput.first()).toHaveValue('test');
       }
 
       const clearButton = authenticatedPage.locator(
@@ -512,11 +510,9 @@ test.describe('Object Storage Page', () => {
 
       if ((await clearButton.count()) > 0) {
         await clearButton.first().click();
-        await authenticatedPage.waitForTimeout(500);
 
         if ((await searchInput.count()) > 0) {
-          const value = await searchInput.first().inputValue();
-          expect(value).toBe('');
+          await expect(searchInput.first()).toHaveValue('');
         }
       }
     });
@@ -723,7 +719,7 @@ test.describe('Key-Value Store Page', () => {
 
       if ((await searchInput.count()) > 0) {
         await searchInput.first().fill('settings');
-        await authenticatedPage.waitForTimeout(500);
+        await expect(searchInput.first()).toHaveValue('settings');
         await expect(authenticatedPage.locator('main')).toBeVisible();
       }
     });
@@ -891,7 +887,7 @@ test.describe('Time Series Page', () => {
 
       if ((await searchInput.count()) > 0) {
         await searchInput.first().fill('cpu');
-        await authenticatedPage.waitForTimeout(500);
+        await expect(searchInput.first()).toHaveValue('cpu');
         await expect(authenticatedPage.locator('main')).toBeVisible();
       }
     });
@@ -1061,7 +1057,7 @@ test.describe('Vector Database Page', () => {
 
       if ((await searchInput.count()) > 0) {
         await searchInput.first().fill('document');
-        await authenticatedPage.waitForTimeout(500);
+        await expect(searchInput.first()).toHaveValue('document');
         await expect(authenticatedPage.locator('main')).toBeVisible();
       }
     });
@@ -1281,7 +1277,7 @@ test.describe('Backup Page', () => {
 
       if ((await searchInput.count()) > 0) {
         await searchInput.first().fill('production');
-        await authenticatedPage.waitForTimeout(500);
+        await expect(searchInput.first()).toHaveValue('production');
         await expect(authenticatedPage.locator('main')).toBeVisible();
       }
     });
@@ -1399,8 +1395,7 @@ test.describe('Backup Page', () => {
     test('should switch between backups and schedules tabs', async ({ authenticatedPage }) => {
       await authenticatedPage.goto('/storage/backup');
 
-      // Wait for page to load
-      await authenticatedPage.waitForTimeout(1000);
+      await expect(authenticatedPage.locator('main')).toBeVisible();
 
       // Check for tabs presence
       const schedulesTab = authenticatedPage.locator('button:has-text("Schedules")').first();
