@@ -2550,8 +2550,8 @@ test.describe('IAM Management', () => {
         await addPolicyButton.click();
       }
 
-      // Wait for navigation
-      await page.waitForTimeout(500);
+      // Wait for navigation (a create dialog keeps the URL, so no throw)
+      await page.waitForURL(/\/iam\/policies\/new/, { timeout: 5000 }).catch(() => {});
 
       // Check what happened after clicking
       const currentUrl = page.url();
@@ -2578,11 +2578,10 @@ test.describe('IAM Management', () => {
           const submitButton = page.getByRole('button', { name: /create|save|submit/i }).last();
           if (await submitButton.isVisible({ timeout: 2000 }).catch(() => false)) {
             await submitButton.click();
-            await page.waitForTimeout(500);
 
             // Check for success
             const successVisible = await page.getByText(/policy created|successfully/i)
-              .first().isVisible({ timeout: 3000 }).catch(() => false);
+              .first().waitFor({ state: 'visible', timeout: 3000 }).then(() => true, () => false);
 
             if (successVisible) {
               const policies = mockApi.getPolicies();
@@ -2679,7 +2678,6 @@ test.describe('IAM Management', () => {
 
       // Wait for page to load
       await page.waitForLoadState('networkidle');
-      await page.waitForTimeout(1000);
 
       // Check for various error indicators
       const errorIndicators = [
@@ -2687,6 +2685,7 @@ test.describe('IAM Management', () => {
         page.getByText(/error loading roles|failed to fetch|error/i).first(),
         page.locator('[data-testid="error"]').first(),
       ];
+      await errorIndicators[0].or(errorIndicators[1]).or(errorIndicators[2]).first().waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
 
       let foundError = false;
       for (const indicator of errorIndicators) {
@@ -2713,7 +2712,6 @@ test.describe('IAM Management', () => {
 
       // Wait for page to load
       await page.waitForLoadState('networkidle');
-      await page.waitForTimeout(1000);
 
       // Check for various error indicators
       const errorIndicators = [
@@ -2721,6 +2719,7 @@ test.describe('IAM Management', () => {
         page.getByText(/error loading groups|failed to fetch|error/i).first(),
         page.locator('[data-testid="error"]').first(),
       ];
+      await errorIndicators[0].or(errorIndicators[1]).or(errorIndicators[2]).first().waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
 
       let foundError = false;
       for (const indicator of errorIndicators) {
@@ -3428,7 +3427,7 @@ test.describe('IAM Management', () => {
       await page.fill('input[placeholder*="Search"]', 'Production');
 
       // Wait for filter to apply - the table should only show Production API
-      await page.waitForTimeout(300);
+      await expect(table.getByText('Development API')).toBeHidden();
 
       // Verify only Production API is in the visible rows
       await expect(table.getByText('Production API')).toBeVisible();
@@ -3436,10 +3435,7 @@ test.describe('IAM Management', () => {
       // Clear search
       await page.fill('input[placeholder*="Search"]', '');
 
-      // Wait for filter to clear
-      await page.waitForTimeout(300);
-
-      // All apps should be visible again
+      // All apps should be visible again (the assertions retry until the filter clears)
       await expect(table.getByText('Production API')).toBeVisible();
       await expect(table.getByText('Development API')).toBeVisible();
       await expect(table.getByText('Test Environment')).toBeVisible();
@@ -3530,9 +3526,6 @@ test.describe('IAM Management', () => {
       // If copy button is visible, click it
       if (await copyButton.isVisible({ timeout: 3000 }).catch(() => false)) {
         await copyButton.click();
-
-        // Wait for state change - the icon changes from copy to check
-        await page.waitForTimeout(500);
 
         // Check that clicking worked by verifying the button still exists (state changed)
         await expect(dialog.locator('button').filter({ has: page.locator('svg') }).first()).toBeVisible();
@@ -3973,8 +3966,8 @@ test.describe('IAM Management', () => {
       await expect(registerButton).toBeVisible();
       await registerButton.click();
 
-      // Wait for action to process
-      await page.waitForTimeout(1000);
+      // The button navigates with router.push('/iam/apps/new')
+      await page.waitForURL(/\/iam\/apps\/new/);
 
       // Test passes if any action was taken (button click was successful)
       // The button either navigates or opens a dialog
@@ -4208,11 +4201,12 @@ test.describe('IAM Management', () => {
       // Click on actions menu
       await page.getByRole('row', { name: /Error Delete App/i }).getByRole('button').last().click();
 
-      // Click delete
+      // Click delete (the native confirm is accepted by the dialog handler)
+      const deleteResponse = page.waitForResponse((r) => r.request().method() === 'DELETE' && /\/api\/v1\/iam\/tenants\/[^/]+\/apps\/[^/]+$/.test(new URL(r.url()).pathname));
       await page.getByRole('menuitem', { name: /delete/i }).click();
 
-      // Wait for the action to process
-      await page.waitForTimeout(1000);
+      // Wait for the mocked DELETE to answer
+      await deleteResponse;
 
       // Test passes if page is still functional after delete attempt
       // We check multiple possible indicators of the error handling or page state
@@ -4247,8 +4241,8 @@ test.describe('IAM Management', () => {
       const searchInput = page.getByPlaceholder('Search applications...');
       await searchInput.fill('Mobile');
 
-      // Wait a moment for the filter to apply
-      await page.waitForTimeout(300);
+      // Wait for the filter to apply
+      await expect(page.getByText('Web Frontend Application')).toBeHidden();
 
       // Mobile Backend Service should still be visible
       await expect(page.getByText('Mobile Backend Service')).toBeVisible();
@@ -4256,10 +4250,7 @@ test.describe('IAM Management', () => {
       // Clear search
       await searchInput.fill('');
 
-      // Wait for all apps to reappear
-      await page.waitForTimeout(300);
-
-      // All apps should be visible again
+      // All apps should be visible again (the assertions retry until the filter clears)
       await expect(page.getByText('Web Frontend Application')).toBeVisible();
       await expect(page.getByText('Mobile Backend Service')).toBeVisible();
       await expect(page.getByText('Admin Dashboard App')).toBeVisible();
