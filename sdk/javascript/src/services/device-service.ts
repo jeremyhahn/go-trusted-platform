@@ -514,7 +514,8 @@ export class DeviceService extends BaseService {
    *
    * @param request - Device identifier request; at least one of ekSerial or
    *   macAddress must be set, or the server answers 400.
-   * @returns Matching profile, or null if none matches
+   * @returns Matching profile; when no profile matches, the server answers
+   *   404 and the call fails with that status (it does not resolve to null)
    */
   async findConfigForDevice(
     request: FindConfigForDeviceRequest
@@ -558,9 +559,35 @@ export class DeviceService extends BaseService {
   async assignProfileToDevice(
     request: AssignProfileToDeviceRequest
   ): Promise<ApiResponse<DeviceProfile>> {
+    // The server's AssignProfileToDeviceRequest decodes snake_case names. The
+    // profile id travels in the path only: its body field is a plain uint64,
+    // so a string fails decoding and a number loses precision above 2^53.
+    const body: Record<string, string> = {};
+    if (request.ekSerial !== undefined && request.ekSerial !== '') {
+      body.ek_serial = request.ekSerial;
+    }
+    if (request.macAddress !== undefined && request.macAddress !== '') {
+      body.mac_address = request.macAddress;
+    }
     return this.client.post<DeviceProfile>(
       this.singularUrl(`/profiles/${request.profileId}/assign`),
-      request
+      body
+    );
+  }
+
+  /**
+   * Unassign a profile from its device
+   *
+   * Server route: `POST /api/v1/device/profiles/{id}/unassign`. The route
+   * reads no body; it clears the profile's device binding and returns the
+   * updated profile.
+   * @param profileId - Profile ID
+   * @returns The updated profile
+   */
+  async unassignProfileFromDevice(profileId: number | string): Promise<ApiResponse<DeviceProfile>> {
+    return this.client.post<DeviceProfile>(
+      this.singularUrl(`/profiles/${profileId}/unassign`),
+      {}
     );
   }
 
