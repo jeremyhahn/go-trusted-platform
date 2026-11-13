@@ -33,6 +33,10 @@ const NotifySocketEnv = "NOTIFY_SOCKET"
 // kernel and dropped.
 const notifyMaxDatagram = 4096
 
+// notifySocketMode lets the supervisor and the service group send to a
+// notify socket; connecting to a Unix socket needs write permission.
+const notifySocketMode = 0o660
+
 // NotifyMessage is one parsed sd_notify(3) datagram. Each field holds the last
 // assignment of its key in the datagram.
 type NotifyMessage struct {
@@ -145,16 +149,32 @@ type NotifySocket struct {
 // A pid of zero accepts nothing until SetPid names the child, which lets the
 // supervisor create the socket before it starts the child. The path must not
 // exist.
-func ListenNotify(path string, pid int) (*NotifySocket, error) {
+//
+// The socket is given mode 0660 whatever the umask, and, when gid is
+// non-negative, the group gid (the service group, Spec.SocketGID), so a child
+// that has dropped to the service account can send to it. A negative gid
+// keeps the group the socket was created with.
+func ListenNotify(path string, pid, gid int) (*NotifySocket, error) {
 	conn, err := net.ListenUnixgram("unixgram", &net.UnixAddr{Name: path, Net: "unixgram"})
 	if err != nil {
 		return nil, &ErrNotifySocket{Path: path, Op: "bind", Cause: err}
 	}
-	s := &NotifySocket{path: path, conn: conn}
-	if err := s.setPassCred(); err != nil {
+	fail := func(op string, err error) (*NotifySocket, error) {
 		_ = conn.Close()
 		_ = os.Remove(path)
-		return nil, &ErrNotifySocket{Path: path, Op: "setsockopt SO_PASSCRED", Cause: err}
+		return nil, &ErrNotifySocket{Path: path, Op: op, Cause: err}
+	}
+	if gid >= 0 {
+		if err := os.Lchown(path, -1, gid); err != nil {
+			return fail("chown", err)
+		}
+	}
+	if err := os.Chmod(path, notifySocketMode); err != nil {
+		return fail("chmod", err)
+	}
+	s := &NotifySocket{path: path, conn: conn}
+	if err := s.setPassCred(); err != nil {
+		return fail("setsockopt SO_PASSCRED", err)
 	}
 	s.SetPid(pid)
 	return s, nil
