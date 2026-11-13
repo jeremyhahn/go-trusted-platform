@@ -3,6 +3,9 @@
 import * as React from "react";
 import {
   RefreshCw,
+  Play,
+  Square,
+  RotateCcw,
   Server,
   Info,
   AlertCircle,
