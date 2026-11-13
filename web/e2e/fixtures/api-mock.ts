@@ -741,6 +741,238 @@ export async function mockVMOperationsApi(
   return { calls: () => [...calls], state: () => state };
 }
 
+// ============================================================================
+// IAM groups, group members, permission check and tenants (#1744)
+// ============================================================================
+
+export interface MockIAMGroup {
+  id: string;
+  name: string;
+  description?: string;
+  members: string[];
+}
+
+export interface MockIAMTenant {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RecordedIAMCall {
+  method: string;
+  path: string;
+  body: unknown;
+}
+
+export interface IAMGroupsTenantsMockConfig {
+  groups?: MockIAMGroup[];
+  tenants?: MockIAMTenant[];
+  /** Reply of POST /tenants/{tenant}/permissions/check */
+  permissionAllowed?: boolean;
+  /** Tenant operations that answer HTTP 500 (failure paths, #1757). */
+  tenantFailOps?: Array<'create' | 'update' | 'delete'>;
+}
+
+/**
+ * Stateful mock of the IAM group, member, permission check and tenant
+ * routes, as pkg/webservice/v1/rest/iam/router.go registers them. Every
+ * request is recorded in `calls` so a test can assert the method and path.
+ */
+export async function mockIAMGroupsTenantsApi(
+  page: Page,
+  config: IAMGroupsTenantsMockConfig = {}
+): Promise<{
+  calls: RecordedIAMCall[];
+  groups: () => MockIAMGroup[];
+  tenants: () => MockIAMTenant[];
+}> {
+  const groups = new Map<string, MockIAMGroup>(
+    (config.groups ?? []).map((g) => [g.id, { ...g, members: [...g.members] }])
+  );
+  const tenants = new Map<string, MockIAMTenant>(
+    (config.tenants ?? []).map((t) => [t.id, { ...t }])
+  );
+  const calls: RecordedIAMCall[] = [];
+  const failOps = config.tenantFailOps ?? [];
+  const now = () => new Date().toISOString();
+  const json = (route: Route, status: number, body: unknown) =>
+    route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+  const record = (request: Request, path: string): unknown => {
+    let body: unknown = null;
+    try {
+      body = request.postDataJSON();
+    } catch {
+      body = request.postData();
+    }
+    calls.push({ method: request.method(), path, body });
+    return body;
+  };
+
+  // Lists the permissions page also loads.
+  await page.route(/\/api\/v1\/iam\/tenants\/[^/]+\/(roles|policies)\/?(\?.*)?$/, async (route) => {
+    await json(route, 200, { roles: [], policies: [], total: 0, timestamp: now() });
+  });
+
+  await page.route(
+    /\/api\/v1\/iam\/tenants\/[^/]+\/permissions\/check\/?(\?.*)?$/,
+    async (route: Route, request: Request) => {
+      const body = record(request, new URL(request.url()).pathname) as Record<string, unknown> | null;
+      // The REST handler decodes CheckPermissionRequest.SubjectID from subject_id.
+      if (typeof body?.subject_id !== 'string' || body.subject_id === '') {
+        await json(route, 400, { error: 'subject_id is required' });
+        return;
+      }
+      await json(route, 200, {
+        allowed: config.permissionAllowed ?? true,
+        matchedPolicy: config.permissionAllowed === false ? '' : 'devices-readers',
+        reason: config.permissionAllowed === false ? 'no matching policy' : 'policy matched',
+        timestamp: now(),
+      });
+    }
+  );
+
+  await page.route(
+    /\/api\/v1\/iam\/tenants\/[^/]+\/groups(\/[^/?]+)?(\/members\/[^/?]+)?\/?(\?.*)?$/,
+    async (route: Route, request: Request) => {
+      const path = new URL(request.url()).pathname.replace(/\/$/, '');
+      const m = path.match(/\/groups(?:\/([^/]+))?(?:\/members\/([^/]+))?$/);
+      const groupId = m?.[1] ? decodeURIComponent(m[1]) : undefined;
+      const userId = m?.[2] ? decodeURIComponent(m[2]) : undefined;
+      const method = request.method();
+      const body = record(request, path) as Record<string, string> | null;
+
+      if (!groupId) {
+        if (method === 'GET') {
+          await json(route, 200, { groups: [...groups.values()], total: groups.size, timestamp: now() });
+          return;
+        }
+        if (method === 'POST') {
+          const id = body?.id || `group-${groups.size + 1}`;
+          const g: MockIAMGroup = { id, name: body?.name ?? id, description: body?.description, members: [] };
+          groups.set(id, g);
+          await json(route, 201, { group: g, timestamp: now() });
+          return;
+        }
+      }
+      const g = groupId ? groups.get(groupId) : undefined;
+      if (!g) {
+        await json(route, 404, { message: 'group not found', code: 'NOT_FOUND' });
+        return;
+      }
+      if (userId && method === 'POST') {
+        if (!g.members.includes(userId)) g.members.push(userId);
+        await json(route, 200, { status: { code: 0 }, timestamp: now() });
+        return;
+      }
+      if (userId && method === 'DELETE') {
+        g.members = g.members.filter((u) => u !== userId);
+        await json(route, 200, { status: { code: 0 }, timestamp: now() });
+        return;
+      }
+      if (method === 'GET') {
+        // groupToResponse never fills members: the real GET carries no members list.
+        const wire: Omit<MockIAMGroup, 'members'> & { members?: string[] } = { ...g };
+        delete wire.members;
+        await json(route, 200, { group: wire, timestamp: now() });
+        return;
+      }
+      if (method === 'PUT') {
+        if (body?.name !== undefined) g.name = body.name;
+        if (body?.description !== undefined) g.description = body.description;
+        await json(route, 200, { group: g, timestamp: now() });
+        return;
+      }
+      if (method === 'DELETE') {
+        groups.delete(g.id);
+        await json(route, 200, { status: { code: 0 }, timestamp: now() });
+        return;
+      }
+      await route.continue();
+    }
+  );
+
+  await page.route(/\/api\/v1\/iam\/tenants(\/[^/?]+)?\/?(\?.*)?$/, async (route: Route, request: Request) => {
+    const path = new URL(request.url()).pathname.replace(/\/$/, '');
+    const m = path.match(/\/tenants(?:\/([^/]+))?$/);
+    const tenantId = m?.[1] ? decodeURIComponent(m[1]) : undefined;
+    const method = request.method();
+    const body = record(request, path) as Record<string, string> | null;
+
+    if (!tenantId) {
+      if (method === 'GET') {
+        // IAMHandlers.ListTenants reads limit (default 50) and offset; the
+        // adapter answers the window with the real total (#1757).
+        const query = new URL(request.url()).searchParams;
+        const limit = Number(query.get('limit') ?? '50') || 50;
+        const offset = Number(query.get('offset') ?? '0') || 0;
+        const all = [...tenants.values()].sort((a, b) => a.id.localeCompare(b.id));
+        await json(route, 200, {
+          tenants: all.slice(offset, offset + limit),
+          total: all.length,
+          limit,
+          offset,
+          timestamp: now(),
+        });
+        return;
+      }
+      if (method === 'POST') {
+        if (failOps.includes('create')) {
+          await json(route, 500, { error: 'tenant store unavailable' });
+          return;
+        }
+        // IAMHandlers.CreateTenant refuses an empty id with HTTP 400.
+        const id = body?.id ?? '';
+        if (!id) {
+          await json(route, 400, { error: 'tenant id is required' });
+          return;
+        }
+        const t: MockIAMTenant = { id, name: body?.name ?? id, createdAt: now(), updatedAt: now() };
+        tenants.set(id, t);
+        await json(route, 201, { tenant: t, timestamp: now() });
+        return;
+      }
+    }
+    const t = tenantId ? tenants.get(tenantId) : undefined;
+    if (!t) {
+      await json(route, 404, { message: 'tenant not found', code: 'NOT_FOUND' });
+      return;
+    }
+    if (method === 'GET') {
+      await json(route, 200, { tenant: t, timestamp: now() });
+      return;
+    }
+    if (method === 'PUT') {
+      if (failOps.includes('update')) {
+        await json(route, 500, { error: 'tenant store unavailable' });
+        return;
+      }
+      // QuicBaaSIAMAdapter.UpdateTenant sends name as the SDK's DisplayName,
+      // which the embedded handler stores as the tenant name (#1757).
+      if (body?.name) t.name = body.name;
+      t.updatedAt = now();
+      await json(route, 200, { tenant: t, timestamp: now() });
+      return;
+    }
+    if (method === 'DELETE') {
+      if (failOps.includes('delete')) {
+        await json(route, 500, { error: 'tenant store unavailable' });
+        return;
+      }
+      tenants.delete(t.id);
+      await json(route, 200, { status: { code: 0 }, timestamp: now() });
+      return;
+    }
+    await route.continue();
+  });
+
+  return {
+    calls,
+    groups: () => [...groups.values()],
+    tenants: () => [...tenants.values()],
+  };
+}
+
 /**
  * Mock the health API endpoint.
  *

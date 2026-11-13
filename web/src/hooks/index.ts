@@ -118,6 +118,9 @@ export type {
 export { useBMC, bmcUrl } from './use-bmc';
 export type { BMCState, BMCPart, UseBMCResult } from './use-bmc';
 
+export { useIAMTenants } from './use-iam-tenants';
+export type { UseIAMTenantsResult } from './use-iam-tenants';
+
 export { useReportedGateways } from './use-reported-gateways';
 
 export {

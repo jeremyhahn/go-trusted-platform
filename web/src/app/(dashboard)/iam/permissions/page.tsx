@@ -15,6 +15,7 @@ import React, { useMemo } from 'react';
 import { ColumnDef } from '@tanstack/react-table';
 import { useAuth } from '@/contexts/AuthContext';
 import { useIAM, useApi } from '@/hooks';
+import { PermissionCheckCard } from '@/components/features/iam/permission-check-card';
 import type { Group, Policy, Permission } from '@/types/iam';
 import { DataTable } from '@/components/ui/data-table';
 import { DataTableColumnHeader } from '@/components/ui/data-table-column-header';
@@ -352,6 +353,8 @@ export default function PermissionsPage() {
           </CardContent>
         </Card>
       </div>
+
+      <PermissionCheckCard tenantId={tenantId} defaultSubjectId={authUser?.id ?? ''} />
 
       {/* Tabs for Groups, Policies, and Permissions */}
       <Tabs defaultValue="groups" className="space-y-4">

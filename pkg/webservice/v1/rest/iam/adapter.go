@@ -16,6 +16,7 @@ package iam
 import (
 	"context"
 	"errors"
+	"sort"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
@@ -264,20 +265,36 @@ func (a *QuicBaaSIAMAdapter) GetTenant(ctx context.Context, tenantID string) (*T
 	return decodeTenant(t), nil
 }
 
+// ListTenants answers one window of the tenants, ordered by ID, with the
+// real total. The pinned SDK's tenant list takes only a page size (no offset,
+// no total), so the adapter reads every tenant (PageSize 0) and pages
+// locally; a limit <= 0 returns every tenant from the offset.
 func (a *QuicBaaSIAMAdapter) ListTenants(ctx context.Context, limit, offset int32) (*ListTenantsResponse, error) {
-	sdkReq := &iamsdk.ListTenantsRequest{}
-	if limit > 0 {
-		sdkReq.PageSize = int(limit)
-	}
-	resp, err := a.client.Tenant().List(ctx, sdkReq)
+	resp, err := a.client.Tenant().List(ctx, &iamsdk.ListTenantsRequest{})
 	if err != nil {
 		return nil, err
 	}
-	out := &ListTenantsResponse{
-		Tenants: make([]TenantResponse, 0, len(resp.Tenants)),
+	all := resp.Tenants
+	sort.SliceStable(all, func(i, j int) bool { return all[i].ID < all[j].ID })
+
+	start := int(offset)
+	if start < 0 {
+		start = 0
 	}
-	for i := range resp.Tenants {
-		out.Tenants = append(out.Tenants, *decodeTenant(&resp.Tenants[i]))
+	if start > len(all) {
+		start = len(all)
+	}
+	end := len(all)
+	if limit > 0 && start+int(limit) < end {
+		end = start + int(limit)
+	}
+
+	out := &ListTenantsResponse{
+		PaginatedResponse: PaginatedResponse{Total: int64(len(all)), Limit: limit, Offset: offset},
+		Tenants:           make([]TenantResponse, 0, end-start),
+	}
+	for i := start; i < end; i++ {
+		out.Tenants = append(out.Tenants, *decodeTenant(&all[i]))
 	}
 	return out, nil
 }
@@ -286,7 +303,8 @@ func (a *QuicBaaSIAMAdapter) UpdateTenant(ctx context.Context, tenantID string, 
 	if req == nil {
 		return nil, errors.New("update tenant request is required")
 	}
-	sdkReq := &iamsdk.UpdateTenantRequest{}
+	// The SDK's tenant update stores DisplayName as the tenant name.
+	sdkReq := &iamsdk.UpdateTenantRequest{DisplayName: req.Name}
 	if req.Settings != nil {
 		sdkReq.Settings = encodeTenantSettings(req.Settings)
 	}

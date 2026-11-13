@@ -729,13 +729,12 @@ func TestCov964Adapter_GetAndDeleteTenant(t *testing.T) {
 
 func TestCov964Adapter_ListTenantsPageSize(t *testing.T) {
 	tests := []struct {
-		name     string
-		limit    int32
-		wantSize int
+		name  string
+		limit int32
 	}{
-		{name: "positive limit becomes page size", limit: 10, wantSize: 10},
-		{name: "zero limit leaves the SDK default", limit: 0, wantSize: 0},
-		{name: "negative limit leaves the SDK default", limit: -4, wantSize: 0},
+		{name: "positive limit still reads every tenant", limit: 10},
+		{name: "zero limit reads every tenant", limit: 0},
+		{name: "negative limit reads every tenant", limit: -4},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -744,9 +743,45 @@ func TestCov964Adapter_ListTenantsPageSize(t *testing.T) {
 			resp, err := NewQuicBaaSIAMAdapter(client).ListTenants(context.Background(), tt.limit, 0)
 
 			require.NoError(t, err)
-			assert.Equal(t, tt.wantSize, client.tenants.listed.PageSize)
+			assert.Equal(t, 0, client.tenants.listed.PageSize, "the SDK has no offset, so the adapter reads all and pages locally")
 			require.Len(t, resp.Tenants, 1)
 			assert.Equal(t, "tenant-a", resp.Tenants[0].ID)
+			assert.Equal(t, int64(1), resp.Total)
+			assert.Equal(t, tt.limit, resp.Limit)
+			assert.Equal(t, int32(0), resp.Offset)
+		})
+	}
+}
+
+func TestCov964Adapter_ListTenantsWindow(t *testing.T) {
+	tests := []struct {
+		name    string
+		limit   int32
+		offset  int32
+		wantIDs []string
+	}{
+		{name: "second page of two", limit: 2, offset: 2, wantIDs: []string{"tenant-c"}},
+		{name: "first page of two", limit: 2, offset: 0, wantIDs: []string{"tenant-a", "tenant-b"}},
+		{name: "no limit returns all from the offset", limit: 0, offset: 1, wantIDs: []string{"tenant-b", "tenant-c"}},
+		{name: "offset past the end is empty", limit: 2, offset: 5, wantIDs: []string{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := cov964NewClient()
+			client.tenants.tenants["tenant-c"] = &iamsdk.Tenant{ID: "tenant-c", Name: "C"}
+			client.tenants.tenants["tenant-b"] = &iamsdk.Tenant{ID: "tenant-b", Name: "B"}
+
+			resp, err := NewQuicBaaSIAMAdapter(client).ListTenants(context.Background(), tt.limit, tt.offset)
+
+			require.NoError(t, err)
+			ids := make([]string, 0, len(resp.Tenants))
+			for _, tn := range resp.Tenants {
+				ids = append(ids, tn.ID)
+			}
+			assert.Equal(t, tt.wantIDs, ids)
+			assert.Equal(t, int64(3), resp.Total)
+			assert.Equal(t, tt.limit, resp.Limit)
+			assert.Equal(t, tt.offset, resp.Offset)
 		})
 	}
 }
@@ -777,6 +812,20 @@ func TestCov964Adapter_UpdateTenant(t *testing.T) {
 	_, err = adapter.UpdateTenant(ctx, "missing", &UpdateTenantRequest{})
 	cov964RequireNotFound(t, err, "tenant", "missing")
 	assert.Nil(t, client.tenants.updated.Settings, "no settings are sent when none are given")
+}
+
+func TestCov964Adapter_UpdateTenantName(t *testing.T) {
+	ctx := context.Background()
+	client := cov964NewClient()
+	adapter := NewQuicBaaSIAMAdapter(client)
+
+	_, err := adapter.UpdateTenant(ctx, "tenant-a", &UpdateTenantRequest{Name: "Renamed"})
+	require.NoError(t, err)
+	assert.Equal(t, "Renamed", client.tenants.updated.DisplayName, "the SDK maps DisplayName to the tenant name")
+
+	_, err = adapter.UpdateTenant(ctx, "tenant-a", &UpdateTenantRequest{Settings: &TenantSettings{MaxUsers: 2}})
+	require.NoError(t, err)
+	assert.Empty(t, client.tenants.updated.DisplayName, "no name is sent when none is given")
 }
 
 func TestCov964DecodeTenantSettings(t *testing.T) {

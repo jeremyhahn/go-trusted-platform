@@ -307,8 +307,8 @@ export class IAMService extends BaseService {
    */
   async addGroupMember(request: AddGroupMemberRequest): Promise<ApiResponse<AddGroupMemberResponse>> {
     return this.client.post<AddGroupMemberResponse>(
-      this.buildUrl(`/tenants/${this.encodePathSegment(request.tenantId)}/groups/${this.encodePathSegment(request.groupId)}/members`),
-      { userId: request.userId }
+      this.buildUrl(`/tenants/${this.encodePathSegment(request.tenantId)}/groups/${this.encodePathSegment(request.groupId)}/members/${this.encodePathSegment(request.userId)}`),
+      {}
     );
   }
 
@@ -336,7 +336,20 @@ export class IAMService extends BaseService {
    * Check permission
    */
   async checkPermission(request: CheckIAMPermissionRequest): Promise<ApiResponse<CheckIAMPermissionResponse>> {
-    return this.client.post<CheckIAMPermissionResponse>(this.buildUrl('/auth/check'), request);
+    // REST wire format of CheckPermissionRequest: subject_id; the tenant is the path, not the body.
+    const body = {
+      subject_id: request.subjectId,
+      roles: request.roles,
+      groups: request.groups,
+      action: request.action,
+      resource: request.resource,
+      context: request.context,
+      attributes: request.attributes,
+    };
+    return this.client.post<CheckIAMPermissionResponse>(
+      this.buildUrl(`/tenants/${this.encodePathSegment(request.tenantId)}/permissions/check`),
+      body
+    );
   }
 
   /**
@@ -384,9 +397,15 @@ export class IAMService extends BaseService {
    * List tenants
    */
   async listTenants(request?: ListIAMTenantsRequest): Promise<ApiResponse<ListIAMTenantsResponse>> {
+    // The server pages tenants by limit and offset; it ignores page.
+    const pageSize = request?.pageSize;
+    const page = request?.page;
+    const offset = pageSize !== undefined && page !== undefined && page > 1
+      ? (page - 1) * pageSize
+      : undefined;
     return this.client.get<ListIAMTenantsResponse>(this.buildUrl('/tenants', {
-      page: request?.page,
-      limit: request?.pageSize,
+      limit: pageSize,
+      filters: { offset },
     }));
   }
 
