@@ -68,7 +68,59 @@ import type {
   TPMMakeCredentialResponse,
   TPMActivateCredentialRequest,
   TPMActivateCredentialResponse,
+  KeyAttributes,
+  PCRBank,
+  PCRBankName,
 } from '../types/tpm.js';
+import { PCR_BANK_PROTO_NAMES } from '../types/tpm.js';
+import { encodeEnum, encodeOptionalEnum } from './wire-enum.js';
+import { KEY_ALGORITHM_PROTO_NAMES } from '../types/ca.js';
+import type { KeyAlgorithmProtoName } from '../types/ca.js';
+
+/**
+ * Key attributes as the protojson REST decoder reads them: the algorithm is
+ * its full enum name, since protojson discards the short one.
+ */
+type WireKeyAttributes = Omit<KeyAttributes, 'algorithm'> & { algorithm: KeyAlgorithmProtoName };
+
+function toWireKeyAttributes(attributes: KeyAttributes): WireKeyAttributes {
+  return { ...attributes, algorithm: encodeEnum('algorithm', KEY_ALGORITHM_PROTO_NAMES, attributes.algorithm) };
+}
+
+/** Replaces a request's attributes with their wire form. */
+function withWireAttributes<T extends { attributes?: KeyAttributes }>(
+  request: T,
+): Omit<T, 'attributes'> & { attributes?: WireKeyAttributes } {
+  const { attributes, ...rest } = request;
+  if (attributes === undefined) {
+    return rest;
+  }
+  return { ...rest, attributes: toWireKeyAttributes(attributes) };
+}
+
+/** Replaces a request's short PCR bank with its proto name. */
+function withWirePCRBank<T extends { pcrBank?: PCRBank }>(
+  request: T,
+): Omit<T, 'pcrBank'> & { pcrBank?: PCRBankName } {
+  const { pcrBank, ...rest } = request;
+  if (pcrBank === undefined) {
+    return rest;
+  }
+  return { ...rest, pcrBank: encodeEnum('pcrBank', PCR_BANK_PROTO_NAMES, pcrBank) };
+}
+
+/**
+ * The DELETE body for the EK, SRK and AK routes. The router serves bare
+ * DELETE /ek, /srk and /ak and decodes handle, algorithm and password from
+ * the body (tpm.proto Delete*Request), so the handle is not a path segment.
+ */
+function toWireDeleteKey(request: DeleteEKRequest | DeleteSRKRequest | DeleteAKRequest): Record<string, unknown> {
+  return {
+    handle: request.handle,
+    algorithm: encodeOptionalEnum('algorithm', KEY_ALGORITHM_PROTO_NAMES, request.algorithm),
+    password: request.password,
+  };
+}
 
 /** Base path of the TPM REST API, under the client's `/api` base URL. */
 export const TPM_BASE_PATH = '/v1/tpm';
@@ -139,7 +191,13 @@ export class TPMService extends BaseService {
    * @returns Provisioning result
    */
   async provision(request: TPMProvisionRequest): Promise<ApiResponse<TPMProvisionResponse>> {
-    return this.client.post<TPMProvisionResponse>(this.buildUrl('/provision'), request);
+    const { ekAttributes, srkAttributes, akAttributes, ...rest } = request;
+    return this.client.post<TPMProvisionResponse>(this.buildUrl('/provision'), {
+      ...rest,
+      ...(ekAttributes !== undefined && { ekAttributes: toWireKeyAttributes(ekAttributes) }),
+      ...(srkAttributes !== undefined && { srkAttributes: toWireKeyAttributes(srkAttributes) }),
+      ...(akAttributes !== undefined && { akAttributes: toWireKeyAttributes(akAttributes) }),
+    });
   }
 
   /**
@@ -163,7 +221,7 @@ export class TPMService extends BaseService {
    * @returns Created EK
    */
   async createEK(request?: CreateEKRequest): Promise<ApiResponse<CreateEKResponse>> {
-    return this.client.post<CreateEKResponse>(this.buildUrl('/ek'), request ?? {});
+    return this.client.post<CreateEKResponse>(this.buildUrl('/ek'), withWireAttributes(request ?? {}));
   }
 
   /**
@@ -207,7 +265,7 @@ export class TPMService extends BaseService {
    * @returns Delete result
    */
   async deleteEK(request: DeleteEKRequest): Promise<ApiResponse<DeleteEKResponse>> {
-    return this.client.delete<DeleteEKResponse>(this.buildUrl(`/ek/${request.handle}`));
+    return this.client.delete<DeleteEKResponse>(this.buildUrl('/ek'), undefined, toWireDeleteKey(request));
   }
 
   // =========================================================================
@@ -221,7 +279,7 @@ export class TPMService extends BaseService {
    * @returns Created SRK
    */
   async createSRK(request?: CreateSRKRequest): Promise<ApiResponse<CreateSRKResponse>> {
-    return this.client.post<CreateSRKResponse>(this.buildUrl('/srk'), request ?? {});
+    return this.client.post<CreateSRKResponse>(this.buildUrl('/srk'), withWireAttributes(request ?? {}));
   }
 
   /**
@@ -243,7 +301,7 @@ export class TPMService extends BaseService {
    * @returns Delete result
    */
   async deleteSRK(request: DeleteSRKRequest): Promise<ApiResponse<DeleteSRKResponse>> {
-    return this.client.delete<DeleteSRKResponse>(this.buildUrl(`/srk/${request.handle}`));
+    return this.client.delete<DeleteSRKResponse>(this.buildUrl('/srk'), undefined, toWireDeleteKey(request));
   }
 
   // =========================================================================
@@ -257,7 +315,7 @@ export class TPMService extends BaseService {
    * @returns Created AK
    */
   async createAK(request?: CreateAKRequest): Promise<ApiResponse<CreateAKResponse>> {
-    return this.client.post<CreateAKResponse>(this.buildUrl('/ak'), request ?? {});
+    return this.client.post<CreateAKResponse>(this.buildUrl('/ak'), withWireAttributes(request ?? {}));
   }
 
   /**
@@ -279,7 +337,7 @@ export class TPMService extends BaseService {
    * @returns Delete result
    */
   async deleteAK(request: DeleteAKRequest): Promise<ApiResponse<DeleteAKResponse>> {
-    return this.client.delete<DeleteAKResponse>(this.buildUrl(`/ak/${request.handle}`));
+    return this.client.delete<DeleteAKResponse>(this.buildUrl('/ak'), undefined, toWireDeleteKey(request));
   }
 
   // =========================================================================
@@ -293,7 +351,7 @@ export class TPMService extends BaseService {
    * @returns Sealed data
    */
   async seal(request: SealRequest): Promise<ApiResponse<SealResponse>> {
-    return this.client.post<SealResponse>(this.buildUrl('/seal'), request);
+    return this.client.post<SealResponse>(this.buildUrl('/seal'), withWirePCRBank(request));
   }
 
   /**
@@ -303,7 +361,7 @@ export class TPMService extends BaseService {
    * @returns Unsealed data
    */
   async unseal(request: UnsealRequest): Promise<ApiResponse<UnsealResponse>> {
-    return this.client.post<UnsealResponse>(this.buildUrl('/unseal'), request);
+    return this.client.post<UnsealResponse>(this.buildUrl('/unseal'), withWirePCRBank(request));
   }
 
   // =========================================================================
@@ -317,14 +375,7 @@ export class TPMService extends BaseService {
    * @returns Quote and signature
    */
   async quote(request: QuoteRequest): Promise<ApiResponse<QuoteResponse>> {
-    // The server decodes QuoteRequest with protojson, which requires the
-    // proto-canonical enum name for `pcrBank` ("PCR_BANK_SHA256"); the
-    // short `PCRBank` form ("SHA256") is translated here, as in getPCRs.
-    const wireRequest: Omit<QuoteRequest, 'pcrBank'> & { pcrBank?: string } = { ...request };
-    if (wireRequest.pcrBank !== undefined && !wireRequest.pcrBank.startsWith('PCR_BANK_')) {
-      wireRequest.pcrBank = `PCR_BANK_${wireRequest.pcrBank}`;
-    }
-    return this.client.post<QuoteResponse>(this.buildUrl('/quote'), wireRequest);
+    return this.client.post<QuoteResponse>(this.buildUrl('/quote'), withWirePCRBank(request));
   }
 
   /**

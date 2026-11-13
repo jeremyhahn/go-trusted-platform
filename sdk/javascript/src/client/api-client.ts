@@ -625,8 +625,8 @@ export class ApiClient implements Transport {
   /**
    * DELETE request
    */
-  async delete<T>(path: string, options?: RequestOptions): Promise<ApiResponse<T>> {
-    return this.request<T>('DELETE', path, undefined, options);
+  async delete<T>(path: string, options?: RequestOptions, body?: RequestBody): Promise<ApiResponse<T>> {
+    return this.request<T>('DELETE', path, body, options);
   }
 
   /**
