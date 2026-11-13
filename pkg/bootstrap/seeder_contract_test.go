@@ -15,17 +15,24 @@ package bootstrap
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
 	"io"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
@@ -55,6 +62,19 @@ type seederContractServer struct {
 func newSeederContractServer(t *testing.T) *seederContractServer {
 	t.Helper()
 
+	root, templates, profiles := newSeederContractRouter(t)
+
+	server := httptest.NewTLSServer(root)
+	t.Cleanup(server.Close)
+
+	return &seederContractServer{server: server, profiles: profiles, templates: templates}
+}
+
+// newSeederContractRouter builds the real device REST router over an
+// in-memory datastore, the routes the seeder calls on the control plane.
+func newSeederContractRouter(t *testing.T) (*mux.Router, *device.TemplateService, *device.ProfileService) {
+	t.Helper()
+
 	storage := quicbaas.NewMockStorage()
 	require.NoError(t, storage.Start(context.Background()))
 	logger := logging.NewLogger(slog.LevelDebug, nil)
@@ -69,10 +89,7 @@ func newSeederContractServer(t *testing.T) *seederContractServer {
 	restdevice.NewDeviceRouter(logger, response.NewResponseWriter(logger, nil), templates, profiles).
 		RegisterRoutes(root.PathPrefix("/api/v1").Subrouter())
 
-	server := httptest.NewTLSServer(root)
-	t.Cleanup(server.Close)
-
-	return &seederContractServer{server: server, profiles: profiles, templates: templates}
+	return root, templates, profiles
 }
 
 // seeder returns a Seeder whose HTTP client trusts the test server's
@@ -395,4 +412,110 @@ func TestSeederContract_RelativeTemplateMissingBesideConfigIsNotFound(t *testing
 	count, err := cp.templates.Count(context.Background())
 	require.NoError(t, err)
 	assert.Zero(t, count, "no template should be stored when resolution fails")
+}
+
+// newSeederClientCertificate issues an in-test ECDSA P-256 CA and, under it,
+// a client certificate for admin@system with ExtKeyUsageClientAuth: the
+// shape of the firstboot admin bundle the control plane's mTLS gate accepts.
+// It returns the client certificate and the pool that verifies it.
+func newSeederClientCertificate(t *testing.T) (*tls.Certificate, *x509.CertPool) {
+	t.Helper()
+
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	now := time.Now()
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "seeder contract test CA"},
+		NotBefore:             now.Add(-time.Hour),
+		NotAfter:              now.Add(time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	require.NoError(t, err)
+	caCert, err := x509.ParseCertificate(caDER)
+	require.NoError(t, err)
+
+	clientKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	clientTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "admin@system"},
+		NotBefore:    now.Add(-time.Hour),
+		NotAfter:     now.Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	clientDER, err := x509.CreateCertificate(rand.Reader, clientTemplate, caCert, &clientKey.PublicKey, caKey)
+	require.NoError(t, err)
+
+	pool := x509.NewCertPool()
+	pool.AddCert(caCert)
+	return &tls.Certificate{Certificate: [][]byte{clientDER}, PrivateKey: clientKey}, pool
+}
+
+// TestSeederContract_PresentsClientCertificate pins #178: the seeder
+// authenticates to the control plane with the firstboot admin bundle. Behind
+// a TLS server that requires and verifies a client certificate, Seed with
+// SeederParams.ClientCertificate uploads the role template; Seed without it
+// fails and stores nothing.
+func TestSeederContract_PresentsClientCertificate(t *testing.T) {
+	clientCert, clientCAs := newSeederClientCertificate(t)
+
+	newServer := func(t *testing.T) (*httptest.Server, *device.TemplateService) {
+		root, templates, _ := newSeederContractRouter(t)
+		server := httptest.NewUnstartedServer(root)
+		server.TLS = &tls.Config{
+			ClientAuth: tls.RequireAndVerifyClientCert,
+			ClientCAs:  clientCAs,
+		}
+		server.StartTLS()
+		t.Cleanup(server.Close)
+		return server, templates
+	}
+
+	seed := func(t *testing.T, server *httptest.Server, cert *tls.Certificate) error {
+		cfg := minimalConfig()
+		cfg.Templates = map[string]string{
+			RoleControlPlane: writeSeederTemplate(t, "control-plane.yaml"),
+		}
+		discovered := []DiscoveredNode{
+			{
+				NodeConfig:     NodeConfig{Hostname: "node-02", Role: RoleControlPlane, MACs: []string{"00:25:90:00:02:aa"}},
+				DiscoveredMACs: []string{"00:25:90:00:02:aa"},
+			},
+		}
+		pool := x509.NewCertPool()
+		pool.AddCert(server.Certificate())
+		s := NewSeeder(SeederParams{
+			ControlPlaneAddr:  server.Listener.Addr().String(),
+			Config:            cfg,
+			Discovered:        discovered,
+			Logger:            orchTestLogger(),
+			CPCAPool:          pool,
+			ServerName:        "example.com",
+			ClientCertificate: cert,
+		})
+		return s.Seed(context.Background())
+	}
+
+	t.Run("with the admin bundle the template is uploaded", func(t *testing.T) {
+		server, templates := newServer(t)
+		require.NoError(t, seed(t, server, clientCert))
+
+		count, err := templates.Count(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, 1, count)
+	})
+
+	t.Run("without a client certificate seeding fails", func(t *testing.T) {
+		server, templates := newServer(t)
+		require.Error(t, seed(t, server, nil))
+
+		count, err := templates.Count(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, 0, count)
+	})
 }

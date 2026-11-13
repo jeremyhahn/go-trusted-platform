@@ -1175,6 +1175,50 @@ func TestRevokeCertificate_Success(t *testing.T) {
 	})
 }
 
+// TestRevokeCertificate_ReasonReachesTheCA pins that the requested revocation
+// reason is passed to the CA as its RFC 5280 reason code, so the revocation
+// state and the CRL record it, not just the success response.
+func TestRevokeCertificate_ReasonReachesTheCA(t *testing.T) {
+	cases := []struct {
+		reason string
+		code   int
+	}{
+		{reason: "REVOCATION_REASON_KEY_COMPROMISE", code: 1},
+		{reason: "REVOCATION_REASON_CA_COMPROMISE", code: 2},
+		{reason: "REVOCATION_REASON_SUPERSEDED", code: 4},
+		{reason: "REVOCATION_REASON_CERTIFICATE_HOLD", code: 6},
+		{reason: "REVOCATION_REASON_AA_COMPROMISE", code: 10},
+	}
+	for _, tc := range cases {
+		t.Run(tc.reason, func(t *testing.T) {
+			testCert := createTestCertificate("revoke.example.com")
+			mockCA := &mockCertificateAuthority{
+				initialized: true,
+				certStore: &mockCertStore{
+					getCertificateFn: func(string) (*x509.Certificate, error) { return testCert, nil },
+				},
+			}
+			stored := -1
+			mockCA.revokeFn = func(_ context.Context, _ *x509.Certificate, opts xkmsca.RevokeOptions) error {
+				stored = opts.Reason
+				return nil
+			}
+			handlers, writer := newTestHandlers(mockCA)
+
+			body := []byte(`{"reason":"` + tc.reason + `"}`)
+			req := httptest.NewRequest(http.MethodDelete, "/api/v1/ca/certificates/abc123", bytes.NewReader(body))
+			req = mux.SetURLVars(req, map[string]string{"serial": "abc123"})
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+
+			handlers.RevokeCertificate(rec, req)
+
+			assert.Equal(t, http.StatusOK, writer.lastStatus)
+			assert.Equal(t, tc.code, stored, "revocation reason not passed to the CA")
+		})
+	}
+}
+
 func TestRevokeCertificate_Error(t *testing.T) {
 	t.Run("returns error when CA is nil", func(t *testing.T) {
 		handlers, writer := newTestHandlers(nil)

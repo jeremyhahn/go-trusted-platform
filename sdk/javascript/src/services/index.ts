@@ -20,10 +20,17 @@ export { KMSService } from './kms-service.js';
 export { OverlayService } from './overlay-service.js';
 export { PlatformService } from './platform-service.js';
 export { PXEService } from './pxe-service.js';
+export {
+  RegistryService,
+  RegistryHealth,
+  type RegistryStatus,
+  type RegistryTagList,
+  type RegistryComponentHealth,
+} from './registry-service.js';
 export { SDNService } from './sdn-service.js';
 export { TenantService } from './tenant-service.js';
 export { TPMService } from './tpm-service.js';
-export { VTPMService } from './vtpm-service.js';
+export { VTPMService, InvalidDeviceProfileIdError } from './vtpm-service.js';
 export { VPNService } from './vpn-service.js';
 export { InvitationService } from './invitation-service.js';
 export { EABService } from './eab-service.js';
