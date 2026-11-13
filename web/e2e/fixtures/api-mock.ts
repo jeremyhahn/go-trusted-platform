@@ -445,6 +445,109 @@ export async function mockHealthApi(
   });
 }
 
+// ============================================================================
+// Container registry (#1723)
+// ============================================================================
+
+export interface RegistryApiMockConfig {
+  /** Repository name to its tags. Deleting a tag removes it here. */
+  repositories?: Record<string, string[]>;
+  /** Status payload; Health follows RegistryHealthStatus (1 = healthy). */
+  status?: {
+    Health: number;
+    Version?: string;
+    ReadOnly?: boolean;
+    Components?: { Name?: string; Status?: number }[];
+  };
+  statusError?: ApiError;
+  deleteError?: ApiError;
+}
+
+export interface RegistryApiMockState {
+  repositories: Record<string, string[]>;
+  deleted: string[];
+}
+
+/**
+ * Mock the registry status route and the OCI distribution tag list and
+ * manifest delete routes. Returns the live state so a test can assert
+ * which manifests were deleted.
+ */
+export async function mockRegistryApi(
+  page: Page,
+  config: RegistryApiMockConfig = {}
+): Promise<RegistryApiMockState> {
+  const state: RegistryApiMockState = {
+    repositories: Object.fromEntries(
+      Object.entries(config.repositories ?? {}).map(([k, v]) => [k, [...v]])
+    ),
+    deleted: [],
+  };
+  const status = config.status ?? { Health: 1, Version: '1.0.0', ReadOnly: false, Components: [] };
+
+  await page.route('**/api/v1/compute/images/status*', async (route: Route, request: Request) => {
+    if (request.method() !== 'GET') {
+      await route.continue();
+      return;
+    }
+    if (config.statusError) {
+      await route.fulfill({
+        status: config.statusError.status,
+        contentType: 'application/json',
+        body: errorEnvelope(config.statusError),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ payload: status }),
+    });
+  });
+
+  await page.route('**/v2/**', async (route: Route, request: Request) => {
+    const path = decodeURIComponent(new URL(request.url()).pathname).replace(/\/$/, '');
+    const tagsMatch = /^\/v2\/(.+)\/tags\/list$/.exec(path);
+    if (tagsMatch && request.method() === 'GET') {
+      const name = tagsMatch[1];
+      const tags = state.repositories[name];
+      if (!tags) {
+        await route.fulfill({
+          status: 404,
+          contentType: 'application/json',
+          body: JSON.stringify({ errors: [{ code: 'NAME_UNKNOWN', message: 'repository name not known to registry' }] }),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ name, tags }),
+      });
+      return;
+    }
+    const manifestMatch = /^\/v2\/(.+)\/manifests\/([^/]+)$/.exec(path);
+    if (manifestMatch && request.method() === 'DELETE') {
+      if (config.deleteError) {
+        await route.fulfill({
+          status: config.deleteError.status,
+          contentType: 'application/json',
+          body: errorEnvelope(config.deleteError),
+        });
+        return;
+      }
+      const [, name, reference] = manifestMatch;
+      state.repositories[name] = (state.repositories[name] ?? []).filter((t) => t !== reference);
+      state.deleted.push(`${name}:${reference}`);
+      await route.fulfill({ status: 202, body: '' });
+      return;
+    }
+    await route.continue();
+  });
+
+  return state;
+}
+
 /**
  * Mock all common API endpoints with default configurations.
  *
@@ -885,6 +988,7 @@ export interface OverlayApiMockConfig {
     bytesTx: number;
     bytesRx: number;
   }>;
+  macs?: Array<{ mac: string; vni: number; remoteVtep: string; learnedAt: string }>;
   /**
    * Requests to fail, keyed '<METHOD> <path>' (for example 'DELETE /vnis/5001'
    * or 'GET /vteps'), with the HTTP status to answer. Use a status the client
@@ -912,6 +1016,7 @@ export async function mockOverlayApi(
   const vteps = [...(config.vteps ?? [])];
   let vnis = [...(config.vnis ?? [])];
   const tunnels = [...(config.tunnels ?? [])];
+  let macs = [...(config.macs ?? [])];
 
   await page.route(
     (url) => url.pathname.startsWith('/api/v1/overlay/'),
@@ -940,6 +1045,8 @@ export async function mockOverlayApi(
       if (method === 'DELETE' && path.startsWith('/vnis/')) {
         const vni = Number(path.slice('/vnis/'.length));
         vnis = vnis.filter((v) => v.config.vni !== vni);
+        // Controller.RemoveVNI removes every remote MAC of the VNI too.
+        macs = macs.filter((m) => m.vni !== vni);
         return json(200, { status: { success: true, message: 'deleted' } });
       }
       if (method === 'GET' && path === '/tunnels') return json(200, { tunnels });
@@ -951,7 +1058,13 @@ export async function mockOverlayApi(
           ? json(200, { tunnel })
           : json(404, { error: { code: 'not_found', message: 'tunnel not found' } });
       }
+      if (method === 'GET' && path === '/macs') {
+        const listed =
+          query.vni !== undefined ? macs.filter((m) => String(m.vni) === query.vni) : macs;
+        return json(200, { macs: listed });
+      }
       if (method === 'DELETE' && path === '/macs') {
+        macs = macs.filter((m) => !(m.mac === query.mac && String(m.vni) === query.vni));
         return json(200, { status: { success: true, message: 'forgotten' } });
       }
       return route.continue();

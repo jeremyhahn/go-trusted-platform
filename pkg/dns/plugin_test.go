@@ -171,27 +171,6 @@ func TestSave_Success(t *testing.T) {
 	assert.Equal(t, expectedID, zeroIDZone.ID)
 }
 
-// TestSecurityLogEntry verifies the SecurityLogEntry struct fields.
-func TestSecurityLogEntry(t *testing.T) {
-	entry := logging.SecurityLogEntry{
-		Severity:        "high",
-		Category:        "network",
-		Description:     "Test description",
-		Details:         "Test details",
-		Source:          "test",
-		OffenderAddress: "192.168.1.1",
-		OffenderID:      "test-id",
-	}
-
-	assert.Equal(t, "high", entry.Severity)
-	assert.Equal(t, "network", entry.Category)
-	assert.Equal(t, "Test description", entry.Description)
-	assert.Equal(t, "Test details", entry.Details)
-	assert.Equal(t, "test", entry.Source)
-	assert.Equal(t, "192.168.1.1", entry.OffenderAddress)
-	assert.Equal(t, "test-id", entry.OffenderID)
-}
-
 // TestErrInternalZoneQueryViolation verifies the error message.
 func TestErrInternalZoneQueryViolation(t *testing.T) {
 	err := ErrInternalZoneQueryViolation

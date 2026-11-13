@@ -132,7 +132,7 @@ func (s *inProcCeremonyServer) SignCSR(_ context.Context, req *platformv1.Ceremo
 // and returns it with JSON-output flags whose local context points at it.
 func startCeremonyServer(t *testing.T) (*inProcCeremonyServer, *cli.CommonFlags) {
 	t.Helper()
-	sock := filepath.Join(t.TempDir(), "platformd.sock")
+	sock := filepath.Join(shortSocketDir(t), "platformd.sock")
 	lis, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatalf("listen: %v", err)
