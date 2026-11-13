@@ -83,10 +83,10 @@ describe('GatewayService', () => {
     });
 
     it('deleteState DELETEs /v1/gateway/state/{id} with no body', async () => {
-      await service.deleteState('gw-01');
+      await service.deleteState('example-gateway');
 
       expectOnly('delete');
-      expect(mockClient.delete).toHaveBeenCalledWith('/v1/gateway/state/gw-01');
+      expect(mockClient.delete).toHaveBeenCalledWith('/v1/gateway/state/example-gateway');
     });
 
     it('deleteState encodes the id', async () => {
@@ -220,8 +220,8 @@ describe('GatewayService', () => {
       ['getStatus', 'get', (s) => s.getStatus()],
       ['setMode', 'post', (s) => s.setMode({ modes: 1 })],
       ['listState', 'get', (s) => s.listState()],
-      ['getState', 'get', (s) => s.getState('gw-01')],
-      ['deleteState', 'delete', (s) => s.deleteState('gw-01')],
+      ['getState', 'get', (s) => s.getState('example-gateway')],
+      ['deleteState', 'delete', (s) => s.deleteState('example-gateway')],
       ['getNAT64Status', 'get', (s) => s.getNAT64Status()],
       ['getBGPStatus', 'get', (s) => s.getBGPStatus()],
       ['listBGPPeers', 'get', (s) => s.listBGPPeers()],
