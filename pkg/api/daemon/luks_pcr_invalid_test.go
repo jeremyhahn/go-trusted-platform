@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
 // luksPCRRefusingBackend refuses every TPM enrollment the way the
@@ -25,7 +26,8 @@ func (b *luksPCRRefusingBackend) EnrollTPM(_ context.Context, req *LUKSEnrollTPM
 }
 
 // TestLUKSPCRInvalid_TransportMapping: an invalid PCR selection is invalid
-// input on REST (400) and gRPC (InvalidArgument), not a server failure.
+// input on REST (400), gRPC and MCP (InvalidArgument) and QUIC
+// (StatusInvalidArgument), not a server failure.
 func TestLUKSPCRInvalid_TransportMapping(t *testing.T) {
 	err := fmt.Errorf("wrapped: %w", ErrLUKSPCRInvalid)
 
@@ -34,6 +36,12 @@ func TestLUKSPCRInvalid_TransportMapping(t *testing.T) {
 	}
 	if st, _ := status.FromError(luksErrorToGRPC(err)); st.Code() != codes.InvalidArgument {
 		t.Errorf("gRPC: want InvalidArgument, got %v", st.Code())
+	}
+	if got := status.Code(ErrLUKSOperation{Cause: err}); got != codes.InvalidArgument {
+		t.Errorf("MCP: want InvalidArgument, got %v", got)
+	}
+	if got := errResponseFrom(err).Status; got != quicwire.StatusInvalidArgument {
+		t.Errorf("QUIC: want InvalidArgument, got %#x", got)
 	}
 }
 
