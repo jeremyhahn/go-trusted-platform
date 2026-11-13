@@ -30,7 +30,6 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { useApi, useNTP, useToast } from '@/hooks';
-import type { NTPStatus } from '@/hooks';
 
 /** `lastSyncUnix` is seconds since the epoch; 0 means never. */
 function formatLastSync(value: number | string | undefined): string {
@@ -50,7 +49,6 @@ export default function NTPPage() {
   const ntp = useNTP();
   const [stepOpen, setStepOpen] = useState(false);
   const [stepping, setStepping] = useState(false);
-  const [steppedStatus, setSteppedStatus] = useState<NTPStatus | null>(null);
   // The last status read failure, kept until a status read or a Step succeeds.
   // useApi clears its own error as each request starts, so it cannot carry this.
   const [staleError, setStaleError] = useState<{ message: string } | null>(null);
@@ -60,6 +58,7 @@ export default function NTPPage() {
     isLoading: statusLoading,
     isFetching: statusFetching,
     refetch: fetchStatus,
+    mutate: setStatusData,
   } = useApi(() => ntp.getStatus(), [], {
     onSuccess: () => {
       setStaleError(null);
@@ -90,7 +89,7 @@ export default function NTPPage() {
     },
   });
 
-  const status = steppedStatus ?? statusData?.status;
+  const status = statusData?.status;
   // useApi keeps the last good data when a refresh fails: mark that cached
   // status stale from the failure until a status read or a Step succeeds, so a
   // failed clock service never reads as synchronised, even while a retry is
@@ -103,7 +102,6 @@ export default function NTPPage() {
 
   const refresh = () => {
     if (loading) return;
-    setSteppedStatus(null);
     void fetchStatus();
     void fetchSources();
   };
@@ -115,8 +113,12 @@ export default function NTPPage() {
       if (!res.success) {
         throw new Error(res.error?.message ?? 'step failed');
       }
-      if (res.data?.status) {
-        setSteppedStatus(res.data.status);
+      const stepped = res.data?.status;
+      if (stepped) {
+        // The Step response is the latest successful read: put it in the
+        // status cache so a later failed refresh keeps it, not the pre-step
+        // snapshot.
+        setStatusData((prev) => ({ ...prev, status: stepped }));
         setStaleError(null);
       }
       toast({ title: 'Clock stepped', description: 'The clock was stepped to the selected source.' });
