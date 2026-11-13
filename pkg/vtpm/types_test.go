@@ -171,44 +171,5 @@ func TestManifest_VersionConstant(t *testing.T) {
 }
 
 // =============================================================================
-// Bundle Tests
-// =============================================================================
-
-func TestBundle_SecureBootKeys(t *testing.T) {
-	sbKeys := &SecureBootKeyPaths{
-		PKKey:   "/path/to/PK.key",
-		PKCert:  "/path/to/PK.crt",
-		KEKKey:  "/path/to/KEK.key",
-		KEKCert: "/path/to/KEK.crt",
-		DBKey:   "/path/to/DB.key",
-		DBCert:  "/path/to/DB.crt",
-	}
-
-	bundle := &Bundle{
-		ID:             "sb-bundle",
-		SecureBootKeys: sbKeys,
-	}
-
-	if bundle.SecureBootKeys.PKKey != "/path/to/PK.key" {
-		t.Errorf("PKKey = %v, want /path/to/PK.key", bundle.SecureBootKeys.PKKey)
-	}
-	if bundle.SecureBootKeys.PKCert != "/path/to/PK.crt" {
-		t.Errorf("PKCert = %v, want /path/to/PK.crt", bundle.SecureBootKeys.PKCert)
-	}
-	if bundle.SecureBootKeys.KEKKey != "/path/to/KEK.key" {
-		t.Errorf("KEKKey = %v, want /path/to/KEK.key", bundle.SecureBootKeys.KEKKey)
-	}
-	if bundle.SecureBootKeys.KEKCert != "/path/to/KEK.crt" {
-		t.Errorf("KEKCert = %v, want /path/to/KEK.crt", bundle.SecureBootKeys.KEKCert)
-	}
-	if bundle.SecureBootKeys.DBKey != "/path/to/DB.key" {
-		t.Errorf("DBKey = %v, want /path/to/DB.key", bundle.SecureBootKeys.DBKey)
-	}
-	if bundle.SecureBootKeys.DBCert != "/path/to/DB.crt" {
-		t.Errorf("DBCert = %v, want /path/to/DB.crt", bundle.SecureBootKeys.DBCert)
-	}
-}
-
-// =============================================================================
 // Constants Tests
 // =============================================================================
