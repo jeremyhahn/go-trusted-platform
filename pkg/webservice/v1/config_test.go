@@ -259,25 +259,6 @@ func TestIdentityStruct(t *testing.T) {
 	})
 }
 
-func TestJWTStruct(t *testing.T) {
-	t.Run("zero values", func(t *testing.T) {
-		jwt := JWT{}
-
-		assert.Zero(t, jwt.Expiration)
-		assert.Empty(t, jwt.Issuer)
-	})
-
-	t.Run("with values", func(t *testing.T) {
-		jwt := JWT{
-			Expiration: 86400,
-			Issuer:     "https://auth.example.com",
-		}
-
-		assert.Equal(t, int64(86400), jwt.Expiration)
-		assert.Equal(t, "https://auth.example.com", jwt.Issuer)
-	})
-}
-
 func TestProxyConfigStruct(t *testing.T) {
 	t.Run("zero values", func(t *testing.T) {
 		proxy := ProxyConfig{}

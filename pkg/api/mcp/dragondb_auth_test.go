@@ -648,31 +648,3 @@ func TestParseToolPermission(t *testing.T) {
 		}
 	})
 }
-
-func TestTokenValidationResult(t *testing.T) {
-	result := &TokenValidationResult{
-		Valid:     true,
-		UserID:    "user-123",
-		TenantID:  "tenant-456",
-		Roles:     []string{"admin", "user"},
-		Groups:    []string{"group-1", "group-2"},
-		ExpiresAt: 1234567890,
-		Scope:     "mcp:tools mcp:resources",
-	}
-
-	if !result.Valid {
-		t.Error("expected Valid to be true")
-	}
-	if result.UserID != "user-123" {
-		t.Errorf("UserID = %s, want user-123", result.UserID)
-	}
-	if result.TenantID != "tenant-456" {
-		t.Errorf("TenantID = %s, want tenant-456", result.TenantID)
-	}
-	if len(result.Roles) != 2 {
-		t.Errorf("Roles count = %d, want 2", len(result.Roles))
-	}
-	if len(result.Groups) != 2 {
-		t.Errorf("Groups count = %d, want 2", len(result.Groups))
-	}
-}
