@@ -895,17 +895,25 @@ export const TPM_QUOTE_CHANNEL_BINDING = Buffer.alloc(32, 0xa1).toString('base64
  * SHA-256(nonce || channelBinding), with that channelBinding echoed. The
  * page refuses any quote not bound this way.
  */
-export function boundQuoteReply(nonceB64: string) {
+export function boundQuoteReply(nonceB64: string, bank = 0x000b) {
   const binding = Buffer.from(TPM_QUOTE_CHANNEL_BINDING, 'base64');
   const extraData = createHash('sha256')
     .update(Buffer.concat([Buffer.from(nonceB64, 'base64'), binding]))
     .digest();
-  const attest = Buffer.alloc(10 + extraData.length + 17);
+  // clockInfo(17) firmwareVersion(8), then TPMS_QUOTE_INFO: one
+  // TPML_PCR_SELECTION entry over `bank` (3 select bytes) and a 32-byte
+  // pcrDigest. The page refuses a quote over any bank but SHA256 (#1751).
+  const selectAt = 10 + extraData.length + 17 + 8;
+  const attest = Buffer.alloc(selectAt + 4 + 3 + 3 + 2 + 32);
   attest.writeUInt32BE(0xff544347, 0);
   attest.writeUInt16BE(0x8018, 4);
   attest.writeUInt16BE(0, 6);
   attest.writeUInt16BE(extraData.length, 8);
   extraData.copy(attest, 10);
+  attest.writeUInt32BE(1, selectAt);
+  attest.writeUInt16BE(bank, selectAt + 4);
+  attest.writeUInt8(3, selectAt + 6);
+  attest.writeUInt16BE(32, selectAt + 10);
   return {
     quote: attest.toString('base64'),
     signature: 'c2ln',

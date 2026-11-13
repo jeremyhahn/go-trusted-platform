@@ -79,6 +79,43 @@ function randomNonce(): string {
   return btoa(String.fromCharCode(...bytes));
 }
 
+/** TPM_ALG_ID of the only PCR bank this panel quotes (TPM_ALG_SHA256). */
+const TPM_ALG_SHA256 = 0x000b;
+
+/**
+ * quotePCRBanks returns the hash algorithm of every TPMS_PCR_SELECTION in a
+ * base64 TPMS_ATTEST quote: magic(4) type(2) qualifiedSigner extraData
+ * clockInfo(17) firmwareVersion(8), then TPMS_QUOTE_INFO's
+ * TPML_PCR_SELECTION. It throws on a truncated structure. The server's Quote
+ * may sign over the IAK's own bank whatever pcrBank asked (#1751), so the
+ * caller checks the banks before announcing anything.
+ */
+export function quotePCRBanks(quoteB64: string): number[] {
+  const bytes = Uint8Array.from(atob(quoteB64), (c) => c.charCodeAt(0));
+  const view = new DataView(bytes.buffer);
+  const need = (at: number, n: number) => {
+    if (at + n > bytes.byteLength) throw new Error("quote is truncated before its PCR selection");
+  };
+  let at = 6;
+  for (let i = 0; i < 2; i++) {
+    need(at, 2);
+    at += 2 + view.getUint16(at); // qualifiedSigner, then extraData
+  }
+  at += 17 + 8;
+  need(at, 4);
+  const count = view.getUint32(at);
+  at += 4;
+  const banks: number[] = [];
+  for (let i = 0; i < count; i++) {
+    need(at, 3);
+    banks.push(view.getUint16(at));
+    const sizeofSelect = view.getUint8(at + 2);
+    need(at + 3, sizeofSelect);
+    at += 3 + sizeofSelect;
+  }
+  return banks;
+}
+
 interface QuoteResult {
   quote?: string;
   signature?: string;
@@ -216,6 +253,13 @@ export function TPMKeyOperations({ onChanged }: { onChanged?: () => void }) {
         // errors.quote, so nothing is announced and nothing can be verified.
         const quote = (res.data ?? {}) as QuoteResult;
         await checkQuoteBinding(quote.quote ?? "", nonce, quote.channelBinding);
+        // The binding covers qualifying data only: refuse a quote whose PCR
+        // selection is not the SHA256 bank requested (#1751).
+        const banks = quotePCRBanks(quote.quote ?? "");
+        if (banks.length === 0 || banks.some((b) => b !== TPM_ALG_SHA256)) {
+          const got = banks.map((b) => `0x${b.toString(16).padStart(4, "0")}`).join(", ") || "none";
+          throw new Error(`quote covers PCR bank ${got}, not the SHA256 bank requested; refused`);
+        }
       }
       return res;
     });
