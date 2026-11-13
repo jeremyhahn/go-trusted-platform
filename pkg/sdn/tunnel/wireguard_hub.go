@@ -190,7 +190,16 @@ func RemoveStaleWireGuardHub(logger *slog.Logger, name string) error {
 
 func removeStaleWireGuardHub(logger *slog.Logger, nl netlinkOps, name string) error {
 	stale, err := nl.LinkByName(name)
-	if err != nil || stale == nil || stale.Type() != (&vnl.Wireguard{}).Type() {
+	if err != nil {
+		// Only the typed not-found result proves the device absent; any other
+		// lookup failure leaves a predecessor's hub possibly live.
+		var missing vnl.LinkNotFoundError
+		if errors.As(err, &missing) {
+			return nil
+		}
+		return &ErrTunnelRemoveFailed{Name: name, Cause: fmt.Errorf("looking up a stale hub device: %w", err)}
+	}
+	if stale == nil || stale.Type() != (&vnl.Wireguard{}).Type() {
 		return nil
 	}
 	if err := nl.LinkDel(stale); err != nil {
