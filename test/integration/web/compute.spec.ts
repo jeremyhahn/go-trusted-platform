@@ -333,9 +333,6 @@ test.describe('Images Page', () => {
 
       await authenticatedPage.waitForLoadState('networkidle');
 
-      // Wait for loading to complete
-      await authenticatedPage.waitForTimeout(1000);
-
       // Should have statistics cards
       const totalImagesCard = authenticatedPage.locator('text=Total Images');
       await expect(totalImagesCard).toBeVisible();
@@ -377,9 +374,6 @@ test.describe('Images Page', () => {
     test('should display image rows in table', async ({ authenticatedPage }) => {
       await authenticatedPage.goto('/compute/images');
 
-      // Wait for data to load (internal mock data uses setTimeout)
-      await authenticatedPage.waitForTimeout(1000);
-
       const tableBody = authenticatedPage.locator('tbody');
       await expect(tableBody).toBeVisible();
 
@@ -392,10 +386,9 @@ test.describe('Images Page', () => {
     test('should display image status badges', async ({ authenticatedPage }) => {
       await authenticatedPage.goto('/compute/images');
 
-      await authenticatedPage.waitForTimeout(1000);
-
       // Look for status text in badges
       const statusBadge = authenticatedPage.locator('text=/available|downloading|building|error/i').first();
+      await expect(statusBadge).toBeVisible();
       const hasStatus = (await statusBadge.count()) > 0;
       expect(hasStatus).toBe(true);
     });
@@ -403,10 +396,9 @@ test.describe('Images Page', () => {
     test('should display image type badges', async ({ authenticatedPage }) => {
       await authenticatedPage.goto('/compute/images');
 
-      await authenticatedPage.waitForTimeout(1000);
-
       // Look for type text in badges (VM or CONTAINER)
       const typeBadge = authenticatedPage.locator('text=/VM|CONTAINER/').first();
+      await expect(typeBadge).toBeVisible();
       const hasType = (await typeBadge.count()) > 0;
       expect(hasType).toBe(true);
     });
@@ -414,18 +406,15 @@ test.describe('Images Page', () => {
     test('should display architecture badges', async ({ authenticatedPage }) => {
       await authenticatedPage.goto('/compute/images');
 
-      await authenticatedPage.waitForTimeout(1000);
-
       // Look for architecture text in badges
       const archBadge = authenticatedPage.locator('text=/amd64|arm64|x86_64/').first();
+      await expect(archBadge).toBeVisible();
       const hasArch = (await archBadge.count()) > 0;
       expect(hasArch).toBe(true);
     });
 
     test('should display image tags', async ({ authenticatedPage }) => {
       await authenticatedPage.goto('/compute/images');
-
-      await authenticatedPage.waitForTimeout(1000);
 
       // Look for tags or image names in the table
       const tableContent = authenticatedPage.locator('table');
@@ -434,8 +423,6 @@ test.describe('Images Page', () => {
 
     test('should display action dropdown menu', async ({ authenticatedPage }) => {
       await authenticatedPage.goto('/compute/images');
-
-      await authenticatedPage.waitForTimeout(1000);
 
       // Find action button in table row
       const actionButton = authenticatedPage.locator('tbody button').first();
@@ -451,8 +438,6 @@ test.describe('Images Page', () => {
 
     test('should display usage count', async ({ authenticatedPage }) => {
       await authenticatedPage.goto('/compute/images');
-
-      await authenticatedPage.waitForTimeout(1000);
 
       // Look for usage count text
       const usageText = authenticatedPage.locator('text=/\\d+ instances/').first();
