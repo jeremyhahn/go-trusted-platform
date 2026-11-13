@@ -63,13 +63,5 @@ func TestNewListCommand_HelpText(t *testing.T) {
 	assert.Contains(t, cmd.Long, "Device")
 }
 
-func TestListFlags(t *testing.T) {
-	flags := &listFlags{
-		configDir: "/etc/trusted-platform",
-	}
-
-	assert.Equal(t, "/etc/trusted-platform", flags.configDir)
-}
-
 // Note: runList requires a running platformd server to test properly.
 // Integration tests for the full command execution are in the integration test suite.
