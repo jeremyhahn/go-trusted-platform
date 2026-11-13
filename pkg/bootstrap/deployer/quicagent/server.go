@@ -50,6 +50,9 @@ const streamRefused quic.StreamErrorCode = 2
 type Server struct {
 	tlsConf *tls.Config
 	logger  *slog.Logger
+	// outputLimit is the Run output budget in bytes; zero means
+	// maxOutputSize.
+	outputLimit int
 
 	mu       sync.Mutex
 	listener *quic.Listener
@@ -225,16 +228,29 @@ func (s *Server) handleStream(stream *quic.Stream, peer string) {
 }
 
 func (s *Server) run(ctx context.Context, command string) response {
+	limit := s.outputLimit
+	if limit <= 0 {
+		limit = maxOutputSize
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	// stdout and stderr share one budget, enforced while the command
+	// runs: the write that passes it kills the process group, so a
+	// verbose or endless command cannot grow the agent's memory.
+	budget := &outputBudget{limit: limit, exceeded: cancel}
 	var stdout, stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, shellPath, "-c", command)
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	cmd := exec.CommandContext(runCtx, shellPath, "-c", command)
+	cmd.Stdout = budget.writer(&stdout)
+	cmd.Stderr = budget.writer(&stderr)
 	// Cancellation kills the command's whole process group, and the wait
 	// for output pipes a stray descendant still holds is bounded, so a
 	// cancelled operation cannot hold up Serve's shutdown.
 	killProcessGroupOnCancel(cmd)
 	cmd.WaitDelay = runWaitDelay
 	err := cmd.Run()
+	if budget.over() {
+		return response{Error: ErrOutputTooLarge{Limit: limit}.Error()}
+	}
 	resp := response{Stdout: stdout.String(), Stderr: stderr.String()}
 	var exitErr *exec.ExitError
 	switch {
@@ -245,6 +261,50 @@ func (s *Server) run(ctx context.Context, command string) response {
 		resp.Error = err.Error()
 	}
 	return resp
+}
+
+// outputBudget bounds the bytes a command's stdout and stderr together
+// may hold. The write that would pass the limit is refused, marks the
+// budget exceeded and calls exceeded (which cancels the command).
+type outputBudget struct {
+	limit    int
+	exceeded func()
+
+	mu   sync.Mutex
+	used int
+	hit  bool
+}
+
+func (b *outputBudget) writer(buf *bytes.Buffer) io.Writer {
+	return budgetWriter{b: b, buf: buf}
+}
+
+func (b *outputBudget) over() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.hit
+}
+
+type budgetWriter struct {
+	b   *outputBudget
+	buf *bytes.Buffer
+}
+
+func (w budgetWriter) Write(p []byte) (int, error) {
+	w.b.mu.Lock()
+	if w.b.hit || w.b.used+len(p) > w.b.limit {
+		first := !w.b.hit
+		w.b.hit = true
+		w.b.mu.Unlock()
+		if first {
+			w.b.exceeded()
+		}
+		return 0, ErrOutputTooLarge{Limit: w.b.limit}
+	}
+	w.b.used += len(p)
+	n, err := w.buf.Write(p)
+	w.b.mu.Unlock()
+	return n, err
 }
 
 // copy writes exactly req.Size body bytes to a temporary file beside

@@ -66,8 +66,14 @@ the stream.
 
 - **Run** executes the command with `/bin/sh -c`, as an SSH session would.
   A non-zero exit gives `quicagent.ErrCommand` with the status and the
-  output (stderr, else stdout).
-- **CopyFileStream** streams the file without buffering it. The agent
+  output (stderr, else stdout). Stdout and stderr together may hold
+  2 MiB, enforced while the command runs: the write that passes the budget
+  kills the command's process group and the response carries
+  `quicagent.ErrOutputTooLarge` instead of the output.
+- **CopyFileStream** streams the file without buffering it. The client
+  sends exactly the size it announced and hashes those same bytes: a file
+  that grows during the upload is cut at that size, and one that shrinks
+  fails with `quicagent.ErrSourceChanged` before the agent commits it. The agent
   writes a temporary file beside the target, sets mode 0644 and renames it
   into place, so a failed copy never leaves a partial file at the target.
   The client compares the agent's sha256 with its own and returns

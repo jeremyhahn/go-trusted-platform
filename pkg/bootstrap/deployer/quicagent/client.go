@@ -18,6 +18,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
+	"errors"
 	"io"
 	"os"
 	"sync"
@@ -139,13 +140,25 @@ func (c *Client) CopyFileStream(ctx context.Context, localPath, remotePath strin
 	if err != nil {
 		return deployer.ErrFileRead{Path: localPath, Cause: err}
 	}
+	return c.copyFrom(ctx, f, info.Size(), localPath, remotePath)
+}
 
+// copyFrom uploads exactly size bytes of src to remotePath and checks the
+// agent's digest against the digest of those same bytes. A source that
+// grows after size was taken is cut at size, so the body never overruns
+// the request (the agent stops reading at Size, and the surplus would
+// exhaust QUIC flow control); one that shrinks fails with
+// ErrSourceChanged before the agent can commit the destination.
+func (c *Client) copyFrom(ctx context.Context, src io.Reader, size int64, localPath, remotePath string) error {
 	h := sha256.New()
 	body := func(w io.Writer) error {
-		_, err := io.Copy(w, io.TeeReader(f, h))
+		n, err := io.CopyN(w, io.TeeReader(src, h), size)
+		if errors.Is(err, io.EOF) {
+			return ErrSourceChanged{Path: localPath, Announced: size, Sent: n}
+		}
 		return err
 	}
-	resp, err := c.roundTrip(ctx, request{Op: opCopy, Path: remotePath, Size: info.Size()}, body)
+	resp, err := c.roundTrip(ctx, request{Op: opCopy, Path: remotePath, Size: size}, body)
 	if err != nil {
 		return deployer.ErrFileCopy{Local: localPath, Remote: remotePath, Cause: err}
 	}

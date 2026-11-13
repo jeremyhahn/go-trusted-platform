@@ -33,6 +33,11 @@ const ALPN = "gtp-deploy-agent/1"
 // maxFrameSize bounds a request or response frame (command output included).
 const maxFrameSize = 16 << 20
 
+// maxOutputSize is the budget for a Run's stdout and stderr together. JSON
+// encodes a byte as at most six (an invalid UTF-8 byte becomes "�"),
+// so a full budget still fits one response frame.
+const maxOutputSize = maxFrameSize / 8
+
 // Operation names on the wire.
 const (
 	opRun  = "run"

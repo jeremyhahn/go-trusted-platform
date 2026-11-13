@@ -110,3 +110,25 @@ type ErrFrameTooLarge struct {
 func (e ErrFrameTooLarge) Error() string {
 	return fmt.Sprintf("quicagent: frame of %d bytes exceeds the %d byte limit", e.Size, maxFrameSize)
 }
+
+// ErrSourceChanged reports a local file that ended before the size
+// announced to the agent: it shrank during the upload.
+type ErrSourceChanged struct {
+	Path      string
+	Announced int64
+	Sent      int64
+}
+
+func (e ErrSourceChanged) Error() string {
+	return fmt.Sprintf("quicagent: %s ended after %d of the %d bytes announced", e.Path, e.Sent, e.Announced)
+}
+
+// ErrOutputTooLarge reports a command whose combined stdout and stderr
+// passed the agent's output budget; the agent killed it.
+type ErrOutputTooLarge struct {
+	Limit int
+}
+
+func (e ErrOutputTooLarge) Error() string {
+	return fmt.Sprintf("quicagent: command output passed the %d byte limit; the command was killed", e.Limit)
+}
