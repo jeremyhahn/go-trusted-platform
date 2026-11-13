@@ -5,6 +5,7 @@ import (
 	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/fips140"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
@@ -439,17 +440,13 @@ func TestCoverage964c_NTSPairHealthy(t *testing.T) {
 	certPEM := pemOf("CERTIFICATE", issueTestCert(t, 1, "nts", false, key.Public(), nil, key).Raw)
 	other := newKey()
 	otherCertPEM := pemOf("CERTIFICATE", issueTestCert(t, 2, "other", false, other.Public(), nil, other).Raw)
-	x25519, err := ecdh.X25519().GenerateKey(rand.Reader)
-	require.NoError(t, err)
-	x25519DER, err := x509.MarshalPKCS8PrivateKey(x25519)
-	require.NoError(t, err)
-
-	cases := map[string]struct {
+	type pairCase struct {
 		key, cert []byte
 		failAt    map[string]int
 		healthy   bool
 		failedOn  string
-	}{
+	}
+	cases := map[string]pairCase{
 		"matching pair":             {key: keyPEM, cert: certPEM, healthy: true},
 		"key absent":                {cert: certPEM},
 		"certificate absent":        {key: keyPEM},
@@ -461,8 +458,17 @@ func TestCoverage964c_NTSPairHealthy(t *testing.T) {
 		"key is not PKCS#8":         {key: pemOf("PRIVATE KEY", []byte{1, 2, 3}), cert: certPEM},
 		"certificate is not PEM":    {key: keyPEM, cert: []byte("raw")},
 		"certificate is not DER":    {key: keyPEM, cert: pemOf("CERTIFICATE", []byte{1, 2, 3})},
-		"key cannot sign":           {key: pemOf("PRIVATE KEY", x25519DER), cert: certPEM},
 		"certificate is for a peer": {key: keyPEM, cert: otherCertPEM},
+	}
+	// The one PKCS#8 key that is not a crypto.Signer is X25519, which
+	// FIPS 140-only mode neither generates nor parses: the case runs only
+	// outside FIPS mode.
+	if !fips140.Enabled() {
+		x25519, err := ecdh.X25519().GenerateKey(rand.Reader)
+		require.NoError(t, err)
+		x25519DER, err := x509.MarshalPKCS8PrivateKey(x25519)
+		require.NoError(t, err)
+		cases["key cannot sign"] = pairCase{key: pemOf("PRIVATE KEY", x25519DER), cert: certPEM}
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
