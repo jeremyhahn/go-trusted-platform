@@ -646,8 +646,8 @@ test.describe('Platform Metrics Page', () => {
     test('should display service metrics section', async ({ authenticatedPage }) => {
       await authenticatedPage.goto('/platform/metrics');
 
-      // The Uptime card renders only after the metrics response arrives (the page shows its loading state until then).
-      await expect(authenticatedPage.locator('text=Uptime')).toBeVisible({ timeout: 10000 });
+      // The service cards render under the "Service Health" heading, only after the health response arrives (web/src/app/(dashboard)/platform/metrics/page.tsx renders it when serviceMetrics is not empty).
+      await expect(authenticatedPage.locator('h2:has-text("Service Health")')).toBeVisible({ timeout: 10000 });
 
       // Look for service metrics section or service names
       const serviceMetricsSection = authenticatedPage.locator('text=/service metrics|api server|tpm service/i');
@@ -658,8 +658,8 @@ test.describe('Platform Metrics Page', () => {
     test('should show service performance data', async ({ authenticatedPage }) => {
       await authenticatedPage.goto('/platform/metrics');
 
-      // The Uptime card renders only after the metrics response arrives (the page shows its loading state until then).
-      await expect(authenticatedPage.locator('text=Uptime')).toBeVisible({ timeout: 10000 });
+      // The service cards render under the "Service Health" heading, only after the health response arrives (web/src/app/(dashboard)/platform/metrics/page.tsx renders it when serviceMetrics is not empty).
+      await expect(authenticatedPage.locator('h2:has-text("Service Health")')).toBeVisible({ timeout: 10000 });
 
       // Look for performance metrics - the page shows latency, requests/sec, error rate
       const perfText = authenticatedPage.locator('text=/latency|requests|error/i');

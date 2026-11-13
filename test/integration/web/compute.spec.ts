@@ -188,10 +188,9 @@ test.describe('Snapshots Page', () => {
     test('should display snapshot status badges', async ({ authenticatedPage }) => {
       await authenticatedPage.goto('/compute/snapshots');
 
-      await expect(authenticatedPage.locator('main')).toBeVisible();
-
       // Look for status text in badges
       const statusBadge = authenticatedPage.locator('text=/available|creating|restoring|error/i').first();
+      await expect(statusBadge).toBeVisible({ timeout: 10000 });
       const hasStatus = (await statusBadge.count()) > 0;
       expect(hasStatus).toBe(true);
     });
@@ -199,10 +198,9 @@ test.describe('Snapshots Page', () => {
     test('should display source type badges', async ({ authenticatedPage }) => {
       await authenticatedPage.goto('/compute/snapshots');
 
-      await expect(authenticatedPage.locator('main')).toBeVisible();
-
       // Look for type text in badges (VM or CONTAINER)
       const typeBadge = authenticatedPage.locator('text=/VM|CONTAINER/').first();
+      await expect(typeBadge).toBeVisible({ timeout: 10000 });
       const hasType = (await typeBadge.count()) > 0;
       expect(hasType).toBe(true);
     });
