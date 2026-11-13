@@ -778,6 +778,7 @@ export interface OverlayApiMockConfig {
     bytesTx: number;
     bytesRx: number;
   }>;
+  macs?: Array<{ mac: string; vni: number; remoteVtep: string; learnedAt: string }>;
   /**
    * Requests to fail, keyed '<METHOD> <path>' (for example 'DELETE /vnis/5001'
    * or 'GET /vteps'), with the HTTP status to answer. Use a status the client
@@ -805,6 +806,7 @@ export async function mockOverlayApi(
   const vteps = [...(config.vteps ?? [])];
   let vnis = [...(config.vnis ?? [])];
   const tunnels = [...(config.tunnels ?? [])];
+  let macs = [...(config.macs ?? [])];
 
   await page.route(
     (url) => url.pathname.startsWith('/api/v1/overlay/'),
@@ -844,7 +846,13 @@ export async function mockOverlayApi(
           ? json(200, { tunnel })
           : json(404, { error: { code: 'not_found', message: 'tunnel not found' } });
       }
+      if (method === 'GET' && path === '/macs') {
+        const listed =
+          query.vni !== undefined ? macs.filter((m) => String(m.vni) === query.vni) : macs;
+        return json(200, { macs: listed });
+      }
       if (method === 'DELETE' && path === '/macs') {
+        macs = macs.filter((m) => !(m.mac === query.mac && String(m.vni) === query.vni));
         return json(200, { status: { success: true, message: 'forgotten' } });
       }
       return route.continue();

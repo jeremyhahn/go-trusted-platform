@@ -19,10 +19,11 @@ const tunnels = [
 
 async function openPage(
   page: Page,
-  failures: Record<string, number> = {}
+  failures: Record<string, number> = {},
+  macs: Array<{ mac: string; vni: number; remoteVtep: string; learnedAt: string }> = []
 ): Promise<OverlayApiCall[]> {
   await mockTenantApi(page);
-  const calls = await mockOverlayApi(page, { vteps, vnis, tunnels, failures });
+  const calls = await mockOverlayApi(page, { vteps, vnis, tunnels, macs, failures });
   await page.goto('/networking/overlays/vteps');
   await expect(page.getByRole('heading', { name: 'Overlay VTEPs' })).toBeVisible();
   return calls;
@@ -149,6 +150,44 @@ test.describe('Overlay VTEPs and tunnels', () => {
     await expect(page.getByTestId('vteps-list-error')).toHaveCount(0);
     await expect(page.getByTestId('vnis-list-error')).toHaveCount(0);
     await expect(page.getByRole('cell', { name: 'node-a', exact: true })).toBeVisible();
+    const del = page.getByRole('button', { name: 'Delete VNI 5001' });
+    await expect(del).toBeVisible();
+    await expect(del).toBeEnabled();
+  });
+
+  const learned = [
+    { mac: '02:00:00:00:00:01', vni: 5001, remoteVtep: 'node-b', learnedAt: '2026-11-12T00:00:00Z' },
+  ];
+
+  test('ListRemoteMACs: lists learned remote MACs', async ({ page }) => {
+    await openPage(page, {}, learned);
+    await expect(page.getByRole('cell', { name: '02:00:00:00:00:01', exact: true })).toBeVisible();
+  });
+
+  test('ListRemoteMACs: forgets a listed MAC after confirmation', async ({ page }) => {
+    const calls = await openPage(page, {}, learned);
+    await page.getByRole('button', { name: 'Forget 02:00:00:00:00:01 on VNI 5001' }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByText('Forget MAC 02:00:00:00:00:01 on VNI 5001?')).toBeVisible();
+    expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
+    await dialog.getByRole('button', { name: 'Forget' }).click();
+    await expect(dialog).toBeHidden();
+    expect(
+      calls.some(
+        (c) =>
+          c.method === 'DELETE' &&
+          c.path === '/macs' &&
+          c.query.mac === '02:00:00:00:00:01' &&
+          c.query.vni === '5001'
+      )
+    ).toBe(true);
+    await expect(page.getByRole('cell', { name: '02:00:00:00:00:01', exact: true })).toHaveCount(0);
+  });
+
+  test('ListRemoteMACs: a denied MAC list keeps the other tables usable', async ({ page }) => {
+    await openPage(page, { 'GET /macs': 403 }, learned);
+    await expect(page.getByTestId('macs-list-error')).toBeVisible();
+    await expect(page.getByTestId('vteps-list-error')).toHaveCount(0);
     const del = page.getByRole('button', { name: 'Delete VNI 5001' });
     await expect(del).toBeVisible();
     await expect(del).toBeEnabled();
