@@ -103,44 +103,53 @@ export default function LogsPage() {
     return params.toString();
   }, [selectedLevel, selectedService, searchQuery, computeSince]);
 
-  const fetchServices = React.useCallback(async () => {
-    try {
-      const res = await fetch("/api/v1/platform/logs/services", fetchOpts);
-      if (!res.ok) return;
-      const body = await res.json();
-      const list: string[] =
-        body.payload?.services ?? body.services ?? [];
-      setServices(list);
-    } catch {
-      // services list is best-effort; failure is non-fatal
-    }
-  }, [fetchOpts]);
+  const fetchServices = React.useCallback(
+    () =>
+      fetch("/api/v1/platform/logs/services", fetchOpts)
+        .then(async (res) => {
+          if (!res.ok) return;
+          const body = await res.json();
+          const list: string[] =
+            body.payload?.services ?? body.services ?? [];
+          setServices(list);
+        })
+        .catch(() => {
+          // services list is best-effort; failure is non-fatal
+        }),
+    [fetchOpts]
+  );
+
+  // settleLogs applies one log read from its promise callbacks, so the
+  // effect starts it without a synchronous setState; fetchLogs adds the
+  // loading flag for a re-read.
+  const settleLogs = React.useCallback(
+    () =>
+      fetch(`/api/v1/platform/logs?${buildQuery()}`, fetchOpts)
+        .then(async (res) => {
+          if (!res.ok) {
+            throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+          }
+          const body = await res.json();
+          const entries: WireEntry[] =
+            body.payload?.entries ?? body.entries ?? [];
+          setLogs(entries.map(toEntry));
+        })
+        .catch((e: unknown) => {
+          const msg = e instanceof Error ? e.message : String(e);
+          toast({
+            title: "Failed to load logs",
+            description: msg,
+            variant: "destructive",
+          });
+        })
+        .finally(() => setIsLoading(false)),
+    [buildQuery, fetchOpts, toast]
+  );
 
   const fetchLogs = React.useCallback(async () => {
     setIsLoading(true);
-    try {
-      const res = await fetch(
-        `/api/v1/platform/logs?${buildQuery()}`,
-        fetchOpts,
-      );
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}: ${await res.text()}`);
-      }
-      const body = await res.json();
-      const entries: WireEntry[] =
-        body.payload?.entries ?? body.entries ?? [];
-      setLogs(entries.map(toEntry));
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      toast({
-        title: "Failed to load logs",
-        description: msg,
-        variant: "destructive",
-      });
-    } finally {
-      setIsLoading(false);
-    }
-  }, [buildQuery, fetchOpts, toast]);
+    await settleLogs();
+  }, [settleLogs]);
 
   const startStreaming = React.useCallback(() => {
     const url = `/api/v1/platform/logs/stream?${buildQuery()}`;
@@ -200,8 +209,8 @@ export default function LogsPage() {
   }, [fetchServices]);
 
   React.useEffect(() => {
-    void fetchLogs();
-  }, [fetchLogs]);
+    void settleLogs();
+  }, [settleLogs]);
 
   React.useEffect(() => {
     return () => {
