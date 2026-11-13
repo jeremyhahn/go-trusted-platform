@@ -363,6 +363,12 @@ func (c Config) validateWireGuard() error {
 		if c.WireGuard.ListenPort != 0 {
 			return &ErrInvalidConfig{Field: "wireguard.listen-port", Reason: "set, but wireguard is not in data-planes"}
 		}
+		if c.WireGuard.KeyRef != "" {
+			return &ErrInvalidConfig{Field: "wireguard.key-ref", Reason: "set, but wireguard is not in data-planes"}
+		}
+		if c.WireGuard.Address.IsValid() {
+			return &ErrInvalidConfig{Field: "wireguard.address", Reason: "set, but wireguard is not in data-planes"}
+		}
 		return nil
 	}
 	if c.WireGuard.ListenPort <= 0 || c.WireGuard.ListenPort > 65535 {

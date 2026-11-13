@@ -237,6 +237,8 @@ is an `*ErrInvalidConfig` naming the key:
 | `Field` | Cause |
 |---|---|
 | `wireguard.listen-port` | set while `wireguard` is not offered (every `fips` build), or outside 1-65535 |
+| `wireguard.key-ref` | set while `wireguard` is not offered (every `fips` build) |
+| `wireguard.address` | set while `wireguard` is not offered (every `fips` build) |
 | `masque` | `masque.template` or `masque.routes` set while `masque` is not offered |
 | `masque.template` | missing; not a URI template; has variables; not an absolute `https` URL with a host; no path (RFC 9484 §3) |
 | `masque.routes` | empty, or a prefix that is not valid (RFC 9484 §4.6) |
