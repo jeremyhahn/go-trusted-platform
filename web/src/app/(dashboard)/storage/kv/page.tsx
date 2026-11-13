@@ -175,8 +175,17 @@ export default function KVStorePage() {
   // Put mutation for creating/updating entries
   const putMutation = useMutation(
     async (data: KVFormData) => {
-      // Encode value to base64
-      const encodedValue = btoa(data.value);
+      // Encode value to base64. btoa throws a DOMException with a numeric
+      // code for a character outside Latin-1, and useMutation rethrows any
+      // error carrying a code without reporting it or clearing isLoading:
+      // rethrow it as a plain Error so onError reports it.
+      let encodedValue: string;
+      try {
+        encodedValue = btoa(data.value);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        throw new Error(`Value cannot be base64-encoded: ${reason}`);
+      }
       return kv.put({
         key: data.key,
         value: encodedValue,
@@ -261,8 +270,9 @@ export default function KVStorePage() {
       }
     }
 
-    // A refusal is reported by the mutation's onError toast; mutateAsync
-    // still rethrows it, so catch it here rather than leak a rejection.
+    // A refusal or an encoding failure is reported by the mutation's
+    // onError toast; mutateAsync still rethrows it, so catch it here rather
+    // than leak a rejection.
     await putMutation.mutateAsync(formData).catch(() => undefined);
   };
 
