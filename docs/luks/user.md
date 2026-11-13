@@ -7,11 +7,11 @@
 
 ## Before you start
 
-- **The verbs below do not work yet.** `platformctl luks` validates its input
-  and reaches platformd over the active transport, but platformd has no LUKS
-  backend wired, so every verb ends with a *backend not configured* or *root
-  required* error. The tasks show the intended use. [cli.md](cli.md) §1 has the
-  details.
+- `platformctl luks` validates its input and reaches platformd over the active
+  transport, where the go-luks2 backend runs the verb on the host's volume.
+  A *backend not configured* error means platformd started without its SDK
+  client, so it wired no LUKS backend ([engineering.md](engineering.md) §6).
+  [cli.md](cli.md) §1 has the details.
 - Run as root, on the host that holds the volume. The CLI checks root and
   auto-detects the device on the host it runs on.
 - Pass `--device /dev/<device>` explicitly unless the volume is on one of the

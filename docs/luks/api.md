@@ -10,9 +10,11 @@ authorization model are defined once in [`docs/daemon/api.md`](../daemon/api.md)
 this page lists only what is specific to LUKS. **Unix is gRPC over a Unix
 domain socket**, so gRPC and Unix share a column.
 
-Every server transport is registered, but the service behind it has no backend
-or root checker injected, so each capability answers *backend not configured*
-or *root required* today ([engineering.md](engineering.md) §6).
+Every server transport is registered, and platformd startup injects the
+go-luks2 backend and the root checker into the service behind it, so each
+capability runs against the host's volumes. If the startup wiring is refused
+(no SDK client), nothing is injected and each capability answers *backend not
+configured* or *root required* ([engineering.md](engineering.md) §6).
 
 ---
 
