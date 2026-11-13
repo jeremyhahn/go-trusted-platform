@@ -166,6 +166,21 @@ func TestWireGuardHub_UpRefusesAForeignDeviceOfItsName(t *testing.T) {
 	}
 }
 
+// TestWireGuardHub_UpStopsOnAFailedStaleLookup covers a lookup of the hub's
+// name that fails for another reason than absence: Up returns it and keys no
+// device, since a predecessor's hub may still be live.
+func TestWireGuardHub_UpStopsOnAFailedStaleLookup(t *testing.T) {
+	hub, nl, _, _ := newTestHub(t)
+	boom := errors.New("netlink: decoding the reply")
+	nl.linkByNameFn = func(string) (vnl.Link, error) { return nil, boom }
+	if err := hub.Up(context.Background()); !errors.Is(err, boom) {
+		t.Fatalf("Up after a failed lookup: err = %v, want the lookup failure", err)
+	}
+	if _, ok := nl.links["wg-vpn0"]; ok {
+		t.Fatal("Up created a hub device after a failed lookup")
+	}
+}
+
 // TestWireGuardHub_UpRemovesAStaleHubWhenTheKeyStoreFails covers a
 // restart after an ungraceful exit while the key store is unavailable: the
 // predecessor's device, with every peer it still holds, is removed before
@@ -234,6 +249,19 @@ func TestRemoveStaleWireGuardHub(t *testing.T) {
 		var rf *ErrTunnelRemoveFailed
 		if err := removeStaleWireGuardHub(nil, nl, "wg-vpn0"); !errors.As(err, &rf) || !errors.Is(err, boom) {
 			t.Fatalf("err = %v", err)
+		}
+	})
+	// Only a typed link-not-found result proves the device absent: a
+	// permission, transport or decoding failure of the lookup is returned, so
+	// the datapath does not start beside a hub it could not see.
+	t.Run("lookup fails", func(t *testing.T) {
+		nl := newMockNetlinkOps()
+		nl.links["wg-vpn0"] = &vnl.Wireguard{LinkAttrs: vnl.LinkAttrs{Name: "wg-vpn0"}}
+		boom := errors.New("operation not permitted")
+		nl.linkByNameFn = func(string) (vnl.Link, error) { return nil, boom }
+		var rf *ErrTunnelRemoveFailed
+		if err := removeStaleWireGuardHub(nil, nl, "wg-vpn0"); !errors.As(err, &rf) || !errors.Is(err, boom) {
+			t.Fatalf("err = %v, want the lookup failure", err)
 		}
 	})
 }
