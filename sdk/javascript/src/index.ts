@@ -83,6 +83,7 @@ export {
   ComputeService,
   DeviceService,
   DNSService,
+  NTPService,
   GatewayService,
   IAMService,
   IDevIDService,
@@ -137,6 +138,15 @@ export {
   // Identity Services (1)
   QuicBaaSIAMService,
 } from './services/index.js';
+
+export type {
+  NTPStatus,
+  NTPSource,
+  NTSServeNameFinding,
+  GetNTPStatusResponse,
+  ListNTPSourcesResponse,
+  StepNTPClockResponse,
+} from './services/ntp-service.js';
 
 // =============================================================================
 // Error Exports

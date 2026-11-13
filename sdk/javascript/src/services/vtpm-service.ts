@@ -32,7 +32,106 @@ import type {
   GetTPMSocketPathResponse,
   GetNVRAMPathResponse,
   VTPMBundle,
+  CreateBundleOptions,
+  CreateTemplateOptions,
 } from '../types/vtpm.js';
+import { BUNDLE_MODE_WIRE_NAMES, EK_ALGORITHM_WIRE_NAMES } from '../types/vtpm.js';
+import { encodeOptionalEnum } from './wire-enum.js';
+
+/** Thrown when a device profile ID is not an unsigned integer the server can read. */
+export class InvalidDeviceProfileIdError extends Error {
+  /** The rejected ID. */
+  public readonly deviceProfileId: string;
+
+  constructor(deviceProfileId: string) {
+    super(`device profile id ${JSON.stringify(deviceProfileId)} is not an unsigned integer`);
+    this.name = 'InvalidDeviceProfileIdError';
+    this.deviceProfileId = deviceProfileId;
+  }
+}
+
+/**
+ * The bundle body pkg/webservice/v1/rest/vtpm/types.go decodes: flat,
+ * snake_case, and unknown fields are refused.
+ */
+interface WireCreateBundleRequest {
+  mode?: string;
+  hostname?: string;
+  ek_algorithm?: string;
+  secure_boot_enabled?: boolean;
+  labels?: Record<string, string>;
+  template_id?: string;
+}
+
+/** The template body the REST handler decodes. */
+interface WireCreateTemplateRequest {
+  id: string;
+  description?: string;
+  ek_algorithm?: string;
+  secure_boot_enabled?: boolean;
+}
+
+/** The largest uint64, the server's device profile ID type, in decimal. */
+const MAX_UINT64_DECIMAL = '18446744073709551615';
+
+/**
+ * Validates a uint64 device profile ID and returns its canonical decimal
+ * digits. The bootstrap seeder assigns 64-bit IDs, past what a JS number holds
+ * exactly (2^53 - 1), so the ID stays a digit string and is never a number.
+ */
+function toDeviceProfileIdDigits(id: string): string {
+  if (!/^\d+$/.test(id)) {
+    throw new InvalidDeviceProfileIdError(id);
+  }
+  const digits = id.replace(/^0+(?=\d)/, '');
+  const fits =
+    digits.length < MAX_UINT64_DECIMAL.length ||
+    (digits.length === MAX_UINT64_DECIMAL.length && digits <= MAX_UINT64_DECIMAL);
+  if (!fits) {
+    throw new InvalidDeviceProfileIdError(id);
+  }
+  return digits;
+}
+
+function toWireCreateBundle(options: CreateBundleOptions): WireCreateBundleRequest {
+  const mode = encodeOptionalEnum('mode', BUNDLE_MODE_WIRE_NAMES, options.mode);
+  const ekAlgorithm = encodeOptionalEnum('ekAlgorithm', EK_ALGORITHM_WIRE_NAMES, options.ekAlgorithm);
+  return {
+    ...(mode !== undefined && { mode }),
+    ...(options.hostname !== undefined && { hostname: options.hostname }),
+    ...(ekAlgorithm !== undefined && { ek_algorithm: ekAlgorithm }),
+    ...(options.secureBootEnabled !== undefined && { secure_boot_enabled: options.secureBootEnabled }),
+    ...(options.labels !== undefined && { labels: options.labels }),
+    ...(options.templateId !== undefined && { template_id: options.templateId }),
+  };
+}
+
+/**
+ * Serializes the bundle body. The server reads device_profile_id as a JSON
+ * number (a uint64), so its exact digits are written as a number literal
+ * after JSON.stringify of the rest; a JS number would round any ID above
+ * 2^53 - 1.
+ */
+function encodeCreateBundle(options: CreateBundleOptions): string {
+  const digits =
+    options.deviceProfileId !== undefined ? toDeviceProfileIdDigits(options.deviceProfileId) : undefined;
+  const body = JSON.stringify(toWireCreateBundle(options));
+  if (digits === undefined) {
+    return body;
+  }
+  const separator = body === '{}' ? '' : ',';
+  return `${body.slice(0, -1)}${separator}"device_profile_id":${digits}}`;
+}
+
+function toWireCreateTemplate(options: CreateTemplateOptions): WireCreateTemplateRequest {
+  const ekAlgorithm = encodeOptionalEnum('ekAlgorithm', EK_ALGORITHM_WIRE_NAMES, options.ekAlgorithm);
+  return {
+    id: options.id,
+    ...(options.description !== undefined && { description: options.description }),
+    ...(ekAlgorithm !== undefined && { ek_algorithm: ekAlgorithm }),
+    ...(options.secureBootEnabled !== undefined && { secure_boot_enabled: options.secureBootEnabled }),
+  };
+}
 
 /**
  * vTPM Service class
@@ -50,6 +149,7 @@ import type {
  *     deviceProfileId: '4242',
  *   }
  * });
+ * // The daemon returns the bundle itself: bundle.data?.id is its generated ID.
  *
  * // Clone from template
  * const cloned = await client.vtpm.cloneTemplate({
@@ -86,7 +186,7 @@ export class VTPMService extends BaseService {
    * @returns Created bundle
    */
   async createBundle(request: CreateBundleRequest): Promise<ApiResponse<CreateBundleResponse>> {
-    return this.client.post<CreateBundleResponse>(this.buildUrl('/bundles'), request);
+    return this.client.post<CreateBundleResponse>(this.buildUrl('/bundles'), encodeCreateBundle(request.options));
   }
 
   /**
@@ -209,13 +309,7 @@ export class VTPMService extends BaseService {
    * @returns Created template
    */
   async createTemplate(request: CreateTemplateRequest): Promise<ApiResponse<CreateTemplateResponse>> {
-    const o = request.options;
-    return this.client.post<CreateTemplateResponse>(this.buildUrl('/templates'), {
-      id: o.id,
-      ...(o.description !== undefined ? { description: o.description } : {}),
-      ...(o.ekAlgorithm !== undefined ? { ek_algorithm: o.ekAlgorithm } : {}),
-      secure_boot_enabled: o.secureBootEnabled ?? false,
-    });
+    return this.client.post<CreateTemplateResponse>(this.buildUrl('/templates'), toWireCreateTemplate(request.options));
   }
 
   /**
