@@ -28,7 +28,9 @@ export default function MigrationsPage() {
 
   const [vmName, setVmName] = useState("");
   const [sourceVmId, setSourceVmId] = useState("");
-  const [mode, setMode] = useState<"cold" | "live">("live");
+  // Cold only (#1742): the receiver creates a blank disk and live mode moves
+  // only RAM, so a live receiver would resume the guest on an empty disk.
+  const [mode, setMode] = useState<"cold" | "live">("cold");
   const [receiver, setReceiver] = useState<PrepareMigrationResponse | null>(null);
 
   // The source guest's configuration: the daemon refuses a prepare without it.
@@ -122,10 +124,12 @@ export default function MigrationsPage() {
                 id="migration-mode"
                 className="block w-full rounded-md border px-2 py-1 text-sm bg-background"
                 value={mode}
-                onChange={(e) => setMode(e.target.value === "cold" ? "cold" : "live")}
+                onChange={(e) => setMode(e.target.value === "live" ? "live" : "cold")}
               >
-                <option value="live">live</option>
                 <option value="cold">cold</option>
+                <option value="live" disabled>
+                  live
+                </option>
               </select>
             </div>
             <div className="grid grid-cols-2 gap-3">

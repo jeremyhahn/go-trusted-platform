@@ -53,7 +53,10 @@ export function VMOperations({ vmId }: { vmId: string }) {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
 
   const [destination, setDestination] = useState("");
-  const [live, setLive] = useState(true);
+  // Live migration stays off (#1742): the destination receiver creates a
+  // blank disk and live mode moves only RAM, so the guest would resume on an
+  // empty disk. It returns when the receiver opens the source's shared image.
+  const live = false;
   const [migrateResult, setMigrateResult] = useState("");
 
   const [confirm, setConfirm] = useState<PendingConfirm | null>(null);
@@ -276,8 +279,11 @@ export function VMOperations({ vmId }: { vmId: string }) {
                 onChange={(e) => setDestination(e.target.value)}
               />
             </div>
-            <label className="flex items-center gap-1 text-sm">
-              <input type="checkbox" checked={live} onChange={(e) => setLive(e.target.checked)} />
+            <label
+              className="flex items-center gap-1 text-sm text-muted-foreground"
+              title="Live migration is unavailable: the destination does not yet open the source's disk"
+            >
+              <input type="checkbox" checked={live} disabled readOnly />
               Live
             </label>
             <Button size="sm" variant="destructive" onClick={askMigrate} disabled={busy}>
