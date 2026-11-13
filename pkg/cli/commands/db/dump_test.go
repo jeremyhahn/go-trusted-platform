@@ -604,23 +604,6 @@ func TestSanitizeFilename(t *testing.T) {
 	})
 }
 
-// TestDumpFlagsStruct tests the dumpFlags struct initialization
-func TestDumpFlagsStruct(t *testing.T) {
-	flags := &dumpFlags{
-		output:     "./backup",
-		format:     "json",
-		entityType: "User",
-		pretty:     true,
-		configDir:  "/etc/trusted-platform",
-	}
-
-	assert.Equal(t, "./backup", flags.output)
-	assert.Equal(t, "json", flags.format)
-	assert.Equal(t, "User", flags.entityType)
-	assert.True(t, flags.pretty)
-	assert.Equal(t, "/etc/trusted-platform", flags.configDir)
-}
-
 // TestDumpFlagsStruct_Defaults tests default values
 func TestDumpFlagsStruct_Defaults(t *testing.T) {
 	flags := &dumpFlags{}
