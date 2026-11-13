@@ -64,25 +64,6 @@ func TestXKMSErrors_ErrorMessages(t *testing.T) {
 }
 
 // =============================================================================
-// Type Alias Tests
-// =============================================================================
-
-func TestTypeAliases(t *testing.T) {
-	t.Run("KeyringConfig_is_XKMSConfig", func(t *testing.T) {
-		var kc XKMSConfig
-		kr := kc
-		assert.IsType(t, XKMSConfig{}, kr)
-	})
-
-	t.Run("Keyring_is_XKMS", func(t *testing.T) {
-		// Type assertion test - Keyring is an alias for XKMS
-		var kc *XKMS
-		kr := kc
-		assert.Nil(t, kr)
-	})
-}
-
-// =============================================================================
 // XKMSConfig Tests
 // =============================================================================
 
