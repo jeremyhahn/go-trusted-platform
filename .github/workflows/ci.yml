@@ -197,7 +197,10 @@ on:
   # v1.29.3: one schedule run per repository (the concurrency group below),
   # and its bigdisk jobs skip while a main push run is in flight (the
   # preflight job's schedule guard).
-  # #1409: the nightly runs on this project's rotation night, Thursday night (Friday 04:00 UTC).
+  # #1409: the schedule is weekly, not daily: the scheduled full tier
+  # (integration included) and the soak run on this project's rotation
+  # night, Thursday night (Friday 04:00 UTC). Every push to main still runs
+  # the full tier; workflow_dispatch still runs both at any time.
   schedule:
     - cron: '0 4 * * 5'
 
