@@ -66,9 +66,10 @@ export interface Transport {
   patch<T>(path: string, body?: RequestBody, options?: RequestOptions): Promise<ApiResponse<T>>;
 
   /**
-   * Issue a DELETE-equivalent request.
+   * Issue a DELETE-equivalent request. `body` is for the routes that read
+   * parameters from a DELETE body (certificate revocation).
    */
-  delete<T>(path: string, options?: RequestOptions): Promise<ApiResponse<T>>;
+  delete<T>(path: string, options?: RequestOptions, body?: RequestBody): Promise<ApiResponse<T>>;
 }
 
 /**

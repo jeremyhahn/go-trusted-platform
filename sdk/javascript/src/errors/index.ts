@@ -8,3 +8,4 @@ export {
   getErrorCodeFromStatus,
 } from './types.js';
 export { SERVICE_NOT_CONFIGURED, isServiceNotConfigured } from './service-availability.js';
+export { InvalidEnumValueError } from './invalid-enum-value.js';
