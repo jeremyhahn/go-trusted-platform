@@ -362,6 +362,17 @@ export interface VerifyCertificateRequest {
 }
 
 /**
+ * Request to certify, for code signing, the KMS key a CSR names
+ * (POST /v1/ca/sign-csr; the caller's token needs ca:sign-csr)
+ */
+export interface SignCSRRequest {
+  /** PKCS#10 certificate signing request in PEM format */
+  csrPem: string;
+  /** Validity period in days (the CA default when absent) */
+  validDays?: number;
+}
+
+/**
  * List certificates request options
  */
 export interface ListCertificatesOptions {
