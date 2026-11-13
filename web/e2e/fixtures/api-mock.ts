@@ -1307,6 +1307,85 @@ export async function mockCAOperationsApi(
   return { signRequests, signAuthorizations, verifyRequests };
 }
 
+/**
+ * Mock the invitation lookup and accept endpoints: GET /invitations/{id}
+ * (GetInvitation), GET /invitations/token/{token} (GetInvitationByToken)
+ * and POST /invitations/accept (AcceptInvitation). Returns the accept
+ * request bodies the page sent.
+ */
+export async function mockInvitationLookupApi(
+  page: Page,
+  options: {
+    invitation: Invitation;
+    acceptError?: ApiError | null;
+  }
+): Promise<{ acceptRequests: () => Array<Record<string, unknown>> }> {
+  const accepted: Array<Record<string, unknown>> = [];
+  const inv = options.invitation;
+
+  await page.route(/\/api\/v1\/invitations\/[^?]+/, async (route: Route, request: Request) => {
+    const path = new URL(request.url()).pathname.replace(/\/+$/, '');
+    const method = request.method();
+
+    if (method === 'POST' && path.endsWith('/invitations/accept')) {
+      const body = (request.postDataJSON() as Record<string, unknown>) ?? {};
+      accepted.push(body);
+      const present = (v: unknown) => v !== undefined && v !== null && String(v) !== '';
+      if (!present(body.token) || !(present(body.userId) || present(body.user_id))) {
+        await route.fulfill({
+          status: 400,
+          contentType: 'application/json',
+          body: errorEnvelope({
+            status: 400,
+            error: 'invitation: user ID is required',
+            errorCode: 'INVALID_ARGUMENT',
+          }),
+        });
+        return;
+      }
+      if (options.acceptError) {
+        await route.fulfill({
+          status: options.acceptError.status,
+          contentType: 'application/json',
+          body: errorEnvelope(options.acceptError),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ success: true, user_id: 'user-new', tenant_id: 'tenant-1' }),
+      });
+      return;
+    }
+
+    if (method === 'GET') {
+      const byToken = path.match(/\/invitations\/token\/([^/]+)$/);
+      const byId = path.match(/\/invitations\/([^/]+)$/);
+      const key = byToken ? decodeURIComponent(byToken[1]) : byId ? decodeURIComponent(byId[1]) : '';
+      const found = byToken ? key === inv.token : key === inv.id;
+      if (found) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ invitation: inv }),
+        });
+      } else {
+        await route.fulfill({
+          status: 404,
+          contentType: 'application/json',
+          body: errorEnvelope({ status: 404, error: 'invitation not found', errorCode: 'NOT_FOUND' }),
+        });
+      }
+      return;
+    }
+
+    await route.continue();
+  });
+
+  return { acceptRequests: () => [...accepted] };
+}
+
 // ============================================================================
 // Overlay API mock (#1722): VTEPs, VNIs, tunnels, tunnel stats, MAC forget
 // ============================================================================

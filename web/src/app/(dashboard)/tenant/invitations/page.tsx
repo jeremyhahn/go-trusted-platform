@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import {
   Crown,
   Mail,
@@ -175,7 +176,12 @@ export default function InvitationsPage() {
         return (
           <div className="flex items-center gap-2">
             <Mail className="h-4 w-4 text-muted-foreground" />
-            <span className="font-medium">{row.original.email}</span>
+            <Link
+              href={`/tenant/invitations/${encodeURIComponent(row.original.id)}`}
+              className="font-medium hover:underline"
+            >
+              {row.original.email}
+            </Link>
           </div>
         );
       },

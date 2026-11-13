@@ -92,6 +92,13 @@ export { useVTPMRuntime, base64ToText, hexToBase64 } from './use-vtpm-runtime';
 export type { VTPMRunState } from './use-vtpm-runtime';
 
 export { useReportedGateways } from './use-reported-gateways';
+
+export {
+  useInvitationById,
+  useInvitationByToken,
+  toInvitationView,
+} from './use-invitation-detail';
+export type { InvitationView, InvitationWire } from './use-invitation-detail';
 export { useOverlayVteps } from './use-overlay-vteps';
 export { useRegistry, encodeRepository } from './use-registry';
 export type {
