@@ -554,8 +554,8 @@ checks each route's scope itself through the guard:
 | `DELETE /api/v1/pxe/devices/{id}` | `pxe:delete` |
 
 Each scope is the one the gRPC catalog gives the matching rpc. A missing
-credential answers 401 and a missing scope 403. The credential-less install
-webhook (`POST /api/v1/pxe/webhook/complete`, #238) and the per-MAC PXE gateway
+credential answers 401 and a missing scope 403. The HMAC-signed install
+webhook (`POST /api/v1/pxe/webhook/complete`, #240) and the per-MAC PXE gateway
 routes are the webservice's; the daemon does not mount them. The daemon refuses
 to start when either mount fails (`ErrTransportConstructionFailed`).
 
