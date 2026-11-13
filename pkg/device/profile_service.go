@@ -291,6 +291,20 @@ func (s *ProfileService) Update(ctx context.Context, profile *entities.DevicePro
 		profile.Assigned = existing.Assigned
 		profile.AssignedAt = existing.AssignedAt
 	}
+	// TenantID, BMC and WorkloadPCR are not on the REST ProfileRequest, so
+	// the console's rename (#1743) rebuilds the entity without them. An
+	// omission keeps the stored value: an empty TenantID would make
+	// verifyEABBinding skip its tenant comparison, and a nil BMC breaks the
+	// next BMC enrollment. A supplied value still wins.
+	if profile.TenantID == "" {
+		profile.TenantID = existing.TenantID
+	}
+	if profile.BMC == nil {
+		profile.BMC = existing.BMC
+	}
+	if profile.WorkloadPCR == 0 {
+		profile.WorkloadPCR = existing.WorkloadPCR
+	}
 
 	return s.saveValidated(ctx, profile, "failed to update profile")
 }

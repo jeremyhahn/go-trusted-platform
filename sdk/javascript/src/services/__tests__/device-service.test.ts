@@ -507,3 +507,39 @@ describe('DeviceService assignProfileToDevice and updateTemplate wire bodies', (
     expect(body).not.toHaveProperty('matchRules');
   });
 });
+
+describe('DeviceService wire bodies for the lookup page (#1756)', () => {
+  let service: DeviceService;
+  let mockClient: ApiClient;
+
+  beforeEach(() => {
+    mockClient = createMockApiClient();
+    service = new DeviceService(mockClient);
+    vi.mocked(mockClient.post).mockResolvedValue({ success: true, data: undefined });
+    vi.mocked(mockClient.put).mockResolvedValue({ success: true, data: undefined });
+  });
+
+  it('updateProfile PUTs the flat profile, not the request envelope', async () => {
+    await service.updateProfile({ profile: { id: '9007199254740993', name: 'n', zone: 'z' } as never });
+
+    const [path, body] = vi.mocked(mockClient.put).mock.calls[0] as [string, Record<string, unknown>];
+    expect(path.endsWith('/profiles/9007199254740993')).toBe(true);
+    expect(body).toHaveProperty('name', 'n');
+    expect(body).toHaveProperty('zone', 'z');
+    expect(body).not.toHaveProperty('profile');
+  });
+
+  it('findMatchingProfile sends mac_address and omits empty criteria', async () => {
+    await service.findMatchingProfile({ macAddress: 'aa:bb', model: '' });
+
+    const [, body] = vi.mocked(mockClient.post).mock.calls[0] as [string, Record<string, unknown>];
+    expect(body).toEqual({ mac_address: 'aa:bb' });
+  });
+
+  it('activateDevice sends serial and mac_address', async () => {
+    await service.activateDevice({ serial: 'S1', macAddress: 'aa:bb' });
+
+    const [, body] = vi.mocked(mockClient.post).mock.calls[0] as [string, Record<string, unknown>];
+    expect(body).toEqual({ serial: 'S1', mac_address: 'aa:bb' });
+  });
+});

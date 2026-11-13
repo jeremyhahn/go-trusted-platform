@@ -606,6 +606,7 @@ export interface GetDeviceResponse {
 
 /**
  * Update device response
+ * @deprecated The server returns the flat object; the SDK method now resolves to it.
  */
 export interface UpdateDeviceResponse {
   /** Operation status */
@@ -634,6 +635,7 @@ export interface ListDevicesResponse {
 
 /**
  * Find device by serial response
+ * @deprecated The server returns the flat object; the SDK method now resolves to it.
  */
 export interface FindDeviceBySerialResponse {
   /** Found device */
@@ -668,6 +670,7 @@ export interface GetProfileResponse {
 
 /**
  * Update profile response
+ * @deprecated The server returns the flat object; the SDK method now resolves to it.
  */
 export interface UpdateProfileResponse {
   /** Operation status */
@@ -696,6 +699,7 @@ export interface ListProfilesResponse {
 
 /**
  * Find profile by MAC address response
+ * @deprecated The server returns the flat object; the SDK method now resolves to it.
  */
 export interface FindProfileByMACAddressResponse {
   /** Found profile */
@@ -704,6 +708,7 @@ export interface FindProfileByMACAddressResponse {
 
 /**
  * Find profile by serial response
+ * @deprecated The server returns the flat object; the SDK method now resolves to it.
  */
 export interface FindProfileBySerialResponse {
   /** Found profile */
@@ -712,6 +717,7 @@ export interface FindProfileBySerialResponse {
 
 /**
  * Find matching profile response
+ * @deprecated The server returns the flat object; the SDK method now resolves to it.
  */
 export interface FindMatchingProfileResponse {
   /** Found profile */
@@ -819,14 +825,12 @@ export interface RecordAttestCertResponse {
  * Activate device response
  */
 export interface ActivateDeviceResponse {
-  /** Operation status */
-  status: DeviceStatus;
   /** Activation status */
-  activationStatus?: string;
+  status: string;
   /** VLAN assigned */
   vlan?: number;
   /** Transition timestamp */
-  transitionedAt?: string;
+  transitioned_at?: string;
 }
 
 // =============================================================================

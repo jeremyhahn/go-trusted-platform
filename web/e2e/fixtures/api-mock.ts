@@ -3197,3 +3197,66 @@ export async function mockDeviceTemplateApi(
 
   return { requests, templates: () => [...templates] };
 }
+
+// ============================================================================
+// Device lookup (#1743)
+// ============================================================================
+
+/** One request the device lookup mock answered. */
+export interface DeviceLookupCall {
+  method: string;
+  path: string;
+  body: unknown;
+}
+
+/**
+ * Responses for the device lookup operations, keyed `METHOD path` with the
+ * `/api/v1` prefix and any trailing slash removed, e.g. `GET /devices/count`.
+ * A value is the payload; an `ApiError` value answers with that error.
+ */
+export type DeviceLookupMockConfig = Record<string, unknown>;
+
+function isApiError(value: unknown): value is ApiError {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'status' in value &&
+    'error' in value &&
+    typeof (value as ApiError).status === 'number'
+  );
+}
+
+/**
+ * Mock the device and profile lookup, count, update, activation and
+ * attestation endpoints. Requests not named in `config` fall through to the
+ * next route. Returns the list of answered calls, filled as they arrive.
+ */
+export async function mockDeviceLookupApi(
+  page: Page,
+  config: DeviceLookupMockConfig
+): Promise<DeviceLookupCall[]> {
+  const calls: DeviceLookupCall[] = [];
+  await page.route(
+    (url) => /^\/api\/v1\/devices?\//.test(url.pathname),
+    async (route: Route, request: Request) => {
+      const path = decodeURIComponent(new URL(request.url()).pathname).replace(/^\/api\/v1/, '').replace(/\/$/, '');
+      const key = `${request.method()} ${path}`;
+      if (!(key in config)) {
+        await route.fallback();
+        return;
+      }
+      calls.push({ method: request.method(), path, body: request.postDataJSON() });
+      const answer = config[key];
+      if (isApiError(answer)) {
+        await route.fulfill({ status: answer.status, contentType: 'application/json', body: errorEnvelope(answer) });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ code: 200, success: true, payload: answer }),
+      });
+    }
+  );
+  return calls;
+}

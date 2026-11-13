@@ -127,6 +127,7 @@ const navigation = [
     children: [
       { title: "All Devices", href: "/devices" },
       { title: "Device Profiles", href: "/devices/profiles" },
+      { title: "Device Lookup", href: "/devices/lookup" },
       { title: "Device Templates", href: "/devices/templates" },
       { title: "vTPM Bundles", href: "/devices/vtpm" },
       { title: "vTPM Templates", href: "/devices/vtpm/templates" },

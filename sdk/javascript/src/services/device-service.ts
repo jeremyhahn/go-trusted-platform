@@ -26,19 +26,14 @@ import type {
   RecordAttestCertResponse,
   CreateDeviceResponse,
   GetDeviceResponse,
-  UpdateDeviceResponse,
   DeleteDeviceResponse,
   ListDevicesResponse,
-  FindDeviceBySerialResponse,
   CountDevicesResponse,
   CreateProfileResponse,
   GetProfileResponse,
-  UpdateProfileResponse,
   DeleteProfileResponse,
   ListProfilesResponse,
-  FindProfileByMACAddressResponse,
-  FindProfileBySerialResponse,
-  FindMatchingProfileResponse,
+  Device,
   CountProfilesResponse,
   ActivateDeviceResponse,
   DeviceTemplate,
@@ -174,8 +169,8 @@ export class DeviceService extends BaseService {
    * @param request - Device update request
    * @returns Updated device
    */
-  async updateDevice(request: UpdateDeviceRequest): Promise<ApiResponse<UpdateDeviceResponse>> {
-    return this.client.put<UpdateDeviceResponse>(
+  async updateDevice(request: UpdateDeviceRequest): Promise<ApiResponse<Device>> {
+    return this.client.put<Device>(
       this.buildUrl(`/${request.device.id}`),
       request
     );
@@ -279,8 +274,8 @@ export class DeviceService extends BaseService {
    * @param serial - Serial number
    * @returns Found device
    */
-  async findDeviceBySerial(serial: string): Promise<ApiResponse<FindDeviceBySerialResponse>> {
-    return this.client.get<FindDeviceBySerialResponse>(
+  async findDeviceBySerial(serial: string): Promise<ApiResponse<Device>> {
+    return this.client.get<Device>(
       this.buildUrl(`/serial/${this.encodePathSegment(serial)}`)
     );
   }
@@ -306,7 +301,12 @@ export class DeviceService extends BaseService {
    * @returns Activation result
    */
   async activateDevice(request: ActivateDeviceRequest): Promise<ApiResponse<ActivateDeviceResponse>> {
-    return this.client.post<ActivateDeviceResponse>(this.singularUrl('/activate-json'), request);
+    // The server decodes snake_case: map the MAC and omit it when empty.
+    const body: { serial: string; mac_address?: string } = { serial: request.serial };
+    if (request.macAddress !== undefined && request.macAddress !== '') {
+      body.mac_address = request.macAddress;
+    }
+    return this.client.post<ActivateDeviceResponse>(this.singularUrl('/activate-json'), body);
   }
 
   // =========================================================================
@@ -339,8 +339,10 @@ export class DeviceService extends BaseService {
    * @param request - Profile update request
    * @returns Updated profile
    */
-  async updateProfile(request: UpdateProfileRequest): Promise<ApiResponse<UpdateProfileResponse>> {
-    return this.client.put<UpdateProfileResponse>(
+  async updateProfile(request: UpdateProfileRequest): Promise<ApiResponse<DeviceProfile>> {
+    // The server decodes a flat profile and replaces every field the body
+    // omits: send the whole profile, not the request envelope.
+    return this.client.put<DeviceProfile>(
       this.singularUrl(`/profiles/${request.profile.id}`),
       toWireProfile(request.profile)
     );
@@ -375,8 +377,8 @@ export class DeviceService extends BaseService {
    * @param macAddress - MAC address
    * @returns Found profile
    */
-  async findProfileByMACAddress(macAddress: string): Promise<ApiResponse<FindProfileByMACAddressResponse>> {
-    return this.client.get<FindProfileByMACAddressResponse>(
+  async findProfileByMACAddress(macAddress: string): Promise<ApiResponse<DeviceProfile>> {
+    return this.client.get<DeviceProfile>(
       this.singularUrl(`/profiles/mac/${this.encodePathSegment(macAddress)}`)
     );
   }
@@ -387,8 +389,8 @@ export class DeviceService extends BaseService {
    * @param serial - Serial number
    * @returns Found profile
    */
-  async findProfileBySerial(serial: string): Promise<ApiResponse<FindProfileBySerialResponse>> {
-    return this.client.get<FindProfileBySerialResponse>(
+  async findProfileBySerial(serial: string): Promise<ApiResponse<DeviceProfile>> {
+    return this.client.get<DeviceProfile>(
       this.singularUrl(`/profiles/serial/${this.encodePathSegment(serial)}`)
     );
   }
@@ -399,11 +401,19 @@ export class DeviceService extends BaseService {
    * @param request - Match request
    * @returns Matched profile
    */
-  async findMatchingProfile(request: FindMatchingProfileRequest): Promise<ApiResponse<FindMatchingProfileResponse>> {
-    return this.client.post<FindMatchingProfileResponse>(
-      this.singularUrl('/profiles/match'),
-      request
-    );
+  async findMatchingProfile(request: FindMatchingProfileRequest): Promise<ApiResponse<DeviceProfile>> {
+    // The server decodes snake_case: map the MAC and omit empty criteria.
+    const body: { mac_address?: string; serial?: string; model?: string } = {};
+    if (request.macAddress !== undefined && request.macAddress !== '') {
+      body.mac_address = request.macAddress;
+    }
+    if (request.serial !== undefined && request.serial !== '') {
+      body.serial = request.serial;
+    }
+    if (request.model !== undefined && request.model !== '') {
+      body.model = request.model;
+    }
+    return this.client.post<DeviceProfile>(this.singularUrl('/profiles/match'), body);
   }
 
   /**
