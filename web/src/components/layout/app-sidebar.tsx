@@ -110,6 +110,7 @@ const navigation = [
       { title: "NVRAM", href: "/tpm/nvram" },
       { title: "Seal/Unseal", href: "/tpm/seal" },
       { title: "Credential / Random", href: "/tpm/credential" },
+      { title: "vTPM Runtime", href: "/tpm/vtpm/__placeholder__" },
     ],
   },
   {

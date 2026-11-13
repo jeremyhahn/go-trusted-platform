@@ -966,3 +966,136 @@ export async function mockOverlayApi(
 
   return calls;
 }
+
+/**
+ * One recorded call to the vTPM bundle runtime API.
+ */
+export interface VTPMRuntimeCall {
+  method: string;
+  path: string;
+  query: string;
+  body: unknown;
+}
+
+export interface VTPMRuntimeApiMockConfig {
+  /** Error to return for every runtime route (e.g. bundle not running) */
+  error?: ApiError;
+  /** Per-operation reply delay in ms, keyed by operation ('start', 'quote', 'pcrs/extend', 'pcrs', ...) */
+  delayMs?: Record<string, number>;
+  /**
+   * Which listener's contract to speak (default 'webservice').
+   * 'daemon' is pkg/api/rest/vtpm_handlers.go: no /pcrs routes (404),
+   * GET /pcr/{index} and POST /pcr/{index}/extend instead, and a stop reply
+   * of { bundle_id, action, success, message } without `stopped` (#452).
+   */
+  listener?: 'webservice' | 'daemon';
+}
+
+/**
+ * Mock the vTPM bundle runtime API (#1726).
+ *
+ * Handles, for any bundle id:
+ * - POST /api/v1/vtpm/bundles/{id}/start, /stop, /quote, /seal, /unseal
+ * - POST /api/v1/vtpm/bundles/{id}/pcrs/extend
+ * - GET  /api/v1/vtpm/bundles/{id}/pcrs?pcr_index=N
+ *
+ * Byte fields are base64 on the wire, as Go encodes []byte. Seal returns
+ * base64("sealed:" + data) and unseal reverses it, so a round trip through
+ * the page restores the original text.
+ */
+export async function mockVTPMRuntimeApi(
+  page: Page,
+  config: VTPMRuntimeApiMockConfig = {}
+): Promise<{ calls: VTPMRuntimeCall[] }> {
+  const calls: VTPMRuntimeCall[] = [];
+  const ok = { success: true, message: 'ok' };
+  const b64 = (s: string) => Buffer.from(s, 'binary').toString('base64');
+  const unb64 = (s: string) => Buffer.from(s, 'base64').toString('binary');
+
+  await page.route('**/api/v1/vtpm/bundles/**', async (route: Route, request: Request) => {
+    const url = new URL(request.url());
+    const m = url.pathname.match(
+      /\/api\/v1\/vtpm\/bundles\/([^/]+)\/(start|stop|quote|seal|unseal|pcrs\/extend|pcrs|pcr\/\d+\/extend|pcr\/\d+)\/?$/
+    );
+    if (!m) {
+      await route.continue();
+      return;
+    }
+    const bundleId = decodeURIComponent(m[1]);
+    const op = m[2];
+    const daemon = config.listener === 'daemon';
+    const daemonPCR = op.match(/^pcr\/(\d+)(\/extend)?$/);
+    const method = request.method();
+    const body = method === 'POST' ? (request.postDataJSON() as Record<string, unknown> | null) : null;
+    calls.push({ method, path: `${op}`, query: url.search, body });
+
+    const delay = config.delayMs?.[op] ?? 0;
+    if (delay > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+
+    if (config.error) {
+      await route.fulfill({
+        status: config.error.status,
+        contentType: 'application/json',
+        body: errorEnvelope(config.error),
+      });
+      return;
+    }
+
+    // Each listener answers 404 on the other listener's PCR routes.
+    const notMine = daemon ? op === 'pcrs' || op === 'pcrs/extend' : daemonPCR !== null;
+    if (notMine) {
+      await route.fulfill({
+        status: 404,
+        contentType: 'application/json',
+        body: errorEnvelope({ error: '404 page not found', status: 404 }),
+      });
+      return;
+    }
+
+    let reply: unknown;
+    if (method === 'POST' && op === 'start') {
+      reply = { status: ok, bundle_id: bundleId, running: true, socket_path: `/run/vtpm/${bundleId}.sock` };
+    } else if (daemon && method === 'POST' && op === 'stop') {
+      reply = { bundle_id: bundleId, action: 'stop', success: true, message: 'ok' };
+    } else if (daemonPCR && daemonPCR[2] && method === 'POST') {
+      reply = { bundle_id: bundleId, action: 'extend_pcr', success: true, message: 'ok' };
+    } else if (daemonPCR && !daemonPCR[2] && method === 'GET') {
+      reply = {
+        bundle_id: bundleId,
+        pcr_index: Number(daemonPCR[1]),
+        value: b64('\xde\xad\xbe\xef'),
+        timestamp: '2026-11-12T00:00:00Z',
+      };
+    } else if (method === 'POST' && op === 'stop') {
+      reply = { status: ok, bundle_id: bundleId, stopped: true };
+    } else if (method === 'POST' && op === 'quote') {
+      reply = {
+        status: ok,
+        bundle_id: bundleId,
+        quote: b64('mock-quote'),
+        signature: b64('mock-signature'),
+        pcr_values: { '0': b64('\x00\x11'), '7': b64('\xaa\xbb') },
+        hash_algorithm: 'SHA256',
+      };
+    } else if (method === 'POST' && op === 'seal') {
+      reply = { status: ok, bundle_id: bundleId, sealed_data: b64(`sealed:${unb64(String(body?.data ?? ''))}`) };
+    } else if (method === 'POST' && op === 'unseal') {
+      const raw = unb64(String(body?.sealed_data ?? ''));
+      reply = { status: ok, bundle_id: bundleId, data: b64(raw.replace(/^sealed:/, '')) };
+    } else if (method === 'POST' && op === 'pcrs/extend') {
+      reply = { status: ok, bundle_id: bundleId, pcr_index: Number(body?.pcr_index ?? 0), extended: true };
+    } else if (method === 'GET' && op === 'pcrs') {
+      const idx = Number(url.searchParams.get('pcr_index') ?? '0');
+      reply = { status: ok, bundle_id: bundleId, pcr_index: idx, value: b64('\xde\xad\xbe\xef') };
+    } else {
+      await route.continue();
+      return;
+    }
+
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(reply) });
+  });
+
+  return { calls };
+}

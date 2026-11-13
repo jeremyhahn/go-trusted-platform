@@ -31,6 +31,18 @@ import type {
   GetBundlePathResponse,
   GetTPMSocketPathResponse,
   GetNVRAMPathResponse,
+  StartBundleResponse,
+  StopBundleResponse,
+  QuoteBundleRequest,
+  QuoteBundleResponse,
+  SealBundleRequest,
+  SealBundleResponse,
+  UnsealBundleRequest,
+  UnsealBundleResponse,
+  ExtendBundlePCRRequest,
+  ExtendBundlePCRResponse,
+  ReadBundlePCRResponse,
+  VTPMRuntimeStatus,
   CreateBundleOptions,
   CreateTemplateOptions,
 } from '../types/vtpm.js';
@@ -131,6 +143,9 @@ function toWireCreateTemplate(options: CreateTemplateOptions): WireCreateTemplat
     ...(options.secureBootEnabled !== undefined && { secure_boot_enabled: options.secureBootEnabled }),
   };
 }
+
+/** A request's outcome: the reply it returned, or the error it threw. */
+type Settled<T> = { reply: ApiResponse<T> } | { thrown: unknown };
 
 /**
  * vTPM Service class
@@ -289,6 +304,200 @@ export class VTPMService extends BaseService {
     return this.client.get<GetNVRAMPathResponse>(
       this.buildUrl(`/bundles/${this.encodePathSegment(id)}/nvram`)
     );
+  }
+
+  // =========================================================================
+  // Bundle Runtime Operations
+  //
+  // IsVTPMRunning has no REST route: callers track the running state from
+  // the start and stop results.
+  // =========================================================================
+
+  /**
+   * Start the vTPM of a bundle (POST /bundles/{id}/start).
+   * A lifecycle change is never replayed after a lost response: a replay
+   * would answer 409 for a start that ran, or undo another caller's stop.
+   */
+  async startBundle(id: string): Promise<ApiResponse<StartBundleResponse>> {
+    return this.withStatus(
+      await this.client.post<StartBundleResponse>(
+        this.buildUrl(`/bundles/${this.encodePathSegment(id)}/start`),
+        {},
+        { retry: { enabled: false } }
+      )
+    );
+  }
+
+  /**
+   * Gives a daemon REST listener reply, which has no `status` block, the
+   * `status` its exported type declares: `success` from the daemon's own
+   * `success` flag when it has one (else true), `message` when the daemon sent
+   * one. A reply that already carries `status` (the webservice shape) and a
+   * failed call pass unchanged.
+   */
+  private withStatus<T extends { status: VTPMRuntimeStatus }>(r: ApiResponse<T>): ApiResponse<T> {
+    const data = r.data as unknown;
+    if (r.success !== true || typeof data !== 'object' || data === null) {
+      return r;
+    }
+    const d = data as { status?: unknown; success?: unknown; message?: unknown };
+    if (typeof d.status === 'object' && d.status !== null) {
+      return r;
+    }
+    const status: VTPMRuntimeStatus = {
+      success: typeof d.success === 'boolean' ? d.success : true,
+      ...(typeof d.message === 'string' ? { message: d.message } : {}),
+    };
+    return { ...r, data: { ...(data as T), status } };
+  }
+
+  /**
+   * Stop the vTPM of a bundle (POST /bundles/{id}/stop).
+   * A lifecycle change is never replayed after a lost response. The daemon
+   * REST listener answers a BundleActionResponse ({ bundle_id, action,
+   * success, message }) without `stopped` or `status`; its `success` is read
+   * as `stopped` (#452) and the reply is given a `status` block (withStatus).
+   * A webservice reply passes unchanged.
+   */
+  async stopBundle(id: string): Promise<ApiResponse<StopBundleResponse>> {
+    const r = await this.client.post<StopBundleResponse>(
+      this.buildUrl(`/bundles/${this.encodePathSegment(id)}/stop`),
+      {},
+      { retry: { enabled: false } }
+    );
+    const data = r.data as (Partial<StopBundleResponse> & { success?: boolean }) | undefined;
+    if (r.success === true && data && typeof data.stopped !== 'boolean') {
+      return this.withStatus({ ...r, data: { ...data, stopped: data.success === true } as StopBundleResponse });
+    }
+    return this.withStatus(r);
+  }
+
+  /** Quote PCRs of a running bundle (POST /bundles/{id}/quote) */
+  async quoteBundle(id: string, request: QuoteBundleRequest): Promise<ApiResponse<QuoteBundleResponse>> {
+    return this.withStatus(
+      await this.client.post<QuoteBundleResponse>(
+        this.buildUrl(`/bundles/${this.encodePathSegment(id)}/quote`),
+        request
+      )
+    );
+  }
+
+  /** Seal data to a running bundle (POST /bundles/{id}/seal) */
+  async sealBundle(id: string, request: SealBundleRequest): Promise<ApiResponse<SealBundleResponse>> {
+    return this.withStatus(
+      await this.client.post<SealBundleResponse>(
+        this.buildUrl(`/bundles/${this.encodePathSegment(id)}/seal`),
+        request
+      )
+    );
+  }
+
+  /** Unseal a blob with a running bundle (POST /bundles/{id}/unseal) */
+  async unsealBundle(id: string, request: UnsealBundleRequest): Promise<ApiResponse<UnsealBundleResponse>> {
+    return this.withStatus(
+      await this.client.post<UnsealBundleResponse>(
+        this.buildUrl(`/bundles/${this.encodePathSegment(id)}/unseal`),
+        request
+      )
+    );
+  }
+
+  /**
+   * Extend a PCR of a running bundle. The webservice's
+   * POST /bundles/{id}/pcrs/extend is tried first; on a 404 the daemon REST
+   * listener's POST /bundles/{id}/pcr/{index}/extend (#452). A 404 means no
+   * extend ran, so the fallback is never a replay. A PCR extend is
+   * irreversible and never retried: a replay after a lost response would
+   * extend the PCR twice.
+   */
+  async extendBundlePCR(
+    id: string,
+    request: ExtendBundlePCRRequest
+  ): Promise<ApiResponse<ExtendBundlePCRResponse>> {
+    const bundle = `/bundles/${this.encodePathSegment(id)}`;
+    const noRetry = { retry: { enabled: false } };
+    const first = await this.settle(
+      this.client.post<ExtendBundlePCRResponse>(this.buildUrl(`${bundle}/pcrs/extend`), request, noRetry)
+    );
+    if (!this.isRouteMissing(first)) {
+      return this.unsettle(first);
+    }
+    const second = await this.settle(
+      this.client.post<{ bundle_id: string; action?: string; success?: boolean; message?: string }>(
+        this.buildUrl(`${bundle}/pcr/${encodeURIComponent(String(request.pcr_index))}/extend`),
+        { data: request.data },
+        noRetry
+      )
+    );
+    if (this.isRouteMissing(second)) {
+      return this.unsettle(first);
+    }
+    const r = this.unsettle(second);
+    if (r.success !== true || !r.data) {
+      return r as unknown as ApiResponse<ExtendBundlePCRResponse>;
+    }
+    return {
+      ...r,
+      data: {
+        status: r.data.message !== undefined ? { success: true, message: r.data.message } : { success: true },
+        bundle_id: r.data.bundle_id,
+        pcr_index: request.pcr_index,
+        extended: r.data.success === true,
+      },
+    };
+  }
+
+  /**
+   * Read one PCR of a running bundle. The webservice's
+   * GET /bundles/{id}/pcrs?pcr_index=N is tried first; on a 404 the daemon
+   * REST listener's GET /bundles/{id}/pcr/{index} (#452), whose bundle_id,
+   * pcr_index and value match ReadBundlePCRResponse.
+   */
+  async readBundlePCR(id: string, pcrIndex: number): Promise<ApiResponse<ReadBundlePCRResponse>> {
+    const bundle = `/bundles/${this.encodePathSegment(id)}`;
+    const index = encodeURIComponent(String(pcrIndex));
+    const first = await this.settle(
+      this.client.get<ReadBundlePCRResponse>(`${this.buildUrl(`${bundle}/pcrs`)}?pcr_index=${index}`)
+    );
+    if (!this.isRouteMissing(first)) {
+      return this.withStatus(this.unsettle(first));
+    }
+    const second = await this.settle(
+      this.client.get<ReadBundlePCRResponse>(this.buildUrl(`${bundle}/pcr/${index}`))
+    );
+    if (this.isRouteMissing(second)) {
+      return this.unsettle(first);
+    }
+    return this.withStatus(this.unsettle(second));
+  }
+
+  /** Captures a request's reply or thrown error, so a 404 of either kind can be tested. */
+  private async settle<T>(p: Promise<ApiResponse<T>>): Promise<Settled<T>> {
+    try {
+      return { reply: await p };
+    } catch (thrown) {
+      return { thrown };
+    }
+  }
+
+  /** Returns the settled reply, or rethrows the settled error. */
+  private unsettle<T>(s: Settled<T>): ApiResponse<T> {
+    if ('thrown' in s) {
+      throw s.thrown;
+    }
+    return s.reply;
+  }
+
+  /**
+   * True when the route is not registered on this listener: a returned
+   * failure with status 404, or a thrown error with status 404.
+   */
+  private isRouteMissing<T>(s: Settled<T>): boolean {
+    if ('thrown' in s) {
+      const status = (s.thrown as { status?: unknown } | null)?.status;
+      return status === 404;
+    }
+    return s.reply.success === false && s.reply.error?.status === 404;
   }
 
   // =========================================================================
