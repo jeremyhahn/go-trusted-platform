@@ -172,7 +172,7 @@ test.describe("BMC profile ID is the numeric device-profile ID (#1736)", () => {
     await mockTenantApi(page);
     await page.goto("/devices/bmc/");
     await page.getByLabel("BMC profile ID").fill(PROFILE_ID);
-    await page.getByRole("button", { name: "Open" }).click();
+    await page.getByRole("button", { name: "Open", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/devices/bmc/${PROFILE_ID}/$`));
   });
 
@@ -181,7 +181,7 @@ test.describe("BMC profile ID is the numeric device-profile ID (#1736)", () => {
     await mockTenantApi(page);
     await page.goto("/devices/bmc/");
     await page.getByLabel("BMC profile ID").fill("abc");
-    await page.getByRole("button", { name: "Open" }).click();
+    await page.getByRole("button", { name: "Open", exact: true }).click();
     await expect(page.getByTestId("bmc-profile-id-error")).toContainText("number");
     await expect(page).toHaveURL(/\/devices\/bmc\/$/);
   });

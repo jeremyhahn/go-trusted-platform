@@ -6,7 +6,10 @@ import InvitationsPage from './page';
 // session is the token the page reads; each case sets the role it needs.
 const session = { isTenantOwner: true };
 
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }));
+// One router object, as Next's useRouter returns: the page's effect depends
+// on it, so a fresh object per render would rerun the list read.
+const router = { push: vi.fn() };
+vi.mock('next/navigation', () => ({ useRouter: () => router }));
 vi.mock('@/utils/jwt', () => ({ getUserFromToken: () => session }));
 vi.mock('@/utils/cookie', () => ({ getCookie: () => 'test' }));
 vi.mock('@/utils/getBaseUrl', () => ({ getBaseUrl: () => '' }));

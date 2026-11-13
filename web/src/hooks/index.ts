@@ -169,6 +169,7 @@ export { useDeviceTemplateActions } from './use-device-template-actions';
 export { useSDNBridge } from './use-sdn-bridge';
 export type { UseSDNBridgeResult } from './use-sdn-bridge';
 export { useDeviceLookup } from './use-device-lookup';
+export type {
   DeviceLookup,
   DeviceUpdate,
   ProfileUpdate,

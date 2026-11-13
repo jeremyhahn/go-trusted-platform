@@ -29,7 +29,7 @@ import { Shield, Key, FileText, AlertCircle, Loader2, Users } from 'lucide-react
  * Permissions list page component
  */
 export default function PermissionsPage() {
-  const { tenantId, isLoading: authLoading } = useAuth();
+  const { user: authUser, tenantId, isLoading: authLoading } = useAuth();
   const iam = useIAM();
 
 

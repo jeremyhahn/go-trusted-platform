@@ -3500,18 +3500,18 @@ export interface IAMPolicyAppApiMockConfig {
 }
 
 /** A request the mock received: method, path after the tenant, and JSON body. */
-export interface RecordedIAMCall {
+export interface RecordedIAMPolicyCall {
   method: string;
   path: string;
   body: Record<string, unknown> | null;
 }
 
 export interface IAMPolicyAppApiMock {
-  calls: RecordedIAMCall[];
+  calls: RecordedIAMPolicyCall[];
   policies: MockIAMPolicy[];
   apps: MockIAMApp[];
   /** Calls with the given method whose path ends with the given suffix. */
-  find: (method: string, pathSuffix: string) => RecordedIAMCall[];
+  find: (method: string, pathSuffix: string) => RecordedIAMPolicyCall[];
 }
 
 /**
@@ -3885,7 +3885,8 @@ function invitationEnvelope(invitation: object): string {
   });
 }
 
-export async function mockInvitationLookupApi(
+// #1753's lookup mock (invitation list, tenant name); #1681's is mockInvitationLookupApi above.
+export async function mockInvitationFlowApi(
   page: Page,
   options: {
     invitations?: Invitation[];
