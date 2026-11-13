@@ -55,13 +55,13 @@ test.describe('Compute VM operations', () => {
     await page.getByLabel('Destination host').fill('dest-node')
     await page.getByRole('button', { name: 'Migrate VM' }).click()
     const dialog = page.getByRole('dialog')
-    await expect(dialog).toContainText('Migrate this VM to dest-node (live)?')
+    await expect(dialog).toContainText('Migrate this VM to dest-node?')
     const fetchesBefore = api.calls().filter((c) => c.method === 'GET' && c.path === `/vms/${VM_ID}`).length
     await page.waitForTimeout(6000)
     const fetchesAfter = api.calls().filter((c) => c.method === 'GET' && c.path === `/vms/${VM_ID}`).length
     expect(fetchesAfter).toBeGreaterThan(fetchesBefore)
     await expect(dialog).toBeVisible()
-    await expect(dialog).toContainText('Migrate this VM to dest-node (live)?')
+    await expect(dialog).toContainText('Migrate this VM to dest-node?')
     await expect(page.getByLabel('Snapshot name')).toHaveValue('kept-across-refresh')
   })
 
@@ -162,12 +162,12 @@ test.describe('Compute VM operations', () => {
     await page.getByLabel('Destination host').fill('dest-node')
     await page.getByRole('button', { name: 'Migrate VM' }).click()
     const dialog = page.getByRole('dialog')
-    await expect(dialog).toContainText('Migrate this VM to dest-node (live)?')
+    await expect(dialog).toContainText('Migrate this VM to dest-node?')
     await dialog.getByRole('button', { name: 'Confirm' }).click()
     await expect(page.getByTestId('vm-migrate-result')).toHaveText('Migration to dest-node started')
     expect(lastCall(api, 'POST', `/vms/${VM_ID}/migrate`)?.body).toEqual({
       destinationHost: 'dest-node',
-      liveMigration: true,
+      liveMigration: false,
     })
   })
 

@@ -74,6 +74,20 @@ describe("MigrationsPage receiver spec", () => {
     expect(spec.networkMode).toBe("none");
     expect(spec.macAddress).toBe("52:54:00:12:34:56");
   });
+
+  // #1742: the receiver creates a blank disk and live mode moves only RAM, so
+  // the page prepares cold receivers only until the receiver opens the
+  // source's shared backing image.
+  it("prepares a cold receiver and offers no live mode", async () => {
+    render(<MigrationsPage />);
+    fillSpec();
+    const live = screen.getByRole("option", { name: "live" }) as HTMLOptionElement;
+    expect(live.disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Prepare Migration" }));
+
+    await waitFor(() => expect(ops.prepareMigration).toHaveBeenCalledTimes(1));
+    expect(ops.prepareMigration.mock.calls[0][0].mode).toBe("cold");
+  });
 });
 
 // #1727: each receiver holds a QEMU process until finalized, so the page keeps
