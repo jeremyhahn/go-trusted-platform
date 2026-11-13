@@ -197,8 +197,9 @@ on:
   # v1.29.3: one schedule run per repository (the concurrency group below),
   # and its bigdisk jobs skip while a main push run is in flight (the
   # preflight job's schedule guard).
+  # #1409: the nightly runs on this project's rotation night, Thursday night (Friday 04:00 UTC).
   schedule:
-    - cron: '0 4 * * *'
+    - cron: '0 4 * * 5'
 
 # Cancel superseded runs. Keyed on the ref so a branch only supersedes itself,
 # and set at workflow level so the whole superseded pipeline goes. ci-gate

@@ -783,8 +783,8 @@ it runs on every push to `main`, on `workflow_dispatch`, on the schedule, and
 on a PR labelled `ci:full`. The workflow env `CI_FULL_TIER` (`ci.yml:143`)
 holds that selection for steps and `CI Gate`. The nightly tier is the `soak`
 job, on the schedule and `workflow_dispatch` only (`ci.yml:648`), never on a
-push to `main` or on `ci:full`. The schedule is one daily cron, `0 4 * * *`
-(04:00 UTC, `ci.yml:110-111`), and runs on the default branch: `main`'s full
+push to `main` or on `ci:full`. The schedule is one weekly cron, `0 4 * * 5`
+(Friday 04:00 UTC, this project's Thursday-night rotation slot, #1409, `ci.yml:110-111`), and runs on the default branch: `main`'s full
 tier and the soak. `ci.yml` is the repository's one scheduler; `nightly.yml`
 and `batch.yml` are dispatch-only (`ci.yml:106-108`).
 
