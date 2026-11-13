@@ -50,6 +50,8 @@ export default function OverlayVtepsPage() {
     vtepsError,
     vnisError,
     tunnelsError,
+    macs,
+    macsError,
     refetchAll,
     getVTEP,
     getTunnelStats,
@@ -69,6 +71,7 @@ export default function OverlayVtepsPage() {
   const vtepsListError = listErrorText(vtepsError);
   const vnisListError = listErrorText(vnisError);
   const tunnelsListError = listErrorText(tunnelsError);
+  const macsListError = listErrorText(macsError);
   const errorRow = (colSpan: number, text: string, testId: string) => (
     <TableRow>
       <TableCell
@@ -292,6 +295,61 @@ export default function OverlayVtepsPage() {
                         onClick={() => void showStats(t)}
                       >
                         Stats
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </div>
+      </section>
+
+      <section className="space-y-2">
+        <h2 className="text-xl font-semibold">Remote MACs</h2>
+        <div className="rounded-md border border-border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>MAC</TableHead>
+                <TableHead>VNI</TableHead>
+                <TableHead>Remote VTEP</TableHead>
+                <TableHead>Learned</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {macsListError ? (
+                errorRow(5, macsListError, 'macs-list-error')
+              ) : macs.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={5} className="text-center text-muted-foreground">
+                    No remote MACs learned
+                  </TableCell>
+                </TableRow>
+              ) : (
+                macs.map((m) => (
+                  <TableRow key={`${m.mac}-${m.vni}`}>
+                    <TableCell className="font-mono">{m.mac}</TableCell>
+                    <TableCell className="font-mono">{m.vni}</TableCell>
+                    <TableCell>{m.remoteVtep}</TableCell>
+                    <TableCell>{m.learnedAt}</TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        aria-label={`Forget ${m.mac} on VNI ${m.vni}`}
+                        onClick={() =>
+                          setPending({
+                            title: 'Forget MAC',
+                            description: `Forget MAC ${m.mac} on VNI ${m.vni}?`,
+                            confirmLabel: 'Forget',
+                            run: () => forgetMAC(m.mac, m.vni),
+                            success: 'MAC forgotten',
+                          })
+                        }
+                      >
+                        Forget
                       </Button>
                     </TableCell>
                   </TableRow>

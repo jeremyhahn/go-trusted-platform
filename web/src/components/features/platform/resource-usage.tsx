@@ -23,7 +23,10 @@ interface ResourceItemProps {
 }
 
 function ResourceItem({ label, icon: Icon, used, total, unit }: ResourceItemProps) {
-  const percentage = (used / total) * 100;
+  // A zero or missing total would give NaN or Infinity, and used above total
+  // (or below zero) would size the bar outside its track: clamp to 0..100.
+  const raw = total > 0 ? (used / total) * 100 : 0;
+  const percentage = Number.isFinite(raw) ? Math.min(100, Math.max(0, raw)) : 0;
   const isHigh = percentage > 80;
   const isMedium = percentage > 60;
 
