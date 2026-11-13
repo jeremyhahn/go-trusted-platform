@@ -221,9 +221,13 @@ export class PlatformService extends BaseService {
     service: string,
     action: DaemonServiceAction
   ): Promise<ApiResponse<DaemonServiceActionResponse>> {
+    // No automatic retries: a network error can arrive after the daemon
+    // acted, and the REST handler has no idempotency key, so a resend could
+    // stop or restart the service a second time.
     return this.client.post<DaemonServiceActionResponse>(
       this.buildUrl(`/services/${encodeURIComponent(service)}/${action}`),
-      {}
+      {},
+      { retry: { enabled: false } }
     );
   }
 
