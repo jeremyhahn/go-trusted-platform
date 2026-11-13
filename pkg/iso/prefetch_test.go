@@ -314,51 +314,6 @@ func TestCollectRequiredPackages_Deduplication(t *testing.T) {
 	assert.Equal(t, 2, count, "expected alpine-base to appear twice (base + extra)")
 }
 
-func TestPreFetchConfig(t *testing.T) {
-	t.Run("zero value config", func(t *testing.T) {
-		config := &PreFetchConfig{}
-		assert.Empty(t, config.Mirror)
-		assert.Empty(t, config.Version)
-		assert.Empty(t, config.Architecture)
-		assert.Empty(t, config.WorkDir)
-		assert.Empty(t, config.ISODir)
-		assert.False(t, config.FIPS)
-		assert.False(t, config.EnableFIDO2)
-		assert.False(t, config.FilesystemLVM)
-		assert.False(t, config.IMAEnabled)
-		assert.False(t, config.IMAAuditEnabled)
-		assert.Nil(t, config.ExtraPackages)
-	})
-
-	t.Run("fully populated config", func(t *testing.T) {
-		config := &PreFetchConfig{
-			Mirror:          "https://dl-cdn.alpinelinux.org/alpine",
-			Version:         "3.22.2",
-			Architecture:    "x86_64",
-			WorkDir:         "/tmp/work",
-			ISODir:          "/tmp/iso",
-			FIPS:            true,
-			EnableFIDO2:     true,
-			FilesystemLVM:   true,
-			IMAEnabled:      true,
-			IMAAuditEnabled: true,
-			ExtraPackages:   []string{"pkg1", "pkg2"},
-		}
-
-		assert.Equal(t, "https://dl-cdn.alpinelinux.org/alpine", config.Mirror)
-		assert.Equal(t, "3.22.2", config.Version)
-		assert.Equal(t, "x86_64", config.Architecture)
-		assert.Equal(t, "/tmp/work", config.WorkDir)
-		assert.Equal(t, "/tmp/iso", config.ISODir)
-		assert.True(t, config.FIPS)
-		assert.True(t, config.EnableFIDO2)
-		assert.True(t, config.FilesystemLVM)
-		assert.True(t, config.IMAEnabled)
-		assert.True(t, config.IMAAuditEnabled)
-		assert.Equal(t, []string{"pkg1", "pkg2"}, config.ExtraPackages)
-	})
-}
-
 func TestNewPreFetchBuilder(t *testing.T) {
 	t.Run("with valid config and logger", func(t *testing.T) {
 		logger := logging.DefaultLogger()
@@ -745,39 +700,6 @@ func TestStripVersionConstraint(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
-}
-
-func TestApkPackageEntry(t *testing.T) {
-	t.Run("zero value", func(t *testing.T) {
-		entry := &apkPackageEntry{}
-		assert.Empty(t, entry.Name)
-		assert.Empty(t, entry.Version)
-		assert.Empty(t, entry.Architecture)
-		assert.Zero(t, entry.Size)
-		assert.Empty(t, entry.Checksum)
-		assert.Nil(t, entry.Dependencies)
-		assert.Nil(t, entry.Provides)
-	})
-
-	t.Run("fully populated", func(t *testing.T) {
-		entry := &apkPackageEntry{
-			Name:         "test-package",
-			Version:      "1.2.3-r0",
-			Architecture: "x86_64",
-			Size:         12345,
-			Checksum:     "Q1abc123=",
-			Dependencies: []string{"dep1", "dep2"},
-			Provides:     []string{"provides1"},
-		}
-
-		assert.Equal(t, "test-package", entry.Name)
-		assert.Equal(t, "1.2.3-r0", entry.Version)
-		assert.Equal(t, "x86_64", entry.Architecture)
-		assert.Equal(t, int64(12345), entry.Size)
-		assert.Equal(t, "Q1abc123=", entry.Checksum)
-		assert.Equal(t, []string{"dep1", "dep2"}, entry.Dependencies)
-		assert.Equal(t, []string{"provides1"}, entry.Provides)
-	})
 }
 
 func TestCollectRequiredPackages_PackageOrder(t *testing.T) {

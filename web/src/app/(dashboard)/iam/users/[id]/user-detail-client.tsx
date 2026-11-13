@@ -6,7 +6,7 @@
  * Displays detailed user information with role management and activity log.
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useParams, usePathname, useRouter } from 'next/navigation';
 import { resolveDynamicId } from '@/utils/dynamic-route';
 import { useAuth } from '@/contexts/AuthContext';
@@ -44,7 +44,6 @@ import {
   Edit,
   Shield,
   Activity,
-  Plus,
   X,
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
@@ -73,7 +72,7 @@ export default function UserDetailPage() {
   );
 
   // Fetch activities (placeholder - needs actual implementation in SDK if not available)
-  const [activities, setActivities] = useState<ActivityLogEntry[]>([]);
+  const [activities] = useState<ActivityLogEntry[]>([]);
 
   // Fetch roles using SDK only when edit form is opened
   const { data: rolesData } = useApi(
@@ -165,29 +164,6 @@ export default function UserDetailPage() {
   );
 
   // Add role mutation using SDK
-  const addRoleMutation = useMutation(
-    (roleId: string) => {
-      if (!tenantId) throw new Error('No tenant ID');
-      return iam.assignRole({ tenantId, userId, roleId });
-    },
-    {
-      onSuccess: () => {
-        toast({
-          title: 'Role assigned',
-          description: 'The role has been assigned successfully',
-          variant: 'success',
-        });
-        refetchUser();
-      },
-      onError: (error) => {
-        toast({
-          title: 'Error assigning role',
-          description: error.message,
-          variant: 'destructive',
-        });
-      },
-    }
-  );
 
   // Remove role mutation using SDK
   const removeRoleMutation = useMutation(
