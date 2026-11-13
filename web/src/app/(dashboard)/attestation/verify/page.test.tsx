@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import VerifyPage from "./page";
@@ -8,7 +8,7 @@ import VerifyPage from "./page";
 // hands to useApi are captured and exercised on their own.
 type ApiOptions = { onError?: (err: Error) => void };
 
-const service = { listManifests: vi.fn() };
+const service = { listManifests: vi.fn(), verifyManifest: vi.fn() };
 const toast = vi.fn();
 const refetch = vi.fn();
 const api: {
@@ -32,14 +32,40 @@ vi.mock("@/hooks", async (importOriginal) => ({
   },
 }));
 
+// Every manifest carries a signature and a Merkle root: only the verifier's
+// verdict decides the result, never the presence of a signature.
+function manifest(id: string, hostId: string) {
+  return { id, hostId, timestamp: "2026-08-31T10:00:00Z", signature: "sig", merkleRoot: "root" };
+}
+
 const manifestsFixture = {
   manifests: [
-    { id: "m-1", hostId: "host-merkle", timestamp: "2026-08-31T10:00:00Z", signature: "sig", merkleRoot: "root" },
-    { id: "m-2", hostId: "host-signed", timestamp: "2026-08-31T10:00:00Z", signature: "sig" },
-    { id: "m-3", hostId: "host-unsigned", timestamp: "2026-08-31T10:00:00Z" },
-    { id: "m-4", hostId: "host-empty-sig", timestamp: "2026-08-31T10:00:00Z", signature: "" },
+    manifest("m-1", "host-verified"),
+    manifest("m-2", "host-failed"),
+    manifest("m-3", "host-invalid"),
+    manifest("m-4", "host-rejected"),
+    manifest("m-5", "host-pending"),
   ],
 };
+
+function result(status: string, errors: string[] = []) {
+  return { success: true, data: { status: { success: true, message: "" }, result: { status, errors } } };
+}
+
+// The verifier's answer per manifest id. A missing entry rejects the call.
+const verdicts: Record<string, unknown> = {
+  "m-1": result("VERIFIED"),
+  "m-2": result("FAILED", ["signature does not verify"]),
+  // Invalid evidence: the verifier answers but gives no result.
+  "m-3": { success: false, error: { code: "INVALID_ARGUMENT", message: "bad manifest" } },
+  "m-5": result("PENDING"),
+};
+
+function answerFromVerdicts() {
+  service.verifyManifest.mockImplementation(({ manifest: m }: { manifest: { id: string } }) =>
+    m.id in verdicts ? Promise.resolve(verdicts[m.id]) : Promise.reject(new Error("verifier unreachable")),
+  );
+}
 
 function card(title: string): HTMLElement | null | undefined {
   // The result names also label table badges: take the card title outside the table.
@@ -60,6 +86,7 @@ function rowOf(name: string): HTMLElement {
 describe("VerifyPage", () => {
   beforeEach(() => {
     api.state = { data: null, isLoading: false, error: null };
+    answerFromVerdicts();
   });
 
   afterEach(() => {
@@ -111,7 +138,7 @@ describe("VerifyPage", () => {
     expect(statValue("Total Verifications")).toBe("0");
     expect(statValue("Passed")).toBe("0");
     expect(statValue("Failed")).toBe("0");
-    expect(statValue("Warning")).toBe("0");
+    expect(statValue("Unverified")).toBe("0");
     expect(statValue("In Progress")).toBe("0");
     expect(card("Passed")?.textContent).toContain("0% success rate");
     expect(screen.getByText("No verifications found")).toBeTruthy();
@@ -125,36 +152,94 @@ describe("VerifyPage", () => {
     expect(screen.getByText("No verifications found")).toBeTruthy();
   });
 
-  it("marks signed manifests passed and unsigned ones in progress", () => {
+  it("asks the verifier about every listed manifest", async () => {
     api.state = { data: manifestsFixture, isLoading: false, error: null };
     render(<VerifyPage />);
 
-    expect(statValue("Total Verifications")).toBe("4");
-    expect(statValue("Passed")).toBe("2");
-    expect(statValue("Failed")).toBe("0");
-    expect(statValue("Warning")).toBe("0");
-    expect(statValue("In Progress")).toBe("2");
-    expect(card("Passed")?.textContent).toContain("50.0% success rate");
+    await waitFor(() => expect(service.verifyManifest).toHaveBeenCalledTimes(5));
+    expect(service.verifyManifest).toHaveBeenCalledWith({ manifest: manifestsFixture.manifests[0] });
+  });
 
-    expect(within(rowOf("Manifest host-merkle")).getByText("Passed")).toBeTruthy();
-    expect(within(rowOf("Manifest host-signed")).getByText("Passed")).toBeTruthy();
-    expect(within(rowOf("Manifest host-unsigned")).getByText("In Progress")).toBeTruthy();
-    // An empty signature is no signature.
-    expect(within(rowOf("Manifest host-empty-sig")).getByText("In Progress")).toBeTruthy();
+  it("shows a signed manifest in progress, never passed, until the verifier answers", () => {
+    service.verifyManifest.mockReturnValue(new Promise(() => {}));
+    api.state = { data: { manifests: [manifest("m-1", "host-verified")] }, isLoading: false, error: null };
+    render(<VerifyPage />);
+
+    expect(within(rowOf("Manifest host-verified")).getByText("In Progress")).toBeTruthy();
+    expect(statValue("Passed")).toBe("0");
+    expect(card("Passed")?.textContent).toContain("0.0% success rate");
+  });
+
+  it("takes each result from the verifier's verdict", async () => {
+    api.state = { data: manifestsFixture, isLoading: false, error: null };
+    render(<VerifyPage />);
+
+    await waitFor(() => expect(within(rowOf("Manifest host-verified")).getByText("Passed")).toBeTruthy());
+    await waitFor(() => expect(within(rowOf("Manifest host-rejected")).getByText("Unverified")).toBeTruthy());
+    expect(within(rowOf("Manifest host-failed")).getByText("Failed")).toBeTruthy();
+    expect(within(rowOf("Manifest host-invalid")).getByText("Unverified")).toBeTruthy();
+    expect(within(rowOf("Manifest host-pending")).getByText("In Progress")).toBeTruthy();
+
+    expect(statValue("Total Verifications")).toBe("5");
+    expect(statValue("Passed")).toBe("1");
+    expect(statValue("Failed")).toBe("1");
+    expect(statValue("Unverified")).toBe("2");
+    expect(statValue("In Progress")).toBe("1");
+    expect(card("Passed")?.textContent).toContain("20.0% success rate");
     expect(screen.queryByText("No verifications found")).toBeNull();
+  });
+
+  it("counts a failed verification, not a passed one, for a signed manifest", async () => {
+    api.state = { data: { manifests: [manifest("m-2", "host-failed")] }, isLoading: false, error: null };
+    render(<VerifyPage />);
+
+    await waitFor(() => expect(statValue("Failed")).toBe("1"));
+    expect(within(rowOf("Manifest host-failed")).getByText("Failed")).toBeTruthy();
+    expect(statValue("Passed")).toBe("0");
+    expect(card("Passed")?.textContent).toContain("0.0% success rate");
+  });
+
+  it("shows invalid evidence, an unknown verdict and a failed call as unverified", async () => {
+    verdicts["m-6"] = result("UNKNOWN");
+    verdicts["m-7"] = { success: true, data: { status: { success: true, message: "" } } };
+    api.state = {
+      data: {
+        manifests: [
+          manifest("m-3", "host-invalid"),
+          manifest("m-4", "host-rejected"),
+          manifest("m-6", "host-unknown"),
+          manifest("m-7", "host-no-result"),
+        ],
+      },
+      isLoading: false,
+      error: null,
+    };
+    try {
+      render(<VerifyPage />);
+
+      await waitFor(() => expect(statValue("Unverified")).toBe("4"));
+      for (const host of ["host-invalid", "host-rejected", "host-unknown", "host-no-result"]) {
+        expect(within(rowOf(`Manifest ${host}`)).getByText("Unverified")).toBeTruthy();
+      }
+      expect(statValue("Passed")).toBe("0");
+      expect(card("Passed")?.textContent).toContain("0.0% success rate");
+    } finally {
+      delete verdicts["m-6"];
+      delete verdicts["m-7"];
+    }
   });
 
   it("names the manifest and reports no PCR mismatch per row", () => {
     api.state = { data: manifestsFixture, isLoading: false, error: null };
     render(<VerifyPage />);
 
-    const row = within(rowOf("Manifest host-merkle"));
-    expect(row.getByText("Manifest host-merkle")).toBeTruthy();
+    const row = within(rowOf("Manifest host-verified"));
+    expect(row.getByText("Manifest host-verified")).toBeTruthy();
     const mismatches = row.getByText("0");
     expect(mismatches.className).toContain("text-green-600");
   });
 
-  it("rounds the success rate to one decimal", () => {
+  it("rounds the success rate to one decimal", async () => {
     api.state = {
       data: { manifests: manifestsFixture.manifests.slice(0, 3) },
       isLoading: false,
@@ -162,7 +247,7 @@ describe("VerifyPage", () => {
     };
     render(<VerifyPage />);
 
-    expect(card("Passed")?.textContent).toContain("66.7% success rate");
+    await waitFor(() => expect(card("Passed")?.textContent).toContain("33.3% success rate"));
   });
 
   it("refetches on Refresh and offers Run Verification", () => {
