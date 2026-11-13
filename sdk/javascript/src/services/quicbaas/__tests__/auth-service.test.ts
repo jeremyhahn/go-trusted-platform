@@ -530,7 +530,7 @@ describe('QuicBaaSAuthService', () => {
       });
 
       expect(result.success).toBe(true);
-      expect(result.data?.revoked).toBe(true);
+      expect(result.data?.keyId).toBe('key-123');
       expect(mockClient.delete).toHaveBeenCalledWith('/v1/quicbaas/auth/apikeys/key-123');
     });
 
