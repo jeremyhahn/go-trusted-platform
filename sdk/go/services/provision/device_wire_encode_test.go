@@ -87,6 +87,38 @@ func TestEncodeProfileOverridesJSON(t *testing.T) {
 	}
 }
 
+// TestEncodeProfileOverridesJSON_CarriesDICEFields pins that the template
+// override body carries the DICE device id and the golden FWHash (#1699):
+// the server cannot recover a field the client encoder drops.
+func TestEncodeProfileOverridesJSON_CarriesDICEFields(t *testing.T) {
+	const diceID = "00112233445566778899aabbccddeeff"
+	const fwHash = "aa00000000000000000000000000000000000000000000000000000000000001"
+	out, err := EncodeProfileOverridesJSON(&platformv1.DeviceProfile{
+		Name:         "avr-01",
+		DiceDeviceId: diceID,
+		GoldenFwHash: fwHash,
+	})
+	if err != nil {
+		t.Fatalf("EncodeProfileOverridesJSON: %v", err)
+	}
+	if out["dice_device_id"] != diceID {
+		t.Errorf("dice_device_id = %v, want %q", out["dice_device_id"], diceID)
+	}
+	if out["golden_fw_hash"] != fwHash {
+		t.Errorf("golden_fw_hash = %v, want %q", out["golden_fw_hash"], fwHash)
+	}
+
+	empty, err := EncodeProfileOverridesJSON(&platformv1.DeviceProfile{Name: "q"})
+	if err != nil {
+		t.Fatalf("EncodeProfileOverridesJSON: %v", err)
+	}
+	for _, key := range []string{"dice_device_id", "golden_fw_hash"} {
+		if _, ok := empty[key]; ok {
+			t.Errorf("%s present for an unset value", key)
+		}
+	}
+}
+
 func TestEncodeProfileOverridesJSON_RefusesUnsupported(t *testing.T) {
 	cases := map[string]*platformv1.DeviceProfile{
 		"overrides.tenant_id":        {TenantId: "t-1"},
