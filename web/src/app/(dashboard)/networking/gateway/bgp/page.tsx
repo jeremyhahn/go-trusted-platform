@@ -40,7 +40,7 @@ export default function GatewayBgpPage() {
     prefixes,
     allocations,
     isLoading,
-    error,
+    errors,
     refetch,
     announcePrefix,
     withdrawPrefix,
@@ -52,6 +52,7 @@ export default function GatewayBgpPage() {
   const [prefix, setPrefix] = React.useState('');
   const [nextHop, setNextHop] = React.useState('');
   const [poolId, setPoolId] = React.useState('');
+  const [deviceId, setDeviceId] = React.useState('');
   const [hostname, setHostname] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [pending, setPending] = React.useState<Pending>(null);
@@ -80,9 +81,10 @@ export default function GatewayBgpPage() {
   const onAllocate = (e: React.FormEvent) => {
     e.preventDefault();
     void run(async () => {
-      const alloc = await allocateIP(poolId.trim(), hostname.trim());
+      const alloc = await allocateIP(poolId.trim(), deviceId.trim(), hostname.trim());
       toast({ title: 'IP allocated', description: alloc?.ip || poolId.trim() });
       setPoolId('');
+      setDeviceId('');
       setHostname('');
     });
   };
@@ -117,14 +119,6 @@ export default function GatewayBgpPage() {
         </Button>
       </div>
 
-      {error && (
-        <Alert variant="destructive">
-          <AlertCircle className="h-4 w-4" />
-          <AlertTitle>Could not load gateway data</AlertTitle>
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
-
       {isLoading && (
         <div className="flex items-center gap-2 text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" /> Loading…
@@ -135,7 +129,8 @@ export default function GatewayBgpPage() {
         <CardHeader>
           <CardTitle>BGP Peers</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
+          <SectionError title="Could not load BGP peers" message={errors.peers} />
           <Table aria-label="BGP peers">
             <TableHeader>
               <TableRow>
@@ -201,6 +196,7 @@ export default function GatewayBgpPage() {
               Announce
             </Button>
           </form>
+          <SectionError title="Could not load announced prefixes" message={errors.prefixes} />
           <Table aria-label="Announced prefixes">
             <TableHeader>
               <TableRow>
@@ -255,6 +251,15 @@ export default function GatewayBgpPage() {
               />
             </div>
             <div className="space-y-1">
+              <Label htmlFor="allocate-device">Device ID</Label>
+              <Input
+                id="allocate-device"
+                value={deviceId}
+                onChange={(e) => setDeviceId(e.target.value)}
+                required
+              />
+            </div>
+            <div className="space-y-1">
               <Label htmlFor="allocate-hostname">Hostname</Label>
               <Input
                 id="allocate-hostname"
@@ -262,16 +267,18 @@ export default function GatewayBgpPage() {
                 onChange={(e) => setHostname(e.target.value)}
               />
             </div>
-            <Button type="submit" disabled={busy || !poolId.trim()}>
+            <Button type="submit" disabled={busy || !poolId.trim() || !deviceId.trim()}>
               <Plus className="mr-2 h-4 w-4" />
               Allocate
             </Button>
           </form>
+          <SectionError title="Could not load IP allocations" message={errors.allocations} />
           <Table aria-label="IP allocations">
             <TableHeader>
               <TableRow>
                 <TableHead>IP</TableHead>
                 <TableHead>Pool</TableHead>
+                <TableHead>Device</TableHead>
                 <TableHead>Hostname</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
@@ -280,7 +287,7 @@ export default function GatewayBgpPage() {
             <TableBody>
               {allocations.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-muted-foreground">
+                  <TableCell colSpan={6} className="text-muted-foreground">
                     No allocations.
                   </TableCell>
                 </TableRow>
