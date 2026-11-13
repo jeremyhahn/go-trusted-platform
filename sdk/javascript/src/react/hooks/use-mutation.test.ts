@@ -301,7 +301,7 @@ describe('useMutation', () => {
       const onSuccess = vi.fn(() => {
         throw new Error('cb boom');
       });
-      const onError = vi.fn();
+      const onError = vi.fn((_e: MutationError, _v: string) => undefined);
       const onSettled = vi.fn();
       const { result } = setup((v: string) => Promise.resolve(ok(v.length)), {
         onSuccess,
@@ -313,8 +313,8 @@ describe('useMutation', () => {
       await flush();
       expect(onSuccess).toHaveBeenCalledTimes(1);
       expect(onError).toHaveBeenCalledTimes(1);
-      const err = onError.mock.calls[0][0] as MutationError;
-      expect(err.message).toBe('cb boom');
+      const err = onError.mock.calls[0]?.[0];
+      expect(err?.message).toBe('cb boom');
       expect(onError).toHaveBeenCalledWith(err, 'abc');
       expect(onSettled).toHaveBeenCalledTimes(1);
       expect(onSettled).toHaveBeenCalledWith(undefined, err, 'abc');
@@ -326,7 +326,7 @@ describe('useMutation', () => {
       const onSuccess = vi.fn(() => {
         throw new Error('cb boom');
       });
-      const onError = vi.fn();
+      const onError = vi.fn((_e: MutationError, _v: string) => undefined);
       const onSettled = vi.fn();
       const { result } = setup((v: string) => Promise.resolve(ok(v.length)), {
         onSuccess,
@@ -337,8 +337,8 @@ describe('useMutation', () => {
       expect(result.current.mutate('abc')).toBeUndefined();
       await flush();
       expect(onError).toHaveBeenCalledTimes(1);
-      const err = onError.mock.calls[0][0] as MutationError;
-      expect(err.message).toBe('cb boom');
+      const err = onError.mock.calls[0]?.[0];
+      expect(err?.message).toBe('cb boom');
       expect(onError).toHaveBeenCalledWith(err, 'abc');
       expect(onSettled).toHaveBeenCalledTimes(1);
       expect(onSettled).toHaveBeenCalledWith(undefined, err, 'abc');
