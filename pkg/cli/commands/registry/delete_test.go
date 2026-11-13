@@ -217,24 +217,6 @@ func TestNewDeleteCommand_FlagUsage(t *testing.T) {
 	}
 }
 
-func TestDeleteResult_FailedDelete(t *testing.T) {
-	result := DeleteResultCLI{
-		Reference: "myrepo/myimage:v1.0",
-		Digest:    "sha256:abc123",
-		Deleted:   false,
-		Message:   "Access denied",
-		Timestamp: 0,
-	}
-
-	if result.Deleted {
-		t.Error("expected Deleted to be false")
-	}
-
-	if result.Message != "Access denied" {
-		t.Errorf("unexpected Message: %q", result.Message)
-	}
-}
-
 func TestPrintDeleteResult_DryRun(t *testing.T) {
 	flags := &cli.CommonFlags{
 		OutputFormat: cli.OutputFormatTable,

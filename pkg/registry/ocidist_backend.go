@@ -186,7 +186,9 @@ func (r *Registry) ListRepositories(ctx context.Context, limit int) ([]string, e
 	return out, nil
 }
 
-// ListTags enumerates the tags within a repository.
+// ListTags enumerates the tags within a repository. It walks every
+// storage page by following the ListManifests cursor, so a repository
+// whose manifests sort beyond the first page is still listed in full.
 func (r *Registry) ListTags(ctx context.Context, name string) ([]string, error) {
 	if err := r.checkState(); err != nil {
 		return nil, err
@@ -194,16 +196,26 @@ func (r *Registry) ListTags(ctx context.Context, name string) ([]string, error) 
 	if r.storage == nil {
 		return nil, ErrStorageNotConfigured{Op: "ListTags"}
 	}
-	res, err := r.storage.ListManifests(ctx, ListOptions{Limit: 500})
-	if err != nil {
-		return nil, err
-	}
 	tags := []string{}
-	for _, m := range res.Manifests {
-		repo, tag := splitOCIRef(m.Reference)
-		if repo == name && tag != "" && !strings.HasPrefix(tag, "sha256:") {
-			tags = append(tags, tag)
+	cursor := ""
+	for {
+		res, err := r.storage.ListManifests(ctx, ListOptions{
+			Limit:  500,
+			Cursor: cursor,
+		})
+		if err != nil {
+			return nil, err
 		}
+		for _, m := range res.Manifests {
+			repo, tag := splitOCIRef(m.Reference)
+			if repo == name && tag != "" && !strings.HasPrefix(tag, "sha256:") {
+				tags = append(tags, tag)
+			}
+		}
+		if !res.HasMore || res.NextCursor == "" || res.NextCursor == cursor {
+			break
+		}
+		cursor = res.NextCursor
 	}
 	sort.Strings(tags)
 	return tags, nil

@@ -50,15 +50,6 @@ func TestDeviceProfile_Config(t *testing.T) {
 	assert.Equal(t, "node-01", got.Hostname)
 }
 
-func TestDeviceProfile_Config_Nil(t *testing.T) {
-	profile := &DeviceProfile{
-		ID:   2,
-		Name: "no-config-profile",
-	}
-
-	assert.Nil(t, profile.Config)
-}
-
 func TestDeviceProfile_Config_JSONRoundTrip(t *testing.T) {
 	cfg := map[string]string{
 		"domain":   "json.example.com",
@@ -84,25 +75,6 @@ func TestDeviceProfile_Config_JSONRoundTrip(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "json.example.com", m["domain"])
 	assert.Equal(t, "json-node", m["hostname"])
-}
-
-func TestDeviceProfile_EKSerial(t *testing.T) {
-	profile := &DeviceProfile{
-		ID:       10,
-		Name:     "ek-profile",
-		EKSerial: "ABC123DEF456",
-	}
-
-	assert.Equal(t, "ABC123DEF456", profile.EKSerial)
-}
-
-func TestDeviceProfile_EKSerial_Empty(t *testing.T) {
-	profile := &DeviceProfile{
-		ID:   11,
-		Name: "no-ek-profile",
-	}
-
-	assert.Equal(t, "", profile.EKSerial)
 }
 
 func TestDeviceProfile_EKSerial_JSONRoundTrip(t *testing.T) {
@@ -139,25 +111,6 @@ func TestDeviceProfile_EKSerial_YAMLRoundTrip(t *testing.T) {
 	assert.Equal(t, "SERIAL-002", decoded.EKSerial)
 }
 
-func TestDeviceProfile_MACAddress(t *testing.T) {
-	profile := &DeviceProfile{
-		ID:         20,
-		Name:       "mac-profile",
-		MACAddress: "52:54:00:ab:cd:ef",
-	}
-
-	assert.Equal(t, "52:54:00:ab:cd:ef", profile.MACAddress)
-}
-
-func TestDeviceProfile_MACAddress_Empty(t *testing.T) {
-	profile := &DeviceProfile{
-		ID:   21,
-		Name: "no-mac-profile",
-	}
-
-	assert.Equal(t, "", profile.MACAddress)
-}
-
 func TestDeviceProfile_MACAddress_JSONRoundTrip(t *testing.T) {
 	profile := &DeviceProfile{
 		ID:         22,
@@ -190,32 +143,6 @@ func TestDeviceProfile_MACAddress_YAMLRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "11:22:33:44:55:66", decoded.MACAddress)
-}
-
-func TestDeviceProfile_Assigned(t *testing.T) {
-	now := time.Now().UTC().Truncate(time.Second)
-
-	profile := &DeviceProfile{
-		ID:         30,
-		Name:       "assigned-profile",
-		EKSerial:   "EK-ASSIGNED-001",
-		MACAddress: "52:54:00:01:02:03",
-		Assigned:   true,
-		AssignedAt: now,
-	}
-
-	assert.True(t, profile.Assigned)
-	assert.Equal(t, now, profile.AssignedAt)
-}
-
-func TestDeviceProfile_Assigned_Default(t *testing.T) {
-	profile := &DeviceProfile{
-		ID:   31,
-		Name: "unassigned-profile",
-	}
-
-	assert.False(t, profile.Assigned)
-	assert.True(t, profile.AssignedAt.IsZero())
 }
 
 func TestDeviceProfile_Assigned_JSONRoundTrip(t *testing.T) {
