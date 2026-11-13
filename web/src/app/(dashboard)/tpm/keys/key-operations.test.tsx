@@ -41,14 +41,28 @@ function unb64(value: string): Uint8Array {
 }
 
 /** A TPMS_ATTEST of type TPM_ST_ATTEST_QUOTE whose extraData is given. */
-function attest(extraData: Uint8Array): Uint8Array {
-  const out = new Uint8Array(10 + extraData.length + 17);
+const TPM_ALG_SHA1 = 0x0004;
+const TPM_ALG_SHA256 = 0x000b;
+
+/**
+ * A TPMS_ATTEST quote: magic, type, empty qualifiedSigner, extraData,
+ * clockInfo (17), firmwareVersion (8), then TPMS_QUOTE_INFO: one
+ * TPML_PCR_SELECTION entry over `bank` selecting `pcrs`, and a 32-byte pcrDigest.
+ */
+function attest(extraData: Uint8Array, bank = TPM_ALG_SHA256, pcrs: number[] = [0, 7]): Uint8Array {
+  const selectAt = 10 + extraData.length + 17 + 8;
+  const out = new Uint8Array(selectAt + 4 + 2 + 1 + 3 + 2 + 32);
   const view = new DataView(out.buffer);
   view.setUint32(0, 0xff544347);
   view.setUint16(4, 0x8018);
   view.setUint16(6, 0);
   view.setUint16(8, extraData.length);
   out.set(extraData, 10);
+  view.setUint32(selectAt, 1);
+  view.setUint16(selectAt + 4, bank);
+  view.setUint8(selectAt + 6, 3);
+  for (const pcr of pcrs) out[selectAt + 7 + (pcr >> 3)] |= 1 << (pcr & 7);
+  view.setUint16(selectAt + 10, 32);
   return out;
 }
 
@@ -58,11 +72,11 @@ function boundTo(binding: Uint8Array) {
 }
 
 /** A quote answer over `quoted(nonce)`, echoing `echo` as the channel binding. */
-function quoteAnswer(quoted: (nonce: Uint8Array) => Promise<Uint8Array>, echo?: Uint8Array) {
-  return async (req: { nonce: string }) => ({
+function quoteAnswer(quoted: (nonce: Uint8Array) => Promise<Uint8Array>, echo?: Uint8Array, bank = TPM_ALG_SHA256) {
+  return async (req: { nonce: string; pcrIndices?: number[] }) => ({
     success: true,
     data: {
-      quote: b64(attest(await quoted(unb64(req.nonce)))),
+      quote: b64(attest(await quoted(unb64(req.nonce)), bank, req.pcrIndices)),
       signature: "c2ln",
       signatureAlgorithm: "ECDSA-SHA256",
       ...(echo ? { channelBinding: b64(echo) } : {}),
@@ -214,6 +228,16 @@ describe("TPMKeyOperations", () => {
 
     click("tpm-op-quote");
     await expectQuoteRefused();
+  });
+
+  it("refuses a bound quote over another PCR bank than the SHA256 it asked for", async () => {
+    tpm.quote.mockImplementation(quoteAnswer(boundTo(callerBinding), callerBinding, TPM_ALG_SHA1));
+    render(<TPMKeyOperations />);
+
+    click("tpm-op-quote");
+    await expectQuoteRefused();
+    expect(tpm.quote).toHaveBeenCalledWith(expect.objectContaining({ pcrBank: "SHA256" }));
+    expect(screen.getByTestId("tpm-error-quote").textContent).toContain("SHA256");
   });
 
   it.each(["0,7,11x", "0 7", "24", ""])("rejects malformed PCR input %j without a request", async (input) => {
