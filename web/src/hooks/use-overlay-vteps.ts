@@ -55,9 +55,11 @@ export function useOverlayVteps() {
     async (vni: number) => {
       const res = await overlay.deleteVNI(vni);
       if (!res.success) throw failure(res.error?.message);
+      // The server removes every remote MAC of a deleted VNI as well.
       await refetchVnis();
+      await refetchMacs();
     },
-    [overlay, refetchVnis]
+    [overlay, refetchVnis, refetchMacs]
   );
 
   const forgetMAC = React.useCallback(
