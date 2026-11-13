@@ -284,7 +284,12 @@ export function useMutation<TData, TVariables>(
       if (response.data !== undefined) {
         setData(response.data);
         setStatus('success');
-        optionsRef.current?.onSuccess?.(response.data, vars);
+        // A throwing onSuccess is reported once, as a failure of the mutation
+        try {
+          optionsRef.current?.onSuccess?.(response.data, vars);
+        } catch (err) {
+          return fail(toMutationError(err));
+        }
         optionsRef.current?.onSettled?.(response.data, undefined, vars);
         return response.data;
       }
