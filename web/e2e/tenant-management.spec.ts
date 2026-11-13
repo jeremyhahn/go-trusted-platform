@@ -867,7 +867,6 @@ test.describe('Tenant Quotas Management', () => {
 
       await page.goto('/tenant/quotas');
       await page.waitForLoadState('domcontentloaded');
-      await page.waitForTimeout(500);
 
       // The error may be displayed in different ways:
       // - "Error loading quotas" text
@@ -880,6 +879,7 @@ test.describe('Tenant Quotas Management', () => {
         page.getByText(/error|failed|unable/i).first(),
         page.locator('[data-testid*="error"]'),
       ];
+      await errorIndicators.slice(1).reduce((acc, l) => acc.or(l), errorIndicators[0]).first().waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
 
       const gracefulIndicators = [
         page.getByRole('heading', { name: /quotas/i }),
@@ -1063,8 +1063,8 @@ test.describe('Tenant Invitations', () => {
 
       await page.goto('/tenant/invitations');
 
-      // Wait for page to stabilize
-      await page.waitForTimeout(500);
+      // Wait (bounded) for an error indicator to render
+      await page.getByText(/error loading invitations/i).or(page.getByRole('alert')).or(page.getByRole('button', { name: /retry/i })).first().waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
 
       // Check for various error indicators - the UI might show errors in different ways
       const errorTextVisible = await page.getByText(/error loading invitations/i).isVisible().catch(() => false);
