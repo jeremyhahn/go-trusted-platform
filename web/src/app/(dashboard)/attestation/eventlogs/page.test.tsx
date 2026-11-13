@@ -32,6 +32,35 @@ vi.mock("@/hooks", async (importOriginal) => ({
   },
 }));
 
+// The toolbar's Radix popover filter is replaced by plain buttons with the same
+// toggle semantics (an open Radix popover costs seconds per test under jsdom).
+// The page's own filter configuration and filterFns still decide the rows.
+type FilterProps = {
+  column?: { getFilterValue: () => unknown; setFilterValue: (v: unknown) => void };
+  title?: string;
+  options: { label: string; value: string }[];
+};
+
+vi.mock("@/components/ui/data-table-faceted-filter", () => ({
+  DataTableFacetedFilter: ({ column, title, options }: FilterProps) => (
+    <div data-filter={title}>
+      {options.map((o) => (
+        <button
+          key={o.value}
+          type="button"
+          onClick={() => {
+            const current = (column?.getFilterValue() as string[] | undefined) ?? [];
+            const next = current.includes(o.value) ? current.filter((v) => v !== o.value) : [...current, o.value];
+            column?.setFilterValue(next.length ? next : undefined);
+          }}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  ),
+}));
+
 const digest = "c2hhMjU2LWRpZ2VzdC1vZi1wY3ItemVyby12YWx1ZQ==";
 
 const manifests = {
@@ -169,6 +198,94 @@ describe("EventLogsPage", () => {
     expect(within(table).getByText("PCR[0]", { exact: false }).className).toContain("bg-blue-500/10");
     expect(within(table).getByText("PCR[7]", { exact: false }).className).toContain("bg-cyan-500/10");
     expect(within(table).getByText("PCR[23]", { exact: false }).className).toContain("bg-gray-500/10");
+  });
+
+  describe("filters", () => {
+    const hostPcr0 = "Host PCR 0 value";
+    const hostPcr23 = "Host PCR 23 value";
+    const vmPcr7 = "VM vm-1 PCR 7 value";
+
+    function visible(): string[] {
+      return [hostPcr0, hostPcr23, vmPcr7].filter((d) => screen.queryByText(d) !== null);
+    }
+
+    function options(title: string): HTMLElement[] {
+      const filter = document.querySelector(`[data-filter="${title}"]`);
+      if (!filter) throw new Error(`no ${title} filter`);
+      return Array.from(filter.querySelectorAll<HTMLElement>("button"));
+    }
+
+    function choose(title: string, label: string) {
+      const item = options(title).find((el) => el.textContent === label);
+      if (!item) throw new Error(`no ${title} option ${label}`);
+      fireEvent.click(item);
+    }
+
+    beforeEach(() => {
+      api.state = { data: manifests, isLoading: false, error: null };
+    });
+
+    it("keeps only the rows whose device matches the search", () => {
+      render(<EventLogsPage />);
+      expect(visible()).toEqual([hostPcr0, hostPcr23, vmPcr7]);
+
+      fireEvent.change(screen.getByPlaceholderText("Search by device name..."), { target: { value: "vm-1" } });
+      expect(visible()).toEqual([vmPcr7]);
+
+      fireEvent.change(screen.getByPlaceholderText("Search by device name..."), { target: { value: "host-a" } });
+      expect(visible()).toEqual([hostPcr0, hostPcr23]);
+    });
+
+    it("offers only the PCR indices present and matches a numeric PCR to its string option", () => {
+      render(<EventLogsPage />);
+      expect(options("PCR Index").map((o) => o.textContent)).toEqual(["PCR[0]", "PCR[7]", "PCR[23]"]);
+      expect(options("Algorithm").map((o) => o.textContent)).toEqual(["SHA-256", "SHA-384", "SHA-512", "SHA-1"]);
+
+      choose("PCR Index", "PCR[7]");
+      expect(visible()).toEqual([vmPcr7]);
+
+      // A second index widens the match; unticking the first narrows it again.
+      choose("PCR Index", "PCR[0]");
+      expect(visible()).toEqual([hostPcr0, vmPcr7]);
+      choose("PCR Index", "PCR[7]");
+      expect(visible()).toEqual([hostPcr0]);
+    });
+
+    it("combines the search, PCR and algorithm filters", () => {
+      render(<EventLogsPage />);
+      choose("Algorithm", "SHA-256");
+      choose("Algorithm", "SHA-384");
+      expect(visible()).toEqual([hostPcr0, vmPcr7]);
+
+      choose("PCR Index", "PCR[23]");
+      expect(visible()).toEqual([]);
+      expect(screen.getByText("No event logs found")).toBeTruthy();
+    });
+
+    it("keeps only the rows with the selected algorithm", () => {
+      render(<EventLogsPage />);
+      choose("Algorithm", "SHA-1");
+      expect(visible()).toEqual([hostPcr23]);
+    });
+
+    it("hides every row for an algorithm no entry uses", () => {
+      render(<EventLogsPage />);
+      choose("Algorithm", "SHA-512");
+      expect(visible()).toEqual([]);
+    });
+
+    it("restores every row on Reset", () => {
+      render(<EventLogsPage />);
+      expect(screen.queryByText("Reset")).toBeNull();
+      choose("PCR Index", "PCR[0]");
+      fireEvent.change(screen.getByPlaceholderText("Search by device name..."), { target: { value: "host" } });
+      expect(visible()).toEqual([hostPcr0]);
+
+      fireEvent.click(screen.getByText("Reset"));
+      expect(visible()).toEqual([hostPcr0, hostPcr23, vmPcr7]);
+      expect((screen.getByPlaceholderText("Search by device name...") as HTMLInputElement).value).toBe("");
+      expect(screen.queryByText("Reset")).toBeNull();
+    });
   });
 
   it("refetches on Refresh", () => {
