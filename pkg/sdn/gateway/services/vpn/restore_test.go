@@ -231,6 +231,39 @@ func requireRestoreDrops(t *testing.T, prepare func(*testing.T, *restoreHarness,
 	assert.NotEqual(t, "mini-1", h.holder(t, lease.Address), "a dropped lease holds no address")
 }
 
+// A datapath that survived the vpn child's restart still hosts the peer of
+// a recorded lease Restore now rejects: the peer is removed with the lease.
+func TestRestore_RemovesTheHostedPeerOfALeaseItRejects(t *testing.T) {
+	cases := map[string]func(*testing.T, *restoreHarness, *Lease){
+		"expired": func(t *testing.T, h *restoreHarness, l *Lease) {
+			l.ExpiresAt = h.clock.Now()
+			require.NoError(t, h.store.Put(context.Background(), l))
+		},
+		"zone withdrawn from the gateway": func(t *testing.T, h *restoreHarness, l *Lease) {
+			l.Zones = []string{"fabric"}
+			require.NoError(t, h.store.Put(context.Background(), l))
+		},
+		"address taken by another device": func(t *testing.T, h *restoreHarness, l *Lease) {
+			h.allocate(t, "mini-other", l.Address)
+		},
+	}
+	for name, prepare := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := newRestoreHarness(t)
+			lease := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
+			prepare(t, h, lease)
+			h.plane.installed[lease.ID] = lease
+			h.start(t)
+
+			err := h.svc.Restore(context.Background())
+
+			var dropped *ErrLeaseNotRestored
+			require.True(t, errors.As(err, &dropped), "got %v", err)
+			assert.False(t, h.plane.hosts(lease.ID), "the rejected lease's hosted peer is removed")
+		})
+	}
+}
+
 func TestRestore_LeavesAnotherDevicesAddressAlone(t *testing.T) {
 	h := newRestoreHarness(t)
 	lease := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")

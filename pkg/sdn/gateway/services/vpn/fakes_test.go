@@ -191,12 +191,32 @@ func (p *fakePlane) InstallPeer(_ context.Context, lease *Lease) error {
 	return nil
 }
 
+// RemovePeer removes the peer; with removeErr set it fails and the peer
+// stays installed, as a datapath that cannot be reached leaves it.
 func (p *fakePlane) RemovePeer(_ context.Context, id LeaseID) error {
 	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.removeErr != nil {
+		return p.removeErr
+	}
 	delete(p.installed, id)
 	p.removed = append(p.removed, id)
+	return nil
+}
+
+// failRemovals sets (or, with nil, clears) the error RemovePeer and
+// ReconcilePeers return.
+func (p *fakePlane) failRemovals(err error) {
+	p.mu.Lock()
+	p.removeErr = err
 	p.mu.Unlock()
-	return p.removeErr
+}
+
+func (p *fakePlane) hosts(id LeaseID) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	_, ok := p.installed[id]
+	return ok
 }
 
 // ReconcilePeers removes every installed peer whose lease is not in keep,
@@ -208,13 +228,16 @@ func (p *fakePlane) ReconcilePeers(_ context.Context, keep []LeaseID) error {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.removeErr != nil {
+		return p.removeErr
+	}
 	for id := range p.installed {
 		if !want[id] {
 			delete(p.installed, id)
 			p.removed = append(p.removed, id)
 		}
 	}
-	return p.removeErr
+	return nil
 }
 
 func (p *fakePlane) count() int {
