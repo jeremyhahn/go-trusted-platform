@@ -273,9 +273,9 @@ export default function TimeSeriesPage() {
     }
     // Use aggregate mutation if aggregation is selected, otherwise use query
     if (queryData.aggregation && queryData.aggregation !== "UNSPECIFIED") {
-      await aggregateMutation.mutateAsync(queryData);
+      await aggregateMutation.mutateAsync(queryData).catch(() => undefined);
     } else {
-      await queryMutation.mutateAsync(queryData);
+      await queryMutation.mutateAsync(queryData).catch(() => undefined);
     }
   };
 
@@ -288,7 +288,7 @@ export default function TimeSeriesPage() {
       metric: metric.name,
       startTime: 0,
       endTime: Date.now(),
-    });
+    }).catch(() => undefined);
   };
 
   const handleCreateMetric = async () => {
@@ -787,7 +787,7 @@ export default function TimeSeriesPage() {
                         metric: row.name,
                         startTime: 0,
                         endTime: Date.now(),
-                      });
+                      }).catch(() => undefined);
                     }
                   }
                 },

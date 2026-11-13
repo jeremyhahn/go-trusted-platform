@@ -1019,6 +1019,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         if: ${{ steps.probe.outputs.has_target == 'true' }}
         with:
+          cache: ${{ runner.environment != 'self-hosted' }}
           go-version: ${{ env.GO_VERSION }}
 
       # v1.29.1: no -k; the first failing gate ends the step (ruling 226(15)).
@@ -1169,6 +1170,7 @@ jobs:
       # with noise that gets misread as the cause when something else breaks.
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
+          cache: ${{ runner.environment != 'self-hosted' }}
           go-version: ${{ env.GO_VERSION }}
 
       # Pinned, like GO_VERSION. sdk/javascript declares only
@@ -1220,6 +1222,7 @@ jobs:
 
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
+          cache: ${{ runner.environment != 'self-hosted' }}
           go-version: ${{ env.GO_VERSION }}
 
       # cpio: pkg/diskimage/netboot repacks an initramfs with it. libssl-dev:
@@ -1267,6 +1270,7 @@ jobs:
 
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
+          cache: ${{ runner.environment != 'self-hosted' }}
           go-version: ${{ env.GO_VERSION }}
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -1697,6 +1701,7 @@ jobs:
       # CUSTOMIZE (ruling 125): Go on the runner for scripts/foreignfailures.
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
+          cache: ${{ runner.environment != 'self-hosted' }}
           go-version: ${{ env.GO_VERSION }}
 
       # This leg's share of the runner's ALL_TARGETS
@@ -1863,6 +1868,7 @@ jobs:
       # CUSTOMIZE (ruling 125): Go on the runner for scripts/foreignfailures.
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
+          cache: ${{ runner.environment != 'self-hosted' }}
           go-version: ${{ env.GO_VERSION }}
 
       # CUSTOMIZE (ruling 125): each iteration applies the foreign-failure
@@ -1937,6 +1943,7 @@ jobs:
 
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
+          cache: ${{ runner.environment != 'self-hosted' }}
           go-version: ${{ env.GO_VERSION }}
 
       - name: Install cpio and the OpenSSL headers
