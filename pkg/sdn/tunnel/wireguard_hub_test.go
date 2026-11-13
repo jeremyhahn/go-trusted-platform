@@ -199,6 +199,45 @@ func TestWireGuardHub_UpRemovesAStaleHubWhenTheKeyStoreFails(t *testing.T) {
 	}
 }
 
+// TestRemoveStaleWireGuardHub covers a datapath that restarts with no hub
+// to bring up: the predecessor's hub device is removed without a hub, a
+// foreign device of the name is left alone, and a failed delete is
+// reported.
+func TestRemoveStaleWireGuardHub(t *testing.T) {
+	for name, tc := range map[string]struct {
+		dev  vnl.Link
+		kept bool
+	}{
+		"stale hub":      {dev: &vnl.Wireguard{LinkAttrs: vnl.LinkAttrs{Name: "wg-vpn0"}}},
+		"foreign device": {dev: &vnl.Dummy{LinkAttrs: vnl.LinkAttrs{Name: "wg-vpn0"}}, kept: true},
+		"no device":      {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			nl := newMockNetlinkOps()
+			if tc.dev != nil {
+				nl.links["wg-vpn0"] = tc.dev
+			}
+			if err := removeStaleWireGuardHub(nil, nl, "wg-vpn0"); err != nil {
+				t.Fatalf("err = %v", err)
+			}
+			_, ok := nl.links["wg-vpn0"]
+			if ok != tc.kept {
+				t.Fatalf("device kept = %v, want %v", ok, tc.kept)
+			}
+		})
+	}
+	t.Run("delete fails", func(t *testing.T) {
+		nl := newMockNetlinkOps()
+		nl.links["wg-vpn0"] = &vnl.Wireguard{LinkAttrs: vnl.LinkAttrs{Name: "wg-vpn0"}}
+		boom := errors.New("busy")
+		nl.linkDelFn = func(vnl.Link) error { return boom }
+		var rf *ErrTunnelRemoveFailed
+		if err := removeStaleWireGuardHub(nil, nl, "wg-vpn0"); !errors.As(err, &rf) || !errors.Is(err, boom) {
+			t.Fatalf("err = %v", err)
+		}
+	})
+}
+
 func TestWireGuardHub_SetAndRemovePeerTouchOnlyThatPeer(t *testing.T) {
 	hub, _, wg, _ := newTestHub(t)
 	if err := hub.Up(context.Background()); err != nil {
