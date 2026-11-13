@@ -677,26 +677,6 @@ func TestApp_NewCertificateStore_NilObjectStore(t *testing.T) {
 	assert.ErrorAs(t, err, &target)
 }
 
-// TestApp_SecureWipePasses verifies the field can be set and read.
-func TestApp_SecureWipePasses(t *testing.T) {
-	tests := []struct {
-		name   string
-		passes int
-	}{
-		{"single_pass", 1},
-		{"dod_standard", 3},
-		{"dod_extended", 7},
-		{"zero", 0},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			app := &App{SecureWipePasses: tt.passes}
-			assert.Equal(t, tt.passes, app.SecureWipePasses)
-		})
-	}
-}
-
 // =============================================================================
 // getIDevIDDecrypter additional paths (using mockTPM)
 // =============================================================================

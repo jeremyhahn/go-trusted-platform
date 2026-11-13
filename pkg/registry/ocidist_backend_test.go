@@ -17,6 +17,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"testing"
 )
 
@@ -131,5 +132,47 @@ func TestOCIDistBackend_ListReposAndTags(t *testing.T) {
 	}
 	if len(tags) != 2 {
 		t.Errorf("expected 2 alpine tags, got %v", tags)
+	}
+}
+
+// TestOCIDistBackend_ListTagsBeyondFirstPage puts more manifests than one
+// storage page holds ahead of the target repository, so its tags only
+// appear on a later page: ListTags must follow the storage cursor.
+func TestOCIDistBackend_ListTagsBeyondFirstPage(t *testing.T) {
+	reg := newTestRegistry(t)
+	ctx := context.Background()
+	m := []byte(`{
+		"schemaVersion": 2,
+		"mediaType": "application/vnd.oci.image.manifest.v1+json",
+		"config": {"digest": "sha256:` + repeat64("c") + `", "size": 4},
+		"layers": []
+	}`)
+	const fillers = 520
+	for i := 0; i < fillers; i++ {
+		tag := fmt.Sprintf("t%04d", i)
+		if _, err := reg.PutManifest(ctx, "aaa/filler", tag, "application/vnd.oci.image.manifest.v1+json", m); err != nil {
+			t.Fatalf("PutManifest aaa/filler:%s: %v", tag, err)
+		}
+	}
+	for _, tag := range []string{"3.20", "3.21"} {
+		if _, err := reg.PutManifest(ctx, "alpine", tag, "application/vnd.oci.image.manifest.v1+json", m); err != nil {
+			t.Fatalf("PutManifest alpine:%s: %v", tag, err)
+		}
+	}
+
+	tags, err := reg.ListTags(ctx, "alpine")
+	if err != nil {
+		t.Fatalf("ListTags alpine: %v", err)
+	}
+	if len(tags) != 2 || tags[0] != "3.20" || tags[1] != "3.21" {
+		t.Errorf("ListTags alpine = %v, want [3.20 3.21]", tags)
+	}
+
+	filler, err := reg.ListTags(ctx, "aaa/filler")
+	if err != nil {
+		t.Fatalf("ListTags aaa/filler: %v", err)
+	}
+	if len(filler) != fillers {
+		t.Errorf("ListTags aaa/filler returned %d tags, want %d", len(filler), fillers)
 	}
 }
