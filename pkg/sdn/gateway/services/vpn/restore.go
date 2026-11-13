@@ -61,17 +61,95 @@ func (s *Service) reconcilePeers(ctx context.Context, leases []*Lease) error {
 		if !ok {
 			continue
 		}
-		keep := make([]LeaseID, 0, len(leases))
-		for _, l := range leases {
-			if l.DataPlane == kind {
-				keep = append(keep, l.ID)
-			}
-		}
-		if err := r.ReconcilePeers(ctx, keep); err != nil {
-			errs = append(errs, &ErrDataPlaneUnavailable{Kind: kind, Cause: err})
+		if err := reconcilePlane(ctx, kind, r, leases); err != nil {
+			// An orphan peer may still be installed with its lease gone from
+			// the store, where no sweep finds it: keep the obligation.
+			s.owePeerRetry(kind, nil)
+			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// reconcilePlane removes every peer of one hosted plane whose lease is not
+// among leases.
+func reconcilePlane(ctx context.Context, kind DataPlaneKind, r PeerReconciler, leases []*Lease) error {
+	keep := make([]LeaseID, 0, len(leases))
+	for _, l := range leases {
+		if l.DataPlane == kind {
+			keep = append(keep, l.ID)
+		}
+	}
+	if err := r.ReconcilePeers(ctx, keep); err != nil {
+		return &ErrDataPlaneUnavailable{Kind: kind, Cause: err}
+	}
+	return nil
+}
+
+// owePeerRetry records that a hosted plane's peers must be reconciled
+// again, and, with held non-nil, that held's address is released only once
+// that succeeds.
+func (s *Service) owePeerRetry(kind DataPlaneKind, held ...*Lease) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.peerRetry == nil {
+		s.peerRetry = map[DataPlaneKind][]*Lease{}
+	}
+	owed := s.peerRetry[kind]
+	for _, l := range held {
+		if l != nil {
+			owed = append(owed, l)
+		}
+	}
+	s.peerRetry[kind] = owed
+}
+
+// retryPeerReconcile retries each owed reconciliation against the stored
+// leases, under the enrolment gate so no admission is between installing
+// a peer and storing its lease. Once a plane's reconciliation succeeds, the
+// addresses of the rejected leases that waited on it are released; a
+// failure keeps the obligation for the next sweep.
+func (s *Service) retryPeerReconcile(ctx context.Context) {
+	s.mu.Lock()
+	due := s.peerRetry
+	s.peerRetry = nil
+	s.mu.Unlock()
+	if len(due) == 0 {
+		return
+	}
+	s.enrolGate.Lock()
+	defer s.enrolGate.Unlock()
+	leases, err := s.deps.Leases.List(ctx)
+	if err != nil {
+		s.logger.Warn("vpn: peer reconciliation retry could not list leases", slog.Any("error", err))
+		for kind, held := range due {
+			s.owePeerRetry(kind, held...)
+		}
+		return
+	}
+	stored := make(map[LeaseID]bool, len(leases))
+	for _, l := range leases {
+		stored[l.ID] = true
+	}
+	for kind, held := range due {
+		r, ok := s.deps.DataPlanes[kind].(PeerReconciler)
+		if !ok {
+			continue
+		}
+		if err := reconcilePlane(ctx, kind, r, leases); err != nil {
+			s.logger.Warn("vpn: peer reconciliation failed again", slog.String("data_plane", string(kind)), slog.Any("error", err))
+			s.owePeerRetry(kind, held...)
+			continue
+		}
+		for _, l := range held {
+			if stored[l.ID] {
+				continue
+			}
+			if h, err := s.holdsAddress(ctx, l); err == nil && h {
+				s.releaseAddress(ctx, l.Address)
+			}
+		}
+	}
 }
 
 // restore reinstates one lease, or drops it.
@@ -156,7 +234,9 @@ func (s *Service) dropLease(ctx context.Context, l *Lease, plane DataPlane, reas
 		}
 	}
 	if removeErr != nil {
-		// The peer may still route the address: keep it held.
+		// The peer may still route the address: keep it held until a
+		// retried reconciliation (Sweep) removes the peer.
+		s.owePeerRetry(l.DataPlane, l)
 		return errors.Join(dropped, removeErr, storeErr)
 	}
 	if held, err := s.holdsAddress(ctx, l); err != nil {
