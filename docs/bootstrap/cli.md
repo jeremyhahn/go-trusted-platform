@@ -502,9 +502,14 @@ platformctl bootstrap direct --bundle ./platform-ca.pem --install-to-system-trus
 The four stubs return an error telling you to use the key-management CLI's
 `bootstrap <mode>` until the platform bridge ships. `direct` requires `--bundle`,
 rejects a directory, reads the file and decodes every PEM block in it. It
-rejects a file with no PEM block (`ErrDirectBundleNotPEM`), a `CERTIFICATE`
-block that does not parse as X.509 (`ErrDirectBundleInvalidCert`), and a
-bundle with no CA certificate (`ErrDirectBundleNoCA`); on success it prints the
+rejects a file with no PEM block (`ErrDirectBundleNotPEM`), a `-----BEGIN`
+boundary that does not open a well-formed block, such as a truncated block,
+one without its END line or one with invalid base64
+(`ErrDirectBundleMalformedPEM`), a block that is not a `CERTIFICATE`
+(`ErrDirectBundleNonCertificateBlock`), a `CERTIFICATE` block that does not
+parse as X.509 (`ErrDirectBundleInvalidCert`), and a bundle with no CA
+certificate (`ErrDirectBundleNoCA`). A rejected bundle is never installed,
+so an existing `--cert-path` file is left as it was. On success it prints the
 path, the size and the number of CA certificates. It does not verify a chain
 between the certificates. With `--install-to-system-trust` it writes the bundle
 to `--cert-path` (a failure returns `ErrTrustInstallFailed`); run the OS
