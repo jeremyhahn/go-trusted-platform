@@ -14,6 +14,7 @@
 package jwt
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -25,6 +26,7 @@ import (
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/login"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
@@ -105,13 +107,7 @@ func (handler *RestHandler) CreateSession(
 		requestedServiceID, _ = strconv.ParseUint(serviceIDParam, 10, 64)
 	}
 
-	userID, err := claims.PlatformUserID()
-	if err != nil {
-		handler.responseWriter.Error400(w, r, err)
-		return nil, err
-	}
-
-	user, err := handler.userService.Get(r.Context(), userID)
+	user, err := handler.sessionUser(r.Context(), claims)
 	if err != nil {
 		handler.responseWriter.Error400(w, r, err)
 		return nil, err
@@ -192,13 +188,7 @@ func (handler *RestHandler) RefreshToken(w http.ResponseWriter, r *http.Request)
 	//
 	// The store is the authority on current authorization, so a refresh
 	// picks up a revocation and fails closed when the user is gone.
-	userID, err := claims.PlatformUserID()
-	if err != nil {
-		handler.logger.Error(err, "rest/jwt: refresh token carries no platform user id")
-		handler.responseWriter.Error401(w, r, ErrInvalidToken)
-		return
-	}
-	user, err := handler.userService.Get(r.Context(), userID)
+	user, err := handler.sessionUser(r.Context(), claims)
 	if err != nil {
 		handler.logger.Error(err, "rest/jwt: refresh could not resolve the user")
 		handler.responseWriter.Error401(w, r, ErrInvalidToken)
@@ -266,4 +256,40 @@ func sessionFromClaims(claims *TokenClaims) iammw.IAMSession {
 		Email:    claims.Email,
 		Roles:    claims.Roles,
 	})
+}
+
+// sessionUser resolves the user a verified token names (#642). There are
+// two token shapes and they name their principal differently:
+//
+//   - a platform-issued token carries the platform user id in "uid";
+//   - a backbone-issued session (IssueSession, the unified login driver)
+//     carries no "uid" — only the backbone's subject, which is the key
+//     registration stores the user under and the same key the FIDO2
+//     binder resolved the session's workspace with.
+//
+// Refusing the second shape (what this did) meant every account that
+// signed in through the backbone was saved but never retrievable from its
+// session: refresh and /session both failed. The store stays the authority
+// either way, so a user who is gone fails closed, and a backbone subject
+// that resolves to a user outside the session's tenant is refused rather
+// than handed that user's record.
+func (handler *RestHandler) sessionUser(ctx context.Context, claims *TokenClaims) (*entities.User, error) {
+	if claims.UID != "" {
+		userID, err := claims.PlatformUserID()
+		if err != nil {
+			return nil, err
+		}
+		return handler.userService.Get(ctx, userID)
+	}
+	if claims.Subject == "" {
+		return nil, ErrInvalidUserClaim
+	}
+	user, err := handler.userService.GetByEmail(ctx, claims.Subject)
+	if err != nil {
+		return nil, err
+	}
+	if user == nil || user.TenantID == "" || user.TenantID != claims.TenantID {
+		return nil, ErrInvalidUserClaim
+	}
+	return user, nil
 }

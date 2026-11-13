@@ -958,10 +958,15 @@ func TestHandlerRefreshToken_RejectsAWrongAudienceToken(t *testing.T) {
 // session whose subject is all digits: it parses as a uint64, so a reader
 // that took the platform user id from "user_id" or "sub" would resolve
 // whichever unrelated platform user holds that key.
+// backboneSubject is the principal a backbone-issued session names: the
+// key registration stores the user under, which the FIDO2 binder resolves
+// the workspace with.
+const backboneSubject = "owner@example.com"
+
 func backboneSessionRequest(t *testing.T, handler *RestHandler, target string) *http.Request {
 	t.Helper()
 	bearer, _, err := handler.jwtService.IssueSession(&quicbaas.Identity{
-		Subject: "5083343080743762020", TenantID: "tenant-a",
+		Subject: backboneSubject, TenantID: "tenant-a",
 	})
 	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodPost, target, nil)
@@ -970,20 +975,95 @@ func backboneSessionRequest(t *testing.T, handler *RestHandler, target string) *
 	return req
 }
 
-func TestHandlerRefreshToken_RefusesABackboneSession(t *testing.T) {
+// backboneUser is the stored user a backbone session's subject names,
+// with a platform id above 2^53 so the refreshed "uid" claim proves the
+// id survives JSON.
+func backboneUser(tenantID string) *entities.User {
+	user := &entities.User{
+		ID: 18446744073709551557, Email: backboneSubject,
+		TenantID: tenantID, IsTenantOwner: true,
+	}
+	user.AddRole(&entities.Role{Name: "admin"})
+	return user
+}
+
+// TestHandlerRefreshToken_RefreshesABackboneSession is #642: an account
+// that signed in through the unified login driver holds a session with no
+// platform "uid". The refresh resolves the user by the session's subject
+// and mints from the stored record, instead of refusing the session.
+func TestHandlerRefreshToken_RefreshesABackboneSession(t *testing.T) {
 	t.Parallel()
 	handler := newHandlerForLoginTest(t)
+	users := handler.userService.(*MockUserService)
+	user := backboneUser("tenant-a")
+	users.On("GetByEmail", mock.Anything, backboneSubject).Return(user, nil)
+	rec := httptest.NewRecorder()
+
+	handler.RefreshToken(rec, backboneSessionRequest(t, handler, "/login/refresh"))
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var env struct {
+		Payload string `json:"payload"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &env))
+	refreshed, err := handler.jwtService.ParseTokenString(env.Payload)
+	require.NoError(t, err)
+	claims, ok := refreshed.Claims.(*TokenClaims)
+	require.True(t, ok)
+	id, err := claims.PlatformUserID()
+	require.NoError(t, err)
+	assert.Equal(t, user.ID, id)
+	assert.Equal(t, "tenant-a", claims.TenantID)
+	assert.Equal(t, []string{"admin"}, claims.Roles)
+	users.AssertNotCalled(t, "Get", mock.Anything, mock.Anything)
+}
+
+func TestHandlerRefreshToken_BackboneSessionFailsClosedWhenTheUserIsGone(t *testing.T) {
+	t.Parallel()
+	handler := newHandlerForLoginTest(t)
+	handler.userService.(*MockUserService).
+		On("GetByEmail", mock.Anything, backboneSubject).Return(nil, errors.New("not found"))
 	rec := httptest.NewRecorder()
 
 	handler.RefreshToken(rec, backboneSessionRequest(t, handler, "/login/refresh"))
 
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
-	handler.userService.(*MockUserService).AssertNotCalled(t, "Get", mock.Anything, mock.Anything)
 }
 
-func TestCreateSession_RefusesABackboneSession(t *testing.T) {
+// TestHandlerRefreshToken_BackboneSessionRefusesAnotherTenantsUser: a
+// subject that resolves to a user outside the session's tenant is refused,
+// never handed that user's record and roles.
+func TestHandlerRefreshToken_BackboneSessionRefusesAnotherTenantsUser(t *testing.T) {
 	t.Parallel()
 	handler := newHandlerForLoginTest(t)
+	handler.userService.(*MockUserService).
+		On("GetByEmail", mock.Anything, backboneSubject).Return(backboneUser("tenant-b"), nil)
+	rec := httptest.NewRecorder()
+
+	handler.RefreshToken(rec, backboneSessionRequest(t, handler, "/login/refresh"))
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+func TestCreateSession_ResolvesABackboneSession(t *testing.T) {
+	t.Parallel()
+	handler := newHandlerForLoginTest(t)
+	users := handler.userService.(*MockUserService)
+	users.On("GetByEmail", mock.Anything, backboneSubject).Return(backboneUser("tenant-a"), nil)
+	rec := httptest.NewRecorder()
+
+	session, err := handler.CreateSession(rec, backboneSessionRequest(t, handler, "/session"))
+
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	users.AssertNotCalled(t, "Get", mock.Anything, mock.Anything)
+}
+
+func TestCreateSession_BackboneSessionRefusesAnotherTenantsUser(t *testing.T) {
+	t.Parallel()
+	handler := newHandlerForLoginTest(t)
+	handler.userService.(*MockUserService).
+		On("GetByEmail", mock.Anything, backboneSubject).Return(backboneUser("tenant-b"), nil)
 	rec := httptest.NewRecorder()
 
 	session, err := handler.CreateSession(rec, backboneSessionRequest(t, handler, "/session"))
@@ -991,7 +1071,6 @@ func TestCreateSession_RefusesABackboneSession(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalidUserClaim)
 	assert.Nil(t, session)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
-	handler.userService.(*MockUserService).AssertNotCalled(t, "Get", mock.Anything, mock.Anything)
 }
 
 // stubLoginClient is a UnifiedLoginClient that returns a fixed bearer and
