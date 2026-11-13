@@ -51,14 +51,20 @@ export default function NTPPage() {
   const [stepOpen, setStepOpen] = useState(false);
   const [stepping, setStepping] = useState(false);
   const [steppedStatus, setSteppedStatus] = useState<NTPStatus | null>(null);
+  // The last status read failure, kept until a status read or a Step succeeds.
+  // useApi clears its own error as each request starts, so it cannot carry this.
+  const [staleError, setStaleError] = useState<{ message: string } | null>(null);
 
   const {
     data: statusData,
-    error: statusError,
     isLoading: statusLoading,
     refetch: fetchStatus,
   } = useApi(() => ntp.getStatus(), [], {
+    onSuccess: () => {
+      setStaleError(null);
+    },
     onError: (err) => {
+      setStaleError({ message: err.message });
       toast({
         title: 'Error',
         description: `Failed to fetch NTP status: ${err.message}`,
@@ -83,10 +89,11 @@ export default function NTPPage() {
   });
 
   const status = steppedStatus ?? statusData?.status;
-  // useApi keeps the last good data when a refresh fails (and clears error on
-  // the next success): mark that cached status stale so a failed clock service
-  // never reads as synchronised. A status returned by Step is fresh.
-  const statusStale = Boolean(statusError && !statusLoading && status && !steppedStatus);
+  // useApi keeps the last good data when a refresh fails: mark that cached
+  // status stale from the failure until a status read or a Step succeeds, so a
+  // failed clock service never reads as synchronised, even while a retry is
+  // pending.
+  const statusStale = Boolean(staleError && status);
   const sources = sourcesData?.sources ?? [];
   const loading = statusLoading || sourcesLoading;
 
@@ -105,6 +112,7 @@ export default function NTPPage() {
       }
       if (res.data?.status) {
         setSteppedStatus(res.data.status);
+        setStaleError(null);
       }
       toast({ title: 'Clock stepped', description: 'The clock was stepped to the selected source.' });
       setStepOpen(false);
@@ -183,9 +191,9 @@ export default function NTPPage() {
           <CardDescription>{status?.anomalyReason || 'Reported by chronyd on this node'}</CardDescription>
         </CardHeader>
         <CardContent>
-          {statusStale && statusError && (
+          {statusStale && staleError && (
             <p className="mb-4 text-sm text-destructive">
-              Status refresh failed: {statusError.message}. The values shown are from the last successful read.
+              Status refresh failed: {staleError.message}. The values shown are from the last successful read.
             </p>
           )}
           {status ? (
