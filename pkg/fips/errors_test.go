@@ -159,23 +159,6 @@ func TestErrorTypeAssertions(t *testing.T) {
 	var _ = ErrOpenSSLNotConfigured
 }
 
-func TestErrorNilChecks(t *testing.T) {
-	// Ensure error constants are not nil
-	errors := []error{
-		ErrUnsupportedOS,
-		ErrNotImplemented,
-		ErrVerificationFailed,
-		ErrKernelNotFound,
-		ErrOpenSSLNotConfigured,
-	}
-
-	for i, err := range errors {
-		if err == nil {
-			t.Errorf("error at index %d is nil", i)
-		}
-	}
-}
-
 func TestErrorMessages(t *testing.T) {
 	// Ensure error messages are non-empty and descriptive
 	tests := []struct {

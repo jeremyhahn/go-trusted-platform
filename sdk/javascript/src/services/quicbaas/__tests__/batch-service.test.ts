@@ -66,7 +66,7 @@ describe('BatchService', () => {
       });
 
       expect(result.success).toBe(true);
-      expect(result.data?.items).toHaveLength(3);
+      expect(result.data).toHaveProperty(['items', 'length'], 3);
       // DO NOT "fix" this to match `BatchGetResponse`, which declares `kvs`
       // rather than `items`. The mismatch is real and is NOT a test bug:
       // `/v1/quicbaas/batch/get` has no server-side implementation at all —
@@ -76,9 +76,9 @@ describe('BatchService', () => {
       // so rewriting this to satisfy the type would dress a guess as a
       // contract and make the test look authoritative about a wire format
       // that does not exist. Resolve #246 when the route is built, then fix
-      // both sides against what the handler actually emits.
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access -- #246
-      expect(result.data?.items[2]).toBeNull();
+      // both sides against what the handler actually emits. Until then the
+      // assertions read `items` by property path, so they claim no type.
+      expect(result.data).toHaveProperty(['items', 2], null);
       expect(mockClient.post).toHaveBeenCalledWith('/v1/quicbaas/batch/get', {
         keys: ['users/user-1', 'users/user-2', 'users/user-3'],
         consistency: undefined,
@@ -135,7 +135,7 @@ describe('BatchService', () => {
       const result = await service.batchGet({ keys: [] });
 
       expect(result.success).toBe(true);
-      expect(result.data?.items).toHaveLength(0);
+      expect(result.data).toHaveProperty(['items', 'length'], 0);
     });
 
     it('should handle batch get error', async () => {
@@ -286,8 +286,8 @@ describe('BatchService', () => {
       });
 
       expect(result.success).toBe(true);
-      expect(result.data?.results[0].success).toBe(true);
-      expect(result.data?.results[1].success).toBe(false);
+      expect(result.data?.results[0]?.success).toBe(true);
+      expect(result.data?.results[1]?.success).toBe(false);
     });
 
     it('should handle atomic batch put failure', async () => {
@@ -405,8 +405,8 @@ describe('BatchService', () => {
       });
 
       expect(result.success).toBe(true);
-      expect(result.data?.results[0].existed).toBe(true);
-      expect(result.data?.results[1].existed).toBe(false);
+      expect(result.data?.results[0]).toMatchObject({ existed: true });
+      expect(result.data?.results[1]).toMatchObject({ existed: false });
     });
 
     it('should handle batch delete error', async () => {

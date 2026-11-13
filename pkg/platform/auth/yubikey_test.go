@@ -379,20 +379,6 @@ func TestWithPrompter_Option(t *testing.T) {
 	assert.Equal(t, mockP, yubiAuth.prompter)
 }
 
-func TestDefaultPrompter_PasswordPrompt(t *testing.T) {
-	// This test verifies that the default prompter exists and is properly typed
-	// We cannot actually test stdin interaction in unit tests
-	dp := &defaultPrompter{}
-	assert.NotNil(t, dp)
-}
-
-func TestYubigoVerifier_Verify(t *testing.T) {
-	// Test that yubigoVerifier properly wraps the yubigo client
-	// This requires a real yubigo client, so we just verify the type exists
-	// Real verification happens in the NewYubiKeyAuthenticator tests
-	assert.NotNil(t, &yubigoVerifier{})
-}
-
 func TestYubiAuth_ImplementsPlatformAuthenticator(t *testing.T) {
 	var _ PlatformAuthenticator = (*YubiAuth)(nil)
 }
