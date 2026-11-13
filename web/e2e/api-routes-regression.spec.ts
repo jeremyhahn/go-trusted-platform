@@ -99,8 +99,8 @@ test.describe('REST routes regression', () => {
       if (resp) {
         expect(resp.status(), `navigation to ${page.path}`).toBeLessThan(500);
       }
-      // Give SPA queries a beat to settle, then assert no unregistered routes.
-      await pwPage.waitForTimeout(500);
+      // Let late SPA queries settle, then assert no unregistered routes.
+      await pwPage.waitForLoadState('networkidle');
       expect(bad, `unregistered REST endpoints hit by ${page.path}: ${JSON.stringify(bad, null, 2)}`).toHaveLength(0);
     });
   }
