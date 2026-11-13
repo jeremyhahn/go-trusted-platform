@@ -694,11 +694,8 @@ test.describe('Certificate Authority - Certificates Page', () => {
 
       // Wait for the API call and response to complete
       // The form will trigger the mutation which posts to the API
-      await page.waitForTimeout(1500);
-
       // Verify certificate was added to mock state
-      const certs = mockApi.getCertificates();
-      expect(certs.length).toBeGreaterThan(0);
+      await expect.poll(() => mockApi.getCertificates().length).toBeGreaterThan(0);
     });
 
     test('should require subject field', async ({ page }) => {
