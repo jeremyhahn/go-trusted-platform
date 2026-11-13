@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -29,6 +30,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
+	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restattestation "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/attestation"
 	restca "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/ca"
@@ -714,8 +716,56 @@ func (v1Router *Router) bmcRoutes() {
 		v1Router.logger.Debug("BMC REST handler is nil - BMC routes not registered")
 		return
 	}
-	// Remote power, boot and media control of the host.
-	router.NewBMCRouter(h).RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
+	// Remote power, boot and media control of the host, through the
+	// daemon's stored BMC credentials. The admin role is held per tenant,
+	// so the role gate alone would let one tenant's admin drive another
+	// tenant's machine: the resolved profile must also belong to the
+	// caller's tenant, or the caller be the system tenant (the control
+	// plane). Its own subrouter, not gated(ROLE_ADMIN), which other
+	// surfaces share.
+	group := v1Router.router.NewRoute().Subrouter()
+	group.Use(v1Router.roleGate([]string{common.ROLE_ADMIN})...)
+	group.Use(v1Router.bmcProfileTenantGate)
+	router.NewBMCRouter(h).RegisterRoutes(group)
+}
+
+// bmcProfileTenantGate admits a BMC request only when the session's tenant
+// owns the device profile the path names, or is the system tenant. It
+// fails closed: no profile service, an unparsable or unknown profile, or a
+// profile with no tenant is refused, all with the same 403, before the
+// handler reaches the BMC.
+func (v1Router *Router) bmcProfileTenantGate(next http.Handler) http.Handler {
+	systemTenantID := v1Router.restHandlerRegistry.TenantID()
+	profiles := v1Router.restHandlerRegistry.DeviceProfileService()
+	forbid := func(w http.ResponseWriter, r *http.Request) {
+		v1Router.responseWriter.Error403(w, r, iammw.ErrForbidden{
+			Reason: "caller may not act on this BMC",
+		}, nil)
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		session, ok := iammw.GetSessionFromContext(r.Context())
+		if !ok || session == nil {
+			v1Router.responseWriter.Error401(w, r, iammw.ErrUnauthorized{Reason: "session required"})
+			return
+		}
+		caller := session.TenantID()
+		if systemTenantID != "" && caller == systemTenantID {
+			next.ServeHTTP(w, r)
+			return
+		}
+		id, err := strconv.ParseUint(mux.Vars(r)["profileID"], 10, 64)
+		if err != nil || profiles == nil || caller == "" {
+			forbid(w, r)
+			return
+		}
+		profile, err := profiles.Get(r.Context(), id)
+		if err != nil || profile == nil || profile.TenantID == "" || profile.TenantID != caller {
+			v1Router.logger.Debugf("bmc: tenant %q refused profile %d", caller, id)
+			forbid(w, r)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (v1Router *Router) eabRoutes() {
