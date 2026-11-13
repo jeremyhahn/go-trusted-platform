@@ -59,6 +59,10 @@ function rowFor(key: string): HTMLElement {
   return row;
 }
 
+function selectRows(...keys: string[]) {
+  for (const key of keys) fireEvent.click(within(rowFor(key)).getByRole("checkbox", { name: "Select row" }));
+}
+
 function chipFor(bucket: string): HTMLElement {
   const chip = screen.getByText(bucket, { selector: "span.font-medium" }).parentElement;
   if (!chip) throw new Error(`no bucket chip for ${bucket}`);
@@ -353,5 +357,40 @@ describe("ObjectStoragePage", () => {
     await waitFor(() =>
       expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Error deleting object", description: "held" })),
     );
+  });
+
+  it("deletes nothing when the bulk delete is not confirmed", async () => {
+    const confirm = vi.fn(() => false);
+    vi.stubGlobal("confirm", confirm);
+    await renderPage();
+    selectRows("cold.bin", "odd.dat");
+    fireEvent.click(screen.getByRole("button", { name: "Delete selected (2)" }));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("Delete 2 selected objects?"));
+    expect(store.deleteObject).not.toHaveBeenCalled();
+  });
+
+  it("goes on with the next selected object after a refused bulk delete", async () => {
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      vi.stubGlobal("confirm", vi.fn(() => true));
+      store.deleteObject.mockResolvedValueOnce(refused("held")).mockResolvedValueOnce(ok({}));
+      await renderPage();
+      selectRows("cold.bin", "odd.dat");
+      fireEvent.click(screen.getByRole("button", { name: "Delete selected (2)" }));
+      await waitFor(() => expect(store.deleteObject).toHaveBeenCalledTimes(2));
+      expect(store.deleteObject.mock.calls).toEqual([
+        [{ bucket: "alpha", key: "cold.bin" }],
+        [{ bucket: "alpha", key: "odd.dat" }],
+      ]);
+      await waitFor(() =>
+        expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Error deleting object", description: "held" })),
+      );
+      await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Object deleted" })));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
   });
 });

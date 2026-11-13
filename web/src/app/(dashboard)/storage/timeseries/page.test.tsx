@@ -60,6 +60,10 @@ function rowFor(name: string): HTMLElement {
   return row;
 }
 
+function selectRows(...names: string[]) {
+  for (const name of names) fireEvent.click(within(rowFor(name)).getByRole("checkbox", { name: "Select row" }));
+}
+
 function stat(title: string): string {
   const card = screen.getByText(title).parentElement?.parentElement;
   return card?.querySelector(".text-2xl")?.textContent?.trim() ?? "";
@@ -227,5 +231,42 @@ describe("TimeSeriesPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Got It" }));
     await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Coming Soon" })));
     await waitFor(() => expect(screen.queryByRole("button", { name: "Got It" })).toBeNull());
+  });
+
+  it("deletes nothing when the bulk delete is not confirmed", async () => {
+    const confirm = vi.fn(() => false);
+    vi.stubGlobal("confirm", confirm);
+    render(<TimeSeriesPage />);
+    await screen.findByText("cpu.usage");
+    selectRows("cpu.usage", "request.latency");
+    fireEvent.click(screen.getByRole("button", { name: "Delete selected data (2)" }));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("Delete all data for 2 selected metrics?"));
+    expect(ts.deleteRange).not.toHaveBeenCalled();
+  });
+
+  it("goes on with the next selected metric after a refused bulk delete", async () => {
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      vi.stubGlobal("confirm", vi.fn(() => true));
+      ts.deleteRange.mockResolvedValueOnce(refused("retention lock")).mockResolvedValueOnce(ok({ deletedCount: 3 }));
+      render(<TimeSeriesPage />);
+      await screen.findByText("cpu.usage");
+      selectRows("cpu.usage", "request.latency");
+      fireEvent.click(screen.getByRole("button", { name: "Delete selected data (2)" }));
+      await waitFor(() => expect(ts.deleteRange).toHaveBeenCalledTimes(2));
+      const metrics = ts.deleteRange.mock.calls.map((c) => (c[0] as { metric: string }).metric);
+      expect(metrics).toEqual(["cpu.usage", "request.latency"]);
+      await waitFor(() =>
+        expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Delete failed", description: "retention lock" })),
+      );
+      await waitFor(() =>
+        expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Data deleted", description: "3 data points deleted" })),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
   });
 });

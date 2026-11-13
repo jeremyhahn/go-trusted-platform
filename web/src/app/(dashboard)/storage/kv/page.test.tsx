@@ -63,6 +63,10 @@ function stat(title: string): string {
   return card?.querySelector(".text-2xl")?.textContent?.trim() ?? "";
 }
 
+function selectRows(...keys: string[]) {
+  for (const key of keys) fireEvent.click(within(rowFor(key)).getByRole("checkbox", { name: "Select row" }));
+}
+
 async function renderPage() {
   render(<KVStorePage />);
   await screen.findByText("config/app");
@@ -251,5 +255,37 @@ describe("KVStorePage", () => {
     await waitFor(() =>
       expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Error deleting entry", description: "locked" })),
     );
+  });
+
+  it("deletes nothing when the bulk delete is not confirmed", async () => {
+    const confirm = vi.fn(() => false);
+    vi.stubGlobal("confirm", confirm);
+    await renderPage();
+    selectRows("config/motd", "solo");
+    fireEvent.click(screen.getByRole("button", { name: "Delete selected (2)" }));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("Delete 2 selected entries?"));
+    expect(kv.delete).not.toHaveBeenCalled();
+  });
+
+  it("goes on with the next selected entry after a refused bulk delete", async () => {
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      vi.stubGlobal("confirm", vi.fn(() => true));
+      kv.delete.mockResolvedValueOnce(refused("locked")).mockResolvedValueOnce(ok({}));
+      await renderPage();
+      selectRows("config/motd", "solo");
+      fireEvent.click(screen.getByRole("button", { name: "Delete selected (2)" }));
+      await waitFor(() => expect(kv.delete).toHaveBeenCalledTimes(2));
+      expect(kv.delete.mock.calls).toEqual([[{ key: "config/motd" }], [{ key: "solo" }]]);
+      await waitFor(() =>
+        expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Error deleting entry", description: "locked" })),
+      );
+      await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Entry deleted" })));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
   });
 });

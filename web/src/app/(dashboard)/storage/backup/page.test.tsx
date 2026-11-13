@@ -61,6 +61,10 @@ function rowFor(name: string): HTMLElement {
   return row;
 }
 
+function selectRows(...names: string[]) {
+  for (const name of names) fireEvent.click(within(rowFor(name)).getByRole("checkbox", { name: "Select row" }));
+}
+
 function stat(title: string): string {
   const card = screen.getByText(title).parentElement?.parentElement;
   return card?.querySelector(".text-2xl")?.textContent?.trim() ?? "";
@@ -275,5 +279,39 @@ describe("BackupPage", () => {
       ),
     );
     expect(screen.getByLabelText("Target Prefix (optional)")).toBeTruthy();
+  });
+
+  it("deletes nothing when the bulk delete is not confirmed", async () => {
+    const confirm = vi.fn(() => false);
+    vi.stubGlobal("confirm", confirm);
+    render(<BackupPage />);
+    await screen.findByText("nightly-full");
+    selectRows("nightly-full", "weekly-diff");
+    fireEvent.click(screen.getByRole("button", { name: "Delete selected (2)" }));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("Delete 2 selected backups?"));
+    expect(client.quicBaaSBackup.delete).not.toHaveBeenCalled();
+  });
+
+  it("goes on with the next selected backup after a refused bulk delete", async () => {
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      vi.stubGlobal("confirm", vi.fn(() => true));
+      client.quicBaaSBackup.delete.mockResolvedValueOnce(refused("locked")).mockResolvedValueOnce(ok({}));
+      render(<BackupPage />);
+      await screen.findByText("nightly-full");
+      selectRows("nightly-full", "weekly-diff");
+      fireEvent.click(screen.getByRole("button", { name: "Delete selected (2)" }));
+      await waitFor(() => expect(client.quicBaaSBackup.delete).toHaveBeenCalledTimes(2));
+      expect(client.quicBaaSBackup.delete.mock.calls).toEqual([[{ backupId: "b-full" }], [{ backupId: "b-diff" }]]);
+      await waitFor(() =>
+        expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Error deleting backup", description: "locked" })),
+      );
+      await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Backup deleted" })));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
   });
 });

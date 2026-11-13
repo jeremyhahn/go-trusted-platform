@@ -72,6 +72,10 @@ function rowFor(name: string): HTMLElement {
   return row;
 }
 
+function selectRows(...names: string[]) {
+  for (const name of names) fireEvent.click(within(rowFor(name)).getByRole("checkbox", { name: "Select row" }));
+}
+
 function stat(title: string): string {
   // "Collections" also titles the table card; the statistics cards come first.
   const card = screen.getAllByText(title)[0].parentElement?.parentElement;
@@ -351,5 +355,44 @@ describe("VectorDatabasePage", () => {
     const input = await searchFromRow("docs");
     expect(input.value).toBe("");
     expect(screen.queryByText("Results (2)")).toBeNull();
+  });
+
+  it("deletes nothing when the bulk delete is not confirmed", async () => {
+    const confirm = vi.fn(() => false);
+    vi.stubGlobal("confirm", confirm);
+    render(<VectorDatabasePage />);
+    await screen.findByText("docs");
+    selectRows("docs", "images");
+    fireEvent.click(screen.getByRole("button", { name: "Delete selected (2)" }));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("Delete 2 selected collections?"));
+    expect(vector.deleteNamespace).not.toHaveBeenCalled();
+  });
+
+  it("goes on with the next selected collection after a refused bulk delete", async () => {
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      vi.stubGlobal("confirm", vi.fn(() => true));
+      vector.deleteNamespace.mockResolvedValueOnce(refused("in use")).mockResolvedValueOnce(ok({}));
+      render(<VectorDatabasePage />);
+      await screen.findByText("docs");
+      selectRows("docs", "images");
+      fireEvent.click(screen.getByRole("button", { name: "Delete selected (2)" }));
+      await waitFor(() => expect(vector.deleteNamespace).toHaveBeenCalledTimes(2));
+      expect(vector.deleteNamespace.mock.calls).toEqual([
+        [{ name: "docs", force: true }],
+        [{ name: "images", force: true }],
+      ]);
+      await waitFor(() =>
+        expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Error deleting collection", description: "in use" })),
+      );
+      await waitFor(() =>
+        expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Collection deleted" })),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
   });
 });
