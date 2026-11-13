@@ -23,6 +23,8 @@ import type {
   CreateIDevIDCSRResponse,
   CreateIAKCSRRequest,
   CreateIAKCSRResponse,
+  CreateLDevIDRequest,
+  CreateLDevIDResponse,
   InstallIDevIDCertificateRequest,
   InstallIDevIDCertificateResponse,
   InstallIAKCertificateRequest,
@@ -267,6 +269,27 @@ export class IDevIDService extends BaseService {
    */
   async deleteIAKCertificate(): Promise<ApiResponse<DeleteIAKCertificateResponse>> {
     return this.client.delete<DeleteIAKCertificateResponse>(this.buildUrl('/iak/certificate'));
+  }
+
+  /**
+   * Create an LDevID: the platform generates the key, builds a CSR and has
+   * the platform CA issue the certificate
+   *
+   * @param request - LDevID creation request
+   * @returns CSR and issued certificate
+   */
+  async createLDevID(request?: CreateLDevIDRequest): Promise<ApiResponse<CreateLDevIDResponse>> {
+    // The REST handler decodes protobuf JSON: the algorithm must carry the
+    // proto enum name (DeviceKeyAlgorithm in idevid.proto), or the decoder
+    // drops it and the service falls back to its default algorithm.
+    const { algorithm, ...rest } = request ?? {};
+    const body: Omit<CreateLDevIDRequest, 'algorithm'> & { algorithm?: string } = { ...rest };
+    if (algorithm) {
+      body.algorithm = algorithm.startsWith('DEVICE_KEY_ALGORITHM_')
+        ? algorithm
+        : `DEVICE_KEY_ALGORITHM_${algorithm}`;
+    }
+    return this.client.post<CreateLDevIDResponse>(this.buildUrl('/ldevid'), body);
   }
 
   // =========================================================================

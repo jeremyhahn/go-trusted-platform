@@ -434,6 +434,39 @@ export interface CreateIAKCSRResponse {
 }
 
 /**
+ * Create LDevID request: the platform creates an LDevID key, a CSR, and
+ * has the platform CA issue the certificate.
+ */
+export interface CreateLDevIDRequest {
+  /** Subject and SAN fields for the LDevID certificate */
+  template?: CSRTemplate;
+  /** Key algorithm (default ECDSA-P256) */
+  algorithm?: DeviceKeyAlgorithm;
+  /** Persistent TPM handle, distinct from the IDevID and IAK handles */
+  handle?: number;
+  /** Platform CA certificate profile */
+  profile?: string;
+  /** Validity in days (0 uses the CA/profile default) */
+  validityDays?: number;
+  /** Overwrite an existing key at the handle */
+  overwrite?: boolean;
+}
+
+/**
+ * Create LDevID response
+ */
+export interface CreateLDevIDResponse {
+  /** Operation status */
+  status: IDevIDStatus;
+  /** CSR signed by the CA (PEM, base64) */
+  csrPem?: string;
+  /** Issued certificate (PEM, base64) */
+  certificatePem?: string;
+  /** Parsed metadata of the issued certificate */
+  certificate?: DeviceIdentityCertificate;
+}
+
+/**
  * Install IDevID certificate response
  */
 export interface InstallIDevIDCertificateResponse {

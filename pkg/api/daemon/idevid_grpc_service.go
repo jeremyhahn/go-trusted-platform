@@ -272,8 +272,15 @@ func (s *IDevIDGRPCService) CreateIDevIDCSR(ctx context.Context, req *platformv1
 		return nil, status.Error(codes.NotFound, "IAK not found")
 	}
 
+	// The TCG CSR carries the EK certificate; xkms rejects a nil one.
+	ekCert, err := s.tpm2Service.EKCertificate()
+	if err != nil {
+		s.logger.Error(err, "Failed to read EK certificate")
+		return nil, s.mapTPM2Error(err, "read EK certificate")
+	}
+
 	// Create TCG CSR using TPM2
-	tcgCSR, err := s.tpm2Service.CreateTCG_CSR_IDEVID(nil, iakAttrs, idevidAttrs)
+	tcgCSR, err := s.tpm2Service.CreateTCG_CSR_IDEVID(ekCert, iakAttrs, idevidAttrs)
 	if err != nil {
 		s.logger.Error(err, "Failed to create TCG CSR")
 		return nil, s.mapTPM2Error(err, "create IDevID CSR")
@@ -303,6 +310,12 @@ func (s *IDevIDGRPCService) CreateIAKCSR(ctx context.Context, req *platformv1.Cr
 		return nil, status.Error(codes.FailedPrecondition, "TPM2 service not initialized")
 	}
 
+	// The TPM library's TCG CSR builder reads the IDevID configuration
+	// unconditionally; refuse here rather than let it dereference nil.
+	if cfg := s.tpm2Service.Config(); cfg == nil || cfg.IDevID == nil {
+		return nil, status.Error(codes.FailedPrecondition, "IAK CSR requires an IDevID configuration")
+	}
+
 	// Get IAK attributes
 	iakAttrs, err := s.tpm2Service.IAKAttributes()
 	if err != nil {
@@ -310,8 +323,15 @@ func (s *IDevIDGRPCService) CreateIAKCSR(ctx context.Context, req *platformv1.Cr
 		return nil, status.Error(codes.NotFound, "IAK not found")
 	}
 
+	// The TCG CSR carries the EK certificate; xkms rejects a nil one.
+	ekCert, err := s.tpm2Service.EKCertificate()
+	if err != nil {
+		s.logger.Error(err, "Failed to read EK certificate")
+		return nil, s.mapTPM2Error(err, "read EK certificate")
+	}
+
 	// Create TCG CSR for IAK - use CreateTCG_CSR_IDEVID with iakAttrs for both params
-	tcgCSR, err := s.tpm2Service.CreateTCG_CSR_IDEVID(nil, iakAttrs, iakAttrs)
+	tcgCSR, err := s.tpm2Service.CreateTCG_CSR_IDEVID(ekCert, iakAttrs, iakAttrs)
 	if err != nil {
 		s.logger.Error(err, "Failed to create IAK CSR")
 		return nil, s.mapTPM2Error(err, "create IAK CSR")

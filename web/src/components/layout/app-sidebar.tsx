@@ -108,6 +108,7 @@ const navigation = [
       { title: "Event Log", href: "/tpm/eventlog" },
       { title: "Quote / Attestation", href: "/tpm/quote" },
       { title: "Lockout", href: "/tpm/lockout" },
+      { title: "IDevID / IAK", href: "/tpm/idevid" },
       { title: "NVRAM", href: "/tpm/nvram" },
       { title: "Seal/Unseal", href: "/tpm/seal" },
       { title: "Credential / Random", href: "/tpm/credential" },
