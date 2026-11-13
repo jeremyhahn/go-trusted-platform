@@ -203,6 +203,7 @@ test.describe('Compute VM operations', () => {
         secureBoot: true,
         enableKvm: true,
         tpmEnabled: true,
+        networkMode: 'bridge',
       },
     })
   })
