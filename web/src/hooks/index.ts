@@ -113,6 +113,8 @@ export type {
   AttestationCollectState,
   UseAttestationCollectResult,
 } from './use-attestation-collect';
+export { useBMC, bmcUrl } from './use-bmc';
+export type { BMCState, BMCPart, UseBMCResult } from './use-bmc';
 
 export { useReportedGateways } from './use-reported-gateways';
 

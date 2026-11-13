@@ -997,6 +997,202 @@ export async function mockSwitchApi(
 }
 
 /**
+ * BMC API mock (#1736): the `/api/v1/bmc/{profileID}/...` routes with the
+ * platform envelope. Mutations change the state the next read returns, and
+ * every mutating request is recorded in order. A non-numeric profile ID is
+ * answered 404 and not recorded, as the server routes (`{profileID:[0-9]+}`)
+ * do.
+ */
+export interface BmcApiMockState {
+  power: { state: string };
+  bootDevice: { device: string; persistent?: boolean };
+  virtualMedia: { mounted: boolean; image_url?: string; media_type?: string };
+  sensors: Array<{ name: string; value: number; units: string; status: string }>;
+  systemInfo: {
+    manufacturer: string;
+    product: string;
+    serial_number: string;
+    firmware_version: string;
+    bios_version: string;
+    power_state: string;
+  };
+  provision: {
+    provision_id: string;
+    profile_id: string;
+    status: string;
+    message?: string;
+    started_at: string;
+    updated_at: string;
+  };
+  certificate: {
+    subject: string;
+    issuer: string;
+    serial_number: string;
+    not_before: string;
+    not_after: string;
+    days_remaining: number;
+    subject_alternative_names?: string[];
+    fingerprint: string;
+  };
+}
+
+export interface BmcApiMockRequest {
+  method: string;
+  op: string;
+  body: unknown;
+}
+
+export interface BmcApiMockConfig {
+  state?: Partial<BmcApiMockState>;
+  /** Answers every request to this op with the error */
+  errors?: Record<string, ApiError>;
+}
+
+export async function mockBmcApi(
+  page: Page,
+  config: BmcApiMockConfig = {}
+): Promise<{ state: BmcApiMockState; requests: BmcApiMockRequest[] }> {
+  // The shapes are the server's JSON types (pkg/webservice/v1/bmc/types.go,
+  // pkg/bmc/types.go, pkg/provisioning/baremetal); the mock rejects the
+  // requests the handlers reject.
+  const state: BmcApiMockState = {
+    power: { state: 'On' },
+    bootDevice: { device: 'disk', persistent: true },
+    virtualMedia: { mounted: false },
+    sensors: [
+      { name: 'CPU1 Temp', value: 54, units: 'C', status: 'OK' },
+      { name: 'Fan1', value: 7200, units: 'RPM', status: 'OK' },
+    ],
+    systemInfo: {
+      manufacturer: 'Dell Inc.',
+      product: 'PowerEdge R640',
+      serial_number: 'SN-R640-01',
+      firmware_version: '7.00.00',
+      bios_version: '2.19.1',
+      power_state: 'On',
+    },
+    provision: {
+      provision_id: 'prov-0',
+      profile_id: '1',
+      status: 'complete',
+      started_at: '2026-11-01T00:00:00Z',
+      updated_at: '2026-11-01T00:40:00Z',
+    },
+    certificate: {
+      subject: 'CN=bmc-1',
+      issuer: 'CN=Platform Intermediate CA',
+      serial_number: '1736',
+      not_before: '2026-11-12T00:00:00Z',
+      not_after: '2027-11-12T00:00:00Z',
+      days_remaining: 365,
+      fingerprint: 'SHA256:5B:9D:3F:2E',
+    },
+    ...config.state,
+  };
+  const requests: BmcApiMockRequest[] = [];
+  const bootDevices = ['none', 'pxe', 'disk', 'cdrom', 'virtual_media'];
+
+  const ok = (payload: unknown, status = 200) => ({
+    status,
+    contentType: 'application/json',
+    body: JSON.stringify({ code: status, success: true, payload }),
+  });
+  const badRequest = (error: string) => ({
+    status: 400,
+    contentType: 'application/json',
+    body: errorEnvelope({ status: 400, error }),
+  });
+
+  await page.route('**/api/v1/bmc/*/*', async (route: Route, request: Request) => {
+    const segments = new URL(request.url()).pathname.split('/').filter(Boolean);
+    const op = segments[segments.length - 1];
+    const profileID = decodeURIComponent(segments[segments.length - 2] ?? '');
+    const method = request.method();
+    // The server routes take {profileID:[0-9]+} and parse it as uint64, so a non-numeric ID matches no route.
+    if (!/^[0-9]+$/.test(profileID)) {
+      await route.fulfill({
+        status: 404,
+        contentType: 'application/json',
+        body: errorEnvelope({ status: 404, error: `no route ${method} bmc/${profileID}/${op}` }),
+      });
+      return;
+    }
+    const error = config.errors?.[op];
+    if (error) {
+      await route.fulfill({ status: error.status, contentType: 'application/json', body: errorEnvelope(error) });
+      return;
+    }
+    const body = request.postData() ? request.postDataJSON() : null;
+    if (method !== 'GET') {
+      requests.push({ method, op, body });
+    }
+    switch (`${method} ${op}`) {
+      case 'GET power':
+        await route.fulfill(ok(state.power));
+        return;
+      case 'GET boot-device':
+        await route.fulfill(ok({ device: state.bootDevice.device }));
+        return;
+      case 'POST boot-device': {
+        const req = (body ?? {}) as { device?: string; persistent?: boolean };
+        if (!req.device || !bootDevices.includes(req.device)) {
+          await route.fulfill(badRequest(`invalid boot device: ${req.device ?? ''}`));
+          return;
+        }
+        state.bootDevice = { device: req.device, persistent: req.persistent };
+        await route.fulfill(ok({ message: 'boot device set' }));
+        return;
+      }
+      case 'GET virtual-media':
+        await route.fulfill(ok(state.virtualMedia));
+        return;
+      case 'POST virtual-media': {
+        const isoURL = (body as { iso_url?: unknown } | null)?.iso_url;
+        if (typeof isoURL !== 'string' || isoURL === '') {
+          await route.fulfill(badRequest('iso_url is required'));
+          return;
+        }
+        state.virtualMedia = { mounted: true, image_url: isoURL };
+        await route.fulfill(ok({ message: 'ISO mounted' }));
+        return;
+      }
+      case 'DELETE virtual-media':
+        state.virtualMedia = { mounted: false };
+        await route.fulfill(ok({ message: 'ISO unmounted' }));
+        return;
+      case 'GET sensors':
+        await route.fulfill(ok(state.sensors));
+        return;
+      case 'GET system-info':
+        await route.fulfill(ok(state.systemInfo));
+        return;
+      case 'GET provision':
+        await route.fulfill(ok(state.provision));
+        return;
+      case 'POST provision': {
+        const now = new Date().toISOString();
+        state.provision = {
+          provision_id: 'prov-1',
+          profile_id: profileID,
+          status: 'pending',
+          started_at: now,
+          updated_at: now,
+        };
+        await route.fulfill(ok(state.provision, 201));
+        return;
+      }
+      case 'GET cert':
+        await route.fulfill(ok(state.certificate));
+        return;
+      default:
+        await route.fulfill({ status: 404, contentType: 'application/json', body: errorEnvelope({ status: 404, error: `no route ${method} ${op}` }) });
+    }
+  });
+
+  return { state, requests };
+}
+
+/**
  * Mock all common API endpoints with default configurations.
  *
  * @param page - Playwright page object
