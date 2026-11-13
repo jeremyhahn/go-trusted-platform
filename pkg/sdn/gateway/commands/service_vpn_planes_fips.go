@@ -19,6 +19,7 @@ import (
 	"log/slog"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/hostfw"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/vpn"
 )
 
@@ -31,3 +32,7 @@ func vpnDataPlanes(cfg *ServeConfig, _ *gateway.Gateway, logger *slog.Logger) ([
 		slog.Any("data_planes", offered))
 	return nil, nil
 }
+
+// vpnHubListeners is empty in a FIPS build: it builds no WireGuard hub,
+// so there is no hub port for the host filter to admit.
+func vpnHubListeners(*ServeConfig, bool) []hostfw.Listener { return nil }

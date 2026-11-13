@@ -40,6 +40,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/process"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/proxysvc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/secrets"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/hostfw"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec"
 	ipsecconfig "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipsec/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
@@ -893,6 +894,11 @@ func buildHostRuntime(cfg *ServeConfig, anchor *trust.Anchor, logger *slog.Logge
 		return nil, err
 	}
 	host.SecretResolver = resolver
+	// The datapath's WireGuard hub is a daemon-owned listener too.
+	if hub := vpnHubListeners(cfg, resolver != nil); len(hub) > 0 {
+		inventory, _ := host.Listeners.(hostfw.StaticInventory)
+		host.Listeners = append(inventory, hub...)
+	}
 	return host, nil
 }
 

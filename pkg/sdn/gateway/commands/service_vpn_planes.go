@@ -22,6 +22,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/hostfw"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/vpn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/tunnel"
 )
@@ -67,6 +68,34 @@ func vpnDataPlanes(cfg *ServeConfig, gw *gateway.Gateway, logger *slog.Logger) (
 		return nil, err
 	}
 	return []vpn.ManagedDataPlane{plane}, nil
+}
+
+// vpnHubListeners is the WireGuard hub's UDP listener for the host
+// filter's inventory: the hub binds its effective listen-port on every
+// interface, and a default-drop input chain admits only declared
+// listeners. It is empty when the datapath builds no hub (the same
+// conditions as vpnDataPlanes, with haveResolver standing for the host's
+// secret resolver), and when the operator already declared the port in
+// hostfw.extra: that declaration, perhaps narrowed to one interface,
+// stands, and a second one would be refused as a duplicate.
+func vpnHubListeners(cfg *ServeConfig, haveResolver bool) []hostfw.Listener {
+	if !haveResolver || cfg.Gateway == nil || cfg.Gateway.ManagementVPN == nil || !cfg.Gateway.ManagementVPN.Enabled {
+		return nil
+	}
+	c := cfg.Gateway.ManagementVPN.Config.WithDefaults()
+	wg := c.WireGuard
+	if !c.Offers(vpn.DataPlaneWireGuard) || wg.KeyRef == "" || !wg.Address.IsValid() || wg.ListenPort <= 0 || wg.ListenPort > 65535 {
+		return nil
+	}
+	port := uint16(wg.ListenPort)
+	if hf := cfg.Gateway.HostFW; hf != nil {
+		for _, l := range hf.Extra {
+			if l.Protocol == hostfw.ProtocolUDP && l.Port == port {
+				return nil
+			}
+		}
+	}
+	return []hostfw.Listener{{Protocol: hostfw.ProtocolUDP, Port: port, Comment: "management-vpn wireguard hub"}}
 }
 
 // secretKeyProvider is the tunnel.KeyProvider over the host's
