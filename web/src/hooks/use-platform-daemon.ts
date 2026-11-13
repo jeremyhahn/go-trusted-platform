@@ -21,7 +21,17 @@ export function usePlatformDaemon() {
   const status = useApi(() => platform.getStatus(), []);
   const version = useApi(() => platform.getVersion(), []);
   const config = useApi(() => platform.getConfig(), []);
-  const services = useApi(() => platform.listServices(), []);
+  // Service-list reads are sequenced: only the latest read may land, and a
+  // lifecycle action invalidates every read started before it, so a slow
+  // pre-action response can never overwrite the post-action list. A stale
+  // response is handed to useApi with neither data nor error, which it
+  // ignores.
+  const listSeq = React.useRef(0);
+  const services = useApi(async () => {
+    const seq = ++listSeq.current;
+    const res = await platform.listServices();
+    return seq === listSeq.current ? res : { success: res.success };
+  }, []);
 
   // Every request in flight, by key. Each request adds its key on start and
   // removes exactly one occurrence on completion, so an overlapping request
@@ -67,6 +77,7 @@ export function usePlatformDaemon() {
             : () => platform.restartService(name);
       // A failed lifecycle call can still change server state (a restart can
       // stop and then fail to start), so the list is re-read either way.
+      listSeq.current += 1;
       try {
         return await run(`${action}:${name}`, call);
       } finally {
