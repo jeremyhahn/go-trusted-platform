@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { Page, Route, Request } from '@playwright/test';
 
 /**
@@ -1615,6 +1616,166 @@ export async function mockInvitationValidation(
       }),
     });
   });
+}
+
+// =============================================================================
+// TPM key lifecycle (#1735)
+// =============================================================================
+
+/** One request the TPM key mock answered: method, path below /api/v1/tpm, JSON body. */
+export interface TPMKeyOperationCall {
+  method: string;
+  path: string;
+  body: unknown;
+}
+
+/** A canned answer: HTTP status (200 when absent) and the JSON body. */
+export interface TPMKeyOperationReply {
+  status?: number;
+  body: unknown;
+}
+
+const TPM_EK_PUBLIC = '-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEek\n-----END PUBLIC KEY-----';
+
+/** The channel binding the mocked node echoes with its quote: 32 bytes of 0xa1. */
+export const TPM_QUOTE_CHANNEL_BINDING = Buffer.alloc(32, 0xa1).toString('base64');
+
+/**
+ * boundQuoteReply answers POST /tpm/quote as the node does (#482): a
+ * TPMS_ATTEST of type TPM_ST_ATTEST_QUOTE whose extraData is
+ * SHA-256(nonce || channelBinding), with that channelBinding echoed. The
+ * page refuses any quote not bound this way.
+ */
+export function boundQuoteReply(nonceB64: string, bank = 0x000b) {
+  const binding = Buffer.from(TPM_QUOTE_CHANNEL_BINDING, 'base64');
+  const extraData = createHash('sha256')
+    .update(Buffer.concat([Buffer.from(nonceB64, 'base64'), binding]))
+    .digest();
+  // clockInfo(17) firmwareVersion(8), then TPMS_QUOTE_INFO: one
+  // TPML_PCR_SELECTION entry over `bank` (3 select bytes) and a 32-byte
+  // pcrDigest. The page refuses a quote over any bank but SHA256 (#1751).
+  const selectAt = 10 + extraData.length + 17 + 8;
+  const attest = Buffer.alloc(selectAt + 4 + 3 + 3 + 2 + 32);
+  attest.writeUInt32BE(0xff544347, 0);
+  attest.writeUInt16BE(0x8018, 4);
+  attest.writeUInt16BE(0, 6);
+  attest.writeUInt16BE(extraData.length, 8);
+  extraData.copy(attest, 10);
+  attest.writeUInt32BE(1, selectAt);
+  attest.writeUInt16BE(bank, selectAt + 4);
+  attest.writeUInt8(3, selectAt + 6);
+  attest.writeUInt16BE(32, selectAt + 10);
+  return {
+    quote: attest.toString('base64'),
+    signature: 'c2ln',
+    signatureAlgorithm: 'ECDSA-SHA256',
+    channelBinding: TPM_QUOTE_CHANNEL_BINDING,
+  };
+}
+
+/**
+ * Default answers keyed by `METHOD /path` (path below /api/v1/tpm, no query).
+ * A delete keys on the handle in decimal, the SDK puts it in the path.
+ * POST /quote has no static answer: without an override it is answered by
+ * boundQuoteReply for the request's nonce.
+ */
+export const defaultTPMKeyReplies: Record<string, TPMKeyOperationReply> = {
+  'GET /ek': { body: { publicKey: TPM_EK_PUBLIC, handle: 0x81010001, algorithm: 'ECDSA_P256' } },
+  'GET /srk': { body: { publicKey: TPM_EK_PUBLIC, handle: 0x81000001, algorithm: 'ECDSA_P256' } },
+  'POST /provision': { body: { status: { code: 0, message: 'provisioned' }, ekPublic: 'RUs=' } },
+  'POST /clear': { body: { status: { code: 0, message: 'cleared' } } },
+  'GET /capabilities': {
+    body: { algorithms: ['RSA', 'ECC', 'SHA256'], commands: ['TPM2_Quote', 'TPM2_Certify'], eccCurves: ['NIST_P256'] },
+  },
+  'GET /platform': {
+    body: {
+      device: '/dev/tpmrm0',
+      isFips: false,
+      canSeal: true,
+      manufacturer: 'Mock TPM Vendor',
+      ek: { handle: 0x81010001, algorithm: 'ECDSA_P256' },
+      srk: { handle: 0x81000001, algorithm: 'ECDSA_P256' },
+      iak: { handle: 0x81010002, algorithm: 'ECDSA_P256' },
+    },
+  },
+  'POST /ek': { status: 201, body: { handle: 0x81010001, publicKey: 'RUs=' } },
+  'POST /ek/certificate': { status: 201, body: { status: { code: 0, message: 'imported' } } },
+  [`DELETE /ek/${0x81010001}`]: { body: { status: { code: 0, message: 'ek deleted' } } },
+  'POST /srk': { status: 201, body: { handle: 0x81000001, publicKey: 'U1JL' } },
+  [`DELETE /srk/${0x81000001}`]: { body: { status: { code: 0, message: 'srk deleted' } } },
+  'POST /ak': { status: 201, body: { handle: 0x81010002, publicKey: 'QUs=' } },
+  'GET /ak': { body: { handle: 0x81010002, publicKey: 'QUs=', algorithm: 'ECDSA_P256' } },
+  // TPMGRPCService.DeleteAK always refuses: the handle names the platform
+  // IAK (ErrDeviceIdentityKeyNotDeletable), which REST maps to 409.
+  [`DELETE /ak/${0x81010002}`]: {
+    status: 409,
+    body: {
+      message:
+        'idevid: the IAK key is TPM-resident and is not evicted by this service; nothing was deleted (delete its certificate with DeleteIAKCertificate)',
+      code: 'HTTP_409',
+    },
+  },
+  'POST /quote/verify': { body: { verified: true, message: 'quote verified' } },
+  'POST /certify': { body: { certifyInfo: 'aW5mbw==', signature: 'c2ln', signatureAlgorithm: 'ECDSA-SHA256' } },
+};
+
+/**
+ * mockTPMKeyOperationsApi answers every /api/v1/tpm request from
+ * `defaultTPMKeyReplies` merged with `overrides`, and every IDevID request
+ * with 404. It returns the list the answered requests are appended to.
+ */
+export async function mockTPMKeyOperationsApi(
+  page: Page,
+  overrides: Record<string, TPMKeyOperationReply> = {},
+): Promise<TPMKeyOperationCall[]> {
+  const replies = { ...defaultTPMKeyReplies, ...overrides };
+  const calls: TPMKeyOperationCall[] = [];
+
+  await page.route(/\/api\/v1\/idevid\//, async (route: Route) => {
+    await route.fulfill({
+      status: 404,
+      contentType: 'application/json',
+      body: JSON.stringify({ message: 'not found', code: 'HTTP_404' }),
+    });
+  });
+
+  await page.route(/\/api\/v1\/tpm\//, async (route: Route, request: Request) => {
+    const url = new URL(request.url());
+    const path = url.pathname.replace(/^.*\/api\/v1\/tpm/, '');
+    const method = request.method();
+    let body: unknown = null;
+    try {
+      body = request.postDataJSON();
+    } catch {
+      body = request.postData();
+    }
+    calls.push({ method, path, body });
+
+    // The server decodes QuoteRequest with protojson: the bank must be the
+    // proto enum name ("PCR_BANK_SHA256"), anything else is a 400.
+    const bank = (body as { pcrBank?: unknown } | null)?.pcrBank;
+    if (method === 'POST' && path === '/quote' && bank !== undefined && !String(bank).startsWith('PCR_BANK_')) {
+      await route.fulfill({
+        status: 400,
+        contentType: 'application/json',
+        body: JSON.stringify({ message: `invalid value for enum field pcrBank: ${String(bank)}`, code: 'HTTP_400' }),
+      });
+      return;
+    }
+
+    const reply =
+      replies[`${method} ${path}`] ??
+      (method === 'POST' && path === '/quote'
+        ? { body: boundQuoteReply(String((body as { nonce?: unknown } | null)?.nonce ?? '')) }
+        : undefined);
+    await route.fulfill({
+      status: reply ? reply.status ?? 200 : 404,
+      contentType: 'application/json',
+      body: JSON.stringify(reply ? reply.body : { message: 'not found', code: 'HTTP_404' }),
+    });
+  });
+
+  return calls;
 }
 
 // =============================================================================
