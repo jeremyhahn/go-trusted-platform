@@ -41,6 +41,7 @@ import { VMMetricsCard } from '@/components/features/compute/vm-metrics';
 import { useCompute, useMutation, useToast, type MutationError } from '@/hooks';
 import type { VMDetail } from '@/types/infrastructure';
 import { toVMDetail, VM_PCRS_NOT_APPRAISED, vmVerifyHeadline } from '@/lib/vm-detail';
+import { VMOperations } from './vm-operations';
 
 const statusColors = {
   running: 'bg-green-500/10 text-green-500 border-green-500/20',
@@ -85,12 +86,13 @@ export default function VMDetailPage() {
   };
 
   const fetchVM = async () => {
-    if (!vmId) {
-      setLoading(false);
-      return;
-    }
+    // No state is set before the first await: the poll effect calls this, and
+    // without a vmId the page shows the spinner anyway (vm stays null).
+    if (!vmId) return;
+    // No setLoading(true) here: loading starts true and only the first fetch
+    // clears it, so the 5 s refresh keeps the detail tree (and the stateful
+    // VMOperations panel) mounted (#1727).
     try {
-      setLoading(true);
       const response = await compute.getVM(vmId);
       if (response.success && response.data) {
         setVM(toVMDetail(response.data.vm));
@@ -107,10 +109,14 @@ export default function VMDetailPage() {
   };
 
   useEffect(() => {
-    fetchVM();
     if (!vmId) return;
+    // Timers, not a direct call: no state is set in the effect body.
+    const first = setTimeout(fetchVM, 0);
     const interval = setInterval(fetchVM, 5000);
-    return () => clearInterval(interval);
+    return () => {
+      clearTimeout(first);
+      clearInterval(interval);
+    };
   }, [vmId]);
 
   const startVMMutation = useMutation(
@@ -179,14 +185,17 @@ export default function VMDetailPage() {
     }
   );
 
-  // TODO: Suspend/Resume functionality not available in SDK yet
-  // SDK only provides start/stop/reboot operations
-  // Placeholder mutations for future implementation
   const suspendVMMutation = useMutation(
-    async (vmId: string) => {
-      throw new Error('Suspend operation not yet implemented in SDK');
-    },
+    (vmId: string) => compute.suspendVM(vmId),
     {
+      onSuccess: () => {
+        toast({
+          title: 'Success',
+          description: 'VM suspended successfully',
+        });
+        setActionLoading(false);
+        fetchVM();
+      },
       onError: (error: MutationError) => {
         toast({
           title: 'Error',
@@ -199,10 +208,16 @@ export default function VMDetailPage() {
   );
 
   const resumeVMMutation = useMutation(
-    async (vmId: string) => {
-      throw new Error('Resume operation not yet implemented in SDK');
-    },
+    (vmId: string) => compute.resumeVM(vmId),
     {
+      onSuccess: () => {
+        toast({
+          title: 'Success',
+          description: 'VM resumed successfully',
+        });
+        setActionLoading(false);
+        fetchVM();
+      },
       onError: (error: MutationError) => {
         toast({
           title: 'Error',
@@ -427,7 +442,7 @@ export default function VMDetailPage() {
           </CardContent>
         </Card>
 
-        <VMMetricsCard metrics={vm.metrics} />
+        {vm.metrics && <VMMetricsCard metrics={vm.metrics} />}
       </div>
 
       {(verifyResult || verifyError) && (
@@ -471,6 +486,8 @@ export default function VMDetailPage() {
         </DialogContent>
       </Dialog>
 
+      <VMOperations vmId={vmId} />
+
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
@@ -482,7 +499,7 @@ export default function VMDetailPage() {
           </div>
         </CardHeader>
         <CardContent>
-          {vm.snapshots.length === 0 ? (
+          {!vm.snapshots || vm.snapshots.length === 0 ? (
             <p className="text-center text-muted-foreground py-8">No snapshots</p>
           ) : (
             <Table>

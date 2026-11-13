@@ -48,6 +48,10 @@ func (lifecycleComputeServer) RebootVM(context.Context, *platformv1.RebootVMRequ
 	return &platformv1.RebootVMResponse{Status: &platformv1.Status{Success: true}}, nil
 }
 
+func (lifecycleComputeServer) MigrateVM(context.Context, *platformv1.MigrateVMRequest) (*platformv1.MigrateVMResponse, error) {
+	return &platformv1.MigrateVMResponse{}, nil
+}
+
 // serveWithExpiredWriteDeadline serves the compute routes from a server whose
 // write timeout has passed by the time any handler runs, as a graceful stop
 // that outlasts the platform's 30 s write timeout leaves it.
@@ -68,12 +72,15 @@ func postLifecycle(server *httptest.Server, action, body string) (*http.Response
 		"application/json", strings.NewReader(body))
 }
 
-func TestComputeHandlers_StopAndRebootOutliveTheWriteTimeout(t *testing.T) {
+// Stop and reboot wait on the guest; migrate waits on the transfer and the
+// receiver's finalize, which the UI allows an hour for.
+func TestComputeHandlers_LongRoutesOutliveTheWriteTimeout(t *testing.T) {
 	server := serveWithExpiredWriteDeadline(t)
 
 	for action, body := range map[string]string{
-		"stop":   `{"timeoutSeconds":30}`,
-		"reboot": `{}`,
+		"stop":    `{"timeoutSeconds":30}`,
+		"reboot":  `{}`,
+		"migrate": `{"destinationHost":"dest-1"}`,
 	} {
 		t.Run(action, func(t *testing.T) {
 			resp, err := postLifecycle(server, action, body)

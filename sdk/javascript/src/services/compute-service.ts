@@ -57,6 +57,13 @@ import type {
   AttestVMResponse,
   AttestContainerResponse,
   VerifyVMAttestationResponse,
+  SuspendVMResponse,
+  ResumeVMResponse,
+  GetSnapshotResponse,
+  PrepareMigrationRequest,
+  PrepareMigrationResponse,
+  FinalizeMigrationRequest,
+  FinalizeMigrationResponse,
 } from '../types/compute.js';
 
 /**
@@ -338,14 +345,69 @@ export class ComputeService extends BaseService {
    * @param request - Migration request
    * @returns Migration result
    */
-  async migrateVM(request: MigrateVMRequest): Promise<ApiResponse<MigrateVMResponse>> {
+  async migrateVM(
+    request: MigrateVMRequest,
+    options?: { timeoutMs?: number }
+  ): Promise<ApiResponse<MigrateVMResponse>> {
     return this.client.post<MigrateVMResponse>(
       this.buildUrl(`/vms/${this.encodePathSegment(request.vmId)}/migrate`),
       {
         destinationHost: request.destinationHost,
         liveMigration: request.liveMigration,
         bandwidthLimitMbps: request.bandwidthLimitMbps,
-      }
+      },
+      options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : undefined
+    );
+  }
+
+  /**
+   * Prepare a migration receiver on this (destination) host
+   */
+  async prepareMigration(request: PrepareMigrationRequest): Promise<ApiResponse<PrepareMigrationResponse>> {
+    return this.client.post<PrepareMigrationResponse>(this.buildUrl('/migrations/prepare'), {
+      vmId: request.vmId,
+      vmName: request.vmName,
+      mode: request.mode,
+      spec: request.spec,
+    });
+  }
+
+  /**
+   * Finalize (commit or abort) a prepared migration receiver
+   */
+  async finalizeMigration(request: FinalizeMigrationRequest): Promise<ApiResponse<FinalizeMigrationResponse>> {
+    return this.client.post<FinalizeMigrationResponse>(
+      this.buildUrl(`/migrations/${this.encodePathSegment(request.receiverId)}/finalize`),
+      { commit: request.commit }
+    );
+  }
+
+  /**
+   * Suspend a running virtual machine
+   */
+  async suspendVM(id: string): Promise<ApiResponse<SuspendVMResponse>> {
+    return this.client.post<SuspendVMResponse>(
+      this.buildUrl(`/vms/${this.encodePathSegment(id)}/suspend`),
+      {}
+    );
+  }
+
+  /**
+   * Resume a suspended virtual machine
+   */
+  async resumeVM(id: string): Promise<ApiResponse<ResumeVMResponse>> {
+    return this.client.post<ResumeVMResponse>(
+      this.buildUrl(`/vms/${this.encodePathSegment(id)}/resume`),
+      {}
+    );
+  }
+
+  /**
+   * Get one snapshot of a virtual machine
+   */
+  async getSnapshot(vmId: string, snapshotId: string): Promise<ApiResponse<GetSnapshotResponse>> {
+    return this.client.get<GetSnapshotResponse>(
+      this.buildUrl(`/vms/${this.encodePathSegment(vmId)}/snapshots/${this.encodePathSegment(snapshotId)}`)
     );
   }
 

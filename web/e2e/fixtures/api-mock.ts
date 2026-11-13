@@ -602,6 +602,144 @@ export async function mockAdminTenantsApi(
   return { calls, tenants: () => [...tenants] };
 }
 
+// ============================================================================
+// VM operations API (#1727)
+// ============================================================================
+
+/** One compute API call the VM operations mock answered. */
+export interface VMOperationCall {
+  method: string;
+  path: string;
+  body: unknown;
+}
+
+/** Initial state of the VM operations mock. */
+export interface VMOperationsMockConfig {
+  vmId?: string;
+  vmName?: string;
+  state?: string;
+}
+
+/**
+ * Mock the compute VM operations: GetVM, SuspendVM, ResumeVM, AttestVM,
+ * GetVMMetrics, Attach/Detach/ResizeDisk, Create/GetSnapshot, MigrateVM,
+ * PrepareMigration and FinalizeMigration. Every answered call is recorded.
+ */
+export async function mockVMOperationsApi(
+  page: Page,
+  config: VMOperationsMockConfig = {}
+): Promise<{ calls: () => VMOperationCall[]; state: () => string }> {
+  const vmId = config.vmId ?? 'vm-ops-1';
+  let state = config.state ?? 'VM_STATE_RUNNING';
+  const calls: VMOperationCall[] = [];
+  const now = new Date().toISOString();
+  const ok = (message: string) => ({ status: { success: true, message } });
+
+  // The real GetVM shape (instanceToVMProto): config carries the name, and
+  // there are no metrics, no snapshots and no flattened fields.
+  const vm = () => ({
+    id: vmId,
+    config: {
+      name: config.vmName ?? 'ops-vm',
+      cpu: { cores: 2 },
+      memory: { sizeMb: 2048 },
+      disks: [],
+      networks: [],
+    },
+    state,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const snapshot = (id: string, name: string) => ({
+    id,
+    vmId,
+    config: { name },
+    createdAt: now,
+    sizeBytes: 4096,
+    vmState: state,
+  });
+
+  await page.route('**/api/v1/compute/**', async (route: Route, request: Request) => {
+    const method = request.method();
+    const path = new URL(request.url()).pathname.replace(/^.*\/api\/v1\/compute/, '');
+    let body: unknown = null;
+    try {
+      body = request.postDataJSON();
+    } catch {
+      body = null;
+    }
+    const json = async (status: number, data: unknown) => {
+      calls.push({ method, path, body });
+      await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(data) });
+    };
+    const vmBase = `/vms/${vmId}`;
+
+    if (method === 'GET' && path === vmBase) return json(200, { vm: vm() });
+    if (method === 'GET' && path === '/vms') {
+      return json(200, { vms: [vm()], pagination: { page: 1, pageSize: 100, totalPages: 1, totalItems: 1 } });
+    }
+    if (method === 'POST' && path === `${vmBase}/suspend`) {
+      state = 'VM_STATE_PAUSED';
+      return json(200, ok('VM suspended'));
+    }
+    if (method === 'POST' && path === `${vmBase}/resume`) {
+      state = 'VM_STATE_RUNNING';
+      return json(200, ok('VM resumed'));
+    }
+    if (method === 'POST' && path === `${vmBase}/attest`) {
+      return json(200, {
+        ...ok('Attestation collected'),
+        quote: 'cXVvdGU=',
+        signature: 'c2ln',
+        pcrValues: [{ index: 0, value: 'AA==' }, { index: 7, value: 'AQ==' }],
+        signatureAlgorithm: 'SHA256-RSAPSS',
+      });
+    }
+    if (method === 'GET' && path === `${vmBase}/metrics`) {
+      return json(200, {
+        metrics: {
+          cpuUsagePercent: 42,
+          memoryUsedMb: 1536,
+          memoryAvailableMb: 512,
+          diskReadBytes: 1,
+          diskWriteBytes: 2,
+          networkRxBytes: 3,
+          networkTxBytes: 4,
+          uptimeSeconds: 3600,
+        },
+      });
+    }
+    if (method === 'POST' && path === `${vmBase}/disks`) return json(200, ok('Disk attached'));
+    if (method === 'DELETE' && path.startsWith(`${vmBase}/disks/`)) return json(200, ok('Disk detached'));
+    if (method === 'PATCH' && path.startsWith(`${vmBase}/disks/`)) return json(200, ok('Disk resized'));
+    if (method === 'POST' && path === `${vmBase}/snapshots`) {
+      const name = (body as { config?: { name?: string } } | null)?.config?.name ?? 'snap';
+      return json(201, { ...ok('Snapshot created'), snapshot: snapshot('snap-new', name) });
+    }
+    if (method === 'GET' && path === `${vmBase}/snapshots`) return json(200, { snapshots: [] });
+    if (method === 'GET' && path.startsWith(`${vmBase}/snapshots/`)) {
+      const id = path.slice(`${vmBase}/snapshots/`.length);
+      return json(200, { snapshot: snapshot(id, `stored-${id}`) });
+    }
+    if (method === 'POST' && path === `${vmBase}/migrate`) return json(200, ok('Migration started'));
+    if (method === 'POST' && path === '/migrations/prepare') {
+      const spec = (body as { spec?: unknown } | null)?.spec as { memoryMb?: unknown; cpus?: unknown } | undefined;
+      const positive = (n: unknown) => typeof n === 'number' && Number.isInteger(n) && n > 0;
+      if (!spec || typeof spec !== 'object' || !positive(spec.memoryMb) || !positive(spec.cpus)) {
+        return json(400, { message: 'migration spec is required', code: 'INVALID_ARGUMENT' });
+      }
+      return json(200, { ...ok('Receiver ready'), receiverId: 'rx-42', port: 49152, tlsHostname: 'rx-42-tls' });
+    }
+    if (method === 'POST' && /^\/migrations\/[^/]+\/finalize$/.test(path)) {
+      return json(200, ok('Migration finalized'));
+    }
+    return json(404, { message: 'not mocked', code: 'HTTP_404' });
+  });
+
+  return { calls: () => [...calls], state: () => state };
+}
+
 /**
  * Mock the health API endpoint.
  *

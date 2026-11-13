@@ -925,6 +925,86 @@ export interface MigrateVMResponse {
   status: ComputeStatus;
 }
 
+/** Suspend VM response */
+export interface SuspendVMResponse {
+  /** Operation status */
+  status: ComputeStatus;
+}
+
+/** Resume VM response */
+export interface ResumeVMResponse {
+  /** Operation status */
+  status: ComputeStatus;
+}
+
+/** Get snapshot response */
+export interface GetSnapshotResponse {
+  /** Snapshot */
+  snapshot: Snapshot;
+}
+
+/** Prepare migration request (run on the destination host) */
+/** The source guest's configuration a migration receiver needs (proto VMMigrationSpec) */
+export interface VMMigrationSpec {
+  /** Memory in MB */
+  memoryMb: number;
+  /** Number of vCPUs */
+  cpus: number;
+  /** Disk size, e.g. "20G" */
+  diskSize?: string;
+  /** Boot mode */
+  bootMode?: string;
+  /** Secure Boot enabled */
+  secureBoot?: boolean;
+  /** KVM acceleration enabled */
+  enableKvm?: boolean;
+  /** vTPM enabled */
+  tpmEnabled?: boolean;
+  /** Network mode */
+  networkMode?: string;
+  /** MAC address */
+  macAddress?: string;
+  /** Source guest arch: "x86_64" or "aarch64"; empty means x86_64 */
+  arch?: string;
+}
+
+export interface PrepareMigrationRequest {
+  /** Source instance ID (informational) */
+  vmId?: string;
+  /** Guest name */
+  vmName: string;
+  /** Migration mode */
+  mode: 'cold' | 'live';
+  /** VM migration spec (required: the daemon refuses a request without one) */
+  spec: VMMigrationSpec;
+}
+
+/** Prepare migration response */
+export interface PrepareMigrationResponse {
+  /** Operation status */
+  status: ComputeStatus;
+  /** Receiver token passed to FinalizeMigration */
+  receiverId?: string;
+  /** TCP port the receiver listens on */
+  port?: number;
+  /** Host name the source pins in the migration TLS credentials */
+  tlsHostname?: string;
+}
+
+/** Finalize migration request */
+export interface FinalizeMigrationRequest {
+  /** Receiver ID from PrepareMigration */
+  receiverId: string;
+  /** true registers and resumes the received VM, false aborts */
+  commit: boolean;
+}
+
+/** Finalize migration response */
+export interface FinalizeMigrationResponse {
+  /** Operation status */
+  status: ComputeStatus;
+}
+
 /**
  * Create container response
  */
