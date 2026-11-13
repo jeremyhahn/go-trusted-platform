@@ -19,7 +19,10 @@ import (
 	"net/netip"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
 	"github.com/spf13/viper"
@@ -154,6 +157,178 @@ func TestReceiveIncoming_ReceiverOutlivesTheRequest(t *testing.T) {
 	require.NoError(t, orch.FinalizeIncoming(context.Background(), handle.ReceiverID, false))
 	assert.True(t, recv.aborted)
 	assert.True(t, tlsProv.cleanedUp, "finalize must clean the receiver's creds up")
+}
+
+// signalReceiver counts aborts and commits and signals the first abort, so a
+// receiver reaped on another goroutine can be awaited without a data race.
+type signalReceiver struct {
+	aborts   atomic.Int32
+	commits  atomic.Int32
+	abortedC chan struct{}
+	once     sync.Once
+}
+
+func newSignalReceiver() *signalReceiver {
+	return &signalReceiver{abortedC: make(chan struct{})}
+}
+
+func (s *signalReceiver) Port() int { return 49301 }
+
+func (s *signalReceiver) Commit(context.Context) error {
+	s.commits.Add(1)
+	return nil
+}
+
+func (s *signalReceiver) Abort(context.Context) error {
+	s.aborts.Add(1)
+	s.once.Do(func() { close(s.abortedC) })
+	return nil
+}
+
+// signalServerTLS counts and signals the release of the receiver's creds.
+type signalServerTLS struct {
+	dir       string
+	cleanups  atomic.Int32
+	cleanedUp chan struct{}
+	once      sync.Once
+}
+
+func newSignalServerTLS(dir string) *signalServerTLS {
+	return &signalServerTLS{dir: dir, cleanedUp: make(chan struct{})}
+}
+
+func (s *signalServerTLS) EnsureTLSCreds(context.Context, MigrationSession, *IncomingEndpoint) (string, error) {
+	return "migtls-client", nil
+}
+
+func (s *signalServerTLS) MaterializeServerCreds(context.Context, string) (string, func(), error) {
+	return s.dir, func() {
+		s.cleanups.Add(1)
+		s.once.Do(func() { close(s.cleanedUp) })
+	}, nil
+}
+
+// swapReceiverLifetime shortens the prepared receiver's lifetime for a test.
+func swapReceiverLifetime(t *testing.T, d time.Duration) {
+	t.Helper()
+	orig := receiverLifetime
+	receiverLifetime = d
+	t.Cleanup(func() { receiverLifetime = orig })
+}
+
+func awaitSignal(t *testing.T, c <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-c:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+	}
+}
+
+func TestReceiveIncoming_UnfinalizedReceiverExpires(t *testing.T) {
+	swapReceiverLifetime(t, 20*time.Millisecond)
+	orch := newOpsOrchestrator(t)
+	tlsProv := newSignalServerTLS(t.TempDir())
+	orch.config.MigrationTLS = tlsProv
+
+	recv := newSignalReceiver()
+	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
+		return recv, nil
+	})
+
+	handle, err := orch.ReceiveIncoming(context.Background(), MigrationSpec{
+		Arch:   orch.config.Arch,
+		VMName: "guest",
+		Config: &InstanceConfig{Memory: 1024},
+	})
+	require.NoError(t, err)
+
+	// The prepare reply is "lost": nobody finalizes. The lifetime reaps it.
+	awaitSignal(t, recv.abortedC, "the expired receiver to be aborted")
+	awaitSignal(t, tlsProv.cleanedUp, "the expired receiver's creds to be released")
+	assert.Equal(t, int32(0), recv.commits.Load())
+
+	err = orch.FinalizeIncoming(context.Background(), handle.ReceiverID, true)
+	assert.ErrorIs(t, err, ErrReceiverNotFound, "an expired receiver can no longer be finalized")
+}
+
+func TestFinalizeIncoming_EndsTheReceiverLifetime(t *testing.T) {
+	swapReceiverLifetime(t, 30*time.Millisecond)
+	orch := newOpsOrchestrator(t)
+	tlsProv := newSignalServerTLS(t.TempDir())
+	orch.config.MigrationTLS = tlsProv
+
+	recv := newSignalReceiver()
+	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
+		return recv, nil
+	})
+
+	handle, err := orch.ReceiveIncoming(context.Background(), MigrationSpec{
+		Arch:   orch.config.Arch,
+		VMName: "guest",
+		Config: &InstanceConfig{Memory: 1024},
+	})
+	require.NoError(t, err)
+	require.NoError(t, orch.FinalizeIncoming(context.Background(), handle.ReceiverID, true))
+
+	// Past the deadline the committed receiver is left alone.
+	time.Sleep(150 * time.Millisecond)
+	assert.Equal(t, int32(1), recv.commits.Load())
+	assert.Equal(t, int32(0), recv.aborts.Load(), "a finalized receiver must not be reaped")
+	assert.Equal(t, int32(1), tlsProv.cleanups.Load(), "creds are released exactly once")
+}
+
+func TestReceiveIncoming_CancelledBeforeReplyAbortsTheReceiver(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	tlsProv := newSignalServerTLS(t.TempDir())
+	orch.config.MigrationTLS = tlsProv
+
+	reqCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	recv := newSignalReceiver()
+	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
+		// The caller goes away while the receiver is being launched.
+		cancel()
+		return recv, nil
+	})
+
+	handle, err := orch.ReceiveIncoming(reqCtx, MigrationSpec{
+		Arch:   orch.config.Arch,
+		VMName: "guest",
+		Config: &InstanceConfig{Memory: 1024},
+	})
+	require.Error(t, err)
+	assert.Nil(t, handle)
+	assert.ErrorIs(t, err, ErrMigrationReceiveFailed)
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, int32(1), recv.aborts.Load(), "a receiver whose token never reached the caller is aborted")
+	assert.Equal(t, int32(1), tlsProv.cleanups.Load())
+}
+
+func TestClose_ReapsPendingReceivers(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	tlsProv := newSignalServerTLS(t.TempDir())
+	orch.config.MigrationTLS = tlsProv
+
+	recv := newSignalReceiver()
+	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
+		return recv, nil
+	})
+
+	handle, err := orch.ReceiveIncoming(context.Background(), MigrationSpec{
+		Arch:   orch.config.Arch,
+		VMName: "guest",
+		Config: &InstanceConfig{Memory: 1024},
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, orch.Close())
+	assert.Equal(t, int32(1), recv.aborts.Load(), "shutdown must abort a pending receiver")
+	assert.Equal(t, int32(1), tlsProv.cleanups.Load(), "shutdown must release a pending receiver's creds")
+
+	err = orch.FinalizeIncoming(context.Background(), handle.ReceiverID, true)
+	assert.ErrorIs(t, err, ErrReceiverNotFound)
 }
 
 func TestReceiveIncoming_ListensOnTheConfiguredAddress(t *testing.T) {
