@@ -1,23 +1,9 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { Suspense } from "react";
 import { useSearchParams } from "next/navigation";
-import { acceptInvitation, isPendingInvitation, useInvitationLookup } from "@/hooks";
-import { AuthProvider, useOptionalAuth } from "@/contexts/AuthContext";
-import {
-  Button,
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui";
+import { isPendingInvitation, useInvitationLookup } from "@/hooks";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui";
 
 /**
  * Public invitation accept page (#1753). Like the login page it sits
@@ -25,35 +11,19 @@ import {
  *
  * The token travels as a query parameter (`/invite/?token=...`) because the
  * site is a static export, which cannot serve an unlisted dynamic segment.
+ *
+ * The page does not call AcceptInvitation: that only marks the invitation
+ * used. It links the invitee to the WebAuthn registration flow with the
+ * token, where BeginRegistration carries `invitation_token` and the server's
+ * RegisterInvitedUser grants the tenant and role and consumes the invitation.
  */
 function InviteAccept() {
   const params = useSearchParams();
   const token = params.get("token");
   const { invitation, loading, error } = useInvitationLookup({ token });
-  const userId = useOptionalAuth()?.user?.id ?? null;
-  const signInHref = `/auth/login/?redirect=${encodeURIComponent(
-    `/invite/?token=${encodeURIComponent(token ?? "")}`
-  )}`;
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const [accepting, setAccepting] = useState(false);
-  const [acceptError, setAcceptError] = useState<string | null>(null);
-  const [accepted, setAccepted] = useState<string | null>(null);
-
-  const onConfirm = async () => {
-    if (!token || !userId) return;
-    setAccepting(true);
-    setAcceptError(null);
-    try {
-      const result = await acceptInvitation(token, userId);
-      setAccepted(result.message || "Invitation accepted");
-      setConfirmOpen(false);
-    } catch (err) {
-      setAcceptError(err instanceof Error ? err.message : "Failed to accept invitation");
-      setConfirmOpen(false);
-    } finally {
-      setAccepting(false);
-    }
-  };
+  const joinHref = `/auth/webauthn/?invitation=${encodeURIComponent(token ?? "")}${
+    invitation?.tenant_name ? `&tenant_name=${encodeURIComponent(invitation.tenant_name)}` : ""
+  }`;
 
   return (
     <main className="flex min-h-screen items-center justify-center p-4">
@@ -85,60 +55,26 @@ function InviteAccept() {
               )}
             </dl>
           )}
-          {accepted && (
-            <p role="status" data-testid="invite-accepted">
-              {accepted}
-            </p>
-          )}
-          {acceptError && (
-            <p role="alert" data-testid="invite-accept-error">
-              {acceptError}
-            </p>
-          )}
-          {!loading && invitation && isPendingInvitation(invitation.status) && !accepted && !userId && (
-            <a href={signInHref} data-testid="invite-sign-in" className="underline">
-              Sign in to accept
-            </a>
-          )}
-          {!loading && invitation && isPendingInvitation(invitation.status) && !accepted && userId && (
+          {!loading && invitation && isPendingInvitation(invitation.status) && (
             <div className="space-y-2">
-              <Button onClick={() => setConfirmOpen(true)} data-testid="invite-accept">
-                Accept invitation
-              </Button>
+              <a href={joinHref} data-testid="invite-join" className="underline">
+                Join workspace
+              </a>
+              <p className="text-sm text-muted-foreground">
+                You will create your account and join as {invitation.role}.
+              </p>
             </div>
           )}
         </CardContent>
       </Card>
-
-      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Accept this invitation?</DialogTitle>
-            <DialogDescription>
-              You will join the workspace as {invitation?.role ?? "a member"}. The invitation
-              cannot be used again.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirmOpen(false)}>
-              Cancel
-            </Button>
-            <Button onClick={onConfirm} disabled={accepting} data-testid="invite-confirm">
-              {accepting ? "Accepting..." : "Confirm"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </main>
   );
 }
 
 export default function InvitePage() {
   return (
-    <AuthProvider>
-      <Suspense fallback={<p>Loading invitation...</p>}>
-        <InviteAccept />
-      </Suspense>
-    </AuthProvider>
+    <Suspense fallback={<p>Loading invitation...</p>}>
+      <InviteAccept />
+    </Suspense>
   );
 }
