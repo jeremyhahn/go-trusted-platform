@@ -246,16 +246,17 @@ test.describe('Devices Page', () => {
 
       // The select component uses a combobox pattern
       const typeSelect = authenticatedPage.locator('button[role="combobox"]:has-text("All types")');
+      const typeTrigger = authenticatedPage.locator('button[role="combobox"]').nth(0); // the type filter is the first Select on the page; its text changes with the selection
 
       if ((await typeSelect.count()) > 0) {
         await typeSelect.first().click();
-        await expect(typeSelect.first()).toHaveAttribute('aria-expanded', 'true');
+        await expect(typeTrigger).toHaveAttribute('aria-expanded', 'true');
 
         // Select the option from the listbox using role
         const physicalOption = authenticatedPage.locator('div[role="option"]:has-text("Physical")');
         if ((await physicalOption.count()) > 0) {
           await physicalOption.first().click({ force: true });
-          await expect(typeSelect.first()).toHaveAttribute('aria-expanded', 'false');
+          await expect(typeTrigger).toHaveAttribute('aria-expanded', 'false');
         }
       }
     });
@@ -283,16 +284,17 @@ test.describe('Devices Page', () => {
 
       // The select component uses a combobox pattern
       const statusSelect = authenticatedPage.locator('button[role="combobox"]:has-text("All statuses")');
+      const statusTrigger = authenticatedPage.locator('button[role="combobox"]').nth(1); // the status filter is the second Select on the page
 
       if ((await statusSelect.count()) > 0) {
         await statusSelect.first().click();
-        await expect(statusSelect.first()).toHaveAttribute('aria-expanded', 'true');
+        await expect(statusTrigger).toHaveAttribute('aria-expanded', 'true');
 
         // Select the option from the listbox using role
         const onlineOption = authenticatedPage.locator('div[role="option"]:has-text("Online")');
         if ((await onlineOption.count()) > 0) {
           await onlineOption.first().click({ force: true });
-          await expect(statusSelect.first()).toHaveAttribute('aria-expanded', 'false');
+          await expect(statusTrigger).toHaveAttribute('aria-expanded', 'false');
         }
       }
     });

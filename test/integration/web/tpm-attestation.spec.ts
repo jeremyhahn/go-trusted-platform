@@ -285,9 +285,7 @@ test.describe('TPM Status Page', () => {
 
       // Should show capability section or EK/SRK indicators
       const capabilitiesSection = authenticatedPage.locator('text=/capabilities|ek|endorsement|srk|storage/i').first();
-      const hasCapabilities = (await capabilitiesSection.count()) > 0;
-
-      expect(hasCapabilities).toBe(true);
+      await expect(capabilitiesSection).toBeVisible({ timeout: 10000 });
     });
 
     test('should have refresh button', async ({ authenticatedPage }) => {
