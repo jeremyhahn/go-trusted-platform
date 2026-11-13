@@ -140,6 +140,60 @@ func TestCanonicalDirect_InstallsOnlyCertificates(t *testing.T) {
 	assert.Equal(t, certPEM, written)
 }
 
+// TestCanonicalDirect_RejectsMalformedPEMBlock proves a damaged PEM block is
+// refused even when a valid CA sits next to it, before or after, and that an
+// existing trust file is left as it was: pem.Decode would otherwise skip the
+// damaged block and install an incomplete bundle.
+func TestCanonicalDirect_RejectsMalformedPEMBlock(t *testing.T) {
+	validCA := directTestCertPEM(t, true)
+	other := directTestCertPEM(t, true)
+	truncated := other[:len(other)/2]
+	badBase64 := []byte("-----BEGIN CERTIFICATE-----\n!!!not*base64!!!\n-----END CERTIFICATE-----\n")
+	noEnd := bytes.Replace(other, []byte("-----END CERTIFICATE-----"), nil, 1)
+	tests := []struct {
+		name   string
+		bundle []byte
+	}{
+		{"truncated after CA", append(append([]byte{}, validCA...), truncated...)},
+		{"truncated before CA", append(append([]byte{}, truncated...), validCA...)},
+		{"bad base64 after CA", append(append([]byte{}, validCA...), badBase64...)},
+		{"bad base64 before CA", append(append([]byte{}, badBase64...), validCA...)},
+		{"missing END after CA", append(append([]byte{}, validCA...), noEnd...)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			certPath := filepath.Join(t.TempDir(), "platform-ca.crt")
+			previous := []byte("previous trust anchors\n")
+			require.NoError(t, os.WriteFile(certPath, previous, 0o600))
+			_, err := runDirect(t, tt.bundle, "--install-to-system-trust", "--cert-path", certPath)
+			var malformed ErrDirectBundleMalformedPEM
+			require.ErrorAs(t, err, &malformed)
+			written, err := os.ReadFile(certPath)
+			require.NoError(t, err)
+			assert.Equal(t, previous, written, "existing trust file must stay unchanged")
+		})
+	}
+}
+
+// TestCanonicalDirect_AcceptsTwoCAsWithText proves ordinary text around and
+// between well-formed blocks is still accepted and both CAs are installed.
+func TestCanonicalDirect_AcceptsTwoCAsWithText(t *testing.T) {
+	first := directTestCertPEM(t, true)
+	second := directTestCertPEM(t, true)
+	var bundle []byte
+	bundle = append(bundle, "# root one\n"...)
+	bundle = append(bundle, first...)
+	bundle = append(bundle, "\n# root two\n"...)
+	bundle = append(bundle, second...)
+	bundle = append(bundle, "# end\n"...)
+	certPath := filepath.Join(t.TempDir(), "platform-ca.crt")
+	_, err := runDirect(t, bundle, "--install-to-system-trust", "--cert-path", certPath)
+	require.NoError(t, err)
+	written, err := os.ReadFile(certPath)
+	require.NoError(t, err)
+	assert.Equal(t, append(append([]byte{}, first...), second...), written)
+}
+
 func TestCanonicalDirect_NoInstallByDefault(t *testing.T) {
 	cmd := newCanonicalDirectCmd(func() *cli.CommonFlags { return &cli.CommonFlags{} })
 	installFlag := cmd.Flag("install-to-system-trust")
