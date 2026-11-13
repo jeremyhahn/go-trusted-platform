@@ -4,8 +4,6 @@ import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ChevronRight } from "lucide-react";
-import { Separator } from "@/components/ui/separator";
-import { cn } from "@/lib/utils";
 
 /**
  * Breadcrumbs component that auto-generates from the current pathname
@@ -58,7 +56,7 @@ export function Breadcrumbs() {
         Home
       </Link>
 
-      {segments.map((segment, index) => (
+      {segments.map((segment) => (
         <React.Fragment key={segment.href}>
           <ChevronRight className="h-4 w-4 text-neutral-400" />
           {segment.isLast ? (
