@@ -34,7 +34,7 @@ import (
 // While any of these is missing it builds none and says so: the vpn
 // process's peer RPCs keep their refusal.
 func vpnDataPlanes(cfg *ServeConfig, gw *gateway.Gateway, logger *slog.Logger) ([]vpn.ManagedDataPlane, error) {
-	c := cfg.Gateway.ManagementVPN.Config.WithDefaults()
+	c := cfg.Gateway.ManagementVPN.WithDefaults()
 	wg := c.WireGuard
 	if !c.Offers(vpn.DataPlaneWireGuard) || wg.KeyRef == "" || !wg.Address.IsValid() {
 		logger.Warn("The datapath hosts no VPN data plane: the configuration does not name the plane's key and address",
@@ -78,7 +78,7 @@ func vpnHubListeners(cfg *ServeConfig, haveResolver bool) []hostfw.Listener {
 	if !haveResolver || cfg.Gateway == nil || cfg.Gateway.ManagementVPN == nil || !cfg.Gateway.ManagementVPN.Enabled {
 		return nil
 	}
-	c := cfg.Gateway.ManagementVPN.Config.WithDefaults()
+	c := cfg.Gateway.ManagementVPN.WithDefaults()
 	wg := c.WireGuard
 	if !c.Offers(vpn.DataPlaneWireGuard) || wg.KeyRef == "" || !wg.Address.IsValid() || wg.ListenPort <= 0 || wg.ListenPort > 65535 {
 		return nil
