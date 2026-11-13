@@ -195,8 +195,10 @@ export class GatewayService extends BaseService {
    * @returns Withdrawal result
    */
   async withdrawPrefix(request: WithdrawPrefixRequest): Promise<ApiResponse<WithdrawPrefixResponse>> {
+    // DELETE /gateway/bgp/prefixes reads the CIDR from the `prefix` query
+    // parameter (pkg/webservice/v1/rest/gateway/router.go withdrawPrefix).
     return this.client.delete<WithdrawPrefixResponse>(
-      this.buildUrl(`/bgp/prefixes/${this.encodePathSegment(request.prefix)}`)
+      this.buildUrl(`/bgp/prefixes?prefix=${encodeURIComponent(request.prefix)}`)
     );
   }
 
@@ -229,10 +231,16 @@ export class GatewayService extends BaseService {
    * @returns Allocated IP
    */
   async allocateIP(request: AllocateIPRequest): Promise<ApiResponse<AllocateIPResponse>> {
-    return this.client.post<AllocateIPResponse>(
-      this.buildUrl(`/ipam/pools/${this.encodePathSegment(request.poolId)}/allocate`),
-      { deviceId: request.deviceId, hostname: request.hostname }
-    );
+    // POST /gateway/ipam/allocations decodes an AllocateIPRequest, pool id
+    // included, from the body (router.go allocateIP).
+    const body: AllocateIPRequest = { poolId: request.poolId };
+    if (request.deviceId !== undefined) {
+      body.deviceId = request.deviceId;
+    }
+    if (request.hostname !== undefined) {
+      body.hostname = request.hostname;
+    }
+    return this.client.post<AllocateIPResponse>(this.buildUrl('/ipam/allocations'), body);
   }
 
   /**
@@ -242,8 +250,10 @@ export class GatewayService extends BaseService {
    * @returns Release result
    */
   async releaseIP(request: ReleaseIPRequest): Promise<ApiResponse<ReleaseIPResponse>> {
+    // DELETE /gateway/ipam/allocations reads the address from the `ip` query
+    // parameter (router.go releaseIP).
     return this.client.delete<ReleaseIPResponse>(
-      this.buildUrl(`/ipam/allocations/${this.encodePathSegment(request.ip)}`)
+      this.buildUrl(`/ipam/allocations?ip=${encodeURIComponent(request.ip)}`)
     );
   }
 
@@ -255,10 +265,11 @@ export class GatewayService extends BaseService {
    */
   async listAllocations(request?: ListAllocationsRequest): Promise<ApiResponse<ListAllocationsResponse>> {
     // An empty poolId means every pool (ListAllocationsRequest), not a
-    // request for `/ipam/pools//allocations`.
+    // filter. The router serves only GET /gateway/ipam/allocations, so the
+    // pool goes in the `poolId` query parameter, never a /pools/{id} path.
     if (request?.poolId !== undefined && request.poolId !== '') {
       return this.client.get<ListAllocationsResponse>(
-        this.buildUrl(`/ipam/pools/${this.encodePathSegment(request.poolId)}/allocations`)
+        this.buildUrl(`/ipam/allocations?poolId=${encodeURIComponent(request.poolId)}`)
       );
     }
     return this.client.get<ListAllocationsResponse>(this.buildUrl('/ipam/allocations'));
