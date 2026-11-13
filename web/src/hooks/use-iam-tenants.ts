@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { useIAM, useApi } from "trusted-platform-sdk";
 import type {
   ApiResponse,
@@ -62,10 +62,12 @@ export function useIAMTenants(): UseIAMTenantsResult {
   );
   const total = data?.total ?? 0;
   const pageCount = tenantPageCount(total, TENANTS_PAGE_SIZE);
-  // A delete can empty the last page: step back to the new last page.
-  useEffect(() => {
-    if (data && page > pageCount) setPage(pageCount);
-  }, [data, page, pageCount]);
+  // A delete can empty the last page: step back to the new last page. The
+  // page is adjusted while rendering (React's pattern for state derived from
+  // a changed input), not in an effect.
+  if (data && page > pageCount) {
+    setPage(pageCount);
+  }
 
   const getTenant = useCallback(
     async (tenantId: string) => expectOk(await iam.getTenant(tenantId), "Get tenant"),

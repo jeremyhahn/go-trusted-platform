@@ -225,7 +225,9 @@ export default function VerifyPage() {
   // the list they answer, so a refetched list shows in progress until its own
   // verdicts arrive.
   const verifier = React.useRef(attestation);
-  verifier.current = attestation;
+  React.useEffect(() => {
+    verifier.current = attestation;
+  });
   const [verdicts, setVerdicts] = React.useState<{
     source: unknown;
     byId: Record<string, Verdict>;

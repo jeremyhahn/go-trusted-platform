@@ -39,6 +39,8 @@ import type {
 
 interface PortView {
   id: string;
+  /** The refresh count the answer belongs to. */
+  reload: number;
   port?: Port;
   stats?: PortStats;
   error?: string;
@@ -136,23 +138,26 @@ export default function SDNBridgeDetailClient() {
   // drops an answer that arrives after the selection moved on (#1755).
   const [portView, setPortView] = useState<PortView | null>(null);
   const [portReload, setPortReload] = useState(0);
+  // The view is shown only for the port and refresh it answers, so a change
+  // needs no reset here.
   useEffect(() => {
-    setPortView(null);
     if (!selectedPort) return;
     let current = true;
     const id = selectedPort;
+    const reload = portReload;
     (async () => {
       try {
         const [state, stats] = await Promise.all([sdn.getPort(bridgeId, id), sdn.getPortStats(bridgeId, id)]);
         if (!current) return;
         setPortView({
           id,
+          reload,
           port: state.data?.port,
           stats: stats.data?.stats,
           error: state.error?.message ?? stats.error?.message,
         });
       } catch (err) {
-        if (current) setPortView({ id, error: errorText(err) });
+        if (current) setPortView({ id, reload, error: errorText(err) });
       }
     })();
     return () => {
@@ -163,7 +168,6 @@ export default function SDNBridgeDetailClient() {
   // another policy is never shown as this policy's data (#1755 Codex round 4).
   const [policyView, setPolicyView] = useState<PolicyView | null>(null);
   useEffect(() => {
-    setPolicyView(null);
     if (!viewPolicyId) return;
     let current = true;
     const id = viewPolicyId;
@@ -207,7 +211,7 @@ export default function SDNBridgeDetailClient() {
     }
   };
 
-  const shown = portView?.id === selectedPort ? portView : null;
+  const shown = portView?.id === selectedPort && portView.reload === portReload ? portView : null;
   const port = shown?.port;
   const stats = shown?.stats;
   const portError = shown?.error;

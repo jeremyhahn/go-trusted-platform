@@ -5,7 +5,7 @@
  * TPM socket and NVRAM paths.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, usePathname } from 'next/navigation';
 import { resolveDynamicId } from '@/utils/dynamic-route';
 import { Button } from '@/components/ui/button';
@@ -21,6 +21,15 @@ export default function BundleDetailClient() {
   const params = useParams();
   const pathname = usePathname();
   const bundleId = resolveDynamicId(params, pathname, 'bundles');
+  if (!bundleId) {
+    return <p className="text-muted-foreground">Loading bundle</p>;
+  }
+  // One view per bundle ID: a new ID remounts it, so no result of bundle A
+  // (manifest, validation or paths) ever shows under bundle B.
+  return <BundleDetail key={bundleId} bundleId={bundleId} />;
+}
+
+function BundleDetail({ bundleId }: { bundleId: string }) {
   const vt = useVTPMTemplates();
   const { getBundle } = vt;
 
@@ -29,29 +38,16 @@ export default function BundleDetailClient() {
   const [socketPath, setSocketPath] = useState<string | null>(null);
   const [nvramPath, setNvramPath] = useState<string | null>(null);
 
-  // Results are keyed to the ID that produced them: a response for an ID the
-  // URL has since left is dropped, so bundle A never shows under bundle B.
+  // Results are keyed to the ID that produced them as well, so a late
+  // response never shows under another ID.
   const [loaded, setLoaded] = useState<{ id: string; bundle: VTPMBundleWire } | null>(null);
   const [failedId, setFailedId] = useState<string | null>(null);
-  const currentId = useRef(bundleId);
-  currentId.current = bundleId;
 
   useEffect(() => {
-    setLoaded(null);
-    setFailedId(null);
-    setValidation(null);
-    setBundlePath(null);
-    setSocketPath(null);
-    setNvramPath(null);
-    if (!bundleId) return;
     const id = bundleId;
     getBundle.mutateAsync(id).then(
-      (result) => {
-        if (currentId.current === id) setLoaded({ id, bundle: result });
-      },
-      () => {
-        if (currentId.current === id) setFailedId(id);
-      }
+      (result) => setLoaded({ id, bundle: result }),
+      () => setFailedId(id)
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bundleId]);
@@ -61,13 +57,13 @@ export default function BundleDetailClient() {
   const run = async <T,>(id: string, call: () => Promise<T>, set: (value: T) => void) => {
     try {
       const value = await call();
-      if (currentId.current === id) set(value);
+      if (id === bundleId) set(value);
     } catch {
       // onError already shows a toast
     }
   };
 
-  if (!bundleId || (!bundle && failedId !== bundleId)) {
+  if (!bundle && failedId !== bundleId) {
     return <p className="text-muted-foreground">Loading bundle</p>;
   }
 
