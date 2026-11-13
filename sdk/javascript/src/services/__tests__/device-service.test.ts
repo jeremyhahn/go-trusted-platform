@@ -114,7 +114,7 @@ const routes: RouteCase[] = [
     call: (s) => s.activateDevice({} as never),
   },
   // Profiles: singular.
-  { method: 'createProfile', verb: 'post', path: '/v1/device/profiles', call: (s) => s.createProfile({} as never) },
+  { method: 'createProfile', verb: 'post', path: '/v1/device/profiles', call: (s) => s.createProfile({ profile: {} }) },
   { method: 'getProfile', verb: 'get', path: '/v1/device/profiles/7', call: (s) => s.getProfile('7') },
   {
     method: 'updateProfile',
