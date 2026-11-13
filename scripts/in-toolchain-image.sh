@@ -157,7 +157,12 @@ if [ "$network" = bridge ]; then
   # its whole graph (gigabytes): it goes beside the build cache on disk, not
   # in the 3g /tmp tmpfs, where it left no room for trivy's DB (#933).
   args+=(--env "GOPROXY=${DEVCACHE_GOPROXY:+$DEVCACHE_GOPROXY|}https://proxy.golang.org" --env GOMODCACHE=/gocache/mod)
-  for v in GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; do
+  # ci-template v1.36: the Trivy database repositories the runner sets (the
+  # dev-cache ghcr mirror on the LAN first, the public ones after) travel
+  # with the stage, so `make security` and `trivy image` fetch the vulnerability
+  # and Java databases from the LAN instead of the internet.
+  for v in GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0 \
+    TRIVY_DB_REPOSITORY TRIVY_JAVA_DB_REPOSITORY TRIVY_INSECURE; do
     if [ -n "${!v:-}" ]; then args+=(--env "$v"); fi
   done
 fi

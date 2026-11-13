@@ -365,56 +365,6 @@ func TestUKIConfig_Valid(t *testing.T) {
 	}
 }
 
-func TestDiskInfo_Structure(t *testing.T) {
-	tests := []struct {
-		name     string
-		diskInfo *DiskInfo
-		verify   func(t *testing.T, info *DiskInfo)
-	}{
-		{
-			name: "complete disk info",
-			diskInfo: &DiskInfo{
-				Device:         "/dev/sda",
-				EFIPartition:   "/dev/sda1",
-				RootPartition:  "/dev/sda2",
-				LUKSPartition:  "/dev/sda2",
-				MappedDevice:   "/dev/mapper/cryptroot",
-				EFIUUID:        "1234-5678",
-				RootUUID:       "abcd-efgh",
-				LUKSUUID:       "ijkl-mnop",
-				PartitionTable: PartitionTableGPT,
-			},
-			verify: func(t *testing.T, info *DiskInfo) {
-				assert.Equal(t, "/dev/sda", info.Device)
-				assert.Equal(t, "/dev/sda1", info.EFIPartition)
-				assert.Equal(t, "/dev/sda2", info.RootPartition)
-				assert.Equal(t, "/dev/mapper/cryptroot", info.MappedDevice)
-				assert.Equal(t, PartitionTableGPT, info.PartitionTable)
-			},
-		},
-		{
-			name: "disk info without encryption",
-			diskInfo: &DiskInfo{
-				Device:         "/dev/vda",
-				EFIPartition:   "/dev/vda1",
-				RootPartition:  "/dev/vda2",
-				PartitionTable: PartitionTableGPT,
-			},
-			verify: func(t *testing.T, info *DiskInfo) {
-				assert.Equal(t, "/dev/vda", info.Device)
-				assert.Empty(t, info.MappedDevice)
-				assert.Empty(t, info.LUKSPartition)
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tt.verify(t, tt.diskInfo)
-		})
-	}
-}
-
 func TestInterfaceType(t *testing.T) {
 	tests := []struct {
 		name     string

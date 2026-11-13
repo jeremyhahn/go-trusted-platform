@@ -8,6 +8,10 @@
 // Session cookie as an external store (SSR-safe)
 export { useSessionToken, useHydrated, notifySessionChanged } from "./use-session-token";
 
+// NTP status, sources and clock step (#1682)
+export { useNTP } from "./use-ntp";
+export type { NTPStatus, NTPSource, NTPStatusResponse, NTPSourcesResponse } from "./use-ntp";
+
 // SDK hooks (exported from main entry point for bundler compatibility)
 export {
   // Generic hooks
@@ -82,7 +86,21 @@ export type { User, AuthContextType } from '@/contexts/AuthContext';
 export { useToast, toast, dismissToast } from './use-toast';
 export type { Toast, UseToastReturn } from './use-toast';
 
+export { useTPMOps, textToBase64, base64ToHex } from './use-tpm-ops';
+// textToBase64 and base64ToHex come from use-tpm-ops (main) above.
+export { useVTPMRuntime, base64ToText, hexToBase64 } from './use-vtpm-runtime';
+export type { VTPMRunState } from './use-vtpm-runtime';
+
 export { useReportedGateways } from './use-reported-gateways';
+export { useOverlayVteps } from './use-overlay-vteps';
+export { useRegistry, encodeRepository } from './use-registry';
+export type {
+  RegistryHealthCode,
+  RegistryComponent,
+  RegistryStatus,
+  RegistryTags,
+  UseRegistryResult,
+} from './use-registry';
 export type {
   ReportedGateway,
   UseReportedGatewaysOptions,
