@@ -495,7 +495,7 @@ func TestParseFIPSBaselineRejectsMalformedRows(t *testing.T) {
 
 func TestRepositoryFIPSBaselineParses(t *testing.T) {
 	b := repositoryFIPSBaseline(t)
-	require.Len(t, b.entries, 8)
+	require.Len(t, b.entries, 9)
 	for _, e := range b.entries {
 		assert.Equal(t, kindPanic, e.Kind)
 		assert.Equal(t, fipsPanic, e.Message)
@@ -510,8 +510,9 @@ func TestRepositoryFIPSBaselineParses(t *testing.T) {
 	assert.Contains(t, b.tests, testKey{Package: "pkg/app", Name: "TestTPMSigner_IDevIDSignsTLS13ClientCertificateVerify"})
 	assert.Contains(t, b.tests, testKey{Package: "pkg/app", Name: "TestInitWebServiceKeyAttributes_IDevIDReuseCarriesIDevIDSubject"})
 	assert.Contains(t, b.tests, testKey{Package: "pkg/app", Name: "TestCoverage964_ProvisionPlatformIdentity"})
+	assert.Contains(t, b.tests, testKey{Package: "pkg/app", Name: "TestCoverage964_InitWebServiceKeyAttributes"})
 	assert.Contains(t, b.tests, testKey{Package: "pkg/api/daemon", Name: "TestTPMSimulator_ActivateCredentialRefusesAForeignCredential"})
-	assert.Equal(t, 6, b.rowsIn("pkg/app"), "the bound on a pkg/app rerun")
+	assert.Equal(t, 7, b.rowsIn("pkg/app"), "the bound on a pkg/app rerun")
 	assert.Equal(t, 1, b.rowsIn("pkg/api/daemon"), "the bound on a pkg/api/daemon rerun")
 	assert.Equal(t, 0, b.rowsIn("pkg/dns"))
 }
