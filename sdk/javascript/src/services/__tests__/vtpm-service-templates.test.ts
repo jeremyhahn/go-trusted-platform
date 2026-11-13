@@ -50,12 +50,12 @@ describe('VTPMService.createTemplate', () => {
     expect(body).not.toHaveProperty('options');
   });
 
-  it('posts only id and secure_boot_enabled when the options are bare', async () => {
+  it('posts only id when the options are bare (an omitted secure_boot_enabled decodes as false)', async () => {
     await service.createTemplate({ options: { id: 't2' } });
 
     const [path, body] = vi.mocked(mockClient.post).mock.calls[0]!;
     expect(path).toMatch(/\/v1\/vtpm\/templates$/);
-    expect(body).toEqual({ id: 't2', secure_boot_enabled: false });
+    expect(body).toEqual({ id: 't2' });
     expect(body).not.toHaveProperty('options');
   });
 });
