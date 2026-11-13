@@ -82,15 +82,17 @@ export type { User, AuthContextType } from '@/contexts/AuthContext';
 export { useToast, toast, dismissToast } from './use-toast';
 export type { Toast, UseToastReturn } from './use-toast';
 
-export { useKmsOps, textToBase64, base64ToText, KMS_SETTABLE_KEY_STATUSES } from './use-kms-ops';
+export { useKmsOps, base64ToText, KMS_SETTABLE_KEY_STATUSES } from './use-kms-ops';
 export type {
   UseKmsOpsResult,
   KmsKeyVersion,
   KmsBackendStatus,
   KmsImportKeyInput,
 } from './use-kms-ops';
+export { useTPMOps, textToBase64, base64ToHex } from './use-tpm-ops';
 
 export { useReportedGateways } from './use-reported-gateways';
+export { useOverlayVteps } from './use-overlay-vteps';
 export type {
   ReportedGateway,
   UseReportedGatewaysOptions,
