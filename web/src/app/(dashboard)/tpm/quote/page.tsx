@@ -52,7 +52,7 @@ import {
   Copy,
   ShieldCheck,
 } from "lucide-react";
-import { useApi, useTPM, useToast } from "@/hooks";
+import { useTPM, useToast } from "@/hooks";
 import { checkQuoteBinding } from "trusted-platform-sdk";
 import type { QuoteResponse, VerifyQuoteResponse } from "trusted-platform-sdk";
 import { errorMessage } from "@/utils/errors";
