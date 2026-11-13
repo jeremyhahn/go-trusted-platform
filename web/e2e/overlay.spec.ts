@@ -52,7 +52,10 @@ test.describe('Overlay VTEPs and tunnels', () => {
   });
 
   test('DeleteVNI: deletes a VNI after confirmation', async ({ page }) => {
-    const calls = await openPage(page);
+    const calls = await openPage(page, {}, [
+      { mac: '02:00:00:00:00:09', vni: 5001, remoteVtep: 'node-b', learnedAt: '2026-11-12T00:00:00Z' },
+    ]);
+    await expect(page.getByRole('cell', { name: '02:00:00:00:00:09', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Delete VNI 5001' }).click();
     const dialog = page.getByRole('dialog');
     await expect(dialog.getByText('Delete VNI 5001?', { exact: false })).toBeVisible();
@@ -60,6 +63,9 @@ test.describe('Overlay VTEPs and tunnels', () => {
     await dialog.getByRole('button', { name: 'Delete' }).click();
     await expect(page.getByText('No VNIs found')).toBeVisible();
     expect(calls.some((c) => c.method === 'DELETE' && c.path === '/vnis/5001')).toBe(true);
+    // The server drops a deleted VNI's remote MACs with it, so its MAC rows go too.
+    await expect(page.getByRole('cell', { name: '02:00:00:00:00:09', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Forget 02:00:00:00:00:09 on VNI 5001' })).toHaveCount(0);
   });
 
   test('DeleteVNI: cancel leaves the VNI in place', async ({ page }) => {

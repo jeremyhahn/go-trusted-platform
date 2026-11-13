@@ -835,6 +835,8 @@ export async function mockOverlayApi(
       if (method === 'DELETE' && path.startsWith('/vnis/')) {
         const vni = Number(path.slice('/vnis/'.length));
         vnis = vnis.filter((v) => v.config.vni !== vni);
+        // Controller.RemoveVNI removes every remote MAC of the VNI too.
+        macs = macs.filter((m) => m.vni !== vni);
         return json(200, { status: { success: true, message: 'deleted' } });
       }
       if (method === 'GET' && path === '/tunnels') return json(200, { tunnels });
