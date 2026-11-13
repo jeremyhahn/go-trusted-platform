@@ -84,6 +84,18 @@ export { useAuth, useOptionalAuth, AuthProvider } from '@/contexts/AuthContext';
 export type { User, AuthContextType } from '@/contexts/AuthContext';
 
 export { useToast, toast, dismissToast } from './use-toast';
+export {
+  useInvitationLookup,
+  fetchInvitation,
+  fetchInvitationByToken,
+  acceptInvitation,
+  isPendingInvitation,
+} from './use-invitation-lookup';
+export type {
+  InvitationDetail,
+  AcceptInvitationResult,
+  InvitationLookupState,
+} from './use-invitation-lookup';
 export type { Toast, UseToastReturn } from './use-toast';
 export { useTPMKeyOperations, operationError } from './use-tpm-key-operations';
 export type { TPMKeyOperation, OperationResponse, TPMClient } from './use-tpm-key-operations';

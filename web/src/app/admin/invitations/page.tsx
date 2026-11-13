@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { getUserFromToken } from "@/utils/jwt";
 import { getBaseUrl } from "@/utils/getBaseUrl";
@@ -287,6 +288,13 @@ export default function InvitationsPage() {
                   >
                     Copy Link
                   </button>
+                  <Link
+                    href={`/admin/invitations/detail/?id=${encodeURIComponent(invitation.id)}`}
+                    title="View invitation"
+                    data-testid={`view-invitation-${invitation.id}`}
+                  >
+                    View
+                  </Link>
                   <button
                     onClick={() => handleRevokeInvitation(invitation.id)}
                     className={styles.revokeButton}
