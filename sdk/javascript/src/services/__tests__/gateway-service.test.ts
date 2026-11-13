@@ -129,18 +129,20 @@ describe('GatewayService', () => {
       expect(mockClient.post).toHaveBeenCalledWith('/v1/gateway/bgp/prefixes', request);
     });
 
-    it('withdrawPrefix DELETEs the prefix with the CIDR encoded and no body', async () => {
+    // The router registers DELETE /gateway/bgp/prefixes and reads the CIDR
+    // from the `prefix` query parameter (router.go withdrawPrefix).
+    it('withdrawPrefix DELETEs /bgp/prefixes with the CIDR in the prefix query, encoded', async () => {
       await service.withdrawPrefix({ prefix: '10.0.0.0/24' });
 
       expectOnly('delete');
-      expect(mockClient.delete).toHaveBeenCalledWith('/v1/gateway/bgp/prefixes/10.0.0.0%2F24');
+      expect(mockClient.delete).toHaveBeenCalledWith('/v1/gateway/bgp/prefixes?prefix=10.0.0.0%2F24');
     });
 
-    it('withdrawPrefix encodes an IPv6 CIDR', async () => {
+    it('withdrawPrefix encodes an IPv6 CIDR in the query', async () => {
       await service.withdrawPrefix({ prefix: '2001:db8::/48' });
 
       expect(mockClient.delete).toHaveBeenCalledWith(
-        '/v1/gateway/bgp/prefixes/2001%3Adb8%3A%3A%2F48'
+        '/v1/gateway/bgp/prefixes?prefix=2001%3Adb8%3A%3A%2F48'
       );
     });
 
@@ -160,30 +162,33 @@ describe('GatewayService', () => {
       expect(mockClient.get).toHaveBeenCalledWith('/v1/gateway/ipam/pools');
     });
 
-    it('allocateIP POSTs to the pool path with only deviceId and hostname in the body', async () => {
-      await service.allocateIP({ poolId: 'pool a', deviceId: 'dev-1', hostname: 'node-1' });
+    // The router registers POST /gateway/ipam/allocations and decodes an
+    // AllocateIPRequest (pool_id, device_id, hostname) from the body.
+    it('allocateIP POSTs /ipam/allocations with poolId, deviceId and hostname in the body', async () => {
+      const request = { poolId: 'pool a', deviceId: 'dev-1', hostname: 'node-1' };
+      await service.allocateIP(request);
 
       expectOnly('post');
-      expect(mockClient.post).toHaveBeenCalledWith('/v1/gateway/ipam/pools/pool%20a/allocate', {
+      expect(mockClient.post).toHaveBeenCalledWith('/v1/gateway/ipam/allocations', {
+        poolId: 'pool a',
         deviceId: 'dev-1',
         hostname: 'node-1',
       });
     });
 
-    it('allocateIP sends undefined optional fields when they are not given', async () => {
+    it('allocateIP sends the poolId alone when the optional fields are not given', async () => {
       await service.allocateIP({ poolId: 'p1' });
 
-      expect(mockClient.post).toHaveBeenCalledWith('/v1/gateway/ipam/pools/p1/allocate', {
-        deviceId: undefined,
-        hostname: undefined,
-      });
+      expect(mockClient.post).toHaveBeenCalledWith('/v1/gateway/ipam/allocations', { poolId: 'p1' });
     });
 
-    it('releaseIP DELETEs the allocation with the address encoded and no body', async () => {
+    // The router registers DELETE /gateway/ipam/allocations and reads the
+    // address from the `ip` query parameter (router.go releaseIP).
+    it('releaseIP DELETEs /ipam/allocations with the address in the ip query, encoded', async () => {
       await service.releaseIP({ ip: 'fd00::1' });
 
       expectOnly('delete');
-      expect(mockClient.delete).toHaveBeenCalledWith('/v1/gateway/ipam/allocations/fd00%3A%3A1');
+      expect(mockClient.delete).toHaveBeenCalledWith('/v1/gateway/ipam/allocations?ip=fd00%3A%3A1');
     });
 
     it('listAllocations with no request GETs every allocation', async () => {
@@ -193,11 +198,13 @@ describe('GatewayService', () => {
       expect(mockClient.get).toHaveBeenCalledWith('/v1/gateway/ipam/allocations');
     });
 
-    it('listAllocations with a pool id GETs that pool\'s allocations, encoded', async () => {
+    // The router registers only GET /gateway/ipam/allocations; the pool
+    // filter goes in the poolId query parameter, never a /pools/{id} path.
+    it('listAllocations with a pool id GETs /ipam/allocations with the poolId query, encoded', async () => {
       await service.listAllocations({ poolId: 'pool/1' });
 
       expectOnly('get');
-      expect(mockClient.get).toHaveBeenCalledWith('/v1/gateway/ipam/pools/pool%2F1/allocations');
+      expect(mockClient.get).toHaveBeenCalledWith('/v1/gateway/ipam/allocations?poolId=pool%2F1');
     });
 
     it('listAllocations with an empty pool id GETs every allocation', async () => {
