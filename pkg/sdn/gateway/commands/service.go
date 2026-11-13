@@ -202,7 +202,14 @@ func serveProcess(ctx context.Context, name string, opts serviceOptions, deps se
 	served := make(chan error, 1)
 	go func() { served <- server.Serve() }()
 
-	if err := errors.Join(planesErr, gw.Start(ctx)); err != nil {
+	// A plane that failed to start keeps the hosted services down: the
+	// supervisor accepts an active service before it reads the start
+	// error, so a started gateway would report ready with no plane.
+	startErr := planesErr
+	if startErr == nil {
+		startErr = gw.Start(ctx)
+	}
+	if err := startErr; err != nil {
 		// The process keeps serving so the supervisor reads why; it stops
 		// the process when it gives up on the service.
 		server.SetStartError(err)
