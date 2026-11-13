@@ -14,10 +14,16 @@ import type {
  * Drives the TenantService lifecycle, quota, sync and DEK operations for
  * the tenant lifecycle page (#1758).
  */
+/** A quota check answer with the resource and amount it answers. */
+export interface QuotaCheckResult extends CheckQuotaResponse {
+  resource: string;
+  amount: number;
+}
+
 export interface UseTenantLifecycleResult {
   tenant: Tenant | null;
   dekStatus: TenantDEKStatus | null;
-  quotaCheck: CheckQuotaResponse | null;
+  quotaCheck: QuotaCheckResult | null;
   busy: boolean;
   error: string | null;
   notice: string | null;
@@ -50,7 +56,7 @@ export function useTenantLifecycle(): UseTenantLifecycleResult {
   const service = useTenant();
   const [tenant, setTenant] = useState<Tenant | null>(null);
   const [dekStatus, setDEKStatus] = useState<TenantDEKStatus | null>(null);
-  const [quotaCheck, setQuotaCheck] = useState<CheckQuotaResponse | null>(null);
+  const [quotaCheck, setQuotaCheck] = useState<QuotaCheckResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -157,7 +163,11 @@ export function useTenantLifecycle(): UseTenantLifecycleResult {
     (resource: string, amount: number) =>
       run(async () => {
         const t = requireTenant();
-        setQuotaCheck(unwrap(await service.checkQuota({ tenantId: t.id, resource, amount })));
+        // Clear the earlier answer first: a failed check must not leave it
+        // beside the new inputs as if it answered them.
+        setQuotaCheck(null);
+        const res = unwrap(await service.checkQuota({ tenantId: t.id, resource, amount }));
+        setQuotaCheck({ ...res, resource, amount });
         return null;
       }),
     [run, service, requireTenant]

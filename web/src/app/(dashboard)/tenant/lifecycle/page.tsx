@@ -214,7 +214,7 @@ export default function TenantLifecyclePage() {
                   Check quota
                 </Button>
               </form>
-              {quotaCheck && (
+              {quotaCheck && quotaCheck.resource === resource && quotaCheck.amount === Number(amount) && (
                 <div data-testid="quota-check-result" className="text-sm">
                   {quotaCheck.available ? "Available" : "Not available"}
                   {quotaCheck.message ? `: ${quotaCheck.message}` : ""}
