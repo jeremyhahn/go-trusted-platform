@@ -32,6 +32,7 @@ export default function MigrationsPage() {
   // only RAM, so a live receiver would resume the guest on an empty disk.
   const [mode, setMode] = useState<"cold" | "live">("cold");
   const [receiver, setReceiver] = useState<PrepareMigrationResponse | null>(null);
+  const [preparedName, setPreparedName] = useState("");
 
   // The source guest's configuration: the daemon refuses a prepare without it.
   const [memoryMb, setMemoryMb] = useState("");
@@ -76,6 +77,7 @@ export default function MigrationsPage() {
     });
     if (result) {
       setReceiver(result);
+      setPreparedName(vmName.trim());
       if (result.receiverId) setReceiverId(result.receiverId);
     }
   };
@@ -84,10 +86,33 @@ export default function MigrationsPage() {
     const commit = confirmCommit;
     setConfirmCommit(null);
     if (commit === null || !receiverId) return;
-    const result = await ops.finalizeMigration(receiverId, commit);
-    if (result) {
-      setFinalizeResult(`Receiver ${receiverId} ${commit ? "committed" : "aborted"}`);
-      if (receiverId === receiver?.receiverId) setReceiver(null);
+    const id = receiverId;
+    // The guest the receiver holds: the one prepared here, else the name typed.
+    const guest = (id === receiver?.receiverId ? preparedName : vmName).trim();
+    const result = await ops.finalizeMigration(id, commit);
+    if (!result) return;
+    // Finalize removes the receiver whatever it answers.
+    if (id === receiver?.receiverId) setReceiver(null);
+    if (result.status && result.status.success === false) {
+      setFinalizeResult(
+        `Receiver ${id} ${commit ? "commit" : "abort"} failed: ${result.status.message || "unknown error"}`,
+      );
+      return;
+    }
+    if (!commit) {
+      setFinalizeResult(`Receiver ${id} aborted`);
+      return;
+    }
+    // #1742: finalize can answer success with the guest missing from the
+    // host's registry, where it cannot be listed, stopped or deleted.
+    if (!guest) {
+      setFinalizeResult(`Receiver ${id} finalized; enter the guest name to check that the VM is registered`);
+      return;
+    }
+    if (await ops.isRegistered(guest)) {
+      setFinalizeResult(`Receiver ${id} committed: VM ${guest} registered`);
+    } else {
+      setFinalizeResult(`Receiver ${id} finalized, but VM ${guest} is not registered on this host`);
     }
   };
 

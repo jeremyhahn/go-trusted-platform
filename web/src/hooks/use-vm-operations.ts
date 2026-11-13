@@ -51,7 +51,12 @@ export interface UseVMOperationsResult {
   migrate: (vmId: string, destinationHost: string, liveMigration: boolean) => Promise<boolean>;
   prepareMigration: (request: PrepareMigrationRequest) => Promise<PrepareMigrationResponse | undefined>;
   finalizeMigration: (receiverId: string, commit: boolean) => Promise<FinalizeMigrationResponse | undefined>;
+  /** Whether ListVMs on this host lists a VM of this name; false when the lookup fails */
+  isRegistered: (name: string) => Promise<boolean>;
 }
+
+/** Upper bound on ListVMs pages read by isRegistered. */
+const REGISTRY_MAX_PAGES = 50;
 
 export function useVMOperations(): UseVMOperationsResult {
   const compute = useCompute();
@@ -109,5 +114,20 @@ export function useVMOperations(): UseVMOperationsResult {
     prepareMigration: (request) => run("Prepare migration", () => compute.prepareMigration(request)),
     finalizeMigration: (receiverId, commit) =>
       run("Finalize migration", () => compute.finalizeMigration({ receiverId, commit })),
+    isRegistered: async (name) => {
+      // The daemon's VM carries its name in config (instanceToVMProto).
+      for (let pageNo = 1; pageNo <= REGISTRY_MAX_PAGES; pageNo++) {
+        try {
+          const response = await compute.listVMs({ page: pageNo, pageSize: 100 });
+          if (!response.success || !response.data) return false;
+          const { vms, pagination } = response.data;
+          if ((vms ?? []).some((vm) => vm.config?.name === name)) return true;
+          if (!pagination || pageNo >= pagination.totalPages) return false;
+        } catch {
+          return false;
+        }
+      }
+      return false;
+    },
   };
 }
