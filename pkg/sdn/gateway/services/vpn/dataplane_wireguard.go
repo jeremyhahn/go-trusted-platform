@@ -17,6 +17,7 @@ package vpn
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/netip"
 	"sync"
@@ -139,4 +140,29 @@ func (p *wireguardPlane) RemovePeer(ctx context.Context, leaseID LeaseID) error 
 	delete(p.peers, leaseID)
 	p.logger.Info("vpn.wireguard.peer.remove", slog.String("lease", string(leaseID)))
 	return nil
+}
+
+// ReconcilePeers removes every peer whose lease is not in keep: the plane
+// lives in the datapath child and outlives a vpn child that died between a
+// revoke's record deletion and its peer removal.
+func (p *wireguardPlane) ReconcilePeers(ctx context.Context, keep []LeaseID) error {
+	want := make(map[LeaseID]bool, len(keep))
+	for _, id := range keep {
+		want[id] = true
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var errs []error
+	for id, key := range p.peers {
+		if want[id] {
+			continue
+		}
+		if err := p.hub.RemovePeer(ctx, key); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		delete(p.peers, id)
+		p.logger.Info("vpn.wireguard.peer.reconcile.remove", slog.String("lease", string(id)))
+	}
+	return errors.Join(errs...)
 }

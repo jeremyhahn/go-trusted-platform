@@ -126,6 +126,23 @@ func TestWireGuardPlane_InstallAndRemove(t *testing.T) {
 	assert.Len(t, hub.removed, 1)
 }
 
+// TestWireGuardPlane_ReconcileRemovesPeersOutsideKeep covers the hosted
+// plane's half of a vpn child's restart: a peer whose lease the restarted
+// child no longer stores is removed from the hub; a kept one stays.
+func TestWireGuardPlane_ReconcileRemovesPeersOutsideKeep(t *testing.T) {
+	plane, hub := newWireGuardPlaneForTest(t)
+	kept, revoked := wgClientKey(1), wgClientKey(2)
+	require.NoError(t, plane.InstallPeer(context.Background(), wgLease("l1", "10.9.0.23/32", kept)))
+	require.NoError(t, plane.InstallPeer(context.Background(), wgLease("l2", "10.9.0.24/32", revoked)))
+
+	var r PeerReconciler = plane
+	require.NoError(t, r.ReconcilePeers(context.Background(), []LeaseID{"l1"}))
+	_, ok := hub.peers[string(kept)]
+	assert.True(t, ok, "the kept peer was removed")
+	_, ok = hub.peers[string(revoked)]
+	assert.False(t, ok, "the revoked peer is still on the hub")
+}
+
 func TestWireGuardPlane_RefusesBadLeases(t *testing.T) {
 	plane, hub := newWireGuardPlaneForTest(t)
 	ctx := context.Background()

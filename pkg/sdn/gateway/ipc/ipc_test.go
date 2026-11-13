@@ -201,9 +201,10 @@ func TestApplyDesired_CarriesTheApplyErrorBesideTheState(t *testing.T) {
 // fakeVPNPlanes records the peer RPCs it is handed and answers with a
 // scripted refusal.
 type fakeVPNPlanes struct {
-	refusal   *ipcv1.VPNPeerRefusal
-	installed *ipcv1.VPNPeer
-	removed   *ipcv1.RemoveVPNPeerRequest
+	refusal    *ipcv1.VPNPeerRefusal
+	installed  *ipcv1.VPNPeer
+	removed    *ipcv1.RemoveVPNPeerRequest
+	reconciled *ipcv1.ReconcileVPNPeersRequest
 }
 
 func (f *fakeVPNPlanes) InstallVPNPeer(_ context.Context, req *ipcv1.InstallVPNPeerRequest) *ipcv1.InstallVPNPeerResponse {
@@ -214,6 +215,11 @@ func (f *fakeVPNPlanes) InstallVPNPeer(_ context.Context, req *ipcv1.InstallVPNP
 func (f *fakeVPNPlanes) RemoveVPNPeer(_ context.Context, req *ipcv1.RemoveVPNPeerRequest) *ipcv1.RemoveVPNPeerResponse {
 	f.removed = req
 	return &ipcv1.RemoveVPNPeerResponse{Refusal: f.refusal}
+}
+
+func (f *fakeVPNPlanes) ReconcileVPNPeers(_ context.Context, req *ipcv1.ReconcileVPNPeersRequest) *ipcv1.ReconcileVPNPeersResponse {
+	f.reconciled = req
+	return &ipcv1.ReconcileVPNPeersResponse{Refusal: f.refusal}
 }
 
 func TestVPNPeer_ForwardsToTheHostedPlanes(t *testing.T) {
@@ -240,6 +246,15 @@ func TestVPNPeer_ForwardsToTheHostedPlanes(t *testing.T) {
 	}
 	if removed.GetRefusal() != nil || planes.removed.GetLeaseId() != "l1" || planes.removed.GetDataPlane() != "masque" {
 		t.Fatalf("remove = %v, planes saw %v", removed.GetRefusal(), planes.removed)
+	}
+
+	reconciled, err := client.ReconcileVPNPeers(testContext(t), &ipcv1.ReconcileVPNPeersRequest{DataPlane: "masque", LeaseIds: []string{"l2"}})
+	if err != nil {
+		t.Fatalf("ReconcileVPNPeers: %v", err)
+	}
+	if reconciled.GetRefusal() != nil || planes.reconciled.GetDataPlane() != "masque" ||
+		len(planes.reconciled.GetLeaseIds()) != 1 || planes.reconciled.GetLeaseIds()[0] != "l2" {
+		t.Fatalf("reconcile = %v, planes saw %v", reconciled.GetRefusal(), planes.reconciled)
 	}
 }
 

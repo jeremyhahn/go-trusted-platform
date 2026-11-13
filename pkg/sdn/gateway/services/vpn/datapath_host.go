@@ -80,6 +80,30 @@ func (h *PlaneHost) RemoveVPNPeer(ctx context.Context, req *ipcv1.RemoveVPNPeerR
 	return &ipcv1.RemoveVPNPeerResponse{Refusal: refusalOf(h.remove(ctx, req))}
 }
 
+// ReconcileVPNPeers removes from the plane the request names every peer
+// whose lease is not in the request: the plane outlives a vpn child that
+// died between a revoke's record deletion and its peer removal.
+func (h *PlaneHost) ReconcileVPNPeers(ctx context.Context, req *ipcv1.ReconcileVPNPeersRequest) *ipcv1.ReconcileVPNPeersResponse {
+	return &ipcv1.ReconcileVPNPeersResponse{Refusal: refusalOf(h.reconcile(ctx, req))}
+}
+
+func (h *PlaneHost) reconcile(ctx context.Context, req *ipcv1.ReconcileVPNPeersRequest) error {
+	kind := DataPlaneKind(req.GetDataPlane())
+	plane, err := h.plane(kind)
+	if err != nil {
+		return err
+	}
+	r, ok := plane.(PeerReconciler)
+	if !ok {
+		return &ErrDataPlaneUnavailable{Kind: kind, Cause: errors.New("the plane cannot reconcile its peers")}
+	}
+	keep := make([]LeaseID, 0, len(req.GetLeaseIds()))
+	for _, id := range req.GetLeaseIds() {
+		keep = append(keep, LeaseID(id))
+	}
+	return r.ReconcilePeers(ctx, keep)
+}
+
 func (h *PlaneHost) install(ctx context.Context, peer *ipcv1.VPNPeer) error {
 	lease, err := leaseFromPeer(peer)
 	if err != nil {

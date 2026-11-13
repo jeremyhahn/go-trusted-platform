@@ -40,9 +40,35 @@ func (s *Service) Restore(ctx context.Context) error {
 		return &ErrLeaseStoreUnavailable{Cause: err}
 	}
 	var errs []error
+	if err := s.reconcilePeers(ctx, leases); err != nil {
+		errs = append(errs, err)
+	}
 	for _, l := range leases {
 		if err := s.restore(ctx, l); err != nil {
 			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// reconcilePeers removes from every plane that outlives the service each
+// peer whose lease is not among the stored leases: a revoke that deleted the
+// record and died before it removed the peer leaves that peer behind.
+func (s *Service) reconcilePeers(ctx context.Context, leases []*Lease) error {
+	var errs []error
+	for kind, plane := range s.deps.DataPlanes {
+		r, ok := plane.(PeerReconciler)
+		if !ok {
+			continue
+		}
+		keep := make([]LeaseID, 0, len(leases))
+		for _, l := range leases {
+			if l.DataPlane == kind {
+				keep = append(keep, l.ID)
+			}
+		}
+		if err := r.ReconcilePeers(ctx, keep); err != nil {
+			errs = append(errs, &ErrDataPlaneUnavailable{Kind: kind, Cause: err})
 		}
 	}
 	return errors.Join(errs...)

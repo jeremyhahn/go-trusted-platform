@@ -44,6 +44,10 @@ service DatapathService {
   rpc InstallVPNPeer(InstallVPNPeerRequest) returns (InstallVPNPeerResponse);
   // RemoveVPNPeer removes a lease's peer from the data plane it names.
   rpc RemoveVPNPeer(RemoveVPNPeerRequest) returns (RemoveVPNPeerResponse);
+  // ReconcileVPNPeers removes from the data plane it names every peer whose
+  // lease is not in lease_ids. A restarted vpn child sends its stored leases
+  // so a peer whose record a revoke deleted before the child died is removed.
+  rpc ReconcileVPNPeers(ReconcileVPNPeersRequest) returns (ReconcileVPNPeersResponse);
 }
 
 // GatewayServicesService is platformd's live read and control surface on the
@@ -158,6 +162,17 @@ message RemoveVPNPeerRequest {
 
 message RemoveVPNPeerResponse {
   // refusal is absent when the peer was removed or was not installed.
+  VPNPeerRefusal refusal = 1;
+}
+
+message ReconcileVPNPeersRequest {
+  string data_plane = 1;
+  // lease_ids are the leases whose peers stay; every other peer goes.
+  repeated string lease_ids = 2;
+}
+
+message ReconcileVPNPeersResponse {
+  // refusal is absent when every peer outside lease_ids was removed.
   VPNPeerRefusal refusal = 1;
 }
 

@@ -46,6 +46,13 @@ func (p *hostPeers) RemoveVPNPeer(ctx context.Context, req *ipcv1.RemoveVPNPeerR
 	return p.host.RemoveVPNPeer(ctx, req), nil
 }
 
+func (p *hostPeers) ReconcileVPNPeers(ctx context.Context, req *ipcv1.ReconcileVPNPeersRequest) (*ipcv1.ReconcileVPNPeersResponse, error) {
+	if p.err != nil {
+		return nil, p.err
+	}
+	return p.host.ReconcileVPNPeers(ctx, req), nil
+}
+
 // refusingPeers answers every RPC with refusal.
 type refusingPeers struct{ refusal *ipcv1.VPNPeerRefusal }
 
@@ -55,6 +62,10 @@ func (p *refusingPeers) InstallVPNPeer(context.Context, *ipcv1.InstallVPNPeerReq
 
 func (p *refusingPeers) RemoveVPNPeer(context.Context, *ipcv1.RemoveVPNPeerRequest) (*ipcv1.RemoveVPNPeerResponse, error) {
 	return &ipcv1.RemoveVPNPeerResponse{Refusal: p.refusal}, nil
+}
+
+func (p *refusingPeers) ReconcileVPNPeers(context.Context, *ipcv1.ReconcileVPNPeersRequest) (*ipcv1.ReconcileVPNPeersResponse, error) {
+	return &ipcv1.ReconcileVPNPeersResponse{Refusal: p.refusal}, nil
 }
 
 func clientLease(id LeaseID) *Lease {
@@ -89,6 +100,27 @@ func TestDatapathPlane_InstallAndRemoveReachTheChildsPlane(t *testing.T) {
 
 	require.NoError(t, p.RemovePeer(context.Background(), "l1"))
 	assert.Equal(t, []LeaseID{"l1"}, plane.removed)
+}
+
+// TestDatapathPlane_ReconcileReachesTheChildsPlane covers the vpn child's
+// restart reconcile over the datapath RPC: the child's plane drops every peer
+// whose lease the request does not keep.
+func TestDatapathPlane_ReconcileReachesTheChildsPlane(t *testing.T) {
+	var log []string
+	plane := newManagedFakePlane(DataPlaneMASQUE, &log)
+	p := datapathOf(t, plane)
+	require.NoError(t, p.InstallPeer(context.Background(), clientLease("l1")))
+	require.NoError(t, p.InstallPeer(context.Background(), clientLease("l2")))
+
+	require.NoError(t, p.ReconcilePeers(context.Background(), []LeaseID{"l1"}))
+	assert.Contains(t, plane.installed, LeaseID("l1"))
+	assert.NotContains(t, plane.installed, LeaseID("l2"))
+	assert.Equal(t, []LeaseID{"l2"}, plane.removed)
+
+	unreachable, err := NewDatapathPlane(DataPlaneMASQUE, &hostPeers{host: hostOf(t, plane), err: errors.New("socket closed")})
+	require.NoError(t, err)
+	var unavailable *ErrDataPlaneUnavailable
+	require.ErrorAs(t, unreachable.ReconcilePeers(context.Background(), nil), &unavailable)
 }
 
 func TestDatapathPlane_RefusesANilLeaseWithoutAnRPC(t *testing.T) {
