@@ -76,4 +76,33 @@ describe('PlatformService daemon operations', () => {
     expect(calls[0]?.url).toMatch(new RegExp(`/v1/platform/services/kms/${action}$`));
     expect(res.data).toEqual(body);
   });
+
+  // A lifecycle POST whose response is lost after the server acted must not
+  // be sent again: the daemon has no idempotency key, so a retried restart
+  // would stop and start the service twice.
+  it.each([
+    ['startService', 'start'],
+    ['stopService', 'stop'],
+    ['restartService', 'restart'],
+  ] as const)('%s is sent once when the response is lost', async (method, action) => {
+    const calls: Call[] = [];
+    const fetchImpl = ((url: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ method: init?.method ?? 'GET', url: String(url) });
+      if (calls.length === 1) {
+        return Promise.reject(new TypeError('Failed to fetch'));
+      }
+      return Promise.resolve(new Response(JSON.stringify({ service: 'kms', action, success: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }));
+    }) as unknown as typeof fetch;
+    const client = new ApiClient({
+      baseUrl: '/api',
+      fetch: fetchImpl,
+      retry: { maxRetries: 3, initialDelayMs: 1, maxDelayMs: 1, retryOnNetworkError: true },
+    });
+    const res = await new PlatformService(client)[method]('kms');
+    expect(calls).toHaveLength(1);
+    expect(res.success).toBe(false);
+  });
 });
