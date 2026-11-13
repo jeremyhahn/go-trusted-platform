@@ -167,7 +167,7 @@ machine and use the root's `--server`, `--transport` and credentials.
 
 | Verb | Flag | Type | Required | Meaning |
 |---|---|---|---|---|
-| `authorize` | `--target-vlan` | uint32 | | VLAN to move the device to (`0` for the one its profile names) |
+| `authorize` | `--target-vlan` | uint32 | **yes** | VLAN to move the device to (1-4094) |
 | `quarantine` | `--reason` | string | **yes** | Why the device is quarantined |
 
 **Authorizing is the step that lets an unknown machine onto the network.**
