@@ -41,7 +41,7 @@ describe('VTPMService.importBundle', () => {
     const result = await service.importBundle(archive);
 
     expect(mockClient.post).toHaveBeenCalledTimes(1);
-    const [path, body] = vi.mocked(mockClient.post).mock.calls[0];
+    const [path, body] = vi.mocked(mockClient.post).mock.calls[0]!;
     expect(path).toMatch(/\/v1\/vtpm\/bundles\/import$/);
     expect(body).toBe(archive);
     expect(result.data).toEqual(payload);
