@@ -2192,12 +2192,9 @@ test.describe('IAM Management', () => {
       // Wait for network to settle
       await page.waitForLoadState('networkidle').catch(() => {});
 
-      // Wait for any loading state to complete
-      await page.waitForTimeout(500);
-
       // Verify groups page loaded - with fallback
       const headingVisible = await page.getByRole('heading', { name: 'Groups', exact: true })
-        .isVisible({ timeout: 10000 }).catch(() => false);
+        .waitFor({ state: 'visible', timeout: 10000 }).then(() => true, () => false);
 
       if (!headingVisible) {
         // Check for loading state or any IAM content
@@ -2224,27 +2221,27 @@ test.describe('IAM Management', () => {
         // No actions menu, try clicking the row
         try {
           await groupRow.click();
-          await page.waitForTimeout(500);
+          await page.waitForURL(/\/iam\/groups\/[^/?]+/, { timeout: 5000 }).catch(() => {});
         } catch {
           expect(true).toBe(true);
           return;
         }
       } else {
         await actionsButton.click();
-        await page.waitForTimeout(300);
 
         // Try to find view/edit menu item
         const viewMenuItem = page.getByRole('menuitem', { name: /view|manage members|details|edit/i }).first();
-        const viewVisible = await viewMenuItem.isVisible({ timeout: 2000 }).catch(() => false);
+        const viewVisible = await viewMenuItem
+          .waitFor({ state: 'visible', timeout: 2000 }).then(() => true, () => false);
 
         if (viewVisible) {
           await viewMenuItem.click();
-          await page.waitForTimeout(500);
+          await page.waitForURL(/\/iam\/groups\/[^/?]+/, { timeout: 5000 }).catch(() => {});
         } else {
           await page.keyboard.press('Escape');
-          await page.waitForTimeout(200);
+          await expect(page.getByRole('menu')).toBeHidden();
           await groupRow.click().catch(() => {});
-          await page.waitForTimeout(500);
+          await page.waitForURL(/\/iam\/groups\/[^/?]+/, { timeout: 5000 }).catch(() => {});
         }
       }
 
@@ -2258,11 +2255,10 @@ test.describe('IAM Management', () => {
 
         if (removeVisible) {
           await removeMemberButton.click();
-          await page.waitForTimeout(500);
 
           // Check for success message
           const successVisible = await page.getByText(/member removed|removed|successfully/i)
-            .first().isVisible({ timeout: 3000 }).catch(() => false);
+            .first().waitFor({ state: 'visible', timeout: 3000 }).then(() => true, () => false);
           expect(successVisible || true).toBe(true);
         } else {
           // No remove button - page may not show members or limited UI
@@ -2340,9 +2336,7 @@ test.describe('IAM Management', () => {
           navigationSucceeded = true;
           break;
         } catch (error) {
-          if (attempt < 2) {
-            await page.waitForTimeout(1000);
-          }
+          // Retry the navigation at once
         }
       }
 
@@ -2358,9 +2352,6 @@ test.describe('IAM Management', () => {
         // Network idle timeout is acceptable, continue with test
       });
 
-      // Give the page time to render
-      await page.waitForTimeout(500);
-
       // Track multiple success conditions - test passes if ANY are met
       let pageLoaded = false;
       let headingVisible = false;
@@ -2374,7 +2365,7 @@ test.describe('IAM Management', () => {
 
         // Check if the page loads - it might be Access Control or Permissions heading
         headingVisible = await page.getByRole('heading', { name: /access control|permissions/i })
-          .isVisible({ timeout: 5000 }).catch(() => false);
+          .waitFor({ state: 'visible', timeout: 5000 }).then(() => true, () => false);
 
         // Check for any IAM-related heading as fallback
         if (!headingVisible) {
@@ -2389,13 +2380,11 @@ test.describe('IAM Management', () => {
           await permissionsTab.click().catch(() => {
             // Tab click failed, but we found it
           });
-          // Wait for tab content to load
-          await page.waitForTimeout(300);
         }
 
         // Check for permissions content with multiple selectors
         permissionsContentVisible = await page.getByText(/devices:read/i)
-          .first().isVisible({ timeout: 3000 }).catch(() => false);
+          .first().waitFor({ state: 'visible', timeout: 3000 }).then(() => true, () => false);
 
         if (!permissionsContentVisible) {
           // Try alternative permission text patterns
