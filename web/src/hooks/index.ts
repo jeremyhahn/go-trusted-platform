@@ -121,6 +121,13 @@ export type { BMCState, BMCPart, UseBMCResult } from './use-bmc';
 export { useIAMTenants } from './use-iam-tenants';
 export type { UseIAMTenantsResult } from './use-iam-tenants';
 
+export { useGatewayBgp } from './use-gateway-bgp';
+export type {
+  GatewayBGPPeer,
+  GatewayAnnouncedPrefix,
+  GatewayIPAllocation,
+  UseGatewayBgpResult,
+} from './use-gateway-bgp';
 export { useReportedGateways } from './use-reported-gateways';
 
 export {
