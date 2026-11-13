@@ -1,5 +1,5 @@
 # code-review-template: v5.10.5 -- the code review in Gitea or GitHub CI for a pull request
-# review-gate: v5.11.0 (Company Agent ruling 589): the required `Code Review (codex)` check is the `gate` job at the end; the review job is `Codex review`.
+# review-gate: v5.11.1 (Company Agent ruling 589): the required `Code Review (codex)` check is the `gate` job at the end; the review job is `Codex review`.
 # that carries `code-review` and `task:ready`, routed by its labels through
 # route-labels (labels.md §2). Codex on the `codex` runner reviews every such
 # PR; `agent:opencode` adds an advisory COMMENT review by the opencode job on
@@ -3226,7 +3226,7 @@ jobs:
   # job is now `Codex review`; this job carries the required name, always
   # runs (no `if:` can skip it), and passes only when
   #   (a) every file the PR changes, base commit to head, is on the owner's
-  #       no-review list (NO_REVIEW_PATHS: docs, CI and process config), or
+  #       no-review list (NO_REVIEW_PATHS: docs and CI config), or
   #   (b) $REVIEWER's latest standing verdict ON THIS HEAD is APPROVED.
   # Anything else fails, the label missing included: no approval, a
   # REQUEST_CHANGES, an approval of another head, a fork head, an unreadable
@@ -3253,9 +3253,10 @@ jobs:
       EVENT_SHA: ${{ github.event.pull_request.head.sha }}
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
       BASE_REF: ${{ github.event.pull_request.base.ref }}
-      # CUSTOMIZE only to narrow it. An extended regex over the whole path;
+      # CUSTOMIZE only to narrow it (ruling 589: docs/, *.md, .github/ or
+      # .gitea/, changelog.d/ and nothing else). An extended regex over the whole path;
       # a rename must match on both its old and its new path.
-      NO_REVIEW_PATHS: '^(docs/.+|[^/]+\.md|(.+/)?README\.md|\.github/.+|\.gitea/.+|\.claude/.+|CODEOWNERS|\.gitignore|\.gitattributes|\.editorconfig|LICENSE[^/]*|NOTICE)$'
+      NO_REVIEW_PATHS: '^(docs/.+|(.+/)?[^/]+\.md|\.github/.+|\.gitea/.+|(.+/)?changelog\.d/.+)$'
     steps:
       - name: Require a Codex approval of the head, or a no-review change
         run: |
@@ -3314,7 +3315,7 @@ jobs:
             [ "$outside" = 0 ] && exempt=1
           fi
           if [ "$exempt" = 1 ]; then
-            echo "All $n changed files are on the no-review list (docs, CI and process config); no review is required."
+            echo "All $n changed files are on the no-review list (docs and CI config); no review is required."
             exit 0
           fi
           echo "$n changed files; at least one is code, so $REVIEWER must approve $EVENT_SHA."
