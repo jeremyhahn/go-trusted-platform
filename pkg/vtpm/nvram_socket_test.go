@@ -30,8 +30,6 @@ import (
 	"github.com/google/go-tpm-tools/simulator"
 	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/stretchr/testify/require"
-
-	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil/socktest"
 )
 
 // tpmHeaderSize is the size of a TPM command header: tag, size, command code.
@@ -62,7 +60,7 @@ func newSimulatorSocket(t *testing.T) *simulatorSocket {
 	t.Helper()
 
 	s := &simulatorSocket{
-		path: filepath.Join(socktest.Dir(t), "swtpm.sock"),
+		path: filepath.Join(shortSocketDir(t), "swtpm.sock"),
 		sim:  newSimulator(t),
 	}
 	tpm := transport.FromReadWriter(s.sim)

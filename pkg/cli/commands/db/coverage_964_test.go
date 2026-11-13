@@ -18,7 +18,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
-	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil/socktest"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	dbsvc "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/db"
 )
@@ -66,7 +65,7 @@ func (f *fakeDBDaemon) DumpEntityType(req *platformv1.DumpEntityTypeRequest, str
 // local context dials it.
 func startDBDaemon(t *testing.T, fake *fakeDBDaemon) *cli.CommonFlags {
 	t.Helper()
-	sock := filepath.Join(socktest.Dir(t), "platformd.sock")
+	sock := filepath.Join(shortSocketDir(t), "platformd.sock")
 	lis, err := net.Listen("unix", sock)
 	require.NoError(t, err)
 

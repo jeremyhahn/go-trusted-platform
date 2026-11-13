@@ -30,7 +30,6 @@ import {
 } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
 import { useIDevID, useDevice, useMutation } from '@/hooks';
-import type { IssueIDevIDInput } from '@/types/device';
 
 const idevidFormSchema = z.object({
   deviceId: z.string().min(1, 'Device is required'),
@@ -78,7 +77,7 @@ export function IDevIDForm({ onSuccess, onCancel }: IDevIDFormProps) {
         if (response.data?.devices) {
           setDevices(response.data.devices.map((d) => ({ id: d.id.toString(), name: d.serial || d.id.toString() })));
         }
-      } catch (error) {
+      } catch {
         toast({
           title: 'Error',
           description: 'Failed to load devices',
