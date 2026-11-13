@@ -483,6 +483,10 @@ func (s *ProfileService) UnassignFromDevice(ctx context.Context, profileID uint6
 	profile.EKSerial = ""
 	profile.MACAddress = ""
 	profile.EKCert = ""
+	// The DICE device id binds the profile to one device like the EK serial
+	// does; a detached profile must not resolve by it. The golden FWHash
+	// describes the firmware build, not the device, so it stays.
+	profile.DICEDeviceID = ""
 	profile.Assigned = false
 	profile.AssignedAt = time.Time{}
 
