@@ -210,6 +210,42 @@ describe("TenantLifecyclePage", () => {
     expect(screen.queryByText("Tenant sync started")).toBeNull();
   });
 
+  it("a failed quota check after a successful one shows no earlier answer", async () => {
+    service.checkQuota.mockImplementationOnce(() => ok({ available: true, message: "" }));
+    service.checkQuota.mockImplementationOnce(() =>
+      Promise.resolve({ success: false, error: { message: "quota service unavailable" } })
+    );
+    await lookUp();
+    fireEvent.click(screen.getByRole("button", { name: "Check quota" }));
+    expect((await screen.findByTestId("quota-check-result")).textContent).toContain("Available");
+    fireEvent.change(screen.getByLabelText("Amount"), { target: { value: "7" } });
+    fireEvent.click(screen.getByRole("button", { name: "Check quota" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("quota service unavailable");
+    expect(service.checkQuota).toHaveBeenLastCalledWith({ tenantId: "t1", resource: "vms", amount: 7 });
+    expect(screen.queryByTestId("quota-check-result")).toBeNull();
+  });
+
+  it("a quota answer is hidden once the resource or amount changes", async () => {
+    service.checkQuota.mockImplementation(() => ok({ available: true, message: "" }));
+    await lookUp();
+    fireEvent.click(screen.getByRole("button", { name: "Check quota" }));
+    await screen.findByTestId("quota-check-result");
+    fireEvent.change(screen.getByLabelText("Amount"), { target: { value: "9" } });
+    expect(screen.queryByTestId("quota-check-result")).toBeNull();
+  });
+
+  it("an empty display name cannot be saved, since UpdateTenant ignores it", async () => {
+    service.updateTenant.mockImplementation(() => ok({ tenant }));
+    await lookUp();
+    fireEvent.change(screen.getByLabelText("Display name"), { target: { value: "  " } });
+    const save = screen.getByRole("button", { name: "Save" }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    fireEvent.submit(save.closest("form")!);
+    await flush();
+    expect(service.updateTenant).not.toHaveBeenCalled();
+    expect(screen.queryByText("Tenant updated")).toBeNull();
+  });
+
   it("sync reports started when the status reports success", async () => {
     service.syncTenants.mockImplementation(() => ok({ status: { success: true, message: "ok" } }));
     render(<TenantLifecyclePage />);
