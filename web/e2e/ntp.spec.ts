@@ -266,6 +266,27 @@ test.describe('NTP', () => {
     expect(calls.status).toBe(before + 1);
   });
 
+  test('keeps the Step status, marked stale, when the next refresh fails', async ({ page }) => {
+    const unavailable = { status: 503, error: 'ntp: chronyd unavailable', errorCode: 'UNAVAILABLE' } as ApiError;
+    let fail = false;
+    await mockNTPApi(page, { statusResponder: () => (fail ? unavailable : null) });
+
+    await page.goto('/networking/ntp');
+    const card = page.getByTestId('ntp-status-card');
+    await expect(card.getByText('time-ref-a')).toBeVisible();
+
+    await page.getByRole('button', { name: /step clock/i }).click();
+    await page.getByRole('dialog').getByRole('button', { name: /confirm step/i }).click();
+    await expect(card.getByText('time-ref-stepped')).toBeVisible();
+
+    // The refresh fails: the Step response stays as the last successful read.
+    fail = true;
+    await page.getByRole('button', { name: 'Refresh' }).click();
+    await expect(card.getByTestId('ntp-status-stale')).toBeVisible({ timeout: 20_000 });
+    await expect(card.getByText('time-ref-stepped')).toBeVisible();
+    await expect(card.getByText('time-ref-a')).toHaveCount(0);
+  });
+
   test('keeps the dialog open when the step is refused (Step, 409)', async ({ page }) => {
     const calls = await mockNTPApi(page, {
       stepError: { status: 409, error: 'ntp: no reachable source', errorCode: 'ABORTED' } as ApiError,
