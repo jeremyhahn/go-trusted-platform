@@ -104,34 +104,43 @@ function unwrap<T>(body: unknown): T | undefined {
  * SDK's built bundle, so this hook calls the REST routes directly with
  * the session cookie, as useReportedGateways does.
  */
+interface Listing {
+  base: string;
+  users: BMCUserSlot[];
+  error: string | null;
+}
+
+const EMPTY_USERS: BMCUserSlot[] = [];
+
 export function useBMCUsers(profileID: string): UseBMCUsersResult {
   const base = `/api/v1/bmc/${encodeURIComponent(profileID)}`;
-  const [users, setUsers] = React.useState<BMCUserSlot[]>([]);
-  const [isLoading, setIsLoading] = React.useState(true);
-  const [error, setError] = React.useState<string | null>(null);
-  // The base whose listing last succeeded; null while none has.
-  const [listedFor, setListedFor] = React.useState<string | null>(null);
+  // The last settled listing, tagged with the base it was read from. Rows
+  // and errors of another profile are never shown for this one.
+  const [listing, setListing] = React.useState<Listing | null>(null);
+  // True while a refetch of the current base is in flight.
+  const [refreshing, setRefreshing] = React.useState(false);
+  // Each load takes a number; only the newest load may set state, so a
+  // superseded request (an earlier profile, an earlier refetch) is dropped.
+  const seq = React.useRef(0);
 
   // load sets state only once the request settles, so the mount effect
   // below never sets state synchronously (react-hooks/set-state-in-effect).
   const load = React.useCallback(async () => {
+    const mine = ++seq.current;
+    let next: Listing;
     try {
       const list = unwrap<BMCUserSlot[]>(await call('GET', `${base}/users`));
-      setUsers(Array.isArray(list) ? list : []);
-      setError(null);
-      setListedFor(base);
+      next = { base, users: Array.isArray(list) ? list : [], error: null };
     } catch (e: unknown) {
-      setUsers([]);
-      setListedFor(null);
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setIsLoading(false);
+      next = { base, users: [], error: e instanceof Error ? e.message : String(e) };
     }
+    if (mine !== seq.current) return;
+    setListing(next);
+    setRefreshing(false);
   }, [base]);
 
   const refetch = React.useCallback(async () => {
-    setListedFor(null);
-    setIsLoading(true);
+    setRefreshing(true);
     await load();
   }, [load]);
 
@@ -150,35 +159,54 @@ export function useBMCUsers(profileID: string): UseBMCUsersResult {
     };
   }, [load, profileID]);
 
+  const current = listing !== null && listing.base === base ? listing : null;
+  const users = current ? current.users : EMPTY_USERS;
+  const error = current ? current.error : null;
+  const isLoading = current === null || refreshing;
+  const listed = current !== null && !refreshing && current.error === null;
+
+  // A slot names a row of the listing on screen. Until the current
+  // profile has listed (a profile change or a reload is in flight) the rows
+  // may be another profile's, so slot mutations are refused, not sent.
+  const requireListed = React.useCallback(() => {
+    if (!listed) {
+      throw new Error('BMC users are still loading for this profile; try again once they are listed');
+    }
+  }, [listed]);
+
   const createUser = React.useCallback(
     async (input: CreateBMCUserInput) => {
+      requireListed();
       await call('POST', `${base}/users`, input);
       await refetch();
     },
-    [base, refetch]
+    [base, refetch, requireListed]
   );
 
   const deleteUser = React.useCallback(
     async (slot: number) => {
+      requireListed();
       await call('DELETE', `${base}/users/${slot}`);
       await refetch();
     },
-    [base, refetch]
+    [base, refetch, requireListed]
   );
 
   const setUserPassword = React.useCallback(
     async (slot: number, password: string) => {
+      requireListed();
       await call('PUT', `${base}/users/${slot}/password`, { password });
     },
-    [base]
+    [base, requireListed]
   );
 
   const setUserPrivilege = React.useCallback(
     async (slot: number, privilege: BMCPrivilege, channel: number) => {
+      requireListed();
       await call('PUT', `${base}/users/${slot}/privilege`, { privilege, channel });
       await refetch();
     },
-    [base, refetch]
+    [base, refetch, requireListed]
   );
 
   const replaceWebCertificate = React.useCallback(
@@ -192,7 +220,7 @@ export function useBMCUsers(profileID: string): UseBMCUsersResult {
     users,
     isLoading,
     error,
-    listed: listedFor === base && !isLoading && error === null,
+    listed,
     refetch,
     createUser,
     deleteUser,

@@ -65,7 +65,10 @@ export default function BMCUsersClient() {
   const bmc = useBMCUsers(profileID);
 
   const [dialog, setDialog] = useState<DialogKind>(null);
-  const [target, setTarget] = useState<BMCUserSlot | null>(null);
+  // The row a dialog acts on, tagged with the profile it was picked from:
+  // after a profile change it no longer names a slot of this BMC.
+  const [picked, setPicked] = useState<{ profileID: string; user: BMCUserSlot } | null>(null);
+  const target = picked !== null && picked.profileID === profileID ? picked.user : null;
   const [busy, setBusy] = useState(false);
 
   const [createForm, setCreateForm] = useState({
@@ -86,8 +89,10 @@ export default function BMCUsersClient() {
   const open = (kind: DialogKind, user: BMCUserSlot | null = null) => {
     // CreateUser overwrites whatever holds the slot, so a free slot is only
     // known once the current profile's listing has succeeded.
-    if (kind === 'create' && !bmc.listed) return;
-    setTarget(user);
+    // Row actions likewise wait for it: until then the rows may be another
+    // profile's.
+    if ((kind === 'create' || user !== null) && !bmc.listed) return;
+    setPicked(user ? { profileID, user } : null);
     if (kind === 'create') {
       setCreateForm((f) => ({ ...f, slot: String(firstFreeSlot(bmc.users)) }));
       setCreateError(null);
@@ -191,6 +196,7 @@ export default function BMCUsersClient() {
                           size="sm"
                           aria-label={`Set password of ${u.username}`}
                           onClick={() => open('password', u)}
+                          disabled={!bmc.listed}
                         >
                           <KeyRound className="h-4 w-4" />
                         </Button>
@@ -199,6 +205,7 @@ export default function BMCUsersClient() {
                           size="sm"
                           aria-label={`Set privilege of ${u.username}`}
                           onClick={() => open('privilege', u)}
+                          disabled={!bmc.listed}
                         >
                           <UserCog className="h-4 w-4" />
                         </Button>
@@ -207,6 +214,7 @@ export default function BMCUsersClient() {
                           size="sm"
                           aria-label={`Delete ${u.username}`}
                           onClick={() => open('delete', u)}
+                          disabled={!bmc.listed}
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>
