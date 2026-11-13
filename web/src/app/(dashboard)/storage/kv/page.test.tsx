@@ -238,6 +238,21 @@ describe("KVStorePage", () => {
     expect(screen.getByLabelText("Key")).toBeTruthy();
   });
 
+  it("reports a value btoa cannot encode and frees the Save button", async () => {
+    // btoa throws an InvalidCharacterError DOMException (code 5) for a
+    // character outside Latin-1; the hook rethrows a coded error unreported.
+    await renderPage();
+    fireEvent.click(screen.getByRole("button", { name: /Add Entry/ }));
+    fireEvent.change(await screen.findByLabelText("Key"), { target: { value: "config/price" } });
+    fireEvent.change(screen.getByLabelText("Value"), { target: { value: "5 €" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Entry" }));
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Error saving entry", variant: "destructive" })),
+    );
+    expect(kv.put).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Save Entry" }).hasAttribute("disabled")).toBe(false);
+  });
+
   it("deletes an entry only after confirmation, and reports a refusal", async () => {
     const confirm = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
     vi.stubGlobal("confirm", confirm);
