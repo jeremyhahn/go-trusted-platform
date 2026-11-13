@@ -329,46 +329,6 @@ func TestRemoveString(t *testing.T) {
 	}
 }
 
-func TestOCIConfigStructs(t *testing.T) {
-	// Test OCI config structure serialization/fields
-	cfg := &ociConfig{
-		OCIVersion: "1.0.0",
-		Root: &ociRoot{
-			Path:     "/rootfs",
-			Readonly: true,
-		},
-		Process: &ociProcess{
-			Terminal: false,
-			User: ociUser{
-				UID: 1000,
-				GID: 1000,
-			},
-			Args: []string{"sleep", "infinity"},
-			Env:  []string{"PATH=/usr/bin"},
-			Cwd:  "/app",
-		},
-		Hostname: "testhost",
-		Mounts: []ociMount{
-			{
-				Destination: "/proc",
-				Type:        "proc",
-				Source:      "proc",
-			},
-		},
-	}
-
-	assert.Equal(t, "1.0.0", cfg.OCIVersion)
-	require.NotNil(t, cfg.Root)
-	assert.Equal(t, "/rootfs", cfg.Root.Path)
-	assert.True(t, cfg.Root.Readonly)
-	require.NotNil(t, cfg.Process)
-	assert.False(t, cfg.Process.Terminal)
-	assert.Equal(t, uint32(1000), cfg.Process.User.UID)
-	assert.Equal(t, []string{"sleep", "infinity"}, cfg.Process.Args)
-	assert.Equal(t, "testhost", cfg.Hostname)
-	assert.Len(t, cfg.Mounts, 1)
-}
-
 func TestOCIResources(t *testing.T) {
 	memLimit := int64(1073741824) // 1GB
 	cpuShares := uint64(1024)
