@@ -58,6 +58,7 @@ export default function NTPPage() {
   const {
     data: statusData,
     isLoading: statusLoading,
+    isFetching: statusFetching,
     refetch: fetchStatus,
   } = useApi(() => ntp.getStatus(), [], {
     onSuccess: () => {
@@ -77,6 +78,7 @@ export default function NTPPage() {
     data: sourcesData,
     error: sourcesError,
     isLoading: sourcesLoading,
+    isFetching: sourcesFetching,
     refetch: fetchSources,
   } = useApi(() => ntp.listSources(), [], {
     onError: (err) => {
@@ -95,9 +97,12 @@ export default function NTPPage() {
   // pending.
   const statusStale = Boolean(staleError && status);
   const sources = sourcesData?.sources ?? [];
-  const loading = statusLoading || sourcesLoading;
+  // useApi applies responses in completion order, so a refresh never starts
+  // while a read is in flight: an older response cannot overwrite a newer one.
+  const loading = statusLoading || sourcesLoading || statusFetching || sourcesFetching;
 
   const refresh = () => {
+    if (loading) return;
     setSteppedStatus(null);
     void fetchStatus();
     void fetchSources();
