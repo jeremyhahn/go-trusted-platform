@@ -206,6 +206,46 @@ func (handler *RestHandler) RefreshToken(w http.ResponseWriter, r *http.Request)
 	handler.responseWriter.Success200(w, r, tokenString)
 }
 
+// Logout signs the caller's session out server-side (#215).
+//
+// Logout used to be a browser-only affair: the console deleted its cookie
+// and the token stayed valid until it expired, so any copy of it kept
+// working after the user signed out. Logout now revokes the presented
+// token, so every route, /login/refresh and the RPC transports refuse it
+// from then on, and also expires the session cookies for a client that
+// cannot clear them itself.
+//
+// Signing out twice succeeds: the session is gone either way. A request
+// that presents no verifiable token is 401 and revokes nothing.
+func (handler *RestHandler) Logout(w http.ResponseWriter, r *http.Request) {
+
+	handler.logger.Debugf("url: %s, method: %s, remoteAddress: %s, requestUri: %s",
+		r.URL.Path, r.Method, r.RemoteAddr, r.RequestURI)
+
+	token, _, err := handler.jwtService.ParseToken(r)
+	if err != nil {
+		handler.responseWriter.Error401(w, r, err)
+		return
+	}
+	if err := handler.jwtService.Revoke(token); err != nil && !errors.Is(err, ErrTokenRevoked) {
+		handler.logger.Debugf("rest/jwt: logout rejected: %v", err)
+		handler.responseWriter.Error401(w, r, ErrInvalidToken)
+		return
+	}
+
+	for _, name := range []string{"jwt", "token"} {
+		http.SetCookie(w, &http.Cookie{
+			Name:     name,
+			Value:    "",
+			Path:     "/",
+			MaxAge:   -1,
+			Secure:   true,
+			SameSite: http.SameSiteStrictMode,
+		})
+	}
+	handler.responseWriter.Success200(w, r, nil)
+}
+
 // Validates the raw JWT token to ensure it's not expired or contains invalid claims. This
 // is used by the negroni middleware to enforce authenticated access to procted resources.
 //
@@ -234,6 +274,12 @@ func (handler *RestHandler) Verify(
 	}
 
 	if err := handler.jwtService.Verify(token); err != nil {
+		// A signed-out session is unauthenticated, not a bad request:
+		// the console answers a 401 by sending the user to sign in.
+		if errors.Is(err, ErrTokenRevoked) {
+			handler.responseWriter.Error401(w, r, err)
+			return
+		}
 		handler.responseWriter.Error400(w, r, err)
 		return
 	}

@@ -3,7 +3,7 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { useOptionalAuth } from "@/contexts/AuthContext";
-import { clearSession } from "@/utils/session";
+import { clearSession, revokeSession } from "@/utils/session";
 
 /**
  * useLogout returns the console's single sign-out action.
@@ -24,6 +24,9 @@ export function useLogout(): () => void {
   const auth = useOptionalAuth();
 
   return React.useCallback(() => {
+    // Revoke on the server first, while the bearer is still readable
+    // (#215); AuthContext.logout and clearSession only drop local state.
+    revokeSession();
     if (auth) {
       auth.logout();
     } else {

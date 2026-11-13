@@ -37,6 +37,44 @@ func TestNewAuthenticationRouter(t *testing.T) {
 	assert.Equal(t, mockMiddleware, authRouter.middleware)
 }
 
+// logoutMiddleware is a JWT middleware that can sign a session out (#215).
+type logoutMiddleware struct {
+	MockJsonWebTokenMiddleware
+	calls int
+}
+
+func (m *logoutMiddleware) Logout(w http.ResponseWriter, _ *http.Request) {
+	m.calls++
+	w.WriteHeader(http.StatusOK)
+}
+
+func TestAuthenticationRouter_MountsLogoutOnPOST(t *testing.T) {
+	middleware := &logoutMiddleware{}
+	r := mux.NewRouter()
+	NewAuthenticationRouter(middleware).RegisterRoutes(r)
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/logout", nil))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, 1, middleware.calls)
+
+	// A GET must not sign anyone out: an <img src="/logout"> on another
+	// page would otherwise end the session.
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/logout", nil))
+	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+	assert.Equal(t, 1, middleware.calls)
+}
+
+func TestAuthenticationRouter_NoLogoutRouteWithoutALogoutHandler(t *testing.T) {
+	r := mux.NewRouter()
+	NewAuthenticationRouter(&MockJsonWebTokenMiddleware{}).RegisterRoutes(r)
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/logout", nil))
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
 func TestAuthenticationRouter_RegisterRoutes(t *testing.T) {
 	mockMiddleware := &MockJsonWebTokenMiddleware{}
 	authRouter := NewAuthenticationRouter(mockMiddleware)

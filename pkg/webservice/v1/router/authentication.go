@@ -14,6 +14,8 @@
 package router
 
 import (
+	"net/http"
+
 	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 )
@@ -35,6 +37,21 @@ func NewAuthenticationRouter(
 func (authenticationRouter *AuthenticationRouter) RegisterRoutes(router *mux.Router) {
 	authenticationRouter.login(router)
 	authenticationRouter.refreshToken(router)
+	authenticationRouter.logout(router)
+}
+
+// @Summary Sign out
+// @Description Revokes the presented JWT server-side and expires the session cookies
+// @Tags Authentication
+// @Produce json
+// @Success 200
+// @Failure 401
+// @Router /logout [post]
+// @Security JWT
+func (authenticationRouter *AuthenticationRouter) logout(router *mux.Router) {
+	if handler, ok := authenticationRouter.middleware.(middleware.LogoutHandler); ok {
+		router.HandleFunc("/logout", handler.Logout).Methods(http.MethodPost)
+	}
 }
 
 // @Summary Authenticate and obtain JWT

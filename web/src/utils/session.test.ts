@@ -1,7 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { getCookie } from "./cookie";
-import { clearSession, storeSession } from "./session";
+import { getCookie, setCookie } from "./cookie";
+import { clearSession, revokeSession, storeSession } from "./session";
 import type { Session } from "@/types/session";
 
 // The cookies a session is made of. Every one of them must be gone after
@@ -114,5 +114,63 @@ describe("clearSession", () => {
     for (const name of SESSION_COOKIES) {
       expect(getCookie(name)).toBeNull();
     }
+  });
+});
+
+// #215: signing out must revoke the bearer on the server, not only drop
+// the browser's copy of it.
+describe("revokeSession", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    wipe();
+    fetchMock = vi.fn(() => Promise.resolve(new Response(null, { status: 200 })));
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    wipe();
+  });
+
+  it("posts the bearer to the logout endpoint", () => {
+    setCookie("jwt", "the-bearer", { secure: true, sameSite: "Strict" });
+
+    revokeSession();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toMatch(/\/api\/v1\/logout$/);
+    expect(init.method).toBe("POST");
+    expect(init.keepalive).toBe(true);
+    expect((init.headers as Record<string, string>).Authorization).toBe(
+      "Bearer the-bearer",
+    );
+  });
+
+  it("sends the bearer it read even when the cookies are cleared right after", () => {
+    setCookie("jwt", "the-bearer", { secure: true, sameSite: "Strict" });
+
+    revokeSession();
+    clearSession();
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect((init.headers as Record<string, string>).Authorization).toBe(
+      "Bearer the-bearer",
+    );
+  });
+
+  it("does nothing when there is no session", () => {
+    revokeSession();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("swallows a failed request", async () => {
+    setCookie("jwt", "the-bearer", { secure: true, sameSite: "Strict" });
+    fetchMock.mockImplementation(() => Promise.reject(new Error("offline")));
+
+    expect(() => revokeSession()).not.toThrow();
+    await Promise.resolve();
   });
 });
