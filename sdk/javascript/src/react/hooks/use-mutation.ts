@@ -249,11 +249,15 @@ export function useMutation<TData, TVariables>(
       // with it. The callbacks run outside the try/catch below, so a
       // callback that throws (even rethrowing the error it was given)
       // propagates as is and is never reported a second time.
-      const fail = (mutationError: MutationError): never => {
+      // A settle callback that throws after a success is reported the same
+      // way, with settle=false so it is not called a second time.
+      const fail = (mutationError: MutationError, settle = true): never => {
         setError(mutationError);
         setStatus('error');
         optionsRef.current?.onError?.(mutationError, vars);
-        optionsRef.current?.onSettled?.(undefined, mutationError, vars);
+        if (settle) {
+          optionsRef.current?.onSettled?.(undefined, mutationError, vars);
+        }
         throw mutationError;
       };
 
@@ -290,7 +294,12 @@ export function useMutation<TData, TVariables>(
         } catch (err) {
           return fail(toMutationError(err));
         }
-        optionsRef.current?.onSettled?.(response.data, undefined, vars);
+        try {
+          optionsRef.current?.onSettled?.(response.data, undefined, vars);
+        } catch (err) {
+          // onSettled already ran once: report the failure without calling it again
+          return fail(toMutationError(err), false);
+        }
         return response.data;
       }
 

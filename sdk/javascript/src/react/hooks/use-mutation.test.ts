@@ -345,6 +345,57 @@ describe('useMutation', () => {
       expect(result.current.isError).toBe(true);
     });
 
+    it('reports a throwing onSettled through onError once (mutateAsync)', async () => {
+      const onSettled = vi.fn(() => {
+        throw new Error('settled boom');
+      });
+      const onSuccess = vi.fn();
+      const onError = vi.fn((_e: MutationError, _v: string) => undefined);
+      const { result } = setup((v: string) => Promise.resolve(ok(v.length)), {
+        onSuccess,
+        onSettled,
+        onError,
+      });
+
+      await expect(result.current.mutateAsync('abc')).rejects.toMatchObject({
+        message: 'settled boom',
+      });
+      await flush();
+      expect(onSuccess).toHaveBeenCalledTimes(1);
+      expect(onSettled).toHaveBeenCalledTimes(1);
+      expect(onError).toHaveBeenCalledTimes(1);
+      const err = onError.mock.calls[0]?.[0];
+      expect(err?.message).toBe('settled boom');
+      expect(onError).toHaveBeenCalledWith(err, 'abc');
+      expect(result.current.isError).toBe(true);
+      expect(result.current.isSuccess).toBe(false);
+      expect(result.current.error).toEqual(err);
+    });
+
+    it('reports a throwing onSettled through onError once (mutate)', async () => {
+      const onSettled = vi.fn(() => {
+        throw new Error('settled boom');
+      });
+      const onSuccess = vi.fn();
+      const onError = vi.fn((_e: MutationError, _v: string) => undefined);
+      const { result } = setup((v: string) => Promise.resolve(ok(v.length)), {
+        onSuccess,
+        onSettled,
+        onError,
+      });
+
+      expect(result.current.mutate('abc')).toBeUndefined();
+      await flush();
+      expect(onSuccess).toHaveBeenCalledTimes(1);
+      expect(onSettled).toHaveBeenCalledTimes(1);
+      expect(onError).toHaveBeenCalledTimes(1);
+      const err = onError.mock.calls[0]?.[0];
+      expect(err?.message).toBe('settled boom');
+      expect(onError).toHaveBeenCalledWith(err, 'abc');
+      expect(result.current.isError).toBe(true);
+      expect(result.current.isSuccess).toBe(false);
+    });
+
     it('treats falsy data other than undefined as a success', async () => {
       const { result } = setup(() => Promise.resolve(ok(false)));
       await expect(result.current.mutateAsync(undefined)).resolves.toBe(false);
