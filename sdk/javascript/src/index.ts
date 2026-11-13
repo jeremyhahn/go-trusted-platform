@@ -1109,6 +1109,26 @@ export type {
   BMCOperationResult,
 } from './services/bmc-service.js';
 
+// Tenant lifecycle, quota and DEK types (#1758)
+  Tenant,
+  TenantState,
+  TenantStatus,
+  TenantDEKStatus,
+  ComputeQuota,
+  NetworkQuota,
+  StorageQuota,
+  CheckQuotaRequest,
+  CheckQuotaResponse,
+  RotateTenantDEKRequest,
+  RotateTenantDEKResponse,
+  GetTenantDEKStatusResponse,
+  GetTenantByNameResponse,
+  UpdateTenantRequest,
+  UpdateTenantResponse,
+  UpdateQuotasRequest,
+  SyncTenantsResponse,
+} from './types/tenant.js';
+
 // =============================================================================
 // QuicBaaS Type Exports (28 services)
 // =============================================================================

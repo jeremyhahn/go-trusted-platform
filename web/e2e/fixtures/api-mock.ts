@@ -974,6 +974,129 @@ export async function mockIAMGroupsTenantsApi(
 }
 
 /**
+ * A tenant as the TenantService (/api/v1/tenants) returns it (#1758).
+ */
+export interface LifecycleTenant {
+  id: string;
+  name: string;
+  displayName?: string;
+  state: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** One recorded TenantService call: method, path below /api/v1/tenants, body. */
+export interface TenantLifecycleCall {
+  method: string;
+  path: string;
+  body: unknown;
+}
+
+/**
+ * Mocks the TenantService lifecycle, quota, sync and DEK routes under
+ * /api/v1/tenants and records every call it answers. Register it after
+ * mockTenantApi: the later route wins.
+ */
+export async function mockTenantLifecycleApi(
+  page: Page,
+  config: { tenant?: Partial<LifecycleTenant>; quotaAvailable?: boolean; syncFails?: boolean } = {}
+): Promise<{ calls: TenantLifecycleCall[]; tenant: () => LifecycleTenant }> {
+  const now = new Date().toISOString();
+  let tenant: LifecycleTenant = {
+    id: 'tenant-abc-123',
+    name: 'acme',
+    displayName: 'Acme Corp',
+    state: 'TENANT_STATE_ACTIVE',
+    createdAt: now,
+    updatedAt: now,
+    ...config.tenant,
+  };
+  let dekVersion = 1;
+  const calls: TenantLifecycleCall[] = [];
+
+  await page.route(/\/api\/v1\/tenants\/.+/, async (route: Route, request: Request) => {
+    const url = new URL(request.url());
+    const path = url.pathname.replace(/^.*\/api\/v1\/tenants/, '').replace(/\/$/, '');
+    const method = request.method();
+    let body: unknown = undefined;
+    try {
+      body = request.postDataJSON();
+    } catch {
+      body = request.postData();
+    }
+    calls.push({ method, path, body });
+
+    const json = (data: unknown, status = 200) =>
+      route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(data) });
+    const ok = { status: { success: true, message: 'ok' } };
+
+    if (method === 'POST' && path === '/sync') {
+      if (config.syncFails) {
+        return json({ status: { success: false, message: 'sync completed with errors: boom' } });
+      }
+      return json(ok);
+    }
+    if (method === 'GET' && path.startsWith('/by-name/')) {
+      const name = decodeURIComponent(path.slice('/by-name/'.length));
+      if (name !== tenant.name) return json({ message: 'tenant not found', code: 'NOT_FOUND' }, 404);
+      return json({ tenant });
+    }
+    const id = `/${tenant.id}`;
+    if (path === id && method === 'GET') return json({ tenant });
+    if (path === id && method === 'PUT') {
+      const update = body as { displayName?: string };
+      tenant = { ...tenant, displayName: update.displayName ?? tenant.displayName };
+      return json({ tenant });
+    }
+    if (path === id && method === 'DELETE') return json(ok);
+    if (path === `${id}/suspend` && method === 'POST') {
+      tenant = { ...tenant, state: 'TENANT_STATE_SUSPENDED' };
+      return json(ok);
+    }
+    if (path === `${id}/resume` && method === 'POST') {
+      tenant = { ...tenant, state: 'TENANT_STATE_ACTIVE' };
+      return json(ok);
+    }
+    if (path === `${id}/quotas` && method === 'GET') {
+      return json({
+        tenantId: tenant.id,
+        compute: { maxVms: 2, maxContainers: 5, maxVcpus: 8, maxMemoryMb: 4096 },
+      });
+    }
+    if (path === `${id}/quotas` && method === 'PUT') return json(ok);
+    if (path === `${id}/quota-check` && method === 'POST') {
+      const req = body as { resource: string; amount: number };
+      const available = config.quotaAvailable ?? true;
+      return json({
+        tenantId: tenant.id,
+        resource: req.resource,
+        amount: req.amount,
+        available,
+        message: available ? 'within quota' : 'quota exceeded',
+      });
+    }
+    if (path === `${id}/dek/rotate` && method === 'POST') {
+      dekVersion += 1;
+      return json({ tenantId: tenant.id, oldVersion: dekVersion - 1, newVersion: dekVersion, timestamp: now });
+    }
+    if (path === `${id}/dek` && method === 'GET') {
+      return json({
+        dekStatus: {
+          tenantId: tenant.id,
+          path: `tenants/${tenant.id}/dek`,
+          version: dekVersion,
+          algorithm: 'AES-256-GCM',
+          createdAt: now,
+        },
+      });
+    }
+    return route.continue();
+  });
+
+  return { calls, tenant: () => ({ ...tenant }) };
+}
+
+/**
  * Mock the health API endpoint.
  *
  * Handles:
