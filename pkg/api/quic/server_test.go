@@ -584,36 +584,6 @@ func TestServerStats(t *testing.T) {
 	}
 }
 
-func TestServerStatsStruct(t *testing.T) {
-	stats := &ServerStats{
-		ActiveConnections: 5,
-		TotalConnections:  100,
-		ActiveStreams:     10,
-		RequestsHandled:   1000,
-		Errors:            5,
-	}
-
-	if stats.ActiveConnections != 5 {
-		t.Errorf("expected ActiveConnections 5, got %d", stats.ActiveConnections)
-	}
-
-	if stats.TotalConnections != 100 {
-		t.Errorf("expected TotalConnections 100, got %d", stats.TotalConnections)
-	}
-
-	if stats.ActiveStreams != 10 {
-		t.Errorf("expected ActiveStreams 10, got %d", stats.ActiveStreams)
-	}
-
-	if stats.RequestsHandled != 1000 {
-		t.Errorf("expected RequestsHandled 1000, got %d", stats.RequestsHandled)
-	}
-
-	if stats.Errors != 5 {
-		t.Errorf("expected Errors 5, got %d", stats.Errors)
-	}
-}
-
 func TestServerWithMultipleOptions(t *testing.T) {
 	tlsConfig := generateTestTLSConfig()
 	config := &ServerConfig{

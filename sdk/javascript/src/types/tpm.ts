@@ -847,3 +847,67 @@ export interface GetRandomResponse {
   /** Random bytes (base64) */
   randomBytes: string;
 }
+
+/**
+ * Extend PCR request (POST /pcrs/extend)
+ */
+export interface ExtendPCRRequest {
+  /** PCR index */
+  index: number;
+  /** Hash algorithm of the bank to extend (for example "SHA256") */
+  hashAlg?: string;
+  /** Data to extend into the PCR (base64) */
+  data: string;
+}
+
+/**
+ * Extend PCR response
+ */
+export interface ExtendPCRResponse {
+  /** Operation status */
+  status?: unknown;
+}
+
+/**
+ * Make credential request (POST /make-credential)
+ */
+export interface TPMMakeCredentialRequest {
+  /** Name of the attestation key (base64) */
+  akName: string;
+  /** Secret to wrap (base64); the TPM picks one when empty */
+  secret?: string;
+  /** EK certificate (base64 DER) */
+  ekCert?: string;
+  /** IAK public area (base64) */
+  iakPub?: string;
+}
+
+/**
+ * Make credential response
+ */
+export interface TPMMakeCredentialResponse {
+  /** Credential blob (base64) */
+  credentialBlob: string;
+  /** Encrypted secret (base64) */
+  encryptedSecret: string;
+  /** The wrapped secret (base64) */
+  secret?: string;
+}
+
+/**
+ * Activate credential request (POST /activate-credential)
+ */
+export interface TPMActivateCredentialRequest {
+  /** Credential blob (base64) */
+  credentialBlob: string;
+  /** Encrypted secret (base64) */
+  encryptedSecret: string;
+}
+
+/**
+ * Activate credential response
+ */
+export interface TPMActivateCredentialResponse {
+  /** The recovered secret (base64) */
+  secret: string;
+}

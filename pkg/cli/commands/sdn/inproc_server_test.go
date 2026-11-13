@@ -104,7 +104,7 @@ func (r *recorder) request(t *testing.T, method string) proto.Message {
 // functions execute their real SDK client path end to end.
 func startSDNServer(t *testing.T, format cli.OutputFormat) (*recorder, *cli.CommonFlags) {
 	t.Helper()
-	sock := filepath.Join(t.TempDir(), "platformd.sock")
+	sock := filepath.Join(shortSocketDir(t), "platformd.sock")
 	lis, err := net.Listen("unix", sock)
 	require.NoError(t, err)
 

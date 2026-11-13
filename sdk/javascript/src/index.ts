@@ -90,6 +90,11 @@ export {
   OverlayService,
   PlatformService,
   PXEService,
+  RegistryService,
+  RegistryHealth,
+  type RegistryStatus,
+  type RegistryTagList,
+  type RegistryComponentHealth,
   SDNService,
   TenantService,
   TPMService,
@@ -414,6 +419,12 @@ export type {
   TPMPlatformAttributesResponse,
   CertifyRequest,
   CertifyResponse,
+  ExtendPCRRequest,
+  ExtendPCRResponse,
+  TPMMakeCredentialRequest,
+  TPMMakeCredentialResponse,
+  TPMActivateCredentialRequest,
+  TPMActivateCredentialResponse,
 } from './types/tpm.js';
 
 // Device values: the server's network phase selector defaults and their resolver
