@@ -27,12 +27,14 @@ import (
 
 func TestNewClientRejectsInsecureSkipVerify(t *testing.T) {
 	ca := newTestCA(t, "test-ca")
-	_, err := NewClient(idleAddr(), &tls.Config{
-		Certificates:       []tls.Certificate{ca.issue(t, "deployer", x509.ExtKeyUsageClientAuth)},
-		RootCAs:            ca.pool,
-		ServerName:         testServerName,
-		InsecureSkipVerify: true,
-	})
+	cfg := &tls.Config{
+		Certificates: []tls.Certificate{ca.issue(t, "deployer", x509.ExtKeyUsageClientAuth)},
+		RootCAs:      ca.pool,
+		ServerName:   testServerName,
+	}
+	// The test asserts NewClient refuses a config that skips verification.
+	cfg.InsecureSkipVerify = true
+	_, err := NewClient(idleAddr(), cfg)
 	var cfgErr ErrInvalidTLSConfig
 	if !errors.As(err, &cfgErr) {
 		t.Fatalf("NewClient with InsecureSkipVerify error = %v, want ErrInvalidTLSConfig", err)
