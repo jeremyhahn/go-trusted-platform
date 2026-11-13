@@ -50,6 +50,8 @@ interface NTPMockConfig {
   sources?: ReturnType<typeof mockSource>[];
   stepError?: ApiError;
   sourcesError?: ApiError;
+  /** Per-call status responses: null answers 200, an ApiError answers that error; the last entry repeats. */
+  statusSequence?: (ApiError | null)[];
 }
 
 async function mockNTPApi(page: Page, config: NTPMockConfig = {}) {
@@ -59,6 +61,16 @@ async function mockNTPApi(page: Page, config: NTPMockConfig = {}) {
 
   await page.route('**/api/v1/ntp/status', async (route: Route) => {
     calls.status++;
+    const seq = config.statusSequence;
+    const statusError = seq && seq.length > 0 ? seq[Math.min(calls.status, seq.length) - 1] : null;
+    if (statusError) {
+      await route.fulfill({
+        status: statusError.status,
+        contentType: 'application/json',
+        body: errorEnvelope(statusError),
+      });
+      return;
+    }
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status }) });
   });
 
@@ -141,6 +153,24 @@ test.describe('NTP', () => {
     await expect(table.getByTestId('ntp-sources-error')).toBeVisible();
     await expect(table.getByText('No sources configured')).toHaveCount(0);
     expect(calls.sources).toBeGreaterThan(0);
+  });
+
+  test('marks the status stale when a refresh fails after a successful read (503)', async ({ page }) => {
+    const calls = await mockNTPApi(page, {
+      statusSequence: [null, { status: 503, error: 'ntp: chronyd unavailable', errorCode: 'UNAVAILABLE' } as ApiError],
+    });
+
+    await page.goto('/networking/ntp');
+
+    const card = page.getByTestId('ntp-status-card');
+    await expect(card.getByText('Synced', { exact: true })).toBeVisible();
+    await expect(card.getByTestId('ntp-status-stale')).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'Refresh' }).click();
+
+    await expect(card.getByTestId('ntp-status-stale')).toBeVisible();
+    await expect(card.getByText(/Status refresh failed/)).toBeVisible();
+    expect(calls.status).toBeGreaterThan(1);
   });
 
   test('steps the clock after confirmation (Step)', async ({ page }) => {
