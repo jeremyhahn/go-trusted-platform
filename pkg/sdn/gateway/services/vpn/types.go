@@ -229,6 +229,14 @@ type WireGuardSettings struct {
 	// ListenPort is the WireGuard UDP port; DefaultWireGuardListenPort
 	// when WireGuard is offered and the key is unset.
 	ListenPort int `yaml:"listen-port" json:"listen_port" mapstructure:"listen-port"`
+	// KeyRef is the secret reference the host's SecretResolver resolves to
+	// the hub's 32-byte private key; the configuration never carries the
+	// key itself. The datapath builds no WireGuard plane while it is unset.
+	KeyRef string `yaml:"key-ref" json:"key_ref" mapstructure:"key-ref"`
+	// Address is the hub's own address on its interface, the gateway
+	// address of the remote-access pool. The datapath builds no WireGuard
+	// plane while it is unset.
+	Address netip.Prefix `yaml:"address" json:"address" mapstructure:"address"`
 }
 
 // MASQUESettings are the `masque.*` keys.

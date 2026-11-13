@@ -329,17 +329,6 @@ func stopVPNPlanes(host *vpn.PlaneHost) error {
 	return host.Stop(ctx)
 }
 
-// vpnDataPlanes is gatewayd's plane factory. The configuration does not yet
-// name what a kernel plane needs beyond its listen port (the WireGuard
-// hub's device key reference and its pool gateway address), so it builds
-// none and says so: the vpn process's peer RPCs keep their refusal.
-func vpnDataPlanes(cfg *ServeConfig, _ *gateway.Gateway, logger *slog.Logger) ([]vpn.ManagedDataPlane, error) {
-	offered := cfg.Gateway.ManagementVPN.Config.WithDefaults().DataPlanes
-	logger.Warn("The datapath hosts no VPN data plane: the configuration does not name the plane's key and address",
-		slog.Any("data_planes", offered))
-	return nil, nil
-}
-
 // closeGatewayRuntime releases the OVS runtime a gateway holds, if any.
 func closeGatewayRuntime(gw *gateway.Gateway, logger *slog.Logger) {
 	rt := gw.GetConfig().Runtime
