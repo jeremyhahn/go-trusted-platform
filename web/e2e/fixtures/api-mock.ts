@@ -2277,3 +2277,193 @@ export async function mockContainerOpsApi(
 
   return calls;
 }
+
+// ============================================================================
+// IAM policy and app API mock (#1728)
+// ============================================================================
+
+export interface MockIAMPolicy {
+  name: string;
+  description?: string;
+  priority?: number;
+  spec_yaml?: string;
+}
+
+export interface MockIAMApp {
+  client_id: string;
+  name: string;
+  redirect_uris?: string[];
+  grant_types?: string[];
+}
+
+export interface IAMPolicyAppApiMockConfig {
+  policies?: MockIAMPolicy[];
+  apps?: MockIAMApp[];
+  /** Response for POST /policies/validate */
+  validateResponse?: { valid: boolean; errors?: string[] };
+  /** Response for POST /policies/test */
+  testResponse?: { allowed: boolean; matchedPolicy?: string; matchedRule?: string };
+}
+
+/** A request the mock received: method, path after the tenant, and JSON body. */
+export interface RecordedIAMCall {
+  method: string;
+  path: string;
+  body: Record<string, unknown> | null;
+}
+
+export interface IAMPolicyAppApiMock {
+  calls: RecordedIAMCall[];
+  policies: MockIAMPolicy[];
+  apps: MockIAMApp[];
+  /** Calls with the given method whose path ends with the given suffix. */
+  find: (method: string, pathSuffix: string) => RecordedIAMCall[];
+}
+
+/**
+ * Mocks the IAM policy and app endpoints under
+ * /api/v1/iam/tenants/{tenantId}/: policies (list, create, get, update,
+ * delete, validate, test) and apps (list, get, update).
+ */
+export async function mockIAMPolicyAppApi(
+  page: Page,
+  config: IAMPolicyAppApiMockConfig = {},
+): Promise<IAMPolicyAppApiMock> {
+  const state: IAMPolicyAppApiMock = {
+    calls: [],
+    policies: [...(config.policies ?? [])],
+    apps: [...(config.apps ?? [])],
+    find: (method, pathSuffix) =>
+      state.calls.filter((c) => c.method === method && c.path.endsWith(pathSuffix)),
+  };
+  const now = () => new Date().toISOString();
+  const json = (route: Route, status: number, body: unknown) =>
+    route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+  const record = (request: Request, path: string): Record<string, unknown> | null => {
+    let body: Record<string, unknown> | null = null;
+    try {
+      body = request.postDataJSON() as Record<string, unknown> | null;
+    } catch {
+      body = null;
+    }
+    state.calls.push({ method: request.method(), path, body });
+    return body;
+  };
+  const notFound = (route: Route) =>
+    route.fulfill({
+      status: 404,
+      contentType: 'application/json',
+      body: errorEnvelope({ error: 'not found', errorCode: 'NOT_FOUND', status: 404 }),
+    });
+
+  await page.route(/\/api\/v1\/iam\/tenants\/[^/]+\/policies(\/[^/?]+)?(\?.*)?$/, async (route, request) => {
+    const url = new URL(request.url());
+    const match = url.pathname.match(/\/policies(?:\/([^/]+))?$/);
+    const id = match?.[1] ? decodeURIComponent(match[1]) : undefined;
+    const method = request.method();
+    const body = record(request, url.pathname.replace(/^.*\/tenants\/[^/]+/, ''));
+
+    if (!id) {
+      if (method === 'GET') {
+        return json(route, 200, {
+          policies: state.policies,
+          total: state.policies.length,
+          timestamp: now(),
+        });
+      }
+      if (method === 'POST') {
+        const created: MockIAMPolicy = {
+          name: String(body?.name ?? ''),
+          description: String(body?.description ?? ''),
+          priority: 0,
+          spec_yaml: String(body?.spec_yaml ?? body?.specYaml ?? ''),
+        };
+        state.policies.unshift(created);
+        return json(route, 201, { policy: created, timestamp: now() });
+      }
+      return route.fallback();
+    }
+
+    if (id === 'validate' && method === 'POST') {
+      return json(route, 200, { ...(config.validateResponse ?? { valid: true }), timestamp: now() });
+    }
+    if (id === 'test' && method === 'POST') {
+      // The REST TestPolicyRequest decodes only `subject_id`.
+      if (typeof body?.subject_id !== 'string' || body.subject_id === '') {
+        return route.fulfill({
+          status: 400,
+          contentType: 'application/json',
+          body: errorEnvelope({ error: 'subject_id is required', status: 400 }),
+        });
+      }
+      return json(route, 200, { ...(config.testResponse ?? { allowed: true }), timestamp: now() });
+    }
+
+    const index = state.policies.findIndex((p) => p.name === id);
+    if (index === -1) return notFound(route);
+    if (method === 'GET') {
+      return json(route, 200, { policy: state.policies[index], timestamp: now() });
+    }
+    if (method === 'PUT') {
+      // The production adapter rejects every nonempty spec YAML on update.
+      const specYaml = body?.spec_yaml ?? body?.specYaml;
+      if (typeof specYaml === 'string' && specYaml !== '') {
+        return route.fulfill({
+          status: 400,
+          contentType: 'application/json',
+          body: errorEnvelope({
+            error: 'update via spec_yaml not supported by IAM SDK; delete and re-create instead',
+            status: 400,
+          }),
+        });
+      }
+      const current = state.policies[index];
+      state.policies[index] = {
+        ...current,
+        description: typeof body?.description === 'string' ? body.description : current.description,
+        priority: typeof body?.priority === 'number' ? body.priority : current.priority,
+      };
+      return json(route, 200, { policy: state.policies[index], timestamp: now() });
+    }
+    if (method === 'DELETE') {
+      state.policies.splice(index, 1);
+      return json(route, 200, { success: true, timestamp: now() });
+    }
+    return route.fallback();
+  });
+
+  await page.route(/\/api\/v1\/iam\/tenants\/[^/]+\/apps(\/[^/?]+)?(\?.*)?$/, async (route, request) => {
+    const url = new URL(request.url());
+    const match = url.pathname.match(/\/apps(?:\/([^/]+))?$/);
+    const id = match?.[1] ? decodeURIComponent(match[1]) : undefined;
+    const method = request.method();
+    const body = record(request, url.pathname.replace(/^.*\/tenants\/[^/]+/, ''));
+
+    if (!id) {
+      if (method === 'GET') {
+        return json(route, 200, { apps: state.apps, total: state.apps.length, timestamp: now() });
+      }
+      return route.fallback();
+    }
+    const index = state.apps.findIndex((a) => a.client_id === id);
+    if (index === -1) return notFound(route);
+    if (method === 'GET') {
+      return json(route, 200, { app: state.apps[index], timestamp: now() });
+    }
+    if (method === 'PUT') {
+      const current = state.apps[index];
+      const list = (v: unknown, fallback: string[] | undefined) =>
+        Array.isArray(v) ? v.map(String) : fallback;
+      state.apps[index] = {
+        ...current,
+        name: typeof body?.name === 'string' ? body.name : current.name,
+        redirect_uris: list(body?.redirect_uris ?? body?.redirectUris, current.redirect_uris),
+        grant_types: list(body?.grant_types ?? body?.grantTypes, current.grant_types),
+      };
+      return json(route, 200, { app: state.apps[index], timestamp: now() });
+    }
+    return route.fallback();
+  });
+
+  return state;
+}
