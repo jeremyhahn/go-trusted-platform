@@ -18,12 +18,7 @@ import {
   LogOut,
   User,
   Database,
-  HardDrive,
-  Key,
   FileCheck,
-  Globe,
-  Radio,
-  Activity,
   Fingerprint,
   PackageCheck,
 } from "lucide-react";
@@ -144,6 +139,7 @@ const navigation = [
       { title: "Containers", href: "/compute/containers" },
       { title: "Snapshots", href: "/compute/snapshots" },
       { title: "Images", href: "/compute/images" },
+      { title: "Registry", href: "/compute/registry" },
     ],
   },
   {

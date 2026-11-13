@@ -38,7 +38,7 @@ interface DisplayGroup {
 export default function GroupsPage() {
   const router = useRouter();
   const { toast } = useToast();
-  const { user: authUser, tenantId, isLoading: authLoading } = useAuth();
+  const { tenantId, isLoading: authLoading } = useAuth();
   const iam = useIAM();
 
   // Fetch groups using SDK
