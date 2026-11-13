@@ -65,7 +65,7 @@ func (f *fakeDBDaemon) DumpEntityType(req *platformv1.DumpEntityTypeRequest, str
 // local context dials it.
 func startDBDaemon(t *testing.T, fake *fakeDBDaemon) *cli.CommonFlags {
 	t.Helper()
-	sock := filepath.Join(t.TempDir(), "platformd.sock")
+	sock := filepath.Join(shortSocketDir(t), "platformd.sock")
 	lis, err := net.Listen("unix", sock)
 	require.NoError(t, err)
 
