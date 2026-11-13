@@ -76,6 +76,12 @@ type Definition struct {
 	// the desired document. The supervisor sends the document to each such
 	// child on every apply and gives it to the child at every launch.
 	ReconcilesDesired bool
+	// FollowsDatapath reports whether the process keeps state in the
+	// datapath child: the vpn child's peers live in the planes the datapath
+	// child hosts. When the supervisor relaunches the datapath child it
+	// relaunches such a process too, so its start (the VPN's Restore)
+	// reinstalls that state before the process is reported up again.
+	FollowsDatapath bool
 	// StateDir is the directory under the gatewayd data directory
 	// (--data-dir) the process writes its own state to. The supervisor
 	// creates it before every launch, owned by the credentials the process
@@ -189,6 +195,8 @@ var definitions = []Definition{
 		Supervised: true,
 		// The vpn section.
 		ReconcilesDesired: true,
+		// Its peers live in the datapath child's planes.
+		FollowsDatapath: true,
 		// Its revocation journal, vpn/pending-revocations.json.
 		StateDir:   "vpn",
 		StateFiles: []string{gateway.VPNRevocationJournalFile},

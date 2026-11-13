@@ -702,9 +702,9 @@ func (s *Supervisor) watch(ctx context.Context, proc *supervised, child Child, d
 	waitErr := child.Wait()
 
 	s.mu.Lock()
-	// A stop cancelled the context: the exit is expected and the process
-	// stays down.
-	if ctx.Err() != nil || s.stopped || len(proc.wanted) == 0 {
+	// A stop cancelled the context, or is under way: the exit is expected
+	// and the process stays down (or is relaunched by whoever stopped it).
+	if ctx.Err() != nil || s.stopped || proc.stopping || len(proc.wanted) == 0 {
 		proc.child = nil
 		s.closeClientLocked(proc)
 		s.mu.Unlock()
@@ -764,11 +764,67 @@ func (s *Supervisor) restartLoop(ctx context.Context, proc *supervised, failure 
 		proc.restoring = false
 		s.mu.Unlock()
 		if err == nil {
+			if proc.def.Class == ClassKernel {
+				s.relaunchFollowers(ctx, proc)
+			}
 			return
 		}
 		s.cfg.Logger.Error("gatewayd supervisor: restart failed",
 			slog.String("process", proc.def.Name), slog.Any("error", err))
 		failure, cause = err, err
+	}
+}
+
+// relaunchFollowers relaunches every running process that keeps state in
+// the datapath child (Definition.FollowsDatapath) once datapath, its
+// relaunched kernel process, answers. The crashed datapath child took that
+// state with it, and such a process reinstalls it only at its start: the
+// vpn child's Restore reinstalls each stored lease into the new planes.
+// The process is reported down (restoring) until that start is done.
+func (s *Supervisor) relaunchFollowers(ctx context.Context, datapath *supervised) {
+	s.mu.Lock()
+	var followers []*supervised
+	for _, p := range s.processes {
+		if p == datapath || !p.def.FollowsDatapath || s.stopped || p.stopping || p.launching ||
+			p.child == nil || len(p.wanted) == 0 {
+			continue
+		}
+		p.launching = true
+		followers = append(followers, p)
+	}
+	s.mu.Unlock()
+
+	for _, p := range followers {
+		if err := s.stopProcess(ctx, p); err != nil {
+			s.mu.Lock()
+			p.launching = false
+			s.mu.Unlock()
+			s.cfg.Logger.Error("gatewayd supervisor: stopping a process for the datapath relaunch failed",
+				slog.String("process", p.def.Name), slog.Any("error", err))
+			continue
+		}
+		s.mu.Lock()
+		p.stopping = false
+		stillWanted := !s.stopped && len(p.wanted) > 0
+		p.restoring = stillWanted && p.desired != nil
+		s.mu.Unlock()
+		var err error
+		if stillWanted {
+			s.cfg.Logger.Info("gatewayd supervisor: relaunching a process after the datapath relaunch",
+				slog.String("process", p.def.Name))
+			if err = s.launch(ctx, p); err == nil {
+				err = s.serveLaunched(ctx, p)
+			}
+		}
+		s.mu.Lock()
+		p.launching = false
+		p.restoring = false
+		s.mu.Unlock()
+		if err != nil {
+			s.cfg.Logger.Error("gatewayd supervisor: relaunch after the datapath relaunch failed",
+				slog.String("process", p.def.Name), slog.Any("error", err))
+			go s.restartLoop(ctx, p, err, err)
+		}
 	}
 }
 
