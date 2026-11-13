@@ -22,7 +22,9 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/gorilla/mux"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -203,8 +205,21 @@ type DeviceAttributesRESTResponse struct {
 // =============================================================================
 
 // registerIDevIDRoutes registers IDevID/IAK REST endpoints.
-func (s *RESTServer) registerIDevIDRoutes() {
-	api := s.router.PathPrefix(restBasePath).Subrouter()
+// SetIDevIDRoutes mounts the IDevID, IAK, device-attributes and LDevID
+// routes behind guard. Each route requires the scope the gRPC catalog gives
+// the IDevIDService rpc it serves (catalogRouteRPCs). The routes are mounted
+// whether or not an IDevID service is set; without one they answer 503.
+func (s *RESTServer) SetIDevIDRoutes(guard *restapi.ScopeGuard) error {
+	if guard == nil {
+		return ErrIDevIDRESTUnavailable{Reason: "no REST scope guard"}
+	}
+	api := s.catalogGuardedAPI(guard)
+	s.registerIDevIDRoutes(api)
+	s.registerLDevIDRoutes(api)
+	return nil
+}
+
+func (s *RESTServer) registerIDevIDRoutes(api *mux.Router) {
 
 	// IDevID operations - paths match test adapter expectations
 	api.HandleFunc("/tpm/idevid", s.handleIDevIDInfo).Methods(http.MethodGet)
@@ -231,9 +246,6 @@ func (s *RESTServer) registerIDevIDRoutes() {
 	api.HandleFunc("/tpm/device/attributes", s.handleDeviceAttributes).Methods(http.MethodGet)
 
 	s.logger.Info("IDevID/IAK REST routes registered")
-
-	// LDevID (802.1AR) issuance route.
-	s.registerLDevIDRoutes()
 }
 
 // =============================================================================

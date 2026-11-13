@@ -449,7 +449,7 @@ func TestHandleGetService_NotFound(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/services/nonexistent-service", nil)
 	w := httptest.NewRecorder()
 
-	server.router.ServeHTTP(w, req)
+	serveDaemonRouteAsOperator(t, server, w, req)
 
 	resp := w.Result()
 	defer resp.Body.Close()
@@ -506,7 +506,7 @@ func TestHandleGetService_AllStatuses(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/services/test-service", nil)
 			w := httptest.NewRecorder()
 
-			server.router.ServeHTTP(w, req)
+			serveDaemonRouteAsOperator(t, server, w, req)
 
 			resp := w.Result()
 			defer resp.Body.Close()

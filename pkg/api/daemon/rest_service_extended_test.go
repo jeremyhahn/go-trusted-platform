@@ -50,7 +50,7 @@ func TestRESTHandlerGetService_ExistingService(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/services/test-service", nil)
 	w := httptest.NewRecorder()
 
-	server.router.ServeHTTP(w, req)
+	serveDaemonRouteAsOperator(t, server, w, req)
 
 	resp := w.Result()
 	defer resp.Body.Close()
@@ -103,7 +103,7 @@ func TestRESTHandlerGetService_ServiceStates(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/services/test-service", nil)
 			w := httptest.NewRecorder()
 
-			server.router.ServeHTTP(w, req)
+			serveDaemonRouteAsOperator(t, server, w, req)
 
 			resp := w.Result()
 			defer resp.Body.Close()
@@ -133,7 +133,7 @@ func TestRESTHandlerStartService_Success(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/services/test-service/start", nil)
 	w := httptest.NewRecorder()
 
-	server.router.ServeHTTP(w, req)
+	serveDaemonRouteAsOperator(t, server, w, req)
 
 	resp := w.Result()
 	defer resp.Body.Close()
@@ -161,7 +161,7 @@ func TestRESTHandlerStartService_NotFound(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/services/nonexistent/start", nil)
 	w := httptest.NewRecorder()
 
-	server.router.ServeHTTP(w, req)
+	serveDaemonRouteAsOperator(t, server, w, req)
 
 	resp := w.Result()
 	defer resp.Body.Close()
@@ -192,7 +192,7 @@ func TestRESTHandlerStartService_AlreadyRunning(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/services/test-service/start", nil)
 	w := httptest.NewRecorder()
 
-	server.router.ServeHTTP(w, req)
+	serveDaemonRouteAsOperator(t, server, w, req)
 
 	resp := w.Result()
 	defer resp.Body.Close()
@@ -216,7 +216,7 @@ func TestRESTHandlerStartService_StartFailed(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/services/test-service/start", nil)
 	w := httptest.NewRecorder()
 
-	server.router.ServeHTTP(w, req)
+	serveDaemonRouteAsOperator(t, server, w, req)
 
 	resp := w.Result()
 	defer resp.Body.Close()
@@ -247,7 +247,7 @@ func TestRESTHandlerStopService_Success(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/services/test-service/stop", nil)
 	w := httptest.NewRecorder()
 
-	server.router.ServeHTTP(w, req)
+	serveDaemonRouteAsOperator(t, server, w, req)
 
 	resp := w.Result()
 	defer resp.Body.Close()
@@ -274,7 +274,7 @@ func TestRESTHandlerStopService_NotFound(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/services/nonexistent/stop", nil)
 	w := httptest.NewRecorder()
 
-	server.router.ServeHTTP(w, req)
+	serveDaemonRouteAsOperator(t, server, w, req)
 
 	resp := w.Result()
 	defer resp.Body.Close()
@@ -297,7 +297,7 @@ func TestRESTHandlerStopService_NotRunning(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/services/test-service/stop", nil)
 	w := httptest.NewRecorder()
 
-	server.router.ServeHTTP(w, req)
+	serveDaemonRouteAsOperator(t, server, w, req)
 
 	resp := w.Result()
 	defer resp.Body.Close()
@@ -329,7 +329,7 @@ func TestRESTHandlerStopService_StopFailed(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/services/test-service/stop", nil)
 	w := httptest.NewRecorder()
 
-	server.router.ServeHTTP(w, req)
+	serveDaemonRouteAsOperator(t, server, w, req)
 
 	resp := w.Result()
 	defer resp.Body.Close()
@@ -352,7 +352,7 @@ func TestRESTHandlerRestartService_Success(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/services/test-service/restart", nil)
 	w := httptest.NewRecorder()
 
-	server.router.ServeHTTP(w, req)
+	serveDaemonRouteAsOperator(t, server, w, req)
 
 	resp := w.Result()
 	defer resp.Body.Close()
@@ -378,7 +378,7 @@ func TestRESTHandlerRestartService_NotFound(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/services/nonexistent/restart", nil)
 	w := httptest.NewRecorder()
 
-	server.router.ServeHTTP(w, req)
+	serveDaemonRouteAsOperator(t, server, w, req)
 
 	resp := w.Result()
 	defer resp.Body.Close()
@@ -409,7 +409,7 @@ func TestRESTHandlerRestartService_RunningThenRestart(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/services/test-service/restart", nil)
 	w := httptest.NewRecorder()
 
-	server.router.ServeHTTP(w, req)
+	serveDaemonRouteAsOperator(t, server, w, req)
 
 	resp := w.Result()
 	defer resp.Body.Close()
@@ -448,7 +448,7 @@ func TestRESTHandlerRestartService_StopFailed(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/services/test-service/restart", nil)
 	w := httptest.NewRecorder()
 
-	server.router.ServeHTTP(w, req)
+	serveDaemonRouteAsOperator(t, server, w, req)
 
 	resp := w.Result()
 	defer resp.Body.Close()
@@ -472,7 +472,7 @@ func TestRESTHandlerRestartService_StartFailed(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/services/test-service/restart", nil)
 	w := httptest.NewRecorder()
 
-	server.router.ServeHTTP(w, req)
+	serveDaemonRouteAsOperator(t, server, w, req)
 
 	resp := w.Result()
 	defer resp.Body.Close()
@@ -514,7 +514,7 @@ func TestRESTHandlerListServices_MultipleServices(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/services", nil)
 	w := httptest.NewRecorder()
 
-	server.router.ServeHTTP(w, req)
+	serveDaemonRouteAsOperator(t, server, w, req)
 
 	resp := w.Result()
 	defer resp.Body.Close()

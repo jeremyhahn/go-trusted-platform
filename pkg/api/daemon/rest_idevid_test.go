@@ -270,6 +270,7 @@ func createTestRESTServer(t *testing.T, mockTPM *mockTPM2RESTService) *RESTServe
 		idevid.SetTPM2Service(mockTPM)
 	}
 	server.SetIDevIDService(idevid)
+	require.NoError(t, server.SetIDevIDRoutes(s6RESTGuard()))
 
 	return server
 }
@@ -284,6 +285,7 @@ func executeRESTRequest(t *testing.T, server *RESTServer, method, path string, b
 
 	req := httptest.NewRequest(method, path, &reqBody)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+s6OperatorToken)
 
 	rr := httptest.NewRecorder()
 	server.router.ServeHTTP(rr, req)
@@ -333,6 +335,7 @@ func TestRESTIDevIDGenerate_InvalidRequestBody(t *testing.T) {
 	// Send invalid JSON
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/tpm/idevid/generate", bytes.NewBufferString("{invalid json"))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+s6OperatorToken)
 
 	rr := httptest.NewRecorder()
 	server.router.ServeHTTP(rr, req)

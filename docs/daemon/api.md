@@ -428,7 +428,7 @@ pool is refused the same way. The daemon REST server requires and verifies a
 client certificate at every TLS handshake (`tls.RequireAndVerifyClientCert`,
 `newServerTLSConfig` in `pkg/api/daemon/transport_auth.go`). That certificate
 is the only authentication on the routes outside the scope guard below
-(service control, provisioning, BMC, device, LUKS and the rest); the guarded
+(protocol status, provisioning and the rest of `daemonMTLSOnlyRoutes`); the guarded
 routes also take a `Bearer` token, but only over that mTLS connection. So
 `EnableREST` requires `EnableMTLS`, checked by both `New` and
 `RESTServer.Start`. Before #550 the interceptors were
@@ -461,6 +461,314 @@ The daemon REST tenant routes (`/api/v1/tenants/*`, #304) run behind the same
 guard with the `tenant` scopes. They then apply the `TenantService` tenant
 binding to the authenticated caller
 ([`docs/tenant/api.md`](../tenant/api.md) §7).
+
+**The daemon REST plane serves `/api/v1/iam/*` (#997).** `SetIAMHandlers`
+(`pkg/api/daemon/iam_rest.go`) mounts the webservice IAM router
+(`pkg/webservice/v1/rest/iam`, all 71 routes of
+[`docs/iam/api.md`](../iam/api.md) §3–§5) on the daemon listener. The router is
+backed by the SDK IAM client and PEP, and the daemon supplies its
+authorization:
+
+| Router hook | Daemon implementation | Refusal |
+|-------------|-----------------------|---------|
+| `Authenticate` | `ScopeGuard.Authenticate`: the guard's credentials above (`Bearer` platform token, else the verified client certificate as the `*:*` operator) | 401 `ErrRouteUnauthenticated`; 403 with no guard |
+| `RequireAdmin` | the caller's scope for the method: `GET` `iam:read`; `POST`, `PUT`, `PATCH` `iam:write`; `DELETE` `iam:delete`. `POST .../policies/validate`, `POST .../policies/test` and `POST .../permissions/check` change nothing and need `iam:read`. Any other method is refused, never defaulted | 403 |
+| `RequireSystemTenant` | the gRPC rule: the caller is of the system tenant | 403 |
+| `RequireOwnTenant` | the gRPC rule: the request's tenant (the `{tenant}` segment, else `tenant_id`) is the caller's | 403 |
+
+There are no sessions and no role check: the scope is the authorization, and
+the operator's `*:*` passes every method. A caller bound to a tenant must name
+it on a flat route (`tenant_id`); one that names none is refused, as on gRPC.
+Installer and machine certificates are not admitted to these routes: no
+`/api/v1/iam` route is on any installer or machine allowlist (#1153). The
+daemon refuses to start when the IAM service is enabled and the routes cannot
+be mounted.
+
+**The daemon REST plane serves the KMS router at `/api/v1/kms/*` (#997).**
+`SetKMSRouterHandlers` (`pkg/api/daemon/kms_rest.go`) mounts the webservice KMS
+router (`pkg/webservice/v1/rest/kms`, 42 routes: keys, crypto, DEKs and
+secrets) over the SDK KMS, crypto, DEK and secrets clients, before
+`SetKMSHandlers`, so it wins every path both serve:
+
+| Routes | Credential | Scope |
+|--------|------------|-------|
+| `/api/v1/kms/secrets/**` | `ScopeGuard.Authenticate` (platform token or operator certificate) | `GET` `secrets:read`; `POST`, `PUT`, `PATCH` `secrets:write`; `DELETE` `secrets:delete` |
+| every other router route under `/api/v1/kms` | same | `GET` `kms:read`; `POST`, `PUT`, `PATCH` `kms:write`; `DELETE` `kms:delete`; `POST` decrypt, verify, hmac verify, hash and random `kms:read` |
+
+A missing credential answers 401, a missing scope 403, and any other method is
+refused. Installer and machine certificates are not admitted: no `/api/v1/kms`
+route is on any installer or machine allowlist (#1153). The daemon refuses to
+start when the KMS service is configured and the routes cannot be mounted.
+[`docs/kms/api.md`](../kms/api.md) §1 lists the paths `SetKMSHandlers` still
+serves. They run behind the same scope guard (`restScopeAuthorization`), with
+the same 401 and 403 answers:
+
+| Route | Scope |
+|-------|-------|
+| `GET /api/v1/kms/keys/{id}/export`, `GET /api/v1/kms/status` | `kms:read` |
+| `POST /api/v1/kms/decrypt`, `/batch-decrypt`, `/verify` | `kms:read` |
+| `POST /api/v1/kms/encrypt`, `/batch-encrypt`, `/rewrap`, `/sign`, `/hmac` | `kms:write` |
+
+A configured KMS facade that cannot be guarded (no scope guard) stops the
+daemon (`ErrTransportConstructionFailed`); it is never served unguarded.
+
+**The daemon REST plane serves the attestation routers at
+`/api/v1/attestation/*` (#997).** `SetAttestationRouterHandlers`
+(`pkg/api/daemon/attestation_rest.go`) mounts the webservice attestation server
+router (`pkg/webservice/v1/rest/attestation`) over the daemon's
+`AttestationService`, and the reports and callers routers when the node holds a
+report cache:
+
+| Routes | Credential | Scope |
+|--------|------------|-------|
+| `GET /api/v1/attestation/manifests`, `GET .../manifests/{id}` | `ScopeGuard.Authenticate` (platform token or operator certificate) | `attestation:read` |
+| `POST /api/v1/attestation/manifests/verify`, `POST .../quote/verify` | same | `attestation:read` |
+| `POST /api/v1/attestation/manifests/build`, `POST .../vm/{id}`, `POST .../container/{id}` | same | `attestation:write` |
+| `DELETE /api/v1/attestation/manifests/{id}` | same | `attestation:delete` |
+| `GET /api/v1/attestation/reports`, `GET .../reports/{device_id}`, `GET .../callers` (with a report cache) | same | `attestation:read` |
+| `POST /api/v1/attestation/reports/{device_id}/refresh` (with a report cache) | same | `attestation:write` |
+
+Each scope is the one the gRPC catalog gives the matching rpc. A missing
+credential answers 401, a missing scope 403, and any other method is refused.
+The caller-gated quote routes (`POST .../quote`, `POST .../host`) and the
+verdicts route are the webservice's; the daemon does not mount them. The daemon
+refuses to start when the routes cannot be mounted.
+
+**The daemon REST plane serves the device operator routes (#997).**
+`SetDeviceRouterHandlers` (`pkg/api/daemon/device_rest.go`) mounts the
+webservice device router (`pkg/webservice/v1/router`) at `/api/v1` when the
+device, profile and template services are configured: `/devices/**` (CRUD,
+count, serial, attest, `attest-cert/record`, `disable`, `enable`),
+`/device/profiles/**` (CRUD, count, `match`, serial, MAC, `find-config`,
+`assign`, `unassign`), `/device/templates/**` and `/device/activate-json`.
+`SetDeviceHandlers` then mounts the device facade (`pkg/api/rest`) for the
+paths the router does not serve, among them `/api/v1/devices/profiles/**` and
+`/api/v1/devices/{id}/{activate,state}`. Both run behind
+`ScopeGuard.Authenticate`, and the router checks each route's own scope again
+through the guard:
+
+| Routes | Scope |
+|--------|-------|
+| every `GET`, and `POST /api/v1/device/profiles/match` | `device:read` |
+| every other `POST`, and every `PUT` and `PATCH` | `device:write` |
+| every `DELETE` | `device:delete` |
+
+Each scope is the one the gRPC catalog gives the matching `DeviceService` rpc. A
+missing credential answers 401 and a missing scope 403. The machine-facing
+device routes (`/device/profile`, `/device/activate`, `/device/heartbeat`,
+`/device/boot/**`) are not mounted on the daemon, and `/api/v1/provisioning/*`
+stays with `SetConfigDeliveryHandler`. The daemon refuses to start when either
+device mount fails (`ErrTransportConstructionFailed`).
+
+**The daemon REST plane serves the DNS and PXE operator routes (#997).**
+`SetDNSRouterHandlers` (`pkg/api/daemon/dns_rest.go`) mounts the DNS router
+(`pkg/webservice/v1/rest/dns`) at `/api/v1/dns` over the same
+`DNSServiceServer` gRPC, QUIC, MCP and Unix serve: zones, records, `resolve`,
+`zones/{zone}/sign`, `zones/{zone}/dnssec` and `register`.
+`SetPXERouterHandlers` (`pkg/api/daemon/pxe_rest.go`) mounts the PXE operator
+routes (`pkg/webservice/v1/rest/pxe`) at `/api/v1/pxe` over the same
+`PXEGRPCService`: `status`, `start`, `stop` and `devices/**`. platformd sets no
+PXE backend, so every PXE route answers 503 `SERVICE_NOT_CONFIGURED`, as the
+other transports do. Both run behind the REST scope guard; the PXE router
+checks each route's scope itself through the guard:
+
+| Routes | Scope |
+|--------|-------|
+| every DNS `GET` | `dns:read` |
+| every DNS `POST` and `PUT` | `dns:write` |
+| every DNS `DELETE` | `dns:delete` |
+| every PXE `GET` | `pxe:read` |
+| every PXE `POST` and `PUT` | `pxe:write` |
+| `DELETE /api/v1/pxe/devices/{id}` | `pxe:delete` |
+
+Each scope is the one the gRPC catalog gives the matching rpc. A missing
+credential answers 401 and a missing scope 403. The credential-less install
+webhook (`POST /api/v1/pxe/webhook/complete`, #238) and the per-MAC PXE gateway
+routes are the webservice's; the daemon does not mount them. The daemon refuses
+to start when either mount fails (`ErrTransportConstructionFailed`).
+
+**The daemon REST SDN routes check the RPC's scope (#997).** `SetSDNService`
+(`pkg/api/daemon/rest_sdn.go`) mounts the SDN handlers (`pkg/api/rest/sdn_handlers.go`,
+absolute `/api/v1/sdn` paths) on a matcher-less subrouter behind the REST scope
+guard: bridges, ports, flows, VLANs, policies and zones. Each route needs the
+`sdn` scope the gRPC catalog gives its `SDNService` rpc:
+
+| Routes | Scope |
+|--------|-------|
+| every SDN `GET` | `sdn:read` |
+| every SDN `POST` and `PUT`, and `DELETE /api/v1/sdn/bridges/{bridge_id}/ports/{port_id}/auth` (`RevokePortAuth`) | `sdn:write` |
+| every other SDN `DELETE` | `sdn:delete` |
+
+A missing credential answers 401 and a missing scope 403. Without an SDN
+service the routes still mount, behind the guard, and the non-zone routes answer
+503. A failed mount (no scope guard, `ErrSDNRESTUnavailable`) stops the daemon
+(`ErrTransportConstructionFailed`). The overlay (`/api/v1/sdn/overlay`) and
+gateway (`/api/v1/sdn/gateway`) routes are separate mounts that take their
+scopes from the gRPC catalog (below).
+
+**The daemon REST ceremony, PIV, LUKS and FIDO2 routes check the RPC's scope (#997).**
+`SetCeremonyService`, `SetPIVService`, `SetLUKSService` and `SetFIDO2Service`
+(`pkg/api/daemon/rest_service.go`) mount the `/api/v1/ceremony`,
+`/api/v1/piv`, `/api/v1/luks` and `/api/v1/fido2` routes behind the REST scope
+guard. Several of their `POST`s read, delete or use a key, and every ceremony
+step has its own action, so the HTTP method does not name the action:
+`catalogRouteRPCs` (`pkg/api/daemon/rest_scope.go`) maps each route to the
+gRPC method it serves, and the route needs the scope the gRPC catalog gives
+that method (`grpcapi.ScopeForMethod`). A route missing from the map, or a
+method without a catalog scope, is refused for every caller
+(`ErrRESTRouteUnscoped`), never served open.
+
+| Routes | Scope |
+|--------|-------|
+| `POST /ceremony/init` | `ceremony:initialize` |
+| `GET /ceremony/status` | `ceremony:status` |
+| `POST /ceremony/claim-cert/begin`, `POST /ceremony/claim-cert/complete` | `ceremony:claim_cert` |
+| `POST /ceremony/claim-share/begin` | `ceremony:claim_share_begin` |
+| `POST /ceremony/claim-share/complete` | `ceremony:claim_share_complete` |
+| `POST /ceremony/sign-csr` | `ceremony:sign_csr` |
+| `GET /piv/devices`, `GET /piv/devices/{device}/slots`, `GET /piv/slots/{slot}`, `POST /piv/slots/{slot}/attest` | `piv:read` |
+| `POST /piv/slots/{slot}/generate`, `POST /piv/slots/{slot}/import` | `piv:write` |
+| `POST /piv/slots/{slot}/sign` | `piv:use` |
+| `POST /piv/devices/{device}/reset` | `piv:delete` |
+| `GET /luks/status`, `GET /luks/slots`, `GET /luks/info`, `POST /luks/keys/test-unlock` | `luks:read` |
+| `POST /luks/enroll/{passphrase,fido2,tpm,recovery}`, `POST /luks/passphrase/change` | `luks:write` |
+| `POST /luks/keys/remove` | `luks:delete` |
+| `GET /fido2/devices`, `GET /fido2/devices/wait`, `GET /fido2/devices/{device}` | `fido2:read` |
+| `POST /fido2/register`, `POST /fido2/authenticate` | `fido2:write` |
+
+**The vTPM, proxy and cluster routes take the same map (#997).**
+`SetVTPMService` (`rest_vtpm.go`), `SetProxyService` (`proxy_rest.go`) and
+`SetClusterService` (`rest_service.go`) mount `/api/v1/vtpm`, `/api/v1/proxy`
+and `/api/v1/cluster` behind the same guard. The vTPM and proxy registrars in
+`pkg/api/rest` register absolute `/api/v1` paths, so they mount on a
+matcher-less guarded subrouter of the root router (`catalogGuardedRoot`): its
+guard runs only for its own routes. Without a cluster backend the cluster
+routes still mount, behind the guard, and answer 503.
+
+| Routes | Scope |
+|--------|-------|
+| `GET /vtpm/bundles`, `GET /vtpm/bundles/{id}`, `GET /vtpm/bundles/{id}/{state,path,tpm-socket,nvram,export}`, `POST /vtpm/bundles/{id}/validate`, `POST /vtpm/bundles/{id}/quote`, `GET /vtpm/bundles/{id}/pcr/{index}`, `POST /vtpm/bundles/{id}/unseal`, `GET /vtpm/templates`, `GET /vtpm/templates/{id}` | `vtpm:read` |
+| `POST /vtpm/bundles`, `POST /vtpm/bundles/{id}/{start,stop,seal}`, `POST /vtpm/bundles/{id}/pcr/{index}/extend`, `POST /vtpm/bundles/import`, `POST /vtpm/templates`, `POST /vtpm/templates/{id}/clone` | `vtpm:write` |
+| `DELETE /vtpm/bundles/{id}`, `DELETE /vtpm/templates/{id}` | `vtpm:delete` |
+| `GET /proxy/routes`, `GET /proxy/routes/{id}`, `GET /proxy/pools`, `GET /proxy/pools/{id}`, `GET /proxy/config`, `GET /proxy/status`, `GET /proxy/zone-matrix` | `proxy:read` |
+| `POST /proxy/routes`, `PUT /proxy/routes/{id}`, `POST /proxy/pools`, `PUT /proxy/pools/{id}`, `POST /proxy/reload` | `proxy:write` |
+| `DELETE /proxy/routes/{id}`, `DELETE /proxy/pools/{id}` | `proxy:delete` |
+| `GET /cluster/status`, `GET /cluster/nodes` | `cluster:read` |
+| `POST /cluster/bootstrap`, `POST /cluster/join`, `POST /cluster/leave` | `cluster:write` |
+
+A missing credential answers 401 and a missing scope 403. A failed mount (no
+scope guard: `ErrCeremonyRESTUnavailable`, `ErrPIVRESTUnavailable`,
+`ErrLUKSRESTUnavailable`, `ErrFIDO2RESTUnavailable`, `ErrVTPMRESTUnavailable`,
+`ErrProxyRESTUnavailable`, `ErrClusterRESTUnavailable`) stops the daemon (`ErrTransportConstructionFailed`).
+
+**The SDN overlay and gateway routes take the same map (#997).**
+`SetOverlayHandlers` (`rest_service.go`) and `SetGatewayIPAMService`
+(`rest_sdn.go`) mount `/api/v1/sdn/overlay` and `/api/v1/sdn/gateway` (IPAM,
+status, mode, BGP, admitted VTEPs, LB, NAT64 and perf) on `catalogGuardedRoot`.
+Three `DELETE`s are writes in the gRPC catalog, so the HTTP method does not
+name the action. `SetGatewaySnapshotService`, `SetGatewayBGPService` and
+`SetGatewayBackends` only wire a service into the mounted gateway routes: called
+before `SetGatewayIPAMService` they mount nothing and return
+`ErrGatewayRESTUnavailable`.
+
+| Routes (under `/sdn`) | Scope |
+|--------|-------|
+| every overlay and gateway `GET` | `sdn:read` |
+| `POST /overlay/vnis`, `PUT /gateway/mode`, `POST /gateway/bgp/prefixes`, `POST /gateway/ipam/pools`, `PUT /gateway/ipam/pools/{id}`, `POST /gateway/ipam/allocations`, `POST /gateway/lb/vips`, `PUT /gateway/lb/vips/{protocol}/{address}/{port}/backends`, `POST /gateway/perf/flows` | `sdn:write` |
+| `DELETE /overlay/macs/{mac}` (`ForgetMAC`), `DELETE /gateway/bgp/prefixes/{prefix}` (`WithdrawPrefix`), `DELETE /gateway/ipam/allocations/{ip}` (`ReleaseIP`) | `sdn:write` |
+| `DELETE /overlay/vnis/{vni}`, `DELETE /gateway/ipam/pools/{id}`, `DELETE /gateway/lb/vips/{protocol}/{address}/{port}` | `sdn:delete` |
+
+A missing credential answers 401 and a missing scope 403. A failed mount (no
+scope guard: `ErrOverlayRESTUnavailable`, `ErrGatewayRESTUnavailable`) stops
+the daemon (`ErrTransportConstructionFailed`).
+
+**The IDevID, IAK and LDevID routes take the same map (#997).**
+`SetIDevIDRoutes` (`rest_idevid.go`) mounts `/api/v1/tpm/idevid*`,
+`/api/v1/tpm/iak*`, `/api/v1/tpm/device/attributes` and
+`/api/v1/idevid/ldevid` on `catalogGuardedAPI`. `New` calls it as soon as the
+REST scope guard exists, whether or not an IDevID service is set; without one
+the routes answer 503. Building the REST server alone mounts none of them.
+Each route serves an `IDevIDService` rpc and takes its catalog scope.
+
+| Routes | Scope |
+|--------|-------|
+| `GET /tpm/idevid`, `/tpm/idevid/exists`, `/tpm/idevid/cert`, `/tpm/iak`, `/tpm/iak/exists`, `/tpm/iak/cert`, `/tpm/device/attributes` (`GetDeviceAttributes`) | `idevid:read` |
+| `POST /tpm/idevid/generate`, `/tpm/idevid/csr`, `/tpm/idevid/install`, `/tpm/iak/generate`, `/tpm/iak/csr`, `/tpm/iak/install`, `/idevid/ldevid` (`CreateLDevID`) | `idevid:write` |
+| `DELETE /tpm/idevid`, `/tpm/idevid/cert`, `/tpm/iak`, `/tpm/iak/cert` | `idevid:delete` |
+
+A missing credential answers 401 and a missing scope 403. A failed mount (no
+scope guard: `ErrIDevIDRESTUnavailable`) stops the daemon
+(`ErrTransportConstructionFailed`).
+
+**The CA certificate routes take the same map (#997).** `SetCAHandlers`
+(`rest_service.go`) mounts the six `/api/v1/ca/certificates` routes
+(`CAHandlers.RegisterCertificateRoutes`) on `catalogGuardedRoot`; each serves a
+`CAService` rpc and takes its catalog scope.
+
+| Routes | Scope |
+|--------|-------|
+| `POST /ca/certificates` (`IssueCertificate`), `POST /ca/certificates/{serial}/renew` (`RenewCertificate`) | `certs:generate` |
+| `GET /ca/certificates` (`ListCertificates`) | `certs:list` |
+| `GET /ca/certificates/{serial}` (`GetCertificate`), `POST /ca/certificates/verify` (`VerifyCertificate`) | `certs:read` |
+| `POST /ca/certificates/{serial}/revoke` (`RevokeCertificate`) | `certs:revoke` |
+
+`/ca/info`, `/ca/crl` and `/ca/bundle` mount on the bare router as before
+(`CAHandlers.RegisterAuthorityRoutes`) and stay in `daemonMTLSOnlyRoutes`;
+`/ca/sign-csr` keeps its own `ca:sign-csr` guard
+([`docs/ca/api.md`](../ca/api.md) §4). A CA given without a scope guard
+(`ErrCARESTUnavailable`) stops the daemon (`ErrTransportConstructionFailed`).
+
+**The BMC routes take the same map (#997).** `SetBMCHandler`
+(`rest_service.go`) mounts the twenty `/api/v1/bmc/{profileID}/...` routes on
+`catalogGuardedAPI`; each serves a `BMCService` rpc and takes its catalog
+scope. The map keys carry the mux regexes the routes are mounted with
+(`{profileID:[0-9]+}`, `{slot:[0-9]+}`), as `restRouteTemplate` returns them.
+
+| Routes (under `/bmc/{profileID}`) | Scope |
+|--------|-------|
+| `GET /power`, `GET /boot-device`, `GET /virtual-media`, `GET /sensors`, `GET /system-info`, `GET /provision`, `GET /cert`, `GET /users` | `bmc:read` |
+| `POST /power` with `action` `on` (`PowerOn`), `POST /boot-device` (`SetBootDevice`) | `bmc:write` |
+| `POST /power` with `action` `off`, `reset`, `cycle` (`PowerOff`, `PowerReset`, `PowerCycle`) | `bmc:power` |
+| `POST /virtual-media` (`MountISO`), `DELETE /virtual-media` (`UnmountISO`) | `bmc:media` |
+| `POST /provision`, `POST /enroll`, `PUT /cert`, `POST /cert/restore`, `POST /users`, `DELETE /users/{slot}`, `PUT /users/{slot}/password`, `PUT /users/{slot}/privilege` | `bmc:admin` |
+
+`POST /power` is the one route whose body picks the rpc. Its
+`catalogRouteRPCs` value names a set (`bmcPowerActionRPCSet`), which
+`catalogBodySelectedRPCs` resolves for each request. The guard reads at most
+1 KiB of the body through `http.MaxBytesReader`, decodes only `action`, maps it
+through `bmcPowerActionRPCs`, and puts the same bytes back on `r.Body`. A body
+over the limit, one that is not JSON, or a missing or unknown action is refused
+with 403 (`ErrBMCPowerActionUnscoped`) before the handler runs. It never falls
+back to `bmc:write`. A BMC handler given without a scope guard
+(`ErrBMCRESTUnavailable`) stops the daemon (`ErrTransportConstructionFailed`).
+[`docs/bmc/api.md`](../bmc/api.md) §8 holds the scope vocabulary.
+
+**The daemon status, version and service-control routes take the same map
+(#997).** `SetDaemonRoutes` (`rest_service.go`) mounts the seven routes below
+on `catalogGuardedAPI`; each serves a `PlatformDaemon` rpc and takes its
+catalog scope. `New` calls it right after the scope guard is built, so a REST
+server is never constructed with these routes unguarded. A nil guard
+(`ErrDaemonRESTUnavailable`) stops the daemon
+(`ErrTransportConstructionFailed`). `GET /api/v1/protocols` has no rpc in the
+catalog and stays outside the guard, on `daemonMTLSOnlyRoutes`.
+
+| Route (under `/api/v1`) | rpc | Scope |
+|--------|-----|-------|
+| `GET /status` | `GetStatus` | `platform:read` |
+| `GET /version` | `GetVersion` | `platform:read` |
+| `GET /services` | `ListServices` | `platform:read` |
+| `GET /services/{service}` | `GetServiceStatus` | `platform:read` |
+| `POST /services/{service}/start` | `StartService` | `platform:write` |
+| `POST /services/{service}/stop` | `StopService` | `platform:write` |
+| `POST /services/{service}/restart` | `RestartService` | `platform:write` |
+
+`TestDaemonREST_EveryMountedRouteIsGuarded` (`pkg/api/daemon/rest_scope_test.go`)
+walks the daemon REST router and sends every route a request with no
+credential; each must answer 401 unless it is on one of two named exception
+lists: `daemonPreAuthRoutes` (the health probes, [`docs/health/api.md`](../health/api.md) §7)
+and `daemonMTLSOnlyRoutes` (the mounts that rely on the listener's mTLS alone,
+known debt that #997 retires slice by slice). A route mounted without a guard
+and not on a list fails the build.
 
 **QUIC authorizes every request before dispatch (#767).** Before #767 the QUIC
 dispatcher authenticated a token when a middleware was installed and then

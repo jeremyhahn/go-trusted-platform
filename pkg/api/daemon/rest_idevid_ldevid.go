@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/gorilla/mux"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -25,8 +26,7 @@ import (
 // IDevID/IAK surface. The path matches the SDK REST adapter mapping for
 // /platform.v1.IDevIDService/CreateLDevID so a REST-transport SDK client
 // reaches the same handler.
-func (s *RESTServer) registerLDevIDRoutes() {
-	api := s.router.PathPrefix(restBasePath).Subrouter()
+func (s *RESTServer) registerLDevIDRoutes(api *mux.Router) {
 	api.HandleFunc("/idevid/ldevid", s.handleLDevIDCreate).Methods(http.MethodPost)
 	s.logger.Info("LDevID REST route registered", "path", restBasePath+"/idevid/ldevid")
 }

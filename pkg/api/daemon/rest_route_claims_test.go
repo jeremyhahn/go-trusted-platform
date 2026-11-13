@@ -23,6 +23,8 @@ import (
 
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/reporting"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning/configdelivery"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
@@ -50,13 +52,17 @@ type (
 	routeTableCA struct {
 		quicbaasca.CACertificateAuthority
 	}
-	routeTableVTPM  struct{ vtpm.VTPMService }
-	routeTableProxy struct{ restapi.ProxyServiceBackend }
+	routeTableVTPM             struct{ vtpm.VTPMService }
+	routeTableProxy            struct{ restapi.ProxyServiceBackend }
+	routeTableDeviceService    struct{ device.DeviceService }
+	routeTableDeviceProfiles   struct{ device.DeviceProfileService }
+	routeTableDeviceTemplates  struct{ device.DeviceTemplateService }
+	routeTableAttestationCache struct{ reporting.Viewer }
 )
 
 // daemonRouteTable builds a daemon REST server with every route-mounting
 // setter wired, and returns it with its built table.
-func daemonRouteTable(t *testing.T) (*RESTServer, []string) {
+func daemonRouteTable(t *testing.T, guard *restapi.ScopeGuard) (*RESTServer, []string) {
 	t.Helper()
 
 	cfg := DefaultConfig()
@@ -68,26 +74,34 @@ func daemonRouteTable(t *testing.T) (*RESTServer, []string) {
 
 	log := logging.DefaultLogger()
 	s.SetConfigDeliveryHandler(routeTableConfigDelivery{})
-	s.SetBMCHandler(routeTableBMC{})
-	s.SetNTPHandlers(platformv1.UnimplementedNTPServiceServer{}, nil)
-	s.SetVPNHandlers(platformv1.UnimplementedVPNServiceServer{}, nil)
-	s.SetAppServiceHandlers(restapi.AppServiceServers{}, nil)
-	s.SetDeviceHandlers(routeTableDevices{}, routeTableProfiles{}, platformv1.UnimplementedDeviceServiceServer{})
-	s.SetTenantHandlers(routeTableTenants{}, nil, "")
-	s.SetKMSHandlers(routeTableKMS{})
-	s.SetComputeHandlers(platformv1.UnimplementedComputeServiceServer{}, nil)
-	s.SetOverlayHandlers(routeTableOverlay{})
-	s.SetCAHandlers(routeTableCA{}, nil)
-	s.SetTPMHandlers(platformv1.UnimplementedTPMServiceServer{}, nil)
-	s.SetVTPMService(routeTableVTPM{})
-	s.SetSDNService(nil)
-	s.SetGatewayIPAMService(nil, nil)
-	s.SetProxyService(routeTableProxy{})
-	s.SetClusterService(nil)
-	s.SetCeremonyService(NewCeremonyService(log, nil))
-	s.SetPIVService(NewPIVService(log, nil))
-	s.SetLUKSService(NewLUKSService(log, nil, RootCheckerFunc(func() bool { return true })))
-	s.SetFIDO2Service(NewFIDO2Service(log, nil))
+	require.NoError(t, s.SetBMCHandler(routeTableBMC{}, guard))
+	s.SetNTPHandlers(platformv1.UnimplementedNTPServiceServer{}, guard)
+	s.SetVPNHandlers(platformv1.UnimplementedVPNServiceServer{}, guard)
+	s.SetAppServiceHandlers(restapi.AppServiceServers{}, guard)
+	require.NoError(t, s.SetAttestationRouterHandlers(log, platformv1.UnimplementedAttestationServiceServer{},
+		ReportingHandles{Reports: routeTableAttestationCache{}}, guard))
+	require.NoError(t, s.SetDeviceRouterHandlers(log, routeTableDeviceService{}, routeTableDeviceProfiles{},
+		routeTableDeviceTemplates{}, platformv1.UnimplementedDeviceServiceServer{}, guard))
+	require.NoError(t, s.SetDeviceHandlers(routeTableDevices{}, routeTableProfiles{}, platformv1.UnimplementedDeviceServiceServer{}, guard))
+	require.NoError(t, s.SetDNSRouterHandlers(log, platformv1.UnimplementedDNSServiceServer{}, guard))
+	require.NoError(t, s.SetPXERouterHandlers(log, platformv1.UnimplementedPXEServiceServer{}, guard))
+	s.SetTenantHandlers(routeTableTenants{}, guard, "")
+	require.NoError(t, s.SetKMSHandlers(routeTableKMS{}, guard))
+	s.SetComputeHandlers(platformv1.UnimplementedComputeServiceServer{}, guard)
+	require.NoError(t, s.SetOverlayHandlers(routeTableOverlay{}, guard))
+	require.NoError(t, s.SetCAHandlers(routeTableCA{}, guard))
+	s.SetTPMHandlers(platformv1.UnimplementedTPMServiceServer{}, guard)
+	require.NoError(t, s.SetVTPMService(routeTableVTPM{}, guard))
+	require.NoError(t, s.SetSDNService(nil, guard))
+	require.NoError(t, s.SetGatewayIPAMService(nil, nil, guard))
+	require.NoError(t, s.SetProxyService(routeTableProxy{}, guard))
+	require.NoError(t, s.SetClusterService(nil, guard))
+	require.NoError(t, s.SetCeremonyService(NewCeremonyService(log, nil), guard))
+	require.NoError(t, s.SetPIVService(NewPIVService(log, nil), guard))
+	require.NoError(t, s.SetLUKSService(NewLUKSService(log, nil, RootCheckerFunc(func() bool { return true })), guard))
+	require.NoError(t, s.SetFIDO2Service(NewFIDO2Service(log, nil), guard))
+	require.NoError(t, s.SetIDevIDRoutes(guard))
+	require.NoError(t, s.SetDaemonRoutes(guard))
 
 	return s, testutil.WalkRoutes(t, s.Router())
 }
@@ -105,10 +119,14 @@ var daemonDivergentClaims = map[string]string{
 
 	"/platform.v1.ComputeService/GetContainerLogs": "#452: lands on GET /api/v1/compute/containers/{id} with id=\"logs\"; neither server serves container logs (claim_operation_resolution_test.go)",
 
-	"/platform.v1.DeviceService/CountDevices":                 "#452: the daemon has no count route; the request lands on GET /api/v1/devices/{id} with id=\"count\"",
-	"/platform.v1.DeviceService/DisableDevice":                "#452: the daemon's device routes (pkg/api/rest) have no disable",
-	"/platform.v1.DeviceService/EnableDevice":                 "#452: the daemon's device routes (pkg/api/rest) have no enable",
-	"/platform.v1.DeviceService/RecordAttestationCertificate": "#452: the daemon's device routes (pkg/api/rest) have no attest-cert/record",
+	"/platform.v1.AttestationService/CollectHostAttestation": attestationQuoteOnWebservice,
+	"/platform.v1.AttestationService/GetAttestationQuote":    attestationQuoteOnWebservice,
+	"/platform.v1.AttestationService/PollDeviceVerdicts":     "#452 (#997 s3): the daemon mounts no verdicts router; the webservice serves GET /api/v1/attestation/verdicts",
+
+	"/platform.v1.DeviceService/BootCertificate": deviceMachineFacingOnWebservice,
+	"/platform.v1.DeviceService/BootDelivery":    deviceMachineFacingOnWebservice,
+
+	"/platform.v1.PXEService/WebhookComplete": pxeWebhookOnWebservice,
 
 	"/platform.v1.IDevIDService/ActivateCredential":       idevidOnTPMPrefix,
 	"/platform.v1.IDevIDService/CreateIAKCSR":             idevidOnTPMPrefix,
@@ -153,6 +171,12 @@ const (
 	idevidOnTPMPrefix      = "#452: the daemon serves IDevID and IAK under /api/v1/tpm/idevid and /api/v1/tpm/iak (rest_idevid.go, registerIDevIDRoutes); the claim is the webservice's /api/v1/idevid shape"
 	kmsKeyInBody           = "#452: the daemon takes the key in the body at POST /api/v1/kms/{encrypt,decrypt,sign,verify}; the claim is the webservice's /{name} path"
 	pxeGatewayOnWebservice = "#452: the per-MAC PXE gateway routes are the webservice's (rest/pxe/gateway.go); the daemon mounts none"
+	// attestationQuoteOnWebservice and deviceMachineFacingOnWebservice are the
+	// caller-gated quote routes and the machine-facing device routes, which
+	// the daemon does not mount (#997 s3).
+	attestationQuoteOnWebservice    = "#452 (#997 s3): the quote and host collection routes take the caller-admission gate (RegisterQuoteRoutes), which the daemon does not mount"
+	deviceMachineFacingOnWebservice = "#452 (#997 s3): the machine-facing device routes (RegisterMachineFacingRoutes) are the webservice's; the daemon mounts none"
+	pxeWebhookOnWebservice          = "#452 (#997 s4): the credential-less install webhook (RegisterMachineFacingRoutes, #238) is the webservice route; the daemon mounts none"
 )
 
 // landsOnClaimedShape routes the claim through the daemon's table. It returns
@@ -189,7 +213,7 @@ func servedPrefixes(built []string) map[string]int {
 // daemonDivergentClaims. As there, the check runs one way; the daemon may
 // serve more than any SDK method calls.
 func TestDaemonRESTRouteClaims_ResolveAgainstBuiltRoutes(t *testing.T) {
-	s, built := daemonRouteTable(t)
+	s, built := daemonRouteTable(t, restapi.NewScopeGuard(nil, nil, nil))
 	served := servedPrefixes(built)
 	require.NotEmpty(t, served, "the fixture built no /api/v1 routes; this test would pass vacuously")
 
@@ -244,7 +268,7 @@ func TestDaemonRESTRouteClaims_ResolveAgainstBuiltRoutes(t *testing.T) {
 // an entry this server builds nothing under would leave those claims checked
 // by neither test.
 func TestDaemonOnlyPrefixes_DaemonServesEach(t *testing.T) {
-	_, built := daemonRouteTable(t)
+	_, built := daemonRouteTable(t, restapi.NewScopeGuard(nil, nil, nil))
 
 	routes := map[string]int{}
 	for _, route := range built {
@@ -270,7 +294,7 @@ func TestDaemonOnlyPrefixes_DaemonServesEach(t *testing.T) {
 // ratchet: an entry whose claim now lands on its own shape, which is no
 // longer a claim, or whose prefix the daemon no longer serves must be deleted.
 func TestDaemonDivergentClaims_StillDiverge(t *testing.T) {
-	s, built := daemonRouteTable(t)
+	s, built := daemonRouteTable(t, restapi.NewScopeGuard(nil, nil, nil))
 	served := servedPrefixes(built)
 
 	live := map[string]sdkrest.RouteClaim{}

@@ -451,11 +451,12 @@ invalidated when a profile changes. Restart `platformd`.
 
 ## Things worth knowing before you rely on them
 
-**BMC operations are not scope-checked on REST.** Any valid platform token can
-power off a node, mount an installer, replace a BMC certificate, or create a BMC
-administrator through the REST routes. gRPC, QUIC and MCP check the `bmc:*` scopes.
-Treat platform tokens that can reach the BMC REST API as equivalent to physical
-access, and restrict who holds them. Recorded in [api.md](api.md) §8.
+**BMC operations need the same `bmc:*` scopes on every transport.** On REST, a
+request without a credential gets 401 and a token without the operation's scope
+gets 403. `POST .../power` with `action` `on` needs `bmc:write`; `off`, `reset`
+and `cycle` need `bmc:power`. A token that can power off, mount an installer
+or administer BMC accounts is still equivalent to physical access, so restrict
+who holds `bmc:power`, `bmc:media` and `bmc:admin`. See [api.md](api.md) §8.
 
 **`--transport embedded` reaches only the SDK-path verbs** (`cert`, `enroll`,
 `user`), through a `platformd` hosted in the `platformctl` process. If you need
