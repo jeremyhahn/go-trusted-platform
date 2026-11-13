@@ -119,8 +119,8 @@ type mockOFServer struct {
 func newMockOFServer(t *testing.T) (*mockOFServer, string) {
 	t.Helper()
 
-	// Use t.TempDir() for Unix socket
-	socketDir := t.TempDir()
+	// A short directory keeps the socket path under the sun_path limit.
+	socketDir := shortSocketDir(t)
 	socketPath := filepath.Join(socketDir, "test-bridge.mgmt")
 
 	listener, err := net.Listen("unix", socketPath)
