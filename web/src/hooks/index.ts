@@ -82,7 +82,18 @@ export type { User, AuthContextType } from '@/contexts/AuthContext';
 export { useToast, toast, dismissToast } from './use-toast';
 export type { Toast, UseToastReturn } from './use-toast';
 
+export { useTPMOps, textToBase64, base64ToHex } from './use-tpm-ops';
+
 export { useReportedGateways } from './use-reported-gateways';
+export { useOverlayVteps } from './use-overlay-vteps';
+export { useRegistry, encodeRepository } from './use-registry';
+export type {
+  RegistryHealthCode,
+  RegistryComponent,
+  RegistryStatus,
+  RegistryTags,
+  UseRegistryResult,
+} from './use-registry';
 export type {
   ReportedGateway,
   UseReportedGatewaysOptions,

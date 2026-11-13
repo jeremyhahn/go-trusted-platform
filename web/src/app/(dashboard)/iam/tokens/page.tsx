@@ -46,7 +46,7 @@ interface DisplayApplication {
  */
 export default function TokensPage() {
   const { toast } = useToast();
-  const { user: authUser, tenantId, isLoading: authLoading } = useAuth();
+  const { tenantId, isLoading: authLoading } = useAuth();
   const iam = useIAM();
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [displaySecret, setDisplaySecret] = useState<{

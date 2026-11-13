@@ -18,12 +18,7 @@ import {
   LogOut,
   User,
   Database,
-  HardDrive,
-  Key,
   FileCheck,
-  Globe,
-  Radio,
-  Activity,
   Fingerprint,
   PackageCheck,
 } from "lucide-react";
@@ -115,6 +110,7 @@ const navigation = [
       { title: "Lockout", href: "/tpm/lockout" },
       { title: "NVRAM", href: "/tpm/nvram" },
       { title: "Seal/Unseal", href: "/tpm/seal" },
+      { title: "Credential / Random", href: "/tpm/credential" },
     ],
   },
   {
@@ -143,6 +139,7 @@ const navigation = [
       { title: "Containers", href: "/compute/containers" },
       { title: "Snapshots", href: "/compute/snapshots" },
       { title: "Images", href: "/compute/images" },
+      { title: "Registry", href: "/compute/registry" },
     ],
   },
   {
@@ -157,6 +154,7 @@ const navigation = [
       { title: "VLANs", href: "/networking/vlans" },
       { title: "DNS Zones", href: "/networking/dns" },
       { title: "Overlays", href: "/networking/overlays" },
+      { title: "VTEPs", href: "/networking/overlays/vteps" },
       { title: "Gateway", href: "/networking/gateway" },
       { title: "VPN", href: "/networking/vpn" },
       { title: "PXE Boot", href: "/networking/pxe" },
