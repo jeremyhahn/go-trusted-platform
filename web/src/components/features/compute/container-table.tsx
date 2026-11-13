@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { MoreHorizontal, Play, Square, Terminal, FileText, Trash2 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { Button } from '@/components/ui/button';
@@ -157,7 +158,11 @@ export function ContainerTable({
           ) : (
             containers.map((container) => (
               <TableRow key={container.id}>
-                <TableCell className="font-medium">{container.name}</TableCell>
+                <TableCell className="font-medium">
+                  <Link href={`/compute/containers/${encodeURIComponent(container.id)}`} className="hover:underline">
+                    {container.name}
+                  </Link>
+                </TableCell>
                 <TableCell className="font-mono text-sm">{container.image}</TableCell>
                 <TableCell>
                   <Badge variant="outline" className={statusColors[container.status]}>
