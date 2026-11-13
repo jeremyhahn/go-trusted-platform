@@ -1,4 +1,6 @@
 DELETE /api/v1/attestation/manifests/{id}
+DELETE /api/v1/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}
+DELETE /api/v1/bmc/{profileID:[0-9]+}/virtual-media
 DELETE /api/v1/ca/certificates/{serial}
 DELETE /api/v1/cache/entries
 DELETE /api/v1/compute/containers/{id}
@@ -96,6 +98,14 @@ GET /api/v1/attestation/manifests/{id}
 GET /api/v1/attestation/reports
 GET /api/v1/attestation/reports/{device_id}
 GET /api/v1/attestation/verdicts
+GET /api/v1/bmc/{profileID:[0-9]+}/boot-device
+GET /api/v1/bmc/{profileID:[0-9]+}/cert
+GET /api/v1/bmc/{profileID:[0-9]+}/power
+GET /api/v1/bmc/{profileID:[0-9]+}/provision
+GET /api/v1/bmc/{profileID:[0-9]+}/sensors
+GET /api/v1/bmc/{profileID:[0-9]+}/system-info
+GET /api/v1/bmc/{profileID:[0-9]+}/users
+GET /api/v1/bmc/{profileID:[0-9]+}/virtual-media
 GET /api/v1/ca
 GET /api/v1/ca/bootstrap
 GET /api/v1/ca/bundle
@@ -366,6 +376,13 @@ POST /api/v1/attestation/quote
 POST /api/v1/attestation/quote/verify
 POST /api/v1/attestation/reports/{device_id}/refresh
 POST /api/v1/attestation/vm/{id}
+POST /api/v1/bmc/{profileID:[0-9]+}/boot-device
+POST /api/v1/bmc/{profileID:[0-9]+}/cert/restore
+POST /api/v1/bmc/{profileID:[0-9]+}/enroll
+POST /api/v1/bmc/{profileID:[0-9]+}/power
+POST /api/v1/bmc/{profileID:[0-9]+}/provision
+POST /api/v1/bmc/{profileID:[0-9]+}/users
+POST /api/v1/bmc/{profileID:[0-9]+}/virtual-media
 POST /api/v1/ca/certificates
 POST /api/v1/ca/certificates/verify
 POST /api/v1/ca/certificates/{serial}/renew
@@ -567,6 +584,9 @@ POST /api/v1/vtpm/bundles/{id}/unseal
 POST /api/v1/vtpm/bundles/{id}/validate
 POST /api/v1/vtpm/templates
 POST /api/v1/vtpm/templates/{id}/clone
+PUT /api/v1/bmc/{profileID:[0-9]+}/cert
+PUT /api/v1/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/password
+PUT /api/v1/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/privilege
 PUT /api/v1/device/profiles/{id:[0-9]+}
 PUT /api/v1/device/templates/{id:[0-9]+}
 PUT /api/v1/devices/{id:[0-9]+}
