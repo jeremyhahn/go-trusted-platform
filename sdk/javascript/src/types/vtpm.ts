@@ -556,6 +556,110 @@ export interface ValidateBundleResponse {
   errors?: string[];
 }
 
+// ============================================================================
+// Bundle runtime (start/stop, quote, seal/unseal, PCRs)
+//
+// Wire shapes of pkg/webservice/v1/rest/vtpm/types.go. Byte fields travel as
+// base64 strings (Go encodes []byte as standard base64).
+// ============================================================================
+
+/** Status block carried by every runtime response */
+export interface VTPMRuntimeStatus {
+  success: boolean;
+  message?: string;
+}
+
+/** Reply to POST /bundles/{id}/start */
+export interface StartBundleResponse {
+  status: VTPMRuntimeStatus;
+  bundle_id: string;
+  running: boolean;
+  socket_path: string;
+}
+
+/** Reply to POST /bundles/{id}/stop */
+export interface StopBundleResponse {
+  status: VTPMRuntimeStatus;
+  bundle_id: string;
+  stopped: boolean;
+}
+
+/** Body of POST /bundles/{id}/quote */
+export interface QuoteBundleRequest {
+  /** Nonce, base64 */
+  nonce: string;
+  /** PCR indexes to quote */
+  pcrs?: number[];
+}
+
+/** Reply to POST /bundles/{id}/quote */
+export interface QuoteBundleResponse {
+  status: VTPMRuntimeStatus;
+  bundle_id: string;
+  /** Quote, base64 */
+  quote: string;
+  /** Signature, base64 */
+  signature: string;
+  /** PCR index to base64 value */
+  pcr_values: Record<string, string>;
+  hash_algorithm: string;
+}
+
+/** Body of POST /bundles/{id}/seal */
+export interface SealBundleRequest {
+  /** Data to seal, base64 */
+  data: string;
+  pcrs?: number[];
+  auth_value?: string;
+}
+
+/** Reply to POST /bundles/{id}/seal */
+export interface SealBundleResponse {
+  status: VTPMRuntimeStatus;
+  bundle_id: string;
+  /** Sealed blob, base64 */
+  sealed_data: string;
+}
+
+/** Body of POST /bundles/{id}/unseal */
+export interface UnsealBundleRequest {
+  /** Sealed blob, base64 */
+  sealed_data: string;
+  auth_value?: string;
+}
+
+/** Reply to POST /bundles/{id}/unseal */
+export interface UnsealBundleResponse {
+  status: VTPMRuntimeStatus;
+  bundle_id: string;
+  /** Unsealed data, base64 */
+  data: string;
+}
+
+/** Body of POST /bundles/{id}/pcrs/extend */
+export interface ExtendBundlePCRRequest {
+  pcr_index: number;
+  /** Data to extend, base64; the TPM hashes it with SHA-256 before extending */
+  data: string;
+}
+
+/** Reply to POST /bundles/{id}/pcrs/extend */
+export interface ExtendBundlePCRResponse {
+  status: VTPMRuntimeStatus;
+  bundle_id: string;
+  pcr_index: number;
+  extended: boolean;
+}
+
+/** Reply to GET /bundles/{id}/pcrs?pcr_index=N */
+export interface ReadBundlePCRResponse {
+  status: VTPMRuntimeStatus;
+  bundle_id: string;
+  pcr_index: number;
+  /** PCR value, base64 */
+  value: string;
+}
+
 /**
  * Get bundle path response
  */
