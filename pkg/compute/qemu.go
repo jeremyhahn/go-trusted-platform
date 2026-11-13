@@ -1213,6 +1213,9 @@ func (o *QEMUOrchestrator) Close() error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
+	// Reap migration receivers that were never finalized.
+	o.closeReceivers()
+
 	// Stop all running instances
 	for instanceID, qemuInst := range o.instances {
 		o.closeConsole(instanceID)
