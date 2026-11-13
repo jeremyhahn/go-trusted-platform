@@ -131,6 +131,8 @@ export default function TenantLifecyclePage() {
                 className="flex items-end gap-2"
                 onSubmit={(e) => {
                   e.preventDefault();
+                  // UpdateTenant ignores an empty displayName, so it cannot clear one.
+                  if (!displayName.trim()) return;
                   void lifecycle.update(displayName);
                 }}
               >
@@ -142,7 +144,7 @@ export default function TenantLifecyclePage() {
                     onChange={(e) => setDisplayName(e.target.value)}
                   />
                 </div>
-                <Button type="submit" disabled={busy}>
+                <Button type="submit" disabled={busy || !displayName.trim()}>
                   Save
                 </Button>
               </form>

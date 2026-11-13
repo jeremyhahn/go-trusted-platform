@@ -105,6 +105,9 @@ export function useTenantLifecycle(): UseTenantLifecycleResult {
     (displayName: string) =>
       run(async () => {
         const t = requireTenant();
+        // TenantGRPCServer.UpdateTenant applies displayName only when it is
+        // nonempty, so an empty one would be reported as saved but ignored.
+        if (!displayName.trim()) throw new Error('Display name cannot be empty');
         const updated = unwrap(await service.updateTenant({ tenantId: t.id, displayName })).tenant;
         setTenant(updated ? normalizeTenant(updated) : { ...t, displayName });
         return 'Tenant updated';
