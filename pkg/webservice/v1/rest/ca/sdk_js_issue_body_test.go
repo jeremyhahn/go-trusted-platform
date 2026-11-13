@@ -16,6 +16,7 @@ package ca
 import (
 	"bytes"
 	"context"
+	"crypto/elliptic"
 	"crypto/x509"
 	"net/http"
 	"net/http/httptest"
@@ -83,4 +84,81 @@ func TestIssueCertificate_ShortEnumNameIsLost(t *testing.T) {
 	require.NotNil(t, issued)
 	require.NotNil(t, issued.KeyAttributes)
 	assert.Equal(t, x509.ECDSA, issued.KeyAttributes.KeyAlgorithm)
+}
+
+// TestIssueCertificate_KeySizeAndCurveReachTheCA pins that the requested RSA
+// key size and ECDSA curve reach the CA on the issued KeyAttributes: without
+// RSAAttributes or ECCAttributes the keystore falls back to RSA-2048 or P-256,
+// so a request for RSA-4096 or P-384 would silently get a weaker key.
+func TestIssueCertificate_KeySizeAndCurveReachTheCA(t *testing.T) {
+	cases := []struct {
+		alg     string
+		x509Alg x509.PublicKeyAlgorithm
+		rsaBits int
+		curve   elliptic.Curve
+	}{
+		{alg: "KEY_ALGORITHM_RSA_2048", x509Alg: x509.RSA, rsaBits: 2048},
+		{alg: "KEY_ALGORITHM_RSA_3072", x509Alg: x509.RSA, rsaBits: 3072},
+		{alg: "KEY_ALGORITHM_RSA_4096", x509Alg: x509.RSA, rsaBits: 4096},
+		{alg: "KEY_ALGORITHM_ECDSA_P256", x509Alg: x509.ECDSA, curve: elliptic.P256()},
+		{alg: "KEY_ALGORITHM_ECDSA_P384", x509Alg: x509.ECDSA, curve: elliptic.P384()},
+		{alg: "KEY_ALGORITHM_ECDSA_P521", x509Alg: x509.ECDSA, curve: elliptic.P521()},
+	}
+	for _, tc := range cases {
+		t.Run(tc.alg, func(t *testing.T) {
+			var issued *xkmsca.CACertificateRequest
+			mockCA := &mockCertificateAuthority{
+				initialized: true,
+				issueCertificateFn: func(_ context.Context, request *xkmsca.CACertificateRequest) (*xkmsca.IssuedCertificate, error) {
+					issued = request
+					return &xkmsca.IssuedCertificate{Certificate: createTestCertificate(request.Subject.CommonName)}, nil
+				},
+			}
+			router := newTestRouter(NewCARouter(newTestLogger(), mockCA, &mockHttpWriter{}))
+
+			body := []byte(`{"request":{"subject":{"commonName":"sub.example.com"},"keyAlgorithm":"` + tc.alg + `"}}`)
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/ca/certificates", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+
+			assert.Equal(t, http.StatusCreated, rec.Code)
+			require.NotNil(t, issued, "the CA was not asked to issue")
+			attrs := issued.KeyAttributes
+			require.NotNil(t, attrs)
+			assert.Equal(t, tc.x509Alg, attrs.KeyAlgorithm)
+			if tc.rsaBits != 0 {
+				require.NotNil(t, attrs.RSAAttributes, "RSA key size not carried to the CA")
+				assert.Equal(t, tc.rsaBits, attrs.RSAAttributes.KeySize)
+				assert.Nil(t, attrs.ECCAttributes)
+			} else {
+				require.NotNil(t, attrs.ECCAttributes, "ECDSA curve not carried to the CA")
+				assert.Equal(t, tc.curve, attrs.ECCAttributes.Curve)
+				assert.Nil(t, attrs.RSAAttributes)
+			}
+		})
+	}
+}
+
+// TestIssueCertificate_UnsupportedKeyAlgorithmRejected pins that a key
+// algorithm the handler cannot map is refused with 400, not issued.
+func TestIssueCertificate_UnsupportedKeyAlgorithmRejected(t *testing.T) {
+	called := false
+	mockCA := &mockCertificateAuthority{
+		initialized: true,
+		issueCertificateFn: func(_ context.Context, request *xkmsca.CACertificateRequest) (*xkmsca.IssuedCertificate, error) {
+			called = true
+			return &xkmsca.IssuedCertificate{Certificate: createTestCertificate(request.Subject.CommonName)}, nil
+		},
+	}
+	router := newTestRouter(NewCARouter(newTestLogger(), mockCA, &mockHttpWriter{}))
+
+	body := []byte(`{"request":{"subject":{"commonName":"sub.example.com"},"keyAlgorithm":999}}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ca/certificates", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.False(t, called, "the CA was asked to issue an unsupported key algorithm")
 }
