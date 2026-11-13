@@ -216,9 +216,7 @@ test.describe('Devices Page', () => {
 
       if ((await searchInput.count()) > 0) {
         await searchInput.first().fill('test-device');
-
-        // Wait for filter to apply
-        await authenticatedPage.waitForTimeout(500);
+        await expect(searchInput.first()).toHaveValue('test-device');
 
         // Search should work without crashing
         await expect(authenticatedPage.locator('main')).toBeVisible();
@@ -251,15 +249,13 @@ test.describe('Devices Page', () => {
 
       if ((await typeSelect.count()) > 0) {
         await typeSelect.first().click();
-
-        // Wait for dropdown to open
-        await authenticatedPage.waitForTimeout(300);
+        await expect(typeSelect.first()).toHaveAttribute('aria-expanded', 'true');
 
         // Select the option from the listbox using role
         const physicalOption = authenticatedPage.locator('div[role="option"]:has-text("Physical")');
         if ((await physicalOption.count()) > 0) {
           await physicalOption.first().click({ force: true });
-          await authenticatedPage.waitForTimeout(500);
+          await expect(typeSelect.first()).toHaveAttribute('aria-expanded', 'false');
         }
       }
     });
@@ -290,15 +286,13 @@ test.describe('Devices Page', () => {
 
       if ((await statusSelect.count()) > 0) {
         await statusSelect.first().click();
-
-        // Wait for dropdown to open
-        await authenticatedPage.waitForTimeout(300);
+        await expect(statusSelect.first()).toHaveAttribute('aria-expanded', 'true');
 
         // Select the option from the listbox using role
         const onlineOption = authenticatedPage.locator('div[role="option"]:has-text("Online")');
         if ((await onlineOption.count()) > 0) {
           await onlineOption.first().click({ force: true });
-          await authenticatedPage.waitForTimeout(500);
+          await expect(statusSelect.first()).toHaveAttribute('aria-expanded', 'false');
         }
       }
     });
@@ -328,7 +322,7 @@ test.describe('Devices Page', () => {
       const searchInput = authenticatedPage.locator('input[placeholder*="search"]');
       if ((await searchInput.count()) > 0) {
         await searchInput.first().fill('test');
-        await authenticatedPage.waitForTimeout(300);
+        await expect(searchInput.first()).toHaveValue('test');
       }
 
       // Look for clear button
@@ -338,10 +332,10 @@ test.describe('Devices Page', () => {
 
       if ((await clearButton.count()) > 0) {
         await clearButton.first().click();
-        await authenticatedPage.waitForTimeout(500);
 
         // Search should be cleared
         if ((await searchInput.count()) > 0) {
+          await expect(searchInput.first()).toHaveValue('');
           const value = await searchInput.first().inputValue();
           expect(value).toBe('');
         }
