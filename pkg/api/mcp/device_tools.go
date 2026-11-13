@@ -172,6 +172,14 @@ func (r *ToolRegistry) registerDeviceToolsV2() {
 					"type":        "string",
 					"description": "Exact MAC address for non-TPM device identification",
 				},
+				"dice_device_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Hex DICE device identifier (1 to 64 bytes) the registry resolves a DICE-attested node to",
+				},
+				"golden_fw_hash": map[string]interface{}{
+					"type":        "string",
+					"description": "Hex expected firmware measurement (FWHash, 32 bytes) of the device bound to this profile",
+				},
 				"config": map[string]interface{}{
 					"type":        "object",
 					"description": "Full merged platform config delivered to the device",
@@ -289,6 +297,14 @@ func (r *ToolRegistry) registerDeviceToolsV2() {
 				"mac_address": map[string]interface{}{
 					"type":        "string",
 					"description": "New exact MAC address",
+				},
+				"dice_device_id": map[string]interface{}{
+					"type":        "string",
+					"description": "New hex DICE device identifier (1 to 64 bytes); omitted or empty keeps the stored one",
+				},
+				"golden_fw_hash": map[string]interface{}{
+					"type":        "string",
+					"description": "New hex golden firmware hash (FWHash, 32 bytes); omitted or empty keeps the stored one",
 				},
 				"config": map[string]interface{}{
 					"type":        "object",

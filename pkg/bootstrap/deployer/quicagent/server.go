@@ -29,12 +29,17 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"time"
 
 	quic "github.com/quic-go/quic-go"
 )
 
 // shellPath is the shell the agent runs commands with, as SSH does.
 const shellPath = "/bin/sh"
+
+// runWaitDelay bounds how long a cancelled command may keep its output
+// pipes open before run gives up on them and returns.
+const runWaitDelay = 3 * time.Second
 
 // streamRefused is the stream error code the agent sends when it stops
 // reading a body it will not write.
@@ -224,6 +229,11 @@ func (s *Server) run(ctx context.Context, command string) response {
 	cmd := exec.CommandContext(ctx, shellPath, "-c", command)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	// Cancellation kills the command's whole process group, and the wait
+	// for output pipes a stray descendant still holds is bounded, so a
+	// cancelled operation cannot hold up Serve's shutdown.
+	killProcessGroupOnCancel(cmd)
+	cmd.WaitDelay = runWaitDelay
 	err := cmd.Run()
 	resp := response{Stdout: stdout.String(), Stderr: stderr.String()}
 	var exitErr *exec.ExitError

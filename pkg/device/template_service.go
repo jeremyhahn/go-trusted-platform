@@ -273,6 +273,15 @@ func (s *TemplateService) ToProfileWithConfigOverrides(
 		if overrides.MACAddress != "" {
 			profile.MACAddress = overrides.MACAddress
 		}
+		// The DICE identity and golden firmware hash ride the same override
+		// body; dropping them stored a profile without the binding the
+		// caller supplied.
+		if overrides.DICEDeviceID != "" {
+			profile.DICEDeviceID = overrides.DICEDeviceID
+		}
+		if overrides.GoldenFWHash != "" {
+			profile.GoldenFWHash = overrides.GoldenFWHash
+		}
 		if overrides.Zone != "" {
 			profile.Zone = overrides.Zone
 		}
