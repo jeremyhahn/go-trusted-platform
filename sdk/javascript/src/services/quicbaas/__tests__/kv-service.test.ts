@@ -60,7 +60,7 @@ describe('KVService', () => {
       const result = await service.get({ key: 'users/user-123' });
 
       expect(result.success).toBe(true);
-      expect(result.data?.key).toBe('users/user-123');
+      expect(result.data).toMatchObject({ key: 'users/user-123' });
       expect(mockClient.get).toHaveBeenCalledWith('/v1/quicbaas/kv/users%2Fuser-123');
     });
 
@@ -324,7 +324,7 @@ describe('KVService', () => {
       const result = await service.list();
 
       expect(result.success).toBe(true);
-      expect(result.data?.items).toHaveLength(2);
+      expect(result.data).toHaveProperty(['items', 'length'], 2);
       expect(mockClient.get).toHaveBeenCalledWith('/v1/quicbaas/kv');
     });
 
@@ -351,7 +351,7 @@ describe('KVService', () => {
 
       await service.list({ startKey: 'a', endKey: 'z' });
 
-      const call = vi.mocked(mockClient.get).mock.calls[0][0];
+      const call = vi.mocked(mockClient.get).mock.calls[0]?.[0];
       expect(call).toContain('startKey=a');
       expect(call).toContain('endKey=z');
     });
@@ -365,7 +365,7 @@ describe('KVService', () => {
 
       await service.list({ limit: 100, cursor: 'page-2' });
 
-      const call = vi.mocked(mockClient.get).mock.calls[0][0];
+      const call = vi.mocked(mockClient.get).mock.calls[0]?.[0];
       expect(call).toContain('limit=100');
       expect(call).toContain('cursor=page-2');
     });

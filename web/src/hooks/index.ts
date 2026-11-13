@@ -89,8 +89,18 @@ export type {
   CreateBMCUserInput,
   UseBMCUsersResult,
 } from './use-bmc-users';
+export { useTPMOps, textToBase64, base64ToHex } from './use-tpm-ops';
 
 export { useReportedGateways } from './use-reported-gateways';
+export { useOverlayVteps } from './use-overlay-vteps';
+export { useRegistry, encodeRepository } from './use-registry';
+export type {
+  RegistryHealthCode,
+  RegistryComponent,
+  RegistryStatus,
+  RegistryTags,
+  UseRegistryResult,
+} from './use-registry';
 export type {
   ReportedGateway,
   UseReportedGatewaysOptions,

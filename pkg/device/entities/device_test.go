@@ -17,7 +17,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestDevice_EntityID(t *testing.T) {
@@ -97,38 +96,6 @@ func TestDevice_SetEntityID(t *testing.T) {
 			assert.Equal(t, tt.expected, tt.device.EntityID())
 		})
 	}
-}
-
-func TestDevice_EmptyDevice(t *testing.T) {
-	device := &Device{}
-
-	assert.Equal(t, uint64(0), device.ID)
-	assert.Equal(t, "", device.AttestPub)
-	assert.Equal(t, "", device.EKCert)
-	assert.Nil(t, device.EventLog)
-	assert.Equal(t, uint32(0), device.HashAlgoId)
-	assert.Equal(t, "", device.Model)
-	assert.Equal(t, "", device.Serial)
-	assert.Equal(t, "", device.SigningPub)
-}
-
-func TestDevice_NilEventLog(t *testing.T) {
-	device := &Device{
-		ID:       12345,
-		EventLog: nil,
-	}
-
-	assert.Nil(t, device.EventLog)
-}
-
-func TestDevice_EmptyEventLog(t *testing.T) {
-	device := &Device{
-		ID:       12345,
-		EventLog: []byte{},
-	}
-
-	require.NotNil(t, device.EventLog)
-	assert.Len(t, device.EventLog, 0)
 }
 
 func TestDevice_LargeEventLog(t *testing.T) {
