@@ -52,68 +52,37 @@ test.describe("Invitation accept flow", () => {
     await expect(page.getByTestId("invite-email")).toHaveText("invitee@example.com");
     await expect(page.getByTestId("invite-role")).toHaveText("member");
     await expect(page.getByTestId("invite-tenant")).toHaveText("Acme Workspace");
-    await expect(page.getByTestId("invite-accept")).toBeVisible();
+    await expect(page.getByTestId("invite-join")).toHaveAttribute(
+      "href",
+      "/auth/webauthn/?invitation=tok-abc&tenant_name=Acme%20Workspace"
+    );
   });
 
-  test("GetInvitationByToken: an unknown token shows the error and no accept button", async ({ page }) => {
+  test("GetInvitationByToken: an unknown token shows the error and no join link", async ({ page }) => {
     await mockInvitationLookupApi(page, { invitations: [] });
 
     await page.goto("/invite/?token=nope");
 
     await expect(page.getByTestId("invite-error")).toContainText("Invalid or expired invitation");
-    await expect(page.getByTestId("invite-accept")).toHaveCount(0);
+    await expect(page.getByTestId("invite-join")).toHaveCount(0);
   });
 
-  test("AcceptInvitation: accept behind a confirm dialog posts the token and user_id", async ({ page }) => {
-    await createTenantOwnerSession(page.context(), { userId: "invitee-user-1" });
-    const inv = createMockInvitation({ id: "inv-acc-1", token: "tok-accept" });
-    const mock = await mockInvitationLookupApi(page, { invitations: [inv] });
+  test("AcceptInvitation: the join link is the registration flow and posts nothing to /invitations/accept", async ({
+    page,
+  }) => {
+    const inv = createMockInvitation({ id: "inv-join-1", token: "tok-join" });
+    const mock = await mockInvitationLookupApi(page, { invitations: [inv], tenantName: "Acme Workspace" });
 
-    await page.goto("/invite/?token=tok-accept");
-    await page.getByTestId("invite-accept").click();
+    await page.goto("/invite/?token=tok-join");
 
-    // Cancelling the dialog posts nothing.
-    await expect(page.getByRole("dialog")).toBeVisible();
-    await page.getByRole("button", { name: "Cancel" }).click();
-    await expect(page.getByRole("dialog")).toHaveCount(0);
+    const join = page.getByTestId("invite-join");
+    await expect(join).toHaveAttribute("href", "/auth/webauthn/?invitation=tok-join&tenant_name=Acme%20Workspace");
+    await join.click();
+
+    // The registration flow (BeginRegistration with invitation_token) joins
+    // the invitee and consumes the invitation; the invite page never calls
+    // AcceptInvitation itself.
+    await expect(page).toHaveURL(/\/auth\/webauthn\/\?invitation=tok-join/);
     expect(mock.acceptBodies()).toHaveLength(0);
-
-    await page.getByTestId("invite-accept").click();
-    await page.getByTestId("invite-confirm").click();
-
-    await expect(page.getByTestId("invite-accepted")).toHaveText("Invitation accepted");
-    expect(mock.acceptBodies()).toEqual([{ token: "tok-accept", user_id: "invitee-user-1" }]);
-    await expect(page.getByTestId("invite-accept")).toHaveCount(0);
-  });
-
-  test("AcceptInvitation: signed out, the page links to sign-in and posts nothing", async ({ page }) => {
-    const inv = createMockInvitation({ id: "inv-acc-3", token: "tok-signin" });
-    const mock = await mockInvitationLookupApi(page, { invitations: [inv] });
-
-    await page.goto("/invite/?token=tok-signin");
-
-    const signIn = page.getByTestId("invite-sign-in");
-    await expect(signIn).toBeVisible();
-    await expect(signIn).toHaveAttribute(
-      "href",
-      `/auth/login/?redirect=${encodeURIComponent("/invite/?token=tok-signin")}`
-    );
-    await expect(page.getByTestId("invite-accept")).toHaveCount(0);
-    expect(mock.acceptBodies()).toHaveLength(0);
-  });
-
-  test("AcceptInvitation: a refused accept shows the error", async ({ page }) => {
-    await createTenantOwnerSession(page.context());
-    const inv = createMockInvitation({ id: "inv-acc-2", token: "tok-refused" });
-    await mockInvitationLookupApi(page, {
-      invitations: [inv],
-      acceptError: { error: "Invitation has expired", status: 410 },
-    });
-
-    await page.goto("/invite/?token=tok-refused");
-    await page.getByTestId("invite-accept").click();
-    await page.getByTestId("invite-confirm").click();
-
-    await expect(page.getByTestId("invite-accept-error")).toHaveText("Invitation has expired");
   });
 });
