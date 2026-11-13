@@ -27,10 +27,6 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/tunnel"
 )
 
-// vpnHubInterface is the WireGuard hub's interface name in the datapath
-// child.
-const vpnHubInterface = "vpn-hub0"
-
 // vpnDataPlanes is gatewayd's plane factory. It builds the WireGuard hub
 // plane when the management VPN offers wireguard and names the hub's key
 // reference (`wireguard.key-ref`) and address (`wireguard.address`), with
@@ -68,12 +64,6 @@ func vpnDataPlanes(cfg *ServeConfig, gw *gateway.Gateway, logger *slog.Logger) (
 		return nil, err
 	}
 	return []vpn.ManagedDataPlane{plane}, nil
-}
-
-// removeStaleVPNHub removes the hub device of vpnHubInterface a killed
-// predecessor left in the kernel, for a datapath that builds no plane.
-func removeStaleVPNHub(logger *slog.Logger) error {
-	return tunnel.RemoveStaleWireGuardHub(logger, vpnHubInterface)
 }
 
 // vpnHubListeners is the WireGuard hub's UDP listener for the host
