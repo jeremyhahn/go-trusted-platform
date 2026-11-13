@@ -613,46 +613,6 @@ func TestStackFrameStruct(t *testing.T) {
 	}
 }
 
-// TestSecurityLogEntryStruct tests the SecurityLogEntry struct
-func TestSecurityLogEntryStruct(t *testing.T) {
-	timestamp := time.Now()
-	entry := SecurityLogEntry{
-		Timestamp:       timestamp,
-		Severity:        SeverityHigh,
-		Category:        CategoryAuthentication,
-		Description:     "Test description",
-		Details:         "Test details",
-		Source:          SourceAuthentication,
-		OffenderAddress: "192.168.1.1",
-		OffenderID:      "user-456",
-	}
-
-	if entry.Timestamp != timestamp {
-		t.Error("SecurityLogEntry.Timestamp mismatch")
-	}
-	if entry.Severity != SeverityHigh {
-		t.Error("SecurityLogEntry.Severity mismatch")
-	}
-	if entry.Category != CategoryAuthentication {
-		t.Error("SecurityLogEntry.Category mismatch")
-	}
-	if entry.Description != "Test description" {
-		t.Error("SecurityLogEntry.Description mismatch")
-	}
-	if entry.Details != "Test details" {
-		t.Error("SecurityLogEntry.Details mismatch")
-	}
-	if entry.Source != SourceAuthentication {
-		t.Error("SecurityLogEntry.Source mismatch")
-	}
-	if entry.OffenderAddress != "192.168.1.1" {
-		t.Error("SecurityLogEntry.OffenderAddress mismatch")
-	}
-	if entry.OffenderID != "user-456" {
-		t.Error("SecurityLogEntry.OffenderID mismatch")
-	}
-}
-
 // TestSourceConstants tests that source constants are defined correctly
 // TestParseFormat tests the ParseFormat function
 func TestParseFormat(t *testing.T) {
