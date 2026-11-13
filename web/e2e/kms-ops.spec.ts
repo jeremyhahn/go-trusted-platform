@@ -155,6 +155,35 @@ test.describe("KMS operations", () => {
     expect(mock.calls.find((c) => c.path === "/data-keys")?.body).toEqual({ key_id: "kek" });
   });
 
+  test("clears the data key when the key name changes or a later generation fails", async ({ page }) => {
+    await openPage(page);
+    const card = page.getByTestId("op-data-key");
+    const result = page.getByTestId("data-key-result");
+    const generate = card.getByRole("button", { name: "Generate data key" });
+    await card.getByLabel("Key name").fill("kek");
+    await generate.click();
+    await expect(result).toHaveText(`plaintext: ${b64("plain-dek")}\nencrypted: ${b64("enc-dek")}`);
+
+    // A new key name makes the shown pair stale: it is not protected by that key.
+    await card.getByLabel("Key name").fill("other");
+    await expect(result).not.toBeVisible();
+
+    await generate.click();
+    await expect(result).toBeVisible();
+
+    // A later generation that fails must not leave the earlier key.
+    await page.route("**/api/v1/kms/data-keys", (route) =>
+      route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ message: "backend unavailable" }),
+      }),
+    );
+    await generate.click();
+    await expect(page.getByTestId("kms-ops-error")).toContainText("backend unavailable");
+    await expect(result).not.toBeVisible();
+  });
+
   test("generates a wrapped data key", async ({ page }) => {
     const mock = await openPage(page);
     const card = page.getByTestId("op-wrapped-data-key");
@@ -162,6 +191,35 @@ test.describe("KMS operations", () => {
     await card.getByRole("button", { name: "Generate wrapped data key" }).click();
     await expect(page.getByTestId("wrapped-data-key-result")).toHaveText(`wrapped by kek: ${b64("wrapped-dek")}`);
     expect(mock.calls.find((c) => c.path === "/data-keys/wrapped")?.body).toEqual({ wrapping_key_id: "kek" });
+  });
+
+  test("clears the wrapped data key when the key name changes or a later generation fails", async ({ page }) => {
+    await openPage(page);
+    const card = page.getByTestId("op-wrapped-data-key");
+    const result = page.getByTestId("wrapped-data-key-result");
+    const generate = card.getByRole("button", { name: "Generate wrapped data key" });
+    await card.getByLabel("Wrapping key name").fill("kek");
+    await generate.click();
+    await expect(result).toHaveText(`wrapped by kek: ${b64("wrapped-dek")}`);
+
+    // A new wrapping key name makes the shown key stale.
+    await card.getByLabel("Wrapping key name").fill("other");
+    await expect(result).not.toBeVisible();
+
+    await generate.click();
+    await expect(result).toBeVisible();
+
+    // A later generation that fails must not leave the earlier key.
+    await page.route("**/api/v1/kms/data-keys/wrapped", (route) =>
+      route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ message: "backend unavailable" }),
+      }),
+    );
+    await generate.click();
+    await expect(page.getByTestId("kms-ops-error")).toContainText("backend unavailable");
+    await expect(result).not.toBeVisible();
   });
 
   test("shows backend status", async ({ page }) => {
