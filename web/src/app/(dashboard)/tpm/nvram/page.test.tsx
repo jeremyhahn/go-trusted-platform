@@ -305,6 +305,37 @@ describe("TPMNVRAMPage", () => {
     expect(tpm.writeNVRAM).toHaveBeenCalledWith({ index: 0x1500001, data: btoa("abcd") });
   });
 
+  it("refuses UTF-8 text larger than the index instead of splitting a character", async () => {
+    tpm.writeNVRAM.mockResolvedValue({ data: {} });
+    await loaded();
+
+    fireEvent.click(rowButton("Write"));
+    fireEvent.change(await screen.findByPlaceholderText("payload bytes…"), { target: { value: "ab€" } });
+    expect(screen.getByText("5 / 4 bytes")).toBeTruthy();
+    fireEvent.click(dialogButton(/^Write$/));
+
+    expect(await screen.findByText("Text is 5 bytes; this index holds 4")).toBeTruthy();
+    expect(tpm.writeNVRAM).not.toHaveBeenCalled();
+    expect(toast).not.toHaveBeenCalledWith(expect.objectContaining({ title: "NV index written" }));
+  });
+
+  it("writes UTF-8 text that exactly fills the index", async () => {
+    tpm.getInfo.mockResolvedValue(info([{ ...ordinary, size: 5 }, counter]));
+    tpm.writeNVRAM.mockResolvedValue({ data: {} });
+    await loaded();
+
+    fireEvent.click(rowButton("Write"));
+    fireEvent.change(await screen.findByPlaceholderText("payload bytes…"), { target: { value: "ab€" } });
+    expect(screen.getByText("5 / 5 bytes")).toBeTruthy();
+    fireEvent.click(dialogButton(/^Write$/));
+
+    await waitFor(() => expect(tpm.writeNVRAM).toHaveBeenCalledTimes(1));
+    expect(tpm.writeNVRAM).toHaveBeenCalledWith({
+      index: 0x1500001,
+      data: Buffer.from([0x61, 0x62, 0xe2, 0x82, 0xac]).toString("base64"),
+    });
+  });
+
   it("writes UTF-8 text as its bytes and counts them", async () => {
     tpm.writeNVRAM.mockResolvedValue({ data: {} });
     await loaded();
