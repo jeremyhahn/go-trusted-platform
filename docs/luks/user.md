@@ -9,6 +9,8 @@
 
 - `platformctl luks` validates its input and reaches platformd over the active
   transport, where the go-luks2 backend runs the verb on the host's volume.
+  FIDO2 and TPM enrollment are refused (*not wired*) until a boot unlock path
+  can open the slots they add ([engineering.md](engineering.md) §6).
   A *backend not configured* error means platformd started without its SDK
   client, so it wired no LUKS backend ([engineering.md](engineering.md) §6).
   [cli.md](cli.md) §1 has the details.

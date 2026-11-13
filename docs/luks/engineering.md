@@ -173,7 +173,16 @@ ceremony backend, injects the production LUKS pieces through the
 `SDKBackendTarget` interface (implemented by `*daemon.Daemon`):
 
 - `SetLUKSBackend(NewLUKSBackend(logger, WithDefaultLUKSHandlers()))`: the
-  go-luks2 backend with the FIDO2 and TPM handlers the host can open;
+  go-luks2 backend, with its FIDO2 and TPM handlers then cleared. No boot
+  unlock path consumes what either default handler enrolls: the FIDO2 handler
+  binds the 64-byte go-xkms derived key, which the initrd FIDO2 strategy cannot
+  derive, and the TPM sealer keeps its sealed passphrase in a `systemd-tpm2`
+  header token, while the initrd TPM strategies unseal from the ESP. So
+  `EnrollFIDO2` answers `ErrLUKSFIDO2NotWired` and `EnrollTPM`
+  `ErrLUKSTPMNotWired` before touching the device. Passphrase, recovery,
+  remove, test-unlock and change-passphrase run against the device. The PCR
+  check (`pcrCheckedTPMHandler`, `ErrLUKSPCRInvalid`, 400 on REST and
+  `InvalidArgument` on gRPC) is in front of the TPM handler when one is wired;
 - `SetLUKSRootChecker(DefaultRootChecker())`: the effective-UID root gate for
   mutating operations.
 

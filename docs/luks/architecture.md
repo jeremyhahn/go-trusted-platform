@@ -71,9 +71,10 @@ sdk/go/services/luks  (Service)          pkg/api/daemon transport adapters
 
 **The chain is connected at the server end by `backends.WireSDKBackends`** (see
 [engineering.md](engineering.md) §6): on the platformd startup path it injects
-the go-luks2 backend (`NewLUKSBackend` with the default FIDO2 and TPM handlers)
-and the effective-UID root checker into `LUKSService`, next to the ceremony
-backend. When that wiring is refused (no SDK client), nothing is injected and
+the go-luks2 backend (`NewLUKSBackend`) and the effective-UID root checker into
+`LUKSService`, next to the ceremony backend. Its FIDO2 and TPM handlers are
+left unset until a boot unlock path consumes what they enroll, so those two
+enrollments answer *not wired*. When that wiring is refused (no SDK client), nothing is injected and
 every server transport answers *backend not configured* or *root required*.
 `platformctl luks` builds the SDK's `GRPCClient` from `platform.Client.LUKS()`
 and reaches the service over whichever transport is active.
