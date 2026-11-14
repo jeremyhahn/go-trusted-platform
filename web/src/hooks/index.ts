@@ -105,6 +105,12 @@ export {
   splitCommand,
 } from './use-container-ops';
 export type { UseContainerOpsResult } from './use-container-ops';
+export { useAttestationCollect, newAttestationNonce } from './use-attestation-collect';
+export type {
+  AttestationCollectOperation,
+  AttestationCollectState,
+  UseAttestationCollectResult,
+} from './use-attestation-collect';
 
 export { useReportedGateways } from './use-reported-gateways';
 

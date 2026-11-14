@@ -101,6 +101,7 @@ const navigation = [
       { title: "Manifests", href: "/attestation/manifests" },
       { title: "Quotes", href: "/attestation/quotes" },
       { title: "Verification", href: "/attestation/verify" },
+      { title: "Collect", href: "/attestation/collect" },
       { title: "Event Logs", href: "/attestation/eventlogs" },
     ],
   },
