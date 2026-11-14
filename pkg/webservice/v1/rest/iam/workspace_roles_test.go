@@ -139,6 +139,55 @@ func TestWorkspaceRoleResolverPrincipalTellsAGoneUserFromOneWithoutRoles(t *test
 	}
 }
 
+// A workspace account IAM holds as suspended, disabled or locked cannot
+// sign in to the workspace: FIDO2 authenticates the principal in the
+// operating tenant, and the login driver then asks Roles for the
+// workspace's roles, so Roles must refuse it with an error that aborts the
+// login, as Principal refuses it at refresh. An active account keeps its
+// roles (#646, Codex P1 on #1906).
+func TestWorkspaceRoleResolverRolesRefusesAnInactiveWorkspaceAccount(t *testing.T) {
+	t.Parallel()
+	users := map[string]*iamsdk.User{
+		"active@platform":    {Email: "active@platform", Roles: []string{"admin"}, Lifecycle: "active"},
+		"suspended@platform": {Email: "suspended@platform", Roles: []string{"admin"}, Lifecycle: "suspended"},
+		"disabled@platform":  {Email: "disabled@platform", Roles: []string{"admin"}, Lifecycle: "disabled"},
+		"locked@platform":    {Email: "locked@platform", Roles: []string{"admin"}, Lifecycle: "locked"},
+		"held@platform":      {Email: "held@platform", Roles: []string{"admin"}, Status: iamsdk.UserStatusSuspended},
+	}
+	client := &mockIAMClient{
+		getByEmailFn: func(_ context.Context, tenantID, email string) (*iamsdk.User, error) {
+			if user, ok := users[email]; ok && tenantID == "workspace-a" {
+				return user, nil
+			}
+			return nil, sdkerrors.NewNotFound("iam.user.get_by_email", "user not found")
+		},
+	}
+	resolver, err := NewWorkspaceRoleResolver(client)
+	if err != nil {
+		t.Fatalf("NewWorkspaceRoleResolver: %v", err)
+	}
+	ctx := context.Background()
+
+	roles, err := resolver.Roles(ctx, "workspace-a", "active@platform")
+	if err != nil || len(roles) != 1 || roles[0] != "admin" {
+		t.Fatalf("active account: got roles=%v err=%v", roles, err)
+	}
+	for _, subject := range []string{"suspended@platform", "disabled@platform", "locked@platform", "held@platform"} {
+		roles, err = resolver.Roles(ctx, "workspace-a", subject)
+		var inactive ErrInactiveAccount
+		if !errors.As(err, &inactive) || roles != nil {
+			t.Fatalf("%s must be refused: got roles=%v err=%v", subject, roles, err)
+		}
+		if inactive.TenantID != "workspace-a" || inactive.Subject != subject {
+			t.Fatalf("%s: error names %q in %q", subject, inactive.Subject, inactive.TenantID)
+		}
+		_, found, perr := resolver.Principal(ctx, "workspace-a", subject)
+		if perr != nil || found {
+			t.Fatalf("%s: Principal must keep failing closed: found=%v err=%v", subject, found, perr)
+		}
+	}
+}
+
 func TestNewWorkspaceRoleResolverRefusesANilClient(t *testing.T) {
 	t.Parallel()
 	resolver, err := NewWorkspaceRoleResolver(nil)
