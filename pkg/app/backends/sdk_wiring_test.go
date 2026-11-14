@@ -59,12 +59,15 @@ func TestWireSDKBackends_WiresLUKS(t *testing.T) {
 	}
 }
 
-// TestWireSDKBackends_LeavesFIDO2EnrollmentOff verifies the production
-// wiring does not offer LUKS FIDO2 enrollment: the enrollment handler binds
-// the 64-byte go-xkms derived key, while the shipped boot paths (the
-// fido2-manual reader and the initrd FIDO2 strategy) cannot derive it, so an
-// enrolled slot would not unlock the volume at boot (Codex round 3, #1852).
-func TestWireSDKBackends_LeavesFIDO2EnrollmentOff(t *testing.T) {
+// TestWireSDKBackends_WiresFIDO2Enrollment verifies the production wiring
+// keeps the default FIDO2 handler: the initrd FIDO2 strategy finds the slot
+// it enrolls from its fido2-manual token and derives the same key
+// (TestLUKSFIDO2EnrollmentUnlocksAtBoot).
+func TestWireSDKBackends_WiresFIDO2Enrollment(t *testing.T) {
+	stub := &stubFIDO2Rich{}
+	orig := newDefaultLUKSFIDO2Handler
+	newDefaultLUKSFIDO2Handler = func(*logging.Logger) (LUKSFIDO2EnrollingHandler, error) { return stub, nil }
+	t.Cleanup(func() { newDefaultLUKSFIDO2Handler = orig })
 	target := &recordingSDKTarget{}
 
 	if err := WireSDKBackends(target, SDKBackendSources{SDK: &fakeQuicbaasClient{}}, logging.DefaultLogger()); err != nil {
@@ -74,8 +77,8 @@ func TestWireSDKBackends_LeavesFIDO2EnrollmentOff(t *testing.T) {
 	if !ok || lb == nil {
 		t.Fatalf("LUKS backend = %T, want a non-nil *LUKSBackend", target.luks)
 	}
-	if lb.fido2 != nil {
-		t.Fatalf("LUKS FIDO2 handler = %T, want nil until a boot unlock path consumes the enrolled key", lb.fido2)
+	if lb.fido2 != LUKSFIDO2Handler(stub) {
+		t.Fatalf("LUKS FIDO2 handler = %T, want the default handler", lb.fido2)
 	}
 }
 

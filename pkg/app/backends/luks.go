@@ -264,7 +264,7 @@ func WithLUKSTPMHandler(h LUKSTPMHandler) LUKSBackendOption {
 func WithDefaultLUKSHandlers() LUKSBackendOption {
 	return func(b *LUKSBackend) {
 		if b.fido2 == nil {
-			if h, err := defaultLUKSFIDO2Handler(b.logger); err == nil {
+			if h, err := newDefaultLUKSFIDO2Handler(b.logger); err == nil {
 				b.fido2 = h
 			} else if b.logger != nil {
 				b.logger.Debug("default luks fido2 handler unavailable", "err", err.Error())
@@ -789,6 +789,10 @@ func clearBytes(b []byte) {
 func DefaultRootChecker() daemon.RootChecker {
 	return daemon.RootCheckerFunc(func() bool { return os.Geteuid() == 0 })
 }
+
+// newDefaultLUKSFIDO2Handler opens the default FIDO2 handler; tests replace
+// it to wire a handler without an authenticator attached.
+var newDefaultLUKSFIDO2Handler = defaultLUKSFIDO2Handler
 
 // defaultLUKSFIDO2Handler builds a production FIDO2 handler using the
 // package-default go-xkms configuration and HID enumerator. Returns
