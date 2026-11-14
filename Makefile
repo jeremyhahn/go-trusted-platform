@@ -1390,6 +1390,7 @@ SHARD_PICK = awk -v n=$(SHARDS) -v s=$(SHARD) '(NR - 1) % n == s'
 test: check-insecure-tls check-go-build-tags
 	@echo "Running all unit tests..."
 	go test -tags "$(BUILD_TAGS)" -v -skip "$(TEST_SKIP)" $$({ go list ./pkg/... ./cmd/... 2>/dev/null | grep -v -E "$(TEST_EXCLUDE)"; printf '%s\n' $(TEST_UNIT_PKGS); } | $(SHARD_PICK))
+	$(if $(filter 0,$(strip $(SHARD))),$(MAKE) --no-print-directory test-noopa)
 
 .PHONY: test-fips
 ## test-fips: FIPS 140-3 suite: build ./... and run `make test`, both with the fips tag under GODEBUG=fips140=only
@@ -1428,6 +1429,24 @@ test-fips:
 			-baseline $(FIPS_FOREIGN_BASELINE) -tags "$$tags" -skip-tests "$(TEST_SKIP)" "$(FIPS_LOG)" || status=$$?; \
 	fi; \
 	exit $$status
+
+.PHONY: test-noopa
+## test-noopa: Unit tests of the !opa build: the OPA engine packages and their consumers with opa dropped from BUILD_TAGS (#1691)
+#
+# BUILD_TAGS carries opa, so `make test` and `make test-race` never compile
+# the ErrOPANotBuilt stubs (engine_noopa.go, opa_engine_noopa.go) or their
+# !opa tests. This target runs every package that splits on the tag, and
+# every package that imports pkg/policy/opa, with the otherwise required
+# tags minus opa: the stubs' refusals and the consumers' behaviour without
+# an engine are tested, and a consumer test that needs the real engine
+# fails here until it carries the opa tag. `make test` runs it after the
+# tagged suite, once (shard 0 only, so test-fips's four shards run it once),
+# which puts it in ci.yml's test step and test-fips without a workflow edit.
+NOOPA_TAGS := $(filter-out opa,$(BUILD_TAGS))
+NOOPA_PKGS := ./pkg/policy/opa/ ./pkg/compute/container/ \
+	./pkg/sdn/gateway/proxysvc/ ./pkg/sdn/gateway/services/vpn/ ./pkg/sdn/gateway/
+test-noopa:
+	go test -count=1 -tags "$(NOOPA_TAGS)" -skip "$(TEST_SKIP)" $(NOOPA_PKGS)
 
 .PHONY: test-pkg
 ## test-pkg: Run unit tests for ONE package with the derived tag set, e.g. make test-pkg PKG=./pkg/api/daemon/
