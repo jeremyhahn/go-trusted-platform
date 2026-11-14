@@ -331,10 +331,13 @@ What persists: the image, the staged media directory, the U-Boot output
 
 ## 8. Measurement manifest
 
-> **Designed, not built.** Nothing below exists in the code yet. It is the
-> design that slices 3-6 of [docs/plans/669.md](../plans/669.md) build, and
-> it needs approval before slice 3 starts. Today a node's quote is checked
-> against its device profile's `PCRBaseline` table.
+> **Partly built.** The prediction is built: `diskimage.Create` predicts
+> PCRs 0, 4, 7 and 9 into `Result.Measurements` (`pkg/diskimage/measure`).
+> So is the unsigned CoRIM encoding (`measure.EncodeManifest`). The
+> signature, `measurements.corim` on disk, the event-log check and
+> registration are not built yet; [docs/plans/669.md](../plans/669.md)
+> slices 4b-6 build them. Until then a node's quote is checked against its
+> device profile's `PCRBaseline` table.
 
 The SPEC row says every image, an upgrade included, is built and signed
 centrally. It also says every image carries a **measurement manifest**: a
@@ -378,13 +381,18 @@ values. The x86 ISO path gets the same check.
 `application/rim+cbor`) per build, written as `measurements.corim` beside the
 image. It holds one CoMID (`#6.506`):
 
-- `tag-identity`: a UUID derived from the image's SHA-256. An upgrade is a
-  new build, so it gets a new tag.
+- `tag-identity`: a UUID derived from the image's SHA-256 (RFC 9562
+  version 8, SHA-256 over a fixed namespace and the digest). The CoRIM's
+  `id` is the same UUID. An upgrade is a new build, so it gets a new tag.
 - one `reference-triple-record`. Its environment is a `class-map` with
   vendor `go-trusted-platform` and model `<target>/<model>`, for example
   `rpi/rpi4` or `qemu-virt/virt`.
 - one `measurement-map` per PCR. `mkey` is the PCR index (`uint`), and
-  `mval.digests` holds one digest per bank.
+  `mval.digests` holds one digest per bank, its `alg` the IANA Named
+  Information identifier (`sha-256` is 1, `sha-384` 7, `sha-512` 8).
+
+The encoding is deterministic CBOR (RFC 8949 §4.2.1), so one image always
+gives the same bytes to sign.
 
 The COSE protected header carries `corim-meta` (signer name and validity)
 and the signing certificate's `x5chain`.
