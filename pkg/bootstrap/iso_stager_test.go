@@ -148,6 +148,9 @@ type stagerTestEnv struct {
 	localPath  string
 	remotePath string
 	metaPath   string
+	// gotConfig is the DeployConfig the stager handed the remote client
+	// factory on its last call; nil until the stager builds a client.
+	gotConfig *deployer.DeployConfig
 }
 
 func newStagerTestEnv(t *testing.T, localBytes []byte) *stagerTestEnv {
@@ -160,8 +163,11 @@ func newStagerTestEnv(t *testing.T, localBytes []byte) *stagerTestEnv {
 	}
 
 	fake := newFakeRemoteISOClient()
+	env := &stagerTestEnv{fake: fake, localPath: localPath}
 	prev := newRemoteISOClient
-	newRemoteISOClient = func(*deployer.DeployConfig) (remoteISOClient, error) {
+	newRemoteISOClient = func(dc *deployer.DeployConfig) (remoteISOClient, error) {
+		cp := *dc
+		env.gotConfig = &cp
 		return fake, nil
 	}
 	t.Cleanup(func() { newRemoteISOClient = prev })
@@ -177,13 +183,10 @@ func newStagerTestEnv(t *testing.T, localBytes []byte) *stagerTestEnv {
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 	remotePath := deployer.DefaultRemoteDataDir + "/" + filepath.Base(localPath)
-	return &stagerTestEnv{
-		stager:     stager,
-		fake:       fake,
-		localPath:  localPath,
-		remotePath: remotePath,
-		metaPath:   remotePath + stageMetaSuffix,
-	}
+	env.stager = stager
+	env.remotePath = remotePath
+	env.metaPath = remotePath + stageMetaSuffix
+	return env
 }
 
 // seedSidecar pre-populates the fake remote host with both the staged ISO
@@ -688,4 +691,115 @@ func assertSidecarMatches(t *testing.T, payload []byte, expected []byte) {
 	if meta.SHA256 != hashHex(expected) {
 		t.Errorf("sidecar sha256: got %s want %s", meta.SHA256, hashHex(expected))
 	}
+}
+
+// quicBootstrapYAML is a bootstrap.yaml that selects the QUIC deploy agent
+// with relative agent credential paths and no SSH user or key.
+const quicBootstrapYAML = `deployer:
+  host: deploy.example.com
+  transport: quic
+  agent_port: 7443
+  agent_cert: certs/agent.crt
+  agent_key: certs/agent.key
+  agent_ca: certs/agent-ca.pem
+  agent_server_name: agent.deploy.example.com
+  smb_host: deploy.example.com
+  container_runtime: podman
+environment:
+  id: 4
+platform:
+  domain: example.com
+  internal_domain: internal.example.com
+  hostmaster: admin@example.com
+  tenant_id: tenant-001
+  environment: production
+  upstream_dns:
+    - 1.1.1.1:53
+  bootstrap_strategy: dane
+templates:
+  control-plane: /etc/platform/templates/cp.yaml
+nodes:
+  - hostname: cp-0
+    role: control-plane
+    bmc_address: 10.200.0.10
+    bmc_user: admin
+    bmc_password: secret
+    bmc_protocol: redfish
+`
+
+// loadQUICBootstrapConfig writes quicBootstrapYAML and its credential files
+// into a temporary directory and loads it the way the CLI does. It returns
+// the loaded deployer section and the directory the relative paths resolve
+// against.
+func loadQUICBootstrapConfig(t *testing.T) (*DeployerConfig, string) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "certs"), 0o755); err != nil {
+		t.Fatalf("mkdir certs: %v", err)
+	}
+	for _, name := range []string{"agent.crt", "agent.key", "agent-ca.pem"} {
+		if err := os.WriteFile(filepath.Join(dir, "certs", name), []byte("pem"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	path := filepath.Join(dir, "bootstrap.yaml")
+	if err := os.WriteFile(path, []byte(quicBootstrapYAML), 0o600); err != nil {
+		t.Fatalf("write bootstrap.yaml: %v", err)
+	}
+	cfg, err := LoadBootstrapConfig(path)
+	if err != nil {
+		t.Fatalf("LoadBootstrapConfig: %v", err)
+	}
+	return &cfg.Deployer, dir
+}
+
+// assertQUICDeployConfig checks that the bootstrap.yaml QUIC selection and
+// every agent credential reached the lower-level DeployConfig, with the
+// relative paths resolved against bootstrap.yaml's directory.
+func assertQUICDeployConfig(t *testing.T, consumer string, dc *deployer.DeployConfig, dir string) {
+	t.Helper()
+	if dc == nil {
+		t.Fatalf("%s: no DeployConfig reached the transport", consumer)
+	}
+	checks := []struct{ field, got, want string }{
+		{"Transport", dc.Transport, deployer.TransportQUIC},
+		{"Host", dc.Host, "deploy.example.com"},
+		{"AgentCertPath", dc.AgentCertPath, filepath.Join(dir, "certs", "agent.crt")},
+		{"AgentKeyPath", dc.AgentKeyPath, filepath.Join(dir, "certs", "agent.key")},
+		{"AgentCAPath", dc.AgentCAPath, filepath.Join(dir, "certs", "agent-ca.pem")},
+		{"AgentServerName", dc.AgentServerName, "agent.deploy.example.com"},
+		{"User", dc.User, ""},
+		{"SSHKeyPath", dc.SSHKeyPath, ""},
+	}
+	for _, c := range checks {
+		if c.got != c.want {
+			t.Errorf("%s: DeployConfig.%s = %q, want %q", consumer, c.field, c.got, c.want)
+		}
+	}
+	if dc.AgentPort != 7443 {
+		t.Errorf("%s: DeployConfig.AgentPort = %d, want 7443", consumer, dc.AgentPort)
+	}
+}
+
+// TestBootstrapQUIC_ReachesDeployerAndISOStager loads a bootstrap.yaml that
+// selects the QUIC deploy agent and checks the DeployConfig both consumers
+// build from it: the deployer adapter (Phase 2 deploy) and the ISO stager
+// (virtual-media staging). Dropping Transport or any agent credential from
+// the bootstrap-to-DeployConfig mapping fails it.
+func TestBootstrapQUIC_ReachesDeployerAndISOStager(t *testing.T) {
+	cfg, dir := loadQUICBootstrapConfig(t)
+
+	adapter := newLinuxDeployerAdapter(cfg, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	assertQUICDeployConfig(t, "deployer adapter", adapter.deployConfig(filepath.Join(dir, "manifest.json")), dir)
+
+	stagerIface, err := newISOStager(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("newISOStager rejected a QUIC config without SSH credentials: %v", err)
+	}
+	env := newStagerTestEnv(t, []byte("iso-bytes"))
+	env.stager = stagerIface.(*sshISOStager)
+	if _, err := env.stager.StageVirtualMediaISO(context.Background(), env.localPath); err != nil {
+		t.Fatalf("StageVirtualMediaISO: %v", err)
+	}
+	assertQUICDeployConfig(t, "ISO stager", env.gotConfig, dir)
 }
