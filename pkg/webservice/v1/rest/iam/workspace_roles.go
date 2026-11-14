@@ -48,18 +48,20 @@ func NewWorkspaceRoleResolver(client IAMClient) (*WorkspaceRoleResolver, error) 
 //
 // A principal the IAM tenant does not hold has no roles there: that is an
 // empty answer, not an error, because an invited member is mirrored only by
-// the startup reconcile and must still be able to sign in as a member. Any
-// other failure is returned, so the caller refuses rather than guesses.
+// the startup reconcile and must still be able to sign in as a member. A
+// principal the tenant holds but not as an active account is refused with
+// ErrInactiveAccount, as Principal refuses it at refresh (#646). Any other
+// failure is returned, so the caller refuses rather than guesses.
 func (r *WorkspaceRoleResolver) Roles(ctx context.Context, tenantID, subject string) ([]string, error) {
-	user, err := r.userByEmail(ctx, tenantID, subject)
-	if sdkerrors.IsNotFound(err) {
-		return nil, nil
-	}
+	user, active, err := r.activeUser(ctx, tenantID, subject)
 	if err != nil {
 		return nil, err
 	}
 	if user == nil {
 		return nil, nil
+	}
+	if !active {
+		return nil, ErrInactiveAccount{TenantID: tenantID, Subject: subject}
 	}
 	return append([]string(nil), user.Roles...), nil
 }
@@ -71,6 +73,22 @@ func (r *WorkspaceRoleResolver) Roles(ctx context.Context, tenantID, subject str
 // holds as suspended, locked, disabled, pending or being deleted, is not
 // found.
 func (r *WorkspaceRoleResolver) Principal(ctx context.Context, tenantID, subject string) ([]string, bool, error) {
+	user, active, err := r.activeUser(ctx, tenantID, subject)
+	if err != nil {
+		return nil, false, err
+	}
+	if !active {
+		return nil, false, nil
+	}
+	return append([]string(nil), user.Roles...), true, nil
+}
+
+// activeUser reads subject's user in tenantID and whether IAM holds it as
+// an active account (iamuser.Active). It is the one lifecycle check Roles
+// and Principal share, so login and refresh cannot disagree on who is
+// admitted. A user the tenant does not hold is a nil user, not an error;
+// any other lookup failure is returned.
+func (r *WorkspaceRoleResolver) activeUser(ctx context.Context, tenantID, subject string) (*iamsdk.User, bool, error) {
 	user, err := r.userByEmail(ctx, tenantID, subject)
 	if sdkerrors.IsNotFound(err) {
 		return nil, false, nil
@@ -78,10 +96,23 @@ func (r *WorkspaceRoleResolver) Principal(ctx context.Context, tenantID, subject
 	if err != nil {
 		return nil, false, err
 	}
-	if !iamuser.Active(user) {
+	if user == nil {
 		return nil, false, nil
 	}
-	return append([]string(nil), user.Roles...), true, nil
+	return user, iamuser.Active(user), nil
+}
+
+// ErrInactiveAccount is Roles' refusal of a principal the workspace holds
+// as suspended, locked, disabled, pending or being deleted. The login
+// driver wraps it and aborts the login, so such an account gets no
+// workspace session even when its operating-tenant credential is valid.
+type ErrInactiveAccount struct {
+	TenantID string
+	Subject  string
+}
+
+func (e ErrInactiveAccount) Error() string {
+	return "iam: account " + e.Subject + " is not active in tenant " + e.TenantID
 }
 
 // userByEmail reads the tenant's user named by email. The pinned SDK's
