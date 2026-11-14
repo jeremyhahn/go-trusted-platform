@@ -183,3 +183,9 @@ func TestQUICVPNCategoryServesEverySubOperation(t *testing.T) {
 		&platformv1.ListVPNPeersRequest{TenantId: "acme"})), &peers)
 	assert.Empty(t, peers.GetPeers(), "the revoked peer must be gone")
 }
+
+func requireVPNQUICOK(t *testing.T, resp *quicwire.Response, decoded interface{}) {
+	t.Helper()
+	require.Equal(t, quicwire.StatusOK, resp.Status, "payload %q", resp.Payload)
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, decoded))
+}

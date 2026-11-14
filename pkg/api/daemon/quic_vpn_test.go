@@ -69,12 +69,6 @@ func TestQUICVPNErrorResponse_KeyCollisionIsAConflict(t *testing.T) {
 }
 
 // requireVPNQUICOK asserts a successful reply and decodes its payload.
-func requireVPNQUICOK(t *testing.T, resp *quicwire.Response, decoded interface{}) {
-	t.Helper()
-	require.Equal(t, quicwire.StatusOK, resp.Status, "payload %q", resp.Payload)
-	require.NoError(t, quicwire.DecodePayload(resp.Payload, decoded))
-}
-
 func TestQUICVPNCategoryMapsServiceRefusals(t *testing.T) {
 	handler, _ := newVPNQUICHandler(t)
 	ctx := context.Background()
