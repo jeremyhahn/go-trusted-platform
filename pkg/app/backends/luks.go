@@ -157,6 +157,15 @@ type LUKSBackend struct {
 	locksMu sync.Mutex
 	locks   map[string]*sync.Mutex
 
+	// fido2Mu serializes every call into the shared FIDO2 handler. The
+	// go-xkms handler reads, overwrites and restores its config timeout
+	// without synchronization, and one handler serves every request, so
+	// two enrollments (even on different devices) must not call it at once.
+	// The lock is held until the handler call returns, also when the
+	// request's context is cancelled, so a cancelled caller never lets the
+	// next one in while the SDK is still running.
+	fido2Mu sync.Mutex
+
 	// fipsActive reports whether the platform FIPS keyslot policy applies.
 	// nil means luksFIPSActive; the package's tests set it as a seam.
 	fipsActive func() bool
@@ -478,14 +487,18 @@ func (b *LUKSBackend) EnrollFIDO2(ctx context.Context, req *daemon.LUKSEnrollFID
 		err       error
 	)
 	if rich, ok := b.fido2.(LUKSFIDO2EnrollingHandler); ok {
+		b.fido2Mu.Lock()
 		res, derr := rich.DeriveEnroll(ctx, req.CredentialID, req.RequirePIN, req.RequireUV)
+		b.fido2Mu.Unlock()
 		if derr != nil {
 			return nil, derr
 		}
 		key = res.DerivedKey
 		tokenJSON = res.TokenJSON
 	} else {
+		b.fido2Mu.Lock()
 		key, err = b.fido2.EnrollCredential(ctx, req.CredentialID, req.RequirePIN, req.RequireUV)
+		b.fido2Mu.Unlock()
 		if err != nil {
 			return nil, err
 		}
