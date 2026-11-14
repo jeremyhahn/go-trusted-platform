@@ -16,6 +16,7 @@ package backends
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -23,10 +24,12 @@ import (
 	"reflect"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/jeremyhahn/go-luks2/pkg/luks2"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/fido2"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/fips"
@@ -712,6 +715,93 @@ func TestLUKSBackend_ConcurrentEnrollmentSerializesTheSharedFIDO2Handler(t *test
 		if err := luks2.TestKey(devices[i], []byte("fido2-key-cred"+strconv.Itoa(i))); err != nil {
 			t.Fatalf("credential %d does not open its volume: %v", i, err)
 		}
+	}
+}
+
+// blockingXKMSFIDO2Handler is an xkms FIDO2 handler whose UnlockWithKey
+// signals entry and blocks until release is closed, and records whether two
+// calls ever ran at once.
+type blockingXKMSFIDO2Handler struct {
+	*stubXKMSFIDO2Handler
+	entered chan struct{}
+	release chan struct{}
+	active  atomic.Int32
+	overlap atomic.Bool
+}
+
+func (h *blockingXKMSFIDO2Handler) UnlockWithKey(cfg *fido2.AuthenticationConfig) ([]byte, error) {
+	if h.active.Add(1) > 1 {
+		h.overlap.Store(true)
+	}
+	defer h.active.Add(-1)
+	h.entered <- struct{}{}
+	<-h.release
+	return append([]byte("fido2-key-"), cfg.CredentialID...), nil
+}
+
+func TestLUKSBackend_CancelledFIDO2DerivationKeepsHandlerLocked(t *testing.T) {
+	xk := &blockingXKMSFIDO2Handler{
+		stubXKMSFIDO2Handler: newStubXKMSFIDO2Handler(nil),
+		entered:              make(chan struct{}, 2),
+		release:              make(chan struct{}),
+	}
+	released := false
+	defer func() {
+		if !released {
+			close(xk.release)
+		}
+	}()
+	h, err := NewLUKSFIDO2Handler(nil, xk, "example.com")
+	if err != nil {
+		t.Fatalf("NewLUKSFIDO2Handler: %v", err)
+	}
+	b := newTestLUKSBackend(WithLUKSFIDO2Handler(h))
+	dev1, dev2 := newLUKSImage(t), newLUKSImage(t)
+
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	defer cancel1()
+	err1 := make(chan error, 1)
+	go func() {
+		_, err := b.EnrollFIDO2(ctx1, &daemon.LUKSEnrollFIDO2Request{
+			Device:             dev1,
+			ExistingPassphrase: testLUKSPassphrase,
+			CredentialID:       hex.EncodeToString([]byte("cred-1")),
+		})
+		err1 <- err
+	}()
+	<-xk.entered
+	cancel1()
+	if err := <-err1; !errors.Is(err, context.Canceled) {
+		t.Fatalf("first EnrollFIDO2: want context.Canceled, got %v", err)
+	}
+
+	err2 := make(chan error, 1)
+	go func() {
+		_, err := b.EnrollFIDO2(context.Background(), &daemon.LUKSEnrollFIDO2Request{
+			Device:             dev2,
+			ExistingPassphrase: testLUKSPassphrase,
+			CredentialID:       hex.EncodeToString([]byte("cred-2")),
+		})
+		err2 <- err
+	}()
+	select {
+	case <-xk.entered:
+		t.Fatal("second enrollment entered the SDK while the cancelled call still runs")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	released = true
+	close(xk.release)
+	select {
+	case <-xk.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("second enrollment never reached the SDK after the first call returned")
+	}
+	if err := <-err2; err != nil {
+		t.Fatalf("second EnrollFIDO2: %v", err)
+	}
+	if xk.overlap.Load() {
+		t.Fatal("two SDK calls ran at once")
 	}
 }
 
