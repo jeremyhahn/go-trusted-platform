@@ -188,14 +188,20 @@ type ServiceParams struct {
 	// named, and this is a trust boundary. Absent, NewService fails closed.
 	AdminEmail string
 	// MultiInstance reports that this deployment runs more than one
-	// platformd instance against one store. The claim ceremony is
-	// REFUSED when true: its challenge/claim state and completion lock
-	// are process-local and the SDK factor enrolment is not conditional,
-	// so a second instance could enrol a different authenticator for the
-	// same one-time ownership transfer. Fail closed rather than serve a
-	// ceremony whose safety property does not hold. Tracked upstream as
-	// #170; this flag is the gate, not the fix.
+	// platformd instance against one store. The process-local completion
+	// lock then serialises one instance only and the SDK factor enrolment
+	// is not conditional, so a second instance could enrol a different
+	// authenticator for the same one-time ownership transfer. The
+	// ceremony is therefore REFUSED when true unless Transactions is set.
 	MultiInstance bool
+	// Transactions is the store's compare-and-swap client. When set, the
+	// claim's completion runs under a store-wide lease, so exactly one
+	// instance at a time can read the factor history and enrol (#172),
+	// and a multi-instance deployment is served. Challenges and claim
+	// tokens stay process-local: a token proved on one instance is
+	// refused by another, so the ceremony runs against one instance.
+	// Wire it only once ProbeTransactions succeeds.
+	Transactions TransactionExecutor
 }
 
 // Service holds the admin-claim business logic. The REST handler owns
@@ -212,7 +218,12 @@ type Service struct {
 	adminEmail    string
 	challenges    *secretStore
 	claims        *secretStore
-	multiInstance bool
+	// refuseMultiInstance closes the ceremony on a multi-instance
+	// deployment with no store-wide completion lease.
+	refuseMultiInstance bool
+	// completion is the store-wide completion lease, nil when no
+	// transaction client is wired.
+	completion *completionLock
 	// completing serialises the claim's one-time completion; see
 	// FinishPasskey.
 	completing sync.Mutex
@@ -250,20 +261,24 @@ func NewService(params ServiceParams) (*Service, error) {
 	if adminUsername == "" {
 		adminUsername = common.AdminUsername
 	}
-	return &Service{
-		logger:        params.Logger,
-		ceremony:      params.Ceremony,
-		factors:       params.Factors,
-		users:         params.Users,
-		tokenIssuer:   params.TokenIssuer,
-		trustAnchors:  params.TrustAnchors,
-		tenantID:      params.TenantID,
-		adminUsername: adminUsername,
-		adminEmail:    params.AdminEmail,
-		challenges:    newSecretStore(challengeTTL),
-		claims:        newSecretStore(claimTokenTTL),
-		multiInstance: params.MultiInstance,
-	}, nil
+	svc := &Service{
+		logger:              params.Logger,
+		ceremony:            params.Ceremony,
+		factors:             params.Factors,
+		users:               params.Users,
+		tokenIssuer:         params.TokenIssuer,
+		trustAnchors:        params.TrustAnchors,
+		tenantID:            params.TenantID,
+		adminUsername:       adminUsername,
+		adminEmail:          params.AdminEmail,
+		challenges:          newSecretStore(challengeTTL),
+		claims:              newSecretStore(claimTokenTTL),
+		refuseMultiInstance: params.MultiInstance && params.Transactions == nil,
+	}
+	if params.Transactions != nil {
+		svc.completion = newCompletionLock(params.Transactions, params.TenantID, adminUsername)
+	}
+	return svc, nil
 }
 
 // tenantContext scopes an SDK call to the platform's operating tenant. The
@@ -328,7 +343,7 @@ func (s *Service) factorHistory(ctx context.Context) (claimHistory, error) {
 
 // Challenge issues a possession nonce for the operator to sign.
 func (s *Service) Challenge(ctx context.Context) (string, time.Time, error) {
-	if s.multiInstance {
+	if s.refuseMultiInstance {
 		return "", time.Time{}, ErrMultiInstanceUnsupported{}
 	}
 	if _, err := s.refuseIfClaimed(ctx); err != nil {
@@ -360,7 +375,7 @@ func (s *Service) Prove(
 	req ProveRequest,
 	peerCertificates []*x509.Certificate,
 ) (string, time.Time, error) {
-	if s.multiInstance {
+	if s.refuseMultiInstance {
 		return "", time.Time{}, ErrMultiInstanceUnsupported{}
 	}
 
@@ -420,7 +435,7 @@ func (s *Service) adminPeerCertificate(peers []*x509.Certificate) *x509.Certific
 func (s *Service) BeginPasskey(
 	ctx context.Context, claimToken string) (*quicbaassdk.FIDO2BeginRegistrationResponse, error) {
 
-	if s.multiInstance {
+	if s.refuseMultiInstance {
 		return nil, ErrMultiInstanceUnsupported{}
 	}
 	if _, ok := s.claims.peek(claimToken); !ok {
@@ -454,12 +469,13 @@ func (s *Service) FinishPasskey(
 	// operator and keep admin access. Serialising makes the second caller
 	// observe the first's enrolment and get ErrAlreadyClaimed.
 	//
-	// The lock is process-local. A deployment running several platformd
-	// instances against one qrdb would still need the SDK to make the
-	// factor enrolment itself conditional; that is an upstream gap, not
-	// something this side can close alone. It is uncontended in practice:
-	// this ceremony happens once in a deployment's lifetime.
-	if s.multiInstance {
+	// The mutex is process-local. Across several platformd instances
+	// sharing one store the store-wide completion lease does the same job
+	// (#172): it is taken after the token is redeemed, so an unproved
+	// caller never writes to the store, and before the factor history is
+	// read, so only its holder can observe an unclaimed identity and
+	// enrol. Without the lease such a deployment is refused outright.
+	if s.refuseMultiInstance {
 		return "", ErrMultiInstanceUnsupported{}
 	}
 
@@ -468,6 +484,26 @@ func (s *Service) FinishPasskey(
 
 	if _, ok := s.claims.redeem(claimToken); !ok {
 		return "", ErrClaimTokenInvalid{}
+	}
+	if s.completion != nil {
+		release, err := s.completion.acquire(ctx)
+		if err != nil {
+			return "", err
+		}
+		defer func() {
+			// Released whatever the outcome: the factor history, not the
+			// lease, is what keeps a claimed identity closed. A release
+			// that fails leaves the lease to expire.
+			if err := release(context.WithoutCancel(ctx)); err != nil {
+				s.logger.Warn("adminclaim: completion lease not released; it expires on its own",
+					"error", err)
+			}
+		}()
+		// The holder's work ends well inside the lease, so the lease is
+		// never taken over while this instance can still enrol.
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, completionDeadline)
+		defer cancel()
 	}
 	// The listing that refuses a claimed identity is also the factor
 	// history the audit record is decided by, read once and before the

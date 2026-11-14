@@ -142,9 +142,12 @@ the console bearer for the now-claimed system admin:
 ```
 
 On a deployment running several `platformd` instances against one store, the
-four mutating routes answer **`501`** with `ErrMultiInstanceUnsupported` —
-the ceremony's one-time state is process-local, so it is not served there
-(#170). `status` still answers `200`: it mutates nothing, and the console has
+four mutating routes answer **`501`** with `ErrMultiInstanceUnsupported`
+unless the store's compare-and-swap answers, which makes the completion
+atomic across instances (#172). Where it does, `passkey/finish` answers
+**`409`** while another instance is completing a claim and **`503`** when the
+store cannot run the completion lease; run the ceremony against one instance,
+since a claim token proved on one is refused by another. `status` still answers `200`: it mutates nothing, and the console has
 to be able to tell a clustered node from a broken one.
 
 ### Error mapping
@@ -206,8 +209,11 @@ user (#642). Read it with `TokenClaims.PlatformUserID()` or
 `strconv.ParseUint(uid, 10, 64)`. A missing or non-decimal `uid` is refused:
 `/api/v1/login/refresh` answers 401, session creation answers 400, and the
 tenant middleware answers 401 (`ErrMissingUserClaim`). A backbone-issued
-session carries no `uid`, so it is refused the same way and renews by logging
-in again ([every such site](architecture.md#why-the-platform-still-mints-the-bearer)
+session carries no `uid`: `/api/v1/login/refresh` re-reads its principal from
+the IAM tenant it landed in and answers a new backbone session carrying the
+roles IAM holds now, or 401 when that tenant no longer holds the principal,
+IAM cannot be read, or no IAM client is wired. It never reads the platform user
+store ([every such site](architecture.md#why-the-platform-still-mints-the-bearer)
 is listed in the architecture).
 
 ### Registration model — iam.self_service_registration

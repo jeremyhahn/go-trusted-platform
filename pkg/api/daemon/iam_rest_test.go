@@ -43,8 +43,8 @@ var iamRESTCallers = iamRESTTokens{
 	"reader-b": {Subject: "reader-b", TenantID: iamRESTTenantB, Scopes: []string{"iam:read"}},
 	"writer":   {Subject: "writer", TenantID: iamRESTTenantA, Scopes: []string{"iam:write"}},
 	"deleter":  {Subject: "deleter", TenantID: iamRESTTenantA, Scopes: []string{"iam:delete"}},
-	"operator": {Subject: "operator", TenantID: iamRESTTenantA, Scopes: []string{mtlsOperatorScope}},
-	"system":   {Subject: "system", TenantID: iamRESTSystemTenant, Scopes: []string{mtlsOperatorScope}},
+	"operator": {Subject: "operator", TenantID: iamRESTTenantA, Scopes: []string{"*:*"}},
+	"system":   {Subject: "system", TenantID: iamRESTSystemTenant, Scopes: []string{"*:*"}},
 	"other":    {Subject: "other", TenantID: iamRESTTenantA, Scopes: []string{"tenant:read"}},
 }
 

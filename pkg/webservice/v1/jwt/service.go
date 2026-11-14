@@ -96,6 +96,8 @@ type Service struct {
 	params        ServiceParams
 	signer        crypto.Signer
 	signingMethod jwt.SigningMethod
+	// revocations is the logout deny-list Verify consults (#215).
+	revocations revocationList
 }
 
 func NewService(ctx context.Context, params ServiceParams) (*Service, error) {
@@ -146,6 +148,7 @@ func (service *Service) GenerateToken(user *entities.User) (string, error) {
 		IsTenantOwner: user.IsTenantOwner,
 		Roles:         roles,
 		RegisteredClaims: jwt.RegisteredClaims{
+			ID:       newTokenID(),
 			Subject:  strconv.FormatUint(user.ID, 10),
 			Audience: jwt.ClaimStrings{service.params.Audience},
 			Issuer:   service.params.Issuer,
@@ -250,7 +253,27 @@ func (service *Service) Verify(token *jwt.Token) error {
 		return ErrInvalidToken
 	}
 	opts := jwt.WithAudience(service.params.Audience)
-	return jwt.NewValidator(opts).Validate(token.Claims)
+	if err := jwt.NewValidator(opts).Validate(token.Claims); err != nil {
+		return err
+	}
+	// A signed-out token is refused everywhere Verify runs: the route
+	// middleware, /login/refresh (so a revoked session cannot be rolled
+	// into a fresh one) and the gRPC/QUIC/MCP transports (#215).
+	if service.revocations.revoked(token) {
+		return ErrTokenRevoked
+	}
+	return nil
+}
+
+// Revoke signs a verified token out server-side (#215): from now until it
+// expires, Verify refuses it. Revoking a token that does not verify is
+// refused, so an unauthenticated caller cannot fill the deny-list.
+func (service *Service) Revoke(token *jwt.Token) error {
+	if err := service.Verify(token); err != nil {
+		return err
+	}
+	service.revocations.revoke(token, time.Now())
+	return nil
 }
 
 // VerifyToken parses and validates a token string. Returns true when the

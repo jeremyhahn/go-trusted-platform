@@ -425,6 +425,36 @@ func TestDriverBeginMTLSCompletesInOneRequest(t *testing.T) {
 	}
 }
 
+// Probe (#201) answers what Begin would, without opening a ceremony.
+func TestDriverProbeAnswersWhatBeginWouldWithoutContactingTheBackbone(t *testing.T) {
+	probe := httptest.NewRequest(http.MethodHead, "/auth/mtls/probe", nil)
+
+	client := &fakeClient{}
+	if err := newTestDriver(t, client, &singleShotBinder{}).Probe(probe, quicbaas.FactorTypePIV); err != nil {
+		t.Fatalf("a factor whose ceremony would open must probe clean, got %v", err)
+	}
+
+	var declined *FactorUnavailableError
+	if err := newTestDriver(t, client, NewMTLSBinder()).Probe(probe, quicbaas.FactorTypeMTLS); !errors.As(err, &declined) {
+		t.Fatalf("the mtls binder declines, so the probe must too, got %v", err)
+	}
+
+	var unavailable *UnavailableError
+	if err := newTestDriver(t, nil, &singleShotBinder{}).Probe(probe, quicbaas.FactorTypePIV); !errors.As(err, &unavailable) {
+		t.Fatalf("no backbone must probe unavailable, got %v", err)
+	}
+
+	var unsupported *UnsupportedFactorError
+	if err := newTestDriver(t, client, &singleShotBinder{}).Probe(probe, quicbaas.FactorTypeMTLS); !errors.As(err, &unsupported) {
+		t.Fatalf("a factor with no binder must probe unsupported, got %v", err)
+	}
+
+	if client.beginCalls != 0 || client.finishCalls != 0 {
+		t.Fatalf("a probe must not open a ceremony, got %d begins and %d finishes",
+			client.beginCalls, client.finishCalls)
+	}
+}
+
 func TestDriverRefusesAnErrorFreeCeremonyWithNoBearer(t *testing.T) {
 	// The defect this guards: treating a nil error as authentication. The
 	// bearer is the only evidence the ceremony succeeded.

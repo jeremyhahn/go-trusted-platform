@@ -14,6 +14,7 @@
 package jwt
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -25,6 +26,7 @@ import (
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/platform/service"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/login"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
@@ -54,7 +56,20 @@ type RestHandler struct {
 	// When nil, /login fails closed with ErrLoginUnavailable rather than
 	// minting an unverified local JWT.
 	loginDriver *login.Driver
+	// principals reads a backbone session's principal from its IAM
+	// tenant, the one user store (#646). When nil a backbone session
+	// cannot be refreshed: refresh fails closed rather than falling back
+	// to the platform user store.
+	principals PrincipalResolver
 	TokenHandler
+}
+
+// PrincipalResolver reads the principal a backbone session names from the
+// IAM tenant the session landed in.
+type PrincipalResolver interface {
+	// Principal returns the roles subject holds in tenantID's IAM tenant
+	// now. found is false when that tenant holds no such user.
+	Principal(ctx context.Context, tenantID, subject string) (roles []string, found bool, err error)
 }
 
 // Instantiate a new JsonWebTokenService
@@ -76,6 +91,12 @@ func NewRestHandler(
 // by the handler registry at boot when the SDK AuthService is available.
 func (handler *RestHandler) SetLoginDriver(driver *login.Driver) {
 	handler.loginDriver = driver
+}
+
+// SetPrincipalResolver wires the IAM read a backbone session refreshes
+// from. Wired by the handler registry when an IAM client is available.
+func (handler *RestHandler) SetPrincipalResolver(principals PrincipalResolver) {
+	handler.principals = principals
 }
 
 // Creates a new web service session from the parsed JWT
@@ -105,13 +126,7 @@ func (handler *RestHandler) CreateSession(
 		requestedServiceID, _ = strconv.ParseUint(serviceIDParam, 10, 64)
 	}
 
-	userID, err := claims.PlatformUserID()
-	if err != nil {
-		handler.responseWriter.Error400(w, r, err)
-		return nil, err
-	}
-
-	user, err := handler.userService.Get(r.Context(), userID)
+	user, err := handler.sessionUser(r.Context(), claims)
 	if err != nil {
 		handler.responseWriter.Error400(w, r, err)
 		return nil, err
@@ -192,13 +207,16 @@ func (handler *RestHandler) RefreshToken(w http.ResponseWriter, r *http.Request)
 	//
 	// The store is the authority on current authorization, so a refresh
 	// picks up a revocation and fails closed when the user is gone.
-	userID, err := claims.PlatformUserID()
-	if err != nil {
-		handler.logger.Error(err, "rest/jwt: refresh token carries no platform user id")
-		handler.responseWriter.Error401(w, r, ErrInvalidToken)
+	//
+	// A backbone session (no platform uid) names a principal in its IAM
+	// tenant, so it refreshes from IAM and stays a backbone session: its
+	// roles are the ones IAM holds now, as at login, never the platform
+	// user store's (#646: one user store).
+	if claims.UID == "" {
+		handler.refreshBackboneSession(w, r, claims)
 		return
 	}
-	user, err := handler.userService.Get(r.Context(), userID)
+	user, err := handler.sessionUser(r.Context(), claims)
 	if err != nil {
 		handler.logger.Error(err, "rest/jwt: refresh could not resolve the user")
 		handler.responseWriter.Error401(w, r, ErrInvalidToken)
@@ -214,6 +232,135 @@ func (handler *RestHandler) RefreshToken(w http.ResponseWriter, r *http.Request)
 	handler.logger.Debugf("rest/jwt: refreshed token: %s", tokenString)
 
 	handler.responseWriter.Success200(w, r, tokenString)
+}
+
+// refreshBackboneSession re-issues a backbone session from the principal
+// its IAM tenant holds now. It fails closed when no IAM read is wired, when
+// the session names no principal or tenant, and when the tenant no longer
+// holds the principal.
+func (handler *RestHandler) refreshBackboneSession(w http.ResponseWriter, r *http.Request, claims *TokenClaims) {
+	if handler.principals == nil {
+		handler.logger.Warn("rest/jwt: backbone session refresh refused: no IAM principal resolver is wired")
+		handler.responseWriter.Error401(w, r, ErrInvalidToken)
+		return
+	}
+	if claims.Subject == "" || claims.TenantID == "" {
+		handler.responseWriter.Error401(w, r, ErrInvalidToken)
+		return
+	}
+	roles, found, err := handler.principals.Principal(r.Context(), claims.TenantID, claims.Subject)
+	if err != nil {
+		handler.logger.Error(err, "rest/jwt: refresh could not resolve the backbone principal")
+		handler.responseWriter.Error401(w, r, ErrInvalidToken)
+		return
+	}
+	if !found {
+		handler.logger.Debugf("rest/jwt: refresh refused: tenant %s holds no principal %s",
+			claims.TenantID, claims.Subject)
+		handler.responseWriter.Error401(w, r, ErrInvalidToken)
+		return
+	}
+	tokenString, _, err := handler.jwtService.IssueSession(&quicbaas.Identity{
+		Subject:  claims.Subject,
+		TenantID: claims.TenantID,
+		Roles:    roles,
+	})
+	if err != nil {
+		handler.responseWriter.Error500(w, r, err)
+		return
+	}
+	handler.responseWriter.Success200(w, r, tokenString)
+}
+
+// Logout signs the caller's session out server-side (#215).
+//
+// Logout used to be a browser-only affair: the console deleted its cookie
+// and the token stayed valid until it expired, so any copy of it kept
+// working after the user signed out. Logout now revokes the presented
+// token, so every route, /login/refresh and the RPC transports refuse it
+// from then on, and also expires the session cookies for a client that
+// cannot clear them itself.
+//
+// Signing out twice succeeds: the session is gone either way. A request
+// that presents no verifiable token is 401 and revokes nothing.
+func (handler *RestHandler) Logout(w http.ResponseWriter, r *http.Request) {
+
+	handler.logger.Debugf("url: %s, method: %s, remoteAddress: %s, requestUri: %s",
+		r.URL.Path, r.Method, r.RemoteAddr, r.RequestURI)
+
+	token, _, err := handler.jwtService.ParseToken(r)
+	if err != nil {
+		handler.responseWriter.Error401(w, r, err)
+		return
+	}
+	if err := handler.jwtService.Revoke(token); err != nil && !errors.Is(err, ErrTokenRevoked) {
+		handler.logger.Debugf("rest/jwt: logout rejected: %v", err)
+		handler.responseWriter.Error401(w, r, ErrInvalidToken)
+		return
+	}
+
+	for _, name := range []string{"jwt", "token"} {
+		http.SetCookie(w, &http.Cookie{
+			Name:     name,
+			Value:    "",
+			Path:     "/",
+			MaxAge:   -1,
+			Secure:   true,
+			HttpOnly: true,
+			SameSite: http.SameSiteStrictMode,
+		})
+	}
+	handler.responseWriter.Success200(w, r, nil)
+}
+
+// ProbeMTLS answers HEAD/GET /api/v1/auth/mtls/probe: whether "Sign in
+// with mTLS" on the login page would start a login for this caller
+// (#201). Before this route existed on the webservice, the console's
+// probe got a 404 and the probe handler sat on the daemon REST server,
+// where nothing it said related to the login the console actually runs.
+//
+// It answers from the same login driver /login runs, so it cannot offer
+// a sign-in that /login then refuses:
+//
+//   - 501 when this deployment cannot sign in with a certificate at all:
+//     no backbone is wired, or the mTLS binder declines the ceremony
+//     (it does until go-quicbaas#857 lets the caller's certificate be
+//     bound). Nothing the user can fix, so the console says "not
+//     supported" rather than "load a certificate".
+//   - 401 when certificate sign-in is possible but the TLS handshake
+//     carried no client certificate.
+//   - 204 when the login would start. Whether the certificate maps to a
+//     principal is the ceremony's answer, not the probe's: the probe
+//     never contacts the backbone, so it is no oracle for which
+//     certificates are enrolled.
+//
+// The answer depends on the connection, so it is never cached.
+func (handler *RestHandler) ProbeMTLS(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+
+	if handler.loginDriver == nil {
+		w.WriteHeader(http.StatusNotImplemented)
+		return
+	}
+	if err := handler.loginDriver.Probe(r, quicbaas.FactorTypeMTLS); err != nil {
+		var (
+			unavailable *login.UnavailableError
+			declined    *login.FactorUnavailableError
+			unsupported *login.UnsupportedFactorError
+		)
+		if errors.As(err, &unavailable) || errors.As(err, &declined) || errors.As(err, &unsupported) {
+			handler.logger.Debugf("rest/jwt: mTLS sign-in unavailable: %v", err)
+			w.WriteHeader(http.StatusNotImplemented)
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // Validates the raw JWT token to ensure it's not expired or contains invalid claims. This
@@ -244,6 +391,12 @@ func (handler *RestHandler) Verify(
 	}
 
 	if err := handler.jwtService.Verify(token); err != nil {
+		// A signed-out session is unauthenticated, not a bad request:
+		// the console answers a 401 by sending the user to sign in.
+		if errors.Is(err, ErrTokenRevoked) {
+			handler.responseWriter.Error401(w, r, err)
+			return
+		}
 		handler.responseWriter.Error400(w, r, err)
 		return
 	}
@@ -266,4 +419,40 @@ func sessionFromClaims(claims *TokenClaims) iammw.IAMSession {
 		Email:    claims.Email,
 		Roles:    claims.Roles,
 	})
+}
+
+// sessionUser resolves the user a verified token names (#642). There are
+// two token shapes and they name their principal differently:
+//
+//   - a platform-issued token carries the platform user id in "uid";
+//   - a backbone-issued session (IssueSession, the unified login driver)
+//     carries no "uid" — only the backbone's subject, which is the key
+//     registration stores the user under and the same key the FIDO2
+//     binder resolved the session's workspace with.
+//
+// Refusing the second shape (what this did) meant every account that
+// signed in through the backbone was saved but never retrievable from its
+// session: refresh and /session both failed. The store stays the authority
+// either way, so a user who is gone fails closed, and a backbone subject
+// that resolves to a user outside the session's tenant is refused rather
+// than handed that user's record.
+func (handler *RestHandler) sessionUser(ctx context.Context, claims *TokenClaims) (*entities.User, error) {
+	if claims.UID != "" {
+		userID, err := claims.PlatformUserID()
+		if err != nil {
+			return nil, err
+		}
+		return handler.userService.Get(ctx, userID)
+	}
+	if claims.Subject == "" {
+		return nil, ErrInvalidUserClaim
+	}
+	user, err := handler.userService.GetByEmail(ctx, claims.Subject)
+	if err != nil {
+		return nil, err
+	}
+	if user == nil || user.TenantID == "" || user.TenantID != claims.TenantID {
+		return nil, ErrInvalidUserClaim
+	}
+	return user, nil
 }

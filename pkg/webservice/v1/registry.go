@@ -1157,11 +1157,16 @@ type RegistryParams struct {
 	// routes unregistered.
 	AdminEmail string
 	// AdminClaimMultiInstance reports that several platformd instances
-	// serve one store. The admin-claim ceremony is refused when true —
-	// its one-time state is process-local and SDK factor enrolment is
-	// not conditional, so two instances could each enrol a different
-	// authenticator for the same one-time ownership transfer. See #170.
+	// serve one store. The process-local completion lock then serialises
+	// one instance only and SDK factor enrolment is not conditional, so
+	// the admin-claim ceremony is refused there unless
+	// AdminClaimTransactions is set.
 	AdminClaimMultiInstance bool
+	// AdminClaimTransactions is the store's compare-and-swap client, set
+	// only once it has answered adminclaim.ProbeTransactions. The claim's
+	// completion then runs under a store-wide lease, atomic across
+	// instances (#172). Nil keeps a multi-instance deployment refused.
+	AdminClaimTransactions adminclaim.TransactionExecutor
 }
 
 type HandlerRegistry struct {
@@ -1323,14 +1328,26 @@ func (registry *HandlerRegistry) JSONWebTokenHandler() jwt.TokenHandler {
 	if err != nil {
 		registry.params.Logger.FatalError(err)
 	}
+	rh, ok := handler.(*jwt.RestHandler)
+	if !ok {
+		return handler
+	}
 	// Wire the unified login driver so /login authenticates through the
 	// canonical ceremony and returns the session it issued. When the SDK
 	// AuthService is unavailable the handler fails closed rather than
 	// minting an unverified local JWT.
 	if driver := registry.LoginDriver(); driver != nil {
-		if rh, ok := handler.(*jwt.RestHandler); ok {
-			rh.SetLoginDriver(driver)
+		rh.SetLoginDriver(driver)
+	}
+	// A backbone session refreshes from the IAM tenant it landed in, the
+	// same store its login read its roles from (#646). Without an IAM
+	// client such a session is not refreshed.
+	if registry.params.IAMClient != nil {
+		resolver, err := restiam.NewWorkspaceRoleResolver(registry.params.IAMClient)
+		if err != nil {
+			registry.params.Logger.FatalError(err)
 		}
+		rh.SetPrincipalResolver(resolver)
 	}
 	return handler
 }
@@ -1591,6 +1608,7 @@ func (registry *HandlerRegistry) AdminClaimRestHandler() *adminclaim.RestHandler
 		AdminUsername: common.AdminUsername,
 		AdminEmail:    params.AdminEmail,
 		MultiInstance: params.AdminClaimMultiInstance,
+		Transactions:  params.AdminClaimTransactions,
 	})
 	if err != nil {
 		params.Logger.Error(err, "admin-claim routes not registered")

@@ -30,6 +30,21 @@ type AuthMiddleware interface {
 	Verify(w http.ResponseWriter, r *http.Request, next http.HandlerFunc)
 }
 
+// LogoutHandler is an AuthMiddleware that can sign a session out
+// server-side (#215). The authentication router mounts POST /logout only
+// on a middleware that implements it.
+type LogoutHandler interface {
+	Logout(w http.ResponseWriter, r *http.Request)
+}
+
+// MTLSProbeHandler is an AuthMiddleware that can say whether certificate
+// sign-in would start for the caller (#201). The authentication router
+// mounts HEAD/GET /auth/mtls/probe only on a middleware that implements
+// it; without it the console reads the 404 as "not supported".
+type MTLSProbeHandler interface {
+	ProbeMTLS(w http.ResponseWriter, r *http.Request)
+}
+
 // ScopeAuthorizer is an AuthMiddleware whose verified requests carry granted
 // scopes, so a route can require one on top of its role gate. The platform
 // token middleware is one; the legacy JWT handler carries no scopes.
