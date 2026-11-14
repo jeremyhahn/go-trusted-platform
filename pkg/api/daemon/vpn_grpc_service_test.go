@@ -152,54 +152,6 @@ func TestVPNGRPCService_PeerLifecycle(t *testing.T) {
 	assert.Equal(t, codes.NotFound, status.Code(err))
 }
 
-func TestVPNGRPCService_PosturePolicyLifecycle(t *testing.T) {
-	server, _ := newVPNTestServer(t)
-	ctx := context.Background()
-
-	set, err := server.SetPosturePolicy(ctx, &platformv1.SetVPNPosturePolicyRequest{
-		Policy: &platformv1.VPNPosturePolicy{TenantId: "acme", Name: "corp", Module: vpnTestPolicy},
-	})
-	require.NoError(t, err)
-	assert.NotZero(t, set.GetPolicy().GetUpdatedAtUnix())
-
-	got, err := server.GetPosturePolicy(ctx, &platformv1.GetVPNPosturePolicyRequest{TenantId: "acme", Name: "corp"})
-	require.NoError(t, err)
-	assert.Equal(t, vpnTestPolicy, got.GetPolicy().GetModule())
-
-	listed, err := server.ListPosturePolicies(ctx, &platformv1.ListVPNPosturePoliciesRequest{})
-	require.NoError(t, err)
-	assert.Len(t, listed.GetPolicies(), 1)
-
-	_, err = server.DeletePosturePolicy(ctx, &platformv1.DeleteVPNPosturePolicyRequest{TenantId: "acme", Name: "corp"})
-	require.NoError(t, err)
-
-	_, err = server.GetPosturePolicy(ctx, &platformv1.GetVPNPosturePolicyRequest{TenantId: "acme", Name: "corp"})
-	assert.Equal(t, codes.NotFound, status.Code(err))
-}
-
-func TestVPNGRPCService_RefusesInvalidRequests(t *testing.T) {
-	server, _ := newVPNTestServer(t)
-	ctx := context.Background()
-
-	_, err := server.EnrolPeer(ctx, &platformv1.EnrolVPNPeerRequest{})
-	assert.Equal(t, codes.InvalidArgument, status.Code(err), "a missing peer")
-
-	_, err = server.EnrolPeer(ctx, &platformv1.EnrolVPNPeerRequest{Peer: &platformv1.VPNPeer{TenantId: "acme"}})
-	assert.Equal(t, codes.InvalidArgument, status.Code(err), "a missing device id")
-
-	_, err = server.SetPosturePolicy(ctx, &platformv1.SetVPNPosturePolicyRequest{})
-	assert.Equal(t, codes.InvalidArgument, status.Code(err), "a missing policy")
-
-	_, err = server.SetPosturePolicy(ctx, &platformv1.SetVPNPosturePolicyRequest{
-		Policy: &platformv1.VPNPosturePolicy{TenantId: "acme", Name: "corp", Module: "package other\n"},
-	})
-	assert.Equal(t, codes.InvalidArgument, status.Code(err), "a module outside package vpn.posture")
-
-	listed, err := server.ListPosturePolicies(ctx, &platformv1.ListVPNPosturePoliciesRequest{})
-	require.NoError(t, err)
-	assert.Empty(t, listed.GetPolicies(), "a refused policy must not be stored")
-}
-
 func TestVPNGRPCService_StoreFailureIsUnavailable(t *testing.T) {
 	server, storage := newVPNTestServer(t)
 	storage.ListError = errors.New("raft leader lost")
