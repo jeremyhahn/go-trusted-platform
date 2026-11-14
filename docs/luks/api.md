@@ -12,8 +12,10 @@ domain socket**, so gRPC and Unix share a column.
 
 Every server transport is registered, and platformd startup injects the
 go-luks2 backend and the root checker into the service behind it, so each
-capability runs against the host's volumes, except FIDO2 and TPM enrollment,
-which answer *not wired* until a boot unlock path opens the slots they add. If the startup wiring is refused
+capability runs against the host's volumes, except TPM enrollment, which
+answers *not wired* until a boot unlock path opens the slots it adds. FIDO2
+enrollment answers *not wired* only when platformd could not open a FIDO2
+handler at startup. If the startup wiring is refused
 (no SDK client), nothing is injected and each capability answers *backend not
 configured* or *root required* ([engineering.md](engineering.md) §6).
 

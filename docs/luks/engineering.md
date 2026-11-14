@@ -176,14 +176,23 @@ ceremony backend, injects the production LUKS pieces through the
 `SDKBackendTarget` interface (implemented by `*daemon.Daemon`):
 
 - `SetLUKSBackend(NewLUKSBackend(logger, WithDefaultLUKSHandlers()))`: the
-  go-luks2 backend, with its FIDO2 and TPM handlers then cleared. No boot
-  unlock path consumes what either default handler enrolls: the FIDO2 handler
-  binds the 64-byte go-xkms derived key, which the initrd FIDO2 strategy cannot
-  derive, and the TPM sealer keeps its sealed passphrase in a `systemd-tpm2`
-  header token, while the initrd TPM strategies unseal from the ESP. So
-  `EnrollFIDO2` answers `ErrLUKSFIDO2NotWired` and `EnrollTPM`
-  `ErrLUKSTPMNotWired` before touching the device. Passphrase, recovery,
-  remove, test-unlock and change-passphrase run against the device. The PCR
+  go-luks2 backend, with its TPM handler then cleared.
+  - FIDO2: the default handler stays when a FIDO2 library opens at startup.
+    It derives the keyslot key with hmac-secret over a fresh salt and writes
+    a `fido2-manual` token (credential, salt, RP, UV) naming the slot. At
+    boot, `pkg/boot/commands` opens a FIDO2 handler when `fido2` is an
+    unlock method (`bootFIDO2Handler`), and the initrd FIDO2 strategy lists
+    the slots the header's FIDO2 tokens name besides the configured ones,
+    rebuilds the same derivation from the token and opens that slot
+    (`TestLUKSFIDO2EnrollmentUnlocksAtBoot`). Without a handler
+    `EnrollFIDO2` answers `ErrLUKSFIDO2NotWired`.
+  - TPM: the sealer keeps its sealed passphrase in a `systemd-tpm2` header
+    token, while the initrd TPM strategies unseal from the ESP, so no boot
+    path opens the slot and `EnrollTPM` answers `ErrLUKSTPMNotWired` before
+    touching the device.
+
+  Passphrase, recovery, remove, test-unlock and change-passphrase run
+  against the device. The PCR
   check (`pcrCheckedTPMHandler`, `ErrLUKSPCRInvalid`, 400 on REST and
   `InvalidArgument` on gRPC) is in front of the TPM handler when one is wired;
 - `SetLUKSRootChecker(DefaultRootChecker())`: the effective-UID root gate for
