@@ -656,6 +656,15 @@ func (b *LUKSBackend) ChangePassphrase(ctx context.Context, req *daemon.LUKSChan
 			}
 			break
 		}
+		_, metadata, err := luks2.ReadHeader(req.Device)
+		if err != nil {
+			return err
+		}
+		if slot := metadata.Keyslots[strconv.Itoa(int(req.Slot))]; slot != nil && slot.KDF != nil && slot.KDF.Hash != "" {
+			if err := fips.ValidateHashForMode(slot.KDF.Hash, true); err != nil {
+				return fmt.Errorf("%w: keyslot %d: %w", ErrLUKSRotationKDFNotApproved, req.Slot, err)
+			}
+		}
 	}
 	return luks2.ChangeKey(
 		req.Device,
