@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/fhrp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/modes"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/secrets"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/firewall"
@@ -64,6 +65,7 @@ var serviceBuilders = map[string]serviceBuilder{
 	ServiceNAT:           buildNAT,
 	ServiceNAT64:         buildNAT64,
 	ServiceHostFW:        buildHostFW,
+	ServiceFHRP:          buildFHRP,
 	ServiceTunnels:       buildTunnels,
 	ServiceOverlay:       buildOverlay,
 	ServiceTransit:       buildTransit,
@@ -452,7 +454,8 @@ func (b hostFWBackend) Healthy() bool { return b.Service.Health().Active }
 
 // buildHostFW builds the nftables host packet filter from the `hostfw:`
 // section, the daemon-injected listener inventory and applier
-// (HostRuntime), and the tunnel interfaces the gateway itself configures.
+// (HostRuntime), the tunnel interfaces the gateway itself configures, and
+// the enabled FHRP groups' interfaces, on which VRRP is admitted.
 // Without an injected applier it opens the real netlink connection, which
 // needs CAP_NET_ADMIN — the gateway's normal privilege.
 func buildHostFW(g *Gateway) (backedService, error) {
@@ -478,16 +481,94 @@ func buildHostFW(g *Gateway) (backedService, error) {
 			rendered.Tunnels = append(rendered.Tunnels, g.config.Tunnels[i].Name)
 		}
 	}
+	var vipDeny []hostfw.VIPDeny
+	// Every enabled FHRP group's interface carries its peers' VRRP
+	// advertisements; without them a backup never hears the master and
+	// claims the same addresses.
+	if f := g.config.FHRP; f != nil && f.Enabled {
+		for i := range f.Groups {
+			if !slices.Contains(rendered.VRRP, f.Groups[i].Interface) {
+				rendered.VRRP = append(rendered.VRRP, f.Groups[i].Interface)
+			}
+		}
+		// accept-mode false (RFC 5798 §6.4.3): a non-owner master holds
+		// the VIPs as local addresses, so the filter drops traffic to
+		// them. The owner always accepts its own address.
+		for i := range f.Groups {
+			grp := f.Groups[i]
+			if grp.AcceptMode || fhrpAddressOwner(grp) {
+				continue
+			}
+			for _, raw := range grp.Addresses {
+				if pfx, err := netip.ParsePrefix(raw); err == nil {
+					vipDeny = append(vipDeny, hostfw.VIPDeny{Interface: grp.Interface, Address: pfx.Addr()})
+				}
+			}
+		}
+	}
 	svc, err := hostfw.New(hostfw.Deps{
 		Applier:   applier,
 		Inventory: inventory,
 		Config:    rendered,
+		VIPDeny:   vipDeny,
 		Logger:    host.Logger,
 	})
 	if err != nil {
 		return nil, &ErrServiceStartFailed{Service: ServiceHostFW, Cause: err}
 	}
 	return hostFWBackend{svc}, nil
+}
+
+// fhrpAddressOwner reports whether the group runs at the address-owner
+// priority 255; priority 0 means the RFC default 100, not the owner.
+func fhrpAddressOwner(grp fhrp.GroupConfig) bool {
+	return grp.Priority == fhrp.PriorityOwner
+}
+
+// fhrpBackend adapts *fhrp.Speaker.
+type fhrpBackend struct{ *fhrp.Speaker }
+
+// Healthy reports a started speaker none of whose groups' last actuation
+// (advertise, claim, release) failed and none of which holds an unrepaired
+// address claim: a later successful advertisement does not hide it.
+func (b fhrpBackend) Healthy() bool { return fhrpHealthy(b.Health()) }
+
+// fhrpHealthy reports a started speaker none of whose groups has a failed
+// last actuation or an unrepaired address claim.
+func fhrpHealthy(h fhrp.Health) bool {
+	if !h.Active {
+		return false
+	}
+	for _, g := range h.Groups {
+		if g.LastError != nil || g.ClaimError != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// buildFHRP builds the VRRPv3 speaker from the `fhrp:` section over the
+// daemon-injected transport and address programmer; without them it opens
+// raw sockets and programs addresses over netlink.
+func buildFHRP(g *Gateway) (backedService, error) {
+	host := g.config.hostRuntime()
+	transport := host.FHRPTransport
+	if transport == nil {
+		transport = fhrp.NewRawTransport()
+	}
+	programmer := host.FHRPProgrammer
+	if programmer == nil {
+		programmer = fhrp.NewNetlinkProgrammer()
+	}
+	speaker, err := fhrp.New(*g.config.FHRP, fhrp.Deps{
+		Transport:  transport,
+		Programmer: programmer,
+		Logger:     host.Logger,
+	})
+	if err != nil {
+		return nil, &ErrServiceStartFailed{Service: ServiceFHRP, Cause: err}
+	}
+	return fhrpBackend{speaker}, nil
 }
 
 // TunnelManager is the tunnel-manager surface the tunnels service drives.

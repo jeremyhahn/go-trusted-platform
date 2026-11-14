@@ -181,7 +181,12 @@ func TestClassTable_EveryProcessOpensOnlyServiceFamilies(t *testing.T) {
 		// A process with no families could not reach its own supervisor.
 		assert.Containsf(t, def.AddressFamilies, uint32(unix.AF_UNIX),
 			"process %q needs AF_UNIX for its IPC", def.Name)
-		for _, family := range []uint32{unix.AF_PACKET, unix.AF_ALG, unix.AF_VSOCK, unix.AF_KEY} {
+		forbidden := []uint32{unix.AF_ALG, unix.AF_VSOCK, unix.AF_KEY}
+		if def.Name != "datapath" {
+			// Only the datapath, which hosts the FHRP announcer, sends raw frames.
+			forbidden = append(forbidden, unix.AF_PACKET)
+		}
+		for _, family := range forbidden {
 			assert.NotContainsf(t, def.AddressFamilies, family,
 				"process %q opens no family %d socket", def.Name, family)
 		}

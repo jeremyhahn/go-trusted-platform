@@ -65,12 +65,17 @@ const (
 	// PortBFD is the UDP port allowed on tunnel interfaces for single-hop BFD.
 	PortBFD uint16 = 3784
 
-	ipProtoGRE      uint8 = 47
-	ipProtoESP      uint8 = 50
-	ipProtoTCP      uint8 = 6
-	ipProtoUDP      uint8 = 17
-	ipProtoICMP     uint8 = 1
-	ipProtoIPv6ICMP uint8 = 58
+	ipProtoGRE  uint8 = 47
+	ipProtoESP  uint8 = 50
+	ipProtoVRRP uint8 = 112
+	// icmpv6NeighborSolicit and icmpv6NeighborAdvert stay answered on an
+	// accept-mode-off virtual address.
+	icmpv6NeighborSolicit uint8 = 135
+	icmpv6NeighborAdvert  uint8 = 136
+	ipProtoTCP            uint8 = 6
+	ipProtoUDP            uint8 = 17
+	ipProtoICMP           uint8 = 1
+	ipProtoIPv6ICMP       uint8 = 58
 
 	// Neighbour-discovery ICMPv6 types (RFC 4861): router solicitation
 	// through redirect. Without them an IPv6 host cannot resolve anything.
@@ -119,6 +124,8 @@ type Ruleset struct {
 	// are accepted from anyone reaching the tunnel — the tunnel itself
 	// bounds who that can be.
 	Tunnels []string
+	// VRRP are the interfaces on which VRRP advertisements (IP protocol 112) from FHRP peers are accepted.
+	VRRP []string
 	// Unfiltered are interfaces the filter deliberately leaves open. It is
 	// for a rollout that must not lock the operator out of the management
 	// leg before its listeners are in the inventory; the rendered ruleset
@@ -126,6 +133,20 @@ type Ruleset struct {
 	Unfiltered []string
 	// ICMP bounds ICMP and ICMPv6 (other than neighbour discovery).
 	ICMP RateLimit
+	// VIPDeny are FHRP virtual addresses held with accept-mode off (RFC
+	// 5798 §6.4.3): traffic addressed to them is dropped on their
+	// interface. The gateway derives them from its FHRP groups; they are
+	// not operator configuration.
+	VIPDeny []VIPDeny
+}
+
+// VIPDeny drops input traffic to a virtual address on an interface; IPv6
+// neighbour discovery to it stays answered.
+type VIPDeny struct {
+	// Interface is the FHRP interface carrying the virtual address.
+	Interface string
+	// Address is the virtual address.
+	Address netip.Addr
 }
 
 // ListenerInventory is what gatewayd and platformd implement: the sockets
@@ -153,6 +174,8 @@ type Config struct {
 	Peers []PeerAllowance `yaml:"peers,omitempty" json:"peers,omitempty" mapstructure:"peers"`
 	// Tunnels are the tunnel interfaces carrying BGP and BFD.
 	Tunnels []string `yaml:"tunnels,omitempty" json:"tunnels,omitempty" mapstructure:"tunnels"`
+	// VRRP are the FHRP interfaces that admit VRRP advertisements.
+	VRRP []string `yaml:"vrrp,omitempty" json:"vrrp,omitempty" mapstructure:"vrrp"`
 	// Unfiltered are interfaces left open on purpose; see Ruleset.
 	Unfiltered []string `yaml:"unfiltered,omitempty" json:"unfiltered,omitempty" mapstructure:"unfiltered"`
 	// ICMP bounds ICMP; zero fields take DefaultICMPRateLimit.
@@ -165,7 +188,7 @@ type Config struct {
 
 // Validate checks the operator-declared part of the ruleset.
 func (c Config) Validate() error {
-	rs := Ruleset{Listeners: c.Extra, Peers: c.Peers, Tunnels: c.Tunnels, Unfiltered: c.Unfiltered, ICMP: c.ICMP}
+	rs := Ruleset{Listeners: c.Extra, Peers: c.Peers, Tunnels: c.Tunnels, Unfiltered: c.Unfiltered, VRRP: c.VRRP, ICMP: c.ICMP}
 	return rs.Validate()
 }
 
@@ -218,9 +241,22 @@ func (rs Ruleset) Validate() error {
 			return &ValidationError{Field: "tunnels", Index: i, Err: err}
 		}
 	}
+	for i, v := range rs.VRRP {
+		if err := validateInterface(v, false); err != nil {
+			return &ValidationError{Field: "vrrp", Index: i, Err: err}
+		}
+	}
 	for i, u := range rs.Unfiltered {
 		if err := validateInterface(u, false); err != nil {
 			return &ValidationError{Field: "unfiltered", Index: i, Err: err}
+		}
+	}
+	for i, v := range rs.VIPDeny {
+		if err := validateInterface(v.Interface, false); err != nil {
+			return &ValidationError{Field: "vip-deny", Index: i, Err: err}
+		}
+		if !v.Address.IsValid() || v.Address.IsUnspecified() {
+			return &ValidationError{Field: "vip-deny", Index: i, Err: ErrInvalidAddress}
 		}
 	}
 	return nil
@@ -235,6 +271,7 @@ func (rs Ruleset) normalized() Ruleset {
 		Peers:      append([]PeerAllowance(nil), rs.Peers...),
 		Tunnels:    append([]string(nil), rs.Tunnels...),
 		Unfiltered: append([]string(nil), rs.Unfiltered...),
+		VRRP:       append([]string(nil), rs.VRRP...),
 		ICMP:       rs.ICMP,
 	}
 	if out.ICMP.Rate == 0 {
@@ -254,6 +291,14 @@ func (rs Ruleset) normalized() Ruleset {
 	})
 	sort.Strings(out.Tunnels)
 	sort.Strings(out.Unfiltered)
+	sort.Strings(out.VRRP)
+	out.VIPDeny = append([]VIPDeny(nil), rs.VIPDeny...)
+	sort.SliceStable(out.VIPDeny, func(i, j int) bool {
+		if out.VIPDeny[i].Interface != out.VIPDeny[j].Interface {
+			return out.VIPDeny[i].Interface < out.VIPDeny[j].Interface
+		}
+		return out.VIPDeny[i].Address.Less(out.VIPDeny[j].Address)
+	})
 	return out
 }
 

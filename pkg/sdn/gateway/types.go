@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/fhrp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/hostfw"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/loadbalancer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/nat64"
@@ -1465,6 +1466,10 @@ type GatewayConfig struct {
 	// interfaces; the daemon's own listeners come from HostRuntime.
 	HostFW *hostfw.Config `yaml:"hostfw,omitempty" json:"hostfw,omitempty" mapstructure:"hostfw"`
 
+	// FHRP is the VRRPv3 first-hop redundancy speaker: the virtual
+	// router groups this gateway holds a default-gateway address in.
+	FHRP *fhrp.Config `yaml:"fhrp,omitempty" json:"fhrp,omitempty" mapstructure:"fhrp"`
+
 	// Runtime carries daemon-injected runtime dependencies (OVS client,
 	// flow controller, zone providers). Never serialized; nil when the
 	// gateway is constructed from configuration alone.
@@ -1571,6 +1576,21 @@ func (c *GatewayConfig) Validate() error {
 			return &ErrHostFWConfigInvalid{Cause: err}
 		}
 	}
+	if c.FHRP != nil && c.FHRP.Enabled {
+		if err := c.FHRP.Validate(); err != nil {
+			return &ErrFHRPConfigInvalid{Cause: err}
+		}
+		// accept-mode false on a non-owner group is enforced by the host
+		// filter's VIP drop rules (RFC 5798 §6.4.3); without hostfw a
+		// master would answer on the VIPs.
+		if c.HostFW == nil || !c.HostFW.Enabled {
+			for _, grp := range c.FHRP.Groups {
+				if !grp.AcceptMode && !fhrpAddressOwner(grp) {
+					return &ErrFHRPConfigInvalid{Cause: fmt.Errorf("group vrid %d: accept-mode false needs hostfw enabled to drop traffic to the virtual addresses (or set accept-mode: true)", grp.VRID)}
+				}
+			}
+		}
+	}
 	return c.validateTunnels()
 }
 
@@ -1636,6 +1656,10 @@ func (c *GatewayConfig) HasEnabledServices() bool {
 // It is exported so the process model's class table can be checked
 // against it: a section here with no process is one the supervisor cannot
 // start (#631 review).
+//
+// Tunnels precede fhrp because a group may name a tunnel interface, so it
+// must exist before the speaker opens its socket and outlive it on the
+// reverse stop.
 func (c *GatewayConfig) EnabledServices() []string {
 	var out []string
 	add := func(on bool, name string) {
@@ -1649,6 +1673,7 @@ func (c *GatewayConfig) EnabledServices() []string {
 	add(c.NAT64 != nil && c.NAT64.Enabled, ServiceNAT64)
 	add(c.HostFW != nil && c.HostFW.Enabled, ServiceHostFW)
 	add(len(c.Tunnels) > 0 || len(c.RoutingUplinks) > 0, ServiceTunnels)
+	add(c.FHRP != nil && c.FHRP.Enabled, ServiceFHRP)
 	add(c.BGP != nil || (c.Transit != nil && c.Transit.Enabled), ServiceTransit)
 	add(c.Overlay != nil && c.Overlay.Enabled, ServiceOverlay)
 	add(c.Edge != nil && c.Edge.Enabled, ServiceEdge)

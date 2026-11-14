@@ -140,6 +140,7 @@ func TestRender_ValidationErrors(t *testing.T) {
 		"peer unspecified":   {Ruleset{Peers: []PeerAllowance{{Interface: "wan0", Protocol: PeerProtocolGRE, Addresses: []netip.Addr{netip.IPv4Unspecified()}}}}, ErrInvalidAddress, "peers"},
 		"tunnel empty":       {Ruleset{Tunnels: []string{""}}, ErrEmptyInterface, "tunnels"},
 		"unfiltered bad":     {Ruleset{Unfiltered: []string{"a/b"}}, ErrInvalidInterface, "unfiltered"},
+		"vrrp bad":           {Ruleset{VRRP: []string{"a/b"}}, ErrInvalidInterface, "vrrp"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -157,6 +158,73 @@ func TestConfig_Validate(t *testing.T) {
 	assert.NoError(t, Config{}.Validate())
 	assert.NoError(t, Config{Extra: []Listener{{Interface: "eth0", Protocol: ProtocolTCP, Port: 22}}, Tunnels: []string{"gre1"}}.Validate())
 	assert.ErrorIs(t, Config{Extra: []Listener{{Protocol: ProtocolTCP}}}.Validate(), ErrZeroPort)
+	assert.ErrorIs(t, Config{VRRP: []string{""}}.Validate(), ErrEmptyInterface)
+}
+
+func TestRender_VRRPOnInterfaces(t *testing.T) {
+	rendered, err := Render(Ruleset{VRRP: []string{"eth2", "eth1"}})
+	require.NoError(t, err)
+	eth1 := `iifname "eth1" meta l4proto 112 accept comment "vrrp on eth1"`
+	eth2 := `iifname "eth2" meta l4proto 112 accept comment "vrrp on eth2"`
+	assert.Contains(t, rendered.Text, eth1)
+	assert.Contains(t, rendered.Text, eth2)
+	assert.Less(t, strings.Index(rendered.Text, eth1), strings.Index(rendered.Text, eth2), "sorted")
+	assert.Len(t, rendered.Rules, 8, "6 base rules plus 2 VRRP")
+}
+
+// accept-mode off (RFC 5798 §6.4.3): traffic to a VIP is dropped whatever
+// interface it arrives on (Linux delivers an installed VIP locally from any
+// ingress), and before the conntrack allowance, so an established flow or
+// a reply to VIP-sourced traffic is dropped too (Codex #1716 round 4). For
+// IPv6 neighbour discovery to the VIP stays answered, so an IPv6 VIP takes
+// two rules: one for every non-ICMPv6 packet, one for ICMPv6 other than
+// NS/NA (an `icmpv6 type` match implies ICMPv6, so one rule alone would
+// let TCP through).
+func TestRender_VIPDeny(t *testing.T) {
+	rendered, err := Render(Ruleset{VIPDeny: []VIPDeny{
+		{Interface: "br-int", Address: netip.MustParseAddr("2001:db8::1")},
+		{Interface: "br-int", Address: netip.MustParseAddr("10.4.200.1")},
+	}})
+	require.NoError(t, err)
+	v4 := `ip daddr 10.4.200.1 drop comment "vip 10.4.200.1 accept-mode off"`
+	v6 := `ip6 daddr 2001:db8::1 meta l4proto != ipv6-icmp drop comment "vip 2001:db8::1 accept-mode off"`
+	v6icmp := `ip6 daddr 2001:db8::1 icmpv6 type != { nd-neighbor-solicit, nd-neighbor-advert } drop comment "vip 2001:db8::1 accept-mode off"`
+	for _, line := range []string{v4, v6, v6icmp} {
+		require.Contains(t, rendered.Text, line)
+		assert.NotContains(t, rendered.Text, `iifname "br-int" `+line, "matches every ingress interface")
+		assert.Less(t, strings.Index(rendered.Text, "loopback"), strings.Index(rendered.Text, line), "after loopback")
+		assert.Less(t, strings.Index(rendered.Text, line), strings.Index(rendered.Text, "ct state established,related accept"), "before the established allowance")
+	}
+	for _, r := range rendered.Rules {
+		if r.Kind == RuleVIPDeny || r.Kind == RuleVIPDenyICMPv6 {
+			assert.Empty(t, r.Interface, "no ingress restriction")
+		}
+	}
+	assert.Less(t, strings.Index(rendered.Text, v4), strings.Index(rendered.Text, v6), "sorted")
+	assert.Len(t, rendered.Rules, 9, "6 base rules plus 3 VIP denies")
+}
+
+// The same VIP on two interfaces compiles to one set of deny rules, now
+// that the rules match every ingress.
+func TestRender_VIPDenyDeduplicatesAddresses(t *testing.T) {
+	rendered, err := Render(Ruleset{VIPDeny: []VIPDeny{
+		{Interface: "br-int", Address: netip.MustParseAddr("10.4.200.1")},
+		{Interface: "eth1", Address: netip.MustParseAddr("10.4.200.1")},
+	}})
+	require.NoError(t, err)
+	assert.Len(t, rendered.Rules, 7, "6 base rules plus 1 VIP deny")
+}
+
+func TestRuleset_ValidateVIPDeny(t *testing.T) {
+	bad := []VIPDeny{
+		{Interface: "", Address: netip.MustParseAddr("10.4.200.1")},
+		{Interface: "br-int"},
+	}
+	for _, v := range bad {
+		var ve *ValidationError
+		require.ErrorAs(t, Ruleset{VIPDeny: []VIPDeny{v}}.Validate(), &ve)
+		assert.Equal(t, "vip-deny", ve.Field)
+	}
 }
 
 func TestErrors_Messages(t *testing.T) {

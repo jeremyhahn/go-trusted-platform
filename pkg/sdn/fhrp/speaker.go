@@ -125,6 +125,8 @@ type GroupStatus struct {
 	// Initialize).
 	NextDeadline time.Time
 	LastError    error
+	// ClaimError is the unrepaired address-claim failure; LastError can be nil while it is set.
+	ClaimError error
 }
 
 // Health is the speaker's health summary.
@@ -228,6 +230,11 @@ type runner struct {
 	// timer is armed in startGroup, before the run loop exists, so the
 	// first deadline is computed from the same instant Startup used.
 	timer Timer
+	// owned holds the prefixes this runner added or adopted; Release
+	// deletes only these. A priority-255 owner's preexisting address is
+	// never in it, so it stays; a non-owner adopts any VIP it finds (one a
+	// crashed master left), so it is released on demotion and Stop (#1716).
+	owned map[netip.Prefix]bool
 }
 
 type event struct {
@@ -242,6 +249,7 @@ func (s *Speaker) startGroup(ctx context.Context, gc GroupConfig) (*runner, erro
 		events:  make(chan event, 16),
 		stopCh:  make(chan struct{}),
 		done:    make(chan struct{}),
+		owned:   make(map[netip.Prefix]bool),
 	}
 	// The group validates the config, so build it before opening a socket
 	// and open on the source address it parsed.
@@ -255,6 +263,7 @@ func (s *Speaker) startGroup(ctx context.Context, gc GroupConfig) (*runner, erro
 		return nil, &ErrTransportFailed{VRID: gc.VRID, Interface: gc.Interface, Operation: "open", Cause: err}
 	}
 	r.conn = conn
+	r.dropStaleVIPs(g)
 	now := s.clock.Now()
 	r.mu.Lock()
 	err = g.Startup(now)
@@ -272,6 +281,35 @@ func (s *Speaker) startGroup(ctx context.Context, gc GroupConfig) (*runner, erro
 	go r.receive(recvCtx)
 	go r.run()
 	return r, nil
+}
+
+// dropStaleVIPs removes, before Startup, every VIP a non-owner finds on
+// its interface: a fresh runner owns nothing, so such an address is one a
+// crashed master left. A non-owner starts in Backup and, while a peer stays
+// master, never claims, so a stale VIP would keep answering ARP/ND for the
+// peer's address (Codex #1716 round 4). A priority-255 owner's address is
+// its own and stays. Without an AddressReader nothing can be seen, so
+// nothing is removed. A failed removal is logged; Startup still runs.
+func (r *runner) dropStaleVIPs(g *Group) {
+	reader, ok := r.speaker.deps.Programmer.(AddressReader)
+	if !ok || g.Priority() == PriorityOwner {
+		return
+	}
+	stale := false
+	for _, p := range g.prefixes {
+		present, err := reader.HasAddress(g.cfg.Interface, p)
+		if err != nil {
+			r.logErr("stale vip check", &ErrAddressOperationFailed{VRID: g.cfg.VRID, Interface: g.cfg.Interface, Operation: "list", Address: p, Cause: err})
+			continue
+		}
+		if present {
+			r.owned[p] = true
+			stale = true
+		}
+	}
+	if stale {
+		r.logErr("stale vip removal", r.Release(g))
+	}
 }
 
 // stop ends the loops, performs the group's Shutdown and closes the socket.
@@ -294,6 +332,7 @@ func (r *runner) status() GroupStatus {
 	return GroupStatus{
 		VRID: g.cfg.VRID, Interface: g.cfg.Interface, Family: g.family, State: g.state,
 		Priority: g.Priority(), Addresses: g.Addresses(), Transitions: g.transitions, LastError: g.lastErr,
+		ClaimError:   g.claimErr,
 		NextDeadline: g.NextDeadline(),
 	}
 }
@@ -458,10 +497,29 @@ func (r *runner) Advertise(g *Group, priority uint8) error {
 // Claim implements Actuator.
 func (r *runner) Claim(g *Group) error {
 	hw := VirtualMAC(g.family, g.cfg.VRID)
+	if r.owned == nil {
+		r.owned = make(map[netip.Prefix]bool)
+	}
+	reader, _ := r.speaker.deps.Programmer.(AddressReader)
 	for _, p := range g.prefixes {
+		// Only a priority-255 address owner holds a VIP as its own
+		// permanent address. For any other group a VIP already on the
+		// interface is one a crashed master left behind: adopt it
+		// (AddAddress replaces idempotently) so it is released later.
+		if !r.owned[p] && reader != nil && g.Priority() == PriorityOwner {
+			present, err := reader.HasAddress(g.cfg.Interface, p)
+			if err != nil {
+				return &ErrAddressOperationFailed{VRID: g.cfg.VRID, Interface: g.cfg.Interface, Operation: "list", Address: p, Cause: err}
+			}
+			if present {
+				// The owner's preexisting address: leave it in place.
+				continue
+			}
+		}
 		if err := r.speaker.deps.Programmer.AddAddress(g.cfg.Interface, p, hw); err != nil {
 			return &ErrAddressOperationFailed{VRID: g.cfg.VRID, Interface: g.cfg.Interface, Operation: "add", Address: p, Cause: err}
 		}
+		r.owned[p] = true
 	}
 	for _, p := range g.prefixes {
 		if err := r.speaker.deps.Programmer.Announce(g.cfg.Interface, p.Addr(), hw); err != nil {
@@ -475,10 +533,21 @@ func (r *runner) Claim(g *Group) error {
 func (r *runner) Release(g *Group) error {
 	hw := VirtualMAC(g.family, g.cfg.VRID)
 	var first error
+	_, reads := r.speaker.deps.Programmer.(AddressReader)
 	for _, p := range g.prefixes {
-		if err := r.speaker.deps.Programmer.DeleteAddress(g.cfg.Interface, p, hw); err != nil && first == nil {
-			first = &ErrAddressOperationFailed{VRID: g.cfg.VRID, Interface: g.cfg.Interface, Operation: "delete", Address: p, Cause: err}
+		// The owner's preexisting prefix is never ours to delete (Claim
+		// adopts a stale VIP for any other group). Without an
+		// AddressReader every prefix counts as owned, as before.
+		if reads && !r.owned[p] {
+			continue
 		}
+		if err := r.speaker.deps.Programmer.DeleteAddress(g.cfg.Interface, p, hw); err != nil {
+			if first == nil {
+				first = &ErrAddressOperationFailed{VRID: g.cfg.VRID, Interface: g.cfg.Interface, Operation: "delete", Address: p, Cause: err}
+			}
+			continue
+		}
+		delete(r.owned, p)
 	}
 	return first
 }

@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/fhrp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/hostfw"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/nat64"
 	"log/slog"
@@ -144,6 +145,10 @@ type HostRuntime struct {
 	Listeners hostfw.ListenerInventory
 	// HostFWApplier programs the nftables table; nil opens netlink.
 	HostFWApplier hostfw.Applier
+	// FHRPTransport opens the VRRP group sockets; nil opens raw sockets.
+	FHRPTransport fhrp.Transport
+	// FHRPProgrammer holds the virtual addresses; nil uses netlink.
+	FHRPProgrammer fhrp.Programmer
 	// TunnelManager drives tunnel interfaces; nil uses the netlink manager.
 	TunnelManager TunnelManager
 	// UplinkManager programs the routing-uplinks: section for an injected

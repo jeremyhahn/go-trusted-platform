@@ -330,6 +330,7 @@ the refusal table. There is no third kind.
 | `nat` | `services/nat` | — |
 | `load-balancer` | `services/loadbalancer` | — |
 | `hostfw` | `services/hostfw` with the listener inventory `HostRuntime` carries | — |
+| `fhrp` | `pkg/sdn/fhrp` VRRPv3 speaker over `HostRuntime.FHRPTransport` / `FHRPProgrammer` (raw sockets and netlink when nil) | — |
 | `tunnels` | `pkg/sdn/tunnel` manager, every configured tunnel ensured, rolled back on the first failure; `ipsec` and `wireguard` keys resolved through `HostRuntime.SecretResolver` | — |
 | `transit` (or a `bgp` section) | `pkg/sdn/bgp` speaker with secrets resolved through `HostRuntime.SecretResolver`, every configured neighbour added | the speaker is in [docs/bgp/](../bgp/architecture.md) |
 | `proxy` | registered by `gatewayd serve` assembly (`proxysvc`), not by the table | — |
@@ -559,8 +560,9 @@ into gatewayd is #596):
   mode are per group. The state machine is pure and clock-injected
   (`fhrp.Group`), the sockets and address programming sit behind
   `fhrp.Transport` and `fhrp.Programmer`, and the speaker (`fhrp.Speaker`)
-  has the gateway service shape (`Start/Stop/Active/Health`). **`pkg/sdn/fhrp`
-  is not wired into gatewayd yet (#596)**: no handler builds it today.
+  has the gateway service shape (`Start/Stop/Active/Health`). gatewayd runs
+  it as the `fhrp` service in the `datapath` process (#1696); the second
+  gateway that pairs with it is #596.
 - **Overlay segments**, which include the public address block (`public` is
   an overlay, not a VLAN) — the **EVPN distributed anycast gateway** (RFC 9135)
   the overlay pipeline programs per VNI in

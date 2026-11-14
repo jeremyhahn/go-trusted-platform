@@ -305,9 +305,8 @@ printed in the ruleset so it is not forgotten.
 
 When two gateways serve one plain L2 segment (an environment VLAN or transit),
 hosts keep a single default gateway and the pair holds it with VRRPv3.
-`pkg/sdn/fhrp` is not wired into gatewayd yet (#596), so the `fhrp:` section
-below describes the package's configuration, not something a gateway runs
-today. Configure the same group on both nodes with
+An enabled `fhrp:` section runs the VRRPv3 speaker as the gateway's `fhrp`
+service. Configure the same group on both nodes with
 different priorities; the higher priority is master and the other waits:
 
 ```yaml
@@ -329,12 +328,11 @@ fhrp:
 
 Failover from a lost master takes about three advertisement intervals plus a
 small skew; a cleanly stopped master hands over in well under a second. `ip
-addr show zone406` on each node shows who holds the address, and the gateway
-snapshot reports each group's state, priority and transition count. The host
-filter must admit VRRP (IP protocol 112, multicast 224.0.0.18 / ff02::12) on
-each group's interface; that allowance is not yet rendered by `hostfw` and is
-part of the handler wiring (#596) — until it lands, list the interface under
-`hostfw.unfiltered` on a filtered gateway. Put the virtual address in `hostfw`
+addr show zone406` on each node shows who holds the address; the speaker's
+health (`fhrp.Health`) carries each group's state, priority and transition
+count, but the gateway snapshot does not report the groups yet. On a
+filtered gateway `hostfw` admits VRRP (IP protocol 112, multicast 224.0.0.18 /
+ff02::12) on each enabled group's interface. Put the virtual address in `hostfw`
 as an `extra` listener only if the gateway itself serves on it.
 
 Overlay (VXLAN) segments, including the public address block, do not use
