@@ -11,6 +11,8 @@
 // 2. Commercial License
 //    Contact licensing@automatethethings.com for commercial licensing options.
 
+//go:build opa
+
 package opa
 
 import "embed"
