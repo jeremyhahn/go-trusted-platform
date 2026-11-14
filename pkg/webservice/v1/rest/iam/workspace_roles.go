@@ -16,7 +16,10 @@ package iam
 import (
 	"context"
 
+	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/auth/iamuser"
 )
 
 // WorkspaceRoleResolver answers which roles a principal holds in a tenant
@@ -48,7 +51,7 @@ func NewWorkspaceRoleResolver(client IAMClient) (*WorkspaceRoleResolver, error) 
 // the startup reconcile and must still be able to sign in as a member. Any
 // other failure is returned, so the caller refuses rather than guesses.
 func (r *WorkspaceRoleResolver) Roles(ctx context.Context, tenantID, subject string) ([]string, error) {
-	user, err := r.client.GetUserByEmail(ctx, tenantID, subject)
+	user, err := r.userByEmail(ctx, tenantID, subject)
 	if sdkerrors.IsNotFound(err) {
 		return nil, nil
 	}
@@ -62,19 +65,35 @@ func (r *WorkspaceRoleResolver) Roles(ctx context.Context, tenantID, subject str
 }
 
 // Principal returns the roles subject holds in tenantID's IAM tenant, and
-// whether that tenant holds subject at all. Unlike Roles it tells a user
-// IAM no longer holds from one with no roles, so a session refresh can fail
-// closed on the first (#646).
+// whether that tenant holds subject as an active account. Unlike Roles it
+// tells a user IAM no longer admits from one with no roles, so a session
+// refresh fails closed on the first (#646): a user IAM no longer holds, or
+// holds as suspended, locked, disabled, pending or being deleted, is not
+// found.
 func (r *WorkspaceRoleResolver) Principal(ctx context.Context, tenantID, subject string) ([]string, bool, error) {
-	user, err := r.client.GetUserByEmail(ctx, tenantID, subject)
+	user, err := r.userByEmail(ctx, tenantID, subject)
 	if sdkerrors.IsNotFound(err) {
 		return nil, false, nil
 	}
 	if err != nil {
 		return nil, false, err
 	}
-	if user == nil {
+	if !iamuser.Active(user) {
 		return nil, false, nil
 	}
 	return append([]string(nil), user.Roles...), true, nil
+}
+
+// userByEmail reads the tenant's user named by email. The pinned SDK's
+// embedded transport has no User/GetByEmail, so on it the lookup falls back
+// to the tenant's user listing (see iamuser.Find).
+func (r *WorkspaceRoleResolver) userByEmail(ctx context.Context, tenantID, email string) (*iamsdk.User, error) {
+	return iamuser.Find(ctx,
+		func(ctx context.Context) (*iamsdk.User, error) {
+			return r.client.GetUserByEmail(ctx, tenantID, email)
+		},
+		func(ctx context.Context, req *iamsdk.ListUsersRequest) (*iamsdk.ListUsersResponse, error) {
+			return r.client.ListUsers(ctx, tenantID, req)
+		},
+		iamuser.ByEmail(email))
 }
