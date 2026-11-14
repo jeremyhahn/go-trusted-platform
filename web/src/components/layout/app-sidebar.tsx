@@ -73,6 +73,7 @@ const navigation = [
       { title: "Members", href: "/tenant/members" },
       { title: "Invitations", href: "/tenant/invitations" },
       { title: "Quotas", href: "/tenant/quotas" },
+      { title: "All Tenants", href: "/admin/tenants" },
     ],
   },
   {
