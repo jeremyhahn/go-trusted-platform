@@ -97,7 +97,8 @@ export type {
 } from './use-kms-ops';
 export { useTPMOps, textToBase64, base64ToHex } from './use-tpm-ops';
 // textToBase64 and base64ToHex come from use-tpm-ops (main) above.
-export { useVTPMRuntime, base64ToText, hexToBase64 } from './use-vtpm-runtime';
+// base64ToText comes from use-kms-ops above.
+export { useVTPMRuntime, hexToBase64 } from './use-vtpm-runtime';
 export type { VTPMRunState } from './use-vtpm-runtime';
 export {
   useContainerOps,

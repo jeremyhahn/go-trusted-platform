@@ -751,6 +751,14 @@ export async function mockRegistryApi(
       state.repositories[name] = (state.repositories[name] ?? []).filter((t) => t !== reference);
       state.deleted.push(`${name}:${reference}`);
       await route.fulfill({ status: 202, body: '' });
+      return;
+    }
+    await route.continue();
+  });
+
+  return state;
+}
+
 /** Switch port status as the server sends it (`switchwire.PortStatus`). */
 export interface SwitchPortStatus {
   port: string;
@@ -847,7 +855,6 @@ export async function mockSwitchApi(
     await route.continue();
   });
 
-  return state;
   return calls;
 }
 
@@ -1269,6 +1276,8 @@ export async function mockIDevIDApi(
   });
 
   return { calls };
+}
+
 // =============================================================================
 // SDN bridge, port and policy mocks (#1745)
 // =============================================================================
@@ -1364,6 +1373,8 @@ export async function mockSdnBridgeApi(page: Page): Promise<SdnApiCall[]> {
     return reply({ message: `unmocked ${method} ${path}`, code: 'NOT_FOUND' }, 404);
   });
   return calls;
+}
+
 // =============================================================================
 // Gateway BGP and IPAM (#1746)
 // =============================================================================
@@ -1502,6 +1513,8 @@ export async function mockGatewayBgpApi(
   });
 
   return { calls };
+}
+
 // ============================================================================
 // Platform daemon status, config and service lifecycle (#1752)
 // ============================================================================
@@ -2065,6 +2078,8 @@ export async function mockEABApi(
   );
 
   return { calls, getCredentials: () => credentials.map((c) => ({ ...c })) };
+}
+
 // CA operations (GetCAInfo, SignCSR, VerifyCertificate)
 
 export interface CAOperationsMockConfig {
@@ -2231,6 +2246,8 @@ export async function mockCAOperationsApi(
   });
 
   return { signRequests, signAuthorizations, verifyRequests };
+}
+
 /**
  * Mock the invitation lookup and accept endpoints: GET /invitations/{id}
  * (GetInvitation), GET /invitations/token/{token} (GetInvitationByToken)
@@ -2415,26 +2432,6 @@ export async function mockOverlayApi(
  * One recorded call to the vTPM bundle runtime API.
  */
 export interface VTPMRuntimeCall {
-// Device templates and profile assignment (#1737)
-
-export interface DeviceTemplateMock {
-  id: string;
-  tenant_id: string;
-  name: string;
-  description: string;
-  role: string;
-  config?: Record<string, unknown>;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface DeviceProfileMock {
-  id: string;
-  name: string;
-  role: string;
-}
-
-export interface RecordedRequest {
   method: string;
   path: string;
   query: string;
@@ -2562,6 +2559,9 @@ export async function mockVTPMRuntimeApi(
   });
 
   return { calls };
+}
+
+/**
  * Calls the container-ops mock recorded, so a test can assert the page
  * sent the request the operation needs.
  */
@@ -2779,6 +2779,8 @@ export async function mockContainerOpsApi(
   });
 
   return calls;
+}
+
 // ============================================================================
 // IAM policy and app API mock (#1728)
 // ============================================================================
@@ -2967,6 +2969,34 @@ export async function mockIAMPolicyAppApi(
   });
 
   return state;
+}
+
+// Device templates and profile assignment (#1737)
+
+export interface DeviceTemplateMock {
+  id: string;
+  tenant_id: string;
+  name: string;
+  description: string;
+  role: string;
+  config?: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DeviceProfileMock {
+  id: string;
+  name: string;
+  role: string;
+}
+
+export interface RecordedRequest {
+  method: string;
+  path: string;
+  query: string;
+  body: unknown;
+}
+
 export function createMockDeviceTemplate(
   overrides: Partial<DeviceTemplateMock> = {}
 ): DeviceTemplateMock {

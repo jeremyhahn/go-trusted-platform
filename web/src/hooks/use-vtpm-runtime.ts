@@ -57,13 +57,6 @@ export function textToBase64(text: string): string {
   return btoa(bin);
 }
 
-/** Base64 to text (UTF-8). */
-export function base64ToText(b64: string): string {
-  const bin = atob(b64);
-  const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
-  return new TextDecoder().decode(bytes);
-}
-
 /** Hex data to base64; throws on odd length or a non-hex digit. */
 export function hexToBase64(hex: string): string {
   const clean = hex.trim().replace(/^0x/i, "");
