@@ -85,27 +85,63 @@ func (s *FIDO2Strategy) CanUnlock(ctx context.Context, volume *luks.VolumeConfig
 		return false
 	}
 
-	// Check if volume has a FIDO2 key slot configured
-	for _, slot := range volume.KeySlots {
-		if slot.Type == luks.UnlockFIDO2 {
-			return true
-		}
+	// A FIDO2 slot is one the configuration names or one a FIDO2 token in
+	// the header names.
+	if len(s.fido2Slots(ctx, volume)) > 0 {
+		return true
 	}
 
-	s.logger.Debug("FIDO2: No FIDO2 key slot configured")
+	s.logger.Debug("FIDO2: No FIDO2 key slot configured or found in the header")
 	return false
+}
+
+// fido2Slots lists the FIDO2 keyslots to try: those the header's FIDO2
+// tokens name, in token order, then the configuration's FIDO2 slots not
+// already listed. The configuration numbers its slots by fallback position,
+// so a slot enrolled later (platformctl luks enroll-fido2) is found only
+// through its token.
+func (s *FIDO2Strategy) fido2Slots(ctx context.Context, volume *luks.VolumeConfig) []luks.KeySlot {
+	var slots []luks.KeySlot
+	seen := map[int]bool{}
+	if tokens, ok := s.platform.LUKS.(luks.HandlerWithTokens); ok {
+		list, err := tokens.TokenList(ctx, volume.DevicePath)
+		if err != nil {
+			s.logger.Warnf("FIDO2: reading LUKS2 tokens of %s: %v", volume.DevicePath, err)
+		}
+		ids := make([]int, 0, len(list))
+		for id := range list {
+			ids = append(ids, id)
+		}
+		sort.Ints(ids)
+		for _, id := range ids {
+			token := list[id]
+			if token == nil || token.FIDO2Credential == "" {
+				continue
+			}
+			for _, ks := range token.Keyslots {
+				idx, err := strconv.Atoi(ks)
+				if err != nil || idx < 0 || seen[idx] {
+					continue
+				}
+				seen[idx] = true
+				slots = append(slots, luks.KeySlot{Index: idx, Type: luks.UnlockFIDO2})
+			}
+		}
+	}
+	for _, slot := range volume.KeySlots {
+		if slot.Type == luks.UnlockFIDO2 && !seen[slot.Index] {
+			seen[slot.Index] = true
+			slots = append(slots, slot)
+		}
+	}
+	return slots
 }
 
 // Unlock attempts to unlock the volume using FIDO2
 func (s *FIDO2Strategy) Unlock(ctx context.Context, volume *luks.VolumeConfig) error {
 	s.logger.Infof("Attempting FIDO2 unlock for %s", volume.DevicePath)
 
-	// Find FIDO2 key slots
-	for _, slot := range volume.KeySlots {
-		if slot.Type != luks.UnlockFIDO2 {
-			continue
-		}
-
+	for _, slot := range s.fido2Slots(ctx, volume) {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()

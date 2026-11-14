@@ -87,12 +87,12 @@ func WireSDKBackends(target SDKBackendTarget, src SDKBackendSources, logger *log
 	// The LUKS backend needs no SDK: it drives go-luks2 on the host. The root checker reads the
 	// effective UID; without it the service refuses every mutation.
 	//
-	// FIDO2 enrollment stays off: the default handler binds the 64-byte
-	// go-xkms derived key, which neither the fido2-manual reader (raw
-	// 32-byte hmac-secret) nor the initrd FIDO2 strategy (no credential or
-	// salt) can produce, so an enrolled slot would not unlock at boot.
-	// EnrollFIDO2 answers ErrLUKSFIDO2NotWired until a boot path consumes
-	// the slot.
+	// FIDO2 enrollment uses the default handler when an authenticator
+	// library opens: it derives the keyslot key with hmac-secret and writes
+	// a fido2-manual token (credential, salt, RP, UV) naming the slot. The
+	// initrd FIDO2 strategy finds the slot from that token and derives the
+	// same key at boot. Without a handler EnrollFIDO2 answers
+	// ErrLUKSFIDO2NotWired.
 	//
 	// TPM enrollment stays off for the same reason: the SDK sealer keeps
 	// the sealed passphrase in a systemd-tpm2 header token, while the
@@ -102,7 +102,6 @@ func WireSDKBackends(target SDKBackendTarget, src SDKBackendSources, logger *log
 	// touching the device. When a boot path consumes the token, wire the
 	// default handler through pcrCheckedTPMHandler.
 	luks := NewLUKSBackend(logger, WithDefaultLUKSHandlers())
-	luks.SetFIDO2Handler(nil)
 	luks.SetTPMHandler(nil)
 	target.SetLUKSBackend(luks)
 	target.SetLUKSRootChecker(DefaultRootChecker())
