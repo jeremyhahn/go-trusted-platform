@@ -234,6 +234,27 @@ func TestCreateFailures(t *testing.T) {
 	}
 }
 
+// A rebuild that fails while assembling leaves no earlier build's manifest
+// beside the output: the container may already have replaced the image.
+func TestCreateFailedRebuildRemovesStaleManifest(t *testing.T) {
+	t.Parallel()
+	rec := &diskimagetest.Runner{Fail: "start"}
+	cfg := buildConfigForTest(t, "qemu-virt", rec)
+	if err := os.MkdirAll(filepath.Dir(cfg.Output), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ManifestPath(cfg.Output), []byte("an earlier build's manifest"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var aerr *AssembleError
+	if _, err := Create(context.Background(), cfg); !errors.As(err, &aerr) {
+		t.Fatalf("container run failure error = %v", err)
+	}
+	if _, err := os.Stat(ManifestPath(cfg.Output)); !os.IsNotExist(err) {
+		t.Errorf("stale manifest survived a failed rebuild: %v", err)
+	}
+}
+
 func TestBuilderImageForSeparatesPlatforms(t *testing.T) {
 	c := (&BuildConfig{}).withDefaults()
 	host, target := c.builderImageFor("amd64"), c.builderImageFor("arm64")
