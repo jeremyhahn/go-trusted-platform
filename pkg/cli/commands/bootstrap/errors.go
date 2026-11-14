@@ -266,6 +266,66 @@ func (e ErrTrustInstallFailed) Unwrap() error {
 	return e.Cause
 }
 
+// ErrDirectBundleNotPEM is returned by `bootstrap direct` when the bundle
+// file holds no PEM block.
+type ErrDirectBundleNotPEM struct {
+	Path string
+}
+
+func (e ErrDirectBundleNotPEM) Error() string {
+	return fmt.Sprintf("bootstrap direct: %s contains no PEM block", e.Path)
+}
+
+// ErrDirectBundleInvalidCert is returned by `bootstrap direct` when a
+// CERTIFICATE block in the bundle does not parse as an X.509 certificate.
+type ErrDirectBundleInvalidCert struct {
+	Path  string
+	Cause error
+}
+
+func (e ErrDirectBundleInvalidCert) Error() string {
+	return fmt.Sprintf("bootstrap direct: %s holds an invalid certificate: %v", e.Path, e.Cause)
+}
+
+func (e ErrDirectBundleInvalidCert) Unwrap() error {
+	return e.Cause
+}
+
+// ErrDirectBundleNoCA is returned by `bootstrap direct` when the bundle
+// holds no CA certificate.
+type ErrDirectBundleNoCA struct {
+	Path string
+}
+
+func (e ErrDirectBundleNoCA) Error() string {
+	return fmt.Sprintf("bootstrap direct: %s contains no CA certificate", e.Path)
+}
+
+// ErrDirectBundleMalformedPEM is returned by `bootstrap direct` when a PEM
+// BEGIN boundary in the bundle does not open a well-formed block (truncated,
+// missing its END line, or with invalid base64). Offset is the byte offset of
+// that boundary in the file.
+type ErrDirectBundleMalformedPEM struct {
+	Path   string
+	Offset int
+}
+
+func (e ErrDirectBundleMalformedPEM) Error() string {
+	return fmt.Sprintf("bootstrap direct: %s holds a malformed PEM block at byte %d", e.Path, e.Offset)
+}
+
+// ErrDirectBundleNonCertificateBlock is returned by `bootstrap direct` when
+// the bundle holds a PEM block that is not a certificate, such as a private
+// key. The block bytes are never part of the message.
+type ErrDirectBundleNonCertificateBlock struct {
+	Path string
+	Type string
+}
+
+func (e ErrDirectBundleNonCertificateBlock) Error() string {
+	return fmt.Sprintf("bootstrap direct: %s holds a %q PEM block; the bundle must contain only certificates", e.Path, e.Type)
+}
+
 // MessageError is a typed error carrying a fully formatted message with no
 // underlying cause. It replaces inline formatted-error constructions that do not wrap
 // another error.
