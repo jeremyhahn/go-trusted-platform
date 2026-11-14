@@ -85,13 +85,20 @@ func run(ctx context.Context, args []string, stderr io.Writer, ready func(net.Ad
 }
 
 func main() {
+	os.Exit(mainCode())
+}
+
+// mainCode runs the agent and returns the process exit code, so the deferred
+// signal stop runs before main calls os.Exit.
+func mainCode() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := run(ctx, os.Args[1:], os.Stderr, nil); err != nil {
 		fmt.Fprintf(os.Stderr, "deploy-agent: %v\n", err)
 		if errors.Is(err, errUsage) {
-			os.Exit(2)
+			return 2
 		}
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }

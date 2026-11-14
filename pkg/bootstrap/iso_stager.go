@@ -64,9 +64,7 @@ type remoteISOClient = deployer.RemoteHost
 // *deployer.SSHClient for ssh, a quicagent.Client for quic (registered by
 // the quicagent import in deployer_adapter.go). Tests override it to inject
 // a fake implementation.
-var newRemoteISOClient = func(dc *deployer.DeployConfig) (remoteISOClient, error) {
-	return deployer.NewRemoteHost(dc)
-}
+var newRemoteISOClient = deployer.NewRemoteHost
 
 // stageMeta is the on-disk schema for the iso-stager's sidecar metadata
 // file. It records the size and lowercase-hex sha256 of the local source
