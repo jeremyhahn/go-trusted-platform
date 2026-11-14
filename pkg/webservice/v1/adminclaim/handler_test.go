@@ -358,7 +358,7 @@ func TestVerify_TruncatedBodyIsStillRejected(t *testing.T) {
 // for a bug in a refusal that was working exactly as designed.
 func TestWriteClaimError_MultiInstanceIsNotImplementedNot500(t *testing.T) {
 	h := newRESTHarness(t)
-	h.svc.multiInstance = true
+	h.svc.refuseMultiInstance = true
 
 	for name, path := range map[string]string{
 		"challenge": "/api/v1/admin/claim/challenge",
@@ -382,7 +382,7 @@ func TestWriteClaimError_MultiInstanceIsNotImplementedNot500(t *testing.T) {
 // removing any risk. Recorded in docs/auth/architecture.md §6b.5.
 func TestStatus_StaysReadableOnAMultiInstanceDeployment(t *testing.T) {
 	h := newRESTHarness(t)
-	h.svc.multiInstance = true
+	h.svc.refuseMultiInstance = true
 
 	rec := h.do(t, http.MethodGet, "/api/v1/admin/claim/status", nil, nil)
 
