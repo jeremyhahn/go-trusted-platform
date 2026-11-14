@@ -651,8 +651,12 @@ func (h *CRUDHandler) calculateTotalPages(total, pageSize int) int {
 
 func (h *CRUDHandler) handleServiceError(w http.ResponseWriter, r *http.Request, err error) {
 	// Typed validation failures from the service layer are client errors.
-	var vlans device.ErrProfileVLANsNotDistinct
-	if errors.As(err, &vlans) {
+	var (
+		vlans        device.ErrProfileVLANsNotDistinct
+		diceDeviceID entities.ErrInvalidDICEDeviceID
+		goldenFWHash entities.ErrInvalidGoldenFWHash
+	)
+	if errors.As(err, &vlans) || errors.As(err, &diceDeviceID) || errors.As(err, &goldenFWHash) {
 		h.responseWriter.Error400(w, r, err)
 		return
 	}

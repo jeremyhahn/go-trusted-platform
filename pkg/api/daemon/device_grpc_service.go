@@ -1094,11 +1094,14 @@ func deviceStatusError(err error) error {
 		templateName     device.ErrTemplateNameRequired
 		templateAbsent   device.ErrNilTemplate
 		badEvidence      ErrInvalidAttestationEvidence
+		diceDeviceID     entities.ErrInvalidDICEDeviceID
+		goldenFWHash     entities.ErrInvalidGoldenFWHash
 	)
 	if errors.As(err, &vlans) || errors.As(err, &tlsClear) ||
 		errors.As(err, &identityRequired) || errors.As(err, &templateID) ||
 		errors.As(err, &templateName) || errors.As(err, &templateAbsent) ||
-		errors.As(err, &badEvidence) {
+		errors.As(err, &badEvidence) || errors.As(err, &diceDeviceID) ||
+		errors.As(err, &goldenFWHash) {
 		return status.Error(codes.InvalidArgument, errStr)
 	}
 	var noConfig device.ErrNoMatchingConfig
