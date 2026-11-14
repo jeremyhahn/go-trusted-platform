@@ -126,6 +126,40 @@ func (app *App) initSDN(ctx context.Context) error {
 		return nil
 	}
 
+	// A clustered datastore already brought the links up before
+	// initStores (initClusterNetwork); do not create them twice.
+	if !app.sdnLinksUp {
+		if err := app.initSDNLinks(ctx); err != nil {
+			return err
+		}
+	}
+
+	// The controller owns IPAM: it seeds the plan's pools (one per zone,
+	// plus the IPAM ranges) and the explicit sdn.ipam.pools. A node with
+	// an explicit ipam section seeds the same set, create-if-missing.
+	if app.SDNConfig.Controller || app.SDNConfig.IPAM != nil {
+		if err := app.initIPAMPools(ctx); err != nil {
+			return err
+		}
+	}
+
+	// Report which zones this node would serve DHCP on.
+	app.logDHCPStatus()
+
+	// Log overall SDN status
+	app.logSDNStatus()
+
+	return nil
+}
+
+// initSDNLinks is the part of SDN bring-up that needs no datastore: the OVS
+// bridge, the OVS bonds and the zone addresses on their tagged internal
+// ports. It records success in sdnLinksUp so initSDN does not repeat it.
+func (app *App) initSDNLinks(ctx context.Context) error {
+	if app.SDNConfig == nil || !app.SDNConfig.Enabled {
+		return nil
+	}
+
 	if err := app.SDNConfig.Validate(); err != nil {
 		return ErrSDNConfigValidation{Cause: err}
 	}
@@ -138,7 +172,7 @@ func (app *App) initSDN(ctx context.Context) error {
 
 	// Initialize the OVS client and create the bridge
 	if app.SDNConfig.OVS != nil {
-		if err := app.initOVSBridge(ctx); err != nil {
+		if err := initOVSBridgeFn(app, ctx); err != nil {
 			return err
 		}
 	}
@@ -166,21 +200,36 @@ func (app *App) initSDN(ctx context.Context) error {
 		}
 	}
 
-	// The controller owns IPAM: it seeds the plan's pools (one per zone,
-	// plus the IPAM ranges) and the explicit sdn.ipam.pools. A node with
-	// an explicit ipam section seeds the same set, create-if-missing.
-	if app.SDNConfig.Controller || app.SDNConfig.IPAM != nil {
-		if err := app.initIPAMPools(ctx); err != nil {
-			return err
-		}
+	app.sdnLinksUp = true
+	return nil
+}
+
+// initOVSBridgeFn is initOVSBridge, held in a package variable so tests can
+// drive the link bring-up without an OVS database socket.
+var initOVSBridgeFn = (*App).initOVSBridge
+
+// initClusterNetwork brings up the host links before initStores when the
+// datastore is clustered (#1702). A clustered node's Raft transport binds its
+// raft-address, which lives on a zone port of an OVS bond that platformd
+// itself creates; on a fresh install that address exists only after the SDN
+// link bring-up, and the datastore cannot start (or reach quorum with peers
+// doing the same) without it. A standalone datastore keeps the original
+// order: storage first, SDN after.
+func (app *App) initClusterNetwork(ctx context.Context) error {
+	if app.QuicBaaSConfig == nil || !app.QuicBaaSConfig.IsClustered() {
+		return nil
 	}
-
-	// Report which zones this node would serve DHCP on.
-	app.logDHCPStatus()
-
-	// Log overall SDN status
-	app.logSDNStatus()
-
+	// The host network is checked before any address is assigned, as the
+	// standalone path does before initSDN.
+	if err := app.validateHostNetwork(); err != nil {
+		return err
+	}
+	if err := app.initSDNLinks(ctx); err != nil {
+		// Non-fatal, as in initSDN: the raft-address may come from a Linux
+		// bond the installer brought up; initSDN retries the links later.
+		app.Logger.Warn("SDN: link bring-up before the clustered datastore failed",
+			slog.String("error", err.Error()))
+	}
 	return nil
 }
 

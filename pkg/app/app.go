@@ -512,6 +512,10 @@ type App struct {
 	// ovsClient is the runtime OVS client (not serialized).
 	ovsClient ovs.ClientInterface
 
+	// sdnLinksUp records that initSDNLinks brought up the OVS bridge, bonds
+	// and zone addresses (not serialized).
+	sdnLinksUp bool
+
 	// ipamAllocator is the runtime IPAM allocator (not serialized).
 	ipamAllocator ipam.Allocator
 
@@ -614,6 +618,12 @@ func (app *App) Init(ctx context.Context, initParams *AppInitParams) (*App, erro
 
 	// Parse private and public IP addresses
 	if err := app.parsePrivateAndPublicIPs(); err != nil {
+		return nil, err
+	}
+
+	// A clustered datastore's Raft transport binds an address that the SDN
+	// link bring-up assigns, so the links come up first (#1702).
+	if err := app.initClusterNetwork(ctx); err != nil {
 		return nil, err
 	}
 
