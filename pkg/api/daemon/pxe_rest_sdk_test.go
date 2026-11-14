@@ -17,6 +17,7 @@ package daemon
 
 import (
 	"context"
+	"crypto/x509"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -78,6 +79,16 @@ func connectPXERESTKeyed(t *testing.T, server platformv1.PXEServiceServer, key [
 	pxe := pxerest.NewPXERouter(logger, server, writer, true)
 	pxe.SetScopeAuthorizer(tokens)
 	pxe.SetWebhookSecret(pxeRESTWebhookSecret)
+	bundle := testutil.GenerateTestTLSBundle(t)
+	clientLeaf, err := x509.ParseCertificate(bundle.ClientCert.Certificate[0])
+	require.NoError(t, err)
+	// The device record binds the SDK client's mTLS certificate to every
+	// MAC: the binding itself is pinned in the pxe package's webhook tests,
+	// and a lookup through the PXE service here would add a call the
+	// direct gRPC path does not make.
+	pxe.SetWebhookIdentity(pxerest.WebhookIdentityFunc(func(context.Context, string) (string, error) {
+		return clientLeaf.SerialNumber.String(), nil
+	}))
 	operator := mux.NewRouter()
 	pxe.RegisterRoutes(operator.PathPrefix("/api/v1").Subrouter())
 	machine := mux.NewRouter()
@@ -90,7 +101,6 @@ func connectPXERESTKeyed(t *testing.T, server platformv1.PXEServiceServer, key [
 	routes.Handle("POST /api/v1/pxe/webhook/complete", machine)
 	routes.Handle("/", tokens.Handler(operator))
 
-	bundle := testutil.GenerateTestTLSBundle(t)
 	srv := httptest.NewUnstartedServer(routes)
 	srv.TLS = bundle.ServerTLSConfig()
 	srv.StartTLS()
