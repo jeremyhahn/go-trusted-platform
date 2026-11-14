@@ -164,6 +164,12 @@ func Create(ctx context.Context, cfg *BuildConfig) (*Result, error) {
 	if output == "" {
 		output = filepath.Join(workDir, "trusted-platform-"+target.Name()+".img")
 	}
+	// The previous build's signed manifest goes before the container can
+	// touch the output: a failed or partial copy must not leave new image
+	// bytes beside a manifest that vouches for the old ones.
+	if err := removeManifest(output); err != nil {
+		return nil, err
+	}
 	if err := c.assembleInContainer(ctx, mediaDir, output, target); err != nil {
 		return nil, err
 	}
@@ -171,9 +177,6 @@ func Create(ctx context.Context, cfg *BuildConfig) (*Result, error) {
 	sum, size, err := fileDigest(output)
 	if err != nil {
 		return nil, &AssembleError{Step: "reading the finished image", Err: err}
-	}
-	if err := removeManifest(output); err != nil {
-		return nil, err
 	}
 	banks, unmeasured, err := c.measureImage(ctx, output, staged)
 	if err != nil {
