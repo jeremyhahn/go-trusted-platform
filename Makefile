@@ -1444,7 +1444,8 @@ test-fips:
 # which puts it in ci.yml's test step and test-fips without a workflow edit.
 NOOPA_TAGS := $(filter-out opa,$(BUILD_TAGS))
 NOOPA_PKGS := ./pkg/policy/opa/ ./pkg/compute/container/ \
-	./pkg/sdn/gateway/proxysvc/ ./pkg/sdn/gateway/services/vpn/ ./pkg/sdn/gateway/
+	./pkg/sdn/gateway/proxysvc/ ./pkg/sdn/gateway/services/vpn/ ./pkg/sdn/gateway/ \
+	./pkg/vpn/... ./pkg/api/daemon/...
 test-noopa:
 	go test -count=1 -tags "$(NOOPA_TAGS)" -skip "$(TEST_SKIP)" $(NOOPA_PKGS)
 
