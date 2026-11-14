@@ -250,7 +250,7 @@ func TestPlatformISOConfig_SetDefaults(t *testing.T) {
 	assert.NotEmpty(t, config.Security.TPM.Device)
 	assert.Equal(t, "/dev/tpm0", config.Security.TPM.Device)
 	assert.NotEmpty(t, config.Security.TPM.SealPCR)
-	assert.Equal(t, "0,7,9", config.Security.TPM.SealPCR)
+	assert.Equal(t, "7,11", config.Security.TPM.SealPCR)
 	assert.Contains(t, config.Security.TPM.SWTPMStateDir, "work")
 	assert.Contains(t, config.Security.TPM.SWTPMCtrlSocket, "swtpm-ctrl")
 	assert.Contains(t, config.Security.TPM.SWTPMSocket, "swtpm-sock")

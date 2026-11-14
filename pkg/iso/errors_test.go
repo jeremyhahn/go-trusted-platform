@@ -146,7 +146,7 @@ func TestErrPlatformConfigMissingSealPCRs(t *testing.T) {
 	assert.Equal(t, ErrorTypePlatform, isoErr.Type)
 	assert.Contains(t, isoErr.Message, "platform config missing required 'seal-pcrs' field")
 	assert.Contains(t, isoErr.Message, path)
-	assert.Contains(t, isoErr.Message, "seal-pcrs: [7, 9]")
+	assert.Contains(t, isoErr.Message, "seal-pcrs: [7, 11]")
 }
 
 func TestErrPlatformConfigWrite(t *testing.T) {

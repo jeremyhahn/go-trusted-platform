@@ -402,7 +402,7 @@ func (c *PlatformISOConfig) SetDefaults() {
 		c.Security.TPM.Device = "/dev/tpm0"
 	}
 	if c.Security.TPM.SealPCR == "" {
-		c.Security.TPM.SealPCR = "0,7,9"
+		c.Security.TPM.SealPCR = "7,11" // installer.DefaultSealPCRs as a selection string
 	}
 	if c.Security.TPM.SWTPMStateDir == "" {
 		c.Security.TPM.SWTPMStateDir = filepath.Join(c.Directories.Work, "tpm")
