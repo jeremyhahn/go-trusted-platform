@@ -20,6 +20,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"strconv"
 	"testing"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/fido2"
@@ -28,6 +29,10 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
 )
+
+// The boot handler (pkg/boot/commands) is a CryptsetupHandler; FIDO2 Install
+// and Unlock need its token area.
+var _ luks.HandlerWithTokens = (*luks.CryptsetupHandler)(nil)
 
 // tokenLUKS adds an in-memory LUKS2 token area to MockLUKSHandler.
 type tokenLUKS struct {
@@ -38,6 +43,22 @@ type tokenLUKS struct {
 
 func newTokenLUKS(m *MockLUKSHandler) *tokenLUKS {
 	return &tokenLUKS{MockLUKSHandler: m, tokens: map[int]*luks.Token{}}
+}
+
+// withFIDO2Tokens gives p a token area holding one fido2 token per slot.
+func withFIDO2Tokens(p *Platform, m *MockLUKSHandler, slots ...int) *tokenLUKS {
+	tl := newTokenLUKS(m)
+	for i, slot := range slots {
+		tl.tokens[i] = &luks.Token{
+			Type:            "fido2-manual",
+			Keyslots:        []string{strconv.Itoa(slot)},
+			FIDO2Credential: hex.EncodeToString([]byte{0x11, byte(slot)}),
+			FIDO2Salt:       base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{byte(slot)}, 32)),
+			FIDO2RP:         "luks-root",
+		}
+	}
+	p.LUKS = tl
+	return tl
 }
 
 func (l *tokenLUKS) TokenCreate(_ context.Context, _ string, token *luks.Token) (int, error) {

@@ -14,7 +14,10 @@
 package initrd
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"errors"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -127,71 +130,47 @@ func TestFIDO2StrategyInstallNoFIDO2Slot(t *testing.T) {
 	}
 }
 
-func TestFIDO2StrategyLoadAuthConfig(t *testing.T) {
-	logger := logging.DefaultLogger()
-	platform := createTestPlatform()
+func TestFIDO2StrategyLoadAuthConfigNeedsTokens(t *testing.T) {
+	strategy := NewFIDO2Strategy(createTestPlatform(), logging.DefaultLogger())
 
-	strategy := NewFIDO2Strategy(platform, logger)
-
-	slot := luks.KeySlot{
-		Index: 0,
-		Type:  luks.UnlockFIDO2,
+	_, err := strategy.loadAuthConfig(context.Background(), "/dev/sda2", luks.KeySlot{Index: 0, Type: luks.UnlockFIDO2})
+	if !errors.Is(err, ErrFIDO2TokensUnsupported) {
+		t.Fatalf("loadAuthConfig = %v, want ErrFIDO2TokensUnsupported", err)
 	}
+}
 
-	config, err := strategy.loadAuthConfig(slot)
+func TestFIDO2StrategyLoadAuthConfigFromToken(t *testing.T) {
+	platform := createTestPlatform()
+	tl := newTokenLUKS(platform.LUKS.(*MockLUKSHandler))
+	platform.LUKS = tl
+	credentialID := []byte{0xde, 0xad, 0xbe, 0xef}
+	salt := bytes.Repeat([]byte{0x5a}, 32)
+	tl.tokens[0] = &luks.Token{Type: "fido2-manual", Keyslots: []string{"1"}, FIDO2Credential: "ignored-other-slot", FIDO2Salt: "x"}
+	tl.tokens[3] = &luks.Token{
+		Type:            "fido2-manual",
+		Keyslots:        []string{"5"},
+		FIDO2Credential: base64.StdEncoding.EncodeToString(credentialID),
+		FIDO2Salt:       base64.StdEncoding.EncodeToString(salt),
+		FIDO2UPRequired: true,
+	}
+	strategy := NewFIDO2Strategy(platform, logging.DefaultLogger())
+
+	config, err := strategy.loadAuthConfig(context.Background(), "/dev/sda2", luks.KeySlot{Index: 5, Type: luks.UnlockFIDO2})
 	if err != nil {
-		t.Fatalf("loadAuthConfig failed: %v", err)
+		t.Fatalf("loadAuthConfig: %v", err)
+	}
+	if !bytes.Equal(config.CredentialID, credentialID) || !bytes.Equal(config.Salt, salt) {
+		t.Errorf("config credential/salt = %x/%x, want %x/%x", config.CredentialID, config.Salt, credentialID, salt)
+	}
+	if config.RelyingPartyID != "luks-root" || !config.RequireUserVerification || config.Timeout == 0 {
+		t.Errorf("config = %+v, want luks-root, user verification and a timeout", config)
 	}
 
-	if config == nil {
-		t.Fatal("loadAuthConfig returned nil config")
+	if _, err := strategy.loadAuthConfig(context.Background(), "/dev/sda2", luks.KeySlot{Index: 7, Type: luks.UnlockFIDO2}); !errors.Is(err, ErrFIDO2TokenMissing) {
+		t.Errorf("loadAuthConfig(slot 7) = %v, want ErrFIDO2TokenMissing", err)
 	}
-
-	if config.RelyingPartyID != "luks-root" {
-		t.Errorf("expected relying party ID luks-root, got %s", config.RelyingPartyID)
+	tl.tokens[4] = &luks.Token{Type: "fido2-manual", Keyslots: []string{"8"}, FIDO2Credential: "abcd", FIDO2Salt: "!!"}
+	if _, err := strategy.loadAuthConfig(context.Background(), "/dev/sda2", luks.KeySlot{Index: 8, Type: luks.UnlockFIDO2}); !errors.Is(err, ErrFIDO2TokenInvalid) {
+		t.Errorf("loadAuthConfig(slot 8) = %v, want ErrFIDO2TokenInvalid", err)
 	}
-
-	if config.Timeout == 0 {
-		t.Error("expected non-zero timeout")
-	}
-}
-
-func TestFIDO2StrategyLoadAuthConfigDifferentSlots(t *testing.T) {
-	logger := logging.DefaultLogger()
-	platform := createTestPlatform()
-
-	strategy := NewFIDO2Strategy(platform, logger)
-
-	// Test with different slot indexes
-	for _, idx := range []int{0, 1, 5, 10} {
-		slot := luks.KeySlot{
-			Index: idx,
-			Type:  luks.UnlockFIDO2,
-		}
-
-		config, err := strategy.loadAuthConfig(slot)
-		if err != nil {
-			t.Errorf("loadAuthConfig failed for slot %d: %v", idx, err)
-			continue
-		}
-
-		if config == nil {
-			t.Errorf("loadAuthConfig returned nil for slot %d", idx)
-		}
-	}
-}
-
-func TestFIDO2StrategyStoreEnrollmentMetadata(t *testing.T) {
-	logger := logging.DefaultLogger()
-	platform := createTestPlatform()
-
-	strategy := NewFIDO2Strategy(platform, logger)
-
-	slot := &luks.KeySlot{
-		Index: 0,
-		Type:  luks.UnlockFIDO2,
-	}
-
-	// Should not panic - it's a no-op currently
-	strategy.storeEnrollmentMetadata(slot, nil)
 }
