@@ -131,6 +131,7 @@ const navigation = [
       { title: "Device Templates", href: "/devices/templates" },
       { title: "vTPM Bundles", href: "/devices/vtpm" },
       { title: "IDevID/IAK", href: "/devices/idevid" },
+      { title: "BMC", href: "/devices/bmc" },
     ],
   },
   {
