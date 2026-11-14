@@ -129,95 +129,28 @@ func (a *Archiver) Export(ctx context.Context, bundleID string, w io.Writer) err
 func (a *Archiver) Import(ctx context.Context, r io.Reader) (*Bundle, error) {
 	a.logger.Info("Importing bundle from archive")
 
-	// Create gzip reader
-	gzr, err := gzip.NewReader(r)
+	// Spool the stream to a seekable temp file inside the bundles directory,
+	// then run the full two-pass extraction. The leading dot keeps the temp
+	// file out of any bundle listing.
+	if err := os.MkdirAll(a.config.BundlesDir(), 0700); err != nil {
+		return nil, ErrArchiveOperationFailed{Operation: "import", Cause: &WrappedError{Msg: "failed to create bundles directory", Err: err}}
+	}
+
+	tmp, err := os.CreateTemp(a.config.BundlesDir(), ".import-*.tar.gz")
 	if err != nil {
-		return nil, ErrArchiveOperationFailed{Operation: "import", Cause: &WrappedError{Msg: "failed to create gzip reader", Err: err}}
+		return nil, ErrArchiveOperationFailed{Operation: "import", Cause: &WrappedError{Msg: "failed to create temp archive", Err: err}}
 	}
-	defer gzr.Close()
+	defer os.Remove(tmp.Name())
 
-	// Create tar reader
-	tr := tar.NewReader(gzr)
-
-	// First pass: read manifest to get bundle ID
-	var manifest *Manifest
-	var archivePrefix string
-
-	for {
-		header, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, ErrArchiveOperationFailed{Operation: "import", Cause: &WrappedError{Msg: "failed to read tar header", Err: err}}
-		}
-
-		// Look for manifest.json
-		if strings.HasSuffix(header.Name, "manifest.json") {
-			data, err := io.ReadAll(tr)
-			if err != nil {
-				return nil, ErrArchiveOperationFailed{Operation: "import", Cause: &WrappedError{Msg: "failed to read manifest", Err: err}}
-			}
-
-			manifest = &Manifest{}
-			if err := json.Unmarshal(data, manifest); err != nil {
-				return nil, ErrInvalidManifest{Reason: fmt.Sprintf("failed to parse manifest: %v", err)}
-			}
-
-			// Extract archive prefix from manifest path
-			archivePrefix = filepath.Dir(header.Name)
-			break
-		}
+	if _, err := io.Copy(tmp, r); err != nil {
+		tmp.Close()
+		return nil, ErrArchiveOperationFailed{Operation: "import", Cause: &WrappedError{Msg: "failed to spool archive", Err: err}}
+	}
+	if err := tmp.Close(); err != nil {
+		return nil, ErrArchiveOperationFailed{Operation: "import", Cause: &WrappedError{Msg: "failed to close temp archive", Err: err}}
 	}
 
-	if manifest == nil {
-		return nil, ErrInvalidManifest{Reason: "manifest.json not found in archive"}
-	}
-
-	// Note: archivePrefix is used for context but extraction requires re-reading
-	_ = archivePrefix
-
-	// Check if bundle already exists
-	bundlePath := a.config.BundlePath(manifest.ID)
-	if _, err := os.Stat(bundlePath); err == nil {
-		return nil, ErrBundleAlreadyExists{ID: manifest.ID}
-	}
-
-	// Create bundle directory
-	if err := os.MkdirAll(bundlePath, 0700); err != nil {
-		return nil, ErrArchiveOperationFailed{Operation: "import", Cause: &WrappedError{Msg: "failed to create bundle directory", Err: err}}
-	}
-
-	// We need to re-read the archive from the beginning
-	// Since we can't seek on the reader, we need to close and reopen
-	// For now, we'll extract what we can and note this limitation
-
-	// Write manifest first (we already have it)
-	manifestPath := filepath.Join(bundlePath, "manifest.json")
-	manifestData, _ := json.MarshalIndent(manifest, "", "  ")
-	if err := os.WriteFile(manifestPath, manifestData, 0600); err != nil {
-		os.RemoveAll(bundlePath)
-		return nil, ErrArchiveOperationFailed{Operation: "import", Cause: &WrappedError{Msg: "failed to write manifest", Err: err}}
-	}
-
-	a.logger.Warn("Import limitation: archive must be re-read for full extraction - manifest imported successfully")
-
-	// Return partial bundle (manifest only for now)
-	bundle := &Bundle{
-		ID:        manifest.ID,
-		Mode:      manifest.Mode,
-		Manifest:  manifest,
-		CreatedAt: manifest.CreatedAt,
-		TPMState: &TPMState{
-			StateDir:    filepath.Join(bundlePath, "tpm"),
-			PermallFile: filepath.Join(bundlePath, "tpm", "tpm2-00.permall"),
-		},
-		OVMFState: &OVMFState{
-			NVRAMFile: filepath.Join(bundlePath, "ovmf", "OVMF_VARS.fd"),
-		},
-	}
-
-	return bundle, nil
+	return a.ImportFromFile(ctx, tmp.Name())
 }
 
 // ImportFromFile imports a bundle from a tar.gz file (supports full extraction).
@@ -280,8 +213,13 @@ func (a *Archiver) ImportFromFile(ctx context.Context, archivePath string) (*Bun
 	}
 
 	// Reopen and extract
-	f.Seek(0, 0)
-	gzr2, _ := gzip.NewReader(f)
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return nil, ErrArchiveOperationFailed{Operation: "import", Cause: err}
+	}
+	gzr2, err := gzip.NewReader(f)
+	if err != nil {
+		return nil, ErrArchiveOperationFailed{Operation: "import", Cause: err}
+	}
 	defer gzr2.Close()
 	tr2 := tar.NewReader(gzr2)
 
@@ -304,7 +242,7 @@ func (a *Archiver) ImportFromFile(ctx context.Context, archivePath string) (*Bun
 		destPath := filepath.Join(bundlePath, relPath)
 
 		// Security check: prevent path traversal
-		if !strings.HasPrefix(destPath, bundlePath) {
+		if destPath != bundlePath && !strings.HasPrefix(destPath, bundlePath+string(os.PathSeparator)) {
 			continue
 		}
 
