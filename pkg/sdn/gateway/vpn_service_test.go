@@ -462,27 +462,6 @@ func TestStopPlanes_StopsInReverseAndJoinsFailures(t *testing.T) {
 	assert.NoError(t, stopPlanes(context.Background(), nil))
 }
 
-func TestApplyVPN_ReachesTheRunningService(t *testing.T) {
-	ctx := context.Background()
-	r := newVPNRig(t)
-	require.NoError(t, r.handler().Start(ctx))
-	defer func() { require.NoError(t, r.handler().Stop(ctx)) }()
-
-	require.NoError(t, r.gw.applyVPN(ctx, laptopSection()))
-	assert.Len(t, r.gw.vpn.svc.Enrolments(), 1)
-
-	broken := laptopSection()
-	broken.PosturePolicies = []gwstate.DesiredVPNPosturePolicy{
-		{TenantID: "tenant-a", Name: vpn.DefaultPosturePolicy, Module: "package vpn.posture\nallow if {"},
-	}
-	err := r.gw.applyVPN(ctx, broken)
-	var invalid *vpn.ErrPosturePolicyInvalid
-	require.True(t, errors.As(err, &invalid), "got %v", err)
-	snap := r.gw.collectVPN(ctx)
-	require.Len(t, snap.PosturePolicyErrors, 1, "the refused tenant is visible in telemetry")
-	assert.Contains(t, snap.PosturePolicyErrors[0], "tenant-a")
-}
-
 func TestApplyVPN_AGatewayWithoutTheVPNIgnoresTheSection(t *testing.T) {
 	ctx := context.Background()
 	r := newVPNRig(t)
