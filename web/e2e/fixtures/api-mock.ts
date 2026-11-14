@@ -1502,6 +1502,111 @@ export async function mockGatewayBgpApi(
   });
 
   return { calls };
+// ============================================================================
+// Platform daemon status, config and service lifecycle (#1752)
+// ============================================================================
+
+export interface DaemonServiceMock {
+  name: string;
+  status: string;
+  uptime?: string;
+  started_at?: string;
+  start_count: number;
+  stop_count: number;
+  last_error?: string;
+}
+
+export interface PlatformDaemonApiMockConfig {
+  status?: Record<string, unknown>;
+  version?: Record<string, unknown>;
+  config?: Record<string, unknown>;
+  services?: DaemonServiceMock[];
+  /** Answer every daemon route with this error */
+  error?: ApiError;
+}
+
+export interface PlatformDaemonApiState {
+  /** Each request the page made, as "METHOD /path" below /api/v1/platform */
+  calls: string[];
+  services: DaemonServiceMock[];
+}
+
+/**
+ * Mock the daemon routes under /api/v1/platform: GET /status, /version,
+ * /config and /services, GET /services/{name}, POST /config/reload and
+ * POST /services/{name}/{start|stop|restart}. Start, stop and restart
+ * change the mocked service's status.
+ */
+export async function mockPlatformDaemonApi(
+  page: Page,
+  config: PlatformDaemonApiMockConfig = {}
+): Promise<PlatformDaemonApiState> {
+  const state: PlatformDaemonApiState = {
+    calls: [],
+    services: (config.services ?? [
+      { name: 'kms', status: 'running', uptime: '2h0m0s', start_count: 1, stop_count: 0 },
+      { name: 'dns', status: 'stopped', start_count: 1, stop_count: 1 },
+    ]).map((s) => ({ ...s })),
+  };
+  const routeRe = /\/api\/v1\/platform(\/(?:status|version|config|services)(?:\/[^?]*)?)(?:\?.*)?$/;
+
+  await page.route(
+    (url) => routeRe.test(url.pathname + url.search),
+    async (route) => {
+      const request = route.request();
+      const url = new URL(request.url());
+      const path = routeRe.exec(url.pathname)?.[1] ?? '';
+      const method = request.method();
+      state.calls.push(`${method} ${path}`);
+      const json = (status: number, body: unknown) =>
+        route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+      const fail = (err: ApiError) =>
+        route.fulfill({ status: err.status, contentType: 'application/json', body: errorEnvelope(err) });
+
+      if (config.error) {
+        return fail(config.error);
+      }
+      if (method === 'GET' && path === '/status') {
+        return json(200, config.status ?? {
+          status: 'running', version: '1.4.2', git_commit: 'abc1234', go_version: 'go1.24', timestamp: 1,
+        });
+      }
+      if (method === 'GET' && path === '/version') {
+        return json(200, config.version ?? { version: '1.4.2', git_commit: 'abc1234' });
+      }
+      if (method === 'GET' && path === '/config') {
+        return json(200, config.config ?? { log_level: 'info', listen_port: 8443 });
+      }
+      if (method === 'POST' && path === '/config/reload') {
+        return json(200, { status: { success: true, message: 'configuration reloaded' } });
+      }
+      if (method === 'GET' && path === '/services') {
+        return json(200, { services: state.services, count: state.services.length, timestamp: 1 });
+      }
+      const m = /^\/services\/([^/]+)(?:\/(start|stop|restart))?$/.exec(path);
+      const svc = m ? state.services.find((s) => s.name === decodeURIComponent(m[1] ?? '')) : undefined;
+      if (!m || !svc) {
+        return fail({ status: 404, error: 'service not found' });
+      }
+      const action = m[2];
+      if (method === 'GET' && !action) {
+        return json(200, svc);
+      }
+      if (method === 'POST' && action) {
+        if (action === 'stop') {
+          svc.status = 'stopped';
+          svc.stop_count += 1;
+        } else {
+          svc.status = 'running';
+          svc.start_count += 1;
+          if (action === 'restart') svc.stop_count += 1;
+        }
+        return json(200, { service: svc.name, action, success: true, message: `${svc.name} ${action === 'stop' ? 'stopped' : `${action}ed`}` });
+      }
+      return fail({ status: 405, error: 'method not allowed' });
+    }
+  );
+  return state;
 }
 
 /**
