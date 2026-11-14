@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/measure"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/runner"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/uboot"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/virtkernel"
@@ -37,6 +38,19 @@ type Result struct {
 	// Kernel is the platform-built kernel the image carries, nil for a
 	// target on a packaged kernel.
 	Kernel *virtkernel.Artifacts
+	// Measurements are the predicted values of measure.ManifestPCRs, one
+	// bank per BuildConfig.MeasurementBanks; nil when the image is not
+	// measured.
+	Measurements []measure.Bank
+	// Unmeasured says why Measurements is nil: UnmeasuredSecureBootOff.
+	Unmeasured string
+	// Manifest is the signed measurement manifest, ManifestPath(Image);
+	// "" when the image is unmeasured or unsigned, and then no manifest
+	// from an earlier build is left at that path.
+	Manifest string
+	// Unsigned says why a measured image has no Manifest:
+	// UnsignedNoManifestKey.
+	Unsigned string
 }
 
 // StagedMedia is a target's install media staged on disk: the layout the
@@ -128,6 +142,9 @@ func Create(ctx context.Context, cfg *BuildConfig) (*Result, error) {
 	if err := validateBuilderImage(resolved.BuilderImage); err != nil {
 		return nil, &StageError{Step: "configuration", Err: err}
 	}
+	if err := resolved.validateManifestKey(); err != nil {
+		return nil, &StageError{Step: "configuration", Err: err}
+	}
 	if !resolved.SkipPreflight {
 		target, err := NewTarget(resolved.Target, resolved.Model)
 		if err != nil {
@@ -147,6 +164,12 @@ func Create(ctx context.Context, cfg *BuildConfig) (*Result, error) {
 	if output == "" {
 		output = filepath.Join(workDir, "trusted-platform-"+target.Name()+".img")
 	}
+	// The previous build's signed manifest goes before the container can
+	// touch the output: a failed or partial copy must not leave new image
+	// bytes beside a manifest that vouches for the old ones.
+	if err := removeManifest(output); err != nil {
+		return nil, err
+	}
 	if err := c.assembleInContainer(ctx, mediaDir, output, target); err != nil {
 		return nil, err
 	}
@@ -155,7 +178,18 @@ func Create(ctx context.Context, cfg *BuildConfig) (*Result, error) {
 	if err != nil {
 		return nil, &AssembleError{Step: "reading the finished image", Err: err}
 	}
-	return &Result{Image: output, SHA256: sum, SizeBytes: size, MediaDir: mediaDir, UBoot: art, Kernel: kernel}, nil
+	banks, unmeasured, err := c.measureImage(ctx, output, staged)
+	if err != nil {
+		return nil, err
+	}
+	var manifest, unsigned string
+	if banks != nil {
+		if manifest, unsigned, err = c.writeManifest(ctx, output, sum, target, banks); err != nil {
+			return nil, err
+		}
+	}
+	return &Result{Image: output, SHA256: sum, SizeBytes: size, MediaDir: mediaDir, UBoot: art, Kernel: kernel,
+		Measurements: banks, Unmeasured: unmeasured, Manifest: manifest, Unsigned: unsigned}, nil
 }
 
 // kernelArtifacts builds or locates the platform-built kernel for a target
