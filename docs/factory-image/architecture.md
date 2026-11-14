@@ -333,10 +333,10 @@ What persists: the image, the staged media directory, the U-Boot output
 
 > **Partly built.** The prediction is built: `diskimage.Create` predicts
 > PCRs 0, 4, 7 and 9 into `Result.Measurements` (`pkg/diskimage/measure`).
-> So is the unsigned CoRIM encoding (`measure.EncodeManifest`). The
-> signature, `measurements.corim` on disk, the event-log check and
-> registration are not built yet; [docs/plans/669.md](../plans/669.md)
-> slices 4b-6 build them. Until then a node's quote is checked against its
+> So are the CoRIM encoding (`measure.EncodeManifest`) and its COSE_Sign1
+> (`measure.SignManifest` / `VerifyManifest`). The `kms://` signing key,
+> `measurements.corim` on disk, the event-log check and registration are not
+> built yet; [docs/plans/669.md](../plans/669.md) slices 4c-6 build them. Until then a node's quote is checked against its
 > device profile's `PCRBaseline` table.
 
 The SPEC row says every image, an upgrade included, is built and signed
@@ -394,8 +394,14 @@ image. It holds one CoMID (`#6.506`):
 The encoding is deterministic CBOR (RFC 8949 §4.2.1), so one image always
 gives the same bytes to sign.
 
-The COSE protected header carries `corim-meta` (signer name and validity)
-and the signing certificate's `x5chain`.
+The COSE protected header carries the algorithm, the content type, `kid`
+(the SHA-256 of the signing certificate), `corim-meta` (signer name and
+signature-validity, epoch times) and the `x5chain`, leaf first. The
+algorithm follows the signing key: ES256, ES384 or ES512 for an ECDSA
+P-256, P-384 or P-521 key, PS256 for an RSA key of 2048 bits or more, so
+open question 2 is the choice of key, not of code. Verification checks the
+chain to the platform CA, the signature with the leaf's key in that key's
+algorithm, both validity windows, and then the payload as above.
 
 **Signed centrally.** The build host never holds the manifest's signing key.
 The key is a KMS key, given as a `kms://` reference, as the DB key in
