@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/channelbind"
 )
 
 // AuthorizationChecker validates tool authorization.
@@ -895,6 +896,74 @@ func (c *AuthorizationChecker) AuthorizeTool(ctx context.Context, toolName strin
 	}
 
 	return ctx, nil
+}
+
+// Authenticate establishes that the caller is a principal, with the same
+// authentication branches as AuthorizeTool but no tool permission lookup
+// and no scope check. Listing methods (tools/list, resources/list) call it
+// so an anonymous client cannot enumerate the catalogue, as the REST stack
+// answers the equivalent with 401 (#414).
+//
+// A tokenless request under mTLS authenticates with its verified client
+// certificate. With no authorization backend nothing can establish a
+// principal, so the request is refused (#440). A token is validated by the
+// claims path (empty requiredPerm: liveness kept, scope skipped) or the
+// legacy ValidateToken. With only an authService configured a presented
+// token is accepted: that service checks permissions, not identity.
+func (c *AuthorizationChecker) Authenticate(ctx context.Context, token string) *AuthorizationError {
+	if token == "" && c.peerAuthenticator != nil {
+		state, _, _ := channelbind.ConnectionTLS(ctx)
+		if state == nil || len(state.VerifiedChains) == 0 || len(state.VerifiedChains[0]) == 0 {
+			return &AuthorizationError{
+				Type:    AuthErrorMissingToken,
+				Message: "Authentication required for this operation: no bearer token and no verified client certificate",
+			}
+		}
+		authCtx, err := c.peerAuthenticator.AuthenticatePeer(ctx, state.VerifiedChains[0])
+		if err != nil || authCtx == nil {
+			return &AuthorizationError{
+				Type:    AuthErrorInvalidToken,
+				Message: "Invalid client certificate",
+			}
+		}
+		return nil
+	}
+
+	if c.authService == nil && c.authManager == nil {
+		return &AuthorizationError{
+			Type:    AuthErrorMissingToken,
+			Message: "Authentication required for this operation: no authorization backend is configured",
+		}
+	}
+
+	if token == "" {
+		return &AuthorizationError{
+			Type:    AuthErrorMissingToken,
+			Message: "Authentication required for this operation",
+		}
+	}
+
+	if cv, ok := c.authManager.(ClaimsAuthManager); ok && cv != nil {
+		if _, err := cv.AuthorizeToken(ctx, token, "", "", "", ""); err != nil {
+			return &AuthorizationError{
+				Type:    AuthErrorInvalidToken,
+				Message: "Invalid or expired token",
+			}
+		}
+		return nil
+	}
+
+	if c.authManager != nil {
+		valid, err := c.authManager.ValidateToken(ctx, token)
+		if err != nil || !valid {
+			return &AuthorizationError{
+				Type:    AuthErrorInvalidToken,
+				Message: "Invalid or expired token",
+			}
+		}
+	}
+
+	return nil
 }
 
 // IsEnabled returns true if authorization checking is enabled.
