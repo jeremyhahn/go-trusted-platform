@@ -15,11 +15,18 @@ package pxe
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
 	"net/http"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/internal/protorest"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 const (
@@ -112,7 +119,109 @@ func (r *PXERouter) verifyWebhook(next http.HandlerFunc) http.HandlerFunc {
 			r.respWriter.Error401(w, req, ErrWebhookSignature{})
 			return
 		}
+		if !r.verifyWebhookIdentity(w, req, body) {
+			return
+		}
 		req.Body = io.NopCloser(bytes.NewReader(body))
 		next(w, req)
 	}
+}
+
+// WebhookIdentity answers the serial of the certificate recorded for the
+// device with the given MAC: the identity that device presented at
+// enrollment, which the install-completion webhook binds its caller to.
+type WebhookIdentity interface {
+	RecordedCertificateSerial(ctx context.Context, mac string) (string, error)
+}
+
+// WebhookIdentityFunc adapts a function to WebhookIdentity.
+type WebhookIdentityFunc func(ctx context.Context, mac string) (string, error)
+
+// RecordedCertificateSerial calls f.
+func (f WebhookIdentityFunc) RecordedCertificateSerial(ctx context.Context, mac string) (string, error) {
+	return f(ctx, mac)
+}
+
+// SetWebhookIdentity replaces the device-record lookup the webhook binds
+// its caller to. Unset, the router reads the PXE device record by MAC
+// through its PXE service (GetDeviceByMAC, certificate_serial).
+func (r *PXERouter) SetWebhookIdentity(identity WebhookIdentity) {
+	r.webhookIdentity = identity
+}
+
+// recordedCertificateSerial is the default WebhookIdentity: the PXE device
+// record's certificate_serial, read by MAC.
+func (r *PXERouter) recordedCertificateSerial(ctx context.Context, mac string) (string, error) {
+	if r.webhookIdentity != nil {
+		return r.webhookIdentity.RecordedCertificateSerial(ctx, mac)
+	}
+	if r.server == nil {
+		return "", &protorest.ErrServiceUnavailable{Service: "pxe"}
+	}
+	resp, err := r.server.GetDeviceByMAC(ctx, &platformv1.GetPXEDeviceByMACRequest{MacAddress: mac})
+	if err != nil {
+		return "", err
+	}
+	return resp.GetDevice().GetCertificateSerial(), nil
+}
+
+// verifyWebhookIdentity enforces the SPEC installer row: the
+// install-completion caller authenticates with its device identity over
+// mTLS, and reports only for itself. The listener must have verified the
+// client's certificate chain (401 otherwise), and the leaf's serial must be
+// the certificate recorded on the reported MAC's device (403 otherwise: an
+// unknown MAC, a device with no recorded certificate, or another device's).
+func (r *PXERouter) verifyWebhookIdentity(w http.ResponseWriter, req *http.Request, body []byte) bool {
+	if req.TLS == nil || len(req.TLS.VerifiedChains) == 0 || len(req.TLS.VerifiedChains[0]) == 0 {
+		r.respWriter.Error401(w, req, ErrWebhookIdentity{Unauthenticated: true})
+		return false
+	}
+	leaf := req.TLS.VerifiedChains[0][0]
+
+	report := &platformv1.PXEWebhookCompleteRequest{}
+	req.Body = io.NopCloser(bytes.NewReader(body))
+	if err := protorest.DecodeRequest(req, report); err != nil {
+		r.respWriter.Error400(w, req, err)
+		return false
+	}
+	mac := report.GetMacAddress()
+	if mac == "" {
+		r.respWriter.Error400(w, req, ErrWebhookIdentity{Reason: "the report names no MAC address"})
+		return false
+	}
+
+	recorded, err := r.recordedCertificateSerial(req.Context(), mac)
+	if status.Code(err) == codes.NotFound {
+		r.respWriter.Error403(w, req, ErrWebhookIdentity{Reason: "no device is recorded for the reported MAC"}, nil)
+		return false
+	}
+	if err != nil {
+		protorest.WriteError(w, req, r.respWriter, err)
+		return false
+	}
+	if recorded == "" {
+		r.respWriter.Error403(w, req, ErrWebhookIdentity{Reason: "the reported device has no recorded certificate"}, nil)
+		return false
+	}
+	if leaf.SerialNumber == nil || leaf.SerialNumber.String() != recorded {
+		r.respWriter.Error403(w, req, ErrWebhookIdentity{Reason: "the client certificate is not the reported device's"}, nil)
+		return false
+	}
+	return true
+}
+
+// ErrWebhookIdentity refuses an install-completion report whose caller did
+// not authenticate as the reported device.
+type ErrWebhookIdentity struct {
+	// Unauthenticated is set when no verified client certificate was
+	// presented.
+	Unauthenticated bool
+	Reason          string
+}
+
+func (e ErrWebhookIdentity) Error() string {
+	if e.Unauthenticated {
+		return "pxe webhook: a verified device client certificate is required"
+	}
+	return "pxe webhook: " + e.Reason
 }

@@ -15,6 +15,9 @@ package v1
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -41,6 +44,19 @@ type recordingPXEServer struct {
 	platformv1.UnimplementedPXEServiceServer
 	state string
 	calls int
+}
+
+// pxeDeviceCert is the client certificate recorded on the reporting device.
+var pxeDeviceCert = &x509.Certificate{SerialNumber: big.NewInt(7001)}
+
+// GetDeviceByMAC answers the device record the webhook binds its caller
+// to: the reported MAC, enrolled with pxeDeviceCert.
+func (s *recordingPXEServer) GetDeviceByMAC(_ context.Context, req *platformv1.GetPXEDeviceByMACRequest) (*platformv1.GetPXEDeviceByMACResponse, error) {
+	return &platformv1.GetPXEDeviceByMACResponse{Device: &platformv1.PXEDeviceInfo{
+		Id:                "dev-1",
+		MacAddress:        req.GetMacAddress(),
+		CertificateSerial: pxeDeviceCert.SerialNumber.String(),
+	}}, nil
 }
 
 func (s *recordingPXEServer) WebhookComplete(
@@ -79,6 +95,12 @@ func postPXEWebhook(t *testing.T, server *recordingPXEServer, enabled bool, sign
 	req.Header.Set("Content-Type", "application/json")
 	if signature != "" {
 		req.Header.Set(restpxe.WebhookSignatureHeader, signature)
+	}
+	// The booting node presents the certificate its PXE device record holds,
+	// verified by the listener (VerifyClientCertIfGiven).
+	req.TLS = &tls.ConnectionState{
+		PeerCertificates: []*x509.Certificate{pxeDeviceCert},
+		VerifiedChains:   [][]*x509.Certificate{{pxeDeviceCert}},
 	}
 	rec := httptest.NewRecorder()
 	root.ServeHTTP(rec, req)

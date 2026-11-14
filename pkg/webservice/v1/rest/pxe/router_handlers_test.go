@@ -15,9 +15,11 @@ package pxe
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"io"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -121,12 +123,22 @@ func handlerRoot(server platformv1.PXEServiceServer) *mux.Router {
 	logger := logging.NewLogger(slog.LevelError, io.Discard)
 	r := NewPXERouter(logger, server, response.NewResponseWriter(logger, nil), true)
 	r.SetWebhookSecret(handlerWebhookSecret)
+	// Every MAC is recorded with handlerDeviceCert, the certificate
+	// serveHandler presents: these tests pin the handlers, and the binding
+	// is pinned by the TestWebhook_* tests.
+	r.SetWebhookIdentity(WebhookIdentityFunc(func(context.Context, string) (string, error) {
+		return handlerDeviceCert.SerialNumber.String(), nil
+	}))
 	root := mux.NewRouter()
 	sub := root.PathPrefix("/api/v1").Subrouter()
 	r.RegisterMachineFacingRoutes(sub)
 	r.RegisterRoutes(sub)
 	return root
 }
+
+// handlerDeviceCert is the verified client certificate serveHandler
+// presents on every request.
+var handlerDeviceCert = &x509.Certificate{SerialNumber: big.NewInt(4242)}
 
 // handlerWebhookSecret is the webhook key handlerRoot configures; every
 // request serveHandler sends is signed with it, as a booting node signs
@@ -140,6 +152,7 @@ func serveHandler(router *mux.Router, method, path, body string) *httptest.Respo
 	}
 	req := httptest.NewRequest(method, path, reader)
 	req.Header.Set(WebhookSignatureHeader, SignWebhookBody([]byte(handlerWebhookSecret), []byte(body)))
+	req.TLS = verifiedTLS(handlerDeviceCert)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	return rec

@@ -44,6 +44,9 @@ type PXERouter struct {
 	// webhookSecret is pxe.ServiceConfig.WebhookSecret: the HMAC key every
 	// install-completion report is verified with (webhook_auth.go).
 	webhookSecret []byte
+	// webhookIdentity, when set, replaces the PXE device-record lookup the
+	// webhook binds its caller's client certificate to (webhook_auth.go).
+	webhookIdentity WebhookIdentity
 	router.WebServiceRouter
 }
 
@@ -170,10 +173,11 @@ func (r *PXERouter) requireScope(scope string, handler http.HandlerFunc) http.Ha
 // time before the body is decoded. A missing or wrong signature answers 401,
 // and an enabled webhook with no secret refuses every report.
 //
-// The HMAC proves the sender holds the shared secret; it does not bind the
-// report to one machine, and a captured report can be replayed. What a node
-// presents beyond that (IDevID over mTLS, a provisioning-session token) is
-// #238.
+// The HMAC alone does not bind the report to one machine, so the caller
+// must also present a client certificate the listener verified (401
+// otherwise) whose serial is the certificate recorded on the reported MAC's
+// PXE device (403 otherwise): a node reports only for itself (SPEC
+// installer row). Replay protection is #238.
 func (r *PXERouter) RegisterMachineFacingRoutes(parent *mux.Router) {
 	if !r.webhookEnabled {
 		return
