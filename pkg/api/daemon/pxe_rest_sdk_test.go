@@ -16,7 +16,9 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -50,6 +52,29 @@ func (v scopedPlatformToken) Validate(context.Context, string, string, string, s
 // operator routes behind the platform-token middleware and the scope each
 // RPC takes on gRPC, the enabled install webhook beside them — over TLS, and
 // returns an SDK REST connection to it for a caller holding scopes (#975).
+// pxeRESTWebhookSecret is the install-completion webhook HMAC key the
+// REST test server configures (pxe.ServiceConfig.WebhookSecret, #240).
+const pxeRESTWebhookSecret = "sdk-rest-test-webhook-secret"
+
+// signAsInstaller plays the installer in front of the machine-facing
+// webhook route: the SDK REST client holds no webhook key, so the report it
+// posts is signed here with pxeRESTWebhookSecret before the router, whose
+// HMAC check stays in force, verifies it.
+func signAsInstaller(t *testing.T, next http.Handler) http.Handler {
+	t.Helper()
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		req.Body = io.NopCloser(bytes.NewReader(body))
+		req.Header.Set(pxerest.WebhookSignatureHeader,
+			pxerest.SignWebhookBody([]byte(pxeRESTWebhookSecret), body))
+		next.ServeHTTP(w, req)
+	})
+}
+
 func connectPXEREST(t *testing.T, server platformv1.PXEServiceServer, scopes ...string) grpc.ClientConnInterface {
 	t.Helper()
 	logger := logging.DefaultLogger()
@@ -60,6 +85,7 @@ func connectPXEREST(t *testing.T, server platformv1.PXEServiceServer, scopes ...
 
 	pxe := pxerest.NewPXERouter(logger, server, writer, true)
 	pxe.SetScopeAuthorizer(tokens)
+	pxe.SetWebhookSecret(pxeRESTWebhookSecret)
 	operator := mux.NewRouter()
 	pxe.RegisterRoutes(operator.PathPrefix("/api/v1").Subrouter())
 	machine := mux.NewRouter()
@@ -69,7 +95,7 @@ func connectPXEREST(t *testing.T, server platformv1.PXEServiceServer, scopes ...
 	routes.HandleFunc("GET /health/live", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	routes.Handle("POST /api/v1/pxe/webhook/complete", machine)
+	routes.Handle("POST /api/v1/pxe/webhook/complete", signAsInstaller(t, machine))
 	routes.Handle("/", tokens.Handler(operator))
 
 	bundle := testutil.GenerateTestTLSBundle(t)
