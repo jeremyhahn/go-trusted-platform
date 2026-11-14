@@ -306,6 +306,7 @@ func (handler *RestHandler) Logout(w http.ResponseWriter, r *http.Request) {
 			Path:     "/",
 			MaxAge:   -1,
 			Secure:   true,
+			HttpOnly: true,
 			SameSite: http.SameSiteStrictMode,
 		})
 	}

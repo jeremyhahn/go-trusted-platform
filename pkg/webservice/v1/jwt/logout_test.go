@@ -91,6 +91,12 @@ func TestLogout_ExpiresTheSessionCookies(t *testing.T) {
 		if cookie.MaxAge < 0 && cookie.Value == "" && cookie.Path == "/" {
 			expired[cookie.Name] = true
 		}
+		// The expiring Set-Cookie is itself held to the session cookie's
+		// attributes (gosec G124): no script may read it, it never rides
+		// plain HTTP, and no cross-site request carries it.
+		assert.True(t, cookie.Secure, "cookie %q must be Secure", cookie.Name)
+		assert.True(t, cookie.HttpOnly, "cookie %q must be HttpOnly", cookie.Name)
+		assert.Equal(t, http.SameSiteStrictMode, cookie.SameSite, "cookie %q must be SameSite=Strict", cookie.Name)
 	}
 	assert.True(t, expired["jwt"], "the jwt cookie must be expired")
 	assert.True(t, expired["token"], "the token cookie must be expired")
@@ -179,7 +185,7 @@ func TestRevocationList_ForgetsExpiredEntries(t *testing.T) {
 
 	other, err := handler.jwtService.ParseTokenString(issueBackboneBearer(t, handler))
 	require.NoError(t, err)
-	list.revoke(other, claims.ExpiresAt.Time.Add(1))
+	list.revoke(other, claims.ExpiresAt.Add(1))
 
 	assert.False(t, list.revoked(token), "an entry outlives its token's expiry")
 	assert.True(t, list.revoked(other))
