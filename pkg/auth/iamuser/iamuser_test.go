@@ -16,6 +16,7 @@ package iamuser_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/jeremyhahn/go-quicbaas/pkg/iam"
@@ -167,12 +168,37 @@ func TestFindListingFallback(t *testing.T) {
 		}), iamuser.ByEmail("b@example.com"))
 		assert.ErrorIs(t, err, iamuser.ErrAmbiguous)
 	})
-	t.Run("a repeated page token ends the listing", func(t *testing.T) {
+	t.Run("a repeated page token ends the listing as truncated", func(t *testing.T) {
 		_, err := iamuser.Find(context.Background(), unimplemented, pages(map[string]*sdkiam.ListUsersResponse{
 			"":   page("p2", "a@example.com"),
 			"p2": page("p2", "c@example.com"),
 		}), iamuser.ByEmail("b@example.com"))
-		assert.True(t, sdkerrors.IsNotFound(err), "%v", err)
+		assert.ErrorIs(t, err, iamuser.ErrTruncated)
+	})
+	t.Run("a full page with no token is a truncated listing, not not-found", func(t *testing.T) {
+		emails := make([]string, iamuser.ListPageSize)
+		for i := range emails {
+			emails[i] = fmt.Sprintf("u%03d@example.com", i)
+		}
+		_, err := iamuser.Find(context.Background(), unimplemented, pages(map[string]*sdkiam.ListUsersResponse{
+			"": page("", emails...),
+		}), iamuser.ByEmail("b@example.com"))
+		assert.ErrorIs(t, err, iamuser.ErrTruncated)
+		assert.False(t, sdkerrors.IsNotFound(err))
+
+		user, err := iamuser.Find(context.Background(), unimplemented, pages(map[string]*sdkiam.ListUsersResponse{
+			"": page("", emails...),
+		}), iamuser.ByEmail("u042@example.com"))
+		require.NoError(t, err, "a user on the full page is still found")
+		assert.Equal(t, "u042@example.com", user.ID)
+	})
+	t.Run("the listing asks for the page size", func(t *testing.T) {
+		var asked sdkiam.ListUsersRequest
+		_, _ = iamuser.Find(context.Background(), unimplemented, func(_ context.Context, req *sdkiam.ListUsersRequest) (*sdkiam.ListUsersResponse, error) {
+			asked = *req
+			return page(""), nil
+		}, iamuser.ByEmail("b@example.com"))
+		assert.EqualValues(t, iamuser.ListPageSize, asked.PageSize)
 	})
 	t.Run("a listing error is returned", func(t *testing.T) {
 		boom := errors.New("boom")
@@ -187,4 +213,36 @@ func TestFindListingFallback(t *testing.T) {
 		}), iamuser.ByUsername(""))
 		assert.True(t, sdkerrors.IsNotFound(err), "%v", err)
 	})
+}
+
+// TestFindOnTheEmbeddedTransportWithMoreThanAPageOfUsers seeds more users
+// than the embedded User/List hands out in its one page: a user is either
+// found or the lookup fails with ErrTruncated, never NotFound.
+func TestFindOnTheEmbeddedTransportWithMoreThanAPageOfUsers(t *testing.T) {
+	t.Parallel()
+	e := iamusertest.NewEmbedded(t)
+	const total = iamuser.ListPageSize + 30
+	for i := 0; i < total; i++ {
+		e.AddUser(t, "tenant-a", fmt.Sprintf("user%03d@example.com", i), fmt.Sprintf("user%03d", i), iam.LifecycleActive)
+	}
+	users := e.Client.User()
+	list := func(ctx context.Context, req *sdkiam.ListUsersRequest) (*sdkiam.ListUsersResponse, error) {
+		return users.List(ctx, "tenant-a", req)
+	}
+	ctx := context.Background()
+	for i := 0; i < total; i++ {
+		username := fmt.Sprintf("user%03d", i)
+		user, err := iamuser.Find(ctx, func(ctx context.Context) (*sdkiam.User, error) {
+			return users.FindByUsername(ctx, "tenant-a", username)
+		}, list, iamuser.ByUsername(username))
+		if err != nil {
+			require.ErrorIs(t, err, iamuser.ErrTruncated, "user %s: %v", username, err)
+			continue
+		}
+		assert.Equal(t, username, user.Username)
+	}
+	_, err := iamuser.Find(ctx, func(ctx context.Context) (*sdkiam.User, error) {
+		return users.GetByEmail(ctx, "tenant-a", "nobody@example.com")
+	}, list, iamuser.ByEmail("nobody@example.com"))
+	assert.ErrorIs(t, err, iamuser.ErrTruncated, "a tenant over one page never answers not-found")
 }

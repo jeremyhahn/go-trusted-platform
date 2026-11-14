@@ -16,10 +16,14 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
+	quiciam "github.com/jeremyhahn/go-quicbaas/pkg/iam"
 	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/auth/iamuser"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/auth/iamuser/iamusertest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -144,6 +148,59 @@ func TestIAMCertificatePrincipals_GrantsThePrincipalsRolePermissions(t *testing.
 	assert.Equal(t, []string{"device:read", "attestation:submit", "tenant:read"}, principal.Scopes,
 		"the union of the principal's role permissions, each once")
 	assert.Equal(t, "tenant-a", users.lastTenantID, "the principal is looked up in the certificate's tenant")
+}
+
+// TestIAMCertificatePrincipals_ResolvesOnTheEmbeddedTransport drives the
+// resolver through the real SDK client over the pinned embedded transport,
+// which registers neither User/FindByUsername nor User/GetByEmail: a CN and
+// an email-SAN principal still resolve, and an unknown one is refused.
+func TestIAMCertificatePrincipals_ResolvesOnTheEmbeddedTransport(t *testing.T) {
+	t.Parallel()
+	e := iamusertest.NewEmbedded(t)
+	e.AddRole(t, "tenant-a", "device")
+	deviceID := e.AddUser(t, "tenant-a", "device-01@example.com", "device-01", quiciam.LifecycleActive, "device")
+	resolver, err := newIAMCertificatePrincipals(e.Client.User(), e.Client.Role())
+	require.NoError(t, err)
+
+	t.Run("a CN principal", func(t *testing.T) {
+		principal, err := resolver.ResolveCertificatePrincipal(context.Background(),
+			&auth.Identity{ID: "device-01", TenantID: "tenant-a"})
+		require.NoError(t, err)
+		assert.Equal(t, deviceID, principal.Subject)
+		assert.Equal(t, []string{"device"}, principal.Roles)
+	})
+	t.Run("an email-SAN principal", func(t *testing.T) {
+		principal, err := resolver.ResolveCertificatePrincipal(context.Background(),
+			&auth.Identity{ID: "Device-01@Example.com", Email: "Device-01@Example.com", TenantID: "tenant-a"})
+		require.NoError(t, err)
+		assert.Equal(t, deviceID, principal.Subject)
+	})
+	t.Run("an unknown principal is refused", func(t *testing.T) {
+		_, err := resolver.ResolveCertificatePrincipal(context.Background(),
+			&auth.Identity{ID: "nobody", TenantID: "tenant-a"})
+		var unresolved ErrCertificatePrincipalUnresolved
+		require.ErrorAs(t, err, &unresolved)
+	})
+}
+
+// TestIAMCertificatePrincipals_RefusesATruncatedListing seeds more users than
+// the embedded User/List returns in its one page: a principal not on it is
+// refused as a truncated listing, never as "IAM holds no principal".
+func TestIAMCertificatePrincipals_RefusesATruncatedListing(t *testing.T) {
+	t.Parallel()
+	e := iamusertest.NewEmbedded(t)
+	for i := 0; i < iamuser.ListPageSize+20; i++ {
+		e.AddUser(t, "tenant-a", fmt.Sprintf("d%03d@example.com", i), fmt.Sprintf("d%03d", i), quiciam.LifecycleActive)
+	}
+	resolver, err := newIAMCertificatePrincipals(e.Client.User(), e.Client.Role())
+	require.NoError(t, err)
+
+	_, err = resolver.ResolveCertificatePrincipal(context.Background(),
+		&auth.Identity{ID: "nobody", TenantID: "tenant-a"})
+	require.ErrorIs(t, err, iamuser.ErrTruncated)
+	var unresolved ErrCertificatePrincipalUnresolved
+	require.ErrorAs(t, err, &unresolved)
+	assert.Contains(t, unresolved.Reason, "truncated")
 }
 
 func TestIAMCertificatePrincipals_PrefersTheIAMUserID(t *testing.T) {
