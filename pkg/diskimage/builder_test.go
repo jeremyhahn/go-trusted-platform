@@ -238,20 +238,36 @@ func TestCreateFailures(t *testing.T) {
 // beside the output: the container may already have replaced the image.
 func TestCreateFailedRebuildRemovesStaleManifest(t *testing.T) {
 	t.Parallel()
-	rec := &diskimagetest.Runner{Fail: "start"}
-	cfg := buildConfigForTest(t, "qemu-virt", rec)
-	if err := os.MkdirAll(filepath.Dir(cfg.Output), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(ManifestPath(cfg.Output), []byte("an earlier build's manifest"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	var aerr *AssembleError
-	if _, err := Create(context.Background(), cfg); !errors.As(err, &aerr) {
-		t.Fatalf("container run failure error = %v", err)
-	}
-	if _, err := os.Stat(ManifestPath(cfg.Output)); !os.IsNotExist(err) {
-		t.Errorf("stale manifest survived a failed rebuild: %v", err)
+	for _, tc := range []struct {
+		fail string
+		// copied: the failure comes after the new image was copied onto
+		// the output (the container's removal fails).
+		copied bool
+	}{
+		{fail: "start"},
+		{fail: "rm", copied: true},
+	} {
+		t.Run(tc.fail, func(t *testing.T) {
+			t.Parallel()
+			rec := &diskimagetest.Runner{Fail: tc.fail}
+			cfg := buildConfigForTest(t, "qemu-virt", rec)
+			if err := os.MkdirAll(filepath.Dir(cfg.Output), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(ManifestPath(cfg.Output), []byte("an earlier build's manifest"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			var aerr *AssembleError
+			if _, err := Create(context.Background(), cfg); !errors.As(err, &aerr) {
+				t.Fatalf("container %s failure error = %v", tc.fail, err)
+			}
+			if _, err := os.Stat(cfg.Output); tc.copied && err != nil {
+				t.Fatalf("the failure came before the image was replaced: %v", err)
+			}
+			if _, err := os.Stat(ManifestPath(cfg.Output)); !os.IsNotExist(err) {
+				t.Errorf("stale manifest survived a failed rebuild: %v", err)
+			}
+		})
 	}
 }
 
