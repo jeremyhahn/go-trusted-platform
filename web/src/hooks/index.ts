@@ -86,6 +86,13 @@ export type { User, AuthContextType } from '@/contexts/AuthContext';
 export { useToast, toast, dismissToast } from './use-toast';
 export type { Toast, UseToastReturn } from './use-toast';
 
+export { useKmsOps, base64ToText, KMS_SETTABLE_KEY_STATUSES } from './use-kms-ops';
+export type {
+  UseKmsOpsResult,
+  KmsKeyVersion,
+  KmsBackendStatus,
+  KmsImportKeyInput,
+} from './use-kms-ops';
 export { useTPMOps, textToBase64, base64ToHex } from './use-tpm-ops';
 // textToBase64 and base64ToHex come from use-tpm-ops (main) above.
 export { useVTPMRuntime, base64ToText, hexToBase64 } from './use-vtpm-runtime';
