@@ -70,7 +70,10 @@
    A recovery keyslot is covered the same way; `RecoveryKeyOptions` has no hash
    or iteration-time field, so its PBKDF2 cost is go-luks2's calibrated default.
    `pkg/arch/luks_keyslot_policy_test.go` fails the build if a keyslot call
-   bypasses it.
+   bypasses it. `ChangePassphrase` keeps the slot's KDF and PRF, so on a FIPS
+   host it refuses, with `ErrLUKSRotationKDFNotApproved`, a slot whose KDF is
+   not PBKDF2 or whose PBKDF2 hash is not approved (SHA-1 included). The slot
+   and its passphrase are left as they were.
 5. **New slot detection.** After `AddKey`, the backend reports the slot that was
    absent from the pre-call snapshot. If none is found it fails with
    `ErrLUKSNewSlotNotFound`; it never guesses the highest slot, which can name
