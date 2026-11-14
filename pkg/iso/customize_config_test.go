@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/authenticode/authenticodetest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/installer"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/uefi"
 	"github.com/stretchr/testify/assert"
@@ -1339,4 +1340,43 @@ func TestCopySecureBootKeys_NetworkServedMediaCarriesNoPrivateKeys(t *testing.T)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "network-served medium cannot sign with media-staged Secure Boot keys")
 	})
+}
+
+// TestBuildInstallerConfig_SealPCRFallback drives the parse-error branch of
+// buildInstallerConfig: with TPM auto-unseal enabled and an empty or invalid
+// SealPCR, the installer config must fall back to the documented seal
+// default [7,11] (installer.SealPCRsDefault, docs/SPEC.md), never the old
+// [0,7,9].
+func TestBuildInstallerConfig_SealPCRFallback(t *testing.T) {
+	tests := []struct {
+		name    string
+		sealPCR string
+	}{
+		{name: "empty", sealPCR: ""},
+		{name: "not a number", sealPCR: "not-a-pcr"},
+		{name: "out of range", sealPCR: "24"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := &PlatformISOConfig{
+				Alpine: AlpineConfig{
+					Version: "3.22.2",
+					Mirror:  "http://example.com",
+				},
+				RootFS: RootFSConfig{Type: "ext4"},
+				Security: SecurityConfig{
+					TPM: TPMConfig{
+						AutoUnseal: true,
+						SealPCR:    tt.sealPCR,
+					},
+				},
+			}
+
+			cfg, err := NewCustomizer(config, nil).buildInstallerConfig()
+			require.NoError(t, err)
+			require.True(t, cfg.EnableTPMSealing)
+			assert.Equal(t, []uint{7, 11}, cfg.PCRs)
+			assert.Equal(t, installer.SealPCRsDefault(), cfg.PCRs)
+		})
+	}
 }
