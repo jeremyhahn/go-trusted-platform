@@ -97,6 +97,14 @@ export { useTPMOps, textToBase64, base64ToHex } from './use-tpm-ops';
 // textToBase64 and base64ToHex come from use-tpm-ops (main) above.
 export { useVTPMRuntime, base64ToText, hexToBase64 } from './use-vtpm-runtime';
 export type { VTPMRunState } from './use-vtpm-runtime';
+export {
+  useContainerOps,
+  useVMAttestationVerify,
+  randomNonce,
+  decodeOutput,
+  splitCommand,
+} from './use-container-ops';
+export type { UseContainerOpsResult } from './use-container-ops';
 
 export { useReportedGateways } from './use-reported-gateways';
 
