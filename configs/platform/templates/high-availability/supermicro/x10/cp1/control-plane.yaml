@@ -1,0 +1,1276 @@
+# =============================================================================
+# Supermicro X10 - Control Plane Template (dedicated profile)
+#
+# Reusable hardware template for Supermicro X10-family motherboards
+# (X10SDV-TP8F and variants) configured for the control-plane role.
+# These boards feature dual 10GbE SFP+, dual 1GbE RJ45, Intel Xeon D-1500
+# series processors, and hardware TPM 2.0 (Nuvoton NPCT750 ATEN BMC).
+#
+# DEPLOYMENT PROFILE: dedicated
+#   3-node layout: 1 control-plane, 1 gateway, 1 compute (this role).
+#   Non-HA reference architecture -- QuicBaaS runs in standalone embedded
+#   mode with storage-backend=file and no Raft consensus.
+#
+# TRUST MODEL: The platform CA bundle is baked into the install ISO and
+#   installed to the system trust store via update-ca-certificates during
+#   installation. Runtime trust bootstrap (DANE/Noise/SPKI) is intentionally
+#   absent.
+#
+# DEPLOYER: Before using this template, update the following for your environment:
+#   - IP addresses (10.4.x.x: the block-4 example of the reference network
+#     design, 10.4.0.0/16 with VLANs 400-408; also PUBLIC_IPv4, PRIVATE_IPv4)
+#   - Domain names (cp.example.com, example.internal)
+#   - TPM serial number (idevid.serial)
+#   - DNS zone records and nameservers
+#   - ACME directory URLs
+#   - WebAuthn origins and CORS origins
+# =============================================================================
+
+debug: false
+debug-secrets: false
+platform-dir: /var/lib/trusted-platform
+config-dir: /etc/trusted-platform
+log-dir: /var/log/trusted-platform
+ca-dir: /var/log/trusted-platform/ca
+domain: cp.example.com
+hostmaster: hostmaster@cp.example.com
+tenant-id: platform
+pin-seal-policy: true
+
+secrets:
+  enabled: true
+  auto-generate: true
+  local-kms: true
+  migrate-to-kms: true
+  update-config-file: true
+
+platform:
+  # Vault-style persistent auto-generation via QuicBaaS EnsureSecret.
+  # First boot generates per spec (length + encoding) and persists at
+  # the path; every subsequent boot returns the same stable bytes via
+  # a distributed lock in the SecretsService. Paths are short-form —
+  # tenant and node identifiers are implicitly prepended at resolution
+  # time from platform.tenant_id and the node hostname.
+  so-pin: "kms://platform/so-pin?ensure=true&len=8&enc=numeric"
+  user-pin: "kms://platform/user-pin?ensure=true&len=6&enc=numeric"
+
+
+# =============================================================================
+# INSTALLATION CONFIGURATION (System Manifest)
+# =============================================================================
+
+# Disk configuration for system installation
+disk:
+  device: ""
+  partition-table: gpt
+  efi-partition-size: 538
+  root-filesystem: lvm
+  lvm-volume-group: vg0
+  lvm-logical-volume: root
+  encryption:
+    version: luks2
+    cipher: aes-xts-plain64
+    key-size: 512
+    hash: sha256
+    pbkdf: argon2id
+    mapped-name: cryptroot
+    tpm:
+      enabled: true
+      # DESTRUCTIVE — DEFAULT FOR REFERENCE ARCHITECTURE.
+      #
+      # When true, firstboot calls FactoryResetWithClear which issues a
+      # TPM2_Clear via the LOCKOUT hierarchy with empty auth BEFORE
+      # provisioning. This wipes any persistent objects in the owner /
+      # endorsement / lockout hierarchies that may have been left behind
+      # by a previous failed install run, AND resets those hierarchy auths
+      # to empty. Manufacturer EK certificates in the Platform hierarchy
+      # are preserved.
+      #
+      # The reference architecture defaults this to TRUE because:
+      #   - Fresh hardware deployment is the primary use case
+      #   - First-time provisioning of newly-purchased servers
+      #   - Recovery from a stuck TPM after a failed previous run
+      #
+      # Set this to FALSE if you are re-imaging a node and need to
+      # preserve known-good TPM state from a prior provisioning, or in
+      # multi-tenant scenarios where another component owns the TPM.
+      #
+      # The Go library default is FALSE — only this template-level
+      # opt-in enables the destructive behaviour.
+      #
+      # See: docs/installer/factory-reset.md
+      factory-reset-on-firstboot: true
+      # When the software TPM2_Clear above fails because BOTH owner and
+      # lockout auths are stale (TPM_RC_BAD_AUTH / LOCKOUT) — the exact state a
+      # prior failed provisioning run leaves on X10 hardware — firstboot
+      # escalates to a UEFI PPI ForceClear and reboots so the firmware clears
+      # the TPM at POST (bypassing DA lockout). Loop-guarded via an ESP marker.
+      # Default FALSE in the Go library; enabled here because X10 DA lockout
+      # routinely blocks the software clear. NOTE: on the escalation reboot the
+      # firmware may require a one-time BIOS "Pending Operation: TPM Clear" /
+      # "PPI Bypass for Clear" if physical-presence confirmation is enforced.
+      force-clear-via-ppi: true
+
+# Operating system configuration
+os:
+  os: alpine
+  version: "3.22.2"
+  architecture: x86_64
+  hostname: cp-01
+  packages:
+    - bash
+    - vim
+    - curl
+    - wget
+    - htop
+    - lsblk
+    - parted
+    - e2fsprogs
+    - lvm2
+    - tpm2-tools
+    - dracut
+    - softhsm
+    - openvswitch
+    - openvswitch-openrc
+    - chrony
+    - chrony-openrc
+  kernel-modules:
+    - igb
+    - ixgbe
+    - e1000e
+    - i40e
+    - ice
+    - openvswitch
+    - vxlan
+  filesystem-type: lvm
+  fips: false
+  lockdown: true
+  lockdown-mode: confidentiality
+  tpm-auto-upgrade-seal: true
+  enable-fido2: false
+  ima:
+    enabled: false
+    policy: tcb
+    hash-algorithm: sha256
+    evm: false
+    appraise-mode: off
+    audit-enabled: true
+
+# Network configuration for installed system
+network:
+  dns:
+    nameservers:
+      - 10.4.6.10
+    search-domains:
+      - example.internal
+  # Host addressing by role (reference network, "Host addressing"): a
+  # control-plane node holds its fabric VTEP and its control-plane address,
+  # plus hypervisor and storage only when it hosts VMs or mounts storage. It
+  # never forwards, its host firewall drops traffic between interfaces, and
+  # its one platform-VRF address (from 10.4.144.0/20) lives in a Linux VRF.
+  role: control-plane
+  ip-forward: false
+  platform-vrf:
+    address: 10.4.144.10/32
+  bridges:
+    # br-fabric carries the physical trunk. The host's zone addresses are
+    # OVS internal ports on it; the VLANs it only passes through to guests
+    # get no host address.
+    - name: br-fabric
+      type: ovs
+      interfaces:
+        - bond0
+      stp: false
+      auto-start: true
+    # br-int is the integration bridge for workload ports (VMs and
+    # containers). It never carries the trunk: workloads reach the network
+    # only through the overlay.
+    - name: br-int
+      type: ovs
+      stp: false
+      auto-start: true
+  bonds:
+    - name: bond0
+      # OVS bond, created at runtime by platformd over native OVSDB (no
+      # kernel bonding driver). The members are brought up as raw
+      # interfaces so ovs-vswitchd can claim them.
+      type: ovs
+      bridge: br-fabric
+      # OVS port bond_mode: balance-tcp with active LACP hashes on L4.
+      mode: balance-tcp
+      lacp: active
+      interfaces:
+        - eth6
+        - eth7
+      # Port class hypervisor (reference switch port model): the switch
+      # trunk carries 401 and 403-408 with native VLAN 405, MTU 9216.
+      vlans:
+        - zone: fabric
+          ipv4-address: 10.4.1.10/24
+          auto-start: true
+        - zone: control-plane
+          ipv4-address: 10.4.6.10/24
+          auto-start: true
+      auto-start: true
+  vlans: []
+  wait-online: true
+  wait-timeout: 30
+
+# UKI (Unified Kernel Image) configuration
+uki:
+  cmdline: "root=/dev/mapper/vg0-root ro quiet"
+  kernel-path: /boot/vmlinuz-lts
+  initramfs-path: /boot/initramfs-lts
+
+# Secure Boot key management. PK/KEK are TPM-resident (store: tpm2); the DB key
+# is CP-KMS software-backed and signs the UKI + kernel modules via remote
+# hash-signing (resign-mode: remote) so the DB key never leaves the server. Key
+# material is referenced by kms:// URI; the KMS picks the backend from `store`.
+# See docs/firmware/secure-boot.md.
+secure-boot:
+  enabled: true
+  enforce: false
+  resign-mode: remote
+  pk:  { cn: "Trusted Platform Secure Boot PK",  store: tpm2,     key-uri: kms://platform/secureboot/pk,  cert-uri: kms://platform/secureboot/pk-cert }
+  kek: { cn: "Trusted Platform Secure Boot KEK", store: tpm2,     key-uri: kms://platform/secureboot/kek, cert-uri: kms://platform/secureboot/kek-cert }
+  db:  { cn: "Trusted Platform Secure Boot DB",  store: software, key-uri: kms://platform/secureboot/db,  cert-uri: kms://platform/secureboot/db-cert }
+
+# Enable TPM-based LUKS key sealing
+enable-tpm-sealing: true
+
+# PCR registers to seal LUKS keys against
+# This is THE SINGLE SOURCE OF TRUTH for seal PCRs used by:
+# - Installer (initial LUKS key sealing)
+# - Initrd firstboot (writes to pcr-banks file)
+# - Initrd boot (reads from config or pcr-banks file)
+#
+# Common PCRs:
+#   0: BIOS/UEFI firmware
+#   7: Secure Boot state
+#   9: Kernel command line
+#   10: Linux IMA - DON'T USE for LUKS (changes on every boot)
+seal-pcrs:
+  - 0
+  - 7
+  - 9
+
+# FIDO2 configuration
+enable-fido2-enrollment: false
+fido2:
+  relying-party-id: cp.example.com
+  keyslot: 3
+  user-presence-required: true
+  timeout: 60
+
+
+# =============================================================================
+# DNS CONFIGURATION
+# =============================================================================
+
+dns:
+  resolver:
+    servers:
+      - address: "127.0.0.1"
+        port: 8053
+    fallback:
+      - "1.1.1.1:53"
+      - "8.8.8.8:53"
+    local-forwarder:
+      enabled: false
+  allow-registration: true
+  allow-external-registration: true
+  allow-internal-registration: true
+  quicbaas:
+    data-dir: /var/lib/trusted-platform/quicbaas
+    storage-backend: file
+    node-id: 1
+    cache-size: 67108864
+    log-level: warn
+    consistency-level: linearizable
+    request-timeout: 30s
+  default-ttl: 3600
+  dnssec:
+    enabled: true
+    default-key:
+      algorithm: ECDSA
+      ecc:
+        curve: P-256
+      signature-algorithm: ECDSA-SHA256
+      hash: SHA-256
+      store: software
+    signature-expiry: 30d
+    nsec-mode: nsec3
+    nsec3-iterations: 1
+    nsec3-salt: ""
+    ksk:
+      lifetime: 365d
+      ttl: 86400
+    zsk:
+      lifetime: 30d
+      ttl: 3600
+  dane:
+    enabled: true
+    auto-generate: true
+    default-port: 8443
+    ttl: 3600
+    default-usage: 2
+    default-selector: 1
+    default-matching-type: 1
+    publish-dane-ee: true
+    key-reuse: true
+    rollover-ttl: 0
+  public:
+    port: 8053
+    forwarders:
+      - 1.1.1.1
+      - 8.8.8.8
+    zone:
+      description: Public zone for cp.example.com
+      name: example.com.
+      ttl: 3600
+      records:
+        soa:
+          name: cp.example.com.
+          mname: ns1.cp.example.com.
+          rname: hostmaster.cp.example.com.
+          serial: 1
+          refresh: 86400
+          retry: 7200
+          expire: 86400
+          minimum_ttl: 3600
+          ttl: 3600
+        # Every zone carries its NS records at the apex (RFC 1034
+        # §4.2.1). The owner used to read cp.example.com., which the
+        # resolver ignored back when it matched no owner names at all;
+        # now that it matches them, an apex NS query needs the record
+        # to actually sit at the apex.
+        ns:
+          - name: "@"
+            value: ns1.cp.example.com.
+            ttl: 3600
+        a:
+          - name: "@"
+            value: ${PUBLIC_IPv4}
+            ttl: 3600
+          - name: ns1
+            value: ${PUBLIC_IPv4}
+            ttl: 3600
+          - name: www
+            value: ${PUBLIC_IPv4}
+            ttl: 3600
+          # The public webservice is issued CN=cp.example.com with SANs
+          # cp.example.com and www.cp.example.com, but this zone's apex is
+          # example.com, so the platform's own public name needs its own
+          # record. Without it the name a client reads out of the
+          # certificate has no answer here.
+          - name: cp
+            value: ${PUBLIC_IPv4}
+            ttl: 3600
+        cname:
+          - name: www
+            value: cp.example.com.
+            ttl: 3600
+        mx:
+          - name: cp.example.com.
+            value: mail.cp.example.com.
+            priority: 10
+            ttl: 3600
+        txt:
+          - name: cp.example.com.
+            value: v=spf1 include:_spf.google.com ~all
+            ttl: 3600
+  internal:
+    # Non-privileged port. platformd does NOT run as root; clients on
+    # the control-plane network reach the internal zone via their local
+    # dnsmasq (port 53) which forwards the internal-domain zone to
+    # this address with an explicit port override — see
+    # `os.dnsmasq.upstreams` in each non-CP template / override.
+    port: 9053
+    forwarders:
+      - 127.0.0.1:8053
+    zone:
+      description: Internal zone for example.internal
+      name: example.internal.
+      ttl: 3600
+      internal: true
+      records:
+        soa:
+          name: example.internal.
+          mname: ns1.example.internal.
+          rname: hostmaster.example.internal.
+          serial: 1
+          refresh: 86400
+          retry: 7200
+          expire: 86400
+          minimum_ttl: 3600
+          ttl: 3600
+        ns:
+          - name: example.internal.
+            value: ns1.example.internal.
+            ttl: 3600
+        a:
+          - name: "@"
+            value: ${PRIVATE_IPv4}
+            ttl: 3600
+          - name: ns1
+            value: ${PRIVATE_IPv4}
+            ttl: 3600
+          - name: ${HOSTNAME}
+            value: ${PRIVATE_IPv4}
+            ttl: 3600
+          # "cp" is the control plane's role alias. The internal
+          # webservice is issued CN=cp.example.internal with that as its
+          # only DNS SAN, and every node's acme.client.directory targets
+          # https://cp.example.internal:9443/... The ${HOSTNAME} record
+          # above covers this node's own hostname, not the alias, so
+          # without this record gateway and compute ACME enrolment has no
+          # answer for the directory URL. Targeting the hostname instead
+          # would resolve but then fail TLS against the certificate SAN.
+          #
+          # NOTE FOR TIME: the node templates also dial this name for NTS
+          # (ntp.consume.upstream), and NTP is allow-listed by SOURCE
+          # ADDRESS. Whatever ${PRIVATE_IPv4} expands to at render time
+          # must therefore fall inside one of ntp.serve.listen-networks
+          # below, or nodes complete the NTS-KE handshake and are then
+          # refused time. On the reference fleet ${PRIVATE_IPv4} expanded
+          # to the MANAGEMENT address while listen-networks covered only
+          # the control-plane and provisioning /24s (#509). platformd reports
+          # the mismatch on the `ntp` health component; reconcile it by
+          # widening listen-networks or by pointing this record at an
+          # already-allowed segment.
+          - name: cp
+            value: ${PRIVATE_IPv4}
+            ttl: 3600
+        cname:
+          - name: www
+            value: example.internal.
+            ttl: 3600
+
+
+# =============================================================================
+# TIME SYNCHRONIZATION (NTP)
+# =============================================================================
+#
+# Time is a trust primitive on this platform: TPM attestation freshness, ACME
+# (RFC 8555) issuance, DANE/DNSSEC signature windows, and JWT exp/nbf are all
+# meaningless against a wrong clock. platformd does NOT implement NTP: chrony
+# runs as a packaged OpenRC service and platformd renders chrony.conf, manages
+# the service, and reads sync state from its control socket.
+#
+# Removing this section entirely makes platformd leave chrony alone.
+
+ntp:
+  enabled: true
+  # Control plane consumes upstream time and serves it to the control-plane
+  # and provisioning networks.
+  mode: both
+  consume:
+    upstream:
+      # The edge router / default gateway is the preferred upstream: it is on
+      # the local segment, so its round-trip is an order of magnitude tighter
+      # than any public source. Most routers cannot do NTS, hence nts: false.
+      - address: 10.4.6.1
+        prefer: true
+        iburst: true
+        nts: false
+      # Public fallback pool. iburst turns a multi-year RTC error into a
+      # sub-minute correction instead of an hours-long slew.
+      - address: pool.ntp.org
+        pool: true
+        iburst: true
+        nts: false
+    startup-gate:
+      # Block platform bring-up until the clock is trustworthy. The gate runs
+      # after network bring-up and before TPM/CA initialization.
+      block-until-synced: true
+      timeout: 120s
+      # warn-and-continue boots the node but flags it time-unsynced in health
+      # status so fleet monitoring surfaces it. Use fail-startup to abort
+      # bring-up instead.
+      on-timeout: warn-and-continue
+    # Keep serving from the local clock when no upstream is reachable, at a
+    # stratum low enough that any real chain wins.
+    orphan-fallback: true
+  serve:
+    # Explicit CIDR allow-list. NEVER 0.0.0.0/0 - an open NTP server is a
+    # reflection-amplification source.
+    listen-networks:
+      - 10.4.6.0/24
+      - 192.0.2.0/24
+    local-stratum: 10
+    nts:
+      # RFC 8915 Network Time Security for internal control-plane time,
+      # keyed by the platform CA.
+      enabled: true
+      cert-uri: kms://platform/ntp/nts-cert
+      key-uri: kms://platform/ntp/nts-key
+      # The names nodes dial this NTS-KE server as. NTS key establishment
+      # is a TLS handshake, so every name a client writes in its own
+      # ntp.consume.upstream must appear in the served certificate's SANs
+      # or the handshake fails (#509). `cp` is the control plane's role
+      # alias in the internal zone — the same name the ACME directory URL
+      # uses — and it is what the compute and gateway templates point at.
+      #
+      # The node's own hostname and FQDN are always included; this list is
+      # additive. Names only: platform certificates are DNS-only, and an
+      # IP address here is rejected at configuration validation.
+      #
+      # The first boot writes a self-signed certificate so the daemon can
+      # start; the certificate-renewal sweep replaces it with a
+      # platform-CA-issued one carrying these names, and marks it due
+      # again whenever a name is missing from what chronyd actually
+      # serves.
+      #
+      # A NAME IS NOT ENOUGH ON ITS OWN. Whatever address the internal
+      # zone publishes for a name here must also fall inside one of the
+      # listen-networks above, or clients complete the handshake and are
+      # then refused time. platformd resolves every name here at bring-up
+      # and at each renewal and drives the `ntp` health component to
+      # degraded when it cannot be dialled, under one of two markers:
+      #   nts-name-unreachable   resolved onto a segment listen-networks
+      #                          refuses; names the address and the list.
+      #                          Fix by widening listen-networks to that
+      #                          segment, or by publishing the name on a
+      #                          segment already listed.
+      #   nts-name-unresolvable  did not resolve here at all; carries the
+      #                          resolver's error. Nodes resolve the
+      #                          internal zone through this node, so no
+      #                          client can reach it either. Fix by
+      #                          publishing the record, or repairing the
+      #                          resolver.
+      # The platform reports the mismatch and does not choose.
+      server-names:
+        - cp.example.internal
+  rtc:
+    # Write the corrected time back to the hardware clock so the next cold
+    # boot starts sane even before the network is up.
+    write-back: true
+
+
+# =============================================================================
+# ACME CLIENT CONFIGURATION
+# =============================================================================
+
+acme:
+  client:
+    directory: https://cp.example.internal:9443/api/v1/acme/directory
+    account:
+      email: hostmaster@cp.example.com
+      key:
+        # TPM 2.0 ECDSA
+        algorithm: ECDSA
+        cn: acme-account
+        debug: true
+        hash: SHA-256
+        password: "kms://acme/account-key/password?ensure=true&len=32&enc=raw"
+        platform-policy: true
+        ecc:
+          curve: P-256
+        signature-algorithm: ECDSA-SHA256
+        store: tpm2
+      register: true
+
+
+# =============================================================================
+# TRUST CONFIGURATION (BMC Trust Bootstrap)
+# =============================================================================
+
+# BMC endpoint trust chain (Phase 3 — BMC TLS lifecycle). Each strategy is
+# attempted in order; the first to succeed is used.
+# The CP runs its own authoritative DNS on 127.0.0.1:8053 (public zone) which
+# is the platform-wide default for DANE TLSA lookups.
+# tofu is NOT available for the bmc class (#83): it fetches a CA bundle and a
+# BMC serves none. First contact is spki with a per-node bmc_spki_pin, until
+# DANE TLSA records for <hostname>-bmc.<internal-zone> are published (bmc
+# enroll does this).
+# =============================================================================
+# REMOTE ATTESTATION
+# =============================================================================
+#
+# The control plane runs the reporting collector: it periodically asks every
+# enrolled device for a TPM quote over mTLS and records a verdict. `enabled`
+# does two things here — it starts the collector, AND it is the gate on the
+# control plane registering ITSELF as a device in its own registry (#472), so
+# leaving it unset produces a control plane absent from its own fleet view.
+#
+# No `collector.ca-file`. The collector verifies node certificates through the
+# trust resolver's `internal` class, which resolves via platform-ca — the
+# control-plane CA that issued those nodes their identities in the first
+# place. That is self-configuring and needs no per-fleet PEM to keep in sync.
+#
+# The node side needs nothing configured: a node admits the control plane it
+# enrolled against (derived from acme.client.directory) and anchors on the
+# root of the chain that issued its IDevID.
+attestation:
+  reporting:
+    enabled: true
+    interval: 15m
+    ttl: 30m              # must be >= interval, else every report is stale on arrival
+    collector:
+      identity: internal  # must name a webservices[] entry; its TLS port and
+                          # certificate are also the control plane's own quote endpoint
+      port: 9443
+      timeout: 30s
+
+trust:
+  bmc:
+    # BMC endpoint trust chain. First strategy to succeed wins.
+    #
+    # tofu is available here again. It was barred under #83 while it was a
+    # CA-bundle fetch — a BMC serves Redfish, never a bundle — but
+    # go-xkms#139 (v0.12.0-alpha) made the TLS path an endpoint verifier
+    # that pins the leaf SPKI on first contact and enforces it afterwards,
+    # with session tickets disabled so resumption cannot bypass the check.
+    # Its changelog names this exact case.
+    #
+    # Prefer dane once TLSA records for <hostname>-bmc.<internal-zone> are
+    # published (bmc enroll does this). Before that, tofu is the better
+    # first-contact option than a hand-carried bmc_spki_pin: it captures and
+    # PERSISTS the pin itself rather than requiring an operator to obtain
+    # the fingerprint out of band.
+    strategies: [dane, spki, tofu, ca-file]
+    dane:
+      dns-server: "127.0.0.1:8053"   # CP serves its own public DNS
+
+# =============================================================================
+# DATASTORE CONFIGURATION
+# =============================================================================
+
+bmc:
+  address: 198.51.100.148  # management (VLAN 402) carries BMCs only
+  port: 623
+  username: admin
+  password: "kms://bmc/password?ensure=true&len=16&enc=base64"
+  protocol: ipmi
+
+# QuicBaaS on this node is one of the three Raft members of the HA control
+# plane (cp1, cp2 and cp3 bootstrap the cluster together).
+quicbaas:
+  data-dir: /var/lib/trusted-platform/quicbaas
+  # Raft consensus is engaged by join-addresses, not by the storage
+  # backend: every member keeps the replicated state in pebble.
+  storage-backend: pebble
+  node-id: 1
+  # Every member carries the same deployment-id and the same member list,
+  # itself included, in id=host:port form; the three bootstrap the
+  # cluster together.
+  deployment-id: 100
+  raft-address: "10.4.6.10:63000"
+  join-addresses:
+    - "1=10.4.6.10:63000"
+    - "2=10.4.6.11:63000"
+    - "3=10.4.6.12:63000"
+  # Mutual TLS between Raft peers is required; there is no plaintext
+  # cluster. The operator supplies this node's certificate and key and
+  # the CA that issued every member's certificate.
+  raft-tls-cert-file: /etc/trusted-platform/raft/tls.crt
+  raft-tls-key-file: /etc/trusted-platform/raft/tls.key
+  raft-tls-ca-file: /etc/trusted-platform/raft/ca.crt
+  cache-size: 67108864
+  log-level: warn
+  consistency-level: linearizable
+  request-timeout: 30s
+  # Required for qrdb first-boot to seed IAM (system tenant, roles, admin
+  # certificate). The bootstrap seeder overwrites this placeholder with the
+  # deployment's platform.internal_domain.
+  spiffe-trust-domain: example.internal
+  # ---------------------------------------------------------------------------
+  # Admin enrollment at first boot (optional; passed through to the embedded
+  # server's auth.* section). Three paths, in increasing order of key hygiene:
+  #
+  #   A. Neither path below set — THE DEFAULT. The node generates the admin
+  #      keypair and writes the certificate AND THE PRIVATE KEY under
+  #      <data-dir>/admin for the operator to collect and then remove. Simple,
+  #      and the only path that puts a private key on this host.
+  #
+  #   B. bootstrap-admin-csr-path — the admin generates their keypair
+  #      off-host and supplies a PKCS#10 CSR; the platform CA signs it. The
+  #      private key NEVER reaches this node, so there is nothing on disk to
+  #      protect or delete afterwards.
+  #
+  #   C. bootstrap-admin-piv-cert-path — adopt a certificate the admin
+  #      already holds, typically on a PIV card.
+  #
+  # bootstrap-admin-csr-path: /etc/trusted-platform/admin.csr
+  # bootstrap-admin-piv-cert-path: /etc/trusted-platform/admin-piv.crt
+  #
+  # admin-factors is a SEPARATE concern from the paths above: it is the
+  # ordered set of LOGIN factors enrolled for that administrator. A seal
+  # strategy answers "how is the barrier key protected at rest"; a login
+  # factor answers "how does a human prove who they are". Empty means the
+  # mTLS baseline alone. Log in afterwards with
+  # `platformctl auth login --method mtls|fido2|piv`.
+  #
+  # admin-factors: [mtls, fido2]
+  # passkey-device: /dev/hidraw0   # only needed when several FIDO2 keys are attached
+  # Canonical registration flag (docs/08 §Registration model).
+  # Default false: invite-only — uninvited console registration is
+  # refused; the system admin provisions tenants. Enable ONLY for
+  # self-service deployments where anyone may create a tenant.
+  # self-service-registration:
+  #   enabled: true
+
+
+# =============================================================================
+# SDN CONFIGURATION
+# =============================================================================
+
+sdn:
+  enabled: true
+  controller: true
+  # The environment numbers every zone (docs/architecture/reference-network.md):
+  # the zone at offset n is VLAN E*100+n with IPv4 10.E.n.0/24 and IPv6
+  # <ula>:<VLAN digits>::/64, and overlay network n is VNI E*100000+n.
+  # Block 4 is the reference example. A non-reference site overrides single
+  # zones under `overrides:` (vlan, subnet, subnet6) instead of renumbering.
+  environment:
+    id: 4
+    base: 10.0.0.0/8
+    # The deployment's RFC 4193 ULA /48. Generate your own random global
+    # ID; this one is the reference document's example.
+    ula: fd12:3456:789a::/48
+    # Management and provisioning use the documentation reference ranges.
+    overrides:
+      - {zone: management, subnet: 198.51.100.0/24}
+      - {zone: provisioning, subnet: 192.0.2.0/24}
+  # zones: the built-in zones (transit, fabric, management, hypervisor,
+  # quarantine, provisioning, control-plane, storage, backup) need no entry.
+  # An entry tunes a built-in's policy or declares an owner-defined zone at
+  # an offset from 09 to 99, for example:
+  #   zones:
+  #     - name: lab
+  #       offset: 9
+  #       port_classes: [hypervisor]
+  #       isolate: true
+  #       allow_to: [{zone: storage, services: [storage]}]
+  # A path into control-plane or management beyond the reference defaults
+  # also needs privileged_access: {reason: ..., approved_by: ...}, which is
+  # logged as an audit record whenever the configuration loads.
+  ovs:
+    socket: /var/run/openvswitch/db.sock
+    # br-fabric carries the physical trunk and the host's zone addresses.
+    # Workload ports live on br-int, which never carries the trunk.
+    bridge: br-fabric
+    datapath: system
+    protocols:
+      - OpenFlow13
+      - OpenFlow15
+  ipam:
+    backend: quicbaas
+    # Every zone pool (subnet, gateway .1, DHCP range from .50) and the IPAM
+    # ranges of 10.4.128.0/17 (tunnel point-to-point, loopbacks, service
+    # VIPs, platform-VRF hosts) are derived from the environment and seeded
+    # at startup. `pools:` adds explicit pools beside them, for example a
+    # public block or an overlay subnet from the tenant default range
+    # 10.4.192.0/18.
+    pools: []
+  # The control-plane node is addressed on no zone that serves DHCP
+  # (provisioning and quarantine are the gateway's), so it runs no DHCP
+  # server. Bootstrap installs PXE from the bootstrap container.
+  dhcp:
+    enabled: false
+  # The physical switch fabric is pure L2: no SVI, no routing, no ACL.
+  # Every platform port has a class; its allowed VLANs, native VLAN and MTU
+  # 9216 come from the environment:
+  #   gateway      x00 x01 x04 x05 x06 x08 (the only class carrying transit)
+  #   hypervisor   x01 x03-x08, native x05 provisioning
+  #   bmc          access x02 (the only class carrying management)
+  #   mgmt-uplink  x02, to the external management firewall
+  #   peer-link    every underlay VLAN of the block (peers[].peer-link-ports)
+  fabric:
+    switches:
+      - id: switch-01
+        vendor: cisco-nexus
+        model: N9K-C93180YC-EX
+        # The switches' own out-of-band management addresses are on the
+        # site network, not on a platform zone.
+        mgmt-ip: 192.0.2.250
+        credentials-ref: "kms://switches/switch-01"
+      - id: switch-02
+        vendor: cisco-nexus
+        model: N9K-C93180YC-EX
+        mgmt-ip: 192.0.2.251
+        credentials-ref: "kms://switches/switch-02"
+    peers:
+      - switch-a: switch-01
+        switch-b: switch-02
+        peer-link-ports:
+          - Ethernet1/49
+          - Ethernet1/50
+    ports:
+      - {switch-id: switch-01, port: Ethernet1/3, class: gateway, description: edge-01 data}
+      - {switch-id: switch-02, port: Ethernet1/3, class: gateway, description: edge-01 data}
+      - {switch-id: switch-01, port: Ethernet1/25, class: hypervisor, description: cp-01 data}
+      - {switch-id: switch-02, port: Ethernet1/25, class: hypervisor, description: cp-01 data}
+      - {switch-id: switch-01, port: Ethernet1/28, class: hypervisor, description: compute-01 data}
+      - {switch-id: switch-02, port: Ethernet1/28, class: hypervisor, description: compute-01 data}
+      - {switch-id: switch-01, port: Ethernet1/41, class: bmc, description: edge-01 BMC}
+      - {switch-id: switch-01, port: Ethernet1/42, class: bmc, description: cp-01 BMC}
+      - {switch-id: switch-02, port: Ethernet1/41, class: bmc, description: compute-01 BMC}
+  overlay:
+    enabled: false
+    vxlan-port: 4789
+  gateway:
+    enabled: false
+
+
+# =============================================================================
+# TPM CONFIGURATION
+# =============================================================================
+
+tpm:
+  # TPM target selection — resolved by the platform's single TPM resolver
+  # (pkg/vtpm ResolveTPMTarget). Explicit configuration always wins and a
+  # hardware target NEVER silently downgrades to a software TPM:
+  #   device: /dev/tpmrm0    -> REAL HARDWARE TPM (X10 dTPM; fails closed if absent)
+  #   device: /path/to.sock  -> swtpm software TPM socket (virtual hosts)
+  #   device: auto           -> detect at runtime (swtpm socket, then /dev/tpmrm0, then /dev/tpm0)
+  #   simulator: true        -> in-process simulator (development only; takes precedence over device)
+  device: /dev/tpmrm0
+  simulator: false
+  encrypt-sessions: false
+  entropy: false
+  hash: SHA-256
+  ek:
+    debug: true
+    handle: 0x81010001
+    hash: SHA-256
+    password:
+    rsa:
+      size: 2048
+  ssrk:
+    debug: true
+    handle: 0x81000001
+    hierarchy-auth:
+    password:
+    platform-policy: false
+    rsa:
+      size: 2048
+  iak:
+    auth:
+    debug: true
+    hash: SHA-256
+    handle: 0x81010002
+    password:
+    rsa:
+      size: 2048
+    signature-algorithm: SHA256-RSA
+  idevid:
+    model: SuperMicro X10
+    serial: sm-cp-01
+    cert-handle: 0x01C90000
+    debug: true
+    handle: 0x81020000
+    hash: SHA-256
+    pad: true
+    password:
+    rsa:
+      size: 2048
+    signature-algorithm: SHA256-RSA
+  platform-pcr: 23
+  platform-pcr-bank: sha256
+  # Golden PCRs for platform policy (separate from seal-pcrs)
+  # NOTE: PCR 10 (IMA) changes on every boot - DO NOT include for LUKS unlock!
+  # PCR 10 is only suitable for post-boot application key sealing when IMA measurements are complete.
+  golden-pcrs: [7, 9]
+  platform-srk:
+    srk-handle: 0x81000002
+    srk-auth: "kms://tpm/platform-srk/srk-auth?ensure=true&len=32&enc=raw"
+    platform-policy: true
+
+
+# =============================================================================
+# CERTIFICATE AUTHORITY CONFIGURATION
+# =============================================================================
+
+certificate-authority:
+  platform-ca: 1
+  auto-import-issuing-ca: true
+  system-cert-pool: false
+  default-validity: 365
+  default-idevid-cn: default-device-id
+  sans-include-localhost: true
+  require-password: true
+  quantum-safe: true
+  identity:
+    - # Root Certificate Authority
+      is-root: true
+      key-algorithm: RSA
+      key-size: 2048
+      keystore-type: software
+      keystores:
+        software:
+          platform-policy: true
+        tpm2:
+          srk-handle: 0x81000001
+          srk-auth: "kms://ca/root/tpm2/srk-auth?ensure=true&len=32&enc=raw"
+          platform-policy: true
+      keys:
+        # PKCS #8 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSA
+          hash: SHA-256
+          store: software
+          password: "kms://ca/root/keys/0/password?ensure=true&len=32&enc=base64"
+          platform-policy: true
+          debug: true
+
+        # TPM 2.0 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSA
+          hash: SHA-256
+          store: tpm2
+          password: "kms://ca/root/keys/1/password?ensure=true&len=32&enc=base64"
+          platform-policy: true
+          debug: true
+
+        # PKCS #8 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: software
+          password: "kms://ca/root/keys/2/password?ensure=true&len=32&enc=base64"
+          platform-policy: true
+          debug: true
+
+        # TPM 2.0 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: tpm2
+          password: "kms://ca/root/keys/3/password?ensure=true&len=32&enc=base64"
+          platform-policy: true
+          debug: true
+
+        # PKCS #8 Ed25519
+        - algorithm: Ed25519
+          ecc:
+            curve: P-256
+          signature-algorithm: Ed25519
+          hash: SHA-256
+          store: software
+          password: "kms://ca/root/keys/4/password?ensure=true&len=32&enc=base64"
+          platform-policy: true
+          debug: true
+
+      valid: 50
+      subject:
+        cn: root-ca.cp.example.com
+        organization: Trusted Platform
+        country: US
+        province: Kernel
+        locality: Hypervisor
+        address: 123 Example Street
+        postal-code: 12345
+      sans:
+        dns:
+          - root-ca.cp.example.com
+        email:
+          - hostmaster@cp.example.com
+
+    - # Intermediate Certificate Authority
+      key-algorithm: RSA
+      key-size: 2048
+      keystore-type: software
+      keystores:
+        software:
+          platform-policy: true
+        tpm2:
+          srk-handle: 0x81000001
+          srk-auth: "kms://ca/issuing/tpm2/srk-auth?ensure=true&len=32&enc=raw"
+          platform-policy: true
+      keys:
+        - # PKCS #8 RSA w/ PSS
+          algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSA
+          hash: SHA-256
+          store: software
+          password: "kms://ca/issuing/keys/0/password?ensure=true&len=32&enc=base64"
+          platform-policy: true
+          debug: true
+
+        # TPM 2.0 RSA w/ PSS
+        - algorithm: RSA
+          rsa:
+            size: 2048
+          signature-algorithm: SHA256-RSA
+          hash: SHA-256
+          store: tpm2
+          password: "kms://ca/issuing/keys/1/password?ensure=true&len=32&enc=base64"
+          platform-policy: true
+          debug: true
+
+        # PKCS #8 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: software
+          password: "kms://ca/issuing/keys/2/password?ensure=true&len=32&enc=base64"
+          platform-policy: true
+          debug: true
+
+        # TPM 2.0 ECDSA
+        - algorithm: ECDSA
+          ecc:
+            curve: P-256
+          signature-algorithm: ECDSA-SHA256
+          hash: SHA-256
+          store: tpm2
+          password: "kms://ca/issuing/keys/3/password?ensure=true&len=32&enc=base64"
+          platform-policy: true
+          debug: true
+
+        # PKCS #8 Ed25519
+        - algorithm: Ed25519
+          ecc:
+            curve: P-256
+          signature-algorithm: Ed25519
+          hash: SHA-256
+          store: software
+          password: "kms://ca/issuing/keys/4/password?ensure=true&len=32&enc=base64"
+          platform-policy: true
+          debug: true
+      valid: 10
+      subject:
+        cn: ca01.cp.example.com
+        organization: Trusted Platform
+        country: US
+        province: Kernel
+        locality: Hypervisor
+        address: 123 Example Street
+        postal-code: 12345
+      sans:
+        dns:
+          - ca01.cp.example.com
+          - ca.cp.example.com
+        email:
+          - hostmaster@cp.example.com
+
+
+# =============================================================================
+# DAEMON TRANSPORTS (platformd)
+# =============================================================================
+# Where platformd's REST, gRPC, QUIC and MCP transports bind. The defaults
+# layer is loopback on the canonical ports, so a transport reaches an
+# interface only because it is named here (file), in
+# PLATFORMD_DAEMON_<TRANSPORT>_BIND_HOST (env) or on
+# `platformd serve --<transport>-bind-host` (flag); flags win over env over
+# this file over the defaults. The Unix socket carries local platformctl
+# and is unaffected. Expose a transport only with mutual TLS. MCP over HTTP
+# serves TLS 1.3 only, with the same daemon certificate as REST and gRPC;
+# there is no plaintext MCP listener (#844).
+
+daemon:
+  rest: {bind-host: 127.0.0.1, port: 8443}
+  grpc: {bind-host: 127.0.0.1, port: 10443}
+  quic: {bind-host: 127.0.0.1, port: 9444}
+  mcp:  {bind-host: 127.0.0.1, port: 9445}
+
+
+# =============================================================================
+# WEBSERVICES CONFIGURATION
+# =============================================================================
+
+webservices:
+  # Public webservice - external/internet facing
+  - name: public
+    home: /var/lib/trusted-platform/public_html
+    port: 8080
+    tls-port: 8443
+    index: index.html
+    acme:
+      enabled: true
+      directory: https://cp.example.com/api/v1/acme/directory
+      terms-of-service: /tos.html
+      challenges:
+        - enroll-01
+        - device-attest-01
+        - dns-01
+        - endorse-01
+        - http-01
+        - http-8080
+        - http-8081
+        - enroll-8080
+        - enroll-8081
+    rewrite:
+    - pattern: "^/test.html$"
+      target: /swagger/
+    jwt:
+      expiration: 60
+      issuer: trusted-platform
+    webauthn:
+      display-name: Trusted Platform
+      id: cp.example.com
+      origins:
+        - https://cp.example.com
+        - https://cp.example.com:8443
+    cors:
+      allowed-origins:
+        - https://cp.example.com
+        - https://cp.example.com:8443
+      allowed-methods:
+        - GET
+        - POST
+        - PUT
+        - DELETE
+        - OPTIONS
+      allowed-headers:
+        - "*"
+      allow-credentials: true
+    key:
+      algorithm: ECDSA
+      ecc:
+        curve: P-256
+      signature-algorithm: ECDSA-SHA256
+      hash: SHA-256
+      store: software
+      password: "kms://webservices/0/key/password?ensure=true&len=32&enc=raw"
+      platform-policy: true
+      debug: true
+    certificate:
+      acme:
+        challenge: http-01
+        renew: 15
+      subject:
+        cn: cp.example.com
+        organization: ACME Corporation
+        country: US
+        province: Florida
+        locality: West Palm Beach
+        address: 123 Automation Street
+        postal-code: 12345
+      sans:
+        dns:
+          - cp.example.com
+          - www.cp.example.com
+        email:
+          - hostmaster@cp.example.com
+
+  # Internal webservice - local network facing
+  - name: internal
+    home: /var/lib/trusted-platform/public_html
+    port: 9080
+    tls-port: 9443
+    index: index.html
+    acme:
+      enabled: true
+      directory: https://cp.example.internal:9443/api/v1/acme/directory
+      terms-of-service: /tos.html
+      challenges:
+        - enroll-01
+        - device-attest-01
+        - dns-01
+        - endorse-01
+        - http-01
+        - http-8080
+        - http-8081
+        - enroll-8080
+        - enroll-8081
+    jwt:
+      expiration: 60
+      issuer: trusted-platform
+    cors:
+      allowed-origins:
+        - https://cp.example.internal
+      allowed-methods:
+        - GET
+        - POST
+        - PUT
+        - DELETE
+        - OPTIONS
+      allowed-headers:
+        - "*"
+      allow-credentials: true
+    webauthn:
+      display-name: Trusted Platform Internal
+      id: cp.example.internal
+      origins:
+        - https://cp.example.internal
+        - https://cp.example.internal:9443
+    key:
+      algorithm: ECDSA
+      ecc:
+        curve: P-256
+      signature-algorithm: ECDSA-SHA256
+      hash: SHA-256
+      store: software
+      password: "kms://webservices/1/key/password?ensure=true&len=32&enc=raw"
+      platform-policy: true
+      debug: true
+    certificate:
+      subject:
+        cn: cp.example.internal
+        organization: ACME Corporation
+        country: US
+        province: Florida
+        locality: West Palm Beach
+        address: 123 Automation Street
+        postal-code: 12345
+      sans:
+        dns:
+          - cp.example.internal
+        email:
+          - hostmaster@cp.example.com
+
+# =============================================================================
+# TRUSTED REVERSE PROXY (control-plane owned; #570, ruling R4)
+# =============================================================================
+# Routes and backend pools the platform's authenticating reverse proxy serves.
+# This is the base layer of the platform proxy store: an entry whose id the
+# store already holds (authored over the API/CLI/console) is kept as stored,
+# an absent one is seeded at startup. Gateways receive these through the
+# proxy sync loop; listeners are gatewayd-local and live in gatewayd's own
+# `proxy:` section. Every route declares its auth mode — the engine refuses a
+# route it cannot enforce.
+proxy:
+  defaults:
+    backend-zone: control-plane
+  pools:
+    - id: control-plane-console
+      backends:
+        - url: "https://cp.example.internal:8443"
+      tls:
+        trust-class: platform
+    - id: client-workloads
+      backends:
+      - url: "https://client.example.internal:9443"
+      tls:
+        trust-class: platform
+  routes:
+    # The console authenticates its own users (WebAuthn / platform tokens),
+    # so the proxy admits the request and the backend decides.
+    - id: console
+      hosts:
+        - cp.example.com
+        - cp.example.internal
+      path-prefix: /
+      pool: control-plane-console
+      preserve-host: true
+      auth:
+        mode: public
+    # Workload traffic requires a hardware-bound identity from the control-plane zone.
+    - id: client-workloads
+      hosts:
+        - custom.example.com
+        - custom.example.internal
+      path-prefix: /
+      pool: client-workloads
+      preserve-host: true
+      auth:
+        mode: mtls
+        require-idevid: true
+        allowed-zones:
+          - control-plane
+        backend-zone: control-plane

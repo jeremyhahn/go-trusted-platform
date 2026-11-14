@@ -496,8 +496,9 @@ func TestInitZoneAddressesPortFailuresSkipTheAddress(t *testing.T) {
 			stubZonePorts(t, ports)
 			assigned := stubBridgeNetlink(t)
 			stubProbe(t, func(context.Context, string, net.IP) error { return nil })
-			if err := app.initZoneAddresses(context.Background()); err != nil {
-				t.Fatalf("initZoneAddresses: %v", err)
+			// The failed port is reported, so the link setup is retried.
+			if err := app.initZoneAddresses(context.Background()); err == nil {
+				t.Fatal("initZoneAddresses: a broken zone port must be reported")
 			}
 			if len(*assigned) != 0 {
 				t.Fatalf("no address may land on a broken port: %v", *assigned)
