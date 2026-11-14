@@ -28,6 +28,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil/socktest"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -236,7 +237,7 @@ func (s *inProcTenantServer) GetTenantBarrierStatus(_ context.Context, r *platfo
 // returns it with CLI flags for each output format pointing at it.
 func startTenantServer(t *testing.T) (*inProcTenantServer, func(cli.OutputFormat) *cli.CommonFlags) {
 	t.Helper()
-	sock := filepath.Join(t.TempDir(), "platformd.sock")
+	sock := filepath.Join(socktest.Dir(t), "platformd.sock")
 	lis, err := net.Listen("unix", sock)
 	require.NoError(t, err)
 	srv := &inProcTenantServer{tenants: map[string]*platformv1.Tenant{}}

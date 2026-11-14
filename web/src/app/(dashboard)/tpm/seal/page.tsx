@@ -71,6 +71,14 @@ export default function TPMSealPage() {
       if (!sealCn) {
         throw new Error("Common name is required");
       }
+      // Every existing seal holds one Latin-1 byte per character and the server
+      // stores no encoding marker. UTF-8 bytes are also valid Latin-1, so an
+      // unseal decoder cannot tell the two apart: keep Latin-1 and refuse what
+      // it cannot encode. A plain Error reaches onError; btoa's DOMException
+      // carries a code and useMutation would drop it silently.
+      if (Array.from(sealData).some((c) => c.charCodeAt(0) > 0xff)) {
+        throw new Error("Data to seal must be Latin-1 text: characters above U+00FF cannot be sealed from this page");
+      }
       return tpm.seal({
         data: btoa(sealData),
         cn: sealCn,
