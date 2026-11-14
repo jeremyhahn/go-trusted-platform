@@ -22,6 +22,9 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/container"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/deployer"
+	// The QUIC deploy agent registers deployer.TransportQUIC, so a
+	// deployer section with transport: quic reaches a host with no SSH.
+	_ "github.com/jeremyhahn/go-trusted-platform/pkg/bootstrap/deployer/quicagent"
 	"gopkg.in/yaml.v3"
 )
 
@@ -139,34 +142,30 @@ func (a *linuxDeployerAdapter) Teardown(ctx context.Context) error {
 // bootstrap.yaml when it was loaded.
 func (a *linuxDeployerAdapter) deployConfig(manifestPath string) *deployer.DeployConfig {
 	c := a.cfg
-	dc := &deployer.DeployConfig{
-		Host:               c.Host,
-		User:               c.User,
-		SSHKeyPath:         expandUserHome(c.SSHKey),
-		KnownHostsPath:     expandUserHome(c.KnownHostsPath),
-		ContainerRuntime:   c.ContainerRuntime,
-		ContainerImage:     c.ContainerImage,
-		ManifestPath:       manifestPath,
-		DataDir:            c.EffectiveDataDir(),
-		RedeployMode:       string(c.EffectiveRedeployMode()),
-		BootstrapInterface: c.BootstrapInterface,
-		BootstrapBindHost:  c.BootstrapBindHost,
-		BootstrapServerIP:  c.BootstrapServerIP,
-		// Effective* rather than the raw fields so the deployer sends the
-		// same ports the orchestrator builds its URLs against.
-		BootstrapHTTPPort:         c.EffectiveBootstrapHTTPPort(),
-		BootstrapDeviceScriptPort: c.EffectiveBootstrapDeviceScriptPort(),
-		BootstrapDHCPStart:        c.BootstrapDHCPStart,
-		BootstrapDHCPEnd:          c.BootstrapDHCPEnd,
-		BootstrapGateway:          c.BootstrapGateway,
-		BootstrapNoRouter:         c.BootstrapNoRouter,
-		BootstrapDNS:              c.BootstrapDNS,
-		BootstrapAPKMirror:        c.BootstrapAPKMirror,
-		NetbootMediaDir:           c.NetbootMediaDir,
-		BootstrapProxyDHCP:        c.ProxyDHCP,
-		BootNode:                  c.BootNode,
-		FirmwareCacheDir:          c.FirmwareCacheDir,
-	}
+	remote := c.remoteConfig()
+	dc := &remote
+	dc.ContainerRuntime = c.ContainerRuntime
+	dc.ContainerImage = c.ContainerImage
+	dc.ManifestPath = manifestPath
+	dc.DataDir = c.EffectiveDataDir()
+	dc.RedeployMode = string(c.EffectiveRedeployMode())
+	dc.BootstrapInterface = c.BootstrapInterface
+	dc.BootstrapBindHost = c.BootstrapBindHost
+	dc.BootstrapServerIP = c.BootstrapServerIP
+	// Effective* rather than the raw fields so the deployer sends the
+	// same ports the orchestrator builds its URLs against.
+	dc.BootstrapHTTPPort = c.EffectiveBootstrapHTTPPort()
+	dc.BootstrapDeviceScriptPort = c.EffectiveBootstrapDeviceScriptPort()
+	dc.BootstrapDHCPStart = c.BootstrapDHCPStart
+	dc.BootstrapDHCPEnd = c.BootstrapDHCPEnd
+	dc.BootstrapGateway = c.BootstrapGateway
+	dc.BootstrapNoRouter = c.BootstrapNoRouter
+	dc.BootstrapDNS = c.BootstrapDNS
+	dc.BootstrapAPKMirror = c.BootstrapAPKMirror
+	dc.NetbootMediaDir = c.NetbootMediaDir
+	dc.BootstrapProxyDHCP = c.ProxyDHCP
+	dc.BootNode = c.BootNode
+	dc.FirmwareCacheDir = c.FirmwareCacheDir
 	dc.ApplyDefaults()
 	return dc
 }
@@ -223,14 +222,8 @@ func NewLinuxDeployerAdapter(cfg *DeployerConfig, logger *slog.Logger) (Deployer
 	if cfg == nil {
 		return nil, ErrInvalidConfig{Field: "deployer", Reason: "must not be nil"}
 	}
-	if cfg.Host == "" {
-		return nil, ErrMissingRequiredField{Field: "deployer.host"}
-	}
-	if cfg.User == "" {
-		return nil, ErrMissingRequiredField{Field: "deployer.user"}
-	}
-	if cfg.SSHKey == "" {
-		return nil, ErrMissingRequiredField{Field: "deployer.ssh_key"}
+	if err := cfg.validateRemote(); err != nil {
+		return nil, err
 	}
 	if cfg.ContainerImage == "" {
 		return nil, ErrMissingRequiredField{Field: "deployer.container_image"}

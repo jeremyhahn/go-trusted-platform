@@ -270,7 +270,29 @@ type DeployerConfig struct {
 	// deployer uses to verify the deployer host key. Deployer SSH is
 	// fail-closed: without provisioned pins the deploy/stage phase errors
 	// rather than trusting the key on first use.
-	KnownHostsPath   string `yaml:"known_hosts_path"`
+	KnownHostsPath string `yaml:"known_hosts_path"`
+
+	// Transport selects how the orchestrator reaches the deployer host:
+	// "ssh" (the default when empty: user, ssh_key and known_hosts_path)
+	// or "quic", the QUIC deploy agent (cmd/deploy-agent) with no SSH on
+	// the host (agent_cert, agent_key and agent_ca).
+	Transport string `yaml:"transport,omitempty"`
+
+	// AgentPort is the deploy agent's UDP port. Empty means 7443.
+	AgentPort int `yaml:"agent_port,omitempty"`
+
+	// AgentCert and AgentKey are the PEM client certificate and key the
+	// orchestrator presents to the deploy agent; AgentCA is the PEM bundle
+	// the agent's certificate must chain to. Relative paths resolve
+	// against bootstrap.yaml's directory, ~ against the home directory.
+	AgentCert string `yaml:"agent_cert,omitempty"`
+	AgentKey  string `yaml:"agent_key,omitempty"`
+	AgentCA   string `yaml:"agent_ca,omitempty"`
+
+	// AgentServerName is the name the agent's certificate must carry.
+	// Empty means host.
+	AgentServerName string `yaml:"agent_server_name,omitempty"`
+
 	ContainerRuntime string `yaml:"container_runtime"`
 	ContainerImage   string `yaml:"container_image"`
 
@@ -560,6 +582,73 @@ func (d *DeployerConfig) validateRouter() error {
 		BootstrapNoRouter: d.BootstrapNoRouter,
 	}
 	return dc.ValidateRouter()
+}
+
+// validateTransport checks the deploy transport at config-load time:
+// transport is "ssh" (or empty) or "quic", and quic names the agent's
+// client certificate, key and CA bundle. The SSH fields are checked when
+// the deployer is built (NewLinuxDeployerAdapter).
+func (d *DeployerConfig) validateTransport() error {
+	if err := validateExplicitPort("deployer.agent_port", d.AgentPort); err != nil {
+		return err
+	}
+	switch d.Transport {
+	case "", deployer.TransportSSH:
+		return nil
+	case deployer.TransportQUIC:
+		for _, f := range []struct{ name, value string }{
+			{"deployer.agent_cert", d.AgentCert},
+			{"deployer.agent_key", d.AgentKey},
+			{"deployer.agent_ca", d.AgentCA},
+		} {
+			if f.value == "" {
+				return ErrMissingRequiredField{Field: f.name}
+			}
+		}
+		return nil
+	default:
+		return ErrInvalidConfig{Field: "deployer.transport", Reason: "\"" + d.Transport + "\" is not \"" + deployer.TransportSSH + "\" or \"" + deployer.TransportQUIC + "\""}
+	}
+}
+
+// IsQUIC reports whether the deployer host is reached over the QUIC
+// deploy agent rather than SSH.
+func (d *DeployerConfig) IsQUIC() bool {
+	return d.Transport == deployer.TransportQUIC
+}
+
+// remoteConfig is the deployer.DeployConfig connection part of this
+// section: host, transport and the credentials of that transport.
+func (d *DeployerConfig) remoteConfig() deployer.DeployConfig {
+	return deployer.DeployConfig{
+		Host:            d.Host,
+		User:            d.User,
+		SSHKeyPath:      expandUserHome(d.SSHKey),
+		KnownHostsPath:  expandUserHome(d.KnownHostsPath),
+		Transport:       d.Transport,
+		AgentPort:       d.AgentPort,
+		AgentCertPath:   expandUserHome(d.AgentCert),
+		AgentKeyPath:    expandUserHome(d.AgentKey),
+		AgentCAPath:     expandUserHome(d.AgentCA),
+		AgentServerName: d.AgentServerName,
+	}
+}
+
+// validateRemote checks the fields the chosen transport needs to reach
+// the deployer host: user and ssh_key for SSH, the agent files for QUIC.
+func (d *DeployerConfig) validateRemote() error {
+	if d.Host == "" {
+		return ErrMissingRequiredField{Field: "deployer.host"}
+	}
+	if !d.IsQUIC() {
+		if d.User == "" {
+			return ErrMissingRequiredField{Field: "deployer.user"}
+		}
+		if d.SSHKey == "" {
+			return ErrMissingRequiredField{Field: "deployer.ssh_key"}
+		}
+	}
+	return d.validateTransport()
 }
 
 // validateExplicitPort bounds a port an operator actually set. Zero is
@@ -1020,7 +1109,10 @@ func LoadBootstrapConfig(path string) (*BootstrapConfig, error) {
 	if config.BackupsDir == "" {
 		config.BackupsDir = defaultBackupsDir
 	}
-	for _, p := range []*string{&config.BackupsDir, &config.Deployer.NetbootMediaDir} {
+	for _, p := range []*string{
+		&config.BackupsDir, &config.Deployer.NetbootMediaDir,
+		&config.Deployer.AgentCert, &config.Deployer.AgentKey, &config.Deployer.AgentCA,
+	} {
 		if *p == "" {
 			continue
 		}
@@ -1163,6 +1255,9 @@ func (c *BootstrapConfig) ValidateDefinition() error {
 		return err
 	}
 	if err := c.Deployer.validateRouter(); err != nil {
+		return err
+	}
+	if err := c.Deployer.validateTransport(); err != nil {
 		return err
 	}
 	if err := validateExplicitPort("platform.control_plane_port", c.Platform.ControlPlanePort); err != nil {

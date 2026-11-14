@@ -38,6 +38,20 @@ func (e ErrConnect) Error() string {
 
 func (e ErrConnect) Unwrap() error { return e.Cause }
 
+// ErrLoadTLS is a certificate, key or CA bundle file that could not be
+// read or parsed.
+type ErrLoadTLS struct {
+	What  string
+	Path  string
+	Cause error
+}
+
+func (e ErrLoadTLS) Error() string {
+	return fmt.Sprintf("quicagent: load %s from %q: %v", e.What, e.Path, e.Cause)
+}
+
+func (e ErrLoadTLS) Unwrap() error { return e.Cause }
+
 // ErrNotConnected is returned by an operation on a client that has not
 // connected, or whose connection has closed.
 type ErrNotConnected struct {
