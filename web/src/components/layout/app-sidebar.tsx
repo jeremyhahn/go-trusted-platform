@@ -79,7 +79,10 @@ const navigation = [
     title: "Security",
     icon: Lock,
     children: [
+      { title: "Overview", href: "/ca" },
       { title: "Certificates", href: "/ca/certificates" },
+      { title: "Sign CSR", href: "/ca/sign" },
+      { title: "Verify Certificate", href: "/ca/verify" },
       { title: "Certificate Requests", href: "/ca/requests" },
       { title: "CA Bundle", href: "/ca/bundle" },
       { title: "CRL", href: "/ca/crl" },

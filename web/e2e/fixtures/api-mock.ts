@@ -1228,6 +1228,172 @@ export async function mockEABApi(
   );
 
   return { calls, getCredentials: () => credentials.map((c) => ({ ...c })) };
+// CA operations (GetCAInfo, SignCSR, VerifyCertificate)
+
+export interface CAOperationsMockConfig {
+  infoError?: ApiError | null;
+  signError?: ApiError | null;
+  verifyValid?: boolean;
+  /** The certificate is revoked: only a request with verifyRevocation true sees it. */
+  verifyRevoked?: boolean;
+}
+
+/**
+ * Mock the CA operation endpoints.
+ *
+ * Handles:
+ * - GET /api/v1/ca/info - CA identity, defaults and chain summaries
+ * - POST /api/v1/ca/sign-csr - Certify the key a CSR names
+ * - POST /api/v1/ca/certificates/verify - Verify a certificate
+ *
+ * @returns the request bodies the pages posted, and the Authorization
+ *   header of each sign request, for assertions
+ */
+export async function mockCAOperationsApi(
+  page: Page,
+  config: CAOperationsMockConfig = {}
+): Promise<{ signRequests: unknown[]; signAuthorizations: string[]; verifyRequests: unknown[] }> {
+  const signRequests: unknown[] = [];
+  const signAuthorizations: string[] = [];
+  const verifyRequests: unknown[] = [];
+  const now = new Date().toISOString();
+
+  await page.route('**/api/v1/ca/info*', async (route: Route, request: Request) => {
+    if (request.method() !== 'GET') {
+      await route.continue();
+      return;
+    }
+    if (config.infoError) {
+      await route.fulfill({
+        status: config.infoError.status,
+        contentType: 'application/json',
+        body: errorEnvelope(config.infoError),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        caInfo: {
+          commonName: 'Platform Intermediate CA',
+          isInitialized: true,
+          isIntermediate: true,
+          rootCert: { serial: '01', commonName: 'Platform Root CA', issuer: 'Platform Root CA' },
+          intermediates: [
+            { serial: '02', commonName: 'Platform Intermediate CA', issuer: 'Platform Root CA' },
+          ],
+          keyStores: [],
+          defaultAlgorithm: 'ECDSA-P256',
+          defaultValidityDays: 397,
+        },
+        timestamp: now,
+      }),
+    });
+  });
+
+  await page.route('**/api/v1/ca/sign-csr*', async (route: Route, request: Request) => {
+    if (request.method() !== 'POST') {
+      await route.continue();
+      return;
+    }
+    signRequests.push(request.postDataJSON());
+    // SignCSR needs a platform token granting ca:sign-csr, sent as a Bearer
+    // Authorization header: the session cookie alone is refused.
+    const authorization = request.headers()['authorization'] ?? '';
+    signAuthorizations.push(authorization);
+    if (!/^Bearer \S+$/.test(authorization)) {
+      await route.fulfill({
+        status: 403,
+        contentType: 'application/json',
+        body: errorEnvelope({ status: 403, error: 'platform token with scope ca:sign-csr required' }),
+      });
+      return;
+    }
+    if (config.signError) {
+      await route.fulfill({
+        status: config.signError.status,
+        contentType: 'application/json',
+        body: errorEnvelope(config.signError),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: { success: true, message: 'certificate issued successfully' },
+        certificate: {
+          serial: '0a1b2c',
+          commonName: 'release-signer',
+          issuer: 'Platform Intermediate CA',
+          // Certificate.pem is proto bytes: protojson carries it as base64.
+          pem: Buffer.from('-----BEGIN CERTIFICATE-----\nSIGNED\n-----END CERTIFICATE-----\n').toString(
+            'base64'
+          ),
+        },
+        timestamp: now,
+      }),
+    });
+  });
+
+  await page.route('**/api/v1/ca/certificates/verify*', async (route: Route, request: Request) => {
+    if (request.method() !== 'POST') {
+      await route.continue();
+      return;
+    }
+    const verifyBody = request.postDataJSON() as { certificatePem?: unknown; verifyRevocation?: unknown } | null;
+    verifyRequests.push(verifyBody);
+    // VerifyCertificateRequest.certificate_pem is proto bytes: the server's
+    // protojson decode needs standard base64 and fails on plain PEM.
+    const wirePem = verifyBody?.certificatePem;
+    const isBase64 =
+      typeof wirePem === 'string' && wirePem.length % 4 === 0 && /^[A-Za-z0-9+/]*={0,2}$/.test(wirePem);
+    const decoded = isBase64 ? Buffer.from(wirePem as string, 'base64').toString('utf8') : '';
+    if (!decoded.startsWith('-----BEGIN CERTIFICATE-----')) {
+      await route.fulfill({
+        status: 400,
+        contentType: 'application/json',
+        body: errorEnvelope({
+          status: 400,
+          error: 'invalid request body: certificatePem must be base64',
+        }),
+      });
+      return;
+    }
+    // The backend checks revocation only when verifyRevocation is true; a
+    // revoked certificate with a valid chain passes plain X.509 verification.
+    if (config.verifyRevoked && verifyBody?.verifyRevocation === true) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          status: { success: true },
+          valid: false,
+          chain: [],
+          errors: ['certificate is revoked'],
+          warnings: [],
+          timestamp: now,
+        }),
+      });
+      return;
+    }
+    const valid = config.verifyValid !== false;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: { success: true },
+        valid,
+        chain: valid ? ['0a1b2c', '02', '01'] : [],
+        errors: valid ? [] : ['certificate has expired'],
+        warnings: [],
+        timestamp: now,
+      }),
+    });
+  });
+
+  return { signRequests, signAuthorizations, verifyRequests };
 }
 
 // ============================================================================
