@@ -415,6 +415,7 @@ jobs:
         run: trivy fs --scanners vuln,secret --severity CRITICAL,HIGH --exit-code 1 --skip-dirs test --skip-dirs examples --skip-dirs vbmc --skip-dirs web/node_modules .
 
   publish-status:
+    timeout-minutes: 10
     name: Publish nightly status
     needs: [fips, trivy, rpi-image]
     if: always()
