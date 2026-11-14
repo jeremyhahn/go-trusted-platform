@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jeremyhahn/go-luks2/pkg/luks2"
 
@@ -654,6 +655,64 @@ func TestLUKSBackend_ConcurrentEnrollmentGetsDistinctSlots(t *testing.T) {
 			}
 		}
 	})
+}
+
+// statefulFIDO2Handler mimics the go-xkms FIDO2 handler, whose UnlockWithKey
+// reads, overwrites and restores its config timeout without synchronization.
+// The backend shares one handler across requests, so it must serialize its
+// calls; under -race this test fails without that lock.
+type statefulFIDO2Handler struct {
+	timeout time.Duration
+}
+
+func (h *statefulFIDO2Handler) EnrollCredential(_ context.Context, credentialID string, _, _ bool) ([]byte, error) {
+	saved := h.timeout
+	h.timeout = 30 * time.Second
+	time.Sleep(time.Millisecond)
+	h.timeout = saved
+	return []byte("fido2-key-" + credentialID), nil
+}
+
+func (h *statefulFIDO2Handler) DeriveEnroll(ctx context.Context, credentialID string, requirePIN, requireUV bool) (*LUKSFIDO2EnrollResult, error) {
+	key, err := h.EnrollCredential(ctx, credentialID, requirePIN, requireUV)
+	if err != nil {
+		return nil, err
+	}
+	return &LUKSFIDO2EnrollResult{DerivedKey: key}, nil
+}
+
+func TestLUKSBackend_ConcurrentEnrollmentSerializesTheSharedFIDO2Handler(t *testing.T) {
+	const n = 4
+	b := newTestLUKSBackend(WithLUKSFIDO2Handler(&statefulFIDO2Handler{timeout: 5 * time.Second}))
+	devices := make([]string, n)
+	for i := range devices {
+		devices[i] = newLUKSImage(t)
+	}
+	start := make(chan struct{})
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			_, errs[i] = b.EnrollFIDO2(context.Background(), &daemon.LUKSEnrollFIDO2Request{
+				Device:             devices[i],
+				ExistingPassphrase: testLUKSPassphrase,
+				CredentialID:       "cred" + strconv.Itoa(i),
+			})
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("EnrollFIDO2 %d: %v", i, err)
+		}
+		if err := luks2.TestKey(devices[i], []byte("fido2-key-cred"+strconv.Itoa(i))); err != nil {
+			t.Fatalf("credential %d does not open its volume: %v", i, err)
+		}
+	}
 }
 
 // TestLUKSVolumeKey_AliasesShareAKey proves a symlink to a volume and the
