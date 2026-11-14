@@ -224,6 +224,29 @@ func TestMCPManifestParity_ListTimeWindow(t *testing.T) {
 	assert.NotEqual(t, asToolResult(t, all), got)
 }
 
+// The manifest filter keeps whole seconds, so a bound with a fractional
+// second is refused as InvalidArgument on gRPC and MCP alike, never
+// truncated into a different window (#1686, Codex round 5).
+func TestMCPManifestParity_ListRefusesFractionalTimeBound(t *testing.T) {
+	frac := manifestFixtureTime.Truncate(time.Second).Add(500 * time.Millisecond)
+	for _, field := range []string{"start_time", "end_time"} {
+		t.Run(field, func(t *testing.T) {
+			f := newManifestParity()
+			_, mcpErr := f.mcp(t, "attestation_list_manifests", map[string]interface{}{
+				field: frac.Format(time.RFC3339Nano),
+			})
+			req := &platformv1.ListManifestsRequest{}
+			if field == "start_time" {
+				req.StartTime = timestamppb.New(frac)
+			} else {
+				req.EndTime = timestamppb.New(frac)
+			}
+			_, grpcErr := f.grpc.ListManifests(context.Background(), req)
+			assertSameClass(t, codes.InvalidArgument, mcpErr, grpcErr)
+		})
+	}
+}
+
 func TestMCPManifestParity_Delete(t *testing.T) {
 	ctx := context.Background()
 	grpcSide, mcpSide := newManifestParity(), newManifestParity()

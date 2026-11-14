@@ -324,6 +324,31 @@ func TestAttestationServerRouter_ListManifestsMalformedTimeIs400(t *testing.T) {
 	}
 }
 
+// The manifest list filters on whole seconds, so a time bound with a
+// fractional second is refused, not truncated into a wider or narrower
+// window (#1686, Codex round 5).
+func TestAttestationServerRouter_ListManifestsFractionalTimeIs400(t *testing.T) {
+	for _, query := range []string{
+		"start_time=2026-11-12T10:00:00.250Z",
+		"end_time=2026-11-12T10:00:00.5Z",
+		"end_time=2026-11-12T10:00:00.000000001%2B02:00",
+	} {
+		t.Run(query, func(t *testing.T) {
+			server := &recordingAttestationServer{}
+			rt := attestationRoute{method: http.MethodGet, path: "/api/v1/attestation/manifests?" + query}
+			rec := serveAttestationRoute(mountAllAttestationRoutes(server), rt, "")
+			assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+			assert.Nil(t, server.req, "the server is not called with a fractional time bound")
+		})
+	}
+	t.Run("zero fraction is accepted", func(t *testing.T) {
+		server := &recordingAttestationServer{}
+		rt := attestationRoute{method: http.MethodGet, path: "/api/v1/attestation/manifests?end_time=2026-11-12T10:00:00.000Z"}
+		rec := serveAttestationRoute(mountAllAttestationRoutes(server), rt, "")
+		assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	})
+}
+
 func TestAttestationServerRouter_NilServerIs503OnEveryRoute(t *testing.T) {
 	router := mountAllAttestationRoutes(nil)
 	for _, rt := range attestationRoutes {
