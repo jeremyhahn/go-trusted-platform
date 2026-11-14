@@ -531,7 +531,7 @@ type fhrpBackend struct{ *fhrp.Speaker }
 // Healthy reports a started speaker none of whose groups' last actuation
 // (advertise, claim, release) failed and none of which holds an unrepaired
 // address claim: a later successful advertisement does not hide it.
-func (b fhrpBackend) Healthy() bool { return fhrpHealthy(b.Speaker.Health()) }
+func (b fhrpBackend) Healthy() bool { return fhrpHealthy(b.Health()) }
 
 // fhrpHealthy reports a started speaker none of whose groups has a failed
 // last actuation or an unrepaired address claim.
