@@ -666,6 +666,113 @@ export async function mockKmsOpsApi(
 }
 
 /**
+ * A request the IDevID mock received.
+ */
+export interface IDevIDApiCall {
+  /** HTTP method */
+  method: string;
+  /** Path below /api/v1/idevid, without a trailing slash ('' for the root) */
+  path: string;
+  /** Parsed JSON body, if any */
+  body: unknown;
+}
+
+export interface IDevIDApiMockConfig {
+  /** HasIDevID result (default true) */
+  hasIDevID?: boolean;
+  /** HasIAK result (default false) */
+  hasIAK?: boolean;
+  /** Responses that override the defaults, keyed by 'METHOD /path' (e.g. 'POST /iak/csr') */
+  responses?: Record<string, { status?: number; body: unknown }>;
+}
+
+const idevidOk = { success: true, message: 'ok' };
+
+/**
+ * Mock the IDevID/IAK API (pkg/webservice/v1/rest/idevid/router.go).
+ *
+ * Handles every route below /api/v1/idevid with a canned success response
+ * and records each call so a test can assert the request the page sent.
+ *
+ * @param page - Playwright page object
+ * @param config - Mock configuration options
+ */
+export async function mockIDevIDApi(
+  page: Page,
+  config: IDevIDApiMockConfig = {}
+): Promise<{ calls: IDevIDApiCall[] }> {
+  const calls: IDevIDApiCall[] = [];
+  const defaults: Record<string, { status?: number; body: unknown }> = {
+    'GET /exists': { body: { exists: config.hasIDevID ?? true } },
+    'GET /iak/exists': { body: { exists: config.hasIAK ?? false } },
+    'GET /attributes': {
+      body: {
+        attributes: {
+          tpmManufacturer: 'Infineon',
+          tpmModel: 'SLB9672',
+          tpmVersion: '2.0',
+          platformManufacturer: 'Acme',
+          platformModel: 'Edge-1',
+          platformVersion: '1.0',
+          platformSerial: 'SN-0001',
+        },
+      },
+    },
+    'POST /iak/generate': { status: 201, body: { status: idevidOk } },
+    'DELETE /iak': {
+      status: 409,
+      body: {
+        message:
+          'idevid: the IAK key is TPM-resident and is not evicted by this service; nothing was deleted (delete its certificate with DeleteIAKCertificate)',
+        code: 'FAILED_PRECONDITION',
+      },
+    },
+    // The server returns binary TCG_CSR_IDEVID bytes, base64 in protobuf JSON.
+    'POST /iak/csr': { body: { status: idevidOk, csrPem: Buffer.from([0x00, 0x01, 0x02, 0xff, 0x10, 0x80]).toString('base64') } },
+    'POST /ldevid': { status: 201, body: { status: idevidOk, certificatePem: '-----BEGIN CERTIFICATE-----\nLDEVIDCERT\n-----END CERTIFICATE-----' } },
+    'POST /certificate': { body: { status: idevidOk } },
+    'POST /iak/certificate': { body: { status: idevidOk } },
+    'DELETE /iak/certificate': { body: { status: idevidOk } },
+    'POST /flush': { body: { status: idevidOk, flushedCount: 3 } },
+    'POST /activate-credential': { body: { status: idevidOk, decryptedSecret: 'U0VDUkVU' } },
+  };
+  const responses = { ...defaults, ...(config.responses ?? {}) };
+
+  await page.route(/\/api\/v1\/idevid(\/|\?|$)/, async (route: Route, request: Request) => {
+    const url = new URL(request.url());
+    const path = url.pathname.replace(/^.*\/api\/v1\/idevid/, '').replace(/\/$/, '');
+    const method = request.method();
+    let body: unknown = undefined;
+    const raw = request.postData();
+    if (raw) {
+      try {
+        body = JSON.parse(raw);
+      } catch {
+        body = raw;
+      }
+    }
+    calls.push({ method, path, body });
+
+    const response = responses[`${method} ${path}`];
+    if (!response) {
+      await route.fulfill({
+        status: 404,
+        contentType: 'application/json',
+        body: JSON.stringify({ message: `no mock for ${method} ${path}`, code: 'HTTP_404' }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: response.status ?? 200,
+      contentType: 'application/json',
+      body: JSON.stringify(response.body),
+    });
+  });
+
+  return { calls };
+}
+
+/**
  * Create a mock WebAuthn registration flow.
  * Mocks the registration begin and finish endpoints.
  *
