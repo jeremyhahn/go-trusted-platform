@@ -15,13 +15,27 @@ package deployer
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 const (
 	// DefaultSSHPort is the default SSH port.
 	DefaultSSHPort = 22
+
+	// DefaultAgentPort is the UDP port of the QUIC deploy agent
+	// (quicagent) on the deploy target.
+	DefaultAgentPort = 7443
+
+	// TransportSSH reaches the deploy target over SSH (*SSHClient). It is
+	// the transport when DeployConfig.Transport is empty.
+	TransportSSH = "ssh"
+
+	// TransportQUIC reaches the deploy target's QUIC deploy agent
+	// (quicagent.Client), with no SSH on the target (#1700).
+	TransportQUIC = "quic"
 
 	// DefaultContainerRuntime is the default container runtime.
 	DefaultContainerRuntime = "docker"
@@ -71,6 +85,27 @@ type DeployConfig struct {
 	// fail-closed: without provisioned pins the SSH client errors rather
 	// than trusting the key on first use.
 	KnownHostsPath string
+
+	// Transport selects how the deployer reaches the target: TransportSSH
+	// (empty means SSH) or TransportQUIC, the QUIC deploy agent. With QUIC
+	// the SSH fields are unused and the Agent* fields are required.
+	Transport string
+
+	// AgentPort is the deploy agent's UDP port (default DefaultAgentPort).
+	AgentPort int
+
+	// AgentCertPath and AgentKeyPath are the PEM client certificate and
+	// key the deployer presents to the deploy agent.
+	AgentCertPath string
+	AgentKeyPath  string
+
+	// AgentCAPath is the PEM bundle of the CA(s) that issued the deploy
+	// agent's certificate; the agent is verified against it.
+	AgentCAPath string
+
+	// AgentServerName is the name the agent's certificate must carry.
+	// Empty means Host.
+	AgentServerName string
 
 	// ContainerRuntime is docker or podman.
 	ContainerRuntime string
@@ -218,10 +253,89 @@ type Deployer interface {
 	Teardown(ctx context.Context, config *DeployConfig) error
 }
 
+// RemoteStager is what staging needs from a deploy target: run a command
+// and stream a file to a path.
+type RemoteStager interface {
+	// Run runs command on the target and returns its output. A command that
+	// fails returns its output (stderr, else stdout) with a typed error.
+	Run(ctx context.Context, command string) (string, error)
+
+	// CopyFileStream streams the local file at localPath to remotePath on
+	// the target.
+	CopyFileStream(ctx context.Context, localPath, remotePath string) error
+}
+
+// RemoteHost is the deploy transport seam: a connection to a deploy target
+// that runs commands, streams files and stats remote paths. *SSHClient
+// implements it over SSH and quicagent.Client over QUIC (#1700).
+type RemoteHost interface {
+	RemoteStager
+
+	// Connect opens the connection to the target.
+	Connect(ctx context.Context) error
+
+	// Close closes the connection.
+	Close() error
+
+	// StatRemote returns the size and modification time (Unix seconds) of
+	// remotePath, or ErrRemoteFileNotFound when it does not exist.
+	StatRemote(ctx context.Context, remotePath string) (size int64, mtime int64, err error)
+}
+
+var _ RemoteHost = (*SSHClient)(nil)
+
+// RemoteHostFactory builds the (not yet connected) RemoteHost for a
+// deploy config's transport.
+type RemoteHostFactory func(config *DeployConfig) (RemoteHost, error)
+
+var (
+	transportsMu sync.RWMutex
+	transports   = map[string]RemoteHostFactory{TransportSSH: newSSHRemoteHost}
+)
+
+// RegisterTransport makes factory the RemoteHost factory for the named
+// transport. The QUIC deploy agent registers TransportQUIC from its
+// package (quicagent imports deployer, so deployer cannot import it); a
+// program that deploys over QUIC imports quicagent. A later registration
+// of the same name replaces the earlier one.
+func RegisterTransport(name string, factory RemoteHostFactory) {
+	transportsMu.Lock()
+	defer transportsMu.Unlock()
+	transports[name] = factory
+}
+
+// NewRemoteHost builds the RemoteHost for config.Transport (empty means
+// SSH). The host is not connected. A transport that is not registered is
+// an ErrInvalidDeployConfig: there is no fallback to SSH.
+func NewRemoteHost(config *DeployConfig) (RemoteHost, error) {
+	name := config.Transport
+	if name == "" {
+		name = TransportSSH
+	}
+	transportsMu.RLock()
+	factory, ok := transports[name]
+	transportsMu.RUnlock()
+	if !ok {
+		return nil, ErrInvalidDeployConfig{Field: "transport", Reason: fmt.Sprintf("transport %q is not registered in this program", name)}
+	}
+	return factory(config)
+}
+
+// newSSHRemoteHost is the TransportSSH factory.
+func newSSHRemoteHost(config *DeployConfig) (RemoteHost, error) {
+	return NewSSHClient(config.Host, config.Port, config.User, config.SSHKeyPath, config.KnownHostsPath)
+}
+
 // ApplyDefaults fills in zero-valued fields with sensible defaults.
 func (c *DeployConfig) ApplyDefaults() {
 	if c.Port == 0 {
 		c.Port = DefaultSSHPort
+	}
+	if c.Transport == "" {
+		c.Transport = TransportSSH
+	}
+	if c.AgentPort == 0 {
+		c.AgentPort = DefaultAgentPort
 	}
 	if c.ContainerRuntime == "" {
 		c.ContainerRuntime = DefaultContainerRuntime
@@ -326,11 +440,26 @@ func (c *DeployConfig) ValidateTeardown() error {
 	if c.Host == "" {
 		return ErrInvalidDeployConfig{Field: "host", Reason: "must not be empty"}
 	}
-	if c.User == "" {
-		return ErrInvalidDeployConfig{Field: "user", Reason: "must not be empty"}
-	}
-	if c.SSHKeyPath == "" {
-		return ErrInvalidDeployConfig{Field: "ssh_key_path", Reason: "must not be empty"}
+	switch c.Transport {
+	case "", TransportSSH:
+		if c.User == "" {
+			return ErrInvalidDeployConfig{Field: "user", Reason: "must not be empty"}
+		}
+		if c.SSHKeyPath == "" {
+			return ErrInvalidDeployConfig{Field: "ssh_key_path", Reason: "must not be empty"}
+		}
+	case TransportQUIC:
+		if c.AgentCertPath == "" {
+			return ErrInvalidDeployConfig{Field: "agent_cert", Reason: "must not be empty for the quic transport"}
+		}
+		if c.AgentKeyPath == "" {
+			return ErrInvalidDeployConfig{Field: "agent_key", Reason: "must not be empty for the quic transport"}
+		}
+		if c.AgentCAPath == "" {
+			return ErrInvalidDeployConfig{Field: "agent_ca", Reason: "must not be empty for the quic transport"}
+		}
+	default:
+		return ErrInvalidDeployConfig{Field: "transport", Reason: fmt.Sprintf("%q is not one of %q, %q", c.Transport, TransportSSH, TransportQUIC)}
 	}
 	return nil
 }

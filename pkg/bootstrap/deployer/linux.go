@@ -52,6 +52,9 @@ type LinuxDeployer struct {
 	// the deployer can resolve and ship locally-built images. Defaults to
 	// execLocalRunner{}; unit tests inject a fake.
 	local localRunner
+	// dial builds the RemoteHost for a deploy config's transport.
+	// Defaults to NewRemoteHost (SSH, or the QUIC deploy agent).
+	dial RemoteHostFactory
 }
 
 // NewLinuxDeployer constructs a LinuxDeployer backed by the given
@@ -61,7 +64,25 @@ func NewLinuxDeployer(logger *slog.Logger) *LinuxDeployer {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &LinuxDeployer{logger: logger, local: execLocalRunner{}}
+	return &LinuxDeployer{logger: logger, local: execLocalRunner{}, dial: NewRemoteHost}
+}
+
+// connect builds the RemoteHost for config's transport and connects it.
+// The caller closes it.
+func (d *LinuxDeployer) connect(ctx context.Context, config *DeployConfig) (RemoteHost, error) {
+	dial := d.dial
+	if dial == nil {
+		dial = NewRemoteHost
+	}
+	client, err := dial(config)
+	if err != nil {
+		return nil, err
+	}
+	if err := client.Connect(ctx); err != nil {
+		_ = client.Close()
+		return nil, err
+	}
+	return client, nil
 }
 
 // Deploy connects to the Linux host via SSH, stages the manifest and the
@@ -81,19 +102,15 @@ func (d *LinuxDeployer) Deploy(ctx context.Context, config *DeployConfig) (*Depl
 		return nil, err
 	}
 
-	client, err := NewSSHClient(config.Host, config.Port, config.User, config.SSHKeyPath, config.KnownHostsPath)
+	client, err := d.connect(ctx, config)
 	if err != nil {
 		return nil, err
 	}
 	defer client.Close()
 
-	if err := client.Connect(ctx); err != nil {
-		return nil, err
-	}
-
 	d.logger.Info("connected to deploy target",
 		slog.String("host", config.Host),
-		slog.Int("port", config.Port))
+		slog.String("transport", config.Transport))
 
 	if _, err := client.Run(ctx, GeneratePrepareCommand(config)); err != nil {
 		return nil, err
@@ -101,7 +118,7 @@ func (d *LinuxDeployer) Deploy(ctx context.Context, config *DeployConfig) (*Depl
 
 	// Copy manifest file.
 	remoteManifest := fmt.Sprintf("%s/manifest.yaml", config.DataDir)
-	if err := client.CopyFile(ctx, config.ManifestPath, remoteManifest); err != nil {
+	if err := copySmallFile(ctx, client, config.ManifestPath, remoteManifest); err != nil {
 		return nil, err
 	}
 	d.logger.Info("copied manifest", slog.String("remote_path", remoteManifest))
@@ -152,6 +169,23 @@ func (d *LinuxDeployer) Deploy(ctx context.Context, config *DeployConfig) (*Depl
 	}, nil
 }
 
+// smallFileCopier is the optional RemoteHost capability for copying a
+// small file (manifest, config) in one command. The SSH transport has it
+// (base64 through the shell, no upload subsystem needed on the target);
+// the QUIC agent does not, and streams every file.
+type smallFileCopier interface {
+	CopyFile(ctx context.Context, localPath, remotePath string) error
+}
+
+// copySmallFile copies a small local file to the target with the host's
+// one-command copy when it has one, and streams it otherwise.
+func copySmallFile(ctx context.Context, host RemoteHost, localPath, remotePath string) error {
+	if c, ok := host.(smallFileCopier); ok {
+		return c.CopyFile(ctx, localPath, remotePath)
+	}
+	return host.CopyFileStream(ctx, localPath, remotePath)
+}
+
 // shipOrPullImage makes the configured image available on the remote
 // host before the container is run.
 //
@@ -169,7 +203,7 @@ func (d *LinuxDeployer) Deploy(ctx context.Context, config *DeployConfig) (*Depl
 //     (save | stream | load) only when they differ; skip when equal.
 //  3. If no local image exists, fall back to the legacy remote
 //     inspect-or-pull path so registry-based deploys keep working.
-func (d *LinuxDeployer) shipOrPullImage(ctx context.Context, client *SSHClient, config *DeployConfig) error {
+func (d *LinuxDeployer) shipOrPullImage(ctx context.Context, client RemoteStager, config *DeployConfig) error {
 	localID := d.localImageID(ctx, config.ContainerRuntime, config.ContainerImage)
 
 	if localID != "" {
@@ -208,7 +242,7 @@ func (d *LinuxDeployer) shipOrPullImage(ctx context.Context, client *SSHClient, 
 // orchestrator host, streams it to the remote, and loads it there. Each
 // phase wraps its failure in ErrImageShipFailed. The remote tar is
 // removed best-effort after a successful load.
-func (d *LinuxDeployer) shipImage(ctx context.Context, client *SSHClient, config *DeployConfig, localID string) error {
+func (d *LinuxDeployer) shipImage(ctx context.Context, client RemoteStager, config *DeployConfig, localID string) error {
 	d.logger.Info("shipping locally-built image to remote host",
 		slog.String("image", config.ContainerImage),
 		slog.String("image_id", localID),
@@ -281,7 +315,7 @@ func (d *LinuxDeployer) localImageID(ctx context.Context, runtime, image string)
 // error (image absent) is treated as "no remote image" — an empty ID —
 // and logged at Debug. The {{.Id}} format matches localImageID so the
 // two strings are directly comparable.
-func (d *LinuxDeployer) remoteImageID(ctx context.Context, client *SSHClient, runtime, image string) string {
+func (d *LinuxDeployer) remoteImageID(ctx context.Context, client RemoteStager, runtime, image string) string {
 	out, err := client.Run(ctx, remoteImageInspectCmd(runtime, image))
 	if err != nil {
 		d.logger.Debug("remote image inspect failed; treating as no remote image",
@@ -460,15 +494,11 @@ func (d *LinuxDeployer) Verify(ctx context.Context, config *DeployConfig) error 
 		return err
 	}
 
-	client, err := NewSSHClient(config.Host, config.Port, config.User, config.SSHKeyPath, config.KnownHostsPath)
+	client, err := d.connect(ctx, config)
 	if err != nil {
 		return err
 	}
 	defer client.Close()
-
-	if err := client.Connect(ctx); err != nil {
-		return err
-	}
 
 	inspectCmd := fmt.Sprintf("%s inspect --format %s %s",
 		shellQuote(config.ContainerRuntime),
@@ -518,15 +548,11 @@ func (d *LinuxDeployer) Teardown(ctx context.Context, config *DeployConfig) erro
 		return err
 	}
 
-	client, err := NewSSHClient(config.Host, config.Port, config.User, config.SSHKeyPath, config.KnownHostsPath)
+	client, err := d.connect(ctx, config)
 	if err != nil {
 		return err
 	}
 	defer client.Close()
-
-	if err := client.Connect(ctx); err != nil {
-		return err
-	}
 
 	teardownCmd := GenerateTeardownCommand(config)
 	if _, err := client.Run(ctx, teardownCmd); err != nil {
