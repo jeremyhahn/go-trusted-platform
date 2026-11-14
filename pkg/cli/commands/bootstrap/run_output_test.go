@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -214,7 +215,8 @@ func TestRunBootstrap_InvalidConfig(t *testing.T) {
 func TestCanonicalDirect(t *testing.T) {
 	dir := t.TempDir()
 	bundle := filepath.Join(dir, "ca.pem")
-	require.NoError(t, os.WriteFile(bundle, []byte("-----BEGIN CERTIFICATE-----\n"), 0o600))
+	caPEM := directTestCertPEM(t, true)
+	require.NoError(t, os.WriteFile(bundle, caPEM, 0o600))
 
 	run := func(args ...string) (string, error) {
 		cmd := newCanonicalDirectCmd(nil)
@@ -228,7 +230,7 @@ func TestCanonicalDirect(t *testing.T) {
 
 	out, err := run("--bundle", bundle)
 	require.NoError(t, err)
-	assert.Contains(t, out, "Direct CA bundle accepted: "+bundle+" (28 bytes)")
+	assert.Contains(t, out, fmt.Sprintf("Direct CA bundle accepted: %s (%d bytes, 1 CA certificates)", bundle, len(caPEM)))
 
 	var msgErr *MessageError
 	_, err = run()
