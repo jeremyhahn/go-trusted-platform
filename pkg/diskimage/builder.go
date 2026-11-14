@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/measure"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/runner"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/uboot"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/virtkernel"
@@ -37,6 +38,12 @@ type Result struct {
 	// Kernel is the platform-built kernel the image carries, nil for a
 	// target on a packaged kernel.
 	Kernel *virtkernel.Artifacts
+	// Measurements are the predicted values of measure.ManifestPCRs, one
+	// bank per BuildConfig.MeasurementBanks; nil when the image is not
+	// measured.
+	Measurements []measure.Bank
+	// Unmeasured says why Measurements is nil: UnmeasuredSecureBootOff.
+	Unmeasured string
 }
 
 // StagedMedia is a target's install media staged on disk: the layout the
@@ -155,7 +162,12 @@ func Create(ctx context.Context, cfg *BuildConfig) (*Result, error) {
 	if err != nil {
 		return nil, &AssembleError{Step: "reading the finished image", Err: err}
 	}
-	return &Result{Image: output, SHA256: sum, SizeBytes: size, MediaDir: mediaDir, UBoot: art, Kernel: kernel}, nil
+	banks, unmeasured, err := c.measureImage(ctx, output, staged)
+	if err != nil {
+		return nil, err
+	}
+	return &Result{Image: output, SHA256: sum, SizeBytes: size, MediaDir: mediaDir, UBoot: art, Kernel: kernel,
+		Measurements: banks, Unmeasured: unmeasured}, nil
 }
 
 // kernelArtifacts builds or locates the platform-built kernel for a target

@@ -1,6 +1,7 @@
 package diskimage
 
 import (
+	"crypto"
 	"path/filepath"
 	"runtime"
 
@@ -99,6 +100,9 @@ type BuildConfig struct {
 	Runner runner.Runner
 	// Logger receives progress; nil means the default logger.
 	Logger *logging.Logger
+	// MeasurementBanks are the PCR banks the image's measurements are
+	// predicted for; nil means sha256.
+	MeasurementBanks []crypto.Hash
 	// SkipPreflight disables the host checks (binfmt, container runtime,
 	// kernel modules); tests use it.
 	SkipPreflight bool
