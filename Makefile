@@ -1445,7 +1445,7 @@ test-fips:
 NOOPA_TAGS := $(filter-out opa,$(BUILD_TAGS))
 NOOPA_PKGS := ./pkg/policy/opa/ ./pkg/compute/container/ \
 	./pkg/sdn/gateway/proxysvc/ ./pkg/sdn/gateway/services/vpn/ ./pkg/sdn/gateway/ \
-	./pkg/vpn/... ./pkg/api/daemon/...
+	./pkg/vpn/... ./pkg/api/daemon/... ./pkg/sdn/gateway/commands/...
 test-noopa:
 	go test -count=1 -tags "$(NOOPA_TAGS)" -skip "$(TEST_SKIP)" $(NOOPA_PKGS)
 

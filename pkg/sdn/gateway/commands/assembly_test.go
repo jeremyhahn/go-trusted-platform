@@ -865,11 +865,8 @@ func TestBuildProxyHandlerOPARoutesRequireEvaluator(t *testing.T) {
 	if _, err := BuildProxyHandler(cfg, nil, nil, testLogger()); !errors.Is(err, proxy.ErrOPANotConfigured) {
 		t.Fatalf("opa route without evaluator = %v, want ErrOPANotConfigured", err)
 	}
-
-	cfg.OPA.Enabled = true
-	if _, err := BuildProxyHandler(cfg, nil, nil, testLogger()); err != nil {
-		t.Fatalf("BuildProxyHandler with opa evaluator: %v", err)
-	}
+	// With OPA enabled the result depends on the build: assembly_opa_test.go
+	// (opa) and assembly_noopa_test.go (!opa) assert it (#1691).
 }
 
 func TestPlatformdAttestationDialUnixSocketMissing(t *testing.T) {
