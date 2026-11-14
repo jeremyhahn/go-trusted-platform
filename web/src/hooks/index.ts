@@ -114,6 +114,13 @@ export type {
 export { useBMC, bmcUrl } from './use-bmc';
 export type { BMCState, BMCPart, UseBMCResult } from './use-bmc';
 
+export { useGatewayBgp } from './use-gateway-bgp';
+export type {
+  GatewayBGPPeer,
+  GatewayAnnouncedPrefix,
+  GatewayIPAllocation,
+  UseGatewayBgpResult,
+} from './use-gateway-bgp';
 export { useReportedGateways } from './use-reported-gateways';
 
 export {

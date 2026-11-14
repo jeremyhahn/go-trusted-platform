@@ -1364,6 +1364,144 @@ export async function mockSdnBridgeApi(page: Page): Promise<SdnApiCall[]> {
     return reply({ message: `unmocked ${method} ${path}`, code: 'NOT_FOUND' }, 404);
   });
   return calls;
+// =============================================================================
+// Gateway BGP and IPAM (#1746)
+// =============================================================================
+
+export interface MockBGPPeer {
+  address: string;
+  asn: number;
+  state: string;
+  prefixes_received?: number;
+}
+
+export interface MockAnnouncedPrefix {
+  prefix: string;
+  next_hop?: string;
+}
+
+export interface MockIPAllocation {
+  ip: string;
+  pool_id: string;
+  device_id?: string;
+  hostname?: string;
+  status?: string;
+}
+
+export interface GatewayBgpApiMockConfig {
+  peers?: MockBGPPeer[];
+  prefixes?: MockAnnouncedPrefix[];
+  allocations?: MockIPAllocation[];
+  /** The address the next allocation hands out. */
+  nextIP?: string;
+  /** Sections the node has not configured: every route under them answers 503. */
+  unavailable?: Array<'bgp' | 'ipam'>;
+}
+
+/** One mutating request the gateway mock received. */
+export interface GatewayBgpCall {
+  method: string;
+  path: string;
+  query: Record<string, string>;
+  body: Record<string, unknown> | null;
+}
+
+/**
+ * Mock the web service's gateway BGP and IPAM routes under
+ * `/api/v1/gateway`. The mock keeps state: an announced prefix or an
+ * allocation shows in the next list, a withdrawn or released one leaves it.
+ * Every mutating request is recorded in `calls`.
+ */
+export async function mockGatewayBgpApi(
+  page: Page,
+  config: GatewayBgpApiMockConfig = {}
+): Promise<{ calls: GatewayBgpCall[] }> {
+  const peers = [...(config.peers ?? [])];
+  let prefixes = [...(config.prefixes ?? [])];
+  let allocations = [...(config.allocations ?? [])];
+  const unavailable = new Set(config.unavailable ?? []);
+  const calls: GatewayBgpCall[] = [];
+  const json = (route: Route, status: number, body: unknown) =>
+    route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+  // The server wraps every message in restwire.WebServiceResponse, with the
+  // protojson payload in lowerCamelCase.
+  const ok = (route: Route, status: number, payload: unknown) =>
+    json(route, status, { code: status, success: true, payload });
+  const fail = (route: Route, status: number, error: string) =>
+    json(route, status, { code: status, success: false, error, payload: null });
+  const peerOut = (p: MockBGPPeer) => ({
+    address: p.address,
+    asn: p.asn,
+    state: p.state,
+    prefixesReceived: p.prefixes_received ?? 0,
+  });
+  const prefixOut = (p: MockAnnouncedPrefix) => ({ prefix: p.prefix, nextHop: p.next_hop ?? '' });
+  const allocOut = (a: MockIPAllocation) => ({
+    ip: a.ip,
+    poolId: a.pool_id,
+    deviceId: a.device_id ?? '',
+    hostname: a.hostname ?? '',
+    status: a.status ?? '',
+  });
+
+  await page.route(/\/api\/v1\/gateway\/(bgp|ipam)\//, async (route: Route, request: Request) => {
+    const url = new URL(request.url());
+    const path = url.pathname.replace(/^\/api\/v1\/gateway/, '');
+    const method = request.method();
+    const query = Object.fromEntries(url.searchParams.entries());
+    let body: Record<string, unknown> | null = null;
+    if (method === 'POST') {
+      try {
+        body = request.postDataJSON() as Record<string, unknown>;
+      } catch {
+        body = null;
+      }
+    }
+    if (method !== 'GET') calls.push({ method, path, query, body });
+
+    if (path.startsWith('/bgp/') && unavailable.has('bgp')) {
+      return fail(route, 503, 'BGP speaker not configured on this node');
+    }
+    if (path.startsWith('/ipam/') && unavailable.has('ipam')) {
+      return fail(route, 503, 'IPAM not configured on this node');
+    }
+
+    if (path === '/bgp/peers' && method === 'GET') return ok(route, 200, { peers: peers.map(peerOut) });
+    if (path === '/bgp/prefixes' && method === 'GET') {
+      return ok(route, 200, { prefixes: prefixes.map(prefixOut) });
+    }
+    if (path === '/bgp/prefixes' && method === 'POST') {
+      prefixes = [...prefixes, { prefix: String(body?.prefix ?? ''), next_hop: String(body?.next_hop ?? '') }];
+      return ok(route, 201, { status: { success: true, message: 'announced' } });
+    }
+    if (path === '/bgp/prefixes' && method === 'DELETE') {
+      prefixes = prefixes.filter((p) => p.prefix !== query.prefix);
+      return ok(route, 200, { status: { success: true, message: 'withdrawn' } });
+    }
+    if (path === '/ipam/allocations' && method === 'GET') {
+      return ok(route, 200, { allocations: allocations.map(allocOut) });
+    }
+    if (path === '/ipam/allocations' && method === 'POST') {
+      const deviceId = String(body?.device_id ?? body?.deviceId ?? '');
+      if (!deviceId) return fail(route, 400, 'device_id is required');
+      const alloc: MockIPAllocation = {
+        ip: config.nextIP ?? '10.0.0.11',
+        pool_id: String(body?.pool_id ?? ''),
+        device_id: deviceId,
+        hostname: String(body?.hostname ?? ''),
+        status: 'active',
+      };
+      allocations = [...allocations, alloc];
+      return ok(route, 201, { status: { success: true }, allocation: allocOut(alloc) });
+    }
+    if (path === '/ipam/allocations' && method === 'DELETE') {
+      allocations = allocations.filter((a) => a.ip !== query.ip);
+      return ok(route, 200, { status: { success: true, message: 'released' } });
+    }
+    return fail(route, 404, 'not found');
+  });
+
+  return { calls };
 }
 
 /**

@@ -168,6 +168,7 @@ const navigation = [
       { title: "Overlays", href: "/networking/overlays" },
       { title: "VTEPs", href: "/networking/overlays/vteps" },
       { title: "Gateway", href: "/networking/gateway" },
+      { title: "Gateway BGP & IPAM", href: "/networking/gateway/bgp" },
       { title: "VPN", href: "/networking/vpn" },
       { title: "PXE Boot", href: "/networking/pxe" },
     ],
