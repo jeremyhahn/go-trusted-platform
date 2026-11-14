@@ -14,7 +14,8 @@ platformctl diskimage create --target rpi --model rpi4 --role compute \
 `--role compute` builds [`rpi4/compute.yaml`](./rpi4/compute.yaml), or
 [`rpi5/compute.yaml`](./rpi5/compute.yaml) with `--model rpi5`;
 `--role control-plane` builds [`cm4/control-plane.yaml`](./cm4/control-plane.yaml)
-with `--model cm4`, or [`rpi4/control-plane.yaml`](./rpi4/control-plane.yaml).
+with `--model cm4`, [`rpi4/control-plane.yaml`](./rpi4/control-plane.yaml), or
+[`rpi5/control-plane.yaml`](./rpi5/control-plane.yaml) with `--model rpi5`.
 A model the builder does not know, a role that is not `gateway`,
 `control-plane` or `compute`, or a role or model with no file here, is refused
 (`ErrRoleTemplate`); the build never falls back to the single-node image. The image pipeline is
@@ -28,6 +29,7 @@ prerequisites (SLB9670 TPM HAT, serial console) are those of
 | compute | `rpi5/compute.yaml` | **Experimental**: builds, loads and validates; TPM, console and Ethernet unvalidated on a Pi 5 ([below](#raspberry-pi-5-experimental)) |
 | control-plane | `cm4/control-plane.yaml` | Builds; loads and validates against the reference network; standalone, no hardware run yet ([below](#control-plane)) |
 | control-plane | `rpi4/control-plane.yaml` | As `cm4`, for a Pi 4 Model B |
+| control-plane | `rpi5/control-plane.yaml` | **Experimental**: as `rpi4`, for a Pi 5; builds, loads and validates; TPM, console and Ethernet unvalidated on a Pi 5 ([below](#raspberry-pi-5-experimental)) |
 | gateway | none | Not supported on a one-port Pi (below) |
 
 ## What `rpi4/compute.yaml` changes against `supermicro/x10/compute.yaml`
@@ -170,6 +172,11 @@ comments on what is unvalidated. It does not carry the compute VM packages.
 Every other row of the x10 table above is the same. The image builder knows the board (`pkg/diskimage/rpi`, model `rpi5`:
 `bcm2712-rpi-5-b.dtb`, `Experimental`).
 
+`rpi5/control-plane.yaml` is `rpi4/control-plane.yaml` with the same board
+changes: `hardware-model` and `tpm.idevid.model` `Raspberry Pi 5`, the serial
+`rpi5-cp-01`, and the same comments on what is unvalidated. Everything below
+applies to both Pi 5 templates.
+
 What the Pi 5 has, as built:
 
 - **No VideoCore firmware on the card.** The Pi 5 bootloader EEPROM reads
@@ -232,7 +239,8 @@ translator, `pkg/config/gateway_role.go`) is built for `linux-lts`, not
 
 `cm4/control-plane.yaml` is `supermicro/x10/control-plane.yaml` with the Pi
 rows of the compute table above; `rpi4/control-plane.yaml` is the same file
-for a Pi 4 Model B. Each is a full copy — templates have no include mechanism.
+for a Pi 4 Model B, and `rpi5/control-plane.yaml` for a Pi 5
+([experimental](#raspberry-pi-5-experimental)). Each is a full copy — templates have no include mechanism.
 
 | Key | x10 | cm4 / rpi4 |
 |---|---|---|
@@ -244,7 +252,7 @@ for a Pi 4 Model B. Each is a full copy — templates have no include mechanism.
 | `hardware-manufacturer` / `hardware-model` | unset | `Raspberry Pi` / `Raspberry Pi Compute Module 4` or `Raspberry Pi 4 Model B` |
 | `seal-pcrs` | `[7, 9]` | `[0, 4, 7, 9]` |
 | `tpm.device` | `/dev/tpmrm0` | `/dev/tpmrm0`, the SLB9670 on SPI0 CE1; fails closed if absent |
-| `tpm.idevid` model / serial | `SuperMicro X10` / `sm-cp-01` | the board name / `cm4-cp-01` or `rpi4-cp-01`; override with `/proc/cpuinfo`'s serial |
+| `tpm.idevid` model / serial | `SuperMicro X10` / `sm-cp-01` | the board name / `cm4-cp-01`, `rpi4-cp-01` or `rpi5-cp-01`; override with `/proc/cpuinfo`'s serial |
 
 Everything else is the x10 control plane: `network.role: control-plane`, its
 CA and ACME server, internal and public DNS, NTP serving, attestation

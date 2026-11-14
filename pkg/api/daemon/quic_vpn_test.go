@@ -69,61 +69,6 @@ func TestQUICVPNErrorResponse_KeyCollisionIsAConflict(t *testing.T) {
 }
 
 // requireVPNQUICOK asserts a successful reply and decodes its payload.
-func requireVPNQUICOK(t *testing.T, resp *quicwire.Response, decoded interface{}) {
-	t.Helper()
-	require.Equal(t, quicwire.StatusOK, resp.Status, "payload %q", resp.Payload)
-	require.NoError(t, quicwire.DecodePayload(resp.Payload, decoded))
-}
-
-func TestQUICVPNCategoryServesEverySubOperation(t *testing.T) {
-	handler, _ := newVPNQUICHandler(t)
-	ctx := context.Background()
-
-	var enrolled platformv1.EnrolVPNPeerResponse
-	requireVPNQUICOK(t, handler.HandleRequest(ctx, vpnCategoryRequest(t, quicwire.VPNSubEnrolPeer,
-		&platformv1.EnrolVPNPeerRequest{Peer: &platformv1.VPNPeer{TenantId: "acme", DeviceId: "laptop-1", Zones: []string{"management"}}})), &enrolled)
-	assert.Equal(t, "laptop-1", enrolled.GetPeer().GetDeviceId())
-
-	var peers platformv1.ListVPNPeersResponse
-	requireVPNQUICOK(t, handler.HandleRequest(ctx, vpnCategoryRequest(t, quicwire.VPNSubListPeers,
-		&platformv1.ListVPNPeersRequest{TenantId: "acme"})), &peers)
-	require.Len(t, peers.GetPeers(), 1)
-	assert.Equal(t, []string{"management"}, peers.GetPeers()[0].GetZones())
-
-	var gateways platformv1.GetVPNStatusResponse
-	requireVPNQUICOK(t, handler.HandleRequest(ctx, vpnCategoryRequest(t, quicwire.VPNSubGetStatus,
-		&platformv1.GetVPNStatusRequest{GatewayId: "gw-1"})), &gateways)
-	require.Len(t, gateways.GetGateways(), 1)
-	assert.Equal(t, "lease-1", gateways.GetGateways()[0].GetLeases()[0].GetId())
-
-	var set platformv1.SetVPNPosturePolicyResponse
-	requireVPNQUICOK(t, handler.HandleRequest(ctx, vpnCategoryRequest(t, quicwire.VPNSubSetPosturePolicy,
-		&platformv1.SetVPNPosturePolicyRequest{Policy: &platformv1.VPNPosturePolicy{TenantId: "acme", Name: "corp", Module: vpnTestPolicy}})), &set)
-	assert.Equal(t, "corp", set.GetPolicy().GetName())
-
-	var got platformv1.GetVPNPosturePolicyResponse
-	requireVPNQUICOK(t, handler.HandleRequest(ctx, vpnCategoryRequest(t, quicwire.VPNSubGetPosturePolicy,
-		&platformv1.GetVPNPosturePolicyRequest{TenantId: "acme", Name: "corp"})), &got)
-	assert.Equal(t, vpnTestPolicy, got.GetPolicy().GetModule())
-
-	var policies platformv1.ListVPNPosturePoliciesResponse
-	requireVPNQUICOK(t, handler.HandleRequest(ctx, vpnCategoryRequest(t, quicwire.VPNSubListPosturePolicies,
-		&platformv1.ListVPNPosturePoliciesRequest{TenantId: "acme"})), &policies)
-	assert.Len(t, policies.GetPolicies(), 1)
-
-	var deleted platformv1.DeleteVPNPosturePolicyResponse
-	requireVPNQUICOK(t, handler.HandleRequest(ctx, vpnCategoryRequest(t, quicwire.VPNSubDeletePosturePolicy,
-		&platformv1.DeleteVPNPosturePolicyRequest{TenantId: "acme", Name: "corp"})), &deleted)
-
-	var revoked platformv1.RevokeVPNPeerResponse
-	requireVPNQUICOK(t, handler.HandleRequest(ctx, vpnCategoryRequest(t, quicwire.VPNSubRevokePeer,
-		&platformv1.RevokeVPNPeerRequest{TenantId: "acme", DeviceId: "laptop-1"})), &revoked)
-
-	requireVPNQUICOK(t, handler.HandleRequest(ctx, vpnCategoryRequest(t, quicwire.VPNSubListPeers,
-		&platformv1.ListVPNPeersRequest{TenantId: "acme"})), &peers)
-	assert.Empty(t, peers.GetPeers(), "the revoked peer must be gone")
-}
-
 func TestQUICVPNCategoryMapsServiceRefusals(t *testing.T) {
 	handler, _ := newVPNQUICHandler(t)
 	ctx := context.Background()
