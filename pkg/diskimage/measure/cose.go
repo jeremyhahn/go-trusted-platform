@@ -26,16 +26,6 @@ const TagSignedCoRIM = 18
 // payload, a tagged-unsigned-corim-map.
 const ManifestContentType = "application/rim+cbor"
 
-// The COSE header labels a signed manifest uses: RFC 9052 §3.1, RFC 9360
-// (x5chain) and draft-ietf-rats-corim-11 §4.2 (corim-meta).
-const (
-	headerAlg         = 1
-	headerContentType = 3
-	headerKID         = 4
-	headerCoRIMMeta   = 8
-	headerX5Chain     = 33
-)
-
 // The COSE algorithms (RFC 9053 §2.1, RFC 8230 §2) a manifest can be signed
 // with. The algorithm follows the signing key: an ECDSA P-256, P-384 or P-521
 // key signs ES256, ES384 or ES512, an RSA key of 2048 bits or more PS256.
@@ -85,6 +75,9 @@ func (e *SignatureError) Error() string {
 func (e *SignatureError) Unwrap() error { return e.Err }
 
 type (
+	// protectedHeader's keys are the COSE header labels a signed manifest
+	// uses: alg 1, content type 3 and kid 4 (RFC 9052 §3.1), corim-meta 8
+	// (draft-ietf-rats-corim-11 §4.2) and x5chain 33 (RFC 9360).
 	protectedHeader struct {
 		Alg         int64    `cbor:"1,keyasint"`
 		ContentType string   `cbor:"3,keyasint"`
