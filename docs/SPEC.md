@@ -175,7 +175,6 @@ Each shipped feature has no open release defect:
 - dns: UpdateZone over QUIC at 0x61/0x30, parity with gRPC/REST/MCP (CA m622, m625, m1094).
 - provisioning: E2E provisioning Phases 2 and 3 assert what they report (#372).
 - sdk-javascript: attest response types and test assertions match the declared types (#499, #246).
-- sdn: the SDN integration suite is green on main (#730).
 - secrets: provisioning and secret materialization conform to protected memory (#60).
 - tpm: the TPM multi-protocol suite is green on every transport and in CI (#682); IDevID and IAK are re-keyed to the TCG Template H-0 policy (#581).
 - web: device registration, the profile hostname and the SDN/DNS wire shape agree with the API (#455, #413, #445).

@@ -83,6 +83,7 @@ export {
   ComputeService,
   DeviceService,
   DNSService,
+  NTPService,
   GatewayService,
   IAMService,
   IDevIDService,
@@ -90,6 +91,11 @@ export {
   OverlayService,
   PlatformService,
   PXEService,
+  RegistryService,
+  RegistryHealth,
+  type RegistryStatus,
+  type RegistryTagList,
+  type RegistryComponentHealth,
   SDNService,
   TenantService,
   TPMService,
@@ -132,6 +138,15 @@ export {
   // Identity Services (1)
   QuicBaaSIAMService,
 } from './services/index.js';
+
+export type {
+  NTPStatus,
+  NTPSource,
+  NTSServeNameFinding,
+  GetNTPStatusResponse,
+  ListNTPSourcesResponse,
+  StepNTPClockResponse,
+} from './services/ntp-service.js';
 
 // =============================================================================
 // Error Exports
@@ -995,6 +1010,18 @@ export type {
   GetVTPMInstanceStatusResponse,
   GetVTPMInstanceEKCertResponse,
   GetVTPMInstanceEKFingerprintResponse,
+  VTPMRuntimeStatus,
+  StartBundleResponse,
+  StopBundleResponse,
+  QuoteBundleRequest,
+  QuoteBundleResponse,
+  SealBundleRequest,
+  SealBundleResponse,
+  UnsealBundleRequest,
+  UnsealBundleResponse,
+  ExtendBundlePCRRequest,
+  ExtendBundlePCRResponse,
+  ReadBundlePCRResponse,
 } from './types/vtpm.js';
 
 // VPN types

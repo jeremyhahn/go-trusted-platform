@@ -91,6 +91,12 @@ func (m *mockStorageClient) List(ctx context.Context, entityType, prefix string,
 
 	sort.Strings(keys)
 
+	// Resume at the cursor this mock hands out: the first key of the
+	// next page.
+	if cursor != "" {
+		keys = keys[sort.SearchStrings(keys, cursor):]
+	}
+
 	// Apply limit
 	if limit > 0 && len(keys) > limit {
 		return keys[:limit], keys[limit], true, nil
