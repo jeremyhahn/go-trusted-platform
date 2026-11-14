@@ -145,6 +145,14 @@ func (e ErrNilConfig) Error() string {
 	return "configuration cannot be nil"
 }
 
+// ErrOPANotBuilt is returned by the engine of a build without the opa
+// build tag.
+type ErrOPANotBuilt struct{}
+
+func (e ErrOPANotBuilt) Error() string {
+	return "OPA policy engine not built: rebuild with the opa build tag"
+}
+
 // ErrWatcherNotStarted is returned when operations are attempted on a stopped watcher.
 type ErrWatcherNotStarted struct{}
 
