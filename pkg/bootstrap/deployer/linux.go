@@ -118,7 +118,7 @@ func (d *LinuxDeployer) Deploy(ctx context.Context, config *DeployConfig) (*Depl
 
 	// Copy manifest file.
 	remoteManifest := fmt.Sprintf("%s/manifest.yaml", config.DataDir)
-	if err := client.CopyFileStream(ctx, config.ManifestPath, remoteManifest); err != nil {
+	if err := copySmallFile(ctx, client, config.ManifestPath, remoteManifest); err != nil {
 		return nil, err
 	}
 	d.logger.Info("copied manifest", slog.String("remote_path", remoteManifest))
@@ -167,6 +167,23 @@ func (d *LinuxDeployer) Deploy(ctx context.Context, config *DeployConfig) (*Depl
 		Host:        config.Host,
 		Running:     true,
 	}, nil
+}
+
+// smallFileCopier is the optional RemoteHost capability for copying a
+// small file (manifest, config) in one command. The SSH transport has it
+// (base64 through the shell, no upload subsystem needed on the target);
+// the QUIC agent does not, and streams every file.
+type smallFileCopier interface {
+	CopyFile(ctx context.Context, localPath, remotePath string) error
+}
+
+// copySmallFile copies a small local file to the target with the host's
+// one-command copy when it has one, and streams it otherwise.
+func copySmallFile(ctx context.Context, host RemoteHost, localPath, remotePath string) error {
+	if c, ok := host.(smallFileCopier); ok {
+		return c.CopyFile(ctx, localPath, remotePath)
+	}
+	return host.CopyFileStream(ctx, localPath, remotePath)
 }
 
 // shipOrPullImage makes the configured image available on the remote
