@@ -232,3 +232,35 @@ func TestDeviceGRPCService_PCRBaseline_ReadOnlyRoundTrip(t *testing.T) {
 	assert.True(t, recorded.Equal(again.GetProfile().GetPcrBaseline().GetRecordedAt().AsTime()))
 	assert.Equal(t, "workers-renamed", again.GetProfile().GetName())
 }
+
+// TestDeviceGRPCService_InvalidDICEFields_AreInvalidArgument pins that a
+// malformed dice_device_id or golden_fw_hash is a client error on both
+// CreateProfile and UpdateProfile, not codes.Internal.
+func TestDeviceGRPCService_InvalidDICEFields_AreInvalidArgument(t *testing.T) {
+	ctx := context.Background()
+	svc := NewDeviceGRPCService(newMockDeviceService(), newRealProfileService(t), nil)
+	_, err := svc.CreateProfile(ctx, &platformv1.CreateProfileRequest{Profile: &platformv1.DeviceProfile{
+		Id: 1699, Name: "avr", Role: platformv1.DeviceRole_DEVICE_ROLE_WORKER,
+	}})
+	require.NoError(t, err)
+
+	cases := []struct {
+		name    string
+		profile func(id uint64) *platformv1.DeviceProfile
+	}{
+		{"dice_device_id", func(id uint64) *platformv1.DeviceProfile {
+			return &platformv1.DeviceProfile{Id: id, Name: "avr", Role: platformv1.DeviceRole_DEVICE_ROLE_WORKER, DiceDeviceId: "zz"}
+		}},
+		{"golden_fw_hash", func(id uint64) *platformv1.DeviceProfile {
+			return &platformv1.DeviceProfile{Id: id, Name: "avr", Role: platformv1.DeviceRole_DEVICE_ROLE_WORKER, GoldenFwHash: "aa"}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := svc.CreateProfile(ctx, &platformv1.CreateProfileRequest{Profile: tc.profile(1700)})
+			require.Equal(t, codes.InvalidArgument, status.Code(err), "create: %v", err)
+			_, err = svc.UpdateProfile(ctx, &platformv1.UpdateProfileRequest{Profile: tc.profile(1699)})
+			require.Equal(t, codes.InvalidArgument, status.Code(err), "update: %v", err)
+		})
+	}
+}
