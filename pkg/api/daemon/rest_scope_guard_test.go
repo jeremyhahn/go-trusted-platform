@@ -59,6 +59,7 @@ func TestNewRESTScopeGuard_MTLS_AdmitsTheOperatorCertificate(t *testing.T) {
 	foreign := testutil.GenerateTestTLSBundle(t)
 	config := failClosedConfig()
 	config.EnableMTLS = true
+	config.MTLSPrincipals = operatorPrincipals()
 	config.MTLSClientCAPool = trusted.CAPool
 
 	guard, err := newRESTScopeGuard(config, nil, logging.DefaultLogger())

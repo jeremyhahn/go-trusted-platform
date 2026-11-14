@@ -318,6 +318,7 @@ func TestSelectQUICAuth_MTLS_AuthenticatesByCertificate(t *testing.T) {
 	t.Parallel()
 	config := failClosedConfig()
 	config.EnableMTLS = true
+	config.MTLSPrincipals = operatorPrincipals()
 	bundle := testutil.GenerateTestTLSBundle(t)
 
 	mw, validator, err := selectQUICAuth(config, nil, bundle.CAPool, logging.DefaultLogger())
@@ -375,9 +376,14 @@ func TestSelectQUICAuth_MTLSWithoutClientCAPool_ReturnsTypedError(t *testing.T) 
 
 func newTestMTLSPeerAuthenticator(t *testing.T, roots *x509.CertPool) mtlsPeerAuthenticator {
 	t.Helper()
+	return newTestMTLSPeerAuthenticatorWith(t, roots, operatorPrincipals())
+}
+
+func newTestMTLSPeerAuthenticatorWith(t *testing.T, roots *x509.CertPool, principals CertificatePrincipalResolver) mtlsPeerAuthenticator {
+	t.Helper()
 	adapter, err := auth.NewMTLSAdapterFromRoots(logging.DefaultLogger(), roots)
 	require.NoError(t, err)
-	return mtlsPeerAuthenticator{authenticator: adapter}
+	return mtlsPeerAuthenticator{authenticator: adapter, principals: principals}
 }
 
 func leafOf(t *testing.T, cert tls.Certificate) *x509.Certificate {
@@ -387,18 +393,48 @@ func leafOf(t *testing.T, cert tls.Certificate) *x509.Certificate {
 	return leaf
 }
 
-func TestMTLSPeerAuthenticator_TrustedCertificate_IsTheOperator(t *testing.T) {
+func TestMTLSPeerAuthenticator_TrustedCertificate_ActsAsItsPrincipal(t *testing.T) {
 	t.Parallel()
 	bundle := testutil.GenerateTestTLSBundle(t)
-	peer := newTestMTLSPeerAuthenticator(t, bundle.CAPool)
+	principals := &stubCertificatePrincipals{principal: &CertificatePrincipal{
+		Subject: "u-client", TenantID: "Test Platform Client", Roles: []string{"signer"}, Scopes: []string{"piv:sign"},
+	}}
+	peer := newTestMTLSPeerAuthenticatorWith(t, bundle.CAPool, principals)
 
 	authCtx, err := peer.AuthenticatePeer(context.Background(), []*x509.Certificate{leafOf(t, bundle.ClientCert), bundle.CACert})
 	require.NoError(t, err)
-	assert.Equal(t, "test-client", authCtx.Subject)
+	require.Len(t, principals.asked, 1)
+	assert.Equal(t, "test-client", principals.asked[0].ID, "the principal is resolved from the certificate's identity")
+	assert.Equal(t, "Test Platform Client", principals.asked[0].TenantID)
+	assert.Equal(t, "u-client", authCtx.Subject)
 	assert.Equal(t, "test-client", authCtx.Username)
 	assert.Equal(t, "Test Platform Client", authCtx.TenantID)
-	assert.True(t, authCtx.HasScope("piv:sign"), "an operator certificate holds every scope, as on gRPC and REST")
-	assert.True(t, authCtx.HasScope("ceremony:init"))
+	assert.Equal(t, []string{"signer"}, authCtx.Roles)
+	assert.True(t, authCtx.HasScope("piv:sign"), "the principal's own permission is granted")
+	assert.False(t, authCtx.HasScope("ceremony:init"), "a verified certificate is not every scope (#1107)")
+}
+
+func TestMTLSPeerAuthenticator_UnresolvedPrincipal_IsRefused(t *testing.T) {
+	t.Parallel()
+	bundle := testutil.GenerateTestTLSBundle(t)
+	chain := []*x509.Certificate{leafOf(t, bundle.ClientCert), bundle.CACert}
+
+	refused := ErrCertificatePrincipalUnresolved{Reason: "IAM holds no principal for the certificate"}
+	for name, principals := range map[string]CertificatePrincipalResolver{
+		"no resolver":      nil,
+		"no IAM principal": &stubCertificatePrincipals{err: refused},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			peer := newTestMTLSPeerAuthenticatorWith(t, bundle.CAPool, principals)
+
+			authCtx, err := peer.AuthenticatePeer(context.Background(), chain)
+
+			require.Error(t, err)
+			assert.Nil(t, authCtx, "a certificate without a principal is never admitted with a default grant")
+			assert.True(t, errors.As(err, &ErrCertificatePrincipalUnresolved{}), "error is %T", err)
+		})
+	}
 }
 
 func TestMTLSPeerAuthenticator_UntrustedCertificate_ReturnsError(t *testing.T) {

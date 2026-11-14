@@ -280,6 +280,7 @@ func TestQUICServerMTLS_SharesTheAuthenticatorsPool(t *testing.T) {
 	config := DefaultConfig()
 	config.SkipIAMValidation = false
 	config.EnableMTLS = true
+	config.MTLSPrincipals = operatorPrincipals()
 	config.MTLSClientCAFile = caFile
 
 	pool, err := resolveMTLSClientCAPool(config, transportQUIC)

@@ -341,6 +341,17 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	if iamService != nil {
 		iamPEP = iamService.PEP()
 	}
+	// A client certificate acts as its IAM principal, with that principal's
+	// permissions, on QUIC, REST and MCP (#1107).
+	if config.MTLSPrincipals == nil && iamService != nil {
+		if client := iamService.Client(); client != nil {
+			principals, principalsErr := newIAMCertificatePrincipals(client.User(), client.Role())
+			if principalsErr != nil {
+				return nil, principalsErr
+			}
+			config.MTLSPrincipals = principals
+		}
+	}
 
 	// Build the shared broker platform-token validator once when configured. It
 	// is reused across the gRPC, QUIC, and MCP inbound transports so all of them

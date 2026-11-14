@@ -120,6 +120,7 @@ func appServicesRESTHandler(t *testing.T, servers appServiceServers) http.Handle
 	bundle := testutil.GenerateTestTLSBundle(t)
 	config := failClosedConfig()
 	config.EnableMTLS = true
+	config.MTLSPrincipals = operatorPrincipals()
 	config.MTLSClientCAPool = bundle.CAPool
 	guard, err := newRESTScopeGuard(config, nil, logging.DefaultLogger())
 	require.NoError(t, err)

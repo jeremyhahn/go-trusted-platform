@@ -1240,7 +1240,7 @@ been fixed.
 
 | # | Where (file:line) | What it decides | Replaced by |
 |---|---|---|---|
-| A1 | `pkg/api/daemon/transport_auth.go:237`, `:259` (`mtlsOperatorScope`, `mtlsPeerAuthenticator.AuthenticatePeer`) | Every caller with a verified client certificate gets `*:*` on QUIC, REST and MCP | `IAMPEPClient.Check` (`sdk/go`, alias of `client/iam.PEPClient`) for the certificate's principal |
+| A1 | `pkg/api/daemon/transport_auth.go` (`mtlsPeerAuthenticator.AuthenticatePeer`), `mtls_principal.go` | **Fixed (#1107).** A verified client certificate no longer gets `*:*` on QUIC, REST and MCP: it acts as the IAM user it names in its tenant, with the permissions of that user's roles, and is refused when IAM holds no active principal for it | `IAMPEPClient.Check` (`sdk/go`, alias of `client/iam.PEPClient`) per operation, once the transports take a decision point |
 | A2 | `pkg/api/daemon/mtls_interceptor.go:75`, `:101` | The gRPC mTLS interceptors authenticate the caller and then call the handler, with no per-method check | `IAMPEPClient.Check` per method |
 | A3 | `pkg/api/quic/auth.go:281-304` (`AuthorizeRequest`) | Allows an operation whose scope is empty (`:288-289`), and every request when no checker is wired (`:303-304`) | `IAMPEPClient.Check`. Deny when no decision point is wired |
 | A4 | `pkg/api/grpc/method_permissions.go:54` (`preAuthMethods`), `:113` (`buildGRPCMethodPermissions`) | The platform's own gRPC method → `resource:action` catalogue | No SDK surface yet: per-method declarations in an API module, like `ModuleMCPToolPermissions` (`ModuleGRPCPublicMethods` lists only the public methods) |
