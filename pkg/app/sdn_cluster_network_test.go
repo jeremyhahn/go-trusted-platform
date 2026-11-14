@@ -15,6 +15,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"path/filepath"
@@ -128,4 +129,84 @@ func TestInitSDN_SkipsLinksAlreadyUp(t *testing.T) {
 	require.NoError(t, a.initSDN(context.Background()))
 	assert.Equal(t, 1, *bridge, "bridge created once")
 	assert.Len(t, *assigned, before, "no address assigned twice")
+}
+
+// TestInitClusterNetwork_FailedZoneAddressRetried: a zone address that fails
+// to assign leaves the links marked down, so initSDN sets them up again and
+// the raft-address lands on the retry.
+func TestInitClusterNetwork_FailedZoneAddressRetried(t *testing.T) {
+	a := zoneAddressApp(t)
+	a.NetworkConfig.Bonds[0].Mode = "balance-tcp"
+	a.QuicBaaSConfig = &quicbaas.Config{
+		NodeID:        1,
+		RaftAddress:   "10.4.6.10:63000",
+		JoinAddresses: []string{"1=10.4.6.10:63000", "2=10.4.6.11:63000", "3=10.4.6.12:63000"},
+	}
+	bridge := stubOVSBridge(t)
+	stubZonePorts(t, newFakeZonePorts())
+	assigned := stubBridgeNetlink(t)
+	stubProbe(t, func(context.Context, string, net.IP) error { return nil })
+
+	ok := assignBridgeAddrFn
+	assignBridgeAddrFn = func(context.Context, string, string) error {
+		return errors.New("netlink: address assignment refused")
+	}
+	require.NoError(t, a.initClusterNetwork(context.Background()))
+	assert.False(t, a.sdnLinksUp, "links marked up after a failed zone address")
+	assert.Empty(t, *assigned)
+
+	assignBridgeAddrFn = ok
+	require.NoError(t, a.initSDN(context.Background()))
+	assert.Equal(t, 2, *bridge, "initSDN retried the link setup")
+	assert.True(t, a.sdnLinksUp)
+	assert.True(t, raftHostAssigned(t, *assigned, a.QuicBaaSConfig.RaftAddress), "%v", *assigned)
+}
+
+// TestInitLinkSetupErrors: the bond and zone-address helpers report each
+// failed item instead of swallowing it.
+func TestInitLinkSetupErrors(t *testing.T) {
+	a := zoneAddressApp(t)
+	stubOVSBridge(t)
+	stubZonePorts(t, newFakeZonePorts())
+	stubBridgeNetlink(t)
+	stubProbe(t, func(context.Context, string, net.IP) error { return nil })
+	setBridgeUpFn = func(context.Context, string) error { return errors.New("link down") }
+
+	err := a.initZoneAddresses(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "link down")
+	assert.ErrorAs(t, a.initSDNLinks(context.Background()), new(ErrSDNLinkSetup))
+	assert.False(t, a.sdnLinksUp)
+}
+
+// TestInitNetworkAndStores_RaftAddressUpAtDatastoreStart drives Init's
+// datastore boundary: when the datastore starts, the clustered node's
+// raft-address is already on its zone port. Running initStores before
+// initClusterNetwork fails this test.
+func TestInitNetworkAndStores_RaftAddressUpAtDatastoreStart(t *testing.T) {
+	a := zoneAddressApp(t)
+	a.NetworkConfig.Bonds[0].Mode = "balance-tcp"
+	a.QuicBaaSConfig = &quicbaas.Config{
+		NodeID:        1,
+		RaftAddress:   "10.4.6.10:63000",
+		JoinAddresses: []string{"1=10.4.6.10:63000", "2=10.4.6.11:63000", "3=10.4.6.12:63000"},
+	}
+	stubOVSBridge(t)
+	stubZonePorts(t, newFakeZonePorts())
+	assigned := stubBridgeNetlink(t)
+	stubProbe(t, func(context.Context, string, net.IP) error { return nil })
+
+	started := false
+	original := initStoresFn
+	initStoresFn = func(app *App) error {
+		started = true
+		assert.True(t, raftHostAssigned(t, *assigned, app.QuicBaaSConfig.RaftAddress),
+			"datastore started before raft-address %s was assigned (assigned %v)",
+			app.QuicBaaSConfig.RaftAddress, *assigned)
+		return nil
+	}
+	t.Cleanup(func() { initStoresFn = original })
+
+	require.NoError(t, a.initNetworkAndStores(context.Background()))
+	assert.True(t, started, "datastore never started")
 }
