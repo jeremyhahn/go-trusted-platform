@@ -31,21 +31,24 @@ type testPCRValueData struct {
 }
 
 type testHostAttestationData struct {
-	QuoteData     []byte             `codec:"quote_data"`
-	PCRs          []testPCRValueData `codec:"pcrs"`
-	Timestamp     int64              `codec:"timestamp"`
-	HashAlgorithm string             `codec:"hash_algorithm"`
+	QuoteData      []byte             `codec:"quote_data"`
+	PCRs           []testPCRValueData `codec:"pcrs"`
+	Timestamp      int64              `codec:"timestamp"`
+	TimestampNanos int64              `codec:"timestamp_nanos"`
+	HashAlgorithm  string             `codec:"hash_algorithm"`
 }
 
 type testVMAttestationData struct {
-	VMID      string `codec:"vm_id"`
-	HostID    string `codec:"host_id"`
-	Timestamp int64  `codec:"timestamp"`
+	VMID           string `codec:"vm_id"`
+	HostID         string `codec:"host_id"`
+	Timestamp      int64  `codec:"timestamp"`
+	TimestampNanos int64  `codec:"timestamp_nanos"`
 }
 
 type testContainerAttestData struct {
-	ContainerID string `codec:"container_id"`
-	Timestamp   int64  `codec:"timestamp"`
+	ContainerID    string `codec:"container_id"`
+	Timestamp      int64  `codec:"timestamp"`
+	TimestampNanos int64  `codec:"timestamp_nanos"`
 }
 
 type testManifestData struct {
@@ -100,15 +103,19 @@ func (s *manifestSender) SendRequest(_ context.Context, opcode byte, payload []b
 			TimestampNanos: 123456789,
 			Nonce:          []byte{1, 2},
 			Host: &testHostAttestationData{
-				QuoteData:     []byte{9},
-				PCRs:          []testPCRValueData{{Index: 7, Value: []byte{5}, Algorithm: "sha256"}},
-				Timestamp:     1700000100,
-				HashAlgorithm: "sha256",
+				QuoteData:      []byte{9},
+				PCRs:           []testPCRValueData{{Index: 7, Value: []byte{5}, Algorithm: "sha256"}},
+				Timestamp:      1700000100,
+				TimestampNanos: 111111111,
+				HashAlgorithm:  "sha256",
 			},
-			VMs:        []testVMAttestationData{{VMID: "vm-1", HostID: "host-a", Timestamp: 1700000200}},
-			Containers: []testContainerAttestData{{ContainerID: "c-1"}},
-			Signature:  []byte{3, 4},
-			Version:    "1",
+			VMs: []testVMAttestationData{{VMID: "vm-1", HostID: "host-a", Timestamp: 1700000200, TimestampNanos: 222222222}},
+			Containers: []testContainerAttestData{
+				{ContainerID: "c-1"},
+				{ContainerID: "c-2", Timestamp: 1700000300, TimestampNanos: 333333333},
+			},
+			Signature: []byte{3, 4},
+			Version:   "1",
 		},
 		Timestamp: 1700000300,
 	})
@@ -145,7 +152,7 @@ func TestGetManifestOverQUIC(t *testing.T) {
 		t.Fatalf("manifest timestamp = %v, want %v", got, want)
 	}
 	h := m.GetHost()
-	if h.GetTimestamp().AsTime().Unix() != 1700000100 || string(h.GetQuoteData()) != "\x09" ||
+	if !h.GetTimestamp().AsTime().Equal(time.Unix(1700000100, 111111111)) || string(h.GetQuoteData()) != "\x09" ||
 		h.GetHashAlgorithm() != platformv1.AttestationHashAlgorithm_ATTESTATION_HASH_ALGORITHM_SHA256 {
 		t.Fatalf("host attestation = %+v", h)
 	}
@@ -153,12 +160,17 @@ func TestGetManifestOverQUIC(t *testing.T) {
 		h.GetPcrs()[0].GetAlgorithm() != platformv1.AttestationHashAlgorithm_ATTESTATION_HASH_ALGORITHM_SHA256 {
 		t.Fatalf("host pcrs = %+v", h.GetPcrs())
 	}
+	// Nested evidence keeps its sub-second time (#1686, Codex round 5).
 	if len(m.GetVms()) != 1 || m.GetVms()[0].GetVmId() != "vm-1" ||
-		m.GetVms()[0].GetTimestamp().AsTime().Unix() != 1700000200 {
+		!m.GetVms()[0].GetTimestamp().AsTime().Equal(time.Unix(1700000200, 222222222)) {
 		t.Fatalf("vms = %+v", m.GetVms())
 	}
-	if len(m.GetContainers()) != 1 || m.GetContainers()[0].GetContainerId() != "c-1" ||
+	if len(m.GetContainers()) != 2 || m.GetContainers()[0].GetContainerId() != "c-1" ||
 		m.GetContainers()[0].GetTimestamp() != nil {
 		t.Fatalf("containers = %+v", m.GetContainers())
+	}
+	if c := m.GetContainers()[1]; c.GetContainerId() != "c-2" ||
+		!c.GetTimestamp().AsTime().Equal(time.Unix(1700000300, 333333333)) {
+		t.Fatalf("container c-2 = %+v", c)
 	}
 }
