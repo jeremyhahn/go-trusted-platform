@@ -24,6 +24,7 @@ import (
 type DatapathPeers interface {
 	InstallVPNPeer(ctx context.Context, req *ipcv1.InstallVPNPeerRequest) (*ipcv1.InstallVPNPeerResponse, error)
 	RemoveVPNPeer(ctx context.Context, req *ipcv1.RemoveVPNPeerRequest) (*ipcv1.RemoveVPNPeerResponse, error)
+	ReconcileVPNPeers(ctx context.Context, req *ipcv1.ReconcileVPNPeersRequest) (*ipcv1.ReconcileVPNPeersResponse, error)
 }
 
 // DatapathPlane is the DataPlane of a process that does not own the plane:
@@ -69,6 +70,20 @@ func (p *DatapathPlane) RemovePeer(ctx context.Context, leaseID LeaseID) error {
 		return &ErrDataPlaneUnavailable{Kind: p.kind, Cause: err}
 	}
 	return errorOfRefusal(p.kind, leaseID, resp.GetRefusal())
+}
+
+// ReconcilePeers asks the datapath child to remove every peer of the plane
+// whose lease is not in keep.
+func (p *DatapathPlane) ReconcilePeers(ctx context.Context, keep []LeaseID) error {
+	ids := make([]string, 0, len(keep))
+	for _, id := range keep {
+		ids = append(ids, string(id))
+	}
+	resp, err := p.peers.ReconcileVPNPeers(ctx, &ipcv1.ReconcileVPNPeersRequest{DataPlane: string(p.kind), LeaseIds: ids})
+	if err != nil {
+		return &ErrDataPlaneUnavailable{Kind: p.kind, Cause: err}
+	}
+	return errorOfRefusal(p.kind, "", resp.GetRefusal())
 }
 
 // peerOf is the wire form of lease for the plane of kind.

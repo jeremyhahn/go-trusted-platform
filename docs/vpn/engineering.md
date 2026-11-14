@@ -2,7 +2,7 @@
 
 > **Status: NORMATIVE** · Scope: `pkg/sdn/gateway/services/vpn`, `pkg/sdn/gateway/ipc`, `pkg/sdn/tunnel`, `pkg/vpn` · Last verified: 2026-10-16
 > Conflicts with this document are defects. Fix them here first.
-> Partial today: the core (#584 PR 1), both data planes (#584 PR 2), the gateway service and the operator control plane (#584 PR 3) exist; the control-plane lease record and the gateway's projection of it exist (§6); the admission listener (#557), its wire contract and the client agent core (`pkg/vpn/agent`) exist; the JS SDK client and the web page (#584 PR 4) exist, and so do `platformctl vpn connect [--foreground]|disconnect|lease|posture|renew` and their exit codes; the client presents the host's TPM device identity (`TPMDevice`, `OpenHostDevice`), renews its lease with fresh evidence (`Agent.Renew`, `Agent.KeepAlive`) and brings up the leased data plane, WireGuard (`!fips`) or MASQUE CONNECT-IP; the client signs the fido2 person factor (`FIDO2Signer`), while the PIV signer waits on the SDK (§1). The datapath child's peer RPCs, its plane host and the process client that reaches it exist (#584); the gatewayd runtime assembly that wires them is planned (§1).
+> Partial today: the core (#584 PR 1), both data planes (#584 PR 2), the gateway service and the operator control plane (#584 PR 3) exist; the control-plane lease record and the gateway's projection of it exist (§6); the admission listener (#557), its wire contract and the client agent core (`pkg/vpn/agent`) exist; the JS SDK client and the web page (#584 PR 4) exist, and so do `platformctl vpn connect [--foreground]|disconnect|lease|posture|renew` and their exit codes; the client presents the host's TPM device identity (`TPMDevice`, `OpenHostDevice`), renews its lease with fresh evidence (`Agent.Renew`, `Agent.KeepAlive`) and brings up the leased data plane, WireGuard (`!fips`) or MASQUE CONNECT-IP; the client signs the fido2 person factor (`FIDO2Signer`), while the PIV signer waits on the SDK (§1). The datapath child's peer RPCs, its plane host and the process client that reaches it exist (#584); the kernel-class datapath child of `gatewayd serve` now hosts them when `management_vpn` is enabled: `serveProcess` builds the planes from its plane factory, wraps them in `vpn.NewPlaneHost`, starts them before `Listen`, hands them to `SetVPNPlanes` and stops them with the child (#1698). In `!fips` builds the factory builds the WireGuard hub plane from `wireguard.key-ref` and `wireguard.address` (§5), with the hub key resolved through the host's secret resolver; while either key is unset, or under `fips`, it builds none and peer RPCs are still refused. The MASQUE plane in the datapath child and the `FactorVerifier` are planned (§1).
 > Identifiers below are either real today (grepped) or marked *(planned)*. A
 > planned name is a requirement for the implementing PR, not a claim.
 > Feature folder: [architecture.md](architecture.md) · engineering (this file) ·
@@ -217,6 +217,8 @@ planes from them is the planned `VPNRuntime` row in §1.
 | `listener` | `{bind-host, port}` | `""`, `4433` | admission listener, mTLS-only; the host-filter inventory learns it from here |
 | `data-planes` | list of `wireguard \| masque` | `[masque]` | `wireguard` refused under `fips` |
 | `wireguard.listen-port` | int | `51820` when `wireguard` is offered | 1-65535. `!fips` only: set without `wireguard` in `data-planes` (always so under `fips`) it is refused |
+| `wireguard.key-ref` | string (secret reference) | none | The secret reference the host's secret resolver turns into the hub's 32-byte private key; the configuration never carries the key. `!fips` only: the datapath builds no WireGuard plane while it is unset |
+| `wireguard.address` | prefix | none | The hub's pool gateway prefix on its interface (for example `100.64.0.1/24`). `!fips` only: the datapath builds no WireGuard plane while it is unset |
 | `masque.template` | string | required when `masque` is offered | RFC 9484 §3 URI template: an absolute `https` URL with a host and a path. IP flow forwarding (`{target}`/`{ipproto}` variables) is not offered: the proxy carries whole IP packets, so the template takes no variables |
 | `masque.routes` | prefixes | required when `masque` is offered | Advertised to an admitted client as RFC 9484 §4.6 address ranges. At least one is required — a client may send only to an advertised range, so a session with no route can carry nothing |
 | `pool` | IPAM pool name | required | `Allocator.GetPoolByName` |
@@ -235,6 +237,8 @@ is an `*ErrInvalidConfig` naming the key:
 | `Field` | Cause |
 |---|---|
 | `wireguard.listen-port` | set while `wireguard` is not offered (every `fips` build), or outside 1-65535 |
+| `wireguard.key-ref` | set while `wireguard` is not offered (every `fips` build) |
+| `wireguard.address` | set while `wireguard` is not offered (every `fips` build) |
 | `masque` | `masque.template` or `masque.routes` set while `masque` is not offered |
 | `masque.template` | missing; not a URI template; has variables; not an absolute `https` URL with a host; no path (RFC 9484 §3) |
 | `masque.routes` | empty, or a prefix that is not valid (RFC 9484 §4.6) |

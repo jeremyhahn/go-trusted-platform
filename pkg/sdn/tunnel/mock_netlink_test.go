@@ -83,7 +83,7 @@ func (m *mockNetlinkOps) LinkAdd(link vnl.Link) error {
 	defer m.mu.Unlock()
 	name := link.Attrs().Name
 	if _, ok := m.links[name]; ok {
-		return errors.New("file exists")
+		return syscall.EEXIST
 	}
 	m.links[name] = link
 	return nil
@@ -140,9 +140,23 @@ func (m *mockNetlinkOps) LinkByName(name string) (vnl.Link, error) {
 	defer m.mu.Unlock()
 	link, ok := m.links[name]
 	if !ok {
-		return nil, errors.New("Link not found")
+		return nil, mockLinkNotFound{}
 	}
 	return link, nil
+}
+
+// mockLinkNotFound is the mock's link-not-found result: it reads as the
+// netlink library's typed vnl.LinkNotFoundError, as the kernel's does.
+type mockLinkNotFound struct{}
+
+func (mockLinkNotFound) Error() string { return "Link not found" }
+
+func (mockLinkNotFound) As(target any) bool {
+	p, ok := target.(*vnl.LinkNotFoundError)
+	if ok {
+		*p = vnl.LinkNotFoundError{}
+	}
+	return ok
 }
 
 func (m *mockNetlinkOps) AddrAdd(link vnl.Link, addr *vnl.Addr) error {

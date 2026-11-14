@@ -49,6 +49,7 @@ type Node interface {
 type VPNPlanes interface {
 	InstallVPNPeer(ctx context.Context, req *ipcv1.InstallVPNPeerRequest) *ipcv1.InstallVPNPeerResponse
 	RemoveVPNPeer(ctx context.Context, req *ipcv1.RemoveVPNPeerRequest) *ipcv1.RemoveVPNPeerResponse
+	ReconcileVPNPeers(ctx context.Context, req *ipcv1.ReconcileVPNPeersRequest) *ipcv1.ReconcileVPNPeersResponse
 }
 
 // vpnPlanes boxes a VPNPlanes for Server's atomic pointer.
@@ -275,4 +276,13 @@ func (s *Server) RemoveVPNPeer(ctx context.Context, req *ipcv1.RemoveVPNPeerRequ
 		return &ipcv1.RemoveVPNPeerResponse{Refusal: noVPNPlanes()}, nil
 	}
 	return planes.host.RemoveVPNPeer(ctx, req), nil
+}
+
+// ReconcileVPNPeers implements DatapathService through the hosted VPN planes.
+func (s *Server) ReconcileVPNPeers(ctx context.Context, req *ipcv1.ReconcileVPNPeersRequest) (*ipcv1.ReconcileVPNPeersResponse, error) {
+	planes := s.vpn.Load()
+	if planes == nil {
+		return &ipcv1.ReconcileVPNPeersResponse{Refusal: noVPNPlanes()}, nil
+	}
+	return planes.host.ReconcileVPNPeers(ctx, req), nil
 }

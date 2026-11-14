@@ -454,6 +454,9 @@ type fakeLauncher struct {
 	// listenGate, when set, makes the next child listen only once it is
 	// closed; see deferNextListen.
 	listenGate chan struct{}
+	// startErrors, keyed by process name, is the Gateway.Start failure
+	// every child of that process launched from now on reports in Status.
+	startErrors map[string]error
 	// events is an ordered log of what the supervisor did to its children,
 	// so a test can assert the ORDER of a signal and a cancellation rather
 	// than only that both happened.
@@ -542,6 +545,9 @@ func (l *fakeLauncher) Launch(ctx context.Context, spec Spec) (Child, error) {
 	server := ipc.NewServer(node, ipc.Policy{ControlUIDs: []uint32{uid}, DatapathUIDs: []uint32{uid}})
 	socket := spec.Socket
 	l.mu.Lock()
+	if startErr := l.startErrors[spec.Definition.Name]; startErr != nil {
+		server.SetStartError(startErr)
+	}
 	mute := l.mute
 	l.mu.Unlock()
 	if mute {
@@ -1568,6 +1574,123 @@ func TestApply_TheVPNChildIsGivenTheDocumentAtStartAndOnEveryApply(t *testing.T)
 	assert.Equal(t, "v2", state.Version, "the datapath child's state is the one reported")
 	assert.Equal(t, []string{"v1", "v2"}, vpn.appliedVersions())
 	assert.Equal(t, []string{"v1", "v2"}, datapath.appliedVersions())
+}
+
+func TestRelaunch_ADatapathRestartRelaunchesTheVPNSoItsLeasesAreReinstalled(t *testing.T) {
+	// The VPN's peers live in the planes hosted by the datapath child, so a
+	// datapath crash takes them with it. The vpn child reinstalls its stored
+	// leases (Restore) only when it starts, so the supervisor relaunches it
+	// after the datapath, and it is reported up only once that start is done.
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) { c.RestartBackoff = time.Millisecond })
+	ctx := testContext(t)
+	startDatapath(t, ctx, supervisor, launcher, "v1")
+	datapathChild := launcher.lastChild()
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceManagementVPN))
+	vpnChild := launcher.lastChild()
+	vpn := launcher.node("vpn", nil)
+
+	datapathChild.exit(errors.New("signal: killed"))
+	awaitRelaunch(t, supervisor, launcher, "datapath", 3)
+	awaitRelaunch(t, supervisor, launcher, "vpn", 4)
+
+	assert.Contains(t, vpnChild.signalled(), os.Signal(syscall.SIGTERM),
+		"the vpn child whose peers went with the datapath is stopped")
+	assert.Equal(t, []string{"v1", "v1"}, vpn.appliedVersions(),
+		"the relaunched vpn child is given the document before it is reported up")
+	require.NoError(t, supervisor.ServiceHealth(gateway.ServiceManagementVPN))
+	require.NoError(t, supervisor.ServiceHealth(gateway.ServiceNAT))
+}
+
+func TestRelaunch_AVPNRelaunchWhoseServiceFailsToStartIsRetried(t *testing.T) {
+	// The vpn child relaunched after a datapath crash answers its socket,
+	// but its start failed (it could not fetch its lease projection during
+	// a control-plane outage) and its VPN service is inactive. That is not
+	// a recovery: the supervisor stops it and relaunches it again, and the
+	// VPN comes up once the dependency is back.
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) { c.RestartBackoff = time.Millisecond })
+	ctx := testContext(t)
+	startDatapath(t, ctx, supervisor, launcher, "v1")
+	datapathChild := launcher.lastChild()
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceManagementVPN))
+	vpn := launcher.node("vpn", nil)
+
+	launcher.mu.Lock()
+	launcher.startErrors = map[string]error{"vpn": errors.New("vpn: lease projection: control plane unavailable")}
+	launcher.mu.Unlock()
+	vpn.setHealth(gateway.ServiceManagementVPN, false, nil)
+
+	datapathChild.exit(errors.New("signal: killed"))
+	awaitRelaunch(t, supervisor, launcher, "datapath", 3)
+	require.Eventually(t, func() bool {
+		launcher.mu.Lock()
+		if len(launcher.children) < 4 {
+			launcher.mu.Unlock()
+			return false
+		}
+		relaunched := launcher.children[3]
+		launcher.mu.Unlock()
+		for _, sig := range relaunched.signalled() {
+			if sig == os.Signal(syscall.SIGTERM) {
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, 10*time.Millisecond, "the relaunched vpn child whose service failed to start is stopped")
+
+	// The control plane is back.
+	launcher.mu.Lock()
+	launcher.startErrors = nil
+	launcher.mu.Unlock()
+	vpn.setHealth(gateway.ServiceManagementVPN, true, nil)
+
+	require.Eventually(t, func() bool {
+		return supervisor.ServiceHealth(gateway.ServiceManagementVPN) == nil
+	}, 5*time.Second, 10*time.Millisecond, "the vpn child is relaunched again and comes up")
+	launcher.mu.Lock()
+	launches := len(launcher.children)
+	launcher.mu.Unlock()
+	assert.GreaterOrEqual(t, launches, 5, "the vpn child is relaunched after the failed start")
+}
+
+func TestRelaunch_ADatapathCrashDuringTheVPNRelaunchRelaunchesTheVPNAgain(t *testing.T) {
+	// The datapath crashes again while the vpn child it caused to relaunch
+	// is still starting: that start may already have restored its leases
+	// into the datapath that is gone. The vpn child is relaunched once more
+	// after its start completes, so its leases reach the fresh hub.
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) { c.RestartBackoff = time.Millisecond })
+	ctx := testContext(t)
+	startDatapath(t, ctx, supervisor, launcher, "v1")
+	datapathChild := launcher.lastChild()
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceManagementVPN))
+	vpn := launcher.node("vpn", nil)
+
+	// Hold the relaunched vpn child's start mid-flight: its readiness
+	// answer, which a real vpn child gives once its Restore is done.
+	restore := newHeldCall()
+	vpn.mu.Lock()
+	vpn.holdStatus = restore
+	vpn.mu.Unlock()
+	datapathChild.exit(errors.New("signal: killed"))
+	secondDatapath := awaitRelaunch(t, supervisor, launcher, "datapath", 3)
+	restore.awaitEntered(t, ctx)
+
+	// The fresh datapath crashes while that vpn start is held.
+	secondDatapath.exit(errors.New("signal: killed"))
+	awaitRelaunch(t, supervisor, launcher, "datapath", 5)
+	close(restore.release)
+
+	awaitRelaunch(t, supervisor, launcher, "vpn", 6)
+	require.Eventually(t, func() bool {
+		return supervisor.ServiceHealth(gateway.ServiceManagementVPN) == nil
+	}, 5*time.Second, 10*time.Millisecond, "the vpn child is reported up after its second relaunch")
+	assert.Equal(t, []string{"v1", "v1", "v1"}, vpn.appliedVersions(),
+		"each vpn start restores the document, the last one into the third datapath")
+}
+
+func TestClassTable_OnlyTheVPNFollowsTheDatapath(t *testing.T) {
+	for _, def := range Definitions() {
+		assert.Equalf(t, def.Name == "vpn", def.FollowsDatapath, "process %q", def.Name)
+	}
 }
 
 func TestApply_AVPNChildFailureIsJoinedToTheDatapathState(t *testing.T) {

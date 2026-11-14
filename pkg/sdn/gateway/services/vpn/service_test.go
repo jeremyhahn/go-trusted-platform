@@ -103,6 +103,15 @@ allow-to: [management]
 		cfg.WireGuard.ListenPort = 51821
 		assertInvalidField(t, cfg.WithDefaults().Validate(), "wireguard.listen-port")
 	})
+	t.Run("a wireguard key-ref or address on a masque-only gateway is refused", func(t *testing.T) {
+		cfg := testConfig()
+		cfg.WireGuard.KeyRef = "secret://vpn/hub-key"
+		assertInvalidField(t, cfg.WithDefaults().Validate(), "wireguard.key-ref")
+
+		cfg = testConfig()
+		cfg.WireGuard.Address = netip.MustParsePrefix("10.99.0.1/24")
+		assertInvalidField(t, cfg.WithDefaults().Validate(), "wireguard.address")
+	})
 	t.Run("an invalid route in YAML is refused", func(t *testing.T) {
 		var cfg Config
 		err := yaml.Unmarshal([]byte("masque:\n  routes: [not-a-prefix]\n"), &cfg)

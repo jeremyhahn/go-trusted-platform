@@ -17,10 +17,13 @@ package tunnel
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/netip"
 	"sync"
+	"syscall"
 
 	vnl "github.com/vishvananda/netlink"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
@@ -121,6 +124,12 @@ func (h *WireGuardHub) Up(ctx context.Context) error {
 	if h.up {
 		return nil
 	}
+	// A predecessor that exited without Down leaves its device, and every
+	// peer on it, in the kernel. Remove it before the key is resolved, so
+	// a key-store failure cannot leave those peers accepting traffic.
+	if err := h.removeStale(); err != nil {
+		return &ErrTunnelCreateFailed{Name: h.cfg.Name, Cause: err}
+	}
 	key, err := fetchKey(ctx, h.keys, h.cfg.Name, h.cfg.KeyRef, wireGuardKeyLen)
 	if err != nil {
 		return err
@@ -138,7 +147,7 @@ func (h *WireGuardHub) Up(ctx context.Context) error {
 		h.wg = ops
 	}
 	link := &vnl.Wireguard{LinkAttrs: vnl.LinkAttrs{Name: h.cfg.Name, MTU: h.cfg.effectiveMTU()}}
-	if err := h.nl.LinkAdd(link); err != nil {
+	if err := h.addLink(link); err != nil {
 		return &ErrTunnelCreateFailed{Name: h.cfg.Name, Cause: err}
 	}
 	created, err := h.nl.LinkByName(h.cfg.Name)
@@ -155,6 +164,38 @@ func (h *WireGuardHub) Up(ctx context.Context) error {
 	h.up = true
 	h.logger.Info("wireguard hub up", slog.String("device", h.cfg.Name), slog.Int("listen_port", h.cfg.ListenPort))
 	return nil
+}
+
+// addLink creates the hub's device. A WireGuard device of the hub's name
+// that already exists is a predecessor's, left by an ungraceful stop
+// (the launcher SIGKILLs a child when the supervisor dies) with its
+// addresses and peers still installed: it is deleted and created afresh,
+// so none of that state survives. A device of the name that is not a
+// WireGuard device is not the hub's, and is refused.
+// removeStale deletes a WireGuard device of the hub's name left by a
+// predecessor. A device of another type is not the hub's and is left for
+// addLink to refuse; a failed lookup means there is nothing to remove.
+func (h *WireGuardHub) removeStale() error {
+	return removeStaleWireGuardHub(h.logger, h.nl, h.cfg.Name)
+}
+
+func (h *WireGuardHub) addLink(link vnl.Link) error {
+	err := h.nl.LinkAdd(link)
+	if !errors.Is(err, syscall.EEXIST) {
+		return err
+	}
+	stale, lerr := h.nl.LinkByName(h.cfg.Name)
+	if lerr != nil {
+		return errors.Join(err, lerr)
+	}
+	if stale.Type() != link.Type() {
+		return fmt.Errorf("%w: the device is a %q device, not the hub's %q", err, stale.Type(), link.Type())
+	}
+	if err := h.nl.LinkDel(stale); err != nil {
+		return fmt.Errorf("removing the stale hub device: %w", err)
+	}
+	h.logger.Warn("wireguard hub replaced a stale device of its name", slog.String("device", h.cfg.Name))
+	return h.nl.LinkAdd(link)
 }
 
 func (h *WireGuardHub) configure(link vnl.Link, priv wgtypes.Key) error {

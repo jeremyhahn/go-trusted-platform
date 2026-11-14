@@ -70,6 +70,15 @@ type ManagedDataPlane interface {
 	Stop(ctx context.Context) error
 }
 
+// PeerReconciler is a DataPlane whose peers can outlive the vpn service that
+// installed them (a plane hosted by the datapath child). ReconcilePeers
+// removes every peer whose lease is not in keep; Restore calls it with the
+// stored leases, so a peer whose record a revoke deleted before the vpn
+// child died does not keep passing traffic.
+type PeerReconciler interface {
+	ReconcilePeers(ctx context.Context, keep []LeaseID) error
+}
+
 // LeaseStore persists leases. The in-memory store is the gateway's
 // projection; the daemon may back it with the control plane.
 type LeaseStore interface {

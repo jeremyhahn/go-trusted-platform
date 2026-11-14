@@ -187,9 +187,10 @@ var ProcessControlService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	DatapathService_ApplyDesired_FullMethodName   = "/gatewayd.ipc.v1.DatapathService/ApplyDesired"
-	DatapathService_InstallVPNPeer_FullMethodName = "/gatewayd.ipc.v1.DatapathService/InstallVPNPeer"
-	DatapathService_RemoveVPNPeer_FullMethodName  = "/gatewayd.ipc.v1.DatapathService/RemoveVPNPeer"
+	DatapathService_ApplyDesired_FullMethodName      = "/gatewayd.ipc.v1.DatapathService/ApplyDesired"
+	DatapathService_InstallVPNPeer_FullMethodName    = "/gatewayd.ipc.v1.DatapathService/InstallVPNPeer"
+	DatapathService_RemoveVPNPeer_FullMethodName     = "/gatewayd.ipc.v1.DatapathService/RemoveVPNPeer"
+	DatapathService_ReconcileVPNPeers_FullMethodName = "/gatewayd.ipc.v1.DatapathService/ReconcileVPNPeers"
 )
 
 // DatapathServiceClient is the client API for DatapathService service.
@@ -211,6 +212,10 @@ type DatapathServiceClient interface {
 	InstallVPNPeer(ctx context.Context, in *InstallVPNPeerRequest, opts ...grpc.CallOption) (*InstallVPNPeerResponse, error)
 	// RemoveVPNPeer removes a lease's peer from the data plane it names.
 	RemoveVPNPeer(ctx context.Context, in *RemoveVPNPeerRequest, opts ...grpc.CallOption) (*RemoveVPNPeerResponse, error)
+	// ReconcileVPNPeers removes from the data plane it names every peer whose
+	// lease is not in lease_ids. A restarted vpn child sends its stored leases
+	// so a peer whose record a revoke deleted before the child died is removed.
+	ReconcileVPNPeers(ctx context.Context, in *ReconcileVPNPeersRequest, opts ...grpc.CallOption) (*ReconcileVPNPeersResponse, error)
 }
 
 type datapathServiceClient struct {
@@ -251,6 +256,16 @@ func (c *datapathServiceClient) RemoveVPNPeer(ctx context.Context, in *RemoveVPN
 	return out, nil
 }
 
+func (c *datapathServiceClient) ReconcileVPNPeers(ctx context.Context, in *ReconcileVPNPeersRequest, opts ...grpc.CallOption) (*ReconcileVPNPeersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReconcileVPNPeersResponse)
+	err := c.cc.Invoke(ctx, DatapathService_ReconcileVPNPeers_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // DatapathServiceServer is the server API for DatapathService service.
 // All implementations must embed UnimplementedDatapathServiceServer
 // for forward compatibility.
@@ -270,6 +285,10 @@ type DatapathServiceServer interface {
 	InstallVPNPeer(context.Context, *InstallVPNPeerRequest) (*InstallVPNPeerResponse, error)
 	// RemoveVPNPeer removes a lease's peer from the data plane it names.
 	RemoveVPNPeer(context.Context, *RemoveVPNPeerRequest) (*RemoveVPNPeerResponse, error)
+	// ReconcileVPNPeers removes from the data plane it names every peer whose
+	// lease is not in lease_ids. A restarted vpn child sends its stored leases
+	// so a peer whose record a revoke deleted before the child died is removed.
+	ReconcileVPNPeers(context.Context, *ReconcileVPNPeersRequest) (*ReconcileVPNPeersResponse, error)
 	mustEmbedUnimplementedDatapathServiceServer()
 }
 
@@ -288,6 +307,9 @@ func (UnimplementedDatapathServiceServer) InstallVPNPeer(context.Context, *Insta
 }
 func (UnimplementedDatapathServiceServer) RemoveVPNPeer(context.Context, *RemoveVPNPeerRequest) (*RemoveVPNPeerResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RemoveVPNPeer not implemented")
+}
+func (UnimplementedDatapathServiceServer) ReconcileVPNPeers(context.Context, *ReconcileVPNPeersRequest) (*ReconcileVPNPeersResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReconcileVPNPeers not implemented")
 }
 func (UnimplementedDatapathServiceServer) mustEmbedUnimplementedDatapathServiceServer() {}
 func (UnimplementedDatapathServiceServer) testEmbeddedByValue()                         {}
@@ -364,6 +386,24 @@ func _DatapathService_RemoveVPNPeer_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DatapathService_ReconcileVPNPeers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReconcileVPNPeersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DatapathServiceServer).ReconcileVPNPeers(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DatapathService_ReconcileVPNPeers_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DatapathServiceServer).ReconcileVPNPeers(ctx, req.(*ReconcileVPNPeersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // DatapathService_ServiceDesc is the grpc.ServiceDesc for DatapathService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -382,6 +422,10 @@ var DatapathService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RemoveVPNPeer",
 			Handler:    _DatapathService_RemoveVPNPeer_Handler,
+		},
+		{
+			MethodName: "ReconcileVPNPeers",
+			Handler:    _DatapathService_ReconcileVPNPeers_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

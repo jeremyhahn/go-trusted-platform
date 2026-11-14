@@ -136,6 +136,12 @@ func (c *Client) RemoveVPNPeer(ctx context.Context, req *ipcv1.RemoveVPNPeerRequ
 	return c.datapath.RemoveVPNPeer(ctx, req)
 }
 
+// ReconcileVPNPeers asks the datapath child to remove every VPN peer of a
+// plane whose lease is not in the request.
+func (c *Client) ReconcileVPNPeers(ctx context.Context, req *ipcv1.ReconcileVPNPeersRequest) (*ipcv1.ReconcileVPNPeersResponse, error) {
+	return c.datapath.ReconcileVPNPeers(ctx, req)
+}
+
 // Close releases the connection.
 func (c *Client) Close() error {
 	return c.conn.Close()

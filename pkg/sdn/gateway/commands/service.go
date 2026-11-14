@@ -29,6 +29,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/ipc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/process"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/perf"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/vpn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 )
 
@@ -90,6 +91,14 @@ type serviceDeps struct {
 	loadConfig      func() (*ServeConfig, error)
 	buildGateway    func(ctx context.Context, cfg *ServeConfig, logger *slog.Logger) (*gateway.Gateway, error)
 	vpnLeaseControl func(ctx context.Context, cfg *ServeConfig, gw *gateway.Gateway, logger *slog.Logger) (gateway.VPNLeaseControl, *gateway.RevocationJournal, error)
+	// vpnDataPlanes builds the VPN data planes the datapath child hosts
+	// for the vpn process's peer RPCs. Nil, or no planes, leaves every
+	// InstallVPNPeer refused.
+	vpnDataPlanes func(cfg *ServeConfig, gw *gateway.Gateway, logger *slog.Logger) ([]vpn.ManagedDataPlane, error)
+	// removeStaleVPNHub removes the WireGuard hub device a killed
+	// predecessor left, with its peers, when the datapath child hosts no
+	// plane whose start would remove it (#1698). Nil does nothing.
+	removeStaleVPNHub func(logger *slog.Logger) error
 }
 
 func runService(cmd *cobra.Command, args []string) error {
@@ -103,11 +112,13 @@ func runService(cmd *cobra.Command, args []string) error {
 		gid:           serviceGID,
 	}
 	deps := serviceDeps{
-		enterHardened:   process.EnterHardened,
-		readConfig:      viper.ReadInConfig,
-		loadConfig:      func() (*ServeConfig, error) { return LoadServeConfig(viper.GetViper()) },
-		buildGateway:    BuildGateway,
-		vpnLeaseControl: vpnLeaseControl,
+		enterHardened:     process.EnterHardened,
+		readConfig:        viper.ReadInConfig,
+		loadConfig:        func() (*ServeConfig, error) { return LoadServeConfig(viper.GetViper()) },
+		buildGateway:      BuildGateway,
+		vpnLeaseControl:   vpnLeaseControl,
+		vpnDataPlanes:     vpnDataPlanes,
+		removeStaleVPNHub: removeStaleVPNHub,
 	}
 	return serveProcess(ctx, args[0], opts, deps, buildServeLogger())
 }
@@ -170,18 +181,40 @@ func serveProcess(ctx context.Context, name string, opts serviceOptions, deps se
 	if err != nil {
 		return err
 	}
+	vpnPlanes, err := deps.datapathVPNPlanes(def, cfg, gw, logger)
+	if err != nil {
+		return err
+	}
 	server := ipc.NewServer(gw, servicePolicy(def, opts, cfg.Process))
 	server.SetServices(services)
+	// The planes start with the child and before the socket is bound, so
+	// the first peer RPC finds them up; one that fails to start is reported
+	// to the supervisor with the services.
+	var planesErr error
+	if vpnPlanes != nil {
+		if planesErr = vpnPlanes.Start(ctx); planesErr == nil {
+			server.SetVPNPlanes(vpnPlanes)
+		} else {
+			vpnPlanes = nil
+		}
+	}
 	// Hardened already, so the kernel-class child holds no CAP_CHOWN and is
 	// not in the socket group: its socket takes the group from the
 	// supervisor's setgid runtime directory, and Listen only verifies it.
 	if err := server.Listen(opts.socket, serviceSocketMode, opts.socketGroup); err != nil {
-		return err
+		return errors.Join(err, stopVPNPlanes(vpnPlanes))
 	}
 	served := make(chan error, 1)
 	go func() { served <- server.Serve() }()
 
-	if err := gw.Start(ctx); err != nil {
+	// A plane that failed to start keeps the hosted services down: the
+	// supervisor accepts an active service before it reads the start
+	// error, so a started gateway would report ready with no plane.
+	startErr := planesErr
+	if startErr == nil {
+		startErr = gw.Start(ctx)
+	}
+	if err := startErr; err != nil {
 		// The process keeps serving so the supervisor reads why; it stops
 		// the process when it gives up on the service.
 		server.SetStartError(err)
@@ -206,6 +239,7 @@ func serveProcess(ctx context.Context, name string, opts serviceOptions, deps se
 	defer stopCancel()
 	stopErr := gw.Stop(stopCtx)
 	server.Stop()
+	stopErr = errors.Join(stopErr, stopVPNPlanes(vpnPlanes))
 	if serveErr != nil {
 		return errors.Join(&ErrServiceIPCFailed{Process: def.Name, Cause: serveErr}, stopErr)
 	}
@@ -271,6 +305,48 @@ func datapathServices(def process.Definition, gw *gateway.Gateway) (ipc.Services
 	}
 	services.Perf = perfService
 	return services, nil
+}
+
+// datapathVPNPlanes is the plane host the datapath child serves the vpn
+// process's peer RPCs from (#1698): the planes the factory builds, wrapped
+// in a vpn.PlaneHost. Only the kernel-class child, which holds
+// CAP_NET_ADMIN, hosts planes, and only while the management VPN is
+// enabled; otherwise, or when the factory builds none, it returns nil and
+// every InstallVPNPeer keeps its refusal. A kernel-class child that hosts
+// no plane removes the hub device a killed predecessor left, since no
+// hub's Up will: its peers would otherwise pass traffic past their leases
+// while every removal RPC is refused.
+func (d serviceDeps) datapathVPNPlanes(def process.Definition, cfg *ServeConfig, gw *gateway.Gateway, logger *slog.Logger) (*vpn.PlaneHost, error) {
+	if def.Class != process.ClassKernel {
+		return nil, nil
+	}
+	var planes []vpn.ManagedDataPlane
+	if d.vpnDataPlanes != nil && cfg.Gateway != nil && cfg.Gateway.ManagementVPN != nil && cfg.Gateway.ManagementVPN.Enabled {
+		var err error
+		if planes, err = d.vpnDataPlanes(cfg, gw, logger); err != nil {
+			return nil, err
+		}
+	}
+	if len(planes) == 0 {
+		if d.removeStaleVPNHub != nil {
+			if err := d.removeStaleVPNHub(logger); err != nil {
+				return nil, err
+			}
+		}
+		return nil, nil
+	}
+	return vpn.NewPlaneHost(planes...)
+}
+
+// stopVPNPlanes stops the hosted planes, if any, within the shutdown
+// timeout.
+func stopVPNPlanes(host *vpn.PlaneHost) error {
+	if host == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	return host.Stop(ctx)
 }
 
 // closeGatewayRuntime releases the OVS runtime a gateway holds, if any.
