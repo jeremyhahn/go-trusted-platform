@@ -769,6 +769,49 @@ func TestLUKSBackend_ChangePassphraseRefusesArgon2SlotUnderFIPS(t *testing.T) {
 	}
 }
 
+// TestLUKSBackend_ChangePassphraseRefusesSHA1SlotUnderFIPS proves rotation
+// does not carry a SHA-1 PBKDF2 PRF forward when the FIPS policy is active:
+// the KDF is approved, its hash is not (#28).
+func TestLUKSBackend_ChangePassphraseRefusesSHA1SlotUnderFIPS(t *testing.T) {
+	device := newLUKSImage(t)
+	before, err := luks2.ListKeyslots(device)
+	if err != nil {
+		t.Fatalf("list keyslots: %v", err)
+	}
+	if err := luks2.AddKey(device, []byte(testLUKSPassphrase), []byte("sha1-pass"), &luks2.AddKeyOptions{
+		KDFType: "pbkdf2",
+		Hash:    "sha1",
+	}); err != nil {
+		t.Skipf("pbkdf2-sha1 keyslot refused in this environment (Go FIPS mode?): %v", err)
+	}
+	slot, err := detectNewSlot(device, before)
+	if err != nil {
+		t.Fatalf("detect new slot: %v", err)
+	}
+
+	b := newTestLUKSBackend()
+	b.fipsActive = func() bool { return true }
+	err = b.ChangePassphrase(context.Background(), &daemon.LUKSChangePassphraseRequest{
+		Device:        device,
+		Slot:          int32(slot),
+		OldPassphrase: "sha1-pass",
+		NewPassphrase: "rotated-pass",
+	})
+	if !errors.Is(err, ErrLUKSRotationKDFNotApproved) {
+		t.Fatalf("ChangePassphrase error = %v, want ErrLUKSRotationKDFNotApproved", err)
+	}
+	var notApproved fips.ErrHashNotApproved
+	if !errors.As(err, &notApproved) {
+		t.Fatalf("ChangePassphrase error = %v, want a fips.ErrHashNotApproved in its chain", err)
+	}
+	if err := luks2.TestKey(device, []byte("sha1-pass")); err != nil {
+		t.Fatalf("old passphrase no longer opens the volume: %v", err)
+	}
+	if err := luks2.TestKey(device, []byte("rotated-pass")); err == nil {
+		t.Fatal("refused rotation still installed the new passphrase")
+	}
+}
+
 // TestLUKSBackend_ChangePassphraseRotatesPBKDF2SlotUnderFIPS proves an
 // approved PBKDF2 slot still rotates under the FIPS policy.
 func TestLUKSBackend_ChangePassphraseRotatesPBKDF2SlotUnderFIPS(t *testing.T) {
