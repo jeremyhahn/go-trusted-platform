@@ -86,7 +86,7 @@ type layerRule struct {
 }
 
 // layerRules is the authoritative list of upstream modules the platform may
-// not import directly. See CLAUDE.md §"SDK Consumption Invariant" and
+// not import directly (the SDK consumption invariant). See
 // docs/02-dependency-graph.md in the architecture repo.
 var layerRules = []layerRule{
 	{

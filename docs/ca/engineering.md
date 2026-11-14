@@ -10,12 +10,10 @@
 ## 1. This repository does not implement a CA
 
 That is the first thing to know, and the package tree says it plainly.
-`pkg/ca/` contains exactly four things (verified 2026-10-12):
+`pkg/ca/` contains exactly two directories:
 
 ```
 pkg/ca/
-    AGENTS.md          (symlinked mirror of CLAUDE.md)
-    CLAUDE.md
     issuance/          (Sign CSR policy, see the gap below)
     quicbaas/
         errors.go
@@ -66,29 +64,20 @@ The two adapters are the whole local surface:
 the other two adapter sites.
 
 **Never add certificate logic here.** If something is missing, it is missing in
-go-xkms or in the quicbaas SDK, and the fix belongs there — that is docs/00 L8,
-and the local `pkg/ca/CLAUDE.md` says the same thing in stronger terms.
+go-xkms or in the quicbaas SDK, and the fix belongs there — that is docs/00 L8.
 
-## 2. A stale instruction file — read before trusting `pkg/ca/CLAUDE.md`
-
-`pkg/ca/CLAUDE.md` carries a responsibility table naming **`go-trusted-ca`** as
-the owner of "all CA operations, ACME server/client, certificate management".
+## 2. A decommissioned name: `go-trusted-ca`
 
 **`go-trusted-ca` was decommissioned on 2026-08-19** — the standalone CA was
-rolled into go-xkms (`TrustedCA` + ACME), and its repository archived. An agent
-following that table would go looking for a repository that is no longer a live
-dependency.
+rolled into go-xkms (`TrustedCA` + ACME), and its repository archived. It is
+no longer a live dependency.
 
-The identifier `go-trusted-ca` still appears in 24 tracked files outside `docs/`
+The identifier `go-trusted-ca` still appears in tracked files outside `docs/`
 and `web/` (`git grep -l go-trusted-ca -- ':!docs' ':!web'` lists them): code
-comments across `pkg/api/`, `pkg/app/`, `pkg/ca/quicbaas/`, `pkg/store/` and
-`pkg/webservice/v1/registry.go`, `internal/ca/adapter.go`, the `Makefile`, three
-docker-compose files, an integration-test README, and `pkg/ca/CLAUDE.md`.
-
-That file is an **agent instruction file with an `AGENTS.md` mirror**, not
-feature documentation, so it is reported here rather than edited in a
-documentation migration. It needs its own change: the responsibility table
-retargeted at go-xkms, and the mirror updated in the same commit.
+comments across `pkg/acme/`, `pkg/api/`, `pkg/app/`, `pkg/auth/`,
+`pkg/ca/quicbaas/`, `pkg/sdn/`, `pkg/store/` and
+`pkg/webservice/v1/registry.go`, `internal/ca/adapter.go`, the `Makefile` and
+three docker-compose files.
 
 ## 3. Exported surface
 

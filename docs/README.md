@@ -289,7 +289,7 @@ We welcome contributions to go-trusted-platform! Here's how you can help:
 ### Contributing to Code
 
 1. **Review the roadmap** - See [ROADMAP.md](../ROADMAP.md) for planned work
-2. **Follow conventions** - See [CLAUDE.md](../CLAUDE.md) for coding standards
+2. **Follow conventions** - Match the surrounding code; the tests in `pkg/arch/` enforce the layering rules
 3. **Update documentation** - Include doc updates with code changes
 
 ### PR Checklist

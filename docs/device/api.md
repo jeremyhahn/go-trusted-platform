@@ -209,9 +209,8 @@ device dispatcher carried an unreachable `StatusNotImplemented` case for it
 on the live dispatcher while a `handleAttest` sat in
 `pkg/api/quic/device_handlers.go`, whose `NewDeviceHandler` had no non-test
 caller (#291); #317 deleted it. So the operation read as implemented in one package
-and was a stub in the one actually served, which is the failure mode
-CLAUDE.md names when it says a "wire this up later" stub on a multi-protocol
-service is a bug rather than a transitional state. It now delegates to the
+and was a stub in the one actually served; a "wire this up later" stub on a
+multi-protocol service is a bug rather than a transitional state. It now delegates to the
 shared `DeviceService` gRPC implementation like every other device opcode.
 
 ### 2.1 The two transports that verified nothing

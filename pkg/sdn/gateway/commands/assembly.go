@@ -709,8 +709,7 @@ func buildAuthChain(clientCAs *x509.CertPool, matrixProvider *proxysvc.ZoneMatri
 
 // dialPlatformd establishes an sdk/go connection to platformd per the
 // configured transport. Control-plane interactions go through sdk/go
-// exclusively (see cmd/gatewayd/CLAUDE.md); connections live for the
-// process lifetime.
+// exclusively; connections live for the process lifetime.
 func dialPlatformd(ctx context.Context, pcfg proxysvc.PlatformdConfig, anchor *trust.Anchor) (platform.Client, error) {
 	opts, err := platformdOptions(ctx, pcfg, anchor)
 	if err != nil {

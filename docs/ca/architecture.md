@@ -33,9 +33,8 @@ pkg/store/object/objstore_adapter.go
 ```
 
 There is **no certificate logic in this repository.** `pkg/ca/` is those two
-adapters with their errors file (`pkg/ca/quicbaas/`), the `pkg/ca/issuance/`
-request helpers (store aliases, Sign CSR pre-checks, renew), and a scoped
-instruction file.
+adapters with their errors file (`pkg/ca/quicbaas/`) and the `pkg/ca/issuance/`
+request helpers (store aliases, Sign CSR pre-checks, renew).
 
 Authorization for issuance comes from **ACME challenge types**, and the ones
 that matter here are `endorse-01`, `enroll-01` and `device-attest-01` — a device
@@ -105,15 +104,12 @@ through `services/ca`.
 - **It does not hold CA private keys.**
 - **It has no unrevoke.**
 
-## A stale instruction file
+## A decommissioned name
 
-`pkg/ca/CLAUDE.md` still names **`go-trusted-ca`** as the owner of CA and ACME
-functionality. That repository was **decommissioned on 2026-08-19** — rolled into
-go-xkms — and the identifier survives in 24 tracked files outside `docs/` and `web/`
-([engineering.md](engineering.md) §2). That file is an agent
-instruction file with an `AGENTS.md` mirror, so it needs its own change rather
-than a documentation edit; it is reported in [engineering.md](engineering.md) §2
-and in the migration report.
+The identifier **`go-trusted-ca`** survives in code comments and build files
+outside `docs/` and `web/`. That repository was **decommissioned on 2026-08-19** —
+rolled into go-xkms — and is no longer a dependency
+([engineering.md](engineering.md) §2).
 
 ---
 

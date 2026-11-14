@@ -20,7 +20,7 @@ go-quicbaas      (service layer: barrier, auth, QUIC transport, SDK)
 go-trusted-platform  (platform: CA, attestation, device management)
 ```
 
-That chain describes where capabilities *originate*, not what the platform is allowed to import. The platform reaches every crypto, key, auth, ceremony, and trust-bootstrap capability through the go-quicbaas SDK alone. Importing `go-xkms`, `go-qrdb`, `go-quicraft`, or `go-truststrap` directly is forbidden everywhere in the repo, including in `_test.go` files, and the rule is machine-enforced by `pkg/arch/layerguard_test.go`, which parses every `.go` file in the module and fails with a `file:line` report naming the sanctioned SDK replacement. See [../CLAUDE.md](../CLAUDE.md) for the full layer-ownership table and the canonical `Security().*` entry point for each capability.
+That chain describes where capabilities *originate*, not what the platform is allowed to import. The platform reaches every crypto, key, auth, ceremony, and trust-bootstrap capability through the go-quicbaas SDK alone. Importing `go-xkms`, `go-qrdb`, `go-quicraft`, or `go-truststrap` directly is forbidden everywhere in the repo, including in `_test.go` files, and the rule is machine-enforced by `pkg/arch/layerguard_test.go`, which parses every `.go` file in the module and fails with a `file:line` report naming the sanctioned SDK replacement. The `layerRules` table in that file lists each forbidden module and its sanctioned SDK replacement.
 
 ### The real go.mod dependency set
 

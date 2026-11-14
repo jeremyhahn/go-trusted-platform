@@ -501,7 +501,7 @@ are in [api.md](api.md) §7.
 
 **BMC TLS private keys are never persisted.** They are generated fresh per
 issuance and shipped to the BMC. BMC *account* passwords do persist, for audit
-and rotation. Both rules are stated in `pkg/bmc/CLAUDE.md`.
+and rotation.
 
 Compatibility: `credentialRecord` is the on-disk contract for stored
 credentials; changing its field names breaks every stored credential.
@@ -673,9 +673,8 @@ The package defines `AttestationProvider`, `Evidence`, `EvidenceMetadata`,
 three backends: `dell.RedfishBackend`, `hpe.ILOBackend`,
 `supermicro.StubBackend`.
 
-**Nothing outside the package imports it.** `pkg/bmc/CLAUDE.md` records it as
-"preserved scaffolding, no real implementation until RoT-capable hardware
-available". Treat it as a design placeholder; it has no CLI, no route, and no
+**Nothing outside the package imports it.** It is preserved scaffolding, with no
+real implementation until RoT-capable hardware is available. Treat it as a design placeholder; it has no CLI, no route, and no
 transport. Design note: [`docs/architecture/bmc-attestation.md`](../architecture/bmc-attestation.md).
 
 ## 13. Observability

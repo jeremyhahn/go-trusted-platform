@@ -268,7 +268,7 @@ func (h *QUICServiceHandler) handleDeviceActivate(ctx context.Context, req *quic
 // This opcode previously answered StatusNotImplemented on the live QUIC
 // dispatcher while a complete handler sat in pkg/api/quic, which has no
 // non-test caller (#291). So the operation looked implemented in one package
-// and was a stub in the one actually served — CLAUDE.md is explicit that a
+// and was a stub in the one actually served — and a
 // "wire this up later" stub on a multi-protocol service is a bug, not a
 // transitional state.
 //
