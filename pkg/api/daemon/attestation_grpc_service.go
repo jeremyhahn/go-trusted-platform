@@ -286,6 +286,12 @@ func (s *AttestationServiceServer) ListManifests(
 		Offset: int(req.GetOffset()),
 	}
 
+	// The filter keeps whole seconds: a fractional bound is refused, not
+	// truncated into a wider or narrower window.
+	if req.GetStartTime().GetNanos() != 0 || req.GetEndTime().GetNanos() != 0 {
+		return nil, status.Error(codes.InvalidArgument,
+			"start_time and end_time must be whole seconds")
+	}
 	if req.GetStartTime() != nil {
 		filter.StartTime = req.GetStartTime().AsTime().Unix()
 	}

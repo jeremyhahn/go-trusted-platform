@@ -164,6 +164,12 @@ func (r *AttestationServerRouter) listManifests(w http.ResponseWriter, req *http
 			r.respWriter.Error400(w, req, fmt.Errorf("invalid %s: %w", bound.name, err))
 			return
 		}
+		// The manifest filter keeps whole seconds: refuse a fractional
+		// bound rather than truncate it into a different window.
+		if t.Nanosecond() != 0 {
+			r.respWriter.Error400(w, req, fmt.Errorf("invalid %s: fractional seconds are not supported", bound.name))
+			return
+		}
 		bound.set(timestamppb.New(t))
 	}
 	resp, err := r.server.ListManifests(req.Context(), pbReq)
