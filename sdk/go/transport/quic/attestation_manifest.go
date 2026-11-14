@@ -78,6 +78,7 @@ type hostAttestationWire struct {
 	PCRDigest          []byte         `codec:"pcr_digest"`
 	Nonce              []byte         `codec:"nonce"`
 	Timestamp          int64          `codec:"timestamp"`
+	TimestampNanos     int64          `codec:"timestamp_nanos"`
 	AKPublicKey        []byte         `codec:"ak_public_key"`
 	IDevIDCertificate  []byte         `codec:"idevid_certificate"`
 	HashAlgorithm      string         `codec:"hash_algorithm"`
@@ -94,6 +95,7 @@ type vmAttestationWire struct {
 	PCRDigest          []byte            `codec:"pcr_digest"`
 	Nonce              []byte            `codec:"nonce"`
 	Timestamp          int64             `codec:"timestamp"`
+	TimestampNanos     int64             `codec:"timestamp_nanos"`
 	AIKPublicKey       []byte            `codec:"aik_public_key"`
 	EKCertificate      []byte            `codec:"ek_certificate"`
 	WorkloadPCR        []byte            `codec:"workload_pcr"`
@@ -102,13 +104,14 @@ type vmAttestationWire struct {
 }
 
 type containerAttestWire struct {
-	ContainerID string            `codec:"container_id"`
-	ImageID     string            `codec:"image_id"`
-	ImageDigest string            `codec:"image_digest"`
-	Digest      []byte            `codec:"digest"`
-	PCRValue    []byte            `codec:"pcr_value"`
-	Timestamp   int64             `codec:"timestamp"`
-	Metadata    map[string]string `codec:"metadata"`
+	ContainerID    string            `codec:"container_id"`
+	ImageID        string            `codec:"image_id"`
+	ImageDigest    string            `codec:"image_digest"`
+	Digest         []byte            `codec:"digest"`
+	PCRValue       []byte            `codec:"pcr_value"`
+	Timestamp      int64             `codec:"timestamp"`
+	TimestampNanos int64             `codec:"timestamp_nanos"`
+	Metadata       map[string]string `codec:"metadata"`
 }
 
 type pcrValueWire struct {
@@ -150,7 +153,7 @@ func (w *hostAttestationWire) toProto() *platformv1.HostAttestation {
 		Pcrs:               pcrValuesToProto(w.PCRs),
 		PcrDigest:          w.PCRDigest,
 		Nonce:              w.Nonce,
-		Timestamp:          unixSecondsTimestamp(w.Timestamp),
+		Timestamp:          unixSecNanoTimestamp(w.Timestamp, w.TimestampNanos),
 		AkPublicKey:        w.AKPublicKey,
 		IdevidCertificate:  w.IDevIDCertificate,
 		HashAlgorithm:      attestationHashAlgorithm(w.HashAlgorithm),
@@ -168,7 +171,7 @@ func (w *vmAttestationWire) toProto() *platformv1.VMAttestation {
 		Pcrs:               pcrValuesToProto(w.PCRs),
 		PcrDigest:          w.PCRDigest,
 		Nonce:              w.Nonce,
-		Timestamp:          unixSecondsTimestamp(w.Timestamp),
+		Timestamp:          unixSecNanoTimestamp(w.Timestamp, w.TimestampNanos),
 		AikPublicKey:       w.AIKPublicKey,
 		EkCertificate:      w.EKCertificate,
 		WorkloadPcr:        w.WorkloadPCR,
@@ -184,7 +187,7 @@ func (w *containerAttestWire) toProto() *platformv1.ContainerAttestation {
 		ImageDigest: w.ImageDigest,
 		Digest:      w.Digest,
 		PcrValue:    w.PCRValue,
-		Timestamp:   unixSecondsTimestamp(w.Timestamp),
+		Timestamp:   unixSecNanoTimestamp(w.Timestamp, w.TimestampNanos),
 		Metadata:    w.Metadata,
 	}
 }
@@ -209,13 +212,6 @@ func pcrValuesToProto(in []pcrValueWire) []*platformv1.AttestationPCRValue {
 }
 
 // unixSecondsTimestamp converts a wire Unix time in seconds; 0 means unset.
-func unixSecondsTimestamp(ts int64) *timestamppb.Timestamp {
-	if ts == 0 {
-		return nil
-	}
-	return timestamppb.New(time.Unix(ts, 0))
-}
-
 // unixSecNanoTimestamp builds a timestamp from whole seconds and their sub-second
 // nanoseconds; it is nil only when both are 0.
 func unixSecNanoTimestamp(sec, nsec int64) *timestamppb.Timestamp {

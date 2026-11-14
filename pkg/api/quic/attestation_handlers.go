@@ -328,39 +328,45 @@ type HostAttestationData struct {
 	PCRDigest          []byte         `codec:"pcr_digest"`
 	Nonce              []byte         `codec:"nonce"`
 	Timestamp          int64          `codec:"timestamp"`
-	AKPublicKey        []byte         `codec:"ak_public_key"`
-	IDevIDCertificate  []byte         `codec:"idevid_certificate"`
-	HashAlgorithm      string         `codec:"hash_algorithm"`
-	FirmwareVersion    string         `codec:"firmware_version"`
+	// TimestampNanos is the sub-second part (0-999999999) of Timestamp.
+	TimestampNanos    int64  `codec:"timestamp_nanos"`
+	AKPublicKey       []byte `codec:"ak_public_key"`
+	IDevIDCertificate []byte `codec:"idevid_certificate"`
+	HashAlgorithm     string `codec:"hash_algorithm"`
+	FirmwareVersion   string `codec:"firmware_version"`
 }
 
 // VMAttestationData represents VM attestation data for QUIC transport
 type VMAttestationData struct {
-	VMID               string            `codec:"vm_id"`
-	HostID             string            `codec:"host_id"`
-	QuoteData          []byte            `codec:"quote_data"`
-	Signature          []byte            `codec:"signature"`
-	SignatureAlgorithm string            `codec:"signature_algorithm"`
-	PCRs               []PCRValueData    `codec:"pcrs"`
-	PCRDigest          []byte            `codec:"pcr_digest"`
-	Nonce              []byte            `codec:"nonce"`
-	Timestamp          int64             `codec:"timestamp"`
-	AIKPublicKey       []byte            `codec:"aik_public_key"`
-	EKCertificate      []byte            `codec:"ek_certificate"`
-	WorkloadPCR        []byte            `codec:"workload_pcr"`
-	HashAlgorithm      string            `codec:"hash_algorithm"`
-	Metadata           map[string]string `codec:"metadata"`
+	VMID               string         `codec:"vm_id"`
+	HostID             string         `codec:"host_id"`
+	QuoteData          []byte         `codec:"quote_data"`
+	Signature          []byte         `codec:"signature"`
+	SignatureAlgorithm string         `codec:"signature_algorithm"`
+	PCRs               []PCRValueData `codec:"pcrs"`
+	PCRDigest          []byte         `codec:"pcr_digest"`
+	Nonce              []byte         `codec:"nonce"`
+	Timestamp          int64          `codec:"timestamp"`
+	// TimestampNanos is the sub-second part (0-999999999) of Timestamp.
+	TimestampNanos int64             `codec:"timestamp_nanos"`
+	AIKPublicKey   []byte            `codec:"aik_public_key"`
+	EKCertificate  []byte            `codec:"ek_certificate"`
+	WorkloadPCR    []byte            `codec:"workload_pcr"`
+	HashAlgorithm  string            `codec:"hash_algorithm"`
+	Metadata       map[string]string `codec:"metadata"`
 }
 
 // ContainerAttestData represents container attestation data for QUIC transport
 type ContainerAttestData struct {
-	ContainerID string            `codec:"container_id"`
-	ImageID     string            `codec:"image_id"`
-	ImageDigest string            `codec:"image_digest"`
-	Digest      []byte            `codec:"digest"`
-	PCRValue    []byte            `codec:"pcr_value"`
-	Timestamp   int64             `codec:"timestamp"`
-	Metadata    map[string]string `codec:"metadata"`
+	ContainerID string `codec:"container_id"`
+	ImageID     string `codec:"image_id"`
+	ImageDigest string `codec:"image_digest"`
+	Digest      []byte `codec:"digest"`
+	PCRValue    []byte `codec:"pcr_value"`
+	Timestamp   int64  `codec:"timestamp"`
+	// TimestampNanos is the sub-second part (0-999999999) of Timestamp.
+	TimestampNanos int64             `codec:"timestamp_nanos"`
+	Metadata       map[string]string `codec:"metadata"`
 }
 
 // PCRValueData represents a PCR value for QUIC transport
@@ -1323,6 +1329,7 @@ func (h *AttestationHandler) hostAttestationToData(a *manifest.HostAttestation) 
 		PCRDigest:          a.PCRDigest,
 		Nonce:              a.Nonce,
 		Timestamp:          a.Timestamp.Unix(),
+		TimestampNanos:     int64(a.Timestamp.Nanosecond()),
 		AKPublicKey:        a.AKPublicKey,
 		IDevIDCertificate:  a.IDevIDCertificate,
 		HashAlgorithm:      a.HashAlgorithm.String(),
@@ -1355,7 +1362,7 @@ func (h *AttestationHandler) dataToHostAttestation(data *HostAttestationData) *m
 		SignatureAlgorithm: data.SignatureAlgorithm,
 		PCRDigest:          data.PCRDigest,
 		Nonce:              data.Nonce,
-		Timestamp:          time.Unix(data.Timestamp, 0),
+		Timestamp:          time.Unix(data.Timestamp, data.TimestampNanos),
 		AKPublicKey:        data.AKPublicKey,
 		IDevIDCertificate:  data.IDevIDCertificate,
 		HashAlgorithm:      h.parseHashAlgorithm(data.HashAlgorithm),
@@ -1391,6 +1398,7 @@ func (h *AttestationHandler) vmAttestationToData(a *manifest.VMAttestation) *VMA
 		PCRDigest:          a.PCRDigest,
 		Nonce:              a.Nonce,
 		Timestamp:          a.Timestamp.Unix(),
+		TimestampNanos:     int64(a.Timestamp.Nanosecond()),
 		AIKPublicKey:       a.AIKPublicKey,
 		EKCertificate:      a.EKCertificate,
 		WorkloadPCR:        a.WorkloadPCR,
@@ -1426,7 +1434,7 @@ func (h *AttestationHandler) dataToVMAttestation(data *VMAttestationData) *manif
 		SignatureAlgorithm: data.SignatureAlgorithm,
 		PCRDigest:          data.PCRDigest,
 		Nonce:              data.Nonce,
-		Timestamp:          time.Unix(data.Timestamp, 0),
+		Timestamp:          time.Unix(data.Timestamp, data.TimestampNanos),
 		AIKPublicKey:       data.AIKPublicKey,
 		EKCertificate:      data.EKCertificate,
 		WorkloadPCR:        data.WorkloadPCR,
@@ -1455,13 +1463,14 @@ func (h *AttestationHandler) containerAttestationToData(a *manifest.ContainerAtt
 	}
 
 	return &ContainerAttestData{
-		ContainerID: a.ContainerID,
-		ImageID:     a.ImageID,
-		ImageDigest: a.ImageDigest,
-		Digest:      a.Digest,
-		PCRValue:    a.PCRValue,
-		Timestamp:   a.Timestamp.Unix(),
-		Metadata:    a.Metadata,
+		ContainerID:    a.ContainerID,
+		ImageID:        a.ImageID,
+		ImageDigest:    a.ImageDigest,
+		Digest:         a.Digest,
+		PCRValue:       a.PCRValue,
+		Timestamp:      a.Timestamp.Unix(),
+		TimestampNanos: int64(a.Timestamp.Nanosecond()),
+		Metadata:       a.Metadata,
 	}
 }
 
@@ -1477,7 +1486,7 @@ func (h *AttestationHandler) dataToContainerAttestation(data *ContainerAttestDat
 		ImageDigest: data.ImageDigest,
 		Digest:      data.Digest,
 		PCRValue:    data.PCRValue,
-		Timestamp:   time.Unix(data.Timestamp, 0),
+		Timestamp:   time.Unix(data.Timestamp, data.TimestampNanos),
 		Metadata:    data.Metadata,
 	}
 }
