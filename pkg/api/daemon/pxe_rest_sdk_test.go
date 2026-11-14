@@ -16,9 +16,7 @@
 package daemon
 
 import (
-	"bytes"
 	"context"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -26,6 +24,8 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -52,30 +52,22 @@ func (v scopedPlatformToken) Validate(context.Context, string, string, string, s
 // operator routes behind the platform-token middleware and the scope each
 // RPC takes on gRPC, the enabled install webhook beside them — over TLS, and
 // returns an SDK REST connection to it for a caller holding scopes (#975).
+//
 // pxeRESTWebhookSecret is the install-completion webhook HMAC key the
 // REST test server configures (pxe.ServiceConfig.WebhookSecret, #240).
 const pxeRESTWebhookSecret = "sdk-rest-test-webhook-secret"
 
-// signAsInstaller plays the installer in front of the machine-facing
-// webhook route: the SDK REST client holds no webhook key, so the report it
-// posts is signed here with pxeRESTWebhookSecret before the router, whose
-// HMAC check stays in force, verifies it.
-func signAsInstaller(t *testing.T, next http.Handler) http.Handler {
+// connectPXEREST connects the SDK REST transport with the webhook key the
+// test server verifies, so WebhookComplete is signed by the real client.
+func connectPXEREST(t *testing.T, server platformv1.PXEServiceServer, scopes ...string) grpc.ClientConnInterface {
 	t.Helper()
-	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		body, err := io.ReadAll(req.Body)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		req.Body = io.NopCloser(bytes.NewReader(body))
-		req.Header.Set(pxerest.WebhookSignatureHeader,
-			pxerest.SignWebhookBody([]byte(pxeRESTWebhookSecret), body))
-		next.ServeHTTP(w, req)
-	})
+	return connectPXERESTKeyed(t, server, []byte(pxeRESTWebhookSecret), scopes...)
 }
 
-func connectPXEREST(t *testing.T, server platformv1.PXEServiceServer, scopes ...string) grpc.ClientConnInterface {
+// connectPXERESTKeyed serves the PXE routes (the webhook verifying
+// pxeRESTWebhookSecret) and connects the SDK REST transport signing
+// webhook reports with key; a nil key sends them unsigned.
+func connectPXERESTKeyed(t *testing.T, server platformv1.PXEServiceServer, key []byte, scopes ...string) grpc.ClientConnInterface {
 	t.Helper()
 	logger := logging.DefaultLogger()
 	writer := response.NewResponseWriter(logger, nil)
@@ -95,7 +87,7 @@ func connectPXEREST(t *testing.T, server platformv1.PXEServiceServer, scopes ...
 	routes.HandleFunc("GET /health/live", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	routes.Handle("POST /api/v1/pxe/webhook/complete", signAsInstaller(t, machine))
+	routes.Handle("POST /api/v1/pxe/webhook/complete", machine)
 	routes.Handle("/", tokens.Handler(operator))
 
 	bundle := testutil.GenerateTestTLSBundle(t)
@@ -107,6 +99,7 @@ func connectPXEREST(t *testing.T, server platformv1.PXEServiceServer, scopes ...
 		platform.WithRESTAddr(srv.URL),
 		platform.WithTLSConfig(bundle.ClientTLSConfig()),
 		platform.WithBearerToken("operator-token"),
+		platform.WithPXEWebhookKey(key),
 	))
 	return connection(t, adapter, err)
 }
@@ -124,4 +117,22 @@ func TestSDKREST_PXEMethods(t *testing.T) {
 func TestSDKREST_PXEMethodsRefuse(t *testing.T) {
 	testSDKPXERefusesScope(t, "REST", connectPXEREST)
 	testSDKPXERefusesNotFound(t, "REST", connectPXEREST)
+}
+
+// TestSDKREST_PXEWebhookNeedsClientKey pins that the signature comes from
+// the client: a REST connection with no webhook key, or the wrong one, is
+// refused 401 (Unauthenticated) and the service never sees the report.
+func TestSDKREST_PXEWebhookNeedsClientKey(t *testing.T) {
+	const method = "/platform.v1.PXEService/WebhookComplete"
+	req := pxeSDKRequests()[method]
+	for name, key := range map[string][]byte{"no key": nil, "wrong key": []byte("not-the-secret")} {
+		t.Run(name, func(t *testing.T) {
+			via := newPXESDKFixture()
+			untouched := via.svc.recorded()
+			conn := connectPXERESTKeyed(t, via.server, key, "*:*")
+			err := conn.Invoke(context.Background(), method, req, &platformv1.PXEWebhookCompleteResponse{})
+			require.Equal(t, codes.Unauthenticated, status.Code(err), "%v", err)
+			require.Equal(t, untouched, via.svc.recorded())
+		})
+	}
 }
