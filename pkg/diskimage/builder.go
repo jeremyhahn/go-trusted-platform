@@ -44,8 +44,9 @@ type Result struct {
 	Measurements []measure.Bank
 	// Unmeasured says why Measurements is nil: UnmeasuredSecureBootOff.
 	Unmeasured string
-	// Manifest is the signed measurement manifest, ManifestFileName beside
-	// Image; "" when the image is unmeasured or unsigned.
+	// Manifest is the signed measurement manifest, ManifestPath(Image);
+	// "" when the image is unmeasured or unsigned, and then no manifest
+	// from an earlier build is left at that path.
 	Manifest string
 	// Unsigned says why a measured image has no Manifest:
 	// UnsignedNoManifestKey.
@@ -170,6 +171,9 @@ func Create(ctx context.Context, cfg *BuildConfig) (*Result, error) {
 	sum, size, err := fileDigest(output)
 	if err != nil {
 		return nil, &AssembleError{Step: "reading the finished image", Err: err}
+	}
+	if err := removeManifest(output); err != nil {
+		return nil, err
 	}
 	banks, unmeasured, err := c.measureImage(ctx, output, staged)
 	if err != nil {

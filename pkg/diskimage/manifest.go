@@ -15,13 +15,30 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/secureboot"
 )
 
-// ManifestFileName is the signed measurement manifest written beside the
-// image (architecture.md §8).
-const ManifestFileName = "measurements.corim"
+// ManifestSuffix names an image's signed measurement manifest
+// (architecture.md §8): ManifestPath appends it to the image's path, so
+// every image in an output directory keeps its own manifest.
+const ManifestSuffix = ".corim"
+
+// ManifestPath is the path of the signed measurement manifest of the image
+// at image: bin/rpi.img's is bin/rpi.img.corim.
+func ManifestPath(image string) string {
+	return image + ManifestSuffix
+}
 
 // UnsignedNoManifestKey is Result.Unsigned for a measured build given no
 // ManifestKey.
-const UnsignedNoManifestKey = "no manifest key (--manifest-key kms://...): the image's PCRs are predicted but not signed, so it has no " + ManifestFileName
+const UnsignedNoManifestKey = "no manifest key (--manifest-key kms://...): the image's PCRs are predicted but not signed, so it has no <image>" + ManifestSuffix
+
+// removeManifest deletes the manifest a previous build left beside image,
+// so a rebuild that writes none (unmeasured, unsigned or failed) never
+// leaves the old image's measurements beside the new image's bytes.
+func removeManifest(image string) error {
+	if err := os.Remove(ManifestPath(image)); err != nil && !os.IsNotExist(err) {
+		return &MeasureError{Step: "removing the previous " + filepath.Base(ManifestPath(image)), Err: err}
+	}
+	return nil
+}
 
 // ManifestKeyRefError reports a ManifestKey that is not a kms:// reference.
 // The manifest's key stays in the KMS: a file key on the build host is
@@ -54,8 +71,8 @@ func (c *BuildConfig) validateManifestKey() error {
 }
 
 // writeManifest signs the measurement manifest of the image whose SHA-256
-// is sum, with banks its predicted PCRs, and writes it as ManifestFileName
-// beside image. The key is ManifestKey in the KMS, its certificate
+// is sum, with banks its predicted PCRs, and writes it to
+// ManifestPath(image). The key is ManifestKey in the KMS, its certificate
 // ManifestCert from the platform CA; corim-meta's signer is the
 // certificate's common name and the signature is good from now until the
 // certificate expires. The written manifest is verified with that
@@ -103,9 +120,9 @@ func (c *BuildConfig) writeManifest(ctx context.Context, image, sum string, targ
 	if _, err := measure.VerifyManifest(data, self, now); err != nil {
 		return fail("checking the signed measurement manifest", err)
 	}
-	out := filepath.Join(filepath.Dir(image), ManifestFileName)
+	out := ManifestPath(image)
 	if err := os.WriteFile(out, data, 0o644); err != nil {
-		return fail("writing "+ManifestFileName, err)
+		return fail("writing "+filepath.Base(out), err)
 	}
 	return out, "", nil
 }

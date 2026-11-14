@@ -32,7 +32,7 @@ Three things to know before you start:
 > [acceptance](../SPEC.md#features) says every image carries a signed CoRIM of
 > the PCR values it determines, registered in the go-quicbaas
 > reference-values store. A Secure Boot image built with
-> `--manifest-key kms://<key>` gets `measurements.corim` beside it, signed in
+> `--manifest-key kms://<key>` gets `<image>.corim` beside it (`bin/rpi.img.corim`), signed in
 > the KMS (`--manifest-cert` names the key's certificate on the platform CA
 > when it is not the key's ID). Without the flag, or with Secure Boot off,
 > the build writes none and says why. Nothing is registered yet, so a node's

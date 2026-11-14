@@ -68,7 +68,7 @@ type createFlags struct {
 	output      string
 	binariesDir string
 	// manifestKey and manifestCert are BuildConfig.ManifestKey and
-	// ManifestCert: the KMS key that signs measurements.corim.
+	// ManifestCert: the KMS key that signs <image>.corim.
 	manifestKey  string
 	manifestCert string
 }
@@ -124,7 +124,7 @@ Examples:
 	f.IntVar(&flags.sizeMB, "size", pkgdiskimage.DefaultSizeMB, "Image size in MB")
 	f.StringVar(&flags.output, "output", "", "Output image path (default <work-dir>/trusted-platform-<target>.img)")
 	f.StringVar(&flags.binariesDir, "binaries-dir", "", "Directory holding the target-architecture platformd, platformctl, platform-initrd and gatewayd (default: aarch64/ next to this binary)")
-	f.StringVar(&flags.manifestKey, "manifest-key", "", "kms:// reference of the key that signs the image's measurement manifest, measurements.corim beside the image; empty writes none")
+	f.StringVar(&flags.manifestKey, "manifest-key", "", "kms:// reference of the key that signs the image's measurement manifest, <image>.corim beside the image; empty writes none")
 	f.StringVar(&flags.manifestCert, "manifest-cert", "", "The manifest key's certificate on the platform CA, optionally pinned with #sha256:<hex> (default: the key's ID)")
 	addMediaFlags(f, &flags.mediaFlags)
 	return cmd

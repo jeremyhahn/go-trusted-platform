@@ -106,7 +106,7 @@ func TestWriteManifestSignsBesideTheImage(t *testing.T) {
 		if err != nil || unsigned != "" {
 			t.Fatalf("%s: writeManifest: %v (unsigned %q)", tc.want, err, unsigned)
 		}
-		if path != filepath.Join(filepath.Dir(image), ManifestFileName) {
+		if path != ManifestPath(image) {
 			t.Fatalf("written to %s, want beside the image", path)
 		}
 		data, err := os.ReadFile(path)
@@ -134,8 +134,76 @@ func TestWriteManifestWithoutAKey(t *testing.T) {
 	if err != nil || path != "" || unsigned != UnsignedNoManifestKey {
 		t.Fatalf("path %q, unsigned %q, err %v", path, unsigned, err)
 	}
-	if _, err := os.Stat(filepath.Join(filepath.Dir(image), ManifestFileName)); !os.IsNotExist(err) {
+	if _, err := os.Stat(ManifestPath(image)); !os.IsNotExist(err) {
 		t.Errorf("a manifest was written without a key: %v", err)
+	}
+}
+
+// Two images built into one directory keep their own manifests: the second
+// build never overwrites the first image's measurements.
+func TestWriteManifestPerImage(t *testing.T) {
+	pki := newManifestPKI(t)
+	dir := t.TempDir()
+	cfg := &BuildConfig{ManifestKey: "kms://build/manifest", KMSClients: pki.clients()}
+	written := map[string]measure.Manifest{}
+	for _, tc := range []struct{ image, target string }{{"rpi.img", "rpi"}, {"qemu.img", "qemu-virt"}} {
+		target, err := NewTarget(tc.target, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		image := filepath.Join(dir, tc.image)
+		digest := sha256.Sum256([]byte(tc.image))
+		path, _, err := cfg.writeManifest(context.Background(), image, hex.EncodeToString(digest[:]), target, manifestBanks())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if path != image+".corim" {
+			t.Fatalf("%s: manifest at %s, want %s.corim", tc.image, path, image)
+		}
+		id, _ := measure.ManifestTagID(digest[:])
+		written[path] = measure.Manifest{TagID: id, Model: target.Name() + "/" + target.ModelName()}
+	}
+	for path, want := range written {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := measure.VerifyManifest(data, pki.roots, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Manifest.TagID != want.TagID || got.Manifest.Model != want.Model {
+			t.Errorf("%s holds tag %v model %s, want tag %v model %s", path, got.Manifest.TagID, got.Manifest.Model, want.TagID, want.Model)
+		}
+	}
+}
+
+// removeManifest deletes a previous build's manifest and is a no-op when
+// there is none.
+func TestRemoveManifest(t *testing.T) {
+	image := filepath.Join(t.TempDir(), "img.img")
+	if err := removeManifest(image); err != nil {
+		t.Fatalf("no manifest to remove: %v", err)
+	}
+	if err := os.WriteFile(ManifestPath(image), []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeManifest(image); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(ManifestPath(image)); !os.IsNotExist(err) {
+		t.Errorf("the stale manifest is still there: %v", err)
+	}
+	// A manifest path that cannot be removed fails the build.
+	if err := os.Remove(ManifestPath(image)); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(ManifestPath(image), "x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var me *MeasureError
+	if err := removeManifest(image); !errors.As(err, &me) {
+		t.Errorf("an unremovable manifest path: err %v, want a MeasureError", err)
 	}
 }
 
@@ -166,7 +234,7 @@ func TestWriteManifestRefuses(t *testing.T) {
 			if !errors.As(err, &me) || me.Step != tc.step || path != "" {
 				t.Fatalf("path %q, err %v, want step %q", path, err, tc.step)
 			}
-			if _, err := os.Stat(filepath.Join(filepath.Dir(image), ManifestFileName)); !os.IsNotExist(err) {
+			if _, err := os.Stat(ManifestPath(image)); !os.IsNotExist(err) {
 				t.Errorf("a refused manifest was written: %v", err)
 			}
 		})

@@ -202,12 +202,24 @@ func TestMeasureImageFailsOnAMissingInput(t *testing.T) {
 // unmeasured, and a Secure Boot build whose image cannot be measured fails.
 func TestCreateMeasuresTheImage(t *testing.T) {
 	t.Parallel()
-	res, err := Create(context.Background(), buildConfigForTest(t, "qemu-virt", &diskimagetest.Runner{}))
+	off := buildConfigForTest(t, "qemu-virt", &diskimagetest.Runner{})
+	// An earlier build's manifest at the image's manifest path is removed:
+	// the rebuilt image's bytes never sit beside another image's PCRs.
+	if err := os.MkdirAll(filepath.Dir(off.Output), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ManifestPath(off.Output), []byte("an earlier build's manifest"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Create(context.Background(), off)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if res.Measurements != nil || res.Unmeasured != UnmeasuredSecureBootOff || res.Manifest != "" || res.Unsigned != "" {
 		t.Errorf("Secure Boot off: measurements %v, unmeasured %q, manifest %q, unsigned %q", res.Measurements, res.Unmeasured, res.Manifest, res.Unsigned)
+	}
+	if _, err := os.Stat(ManifestPath(off.Output)); !os.IsNotExist(err) {
+		t.Errorf("a rebuild left the earlier build's manifest: %v", err)
 	}
 
 	cfg := buildConfigForTest(t, "qemu-virt", &diskimagetest.Runner{})

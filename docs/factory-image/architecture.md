@@ -335,7 +335,7 @@ What persists: the image, the staged media directory, the U-Boot output
 > PCRs 0, 4, 7 and 9 into `Result.Measurements` (`pkg/diskimage/measure`).
 > So are the CoRIM encoding (`measure.EncodeManifest`) and its COSE_Sign1
 > (`measure.SignManifest` / `VerifyManifest`), and `Create` writes
-> `measurements.corim` when it is given a `kms://` manifest key
+> `<image>.corim` when it is given a `kms://` manifest key
 > (`--manifest-key`). The event-log check and registration are not built
 > yet; [docs/plans/669.md](../plans/669.md) slices 5-6 build them. Until then a node's quote is checked against its
 > device profile's `PCRBaseline` table.
@@ -379,8 +379,9 @@ and checks that the live TCG event log, replayed, gives the manifest's
 values. The x86 ISO path gets the same check.
 
 **The CoRIM.** One `signed-corim` (`#6.18`, COSE_Sign1, content type
-`application/rim+cbor`) per build, written as `measurements.corim` beside the
-image. It holds one CoMID (`#6.506`):
+`application/rim+cbor`) per build, written as `<image>.corim` beside the
+image (`bin/rpi.img.corim`), so images built into one directory keep their own
+manifests; a rebuild that writes none removes the earlier one. It holds one CoMID (`#6.506`):
 
 - `tag-identity`: a UUID derived from the image's SHA-256 (RFC 9562
   version 8, SHA-256 over a fixed namespace and the digest). The CoRIM's

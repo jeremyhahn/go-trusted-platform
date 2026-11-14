@@ -108,7 +108,7 @@ type BuildConfig struct {
 	// the platform CA (default the key's ID; a "#sha256:<hex>" pin is
 	// allowed, as for the Secure Boot DB key). The build reaches them
 	// through KMSClients and never holds the key. A measured image is
-	// written with ManifestFileName beside it; with no ManifestKey it gets
+	// written with its manifest at ManifestPath(image); with no ManifestKey it gets
 	// none and Result.Unsigned says so. Any other reference is refused.
 	ManifestKey  string
 	ManifestCert string

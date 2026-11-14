@@ -21,7 +21,7 @@
 > read as a description of the shipped image.
 >
 > The factory image carries the signed CoRIM of the PCR values it determines
-> (`measurements.corim`) when it is built with a `kms://` manifest key. The
+> (`<image>.corim`) when it is built with a `kms://` manifest key. The
 > manifest is not yet registered in the go-quicbaas reference-values store,
 > as its SPEC row requires. That waits on the go-quicbaas pin (#720). See the [user guide](../factory-image/user.md#what-this-is) and
 > [docs/plans/669.md](../plans/669.md).
