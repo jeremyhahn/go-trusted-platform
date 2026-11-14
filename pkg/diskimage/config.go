@@ -103,6 +103,15 @@ type BuildConfig struct {
 	// MeasurementBanks are the PCR banks the image's measurements are
 	// predicted for; nil means sha256.
 	MeasurementBanks []crypto.Hash
+	// ManifestKey is the kms:// reference of the key that signs the
+	// image's measurement manifest; ManifestCert names its certificate on
+	// the platform CA (default the key's ID; a "#sha256:<hex>" pin is
+	// allowed, as for the Secure Boot DB key). The build reaches them
+	// through KMSClients and never holds the key. A measured image is
+	// written with ManifestFileName beside it; with no ManifestKey it gets
+	// none and Result.Unsigned says so. Any other reference is refused.
+	ManifestKey  string
+	ManifestCert string
 	// SkipPreflight disables the host checks (binfmt, container runtime,
 	// kernel modules); tests use it.
 	SkipPreflight bool

@@ -41,6 +41,9 @@ func New() *Target { return &Target{} }
 // Name implements diskimage.Target.
 func (t *Target) Name() string { return Name }
 
+// ModelName implements diskimage.Target: the one machine, QEMU's virt.
+func (t *Target) ModelName() string { return "virt" }
+
 // Architecture implements diskimage.Target.
 func (t *Target) Architecture() uki.Architecture { return uki.ArchAArch64 }
 

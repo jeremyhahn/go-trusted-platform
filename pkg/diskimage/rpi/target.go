@@ -120,6 +120,10 @@ func New(model string) (*Target, error) {
 // Name implements diskimage.Target.
 func (t *Target) Name() string { return Name }
 
+// ModelName implements diskimage.Target: the model's name, "rpi4" for a
+// Raspberry Pi 4.
+func (t *Target) ModelName() string { return t.Model.Name }
+
 // Architecture implements diskimage.Target.
 func (t *Target) Architecture() uki.Architecture { return uki.ArchAArch64 }
 

@@ -67,6 +67,10 @@ type createFlags struct {
 	sizeMB      int
 	output      string
 	binariesDir string
+	// manifestKey and manifestCert are BuildConfig.ManifestKey and
+	// ManifestCert: the KMS key that signs measurements.corim.
+	manifestKey  string
+	manifestCert string
 }
 
 // defaultPlatformConfigPaths mirror `iso create`: the single-node template
@@ -120,6 +124,8 @@ Examples:
 	f.IntVar(&flags.sizeMB, "size", pkgdiskimage.DefaultSizeMB, "Image size in MB")
 	f.StringVar(&flags.output, "output", "", "Output image path (default <work-dir>/trusted-platform-<target>.img)")
 	f.StringVar(&flags.binariesDir, "binaries-dir", "", "Directory holding the target-architecture platformd, platformctl, platform-initrd and gatewayd (default: aarch64/ next to this binary)")
+	f.StringVar(&flags.manifestKey, "manifest-key", "", "kms:// reference of the key that signs the image's measurement manifest, measurements.corim beside the image; empty writes none")
+	f.StringVar(&flags.manifestCert, "manifest-cert", "", "The manifest key's certificate on the platform CA, optionally pinned with #sha256:<hex> (default: the key's ID)")
 	addMediaFlags(f, &flags.mediaFlags)
 	return cmd
 }
@@ -380,6 +386,8 @@ func runCreate(common *cli.CommonFlags, flags *createFlags) (err error) {
 	build.SizeMB = flags.sizeMB
 	build.Output = flags.output
 	build.BinariesDir = filepath.Dir(cfg.PlatformdBinary)
+	build.ManifestKey = flags.manifestKey
+	build.ManifestCert = flags.manifestCert
 	if build.HostInstallerBinary, err = hostInstallerBinary(); err != nil {
 		return err
 	}
@@ -388,6 +396,14 @@ func runCreate(common *cli.CommonFlags, flags *createFlags) (err error) {
 		return ErrBuildFailed{Reason: err.Error()}
 	}
 	fmt.Printf("\nImage: %s\n  SHA256: %s\n  Size: %d MB\n  U-Boot: %s\n  Media: %s\n", result.Image, result.SHA256, result.SizeBytes/(1024*1024), result.UBoot.Binary, result.MediaDir)
+	switch {
+	case result.Manifest != "":
+		fmt.Printf("  Measurement manifest: %s\n", result.Manifest)
+	case result.Unmeasured != "":
+		fmt.Printf("  Measurement manifest: none (%s)\n", result.Unmeasured)
+	case result.Unsigned != "":
+		fmt.Printf("  Measurement manifest: none (%s)\n", result.Unsigned)
+	}
 	return nil
 }
 

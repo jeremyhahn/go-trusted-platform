@@ -28,6 +28,10 @@ import (
 type Target interface {
 	// Name is the --target value.
 	Name() string
+	// ModelName is the board the image is for, the --model value resolved
+	// to the target's name for it ("rpi4", "virt"). Name()/ModelName() is
+	// the measurement manifest's model.
+	ModelName() string
 	// Architecture is the CPU architecture of the image.
 	Architecture() uki.Architecture
 	// KernelPackage is the apk kernel to install and prefetch.

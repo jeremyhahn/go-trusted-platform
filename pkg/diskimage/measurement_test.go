@@ -206,8 +206,8 @@ func TestCreateMeasuresTheImage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Measurements != nil || res.Unmeasured != UnmeasuredSecureBootOff {
-		t.Errorf("Secure Boot off: measurements %v, unmeasured %q", res.Measurements, res.Unmeasured)
+	if res.Measurements != nil || res.Unmeasured != UnmeasuredSecureBootOff || res.Manifest != "" || res.Unsigned != "" {
+		t.Errorf("Secure Boot off: measurements %v, unmeasured %q, manifest %q, unsigned %q", res.Measurements, res.Unmeasured, res.Manifest, res.Unsigned)
 	}
 
 	cfg := buildConfigForTest(t, "qemu-virt", &diskimagetest.Runner{})

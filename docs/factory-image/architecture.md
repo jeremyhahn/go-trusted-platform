@@ -334,9 +334,10 @@ What persists: the image, the staged media directory, the U-Boot output
 > **Partly built.** The prediction is built: `diskimage.Create` predicts
 > PCRs 0, 4, 7 and 9 into `Result.Measurements` (`pkg/diskimage/measure`).
 > So are the CoRIM encoding (`measure.EncodeManifest`) and its COSE_Sign1
-> (`measure.SignManifest` / `VerifyManifest`). The `kms://` signing key,
-> `measurements.corim` on disk, the event-log check and registration are not
-> built yet; [docs/plans/669.md](../plans/669.md) slices 4c-6 build them. Until then a node's quote is checked against its
+> (`measure.SignManifest` / `VerifyManifest`), and `Create` writes
+> `measurements.corim` when it is given a `kms://` manifest key
+> (`--manifest-key`). The event-log check and registration are not built
+> yet; [docs/plans/669.md](../plans/669.md) slices 5-6 build them. Until then a node's quote is checked against its
 > device profile's `PCRBaseline` table.
 
 The SPEC row says every image, an upgrade included, is built and signed
