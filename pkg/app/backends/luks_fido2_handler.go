@@ -88,6 +88,12 @@ type luksFIDO2Handler struct {
 	logger *logging.Logger
 	xkms   fido2.Handler
 	rpID   string
+	// sdkSem (capacity 1) serializes calls into xkms, whose UnlockWithKey
+	// overwrites and restores its config timeout without synchronization.
+	// The goroutine running the SDK call releases it when that call
+	// returns, so a caller whose context is cancelled never lets the next
+	// derivation in while the SDK is still running.
+	sdkSem chan struct{}
 }
 
 // Compile-time assertion against the minimum interface.
@@ -107,7 +113,7 @@ func NewLUKSFIDO2Handler(logger *logging.Logger, h fido2.Handler, rpID string) (
 	if rpID == "" {
 		rpID = fido2.DefaultConfig.RelyingPartyID
 	}
-	return &luksFIDO2Handler{logger: logger, xkms: h, rpID: rpID}, nil
+	return &luksFIDO2Handler{logger: logger, xkms: h, rpID: rpID, sdkSem: make(chan struct{}, 1)}, nil
 }
 
 // EnrollCredential satisfies the minimal LUKSFIDO2Handler interface consumed
@@ -210,8 +216,16 @@ func (h *luksFIDO2Handler) deriveWithContext(ctx context.Context, credentialID, 
 		key []byte
 		err error
 	}
+	// Wait for any earlier SDK call to return, also one whose caller has
+	// already given up, unless this caller gives up first.
+	select {
+	case h.sdkSem <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 	ch := make(chan derivation, 1)
 	go func() {
+		defer func() { <-h.sdkSem }()
 		key, err := h.xkms.UnlockWithKey(cfg)
 		ch <- derivation{key: key, err: err}
 	}()

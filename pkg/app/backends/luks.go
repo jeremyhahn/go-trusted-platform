@@ -161,9 +161,10 @@ type LUKSBackend struct {
 	// go-xkms handler reads, overwrites and restores its config timeout
 	// without synchronization, and one handler serves every request, so
 	// two enrollments (even on different devices) must not call it at once.
-	// The lock is held until the handler call returns, also when the
-	// request's context is cancelled, so a cancelled caller never lets the
-	// next one in while the SDK is still running.
+	// The lock is released when the handler call returns; a call that
+	// returns early on a cancelled context may leave its SDK call running,
+	// so the SDK-backed handler (luksFIDO2Handler) also holds its own lock
+	// from inside the goroutine running that call until the call returns.
 	fido2Mu sync.Mutex
 
 	// fipsActive reports whether the platform FIPS keyslot policy applies.
