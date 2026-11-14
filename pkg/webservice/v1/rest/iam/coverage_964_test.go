@@ -263,6 +263,8 @@ type cov964Policies struct {
 	tested    *iamsdk.TestPolicyRequest
 	validRes  *iamsdk.ValidationResult
 	testRes   *iamsdk.TestPolicyResponse
+	simulated *iamsdk.SimulateRequest
+	simRes    *iamsdk.SimulateResponse
 	err       error
 }
 
@@ -352,6 +354,28 @@ func (c *cov964Policies) Test(_ context.Context, tenantID string, req *iamsdk.Te
 		return nil, c.err
 	}
 	return c.testRes, nil
+}
+
+func (c *cov964Policies) Simulate(_ context.Context, tenantID string, req *iamsdk.SimulateRequest) (*iamsdk.SimulateResponse, error) {
+	c.simulated = req
+	// Mirror the pinned SDK's validateSimulateRequest so the fake cannot
+	// certify a request the real client rejects.
+	switch {
+	case tenantID == "":
+		return nil, qberrors.NewInvalidInput("iam.Policy.Simulate", "tenant ID is required")
+	case req == nil:
+		return nil, qberrors.NewInvalidInput("iam.Policy.Simulate", "request is required")
+	case req.Subject.ID == "":
+		return nil, qberrors.NewInvalidInput("iam.Policy.Simulate", "subject ID is required")
+	case req.Action == "":
+		return nil, qberrors.NewInvalidInput("iam.Policy.Simulate", "action is required")
+	case req.Resource == "":
+		return nil, qberrors.NewInvalidInput("iam.Policy.Simulate", "resource is required")
+	}
+	if c.err != nil {
+		return nil, c.err
+	}
+	return c.simRes, nil
 }
 
 // cov964Apps is an in-memory AppClient keyed by client ID; err, when set,
@@ -971,9 +995,14 @@ func TestCov964Adapter_ValidatePolicy(t *testing.T) {
 	assert.ErrorIs(t, err, cov964Unavailable{})
 }
 
-func TestCov964Adapter_TestPolicySendsOneInlineCase(t *testing.T) {
+func TestCov964Adapter_TestPolicySimulates(t *testing.T) {
 	client := cov964NewClient()
-	client.policies.testRes = &iamsdk.TestPolicyResponse{Passed: 1}
+	client.policies.simRes = &iamsdk.SimulateResponse{
+		Allowed:          true,
+		MatchedPolicies:  []string{"allow-read"},
+		MatchedRules:     []string{"rule-1"},
+		EvaluationTimeNs: 42,
+	}
 
 	resp, err := NewQuicBaaSIAMAdapter(client).TestPolicy(context.Background(), "tenant-a", &TestPolicyRequest{
 		SubjectID: "user-1",
@@ -984,60 +1013,69 @@ func TestCov964Adapter_TestPolicySendsOneInlineCase(t *testing.T) {
 		Context:   map[string]string{"ip": "10.0.0.1"},
 	})
 
-	// The REST shape names no policy, so the SDK rejects the request before
-	// it reaches the server and the adapter returns that error.
-	require.Error(t, err)
-	assert.True(t, qberrors.IsInvalidInput(err), "want the SDK's invalid-input error, got %v", err)
-	assert.Equal(t, "policy name is required", qberrors.Message(err))
-	assert.Nil(t, resp)
+	require.NoError(t, err)
+	assert.Equal(t, &TestPolicyResponse{Allowed: true, MatchedPolicy: "allow-read", MatchedRule: "rule-1", EvaluationTimeNs: 42}, resp)
 
-	require.NotNil(t, client.policies.tested)
-	assert.Empty(t, client.policies.tested.PolicyName)
-	require.Len(t, client.policies.tested.TestCases, 1)
-	tc := client.policies.tested.TestCases[0]
-	assert.Equal(t, "rest-inline", tc.Name)
-	assert.Equal(t, iamsdk.Subject{ID: "user-1", TenantID: "tenant-a", Roles: []string{"viewer"}, Groups: []string{"ops"}}, tc.Subject)
-	assert.Equal(t, "iam:get", tc.Action)
-	assert.Equal(t, "tenant/a", tc.Resource)
-	assert.Equal(t, map[string]interface{}{"ip": "10.0.0.1"}, tc.Context)
+	assert.Nil(t, client.policies.tested, "Policy.Test needs a policy name and must not be called")
+	require.NotNil(t, client.policies.simulated)
+	sim := client.policies.simulated
+	assert.Equal(t, iamsdk.Subject{ID: "user-1", TenantID: "tenant-a", Roles: []string{"viewer"}, Groups: []string{"ops"}}, sim.Subject)
+	assert.Equal(t, "iam:get", sim.Action)
+	assert.Equal(t, "tenant/a", sim.Resource)
+	assert.Equal(t, map[string]interface{}{"ip": "10.0.0.1"}, sim.Context)
+
+	t.Run("attributes reach the subject", func(t *testing.T) {
+		client := cov964NewClient()
+		client.policies.simRes = &iamsdk.SimulateResponse{}
+		_, err := NewQuicBaaSIAMAdapter(client).TestPolicy(context.Background(), "tenant-a", &TestPolicyRequest{
+			SubjectID:  "user-1",
+			Action:     "iam:get",
+			Resource:   "tenant/a",
+			Attributes: map[string]string{"dept": "eng"},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, client.policies.simulated)
+		assert.Equal(t, map[string]interface{}{"dept": "eng"}, client.policies.simulated.Subject.Attributes)
+	})
 }
 
 func TestCov964Adapter_TestPolicyResultDecides(t *testing.T) {
 	tests := []struct {
 		name string
-		res  *iamsdk.TestPolicyResponse
+		res  *iamsdk.SimulateResponse
 		want *TestPolicyResponse
 	}{
 		{
-			name: "passing deny case is not allowed",
-			res: &iamsdk.TestPolicyResponse{Passed: 1, Results: []iamsdk.TestCaseResult{{
-				Passed: true, ExpectedResult: iamsdk.EffectDeny, ActualResult: iamsdk.EffectDeny, MatchedRule: "block",
-			}}},
-			want: &TestPolicyResponse{Allowed: false, MatchedRule: "block"},
+			name: "denied with a matched policy",
+			res: &iamsdk.SimulateResponse{
+				Allowed: false, Effect: iamsdk.EffectDeny,
+				MatchedPolicies: []string{"block-all", "other"}, MatchedRules: []string{"block"},
+				EvaluationTimeNs: 7,
+			},
+			want: &TestPolicyResponse{Allowed: false, MatchedPolicy: "block-all", MatchedRule: "block", EvaluationTimeNs: 7},
 		},
 		{
-			name: "failing case whose actual decision is allow is allowed",
-			res: &iamsdk.TestPolicyResponse{Failed: 1, Results: []iamsdk.TestCaseResult{{
-				Passed: false, ExpectedResult: iamsdk.EffectDeny, ActualResult: iamsdk.EffectAllow, MatchedRule: "read",
-			}}},
-			want: &TestPolicyResponse{Allowed: true, MatchedRule: "read"},
+			name: "allowed",
+			res: &iamsdk.SimulateResponse{
+				Allowed: true, Effect: iamsdk.EffectAllow,
+				MatchedPolicies: []string{"allow-read"}, MatchedRules: []string{"read"},
+			},
+			want: &TestPolicyResponse{Allowed: true, MatchedPolicy: "allow-read", MatchedRule: "read"},
 		},
 		{
-			name: "passing allow case is allowed",
-			res: &iamsdk.TestPolicyResponse{Passed: 1, Results: []iamsdk.TestCaseResult{{
-				Passed: true, ExpectedResult: iamsdk.EffectAllow, ActualResult: iamsdk.EffectAllow, MatchedRule: "read",
-			}}},
-			want: &TestPolicyResponse{Allowed: true, MatchedRule: "read"},
+			name: "empty response is not allowed",
+			res:  &iamsdk.SimulateResponse{},
+			want: &TestPolicyResponse{},
 		},
 		{
-			name: "no results is not allowed",
-			res:  &iamsdk.TestPolicyResponse{Passed: 1},
+			name: "nil response is not allowed",
+			res:  nil,
 			want: &TestPolicyResponse{},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, testPolicyResponseFromSDK(tt.res))
+			assert.Equal(t, tt.want, testPolicyResponseFromSimulate(tt.res))
 		})
 	}
 }
@@ -1046,11 +1084,20 @@ func TestCov964Adapter_TestPolicyErrors(t *testing.T) {
 	client := cov964NewClient()
 	_, err := NewQuicBaaSIAMAdapter(client).TestPolicy(context.Background(), "tenant-a", nil)
 	require.Error(t, err)
+	assert.Nil(t, client.policies.simulated, "the SDK must not be called")
 	assert.Nil(t, client.policies.tested, "the SDK must not be called")
 
 	_, err = NewQuicBaaSIAMAdapter(client).TestPolicy(context.Background(), "", &TestPolicyRequest{})
 	assert.True(t, qberrors.IsInvalidInput(err), "want the SDK's invalid-input error, got %v", err)
 	assert.Equal(t, "tenant ID is required", qberrors.Message(err))
+	assert.Equal(t, "iam.Policy.Simulate", qberrors.Op(err))
+
+	client = cov964NewClient()
+	client.policies.err = qberrors.NewUnavailable("iam.Policy.Simulate", "backend down")
+	_, err = NewQuicBaaSIAMAdapter(client).TestPolicy(context.Background(), "tenant-a", &TestPolicyRequest{
+		SubjectID: "user-1", Action: "iam:get", Resource: "tenant/a",
+	})
+	assert.Equal(t, client.policies.err, err)
 }
 
 func TestCov964Adapter_ListApps(t *testing.T) {
