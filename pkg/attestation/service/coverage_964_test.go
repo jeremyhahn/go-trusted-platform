@@ -15,6 +15,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -118,12 +119,15 @@ func TestListManifests_AppliesTheFilter(t *testing.T) {
 		name   string
 		filter *daemon.ListManifestsFilter
 		want   []string
+		total  int
 	}{
-		{"nil filter lists all", nil, []string{"a-old", "a-new", "b-new"}},
-		{"host", &daemon.ListManifestsFilter{HostID: "host-a"}, []string{"a-old", "a-new"}},
-		{"start time", &daemon.ListManifestsFilter{StartTime: base.Add(-time.Hour).Unix()}, []string{"a-new", "b-new"}},
-		{"end time", &daemon.ListManifestsFilter{EndTime: base.Add(-time.Hour).Unix()}, []string{"a-old"}},
-		{"limit", &daemon.ListManifestsFilter{HostID: "host-a", Limit: 1}, []string{"a-new"}},
+		{"nil filter lists all", nil, []string{"a-old", "a-new", "b-new"}, 3},
+		{"host", &daemon.ListManifestsFilter{HostID: "host-a"}, []string{"a-old", "a-new"}, 2},
+		{"start time", &daemon.ListManifestsFilter{StartTime: base.Add(-time.Hour).Unix()}, []string{"a-new", "b-new"}, 2},
+		{"end time", &daemon.ListManifestsFilter{EndTime: base.Add(-time.Hour).Unix()}, []string{"a-old"}, 1},
+		// total counts every match before the page is cut (#1686).
+		{"limit", &daemon.ListManifestsFilter{HostID: "host-a", Limit: 1}, []string{"a-new"}, 2},
+		{"offset", &daemon.ListManifestsFilter{HostID: "host-a", Limit: 1, Offset: 1}, []string{"a-old"}, 2},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -134,9 +138,39 @@ func TestListManifests_AppliesTheFilter(t *testing.T) {
 				ids = append(ids, m.ID)
 			}
 			assert.ElementsMatch(t, tc.want, ids)
-			assert.Equal(t, len(tc.want), total)
+			assert.Equal(t, tc.total, total)
 		})
 	}
+}
+
+// TestListManifests_PagesWithOffsetAndCountsBeforePaging pages through 30
+// stored manifests through the real store: each page holds different
+// manifests and total counts every match, not the page (#1686, Codex P1).
+func TestListManifests_PagesWithOffsetAndCountsBeforePaging(t *testing.T) {
+	svc, _ := newVerdictService(t)
+	base := time.Unix(1_700_000_000, 0).UTC()
+	for i := 0; i < 30; i++ {
+		putManifest(t, svc, fmt.Sprintf("m-%02d", i), "host-a", base.Add(time.Duration(i)*time.Minute))
+	}
+
+	seen := map[string]bool{}
+	for offset := 0; offset < 30; offset += 10 {
+		got, total, err := svc.ListManifests(context.Background(),
+			&daemon.ListManifestsFilter{Limit: 10, Offset: offset})
+		require.NoError(t, err)
+		assert.Equal(t, 30, total, "offset %d", offset)
+		require.Len(t, got, 10, "offset %d", offset)
+		for _, m := range got {
+			assert.False(t, seen[m.ID], "offset %d repeats %s", offset, m.ID)
+			seen[m.ID] = true
+		}
+	}
+	assert.Len(t, seen, 30)
+
+	got, total, err := svc.ListManifests(context.Background(), &daemon.ListManifestsFilter{Limit: 10, Offset: 40})
+	require.NoError(t, err)
+	assert.Empty(t, got)
+	assert.Equal(t, 30, total)
 }
 
 func TestListManifests_SurfacesTheStoreError(t *testing.T) {

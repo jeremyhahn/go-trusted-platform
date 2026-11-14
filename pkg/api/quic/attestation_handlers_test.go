@@ -2406,6 +2406,20 @@ func TestManifestToData(t *testing.T) {
 		assert.Len(t, data.Containers, 1)
 	})
 
+	t.Run("keeps sub-second manifest time", func(t *testing.T) {
+		m := &manifest.HostManifest{
+			ID:        "frac",
+			HostID:    "test-host",
+			Timestamp: time.Unix(1700000000, 123456789).UTC(),
+		}
+		data := handler.manifestToData(m)
+		assert.Equal(t, int64(1700000000), data.Timestamp)
+		assert.Equal(t, int64(123456789), data.TimestampNanos)
+		back, err := handler.dataToManifest(data)
+		assert.NoError(t, err)
+		assert.True(t, back.Timestamp.Equal(m.Timestamp), "round trip %v != %v", back.Timestamp, m.Timestamp)
+	})
+
 	t.Run("handles nil manifest", func(t *testing.T) {
 		data := handler.manifestToData(nil)
 		assert.Nil(t, data)
@@ -2440,11 +2454,54 @@ func TestDataToManifest(t *testing.T) {
 		assert.NotNil(t, m.Host)
 	})
 
+	t.Run("keeps sub-second manifest time", func(t *testing.T) {
+		want := time.Unix(1700000000, 123456789).UTC()
+		m, err := handler.dataToManifest(&ManifestData{
+			ID:             "frac",
+			HostID:         "test-host",
+			Timestamp:      1700000000,
+			TimestampNanos: 123456789,
+		})
+		assert.NoError(t, err)
+		assert.True(t, m.Timestamp.Equal(want), "timestamp %v != %v", m.Timestamp, want)
+	})
+
 	t.Run("handles nil data", func(t *testing.T) {
 		m, err := handler.dataToManifest(nil)
 		assert.Error(t, err)
 		assert.Nil(t, m)
 	})
+}
+
+// A stored manifest whose host, VM and container evidence carry
+// sub-second times crosses the QUIC wire unchanged (#1686, Codex round 5).
+func TestManifestNestedEvidenceKeepsNanoseconds(t *testing.T) {
+	handler, _ := createTestAttestationHandler()
+	hostTS := time.Unix(1700000100, 111111111).UTC()
+	vmTS := time.Unix(1700000200, 222222222).UTC()
+	ctrTS := time.Unix(1700000300, 333333333).UTC()
+	m := &manifest.HostManifest{
+		ID:         "frac-nested",
+		HostID:     "test-host",
+		Timestamp:  time.Unix(1700000000, 123456789).UTC(),
+		Host:       &manifest.HostAttestation{QuoteData: []byte("q"), Timestamp: hostTS, HashAlgorithm: manifest.HashAlgorithmSHA256},
+		VMs:        []manifest.VMAttestation{{VMID: "vm-1", Timestamp: vmTS, HashAlgorithm: manifest.HashAlgorithmSHA256}},
+		Containers: []manifest.ContainerAttestation{{ContainerID: "c-1", Timestamp: ctrTS}},
+	}
+
+	data := handler.manifestToData(m)
+	require.NotNil(t, data.Host)
+	require.Len(t, data.VMs, 1)
+	require.Len(t, data.Containers, 1)
+	assert.Equal(t, int64(111111111), data.Host.TimestampNanos)
+	assert.Equal(t, int64(222222222), data.VMs[0].TimestampNanos)
+	assert.Equal(t, int64(333333333), data.Containers[0].TimestampNanos)
+
+	back, err := handler.dataToManifest(data)
+	require.NoError(t, err)
+	assert.True(t, back.Host.Timestamp.Equal(hostTS), "host %v != %v", back.Host.Timestamp, hostTS)
+	assert.True(t, back.VMs[0].Timestamp.Equal(vmTS), "vm %v != %v", back.VMs[0].Timestamp, vmTS)
+	assert.True(t, back.Containers[0].Timestamp.Equal(ctrTS), "container %v != %v", back.Containers[0].Timestamp, ctrTS)
 }
 
 func TestHostAttestationDataConversion(t *testing.T) {

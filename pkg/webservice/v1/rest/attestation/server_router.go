@@ -14,9 +14,12 @@
 package attestation
 
 import (
+	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/gorilla/mux"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/channelbind"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -130,7 +133,45 @@ func (r *AttestationServerRouter) listManifests(w http.ResponseWriter, req *http
 	if !r.ensure(w, req) {
 		return
 	}
-	pbReq := &platformv1.ListManifestsRequest{}
+	limit, err := protorest.QueryUint32(req, "limit")
+	if err != nil {
+		r.respWriter.Error400(w, req, err)
+		return
+	}
+	offset, err := protorest.QueryUint32(req, "offset")
+	if err != nil {
+		r.respWriter.Error400(w, req, err)
+		return
+	}
+	pbReq := &platformv1.ListManifestsRequest{
+		HostId: req.URL.Query().Get("host_id"),
+		Limit:  limit,
+		Offset: offset,
+	}
+	for _, bound := range []struct {
+		name string
+		set  func(*timestamppb.Timestamp)
+	}{
+		{"start_time", func(ts *timestamppb.Timestamp) { pbReq.StartTime = ts }},
+		{"end_time", func(ts *timestamppb.Timestamp) { pbReq.EndTime = ts }},
+	} {
+		raw := req.URL.Query().Get(bound.name)
+		if raw == "" {
+			continue
+		}
+		t, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			r.respWriter.Error400(w, req, fmt.Errorf("invalid %s: %w", bound.name, err))
+			return
+		}
+		// The manifest filter keeps whole seconds: refuse a fractional
+		// bound rather than truncate it into a different window.
+		if t.Nanosecond() != 0 {
+			r.respWriter.Error400(w, req, fmt.Errorf("invalid %s: fractional seconds are not supported", bound.name))
+			return
+		}
+		bound.set(timestamppb.New(t))
+	}
 	resp, err := r.server.ListManifests(req.Context(), pbReq)
 	if err != nil {
 		protorest.WriteError(w, req, r.respWriter, err)

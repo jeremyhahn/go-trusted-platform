@@ -57,12 +57,18 @@ Examples:
   # Print every device verdict platformd records from now on
   platformctl attestation verdicts follow
 
+  # Stored host attestation manifests
+  platformctl attestation manifests list --host-id host-a
+  platformctl attestation manifests get m-123
+  platformctl attestation manifests delete m-123
+
   # Machine-readable output carries the wire shape unchanged
   platformctl attestation reports get 123 -o json`,
 	}
 	cmd.AddCommand(newReportsCommand(getFlags))
 	cmd.AddCommand(newCallersCommand(getFlags))
 	cmd.AddCommand(newVerdictsCommand(getFlags))
+	cmd.AddCommand(newManifestsCommand(getFlags))
 	return cmd
 }
 
