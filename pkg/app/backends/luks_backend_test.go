@@ -16,13 +16,20 @@ package backends
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jeremyhahn/go-luks2/pkg/luks2"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/fido2"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/fips"
@@ -543,21 +550,433 @@ func TestLUKSBackend_RemoveKey(t *testing.T) {
 	}
 }
 
-func TestLUKSBackend_TestUnlock(t *testing.T) {
+func TestLUKSBackend_TestUnlockRefusesWithoutVerification(t *testing.T) {
 	device := newLUKSImage(t)
 	b := newTestLUKSBackend()
-	tests := []struct {
-		slot int32
-		want bool
-	}{
-		{slot: 0, want: true},
-		{slot: 5, want: false},
+	ok, err := b.TestUnlock(context.Background(), &daemon.LUKSTestUnlockRequest{Device: device, Slot: 0})
+	if ok || !errors.Is(err, ErrLUKSTestUnlockUnverified) {
+		t.Fatalf("TestUnlock(slot 0) = %v, %v; want false and ErrLUKSTestUnlockUnverified", ok, err)
 	}
-	for _, tc := range tests {
-		got, err := b.TestUnlock(context.Background(), &daemon.LUKSTestUnlockRequest{Device: device, Slot: tc.slot})
-		if err != nil || got != tc.want {
-			t.Fatalf("TestUnlock(slot %d) = %v, %v; want %v", tc.slot, got, err, tc.want)
+}
+
+// perCredentialFIDO2Key derives a distinct key per credential ID and returns
+// a fresh slice on every call, since the backend wipes the returned key.
+type perCredentialFIDO2Key struct{}
+
+func (perCredentialFIDO2Key) EnrollCredential(_ context.Context, credentialID string, _, _ bool) ([]byte, error) {
+	return []byte("fido2-key-" + credentialID), nil
+}
+
+func TestLUKSBackend_ConcurrentEnrollmentGetsDistinctSlots(t *testing.T) {
+	const n = 4
+
+	t.Run("passphrase", func(t *testing.T) {
+		device := newLUKSImage(t)
+		b := newTestLUKSBackend()
+		start := make(chan struct{})
+		slots := make([]int32, n)
+		errs := make([]error, n)
+		var wg sync.WaitGroup
+		for i := 0; i < n; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				<-start
+				res, err := b.EnrollPassphrase(context.Background(), &daemon.LUKSEnrollPassphraseRequest{
+					Device:             device,
+					ExistingPassphrase: testLUKSPassphrase,
+					NewPassphrase:      "concurrent-pass-" + strconv.Itoa(i),
+				})
+				errs[i] = err
+				if res != nil {
+					slots[i] = res.Slot
+				}
+			}(i)
 		}
+		close(start)
+		wg.Wait()
+
+		seen := map[int32]int{}
+		ids := keyslotIDs(t, device)
+		for i := 0; i < n; i++ {
+			if errs[i] != nil {
+				t.Fatalf("EnrollPassphrase %d: %v", i, errs[i])
+			}
+			if j, dup := seen[slots[i]]; dup {
+				t.Fatalf("enrollments %d and %d both reported slot %d", j, i, slots[i])
+			}
+			seen[slots[i]] = i
+			if !ids[int(slots[i])] {
+				t.Fatalf("slot %d of enrollment %d is not on the device (%v)", slots[i], i, ids)
+			}
+			if err := luks2.TestKey(device, []byte("concurrent-pass-"+strconv.Itoa(i))); err != nil {
+				t.Fatalf("passphrase %d does not open the volume: %v", i, err)
+			}
+		}
+	})
+
+	t.Run("fido2", func(t *testing.T) {
+		device := newLUKSImage(t)
+		b := newTestLUKSBackend(WithLUKSFIDO2Handler(perCredentialFIDO2Key{}))
+		start := make(chan struct{})
+		results := make([]*daemon.LUKSEnrollFIDO2Result, n)
+		errs := make([]error, n)
+		var wg sync.WaitGroup
+		for i := 0; i < n; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				<-start
+				results[i], errs[i] = b.EnrollFIDO2(context.Background(), &daemon.LUKSEnrollFIDO2Request{
+					Device:             device,
+					ExistingPassphrase: testLUKSPassphrase,
+					CredentialID:       "cred" + strconv.Itoa(i),
+				})
+			}(i)
+		}
+		close(start)
+		wg.Wait()
+
+		slotSeen := map[int32]int{}
+		tokenSeen := map[string]int{}
+		for i := 0; i < n; i++ {
+			if errs[i] != nil {
+				t.Fatalf("EnrollFIDO2 %d: %v", i, errs[i])
+			}
+			res := results[i]
+			if j, dup := slotSeen[res.Slot]; dup {
+				t.Fatalf("enrollments %d and %d both reported slot %d", j, i, res.Slot)
+			}
+			slotSeen[res.Slot] = i
+			if j, dup := tokenSeen[res.TokenID]; dup {
+				t.Fatalf("enrollments %d and %d both reported token %s", j, i, res.TokenID)
+			}
+			tokenSeen[res.TokenID] = i
+			assertKeyslots(t, tokenByID(t, device, res.TokenID), strconv.Itoa(int(res.Slot)))
+			if err := luks2.TestKey(device, []byte("fido2-key-cred"+strconv.Itoa(i))); err != nil {
+				t.Fatalf("credential %d does not open the volume: %v", i, err)
+			}
+		}
+	})
+}
+
+// statefulFIDO2Handler mimics the go-xkms FIDO2 handler, whose UnlockWithKey
+// reads, overwrites and restores its config timeout without synchronization.
+// The backend shares one handler across requests, so it must serialize its
+// calls; under -race this test fails without that lock.
+type statefulFIDO2Handler struct {
+	timeout time.Duration
+}
+
+func (h *statefulFIDO2Handler) EnrollCredential(_ context.Context, credentialID string, _, _ bool) ([]byte, error) {
+	saved := h.timeout
+	h.timeout = 30 * time.Second
+	time.Sleep(time.Millisecond)
+	h.timeout = saved
+	return []byte("fido2-key-" + credentialID), nil
+}
+
+func (h *statefulFIDO2Handler) DeriveEnroll(ctx context.Context, credentialID string, requirePIN, requireUV bool) (*LUKSFIDO2EnrollResult, error) {
+	key, err := h.EnrollCredential(ctx, credentialID, requirePIN, requireUV)
+	if err != nil {
+		return nil, err
+	}
+	return &LUKSFIDO2EnrollResult{DerivedKey: key}, nil
+}
+
+func TestLUKSBackend_ConcurrentEnrollmentSerializesTheSharedFIDO2Handler(t *testing.T) {
+	const n = 4
+	b := newTestLUKSBackend(WithLUKSFIDO2Handler(&statefulFIDO2Handler{timeout: 5 * time.Second}))
+	devices := make([]string, n)
+	for i := range devices {
+		devices[i] = newLUKSImage(t)
+	}
+	start := make(chan struct{})
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			_, errs[i] = b.EnrollFIDO2(context.Background(), &daemon.LUKSEnrollFIDO2Request{
+				Device:             devices[i],
+				ExistingPassphrase: testLUKSPassphrase,
+				CredentialID:       "cred" + strconv.Itoa(i),
+			})
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("EnrollFIDO2 %d: %v", i, err)
+		}
+		if err := luks2.TestKey(devices[i], []byte("fido2-key-cred"+strconv.Itoa(i))); err != nil {
+			t.Fatalf("credential %d does not open its volume: %v", i, err)
+		}
+	}
+}
+
+// blockingXKMSFIDO2Handler is an xkms FIDO2 handler whose UnlockWithKey
+// signals entry and blocks until release is closed, and records whether two
+// calls ever ran at once.
+type blockingXKMSFIDO2Handler struct {
+	*stubXKMSFIDO2Handler
+	entered chan struct{}
+	release chan struct{}
+	active  atomic.Int32
+	overlap atomic.Bool
+}
+
+func (h *blockingXKMSFIDO2Handler) UnlockWithKey(cfg *fido2.AuthenticationConfig) ([]byte, error) {
+	if h.active.Add(1) > 1 {
+		h.overlap.Store(true)
+	}
+	defer h.active.Add(-1)
+	h.entered <- struct{}{}
+	<-h.release
+	return append([]byte("fido2-key-"), cfg.CredentialID...), nil
+}
+
+func TestLUKSBackend_CancelledFIDO2DerivationKeepsHandlerLocked(t *testing.T) {
+	xk := &blockingXKMSFIDO2Handler{
+		stubXKMSFIDO2Handler: newStubXKMSFIDO2Handler(nil),
+		entered:              make(chan struct{}, 2),
+		release:              make(chan struct{}),
+	}
+	released := false
+	defer func() {
+		if !released {
+			close(xk.release)
+		}
+	}()
+	h, err := NewLUKSFIDO2Handler(nil, xk, "example.com")
+	if err != nil {
+		t.Fatalf("NewLUKSFIDO2Handler: %v", err)
+	}
+	b := newTestLUKSBackend(WithLUKSFIDO2Handler(h))
+	dev1, dev2 := newLUKSImage(t), newLUKSImage(t)
+
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	defer cancel1()
+	err1 := make(chan error, 1)
+	go func() {
+		_, err := b.EnrollFIDO2(ctx1, &daemon.LUKSEnrollFIDO2Request{
+			Device:             dev1,
+			ExistingPassphrase: testLUKSPassphrase,
+			CredentialID:       hex.EncodeToString([]byte("cred-1")),
+		})
+		err1 <- err
+	}()
+	<-xk.entered
+	cancel1()
+	if err := <-err1; !errors.Is(err, context.Canceled) {
+		t.Fatalf("first EnrollFIDO2: want context.Canceled, got %v", err)
+	}
+
+	err2 := make(chan error, 1)
+	go func() {
+		_, err := b.EnrollFIDO2(context.Background(), &daemon.LUKSEnrollFIDO2Request{
+			Device:             dev2,
+			ExistingPassphrase: testLUKSPassphrase,
+			CredentialID:       hex.EncodeToString([]byte("cred-2")),
+		})
+		err2 <- err
+	}()
+	select {
+	case <-xk.entered:
+		t.Fatal("second enrollment entered the SDK while the cancelled call still runs")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	released = true
+	close(xk.release)
+	select {
+	case <-xk.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("second enrollment never reached the SDK after the first call returned")
+	}
+	if err := <-err2; err != nil {
+		t.Fatalf("second EnrollFIDO2: %v", err)
+	}
+	if xk.overlap.Load() {
+		t.Fatal("two SDK calls ran at once")
+	}
+}
+
+// TestLUKSVolumeKey_AliasesShareAKey proves a symlink to a volume and the
+// volume's own path select the same mutation lock.
+func TestLUKSVolumeKey_AliasesShareAKey(t *testing.T) {
+	device := newLUKSImage(t)
+	link := filepath.Join(t.TempDir(), "by-uuid-alias")
+	if err := os.Symlink(device, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	if got, want := luksVolumeKey(link), luksVolumeKey(device); got != want {
+		t.Fatalf("alias key %q differs from device key %q", got, want)
+	}
+}
+
+// TestLUKSBackend_ConcurrentEnrollmentThroughAliasesGetsDistinctSlots proves
+// enrollments that name one volume by two paths are still serialized.
+func TestLUKSBackend_ConcurrentEnrollmentThroughAliasesGetsDistinctSlots(t *testing.T) {
+	const n = 4
+	device := newLUKSImage(t)
+	link := filepath.Join(t.TempDir(), "by-uuid-alias")
+	if err := os.Symlink(device, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	b := newTestLUKSBackend()
+	start := make(chan struct{})
+	slots := make([]int32, n)
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			path := device
+			if i%2 == 1 {
+				path = link
+			}
+			res, err := b.EnrollPassphrase(context.Background(), &daemon.LUKSEnrollPassphraseRequest{
+				Device:             path,
+				ExistingPassphrase: testLUKSPassphrase,
+				NewPassphrase:      "alias-pass-" + strconv.Itoa(i),
+			})
+			errs[i] = err
+			if res != nil {
+				slots[i] = res.Slot
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	seen := map[int32]int{}
+	ids := keyslotIDs(t, device)
+	for i := 0; i < n; i++ {
+		if errs[i] != nil {
+			t.Fatalf("EnrollPassphrase %d: %v", i, errs[i])
+		}
+		if j, dup := seen[slots[i]]; dup {
+			t.Fatalf("enrollments %d and %d both reported slot %d", j, i, slots[i])
+		}
+		seen[slots[i]] = i
+		if !ids[int(slots[i])] {
+			t.Fatalf("slot %d of enrollment %d is not on the device (%v)", slots[i], i, ids)
+		}
+		if err := luks2.TestKey(device, []byte("alias-pass-"+strconv.Itoa(i))); err != nil {
+			t.Fatalf("passphrase %d does not open the volume: %v", i, err)
+		}
+	}
+}
+
+// TestLUKSBackend_ChangePassphraseRefusesArgon2SlotUnderFIPS proves rotation
+// does not carry a non-approved KDF forward when the FIPS policy is active.
+func TestLUKSBackend_ChangePassphraseRefusesArgon2SlotUnderFIPS(t *testing.T) {
+	device := newLUKSImage(t)
+	before, err := luks2.ListKeyslots(device)
+	if err != nil {
+		t.Fatalf("list keyslots: %v", err)
+	}
+	if err := luks2.AddKey(device, []byte(testLUKSPassphrase), []byte("argon-pass"), &luks2.AddKeyOptions{
+		KDFType:        "argon2id",
+		Argon2Time:     1,
+		Argon2Memory:   1024,
+		Argon2Parallel: 1,
+	}); err != nil {
+		t.Skipf("argon2id keyslot refused in this environment (Go FIPS mode?): %v", err)
+	}
+	slot, err := detectNewSlot(device, before)
+	if err != nil {
+		t.Fatalf("detect new slot: %v", err)
+	}
+
+	b := newTestLUKSBackend()
+	b.fipsActive = func() bool { return true }
+	err = b.ChangePassphrase(context.Background(), &daemon.LUKSChangePassphraseRequest{
+		Device:        device,
+		Slot:          int32(slot),
+		OldPassphrase: "argon-pass",
+		NewPassphrase: "rotated-pass",
+	})
+	if !errors.Is(err, ErrLUKSRotationKDFNotApproved) {
+		t.Fatalf("ChangePassphrase error = %v, want ErrLUKSRotationKDFNotApproved", err)
+	}
+	var notApproved fips.ErrKDFNotApproved
+	if !errors.As(err, &notApproved) {
+		t.Fatalf("ChangePassphrase error = %v, want a fips.ErrKDFNotApproved in its chain", err)
+	}
+	if err := luks2.TestKey(device, []byte("argon-pass")); err != nil {
+		t.Fatalf("old passphrase no longer opens the volume: %v", err)
+	}
+	if err := luks2.TestKey(device, []byte("rotated-pass")); err == nil {
+		t.Fatal("refused rotation still installed the new passphrase")
+	}
+}
+
+// TestLUKSBackend_ChangePassphraseRefusesSHA1SlotUnderFIPS proves rotation
+// does not carry a SHA-1 PBKDF2 PRF forward when the FIPS policy is active:
+// the KDF is approved, its hash is not (#28).
+func TestLUKSBackend_ChangePassphraseRefusesSHA1SlotUnderFIPS(t *testing.T) {
+	device := newLUKSImage(t)
+	before, err := luks2.ListKeyslots(device)
+	if err != nil {
+		t.Fatalf("list keyslots: %v", err)
+	}
+	if err := luks2.AddKey(device, []byte(testLUKSPassphrase), []byte("sha1-pass"), &luks2.AddKeyOptions{
+		KDFType: "pbkdf2",
+		Hash:    "sha1",
+	}); err != nil {
+		t.Skipf("pbkdf2-sha1 keyslot refused in this environment (Go FIPS mode?): %v", err)
+	}
+	slot, err := detectNewSlot(device, before)
+	if err != nil {
+		t.Fatalf("detect new slot: %v", err)
+	}
+
+	b := newTestLUKSBackend()
+	b.fipsActive = func() bool { return true }
+	err = b.ChangePassphrase(context.Background(), &daemon.LUKSChangePassphraseRequest{
+		Device:        device,
+		Slot:          int32(slot),
+		OldPassphrase: "sha1-pass",
+		NewPassphrase: "rotated-pass",
+	})
+	if !errors.Is(err, ErrLUKSRotationKDFNotApproved) {
+		t.Fatalf("ChangePassphrase error = %v, want ErrLUKSRotationKDFNotApproved", err)
+	}
+	var notApproved fips.ErrHashNotApproved
+	if !errors.As(err, &notApproved) {
+		t.Fatalf("ChangePassphrase error = %v, want a fips.ErrHashNotApproved in its chain", err)
+	}
+	if err := luks2.TestKey(device, []byte("sha1-pass")); err != nil {
+		t.Fatalf("old passphrase no longer opens the volume: %v", err)
+	}
+	if err := luks2.TestKey(device, []byte("rotated-pass")); err == nil {
+		t.Fatal("refused rotation still installed the new passphrase")
+	}
+}
+
+// TestLUKSBackend_ChangePassphraseRotatesPBKDF2SlotUnderFIPS proves an
+// approved PBKDF2 slot still rotates under the FIPS policy.
+func TestLUKSBackend_ChangePassphraseRotatesPBKDF2SlotUnderFIPS(t *testing.T) {
+	device := newLUKSImage(t)
+	b := newTestLUKSBackend()
+	b.fipsActive = func() bool { return true }
+	if err := b.ChangePassphrase(context.Background(), &daemon.LUKSChangePassphraseRequest{
+		Device:        device,
+		Slot:          0,
+		OldPassphrase: testLUKSPassphrase,
+		NewPassphrase: "rotated-pass",
+	}); err != nil {
+		t.Fatalf("ChangePassphrase: %v", err)
+	}
+	if err := luks2.TestKey(device, []byte("rotated-pass")); err != nil {
+		t.Fatalf("new passphrase does not open the volume: %v", err)
 	}
 }
 

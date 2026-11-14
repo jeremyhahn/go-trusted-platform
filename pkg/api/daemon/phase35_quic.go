@@ -95,6 +95,7 @@ var phase35QUICRefusals = []phase35QUICRefusal{
 	{ErrLUKSNewPassphraseRequired, quicwire.StatusInvalidArgument},
 	{ErrLUKSCredentialIDRequired, quicwire.StatusInvalidArgument},
 	{ErrLUKSSlotRequired, quicwire.StatusInvalidArgument},
+	{ErrLUKSPCRInvalid, quicwire.StatusInvalidArgument},
 	{ErrFIDO2DeviceRequired, quicwire.StatusInvalidArgument},
 	{ErrFIDO2UsernameRequired, quicwire.StatusInvalidArgument},
 	{ErrFIDO2CredentialRequired, quicwire.StatusInvalidArgument},

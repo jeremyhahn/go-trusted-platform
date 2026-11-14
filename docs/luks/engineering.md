@@ -70,7 +70,10 @@
    A recovery keyslot is covered the same way; `RecoveryKeyOptions` has no hash
    or iteration-time field, so its PBKDF2 cost is go-luks2's calibrated default.
    `pkg/arch/luks_keyslot_policy_test.go` fails the build if a keyslot call
-   bypasses it.
+   bypasses it. `ChangePassphrase` keeps the slot's KDF and PRF, so on a FIPS
+   host it refuses, with `ErrLUKSRotationKDFNotApproved`, a slot whose KDF is
+   not PBKDF2 or whose PBKDF2 hash is not approved (SHA-1 included). The slot
+   and its passphrase are left as they were.
 5. **New slot detection.** After `AddKey`, the backend reports the slot that was
    absent from the pre-call snapshot. If none is found it fails with
    `ErrLUKSNewSlotNotFound`; it never guesses the highest slot, which can name
@@ -167,20 +170,47 @@ platform stores nothing about the volume.
 ## 6. Wiring as shipped
 
 `daemon.go` constructs `NewLUKSService(logger, nil, nil)` and registers it on
-REST, gRPC (TCP and Unix), QUIC and MCP. **No production code calls
-`SetLUKSBackend`, `SetLUKSRootChecker`, `NewLUKSBackend` or
-`DefaultRootChecker`.** The consequences on every server transport:
+REST, gRPC (TCP and Unix), QUIC and MCP. The platformd startup path then calls
+`backends.WireSDKBackends` (`pkg/app/backends/sdk_wiring.go`), which, after the
+ceremony backend, injects the production LUKS pieces through the
+`SDKBackendTarget` interface (implemented by `*daemon.Daemon`):
 
-- mutating operations return `ErrLUKSRootRequired` (the nil root checker reports
-  non-root), before the backend is ever consulted;
-- `status`, `list-slots`, `info` and `test-unlock` return `ErrLUKSNotConfigured`.
+- `SetLUKSBackend(NewLUKSBackend(logger, WithDefaultLUKSHandlers()))`: the
+  go-luks2 backend, with its TPM handler then cleared.
+  - FIDO2: the default handler stays when a FIDO2 library opens at startup.
+    It derives the keyslot key with hmac-secret over a fresh salt and writes
+    a `fido2-manual` token (credential, salt, RP, UV) naming the slot. At
+    boot, `pkg/boot/commands` opens a FIDO2 handler when `fido2` is an
+    unlock method (`bootFIDO2Handler`), and the initrd FIDO2 strategy lists
+    the slots the header's FIDO2 tokens name besides the configured ones,
+    rebuilds the same derivation from the token and opens that slot
+    (`TestLUKSFIDO2EnrollmentUnlocksAtBoot`). Without a handler
+    `EnrollFIDO2` answers `ErrLUKSFIDO2NotWired`.
+  - TPM: the sealer keeps its sealed passphrase in a `systemd-tpm2` header
+    token, while the initrd TPM strategies unseal from the ESP, so no boot
+    path opens the slot and `EnrollTPM` answers `ErrLUKSTPMNotWired` before
+    touching the device.
+
+  Passphrase, recovery, remove, test-unlock and change-passphrase run
+  against the device. The PCR
+  check (`pcrCheckedTPMHandler`, `ErrLUKSPCRInvalid`, 400 on REST and
+  `InvalidArgument` on gRPC) is in front of the TPM handler when one is wired;
+- `SetLUKSRootChecker(DefaultRootChecker())`: the effective-UID root gate for
+  mutating operations.
+
+The LUKS backend needs no SDK client, but it is wired only when
+`WireSDKBackends` succeeds: if the SDK client is missing it returns
+`ErrCeremonyBackendRequiresSDK` and wires nothing, so every server transport
+keeps answering as before (mutations `ErrLUKSRootRequired`, reads
+`ErrLUKSNotConfigured`).
 
 On the client side, every `platformctl luks` verb reaches the server through
-`platform.Client.LUKS()`, so after its local checks it returns the server's
-refusal above.
+`platform.Client.LUKS()`, so after its local checks it runs against the wired
+backend on whichever transport is active.
 
-The working pieces are the backend (exercised by its loopback tests) and the
-server-side transport adapters (exercised against a stub backend).
+`TestWireSDKBackends_WiresLUKS` (`pkg/app/backends/sdk_wiring_test.go`) checks
+that a fake target receives a non-nil `*LUKSBackend` and a root checker, and
+`TestWireSDKBackends_NoSDKClientIsFatal` that a refused wiring sets neither.
 
 ---
 

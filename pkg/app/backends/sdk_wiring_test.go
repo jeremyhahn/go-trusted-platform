@@ -14,7 +14,9 @@
 package backends
 
 import (
+	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -28,10 +30,131 @@ import (
 type recordingSDKTarget struct {
 	ceremony daemon.CeremonyBackend
 	fido2    daemon.FIDO2Backend
+	luks     daemon.LUKSBackend
+	root     daemon.RootChecker
 }
 
 func (r *recordingSDKTarget) SetCeremonyBackend(b daemon.CeremonyBackend) { r.ceremony = b }
 func (r *recordingSDKTarget) SetFIDO2Backend(b daemon.FIDO2Backend)       { r.fido2 = b }
+func (r *recordingSDKTarget) SetLUKSBackend(b daemon.LUKSBackend)         { r.luks = b }
+func (r *recordingSDKTarget) SetLUKSRootChecker(rc daemon.RootChecker)    { r.root = rc }
+
+// TestWireSDKBackends_WiresLUKS verifies the SDK wiring gives the daemon a
+// LUKS backend and a root checker, so the LUKS service answers on every
+// transport instead of "not configured" (#1692).
+func TestWireSDKBackends_WiresLUKS(t *testing.T) {
+	target := &recordingSDKTarget{}
+
+	if err := WireSDKBackends(target, SDKBackendSources{SDK: &fakeQuicbaasClient{}}, logging.DefaultLogger()); err != nil {
+		t.Fatalf("WireSDKBackends: %v", err)
+	}
+	if lb, ok := target.luks.(*LUKSBackend); !ok || lb == nil {
+		t.Errorf("LUKS backend = %T, want a non-nil *LUKSBackend", target.luks)
+	}
+	if target.root == nil {
+		t.Fatal("LUKS root checker was not wired")
+	}
+	if got, want := target.root.IsRoot(), os.Geteuid() == 0; got != want {
+		t.Errorf("root checker IsRoot = %v, want %v (the effective UID)", got, want)
+	}
+}
+
+// TestWireSDKBackends_WiresFIDO2Enrollment verifies the production wiring
+// keeps the default FIDO2 handler: the initrd FIDO2 strategy finds the slot
+// it enrolls from its fido2-manual token and derives the same key
+// (TestLUKSFIDO2EnrollmentUnlocksAtBoot).
+func TestWireSDKBackends_WiresFIDO2Enrollment(t *testing.T) {
+	stub := &stubFIDO2Rich{}
+	orig := newDefaultLUKSFIDO2Handler
+	newDefaultLUKSFIDO2Handler = func(*logging.Logger) (LUKSFIDO2EnrollingHandler, error) { return stub, nil }
+	t.Cleanup(func() { newDefaultLUKSFIDO2Handler = orig })
+	target := &recordingSDKTarget{}
+
+	if err := WireSDKBackends(target, SDKBackendSources{SDK: &fakeQuicbaasClient{}}, logging.DefaultLogger()); err != nil {
+		t.Fatalf("WireSDKBackends: %v", err)
+	}
+	lb, ok := target.luks.(*LUKSBackend)
+	if !ok || lb == nil {
+		t.Fatalf("LUKS backend = %T, want a non-nil *LUKSBackend", target.luks)
+	}
+	if lb.fido2 != LUKSFIDO2Handler(stub) {
+		t.Fatalf("LUKS FIDO2 handler = %T, want the default handler", lb.fido2)
+	}
+}
+
+// TestWireSDKBackends_LeavesTPMEnrollmentOff: the SDK TPM sealer stores its
+// sealed passphrase in a systemd-tpm2 header token that no boot unlock path
+// reads, so production wiring leaves the TPM handler unset and EnrollTPM
+// refuses before touching the device instead of adding a slot boot cannot
+// open.
+func TestWireSDKBackends_LeavesTPMEnrollmentOff(t *testing.T) {
+	target := &recordingSDKTarget{}
+
+	if err := WireSDKBackends(target, SDKBackendSources{SDK: &fakeQuicbaasClient{}}, logging.DefaultLogger()); err != nil {
+		t.Fatalf("WireSDKBackends: %v", err)
+	}
+	lb, ok := target.luks.(*LUKSBackend)
+	if !ok || lb == nil {
+		t.Fatalf("LUKS backend = %T, want a non-nil *LUKSBackend", target.luks)
+	}
+	if lb.tpm != nil {
+		t.Fatalf("LUKS TPM handler = %T, want nil until a boot unlock path consumes the enrolled token", lb.tpm)
+	}
+	_, err := lb.EnrollTPM(context.Background(), &daemon.LUKSEnrollTPMRequest{
+		Device: "/dev/null", ExistingPassphrase: "existing", PCRs: []int32{7},
+	})
+	if !errors.Is(err, ErrLUKSTPMNotWired) {
+		t.Fatalf("EnrollTPM error = %v, want ErrLUKSTPMNotWired", err)
+	}
+}
+
+// countingTPMSealer records every Seal call the PCR check lets through.
+type countingTPMSealer struct{ calls int }
+
+func (s *countingTPMSealer) Seal(_ context.Context, _ string, _ []int32) ([]byte, []byte, error) {
+	s.calls++
+	return []byte("passphrase"), []byte(`{"type":"tpm2"}`), nil
+}
+
+// The wired TPM handler refuses an empty PCR list and every index outside
+// 0..23 before it seals anything (Codex round 4 on #1852).
+func TestPCRCheckedTPMHandler_RefusesBadIndexesBeforeSealing(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		pcrs []int32
+		bad  string
+	}{
+		{"empty", nil, "at least one"},
+		{"invalid only", []int32{24}, "24"},
+		{"mixed", []int32{7, 24}, "24"},
+		{"negative", []int32{-1}, "-1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sealer := &countingTPMSealer{}
+			_, _, err := pcrCheckedTPMHandler(sealer).Seal(context.Background(), "0x81000001", tc.pcrs)
+			if !errors.Is(err, daemon.ErrLUKSPCRInvalid) {
+				t.Fatalf("Seal(%v) error = %v, want ErrLUKSPCRInvalid", tc.pcrs, err)
+			}
+			if !strings.Contains(err.Error(), tc.bad) {
+				t.Errorf("error %q does not name %q", err, tc.bad)
+			}
+			if sealer.calls != 0 {
+				t.Errorf("sealer called %d times, want 0", sealer.calls)
+			}
+		})
+	}
+
+	sealer := &countingTPMSealer{}
+	if _, _, err := pcrCheckedTPMHandler(sealer).Seal(context.Background(), "0x81000001", []int32{0, 7}); err != nil {
+		t.Fatalf("Seal([0 7]) = %v, want nil", err)
+	}
+	if sealer.calls != 1 {
+		t.Errorf("sealer called %d times, want 1", sealer.calls)
+	}
+	if pcrCheckedTPMHandler(nil) != nil {
+		t.Error("pcrCheckedTPMHandler(nil) should stay nil so TPM enrollment stays off")
+	}
+}
 
 func TestWireSDKBackends_WiresCeremonyOnly(t *testing.T) {
 	target := &recordingSDKTarget{}
@@ -79,7 +202,7 @@ func TestWireSDKBackends_NoSDKClientIsFatal(t *testing.T) {
 	if !errors.As(err, &noClient) {
 		t.Fatalf("want ErrCeremonyBackendRequiresSDK, got %T: %v", err, err)
 	}
-	if target.ceremony != nil || target.fido2 != nil {
+	if target.ceremony != nil || target.fido2 != nil || target.luks != nil || target.root != nil {
 		t.Errorf("a failed wiring wired %+v", target)
 	}
 }

@@ -342,6 +342,18 @@ Strategy constructors: `NewKeyfileStrategy`, `NewTPMPCRStrategy`,
 `DefaultConfig().FallbackMethods` is
 `[UnlockTPMPCR, UnlockTPMUpgrade, UnlockFIDO2, UnlockPassword]`.
 
+**`FIDO2` keeps its credential and salt in the LUKS2 header.** `Install`
+enrolls a credential for relying party `luks-root`, then derives the keyslot
+key as the authenticator's hmac-secret over a fresh 32-byte salt (a second
+touch). It writes a `fido2-manual` token listing the slot, with the
+credential in hex and the salt in base64; this is the token shape the
+platformd backend writes (`docs/luks/engineering.md`). A LUKS handler without
+a token area is refused with `ErrFIDO2TokensUnsupported` before the
+authenticator is touched. A failed token write removes the keyslot. At boot,
+`Unlock` reads the token that lists each FIDO2 slot. A slot with no token
+(`ErrFIDO2TokenMissing`) or an undecodable one (`ErrFIDO2TokenInvalid`) is
+skipped without asking the authenticator.
+
 **`TPM-Upgrade` has a reader and no production writer.** It is registered by
 default (`pkg/initrd/initrd.go:188-189`) and runs every boot: `CanUnlock`
 mounts the ESP, finds no `tpm2/seal-upgrade.pub` / `.priv`, logs

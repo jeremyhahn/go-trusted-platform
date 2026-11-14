@@ -14,6 +14,8 @@
 package backends
 
 import (
+	"context"
+	"fmt"
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 
@@ -36,6 +38,8 @@ func (ErrCeremonyBackendRequiresSDK) Error() string {
 // SDKBackendTarget is the daemon surface the SDK backend wiring writes to.
 type SDKBackendTarget interface {
 	SetCeremonyBackend(b daemon.CeremonyBackend)
+	SetLUKSBackend(b daemon.LUKSBackend)
+	SetLUKSRootChecker(rc daemon.RootChecker)
 }
 
 // SDKBackendSources is what the ceremony backend is built from.
@@ -69,16 +73,66 @@ func PlatformAdminIdentity(a *app.App) AdminIdentity {
 	return identity
 }
 
-// WireSDKBackends gives a daemon's ceremony service its production backend on
-// every transport. Runtime FIDO2 is intentionally left unwired until the SDK
-// exposes the daemon backend shape; callers receive daemon.ErrFIDO2NotConfigured
-// instead of a local CTAP2/KV implementation.
+// WireSDKBackends gives a daemon's ceremony and LUKS services their production
+// backends on every transport, and the LUKS service its effective-UID root
+// checker. A refused wiring (no SDK client) wires nothing. Runtime FIDO2 is
+// intentionally left unwired until the SDK exposes the daemon backend shape;
+// callers receive daemon.ErrFIDO2NotConfigured instead of a local CTAP2/KV
+// implementation.
 func WireSDKBackends(target SDKBackendTarget, src SDKBackendSources, logger *logging.Logger) error {
 	if src.SDK == nil {
 		return ErrCeremonyBackendRequiresSDK{}
 	}
 	target.SetCeremonyBackend(NewCeremonyBackend(logger, src.SDK, src.Admin))
+	// The LUKS backend needs no SDK: it drives go-luks2 on the host. The root checker reads the
+	// effective UID; without it the service refuses every mutation.
+	//
+	// FIDO2 enrollment uses the default handler when an authenticator
+	// library opens: it derives the keyslot key with hmac-secret and writes
+	// a fido2-manual token (credential, salt, RP, UV) naming the slot. The
+	// initrd FIDO2 strategy finds the slot from that token and derives the
+	// same key at boot. Without a handler EnrollFIDO2 answers
+	// ErrLUKSFIDO2NotWired.
+	//
+	// TPM enrollment stays off for the same reason: the SDK sealer keeps
+	// the sealed passphrase in a systemd-tpm2 header token, while the
+	// initrd TPM strategies unseal the root key from the ESP
+	// (seal-platform.pub/priv and the .tpmpolicy record), so nothing at
+	// boot reads the token. EnrollTPM answers ErrLUKSTPMNotWired before
+	// touching the device. When a boot path consumes the token, wire the
+	// default handler through pcrCheckedTPMHandler.
+	luks := NewLUKSBackend(logger, WithDefaultLUKSHandlers())
+	luks.SetTPMHandler(nil)
+	target.SetLUKSBackend(luks)
+	target.SetLUKSRootChecker(DefaultRootChecker())
 	return nil
+}
+
+// maxTPMPCRIndex is the highest PCR index a TPM 2.0 PC-client bank holds.
+const maxTPMPCRIndex = 23
+
+// pcrCheckedTPMHandler wraps h so Seal refuses an empty PCR list and any
+// index outside 0..maxTPMPCRIndex before the sealer runs or a slot is
+// written. A nil h stays nil, so TPM enrollment stays off.
+func pcrCheckedTPMHandler(h LUKSTPMHandler) LUKSTPMHandler {
+	if h == nil {
+		return nil
+	}
+	return pcrCheckedTPM{next: h}
+}
+
+type pcrCheckedTPM struct{ next LUKSTPMHandler }
+
+func (p pcrCheckedTPM) Seal(ctx context.Context, handle string, pcrs []int32) ([]byte, []byte, error) {
+	if len(pcrs) == 0 {
+		return nil, nil, fmt.Errorf("%w: at least one pcr index is required", daemon.ErrLUKSPCRInvalid)
+	}
+	for _, idx := range pcrs {
+		if idx < 0 || idx > maxTPMPCRIndex {
+			return nil, nil, fmt.Errorf("%w: pcr index %d is outside 0..%d", daemon.ErrLUKSPCRInvalid, idx, maxTPMPCRIndex)
+		}
+	}
+	return p.next.Seal(ctx, handle, pcrs)
 }
 
 // WireEmbeddedHost is the daemon.EmbeddedHostOptions.WireBackends of every
