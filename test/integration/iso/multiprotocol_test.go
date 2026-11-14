@@ -141,7 +141,6 @@ func installedDiskPath(workDir string) string {
 	return filepath.Join(workDir, "test-install.qcow2")
 }
 
-// ensureAlpineISO returns the downloaded Alpine ISO, downloading it first.
 // sharedAlpine holds the one verified Alpine ISO download of this go test
 // process. Every test that only needs the stock ISO as an input seeds its
 // work dir from it, so a run fetches the ISO from the mirror once (plus the
@@ -253,6 +252,42 @@ func linkOrCopy(src, dst string) error {
 	return out.Close()
 }
 
+// adoptSharedAlpineISO makes iso, a verified ISO a Download test fetched
+// itself, the process's shared copy, so sharedAlpineISO does not fetch it a
+// second time. It copies the ISO, its checksum file and its verified marker
+// into a cache dir of its own, because the test's work dir is removed before
+// later tests seed from the shared copy. When the shared copy already
+// exists, it does nothing.
+func adoptSharedAlpineISO(t *testing.T, iso string) {
+	t.Helper()
+	sharedAlpine.once.Do(func() {
+		dir, err := os.MkdirTemp("", "iso-shared-alpine-")
+		if err != nil {
+			sharedAlpine.err = fmt.Errorf("creating the shared ISO cache dir: %w", err)
+			return
+		}
+		sharedAlpine.dir = dir
+		src := pkgiso.ISOConfig{WorkDir: filepath.Dir(iso), ISO: filepath.Base(iso)}
+		dst := pkgiso.ISOConfig{WorkDir: dir, ISO: filepath.Base(iso)}
+		pairs := [][2]string{
+			{src.ISOPath(), dst.ISOPath()},
+			{src.ChecksumPath(), dst.ChecksumPath()},
+			{src.VerifiedMarkerPath(), dst.VerifiedMarkerPath()},
+		}
+		for i, p := range pairs {
+			if i > 0 && !FileExists(p[0]) {
+				continue
+			}
+			if err := linkOrCopy(p[0], p[1]); err != nil {
+				sharedAlpine.err = fmt.Errorf("adopting %s as the shared Alpine ISO: %w", p[0], err)
+				return
+			}
+		}
+		sharedAlpine.iso = dst.ISOPath()
+	})
+}
+
+// ensureAlpineISO returns the downloaded Alpine ISO, downloading it first.
 func ensureAlpineISO(t *testing.T, ctx context.Context, cmd ISOCommands, workDir string) string {
 	t.Helper()
 	isoPath := alpineISOPath(workDir)
@@ -546,6 +581,7 @@ func testDownloadOperations(t *testing.T, ctx context.Context, cmd ISOCommands, 
 		assert.Len(t, result.SHA256, 64)
 		assert.Positive(t, result.SizeBytes)
 		assert.True(t, FileExists(result.ISOPath))
+		adoptSharedAlpineISO(t, result.ISOPath)
 	})
 
 	t.Run("DownloadInvalidArch", func(t *testing.T) {
