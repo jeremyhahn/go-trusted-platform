@@ -581,11 +581,8 @@ test.describe('Dashboard Overview', () => {
     // Click refresh button
     await page.getByRole('button', { name: /refresh/i }).click();
 
-    // Wait for new requests
-    await page.waitForTimeout(500);
-
-    // Should have made additional requests
-    expect(requestCount).toBeGreaterThan(initialCount);
+    // Should make additional requests
+    await expect.poll(() => requestCount).toBeGreaterThan(initialCount);
   });
 });
 
@@ -635,12 +632,12 @@ test.describe('Error Handling', () => {
       });
     });
 
+    const firstApiResponse = page.waitForResponse((response) => response.url().includes('/api/v1/'));
     await page.goto('/dashboard');
+    await firstApiResponse;
 
-    // Dashboard should still render
+    // Dashboard should still render after the 500s have been served
     await expect(page.getByRole('heading', { name: /dashboard/i })).toBeVisible();
-    // Wait for any error states to appear
-    await page.waitForTimeout(1000);
   });
 
 });
@@ -828,18 +825,7 @@ test.describe('Stats Card Navigation', () => {
   test('should navigate to certificates page when clicking certificates card', async ({ page }) => {
     test.setTimeout(60000);
 
-    // Retry navigation if server is slow to respond
-    let retries = 2;
-    while (retries > 0) {
-      try {
-        await page.goto('/dashboard', { timeout: 30000 });
-        break;
-      } catch (e) {
-        retries--;
-        if (retries === 0) throw e;
-        await page.waitForTimeout(2000);
-      }
-    }
+    await page.goto('/dashboard');
     await page.waitForLoadState('networkidle');
 
     // Find the stats card by looking for "Certificates" in the card title area
@@ -875,18 +861,7 @@ test.describe('Stats Card Navigation', () => {
   test('should navigate to health page when clicking platform health card', async ({ page }) => {
     test.setTimeout(60000);
 
-    // Retry navigation if server is slow to respond
-    let retries = 2;
-    while (retries > 0) {
-      try {
-        await page.goto('/dashboard', { timeout: 30000 });
-        break;
-      } catch (e) {
-        retries--;
-        if (retries === 0) throw e;
-        await page.waitForTimeout(2000);
-      }
-    }
+    await page.goto('/dashboard');
     await page.waitForLoadState('networkidle');
 
     // Find the stats card by its visible text content
@@ -929,18 +904,7 @@ test.describe('Tenant Details Navigation', () => {
   test('should navigate to tenant details page', async ({ page }) => {
     test.setTimeout(60000);
 
-    // Retry navigation if server is slow to respond
-    let retries = 2;
-    while (retries > 0) {
-      try {
-        await page.goto('/dashboard', { timeout: 30000 });
-        break;
-      } catch (e) {
-        retries--;
-        if (retries === 0) throw e;
-        await page.waitForTimeout(2000);
-      }
-    }
+    await page.goto('/dashboard');
     await page.waitForLoadState('networkidle');
 
     // Click on View Tenant Details button
@@ -1010,22 +974,7 @@ test.describe('User Menu', () => {
     // Click logout
     await logoutItem.click();
 
-    // Wait for logout to process - give extra time for any redirects
-    await page.waitForTimeout(1000);
-    await page.waitForLoadState('domcontentloaded').catch(() => {});
-
-    // Verify the logout action was triggered
-    // The test passes if any of these conditions are met:
-    // 1. URL changed to an auth-related page
-    // 2. URL changed away from dashboard
-    // 3. The page is still loading/processing (logout in progress)
-    // 4. Any body content is visible (page loaded after logout action)
-    const currentUrl = page.url();
-    const isAuthUrl = /\/auth|\/login|^\/$/.test(currentUrl);
-    const notOnDashboard = !currentUrl.includes('/dashboard');
-    const bodyVisible = await page.locator('body').first().isVisible().catch(() => false);
-
-    // Test passes if we navigated to auth, left dashboard, or page is responding
-    expect(isAuthUrl || notOnDashboard || bodyVisible).toBeTruthy();
+    // The logout action closes the menu (no logout route mock redirects here)
+    await expect(logoutItem).toBeHidden();
   });
 });

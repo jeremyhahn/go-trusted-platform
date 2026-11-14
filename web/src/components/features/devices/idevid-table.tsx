@@ -72,7 +72,7 @@ export function IDevIDTable({ idevids, onIDevIDChange }: IDevIDTableProps) {
       onError: (error) => {
         toast({
           title: 'Error',
-          description: error instanceof Error ? error.message : 'Failed to renew certificate',
+          description: error.message || 'Failed to renew certificate',
           variant: 'destructive',
         });
       },
@@ -98,7 +98,7 @@ export function IDevIDTable({ idevids, onIDevIDChange }: IDevIDTableProps) {
       onError: (error) => {
         toast({
           title: 'Error',
-          description: error instanceof Error ? error.message : 'Failed to revoke certificate',
+          description: error.message || 'Failed to revoke certificate',
           variant: 'destructive',
         });
       },
@@ -109,6 +109,8 @@ export function IDevIDTable({ idevids, onIDevIDChange }: IDevIDTableProps) {
     setLoadingId(cert.id);
     try {
       await renewMutation.mutateAsync(cert.deviceName);
+    } catch {
+      // onError has already shown the refusal.
     } finally {
       setLoadingId(null);
     }
@@ -122,6 +124,8 @@ export function IDevIDTable({ idevids, onIDevIDChange }: IDevIDTableProps) {
     setLoadingId(cert.id);
     try {
       await revokeMutation.mutateAsync(undefined);
+    } catch {
+      // onError has already shown the refusal.
     } finally {
       setLoadingId(null);
     }

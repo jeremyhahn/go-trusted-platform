@@ -22,6 +22,14 @@ export type {
   ListNTPSourcesResponse,
   StepNTPClockResponse,
 } from './ntp-service.js';
+export { BMCService, BMC_PRIVILEGE_CODES, bmcPrivilegeName } from './bmc-service.js';
+export type {
+  BMCPrivilegeName,
+  BMCUser,
+  CreateBMCUserRequest,
+  ReplaceBMCWebCertificateRequest,
+  BMCStatusResponse,
+} from './bmc-service.js';
 export { GatewayService } from './gateway-service.js';
 export { IAMService } from './iam-service.js';
 export { IDevIDService } from './idevid-service.js';
@@ -37,6 +45,14 @@ export {
   type RegistryComponentHealth,
 } from './registry-service.js';
 export { SDNService } from './sdn-service.js';
+export {
+  SwitchService,
+  SWITCH_MAX_VLAN_ID,
+  type SwitchPortMode,
+  type SwitchPortStatus,
+  type SwitchPortActionResponse,
+  type SwitchSetPortVLANResponse,
+} from './switch-service.js';
 export { TenantService } from './tenant-service.js';
 export { TPMService } from './tpm-service.js';
 export { VTPMService, InvalidDeviceProfileIdError } from './vtpm-service.js';

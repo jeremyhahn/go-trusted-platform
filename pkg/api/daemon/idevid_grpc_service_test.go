@@ -84,6 +84,12 @@ type idevIDTestTPM struct {
 	// CSR creation
 	createTCGCSRResult xkmssdk.TCG_CSR_IDEVID
 	createTCGCSRErr    error
+	// csrEKCert records the EK certificate passed to CreateTCG_CSR_IDEVID.
+	csrEKCert    *x509.Certificate
+	csrReached   bool
+	ekCertResult *x509.Certificate
+	ekCertErr    error
+	configResult *xkmssdk.TPMConfig
 
 	// Raw transport (nil in unit tests; a real/simulated transport is
 	// supplied by integration tests exercising FlushTransientContexts).
@@ -124,6 +130,7 @@ func newIDevIDTestTPM() *idevIDTestTPM {
 			FwMinor:      0,
 		},
 		activateCredResult: []byte("decrypted-secret"),
+		configResult:       &xkmssdk.TPMConfig{IDevID: &xkmssdk.IDevIDConfig{}},
 	}
 }
 
@@ -154,10 +161,20 @@ func (m *idevIDTestTPM) CreateIDevID(akAttrs *xkmssdk.KeyAttributes, ekCert *x50
 }
 
 func (m *idevIDTestTPM) CreateTCG_CSR_IDEVID(ekCert *x509.Certificate, akAttrs *xkmssdk.KeyAttributes, idevidAttrs *xkmssdk.KeyAttributes) (xkmssdk.TCG_CSR_IDEVID, error) {
+	m.csrReached = true
+	m.csrEKCert = ekCert
 	if m.createTCGCSRErr != nil {
 		return xkmssdk.TCG_CSR_IDEVID{}, m.createTCGCSRErr
 	}
 	return m.createTCGCSRResult, nil
+}
+
+func (m *idevIDTestTPM) EKCertificate() (*x509.Certificate, error) {
+	return m.ekCertResult, m.ekCertErr
+}
+
+func (m *idevIDTestTPM) Config() *xkmssdk.TPMConfig {
+	return m.configResult
 }
 
 func (m *idevIDTestTPM) FixedProperties() (*xkmssdk.PropertiesFixed, error) {
@@ -219,6 +236,7 @@ func createIDevIDTestServiceWithTPM(t *testing.T) (*IDevIDGRPCService, *idevIDTe
 	logger := logging.DefaultLogger()
 	svc := NewIDevIDGRPCService(logger)
 	tpm := newIDevIDTestTPM()
+	tpm.ekCertResult = &x509.Certificate{}
 	svc.SetTPM2Service(tpm)
 	return svc, tpm
 }
@@ -1203,14 +1221,26 @@ func TestIDevIDGRPCService_CreateIDevIDCSR(t *testing.T) {
 		require.Error(t, err)
 	})
 
+	t.Run("returns error when EK certificate cannot be read", func(t *testing.T) {
+		svc, tpm := createIDevIDTestServiceWithTPM(t)
+		tpm.ekCertErr = errors.New("EK certificate not found")
+
+		resp, err := svc.CreateIDevIDCSR(ctx, &platformv1.CreateIDevIDCSRRequest{})
+
+		assert.Nil(t, resp)
+		require.Error(t, err)
+		assert.False(t, tpm.csrReached, "CreateTCG_CSR_IDEVID must not be called without an EK certificate")
+	})
+
 	t.Run("creates IDevID CSR successfully", func(t *testing.T) {
-		svc, _ := createIDevIDTestServiceWithTPM(t)
+		svc, tpm := createIDevIDTestServiceWithTPM(t)
 
 		resp, err := svc.CreateIDevIDCSR(ctx, &platformv1.CreateIDevIDCSRRequest{})
 
 		require.NoError(t, err)
 		assert.NotNil(t, resp)
 		assert.True(t, resp.Status.Success)
+		assert.Same(t, tpm.ekCertResult, tpm.csrEKCert, "the EK certificate is passed to CreateTCG_CSR_IDEVID")
 	})
 }
 
@@ -1256,14 +1286,54 @@ func TestIDevIDGRPCService_CreateIAKCSR(t *testing.T) {
 		require.Error(t, err)
 	})
 
+	t.Run("returns error when EK certificate cannot be read", func(t *testing.T) {
+		svc, tpm := createIDevIDTestServiceWithTPM(t)
+		tpm.ekCertErr = errors.New("EK certificate not found")
+
+		resp, err := svc.CreateIAKCSR(ctx, &platformv1.CreateIAKCSRRequest{})
+
+		assert.Nil(t, resp)
+		require.Error(t, err)
+		assert.False(t, tpm.csrReached, "CreateTCG_CSR_IDEVID must not be called without an EK certificate")
+	})
+
+	t.Run("rejects a missing IDevID configuration", func(t *testing.T) {
+		svc, tpm := createIDevIDTestServiceWithTPM(t)
+		tpm.configResult = &xkmssdk.TPMConfig{}
+
+		resp, err := svc.CreateIAKCSR(ctx, &platformv1.CreateIAKCSRRequest{})
+
+		assert.Nil(t, resp)
+		require.Error(t, err)
+		st, ok := status.FromError(err)
+		require.True(t, ok)
+		assert.Equal(t, codes.FailedPrecondition, st.Code())
+		assert.False(t, tpm.csrReached, "CreateTCG_CSR_IDEVID must not be called without an IDevID configuration")
+	})
+
+	t.Run("rejects a missing TPM configuration", func(t *testing.T) {
+		svc, tpm := createIDevIDTestServiceWithTPM(t)
+		tpm.configResult = nil
+
+		resp, err := svc.CreateIAKCSR(ctx, &platformv1.CreateIAKCSRRequest{})
+
+		assert.Nil(t, resp)
+		require.Error(t, err)
+		st, ok := status.FromError(err)
+		require.True(t, ok)
+		assert.Equal(t, codes.FailedPrecondition, st.Code())
+		assert.False(t, tpm.csrReached, "CreateTCG_CSR_IDEVID must not be called without a TPM configuration")
+	})
+
 	t.Run("creates IAK CSR successfully", func(t *testing.T) {
-		svc, _ := createIDevIDTestServiceWithTPM(t)
+		svc, tpm := createIDevIDTestServiceWithTPM(t)
 
 		resp, err := svc.CreateIAKCSR(ctx, &platformv1.CreateIAKCSRRequest{})
 
 		require.NoError(t, err)
 		assert.NotNil(t, resp)
 		assert.True(t, resp.Status.Success)
+		assert.Same(t, tpm.ekCertResult, tpm.csrEKCert, "the EK certificate is passed to CreateTCG_CSR_IDEVID")
 	})
 }
 

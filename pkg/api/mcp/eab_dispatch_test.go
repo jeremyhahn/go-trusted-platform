@@ -483,6 +483,26 @@ func TestToolRegistry_EABToolsRegistered(t *testing.T) {
 	}
 }
 
+// TestToolRegistry_EABCreateExpiryOptional pins the documented EAB contract
+// (docs/eab/api.md §3): expires_in_seconds is optional on create, and zero or
+// omitted issues a non-expiring credential.
+func TestToolRegistry_EABCreateExpiryOptional(t *testing.T) {
+	registry := NewToolRegistry(newMockServiceProvider(), logging.DefaultLogger())
+	for _, td := range registry.ListTools() {
+		if td.Name != "platform_eab_create_credential" {
+			continue
+		}
+		required, _ := td.InputSchema["required"].([]string)
+		for _, r := range required {
+			if r == "expires_in_seconds" {
+				t.Errorf("expires_in_seconds must stay optional, required = %v", required)
+			}
+		}
+		return
+	}
+	t.Fatal("platform_eab_create_credential not registered")
+}
+
 // TestEABProviderHelper_eabProvider verifies the type-assertion helper.
 func TestEABProviderHelper_eabProvider(t *testing.T) {
 	// Without provider satisfaction, eabProvider() returns nil.

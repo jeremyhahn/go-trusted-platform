@@ -84,14 +84,74 @@ export { useAuth, useOptionalAuth, AuthProvider } from '@/contexts/AuthContext';
 export type { User, AuthContextType } from '@/contexts/AuthContext';
 
 export { useToast, toast, dismissToast } from './use-toast';
+export {
+  useInvitationLookup,
+  fetchInvitation,
+  fetchInvitationByToken,
+  acceptInvitation,
+  isPendingInvitation,
+} from './use-invitation-lookup';
+export type {
+  InvitationDetail,
+  AcceptInvitationResult,
+  InvitationLookupState,
+} from './use-invitation-lookup';
+export { usePlatformDaemon } from './use-platform-daemon';
+export type { DaemonServiceAction } from './use-platform-daemon';
 export type { Toast, UseToastReturn } from './use-toast';
+export { useTPMKeyOperations, operationError } from './use-tpm-key-operations';
+export type { TPMKeyOperation, OperationResponse, TPMClient } from './use-tpm-key-operations';
 
+export { useBMCUsers, bmcPrivilegeLabel, BMC_PRIVILEGES } from './use-bmc-users';
+export type {
+  BMCPrivilege,
+  BMCUserSlot,
+  CreateBMCUserInput,
+  UseBMCUsersResult,
+} from './use-bmc-users';
 export { useTPMOps, textToBase64, base64ToHex } from './use-tpm-ops';
 // textToBase64 and base64ToHex come from use-tpm-ops (main) above.
 export { useVTPMRuntime, base64ToText, hexToBase64 } from './use-vtpm-runtime';
 export type { VTPMRunState } from './use-vtpm-runtime';
+export {
+  useContainerOps,
+  useVMAttestationVerify,
+  randomNonce,
+  decodeOutput,
+  splitCommand,
+} from './use-container-ops';
+export type { UseContainerOpsResult } from './use-container-ops';
+export { useVMOperations, attestationNonce } from './use-vm-operations';
+export type { UseVMOperationsResult } from './use-vm-operations';
+export { useAttestationCollect, newAttestationNonce } from './use-attestation-collect';
+export type {
+  AttestationCollectOperation,
+  AttestationCollectState,
+  UseAttestationCollectResult,
+} from './use-attestation-collect';
+export { useBMC, bmcUrl } from './use-bmc';
+export type { BMCState, BMCPart, UseBMCResult } from './use-bmc';
 
+export { useIAMTenants } from './use-iam-tenants';
+export type { UseIAMTenantsResult } from './use-iam-tenants';
+
+export { useGatewayBgp } from './use-gateway-bgp';
+export type {
+  GatewayBGPPeer,
+  GatewayAnnouncedPrefix,
+  GatewayIPAllocation,
+  UseGatewayBgpResult,
+} from './use-gateway-bgp';
 export { useReportedGateways } from './use-reported-gateways';
+
+export {
+  useInvitationById,
+  useInvitationByToken,
+  toInvitationView,
+} from './use-invitation-detail';
+export type { InvitationView, InvitationWire } from './use-invitation-detail';
+export { useTenantLifecycle } from './use-tenant-lifecycle';
+export type { UseTenantLifecycleResult } from './use-tenant-lifecycle';
 export { useOverlayVteps } from './use-overlay-vteps';
 export { useRegistry, encodeRepository } from './use-registry';
 export type {
@@ -101,6 +161,20 @@ export type {
   RegistryTags,
   UseRegistryResult,
 } from './use-registry';
+export { useSwitchPorts } from './use-switch-ports';
+export type { UseSwitchPortsResult } from './use-switch-ports';
+export { usePolicyTools, splitList } from './use-policy-tools';
+export type { ValidatePolicyInput, TestPolicyInput } from './use-policy-tools';
+export { useDeviceTemplateActions } from './use-device-template-actions';
+export { useSDNBridge } from './use-sdn-bridge';
+export type { UseSDNBridgeResult } from './use-sdn-bridge';
+export { useDeviceLookup } from './use-device-lookup';
+export type {
+  DeviceLookup,
+  DeviceUpdate,
+  ProfileUpdate,
+  DeviceAttestVariables,
+} from './use-device-lookup';
 export type {
   ReportedGateway,
   UseReportedGatewaysOptions,

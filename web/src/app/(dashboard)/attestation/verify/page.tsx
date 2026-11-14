@@ -33,6 +33,45 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
  * Verification represents an attestation verification operation
  * that validates TPM quotes against reference manifests.
  */
+/**
+ * A row's result. Only the verifier's verdict makes a row passed or failed:
+ * a signature or Merkle root on the manifest proves nothing until it is
+ * verified. "unverified" covers invalid evidence, an unknown or missing
+ * verdict and a failed verifier call; "in_progress" means no answer yet or a
+ * PENDING verdict.
+ */
+type VerificationStatus = "passed" | "failed" | "unverified" | "in_progress";
+
+/** What the verifier answered for one manifest. */
+interface Verdict {
+  status: VerificationStatus;
+  verifiedAt?: string;
+  errors: string[];
+}
+
+/** Maps a verifyManifest response (or its rejection, as null) to a verdict. */
+function verdictOf(
+  response: {
+    success?: boolean;
+    data?: {
+      result?: { status?: string; verifiedAt?: string; errors?: string[] };
+    };
+  } | null
+): Verdict {
+  const result = response?.success ? response.data?.result : undefined;
+  const errors = result?.errors ?? [];
+  switch (result?.status) {
+    case "VERIFIED":
+      return { status: "passed", verifiedAt: result.verifiedAt, errors };
+    case "FAILED":
+      return { status: "failed", verifiedAt: result.verifiedAt, errors };
+    case "PENDING":
+      return { status: "in_progress", errors };
+    default:
+      return { status: "unverified", errors };
+  }
+}
+
 interface Verification {
   id: string;
   deviceId: string;
@@ -40,7 +79,7 @@ interface Verification {
   quoteId: string;
   manifestId: string;
   manifestName: string;
-  status: "passed" | "failed" | "warning" | "in_progress";
+  status: VerificationStatus;
   verifiedAt: string;
   pcrMismatches: number;
   errors: string[];
@@ -56,7 +95,7 @@ const statusConfig: Record<
 > = {
   passed: { label: "Passed", variant: "default", icon: CheckCircle2 },
   failed: { label: "Failed", variant: "destructive", icon: XCircle },
-  warning: { label: "Warning", variant: "secondary", icon: AlertTriangle },
+  unverified: { label: "Unverified", variant: "secondary", icon: AlertTriangle },
   in_progress: { label: "In Progress", variant: "outline", icon: Clock },
 };
 
@@ -182,22 +221,53 @@ export default function VerifyPage() {
     }
   );
 
-  // Transform manifests into verification records
-  // In a real system, there would be a separate verification history endpoint
+  // Ask the verifier about every listed manifest. The verdicts are kept with
+  // the list they answer, so a refetched list shows in progress until its own
+  // verdicts arrive.
+  const verifier = React.useRef(attestation);
+  React.useEffect(() => {
+    verifier.current = attestation;
+  });
+  const [verdicts, setVerdicts] = React.useState<{
+    source: unknown;
+    byId: Record<string, Verdict>;
+  }>({ source: null, byId: {} });
+
+  React.useEffect(() => {
+    const manifests = manifestsData?.manifests;
+    if (!manifests?.length) return;
+    let cancelled = false;
+    for (const manifest of manifests) {
+      Promise.resolve(verifier.current.verifyManifest({ manifest }))
+        .then(
+          (response) => verdictOf(response),
+          () => verdictOf(null)
+        )
+        .then((verdict) => {
+          if (cancelled) return;
+          setVerdicts((prev) => ({
+            source: manifestsData,
+            byId: {
+              ...(prev.source === manifestsData ? prev.byId : {}),
+              [manifest.id]: verdict,
+            },
+          }));
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [manifestsData]);
+
   const verifications = React.useMemo<Verification[]>(() => {
     if (!manifestsData?.manifests) return [];
+    const byId = verdicts.source === manifestsData ? verdicts.byId : {};
 
     return manifestsData.manifests.map((manifest) => {
-      // Determine verification status based on signature validity
-      let status: "passed" | "failed" | "warning" | "in_progress" = "passed";
-      const pcrMismatches = 0;
-      const errors: string[] = [];
-
-      if (!manifest.signature) {
-        status = "in_progress";
-      } else if (manifest.signature && manifest.merkleRoot) {
-        status = "passed";
-      }
+      const verdict: Verdict = byId[manifest.id] ?? {
+        status: "in_progress",
+        errors: [],
+      };
 
       return {
         id: manifest.id,
@@ -206,20 +276,21 @@ export default function VerifyPage() {
         quoteId: manifest.id,
         manifestId: manifest.id,
         manifestName: `Manifest ${manifest.hostId}`,
-        status,
-        verifiedAt: manifest.timestamp,
-        pcrMismatches,
-        errors,
+        status: verdict.status,
+        verifiedAt: verdict.verifiedAt || manifest.timestamp,
+        pcrMismatches: 0,
+        errors: verdict.errors,
       };
     });
-  }, [manifestsData]);
+  }, [manifestsData, verdicts]);
 
   const stats = React.useMemo(() => {
     return {
       total: verifications.length,
       passed: verifications.filter((v) => v.status === "passed").length,
       failed: verifications.filter((v) => v.status === "failed").length,
-      warning: verifications.filter((v) => v.status === "warning").length,
+      unverified: verifications.filter((v) => v.status === "unverified")
+        .length,
       inProgress: verifications.filter((v) => v.status === "in_progress")
         .length,
     };
@@ -342,15 +413,15 @@ export default function VerifyPage() {
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Warning</CardTitle>
+            <CardTitle className="text-sm font-medium">Unverified</CardTitle>
             <AlertTriangle className="h-4 w-4 text-yellow-500" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-yellow-600 dark:text-yellow-400">
-              {stats.warning}
+              {stats.unverified}
             </div>
             <p className="text-xs text-muted-foreground">
-              Minor issues detected
+              No verdict from the verifier
             </p>
           </CardContent>
         </Card>
@@ -391,7 +462,7 @@ export default function VerifyPage() {
                 options: [
                   { label: "Passed", value: "passed" },
                   { label: "Failed", value: "failed" },
-                  { label: "Warning", value: "warning" },
+                  { label: "Unverified", value: "unverified" },
                   { label: "In Progress", value: "in_progress" },
                 ],
               },

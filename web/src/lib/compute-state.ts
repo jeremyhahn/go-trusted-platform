@@ -25,6 +25,8 @@ export function vmStateName(state: VMState | undefined): string | undefined {
  * the daemon reports no state for is shown as creating.
  */
 export function vmStatus(state: VMState | undefined): VM["status"] {
+  // The daemon reports a suspended VM as VM_STATE_PAUSED (#1727).
+  if (vmStateName(state) === "PAUSED") return "suspended";
   return (vmStateName(state)?.toLowerCase() || "creating") as VM["status"];
 }
 

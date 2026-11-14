@@ -263,6 +263,8 @@ type cov964Policies struct {
 	tested    *iamsdk.TestPolicyRequest
 	validRes  *iamsdk.ValidationResult
 	testRes   *iamsdk.TestPolicyResponse
+	simulated *iamsdk.SimulateRequest
+	simRes    *iamsdk.SimulateResponse
 	err       error
 }
 
@@ -352,6 +354,28 @@ func (c *cov964Policies) Test(_ context.Context, tenantID string, req *iamsdk.Te
 		return nil, c.err
 	}
 	return c.testRes, nil
+}
+
+func (c *cov964Policies) Simulate(_ context.Context, tenantID string, req *iamsdk.SimulateRequest) (*iamsdk.SimulateResponse, error) {
+	c.simulated = req
+	// Mirror the pinned SDK's validateSimulateRequest so the fake cannot
+	// certify a request the real client rejects.
+	switch {
+	case tenantID == "":
+		return nil, qberrors.NewInvalidInput("iam.Policy.Simulate", "tenant ID is required")
+	case req == nil:
+		return nil, qberrors.NewInvalidInput("iam.Policy.Simulate", "request is required")
+	case req.Subject.ID == "":
+		return nil, qberrors.NewInvalidInput("iam.Policy.Simulate", "subject ID is required")
+	case req.Action == "":
+		return nil, qberrors.NewInvalidInput("iam.Policy.Simulate", "action is required")
+	case req.Resource == "":
+		return nil, qberrors.NewInvalidInput("iam.Policy.Simulate", "resource is required")
+	}
+	if c.err != nil {
+		return nil, c.err
+	}
+	return c.simRes, nil
 }
 
 // cov964Apps is an in-memory AppClient keyed by client ID; err, when set,
@@ -705,13 +729,12 @@ func TestCov964Adapter_GetAndDeleteTenant(t *testing.T) {
 
 func TestCov964Adapter_ListTenantsPageSize(t *testing.T) {
 	tests := []struct {
-		name     string
-		limit    int32
-		wantSize int
+		name  string
+		limit int32
 	}{
-		{name: "positive limit becomes page size", limit: 10, wantSize: 10},
-		{name: "zero limit leaves the SDK default", limit: 0, wantSize: 0},
-		{name: "negative limit leaves the SDK default", limit: -4, wantSize: 0},
+		{name: "positive limit still reads every tenant", limit: 10},
+		{name: "zero limit reads every tenant", limit: 0},
+		{name: "negative limit reads every tenant", limit: -4},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -720,9 +743,45 @@ func TestCov964Adapter_ListTenantsPageSize(t *testing.T) {
 			resp, err := NewQuicBaaSIAMAdapter(client).ListTenants(context.Background(), tt.limit, 0)
 
 			require.NoError(t, err)
-			assert.Equal(t, tt.wantSize, client.tenants.listed.PageSize)
+			assert.Equal(t, 0, client.tenants.listed.PageSize, "the SDK has no offset, so the adapter reads all and pages locally")
 			require.Len(t, resp.Tenants, 1)
 			assert.Equal(t, "tenant-a", resp.Tenants[0].ID)
+			assert.Equal(t, int64(1), resp.Total)
+			assert.Equal(t, tt.limit, resp.Limit)
+			assert.Equal(t, int32(0), resp.Offset)
+		})
+	}
+}
+
+func TestCov964Adapter_ListTenantsWindow(t *testing.T) {
+	tests := []struct {
+		name    string
+		limit   int32
+		offset  int32
+		wantIDs []string
+	}{
+		{name: "second page of two", limit: 2, offset: 2, wantIDs: []string{"tenant-c"}},
+		{name: "first page of two", limit: 2, offset: 0, wantIDs: []string{"tenant-a", "tenant-b"}},
+		{name: "no limit returns all from the offset", limit: 0, offset: 1, wantIDs: []string{"tenant-b", "tenant-c"}},
+		{name: "offset past the end is empty", limit: 2, offset: 5, wantIDs: []string{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := cov964NewClient()
+			client.tenants.tenants["tenant-c"] = &iamsdk.Tenant{ID: "tenant-c", Name: "C"}
+			client.tenants.tenants["tenant-b"] = &iamsdk.Tenant{ID: "tenant-b", Name: "B"}
+
+			resp, err := NewQuicBaaSIAMAdapter(client).ListTenants(context.Background(), tt.limit, tt.offset)
+
+			require.NoError(t, err)
+			ids := make([]string, 0, len(resp.Tenants))
+			for _, tn := range resp.Tenants {
+				ids = append(ids, tn.ID)
+			}
+			assert.Equal(t, tt.wantIDs, ids)
+			assert.Equal(t, int64(3), resp.Total)
+			assert.Equal(t, tt.limit, resp.Limit)
+			assert.Equal(t, tt.offset, resp.Offset)
 		})
 	}
 }
@@ -753,6 +812,20 @@ func TestCov964Adapter_UpdateTenant(t *testing.T) {
 	_, err = adapter.UpdateTenant(ctx, "missing", &UpdateTenantRequest{})
 	cov964RequireNotFound(t, err, "tenant", "missing")
 	assert.Nil(t, client.tenants.updated.Settings, "no settings are sent when none are given")
+}
+
+func TestCov964Adapter_UpdateTenantName(t *testing.T) {
+	ctx := context.Background()
+	client := cov964NewClient()
+	adapter := NewQuicBaaSIAMAdapter(client)
+
+	_, err := adapter.UpdateTenant(ctx, "tenant-a", &UpdateTenantRequest{Name: "Renamed"})
+	require.NoError(t, err)
+	assert.Equal(t, "Renamed", client.tenants.updated.DisplayName, "the SDK maps DisplayName to the tenant name")
+
+	_, err = adapter.UpdateTenant(ctx, "tenant-a", &UpdateTenantRequest{Settings: &TenantSettings{MaxUsers: 2}})
+	require.NoError(t, err)
+	assert.Empty(t, client.tenants.updated.DisplayName, "no name is sent when none is given")
 }
 
 func TestCov964DecodeTenantSettings(t *testing.T) {
@@ -971,9 +1044,14 @@ func TestCov964Adapter_ValidatePolicy(t *testing.T) {
 	assert.ErrorIs(t, err, cov964Unavailable{})
 }
 
-func TestCov964Adapter_TestPolicySendsOneInlineCase(t *testing.T) {
+func TestCov964Adapter_TestPolicySimulates(t *testing.T) {
 	client := cov964NewClient()
-	client.policies.testRes = &iamsdk.TestPolicyResponse{Passed: 1}
+	client.policies.simRes = &iamsdk.SimulateResponse{
+		Allowed:          true,
+		MatchedPolicies:  []string{"allow-read"},
+		MatchedRules:     []string{"rule-1"},
+		EvaluationTimeNs: 42,
+	}
 
 	resp, err := NewQuicBaaSIAMAdapter(client).TestPolicy(context.Background(), "tenant-a", &TestPolicyRequest{
 		SubjectID: "user-1",
@@ -984,60 +1062,69 @@ func TestCov964Adapter_TestPolicySendsOneInlineCase(t *testing.T) {
 		Context:   map[string]string{"ip": "10.0.0.1"},
 	})
 
-	// The REST shape names no policy, so the SDK rejects the request before
-	// it reaches the server and the adapter returns that error.
-	require.Error(t, err)
-	assert.True(t, qberrors.IsInvalidInput(err), "want the SDK's invalid-input error, got %v", err)
-	assert.Equal(t, "policy name is required", qberrors.Message(err))
-	assert.Nil(t, resp)
+	require.NoError(t, err)
+	assert.Equal(t, &TestPolicyResponse{Allowed: true, MatchedPolicy: "allow-read", MatchedRule: "rule-1", EvaluationTimeNs: 42}, resp)
 
-	require.NotNil(t, client.policies.tested)
-	assert.Empty(t, client.policies.tested.PolicyName)
-	require.Len(t, client.policies.tested.TestCases, 1)
-	tc := client.policies.tested.TestCases[0]
-	assert.Equal(t, "rest-inline", tc.Name)
-	assert.Equal(t, iamsdk.Subject{ID: "user-1", TenantID: "tenant-a", Roles: []string{"viewer"}, Groups: []string{"ops"}}, tc.Subject)
-	assert.Equal(t, "iam:get", tc.Action)
-	assert.Equal(t, "tenant/a", tc.Resource)
-	assert.Equal(t, map[string]interface{}{"ip": "10.0.0.1"}, tc.Context)
+	assert.Nil(t, client.policies.tested, "Policy.Test needs a policy name and must not be called")
+	require.NotNil(t, client.policies.simulated)
+	sim := client.policies.simulated
+	assert.Equal(t, iamsdk.Subject{ID: "user-1", TenantID: "tenant-a", Roles: []string{"viewer"}, Groups: []string{"ops"}}, sim.Subject)
+	assert.Equal(t, "iam:get", sim.Action)
+	assert.Equal(t, "tenant/a", sim.Resource)
+	assert.Equal(t, map[string]interface{}{"ip": "10.0.0.1"}, sim.Context)
+
+	t.Run("attributes reach the subject", func(t *testing.T) {
+		client := cov964NewClient()
+		client.policies.simRes = &iamsdk.SimulateResponse{}
+		_, err := NewQuicBaaSIAMAdapter(client).TestPolicy(context.Background(), "tenant-a", &TestPolicyRequest{
+			SubjectID:  "user-1",
+			Action:     "iam:get",
+			Resource:   "tenant/a",
+			Attributes: map[string]string{"dept": "eng"},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, client.policies.simulated)
+		assert.Equal(t, map[string]interface{}{"dept": "eng"}, client.policies.simulated.Subject.Attributes)
+	})
 }
 
 func TestCov964Adapter_TestPolicyResultDecides(t *testing.T) {
 	tests := []struct {
 		name string
-		res  *iamsdk.TestPolicyResponse
+		res  *iamsdk.SimulateResponse
 		want *TestPolicyResponse
 	}{
 		{
-			name: "passing deny case is not allowed",
-			res: &iamsdk.TestPolicyResponse{Passed: 1, Results: []iamsdk.TestCaseResult{{
-				Passed: true, ExpectedResult: iamsdk.EffectDeny, ActualResult: iamsdk.EffectDeny, MatchedRule: "block",
-			}}},
-			want: &TestPolicyResponse{Allowed: false, MatchedRule: "block"},
+			name: "denied with a matched policy",
+			res: &iamsdk.SimulateResponse{
+				Allowed: false, Effect: iamsdk.EffectDeny,
+				MatchedPolicies: []string{"block-all", "other"}, MatchedRules: []string{"block"},
+				EvaluationTimeNs: 7,
+			},
+			want: &TestPolicyResponse{Allowed: false, MatchedPolicy: "block-all", MatchedRule: "block", EvaluationTimeNs: 7},
 		},
 		{
-			name: "failing case whose actual decision is allow is allowed",
-			res: &iamsdk.TestPolicyResponse{Failed: 1, Results: []iamsdk.TestCaseResult{{
-				Passed: false, ExpectedResult: iamsdk.EffectDeny, ActualResult: iamsdk.EffectAllow, MatchedRule: "read",
-			}}},
-			want: &TestPolicyResponse{Allowed: true, MatchedRule: "read"},
+			name: "allowed",
+			res: &iamsdk.SimulateResponse{
+				Allowed: true, Effect: iamsdk.EffectAllow,
+				MatchedPolicies: []string{"allow-read"}, MatchedRules: []string{"read"},
+			},
+			want: &TestPolicyResponse{Allowed: true, MatchedPolicy: "allow-read", MatchedRule: "read"},
 		},
 		{
-			name: "passing allow case is allowed",
-			res: &iamsdk.TestPolicyResponse{Passed: 1, Results: []iamsdk.TestCaseResult{{
-				Passed: true, ExpectedResult: iamsdk.EffectAllow, ActualResult: iamsdk.EffectAllow, MatchedRule: "read",
-			}}},
-			want: &TestPolicyResponse{Allowed: true, MatchedRule: "read"},
+			name: "empty response is not allowed",
+			res:  &iamsdk.SimulateResponse{},
+			want: &TestPolicyResponse{},
 		},
 		{
-			name: "no results is not allowed",
-			res:  &iamsdk.TestPolicyResponse{Passed: 1},
+			name: "nil response is not allowed",
+			res:  nil,
 			want: &TestPolicyResponse{},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, testPolicyResponseFromSDK(tt.res))
+			assert.Equal(t, tt.want, testPolicyResponseFromSimulate(tt.res))
 		})
 	}
 }
@@ -1046,11 +1133,20 @@ func TestCov964Adapter_TestPolicyErrors(t *testing.T) {
 	client := cov964NewClient()
 	_, err := NewQuicBaaSIAMAdapter(client).TestPolicy(context.Background(), "tenant-a", nil)
 	require.Error(t, err)
+	assert.Nil(t, client.policies.simulated, "the SDK must not be called")
 	assert.Nil(t, client.policies.tested, "the SDK must not be called")
 
 	_, err = NewQuicBaaSIAMAdapter(client).TestPolicy(context.Background(), "", &TestPolicyRequest{})
 	assert.True(t, qberrors.IsInvalidInput(err), "want the SDK's invalid-input error, got %v", err)
 	assert.Equal(t, "tenant ID is required", qberrors.Message(err))
+	assert.Equal(t, "iam.Policy.Simulate", qberrors.Op(err))
+
+	client = cov964NewClient()
+	client.policies.err = qberrors.NewUnavailable("iam.Policy.Simulate", "backend down")
+	_, err = NewQuicBaaSIAMAdapter(client).TestPolicy(context.Background(), "tenant-a", &TestPolicyRequest{
+		SubjectID: "user-1", Action: "iam:get", Resource: "tenant/a",
+	})
+	assert.Equal(t, client.policies.err, err)
 }
 
 func TestCov964Adapter_ListApps(t *testing.T) {

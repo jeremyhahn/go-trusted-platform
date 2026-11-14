@@ -505,7 +505,6 @@ test.describe('Platform Management', () => {
 
       // Wait for page to load
       await page.waitForLoadState('networkidle');
-      await page.waitForTimeout(1000);
 
       // Check for various error indicators
       const errorIndicators = [
@@ -513,6 +512,7 @@ test.describe('Platform Management', () => {
         page.getByText(/error|unavailable|failed/i).first(),
         page.locator('[data-testid="error"]').first(),
       ];
+      await errorIndicators.slice(1).reduce((acc, l) => acc.or(l), errorIndicators[0]).first().waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
 
       let foundError = false;
       for (const indicator of errorIndicators) {
@@ -533,76 +533,8 @@ test.describe('Platform Management', () => {
   // ============================================================================
   // Services Page Tests
   // ============================================================================
-  test.describe('Services Page', () => {
-    test.beforeEach(async ({ page }) => {
-      await createTenantOwnerSession(page.context());
-    });
-
-    test('should list services from health data', async ({ page }) => {
-      await mockPlatformApi(page);
-      await mockTenantApi(page);
-
-      await page.goto('/platform/services');
-
-      // Verify page header
-      await expect(page.getByRole('heading', { name: /platform services/i })).toBeVisible();
-
-      // Verify services are listed (derived from health data)
-      await expect(page.getByText(/api.?server/i).first()).toBeVisible();
-      await expect(page.getByText(/database/i).first()).toBeVisible();
-    });
-
-    test('should display service status badges', async ({ page }) => {
-      await mockPlatformApi(page);
-      await mockTenantApi(page);
-
-      await page.goto('/platform/services');
-
-      // Verify running status badges (healthy services show as "running")
-      await expect(page.getByText(/running/i).first()).toBeVisible();
-    });
-
-    test('should show service statistics', async ({ page }) => {
-      await mockPlatformApi(page);
-      await mockTenantApi(page);
-
-      await page.goto('/platform/services');
-
-      // Verify statistics cards are displayed
-      await expect(page.getByText(/total services/i)).toBeVisible();
-      await expect(page.getByText(/running/i).first()).toBeVisible();
-    });
-
-    test('should display service error state', async ({ page }) => {
-      const unhealthyData = createMockGetHealthResponse({
-        healthy: false,
-        services: [
-          createMockServiceHealth({ name: 'api-server', healthy: false, message: 'Service error' }),
-          createMockServiceHealth({ name: 'database', healthy: true }),
-        ],
-      });
-
-      await mockPlatformApi(page, { health: unhealthyData });
-      await mockTenantApi(page);
-
-      await page.goto('/platform/services');
-
-      // Verify error status is displayed
-      await expect(page.getByText(/error/i).first()).toBeVisible();
-    });
-
-    test('should handle services fetch failure', async ({ page }) => {
-      await mockPlatformApi(page, {
-        healthError: { error: 'Cannot connect to service manager', status: 500 },
-      });
-      await mockTenantApi(page);
-
-      await page.goto('/platform/services');
-
-      // Should display error
-      await expect(page.getByText(/error|cannot connect|failed/i).first()).toBeVisible();
-    });
-  });
+  // The services page reads the daemon's /status, /version, /config and
+  // /services routes (#1752); e2e/platform-services.spec.ts covers it.
 
   // ============================================================================
   // Events Page Tests
@@ -864,10 +796,7 @@ test.describe('Platform Management', () => {
           await autoRefreshToggle.click();
         }
 
-        // Wait for at least one auto-refresh (page uses 30 second interval)
-        const initialCount = callCount;
-        // Use shorter timeout for test - just verify the mechanism works
-        await page.waitForTimeout(1000);
+        await expect.poll(() => callCount).toBeGreaterThan(0);
 
         // The auto-refresh should be enabled (we can't wait 30s in tests)
         await expect(autoRefreshToggle).toBeChecked();

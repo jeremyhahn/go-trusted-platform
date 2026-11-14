@@ -737,6 +737,14 @@ export interface AttestVMRequest {
 }
 
 /**
+ * Request to attest a container
+ */
+export interface AttestContainerRequest {
+  /** Container ID */
+  id: string;
+}
+
+/**
  * Verify VM attestation request
  */
 export interface VerifyVMAttestationRequest {
@@ -917,6 +925,86 @@ export interface MigrateVMResponse {
   status: ComputeStatus;
 }
 
+/** Suspend VM response */
+export interface SuspendVMResponse {
+  /** Operation status */
+  status: ComputeStatus;
+}
+
+/** Resume VM response */
+export interface ResumeVMResponse {
+  /** Operation status */
+  status: ComputeStatus;
+}
+
+/** Get snapshot response */
+export interface GetSnapshotResponse {
+  /** Snapshot */
+  snapshot: Snapshot;
+}
+
+/** Prepare migration request (run on the destination host) */
+/** The source guest's configuration a migration receiver needs (proto VMMigrationSpec) */
+export interface VMMigrationSpec {
+  /** Memory in MB */
+  memoryMb: number;
+  /** Number of vCPUs */
+  cpus: number;
+  /** Disk size, e.g. "20G" */
+  diskSize?: string;
+  /** Boot mode */
+  bootMode?: string;
+  /** Secure Boot enabled */
+  secureBoot?: boolean;
+  /** KVM acceleration enabled */
+  enableKvm?: boolean;
+  /** vTPM enabled */
+  tpmEnabled?: boolean;
+  /** Network mode */
+  networkMode?: string;
+  /** MAC address */
+  macAddress?: string;
+  /** Source guest arch: "x86_64" or "aarch64"; empty means x86_64 */
+  arch?: string;
+}
+
+export interface PrepareMigrationRequest {
+  /** Source instance ID (informational) */
+  vmId?: string;
+  /** Guest name */
+  vmName: string;
+  /** Migration mode */
+  mode: 'cold' | 'live';
+  /** VM migration spec (required: the daemon refuses a request without one) */
+  spec: VMMigrationSpec;
+}
+
+/** Prepare migration response */
+export interface PrepareMigrationResponse {
+  /** Operation status */
+  status: ComputeStatus;
+  /** Receiver token passed to FinalizeMigration */
+  receiverId?: string;
+  /** TCP port the receiver listens on */
+  port?: number;
+  /** Host name the source pins in the migration TLS credentials */
+  tlsHostname?: string;
+}
+
+/** Finalize migration request */
+export interface FinalizeMigrationRequest {
+  /** Receiver ID from PrepareMigration */
+  receiverId: string;
+  /** true registers and resumes the received VM, false aborts */
+  commit: boolean;
+}
+
+/** Finalize migration response */
+export interface FinalizeMigrationResponse {
+  /** Operation status */
+  status: ComputeStatus;
+}
+
 /**
  * Create container response
  */
@@ -1018,6 +1106,36 @@ export interface AttestVMResponse {
    * as VerifyVMAttestationRequest.signatureAlgorithm.
    */
   signatureAlgorithm?: string;
+}
+
+/**
+ * Response from attesting a container
+ */
+export interface AttestContainerResponse {
+  /** Operation status */
+  status: ComputeStatus;
+  /** Quote (base64) */
+  quote?: string;
+  /** Signature (base64) */
+  signature?: string;
+  /** PCR values */
+  pcrValues?: PCRValue[];
+  /** Event log (base64) */
+  eventLog?: string;
+  /** AK public key (base64) */
+  akPublic?: string;
+  /** Container ID */
+  containerId?: string;
+  /** Container name */
+  containerName?: string;
+  /** Image digest (base64) */
+  imageDigest?: string;
+  /** Config digest (base64) */
+  configDigest?: string;
+  /** Whether the server verified the quote */
+  verified?: boolean;
+  /** Attestation time (RFC 3339) */
+  timestamp?: string;
 }
 
 /**

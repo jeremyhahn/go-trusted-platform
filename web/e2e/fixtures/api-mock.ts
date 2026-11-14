@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { Page, Route, Request } from '@playwright/test';
 
 /**
@@ -391,6 +392,710 @@ export async function mockTenantApi(
   };
 }
 
+// ============================================================================
+// Admin tenant API mock (#1673): /api/v1/tenants and its sub-routes
+// ============================================================================
+
+/** A tenant record as the admin tenant pages read it. */
+export interface AdminTenant {
+  id: string;
+  name: string;
+  displayName?: string;
+  /** protojson enum names, as the webservice serialises Tenant.state */
+  state:
+    | 'TENANT_STATE_ACTIVE'
+    | 'TENANT_STATE_SUSPENDED'
+    | 'TENANT_STATE_PENDING'
+    | 'TENANT_STATE_DELETING'
+    | 'TENANT_STATE_DELETED';
+  computeQuota?: { maxVms?: number; maxContainers?: number; maxVcpus?: number; maxMemoryMb?: number };
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** One request the admin tenant mock answered. */
+export interface AdminTenantCall {
+  method: string;
+  path: string;
+  /** The request's query string, e.g. `?limit=100&offset=0`. */
+  query: string;
+  body: unknown;
+}
+
+export function createMockAdminTenant(overrides: Partial<AdminTenant> = {}): AdminTenant {
+  return {
+    id: 'tenant-1',
+    name: 'acme',
+    displayName: 'Acme Corp',
+    state: 'TENANT_STATE_ACTIVE',
+    computeQuota: { maxVms: 10, maxContainers: 5, maxVcpus: 40, maxMemoryMb: 65536 },
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    ...overrides,
+  };
+}
+
+/**
+ * Mock the admin tenant routes with an in-memory tenant store. Every
+ * request is recorded in calls, so a test can assert which operation ran.
+ */
+export async function mockAdminTenantsApi(
+  page: Page,
+  config: { tenants?: AdminTenant[]; quotaAvailable?: boolean } = {}
+): Promise<{ calls: AdminTenantCall[]; tenants: () => AdminTenant[] }> {
+  let tenants = [...(config.tenants ?? [createMockAdminTenant()])];
+  const calls: AdminTenantCall[] = [];
+  let dekVersion = 1;
+  const ok = { success: true, message: 'ok' };
+
+  const reply = (route: Route, status: number, payload: unknown) =>
+    route.fulfill({
+      status,
+      contentType: 'application/json',
+      body: JSON.stringify({ code: status, error: '', success: status < 400, payload }),
+    });
+  const notFound = (route: Route) =>
+    route.fulfill({
+      status: 404,
+      contentType: 'application/json',
+      body: JSON.stringify({ code: 404, error: 'tenant not found', success: false }),
+    });
+
+  await page.route('**/api/v1/tenants**', async (route: Route, request: Request) => {
+    const method = request.method();
+    const url = new URL(request.url());
+    const path = url.pathname.replace(/\/+$/, '');
+    let body: unknown;
+    try {
+      body = request.postDataJSON();
+    } catch {
+      body = undefined;
+    }
+    calls.push({ method, path, query: url.search, body });
+    const parts = path.replace(/^.*\/api\/v1\/tenants/, '').split('/').filter(Boolean).map(decodeURIComponent);
+    const input = (body ?? {}) as Record<string, unknown>;
+
+    if (parts.length === 0) {
+      if (method === 'GET') {
+        // The server pages the list: limit defaults to 100, offset to 0.
+        const limit = Number(url.searchParams.get('limit') ?? '') || 100;
+        const offset = Number(url.searchParams.get('offset') ?? '') || 0;
+        return reply(route, 200, { tenants: tenants.slice(offset, offset + limit), total: tenants.length });
+      }
+      if (method === 'POST') {
+        const created = createMockAdminTenant({
+          id: `tenant-${tenants.length + 1}`,
+          name: String(input.name ?? ''),
+          displayName: input.displayName as string | undefined,
+        });
+        tenants = [...tenants, created];
+        return reply(route, 201, { status: ok, tenant: created });
+      }
+    }
+    if (parts[0] === 'sync' && method === 'POST') return reply(route, 200, { status: ok });
+    if (parts[0] === 'by-name' && parts.length === 2 && method === 'GET') {
+      const found = tenants.find((t) => t.name === parts[1]);
+      return found ? reply(route, 200, { tenant: found }) : notFound(route);
+    }
+
+    const tenant = tenants.find((t) => t.id === parts[0]);
+    if (!tenant) return notFound(route);
+    const sub = parts.slice(1).join('/');
+    const update = (patch: Partial<AdminTenant>) => {
+      Object.assign(tenant, patch);
+      return tenant;
+    };
+
+    switch (`${method} ${sub}`) {
+      case 'GET ':
+        return reply(route, 200, { tenant });
+      case 'PUT ':
+      {
+        // The server ignores an empty display name and keeps the old one.
+        const submitted = input.displayName as string | undefined;
+        return reply(route, 200, {
+          status: ok,
+          tenant: submitted ? update({ displayName: submitted }) : tenant,
+        });
+      }
+      case 'DELETE ':
+        tenants = tenants.filter((t) => t.id !== tenant.id);
+        return reply(route, 200, { status: ok });
+      case 'POST suspend':
+        update({ state: 'TENANT_STATE_SUSPENDED' });
+        return reply(route, 200, { status: ok });
+      case 'POST resume':
+        update({ state: 'TENANT_STATE_ACTIVE' });
+        return reply(route, 200, { status: ok });
+      case 'PUT quotas': {
+        // Like TenantGRPCServer.UpdateQuotas: a supplied compute section
+        // replaces every limit, so an omitted field becomes zero.
+        const c = input.compute as Record<string, unknown> | undefined;
+        if (c) {
+          const num = (v: unknown) => Number(v ?? 0) || 0;
+          update({
+            computeQuota: {
+              maxVms: num(c.maxVms),
+              maxContainers: num(c.maxContainers),
+              maxVcpus: num(c.maxVcpus),
+              maxMemoryMb: num(c.maxMemoryMb),
+            },
+          });
+        }
+        return reply(route, 200, { status: ok });
+      }
+      case 'POST quota-check':
+        return reply(route, 200, {
+          tenantId: tenant.id,
+          resource: input.resource,
+          amount: input.amount,
+          available: config.quotaAvailable ?? true,
+        });
+      case 'GET dek':
+        return reply(route, 200, {
+          dekStatus: {
+            tenantId: tenant.id,
+            path: `tenants/${tenant.id}/dek`,
+            version: dekVersion,
+            algorithm: 'AES-256-GCM',
+            status: 'ACTIVE',
+            isDefault: true,
+            createdAt: tenant.createdAt,
+            usageCount: 10,
+            bytesUsed: 1024,
+            maxUsageCount: 1000,
+            maxBytesUsed: 1048576,
+            warningPercent: 80,
+            usagePercent: 1,
+            needsRotation: false,
+          },
+        });
+      case 'POST dek/rotate':
+        dekVersion += 1;
+        return reply(route, 200, {
+          tenantId: tenant.id,
+          oldVersion: dekVersion - 1,
+          newVersion: dekVersion,
+          timestamp: '2026-01-02T00:00:00Z',
+        });
+      case 'POST barrier/init':
+        // TenantGRPCServer.InitTenantBarrier refuses any Shamir setting.
+        if (Number(input.threshold ?? 0) !== 0 || Number(input.shares ?? 0) !== 0) {
+          return route.fulfill({
+            status: 400,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              code: 400,
+              error: 'tenant barrier: Shamir threshold/shares are not supported',
+              success: false,
+            }),
+          });
+        }
+        return reply(route, 200, { status: ok });
+      case 'POST barrier/unseal':
+      case 'POST barrier/seal':
+        return reply(route, 200, { status: ok });
+      default:
+        return route.continue();
+    }
+  });
+
+  return { calls, tenants: () => [...tenants] };
+}
+
+// ============================================================================
+// VM operations API (#1727)
+// ============================================================================
+
+/** One compute API call the VM operations mock answered. */
+export interface VMOperationCall {
+  method: string;
+  path: string;
+  body: unknown;
+}
+
+/** Initial state of the VM operations mock. */
+export interface VMOperationsMockConfig {
+  vmId?: string;
+  vmName?: string;
+  state?: string;
+}
+
+/**
+ * Mock the compute VM operations: GetVM, SuspendVM, ResumeVM, AttestVM,
+ * GetVMMetrics, Attach/Detach/ResizeDisk, Create/GetSnapshot, MigrateVM,
+ * PrepareMigration and FinalizeMigration. Every answered call is recorded.
+ */
+export async function mockVMOperationsApi(
+  page: Page,
+  config: VMOperationsMockConfig = {}
+): Promise<{ calls: () => VMOperationCall[]; state: () => string }> {
+  const vmId = config.vmId ?? 'vm-ops-1';
+  let state = config.state ?? 'VM_STATE_RUNNING';
+  const calls: VMOperationCall[] = [];
+  const now = new Date().toISOString();
+  const ok = (message: string) => ({ status: { success: true, message } });
+
+  // The real GetVM shape (instanceToVMProto): config carries the name, and
+  // there are no metrics, no snapshots and no flattened fields.
+  const vm = () => ({
+    id: vmId,
+    config: {
+      name: config.vmName ?? 'ops-vm',
+      cpu: { cores: 2 },
+      memory: { sizeMb: 2048 },
+      disks: [],
+      networks: [],
+    },
+    state,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const snapshot = (id: string, name: string) => ({
+    id,
+    vmId,
+    config: { name },
+    createdAt: now,
+    sizeBytes: 4096,
+    vmState: state,
+  });
+
+  await page.route('**/api/v1/compute/**', async (route: Route, request: Request) => {
+    const method = request.method();
+    const path = new URL(request.url()).pathname.replace(/^.*\/api\/v1\/compute/, '');
+    let body: unknown = null;
+    try {
+      body = request.postDataJSON();
+    } catch {
+      body = null;
+    }
+    const json = async (status: number, data: unknown) => {
+      calls.push({ method, path, body });
+      await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(data) });
+    };
+    const vmBase = `/vms/${vmId}`;
+
+    if (method === 'GET' && path === vmBase) return json(200, { vm: vm() });
+    if (method === 'GET' && path === '/vms') {
+      return json(200, { vms: [vm()], pagination: { page: 1, pageSize: 100, totalPages: 1, totalItems: 1 } });
+    }
+    if (method === 'POST' && path === `${vmBase}/suspend`) {
+      state = 'VM_STATE_PAUSED';
+      return json(200, ok('VM suspended'));
+    }
+    if (method === 'POST' && path === `${vmBase}/resume`) {
+      state = 'VM_STATE_RUNNING';
+      return json(200, ok('VM resumed'));
+    }
+    if (method === 'POST' && path === `${vmBase}/attest`) {
+      return json(200, {
+        ...ok('Attestation collected'),
+        quote: 'cXVvdGU=',
+        signature: 'c2ln',
+        pcrValues: [{ index: 0, value: 'AA==' }, { index: 7, value: 'AQ==' }],
+        signatureAlgorithm: 'SHA256-RSAPSS',
+      });
+    }
+    if (method === 'GET' && path === `${vmBase}/metrics`) {
+      return json(200, {
+        metrics: {
+          cpuUsagePercent: 42,
+          memoryUsedMb: 1536,
+          memoryAvailableMb: 512,
+          diskReadBytes: 1,
+          diskWriteBytes: 2,
+          networkRxBytes: 3,
+          networkTxBytes: 4,
+          uptimeSeconds: 3600,
+        },
+      });
+    }
+    if (method === 'POST' && path === `${vmBase}/disks`) return json(200, ok('Disk attached'));
+    if (method === 'DELETE' && path.startsWith(`${vmBase}/disks/`)) return json(200, ok('Disk detached'));
+    if (method === 'PATCH' && path.startsWith(`${vmBase}/disks/`)) return json(200, ok('Disk resized'));
+    if (method === 'POST' && path === `${vmBase}/snapshots`) {
+      const name = (body as { config?: { name?: string } } | null)?.config?.name ?? 'snap';
+      return json(201, { ...ok('Snapshot created'), snapshot: snapshot('snap-new', name) });
+    }
+    if (method === 'GET' && path === `${vmBase}/snapshots`) return json(200, { snapshots: [] });
+    if (method === 'GET' && path.startsWith(`${vmBase}/snapshots/`)) {
+      const id = path.slice(`${vmBase}/snapshots/`.length);
+      return json(200, { snapshot: snapshot(id, `stored-${id}`) });
+    }
+    if (method === 'POST' && path === `${vmBase}/migrate`) return json(200, ok('Migration started'));
+    if (method === 'POST' && path === '/migrations/prepare') {
+      const spec = (body as { spec?: unknown } | null)?.spec as { memoryMb?: unknown; cpus?: unknown } | undefined;
+      const positive = (n: unknown) => typeof n === 'number' && Number.isInteger(n) && n > 0;
+      if (!spec || typeof spec !== 'object' || !positive(spec.memoryMb) || !positive(spec.cpus)) {
+        return json(400, { message: 'migration spec is required', code: 'INVALID_ARGUMENT' });
+      }
+      return json(200, { ...ok('Receiver ready'), receiverId: 'rx-42', port: 49152, tlsHostname: 'rx-42-tls' });
+    }
+    if (method === 'POST' && /^\/migrations\/[^/]+\/finalize$/.test(path)) {
+      return json(200, ok('Migration finalized'));
+    }
+    return json(404, { message: 'not mocked', code: 'HTTP_404' });
+  });
+
+  return { calls: () => [...calls], state: () => state };
+}
+
+// ============================================================================
+// IAM groups, group members, permission check and tenants (#1744)
+// ============================================================================
+
+export interface MockIAMGroup {
+  id: string;
+  name: string;
+  description?: string;
+  members: string[];
+}
+
+export interface MockIAMTenant {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RecordedIAMCall {
+  method: string;
+  path: string;
+  body: unknown;
+}
+
+export interface IAMGroupsTenantsMockConfig {
+  groups?: MockIAMGroup[];
+  tenants?: MockIAMTenant[];
+  /** Reply of POST /tenants/{tenant}/permissions/check */
+  permissionAllowed?: boolean;
+  /** Tenant operations that answer HTTP 500 (failure paths, #1757). */
+  tenantFailOps?: Array<'create' | 'update' | 'delete'>;
+}
+
+/**
+ * Stateful mock of the IAM group, member, permission check and tenant
+ * routes, as pkg/webservice/v1/rest/iam/router.go registers them. Every
+ * request is recorded in `calls` so a test can assert the method and path.
+ */
+export async function mockIAMGroupsTenantsApi(
+  page: Page,
+  config: IAMGroupsTenantsMockConfig = {}
+): Promise<{
+  calls: RecordedIAMCall[];
+  groups: () => MockIAMGroup[];
+  tenants: () => MockIAMTenant[];
+}> {
+  const groups = new Map<string, MockIAMGroup>(
+    (config.groups ?? []).map((g) => [g.id, { ...g, members: [...g.members] }])
+  );
+  const tenants = new Map<string, MockIAMTenant>(
+    (config.tenants ?? []).map((t) => [t.id, { ...t }])
+  );
+  const calls: RecordedIAMCall[] = [];
+  const failOps = config.tenantFailOps ?? [];
+  const now = () => new Date().toISOString();
+  const json = (route: Route, status: number, body: unknown) =>
+    route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+  const record = (request: Request, path: string): unknown => {
+    let body: unknown = null;
+    try {
+      body = request.postDataJSON();
+    } catch {
+      body = request.postData();
+    }
+    calls.push({ method: request.method(), path, body });
+    return body;
+  };
+
+  // Lists the permissions page also loads.
+  await page.route(/\/api\/v1\/iam\/tenants\/[^/]+\/(roles|policies)\/?(\?.*)?$/, async (route) => {
+    await json(route, 200, { roles: [], policies: [], total: 0, timestamp: now() });
+  });
+
+  await page.route(
+    /\/api\/v1\/iam\/tenants\/[^/]+\/permissions\/check\/?(\?.*)?$/,
+    async (route: Route, request: Request) => {
+      const body = record(request, new URL(request.url()).pathname) as Record<string, unknown> | null;
+      // The REST handler decodes CheckPermissionRequest.SubjectID from subject_id.
+      if (typeof body?.subject_id !== 'string' || body.subject_id === '') {
+        await json(route, 400, { error: 'subject_id is required' });
+        return;
+      }
+      await json(route, 200, {
+        allowed: config.permissionAllowed ?? true,
+        matchedPolicy: config.permissionAllowed === false ? '' : 'devices-readers',
+        reason: config.permissionAllowed === false ? 'no matching policy' : 'policy matched',
+        timestamp: now(),
+      });
+    }
+  );
+
+  await page.route(
+    /\/api\/v1\/iam\/tenants\/[^/]+\/groups(\/[^/?]+)?(\/members\/[^/?]+)?\/?(\?.*)?$/,
+    async (route: Route, request: Request) => {
+      const path = new URL(request.url()).pathname.replace(/\/$/, '');
+      const m = path.match(/\/groups(?:\/([^/]+))?(?:\/members\/([^/]+))?$/);
+      const groupId = m?.[1] ? decodeURIComponent(m[1]) : undefined;
+      const userId = m?.[2] ? decodeURIComponent(m[2]) : undefined;
+      const method = request.method();
+      const body = record(request, path) as Record<string, string> | null;
+
+      if (!groupId) {
+        if (method === 'GET') {
+          await json(route, 200, { groups: [...groups.values()], total: groups.size, timestamp: now() });
+          return;
+        }
+        if (method === 'POST') {
+          const id = body?.id || `group-${groups.size + 1}`;
+          const g: MockIAMGroup = { id, name: body?.name ?? id, description: body?.description, members: [] };
+          groups.set(id, g);
+          await json(route, 201, { group: g, timestamp: now() });
+          return;
+        }
+      }
+      const g = groupId ? groups.get(groupId) : undefined;
+      if (!g) {
+        await json(route, 404, { message: 'group not found', code: 'NOT_FOUND' });
+        return;
+      }
+      if (userId && method === 'POST') {
+        if (!g.members.includes(userId)) g.members.push(userId);
+        await json(route, 200, { status: { code: 0 }, timestamp: now() });
+        return;
+      }
+      if (userId && method === 'DELETE') {
+        g.members = g.members.filter((u) => u !== userId);
+        await json(route, 200, { status: { code: 0 }, timestamp: now() });
+        return;
+      }
+      if (method === 'GET') {
+        // groupToResponse never fills members: the real GET carries no members list.
+        const wire: Omit<MockIAMGroup, 'members'> & { members?: string[] } = { ...g };
+        delete wire.members;
+        await json(route, 200, { group: wire, timestamp: now() });
+        return;
+      }
+      if (method === 'PUT') {
+        if (body?.name !== undefined) g.name = body.name;
+        if (body?.description !== undefined) g.description = body.description;
+        await json(route, 200, { group: g, timestamp: now() });
+        return;
+      }
+      if (method === 'DELETE') {
+        groups.delete(g.id);
+        await json(route, 200, { status: { code: 0 }, timestamp: now() });
+        return;
+      }
+      await route.continue();
+    }
+  );
+
+  await page.route(/\/api\/v1\/iam\/tenants(\/[^/?]+)?\/?(\?.*)?$/, async (route: Route, request: Request) => {
+    const path = new URL(request.url()).pathname.replace(/\/$/, '');
+    const m = path.match(/\/tenants(?:\/([^/]+))?$/);
+    const tenantId = m?.[1] ? decodeURIComponent(m[1]) : undefined;
+    const method = request.method();
+    const body = record(request, path) as Record<string, string> | null;
+
+    if (!tenantId) {
+      if (method === 'GET') {
+        // IAMHandlers.ListTenants reads limit (default 50) and offset; the
+        // adapter answers the window with the real total (#1757).
+        const query = new URL(request.url()).searchParams;
+        const limit = Number(query.get('limit') ?? '50') || 50;
+        const offset = Number(query.get('offset') ?? '0') || 0;
+        const all = [...tenants.values()].sort((a, b) => a.id.localeCompare(b.id));
+        await json(route, 200, {
+          tenants: all.slice(offset, offset + limit),
+          total: all.length,
+          limit,
+          offset,
+          timestamp: now(),
+        });
+        return;
+      }
+      if (method === 'POST') {
+        if (failOps.includes('create')) {
+          await json(route, 500, { error: 'tenant store unavailable' });
+          return;
+        }
+        // IAMHandlers.CreateTenant refuses an empty id with HTTP 400.
+        const id = body?.id ?? '';
+        if (!id) {
+          await json(route, 400, { error: 'tenant id is required' });
+          return;
+        }
+        const t: MockIAMTenant = { id, name: body?.name ?? id, createdAt: now(), updatedAt: now() };
+        tenants.set(id, t);
+        await json(route, 201, { tenant: t, timestamp: now() });
+        return;
+      }
+    }
+    const t = tenantId ? tenants.get(tenantId) : undefined;
+    if (!t) {
+      await json(route, 404, { message: 'tenant not found', code: 'NOT_FOUND' });
+      return;
+    }
+    if (method === 'GET') {
+      await json(route, 200, { tenant: t, timestamp: now() });
+      return;
+    }
+    if (method === 'PUT') {
+      if (failOps.includes('update')) {
+        await json(route, 500, { error: 'tenant store unavailable' });
+        return;
+      }
+      // QuicBaaSIAMAdapter.UpdateTenant sends name as the SDK's DisplayName,
+      // which the embedded handler stores as the tenant name (#1757).
+      if (body?.name) t.name = body.name;
+      t.updatedAt = now();
+      await json(route, 200, { tenant: t, timestamp: now() });
+      return;
+    }
+    if (method === 'DELETE') {
+      if (failOps.includes('delete')) {
+        await json(route, 500, { error: 'tenant store unavailable' });
+        return;
+      }
+      tenants.delete(t.id);
+      await json(route, 200, { status: { code: 0 }, timestamp: now() });
+      return;
+    }
+    await route.continue();
+  });
+
+  return {
+    calls,
+    groups: () => [...groups.values()],
+    tenants: () => [...tenants.values()],
+  };
+}
+
+/**
+ * A tenant as the TenantService (/api/v1/tenants) returns it (#1758).
+ */
+export interface LifecycleTenant {
+  id: string;
+  name: string;
+  displayName?: string;
+  state: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** One recorded TenantService call: method, path below /api/v1/tenants, body. */
+export interface TenantLifecycleCall {
+  method: string;
+  path: string;
+  body: unknown;
+}
+
+/**
+ * Mocks the TenantService lifecycle, quota, sync and DEK routes under
+ * /api/v1/tenants and records every call it answers. Register it after
+ * mockTenantApi: the later route wins.
+ */
+export async function mockTenantLifecycleApi(
+  page: Page,
+  config: { tenant?: Partial<LifecycleTenant>; quotaAvailable?: boolean; syncFails?: boolean } = {}
+): Promise<{ calls: TenantLifecycleCall[]; tenant: () => LifecycleTenant }> {
+  const now = new Date().toISOString();
+  let tenant: LifecycleTenant = {
+    id: 'tenant-abc-123',
+    name: 'acme',
+    displayName: 'Acme Corp',
+    state: 'TENANT_STATE_ACTIVE',
+    createdAt: now,
+    updatedAt: now,
+    ...config.tenant,
+  };
+  let dekVersion = 1;
+  const calls: TenantLifecycleCall[] = [];
+
+  await page.route(/\/api\/v1\/tenants\/.+/, async (route: Route, request: Request) => {
+    const url = new URL(request.url());
+    const path = url.pathname.replace(/^.*\/api\/v1\/tenants/, '').replace(/\/$/, '');
+    const method = request.method();
+    let body: unknown = undefined;
+    try {
+      body = request.postDataJSON();
+    } catch {
+      body = request.postData();
+    }
+    calls.push({ method, path, body });
+
+    const json = (data: unknown, status = 200) =>
+      route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(data) });
+    const ok = { status: { success: true, message: 'ok' } };
+
+    if (method === 'POST' && path === '/sync') {
+      if (config.syncFails) {
+        return json({ status: { success: false, message: 'sync completed with errors: boom' } });
+      }
+      return json(ok);
+    }
+    if (method === 'GET' && path.startsWith('/by-name/')) {
+      const name = decodeURIComponent(path.slice('/by-name/'.length));
+      if (name !== tenant.name) return json({ message: 'tenant not found', code: 'NOT_FOUND' }, 404);
+      return json({ tenant });
+    }
+    const id = `/${tenant.id}`;
+    if (path === id && method === 'GET') return json({ tenant });
+    if (path === id && method === 'PUT') {
+      const update = body as { displayName?: string };
+      tenant = { ...tenant, displayName: update.displayName ?? tenant.displayName };
+      return json({ tenant });
+    }
+    if (path === id && method === 'DELETE') return json(ok);
+    if (path === `${id}/suspend` && method === 'POST') {
+      tenant = { ...tenant, state: 'TENANT_STATE_SUSPENDED' };
+      return json(ok);
+    }
+    if (path === `${id}/resume` && method === 'POST') {
+      tenant = { ...tenant, state: 'TENANT_STATE_ACTIVE' };
+      return json(ok);
+    }
+    if (path === `${id}/quotas` && method === 'GET') {
+      return json({
+        tenantId: tenant.id,
+        compute: { maxVms: 2, maxContainers: 5, maxVcpus: 8, maxMemoryMb: 4096 },
+      });
+    }
+    if (path === `${id}/quotas` && method === 'PUT') return json(ok);
+    if (path === `${id}/quota-check` && method === 'POST') {
+      const req = body as { resource: string; amount: number };
+      const available = config.quotaAvailable ?? true;
+      return json({
+        tenantId: tenant.id,
+        resource: req.resource,
+        amount: req.amount,
+        available,
+        message: available ? 'within quota' : 'quota exceeded',
+      });
+    }
+    if (path === `${id}/dek/rotate` && method === 'POST') {
+      dekVersion += 1;
+      return json({ tenantId: tenant.id, oldVersion: dekVersion - 1, newVersion: dekVersion, timestamp: now });
+    }
+    if (path === `${id}/dek` && method === 'GET') {
+      return json({
+        dekStatus: {
+          tenantId: tenant.id,
+          path: `tenants/${tenant.id}/dek`,
+          version: dekVersion,
+          algorithm: 'AES-256-GCM',
+          createdAt: now,
+        },
+      });
+    }
+    return route.continue();
+  });
+
+  return { calls, tenant: () => ({ ...tenant }) };
+}
+
 /**
  * Mock the health API endpoint.
  *
@@ -466,6 +1171,146 @@ export interface RegistryApiMockConfig {
 export interface RegistryApiMockState {
   repositories: Record<string, string[]>;
   deleted: string[];
+}
+
+// =============================================================================
+// Gateway BGP and IPAM (#1746)
+// =============================================================================
+
+export interface MockBGPPeer {
+  address: string;
+  asn: number;
+  state: string;
+  prefixes_received?: number;
+}
+
+export interface MockAnnouncedPrefix {
+  prefix: string;
+  next_hop?: string;
+}
+
+export interface MockIPAllocation {
+  ip: string;
+  pool_id: string;
+  device_id?: string;
+  hostname?: string;
+  status?: string;
+}
+
+export interface GatewayBgpApiMockConfig {
+  peers?: MockBGPPeer[];
+  prefixes?: MockAnnouncedPrefix[];
+  allocations?: MockIPAllocation[];
+  /** The address the next allocation hands out. */
+  nextIP?: string;
+  /** Sections the node has not configured: every route under them answers 503. */
+  unavailable?: Array<'bgp' | 'ipam'>;
+}
+
+/** One mutating request the gateway mock received. */
+export interface GatewayBgpCall {
+  method: string;
+  path: string;
+  query: Record<string, string>;
+  body: Record<string, unknown> | null;
+}
+
+/**
+ * Mock the web service's gateway BGP and IPAM routes under
+ * `/api/v1/gateway`. The mock keeps state: an announced prefix or an
+ * allocation shows in the next list, a withdrawn or released one leaves it.
+ * Every mutating request is recorded in `calls`.
+ */
+export async function mockGatewayBgpApi(
+  page: Page,
+  config: GatewayBgpApiMockConfig = {}
+): Promise<{ calls: GatewayBgpCall[] }> {
+  const peers = [...(config.peers ?? [])];
+  let prefixes = [...(config.prefixes ?? [])];
+  let allocations = [...(config.allocations ?? [])];
+  const unavailable = new Set(config.unavailable ?? []);
+  const calls: GatewayBgpCall[] = [];
+  const json = (route: Route, status: number, body: unknown) =>
+    route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+  // The server wraps every message in restwire.WebServiceResponse, with the
+  // protojson payload in lowerCamelCase.
+  const ok = (route: Route, status: number, payload: unknown) =>
+    json(route, status, { code: status, success: true, payload });
+  const fail = (route: Route, status: number, error: string) =>
+    json(route, status, { code: status, success: false, error, payload: null });
+  const peerOut = (p: MockBGPPeer) => ({
+    address: p.address,
+    asn: p.asn,
+    state: p.state,
+    prefixesReceived: p.prefixes_received ?? 0,
+  });
+  const prefixOut = (p: MockAnnouncedPrefix) => ({ prefix: p.prefix, nextHop: p.next_hop ?? '' });
+  const allocOut = (a: MockIPAllocation) => ({
+    ip: a.ip,
+    poolId: a.pool_id,
+    deviceId: a.device_id ?? '',
+    hostname: a.hostname ?? '',
+    status: a.status ?? '',
+  });
+
+  await page.route(/\/api\/v1\/gateway\/(bgp|ipam)\//, async (route: Route, request: Request) => {
+    const url = new URL(request.url());
+    const path = url.pathname.replace(/^\/api\/v1\/gateway/, '');
+    const method = request.method();
+    const query = Object.fromEntries(url.searchParams.entries());
+    let body: Record<string, unknown> | null = null;
+    if (method === 'POST') {
+      try {
+        body = request.postDataJSON() as Record<string, unknown>;
+      } catch {
+        body = null;
+      }
+    }
+    if (method !== 'GET') calls.push({ method, path, query, body });
+
+    if (path.startsWith('/bgp/') && unavailable.has('bgp')) {
+      return fail(route, 503, 'BGP speaker not configured on this node');
+    }
+    if (path.startsWith('/ipam/') && unavailable.has('ipam')) {
+      return fail(route, 503, 'IPAM not configured on this node');
+    }
+
+    if (path === '/bgp/peers' && method === 'GET') return ok(route, 200, { peers: peers.map(peerOut) });
+    if (path === '/bgp/prefixes' && method === 'GET') {
+      return ok(route, 200, { prefixes: prefixes.map(prefixOut) });
+    }
+    if (path === '/bgp/prefixes' && method === 'POST') {
+      prefixes = [...prefixes, { prefix: String(body?.prefix ?? ''), next_hop: String(body?.next_hop ?? '') }];
+      return ok(route, 201, { status: { success: true, message: 'announced' } });
+    }
+    if (path === '/bgp/prefixes' && method === 'DELETE') {
+      prefixes = prefixes.filter((p) => p.prefix !== query.prefix);
+      return ok(route, 200, { status: { success: true, message: 'withdrawn' } });
+    }
+    if (path === '/ipam/allocations' && method === 'GET') {
+      return ok(route, 200, { allocations: allocations.map(allocOut) });
+    }
+    if (path === '/ipam/allocations' && method === 'POST') {
+      const deviceId = String(body?.device_id ?? body?.deviceId ?? '');
+      if (!deviceId) return fail(route, 400, 'device_id is required');
+      const alloc: MockIPAllocation = {
+        ip: config.nextIP ?? '10.0.0.11',
+        pool_id: String(body?.pool_id ?? ''),
+        device_id: deviceId,
+        hostname: String(body?.hostname ?? ''),
+        status: 'active',
+      };
+      allocations = [...allocations, alloc];
+      return ok(route, 201, { status: { success: true }, allocation: allocOut(alloc) });
+    }
+    if (path === '/ipam/allocations' && method === 'DELETE') {
+      allocations = allocations.filter((a) => a.ip !== query.ip);
+      return ok(route, 200, { status: { success: true, message: 'released' } });
+    }
+    return fail(route, 404, 'not found');
+  });
+
+  return { calls };
 }
 
 /**
@@ -548,6 +1393,408 @@ export async function mockRegistryApi(
   return state;
 }
 
+/** Switch port status as the server sends it (`switchwire.PortStatus`). */
+export interface SwitchPortStatus {
+  port: string;
+  mode: 'access' | 'trunk';
+  access_vlan: number;
+  trunk_vlans?: number[];
+  native_vlan?: number;
+  enabled: boolean;
+  link_up: boolean;
+  description?: string;
+}
+
+export interface SwitchApiMockConfig {
+  switchName?: string;
+  ports?: SwitchPortStatus[];
+  /** Operations answered 403 (recorded, port state unchanged): 'status', 'enable', 'disable', 'vlan'. */
+  failActions?: string[];
+}
+
+/** One request the switch mock answered: verb, decoded port, action and body. */
+export interface SwitchApiCall {
+  method: string;
+  port?: string;
+  action?: string;
+  body?: unknown;
+}
+
+// ============================================================================
+// Platform daemon status, config and service lifecycle (#1752)
+// ============================================================================
+
+export interface DaemonServiceMock {
+  name: string;
+  status: string;
+  uptime?: string;
+  started_at?: string;
+  start_count: number;
+  stop_count: number;
+  last_error?: string;
+}
+
+export interface PlatformDaemonApiMockConfig {
+  status?: Record<string, unknown>;
+  version?: Record<string, unknown>;
+  config?: Record<string, unknown>;
+  services?: DaemonServiceMock[];
+  /** Answer every daemon route with this error */
+  error?: ApiError;
+}
+
+export interface PlatformDaemonApiState {
+  /** Each request the page made, as "METHOD /path" below /api/v1/platform */
+  calls: string[];
+  services: DaemonServiceMock[];
+}
+
+/**
+ * Mock the daemon routes under /api/v1/platform: GET /status, /version,
+ * /config and /services, GET /services/{name}, POST /config/reload and
+ * POST /services/{name}/{start|stop|restart}. Start, stop and restart
+ * change the mocked service's status.
+ */
+export async function mockPlatformDaemonApi(
+  page: Page,
+  config: PlatformDaemonApiMockConfig = {}
+): Promise<PlatformDaemonApiState> {
+  const state: PlatformDaemonApiState = {
+    calls: [],
+    services: (config.services ?? [
+      { name: 'kms', status: 'running', uptime: '2h0m0s', start_count: 1, stop_count: 0 },
+      { name: 'dns', status: 'stopped', start_count: 1, stop_count: 1 },
+    ]).map((s) => ({ ...s })),
+  };
+  const routeRe = /\/api\/v1\/platform(\/(?:status|version|config|services)(?:\/[^?]*)?)(?:\?.*)?$/;
+
+  await page.route(
+    (url) => routeRe.test(url.pathname + url.search),
+    async (route) => {
+      const request = route.request();
+      const url = new URL(request.url());
+      const path = routeRe.exec(url.pathname)?.[1] ?? '';
+      const method = request.method();
+      state.calls.push(`${method} ${path}`);
+      const json = (status: number, body: unknown) =>
+        route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+      const fail = (err: ApiError) =>
+        route.fulfill({ status: err.status, contentType: 'application/json', body: errorEnvelope(err) });
+
+      if (config.error) {
+        return fail(config.error);
+      }
+      if (method === 'GET' && path === '/status') {
+        return json(200, config.status ?? {
+          status: 'running', version: '1.4.2', git_commit: 'abc1234', go_version: 'go1.24', timestamp: 1,
+        });
+      }
+      if (method === 'GET' && path === '/version') {
+        return json(200, config.version ?? { version: '1.4.2', git_commit: 'abc1234' });
+      }
+      if (method === 'GET' && path === '/config') {
+        return json(200, config.config ?? { log_level: 'info', listen_port: 8443 });
+      }
+      if (method === 'POST' && path === '/config/reload') {
+        return json(200, { status: { success: true, message: 'configuration reloaded' } });
+      }
+      if (method === 'GET' && path === '/services') {
+        return json(200, { services: state.services, count: state.services.length, timestamp: 1 });
+      }
+      const m = /^\/services\/([^/]+)(?:\/(start|stop|restart))?$/.exec(path);
+      const svc = m ? state.services.find((s) => s.name === decodeURIComponent(m[1] ?? '')) : undefined;
+      if (!m || !svc) {
+        return fail({ status: 404, error: 'service not found' });
+      }
+      const action = m[2];
+      if (method === 'GET' && !action) {
+        return json(200, svc);
+      }
+      if (method === 'POST' && action) {
+        if (action === 'stop') {
+          svc.status = 'stopped';
+          svc.stop_count += 1;
+        } else {
+          svc.status = 'running';
+          svc.start_count += 1;
+          if (action === 'restart') svc.stop_count += 1;
+        }
+        return json(200, { service: svc.name, action, success: true, message: `${svc.name} ${action === 'stop' ? 'stopped' : `${action}ed`}` });
+      }
+      return fail({ status: 405, error: 'method not allowed' });
+    }
+  );
+  return state;
+}
+
+/**
+ * Mocks `/api/v1/switches/{switch}/ports[/{port}[/enable|/disable|/vlan]]`
+ * (docs/switch/api.md §5.1). Replies use the platform envelope, keep port
+ * state across calls, and every call is recorded in the returned array.
+ */
+export async function mockSwitchApi(
+  page: Page,
+  config: SwitchApiMockConfig = {}
+): Promise<SwitchApiCall[]> {
+  const switchName = config.switchName || 'core-1';
+  const ports = new Map<string, SwitchPortStatus>();
+  for (const p of config.ports || []) ports.set(p.port, { ...p });
+  const calls: SwitchApiCall[] = [];
+  const ok = (payload: unknown) => ({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ success: true, code: 200, payload }),
+  });
+
+  await page.route('**/api/v1/switches/**', async (route: Route, request: Request) => {
+    const path = new URL(request.url()).pathname;
+    const m = path.match(/\/api\/v1\/switches\/([^/]+)\/ports(?:\/([^/]+))?(?:\/(enable|disable|vlan))?\/?$/);
+    if (!m || decodeURIComponent(m[1]) !== switchName) {
+      await route.fulfill({ status: 404, contentType: 'application/json', body: errorEnvelope({ error: 'switch not found', status: 404 }) });
+      return;
+    }
+    const port = m[2] ? decodeURIComponent(m[2]) : undefined;
+    const action = m[3];
+    const body = request.postData() ? request.postDataJSON() : undefined;
+    calls.push({ method: request.method(), port, action, body });
+
+    if (!port) {
+      await route.fulfill(ok([...ports.values()]));
+      return;
+    }
+    const status = ports.get(port);
+    if (!status) {
+      await route.fulfill({ status: 404, contentType: 'application/json', body: errorEnvelope({ error: 'port not found', status: 404 }) });
+      return;
+    }
+    const op = action ?? (request.method() === 'GET' ? 'status' : undefined);
+    if (op && config.failActions?.includes(op)) {
+      // 403, not 503: the SDK retries a 503.
+      await route.fulfill({ status: 403, contentType: 'application/json', body: errorEnvelope({ error: 'denied', status: 403 }) });
+      return;
+    }
+    if (!action && request.method() === 'GET') {
+      // The server's single-port status never reports link state (always false),
+      // and its enabled reads `Switchport: Enabled`, which stays true for a
+      // shut-down port. It omits the description too, as the SSH parser does.
+      await route.fulfill(ok({ ...status, description: undefined, link_up: false, enabled: true }));
+      return;
+    }
+    if (action === 'enable' || action === 'disable') {
+      status.enabled = action === 'enable';
+      await route.fulfill(ok({ switch: switchName, port, action, status: 'ok' }));
+      return;
+    }
+    if (action === 'vlan') {
+      const vlanId = (body as { vlan_id?: number } | undefined)?.vlan_id ?? 0;
+      // The server forces access mode before it sets the VLAN.
+      status.mode = 'access';
+      status.access_vlan = vlanId;
+      await route.fulfill(ok({ switch: switchName, port, vlan_id: vlanId, status: 'ok' }));
+      return;
+    }
+    await route.continue();
+  });
+
+  return calls;
+}
+
+/**
+ * BMC API mock (#1736): the `/api/v1/bmc/{profileID}/...` routes with the
+ * platform envelope. Mutations change the state the next read returns, and
+ * every mutating request is recorded in order. A non-numeric profile ID is
+ * answered 404 and not recorded, as the server routes (`{profileID:[0-9]+}`)
+ * do.
+ */
+export interface BmcApiMockState {
+  power: { state: string };
+  bootDevice: { device: string; persistent?: boolean };
+  virtualMedia: { mounted: boolean; image_url?: string; media_type?: string };
+  sensors: Array<{ name: string; value: number; units: string; status: string }>;
+  systemInfo: {
+    manufacturer: string;
+    product: string;
+    serial_number: string;
+    firmware_version: string;
+    bios_version: string;
+    power_state: string;
+  };
+  provision: {
+    provision_id: string;
+    profile_id: string;
+    status: string;
+    message?: string;
+    started_at: string;
+    updated_at: string;
+  };
+  certificate: {
+    subject: string;
+    issuer: string;
+    serial_number: string;
+    not_before: string;
+    not_after: string;
+    days_remaining: number;
+    subject_alternative_names?: string[];
+    fingerprint: string;
+  };
+}
+
+export interface BmcApiMockRequest {
+  method: string;
+  op: string;
+  body: unknown;
+}
+
+export interface BmcApiMockConfig {
+  state?: Partial<BmcApiMockState>;
+  /** Answers every request to this op with the error */
+  errors?: Record<string, ApiError>;
+}
+
+export async function mockBmcApi(
+  page: Page,
+  config: BmcApiMockConfig = {}
+): Promise<{ state: BmcApiMockState; requests: BmcApiMockRequest[] }> {
+  // The shapes are the server's JSON types (pkg/webservice/v1/bmc/types.go,
+  // pkg/bmc/types.go, pkg/provisioning/baremetal); the mock rejects the
+  // requests the handlers reject.
+  const state: BmcApiMockState = {
+    power: { state: 'On' },
+    bootDevice: { device: 'disk', persistent: true },
+    virtualMedia: { mounted: false },
+    sensors: [
+      { name: 'CPU1 Temp', value: 54, units: 'C', status: 'OK' },
+      { name: 'Fan1', value: 7200, units: 'RPM', status: 'OK' },
+    ],
+    systemInfo: {
+      manufacturer: 'Dell Inc.',
+      product: 'PowerEdge R640',
+      serial_number: 'SN-R640-01',
+      firmware_version: '7.00.00',
+      bios_version: '2.19.1',
+      power_state: 'On',
+    },
+    provision: {
+      provision_id: 'prov-0',
+      profile_id: '1',
+      status: 'complete',
+      started_at: '2026-11-01T00:00:00Z',
+      updated_at: '2026-11-01T00:40:00Z',
+    },
+    certificate: {
+      subject: 'CN=bmc-1',
+      issuer: 'CN=Platform Intermediate CA',
+      serial_number: '1736',
+      not_before: '2026-11-12T00:00:00Z',
+      not_after: '2027-11-12T00:00:00Z',
+      days_remaining: 365,
+      fingerprint: 'SHA256:5B:9D:3F:2E',
+    },
+    ...config.state,
+  };
+  const requests: BmcApiMockRequest[] = [];
+  const bootDevices = ['none', 'pxe', 'disk', 'cdrom', 'virtual_media'];
+
+  const ok = (payload: unknown, status = 200) => ({
+    status,
+    contentType: 'application/json',
+    body: JSON.stringify({ code: status, success: true, payload }),
+  });
+  const badRequest = (error: string) => ({
+    status: 400,
+    contentType: 'application/json',
+    body: errorEnvelope({ status: 400, error }),
+  });
+
+  await page.route('**/api/v1/bmc/*/*', async (route: Route, request: Request) => {
+    const segments = new URL(request.url()).pathname.split('/').filter(Boolean);
+    const op = segments[segments.length - 1];
+    const profileID = decodeURIComponent(segments[segments.length - 2] ?? '');
+    const method = request.method();
+    // The server routes take {profileID:[0-9]+} and parse it as uint64, so a non-numeric ID matches no route.
+    if (!/^[0-9]+$/.test(profileID)) {
+      await route.fulfill({
+        status: 404,
+        contentType: 'application/json',
+        body: errorEnvelope({ status: 404, error: `no route ${method} bmc/${profileID}/${op}` }),
+      });
+      return;
+    }
+    const error = config.errors?.[op];
+    if (error) {
+      await route.fulfill({ status: error.status, contentType: 'application/json', body: errorEnvelope(error) });
+      return;
+    }
+    const body = request.postData() ? request.postDataJSON() : null;
+    if (method !== 'GET') {
+      requests.push({ method, op, body });
+    }
+    switch (`${method} ${op}`) {
+      case 'GET power':
+        await route.fulfill(ok(state.power));
+        return;
+      case 'GET boot-device':
+        await route.fulfill(ok({ device: state.bootDevice.device }));
+        return;
+      case 'POST boot-device': {
+        const req = (body ?? {}) as { device?: string; persistent?: boolean };
+        if (!req.device || !bootDevices.includes(req.device)) {
+          await route.fulfill(badRequest(`invalid boot device: ${req.device ?? ''}`));
+          return;
+        }
+        state.bootDevice = { device: req.device, persistent: req.persistent };
+        await route.fulfill(ok({ message: 'boot device set' }));
+        return;
+      }
+      case 'GET virtual-media':
+        await route.fulfill(ok(state.virtualMedia));
+        return;
+      case 'POST virtual-media': {
+        const isoURL = (body as { iso_url?: unknown } | null)?.iso_url;
+        if (typeof isoURL !== 'string' || isoURL === '') {
+          await route.fulfill(badRequest('iso_url is required'));
+          return;
+        }
+        state.virtualMedia = { mounted: true, image_url: isoURL };
+        await route.fulfill(ok({ message: 'ISO mounted' }));
+        return;
+      }
+      case 'DELETE virtual-media':
+        state.virtualMedia = { mounted: false };
+        await route.fulfill(ok({ message: 'ISO unmounted' }));
+        return;
+      case 'GET sensors':
+        await route.fulfill(ok(state.sensors));
+        return;
+      case 'GET system-info':
+        await route.fulfill(ok(state.systemInfo));
+        return;
+      case 'GET provision':
+        await route.fulfill(ok(state.provision));
+        return;
+      case 'POST provision': {
+        const now = new Date().toISOString();
+        state.provision = {
+          provision_id: 'prov-1',
+          profile_id: profileID,
+          status: 'pending',
+          started_at: now,
+          updated_at: now,
+        };
+        await route.fulfill(ok(state.provision, 201));
+        return;
+      }
+      case 'GET cert':
+        await route.fulfill(ok(state.certificate));
+        return;
+      default:
+        await route.fulfill({ status: 404, contentType: 'application/json', body: errorEnvelope({ status: 404, error: `no route ${method} ${op}` }) });
+    }
+  });
+
+  return { state, requests };
+}
+
 /**
  * Mock all common API endpoints with default configurations.
  *
@@ -572,6 +1819,210 @@ export async function mockAllApis(
   ]);
 
   return { invitation, tenant };
+}
+
+// =============================================================================
+// SDN bridge, port and policy mocks (#1745)
+// =============================================================================
+
+/** One request the SDN mock answered; `path` is relative to /api/v1/sdn. */
+export interface SdnApiCall {
+  method: string;
+  path: string;
+  body: unknown;
+}
+
+export const SDN_MOCK_BRIDGE = {
+  id: 'br-1',
+  config: { name: 'br-int', type: 'BRIDGE_TYPE_OVS' },
+  status: 'BRIDGE_STATUS_UP',
+  createdAt: '2026-11-01T00:00:00Z',
+  updatedAt: '2026-11-01T00:00:00Z',
+};
+
+export const SDN_MOCK_PORT = {
+  id: 'p-1',
+  bridgeId: 'br-1',
+  config: { name: 'eth1' },
+  status: 'PORT_STATUS_UP',
+  auth: { authenticated: false },
+};
+
+export const SDN_MOCK_POLICY = {
+  id: 'pol-1',
+  config: {
+    name: 'deny-telnet',
+    description: 'Drop telnet',
+    type: 'POLICY_TYPE_ACL',
+    rules: [{ ruleId: 'r1' }],
+  },
+  status: 'POLICY_STATUS_ACTIVE',
+  hitCount: '42',
+};
+
+/**
+ * Mock the SDN bridge br-1, its port p-1 and the policy pol-1 under
+ * /api/v1/sdn. Returns the list of calls the mock answered, so a test can
+ * assert the method, path and body the page sent.
+ */
+export async function mockSdnBridgeApi(page: Page): Promise<SdnApiCall[]> {
+  const calls: SdnApiCall[] = [];
+  await page.route('**/api/v1/sdn/**', async (route: Route) => {
+    const request = route.request();
+    const method = request.method();
+    const path = new URL(request.url()).pathname.replace(/^.*\/api\/v1\/sdn/, '');
+    let body: unknown = null;
+    try {
+      body = request.postDataJSON();
+    } catch {
+      body = request.postData();
+    }
+    calls.push({ method, path, body });
+
+    const reply = (data: unknown, status = 200) =>
+      route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(data) });
+    const portPath = '/bridges/br-1/ports/p-1';
+
+    if (path === '/bridges' && method === 'GET') return reply({ bridges: [SDN_MOCK_BRIDGE] });
+    if (path === '/bridges/br-1' && method === 'GET') return reply({ bridge: SDN_MOCK_BRIDGE });
+    if (path === '/bridges/br-1' && method === 'DELETE') return reply({ status: { success: true } });
+    if (path === '/bridges/br-1/ports' && method === 'GET') return reply({ ports: [SDN_MOCK_PORT] });
+    if (path === '/bridges/br-1/flows' && method === 'GET') return reply({ flows: [] });
+    if (path === `${portPath}/state` && method === 'GET') return reply({ port: SDN_MOCK_PORT });
+    if (path === `${portPath}/state` && method === 'PUT') {
+      return reply({ status: { success: true }, port: { ...SDN_MOCK_PORT, status: 'PORT_STATUS_DOWN' } });
+    }
+    if (path === `${portPath}/stats` && method === 'GET') {
+      return reply({
+        stats: {
+          packetsReceived: '1234',
+          packetsSent: '567',
+          bytesReceived: '89000',
+          bytesSent: '4500',
+          errors: '3',
+          dropped: '7',
+        },
+      });
+    }
+    if (path === `${portPath}/auth` && method === 'POST') {
+      return reply({ status: { success: true }, auth: { authenticated: true } });
+    }
+    if (path === `${portPath}/auth` && method === 'DELETE') return reply({ status: { success: true } });
+    if (path === '/policies' && method === 'GET') return reply({ policies: [SDN_MOCK_POLICY] });
+    if (path === '/policies' && method === 'POST') {
+      return reply({ status: { success: true }, policy: { id: 'pol-2' } }, 201);
+    }
+    if (path === '/policies/pol-1' && method === 'GET') return reply({ policy: SDN_MOCK_POLICY });
+    return reply({ message: `unmocked ${method} ${path}`, code: 'NOT_FOUND' }, 404);
+  });
+  return calls;
+}
+
+/**
+ * A request the IDevID mock received.
+ */
+export interface IDevIDApiCall {
+  /** HTTP method */
+  method: string;
+  /** Path below /api/v1/idevid, without a trailing slash ('' for the root) */
+  path: string;
+  /** Parsed JSON body, if any */
+  body: unknown;
+}
+
+export interface IDevIDApiMockConfig {
+  /** HasIDevID result (default true) */
+  hasIDevID?: boolean;
+  /** HasIAK result (default false) */
+  hasIAK?: boolean;
+  /** Responses that override the defaults, keyed by 'METHOD /path' (e.g. 'POST /iak/csr') */
+  responses?: Record<string, { status?: number; body: unknown }>;
+}
+
+const idevidOk = { success: true, message: 'ok' };
+
+/**
+ * Mock the IDevID/IAK API (pkg/webservice/v1/rest/idevid/router.go).
+ *
+ * Handles every route below /api/v1/idevid with a canned success response
+ * and records each call so a test can assert the request the page sent.
+ *
+ * @param page - Playwright page object
+ * @param config - Mock configuration options
+ */
+export async function mockIDevIDApi(
+  page: Page,
+  config: IDevIDApiMockConfig = {}
+): Promise<{ calls: IDevIDApiCall[] }> {
+  const calls: IDevIDApiCall[] = [];
+  const defaults: Record<string, { status?: number; body: unknown }> = {
+    'GET /exists': { body: { exists: config.hasIDevID ?? true } },
+    'GET /iak/exists': { body: { exists: config.hasIAK ?? false } },
+    'GET /attributes': {
+      body: {
+        attributes: {
+          tpmManufacturer: 'Infineon',
+          tpmModel: 'SLB9672',
+          tpmVersion: '2.0',
+          platformManufacturer: 'Acme',
+          platformModel: 'Edge-1',
+          platformVersion: '1.0',
+          platformSerial: 'SN-0001',
+        },
+      },
+    },
+    'POST /iak/generate': { status: 201, body: { status: idevidOk } },
+    'DELETE /iak': {
+      status: 409,
+      body: {
+        message:
+          'idevid: the IAK key is TPM-resident and is not evicted by this service; nothing was deleted (delete its certificate with DeleteIAKCertificate)',
+        code: 'FAILED_PRECONDITION',
+      },
+    },
+    // The server returns binary TCG_CSR_IDEVID bytes, base64 in protobuf JSON.
+    'POST /iak/csr': { body: { status: idevidOk, csrPem: Buffer.from([0x00, 0x01, 0x02, 0xff, 0x10, 0x80]).toString('base64') } },
+    'POST /ldevid': { status: 201, body: { status: idevidOk, certificatePem: '-----BEGIN CERTIFICATE-----\nLDEVIDCERT\n-----END CERTIFICATE-----' } },
+    'POST /certificate': { body: { status: idevidOk } },
+    'POST /iak/certificate': { body: { status: idevidOk } },
+    'DELETE /iak/certificate': { body: { status: idevidOk } },
+    'POST /flush': { body: { status: idevidOk, flushedCount: 3 } },
+    'POST /activate-credential': { body: { status: idevidOk, decryptedSecret: 'U0VDUkVU' } },
+  };
+  const responses = { ...defaults, ...(config.responses ?? {}) };
+
+  await page.route(/\/api\/v1\/idevid(\/|\?|$)/, async (route: Route, request: Request) => {
+    const url = new URL(request.url());
+    const path = url.pathname.replace(/^.*\/api\/v1\/idevid/, '').replace(/\/$/, '');
+    const method = request.method();
+    let body: unknown = undefined;
+    const raw = request.postData();
+    if (raw) {
+      try {
+        body = JSON.parse(raw);
+      } catch {
+        body = raw;
+      }
+    }
+    calls.push({ method, path, body });
+
+    const response = responses[`${method} ${path}`];
+    if (!response) {
+      await route.fulfill({
+        status: 404,
+        contentType: 'application/json',
+        body: JSON.stringify({ message: `no mock for ${method} ${path}`, code: 'HTTP_404' }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: response.status ?? 200,
+      contentType: 'application/json',
+      body: JSON.stringify(response.body),
+    });
+  });
+
+  return { calls };
 }
 
 /**
@@ -866,6 +2317,707 @@ export async function mockInvitationValidation(
   });
 }
 
+// =============================================================================
+// TPM key lifecycle (#1735)
+// =============================================================================
+
+/** One request the TPM key mock answered: method, path below /api/v1/tpm, JSON body. */
+export interface TPMKeyOperationCall {
+  method: string;
+  path: string;
+  body: unknown;
+}
+
+/** A canned answer: HTTP status (200 when absent) and the JSON body. */
+export interface TPMKeyOperationReply {
+  status?: number;
+  body: unknown;
+}
+
+const TPM_EK_PUBLIC = '-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEek\n-----END PUBLIC KEY-----';
+
+/** The channel binding the mocked node echoes with its quote: 32 bytes of 0xa1. */
+export const TPM_QUOTE_CHANNEL_BINDING = Buffer.alloc(32, 0xa1).toString('base64');
+
+/**
+ * boundQuoteReply answers POST /tpm/quote as the node does (#482): a
+ * TPMS_ATTEST of type TPM_ST_ATTEST_QUOTE whose extraData is
+ * SHA-256(nonce || channelBinding), with that channelBinding echoed. The
+ * page refuses any quote not bound this way.
+ */
+export function boundQuoteReply(nonceB64: string, bank = 0x000b) {
+  const binding = Buffer.from(TPM_QUOTE_CHANNEL_BINDING, 'base64');
+  const extraData = createHash('sha256')
+    .update(Buffer.concat([Buffer.from(nonceB64, 'base64'), binding]))
+    .digest();
+  // clockInfo(17) firmwareVersion(8), then TPMS_QUOTE_INFO: one
+  // TPML_PCR_SELECTION entry over `bank` (3 select bytes) and a 32-byte
+  // pcrDigest. The page refuses a quote over any bank but SHA256 (#1751).
+  const selectAt = 10 + extraData.length + 17 + 8;
+  const attest = Buffer.alloc(selectAt + 4 + 3 + 3 + 2 + 32);
+  attest.writeUInt32BE(0xff544347, 0);
+  attest.writeUInt16BE(0x8018, 4);
+  attest.writeUInt16BE(0, 6);
+  attest.writeUInt16BE(extraData.length, 8);
+  extraData.copy(attest, 10);
+  attest.writeUInt32BE(1, selectAt);
+  attest.writeUInt16BE(bank, selectAt + 4);
+  attest.writeUInt8(3, selectAt + 6);
+  attest.writeUInt16BE(32, selectAt + 10);
+  return {
+    quote: attest.toString('base64'),
+    signature: 'c2ln',
+    signatureAlgorithm: 'ECDSA-SHA256',
+    channelBinding: TPM_QUOTE_CHANNEL_BINDING,
+  };
+}
+
+/**
+ * Default answers keyed by `METHOD /path` (path below /api/v1/tpm, no query).
+ * A delete keys on the handle in decimal, the SDK puts it in the path.
+ * POST /quote has no static answer: without an override it is answered by
+ * boundQuoteReply for the request's nonce.
+ */
+export const defaultTPMKeyReplies: Record<string, TPMKeyOperationReply> = {
+  'GET /ek': { body: { publicKey: TPM_EK_PUBLIC, handle: 0x81010001, algorithm: 'ECDSA_P256' } },
+  'GET /srk': { body: { publicKey: TPM_EK_PUBLIC, handle: 0x81000001, algorithm: 'ECDSA_P256' } },
+  'POST /provision': { body: { status: { code: 0, message: 'provisioned' }, ekPublic: 'RUs=' } },
+  'POST /clear': { body: { status: { code: 0, message: 'cleared' } } },
+  'GET /capabilities': {
+    body: { algorithms: ['RSA', 'ECC', 'SHA256'], commands: ['TPM2_Quote', 'TPM2_Certify'], eccCurves: ['NIST_P256'] },
+  },
+  'GET /platform': {
+    body: {
+      device: '/dev/tpmrm0',
+      isFips: false,
+      canSeal: true,
+      manufacturer: 'Mock TPM Vendor',
+      ek: { handle: 0x81010001, algorithm: 'ECDSA_P256' },
+      srk: { handle: 0x81000001, algorithm: 'ECDSA_P256' },
+      iak: { handle: 0x81010002, algorithm: 'ECDSA_P256' },
+    },
+  },
+  'POST /ek': { status: 201, body: { handle: 0x81010001, publicKey: 'RUs=' } },
+  'POST /ek/certificate': { status: 201, body: { status: { code: 0, message: 'imported' } } },
+  [`DELETE /ek/${0x81010001}`]: { body: { status: { code: 0, message: 'ek deleted' } } },
+  'POST /srk': { status: 201, body: { handle: 0x81000001, publicKey: 'U1JL' } },
+  [`DELETE /srk/${0x81000001}`]: { body: { status: { code: 0, message: 'srk deleted' } } },
+  'POST /ak': { status: 201, body: { handle: 0x81010002, publicKey: 'QUs=' } },
+  'GET /ak': { body: { handle: 0x81010002, publicKey: 'QUs=', algorithm: 'ECDSA_P256' } },
+  // TPMGRPCService.DeleteAK always refuses: the handle names the platform
+  // IAK (ErrDeviceIdentityKeyNotDeletable), which REST maps to 409.
+  [`DELETE /ak/${0x81010002}`]: {
+    status: 409,
+    body: {
+      message:
+        'idevid: the IAK key is TPM-resident and is not evicted by this service; nothing was deleted (delete its certificate with DeleteIAKCertificate)',
+      code: 'HTTP_409',
+    },
+  },
+  'POST /quote/verify': { body: { verified: true, message: 'quote verified' } },
+  'POST /certify': { body: { certifyInfo: 'aW5mbw==', signature: 'c2ln', signatureAlgorithm: 'ECDSA-SHA256' } },
+};
+
+/**
+ * mockTPMKeyOperationsApi answers every /api/v1/tpm request from
+ * `defaultTPMKeyReplies` merged with `overrides`, and every IDevID request
+ * with 404. It returns the list the answered requests are appended to.
+ */
+export async function mockTPMKeyOperationsApi(
+  page: Page,
+  overrides: Record<string, TPMKeyOperationReply> = {},
+): Promise<TPMKeyOperationCall[]> {
+  const replies = { ...defaultTPMKeyReplies, ...overrides };
+  const calls: TPMKeyOperationCall[] = [];
+
+  await page.route(/\/api\/v1\/idevid\//, async (route: Route) => {
+    await route.fulfill({
+      status: 404,
+      contentType: 'application/json',
+      body: JSON.stringify({ message: 'not found', code: 'HTTP_404' }),
+    });
+  });
+
+  await page.route(/\/api\/v1\/tpm\//, async (route: Route, request: Request) => {
+    const url = new URL(request.url());
+    const path = url.pathname.replace(/^.*\/api\/v1\/tpm/, '');
+    const method = request.method();
+    let body: unknown = null;
+    try {
+      body = request.postDataJSON();
+    } catch {
+      body = request.postData();
+    }
+    calls.push({ method, path, body });
+
+    // The server decodes QuoteRequest with protojson: the bank must be the
+    // proto enum name ("PCR_BANK_SHA256"), anything else is a 400.
+    const bank = (body as { pcrBank?: unknown } | null)?.pcrBank;
+    if (method === 'POST' && path === '/quote' && bank !== undefined && !String(bank).startsWith('PCR_BANK_')) {
+      await route.fulfill({
+        status: 400,
+        contentType: 'application/json',
+        body: JSON.stringify({ message: `invalid value for enum field pcrBank: ${String(bank)}`, code: 'HTTP_400' }),
+      });
+      return;
+    }
+
+    const reply =
+      replies[`${method} ${path}`] ??
+      (method === 'POST' && path === '/quote'
+        ? { body: boundQuoteReply(String((body as { nonce?: unknown } | null)?.nonce ?? '')) }
+        : undefined);
+    await route.fulfill({
+      status: reply ? reply.status ?? 200 : 404,
+      contentType: 'application/json',
+      body: JSON.stringify(reply ? reply.body : { message: 'not found', code: 'HTTP_404' }),
+    });
+  });
+
+  return calls;
+}
+
+// =============================================================================
+// EAB credentials (#1667)
+// =============================================================================
+
+/** The REST handlers serialize protobuf enum names, so the mock does too. */
+export type MockEABStatus =
+  | 'EAB_CREDENTIAL_STATUS_ACTIVE'
+  | 'EAB_CREDENTIAL_STATUS_REVOKED'
+  | 'EAB_CREDENTIAL_STATUS_EXPIRED'
+  | 'EAB_CREDENTIAL_STATUS_USED';
+
+export interface MockEABCredential {
+  /** uint64 credential ID; protojson serializes it as a decimal string. */
+  id: string;
+  keyId: string;
+  /** uint64 device profile ID, a decimal string like id. */
+  profileId: string;
+  tenantId: string;
+  expiresAt: string;
+  status: MockEABStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EABApiCall {
+  method: string;
+  path: string;
+  body: unknown;
+}
+
+export function createMockEABCredential(
+  overrides: Partial<MockEABCredential> = {}
+): MockEABCredential {
+  const id = overrides.id ?? '1';
+  return {
+    id,
+    keyId: `kid-${id}`,
+    profileId: '1',
+    tenantId: 'tenant-test-123',
+    expiresAt: '2030-01-01T00:00:00Z',
+    status: 'EAB_CREDENTIAL_STATUS_ACTIVE',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    ...overrides,
+  };
+}
+
+/** A 1x1 PNG, base64 encoded, for the QR code response. */
+const MOCK_QR_PNG =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+
+/**
+ * Mock the EAB credential REST API (/api/v1/eab/credentials...). The mock
+ * keeps the credentials in memory so a mutation shows up on the next list,
+ * and records every call for assertions.
+ */
+export async function mockEABApi(
+  page: Page,
+  initial: MockEABCredential[] = [createMockEABCredential()]
+): Promise<{
+  calls: EABApiCall[];
+  getCredentials: () => MockEABCredential[];
+}> {
+  let credentials = initial.map((c) => ({ ...c }));
+  // BigInt keeps timestamp-sized ids above Number.MAX_SAFE_INTEGER exact.
+  let nextId =
+    credentials.reduce((max, c) => (BigInt(c.id) > max ? BigInt(c.id) : max), BigInt(0)) +
+    BigInt(1);
+  const calls: EABApiCall[] = [];
+  const ok = { success: true, message: 'ok' };
+
+  const json = (route: Route, status: number, body: unknown) =>
+    route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+  const notFound = (route: Route) =>
+    json(route, 404, { message: 'credential not found', code: 'NOT_FOUND' });
+
+  await page.route(
+    (url) => url.pathname.includes('/api/v1/eab/credentials'),
+    async (route: Route, request: Request) => {
+      const method = request.method();
+      const url = new URL(request.url());
+      const path = url.pathname
+        .replace(/\/$/, '')
+        .replace(/^.*\/api\/v1\/eab\/credentials/, '');
+      let body: unknown = null;
+      try {
+        body = request.postDataJSON();
+      } catch {
+        body = request.postData();
+      }
+      calls.push({ method, path, body });
+
+      const byId = (raw: string) => credentials.find((c) => c.id === raw);
+      let m: RegExpMatchArray | null;
+
+      if (method === 'GET' && path === '') {
+        return json(route, 200, {
+          credentials,
+          pagination: {
+            page: 1,
+            pageSize: credentials.length,
+            totalItems: credentials.length,
+            totalPages: 1,
+          },
+        });
+      }
+      if (method === 'POST' && path === '') {
+        const req = (body ?? {}) as { profileId?: string; tenantId?: string };
+        const cred = createMockEABCredential({
+          id: (nextId++).toString(),
+          profileId: req.profileId ?? '0',
+          tenantId: req.tenantId ?? '',
+        });
+        cred.keyId = `kid-created-${cred.id}`;
+        credentials.push(cred);
+        return json(route, 200, { status: ok, credential: { ...cred, hmacKey: 'hmac-secret-value' } });
+      }
+      if (method === 'POST' && path === '/validate') {
+        const req = (body ?? {}) as { keyId?: string; hmacKey?: string };
+        const valid = req.hmacKey === 'good-hmac' && credentials.some((c) => c.keyId === req.keyId);
+        return json(route, 200, { status: ok, valid });
+      }
+      if (method === 'POST' && path === '/cleanup') {
+        const before = credentials.length;
+        credentials = credentials.filter((c) => c.status !== 'EAB_CREDENTIAL_STATUS_EXPIRED');
+        return json(route, 200, { status: ok, deletedCount: before - credentials.length });
+      }
+      if (method === 'GET' && (m = path.match(/^\/key\/([^/]+)$/))) {
+        const keyId = decodeURIComponent(m[1]);
+        const cred = credentials.find((c) => c.keyId === keyId);
+        return cred ? json(route, 200, { credential: cred }) : notFound(route);
+      }
+      if ((m = path.match(/^\/(\d+)(\/[a-z-]+)?$/))) {
+        const cred = byId(m[1]);
+        if (!cred) return notFound(route);
+        const action = m[2] ?? '';
+        if (method === 'GET' && action === '') return json(route, 200, { credential: cred });
+        if (method === 'DELETE' && action === '') {
+          credentials = credentials.filter((c) => c.id !== cred.id);
+          return json(route, 200, { status: ok });
+        }
+        if (method === 'POST' && action === '/revoke') {
+          cred.status = 'EAB_CREDENTIAL_STATUS_REVOKED';
+          return json(route, 200, { status: ok });
+        }
+        if (method === 'POST' && action === '/used') {
+          cred.status = 'EAB_CREDENTIAL_STATUS_USED';
+          return json(route, 200, { status: ok });
+        }
+        if (method === 'GET' && action === '/qrcode') {
+          return json(route, 200, { qrCode: MOCK_QR_PNG, format: 'png', size: 256 });
+        }
+        if (method === 'GET' && action === '/url') {
+          return json(route, 200, {
+            url: `/enroll?kid=${encodeURIComponent(cred.keyId)}`,
+            timestamp: '2026-01-01T00:00:00Z',
+          });
+        }
+      }
+      return json(route, 404, { message: `unmocked EAB route ${method} ${path}` });
+    }
+  );
+
+  return { calls, getCredentials: () => credentials.map((c) => ({ ...c })) };
+}
+
+// CA operations (GetCAInfo, SignCSR, VerifyCertificate)
+
+export interface CAOperationsMockConfig {
+  infoError?: ApiError | null;
+  signError?: ApiError | null;
+  verifyValid?: boolean;
+  /** The certificate is revoked: only a request with verifyRevocation true sees it. */
+  verifyRevoked?: boolean;
+}
+
+/**
+ * Mock the CA operation endpoints.
+ *
+ * Handles:
+ * - GET /api/v1/ca/info - CA identity, defaults and chain summaries
+ * - POST /api/v1/ca/sign-csr - Certify the key a CSR names
+ * - POST /api/v1/ca/certificates/verify - Verify a certificate
+ *
+ * @returns the request bodies the pages posted, and the Authorization
+ *   header of each sign request, for assertions
+ */
+export async function mockCAOperationsApi(
+  page: Page,
+  config: CAOperationsMockConfig = {}
+): Promise<{ signRequests: unknown[]; signAuthorizations: string[]; verifyRequests: unknown[] }> {
+  const signRequests: unknown[] = [];
+  const signAuthorizations: string[] = [];
+  const verifyRequests: unknown[] = [];
+  const now = new Date().toISOString();
+
+  await page.route('**/api/v1/ca/info*', async (route: Route, request: Request) => {
+    if (request.method() !== 'GET') {
+      await route.continue();
+      return;
+    }
+    if (config.infoError) {
+      await route.fulfill({
+        status: config.infoError.status,
+        contentType: 'application/json',
+        body: errorEnvelope(config.infoError),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        caInfo: {
+          commonName: 'Platform Intermediate CA',
+          isInitialized: true,
+          isIntermediate: true,
+          rootCert: { serial: '01', commonName: 'Platform Root CA', issuer: 'Platform Root CA' },
+          intermediates: [
+            { serial: '02', commonName: 'Platform Intermediate CA', issuer: 'Platform Root CA' },
+          ],
+          keyStores: [],
+          defaultAlgorithm: 'ECDSA-P256',
+          defaultValidityDays: 397,
+        },
+        timestamp: now,
+      }),
+    });
+  });
+
+  await page.route('**/api/v1/ca/sign-csr*', async (route: Route, request: Request) => {
+    if (request.method() !== 'POST') {
+      await route.continue();
+      return;
+    }
+    signRequests.push(request.postDataJSON());
+    // SignCSR needs a platform token granting ca:sign-csr, sent as a Bearer
+    // Authorization header: the session cookie alone is refused.
+    const authorization = request.headers()['authorization'] ?? '';
+    signAuthorizations.push(authorization);
+    if (!/^Bearer \S+$/.test(authorization)) {
+      await route.fulfill({
+        status: 403,
+        contentType: 'application/json',
+        body: errorEnvelope({ status: 403, error: 'platform token with scope ca:sign-csr required' }),
+      });
+      return;
+    }
+    if (config.signError) {
+      await route.fulfill({
+        status: config.signError.status,
+        contentType: 'application/json',
+        body: errorEnvelope(config.signError),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: { success: true, message: 'certificate issued successfully' },
+        certificate: {
+          serial: '0a1b2c',
+          commonName: 'release-signer',
+          issuer: 'Platform Intermediate CA',
+          // Certificate.pem is proto bytes: protojson carries it as base64.
+          pem: Buffer.from('-----BEGIN CERTIFICATE-----\nSIGNED\n-----END CERTIFICATE-----\n').toString(
+            'base64'
+          ),
+        },
+        timestamp: now,
+      }),
+    });
+  });
+
+  await page.route('**/api/v1/ca/certificates/verify*', async (route: Route, request: Request) => {
+    if (request.method() !== 'POST') {
+      await route.continue();
+      return;
+    }
+    const verifyBody = request.postDataJSON() as { certificatePem?: unknown; verifyRevocation?: unknown } | null;
+    verifyRequests.push(verifyBody);
+    // VerifyCertificateRequest.certificate_pem is proto bytes: the server's
+    // protojson decode needs standard base64 and fails on plain PEM.
+    const wirePem = verifyBody?.certificatePem;
+    const isBase64 =
+      typeof wirePem === 'string' && wirePem.length % 4 === 0 && /^[A-Za-z0-9+/]*={0,2}$/.test(wirePem);
+    const decoded = isBase64 ? Buffer.from(wirePem as string, 'base64').toString('utf8') : '';
+    if (!decoded.startsWith('-----BEGIN CERTIFICATE-----')) {
+      await route.fulfill({
+        status: 400,
+        contentType: 'application/json',
+        body: errorEnvelope({
+          status: 400,
+          error: 'invalid request body: certificatePem must be base64',
+        }),
+      });
+      return;
+    }
+    // The backend checks revocation only when verifyRevocation is true; a
+    // revoked certificate with a valid chain passes plain X.509 verification.
+    if (config.verifyRevoked && verifyBody?.verifyRevocation === true) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          status: { success: true },
+          valid: false,
+          chain: [],
+          errors: ['certificate is revoked'],
+          warnings: [],
+          timestamp: now,
+        }),
+      });
+      return;
+    }
+    const valid = config.verifyValid !== false;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: { success: true },
+        valid,
+        chain: valid ? ['0a1b2c', '02', '01'] : [],
+        errors: valid ? [] : ['certificate has expired'],
+        warnings: [],
+        timestamp: now,
+      }),
+    });
+  });
+
+  return { signRequests, signAuthorizations, verifyRequests };
+}
+
+/**
+ * Mock the invitation lookup and accept endpoints: GET /invitations/{id}
+ * (GetInvitation), GET /invitations/token/{token} (GetInvitationByToken)
+ * and POST /invitations/accept (AcceptInvitation). Returns the accept
+ * request bodies the page sent.
+ */
+export async function mockInvitationLookupApi(
+  page: Page,
+  options: {
+    invitation: Invitation;
+    acceptError?: ApiError | null;
+  }
+): Promise<{ acceptRequests: () => Array<Record<string, unknown>> }> {
+  const accepted: Array<Record<string, unknown>> = [];
+  const inv = options.invitation;
+
+  await page.route(/\/api\/v1\/invitations\/[^?]+/, async (route: Route, request: Request) => {
+    const path = new URL(request.url()).pathname.replace(/\/+$/, '');
+    const method = request.method();
+
+    if (method === 'POST' && path.endsWith('/invitations/accept')) {
+      const body = (request.postDataJSON() as Record<string, unknown>) ?? {};
+      accepted.push(body);
+      const present = (v: unknown) => v !== undefined && v !== null && String(v) !== '';
+      if (!present(body.token) || !(present(body.userId) || present(body.user_id))) {
+        await route.fulfill({
+          status: 400,
+          contentType: 'application/json',
+          body: errorEnvelope({
+            status: 400,
+            error: 'invitation: user ID is required',
+            errorCode: 'INVALID_ARGUMENT',
+          }),
+        });
+        return;
+      }
+      if (options.acceptError) {
+        await route.fulfill({
+          status: options.acceptError.status,
+          contentType: 'application/json',
+          body: errorEnvelope(options.acceptError),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ success: true, user_id: 'user-new', tenant_id: 'tenant-1' }),
+      });
+      return;
+    }
+
+    if (method === 'GET') {
+      const byToken = path.match(/\/invitations\/token\/([^/]+)$/);
+      const byId = path.match(/\/invitations\/([^/]+)$/);
+      const key = byToken ? decodeURIComponent(byToken[1]) : byId ? decodeURIComponent(byId[1]) : '';
+      const found = byToken ? key === inv.token : key === inv.id;
+      if (found) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ invitation: inv }),
+        });
+      } else {
+        await route.fulfill({
+          status: 404,
+          contentType: 'application/json',
+          body: errorEnvelope({ status: 404, error: 'invitation not found', errorCode: 'NOT_FOUND' }),
+        });
+      }
+      return;
+    }
+
+    await route.continue();
+  });
+
+  return { acceptRequests: () => [...accepted] };
+}
+
+// ============================================================================
+// BMC users and web certificate (#1720)
+// ============================================================================
+
+export interface MockBMCUser {
+  slot: number;
+  username: string;
+  enabled: boolean;
+  /** IPMI privilege code: 0x01 callback, 0x02 user, 0x03 operator, 0x04 administrator, 0x0f no-access. */
+  privilege: number;
+  channel: number;
+}
+
+export interface BMCApiCall {
+  method: string;
+  path: string;
+  body: unknown;
+}
+
+export interface BMCApiMockConfig {
+  profileID?: string;
+  users?: MockBMCUser[];
+  /** When set and not 200, GET /users answers this status with an error envelope. */
+  listStatus?: number;
+  /** GET /users waits this many milliseconds before answering. */
+  listDelayMs?: number;
+}
+
+/**
+ * mockBMCApi serves /api/v1/bmc/{profileID}/users... and /cert from an
+ * in-memory user table and records every call, so a spec can assert the
+ * verb, path and body the page sent.
+ */
+export async function mockBMCApi(
+  page: Page,
+  config: BMCApiMockConfig = {}
+): Promise<{ calls: BMCApiCall[]; users: () => MockBMCUser[] }> {
+  const profileID = config.profileID ?? '7';
+  let users: MockBMCUser[] = (config.users ?? []).map((u) => ({ ...u }));
+  const calls: BMCApiCall[] = [];
+  const privilegeCodes: Record<string, number> = {
+    'no-access': 0x0f,
+    callback: 0x01,
+    user: 0x02,
+    operator: 0x03,
+    administrator: 0x04,
+  };
+  const ok = (route: Route, payload: unknown) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ payload }),
+    });
+
+  await page.route(`**/api/v1/bmc/${profileID}/**`, async (route: Route, request: Request) => {
+    const method = request.method();
+    const path = new URL(request.url()).pathname.replace(/\/$/, '');
+    const raw = request.postData();
+    const body: unknown = raw ? JSON.parse(raw) : undefined;
+    calls.push({ method, path, body });
+
+    const prefix = `/api/v1/bmc/${profileID}`;
+    const rest = path.slice(prefix.length);
+    const slotMatch = rest.match(/^\/users\/(\d+)(\/(password|privilege))?$/);
+
+    if (rest === '/users' && method === 'GET') {
+      if (config.listDelayMs) {
+        await new Promise((resolve) => setTimeout(resolve, config.listDelayMs));
+      }
+      if (config.listStatus !== undefined && config.listStatus !== 200) {
+        await route.fulfill({
+          status: config.listStatus,
+          contentType: 'application/json',
+          body: JSON.stringify({ message: 'BMC listing failed' }),
+        });
+        return;
+      }
+      await ok(route, users);
+      return;
+    }
+    if (rest === '/users' && method === 'POST') {
+      const b = body as { slot: number; username: string; enabled: boolean; privilege: string; channel: number };
+      const created: MockBMCUser = {
+        slot: b.slot,
+        username: b.username,
+        enabled: b.enabled,
+        privilege: privilegeCodes[b.privilege] ?? 0x02,
+        channel: b.channel,
+      };
+      users = [...users.filter((u) => u.slot !== created.slot), created];
+      await ok(route, created);
+      return;
+    }
+    if (rest === '/cert' && method === 'PUT') {
+      await ok(route, { status: 'ok' });
+      return;
+    }
+    if (slotMatch) {
+      const slot = Number(slotMatch[1]);
+      const sub = slotMatch[3];
+      if (!sub && method === 'DELETE') {
+        users = users.filter((u) => u.slot !== slot);
+        await ok(route, { status: 'ok' });
+        return;
+      }
+      if (sub === 'password' && method === 'PUT') {
+        await ok(route, { status: 'ok' });
+        return;
+      }
+      if (sub === 'privilege' && method === 'PUT') {
+        const b = body as { privilege: string; channel: number };
+        users = users.map((u) =>
+          u.slot === slot ? { ...u, privilege: privilegeCodes[b.privilege] ?? u.privilege, channel: b.channel } : u
+        );
+        await ok(route, { status: 'ok' });
+        return;
+      }
+    }
+    await route.fulfill({
+      status: 404,
+      contentType: 'application/json',
+      body: JSON.stringify({ message: 'not found' }),
+    });
+  });
+
+  return { calls, users: () => users.map((u) => ({ ...u })) };
+}
+
 // ============================================================================
 // Overlay API mock (#1722): VTEPs, VNIs, tunnels, tunnel stats, MAC forget
 // ============================================================================
@@ -1098,4 +3250,746 @@ export async function mockVTPMRuntimeApi(
   });
 
   return { calls };
+}
+
+/**
+ * Calls the container-ops mock recorded, so a test can assert the page
+ * sent the request the operation needs.
+ */
+export interface ContainerOpsCalls {
+  getContainer: number;
+  getMetrics: number;
+  exec: unknown[];
+  attest: unknown[];
+  vmAttest: unknown[];
+  vmVerify: unknown[];
+}
+
+export interface ContainerOpsMockConfig {
+  containerId?: string;
+  containerName?: string;
+  vmId?: string;
+  vmName?: string;
+  /** Base64 stdout the exec mock answers. */
+  execStdout?: string;
+  execExitCode?: number;
+  /** Verified flag the VM verify mock answers. */
+  vmVerified?: boolean;
+  /**
+   * 1-based call number from which the VM verify POST answers 500
+   * { error: 'attestation unavailable' }; unset means never.
+   */
+  vmVerifyFailFrom?: number;
+  /**
+   * 1-based call number from which the container attest POST answers 500
+   * { error: 'attestation unavailable' }; unset means never.
+   */
+  attestFailFrom?: number;
+  /** Exec calls from this 1-based index on answer 500. */
+  execFailFrom?: number;
+}
+
+/**
+ * Mock the container detail operations of #1721 and the VM attest/verify
+ * round trip:
+ *
+ * - GET  /api/v1/compute/containers/:id          - GetContainer
+ * - GET  /api/v1/compute/containers/:id/metrics  - GetContainerMetrics
+ * - POST /api/v1/compute/containers/:id/exec     - ExecContainer
+ * - POST /api/v1/compute/containers/:id/attest   - AttestContainer
+ * - GET  /api/v1/compute/vms/:id                 - GetVM (detail page load)
+ * - POST /api/v1/compute/vms/:id/attest          - AttestVM
+ * - POST /api/v1/compute/vms/:id/attest/verify   - VerifyVMAttestation
+ */
+export async function mockContainerOpsApi(
+  page: Page,
+  config: ContainerOpsMockConfig = {}
+): Promise<ContainerOpsCalls> {
+  const containerId = config.containerId || 'ctr-1';
+  const vmId = config.vmId || 'vm-1';
+  const now = new Date().toISOString();
+  const calls: ContainerOpsCalls = {
+    getContainer: 0,
+    getMetrics: 0,
+    exec: [],
+    attest: [],
+    vmAttest: [],
+    vmVerify: [],
+  };
+  const json = (route: Route, body: unknown) =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+  const unavailable = (route: Route) =>
+    route.fulfill({
+      status: 500,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'attestation unavailable' }),
+    });
+  const failsAt = (failFrom: number | undefined, call: number) =>
+    failFrom !== undefined && call >= failFrom;
+
+  await page.route('**/api/v1/compute/containers/**', async (route: Route, request: Request) => {
+    const path = new URL(request.url()).pathname.replace(/\/+$/, '');
+    const match = path.match(/\/containers\/([^/]+)(?:\/(\w+))?$/);
+    if (!match || decodeURIComponent(match[1]) !== containerId) {
+      await route.fallback();
+      return;
+    }
+    const op = match[2];
+    const method = request.method();
+    if (method === 'GET' && !op) {
+      calls.getContainer++;
+      await json(route, {
+        container: {
+          id: containerId,
+          config: { name: config.containerName || 'web-frontend', image: 'nginx:1.27' },
+          state: 'CONTAINER_STATE_RUNNING',
+          createdAt: now,
+          startedAt: now,
+          hostId: 'host-a',
+        },
+      });
+      return;
+    }
+    if (method === 'GET' && op === 'metrics') {
+      calls.getMetrics++;
+      await json(route, {
+        metrics: {
+          cpuUsagePercent: 12.5,
+          memoryUsedMb: 256,
+          memoryLimitMb: 512,
+          diskReadBytes: 1024,
+          diskWriteBytes: 2048,
+          networkRxBytes: 4096,
+          networkTxBytes: 8192,
+          uptimeSeconds: 3600,
+        },
+      });
+      return;
+    }
+    if (method === 'POST' && op === 'exec') {
+      calls.exec.push(request.postDataJSON());
+      if (failsAt(config.execFailFrom, calls.exec.length)) {
+        await route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'exec unavailable' }),
+        });
+        return;
+      }
+      await json(route, {
+        status: { success: true },
+        exitCode: config.execExitCode ?? 0,
+        stdout: config.execStdout ?? Buffer.from('hello from container\n').toString('base64'),
+      });
+      return;
+    }
+    if (method === 'POST' && op === 'attest') {
+      calls.attest.push(request.postDataJSON());
+      if (failsAt(config.attestFailFrom, calls.attest.length)) {
+        await unavailable(route);
+        return;
+      }
+      await json(route, {
+        status: { success: true },
+        quote: 'cXVvdGU=',
+        signature: 'c2ln',
+        pcrValues: [{ index: 0, value: 'AAAA' }],
+        containerId,
+        imageDigest: 'aW1hZ2UtZGlnZXN0',
+        configDigest: 'Y29uZmlnLWRpZ2VzdA==',
+        verified: true,
+        timestamp: now,
+      });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await page.route('**/api/v1/compute/vms/**', async (route: Route, request: Request) => {
+    const path = new URL(request.url()).pathname.replace(/\/+$/, '');
+    const match = path.match(/\/vms\/([^/]+)((?:\/\w+)*)$/);
+    if (!match || decodeURIComponent(match[1]) !== vmId) {
+      await route.fallback();
+      return;
+    }
+    const op = match[2];
+    const method = request.method();
+    if (method === 'GET' && op === '') {
+      await json(route, {
+        vm: {
+          id: vmId,
+          config: {
+            name: config.vmName || 'build-vm',
+            cpu: { cores: 2 },
+            memory: { sizeMb: '2048' },
+            disks: [],
+            networks: [],
+          },
+          state: 'VM_STATE_RUNNING',
+          createdAt: now,
+          updatedAt: now,
+          metrics: {
+            cpuUsagePercent: 10,
+            memoryUsedMb: '512',
+            memoryAvailableMb: '1536',
+            diskReadBytes: '0',
+            diskWriteBytes: '0',
+            networkRxBytes: '0',
+            networkTxBytes: '0',
+            uptimeSeconds: 60,
+          },
+        },
+      });
+      return;
+    }
+    if (method === 'POST' && op === '/attest') {
+      calls.vmAttest.push(request.postDataJSON());
+      await json(route, {
+        status: { success: true },
+        quote: 'cXVvdGU=',
+        signature: 'c2ln',
+        signatureAlgorithm: 'SHA256-RSAPSS',
+      });
+      return;
+    }
+    if (method === 'POST' && op === '/attest/verify') {
+      calls.vmVerify.push(request.postDataJSON());
+      if (failsAt(config.vmVerifyFailFrom, calls.vmVerify.length)) {
+        await unavailable(route);
+        return;
+      }
+      const verified = config.vmVerified ?? true;
+      await json(route, {
+        status: { success: true },
+        verified,
+        message: verified ? 'quote signature and nonce valid' : 'quote signature invalid',
+      });
+      return;
+    }
+    await route.fallback();
+  });
+
+  return calls;
+}
+
+// ============================================================================
+// IAM policy and app API mock (#1728)
+// ============================================================================
+
+export interface MockIAMPolicy {
+  name: string;
+  description?: string;
+  priority?: number;
+  spec_yaml?: string;
+}
+
+export interface MockIAMApp {
+  client_id: string;
+  name: string;
+  redirect_uris?: string[];
+  grant_types?: string[];
+}
+
+export interface IAMPolicyAppApiMockConfig {
+  policies?: MockIAMPolicy[];
+  apps?: MockIAMApp[];
+  /** Response for POST /policies/validate */
+  validateResponse?: { valid: boolean; errors?: string[] };
+  /** Response for POST /policies/test */
+  testResponse?: { allowed: boolean; matchedPolicy?: string; matchedRule?: string };
+}
+
+/** A request the mock received: method, path after the tenant, and JSON body. */
+export interface RecordedIAMPolicyCall {
+  method: string;
+  path: string;
+  body: Record<string, unknown> | null;
+}
+
+export interface IAMPolicyAppApiMock {
+  calls: RecordedIAMPolicyCall[];
+  policies: MockIAMPolicy[];
+  apps: MockIAMApp[];
+  /** Calls with the given method whose path ends with the given suffix. */
+  find: (method: string, pathSuffix: string) => RecordedIAMPolicyCall[];
+}
+
+/**
+ * Mocks the IAM policy and app endpoints under
+ * /api/v1/iam/tenants/{tenantId}/: policies (list, create, get, update,
+ * delete, validate, test) and apps (list, get, update).
+ */
+export async function mockIAMPolicyAppApi(
+  page: Page,
+  config: IAMPolicyAppApiMockConfig = {},
+): Promise<IAMPolicyAppApiMock> {
+  const state: IAMPolicyAppApiMock = {
+    calls: [],
+    policies: [...(config.policies ?? [])],
+    apps: [...(config.apps ?? [])],
+    find: (method, pathSuffix) =>
+      state.calls.filter((c) => c.method === method && c.path.endsWith(pathSuffix)),
+  };
+  const now = () => new Date().toISOString();
+  const json = (route: Route, status: number, body: unknown) =>
+    route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+  const record = (request: Request, path: string): Record<string, unknown> | null => {
+    let body: Record<string, unknown> | null = null;
+    try {
+      body = request.postDataJSON() as Record<string, unknown> | null;
+    } catch {
+      body = null;
+    }
+    state.calls.push({ method: request.method(), path, body });
+    return body;
+  };
+  const notFound = (route: Route) =>
+    route.fulfill({
+      status: 404,
+      contentType: 'application/json',
+      body: errorEnvelope({ error: 'not found', errorCode: 'NOT_FOUND', status: 404 }),
+    });
+
+  await page.route(/\/api\/v1\/iam\/tenants\/[^/]+\/policies(\/[^/?]+)?(\?.*)?$/, async (route, request) => {
+    const url = new URL(request.url());
+    const match = url.pathname.match(/\/policies(?:\/([^/]+))?$/);
+    const id = match?.[1] ? decodeURIComponent(match[1]) : undefined;
+    const method = request.method();
+    const body = record(request, url.pathname.replace(/^.*\/tenants\/[^/]+/, ''));
+
+    if (!id) {
+      if (method === 'GET') {
+        return json(route, 200, {
+          policies: state.policies,
+          total: state.policies.length,
+          timestamp: now(),
+        });
+      }
+      if (method === 'POST') {
+        const created: MockIAMPolicy = {
+          name: String(body?.name ?? ''),
+          description: String(body?.description ?? ''),
+          priority: 0,
+          spec_yaml: String(body?.spec_yaml ?? body?.specYaml ?? ''),
+        };
+        state.policies.unshift(created);
+        return json(route, 201, { policy: created, timestamp: now() });
+      }
+      return route.fallback();
+    }
+
+    if (id === 'validate' && method === 'POST') {
+      return json(route, 200, { ...(config.validateResponse ?? { valid: true }), timestamp: now() });
+    }
+    if (id === 'test' && method === 'POST') {
+      // The REST TestPolicyRequest decodes only `subject_id`.
+      if (typeof body?.subject_id !== 'string' || body.subject_id === '') {
+        return route.fulfill({
+          status: 400,
+          contentType: 'application/json',
+          body: errorEnvelope({ error: 'subject_id is required', status: 400 }),
+        });
+      }
+      return json(route, 200, { ...(config.testResponse ?? { allowed: true }), timestamp: now() });
+    }
+
+    const index = state.policies.findIndex((p) => p.name === id);
+    if (index === -1) return notFound(route);
+    if (method === 'GET') {
+      return json(route, 200, { policy: state.policies[index], timestamp: now() });
+    }
+    if (method === 'PUT') {
+      // The production adapter rejects every nonempty spec YAML on update.
+      const specYaml = body?.spec_yaml ?? body?.specYaml;
+      if (typeof specYaml === 'string' && specYaml !== '') {
+        return route.fulfill({
+          status: 400,
+          contentType: 'application/json',
+          body: errorEnvelope({
+            error: 'update via spec_yaml not supported by IAM SDK; delete and re-create instead',
+            status: 400,
+          }),
+        });
+      }
+      const current = state.policies[index];
+      state.policies[index] = {
+        ...current,
+        description: typeof body?.description === 'string' ? body.description : current.description,
+        priority: typeof body?.priority === 'number' ? body.priority : current.priority,
+      };
+      return json(route, 200, { policy: state.policies[index], timestamp: now() });
+    }
+    if (method === 'DELETE') {
+      state.policies.splice(index, 1);
+      return json(route, 200, { success: true, timestamp: now() });
+    }
+    return route.fallback();
+  });
+
+  await page.route(/\/api\/v1\/iam\/tenants\/[^/]+\/apps(\/[^/?]+)?(\?.*)?$/, async (route, request) => {
+    const url = new URL(request.url());
+    const match = url.pathname.match(/\/apps(?:\/([^/]+))?$/);
+    const id = match?.[1] ? decodeURIComponent(match[1]) : undefined;
+    const method = request.method();
+    const body = record(request, url.pathname.replace(/^.*\/tenants\/[^/]+/, ''));
+
+    if (!id) {
+      if (method === 'GET') {
+        return json(route, 200, { apps: state.apps, total: state.apps.length, timestamp: now() });
+      }
+      return route.fallback();
+    }
+    const index = state.apps.findIndex((a) => a.client_id === id);
+    if (index === -1) return notFound(route);
+    if (method === 'GET') {
+      return json(route, 200, { app: state.apps[index], timestamp: now() });
+    }
+    if (method === 'PUT') {
+      const current = state.apps[index];
+      const list = (v: unknown, fallback: string[] | undefined) =>
+        Array.isArray(v) ? v.map(String) : fallback;
+      state.apps[index] = {
+        ...current,
+        name: typeof body?.name === 'string' ? body.name : current.name,
+        redirect_uris: list(body?.redirect_uris ?? body?.redirectUris, current.redirect_uris),
+        grant_types: list(body?.grant_types ?? body?.grantTypes, current.grant_types),
+      };
+      return json(route, 200, { app: state.apps[index], timestamp: now() });
+    }
+    return route.fallback();
+  });
+
+  return state;
+}
+
+// Device templates and profile assignment (#1737)
+
+export interface DeviceTemplateMock {
+  id: string;
+  tenant_id: string;
+  name: string;
+  description: string;
+  role: string;
+  config?: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DeviceProfileMock {
+  id: string;
+  name: string;
+  role: string;
+}
+
+export interface RecordedRequest {
+  method: string;
+  path: string;
+  query: string;
+  body: unknown;
+}
+
+export function createMockDeviceTemplate(
+  overrides: Partial<DeviceTemplateMock> = {}
+): DeviceTemplateMock {
+  const now = new Date().toISOString();
+  return {
+    id: '42',
+    tenant_id: 'tenant-abc-123',
+    name: 'edge-node',
+    description: 'Edge node baseline',
+    role: 'edge',
+    config: {},
+    created_at: now,
+    updated_at: now,
+    ...overrides,
+  };
+}
+
+/**
+ * Mock the device template and profile-assignment routes under the
+ * singular `/api/v1/device` prefix:
+ * - GET/POST /device/templates, GET/PUT/DELETE /device/templates/{id}
+ * - POST /device/templates/{id}/create-profile
+ * - GET /device/profiles/find-config
+ * - POST /device/profiles/{id}/assign and /device/profiles/{id}/unassign
+ *
+ * Every request the mock answers is recorded, so a test can assert the
+ * method, path, query and body the page sent.
+ */
+export async function mockDeviceTemplateApi(
+  page: Page,
+  config: {
+    templates?: DeviceTemplateMock[];
+    profile?: DeviceProfileMock;
+    findConfigResult?: DeviceProfileMock | null;
+  } = {}
+): Promise<{ requests: RecordedRequest[]; templates: () => DeviceTemplateMock[] }> {
+  let templates = [...(config.templates ?? [createMockDeviceTemplate()])];
+  const profile = config.profile ?? { id: '7', name: 'edge-node-profile', role: 'edge' };
+  const findConfigResult = config.findConfigResult === undefined ? profile : config.findConfigResult;
+  const requests: RecordedRequest[] = [];
+
+  const json = (route: Route, status: number, body: unknown) =>
+    route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+
+  await page.route(
+    (url) => url.pathname.startsWith('/api/v1/device/'),
+    async (route: Route, request: Request) => {
+      const url = new URL(request.url());
+      const path = url.pathname.replace(/\/+$/, '');
+      const method = request.method();
+      let body: unknown = undefined;
+      try {
+        body = request.postDataJSON();
+      } catch {
+        body = request.postData();
+      }
+      requests.push({ method, path, query: url.search, body });
+
+      const templateMatch = path.match(/^\/api\/v1\/device\/templates\/([^/]+)(\/create-profile)?$/);
+      const profileMatch = path.match(/^\/api\/v1\/device\/profiles\/([^/]+)\/(assign|unassign)$/);
+
+      if (path === '/api/v1/device/templates') {
+        if (method === 'GET') {
+          return json(route, 200, { templates, pagination: { total: templates.length } });
+        }
+        if (method === 'POST') {
+          const req = (body ?? {}) as Partial<DeviceTemplateMock>;
+          const created = createMockDeviceTemplate({ ...req, id: String(100 + templates.length) });
+          templates = [...templates, created];
+          return json(route, 201, created);
+        }
+      }
+      if (templateMatch && templateMatch[2]) {
+        if (method === 'POST') {
+          return json(route, 201, profile);
+        }
+      } else if (templateMatch) {
+        const id = templateMatch[1];
+        const found = templates.find((t) => t.id === id);
+        if (!found) {
+          return route.fulfill({
+            status: 404,
+            contentType: 'application/json',
+            body: errorEnvelope({ error: 'template not found', status: 404 }),
+          });
+        }
+        if (method === 'GET') {
+          return json(route, 200, found);
+        }
+        if (method === 'PUT') {
+          const updated = { ...found, ...((body ?? {}) as Partial<DeviceTemplateMock>), id };
+          templates = templates.map((t) => (t.id === id ? updated : t));
+          return json(route, 200, updated);
+        }
+        if (method === 'DELETE') {
+          templates = templates.filter((t) => t.id !== id);
+          return route.fulfill({ status: 204, body: '' });
+        }
+      }
+      if (path === '/api/v1/device/profiles/find-config' && method === 'GET') {
+        return json(route, 200, findConfigResult);
+      }
+      if (profileMatch && method === 'POST') {
+        return json(route, 200, { ...profile, id: profileMatch[1] });
+      }
+      return route.fallback();
+    }
+  );
+
+  return { requests, templates: () => [...templates] };
+}
+
+// ============================================================================
+// Device lookup (#1743)
+// ============================================================================
+
+/** One request the device lookup mock answered. */
+export interface DeviceLookupCall {
+  method: string;
+  path: string;
+  body: unknown;
+}
+
+/**
+ * Responses for the device lookup operations, keyed `METHOD path` with the
+ * `/api/v1` prefix and any trailing slash removed, e.g. `GET /devices/count`.
+ * A value is the payload; an `ApiError` value answers with that error.
+ */
+export type DeviceLookupMockConfig = Record<string, unknown>;
+
+function isApiError(value: unknown): value is ApiError {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'status' in value &&
+    'error' in value &&
+    typeof (value as ApiError).status === 'number'
+  );
+}
+
+/**
+ * Mock the device and profile lookup, count, update, activation and
+ * attestation endpoints. Requests not named in `config` fall through to the
+ * next route. Returns the list of answered calls, filled as they arrive.
+ */
+export async function mockDeviceLookupApi(
+  page: Page,
+  config: DeviceLookupMockConfig
+): Promise<DeviceLookupCall[]> {
+  const calls: DeviceLookupCall[] = [];
+  await page.route(
+    (url) => /^\/api\/v1\/devices?\//.test(url.pathname),
+    async (route: Route, request: Request) => {
+      const path = decodeURIComponent(new URL(request.url()).pathname).replace(/^\/api\/v1/, '').replace(/\/$/, '');
+      const key = `${request.method()} ${path}`;
+      if (!(key in config)) {
+        await route.fallback();
+        return;
+      }
+      calls.push({ method: request.method(), path, body: request.postDataJSON() });
+      const answer = config[key];
+      if (isApiError(answer)) {
+        await route.fulfill({ status: answer.status, contentType: 'application/json', body: errorEnvelope(answer) });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ code: 200, success: true, payload: answer }),
+      });
+    }
+  );
+  return calls;
+}
+
+/**
+ * Mock the invitation detail, token lookup and accept endpoints (#1753).
+ *
+ * Handles:
+ * - GET  /api/v1/invitations/{id}           - GetInvitation
+ * - GET  /api/v1/invitations/token/{token}  - GetInvitationByToken
+ * - POST /api/v1/invitations/accept         - AcceptInvitation
+ *
+ * Register it after mockInvitationApi: Playwright tries the most recently
+ * added route first, so these specific paths win over the list handler.
+ *
+ * @returns the accept request bodies the page posted
+ */
+/** The gateway's REST envelope around a GetInvitation(ByToken) response. */
+function invitationEnvelope(invitation: object): string {
+  return JSON.stringify({
+    code: 200,
+    success: true,
+    payload: { invitation, timestamp: new Date().toISOString() },
+  });
+}
+
+// #1753's lookup mock (invitation list, tenant name); #1681's is mockInvitationLookupApi above.
+export async function mockInvitationFlowApi(
+  page: Page,
+  options: {
+    invitations?: Invitation[];
+    tenantName?: string;
+    getError?: ApiError | null;
+    tokenError?: ApiError | null;
+    acceptError?: ApiError | null;
+  } = {}
+): Promise<{ acceptBodies: () => Array<Record<string, unknown>> }> {
+  const invitations = options.invitations || [];
+  const accepted: Array<Record<string, unknown>> = [];
+
+  const fail = async (route: Route, err: ApiError) => {
+    await route.fulfill({
+      status: err.status,
+      contentType: 'application/json',
+      body: errorEnvelope(err),
+    });
+  };
+
+  await page.route('**/api/v1/invitations/**', async (route: Route, request: Request) => {
+    const url = new URL(request.url());
+    const path = url.pathname.replace(/\/+$/, '');
+    const method = request.method();
+
+    if (method === 'POST' && path.endsWith('/invitations/accept')) {
+      if (options.acceptError) {
+        await fail(route, options.acceptError);
+        return;
+      }
+      const body = (request.postDataJSON() || {}) as Record<string, unknown>;
+      accepted.push(body);
+      // AcceptInvitationRequest is {token, user_id}: the server rejects a
+      // request without user_id.
+      if (typeof body.user_id !== 'string' || body.user_id === '') {
+        await fail(route, { error: 'user_id is required', status: 400 });
+        return;
+      }
+      const inv = invitations.find((i) => i.token === body.token);
+      if (!inv) {
+        await fail(route, { error: 'Invitation not found', status: 404 });
+        return;
+      }
+      inv.status = 'accepted';
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: true,
+          tenantId: 'invited-tenant-123',
+          message: 'Invitation accepted',
+        }),
+      });
+      return;
+    }
+
+    const tokenMatch = path.match(/\/invitations\/token\/([^/]+)$/);
+    if (method === 'GET' && tokenMatch) {
+      if (options.tokenError) {
+        await fail(route, options.tokenError);
+        return;
+      }
+      const token = decodeURIComponent(tokenMatch[1]);
+      const inv = invitations.find((i) => i.token === token);
+      if (!inv) {
+        await fail(route, { error: 'Invalid or expired invitation', status: 404 });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        // The REST envelope; the status is the protobuf enum string.
+        body: invitationEnvelope({
+          ...inv,
+          status: `INVITATION_STATUS_${inv.status.toUpperCase()}`,
+          tenant_name: options.tenantName || 'Invited Workspace',
+        }),
+      });
+      return;
+    }
+
+    const idMatch = path.match(/\/invitations\/([^/]+)$/);
+    if (method === 'GET' && idMatch && idMatch[1] !== 'validate') {
+      if (options.getError) {
+        await fail(route, options.getError);
+        return;
+      }
+      const id = decodeURIComponent(idMatch[1]);
+      const inv = invitations.find((i) => i.id === id);
+      if (!inv) {
+        await fail(route, { error: 'Invitation not found', status: 404 });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: invitationEnvelope(inv),
+      });
+      return;
+    }
+
+    await route.fallback();
+  });
+
+  return { acceptBodies: () => [...accepted] };
 }

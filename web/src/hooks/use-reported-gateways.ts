@@ -81,44 +81,54 @@ export function useReportedGateways(
     };
   }, []);
 
+  // settle applies one state read from its promise callbacks, so the mount
+  // effect can start a read without a synchronous setState.
+  const settle = React.useCallback(
+    () =>
+      fetch('/api/v1/gateway/state', { credentials: 'include' })
+        .then(async (res) => {
+          if (!res.ok) {
+            throw new Error(`HTTP ${res.status}`);
+          }
+          const body = await res.json();
+          if (mounted.current) {
+            setGateways(body.payload?.gateways ?? body.gateways ?? []);
+          }
+        })
+        .catch((e: unknown) => {
+          if (mounted.current) {
+            setError(e instanceof Error ? e.message : String(e));
+          }
+        })
+        .finally(() => {
+          if (mounted.current) {
+            setInFlight(false);
+            setLoaded(true);
+          }
+        }),
+    []
+  );
+
   const refetch = React.useCallback(async () => {
     if (!enabled) {
       return;
     }
     setInFlight(true);
     setError(null);
-    try {
-      const res = await fetch('/api/v1/gateway/state', { credentials: 'include' });
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
-      }
-      const body = await res.json();
-      if (mounted.current) {
-        setGateways(body.payload?.gateways ?? body.gateways ?? []);
-      }
-    } catch (e: unknown) {
-      if (mounted.current) {
-        setError(e instanceof Error ? e.message : String(e));
-      }
-    } finally {
-      if (mounted.current) {
-        setInFlight(false);
-        setLoaded(true);
-      }
-    }
-  }, [enabled]);
+    await settle();
+  }, [enabled, settle]);
 
   React.useEffect(() => {
     if (!enabled) {
       return;
     }
-    void refetch();
+    void settle();
     if (!refreshMs) {
       return;
     }
     const id = setInterval(() => void refetch(), refreshMs);
     return () => clearInterval(id);
-  }, [enabled, refetch, refreshMs]);
+  }, [enabled, refetch, refreshMs, settle]);
 
   return { gateways, isLoading, error, refetch };
 }

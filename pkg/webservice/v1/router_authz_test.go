@@ -328,6 +328,9 @@ func newGatedTestRouter(t *testing.T, registry *testHandlerRegistry) *mux.Router
 	registry.overlayService = &stubOverlayServer{}
 	registry.switchService = &stubSwitchService{}
 	registry.sdnService = &stubSDNServer{}
+	if registry.bmcHandler == nil {
+		registry.bmcHandler = stubBMCHandler{}
+	}
 	registry.gatewayService = &stubGatewayServer{}
 	registry.gatewayStore = &stubGatewayStore{}
 	registry.configDelivery = &stubConfigDelivery{}
@@ -338,7 +341,9 @@ func newGatedTestRouter(t *testing.T, registry *testHandlerRegistry) *mux.Router
 	registry.attestationService = &stubAttestationServer{}
 	registry.deviceGRPCService = &stubDeviceGRPCServer{}
 	registry.deviceTemplateService = &stubDeviceTemplateService{}
-	registry.deviceProfileService = &stubDeviceProfileService{}
+	if registry.deviceProfileService == nil {
+		registry.deviceProfileService = &stubDeviceProfileService{}
+	}
 	registry.invitationService = &stubInvitationServer{}
 	registry.iamClient = &probeIAM{}
 	registry.pepClient = &probePEP{}
@@ -677,10 +682,7 @@ var pendingRoutes = map[string]string{
 // fixture did not build the services. That is the sharpest form of the rule
 // below: a nil in a fixture can hide a route that production always serves.
 //
-// Slice 1 also named /bmc here. That was wrong: the webservice serves no
-// /bmc route. The live BMC surface belongs to the daemon REST server
-// (#232), so it is not this audit's blind spot. The unreferenced webservice
-// BMC router (pkg/webservice/v1/router/bmc.go) was deleted (#239).
+// /bmc is now mounted admin-gated by bmcRoutes, and is covered by this walk.
 func TestRegisterRoutes_EveryRouteDeniesWithoutCredential(t *testing.T) {
 	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
 

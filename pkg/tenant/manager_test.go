@@ -16,9 +16,12 @@ package tenant
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"slices"
+	"sort"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -147,12 +150,33 @@ func (m *mockIAMClient) List(ctx context.Context, req *iam.ListTenantsRequest) (
 	for _, t := range m.tenants {
 		tenants = append(tenants, *t)
 	}
+	sort.Slice(tenants, func(i, j int) bool { return tenants[i].ID < tenants[j].ID })
 
+	total := len(tenants)
+	start := 0
+	if req != nil && req.PageToken != "" {
+		n, err := strconv.Atoi(req.PageToken)
+		if err != nil || n < 0 {
+			return nil, fmt.Errorf("invalid page token %q", req.PageToken)
+		}
+		start = n
+	}
+	if start > total {
+		start = total
+	}
+	end := total
+	if req != nil && req.PageSize > 0 && start+req.PageSize < total {
+		end = start + req.PageSize
+	}
+
+	pagination := iam.PaginationInfo{TotalCount: total}
+	if end < total {
+		pagination.NextPageToken = strconv.Itoa(end)
+		pagination.HasMore = true
+	}
 	return &iam.ListTenantsResponse{
-		Tenants: tenants,
-		Pagination: iam.PaginationInfo{
-			TotalCount: len(tenants),
-		},
+		Tenants:    tenants[start:end],
+		Pagination: pagination,
 	}, nil
 }
 
@@ -1118,6 +1142,57 @@ func TestGetTenantByName_FromIAMAfterCacheInvalidation(t *testing.T) {
 	// Verify cache is populated
 	if manager.GetCacheSize() != 1 {
 		t.Errorf("expected cache size 1, got %d", manager.GetCacheSize())
+	}
+}
+
+// seedIAMTenants puts n tenants straight into the mock IAM store, bypassing
+// the manager cache. IDs sort in creation order: tenant-000, tenant-001, ...
+func seedIAMTenants(iamClient *mockIAMClient, n int) {
+	iamClient.mu.Lock()
+	defer iamClient.mu.Unlock()
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("tenant-%03d", i)
+		iamClient.tenants[id] = &iam.Tenant{
+			ID:   id,
+			Name: fmt.Sprintf("name-%03d", i),
+		}
+	}
+}
+
+func TestListTenants_OffsetBeyondFirstPage(t *testing.T) {
+	manager, iamClient := newTestManager(t)
+	seedIAMTenants(iamClient, 250)
+
+	entities, total, err := manager.ListTenants(context.Background(), 100, 200)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if total != 250 {
+		t.Errorf("expected total 250, got %d", total)
+	}
+	if len(entities) != 50 {
+		t.Fatalf("expected 50 tenants, got %d", len(entities))
+	}
+	if entities[0].ID != "tenant-200" || entities[49].ID != "tenant-249" {
+		t.Errorf("expected tenant-200..tenant-249, got %q..%q", entities[0].ID, entities[49].ID)
+	}
+}
+
+func TestGetTenantByName_BeyondFirstPage(t *testing.T) {
+	manager, iamClient := newTestManager(t)
+	seedIAMTenants(iamClient, 250)
+	manager.InvalidateCache("")
+
+	entity, err := manager.GetTenantByName(context.Background(), "name-150")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if entity.ID != "tenant-150" {
+		t.Errorf("expected ID tenant-150, got %q", entity.ID)
+	}
+
+	if _, err := manager.GetTenantByName(context.Background(), "name-999"); err == nil {
+		t.Error("expected an error for a tenant that does not exist")
 	}
 }
 

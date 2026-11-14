@@ -83,11 +83,11 @@ export function SDNTopology({ nodes, links }: SDNTopologyProps) {
                   <span className="font-mono">
                     {link.source} → {link.target}
                   </span>
-                  {link.bandwidth && (
+                  {link.bandwidth ? (
                     <span className="text-muted-foreground">
                       {link.bandwidth} Mbps
                     </span>
-                  )}
+                  ) : null}
                 </div>
               ))}
             </div>

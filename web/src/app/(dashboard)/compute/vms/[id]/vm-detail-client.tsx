@@ -13,7 +13,18 @@ import {
   Camera,
   RefreshCw,
   Pause,
+  ShieldCheck,
 } from 'lucide-react';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { useVMAttestationVerify } from '@/hooks';
+import type { VerifyVMAttestationResponse } from 'trusted-platform-sdk';
 import { formatDistanceToNow } from 'date-fns';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -29,7 +40,8 @@ import {
 import { VMMetricsCard } from '@/components/features/compute/vm-metrics';
 import { useCompute, useMutation, useToast, type MutationError } from '@/hooks';
 import type { VMDetail } from '@/types/infrastructure';
-import { vmStatus } from '@/lib/compute-state';
+import { toVMDetail, VM_PCRS_NOT_APPRAISED, vmVerifyHeadline } from '@/lib/vm-detail';
+import { VMOperations } from './vm-operations';
 
 const statusColors = {
   running: 'bg-green-500/10 text-green-500 border-green-500/20',
@@ -48,22 +60,42 @@ export default function VMDetailPage() {
   const [actionLoading, setActionLoading] = useState(false);
   const compute = useCompute();
   const { toast } = useToast();
+  const verifyAttestation = useVMAttestationVerify(vmId);
+  const [verifyConfirmOpen, setVerifyConfirmOpen] = useState(false);
+  const [verifyResult, setVerifyResult] = useState<VerifyVMAttestationResponse | null>(null);
+  const [verifyError, setVerifyError] = useState<string | null>(null);
+
+  const handleVerifyAttestation = async () => {
+    setVerifyConfirmOpen(false);
+    setActionLoading(true);
+    setVerifyResult(null);
+    setVerifyError(null);
+    try {
+      setVerifyResult(await verifyAttestation());
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      setVerifyError(message);
+      toast({
+        title: 'Error',
+        description: `Failed to verify VM attestation: ${message}`,
+        variant: 'destructive',
+      });
+    } finally {
+      setActionLoading(false);
+    }
+  };
 
   const fetchVM = async () => {
-    if (!vmId) {
-      setLoading(false);
-      return;
-    }
+    // No state is set before the first await: the poll effect calls this, and
+    // without a vmId the page shows the spinner anyway (vm stays null).
+    if (!vmId) return;
+    // No setLoading(true) here: loading starts true and only the first fetch
+    // clears it, so the 5 s refresh keeps the detail tree (and the stateful
+    // VMOperations panel) mounted (#1727).
     try {
-      setLoading(true);
       const response = await compute.getVM(vmId);
       if (response.success && response.data) {
-        // SDK returns { vm: VM }, but we need VMDetail
-        // For now, cast to VMDetail - proper type mapping would be handled by backend
-        setVM({
-          ...(response.data.vm as unknown as VMDetail),
-          status: vmStatus(response.data.vm.state),
-        });
+        setVM(toVMDetail(response.data.vm));
       }
     } catch (error) {
       toast({
@@ -77,10 +109,14 @@ export default function VMDetailPage() {
   };
 
   useEffect(() => {
-    fetchVM();
     if (!vmId) return;
+    // Timers, not a direct call: no state is set in the effect body.
+    const first = setTimeout(fetchVM, 0);
     const interval = setInterval(fetchVM, 5000);
-    return () => clearInterval(interval);
+    return () => {
+      clearTimeout(first);
+      clearInterval(interval);
+    };
   }, [vmId]);
 
   const startVMMutation = useMutation(
@@ -149,14 +185,17 @@ export default function VMDetailPage() {
     }
   );
 
-  // TODO: Suspend/Resume functionality not available in SDK yet
-  // SDK only provides start/stop/reboot operations
-  // Placeholder mutations for future implementation
   const suspendVMMutation = useMutation(
-    async (vmId: string) => {
-      throw new Error('Suspend operation not yet implemented in SDK');
-    },
+    (vmId: string) => compute.suspendVM(vmId),
     {
+      onSuccess: () => {
+        toast({
+          title: 'Success',
+          description: 'VM suspended successfully',
+        });
+        setActionLoading(false);
+        fetchVM();
+      },
       onError: (error: MutationError) => {
         toast({
           title: 'Error',
@@ -169,10 +208,16 @@ export default function VMDetailPage() {
   );
 
   const resumeVMMutation = useMutation(
-    async (vmId: string) => {
-      throw new Error('Resume operation not yet implemented in SDK');
-    },
+    (vmId: string) => compute.resumeVM(vmId),
     {
+      onSuccess: () => {
+        toast({
+          title: 'Success',
+          description: 'VM resumed successfully',
+        });
+        setActionLoading(false);
+        fetchVM();
+      },
       onError: (error: MutationError) => {
         toast({
           title: 'Error',
@@ -333,6 +378,14 @@ export default function VMDetailPage() {
               Resume
             </Button>
           )}
+          <Button
+            variant="outline"
+            onClick={() => setVerifyConfirmOpen(true)}
+            disabled={actionLoading}
+          >
+            <ShieldCheck className="mr-2 h-4 w-4" />
+            Verify Attestation
+          </Button>
           <Button variant="outline" onClick={handleClone} disabled={actionLoading}>
             <Copy className="mr-2 h-4 w-4" />
             Clone
@@ -389,8 +442,51 @@ export default function VMDetailPage() {
           </CardContent>
         </Card>
 
-        <VMMetricsCard metrics={vm.metrics} />
+        {vm.metrics && <VMMetricsCard metrics={vm.metrics} />}
       </div>
+
+      {(verifyResult || verifyError) && (
+        <Card data-testid="vm-verify-result">
+          <CardHeader>
+            <CardTitle>Attestation Verification</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {verifyError ? (
+              <p className="font-medium text-destructive">Verification failed: {verifyError}</p>
+            ) : (
+              verifyResult && (
+                <>
+                  <p className="font-medium">{vmVerifyHeadline(verifyResult)}</p>
+                  <p className="text-muted-foreground">{VM_PCRS_NOT_APPRAISED}</p>
+                  {verifyResult.message && (
+                    <p className="text-muted-foreground">{verifyResult.message}</p>
+                  )}
+                </>
+              )
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      <Dialog open={verifyConfirmOpen} onOpenChange={setVerifyConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Verify VM attestation?</DialogTitle>
+            <DialogDescription>
+              This requests a fresh TPM quote from {vm.name} and verifies it. It checks the quote
+              signature and nonce; boot measurements are not compared with reference values.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setVerifyConfirmOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={() => void handleVerifyAttestation()}>Confirm</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <VMOperations vmId={vmId} />
 
       <Card>
         <CardHeader>
@@ -403,7 +499,7 @@ export default function VMDetailPage() {
           </div>
         </CardHeader>
         <CardContent>
-          {vm.snapshots.length === 0 ? (
+          {!vm.snapshots || vm.snapshots.length === 0 ? (
             <p className="text-center text-muted-foreground py-8">No snapshots</p>
           ) : (
             <Table>

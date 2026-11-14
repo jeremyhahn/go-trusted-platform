@@ -16,6 +16,7 @@ package iam
 import (
 	"context"
 	"errors"
+	"sort"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
@@ -264,20 +265,36 @@ func (a *QuicBaaSIAMAdapter) GetTenant(ctx context.Context, tenantID string) (*T
 	return decodeTenant(t), nil
 }
 
+// ListTenants answers one window of the tenants, ordered by ID, with the
+// real total. The pinned SDK's tenant list takes only a page size (no offset,
+// no total), so the adapter reads every tenant (PageSize 0) and pages
+// locally; a limit <= 0 returns every tenant from the offset.
 func (a *QuicBaaSIAMAdapter) ListTenants(ctx context.Context, limit, offset int32) (*ListTenantsResponse, error) {
-	sdkReq := &iamsdk.ListTenantsRequest{}
-	if limit > 0 {
-		sdkReq.PageSize = int(limit)
-	}
-	resp, err := a.client.Tenant().List(ctx, sdkReq)
+	resp, err := a.client.Tenant().List(ctx, &iamsdk.ListTenantsRequest{})
 	if err != nil {
 		return nil, err
 	}
-	out := &ListTenantsResponse{
-		Tenants: make([]TenantResponse, 0, len(resp.Tenants)),
+	all := resp.Tenants
+	sort.SliceStable(all, func(i, j int) bool { return all[i].ID < all[j].ID })
+
+	start := int(offset)
+	if start < 0 {
+		start = 0
 	}
-	for i := range resp.Tenants {
-		out.Tenants = append(out.Tenants, *decodeTenant(&resp.Tenants[i]))
+	if start > len(all) {
+		start = len(all)
+	}
+	end := len(all)
+	if limit > 0 && start+int(limit) < end {
+		end = start + int(limit)
+	}
+
+	out := &ListTenantsResponse{
+		PaginatedResponse: PaginatedResponse{Total: int64(len(all)), Limit: limit, Offset: offset},
+		Tenants:           make([]TenantResponse, 0, end-start),
+	}
+	for i := start; i < end; i++ {
+		out.Tenants = append(out.Tenants, *decodeTenant(&all[i]))
 	}
 	return out, nil
 }
@@ -286,7 +303,8 @@ func (a *QuicBaaSIAMAdapter) UpdateTenant(ctx context.Context, tenantID string, 
 	if req == nil {
 		return nil, errors.New("update tenant request is required")
 	}
-	sdkReq := &iamsdk.UpdateTenantRequest{}
+	// The SDK's tenant update stores DisplayName as the tenant name.
+	sdkReq := &iamsdk.UpdateTenantRequest{DisplayName: req.Name}
 	if req.Settings != nil {
 		sdkReq.Settings = encodeTenantSettings(req.Settings)
 	}
@@ -414,12 +432,15 @@ func (a *QuicBaaSIAMAdapter) TestPolicy(ctx context.Context, tenantID string, re
 	if req == nil {
 		return nil, errors.New("test policy request is required")
 	}
-	// The QuicBaaS SDK runs test cases against a named policy. The REST
-	// shape only describes a single inline check; wrap it as a one-element
-	// test case so the underlying engine evaluates the same scenario.
-	contextMap := make(map[string]interface{}, len(req.Context))
-	for k, v := range req.Context {
-		contextMap[k] = v
+	// The REST shape describes one inline check (subject, action, resource,
+	// context) against the tenant's whole policy set, which is the SDK's
+	// Simulate. Policy.Test needs a named policy and cannot serve it.
+	var contextMap map[string]interface{}
+	if len(req.Context) > 0 {
+		contextMap = make(map[string]interface{}, len(req.Context))
+		for k, v := range req.Context {
+			contextMap[k] = v
+		}
 	}
 	subject := iamsdk.Subject{
 		ID:       req.SubjectID,
@@ -427,32 +448,40 @@ func (a *QuicBaaSIAMAdapter) TestPolicy(ctx context.Context, tenantID string, re
 		Roles:    req.Roles,
 		Groups:   req.Groups,
 	}
-	sdkReq := &iamsdk.TestPolicyRequest{
-		TestCases: []iamsdk.TestCase{{
-			Name:     "rest-inline",
-			Subject:  subject,
-			Action:   req.Action,
-			Resource: req.Resource,
-			Context:  contextMap,
-		}},
+	if len(req.Attributes) > 0 {
+		subject.Attributes = make(map[string]interface{}, len(req.Attributes))
+		for k, v := range req.Attributes {
+			subject.Attributes[k] = v
+		}
 	}
-	resp, err := a.client.Policy().Test(ctx, tenantID, sdkReq)
+	resp, err := a.client.Policy().Simulate(ctx, tenantID, &iamsdk.SimulateRequest{
+		Subject:  subject,
+		Action:   req.Action,
+		Resource: req.Resource,
+		Context:  contextMap,
+	})
 	if err != nil {
 		return nil, err
 	}
-	return testPolicyResponseFromSDK(resp), nil
+	return testPolicyResponseFromSimulate(resp), nil
 }
 
-// testPolicyResponseFromSDK maps the inline case's result to the REST shape.
-// Allowed is the actual authorization decision: the SDK's Passed only says
-// whether the case met its expected result, so a passing deny case is denied.
-func testPolicyResponseFromSDK(resp *iamsdk.TestPolicyResponse) *TestPolicyResponse {
+// testPolicyResponseFromSimulate maps the SDK's simulation result to the REST
+// shape: the first matched policy and rule name the decision's source. A nil
+// response is a denial with no match.
+func testPolicyResponseFromSimulate(resp *iamsdk.SimulateResponse) *TestPolicyResponse {
 	out := &TestPolicyResponse{}
-	if len(resp.Results) > 0 {
-		first := resp.Results[0]
-		out.MatchedRule = first.MatchedRule
-		out.Allowed = first.ActualResult == iamsdk.EffectAllow
+	if resp == nil {
+		return out
 	}
+	out.Allowed = resp.Allowed
+	if len(resp.MatchedPolicies) > 0 {
+		out.MatchedPolicy = resp.MatchedPolicies[0]
+	}
+	if len(resp.MatchedRules) > 0 {
+		out.MatchedRule = resp.MatchedRules[0]
+	}
+	out.EvaluationTimeNs = resp.EvaluationTimeNs
 	return out
 }
 
