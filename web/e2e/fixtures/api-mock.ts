@@ -866,6 +866,172 @@ export async function mockInvitationValidation(
   });
 }
 
+// =============================================================================
+// EAB credentials (#1667)
+// =============================================================================
+
+/** The REST handlers serialize protobuf enum names, so the mock does too. */
+export type MockEABStatus =
+  | 'EAB_CREDENTIAL_STATUS_ACTIVE'
+  | 'EAB_CREDENTIAL_STATUS_REVOKED'
+  | 'EAB_CREDENTIAL_STATUS_EXPIRED'
+  | 'EAB_CREDENTIAL_STATUS_USED';
+
+export interface MockEABCredential {
+  /** uint64 credential ID; protojson serializes it as a decimal string. */
+  id: string;
+  keyId: string;
+  /** uint64 device profile ID, a decimal string like id. */
+  profileId: string;
+  tenantId: string;
+  expiresAt: string;
+  status: MockEABStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EABApiCall {
+  method: string;
+  path: string;
+  body: unknown;
+}
+
+export function createMockEABCredential(
+  overrides: Partial<MockEABCredential> = {}
+): MockEABCredential {
+  const id = overrides.id ?? '1';
+  return {
+    id,
+    keyId: `kid-${id}`,
+    profileId: '1',
+    tenantId: 'tenant-test-123',
+    expiresAt: '2030-01-01T00:00:00Z',
+    status: 'EAB_CREDENTIAL_STATUS_ACTIVE',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    ...overrides,
+  };
+}
+
+/** A 1x1 PNG, base64 encoded, for the QR code response. */
+const MOCK_QR_PNG =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+
+/**
+ * Mock the EAB credential REST API (/api/v1/eab/credentials...). The mock
+ * keeps the credentials in memory so a mutation shows up on the next list,
+ * and records every call for assertions.
+ */
+export async function mockEABApi(
+  page: Page,
+  initial: MockEABCredential[] = [createMockEABCredential()]
+): Promise<{
+  calls: EABApiCall[];
+  getCredentials: () => MockEABCredential[];
+}> {
+  let credentials = initial.map((c) => ({ ...c }));
+  // BigInt keeps timestamp-sized ids above Number.MAX_SAFE_INTEGER exact.
+  let nextId =
+    credentials.reduce((max, c) => (BigInt(c.id) > max ? BigInt(c.id) : max), BigInt(0)) +
+    BigInt(1);
+  const calls: EABApiCall[] = [];
+  const ok = { success: true, message: 'ok' };
+
+  const json = (route: Route, status: number, body: unknown) =>
+    route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+  const notFound = (route: Route) =>
+    json(route, 404, { message: 'credential not found', code: 'NOT_FOUND' });
+
+  await page.route(
+    (url) => url.pathname.includes('/api/v1/eab/credentials'),
+    async (route: Route, request: Request) => {
+      const method = request.method();
+      const url = new URL(request.url());
+      const path = url.pathname
+        .replace(/\/$/, '')
+        .replace(/^.*\/api\/v1\/eab\/credentials/, '');
+      let body: unknown = null;
+      try {
+        body = request.postDataJSON();
+      } catch {
+        body = request.postData();
+      }
+      calls.push({ method, path, body });
+
+      const byId = (raw: string) => credentials.find((c) => c.id === raw);
+      let m: RegExpMatchArray | null;
+
+      if (method === 'GET' && path === '') {
+        return json(route, 200, {
+          credentials,
+          pagination: {
+            page: 1,
+            pageSize: credentials.length,
+            totalItems: credentials.length,
+            totalPages: 1,
+          },
+        });
+      }
+      if (method === 'POST' && path === '') {
+        const req = (body ?? {}) as { profileId?: string; tenantId?: string };
+        const cred = createMockEABCredential({
+          id: (nextId++).toString(),
+          profileId: req.profileId ?? '0',
+          tenantId: req.tenantId ?? '',
+        });
+        cred.keyId = `kid-created-${cred.id}`;
+        credentials.push(cred);
+        return json(route, 200, { status: ok, credential: { ...cred, hmacKey: 'hmac-secret-value' } });
+      }
+      if (method === 'POST' && path === '/validate') {
+        const req = (body ?? {}) as { keyId?: string; hmacKey?: string };
+        const valid = req.hmacKey === 'good-hmac' && credentials.some((c) => c.keyId === req.keyId);
+        return json(route, 200, { status: ok, valid });
+      }
+      if (method === 'POST' && path === '/cleanup') {
+        const before = credentials.length;
+        credentials = credentials.filter((c) => c.status !== 'EAB_CREDENTIAL_STATUS_EXPIRED');
+        return json(route, 200, { status: ok, deletedCount: before - credentials.length });
+      }
+      if (method === 'GET' && (m = path.match(/^\/key\/([^/]+)$/))) {
+        const keyId = decodeURIComponent(m[1]);
+        const cred = credentials.find((c) => c.keyId === keyId);
+        return cred ? json(route, 200, { credential: cred }) : notFound(route);
+      }
+      if ((m = path.match(/^\/(\d+)(\/[a-z-]+)?$/))) {
+        const cred = byId(m[1]);
+        if (!cred) return notFound(route);
+        const action = m[2] ?? '';
+        if (method === 'GET' && action === '') return json(route, 200, { credential: cred });
+        if (method === 'DELETE' && action === '') {
+          credentials = credentials.filter((c) => c.id !== cred.id);
+          return json(route, 200, { status: ok });
+        }
+        if (method === 'POST' && action === '/revoke') {
+          cred.status = 'EAB_CREDENTIAL_STATUS_REVOKED';
+          return json(route, 200, { status: ok });
+        }
+        if (method === 'POST' && action === '/used') {
+          cred.status = 'EAB_CREDENTIAL_STATUS_USED';
+          return json(route, 200, { status: ok });
+        }
+        if (method === 'GET' && action === '/qrcode') {
+          return json(route, 200, { qrCode: MOCK_QR_PNG, format: 'png', size: 256 });
+        }
+        if (method === 'GET' && action === '/url') {
+          return json(route, 200, {
+            url: `/enroll?kid=${encodeURIComponent(cred.keyId)}`,
+            timestamp: '2026-01-01T00:00:00Z',
+          });
+        }
+      }
+      return json(route, 404, { message: `unmocked EAB route ${method} ${path}` });
+    }
+  );
+
+  return { calls, getCredentials: () => credentials.map((c) => ({ ...c })) };
+}
+
 // ============================================================================
 // Overlay API mock (#1722): VTEPs, VNIs, tunnels, tunnel stats, MAC forget
 // ============================================================================

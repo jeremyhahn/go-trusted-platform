@@ -22,14 +22,14 @@ export type EABCredentialStatus = 'ACTIVE' | 'REVOKED' | 'EXPIRED' | 'USED';
  * EAB credential
  */
 export interface EABCredential {
-  /** Unique identifier */
-  id: number;
+  /** Unique identifier (uint64, serialized by protojson as a decimal string) */
+  id: string;
   /** Key identifier for ACME binding */
   keyId: string;
   /** HMAC key for signing */
   hmacKey: string;
-  /** Associated profile ID */
-  profileId: number;
+  /** Associated profile ID (uint64, serialized by protojson as a decimal string) */
+  profileId: string;
   /** Tenant identifier */
   tenantId: string;
   /** Expiration timestamp */
@@ -46,12 +46,12 @@ export interface EABCredential {
  * EAB credential summary (without sensitive HMAC key)
  */
 export interface EABCredentialSummary {
-  /** Unique identifier */
-  id: number;
+  /** Unique identifier (uint64, serialized by protojson as a decimal string) */
+  id: string;
   /** Key identifier for ACME binding */
   keyId: string;
-  /** Associated profile ID */
-  profileId: number;
+  /** Associated profile ID (uint64, serialized by protojson as a decimal string) */
+  profileId: string;
   /** Tenant identifier */
   tenantId: string;
   /** Expiration timestamp */
@@ -72,8 +72,8 @@ export interface EABCredentialSummary {
  * Create EAB credential request
  */
 export interface CreateEABCredentialRequest {
-  /** Profile ID to associate with */
-  profileId: number;
+  /** Profile ID to associate with (uint64, serialized by protojson as a decimal string) */
+  profileId: string;
   /** Tenant identifier */
   tenantId: string;
   /** Expiration time in seconds (optional) */
@@ -84,8 +84,8 @@ export interface CreateEABCredentialRequest {
  * Get EAB credential request
  */
 export interface GetEABCredentialRequest {
-  /** Credential ID */
-  id: number;
+  /** Credential ID (uint64, serialized by protojson as a decimal string) */
+  id: string;
 }
 
 /**
@@ -100,8 +100,8 @@ export interface GetEABCredentialByKeyIdRequest {
  * List EAB credentials request
  */
 export interface ListEABCredentialsRequest {
-  /** Filter by profile ID */
-  profileId?: number;
+  /** Filter by profile ID (uint64, serialized by protojson as a decimal string) */
+  profileId?: string;
   /** Filter by tenant ID */
   tenantId?: string;
   /** Filter by status */
@@ -116,8 +116,8 @@ export interface ListEABCredentialsRequest {
  * Revoke EAB credential request
  */
 export interface RevokeEABCredentialRequest {
-  /** Credential ID */
-  id: number;
+  /** Credential ID (uint64, serialized by protojson as a decimal string) */
+  id: string;
 }
 
 /**
@@ -134,16 +134,16 @@ export interface ValidateEABCredentialRequest {
  * Delete EAB credential request
  */
 export interface DeleteEABCredentialRequest {
-  /** Credential ID */
-  id: number;
+  /** Credential ID (uint64, serialized by protojson as a decimal string) */
+  id: string;
 }
 
 /**
  * Get EAB QR code request
  */
 export interface GetEABQRCodeRequest {
-  /** Credential ID */
-  id: number;
+  /** Credential ID (uint64, serialized by protojson as a decimal string) */
+  id: string;
   /** QR code size in pixels (optional) */
   size?: number;
 }
@@ -152,8 +152,8 @@ export interface GetEABQRCodeRequest {
  * Get enrollment URL request
  */
 export interface GetEnrollmentURLRequest {
-  /** Credential ID */
-  id: number;
+  /** Credential ID (uint64, serialized by protojson as a decimal string) */
+  id: string;
 }
 
 // =============================================================================
@@ -245,7 +245,8 @@ export interface ValidateEABCredentialResponse {
   /** Validation details */
   details?: {
     keyId: string;
-    profileId: number;
+    /** Profile ID (uint64, serialized by protojson as a decimal string) */
+    profileId: string;
     tenantId: string;
     expiresAt: string;
     status: EABCredentialStatus;
@@ -280,4 +281,32 @@ export interface GetEnrollmentURLResponse {
   url: string;
   /** URL expiration timestamp */
   expiresAt: string;
+}
+
+/**
+ * Mark EAB credential used response
+ */
+export interface MarkEABCredentialUsedResponse {
+  /** Operation status */
+  status: EABStatus;
+  /** Response timestamp */
+  timestamp?: string;
+}
+
+/**
+ * Cleanup expired EAB credentials request
+ */
+export interface CleanupExpiredEABCredentialsRequest {
+  /** Tenant to clean up (empty means all tenants) */
+  tenantId?: string;
+}
+
+/**
+ * Cleanup expired EAB credentials response
+ */
+export interface CleanupExpiredEABCredentialsResponse {
+  /** Number of credentials deleted */
+  deletedCount: number;
+  /** Operation status */
+  status: EABStatus;
 }
