@@ -320,8 +320,8 @@ func TestShippedTemplatesNameTheirNTSUpstream(t *testing.T) {
 func TestShippedControlPlanesServeEveryNTSNameTheirNodesDial(t *testing.T) {
 	// Group the templates by board directory: a board's node templates are
 	// served by that board's control-plane template. A board directory with
-	// no time server of its own (dedicated/raspberrypi/rpi5, whose nodes
-	// join a control plane on another board) is served by any control plane of its
+	// no time server of its own (none ships one now: rpi5 gained its own
+	// control-plane template in #1701) is served by any control plane of its
 	// profile, so every one of them must list the names its nodes dial.
 	hasServer := map[string]bool{}
 	served := map[string]map[string]struct{}{}
