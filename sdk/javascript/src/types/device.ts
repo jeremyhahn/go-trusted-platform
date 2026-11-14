@@ -887,8 +887,10 @@ export interface UpdateDeviceTemplateRequest {
   role?: DeviceRole;
   /** Full platform config (app.App as JSON) */
   config?: Record<string, unknown>;
-  /** Profile match rules */
-  matchRules?: ProfileMatchRules;
+  /** Profile match rules (wire name `match_rules`) */
+  match_rules?: ProfileMatchRules;
+  /** Tenant ID; PUT replaces the stored template, so send it back unchanged */
+  tenant_id?: string;
 }
 
 /**
@@ -940,8 +942,8 @@ export interface FindConfigForDeviceRequest {
  * Assign profile to device request
  */
 export interface AssignProfileToDeviceRequest {
-  /** Profile ID */
-  profileId: number;
+  /** Profile ID, a decimal string: generated ids exceed 2^53 */
+  profileId: string;
   /** Endorsement key serial number */
   ekSerial?: string;
   /** MAC address */

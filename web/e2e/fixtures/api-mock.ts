@@ -2077,6 +2077,26 @@ export async function mockOverlayApi(
  * One recorded call to the vTPM bundle runtime API.
  */
 export interface VTPMRuntimeCall {
+// Device templates and profile assignment (#1737)
+
+export interface DeviceTemplateMock {
+  id: string;
+  tenant_id: string;
+  name: string;
+  description: string;
+  role: string;
+  config?: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DeviceProfileMock {
+  id: string;
+  name: string;
+  role: string;
+}
+
+export interface RecordedRequest {
   method: string;
   path: string;
   query: string;
@@ -2609,4 +2629,114 @@ export async function mockIAMPolicyAppApi(
   });
 
   return state;
+export function createMockDeviceTemplate(
+  overrides: Partial<DeviceTemplateMock> = {}
+): DeviceTemplateMock {
+  const now = new Date().toISOString();
+  return {
+    id: '42',
+    tenant_id: 'tenant-abc-123',
+    name: 'edge-node',
+    description: 'Edge node baseline',
+    role: 'edge',
+    config: {},
+    created_at: now,
+    updated_at: now,
+    ...overrides,
+  };
+}
+
+/**
+ * Mock the device template and profile-assignment routes under the
+ * singular `/api/v1/device` prefix:
+ * - GET/POST /device/templates, GET/PUT/DELETE /device/templates/{id}
+ * - POST /device/templates/{id}/create-profile
+ * - GET /device/profiles/find-config
+ * - POST /device/profiles/{id}/assign and /device/profiles/{id}/unassign
+ *
+ * Every request the mock answers is recorded, so a test can assert the
+ * method, path, query and body the page sent.
+ */
+export async function mockDeviceTemplateApi(
+  page: Page,
+  config: {
+    templates?: DeviceTemplateMock[];
+    profile?: DeviceProfileMock;
+    findConfigResult?: DeviceProfileMock | null;
+  } = {}
+): Promise<{ requests: RecordedRequest[]; templates: () => DeviceTemplateMock[] }> {
+  let templates = [...(config.templates ?? [createMockDeviceTemplate()])];
+  const profile = config.profile ?? { id: '7', name: 'edge-node-profile', role: 'edge' };
+  const findConfigResult = config.findConfigResult === undefined ? profile : config.findConfigResult;
+  const requests: RecordedRequest[] = [];
+
+  const json = (route: Route, status: number, body: unknown) =>
+    route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+
+  await page.route(
+    (url) => url.pathname.startsWith('/api/v1/device/'),
+    async (route: Route, request: Request) => {
+      const url = new URL(request.url());
+      const path = url.pathname.replace(/\/+$/, '');
+      const method = request.method();
+      let body: unknown = undefined;
+      try {
+        body = request.postDataJSON();
+      } catch {
+        body = request.postData();
+      }
+      requests.push({ method, path, query: url.search, body });
+
+      const templateMatch = path.match(/^\/api\/v1\/device\/templates\/([^/]+)(\/create-profile)?$/);
+      const profileMatch = path.match(/^\/api\/v1\/device\/profiles\/([^/]+)\/(assign|unassign)$/);
+
+      if (path === '/api/v1/device/templates') {
+        if (method === 'GET') {
+          return json(route, 200, { templates, pagination: { total: templates.length } });
+        }
+        if (method === 'POST') {
+          const req = (body ?? {}) as Partial<DeviceTemplateMock>;
+          const created = createMockDeviceTemplate({ ...req, id: String(100 + templates.length) });
+          templates = [...templates, created];
+          return json(route, 201, created);
+        }
+      }
+      if (templateMatch && templateMatch[2]) {
+        if (method === 'POST') {
+          return json(route, 201, profile);
+        }
+      } else if (templateMatch) {
+        const id = templateMatch[1];
+        const found = templates.find((t) => t.id === id);
+        if (!found) {
+          return route.fulfill({
+            status: 404,
+            contentType: 'application/json',
+            body: errorEnvelope({ error: 'template not found', status: 404 }),
+          });
+        }
+        if (method === 'GET') {
+          return json(route, 200, found);
+        }
+        if (method === 'PUT') {
+          const updated = { ...found, ...((body ?? {}) as Partial<DeviceTemplateMock>), id };
+          templates = templates.map((t) => (t.id === id ? updated : t));
+          return json(route, 200, updated);
+        }
+        if (method === 'DELETE') {
+          templates = templates.filter((t) => t.id !== id);
+          return route.fulfill({ status: 204, body: '' });
+        }
+      }
+      if (path === '/api/v1/device/profiles/find-config' && method === 'GET') {
+        return json(route, 200, findConfigResult);
+      }
+      if (profileMatch && method === 'POST') {
+        return json(route, 200, { ...profile, id: profileMatch[1] });
+      }
+      return route.fallback();
+    }
+  );
+
+  return { requests, templates: () => [...templates] };
 }

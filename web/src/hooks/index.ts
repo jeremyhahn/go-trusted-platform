@@ -135,6 +135,7 @@ export { useSwitchPorts } from './use-switch-ports';
 export type { UseSwitchPortsResult } from './use-switch-ports';
 export { usePolicyTools, splitList } from './use-policy-tools';
 export type { ValidatePolicyInput, TestPolicyInput } from './use-policy-tools';
+export { useDeviceTemplateActions } from './use-device-template-actions';
 export type {
   ReportedGateway,
   UseReportedGatewaysOptions,
