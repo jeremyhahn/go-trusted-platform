@@ -56,7 +56,20 @@ type RestHandler struct {
 	// When nil, /login fails closed with ErrLoginUnavailable rather than
 	// minting an unverified local JWT.
 	loginDriver *login.Driver
+	// principals reads a backbone session's principal from its IAM
+	// tenant, the one user store (#646). When nil a backbone session
+	// cannot be refreshed: refresh fails closed rather than falling back
+	// to the platform user store.
+	principals PrincipalResolver
 	TokenHandler
+}
+
+// PrincipalResolver reads the principal a backbone session names from the
+// IAM tenant the session landed in.
+type PrincipalResolver interface {
+	// Principal returns the roles subject holds in tenantID's IAM tenant
+	// now. found is false when that tenant holds no such user.
+	Principal(ctx context.Context, tenantID, subject string) (roles []string, found bool, err error)
 }
 
 // Instantiate a new JsonWebTokenService
@@ -78,6 +91,12 @@ func NewRestHandler(
 // by the handler registry at boot when the SDK AuthService is available.
 func (handler *RestHandler) SetLoginDriver(driver *login.Driver) {
 	handler.loginDriver = driver
+}
+
+// SetPrincipalResolver wires the IAM read a backbone session refreshes
+// from. Wired by the handler registry when an IAM client is available.
+func (handler *RestHandler) SetPrincipalResolver(principals PrincipalResolver) {
+	handler.principals = principals
 }
 
 // Creates a new web service session from the parsed JWT
@@ -188,6 +207,15 @@ func (handler *RestHandler) RefreshToken(w http.ResponseWriter, r *http.Request)
 	//
 	// The store is the authority on current authorization, so a refresh
 	// picks up a revocation and fails closed when the user is gone.
+	//
+	// A backbone session (no platform uid) names a principal in its IAM
+	// tenant, so it refreshes from IAM and stays a backbone session: its
+	// roles are the ones IAM holds now, as at login, never the platform
+	// user store's (#646: one user store).
+	if claims.UID == "" {
+		handler.refreshBackboneSession(w, r, claims)
+		return
+	}
 	user, err := handler.sessionUser(r.Context(), claims)
 	if err != nil {
 		handler.logger.Error(err, "rest/jwt: refresh could not resolve the user")
@@ -203,6 +231,44 @@ func (handler *RestHandler) RefreshToken(w http.ResponseWriter, r *http.Request)
 
 	handler.logger.Debugf("rest/jwt: refreshed token: %s", tokenString)
 
+	handler.responseWriter.Success200(w, r, tokenString)
+}
+
+// refreshBackboneSession re-issues a backbone session from the principal
+// its IAM tenant holds now. It fails closed when no IAM read is wired, when
+// the session names no principal or tenant, and when the tenant no longer
+// holds the principal.
+func (handler *RestHandler) refreshBackboneSession(w http.ResponseWriter, r *http.Request, claims *TokenClaims) {
+	if handler.principals == nil {
+		handler.logger.Warn("rest/jwt: backbone session refresh refused: no IAM principal resolver is wired")
+		handler.responseWriter.Error401(w, r, ErrInvalidToken)
+		return
+	}
+	if claims.Subject == "" || claims.TenantID == "" {
+		handler.responseWriter.Error401(w, r, ErrInvalidToken)
+		return
+	}
+	roles, found, err := handler.principals.Principal(r.Context(), claims.TenantID, claims.Subject)
+	if err != nil {
+		handler.logger.Error(err, "rest/jwt: refresh could not resolve the backbone principal")
+		handler.responseWriter.Error401(w, r, ErrInvalidToken)
+		return
+	}
+	if !found {
+		handler.logger.Debugf("rest/jwt: refresh refused: tenant %s holds no principal %s",
+			claims.TenantID, claims.Subject)
+		handler.responseWriter.Error401(w, r, ErrInvalidToken)
+		return
+	}
+	tokenString, _, err := handler.jwtService.IssueSession(&quicbaas.Identity{
+		Subject:  claims.Subject,
+		TenantID: claims.TenantID,
+		Roles:    roles,
+	})
+	if err != nil {
+		handler.responseWriter.Error500(w, r, err)
+		return
+	}
 	handler.responseWriter.Success200(w, r, tokenString)
 }
 

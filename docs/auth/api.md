@@ -209,8 +209,11 @@ user (#642). Read it with `TokenClaims.PlatformUserID()` or
 `strconv.ParseUint(uid, 10, 64)`. A missing or non-decimal `uid` is refused:
 `/api/v1/login/refresh` answers 401, session creation answers 400, and the
 tenant middleware answers 401 (`ErrMissingUserClaim`). A backbone-issued
-session carries no `uid`, so it is refused the same way and renews by logging
-in again ([every such site](architecture.md#why-the-platform-still-mints-the-bearer)
+session carries no `uid`: `/api/v1/login/refresh` re-reads its principal from
+the IAM tenant it landed in and answers a new backbone session carrying the
+roles IAM holds now, or 401 when that tenant no longer holds the principal,
+IAM cannot be read, or no IAM client is wired. It never reads the platform user
+store ([every such site](architecture.md#why-the-platform-still-mints-the-bearer)
 is listed in the architecture).
 
 ### Registration model — iam.self_service_registration

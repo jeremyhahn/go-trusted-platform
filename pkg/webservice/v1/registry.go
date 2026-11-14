@@ -1328,14 +1328,26 @@ func (registry *HandlerRegistry) JSONWebTokenHandler() jwt.TokenHandler {
 	if err != nil {
 		registry.params.Logger.FatalError(err)
 	}
+	rh, ok := handler.(*jwt.RestHandler)
+	if !ok {
+		return handler
+	}
 	// Wire the unified login driver so /login authenticates through the
 	// canonical ceremony and returns the session it issued. When the SDK
 	// AuthService is unavailable the handler fails closed rather than
 	// minting an unverified local JWT.
 	if driver := registry.LoginDriver(); driver != nil {
-		if rh, ok := handler.(*jwt.RestHandler); ok {
-			rh.SetLoginDriver(driver)
+		rh.SetLoginDriver(driver)
+	}
+	// A backbone session refreshes from the IAM tenant it landed in, the
+	// same store its login read its roles from (#646). Without an IAM
+	// client such a session is not refreshed.
+	if registry.params.IAMClient != nil {
+		resolver, err := restiam.NewWorkspaceRoleResolver(registry.params.IAMClient)
+		if err != nil {
+			registry.params.Logger.FatalError(err)
 		}
+		rh.SetPrincipalResolver(resolver)
 	}
 	return handler
 }

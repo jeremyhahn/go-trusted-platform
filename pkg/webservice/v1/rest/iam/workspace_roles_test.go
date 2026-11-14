@@ -92,6 +92,53 @@ func TestWorkspaceRoleResolverReturnsALookupFailure(t *testing.T) {
 	}
 }
 
+// TestWorkspaceRoleResolverPrincipalTellsAGoneUserFromOneWithoutRoles: a
+// session refresh fails closed on a user IAM no longer holds, so Principal
+// must tell that apart from a held user with no roles (#646).
+func TestWorkspaceRoleResolverPrincipalTellsAGoneUserFromOneWithoutRoles(t *testing.T) {
+	t.Parallel()
+	cause := errors.New("iam unavailable")
+	users := map[string]*iamsdk.User{
+		"admin@platform": {Email: "admin@platform", Roles: []string{"admin"}},
+		"plain@platform": {Email: "plain@platform"},
+	}
+	client := &mockIAMClient{
+		getByEmailFn: func(_ context.Context, tenantID, email string) (*iamsdk.User, error) {
+			if email == "broken@platform" {
+				return nil, cause
+			}
+			if user, ok := users[email]; ok && tenantID == "workspace-a" {
+				return user, nil
+			}
+			return nil, sdkerrors.NewNotFound("iam.user.get_by_email", "user not found")
+		},
+	}
+	resolver, err := NewWorkspaceRoleResolver(client)
+	if err != nil {
+		t.Fatalf("NewWorkspaceRoleResolver: %v", err)
+	}
+	ctx := context.Background()
+
+	roles, found, err := resolver.Principal(ctx, "workspace-a", "admin@platform")
+	if err != nil || !found || len(roles) != 1 || roles[0] != "admin" {
+		t.Fatalf("held admin: got roles=%v found=%v err=%v", roles, found, err)
+	}
+	roles, found, err = resolver.Principal(ctx, "workspace-a", "plain@platform")
+	if err != nil || !found || len(roles) != 0 {
+		t.Fatalf("held user without roles: got roles=%v found=%v err=%v", roles, found, err)
+	}
+	for _, gone := range [][2]string{{"workspace-a", "gone@platform"}, {"workspace-b", "admin@platform"}} {
+		roles, found, err = resolver.Principal(ctx, gone[0], gone[1])
+		if err != nil || found || roles != nil {
+			t.Fatalf("%s in %s is not held: got roles=%v found=%v err=%v", gone[1], gone[0], roles, found, err)
+		}
+	}
+	roles, found, err = resolver.Principal(ctx, "workspace-a", "broken@platform")
+	if !errors.Is(err, cause) || found || roles != nil {
+		t.Fatalf("a failed lookup must be returned and grant nothing: got roles=%v found=%v err=%v", roles, found, err)
+	}
+}
+
 func TestNewWorkspaceRoleResolverRefusesANilClient(t *testing.T) {
 	t.Parallel()
 	resolver, err := NewWorkspaceRoleResolver(nil)

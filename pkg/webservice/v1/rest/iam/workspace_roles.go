@@ -60,3 +60,21 @@ func (r *WorkspaceRoleResolver) Roles(ctx context.Context, tenantID, subject str
 	}
 	return append([]string(nil), user.Roles...), nil
 }
+
+// Principal returns the roles subject holds in tenantID's IAM tenant, and
+// whether that tenant holds subject at all. Unlike Roles it tells a user
+// IAM no longer holds from one with no roles, so a session refresh can fail
+// closed on the first (#646).
+func (r *WorkspaceRoleResolver) Principal(ctx context.Context, tenantID, subject string) ([]string, bool, error) {
+	user, err := r.client.GetUserByEmail(ctx, tenantID, subject)
+	if sdkerrors.IsNotFound(err) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if user == nil {
+		return nil, false, nil
+	}
+	return append([]string(nil), user.Roles...), true, nil
+}

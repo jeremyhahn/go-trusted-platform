@@ -269,8 +269,8 @@ two stores converge (phase 3 of #644):
 
 | Site | Backbone-issued session |
 |------|-------------------------|
-| `/login/refresh` — `jwt.RestHandler.RefreshToken` | `401 ErrInvalidToken`; the user store is not consulted. A refresh mints from the *current* authorization, and copying the old token's roles and tenant forward would roll a revoked privilege forward, so the client renews by running the login ceremony again. Test: `TestHandlerRefreshToken_RefusesABackboneSession` |
-| Session creation — `jwt.RestHandler.CreateSession` | `400 ErrInvalidUserClaim`, no session. Test: `TestCreateSession_RefusesABackboneSession` |
+| `/login/refresh` — `jwt.RestHandler.RefreshToken` | Refreshed from IAM, never the platform user store: the principal is re-read in the session's IAM tenant (`rest/iam.WorkspaceRoleResolver.Principal`) and a new backbone session carries the roles IAM holds now, so a revocation since login is picked up. `401 ErrInvalidToken` when the tenant no longer holds the principal, IAM cannot be read, or no IAM client is wired. Tests: `TestHandlerRefreshToken_RefreshesABackboneSessionFromIAM`, `TestHandlerRefreshToken_BackboneSessionPicksUpAnIAMRevocation`, `TestHandlerRefreshToken_BackboneSessionFailsClosed` |
+| Session creation — `jwt.RestHandler.CreateSession` | Still resolves the subject in the platform user store by email (#642) and refuses a user outside the session's tenant (`400`); it moves to IAM with the rest of phase 3. Test: `TestCreateSession_BackboneSessionRefusesAnotherTenantsUser` |
 | `POST /api/v1/invitations` — `rest/invitation` `resolveUserID` | Resolves no inviter (0) when the body names none; `InvitationService.Create` refuses it (`ErrInvalidInvitation`, "inviter ID is required") rather than recording an invitation from nobody. The tenant is the session's, which is now the workspace |
 | Tenant middleware — `middleware/tenant` `ExtractTenantContext` | `401 ErrMissingUserClaim`. Nothing constructs it (`NewMiddleware`) outside its tests today |
 | Legacy invitation handler — `webservice/v1/invitation` | `401` "missing user context". Nothing outside its tests imports the package today |
