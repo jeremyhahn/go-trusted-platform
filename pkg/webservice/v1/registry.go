@@ -810,6 +810,7 @@ type RestHandlerRegistry interface {
 	PlatformRestRouter() *platform.PlatformRouter
 	PXEServiceServer() platformv1.PXEServiceServer
 	PXEWebhookEnabled() bool
+	PXEWebhookSecret() string
 	NTPServiceServer() platformv1.NTPServiceServer
 	VPNServiceServer() platformv1.VPNServiceServer
 	AppServiceServers() restapi.AppServiceServers
@@ -1032,12 +1033,16 @@ type RegistryParams struct {
 	InvitationServiceServer  platformv1.InvitationServiceServer
 	OverlayServiceServer     platformv1.OverlayServiceServer
 	PXEServiceServer         platformv1.PXEServiceServer
-	// PXEWebhookEnabled is pxe.ServiceConfig.WebhookEnabled: it mounts the
-	// unauthenticated POST /pxe/webhook/complete (#238). Nothing in the
-	// daemon sets it today, so the route is not served.
+	// PXEWebhookEnabled is pxe.ServiceConfig.WebhookEnabled: it mounts
+	// POST /pxe/webhook/complete. Nothing in the daemon sets it today, so
+	// the route is not served.
 	PXEWebhookEnabled bool
-	NTPServiceServer  platformv1.NTPServiceServer
-	VPNServiceServer  platformv1.VPNServiceServer
+	// PXEWebhookSecret is pxe.ServiceConfig.WebhookSecret: the HMAC key the
+	// webhook verifies every report with (#240). Empty, an enabled webhook
+	// refuses every report.
+	PXEWebhookSecret string
+	NTPServiceServer platformv1.NTPServiceServer
+	VPNServiceServer platformv1.VPNServiceServer
 	// AppServiceServers are the daemon's Cache, Scheduler, Messaging and
 	// ObjectStorage servers, the instances behind every other transport.
 	AppServiceServers restapi.AppServiceServers
@@ -2102,6 +2107,12 @@ func (registry *HandlerRegistry) PXEServiceServer() platformv1.PXEServiceServer 
 // install-completion webhook (pxe.ServiceConfig.WebhookEnabled).
 func (registry *HandlerRegistry) PXEWebhookEnabled() bool {
 	return registry.params.PXEWebhookEnabled
+}
+
+// PXEWebhookSecret is the HMAC key of the PXE install-completion webhook
+// (pxe.ServiceConfig.WebhookSecret).
+func (registry *HandlerRegistry) PXEWebhookSecret() string {
+	return registry.params.PXEWebhookSecret
 }
 
 // NTPServiceServer returns the in-process NTPService gRPC implementation, or nil.

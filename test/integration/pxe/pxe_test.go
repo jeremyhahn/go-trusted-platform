@@ -28,11 +28,8 @@
 package pxe
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"os"
-	"os/exec"
 	"testing"
 	"time"
 
@@ -85,11 +82,11 @@ func testPXEProtocol(t *testing.T, ctx context.Context, cmd PXECommands) {
 	// Generate unique test prefix for this protocol run
 	prefix := fmt.Sprintf("%s-%d", cmd.Name(), time.Now().Unix())
 
-	// The PXE device lifecycle is API-only (docs/daemon/cli.md:223), so the
-	// CLI leg asserts the documented refusal instead of the device flow. On
+	// platformctl pxe covers six verbs; registration and state writes stay
+	// API-only, so the CLI leg seeds through gRPC and drives those six. On
 	// every other transport the assertions below are unchanged.
 	if cliAdapter, ok := cmd.(*CLIAdapter); ok {
-		assertPXECLIGap(t, cliAdapter)
+		testPXECLI(t, ctx, cliAdapter, prefix)
 		return
 	}
 
@@ -129,71 +126,157 @@ func testPXEProtocol(t *testing.T, ctx context.Context, cmd PXECommands) {
 // CLI Declared Gap: the PXE device lifecycle is API-only
 // =============================================================================
 
-// runPXECLIBinaryOnce executes one real `platformctl pxe ...` command. The
-// subcommand tree past `pxe` is irrelevant: the refusal happens at the
-// group level, because there is no `pxe` group (docs/daemon/cli.md:223).
-// It returns the process error and stderr so the caller can assert either
-// the documented refusal or its flip.
-func runPXECLIBinaryOnce(t *testing.T, ctx context.Context) (error, string) {
+// testPXECLI is the CLI leg of TestPXEMultiProtocol. platformctl pxe has six
+// verbs (docs/provisioning/cli.md §5): get, list, authorize, quarantine,
+// retry and events, and every assertion on them goes through the real
+// binary. Registration and raw state writes stay API-only, so devices are
+// seeded through the gRPC adapter. The verbs with no CLI counterpart assert
+// their typed refusal (CA m588 (1)): green on declared behaviour, red when
+// the gap closes, never skipped.
+func testPXECLI(t *testing.T, ctx context.Context, cli *CLIAdapter, prefix string) {
 	t.Helper()
-
-	path := os.Getenv(EnvPlatformctlBinary)
-	if path == "" {
-		path = DefaultPlatformctlBinary
-	}
-	if _, err := exec.LookPath(path); err != nil {
-		t.Fatalf("platformctl binary %q not found: %v", path, err)
-	}
-
-	cmd := exec.CommandContext(ctx, path,
-		"--output", "json", "pxe", "device", "list")
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	return err, stderr.String()
-}
-
-// assertPXECLIGap is the CLI leg of TestPXEMultiProtocol. Per CA m588 (1),
-// a capability that is documented but missing asserts its typed refusal:
-// green on declared behavior, red when the gap closes, never skipped.
-//
-// docs/daemon/cli.md:223: "There is no `dns`, no `pxe`, no `gateway` and no
-// `cluster` top-level group ... PXE device lifecycle is API-only".
-// Option (b) of the #975 ruling kept that architecture and sent option (a),
-// building a `platformctl pxe` group, to the department as a question.
-//
-// The leg performs two assertions: it runs the real binary once and requires
-// the unknown-command refusal, and it checks that the CLI adapter's methods
-// carry the same typed refusal so a future implementation cannot fake a
-// success. When a `platformctl pxe` group is added, delete this function,
-// drop the CLIAdapter branch in testPXEProtocol, and have the adapter drive
-// the group.
-func assertPXECLIGap(t *testing.T, cli *CLIAdapter) {
-	t.Helper()
-
-	testCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	testCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
 
-	t.Run("BinaryRefusesThePXEGroup", func(t *testing.T) {
-		err, stderr := runPXECLIBinaryOnce(t, testCtx)
-		var exitErr *exec.ExitError
-		require.Error(t, err,
-			"platformctl pxe exited 0, so the documented API-only refusal "+
-				"(docs/daemon/cli.md:223) is no longer the behaviour: the "+
-				"platformctl pxe group exists, so delete this gap check and "+
-				"have the CLI adapter drive it")
-		require.ErrorAs(t, err, &exitErr, "platformctl pxe did not exit non-zero: %v", err)
-		assert.Contains(t, stderr, "unknown command",
-			"want the unknown-command refusal of the absent pxe group, got: %s", stderr)
+	seed := NewGRPCAdapter()
+	require.NoError(t, seed.Setup(testCtx), "Setup: gRPC seed adapter")
+	defer func() { _ = seed.Teardown() }()
+
+	register := func(t *testing.T, name string, states ...string) (string, RegisterDeviceOptions) {
+		t.Helper()
+		opts := DefaultRegisterOptions(prefix + "-" + name)
+		dev, err := seed.RegisterDevice(testCtx, opts)
+		require.NoError(t, err, "Setup: RegisterDevice")
+		t.Cleanup(func() { _ = CleanupDevice(testCtx, seed, dev.ID) })
+		for _, s := range states {
+			_, err := seed.UpdateDeviceState(testCtx, UpdateStateOptions{
+				DeviceID: dev.ID, State: s, Reason: "Setup progression",
+			})
+			require.NoError(t, err, "Setup: UpdateDeviceState to %s", s)
+		}
+		return dev.ID, opts
+	}
+	seededState := func(t *testing.T, id string) string {
+		t.Helper()
+		dev, err := seed.GetDevice(testCtx, id)
+		require.NoError(t, err, "GetDevice through gRPC")
+		return dev.State
+	}
+
+	t.Run("Get", func(t *testing.T) {
+		id, opts := register(t, "get")
+		got, err := cli.GetDevice(testCtx, id)
+		require.NoError(t, err, "platformctl pxe get")
+		assert.Equal(t, id, got.ID)
+		assert.Equal(t, opts.MACAddress, got.MACAddress)
+		assert.Equal(t, opts.PortID, got.PortID)
+		assert.Equal(t, StateDiscovered, got.State)
 	})
 
-	t.Run("AdapterCarriesTheTypedRefusal", func(t *testing.T) {
-		_, err := cli.ListDevices(testCtx, ListDevicesOptions{Limit: 10})
-		var notImpl ErrCLIPXENotImplemented
-		require.ErrorAs(t, err, &notImpl,
-			"want the declared API-only refusal, got: %v", err)
-		assert.Equal(t, "ListDevices", notImpl.Method, "declared method")
+	t.Run("GetNonexistentFails", func(t *testing.T) {
+		_, err := cli.GetDevice(testCtx, "nonexistent-device-id")
+		var failed ErrCLICommandFailed
+		require.ErrorAs(t, err, &failed, "platformctl pxe get of an unknown device must exit non-zero")
+	})
+
+	t.Run("List", func(t *testing.T) {
+		id, opts := register(t, "list", StateBooting)
+		byMAC, err := cli.ListDevices(testCtx, ListDevicesOptions{MACAddress: opts.MACAddress})
+		require.NoError(t, err, "platformctl pxe list --mac")
+		require.Len(t, byMAC.Devices, 1, "--mac selects the one device")
+		assert.Equal(t, id, byMAC.Devices[0].ID)
+		assert.Equal(t, StateBooting, byMAC.Devices[0].State)
+
+		byState, err := cli.ListDevices(testCtx, ListDevicesOptions{State: StateBooting, Limit: 1000})
+		require.NoError(t, err, "platformctl pxe list --state")
+		var ids []string
+		for _, d := range byState.Devices {
+			assert.Equal(t, StateBooting, d.State, "--state returns only booting devices")
+			ids = append(ids, d.ID)
+		}
+		assert.Contains(t, ids, id)
+	})
+
+	t.Run("ListRejectsOutOfRangeVLAN", func(t *testing.T) {
+		_, err := cli.ListDevices(testCtx, ListDevicesOptions{VLAN: 4095})
+		var failed ErrCLICommandFailed
+		require.ErrorAs(t, err, &failed, "--vlan 4095 must be refused")
+		assert.Contains(t, failed.Output, "out of range")
+	})
+
+	t.Run("AuthorizeEnrolledDevice", func(t *testing.T) {
+		id, _ := register(t, "authorize",
+			StateBooting, StateInstalling, StateInstallComplete, StateEnrolling)
+		_, err := seed.SetDeviceEnrolled(testCtx, id, GenerateTestCertSerial())
+		require.NoError(t, err, "Setup: SetDeviceEnrolled")
+
+		got, err := cli.AuthorizeDevice(testCtx, id, 100)
+		require.NoError(t, err, "platformctl pxe authorize of an enrolled device")
+		assert.Equal(t, StateAuthorized, got.State)
+		assert.Equal(t, uint16(100), got.TargetVLAN)
+		assert.Equal(t, StateAuthorized, seededState(t, id))
+	})
+
+	t.Run("AuthorizeRefusesUnenrolledDevice", func(t *testing.T) {
+		id, _ := register(t, "authorize-early", StateBooting)
+		_, err := cli.AuthorizeDevice(testCtx, id, 100)
+		var failed ErrCLICommandFailed
+		require.ErrorAs(t, err, &failed, "authorize of a booting device must be refused")
+		assert.Equal(t, StateBooting, seededState(t, id), "a refused authorize leaves the state")
+	})
+
+	t.Run("Quarantine", func(t *testing.T) {
+		id, _ := register(t, "quarantine", StateBooting)
+		reason := "Security policy violation"
+		got, err := cli.QuarantineDevice(testCtx, id, reason)
+		require.NoError(t, err, "platformctl pxe quarantine")
+		assert.Equal(t, StateQuarantined, got.State)
+		assert.Equal(t, reason, got.Reason)
+		assert.Equal(t, StateQuarantined, seededState(t, id))
+	})
+
+	t.Run("Retry", func(t *testing.T) {
+		id, _ := register(t, "retry", StateBooting, StateFailed)
+		got, err := cli.RetryDevice(testCtx, id)
+		require.NoError(t, err, "platformctl pxe retry")
+		assert.Equal(t, StateDiscovered, got.State)
+		assert.Greater(t, got.RetryCount, 0)
+	})
+
+	t.Run("Events", func(t *testing.T) {
+		id, _ := register(t, "events", StateBooting)
+		got, err := cli.GetEvents(testCtx, id)
+		require.NoError(t, err, "platformctl pxe events")
+		assert.Equal(t, id, got.DeviceID)
+		require.GreaterOrEqual(t, len(got.Events), 2, "register and the state change")
+		var toBooting bool
+		for _, e := range got.Events {
+			assert.Equal(t, id, e.DeviceID)
+			toBooting = toBooting || e.ToState == StateBooting
+		}
+		assert.True(t, toBooting, "an event records the move to booting")
+	})
+
+	t.Run("APIOnlyVerbsRefuse", func(t *testing.T) {
+		calls := map[string]func() error{
+			"RegisterDevice": func() error {
+				_, err := cli.RegisterDevice(testCtx, DefaultRegisterOptions(prefix+"-refused"))
+				return err
+			},
+			"GetDeviceByMAC": func() error { _, err := cli.GetDeviceByMAC(testCtx, "00:00:00:00:00:01"); return err },
+			"RemoveDevice":   func() error { _, err := cli.RemoveDevice(testCtx, "any"); return err },
+			"UpdateDeviceState": func() error {
+				_, err := cli.UpdateDeviceState(testCtx, UpdateStateOptions{DeviceID: "any", State: StateBooting})
+				return err
+			},
+			"SetDeviceEnrolled": func() error { _, err := cli.SetDeviceEnrolled(testCtx, "any", "serial"); return err },
+			"GetStatus":         func() error { _, err := cli.GetStatus(testCtx); return err },
+		}
+		for method, call := range calls {
+			var notImpl ErrCLIPXENotImplemented
+			require.ErrorAs(t, call(), &notImpl, "%s: want the declared API-only refusal", method)
+			assert.Equal(t, method, notImpl.Method)
+		}
 	})
 }
 

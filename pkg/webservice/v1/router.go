@@ -911,12 +911,14 @@ func (v1Router *Router) pxeRoutes() {
 		server,
 		v1Router.responseWriter,
 		v1Router.restHandlerRegistry.PXEWebhookEnabled())
+	r.SetWebhookSecret(v1Router.restHandlerRegistry.PXEWebhookSecret())
 	// Split by principal. Service controls and the device lifecycle —
 	// authorize, quarantine, retry, state — are operator work and take the
 	// admin gate, then per route the pxe:* scope its RPC takes on gRPC. The
 	// install-completion webhook stays off both because its caller is a
-	// booting node; it presents and checks no credential at all (#238), so
-	// it is mounted only when the operator enabled it.
+	// booting node; it is mounted only when the operator enabled it, and
+	// then admits only a report HMAC-signed with pxe.ServiceConfig's
+	// WebhookSecret (#240).
 	//
 	// The provisioning gateway's device reports (register, state, install
 	// complete) under /provisioning/devices/{mac}: the admin gate, then

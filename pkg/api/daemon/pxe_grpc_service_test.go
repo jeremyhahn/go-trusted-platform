@@ -15,6 +15,7 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -750,6 +751,39 @@ func TestPXEGRPCService_Authorize(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, codes.InvalidArgument, st.Code())
 	})
+
+	// Out-of-range VLANs are refused before the service is called: a
+	// uint16 conversion would otherwise turn 65556 into VLAN 20.
+	for _, vlan := range []uint32{4095, 65556} {
+		t.Run(fmt.Sprintf("target VLAN %d out of range", vlan), func(t *testing.T) {
+			before := mockService.devices[deviceID].TargetVLAN
+			resp, err := svc.Authorize(ctx, &platformv1.AuthorizePXEDeviceRequest{
+				DeviceId:   deviceID,
+				TargetVlan: vlan,
+			})
+
+			require.Error(t, err)
+			assert.Nil(t, resp)
+			st, ok := status.FromError(err)
+			require.True(t, ok)
+			assert.Equal(t, codes.InvalidArgument, st.Code())
+			assert.Contains(t, st.Message(), "1-4094")
+			assert.Equal(t, before, mockService.devices[deviceID].TargetVLAN, "AuthorizeDevice must not be called")
+		})
+	}
+
+	for _, vlan := range []uint32{1, 4094} {
+		t.Run(fmt.Sprintf("target VLAN %d accepted", vlan), func(t *testing.T) {
+			resp, err := svc.Authorize(ctx, &platformv1.AuthorizePXEDeviceRequest{
+				DeviceId:   deviceID,
+				TargetVlan: vlan,
+			})
+
+			require.NoError(t, err)
+			require.NotNil(t, resp)
+			assert.Equal(t, vlan, resp.GetDevice().GetTargetVlan())
+		})
+	}
 }
 
 // TestPXEGRPCService_Quarantine tests quarantining a device.

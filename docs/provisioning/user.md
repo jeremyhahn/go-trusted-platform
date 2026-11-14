@@ -106,10 +106,19 @@ attestation is what actually establishes trust afterwards
 
 ---
 
-## Managing devices — API only
+## Managing devices
 
-**There is no `platformctl pxe` command group.** Every device-lifecycle
-operation is an API call:
+`platformctl pxe` lists, inspects, authorizes, quarantines and retries devices
+and reads their events ([cli.md](cli.md) §5):
+
+```bash
+platformctl pxe list --state enrolled
+platformctl pxe events <id>
+platformctl pxe authorize <id> --target-vlan 200
+```
+
+Registering or removing a device has no CLI verb. Every device-lifecycle
+operation is also an API call:
 
 ```bash
 curl -s        https://platform.example.com/api/v1/pxe/devices
@@ -215,10 +224,11 @@ pre-auth on gRPC: the machine proves itself inside the request (single-use
 nonce, EAB HMAC, EK-certificate binding), not with a platform token. On MCP the
 BMC, `pxe_*` and `provision_*` tools take the scopes of their gRPC twins, and
 the four device-facing `provision_*` tools are open as their gRPC methods are.
-**One open path remains:** the
-install-completion webhook `POST /api/v1/pxe/webhook/complete` presents no
-credential (#238). See [api.md](api.md) §6 and
-[`docs/ipxe/api.md`](../ipxe/api.md) §5.
+The install-completion webhook `POST /api/v1/pxe/webhook/complete` takes no
+token: it admits a report signed with `pxe.ServiceConfig.WebhookSecret`, an
+HMAC-SHA256 of the body in `X-PXE-Webhook-Signature` (#240). The secret is
+shared by every installing node, so treat it as a fleet credential. See
+[api.md](api.md) §6 and [`docs/ipxe/api.md`](../ipxe/api.md) §4–§5.
 
 **Test coverage.** Two provisioning integration suites do not exercise what they
 appear to: the PXE suite reaches a platformd with no PXE backend, so every call

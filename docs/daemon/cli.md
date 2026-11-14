@@ -223,10 +223,12 @@ and 39 feature groups. A build with the `pkcs11` tag adds `pkcs11`
 | `pkcs11` (`pkcs11` tag) | this document, §6 |
 | `dns` | [`dns/cli.md`](../dns/cli.md) |
 
-**There is no `pxe`, no `gateway` and no `cluster` top-level group.**
-PXE device lifecycle
-is API-only; the gateway lives under `platformctl sdn gateway`. The secure-boot
-group is spelled `secure-boot`.
+`pxe` lists, inspects, authorizes, quarantines and retries PXE devices and
+reads their events ([`provisioning/cli.md`](../provisioning/cli.md) §5);
+registration, removal and service start/stop stay API-only.
+
+**There is no `gateway` and no `cluster` top-level group.** The gateway lives
+under `platformctl sdn gateway`. The secure-boot group is spelled `secure-boot`.
 
 ---
 
