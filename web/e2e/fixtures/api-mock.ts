@@ -751,12 +751,104 @@ export async function mockRegistryApi(
       state.repositories[name] = (state.repositories[name] ?? []).filter((t) => t !== reference);
       state.deleted.push(`${name}:${reference}`);
       await route.fulfill({ status: 202, body: '' });
+/** Switch port status as the server sends it (`switchwire.PortStatus`). */
+export interface SwitchPortStatus {
+  port: string;
+  mode: 'access' | 'trunk';
+  access_vlan: number;
+  trunk_vlans?: number[];
+  native_vlan?: number;
+  enabled: boolean;
+  link_up: boolean;
+  description?: string;
+}
+
+export interface SwitchApiMockConfig {
+  switchName?: string;
+  ports?: SwitchPortStatus[];
+  /** Operations answered 403 (recorded, port state unchanged): 'status', 'enable', 'disable', 'vlan'. */
+  failActions?: string[];
+}
+
+/** One request the switch mock answered: verb, decoded port, action and body. */
+export interface SwitchApiCall {
+  method: string;
+  port?: string;
+  action?: string;
+  body?: unknown;
+}
+
+/**
+ * Mocks `/api/v1/switches/{switch}/ports[/{port}[/enable|/disable|/vlan]]`
+ * (docs/switch/api.md §5.1). Replies use the platform envelope, keep port
+ * state across calls, and every call is recorded in the returned array.
+ */
+export async function mockSwitchApi(
+  page: Page,
+  config: SwitchApiMockConfig = {}
+): Promise<SwitchApiCall[]> {
+  const switchName = config.switchName || 'core-1';
+  const ports = new Map<string, SwitchPortStatus>();
+  for (const p of config.ports || []) ports.set(p.port, { ...p });
+  const calls: SwitchApiCall[] = [];
+  const ok = (payload: unknown) => ({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ success: true, code: 200, payload }),
+  });
+
+  await page.route('**/api/v1/switches/**', async (route: Route, request: Request) => {
+    const path = new URL(request.url()).pathname;
+    const m = path.match(/\/api\/v1\/switches\/([^/]+)\/ports(?:\/([^/]+))?(?:\/(enable|disable|vlan))?\/?$/);
+    if (!m || decodeURIComponent(m[1]) !== switchName) {
+      await route.fulfill({ status: 404, contentType: 'application/json', body: errorEnvelope({ error: 'switch not found', status: 404 }) });
+      return;
+    }
+    const port = m[2] ? decodeURIComponent(m[2]) : undefined;
+    const action = m[3];
+    const body = request.postData() ? request.postDataJSON() : undefined;
+    calls.push({ method: request.method(), port, action, body });
+
+    if (!port) {
+      await route.fulfill(ok([...ports.values()]));
+      return;
+    }
+    const status = ports.get(port);
+    if (!status) {
+      await route.fulfill({ status: 404, contentType: 'application/json', body: errorEnvelope({ error: 'port not found', status: 404 }) });
+      return;
+    }
+    const op = action ?? (request.method() === 'GET' ? 'status' : undefined);
+    if (op && config.failActions?.includes(op)) {
+      // 403, not 503: the SDK retries a 503.
+      await route.fulfill({ status: 403, contentType: 'application/json', body: errorEnvelope({ error: 'denied', status: 403 }) });
+      return;
+    }
+    if (!action && request.method() === 'GET') {
+      // The server's single-port status never reports link state (always false),
+      // and its enabled reads `Switchport: Enabled`, which stays true for a
+      // shut-down port. It omits the description too, as the SSH parser does.
+      await route.fulfill(ok({ ...status, description: undefined, link_up: false, enabled: true }));
+      return;
+    }
+    if (action === 'enable' || action === 'disable') {
+      status.enabled = action === 'enable';
+      await route.fulfill(ok({ switch: switchName, port, action, status: 'ok' }));
+      return;
+    }
+    if (action === 'vlan') {
+      const vlanId = (body as { vlan_id?: number } | undefined)?.vlan_id ?? 0;
+      // The server forces access mode before it sets the VLAN.
+      status.mode = 'access';
+      status.access_vlan = vlanId;
+      await route.fulfill(ok({ switch: switchName, port, vlan_id: vlanId, status: 'ok' }));
       return;
     }
     await route.continue();
   });
 
   return state;
+  return calls;
 }
 
 /**

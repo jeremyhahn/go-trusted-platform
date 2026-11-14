@@ -123,6 +123,8 @@ export type {
   RegistryTags,
   UseRegistryResult,
 } from './use-registry';
+export { useSwitchPorts } from './use-switch-ports';
+export type { UseSwitchPortsResult } from './use-switch-ports';
 export type {
   ReportedGateway,
   UseReportedGatewaysOptions,
