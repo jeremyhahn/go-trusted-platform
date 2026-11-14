@@ -142,9 +142,12 @@ the console bearer for the now-claimed system admin:
 ```
 
 On a deployment running several `platformd` instances against one store, the
-four mutating routes answer **`501`** with `ErrMultiInstanceUnsupported` —
-the ceremony's one-time state is process-local, so it is not served there
-(#170). `status` still answers `200`: it mutates nothing, and the console has
+four mutating routes answer **`501`** with `ErrMultiInstanceUnsupported`
+unless the store's compare-and-swap answers, which makes the completion
+atomic across instances (#172). Where it does, `passkey/finish` answers
+**`409`** while another instance is completing a claim and **`503`** when the
+store cannot run the completion lease; run the ceremony against one instance,
+since a claim token proved on one is refused by another. `status` still answers `200`: it mutates nothing, and the console has
 to be able to tell a clustered node from a broken one.
 
 ### Error mapping

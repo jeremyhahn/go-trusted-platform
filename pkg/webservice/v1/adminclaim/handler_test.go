@@ -367,9 +367,9 @@ func TestWriteClaimError_MultiInstanceIsNotImplementedNot500(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			rec := h.do(t, http.MethodPost, path, ProveRequest{}, nil)
 			require.Equal(t, http.StatusNotImplemented, rec.Code)
-			assert.Contains(t, rec.Body.String(), "single-instance deployment",
+			assert.Contains(t, rec.Body.String(), "multi-instance deployment",
 				"the refusal must explain itself")
-			assert.Contains(t, rec.Body.String(), "#170",
+			assert.Contains(t, rec.Body.String(), "#172",
 				"and point at what would lift it")
 		})
 	}

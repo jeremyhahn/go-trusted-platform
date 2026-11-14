@@ -647,17 +647,21 @@ identity and signature checks before it touches the SDK.
   claim completing over a revoked `fido2` factor raises a high-severity
   security event of its own type (#169) — see
   [engineering.md invariant 8a](engineering.md).
-- A **multi-instance deployment is refused, not unregistered** — and that
-  asymmetry with the bullet above is deliberate. The four conditions there
-  mean the node cannot *verify* a certificate, so publishing the ceremony
-  would be publishing an unverifiable admin surface. A clustered node
-  verifies perfectly well; what it cannot guarantee is *one-time-ness*, since
-  the ceremony's challenge and claim-token state is process-local and SDK
-  factor enrolment is not conditional (#170). So the four MUTATING paths —
-  `Challenge`, `Prove`, `BeginPasskey`, `FinishPasskey` — refuse with
-  `ErrMultiInstanceUnsupported`, answered as **501 Not Implemented** carrying
-  the reason and the issue that would lift it. It is not a 500: the refusal
-  is what this build implements, not a fault handling the request.
+- A **multi-instance deployment is refused, not unregistered, unless the
+  store's compare-and-swap answers** — and that asymmetry with the bullet
+  above is deliberate. The four conditions there mean the node cannot
+  *verify* a certificate, so publishing the ceremony would be publishing an
+  unverifiable admin surface. A clustered node verifies perfectly well; what
+  it needs is *one-time-ness* across instances, which the store-wide
+  completion lease below provides (#172). `serve` wires the lease only when
+  the store answers a read-only probe (`adminclaim.ProbeTransactions`);
+  without it the four MUTATING paths — `Challenge`, `Prove`,
+  `BeginPasskey`, `FinishPasskey` — refuse with
+  `ErrMultiInstanceUnsupported`, answered as **501 Not Implemented**
+  carrying the reason and the issue. It is not a 500: the refusal is what
+  this build implements, not a fault handling the request. At the pinned
+  SDK the embedded transport does not carry transactions (go-quicbaas
+  #1319), so a clustered node stays refused until a tag carries that fix.
 - **Status stays readable on a clustered node.** It mutates nothing, and the
   console has to be able to distinguish a deployment that will not run the
   ceremony from one that is simply broken. Refusing it would remove that
@@ -680,13 +684,19 @@ identity and signature checks before it touches the SDK.
   otherwise both observe an unclaimed identity and both enrol, letting a
   copied bootstrap key race the legitimate operator. A process-local lock
   makes the loser observe the winner's enrolment and get `ErrAlreadyClaimed`.
-  *Residual, and it is a real one:* several `platformd` instances sharing one
-  qrdb could still both complete, because the lock is process-local. Closing
-  it needs a **conditional** factor enrolment from the SDK — `Factors().Add`
-  and the WebAuthn write-through are both unconditional — so it cannot be
-  fixed from this side without inventing a distributed lease, which is a
-  larger design than this change carries. Tracked upstream as **#170**;
-  until then, run the ceremony against a single active instance.
+  Across several `platformd` instances sharing one store, a
+  **compare-and-swap lease** on that store does the same job
+  (`adminclaim/completion.go`, #172): taken after the claim token is
+  redeemed (an unproved caller never writes to the store) and before the
+  factor history is read, so only its holder can observe an unclaimed
+  identity and enrol. Another instance is refused with
+  `ErrClaimInProgress` (**409**); a store that cannot run the transaction
+  fails the claim closed (**503**). The lease expires after two minutes and
+  its holder's work is bounded to one, so a live holder is never taken
+  over; it is released whatever the outcome, because the factor history,
+  not the lease, keeps a claimed identity closed. Challenges and claim
+  tokens stay process-local: a token proved on one instance is refused by
+  another, so the ceremony runs against one instance.
 - **Nothing that can fail runs after the enrolment.** The SDK enrolment is
   the irreversible step — once the factor exists the ceremony is closed
   forever — so the platform-local admin record is written *before* it. A

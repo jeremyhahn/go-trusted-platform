@@ -1157,11 +1157,16 @@ type RegistryParams struct {
 	// routes unregistered.
 	AdminEmail string
 	// AdminClaimMultiInstance reports that several platformd instances
-	// serve one store. The admin-claim ceremony is refused when true —
-	// its one-time state is process-local and SDK factor enrolment is
-	// not conditional, so two instances could each enrol a different
-	// authenticator for the same one-time ownership transfer. See #170.
+	// serve one store. The process-local completion lock then serialises
+	// one instance only and SDK factor enrolment is not conditional, so
+	// the admin-claim ceremony is refused there unless
+	// AdminClaimTransactions is set.
 	AdminClaimMultiInstance bool
+	// AdminClaimTransactions is the store's compare-and-swap client, set
+	// only once it has answered adminclaim.ProbeTransactions. The claim's
+	// completion then runs under a store-wide lease, atomic across
+	// instances (#172). Nil keeps a multi-instance deployment refused.
+	AdminClaimTransactions adminclaim.TransactionExecutor
 }
 
 type HandlerRegistry struct {
@@ -1591,6 +1596,7 @@ func (registry *HandlerRegistry) AdminClaimRestHandler() *adminclaim.RestHandler
 		AdminUsername: common.AdminUsername,
 		AdminEmail:    params.AdminEmail,
 		MultiInstance: params.AdminClaimMultiInstance,
+		Transactions:  params.AdminClaimTransactions,
 	})
 	if err != nil {
 		params.Logger.Error(err, "admin-claim routes not registered")
