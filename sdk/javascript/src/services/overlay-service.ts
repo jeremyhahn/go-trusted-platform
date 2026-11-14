@@ -153,7 +153,9 @@ export class OverlayService extends BaseService {
    */
   async getTunnelStats(request: GetTunnelStatsRequest): Promise<ApiResponse<GetTunnelStatsResponse>> {
     return this.client.get<GetTunnelStatsResponse>(
-      this.buildUrl(`/tunnels/${this.encodePathSegment(request.remoteVtep)}/${request.vni}/stats`)
+      this.buildUrl('/tunnels/stats', {
+        filters: { remote_vtep: request.remoteVtep, vni: request.vni?.toString() },
+      })
     );
   }
 
@@ -181,7 +183,9 @@ export class OverlayService extends BaseService {
    */
   async forgetMAC(request: ForgetMACRequest): Promise<ApiResponse<ForgetMACResponse>> {
     return this.client.delete<ForgetMACResponse>(
-      this.buildUrl(`/macs/${this.encodePathSegment(request.mac)}/${request.vni}`)
+      this.buildUrl('/macs', {
+        filters: { mac: request.mac, vni: request.vni?.toString() },
+      })
     );
   }
 }

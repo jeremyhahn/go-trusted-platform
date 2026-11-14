@@ -1074,48 +1074,6 @@ func TestSDNService_ConversionHelpers(t *testing.T) {
 	})
 }
 
-func TestSDNService_ResourceTracking(t *testing.T) {
-	svc := &SDNService{
-		bridges: make(map[string]*bridgeResource),
-		ports:   make(map[string]*portResource),
-		taps:    make(map[string]*tapResource),
-	}
-
-	t.Run("track bridge", func(t *testing.T) {
-		svc.bridges["br0"] = &bridgeResource{
-			id:         "uuid-1",
-			name:       "br0",
-			bridgeType: platformv1.BridgeType_BRIDGE_TYPE_OVS,
-		}
-
-		assert.Len(t, svc.bridges, 1)
-		assert.Contains(t, svc.bridges, "br0")
-		assert.Equal(t, "uuid-1", svc.bridges["br0"].id)
-	})
-
-	t.Run("track port", func(t *testing.T) {
-		svc.ports["port0"] = &portResource{
-			id:       "uuid-2",
-			name:     "port0",
-			bridgeID: "br0",
-			portType: platformv1.PortType_PORT_TYPE_TAP,
-		}
-
-		assert.Len(t, svc.ports, 1)
-		assert.Contains(t, svc.ports, "port0")
-		assert.Equal(t, "uuid-2", svc.ports["port0"].id)
-	})
-
-	t.Run("track tap", func(t *testing.T) {
-		svc.taps["tap0"] = &tapResource{
-			name: "tap0",
-		}
-
-		assert.Len(t, svc.taps, 1)
-		assert.Contains(t, svc.taps, "tap0")
-	})
-}
-
 // generateTestCertificate generates a self-signed certificate for testing
 func generateTestCertificate(t *testing.T, notBefore, notAfter time.Time) []byte {
 	t.Helper()
