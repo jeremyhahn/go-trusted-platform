@@ -15,10 +15,13 @@ package daemon
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"strings"
 
 	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/auth/iamuser"
 )
 
 // CertificatePrincipal is the IAM principal a verified client certificate
@@ -77,7 +80,12 @@ func (p *iamCertificatePrincipals) ResolveCertificatePrincipal(ctx context.Conte
 	if identity.UserID != "" {
 		user, err = p.users.Get(lookupCtx, tenantID, identity.UserID)
 	} else {
-		user, err = p.users.FindByUsername(lookupCtx, tenantID, identity.ID)
+		user, err = p.findPrincipal(lookupCtx, tenantID, identity)
+	}
+	if errors.Is(err, iamuser.ErrTruncated) {
+		slog.Warn("mTLS principal refused: the IAM user listing may be truncated, so the certificate's principal could not be resolved",
+			"tenant_id", tenantID, "principal", identity.ID)
+		return nil, ErrCertificatePrincipalUnresolved{Reason: "the IAM user listing may be truncated", Cause: err}
 	}
 	if err != nil {
 		return nil, ErrCertificatePrincipalUnresolved{Reason: "IAM holds no principal for the certificate", Cause: err}
@@ -113,6 +121,26 @@ func (p *iamCertificatePrincipals) ResolveCertificatePrincipal(ctx context.Conte
 		Roles:    append([]string(nil), user.Roles...),
 		Scopes:   scopes,
 	}, nil
+}
+
+// findPrincipal looks the certificate's principal up by email when the
+// certificate names it by an email SAN, else by username, through
+// iamuser.Find: the transport's own lookup first and, where the transport
+// does not register it (the pinned embedded transport has no User/GetByEmail
+// or User/FindByUsername), the tenant's User/List.
+func (p *iamCertificatePrincipals) findPrincipal(ctx context.Context, tenantID string, identity *auth.Identity) (*sdkiam.User, error) {
+	id := strings.TrimSpace(identity.ID)
+	list := func(ctx context.Context, req *sdkiam.ListUsersRequest) (*sdkiam.ListUsersResponse, error) {
+		return p.users.List(ctx, tenantID, req)
+	}
+	if strings.Contains(id, "@") || (identity.Email != "" && strings.EqualFold(id, strings.TrimSpace(identity.Email))) {
+		return iamuser.Find(ctx, func(ctx context.Context) (*sdkiam.User, error) {
+			return p.users.GetByEmail(ctx, tenantID, id)
+		}, list, iamuser.ByEmail(id))
+	}
+	return iamuser.Find(ctx, func(ctx context.Context) (*sdkiam.User, error) {
+		return p.users.FindByUsername(ctx, tenantID, id)
+	}, list, iamuser.ByUsername(id))
 }
 
 // principalActive reports whether IAM holds the user as active. Lifecycle is

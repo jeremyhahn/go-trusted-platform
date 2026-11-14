@@ -53,13 +53,26 @@ type Matcher func(user *sdkiam.User) bool
 // one of them.
 var ErrAmbiguous = errors.New("iamuser: more than one IAM user matches")
 
+// ListPageSize is the page size the listing fallback asks for. It is also
+// the store's default page (qrdb serves 100 users when no page size reaches
+// it, as on the pinned embedded transport, whose List wrapper drops it).
+const ListPageSize = 100
+
+// ErrTruncated is returned when the listing fallback did not find the user
+// and the listing may be incomplete: a page came back full with no
+// NextPageToken, so users past it may exist that the transport never
+// showed. The lookup fails closed rather than report "no such user".
+var ErrTruncated = errors.New("iamuser: the IAM user listing may be truncated (a full page with no next page token)")
+
 // Find returns the user lookup names. When the transport does not implement
 // lookup, Find pages through list and returns the single user match accepts,
 // or a NotFound error when none does.
 //
-// On the embedded transport the listing is the store's first page (qrdb
-// serves 100 users when no page size reaches it): a user beyond it is not
-// found, so the caller refuses rather than admits.
+// The pinned embedded transport answers User/List with the store's first
+// page only, with no NextPageToken. When the user is not on the pages seen
+// and the last page was full (ListPageSize users or more) with no token,
+// Find returns ErrTruncated, never NotFound: the caller refuses, and says
+// why.
 func Find(ctx context.Context, lookup Lookup, list Lister, match Matcher) (*sdkiam.User, error) {
 	user, err := lookup(ctx)
 	if err == nil || !Unimplemented(err) {
@@ -67,10 +80,11 @@ func Find(ctx context.Context, lookup Lookup, list Lister, match Matcher) (*sdki
 	}
 
 	var found *sdkiam.User
+	truncated := false
 	seen := map[string]struct{}{}
 	token := ""
 	for page := 0; page < maxListPages; page++ {
-		resp, listErr := list(ctx, &sdkiam.ListUsersRequest{PageToken: token})
+		resp, listErr := list(ctx, &sdkiam.ListUsersRequest{PageSize: ListPageSize, PageToken: token})
 		if listErr != nil {
 			return nil, listErr
 		}
@@ -89,13 +103,21 @@ func Find(ctx context.Context, lookup Lookup, list Lister, match Matcher) (*sdki
 		}
 		next := resp.Pagination.NextPageToken
 		if next == "" {
+			truncated = len(resp.Users) >= ListPageSize
 			break
 		}
 		if _, again := seen[next]; again {
+			truncated = true
 			break
 		}
 		seen[next] = struct{}{}
 		token = next
+		if page == maxListPages-1 {
+			truncated = true
+		}
+	}
+	if found == nil && truncated {
+		return nil, ErrTruncated
 	}
 	if found == nil {
 		return nil, sdkerrors.NewNotFound("iamuser.Find", "user not found")
