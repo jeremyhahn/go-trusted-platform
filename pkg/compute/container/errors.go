@@ -184,6 +184,10 @@ var (
 	// ErrOrchestratorClosed is returned when operations are attempted on a closed orchestrator.
 	ErrOrchestratorClosed = errors.New("orchestrator closed")
 
+	// ErrOPANotBuilt is returned by the OPA engine of a build without the
+	// opa build tag.
+	ErrOPANotBuilt = errors.New("OPA policy engine not built: rebuild with the opa build tag")
+
 	// ErrPodmanNotAvailable is returned when podman is not available on the system.
 	ErrPodmanNotAvailable = errors.New("podman not available")
 
