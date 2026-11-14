@@ -30,8 +30,10 @@ package iso
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -140,12 +142,124 @@ func installedDiskPath(workDir string) string {
 }
 
 // ensureAlpineISO returns the downloaded Alpine ISO, downloading it first.
+// sharedAlpine holds the one verified Alpine ISO download of this go test
+// process. Every test that only needs the stock ISO as an input seeds its
+// work dir from it, so a run fetches the ISO from the mirror once (plus the
+// Download tests, which test the fetch itself) and not once per work dir.
+var sharedAlpine struct {
+	once sync.Once
+	dir  string
+	iso  string
+	err  error
+}
+
+// TestMain removes the shared ISO cache once every test has run.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if sharedAlpine.dir != "" {
+		_ = os.RemoveAll(sharedAlpine.dir)
+	}
+	os.Exit(code)
+}
+
+// sharedAlpineISO downloads and verifies the default Alpine ISO once per
+// process, through cmd.Download, into one cache dir, and returns its path.
+func sharedAlpineISO(t *testing.T, ctx context.Context, cmd ISOCommands) string {
+	t.Helper()
+	sharedAlpine.once.Do(func() {
+		dir, err := os.MkdirTemp("", "iso-shared-alpine-")
+		if err != nil {
+			sharedAlpine.err = fmt.Errorf("creating the shared ISO cache dir: %w", err)
+			return
+		}
+		sharedAlpine.dir = dir
+		result, err := cmd.Download(ctx, DownloadOptions{
+			Version: DefaultAlpineVersion,
+			Mirror:  DefaultMirror,
+			Arch:    DefaultArch,
+			WorkDir: dir,
+			Verify:  true,
+		})
+		if err != nil {
+			sharedAlpine.err = fmt.Errorf("downloading the shared Alpine ISO: %w", err)
+			return
+		}
+		isoPath := alpineISOPath(dir)
+		if result != nil && result.ISOPath != "" {
+			isoPath = result.ISOPath
+		}
+		if !FileExists(isoPath) {
+			sharedAlpine.err = ErrISONotFound{Path: isoPath}
+			return
+		}
+		sharedAlpine.iso = isoPath
+	})
+	if sharedAlpine.err != nil {
+		t.Fatalf("missing prerequisite: %v", sharedAlpine.err)
+	}
+	return sharedAlpine.iso
+}
+
+// seedAlpineISO places the shared verified ISO, its checksum file and its
+// verified marker in workDir under the names pkg/iso looks for, so the CLI's
+// cache check finds a verified ISO there and does not fetch it again.
+func seedAlpineISO(t *testing.T, ctx context.Context, cmd ISOCommands, workDir string) {
+	t.Helper()
+	src := sharedAlpineISO(t, ctx, cmd)
+	dst := alpineISOPath(workDir)
+	cfg := pkgiso.ISOConfig{WorkDir: filepath.Dir(src), ISO: filepath.Base(src)}
+	dstCfg := pkgiso.ISOConfig{WorkDir: workDir, ISO: filepath.Base(dst)}
+	pairs := [][2]string{
+		{cfg.ISOPath(), dstCfg.ISOPath()},
+		{cfg.ChecksumPath(), dstCfg.ChecksumPath()},
+		{cfg.VerifiedMarkerPath(), dstCfg.VerifiedMarkerPath()},
+	}
+	for i, p := range pairs {
+		if i > 0 && !FileExists(p[0]) {
+			continue
+		}
+		if FileExists(p[1]) {
+			continue
+		}
+		if err := linkOrCopy(p[0], p[1]); err != nil {
+			t.Fatalf("missing prerequisite: seeding %s from the shared ISO: %v", p[1], err)
+		}
+	}
+}
+
+// linkOrCopy hard-links src to dst, or copies it when the link fails (for
+// example across file systems).
+func linkOrCopy(src, dst string) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		return err
+	}
+	if err := os.Link(src, dst); err == nil {
+		return nil
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		os.Remove(dst)
+		return err
+	}
+	return out.Close()
+}
+
 func ensureAlpineISO(t *testing.T, ctx context.Context, cmd ISOCommands, workDir string) string {
 	t.Helper()
 	isoPath := alpineISOPath(workDir)
 	if FileExists(isoPath) {
 		return isoPath
 	}
+	seedAlpineISO(t, ctx, cmd, workDir)
 
 	result, err := cmd.Download(ctx, DownloadOptions{
 		Version: DefaultAlpineVersion,
@@ -584,6 +698,7 @@ func testCreateOperations(t *testing.T, ctx context.Context, cmd ISOCommands, wo
 		createWorkDir := filepath.Join(workDir, "create-default")
 		err := os.MkdirAll(createWorkDir, 0755)
 		require.NoError(t, err, "Should create work dir")
+		seedAlpineISO(t, testCtx, cmd, createWorkDir)
 
 		opts := CreateOptions{
 			AlpineVersion: DefaultAlpineVersion,
@@ -613,6 +728,7 @@ func testCreateOperations(t *testing.T, ctx context.Context, cmd ISOCommands, wo
 		createWorkDir := filepath.Join(workDir, "create-fips")
 		err := os.MkdirAll(createWorkDir, 0755)
 		require.NoError(t, err, "Should create work dir")
+		seedAlpineISO(t, testCtx, cmd, createWorkDir)
 
 		opts := CreateOptions{
 			AlpineVersion: DefaultAlpineVersion,
@@ -643,6 +759,7 @@ func testCreateOperations(t *testing.T, ctx context.Context, cmd ISOCommands, wo
 		createWorkDir := filepath.Join(workDir, "create-server")
 		err := os.MkdirAll(createWorkDir, 0755)
 		require.NoError(t, err, "Should create work dir")
+		seedAlpineISO(t, testCtx, cmd, createWorkDir)
 
 		opts := CreateOptions{
 			AlpineVersion: DefaultAlpineVersion,
@@ -667,6 +784,7 @@ func testCreateOperations(t *testing.T, ctx context.Context, cmd ISOCommands, wo
 		createWorkDir := filepath.Join(workDir, "create-client")
 		err := os.MkdirAll(createWorkDir, 0755)
 		require.NoError(t, err, "Should create work dir")
+		seedAlpineISO(t, testCtx, cmd, createWorkDir)
 
 		opts := CreateOptions{
 			AlpineVersion: DefaultAlpineVersion,
@@ -735,6 +853,7 @@ func TestISOVMTests(t *testing.T) {
 
 	workDir := CreateTestWorkDir(t, "iso-vm-test-")
 	defer CleanupTestWorkDir(t, workDir)
+	seedAlpineISO(t, ctx, adapter, workDir)
 
 	installed := t.Run("TestInstall", func(t *testing.T) {
 		testVMInstall(t, ctx, adapter, workDir)
