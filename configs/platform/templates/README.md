@@ -11,7 +11,7 @@ For full documentation, see [docs/device-templates.md](../../../docs/device-temp
 |---------|--------|--------|
 | [dedicated/](./dedicated/) | 3 dedicated nodes: 1 control-plane, 1 gateway, 1 compute | **Active** |
 | [single-node/](./single-node/) | Control-plane + gateway + compute colocated on a single node | Default ISO template; Raspberry Pi factory image under [single-node/raspberrypi/](./single-node/raspberrypi/) |
-| [high-availability/](./high-availability/) | 3 control-plane, 2 gateway, 2 compute (HA Raft cluster) | Planned |
+| [high-availability/](./high-availability/) | 3 control-plane, 2 gateway, 2 compute (HA Raft cluster) | Control plane only |
 
 The `dedicated/` profile is the current reference architecture being
 developed. The other profiles will be added once `dedicated/` is proven
@@ -51,7 +51,12 @@ configs/platform/templates/
     raspberrypi/        # Factory SD-card image (platformctl diskimage create --target rpi)
       rpi4/
         default.yaml
-  high-availability/    # HA cluster (planned)
+  high-availability/    # HA cluster: the three-node control plane
+    supermicro/
+      x10/
+        cp1/control-plane.yaml   # Raft member 1
+        cp2/control-plane.yaml   # Raft member 2
+        cp3/control-plane.yaml   # Raft member 3
 ```
 
 ## Quick Start
@@ -96,7 +101,7 @@ All `dedicated/` templates assume:
 - **Datastore**: QuicBaaS runs in **standalone embedded mode** (non-HA).
   `storage-backend: file` with `node-id: 1` and no join-addresses means
   Raft consensus is not engaged. For HA, use the `high-availability/`
-  profile (when available).
+  profile.
 
 - **Secrets**: all secret URIs use the canonical `kms://?ensure=true&len=N&enc=ENC`
   scheme backed by the platform `SecretsService.EnsureSecret` distributed lock
