@@ -74,6 +74,9 @@ func newWebhookIdentityFixture(t *testing.T) *webhookIdentityFixture {
 	cfg.IPXEConfig.InstallsDir = t.TempDir()
 	cfg.IPXEConfig.FirmwareDir = t.TempDir()
 	cfg.IPXEConfig.FirmwareOffline = true
+	// Pin the server address: a CI container without a routable interface
+	// cannot auto-detect one (#1896).
+	cfg.IPXEConfig.BindHost = "127.0.0.1"
 	cfg.IPXEConfig.BootEntries = []ipxe.BootEntry{
 		{Name: "test", Description: "Test Entry", Kernel: "http://example.com/kernel"},
 	}

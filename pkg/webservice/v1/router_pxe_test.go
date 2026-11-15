@@ -15,8 +15,10 @@ package v1
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -57,6 +59,14 @@ func (s *recordingPXEServer) GetDeviceByMAC(_ context.Context, req *platformv1.G
 		MacAddress:        req.GetMacAddress(),
 		CertificateSerial: pxeDeviceCert.SerialNumber.String(),
 	}}, nil
+}
+
+// RecordedIDevIDFingerprint answers the IDevID fingerprint recorded at
+// enrolment (ruling 673): the presented certificate's, so the signed
+// report reaches the handler.
+func (s *recordingPXEServer) RecordedIDevIDFingerprint(_ context.Context, _ string) (string, error) {
+	sum := sha256.Sum256(pxeDeviceCert.Raw)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func (s *recordingPXEServer) WebhookComplete(
