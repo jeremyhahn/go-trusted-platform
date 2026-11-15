@@ -803,12 +803,13 @@ func testCreateOperations(t *testing.T, ctx context.Context, cmd ISOCommands, wo
 		}
 
 		result, err := cmd.Create(testCtx, opts)
+		// Create downloads before it builds, so check the seed even when it fails.
+		assertSeededISOKept(t, seeded, createWorkDir)
 		if err != nil {
 			t.Logf("Create not available (expected): %v", err)
 			return
 		}
 		require.NotNil(t, result, "Result should not be nil")
-		assertSeededISOKept(t, seeded, createWorkDir)
 		if result.Success {
 			assert.NotEmpty(t, result.OutputISO, "Output ISO should be set")
 			t.Logf("Created ISO in %v: %s", result.ElapsedTime, result.OutputISO)
@@ -836,12 +837,13 @@ func testCreateOperations(t *testing.T, ctx context.Context, cmd ISOCommands, wo
 		}
 
 		result, err := cmd.Create(testCtx, opts)
+		// Create downloads before it builds, so check the seed even when it fails.
+		assertSeededISOKept(t, seeded, createWorkDir)
 		if err != nil {
 			t.Logf("Create with FIPS not available (expected): %v", err)
 			return
 		}
 		require.NotNil(t, result, "Result should not be nil")
-		assertSeededISOKept(t, seeded, createWorkDir)
 		if result.Success {
 			// FIPS ISO should have -fips suffix
 			assert.Contains(t, result.OutputISO, "fips", "FIPS ISO should have fips in name")
@@ -867,12 +869,13 @@ func testCreateOperations(t *testing.T, ctx context.Context, cmd ISOCommands, wo
 		}
 
 		result, err := cmd.Create(testCtx, opts)
+		// Create downloads before it builds, so check the seed even when it fails.
+		assertSeededISOKept(t, seeded, createWorkDir)
 		if err != nil {
 			t.Logf("Create server type not available (expected): %v", err)
 			return
 		}
 		require.NotNil(t, result, "Result should not be nil")
-		assertSeededISOKept(t, seeded, createWorkDir)
 	})
 
 	t.Run("CreateClientType", func(t *testing.T) {
@@ -894,12 +897,13 @@ func testCreateOperations(t *testing.T, ctx context.Context, cmd ISOCommands, wo
 		}
 
 		result, err := cmd.Create(testCtx, opts)
+		// Create downloads before it builds, so check the seed even when it fails.
+		assertSeededISOKept(t, seeded, createWorkDir)
 		if err != nil {
 			t.Logf("Create client type not available (expected): %v", err)
 			return
 		}
 		require.NotNil(t, result, "Result should not be nil")
-		assertSeededISOKept(t, seeded, createWorkDir)
 	})
 
 	t.Run("CreateInvalidArch", func(t *testing.T) {
