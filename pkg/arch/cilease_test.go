@@ -482,6 +482,16 @@ const (
 	reasonPullNotGuarded     = "pulls from the LAN registry without the lease step first and an image_ref to pull"
 	reasonPullNoLayerCompare = "does not compare the pulled image's layer identity with IT_IMAGE_IDENTITY"
 	reasonNoRegistryPull     = "has no step that pulls the image job's image_ref from the LAN registry"
+	reasonPullRemovesRef     = "removes the registry reference another leg on the same daemon may still re-tag from"
+	reasonPullRetagExits     = "re-tags the registry reference without a fallback, so a failed tag fails the leg"
+
+	// ciPullRemoveRef is the removal of the shared registry reference; a
+	// leg that already pulled it and waits on the image lock re-tags from it.
+	ciPullRemoveRef = `docker rmi "$IT_IMAGE_REF"`
+	// ciPullRetagGuard re-tags under a guard whose else warns and leaves the
+	// lease to the load step's fallback build.
+	ciPullRetagGuard = `if ! docker tag "$IT_IMAGE_REF" "$IT_IMAGE"; then`
+	ciPullRetagWarn  = "::warning::re-tagging $IT_IMAGE_REF as $IT_IMAGE failed; building this leg's image"
 )
 
 // ciRawStep is a workflow step as the registry check reads it.
@@ -572,6 +582,12 @@ func registryPathFindings(t *testing.T, wf ciWorkflow) []error {
 		if !strings.Contains(step.Run, ciLayerIdentity) || !strings.Contains(step.Run, ciIdentityCompare) {
 			finding(ciLegJob, step.Line, reasonPullNoLayerCompare)
 		}
+		if strings.Contains(step.Run, ciPullRemoveRef) {
+			finding(ciLegJob, step.Line, reasonPullRemovesRef)
+		}
+		if !strings.Contains(step.Run, ciPullRetagGuard) || !strings.Contains(step.Run, ciPullRetagWarn) {
+			finding(ciLegJob, step.Line, reasonPullRetagExits)
+		}
 	}
 	if !pulled {
 		finding(ciLegJob, legJob.Line, reasonNoRegistryPull)
@@ -623,6 +639,18 @@ func TestRegistryPathFindingsRejectArtifactsBesideTheRegistry(t *testing.T) {
 			old:    `[ "$pulled_identity" = "$IT_IMAGE_IDENTITY" ]`,
 			new:    `[ "$pulled_id" = "$IT_IMAGE_ID" ]`,
 			reason: reasonPullNoLayerCompare,
+		},
+		{
+			name:   "pull removes the registry reference after re-tagging",
+			old:    "          if pulled_id=$(docker image inspect -f '{{.Id}}' \"$IT_IMAGE\") &&\n",
+			new:    "          " + ciPullRemoveRef + " >/dev/null 2>&1 || true\n          if pulled_id=$(docker image inspect -f '{{.Id}}' \"$IT_IMAGE\") &&\n",
+			reason: reasonPullRemovesRef,
+		},
+		{
+			name:   "pull re-tags without a fallback",
+			old:    ciPullRetagGuard,
+			new:    "docker tag \"$IT_IMAGE_REF\" \"$IT_IMAGE\"\n          if false; then",
+			reason: reasonPullRetagExits,
 		},
 	}
 	for _, tc := range cases {
