@@ -2300,9 +2300,11 @@ MODULE_ENV_FILE ?= .devcontainer/.env
 
 # The docker build arguments every devcontainer stage shares. $(comma) because a
 # literal comma inside $(if ...) would end its condition.
-# The key of the image's apt layer: the newest Date: of the InRelease files of
-# the image's Debian suites (scripts/apt-refresh-key.sh), so a Debian fix
-# rebuilds the layer on the next build although BuildKit caches it. The script
+# The key of the image's apt layer: a sha256 over the amd64 and arm64 Packages
+# index sums in the InRelease files of the image's Debian suites
+# (scripts/apt-refresh-key.sh, ruling 676), so a Debian fix rebuilds the layer
+# on the next build although BuildKit caches it, and a re-signed InRelease with
+# only a new Date: keeps the cached layer. The script
 # falls back to the UTC date and hour, with a warning, if Debian is unreachable.
 # Computed once, and only by a recipe that expands it. Pass APT_REFRESH=<key>
 # to rebuild against a fixed key.

@@ -853,9 +853,15 @@ bundles, which no Node or npm release fixes yet.
 A fixed Debian package is never suppressed; the image picks it up instead. The
 `base` stage's `apt-get upgrade` layer reads the `APT_REFRESH` build argument,
 which every `make docker-build*` target (the CI image job's included) sets with
-`scripts/apt-refresh-key.sh`: the newest `Date:` of the `InRelease` files of
-`bookworm`, `bookworm-updates` and `bookworm-security` on the image's Debian
-mirrors, so the layer is rebuilt whenever Debian publishes to any of them. If
+`scripts/apt-refresh-key.sh`: a SHA-256 over the `SHA256:` lines of the
+`main/binary-amd64/Packages*` and `main/binary-arm64/Packages*` indexes in the
+`InRelease` files of `bookworm`, `bookworm-updates` and `bookworm-security` on
+the image's Debian mirrors, so the layer is rebuilt whenever Debian publishes a
+package to any of them. Debian re-signs `InRelease` with a new `Date:` several
+times a day without changing a package; that keeps the key, so the registry
+layer cache keeps hitting (Tenant Agent ruling 676; the key used to be the
+newest `Date:` and missed the cache on every re-sign). `APT_SUITES` replaces the
+suite URLs (the test in `pkg/arch/apt_index_key_test.go` serves fake ones). If
 a fetch fails, the key falls back to the UTC date and hour and the script
 prints a warning; the build goes on. The Dockerfile's dated default applies
 only to a bare `docker build`. Without a key BuildKit reused a cached layer
