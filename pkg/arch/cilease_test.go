@@ -891,6 +891,44 @@ func TestRegistryCredentialFindingsRejectTheRunnersDockerConfig(t *testing.T) {
 	}
 }
 
+// TestCIRegistryStepsKeepTheRunnersDockerContext holds Codex P1 (a) on #1919:
+// DOCKER_CONFIG also selects the Docker context, so the per-step config that
+// isolates the registry credential must keep the runner's context. Push,
+// pull and the tags around them all reach the same daemon.
+func TestCIRegistryStepsKeepTheRunnersDockerContext(t *testing.T) {
+	push := ciStepRun(t, ciImageJob, "push")
+	pull := ciStepRun(t, ciLegJob, "pull")
+	for name, tc := range map[string]struct {
+		env  []string
+		want string
+	}{
+		"context in the runner's config": {want: "ci-ctx"},
+		"DOCKER_HOST set":                {env: []string{"DOCKER_HOST=unix:///run/ci-docker.sock"}, want: "default"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			setup := func(home string) {
+				contexts := filepath.Join(home, ".docker", "contexts")
+				require.NoError(t, os.MkdirAll(contexts, 0o755))
+				require.NoError(t, os.WriteFile(filepath.Join(contexts, "ci-ctx"), nil, 0o644))
+				require.NoError(t, os.WriteFile(filepath.Join(home, ".docker", "config.json"), []byte(`{"currentContext": "ci-ctx"}`), 0o644))
+			}
+			r := runRegistrySteps(t, setup, tc.env, push, pull)
+			require.NoError(t, r.err, r.log)
+			require.Contains(t, r.output, "leased=true", r.log)
+			for _, log := range []string{"push-context", "pull-context", "tag-context"} {
+				got := strings.Fields(r.read(log))
+				require.NotEmpty(t, got, log)
+				for _, ctx := range got {
+					require.Equal(t, tc.want, ctx, "%s:\n%s", log, r.log)
+				}
+			}
+			left, err := filepath.Glob(filepath.Join(r.tmp, "docker-config.*"))
+			require.NoError(t, err)
+			require.Empty(t, left)
+		})
+	}
+}
+
 func TestImageArchiveFindingsRejectAnArchiveInTheCheckout(t *testing.T) {
 	const workflow = `name: CI
 on:
