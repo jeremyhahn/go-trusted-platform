@@ -2957,11 +2957,25 @@ jobs:
             printf '%s\n' "$all"
           }
 
+          # The live PR. Its base must still be $BASE_REF, the base this run's
+          # change and verdict belong to: a PR retargeted while the run waited
+          # never passes on the old base's exempt diff or approval (Codex P1,
+          # #1921). Checked before the exemption and again before the verdict.
+          same_base() { # PR body -> fails unless its base is still $BASE_REF
+            local live_base
+            live_base=$(jq -r '.base.ref // empty' <<<"$1") || fail "cannot read the base of PR $PR_NUM"
+            [ "$live_base" = "$BASE_REF" ] ||
+              fail "PR $PR_NUM was retargeted from $BASE_REF to ${live_base:-no base}"
+          }
+          pr=$(get "/pulls/$PR_NUM")
+          same_base "$pr"
+
           # (a) The no-review list. The change is pinned to the event: on
           # GitHub the compare of $BASE_SHA...$EVENT_SHA (merge base to head);
           # Gitea has no range diff in its API, so there the PR's files, read
-          # only while the live head is still $EVENT_SHA. GitHub's compare
-          # lists at most 300 files: a list that long is never exempt.
+          # only while the live PR is still at $EVENT_SHA on $BASE_REF.
+          # GitHub's compare lists at most 300 files: a list that long is
+          # never exempt.
           exempt=0
           if [ "$FORGE" = github ]; then
             [[ $BASE_SHA =~ ^[0-9a-f]{40}$ ]] || fail "the event names no base commit"
@@ -2970,7 +2984,9 @@ jobs:
               fail "cannot read the change $BASE_SHA...$EVENT_SHA"
           else
             files=$(get_all "/pulls/$PR_NUM/files?")
-            live=$(get "/pulls/$PR_NUM" | jq -r '.head.sha // empty')
+            pr=$(get "/pulls/$PR_NUM")
+            same_base "$pr"
+            live=$(jq -r '.head.sha // empty' <<<"$pr")
             [ "$live" = "$EVENT_SHA" ] || files='[]'
           fi
           n=$(jq 'length' <<<"$files")
@@ -3016,9 +3032,14 @@ jobs:
             done
           fi
 
-          # The owner hold, read live: needs-owner on the PR refuses even an
-          # approval already on the head (Codex P1, #1921).
-          labels=$(get_all "/issues/$PR_NUM/labels?" | jq -r '.[].name') ||
+          # The base and the owner hold, read live from the PR after the wait:
+          # a retargeted PR fails, and needs-owner on the PR refuses even an
+          # approval already on the head. The labels come from the PR itself,
+          # never from the issue-labels list, which Gitea does not paginate
+          # (Codex P1, #1921).
+          pr=$(get "/pulls/$PR_NUM")
+          same_base "$pr"
+          labels=$(jq -r '.labels[].name' <<<"$pr") ||
             fail "cannot read the labels of PR $PR_NUM"
           ! grep -qx needs-owner <<<"$labels" ||
             fail "PR $PR_NUM is on owner hold (needs-owner): an existing approval does not pass the gate"
