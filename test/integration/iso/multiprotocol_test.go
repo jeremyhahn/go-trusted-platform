@@ -637,6 +637,32 @@ func testDownloadOperations(t *testing.T, ctx context.Context, cmd ISOCommands, 
 		adoptSharedAlpineISO(t, result.ISOPath)
 	})
 
+	// A Download into a work dir that already holds the verified ISO must
+	// reuse it: it succeeds without a single request to the mirror. A
+	// failed or skipped fetch cannot pass here, as the inode check alone
+	// could.
+	t.Run("DownloadSeededMakesNoMirrorRequests", func(t *testing.T) {
+		dir := filepath.Join(workDir, "download-seeded")
+		require.NoError(t, os.MkdirAll(dir, 0o755))
+		seedAlpineISO(t, testCtx, cmd, dir)
+		seeded := statSeededISO(t, dir)
+		mirror := newAlpineMirror(t)
+
+		result, err := cmd.Download(testCtx, DownloadOptions{
+			Version: DefaultAlpineVersion,
+			Mirror:  mirror.URL(),
+			Arch:    DefaultArch,
+			WorkDir: dir,
+			Verify:  true,
+			Force:   false,
+		})
+		require.NoError(t, err)
+		require.True(t, result.Success)
+		require.Zero(t, mirror.requests(),
+			"Download fetched from the mirror instead of reusing the seeded ISO")
+		assertSeededISOKept(t, seeded, dir)
+	})
+
 	t.Run("DownloadInvalidArch", func(t *testing.T) {
 		_, err := cmd.Download(testCtx, DownloadOptions{
 			Version: DefaultAlpineVersion,
