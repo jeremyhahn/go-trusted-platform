@@ -115,14 +115,17 @@ describe("admin TenantPage", () => {
     expect(screen.getByText("Failed to fetch tenant info")).toBeTruthy();
   });
 
-  it("shows N/A when the user loses the tenant before a failed fetch completes", async () => {
+  // The page reads the token once at mount (#1768) and keeps that tenant id
+  // through a failed fetch; a later token without a tenant does not reach it.
+  it("keeps the tenant id read at mount when the token loses the tenant before a failed fetch completes", async () => {
     getUserFromToken
       .mockReturnValueOnce({ tenantId: "tenant-1", isTenantOwner: false })
       .mockReturnValue(null);
     respond(false, {});
     render(<TenantPage />);
     await settled();
-    expect(info("Workspace ID")).toBe("N/A");
+    expect(getUserFromToken).toHaveBeenCalledTimes(1);
+    expect(info("Workspace ID")).toBe("tenant-1");
   });
 
   it("offers invitations only to the tenant owner", async () => {
