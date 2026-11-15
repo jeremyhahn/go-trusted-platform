@@ -44,3 +44,37 @@ type MalformedImageError struct {
 func (e *MalformedImageError) Error() string {
 	return "measure: malformed image: " + e.Reason
 }
+
+// MalformedEventLogError is a TCG event log ParseEventLog cannot read. Offset
+// is the first byte of the failing record.
+type MalformedEventLogError struct {
+	Offset int
+	Reason string
+}
+
+func (e *MalformedEventLogError) Error() string {
+	return fmt.Sprintf("measure: malformed event log at byte %d: %s", e.Offset, e.Reason)
+}
+
+// MissingBankError is a PCR bank the event log does not carry.
+type MissingBankError struct {
+	Hash crypto.Hash
+}
+
+func (e *MissingBankError) Error() string {
+	return fmt.Sprintf("measure: the event log has no %v bank", e.Hash)
+}
+
+// PCRMismatchError is a PCR whose event-log replay differs from the
+// manifest's prediction. Replayed is nil when the log does not extend the
+// PCR at all.
+type PCRMismatchError struct {
+	Hash      crypto.Hash
+	PCR       int
+	Predicted []byte
+	Replayed  []byte
+}
+
+func (e *PCRMismatchError) Error() string {
+	return fmt.Sprintf("measure: %v PCR %d: the event log replays to %x, the manifest predicts %x", e.Hash, e.PCR, e.Replayed, e.Predicted)
+}
