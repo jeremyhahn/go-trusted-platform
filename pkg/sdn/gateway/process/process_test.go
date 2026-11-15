@@ -1229,6 +1229,57 @@ func TestRestart_AChildThatNeverServesIsNotAcceptedAsLive(t *testing.T) {
 	}
 }
 
+func TestRestart_ARestartedChildWhoseServiceFailsToStartIsRestartedAgain(t *testing.T) {
+	// The vpn child itself crashes. Its restart answers the socket, but its
+	// start failed and its VPN service is inactive: the restart loop stops
+	// it and restarts it again until the service comes up.
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) { c.RestartBackoff = time.Millisecond })
+	ctx := testContext(t)
+	startDatapath(t, ctx, supervisor, launcher, "v1")
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceManagementVPN))
+	vpnChild := launcher.lastChild()
+	vpn := launcher.node("vpn", nil)
+	launcher.mu.Lock()
+	before := len(launcher.children)
+	launcher.mu.Unlock()
+
+	launcher.mu.Lock()
+	launcher.startErrors = map[string]error{"vpn": errors.New("vpn: lease projection: control plane unavailable")}
+	launcher.mu.Unlock()
+	vpn.setHealth(gateway.ServiceManagementVPN, false, nil)
+
+	vpnChild.exit(errors.New("signal: killed"))
+	require.Eventually(t, func() bool {
+		launcher.mu.Lock()
+		if len(launcher.children) <= before {
+			launcher.mu.Unlock()
+			return false
+		}
+		restarted := launcher.children[before]
+		launcher.mu.Unlock()
+		for _, sig := range restarted.signalled() {
+			if sig == os.Signal(syscall.SIGTERM) {
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, 10*time.Millisecond, "the restarted vpn child whose service failed to start is stopped")
+
+	// The control plane is back.
+	launcher.mu.Lock()
+	launcher.startErrors = nil
+	launcher.mu.Unlock()
+	vpn.setHealth(gateway.ServiceManagementVPN, true, nil)
+
+	require.Eventually(t, func() bool {
+		return supervisor.ServiceHealth(gateway.ServiceManagementVPN) == nil
+	}, 5*time.Second, 10*time.Millisecond, "the vpn child is restarted again and comes up")
+	launcher.mu.Lock()
+	launches := len(launcher.children)
+	launcher.mu.Unlock()
+	assert.GreaterOrEqual(t, launches, before+2, "the vpn child is restarted after the failed start")
+}
+
 func TestCrashedProcess_IsRestartedWithGrowingBackoff(t *testing.T) {
 	supervisor, launcher, clock := newSupervisor(t, func(c *Config) {
 		c.RestartBackoff = 100 * time.Millisecond
