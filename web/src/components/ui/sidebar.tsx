@@ -542,6 +542,7 @@ export const SidebarMenuButton = React.forwardRef<
     const button = (
       <Comp
         ref={ref}
+        data-active={isActive}
         className={cn(
           sidebarMenuButtonVariants({ variant, size, isActive }),
           state === "collapsed" &&
@@ -610,12 +611,13 @@ export const SidebarMenuSubButton = React.forwardRef<
     size?: "sm" | "md";
     isActive?: boolean;
   }
->(({ asChild = false, size = "md", isActive, className, ...props }, ref) => {
+>(({ asChild = false, size = "md", isActive = false, className, ...props }, ref) => {
   const Comp = asChild ? Slot : "a";
 
   return (
     <Comp
       ref={ref}
+      data-active={isActive}
       className={cn(
         "flex h-7 min-w-0 items-center gap-2 overflow-hidden rounded-md px-2 text-xs outline-none transition-colors hover:bg-neutral-200 hover:text-neutral-900 focus-visible:ring-2 focus-visible:ring-neutral-950 active:bg-neutral-200 disabled:pointer-events-none disabled:opacity-50 dark:hover:bg-neutral-800 dark:hover:text-neutral-50 dark:focus-visible:ring-neutral-300 dark:active:bg-neutral-800 aria-disabled:pointer-events-none aria-disabled:opacity-50 [&>svg]:size-4 [&>svg]:shrink-0",
         size === "sm" && "h-6 text-xs",
