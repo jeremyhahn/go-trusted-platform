@@ -399,6 +399,7 @@ PLATFORMCTL_STATIC      ?= bin/platformctl-static
 PLATFORM_INITRD         ?= bin/platform-initrd
 GATEWAYD                ?= bin/gatewayd
 DEPLOYER_PIN            ?= bin/deployer-pin
+DEPLOY_AGENT            ?= bin/deploy-agent
 
 # Cross-compiled arm64 binaries land under their own directory so a native
 # x86-64 build never overwrites them (and vice versa).
@@ -1052,6 +1053,23 @@ build-deployer-pin:
 		--ldflags '-w -s ${LDFLAGS}' \
 		-o $(DEPLOYER_PIN) ./cmd/deployer-pin
 	@echo "Binary size: $$(du -h $(DEPLOYER_PIN) | cut -f1)"
+# ==============================================================================
+
+# ==============================================================================
+# QUIC deploy agent (#1700)
+# ==============================================================================
+# deploy-agent runs on a deploy target in place of an SSH server; the
+# bootstrap deployer reaches it with deployer.transport: quic. Installed by
+# configs/os/deploy-agent.service. See docs/bootstrap/remote-deploy.md.
+
+.PHONY: build-deploy-agent
+build-deploy-agent:
+	@mkdir -p bin
+	@echo "Building deploy-agent (QUIC deploy agent - static)..."
+	CGO_ENABLED=0 $(GOBIN)/go build -tags "osusergo netgo $(BUILD_TAGS)" \
+		--ldflags '-w -s ${LDFLAGS}' \
+		-o $(DEPLOY_AGENT) ./cmd/deploy-agent
+	@echo "Binary size: $$(du -h $(DEPLOY_AGENT) | cut -f1)"
 # ==============================================================================
 
 # Build the public_html directory using devcontainer

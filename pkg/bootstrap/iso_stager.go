@@ -53,24 +53,18 @@ func expandTilde(path string) string {
 	return filepath.Join(home, path[2:])
 }
 
-// remoteISOClient is the small, testable subset of *deployer.SSHClient used
+// remoteISOClient is the deploy transport seam (deployer.RemoteHost) used
 // by sshISOStager. Pulling it out as an interface keeps the freshness logic
 // (size + sha256 comparison) unit-testable without spinning up a real SSH
 // server, while production code still drives a real SSH connection.
-type remoteISOClient interface {
-	Connect(ctx context.Context) error
-	Close() error
-	Run(ctx context.Context, command string) (string, error)
-	StatRemote(ctx context.Context, remotePath string) (size int64, mtime int64, err error)
-	CopyFileStream(ctx context.Context, localPath, remotePath string) error
-}
+type remoteISOClient = deployer.RemoteHost
 
 // newRemoteISOClient is the factory used by sshISOStager to obtain its
-// remote client. Tests override it via the exported test hook to inject a
-// fake implementation; production callers get a real *deployer.SSHClient.
-var newRemoteISOClient = func(host string, port int, user, keyPath, knownHostsPath string) (remoteISOClient, error) {
-	return deployer.NewSSHClient(host, port, user, keyPath, knownHostsPath)
-}
+// remote client for the deployer section's transport: a
+// *deployer.SSHClient for ssh, a quicagent.Client for quic (registered by
+// the quicagent import in deployer_adapter.go). Tests override it to inject
+// a fake implementation.
+var newRemoteISOClient = deployer.NewRemoteHost
 
 // stageMeta is the on-disk schema for the iso-stager's sidecar metadata
 // file. It records the size and lowercase-hex sha256 of the local source
@@ -118,14 +112,8 @@ func newISOStager(cfg *DeployerConfig, logger *slog.Logger) (ISOStager, error) {
 	if cfg == nil {
 		return nil, ErrInvalidConfig{Field: "deployer", Reason: "must not be nil"}
 	}
-	if cfg.Host == "" {
-		return nil, ErrMissingRequiredField{Field: "deployer.host"}
-	}
-	if cfg.User == "" {
-		return nil, ErrMissingRequiredField{Field: "deployer.user"}
-	}
-	if cfg.SSHKey == "" {
-		return nil, ErrMissingRequiredField{Field: "deployer.ssh_key"}
+	if err := cfg.validateRemote(); err != nil {
+		return nil, err
 	}
 	return &sshISOStager{cfg: cfg, logger: logger}, nil
 }
@@ -170,8 +158,9 @@ func (s *sshISOStager) StageVirtualMediaISO(ctx context.Context, localISOPath st
 		}
 	}
 
-	port := deployer.DefaultSSHPort
-	client, err := newRemoteISOClient(s.cfg.Host, port, s.cfg.User, expandTilde(s.cfg.SSHKey), expandTilde(s.cfg.KnownHostsPath))
+	dc := s.cfg.remoteConfig()
+	dc.ApplyDefaults()
+	client, err := newRemoteISOClient(&dc)
 	if err != nil {
 		return "", ErrISOStagingFailed{
 			LocalPath:  localISOPath,
