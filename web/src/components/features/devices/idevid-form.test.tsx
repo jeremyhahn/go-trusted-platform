@@ -153,7 +153,7 @@ describe('IDevIDForm', () => {
 
     await waitFor(() => expect(onSuccess).toHaveBeenCalledTimes(1));
     expect(sent.filter((r) => r.method === 'POST')).toEqual([
-      { method: 'POST', path: '/api/v1/idevid/generate', body: { config: { algorithm: 'RSA_2048', hierarchy: 'endorsement' } } },
+      { method: 'POST', path: '/api/v1/idevid/generate', body: { config: { algorithm: 'DEVICE_KEY_ALGORITHM_RSA_2048', hierarchy: 'endorsement' } } },
       { method: 'POST', path: '/api/v1/idevid/csr', body: { template: { commonName: 'CN=SN-7' } } },
     ]);
     expect(screen.getByText('Success: IDevID certificate issued successfully')).toBeDefined();
@@ -178,7 +178,7 @@ describe('IDevIDForm', () => {
 
     await waitFor(() => expect(onSuccess).toHaveBeenCalledTimes(1));
     expect(sent.find((r) => r.path === '/api/v1/idevid/generate')?.body).toEqual({
-      config: { algorithm: 'ECDSA_P256', hierarchy: 'endorsement' },
+      config: { algorithm: 'DEVICE_KEY_ALGORITHM_ECDSA_P256', hierarchy: 'endorsement' },
     });
   });
 

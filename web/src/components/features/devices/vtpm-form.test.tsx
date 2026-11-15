@@ -43,7 +43,7 @@ describe('VTPMForm', () => {
     await create();
 
     await waitFor(() => expect(onSuccess).toHaveBeenCalledTimes(1));
-    expect(sent).toEqual([{ method: 'POST', path: '/api/v1/vtpm/bundles', body: { options: { hostname: 'vm-one' } } }]);
+    expect(sent).toEqual([{ method: 'POST', path: '/api/v1/vtpm/bundles', body: { hostname: 'vm-one' } }]);
     expect(screen.getByText('Success: vTPM instance created successfully')).toBeDefined();
     expect((screen.getByLabelText('vTPM Name') as HTMLInputElement).value).toBe('');
   });
