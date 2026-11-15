@@ -246,15 +246,29 @@ func (app *App) initClusterNetwork(ctx context.Context) error {
 	if err := app.validateHostNetwork(); err != nil {
 		return err
 	}
+	// A failed bond or zone address is fatal here, unlike in initSDN: the
+	// clustered datastore binds its explicit raft-address next, and Init
+	// would return on that bind failure before it reaches the initSDN
+	// retry. sdnLinksUp stays false, so the next preparation retries the
+	// links.
 	if err := app.initSDNLinks(ctx); err != nil {
-		// Non-fatal, as in initSDN: the raft-address may come from a Linux
-		// bond the installer brought up. A failed step leaves sdnLinksUp
-		// false, so initSDN retries the links later.
-		app.Logger.Warn("SDN: link bring-up before the clustered datastore failed",
-			slog.String("error", err.Error()))
+		return ErrClusterNetworkLinkSetup{Cause: err}
 	}
 	return nil
 }
+
+// ErrClusterNetworkLinkSetup reports that the SDN link bring-up of a
+// clustered node failed before its datastore started. Cause names the bond
+// or zone address that failed.
+type ErrClusterNetworkLinkSetup struct {
+	Cause error
+}
+
+func (e ErrClusterNetworkLinkSetup) Error() string {
+	return "cluster network: required link setup failed before the datastore start: " + e.Cause.Error()
+}
+
+func (e ErrClusterNetworkLinkSetup) Unwrap() error { return e.Cause }
 
 // OVS other_config keys derived from the platform OVSConfig. These are the
 // canonical Open_vSwitch other_config key names consumed by ovs-vswitchd.
