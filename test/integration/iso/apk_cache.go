@@ -3,7 +3,6 @@
 package iso
 
 import (
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -136,14 +135,42 @@ func linkAPKs(src, dst string) (int, error) {
 }
 
 func placeAtomically(src, target string) error {
-	tmp := filepath.Join(filepath.Dir(target),
-		fmt.Sprintf(".%s.%d.tmp", filepath.Base(target), os.Getpid()))
-	_ = os.Remove(tmp)
-	if err := os.Link(src, tmp); err != nil {
-		if err := copyFile(src, tmp); err != nil {
-			_ = os.Remove(tmp)
+	dir := filepath.Dir(target)
+	pattern := "." + filepath.Base(target) + ".*.tmp"
+
+	// The cache volume is shared across containers, whose PIDs collide, so
+	// every staging name is created exclusively by os.CreateTemp and this
+	// writer only ever removes or renames a path it created itself.
+	if staged, err := linkStaged(src, dir, pattern); err == nil {
+		if err := os.Rename(staged, target); err != nil {
+			_ = os.Remove(staged)
 			return err
 		}
+		return nil
+	}
+
+	out, err := os.CreateTemp(dir, pattern)
+	if err != nil {
+		return err
+	}
+	tmp := out.Name()
+	if err := copyFile(src, out); err != nil {
+		out.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := out.Sync(); err != nil {
+		out.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := out.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Chmod(tmp, 0o644); err != nil {
+		_ = os.Remove(tmp)
+		return err
 	}
 	if err := os.Rename(tmp, target); err != nil {
 		_ = os.Remove(tmp)
@@ -152,23 +179,38 @@ func placeAtomically(src, target string) error {
 	return nil
 }
 
-func copyFile(src, dst string) error {
+// linkStaged hard-links src to a fresh staging name in dir: it reserves the
+// name with os.CreateTemp, removes its own empty file and links in its place.
+// On failure nothing it created is left, and nothing else is touched.
+func linkStaged(src, dir, pattern string) (string, error) {
+	f, err := os.CreateTemp(dir, pattern)
+	if err != nil {
+		return "", err
+	}
+	name := f.Name()
+	f.Close()
+	if err := os.Remove(name); err != nil {
+		return "", err
+	}
+	if err := linkFile(src, name); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+// linkFile and copyFile are hooks the tests swap to force the copy path and
+// to interrupt a copy.
+var (
+	linkFile = os.Link
+	copyFile = copyInto
+)
+
+func copyInto(src string, out *os.File) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		return err
-	}
-	if err := out.Sync(); err != nil {
-		out.Close()
-		return err
-	}
-	return out.Close()
+	_, err = io.Copy(out, in)
+	return err
 }
