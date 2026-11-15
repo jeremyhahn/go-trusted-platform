@@ -205,3 +205,71 @@ func TestPlaceAtomicallyInterruptedCopyPublishesNothing(t *testing.T) {
 	require.Error(t, placeAtomically(src, target))
 	assert.Empty(t, dirNames(t, dst), "an interrupted copy left files in the cache")
 }
+
+// TestPlaceAtomicallyHidesAPausedCopy pauses a copy part way through and
+// checks what another container reading the shared cache would see: the
+// final name must hold either nothing or the previous complete file, never
+// the partial bytes, until the copy finishes (Codex P1, #1915).
+func TestPlaceAtomicallyHidesAPausedCopy(t *testing.T) {
+	const prefix = 4 << 10
+	for _, tc := range []struct {
+		name string
+		old  []byte
+	}{
+		{name: "no previous file"},
+		{name: "previous complete file", old: bytes.Repeat([]byte("old complete apk "), 64)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			forceCopyPath(t)
+			srcDir, dst := t.TempDir(), t.TempDir()
+			payload := make([]byte, 1<<20)
+			_, err := rand.Read(payload)
+			require.NoError(t, err)
+			src := filepath.Join(srcDir, "musl-1.2.5-r0.apk")
+			require.NoError(t, os.WriteFile(src, payload, 0o644))
+			target := filepath.Join(dst, "musl-1.2.5-r0.apk")
+			if tc.old != nil {
+				require.NoError(t, os.WriteFile(target, tc.old, 0o644))
+			}
+
+			paused, release := make(chan struct{}), make(chan struct{})
+			orig := copyFile
+			copyFile = func(src string, out *os.File) error {
+				in, err := os.Open(src)
+				if err != nil {
+					return err
+				}
+				defer in.Close()
+				if _, err := io.CopyN(out, in, prefix); err != nil {
+					return err
+				}
+				close(paused)
+				<-release
+				_, err = io.Copy(out, in)
+				return err
+			}
+			t.Cleanup(func() { copyFile = orig })
+
+			done := make(chan error, 1)
+			go func() { done <- placeAtomically(src, target) }()
+			<-paused
+
+			got, err := os.ReadFile(target)
+			if tc.old == nil {
+				assert.True(t, errors.Is(err, os.ErrNotExist),
+					"a paused copy exposed %d bytes under the final name", len(got))
+			} else {
+				require.NoError(t, err)
+				assert.True(t, bytes.Equal(tc.old, got),
+					"a paused copy replaced the complete file with %d partial bytes", len(got))
+			}
+
+			close(release)
+			require.NoError(t, <-done)
+			got, err = os.ReadFile(target)
+			require.NoError(t, err)
+			assert.True(t, bytes.Equal(payload, got), "the finished copy is not the full source")
+			assert.Empty(t, tmpNames(t, dst), "the finished copy left staging files")
+		})
+	}
+}
