@@ -13,12 +13,12 @@ import (
 )
 
 // TestAPKCacheDir checks where the runner-local APK cache lives: the
-// GTP_ISO_APK_CACHE override when set, else a per-version, per-arch
-// directory under the user cache directory.
+// per-version, per-arch directory under the GTP_ISO_APK_CACHE override when
+// set (one CI volume holds every version), else under the user cache directory.
 func TestAPKCacheDir(t *testing.T) {
 	override := t.TempDir()
 	t.Setenv(EnvISOAPKCache, override)
-	assert.Equal(t, override, apkCacheDir(t))
+	assert.Equal(t, filepath.Join(override, DefaultAlpineVersion, DefaultArch), apkCacheDir(t))
 
 	t.Setenv(EnvISOAPKCache, "")
 	got := apkCacheDir(t)
@@ -33,8 +33,9 @@ func TestAPKCacheDir(t *testing.T) {
 // pre-fetch directory iso customize reads, so it is not downloaded again,
 // and that neither a partial temp file nor a platform-built package is seeded.
 func TestSeedPrefetchCache(t *testing.T) {
-	cache := t.TempDir()
-	t.Setenv(EnvISOAPKCache, cache)
+	root := t.TempDir()
+	t.Setenv(EnvISOAPKCache, root)
+	cache := filepath.Join(root, DefaultAlpineVersion, DefaultArch)
 	writeFile(t, filepath.Join(cache, "musl-1.2.5-r0.apk"), "musl")
 	writeFile(t, filepath.Join(cache, ".busybox-1.36.1-r0.apk.1.tmp"), "partial")
 	writeFile(t, filepath.Join(cache, "trusted-platform-p11-host-1.0.0-r0.apk"), "stale build")
@@ -53,8 +54,9 @@ func TestSeedPrefetchCache(t *testing.T) {
 // land in the cache whole, that platform-built packages stay out, and that no
 // partial temp file ever shows up under a *.apk name.
 func TestHarvestPrefetchCache(t *testing.T) {
-	cache := filepath.Join(t.TempDir(), "nested", "cache")
-	t.Setenv(EnvISOAPKCache, cache)
+	root := filepath.Join(t.TempDir(), "nested", "cache")
+	t.Setenv(EnvISOAPKCache, root)
+	cache := filepath.Join(root, DefaultAlpineVersion, DefaultArch)
 
 	isoDir := t.TempDir()
 	prefetch := filepath.Join(isoDir, "apks-prefetch", DefaultArch)
