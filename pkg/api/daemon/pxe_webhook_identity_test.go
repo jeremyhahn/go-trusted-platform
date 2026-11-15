@@ -1,0 +1,169 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+package daemon
+
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/hex"
+	"io"
+	"log/slog"
+	"math/big"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/gorilla/mux"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	restpxe "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/pxe"
+)
+
+const (
+	webhookIdentityMAC    = "aa:bb:cc:dd:ee:01"
+	webhookIdentitySecret = "s3cret"
+)
+
+// webhookIdentityFixture is a real PXE service (initialized, not started)
+// behind the daemon's gRPC adapter and the REST router, with no
+// SetWebhookIdentity: the webhook reads the IDevID fingerprint recorded at
+// enrolment through the service, as platformd does (ruling 673).
+type webhookIdentityFixture struct {
+	svc      pxe.Service
+	root     *mux.Router
+	deviceID string
+}
+
+func newWebhookIdentityFixture(t *testing.T) *webhookIdentityFixture {
+	t.Helper()
+	ctx := context.Background()
+	plan, err := netplan.New(netplan.Environment{ID: 4}, zone.Defaults())
+	require.NoError(t, err)
+	cfg, err := pxe.NewServiceConfig(plan)
+	require.NoError(t, err)
+	cfg.BridgeName = "br-test"
+
+	svc := pxe.NewService(
+		pxe.WithStateManager(pxe.NewStateManager()),
+		pxe.WithVLANIntegration(pxe.NewNoopVLANIntegration(plan)),
+	)
+	require.NoError(t, svc.Initialize(ctx, cfg))
+
+	device, err := svc.RegisterDevice(ctx, webhookIdentityMAC, "port-1")
+	require.NoError(t, err)
+	require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, pxe.StateBooting, "booting"))
+	require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, pxe.StateInstalling, "installing"))
+
+	logger := logging.NewLogger(slog.LevelError, io.Discard)
+	grpcSvc := NewPXEGRPCService(logger, svc)
+	router := restpxe.NewPXERouter(logger, grpcSvc, response.NewResponseWriter(logger, nil), true)
+	router.SetWebhookSecret(webhookIdentitySecret)
+	root := mux.NewRouter()
+	router.RegisterMachineFacingRoutes(root.PathPrefix("/api/v1").Subrouter())
+	return &webhookIdentityFixture{svc: svc, root: root, deviceID: device.ID}
+}
+
+// report posts a signed, successful install-completion report for the
+// fixture's device, over a connection whose verified client leaf is cert.
+func (f *webhookIdentityFixture) report(cert *x509.Certificate) *httptest.ResponseRecorder {
+	body := `{"macAddress":"` + webhookIdentityMAC + `","hostname":"node-1","success":true}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/pxe/webhook/complete", strings.NewReader(body))
+	req.Header.Set(restpxe.WebhookSignatureHeader, restpxe.SignWebhookBody([]byte(webhookIdentitySecret), []byte(body)))
+	req.TLS = &tls.ConnectionState{
+		PeerCertificates: []*x509.Certificate{cert},
+		VerifiedChains:   [][]*x509.Certificate{{cert}},
+	}
+	rec := httptest.NewRecorder()
+	f.root.ServeHTTP(rec, req)
+	return rec
+}
+
+func (f *webhookIdentityFixture) state(t *testing.T) pxe.ProvisioningState {
+	t.Helper()
+	d, err := f.svc.GetDevice(context.Background(), f.deviceID)
+	require.NoError(t, err)
+	return d.State
+}
+
+// webhookIdentityCert is a self-signed client certificate standing in for
+// a device's IDevID.
+func webhookIdentityCert(t *testing.T) *x509.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1001),
+		Subject:      pkix.Name{CommonName: "device"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	require.NoError(t, err)
+	cert, err := x509.ParseCertificate(der)
+	require.NoError(t, err)
+	return cert
+}
+
+func webhookIdentityFingerprint(cert *x509.Certificate) string {
+	sum := sha256.Sum256(cert.Raw)
+	return hex.EncodeToString(sum[:])
+}
+
+// TestPXEWebhook_InstallingDeviceWithRecordedIDevIDCompletes is Codex round
+// 5's P1 (a) on #1896: a fresh device reporting from installing, whose IDevID
+// fingerprint was recorded at enrolment, completes through the real service;
+// the cert-serial binding refused it 403 because only SetDeviceEnrolled,
+// after install completion, recorded a serial (ruling 673).
+func TestPXEWebhook_InstallingDeviceWithRecordedIDevIDCompletes(t *testing.T) {
+	ctx := context.Background()
+	cert := webhookIdentityCert(t)
+
+	f := newWebhookIdentityFixture(t)
+	require.NoError(t, f.svc.RecordIDevIDFingerprint(ctx, f.deviceID, webhookIdentityFingerprint(cert)))
+
+	rec := f.report(cert)
+
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, pxe.StateInstallComplete, f.state(t))
+
+	t.Run("no IDevID recorded", func(t *testing.T) {
+		f := newWebhookIdentityFixture(t)
+		rec := f.report(cert)
+		assert.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+		assert.Equal(t, pxe.StateInstalling, f.state(t))
+	})
+
+	t.Run("another certificate", func(t *testing.T) {
+		f := newWebhookIdentityFixture(t)
+		require.NoError(t, f.svc.RecordIDevIDFingerprint(ctx, f.deviceID, webhookIdentityFingerprint(cert)))
+		rec := f.report(webhookIdentityCert(t))
+		assert.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+		assert.Equal(t, pxe.StateInstalling, f.state(t))
+	})
+}

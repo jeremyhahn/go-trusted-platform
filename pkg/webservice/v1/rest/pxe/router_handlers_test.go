@@ -127,7 +127,7 @@ func handlerRoot(server platformv1.PXEServiceServer) *mux.Router {
 	// serveHandler presents: these tests pin the handlers, and the binding
 	// is pinned by the TestWebhook_* tests.
 	r.SetWebhookIdentity(WebhookIdentityFunc(func(context.Context, string) (string, error) {
-		return handlerDeviceCert.SerialNumber.String(), nil
+		return fingerprintOf(handlerDeviceCert), nil
 	}))
 	root := mux.NewRouter()
 	sub := root.PathPrefix("/api/v1").Subrouter()

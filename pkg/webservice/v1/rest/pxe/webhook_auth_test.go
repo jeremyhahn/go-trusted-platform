@@ -18,9 +18,11 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"io"
 	"log/slog"
 	"math/big"
@@ -72,7 +74,7 @@ func postWebhook(root *mux.Router, body, signature string) *httptest.ResponseRec
 // the body that was signed.
 func TestWebhook_SignedReportReachesTheService(t *testing.T) {
 	cert := deviceCert(t, 1001)
-	server := newWebhookPXE("aa:bb:cc:dd:ee:ff", "1001")
+	server := newWebhookPXE("aa:bb:cc:dd:ee:ff", fingerprintOf(cert))
 	sig := SignWebhookBody([]byte("s3cret"), []byte(webhookBody))
 
 	rec := postWebhookAs(webhookRoot(server, "s3cret"), webhookBody, sig, verifiedTLS(cert))
@@ -83,31 +85,39 @@ func TestWebhook_SignedReportReachesTheService(t *testing.T) {
 	assert.Equal(t, "node-1", server.report.Hostname)
 }
 
-// webhookPXE is a PXE service holding one device record, the record the
-// webhook binds the caller's certificate to, and the report it received.
+// webhookPXE is a PXE service holding one device, the IDevID fingerprint
+// recorded for it at enrolment (the binding the webhook checks its caller
+// against, ruling 673), and the report it received.
 type webhookPXE struct {
 	platformv1.UnimplementedPXEServiceServer
-	devices map[string]*platformv1.PXEDeviceInfo
-	report  *platformv1.PXEWebhookCompleteRequest
+	fingerprints map[string]string
+	report       *platformv1.PXEWebhookCompleteRequest
 }
 
-func newWebhookPXE(mac, certSerial string) *webhookPXE {
-	return &webhookPXE{devices: map[string]*platformv1.PXEDeviceInfo{
-		mac: {Id: "dev-1", MacAddress: mac, CertificateSerial: certSerial},
-	}}
+func newWebhookPXE(mac, fingerprint string) *webhookPXE {
+	return &webhookPXE{fingerprints: map[string]string{mac: fingerprint}}
 }
 
-func (s *webhookPXE) GetDeviceByMAC(_ context.Context, req *platformv1.GetPXEDeviceByMACRequest) (*platformv1.GetPXEDeviceByMACResponse, error) {
-	d, ok := s.devices[req.GetMacAddress()]
+// RecordedIDevIDFingerprint answers the fingerprint recorded for mac, and
+// NotFound for a MAC with no device.
+func (s *webhookPXE) RecordedIDevIDFingerprint(_ context.Context, mac string) (string, error) {
+	fp, ok := s.fingerprints[mac]
 	if !ok {
-		return nil, status.Error(codes.NotFound, "device not found")
+		return "", status.Error(codes.NotFound, "device not found")
 	}
-	return &platformv1.GetPXEDeviceByMACResponse{Device: d}, nil
+	return fp, nil
 }
 
 func (s *webhookPXE) WebhookComplete(_ context.Context, req *platformv1.PXEWebhookCompleteRequest) (*platformv1.PXEWebhookCompleteResponse, error) {
 	s.report = req
 	return &platformv1.PXEWebhookCompleteResponse{Status: handlerOK}, nil
+}
+
+// fingerprintOf is the IDevID fingerprint recorded at enrolment: the
+// lower-case hex SHA-256 of the certificate's DER.
+func fingerprintOf(cert *x509.Certificate) string {
+	sum := sha256.Sum256(cert.Raw)
+	return hex.EncodeToString(sum[:])
 }
 
 // deviceCert is a client certificate with the given serial, standing in
@@ -163,7 +173,7 @@ func TestWebhook_RefusesWithoutAVerifiedClientCertificate(t *testing.T) {
 		"unverified client": {PeerCertificates: []*x509.Certificate{cert}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			server := newWebhookPXE("aa:bb:cc:dd:ee:ff", "1001")
+			server := newWebhookPXE("aa:bb:cc:dd:ee:ff", fingerprintOf(cert))
 			rec := postWebhookAs(webhookRoot(server, "s3cret"), webhookBody, sig, state)
 			assert.Equal(t, http.StatusUnauthorized, rec.Code, rec.Body.String())
 			assert.Nil(t, server.report, "the service was reached")
@@ -172,27 +182,47 @@ func TestWebhook_RefusesWithoutAVerifiedClientCertificate(t *testing.T) {
 }
 
 // TestWebhook_RefusesAnotherDevicesIdentity pins the binding: a verified
-// client may report only for the device whose recorded certificate it holds.
+// client may report only for the device whose IDevID fingerprint was
+// recorded at enrolment (ruling 673).
 func TestWebhook_RefusesAnotherDevicesIdentity(t *testing.T) {
 	sig := SignWebhookBody([]byte("s3cret"), []byte(webhookBody))
+	recorded := deviceCert(t, 1001)
+	caller := deviceCert(t, 2002)
 	for name, server := range map[string]*webhookPXE{
-		"other device's cert": newWebhookPXE("aa:bb:cc:dd:ee:ff", "1001"),
-		"no cert recorded":    newWebhookPXE("aa:bb:cc:dd:ee:ff", ""),
-		"unknown MAC":         newWebhookPXE("11:22:33:44:55:66", "2002"),
+		"another device's IDevID": newWebhookPXE("aa:bb:cc:dd:ee:ff", fingerprintOf(recorded)),
+		"no IDevID recorded":      newWebhookPXE("aa:bb:cc:dd:ee:ff", ""),
+		"unknown MAC":             newWebhookPXE("11:22:33:44:55:66", fingerprintOf(caller)),
 	} {
 		t.Run(name, func(t *testing.T) {
-			rec := postWebhookAs(webhookRoot(server, "s3cret"), webhookBody, sig, verifiedTLS(deviceCert(t, 2002)))
+			rec := postWebhookAs(webhookRoot(server, "s3cret"), webhookBody, sig, verifiedTLS(caller))
 			assert.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
 			assert.Nil(t, server.report, "the service was reached")
 		})
 	}
 }
 
+// TestWebhook_SameSerialOtherKeyIsRefused pins that the certificate serial
+// is no longer the binding: a certificate carrying the recorded IDevID's
+// serial, but another key, is refused.
+func TestWebhook_SameSerialOtherKeyIsRefused(t *testing.T) {
+	recorded := deviceCert(t, 1001)
+	impostor := deviceCert(t, 1001)
+	require.Equal(t, recorded.SerialNumber, impostor.SerialNumber)
+	server := newWebhookPXE("aa:bb:cc:dd:ee:ff", fingerprintOf(recorded))
+	sig := SignWebhookBody([]byte("s3cret"), []byte(webhookBody))
+
+	rec := postWebhookAs(webhookRoot(server, "s3cret"), webhookBody, sig, verifiedTLS(impostor))
+
+	assert.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	assert.Nil(t, server.report, "the service was reached")
+}
+
 // TestWebhook_BoundIdentityStillNeedsTheSignature keeps the HMAC as the
 // second factor: the bound device's certificate without the signature is 401.
 func TestWebhook_BoundIdentityStillNeedsTheSignature(t *testing.T) {
-	server := newWebhookPXE("aa:bb:cc:dd:ee:ff", "1001")
-	rec := postWebhookAs(webhookRoot(server, "s3cret"), webhookBody, "", verifiedTLS(deviceCert(t, 1001)))
+	cert := deviceCert(t, 1001)
+	server := newWebhookPXE("aa:bb:cc:dd:ee:ff", fingerprintOf(cert))
+	rec := postWebhookAs(webhookRoot(server, "s3cret"), webhookBody, "", verifiedTLS(cert))
 	assert.Equal(t, http.StatusUnauthorized, rec.Code, rec.Body.String())
 	assert.Nil(t, server.report, "the service was reached")
 }

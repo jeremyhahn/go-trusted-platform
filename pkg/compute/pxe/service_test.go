@@ -540,6 +540,105 @@ func TestService_SetDeviceEnrolled_InvalidTransition(t *testing.T) {
 	assert.True(t, errors.As(err, &transitionErr))
 }
 
+// TestService_RecordIDevIDFingerprint pins ruling 673 (per ruling 70): the
+// IDevID fingerprint is stored at enrolment, before install completion, so
+// it is accepted while the device boots and installs, leaves the state
+// alone, and is refused once the install is complete.
+func TestService_RecordIDevIDFingerprint(t *testing.T) {
+	const fp = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	const otherFP = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+	ctx := context.Background()
+
+	// advance moves a fresh device through the given states in order.
+	advance := func(t *testing.T, svc Service, id string, states ...ProvisioningState) {
+		t.Helper()
+		for _, st := range states {
+			require.NoError(t, svc.UpdateDeviceState(ctx, id, st, string(st)))
+		}
+	}
+
+	for name, path := range map[string][]ProvisioningState{
+		"discovered": nil,
+		"booting":    {StateBooting},
+		"installing": {StateBooting, StateInstalling},
+	} {
+		t.Run("accepted while "+name, func(t *testing.T) {
+			svc, _ := initializeTestService(t)
+			device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
+			require.NoError(t, err)
+			advance(t, svc, device.ID, path...)
+			before, err := svc.GetDevice(ctx, device.ID)
+			require.NoError(t, err)
+
+			require.NoError(t, svc.RecordIDevIDFingerprint(ctx, device.ID, fp))
+
+			got, err := svc.GetDeviceByMAC(ctx, "00:11:22:33:44:55")
+			require.NoError(t, err)
+			assert.Equal(t, fp, got.IDevIDFingerprint)
+			assert.Equal(t, before.State, got.State, "recording the fingerprint changed the state")
+		})
+	}
+
+	for name, path := range map[string][]ProvisioningState{
+		"install_complete": {StateBooting, StateInstalling, StateInstallComplete},
+		"enrolling":        {StateBooting, StateInstalling, StateInstallComplete, StateEnrolling},
+	} {
+		t.Run("refused once "+name, func(t *testing.T) {
+			svc, _ := initializeTestService(t)
+			device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
+			require.NoError(t, err)
+			advance(t, svc, device.ID, path...)
+
+			err = svc.RecordIDevIDFingerprint(ctx, device.ID, fp)
+			var transitionErr ErrInvalidStateTransition
+			assert.True(t, errors.As(err, &transitionErr), "got %v", err)
+
+			got, err := svc.GetDevice(ctx, device.ID)
+			require.NoError(t, err)
+			assert.Empty(t, got.IDevIDFingerprint)
+		})
+	}
+
+	t.Run("refuses a value that is not a SHA-256 hex digest", func(t *testing.T) {
+		svc, _ := initializeTestService(t)
+		device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
+		require.NoError(t, err)
+		for _, bad := range []string{"", "abc", fp[:63], fp + "0", "0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef", "g123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"} {
+			assert.Error(t, svc.RecordIDevIDFingerprint(ctx, device.ID, bad), "accepted %q", bad)
+		}
+		got, err := svc.GetDevice(ctx, device.ID)
+		require.NoError(t, err)
+		assert.Empty(t, got.IDevIDFingerprint)
+	})
+
+	t.Run("refuses a second, different fingerprint", func(t *testing.T) {
+		svc, _ := initializeTestService(t)
+		device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
+		require.NoError(t, err)
+		require.NoError(t, svc.RecordIDevIDFingerprint(ctx, device.ID, fp))
+
+		assert.NoError(t, svc.RecordIDevIDFingerprint(ctx, device.ID, fp), "re-recording the same fingerprint is a no-op")
+		assert.Error(t, svc.RecordIDevIDFingerprint(ctx, device.ID, otherFP))
+
+		got, err := svc.GetDevice(ctx, device.ID)
+		require.NoError(t, err)
+		assert.Equal(t, fp, got.IDevIDFingerprint)
+	})
+
+	t.Run("needs an initialized service", func(t *testing.T) {
+		err := NewService().RecordIDevIDFingerprint(ctx, "device-123", fp)
+		var notInitErr ErrServiceNotInitialized
+		assert.True(t, errors.As(err, &notInitErr))
+	})
+
+	t.Run("unknown device", func(t *testing.T) {
+		svc, _ := initializeTestService(t)
+		err := svc.RecordIDevIDFingerprint(ctx, "nonexistent", fp)
+		var notFoundErr ErrDeviceNotFound
+		assert.True(t, errors.As(err, &notFoundErr))
+	})
+}
+
 func TestService_AuthorizeDevice_NotInitialized(t *testing.T) {
 	svc := NewService()
 	ctx := context.Background()

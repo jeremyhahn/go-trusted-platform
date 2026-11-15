@@ -17,7 +17,9 @@ package daemon
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -87,7 +89,8 @@ func connectPXERESTKeyed(t *testing.T, server platformv1.PXEServiceServer, key [
 	// and a lookup through the PXE service here would add a call the
 	// direct gRPC path does not make.
 	pxe.SetWebhookIdentity(pxerest.WebhookIdentityFunc(func(context.Context, string) (string, error) {
-		return clientLeaf.SerialNumber.String(), nil
+		sum := sha256.Sum256(clientLeaf.Raw)
+		return hex.EncodeToString(sum[:]), nil
 	}))
 	operator := mux.NewRouter()
 	pxe.RegisterRoutes(operator.PathPrefix("/api/v1").Subrouter())
