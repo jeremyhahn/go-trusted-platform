@@ -1232,11 +1232,11 @@ Recorded because a reader will otherwise assume they are covered.
    of it is advisory (§3 invariant 20, #126) — so a host that never boots the
    media spends the advisory window plus the poll window before the retry
    loop moves on.
-6. **The canonical trust modes are stubs.** `bootstrap auto|dane|noise|spki`
-   return `PendingBootstrapBackendError`; only `direct` does work, and that work
-   is limited to checking that the `--bundle` path exists and is not a
-   directory. It neither parses the PEM nor records the bundle anywhere,
-   though its help text says it does (`pkg/cli/commands/bootstrap/canonical_modes.go`).
+6. **Four of the canonical trust modes are stubs.** `bootstrap auto|dane|noise|spki`
+   return `PendingBootstrapBackendError`. `direct` is no longer part of this
+   gap: it decodes the `--bundle` PEM, requires an X.509 CA certificate, and
+   installs the bundle with `--install-to-system-trust`
+   (`pkg/cli/commands/bootstrap/canonical_modes.go`).
 7. **Media-read attribution assumes the BMC's SMB source address is its
    `bmc_address`, and that smbd retitles its workers.** `MediaReadProbe.Client`
    is matched against the worker title pkg/ipxe reads from `/proc` — Debian's

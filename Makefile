@@ -152,7 +152,10 @@ endif
 # so the pure-Go implementation must be selected explicitly or the
 # build fails with "build constraints exclude all Go files" in
 # go-mysql-server/internal/regex.
-BUILD_TAGS := iam rest quic mcp cluster gms_pure_go
+#
+# opa: the OPA policy engines (pkg/policy/opa, pkg/compute/container).
+# Without it they compile to stubs returning ErrOPANotBuilt (#1691).
+BUILD_TAGS := iam rest quic mcp cluster gms_pure_go opa
 
 # go-quicbaas tags.
 #
@@ -396,6 +399,7 @@ PLATFORMCTL_STATIC      ?= bin/platformctl-static
 PLATFORM_INITRD         ?= bin/platform-initrd
 GATEWAYD                ?= bin/gatewayd
 DEPLOYER_PIN            ?= bin/deployer-pin
+DEPLOY_AGENT            ?= bin/deploy-agent
 
 # Cross-compiled arm64 binaries land under their own directory so a native
 # x86-64 build never overwrites them (and vice versa).
@@ -1051,6 +1055,23 @@ build-deployer-pin:
 	@echo "Binary size: $$(du -h $(DEPLOYER_PIN) | cut -f1)"
 # ==============================================================================
 
+# ==============================================================================
+# QUIC deploy agent (#1700)
+# ==============================================================================
+# deploy-agent runs on a deploy target in place of an SSH server; the
+# bootstrap deployer reaches it with deployer.transport: quic. Installed by
+# configs/os/deploy-agent.service. See docs/bootstrap/remote-deploy.md.
+
+.PHONY: build-deploy-agent
+build-deploy-agent:
+	@mkdir -p bin
+	@echo "Building deploy-agent (QUIC deploy agent - static)..."
+	CGO_ENABLED=0 $(GOBIN)/go build -tags "osusergo netgo $(BUILD_TAGS)" \
+		--ldflags '-w -s ${LDFLAGS}' \
+		-o $(DEPLOY_AGENT) ./cmd/deploy-agent
+	@echo "Binary size: $$(du -h $(DEPLOY_AGENT) | cut -f1)"
+# ==============================================================================
+
 # Build the public_html directory using devcontainer
 # This target uses docker to ensure consistent builds regardless of host environment
 .PHONY: build-public-html
@@ -1387,6 +1408,7 @@ SHARD_PICK = awk -v n=$(SHARDS) -v s=$(SHARD) '(NR - 1) % n == s'
 test: check-insecure-tls check-go-build-tags
 	@echo "Running all unit tests..."
 	go test -tags "$(BUILD_TAGS)" -v -skip "$(TEST_SKIP)" $$({ go list ./pkg/... ./cmd/... 2>/dev/null | grep -v -E "$(TEST_EXCLUDE)"; printf '%s\n' $(TEST_UNIT_PKGS); } | $(SHARD_PICK))
+	$(if $(filter 0,$(strip $(SHARD))),$(MAKE) --no-print-directory test-noopa)
 
 .PHONY: test-fips
 ## test-fips: FIPS 140-3 suite: build ./... and run `make test`, both with the fips tag under GODEBUG=fips140=only
@@ -1425,6 +1447,25 @@ test-fips:
 			-baseline $(FIPS_FOREIGN_BASELINE) -tags "$$tags" -skip-tests "$(TEST_SKIP)" "$(FIPS_LOG)" || status=$$?; \
 	fi; \
 	exit $$status
+
+.PHONY: test-noopa
+## test-noopa: Unit tests of the !opa build: the OPA engine packages and their consumers with opa dropped from BUILD_TAGS (#1691)
+#
+# BUILD_TAGS carries opa, so `make test` and `make test-race` never compile
+# the ErrOPANotBuilt stubs (engine_noopa.go, opa_engine_noopa.go) or their
+# !opa tests. This target runs every package that splits on the tag, and
+# every package that imports pkg/policy/opa, with the otherwise required
+# tags minus opa: the stubs' refusals and the consumers' behaviour without
+# an engine are tested, and a consumer test that needs the real engine
+# fails here until it carries the opa tag. `make test` runs it after the
+# tagged suite, once (shard 0 only, so test-fips's four shards run it once),
+# which puts it in ci.yml's test step and test-fips without a workflow edit.
+NOOPA_TAGS := $(filter-out opa,$(BUILD_TAGS))
+NOOPA_PKGS := ./pkg/policy/opa/ ./pkg/compute/container/ \
+	./pkg/sdn/gateway/proxysvc/ ./pkg/sdn/gateway/services/vpn/ ./pkg/sdn/gateway/ \
+	./pkg/vpn/... ./pkg/api/daemon/... ./pkg/sdn/gateway/commands/...
+test-noopa:
+	go test -count=1 -tags "$(NOOPA_TAGS)" -skip "$(TEST_SKIP)" $(NOOPA_PKGS)
 
 .PHONY: test-pkg
 ## test-pkg: Run unit tests for ONE package with the derived tag set, e.g. make test-pkg PKG=./pkg/api/daemon/

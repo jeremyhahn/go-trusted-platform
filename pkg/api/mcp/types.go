@@ -827,6 +827,11 @@ type ServiceProvider interface {
 	DaemonStopService(ctx context.Context, name string) (interface{}, error)
 	DaemonRestartService(ctx context.Context, name string) (interface{}, error)
 	DaemonListProtocols(ctx context.Context) (interface{}, error)
+	// DaemonGetConfig returns the daemon configuration; an empty section
+	// returns every section.
+	DaemonGetConfig(ctx context.Context, section string) (interface{}, error)
+	// DaemonReloadConfig reloads the daemon configuration from disk.
+	DaemonReloadConfig(ctx context.Context) (interface{}, error)
 
 	// CA operations
 	CAInfo(ctx context.Context) (interface{}, error)

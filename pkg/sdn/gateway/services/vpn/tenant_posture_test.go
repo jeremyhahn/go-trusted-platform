@@ -11,6 +11,11 @@
 // 2. Commercial License
 //    Contact licensing@automatethethings.com for commercial licensing options.
 
+// The tenant posture policies compile in a real OPA engine; the !opa build's
+// behaviour is tenant_posture_noopa_test.go (#1691).
+
+//go:build opa
+
 package vpn
 
 import (

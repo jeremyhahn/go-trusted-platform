@@ -143,6 +143,13 @@ func (m *alpineMirror) serve(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(file.body))
 }
 
+// requests returns how many requests the mirror has received, whatever
+// their path or method: a path the mirror does not carry (the ISO among
+// them) counts in unknownGets.
+func (m *alpineMirror) requests() int64 {
+	return m.indexGets.Load() + m.packageGets.Load() + m.rootfsGets.Load() + m.unknownGets.Load()
+}
+
 // URL is the mirror base iso customize takes as alpine-mirror.
 func (m *alpineMirror) URL() string {
 	return m.server.URL + "/alpine"
