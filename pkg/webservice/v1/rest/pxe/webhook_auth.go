@@ -127,50 +127,52 @@ func (r *PXERouter) verifyWebhook(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// WebhookIdentity answers the serial of the certificate recorded for the
-// device with the given MAC: the identity that device presented at
-// enrollment, which the install-completion webhook binds its caller to.
+// WebhookIdentity answers the IDevID fingerprint (lower-case hex SHA-256 of
+// the IDevID certificate's DER) stored at enrolment for the device with the
+// given MAC: the binding the install-completion webhook verifies its caller
+// against (ruling 673, SPEC installer row).
 type WebhookIdentity interface {
-	RecordedCertificateSerial(ctx context.Context, mac string) (string, error)
+	RecordedIDevIDFingerprint(ctx context.Context, mac string) (string, error)
 }
 
 // WebhookIdentityFunc adapts a function to WebhookIdentity.
 type WebhookIdentityFunc func(ctx context.Context, mac string) (string, error)
 
-// RecordedCertificateSerial calls f.
-func (f WebhookIdentityFunc) RecordedCertificateSerial(ctx context.Context, mac string) (string, error) {
+// RecordedIDevIDFingerprint calls f.
+func (f WebhookIdentityFunc) RecordedIDevIDFingerprint(ctx context.Context, mac string) (string, error) {
 	return f(ctx, mac)
 }
 
 // SetWebhookIdentity replaces the device-record lookup the webhook binds
-// its caller to. Unset, the router reads the PXE device record by MAC
-// through its PXE service (GetDeviceByMAC, certificate_serial).
+// its caller to. Unset, the router asks its PXE service for the IDevID
+// fingerprint recorded at enrolment (RecordedIDevIDFingerprint).
 func (r *PXERouter) SetWebhookIdentity(identity WebhookIdentity) {
 	r.webhookIdentity = identity
 }
 
-// recordedCertificateSerial is the default WebhookIdentity: the PXE device
-// record's certificate_serial, read by MAC.
-func (r *PXERouter) recordedCertificateSerial(ctx context.Context, mac string) (string, error) {
+// recordedIDevIDFingerprint is the default WebhookIdentity: the PXE
+// service's RecordedIDevIDFingerprint, read by MAC. A server without that
+// method answers service unavailable.
+func (r *PXERouter) recordedIDevIDFingerprint(ctx context.Context, mac string) (string, error) {
 	if r.webhookIdentity != nil {
-		return r.webhookIdentity.RecordedCertificateSerial(ctx, mac)
+		return r.webhookIdentity.RecordedIDevIDFingerprint(ctx, mac)
 	}
-	if r.server == nil {
+	identity, ok := r.server.(interface {
+		RecordedIDevIDFingerprint(context.Context, string) (string, error)
+	})
+	if !ok {
 		return "", &protorest.ErrServiceUnavailable{Service: "pxe"}
 	}
-	resp, err := r.server.GetDeviceByMAC(ctx, &platformv1.GetPXEDeviceByMACRequest{MacAddress: mac})
-	if err != nil {
-		return "", err
-	}
-	return resp.GetDevice().GetCertificateSerial(), nil
+	return identity.RecordedIDevIDFingerprint(ctx, mac)
 }
 
 // verifyWebhookIdentity enforces the SPEC installer row: the
-// install-completion caller authenticates with its device identity over
-// mTLS, and reports only for itself. The listener must have verified the
-// client's certificate chain (401 otherwise), and the leaf's serial must be
-// the certificate recorded on the reported MAC's device (403 otherwise: an
-// unknown MAC, a device with no recorded certificate, or another device's).
+// install-completion caller authenticates with its IDevID over mTLS, and
+// reports only for itself. The listener must have verified the client's
+// certificate chain (401 otherwise), and the hex SHA-256 of the leaf must be
+// the IDevID fingerprint stored at enrolment for the reported MAC's device
+// (403 otherwise: an unknown MAC, a device with none recorded, or another
+// device's), per ruling 673.
 func (r *PXERouter) verifyWebhookIdentity(w http.ResponseWriter, req *http.Request, body []byte) bool {
 	if req.TLS == nil || len(req.TLS.VerifiedChains) == 0 || len(req.TLS.VerifiedChains[0]) == 0 {
 		r.respWriter.Error401(w, req, ErrWebhookIdentity{Unauthenticated: true})
@@ -190,7 +192,7 @@ func (r *PXERouter) verifyWebhookIdentity(w http.ResponseWriter, req *http.Reque
 		return false
 	}
 
-	recorded, err := r.recordedCertificateSerial(req.Context(), mac)
+	recorded, err := r.recordedIDevIDFingerprint(req.Context(), mac)
 	if status.Code(err) == codes.NotFound {
 		r.respWriter.Error403(w, req, ErrWebhookIdentity{Reason: "no device is recorded for the reported MAC"}, nil)
 		return false
@@ -200,10 +202,11 @@ func (r *PXERouter) verifyWebhookIdentity(w http.ResponseWriter, req *http.Reque
 		return false
 	}
 	if recorded == "" {
-		r.respWriter.Error403(w, req, ErrWebhookIdentity{Reason: "the reported device has no recorded certificate"}, nil)
+		r.respWriter.Error403(w, req, ErrWebhookIdentity{Reason: "the reported device has no IDevID recorded at enrolment"}, nil)
 		return false
 	}
-	if leaf.SerialNumber == nil || leaf.SerialNumber.String() != recorded {
+	sum := sha256.Sum256(leaf.Raw)
+	if !hmac.Equal([]byte(hex.EncodeToString(sum[:])), []byte(recorded)) {
 		r.respWriter.Error403(w, req, ErrWebhookIdentity{Reason: "the client certificate is not the reported device's"}, nil)
 		return false
 	}

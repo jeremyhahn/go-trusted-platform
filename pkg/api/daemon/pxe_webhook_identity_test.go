@@ -37,6 +37,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ipxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
@@ -67,6 +68,15 @@ func newWebhookIdentityFixture(t *testing.T) *webhookIdentityFixture {
 	cfg, err := pxe.NewServiceConfig(plan)
 	require.NoError(t, err)
 	cfg.BridgeName = "br-test"
+	// Initialize builds (but does not start) the iPXE server, which needs a
+	// boot entry; the service is never started, so nothing is served.
+	cfg.IPXEConfig.LocalFilesDir = t.TempDir()
+	cfg.IPXEConfig.InstallsDir = t.TempDir()
+	cfg.IPXEConfig.FirmwareDir = t.TempDir()
+	cfg.IPXEConfig.FirmwareOffline = true
+	cfg.IPXEConfig.BootEntries = []ipxe.BootEntry{
+		{Name: "test", Description: "Test Entry", Kernel: "http://example.com/kernel"},
+	}
 
 	svc := pxe.NewService(
 		pxe.WithStateManager(pxe.NewStateManager()),

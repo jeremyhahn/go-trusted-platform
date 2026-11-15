@@ -499,6 +499,7 @@ func copyDeviceInfo(src *DeviceInfo) *DeviceInfo {
 		StateReason:       src.StateReason,
 		Profile:           src.Profile, // Shallow copy - profiles should be immutable
 		CertificateSerial: src.CertificateSerial,
+		IDevIDFingerprint: src.IDevIDFingerprint,
 		CurrentVLAN:       src.CurrentVLAN,
 		TargetVLAN:        src.TargetVLAN,
 		CreatedAt:         src.CreatedAt,

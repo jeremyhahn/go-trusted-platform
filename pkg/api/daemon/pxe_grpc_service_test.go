@@ -177,6 +177,15 @@ func (m *mockPXEService) UpdateDeviceState(ctx context.Context, deviceID string,
 	return nil
 }
 
+func (m *mockPXEService) RecordIDevIDFingerprint(ctx context.Context, deviceID, fingerprint string) error {
+	device, ok := m.devices[deviceID]
+	if !ok {
+		return pxe.ErrDeviceNotFound{DeviceID: deviceID}
+	}
+	device.IDevIDFingerprint = fingerprint
+	return nil
+}
+
 func (m *mockPXEService) SetDeviceEnrolled(ctx context.Context, deviceID, certSerial string) error {
 	if m.enrollErr != nil {
 		return m.enrollErr

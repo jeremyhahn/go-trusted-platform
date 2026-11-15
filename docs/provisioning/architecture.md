@@ -114,9 +114,11 @@ machine boots (provisioning zone: enrollment traffic only)
    │
    ├─ PollSession → config delivered
    ├─ install (SignDigest for Secure Boot; FIDO2 unlock enrolled)
-   ├─ WebhookComplete
+   ├─ IDevID enrolment (fingerprint recorded)
+   ├─ WebhookComplete (caller's mTLS leaf verified against the
+   │                   recorded IDevID fingerprint, ruling 673)
    │
-   └─ IDevID enrolment → port authenticates → production zone
+   └─ port authenticates → production zone
                                             → attestation
 ```
 

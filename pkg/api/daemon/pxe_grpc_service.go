@@ -15,6 +15,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -63,6 +64,26 @@ func (s *PXEGRPCService) requireService() error {
 		return serviceNotConfigured("pxe", "PXE service is not configured on this node")
 	}
 	return nil
+}
+
+// RecordedIDevIDFingerprint answers the IDevID fingerprint recorded at
+// enrolment for the device with the given MAC: the binding the REST
+// install-completion webhook verifies its mTLS caller against (ruling 673).
+// It is a Go method for the REST router, not a proto RPC. A MAC with no
+// device answers codes.NotFound; a device with none recorded answers "".
+func (s *PXEGRPCService) RecordedIDevIDFingerprint(ctx context.Context, mac string) (string, error) {
+	if err := s.requireService(); err != nil {
+		return "", err
+	}
+	device, err := s.pxeService.GetDeviceByMAC(ctx, mac)
+	if err != nil {
+		var notFound pxe.ErrDeviceNotFound
+		if errors.As(err, &notFound) {
+			return "", status.Error(codes.NotFound, "device not found")
+		}
+		return "", s.mapPXEError(err, "get device for webhook identity")
+	}
+	return device.IDevIDFingerprint, nil
 }
 
 // =============================================================================

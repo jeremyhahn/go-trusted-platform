@@ -47,6 +47,9 @@ type Service interface {
 	// State Transitions
 	UpdateDeviceState(ctx context.Context, deviceID string, state ProvisioningState, reason string) error
 	SetDeviceEnrolled(ctx context.Context, deviceID, certSerial string) error
+	// RecordIDevIDFingerprint stores the device's IDevID fingerprint at
+	// enrolment, before install completion (ruling 673).
+	RecordIDevIDFingerprint(ctx context.Context, deviceID, fingerprint string) error
 	AuthorizeDevice(ctx context.Context, deviceID string, targetVLAN uint16) error
 	QuarantineDevice(ctx context.Context, deviceID string, reason string) error
 	RetryDevice(ctx context.Context, deviceID string) error
@@ -610,6 +613,75 @@ func (s *service) SetDeviceEnrolled(ctx context.Context, deviceID, certSerial st
 	)
 
 	return nil
+}
+
+// RecordIDevIDFingerprint stores the IDevID fingerprint (lower-case hex
+// SHA-256 of the IDevID certificate's DER) the device presented at
+// enrolment. Per ruling 70 and ruling 673, enrolment comes before install
+// completion: the fingerprint is accepted while the device is discovered,
+// booting or installing, and refused once the install is complete. It
+// makes no state transition. Re-recording the same fingerprint is a no-op;
+// a different one is refused.
+func (s *service) RecordIDevIDFingerprint(ctx context.Context, deviceID, fingerprint string) error {
+	if !s.initialized.Load() {
+		return ErrServiceNotInitialized{}
+	}
+	if !isIDevIDFingerprint(fingerprint) {
+		return ErrInvalidConfiguration{
+			Field:  "idevid_fingerprint",
+			Reason: "must be 64 lower-case hex characters (SHA-256)",
+		}
+	}
+
+	device, err := s.stateManager.Get(deviceID)
+	if err != nil {
+		return ErrDeviceNotFound{DeviceID: deviceID}
+	}
+
+	updateErr := s.stateManager.UpdateDevice(deviceID, func(d *DeviceInfo) error {
+		switch d.State {
+		case StateDiscovered, StateBooting, StateInstalling:
+		default:
+			return ErrInvalidStateTransition{
+				DeviceID:  deviceID,
+				FromState: string(d.State),
+				ToState:   string(d.State),
+				Reason:    "the IDevID fingerprint is recorded at enrolment, before install completion",
+			}
+		}
+		if d.IDevIDFingerprint != "" && d.IDevIDFingerprint != fingerprint {
+			return ErrInvalidState{
+				DeviceID: deviceID,
+				State:    string(d.State),
+				Reason:   "a different IDevID fingerprint is already recorded",
+			}
+		}
+		d.IDevIDFingerprint = fingerprint
+		return nil
+	})
+	if updateErr != nil {
+		return updateErr
+	}
+
+	s.logger.Info("Device IDevID fingerprint recorded",
+		"device_id", deviceID,
+		"mac_address", device.MACAddress.String(),
+		"idevid_fingerprint", fingerprint,
+	)
+	return nil
+}
+
+// isIDevIDFingerprint reports whether fp is a lower-case hex SHA-256 digest.
+func isIDevIDFingerprint(fp string) bool {
+	if len(fp) != 64 {
+		return false
+	}
+	for _, c := range fp {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // AuthorizeDevice authorizes a device for production network access.

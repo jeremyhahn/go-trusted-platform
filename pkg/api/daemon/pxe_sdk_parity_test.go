@@ -227,6 +227,18 @@ func (f *recordingPXEService) UpdateDeviceState(_ context.Context, deviceID stri
 	return nil
 }
 
+func (f *recordingPXEService) RecordIDevIDFingerprint(_ context.Context, deviceID, fingerprint string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("RecordIDevIDFingerprint", deviceID, fingerprint)
+	device, err := f.lookup(deviceID)
+	if err != nil {
+		return err
+	}
+	device.IDevIDFingerprint = fingerprint
+	return nil
+}
+
 func (f *recordingPXEService) SetDeviceEnrolled(_ context.Context, deviceID, certSerial string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
