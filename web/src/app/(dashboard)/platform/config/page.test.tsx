@@ -68,8 +68,15 @@ describe("ConfigPage", () => {
     fetchMock.mockReset();
     fetchMock.mockImplementation((input, init) => {
       const url = String(input);
+      // A real fetch never throws synchronously: a route that throws is
+      // a network failure, which fetch reports as a rejected promise.
       for (const r of [...routes].reverse()) {
-        const res = r(url, init);
+        let res: Response | undefined;
+        try {
+          res = r(url, init);
+        } catch (err) {
+          return Promise.reject(err);
+        }
         if (res) return Promise.resolve(res);
       }
       return Promise.resolve(textResponse(404, "not found"));
