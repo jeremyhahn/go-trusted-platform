@@ -12,7 +12,7 @@ import (
 var ErrLookupDisabled = errors.New("depscheck: GOPROXY=off disables module version lookup, so the latest release of each dependency cannot be known; run make deps-check with access to the module proxy and the dev Gitea")
 
 // ErrUsage is returned when no module directory is given.
-var ErrUsage = errors.New("depscheck: usage: depscheck [-go <go command>] [-first-party <module path prefix>] <module dir>...")
+var ErrUsage = errors.New("depscheck: usage: depscheck [-go <go command>] [-first-party <module path prefix>] [-base <commit>] [-vuln [-govulncheck <command>] [-vuln-tags <tags>]] [-bump] <module dir>...")
 
 // ParseError reports a go.mod line the parser does not understand.
 type ParseError struct {
@@ -60,3 +60,32 @@ type LookupError struct {
 func (e *LookupError) Error() string {
 	return fmt.Sprintf("depscheck: cannot look up the latest version of %s: %s", e.Module, e.Reason)
 }
+
+// BaseError reports a merge-base go.mod that could not be read: a bad
+// commit or a failed git command. A missing file is not one (a new module).
+type BaseError struct {
+	Dir    string
+	Commit string
+	Stderr string
+	Err    error
+}
+
+func (e *BaseError) Error() string {
+	return fmt.Sprintf("depscheck: reading %s/go.mod at %s: %v: %s", e.Dir, e.Commit, e.Err, strings.TrimSpace(e.Stderr))
+}
+
+func (e *BaseError) Unwrap() error { return e.Err }
+
+// VulnError reports a govulncheck run that failed or printed output that
+// does not decode. A vulnerability scan that did not run never passes.
+type VulnError struct {
+	Dir    string
+	Stderr string
+	Err    error
+}
+
+func (e *VulnError) Error() string {
+	return fmt.Sprintf("depscheck: govulncheck in %s: %v: %s", e.Dir, e.Err, strings.TrimSpace(e.Stderr))
+}
+
+func (e *VulnError) Unwrap() error { return e.Err }

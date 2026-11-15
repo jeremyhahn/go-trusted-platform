@@ -1,4 +1,9 @@
 # ci-template: v1.35.1 (customized)
+# Ruling 640 (ci-template v1.39 deltas, adopted 2026-11-15): the lint job's
+# `Base commit for deps-check (ruling 640)` step passes DEPS_CHECK_BASE to
+# make deps-check (the shared depscheck v1.0.0 in scripts/depscheck), and a
+# workflow_dispatch on ci/deps-bump is not refused: deps-bump.yml dispatches
+# this workflow there, because the PR it opens starts no pull_request run.
 #
 # v1.35.1 (DS-8433, CA m2557): the Signatures job of handbook cd17d28
 # (ci-template v1.35.1) is adopted as is, in CI Gate's needs, env block and a
@@ -394,7 +399,7 @@ jobs:
           }
           verdict=run N=0 PROOF=
           # v1.30 (fixes 3 and 5): the refusals come first.
-          if [ "$EVENT" = workflow_dispatch ] && [ "$REF" != refs/heads/main ]; then
+          if [ "$EVENT" = workflow_dispatch ] && [ "$REF" != refs/heads/main ] && [ "$REF" != refs/heads/ci/deps-bump ]; then
             verdict=refused
             echo "::error::workflow_dispatch on $REF: the full tier runs on main only, never on a PR branch (ci-template v1.30); every job skips and CI Gate fails"
           elif [ "$EVENT" = pull_request ] && [ "${HEAD_REF#lane-ckpt/}" != "$HEAD_REF" ]; then
@@ -606,6 +611,24 @@ jobs:
           IN_IMAGE_GOMAXPROCS: 8
         run: scripts/in-toolchain-image.sh "$TOOLCHAIN_IMAGE" make gosec GOSEC_CONCURRENCY=2
 
+      # Ruling 640 (ci-template v1.39): the commit deps-check compares go.mod
+      # against: the PR's base sha or a push's `before`, fetched at depth 1. A
+      # schedule or workflow_dispatch run sets none and gets the full gate; a
+      # fetch that fails leaves it unset, with a warning: never a silent pass.
+      - name: Base commit for deps-check (ruling 640)
+        if: ${{ !cancelled() && env.TOOLCHAIN_IMAGE != '' && (github.event_name == 'pull_request' || github.event_name == 'push') }}
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          case $BASE_SHA in
+            ''|*[!0-9a-f]*|0000000000000000000000000000000000000000) echo "deps-check: no base commit; the full gate runs"; exit 0 ;;
+          esac
+          if git fetch --no-tags --depth=1 origin "$BASE_SHA"; then
+            echo "DEPS_CHECK_BASE=$BASE_SHA" >> "$GITHUB_ENV"
+          else
+            echo "::warning title=deps-check::base commit $BASE_SHA could not be fetched; the full gate runs"
+          fi
+
       # Fails when a library, first-party or third-party, is behind its latest
       # release without devops.md §9's documented reason (ci-standard.md §1).
       # v1.28: a lint-class gate of seconds on the PR tier, every event, a
@@ -616,7 +639,7 @@ jobs:
         env:
           IN_IMAGE_NETWORK: bridge
           IN_IMAGE_MEMORY: 4g
-        run: scripts/in-toolchain-image.sh "$TOOLCHAIN_IMAGE" make deps-check
+        run: scripts/in-toolchain-image.sh "$TOOLCHAIN_IMAGE" "make deps-check DEPS_CHECK_BASE='${DEPS_CHECK_BASE:-}'"
 
       - name: Tear down
         if: always()

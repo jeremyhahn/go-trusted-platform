@@ -4770,8 +4770,21 @@ deps-latest:
 # Gitea: under GOPROXY=off it fails with that reason instead of passing.
 .PHONY: deps-check
 ## deps-check: Fail when a dependency is behind its latest version without a go.mod reason comment
+# deps-check and deps-bump: the shared depscheck v1.0.0 (handbook
+# templates/deps/depscheck, ruling 640). With DEPS_CHECK_BASE (ci.yml passes
+# the PR base or the push's before) a lag fails only on a go.mod line the
+# change adds or bumps; -vuln fails a vulnerable version of a go.mod
+# requirement. deps-bump moves every failing requirement to latest; the
+# daily deps-bump.yml PR carries it.
+DEPS_CHECK_MODULES ?= . sdk/go
+GOVULNCHECK ?= govulncheck
+
 deps-check:
-	@$(GO) run ./scripts/depscheck -go $(GO) . sdk/go
+	$(GO) run ./scripts/depscheck -go $(GO) $(if $(DEPS_CHECK_BASE),-base $(DEPS_CHECK_BASE)) -vuln -govulncheck $(GOVULNCHECK) $(if $(DEPS_CHECK_VULN_TAGS),-vuln-tags $(DEPS_CHECK_VULN_TAGS)) $(DEPS_CHECK_MODULES)
+
+.PHONY: deps-bump
+deps-bump:
+	$(GO) run ./scripts/depscheck -go $(GO) -bump $(DEPS_CHECK_MODULES)
 
 # ---- release-alpha: handbook template release-alpha v2.4.0 ----
 # make release-alpha VERSION=vX.Y.Z-alpha cuts an internal alpha from main

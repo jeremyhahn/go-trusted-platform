@@ -1,0 +1,212 @@
+# deps-bump-template: v1.0.0 — the daily dependency bump PR (ruling 640).
+# v1.0.0 (2026-11-14, ruling 640, owner decision 222 (a); ruling 633 allows
+# the schedule trigger, and no host timer runs it): ci-template v1.39's
+# deps-check fails a library behind its latest release only when a change
+# adds or bumps it, so a lag nobody touches no longer reddens a PR. This
+# workflow carries those lags instead. Once a day, and on workflow_dispatch,
+# it runs the shared depscheck's `make deps-bump` in the toolchain image,
+# verifies with `make deps-check` (the full gate, no base) and `make build`,
+# and lands the go.mod and go.sum changes as ONE commit on the fixed branch
+# ci/deps-bump, with ONE pull request into main labelled `code-review` and
+# `task:ready`, so the normal review and auto-merge land it.
+#
+#   - The commit is written through the git data API with GITHUB_TOKEN
+#     (blobs, a tree on the base commit's tree, a commit), so GitHub signs it
+#     and the Signatures check reads it as a `web-flow` commit.
+#   - With an open PR on the branch, the job first calls
+#     PUT pulls/N/update-branch and builds on the PR's new tip. It never
+#     force-updates a ref: a ref update is a fast-forward, and a branch left
+#     behind by an unmerged closed PR fails the job, for a person to close.
+#     The branch of a merged PR is deleted and re-created from main, which
+#     loses nothing.
+#   - A govulncheck finding on the standard library, the toolchain or an
+#     indirect-only module is reported, not failed, by deps-check, so it does
+#     not stop the verify: the portfolio-wide toolchain pass carries stdlib.
+#   - A PR or push made with GITHUB_TOKEN starts no pull_request run, so the
+#     job dispatches ci.yml on ci/deps-bump; ci-template v1.39 runs that
+#     dispatch as the PR tier and its CI Gate check attaches to the head.
+#   - OPEN OWNER QUESTION: code-review.yml runs on pull_request_target, which
+#     a GITHUB_TOKEN PR or label change does not start either, so the review
+#     does not begin on its own. code-review.yml is unchanged here; until the
+#     owner rules, a person or agent with its own token re-applies the
+#     `code-review` label to start it.
+#
+# GitHub only (the git data API calls are GitHub's). Copy to
+# .github/workflows/deps-bump.yml. The Makefile needs `deps-bump`, `deps-check`
+# and `build` (handbook templates/deps/depscheck/README.md). CUSTOMIZE: the
+# cron minute, per repository, off 03:00 (nightly), 04:00 (ci) and fuzz.yml's.
+
+name: Deps Bump
+
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+# One bump at a time per repository; a newer run waits, never cancels one
+# halfway through its ref update.
+concurrency:
+  group: deps-bump-${{ github.repository }}
+  cancel-in-progress: false
+
+env:
+  BRANCH: ci/deps-bump
+  PR_TITLE: 'deps: bump dependencies to latest (ruling 640)'
+
+jobs:
+  bump:
+    name: Deps bump
+    if: ${{ github.server_url == 'https://github.com' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      CI_STACK_PREFIX: ${{ github.event.repository.name }}-ci-
+      CI_CACHE_CLASS: pr
+      CI_IMAGE_NAMESPACE: ${{ vars.CI_IMAGE_NAMESPACE }}
+    steps:
+      # The commit to build on: the open PR's tip after update-branch, or
+      # main's tip when there is no open PR.
+      - name: Find the base commit
+        id: base
+        run: |
+          set -euo pipefail
+          owner=${REPO%%/*}
+          pr=$(gh api "repos/$REPO/pulls?state=open&head=$owner:$BRANCH&base=main" --jq '.[0].number // empty')
+          if [ -n "$pr" ]; then
+            head=$(gh api "repos/$REPO/pulls/$pr" --jq .head.sha)
+            # 202 starts the merge of main into the branch; 422 means there
+            # is nothing to merge. Either way read the tip it leaves.
+            if gh api -X PUT "repos/$REPO/pulls/$pr/update-branch" -f expected_head_sha="$head" >/dev/null 2>&1; then
+              for _ in $(seq 1 24); do
+                read -r -t 5 < /dev/zero || true
+                now=$(gh api "repos/$REPO/pulls/$pr" --jq .head.sha)
+                [ "$now" != "$head" ] && break
+              done
+            fi
+            sha=$(gh api "repos/$REPO/pulls/$pr" --jq .head.sha)
+            echo "open PR #$pr on $BRANCH; building on its tip $sha"
+          else
+            sha=$(gh api "repos/$REPO/git/ref/heads/main" --jq .object.sha)
+            if gh api "repos/$REPO/git/ref/heads/$BRANCH" >/dev/null 2>&1; then
+              merged=$(gh api "repos/$REPO/pulls?state=closed&head=$owner:$BRANCH&base=main&sort=updated&direction=desc" --jq '.[0].merged_at // empty')
+              if [ -z "$merged" ]; then
+                echo "::error::$BRANCH exists with no open PR and its last PR was not merged; close or delete it by hand (this job never force-updates a ref)"
+                exit 1
+              fi
+              gh api -X DELETE "repos/$REPO/git/refs/heads/$BRANCH" >/dev/null
+              echo "$BRANCH belonged to a merged PR: deleted, re-created from main"
+            fi
+            echo "no open PR on $BRANCH; building on main $sha"
+          fi
+          echo "pr=$pr" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ steps.base.outputs.sha }}
+
+      - name: Mask the forge credentials
+        run: |
+          for v in GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; do
+            val=${!v:-}
+            [ -n "$val" ] || continue
+            echo "::add-mask::$val"
+            case $val in *://*:*@*) t=${val#*://}; t=${t%%@*}; echo "::add-mask::${t#*:}" ;; esac
+          done
+
+      - name: Pull the toolchain image from the registry cache
+        run: scripts/ci-image-cache.sh pull || true
+
+      - name: Build the toolchain image
+        run: |
+          ( umask 077; : > "$RUNNER_TEMP/gomodauth.env"
+            for v in GOPRIVATE GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0; do
+              if [ -n "${!v:-}" ]; then printf '%s=%s\n' "$v" "${!v}" >> "$RUNNER_TEMP/gomodauth.env"; fi
+            done )
+          make docker-build-toolchain MODULE_ENV_FILE="$RUNNER_TEMP/gomodauth.env"
+          rm -f "$RUNNER_TEMP/gomodauth.env"
+          echo "TOOLCHAIN_IMAGE=$(make -s toolchain-image)" >> "$GITHUB_ENV"
+
+      # in-toolchain-image.sh runs on a copy of the checkout, so the bump,
+      # the full deps-check and the build run in one container, their output
+      # on stderr, and the go.mod and go.sum diff comes back on stdout.
+      - name: make deps-bump, then make deps-check and make build
+        env:
+          IN_IMAGE_NETWORK: bridge
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2016 # expands in the container
+          scripts/in-toolchain-image.sh "$TOOLCHAIN_IMAGE" \
+            '{ make deps-bump && make deps-check && make build; } >&2 && git -c safe.directory="*" diff --binary -- ":(glob)**/go.mod" ":(glob)**/go.sum" | base64 -w0' \
+            > "$RUNNER_TEMP/bump.b64"
+          base64 -d "$RUNNER_TEMP/bump.b64" > "$RUNNER_TEMP/bump.patch"
+          if [ ! -s "$RUNNER_TEMP/bump.patch" ]; then
+            echo "deps-bump: nothing moved"
+            echo "CHANGED=" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          git apply --index "$RUNNER_TEMP/bump.patch"
+          git diff --cached --stat
+          echo "CHANGED=$(git diff --cached --name-only | tr '\n' ' ')" >> "$GITHUB_ENV"
+
+      # One commit through the git data API, so GitHub signs it, then a
+      # fast-forward ref update (force: false) or a new ref.
+      - name: Commit to ci/deps-bump
+        if: ${{ env.CHANGED != '' }}
+        env:
+          BASE_SHA: ${{ steps.base.outputs.sha }}
+        run: |
+          set -euo pipefail
+          entries='[]'
+          for f in $CHANGED; do
+            if [ -f "$f" ]; then
+              blob=$(base64 -w0 "$f" | jq -Rs '{content: ., encoding: "base64"}' | gh api "repos/$REPO/git/blobs" --input - --jq .sha)
+              entries=$(jq -c --arg p "$f" --arg s "$blob" '. + [{path: $p, mode: "100644", type: "blob", sha: $s}]' <<<"$entries")
+            else
+              entries=$(jq -c --arg p "$f" '. + [{path: $p, mode: "100644", type: "blob", sha: null}]' <<<"$entries")
+            fi
+          done
+          base_tree=$(gh api "repos/$REPO/git/commits/$BASE_SHA" --jq .tree.sha)
+          tree=$(jq -n --arg b "$base_tree" --argjson e "$entries" '{base_tree: $b, tree: $e}' | gh api "repos/$REPO/git/trees" --input - --jq .sha)
+          msg=$(printf 'deps: bump dependencies to latest (ruling 640)\n\n%s\n' "$(git diff --cached --stat)")
+          commit=$(jq -n --arg m "$msg" --arg t "$tree" --arg p "$BASE_SHA" '{message: $m, tree: $t, parents: [$p]}' | gh api "repos/$REPO/git/commits" --input - --jq .sha)
+          if gh api "repos/$REPO/git/ref/heads/$BRANCH" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/$REPO/git/refs/heads/$BRANCH" -f sha="$commit" -F force=false >/dev/null
+          else
+            gh api "repos/$REPO/git/refs" -f ref="refs/heads/$BRANCH" -f sha="$commit" >/dev/null
+          fi
+          echo "deps-bump: $commit on $BRANCH"
+
+      - name: Open the PR and label it
+        id: pr
+        if: ${{ env.CHANGED != '' || steps.base.outputs.pr != '' }}
+        env:
+          PR: ${{ steps.base.outputs.pr }}
+        run: |
+          set -euo pipefail
+          if [ -z "$PR" ]; then
+            # shellcheck disable=SC2016 # backquotes are markdown, not a command
+            body=$(printf '%s\n\n%s\n' \
+              'The daily dependency bump (deps-bump.yml, ruling 640): every go.mod requirement behind its latest release, with no reason comment and past the 7-day window, moved to latest, then `make deps-check` and `make build` passed.' \
+              "Changed: $CHANGED")
+            PR=$(jq -n --arg t "$PR_TITLE" --arg h "$BRANCH" --arg b "$body" '{title: $t, head: $h, base: "main", body: $b}' | gh api "repos/$REPO/pulls" --input - --jq .number)
+            echo "opened #$PR"
+          fi
+          gh api "repos/$REPO/issues/$PR/labels" -f 'labels[]=code-review' -f 'labels[]=task:ready' >/dev/null
+          echo "number=$PR" >> "$GITHUB_OUTPUT"
+
+      # A GITHUB_TOKEN push or PR starts no pull_request run.
+      - name: Dispatch CI on ci/deps-bump
+        if: ${{ steps.pr.outputs.number != '' }}
+        run: gh api "repos/$REPO/actions/workflows/ci.yml/dispatches" -f ref="$BRANCH"
+
+      - name: Tear down
+        if: always()
+        run: rm -f "$RUNNER_TEMP/gomodauth.env" "$RUNNER_TEMP/bump.b64" "$RUNNER_TEMP/bump.patch"

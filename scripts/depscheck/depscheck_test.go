@@ -8,9 +8,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 const firstParty = "github.com/jeremyhahn/"
@@ -133,24 +130,21 @@ func TestDependenciesSkipsReplacedRequires(t *testing.T) {
 	assert.Equal(t, "example.com/one", again[1].Path)
 }
 
-// TestParsesThisRepository parses the two go.mod files `make deps-check`
-// reads, so a form the parser rejects fails here, not in the CI stage.
+// TestParsesThisRepository parses the go.mod of the repository the tool is
+// copied into (scripts/depscheck, so ../../go.mod), so a form the parser
+// rejects fails here, not in the CI stage. In the handbook template there
+// is no such go.mod and the test skips.
 func TestParsesThisRepository(t *testing.T) {
-	for _, file := range []string{"../../go.mod", "../../sdk/go/go.mod"} {
-		t.Run(file, func(t *testing.T) {
-			data, err := os.ReadFile(file)
-			require.NoError(t, err)
-
-			directives, err := parseGoMod(file, data)
-			require.NoError(t, err)
-
-			deps := dependencies(file, directives)
-			require.NotEmpty(t, deps)
-			for _, d := range deps {
-				assert.NotEqual(t, "github.com/jeremyhahn/go-trusted-platform/sdk/go", d.Module, "the local sdk/go replace has no published version to compare")
-			}
-		})
+	file := "../../go.mod"
+	data, err := os.ReadFile(file)
+	if errors.Is(err, os.ErrNotExist) {
+		t.Skip("no repository go.mod: the handbook template copy")
 	}
+	require.NoError(t, err)
+
+	directives, err := parseGoMod(file, data)
+	require.NoError(t, err)
+	_ = dependencies(file, directives)
 }
 
 func TestDecodeList(t *testing.T) {
@@ -477,7 +471,7 @@ func TestReportFreshRelease(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			assert.Equal(t, tc.code, report([]finding{tc.finding}, &stdout, &stderr))
+			assert.Equal(t, tc.code, report([]finding{tc.finding}, nil, &stdout, &stderr))
 			if tc.stdout != "" {
 				assert.Contains(t, stdout.String(), tc.stdout)
 			}

@@ -96,3 +96,21 @@ func proxyDisabled(goproxy string) bool {
 	entries := strings.FieldsFunc(goproxy, func(r rune) bool { return r == ',' || r == '|' })
 	return len(entries) > 0 && strings.TrimSpace(entries[0]) == "off"
 }
+
+// Get runs `go get path@version` in dir: the bump of one requirement.
+func (g goCommand) Get(dir, pathAtVersion string) error {
+	_, err := g.run(dir, "get", pathAtVersion)
+	return err
+}
+
+// Tidy runs `go mod tidy` in dir after a bump.
+func (g goCommand) Tidy(dir string) error {
+	_, err := g.run(dir, "mod", "tidy")
+	return err
+}
+
+// moduleEditor is what -bump asks the go command to do.
+type moduleEditor interface {
+	Get(dir, pathAtVersion string) error
+	Tidy(dir string) error
+}

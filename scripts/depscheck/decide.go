@@ -24,6 +24,10 @@ type finding struct {
 	Fresh bool
 	// Released is when Latest was released; zero when unknown.
 	Released time.Time
+	// Untouched is set, under -base, when the change leaves this line's
+	// path and version as they were at the merge base: a lag behind latest
+	// is then reported, not failed (ruling 640).
+	Untouched bool
 }
 
 // freshWindow is how long a new release may go unadopted before a lag
