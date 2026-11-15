@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/google/uuid"
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 
@@ -70,46 +71,27 @@ func (r *WorkspaceRoleResolver) Roles(ctx context.Context, tenantID, subject str
 }
 
 // roleNames maps the role references IAM stores on a user to the role
-// names the session guards check. It pages the tenant's role listing, system
-// roles included, maps every role ID to its name, keeps a reference that is
-// already a role name, and returns an error for one the listing does not
-// hold, never a guessed name. A user with no roles costs no listing.
+// names the session guards check. It looks each stored role ID (a UUID) up
+// with GetRole, since the role listing answers only its first page, keeps a
+// reference that is already a role name, and returns an error for an ID the
+// tenant does not hold, never a guessed name. A user with no roles costs no
+// lookup.
 func (r *WorkspaceRoleResolver) roleNames(ctx context.Context, tenantID string, refs []string) ([]string, error) {
-	if len(refs) == 0 {
-		return []string{}, nil
-	}
-	nameByID := make(map[string]string)
-	names := make(map[string]struct{})
-	req := &iamsdk.ListRolesRequest{PageSize: rolesPageSize, IncludeSystem: true}
-	for {
-		resp, err := r.client.ListRoles(ctx, tenantID, req)
-		if err != nil {
-			return nil, err
-		}
-		if resp == nil {
-			break
-		}
-		for _, role := range resp.Roles {
-			nameByID[role.ID] = role.Name
-			names[role.Name] = struct{}{}
-		}
-		next := resp.Pagination.NextPageToken
-		if !resp.Pagination.HasMore || next == "" || next == req.PageToken {
-			break
-		}
-		req.PageToken = next
-	}
 	out := make([]string, 0, len(refs))
 	for _, ref := range refs {
-		if name, ok := nameByID[ref]; ok {
-			out = append(out, name)
-			continue
-		}
-		if _, ok := names[ref]; ok {
+		// Role IDs are UUIDs; any other reference is already a role name.
+		if uuid.Validate(ref) != nil {
 			out = append(out, ref)
 			continue
 		}
-		return nil, fmt.Errorf("iam: tenant %q holds no role %q", tenantID, ref)
+		role, err := r.client.GetRole(ctx, tenantID, ref)
+		if sdkerrors.IsNotFound(err) || (err == nil && role == nil) {
+			return nil, fmt.Errorf("iam: tenant %q holds no role %q", tenantID, ref)
+		}
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, role.Name)
 	}
 	return out, nil
 }
