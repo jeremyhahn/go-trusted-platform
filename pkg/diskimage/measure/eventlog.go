@@ -1,7 +1,8 @@
 // TCG2 event logs. A measured boot leaves a crypto-agile event log
 // (binary_bios_measurements): a TCG_PCClientPCREvent header whose event is
-// the Spec ID Event03 structure (TCG PC Client Platform Firmware Profile
-// §10.4.5.1), then one TCG_PCR_EVENT2 record per measurement (§10.2.2).
+// the Spec ID Event03 structure (TCG PC Client Platform Firmware Profile,
+// the Spec ID event section), then one TCG_PCR_EVENT2 record per
+// measurement (the profile's crypto-agile event section).
 // ParseEventLog reads it, ReplayEventLog extends each PCR from its records,
 // and CheckEventLog compares the replay with the banks Predict writes into
 // an image's manifest, so a booted image proves the predicted values.
