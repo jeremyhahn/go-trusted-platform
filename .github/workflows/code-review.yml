@@ -43,7 +43,9 @@
 # on a person's removal of `needs-owner` (GitHub), or when `code-review` is
 # added again. A copy takes the version line, the two stop lines (marked
 # v5.11.2), the hand-on step's dropped `needs-owner)` case and the guard's
-# "the count stands" message.
+# "the count stands" message. The approval gate reads the PR's live labels
+# after the twin-review wait and refuses even a standing approval while
+# `needs-owner` is on the PR (Codex P1, #1921).
 #
 # v5.11.1 (2026-11-13, Tenant Agent m2669, ruling 589; go-qrdb #1572 and
 # go-xkms #2183 merged with no review): THE NO-REVIEW LIST IS DOCS AND CI
@@ -3006,6 +3008,13 @@ jobs:
               waited=$((waited + 30))
             done
           fi
+
+          # The owner hold, read live: needs-owner on the PR refuses even an
+          # approval already on the head (Codex P1, #1921).
+          labels=$(get_all "/issues/$PR_NUM/labels?" | jq -r '.[].name') ||
+            fail "cannot read the labels of PR $PR_NUM"
+          ! grep -qx needs-owner <<<"$labels" ||
+            fail "PR $PR_NUM is on owner hold (needs-owner): an existing approval does not pass the gate"
 
           # (b) The reviewer's latest standing verdict on this head. PENDING,
           # COMMENTED and dismissed reviews are no verdict.
