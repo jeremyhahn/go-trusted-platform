@@ -438,7 +438,11 @@ optional secrets `CI_IMAGE_REGISTRY_USER` and `CI_IMAGE_REGISTRY_PASSWORD`.
 The push step and each leg's pull step log in only through a Docker config
 made for the step (`mktemp -d "$RUNNER_TEMP/docker-config.XXXXXX"`, the step
 fails if it cannot) and removed by its EXIT trap, so the credential never
-reaches the runner's own Docker config (#1919). No job removes a registry tag:
+reaches the runner's own Docker config (#1919). Since `DOCKER_CONFIG` also
+selects the Docker context, the step reads `docker context show` first, links
+the runner's `contexts/` into the step's config and names a non-default
+context there as `currentContext`; a set `DOCKER_HOST` is left as it is. So
+`docker tag`, `push`, `pull` and `image inspect` reach the same daemon. No job removes a registry tag:
 two producers of one image id on a daemon share it, and legs sharing a daemon
 re-tag from it. The stale-stack reaper (below) removes a
 `<registry>/go-trusted-platform/it-image:<hex>` tag on any registry host under

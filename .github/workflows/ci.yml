@@ -1466,7 +1466,9 @@ jobs:
       # image this job leased. The optional secrets log in to a registry that
       # wants it, through a Docker config made for this step under RUNNER_TEMP
       # and removed at its exit, so the credential never reaches the runner's
-      # own config. The registry tag stays: another producer of the same id
+      # own config. DOCKER_CONFIG also selects the Docker context, so that
+      # config names the runner's current context and links its contexts/:
+      # tag, push and inspect reach the same daemon. The registry tag stays: another producer of the same id
       # on this daemon may still push it. The reaper removes it once stale
       # and unused (scripts/reap-stale-ci-stacks.sh); the lease keeps the image.
       - name: Push the integration image to the LAN registry
@@ -1480,6 +1482,14 @@ jobs:
           source "$RUNNER_TEMP/image-lock.sh"
           registry_config=$(mktemp -d "$RUNNER_TEMP/docker-config.XXXXXX") || exit 1
           trap 'image_unlock; rm -rf "$registry_config"' EXIT
+          docker_ctx=$(docker context show) || exit 1
+          docker_home=${DOCKER_CONFIG:-$HOME/.docker}
+          if [ -d "$docker_home/contexts" ]; then
+            ln -s "$docker_home/contexts" "$registry_config/contexts"
+          fi
+          if [ "$docker_ctx" != default ]; then
+            printf '{"currentContext": "%s"}\n' "$docker_ctx" > "$registry_config/config.json"
+          fi
           if [ -n "$REGISTRY_USER" ] && [ -n "$REGISTRY_PASSWORD" ]; then
             printf '%s' "$REGISTRY_PASSWORD" | DOCKER_CONFIG=$registry_config docker login --username "$REGISTRY_USER" --password-stdin "$IT_REGISTRY"
           fi
@@ -1673,8 +1683,10 @@ jobs:
       # Ruling 675: a leg placed on another runner's daemon (run 68296, legs
       # 1, 2 and 4) pulls the image the image job pushed to the LAN registry,
       # over the LAN, not the uplink. As after a load, the leg leases the id
-      # the pull gave the tag and checks the image job's layer identity. The
-      # registry tag stays on the daemon: another leg sharing it may have
+      # the pull gave the tag and checks the image job's layer identity. It
+      # logs in through a per-step Docker config, like the push, that keeps
+      # the runner's Docker context, so the pull and the re-tag reach the
+      # same daemon. The registry tag stays on the daemon: another leg sharing it may have
       # pulled too and still waits on the image lock to re-tag from it. A
       # failed pull, a failed re-tag or another image leaves the lease to
       # the load step's fallback build, with a warning.
@@ -1689,6 +1701,17 @@ jobs:
           source "$RUNNER_TEMP/image-lock.sh"
           registry_config=$(mktemp -d "$RUNNER_TEMP/docker-config.XXXXXX") || exit 1
           trap 'image_unlock; rm -rf "$registry_config"' EXIT
+          if ! docker_ctx=$(docker context show); then
+            echo "::warning::the runner's Docker context could not be read; building this leg's image"
+            exit 0
+          fi
+          docker_home=${DOCKER_CONFIG:-$HOME/.docker}
+          if [ -d "$docker_home/contexts" ]; then
+            ln -s "$docker_home/contexts" "$registry_config/contexts"
+          fi
+          if [ "$docker_ctx" != default ]; then
+            printf '{"currentContext": "%s"}\n' "$docker_ctx" > "$registry_config/config.json"
+          fi
           if [ -n "$REGISTRY_USER" ] && [ -n "$REGISTRY_PASSWORD" ]; then
             printf '%s' "$REGISTRY_PASSWORD" | DOCKER_CONFIG=$registry_config docker login --username "$REGISTRY_USER" --password-stdin "${IT_IMAGE_REF%%/*}" || true
           fi
