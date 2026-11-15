@@ -3,6 +3,7 @@ package diskimage
 import (
 	"bytes"
 	"context"
+	"crypto/rsa"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
@@ -111,6 +112,13 @@ func (c *BuildConfig) writeManifest(ctx context.Context, image, sum string, targ
 	key, cert, err := secureboot.NewKMSSigner(ctx, clients.KMS, clients.CA, c.ManifestKey, c.ManifestCert)
 	if err != nil {
 		return fail("opening the manifest key", err)
+	}
+	// An RSA manifest is signed PS256, and the platform KMS Sign API carries
+	// no RSA-PSS parameters: refuse the key here,
+	// before anything is signed or written, not after a PKCS#1 v1.5
+	// signature fails its check.
+	if _, isRSA := key.Public().(*rsa.PublicKey); isRSA {
+		return fail("opening the manifest key", secureboot.ErrKMSPSSUnsupported)
 	}
 	name := cert.Subject.CommonName
 	if name == "" {

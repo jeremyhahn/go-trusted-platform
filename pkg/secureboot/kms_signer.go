@@ -17,10 +17,12 @@ import (
 	"context"
 	"crypto"
 	"crypto/ed25519"
+	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"io"
 	"strings"
 
@@ -48,6 +50,12 @@ type CertificateGetter interface {
 type CABundleGetter interface {
 	GetCABundle(ctx context.Context, in *platformv1.GetCABundleRequest, opts ...grpc.CallOption) (*platformv1.GetCABundleResponse, error)
 }
+
+// ErrKMSPSSUnsupported is returned when a KMS-backed signer is asked for an
+// RSA-PSS signature. The platform KMS Sign API carries no RSA-PSS padding or
+// salt parameters, so an RSA KMS key would sign PKCS#1 v1.5 instead; the
+// signer refuses before it calls the KMS.
+var ErrKMSPSSUnsupported = errors.New("secureboot: the platform KMS Sign API carries no RSA-PSS parameters")
 
 // NewKMSSigner resolves a Secure Boot key held in the platform KMS — the DB
 // key, for resign-mode remote — over an authenticated platform client: a
@@ -180,6 +188,9 @@ func (s *kmsSigner) Public() crypto.PublicKey { return s.public }
 // as given instead of hashing it a second time. An Ed25519 key signs the
 // message itself, which is sent as is.
 func (s *kmsSigner) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
+	if _, pss := opts.(*rsa.PSSOptions); pss {
+		return nil, ErrKMSPSSUnsupported
+	}
 	req := &platformv1.SignRequest{KeyId: s.keyID, Message: digest}
 	if _, pure := s.public.(ed25519.PublicKey); !pure || opts.HashFunc() != 0 {
 		// Pure Ed25519 is the one signature crypto.Signer asks for without a
