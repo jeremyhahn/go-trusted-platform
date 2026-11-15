@@ -184,18 +184,22 @@ func runnerMapEntry(script, name, key string) string {
 func TestIntegrationRunner_ISOVMTestsRunInTheirOwnTarget(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(repoRoot(t), integrationRunnerPath))
 	require.NoError(t, err)
-	script := string(data)
+	require.Equal(t, `"./test/integration/iso/..."`, runnerMapEntry(string(data), "TARGET_PACKAGES", "iso-vm"),
+		"iso-vm runs the iso package")
 
-	for _, c := range []struct{ name, key, want string }{
-		{"TARGET_PACKAGES", "iso-vm", `"./test/integration/iso/..."`},
-		{"TARGET_RUN", "iso-vm", `'^TestISOVMTests$'`},
-		{"TARGET_SKIP", "iso", `'^TestISOVMTests$'`},
+	// The arguments run_test hands go test, read from the runner itself, so
+	// dropping the -run/-skip handling or the timeout fails here.
+	for _, c := range []struct {
+		target string
+		want   []string
+	}{
+		{"iso", []string{"-timeout", "35m", "-skip", "^TestISOVMTests$"}},
+		{"iso-vm", []string{"-timeout", "55m", "-run", "^TestISOVMTests$"}},
 	} {
-		require.Equal(t, c.want, runnerMapEntry(script, c.name, c.key), "%s[%s]", c.name, c.key)
+		out, err := runIntegrationRunner(t, "go-test-args", c.target)
+		require.NoError(t, err, out)
+		require.Equal(t, c.want, strings.Fields(out), "go test arguments of %s", c.target)
 	}
-	require.NotEmpty(t, runnerMapEntry(script, "TARGET_TIMEOUTS", "iso-vm"),
-		"iso-vm needs its own go test timeout, not the default")
-	require.Equal(t, `"35m"`, runnerMapEntry(script, "TARGET_TIMEOUTS", "iso"), "iso keeps its 35 minutes")
 }
 
 func TestIntegrationLegFindingsAcceptAPartition(t *testing.T) {

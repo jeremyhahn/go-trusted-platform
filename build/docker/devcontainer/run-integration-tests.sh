@@ -251,6 +251,31 @@ ARG2="${2:-}"
 
 # `legs` prints ALL_TARGETS and then each leg, one per line, and exits before
 # anything starts: the partition check and the docs read the legs from here.
+# go_test_args prints the go test arguments a target's run selects, one per
+# line: -timeout and its value, then the -run and -skip pairs. run_test reads
+# them from here, and `go-test-args TARGET` prints them, so a test can check
+# the arguments go test actually gets (#1918).
+go_test_args() {
+    local target="$1"
+    printf '%s\n' -timeout "${TARGET_TIMEOUTS[$target]:-10m}"
+    if [ -n "${TARGET_RUN[$target]:-}" ]; then
+        printf '%s\n' -run "${TARGET_RUN[$target]}"
+    fi
+    if [ -n "${TARGET_SKIP[$target]:-}" ]; then
+        printf '%s\n' -skip "${TARGET_SKIP[$target]}"
+    fi
+}
+
+# `go-test-args TARGET` prints go_test_args TARGET and starts nothing.
+if [ "$ARG1" = "go-test-args" ]; then
+    if [ -z "${TARGET_PACKAGES[${ARG2:-}]+set}" ]; then
+        echo "FATAL: no integration target '${ARG2:-}'" >&2
+        exit 2
+    fi
+    go_test_args "$ARG2"
+    exit 0
+fi
+
 if [ "$ARG1" = "legs" ]; then
     echo "all ${ALL_TARGETS[*]} compute"
     for i in "${!INTEGRATION_LEGS[@]}"; do
@@ -1527,21 +1552,15 @@ run_test() {
         echo "--- FAIL: $pkg ---"
         return 1
     fi
-    local timeout="${TARGET_TIMEOUTS[$target]:-10m}"
     local pkgs=()
     read -r -a pkgs <<< "$pkg"
-    local run_args=()
-    if [ -n "${TARGET_RUN[$target]:-}" ]; then
-        run_args=(-run "${TARGET_RUN[$target]}")
-    fi
-    if [ -n "${TARGET_SKIP[$target]:-}" ]; then
-        run_args+=(-skip "${TARGET_SKIP[$target]}")
-    fi
+    local test_args=()
+    mapfile -t test_args < <(go_test_args "$target")
     local target_env=()
     if [ -n "${TARGET_ENV[$target]:-}" ]; then
         read -r -a target_env <<< "${TARGET_ENV[$target]}"
     fi
-    if env "${target_env[@]}" go test -v -tags "${BUILD_TAGS}" -count=1 -parallel 1 -timeout "$timeout" "${run_args[@]}" "${pkgs[@]}"; then
+    if env "${target_env[@]}" go test -v -tags "${BUILD_TAGS}" -count=1 -parallel 1 "${test_args[@]}" "${pkgs[@]}"; then
         echo "--- PASS: $pkg ---"
     else
         echo "--- FAIL: $pkg ---"
