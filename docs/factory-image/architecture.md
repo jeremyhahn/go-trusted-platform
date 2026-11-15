@@ -334,10 +334,13 @@ What persists: the image, the staged media directory, the U-Boot output
 > **Partly built.** The prediction is built: `diskimage.Create` predicts
 > PCRs 0, 4, 7 and 9 into `Result.Measurements` (`pkg/diskimage/measure`).
 > So are the CoRIM encoding (`measure.EncodeManifest`) and its COSE_Sign1
-> (`measure.SignManifest` / `VerifyManifest`), and `Create` writes
-> `<image>.corim` when it is given a `kms://` manifest key
-> (`--manifest-key`). The event-log check and registration are not built
-> yet; [docs/plans/669.md](../plans/669.md) slices 5-6 build them. Until then a node's quote is checked against its
+> (`measure.SignManifest` / `VerifyManifest`), and `Create` always writes
+> `<image>.corim` for a measured image, signed by default with the tenant
+> release key (`kms://release-signer`; `--manifest-key` names another). The
+> event-log comparator is built (`measure.CheckEventLog`: parse a TCG2
+> event log, replay it per bank, compare with the predicted PCRs). The QEMU
+> boot that feeds it a live log, and registration, are not built yet;
+> [docs/plans/669.md](../plans/669.md) slices 5b and 6 build them. Until then a node's quote is checked against its
 > device profile's `PCRBaseline` table.
 
 The SPEC row says every image, an upgrade included, is built and signed
@@ -376,7 +379,7 @@ default). The bank list is a build input. A missing input fails the build;
 the build never writes a partial manifest. Slice 5 proves the prediction:
 `make integration-test-diskimage` boots the image on the QEMU `virt` stand-in
 and checks that the live TCG event log, replayed, gives the manifest's
-values. The x86 ISO path gets the same check.
+values (`measure.CheckEventLog`). The x86 ISO path gets the same check.
 
 **The CoRIM.** One `signed-corim` (`#6.18`, COSE_Sign1, content type
 `application/rim+cbor`) per build, written as `<image>.corim` beside the
