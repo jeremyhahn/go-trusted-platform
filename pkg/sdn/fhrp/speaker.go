@@ -263,7 +263,12 @@ func (s *Speaker) startGroup(ctx context.Context, gc GroupConfig) (*runner, erro
 		return nil, &ErrTransportFailed{VRID: gc.VRID, Interface: gc.Interface, Operation: "open", Cause: err}
 	}
 	r.conn = conn
-	r.dropStaleVIPs(g)
+	if err := r.dropStaleVIPs(g); err != nil {
+		// Nothing is running yet: close the socket and fail the start, so
+		// Start rolls back the groups already started.
+		_ = conn.Close()
+		return nil, err
+	}
 	now := s.clock.Now()
 	r.mu.Lock()
 	err = g.Startup(now)
@@ -289,18 +294,20 @@ func (s *Speaker) startGroup(ctx context.Context, gc GroupConfig) (*runner, erro
 // master, never claims, so a stale VIP would keep answering ARP/ND for the
 // peer's address (Codex #1716 round 4). A priority-255 owner's address is
 // its own and stays. Without an AddressReader nothing can be seen, so
-// nothing is removed. A failed removal is logged; Startup still runs.
-func (r *runner) dropStaleVIPs(g *Group) {
+// nothing is removed. A failed check or removal fails the start (ruling
+// 673, Codex #1716 round 5): a backup that cannot prove its interface free
+// of the master's VIP must not run, so the supervisor restarts the speaker
+// instead of a backup answering for the VIP while Health shows no error.
+func (r *runner) dropStaleVIPs(g *Group) error {
 	reader, ok := r.speaker.deps.Programmer.(AddressReader)
 	if !ok || g.Priority() == PriorityOwner {
-		return
+		return nil
 	}
 	stale := false
 	for _, p := range g.prefixes {
 		present, err := reader.HasAddress(g.cfg.Interface, p)
 		if err != nil {
-			r.logErr("stale vip check", &ErrAddressOperationFailed{VRID: g.cfg.VRID, Interface: g.cfg.Interface, Operation: "list", Address: p, Cause: err})
-			continue
+			return &ErrAddressOperationFailed{VRID: g.cfg.VRID, Interface: g.cfg.Interface, Operation: "list", Address: p, Cause: err}
 		}
 		if present {
 			r.owned[p] = true
@@ -308,8 +315,9 @@ func (r *runner) dropStaleVIPs(g *Group) {
 		}
 	}
 	if stale {
-		r.logErr("stale vip removal", r.Release(g))
+		return r.Release(g)
 	}
+	return nil
 }
 
 // stop ends the loops, performs the group's Shutdown and closes the socket.
