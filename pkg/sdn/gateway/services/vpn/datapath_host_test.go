@@ -113,6 +113,12 @@ func TestPlaneHost_RefusesBadInputAsInvalidRequest(t *testing.T) {
 		"no lease id":  {host.InstallVPNPeer(ctx, &ipcv1.InstallVPNPeerRequest{Peer: noID}).GetRefusal(), "lease_id"},
 		"bad address":  {host.InstallVPNPeer(ctx, &ipcv1.InstallVPNPeerRequest{Peer: badAddress}).GetRefusal(), "address"},
 		"remove no id": {host.RemoveVPNPeer(ctx, &ipcv1.RemoveVPNPeerRequest{DataPlane: string(DataPlaneMASQUE)}).GetRefusal(), "lease_id"},
+		"reconcile no plane": {host.ReconcileVPNPeers(ctx,
+			&ipcv1.ReconcileVPNPeersRequest{LeaseIds: []string{"l1"}}).GetRefusal(), "data_plane"},
+		"reconcile empty id": {host.ReconcileVPNPeers(ctx,
+			&ipcv1.ReconcileVPNPeersRequest{DataPlane: string(DataPlaneMASQUE), LeaseIds: []string{"l1", ""}}).GetRefusal(), "lease_ids"},
+		"reconcile duplicate id": {host.ReconcileVPNPeers(ctx,
+			&ipcv1.ReconcileVPNPeersRequest{DataPlane: string(DataPlaneMASQUE), LeaseIds: []string{"l1", "l1"}}).GetRefusal(), "lease_ids"},
 	}
 	for name, c := range cases {
 		assert.Equal(t, ipcv1.VPNPeerRefusalClass_VPN_PEER_REFUSAL_CLASS_INVALID_REQUEST, c.refusal.GetClass(), name)
@@ -121,6 +127,7 @@ func TestPlaneHost_RefusesBadInputAsInvalidRequest(t *testing.T) {
 	}
 	assert.Zero(t, plane.count(), "a refused request must not reach the plane")
 	assert.Empty(t, plane.removed)
+	assert.Empty(t, plane.reconciles, "a refused reconciliation must not reach the plane")
 }
 
 func TestPlaneHost_RefusesAPlaneItDoesNotHost(t *testing.T) {

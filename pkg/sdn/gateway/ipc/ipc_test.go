@@ -321,6 +321,10 @@ func TestPolicy_DeniesAnUnadmittedUIDOnEveryService(t *testing.T) {
 	if status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("RemoveVPNPeer err = %v, want PermissionDenied", err)
 	}
+	_, err = client.ReconcileVPNPeers(testContext(t), &ipcv1.ReconcileVPNPeersRequest{DataPlane: "wireguard", LeaseIds: []string{"l1"}})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("ReconcileVPNPeers err = %v, want PermissionDenied", err)
+	}
 }
 
 func TestPolicy_TheParserUIDReachesOnlyTheVPNPeerMethods(t *testing.T) {
@@ -343,6 +347,9 @@ func TestPolicy_TheParserUIDReachesOnlyTheVPNPeerMethods(t *testing.T) {
 	if _, err := client.RemoveVPNPeer(testContext(t), &ipcv1.RemoveVPNPeerRequest{LeaseId: "l1"}); err != nil {
 		t.Fatalf("RemoveVPNPeer: %v", err)
 	}
+	if _, err := client.ReconcileVPNPeers(testContext(t), &ipcv1.ReconcileVPNPeersRequest{DataPlane: "wireguard", LeaseIds: []string{"l1"}}); err != nil {
+		t.Fatalf("ReconcileVPNPeers: %v", err)
+	}
 }
 
 func TestPolicyAdmit_TableAndUnknownMethod(t *testing.T) {
@@ -356,6 +363,7 @@ func TestPolicyAdmit_TableAndUnknownMethod(t *testing.T) {
 		{ipcv1.DatapathService_ApplyDesired_FullMethodName, false},
 		{ipcv1.DatapathService_InstallVPNPeer_FullMethodName, true},
 		{ipcv1.DatapathService_RemoveVPNPeer_FullMethodName, true},
+		{ipcv1.DatapathService_ReconcileVPNPeers_FullMethodName, true},
 	}
 	for _, tc := range cases {
 		if err := p.admit(tc.method, creds(0)); err != nil {

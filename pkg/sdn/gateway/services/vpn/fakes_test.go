@@ -170,6 +170,8 @@ type fakePlane struct {
 	mu         sync.Mutex
 	installed  map[LeaseID]*Lease
 	removed    []LeaseID
+	// reconciles records the keep list of every ReconcilePeers call.
+	reconciles [][]LeaseID
 	pause      *pause
 }
 
@@ -228,6 +230,7 @@ func (p *fakePlane) ReconcilePeers(_ context.Context, keep []LeaseID) error {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.reconciles = append(p.reconciles, append([]LeaseID(nil), keep...))
 	if p.removeErr != nil {
 		return p.removeErr
 	}

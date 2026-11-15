@@ -28,9 +28,13 @@ import (
 // Policy names the kernel-verified uids each IPC method admits. The
 // supervisor is root, so ControlUIDs is {0} unless a test says otherwise;
 // DatapathUIDs additionally admits the parser processes' uid to the
-// kernel-programming process's narrow surface: the VPN peer RPCs, never
+// kernel-programming process's narrow surface: the VPN peer RPCs
+// (InstallVPNPeer, RemoveVPNPeer and ReconcileVPNPeers), never
 // ApplyDesired, which replaces the whole desired document and is the
-// supervisor's alone. PlatformUIDs admits platformd's uid to
+// supervisor's alone. ReconcileVPNPeers is the bulk form of RemoveVPNPeer
+// under the same admission: it removes only what a run of RemoveVPNPeer
+// calls on the plane it names could remove, so it grants the parser uid
+// nothing the per-peer verb does not already grant. PlatformUIDs admits platformd's uid to
 // GatewayServicesService (#660), the live load-balancer, NAT64 and perf
 // surface, and to nothing else.
 type Policy struct {
