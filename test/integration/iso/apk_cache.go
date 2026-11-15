@@ -28,20 +28,25 @@ const EnvISOAPKCache = "GTP_ISO_APK_CACHE"
 // cache never holds them.
 var platformAPKPrefixes = []string{"trusted-platform-", "go-trusted-platform-"}
 
-// apkCacheDir returns the runner-local APK cache: $GTP_ISO_APK_CACHE when set,
-// else <user cache dir>/go-trusted-platform/iso-apk/<alpine version>/<arch>.
-// It returns "" when the host has no user cache directory.
+// apkCacheDir returns the runner-local APK cache,
+// <root>/<alpine version>/<arch>, where <root> is $GTP_ISO_APK_CACHE when set
+// (CI mounts the external go-trusted-platform-iso-apk-cache volume there, see
+// build/docker/devcontainer/compose.yaml, so one volume holds every version
+// and the cache outlives the `run --rm` integration container), else
+// <user cache dir>/go-trusted-platform/iso-apk. It returns "" when neither is
+// available.
 func apkCacheDir(t *testing.T) string {
 	t.Helper()
-	if dir := os.Getenv(EnvISOAPKCache); dir != "" {
-		return dir
+	base := os.Getenv(EnvISOAPKCache)
+	if base == "" {
+		userCache, err := os.UserCacheDir()
+		if err != nil || userCache == "" {
+			t.Logf("APK cache disabled: no user cache directory: %v", err)
+			return ""
+		}
+		base = filepath.Join(userCache, "go-trusted-platform", "iso-apk")
 	}
-	base, err := os.UserCacheDir()
-	if err != nil || base == "" {
-		t.Logf("APK cache disabled: no user cache directory: %v", err)
-		return ""
-	}
-	return filepath.Join(base, "go-trusted-platform", "iso-apk", DefaultAlpineVersion, DefaultArch)
+	return filepath.Join(base, DefaultAlpineVersion, DefaultArch)
 }
 
 // prefetchDir is where iso customize keeps its pre-fetched packages.

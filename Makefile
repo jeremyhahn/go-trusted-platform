@@ -2136,6 +2136,7 @@ integration-test: $(if $(IT_PREBUILT),,docker-build-it)
 			echo "warning: teardown of $(IT_PROJECT) failed; scripts/reap-stale-ci-stacks.sh removes what is left" >&2; \
 	}; \
 	trap teardown EXIT; trap 'exit 130' INT; trap 'exit 143' TERM; \
+	docker volume create go-trusted-platform-iso-apk-cache >/dev/null; \
 	HOST_UID=$$(id -u) HOST_GID=$$(id -g) \
 		docker compose -f $(DEVCONTAINER_COMPOSE) -p $(IT_PROJECT) \
 		run --rm integration $(IT_SELECT) "$(strip $(TEST_BUILD_TAGS))" $(if $(IT_FOREIGN_BASELINE),2>&1 | tee "$(IT_LOG)") || status=$$?; \
