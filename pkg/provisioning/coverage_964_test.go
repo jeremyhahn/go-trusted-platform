@@ -3,6 +3,7 @@ package provisioning
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"testing"
 	"time"
@@ -55,14 +56,29 @@ func newClientForURL(t *testing.T, serverURL string) *Client {
 	return client
 }
 
-// closedServerURL returns the URL of a TLS server that is no longer listening.
-func closedServerURL(t *testing.T) string {
+// refusingServerURL returns the URL of a listener that accepts each connection
+// and closes it at once, so every request fails in the transport.
+func refusingServerURL(t *testing.T) string {
 	t.Helper()
 
-	server, _ := startTLSTestServer(t, http.NotFoundHandler())
-	url := server.URL
-	server.Close()
-	return url
+	// Keep the port owned by this test for its whole life: a freed port can
+	// be taken over by another test server in the same job, which would
+	// answer the request instead of the transport failing.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	return "https://" + ln.Addr().String()
 }
 
 func TestClient_RequestErrors(t *testing.T) {
@@ -86,13 +102,13 @@ func TestClient_RequestErrors(t *testing.T) {
 		},
 		{
 			name:      "activate against a closed server",
-			serverURL: closedServerURL,
+			serverURL: refusingServerURL,
 			call:      func(c *Client) (any, error) { return c.Activate(context.Background()) },
 			want:      ErrConnectionFailed,
 		},
 		{
 			name:      "heartbeat against a closed server",
-			serverURL: closedServerURL,
+			serverURL: refusingServerURL,
 			call:      func(c *Client) (any, error) { return c.Heartbeat(context.Background()) },
 			want:      ErrConnectionFailed,
 		},
