@@ -127,6 +127,17 @@ func TestBuildUmbrellaCloudProviders(t *testing.T) {
 			}
 		})
 
+		t.Run(p.umbrella+"=1 over toggles=0", func(t *testing.T) {
+			vars := []string{p.umbrella + "=1"}
+			for _, toggle := range p.toggles {
+				vars = append(vars, toggle+"=0")
+			}
+			got := printBuildTags(t, vars...)
+			for _, tag := range p.tags {
+				require.Contains(t, got, tag, "%s=1 forces the provider's services on", p.umbrella)
+			}
+		})
+
 		t.Run(p.umbrella+"=0 "+p.toggles[0]+"=1", func(t *testing.T) {
 			got := printBuildTags(t, p.umbrella+"=0", p.toggles[0]+"=1")
 			for _, tag := range p.tags {
