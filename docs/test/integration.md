@@ -435,10 +435,14 @@ registry as `go-trusted-platform/it-image:<image id hex>` and outputs the
 reference as `image_ref` (ruling 675: the 3.4 GB artifact, downloaded again by
 each leg, saturated the uplink); a registry that wants a login takes the
 optional secrets `CI_IMAGE_REGISTRY_USER` and `CI_IMAGE_REGISTRY_PASSWORD`.
-The push step and each leg's pull step log in only through a Docker config
-made for the step (`mktemp -d "$RUNNER_TEMP/docker-config.XXXXXX"`, the step
-fails if it cannot) and removed by its EXIT trap, so the credential never
-reaches the runner's own Docker config (#1919). Since `DOCKER_CONFIG` also
+The push step and each leg's pull step never run `docker login`: they write
+the secrets as an `auths` entry (base64 `user:password`, with `umask 077`) into
+the `config.json` of a Docker config made for the step (`mktemp -d
+"$RUNNER_TEMP/docker-config.XXXXXX"`, the step fails if it cannot) and removed
+by its EXIT trap. With an `auths` entry present the Docker CLI keeps its file
+store and detects no native credential helper (`pass`, `secretservice`), so the
+credential never reaches the runner's own Docker config or credential store
+(#1919). Since `DOCKER_CONFIG` also
 selects the Docker context, the step reads `docker context show` first, links
 the runner's `contexts/` into the step's config and names a non-default
 context there as `currentContext`; a set `DOCKER_HOST` is left as it is. So

@@ -814,7 +814,7 @@ func registryCredentialFindings(jobs map[string]ciShellJob) []error {
 			if !strings.Contains(step.Run, "docker login") && !strings.Contains(step.Run, registryConfigUse) {
 				continue
 			}
-			if !strings.Contains(step.Run, `"auths"`) || !strings.Contains(step.Run, "umask 077") || !strings.Contains(step.Run, "base64") {
+			if !strings.Contains(step.Run, `"auths`) || !strings.Contains(step.Run, "umask 077") || !strings.Contains(step.Run, "base64") {
 				errs = append(errs, fmt.Errorf("%s / %q does not write its registry auths (umask 077, base64 user:password) into its own config.json", id, step.Name))
 			}
 			lines := strings.Split(step.Run, "\n")

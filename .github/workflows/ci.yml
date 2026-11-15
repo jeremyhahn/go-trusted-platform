@@ -1463,10 +1463,12 @@ jobs:
       # The legs share this job's runner label, not its daemon (#1119): a leg
       # placed on another runner pulls the image from the LAN registry
       # (ruling 675), tagged by the image id, so the push names exactly the
-      # image this job leased. The optional secrets log in to a registry that
-      # wants it, through a Docker config made for this step under RUNNER_TEMP
-      # and removed at its exit, so the credential never reaches the runner's
-      # own config. DOCKER_CONFIG also selects the Docker context, so that
+      # image this job leased. The optional secrets go, as a base64 auths entry
+      # written with umask 077 (no registry login command), into a Docker config made
+      # for this step under RUNNER_TEMP and removed at its exit: with auths in
+      # config.json the CLI keeps its file store and detects no native
+      # credential helper, so the credential never reaches the runner's own
+      # config or credential store. DOCKER_CONFIG also selects the Docker context, so that
       # config names the runner's current context and links its contexts/:
       # tag, push and inspect reach the same daemon. The registry tag stays: another producer of the same id
       # on this daemon may still push it. The reaper removes it once stale
@@ -1487,11 +1489,16 @@ jobs:
           if [ -d "$docker_home/contexts" ]; then
             ln -s "$docker_home/contexts" "$registry_config/contexts"
           fi
+          json='' sep=''
           if [ "$docker_ctx" != default ]; then
-            printf '{"currentContext": "%s"}\n' "$docker_ctx" > "$registry_config/config.json"
+            json="\"currentContext\": \"$docker_ctx\"" sep=", "
           fi
           if [ -n "$REGISTRY_USER" ] && [ -n "$REGISTRY_PASSWORD" ]; then
-            printf '%s' "$REGISTRY_PASSWORD" | DOCKER_CONFIG=$registry_config docker login --username "$REGISTRY_USER" --password-stdin "$IT_REGISTRY"
+            auth=$(printf '%s:%s' "$REGISTRY_USER" "$REGISTRY_PASSWORD" | base64 | tr -d '\n') || exit 1
+            json="$json$sep\"auths\": {\"$IT_REGISTRY\": {\"auth\": \"$auth\"}}"
+          fi
+          if [ -n "$json" ]; then
+            (umask 077 && printf '{%s}\n' "$json" > "$registry_config/config.json") || exit 1
           fi
           image_lock || exit 1
           docker tag "$IT_LEASE_ID" "$ref"
@@ -1709,11 +1716,16 @@ jobs:
           if [ -d "$docker_home/contexts" ]; then
             ln -s "$docker_home/contexts" "$registry_config/contexts"
           fi
+          json='' sep=''
           if [ "$docker_ctx" != default ]; then
-            printf '{"currentContext": "%s"}\n' "$docker_ctx" > "$registry_config/config.json"
+            json="\"currentContext\": \"$docker_ctx\"" sep=", "
           fi
           if [ -n "$REGISTRY_USER" ] && [ -n "$REGISTRY_PASSWORD" ]; then
-            printf '%s' "$REGISTRY_PASSWORD" | DOCKER_CONFIG=$registry_config docker login --username "$REGISTRY_USER" --password-stdin "${IT_IMAGE_REF%%/*}" || true
+            auth=$(printf '%s:%s' "$REGISTRY_USER" "$REGISTRY_PASSWORD" | base64 | tr -d '\n') || true
+            json="$json$sep\"auths\": {\"${IT_IMAGE_REF%%/*}\": {\"auth\": \"$auth\"}}"
+          fi
+          if [ -n "$json" ]; then
+            (umask 077 && printf '{%s}\n' "$json" > "$registry_config/config.json") || true
           fi
           if ! DOCKER_CONFIG=$registry_config docker pull "$IT_IMAGE_REF"; then
             echo "::warning::pulling $IT_IMAGE_REF from the LAN registry failed; building this leg's image"
