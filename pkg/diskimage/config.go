@@ -12,6 +12,10 @@ import (
 
 // Defaults for BuildConfig.
 const (
+	// DefaultManifestKey is the tenant release key, the default signer of
+	// images and CoRIM (ruling 134): every measured image's manifest is
+	// signed with it unless a tenant names another key with --manifest-key.
+	DefaultManifestKey      = "kms://release-signer"
 	DefaultTarget           = "rpi"
 	DefaultSizeMB           = 4096
 	DefaultContainerRuntime = "docker"
@@ -107,9 +111,9 @@ type BuildConfig struct {
 	// image's measurement manifest; ManifestCert names its certificate on
 	// the platform CA (default the key's ID; a "#sha256:<hex>" pin is
 	// allowed, as for the Secure Boot DB key). The build reaches them
-	// through KMSClients and never holds the key. A measured image is
-	// written with its manifest at ManifestPath(image); with no ManifestKey it gets
-	// none and Result.Unsigned says so. Any other reference is refused.
+	// through KMSClients and never holds the key. Empty means
+	// DefaultManifestKey: every measured image is signed, and written with
+	// its manifest at ManifestPath(image). Any other reference is refused.
 	ManifestKey  string
 	ManifestCert string
 	// SkipPreflight disables the host checks (binfmt, container runtime,
@@ -157,6 +161,9 @@ func (c *BuildConfig) withDefaults() *BuildConfig {
 	}
 	if out.VirtKernelOutputDir == "" {
 		out.VirtKernelOutputDir = filepath.Join(out.VirtKernelBuilderDir, "output")
+	}
+	if out.ManifestKey == "" {
+		out.ManifestKey = DefaultManifestKey
 	}
 	if out.Runner == nil {
 		out.Runner = runner.Exec

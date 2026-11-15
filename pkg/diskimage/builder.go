@@ -45,12 +45,9 @@ type Result struct {
 	// Unmeasured says why Measurements is nil: UnmeasuredSecureBootOff.
 	Unmeasured string
 	// Manifest is the signed measurement manifest, ManifestPath(Image);
-	// "" when the image is unmeasured or unsigned, and then no manifest
-	// from an earlier build is left at that path.
+	// "" only when the image is unmeasured, and then no manifest from an
+	// earlier build is left at that path.
 	Manifest string
-	// Unsigned says why a measured image has no Manifest:
-	// UnsignedNoManifestKey.
-	Unsigned string
 }
 
 // StagedMedia is a target's install media staged on disk: the layout the
@@ -182,14 +179,14 @@ func Create(ctx context.Context, cfg *BuildConfig) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	var manifest, unsigned string
+	var manifest string
 	if banks != nil {
-		if manifest, unsigned, err = c.writeManifest(ctx, output, sum, target, banks); err != nil {
+		if manifest, err = c.writeManifest(ctx, output, sum, target, banks); err != nil {
 			return nil, err
 		}
 	}
 	return &Result{Image: output, SHA256: sum, SizeBytes: size, MediaDir: mediaDir, UBoot: art, Kernel: kernel,
-		Measurements: banks, Unmeasured: unmeasured, Manifest: manifest, Unsigned: unsigned}, nil
+		Measurements: banks, Unmeasured: unmeasured, Manifest: manifest}, nil
 }
 
 // kernelArtifacts builds or locates the platform-built kernel for a target

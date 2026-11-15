@@ -26,12 +26,8 @@ func ManifestPath(image string) string {
 	return image + ManifestSuffix
 }
 
-// UnsignedNoManifestKey is Result.Unsigned for a measured build given no
-// ManifestKey.
-const UnsignedNoManifestKey = "no manifest key (--manifest-key kms://...): the image's PCRs are predicted but not signed, so it has no <image>" + ManifestSuffix
-
 // removeManifest deletes the manifest a previous build left beside image,
-// so a rebuild that writes none (unmeasured, unsigned or failed) never
+// so a rebuild that writes none (unmeasured or failed) never
 // leaves the old image's measurements beside the new image's bytes.
 func removeManifest(image string) error {
 	if err := os.Remove(ManifestPath(image)); err != nil && !os.IsNotExist(err) {
@@ -55,16 +51,23 @@ func (e *ManifestKeyRefError) Error() string {
 // KMSClients to reach it through.
 var errNoManifestKMS = errors.New("diskimage: a manifest key needs a platform client to reach the KMS")
 
+// errNoManifestKey is validateManifestKey's error for an empty ManifestKey:
+// a measured image is always signed.
+var errNoManifestKey = errors.New("diskimage: a measured image needs a manifest key (default " + DefaultManifestKey + ")")
+
 // validateManifestKey refuses a ManifestKey the build cannot sign with, so
-// the build fails before it starts rather than after the image is written.
+// the build fails before it starts rather than after the image is written:
+// an empty key (withDefaults names DefaultManifestKey), a reference that is
+// not kms://, and, for a Secure Boot build (the only one measured), no
+// KMSClients to reach the key through.
 func (c *BuildConfig) validateManifestKey() error {
 	if c.ManifestKey == "" {
-		return nil
+		return errNoManifestKey
 	}
 	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(c.ManifestKey)), "kms://") {
 		return &ManifestKeyRefError{Ref: c.ManifestKey}
 	}
-	if c.KMSClients == nil {
+	if c.ISO != nil && c.ISO.SecureBoot && c.KMSClients == nil {
 		return errNoManifestKMS
 	}
 	return nil
@@ -77,17 +80,18 @@ func (c *BuildConfig) validateManifestKey() error {
 // certificate's common name and the signature is good from now until the
 // certificate expires. The written manifest is verified with that
 // certificate before the build reports it, so a KMS that signs in another
-// algorithm than the key's fails the build. It returns the manifest's path,
-// or "" and UnsignedNoManifestKey with no ManifestKey.
-func (c *BuildConfig) writeManifest(ctx context.Context, image, sum string, target Target, banks []measure.Bank) (string, string, error) {
-	if c.ManifestKey == "" {
-		return "", UnsignedNoManifestKey, nil
-	}
-	fail := func(step string, err error) (string, string, error) {
-		return "", "", &MeasureError{Step: step, Err: err}
+// algorithm than the key's fails the build. It returns the manifest's path;
+// an empty ManifestKey or no KMSClients is a MeasureError, never an
+// unsigned image.
+func (c *BuildConfig) writeManifest(ctx context.Context, image, sum string, target Target, banks []measure.Bank) (string, error) {
+	fail := func(step string, err error) (string, error) {
+		return "", &MeasureError{Step: step, Err: err}
 	}
 	if err := c.validateManifestKey(); err != nil {
 		return fail("the manifest key", err)
+	}
+	if c.KMSClients == nil {
+		return fail("the manifest key", errNoManifestKMS)
 	}
 	digest, err := hex.DecodeString(sum)
 	if err != nil {
@@ -124,5 +128,5 @@ func (c *BuildConfig) writeManifest(ctx context.Context, image, sum string, targ
 	if err := os.WriteFile(out, data, 0o644); err != nil {
 		return fail("writing "+filepath.Base(out), err)
 	}
-	return out, "", nil
+	return out, nil
 }
