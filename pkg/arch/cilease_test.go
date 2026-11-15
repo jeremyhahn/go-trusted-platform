@@ -458,6 +458,180 @@ func TestLegLoadFindingsRejectStoreDependentLoads(t *testing.T) {
 	}
 }
 
+// Ruling 675: on a self-hosted runner the integration image goes through the
+// LAN registry the repository variable CI_IMAGE_REGISTRY names, not a 3.4 GB
+// GitHub artifact each leg downloads over the uplink. The artifact path stays
+// for GitHub-hosted runners and for a runner with the variable unset.
+const (
+	ciImageJob        = "integration-image"
+	ciLegJob          = "integration"
+	ciRegistryEnv     = "IT_REGISTRY"
+	ciRegistryValue   = "${{ runner.environment != 'github-hosted' && vars.CI_IMAGE_REGISTRY || '' }}"
+	ciImageNoRegistry = "env.IT_REGISTRY == ''"
+	ciImageRegistry   = "env.IT_REGISTRY != ''"
+	ciLegNoRegistry   = "needs.integration-image.outputs.image_ref == ''"
+	ciLegRegistry     = "needs.integration-image.outputs.image_ref != ''"
+	ciLegNotLeased    = "steps.lease.outputs.leased != 'true'"
+	ciUploadArtifact  = "actions/upload-artifact"
+	ciDownloadArtfct  = "actions/download-artifact"
+
+	reasonRegistryUnguarded  = "sets IT_REGISTRY to something other than CI_IMAGE_REGISTRY on a self-hosted runner only"
+	reasonUploadWithRegistry = "uploads the image artifact even when the LAN registry carries the image"
+	reasonDownloadWithRef    = "downloads the image artifact even when the image job pushed it to the LAN registry"
+	reasonNoRegistryPush     = "has no push step to the LAN registry guarded by IT_REGISTRY, or no image_ref output from it"
+	reasonPullNotGuarded     = "pulls from the LAN registry without the lease step first and an image_ref to pull"
+	reasonPullNoLayerCompare = "does not compare the pulled image's layer identity with IT_IMAGE_IDENTITY"
+	reasonNoRegistryPull     = "has no step that pulls the image job's image_ref from the LAN registry"
+)
+
+// ciRawStep is a workflow step as the registry check reads it.
+type ciRawStep struct {
+	ID   string `yaml:"id"`
+	Name string `yaml:"name"`
+	If   string `yaml:"if"`
+	Uses string `yaml:"uses"`
+	Run  string `yaml:"run"`
+	Line int    `yaml:"-"`
+}
+
+func ciRawJob(t *testing.T, wf ciWorkflow, id string) (*yaml.Node, []ciRawStep) {
+	t.Helper()
+	job := mappingValue(mappingValue(wf.Doc, "jobs"), id)
+	require.NotNil(t, job, "%s has no job %s", wf.File, id)
+	steps := mappingValue(job, "steps")
+	require.NotNil(t, steps, "job %s has no steps", id)
+	var raw []ciRawStep
+	for _, node := range steps.Content {
+		var step ciRawStep
+		require.NoError(t, node.Decode(&step))
+		step.Line = node.Line
+		raw = append(raw, step)
+	}
+	return job, raw
+}
+
+func ciScalar(node *yaml.Node, keys ...string) string {
+	for _, key := range keys {
+		node = mappingValue(node, key)
+	}
+	if node == nil {
+		return ""
+	}
+	return node.Value
+}
+
+func registryPathFindings(t *testing.T, wf ciWorkflow) []error {
+	var findings []error
+	finding := func(job string, line int, reason string) {
+		findings = append(findings, &ImageLeaseError{File: wf.File, Line: line, Job: job, Reason: reason})
+	}
+
+	imageJob, imageSteps := ciRawJob(t, wf, ciImageJob)
+	if ciScalar(imageJob, "env", ciRegistryEnv) != ciRegistryValue {
+		finding(ciImageJob, imageJob.Line, reasonRegistryUnguarded)
+	}
+	pushed := false
+	for _, step := range imageSteps {
+		if strings.Contains(step.Uses, ciUploadArtifact) && !strings.Contains(step.If, ciImageNoRegistry) {
+			finding(ciImageJob, step.Line, reasonUploadWithRegistry)
+		}
+		if strings.Contains(step.Run, "docker push") && strings.Contains(step.If, ciImageRegistry) && step.ID != "" &&
+			ciScalar(imageJob, "outputs", "image_ref") == "${{ steps."+step.ID+".outputs.image_ref }}" {
+			pushed = true
+		}
+	}
+	if !pushed {
+		finding(ciImageJob, imageJob.Line, reasonNoRegistryPush)
+	}
+
+	legJob, legSteps := ciRawJob(t, wf, ciLegJob)
+	leaseAt, pulled := -1, false
+	for i, step := range legSteps {
+		if step.ID == "lease" {
+			leaseAt = i
+		}
+		if strings.Contains(step.Uses, ciDownloadArtfct) && !strings.Contains(step.If, ciLegNoRegistry) {
+			finding(ciLegJob, step.Line, reasonDownloadWithRef)
+		}
+		if !strings.Contains(step.Run, "docker pull") {
+			continue
+		}
+		pulled = true
+		if leaseAt < 0 || !strings.Contains(step.If, ciLegNotLeased) || !strings.Contains(step.If, ciLegRegistry) {
+			finding(ciLegJob, step.Line, reasonPullNotGuarded)
+		}
+		if !strings.Contains(step.Run, ciLayerIdentity) || !strings.Contains(step.Run, ciIdentityCompare) {
+			finding(ciLegJob, step.Line, reasonPullNoLayerCompare)
+		}
+	}
+	if !pulled {
+		finding(ciLegJob, legJob.Line, reasonNoRegistryPull)
+	}
+	return findings
+}
+
+func TestCIIntegrationImageUsesTheLANRegistryOnSelfHostedRunners(t *testing.T) {
+	wf := loadCIWorkflow(t, repoRoot(t), ciWorkflowFile)
+	for _, finding := range registryPathFindings(t, wf) {
+		t.Error(finding)
+	}
+}
+
+func TestRegistryPathFindingsRejectArtifactsBesideTheRegistry(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), ciWorkflowFile))
+	require.NoError(t, err)
+	workflow := string(data)
+
+	cases := []struct {
+		name, old, new, reason string
+	}{
+		{
+			name:   "GitHub upload without the registry guard",
+			old:    "if: env.IT_REGISTRY == '' && github.server_url == 'https://github.com'",
+			new:    "if: github.server_url == 'https://github.com'",
+			reason: reasonUploadWithRegistry,
+		},
+		{
+			name:   "registry on GitHub-hosted runners too",
+			old:    ciRegistryEnv + ": " + ciRegistryValue,
+			new:    ciRegistryEnv + ": ${{ vars.CI_IMAGE_REGISTRY }}",
+			reason: reasonRegistryUnguarded,
+		},
+		{
+			name:   "GitHub download beside the registry",
+			old:    "if: steps.lease.outputs.leased != 'true' && " + ciLegNoRegistry + " && github.server_url == 'https://github.com'",
+			new:    "if: steps.lease.outputs.leased != 'true' && github.server_url == 'https://github.com'",
+			reason: reasonDownloadWithRef,
+		},
+		{
+			name:   "pull on a leased leg",
+			old:    "if: " + ciLegNotLeased + " && " + ciLegRegistry + "\n",
+			new:    "if: " + ciLegRegistry + "\n",
+			reason: reasonPullNotGuarded,
+		},
+		{
+			name:   "pull compares the daemon-local id",
+			old:    `[ "$pulled_identity" = "$IT_IMAGE_IDENTITY" ]`,
+			new:    `[ "$pulled_id" = "$IT_IMAGE_ID" ]`,
+			reason: reasonPullNoLayerCompare,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, 1, strings.Count(workflow, tc.old), "the workflow no longer carries %q", tc.old)
+			mutated := strings.Replace(workflow, tc.old, tc.new, 1)
+			wf, err := parseCIWorkflow(ciWorkflowFile, []byte(mutated))
+			require.NoError(t, err)
+
+			findings := registryPathFindings(t, wf)
+			require.Len(t, findings, 1)
+			var lease *ImageLeaseError
+			require.ErrorAs(t, findings[0], &lease)
+			require.Equal(t, tc.reason, lease.Reason)
+		})
+	}
+}
+
 // ImageArchiveError is a ci.yml step that leaves the integration image's
 // `docker save` archive where the checkout copy of every toolchain step, or
 // a build context, picks it up (#1272).
