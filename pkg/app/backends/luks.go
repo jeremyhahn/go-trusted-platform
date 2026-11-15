@@ -15,6 +15,8 @@ package backends
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,6 +24,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/jeremyhahn/go-luks2/pkg/luks2"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/fido2"
@@ -146,14 +150,18 @@ type LUKSBackend struct {
 	// spend seconds in the KDF.
 	kdfCost *luksKDFCost
 
-	// locks serializes keyslot and token mutations per device. go-luks2
+	// locks serializes keyslot and token mutations per volume. go-luks2
 	// takes its header lock for one call only and releases it after each
 	// AddKey or ImportToken, so the backend's snapshot, add, detect-new-slot,
 	// token-write and rollback sequence is not atomic on its own: two
 	// concurrent enrollments could detect the same new slot, bind a token to
 	// the other's slot, or roll back the other's credential. Every mutating
-	// method holds the device's mutex for its whole sequence; locksMu guards
-	// the map.
+	// method holds, for its whole sequence, the volume's mutex and an
+	// exclusive flock on <luksLockDir>/<sha256 of the resolved path>.lock
+	// (lockDevice), so separate backends and processes (platformd and each
+	// embedded platformctl host build their own) serialize too. The device
+	// node itself is not flocked: go-luks2 takes its own LOCK_NB flock there
+	// per call, which a held lock would make fail. locksMu guards the map.
 	locksMu sync.Mutex
 	locks   map[string]*sync.Mutex
 
@@ -197,9 +205,28 @@ func luksVolumeKey(device string) string {
 	return abs
 }
 
-// lockDevice takes the mutex of device (keyed by its cleaned path, created on
-// first use) and returns its unlock.
-func (b *LUKSBackend) lockDevice(device string) func() {
+// luksDefaultLockDir holds one lock file per LUKS volume, shared by every
+// backend and process on the host.
+const luksDefaultLockDir = "/run/platform/luks-locks"
+
+// luksLockDir is the per-volume lock directory; the package's tests point it
+// at a temporary directory.
+var luksLockDir = luksDefaultLockDir
+
+// luksVolumeLockPath returns the lock file of device: the hex SHA-256 of its
+// resolved path, so every alias of one volume shares one lock file.
+func luksVolumeLockPath(device string) string {
+	sum := sha256.Sum256([]byte(luksVolumeKey(device)))
+	return filepath.Join(luksLockDir, hex.EncodeToString(sum[:])+".lock")
+}
+
+// lockDevice takes the volume's in-process mutex (keyed by its resolved path,
+// created on first use), then a blocking exclusive flock on the volume's lock
+// file, and returns the unlock that releases both. It fails closed: when the
+// flock cannot be taken it releases the mutex and returns an error, and the
+// caller mutates nothing. The lock file stays in place after unlock, since
+// removing it would race with another locker.
+func (b *LUKSBackend) lockDevice(device string) (func(), error) {
 	key := luksVolumeKey(device)
 	b.locksMu.Lock()
 	if b.locks == nil {
@@ -212,7 +239,33 @@ func (b *LUKSBackend) lockDevice(device string) func() {
 	}
 	b.locksMu.Unlock()
 	mu.Lock()
-	return mu.Unlock
+
+	path := luksVolumeLockPath(device)
+	if err := os.MkdirAll(luksLockDir, 0o700); err != nil {
+		mu.Unlock()
+		return nil, fmt.Errorf("luks: volume lock directory %s: %w", luksLockDir, err)
+	}
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|unix.O_CLOEXEC, 0o600)
+	if err != nil {
+		mu.Unlock()
+		return nil, fmt.Errorf("luks: open volume lock %s: %w", path, err)
+	}
+	for {
+		err = unix.Flock(int(f.Fd()), unix.LOCK_EX)
+		if !errors.Is(err, unix.EINTR) {
+			break
+		}
+	}
+	if err != nil {
+		_ = f.Close()
+		mu.Unlock()
+		return nil, fmt.Errorf("luks: lock volume %s: %w", key, err)
+	}
+	return func() {
+		_ = unix.Flock(int(f.Fd()), unix.LOCK_UN)
+		_ = f.Close()
+		mu.Unlock()
+	}, nil
 }
 
 // luksKDFCost is a fixed keyslot KDF cost (see LUKSBackend.kdfCost): the
@@ -439,7 +492,11 @@ func volumeKeyBits(info *luks2.VolumeInfo, slots []daemon.LUKSKeyslot) int32 {
 
 // EnrollPassphrase adds a new passphrase keyslot.
 func (b *LUKSBackend) EnrollPassphrase(ctx context.Context, req *daemon.LUKSEnrollPassphraseRequest) (*daemon.LUKSEnrollPassphraseResult, error) {
-	defer b.lockDevice(req.Device)()
+	unlock, err := b.lockDevice(req.Device)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 
 	before, err := luks2.ListKeyslots(req.Device)
 	if err != nil {
@@ -507,7 +564,11 @@ func (b *LUKSBackend) EnrollFIDO2(ctx context.Context, req *daemon.LUKSEnrollFID
 	defer clearBytes(key)
 
 	// The FIDO2 derivation (a touch) stays outside the device lock.
-	defer b.lockDevice(req.Device)()
+	unlock, err := b.lockDevice(req.Device)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 
 	before, err := luks2.ListKeyslots(req.Device)
 	if err != nil {
@@ -562,7 +623,11 @@ func (b *LUKSBackend) EnrollTPM(ctx context.Context, req *daemon.LUKSEnrollTPMRe
 	defer clearBytes(passphrase)
 
 	// The TPM seal stays outside the device lock.
-	defer b.lockDevice(req.Device)()
+	unlock, err := b.lockDevice(req.Device)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 
 	before, err := luks2.ListKeyslots(req.Device)
 	if err != nil {
@@ -604,7 +669,11 @@ func (b *LUKSBackend) EnrollRecovery(ctx context.Context, req *daemon.LUKSEnroll
 		return nil, err
 	}
 	b.kdfCost.applyRecovery(recoveryOpts)
-	defer b.lockDevice(req.Device)()
+	unlock, err := b.lockDevice(req.Device)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	recoveryKey, err := luks2.AddRecoveryKey(
 		req.Device,
 		[]byte(req.ExistingPassphrase),
@@ -632,7 +701,11 @@ func (b *LUKSBackend) EnrollRecovery(ctx context.Context, req *daemon.LUKSEnroll
 
 // RemoveKey kills a keyslot. The slot index must be an existing, active slot.
 func (b *LUKSBackend) RemoveKey(ctx context.Context, req *daemon.LUKSRemoveKeyRequest) error {
-	defer b.lockDevice(req.Device)()
+	unlock, err := b.lockDevice(req.Device)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	return luks2.KillKeyslot(req.Device, int(req.Slot))
 }
 
@@ -653,7 +726,11 @@ func (b *LUKSBackend) TestUnlock(ctx context.Context, req *daemon.LUKSTestUnlock
 
 // ChangePassphrase rotates the secret on an existing passphrase slot.
 func (b *LUKSBackend) ChangePassphrase(ctx context.Context, req *daemon.LUKSChangePassphraseRequest) error {
-	defer b.lockDevice(req.Device)()
+	unlock, err := b.lockDevice(req.Device)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	if b.fipsPolicyActive() {
 		// go-luks2 ChangeKey keeps the slot's KDF, so rotating a slot whose
 		// KDF the FIPS policy refuses would write another such slot.
