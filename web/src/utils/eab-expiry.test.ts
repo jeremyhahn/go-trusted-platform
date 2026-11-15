@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 import { parseExpiresIn } from "./eab-expiry";
 
 describe("parseExpiresIn", () => {
-  it("leaves the expiry unset for a blank input", () => {
+  it("omits the expiry for a blank input, so the credential never expires (docs/eab/api.md section 3)", () => {
     expect(parseExpiresIn("")).toEqual({ ok: true });
+    expect(parseExpiresIn("")).not.toHaveProperty("seconds");
     expect(parseExpiresIn("   ")).toEqual({ ok: true });
   });
 
