@@ -49,6 +49,8 @@ type manifestPKI struct {
 	leaf  *x509.Certificate
 	kms   *ecKMS
 	ca    *secureboottest.CA
+	// bundle is the platform CA bundle: intermediates and roots.
+	bundle []*x509.Certificate
 }
 
 func newManifestPKI(t *testing.T) manifestPKI {
@@ -73,11 +75,13 @@ func newManifestPKI(t *testing.T) manifestPKI {
 	roots := x509.NewCertPool()
 	roots.AddCert(root)
 	return manifestPKI{roots: roots, leaf: leaf, kms: &ecKMS{key: key},
-		ca: &secureboottest.CA{Certs: map[string]*x509.Certificate{"build/manifest": leaf}}}
+		ca: &secureboottest.CA{Certs: map[string]*x509.Certificate{"build/manifest": leaf}}, bundle: []*x509.Certificate{root}}
 }
 
 func (p manifestPKI) clients() iso.KMSClientsFunc {
-	return func() (*iso.KMSClients, error) { return &iso.KMSClients{KMS: p.kms, CA: p.ca}, nil }
+	return func() (*iso.KMSClients, error) {
+		return &iso.KMSClients{KMS: p.kms, CA: bundleCA{CA: p.ca, bundle: p.bundle}}, nil
+	}
 }
 
 func manifestBanks() []measure.Bank {
