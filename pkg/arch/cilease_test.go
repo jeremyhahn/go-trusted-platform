@@ -484,6 +484,7 @@ const (
 	reasonNoRegistryPull     = "has no step that pulls the image job's image_ref from the LAN registry"
 	reasonPullRemovesRef     = "removes the registry reference another leg on the same daemon may still re-tag from"
 	reasonPullRetagExits     = "re-tags the registry reference without a fallback, so a failed tag fails the leg"
+	reasonPullExitHoldsLock  = "exits after image_lock without image_unlock, so the other legs on the daemon wait on a held lock"
 
 	// ciPullRemoveRef is the removal of the shared registry reference; a
 	// leg that already pulled it and waits on the image lock re-tags from it.
@@ -588,6 +589,19 @@ func registryPathFindings(t *testing.T, wf ciWorkflow) []error {
 		if !strings.Contains(step.Run, ciPullRetagGuard) || !strings.Contains(step.Run, ciPullRetagWarn) {
 			finding(ciLegJob, step.Line, reasonPullRetagExits)
 		}
+		// Every early exit once the lock is held releases it in the same branch.
+		locked, prev := false, ""
+		for _, line := range strings.Split(step.Run, "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, ciImageLock) {
+				locked = true
+			}
+			if locked && line == "exit 0" && prev != ciImageUnlock {
+				finding(ciLegJob, step.Line, reasonPullExitHoldsLock)
+				break
+			}
+			prev = line
+		}
 	}
 	if !pulled {
 		finding(ciLegJob, legJob.Line, reasonNoRegistryPull)
@@ -651,6 +665,12 @@ func TestRegistryPathFindingsRejectArtifactsBesideTheRegistry(t *testing.T) {
 			old:    ciPullRetagGuard,
 			new:    "docker tag \"$IT_IMAGE_REF\" \"$IT_IMAGE\"\n          if false; then",
 			reason: reasonPullRetagExits,
+		},
+		{
+			name:   "pull exits on a failed re-tag with the lock held",
+			old:    ciPullRetagWarn + "\"\n            " + ciImageUnlock + "\n            exit 0\n",
+			new:    ciPullRetagWarn + "\"\n            exit 0\n",
+			reason: reasonPullExitHoldsLock,
 		},
 	}
 	for _, tc := range cases {
