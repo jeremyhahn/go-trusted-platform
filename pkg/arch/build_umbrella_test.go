@@ -43,21 +43,40 @@ var cloudUmbrellas = []cloudUmbrella{
 }
 
 // printBuildTags runs `make print-build-tags` at the repository root with the
-// given variables on the command line and returns the tag list. WITH_*
-// variables of the calling environment are dropped so they cannot leak in.
+// given variables on the command line and returns the tag list. The variables
+// of the calling environment that the Makefile's tag list reads (every WITH_*
+// toggle and GO_BUILD_TAGS, which the Makefile appends to every result) are
+// dropped, as are MAKEFLAGS, MAKEOVERRIDES and MFLAGS, which carry a parent
+// make's command-line variables; GO_BUILD_TAGS= is also passed empty on the
+// command line, before the case's own variables, so the list measures only the
+// toggles the case sets.
 func printBuildTags(t *testing.T, vars ...string) []string {
 	t.Helper()
-	args := append([]string{"-s", "--no-print-directory", "print-build-tags"}, vars...)
+	args := append([]string{"-s", "--no-print-directory", "print-build-tags", "GO_BUILD_TAGS="}, vars...)
 	cmd := exec.Command("make", args...)
 	cmd.Dir = repoRoot(t)
 	for _, kv := range os.Environ() {
-		if !strings.HasPrefix(kv, "WITH_") && !strings.HasPrefix(kv, "MAKEFLAGS=") {
+		if !inheritedTagVar(kv) {
 			cmd.Env = append(cmd.Env, kv)
 		}
 	}
 	out, err := cmd.Output()
 	require.NoError(t, err, "make print-build-tags %v", vars)
 	return strings.Fields(string(out))
+}
+
+// inheritedTagVar reports whether the environment entry kv is one that would
+// change `make print-build-tags` behind the test's back.
+func inheritedTagVar(kv string) bool {
+	if strings.HasPrefix(kv, "WITH_") {
+		return true
+	}
+	for _, name := range []string{"GO_BUILD_TAGS=", "MAKEFLAGS=", "MAKEOVERRIDES=", "MFLAGS="} {
+		if strings.HasPrefix(kv, name) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestBuildUmbrellaCloudProviders(t *testing.T) {
@@ -74,6 +93,13 @@ func TestBuildUmbrellaCloudProviders(t *testing.T) {
 			require.NotContains(t, defaults, tag, "default build has no cloud provider tag")
 		}
 	}
+
+	t.Run("inherited GO_BUILD_TAGS", func(t *testing.T) {
+		t.Setenv("GO_BUILD_TAGS", "awscompute")
+		got := printBuildTags(t)
+		require.NotContains(t, got, "awscompute", "an inherited GO_BUILD_TAGS does not reach the defaults")
+		require.Equal(t, defaults, got)
+	})
 
 	for _, p := range cloudUmbrellas {
 		t.Run(p.umbrella+"=1", func(t *testing.T) {
