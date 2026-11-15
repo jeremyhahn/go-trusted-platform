@@ -36,6 +36,10 @@ type DeviceProfileDAO interface {
 	// FindByEKSerial finds a profile by exact TPM EK certificate serial number.
 	FindByEKSerial(ctx context.Context, ekSerial string) (*entities.DeviceProfile, error)
 
+	// FindByDICEDeviceID finds a profile by exact (case-insensitive) DICE
+	// device id.
+	FindByDICEDeviceID(ctx context.Context, diceDeviceID string) (*entities.DeviceProfile, error)
+
 	// FindByExactMAC finds a profile by exact MAC address.
 	FindByExactMAC(ctx context.Context, mac string) (*entities.DeviceProfile, error)
 
