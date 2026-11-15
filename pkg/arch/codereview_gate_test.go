@@ -82,6 +82,12 @@ while [ $# -gt 0 ]; do
   esac
 done
 path=${url#"$REPO_API"}
+# FAKE_FAIL, a glob on the path, makes the forge answer HTTP 500.
+if [ -n "${FAKE_FAIL:-}" ] && [[ $path == $FAKE_FAIL ]]; then
+  printf '{"message":"boom"}' >"$out"
+  printf 500
+  exit 0
+fi
 case "$path" in
   "/pulls/$PR_NUM") body="{\"head\":{\"sha\":\"$EVENT_SHA\"}}" ;;
   *page=1)
@@ -111,10 +117,16 @@ func TestCodeReviewGateRefusesAnApprovalOnOwnerHold(t *testing.T) {
 	cases := []struct {
 		name     string
 		labels   string
+		fail     string // FAKE_FAIL: the path glob the forge answers HTTP 500
 		wantPass bool
+		wantOut  string
 	}{
-		{"an approval without the hold", `[{"name":"code-review"},{"name":"task:ready"}]`, true},
-		{"an approval on owner hold", `[{"name":"code-review"},{"name":"needs-owner"}]`, false},
+		{"an approval without the hold", `[{"name":"code-review"},{"name":"task:ready"}]`, "", true, "codex approved"},
+		{"an approval on owner hold", `[{"name":"code-review"},{"name":"needs-owner"}]`, "", false, "owner hold"},
+		// A failed page request fails the gate: it never ends the listing
+		// as if the list were complete (Codex P1, #1921).
+		{"a failed first labels page", `[{"name":"code-review"}]`, "/issues/7/labels?*page=1", false, "answered HTTP 500"},
+		{"a failed later reviews page", `[{"name":"code-review"}]`, "/pulls/7/reviews?*page=2", false, "answered HTTP 500"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -133,16 +145,17 @@ func TestCodeReviewGateRefusesAnApprovalOnOwnerHold(t *testing.T) {
 				"GH_API_TOKEN=x",
 				`NO_REVIEW_PATHS=^docs/.+$`,
 				"FAKE_LABELS=" + tc.labels,
+				"FAKE_FAIL=" + tc.fail,
 			}
 			out, runErr := cmd.CombinedOutput()
 			if tc.wantPass {
 				require.NoError(t, runErr, string(out))
-				require.Contains(t, string(out), "codex approved")
+				require.Contains(t, string(out), tc.wantOut)
 				return
 			}
 			var exitErr *exec.ExitError
 			require.ErrorAs(t, runErr, &exitErr, "the gate passed:\n%s", out)
-			require.Contains(t, string(out), "owner hold", string(out))
+			require.Contains(t, string(out), tc.wantOut, string(out))
 		})
 	}
 }
