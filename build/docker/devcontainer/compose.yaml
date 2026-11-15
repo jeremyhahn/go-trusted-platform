@@ -111,6 +111,12 @@ services:
         soft: 65536
         hard: 65536
     working_dir: /workspace
+    # The ISO VM fixture's APK pre-fetch cache (test/integration/iso/
+    # apk_cache.go, #1915). `run --rm` discards the container, so the cache
+    # lives in an external volume the Makefile creates; `down --volumes`
+    # removes only the volumes this file owns and leaves it in place.
+    volumes:
+      - iso-apk-cache:/var/cache/go-trusted-platform/iso-apk
     environment:
       GOTOOLCHAIN: local
       GOFLAGS: -mod=readonly -buildvcs=false
@@ -120,6 +126,7 @@ services:
       CI: ${CI:-}
       HOST_UID: ${HOST_UID:-}
       HOST_GID: ${HOST_GID:-}
+      GTP_ISO_APK_CACHE: /var/cache/go-trusted-platform/iso-apk
 
   toolchain:
     <<: *posture
@@ -142,3 +149,7 @@ services:
 volumes:
   toolchain-gocache:
   toolchain-tmp:
+  # External: created by `make integration-test`, kept across legs and runs.
+  iso-apk-cache:
+    external: true
+    name: go-trusted-platform-iso-apk-cache

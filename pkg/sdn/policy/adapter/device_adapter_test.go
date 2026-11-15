@@ -332,6 +332,10 @@ func (m *MockProfileDAO) FindByEKSerial(ctx context.Context, ekSerial string) (*
 	return &entities.DeviceProfile{}, nil
 }
 
+func (m *MockProfileDAO) FindByDICEDeviceID(ctx context.Context, diceDeviceID string) (*entities.DeviceProfile, error) {
+	return &entities.DeviceProfile{}, nil
+}
+
 func (m *MockProfileDAO) FindByExactMAC(ctx context.Context, mac string) (*entities.DeviceProfile, error) {
 	return &entities.DeviceProfile{}, nil
 }

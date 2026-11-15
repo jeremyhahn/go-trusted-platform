@@ -60,6 +60,10 @@ type profileFlags struct {
 	tlsServerName string
 	// clearTLSServerName blanks the stored tlsServerName on update (#462).
 	clearTLSServerName bool
+	// diceDeviceID is the hex DICE device identifier (#1699).
+	diceDeviceID string
+	// goldenFWHash is the hex expected firmware hash, 32 bytes (#1699).
+	goldenFWHash string
 	// match is the rule set FindMatchingProfile selects the profile by.
 	match matchRuleFlags
 }
@@ -75,6 +79,8 @@ func registerProfileFlags(cmd *cobra.Command, pf *profileFlags) {
 	cmd.Flags().StringVar(&pf.ekCert, "ek-cert", "", "prestaged TPM EK certificate: path to a PEM file or an inline PEM string")
 	cmd.Flags().StringVar(&pf.configFile, "config-file", "", "path to the device platform config (YAML or JSON)")
 	cmd.Flags().StringVar(&pf.tlsServerName, "tls-server-name", "", "certificate name the attestation collector verifies nodes of this profile against (e.g. compute.example.internal); empty means the device's own FQDN")
+	cmd.Flags().StringVar(&pf.diceDeviceID, "dice-device-id", "", "hex DICE device identifier (1-64 bytes) the registry resolves this profile by")
+	cmd.Flags().StringVar(&pf.goldenFWHash, "golden-fw-hash", "", "hex golden firmware hash (FWHash, 32 bytes) expected of the device")
 	registerMatchRuleFlags(cmd, &pf.match)
 }
 
@@ -206,6 +212,25 @@ Examples:
 
 // runProfileCreate validates the flags and creates the profile via the
 // SDK device service.
+// newProfileCreateMessage builds the CreateProfile message from the parsed
+// flags and the already-resolved role, EK certificate and config.
+func newProfileCreateMessage(pf *profileFlags, role platformv1.DeviceRole, ekCertPEM string, configJSON []byte) *platformv1.DeviceProfile {
+	return &platformv1.DeviceProfile{
+		Name:          pf.name,
+		Model:         pf.model,
+		Role:          role,
+		Zone:          pf.zone,
+		EkSerial:      pf.ekSerial,
+		MacAddress:    pf.mac,
+		EkCert:        ekCertPEM,
+		Config:        configJSON,
+		TlsServerName: pf.tlsServerName,
+		DiceDeviceId:  pf.diceDeviceID,
+		GoldenFwHash:  pf.goldenFWHash,
+		MatchRules:    applyMatchRuleFlags(nil, &pf.match),
+	}
+}
+
 func runProfileCreate(flags *cli.CommonFlags, pf *profileFlags) error {
 	if pf.name == "" {
 		return ErrProfileNameRequired{}
@@ -231,18 +256,7 @@ func runProfileCreate(flags *cli.CommonFlags, pf *profileFlags) error {
 
 	deviceClient := device.NewClientFromGRPC(base.Client().Device())
 
-	profile := &platformv1.DeviceProfile{
-		Name:          pf.name,
-		Model:         pf.model,
-		Role:          role,
-		Zone:          pf.zone,
-		EkSerial:      pf.ekSerial,
-		MacAddress:    pf.mac,
-		EkCert:        ekCertPEM,
-		Config:        configJSON,
-		TlsServerName: pf.tlsServerName,
-		MatchRules:    applyMatchRuleFlags(nil, &pf.match),
-	}
+	profile := newProfileCreateMessage(pf, role, ekCertPEM, configJSON)
 
 	created, err := deviceClient.CreateProfile(base.Context(), profile)
 	if err != nil {
@@ -335,6 +349,12 @@ func applyProfileUpdateFlags(profile *platformv1.DeviceProfile, pf *profileFlags
 	}
 	if pf.clearTLSServerName {
 		profile.TlsServerName = ""
+	}
+	if pf.diceDeviceID != "" {
+		profile.DiceDeviceId = pf.diceDeviceID
+	}
+	if pf.goldenFWHash != "" {
+		profile.GoldenFwHash = pf.goldenFWHash
 	}
 	profile.MatchRules = applyMatchRuleFlags(profile.MatchRules, &pf.match)
 	return nil
@@ -445,6 +465,12 @@ func buildProfileOutput(profile *platformv1.DeviceProfile) map[string]interface{
 	}
 	if profile.GetTlsServerName() != "" {
 		output["tls_server_name"] = profile.GetTlsServerName()
+	}
+	if profile.GetDiceDeviceId() != "" {
+		output["dice_device_id"] = profile.GetDiceDeviceId()
+	}
+	if profile.GetGoldenFwHash() != "" {
+		output["golden_fw_hash"] = profile.GetGoldenFwHash()
 	}
 	if rules := buildMatchRulesOutput(profile.GetMatchRules()); rules != nil {
 		output["match_rules"] = rules

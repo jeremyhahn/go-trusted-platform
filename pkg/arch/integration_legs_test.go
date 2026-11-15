@@ -160,6 +160,48 @@ func TestIntegrationRunnerRejectsAnUnknownLeg(t *testing.T) {
 	require.Contains(t, out, "no integration leg 99")
 }
 
+// runnerMapEntry returns the value of [key] in the runner's
+// `declare -A name=( ... )` map, or "" when the map or the key is missing.
+func runnerMapEntry(script, name, key string) string {
+	_, body, found := strings.Cut(script, "\ndeclare -A "+name+"=(\n")
+	if !found {
+		return ""
+	}
+	body, _, _ = strings.Cut(body, "\n)")
+	for _, line := range strings.Split(body, "\n") {
+		if value, ok := strings.CutPrefix(strings.TrimSpace(line), "["+key+"]="); ok {
+			return value
+		}
+	}
+	return ""
+}
+
+// TestIntegrationRunner_ISOVMTestsRunInTheirOwnTarget pins the main-fix for
+// main ac83c0e95 (run 43694406642): TestISOVMTests ran inside the iso
+// package's one go test -timeout, after the multi-protocol Create subtests
+// had spent it, and TestBoot refused with a negative time left. The VM tests
+// run as their own iso-vm target, with their own timeout, and iso skips them.
+func TestIntegrationRunner_ISOVMTestsRunInTheirOwnTarget(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), integrationRunnerPath))
+	require.NoError(t, err)
+	require.Equal(t, `"./test/integration/iso/..."`, runnerMapEntry(string(data), "TARGET_PACKAGES", "iso-vm"),
+		"iso-vm runs the iso package")
+
+	// The arguments run_test hands go test, read from the runner itself, so
+	// dropping the -run/-skip handling or the timeout fails here.
+	for _, c := range []struct {
+		target string
+		want   []string
+	}{
+		{"iso", []string{"-timeout", "35m", "-skip", "^TestISOVMTests$"}},
+		{"iso-vm", []string{"-timeout", "55m", "-run", "^TestISOVMTests$"}},
+	} {
+		out, err := runIntegrationRunner(t, "go-test-args", c.target)
+		require.NoError(t, err, out)
+		require.Equal(t, c.want, strings.Fields(out), "go test arguments of %s", c.target)
+	}
+}
+
 func TestIntegrationLegFindingsAcceptAPartition(t *testing.T) {
 	listing := "all a b c compute\nleg-1 a c\nleg-2 b compute\n"
 	require.Empty(t, integrationLegFindings(listing, []int{1, 2}))
