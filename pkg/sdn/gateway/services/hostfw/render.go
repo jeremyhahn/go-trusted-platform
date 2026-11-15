@@ -125,24 +125,38 @@ func compile(rs Ruleset) []Rule {
 	)
 	// Input chain only: traffic forwarded through the VIP as a gateway is
 	// unaffected. ARP is not in the inet family, so the VIP still resolves.
-	// No ingress match: Linux delivers an installed VIP locally whatever
-	// interface the packet arrives on. Ahead of the conntrack allowance, so
-	// an established flow to the VIP, or a reply to VIP-sourced traffic,
-	// is dropped once accept-mode is off (Codex #1716 round 4).
-	seen := make(map[netip.Addr]bool, len(rs.VIPDeny))
+	// No ingress match for a global address: Linux delivers an installed
+	// VIP locally whatever interface the packet arrives on, so it is
+	// deduplicated by address. An IPv6 link-local VIP is scoped to its
+	// link: the same fe80:: address can be accept-mode off on one link and
+	// must be accepted on another, so its deny matches its own interface
+	// only and is deduplicated per interface (ruling 673, Codex #1716
+	// round 5). Ahead of the conntrack allowance, so an established flow to
+	// the VIP, or a reply to VIP-sourced traffic, is dropped once
+	// accept-mode is off (Codex #1716 round 4).
+	type vipKey struct {
+		iface string
+		addr  netip.Addr
+	}
+	seen := make(map[vipKey]bool, len(rs.VIPDeny))
 	for _, v := range rs.VIPDeny {
-		if seen[v.Address] {
+		key := vipKey{addr: v.Address}
+		linkLocal := v.Address.Is6() && v.Address.IsLinkLocalUnicast()
+		if linkLocal {
+			key.iface = v.Interface
+		}
+		if seen[key] {
 			continue
 		}
-		seen[v.Address] = true
+		seen[key] = true
 		comment := fmt.Sprintf("vip %s accept-mode off", v.Address)
 		if v.Address.Is4() {
 			rules = append(rules, Rule{Kind: RuleVIPDeny, Family: 4, Destination: v.Address, Comment: comment})
 			continue
 		}
 		rules = append(rules,
-			Rule{Kind: RuleVIPDeny, Family: 6, Destination: v.Address, Comment: comment},
-			Rule{Kind: RuleVIPDenyICMPv6, Family: 6, Destination: v.Address, Comment: comment},
+			Rule{Kind: RuleVIPDeny, Interface: key.iface, Family: 6, Destination: v.Address, Comment: comment},
+			Rule{Kind: RuleVIPDenyICMPv6, Interface: key.iface, Family: 6, Destination: v.Address, Comment: comment},
 		)
 	}
 	rules = append(rules,

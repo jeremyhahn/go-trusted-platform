@@ -134,16 +134,21 @@ type Ruleset struct {
 	// ICMP bounds ICMP and ICMPv6 (other than neighbour discovery).
 	ICMP RateLimit
 	// VIPDeny are FHRP virtual addresses held with accept-mode off (RFC
-	// 5798 §6.4.3): traffic addressed to them is dropped on their
-	// interface. The gateway derives them from its FHRP groups; they are
-	// not operator configuration.
+	// 5798 §6.4.3): traffic addressed to them is dropped (a global address
+	// on every ingress interface, an IPv6 link-local one on its own
+	// interface only). The gateway derives them from its FHRP groups; they
+	// are not operator configuration.
 	VIPDeny []VIPDeny
 }
 
-// VIPDeny drops input traffic to a virtual address on an interface; IPv6
-// neighbour discovery to it stays answered.
+// VIPDeny drops input traffic to a virtual address; IPv6 neighbour
+// discovery to it stays answered. A global address is denied on every
+// ingress interface, since Linux delivers it locally whatever link the
+// packet arrives on. An IPv6 link-local address is scoped to its link, so
+// its deny matches Interface only (ruling 673, Codex #1716 round 5).
 type VIPDeny struct {
-	// Interface is the FHRP interface carrying the virtual address.
+	// Interface is the FHRP interface carrying the virtual address; the
+	// deny is restricted to it for an IPv6 link-local address.
 	Interface string
 	// Address is the virtual address.
 	Address netip.Addr
