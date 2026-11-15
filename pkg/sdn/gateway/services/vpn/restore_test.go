@@ -310,6 +310,32 @@ func TestRestore_AFailedRejectedPeerRemovalIsRetried(t *testing.T) {
 	assert.NotEqual(t, "mini-1", h.holder(t, lease.Address), "then the address is released")
 }
 
+// A rejected lease whose record the store could not delete is still listed
+// when the reconciliation is retried: the retry must not keep its peer.
+func TestRestore_ARetriedReconciliationRemovesARejectedLeaseStillStored(t *testing.T) {
+	h := newRestoreHarness(t)
+	lease := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
+	lease.Zones = []string{"fabric"}
+	require.NoError(t, h.store.Put(context.Background(), lease))
+	h.plane.installed[lease.ID] = lease
+	h.allocate(t, "mini-1", lease.Address)
+	h.store.deleteErr = errors.New("control plane unreachable")
+	h.start(t)
+	h.plane.failRemovals(errors.New("datapath unreachable"))
+
+	err := h.svc.Restore(context.Background())
+	var dropped *ErrLeaseNotRestored
+	require.True(t, errors.As(err, &dropped), "got %v", err)
+	require.True(t, h.plane.hosts(lease.ID))
+	stored, err := h.store.List(context.Background())
+	require.NoError(t, err)
+	require.Len(t, stored, 1, "the rejected lease's record is still stored")
+
+	h.plane.failRemovals(nil)
+	h.svc.Sweep(context.Background())
+	assert.False(t, h.plane.hosts(lease.ID), "the retried reconciliation takes the rejected lease's peer down")
+}
+
 func TestRestore_LeavesAnotherDevicesAddressAlone(t *testing.T) {
 	h := newRestoreHarness(t)
 	lease := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
