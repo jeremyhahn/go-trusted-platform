@@ -1,4 +1,6 @@
 # code-review-template: v5.10.5 -- the code review in Gitea or GitHub CI for a pull request
+# + v5.11.2 (Tenant Agent ruling 673): after the last round the PR stays
+#   needs-coordinator; the workflow never sets needs-owner.
 # that carries `code-review` and `task:ready`, routed by its labels through
 # route-labels (labels.md §2). Codex on the `codex` runner reviews every such
 # PR; `agent:opencode` adds an advisory COMMENT review by the opencode job on
@@ -1496,7 +1498,7 @@ jobs:
           latest=$(jq -r 'if length == 0 then "" elif (last | .stands) then last | .state else "DISMISSED" end' <<<"$hist")
           if [ "$done_rounds" -ge "$limit" ] && [ "$latest" != APPROVED ]; then
             stop=needs-coordinator
-            [ "$done_rounds" -lt "$last_round" ] || stop=needs-owner
+            # v5.11.2 (ruling 673): every stop goes to the coordinator.
             { echo "skip=round-limit"; echo "stop=$stop"; } >> "$GITHUB_OUTPUT"
             touch "$WORK/verdict"
             echo "::error::$REVIEWER has reviewed PR $PR_NUM for $done_rounds rounds and the latest verdict is ${latest:-none}, not an approval: the round limit is $limit (sdlc.md §2b). The PR goes to $stop."
@@ -2171,7 +2173,7 @@ jobs:
           stop=""
           if [ "$event" = REQUEST_CHANGES ] && [ "$ROUND" -ge "$LIMIT" ]; then
             stop=needs-coordinator
-            [ "$ROUND" -lt $((2 + COORDINATOR_TURNS)) ] || stop=needs-owner
+            # v5.11.2 (ruling 673): every stop goes to the coordinator.
           fi
           jq -r --arg e "$event" --arg s "$EVENT_SHA" --arg m "$MODEL" --arg f "$EFFORT" --arg u "$RUN_URL" \
                 --arg p "$PATCH_ID" --arg x "$HUNK_CTX" --arg r "$ROUND" --arg t "$stop" '
@@ -2289,7 +2291,6 @@ jobs:
           printf '%s\n' "$STOP" > "$WORK/stop-error"
           case "$STOP" in
             needs-coordinator) relabel needs-coordinator ;;
-            needs-owner) relabel needs-owner needs-coordinator ;;
             *) die "no hand-on label '$STOP'" ;;
           esac
           rm -f "$WORK/stop-error"
