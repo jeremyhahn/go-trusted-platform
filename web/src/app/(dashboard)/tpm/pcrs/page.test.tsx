@@ -11,6 +11,13 @@ const tpm = {
 };
 const toast = vi.fn();
 
+// The page's TPM operation hooks (useTPMOps, useTPMKeyOperations) read
+// useTPM from the SDK directly, so the SDK hook returns the same stub.
+vi.mock("trusted-platform-sdk", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("trusted-platform-sdk")>()),
+  useTPM: () => tpm,
+}));
+
 vi.mock("@/hooks", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks")>()),
   useTPM: () => tpm,
