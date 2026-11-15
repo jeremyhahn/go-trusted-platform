@@ -45,7 +45,10 @@
 # v5.11.2), the hand-on step's dropped `needs-owner)` case and the guard's
 # "the count stands" message. The approval gate reads the PR's live labels
 # after the twin-review wait and refuses even a standing approval while
-# `needs-owner` is on the PR (Codex P1, #1921).
+# `needs-owner` is on the PR (Codex P1, #1921). The gate's get_all fails
+# on a failed page request (and on a page count that is not a number)
+# instead of ending the listing, so a failed labels or reviews read never
+# passes as an empty list (Codex P1, #1921).
 #
 # v5.11.1 (2026-11-13, Tenant Agent m2669, ruling 589; go-qrdb #1572 and
 # go-xkms #2183 merged with no review): THE NO-REVIEW LIST IS DOCS AND CI
@@ -2940,9 +2943,13 @@ jobs:
             local page=1 all='[]' got n size=limit=50
             [ "$FORGE" != github ] || size=per_page=100
             while :; do
-              got=$(get "$1&$size&page=$page")
+              # The callers run get_all under `|| fail`, where errexit is
+              # off: a failed page returns non-zero here, never ends the
+              # list as if it were complete (Codex P1, #1921).
+              got=$(get "$1&$size&page=$page") || return 3
               n=$(jq 'if type == "array" then length else error("not a list") end' <<<"$got") ||
                 fail "GET $1 did not answer a list"
+              [[ $n =~ ^[0-9]+$ ]] || return 3
               [ "$n" -gt 0 ] || break
               all=$(printf '%s\n%s\n' "$all" "$got" | jq -cs '.[0] + .[1]') || fail "cannot join the pages of $1"
               page=$((page + 1))
