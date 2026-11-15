@@ -1,0 +1,169 @@
+//go:build integration
+
+package iso
+
+import (
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// EnvISOAPKCache overrides the runner-local APK cache directory.
+const EnvISOAPKCache = "GTP_ISO_APK_CACHE"
+
+// The ISO VM fixture's `iso customize` pre-fetches every APK the offline
+// repository needs. On main d416ba86d (run 43689586687) that pre-fetch spent
+// the whole 10-minute customize limit: the package index loaded in 39 s, then
+// 294 packages came one by one from the public Alpine mirror and only 130 of
+// them were on disk when customize was killed at 600 s, before any VM install.
+// The fixture now seeds the pre-fetch directory from a cache that survives
+// between runs on the same runner; downloadPackage skips a file that already
+// exists, so only packages the cache lacks are fetched.
+
+// platformAPKPrefixes name the packages iso customize builds from the
+// platform tree. They are copied fresh on every run (pkg.LocalPath), so the
+// cache never holds them.
+var platformAPKPrefixes = []string{"trusted-platform-", "go-trusted-platform-"}
+
+// apkCacheDir returns the runner-local APK cache: $GTP_ISO_APK_CACHE when set,
+// else <user cache dir>/go-trusted-platform/iso-apk/<alpine version>/<arch>.
+// It returns "" when the host has no user cache directory.
+func apkCacheDir(t *testing.T) string {
+	t.Helper()
+	if dir := os.Getenv(EnvISOAPKCache); dir != "" {
+		return dir
+	}
+	base, err := os.UserCacheDir()
+	if err != nil || base == "" {
+		t.Logf("APK cache disabled: no user cache directory: %v", err)
+		return ""
+	}
+	return filepath.Join(base, "go-trusted-platform", "iso-apk", DefaultAlpineVersion, DefaultArch)
+}
+
+// prefetchDir is where iso customize keeps its pre-fetched packages.
+func prefetchDir(isoDir string) string {
+	return filepath.Join(isoDir, "apks-prefetch", DefaultArch)
+}
+
+// seedPrefetchCache places every cached package in isoDir's pre-fetch
+// directory before customize runs. Failures only cost a download, so they
+// are logged, not fatal.
+func seedPrefetchCache(t *testing.T, isoDir string) {
+	t.Helper()
+	cache := apkCacheDir(t)
+	if cache == "" {
+		return
+	}
+	n, err := linkAPKs(cache, prefetchDir(isoDir))
+	if err != nil {
+		t.Logf("APK cache: seeding %s from %s: %v", prefetchDir(isoDir), cache, err)
+	}
+	t.Logf("APK cache: seeded %d packages from %s", n, cache)
+}
+
+// harvestPrefetchCache stores the packages a successful customize downloaded
+// in the cache for the next run.
+func harvestPrefetchCache(t *testing.T, isoDir string) {
+	t.Helper()
+	cache := apkCacheDir(t)
+	if cache == "" {
+		return
+	}
+	n, err := linkAPKs(prefetchDir(isoDir), cache)
+	if err != nil {
+		t.Logf("APK cache: harvesting %s into %s: %v", prefetchDir(isoDir), cache, err)
+	}
+	t.Logf("APK cache: stored %d new packages in %s", n, cache)
+}
+
+// cacheableAPK reports whether name is a mirror package the cache may hold.
+func cacheableAPK(name string) bool {
+	if strings.HasPrefix(name, ".") || !strings.HasSuffix(name, ".apk") {
+		return false
+	}
+	for _, p := range platformAPKPrefixes {
+		if strings.HasPrefix(name, p) {
+			return false
+		}
+	}
+	return true
+}
+
+// linkAPKs hard-links (or copies) each cacheable *.apk in src that dst lacks
+// into dst. Each file is written under a hidden temp name and renamed into
+// place, so a killed run never leaves a partial file under a *.apk name.
+// A missing src is not an error. It returns how many files it placed.
+func linkAPKs(src, dst string) (int, error) {
+	entries, err := os.ReadDir(src)
+	if os.IsNotExist(err) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return 0, err
+	}
+	placed := 0
+	var firstErr error
+	for _, e := range entries {
+		name := e.Name()
+		if !e.Type().IsRegular() || !cacheableAPK(name) {
+			continue
+		}
+		target := filepath.Join(dst, name)
+		if _, err := os.Stat(target); err == nil {
+			continue
+		}
+		if err := placeAtomically(filepath.Join(src, name), target); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		placed++
+	}
+	return placed, firstErr
+}
+
+func placeAtomically(src, target string) error {
+	tmp := filepath.Join(filepath.Dir(target),
+		fmt.Sprintf(".%s.%d.tmp", filepath.Base(target), os.Getpid()))
+	_ = os.Remove(tmp)
+	if err := os.Link(src, tmp); err != nil {
+		if err := copyFile(src, tmp); err != nil {
+			_ = os.Remove(tmp)
+			return err
+		}
+	}
+	if err := os.Rename(tmp, target); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	if err := out.Sync(); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
+}
