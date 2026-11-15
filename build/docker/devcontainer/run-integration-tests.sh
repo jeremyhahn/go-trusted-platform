@@ -94,6 +94,7 @@ declare -A TARGET_PACKAGES=(
     [ipxe]="./test/integration/ipxe/..."
     [ipxe-dhcp]="./test/integration/ipxe/..."
     [iso]="./test/integration/iso/..."
+    [iso-vm]="./test/integration/iso/..."
     [kms]="./test/integration/kms/..."
     [pxe]="./test/integration/pxe/..."
     [registry]="./test/integration/registry/..."
@@ -108,11 +109,21 @@ declare -A TARGET_PACKAGES=(
 # it runs its full mode when INTEGRATION_TEST_SERVER_ISO and
 # INTEGRATION_TEST_CLIENT_ISO name pre-built ISOs. ipxe-dhcp is the DHCP
 # slice of the ipxe suite; it starts a DHCP server for
-# TestIPXEDHCPToHTTPChain.
+# TestIPXEDHCPToHTTPChain. iso-vm is the VM slice of the iso suite
+# (TestISOVMTests: install Alpine to a disk, then boot it), run with its own
+# go test timeout so the multi-protocol tests before it in the package
+# cannot spend its deadline (main-fix, main ac83c0e95, run 43694406642).
 declare -A TARGET_RUN=(
     [lb]='^TestGroupLoadBalancer$'
     [testenv-enrollment]='^TestEnrollmentIntegration$'
     [ipxe-dhcp]='.*DHCP.*'
+    [iso-vm]='^TestISOVMTests$'
+)
+
+# Per-target go test -skip: the tests a target leaves to a slice of its own.
+# iso leaves TestISOVMTests to iso-vm.
+declare -A TARGET_SKIP=(
+    [iso]='^TestISOVMTests$'
 )
 
 # Per-target environment, NAME=value words passed to `env` before go test.
@@ -142,11 +153,19 @@ declare -A TARGET_ENV=(
 # transport adapter a client timeout and a context deadline.
 # iso gets 35 minutes: the 20-minute install budget (vmInstallTimeout) plus the
 # ISO build and customize steps; a guest stuck at its GRUB menu fails in 2.
+# iso skips TestISOVMTests, which iso-vm runs alone: on main ac83c0e95 (run
+# 43694406642) the TestISOMultiProtocol CLI Create subtests took about 517 s
+# each, and TestBoot found its share of the package's 35 minutes spent.
+# iso-vm gets 55 minutes, from the VM tests' own bounds: the 20-minute
+# install (vmInstallTimeout) + the 30-minute boot context (testVMBoot) + the
+# 2-minute cleanup margin (vmCleanupMargin) = 52, plus the Alpine ISO seed,
+# rounded up.
 # sdn-stress gets the 30 minutes `make stress-sdn` gives the same package.
 declare -A TARGET_TIMEOUTS=(
     [sdn]="15m"
     [sdn-stress]="30m"
     [iso]="35m"
+    [iso-vm]="55m"
     [diskimage]="90m"
     [netboot]="40m"
     [nat64]="15m"
@@ -204,7 +223,7 @@ declare -A TARGET_NO_DAEMON=(
 ALL_TARGETS=(
     helpers ipxe installer e2e
     root acme attestation authenticode ca ceremony cli
-    container daemon device dns fido2 iam iso kms luks
+    container daemon device dns fido2 iam iso iso-vm kms luks
     ntp objectstorage piv provision proxy registry sdn
     sdn-stress secrets tenant vpn vtpm tpm
 )
@@ -215,12 +234,14 @@ ALL_TARGETS=(
 # everything: its daemon-free suites at once, then its daemon-backed ones in
 # ALL_TARGETS order, so tpm stays last on its daemon, and compute after them on
 # a restarted one. The legs are balanced by CI's measured job times
-# (docs/test/integration.md, "Legs"); iso and sdn, the two longest, are apart.
+# (docs/test/integration.md, "Legs"); iso and sdn, the two longest, are apart,
+# and iso-vm, the iso suite's VM tests, runs in leg 4, the shortest measured,
+# apart from both.
 INTEGRATION_LEGS=(
     "acme authenticode ca iso"
     "ceremony cli container sdn"
     "daemon device dns sdn-stress"
-    "helpers ipxe installer e2e root attestation fido2 iam kms luks ntp objectstorage"
+    "helpers ipxe installer e2e root attestation fido2 iam iso-vm kms luks ntp objectstorage"
     "piv provision proxy registry secrets tenant vpn vtpm tpm compute"
 )
 
@@ -230,6 +251,31 @@ ARG2="${2:-}"
 
 # `legs` prints ALL_TARGETS and then each leg, one per line, and exits before
 # anything starts: the partition check and the docs read the legs from here.
+# go_test_args prints the go test arguments a target's run selects, one per
+# line: -timeout and its value, then the -run and -skip pairs. run_test reads
+# them from here, and `go-test-args TARGET` prints them, so a test can check
+# the arguments go test actually gets (#1918).
+go_test_args() {
+    local target="$1"
+    printf '%s\n' -timeout "${TARGET_TIMEOUTS[$target]:-10m}"
+    if [ -n "${TARGET_RUN[$target]:-}" ]; then
+        printf '%s\n' -run "${TARGET_RUN[$target]}"
+    fi
+    if [ -n "${TARGET_SKIP[$target]:-}" ]; then
+        printf '%s\n' -skip "${TARGET_SKIP[$target]}"
+    fi
+}
+
+# `go-test-args TARGET` prints go_test_args TARGET and starts nothing.
+if [ "$ARG1" = "go-test-args" ]; then
+    if [ -z "${TARGET_PACKAGES[${ARG2:-}]+set}" ]; then
+        echo "FATAL: no integration target '${ARG2:-}'" >&2
+        exit 2
+    fi
+    go_test_args "$ARG2"
+    exit 0
+fi
+
 if [ "$ARG1" = "legs" ]; then
     echo "all ${ALL_TARGETS[*]} compute"
     for i in "${!INTEGRATION_LEGS[@]}"; do
@@ -473,13 +519,14 @@ setup_devices() {
     fi
 
     # KVM permissions. Without /dev/kvm every QEMU guest runs TCG (pkg/qemu
-    # logs "KVM requested but unusable, running TCG"), and the iso install
-    # suite does not finish inside its 20-minute bound: say which it is.
+    # logs "KVM requested but unusable, running TCG"), and the iso-vm install
+    # test (the iso package's TestISOVMTests) does not finish inside its
+    # 20-minute bound: say which it is.
     if [ -e /dev/kvm ]; then
         chmod 666 /dev/kvm
         echo "/dev/kvm: available (QEMU guests run KVM)"
     else
-        echo "WARNING: /dev/kvm NOT AVAILABLE: QEMU guests run TCG; the iso install suite will exceed its bound"
+        echo "WARNING: /dev/kvm NOT AVAILABLE: QEMU guests run TCG; the iso-vm install test will exceed its bound"
     fi
 
     # Load kernel modules (best effort)
@@ -1457,7 +1504,8 @@ fi
 
 # The iso suite's customize step stages platform-initrd and gatewayd from
 # beside /tmp/platformd, and platformctl-static from PLATFORMCTL_STATIC_PATH.
-if [ "$RUN_TARGET" = "iso" ] || { [ "$RUN_TARGET" = "all" ] && target_selected iso; }; then
+# iso-vm runs the same package's VM tests, so it gets the same staging.
+if [ "$RUN_TARGET" = "iso" ] || [ "$RUN_TARGET" = "iso-vm" ] || { [ "$RUN_TARGET" = "all" ] && { target_selected iso || target_selected iso-vm; }; }; then
     prepare_iso_customize
 fi
 
@@ -1504,18 +1552,15 @@ run_test() {
         echo "--- FAIL: $pkg ---"
         return 1
     fi
-    local timeout="${TARGET_TIMEOUTS[$target]:-10m}"
     local pkgs=()
     read -r -a pkgs <<< "$pkg"
-    local run_args=()
-    if [ -n "${TARGET_RUN[$target]:-}" ]; then
-        run_args=(-run "${TARGET_RUN[$target]}")
-    fi
+    local test_args=()
+    mapfile -t test_args < <(go_test_args "$target")
     local target_env=()
     if [ -n "${TARGET_ENV[$target]:-}" ]; then
         read -r -a target_env <<< "${TARGET_ENV[$target]}"
     fi
-    if env "${target_env[@]}" go test -v -tags "${BUILD_TAGS}" -count=1 -parallel 1 -timeout "$timeout" "${run_args[@]}" "${pkgs[@]}"; then
+    if env "${target_env[@]}" go test -v -tags "${BUILD_TAGS}" -count=1 -parallel 1 "${test_args[@]}" "${pkgs[@]}"; then
         echo "--- PASS: $pkg ---"
     else
         echo "--- FAIL: $pkg ---"
