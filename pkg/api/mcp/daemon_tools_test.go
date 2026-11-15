@@ -15,7 +15,10 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"testing"
+
+	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 )
 
 func TestDaemonToolExecution(t *testing.T) {
@@ -258,6 +261,163 @@ func TestDaemonToolExecution(t *testing.T) {
 			t.Fatal("expected error")
 		}
 	})
+}
+
+// TestDaemonGetConfigTool checks that platform_daemon_get_config passes
+// the section argument to the provider and returns its result (#1689).
+func TestDaemonGetConfigTool(t *testing.T) {
+	ctx := context.Background()
+	log := newTestLogger()
+
+	t.Run("passes the section", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		var got string
+		svc.daemonGetConfigFunc = func(ctx context.Context, section string) (interface{}, error) {
+			got = section
+			return map[string]interface{}{"section": section}, nil
+		}
+		registry := NewToolRegistry(svc, log)
+
+		result, err := registry.ExecuteTool(ctx, "platform_daemon_get_config", map[string]interface{}{
+			"section": "daemon",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result == nil {
+			t.Fatal("result should not be nil")
+		}
+		if got != "daemon" {
+			t.Fatalf("section = %q, want %q", got, "daemon")
+		}
+	})
+
+	t.Run("empty section asks for every section", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		got := "unset"
+		svc.daemonGetConfigFunc = func(ctx context.Context, section string) (interface{}, error) {
+			got = section
+			return map[string]interface{}{}, nil
+		}
+		registry := NewToolRegistry(svc, log)
+
+		if _, err := registry.ExecuteTool(ctx, "platform_daemon_get_config", map[string]interface{}{}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "" {
+			t.Fatalf("section = %q, want empty", got)
+		}
+	})
+
+	t.Run("service error", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		svc.daemonGetConfigFunc = func(ctx context.Context, section string) (interface{}, error) {
+			return nil, ErrMockServiceError
+		}
+		registry := NewToolRegistry(svc, log)
+
+		_, err := registry.ExecuteTool(ctx, "platform_daemon_get_config", map[string]interface{}{})
+		if !errors.Is(err, ErrMockServiceError) {
+			t.Fatalf("err = %v, want ErrMockServiceError", err)
+		}
+	})
+
+	t.Run("registered", func(t *testing.T) {
+		registry := NewToolRegistry(newMockServiceProvider(), log)
+		if !hasDaemonTool(registry, "platform_daemon_get_config") {
+			t.Fatal("platform_daemon_get_config is not registered")
+		}
+	})
+
+	t.Run("scope matches gRPC", func(t *testing.T) {
+		assertDaemonConfigScope(t, "platform_daemon_get_config")
+	})
+}
+
+// TestDaemonReloadConfigTool checks that platform_daemon_reload_config
+// calls the provider and returns its result (#1689).
+func TestDaemonReloadConfigTool(t *testing.T) {
+	ctx := context.Background()
+	log := newTestLogger()
+
+	t.Run("success", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		called := false
+		svc.daemonReloadConfigFunc = func(ctx context.Context) (interface{}, error) {
+			called = true
+			return map[string]interface{}{"success": true}, nil
+		}
+		registry := NewToolRegistry(svc, log)
+
+		result, err := registry.ExecuteTool(ctx, "platform_daemon_reload_config", map[string]interface{}{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result == nil {
+			t.Fatal("result should not be nil")
+		}
+		if !called {
+			t.Fatal("DaemonReloadConfig was not called")
+		}
+	})
+
+	t.Run("service error", func(t *testing.T) {
+		svc := newMockServiceProvider()
+		svc.daemonReloadConfigFunc = func(ctx context.Context) (interface{}, error) {
+			return nil, ErrMockServiceError
+		}
+		registry := NewToolRegistry(svc, log)
+
+		_, err := registry.ExecuteTool(ctx, "platform_daemon_reload_config", map[string]interface{}{})
+		if !errors.Is(err, ErrMockServiceError) {
+			t.Fatalf("err = %v, want ErrMockServiceError", err)
+		}
+	})
+
+	t.Run("registered", func(t *testing.T) {
+		registry := NewToolRegistry(newMockServiceProvider(), log)
+		if !hasDaemonTool(registry, "platform_daemon_reload_config") {
+			t.Fatal("platform_daemon_reload_config is not registered")
+		}
+	})
+
+	t.Run("scope matches gRPC", func(t *testing.T) {
+		assertDaemonConfigScope(t, "platform_daemon_reload_config")
+	})
+}
+
+// hasDaemonTool reports whether the registry lists a tool by name.
+func hasDaemonTool(r *ToolRegistry, name string) bool {
+	for _, tool := range r.ListTools() {
+		if tool.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// daemonConfigGRPCTwins maps each daemon config tool to the gRPC method
+// whose scope it carries.
+var daemonConfigGRPCTwins = map[string]string{
+	"platform_daemon_get_config":    "/platform.v1.PlatformDaemon/GetConfig",
+	"platform_daemon_reload_config": "/platform.v1.PlatformDaemon/ReloadConfig",
+}
+
+// assertDaemonConfigScope checks that the MCP tool needs the scope its gRPC
+// twin needs.
+func assertDaemonConfigScope(t *testing.T, tool string) {
+	t.Helper()
+	want := grpcapi.ScopeForMethod(daemonConfigGRPCTwins[tool])
+	if want == "" {
+		t.Fatalf("gRPC twin of %s has no scope", tool)
+	}
+	got, ok := toolPermissionCatalog()[tool]
+	if !ok {
+		t.Fatalf("MCP %s is not classified", tool)
+	}
+	if got != want {
+		t.Fatalf("MCP %s scope = %q, want %q", tool, got, want)
+	}
 }
 
 func TestErrDaemonServiceNameRequired(t *testing.T) {
