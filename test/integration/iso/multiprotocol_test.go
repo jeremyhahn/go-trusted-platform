@@ -765,7 +765,7 @@ func testCreateOperations(t *testing.T, ctx context.Context, cmd ISOCommands, wo
 			TPMUnseal:     true,
 			LUKS:          true,
 			GenerateKeys:  false, // Skip key generation for tests
-			Force:         true,
+			Force:         false,
 		}
 
 		result, err := cmd.Create(testCtx, opts)
@@ -798,7 +798,7 @@ func testCreateOperations(t *testing.T, ctx context.Context, cmd ISOCommands, wo
 			LUKS:          true,
 			FIPS:          true, // Enable FIPS mode
 			GenerateKeys:  false,
-			Force:         true,
+			Force:         false,
 		}
 
 		result, err := cmd.Create(testCtx, opts)
@@ -829,7 +829,7 @@ func testCreateOperations(t *testing.T, ctx context.Context, cmd ISOCommands, wo
 			WorkDir:       createWorkDir,
 			SecureBoot:    false,
 			GenerateKeys:  false,
-			Force:         true,
+			Force:         false,
 		}
 
 		result, err := cmd.Create(testCtx, opts)
@@ -856,7 +856,7 @@ func testCreateOperations(t *testing.T, ctx context.Context, cmd ISOCommands, wo
 			WorkDir:       createWorkDir,
 			SecureBoot:    false,
 			GenerateKeys:  false,
-			Force:         true,
+			Force:         false,
 		}
 
 		result, err := cmd.Create(testCtx, opts)
