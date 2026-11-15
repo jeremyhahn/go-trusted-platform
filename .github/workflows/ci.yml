@@ -1668,9 +1668,11 @@ jobs:
       # Ruling 675: a leg placed on another runner's daemon (run 68296, legs
       # 1, 2 and 4) pulls the image the image job pushed to the LAN registry,
       # over the LAN, not the uplink. As after a load, the leg leases the id
-      # the pull gave the tag and checks the image job's layer identity. A
-      # failed pull or another image leaves the lease to the load step's
-      # fallback build, with a warning.
+      # the pull gave the tag and checks the image job's layer identity. The
+      # registry tag stays on the daemon: another leg sharing it may have
+      # pulled too and still waits on the image lock to re-tag from it. A
+      # failed pull, a failed re-tag or another image leaves the lease to
+      # the load step's fallback build, with a warning.
       - name: Pull the integration image from the LAN registry
         id: pull
         if: steps.lease.outputs.leased != 'true' && needs.integration-image.outputs.image_ref != ''
@@ -1689,8 +1691,10 @@ jobs:
             exit 0
           fi
           image_lock || exit 1
-          docker tag "$IT_IMAGE_REF" "$IT_IMAGE"
-          docker rmi "$IT_IMAGE_REF" >/dev/null 2>&1 || true
+          if ! docker tag "$IT_IMAGE_REF" "$IT_IMAGE"; then
+            echo "::warning::re-tagging $IT_IMAGE_REF as $IT_IMAGE failed; building this leg's image"
+            exit 0
+          fi
           if pulled_id=$(docker image inspect -f '{{.Id}}' "$IT_IMAGE") &&
             docker create --pull never --name "$IT_LEASE" "$pulled_id" true >/dev/null; then
             pulled_identity=$(docker image inspect -f '{{json .RootFS.Layers}}' "$pulled_id" | sha256sum | cut -d' ' -f1)
