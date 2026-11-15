@@ -250,11 +250,14 @@ images=0
 refs=
 if [ "${REAP_DRY_RUN:-0}" = 1 ] || image_lock; then
   refs=$(docker images --filter "reference=${prefix}it" --format '{{.Repository}}:{{.Tag}}')
+  # LAN registry tags of the integration image (ruling 675), on any registry
+  # host: no job removes them (#1919), so they age out here like the rest.
+  refs="$refs $(docker images --filter "reference=*/go-trusted-platform/it-image" --format '{{.Repository}}:{{.Tag}}')"
 else
-  echo "keep  every ${prefix}it image (the image lock was not free within ${lock_wait}s)"
+  echo "keep  every ${prefix}it image and LAN registry tag (the image lock was not free within ${lock_wait}s)"
 fi
 for ref in $refs; do
-  case $ref in "${prefix}it:"*) ;; *) continue ;; esac
+  case $ref in "${prefix}it:"* | */go-trusted-platform/it-image:*) ;; *) continue ;; esac
   id='' created=''
   read -r id created < <(docker image inspect -f '{{.Id}} {{.Created}}' "$ref" 2>/dev/null)
   if [ -z "$id" ] || [ -z "$created" ]; then
