@@ -239,10 +239,44 @@ func statSeededISO(t *testing.T, workDir string) os.FileInfo {
 // file seedAlpineISO placed there, i.e. the CLI removed and re-downloaded it.
 func assertSeededISOKept(t *testing.T, before os.FileInfo, workDir string) {
 	t.Helper()
-	after, err := os.Stat(alpineISOPath(workDir))
+	kept, err := seededISOKept(before, workDir)
 	require.NoError(t, err, "seeded ISO must still exist in %s", workDir)
-	assert.True(t, os.SameFile(before, after),
+	assert.True(t, kept,
 		"Create re-fetched the seeded ISO in %s instead of reusing it", workDir)
+}
+
+// seededISOKept reports whether the ISO in workDir is still the file recorded
+// in before (same inode), i.e. nothing removed and rewrote it.
+func seededISOKept(before os.FileInfo, workDir string) (bool, error) {
+	after, err := os.Stat(alpineISOPath(workDir))
+	if err != nil {
+		return false, err
+	}
+	return os.SameFile(before, after), nil
+}
+
+// TestSeededISOKeptDetectsReplacement proves seededISOKept tells a kept seeded
+// ISO from one that was removed and written again.
+func TestSeededISOKeptDetectsReplacement(t *testing.T) {
+	dir := t.TempDir()
+	path := alpineISOPath(dir)
+	require.NoError(t, os.WriteFile(path, []byte("seed"), 0o644))
+	before, err := os.Stat(path)
+	require.NoError(t, err)
+
+	kept, err := seededISOKept(before, dir)
+	require.NoError(t, err)
+	assert.True(t, kept, "an untouched seeded ISO must count as kept")
+
+	require.NoError(t, os.Remove(path))
+	// Hold a file on the old inode's slot so the rewrite gets a new inode.
+	holder := filepath.Join(dir, "holder")
+	require.NoError(t, os.WriteFile(holder, []byte("x"), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte("refetched"), 0o644))
+
+	kept, err = seededISOKept(before, dir)
+	require.NoError(t, err)
+	assert.False(t, kept, "a removed and rewritten ISO must not count as kept")
 }
 
 // linkOrCopy hard-links src to dst, or copies it when the link fails (for
