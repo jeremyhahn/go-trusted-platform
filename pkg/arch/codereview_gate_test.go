@@ -14,11 +14,13 @@
 package arch
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -31,7 +33,7 @@ const (
 	codeReviewVerdictRead = `verdict=$(get_all "/pulls/$PR_NUM/reviews?"`
 	codeReviewVerdictCase = `case "$verdict"`
 	codeReviewTwinWait    = `"$waited" -lt 4500`
-	codeReviewLabelsRead  = `/issues/$PR_NUM/labels`
+	codeReviewLabelsRead  = `.labels[].name`
 	codeReviewOwnerHold   = `needs-owner`
 )
 
@@ -89,13 +91,17 @@ if [ -n "${FAKE_FAIL:-}" ] && [[ $path == $FAKE_FAIL ]]; then
   exit 0
 fi
 case "$path" in
-  "/pulls/$PR_NUM") body="{\"head\":{\"sha\":\"$EVENT_SHA\"}}" ;;
+  # The live PR: its head, its base (FAKE_BASE_REF, the run's BASE_REF by
+  # default) and its labels.
+  "/pulls/$PR_NUM")
+    body="{\"head\":{\"sha\":\"$EVENT_SHA\"},\"base\":{\"ref\":\"${FAKE_BASE_REF:-$BASE_REF}\"},\"labels\":$FAKE_LABELS}" ;;
+  # Gitea's issue labels are not paginated: every page is the full list.
+  "/issues/$PR_NUM/labels?"*) body=$FAKE_LABELS ;;
   *page=1)
     case "$path" in
-      "/pulls/$PR_NUM/files?"*) body='[{"filename":"pkg/x/x.go"}]' ;;
+      "/pulls/$PR_NUM/files?"*) body=${FAKE_FILES:-'[{"filename":"pkg/x/x.go"}]'} ;;
       "/pulls/$PR_NUM/reviews?"*)
         body="[{\"id\":1,\"state\":\"APPROVED\",\"user\":{\"login\":\"$REVIEWER\"},\"commit_id\":\"$EVENT_SHA\",\"submitted_at\":\"2026-11-15T00:00:00Z\"}]" ;;
-      "/issues/$PR_NUM/labels?"*) body=$FAKE_LABELS ;;
       *) echo "fake curl: unexpected $path" >&2; exit 22 ;;
     esac ;;
   *) body='[]' ;;
@@ -114,23 +120,37 @@ func TestCodeReviewGateRefusesAnApprovalOnOwnerHold(t *testing.T) {
 	bin := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(bin, "curl"), []byte(fakeForgeCurl), 0o755))
 
+	const docsOnly = `[{"filename":"docs/x.md"}]`
 	cases := []struct {
 		name     string
 		labels   string
+		files    string // FAKE_FILES: the PR's files; code by default
+		base     string // FAKE_BASE_REF: the live base; the run's BASE_REF by default
 		fail     string // FAKE_FAIL: the path glob the forge answers HTTP 500
 		wantPass bool
 		wantOut  string
 	}{
-		{"an approval without the hold", `[{"name":"code-review"},{"name":"task:ready"}]`, "", true, "codex approved"},
-		{"an approval on owner hold", `[{"name":"code-review"},{"name":"needs-owner"}]`, "", false, "owner hold"},
+		// The labels come from the live PR, so a forge whose labels
+		// endpoint is not paginated (Gitea) never loops (Codex P1, #1921).
+		{"an approval without the hold", `[{"name":"code-review"},{"name":"task:ready"}]`, "", "", "", true, "codex approved"},
+		{"an approval on owner hold", `[{"name":"code-review"},{"name":"needs-owner"}]`, "", "", "", false, "owner hold"},
+		{"a docs-only change", `[]`, docsOnly, "", "", true, "no review is required"},
+		// A PR retargeted while the run waited never passes on the old
+		// base's exempt diff or approval (Codex P1, #1921).
+		{"a retargeted docs-only change", `[]`, docsOnly, "release", "", false, "retargeted from main to release"},
+		{"a retargeted approved change", `[{"name":"code-review"}]`, "", "release", "", false, "retargeted from main to release"},
 		// A failed page request fails the gate: it never ends the listing
 		// as if the list were complete (Codex P1, #1921).
-		{"a failed first labels page", `[{"name":"code-review"}]`, "/issues/7/labels?*page=1", false, "answered HTTP 500"},
-		{"a failed later reviews page", `[{"name":"code-review"}]`, "/pulls/7/reviews?*page=2", false, "answered HTTP 500"},
+		{"a failed live PR read", `[{"name":"code-review"}]`, "", "", "/pulls/7", false, "answered HTTP 500"},
+		{"a failed later reviews page", `[{"name":"code-review"}]`, "", "", "/pulls/7/reviews?*page=2", false, "answered HTTP 500"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cmd := exec.CommandContext(t.Context(), bash, "-eo", "pipefail", "-c", step.Run)
+			// A gate that loops on a page fails here, not at the job timeout.
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, bash, "-eo", "pipefail", "-c", step.Run)
+			cmd.WaitDelay = time.Second
 			cmd.Dir = t.TempDir()
 			// Gitea mode: no twin-review wait, so no Actions reads.
 			cmd.Env = []string{
@@ -145,9 +165,12 @@ func TestCodeReviewGateRefusesAnApprovalOnOwnerHold(t *testing.T) {
 				"GH_API_TOKEN=x",
 				`NO_REVIEW_PATHS=^docs/.+$`,
 				"FAKE_LABELS=" + tc.labels,
+				"FAKE_FILES=" + tc.files,
+				"FAKE_BASE_REF=" + tc.base,
 				"FAKE_FAIL=" + tc.fail,
 			}
 			out, runErr := cmd.CombinedOutput()
+			require.NoError(t, ctx.Err(), "the gate did not finish:\n%s", out)
 			if tc.wantPass {
 				require.NoError(t, runErr, string(out))
 				require.Contains(t, string(out), tc.wantOut)
