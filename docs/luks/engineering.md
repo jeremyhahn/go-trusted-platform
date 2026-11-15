@@ -185,7 +185,8 @@ ceremony backend, injects the production LUKS pieces through the
 `SDKBackendTarget` interface (implemented by `*daemon.Daemon`):
 
 - `SetLUKSBackend(NewLUKSBackend(logger, WithDefaultLUKSHandlers()))`: the
-  go-luks2 backend, with its TPM handler then cleared.
+  go-luks2 backend, with its default TPM handler then replaced by
+  `pcrCheckedTPMHandler(luks.TPMHandler())` (none when no TPM opened).
   - FIDO2: the default handler stays when a FIDO2 library opens at startup.
     It derives the keyslot key with hmac-secret over a fresh salt and writes
     a `fido2-manual` token (credential, salt, RP, UV) naming the slot. At
@@ -195,10 +196,15 @@ ceremony backend, injects the production LUKS pieces through the
     rebuilds the same derivation from the token and opens that slot
     (`TestLUKSFIDO2EnrollmentUnlocksAtBoot`). Without a handler
     `EnrollFIDO2` answers `ErrLUKSFIDO2NotWired`.
-  - TPM: the sealer keeps its sealed passphrase in a `systemd-tpm2` header
-    token, while the initrd TPM strategies unseal from the ESP, so no boot
-    path opens the slot and `EnrollTPM` answers `ErrLUKSTPMNotWired` before
-    touching the device.
+  - TPM (ruling 673): `EnrollTPM` seals a fresh passphrase to the requested
+    PCRs and writes the sealed blob in a `systemd-tpm2` header token naming
+    the slot. At boot the initrd `TPMTokenStrategy` (`tpm-token`, priority
+    0, ahead of the ESP-based TPM-PCR strategy) lists the header's
+    `systemd-tpm2` tokens, unseals each blob through its `TokenUnsealer`
+    (the go-xkms sealer by default; `SetUnsealer` swaps it) and opens the
+    slot the token names. A header without such a token leaves `CanUnlock`
+    false and the next strategy runs. Without a TPM handler `EnrollTPM`
+    answers `ErrLUKSTPMNotWired` before touching the device.
 
   Passphrase, recovery, remove, test-unlock and change-passphrase run
   against the device. The PCR
@@ -218,8 +224,14 @@ On the client side, every `platformctl luks` verb reaches the server through
 backend on whichever transport is active.
 
 `TestWireSDKBackends_WiresLUKS` (`pkg/app/backends/sdk_wiring_test.go`) checks
-that a fake target receives a non-nil `*LUKSBackend` and a root checker, and
-`TestWireSDKBackends_NoSDKClientIsFatal` that a refused wiring sets neither.
+that a fake target receives a non-nil `*LUKSBackend` and a root checker,
+`TestWireSDKBackends_WiresPCRCheckedTPMEnrollment` that the wired TPM handler
+is the PCR-checked one, and `TestWireSDKBackends_NoSDKClientIsFatal` that a
+refused wiring sets neither. `TestLUKSTPMBootRoundTrip_InitrdUnsealsWhatEnrolmentSealed`
+(`pkg/app/backends/luks_tpm_boot_roundtrip_test.go`) seals through the
+PCR-checked handler, writes the token for keyslot 1, and has the initrd
+`TPMTokenStrategy` unseal it and open keyslot 1 with the sealed passphrase,
+with no hardware.
 
 ---
 
@@ -232,6 +244,7 @@ that a fake target receives a non-nil `*LUKSBackend` and a root checker, and
 | `pkg/api/daemon/mcp_luks_parity_test.go` | the MCP provider and the gRPC service over one service and an in-memory backend: same answers, and the same code for invalid input, a backend error, non-root and not configured, test-unlock included |
 | `pkg/api/mcp/luks_authz_test.go` | each LUKS tool's scope, `tools/call` running the handler only for a caller holding it, test-unlock included |
 | `pkg/app/backends/luks_test.go`, `luks_fido2_handler_test.go`, `luks_tpm_handler_test.go`, `luks_fips_test.go` | backend, handlers, FIPS policy |
+| `pkg/app/backends/luks_tpm_boot_roundtrip_test.go`, `pkg/initrd/strategy_tpm_token_test.go` | TPM enrolment's `systemd-tpm2` token unsealed and opened by the initrd `TPMTokenStrategy` |
 | `pkg/app/backends/luks_token_test.go` | slot detection, token write and rollback (`ErrMetadataTooLarge`, failed rollback), `AddRecoveryKey` slot; file-backed images, no loop device |
 | `pkg/app/backends/luks_integration_test.go` | enroll and test against a loopback LUKS2 volume |
 | `pkg/installer/mapped_name_test.go`, `pkg/storage/drive/types_test.go` | mapping names `Unlock` would refuse are rejected before the disk is formatted |
