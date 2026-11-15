@@ -147,19 +147,34 @@ func TestInitClusterNetwork_FailedZoneAddressRetried(t *testing.T) {
 	assigned := stubBridgeNetlink(t)
 	stubProbe(t, func(context.Context, string, net.IP) error { return nil })
 
+	starts := 0
+	original := initStoresFn
+	initStoresFn = func(app *App) error {
+		starts++
+		assert.True(t, raftHostAssigned(t, *assigned, app.QuicBaaSConfig.RaftAddress),
+			"datastore started before raft-address %s was assigned (assigned %v)",
+			app.QuicBaaSConfig.RaftAddress, *assigned)
+		return nil
+	}
+	t.Cleanup(func() { initStoresFn = original })
+
 	ok := assignBridgeAddrFn
 	assignBridgeAddrFn = func(context.Context, string, string) error {
 		return errors.New("netlink: address assignment refused")
 	}
-	require.NoError(t, a.initClusterNetwork(context.Background()))
+	require.Error(t, a.initNetworkAndStores(context.Background()))
 	assert.False(t, a.sdnLinksUp, "links marked up after a failed zone address")
 	assert.Empty(t, *assigned)
+	assert.Zero(t, starts, "datastore started after a failed zone address")
 
+	// The fault clears: the next preparation retries the link setup and
+	// the datastore starts with its raft-address up.
 	assignBridgeAddrFn = ok
-	require.NoError(t, a.initSDN(context.Background()))
-	assert.Equal(t, 2, *bridge, "initSDN retried the link setup")
+	require.NoError(t, a.initNetworkAndStores(context.Background()))
+	assert.Equal(t, 2, *bridge, "the second preparation retried the link setup")
 	assert.True(t, a.sdnLinksUp)
 	assert.True(t, raftHostAssigned(t, *assigned, a.QuicBaaSConfig.RaftAddress), "%v", *assigned)
+	assert.Equal(t, 1, starts, "datastore did not start once the fault cleared")
 }
 
 // TestInitLinkSetupErrors: the bond and zone-address helpers report each
@@ -209,4 +224,47 @@ func TestInitNetworkAndStores_RaftAddressUpAtDatastoreStart(t *testing.T) {
 
 	require.NoError(t, a.initNetworkAndStores(context.Background()))
 	assert.True(t, started, "datastore never started")
+}
+
+// A failed zone address of a clustered node fails cluster-network
+// preparation: the datastore's explicit raft bind address would be absent,
+// and Init would never reach the later initSDN retry (Codex round 3, #1867).
+func TestInitNetworkAndStores_FailedZoneAddressFailsBeforeStores(t *testing.T) {
+	a := zoneAddressApp(t)
+	a.NetworkConfig.Bonds[0].Mode = "balance-tcp"
+	a.QuicBaaSConfig = &quicbaas.Config{
+		NodeID:        1,
+		RaftAddress:   "10.4.6.10:63000",
+		JoinAddresses: []string{"1=10.4.6.10:63000", "2=10.4.6.11:63000", "3=10.4.6.12:63000"},
+	}
+	stubOVSBridge(t)
+	stubZonePorts(t, newFakeZonePorts())
+	stubBridgeNetlink(t)
+	stubProbe(t, func(context.Context, string, net.IP) error { return nil })
+
+	ok := assignBridgeAddrFn
+	assignBridgeAddrFn = func(_ context.Context, port, addr string) error {
+		if addr == "10.4.6.10/24" {
+			return errors.New("netlink: address assignment refused")
+		}
+		return ok(context.Background(), port, addr)
+	}
+	t.Cleanup(func() { assignBridgeAddrFn = ok })
+
+	started := false
+	original := initStoresFn
+	initStoresFn = func(*App) error {
+		started = true
+		return nil
+	}
+	t.Cleanup(func() { initStoresFn = original })
+
+	err := a.initNetworkAndStores(context.Background())
+	require.Error(t, err)
+	var clusterErr ErrClusterNetworkLinkSetup
+	require.ErrorAs(t, err, &clusterErr)
+	assert.ErrorAs(t, err, new(ErrSDNLinkSetup))
+	assert.Contains(t, err.Error(), "zone address 10.4.6.10/24 on ", "error does not name the link")
+	assert.False(t, a.sdnLinksUp)
+	assert.False(t, started, "datastore started after a failed zone address")
 }
