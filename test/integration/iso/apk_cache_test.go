@@ -3,9 +3,15 @@
 package iso
 
 import (
+	"bytes"
+	"crypto/rand"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -101,4 +107,101 @@ func dirNames(t *testing.T, dir string) []string {
 		names = append(names, e.Name())
 	}
 	return names
+}
+
+// forceCopyPath makes placeAtomically skip the hard link, as it does when the
+// cache volume and the prefetch dir sit on different filesystems.
+func forceCopyPath(t *testing.T) {
+	t.Helper()
+	orig := linkFile
+	linkFile = func(string, string) error { return errors.New("link refused by test") }
+	t.Cleanup(func() { linkFile = orig })
+}
+
+func tmpNames(t *testing.T, dir string) []string {
+	t.Helper()
+	var out []string
+	for _, n := range dirNames(t, dir) {
+		if strings.HasSuffix(n, ".tmp") {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+func TestPlaceAtomicallyConcurrentWritersPublishCompleteFiles(t *testing.T) {
+	forceCopyPath(t)
+	srcDir, dst := t.TempDir(), t.TempDir()
+	payload := make([]byte, 1<<20)
+	_, err := rand.Read(payload)
+	require.NoError(t, err)
+	src := filepath.Join(srcDir, "musl-1.2.5-r0.apk")
+	require.NoError(t, os.WriteFile(src, payload, 0o644))
+	target := filepath.Join(dst, "musl-1.2.5-r0.apk")
+
+	const writers = 8
+	errs := make([]error, writers)
+	var wg sync.WaitGroup
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = placeAtomically(src, target)
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		assert.NoError(t, err, "writer %d", i)
+	}
+	got, err := os.ReadFile(target)
+	require.NoError(t, err)
+	assert.True(t, bytes.Equal(payload, got), "cached APK differs from the source (%d of %d bytes)", len(got), len(payload))
+	assert.Empty(t, tmpNames(t, dst), "staging files left behind")
+}
+
+func TestPlaceAtomicallyLeavesOtherWritersStagingFiles(t *testing.T) {
+	forceCopyPath(t)
+	srcDir, dst := t.TempDir(), t.TempDir()
+	src := filepath.Join(srcDir, "busybox-1.36.1-r0.apk")
+	writeFile(t, src, "complete package")
+	target := filepath.Join(dst, "busybox-1.36.1-r0.apk")
+
+	// Another container's writer, whose PID may equal ours, is mid-copy.
+	other := filepath.Join(dst, fmt.Sprintf(".%s.%d.tmp", filepath.Base(target), os.Getpid()))
+	writeFile(t, other, "half of another writer's copy")
+
+	require.NoError(t, placeAtomically(src, target))
+
+	got, err := os.ReadFile(other)
+	require.NoError(t, err, "another writer's staging file was removed or renamed")
+	assert.Equal(t, "half of another writer's copy", string(got))
+	pub, err := os.ReadFile(target)
+	require.NoError(t, err)
+	assert.Equal(t, "complete package", string(pub))
+}
+
+func TestPlaceAtomicallyInterruptedCopyPublishesNothing(t *testing.T) {
+	forceCopyPath(t)
+	orig := copyFile
+	copyFile = func(src string, out *os.File) error {
+		in, err := os.Open(src)
+		if err != nil {
+			return err
+		}
+		defer in.Close()
+		if _, err := io.CopyN(out, in, 4); err != nil {
+			return err
+		}
+		return errors.New("copy interrupted by test")
+	}
+	t.Cleanup(func() { copyFile = orig })
+
+	srcDir, dst := t.TempDir(), t.TempDir()
+	src := filepath.Join(srcDir, "zlib-1.3.1-r0.apk")
+	writeFile(t, src, "a package longer than four bytes")
+	target := filepath.Join(dst, "zlib-1.3.1-r0.apk")
+
+	require.Error(t, placeAtomically(src, target))
+	assert.Empty(t, dirNames(t, dst), "an interrupted copy left files in the cache")
 }
