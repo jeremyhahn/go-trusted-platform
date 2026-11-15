@@ -22,6 +22,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
@@ -324,29 +325,34 @@ func TestAttestationServerRouter_ListManifestsMalformedTimeIs400(t *testing.T) {
 	}
 }
 
-// The manifest list filters on whole seconds, so a time bound with a
-// fractional second is refused, not truncated into a wider or narrower
-// window (#1686, Codex round 5).
-func TestAttestationServerRouter_ListManifestsFractionalTimeIs400(t *testing.T) {
-	for _, query := range []string{
-		"start_time=2026-11-12T10:00:00.250Z",
-		"end_time=2026-11-12T10:00:00.5Z",
-		"end_time=2026-11-12T10:00:00.000000001%2B02:00",
+// The manifest list keeps full nanosecond precision, so a time bound with
+// a fractional second reaches the server as the same instant, never
+// truncated into a wider or narrower window (#1686, ruling 673).
+func TestAttestationServerRouter_ListManifestsKeepsFractionalTime(t *testing.T) {
+	for _, tc := range []struct {
+		query string
+		start bool
+		want  time.Time
+	}{
+		{"start_time=2026-11-12T10:00:00.250Z", true, time.Date(2026, 11, 12, 10, 0, 0, 250_000_000, time.UTC)},
+		{"end_time=2026-11-12T10:00:00.5Z", false, time.Date(2026, 11, 12, 10, 0, 0, 500_000_000, time.UTC)},
+		{"end_time=2026-11-12T10:00:00.000000001%2B02:00", false, time.Date(2026, 11, 12, 8, 0, 0, 1, time.UTC)},
 	} {
-		t.Run(query, func(t *testing.T) {
+		t.Run(tc.query, func(t *testing.T) {
 			server := &recordingAttestationServer{}
-			rt := attestationRoute{method: http.MethodGet, path: "/api/v1/attestation/manifests?" + query}
+			rt := attestationRoute{method: http.MethodGet, path: "/api/v1/attestation/manifests?" + tc.query}
 			rec := serveAttestationRoute(mountAllAttestationRoutes(server), rt, "")
-			assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
-			assert.Nil(t, server.req, "the server is not called with a fractional time bound")
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			got, ok := server.req.(*platformv1.ListManifestsRequest)
+			require.True(t, ok, "the server is called with a ListManifestsRequest")
+			bound := got.GetEndTime()
+			if tc.start {
+				bound = got.GetStartTime()
+			}
+			require.NotNil(t, bound)
+			assert.True(t, bound.AsTime().Equal(tc.want), "got %s, want %s", bound.AsTime(), tc.want)
 		})
 	}
-	t.Run("zero fraction is accepted", func(t *testing.T) {
-		server := &recordingAttestationServer{}
-		rt := attestationRoute{method: http.MethodGet, path: "/api/v1/attestation/manifests?end_time=2026-11-12T10:00:00.000Z"}
-		rec := serveAttestationRoute(mountAllAttestationRoutes(server), rt, "")
-		assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	})
 }
 
 func TestAttestationServerRouter_NilServerIs503OnEveryRoute(t *testing.T) {

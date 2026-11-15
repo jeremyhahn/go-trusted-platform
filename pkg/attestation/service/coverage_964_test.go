@@ -123,8 +123,8 @@ func TestListManifests_AppliesTheFilter(t *testing.T) {
 	}{
 		{"nil filter lists all", nil, []string{"a-old", "a-new", "b-new"}, 3},
 		{"host", &daemon.ListManifestsFilter{HostID: "host-a"}, []string{"a-old", "a-new"}, 2},
-		{"start time", &daemon.ListManifestsFilter{StartTime: base.Add(-time.Hour).Unix()}, []string{"a-new", "b-new"}, 2},
-		{"end time", &daemon.ListManifestsFilter{EndTime: base.Add(-time.Hour).Unix()}, []string{"a-old"}, 1},
+		{"start time", &daemon.ListManifestsFilter{StartTime: base.Add(-time.Hour)}, []string{"a-new", "b-new"}, 2},
+		{"end time", &daemon.ListManifestsFilter{EndTime: base.Add(-time.Hour)}, []string{"a-old"}, 1},
 		// total counts every match before the page is cut (#1686).
 		{"limit", &daemon.ListManifestsFilter{HostID: "host-a", Limit: 1}, []string{"a-new"}, 2},
 		{"offset", &daemon.ListManifestsFilter{HostID: "host-a", Limit: 1, Offset: 1}, []string{"a-old"}, 2},
@@ -139,6 +139,41 @@ func TestListManifests_AppliesTheFilter(t *testing.T) {
 			}
 			assert.ElementsMatch(t, tc.want, ids)
 			assert.Equal(t, tc.total, total)
+		})
+	}
+}
+
+// List time bounds keep full nanosecond precision through the real store:
+// a sub-second bound is neither truncated nor widened, and both bounds are
+// inclusive (#1686, ruling 673).
+func TestListManifests_KeepsSubSecondBounds(t *testing.T) {
+	svc, _ := newVerdictService(t)
+	base := time.Unix(1_700_000_000, 0).UTC()
+	putManifest(t, svc, "m-250", "host-a", base.Add(250*time.Millisecond))
+	putManifest(t, svc, "m-750", "host-a", base.Add(750*time.Millisecond))
+
+	cases := []struct {
+		name   string
+		filter *daemon.ListManifestsFilter
+		want   []string
+	}{
+		{"end bound mid-second", &daemon.ListManifestsFilter{EndTime: base.Add(500 * time.Millisecond)}, []string{"m-250"}},
+		{"start bound mid-second", &daemon.ListManifestsFilter{StartTime: base.Add(500 * time.Millisecond)}, []string{"m-750"}},
+		{"inclusive equal bounds", &daemon.ListManifestsFilter{
+			StartTime: base.Add(250 * time.Millisecond),
+			EndTime:   base.Add(250 * time.Millisecond),
+		}, []string{"m-250"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, total, err := svc.ListManifests(context.Background(), tc.filter)
+			require.NoError(t, err)
+			ids := make([]string, 0, len(got))
+			for _, m := range got {
+				ids = append(ids, m.ID)
+			}
+			assert.Equal(t, tc.want, ids)
+			assert.Equal(t, 1, total)
 		})
 	}
 }
