@@ -104,13 +104,22 @@ either implies `qrdb_sql`. SQL builds stay CGO-free via the always-on
 
 Cloud provider tags enable integration with external cloud services. Disabled by default to minimize dependencies.
 
-The three group variables switch on every per-service variable for their cloud:
+The three group variables are umbrellas over the per-service variables of
+their cloud (owner ruling 683 (1), the handbook build-tags convention):
 
-| Variable | Default | Turns on |
+- unset (the default): the per-service variables decide;
+- `1`: every per-service variable of the cloud is on;
+- `0`: every per-service variable of the cloud is off, even one set on the
+  command line (`make build WITH_AWS=0 WITH_AWS_KMS=1` builds no AWS tag).
+
+| Variable | Default | Services |
 |-----------|---------|--------|
-| `WITH_AWS` | 0 | `WITH_AWS_KMS` (`awskms`), `WITH_OBJSTORE_S3` (`awss3`), `WITH_AWS_COMPUTE` (`awscompute`) |
-| `WITH_GCP` | 0 | `WITH_GCP_KMS` (`gcpkms`), `WITH_OBJSTORE_GCS` (`gcpstorage`), `WITH_GCP_COMPUTE` (`gcpcompute`) |
-| `WITH_AZURE` | 0 | `WITH_AZURE_KV` (`azurekv`), `WITH_OBJSTORE_AZURE` (`azureblob`), `WITH_AZURE_COMPUTE` (`azurecompute`) |
+| `WITH_AWS` | unset | `WITH_AWS_KMS` (`awskms`), `WITH_OBJSTORE_S3` (`awss3`), `WITH_AWS_COMPUTE` (`awscompute`) |
+| `WITH_GCP` | unset | `WITH_GCP_KMS` (`gcpkms`), `WITH_OBJSTORE_GCS` (`gcpstorage`), `WITH_GCP_COMPUTE` (`gcpcompute`) |
+| `WITH_AZURE` | unset | `WITH_AZURE_KV` (`azurekv`), `WITH_OBJSTORE_AZURE` (`azureblob`), `WITH_AZURE_COMPUTE` (`azurecompute`) |
+
+| Variable | Default | Effect |
+|-----------|---------|--------|
 | `WITH_VAULT` | 0 | HashiCorp Vault (`vault`) |
 
 Each per-service variable defaults to 0 and can be set on its own.
