@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { Header } from "./header";
@@ -27,6 +27,28 @@ vi.mock("@/hooks/use-logout", () => ({
 vi.mock("@/hooks/use-signed-in-identity", () => ({
   useSignedInIdentity: () => identity.value,
 }));
+
+// Opening the account menu positions it with floating-ui, whose isTopLayer
+// asks element.matches(":popover-open") and (":modal") on every ancestor.
+// jsdom's nwsapi answers those pseudo-classes so slowly that each opened-menu
+// test took seconds, and the run tripped vitest's onTaskUpdate RPC timeout.
+// jsdom has no top layer, so both selectors never match: answer that directly.
+const topLayerSelectors = new Set([":popover-open", ":modal"]);
+const nativeMatches = Element.prototype.matches;
+
+beforeAll(() => {
+  vi.spyOn(Element.prototype, "matches").mockImplementation(function (
+    this: Element,
+    selectors: string,
+  ) {
+    if (topLayerSelectors.has(selectors)) return false;
+    return nativeMatches.call(this, selectors);
+  });
+});
+
+afterAll(() => {
+  vi.restoreAllMocks();
+});
 
 function renderHeader() {
   return render(
