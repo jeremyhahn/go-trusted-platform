@@ -73,7 +73,8 @@ func newManifestPKI(t *testing.T) manifestPKI {
 	roots := x509.NewCertPool()
 	roots.AddCert(root)
 	return manifestPKI{roots: roots, leaf: leaf, kms: &ecKMS{key: key},
-		ca: &secureboottest.CA{Certs: map[string]*x509.Certificate{"build/manifest": leaf}}}
+		ca: &secureboottest.CA{Certs: map[string]*x509.Certificate{"build/manifest": leaf},
+			Chains: map[string][]*x509.Certificate{"build/manifest": {root}}}}
 }
 
 func (p manifestPKI) clients() iso.KMSClientsFunc {

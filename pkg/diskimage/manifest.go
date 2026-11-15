@@ -1,9 +1,11 @@
 package diskimage
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"os"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/diskimage/measure"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/secureboot"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // ManifestSuffix names an image's signed measurement manifest
@@ -115,13 +118,15 @@ func (c *BuildConfig) writeManifest(ctx context.Context, image, sum string, targ
 	}
 	now := time.Now().UTC().Truncate(time.Second)
 	m := measure.Manifest{TagID: id, Model: target.Name() + "/" + target.ModelName(), Banks: banks}
-	data, err := measure.SignManifest(m, key, []*x509.Certificate{cert}, measure.Signer{Name: name, NotBefore: now, NotAfter: cert.NotAfter})
+	chain, root, err := manifestChain(ctx, clients.CA, cert, now)
+	if err != nil {
+		return fail("building the manifest certificate's chain", err)
+	}
+	data, err := measure.SignManifest(m, key, chain, measure.Signer{Name: name, NotBefore: now, NotAfter: cert.NotAfter})
 	if err != nil {
 		return fail("signing the measurement manifest", err)
 	}
-	self := x509.NewCertPool()
-	self.AddCert(cert)
-	if _, err := measure.VerifyManifest(data, self, now); err != nil {
+	if _, err := measure.VerifyManifest(data, root, now); err != nil {
 		return fail("checking the signed measurement manifest", err)
 	}
 	out := ManifestPath(image)
@@ -129,4 +134,56 @@ func (c *BuildConfig) writeManifest(ctx context.Context, image, sum string, targ
 		return fail("writing "+filepath.Base(out), err)
 	}
 	return out, nil
+}
+
+// errNoCABundle: the platform CA client cannot return the CA bundle, so the
+// manifest certificate's issuer chain cannot be built.
+var errNoCABundle = errors.New("diskimage: the platform CA client returns no CA bundle to build the manifest certificate's chain from")
+
+// manifestChain builds the manifest certificate's chain from the platform
+// CA's bundle (intermediates included): it returns the leaf followed by its
+// intermediates, the chain a manifest carries, and a pool holding only the
+// platform root the chain ends at, the anchor a consumer verifies against.
+func manifestChain(ctx context.Context, ca secureboot.CertificateGetter, leaf *x509.Certificate, now time.Time) ([]*x509.Certificate, *x509.CertPool, error) {
+	getter, ok := ca.(secureboot.CABundleGetter)
+	if !ok {
+		return nil, nil, errNoCABundle
+	}
+	resp, err := getter.GetCABundle(ctx, &platformv1.GetCABundleRequest{IncludeIntermediates: true})
+	if err != nil {
+		return nil, nil, fmt.Errorf("diskimage: fetching the platform CA bundle: %w", err)
+	}
+	roots, inters := x509.NewCertPool(), x509.NewCertPool()
+	rest := resp.GetBundle().GetPem()
+	for {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, nil, fmt.Errorf("diskimage: parsing the platform CA bundle: %w", err)
+		}
+		if bytes.Equal(cert.RawIssuer, cert.RawSubject) && cert.CheckSignatureFrom(cert) == nil {
+			roots.AddCert(cert)
+		} else {
+			inters.AddCert(cert)
+		}
+	}
+	chains, err := leaf.Verify(x509.VerifyOptions{Roots: roots, Intermediates: inters, CurrentTime: now,
+		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny}})
+	if err != nil {
+		return nil, nil, fmt.Errorf("diskimage: the manifest certificate does not chain to a platform root in the CA bundle: %w", err)
+	}
+	full := chains[0]
+	root := x509.NewCertPool()
+	root.AddCert(full[len(full)-1])
+	if len(full) == 1 {
+		return full, root, nil
+	}
+	return full[:len(full)-1], root, nil
 }
