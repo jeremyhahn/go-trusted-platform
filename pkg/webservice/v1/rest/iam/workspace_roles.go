@@ -15,6 +15,7 @@ package iam
 
 import (
 	"context"
+	"fmt"
 
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
@@ -28,9 +29,11 @@ import (
 // roles, never the operating tenant's (#662).
 //
 // The principal is named by email, as the backbone names it and as the
-// user mirror writes it. The roles are the names the mirror and the IAM
-// role assignments store on the user ("admin" for a workspace owner), which
-// are the names the session guards check.
+// user mirror writes it. IAM stores the user's roles as canonical role IDs
+// (built-in roles carry tenant-specific UUIDs), while the session guards
+// check role names ("admin" for a workspace owner), so the resolver maps
+// every stored reference to its role name through the tenant's role listing
+// and refuses one the listing does not hold.
 type WorkspaceRoleResolver struct {
 	client IAMClient
 }
@@ -63,7 +66,52 @@ func (r *WorkspaceRoleResolver) Roles(ctx context.Context, tenantID, subject str
 	if !active {
 		return nil, ErrInactiveAccount{TenantID: tenantID, Subject: subject}
 	}
-	return append([]string(nil), user.Roles...), nil
+	return r.roleNames(ctx, tenantID, user.Roles)
+}
+
+// roleNames maps the role references IAM stores on a user to the role
+// names the session guards check. It pages the tenant's role listing, system
+// roles included, maps every role ID to its name, keeps a reference that is
+// already a role name, and returns an error for one the listing does not
+// hold, never a guessed name. A user with no roles costs no listing.
+func (r *WorkspaceRoleResolver) roleNames(ctx context.Context, tenantID string, refs []string) ([]string, error) {
+	if len(refs) == 0 {
+		return []string{}, nil
+	}
+	nameByID := make(map[string]string)
+	names := make(map[string]struct{})
+	req := &iamsdk.ListRolesRequest{PageSize: rolesPageSize, IncludeSystem: true}
+	for {
+		resp, err := r.client.ListRoles(ctx, tenantID, req)
+		if err != nil {
+			return nil, err
+		}
+		if resp == nil {
+			break
+		}
+		for _, role := range resp.Roles {
+			nameByID[role.ID] = role.Name
+			names[role.Name] = struct{}{}
+		}
+		next := resp.Pagination.NextPageToken
+		if !resp.Pagination.HasMore || next == "" || next == req.PageToken {
+			break
+		}
+		req.PageToken = next
+	}
+	out := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		if name, ok := nameByID[ref]; ok {
+			out = append(out, name)
+			continue
+		}
+		if _, ok := names[ref]; ok {
+			out = append(out, ref)
+			continue
+		}
+		return nil, fmt.Errorf("iam: tenant %q holds no role %q", tenantID, ref)
+	}
+	return out, nil
 }
 
 // Principal returns the roles subject holds in tenantID's IAM tenant, and
@@ -80,7 +128,11 @@ func (r *WorkspaceRoleResolver) Principal(ctx context.Context, tenantID, subject
 	if !active {
 		return nil, false, nil
 	}
-	return append([]string(nil), user.Roles...), true, nil
+	roles, err := r.roleNames(ctx, tenantID, user.Roles)
+	if err != nil {
+		return nil, false, err
+	}
+	return roles, true, nil
 }
 
 // activeUser reads subject's user in tenantID and whether IAM holds it as
