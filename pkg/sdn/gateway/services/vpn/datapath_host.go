@@ -82,13 +82,33 @@ func (h *PlaneHost) RemoveVPNPeer(ctx context.Context, req *ipcv1.RemoveVPNPeerR
 
 // ReconcileVPNPeers removes from the plane the request names every peer
 // whose lease is not in the request: the plane outlives a vpn child that
-// died between a revoke's record deletion and its peer removal.
+// died between a revoke's record deletion and its peer removal. The vpn
+// child sends it at Restore, with its stored leases, and again from Sweep
+// while a failed reconciliation is owed. It is the bulk form of
+// RemoveVPNPeer, under the same admission, and touches only the one plane
+// it names. A request with no data plane, or with an empty or repeated
+// lease id, is refused as INVALID_REQUEST before any plane is reached.
 func (h *PlaneHost) ReconcileVPNPeers(ctx context.Context, req *ipcv1.ReconcileVPNPeersRequest) *ipcv1.ReconcileVPNPeersResponse {
 	return &ipcv1.ReconcileVPNPeersResponse{Refusal: refusalOf(h.reconcile(ctx, req))}
 }
 
 func (h *PlaneHost) reconcile(ctx context.Context, req *ipcv1.ReconcileVPNPeersRequest) error {
 	kind := DataPlaneKind(req.GetDataPlane())
+	if kind == "" {
+		return &ErrInvalidRequest{Field: "data_plane", Reason: "required"}
+	}
+	keep := make([]LeaseID, 0, len(req.GetLeaseIds()))
+	seen := make(map[string]bool, len(req.GetLeaseIds()))
+	for _, id := range req.GetLeaseIds() {
+		if id == "" {
+			return &ErrInvalidRequest{Field: "lease_ids", Reason: "a lease id is empty"}
+		}
+		if seen[id] {
+			return &ErrInvalidRequest{Field: "lease_ids", Reason: "lease id " + id + " is repeated"}
+		}
+		seen[id] = true
+		keep = append(keep, LeaseID(id))
+	}
 	plane, err := h.plane(kind)
 	if err != nil {
 		return err
@@ -96,10 +116,6 @@ func (h *PlaneHost) reconcile(ctx context.Context, req *ipcv1.ReconcileVPNPeersR
 	r, ok := plane.(PeerReconciler)
 	if !ok {
 		return &ErrDataPlaneUnavailable{Kind: kind, Cause: errors.New("the plane cannot reconcile its peers")}
-	}
-	keep := make([]LeaseID, 0, len(req.GetLeaseIds()))
-	for _, id := range req.GetLeaseIds() {
-		keep = append(keep, LeaseID(id))
 	}
 	return r.ReconcilePeers(ctx, keep)
 }
