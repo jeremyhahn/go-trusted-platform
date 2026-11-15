@@ -113,7 +113,8 @@ func imageLeaseFindings(wf ciWorkflow) []error {
 				named = true
 			}
 			built, locked, inFunction := false, false, false
-			for i, line := range strings.Split(step.Run, "\n") {
+			lines := strings.Split(step.Run, "\n")
+			for i, line := range lines {
 				trimmed := strings.TrimSpace(line)
 				// The template's function definitions run nothing where
 				// they stand; their calls below are what count.
@@ -148,7 +149,9 @@ func imageLeaseFindings(wf ciWorkflow) []error {
 				case strings.HasPrefix(trimmed, ciImageLock):
 					locked = true
 				case trimmed == ciImageUnlock:
-					locked = false
+					// An unlock right before an early exit ends only that
+					// branch; the lines below it still run under the lock.
+					locked = i+1 < len(lines) && strings.TrimSpace(lines[i+1]) == "exit 0"
 				case strings.Contains(line, ciImageRetag) && !locked:
 					finding(step.RunLine+i, "re-tags the image outside the image lock, where the reaper can remove the tag first")
 				case strings.Contains(line, ciLeaseRemove):

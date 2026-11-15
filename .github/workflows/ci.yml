@@ -1693,6 +1693,7 @@ jobs:
           image_lock || exit 1
           if ! docker tag "$IT_IMAGE_REF" "$IT_IMAGE"; then
             echo "::warning::re-tagging $IT_IMAGE_REF as $IT_IMAGE failed; building this leg's image"
+            image_unlock
             exit 0
           fi
           if pulled_id=$(docker image inspect -f '{{.Id}}' "$IT_IMAGE") &&
