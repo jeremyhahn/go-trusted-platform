@@ -1464,7 +1464,11 @@ jobs:
       # placed on another runner pulls the image from the LAN registry
       # (ruling 675), tagged by the image id, so the push names exactly the
       # image this job leased. The optional secrets log in to a registry that
-      # wants it. The registry tag goes once pushed; the lease keeps the image.
+      # wants it, through a Docker config made for this step under RUNNER_TEMP
+      # and removed at its exit, so the credential never reaches the runner's
+      # own config. The registry tag stays: another producer of the same id
+      # on this daemon may still push it. The reaper removes it once stale
+      # and unused (scripts/reap-stale-ci-stacks.sh); the lease keeps the image.
       - name: Push the integration image to the LAN registry
         id: push
         if: env.IT_REGISTRY != ''
@@ -1473,15 +1477,16 @@ jobs:
           REGISTRY_PASSWORD: ${{ secrets.CI_IMAGE_REGISTRY_PASSWORD }}
         run: |
           ref="$IT_REGISTRY/go-trusted-platform/it-image:${IT_LEASE_ID#sha256:}"
-          if [ -n "$REGISTRY_USER" ] && [ -n "$REGISTRY_PASSWORD" ]; then
-            printf '%s' "$REGISTRY_PASSWORD" | docker login --username "$REGISTRY_USER" --password-stdin "$IT_REGISTRY"
-          fi
           source "$RUNNER_TEMP/image-lock.sh"
-          trap 'image_unlock; docker rmi "$ref" >/dev/null 2>&1 || true' EXIT
+          registry_config=$(mktemp -d "$RUNNER_TEMP/docker-config.XXXXXX") || exit 1
+          trap 'image_unlock; rm -rf "$registry_config"' EXIT
+          if [ -n "$REGISTRY_USER" ] && [ -n "$REGISTRY_PASSWORD" ]; then
+            printf '%s' "$REGISTRY_PASSWORD" | DOCKER_CONFIG=$registry_config docker login --username "$REGISTRY_USER" --password-stdin "$IT_REGISTRY"
+          fi
           image_lock || exit 1
           docker tag "$IT_LEASE_ID" "$ref"
           image_unlock
-          docker push "$ref"
+          DOCKER_CONFIG=$registry_config docker push "$ref"
           echo "image_ref=$ref" >> "$GITHUB_OUTPUT"
 
       # Without a registry (GitHub-hosted runners, or CI_IMAGE_REGISTRY unset)
@@ -1682,11 +1687,12 @@ jobs:
           REGISTRY_PASSWORD: ${{ secrets.CI_IMAGE_REGISTRY_PASSWORD }}
         run: |
           source "$RUNNER_TEMP/image-lock.sh"
-          trap image_unlock EXIT
+          registry_config=$(mktemp -d "$RUNNER_TEMP/docker-config.XXXXXX") || exit 1
+          trap 'image_unlock; rm -rf "$registry_config"' EXIT
           if [ -n "$REGISTRY_USER" ] && [ -n "$REGISTRY_PASSWORD" ]; then
-            printf '%s' "$REGISTRY_PASSWORD" | docker login --username "$REGISTRY_USER" --password-stdin "${IT_IMAGE_REF%%/*}" || true
+            printf '%s' "$REGISTRY_PASSWORD" | DOCKER_CONFIG=$registry_config docker login --username "$REGISTRY_USER" --password-stdin "${IT_IMAGE_REF%%/*}" || true
           fi
-          if ! docker pull "$IT_IMAGE_REF"; then
+          if ! DOCKER_CONFIG=$registry_config docker pull "$IT_IMAGE_REF"; then
             echo "::warning::pulling $IT_IMAGE_REF from the LAN registry failed; building this leg's image"
             exit 0
           fi

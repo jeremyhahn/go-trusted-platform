@@ -516,7 +516,7 @@ func TestReaperKeepsEveryImageWhileAnotherHolderHasTheImageLock(t *testing.T) {
 	}, reaperArgs, "REAP_LOCK_WAIT=1")
 
 	require.Empty(t, run.removed, run.out)
-	require.Contains(t, run.out, "keep  every "+reaperImage+" image (the image lock was not free within 1s)")
+	require.Contains(t, run.out, "keep  every "+reaperImage+" image and LAN registry tag (the image lock was not free within 1s)")
 	// The other holder's lock is never removed.
 	require.Contains(t, run.left, "|"+reaperLock+"|")
 	require.NotContains(t, run.lockLog, "rm_"+reaperLock)

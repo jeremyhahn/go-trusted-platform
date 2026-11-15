@@ -435,6 +435,14 @@ registry as `go-trusted-platform/it-image:<image id hex>` and outputs the
 reference as `image_ref` (ruling 675: the 3.4 GB artifact, downloaded again by
 each leg, saturated the uplink); a registry that wants a login takes the
 optional secrets `CI_IMAGE_REGISTRY_USER` and `CI_IMAGE_REGISTRY_PASSWORD`.
+The push step and each leg's pull step log in only through a Docker config
+made for the step (`mktemp -d "$RUNNER_TEMP/docker-config.XXXXXX"`, the step
+fails if it cannot) and removed by its EXIT trap, so the credential never
+reaches the runner's own Docker config (#1919). No job removes a registry tag:
+two producers of one image id on a daemon share it, and legs sharing a daemon
+re-tag from it. The stale-stack reaper (below) removes a
+`<registry>/go-trusted-platform/it-image:<hex>` tag on any registry host under
+the same image lock, minimum age and in-use check as `IT_IMAGE` tags.
 On a GitHub-hosted runner, or with the variable unset (a self-hosted runner
 then warns), it uploads a `docker save` of it as the run artifact
 `integration-image-<attempt>` instead. It also
