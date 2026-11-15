@@ -102,9 +102,9 @@ func TestWriteManifestSignsBesideTheImage(t *testing.T) {
 			t.Fatal(err)
 		}
 		cfg := &BuildConfig{ManifestKey: "kms://build/manifest", KMSClients: pki.clients()}
-		path, unsigned, err := cfg.writeManifest(context.Background(), image, hex.EncodeToString(digest[:]), target, manifestBanks())
-		if err != nil || unsigned != "" {
-			t.Fatalf("%s: writeManifest: %v (unsigned %q)", tc.want, err, unsigned)
+		path, err := cfg.writeManifest(context.Background(), image, hex.EncodeToString(digest[:]), target, manifestBanks())
+		if err != nil {
+			t.Fatalf("%s: writeManifest: %v", tc.want, err)
 		}
 		if path != ManifestPath(image) {
 			t.Fatalf("written to %s, want beside the image", path)
@@ -127,15 +127,27 @@ func TestWriteManifestSignsBesideTheImage(t *testing.T) {
 	}
 }
 
-func TestWriteManifestWithoutAKey(t *testing.T) {
+func TestWriteManifestRefusesAnEmptyKey(t *testing.T) {
 	image := filepath.Join(t.TempDir(), "img.img")
 	target, _ := NewTarget("qemu-virt", "")
-	path, unsigned, err := (&BuildConfig{}).writeManifest(context.Background(), image, hex.EncodeToString(make([]byte, 32)), target, manifestBanks())
-	if err != nil || path != "" || unsigned != UnsignedNoManifestKey {
-		t.Fatalf("path %q, unsigned %q, err %v", path, unsigned, err)
+	path, err := (&BuildConfig{}).writeManifest(context.Background(), image, hex.EncodeToString(make([]byte, 32)), target, manifestBanks())
+	var me *MeasureError
+	if !errors.As(err, &me) || me.Step != "the manifest key" || path != "" {
+		t.Fatalf("path %q, err %v", path, err)
 	}
 	if _, err := os.Stat(ManifestPath(image)); !os.IsNotExist(err) {
 		t.Errorf("a manifest was written without a key: %v", err)
+	}
+}
+
+// TestWithDefaultsSignsWithTheReleaseKey: a build names no manifest key and
+// signs with the tenant release key (ruling 134); a named key is kept.
+func TestWithDefaultsSignsWithTheReleaseKey(t *testing.T) {
+	if got := (&BuildConfig{}).withDefaults().ManifestKey; got != DefaultManifestKey {
+		t.Errorf("default manifest key %q, want %q", got, DefaultManifestKey)
+	}
+	if got := (&BuildConfig{ManifestKey: "kms://build/manifest"}).withDefaults().ManifestKey; got != "kms://build/manifest" {
+		t.Errorf("named manifest key became %q", got)
 	}
 }
 
@@ -153,7 +165,7 @@ func TestWriteManifestPerImage(t *testing.T) {
 		}
 		image := filepath.Join(dir, tc.image)
 		digest := sha256.Sum256([]byte(tc.image))
-		path, _, err := cfg.writeManifest(context.Background(), image, hex.EncodeToString(digest[:]), target, manifestBanks())
+		path, err := cfg.writeManifest(context.Background(), image, hex.EncodeToString(digest[:]), target, manifestBanks())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -229,7 +241,7 @@ func TestWriteManifestRefuses(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			image := filepath.Join(t.TempDir(), "img.img")
-			path, _, err := tc.cfg.writeManifest(context.Background(), image, sum, target, manifestBanks())
+			path, err := tc.cfg.writeManifest(context.Background(), image, sum, target, manifestBanks())
 			var me *MeasureError
 			if !errors.As(err, &me) || me.Step != tc.step || path != "" {
 				t.Fatalf("path %q, err %v, want step %q", path, err, tc.step)
@@ -249,6 +261,25 @@ func TestCreateRefusesAFileManifestKey(t *testing.T) {
 	cfg.ManifestKey = "file:///keys/manifest.key"
 	var ref *ManifestKeyRefError
 	if res, err := Create(context.Background(), cfg); !errors.As(err, &ref) || res != nil {
+		t.Fatalf("result %+v, err %v", res, err)
+	}
+	if len(rec.Calls) != 0 {
+		t.Errorf("the build ran before refusing: %v", rec.Calls)
+	}
+}
+
+// TestCreateRefusesASecureBootBuildWithoutAPlatformClient: a measured build
+// is always signed, so with no platform client to reach the release key it
+// is refused before any container runs.
+func TestCreateRefusesASecureBootBuildWithoutAPlatformClient(t *testing.T) {
+	t.Parallel()
+	rec := &diskimagetest.Runner{}
+	cfg := buildConfigForTest(t, "qemu-virt", rec)
+	cfg.ISO.SecureBoot = true
+	cfg.KMSClients = nil
+	var se *StageError
+	res, err := Create(context.Background(), cfg)
+	if !errors.As(err, &se) || !errors.Is(err, errNoManifestKMS) || res != nil {
 		t.Fatalf("result %+v, err %v", res, err)
 	}
 	if len(rec.Calls) != 0 {

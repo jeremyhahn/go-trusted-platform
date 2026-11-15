@@ -215,8 +215,8 @@ func TestCreateMeasuresTheImage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Measurements != nil || res.Unmeasured != UnmeasuredSecureBootOff || res.Manifest != "" || res.Unsigned != "" {
-		t.Errorf("Secure Boot off: measurements %v, unmeasured %q, manifest %q, unsigned %q", res.Measurements, res.Unmeasured, res.Manifest, res.Unsigned)
+	if res.Measurements != nil || res.Unmeasured != UnmeasuredSecureBootOff || res.Manifest != "" {
+		t.Errorf("Secure Boot off: measurements %v, unmeasured %q, manifest %q", res.Measurements, res.Unmeasured, res.Manifest)
 	}
 	if _, err := os.Stat(ManifestPath(off.Output)); !os.IsNotExist(err) {
 		t.Errorf("a rebuild left the earlier build's manifest: %v", err)
@@ -225,6 +225,7 @@ func TestCreateMeasuresTheImage(t *testing.T) {
 	cfg := buildConfigForTest(t, "qemu-virt", &diskimagetest.Runner{})
 	cfg.ISO.SecureBoot = true
 	cfg.ISO.GenerateKeys = false
+	cfg.KMSClients = newManifestPKI(t).clients()
 	authenticodetest.WriteKeyPair(t, cfg.ISO.KeysDir)
 	for _, role := range []string{"PK", "KEK"} {
 		_, certPath := authenticodetest.WriteKeyPair(t, t.TempDir())
