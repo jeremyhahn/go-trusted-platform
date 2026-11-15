@@ -428,8 +428,16 @@ and otherwise builds it once with `make docker-build-it BUILDX_CLIENT_LOAD=1`
 (below: `--load` would import it into the builder node's daemon, where the
 job's `docker save` cannot find it). It fails if the image is not on the job's
 own daemon, leases it until its teardown, outputs its image id and its layer
-identity (a SHA-256 of the image's `RootFS.Layers` diff ids), and uploads a
-`docker save` of it as the run artifact `integration-image-<attempt>`. It also
+identity (a SHA-256 of the image's `RootFS.Layers` diff ids), and hands the
+image to legs on other daemons. On a self-hosted runner with the repository
+variable `CI_IMAGE_REGISTRY` (host:port) set, it pushes the image to that LAN
+registry as `go-trusted-platform/it-image:<image id hex>` and outputs the
+reference as `image_ref` (ruling 675: the 3.4 GB artifact, downloaded again by
+each leg, saturated the uplink); a registry that wants a login takes the
+optional secrets `CI_IMAGE_REGISTRY_USER` and `CI_IMAGE_REGISTRY_PASSWORD`.
+On a GitHub-hosted runner, or with the variable unset (a self-hosted runner
+then warns), it uploads a `docker save` of it as the run artifact
+`integration-image-<attempt>` instead. It also
 outputs the `APK_INDEX_SUM` and `APT_REFRESH` it read, so each leg's `make -s
 it-image` names the same tag. Each leg leases that id under the image lock (a
 created, never-started container that names it), re-tags it `IT_IMAGE` under
@@ -442,16 +450,18 @@ two hours ago.
 
 The legs share the image job's runner label, not its daemon: a label can name
 several runners, and on github.com every job is a fresh machine. A leg whose
-daemon lacks the id (run 68296, legs 1, 2 and 4: `No such image`) downloads
-the artifact and `docker load`s it. The load keeps the image but not
+daemon lacks the id (run 68296, legs 1, 2 and 4: `No such image`) pulls
+`image_ref` from the LAN registry when the image job pushed one, and otherwise
+downloads the artifact and `docker load`s it; a leg whose lease took the id
+fetches nothing. The pull and the load keep the image but not
 necessarily its id: an image id is the config digest on the classic overlay2
 image store and the manifest digest on the containerd image store, so the id
 the image job read on its daemon names nothing on a daemon whose store differs
 (run 70938, legs 1 and 3: `No such image` again after a successful load). The
-leg therefore leases the id of the tag the load restored (the content tag), then compares that image's layer identity with the job's: the layers'
+leg therefore leases the id of the tag the pull or load restored (the content tag), then compares that image's layer identity with the job's: the layers'
 diff ids are digests of the uncompressed layers, the same on every store. So
-every leg still runs the one image built per run. Only if the load fails or
-restores other layers does the leg build the image there, with a warning,
+every leg still runs the one image built per run. Only if the pull or load
+fails or restores other layers does the leg build the image there, with a warning,
 under the `integration` stage's own content tag (`make -s it-image
 IT_WARM_CACHE=0`), which a daemon that already holds it reuses.
 That build runs
@@ -767,7 +777,7 @@ devcontainer image so a developer and CI run the same thing:
 | `arch-gates` | PR | No direct go-objstore import outside a storage seam (this repo has none) (`ci.yml:466`) |
 | `sdkjs` | docs | The JS SDK's unit tests and lint, on the runner (`ci.yml:495`) |
 | `web` | full | The web console's tests, typecheck and build (`ci.yml:535-566`) |
-| `integration-image` | full | `make docker-build-it` once per run, or the daemon's image of the same content tag; outputs the image id a leg on its daemon leases and the layer identity a leg that loads the image compares, and uploads the image as the artifact a leg on another daemon loads (see "Legs"); needs `image` (`ci.yml:568-678`) |
+| `integration-image` | full | `make docker-build-it` once per run, or the daemon's image of the same content tag; outputs the image id a leg on its daemon leases and the layer identity a leg that loads the image compares, and, on a self-hosted runner with `CI_IMAGE_REGISTRY` set, pushes the image to that LAN registry for a leg on another daemon to pull (ruling 675), else uploads it as the artifact such a leg loads (see "Legs"); needs `image` (`ci.yml:568-678`) |
 | `integration` | full | A matrix job per leg: `make integration-test-leg LEG=<n> IT_PREBUILT=1` in the run's leased integration image, under a per-leg `IT_PROJECT` and the run's content tag `IT_IMAGE` and the `IT_MEMORY` limit, torn down on every exit (see "Legs" and "Memory limits"); needs `integration-image` (`ci.yml:680-853`) |
 | `soak` | nightly | `make integration-test` looped for `SOAK_MINUTES` (below), under the same `IT_MEMORY` limit (`ci.yml:867-974`) |
 | `fips` | full | `make test-fips`; outside the gate (`ci.yml:976-992`) |

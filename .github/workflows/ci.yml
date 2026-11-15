@@ -1308,17 +1308,26 @@ jobs:
     # A cold build on a loaded runner (#1299, run 72198): `make
     # docker-build-it` 47.5 min + `docker save` 3.5 min + the 3.2 GB upload
     # at about 5.7 MB/s, about 9.5 min, is about 61 min. 90 leaves margin
-    # for a slower runner; a warm runner reuses the image (#1292).
+    # for a slower runner; a warm runner reuses the image (#1292). On a
+    # self-hosted runner with CI_IMAGE_REGISTRY set (ruling 675) the save and
+    # upload give way to a push to the LAN registry, which takes minutes, not
+    # the uplink's 13; the 90 stays for the cold build.
     timeout-minutes: 90
     outputs:
       image_id: ${{ steps.build.outputs.image_id }}
       # The image's identity on any daemon: a hash of its layers' diff ids,
-      # which `docker save` / `docker load` keep whatever the image store.
+      # which `docker save` / `docker load` and a registry push / pull keep
+      # whatever the image store.
       image_identity: ${{ steps.build.outputs.image_identity }}
-      # The artifact a leg on another runner's daemon loads the image from.
-      # An output, so a re-run of the legs alone finds the attempt's artifact
-      # that built the image they lease.
-      artifact: integration-image-${{ github.run_attempt }}
+      # Ruling 675: the LAN registry reference a leg on another runner's
+      # daemon pulls the image from; empty when the artifact path ran.
+      image_ref: ${{ steps.push.outputs.image_ref }}
+      # The artifact a leg on another runner's daemon loads the image from
+      # when no registry carries it (GitHub-hosted runners, or a self-hosted
+      # runner with CI_IMAGE_REGISTRY unset). An output, so a re-run of the
+      # legs alone finds the attempt's artifact that built the image they
+      # lease; empty on the registry path.
+      artifact: ${{ steps.save.outputs.artifact }}
       # The package keys this job's tag hashed, so each leg names the same
       # tag with `make -s it-image` (ci-standard.md §9).
       apk_index_sum: ${{ steps.index.outputs.apk_index_sum }}
@@ -1329,6 +1338,15 @@ jobs:
       BUILDKIT_KEEP_STORAGE: 40gb
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      # Ruling 675: IT_REGISTRY is the LAN registry (host:port) the legs pull
+      # the image from, on self-hosted runners only; empty selects the
+      # artifact path. The endpoint lives in the repository variable, never
+      # in the repo. A step sets it, as a job's env has no runner context.
+      - name: Select the integration image transport
+        env:
+          IT_REGISTRY: ${{ runner.environment != 'github-hosted' && vars.CI_IMAGE_REGISTRY || '' }}
+        run: echo "IT_REGISTRY=$IT_REGISTRY" >> "$GITHUB_ENV"
 
       - name: Reap stale CI stacks
         run: scripts/reap-stale-ci-stacks.sh go-trusted-platform-ci-
@@ -1443,19 +1461,49 @@ jobs:
           echo "image_identity=$image_identity" >> "$GITHUB_OUTPUT"
 
       # The legs share this job's runner label, not its daemon (#1119): a leg
-      # placed on another runner loads the image from this artifact. Gitea
+      # placed on another runner pulls the image from the LAN registry
+      # (ruling 675), tagged by the image id, so the push names exactly the
+      # image this job leased. The optional secrets log in to a registry that
+      # wants it. The registry tag goes once pushed; the lease keeps the image.
+      - name: Push the integration image to the LAN registry
+        id: push
+        if: env.IT_REGISTRY != ''
+        env:
+          REGISTRY_USER: ${{ secrets.CI_IMAGE_REGISTRY_USER }}
+          REGISTRY_PASSWORD: ${{ secrets.CI_IMAGE_REGISTRY_PASSWORD }}
+        run: |
+          ref="$IT_REGISTRY/go-trusted-platform/it-image:${IT_LEASE_ID#sha256:}"
+          if [ -n "$REGISTRY_USER" ] && [ -n "$REGISTRY_PASSWORD" ]; then
+            printf '%s' "$REGISTRY_PASSWORD" | docker login --username "$REGISTRY_USER" --password-stdin "$IT_REGISTRY"
+          fi
+          source "$RUNNER_TEMP/image-lock.sh"
+          trap 'image_unlock; docker rmi "$ref" >/dev/null 2>&1 || true' EXIT
+          image_lock || exit 1
+          docker tag "$IT_LEASE_ID" "$ref"
+          image_unlock
+          docker push "$ref"
+          echo "image_ref=$ref" >> "$GITHUB_OUTPUT"
+
+      # Without a registry (GitHub-hosted runners, or CI_IMAGE_REGISTRY unset)
+      # a leg on another runner loads the image from this artifact. Gitea
       # uploads with v3 and github.com with v6 (see batch.yml, ARTIFACTS).
       - name: Save the integration image
+        id: save
+        if: env.IT_REGISTRY == ''
         run: |
+          if [ "$RUNNER_ENVIRONMENT" != "github-hosted" ]; then
+            echo "::warning::CI_IMAGE_REGISTRY is unset: the integration image goes to the legs as a GitHub artifact over the uplink, not through the LAN registry (ruling 675)"
+          fi
           source "$RUNNER_TEMP/image-lock.sh"
           trap image_unlock EXIT
           image_lock || exit 1
           docker tag "$IT_LEASE_ID" "$IT_IMAGE"
           image_unlock
           docker save -o "$RUNNER_TEMP/it-image.tar" "$IT_IMAGE"
+          echo "artifact=integration-image-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
 
       - name: Upload the integration image (Gitea)
-        if: github.server_url != 'https://github.com'
+        if: env.IT_REGISTRY == '' && github.server_url != 'https://github.com'
         uses: actions/upload-artifact@c6a366c94c3e0affe28c06c8df20a878f24da3cf # v3.2.2
         with:
           name: integration-image-${{ github.run_attempt }}
@@ -1463,7 +1511,7 @@ jobs:
           retention-days: 1
 
       - name: Upload the integration image (GitHub)
-        if: github.server_url == 'https://github.com'
+        if: env.IT_REGISTRY == '' && github.server_url == 'https://github.com'
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: integration-image-${{ github.run_attempt }}
@@ -1613,21 +1661,62 @@ jobs:
             echo "IT_LEASE_ID=$IT_IMAGE_ID" >> "$GITHUB_ENV"
             echo "leased=true" >> "$GITHUB_OUTPUT"
           else
-            echo "::notice::the integration image $IT_IMAGE_ID is not on this runner's daemon; loading it from the run's artifact"
+            echo "::notice::the integration image $IT_IMAGE_ID is not on this runner's daemon; fetching it from the LAN registry or the run's artifact"
           fi
           image_unlock
 
-      # A leg placed on another runner's daemon (run 68296, legs 1, 2 and 4)
-      # loads the image job's `docker save` of the image.
+      # Ruling 675: a leg placed on another runner's daemon (run 68296, legs
+      # 1, 2 and 4) pulls the image the image job pushed to the LAN registry,
+      # over the LAN, not the uplink. As after a load, the leg leases the id
+      # the pull gave the tag and checks the image job's layer identity. A
+      # failed pull or another image leaves the lease to the load step's
+      # fallback build, with a warning.
+      - name: Pull the integration image from the LAN registry
+        id: pull
+        if: steps.lease.outputs.leased != 'true' && needs.integration-image.outputs.image_ref != ''
+        env:
+          IT_IMAGE_REF: ${{ needs.integration-image.outputs.image_ref }}
+          REGISTRY_USER: ${{ secrets.CI_IMAGE_REGISTRY_USER }}
+          REGISTRY_PASSWORD: ${{ secrets.CI_IMAGE_REGISTRY_PASSWORD }}
+        run: |
+          source "$RUNNER_TEMP/image-lock.sh"
+          trap image_unlock EXIT
+          if [ -n "$REGISTRY_USER" ] && [ -n "$REGISTRY_PASSWORD" ]; then
+            printf '%s' "$REGISTRY_PASSWORD" | docker login --username "$REGISTRY_USER" --password-stdin "${IT_IMAGE_REF%%/*}" || true
+          fi
+          if ! docker pull "$IT_IMAGE_REF"; then
+            echo "::warning::pulling $IT_IMAGE_REF from the LAN registry failed; building this leg's image"
+            exit 0
+          fi
+          image_lock || exit 1
+          docker tag "$IT_IMAGE_REF" "$IT_IMAGE"
+          docker rmi "$IT_IMAGE_REF" >/dev/null 2>&1 || true
+          if pulled_id=$(docker image inspect -f '{{.Id}}' "$IT_IMAGE") &&
+            docker create --pull never --name "$IT_LEASE" "$pulled_id" true >/dev/null; then
+            pulled_identity=$(docker image inspect -f '{{json .RootFS.Layers}}' "$pulled_id" | sha256sum | cut -d' ' -f1)
+            if [ "$pulled_identity" = "$IT_IMAGE_IDENTITY" ]; then
+              echo "IT_LEASE_ID=$pulled_id" >> "$GITHUB_ENV"
+              echo "leased=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "::warning::the LAN registry gave $IT_IMAGE as layers $pulled_identity, not the image job's $IT_IMAGE_IDENTITY; building this leg's image"
+              docker container rm "$IT_LEASE" >/dev/null
+            fi
+          else
+            echo "::warning::the image pulled from $IT_IMAGE_REF could not be leased; building this leg's image"
+          fi
+          image_unlock
+
+      # Without a registry (GitHub-hosted runners, or CI_IMAGE_REGISTRY
+      # unset), such a leg loads the image job's `docker save` of the image.
       - name: Download the integration image (Gitea)
-        if: steps.lease.outputs.leased != 'true' && github.server_url != 'https://github.com'
+        if: steps.lease.outputs.leased != 'true' && needs.integration-image.outputs.image_ref == '' && github.server_url != 'https://github.com'
         uses: actions/download-artifact@a9bc5e6ef2cb54c177f32aa5726adaa15e7e2d59 # v3.1.0
         with:
           name: ${{ needs.integration-image.outputs.artifact }}
           path: ${{ runner.temp }}/it-image
 
       - name: Download the integration image (GitHub)
-        if: steps.lease.outputs.leased != 'true' && github.server_url == 'https://github.com'
+        if: steps.lease.outputs.leased != 'true' && needs.integration-image.outputs.image_ref == '' && github.server_url == 'https://github.com'
         uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
           name: ${{ needs.integration-image.outputs.artifact }}
@@ -1648,15 +1737,19 @@ jobs:
       # already reuses it. It streams the image to this step's `docker load`
       # (BUILDX_CLIENT_LOAD): --load imports into the daemon of the builder's
       # node, which on run 68044 was not the daemon `docker create` asked.
+      # On the registry path (ruling 675) there is no artifact to load: a
+      # pull that left no lease goes straight to that fallback build.
       - name: Load the integration image
-        if: steps.lease.outputs.leased != 'true'
+        if: steps.lease.outputs.leased != 'true' && steps.pull.outputs.leased != 'true'
+        env:
+          IT_IMAGE_REF: ${{ needs.integration-image.outputs.image_ref }}
         run: |
           source "$RUNNER_TEMP/image-lock.sh"
           trap image_unlock EXIT
           # shellcheck disable=SC2034 # read by take_lease, sourced above
           lease=$IT_LEASE
           leased=false
-          if docker load -i "$RUNNER_TEMP/it-image/it-image.tar"; then
+          if [ -z "$IT_IMAGE_REF" ] && docker load -i "$RUNNER_TEMP/it-image/it-image.tar"; then
             image_lock || exit 1
             if loaded_id=$(docker image inspect -f '{{.Id}}' "$IT_IMAGE") &&
               docker create --pull never --name "$IT_LEASE" "$loaded_id" true >/dev/null; then
@@ -1673,7 +1766,7 @@ jobs:
           fi
           if [ "$leased" != true ]; then
             IT_IMAGE=$(make -s it-image IT_WARM_CACHE=0)
-            echo "::warning::loading the run's artifact left no image with the image job's layers on this runner's daemon; running this leg in $IT_IMAGE"
+            echo "::warning::the LAN registry pull or the run's artifact left no image with the image job's layers on this runner's daemon; running this leg in $IT_IMAGE"
             image_lock || exit 1
             if ! take_lease; then
               image_unlock

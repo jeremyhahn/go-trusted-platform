@@ -486,12 +486,13 @@ const (
 
 // ciRawStep is a workflow step as the registry check reads it.
 type ciRawStep struct {
-	ID   string `yaml:"id"`
-	Name string `yaml:"name"`
-	If   string `yaml:"if"`
-	Uses string `yaml:"uses"`
-	Run  string `yaml:"run"`
-	Line int    `yaml:"-"`
+	ID   string            `yaml:"id"`
+	Name string            `yaml:"name"`
+	If   string            `yaml:"if"`
+	Uses string            `yaml:"uses"`
+	Run  string            `yaml:"run"`
+	Env  map[string]string `yaml:"env"`
+	Line int               `yaml:"-"`
 }
 
 func ciRawJob(t *testing.T, wf ciWorkflow, id string) (*yaml.Node, []ciRawStep) {
@@ -527,10 +528,18 @@ func registryPathFindings(t *testing.T, wf ciWorkflow) []error {
 	}
 
 	imageJob, imageSteps := ciRawJob(t, wf, ciImageJob)
-	if ciScalar(imageJob, "env", ciRegistryEnv) != ciRegistryValue {
+	// A job's env has no runner context, so a step selects IT_REGISTRY from
+	// its own env and hands it to the later steps through GITHUB_ENV.
+	selected, pushed := false, false
+	for _, step := range imageSteps {
+		if step.Env[ciRegistryEnv] == ciRegistryValue && strings.Contains(step.Run, ciRegistryEnv+"=$"+ciRegistryEnv) &&
+			strings.Contains(step.Run, "$GITHUB_ENV") {
+			selected = true
+		}
+	}
+	if !selected {
 		finding(ciImageJob, imageJob.Line, reasonRegistryUnguarded)
 	}
-	pushed := false
 	for _, step := range imageSteps {
 		if strings.Contains(step.Uses, ciUploadArtifact) && !strings.Contains(step.If, ciImageNoRegistry) {
 			finding(ciImageJob, step.Line, reasonUploadWithRegistry)
