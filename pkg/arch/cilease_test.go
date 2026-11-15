@@ -14,6 +14,8 @@
 package arch
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -806,8 +808,14 @@ func registryCredentialFindings(jobs map[string]ciShellJob) []error {
 			if (id == "integration-image" || id == "integration") && registryRefRemoval.MatchString(step.Run) {
 				errs = append(errs, fmt.Errorf("%s / %q removes the registry reference; the reaper owns it", id, step.Name))
 			}
-			if !strings.Contains(step.Run, "docker login") {
+			if strings.Contains(step.Run, "docker login") {
+				errs = append(errs, fmt.Errorf("%s / %q runs docker login, which can store the registry password in the runner's native credential helper; write the auths entry into the step's own config.json", id, step.Name))
+			}
+			if !strings.Contains(step.Run, "docker login") && !strings.Contains(step.Run, registryConfigUse) {
 				continue
+			}
+			if !strings.Contains(step.Run, `"auths"`) || !strings.Contains(step.Run, "umask 077") || !strings.Contains(step.Run, "base64") {
+				errs = append(errs, fmt.Errorf("%s / %q does not write its registry auths (umask 077, base64 user:password) into its own config.json", id, step.Name))
 			}
 			lines := strings.Split(step.Run, "\n")
 			made, trapped := -1, -1
@@ -858,13 +866,16 @@ func ciShellJobs(t *testing.T) map[string]ciShellJob {
 
 func TestCIRegistryLoginsUseAPerJobDockerConfigAndLeaveRegistryRefsToTheReaper(t *testing.T) {
 	jobs := ciShellJobs(t)
-	logins := 0
+	steps := 0
 	for _, job := range jobs {
 		for _, step := range job.Steps {
-			logins += strings.Count(step.Run, "docker login")
+			require.NotContains(t, step.Run, "docker login", "%q: registry credentials go into the step's own config.json, never through docker login", step.Name)
+			if strings.Contains(step.Run, registryConfigUse) {
+				steps++
+			}
 		}
 	}
-	require.GreaterOrEqual(t, logins, 2, "the push and the pull step log in to the registry")
+	require.GreaterOrEqual(t, steps, 2, "the push and the pull step use their own Docker config")
 	require.Empty(t, registryCredentialFindings(jobs))
 }
 
@@ -877,13 +888,16 @@ func TestRegistryCredentialFindingsRejectTheRunnersDockerConfig(t *testing.T) {
 		}{Name: "push", Run: run})
 		return map[string]ciShellJob{"integration-image": j}
 	}
-	good := registryConfigMake + "\ntrap 'image_unlock; " + registryConfigRm + "' EXIT\n" +
-		"printf x | DOCKER_CONFIG=$registry_config docker login --password-stdin r\nDOCKER_CONFIG=$registry_config docker push \"$ref\"\n"
+	writer := "umask 077\nauth=$(printf '%s:%s' \"$REGISTRY_USER\" \"$REGISTRY_PASSWORD\" | base64 | tr -d '\\n')\nprintf '{\"auths\": {\"r\": {\"auth\": \"%s\"}}}' \"$auth\" > \"$registry_config/config.json\"\n"
+	good := registryConfigMake + "\ntrap 'image_unlock; " + registryConfigRm + "' EXIT\n" + writer +
+		"DOCKER_CONFIG=$registry_config docker push \"$ref\"\n"
 	require.Empty(t, registryCredentialFindings(job(good)))
 	for name, run := range map[string]string{
+		"docker login":   good + "printf x | DOCKER_CONFIG=$registry_config docker login --password-stdin r\n",
 		"default config": "printf x | docker login --password-stdin r\ndocker push \"$ref\"\n",
-		"no trap":        registryConfigMake + "\nprintf x | DOCKER_CONFIG=$registry_config docker login r\n",
-		"trap replaced":  registryConfigMake + "\ntrap '" + registryConfigRm + "' EXIT\ntrap image_unlock EXIT\nprintf x | DOCKER_CONFIG=$registry_config docker login r\n",
+		"no auths":       registryConfigMake + "\ntrap '" + registryConfigRm + "' EXIT\nDOCKER_CONFIG=$registry_config docker push \"$ref\"\n",
+		"no trap":        registryConfigMake + "\n" + writer + "DOCKER_CONFIG=$registry_config docker push \"$ref\"\n",
+		"trap replaced":  registryConfigMake + "\ntrap '" + registryConfigRm + "' EXIT\ntrap image_unlock EXIT\n" + writer + "DOCKER_CONFIG=$registry_config docker push \"$ref\"\n",
 		"push outside":   good + "docker push \"$ref\"\n",
 		"producer rmi":   good + "trap 'docker rmi \"$ref\"' EXIT\n",
 	} {
@@ -925,6 +939,49 @@ func TestCIRegistryStepsKeepTheRunnersDockerContext(t *testing.T) {
 			left, err := filepath.Glob(filepath.Join(r.tmp, "docker-config.*"))
 			require.NoError(t, err)
 			require.Empty(t, left)
+		})
+	}
+}
+
+// TestCIRegistryStepsWriteTheirOwnAuths: Codex P1 round 4 on #1919. With no
+// auths in config.json the Docker CLI detects an installed native credential
+// helper (pass, secretservice), so docker login would store the registry
+// password in the runner user's shared store, beyond the temp config. Each
+// registry step writes its own auths entry instead, and with one present the
+// CLI keeps the file store: the fake helpers on PATH are never called.
+func TestCIRegistryStepsWriteTheirOwnAuths(t *testing.T) {
+	push := ciStepRun(t, ciImageJob, "push")
+	pull := ciStepRun(t, ciLegJob, "pull")
+	auth := base64.StdEncoding.EncodeToString([]byte("ci:secret"))
+	for name, tc := range map[string]struct {
+		setup func(home string)
+		ctx   string
+	}{
+		"default context": {},
+		"runner context": {ctx: "ci-ctx", setup: func(home string) {
+			contexts := filepath.Join(home, ".docker", "contexts")
+			require.NoError(t, os.MkdirAll(contexts, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(contexts, "ci-ctx"), nil, 0o644))
+			require.NoError(t, os.WriteFile(filepath.Join(home, ".docker", "config.json"), []byte(`{"currentContext": "ci-ctx"}`), 0o644))
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := runRegistrySteps(t, tc.setup, nil, push, pull)
+			require.NoError(t, r.err, r.log)
+			require.Contains(t, r.output, "leased=true", r.log)
+			require.Empty(t, r.read("login"), "no registry step runs docker login:\n%s", r.log)
+			require.Empty(t, r.read("helper-calls"), "a native credential helper was called:\n%s", r.log)
+			for _, log := range []string{"push-config", "pull-config"} {
+				var cfg struct {
+					CurrentContext string `json:"currentContext"`
+					Auths          map[string]struct {
+						Auth string `json:"auth"`
+					} `json:"auths"`
+				}
+				require.NoError(t, json.Unmarshal([]byte(r.read(log)), &cfg), "%s: %q\n%s", log, r.read(log), r.log)
+				require.Equal(t, auth, cfg.Auths["registry.invalid:5000"].Auth, log)
+				require.Equal(t, tc.ctx, cfg.CurrentContext, log)
+			}
 		})
 	}
 }

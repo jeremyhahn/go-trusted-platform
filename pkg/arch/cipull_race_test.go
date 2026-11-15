@@ -50,9 +50,22 @@ fi
 if [ "$ctx" != default ] && [ ! -e "$cfg/contexts/$ctx" ]; then
   echo "context \"$ctx\": context not found" >&2; exit 1
 fi
+# The CLI falls back to an installed native credential helper whenever its
+# config.json holds no auths (DetectDefaultStore); call it as the CLI would.
+case "$1" in
+  login|push|pull)
+    if ! { [ -f "$cfg/config.json" ] && [[ $(cat "$cfg/config.json") == *'"auths"'* ]]; }; then
+      for h in pass secretservice; do
+        if command -v "docker-credential-$h" >/dev/null; then echo "$1" | "docker-credential-$h" list; break; fi
+      done
+    fi
+    if [ "$1" != login ]; then
+      if [ -f "$cfg/config.json" ]; then cat "$cfg/config.json" > "$s/$1-config"; else : > "$s/$1-config"; fi
+    fi ;;
+esac
 case "$1" in
   context) [ "$2" = show ] || { echo "fake docker: $*" >&2; exit 2; }; echo "$ctx" ;;
-  login) cat >/dev/null; exit 0 ;;
+  login) cat >/dev/null; echo "$*" >> "$s/login"; exit 0 ;;
   push) echo "$ctx" >> "$s/push-context"; resolve "$2" >/dev/null || exit 1; echo "$2" >> "$s/pushed" ;;
   pull)
     echo "$ctx" >> "$s/pull-context"
@@ -328,6 +341,10 @@ func runRegistrySteps(t *testing.T, setup func(home string), env []string, steps
 	}
 	require.NoError(t, os.WriteFile(filepath.Join(bin, "docker"), []byte(fakeRegistryDocker), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(bin, "make"), []byte(fakeBuildMake), 0o755))
+	for _, h := range []string{"docker-credential-pass", "docker-credential-secretservice"} {
+		helper := "#!/usr/bin/env bash\necho \"" + h + " $* $(cat)\" >> \"$FAKE_DOCKER_STATE/helper-calls\"\n"
+		require.NoError(t, os.WriteFile(filepath.Join(bin, h), []byte(helper), 0o755))
+	}
 	require.NoError(t, os.WriteFile(filepath.Join(tmp, "image-lock.sh"), []byte(singleLegLock), 0o644))
 	if setup != nil {
 		setup(home)
