@@ -226,6 +226,25 @@ func seedAlpineISO(t *testing.T, ctx context.Context, cmd ISOCommands, workDir s
 	}
 }
 
+// statSeededISO records the seeded ISO in workDir so a later
+// assertSeededISOKept can tell whether a Create fetched it again.
+func statSeededISO(t *testing.T, workDir string) os.FileInfo {
+	t.Helper()
+	fi, err := os.Stat(alpineISOPath(workDir))
+	require.NoError(t, err, "seeded ISO must exist in %s", workDir)
+	return fi
+}
+
+// assertSeededISOKept fails the test when the ISO in workDir is no longer the
+// file seedAlpineISO placed there, i.e. the CLI removed and re-downloaded it.
+func assertSeededISOKept(t *testing.T, before os.FileInfo, workDir string) {
+	t.Helper()
+	after, err := os.Stat(alpineISOPath(workDir))
+	require.NoError(t, err, "seeded ISO must still exist in %s", workDir)
+	assert.True(t, os.SameFile(before, after),
+		"Create re-fetched the seeded ISO in %s instead of reusing it", workDir)
+}
+
 // linkOrCopy hard-links src to dst, or copies it when the link fails (for
 // example across file systems).
 func linkOrCopy(src, dst string) error {
@@ -735,6 +754,7 @@ func testCreateOperations(t *testing.T, ctx context.Context, cmd ISOCommands, wo
 		err := os.MkdirAll(createWorkDir, 0755)
 		require.NoError(t, err, "Should create work dir")
 		seedAlpineISO(t, testCtx, cmd, createWorkDir)
+		seeded := statSeededISO(t, createWorkDir)
 
 		opts := CreateOptions{
 			AlpineVersion: DefaultAlpineVersion,
@@ -754,6 +774,7 @@ func testCreateOperations(t *testing.T, ctx context.Context, cmd ISOCommands, wo
 			return
 		}
 		require.NotNil(t, result, "Result should not be nil")
+		assertSeededISOKept(t, seeded, createWorkDir)
 		if result.Success {
 			assert.NotEmpty(t, result.OutputISO, "Output ISO should be set")
 			t.Logf("Created ISO in %v: %s", result.ElapsedTime, result.OutputISO)
@@ -765,6 +786,7 @@ func testCreateOperations(t *testing.T, ctx context.Context, cmd ISOCommands, wo
 		err := os.MkdirAll(createWorkDir, 0755)
 		require.NoError(t, err, "Should create work dir")
 		seedAlpineISO(t, testCtx, cmd, createWorkDir)
+		seeded := statSeededISO(t, createWorkDir)
 
 		opts := CreateOptions{
 			AlpineVersion: DefaultAlpineVersion,
@@ -785,6 +807,7 @@ func testCreateOperations(t *testing.T, ctx context.Context, cmd ISOCommands, wo
 			return
 		}
 		require.NotNil(t, result, "Result should not be nil")
+		assertSeededISOKept(t, seeded, createWorkDir)
 		if result.Success {
 			// FIPS ISO should have -fips suffix
 			assert.Contains(t, result.OutputISO, "fips", "FIPS ISO should have fips in name")
@@ -796,6 +819,7 @@ func testCreateOperations(t *testing.T, ctx context.Context, cmd ISOCommands, wo
 		err := os.MkdirAll(createWorkDir, 0755)
 		require.NoError(t, err, "Should create work dir")
 		seedAlpineISO(t, testCtx, cmd, createWorkDir)
+		seeded := statSeededISO(t, createWorkDir)
 
 		opts := CreateOptions{
 			AlpineVersion: DefaultAlpineVersion,
@@ -814,6 +838,7 @@ func testCreateOperations(t *testing.T, ctx context.Context, cmd ISOCommands, wo
 			return
 		}
 		require.NotNil(t, result, "Result should not be nil")
+		assertSeededISOKept(t, seeded, createWorkDir)
 	})
 
 	t.Run("CreateClientType", func(t *testing.T) {
@@ -821,6 +846,7 @@ func testCreateOperations(t *testing.T, ctx context.Context, cmd ISOCommands, wo
 		err := os.MkdirAll(createWorkDir, 0755)
 		require.NoError(t, err, "Should create work dir")
 		seedAlpineISO(t, testCtx, cmd, createWorkDir)
+		seeded := statSeededISO(t, createWorkDir)
 
 		opts := CreateOptions{
 			AlpineVersion: DefaultAlpineVersion,
@@ -839,6 +865,7 @@ func testCreateOperations(t *testing.T, ctx context.Context, cmd ISOCommands, wo
 			return
 		}
 		require.NotNil(t, result, "Result should not be nil")
+		assertSeededISOKept(t, seeded, createWorkDir)
 	})
 
 	t.Run("CreateInvalidArch", func(t *testing.T) {
