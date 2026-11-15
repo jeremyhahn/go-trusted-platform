@@ -93,7 +93,7 @@ Field names per transport:
 | EnrollTPM | `device`, `existing_passphrase`, `pcrs` (int list), `handle` | first two | `slot`, `token_id` |
 | EnrollRecovery | `device`, `existing_passphrase` | both | `slot`, `recovery_key` |
 | RemoveKey | `device`, `slot` | both | `removed` |
-| TestUnlock | `device`, `slot` | both | `unlocked` |
+| TestUnlock | `device`, `slot` | both | error `ErrLUKSTestUnlockUnverified` (no credential to verify) |
 | ChangePassphrase | `device`, `slot`, `old_passphrase`, `new_passphrase` | all | `changed` |
 
 The server does not range-check `slot`. On REST and QUIC an omitted `slot`
@@ -152,10 +152,13 @@ message. The SDK REST transport takes that message from the `error` key.
 | EnrollPassphrase, EnrollFIDO2, EnrollTPM, EnrollRecovery, ChangePassphrase | `luks:write` |
 | RemoveKey | `luks:delete` |
 
-Test-unlock proves less than its name says, on every transport: the request
-carries no key, and the backend only checks that the keyslot exists
-(`pkg/app/backends/luks.go`), so `unlocked: true` means the slot is there, not
-that a key opens it.
+Test-unlock is refused on every transport: the request carries no credential,
+so the backend (`pkg/app/backends/luks.go`) cannot prove a key opens the slot
+and returns `ErrLUKSTestUnlockUnverified`, which the transport returns as an
+error (a device that is not a LUKS2 volume returns its read error instead). It
+never answers `unlocked: true`. Before `remove-key`, confirm separately that
+another credential still opens the volume, by unlocking with it, for example
+`cryptsetup open --test-passphrase --key-slot N /dev/<device>`.
 
 LUKS has no tenancy. A request names only a device path, and neither
 `LUKSService` nor its transports read a tenant.

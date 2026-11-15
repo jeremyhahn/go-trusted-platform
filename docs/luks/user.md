@@ -107,14 +107,16 @@ platformctl luks change-passphrase --device /dev/<device> --slot 0 \
 ## Retire a slot
 
 ```
-platformctl luks test-unlock --device /dev/<device> --slot 3
-platformctl luks remove-key  --device /dev/<device> --slot 3
+cryptsetup open --test-passphrase --key-slot 0 /dev/<device>
+platformctl luks remove-key --device /dev/<device> --slot 3
 ```
 
-`remove-key` wipes the slot and cannot be undone. Make sure another slot you
-can use still exists first. `test-unlock` confirms only that the slot exists;
-it does not prove a credential opens it. Every transport, MCP included, gives
-that same answer.
+`remove-key` wipes the slot and cannot be undone. First confirm that another
+credential still opens the volume by unlocking with it, as the `cryptsetup
+open --test-passphrase --key-slot N` line above does for the slot you keep.
+`platformctl luks test-unlock` cannot do this: the request carries no
+credential, so the backend refuses it with `ErrLUKSTestUnlockUnverified` and
+every transport, MCP included, returns that error.
 
 ---
 

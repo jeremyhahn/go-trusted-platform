@@ -222,8 +222,10 @@ platformctl luks remove-key --device /dev/<device> --slot 3
 | `--device` | string | auto-detect | no |
 | `--slot` | int32, `0`–`31` | `-1` (unset) | yes |
 
-Output: `unlocked`. The request carries no credential; the backend reports
-`true` when the slot exists ([engineering.md](engineering.md) §3).
+Output: an error. The request carries no credential, so the backend refuses
+with `ErrLUKSTestUnlockUnverified` ([engineering.md](engineering.md) §3);
+it never reports `unlocked: true`. Confirm a credential before `remove-key`
+by unlocking with it, e.g. `cryptsetup open --test-passphrase --key-slot N`.
 
 ```
 platformctl luks test-unlock --device /dev/<device> --slot 3

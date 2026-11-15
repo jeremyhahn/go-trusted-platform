@@ -112,8 +112,17 @@
 | EnrollTPM | `AddKey`, `FindFreeTokenSlot`, `ImportTokenJSON` | the handler seals to `--handle` / `--pcrs`; no token JSON is `ErrLUKSTokenMissing` and removes the keyslot (§2.8) |
 | EnrollRecovery | `AddRecoveryKey` | |
 | RemoveKey | `KillKeyslot` | destructive |
-| TestUnlock | `ListKeyslots` | **checks only that the slot exists**; no key material is tried |
+| TestUnlock | `ListKeyslots` | the request carries no credential, so it always returns `ErrLUKSTestUnlockUnverified` (a non-LUKS2 device returns its read error); confirm a credential separately before RemoveKey |
 | ChangePassphrase | `ChangeKey(device, old, new, slot)` | |
+
+Every keyslot mutation (the four Enroll operations, RemoveKey,
+ChangePassphrase) holds the volume's in-process mutex and a blocking
+exclusive `flock` on `/run/platform/luks-locks/<sha256 of the resolved
+device path>.lock` for its whole snapshot, add, token-write and rollback
+sequence, so separate backends and processes (platformd and each embedded
+platformctl host) serialize on one volume; when the lock cannot be taken the
+operation fails and writes nothing. The device node itself is not flocked:
+go-luks2 takes its own `LOCK_NB` flock there for each call.
 
 ---
 

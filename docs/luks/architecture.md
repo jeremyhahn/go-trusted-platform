@@ -25,8 +25,9 @@ keyslots enrolled here are the ones those strategies consume.
 
 ## 2. What it does not do
 
-- It does not unlock, open or mount a volume. `test-unlock` checks a slot; it
-  maps nothing.
+- It does not unlock, open or mount a volume. `test-unlock` carries no
+  credential, so the backend refuses it with `ErrLUKSTestUnlockUnverified`;
+  it maps nothing.
 - It does not format a volume. Formatting happens in the installer
   ([`docs/installer/`](../installer/)).
 - It does not implement LUKS2. All header and keyslot I/O is
