@@ -379,6 +379,20 @@ customize refuses a dynamically linked installer (`DynamicBinaryError`), so
 exports its path as `PLATFORMCTL_STATIC_PATH`, and the suite passes it to
 customize as `--platformctl-static-binary`: customize names the running
 `platformctl` as the installer and never looks beside it for the static one.
+
+The suite's VM tests, `TestISOVMTests` (install Alpine to a disk, then boot
+it), run as a target of their own, `iso-vm`: the same package narrowed by
+`TARGET_RUN`, the way `ipxe-dhcp` narrows `ipxe`, and `iso` leaves them out
+with `go test -skip` (`TARGET_SKIP`). On main ac83c0e95 (run 43694406642,
+Integration leg 1) the `TestISOMultiProtocol` CLI Create subtests took about
+517 s each inside the package's one 35-minute `go test -timeout`, and
+`TestBoot` refused with `-1m0.97s` left under its 2-minute cleanup margin;
+on d416ba86d `TestInstall` timed out the same way. `iso` keeps 35 minutes;
+`iso-vm` gets its own 55, from the VM tests' own bounds: the 20-minute
+install (`vmInstallTimeout`), the 30-minute boot context and the 2-minute
+cleanup margin, 52, plus the Alpine ISO seed, rounded up (main-fix). It runs
+in leg 4, apart from `iso` (leg 1) and `sdn` (leg 2), and gets the same
+`prepare_iso_customize` staging as `iso`.
 The suite fails, rather than fall back to the CGO build, when
 `PLATFORMCTL_STATIC_PATH` is unset or names no file. The `device`
 suite keeps only its daemon-backed tests: the adapter decode tests that
@@ -521,7 +535,7 @@ The bring-up waits are bounded polls on a ready condition, every 0.2 s
 (`wait-for.sh`): OVS's control sockets, swtpm's socket, `platformd`'s socket
 (or its exit) and its TLS bundles. A leg builds `gatewayd` and delegates the
 cgroup controllers only when it holds `proxy`. It stages the `iso customize`
-binaries only when it holds `iso`.
+binaries only when it holds `iso` or `iso-vm`.
 
 Main run 67833, the first with five legs, before the single image build
 (UTC, from the job logs):
@@ -551,10 +565,15 @@ cache the bring-up only links the binaries and starts OVS, swtpm and
 | 1 | `acme`, `authenticode`, `ca`, `iso` | 8.9 min (`iso` 7.9) | about 10.5 min |
 | 2 | `ceremony`, `cli`, `container`, `sdn` | 3.7 min | about 5 min |
 | 3 | `daemon`, `device`, `dns`, `sdn-stress` | 5.5 min (`sdn-stress` 4.5) | about 7 min |
-| 4 | `helpers`, `ipxe`, `installer`, `e2e`, `root`, `attestation`, `fido2`, `iam`, `kms`, `luks`, `ntp`, `objectstorage` | 3.8 min (with `sdk`, since moved to `pkg/storage/quicbaas`'s unit suite) | about 5.5 min |
+| 4 | `helpers`, `ipxe`, `installer`, `e2e`, `root`, `attestation`, `fido2`, `iam`, `iso-vm`, `kms`, `luks`, `ntp`, `objectstorage` | 3.8 min (with `sdk`, since moved to `pkg/storage/quicbaas`'s unit suite; before `iso-vm`) | about 5.5 min, plus `iso-vm` (go test timeout 55 min) |
 | 5 | `piv`, `provision`, `proxy`, `registry`, `secrets`, `tenant`, `vpn`, `vtpm`, `tpm`, `compute` | about 12 min (24 less a 6.5-minute build and a 5.5-minute bring-up, as on the other legs) | about 13.5 min |
 
-No suite moved. Taking out the build and the cold compile brings every leg
+Run 67833 timed `iso` with its VM tests inside it (`iso` 7.9 min); they have
+since moved to `iso-vm` in leg 4 (main-fix for main ac83c0e95, see the `iso`
+paragraph above), so leg 1 sheds them and leg 4 takes them on. `iso`, `iso-vm`
+and `sdn`, the three longest, are in three different legs.
+
+No other suite moved. Taking out the build and the cold compile brings every leg
 under 20 minutes, and the longest, leg 5, has about 6.5 minutes of room. Leg 5
 is the one to split if a run measures it over. Its job log gave no per-package
 times, so moving one of its suites now would rest on a guess, not a
