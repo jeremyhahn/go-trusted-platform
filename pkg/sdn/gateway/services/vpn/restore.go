@@ -61,7 +61,7 @@ func (s *Service) reconcilePeers(ctx context.Context, leases []*Lease) error {
 		if !ok {
 			continue
 		}
-		if err := reconcilePlane(ctx, kind, r, leases); err != nil {
+		if err := reconcilePlane(ctx, kind, r, leases, nil); err != nil {
 			// An orphan peer may still be installed with its lease gone from
 			// the store, where no sweep finds it: keep the obligation.
 			s.owePeerRetry(kind, nil)
@@ -73,10 +73,10 @@ func (s *Service) reconcilePeers(ctx context.Context, leases []*Lease) error {
 
 // reconcilePlane removes every peer of one hosted plane whose lease is not
 // among leases.
-func reconcilePlane(ctx context.Context, kind DataPlaneKind, r PeerReconciler, leases []*Lease) error {
+func reconcilePlane(ctx context.Context, kind DataPlaneKind, r PeerReconciler, leases []*Lease, except map[LeaseID]bool) error {
 	keep := make([]LeaseID, 0, len(leases))
 	for _, l := range leases {
-		if l.DataPlane == kind {
+		if l.DataPlane == kind && !except[l.ID] {
 			keep = append(keep, l.ID)
 		}
 	}
@@ -136,7 +136,13 @@ func (s *Service) retryPeerReconcile(ctx context.Context) {
 		if !ok {
 			continue
 		}
-		if err := reconcilePlane(ctx, kind, r, leases); err != nil {
+		// A held lease was rejected: its record may still be stored when
+		// its delete failed, but its peer must not be kept.
+		except := make(map[LeaseID]bool, len(held))
+		for _, l := range held {
+			except[l.ID] = true
+		}
+		if err := reconcilePlane(ctx, kind, r, leases, except); err != nil {
 			s.logger.Warn("vpn: peer reconciliation failed again", slog.String("data_plane", string(kind)), slog.Any("error", err))
 			s.owePeerRetry(kind, held...)
 			continue
