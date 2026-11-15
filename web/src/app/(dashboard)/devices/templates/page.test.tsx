@@ -100,6 +100,39 @@ vi.mock('@/components/ui/dialog', async () => {
   };
 });
 
+// #1737: the row actions open the template dialogs, which template-dialogs.test
+// covers; here they are stubs that show which dialog is open and for what.
+vi.mock('./template-dialogs', () => ({
+  ProfileAssignmentPanel: () => null,
+  TemplateDetailsDialog: ({ templateId }: { templateId: string | null }) =>
+    templateId === null ? null : <div data-testid="details-dialog">{String(templateId)}</div>,
+  EditTemplateDialog: ({ template }: { template: DeviceTemplate | null }) =>
+    template ? <div data-testid="edit-dialog">{`Editing ${template.name}`}</div> : null,
+  CreateProfileDialog: () => null,
+  ConfirmDialog: ({
+    open,
+    description,
+    onOpenChange,
+    onConfirm,
+  }: {
+    open: boolean;
+    description: string;
+    onOpenChange: (o: boolean) => void;
+    onConfirm: () => void;
+  }) =>
+    open ? (
+      <div role="alertdialog">
+        <p>{description}</p>
+        <button type="button" onClick={() => onOpenChange(false)}>
+          Keep template
+        </button>
+        <button type="button" onClick={onConfirm}>
+          Confirm delete
+        </button>
+      </div>
+    ) : null,
+}));
+
 import DeviceTemplatesPage from './page';
 
 function tpl(over: Partial<Record<keyof DeviceTemplate, unknown>>): DeviceTemplate {
@@ -123,6 +156,8 @@ function hookState(over: Record<string, unknown> = {}) {
     refetch: vi.fn(),
     create: { mutateAsync: vi.fn().mockResolvedValue({}), isLoading: false },
     remove: { mutateAsync: vi.fn().mockResolvedValue(undefined), isLoading: false },
+    update: { mutateAsync: vi.fn().mockResolvedValue({}), isLoading: false },
+    createProfileFromTemplate: { mutateAsync: vi.fn().mockResolvedValue({}), isLoading: false },
     ...over,
   };
   return h.state as {
@@ -319,14 +354,15 @@ describe('DeviceTemplatesPage', () => {
   });
 
   describe('row actions', () => {
-    it('View Details and Edit Template navigate to the template routes', () => {
+    it('View Details and Edit Template open the template dialogs', () => {
       hookState({ templates: [tpl({ id: 42, name: 'Nav' })] });
       render(<DeviceTemplatesPage />);
       const row = within(rowFor('Nav'));
       fireEvent.click(row.getByText('View Details'));
-      expect(h.push).toHaveBeenLastCalledWith('/devices/templates/42');
+      expect(screen.getByTestId('details-dialog').textContent).toBe('42');
       fireEvent.click(row.getByText('Edit Template'));
-      expect(h.push).toHaveBeenLastCalledWith('/devices/templates/42/edit');
+      expect(screen.getByTestId('edit-dialog').textContent).toBe('Editing Nav');
+      expect(h.push).not.toHaveBeenCalled();
     });
 
     it('Duplicate creates a copy, toasts success and refetches', async () => {
@@ -371,11 +407,15 @@ describe('DeviceTemplatesPage', () => {
     });
 
     it('Delete asks for confirmation and does nothing when declined', () => {
-      confirmSpy.mockReturnValue(false);
       const s = hookState({ templates: [tpl({ id: 9, name: 'Doomed' })] });
       render(<DeviceTemplatesPage />);
       fireEvent.click(within(rowFor('Doomed')).getByText('Delete'));
-      expect(confirmSpy).toHaveBeenCalledWith('Are you sure you want to delete "Doomed"?');
+      expect(screen.getByRole('alertdialog').textContent).toContain(
+        '"Doomed" will be deleted. This cannot be undone.'
+      );
+      expect(s.remove.mutateAsync).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByText('Keep template'));
+      expect(screen.queryByRole('alertdialog')).toBeNull();
       expect(s.remove.mutateAsync).not.toHaveBeenCalled();
       expect(h.toast).not.toHaveBeenCalled();
     });
@@ -384,6 +424,7 @@ describe('DeviceTemplatesPage', () => {
       const s = hookState({ templates: [tpl({ id: 9, name: 'Doomed' })] });
       render(<DeviceTemplatesPage />);
       fireEvent.click(within(rowFor('Doomed')).getByText('Delete'));
+      fireEvent.click(screen.getByText('Confirm delete'));
       await waitFor(() => expect(s.refetch).toHaveBeenCalledTimes(1));
       expect(s.remove.mutateAsync).toHaveBeenCalledWith(9);
       expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: 'Template deleted', variant: 'success' }));
@@ -394,6 +435,7 @@ describe('DeviceTemplatesPage', () => {
       s.remove.mutateAsync.mockRejectedValueOnce(new Error('in use'));
       render(<DeviceTemplatesPage />);
       fireEvent.click(within(rowFor('Doomed')).getByText('Delete'));
+      fireEvent.click(screen.getByText('Confirm delete'));
       await waitFor(() =>
         expect(h.toast).toHaveBeenCalledWith(
           expect.objectContaining({ title: 'Error deleting template', description: 'in use', variant: 'destructive' })
@@ -407,6 +449,7 @@ describe('DeviceTemplatesPage', () => {
       s.remove.mutateAsync.mockRejectedValueOnce(42);
       render(<DeviceTemplatesPage />);
       fireEvent.click(within(rowFor('Doomed')).getByText('Delete'));
+      fireEvent.click(screen.getByText('Confirm delete'));
       await waitFor(() =>
         expect(h.toast).toHaveBeenCalledWith(
           expect.objectContaining({ title: 'Error deleting template', description: 'Unknown error' })
