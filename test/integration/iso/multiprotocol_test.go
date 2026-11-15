@@ -438,6 +438,9 @@ func ensureBuiltISO(t *testing.T, ctx context.Context, cmd ISOCommands, workDir 
 
 	isoDir := ensureExtractedISO(t, ctx, cmd, workDir)
 	platformdPath, platformctlStaticPath, platformConfig := customizeInputs(t)
+	// Run 43689586687 lost the 10-minute customize limit to a serial pre-fetch
+	// of 294 APKs from the public mirror: seed it from the runner-local cache.
+	seedPrefetchCache(t, isoDir)
 	customized, err := cmd.Customize(ctx, CustomizeOptions{
 		ISODir:                isoDir,
 		PlatformdPath:         platformdPath,
@@ -451,6 +454,7 @@ func ensureBuiltISO(t *testing.T, ctx context.Context, cmd ISOCommands, workDir 
 	if customized == nil || !customized.Success {
 		t.Fatalf("missing prerequisite: customizing the ISO fixture reported no success: %+v", customized)
 	}
+	harvestPrefetchCache(t, isoDir)
 	if err := requireOfflineRepository(isoDir); err != nil {
 		t.Fatalf("missing prerequisite: %v", err)
 	}
