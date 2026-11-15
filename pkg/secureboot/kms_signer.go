@@ -41,6 +41,14 @@ type CertificateGetter interface {
 	GetCertificate(ctx context.Context, in *platformv1.GetCertificateRequest, opts ...grpc.CallOption) (*platformv1.GetCertificateResponse, error)
 }
 
+// CABundleGetter is the optional slice of the platform CA service client that
+// returns the CA's PEM bundle (intermediates included), from which a KMS-held
+// key's issuer chain is built. platform.Client.CA() satisfies it; a
+// CertificateGetter that does not is treated as a CA with no intermediates.
+type CABundleGetter interface {
+	GetCABundle(ctx context.Context, in *platformv1.GetCABundleRequest, opts ...grpc.CallOption) (*platformv1.GetCABundleResponse, error)
+}
+
 // NewKMSSigner resolves a Secure Boot key held in the platform KMS — the DB
 // key, for resign-mode remote — over an authenticated platform client: a
 // node's IDevID mTLS client after install, an operator's client at build

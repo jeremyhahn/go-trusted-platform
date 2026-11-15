@@ -83,8 +83,11 @@ var ErrNoCertificate = errors.New("secureboottest: no such certificate")
 // CA serves certificates by reference, recording the last one asked for.
 // Raw overrides the PEM returned for a reference (malformed-response tests).
 type CA struct {
-	Certs   map[string]*x509.Certificate
-	Raw     map[string][]byte
+	Certs map[string]*x509.Certificate
+	Raw   map[string][]byte
+	// Chains holds, per certificate reference, the issuer chain (intermediates
+	// then root) GetCABundle returns; a nil map leaves the bundle empty.
+	Chains  map[string][]*x509.Certificate
 	Err     error
 	LastRef string
 }
@@ -106,4 +109,27 @@ func (c *CA) GetCertificate(_ context.Context, in *platformv1.GetCertificateRequ
 		return nil, ErrNoCertificate
 	}
 	return &platformv1.GetCertificateResponse{Certificate: &platformv1.Certificate{Pem: PEM(cert)}}, nil
+}
+
+// GetCABundle implements secureboot.CABundleGetter: the PEM bundle is every
+// certificate of the issuer chain of the last reference fetched (or of every
+// chain when none was), intermediates included.
+func (c *CA) GetCABundle(_ context.Context, _ *platformv1.GetCABundleRequest, _ ...grpc.CallOption) (*platformv1.GetCABundleResponse, error) {
+	if c.Err != nil {
+		return nil, c.Err
+	}
+	var bundle []byte
+	add := func(chain []*x509.Certificate) {
+		for _, cert := range chain {
+			bundle = append(bundle, PEM(cert)...)
+		}
+	}
+	if chain, ok := c.Chains[c.LastRef]; ok {
+		add(chain)
+	} else {
+		for _, chain := range c.Chains {
+			add(chain)
+		}
+	}
+	return &platformv1.GetCABundleResponse{Bundle: &platformv1.CABundle{Pem: bundle}}, nil
 }
