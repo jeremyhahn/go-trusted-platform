@@ -16,7 +16,9 @@ package iam
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
@@ -32,42 +34,72 @@ const (
 	memberRoleID   = "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"
 )
 
-// workspaceRoleListing returns a ListRoles fake that pages the workspace's
-// roles (a built-in admin on the first page, a custom operator and member on
-// the second) and counts its calls. It refuses a request that leaves out the
-// system roles or names another tenant.
-func workspaceRoleListing(t *testing.T, calls *int) func(context.Context, string, *iamsdk.ListRolesRequest) (*iamsdk.ListRolesResponse, error) {
+// workspaceRoleCount is the number of roles the fake workspace holds: more
+// than one ListRoles page, so a resolver that reads only the first page of the
+// listing misses the roles past it.
+const workspaceRoleCount = 150
+
+// lateRoleID is the ID of role number 140 of the fake workspace, beyond the
+// first page of a 100-role listing.
+const lateRoleID = "00000000-0000-4000-8000-000000000140"
+
+// workspaceRoles answers the roles of the fake workspace by ID: the three named
+// roles plus workspaceRoleCount numbered ones ("role-<n>").
+func workspaceRoles() map[string]string {
+	roles := map[string]string{
+		adminRoleID:    "admin",
+		operatorRoleID: "operator",
+		memberRoleID:   "member",
+	}
+	for i := 1; i <= workspaceRoleCount; i++ {
+		roles[fmt.Sprintf("00000000-0000-4000-8000-%012d", i)] = fmt.Sprintf("role-%d", i)
+	}
+	return roles
+}
+
+// workspaceRoleLookup is a GetRole fake over workspaceRoles. It counts the
+// lookups in calls (when not nil) and answers an ID the workspace does not
+// hold with the SDK's not-found error.
+func workspaceRoleLookup(t *testing.T, calls *int) func(context.Context, string, string) (*iamsdk.Role, error) {
 	t.Helper()
-	return func(_ context.Context, tenantID string, req *iamsdk.ListRolesRequest) (*iamsdk.ListRolesResponse, error) {
+	roles := workspaceRoles()
+	return func(_ context.Context, tenantID, roleID string) (*iamsdk.Role, error) {
 		if calls != nil {
 			*calls++
 		}
-		if tenantID != "workspace-a" || req == nil || !req.IncludeSystem {
-			return nil, errors.New("role listing must name the workspace and include the system roles")
+		if tenantID != "workspace-a" {
+			return nil, errors.New("role lookup must name the workspace")
 		}
-		if req.PageToken == "" {
-			return &iamsdk.ListRolesResponse{
-				Roles:      []iamsdk.Role{{ID: adminRoleID, Name: "admin"}},
-				Pagination: iamsdk.PaginationInfo{HasMore: true, NextPageToken: "p2"},
-			}, nil
+		name, ok := roles[roleID]
+		if !ok {
+			return nil, sdkerrors.NewNotFound("iam.role.get", "role not found")
 		}
-		return &iamsdk.ListRolesResponse{Roles: []iamsdk.Role{
-			{ID: operatorRoleID, Name: "operator"},
-			{ID: memberRoleID, Name: "member"},
-		}}, nil
+		return &iamsdk.Role{ID: roleID, Name: name}, nil
 	}
 }
 
-// A user stored with role IDs answers the role names the session guards
-// check, from both Roles (login) and Principal (refresh), across pages of the
-// role listing (#646, Codex P1 on #1906).
+// noRoleListing fails the test if the resolver lists the workspace's roles:
+// the listing answers only its first page, so the resolver must look each
+// role up instead.
+func noRoleListing(t *testing.T) func(context.Context, string, *iamsdk.ListRolesRequest) (*iamsdk.ListRolesResponse, error) {
+	t.Helper()
+	return func(context.Context, string, *iamsdk.ListRolesRequest) (*iamsdk.ListRolesResponse, error) {
+		t.Errorf("the role resolver must not list the workspace's roles")
+		return nil, errors.New("role listing called")
+	}
+}
+
+// TestWorkspaceRoleResolverAnswersRoleNamesForStoredRoleIDs checks that the
+// role IDs stored on a workspace user come back as the role names the session
+// guards check.
 func TestWorkspaceRoleResolverAnswersRoleNamesForStoredRoleIDs(t *testing.T) {
 	t.Parallel()
 	client := &mockIAMClient{
 		getByEmailFn: func(_ context.Context, _, email string) (*iamsdk.User, error) {
 			return &iamsdk.User{Email: email, Roles: []string{adminRoleID, operatorRoleID}}, nil
 		},
-		listRolesFn: workspaceRoleListing(t, nil),
+		getRoleFn:   workspaceRoleLookup(t, nil),
+		listRolesFn: noRoleListing(t),
 	}
 	resolver, err := NewWorkspaceRoleResolver(client)
 	if err != nil {
@@ -85,14 +117,45 @@ func TestWorkspaceRoleResolverAnswersRoleNamesForStoredRoleIDs(t *testing.T) {
 	}
 }
 
-// A role the user already holds by name stays as it is.
+// TestWorkspaceRoleResolverNamesARoleBeyondTheFirstListingPage checks that a
+// role past the first 100 of a 150-role workspace still resolves to its name,
+// through GetRole and without listing the roles (Codex P1, #1906).
+func TestWorkspaceRoleResolverNamesARoleBeyondTheFirstListingPage(t *testing.T) {
+	t.Parallel()
+	client := &mockIAMClient{
+		getByEmailFn: func(_ context.Context, _, email string) (*iamsdk.User, error) {
+			return &iamsdk.User{Email: email, Roles: []string{lateRoleID}}, nil
+		},
+		getRoleFn:   workspaceRoleLookup(t, nil),
+		listRolesFn: noRoleListing(t),
+	}
+	resolver, err := NewWorkspaceRoleResolver(client)
+	if err != nil {
+		t.Fatalf("NewWorkspaceRoleResolver: %v", err)
+	}
+	ctx := context.Background()
+
+	roles, err := resolver.Roles(ctx, "workspace-a", "late@platform")
+	if err != nil || !slices.Equal(roles, []string{"role-140"}) {
+		t.Fatalf("Roles: got %v err=%v, want [role-140]", roles, err)
+	}
+	roles, found, err := resolver.Principal(ctx, "workspace-a", "late@platform")
+	if err != nil || !found || !slices.Equal(roles, []string{"role-140"}) {
+		t.Fatalf("Principal: got %v found=%v err=%v, want [role-140]", roles, found, err)
+	}
+}
+
+// TestWorkspaceRoleResolverKeepsARoleGivenByName checks that a reference that
+// is already a role name is kept as it is, with no GetRole call for it.
 func TestWorkspaceRoleResolverKeepsARoleGivenByName(t *testing.T) {
 	t.Parallel()
+	var lookups int
 	client := &mockIAMClient{
 		getByEmailFn: func(_ context.Context, _, email string) (*iamsdk.User, error) {
 			return &iamsdk.User{Email: email, Roles: []string{"admin", memberRoleID}}, nil
 		},
-		listRolesFn: workspaceRoleListing(t, nil),
+		getRoleFn:   workspaceRoleLookup(t, &lookups),
+		listRolesFn: noRoleListing(t),
 	}
 	resolver, err := NewWorkspaceRoleResolver(client)
 	if err != nil {
@@ -102,17 +165,21 @@ func TestWorkspaceRoleResolverKeepsARoleGivenByName(t *testing.T) {
 	if err != nil || !found || !slices.Equal(roles, []string{"admin", "member"}) {
 		t.Fatalf("Principal: got %v found=%v err=%v, want [admin member]", roles, found, err)
 	}
+	if lookups != 1 {
+		t.Fatalf("GetRole calls: got %d, want 1 (the role ID only, not the role name)", lookups)
+	}
 }
 
-// A role reference the workspace's role listing does not hold is an error,
-// never a guessed name.
+// TestWorkspaceRoleResolverRefusesARoleTheWorkspaceDoesNotHold checks that a
+// stored role ID GetRole does not find fails the login with "holds no role".
 func TestWorkspaceRoleResolverRefusesARoleTheWorkspaceDoesNotHold(t *testing.T) {
 	t.Parallel()
 	client := &mockIAMClient{
 		getByEmailFn: func(_ context.Context, _, email string) (*iamsdk.User, error) {
 			return &iamsdk.User{Email: email, Roles: []string{adminRoleID, "0e0e0e0e-dead-4bee-8f00-123456789abc"}}, nil
 		},
-		listRolesFn: workspaceRoleListing(t, nil),
+		getRoleFn:   workspaceRoleLookup(t, nil),
+		listRolesFn: noRoleListing(t),
 	}
 	resolver, err := NewWorkspaceRoleResolver(client)
 	if err != nil {
@@ -120,26 +187,28 @@ func TestWorkspaceRoleResolverRefusesARoleTheWorkspaceDoesNotHold(t *testing.T) 
 	}
 	ctx := context.Background()
 	roles, found, err := resolver.Principal(ctx, "workspace-a", "admin@platform")
-	if err == nil || found || roles != nil {
-		t.Fatalf("Principal: an unknown role must fail: got %v found=%v err=%v", roles, found, err)
+	if err == nil || found || roles != nil || !strings.Contains(err.Error(), "holds no role") {
+		t.Fatalf("Principal: an unknown role must fail with holds no role: got %v found=%v err=%v", roles, found, err)
 	}
 	roles, err = resolver.Roles(ctx, "workspace-a", "admin@platform")
-	if err == nil || roles != nil {
-		t.Fatalf("Roles: an unknown role must fail: got %v err=%v", roles, err)
+	if err == nil || roles != nil || !strings.Contains(err.Error(), "holds no role") {
+		t.Fatalf("Roles: an unknown role must fail with holds no role: got %v err=%v", roles, err)
 	}
 }
 
-// A role listing failure is returned from both lookups and grants nothing.
-func TestWorkspaceRoleResolverReturnsARoleListingFailure(t *testing.T) {
+// TestWorkspaceRoleResolverReturnsARoleLookupFailure checks that a GetRole
+// failure other than not-found comes back as it is.
+func TestWorkspaceRoleResolverReturnsARoleLookupFailure(t *testing.T) {
 	t.Parallel()
-	cause := errors.New("role listing unavailable")
+	cause := errors.New("role lookup unavailable")
 	client := &mockIAMClient{
 		getByEmailFn: func(_ context.Context, _, email string) (*iamsdk.User, error) {
 			return &iamsdk.User{Email: email, Roles: []string{adminRoleID}}, nil
 		},
-		listRolesFn: func(context.Context, string, *iamsdk.ListRolesRequest) (*iamsdk.ListRolesResponse, error) {
+		getRoleFn: func(context.Context, string, string) (*iamsdk.Role, error) {
 			return nil, cause
 		},
+		listRolesFn: noRoleListing(t),
 	}
 	resolver, err := NewWorkspaceRoleResolver(client)
 	if err != nil {
@@ -148,11 +217,11 @@ func TestWorkspaceRoleResolverReturnsARoleListingFailure(t *testing.T) {
 	ctx := context.Background()
 	roles, err := resolver.Roles(ctx, "workspace-a", "admin@platform")
 	if !errors.Is(err, cause) || roles != nil {
-		t.Fatalf("Roles: got %v err=%v, want the listing failure", roles, err)
+		t.Fatalf("Roles: got %v err=%v, want the lookup failure", roles, err)
 	}
 	roles, found, err := resolver.Principal(ctx, "workspace-a", "admin@platform")
 	if !errors.Is(err, cause) || found || roles != nil {
-		t.Fatalf("Principal: got %v found=%v err=%v, want the listing failure", roles, found, err)
+		t.Fatalf("Principal: got %v found=%v err=%v, want the lookup failure", roles, found, err)
 	}
 }
 
@@ -164,7 +233,8 @@ func TestWorkspaceRoleResolverListsNoRolesForAUserWithoutRoles(t *testing.T) {
 		getByEmailFn: func(_ context.Context, _, email string) (*iamsdk.User, error) {
 			return &iamsdk.User{Email: email}, nil
 		},
-		listRolesFn: workspaceRoleListing(t, &calls),
+		getRoleFn:   workspaceRoleLookup(t, &calls),
+		listRolesFn: noRoleListing(t),
 	}
 	resolver, err := NewWorkspaceRoleResolver(client)
 	if err != nil {
@@ -172,7 +242,7 @@ func TestWorkspaceRoleResolverListsNoRolesForAUserWithoutRoles(t *testing.T) {
 	}
 	roles, found, err := resolver.Principal(context.Background(), "workspace-a", "plain@platform")
 	if err != nil || !found || len(roles) != 0 || calls != 0 {
-		t.Fatalf("got %v found=%v err=%v listings=%d, want no roles and no listing", roles, found, err, calls)
+		t.Fatalf("got %v found=%v err=%v lookups=%d, want no roles and no lookup", roles, found, err, calls)
 	}
 }
 
@@ -184,7 +254,8 @@ func TestWorkspaceRoleResolverReadsTheRolesOfTheWorkspaceUser(t *testing.T) {
 			gotTenant, gotEmail = tenantID, email
 			return &iamsdk.User{Email: email, Roles: []string{memberRoleID}}, nil
 		},
-		listRolesFn: workspaceRoleListing(t, nil),
+		getRoleFn:   workspaceRoleLookup(t, nil),
+		listRolesFn: noRoleListing(t),
 	}
 	resolver, err := NewWorkspaceRoleResolver(client)
 	if err != nil {
@@ -266,7 +337,8 @@ func TestWorkspaceRoleResolverPrincipalTellsAGoneUserFromOneWithoutRoles(t *test
 			}
 			return nil, sdkerrors.NewNotFound("iam.user.get_by_email", "user not found")
 		},
-		listRolesFn: workspaceRoleListing(t, nil),
+		getRoleFn:   workspaceRoleLookup(t, nil),
+		listRolesFn: noRoleListing(t),
 	}
 	resolver, err := NewWorkspaceRoleResolver(client)
 	if err != nil {
@@ -316,7 +388,8 @@ func TestWorkspaceRoleResolverRolesRefusesAnInactiveWorkspaceAccount(t *testing.
 			}
 			return nil, sdkerrors.NewNotFound("iam.user.get_by_email", "user not found")
 		},
-		listRolesFn: workspaceRoleListing(t, nil),
+		getRoleFn:   workspaceRoleLookup(t, nil),
+		listRolesFn: noRoleListing(t),
 	}
 	resolver, err := NewWorkspaceRoleResolver(client)
 	if err != nil {
