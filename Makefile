@@ -16,12 +16,16 @@ TARGET_ARCH             := $(shell uname -m)
 # =============================================================================
 
 # -----------------------------------------------------------------------------
-# Cloud Provider Group Variables (enables ALL features for a provider)
-# These cascade down to enable individual project features
+# Cloud Provider Group Variables (umbrellas, owner ruling 683 (1))
+# Unset by default: the individual service toggles decide. 1 turns every
+# service of the provider on; 0 forces every one off, over the toggles.
 # -----------------------------------------------------------------------------
-WITH_AWS                ?= 0    # Enable ALL AWS features (KMS, S3, etc.) across all projects
-WITH_GCP                ?= 0    # Enable ALL GCP features (KMS, GCS, etc.) across all projects
-WITH_AZURE              ?= 0    # Enable ALL Azure features (KeyVault, Blob, etc.) across all projects
+WITH_AWS                ?=
+# WITH_AWS: unset = toggles decide; 1 = all AWS services (KMS, S3, compute) on; 0 = all off
+WITH_GCP                ?=
+# WITH_GCP: unset = toggles decide; 1 = all GCP services (KMS, GCS, compute) on; 0 = all off
+WITH_AZURE              ?=
+# WITH_AZURE: unset = toggles decide; 1 = all Azure services (Key Vault, Blob, compute) on; 0 = all off
 
 # -----------------------------------------------------------------------------
 # go-quicbaas Build Variables
@@ -107,22 +111,36 @@ WITH_CODEC_PROTOBUF     ?= 0    # Protocol Buffers codec
 
 # =============================================================================
 # Cloud Provider Group Variable Expansion
-# When WITH_AWS=1, enable all AWS features across all projects
+# Owner ruling 683 (1): an umbrella of 1 turns every service of the provider
+# on, 0 forces every one off. `override` wins over a toggle given on the
+# command line too; left unset, the individual toggles decide.
 # =============================================================================
 ifeq ($(strip $(WITH_AWS)),1)
-    WITH_AWS_KMS        := 1
-    WITH_OBJSTORE_S3    := 1
-    WITH_AWS_COMPUTE    := 1
+    override WITH_AWS_KMS        := 1
+    override WITH_OBJSTORE_S3    := 1
+    override WITH_AWS_COMPUTE    := 1
+else ifeq ($(strip $(WITH_AWS)),0)
+    override WITH_AWS_KMS        := 0
+    override WITH_OBJSTORE_S3    := 0
+    override WITH_AWS_COMPUTE    := 0
 endif
 ifeq ($(strip $(WITH_GCP)),1)
-    WITH_GCP_KMS        := 1
-    WITH_OBJSTORE_GCS   := 1
-    WITH_GCP_COMPUTE    := 1
+    override WITH_GCP_KMS        := 1
+    override WITH_OBJSTORE_GCS   := 1
+    override WITH_GCP_COMPUTE    := 1
+else ifeq ($(strip $(WITH_GCP)),0)
+    override WITH_GCP_KMS        := 0
+    override WITH_OBJSTORE_GCS   := 0
+    override WITH_GCP_COMPUTE    := 0
 endif
 ifeq ($(strip $(WITH_AZURE)),1)
-    WITH_AZURE_KV       := 1
-    WITH_OBJSTORE_AZURE := 1
-    WITH_AZURE_COMPUTE  := 1
+    override WITH_AZURE_KV       := 1
+    override WITH_OBJSTORE_AZURE := 1
+    override WITH_AZURE_COMPUTE  := 1
+else ifeq ($(strip $(WITH_AZURE)),0)
+    override WITH_AZURE_KV       := 0
+    override WITH_OBJSTORE_AZURE := 0
+    override WITH_AZURE_COMPUTE  := 0
 endif
 
 # =============================================================================
