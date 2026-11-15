@@ -22,6 +22,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -31,14 +32,46 @@ import (
 // bring-up runs without an OVS database socket.
 func stubOVSBridge(t *testing.T) *int {
 	t.Helper()
+	calls, _ := stubOVSBridgeClient(t)
+	return calls
+}
+
+// stubOVSBridgeClient replaces the OVS bridge bring-up with one that
+// connects app.ovsClient to a fake client, so bond creation runs through
+// AddBond the way it does against a live OVSDB.
+func stubOVSBridgeClient(t *testing.T) (*int, *fakeOVSClient) {
+	t.Helper()
 	calls := 0
+	client := &fakeOVSClient{}
 	original := initOVSBridgeFn
-	initOVSBridgeFn = func(*App, context.Context) error {
+	initOVSBridgeFn = func(app *App, _ context.Context) error {
 		calls++
+		app.ovsClient = client
 		return nil
 	}
 	t.Cleanup(func() { initOVSBridgeFn = original })
-	return &calls
+	return &calls, client
+}
+
+// fakeOVSClient is the slice of ovs.ClientInterface bond creation uses.
+// Any other method panics on the nil embedded interface, so a new OVS
+// call on the cluster-network path shows up in these tests.
+type fakeOVSClient struct {
+	ovs.ClientInterface
+	bonds      []string
+	addBondErr error
+}
+
+func (f *fakeOVSClient) GetPort(_ context.Context, name string) (*ovs.Port, error) {
+	return nil, fmt.Errorf("port %s not found", name)
+}
+
+func (f *fakeOVSClient) AddBond(_ context.Context, _, bondName string, _ []string, _, _ string) (*ovs.Port, error) {
+	f.bonds = append(f.bonds, bondName)
+	if f.addBondErr != nil {
+		return nil, f.addBondErr
+	}
+	return &ovs.Port{Name: bondName}, nil
 }
 
 // raftHostAssigned reports whether assigned (entries "<port> <addr/len>")
@@ -224,6 +257,79 @@ func TestInitNetworkAndStores_RaftAddressUpAtDatastoreStart(t *testing.T) {
 
 	require.NoError(t, a.initNetworkAndStores(context.Background()))
 	assert.True(t, started, "datastore never started")
+}
+
+// TestInitNetworkAndStores_BondCreatedBeforeStores covers PR #1867
+// Codex round 4: the Type=ovs bond is the physical path to the Raft
+// peers, so it must be created in OVS before the datastore starts.
+func TestInitNetworkAndStores_BondCreatedBeforeStores(t *testing.T) {
+	a := zoneAddressApp(t)
+	a.NetworkConfig.Bonds[0].Mode = "balance-tcp"
+	a.QuicBaaSConfig = &quicbaas.Config{
+		NodeID:        1,
+		RaftAddress:   "10.4.6.10:63000",
+		JoinAddresses: []string{"1=10.4.6.10:63000", "2=10.4.6.11:63000", "3=10.4.6.12:63000"},
+	}
+	_, client := stubOVSBridgeClient(t)
+	stubZonePorts(t, newFakeZonePorts())
+	stubBridgeNetlink(t)
+	stubProbe(t, func(context.Context, string, net.IP) error { return nil })
+
+	started := false
+	original := initStoresFn
+	initStoresFn = func(*App) error {
+		started = true
+		assert.Equal(t, []string{"bond0"}, client.bonds,
+			"datastore started before OVS bond bond0 was created")
+		return nil
+	}
+	t.Cleanup(func() { initStoresFn = original })
+
+	require.NoError(t, a.initNetworkAndStores(context.Background()))
+	assert.True(t, started, "datastore never started")
+	assert.True(t, a.sdnLinksUp)
+}
+
+// TestInitNetworkAndStores_FailedBondFailsBeforeStores covers PR #1867
+// Codex round 4: an AddBond failure fails cluster-network preparation,
+// keeps the datastore stopped and leaves the links retryable.
+func TestInitNetworkAndStores_FailedBondFailsBeforeStores(t *testing.T) {
+	a := zoneAddressApp(t)
+	a.NetworkConfig.Bonds[0].Mode = "balance-tcp"
+	a.QuicBaaSConfig = &quicbaas.Config{
+		NodeID:        1,
+		RaftAddress:   "10.4.6.10:63000",
+		JoinAddresses: []string{"1=10.4.6.10:63000", "2=10.4.6.11:63000", "3=10.4.6.12:63000"},
+	}
+	_, client := stubOVSBridgeClient(t)
+	client.addBondErr = errors.New("ovsdb: bond member eth7 busy")
+	stubZonePorts(t, newFakeZonePorts())
+	stubBridgeNetlink(t)
+	stubProbe(t, func(context.Context, string, net.IP) error { return nil })
+
+	started := false
+	original := initStoresFn
+	initStoresFn = func(*App) error {
+		started = true
+		return nil
+	}
+	t.Cleanup(func() { initStoresFn = original })
+
+	err := a.initNetworkAndStores(context.Background())
+	require.Error(t, err)
+	var clusterErr ErrClusterNetworkLinkSetup
+	require.ErrorAs(t, err, &clusterErr)
+	assert.ErrorAs(t, err, new(ErrSDNLinkSetup))
+	assert.Contains(t, err.Error(), "bond bond0", "error does not name the bond")
+	assert.Equal(t, []string{"bond0"}, client.bonds)
+	assert.False(t, a.sdnLinksUp)
+	assert.False(t, started, "datastore started after a failed OVS bond")
+
+	client.addBondErr = nil
+	require.NoError(t, a.initNetworkAndStores(context.Background()))
+	assert.Equal(t, []string{"bond0", "bond0"}, client.bonds, "bond creation not retried")
+	assert.True(t, a.sdnLinksUp)
+	assert.True(t, started, "datastore never started after the retry")
 }
 
 // A failed zone address of a clustered node fails cluster-network
