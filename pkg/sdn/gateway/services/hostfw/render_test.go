@@ -215,6 +215,32 @@ func TestRender_VIPDenyDeduplicatesAddresses(t *testing.T) {
 	assert.Len(t, rendered.Rules, 7, "6 base rules plus 1 VIP deny")
 }
 
+// TestRender_VIPDenyLinkLocalKeepsItsInterface pins ruling 673 (Codex #1716
+// round 5): an IPv6 link-local VIP is scoped to its link, so fe80::1 held
+// accept-mode off on br-int must not drop fe80::1 traffic on eth1. Each
+// link-local deny matches its own interface and dedups per interface.
+func TestRender_VIPDenyLinkLocalKeepsItsInterface(t *testing.T) {
+	ll := netip.MustParseAddr("fe80::1")
+	rendered, err := Render(Ruleset{VIPDeny: []VIPDeny{
+		{Interface: "br-int", Address: ll},
+		{Interface: "eth1", Address: ll},
+		{Interface: "br-int", Address: ll},
+	}})
+	require.NoError(t, err)
+	byKind := map[RuleKind][]string{}
+	for _, r := range rendered.Rules {
+		if r.Kind == RuleVIPDeny || r.Kind == RuleVIPDenyICMPv6 {
+			assert.Equal(t, ll, r.Destination)
+			byKind[r.Kind] = append(byKind[r.Kind], r.Interface)
+		}
+	}
+	assert.ElementsMatch(t, []string{"br-int", "eth1"}, byKind[RuleVIPDeny])
+	assert.ElementsMatch(t, []string{"br-int", "eth1"}, byKind[RuleVIPDenyICMPv6])
+	assert.Contains(t, rendered.Text, `iifname "br-int" ip6 daddr fe80::1 meta l4proto != ipv6-icmp drop`)
+	assert.Contains(t, rendered.Text, `iifname "eth1" ip6 daddr fe80::1 meta l4proto != ipv6-icmp drop`)
+	assert.Len(t, rendered.Rules, 10, "6 base rules plus 2 link-local VIP deny pairs")
+}
+
 func TestRuleset_ValidateVIPDeny(t *testing.T) {
 	bad := []VIPDeny{
 		{Interface: "", Address: netip.MustParseAddr("10.4.200.1")},

@@ -116,6 +116,7 @@ type fakeProgrammer struct {
 	claimed chan string
 	addErr  error
 	delErr  error
+	hasErr  error
 }
 
 func newFakeProgrammer() *fakeProgrammer {
@@ -160,6 +161,9 @@ func (p *fakeProgrammer) holds(iface string, prefix string) bool {
 // HasAddress makes fakeProgrammer an AddressReader: an address seeded in
 // addrs before Start is one the speaker found on the interface.
 func (p *fakeProgrammer) HasAddress(iface string, prefix netip.Prefix) (bool, error) {
+	if p.hasErr != nil {
+		return false, p.hasErr
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	_, ok := p.addrs[iface+"/"+prefix.String()]
@@ -652,6 +656,50 @@ func TestSpeaker_RestartedBackupRemovesAStaleVIP(t *testing.T) {
 	assert.Equal(t, StateBackup, state)
 	assert.False(t, prog.holds("br-int", "10.4.200.1/24"), "the restarted backup removed the stale VIP before entering Backup")
 	assert.True(t, progHigh.holds("br-int", "10.4.200.1/24"), "the peer master keeps its VIP")
+}
+
+// TestSpeaker_StartFailsWhenTheStaleVIPCheckFails pins ruling 673 (Codex
+// #1716 round 5): a backup that cannot tell whether a stale VIP is on its
+// interface must not start, or it could keep answering ARP/ND for the
+// master's address while Health shows no error.
+func TestSpeaker_StartFailsWhenTheStaleVIPCheckFails(t *testing.T) {
+	seg := newSegment()
+	prog := newFakeProgrammer()
+	prog.hasErr = errors.New("netlink: dump failed")
+	s, err := New(speakerConfig(200, "10.4.200.10"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: prog, Clock: newFakeClock(t0), Logger: quietLogger()})
+	require.NoError(t, err)
+
+	err = s.Start(context.Background())
+	var aof *ErrAddressOperationFailed
+	require.True(t, errors.As(err, &aof), "got %v", err)
+	assert.Equal(t, "list", aof.Operation)
+	assert.False(t, s.Active())
+	seg.mu.Lock()
+	require.Len(t, seg.conns, 1)
+	conn := seg.conns[0]
+	seg.mu.Unlock()
+	select {
+	case <-conn.closed:
+	default:
+		t.Fatal("the socket opened for the failed group was not closed")
+	}
+}
+
+// TestSpeaker_StartFailsWhenTheStaleVIPRemovalFails pins ruling 673: a stale
+// VIP the backup cannot remove fails the start instead of being logged.
+func TestSpeaker_StartFailsWhenTheStaleVIPRemovalFails(t *testing.T) {
+	seg := newSegment()
+	prog := newFakeProgrammer()
+	prog.addrs["br-int/10.4.200.1/24"] = nil
+	prog.delErr = errors.New("netlink: permission denied")
+	s, err := New(speakerConfig(200, "10.4.200.10"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: prog, Clock: newFakeClock(t0), Logger: quietLogger()})
+	require.NoError(t, err)
+
+	err = s.Start(context.Background())
+	var aof *ErrAddressOperationFailed
+	require.True(t, errors.As(err, &aof), "got %v", err)
+	assert.Equal(t, "delete", aof.Operation)
+	assert.False(t, s.Active())
 }
 
 func TestWallClock(t *testing.T) {
