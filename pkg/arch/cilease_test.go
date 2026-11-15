@@ -779,6 +779,118 @@ func TestCIKeepsTheImageArchiveOutOfTheCheckout(t *testing.T) {
 	require.Contains(t, string(data), "name: "+ciArchiveTrivy)
 }
 
+// ciShellJob is a job's steps as plain names and run scripts.
+type ciShellJob struct {
+	Steps []struct {
+		Name string `yaml:"name"`
+		Run  string `yaml:"run"`
+	} `yaml:"steps"`
+}
+
+const (
+	registryConfigMake = `registry_config=$(mktemp -d "$RUNNER_TEMP/docker-config.XXXXXX") || exit 1`
+	registryConfigUse  = `DOCKER_CONFIG=$registry_config docker `
+	registryConfigRm   = `rm -rf "$registry_config"`
+)
+
+var registryRefRemoval = regexp.MustCompile(`docker (rmi|image rm)\b[^\n]*"\$(ref|IT_IMAGE_REF)"`)
+
+// registryCredentialFindings holds Codex P1s (a) and (c) on #1919: a
+// registry login writes only to a per-job Docker config under RUNNER_TEMP
+// that the step's EXIT trap removes, and no job removes a registry
+// reference (the reaper owns them).
+func registryCredentialFindings(jobs map[string]ciShellJob) []error {
+	var errs []error
+	for id, job := range jobs {
+		for _, step := range job.Steps {
+			if (id == "integration-image" || id == "integration") && registryRefRemoval.MatchString(step.Run) {
+				errs = append(errs, fmt.Errorf("%s / %q removes the registry reference; the reaper owns it", id, step.Name))
+			}
+			if !strings.Contains(step.Run, "docker login") {
+				continue
+			}
+			lines := strings.Split(step.Run, "\n")
+			made, trapped := -1, -1
+			for i, line := range lines {
+				line = strings.TrimSpace(line)
+				switch {
+				case line == registryConfigMake && made < 0:
+					made = i
+				case strings.HasPrefix(line, "trap "):
+					if made >= 0 && strings.Contains(line, registryConfigRm) && strings.HasSuffix(line, " EXIT") {
+						trapped = i
+					} else if trapped >= 0 {
+						errs = append(errs, fmt.Errorf("%s / %q replaces the EXIT trap that removes the Docker config", id, step.Name))
+					}
+				}
+				for _, cmd := range []string{"docker login", "docker push", "docker pull"} {
+					if strings.Contains(line, cmd) && !strings.Contains(line, registryConfigUse+strings.TrimPrefix(cmd, "docker ")) {
+						errs = append(errs, fmt.Errorf("%s / %q runs %s outside the per-job Docker config: %s", id, step.Name, cmd, line))
+					}
+					if strings.Contains(line, cmd) && (made < 0 || trapped < 0) {
+						errs = append(errs, fmt.Errorf("%s / %q runs %s before making the Docker config and trapping its removal", id, step.Name, cmd))
+					}
+				}
+			}
+			if made < 0 {
+				errs = append(errs, fmt.Errorf("%s / %q logs in without %s", id, step.Name, registryConfigMake))
+			}
+			if trapped < 0 {
+				errs = append(errs, fmt.Errorf("%s / %q does not remove the Docker config in its EXIT trap", id, step.Name))
+			}
+		}
+	}
+	return errs
+}
+
+func ciShellJobs(t *testing.T) map[string]ciShellJob {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), ".github", "workflows", "ci.yml"))
+	require.NoError(t, err)
+	var wf struct {
+		Jobs map[string]ciShellJob `yaml:"jobs"`
+	}
+	require.NoError(t, yaml.Unmarshal(data, &wf))
+	require.Contains(t, wf.Jobs, "integration-image")
+	require.Contains(t, wf.Jobs, "integration")
+	return wf.Jobs
+}
+
+func TestCIRegistryLoginsUseAPerJobDockerConfigAndLeaveRegistryRefsToTheReaper(t *testing.T) {
+	jobs := ciShellJobs(t)
+	logins := 0
+	for _, job := range jobs {
+		for _, step := range job.Steps {
+			logins += strings.Count(step.Run, "docker login")
+		}
+	}
+	require.GreaterOrEqual(t, logins, 2, "the push and the pull step log in to the registry")
+	require.Empty(t, registryCredentialFindings(jobs))
+}
+
+func TestRegistryCredentialFindingsRejectTheRunnersDockerConfig(t *testing.T) {
+	job := func(run string) map[string]ciShellJob {
+		var j ciShellJob
+		j.Steps = append(j.Steps, struct {
+			Name string `yaml:"name"`
+			Run  string `yaml:"run"`
+		}{Name: "push", Run: run})
+		return map[string]ciShellJob{"integration-image": j}
+	}
+	good := registryConfigMake + "\ntrap 'image_unlock; " + registryConfigRm + "' EXIT\n" +
+		"printf x | DOCKER_CONFIG=$registry_config docker login --password-stdin r\nDOCKER_CONFIG=$registry_config docker push \"$ref\"\n"
+	require.Empty(t, registryCredentialFindings(job(good)))
+	for name, run := range map[string]string{
+		"default config": "printf x | docker login --password-stdin r\ndocker push \"$ref\"\n",
+		"no trap":        registryConfigMake + "\nprintf x | DOCKER_CONFIG=$registry_config docker login r\n",
+		"trap replaced":  registryConfigMake + "\ntrap '" + registryConfigRm + "' EXIT\ntrap image_unlock EXIT\nprintf x | DOCKER_CONFIG=$registry_config docker login r\n",
+		"push outside":   good + "docker push \"$ref\"\n",
+		"producer rmi":   good + "trap 'docker rmi \"$ref\"' EXIT\n",
+	} {
+		require.NotEmpty(t, registryCredentialFindings(job(run)), name)
+	}
+}
+
 func TestImageArchiveFindingsRejectAnArchiveInTheCheckout(t *testing.T) {
 	const workflow = `name: CI
 on:

@@ -37,7 +37,8 @@ resolve() {
   else echo "Error response from daemon: No such image: $1" >&2; return 1; fi
 }
 case "$1" in
-  login) exit 0 ;;
+  login) cat >/dev/null; exit 0 ;;
+  push) resolve "$2" >/dev/null || exit 1; echo "$2" >> "$s/pushed" ;;
   pull) echo "$FAKE_IMAGE_ID" > "$s/tags/$(enc "$2")" ;;
   tag) id=$(resolve "$2") || exit 1; echo "$id" > "$s/tags/$(enc "$3")" ;;
   rmi) rm "$s/tags/$(enc "$2")" 2>/dev/null || exit 1 ;;
@@ -157,4 +158,83 @@ func TestCIRegistryPullSurvivesTwoLegsOnOneDaemon(t *testing.T) {
 	require.Contains(t, a.output, "leased=true", "leg A:\n%s", a.log)
 	require.Equal(t, "0", b.rc, "leg B, second to take the lock:\n%s", b.log)
 	require.Contains(t, b.output, "leased=true", "leg B:\n%s", b.log)
+}
+
+// twoProducerLock is the image lock both producers source. Producer B
+// tagged the registry reference first; when it drops the lock, producer A,
+// which built the same image id on the same daemon, runs its whole push
+// step. Producer B then pushes.
+const twoProducerLock = `image_lock() { return 0; }
+image_unlock() {
+  if [ -z "$PRODUCER_A_DONE" ]; then
+    export PRODUCER_A_DONE=1
+    if GITHUB_OUTPUT=$PRODUCER_A_OUT bash -e "$PUSH_STEP" > "$PRODUCER_A_LOG" 2>&1; then
+      echo 0 > "$PRODUCER_A_RC"
+    else
+      echo 1 > "$PRODUCER_A_RC"
+    fi
+  fi
+}
+`
+
+// Codex review of #1919 (P1, round 2): two producers of one image id on one
+// daemon share the registry reference. Producer A's exit must not remove
+// the reference producer B is about to push; the reaper owns it.
+func TestCIRegistryPushSurvivesTwoProducersOnOneDaemon(t *testing.T) {
+	wf := loadCIWorkflow(t, repoRoot(t), ciWorkflowFile)
+	_, steps := ciRawJob(t, wf, "integration-image")
+	var step string
+	for _, s := range steps {
+		if s.ID == "push" {
+			step = s.Run
+		}
+	}
+	require.NotEmpty(t, step, "job integration-image has no step with id push")
+
+	dir := t.TempDir()
+	bin, state, tmp := filepath.Join(dir, "bin"), filepath.Join(dir, "state"), filepath.Join(dir, "runner-temp")
+	for _, d := range []string{bin, filepath.Join(state, "tags"), filepath.Join(state, "containers"), tmp} {
+		require.NoError(t, os.MkdirAll(d, 0o755))
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "docker"), []byte(fakeRegistryDocker), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "image-lock.sh"), []byte(twoProducerLock), 0o644))
+	file := func(name string) string { return filepath.Join(dir, name) }
+	require.NoError(t, os.WriteFile(file("push.sh"), []byte(step), 0o644))
+	for _, name := range []string{"a.out", "b.out"} {
+		require.NoError(t, os.WriteFile(file(name), nil, 0o644))
+	}
+
+	cmd := exec.Command("bash", "-e", file("push.sh"))
+	cmd.Env = append(os.Environ(),
+		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"FAKE_DOCKER_STATE="+state,
+		"FAKE_IMAGE_ID=sha256:1111",
+		"RUNNER_TEMP="+tmp,
+		"IT_REGISTRY=registry.invalid:5000",
+		"IT_LEASE_ID=sha256:1111",
+		"REGISTRY_USER=ci", "REGISTRY_PASSWORD=secret",
+		"GITHUB_OUTPUT="+file("b.out"),
+		"PUSH_STEP="+file("push.sh"),
+		"PRODUCER_A_OUT="+file("a.out"),
+		"PRODUCER_A_LOG="+file("a.log"),
+		"PRODUCER_A_RC="+file("a.rc"),
+	)
+	out, err := cmd.CombinedOutput()
+	read := func(name string) string {
+		data, _ := os.ReadFile(file(name))
+		return strings.TrimSpace(string(data))
+	}
+	require.Equal(t, "0", read("a.rc"), "producer A:\n%s", read("a.log"))
+	require.NoError(t, err, "producer B, which pushes after producer A exits:\n%s", out)
+	ref := "image_ref=registry.invalid:5000/go-trusted-platform/it-image:1111"
+	require.Equal(t, ref, read("a.out"))
+	require.Equal(t, ref, read("b.out"))
+	pushed, err := os.ReadFile(filepath.Join(state, "pushed"))
+	require.NoError(t, err)
+	pushedRef := strings.TrimPrefix(ref, "image_ref=")
+	require.Equal(t, []string{pushedRef, pushedRef}, strings.Fields(string(pushed)), "both producers push")
+	// The per-job Docker configs are gone with their jobs.
+	left, err := filepath.Glob(filepath.Join(tmp, "docker-config.*"))
+	require.NoError(t, err)
+	require.Empty(t, left)
 }

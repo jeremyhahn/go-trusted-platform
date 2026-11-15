@@ -143,7 +143,8 @@ import)
 images)
   [ "${2:-}" = --filter ] && [ "${4:-}" = --format ] || unexpected "$*"
   repo=${3#reference=}
-  rows images | while IFS='|' read -r ref rest; do [ "${ref%:*}" != "$repo" ] || echo "$ref"; done
+  # A reference filter is a glob over the repository, as in docker.
+  rows images | while IFS='|' read -r ref rest; do case ${ref%:*} in $repo) echo "$ref" ;; esac; done
   ;;
 image)
   case ${2:-} in
@@ -379,6 +380,41 @@ func TestReaperRemovesAStaleUnusedImageUnderTheImageLock(t *testing.T) {
 	// The lock is taken before the listing and dropped at the end.
 	require.Equal(t, []string{"import_" + reaperLock + ":base", "create_" + reaperLock, "rm_" + reaperLock}, run.lockLog)
 	require.NotContains(t, run.left, reaperLock)
+}
+
+// reaperRegistryRef is a LAN registry tag the integration image job pushes
+// (ruling 675); the reaper owns it, not the job that made it (#1919).
+const reaperRegistryRef = "registry.invalid:5000/go-trusted-platform/it-image"
+
+func TestReaperRemovesAStaleUnusedRegistryReference(t *testing.T) {
+	ref := reaperRegistryRef + ":0a1b2c3d4e5f6071"
+	run := runReaperOK(t, reapFixture{images: []reapImage{
+		{ref: ref, id: "sha256:old", created: 3 * time.Hour},
+	}}, reaperArgs)
+
+	require.Equal(t, []string{"image-rm-" + ref}, run.removed, run.out)
+	require.Contains(t, run.out, "reap  image "+ref)
+	require.Equal(t, []string{"import_" + reaperLock + ":base", "create_" + reaperLock, "rm_" + reaperLock}, run.lockLog)
+}
+
+func TestReaperKeepsAFreshOrUsedRegistryReference(t *testing.T) {
+	fresh, used := reaperRegistryRef+":fresh", reaperRegistryRef+":used"
+	run := runReaperOK(t, reapFixture{
+		images: []reapImage{
+			{ref: fresh, id: "sha256:fresh", created: 5 * time.Hour, tagged: 10 * time.Minute},
+			{ref: used, id: "sha256:shared", created: 5 * time.Hour},
+			{ref: reaperImage + ":leased", id: "sha256:shared", created: 5 * time.Hour},
+			// Another project's image in the same registry is not ours.
+			{ref: "registry.invalid:5000/other/it-image:stale", id: "sha256:other", created: 5 * time.Hour},
+		},
+		containers: []reapContainer{
+			{name: reaperPrefix + "lease-71000-1-0a0b0c0d", state: "created", age: time.Minute, image: reaperImage + ":leased"},
+		},
+	}, reaperArgs)
+
+	require.Empty(t, run.removed, run.out)
+	require.Contains(t, run.out, "keep  image "+fresh+" (created or tagged within 7200s)")
+	require.Contains(t, run.out, "keep  image "+used+" (in use: 1 container(s) on sha256:shared)")
 }
 
 func TestReaperKeepsAnImageCreatedOrTaggedWithinTheImageMinAge(t *testing.T) {
