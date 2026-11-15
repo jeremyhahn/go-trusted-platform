@@ -1,5 +1,5 @@
 import * as React from "react";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import ObjectStoragePage from "./page";
@@ -75,8 +75,23 @@ function stat(title: string): string {
 }
 
 async function renderPage() {
-  render(<ObjectStoragePage />);
-  await screen.findByText("docs/readme.txt");
+  // Flush the mocked call chain (listBuckets -> first bucket selected ->
+  // listObjects) through act() instead of polling the clock, so a slow
+  // first render on a loaded runner cannot run the wait out.
+  await act(async () => {
+    render(<ObjectStoragePage />);
+  });
+  for (let step = 0; step < 20 && store.listObjects.mock.calls.length === 0; step++) {
+    await act(async () => {
+      await admin.listBuckets.mock.results.at(-1)?.value;
+    });
+  }
+  for (let step = 0; step < 20 && !screen.queryByText("docs/readme.txt"); step++) {
+    await act(async () => {
+      await store.listObjects.mock.results.at(-1)?.value;
+    });
+  }
+  screen.getByText("docs/readme.txt");
 }
 
 async function openUpload(file: File) {
