@@ -118,6 +118,26 @@ func (r *ToolRegistry) registerDaemonTools() {
 			"properties": map[string]interface{}{},
 		},
 	})
+
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "platform_daemon_get_config",
+		Description: "Get the daemon configuration, one section or all of them",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"section": map[string]interface{}{"type": "string", "description": "Config section; empty returns every section"},
+			},
+		},
+	})
+
+	r.addTool(mcpwire.ToolDefinition{
+		Name:        "platform_daemon_reload_config",
+		Description: "Reload the daemon configuration from disk",
+		InputSchema: map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{},
+		},
+	})
 }
 
 // executeDaemonStatus returns the daemon status.
@@ -206,4 +226,53 @@ func (r *ToolRegistry) executeDaemonListProtocols(ctx context.Context, args map[
 		return nil, &mcpwire.WrappedError{Msg: "daemon list protocols", Err: err}
 	}
 	return marshalResult(result)
+}
+
+// executeDaemonGetConfig returns the daemon configuration.
+func (r *ToolRegistry) executeDaemonGetConfig(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	result, err := r.service.DaemonGetConfig(ctx, getString(args, "section"))
+	if err != nil {
+		return nil, &mcpwire.WrappedError{Msg: "daemon get config", Err: err}
+	}
+	return marshalResult(result)
+}
+
+// executeDaemonReloadConfig reloads the daemon configuration from disk.
+func (r *ToolRegistry) executeDaemonReloadConfig(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	result, err := r.service.DaemonReloadConfig(ctx)
+	if err != nil {
+		return nil, &mcpwire.WrappedError{Msg: "daemon reload config", Err: err}
+	}
+	return marshalResult(reloadConfigResponseShape(result))
+}
+
+// reloadConfigResponseShape nests a flattened success/message answer under
+// "status", the field platformv1.ReloadConfigResponse carries, so the SDK MCP
+// adapter decodes the same status object the gRPC method returns. A result
+// that already carries "status", or is not a map, passes through unchanged.
+func reloadConfigResponseShape(result interface{}) interface{} {
+	m, ok := result.(map[string]interface{})
+	if !ok {
+		return result
+	}
+	if _, has := m["status"]; has {
+		return result
+	}
+	_, hasSuccess := m["success"]
+	_, hasMessage := m["message"]
+	if !hasSuccess && !hasMessage {
+		return result
+	}
+	shaped := make(map[string]interface{}, len(m))
+	status := map[string]interface{}{}
+	for k, v := range m {
+		switch k {
+		case "success", "message":
+			status[k] = v
+		default:
+			shaped[k] = v
+		}
+	}
+	shaped["status"] = status
+	return shaped
 }

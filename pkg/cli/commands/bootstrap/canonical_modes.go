@@ -19,12 +19,16 @@
 package bootstrap
 
 import (
+	"bytes"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/cli"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/trust"
 )
 
 // PendingBootstrapBackendError is emitted by canonical TOFU modes that
@@ -101,16 +105,25 @@ func newCanonicalSPKICmd(getFlags func() *cli.CommonFlags) *cobra.Command {
 // bundle path out of band; the command validates the bundle and
 // stages it for ingestion by the trust bootstrap pipeline.
 func newCanonicalDirectCmd(getFlags func() *cli.CommonFlags) *cobra.Command {
-	var bundlePath string
+	var (
+		bundlePath           string
+		installToSystemTrust bool
+		certPath             string
+	)
 	cmd := &cobra.Command{
 		Use:   "direct",
 		Short: "Direct CA bundle copy (operator-supplied trust root)",
-		Long: `Bootstrap trust by copying a CA bundle PEM file directly. The operator
-supplies the CA bundle out of band; the command validates the file and
-records it as the active trust root for subsequent calls.
+		Long: `Bootstrap trust from a CA bundle PEM file supplied out of band. The
+command decodes every PEM block in the file; the bundle must hold only
+CERTIFICATE blocks (a private key or any other block is refused), and at
+least one must parse as an X.509 CA certificate. With
+--install-to-system-trust it writes only the certificates, re-encoded, to
+--cert-path; text around the blocks is not copied. Run the OS
+trust-store update command (e.g. update-ca-certificates) afterwards.
 
 Example:
-  platformctl bootstrap direct --bundle /path/to/ca.pem`,
+  platformctl bootstrap direct --bundle /path/to/ca.pem
+  platformctl bootstrap direct --bundle /path/to/ca.pem --install-to-system-trust`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if bundlePath == "" {
@@ -123,10 +136,80 @@ Example:
 			if info.IsDir() {
 				return &MessageError{Msg: fmt.Sprintf("bootstrap direct: %s is a directory", bundlePath)}
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Direct CA bundle accepted: %s (%d bytes)\n", bundlePath, info.Size())
+			bundle, err := os.ReadFile(bundlePath)
+			if err != nil {
+				return ErrFileReadFailed{Path: bundlePath, Err: err}
+			}
+			certs, caCount, err := validateDirectBundle(bundlePath, bundle)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Direct CA bundle accepted: %s (%d bytes, %d CA certificates)\n",
+				bundlePath, len(bundle), caCount)
+			if installToSystemTrust {
+				if err := trust.InstallToSystemTrust(certs, certPath); err != nil {
+					return ErrTrustInstallFailed{Path: certPath, Cause: err}
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "CA bundle installed to %s\n", certPath)
+			}
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&bundlePath, "bundle", "", "Path to the CA bundle PEM file")
+	cmd.Flags().BoolVar(&installToSystemTrust, "install-to-system-trust", false, "install the CA bundle into the system trust store")
+	cmd.Flags().StringVar(&certPath, "cert-path", defaultCertPath, "system trust store certificate path")
 	return cmd
+}
+
+// pemBeginBoundary opens every PEM block.
+var pemBeginBoundary = []byte("-----BEGIN ")
+
+// validateDirectBundle decodes every PEM block in bundle, parses each
+// CERTIFICATE block and returns the number of CA certificates found. It
+// fails when the bundle holds no PEM block, a CERTIFICATE block does not
+// parse, a BEGIN boundary does not open a well-formed block, or no
+// certificate is a CA. Text outside the blocks is ignored.
+func validateDirectBundle(path string, bundle []byte) ([]byte, int, error) {
+	var blocks, caCount int
+	var certs []byte
+	rest := bundle
+	for {
+		// pem.Decode silently skips a malformed candidate and returns nil
+		// for an undecodable remainder, so locate each BEGIN boundary
+		// here and require that the block it opens decodes on its own.
+		start := bytes.Index(rest, pemBeginBoundary)
+		if start < 0 {
+			break
+		}
+		offset := len(bundle) - len(rest) + start
+		candidate := rest[start:]
+		block, next := pem.Decode(candidate)
+		if block == nil {
+			return nil, 0, ErrDirectBundleMalformedPEM{Path: path, Offset: offset}
+		}
+		consumed := candidate[:len(candidate)-len(next)]
+		if bytes.Contains(consumed[len(pemBeginBoundary):], pemBeginBoundary) {
+			return nil, 0, ErrDirectBundleMalformedPEM{Path: path, Offset: offset}
+		}
+		rest = next
+		blocks++
+		if block.Type != "CERTIFICATE" {
+			return nil, 0, ErrDirectBundleNonCertificateBlock{Path: path, Type: block.Type}
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, 0, ErrDirectBundleInvalidCert{Path: path, Cause: err}
+		}
+		if cert.IsCA {
+			caCount++
+		}
+		certs = append(certs, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: block.Bytes})...)
+	}
+	if blocks == 0 {
+		return nil, 0, ErrDirectBundleNotPEM{Path: path}
+	}
+	if caCount == 0 {
+		return nil, 0, ErrDirectBundleNoCA{Path: path}
+	}
+	return certs, caCount, nil
 }

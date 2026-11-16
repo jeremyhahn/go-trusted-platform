@@ -735,6 +735,10 @@ func toolPermissionCatalog() map[string]string {
 	permissions["platform_daemon_start_service"] = "platform:write"
 	permissions["platform_daemon_stop_service"] = "platform:write"
 	permissions["platform_daemon_restart_service"] = "platform:write"
+	// GetConfig and ReloadConfig carry the scopes of their gRPC twins
+	// (/platform.v1.PlatformDaemon/GetConfig and /ReloadConfig).
+	permissions["platform_daemon_get_config"] = "platform:read"
+	permissions["platform_daemon_reload_config"] = "platform:write"
 
 	// Provisioning tools (#304) take the scope of their gRPC
 	// ConfigDeliveryService twin. The operator session tools need a
