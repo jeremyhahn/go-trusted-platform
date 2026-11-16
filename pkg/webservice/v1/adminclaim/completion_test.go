@@ -230,6 +230,27 @@ func TestFinishPasskey_SingleInstanceTakesTheLeaseWhenWired(t *testing.T) {
 	assert.Zero(t, store.size())
 }
 
+// TestMultiInstanceRefusesTheClaimEvenWithTheLease pins the refusal Codex
+// round 3 restored on #1906: the completion lease does not fence a
+// timed-out enrolment (a cancelled remote FinishRegistration can still
+// commit after the deferred release), so a second instance could enrol a
+// second authenticator. Until enrolment checks lease ownership, a
+// multi-instance deployment refuses the ceremony with the lease wired too.
+func TestMultiInstanceRefusesTheClaimEvenWithTheLease(t *testing.T) {
+	store := newFakeTxnStore()
+	h := newHarnessWith(t, multiInstance(store, &fakeFactors{resp: &quicbaassdk.AuthFactorListResponse{}}))
+
+	var refused ErrMultiInstanceUnsupported
+	_, _, err := h.svc.Challenge(context.Background())
+	require.ErrorAs(t, err, &refused, "the entry point refuses")
+
+	_, err = h.svc.FinishPasskey(context.Background(), "any-token",
+		&quicbaassdk.FIDO2FinishRegistrationRequest{})
+	require.ErrorAs(t, err, &refused, "the completion refuses")
+	assert.Zero(t, h.ceremony.finishCalls.Load(), "no enrolment on a multi-instance deployment")
+	assert.Zero(t, store.size(), "no lease is taken")
+}
+
 func TestCompletionLock_ExpiredLeaseIsTakenOver(t *testing.T) {
 	store := newFakeTxnStore()
 	stale := leaseJSON(t, "dead-instance", time.Now().Add(-time.Second))
