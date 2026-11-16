@@ -172,17 +172,29 @@ func sharedAlpineISO(t *testing.T, ctx context.Context, cmd ISOCommands) string 
 			return
 		}
 		sharedAlpine.dir = dir
-		result, err := cmd.Download(ctx, DownloadOptions{
-			Version: DefaultAlpineVersion,
-			Mirror:  DefaultMirror,
-			Arch:    DefaultArch,
-			WorkDir: dir,
-			Verify:  true,
-		})
-		if err != nil {
-			sharedAlpine.err = fmt.Errorf("downloading the shared Alpine ISO: %w", err)
-			return
+		download := func(mirror string) (*DownloadResult, error) {
+			return cmd.Download(ctx, DownloadOptions{
+				Version: DefaultAlpineVersion,
+				Mirror:  mirror,
+				Arch:    DefaultArch,
+				WorkDir: dir,
+				Verify:  true,
+			})
 		}
+		mirror := DefaultMirror
+		result, err := download(mirror)
+		if err != nil {
+			t.Logf("shared Alpine ISO from %s failed (%v); trying %s", DefaultMirror, err, FallbackMirror)
+			mirror = FallbackMirror
+			var fallbackErr error
+			result, fallbackErr = download(mirror)
+			if fallbackErr != nil {
+				sharedAlpine.err = fmt.Errorf("downloading the shared Alpine ISO: %s: %w; %s: %w",
+					DefaultMirror, err, FallbackMirror, fallbackErr)
+				return
+			}
+		}
+		t.Logf("shared Alpine ISO served by %s", mirror)
 		isoPath := alpineISOPath(dir)
 		if result != nil && result.ISOPath != "" {
 			isoPath = result.ISOPath
