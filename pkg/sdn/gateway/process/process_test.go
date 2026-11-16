@@ -1579,6 +1579,68 @@ func TestCrashLoop_StopsAtTheRestartBudget(t *testing.T) {
 	assert.Equal(t, 3, launcher.launchCount(), "no fourth launch after the budget is gone")
 }
 
+// requireNotifySocketGone waits for the last launch's notify socket to be
+// closed: Close removes the path, and a closed socket is what ends the
+// launch's notify reader (Codex P1 #1926).
+func requireNotifySocketGone(t *testing.T, launcher *fakeLauncher, why string) {
+	t.Helper()
+	path := launcher.lastSpec(t).NotifySocket
+	require.NotEmpty(t, path)
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(path)
+		return os.IsNotExist(err)
+	}, 5*time.Second, 10*time.Millisecond, why)
+}
+
+func TestCrashLoop_ExhaustedBudgetClosesTheNotifySocket(t *testing.T) {
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
+		c.RestartBackoff = time.Millisecond
+		c.RestartBudget = 2
+	})
+	ctx := testContext(t)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceTransit))
+
+	child := launcher.lastChild()
+	for i := 0; i < 3; i++ {
+		child.exit(errors.New("signal: killed"))
+		if i < 2 {
+			child = awaitRelaunch(t, supervisor, launcher, "routing", i+2)
+		}
+	}
+	var exhausted *ErrRestartBudgetExhausted
+	require.Eventually(t, func() bool {
+		return errors.As(supervisor.ServiceHealth(gateway.ServiceTransit), &exhausted)
+	}, 20*time.Second, 10*time.Millisecond)
+
+	// No launch follows, so nothing else would ever close the dead child's
+	// socket and its reader would block in Receive for good.
+	requireNotifySocketGone(t, launcher, "the reaped child's notify socket is closed")
+}
+
+func TestRestart_AnUnservingChildsNotifySocketIsClosed(t *testing.T) {
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
+		c.RestartBackoff = time.Millisecond
+		c.ReadyTimeout = 150 * time.Millisecond
+		c.RestartBudget = 2
+	})
+	ctx := testContext(t)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceTransit))
+
+	launcher.mu.Lock()
+	launcher.mute = true
+	launcher.mu.Unlock()
+	launcher.lastChild().exit(errors.New("signal: killed"))
+
+	var exhausted *ErrRestartBudgetExhausted
+	require.Eventually(t, func() bool {
+		return errors.As(supervisor.ServiceHealth(gateway.ServiceTransit), &exhausted)
+	}, 10*time.Second, 20*time.Millisecond)
+
+	// The last attempt was torn down by stopUnservingChild: its socket
+	// goes with it.
+	requireNotifySocketGone(t, launcher, "an unserving child's notify socket is closed on teardown")
+}
+
 // provisioningConfig enables the three sections the provisioning process
 // hosts. None of them has a backend yet, so in process each one is a
 // refusal; sup is nil for a gateway with the process model off.
