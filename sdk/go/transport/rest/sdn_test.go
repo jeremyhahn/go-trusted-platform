@@ -260,6 +260,22 @@ func TestSDN_SDKOverREST_EveryCallReachesItsRoute(t *testing.T) {
 			},
 			method: http.MethodGet, path: "/api/v1/sdn/vlans", query: "bridge_id=br-int",
 		},
+		{
+			name: "DeleteVLAN",
+			call: func(c platformv1.SDNServiceClient) error {
+				_, err := c.DeleteVLAN(ctx, &platformv1.DeleteVLANRequest{BridgeId: "br-int", VlanId: 20})
+				return err
+			},
+			method: http.MethodDelete, path: "/api/v1/sdn/vlans/20", query: "bridge_id=br-int",
+		},
+		{
+			name: "DeletePolicy",
+			call: func(c platformv1.SDNServiceClient) error {
+				_, err := c.DeletePolicy(ctx, &platformv1.DeletePolicyRequest{PolicyId: "p1"})
+				return err
+			},
+			method: http.MethodDelete, path: "/api/v1/sdn/policies/p1",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
