@@ -421,7 +421,17 @@ a netboot media set, and an upgrade.
 `tag-identity`, after the build succeeds. A registration failure fails the
 command, and the image is still left on disk. The verb ships in go-quicbaas
 v0.14.0-alpha, and the platform pins v0.12.0-alpha (#720), so registration
-is the last code slice.
+is the last code slice. `diskimage.Create` already calls
+`BuildConfig.ReferenceValues` after it writes the manifest and fails the
+build on its error; the command wires the go-quicbaas client into it once the
+pin reaches v0.14.0-alpha, and until then reports the manifest as not
+registered.
+
+**Netboot sets and upgrades (not yet).** A netboot media set is staged
+through `diskimage.StageMedia` without an assembled ESP: its UKI is built
+by the installer on the device (`installer` `uki_rebuild`), so the staging
+host has no UKI to predict PCR 4 from. These paths need the UKI built
+centrally first, then the same `measureImage` and `publishManifest` steps.
 
 **Open questions for approval:**
 
