@@ -37,11 +37,13 @@ func (m *mockTokenValidator) ValidateToken(ctx context.Context, token string) (*
 
 // mockPEPClient implements iam.PEPClient for testing.
 type mockPEPClient struct {
-	checkResp *iam.CheckResponse
-	checkErr  error
+	checkResp  *iam.CheckResponse
+	checkErr   error
+	checkCalls int
 }
 
 func (m *mockPEPClient) Check(ctx context.Context, req *iam.CheckRequest) (*iam.CheckResponse, error) {
+	m.checkCalls++
 	if m.checkErr != nil {
 		return nil, m.checkErr
 	}
@@ -69,9 +71,8 @@ func TestNewQuicBaaSAuthAdapter(t *testing.T) {
 		pepClient := &mockPEPClient{}
 
 		adapter := NewQuicBaaSAuthAdapter(&QuicBaaSAuthConfig{
-			TokenValidator:  validator,
-			PEPClient:       pepClient,
-			DefaultTenantID: "default-tenant",
+			TokenValidator: validator,
+			PEPClient:      pepClient,
 		})
 
 		if adapter.tokenValidator != validator {
@@ -79,9 +80,6 @@ func TestNewQuicBaaSAuthAdapter(t *testing.T) {
 		}
 		if adapter.pepClient != pepClient {
 			t.Error("PEP client not set")
-		}
-		if adapter.defaultTenantID != "default-tenant" {
-			t.Errorf("defaultTenantID = %s, want default-tenant", adapter.defaultTenantID)
 		}
 	})
 }
@@ -452,7 +450,7 @@ func TestQuicBaaSAuthAdapter_CheckPermission(t *testing.T) {
 		}
 	})
 
-	t.Run("uses default tenant when not in token", func(t *testing.T) {
+	t.Run("refuses a token with no tenant", func(t *testing.T) {
 		validator := &mockTokenValidator{
 			result: &TokenValidationResult{
 				Valid:  true,
@@ -464,18 +462,24 @@ func TestQuicBaaSAuthAdapter_CheckPermission(t *testing.T) {
 			checkResp: &iam.CheckResponse{Allowed: true},
 		}
 		adapter := NewQuicBaaSAuthAdapter(&QuicBaaSAuthConfig{
-			TokenValidator:  validator,
-			PEPClient:       pepClient,
-			DefaultTenantID: "default-tenant",
+			TokenValidator: validator,
+			PEPClient:      pepClient,
 		})
 
 		allowed, err := adapter.CheckPermission(context.Background(), "test-token", "vtpm", "read")
 
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
+		if allowed {
+			t.Error("expected allowed to be false")
 		}
-		if !allowed {
-			t.Error("expected allowed to be true")
+		var authErr *QuicBaaSAuthError
+		if !errors.As(err, &authErr) {
+			t.Fatalf("expected *QuicBaaSAuthError, got %v", err)
+		}
+		if authErr.Code != QuicBaaSAuthErrorMissingTenant {
+			t.Errorf("error code = %d, want %d", authErr.Code, QuicBaaSAuthErrorMissingTenant)
+		}
+		if pepClient.checkCalls != 0 {
+			t.Errorf("PEP Check called %d times, want 0", pepClient.checkCalls)
 		}
 	})
 
@@ -557,15 +561,6 @@ func TestQuicBaaSAuthAdapter_HelperMethods(t *testing.T) {
 		})
 		if !adapter.HasPEPClient() {
 			t.Error("expected HasPEPClient to return true")
-		}
-	})
-
-	t.Run("SetDefaultTenantID", func(t *testing.T) {
-		adapter := NewQuicBaaSAuthAdapter(nil)
-		adapter.SetDefaultTenantID("new-tenant")
-
-		if adapter.defaultTenantID != "new-tenant" {
-			t.Errorf("defaultTenantID = %s, want new-tenant", adapter.defaultTenantID)
 		}
 	})
 
