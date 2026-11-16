@@ -271,7 +271,11 @@ same `ComputeService` as gRPC (§6).
 **The Go SDK carries each verb the daemon answers.** Its REST adapter maps all
 six lifecycle verbs to the routes above, with the id in the path and
 `delete_disks` as a query parameter, and sends the full `CreateVMRequest` as
-the body of `POST /api/v1/compute/vms`. Its MCP adapter maps all six, plus
+the body of `POST /api/v1/compute/vms`. It maps `AttachDisk`, `DetachDisk`,
+`ResizeDisk` and `MigrateVM` to `POST /api/v1/compute/vms/{id}/disks`,
+`DELETE` and `PATCH /api/v1/compute/vms/{id}/disks/{diskId}` and
+`POST /api/v1/compute/vms/{id}/migrate`, with `vm_id` and `disk_id` in the
+path and the rest of the request in the body. Its MCP adapter maps all six, plus
 create, get and list, to the `vm_*` tools and sends each RPC's full request,
 `force`, `timeout_seconds` and `delete_disks` included
 (`sdk/go/transport/mcp/compute_vm.go`). Its QUIC adapter maps all six, and
