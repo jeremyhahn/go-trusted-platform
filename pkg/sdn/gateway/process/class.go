@@ -21,6 +21,7 @@ package process
 
 import (
 	"slices"
+	"time"
 
 	"golang.org/x/sys/unix"
 
@@ -89,6 +90,11 @@ type Definition struct {
 	// them root-owned; the supervisor hands each that exists to the
 	// process's credentials before every launch, keeping its content.
 	StateFiles []string
+	// WatchdogInterval is how often the process must send WATCHDOG=1 once
+	// it is ready. The supervisor passes it to the child as WATCHDOG_USEC;
+	// a child silent for a whole interval is stopped and restarted under
+	// the restart policy. Zero turns the watchdog off.
+	WatchdogInterval time.Duration
 }
 
 // serviceFamilies are the address families every gateway process opens:
