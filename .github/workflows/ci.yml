@@ -237,6 +237,9 @@ env:
   # release.yml set the same).
   GOWORK: "off"
   GOFLAGS: "-buildvcs=false"
+  # sun_path is 108 bytes: the runner's _work/_temp TMPDIR makes t.TempDir()
+  # unix socket paths too long for bind, so tests use /tmp on every runner.
+  TMPDIR: /tmp
   # The full-tier selection (v1.23): every event but pull_request, and a PR
   # labelled ci:full. Steps and ci-gate read it; a job-level `if:` cannot.
   # v1.30 (fix 5): a workflow_dispatch off main is not the full tier (the
