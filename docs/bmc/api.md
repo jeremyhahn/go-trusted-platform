@@ -321,25 +321,30 @@ transport adapter maps them onto its own wire:
 | QUIC | `sdk/go/transport/quic/aab_bmc.go` (`bmcSubOpcodes`): method → `0x9F` sub-opcode | 23 of 23 |
 | MCP | `sdk/go/transport/mcp/bmc.go`: method → `platform_bmc_*` tool | 23 of 23 |
 | Embedded | `sdk/go/transport/embedded/dispatch.go` (`registerBMCHandlers`): method → `ServiceRegistry.BMC` | 23 of 23 |
-| REST | `sdk/go/transport/rest/adapter.go`: method → route template | **14 of 23** |
+| REST | `sdk/go/transport/rest/adapter.go`, `bmc_cert.go`: method → route template | **17 of 23** |
 
 A client on QUIC, MCP or embedded gets the reply and the refusal code its
 gRPC call gives.
 
 `sdk/go/transport/rest/adapter.go` templates gRPC method strings onto REST
-routes. It defines **14 of the 23 `platform.v1.BMCService` methods**: the five
+routes. It defines **17 of the 23 `platform.v1.BMCService` methods**: the five
 power RPCs, both boot-device RPCs, three virtual-media RPCs, sensors, system
-info, and both provisioning RPCs.
+info, both provisioning RPCs, `ReplaceWebCertificate`, and the `EnrollBMC` and
+`RestoreFactoryCert` ceremonies. Those last three are templated in
+`sdk/go/transport/rest/bmc_cert.go`, which also carries their wire shape: PEM
+crosses as text both ways (the proto fields are `bytes`), and the ceremony
+replies carry `device_id` as a decimal string and the certificate times as
+RFC 3339.
 
-Not mapped: `GetWebCertificate`, `ReplaceWebCertificate`, `ListUsers`,
-`CreateUser`, `DeleteUser`, `SetUserPassword`, `SetUserPrivilege`, `EnrollBMC`,
-`RestoreFactoryCert`.
+Not mapped: `GetWebCertificate`, `ListUsers`, `CreateUser`, `DeleteUser`,
+`SetUserPassword`, `SetUserPrivilege`.
 
-So an SDK client on `--transport rest` cannot reach certificate management,
-user management or either ceremony — **even though `platformd` serves all of
-those routes**. This is a client-side gap, distinct from the transport gaps in
-§3–§6, and it is why the `platformctl bmc cert` / `enroll` / `user` verbs use
-the gRPC path rather than the raw-HTTP path the other verbs use.
+So an SDK client on `--transport rest` cannot read the web certificate or reach
+user management — **even though `platformd` serves those routes**. This is a
+client-side gap, distinct from the transport gaps in §3–§6, and it is why the
+`platformctl bmc cert` / `user` verbs use the gRPC path rather than the
+raw-HTTP path the other verbs use. `platformctl bmc enroll` still uses gRPC
+too, although the SDK's REST transport now reaches the ceremony.
 
 
 
@@ -374,7 +379,7 @@ table are in [`docs/daemon/api.md`](../daemon/api.md) §4.
 | `MountVirtualMedia`, `UnmountVirtualMedia`, `ClearUEFIBootEntries` have no transport | 3 |
 | MAC discovery, protocol detection, vendor probe have no transport | 3 |
 | Password rotation and credential-store CRUD have no transport | 2 |
-| SDK REST adapter maps 14 of 23 RPCs | 9 |
+| SDK REST adapter maps 17 of 23 RPCs | 6 |
 | REST carries no BMC scope check (§8) | every REST route |
 
 All are recorded as `docs/13 G7` debt, not as design.
