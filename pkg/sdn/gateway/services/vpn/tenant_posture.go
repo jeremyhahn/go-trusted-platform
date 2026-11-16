@@ -39,7 +39,7 @@ type PosturePolicy struct {
 // tenantPosture is one tenant's compiled policy, or the reason it could not
 // be compiled. A broken policy refuses the tenant's admissions.
 type tenantPosture struct {
-	engine *opa.OPAEngine
+	engine PostureEvaluator
 	err    error
 }
 
@@ -104,16 +104,19 @@ func (s *Service) SetPosturePolicies(ctx context.Context, policies []PosturePoli
 
 // postureFor returns the evaluator and policy name that judge the tenant: its
 // own policy when one was delivered, else the gateway default.
-func (s *Service) postureFor(tenantID string) (PostureEvaluator, string, error) {
+func (s *Service) postureFor(tenantID string) (evaluator PostureEvaluator, lookup, name string, err error) {
 	if p := s.tenantPosture.Load(); p != nil {
 		if tp, ok := (*p)[tenantID]; ok {
 			if tp.err != nil {
-				return nil, "", tp.err
+				return nil, "", "", tp.err
 			}
-			return tp.engine, DefaultPosturePolicy, nil
+			// The tenant's module is loaded under DefaultPosturePolicy
+			// (CompilePosturePolicy), but SetPosturePolicies accepts only a
+			// policy named s.cfg.PosturePolicy: that is the name to report.
+			return tp.engine, DefaultPosturePolicy, s.cfg.PosturePolicy, nil
 		}
 	}
-	return s.deps.Posture, s.cfg.PosturePolicy, nil
+	return s.deps.Posture, s.cfg.PosturePolicy, s.cfg.PosturePolicy, nil
 }
 
 // PosturePolicyErrors returns, sorted, why each tenant's delivered policy is
