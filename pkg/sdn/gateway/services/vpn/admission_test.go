@@ -486,6 +486,55 @@ func TestAdmit_FailedRollbackRemovalIsOwedAndHoldsTheAddress(t *testing.T) {
 	assert.Equal(t, 0, h.ipam.allocatedCount(), "and releases the address")
 }
 
+func (f *fakeIPAM) failLookups(err error) {
+	f.mu.Lock()
+	f.getErr = err
+	f.mu.Unlock()
+}
+
+func (f *fakeIPAM) failReleases(err error) {
+	f.mu.Lock()
+	f.releaseErr = err
+	f.mu.Unlock()
+}
+
+// An owed peer whose removal succeeds but whose address lookup or release
+// fails stays owed: its lease record is gone, so only the retry set can
+// still find the allocation.
+func TestAdmit_AnOwedRemovalWhoseAddressCleanupFailsIsRetried(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fail func(h *harness, err error)
+	}{
+		{"lookup", func(h *harness, err error) { h.ipam.failLookups(err) }},
+		{"release", func(h *harness, err error) { h.ipam.failReleases(err) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var store *putFailStore
+			h := newHarnessWith(t, testConfig(), func(d *Deps) {
+				store = &putFailStore{LeaseStore: d.Leases}
+				d.Leases = store
+			})
+			store.failPuts(errors.New("disk full"))
+			h.plane.failRemovals(errors.New("datapath unreachable"))
+			_, err := h.svc.Admit(context.Background(), h.request(t))
+			var unavailable *ErrLeaseStoreUnavailable
+			require.True(t, errors.As(err, &unavailable), "got %v", err)
+			h.plane.failRemovals(nil)
+			store.failPuts(nil)
+
+			tc.fail(h, errors.New("ipam unreachable"))
+			h.svc.Sweep(context.Background())
+			require.Zero(t, h.plane.installedCount(), "the sweep removes the owed peer")
+			require.Equal(t, 1, h.ipam.allocatedCount(), "the address could not be released yet")
+
+			tc.fail(h, nil)
+			h.svc.Sweep(context.Background())
+			assert.Equal(t, 0, h.ipam.allocatedCount(), "a later sweep releases the address")
+		})
+	}
+}
+
 func TestSweep_ExpiredLeasesAreRevoked(t *testing.T) {
 	h := newHarness(t, testConfig())
 	lease, err := h.svc.Admit(context.Background(), h.request(t))

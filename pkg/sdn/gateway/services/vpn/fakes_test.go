@@ -259,15 +259,17 @@ func (p *fakePlane) count() int {
 // addresses, released back on Release.
 type fakeIPAM struct {
 	ipam.Allocator
-	mu        sync.Mutex
-	pool      *ipam.Pool
-	poolErr   error
-	next      netip.Addr
-	free      []netip.Addr
-	allocated map[netip.Addr]string
-	capacity  int
-	renewErr  error
-	releases  int
+	mu         sync.Mutex
+	pool       *ipam.Pool
+	poolErr    error
+	next       netip.Addr
+	free       []netip.Addr
+	allocated  map[netip.Addr]string
+	capacity   int
+	renewErr   error
+	releases   int
+	getErr     error
+	releaseErr error
 }
 
 func newFakeIPAM(capacity int) *fakeIPAM {
@@ -312,6 +314,9 @@ func (f *fakeIPAM) Allocate(_ context.Context, req *ipam.AllocationRequest) (*ip
 func (f *fakeIPAM) Release(_ context.Context, ip netip.Addr) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.releaseErr != nil {
+		return f.releaseErr
+	}
 	if _, ok := f.allocated[ip]; !ok {
 		return errors.New("not allocated")
 	}
@@ -324,6 +329,9 @@ func (f *fakeIPAM) Release(_ context.Context, ip netip.Addr) error {
 func (f *fakeIPAM) GetAllocation(_ context.Context, ip netip.Addr) (*ipam.Allocation, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
 	dev, ok := f.allocated[ip]
 	if !ok {
 		return nil, ipam.ErrAllocationNotFound
