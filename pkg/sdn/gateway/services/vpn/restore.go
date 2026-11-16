@@ -247,25 +247,28 @@ func (s *Service) holdsAddress(ctx context.Context, l *Lease) (bool, error) {
 // dropLease removes a lease Restore will not reinstate: the record is deleted
 // so the control plane forgets it too, and the address goes back to the pool
 // when the device holds it. A store that could not record the drop
-// (ErrRevocationNotRecorded) keeps the lease, and its address with it.
+// (ErrRevocationNotRecorded) keeps the lease, with its hosted peer and its
+// address: the deletion is recorded before the peer is removed.
 func (s *Service) dropLease(ctx context.Context, l *Lease, plane DataPlane, reason string, cause error) error {
 	dropped := &ErrLeaseNotRestored{LeaseID: l.ID, Reason: reason, Cause: cause}
 	s.logger.Warn("vpn.restore: lease dropped",
 		slog.String("lease", string(l.ID)), slog.String("device", l.DeviceID), slog.String("reason", reason))
-	// A hosted plane may still carry the lease's peer from before the vpn
-	// child restarted: remove it before the address can go to another device.
-	removeErr := s.removeRejectedPeer(ctx, l, plane)
+	// Record the deletion first: a lease the store keeps is reinstated by
+	// the next restart, so its peer must not go before the drop is recorded.
 	var storeErr error
 	if err := s.deps.Leases.Delete(ctx, l.ID); err != nil {
 		var nf *ErrLeaseNotFound
 		var unrecorded *ErrRevocationNotRecorded
 		if errors.As(err, &unrecorded) {
-			return errors.Join(dropped, removeErr, err)
+			return errors.Join(dropped, err)
 		}
 		if !errors.As(err, &nf) {
 			storeErr = err
 		}
 	}
+	// A hosted plane may still carry the lease's peer from before the vpn
+	// child restarted: remove it before the address can go to another device.
+	removeErr := s.removeRejectedPeer(ctx, l, plane)
 	if removeErr != nil {
 		// The peer may still route the address: keep it held until a
 		// retried reconciliation (Sweep) removes the peer.
