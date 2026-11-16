@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strconv"
+	"strings"
 	"syscall"
 	"unsafe"
 
@@ -50,6 +51,26 @@ type Spec struct {
 	// kernel places the child in at clone time (clone3 CLONE_INTO_CGROUP),
 	// so the child is never accounted outside its own limits.
 	CgroupFD int
+	// NotifySocket, when not empty, is the child's own sd_notify socket
+	// path, passed as NOTIFY_SOCKET in its environment in place of any the
+	// supervisor inherited (docs/gateway/supervisor.md).
+	NotifySocket string
+}
+
+// childEnv is base without any NOTIFY_SOCKET entry, plus the child's own
+// when notify is not empty. base is not modified.
+func childEnv(base []string, notify string) []string {
+	env := make([]string, 0, len(base)+1)
+	for _, kv := range base {
+		if strings.HasPrefix(kv, NotifySocketEnv+"=") {
+			continue
+		}
+		env = append(env, kv)
+	}
+	if notify != "" {
+		env = append(env, NotifySocketEnv+"="+notify)
+	}
+	return env
 }
 
 // Inherited holds the gatewayd root flags a child is started with. A child
@@ -157,7 +178,11 @@ func (l *ExecLauncher) Launch(ctx context.Context, spec Spec) (Child, error) {
 	// another; the arguments are a fixed verb plus paths from the daemon's
 	// own configuration. Nothing here comes from the network.
 	cmd := exec.CommandContext(ctx, binary, args...) // #nosec G204 -- gatewayd re-executes itself with a fixed argument shape
-	cmd.Env = l.Env
+	base := l.Env
+	if base == nil {
+		base = os.Environ()
+	}
+	cmd.Env = childEnv(base, spec.NotifySocket)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if l.Stdout != nil {

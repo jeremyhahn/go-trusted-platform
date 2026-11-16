@@ -126,43 +126,15 @@ func (app *App) initSDN(ctx context.Context) error {
 		return nil
 	}
 
-	if err := app.SDNConfig.Validate(); err != nil {
-		return ErrSDNConfigValidation{Cause: err}
-	}
-	// Every zone path into control-plane or management beyond the
-	// reference is an audited override: record it on every load.
-	app.SDNConfig.LogPrivilegedPaths(app.Logger.Slog())
-
-	app.Logger.Info("Initializing SDN controller",
-		slog.Bool("controller", app.SDNConfig.Controller))
-
-	// Initialize the OVS client and create the bridge
-	if app.SDNConfig.OVS != nil {
-		if err := app.initOVSBridge(ctx); err != nil {
-			return err
-		}
-	}
-
-	// Materialise OVS bonds + zone addresses from the installer
-	// NetworkConfig. This is the runtime counterpart to the Linux
-	// `/etc/network/interfaces` file: operators who mark a bond as Type=ovs
-	// delegate its creation to platformd so the bond lives inside OVS (not
-	// the kernel bonding driver), and every host address the bond declares
-	// lands on a tagged internal port of its zone.
-	// Linux-typed bonds are skipped here — the installer writes them into
-	// `/etc/network/interfaces` and Alpine's OpenRC networking brings
-	// them up before platformd starts.
-	if app.NetworkConfig != nil {
-		if err := app.initOVSBonds(ctx); err != nil {
-			// Non-fatal: log and continue so other SDN init steps still
-			// run. A missing bond isn't a control-plane-stopper; the
-			// operator can diagnose via `ip link` / `ovs-vsctl show`.
-			app.Logger.Warn("SDN: OVS bond initialisation failed",
-				slog.String("error", err.Error()))
-		}
-		if err := app.initZoneAddresses(ctx); err != nil {
-			app.Logger.Warn("SDN: zone address assignment failed",
-				slog.String("error", err.Error()))
+	// A clustered datastore already brought the links up before
+	// initStores (initClusterNetwork); do not create them twice.
+	if !app.sdnLinksUp {
+		if err := app.initSDNLinks(ctx); err != nil {
+			// A failed bond or zone address does not stop the IPAM
+			// steps; the links stay down and are retried next time.
+			if !errors.As(err, new(ErrSDNLinkSetup)) {
+				return err
+			}
 		}
 	}
 
@@ -183,6 +155,120 @@ func (app *App) initSDN(ctx context.Context) error {
 
 	return nil
 }
+
+// initSDNLinks is the part of SDN bring-up that needs no datastore: the OVS
+// bridge, the OVS bonds and the zone addresses on their tagged internal
+// ports. It records success in sdnLinksUp so initSDN does not repeat it.
+func (app *App) initSDNLinks(ctx context.Context) error {
+	if app.SDNConfig == nil || !app.SDNConfig.Enabled {
+		return nil
+	}
+
+	if err := app.SDNConfig.Validate(); err != nil {
+		return ErrSDNConfigValidation{Cause: err}
+	}
+	// Every zone path into control-plane or management beyond the
+	// reference is an audited override: record it on every load.
+	app.SDNConfig.LogPrivilegedPaths(app.Logger.Slog())
+
+	app.Logger.Info("Initializing SDN controller",
+		slog.Bool("controller", app.SDNConfig.Controller))
+
+	// Initialize the OVS client and create the bridge
+	if app.SDNConfig.OVS != nil {
+		if err := initOVSBridgeFn(app, ctx); err != nil {
+			return err
+		}
+	}
+
+	// Materialise OVS bonds + zone addresses from the installer
+	// NetworkConfig. This is the runtime counterpart to the Linux
+	// `/etc/network/interfaces` file: operators who mark a bond as Type=ovs
+	// delegate its creation to platformd so the bond lives inside OVS (not
+	// the kernel bonding driver), and every host address the bond declares
+	// lands on a tagged internal port of its zone.
+	// Linux-typed bonds are skipped here — the installer writes them into
+	// `/etc/network/interfaces` and Alpine's OpenRC networking brings
+	// them up before platformd starts.
+	// A bond or zone address that failed leaves sdnLinksUp false, so a
+	// later initSDN retries the link setup instead of skipping it.
+	if app.NetworkConfig != nil {
+		var linkErr error
+		if err := app.initOVSBonds(ctx); err != nil {
+			app.Logger.Warn("SDN: OVS bond initialisation failed",
+				slog.String("error", err.Error()))
+			linkErr = errors.Join(linkErr, err)
+		}
+		if err := app.initZoneAddresses(ctx); err != nil {
+			app.Logger.Warn("SDN: zone address assignment failed",
+				slog.String("error", err.Error()))
+			linkErr = errors.Join(linkErr, err)
+		}
+		if linkErr != nil {
+			return ErrSDNLinkSetup{Cause: linkErr}
+		}
+	}
+
+	app.sdnLinksUp = true
+	return nil
+}
+
+// ErrSDNLinkSetup reports that a bond or zone address of the SDN link
+// bring-up failed. It is not fatal to initSDN: the IPAM steps still run,
+// and the links stay marked down so the next bring-up retries them.
+type ErrSDNLinkSetup struct {
+	Cause error
+}
+
+func (e ErrSDNLinkSetup) Error() string {
+	return "SDN link setup incomplete: " + e.Cause.Error()
+}
+
+func (e ErrSDNLinkSetup) Unwrap() error { return e.Cause }
+
+// initOVSBridgeFn is initOVSBridge, held in a package variable so tests can
+// drive the link bring-up without an OVS database socket.
+var initOVSBridgeFn = (*App).initOVSBridge
+
+// initClusterNetwork brings up the host links before initStores when the
+// datastore is clustered (#1702). A clustered node's Raft transport binds its
+// raft-address, which lives on a zone port of an OVS bond that platformd
+// itself creates; on a fresh install that address exists only after the SDN
+// link bring-up, and the datastore cannot start (or reach quorum with peers
+// doing the same) without it. A standalone datastore keeps the original
+// order: storage first, SDN after.
+func (app *App) initClusterNetwork(ctx context.Context) error {
+	if app.QuicBaaSConfig == nil || !app.QuicBaaSConfig.IsClustered() {
+		return nil
+	}
+	// The host network is checked before any address is assigned, as the
+	// standalone path does before initSDN.
+	if err := app.validateHostNetwork(); err != nil {
+		return err
+	}
+	// A failed bond or zone address is fatal here, unlike in initSDN: the
+	// clustered datastore binds its explicit raft-address next, and Init
+	// would return on that bind failure before it reaches the initSDN
+	// retry. sdnLinksUp stays false, so the next preparation retries the
+	// links.
+	if err := app.initSDNLinks(ctx); err != nil {
+		return ErrClusterNetworkLinkSetup{Cause: err}
+	}
+	return nil
+}
+
+// ErrClusterNetworkLinkSetup reports that the SDN link bring-up of a
+// clustered node failed before its datastore started. Cause names the bond
+// or zone address that failed.
+type ErrClusterNetworkLinkSetup struct {
+	Cause error
+}
+
+func (e ErrClusterNetworkLinkSetup) Error() string {
+	return "cluster network: required link setup failed before the datastore start: " + e.Cause.Error()
+}
+
+func (e ErrClusterNetworkLinkSetup) Unwrap() error { return e.Cause }
 
 // OVS other_config keys derived from the platform OVSConfig. These are the
 // canonical Open_vSwitch other_config key names consumed by ovs-vswitchd.
@@ -729,6 +815,7 @@ func (app *App) initOVSBonds(ctx context.Context) error {
 		defaultBridge = app.SDNConfig.OVS.Bridge
 	}
 
+	var errs error
 	for _, bond := range app.NetworkConfig.Bonds {
 		// Type is new; existing templates that omit it get "ovs" by
 		// default so operators aren't silently kept on the kernel
@@ -759,6 +846,7 @@ func (app *App) initOVSBonds(ctx context.Context) error {
 				slog.String("bond", bond.Name),
 				slog.String("bridge", bridge),
 				slog.String("error", err.Error()))
+			errs = errors.Join(errs, fmt.Errorf("bond %s: %w", bond.Name, err))
 			continue
 		}
 
@@ -769,7 +857,7 @@ func (app *App) initOVSBonds(ctx context.Context) error {
 			slog.String("lacp", bond.LACP),
 			slog.Any("members", bond.Interfaces))
 	}
-	return nil
+	return errs
 }
 
 // createOVSBond issues an OVSDB Transact to create the bond port
@@ -966,12 +1054,14 @@ func (app *App) initZoneAddresses(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	var errs error
 	for _, za := range addrs {
 		if err := ensureZonePort(ctx, client, za); err != nil {
 			app.Logger.Warn("SDN: failed to create zone port",
 				slog.String("port", za.port),
 				slog.String("bridge", za.bridge),
 				slog.String("error", err.Error()))
+			errs = errors.Join(errs, fmt.Errorf("zone port %s: %w", za.port, err))
 			continue
 		}
 
@@ -979,6 +1069,7 @@ func (app *App) initZoneAddresses(ctx context.Context) error {
 			app.Logger.Warn("SDN: failed to bring zone port up",
 				slog.String("port", za.port),
 				slog.String("error", err.Error()))
+			errs = errors.Join(errs, fmt.Errorf("zone port %s up: %w", za.port, err))
 			continue
 		}
 
@@ -995,6 +1086,7 @@ func (app *App) initZoneAddresses(ctx context.Context) error {
 				slog.String("port", za.port),
 				slog.String("address", za.addr),
 				slog.String("error", err.Error()))
+			errs = errors.Join(errs, fmt.Errorf("zone address %s on %s: %w", za.addr, za.port, err))
 			continue
 		}
 
@@ -1004,7 +1096,7 @@ func (app *App) initZoneAddresses(ctx context.Context) error {
 			slog.Int("vlan", int(za.vlan)),
 			slog.String("address", za.addr))
 	}
-	return nil
+	return errs
 }
 
 // bridgeLink resolves the kernel link for an OVS bridge by name. The
