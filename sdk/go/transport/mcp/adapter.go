@@ -295,6 +295,8 @@ var grpcMethodToMCPToolMap = map[string]string{
 	"/platform.v1.PlatformDaemon/StartService":     "platform_daemon_start_service",
 	"/platform.v1.PlatformDaemon/StopService":      "platform_daemon_stop_service",
 	"/platform.v1.PlatformDaemon/RestartService":   "platform_daemon_restart_service",
+	"/platform.v1.PlatformDaemon/GetConfig":        "platform_daemon_get_config",
+	"/platform.v1.PlatformDaemon/ReloadConfig":     "platform_daemon_reload_config",
 
 	// TPM Service — proto: pkg/api/grpc/proto/tpm.proto. Only the quote
 	// pair is routed (#482); the SDK refuses Quote here, because MCP has no

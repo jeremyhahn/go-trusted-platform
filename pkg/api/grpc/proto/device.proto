@@ -301,6 +301,14 @@ message DeviceProfile {
   // expected state is the defect #373 removed from the attest path — and
   // an update that omits it keeps the stored baseline (#446).
   PCRBaseline pcr_baseline = 27;
+  // dice_device_id is the hex DICE device identifier (1-64 bytes) the
+  // registry resolves a DICE-attesting device by (#1699). Writable on create
+  // and update; an update that omits it keeps the stored value.
+  string dice_device_id = 28;
+  // golden_fw_hash is the hex SHA-256 (32 bytes) of the firmware the device
+  // is expected to run (#1699). Writable on create and update; an update
+  // that omits it keeps the stored value.
+  string golden_fw_hash = 29;
 }
 
 // PCRBaseline is the expected PCR state recorded for a device profile. See

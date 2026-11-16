@@ -929,7 +929,15 @@ type DeviceProfile struct {
 	// this field on CreateProfile and UpdateProfile — a caller-supplied
 	// expected state is the defect #373 removed from the attest path — and
 	// an update that omits it keeps the stored baseline (#446).
-	PcrBaseline   *PCRBaseline `protobuf:"bytes,27,opt,name=pcr_baseline,json=pcrBaseline,proto3" json:"pcr_baseline,omitempty"`
+	PcrBaseline *PCRBaseline `protobuf:"bytes,27,opt,name=pcr_baseline,json=pcrBaseline,proto3" json:"pcr_baseline,omitempty"`
+	// dice_device_id is the hex DICE device identifier (1-64 bytes) the
+	// registry resolves a DICE-attesting device by (#1699). Writable on create
+	// and update; an update that omits it keeps the stored value.
+	DiceDeviceId string `protobuf:"bytes,28,opt,name=dice_device_id,json=diceDeviceId,proto3" json:"dice_device_id,omitempty"`
+	// golden_fw_hash is the hex SHA-256 (32 bytes) of the firmware the device
+	// is expected to run (#1699). Writable on create and update; an update
+	// that omits it keeps the stored value.
+	GoldenFwHash  string `protobuf:"bytes,29,opt,name=golden_fw_hash,json=goldenFwHash,proto3" json:"golden_fw_hash,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1130,6 +1138,20 @@ func (x *DeviceProfile) GetPcrBaseline() *PCRBaseline {
 		return x.PcrBaseline
 	}
 	return nil
+}
+
+func (x *DeviceProfile) GetDiceDeviceId() string {
+	if x != nil {
+		return x.DiceDeviceId
+	}
+	return ""
+}
+
+func (x *DeviceProfile) GetGoldenFwHash() string {
+	if x != nil {
+		return x.GoldenFwHash
+	}
+	return ""
 }
 
 // PCRBaseline is the expected PCR state recorded for a device profile. See
@@ -5023,7 +5045,7 @@ const file_device_proto_rawDesc = "" +
 	"\x04port\x18\x02 \x01(\x05R\x04port\x12\x1a\n" +
 	"\busername\x18\x03 \x01(\tR\busername\x12\x1a\n" +
 	"\bpassword\x18\x04 \x01(\tR\bpassword\x12\x1a\n" +
-	"\bprotocol\x18\x05 \x01(\tR\bprotocol\"\xa2\t\n" +
+	"\bprotocol\x18\x05 \x01(\tR\bprotocol\"\xee\t\n" +
 	"\rDeviceProfile\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x04R\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
@@ -5054,7 +5076,9 @@ const file_device_proto_rawDesc = "" +
 	"\ttenant_id\x18\x18 \x01(\tR\btenantId\x12\x17\n" +
 	"\aek_cert\x18\x19 \x01(\tR\x06ekCert\x12&\n" +
 	"\x0ftls_server_name\x18\x1a \x01(\tR\rtlsServerName\x12;\n" +
-	"\fpcr_baseline\x18\x1b \x01(\v2\x18.platform.v1.PCRBaselineR\vpcrBaseline\x1a\\\n" +
+	"\fpcr_baseline\x18\x1b \x01(\v2\x18.platform.v1.PCRBaselineR\vpcrBaseline\x12$\n" +
+	"\x0edice_device_id\x18\x1c \x01(\tR\fdiceDeviceId\x12$\n" +
+	"\x0egolden_fw_hash\x18\x1d \x01(\tR\fgoldenFwHash\x1a\\\n" +
 	"\rNetworksEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x125\n" +
 	"\x05value\x18\x02 \x01(\v2\x1f.platform.v1.NetworkPhaseConfigR\x05value:\x028\x01J\x04\b\x06\x10\aJ\x04\b\a\x10\bJ\x04\b\b\x10\tR\x14provisioning_networkR\x12production_networkR\x12quarantine_network\"\x92\x02\n" +

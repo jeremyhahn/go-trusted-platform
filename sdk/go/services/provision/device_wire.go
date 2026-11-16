@@ -105,6 +105,8 @@ func EncodeProfileOverridesJSON(overrides *platformv1.DeviceProfile) (map[string
 	setString(out, "post_enrollment_network", overrides.GetPostEnrollmentNetwork())
 	setString(out, "failure_network", overrides.GetFailureNetwork())
 	setString(out, "tls_server_name", overrides.GetTlsServerName())
+	setString(out, "dice_device_id", overrides.GetDiceDeviceId())
+	setString(out, "golden_fw_hash", overrides.GetGoldenFwHash())
 	if len(overrides.GetEventLog()) > 0 {
 		out["event_log"] = base64.StdEncoding.EncodeToString(overrides.GetEventLog())
 	}

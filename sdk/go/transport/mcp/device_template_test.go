@@ -270,6 +270,11 @@ func TestDeviceTemplateMCP_CRUD_Errors(t *testing.T) {
 	})
 }
 
+const (
+	testTemplateDICEDeviceID = "00112233445566778899aabbccddeeff"
+	testTemplateGoldenFWHash = "aa00000000000000000000000000000000000000000000000000000000000001"
+)
+
 func TestDeviceTemplateMCP_CreateProfileFromTemplate(t *testing.T) {
 	var calls []toolCall
 	a := provisioningTestServer(t, map[string]interface{}{
@@ -279,6 +284,9 @@ func TestDeviceTemplateMCP_CreateProfileFromTemplate(t *testing.T) {
 			"role":      "gateway",
 			"ek_serial": "EK-1",
 			"config":    map[string]interface{}{"hostname": "edge-01"},
+			// #1699: the stored DICE binding comes back on the reply.
+			"dice_device_id": testTemplateDICEDeviceID,
+			"golden_fw_hash": testTemplateGoldenFWHash,
 		},
 	}, &calls)
 
@@ -291,6 +299,9 @@ func TestDeviceTemplateMCP_CreateProfileFromTemplate(t *testing.T) {
 				EkSerial:   "EK-1",
 				MacAddress: "00:25:90:aa:bb:01",
 				EventLog:   []byte{0x01, 0x02},
+				// #1699: the template override body must carry both.
+				DiceDeviceId: testTemplateDICEDeviceID,
+				GoldenFwHash: testTemplateGoldenFWHash,
 			},
 		}, resp)
 	if err != nil {
@@ -308,6 +319,9 @@ func TestDeviceTemplateMCP_CreateProfileFromTemplate(t *testing.T) {
 	if overrides["event_log"] != "AQI=" {
 		t.Errorf("event_log = %v, want base64", overrides["event_log"])
 	}
+	if overrides["dice_device_id"] != testTemplateDICEDeviceID || overrides["golden_fw_hash"] != testTemplateGoldenFWHash {
+		t.Errorf("overrides dropped the DICE fields: %v", overrides)
+	}
 	if _, sent := overrides["role"]; sent {
 		t.Error("an unset role must not be sent, so the template's role is kept")
 	}
@@ -318,6 +332,9 @@ func TestDeviceTemplateMCP_CreateProfileFromTemplate(t *testing.T) {
 	}
 	if got.GetRole() != platformv1.DeviceRole_DEVICE_ROLE_GATEWAY || got.GetEkSerial() != "EK-1" {
 		t.Errorf("profile = %v", got)
+	}
+	if got.GetDiceDeviceId() != testTemplateDICEDeviceID || got.GetGoldenFwHash() != testTemplateGoldenFWHash {
+		t.Errorf("reply DICE fields = %q, %q", got.GetDiceDeviceId(), got.GetGoldenFwHash())
 	}
 	if !resp.GetStatus().GetSuccess() {
 		t.Error("status must report success")

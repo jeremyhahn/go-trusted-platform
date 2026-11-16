@@ -155,11 +155,11 @@ func TestBackendTypeIsValid(t *testing.T) {
 }
 
 func TestXKMSManagerGenerateAllWithFileBackend(t *testing.T) {
-	// Create temp directory
-	tmpDir := t.TempDir()
+	// A keys directory that does not exist yet: GenerateAll creates it.
+	keysDir := filepath.Join(t.TempDir(), "newkeys")
 
 	config := &XKMSConfig{
-		KeysDir:      tmpDir,
+		KeysDir:      keysDir,
 		Backend:      BackendFile,
 		CommonName:   "Test Platform",
 		Country:      "US",
@@ -652,31 +652,6 @@ func TestGenerateKeyFallback(t *testing.T) {
 }
 
 // TestCreateXKMSBackendErrors tests error paths in createXKMSBackend
-func TestCreateXKMSBackendErrors(t *testing.T) {
-	// Test with invalid path that can't be created
-	tmpDir := t.TempDir()
-
-	// Create a file (not a directory) where we'll try to create subdirectories
-	invalidPath := filepath.Join(tmpDir, "file")
-	err := os.WriteFile(invalidPath, []byte("test"), 0644)
-	require.NoError(t, err)
-
-	// Try to create keys directory under the file (should fail)
-	config := &XKMSConfig{
-		KeysDir: filepath.Join(invalidPath, "keys"),
-		Backend: BackendFile,
-	}
-
-	km := &XKMSManager{
-		config: config,
-		logger: nil,
-	}
-
-	_, err = km.createXKMSBackend()
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to create")
-}
-
 // TestInitializeServiceError tests error handling in initializeService
 func TestInitializeServiceError(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -954,34 +929,6 @@ func TestGenerateAllPKError(t *testing.T) {
 }
 
 // TestGenerateAllCallsGenerateFunctions tests that GenerateAll properly calls all generate functions
-func TestGenerateAllCallsGenerateFunctions(t *testing.T) {
-	tmpDir := t.TempDir()
-	keysDir := filepath.Join(tmpDir, "newkeys")
-
-	config := &XKMSConfig{
-		KeysDir:    keysDir,
-		Backend:    BackendFile,
-		ExportKeys: true,
-	}
-
-	km, err := NewXKMSManager(config, nil)
-	require.NoError(t, err)
-	defer km.Close()
-
-	ctx := context.Background()
-	err = km.GenerateAll(ctx)
-	require.NoError(t, err)
-
-	// Verify all keys were created
-	paths := km.GetKeyPaths()
-	assert.FileExists(t, paths.PKCert)
-	assert.FileExists(t, paths.KEKCert)
-	assert.FileExists(t, paths.DBCert)
-	assert.FileExists(t, paths.PKKey)
-	assert.FileExists(t, paths.KEKKey)
-	assert.FileExists(t, paths.DBKey)
-}
-
 // TestGenerateAllWithCancelledContextDuringGeneration tests context cancellation
 func TestGenerateAllWithCancelledContextDuringGeneration(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -1298,4 +1245,5 @@ func TestGenerateAllMkdirError(t *testing.T) {
 	km, err := NewXKMSManager(config, nil)
 	assert.Error(t, err)
 	assert.Nil(t, km)
+	assert.Contains(t, err.Error(), "failed to create")
 }
