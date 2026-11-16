@@ -1111,6 +1111,42 @@ func TestStopService_SignalsBeforeItCancelsTheLaunchContext(t *testing.T) {
 	assert.NotContains(t, log, "signal:killed", "a child that stops gracefully is never killed")
 }
 
+// lastSpec is the Spec of the most recent launch.
+func (l *fakeLauncher) lastSpec(t *testing.T) Spec {
+	t.Helper()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	require.NotEmpty(t, l.launches, "nothing was launched")
+	return l.launches[len(l.launches)-1]
+}
+
+func TestSupervisor_LaunchPassesEachChildItsNotifySocket(t *testing.T) {
+	// docs/gateway/supervisor.md: platformd passes each child a NOTIFY_SOCKET,
+	// an AF_UNIX SOCK_DGRAM socket per child in its runtime directory (#1193).
+	supervisor, launcher, _ := newSupervisor(t, nil)
+	ctx := testContext(t)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceProxy))
+
+	spec := launcher.lastSpec(t)
+	want := filepath.Join(supervisor.cfg.RuntimeDir, spec.Definition.Name+".notify")
+	assert.Equal(t, want, spec.NotifySocket)
+	info, err := os.Stat(want)
+	require.NoError(t, err)
+	assert.Equal(t, os.ModeSocket, info.Mode()&os.ModeSocket, "the notify path is a bound socket")
+}
+
+func TestSupervisor_StopRemovesTheNotifySocket(t *testing.T) {
+	supervisor, launcher, _ := newSupervisor(t, nil)
+	ctx := testContext(t)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceProxy))
+	path := launcher.lastSpec(t).NotifySocket
+	require.NotEmpty(t, path)
+
+	require.NoError(t, supervisor.StopService(ctx, gateway.ServiceProxy))
+	_, err := os.Stat(path)
+	assert.ErrorIs(t, err, os.ErrNotExist, "stopping the last service closes and removes the socket")
+}
+
 func TestExecLauncher_CancellingTheContextAsksTheChildToStopRatherThanKillingIt(t *testing.T) {
 	// exec.CommandContext's default cancellation is Process.Kill. A gatewayd
 	// child holds kernel state it withdraws on SIGTERM, so the launcher
