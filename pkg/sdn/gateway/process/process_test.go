@@ -1579,6 +1579,193 @@ func TestCrashLoop_StopsAtTheRestartBudget(t *testing.T) {
 	assert.Equal(t, 3, launcher.launchCount(), "no fourth launch after the budget is gone")
 }
 
+// watchdogClock is a testClock that holds every wait of the watchdog
+// interval until the test fires it, so a keep-alive deadline passes only
+// when the test says so. Each re-arm of the watchdog is one more wait.
+type watchdogClock struct {
+	*testClock
+	interval time.Duration
+
+	mu    sync.Mutex
+	armed []chan time.Time
+}
+
+func (c *watchdogClock) After(d time.Duration) <-chan time.Time {
+	if d != c.interval {
+		return c.testClock.After(d)
+	}
+	ch := make(chan time.Time, 1)
+	c.mu.Lock()
+	c.armed = append(c.armed, ch)
+	c.mu.Unlock()
+	return ch
+}
+
+// arms is how many times the watchdog deadline has been armed.
+func (c *watchdogClock) arms() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.armed)
+}
+
+func (c *watchdogClock) awaitArmed(t *testing.T, n int) {
+	t.Helper()
+	require.Eventually(t, func() bool { return c.arms() >= n },
+		10*time.Second, 5*time.Millisecond, "the watchdog deadline is armed %d times", n)
+}
+
+// fire passes the i-th armed deadline.
+func (c *watchdogClock) fire(i int) {
+	c.mu.Lock()
+	ch := c.armed[i]
+	c.mu.Unlock()
+	select {
+	case ch <- time.Now():
+	default:
+	}
+}
+
+// newWatchdogSupervisor is newSupervisor with a watchdogClock holding waits
+// of clockInterval, and the routing process (the transit service) given a
+// watchdog interval of defInterval. Every child reports this test's pid,
+// so the test's own Notify reaches the supervisor's notify socket.
+func newWatchdogSupervisor(t *testing.T, clockInterval, defInterval time.Duration, tune func(*Config)) (*Supervisor, *fakeLauncher, *watchdogClock) {
+	t.Helper()
+	clock := &watchdogClock{testClock: &testClock{}, interval: clockInterval}
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
+		if tune != nil {
+			tune(c)
+		}
+		clock.testClock.stopTimeout = c.StopTimeout
+		c.Clock = clock
+	})
+	launcher.pid = os.Getpid()
+	def, err := DefinitionForService(gateway.ServiceTransit)
+	require.NoError(t, err)
+	def.WatchdogInterval = defInterval
+	supervisor.mu.Lock()
+	supervisor.processes[def.Name] = &supervised{def: def, wanted: map[string]bool{}, socket: supervisor.socketPath(def.Name)}
+	supervisor.mu.Unlock()
+	return supervisor, launcher, clock
+}
+
+// notifyChild sends msg to the current child's notify socket, as the child.
+func notifyChild(t *testing.T, launcher *fakeLauncher, msg string) {
+	t.Helper()
+	t.Setenv(NotifySocketEnv, launcher.lastSpec(t).NotifySocket)
+	require.NoError(t, Notify(msg))
+}
+
+func TestWatchdog_AMissedKeepAliveRestartsTheChild(t *testing.T) {
+	// docs/gateway/supervisor.md: a child with a watchdog interval sends
+	// WATCHDOG=1 at least once per interval; a missed deadline is a failure,
+	// restarted under the restart policy and counted against its budget.
+	const interval = 7 * time.Second
+	supervisor, launcher, clock := newWatchdogSupervisor(t, interval, interval, func(c *Config) {
+		c.RestartBackoff = time.Millisecond
+		c.RestartBudget = 1
+	})
+	ctx := testContext(t)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceTransit))
+	first := launcher.lastChild()
+
+	// The deadline is armed at readiness and again at every keep-alive.
+	notifyChild(t, launcher, "READY=1")
+	clock.awaitArmed(t, 1)
+	for i := 0; i < 3; i++ {
+		notifyChild(t, launcher, "WATCHDOG=1")
+		clock.awaitArmed(t, i+2)
+	}
+	assert.Empty(t, first.signalled(), "keep-alives in time leave the child alone")
+
+	// The keep-alives stop and the deadline passes: the child is stopped and
+	// a new one launched through the restart backoff.
+	clock.fire(clock.arms() - 1)
+	require.Eventually(t, func() bool { return len(first.signalled()) > 0 },
+		10*time.Second, 5*time.Millisecond, "the silent child is stopped")
+	assert.Equal(t, syscall.SIGTERM, first.signalled()[0])
+	awaitRelaunch(t, supervisor, launcher, "routing", 2)
+	supervisor.mu.Lock()
+	restarts := len(supervisor.processes["routing"].restarts)
+	supervisor.mu.Unlock()
+	assert.Equal(t, 1, restarts, "the missed keep-alive is counted against the restart budget, like a crash")
+
+	// The new child misses too: a budget of one is exhausted, and the
+	// supervisor says the watchdog was the last failure.
+	armed := clock.arms()
+	notifyChild(t, launcher, "READY=1")
+	clock.awaitArmed(t, armed+1)
+	clock.fire(clock.arms() - 1)
+	var exhausted *ErrRestartBudgetExhausted
+	require.Eventually(t, func() bool {
+		return errors.As(supervisor.ServiceHealth(gateway.ServiceTransit), &exhausted)
+	}, 20*time.Second, 10*time.Millisecond, "the supervisor gives up and says so")
+	var missed *ErrWatchdogMissed
+	require.ErrorAs(t, exhausted.Last, &missed)
+	assert.Equal(t, "routing", missed.Process)
+	assert.Equal(t, interval, missed.Interval)
+	assert.Contains(t, missed.Error(), "watchdog")
+	assert.Equal(t, 2, launcher.launchCount(), "no third launch after the budget is gone")
+}
+
+func TestWatchdog_KeepAlivesHoldTheChild(t *testing.T) {
+	// Keep-alives at half the interval: every deadline the clock passes has
+	// already been replaced by the next keep-alive's, so the child stays up
+	// across several intervals.
+	const interval = 7 * time.Second
+	supervisor, launcher, clock := newWatchdogSupervisor(t, interval, interval, nil)
+	ctx := testContext(t)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceTransit))
+	child := launcher.lastChild()
+
+	notifyChild(t, launcher, "READY=1")
+	clock.awaitArmed(t, 1)
+	for i := 0; i < 4; i++ {
+		notifyChild(t, launcher, "WATCHDOG=1")
+		clock.awaitArmed(t, i+2)
+		// The deadline the keep-alive replaced passes: nothing happens.
+		clock.fire(i)
+	}
+	assert.Never(t, func() bool {
+		return len(child.signalled()) > 0 || launcher.launchCount() > 1
+	}, 300*time.Millisecond, 10*time.Millisecond, "a child that keeps alive is never stopped")
+	assert.True(t, supervisor.ServiceActive(gateway.ServiceTransit))
+}
+
+func TestWatchdog_ZeroIntervalIsOff(t *testing.T) {
+	// No interval: no watchdog deadline, however long the child is silent,
+	// and no WATCHDOG_USEC in its environment, not even an inherited one.
+	supervisor, launcher, clock := newWatchdogSupervisor(t, 7*time.Second, 0, nil)
+	ctx := testContext(t)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceTransit))
+	notifyChild(t, launcher, "READY=1")
+	notifyChild(t, launcher, "WATCHDOG=1")
+	assert.Never(t, func() bool { return clock.arms() > 0 },
+		200*time.Millisecond, 10*time.Millisecond, "no watchdog is armed")
+
+	spec := launcher.lastSpec(t)
+	assert.Zero(t, spec.Definition.WatchdogInterval)
+	env := launchEnv([]string{"PATH=/usr/bin", WatchdogUsecEnv + "=5000000"}, spec)
+	assert.Equal(t, []string{"PATH=/usr/bin", NotifySocketEnv + "=" + spec.NotifySocket}, env)
+}
+
+func TestWatchdog_EnvironmentCarriesTheInterval(t *testing.T) {
+	// The child learns its interval the systemd way: WATCHDOG_USEC, in
+	// microseconds, replacing any the supervisor inherited.
+	supervisor, launcher, _ := newWatchdogSupervisor(t, 7*time.Second, 7*time.Second, nil)
+	ctx := testContext(t)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceTransit))
+
+	spec := launcher.lastSpec(t)
+	assert.Equal(t, 7*time.Second, spec.Definition.WatchdogInterval)
+	env := launchEnv([]string{WatchdogUsecEnv + "=1", "PATH=/usr/bin"}, spec)
+	assert.Equal(t, []string{
+		"PATH=/usr/bin",
+		NotifySocketEnv + "=" + spec.NotifySocket,
+		WatchdogUsecEnv + "=7000000",
+	}, env)
+}
+
 // requireNotifySocketGone waits for the last launch's notify socket to be
 // closed: Close removes the path, and a closed socket is what ends the
 // launch's notify reader (Codex P1 #1926).
