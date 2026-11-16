@@ -131,11 +131,23 @@ func multiInstance(store *fakeTxnStore, factors *fakeFactors) func(*ServiceParam
 	}
 }
 
+// sharedLease returns harness params for one of several services sharing
+// store and factors with the completion lease wired. MultiInstance stays
+// false: the lease does not fence a timed-out enrolment, so a
+// multi-instance deployment is refused (#1906, Codex round 3); these
+// tests pin the lease mechanics only.
+func sharedLease(store *fakeTxnStore, factors *fakeFactors) func(*ServiceParams) {
+	return func(p *ServiceParams) {
+		p.Transactions = store
+		p.Factors = factors
+	}
+}
+
 func TestFinishPasskey_MultiInstanceCompletesOnceAcrossInstances(t *testing.T) {
 	store := newFakeTxnStore()
 	factors := &fakeFactors{resp: &quicbaassdk.AuthFactorListResponse{}}
-	first := newHarnessWith(t, multiInstance(store, factors))
-	second := newHarnessWith(t, multiInstance(store, factors))
+	first := newHarnessWith(t, sharedLease(store, factors))
+	second := newHarnessWith(t, sharedLease(store, factors))
 
 	firstToken := first.claimTo(t)
 	secondToken := second.claimTo(t)
@@ -182,7 +194,7 @@ func TestFinishPasskey_ReleasesTheLeaseWhatever(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			store := newFakeTxnStore()
-			h := newHarnessWith(t, multiInstance(store, &fakeFactors{resp: &quicbaassdk.AuthFactorListResponse{}}))
+			h := newHarnessWith(t, sharedLease(store, &fakeFactors{resp: &quicbaassdk.AuthFactorListResponse{}}))
 			ceremony(h.ceremony)
 			token := h.claimTo(t)
 
@@ -198,7 +210,7 @@ func TestFinishPasskey_ReleasesTheLeaseWhatever(t *testing.T) {
 
 func TestFinishPasskey_FailsClosedWithoutTheLease(t *testing.T) {
 	store := newFakeTxnStore()
-	h := newHarnessWith(t, multiInstance(store, &fakeFactors{resp: &quicbaassdk.AuthFactorListResponse{}}))
+	h := newHarnessWith(t, sharedLease(store, &fakeFactors{resp: &quicbaassdk.AuthFactorListResponse{}}))
 	token := h.claimTo(t)
 	store.err = errors.New("embedded: invalid request type")
 

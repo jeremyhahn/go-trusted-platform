@@ -95,21 +95,20 @@ func (e ErrClaimTokenInvalid) Error() string {
 
 // ErrMultiInstanceUnsupported is returned when the claim ceremony is
 // invoked on a deployment that runs more than one platformd instance
-// against one store and no store-wide completion lease is wired. The
-// process-local completion lock serialises one instance only, and the
-// SDK factor enrolment is not conditional, so two instances could both
-// observe an unclaimed identity and each enrol a different
-// authenticator — letting a copied bootstrap key retain admin access
-// alongside the legitimate operator. Rather than serve a ceremony that
-// is silently unsafe there, the route refuses. The deployment lifts it
-// by wiring ServiceParams.Transactions, which it does once the store's
-// compare-and-swap answers (#172; ProbeTransactions).
+// against one store. The process-local completion lock serialises one
+// instance only, and the SDK factor enrolment is not conditional, so two
+// instances could both enrol a different authenticator, letting a copied
+// bootstrap key retain admin access alongside the legitimate operator.
+// The store-wide completion lease (ServiceParams.Transactions, #172) does
+// not lift this: it does not fence a timed-out enrolment, which may still
+// commit after the lease is released (#1906). The refusal stays until the
+// enrolment checks lease ownership.
 type ErrMultiInstanceUnsupported struct{}
 
 // Error implements the error interface.
 func (e ErrMultiInstanceUnsupported) Error() string {
-	return "admin claim: the claim ceremony on a multi-instance deployment needs the store's " +
-		"compare-and-swap to make its completion atomic across instances, and this store did not answer it (see #172)"
+	return "admin claim: the claim ceremony is not served on a multi-instance deployment: " +
+		"its completion is not yet fenced across instances (see #172)"
 }
 
 // ErrClaimInProgress is returned when another instance holds the claim's

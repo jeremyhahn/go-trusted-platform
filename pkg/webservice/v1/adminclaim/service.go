@@ -192,12 +192,17 @@ type ServiceParams struct {
 	// lock then serialises one instance only and the SDK factor enrolment
 	// is not conditional, so a second instance could enrol a different
 	// authenticator for the same one-time ownership transfer. The
-	// ceremony is therefore REFUSED when true unless Transactions is set.
+	// ceremony is therefore REFUSED when true, Transactions or not: the
+	// completion lease does not fence a timed-out enrolment, so the
+	// refusal stays until the enrolment checks lease ownership.
 	MultiInstance bool
 	// Transactions is the store's compare-and-swap client. When set, the
-	// claim's completion runs under a store-wide lease, so exactly one
-	// instance at a time can read the factor history and enrol (#172),
-	// and a multi-instance deployment is served. Challenges and claim
+	// claim's completion runs under a store-wide lease, so one instance
+	// at a time reads the factor history and enrols (#172). The lease
+	// does NOT fence: a cancelled remote FinishRegistration can still
+	// commit after the lease is released, so it does not make a
+	// multi-instance deployment safe and MultiInstance still refuses.
+	// Challenges and claim
 	// tokens stay process-local: a token proved on one instance is
 	// refused by another, so the ceremony runs against one instance.
 	// Wire it only once ProbeTransactions succeeds.
@@ -219,7 +224,7 @@ type Service struct {
 	challenges    *secretStore
 	claims        *secretStore
 	// refuseMultiInstance closes the ceremony on a multi-instance
-	// deployment with no store-wide completion lease.
+	// deployment, completion lease or not.
 	refuseMultiInstance bool
 	// completion is the store-wide completion lease, nil when no
 	// transaction client is wired.
@@ -262,18 +267,21 @@ func NewService(params ServiceParams) (*Service, error) {
 		adminUsername = common.AdminUsername
 	}
 	svc := &Service{
-		logger:              params.Logger,
-		ceremony:            params.Ceremony,
-		factors:             params.Factors,
-		users:               params.Users,
-		tokenIssuer:         params.TokenIssuer,
-		trustAnchors:        params.TrustAnchors,
-		tenantID:            params.TenantID,
-		adminUsername:       adminUsername,
-		adminEmail:          params.AdminEmail,
-		challenges:          newSecretStore(challengeTTL),
-		claims:              newSecretStore(claimTokenTTL),
-		refuseMultiInstance: params.MultiInstance && params.Transactions == nil,
+		logger:        params.Logger,
+		ceremony:      params.Ceremony,
+		factors:       params.Factors,
+		users:         params.Users,
+		tokenIssuer:   params.TokenIssuer,
+		trustAnchors:  params.TrustAnchors,
+		tenantID:      params.TenantID,
+		adminUsername: adminUsername,
+		adminEmail:    params.AdminEmail,
+		challenges:    newSecretStore(challengeTTL),
+		claims:        newSecretStore(claimTokenTTL),
+		// The completion lease does not fence: a timed-out enrolment can
+		// still commit after the lease is released (Codex round 3, #1906),
+		// so it never opens a multi-instance deployment.
+		refuseMultiInstance: params.MultiInstance,
 	}
 	if params.Transactions != nil {
 		svc.completion = newCompletionLock(params.Transactions, params.TenantID, adminUsername)
@@ -469,12 +477,15 @@ func (s *Service) FinishPasskey(
 	// operator and keep admin access. Serialising makes the second caller
 	// observe the first's enrolment and get ErrAlreadyClaimed.
 	//
-	// The mutex is process-local. Across several platformd instances
-	// sharing one store the store-wide completion lease does the same job
-	// (#172): it is taken after the token is redeemed, so an unproved
-	// caller never writes to the store, and before the factor history is
-	// read, so only its holder can observe an unclaimed identity and
-	// enrol. Without the lease such a deployment is refused outright.
+	// The mutex is process-local. When a transaction client is wired the
+	// store-wide completion lease is taken as well (#172): after the
+	// token is redeemed, so an unproved caller never writes to the
+	// store, and before the factor history is read. The lease does not
+	// fence: a remote FinishRegistration cancelled at the deadline may
+	// still commit after the deferred release, so a second instance could
+	// enrol a second authenticator. A multi-instance deployment is
+	// therefore refused outright, lease or not, until the enrolment
+	// checks lease ownership.
 	if s.refuseMultiInstance {
 		return "", ErrMultiInstanceUnsupported{}
 	}
