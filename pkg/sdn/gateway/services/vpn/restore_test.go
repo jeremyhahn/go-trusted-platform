@@ -381,6 +381,29 @@ func TestRestore_ADropRecordedNowhereKeepsTheAddress(t *testing.T) {
 	assert.Equal(t, "mini-1", alloc.DeviceID)
 }
 
+// A drop the store could not record keeps the lease, so a later restart
+// reinstates it: its hosted peer must stay with it, not go before the
+// deletion is known to be recorded.
+func TestRestore_AnUnrecordedDropLeavesTheHostedPeer(t *testing.T) {
+	h := newRestoreHarness(t)
+	lease := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
+	lease.ExpiresAt = h.clock.Now()
+	require.NoError(t, h.store.Put(context.Background(), lease))
+	h.plane.installed[lease.ID] = lease
+	h.allocate(t, "mini-1", lease.Address)
+	h.store.deleteErr = &ErrRevocationNotRecorded{LeaseID: lease.ID, Cause: errors.New("disk full")}
+	h.start(t)
+
+	err := h.svc.Restore(context.Background())
+
+	var unrecorded *ErrRevocationNotRecorded
+	require.True(t, errors.As(err, &unrecorded), "got %v", err)
+	assert.True(t, h.plane.hosts(lease.ID), "the kept lease keeps its hosted peer")
+	stored, err := h.store.List(context.Background())
+	require.NoError(t, err)
+	assert.Len(t, stored, 1, "the lease whose drop was not recorded is still stored")
+}
+
 func TestRevoke_ARevocationRecordedNowhereTearsNothingDown(t *testing.T) {
 	h := newRestoreHarness(t)
 	lease := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
