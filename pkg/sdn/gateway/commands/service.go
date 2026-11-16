@@ -187,9 +187,13 @@ func serveProcess(ctx context.Context, name string, opts serviceOptions, deps se
 		server.SetStartError(err)
 		logger.Error("Supervised services failed to start",
 			slog.String("process", def.Name), slog.Any("error", err))
+		// The STATUS= text names the process only: the error reaches the
+		// supervisor over the control socket, never through the notify one.
+		notifySupervisor(logger, def.Name, "STATUS="+def.Name+": services failed to start")
 	} else {
 		logger.Info("Supervised services started",
 			slog.String("process", def.Name), slog.Any("services", hosted))
+		notifySupervisor(logger, def.Name, "READY=1")
 	}
 
 	var serveErr error
@@ -202,6 +206,7 @@ func serveProcess(ctx context.Context, name string, opts serviceOptions, deps se
 		}
 	}
 
+	notifySupervisor(logger, def.Name, "STOPPING=1")
 	stopCtx, stopCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer stopCancel()
 	stopErr := gw.Stop(stopCtx)
@@ -214,6 +219,17 @@ func serveProcess(ctx context.Context, name string, opts serviceOptions, deps se
 			slog.String("process", def.Name), slog.Any("error", err))
 	}
 	return stopErr
+}
+
+// notifySupervisor sends state to the supervisor's notify socket, which
+// NOTIFY_SOCKET names (nothing when it is unset). A failed notification is
+// logged and never fails the process: the supervisor still reads the
+// process's state over the control socket.
+func notifySupervisor(logger *slog.Logger, name, state string) {
+	if err := process.Notify(state); err != nil {
+		logger.Warn("Supervisor notification failed",
+			slog.String("process", name), slog.Any("error", err))
+	}
 }
 
 // vpnLeaseControl is the management VPN's lease record for the vpn child:

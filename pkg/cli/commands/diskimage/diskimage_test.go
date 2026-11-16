@@ -224,6 +224,7 @@ func TestBuildConfigRoleBuildsTheDedicatedTemplate(t *testing.T) {
 		{"rpi5", "compute"},
 		{"cm4", "control-plane"},
 		{"rpi4", "control-plane"},
+		{"rpi5", "control-plane"},
 	}
 	for _, b := range builds {
 		t.Run(b.model+"/"+b.role, func(t *testing.T) {
@@ -266,7 +267,6 @@ func TestBuildConfigRefusesRoleItCannotBuild(t *testing.T) {
 		"unknown model":   {target: "rpi", model: "rpi2", role: "compute", binariesDir: bins},
 		"model as a path": {target: "rpi", model: "../supermicro/x10", role: "compute", binariesDir: bins},
 		"rpi5 gateway":    {target: "rpi", model: "rpi5", role: "gateway", binariesDir: bins},
-		"rpi5 cp":         {target: "rpi", model: "rpi5", role: "control-plane", binariesDir: bins},
 		"overrides":       {target: "rpi", model: "cm4", role: "desk-overrides", binariesDir: bins},
 		"role as a path":  {target: "rpi", model: "rpi4", role: "../cm4/control-plane", binariesDir: bins},
 		"qemu-virt":       {target: "qemu-virt", role: "compute", binariesDir: bins},

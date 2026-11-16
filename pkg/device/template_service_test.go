@@ -16,6 +16,7 @@ package device
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
@@ -719,6 +720,33 @@ func TestTemplateService_ToProfile_CarriesEKCertOverride(t *testing.T) {
 	bare, err := service.ToProfile(ctx, template.ID, &entities.DeviceProfile{EKSerial: "EK-2"})
 	require.NoError(t, err)
 	assert.Empty(t, bare.EKCert, "no override leaves no prestaged certificate")
+}
+
+// TestTemplateService_ToProfile_CarriesDICEOverrides checks that the DICE
+// device id and golden firmware hash in the override body reach the
+// profile built from a template (Codex round 3 on #1853).
+func TestTemplateService_ToProfile_CarriesDICEOverrides(t *testing.T) {
+	ds := testTemplateServiceDatastore(t)
+	ctx := context.Background()
+
+	service, err := NewTemplateService(ds)
+	require.NoError(t, err)
+
+	template := &entities.DeviceTemplate{ID: 1, Name: "edge", Role: entities.DeviceRoleEdge}
+	require.NoError(t, service.Save(ctx, template))
+
+	const diceID = "a1b2c3d4e5f60718"
+	fwHash := strings.Repeat("ab", entities.GoldenFWHashBytes)
+	profile, err := service.ToProfileWithConfigOverrides(ctx, template.ID,
+		&entities.DeviceProfile{Name: "dice-node", DICEDeviceID: diceID, GoldenFWHash: fwHash}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, diceID, profile.DICEDeviceID)
+	assert.Equal(t, fwHash, profile.GoldenFWHash)
+
+	bare, err := service.ToProfile(ctx, template.ID, &entities.DeviceProfile{Name: "plain"})
+	require.NoError(t, err)
+	assert.Empty(t, bare.DICEDeviceID)
+	assert.Empty(t, bare.GoldenFWHash)
 }
 
 func TestTemplateService_ToProfile_NoConfig(t *testing.T) {
