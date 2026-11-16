@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/mcpwire"
 )
 
@@ -16,6 +17,7 @@ func TestServer_ListRequiresPrincipal(t *testing.T) {
 
 	cases := []struct {
 		name     string
+		service  AuthorizationService
 		backend  AuthManager
 		token    string
 		wantCode int // 0 means the list is returned
@@ -31,14 +33,35 @@ func TestServer_ListRequiresPrincipal(t *testing.T) {
 			wantCode: mcpwire.InvalidToken,
 		},
 		{name: "backend, valid token", backend: &mockAuthManager{}, token: "good-token", wantCode: 0},
+		// An authService alone cannot validate a token's identity: listing
+		// must not accept an arbitrary bearer string (Codex, #1879).
+		{name: "authService only, arbitrary token", service: &mockAuthorizationService{}, token: "anything", wantCode: mcpwire.InvalidToken},
+		{name: "authService and backend, valid token", service: &mockAuthorizationService{}, backend: &mockAuthManager{}, token: "good-token", wantCode: 0},
+		{
+			name:     "claims backend, token with no scopes",
+			backend:  &claimsAuthManagerStub{authCtx: &platformtoken.AuthorizedContext{Subject: "u", TenantID: "t"}},
+			token:    "tok",
+			wantCode: 0,
+		},
 	}
 
 	for _, method := range methods {
 		for _, tc := range cases {
 			t.Run(method+"/"+tc.name, func(t *testing.T) {
 				server := NewServer(newMockServiceProvider(), DefaultConfig(), newTestLogger())
-				if tc.backend != nil {
-					server.SetAuthorizationService(nil, tc.backend)
+				svc, _ := tc.service.(*mockAuthorizationService)
+				if svc != nil {
+					svc.checkCalled = false
+				}
+				if tc.backend != nil || tc.service != nil {
+					server.SetAuthorizationService(tc.service, tc.backend)
+				}
+				if svc != nil {
+					defer func() {
+						if svc.checkCalled {
+							t.Errorf("%s checked a tool permission; listing checks none", method)
+						}
+					}()
 				}
 				ctx := context.Background()
 				if tc.token != "" {
