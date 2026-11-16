@@ -1,0 +1,148 @@
+package rest
+
+import (
+	"encoding/json"
+	"net/http"
+
+	"google.golang.org/protobuf/proto"
+
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+)
+
+// IAM policy routes (#1958). The webservice serves policies tenant-scoped
+// (pkg/webservice/v1/rest/iam/router.go registerPolicyRoutes) and carries
+// spec_yaml as YAML text, while the proto carries bytes, which encoding/json
+// would send as base64. The request encoders write spec_yaml as a string;
+// the bare PolicyResponse of Create, Get and Update is placed under the
+// reply's policy; List and Delete reply with protojson.
+
+const (
+	iamPoliciesPath = "/api/v1/iam/tenants/{tenant}/policies"
+	iamPolicyPath   = iamPoliciesPath + "/{id}"
+)
+
+var iamPolicyNameParam = pathParam{placeholder: "{id}", field: "policy_name"}
+
+func init() {
+	templatedRouteTable[platformv1.PlatformIAMService_CreatePolicy_FullMethodName] =
+		tenantItemRoute(iamPoliciesPath, http.MethodPost)
+	templatedRouteTable[platformv1.PlatformIAMService_ListPolicies_FullMethodName] =
+		tenantItemRoute(iamPoliciesPath, http.MethodGet)
+	templatedRouteTable[platformv1.PlatformIAMService_GetPolicy_FullMethodName] =
+		tenantItemRoute(iamPolicyPath, http.MethodGet, iamPolicyNameParam)
+	templatedRouteTable[platformv1.PlatformIAMService_UpdatePolicy_FullMethodName] =
+		tenantItemRoute(iamPolicyPath, http.MethodPut, iamPolicyNameParam)
+	templatedRouteTable[platformv1.PlatformIAMService_DeletePolicy_FullMethodName] =
+		tenantItemRoute(iamPolicyPath, http.MethodDelete, iamPolicyNameParam)
+	templatedRouteTable[platformv1.PlatformIAMService_ValidatePolicy_FullMethodName] =
+		tenantItemRoute(iamPoliciesPath+"/validate", http.MethodPost)
+	templatedRouteTable[platformv1.PlatformIAMService_TestPolicy_FullMethodName] =
+		tenantItemRoute(iamPoliciesPath+"/test", http.MethodPost)
+
+	restRequestEncoders[platformv1.PlatformIAMService_CreatePolicy_FullMethodName] = encodeCreateIAMPolicy
+	restRequestEncoders[platformv1.PlatformIAMService_UpdatePolicy_FullMethodName] = encodeUpdateIAMPolicy
+	restRequestEncoders[platformv1.PlatformIAMService_ValidatePolicy_FullMethodName] = encodeValidateIAMPolicy
+
+	for _, method := range []string{
+		platformv1.PlatformIAMService_CreatePolicy_FullMethodName,
+		platformv1.PlatformIAMService_GetPolicy_FullMethodName,
+		platformv1.PlatformIAMService_UpdatePolicy_FullMethodName,
+	} {
+		restResponseDecoders[method] = resourceReplyDecoder(method, "policy", decodeIAMPolicy)
+	}
+	restResponseDecoders[platformv1.PlatformIAMService_ListPolicies_FullMethodName] =
+		wireDecoder(platformv1.PlatformIAMService_ListPolicies_FullMethodName, protoJSONReply[platformv1.ListIAMPoliciesResponse])
+	restResponseDecoders[platformv1.PlatformIAMService_DeletePolicy_FullMethodName] =
+		wireDecoder(platformv1.PlatformIAMService_DeletePolicy_FullMethodName, protoJSONReply[platformv1.DeleteIAMPolicyResponse])
+	restResponseDecoders[platformv1.PlatformIAMService_ValidatePolicy_FullMethodName] =
+		wireDecoder(platformv1.PlatformIAMService_ValidatePolicy_FullMethodName, protoJSONReply[platformv1.ValidateIAMPolicyResponse])
+	restResponseDecoders[platformv1.PlatformIAMService_TestPolicy_FullMethodName] =
+		wireDecoder(platformv1.PlatformIAMService_TestPolicy_FullMethodName, protoJSONReply[platformv1.TestIAMPolicyResponse])
+}
+
+// iamPolicyWriteBody is the server's CreatePolicyRequest / UpdatePolicyRequest
+// body: spec_yaml as text, the tenant and policy name in the path.
+type iamPolicyWriteBody struct {
+	Name        string            `json:"name,omitempty"`
+	Description string            `json:"description,omitempty"`
+	Priority    int32             `json:"priority,omitempty"`
+	SpecYAML    string            `json:"spec_yaml,omitempty"`
+	Labels      map[string]string `json:"labels,omitempty"`
+}
+
+func encodeCreateIAMPolicy(body interface{}) (interface{}, error) {
+	in, ok := body.(*platformv1.CreateIAMPolicyRequest)
+	if !ok {
+		return nil, ErrUnexpectedRequestType{Method: platformv1.PlatformIAMService_CreatePolicy_FullMethodName}
+	}
+	return iamPolicyWriteBody{
+		Name:        in.GetName(),
+		Description: in.GetDescription(),
+		Priority:    in.GetPriority(),
+		SpecYAML:    string(in.GetSpecYaml()),
+		Labels:      in.GetLabels(),
+	}, nil
+}
+
+func encodeUpdateIAMPolicy(body interface{}) (interface{}, error) {
+	in, ok := body.(*platformv1.UpdateIAMPolicyRequest)
+	if !ok {
+		return nil, ErrUnexpectedRequestType{Method: platformv1.PlatformIAMService_UpdatePolicy_FullMethodName}
+	}
+	return iamPolicyWriteBody{
+		Description: in.GetDescription(),
+		Priority:    in.GetPriority(),
+		SpecYAML:    string(in.GetSpecYaml()),
+		Labels:      in.GetLabels(),
+	}, nil
+}
+
+func encodeValidateIAMPolicy(body interface{}) (interface{}, error) {
+	in, ok := body.(*platformv1.ValidateIAMPolicyRequest)
+	if !ok {
+		return nil, ErrUnexpectedRequestType{Method: platformv1.PlatformIAMService_ValidatePolicy_FullMethodName}
+	}
+	return struct {
+		SpecYAML string `json:"spec_yaml"`
+	}{SpecYAML: string(in.GetSpecYaml())}, nil
+}
+
+// decodeIAMPolicy decodes a bare PolicyResponse, whose spec_yaml is YAML
+// text rather than the base64 protojson expects for bytes.
+func decodeIAMPolicy(raw []byte) (proto.Message, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return nil, ErrUnmarshalFailed{Err: err}
+	}
+	var spec string
+	if text, ok := fields["spec_yaml"]; ok {
+		if err := json.Unmarshal(text, &spec); err != nil {
+			return nil, ErrUnmarshalFailed{Err: err}
+		}
+		delete(fields, "spec_yaml")
+	}
+	rest, err := json.Marshal(fields)
+	if err != nil {
+		return nil, ErrUnmarshalFailed{Err: err}
+	}
+	policy := &platformv1.IAMPolicy{}
+	if err := reportJSON.Unmarshal(rest, policy); err != nil {
+		return nil, ErrUnmarshalFailed{Err: err}
+	}
+	if spec != "" {
+		policy.SpecYaml = []byte(spec)
+	}
+	return policy, nil
+}
+
+// protoJSONReply decodes a reply the server writes as protojson.
+func protoJSONReply[R any, P interface {
+	*R
+	proto.Message
+}](raw []byte) (P, error) {
+	out := P(new(R))
+	if err := reportJSON.Unmarshal(raw, out); err != nil {
+		return nil, ErrUnmarshalFailed{Err: err}
+	}
+	return out, nil
+}
