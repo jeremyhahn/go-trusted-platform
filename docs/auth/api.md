@@ -142,12 +142,13 @@ the console bearer for the now-claimed system admin:
 ```
 
 On a deployment running several `platformd` instances against one store, the
-four mutating routes answer **`501`** with `ErrMultiInstanceUnsupported`
-unless the store's compare-and-swap answers, which makes the completion
-atomic across instances (#172). Where it does, `passkey/finish` answers
-**`409`** while another instance is completing a claim and **`503`** when the
-store cannot run the completion lease; run the ceremony against one instance,
-since a claim token proved on one is refused by another. `status` still answers `200`: it mutates nothing, and the console has
+four mutating routes answer **`501`** with `ErrMultiInstanceUnsupported`,
+**whatever the transactions probe answers**: a working compare-and-swap
+backend does not lift the refusal, because the completion lease (#172)
+cannot yet fence a delayed enrolment. Run the ceremony on a single-instance
+deployment. There, `passkey/finish` answers **`409`** while another
+completion holds the lease and **`503`** when the store cannot run the
+completion lease. `status` still answers `200`: it mutates nothing, and the console has
 to be able to tell a clustered node from a broken one.
 
 ### Error mapping

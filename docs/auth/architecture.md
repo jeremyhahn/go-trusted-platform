@@ -647,21 +647,25 @@ identity and signature checks before it touches the SDK.
   claim completing over a revoked `fido2` factor raises a high-severity
   security event of its own type (#169) — see
   [engineering.md invariant 8a](engineering.md).
-- A **multi-instance deployment is refused, not unregistered, unless the
-  store's compare-and-swap answers** — and that asymmetry with the bullet
-  above is deliberate. The four conditions there mean the node cannot
-  *verify* a certificate, so publishing the ceremony would be publishing an
-  unverifiable admin surface. A clustered node verifies perfectly well; what
-  it needs is *one-time-ness* across instances, which the store-wide
-  completion lease below provides (#172). `serve` wires the lease only when
-  the store answers a read-only probe (`adminclaim.ProbeTransactions`);
-  without it the four MUTATING paths — `Challenge`, `Prove`,
-  `BeginPasskey`, `FinishPasskey` — refuse with
-  `ErrMultiInstanceUnsupported`, answered as **501 Not Implemented**
-  carrying the reason and the issue. It is not a 500: the refusal is what
-  this build implements, not a fault handling the request. At the pinned
-  SDK the embedded transport does not carry transactions (go-quicbaas
-  #1319), so a clustered node stays refused until a tag carries that fix.
+- A **multi-instance deployment is refused, not unregistered** — and that
+  asymmetry with the bullet above is deliberate. The four conditions there
+  mean the node cannot *verify* a certificate, so publishing the ceremony
+  would be publishing an unverifiable admin surface. A clustered node
+  verifies perfectly well; what it needs is *one-time-ness* across
+  instances. On a multi-instance deployment the four MUTATING paths —
+  `Challenge`, `Prove`, `BeginPasskey`, `FinishPasskey` — **always** refuse
+  with `ErrMultiInstanceUnsupported`, answered as **501 Not Implemented**
+  carrying the reason and the issue, **whatever the transactions probe
+  (`adminclaim.ProbeTransactions`) answers**: `NewService` sets the refusal
+  from `MultiInstance` alone. The store-wide completion lease below (#172)
+  serialises the completion step, but it cannot fence a delayed enrolment —
+  a holder whose lease expired mid-write can still land its factor — so a
+  working transaction backend does not lift the refusal. Clustered claims
+  stay refused until the enrolment itself is fenced by the lease (a
+  write conditioned on the lease's revision); that is the prerequisite, not
+  the probe. It is not a 500: the refusal is what this build implements,
+  not a fault handling the request. (At the pinned SDK the embedded
+  transport does not carry transactions either, go-quicbaas #1319.)
 - **Status stays readable on a clustered node.** It mutates nothing, and the
   console has to be able to distinguish a deployment that will not run the
   ceremony from one that is simply broken. Refusing it would remove that
