@@ -1309,6 +1309,13 @@ func NewHandlerRegistry(ctx context.Context, params RegistryParams) RestHandlerR
 		KeyAttrs:   params.ServerKeyAttributes,
 		XKMS:       params.XKMS,
 	}
+	// Logout revocations persist in the daemon's store, so a signed-out
+	// token stays refused after a restart and on every instance (#215).
+	if params.ServiceRegistry != nil {
+		if blobs := params.ServiceRegistry.WebAuthnSessionService(); blobs != nil {
+			jwtParams.Revocations = jwt.NewBlobRevocationStore(blobs)
+		}
+	}
 	jwtService, err := jwt.NewService(ctx, jwtParams)
 	if err != nil {
 		params.Logger.FatalError(err)

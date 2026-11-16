@@ -90,6 +90,9 @@ type ServiceParams struct {
 	Issuer     string
 	KeyAttrs   *xkmssdk.KeyAttributes
 	XKMS       XKMSSigner
+	// Revocations is the persistent logout deny-list (#215). nil keeps it
+	// in process memory, which a restart or another instance does not see.
+	Revocations RevocationStore
 }
 
 type Service struct {
@@ -259,10 +262,24 @@ func (service *Service) Verify(token *jwt.Token) error {
 	// A signed-out token is refused everywhere Verify runs: the route
 	// middleware, /login/refresh (so a revoked session cannot be rolled
 	// into a fresh one) and the gRPC/QUIC/MCP transports (#215).
-	if service.revocations.revoked(token) {
+	revoked, err := service.revocationStore().Revoked(
+		context.Background(), revocationKey(token), time.Now())
+	if err != nil {
+		return err
+	}
+	if revoked {
 		return ErrTokenRevoked
 	}
 	return nil
+}
+
+// revocationStore is the configured RevocationStore, or the in-process
+// list when none was given.
+func (service *Service) revocationStore() RevocationStore {
+	if service.params.Revocations != nil {
+		return service.params.Revocations
+	}
+	return &service.revocations
 }
 
 // Revoke signs a verified token out server-side (#215): from now until it
@@ -272,8 +289,8 @@ func (service *Service) Revoke(token *jwt.Token) error {
 	if err := service.Verify(token); err != nil {
 		return err
 	}
-	service.revocations.revoke(token, time.Now())
-	return nil
+	return service.revocationStore().Revoke(context.Background(),
+		revocationKey(token), revocationExpiry(token), time.Now())
 }
 
 // VerifyToken parses and validates a token string. Returns true when the
