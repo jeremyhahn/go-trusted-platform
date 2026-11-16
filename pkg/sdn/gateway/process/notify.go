@@ -273,6 +273,13 @@ func (s *NotifySocket) Close() error {
 	return nil
 }
 
+// notifySendTimeout bounds one Notify send. A unixgram write blocks while
+// the receiver's queue is full; the supervisor may not drain its notify
+// socket, and any member of the service group can flood it (mode 0660), so
+// an unbounded send could hold the child before READY=1 or STOPPING=1 and
+// keep it from ever reaching its stop.
+const notifySendTimeout = time.Second
+
 // Notify sends state, newline-separated sd_notify(3) assignments such as
 // "READY=1", to the socket NOTIFY_SOCKET names. It is the child's side of the
 // supervisor's notify socket. With NOTIFY_SOCKET unset or empty it does
@@ -291,6 +298,9 @@ func Notify(state string) error {
 		return &ErrNotifySend{Socket: path, Cause: err}
 	}
 	defer func() { _ = conn.Close() }()
+	if err := conn.SetWriteDeadline(time.Now().Add(notifySendTimeout)); err != nil {
+		return &ErrNotifySend{Socket: path, Cause: err}
+	}
 	if _, err := conn.Write([]byte(state)); err != nil {
 		return &ErrNotifySend{Socket: path, Cause: err}
 	}
