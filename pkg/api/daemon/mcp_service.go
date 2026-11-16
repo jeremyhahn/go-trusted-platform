@@ -1487,6 +1487,45 @@ func (p *MCPServiceProvider) DaemonListProtocols(ctx context.Context) (interface
 	return mcpListProtocolsMap(p.healthService.config), nil
 }
 
+// DaemonGetConfig returns the daemon configuration through Service.GetConfig,
+// the method the gRPC PlatformDaemon/GetConfig answers with. An empty section
+// returns every section.
+func (p *MCPServiceProvider) DaemonGetConfig(ctx context.Context, section string) (interface{}, error) {
+	if p.healthService == nil {
+		return nil, ErrServiceNotAvailable{Service: "daemon"}
+	}
+	resp, err := p.healthService.GetConfig(ctx, &platformv1.GetConfigRequest{Section: section})
+	if err != nil {
+		return nil, err
+	}
+	sections := make([]map[string]interface{}, 0, len(resp.GetSections()))
+	for _, s := range resp.GetSections() {
+		sections = append(sections, map[string]interface{}{
+			"section": s.GetSection(),
+			"values":  s.GetValues(),
+		})
+	}
+	return map[string]interface{}{"sections": sections}, nil
+}
+
+// DaemonReloadConfig reloads the daemon configuration from disk through
+// Service.ReloadConfig, the method the gRPC PlatformDaemon/ReloadConfig
+// answers with.
+func (p *MCPServiceProvider) DaemonReloadConfig(ctx context.Context) (interface{}, error) {
+	if p.healthService == nil {
+		return nil, ErrServiceNotAvailable{Service: "daemon"}
+	}
+	resp, err := p.healthService.ReloadConfig(ctx, &platformv1.ReloadConfigRequest{})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		"success":           resp.GetStatus().GetSuccess(),
+		"message":           resp.GetStatus().GetMessage(),
+		"reloaded_sections": resp.GetReloadedSections(),
+	}, nil
+}
+
 // =============================================================================
 // CA Operations
 // =============================================================================

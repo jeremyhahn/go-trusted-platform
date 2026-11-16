@@ -76,8 +76,11 @@ risk.
 | `WITH_GCP_COMPUTE`   | `0`     | `gcpcompute`    |
 | `WITH_AZURE_COMPUTE` | `0`     | `azurecompute`  |
 
-Setting the umbrella `WITH_AWS=1` expands to `WITH_AWS_KMS`,
-`WITH_OBJSTORE_S3`, **and** `WITH_AWS_COMPUTE` (GCP/Azure analogously).
+The umbrella `WITH_AWS` is unset by default, and then the individual toggles
+decide. `WITH_AWS=1` turns on `WITH_AWS_KMS`, `WITH_OBJSTORE_S3`, **and**
+`WITH_AWS_COMPUTE`; `WITH_AWS=0` forces all three off, even a toggle given on
+the command line (owner ruling 683 (1)). `WITH_GCP` and `WITH_AZURE` work the
+same way.
 
 ```bash
 make build WITH_AWS=1            # KMS + S3 + EC2 NitroTPM compute

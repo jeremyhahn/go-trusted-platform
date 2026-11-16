@@ -262,7 +262,7 @@ does not carry that adapter.
 
 | # | Call | On main | Missing |
 |---|------|---------|---------|
-| 1 | Device profile | `platformctl device profile create` ([../device/cli.md §3.2](../device/cli.md)) | The profile is keyed by EK serial, MAC and EK certificate. It has no field for a DICE device id or the golden `FWHash`. That is #696's registry. |
+| 1 | Device profile | `platformctl device profile create` ([../device/cli.md §3.2](../device/cli.md)) | Nothing for the record: `--dice-device-id` and `--golden-fw-hash` store the DICE device id and the golden `FWHash`, and the profile store resolves a profile by DICE device id (#1699). Enrollment does not read them yet; that needs the go-quicbaas DICE verb (#696's registry). |
 | 2 | EAB, if required | `webservices[].acme.external-account-required` (`pkg/webservice/v1/config.go:105`, passed through at `pkg/webservice/v1/registry.go:1900`). Create a credential with `POST /api/v1/eab/credentials` (`pkg/webservice/v1/rest/eab/router.go:59`). | Nothing. A bench may leave EAB off. |
 | 3 | `newAccount`, then `newOrder` for a `permanent-identifier` | The ACME routes ([../ca/api.md §3](../ca/api.md)) | Nothing on the order. |
 | 4 | Respond to the `device-attest-01` challenge | `AttestCert` (`provider.go:189`) signs the 32-byte SHA-256 of the key authorization | A server-side verifier (`buildChallengeMap`) and a client that carries the alias certificate to the challenge (#696). |
