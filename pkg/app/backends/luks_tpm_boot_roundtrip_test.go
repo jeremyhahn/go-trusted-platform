@@ -1,59 +1,105 @@
 package backends
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"testing"
 
+	"github.com/google/go-tpm-tools/simulator"
+	"github.com/google/go-tpm/tpm2"
+	"github.com/google/go-tpm/tpm2/transport"
+	luks2 "github.com/jeremyhahn/go-luks2/pkg/luks2"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/initrd"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/luks"
 )
 
-// roundTripSealer stands in for the TPM: Seal returns the passphrase and the
-// systemd-tpm2 token JSON that enrolment writes to the LUKS2 header.
-type roundTripSealer struct {
-	pass  []byte
-	token []byte
-	pcrs  []int32
-}
+// roundTripSRKHandle is the persistent storage SRK the SDK sealer seals under
+// by default (TCG PC Client 0x81000001).
+const roundTripSRKHandle = 0x81000001
 
-func (s *roundTripSealer) Seal(_ context.Context, _ string, pcrs []int32) ([]byte, []byte, error) {
-	s.pcrs = pcrs
-	return s.pass, s.token, nil
-}
+// simTPM hands every sealer operation the one in-process simulator. The
+// sealer closes its transport after each command batch; closing must not
+// stop the simulator, so Close is a no-op and the test closes it at the end.
+type simTPM struct{ transport.TPM }
 
-// roundTripUnsealer stands in for the initrd TPM unseal: it returns the
-// passphrase only for the blob enrolment sealed.
-type roundTripUnsealer struct {
-	blob string
-	pass []byte
-}
+func (simTPM) Close() error { return nil }
 
-func (u *roundTripUnsealer) Unseal(_ context.Context, token *luks.Token) ([]byte, error) {
-	if token == nil || token.TPM2Blob != u.blob {
-		return nil, errors.New("blob does not match the sealed one")
+// newRoundTripSimulator starts the TPM simulator, persists an ECC storage
+// SRK at roundTripSRKHandle and returns an opener for the SDK sealer.
+func newRoundTripSimulator(t *testing.T) TPMOpener {
+	t.Helper()
+	sim, err := simulator.GetWithFixedSeedInsecure(1234567890)
+	if err != nil {
+		t.Fatalf("simulator: %v", err)
 	}
-	return u.pass, nil
+	t.Cleanup(func() { _ = sim.Close() })
+	tpm := transport.FromReadWriter(sim)
+
+	srk, err := tpm2.CreatePrimary{
+		PrimaryHandle: tpm2.TPMRHOwner,
+		InPublic:      tpm2.New2B(tpm2.ECCSRKTemplate),
+	}.Execute(tpm)
+	if err != nil {
+		t.Fatalf("create SRK: %v", err)
+	}
+	if _, err := (tpm2.EvictControl{
+		Auth:             tpm2.TPMRHOwner,
+		ObjectHandle:     &tpm2.NamedHandle{Handle: srk.ObjectHandle, Name: srk.Name},
+		PersistentHandle: roundTripSRKHandle,
+	}).Execute(tpm); err != nil {
+		t.Fatalf("persist SRK: %v", err)
+	}
+	if _, err := (tpm2.FlushContext{FlushHandle: srk.ObjectHandle}).Execute(tpm); err != nil {
+		t.Fatalf("flush SRK: %v", err)
+	}
+	return TPMOpenerFunc(func(context.Context) (transport.TPMCloser, error) {
+		return simTPM{tpm}, nil
+	})
 }
 
-// roundTripLUKS is a header with one systemd-tpm2 token; Open records the
-// slot and passphrase it was called with.
+// sdkTokenUnsealer is the initrd's xkmsTokenUnsealer over a simulator
+// opener: it hands the header token, re-encoded, to the same SDK sealer's
+// UnsealPassphrase. The initrd type is unexported and opens only the host
+// TPM device, so the test builds the same two steps over the simulator.
+type sdkTokenUnsealer struct {
+	sealer interface {
+		UnsealPassphrase(ctx context.Context, tokenJSON []byte) ([]byte, error)
+	}
+}
+
+func (u sdkTokenUnsealer) Unseal(ctx context.Context, token *luks.Token) ([]byte, error) {
+	payload, err := json.Marshal(token)
+	if err != nil {
+		return nil, err
+	}
+	return u.sealer.UnsealPassphrase(ctx, payload)
+}
+
+// roundTripLUKS is the initrd's view of the volume: tokens come from the
+// real LUKS2 header and Open checks the passphrase against its keyslot.
+// Methods the boot unlock does not reach panic on the nil embedded Handler.
 type roundTripLUKS struct {
 	luks.Handler
-	token    *luks.Token
-	openPass []byte
+	device   string
+	tokens   map[int]*luks.Token
 	openSlot *int
+	openErr  error
+	opened   bool
 }
 
-func (l *roundTripLUKS) Open(_ context.Context, _, _ string, password []byte, opts *luks.OpenOptions) error {
-	l.openPass = append([]byte(nil), password...)
+func (l *roundTripLUKS) Open(_ context.Context, device, _ string, password []byte, opts *luks.OpenOptions) error {
 	if opts != nil && opts.KeySlot != nil {
 		slot := *opts.KeySlot
 		l.openSlot = &slot
 	}
-	return nil
+	// The strategy wipes the buffer after Open, so test the key here.
+	l.openErr = luks2.TestKey(device, password)
+	l.opened = true
+	return l.openErr
 }
 
 func (l *roundTripLUKS) IsOpen(context.Context, string) bool { return false }
@@ -67,10 +113,11 @@ func (l *roundTripLUKS) TokenCreateAt(context.Context, string, int, *luks.Token)
 }
 
 func (l *roundTripLUKS) TokenRead(_ context.Context, _ string, id int) (*luks.Token, error) {
-	if id != 0 {
+	tok, ok := l.tokens[id]
+	if !ok {
 		return nil, errors.New("no token")
 	}
-	return l.token, nil
+	return tok, nil
 }
 
 func (l *roundTripLUKS) TokenDelete(context.Context, string, int) error {
@@ -82,60 +129,75 @@ func (l *roundTripLUKS) TokenUpdate(context.Context, string, int, *luks.Token) e
 }
 
 func (l *roundTripLUKS) TokenList(context.Context, string) (map[int]*luks.Token, error) {
-	return map[int]*luks.Token{0: l.token}, nil
+	return l.tokens, nil
 }
 
 func (l *roundTripLUKS) TokenExists(_ context.Context, _ string, id int) (bool, error) {
-	return id == 0, nil
+	_, ok := l.tokens[id]
+	return ok, nil
 }
 
-func (l *roundTripLUKS) TokenCount(context.Context, string) (int, error) { return 1, nil }
+func (l *roundTripLUKS) TokenCount(context.Context, string) (int, error) { return len(l.tokens), nil }
 
-// TestLUKSTPMBootRoundTrip_InitrdUnsealsWhatEnrolmentSealed seals through the
-// PCR-checked handler WireSDKBackends installs, writes the token the way
-// enrolment does (keyslot 1), and has the initrd TPM-token strategy unlock
-// the volume: it must open keyslot 1 with the sealed passphrase.
+// TestLUKSTPMBootRoundTrip_InitrdUnsealsWhatEnrolmentSealed drives the TPM
+// enrolment and the boot unlock on the TPM simulator through the real SDK
+// sealer: the backend's EnrollTPM seals and writes the token into a LUKS2
+// image, the token is re-read from the header, and the initrd TPM token
+// strategy unseals it with the SDK sealer and opens the enrolled keyslot.
 func TestLUKSTPMBootRoundTrip_InitrdUnsealsWhatEnrolmentSealed(t *testing.T) {
 	ctx := context.Background()
-	pass := []byte("sealed-volume-passphrase")
-	tokenJSON := []byte(`{"type":"systemd-tpm2","keyslots":[],"tpm2-blob":"c2VhbGVkLWJsb2I=","tpm2-pcrs":[7],"tpm2-pcr-bank":"sha256"}`)
+	opener := newRoundTripSimulator(t)
 
-	sealer := &roundTripSealer{pass: pass, token: tokenJSON}
-	handler := pcrCheckedTPMHandler(sealer)
-	if handler == nil {
-		t.Fatal("pcrCheckedTPMHandler returned nil for a non-nil handler")
-	}
-	gotPass, gotToken, err := handler.Seal(ctx, "/dev/vda2", []int32{7})
+	sealer, err := NewLUKSTPMHandler(nil, opener)
 	if err != nil {
-		t.Fatalf("Seal: %v", err)
+		t.Fatalf("NewLUKSTPMHandler: %v", err)
 	}
-	if len(sealer.pcrs) != 1 || sealer.pcrs[0] != 7 {
-		t.Fatalf("Seal reached the TPM with PCRs %v, want [7]", sealer.pcrs)
+	device := newLUKSImage(t)
+	b := newTestLUKSBackend(WithLUKSTPMHandler(pcrCheckedTPMHandler(sealer)))
+
+	res, err := b.EnrollTPM(ctx, &daemon.LUKSEnrollTPMRequest{
+		Device:             device,
+		ExistingPassphrase: testLUKSPassphrase,
+		PCRs:               []int32{7},
+	})
+	if err != nil {
+		t.Fatalf("EnrollTPM: %v", err)
 	}
 
+	tokenID, err := strconv.Atoi(res.TokenID)
+	if err != nil {
+		t.Fatalf("token id %q: %v", res.TokenID, err)
+	}
+	raw, err := luks2.ExportToken(device, tokenID)
+	if err != nil {
+		t.Fatalf("re-read token %d from the header: %v", tokenID, err)
+	}
 	var token luks.Token
-	if err := json.Unmarshal(gotToken, &token); err != nil {
-		t.Fatalf("token JSON: %v", err)
+	if err := json.Unmarshal(raw, &token); err != nil {
+		t.Fatalf("header token JSON: %v", err)
 	}
-	token.Keyslots = []string{"1"}
+	if len(token.Keyslots) != 1 || token.Keyslots[0] != strconv.Itoa(int(res.Slot)) {
+		t.Fatalf("header token keyslots %v, want [%d]", token.Keyslots, res.Slot)
+	}
 
-	header := &roundTripLUKS{token: &token}
+	header := &roundTripLUKS{device: device, tokens: map[int]*luks.Token{tokenID: &token}}
 	strategy := initrd.NewTPMTokenStrategy(&initrd.Platform{LUKS: header}, nil)
-	strategy.SetUnsealer(&roundTripUnsealer{blob: token.TPM2Blob, pass: gotPass})
+	strategy.SetUnsealer(sdkTokenUnsealer{sealer: sealer})
 
-	volume := &luks.VolumeConfig{DevicePath: "/dev/vda2", MappingName: "cryptroot"}
+	volume := &luks.VolumeConfig{DevicePath: device, MappingName: "cryptroot"}
 	if !strategy.CanUnlock(ctx, volume) {
-		t.Fatal("CanUnlock is false for a volume with a systemd-tpm2 token")
+		t.Fatalf("CanUnlock is false for the enrolled header token %s", raw)
 	}
 	if err := strategy.Unlock(ctx, volume); err != nil {
 		t.Fatalf("Unlock: %v", err)
 	}
-	if header.openSlot == nil || *header.openSlot != 1 {
-		t.Fatalf("Open used keyslot %v, want 1", header.openSlot)
+	if !header.opened {
+		t.Fatal("Unlock never opened the volume")
 	}
-	// The strategy wipes the unsealed buffer after Open, so compare with a
-	// literal and not with the slice the sealer handed out.
-	if !bytes.Equal(header.openPass, []byte("sealed-volume-passphrase")) {
-		t.Fatal("Open was not given the sealed passphrase")
+	if header.openSlot == nil || *header.openSlot != int(res.Slot) {
+		t.Fatalf("Open used keyslot %v, want %d", header.openSlot, res.Slot)
+	}
+	if header.openErr != nil {
+		t.Fatalf("the unsealed passphrase does not open the enrolled keyslot: %v", header.openErr)
 	}
 }
