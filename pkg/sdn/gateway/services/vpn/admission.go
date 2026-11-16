@@ -286,7 +286,9 @@ func (s *Service) OwnLease(ctx context.Context, id LeaseID, peer *calleradmissio
 // failed to remove is never forgotten: its removal is owed to the next
 // Sweep, which retries it, and the address stays held until the peer is
 // gone, so it cannot go to another device while the revoked key may still
-// pass traffic. The removal error is returned too.
+// pass traffic. The removal error is returned too. Restore's dropLease
+// keeps the same order: the deletion is recorded before the peer goes, so an
+// unrecorded drop leaves the peer with the lease a restart reinstates.
 func (s *Service) revoke(ctx context.Context, lease *Lease, reason RevokeReason) error {
 	var storeErr error
 	if err := s.deps.Leases.Delete(ctx, lease.ID); err != nil {

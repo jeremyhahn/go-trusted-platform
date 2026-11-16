@@ -322,7 +322,11 @@ carried or revoked separately.
   a revocation the control plane refused stays out of a second gateway
   started over the same journal, and an unreadable journal refuses the start;
   a revocation that neither the journal nor the control plane records keeps
-  the lease, its peer and its address, and a restart agrees with it; an
+  the lease, its peer and its address, and a restart agrees with it; a
+  lease `Restore` drops is deleted before its hosted peer is removed, so a
+  drop the store could not record keeps the peer with the lease; a peer
+  removal that fails at a revoke, a drop or an admission rollback is owed to
+  the next `Sweep` and the address stays held until the peer is gone; an
   admission whose PUT committed but failed, or whose projection refused it
   after the PUT, is deleted again and stays out of a restart's rebuild;
   the gateway-facing lease routes refuse another gateway's record.
