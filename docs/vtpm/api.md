@@ -32,6 +32,7 @@ QUIC: **two top-level ranges** — `0x03`–`0x0F` for templates and bundles,
 | Clone template → bundle | `POST /api/v1/vtpm/templates/{id}/clone` | `CloneTemplate` | `OpVTPMCloneTemplate` (`0x07`) | `vtpm_template_clone` | ✅ |
 
 Complete on all five reachable transports.
+The SDK REST transport claims all five template routes and translates the domain JSON (`sdk/go/transport/rest/vtpm_templates.go`).
 
 ---
 
