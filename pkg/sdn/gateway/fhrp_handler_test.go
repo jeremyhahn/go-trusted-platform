@@ -20,6 +20,7 @@ import (
 	"net/netip"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -76,6 +77,8 @@ type fakeFHRPProgrammer struct {
 	// present holds the addresses found on the interface before Start.
 	present map[netip.Prefix]bool
 	deleted []netip.Prefix
+	// announced holds the addresses the speaker announced on takeover.
+	announced []netip.Addr
 }
 
 func (p *fakeFHRPProgrammer) AddAddress(_ string, prefix netip.Prefix, _ net.HardwareAddr) error {
@@ -105,7 +108,18 @@ func (p *fakeFHRPProgrammer) Deleted() []netip.Prefix {
 	return append([]netip.Prefix(nil), p.deleted...)
 }
 
-func (p *fakeFHRPProgrammer) Announce(string, netip.Addr, net.HardwareAddr) error { return nil }
+func (p *fakeFHRPProgrammer) Announce(_ string, addr netip.Addr, _ net.HardwareAddr) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.announced = append(p.announced, addr)
+	return nil
+}
+
+func (p *fakeFHRPProgrammer) Announced() []netip.Addr {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]netip.Addr(nil), p.announced...)
+}
 
 func (p *fakeFHRPProgrammer) Added() []netip.Prefix {
 	p.mu.Lock()
@@ -150,6 +164,37 @@ func TestBuildFHRP_StartsSpeakerWithInjectedTransport(t *testing.T) {
 
 	require.NoError(t, svc.Stop(context.Background()))
 	assert.False(t, svc.Active())
+}
+
+// TestBuildFHRP_IPv6TakeoverAnnouncesTheVIP: an IPv6 owner group built by
+// gatewayd announces its virtual address through the programmer on
+// takeover. The default programmer (fhrp.NewNetlinkProgrammer) sends that
+// announcement as a neighbor advertisement with Router and Override set
+// (RFC 4861 7.2.5), pinned in pkg/sdn/fhrp by
+// TestNetlinkProgrammer_AnnounceSendsAnUnsolicitedNA.
+func TestBuildFHRP_IPv6TakeoverAnnouncesTheVIP(t *testing.T) {
+	cfg := baseGatewayConfig("fhrp-gw6")
+	cfg.FHRP = &fhrp.Config{
+		Enabled: true,
+		Groups: []fhrp.GroupConfig{{
+			VRID:      10,
+			Interface: "trusted0",
+			Priority:  255,
+			Addresses: []string{"2001:db8::1/64"},
+			Source:    "fe80::1",
+		}},
+	}
+	programmer := &fakeFHRPProgrammer{}
+	cfg.Host = &HostRuntime{FHRPTransport: &fakeFHRPTransport{}, FHRPProgrammer: programmer}
+
+	svc, err := buildFHRP(&Gateway{config: cfg})
+	require.NoError(t, err)
+	require.NoError(t, svc.Start(context.Background()))
+	t.Cleanup(func() { _ = svc.Stop(context.Background()) })
+
+	require.Eventually(t, func() bool { return len(programmer.Announced()) > 0 }, 5*time.Second, 10*time.Millisecond,
+		"the owner announces its IPv6 virtual address on takeover")
+	assert.Equal(t, netip.MustParseAddr("2001:db8::1"), programmer.Announced()[0])
 }
 
 func TestBuildFHRP_InvalidConfigRefused(t *testing.T) {
