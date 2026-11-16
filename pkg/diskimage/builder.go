@@ -142,14 +142,17 @@ func Create(ctx context.Context, cfg *BuildConfig) (*Result, error) {
 	if err := validateBuilderImage(resolved.BuilderImage); err != nil {
 		return nil, &StageError{Step: "configuration", Err: err}
 	}
+	// The target resolves before the manifest key is checked: a usage error
+	// (an unknown --target) is reported ahead of a missing dependency such
+	// as the reference-values registrar.
+	target, err := NewTarget(resolved.Target, resolved.Model)
+	if err != nil {
+		return nil, err
+	}
 	if err := resolved.validateManifestKey(); err != nil {
 		return nil, &StageError{Step: "configuration", Err: err}
 	}
 	if !resolved.SkipPreflight {
-		target, err := NewTarget(resolved.Target, resolved.Model)
-		if err != nil {
-			return nil, err
-		}
 		if err := Preflight(ctx, resolved.Runner, resolved.ContainerRuntime, string(target.Architecture())); err != nil {
 			return nil, err
 		}
