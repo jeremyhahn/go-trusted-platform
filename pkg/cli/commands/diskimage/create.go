@@ -259,6 +259,7 @@ func (m *mediaFlags) imageBuild(iso *pkgiso.ISOBuildConfig, platformClient *cli.
 		UBootDir:              m.ubootDir,
 		UBootCacheVolume:      m.ubootCacheVolume,
 		KMSClients:            kmsClients(platformClient),
+		ReferenceValues:       referenceValues(platformClient),
 		Logger:                logger,
 		SkipPreflight:         m.skipPreflight,
 	}
@@ -415,4 +416,15 @@ func kmsClients(client *cli.LazyClient) pkgiso.KMSClientsFunc {
 		}
 		return &pkgiso.KMSClients{KMS: cl.KMS(), CA: cl.CA()}, nil
 	}
+}
+
+// referenceValues resolves the reference-values registrar a measured build
+// registers its signed manifest through: the go-quicbaas reference-values
+// store the verifier reads, reached through the platform client. The pinned
+// go-quicbaas SDK (v0.12.0-alpha) carries no reference-values verb
+// (PutReferenceValues ships in v0.14.0-alpha, a bump held to #1348), so it
+// yields no registrar and diskimage.Create refuses a measured build before it
+// starts. A variable so the command's tests can supply a registrar.
+var referenceValues = func(_ *cli.LazyClient) pkgdiskimage.ReferenceValueRegistrar {
+	return nil
 }
