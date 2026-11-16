@@ -410,21 +410,22 @@ func (s *Service) posture(ctx context.Context, tenantID string, report *PostureR
 	}
 	input, err := postureInput(report, v)
 	if err != nil {
-		return &ErrPostureUnavailable{Cause: err}
+		return &ErrPostureUnavailable{TenantID: tenantID, Cause: err}
 	}
 	evaluator, policyName, err := s.postureFor(tenantID)
 	if err != nil {
 		// A tenant policy that failed to compile refuses; it never falls
 		// back to the default.
-		return &ErrPostureUnavailable{Cause: err}
+		return &ErrPostureUnavailable{TenantID: tenantID, Cause: err}
 	}
 	result, err := evaluator.Evaluate(ctx, policyName, input)
 	if err != nil {
 		// Every engine failure is a refusal: no policy never means allow.
-		return &ErrPostureUnavailable{Cause: err}
+		return &ErrPostureUnavailable{TenantID: tenantID, Name: policyName, Cause: err}
 	}
 	if result == nil {
-		return &ErrPostureUnavailable{Cause: &opa.ErrEvaluationFailed{PolicyName: policyName, Reason: "no result"}}
+		return &ErrPostureUnavailable{TenantID: tenantID, Name: policyName,
+			Cause: &opa.ErrEvaluationFailed{PolicyName: policyName, Reason: "no result"}}
 	}
 	if len(result.Violations) > 0 || !result.Allowed {
 		names := make([]string, 0, len(result.Violations))

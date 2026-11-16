@@ -67,11 +67,18 @@ func (e *ErrPostureViolation) Error() string {
 
 // ErrPostureUnavailable is returned when the posture policy cannot be
 // evaluated at all. It is a refusal, never a bypass.
+// TenantID and Name name the tenant policy that could not be evaluated; both
+// are empty for the gateway default policy.
 type ErrPostureUnavailable struct {
-	Cause error
+	TenantID string
+	Name     string
+	Cause    error
 }
 
 func (e *ErrPostureUnavailable) Error() string {
+	if e.TenantID != "" {
+		return fmt.Sprintf("vpn: posture policy %q of tenant %q unavailable: %v", e.Name, e.TenantID, e.Cause)
+	}
 	return fmt.Sprintf("vpn: posture policy unavailable: %v", e.Cause)
 }
 

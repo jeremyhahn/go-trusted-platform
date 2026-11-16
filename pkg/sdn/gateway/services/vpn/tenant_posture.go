@@ -54,14 +54,14 @@ func CompilePosturePolicy(ctx context.Context, p PosturePolicy) (*opa.OPAEngine,
 	}
 	engine := opa.NewOPAEngine()
 	if err := engine.Initialize(ctx, &config.PolicyConfig{}); err != nil {
-		return nil, &ErrPostureUnavailable{Cause: err}
+		return nil, &ErrPostureUnavailable{TenantID: p.TenantID, Name: p.Name, Cause: err}
 	}
 	if err := engine.LoadPolicy(ctx, DefaultPosturePolicy, []byte(p.Module)); err != nil {
 		return nil, &ErrPosturePolicyInvalid{TenantID: p.TenantID, Name: p.Name, Reason: err.Error()}
 	}
 	bundle, err := engine.GetPolicy(DefaultPosturePolicy)
 	if err != nil {
-		return nil, &ErrPostureUnavailable{Cause: err}
+		return nil, &ErrPostureUnavailable{TenantID: p.TenantID, Name: p.Name, Cause: err}
 	}
 	if bundle.Package != PosturePackage {
 		return nil, &ErrPosturePolicyInvalid{TenantID: p.TenantID, Name: p.Name,
