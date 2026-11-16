@@ -17,10 +17,14 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"math"
 	"net"
+	"os"
 	"os/signal"
 	"slices"
+	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -181,15 +185,23 @@ func serveProcess(ctx context.Context, name string, opts serviceOptions, deps se
 	served := make(chan error, 1)
 	go func() { served <- server.Serve() }()
 
+	stopKeepAlive := func() {}
 	if err := gw.Start(ctx); err != nil {
 		// The process keeps serving so the supervisor reads why; it stops
 		// the process when it gives up on the service.
 		server.SetStartError(err)
 		logger.Error("Supervised services failed to start",
 			slog.String("process", def.Name), slog.Any("error", err))
+		// The STATUS= text names the process only: the error reaches the
+		// supervisor over the control socket, never through the notify one.
+		notifySupervisor(logger, def.Name, "STATUS="+def.Name+": services failed to start")
 	} else {
 		logger.Info("Supervised services started",
 			slog.String("process", def.Name), slog.Any("services", hosted))
+		notifySupervisor(logger, def.Name, "READY=1")
+		// Keep-alives run only after READY=1: the supervisor arms the watchdog
+		// at readiness, and a child that failed to start has nothing to keep.
+		stopKeepAlive = startWatchdogKeepAlive(ctx, logger, def.Name)
 	}
 
 	var serveErr error
@@ -202,6 +214,8 @@ func serveProcess(ctx context.Context, name string, opts serviceOptions, deps se
 		}
 	}
 
+	stopKeepAlive()
+	notifySupervisor(logger, def.Name, "STOPPING=1")
 	stopCtx, stopCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer stopCancel()
 	stopErr := gw.Stop(stopCtx)
@@ -214,6 +228,60 @@ func serveProcess(ctx context.Context, name string, opts serviceOptions, deps se
 			slog.String("process", def.Name), slog.Any("error", err))
 	}
 	return stopErr
+}
+
+// notifySupervisor sends state to the supervisor's notify socket, which
+// NOTIFY_SOCKET names (nothing when it is unset). A failed notification is
+// logged and never fails the process: the supervisor still reads the
+// process's state over the control socket.
+func notifySupervisor(logger *slog.Logger, name, state string) {
+	if err := process.Notify(state); err != nil {
+		logger.Warn("Supervisor notification failed",
+			slog.String("process", name), slog.Any("error", err))
+	}
+}
+
+// newKeepAliveTicker makes the keep-alive's ticker of period d: its channel
+// and its stop. A variable so tests drive the ticks and see the period
+// (Codex P1 #1928 round 4).
+var newKeepAliveTicker = func(d time.Duration) (<-chan time.Time, func()) {
+	t := time.NewTicker(d)
+	return t.C, t.Stop
+}
+
+// startWatchdogKeepAlive sends WATCHDOG=1 every half of the supervisor's
+// WATCHDOG_USEC (docs/gateway/supervisor.md) until ctx ends or the returned
+// stop is called; stop waits for the sender, so no keep-alive follows it.
+// A missing, zero or malformed WATCHDOG_USEC sends nothing.
+func startWatchdogKeepAlive(ctx context.Context, logger *slog.Logger, name string) (stop func()) {
+	usec, err := strconv.ParseInt(os.Getenv(process.WatchdogUsecEnv), 10, 64)
+	if err != nil || usec <= 0 {
+		return func() {}
+	}
+	usec = min(usec, int64(math.MaxInt64/time.Microsecond))
+	period := time.Duration(usec) * time.Microsecond / 2
+	if period <= 0 {
+		period = time.Microsecond
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticks, stopTicker := newKeepAliveTicker(period)
+		defer stopTicker()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticks:
+				notifySupervisor(logger, name, "WATCHDOG=1")
+			}
+		}
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
 }
 
 // vpnLeaseControl is the management VPN's lease record for the vpn child:

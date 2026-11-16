@@ -441,6 +441,8 @@ failed to find config: <reason>`.
 | `--config-file` | string | | Device platform config, YAML or JSON; converted to JSON on the wire |
 | `--tls-server-name` | string | | Certificate name the attestation collector verifies nodes of this profile against when it dials them for a quote (e.g. `compute.example.internal`); empty means the device's own FQDN (`docs/attestation/user.md`) |
 | `--clear-tls-server-name` | bool | `false` | **`update` only.** Clears the stored TLS server name, so the collector verifies nodes against their own FQDN again (§3.3). Mutually exclusive with `--tls-server-name` |
+| `--dice-device-id` | string | | Hex DICE device identifier (1 to 64 bytes) the registry resolves this profile by (`docs/firmware/avr-attestation.md`); lookups match it case-insensitively. An update that omits it keeps the stored value |
+| `--golden-fw-hash` | string | | Hex golden firmware hash (`FWHash`, exactly 32 bytes) the device is expected to measure. An update that omits it keeps the stored value |
 | `--match-mac-prefix` | string | | Match rule: MAC address prefix (e.g. `52:54:00`) |
 | `--match-serial-prefix` | string | | Match rule: serial number prefix |
 | `--match-model` | string | | Match rule: exact device model |

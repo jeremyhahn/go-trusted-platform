@@ -110,6 +110,14 @@ func (m *MockDeviceProfileDAO) FindByEKSerial(ctx context.Context, ekSerial stri
 	return args.Get(0).(*entities.DeviceProfile), args.Error(1)
 }
 
+func (m *MockDeviceProfileDAO) FindByDICEDeviceID(ctx context.Context, diceDeviceID string) (*entities.DeviceProfile, error) {
+	args := m.Called(ctx, diceDeviceID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*entities.DeviceProfile), args.Error(1)
+}
+
 func (m *MockDeviceProfileDAO) FindByExactMAC(ctx context.Context, mac string) (*entities.DeviceProfile, error) {
 	args := m.Called(ctx, mac)
 	if args.Get(0) == nil {

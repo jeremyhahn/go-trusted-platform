@@ -566,6 +566,36 @@ func TestDeviceProfileDAO_FindByMACPrefix_InputCaseIgnored_Mock(t *testing.T) {
 	}
 }
 
+func TestDeviceProfileDAO_FindByDICEDeviceID_Mock(t *testing.T) {
+	dao, mock := setupMockDeviceProfileDAO(t)
+	defer mock.Stop(context.Background())
+
+	ctx := context.Background()
+	other := &entities.DeviceProfile{ID: 1, Model: "Model-No-DICE", EKSerial: "EK-1"}
+	profile := &entities.DeviceProfile{
+		ID:           2,
+		Model:        "Model-DICE",
+		DICEDeviceID: "00aabbccdd",
+		GoldenFWHash: "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+	}
+	require.NoError(t, dao.Save(ctx, other))
+	require.NoError(t, dao.Save(ctx, profile))
+
+	for _, id := range []string{"00aabbccdd", "00AABBCCDD"} {
+		retrieved, err := dao.FindByDICEDeviceID(ctx, id)
+		require.NoError(t, err, id)
+		assert.Equal(t, profile.ID, retrieved.ID, id)
+		assert.Equal(t, profile.GoldenFWHash, retrieved.GoldenFWHash, id)
+	}
+
+	for _, id := range []string{"00aabbccee", ""} {
+		_, err := dao.FindByDICEDeviceID(ctx, id)
+		var notFound ErrNotFoundByIndex
+		require.ErrorAs(t, err, &notFound, id)
+		assert.Equal(t, "DICEDeviceID", notFound.IndexField, id)
+	}
+}
+
 func TestDeviceProfileDAO_FindMatchingProfile_AllCriteria_Mock(t *testing.T) {
 	dao, mock := setupMockDeviceProfileDAO(t)
 	defer mock.Stop(context.Background())

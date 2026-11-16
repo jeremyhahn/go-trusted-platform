@@ -1,0 +1,46 @@
+# /lib/systemd/system/deploy-agent.service
+# Trusted Platform :: QUIC deploy agent (#1700)
+# Serves the bootstrap deployer over mutually authenticated QUIC (TLS 1.3),
+# in place of SSH. See docs/bootstrap/remote-deploy.md.
+#
+# Install: copy bin/deploy-agent to /usr/local/bin, the agent certificate,
+# key and the deployer CA bundle to /etc/trusted-platform/deploy-agent/,
+# then `systemctl enable --now deploy-agent`.
+
+[Unit]
+Description=Trusted Platform QUIC deploy agent
+Documentation=file:///usr/share/doc/trusted-platform/remote-deploy.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+
+# Optional overrides, e.g. DEPLOY_AGENT_LISTEN=10.0.0.5:7443
+Environment=DEPLOY_AGENT_LISTEN=:7443
+EnvironmentFile=-/etc/trusted-platform/deploy-agent.env
+
+# Root: the deployer runs the container runtime and writes the staging
+# directory, as it did over SSH.
+ExecStart=/usr/local/bin/deploy-agent \
+	-listen=${DEPLOY_AGENT_LISTEN} \
+	-cert=/etc/trusted-platform/deploy-agent/agent.crt \
+	-key=/etc/trusted-platform/deploy-agent/agent.key \
+	-client-ca=/etc/trusted-platform/deploy-agent/deployer-ca.pem
+
+Restart=on-failure
+RestartSec=5s
+StartLimitInterval=60s
+StartLimitBurst=3
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=deploy-agent
+
+NoNewPrivileges=true
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

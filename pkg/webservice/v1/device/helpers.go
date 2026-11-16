@@ -67,7 +67,10 @@ func handleServiceErr(responseWriter response.HttpWriter, w http.ResponseWriter,
 	// Typed validation failures from the service layer are client errors.
 	var vlans device.ErrProfileVLANsNotDistinct
 	var templateName device.ErrTemplateNameRequired
-	if errors.As(err, &vlans) || errors.As(err, &templateName) {
+	var diceID entities.ErrInvalidDICEDeviceID
+	var fwHash entities.ErrInvalidGoldenFWHash
+	if errors.As(err, &vlans) || errors.As(err, &templateName) ||
+		errors.As(err, &diceID) || errors.As(err, &fwHash) {
 		responseWriter.Error400(w, r, err)
 		return
 	}

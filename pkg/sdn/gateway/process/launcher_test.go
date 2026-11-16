@@ -169,3 +169,22 @@ func TestCapValues_ListsEverySetBit(t *testing.T) {
 func TestCapValues_ListsNothingForAnEmptyMask(t *testing.T) {
 	assert.Empty(t, capValues(0))
 }
+
+func TestChildEnv_SetsTheNotifySocket(t *testing.T) {
+	base := []string{"PATH=/usr/bin", "HOME=/root"}
+
+	env := childEnv(base, "/run/platformd/dhcp.notify")
+
+	assert.Equal(t, []string{"PATH=/usr/bin", "HOME=/root", "NOTIFY_SOCKET=/run/platformd/dhcp.notify"}, env)
+	assert.Equal(t, []string{"PATH=/usr/bin", "HOME=/root"}, base, "the base env is not modified")
+}
+
+func TestChildEnv_DropsAnInheritedNotifySocket(t *testing.T) {
+	base := []string{"NOTIFY_SOCKET=/elsewhere", "PATH=/usr/bin", "NOTIFY_SOCKET=@abstract"}
+
+	env := childEnv(base, "/run/platformd/dhcp.notify")
+	assert.Equal(t, []string{"PATH=/usr/bin", "NOTIFY_SOCKET=/run/platformd/dhcp.notify"}, env)
+
+	env = childEnv(base, "")
+	assert.Equal(t, []string{"PATH=/usr/bin"}, env)
+}

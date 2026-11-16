@@ -441,6 +441,9 @@ type fakeLauncher struct {
 	// loop can outrun (#742).
 	failCount int
 	nextPID   int
+	// pid, when set, is the pid every child reports instead of a counted
+	// one; os.Getpid() lets a test's own Notify pass the pid check.
+	pid int
 	// gate, when set, blocks inside Launch until it is closed, so a test
 	// can run a stop while a launch is in flight. launched is closed once
 	// Launch has been entered.
@@ -523,6 +526,9 @@ func (l *fakeLauncher) Launch(ctx context.Context, spec Spec) (Child, error) {
 	}
 	l.nextPID++
 	pid := l.nextPID
+	if l.pid != 0 {
+		pid = l.pid
+	}
 	l.mu.Unlock()
 	if failure != nil {
 		return nil, &ErrProcessLaunch{Process: spec.Definition.Name, Cause: failure}
@@ -1111,6 +1117,244 @@ func TestStopService_SignalsBeforeItCancelsTheLaunchContext(t *testing.T) {
 	assert.NotContains(t, log, "signal:killed", "a child that stops gracefully is never killed")
 }
 
+// lastSpec is the Spec of the most recent launch.
+func (l *fakeLauncher) lastSpec(t *testing.T) Spec {
+	t.Helper()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	require.NotEmpty(t, l.launches, "nothing was launched")
+	return l.launches[len(l.launches)-1]
+}
+
+func TestSupervisor_LaunchPassesEachChildItsNotifySocket(t *testing.T) {
+	// docs/gateway/supervisor.md: platformd passes each child a NOTIFY_SOCKET,
+	// an AF_UNIX SOCK_DGRAM socket per child in its runtime directory (#1193).
+	supervisor, launcher, _ := newSupervisor(t, nil)
+	ctx := testContext(t)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceProxy))
+
+	spec := launcher.lastSpec(t)
+	want := filepath.Join(supervisor.cfg.RuntimeDir, spec.Definition.Name+".notify")
+	assert.Equal(t, want, spec.NotifySocket)
+	info, err := os.Stat(want)
+	require.NoError(t, err)
+	assert.Equal(t, os.ModeSocket, info.Mode()&os.ModeSocket, "the notify path is a bound socket")
+}
+
+func TestSupervisor_StopRemovesTheNotifySocket(t *testing.T) {
+	supervisor, launcher, _ := newSupervisor(t, nil)
+	ctx := testContext(t)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceProxy))
+	path := launcher.lastSpec(t).NotifySocket
+	require.NotEmpty(t, path)
+
+	require.NoError(t, supervisor.StopService(ctx, gateway.ServiceProxy))
+	_, err := os.Stat(path)
+	assert.ErrorIs(t, err, os.ErrNotExist, "stopping the last service closes and removes the socket")
+}
+
+// notifyState returns a process's current notify socket and the ready
+// channel its reader closes on the first READY=1.
+func (s *Supervisor) notifyState(t *testing.T, process string) (*NotifySocket, <-chan struct{}) {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	proc := s.processes[process]
+	require.NotNil(t, proc, "process %s is supervised", process)
+	return proc.notify, proc.ready
+}
+
+func TestSupervisor_ReadyNotifyIsRecorded(t *testing.T) {
+	// docs/gateway/supervisor.md: the supervisor reads each child's notify
+	// socket and records its READY=1 (#1193 slice 3).
+	supervisor, launcher, _ := newSupervisor(t, nil)
+	launcher.pid = os.Getpid()
+	ctx := testContext(t)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceProxy))
+	spec := launcher.lastSpec(t)
+	_, ready := supervisor.notifyState(t, spec.Definition.Name)
+	require.NotNil(t, ready)
+
+	t.Setenv(NotifySocketEnv, spec.NotifySocket)
+	require.NoError(t, Notify("STATUS=serving\nREADY=1"))
+	select {
+	case <-ready:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the supervisor never saw the child's READY=1")
+	}
+}
+
+func TestSupervisor_AwaitWakesOnReady(t *testing.T) {
+	// A child that is still starting at the first status question is asked
+	// again as soon as it sends READY=1, not a poll interval later.
+	supervisor, launcher, clock := newSupervisor(t, nil)
+	launcher.pid = os.Getpid()
+	node := launcher.node("datapath", nil)
+	node.services = []gateway.ServiceReport{{Name: gateway.ServiceLoadBalancer, Active: true}}
+	// awaitProcess's question takes the first reply, awaitService's first
+	// question the second: both say the child is still starting.
+	node.startingPolls = 2
+	// The poll never fires on its own: only READY=1 can wake the wait.
+	held := clock.holdDelay(readyPollInterval)
+	released := false
+	defer func() {
+		if !released {
+			close(held.release)
+		}
+	}()
+
+	ctx := testContext(t)
+	result := make(chan error, 1)
+	go func() { result <- supervisor.StartService(ctx, gateway.ServiceLoadBalancer) }()
+	held.awaitEntered(t, ctx)
+
+	t.Setenv(NotifySocketEnv, launcher.lastSpec(t).NotifySocket)
+	require.NoError(t, Notify("READY=1"))
+	select {
+	case err := <-result:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		close(held.release)
+		released = true
+		<-result
+		t.Fatal("StartService waited out the poll instead of waking on READY=1")
+	}
+	assert.True(t, supervisor.ServiceActive(gateway.ServiceLoadBalancer))
+}
+
+func TestSupervisor_AwaitProcessWakesOnReady(t *testing.T) {
+	// A child that does not answer its first status question is asked again
+	// as soon as it sends READY=1: awaitProcess, not only awaitService,
+	// wakes on the notify (Codex P1, #1926).
+	supervisor, launcher, clock := newSupervisor(t, nil)
+	launcher.pid = os.Getpid()
+	node := launcher.node("datapath", nil)
+	node.services = []gateway.ServiceReport{{Name: gateway.ServiceLoadBalancer, Active: true}}
+	// The child does not listen yet, so awaitProcess's first status
+	// question fails and it goes to its poll wait.
+	listen := launcher.deferNextListen()
+	listened := false
+	defer func() {
+		if !listened {
+			close(listen)
+		}
+	}()
+	// The poll never fires on its own: only READY=1 can wake the wait.
+	held := clock.holdDelay(readyPollInterval)
+	released := false
+	defer func() {
+		if !released {
+			close(held.release)
+		}
+	}()
+
+	ctx := testContext(t)
+	result := make(chan error, 1)
+	go func() { result <- supervisor.StartService(ctx, gateway.ServiceLoadBalancer) }()
+	held.awaitEntered(t, ctx)
+
+	close(listen)
+	listened = true
+	t.Setenv(NotifySocketEnv, launcher.lastSpec(t).NotifySocket)
+	require.NoError(t, Notify("READY=1"))
+	select {
+	case err := <-result:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		close(held.release)
+		released = true
+		<-result
+		t.Fatal("awaitProcess waited out the poll instead of waking on READY=1")
+	}
+	assert.True(t, supervisor.ServiceActive(gateway.ServiceLoadBalancer))
+}
+
+func TestSupervisor_ReadyButInactiveTimesOut(t *testing.T) {
+	// READY=1 only wakes the wait: a child that notified but whose service
+	// never comes up is still polled, still held to ReadyTimeout, and
+	// stopped when it runs out.
+	const readyTimeout = 200 * time.Millisecond
+	supervisor, launcher, clock := newSupervisor(t, func(c *Config) { c.ReadyTimeout = readyTimeout })
+	launcher.pid = os.Getpid()
+	node := launcher.node("datapath", nil)
+	node.services = []gateway.ServiceReport{{Name: gateway.ServiceLoadBalancer, Active: true}}
+	node.startingPolls = math.MaxInt
+	// awaitProcess is answered at once; awaitService's first poll is held
+	// so READY=1 lands while it waits.
+	held := clock.holdDelay(readyPollInterval)
+	defer close(held.release)
+
+	ctx := testContext(t)
+	result := make(chan error, 1)
+	go func() { result <- supervisor.StartService(ctx, gateway.ServiceLoadBalancer) }()
+	held.awaitEntered(t, ctx)
+	clock.mu.Lock()
+	pollsBefore := countDelays(clock.delays, readyPollInterval)
+	clock.mu.Unlock()
+
+	t.Setenv(NotifySocketEnv, launcher.lastSpec(t).NotifySocket)
+	require.NoError(t, Notify("READY=1"))
+	var err error
+	select {
+	case err = <-result:
+	case <-ctx.Done():
+		t.Fatal("a ready but inactive child was waited on past ReadyTimeout")
+	}
+	var notActive *ErrServiceNotActiveInProcess
+	require.ErrorAs(t, err, &notActive, "the readiness deadline still bounds the wait after READY=1")
+	assert.Equal(t, gateway.ServiceLoadBalancer, notActive.Service)
+
+	clock.mu.Lock()
+	pollsAfter := countDelays(clock.delays, readyPollInterval) - pollsBefore
+	clock.mu.Unlock()
+	// Every collapsed poll moves the clock one interval on, so reaching the
+	// deadline after READY=1 took polls; half the timeout's worth leaves
+	// room for the real time the status questions took.
+	assert.GreaterOrEqual(t, pollsAfter, int(readyTimeout/readyPollInterval)/2,
+		"polling goes on after the readiness channel is closed")
+	assert.Contains(t, launcher.lastChild().signalled(), os.Signal(syscall.SIGTERM))
+	assert.False(t, supervisor.ServiceActive(gateway.ServiceLoadBalancer))
+}
+
+// countDelays is how many of the recorded clock waits were of length d.
+func countDelays(delays []time.Duration, d time.Duration) int {
+	n := 0
+	for _, delay := range delays {
+		if delay == d {
+			n++
+		}
+	}
+	return n
+}
+
+func TestSupervisor_WrongPidNotifyIsDropped(t *testing.T) {
+	// The fake child's pid is not this test's, so the test's datagram comes
+	// from the wrong sender: it is dropped and the child is not marked
+	// ready. The polled path still brings the service up (a child that
+	// never notifies is started the way it always was).
+	supervisor, launcher, _ := newSupervisor(t, nil)
+	node := launcher.node("datapath", nil)
+	node.services = []gateway.ServiceReport{{Name: gateway.ServiceLoadBalancer, Active: true}}
+	node.startingPolls = 3
+	ctx := testContext(t)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceLoadBalancer))
+	assert.True(t, supervisor.ServiceActive(gateway.ServiceLoadBalancer))
+
+	spec := launcher.lastSpec(t)
+	require.NotEqual(t, os.Getpid(), launcher.lastChild().PID())
+	notify, ready := supervisor.notifyState(t, spec.Definition.Name)
+	require.NotNil(t, notify)
+	t.Setenv(NotifySocketEnv, spec.NotifySocket)
+	require.NoError(t, Notify("READY=1"))
+	require.Eventually(t, func() bool { return notify.Dropped() > 0 }, 2*time.Second, 5*time.Millisecond,
+		"the datagram from the wrong pid is dropped")
+	select {
+	case <-ready:
+		t.Fatal("a READY=1 from the wrong pid marked the child ready")
+	default:
+	}
+}
+
 func TestExecLauncher_CancellingTheContextAsksTheChildToStopRatherThanKillingIt(t *testing.T) {
 	// exec.CommandContext's default cancellation is Process.Kill. A gatewayd
 	// child holds kernel state it withdraws on SIGTERM, so the launcher
@@ -1333,6 +1577,639 @@ func TestCrashLoop_StopsAtTheRestartBudget(t *testing.T) {
 	assert.Equal(t, "routing", exhausted.Process)
 	assert.Contains(t, exhausted.Error(), "restart budget")
 	assert.Equal(t, 3, launcher.launchCount(), "no fourth launch after the budget is gone")
+}
+
+// watchdogClock is a testClock that holds every wait of the watchdog
+// interval until the test fires it, so a keep-alive deadline passes only
+// when the test says so. Each re-arm of the watchdog is one more wait.
+type watchdogClock struct {
+	*testClock
+	interval time.Duration
+
+	mu    sync.Mutex
+	armed []chan time.Time
+	// due is each armed wait's deadline on this clock: Now when it was
+	// armed plus the wait.
+	due []time.Time
+	now time.Time
+	// jumpTo, once set, is where Now moves right after its next read: the
+	// keep-alive's receipt stamp reads the old time, and everything after it
+	// (the watchdog handling that keep-alive) reads the new one.
+	jumpTo time.Time
+}
+
+func (c *watchdogClock) After(d time.Duration) <-chan time.Time {
+	if d != c.interval {
+		return c.testClock.After(d)
+	}
+	now := c.Now()
+	ch := make(chan time.Time, 1)
+	c.mu.Lock()
+	c.armed = append(c.armed, ch)
+	c.due = append(c.due, now.Add(d))
+	c.mu.Unlock()
+	return ch
+}
+
+// arms is how many times the watchdog deadline has been armed.
+func (c *watchdogClock) arms() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.armed)
+}
+
+func (c *watchdogClock) awaitArmed(t *testing.T, n int) {
+	t.Helper()
+	require.Eventually(t, func() bool { return c.arms() >= n },
+		10*time.Second, 5*time.Millisecond, "the watchdog deadline is armed %d times", n)
+}
+
+// fire passes the i-th armed deadline: the clock moves to it (never back)
+// and its wait ends.
+func (c *watchdogClock) fire(i int) {
+	c.Now() // stand the clock still first, if nothing has yet
+	c.mu.Lock()
+	ch := c.armed[i]
+	if c.due[i].After(c.now) {
+		c.now = c.due[i]
+	}
+	c.mu.Unlock()
+	select {
+	case ch <- time.Now():
+	default:
+	}
+}
+
+// Now is the time setNow or fire last gave. It stands still between them:
+// the first read takes the testClock's time and keeps it, so a watchdog
+// deadline taken at a keep-alive is exactly one interval from the watchdog's
+// own reading. The watchdog's deadlines and keep-alive stamps read it, so a
+// test moves the supervisor's time past a deadline without firing its timer.
+func (c *watchdogClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.now.IsZero() {
+		c.now = c.testClock.Now()
+	}
+	now := c.now
+	if !c.jumpTo.IsZero() {
+		c.now, c.jumpTo = c.jumpTo, time.Time{}
+	}
+	return now
+}
+
+// jumpAfterNextRead moves the clock to to right after its next read.
+func (c *watchdogClock) jumpAfterNextRead(to time.Time) {
+	c.mu.Lock()
+	c.jumpTo = to
+	c.mu.Unlock()
+}
+
+func (c *watchdogClock) setNow(now time.Time) {
+	c.mu.Lock()
+	c.now = now
+	c.mu.Unlock()
+}
+
+// newWatchdogSupervisor is newSupervisor with a watchdogClock holding waits
+// of clockInterval, and the routing process (the transit service) given a
+// watchdog interval of defInterval. Every child reports this test's pid,
+// so the test's own Notify reaches the supervisor's notify socket.
+func newWatchdogSupervisor(t *testing.T, clockInterval, defInterval time.Duration, tune func(*Config)) (*Supervisor, *fakeLauncher, *watchdogClock) {
+	t.Helper()
+	clock := &watchdogClock{testClock: &testClock{}, interval: clockInterval}
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
+		if tune != nil {
+			tune(c)
+		}
+		clock.stopTimeout = c.StopTimeout
+		c.Clock = clock
+	})
+	launcher.pid = os.Getpid()
+	def, err := DefinitionForService(gateway.ServiceTransit)
+	require.NoError(t, err)
+	def.WatchdogInterval = defInterval
+	supervisor.mu.Lock()
+	supervisor.processes[def.Name] = &supervised{def: def, wanted: map[string]bool{}, socket: supervisor.socketPath(def.Name)}
+	supervisor.mu.Unlock()
+	return supervisor, launcher, clock
+}
+
+// notifyChild sends msg to the current child's notify socket, as the child.
+func notifyChild(t *testing.T, launcher *fakeLauncher, msg string) {
+	t.Helper()
+	t.Setenv(NotifySocketEnv, launcher.lastSpec(t).NotifySocket)
+	require.NoError(t, Notify(msg))
+}
+
+func TestWatchdog_AMissedKeepAliveRestartsTheChild(t *testing.T) {
+	// docs/gateway/supervisor.md: a child with a watchdog interval sends
+	// WATCHDOG=1 at least once per interval; a missed deadline is a failure,
+	// restarted under the restart policy and counted against its budget.
+	const interval = 7 * time.Second
+	supervisor, launcher, clock := newWatchdogSupervisor(t, interval, interval, func(c *Config) {
+		c.RestartBackoff = time.Millisecond
+		c.RestartBudget = 1
+	})
+	ctx := testContext(t)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceTransit))
+	first := launcher.lastChild()
+
+	// The deadline is armed at readiness and again at every keep-alive.
+	notifyChild(t, launcher, "READY=1")
+	clock.awaitArmed(t, 1)
+	for i := 0; i < 3; i++ {
+		notifyChild(t, launcher, "WATCHDOG=1")
+		clock.awaitArmed(t, i+2)
+	}
+	assert.Empty(t, first.signalled(), "keep-alives in time leave the child alone")
+
+	// The keep-alives stop and the deadline passes: the child is stopped and
+	// a new one launched through the restart backoff.
+	clock.fire(clock.arms() - 1)
+	require.Eventually(t, func() bool { return len(first.signalled()) > 0 },
+		10*time.Second, 5*time.Millisecond, "the silent child is stopped")
+	assert.Equal(t, syscall.SIGTERM, first.signalled()[0])
+	awaitRelaunch(t, supervisor, launcher, "routing", 2)
+	supervisor.mu.Lock()
+	restarts := len(supervisor.processes["routing"].restarts)
+	supervisor.mu.Unlock()
+	assert.Equal(t, 1, restarts, "the missed keep-alive is counted against the restart budget, like a crash")
+
+	// The new child misses too: a budget of one is exhausted, and the
+	// supervisor says the watchdog was the last failure.
+	armed := clock.arms()
+	notifyChild(t, launcher, "READY=1")
+	clock.awaitArmed(t, armed+1)
+	clock.fire(clock.arms() - 1)
+	var exhausted *ErrRestartBudgetExhausted
+	require.Eventually(t, func() bool {
+		return errors.As(supervisor.ServiceHealth(gateway.ServiceTransit), &exhausted)
+	}, 20*time.Second, 10*time.Millisecond, "the supervisor gives up and says so")
+	var missed *ErrWatchdogMissed
+	require.ErrorAs(t, exhausted.Last, &missed)
+	assert.Equal(t, "routing", missed.Process)
+	assert.Equal(t, interval, missed.Interval)
+	assert.Contains(t, missed.Error(), "watchdog")
+	assert.Equal(t, 2, launcher.launchCount(), "no third launch after the budget is gone")
+}
+
+func TestWatchdog_KeepAlivesHoldTheChild(t *testing.T) {
+	// Keep-alives at half the interval: every deadline the clock passes has
+	// already been replaced by the next keep-alive's, so the child stays up
+	// across several intervals.
+	const interval = 7 * time.Second
+	supervisor, launcher, clock := newWatchdogSupervisor(t, interval, interval, nil)
+	ctx := testContext(t)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceTransit))
+	child := launcher.lastChild()
+
+	notifyChild(t, launcher, "READY=1")
+	clock.awaitArmed(t, 1)
+	for i := 0; i < 4; i++ {
+		notifyChild(t, launcher, "WATCHDOG=1")
+		clock.awaitArmed(t, i+2)
+		// The deadline the keep-alive replaced passes: nothing happens.
+		clock.fire(i)
+	}
+	assert.Never(t, func() bool {
+		return len(child.signalled()) > 0 || launcher.launchCount() > 1
+	}, 300*time.Millisecond, 10*time.Millisecond, "a child that keeps alive is never stopped")
+	assert.True(t, supervisor.ServiceActive(gateway.ServiceTransit))
+}
+
+func TestWatchdog_ZeroIntervalIsOff(t *testing.T) {
+	// No interval: no watchdog deadline, however long the child is silent,
+	// and no WATCHDOG_USEC in its environment, not even an inherited one.
+	supervisor, launcher, clock := newWatchdogSupervisor(t, 7*time.Second, 0, nil)
+	ctx := testContext(t)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceTransit))
+	notifyChild(t, launcher, "READY=1")
+	notifyChild(t, launcher, "WATCHDOG=1")
+	assert.Never(t, func() bool { return clock.arms() > 0 },
+		200*time.Millisecond, 10*time.Millisecond, "no watchdog is armed")
+
+	spec := launcher.lastSpec(t)
+	assert.Zero(t, spec.Definition.WatchdogInterval)
+	env := launchEnv([]string{"PATH=/usr/bin", WatchdogUsecEnv + "=5000000"}, spec)
+	assert.Equal(t, []string{"PATH=/usr/bin", NotifySocketEnv + "=" + spec.NotifySocket}, env)
+}
+
+func TestWatchdog_EnvironmentCarriesTheInterval(t *testing.T) {
+	// The child learns its interval the systemd way: WATCHDOG_USEC, in
+	// microseconds, replacing any the supervisor inherited.
+	supervisor, launcher, _ := newWatchdogSupervisor(t, 7*time.Second, 7*time.Second, nil)
+	ctx := testContext(t)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceTransit))
+
+	spec := launcher.lastSpec(t)
+	assert.Equal(t, 7*time.Second, spec.Definition.WatchdogInterval)
+	env := launchEnv([]string{WatchdogUsecEnv + "=1", "PATH=/usr/bin"}, spec)
+	assert.Equal(t, []string{
+		"PATH=/usr/bin",
+		NotifySocketEnv + "=" + spec.NotifySocket,
+		WatchdogUsecEnv + "=7000000",
+	}, env)
+}
+
+func TestWatchdog_AnOnTimeKeepAliveBeatsAnExpiredTimer(t *testing.T) {
+	// Codex P1 #1928: a keep-alive received before the deadline is on time,
+	// however late the watchdog reads it: the watchdog starts with the clock
+	// past the first deadline and the keep-alive already recorded. Round 2:
+	// a keep-alive received after the deadline is a miss.
+	const interval = 7 * time.Second
+	clock := &watchdogClock{testClock: &testClock{}, interval: interval}
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
+		clock.stopTimeout = c.StopTimeout
+		c.Clock = clock
+	})
+	launcher.pid = os.Getpid()
+	require.NoError(t, supervisor.StartService(testContext(t), gateway.ServiceTransit))
+	child := launcher.lastChild()
+	def, err := DefinitionForService(gateway.ServiceTransit)
+	require.NoError(t, err)
+
+	run := func(stamp time.Duration) bool {
+		base := time.Now()
+		ready := make(chan struct{})
+		close(ready)
+		proc := &supervised{def: def, wanted: map[string]bool{}, child: child, stopping: true}
+		clock.setNow(base)
+		wd := newWatchdogState(interval, clock)
+		wd.ready()
+		clock.setNow(base.Add(stamp))
+		wd.keepAlive()
+		clock.setNow(base.Add(interval + time.Second))
+		gone := make(chan struct{})
+		ctx, cancel := context.WithCancel(testContext(t))
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			supervisor.watchdog(ctx, proc, child, wd, ready, gone)
+		}()
+		// proc is stopping, so a miss records nothing and stops nobody: the
+		// watchdog just returns.
+		var missed bool
+		select {
+		case <-done:
+			missed = true
+		case <-time.After(200 * time.Millisecond):
+		}
+		cancel()
+		close(gone)
+		<-done
+		return missed
+	}
+
+	assert.False(t, run(interval-time.Second), "a keep-alive received before the deadline is on time, however late it is read")
+	assert.True(t, run(interval+time.Second), "a keep-alive received after the deadline is a miss")
+	assert.Empty(t, child.signalled(), "the watchdog stops only the current child, and proc is stopping")
+}
+
+func TestWatchdog_ConfigGivesProductionChildrenAnInterval(t *testing.T) {
+	// Codex P1 #1928: the production definitions carry no interval, so the
+	// supervisor's Config gives one to each child it launches, and the
+	// child learns it from WATCHDOG_USEC. The package's definitions stay
+	// as they are.
+	const interval = 7 * time.Second
+	clock := &watchdogClock{testClock: &testClock{}, interval: interval}
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
+		clock.stopTimeout = c.StopTimeout
+		c.Clock = clock
+		c.WatchdogInterval = interval
+	})
+	require.NoError(t, supervisor.StartService(testContext(t), gateway.ServiceTransit))
+
+	spec := launcher.lastSpec(t)
+	assert.Equal(t, interval, spec.Definition.WatchdogInterval)
+	env := launchEnv([]string{"PATH=/usr/bin"}, spec)
+	assert.Contains(t, env, WatchdogUsecEnv+"=7000000")
+	for _, def := range Definitions() {
+		assert.Zero(t, def.WatchdogInterval, "%s: the package definitions are not mutated", def.Name)
+	}
+}
+
+func TestSettings_WatchdogInterval(t *testing.T) {
+	// Absent: the documented default, 0, so the watchdog is opt-in (Codex
+	// P1 #1928 round 2). An explicit 0: off. Negative: refused.
+	name := currentUserName(t)
+	cfg, err := Settings{Enabled: true, User: name}.Config(Inherited{}, nil)
+	require.NoError(t, err)
+	assert.Zero(t, DefaultWatchdogInterval, "the watchdog is off unless the operator sets an interval")
+	assert.Zero(t, cfg.WatchdogInterval)
+
+	off := time.Duration(0)
+	cfg, err = Settings{Enabled: true, User: name, WatchdogInterval: &off}.Config(Inherited{}, nil)
+	require.NoError(t, err)
+	assert.Zero(t, cfg.WatchdogInterval)
+
+	set := 5 * time.Second
+	cfg, err = Settings{Enabled: true, User: name, WatchdogInterval: &set}.Config(Inherited{}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, set, cfg.WatchdogInterval)
+
+	negative := -time.Second
+	_, err = Settings{Enabled: true, User: name, WatchdogInterval: &negative}.Config(Inherited{}, nil)
+	var invalid *ErrWatchdogIntervalInvalid
+	require.ErrorAs(t, err, &invalid)
+	assert.Equal(t, negative, invalid.Interval)
+
+	// Codex P1 #1928 round 5: a positive interval below 1 µs would reach
+	// the child as WATCHDOG_USEC=0, so it would send no keep-alives while
+	// the supervisor armed a deadline. Refused; 1 µs is the floor.
+	for _, below := range []time.Duration{time.Nanosecond, 999 * time.Nanosecond} {
+		_, err = Settings{Enabled: true, User: name, WatchdogInterval: &below}.Config(Inherited{}, nil)
+		invalid = nil
+		require.ErrorAs(t, err, &invalid, "interval %s", below)
+		assert.Equal(t, below, invalid.Interval)
+	}
+	floor := time.Microsecond
+	cfg, err = Settings{Enabled: true, User: name, WatchdogInterval: &floor}.Config(Inherited{}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, floor, cfg.WatchdogInterval)
+}
+
+func TestWatchdog_ASubMicrosecondIntervalIsRefusedAtStart(t *testing.T) {
+	// Codex P1 #1928 round 5: an interval that reaches StartService without
+	// passing Settings, from a definition's own WatchdogInterval or a Config
+	// built directly, is refused before any child is launched.
+	t.Run("definition", func(t *testing.T) {
+		def, err := DefinitionForService(gateway.ServiceTransit)
+		require.NoError(t, err)
+		saved := byService[gateway.ServiceTransit]
+		def.WatchdogInterval = 500 * time.Nanosecond
+		byService[gateway.ServiceTransit] = def
+		t.Cleanup(func() { byService[gateway.ServiceTransit] = saved })
+
+		supervisor, launcher, _ := newSupervisor(t, nil)
+		err = supervisor.StartService(testContext(t), gateway.ServiceTransit)
+		var invalid *ErrWatchdogIntervalInvalid
+		require.ErrorAs(t, err, &invalid)
+		assert.Equal(t, 500*time.Nanosecond, invalid.Interval)
+		assert.Zero(t, launcher.launchCount(), "no child is launched")
+	})
+	t.Run("config", func(t *testing.T) {
+		supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
+			c.WatchdogInterval = 500 * time.Nanosecond
+		})
+		err := supervisor.StartService(testContext(t), gateway.ServiceTransit)
+		var invalid *ErrWatchdogIntervalInvalid
+		require.ErrorAs(t, err, &invalid)
+		assert.Equal(t, 500*time.Nanosecond, invalid.Interval)
+		assert.Zero(t, launcher.launchCount(), "no child is launched")
+	})
+}
+
+func TestWatchdog_TheDefaultSettingStartsNoWatchdog(t *testing.T) {
+	// Codex P1 #1928 round 2: an existing deployment, with no
+	// watchdog-interval in its `process:` section, keeps running without
+	// watchdog restarts. Its children get no WATCHDOG_USEC and no deadline
+	// is armed after READY=1.
+	cfg, err := Settings{Enabled: true, User: currentUserName(t)}.Config(Inherited{}, nil)
+	require.NoError(t, err)
+	// The clock counts waits of the round-1 default, 30 s, as arms.
+	clock := &watchdogClock{testClock: &testClock{}, interval: 30 * time.Second}
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
+		clock.stopTimeout = c.StopTimeout
+		c.Clock = clock
+		c.WatchdogInterval = cfg.WatchdogInterval
+	})
+	launcher.pid = os.Getpid()
+	require.NoError(t, supervisor.StartService(testContext(t), gateway.ServiceTransit))
+
+	spec := launcher.lastSpec(t)
+	assert.Zero(t, spec.Definition.WatchdogInterval)
+	for _, kv := range launchEnv([]string{"PATH=/usr/bin"}, spec) {
+		assert.NotContains(t, kv, WatchdogUsecEnv+"=", "no watchdog interval is passed to the child")
+	}
+	// The watchdog goroutine is started at launch only for a positive
+	// interval, so nothing can arm a deadline after this point either.
+	notifyChild(t, launcher, "READY=1")
+	notifyChild(t, launcher, "WATCHDOG=1")
+	assert.Zero(t, clock.arms(), "no watchdog deadline is armed")
+}
+
+func TestWatchdog_AKeepAliveAfterTheDeadlineIsAMiss(t *testing.T) {
+	// Codex P1 #1928 round 2: the deadline passes while the watchdog's
+	// timer has not yet been seen (the goroutine runs late), and only then
+	// does a keep-alive arrive. It is stamped after the deadline, so it is
+	// a miss: the child is stopped and restarted, and the last failure is
+	// ErrWatchdogMissed. The timer is never fired; only the clock moves.
+	const interval = 7 * time.Second
+	supervisor, launcher, clock := newWatchdogSupervisor(t, interval, interval, func(c *Config) {
+		c.RestartBackoff = time.Millisecond
+		c.RestartBudget = 1
+	})
+	ctx := testContext(t)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceTransit))
+
+	now := time.Now()
+	lateKeepAlive := func(round int) *fakeChild {
+		child := launcher.lastChild()
+		armed := clock.arms()
+		clock.setNow(now)
+		notifyChild(t, launcher, "READY=1")
+		clock.awaitArmed(t, armed+1)
+		now = now.Add(interval + time.Second)
+		clock.setNow(now)
+		notifyChild(t, launcher, "WATCHDOG=1")
+		require.Eventually(t, func() bool { return len(child.signalled()) > 0 },
+			3*time.Second, 5*time.Millisecond, "round %d: a keep-alive after the deadline stops the child", round)
+		assert.Equal(t, syscall.SIGTERM, child.signalled()[0])
+		return child
+	}
+
+	lateKeepAlive(1)
+	awaitRelaunch(t, supervisor, launcher, "routing", 2)
+	lateKeepAlive(2)
+	var exhausted *ErrRestartBudgetExhausted
+	require.Eventually(t, func() bool {
+		return errors.As(supervisor.ServiceHealth(gateway.ServiceTransit), &exhausted)
+	}, 20*time.Second, 10*time.Millisecond, "the supervisor gives up and says so")
+	var missed *ErrWatchdogMissed
+	require.ErrorAs(t, exhausted.Last, &missed)
+	assert.Equal(t, interval, missed.Interval)
+}
+
+func TestWatchdog_AnOnTimeKeepAliveHandledPastItsNewDeadlineIsAMiss(t *testing.T) {
+	// Codex P1 #1928 round 3 (A): a keep-alive received at t=5 (interval
+	// 10) moves the deadline to t=15. When the watchdog only handles it at
+	// t=20, the child has been silent past that deadline already: it is a
+	// miss at once, not one full interval after the handling.
+	const interval = 10 * time.Second
+	supervisor, launcher, clock := newWatchdogSupervisor(t, interval, interval, nil)
+	require.NoError(t, supervisor.StartService(testContext(t), gateway.ServiceTransit))
+	child := launcher.lastChild()
+
+	base := time.Now()
+	clock.setNow(base)
+	notifyChild(t, launcher, "READY=1")
+	clock.awaitArmed(t, 1)
+	clock.setNow(base.Add(5 * time.Second))
+	clock.jumpAfterNextRead(base.Add(20 * time.Second))
+	notifyChild(t, launcher, "WATCHDOG=1")
+	require.Eventually(t, func() bool { return len(child.signalled()) > 0 },
+		3*time.Second, 5*time.Millisecond, "a keep-alive whose new deadline has passed when handled is a miss")
+	assert.Equal(t, syscall.SIGTERM, child.signalled()[0])
+}
+
+func TestWatchdog_ABurstOfKeepAlivesIsNeverDropped(t *testing.T) {
+	// Codex P1 #1928 round 3 (B): more keep-alives than the old queue held
+	// (8) arrive while the watchdog is not yet watching. None of them may
+	// leave a stale deadline behind: after READY=1, one more keep-alive in
+	// time keeps the child up.
+	const interval = 10 * time.Second
+	supervisor, launcher, clock := newWatchdogSupervisor(t, interval, interval, nil)
+	require.NoError(t, supervisor.StartService(testContext(t), gateway.ServiceTransit))
+	child := launcher.lastChild()
+
+	base := time.Now()
+	clock.setNow(base)
+	for i := 0; i < 9; i++ {
+		notifyChild(t, launcher, "WATCHDOG=1")
+	}
+	clock.setNow(base.Add(20 * time.Second))
+	notifyChild(t, launcher, "READY=1")
+	clock.awaitArmed(t, 1)
+	clock.setNow(base.Add(21 * time.Second))
+	notifyChild(t, launcher, "WATCHDOG=1")
+	assert.Never(t, func() bool {
+		return len(child.signalled()) > 0 || launcher.launchCount() > 1
+	}, 300*time.Millisecond, 10*time.Millisecond, "keep-alives in time never stop the child")
+	assert.True(t, supervisor.ServiceActive(gateway.ServiceTransit))
+}
+
+// newStampState is a watchdogState of interval on a settable clock, READY=1
+// received at base.
+func newStampState(interval time.Duration) (*watchdogState, *watchdogClock, time.Time) {
+	clock := &watchdogClock{testClock: &testClock{}, interval: interval}
+	base := time.Now()
+	clock.setNow(base)
+	wd := newWatchdogState(interval, clock)
+	wd.ready()
+	return wd, clock, base
+}
+
+func TestWatchdogState_AKeepAliveBeforeTheExpiryMovesTheDeadline(t *testing.T) {
+	// Codex P1 #1928 round 4 (A): the keep-alive stamp and the expiry
+	// decision are ordered by one lock. A keep-alive at t=6 (interval 7,
+	// READY=1 at 0) taken before the expiry check at t=7 moves the
+	// deadline to t=13: the child has not expired.
+	const interval = 7 * time.Second
+	wd, clock, base := newStampState(interval)
+	clock.setNow(base.Add(6 * time.Second))
+	wd.keepAlive()
+	clock.setNow(base.Add(7 * time.Second))
+	left, expired := wd.expire()
+	assert.False(t, expired, "an on-time keep-alive stamped before the decision holds the child")
+	assert.Equal(t, 6*time.Second, left, "the deadline is t=13")
+}
+
+func TestWatchdogState_AKeepAliveAfterTheExpiryDoesNotReviveIt(t *testing.T) {
+	// Round 4 (A): the expiry at t=7 (deadline 7) is final; a keep-alive
+	// stamped after it is late and changes nothing.
+	const interval = 7 * time.Second
+	wd, clock, base := newStampState(interval)
+	clock.setNow(base.Add(7 * time.Second))
+	_, expired := wd.expire()
+	require.True(t, expired, "the deadline has passed at t=7")
+	wd.keepAlive()
+	clock.setNow(base.Add(8 * time.Second))
+	_, expired = wd.expire()
+	assert.True(t, expired, "a keep-alive after the expiry does not revive the child")
+}
+
+func TestWatchdogState_KeepAliveAndExpiryRaceToAConsistentVerdict(t *testing.T) {
+	// Round 4 (A), under -race: with the clock at the deadline, a
+	// keep-alive and the expiry run from two goroutines. Whichever takes
+	// the lock first decides: a keep-alive first moves the deadline (not
+	// expired, one interval left); the expiry first is final.
+	const interval = 7 * time.Second
+	for i := 0; i < 200; i++ {
+		wd, clock, base := newStampState(interval)
+		clock.setNow(base.Add(interval))
+		var wg sync.WaitGroup
+		var left time.Duration
+		var expired bool
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			wd.keepAlive()
+		}()
+		go func() {
+			defer wg.Done()
+			left, expired = wd.expire()
+		}()
+		wg.Wait()
+		finalLeft, finalExpired := wd.expire()
+		require.Equal(t, expired, finalExpired, "run %d: the verdict is the final state", i)
+		if !expired {
+			require.Equal(t, interval, left, "run %d: the keep-alive came first and moved the deadline", i)
+			require.Equal(t, interval, finalLeft, "run %d", i)
+		}
+	}
+}
+
+// requireNotifySocketGone waits for the last launch's notify socket to be
+// closed: Close removes the path, and a closed socket is what ends the
+// launch's notify reader (Codex P1 #1926).
+func requireNotifySocketGone(t *testing.T, launcher *fakeLauncher, why string) {
+	t.Helper()
+	path := launcher.lastSpec(t).NotifySocket
+	require.NotEmpty(t, path)
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(path)
+		return os.IsNotExist(err)
+	}, 5*time.Second, 10*time.Millisecond, why)
+}
+
+func TestCrashLoop_ExhaustedBudgetClosesTheNotifySocket(t *testing.T) {
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
+		c.RestartBackoff = time.Millisecond
+		c.RestartBudget = 2
+	})
+	ctx := testContext(t)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceTransit))
+
+	child := launcher.lastChild()
+	for i := 0; i < 3; i++ {
+		child.exit(errors.New("signal: killed"))
+		if i < 2 {
+			child = awaitRelaunch(t, supervisor, launcher, "routing", i+2)
+		}
+	}
+	var exhausted *ErrRestartBudgetExhausted
+	require.Eventually(t, func() bool {
+		return errors.As(supervisor.ServiceHealth(gateway.ServiceTransit), &exhausted)
+	}, 20*time.Second, 10*time.Millisecond)
+
+	// No launch follows, so nothing else would ever close the dead child's
+	// socket and its reader would block in Receive for good.
+	requireNotifySocketGone(t, launcher, "the reaped child's notify socket is closed")
+}
+
+func TestRestart_AnUnservingChildsNotifySocketIsClosed(t *testing.T) {
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
+		c.RestartBackoff = time.Millisecond
+		c.ReadyTimeout = 150 * time.Millisecond
+		c.RestartBudget = 2
+	})
+	ctx := testContext(t)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceTransit))
+
+	launcher.mu.Lock()
+	launcher.mute = true
+	launcher.mu.Unlock()
+	launcher.lastChild().exit(errors.New("signal: killed"))
+
+	var exhausted *ErrRestartBudgetExhausted
+	require.Eventually(t, func() bool {
+		return errors.As(supervisor.ServiceHealth(gateway.ServiceTransit), &exhausted)
+	}, 10*time.Second, 20*time.Millisecond)
+
+	// The last attempt was torn down by stopUnservingChild: its socket
+	// goes with it.
+	requireNotifySocketGone(t, launcher, "an unserving child's notify socket is closed on teardown")
 }
 
 // provisioningConfig enables the three sections the provisioning process
