@@ -50,6 +50,7 @@ var DaemonOnlyPrefixes = map[string]string{
 
 	// The webservice router serves /sdn/gateway/ipam, so the gateway surface
 	// is listed by the sub-prefixes only the daemon serves.
+	"sdn/gateway/lb":      "RESTServer.SetGatewayIPAMService (pkg/api/daemon/rest_sdn.go)",
 	"sdn/gateway/nat64":   "RESTServer.SetGatewayIPAMService (pkg/api/daemon/rest_sdn.go)",
 	"sdn/gateway/overlay": "RESTServer.SetGatewayIPAMService (pkg/api/daemon/rest_sdn.go)",
 	"sdn/gateway/perf":    "RESTServer.SetGatewayIPAMService (pkg/api/daemon/rest_sdn.go)",
