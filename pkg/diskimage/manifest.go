@@ -74,8 +74,16 @@ func (c *BuildConfig) validateManifestKey() error {
 	if c.ISO != nil && c.ISO.SecureBoot && c.KMSClients == nil {
 		return errNoManifestKMS
 	}
+	if c.ISO != nil && c.ISO.SecureBoot && c.ReferenceValues == nil {
+		return errNoReferenceValues
+	}
 	return nil
 }
+
+// errNoReferenceValues refuses a measured build with no ReferenceValues: its
+// signed manifest must be registered in the reference-values store the
+// verifier reads, so the build never reports success without it.
+var errNoReferenceValues = errors.New("diskimage: a measured image needs a reference-values registrar to register its manifest")
 
 // writeManifest signs the measurement manifest of the image whose SHA-256
 // is sum, with banks its predicted PCRs, and writes it to
@@ -162,7 +170,7 @@ func (c *BuildConfig) publishManifest(ctx context.Context, image, sum string, ta
 		return "", false, err
 	}
 	if c.ReferenceValues == nil {
-		return out, false, nil
+		return out, false, &MeasureError{Step: "registering the measurement manifest", Err: errNoReferenceValues}
 	}
 	signed, err := os.ReadFile(out)
 	if err != nil {

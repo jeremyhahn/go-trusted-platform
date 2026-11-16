@@ -398,10 +398,7 @@ func runCreate(common *cli.CommonFlags, flags *createFlags) (err error) {
 	fmt.Printf("\nImage: %s\n  SHA256: %s\n  Size: %d MB\n  U-Boot: %s\n  Media: %s\n", result.Image, result.SHA256, result.SizeBytes/(1024*1024), result.UBoot.Binary, result.MediaDir)
 	switch {
 	case result.Manifest != "":
-		fmt.Printf("  Measurement manifest: %s\n", result.Manifest)
-		if !result.Registered {
-			fmt.Println("  Reference values: not registered (no reference-values store client)")
-		}
+		fmt.Printf("  Measurement manifest: %s (registered in the reference-values store)\n", result.Manifest)
 	case result.Unmeasured != "":
 		fmt.Printf("  Measurement manifest: none (%s)\n", result.Unmeasured)
 	}

@@ -226,6 +226,7 @@ func TestCreateMeasuresTheImage(t *testing.T) {
 	cfg.ISO.SecureBoot = true
 	cfg.ISO.GenerateKeys = false
 	cfg.KMSClients = newManifestPKI(t).clients()
+	cfg.ReferenceValues = &fakeRegistrar{}
 	authenticodetest.WriteKeyPair(t, cfg.ISO.KeysDir)
 	for _, role := range []string{"PK", "KEK"} {
 		_, certPath := authenticodetest.WriteKeyPair(t, t.TempDir())
