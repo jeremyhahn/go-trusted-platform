@@ -70,10 +70,10 @@ export default function RoleDetailPage() {
   );
 
   // Fetch users (placeholder - needs actual implementation in SDK if not available)
-  const [users, setUsers] = useState<LegacyUser[]>([]);
+  const [users] = useState<LegacyUser[]>([]);
 
   // Fetch permissions (placeholder - needs actual implementation in SDK if not available)
-  const [allPermissions, setAllPermissions] = useState<Permission[]>([]);
+  const [allPermissions] = useState<Permission[]>([]);
 
   // Tolerate both the legacy {role: …} envelope and the current direct
   // payload shape; also accept snake_case timestamps from the server.

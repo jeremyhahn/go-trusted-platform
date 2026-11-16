@@ -492,20 +492,32 @@ is the authority for it, not this file. All five verbs exist on `platformctl`.
 | `dane` | none | — | **Stub.** Returns `PendingBootstrapBackendError` |
 | `noise` | none | — | **Stub.** Returns `PendingBootstrapBackendError` |
 | `spki` | none | — | **Stub.** Returns `PendingBootstrapBackendError` |
-| `direct` | none | `--bundle` (string, path to a CA bundle PEM) | Implemented, narrowly |
+| `direct` | none | `--bundle` (string, path to a CA bundle PEM), `--install-to-system-trust` (bool, default false), `--cert-path` (string, default `/usr/local/share/ca-certificates/platform-ca.crt`) | Implemented |
 
 ```bash
 platformctl bootstrap direct --bundle ./platform-ca.pem
+platformctl bootstrap direct --bundle ./platform-ca.pem --install-to-system-trust
 ```
 
 The four stubs return an error telling you to use the key-management CLI's
 `bootstrap <mode>` until the platform bridge ships. `direct` requires `--bundle`,
-rejects a directory, and prints the accepted path and size — it validates that
-the file is a readable regular file and does **not** parse the PEM, verify the
-chain, or install anything. Use `bootstrap trust` for real work today.
+rejects a directory, reads the file and decodes every PEM block in it. It
+rejects a file with no PEM block (`ErrDirectBundleNotPEM`), a `-----BEGIN`
+boundary that does not open a well-formed block, such as a truncated block,
+one without its END line or one with invalid base64
+(`ErrDirectBundleMalformedPEM`), a block that is not a `CERTIFICATE`
+(`ErrDirectBundleNonCertificateBlock`), a `CERTIFICATE` block that does not
+parse as X.509 (`ErrDirectBundleInvalidCert`), and a bundle with no CA
+certificate (`ErrDirectBundleNoCA`). A rejected bundle is never installed,
+so an existing `--cert-path` file is left as it was. On success it prints the
+path, the size and the number of CA certificates. It does not verify a chain
+between the certificates. With `--install-to-system-trust` it writes the bundle
+to `--cert-path` (a failure returns `ErrTrustInstallFailed`); run the OS
+trust-store update (for example `update-ca-certificates`) afterwards, as with
+`bootstrap trust`.
 
-This is a divergence between the locked surface and the implementation. It is
-recorded here and in [engineering.md](engineering.md) §7.6 rather than
+The stubs are a divergence between the locked surface and the implementation.
+It is recorded here and in [engineering.md](engineering.md) §7.6 rather than
 documented as if the stubs worked.
 
 ---

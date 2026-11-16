@@ -1,16 +1,9 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { Plus, RefreshCw, MoreHorizontal, RotateCcw, Trash2, Copy, Download, AlertCircle, Loader2 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { Button } from '@/components/ui/button';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import {
   Table,
   TableBody,
@@ -46,7 +39,6 @@ const sourceTypeColors = {
 };
 
 export default function SnapshotsPage() {
-  const [statusFilter, setStatusFilter] = useState<string>('all');
   const { toast } = useToast();
   const compute = useCompute();
 
@@ -197,7 +189,7 @@ export default function SnapshotsPage() {
     }
   };
 
-  const handleClone = (snapshot: SnapshotWithSource) => {
+  const handleClone = () => {
     toast({
       title: 'Feature Not Available',
       description: 'Snapshot cloning is not yet implemented in the API',
@@ -205,7 +197,7 @@ export default function SnapshotsPage() {
     });
   };
 
-  const handleExport = (snapshot: SnapshotWithSource) => {
+  const handleExport = () => {
     toast({
       title: 'Feature Not Available',
       description: 'Snapshot export is not yet implemented in the API',
@@ -397,11 +389,11 @@ export default function SnapshotsPage() {
                           <RotateCcw className="mr-2 h-4 w-4" />
                           Restore
                         </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => handleClone(snapshot)}>
+                        <DropdownMenuItem onClick={() => handleClone()}>
                           <Copy className="mr-2 h-4 w-4" />
                           Clone to New Instance
                         </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => handleExport(snapshot)}>
+                        <DropdownMenuItem onClick={() => handleExport()}>
                           <Download className="mr-2 h-4 w-4" />
                           Export
                         </DropdownMenuItem>

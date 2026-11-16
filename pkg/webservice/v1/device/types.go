@@ -120,6 +120,12 @@ type ProfileRequest struct {
 	// (or null) value keeps the stored name and an explicit "" clears it
 	// (#462).
 	TLSServerName *string `json:"tls_server_name,omitempty"`
+	// DICEDeviceID is the hex DICE device identifier the registry resolves
+	// this profile by (#1699); same JSON name as the protobuf field.
+	DICEDeviceID string `json:"dice_device_id,omitempty"`
+	// GoldenFWHash is the hex expected firmware measurement (FWHash) of the
+	// device bound to this profile; same JSON name as the protobuf field.
+	GoldenFWHash string `json:"golden_fw_hash,omitempty"`
 }
 
 // NetworkPhaseRequest represents network configuration for a phase.
@@ -226,6 +232,8 @@ type ProfileFullResponse struct {
 	// TLSServerName is the certificate name the attestation collector
 	// verifies a node of this profile against (#430).
 	TLSServerName string `json:"tls_server_name,omitempty"`
+	DICEDeviceID  string `json:"dice_device_id,omitempty"`
+	GoldenFWHash  string `json:"golden_fw_hash,omitempty"`
 }
 
 // PCRBaselineResponse is the wire form of entities.PCRBaseline. Digests are

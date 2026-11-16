@@ -15,7 +15,6 @@ package vtpm
 
 import (
 	"context"
-	"crypto/x509"
 	"encoding/pem"
 	"errors"
 	"io"
@@ -1401,39 +1400,6 @@ func TestVTPMConfig(t *testing.T) {
 		}
 		if len(config.PCRBanks) == 0 {
 			t.Error("expected default PCR banks")
-		}
-	})
-}
-
-func TestVTPMInstance(t *testing.T) {
-	t.Run("VTPMInstance has correct fields", func(t *testing.T) {
-		now := time.Now()
-		cert := &x509.Certificate{}
-		profile := &entities.DeviceProfile{ID: 123}
-
-		instance := &VTPMInstance{
-			ID:              "test-instance",
-			Version:         TPMVersion20,
-			StoragePath:     "/tmp/vtpm/test",
-			EKFingerprint:   "sha256:abc123",
-			EKCertificate:   cert,
-			SRKHandle:       SRKHandle,
-			DeviceProfileID: 123,
-			DeviceProfile:   profile,
-			SocketPath:      "/tmp/vtpm/test/swtpm.sock",
-			NVRAMPath:       "/tmp/vtpm/test/OVMF_VARS.fd",
-			CreatedAt:       now,
-			Running:         false,
-		}
-
-		if instance.ID != "test-instance" {
-			t.Errorf("unexpected ID: %s", instance.ID)
-		}
-		if instance.Version != TPMVersion20 {
-			t.Errorf("unexpected version: %s", instance.Version)
-		}
-		if instance.DeviceProfile != profile {
-			t.Error("unexpected device profile")
 		}
 	})
 }

@@ -332,46 +332,6 @@ func TestMockInstallerErrors(t *testing.T) {
 	}
 }
 
-func TestConfigStruct(t *testing.T) {
-	// Test Config struct initialization and field access
-	config := &Config{
-		OS:         "ubuntu",
-		Version:    "22.04",
-		Arch:       "x86_64",
-		Mirror:     "http://archive.ubuntu.com/ubuntu",
-		WorkDir:    "/tmp/fips",
-		MountPoint: "/mnt/target",
-		Debug:      true,
-		Logger:     slog.Default(),
-	}
-
-	// Verify all fields are accessible
-	if config.OS != "ubuntu" {
-		t.Errorf("expected OS 'ubuntu', got '%s'", config.OS)
-	}
-	if config.Version != "22.04" {
-		t.Errorf("expected Version '22.04', got '%s'", config.Version)
-	}
-	if config.Arch != "x86_64" {
-		t.Errorf("expected Arch 'x86_64', got '%s'", config.Arch)
-	}
-	if config.Mirror != "http://archive.ubuntu.com/ubuntu" {
-		t.Errorf("expected specific mirror URL, got '%s'", config.Mirror)
-	}
-	if config.WorkDir != "/tmp/fips" {
-		t.Errorf("expected WorkDir '/tmp/fips', got '%s'", config.WorkDir)
-	}
-	if config.MountPoint != "/mnt/target" {
-		t.Errorf("expected MountPoint '/mnt/target', got '%s'", config.MountPoint)
-	}
-	if !config.Debug {
-		t.Error("expected Debug to be true")
-	}
-	if config.Logger == nil {
-		t.Error("expected Logger to be non-nil")
-	}
-}
-
 func TestConfigZeroValues(t *testing.T) {
 	// Test Config with zero values
 	config := &Config{}

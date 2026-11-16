@@ -7,7 +7,7 @@
  * Uses the trusted-platform-sdk for API interactions.
  */
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useIAM, useApi, useMutation, useToast } from '@/hooks';
 import { useAuth } from '@/contexts/AuthContext';
@@ -19,7 +19,7 @@ import type {
 import { UserTable } from '@/components/features/iam/user-table';
 import { UserForm } from '@/components/features/iam/user-form';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Plus, Users, AlertCircle, Loader2 } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 
@@ -29,7 +29,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 export default function UsersPage() {
   const router = useRouter();
   const { toast } = useToast();
-  const { user: authUser, tenantId, isLoading: authLoading } = useAuth();
+  const { tenantId, isLoading: authLoading } = useAuth();
   const [isFormOpen, setIsFormOpen] = useState(false);
   const iam = useIAM();
 

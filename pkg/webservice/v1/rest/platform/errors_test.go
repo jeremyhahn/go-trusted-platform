@@ -119,15 +119,3 @@ func TestErrDaemonConfigNotConfigured(t *testing.T) {
 		t.Errorf("expected error message to contain 'not configured', got: %s", msg)
 	}
 }
-
-func TestErrorsImplementErrorInterface(t *testing.T) {
-	// Verify all errors implement the error interface
-	var _ error = ErrServiceNotFound{}
-	var _ error = ErrServiceAlreadyRunning{}
-	var _ error = ErrServiceNotRunning{}
-	var _ error = ErrServiceStartFailed{}
-	var _ error = ErrServiceStopFailed{}
-	var _ error = ErrHealthRegistryNotConfigured{}
-	var _ error = ErrServiceRegistryNotConfigured{}
-	var _ error = ErrDaemonConfigNotConfigured{}
-}

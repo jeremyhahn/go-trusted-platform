@@ -171,43 +171,6 @@ func TestHashString_Uniqueness(t *testing.T) {
 	}
 }
 
-func TestFlowAction_AllTypes(t *testing.T) {
-	tests := []struct {
-		name       string
-		actionType FlowActionType
-	}{
-		{name: "output", actionType: ActionOutput},
-		{name: "drop", actionType: ActionDrop},
-		{name: "normal", actionType: ActionNormal},
-		{name: "flood", actionType: ActionFlood},
-		{name: "all", actionType: ActionAll},
-		{name: "controller", actionType: ActionController},
-		{name: "local", actionType: ActionLocal},
-		{name: "in_port", actionType: ActionInPort},
-		{name: "set_vlan", actionType: ActionSetVLAN},
-		{name: "strip_vlan", actionType: ActionStripVLAN},
-		{name: "set_vlan_pcp", actionType: ActionSetVLANPcp},
-		{name: "set_eth_src", actionType: ActionSetEthSrc},
-		{name: "set_eth_dst", actionType: ActionSetEthDst},
-		{name: "set_ipv4_src", actionType: ActionSetIPv4Src},
-		{name: "set_ipv4_dst", actionType: ActionSetIPv4Dst},
-		{name: "set_tcp_src", actionType: ActionSetTCPSrc},
-		{name: "set_tcp_dst", actionType: ActionSetTCPDst},
-		{name: "set_udp_src", actionType: ActionSetUDPSrc},
-		{name: "set_udp_dst", actionType: ActionSetUDPDst},
-		{name: "goto_table", actionType: ActionGotoTable},
-		{name: "group", actionType: ActionGroup},
-		{name: "meter", actionType: ActionMeter},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			action := &FlowAction{Type: tt.actionType}
-			assert.Equal(t, tt.actionType, action.Type)
-		})
-	}
-}
-
 func TestFlowAction_WithParameters(t *testing.T) {
 	port := uint32(1)
 	vlanVid := uint16(100)

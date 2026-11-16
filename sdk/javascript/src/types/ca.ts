@@ -24,6 +24,27 @@ export type RevocationReason =
   | 'PRIVILEGE_WITHDRAWN'
   | 'AA_COMPROMISE';
 
+/** Protobuf enum name of a revocation reason (platform.v1.RevocationReason). */
+export type RevocationReasonProtoName = `REVOCATION_REASON_${RevocationReason}`;
+
+/**
+ * Protobuf enum name of every revocation reason. The REST decoder is
+ * protojson, which accepts only the full enum name: a short name such as
+ * 'KEY_COMPROMISE' is discarded and the reason arrives unspecified.
+ */
+export const REVOCATION_REASON_PROTO_NAMES: Readonly<Record<RevocationReason, RevocationReasonProtoName>> = {
+  UNSPECIFIED: 'REVOCATION_REASON_UNSPECIFIED',
+  KEY_COMPROMISE: 'REVOCATION_REASON_KEY_COMPROMISE',
+  CA_COMPROMISE: 'REVOCATION_REASON_CA_COMPROMISE',
+  AFFILIATION_CHANGED: 'REVOCATION_REASON_AFFILIATION_CHANGED',
+  SUPERSEDED: 'REVOCATION_REASON_SUPERSEDED',
+  CESSATION_OF_OPERATION: 'REVOCATION_REASON_CESSATION_OF_OPERATION',
+  CERTIFICATE_HOLD: 'REVOCATION_REASON_CERTIFICATE_HOLD',
+  REMOVE_FROM_CRL: 'REVOCATION_REASON_REMOVE_FROM_CRL',
+  PRIVILEGE_WITHDRAWN: 'REVOCATION_REASON_PRIVILEGE_WITHDRAWN',
+  AA_COMPROMISE: 'REVOCATION_REASON_AA_COMPROMISE',
+};
+
 /**
  * Certificate type
  */
@@ -34,6 +55,19 @@ export type CertificateType =
   | 'CA'
   | 'CODE_SIGNING'
   | 'EMAIL';
+
+/** Protobuf enum name of a certificate type (platform.v1.CertificateType). */
+export type CertificateTypeProtoName = `CERTIFICATE_TYPE_${CertificateType}`;
+
+/** Protobuf enum name of every certificate type; see REVOCATION_REASON_PROTO_NAMES. */
+export const CERTIFICATE_TYPE_PROTO_NAMES: Readonly<Record<CertificateType, CertificateTypeProtoName>> = {
+  UNSPECIFIED: 'CERTIFICATE_TYPE_UNSPECIFIED',
+  SERVER: 'CERTIFICATE_TYPE_SERVER',
+  CLIENT: 'CERTIFICATE_TYPE_CLIENT',
+  CA: 'CERTIFICATE_TYPE_CA',
+  CODE_SIGNING: 'CERTIFICATE_TYPE_CODE_SIGNING',
+  EMAIL: 'CERTIFICATE_TYPE_EMAIL',
+};
 
 /**
  * Certificate status
@@ -60,6 +94,24 @@ export type KeyAlgorithm =
   | 'DILITHIUM2'
   | 'DILITHIUM3'
   | 'DILITHIUM5';
+
+/** Protobuf enum name of a key algorithm (platform.v1.KeyAlgorithm). */
+export type KeyAlgorithmProtoName = `KEY_ALGORITHM_${KeyAlgorithm}`;
+
+/** Protobuf enum name of every key algorithm; see REVOCATION_REASON_PROTO_NAMES. */
+export const KEY_ALGORITHM_PROTO_NAMES: Readonly<Record<KeyAlgorithm, KeyAlgorithmProtoName>> = {
+  UNSPECIFIED: 'KEY_ALGORITHM_UNSPECIFIED',
+  RSA_2048: 'KEY_ALGORITHM_RSA_2048',
+  RSA_3072: 'KEY_ALGORITHM_RSA_3072',
+  RSA_4096: 'KEY_ALGORITHM_RSA_4096',
+  ECDSA_P256: 'KEY_ALGORITHM_ECDSA_P256',
+  ECDSA_P384: 'KEY_ALGORITHM_ECDSA_P384',
+  ECDSA_P521: 'KEY_ALGORITHM_ECDSA_P521',
+  ED25519: 'KEY_ALGORITHM_ED25519',
+  DILITHIUM2: 'KEY_ALGORITHM_DILITHIUM2',
+  DILITHIUM3: 'KEY_ALGORITHM_DILITHIUM3',
+  DILITHIUM5: 'KEY_ALGORITHM_DILITHIUM5',
+};
 
 // =============================================================================
 // Data Types

@@ -187,6 +187,8 @@ type deviceProfileToolRequest struct {
 	EKSerial              string                                  `json:"ek_serial"`
 	EKCert                string                                  `json:"ek_cert"`
 	MACAddress            string                                  `json:"mac_address"`
+	DICEDeviceID          string                                  `json:"dice_device_id"`
+	GoldenFWHash          string                                  `json:"golden_fw_hash"`
 	Config                any                                     `json:"config"`
 	Assigned              *bool                                   `json:"assigned"`
 	AssignedAt            *time.Time                              `json:"assigned_at"`
@@ -358,6 +360,8 @@ func (req *deviceProfileToolRequest) toEntity() (*entities.DeviceProfile, error)
 		EKSerial:              req.EKSerial,
 		EKCert:                req.EKCert,
 		MACAddress:            req.MACAddress,
+		DICEDeviceID:          req.DICEDeviceID,
+		GoldenFWHash:          req.GoldenFWHash,
 		Config:                req.Config,
 	}
 	if req.Assigned != nil {
@@ -571,6 +575,12 @@ func (r *ToolRegistry) executeDeviceProfileUpdate(ctx context.Context, args map[
 	}
 	if req.MACAddress != "" {
 		profile.MACAddress = req.MACAddress
+	}
+	if req.DICEDeviceID != "" {
+		profile.DICEDeviceID = req.DICEDeviceID
+	}
+	if req.GoldenFWHash != "" {
+		profile.GoldenFWHash = req.GoldenFWHash
 	}
 	if req.Config != nil {
 		profile.Config = req.Config

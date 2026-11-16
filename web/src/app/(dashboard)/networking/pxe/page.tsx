@@ -28,7 +28,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { ServiceUnavailableState } from '@/components/features/platform';
 import { isServiceNotConfigured } from 'trusted-platform-sdk';
 import { usePXE, useApi, useToast, useReportedGateways } from '@/hooks';
-import type { PXEDeviceInfo, ProvisioningEvent } from 'trusted-platform-sdk';
+import type { PXEDeviceInfo } from 'trusted-platform-sdk';
 
 export default function PXEBootPage() {
   const { toast } = useToast();

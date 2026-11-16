@@ -49,7 +49,7 @@ function getPriorityVariant(priority: number): 'default' | 'secondary' | 'destru
 export default function PoliciesPage() {
   const router = useRouter();
   const { toast } = useToast();
-  const { user: authUser, tenantId, isLoading: authLoading } = useAuth();
+  const { tenantId, isLoading: authLoading } = useAuth();
   const iam = useIAM();
 
   // Fetch policies using SDK

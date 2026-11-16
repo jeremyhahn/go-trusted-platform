@@ -751,26 +751,3 @@ func TestErrUnsupportedAlgorithm(t *testing.T) {
 		})
 	}
 }
-
-func TestErrorsImplementError(t *testing.T) {
-	// Verify all error types implement the error interface
-	var _ error = ErrImageNotFound{}
-	var _ error = ErrSignatureNotFound{}
-	var _ error = ErrInvalidSignature{}
-	var _ error = ErrCertificateExpired{}
-	var _ error = ErrCertificateRevoked{}
-	var _ error = ErrUntrustedSigner{}
-	var _ error = ErrInvalidImageReference{}
-	var _ error = ErrSigningFailed{}
-	var _ error = ErrVerificationFailed{}
-	var _ error = ErrRegistryAccessDenied{}
-	var _ error = ErrRegistryUnavailable{}
-	var _ error = ErrInvalidManifest{}
-	var _ error = ErrKeyNotFound{}
-	var _ error = ErrCertificateNotFound{}
-	var _ error = ErrInvalidKeyType{}
-	var _ error = ErrTimestampFailed{}
-	var _ error = ErrNilParameter{}
-	var _ error = ErrInvalidDigest{}
-	var _ error = ErrUnsupportedAlgorithm{}
-}

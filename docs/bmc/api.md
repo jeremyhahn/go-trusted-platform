@@ -343,22 +343,14 @@ the gRPC path rather than the raw-HTTP path the other verbs use.
 
 
 
-## 10. Two REST route registries, and they disagree
+## 10. One REST route registry
 
-BMC routes are registered in two places:
-
-| Registrar | Routes | Includes enroll / cert-restore? |
-|---|---|---|
-| `pkg/api/daemon/rest_service.go` | 20 registrations, 13 paths | **Yes** |
-| `pkg/webservice/v1/router/bmc.go` (`BMCRouter`) | 18 registrations | **No** |
-
-`BMCRouter` covers power, boot device, virtual media, sensors, system info,
-provision, cert get/replace and the five user routes — and omits
-`POST /bmc/{profileID}/enroll` and `POST /bmc/{profileID}/cert/restore`,
-even though `bmc.RestHandler` declares `EnrollBMC` and the handler implements
-it. A deployment served by `BMCRouter` rather than the daemon REST service has
-no enrollment endpoint. The bootstrap orchestrator hardcodes
-`"/api/v1/bmc/%d/enroll"`, so it depends on the daemon registrar.
+BMC routes are registered only in `pkg/api/daemon/rest_service.go`: 20
+registrations on 13 paths, including `POST /bmc/{profileID}/enroll` and
+`POST /bmc/{profileID}/cert/restore`. A second registry in the webservice
+router package had no caller and was deleted under ruling 133 (#239). The
+bootstrap orchestrator hardcodes `"/api/v1/bmc/%d/enroll"`, so it depends on
+the daemon registrar.
 
 ## 11. Versioning and deprecation
 
@@ -383,7 +375,6 @@ table are in [`docs/daemon/api.md`](../daemon/api.md) §4.
 | MAC discovery, protocol detection, vendor probe have no transport | 3 |
 | Password rotation and credential-store CRUD have no transport | 2 |
 | SDK REST adapter maps 14 of 23 RPCs | 9 |
-| `BMCRouter` omits enroll and cert-restore | 2 |
 | REST carries no BMC scope check (§8) | every REST route |
 
 All are recorded as `docs/13 G7` debt, not as design.

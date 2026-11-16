@@ -1215,8 +1215,8 @@ and the `pkg/api/daemon.RESTServer` second REST server (#232). Both are
 stated here rather than left to be discovered.
 
 **Correcting slice 1**, which named `/bmc` as part of the blind spot: the
-webservice serves **no** `/bmc` route. `pkg/webservice/v1/router/bmc.go`
-exists, but `NewBMCRouter` has no non-test caller, and the live BMC surface
+webservice serves **no** `/bmc` route. The unreferenced
+`pkg/webservice/v1/router/bmc.go` was deleted (#239), and the live BMC surface
 belongs to the second REST server tracked on #232.
 
 Tracked on #165 (the seven routes) and #420 (the audit's reach) — do not read

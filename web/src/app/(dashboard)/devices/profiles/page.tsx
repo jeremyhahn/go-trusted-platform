@@ -336,11 +336,27 @@ export default function DeviceProfilesPage() {
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
 
-    await createProfileMutation.mutateAsync({
-      name: formData.get('name') as string,
-      model: formData.get('model') as string || undefined,
-      role: toDeviceRole(formData.get('role')),
-    });
+    let role: DeviceRole;
+    try {
+      role = toDeviceRole(formData.get('role'));
+    } catch (error) {
+      toast({
+        title: 'Error creating profile',
+        description: error instanceof Error ? error.message : String(error),
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    try {
+      await createProfileMutation.mutateAsync({
+        name: formData.get('name') as string,
+        model: formData.get('model') as string || undefined,
+        role,
+      });
+    } catch {
+      // Error handling is done in the mutation
+    }
   };
 
   // Show error state

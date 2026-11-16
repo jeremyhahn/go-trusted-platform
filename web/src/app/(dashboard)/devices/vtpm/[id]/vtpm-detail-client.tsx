@@ -14,7 +14,6 @@ import {
   Unlock,
   RotateCcw,
   Trash2,
-  ArrowRightLeft,
   FileText,
   Plus,
 } from 'lucide-react';
@@ -42,7 +41,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { VTPMPCRDisplay } from '@/components/features/devices/vtpm-pcr';
 import { useToast } from '@/hooks/use-toast';
 import { useVTPM, useMutation } from '@/hooks';
-import type { VTPMDetail, SealDataInput } from '@/types/device';
+import type { VTPMDetail } from '@/types/device';
 
 export default function VTPMDetailPage() {
   const params = useParams();
@@ -58,8 +57,7 @@ export default function VTPMDetailPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSealDialogOpen, setIsSealDialogOpen] = useState(false);
   const [isUnsealDialogOpen, setIsUnsealDialogOpen] = useState(false);
-  const [selectedSealedId, setSelectedSealedId] = useState<string | null>(null);
-  const [unsealedData, setUnsealedData] = useState<string | null>(null);
+  const [unsealedData] = useState<string | null>(null);
 
   // Seal data form state
   const [sealForm, setSealForm] = useState({
@@ -106,7 +104,7 @@ export default function VTPMDetailPage() {
   }, [action]);
 
   const deleteMutation = useMutation(
-    async (_: void) => {
+    async () => {
       return await vtpmService.deleteBundle(vtpmId);
     },
     {
@@ -161,7 +159,7 @@ export default function VTPMDetailPage() {
     });
   };
 
-  const handleUnsealData = async (sealedId: string) => {
+  const handleUnsealData = async () => {
     toast({
       title: 'Info',
       description: 'Unseal operation not yet implemented in SDK',
@@ -169,7 +167,7 @@ export default function VTPMDetailPage() {
     });
   };
 
-  const handleDeleteSealed = async (sealedId: string) => {
+  const handleDeleteSealed = async () => {
     if (!confirm('Are you sure you want to delete this sealed data?')) {
       return;
     }
@@ -371,7 +369,7 @@ export default function VTPMDetailPage() {
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => handleUnsealData(sealed.id)}
+                            onClick={() => handleUnsealData()}
                           >
                             <Unlock className="mr-2 h-4 w-4" />
                             Unseal
@@ -379,7 +377,7 @@ export default function VTPMDetailPage() {
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => handleDeleteSealed(sealed.id)}
+                            onClick={() => handleDeleteSealed()}
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>

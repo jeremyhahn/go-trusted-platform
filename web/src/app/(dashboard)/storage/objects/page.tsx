@@ -116,8 +116,10 @@ function fileToBase64(file: File): Promise<string> {
     const reader = new FileReader();
     reader.onload = () => {
       const result = reader.result as string;
-      const base64 = result.split(",")[1] || result;
-      resolve(base64);
+      // A data URL is "data:<type>;base64,<payload>"; the payload of an
+      // empty file is empty, so take what follows the comma, even "".
+      const comma = result.indexOf(",");
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
     };
     reader.onerror = reject;
     reader.readAsDataURL(file);
@@ -389,14 +391,14 @@ export default function ObjectStoragePage() {
       });
       return;
     }
-    await createBucketMutation.mutateAsync(bucketFormData);
+    await createBucketMutation.mutateAsync(bucketFormData).catch(() => undefined);
   };
 
   const handleDeleteBucket = async (bucket: BucketUI) => {
     if (!confirm(`Delete bucket "${bucket.name}"? This action cannot be undone.`)) {
       return;
     }
-    await deleteBucketMutation.mutateAsync(bucket.name);
+    await deleteBucketMutation.mutateAsync(bucket.name).catch(() => undefined);
   };
 
   const handleUpload = async () => {
@@ -416,14 +418,14 @@ export default function ObjectStoragePage() {
       });
       return;
     }
-    await uploadMutation.mutateAsync(uploadFormData);
+    await uploadMutation.mutateAsync(uploadFormData).catch(() => undefined);
   };
 
   const handleDeleteObject = async (obj: ObjectUI) => {
     if (!confirm(`Delete object "${obj.key}"? This action cannot be undone.`)) {
       return;
     }
-    await deleteObjectMutation.mutateAsync(obj);
+    await deleteObjectMutation.mutateAsync(obj).catch(() => undefined);
   };
 
   const handleDownload = async (obj: ObjectUI) => {
@@ -1023,7 +1025,7 @@ export default function ObjectStoragePage() {
                     )
                   ) {
                     for (const row of rows) {
-                      await deleteObjectMutation.mutateAsync(row);
+                      await deleteObjectMutation.mutateAsync(row).catch(() => undefined);
                     }
                   }
                 },

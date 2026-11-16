@@ -1,0 +1,452 @@
+// Copyright (c) 2025 Jeremy Hahn
+// Copyright (c) 2025 Automate The Things, LLC
+//
+// This file is part of go-trusted-platform.
+//
+// go-trusted-platform is dual-licensed:
+//
+// 1. GNU Affero General Public License v3.0 (AGPL-3.0)
+//    See LICENSE file or visit https://www.gnu.org/licenses/agpl-3.0.html
+//
+// 2. Commercial License
+//    Contact licensing@automatethethings.com for commercial licensing options.
+
+package process
+
+import (
+	"errors"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"syscall"
+	"testing"
+	"time"
+
+	"golang.org/x/sys/unix"
+)
+
+// notifyHelperEnv makes the test binary act as a supervised child that sends
+// one notify state and exits (TestNotifyHelperChild).
+const notifyHelperEnv = "GTP_NOTIFY_HELPER_STATE"
+
+func TestNotifyHelperChild(t *testing.T) {
+	state := os.Getenv(notifyHelperEnv)
+	if state == "" {
+		t.Skip("helper process only")
+	}
+	if err := Notify(state); err != nil {
+		t.Fatalf("Notify: %v", err)
+	}
+}
+
+func TestParseNotify_Ready(t *testing.T) {
+	m, err := ParseNotify([]byte("READY=1"))
+	if err != nil {
+		t.Fatalf("ParseNotify: %v", err)
+	}
+	if !m.Ready || m.Watchdog || m.Stopping || m.HasStatus || m.HasErrno {
+		t.Fatalf("got %+v, want only Ready", m)
+	}
+}
+
+func TestParseNotify_Status(t *testing.T) {
+	m, err := ParseNotify([]byte("STATUS=backend started: 3 peers = up\n"))
+	if err != nil {
+		t.Fatalf("ParseNotify: %v", err)
+	}
+	if !m.HasStatus || m.Status != "backend started: 3 peers = up" {
+		t.Fatalf("got status %q (has %v)", m.Status, m.HasStatus)
+	}
+	if m.Ready {
+		t.Fatal("Ready set by a STATUS line")
+	}
+}
+
+func TestParseNotify_EmptyStatus(t *testing.T) {
+	m, err := ParseNotify([]byte("STATUS="))
+	if err != nil {
+		t.Fatalf("ParseNotify: %v", err)
+	}
+	if !m.HasStatus || m.Status != "" {
+		t.Fatalf("got status %q (has %v), want empty and present", m.Status, m.HasStatus)
+	}
+}
+
+func TestParseNotify_Watchdog(t *testing.T) {
+	m, err := ParseNotify([]byte("WATCHDOG=1"))
+	if err != nil {
+		t.Fatalf("ParseNotify: %v", err)
+	}
+	if !m.Watchdog || m.Ready {
+		t.Fatalf("got %+v, want only Watchdog", m)
+	}
+}
+
+func TestParseNotify_Stopping(t *testing.T) {
+	m, err := ParseNotify([]byte("STOPPING=1"))
+	if err != nil {
+		t.Fatalf("ParseNotify: %v", err)
+	}
+	if !m.Stopping || m.Ready {
+		t.Fatalf("got %+v, want only Stopping", m)
+	}
+}
+
+func TestParseNotify_Errno(t *testing.T) {
+	m, err := ParseNotify([]byte("ERRNO=98"))
+	if err != nil {
+		t.Fatalf("ParseNotify: %v", err)
+	}
+	if !m.HasErrno || m.Errno != 98 {
+		t.Fatalf("got errno %d (has %v), want 98", m.Errno, m.HasErrno)
+	}
+}
+
+func TestParseNotify_MultipleLines(t *testing.T) {
+	m, err := ParseNotify([]byte("STATUS=serving\nREADY=1\n\nWATCHDOG=1\n"))
+	if err != nil {
+		t.Fatalf("ParseNotify: %v", err)
+	}
+	if !m.Ready || !m.Watchdog || m.Status != "serving" {
+		t.Fatalf("got %+v", m)
+	}
+}
+
+func TestParseNotify_UnknownKeysKept(t *testing.T) {
+	m, err := ParseNotify([]byte("READY=1\nMAINPID=42\nX_CUSTOM=a=b"))
+	if err != nil {
+		t.Fatalf("ParseNotify: %v", err)
+	}
+	if !m.Ready {
+		t.Fatal("Ready lost next to unknown keys")
+	}
+	if len(m.Unknown) != 2 || m.Unknown[0] != "MAINPID" || m.Unknown[1] != "X_CUSTOM" {
+		t.Fatalf("Unknown = %q, want [MAINPID X_CUSTOM]", m.Unknown)
+	}
+}
+
+func TestParseNotify_Empty(t *testing.T) {
+	for _, in := range []string{"", "\n", "\n\n"} {
+		_, err := ParseNotify([]byte(in))
+		var want *ErrNotifyEmpty
+		if !errors.As(err, &want) {
+			t.Fatalf("ParseNotify(%q) error = %v, want *ErrNotifyEmpty", in, err)
+		}
+	}
+}
+
+func TestParseNotify_Malformed(t *testing.T) {
+	cases := map[string]string{
+		"no equals":         "READY",
+		"empty key":         "=1",
+		"ready not one":     "READY=0",
+		"ready trailing":    "READY=1 ",
+		"watchdog not one":  "WATCHDOG=yes",
+		"stopping not one":  "STOPPING=2",
+		"errno not number":  "ERRNO=EADDRINUSE",
+		"errno negative":    "ERRNO=-1",
+		"errno empty":       "ERRNO=",
+		"key with space":    "READY =1",
+		"bad line after ok": "READY=1\ngarbage",
+		"nul byte":          "STATUS=a\x00b",
+	}
+	for name, in := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := ParseNotify([]byte(in))
+			var want *ErrNotifyMalformed
+			if !errors.As(err, &want) {
+				t.Fatalf("ParseNotify(%q) error = %v, want *ErrNotifyMalformed", in, err)
+			}
+		})
+	}
+}
+
+// shortSocketPath returns a socket path short enough for sun_path whatever
+// the test's temporary directory is.
+func shortSocketPath(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "ntf")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return filepath.Join(dir, "n.sock")
+}
+
+func TestNotifySocket_RefusesForeignPid(t *testing.T) {
+	path := shortSocketPath(t)
+	// Expect a pid that is not this process: the datagram this process sends
+	// carries its own pid and must be dropped.
+	s, err := ListenNotify(path, os.Getpid()+1, -1)
+	if err != nil {
+		t.Fatalf("ListenNotify: %v", err)
+	}
+	defer func() { _ = s.Close() }()
+
+	t.Setenv("NOTIFY_SOCKET", path)
+	if err := Notify("READY=1"); err != nil {
+		t.Fatalf("Notify: %v", err)
+	}
+
+	_, err = s.Receive(time.Now().Add(300 * time.Millisecond))
+	if err == nil {
+		t.Fatal("Receive accepted a datagram from a foreign pid")
+	}
+	if !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("Receive error = %v, want a deadline", err)
+	}
+	if got := s.Dropped(); got != 1 {
+		t.Fatalf("Dropped() = %d, want 1", got)
+	}
+
+	// The same sender is accepted once it is the expected pid.
+	s.SetPid(os.Getpid())
+	if err := Notify("READY=1"); err != nil {
+		t.Fatalf("Notify: %v", err)
+	}
+	m, err := s.Receive(time.Now().Add(5 * time.Second))
+	if err != nil {
+		t.Fatalf("Receive: %v", err)
+	}
+	if !m.Ready {
+		t.Fatalf("got %+v, want Ready", m)
+	}
+}
+
+func TestNotifySocket_AcceptsChildReady(t *testing.T) {
+	path := shortSocketPath(t)
+	s, err := ListenNotify(path, 0, -1)
+	if err != nil {
+		t.Fatalf("ListenNotify: %v", err)
+	}
+	defer func() { _ = s.Close() }()
+	if s.Path() != path {
+		t.Fatalf("Path() = %q, want %q", s.Path(), path)
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestNotifyHelperChild$")
+	cmd.Env = append(os.Environ(),
+		notifyHelperEnv+"=STATUS=child up\nREADY=1",
+		"NOTIFY_SOCKET="+path,
+	)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start child: %v", err)
+	}
+	// The pid is set after Start, as the supervisor does: the kernel stamps
+	// the credentials at send time, so a datagram queued earlier still
+	// carries the child's pid.
+	s.SetPid(cmd.Process.Pid)
+
+	m, err := s.Receive(time.Now().Add(10 * time.Second))
+	if err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		t.Fatalf("Receive: %v", err)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("child: %v", err)
+	}
+	if !m.Ready || m.Status != "child up" {
+		t.Fatalf("got %+v, want Ready with status %q", m, "child up")
+	}
+	if got := s.Dropped(); got != 0 {
+		t.Fatalf("Dropped() = %d, want 0", got)
+	}
+}
+
+func TestNotifySocket_ListenOnExistingPathFails(t *testing.T) {
+	path := shortSocketPath(t)
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	_, err := ListenNotify(path, 1, -1)
+	var want *ErrNotifySocket
+	if !errors.As(err, &want) {
+		t.Fatalf("ListenNotify error = %v, want *ErrNotifySocket", err)
+	}
+}
+
+// withUmask runs the rest of the test under mask, as a root supervisor with
+// the usual umask 022 does.
+func withUmask(t *testing.T, mask int) {
+	t.Helper()
+	old := unix.Umask(mask)
+	t.Cleanup(func() { unix.Umask(old) })
+}
+
+func TestNotifySocket_ModeIsGroupWritable(t *testing.T) {
+	withUmask(t, 0o022)
+	path := shortSocketPath(t)
+	s, err := ListenNotify(path, 0, -1)
+	if err != nil {
+		t.Fatalf("ListenNotify: %v", err)
+	}
+	defer func() { _ = s.Close() }()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if info.Mode().Type() != os.ModeSocket {
+		t.Fatalf("type = %v, want a socket", info.Mode().Type())
+	}
+	if got := info.Mode().Perm(); got != 0o660 {
+		t.Fatalf("mode = %#o, want 0660 under umask 022", got)
+	}
+}
+
+// ownedOtherGID returns a group the test may chown to that is not its
+// effective group: nobody's group as root, else a supplementary group.
+func ownedOtherGID(t *testing.T) int {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		return 65534
+	}
+	groups, err := os.Getgroups()
+	if err != nil {
+		t.Fatalf("Getgroups: %v", err)
+	}
+	for _, g := range groups {
+		if g != os.Getegid() {
+			return g
+		}
+	}
+	t.Skip("needs root or a supplementary group to chown the socket to")
+	return -1
+}
+
+func TestNotifySocket_GroupIsServiceGroup(t *testing.T) {
+	withUmask(t, 0o022)
+	gid := ownedOtherGID(t)
+	path := shortSocketPath(t)
+	s, err := ListenNotify(path, 0, gid)
+	if err != nil {
+		t.Fatalf("ListenNotify: %v", err)
+	}
+	defer func() { _ = s.Close() }()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if got := info.Sys().(*syscall.Stat_t).Gid; got != uint32(gid) {
+		t.Fatalf("socket gid = %d, want %d", got, gid)
+	}
+	if got := info.Mode().Perm(); got != 0o660 {
+		t.Fatalf("mode = %#o, want 0660", got)
+	}
+}
+
+func TestNotifySocket_ChownRefusedIsTypedAndCleansUp(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root may chown to any group")
+	}
+	groups, err := os.Getgroups()
+	if err != nil {
+		t.Fatalf("Getgroups: %v", err)
+	}
+	if os.Getegid() == 0 || slices.Contains(groups, 0) {
+		t.Skip("the test is in group 0")
+	}
+	path := shortSocketPath(t)
+	_, err = ListenNotify(path, 0, 0)
+	var want *ErrNotifySocket
+	if !errors.As(err, &want) || want.Op != "chown" {
+		t.Fatalf("ListenNotify error = %v, want *ErrNotifySocket for chown", err)
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Fatalf("socket left behind after a failed chown: %v", err)
+	}
+}
+
+// copyExecutable copies the test binary to dir so a child running with
+// other credentials can execute it.
+func copyExecutable(t *testing.T, dir string) string {
+	t.Helper()
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("Executable: %v", err)
+	}
+	src, err := os.Open(self)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = src.Close() }()
+	dst := filepath.Join(dir, "helper.test")
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o755)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	if _, err := io.Copy(out, src); err != nil {
+		_ = out.Close()
+		t.Fatalf("copy: %v", err)
+	}
+	if err := out.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	return dst
+}
+
+// TestNotifySocket_AcceptsUnprivilegedChild sends READY=1 from a child that
+// has dropped to another UID and the service group, as a parser child does.
+func TestNotifySocket_AcceptsUnprivilegedChild(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root to start a child under another UID")
+	}
+	withUmask(t, 0o022)
+	const uid, gid = 65534, 65534
+	path := shortSocketPath(t)
+	dir := filepath.Dir(path)
+	if err := os.Chmod(dir, 0o711); err != nil {
+		t.Fatalf("Chmod dir: %v", err)
+	}
+	helper := copyExecutable(t, dir)
+	s, err := ListenNotify(path, 0, gid)
+	if err != nil {
+		t.Fatalf("ListenNotify: %v", err)
+	}
+	defer func() { _ = s.Close() }()
+
+	cmd := exec.Command(helper, "-test.run=^TestNotifyHelperChild$")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		notifyHelperEnv+"=READY=1",
+		"NOTIFY_SOCKET="+path,
+	)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Credential: &syscall.Credential{Uid: uid, Gid: gid, Groups: []uint32{}},
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start child: %v", err)
+	}
+	s.SetPid(cmd.Process.Pid)
+
+	m, err := s.Receive(time.Now().Add(10 * time.Second))
+	if err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		t.Fatalf("Receive: %v", err)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("child: %v", err)
+	}
+	if !m.Ready {
+		t.Fatalf("got %+v, want Ready", m)
+	}
+}
+
+func TestNotify_NoSocketIsNoop(t *testing.T) {
+	t.Setenv("NOTIFY_SOCKET", "")
+	if err := Notify("READY=1"); err != nil {
+		t.Fatalf("Notify with no NOTIFY_SOCKET = %v, want nil", err)
+	}
+}
+
+func TestNotify_MissingSocketFails(t *testing.T) {
+	t.Setenv("NOTIFY_SOCKET", shortSocketPath(t))
+	err := Notify("READY=1")
+	var want *ErrNotifySend
+	if !errors.As(err, &want) {
+		t.Fatalf("Notify error = %v, want *ErrNotifySend", err)
+	}
+}

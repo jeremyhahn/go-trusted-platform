@@ -195,6 +195,24 @@ func gatewayRouteCases() []gatewayRouteCase {
 			wantCode: http.StatusOK,
 		},
 		{
+			// The JS SDK sends the pool filter as ?poolId= (listAllocations);
+			// the route must forward it so the service lists that pool only.
+			name: "list allocations in one pool", method: http.MethodGet, path: "/api/v1/gateway/ipam/allocations?poolId=prod-v4",
+			wantReq: &platformv1.ListAllocationsRequest{PoolId: "prod-v4"},
+			reply: &platformv1.ListAllocationsResponse{Allocations: []*platformv1.IPAllocation{
+				{Ip: "10.0.0.10", PoolId: "prod-v4", Hostname: "node-03", Status: "active"},
+			}},
+			wantCode: http.StatusOK,
+		},
+		{
+			name: "list allocations in one pool by pool_id", method: http.MethodGet, path: "/api/v1/gateway/ipam/allocations?pool_id=prod-v4",
+			wantReq: &platformv1.ListAllocationsRequest{PoolId: "prod-v4"},
+			reply: &platformv1.ListAllocationsResponse{Allocations: []*platformv1.IPAllocation{
+				{Ip: "10.0.0.10", PoolId: "prod-v4", Hostname: "node-03", Status: "active"},
+			}},
+			wantCode: http.StatusOK,
+		},
+		{
 			name: "allocate ip", method: http.MethodPost, path: "/api/v1/gateway/ipam/allocations",
 			body:    `{"pool_id":"prod-v4","hostname":"node-04"}`,
 			wantReq: &platformv1.AllocateIPRequest{PoolId: "prod-v4", Hostname: "node-04"},

@@ -650,14 +650,6 @@ func TestPrompter_KeyPassword_Error(t *testing.T) {
 	require.Error(t, err, "Should return an error")
 }
 
-func TestTermPasswordReader(t *testing.T) {
-	// Test that TermPasswordReader implements the interface
-	var _ PasswordReader = &TermPasswordReader{}
-
-	tr := &TermPasswordReader{}
-	assert.NotNil(t, tr, "TermPasswordReader should be creatable")
-}
-
 // ===== Tests for functional options =====
 
 func TestWithReader(t *testing.T) {

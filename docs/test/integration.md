@@ -379,6 +379,20 @@ customize refuses a dynamically linked installer (`DynamicBinaryError`), so
 exports its path as `PLATFORMCTL_STATIC_PATH`, and the suite passes it to
 customize as `--platformctl-static-binary`: customize names the running
 `platformctl` as the installer and never looks beside it for the static one.
+
+The suite's VM tests, `TestISOVMTests` (install Alpine to a disk, then boot
+it), run as a target of their own, `iso-vm`: the same package narrowed by
+`TARGET_RUN`, the way `ipxe-dhcp` narrows `ipxe`, and `iso` leaves them out
+with `go test -skip` (`TARGET_SKIP`). On main ac83c0e95 (run 43694406642,
+Integration leg 1) the `TestISOMultiProtocol` CLI Create subtests took about
+517 s each inside the package's one 35-minute `go test -timeout`, and
+`TestBoot` refused with `-1m0.97s` left under its 2-minute cleanup margin;
+on d416ba86d `TestInstall` timed out the same way. `iso` keeps 35 minutes;
+`iso-vm` gets its own 55, from the VM tests' own bounds: the 20-minute
+install (`vmInstallTimeout`), the 30-minute boot context and the 2-minute
+cleanup margin, 52, plus the Alpine ISO seed, rounded up (main-fix). It runs
+in leg 4, apart from `iso` (leg 1) and `sdn` (leg 2), and gets the same
+`prepare_iso_customize` staging as `iso`.
 The suite fails, rather than fall back to the CGO build, when
 `PLATFORMCTL_STATIC_PATH` is unset or names no file. The `device`
 suite keeps only its daemon-backed tests: the adapter decode tests that
@@ -428,8 +442,32 @@ and otherwise builds it once with `make docker-build-it BUILDX_CLIENT_LOAD=1`
 (below: `--load` would import it into the builder node's daemon, where the
 job's `docker save` cannot find it). It fails if the image is not on the job's
 own daemon, leases it until its teardown, outputs its image id and its layer
-identity (a SHA-256 of the image's `RootFS.Layers` diff ids), and uploads a
-`docker save` of it as the run artifact `integration-image-<attempt>`. It also
+identity (a SHA-256 of the image's `RootFS.Layers` diff ids), and hands the
+image to legs on other daemons. On a self-hosted runner with the repository
+variable `CI_IMAGE_REGISTRY` (host:port) set, it pushes the image to that LAN
+registry as `go-trusted-platform/it-image:<image id hex>` and outputs the
+reference as `image_ref` (ruling 675: the 3.4 GB artifact, downloaded again by
+each leg, saturated the uplink); a registry that wants a login takes the
+optional secrets `CI_IMAGE_REGISTRY_USER` and `CI_IMAGE_REGISTRY_PASSWORD`.
+The push step and each leg's pull step never run `docker login`: they write
+the secrets as an `auths` entry (base64 `user:password`, with `umask 077`) into
+the `config.json` of a Docker config made for the step (`mktemp -d
+"$RUNNER_TEMP/docker-config.XXXXXX"`, the step fails if it cannot) and removed
+by its EXIT trap. With an `auths` entry present the Docker CLI keeps its file
+store and detects no native credential helper (`pass`, `secretservice`), so the
+credential never reaches the runner's own Docker config or credential store
+(#1919). Since `DOCKER_CONFIG` also
+selects the Docker context, the step reads `docker context show` first, links
+the runner's `contexts/` into the step's config and names a non-default
+context there as `currentContext`; a set `DOCKER_HOST` is left as it is. So
+`docker tag`, `push`, `pull` and `image inspect` reach the same daemon. No job removes a registry tag:
+two producers of one image id on a daemon share it, and legs sharing a daemon
+re-tag from it. The stale-stack reaper (below) removes a
+`<registry>/go-trusted-platform/it-image:<hex>` tag on any registry host under
+the same image lock, minimum age and in-use check as `IT_IMAGE` tags.
+On a GitHub-hosted runner, or with the variable unset (a self-hosted runner
+then warns), it uploads a `docker save` of it as the run artifact
+`integration-image-<attempt>` instead. It also
 outputs the `APK_INDEX_SUM` and `APT_REFRESH` it read, so each leg's `make -s
 it-image` names the same tag. Each leg leases that id under the image lock (a
 created, never-started container that names it), re-tags it `IT_IMAGE` under
@@ -442,16 +480,18 @@ two hours ago.
 
 The legs share the image job's runner label, not its daemon: a label can name
 several runners, and on github.com every job is a fresh machine. A leg whose
-daemon lacks the id (run 68296, legs 1, 2 and 4: `No such image`) downloads
-the artifact and `docker load`s it. The load keeps the image but not
+daemon lacks the id (run 68296, legs 1, 2 and 4: `No such image`) pulls
+`image_ref` from the LAN registry when the image job pushed one, and otherwise
+downloads the artifact and `docker load`s it; a leg whose lease took the id
+fetches nothing. The pull and the load keep the image but not
 necessarily its id: an image id is the config digest on the classic overlay2
 image store and the manifest digest on the containerd image store, so the id
 the image job read on its daemon names nothing on a daemon whose store differs
 (run 70938, legs 1 and 3: `No such image` again after a successful load). The
-leg therefore leases the id of the tag the load restored (the content tag), then compares that image's layer identity with the job's: the layers'
+leg therefore leases the id of the tag the pull or load restored (the content tag), then compares that image's layer identity with the job's: the layers'
 diff ids are digests of the uncompressed layers, the same on every store. So
-every leg still runs the one image built per run. Only if the load fails or
-restores other layers does the leg build the image there, with a warning,
+every leg still runs the one image built per run. Only if the pull or load
+fails or restores other layers does the leg build the image there, with a warning,
 under the `integration` stage's own content tag (`make -s it-image
 IT_WARM_CACHE=0`), which a daemon that already holds it reuses.
 That build runs
@@ -495,7 +535,7 @@ The bring-up waits are bounded polls on a ready condition, every 0.2 s
 (`wait-for.sh`): OVS's control sockets, swtpm's socket, `platformd`'s socket
 (or its exit) and its TLS bundles. A leg builds `gatewayd` and delegates the
 cgroup controllers only when it holds `proxy`. It stages the `iso customize`
-binaries only when it holds `iso`.
+binaries only when it holds `iso` or `iso-vm`.
 
 Main run 67833, the first with five legs, before the single image build
 (UTC, from the job logs):
@@ -525,10 +565,15 @@ cache the bring-up only links the binaries and starts OVS, swtpm and
 | 1 | `acme`, `authenticode`, `ca`, `iso` | 8.9 min (`iso` 7.9) | about 10.5 min |
 | 2 | `ceremony`, `cli`, `container`, `sdn` | 3.7 min | about 5 min |
 | 3 | `daemon`, `device`, `dns`, `sdn-stress` | 5.5 min (`sdn-stress` 4.5) | about 7 min |
-| 4 | `helpers`, `ipxe`, `installer`, `e2e`, `root`, `attestation`, `fido2`, `iam`, `kms`, `luks`, `ntp`, `objectstorage` | 3.8 min (with `sdk`, since moved to `pkg/storage/quicbaas`'s unit suite) | about 5.5 min |
+| 4 | `helpers`, `ipxe`, `installer`, `e2e`, `root`, `attestation`, `fido2`, `iam`, `iso-vm`, `kms`, `luks`, `ntp`, `objectstorage` | 3.8 min (with `sdk`, since moved to `pkg/storage/quicbaas`'s unit suite; before `iso-vm`) | about 5.5 min, plus `iso-vm` (go test timeout 55 min) |
 | 5 | `piv`, `provision`, `proxy`, `registry`, `secrets`, `tenant`, `vpn`, `vtpm`, `tpm`, `compute` | about 12 min (24 less a 6.5-minute build and a 5.5-minute bring-up, as on the other legs) | about 13.5 min |
 
-No suite moved. Taking out the build and the cold compile brings every leg
+Run 67833 timed `iso` with its VM tests inside it (`iso` 7.9 min); they have
+since moved to `iso-vm` in leg 4 (main-fix for main ac83c0e95, see the `iso`
+paragraph above), so leg 1 sheds them and leg 4 takes them on. `iso`, `iso-vm`
+and `sdn`, the three longest, are in three different legs.
+
+No other suite moved. Taking out the build and the cold compile brings every leg
 under 20 minutes, and the longest, leg 5, has about 6.5 minutes of room. Leg 5
 is the one to split if a run measures it over. Its job log gave no per-package
 times, so moving one of its suites now would rest on a guess, not a
@@ -767,7 +812,7 @@ devcontainer image so a developer and CI run the same thing:
 | `arch-gates` | PR | No direct go-objstore import outside a storage seam (this repo has none) (`ci.yml:466`) |
 | `sdkjs` | docs | The JS SDK's unit tests and lint, on the runner (`ci.yml:495`) |
 | `web` | full | The web console's tests, typecheck and build (`ci.yml:535-566`) |
-| `integration-image` | full | `make docker-build-it` once per run, or the daemon's image of the same content tag; outputs the image id a leg on its daemon leases and the layer identity a leg that loads the image compares, and uploads the image as the artifact a leg on another daemon loads (see "Legs"); needs `image` (`ci.yml:568-678`) |
+| `integration-image` | full | `make docker-build-it` once per run, or the daemon's image of the same content tag; outputs the image id a leg on its daemon leases and the layer identity a leg that loads the image compares, and, on a self-hosted runner with `CI_IMAGE_REGISTRY` set, pushes the image to that LAN registry for a leg on another daemon to pull (ruling 675), else uploads it as the artifact such a leg loads (see "Legs"); needs `image` (`ci.yml:568-678`) |
 | `integration` | full | A matrix job per leg: `make integration-test-leg LEG=<n> IT_PREBUILT=1` in the run's leased integration image, under a per-leg `IT_PROJECT` and the run's content tag `IT_IMAGE` and the `IT_MEMORY` limit, torn down on every exit (see "Legs" and "Memory limits"); needs `integration-image` (`ci.yml:680-853`) |
 | `soak` | nightly | `make integration-test` looped for `SOAK_MINUTES` (below), under the same `IT_MEMORY` limit (`ci.yml:867-974`) |
 | `fips` | full | `make test-fips`; outside the gate (`ci.yml:976-992`) |
@@ -783,10 +828,12 @@ it runs on every push to `main`, on `workflow_dispatch`, on the schedule, and
 on a PR labelled `ci:full`. The workflow env `CI_FULL_TIER` (`ci.yml:143`)
 holds that selection for steps and `CI Gate`. The nightly tier is the `soak`
 job, on the schedule and `workflow_dispatch` only (`ci.yml:648`), never on a
-push to `main` or on `ci:full`. The schedule is one daily cron, `0 4 * * *`
-(04:00 UTC, `ci.yml:110-111`), and runs on the default branch: `main`'s full
-tier and the soak. `ci.yml` is the repository's one scheduler; `nightly.yml`
-and `batch.yml` are dispatch-only (`ci.yml:106-108`).
+push to `main` or on `ci:full`. The schedule is one weekly cron, `0 4 * * 5`
+(Friday 04:00 UTC, this project's Thursday-night rotation slot, #1409,
+`ci.yml:204-205`), and runs on the default branch: `main`'s full tier and the
+soak, once a week; every push to `main` still runs the full tier, and
+`workflow_dispatch` runs both at any time. `ci.yml` is the repository's one
+scheduler; `nightly.yml` and `batch.yml` are dispatch-only (`ci.yml:193-195`).
 
 The docs tier runs on every run except a docs-only PR: one whose every changed
 file is markdown or under `docs/` (`DOCS_ONLY_PATTERN`, `ci.yml:146`), none of
@@ -851,9 +898,15 @@ bundles, which no Node or npm release fixes yet.
 A fixed Debian package is never suppressed; the image picks it up instead. The
 `base` stage's `apt-get upgrade` layer reads the `APT_REFRESH` build argument,
 which every `make docker-build*` target (the CI image job's included) sets with
-`scripts/apt-refresh-key.sh`: the newest `Date:` of the `InRelease` files of
-`bookworm`, `bookworm-updates` and `bookworm-security` on the image's Debian
-mirrors, so the layer is rebuilt whenever Debian publishes to any of them. If
+`scripts/apt-refresh-key.sh`: a SHA-256 over the `SHA256:` lines of the
+`main/binary-amd64/Packages*` and `main/binary-arm64/Packages*` indexes in the
+`InRelease` files of `bookworm`, `bookworm-updates` and `bookworm-security` on
+the image's Debian mirrors, so the layer is rebuilt whenever Debian publishes a
+package to any of them. Debian re-signs `InRelease` with a new `Date:` several
+times a day without changing a package; that keeps the key, so the registry
+layer cache keeps hitting (Tenant Agent ruling 676; the key used to be the
+newest `Date:` and missed the cache on every re-sign). `APT_SUITES` replaces the
+suite URLs (the test in `pkg/arch/apt_index_key_test.go` serves fake ones). If
 a fetch fails, the key falls back to the UTC date and hour and the script
 prints a warning; the build goes on. The Dockerfile's dated default applies
 only to a bare `docker build`. Without a key BuildKit reused a cached layer

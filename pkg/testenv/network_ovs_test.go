@@ -128,26 +128,6 @@ func TestDefaultOVSSocketPath(t *testing.T) {
 	assert.Equal(t, "/var/run/openvswitch/db.sock", DefaultOVSSocketPath)
 }
 
-func TestOVSNetworkOptions_CustomValues(t *testing.T) {
-	opts := &OVSNetworkOptions{
-		SocketPath:        "/custom/path/db.sock",
-		ServerVLAN:        100,
-		ClientVLAN:        200,
-		EnableFlowControl: true,
-		ProvisioningVLAN:  10,
-		AdmittedVLAN:      20,
-		QuarantineVLAN:    30,
-	}
-
-	assert.Equal(t, "/custom/path/db.sock", opts.SocketPath)
-	assert.Equal(t, uint16(100), opts.ServerVLAN)
-	assert.Equal(t, uint16(200), opts.ClientVLAN)
-	assert.True(t, opts.EnableFlowControl)
-	assert.Equal(t, uint16(10), opts.ProvisioningVLAN)
-	assert.Equal(t, uint16(20), opts.AdmittedVLAN)
-	assert.Equal(t, uint16(30), opts.QuarantineVLAN)
-}
-
 func TestNewOVSIsolatedNetwork_NilOptions(t *testing.T) {
 	cfg := DefaultNetworkConfig()
 

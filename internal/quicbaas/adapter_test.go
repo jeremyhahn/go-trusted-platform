@@ -1136,38 +1136,6 @@ func TestTransportTypes(t *testing.T) {
 // TLS and Pool Config Tests
 // =============================================================================
 
-func TestTLSConfig(t *testing.T) {
-	t.Run("empty_tls_config", func(t *testing.T) {
-		cfg := &TLSConfig{}
-		if cfg.CACert != "" {
-			t.Error("expected empty CACert")
-		}
-		if cfg.ClientCert != "" {
-			t.Error("expected empty ClientCert")
-		}
-		if cfg.ClientKey != "" {
-			t.Error("expected empty ClientKey")
-		}
-	})
-
-	t.Run("populated_tls_config", func(t *testing.T) {
-		cfg := &TLSConfig{
-			CACert:     "/path/to/ca.crt",
-			ClientCert: "/path/to/client.crt",
-			ClientKey:  "/path/to/client.key",
-		}
-		if cfg.CACert != "/path/to/ca.crt" {
-			t.Errorf("expected /path/to/ca.crt, got %s", cfg.CACert)
-		}
-		if cfg.ClientCert != "/path/to/client.crt" {
-			t.Errorf("expected /path/to/client.crt, got %s", cfg.ClientCert)
-		}
-		if cfg.ClientKey != "/path/to/client.key" {
-			t.Errorf("expected /path/to/client.key, got %s", cfg.ClientKey)
-		}
-	})
-}
-
 func TestPoolConfig(t *testing.T) {
 	t.Run("empty_pool_config", func(t *testing.T) {
 		cfg := &PoolConfig{}

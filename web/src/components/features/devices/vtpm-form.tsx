@@ -5,7 +5,6 @@
  * Form for creating new vTPM instances
  */
 
-import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -23,7 +22,6 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
 import { useVTPM, useMutation } from '@/hooks';
-import type { CreateVTPMInput } from '@/types/device';
 
 const vtpmFormSchema = z.object({
   name: z.string().min(1, 'Name is required').max(100),

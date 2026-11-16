@@ -192,6 +192,9 @@ func (s *ProfileService) saveValidated(ctx context.Context, profile *entities.De
 	if err := validateNetworkPhases(profile); err != nil {
 		return err
 	}
+	if err := profile.ValidateDICEFields(); err != nil {
+		return err
+	}
 
 	return s.save(ctx, profile, msg)
 }
@@ -286,6 +289,15 @@ func (s *ProfileService) Update(ctx context.Context, profile *entities.DevicePro
 	// and only the explicit ClearTLSServerName option blanks it (#462).
 	if profile.TLSServerName == "" && !clearTLSServerName {
 		profile.TLSServerName = existing.TLSServerName
+	}
+	// The DICE identity and golden firmware hash (#1699) follow the same
+	// omission rule: a write path that does not know them keeps the stored
+	// values, and a supplied value replaces them.
+	if profile.DICEDeviceID == "" {
+		profile.DICEDeviceID = existing.DICEDeviceID
+	}
+	if profile.GoldenFWHash == "" {
+		profile.GoldenFWHash = existing.GoldenFWHash
 	}
 	if !profile.Assigned && existing.Assigned {
 		profile.Assigned = existing.Assigned
@@ -471,6 +483,10 @@ func (s *ProfileService) UnassignFromDevice(ctx context.Context, profileID uint6
 	profile.EKSerial = ""
 	profile.MACAddress = ""
 	profile.EKCert = ""
+	// The DICE device id binds the profile to one device like the EK serial
+	// does; a detached profile must not resolve by it. The golden FWHash
+	// describes the firmware build, not the device, so it stays.
+	profile.DICEDeviceID = ""
 	profile.Assigned = false
 	profile.AssignedAt = time.Time{}
 

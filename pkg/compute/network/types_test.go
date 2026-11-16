@@ -115,27 +115,6 @@ func TestAuthState_CanTransitionTo(t *testing.T) {
 	}
 }
 
-func TestVLANTransition(t *testing.T) {
-	transition := VLANTransition{
-		PortID:        "eth0",
-		FromVLAN:      1,
-		ToVLAN:        100,
-		FromState:     AuthStateQuarantine,
-		ToState:       AuthStateAuthorized,
-		Reason:        "authentication successful",
-		Timestamp:     time.Now(),
-		TransactionID: "txn-123",
-		Success:       true,
-	}
-
-	assert.Equal(t, "eth0", transition.PortID)
-	assert.Equal(t, uint16(1), transition.FromVLAN)
-	assert.Equal(t, uint16(100), transition.ToVLAN)
-	assert.Equal(t, AuthStateQuarantine, transition.FromState)
-	assert.Equal(t, AuthStateAuthorized, transition.ToState)
-	assert.True(t, transition.Success)
-}
-
 func TestAuthResult_IsSuccessful(t *testing.T) {
 	tests := []struct {
 		name   string

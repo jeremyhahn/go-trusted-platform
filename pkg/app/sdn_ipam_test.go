@@ -481,14 +481,6 @@ func (k *getKVClient) Get(context.Context, *service.GetRequest) (*service.GetRes
 	return k.resp, k.err
 }
 
-// kvOnlyClient is an SDK client that serves only KV().
-type kvOnlyClient struct {
-	quicbaassdk.Client
-	kv quicbaassdk.KVClient
-}
-
-func (c *kvOnlyClient) KV() quicbaassdk.KVClient { return c.kv }
-
 // A KV Get answers a miss with a typed not-found error, never Found=false.
 // The IPAM backend reads found=false as "absent" (CreatePool's existence
 // check), so the adapter must translate the miss rather than fail the call.

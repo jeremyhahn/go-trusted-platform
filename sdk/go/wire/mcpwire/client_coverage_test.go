@@ -344,28 +344,6 @@ func TestMCPError_ErrorCoverage(t *testing.T) {
 	}
 }
 
-func TestClientOptionsCoverage(t *testing.T) {
-	config := &ClientConfig{
-		ServerAddr: "http://localhost:8080",
-		Timeout:    10 * time.Second,
-		MaxRetries: 5,
-		RetryDelay: 200 * time.Millisecond,
-	}
-
-	if config.ServerAddr != "http://localhost:8080" {
-		t.Errorf("unexpected ServerAddr: %s", config.ServerAddr)
-	}
-	if config.Timeout != 10*time.Second {
-		t.Errorf("unexpected Timeout: %v", config.Timeout)
-	}
-	if config.MaxRetries != 5 {
-		t.Errorf("unexpected MaxRetries: %d", config.MaxRetries)
-	}
-	if config.RetryDelay != 200*time.Millisecond {
-		t.Errorf("unexpected RetryDelay: %v", config.RetryDelay)
-	}
-}
-
 func TestNewClient_ValidationCoverage(t *testing.T) {
 	// Test with empty server address
 	_, err := NewClient(&ClientConfig{

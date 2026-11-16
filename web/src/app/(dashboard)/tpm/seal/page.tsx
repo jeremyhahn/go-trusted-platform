@@ -17,8 +17,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Lock,
   Unlock,
-  AlertCircle,
-  Shield,
   Loader2,
 } from "lucide-react";
 import { useTPM, useMutation, useToast } from "@/hooks";

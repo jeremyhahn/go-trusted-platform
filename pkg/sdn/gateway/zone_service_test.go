@@ -35,18 +35,6 @@ import (
 // DHCPServiceConfig — Zone field
 // ─────────────────────────────────────────────────────────────────────────────
 
-func TestDHCPServiceConfig_ZoneField_Preserved(t *testing.T) {
-	t.Parallel()
-
-	cfg := &DHCPServiceConfig{
-		Enabled:   true,
-		Interface: "eth0",
-		Zone:      "provisioning",
-	}
-	if cfg.Zone != "provisioning" {
-		t.Errorf("want zone %q, got %q", "provisioning", cfg.Zone)
-	}
-}
 func TestDHCPServiceConfig_Validate_EnabledWithInterface_NoError(t *testing.T) {
 	t.Parallel()
 

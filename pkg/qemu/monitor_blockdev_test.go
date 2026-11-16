@@ -148,20 +148,3 @@ func TestBlockResize(t *testing.T) {
 		assert.Contains(t, err.Error(), "required")
 	})
 }
-
-func TestBlockStatTypes(t *testing.T) {
-	s := BlockStat{
-		Device:   "",
-		NodeName: "node0",
-		Stats: BlockStatCounters{
-			RdBytes:         100,
-			WrBytes:         200,
-			RdOperations:    3,
-			WrOperations:    4,
-			FlushOperations: 1,
-		},
-	}
-	assert.Equal(t, "node0", s.NodeName)
-	assert.Equal(t, int64(100), s.Stats.RdBytes)
-	assert.Equal(t, int64(200), s.Stats.WrBytes)
-}

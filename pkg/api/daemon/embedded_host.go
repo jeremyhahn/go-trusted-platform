@@ -222,6 +222,9 @@ func (d *Daemon) embeddedServices() *embedded.ServiceRegistry {
 	if svc := d.LUKSService(); svc != nil {
 		registry.LUKS = svc
 	}
+	if svc := d.BarrierGRPCService(); svc != nil {
+		registry.Barrier = svc
+	}
 	if svc := d.SwitchService(); svc != nil {
 		registry.Switch = svc
 	}

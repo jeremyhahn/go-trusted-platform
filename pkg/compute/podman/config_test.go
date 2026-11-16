@@ -404,18 +404,6 @@ func TestPodmanConfig_Clone_NilMaps(t *testing.T) {
 	assert.Nil(t, clone.InsecureRegistries)
 }
 
-func TestRegistryCredentials(t *testing.T) {
-	creds := &RegistryCredentials{
-		Username:      "testuser",
-		Password:      "testpass",
-		IdentityToken: "token123",
-	}
-
-	assert.Equal(t, "testuser", creds.Username)
-	assert.Equal(t, "testpass", creds.Password)
-	assert.Equal(t, "token123", creds.IdentityToken)
-}
-
 func TestPodmanConfig_MethodChaining(t *testing.T) {
 	config := DefaultPodmanConfig().
 		WithStorageRoot("/custom/storage").

@@ -443,34 +443,6 @@ func TestNetworkConfigWriter(t *testing.T) {
 	})
 }
 
-func TestPlatformAPIConfig(t *testing.T) {
-	t.Run("Create platform API config", func(t *testing.T) {
-		config := &PlatformAPIConfig{
-			Endpoint:   "https://platform.example.com/api/v1",
-			ProfileID:  12345,
-			TLSVerify:  true,
-			CACertPath: "/etc/ssl/certs/ca-bundle.crt",
-		}
-
-		assert.Equal(t, "https://platform.example.com/api/v1", config.Endpoint)
-		assert.Equal(t, uint64(12345), config.ProfileID)
-		assert.True(t, config.TLSVerify)
-		assert.Equal(t, "/etc/ssl/certs/ca-bundle.crt", config.CACertPath)
-	})
-
-	t.Run("Create platform API config with profile name", func(t *testing.T) {
-		config := &PlatformAPIConfig{
-			Endpoint:    "https://platform.example.com/api/v1",
-			ProfileName: "default-server",
-			TLSVerify:   false,
-		}
-
-		assert.Equal(t, "default-server", config.ProfileName)
-		assert.Equal(t, uint64(0), config.ProfileID)
-		assert.False(t, config.TLSVerify)
-	})
-}
-
 // TestZoneNetworkSet verifies ZoneNetworkSet population from device profiles.
 func TestZoneNetworkSet(t *testing.T) {
 	t.Run("Explicit zones in all phases", func(t *testing.T) {

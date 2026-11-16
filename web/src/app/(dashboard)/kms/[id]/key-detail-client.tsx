@@ -38,7 +38,7 @@ interface KeyResponseWire extends KeyWire {
   key?: KeyWire;
   metadata?: KeyWire;
 }
-import { ArrowLeft, Loader2, AlertCircle, RefreshCw, Ban, Trash2 } from "lucide-react";
+import { ArrowLeft, Loader2, AlertCircle, RefreshCw, Ban } from "lucide-react";
 
 /**
  * Key Detail Page

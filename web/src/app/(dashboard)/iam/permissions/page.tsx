@@ -11,17 +11,16 @@
  * - /api/v1/iam/tenants/{tenant}/roles (for extracting permission strings)
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useMemo } from 'react';
 import { ColumnDef } from '@tanstack/react-table';
 import { useAuth } from '@/contexts/AuthContext';
 import { useIAM, useApi } from '@/hooks';
-import type { Group, Policy, Role, Permission } from '@/types/iam';
+import type { Group, Policy, Permission } from '@/types/iam';
 import { DataTable } from '@/components/ui/data-table';
 import { DataTableColumnHeader } from '@/components/ui/data-table-column-header';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Shield, Key, FileText, AlertCircle, Loader2, Users } from 'lucide-react';
 
@@ -29,7 +28,7 @@ import { Shield, Key, FileText, AlertCircle, Loader2, Users } from 'lucide-react
  * Permissions list page component
  */
 export default function PermissionsPage() {
-  const { user: authUser, tenantId, isLoading: authLoading } = useAuth();
+  const { tenantId, isLoading: authLoading } = useAuth();
   const iam = useIAM();
 
 
