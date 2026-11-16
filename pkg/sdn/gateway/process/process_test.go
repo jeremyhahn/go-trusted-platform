@@ -1913,6 +1913,51 @@ func TestSettings_WatchdogInterval(t *testing.T) {
 	var invalid *ErrWatchdogIntervalInvalid
 	require.ErrorAs(t, err, &invalid)
 	assert.Equal(t, negative, invalid.Interval)
+
+	// Codex P1 #1928 round 5: a positive interval below 1 µs would reach
+	// the child as WATCHDOG_USEC=0, so it would send no keep-alives while
+	// the supervisor armed a deadline. Refused; 1 µs is the floor.
+	for _, below := range []time.Duration{time.Nanosecond, 999 * time.Nanosecond} {
+		_, err = Settings{Enabled: true, User: name, WatchdogInterval: &below}.Config(Inherited{}, nil)
+		invalid = nil
+		require.ErrorAs(t, err, &invalid, "interval %s", below)
+		assert.Equal(t, below, invalid.Interval)
+	}
+	floor := time.Microsecond
+	cfg, err = Settings{Enabled: true, User: name, WatchdogInterval: &floor}.Config(Inherited{}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, floor, cfg.WatchdogInterval)
+}
+
+func TestWatchdog_ASubMicrosecondIntervalIsRefusedAtStart(t *testing.T) {
+	// Codex P1 #1928 round 5: an interval that reaches StartService without
+	// passing Settings, from a definition's own WatchdogInterval or a Config
+	// built directly, is refused before any child is launched.
+	t.Run("definition", func(t *testing.T) {
+		def, err := DefinitionForService(gateway.ServiceTransit)
+		require.NoError(t, err)
+		saved := byService[gateway.ServiceTransit]
+		def.WatchdogInterval = 500 * time.Nanosecond
+		byService[gateway.ServiceTransit] = def
+		t.Cleanup(func() { byService[gateway.ServiceTransit] = saved })
+
+		supervisor, launcher, _ := newSupervisor(t, nil)
+		err = supervisor.StartService(testContext(t), gateway.ServiceTransit)
+		var invalid *ErrWatchdogIntervalInvalid
+		require.ErrorAs(t, err, &invalid)
+		assert.Equal(t, 500*time.Nanosecond, invalid.Interval)
+		assert.Zero(t, launcher.launchCount(), "no child is launched")
+	})
+	t.Run("config", func(t *testing.T) {
+		supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
+			c.WatchdogInterval = 500 * time.Nanosecond
+		})
+		err := supervisor.StartService(testContext(t), gateway.ServiceTransit)
+		var invalid *ErrWatchdogIntervalInvalid
+		require.ErrorAs(t, err, &invalid)
+		assert.Equal(t, 500*time.Nanosecond, invalid.Interval)
+		assert.Zero(t, launcher.launchCount(), "no child is launched")
+	})
 }
 
 func TestWatchdog_TheDefaultSettingStartsNoWatchdog(t *testing.T) {
