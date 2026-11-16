@@ -17,11 +17,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -392,6 +394,159 @@ func TestCopyWithContext_Cancellation(t *testing.T) {
 	// Wait for copy to finish
 	err = <-errChan
 	assert.ErrorIs(t, err, context.Canceled)
+}
+
+// shortenDownloadTimeouts shortens the stall and response-header windows for
+// one test and restores them when it ends.
+func shortenDownloadTimeouts(t *testing.T, stall, header time.Duration) {
+	t.Helper()
+	oldStall, oldHeader := downloadStallTimeout, responseHeaderTimeout
+	downloadStallTimeout, responseHeaderTimeout = stall, header
+	t.Cleanup(func() {
+		downloadStallTimeout, responseHeaderTimeout = oldStall, oldHeader
+	})
+}
+
+// A mirror that sends the headers and a few KB and then holds the connection
+// open fails fast with ErrDownloadStalled, and the partial file stays for a
+// resume (#1927).
+func TestDownloadISO_StalledTransferFailsFast(t *testing.T) {
+	shortenDownloadTimeouts(t, 500*time.Millisecond, 5*time.Second)
+
+	const sent = 4096
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "1048576")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(make([]byte, sent))
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	config := &ISOConfig{
+		Version:        "3.22.2",
+		ISO:            "alpine.iso",
+		URL:            server.URL + "/alpine.iso",
+		MirrorURL:      server.URL,
+		WorkDir:        tmpDir,
+		VerifyChecksum: false,
+		ResumeDownload: true,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	err := DownloadISO(ctx, config)
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	var stalled *ErrDownloadStalled
+	require.True(t, errors.As(err, &stalled), "want *ErrDownloadStalled, got %v", err)
+	assert.Equal(t, config.URL, stalled.URL)
+	assert.Equal(t, int64(sent), stalled.Written)
+	assert.Equal(t, 500*time.Millisecond, stalled.After)
+	assert.Less(t, elapsed, 5*time.Second, "the stall must be caught well before the deadline")
+	assert.NoError(t, ctx.Err(), "the caller's context must not have expired")
+
+	info, statErr := os.Stat(config.TempPath())
+	require.NoError(t, statErr, "the partial file stays for a resume")
+	assert.Equal(t, int64(sent), info.Size())
+	_, statErr = os.Stat(config.ISOPath())
+	assert.True(t, os.IsNotExist(statErr), "a stalled download must not produce the ISO")
+}
+
+// TestDownloadISO_SteadyProgressOutlivesStallWindow proves the stall window
+// is an idle timeout, not a total-duration limit: a transfer that keeps
+// making progress runs longer than the window and still completes.
+func TestDownloadISO_SteadyProgressOutlivesStallWindow(t *testing.T) {
+	const window = 300 * time.Millisecond
+	shortenDownloadTimeouts(t, window, 5*time.Second)
+
+	const (
+		chunks    = 8
+		chunkSize = 4096
+		pause     = 100 * time.Millisecond
+	)
+	body := make([]byte, chunks*chunkSize)
+	for i := range body {
+		body[i] = byte(i % 251)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		w.WriteHeader(http.StatusOK)
+		for i := 0; i < chunks; i++ {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-time.After(pause):
+			}
+			_, _ = w.Write(body[i*chunkSize : (i+1)*chunkSize])
+			w.(http.Flusher).Flush()
+		}
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	config := &ISOConfig{
+		Version:        "3.22.2",
+		ISO:            "alpine.iso",
+		URL:            server.URL + "/alpine.iso",
+		MirrorURL:      server.URL,
+		WorkDir:        tmpDir,
+		VerifyChecksum: false,
+		ResumeDownload: true,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	err := DownloadISO(ctx, config)
+	elapsed := time.Since(start)
+
+	require.NoError(t, err, "a transfer with steady progress must not trip the stall window")
+	assert.Greater(t, elapsed, window, "the transfer must outlast the stall window to prove the reset")
+	assert.Less(t, elapsed, 5*time.Second)
+
+	got, readErr := os.ReadFile(config.ISOPath())
+	require.NoError(t, readErr)
+	require.Len(t, got, len(body))
+	assert.Equal(t, body, got)
+}
+
+// A mirror that accepts the request and never sends headers fails with the
+// response-header timeout, not at the caller's deadline (#1927).
+func TestDownloadISO_NoResponseHeadersFailsFast(t *testing.T) {
+	shortenDownloadTimeouts(t, 5*time.Second, 500*time.Millisecond)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	config := &ISOConfig{
+		Version:        "3.22.2",
+		ISO:            "alpine.iso",
+		URL:            server.URL + "/alpine.iso",
+		MirrorURL:      server.URL,
+		WorkDir:        t.TempDir(),
+		VerifyChecksum: false,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	err := DownloadISO(ctx, config)
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "timeout awaiting response headers")
+	assert.Less(t, elapsed, 5*time.Second, "the header timeout must fire well before the deadline")
+	assert.NoError(t, ctx.Err(), "the caller's context must not have expired")
 }
 
 // gatedReader announces each Read on reading and holds it until release is
