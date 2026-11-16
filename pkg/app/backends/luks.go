@@ -368,6 +368,12 @@ func (b *LUKSBackend) SetTPMHandler(h LUKSTPMHandler) {
 	b.tpm = h
 }
 
+// TPMHandler returns the TPM sealing handler, or nil when TPM enrollment
+// is not wired.
+func (b *LUKSBackend) TPMHandler() LUKSTPMHandler {
+	return b.tpm
+}
+
 // luksKeySlotTypeMap routes LUKS2 token/keyslot types onto the service-layer
 // LUKSKeyType enum. Entries cover both raw keyslot.Type values and token
 // type discriminators that imply the slot purpose.

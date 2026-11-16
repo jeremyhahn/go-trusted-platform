@@ -25,8 +25,10 @@ const tpmTokenType = "systemd-tpm2"
 // opened for the systemd-tpm2 token.
 var ErrTPMTokenUnsealerUnavailable = errors.New("initrd: no TPM unsealer for the systemd-tpm2 token")
 
-// tokenUnsealer unseals the passphrase a systemd-tpm2 token carries.
-type tokenUnsealer interface {
+// TokenUnsealer unseals the passphrase a systemd-tpm2 token carries. The
+// default is the go-xkms TPM sealer; SetUnsealer replaces it (tests, or a
+// caller holding its own TPM session).
+type TokenUnsealer interface {
 	Unseal(ctx context.Context, token *luks.Token) ([]byte, error)
 }
 
@@ -36,7 +38,7 @@ type tokenUnsealer interface {
 type TPMTokenStrategy struct {
 	platform *Platform
 	logger   *logging.Logger
-	unsealer tokenUnsealer
+	unsealer TokenUnsealer
 	priority int
 }
 
@@ -49,7 +51,10 @@ func NewTPMTokenStrategy(platform *Platform, logger *logging.Logger) *TPMTokenSt
 		platform: platform,
 		logger:   logger,
 		unsealer: newDefaultTokenUnsealer(logger),
-		priority: 5,
+		// 0: ahead of TPM-PCR (1). The token is what SDK enrolment wrote
+		// under the PCR policy, so it is the current enrolment when present;
+		// without a token CanUnlock is false and TPM-PCR (ESP) runs next.
+		priority: 0,
 	}
 }
 
@@ -58,6 +63,10 @@ func (s *TPMTokenStrategy) Name() string { return StrategyNameTPMToken }
 
 // Priority runs the token strategy ahead of the ESP TPM strategies.
 func (s *TPMTokenStrategy) Priority() int { return s.priority }
+
+// SetUnsealer replaces the TPM unsealer. A nil unsealer makes CanUnlock
+// false, so the chain moves on to the next strategy.
+func (s *TPMTokenStrategy) SetUnsealer(u TokenUnsealer) { s.unsealer = u }
 
 type tpmTokenSlot struct {
 	slot  int
@@ -174,7 +183,7 @@ func (u *xkmsTokenUnsealer) Unseal(ctx context.Context, token *luks.Token) ([]by
 
 // newDefaultTokenUnsealer opens the go-xkms sealer on the default TPM
 // transport, or returns nil when it cannot be built.
-func newDefaultTokenUnsealer(logger *logging.Logger) tokenUnsealer {
+func newDefaultTokenUnsealer(logger *logging.Logger) TokenUnsealer {
 	sealer, err := xkmsluks.NewTPMSealer(logger.Slog(), xkmsluks.DefaultTPMOpener())
 	if err != nil {
 		logger.Debugf("TPM token: sealer unavailable: %v", err)
