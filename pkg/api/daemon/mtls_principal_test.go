@@ -126,17 +126,24 @@ func newCertPrincipalDirectory() (*certPrincipalUsers, *certPrincipalRoles) {
 	return users, roles
 }
 
-func newTestIAMCertificatePrincipals(t *testing.T, users *certPrincipalUsers, roles *certPrincipalRoles) *iamCertificatePrincipals {
+func newTestIAMCertificatePrincipals(t *testing.T, users *certPrincipalUsers, roles *certPrincipalRoles, pep sdkiam.PEPClient) *iamCertificatePrincipals {
 	t.Helper()
-	resolver, err := newIAMCertificatePrincipals(users, roles)
+	resolver, err := newIAMCertificatePrincipals(users, roles, pep)
 	require.NoError(t, err)
 	return resolver
+}
+
+// allowAllPEP is a policy decision point that allows every permission it is asked.
+func allowAllPEP() *mockSDKPEPClient {
+	return &mockSDKPEPClient{checkFunc: func(context.Context, *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+		return &sdkiam.CheckResponse{Allowed: true}, nil
+	}}
 }
 
 func TestIAMCertificatePrincipals_GrantsThePrincipalsRolePermissions(t *testing.T) {
 	t.Parallel()
 	users, roles := newCertPrincipalDirectory()
-	resolver := newTestIAMCertificatePrincipals(t, users, roles)
+	resolver := newTestIAMCertificatePrincipals(t, users, roles, allowAllPEP())
 
 	principal, err := resolver.ResolveCertificatePrincipal(context.Background(),
 		&auth.Identity{ID: "device-01", TenantID: "tenant-a"})
@@ -159,7 +166,7 @@ func TestIAMCertificatePrincipals_ResolvesOnTheEmbeddedTransport(t *testing.T) {
 	e := iamusertest.NewEmbedded(t)
 	e.AddRole(t, "tenant-a", "device")
 	deviceID := e.AddUser(t, "tenant-a", "device-01@example.com", "device-01", quiciam.LifecycleActive, "device")
-	resolver, err := newIAMCertificatePrincipals(e.Client.User(), e.Client.Role())
+	resolver, err := newIAMCertificatePrincipals(e.Client.User(), e.Client.Role(), &mockSDKPEPClient{})
 	require.NoError(t, err)
 
 	t.Run("a CN principal", func(t *testing.T) {
@@ -192,7 +199,7 @@ func TestIAMCertificatePrincipals_RefusesATruncatedListing(t *testing.T) {
 	for i := 0; i < iamuser.ListPageSize+20; i++ {
 		e.AddUser(t, "tenant-a", fmt.Sprintf("d%03d@example.com", i), fmt.Sprintf("d%03d", i), quiciam.LifecycleActive)
 	}
-	resolver, err := newIAMCertificatePrincipals(e.Client.User(), e.Client.Role())
+	resolver, err := newIAMCertificatePrincipals(e.Client.User(), e.Client.Role(), &mockSDKPEPClient{})
 	require.NoError(t, err)
 
 	_, err = resolver.ResolveCertificatePrincipal(context.Background(),
@@ -206,7 +213,7 @@ func TestIAMCertificatePrincipals_RefusesATruncatedListing(t *testing.T) {
 func TestIAMCertificatePrincipals_PrefersTheIAMUserID(t *testing.T) {
 	t.Parallel()
 	users, roles := newCertPrincipalDirectory()
-	resolver := newTestIAMCertificatePrincipals(t, users, roles)
+	resolver := newTestIAMCertificatePrincipals(t, users, roles, allowAllPEP())
 
 	principal, err := resolver.ResolveCertificatePrincipal(context.Background(),
 		&auth.Identity{ID: "device-01", UserID: "u-device", TenantID: "tenant-a"})
@@ -242,7 +249,7 @@ func TestIAMCertificatePrincipals_RefusesWhatIAMCannotResolve(t *testing.T) {
 			if tc.mutate != nil {
 				tc.mutate(users, roles)
 			}
-			resolver := newTestIAMCertificatePrincipals(t, users, roles)
+			resolver := newTestIAMCertificatePrincipals(t, users, roles, allowAllPEP())
 
 			principal, err := resolver.ResolveCertificatePrincipal(context.Background(), tc.identity)
 
@@ -258,8 +265,64 @@ func TestIAMCertificatePrincipals_RefusesWhatIAMCannotResolve(t *testing.T) {
 func TestNewIAMCertificatePrincipals_RequiresBothClients(t *testing.T) {
 	t.Parallel()
 	users, roles := newCertPrincipalDirectory()
-	_, err := newIAMCertificatePrincipals(nil, roles)
+	_, err := newIAMCertificatePrincipals(nil, roles, allowAllPEP())
 	assert.Error(t, err)
-	_, err = newIAMCertificatePrincipals(users, nil)
+	_, err = newIAMCertificatePrincipals(users, nil, allowAllPEP())
 	assert.Error(t, err)
+	_, err = newIAMCertificatePrincipals(users, roles, nil)
+	assert.Error(t, err, "no policy decision point, no certificate principals")
+}
+
+func TestIAMCertificatePrincipals_ThePEPDecidesEachScope(t *testing.T) {
+	t.Parallel()
+	users, roles := newCertPrincipalDirectory()
+	var asked []*sdkiam.CheckRequest
+	pep := &mockSDKPEPClient{checkFunc: func(_ context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+		asked = append(asked, req)
+		return &sdkiam.CheckResponse{Allowed: !(req.Resource == "attestation" && req.Action == "submit")}, nil
+	}}
+	resolver := newTestIAMCertificatePrincipals(t, users, roles, pep)
+
+	principal, err := resolver.ResolveCertificatePrincipal(context.Background(),
+		&auth.Identity{ID: "device-01", TenantID: "tenant-a"})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"device:read", "tenant:read"}, principal.Scopes,
+		"only the permissions the PEP allows become scopes")
+	require.Len(t, asked, 3, "each role permission is asked once")
+	got := make([][2]string, 0, len(asked))
+	for _, req := range asked {
+		assert.Equal(t, sdkiam.CheckSubject{ID: "u-device", TenantID: "tenant-a", Roles: []string{"device", "reader"}}, req.Subject)
+		got = append(got, [2]string{req.Resource, req.Action})
+	}
+	assert.Equal(t, [][2]string{{"device", "read"}, {"attestation", "submit"}, {"tenant", "read"}}, got)
+}
+
+func TestIAMCertificatePrincipals_APEPThatDeniesAllGrantsNoScopes(t *testing.T) {
+	t.Parallel()
+	users, roles := newCertPrincipalDirectory()
+	resolver := newTestIAMCertificatePrincipals(t, users, roles, &mockSDKPEPClient{})
+
+	principal, err := resolver.ResolveCertificatePrincipal(context.Background(),
+		&auth.Identity{ID: "device-01", TenantID: "tenant-a"})
+
+	require.NoError(t, err)
+	require.NotNil(t, principal)
+	assert.Empty(t, principal.Scopes)
+}
+
+func TestIAMCertificatePrincipals_RefusesWhenThePEPCannotDecide(t *testing.T) {
+	t.Parallel()
+	users, roles := newCertPrincipalDirectory()
+	pep := &mockSDKPEPClient{checkFunc: func(context.Context, *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+		return nil, assert.AnError
+	}}
+	resolver := newTestIAMCertificatePrincipals(t, users, roles, pep)
+
+	principal, err := resolver.ResolveCertificatePrincipal(context.Background(),
+		&auth.Identity{ID: "device-01", TenantID: "tenant-a"})
+
+	assert.Nil(t, principal, "fail closed, never a partial grant")
+	var unresolved ErrCertificatePrincipalUnresolved
+	assert.ErrorAs(t, err, &unresolved)
 }

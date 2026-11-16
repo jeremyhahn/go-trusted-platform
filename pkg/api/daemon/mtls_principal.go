@@ -51,15 +51,21 @@ type CertificatePrincipalResolver interface {
 type iamCertificatePrincipals struct {
 	users sdkiam.UserClient
 	roles sdkiam.RoleClient
+	// pep decides each candidate permission (IAMPEPClient.Check); the
+	// roles' permission lists only name the candidates.
+	pep sdkiam.PEPClient
 }
 
 // newIAMCertificatePrincipals returns a resolver backed by IAM. Both clients
 // are required: without them there is no principal to resolve.
-func newIAMCertificatePrincipals(users sdkiam.UserClient, roles sdkiam.RoleClient) (*iamCertificatePrincipals, error) {
+func newIAMCertificatePrincipals(users sdkiam.UserClient, roles sdkiam.RoleClient, pep sdkiam.PEPClient) (*iamCertificatePrincipals, error) {
 	if users == nil || roles == nil {
 		return nil, ErrInvalidConfig{Reason: "the mTLS principal resolver requires the IAM user and role clients"}
 	}
-	return &iamCertificatePrincipals{users: users, roles: roles}, nil
+	if pep == nil {
+		return nil, ErrPEPClientNotAvailable{}
+	}
+	return &iamCertificatePrincipals{users: users, roles: roles, pep: pep}, nil
 }
 
 // ResolveCertificatePrincipal implements CertificatePrincipalResolver. It
@@ -97,7 +103,7 @@ func (p *iamCertificatePrincipals) ResolveCertificatePrincipal(ctx context.Conte
 		return nil, ErrCertificatePrincipalUnresolved{Reason: "the certificate's principal is not active"}
 	}
 
-	scopes := make([]string, 0)
+	candidates := make([]string, 0)
 	seen := make(map[string]struct{})
 	for _, roleID := range user.Roles {
 		role, roleErr := p.roles.Get(lookupCtx, tenantID, roleID)
@@ -112,6 +118,27 @@ func (p *iamCertificatePrincipals) ResolveCertificatePrincipal(ctx context.Conte
 				continue
 			}
 			seen[permission] = struct{}{}
+			candidates = append(candidates, permission)
+		}
+	}
+
+	// The policy decision point decides each candidate; the role lists
+	// never grant on their own (docs/SPEC.md: go-qrdb decides).
+	subject := &tokenPrincipal{Subject: user.ID, TenantID: tenantID, Roles: user.Roles}
+	scopes := make([]string, 0, len(candidates))
+	for _, permission := range candidates {
+		resource, action, ok := strings.Cut(permission, ":")
+		if !ok {
+			continue
+		}
+		allowed, checkErr := checkPrincipalPermission(lookupCtx, p.pep, subject, resource, action)
+		if checkErr != nil {
+			return nil, ErrCertificatePrincipalUnresolved{
+				Reason: "the IAM policy decision point could not decide the principal's permission " + permission,
+				Cause:  checkErr,
+			}
+		}
+		if allowed {
 			scopes = append(scopes, permission)
 		}
 	}
