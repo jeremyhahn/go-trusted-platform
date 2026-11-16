@@ -1656,7 +1656,7 @@ func newWatchdogSupervisor(t *testing.T, clockInterval, defInterval time.Duratio
 		if tune != nil {
 			tune(c)
 		}
-		clock.testClock.stopTimeout = c.StopTimeout
+		clock.stopTimeout = c.StopTimeout
 		c.Clock = clock
 	})
 	launcher.pid = os.Getpid()
@@ -1826,7 +1826,7 @@ func TestWatchdog_AnOnTimeKeepAliveBeatsAnExpiredTimer(t *testing.T) {
 	const interval = 7 * time.Second
 	clock := &expiringClock{watchdogClock: &watchdogClock{testClock: &testClock{}, interval: interval}}
 	supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
-		clock.testClock.stopTimeout = c.StopTimeout
+		clock.stopTimeout = c.StopTimeout
 		c.Clock = clock
 	})
 	launcher.pid = os.Getpid()
@@ -1895,7 +1895,7 @@ func TestWatchdog_ConfigGivesProductionChildrenAnInterval(t *testing.T) {
 	const interval = 7 * time.Second
 	clock := &watchdogClock{testClock: &testClock{}, interval: interval}
 	supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
-		clock.testClock.stopTimeout = c.StopTimeout
+		clock.stopTimeout = c.StopTimeout
 		c.Clock = clock
 		c.WatchdogInterval = interval
 	})
@@ -1946,7 +1946,7 @@ func TestWatchdog_TheDefaultSettingStartsNoWatchdog(t *testing.T) {
 	// The clock counts waits of the round-1 default, 30 s, as arms.
 	clock := &watchdogClock{testClock: &testClock{}, interval: 30 * time.Second}
 	supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
-		clock.testClock.stopTimeout = c.StopTimeout
+		clock.stopTimeout = c.StopTimeout
 		c.Clock = clock
 		c.WatchdogInterval = cfg.WatchdogInterval
 	})
