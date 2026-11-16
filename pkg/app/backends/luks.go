@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"time"
 
 	"golang.org/x/sys/unix"
 
@@ -163,7 +164,7 @@ type LUKSBackend struct {
 	// node itself is not flocked: go-luks2 takes its own LOCK_NB flock there
 	// per call, which a held lock would make fail. locksMu guards the map.
 	locksMu sync.Mutex
-	locks   map[string]*sync.Mutex
+	locks   map[string]chan struct{}
 
 	// fido2Mu serializes every call into the shared FIDO2 handler. The
 	// go-xkms handler reads, overwrites and restores its config timeout
@@ -220,52 +221,103 @@ func luksVolumeLockPath(device string) string {
 	return filepath.Join(luksLockDir, hex.EncodeToString(sum[:])+".lock")
 }
 
-// lockDevice takes the volume's in-process mutex (keyed by its resolved path,
-// created on first use), then a blocking exclusive flock on the volume's lock
-// file, and returns the unlock that releases both. It fails closed: when the
-// flock cannot be taken it releases the mutex and returns an error, and the
-// caller mutates nothing. The lock file stays in place after unlock, since
+// lockDevice takes the volume's in-process lock (a one-slot channel keyed by
+// its resolved path, created on first use), then an exclusive flock on the
+// volume's lock file, and returns the unlock that releases both. Both waits
+// end when ctx does: lockDevice then returns ctx.Err(), and it also returns
+// ctx.Err(), holding nothing, when ctx ended while the lock was being taken,
+// so a caller whose request is gone never starts its disk mutation. It fails
+// closed: when the flock cannot be taken it releases the in-process lock and
+// returns an error, and the caller mutates nothing. The lock file stays in place after unlock, since
 // removing it would race with another locker.
-func (b *LUKSBackend) lockDevice(device string) (func(), error) {
+func (b *LUKSBackend) lockDevice(ctx context.Context, device string) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	key := luksVolumeKey(device)
 	b.locksMu.Lock()
 	if b.locks == nil {
-		b.locks = make(map[string]*sync.Mutex)
+		b.locks = make(map[string]chan struct{})
 	}
-	mu, ok := b.locks[key]
+	sem, ok := b.locks[key]
 	if !ok {
-		mu = &sync.Mutex{}
-		b.locks[key] = mu
+		sem = make(chan struct{}, 1)
+		b.locks[key] = sem
 	}
 	b.locksMu.Unlock()
-	mu.Lock()
+	select {
+	case sem <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	release := func() { <-sem }
 
 	path := luksVolumeLockPath(device)
 	if err := os.MkdirAll(luksLockDir, 0o700); err != nil {
-		mu.Unlock()
+		release()
 		return nil, fmt.Errorf("luks: volume lock directory %s: %w", luksLockDir, err)
 	}
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|unix.O_CLOEXEC, 0o600)
 	if err != nil {
-		mu.Unlock()
+		release()
 		return nil, fmt.Errorf("luks: open volume lock %s: %w", path, err)
 	}
-	for {
-		err = unix.Flock(int(f.Fd()), unix.LOCK_EX)
-		if !errors.Is(err, unix.EINTR) {
-			break
-		}
-	}
-	if err != nil {
+	if err := flockContext(ctx, f); err != nil {
 		_ = f.Close()
-		mu.Unlock()
+		release()
+		if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, ctxErr) {
+			return nil, ctxErr
+		}
 		return nil, fmt.Errorf("luks: lock volume %s: %w", key, err)
 	}
-	return func() {
+	unlock := func() {
 		_ = unix.Flock(int(f.Fd()), unix.LOCK_UN)
 		_ = f.Close()
-		mu.Unlock()
-	}, nil
+		release()
+	}
+	// The context may have ended while the lock was being taken: the caller
+	// mutates nothing then.
+	if err := ctx.Err(); err != nil {
+		unlock()
+		return nil, err
+	}
+	return unlock, nil
+}
+
+// luksFlockRetry is how often a contended volume flock is retried while the
+// caller's context is live.
+const luksFlockRetry = 20 * time.Millisecond
+
+// flockContext takes an exclusive flock on f, retrying a contended
+// non-blocking attempt until it succeeds or ctx ends (then ctx.Err()).
+func flockContext(ctx context.Context, f *os.File) error {
+	var ticker *time.Ticker
+	for {
+		err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+		switch {
+		case err == nil:
+			if ticker != nil {
+				ticker.Stop()
+			}
+			return nil
+		case errors.Is(err, unix.EINTR):
+			continue
+		case !errors.Is(err, unix.EWOULDBLOCK):
+			if ticker != nil {
+				ticker.Stop()
+			}
+			return err
+		}
+		if ticker == nil {
+			ticker = time.NewTicker(luksFlockRetry)
+		}
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+			ticker.Stop()
+			return ctx.Err()
+		}
+	}
 }
 
 // luksKDFCost is a fixed keyslot KDF cost (see LUKSBackend.kdfCost): the
@@ -498,7 +550,7 @@ func volumeKeyBits(info *luks2.VolumeInfo, slots []daemon.LUKSKeyslot) int32 {
 
 // EnrollPassphrase adds a new passphrase keyslot.
 func (b *LUKSBackend) EnrollPassphrase(ctx context.Context, req *daemon.LUKSEnrollPassphraseRequest) (*daemon.LUKSEnrollPassphraseResult, error) {
-	unlock, err := b.lockDevice(req.Device)
+	unlock, err := b.lockDevice(ctx, req.Device)
 	if err != nil {
 		return nil, err
 	}
@@ -570,7 +622,7 @@ func (b *LUKSBackend) EnrollFIDO2(ctx context.Context, req *daemon.LUKSEnrollFID
 	defer clearBytes(key)
 
 	// The FIDO2 derivation (a touch) stays outside the device lock.
-	unlock, err := b.lockDevice(req.Device)
+	unlock, err := b.lockDevice(ctx, req.Device)
 	if err != nil {
 		return nil, err
 	}
@@ -629,7 +681,7 @@ func (b *LUKSBackend) EnrollTPM(ctx context.Context, req *daemon.LUKSEnrollTPMRe
 	defer clearBytes(passphrase)
 
 	// The TPM seal stays outside the device lock.
-	unlock, err := b.lockDevice(req.Device)
+	unlock, err := b.lockDevice(ctx, req.Device)
 	if err != nil {
 		return nil, err
 	}
@@ -675,7 +727,7 @@ func (b *LUKSBackend) EnrollRecovery(ctx context.Context, req *daemon.LUKSEnroll
 		return nil, err
 	}
 	b.kdfCost.applyRecovery(recoveryOpts)
-	unlock, err := b.lockDevice(req.Device)
+	unlock, err := b.lockDevice(ctx, req.Device)
 	if err != nil {
 		return nil, err
 	}
@@ -707,7 +759,7 @@ func (b *LUKSBackend) EnrollRecovery(ctx context.Context, req *daemon.LUKSEnroll
 
 // RemoveKey kills a keyslot. The slot index must be an existing, active slot.
 func (b *LUKSBackend) RemoveKey(ctx context.Context, req *daemon.LUKSRemoveKeyRequest) error {
-	unlock, err := b.lockDevice(req.Device)
+	unlock, err := b.lockDevice(ctx, req.Device)
 	if err != nil {
 		return err
 	}
@@ -732,7 +784,7 @@ func (b *LUKSBackend) TestUnlock(ctx context.Context, req *daemon.LUKSTestUnlock
 
 // ChangePassphrase rotates the secret on an existing passphrase slot.
 func (b *LUKSBackend) ChangePassphrase(ctx context.Context, req *daemon.LUKSChangePassphraseRequest) error {
-	unlock, err := b.lockDevice(req.Device)
+	unlock, err := b.lockDevice(ctx, req.Device)
 	if err != nil {
 		return err
 	}
