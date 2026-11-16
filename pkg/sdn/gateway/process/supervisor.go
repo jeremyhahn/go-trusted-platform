@@ -655,9 +655,10 @@ func (s *Supervisor) launch(ctx context.Context, proc *supervised) error {
 	done := proc.done
 	s.mu.Unlock()
 
-	// keepalive carries the child's WATCHDOG=1 to its watchdog; gone
-	// closes when the child's notify reader ends, with its socket.
-	keepalive := make(chan struct{}, 1)
+	// keepalive carries each WATCHDOG=1's receipt time to the child's
+	// watchdog; gone closes when the child's notify reader ends, with its
+	// socket.
+	keepalive := make(chan time.Time, keepaliveQueue)
 	gone := make(chan struct{})
 	go s.readNotify(proc.def.Name, notify, ready, keepalive, gone)
 	go s.watch(runCtx, proc, child, notify, done)
@@ -757,6 +758,11 @@ func (s *Supervisor) awaitService(ctx context.Context, proc *supervised, service
 // readyPollInterval is how often a starting child is asked whether its
 // services are up.
 const readyPollInterval = 25 * time.Millisecond
+
+// keepaliveQueue is how many stamped WATCHDOG=1 keep-alives wait for a
+// child's watchdog. Each is judged by its own stamp, so a late watchdog
+// still sees every on-time one; past this many the newest are dropped.
+const keepaliveQueue = 8
 
 // watch waits for the child to exit and restarts it while the parent still
 // wants services from it and its restart budget holds.
@@ -1106,7 +1112,7 @@ func (s *Supervisor) closeNotifyOfLocked(proc *supervised, notify *NotifySocket)
 // asks again at once rather than a poll interval later; the poll stays the
 // fallback for a child that never notifies. It touches no proc field: the
 // socket and the channel are its own launch's, passed in.
-func (s *Supervisor) readNotify(process string, notify *NotifySocket, ready chan struct{}, keepalive chan<- struct{}, gone chan struct{}) {
+func (s *Supervisor) readNotify(process string, notify *NotifySocket, ready chan struct{}, keepalive chan<- time.Time, gone chan struct{}) {
 	defer close(gone)
 	signalled := false
 	for {
@@ -1134,10 +1140,12 @@ func (s *Supervisor) readNotify(process string, notify *NotifySocket, ready chan
 			close(ready)
 		}
 		if msg.Watchdog {
-			// Non-blocking: one pending keep-alive re-arms the deadline as
-			// well as several would.
+			// Stamped on receipt, so the watchdog judges the keep-alive by
+			// when it arrived, not by when it is read (Codex P1 #1928).
+			// Non-blocking: a watchdog keepaliveQueue keep-alives behind
+			// has older on-time stamps queued already.
 			select {
-			case keepalive <- struct{}{}:
+			case keepalive <- s.cfg.Clock.Now():
 			default:
 			}
 		}
@@ -1151,7 +1159,7 @@ func (s *Supervisor) readNotify(process string, notify *NotifySocket, ready chan
 // only on child, never on a later launch, and returns when the child's
 // notify reader ends (the child is reaped) or the launch context is
 // cancelled.
-func (s *Supervisor) watchdog(ctx context.Context, proc *supervised, child Child, interval time.Duration, ready <-chan struct{}, keepalive <-chan struct{}, gone <-chan struct{}) {
+func (s *Supervisor) watchdog(ctx context.Context, proc *supervised, child Child, interval time.Duration, ready <-chan struct{}, keepalive <-chan time.Time, gone <-chan struct{}) {
 	select {
 	case <-ready:
 	case <-gone:
@@ -1159,28 +1167,43 @@ func (s *Supervisor) watchdog(ctx context.Context, proc *supervised, child Child
 	case <-ctx.Done():
 		return
 	}
-	deadline := s.cfg.Clock.After(interval)
+	// deadline is absolute, on the supervisor's clock: a keep-alive counts
+	// by its receipt stamp against it, never by when this goroutine gets
+	// to read it (Codex P1 #1928). The timer only says when to look.
+	deadline := s.cfg.Clock.Now().Add(interval)
+	timer := s.cfg.Clock.After(interval)
+	onTime := func(at time.Time) bool {
+		if at.After(deadline) {
+			return false
+		}
+		deadline = at.Add(interval)
+		timer = s.cfg.Clock.After(interval)
+		return true
+	}
+watch:
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-gone:
 			return
-		case <-keepalive:
-			deadline = s.cfg.Clock.After(interval)
-			continue
-		case <-deadline:
-			// select picks at random among ready cases: a keep-alive that
-			// is queued as the deadline passes arrived in time (Codex P1
-			// #1928), so it re-arms rather than counting as a miss.
+		case at := <-keepalive:
+			if !onTime(at) {
+				break watch
+			}
+		case <-timer:
+			// select picks at random among ready cases, and this goroutine
+			// may run late: a keep-alive queued now may still be stamped
+			// before the deadline.
 			select {
-			case <-keepalive:
-				deadline = s.cfg.Clock.After(interval)
-				continue
+			case at := <-keepalive:
+				if onTime(at) {
+					continue
+				}
 			default:
 			}
+			break watch
 		}
-		break
 	}
 
 	s.mu.Lock()

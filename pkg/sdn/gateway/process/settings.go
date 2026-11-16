@@ -32,9 +32,9 @@ const DefaultCgroupParent = "gatewayd"
 const DefaultServiceUser = "gatewayd"
 
 // DefaultWatchdogInterval is the watchdog interval of a `process:` section
-// that sets none: each child sends WATCHDOG=1 every 15 s and is restarted
-// after 30 s of silence.
-const DefaultWatchdogInterval = 30 * time.Second
+// that sets none: 0, off. The watchdog is opt-in, so an existing deployment
+// gains no watchdog restarts until its operator sets an interval.
+const DefaultWatchdogInterval time.Duration = 0
 
 // Settings is the `process:` configuration section: whether gatewayd
 // supervises its services in separate processes, and the knobs an operator
@@ -65,8 +65,8 @@ type Settings struct {
 	RestartBudget int           `yaml:"restart-budget" json:"restart_budget" mapstructure:"restart-budget"`
 	RestartWindow time.Duration `yaml:"restart-window" json:"restart_window" mapstructure:"restart-window"`
 	// WatchdogInterval is how often each child must send WATCHDOG=1 once it
-	// is ready. Absent means DefaultWatchdogInterval; an explicit 0 turns
-	// the watchdog off; a negative interval is refused. A pointer, like
+	// is ready. Absent means DefaultWatchdogInterval, 0, which like an
+	// explicit 0 leaves the watchdog off; a negative interval is refused. A pointer, like
 	// CgroupParent, so absent and 0 are distinguishable.
 	WatchdogInterval *time.Duration `yaml:"watchdog-interval" json:"watchdog_interval" mapstructure:"watchdog-interval"`
 	// PlatformUIDs are the platformd accounts the datapath child admits to
