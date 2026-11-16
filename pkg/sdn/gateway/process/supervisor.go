@@ -643,7 +643,7 @@ func (s *Supervisor) launch(ctx context.Context, proc *supervised) error {
 	s.mu.Unlock()
 
 	go s.readNotify(proc.def.Name, notify, ready)
-	go s.watch(runCtx, proc, child, done)
+	go s.watch(runCtx, proc, child, notify, done)
 
 	s.cfg.Logger.Info("gatewayd supervisor: process started",
 		slog.String("process", proc.def.Name),
@@ -740,12 +740,16 @@ const readyPollInterval = 25 * time.Millisecond
 
 // watch waits for the child to exit and restarts it while the parent still
 // wants services from it and its restart budget holds.
-func (s *Supervisor) watch(ctx context.Context, proc *supervised, child Child, done chan struct{}) {
+func (s *Supervisor) watch(ctx context.Context, proc *supervised, child Child, notify *NotifySocket, done chan struct{}) {
 	defer close(done)
 
 	waitErr := child.Wait()
 
 	s.mu.Lock()
+	// The child is reaped: its notify socket goes with it, which is what
+	// ends its reader. Nothing else would close it when no launch follows
+	// (an exhausted restart budget).
+	s.closeNotifyOfLocked(proc, notify)
 	// A stop cancelled the context: the exit is expected and the process
 	// stays down.
 	if ctx.Err() != nil || s.stopped || len(proc.wanted) == 0 {
@@ -990,7 +994,7 @@ func (s *Supervisor) releaseApply() {
 // next restart attempt does not race the last one's leftovers.
 func (s *Supervisor) stopUnservingChild(ctx context.Context, proc *supervised) {
 	s.mu.Lock()
-	child, cancel, done := proc.child, proc.cancel, proc.done
+	child, cancel, done, notify := proc.child, proc.cancel, proc.done, proc.notify
 	proc.cancel = nil
 	s.mu.Unlock()
 
@@ -1003,6 +1007,9 @@ func (s *Supervisor) stopUnservingChild(ctx context.Context, proc *supervised) {
 		cancel()
 	}
 	if child == nil {
+		s.mu.Lock()
+		s.closeNotifyOfLocked(proc, notify)
+		s.mu.Unlock()
 		return
 	}
 	if err := s.terminate(context.WithoutCancel(ctx), proc.def.Name, child, done); err != nil {
@@ -1012,6 +1019,9 @@ func (s *Supervisor) stopUnservingChild(ctx context.Context, proc *supervised) {
 	s.mu.Lock()
 	proc.child = nil
 	s.closeClientLocked(proc)
+	// The watch goroutine closes it on reaping; this covers a child that
+	// would not die, so its reader does not outlive the teardown.
+	s.closeNotifyOfLocked(proc, notify)
 	s.mu.Unlock()
 }
 
@@ -1050,6 +1060,17 @@ func (s *Supervisor) closeNotifyLocked(proc *supervised) {
 			slog.String("process", proc.def.Name), slog.Any("error", err))
 	}
 	proc.notify = nil
+}
+
+// closeNotifyOfLocked closes notify only while it is still proc's current
+// notify socket: a newer launch's socket is never closed on behalf of an
+// older child, and a socket already closed (proc.notify reset to nil) is not
+// closed twice. The caller holds s.mu.
+func (s *Supervisor) closeNotifyOfLocked(proc *supervised, notify *NotifySocket) {
+	if notify == nil || proc.notify != notify {
+		return
+	}
+	s.closeNotifyLocked(proc)
 }
 
 // readNotify reads one child's notify socket until closeNotifyLocked closes
