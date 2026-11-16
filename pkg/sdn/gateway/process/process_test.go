@@ -1588,16 +1588,25 @@ type watchdogClock struct {
 
 	mu    sync.Mutex
 	armed []chan time.Time
-	now   time.Time
+	// due is each armed wait's deadline on this clock: Now when it was
+	// armed plus the wait.
+	due []time.Time
+	now time.Time
+	// jumpTo, once set, is where Now moves right after its next read: the
+	// keep-alive's receipt stamp reads the old time, and everything after it
+	// (the watchdog handling that keep-alive) reads the new one.
+	jumpTo time.Time
 }
 
 func (c *watchdogClock) After(d time.Duration) <-chan time.Time {
 	if d != c.interval {
 		return c.testClock.After(d)
 	}
+	now := c.Now()
 	ch := make(chan time.Time, 1)
 	c.mu.Lock()
 	c.armed = append(c.armed, ch)
+	c.due = append(c.due, now.Add(d))
 	c.mu.Unlock()
 	return ch
 }
@@ -1615,10 +1624,15 @@ func (c *watchdogClock) awaitArmed(t *testing.T, n int) {
 		10*time.Second, 5*time.Millisecond, "the watchdog deadline is armed %d times", n)
 }
 
-// fire passes the i-th armed deadline.
+// fire passes the i-th armed deadline: the clock moves to it (never back)
+// and its wait ends.
 func (c *watchdogClock) fire(i int) {
+	c.Now() // stand the clock still first, if nothing has yet
 	c.mu.Lock()
 	ch := c.armed[i]
+	if c.due[i].After(c.now) {
+		c.now = c.due[i]
+	}
 	c.mu.Unlock()
 	select {
 	case ch <- time.Now():
@@ -1626,17 +1640,29 @@ func (c *watchdogClock) fire(i int) {
 	}
 }
 
-// Now is the time setNow last gave, or the testClock's until the first
-// setNow. The watchdog's deadlines and keep-alive stamps read it, so a test
-// moves the supervisor's time past a deadline without firing its timer.
+// Now is the time setNow or fire last gave. It stands still between them:
+// the first read takes the testClock's time and keeps it, so a watchdog
+// deadline taken at a keep-alive is exactly one interval from the watchdog's
+// own reading. The watchdog's deadlines and keep-alive stamps read it, so a
+// test moves the supervisor's time past a deadline without firing its timer.
 func (c *watchdogClock) Now() time.Time {
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.now.IsZero() {
+		c.now = c.testClock.Now()
+	}
 	now := c.now
-	c.mu.Unlock()
-	if now.IsZero() {
-		return c.testClock.Now()
+	if !c.jumpTo.IsZero() {
+		c.now, c.jumpTo = c.jumpTo, time.Time{}
 	}
 	return now
+}
+
+// jumpAfterNextRead moves the clock to to right after its next read.
+func (c *watchdogClock) jumpAfterNextRead(to time.Time) {
+	c.mu.Lock()
+	c.jumpTo = to
+	c.mu.Unlock()
 }
 
 func (c *watchdogClock) setNow(now time.Time) {
@@ -2005,6 +2031,54 @@ func TestWatchdog_AKeepAliveAfterTheDeadlineIsAMiss(t *testing.T) {
 	var missed *ErrWatchdogMissed
 	require.ErrorAs(t, exhausted.Last, &missed)
 	assert.Equal(t, interval, missed.Interval)
+}
+
+func TestWatchdog_AnOnTimeKeepAliveHandledPastItsNewDeadlineIsAMiss(t *testing.T) {
+	// Codex P1 #1928 round 3 (A): a keep-alive received at t=5 (interval
+	// 10) moves the deadline to t=15. When the watchdog only handles it at
+	// t=20, the child has been silent past that deadline already: it is a
+	// miss at once, not one full interval after the handling.
+	const interval = 10 * time.Second
+	supervisor, launcher, clock := newWatchdogSupervisor(t, interval, interval, nil)
+	require.NoError(t, supervisor.StartService(testContext(t), gateway.ServiceTransit))
+	child := launcher.lastChild()
+
+	base := time.Now()
+	clock.setNow(base)
+	notifyChild(t, launcher, "READY=1")
+	clock.awaitArmed(t, 1)
+	clock.setNow(base.Add(5 * time.Second))
+	clock.jumpAfterNextRead(base.Add(20 * time.Second))
+	notifyChild(t, launcher, "WATCHDOG=1")
+	require.Eventually(t, func() bool { return len(child.signalled()) > 0 },
+		3*time.Second, 5*time.Millisecond, "a keep-alive whose new deadline has passed when handled is a miss")
+	assert.Equal(t, syscall.SIGTERM, child.signalled()[0])
+}
+
+func TestWatchdog_ABurstOfKeepAlivesIsNeverDropped(t *testing.T) {
+	// Codex P1 #1928 round 3 (B): more keep-alives than the old queue held
+	// (8) arrive while the watchdog is not yet watching. None of them may
+	// leave a stale deadline behind: after READY=1, one more keep-alive in
+	// time keeps the child up.
+	const interval = 10 * time.Second
+	supervisor, launcher, clock := newWatchdogSupervisor(t, interval, interval, nil)
+	require.NoError(t, supervisor.StartService(testContext(t), gateway.ServiceTransit))
+	child := launcher.lastChild()
+
+	base := time.Now()
+	clock.setNow(base)
+	for i := 0; i < 9; i++ {
+		notifyChild(t, launcher, "WATCHDOG=1")
+	}
+	clock.setNow(base.Add(20 * time.Second))
+	notifyChild(t, launcher, "READY=1")
+	clock.awaitArmed(t, 1)
+	clock.setNow(base.Add(21 * time.Second))
+	notifyChild(t, launcher, "WATCHDOG=1")
+	assert.Never(t, func() bool {
+		return len(child.signalled()) > 0 || launcher.launchCount() > 1
+	}, 300*time.Millisecond, 10*time.Millisecond, "keep-alives in time never stop the child")
+	assert.True(t, supervisor.ServiceActive(gateway.ServiceTransit))
 }
 
 // requireNotifySocketGone waits for the last launch's notify socket to be
