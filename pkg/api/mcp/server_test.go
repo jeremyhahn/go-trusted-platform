@@ -424,7 +424,9 @@ func TestServer_handleToolsList(t *testing.T) {
 	svc := newMockServiceProvider()
 	config := DefaultConfig()
 	server := NewServer(svc, config, newTestLogger())
-	ctx := context.Background()
+	// tools/list requires a principal (#414): configure a backend and a token.
+	server.SetAuthorizationService(nil, &mockAuthManager{})
+	ctx := ContextWithToken(context.Background(), "test-token")
 
 	t.Run("returns list of tools", func(t *testing.T) {
 		req := &mcpwire.JSONRPCRequest{
@@ -651,7 +653,9 @@ func TestServer_handleToolsCall(t *testing.T) {
 func TestServer_handleResourcesList(t *testing.T) {
 	svc := newMockServiceProvider()
 	server := NewServer(svc, nil, newTestLogger())
-	ctx := context.Background()
+	// resources/list requires a principal (#414): configure a backend and a token.
+	server.SetAuthorizationService(nil, &mockAuthManager{})
+	ctx := ContextWithToken(context.Background(), "test-token")
 
 	t.Run("returns list of resources", func(t *testing.T) {
 		req := &mcpwire.JSONRPCRequest{

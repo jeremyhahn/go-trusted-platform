@@ -450,3 +450,38 @@ func TestNotify_MissingSocketFails(t *testing.T) {
 		t.Fatalf("Notify error = %v, want *ErrNotifySend", err)
 	}
 }
+
+// TestNotify_AFullSocketTimesOut binds a notify socket that is never
+// drained: once its queue is full, Notify must give up with a deadline
+// error rather than block the child for ever.
+func TestNotify_AFullSocketTimesOut(t *testing.T) {
+	path := shortSocketPath(t)
+	s, err := ListenNotify(path, os.Getpid(), -1)
+	if err != nil {
+		t.Fatalf("ListenNotify: %v", err)
+	}
+	defer func() { _ = s.Close() }()
+	t.Setenv(NotifySocketEnv, path)
+
+	errc := make(chan error, 1)
+	go func() {
+		for {
+			if err := Notify("WATCHDOG=1"); err != nil {
+				errc <- err
+				return
+			}
+		}
+	}()
+	select {
+	case err := <-errc:
+		if !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("Notify error = %v, want os.ErrDeadlineExceeded", err)
+		}
+		var want *ErrNotifySend
+		if !errors.As(err, &want) {
+			t.Fatalf("Notify error = %v, want *ErrNotifySend", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Notify to a full socket blocked past 10 s")
+	}
+}
