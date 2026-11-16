@@ -169,6 +169,9 @@ type supervised struct {
 
 	child  Child
 	client *ipc.Client
+	// notify is the current child's sd_notify socket, bound under the
+	// runtime directory and passed to it as NOTIFY_SOCKET.
+	notify *NotifySocket
 	// cancel stops the watch goroutine and the launch context.
 	cancel context.CancelFunc
 	// done closes when the watch goroutine has exited.
@@ -525,6 +528,29 @@ func (s *Supervisor) launch(ctx context.Context, proc *supervised) error {
 	if err := s.ensureRuntimeDir(); err != nil {
 		return err
 	}
+	// The previous child's socket, after a crash, still holds the path:
+	// close it before binding the new one there.
+	s.mu.Lock()
+	s.closeNotifyLocked(proc)
+	s.mu.Unlock()
+	notifyPath := filepath.Join(s.cfg.RuntimeDir, proc.def.Name+".notify")
+	if err := os.Remove(notifyPath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	notify, err := ListenNotify(notifyPath, 0, s.cfg.SocketGID)
+	if err != nil {
+		return err
+	}
+	published := false
+	defer func() {
+		if published {
+			return
+		}
+		if cerr := notify.Close(); cerr != nil {
+			s.cfg.Logger.Warn("gatewayd supervisor: closing an unpublished notify socket",
+				slog.String("process", proc.def.Name), slog.Any("error", cerr))
+		}
+	}()
 	if err := s.ensureStateDir(proc.def); err != nil {
 		return err
 	}
@@ -547,6 +573,7 @@ func (s *Supervisor) launch(ctx context.Context, proc *supervised) error {
 		// control service.
 		SupervisorUID: uint32(os.Getuid()),
 		CgroupFD:      -1,
+		NotifySocket:  notifyPath,
 	}
 	if leaf != nil {
 		spec.CgroupFD = int(leaf.Fd())
@@ -566,6 +593,7 @@ func (s *Supervisor) launch(ctx context.Context, proc *supervised) error {
 		cancel()
 		return err
 	}
+	notify.SetPid(child.PID())
 
 	client, err := ipc.Dial(proc.socket)
 	if err != nil {
@@ -600,6 +628,8 @@ func (s *Supervisor) launch(ctx context.Context, proc *supervised) error {
 	}
 	proc.child = child
 	proc.client = client
+	proc.notify = notify
+	published = true
 	proc.cancel = cancel
 	proc.startedAt = s.cfg.Clock.Now()
 	proc.failure = nil
@@ -987,6 +1017,19 @@ func (s *Supervisor) closeClientLocked(proc *supervised) {
 	proc.client = nil
 }
 
+// closeNotifyLocked releases the child's sd_notify socket. The caller holds
+// s.mu.
+func (s *Supervisor) closeNotifyLocked(proc *supervised) {
+	if proc.notify == nil {
+		return
+	}
+	if err := proc.notify.Close(); err != nil {
+		s.cfg.Logger.Warn("gatewayd supervisor: closing process notify socket",
+			slog.String("process", proc.def.Name), slog.Any("error", err))
+	}
+	proc.notify = nil
+}
+
 // StopService implements gateway.ServiceSupervisor: the service is released,
 // and the process stops once none of its services remain wanted.
 func (s *Supervisor) StopService(ctx context.Context, service string) error {
@@ -1091,6 +1134,7 @@ func (s *Supervisor) clearProcessState(proc *supervised) {
 	proc.restarts = nil
 	proc.backoff = 0
 	s.closeClientLocked(proc)
+	s.closeNotifyLocked(proc)
 }
 
 // removeCgroup deletes the process's cgroup leaf. A leaf that cannot be
