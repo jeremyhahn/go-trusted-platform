@@ -142,6 +142,18 @@ export type {
   GatewayIPAllocation,
   UseGatewayBgpResult,
 } from './use-gateway-bgp';
+
+// textToBase64 and base64ToText are exported above (use-tpm-ops,
+// use-vtpm-runtime); use-kms-ops keeps its own copies module-local.
+export { useKmsOps, KMS_KEY_STATUSES } from './use-kms-ops';
+export type {
+  UseKmsOpsResult,
+  KmsKeyStatus,
+  KmsKeyVersion,
+  KmsBackendStatus,
+  KmsImportKeyInput,
+} from './use-kms-ops';
+
 export { useReportedGateways } from './use-reported-gateways';
 
 export {
