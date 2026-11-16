@@ -410,7 +410,11 @@ func (c *restClientConn) Invoke(ctx context.Context, method string, args interfa
 		}
 		return translateInvokeError(httpMethod, reqErr)
 	}
-	return c.finishInvoke(hasDecoder, decode, raw, reply)
+	if err := c.finishInvoke(hasDecoder, decode, raw, reply); err != nil {
+		return err
+	}
+	echoRequestIntoReply(method, args, reply)
+	return nil
 }
 
 // route resolves the HTTP method, path and body of a gRPC method call.
