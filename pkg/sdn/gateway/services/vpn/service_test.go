@@ -278,3 +278,15 @@ func TestErrors_Messages(t *testing.T) {
 	assert.ErrorIs(t, &ErrPoolExhausted{Cause: cause}, cause)
 	assert.ErrorIs(t, &ErrDataPlaneUnavailable{Cause: cause}, cause)
 }
+
+// TestErrPostureUnavailable_NamesTheTenant pins that the refusal names the
+// tenant and the policy when it has them and keeps the gateway default's
+// text when it does not.
+func TestErrPostureUnavailable_NamesTheTenant(t *testing.T) {
+	cause := errors.New("boom")
+	assert.Equal(t, "vpn: posture policy unavailable: boom", (&ErrPostureUnavailable{Cause: cause}).Error())
+
+	named := &ErrPostureUnavailable{TenantID: "tenant-a", Name: "corp", Cause: cause}
+	assert.Equal(t, `vpn: posture policy "corp" of tenant "tenant-a" unavailable: boom`, named.Error())
+	assert.ErrorIs(t, named, cause)
+}

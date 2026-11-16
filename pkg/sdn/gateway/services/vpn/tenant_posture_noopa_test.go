@@ -38,6 +38,8 @@ func TestCompilePosturePolicy_NoOPA_TheEngineIsUnavailable(t *testing.T) {
 	assert.Nil(t, engine)
 	var unavailable *ErrPostureUnavailable
 	require.True(t, errors.As(err, &unavailable), "got %v", err)
+	assert.Equal(t, "t", unavailable.TenantID)
+	assert.Equal(t, DefaultPosturePolicy, unavailable.Name)
 	var notBuilt opa.ErrOPANotBuilt
 	assert.True(t, errors.As(err, &notBuilt), "the cause is the missing opa tag: %v", err)
 }
@@ -62,4 +64,31 @@ func TestAdmit_NoOPA_ATenantPolicyRefusesAsUnavailable(t *testing.T) {
 	assert.Equal(t, 0, h.posture.inputCount())
 	require.Len(t, h.svc.PosturePolicyErrors(), 1)
 	assert.Contains(t, h.svc.PosturePolicyErrors()[0], "opa build tag", "the operator is told why")
+}
+
+// TestSetPosturePolicies_NoOPA_EachRefusalNamesItsTenant pins that, with no
+// engine built in, each tenant's refusal says which tenant it belongs to.
+func TestSetPosturePolicies_NoOPA_EachRefusalNamesItsTenant(t *testing.T) {
+	h := newHarness(t, testConfig())
+	err := h.svc.SetPosturePolicies(context.Background(), []PosturePolicy{
+		{TenantID: "tenant-a", Name: DefaultPosturePolicy, Module: noopaPostureModule},
+		{TenantID: "tenant-b", Name: DefaultPosturePolicy, Module: noopaPostureModule},
+	})
+	joined, ok := err.(interface{ Unwrap() []error })
+	require.True(t, ok, "a joined error: %v", err)
+	var tenants []string
+	for _, e := range joined.Unwrap() {
+		var unavailable *ErrPostureUnavailable
+		require.True(t, errors.As(e, &unavailable), "got %v", e)
+		assert.Equal(t, DefaultPosturePolicy, unavailable.Name)
+		tenants = append(tenants, unavailable.TenantID)
+	}
+	assert.ElementsMatch(t, []string{"tenant-a", "tenant-b"}, tenants)
+
+	lines := h.svc.PosturePolicyErrors()
+	require.Len(t, lines, 2)
+	for i, tenant := range []string{"tenant-a", "tenant-b"} {
+		assert.Contains(t, lines[i], tenant)
+		assert.Contains(t, lines[i], "opa build tag", "the operator is told why")
+	}
 }
