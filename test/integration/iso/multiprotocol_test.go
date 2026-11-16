@@ -145,7 +145,12 @@ func installedDiskPath(workDir string) string {
 // process. Every test that only needs the stock ISO as an input seeds its
 // work dir from it, so a run fetches the ISO from the mirror once (plus the
 // Download tests, which test the fetch itself) and not once per work dir.
-var sharedAlpine struct {
+var sharedAlpine sharedISO
+
+// sharedISO is a once-per-value verified Alpine ISO download: the first get
+// fetches it (from DefaultMirror, then FallbackMirror), and every later get
+// returns the same path, or fails with the same error.
+type sharedISO struct {
 	once sync.Once
 	dir  string
 	iso  string
@@ -165,38 +170,57 @@ func TestMain(m *testing.M) {
 // process, through cmd.Download, into one cache dir, and returns its path.
 func sharedAlpineISO(t *testing.T, ctx context.Context, cmd ISOCommands) string {
 	t.Helper()
-	sharedAlpine.once.Do(func() {
+	return sharedAlpine.get(t, ctx, cmd)
+}
+
+// get downloads and verifies the default Alpine ISO the first time it is
+// called on s and returns its path; later calls return the same path.
+func (s *sharedISO) get(t testing.TB, ctx context.Context, cmd ISOCommands) string {
+	t.Helper()
+	s.once.Do(func() {
 		dir, err := os.MkdirTemp("", "iso-shared-alpine-")
 		if err != nil {
-			sharedAlpine.err = fmt.Errorf("creating the shared ISO cache dir: %w", err)
+			s.err = fmt.Errorf("creating the shared ISO cache dir: %w", err)
 			return
 		}
-		sharedAlpine.dir = dir
-		result, err := cmd.Download(ctx, DownloadOptions{
-			Version: DefaultAlpineVersion,
-			Mirror:  DefaultMirror,
-			Arch:    DefaultArch,
-			WorkDir: dir,
-			Verify:  true,
-		})
+		s.dir = dir
+		download := func(mirror string) (*DownloadResult, error) {
+			return cmd.Download(ctx, DownloadOptions{
+				Version: DefaultAlpineVersion,
+				Mirror:  mirror,
+				Arch:    DefaultArch,
+				WorkDir: dir,
+				Verify:  true,
+			})
+		}
+		mirror := DefaultMirror
+		result, err := download(mirror)
 		if err != nil {
-			sharedAlpine.err = fmt.Errorf("downloading the shared Alpine ISO: %w", err)
-			return
+			t.Logf("shared Alpine ISO from %s failed (%v); trying %s", DefaultMirror, err, FallbackMirror)
+			mirror = FallbackMirror
+			var fallbackErr error
+			result, fallbackErr = download(mirror)
+			if fallbackErr != nil {
+				s.err = fmt.Errorf("downloading the shared Alpine ISO: %s: %w; %s: %w",
+					DefaultMirror, err, FallbackMirror, fallbackErr)
+				return
+			}
 		}
+		t.Logf("shared Alpine ISO served by %s", mirror)
 		isoPath := alpineISOPath(dir)
 		if result != nil && result.ISOPath != "" {
 			isoPath = result.ISOPath
 		}
 		if !FileExists(isoPath) {
-			sharedAlpine.err = ErrISONotFound{Path: isoPath}
+			s.err = ErrISONotFound{Path: isoPath}
 			return
 		}
-		sharedAlpine.iso = isoPath
+		s.iso = isoPath
 	})
-	if sharedAlpine.err != nil {
-		t.Fatalf("missing prerequisite: %v", sharedAlpine.err)
+	if s.err != nil {
+		t.Fatalf("missing prerequisite: %v", s.err)
 	}
-	return sharedAlpine.iso
+	return s.iso
 }
 
 // seedAlpineISO places the shared verified ISO, its checksum file and its
@@ -313,13 +337,18 @@ func linkOrCopy(src, dst string) error {
 // exists, it does nothing.
 func adoptSharedAlpineISO(t *testing.T, iso string) {
 	t.Helper()
-	sharedAlpine.once.Do(func() {
+	sharedAlpine.adopt(iso)
+}
+
+// adopt makes iso the shared copy of s unless s already holds one.
+func (s *sharedISO) adopt(iso string) {
+	s.once.Do(func() {
 		dir, err := os.MkdirTemp("", "iso-shared-alpine-")
 		if err != nil {
-			sharedAlpine.err = fmt.Errorf("creating the shared ISO cache dir: %w", err)
+			s.err = fmt.Errorf("creating the shared ISO cache dir: %w", err)
 			return
 		}
-		sharedAlpine.dir = dir
+		s.dir = dir
 		src := pkgiso.ISOConfig{WorkDir: filepath.Dir(iso), ISO: filepath.Base(iso)}
 		dst := pkgiso.ISOConfig{WorkDir: dir, ISO: filepath.Base(iso)}
 		pairs := [][2]string{
@@ -332,11 +361,11 @@ func adoptSharedAlpineISO(t *testing.T, iso string) {
 				continue
 			}
 			if err := linkOrCopy(p[0], p[1]); err != nil {
-				sharedAlpine.err = fmt.Errorf("adopting %s as the shared Alpine ISO: %w", p[0], err)
+				s.err = fmt.Errorf("adopting %s as the shared Alpine ISO: %w", p[0], err)
 				return
 			}
 		}
-		sharedAlpine.iso = dst.ISOPath()
+		s.iso = dst.ISOPath()
 	})
 }
 
