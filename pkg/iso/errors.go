@@ -16,6 +16,7 @@ package iso
 import (
 	"debug/elf"
 	"fmt"
+	"time"
 )
 
 // ErrorType categorizes ISO builder errors
@@ -250,6 +251,18 @@ func (e *MessageError) Error() string {
 type WrappedError struct {
 	Msg string
 	Err error
+}
+
+// ErrDownloadStalled is returned when an ISO transfer receives no bytes for
+// After. Written is the size of the partial file kept for a resume.
+type ErrDownloadStalled struct {
+	URL     string
+	After   time.Duration
+	Written int64
+}
+
+func (e *ErrDownloadStalled) Error() string {
+	return fmt.Sprintf("download of %s stalled: no data for %s after %d bytes", e.URL, e.After, e.Written)
 }
 
 // Error implements the error interface.
