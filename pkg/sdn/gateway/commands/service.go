@@ -17,10 +17,14 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"math"
 	"net"
+	"os"
 	"os/signal"
 	"slices"
+	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -181,6 +185,7 @@ func serveProcess(ctx context.Context, name string, opts serviceOptions, deps se
 	served := make(chan error, 1)
 	go func() { served <- server.Serve() }()
 
+	stopKeepAlive := func() {}
 	if err := gw.Start(ctx); err != nil {
 		// The process keeps serving so the supervisor reads why; it stops
 		// the process when it gives up on the service.
@@ -194,6 +199,9 @@ func serveProcess(ctx context.Context, name string, opts serviceOptions, deps se
 		logger.Info("Supervised services started",
 			slog.String("process", def.Name), slog.Any("services", hosted))
 		notifySupervisor(logger, def.Name, "READY=1")
+		// Keep-alives run only after READY=1: the supervisor arms the watchdog
+		// at readiness, and a child that failed to start has nothing to keep.
+		stopKeepAlive = startWatchdogKeepAlive(ctx, logger, def.Name)
 	}
 
 	var serveErr error
@@ -206,6 +214,7 @@ func serveProcess(ctx context.Context, name string, opts serviceOptions, deps se
 		}
 	}
 
+	stopKeepAlive()
 	notifySupervisor(logger, def.Name, "STOPPING=1")
 	stopCtx, stopCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer stopCancel()
@@ -229,6 +238,41 @@ func notifySupervisor(logger *slog.Logger, name, state string) {
 	if err := process.Notify(state); err != nil {
 		logger.Warn("Supervisor notification failed",
 			slog.String("process", name), slog.Any("error", err))
+	}
+}
+
+// startWatchdogKeepAlive sends WATCHDOG=1 every half of the supervisor's
+// WATCHDOG_USEC (docs/gateway/supervisor.md) until ctx ends or the returned
+// stop is called; stop waits for the sender, so no keep-alive follows it.
+// A missing, zero or malformed WATCHDOG_USEC sends nothing.
+func startWatchdogKeepAlive(ctx context.Context, logger *slog.Logger, name string) (stop func()) {
+	usec, err := strconv.ParseInt(os.Getenv(process.WatchdogUsecEnv), 10, 64)
+	if err != nil || usec <= 0 {
+		return func() {}
+	}
+	usec = min(usec, int64(math.MaxInt64/time.Microsecond))
+	period := time.Duration(usec) * time.Microsecond / 2
+	if period <= 0 {
+		period = time.Microsecond
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(period)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				notifySupervisor(logger, name, "WATCHDOG=1")
+			}
+		}
+	}()
+	return func() {
+		cancel()
+		<-done
 	}
 }
 

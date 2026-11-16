@@ -91,6 +91,10 @@ type Config struct {
 	RestartBackoffMax time.Duration
 	RestartBudget     int
 	RestartWindow     time.Duration
+	// WatchdogInterval is the watchdog interval given to every process
+	// whose definition sets none: the child must send WATCHDOG=1 at least
+	// once per interval once it is ready. Zero leaves the watchdog off.
+	WatchdogInterval time.Duration
 	// Clock is the time source; nil means the system clock.
 	Clock Clock
 	// Logger receives supervision events; nil means slog.Default().
@@ -240,6 +244,10 @@ func (s *Supervisor) StartService(ctx context.Context, service string) error {
 	def, err := DefinitionForService(service)
 	if err != nil {
 		return err
+	}
+	// def is a copy: the package's definitions are left as they are.
+	if def.WatchdogInterval == 0 {
+		def.WatchdogInterval = s.cfg.WatchdogInterval
 	}
 
 	s.mu.Lock()
@@ -1162,6 +1170,15 @@ func (s *Supervisor) watchdog(ctx context.Context, proc *supervised, child Child
 			deadline = s.cfg.Clock.After(interval)
 			continue
 		case <-deadline:
+			// select picks at random among ready cases: a keep-alive that
+			// is queued as the deadline passes arrived in time (Codex P1
+			// #1928), so it re-arms rather than counting as a miss.
+			select {
+			case <-keepalive:
+				deadline = s.cfg.Clock.After(interval)
+				continue
+			default:
+			}
 		}
 		break
 	}
