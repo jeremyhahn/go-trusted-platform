@@ -1222,6 +1222,111 @@ func TestSupervisor_AwaitWakesOnReady(t *testing.T) {
 	assert.True(t, supervisor.ServiceActive(gateway.ServiceLoadBalancer))
 }
 
+func TestSupervisor_AwaitProcessWakesOnReady(t *testing.T) {
+	// A child that does not answer its first status question is asked again
+	// as soon as it sends READY=1: awaitProcess, not only awaitService,
+	// wakes on the notify (Codex P1, #1926).
+	supervisor, launcher, clock := newSupervisor(t, nil)
+	launcher.pid = os.Getpid()
+	node := launcher.node("datapath", nil)
+	node.services = []gateway.ServiceReport{{Name: gateway.ServiceLoadBalancer, Active: true}}
+	// The child does not listen yet, so awaitProcess's first status
+	// question fails and it goes to its poll wait.
+	listen := launcher.deferNextListen()
+	listened := false
+	defer func() {
+		if !listened {
+			close(listen)
+		}
+	}()
+	// The poll never fires on its own: only READY=1 can wake the wait.
+	held := clock.holdDelay(readyPollInterval)
+	released := false
+	defer func() {
+		if !released {
+			close(held.release)
+		}
+	}()
+
+	ctx := testContext(t)
+	result := make(chan error, 1)
+	go func() { result <- supervisor.StartService(ctx, gateway.ServiceLoadBalancer) }()
+	held.awaitEntered(t, ctx)
+
+	close(listen)
+	listened = true
+	t.Setenv(NotifySocketEnv, launcher.lastSpec(t).NotifySocket)
+	require.NoError(t, Notify("READY=1"))
+	select {
+	case err := <-result:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		close(held.release)
+		released = true
+		<-result
+		t.Fatal("awaitProcess waited out the poll instead of waking on READY=1")
+	}
+	assert.True(t, supervisor.ServiceActive(gateway.ServiceLoadBalancer))
+}
+
+func TestSupervisor_ReadyButInactiveTimesOut(t *testing.T) {
+	// READY=1 only wakes the wait: a child that notified but whose service
+	// never comes up is still polled, still held to ReadyTimeout, and
+	// stopped when it runs out.
+	const readyTimeout = 200 * time.Millisecond
+	supervisor, launcher, clock := newSupervisor(t, func(c *Config) { c.ReadyTimeout = readyTimeout })
+	launcher.pid = os.Getpid()
+	node := launcher.node("datapath", nil)
+	node.services = []gateway.ServiceReport{{Name: gateway.ServiceLoadBalancer, Active: true}}
+	node.startingPolls = math.MaxInt
+	// awaitProcess is answered at once; awaitService's first poll is held
+	// so READY=1 lands while it waits.
+	held := clock.holdDelay(readyPollInterval)
+	defer close(held.release)
+
+	ctx := testContext(t)
+	result := make(chan error, 1)
+	go func() { result <- supervisor.StartService(ctx, gateway.ServiceLoadBalancer) }()
+	held.awaitEntered(t, ctx)
+	clock.mu.Lock()
+	pollsBefore := countDelays(clock.delays, readyPollInterval)
+	clock.mu.Unlock()
+
+	t.Setenv(NotifySocketEnv, launcher.lastSpec(t).NotifySocket)
+	require.NoError(t, Notify("READY=1"))
+	var err error
+	select {
+	case err = <-result:
+	case <-ctx.Done():
+		t.Fatal("a ready but inactive child was waited on past ReadyTimeout")
+	}
+	var notActive *ErrServiceNotActiveInProcess
+	require.ErrorAs(t, err, &notActive, "the readiness deadline still bounds the wait after READY=1")
+	assert.Equal(t, gateway.ServiceLoadBalancer, notActive.Service)
+
+	clock.mu.Lock()
+	pollsAfter := countDelays(clock.delays, readyPollInterval) - pollsBefore
+	clock.mu.Unlock()
+	// Every collapsed poll moves the clock one interval on, so reaching the
+	// deadline after READY=1 took polls; half the timeout's worth leaves
+	// room for the real time the status questions took.
+	assert.GreaterOrEqual(t, pollsAfter, int(readyTimeout/readyPollInterval)/2,
+		"polling goes on after the readiness channel is closed")
+	assert.Contains(t, launcher.lastChild().signalled(), os.Signal(syscall.SIGTERM))
+	assert.False(t, supervisor.ServiceActive(gateway.ServiceLoadBalancer))
+}
+
+// countDelays is how many of the recorded clock waits were of length d.
+func countDelays(delays []time.Duration, d time.Duration) int {
+	n := 0
+	for _, delay := range delays {
+		if delay == d {
+			n++
+		}
+	}
+	return n
+}
+
 func TestSupervisor_WrongPidNotifyIsDropped(t *testing.T) {
 	// The fake child's pid is not this test's, so the test's datagram comes
 	// from the wrong sender: it is dropped and the child is not marked
