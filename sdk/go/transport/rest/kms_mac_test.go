@@ -12,7 +12,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc/platform/v1"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // TestKMSMAC_RoutesAndBodies: HMAC and VerifyHMAC carry the key in the path,
