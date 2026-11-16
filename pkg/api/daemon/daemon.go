@@ -341,11 +341,12 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	if iamService != nil {
 		iamPEP = iamService.PEP()
 	}
-	// A client certificate acts as its IAM principal, with that principal's
-	// permissions, on QUIC, REST and MCP (#1107).
+	// A client certificate acts as its IAM principal, with the permissions
+	// of that principal the IAM PEP allows, on QUIC, REST and MCP (#1107;
+	// SPEC 107-108: IAMPEPClient.Check decides every request).
 	if config.MTLSPrincipals == nil && iamService != nil {
 		if client := iamService.Client(); client != nil {
-			principals, principalsErr := newIAMCertificatePrincipals(client.User(), client.Role())
+			principals, principalsErr := newIAMCertificatePrincipals(client.User(), client.Role(), iamPEP)
 			if principalsErr != nil {
 				return nil, principalsErr
 			}
