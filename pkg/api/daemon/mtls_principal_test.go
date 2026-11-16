@@ -279,7 +279,7 @@ func TestIAMCertificatePrincipals_ThePEPDecidesEachScope(t *testing.T) {
 	var asked []*sdkiam.CheckRequest
 	pep := &mockSDKPEPClient{checkFunc: func(_ context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
 		asked = append(asked, req)
-		return &sdkiam.CheckResponse{Allowed: !(req.Resource == "attestation" && req.Action == "submit")}, nil
+		return &sdkiam.CheckResponse{Allowed: req.Resource != "attestation" || req.Action != "submit"}, nil
 	}}
 	resolver := newTestIAMCertificatePrincipals(t, users, roles, pep)
 
