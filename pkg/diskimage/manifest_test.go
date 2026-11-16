@@ -376,3 +376,25 @@ func TestCreateRefusesASecureBootBuildWithoutARegistrar(t *testing.T) {
 		t.Errorf("the build ran before refusing: %v", rec.Calls)
 	}
 }
+
+// TestCreateReportsAnUnknownTargetBeforeAMissingRegistrar: a usage error (an
+// unknown target) wins over a missing dependency, so a measured build with no
+// registrar and a bad target is told about the target.
+func TestCreateReportsAnUnknownTargetBeforeAMissingRegistrar(t *testing.T) {
+	t.Parallel()
+	rec := &diskimagetest.Runner{}
+	cfg := buildConfigForTest(t, "qemu-virt", rec)
+	cfg.Target = "nope"
+	cfg.SkipPreflight = true
+	cfg.ISO.SecureBoot = true
+	cfg.KMSClients = newManifestPKI(t).clients()
+	cfg.ReferenceValues = nil
+	var ue *UnknownTargetError
+	res, err := Create(context.Background(), cfg)
+	if !errors.As(err, &ue) || errors.Is(err, errNoReferenceValues) || res != nil {
+		t.Fatalf("result %+v, err %v", res, err)
+	}
+	if len(rec.Calls) != 0 {
+		t.Errorf("the build ran before refusing: %v", rec.Calls)
+	}
+}
