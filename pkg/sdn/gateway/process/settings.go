@@ -112,8 +112,8 @@ func (s Settings) Config(inherited Inherited, logger *slog.Logger) (Config, erro
 	if s.WatchdogInterval != nil {
 		watchdog = *s.WatchdogInterval
 	}
-	if watchdog < 0 {
-		return Config{}, &ErrWatchdogIntervalInvalid{Interval: watchdog}
+	if err := checkWatchdogInterval(watchdog); err != nil {
+		return Config{}, err
 	}
 	return Config{
 		RuntimeDir: runtimeDir,

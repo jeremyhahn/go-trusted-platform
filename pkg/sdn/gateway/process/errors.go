@@ -173,14 +173,24 @@ func (e *ErrWatchdogMissed) Error() string {
 	return fmt.Sprintf("process %q missed its watchdog: no WATCHDOG=1 in %s", e.Process, e.Interval)
 }
 
-// ErrWatchdogIntervalInvalid refuses a negative `process.watchdog-interval`:
-// 0 is how the watchdog is turned off.
+// ErrWatchdogIntervalInvalid refuses a negative watchdog interval, or a
+// positive one below 1 µs, which would reach the child as WATCHDOG_USEC=0
+// while the supervisor armed a deadline: 0 is how the watchdog is turned off.
 type ErrWatchdogIntervalInvalid struct {
 	Interval time.Duration
 }
 
 func (e *ErrWatchdogIntervalInvalid) Error() string {
-	return fmt.Sprintf("process watchdog-interval %s is negative: use 0 to turn the watchdog off", e.Interval)
+	return fmt.Sprintf("process watchdog-interval %s is negative or below 1µs: use 0 to turn the watchdog off", e.Interval)
+}
+
+// checkWatchdogInterval refuses an interval the child could not be told:
+// negative, or positive and below 1 µs.
+func checkWatchdogInterval(interval time.Duration) error {
+	if interval < 0 || (interval > 0 && interval < time.Microsecond) {
+		return &ErrWatchdogIntervalInvalid{Interval: interval}
+	}
+	return nil
 }
 
 type ErrProcessExited struct {

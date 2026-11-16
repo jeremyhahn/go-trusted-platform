@@ -249,6 +249,11 @@ func (s *Supervisor) StartService(ctx context.Context, service string) error {
 	if def.WatchdogInterval == 0 {
 		def.WatchdogInterval = s.cfg.WatchdogInterval
 	}
+	// A definition's own interval, or a Config built without Settings, has
+	// not been checked yet: refuse one the child would get as WATCHDOG_USEC=0.
+	if err := checkWatchdogInterval(def.WatchdogInterval); err != nil {
+		return err
+	}
 
 	s.mu.Lock()
 	if s.stopped {
