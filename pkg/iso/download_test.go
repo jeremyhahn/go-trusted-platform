@@ -23,6 +23,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -454,6 +455,66 @@ func TestDownloadISO_StalledTransferFailsFast(t *testing.T) {
 	assert.Equal(t, int64(sent), info.Size())
 	_, statErr = os.Stat(config.ISOPath())
 	assert.True(t, os.IsNotExist(statErr), "a stalled download must not produce the ISO")
+}
+
+// TestDownloadISO_SteadyProgressOutlivesStallWindow proves the stall window
+// is an idle timeout, not a total-duration limit: a transfer that keeps
+// making progress runs longer than the window and still completes.
+func TestDownloadISO_SteadyProgressOutlivesStallWindow(t *testing.T) {
+	const window = 300 * time.Millisecond
+	shortenDownloadTimeouts(t, window, 5*time.Second)
+
+	const (
+		chunks    = 8
+		chunkSize = 4096
+		pause     = 100 * time.Millisecond
+	)
+	body := make([]byte, chunks*chunkSize)
+	for i := range body {
+		body[i] = byte(i % 251)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		w.WriteHeader(http.StatusOK)
+		for i := 0; i < chunks; i++ {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-time.After(pause):
+			}
+			_, _ = w.Write(body[i*chunkSize : (i+1)*chunkSize])
+			w.(http.Flusher).Flush()
+		}
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	config := &ISOConfig{
+		Version:        "3.22.2",
+		ISO:            "alpine.iso",
+		URL:            server.URL + "/alpine.iso",
+		MirrorURL:      server.URL,
+		WorkDir:        tmpDir,
+		VerifyChecksum: false,
+		ResumeDownload: true,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	err := DownloadISO(ctx, config)
+	elapsed := time.Since(start)
+
+	require.NoError(t, err, "a transfer with steady progress must not trip the stall window")
+	assert.Greater(t, elapsed, window, "the transfer must outlast the stall window to prove the reset")
+	assert.Less(t, elapsed, 5*time.Second)
+
+	got, readErr := os.ReadFile(config.ISOPath())
+	require.NoError(t, readErr)
+	require.Len(t, got, len(body))
+	assert.Equal(t, body, got)
 }
 
 // A mirror that accepts the request and never sends headers fails with the
