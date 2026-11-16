@@ -1812,45 +1812,13 @@ func TestWatchdog_EnvironmentCarriesTheInterval(t *testing.T) {
 	}, env)
 }
 
-// expiringClock is a watchdogClock whose next watchdog deadline, once asked
-// for with expireNext, has already passed when the watchdog first selects.
-type expiringClock struct {
-	*watchdogClock
-
-	expireMu sync.Mutex
-	expire   bool
-}
-
-func (c *expiringClock) expireNext() {
-	c.expireMu.Lock()
-	c.expire = true
-	c.expireMu.Unlock()
-}
-
-func (c *expiringClock) After(d time.Duration) <-chan time.Time {
-	ch := c.watchdogClock.After(d)
-	if d != c.interval {
-		return ch
-	}
-	c.expireMu.Lock()
-	expire := c.expire
-	c.expire = false
-	c.expireMu.Unlock()
-	if expire {
-		c.fire(c.arms() - 1)
-	}
-	return ch
-}
-
 func TestWatchdog_AnOnTimeKeepAliveBeatsAnExpiredTimer(t *testing.T) {
-	// Codex P1 #1928: a keep-alive stamped before the deadline is on time,
-	// however late the watchdog reads it. Each round starts the watchdog
-	// with its timer already expired and the keep-alive queued, so Go's
-	// select may see either first; the clock reads past the deadline by
-	// then. Round 2: a keep-alive stamped after the deadline, in the same
-	// race, is a miss whichever case select picks.
+	// Codex P1 #1928: a keep-alive received before the deadline is on time,
+	// however late the watchdog reads it: the watchdog starts with the clock
+	// past the first deadline and the keep-alive already recorded. Round 2:
+	// a keep-alive received after the deadline is a miss.
 	const interval = 7 * time.Second
-	clock := &expiringClock{watchdogClock: &watchdogClock{testClock: &testClock{}, interval: interval}}
+	clock := &watchdogClock{testClock: &testClock{}, interval: interval}
 	supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
 		clock.stopTimeout = c.StopTimeout
 		c.Clock = clock
@@ -1861,55 +1829,38 @@ func TestWatchdog_AnOnTimeKeepAliveBeatsAnExpiredTimer(t *testing.T) {
 	def, err := DefinitionForService(gateway.ServiceTransit)
 	require.NoError(t, err)
 
-	run := func(round int, stamp time.Duration) error {
+	run := func(stamp time.Duration) bool {
 		base := time.Now()
-		clock.setNow(base)
 		ready := make(chan struct{})
 		close(ready)
 		proc := &supervised{def: def, wanted: map[string]bool{}, child: child, stopping: true}
-		keepalive := make(chan time.Time, keepaliveQueue)
-		keepalive <- base.Add(stamp)
+		wd := newWatchdogState(interval)
+		wd.ready(base)
+		wd.keepAlive(base.Add(stamp))
+		clock.setNow(base.Add(interval + time.Second))
 		gone := make(chan struct{})
 		ctx, cancel := context.WithCancel(testContext(t))
-		armed := clock.arms()
-		clock.expireNext()
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			supervisor.watchdog(ctx, proc, child, interval, ready, keepalive, gone)
+			supervisor.watchdog(ctx, proc, child, wd, ready, gone)
 		}()
-		clock.awaitArmed(t, armed+1)
-		clock.setNow(base.Add(interval + time.Second))
 		// proc is stopping, so a miss records nothing and stops nobody: the
-		// watchdog just returns. A re-arm is a second wait of the interval.
-		returned := func() bool {
-			select {
-			case <-done:
-				return true
-			default:
-				return false
-			}
+		// watchdog just returns.
+		var missed bool
+		select {
+		case <-done:
+			missed = true
+		case <-time.After(200 * time.Millisecond):
 		}
-		require.Eventually(t, func() bool { return returned() || clock.arms() >= armed+2 },
-			5*time.Second, time.Millisecond, "round %d: the watchdog re-arms or misses", round)
-		missed := returned() && clock.arms() < armed+2
 		cancel()
 		close(gone)
 		<-done
-		if missed {
-			return &ErrWatchdogMissed{Process: def.Name, Interval: interval}
-		}
-		return nil
+		return missed
 	}
 
-	for round := 0; round < 32; round++ {
-		require.NoError(t, run(round, interval-time.Second),
-			"round %d: a keep-alive stamped before the deadline is on time, however late it is read", round)
-	}
-	for round := 0; round < 32; round++ {
-		require.Error(t, run(round, interval+time.Second),
-			"round %d: a keep-alive stamped after the deadline is a miss, however select orders it", round)
-	}
+	assert.False(t, run(interval-time.Second), "a keep-alive received before the deadline is on time, however late it is read")
+	assert.True(t, run(interval+time.Second), "a keep-alive received after the deadline is a miss")
 	assert.Empty(t, child.signalled(), "the watchdog stops only the current child, and proc is stopping")
 }
 

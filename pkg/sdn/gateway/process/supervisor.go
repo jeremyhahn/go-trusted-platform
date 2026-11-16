@@ -655,15 +655,15 @@ func (s *Supervisor) launch(ctx context.Context, proc *supervised) error {
 	done := proc.done
 	s.mu.Unlock()
 
-	// keepalive carries each WATCHDOG=1's receipt time to the child's
-	// watchdog; gone closes when the child's notify reader ends, with its
-	// socket.
-	keepalive := make(chan time.Time, keepaliveQueue)
+	// wd is the child's watchdog deadline, kept by its notify reader (nil
+	// without a watchdog); gone closes when the child's notify reader ends,
+	// with its socket.
+	wd := newWatchdogState(proc.def.WatchdogInterval)
 	gone := make(chan struct{})
-	go s.readNotify(proc.def.Name, notify, ready, keepalive, gone)
+	go s.readNotify(proc.def.Name, notify, ready, wd, gone)
 	go s.watch(runCtx, proc, child, notify, done)
-	if interval := proc.def.WatchdogInterval; interval > 0 {
-		go s.watchdog(runCtx, proc, child, interval, ready, keepalive, gone)
+	if wd != nil {
+		go s.watchdog(runCtx, proc, child, wd, ready, gone)
 	}
 
 	s.cfg.Logger.Info("gatewayd supervisor: process started",
@@ -759,10 +759,79 @@ func (s *Supervisor) awaitService(ctx context.Context, proc *supervised, service
 // services are up.
 const readyPollInterval = 25 * time.Millisecond
 
-// keepaliveQueue is how many stamped WATCHDOG=1 keep-alives wait for a
-// child's watchdog. Each is judged by its own stamp, so a late watchdog
-// still sees every on-time one; past this many the newest are dropped.
-const keepaliveQueue = 8
+// watchdogState is one child's watchdog deadline, kept by its notify reader
+// and read by its watchdog. Each WATCHDOG=1 updates it on receipt, so no
+// keep-alive is ever dropped or judged by when the watchdog gets to it
+// (Codex P1 #1928). A nil *watchdogState is a child without a watchdog.
+type watchdogState struct {
+	interval time.Duration
+
+	mu sync.Mutex
+	// deadline is absolute, on the supervisor's clock; zero until READY=1.
+	deadline time.Time
+	// missed is set by a keep-alive received after the deadline.
+	missed bool
+	// wake tells the watchdog the state changed. One pending signal is
+	// enough: the watchdog reads the whole state each time.
+	wake chan struct{}
+}
+
+func newWatchdogState(interval time.Duration) *watchdogState {
+	if interval <= 0 {
+		return nil
+	}
+	return &watchdogState{interval: interval, wake: make(chan struct{}, 1)}
+}
+
+// ready sets the first deadline, one interval after READY=1's receipt.
+func (w *watchdogState) ready(now time.Time) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	if w.deadline.IsZero() {
+		w.deadline = now.Add(w.interval)
+	}
+	w.mu.Unlock()
+	// No wake-up: the watchdog reads the state once ready closes.
+}
+
+// keepAlive records a WATCHDOG=1 received at now: past the deadline it is a
+// miss, otherwise the deadline moves to one interval after it. Before
+// READY=1 there is no deadline yet, and a keep-alive changes nothing.
+func (w *watchdogState) keepAlive(now time.Time) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	switch {
+	case w.deadline.IsZero():
+	case now.After(w.deadline):
+		w.missed = true
+	default:
+		w.deadline = now.Add(w.interval)
+	}
+	w.mu.Unlock()
+	w.signal()
+}
+
+func (w *watchdogState) signal() {
+	select {
+	case w.wake <- struct{}{}:
+	default:
+	}
+}
+
+// left is how long the child has until its deadline at now; zero or less
+// (or a keep-alive already late) is a miss.
+func (w *watchdogState) left(now time.Time) time.Duration {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.missed {
+		return 0
+	}
+	return w.deadline.Sub(now)
+}
 
 // watch waits for the child to exit and restarts it while the parent still
 // wants services from it and its restart budget holds.
@@ -1112,7 +1181,7 @@ func (s *Supervisor) closeNotifyOfLocked(proc *supervised, notify *NotifySocket)
 // asks again at once rather than a poll interval later; the poll stays the
 // fallback for a child that never notifies. It touches no proc field: the
 // socket and the channel are its own launch's, passed in.
-func (s *Supervisor) readNotify(process string, notify *NotifySocket, ready chan struct{}, keepalive chan<- time.Time, gone chan struct{}) {
+func (s *Supervisor) readNotify(process string, notify *NotifySocket, ready chan struct{}, wd *watchdogState, gone chan struct{}) {
 	defer close(gone)
 	signalled := false
 	for {
@@ -1137,17 +1206,14 @@ func (s *Supervisor) readNotify(process string, notify *NotifySocket, ready chan
 		}
 		if msg.Ready && !signalled {
 			signalled = true
+			// The first deadline counts from READY=1's receipt.
+			wd.ready(s.cfg.Clock.Now())
 			close(ready)
 		}
 		if msg.Watchdog {
-			// Stamped on receipt, so the watchdog judges the keep-alive by
-			// when it arrived, not by when it is read (Codex P1 #1928).
-			// Non-blocking: a watchdog keepaliveQueue keep-alives behind
-			// has older on-time stamps queued already.
-			select {
-			case keepalive <- s.cfg.Clock.Now():
-			default:
-			}
+			// Judged on receipt against the absolute deadline, never by
+			// when the watchdog gets to it (Codex P1 #1928).
+			wd.keepAlive(s.cfg.Clock.Now())
 		}
 	}
 }
@@ -1159,7 +1225,8 @@ func (s *Supervisor) readNotify(process string, notify *NotifySocket, ready chan
 // only on child, never on a later launch, and returns when the child's
 // notify reader ends (the child is reaped) or the launch context is
 // cancelled.
-func (s *Supervisor) watchdog(ctx context.Context, proc *supervised, child Child, interval time.Duration, ready <-chan struct{}, keepalive <-chan time.Time, gone <-chan struct{}) {
+func (s *Supervisor) watchdog(ctx context.Context, proc *supervised, child Child, wd *watchdogState, ready <-chan struct{}, gone <-chan struct{}) {
+	interval := wd.interval
 	select {
 	case <-ready:
 	case <-gone:
@@ -1167,42 +1234,21 @@ func (s *Supervisor) watchdog(ctx context.Context, proc *supervised, child Child
 	case <-ctx.Done():
 		return
 	}
-	// deadline is absolute, on the supervisor's clock: a keep-alive counts
-	// by its receipt stamp against it, never by when this goroutine gets
-	// to read it (Codex P1 #1928). The timer only says when to look.
-	deadline := s.cfg.Clock.Now().Add(interval)
-	timer := s.cfg.Clock.After(interval)
-	onTime := func(at time.Time) bool {
-		if at.After(deadline) {
-			return false
-		}
-		deadline = at.Add(interval)
-		timer = s.cfg.Clock.After(interval)
-		return true
-	}
-watch:
+	// The deadline is absolute and kept by the notify reader (Codex P1
+	// #1928): on every wake-up or timer the watchdog waits only for the
+	// time left to it, so a late wake-up never extends it.
 	for {
+		left := wd.left(s.cfg.Clock.Now())
+		if left <= 0 {
+			break
+		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-gone:
 			return
-		case at := <-keepalive:
-			if !onTime(at) {
-				break watch
-			}
-		case <-timer:
-			// select picks at random among ready cases, and this goroutine
-			// may run late: a keep-alive queued now may still be stamped
-			// before the deadline.
-			select {
-			case at := <-keepalive:
-				if onTime(at) {
-					continue
-				}
-			default:
-			}
-			break watch
+		case <-wd.wake:
+		case <-s.cfg.Clock.After(left):
 		}
 	}
 
