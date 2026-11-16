@@ -202,6 +202,67 @@ func TestGroup_MasterYieldsAndReleases(t *testing.T) {
 	})
 }
 
+// demotedWithFailedRelease takes a group to Master, then demotes it with a
+// failing Release, the case #1716's review names.
+func demotedWithFailedRelease(t *testing.T) (*Group, *recordingActuator, time.Time) {
+	t.Helper()
+	cfg := backupConfig()
+	cfg.Priority = 150
+	g, act := newGroupT(t, cfg)
+	require.NoError(t, g.Startup(t0))
+	require.NoError(t, g.Tick(g.NextDeadline()))
+	require.Equal(t, StateMaster, g.State())
+	act.failRel = errors.New("netlink: device busy")
+	now := t0.Add(10 * time.Second)
+	adv := &Advertisement{VRID: 20, Priority: 200, MaxAdvertInterval: 100, Addresses: g.Addresses()}
+	require.Error(t, g.HandleAdvertisement(adv, netip.MustParseAddr("10.4.200.3"), now))
+	require.Equal(t, StateBackup, g.State())
+	require.Equal(t, 1, act.releases)
+	return g, act, now
+}
+
+func TestGroup_BackupRetriesAFailedRelease(t *testing.T) {
+	g, act, now := demotedWithFailedRelease(t)
+	masterDown := now.Add(g.MasterDownInterval())
+	retryAt := now.Add(g.AdvertInterval())
+	require.True(t, retryAt.Before(masterDown))
+	assert.Equal(t, retryAt, g.NextDeadline(), "an outstanding release wakes the group before Master_Down")
+
+	require.Error(t, g.Tick(retryAt), "the retry still fails")
+	assert.Equal(t, 2, act.releases)
+	assert.Equal(t, StateBackup, g.State())
+	assert.Error(t, g.LastError())
+	assert.Equal(t, retryAt.Add(g.AdvertInterval()), g.NextDeadline())
+
+	act.failRel = nil
+	require.NoError(t, g.Tick(g.NextDeadline()), "the deletion recovers")
+	assert.Equal(t, 3, act.releases)
+	assert.Equal(t, StateBackup, g.State())
+	assert.NoError(t, g.LastError(), "a repaired release clears the health error")
+	assert.Equal(t, masterDown, g.NextDeadline(), "nothing left to retry")
+
+	require.NoError(t, g.Shutdown(masterDown.Add(-time.Millisecond)))
+	assert.Equal(t, 3, act.releases, "nothing outstanding at shutdown")
+}
+
+func TestGroup_BackupShutdownRetriesAFailedRelease(t *testing.T) {
+	t.Run("recovered", func(t *testing.T) {
+		g, act, now := demotedWithFailedRelease(t)
+		act.failRel = nil
+		require.NoError(t, g.Shutdown(now))
+		assert.Equal(t, 2, act.releases, "shutdown in Backup releases what demotion left")
+		assert.Equal(t, StateInitialize, g.State())
+		assert.NoError(t, g.LastError())
+	})
+	t.Run("still failing", func(t *testing.T) {
+		g, act, now := demotedWithFailedRelease(t)
+		require.Error(t, g.Shutdown(now))
+		assert.Equal(t, 2, act.releases)
+		assert.Equal(t, StateInitialize, g.State())
+		assert.Error(t, g.LastError())
+	})
+}
+
 func TestGroup_Shutdown(t *testing.T) {
 	g, act := newGroupT(t, backupConfig())
 	require.NoError(t, g.Shutdown(t0), "shutdown in Initialize is a no-op")

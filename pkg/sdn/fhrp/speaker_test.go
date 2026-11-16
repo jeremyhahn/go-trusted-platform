@@ -170,6 +170,28 @@ func (p *fakeProgrammer) HasAddress(iface string, prefix netip.Prefix) (bool, er
 	return ok, nil
 }
 
+// AddressPrefixes makes fakeProgrammer a PrefixReader: every seeded prefix
+// on iface whose address is addr, whatever its length.
+func (p *fakeProgrammer) AddressPrefixes(iface string, addr netip.Addr) ([]netip.Prefix, error) {
+	if p.hasErr != nil {
+		return nil, p.hasErr
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out []netip.Prefix
+	for key := range p.addrs {
+		rest, ok := strings.CutPrefix(key, iface+"/")
+		if !ok {
+			continue
+		}
+		pfx, err := netip.ParsePrefix(rest)
+		if err == nil && pfx.Addr() == addr {
+			out = append(out, pfx)
+		}
+	}
+	return out, nil
+}
+
 // fakeClock fires timers when the test advances it.
 type fakeClock struct {
 	mu     sync.Mutex
@@ -656,6 +678,39 @@ func TestSpeaker_RestartedBackupRemovesAStaleVIP(t *testing.T) {
 	assert.Equal(t, StateBackup, state)
 	assert.False(t, prog.holds("br-int", "10.4.200.1/24"), "the restarted backup removed the stale VIP before entering Backup")
 	assert.True(t, progHigh.holds("br-int", "10.4.200.1/24"), "the peer master keeps its VIP")
+}
+
+// A crashed master left the VIP with the prefix length of an older config:
+// the restarted backup finds it by address and deletes the installed prefix.
+func TestSpeaker_RestartedBackupRemovesAStaleVIPWithAnotherPrefixLength(t *testing.T) {
+	seg := newSegment()
+	prog := newFakeProgrammer()
+	prog.addrs["br-int/10.4.200.1/16"] = nil
+	prog.addrs["br-int/10.4.200.10/24"] = nil
+	s, err := New(speakerConfig(200, "10.4.200.10"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: prog, Clock: newFakeClock(t0), Logger: quietLogger()})
+	require.NoError(t, err)
+	require.NoError(t, s.Start(context.Background()))
+	defer func() { _ = s.Stop(context.Background()) }()
+	state, err := s.GroupState("br-int", 20)
+	require.NoError(t, err)
+	assert.Equal(t, StateBackup, state)
+	assert.False(t, prog.holds("br-int", "10.4.200.1/16"), "the stale VIP is removed at its installed length")
+	assert.True(t, prog.holds("br-int", "10.4.200.10/24"), "the node's own address stays")
+}
+
+func TestSpeaker_StartFailsWhenTheStaleVIPOfAnotherLengthCannotBeRemoved(t *testing.T) {
+	seg := newSegment()
+	prog := newFakeProgrammer()
+	prog.addrs["br-int/10.4.200.1/16"] = nil
+	prog.delErr = errors.New("netlink: permission denied")
+	s, err := New(speakerConfig(200, "10.4.200.10"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: prog, Clock: newFakeClock(t0), Logger: quietLogger()})
+	require.NoError(t, err)
+	err = s.Start(context.Background())
+	var aof *ErrAddressOperationFailed
+	require.True(t, errors.As(err, &aof), "got %v", err)
+	assert.Equal(t, "delete", aof.Operation)
+	assert.Equal(t, netip.MustParsePrefix("10.4.200.1/16"), aof.Address)
+	assert.False(t, s.Active())
 }
 
 // TestSpeaker_StartFailsWhenTheStaleVIPCheckFails pins ruling 673 (Codex

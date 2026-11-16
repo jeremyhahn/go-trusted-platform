@@ -489,6 +489,29 @@ func TestNetlinkProgrammer_HasAddressMatchesAddressAndLength(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestNetlinkProgrammer_AddressPrefixesMatchesTheAddressAtAnyLength(t *testing.T) {
+	family := stubAddrList(t, nil, "192.0.2.9/24", "192.0.2.1/16")
+	p := NewNetlinkProgrammer().(PrefixReader)
+
+	got, err := p.AddressPrefixes(seamIface.Name, netip.MustParseAddr("192.0.2.1"))
+	require.NoError(t, err)
+	assert.Equal(t, []netip.Prefix{netip.MustParsePrefix("192.0.2.1/16")}, got)
+	assert.Equal(t, vnl.FAMILY_V4, *family)
+
+	got, err = p.AddressPrefixes(seamIface.Name, netip.MustParseAddr("192.0.2.2"))
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+func TestNetlinkProgrammer_AddressPrefixesReportsFailures(t *testing.T) {
+	stubAddrList(t, errors.New("dump interrupted"))
+	p := NewNetlinkProgrammer().(PrefixReader)
+	_, err := p.AddressPrefixes(seamIface.Name, netip.MustParseAddr("192.0.2.1"))
+	require.Error(t, err)
+	_, err = p.AddressPrefixes("missing0", netip.MustParseAddr("192.0.2.1"))
+	require.Error(t, err)
+}
+
 func TestNetlinkProgrammer_HasAddressAsksForTheIPv6Family(t *testing.T) {
 	family := stubAddrList(t, nil, "2001:db8::1/64")
 	ok, err := NewNetlinkProgrammer().(AddressReader).HasAddress(seamIface.Name, netip.MustParsePrefix("2001:db8::1/64"))
