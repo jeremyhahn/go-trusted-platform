@@ -241,6 +241,14 @@ func notifySupervisor(logger *slog.Logger, name, state string) {
 	}
 }
 
+// newKeepAliveTicker makes the keep-alive's ticker of period d: its channel
+// and its stop. A variable so tests drive the ticks and see the period
+// (Codex P1 #1928 round 4).
+var newKeepAliveTicker = func(d time.Duration) (<-chan time.Time, func()) {
+	t := time.NewTicker(d)
+	return t.C, t.Stop
+}
+
 // startWatchdogKeepAlive sends WATCHDOG=1 every half of the supervisor's
 // WATCHDOG_USEC (docs/gateway/supervisor.md) until ctx ends or the returned
 // stop is called; stop waits for the sender, so no keep-alive follows it.
@@ -259,13 +267,13 @@ func startWatchdogKeepAlive(ctx context.Context, logger *slog.Logger, name strin
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		ticker := time.NewTicker(period)
-		defer ticker.Stop()
+		ticks, stopTicker := newKeepAliveTicker(period)
+		defer stopTicker()
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
+			case <-ticks:
 				notifySupervisor(logger, name, "WATCHDOG=1")
 			}
 		}

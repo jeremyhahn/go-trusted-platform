@@ -658,7 +658,7 @@ func (s *Supervisor) launch(ctx context.Context, proc *supervised) error {
 	// wd is the child's watchdog deadline, kept by its notify reader (nil
 	// without a watchdog); gone closes when the child's notify reader ends,
 	// with its socket.
-	wd := newWatchdogState(proc.def.WatchdogInterval)
+	wd := newWatchdogState(proc.def.WatchdogInterval, s.cfg.Clock)
 	gone := make(chan struct{})
 	go s.readNotify(proc.def.Name, notify, ready, wd, gone)
 	go s.watch(runCtx, proc, child, notify, done)
@@ -762,50 +762,58 @@ const readyPollInterval = 25 * time.Millisecond
 // watchdogState is one child's watchdog deadline, kept by its notify reader
 // and read by its watchdog. Each WATCHDOG=1 updates it on receipt, so no
 // keep-alive is ever dropped or judged by when the watchdog gets to it
-// (Codex P1 #1928). A nil *watchdogState is a child without a watchdog.
+// (Codex P1 #1928). Every stamp reads the clock under the same lock as the
+// expiry decision, so each keep-alive is ordered before or after it (Codex
+// P1 #1928 round 4). A nil *watchdogState is a child without a watchdog.
 type watchdogState struct {
 	interval time.Duration
+	clock    Clock
 
 	mu sync.Mutex
-	// deadline is absolute, on the supervisor's clock; zero until READY=1.
+	// deadline is absolute, on clock; zero until READY=1.
 	deadline time.Time
 	// missed is set by a keep-alive received after the deadline.
 	missed bool
+	// expired is set by expire once the child has missed its watchdog;
+	// it is final: no later keep-alive revives the child.
+	expired bool
 	// wake tells the watchdog the state changed. One pending signal is
 	// enough: the watchdog reads the whole state each time.
 	wake chan struct{}
 }
 
-func newWatchdogState(interval time.Duration) *watchdogState {
+func newWatchdogState(interval time.Duration, clock Clock) *watchdogState {
 	if interval <= 0 {
 		return nil
 	}
-	return &watchdogState{interval: interval, wake: make(chan struct{}, 1)}
+	return &watchdogState{interval: interval, clock: clock, wake: make(chan struct{}, 1)}
 }
 
 // ready sets the first deadline, one interval after READY=1's receipt.
-func (w *watchdogState) ready(now time.Time) {
+func (w *watchdogState) ready() {
 	if w == nil {
 		return
 	}
 	w.mu.Lock()
 	if w.deadline.IsZero() {
-		w.deadline = now.Add(w.interval)
+		w.deadline = w.clock.Now().Add(w.interval)
 	}
 	w.mu.Unlock()
 	// No wake-up: the watchdog reads the state once ready closes.
 }
 
-// keepAlive records a WATCHDOG=1 received at now: past the deadline it is a
+// keepAlive records a WATCHDOG=1 received now: past the deadline it is a
 // miss, otherwise the deadline moves to one interval after it. Before
-// READY=1 there is no deadline yet, and a keep-alive changes nothing.
-func (w *watchdogState) keepAlive(now time.Time) {
+// READY=1 there is no deadline yet, and after the expiry the verdict is
+// final: in both cases a keep-alive changes nothing.
+func (w *watchdogState) keepAlive() {
 	if w == nil {
 		return
 	}
 	w.mu.Lock()
+	now := w.clock.Now()
 	switch {
-	case w.deadline.IsZero():
+	case w.deadline.IsZero(), w.expired:
 	case now.After(w.deadline):
 		w.missed = true
 	default:
@@ -822,15 +830,22 @@ func (w *watchdogState) signal() {
 	}
 }
 
-// left is how long the child has until its deadline at now; zero or less
-// (or a keep-alive already late) is a miss.
-func (w *watchdogState) left(now time.Time) time.Duration {
+// expire decides, under the stamps' lock, whether the child has missed its
+// watchdog: once the deadline has passed (or a keep-alive came late) it
+// sets the final expired verdict and reports it; otherwise it returns how
+// long the child has left.
+func (w *watchdogState) expire() (left time.Duration, expired bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.missed {
-		return 0
+	if w.expired {
+		return 0, true
 	}
-	return w.deadline.Sub(now)
+	left = w.deadline.Sub(w.clock.Now())
+	if w.missed || left <= 0 {
+		w.expired = true
+		return 0, true
+	}
+	return left, false
 }
 
 // watch waits for the child to exit and restarts it while the parent still
@@ -1207,13 +1222,13 @@ func (s *Supervisor) readNotify(process string, notify *NotifySocket, ready chan
 		if msg.Ready && !signalled {
 			signalled = true
 			// The first deadline counts from READY=1's receipt.
-			wd.ready(s.cfg.Clock.Now())
+			wd.ready()
 			close(ready)
 		}
 		if msg.Watchdog {
 			// Judged on receipt against the absolute deadline, never by
 			// when the watchdog gets to it (Codex P1 #1928).
-			wd.keepAlive(s.cfg.Clock.Now())
+			wd.keepAlive()
 		}
 	}
 }
@@ -1238,8 +1253,10 @@ func (s *Supervisor) watchdog(ctx context.Context, proc *supervised, child Child
 	// #1928): on every wake-up or timer the watchdog waits only for the
 	// time left to it, so a late wake-up never extends it.
 	for {
-		left := wd.left(s.cfg.Clock.Now())
-		if left <= 0 {
+		// The child is stopped only on expire's verdict, taken under the
+		// lock that orders every keep-alive stamp (Codex P1 #1928 round 4).
+		left, expired := wd.expire()
+		if expired {
 			break
 		}
 		select {
