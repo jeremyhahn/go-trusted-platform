@@ -179,8 +179,6 @@ type Config struct {
 	Peers []PeerAllowance `yaml:"peers,omitempty" json:"peers,omitempty" mapstructure:"peers"`
 	// Tunnels are the tunnel interfaces carrying BGP and BFD.
 	Tunnels []string `yaml:"tunnels,omitempty" json:"tunnels,omitempty" mapstructure:"tunnels"`
-	// VRRP are the FHRP interfaces that admit VRRP advertisements.
-	VRRP []string `yaml:"vrrp,omitempty" json:"vrrp,omitempty" mapstructure:"vrrp"`
 	// Unfiltered are interfaces left open on purpose; see Ruleset.
 	Unfiltered []string `yaml:"unfiltered,omitempty" json:"unfiltered,omitempty" mapstructure:"unfiltered"`
 	// ICMP bounds ICMP; zero fields take DefaultICMPRateLimit.
@@ -193,7 +191,7 @@ type Config struct {
 
 // Validate checks the operator-declared part of the ruleset.
 func (c Config) Validate() error {
-	rs := Ruleset{Listeners: c.Extra, Peers: c.Peers, Tunnels: c.Tunnels, Unfiltered: c.Unfiltered, VRRP: c.VRRP, ICMP: c.ICMP}
+	rs := Ruleset{Listeners: c.Extra, Peers: c.Peers, Tunnels: c.Tunnels, Unfiltered: c.Unfiltered, ICMP: c.ICMP}
 	return rs.Validate()
 }
 

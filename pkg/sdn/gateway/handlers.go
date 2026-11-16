@@ -484,11 +484,13 @@ func buildHostFW(g *Gateway) (backedService, error) {
 	var vipDeny []hostfw.VIPDeny
 	// Every enabled FHRP group's interface carries its peers' VRRP
 	// advertisements; without them a backup never hears the master and
-	// claims the same addresses.
+	// claims the same addresses. These are the only interfaces that
+	// admit VRRP: no operator setting opens protocol 112.
+	var vrrp []string
 	if f := g.config.FHRP; f != nil && f.Enabled {
 		for i := range f.Groups {
-			if !slices.Contains(rendered.VRRP, f.Groups[i].Interface) {
-				rendered.VRRP = append(rendered.VRRP, f.Groups[i].Interface)
+			if !slices.Contains(vrrp, f.Groups[i].Interface) {
+				vrrp = append(vrrp, f.Groups[i].Interface)
 			}
 		}
 		// accept-mode false (RFC 5798 §6.4.3): a non-owner master holds
@@ -511,6 +513,7 @@ func buildHostFW(g *Gateway) (backedService, error) {
 		Inventory: inventory,
 		Config:    rendered,
 		VIPDeny:   vipDeny,
+		VRRP:      vrrp,
 		Logger:    host.Logger,
 	})
 	if err != nil {

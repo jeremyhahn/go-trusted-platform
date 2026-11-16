@@ -171,7 +171,6 @@ func TestConfig_Validate(t *testing.T) {
 	assert.NoError(t, Config{}.Validate())
 	assert.NoError(t, Config{Extra: []Listener{{Interface: "eth0", Protocol: ProtocolTCP, Port: 22}}, Tunnels: []string{"gre1"}}.Validate())
 	assert.ErrorIs(t, Config{Extra: []Listener{{Protocol: ProtocolTCP}}}.Validate(), ErrZeroPort)
-	assert.ErrorIs(t, Config{VRRP: []string{""}}.Validate(), ErrEmptyInterface)
 }
 
 func TestRender_VRRPOnInterfaces(t *testing.T) {

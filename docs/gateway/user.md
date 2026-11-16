@@ -307,9 +307,16 @@ When two gateways serve one plain L2 segment (an environment VLAN or transit),
 hosts keep a single default gateway and the pair holds it with VRRPv3.
 An enabled `fhrp:` section runs the VRRPv3 speaker as the gateway's `fhrp`
 service. Configure the same group on both nodes with
-different priorities; the higher priority is master and the other waits:
+different priorities; the higher priority is master and the other waits.
+A group below priority 255 (a non-owner, as in this example) leaves
+`accept-mode` at its default `false`, so the master holds the virtual
+address but `hostfw` drops traffic to it (RFC 5798 §6.4.3); that drop needs
+the host filter, so such a configuration is refused unless `hostfw` is
+enabled:
 
 ```yaml
+hostfw:
+  enabled: true
 fhrp:
   enabled: true
   groups:
@@ -332,8 +339,13 @@ addr show zone406` on each node shows who holds the address; the speaker's
 health (`fhrp.Health`) carries each group's state, priority and transition
 count, but the gateway snapshot does not report the groups yet. On a
 filtered gateway `hostfw` admits VRRP (IP protocol 112, multicast 224.0.0.18 /
-ff02::12) on each enabled group's interface. Put the virtual address in `hostfw`
-as an `extra` listener only if the gateway itself serves on it.
+ff02::12) only on each enabled group's interface; there is no setting that
+admits it anywhere else, and none at all while `fhrp` is disabled. To serve
+on a non-owner virtual address (for example a DNS forwarder on it), set
+`accept-mode: true` on that group and declare the service in `hostfw` as an
+`extra` listener; with `accept-mode: false` the virtual address drop comes
+before every listener allowance, so an `extra` listener alone does not make
+it reachable.
 
 Overlay (VXLAN) segments, including the public address block, do not use
 VRRP: every gateway answers for the anycast gateway address locally (EVPN
