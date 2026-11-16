@@ -15,6 +15,7 @@ package backends
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -61,13 +62,13 @@ func TestLUKSVolumeLock_HeldAcrossBackends(t *testing.T) {
 
 	a := newTestLUKSBackend()
 	b := newTestLUKSBackend()
-	unlockA, err := a.lockDevice(device)
+	unlockA, err := a.lockDevice(context.Background(), device)
 	if err != nil {
 		t.Fatalf("A lockDevice: %v", err)
 	}
 	done := make(chan error, 1)
 	go func() {
-		unlockB, err := b.lockDevice(alias)
+		unlockB, err := b.lockDevice(context.Background(), alias)
 		if err == nil {
 			unlockB()
 		}
@@ -87,6 +88,80 @@ func TestLUKSVolumeLock_HeldAcrossBackends(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("B did not take the volume lock after A released it")
+	}
+}
+
+// TestLUKSVolumeLock_CancelWhileHeld: while one backend holds the volume
+// lock, a RemoveKey whose context ends gives up waiting with the context
+// error and kills no keyslot, both when it queues on the same backend's
+// in-process lock and when it queues on another backend's flock. A context
+// that is already done never takes the lock either.
+func TestLUKSVolumeLock_CancelWhileHeld(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		sameOwner bool
+		preCancel bool
+	}{
+		{"same backend, cancelled while waiting", true, false},
+		{"other backend, cancelled while waiting", false, false},
+		{"other backend, cancelled before the call", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			device := newLUKSImage(t)
+			before := keyslotIDs(t, device)
+			slot := -1
+			for id := range before {
+				slot = id
+				break
+			}
+			if slot < 0 {
+				t.Fatal("the test image has no keyslot")
+			}
+
+			holder := newTestLUKSBackend()
+			caller := holder
+			if !tc.sameOwner {
+				caller = newTestLUKSBackend()
+			}
+			unlock, err := holder.lockDevice(context.Background(), device)
+			if err != nil {
+				t.Fatalf("holder lockDevice: %v", err)
+			}
+			defer func() { unlock() }()
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tc.preCancel {
+				cancel()
+			}
+			done := make(chan error, 1)
+			go func() {
+				done <- caller.RemoveKey(ctx, &daemon.LUKSRemoveKeyRequest{Device: device, Slot: int32(slot)})
+			}()
+			if !tc.preCancel {
+				select {
+				case err := <-done:
+					t.Fatalf("RemoveKey returned while the volume lock was held: %v", err)
+				case <-time.After(100 * time.Millisecond):
+				}
+				cancel()
+			}
+			select {
+			case err := <-done:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("RemoveKey = %v, want context.Canceled", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("RemoveKey kept waiting for the volume lock after its context ended")
+			}
+
+			unlock()
+			unlock = func() {}
+			after := keyslotIDs(t, device)
+			if len(after) != len(before) || !after[slot] {
+				t.Fatalf("keyslots changed by a cancelled RemoveKey: before %v, after %v", before, after)
+			}
+		})
 	}
 }
 
