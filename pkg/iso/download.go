@@ -23,11 +23,62 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
 // DownloadISO downloads an Alpine Linux ISO with checksum verification
 // and support for resuming interrupted downloads.
+// downloadStallTimeout is how long an ISO transfer may go without receiving a
+// byte before it is aborted with ErrDownloadStalled. A var so tests can
+// shorten it.
+var downloadStallTimeout = 60 * time.Second
+
+// responseHeaderTimeout bounds the wait for a mirror's response headers.
+// A var so tests can shorten it.
+var responseHeaderTimeout = 30 * time.Second
+
+// isoHTTPClient returns a client with the given total timeout whose
+// transport gives up on a mirror that sends no response headers within
+// responseHeaderTimeout.
+func isoHTTPClient(total time.Duration) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = responseHeaderTimeout
+	return &http.Client{Timeout: total, Transport: transport}
+}
+
+// stallReader wraps a response body and calls cancel when no bytes arrive
+// within window; the cancelled request then fails the pending Read.
+type stallReader struct {
+	r       io.Reader
+	window  time.Duration
+	timer   *time.Timer
+	tripped atomic.Bool
+}
+
+func newStallReader(r io.Reader, window time.Duration, cancel context.CancelFunc) *stallReader {
+	s := &stallReader{r: r, window: window}
+	s.timer = time.AfterFunc(window, func() {
+		s.tripped.Store(true)
+		cancel()
+	})
+	return s
+}
+
+func (s *stallReader) Read(p []byte) (int, error) {
+	n, err := s.r.Read(p)
+	if n > 0 && !s.tripped.Load() {
+		s.timer.Reset(s.window)
+	}
+	return n, err
+}
+
+// stalled reports whether the watchdog fired.
+func (s *stallReader) stalled() bool { return s.tripped.Load() }
+
+// stop disarms the watchdog.
+func (s *stallReader) stop() { s.timer.Stop() }
+
 func DownloadISO(ctx context.Context, config *ISOConfig) error {
 	logger := slog.Default()
 
@@ -141,8 +192,13 @@ func downloadFile(ctx context.Context, config *ISOConfig) error {
 		}
 	}
 
+	// The request runs under its own context so the stall watchdog can
+	// abort it without cancelling the caller's.
+	reqCtx, cancelReq := context.WithCancel(ctx)
+	defer cancelReq()
+
 	// Create HTTP request with context
-	req, err := http.NewRequestWithContext(ctx, "GET", config.URL, nil)
+	req, err := http.NewRequestWithContext(reqCtx, "GET", config.URL, nil)
 	if err != nil {
 		return &WrappedError{Msg: "failed to create request", Err: err}
 	}
@@ -154,9 +210,7 @@ func downloadFile(ctx context.Context, config *ISOConfig) error {
 	}
 
 	// Execute the request
-	client := &http.Client{
-		Timeout: 30 * time.Minute,
-	}
+	client := isoHTTPClient(30 * time.Minute)
 	resp, err := client.Do(req)
 	if err != nil {
 		return &WrappedError{Msg: "failed to download file", Err: err}
@@ -202,9 +256,20 @@ func downloadFile(ctx context.Context, config *ISOConfig) error {
 		}
 	}
 
-	// Copy data with context cancellation support
-	_, err = copyWithContext(ctx, writer, resp.Body)
+	// Copy data with context cancellation support; a mirror that sends no
+	// bytes for downloadStallTimeout aborts the request. The partial temp
+	// file stays for a resume.
+	body := newStallReader(resp.Body, downloadStallTimeout, cancelReq)
+	written, err := copyWithContext(reqCtx, writer, body)
+	body.stop()
 	if err != nil {
+		if body.stalled() && ctx.Err() == nil {
+			return &ErrDownloadStalled{
+				URL:     config.URL,
+				After:   body.window,
+				Written: startByte + written,
+			}
+		}
 		return &WrappedError{Msg: "failed to write file", Err: err}
 	}
 
@@ -223,9 +288,7 @@ func downloadChecksum(ctx context.Context, config *ISOConfig) error {
 		return &WrappedError{Msg: "failed to create request", Err: err}
 	}
 
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-	}
+	client := isoHTTPClient(30 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return &WrappedError{Msg: "failed to download checksum", Err: err}
