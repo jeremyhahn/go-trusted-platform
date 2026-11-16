@@ -1816,7 +1816,7 @@ func (s *Supervisor) applyDatapath(ctx context.Context, desired *gwstate.Desired
 // apply slot the caller holds. The caller holds the apply slot.
 func (s *Supervisor) forwardDesired(ctx context.Context, desired *gwstate.DesiredConfig) error {
 	type target struct {
-		name   string
+		proc   *supervised
 		client *ipc.Client
 	}
 	var targets []target
@@ -1831,7 +1831,7 @@ func (s *Supervisor) forwardDesired(ctx context.Context, desired *gwstate.Desire
 			proc.restoring = true
 		}
 		if proc.client != nil {
-			targets = append(targets, target{name: proc.def.Name, client: proc.client})
+			targets = append(targets, target{proc: proc, client: proc.client})
 		}
 	}
 	s.mu.Unlock()
@@ -1840,8 +1840,18 @@ func (s *Supervisor) forwardDesired(ctx context.Context, desired *gwstate.Desire
 	for _, t := range targets {
 		if _, err := t.client.ApplyDesired(ctx, desired); err != nil {
 			failures = append(failures, &ErrDesiredForwardFailed{
-				Process: t.name, Version: desired.EffectiveVersion(), Cause: err})
+				Process: t.proc.def.Name, Version: desired.EffectiveVersion(), Cause: err})
+			continue
 		}
+		// The child that answered now holds the document restoring stands
+		// for. A relaunch past its restore (awaiting readiness) clears
+		// restoring no more, so this forward is what clears it; a child
+		// relaunched since has another client and keeps its own.
+		s.mu.Lock()
+		if t.proc.client == t.client && t.proc.desired == desired {
+			t.proc.restoring = false
+		}
+		s.mu.Unlock()
 	}
 	return errors.Join(failures...)
 }
