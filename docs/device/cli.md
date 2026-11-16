@@ -446,8 +446,8 @@ failed to find config: <reason>`.
 | `--match-mac-prefix` | string | | Match rule: MAC address prefix (e.g. `52:54:00`) |
 | `--match-serial-prefix` | string | | Match rule: serial number prefix |
 | `--match-model` | string | | Match rule: exact device model |
-| `--match-model-pattern` | string | | Match rule: device model regular expression (`model_pattern`) |
-| `--match-serial-pattern` | string | | Match rule: serial number regular expression (`serial_pattern`) |
+| `--match-model-pattern` | string | | Match rule: device model, exact match (legacy `model_pattern` field), for example `r650` |
+| `--match-serial-pattern` | string | | Match rule: literal serial number prefix (legacy `serial_pattern` field), for example `SN12` |
 | `--match-manufacturer` | string | | Match rule: device manufacturer (`manufacturer_match`) |
 | `--match-tpm-vendor` | string | | Match rule: TPM vendor, e.g. `IFX` (`tpm_vendor`) |
 

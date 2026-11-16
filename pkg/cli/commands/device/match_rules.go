@@ -38,8 +38,8 @@ func registerMatchRuleFlags(cmd *cobra.Command, mf *matchRuleFlags) {
 	cmd.Flags().StringVar(&mf.macPrefix, "match-mac-prefix", "", "match rule: MAC address prefix (e.g. 52:54:00)")
 	cmd.Flags().StringVar(&mf.serialPrefix, "match-serial-prefix", "", "match rule: serial number prefix")
 	cmd.Flags().StringVar(&mf.model, "match-model", "", "match rule: exact device model")
-	cmd.Flags().StringVar(&mf.modelPattern, "match-model-pattern", "", "match rule: device model regular expression")
-	cmd.Flags().StringVar(&mf.serialPattern, "match-serial-pattern", "", "match rule: serial number regular expression")
+	cmd.Flags().StringVar(&mf.modelPattern, "match-model-pattern", "", "match rule: device model, exact match (legacy model_pattern field)")
+	cmd.Flags().StringVar(&mf.serialPattern, "match-serial-pattern", "", "match rule: literal serial number prefix (legacy serial_pattern field)")
 	cmd.Flags().StringVar(&mf.manufacturer, "match-manufacturer", "", "match rule: device manufacturer")
 	cmd.Flags().StringVar(&mf.tpmVendor, "match-tpm-vendor", "", "match rule: TPM vendor (e.g. IFX)")
 }
