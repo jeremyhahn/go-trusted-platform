@@ -128,6 +128,54 @@ func TestWriteManifestSignsBesideTheImage(t *testing.T) {
 	}
 }
 
+// fakeRegistrar records the manifests Create registers and fails with err.
+type fakeRegistrar struct {
+	err    error
+	sum    string
+	signed []byte
+}
+
+func (f *fakeRegistrar) RegisterManifest(_ context.Context, sum string, signed []byte) error {
+	f.sum, f.signed = sum, signed
+	return f.err
+}
+
+// TestPublishManifestRegistersTheSignedManifest: Create's manifest step
+// registers the bytes it wrote in the reference-values store, and a
+// registration failure fails the build.
+func TestPublishManifestRegistersTheSignedManifest(t *testing.T) {
+	pki := newManifestPKI(t)
+	target, err := NewTarget("rpi", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256([]byte("the image"))
+	sum := hex.EncodeToString(digest[:])
+
+	reg := &fakeRegistrar{}
+	image := filepath.Join(t.TempDir(), "trusted-platform-rpi.img")
+	cfg := &BuildConfig{ManifestKey: "kms://build/manifest", KMSClients: pki.clients(), ReferenceValues: reg}
+	path, registered, err := cfg.publishManifest(context.Background(), image, sum, target, manifestBanks())
+	if err != nil || !registered {
+		t.Fatalf("publishManifest: registered %v, err %v", registered, err)
+	}
+	written, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reg.sum != sum || !reflect.DeepEqual(reg.signed, written) {
+		t.Errorf("registered digest %q and %d bytes, want %q and the %d written", reg.sum, len(reg.signed), sum, len(written))
+	}
+
+	refused := errors.New("store refused")
+	cfg.ReferenceValues = &fakeRegistrar{err: refused}
+	_, registered, err = cfg.publishManifest(context.Background(), image, sum, target, manifestBanks())
+	var me *MeasureError
+	if !errors.As(err, &me) || me.Step != "registering the measurement manifest" || !errors.Is(err, refused) || registered {
+		t.Fatalf("a refused registration: registered %v, err %v", registered, err)
+	}
+}
+
 func TestWriteManifestRefusesAnEmptyKey(t *testing.T) {
 	image := filepath.Join(t.TempDir(), "img.img")
 	target, _ := NewTarget("qemu-virt", "")
