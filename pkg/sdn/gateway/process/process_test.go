@@ -1766,6 +1766,133 @@ func TestWatchdog_EnvironmentCarriesTheInterval(t *testing.T) {
 	}, env)
 }
 
+// expiringClock is a watchdogClock whose next watchdog deadline, once asked
+// for with expireNext, has already passed when the watchdog first selects.
+type expiringClock struct {
+	*watchdogClock
+
+	expireMu sync.Mutex
+	expire   bool
+}
+
+func (c *expiringClock) expireNext() {
+	c.expireMu.Lock()
+	c.expire = true
+	c.expireMu.Unlock()
+}
+
+func (c *expiringClock) After(d time.Duration) <-chan time.Time {
+	ch := c.watchdogClock.After(d)
+	if d != c.interval {
+		return ch
+	}
+	c.expireMu.Lock()
+	expire := c.expire
+	c.expire = false
+	c.expireMu.Unlock()
+	if expire {
+		c.fire(c.arms() - 1)
+	}
+	return ch
+}
+
+func TestWatchdog_AnOnTimeKeepAliveBeatsAnExpiredTimer(t *testing.T) {
+	// Codex P1 #1928: a keep-alive queued while the deadline also fires is
+	// on time. Go's select picks either ready case at random, so the
+	// watchdog must not declare a miss when a keep-alive is waiting. Each
+	// round starts the watchdog with both ready at its first select; a
+	// watchdog that trusts the select alone misses about half of them.
+	const interval = 7 * time.Second
+	clock := &expiringClock{watchdogClock: &watchdogClock{testClock: &testClock{}, interval: interval}}
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
+		clock.testClock.stopTimeout = c.StopTimeout
+		c.Clock = clock
+	})
+	launcher.pid = os.Getpid()
+	require.NoError(t, supervisor.StartService(testContext(t), gateway.ServiceTransit))
+	child := launcher.lastChild()
+	def, err := DefinitionForService(gateway.ServiceTransit)
+	require.NoError(t, err)
+
+	ready := make(chan struct{})
+	close(ready)
+	for round := 0; round < 64; round++ {
+		proc := &supervised{def: def, wanted: map[string]bool{}, child: child}
+		keepalive := make(chan struct{}, 1)
+		keepalive <- struct{}{}
+		gone := make(chan struct{})
+		ctx, cancel := context.WithCancel(testContext(t))
+		armed := clock.arms()
+		clock.expireNext()
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			supervisor.watchdog(ctx, proc, child, interval, ready, keepalive, gone)
+		}()
+		var missed error
+		require.Eventually(t, func() bool {
+			supervisor.mu.Lock()
+			if proc.missed != nil {
+				missed = proc.missed
+			}
+			supervisor.mu.Unlock()
+			return missed != nil || clock.arms() >= armed+2
+		}, 5*time.Second, time.Millisecond, "round %d: the watchdog re-arms or misses", round)
+		cancel()
+		close(gone)
+		<-done
+		require.NoError(t, missed, "round %d: a queued keep-alive is on time, however select orders it", round)
+		assert.Empty(t, child.signalled(), "round %d: an on-time child is never stopped", round)
+	}
+}
+
+func TestWatchdog_ConfigGivesProductionChildrenAnInterval(t *testing.T) {
+	// Codex P1 #1928: the production definitions carry no interval, so the
+	// supervisor's Config gives one to each child it launches, and the
+	// child learns it from WATCHDOG_USEC. The package's definitions stay
+	// as they are.
+	const interval = 7 * time.Second
+	clock := &watchdogClock{testClock: &testClock{}, interval: interval}
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
+		clock.testClock.stopTimeout = c.StopTimeout
+		c.Clock = clock
+		c.WatchdogInterval = interval
+	})
+	require.NoError(t, supervisor.StartService(testContext(t), gateway.ServiceTransit))
+
+	spec := launcher.lastSpec(t)
+	assert.Equal(t, interval, spec.Definition.WatchdogInterval)
+	env := launchEnv([]string{"PATH=/usr/bin"}, spec)
+	assert.Contains(t, env, WatchdogUsecEnv+"=7000000")
+	for _, def := range Definitions() {
+		assert.Zero(t, def.WatchdogInterval, "%s: the package definitions are not mutated", def.Name)
+	}
+}
+
+func TestSettings_WatchdogInterval(t *testing.T) {
+	// Absent: the documented default. An explicit 0: off. Negative: refused.
+	name := currentUserName(t)
+	cfg, err := Settings{Enabled: true, User: name}.Config(Inherited{}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, DefaultWatchdogInterval, cfg.WatchdogInterval)
+
+	off := time.Duration(0)
+	cfg, err = Settings{Enabled: true, User: name, WatchdogInterval: &off}.Config(Inherited{}, nil)
+	require.NoError(t, err)
+	assert.Zero(t, cfg.WatchdogInterval)
+
+	set := 5 * time.Second
+	cfg, err = Settings{Enabled: true, User: name, WatchdogInterval: &set}.Config(Inherited{}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, set, cfg.WatchdogInterval)
+
+	negative := -time.Second
+	_, err = Settings{Enabled: true, User: name, WatchdogInterval: &negative}.Config(Inherited{}, nil)
+	var invalid *ErrWatchdogIntervalInvalid
+	require.ErrorAs(t, err, &invalid)
+	assert.Equal(t, negative, invalid.Interval)
+}
+
 // requireNotifySocketGone waits for the last launch's notify socket to be
 // closed: Close removes the path, and a closed socket is what ends the
 // launch's notify reader (Codex P1 #1926).
