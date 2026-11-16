@@ -47,7 +47,9 @@ func TestNeighborAdvertisementBody(t *testing.T) {
 	hw := net.HardwareAddr{0x00, 0x00, 0x5e, 0x00, 0x02, 0x14}
 	body := neighborAdvertisementBody(netip.MustParseAddr("2001:db8::1"), hw)
 	require.Len(t, body, 28)
-	assert.Equal(t, []byte{0x20, 0, 0, 0}, body[0:4], "Override set, Router and Solicited clear")
+	// RFC 4861 7.2.5: a clear Router flag drops the virtual gateway from
+	// a client's Default Router List, so a router takeover sets R and O.
+	assert.Equal(t, []byte{0xa0, 0, 0, 0}, body[0:4], "Router and Override set, Solicited clear")
 	assert.Equal(t, netip.MustParseAddr("2001:db8::1").AsSlice(), body[4:20])
 	assert.Equal(t, byte(2), body[20], "target link-layer address option")
 	assert.Equal(t, byte(1), body[21], "one 8-byte unit")

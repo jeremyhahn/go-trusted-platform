@@ -633,7 +633,7 @@ func TestNetlinkProgrammer_AnnounceSendsAnUnsolicitedNA(t *testing.T) {
 	require.Len(t, v6.payload, 4+4+16+8)
 	assert.Equal(t, byte(136), v6.payload[0], "ICMPv6 Neighbor Advertisement")
 	assert.Zero(t, v6.payload[1], "code")
-	assert.Equal(t, []byte{0x20, 0, 0, 0}, v6.payload[4:8], "override flag")
+	assert.Equal(t, []byte{0xa0, 0, 0, 0}, v6.payload[4:8], "Router and Override set, Solicited clear (RFC 4861 7.2.5)")
 	assert.Equal(t, target.AsSlice(), v6.payload[8:24], "target address")
 	assert.Equal(t, []byte{2, 1}, v6.payload[24:26], "target link-layer address option")
 	assert.Equal(t, []byte(seamIface.HardwareAddr), v6.payload[26:32])
