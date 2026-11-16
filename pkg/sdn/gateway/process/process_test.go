@@ -1834,9 +1834,11 @@ func TestWatchdog_AnOnTimeKeepAliveBeatsAnExpiredTimer(t *testing.T) {
 		ready := make(chan struct{})
 		close(ready)
 		proc := &supervised{def: def, wanted: map[string]bool{}, child: child, stopping: true}
-		wd := newWatchdogState(interval)
-		wd.ready(base)
-		wd.keepAlive(base.Add(stamp))
+		clock.setNow(base)
+		wd := newWatchdogState(interval, clock)
+		wd.ready()
+		clock.setNow(base.Add(stamp))
+		wd.keepAlive()
 		clock.setNow(base.Add(interval + time.Second))
 		gone := make(chan struct{})
 		ctx, cancel := context.WithCancel(testContext(t))
@@ -2030,6 +2032,77 @@ func TestWatchdog_ABurstOfKeepAlivesIsNeverDropped(t *testing.T) {
 		return len(child.signalled()) > 0 || launcher.launchCount() > 1
 	}, 300*time.Millisecond, 10*time.Millisecond, "keep-alives in time never stop the child")
 	assert.True(t, supervisor.ServiceActive(gateway.ServiceTransit))
+}
+
+// newStampState is a watchdogState of interval on a settable clock, READY=1
+// received at base.
+func newStampState(interval time.Duration) (*watchdogState, *watchdogClock, time.Time) {
+	clock := &watchdogClock{testClock: &testClock{}, interval: interval}
+	base := time.Now()
+	clock.setNow(base)
+	wd := newWatchdogState(interval, clock)
+	wd.ready()
+	return wd, clock, base
+}
+
+func TestWatchdogState_AKeepAliveBeforeTheExpiryMovesTheDeadline(t *testing.T) {
+	// Codex P1 #1928 round 4 (A): the keep-alive stamp and the expiry
+	// decision are ordered by one lock. A keep-alive at t=6 (interval 7,
+	// READY=1 at 0) taken before the expiry check at t=7 moves the
+	// deadline to t=13: the child has not expired.
+	const interval = 7 * time.Second
+	wd, clock, base := newStampState(interval)
+	clock.setNow(base.Add(6 * time.Second))
+	wd.keepAlive()
+	clock.setNow(base.Add(7 * time.Second))
+	left, expired := wd.expire()
+	assert.False(t, expired, "an on-time keep-alive stamped before the decision holds the child")
+	assert.Equal(t, 6*time.Second, left, "the deadline is t=13")
+}
+
+func TestWatchdogState_AKeepAliveAfterTheExpiryDoesNotReviveIt(t *testing.T) {
+	// Round 4 (A): the expiry at t=7 (deadline 7) is final; a keep-alive
+	// stamped after it is late and changes nothing.
+	const interval = 7 * time.Second
+	wd, clock, base := newStampState(interval)
+	clock.setNow(base.Add(7 * time.Second))
+	_, expired := wd.expire()
+	require.True(t, expired, "the deadline has passed at t=7")
+	wd.keepAlive()
+	clock.setNow(base.Add(8 * time.Second))
+	_, expired = wd.expire()
+	assert.True(t, expired, "a keep-alive after the expiry does not revive the child")
+}
+
+func TestWatchdogState_KeepAliveAndExpiryRaceToAConsistentVerdict(t *testing.T) {
+	// Round 4 (A), under -race: with the clock at the deadline, a
+	// keep-alive and the expiry run from two goroutines. Whichever takes
+	// the lock first decides: a keep-alive first moves the deadline (not
+	// expired, one interval left); the expiry first is final.
+	const interval = 7 * time.Second
+	for i := 0; i < 200; i++ {
+		wd, clock, base := newStampState(interval)
+		clock.setNow(base.Add(interval))
+		var wg sync.WaitGroup
+		var left time.Duration
+		var expired bool
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			wd.keepAlive()
+		}()
+		go func() {
+			defer wg.Done()
+			left, expired = wd.expire()
+		}()
+		wg.Wait()
+		finalLeft, finalExpired := wd.expire()
+		require.Equal(t, expired, finalExpired, "run %d: the verdict is the final state", i)
+		if !expired {
+			require.Equal(t, interval, left, "run %d: the keep-alive came first and moved the deadline", i)
+			require.Equal(t, interval, finalLeft, "run %d", i)
+		}
+	}
 }
 
 // requireNotifySocketGone waits for the last launch's notify socket to be
