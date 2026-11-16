@@ -7,7 +7,7 @@ orchestrator targets by default.
 
 For single-box or cluster topologies, see the sibling profiles:
 - [`../single-node/`](../single-node/) — CP + GW + compute collocated (lab / edge)
-- [`../high-availability/`](../high-availability/) — 3× CP Raft + 2× GW + N× compute (planned)
+- [`../high-availability/`](../high-availability/) — 3× CP Raft (shipped for the x10) + 2× GW + N× compute (gateway and compute pairs planned)
 
 ---
 

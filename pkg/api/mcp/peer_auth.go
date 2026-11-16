@@ -18,8 +18,6 @@ import (
 	"crypto/x509"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
-
-	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/channelbind"
 )
 
 // PeerAuthenticator authenticates a caller by the client certificate chain
@@ -46,26 +44,3 @@ func WithPeerAuthenticator(a PeerAuthenticator) AuthorizationCheckerOption {
 // verified client certificate, then enforces the tool's scope against the
 // principal the certificate authenticates. Only VerifiedChains is read:
 // PeerCertificates is whatever the client sent.
-func (c *AuthorizationChecker) authorizePeer(ctx context.Context, permission string) (context.Context, *AuthorizationError) {
-	state, _, _ := channelbind.ConnectionTLS(ctx)
-	if state == nil || len(state.VerifiedChains) == 0 || len(state.VerifiedChains[0]) == 0 {
-		return ctx, &AuthorizationError{
-			Type:    AuthErrorMissingToken,
-			Message: "Authentication required for this operation: no bearer token and no verified client certificate",
-		}
-	}
-	authCtx, err := c.peerAuthenticator.AuthenticatePeer(ctx, state.VerifiedChains[0])
-	if err != nil || authCtx == nil {
-		return ctx, &AuthorizationError{
-			Type:    AuthErrorInvalidToken,
-			Message: "Invalid client certificate",
-		}
-	}
-	if err := authCtx.RequireScope(scopeForToolPermission(permission)); err != nil {
-		return ctx, &AuthorizationError{
-			Type:    AuthErrorPermissionDenied,
-			Message: "Permission denied: insufficient privileges",
-		}
-	}
-	return ContextWithAuthorizedContext(ctx, authCtx), nil
-}

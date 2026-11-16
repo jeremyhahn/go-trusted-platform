@@ -31,6 +31,11 @@ const DefaultCgroupParent = "gatewayd"
 // as. It is created by the package install, not by gatewayd.
 const DefaultServiceUser = "gatewayd"
 
+// DefaultWatchdogInterval is the watchdog interval of a `process:` section
+// that sets none: 0, off. The watchdog is opt-in, so an existing deployment
+// gains no watchdog restarts until its operator sets an interval.
+const DefaultWatchdogInterval time.Duration = 0
+
 // Settings is the `process:` configuration section: whether gatewayd
 // supervises its services in separate processes, and the knobs an operator
 // may turn. The privilege classes themselves are not configuration — they
@@ -59,6 +64,11 @@ type Settings struct {
 	StopTimeout   time.Duration `yaml:"stop-timeout" json:"stop_timeout" mapstructure:"stop-timeout"`
 	RestartBudget int           `yaml:"restart-budget" json:"restart_budget" mapstructure:"restart-budget"`
 	RestartWindow time.Duration `yaml:"restart-window" json:"restart_window" mapstructure:"restart-window"`
+	// WatchdogInterval is how often each child must send WATCHDOG=1 once it
+	// is ready. Absent means DefaultWatchdogInterval, 0, which like an
+	// explicit 0 leaves the watchdog off; a negative interval is refused. A pointer, like
+	// CgroupParent, so absent and 0 are distinguishable.
+	WatchdogInterval *time.Duration `yaml:"watchdog-interval" json:"watchdog_interval" mapstructure:"watchdog-interval"`
 	// PlatformUIDs are the platformd accounts the datapath child admits to
 	// its live load-balancer, NAT64 and perf calls (#660). A root platformd
 	// needs no entry: root is a control uid already.
@@ -98,6 +108,13 @@ func (s Settings) Config(inherited Inherited, logger *slog.Logger) (Config, erro
 	if s.CgroupParent != nil {
 		cgroupParent = *s.CgroupParent
 	}
+	watchdog := DefaultWatchdogInterval
+	if s.WatchdogInterval != nil {
+		watchdog = *s.WatchdogInterval
+	}
+	if err := checkWatchdogInterval(watchdog); err != nil {
+		return Config{}, err
+	}
 	return Config{
 		RuntimeDir: runtimeDir,
 		Inherited:  inherited,
@@ -111,7 +128,9 @@ func (s Settings) Config(inherited Inherited, logger *slog.Logger) (Config, erro
 		StopTimeout:   s.StopTimeout,
 		RestartBudget: s.RestartBudget,
 		RestartWindow: s.RestartWindow,
-		Logger:        logger,
+		// Applied by the supervisor to each process it launches.
+		WatchdogInterval: watchdog,
+		Logger:           logger,
 	}, nil
 }
 

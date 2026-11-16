@@ -512,6 +512,10 @@ type App struct {
 	// ovsClient is the runtime OVS client (not serialized).
 	ovsClient ovs.ClientInterface
 
+	// sdnLinksUp records that initSDNLinks brought up the OVS bridge, bonds
+	// and zone addresses (not serialized).
+	sdnLinksUp bool
+
 	// ipamAllocator is the runtime IPAM allocator (not serialized).
 	ipamAllocator ipam.Allocator
 
@@ -617,10 +621,12 @@ func (app *App) Init(ctx context.Context, initParams *AppInitParams) (*App, erro
 		return nil, err
 	}
 
+	// A clustered datastore's Raft transport binds an address that the SDN
+	// link bring-up assigns, so the links come up first (#1702).
 	// Initialize the platform datastores. The QuicBaaS SecretsService comes
 	// up here — everything downstream (kms:// resolution, PIN parsing, TPM
 	// provisioning, CA init) depends on it.
-	if err := app.initStores(); err != nil {
+	if err := app.initNetworkAndStores(ctx); err != nil {
 		return nil, err
 	}
 
@@ -1651,6 +1657,20 @@ func (app *App) resolveHostname(osHostname func() (string, error)) error {
 }
 
 // Initialize object and certificate stores
+// initStoresFn starts the platform datastores; tests replace it to observe
+// the host network at the moment the datastore starts.
+var initStoresFn = (*App).initStores
+
+// initNetworkAndStores is Init's datastore boundary: a clustered
+// datastore's Raft transport binds an address the SDN link bring-up
+// assigns, so initClusterNetwork runs before the stores start (#1702).
+func (app *App) initNetworkAndStores(ctx context.Context) error {
+	if err := app.initClusterNetwork(ctx); err != nil {
+		return err
+	}
+	return initStoresFn(app)
+}
+
 func (app *App) initStores() error {
 	// Pre-initialize XKMS with filesystem storage before QuicBaaS starts.
 	// QuicBaaS's embedded server startKMS() initializes go-xkms with
