@@ -19,6 +19,7 @@ import (
 	"errors"
 	"log/slog"
 	"sync/atomic"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/peer"
@@ -78,9 +79,11 @@ type BuildManifestOptions struct {
 
 // ListManifestsFilter contains filters for listing manifests.
 type ListManifestsFilter struct {
-	HostID    string
-	StartTime int64
-	EndTime   int64
+	HostID string
+	// StartTime and EndTime are inclusive bounds; zero means no bound; full
+	// nanosecond precision (#1686, ruling 673).
+	StartTime time.Time
+	EndTime   time.Time
 	Limit     int
 	Offset    int
 }
@@ -286,17 +289,11 @@ func (s *AttestationServiceServer) ListManifests(
 		Offset: int(req.GetOffset()),
 	}
 
-	// The filter keeps whole seconds: a fractional bound is refused, not
-	// truncated into a wider or narrower window.
-	if req.GetStartTime().GetNanos() != 0 || req.GetEndTime().GetNanos() != 0 {
-		return nil, status.Error(codes.InvalidArgument,
-			"start_time and end_time must be whole seconds")
-	}
 	if req.GetStartTime() != nil {
-		filter.StartTime = req.GetStartTime().AsTime().Unix()
+		filter.StartTime = req.GetStartTime().AsTime()
 	}
 	if req.GetEndTime() != nil {
-		filter.EndTime = req.GetEndTime().AsTime().Unix()
+		filter.EndTime = req.GetEndTime().AsTime()
 	}
 
 	manifests, total, err := s.service.ListManifests(ctx, filter)

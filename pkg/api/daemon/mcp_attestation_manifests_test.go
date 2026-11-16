@@ -77,10 +77,10 @@ func (s *memoryManifestService) ListManifests(_ context.Context, filter *ListMan
 		if filter != nil && filter.HostID != "" && m.HostID != filter.HostID {
 			continue
 		}
-		if filter != nil && filter.StartTime != 0 && m.Timestamp.Unix() < filter.StartTime {
+		if filter != nil && !filter.StartTime.IsZero() && m.Timestamp.Before(filter.StartTime) {
 			continue
 		}
-		if filter != nil && filter.EndTime != 0 && m.Timestamp.Unix() > filter.EndTime {
+		if filter != nil && !filter.EndTime.IsZero() && m.Timestamp.After(filter.EndTime) {
 			continue
 		}
 		out = append(out, m)
@@ -224,25 +224,41 @@ func TestMCPManifestParity_ListTimeWindow(t *testing.T) {
 	assert.NotEqual(t, asToolResult(t, all), got)
 }
 
-// The manifest filter keeps whole seconds, so a bound with a fractional
-// second is refused as InvalidArgument on gRPC and MCP alike, never
-// truncated into a different window (#1686, Codex round 5).
-func TestMCPManifestParity_ListRefusesFractionalTimeBound(t *testing.T) {
-	frac := manifestFixtureTime.Truncate(time.Second).Add(500 * time.Millisecond)
-	for _, field := range []string{"start_time", "end_time"} {
-		t.Run(field, func(t *testing.T) {
+// The manifest filter keeps full nanosecond precision, so a sub-second
+// bound selects the same manifests on gRPC and MCP alike, never truncated
+// into a wider or narrower window (#1686, ruling 673).
+func TestMCPManifestParity_ListKeepsFractionalTimeBound(t *testing.T) {
+	early := manifestFixtureTime.Add(250 * time.Millisecond)
+	late := manifestFixtureTime.Add(750 * time.Millisecond)
+	mid := manifestFixtureTime.Add(500 * time.Millisecond)
+	cases := []struct {
+		field string
+		want  string
+	}{
+		{"end_time", "m-1"},
+		{"start_time", "m-2"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.field, func(t *testing.T) {
 			f := newManifestParity()
-			_, mcpErr := f.mcp(t, "attestation_list_manifests", map[string]interface{}{
-				field: frac.Format(time.RFC3339Nano),
+			f.svc.manifests["m-1"].Timestamp = early
+			f.svc.manifests["m-2"] = &manifest.HostManifest{ID: "m-2", HostID: "host-a", Timestamp: late, Nonce: []byte{4}, MerkleRoot: []byte{8}, Version: "1"}
+
+			got, err := f.mcp(t, "attestation_list_manifests", map[string]interface{}{
+				tc.field: mid.Format(time.RFC3339Nano),
 			})
+			require.NoError(t, err)
 			req := &platformv1.ListManifestsRequest{}
-			if field == "start_time" {
-				req.StartTime = timestamppb.New(frac)
+			if tc.field == "start_time" {
+				req.StartTime = timestamppb.New(mid)
 			} else {
-				req.EndTime = timestamppb.New(frac)
+				req.EndTime = timestamppb.New(mid)
 			}
-			_, grpcErr := f.grpc.ListManifests(context.Background(), req)
-			assertSameClass(t, codes.InvalidArgument, mcpErr, grpcErr)
+			want, err := f.grpc.ListManifests(context.Background(), req)
+			require.NoError(t, err)
+			require.Len(t, want.GetManifests(), 1)
+			assert.Equal(t, tc.want, want.GetManifests()[0].GetId())
+			assert.Equal(t, asToolResult(t, want), got)
 		})
 	}
 }

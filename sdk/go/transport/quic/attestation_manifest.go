@@ -211,7 +211,6 @@ func pcrValuesToProto(in []pcrValueWire) []*platformv1.AttestationPCRValue {
 	return out
 }
 
-// unixSecondsTimestamp converts a wire Unix time in seconds; 0 means unset.
 // unixSecNanoTimestamp builds a timestamp from whole seconds and their sub-second
 // nanoseconds; it is nil only when both are 0.
 func unixSecNanoTimestamp(sec, nsec int64) *timestamppb.Timestamp {

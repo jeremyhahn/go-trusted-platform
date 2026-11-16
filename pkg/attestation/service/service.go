@@ -187,11 +187,11 @@ func (s *Service) ListManifests(ctx context.Context, filter *daemon.ListManifest
 	if filter != nil {
 		f.HostID = filter.HostID
 		limit, offset = filter.Limit, filter.Offset
-		if filter.StartTime > 0 {
-			f.Since = time.Unix(filter.StartTime, 0)
+		if !filter.StartTime.IsZero() {
+			f.Since = filter.StartTime
 		}
-		if filter.EndTime > 0 {
-			f.Until = time.Unix(filter.EndTime, 0)
+		if !filter.EndTime.IsZero() {
+			f.Until = filter.EndTime
 		}
 	}
 	// The store lists every match, newest first; total counts them all
