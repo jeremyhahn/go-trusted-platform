@@ -399,6 +399,9 @@ func runCreate(common *cli.CommonFlags, flags *createFlags) (err error) {
 	switch {
 	case result.Manifest != "":
 		fmt.Printf("  Measurement manifest: %s\n", result.Manifest)
+		if !result.Registered {
+			fmt.Println("  Reference values: not registered (no reference-values store client)")
+		}
 	case result.Unmeasured != "":
 		fmt.Printf("  Measurement manifest: none (%s)\n", result.Unmeasured)
 	}

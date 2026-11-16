@@ -116,6 +116,11 @@ type BuildConfig struct {
 	// its manifest at ManifestPath(image). Any other reference is refused.
 	ManifestKey  string
 	ManifestCert string
+	// ReferenceValues registers each signed manifest in the reference-values
+	// store once it is written; a registration failure fails the build. Nil
+	// leaves the manifest beside the image only (Result.Registered false):
+	// the pinned go-quicbaas SDK has no reference-values client yet.
+	ReferenceValues ReferenceValueRegistrar
 	// SkipPreflight disables the host checks (binfmt, container runtime,
 	// kernel modules); tests use it.
 	SkipPreflight bool

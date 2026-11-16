@@ -144,6 +144,36 @@ func (c *BuildConfig) writeManifest(ctx context.Context, image, sum string, targ
 	return out, nil
 }
 
+// ReferenceValueRegistrar registers a signed measurement manifest, the
+// CoRIM of the PCR values an image determines, in the reference-values store
+// the verifier reads.
+type ReferenceValueRegistrar interface {
+	// RegisterManifest registers signed, the manifest of the image whose
+	// SHA-256 digest is sum (hex).
+	RegisterManifest(ctx context.Context, sum string, signed []byte) error
+}
+
+// publishManifest writes the image's signed manifest beside it and registers
+// it through c.ReferenceValues when one is set. It reports whether the
+// manifest was registered; a registration failure is a MeasureError.
+func (c *BuildConfig) publishManifest(ctx context.Context, image, sum string, target Target, banks []measure.Bank) (string, bool, error) {
+	out, err := c.writeManifest(ctx, image, sum, target, banks)
+	if err != nil {
+		return "", false, err
+	}
+	if c.ReferenceValues == nil {
+		return out, false, nil
+	}
+	signed, err := os.ReadFile(out)
+	if err != nil {
+		return out, false, &MeasureError{Step: "reading " + filepath.Base(out), Err: err}
+	}
+	if err := c.ReferenceValues.RegisterManifest(ctx, sum, signed); err != nil {
+		return out, false, &MeasureError{Step: "registering the measurement manifest", Err: err}
+	}
+	return out, true, nil
+}
+
 // errNoCABundle: the platform CA client cannot return the CA bundle, so the
 // manifest certificate's issuer chain cannot be built.
 var errNoCABundle = errors.New("diskimage: the platform CA client returns no CA bundle to build the manifest certificate's chain from")

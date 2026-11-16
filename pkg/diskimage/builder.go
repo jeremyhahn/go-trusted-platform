@@ -48,6 +48,9 @@ type Result struct {
 	// "" only when the image is unmeasured, and then no manifest from an
 	// earlier build is left at that path.
 	Manifest string
+	// Registered says the manifest was registered in the reference-values
+	// store through BuildConfig.ReferenceValues.
+	Registered bool
 }
 
 // StagedMedia is a target's install media staged on disk: the layout the
@@ -180,13 +183,14 @@ func Create(ctx context.Context, cfg *BuildConfig) (*Result, error) {
 		return nil, err
 	}
 	var manifest string
+	var registered bool
 	if banks != nil {
-		if manifest, err = c.writeManifest(ctx, output, sum, target, banks); err != nil {
+		if manifest, registered, err = c.publishManifest(ctx, output, sum, target, banks); err != nil {
 			return nil, err
 		}
 	}
 	return &Result{Image: output, SHA256: sum, SizeBytes: size, MediaDir: mediaDir, UBoot: art, Kernel: kernel,
-		Measurements: banks, Unmeasured: unmeasured, Manifest: manifest}, nil
+		Measurements: banks, Unmeasured: unmeasured, Manifest: manifest, Registered: registered}, nil
 }
 
 // kernelArtifacts builds or locates the platform-built kernel for a target
