@@ -529,26 +529,34 @@ func (s *TPMPCRStrategy) unmountEFI() {
 // Uses the TPM connection already established in the platform to extend PCR 23
 // (or configured platform PCR) with the golden measurement hash.
 func (s *TPMPCRStrategy) extendPlatformPCR(ctx context.Context) error {
-	if s.platform.TPM == nil {
+	return extendPlatformPCRWith(ctx, s.platform, s.logger)
+}
+
+// extendPlatformPCRWith extends the platform PCR with the golden
+// measurement unless it already is. Every strategy whose sealed object is
+// bound to the platform PCR (TPM-PCR, TPM2-Token) calls it before
+// unsealing, so whichever runs first restores the runtime PCR state.
+func extendPlatformPCRWith(_ context.Context, platform *Platform, logger *logging.Logger) error {
+	if platform == nil || platform.TPM == nil {
 		return &MessageError{Msg: "TPM not available for PCR extension"}
 	}
 
 	// Check if platform PCR is already extended
-	extended, err := s.platform.TPM.IsPlatformPCRExtended()
+	extended, err := platform.TPM.IsPlatformPCRExtended()
 	if err != nil {
-		s.logger.Warnf("Failed to check platform PCR state: %v", err)
+		logger.Warnf("Failed to check platform PCR state: %v", err)
 		// Continue anyway - CreatePlatformPolicy will fail if there's a real problem
 	} else if extended {
-		s.logger.Info("Platform PCR already extended, skipping")
+		logger.Info("Platform PCR already extended, skipping")
 		return nil
 	}
 
 	// Extend platform PCR with golden measurement
-	s.logger.Info("Extending platform PCR with golden measurement (in-process)...")
-	if err := s.platform.TPM.CreatePlatformPolicy(); err != nil {
+	logger.Info("Extending platform PCR with golden measurement (in-process)...")
+	if err := platform.TPM.CreatePlatformPolicy(); err != nil {
 		return &WrappedError{Msg: "failed to extend platform PCR", Err: err}
 	}
 
-	s.logger.Info("Platform PCR extended successfully")
+	logger.Info("Platform PCR extended successfully")
 	return nil
 }

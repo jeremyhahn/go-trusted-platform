@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 
@@ -40,6 +42,14 @@ type TPMTokenStrategy struct {
 	logger   *logging.Logger
 	unsealer TokenUnsealer
 	priority int
+	// sealPending reports that the firstboot seal is not yet confirmed
+	// (installer.luks still on the ESP). Only a TPM-PCR unlock confirms it
+	// (shouldConfirmSeal, pkg/boot/commands/sealconfirm.go), so the token
+	// strategy stands aside until then.
+	sealPending func() bool
+	// extendPCR restores the runtime platform-PCR state that enrolment
+	// sealed against, before any token is unsealed.
+	extendPCR func(ctx context.Context) error
 }
 
 // NewTPMTokenStrategy returns the strategy with the default TPM unsealer.
@@ -47,15 +57,35 @@ func NewTPMTokenStrategy(platform *Platform, logger *logging.Logger) *TPMTokenSt
 	if logger == nil {
 		logger = logging.DefaultLogger()
 	}
-	return &TPMTokenStrategy{
+	s := &TPMTokenStrategy{
 		platform: platform,
 		logger:   logger,
 		unsealer: newDefaultTokenUnsealer(logger),
 		// 0: ahead of TPM-PCR (1). The token is what SDK enrolment wrote
 		// under the PCR policy, so it is the current enrolment when present;
 		// without a token CanUnlock is false and TPM-PCR (ESP) runs next.
-		priority: 0,
+		priority:    0,
+		sealPending: firstbootSealPending,
 	}
+	s.extendPCR = func(ctx context.Context) error {
+		return extendPlatformPCRWith(ctx, s.platform, s.logger)
+	}
+	return s
+}
+
+// firstbootSealPending is true while the installer container is still on
+// the ESP or mounted: the firstboot seal has not been proven by a TPM-PCR
+// unlock yet.
+func firstbootSealPending() bool {
+	for _, p := range []string{
+		filepath.Join(pcrEfiMountPoint, "tpm2", "installer.luks"),
+		"/mnt/installer/luks-key.bin",
+	} {
+		if _, err := os.Stat(p); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // Name returns StrategyNameTPMToken.
@@ -118,6 +148,10 @@ func (s *TPMTokenStrategy) CanUnlock(ctx context.Context, volume *luks.VolumeCon
 		s.logger.Debug("TPM token: no unsealer")
 		return false
 	}
+	if s.sealPending != nil && s.sealPending() {
+		s.logger.Info("TPM token: firstboot seal not yet confirmed; leaving the unlock to TPM-PCR")
+		return false
+	}
 	return len(s.tokenSlots(ctx, volume)) > 0
 }
 
@@ -126,6 +160,15 @@ func (s *TPMTokenStrategy) CanUnlock(ctx context.Context, volume *luks.VolumeCon
 func (s *TPMTokenStrategy) Unlock(ctx context.Context, volume *luks.VolumeConfig) error {
 	if s.unsealer == nil {
 		return ErrTPMTokenUnsealerUnavailable
+	}
+	// Enrolment sealed against the runtime PCRs, after the platform PCR
+	// carries the golden measurement; restore that state first. A failed
+	// extension only fails tokens bound to the platform PCR, so the
+	// unseal below still decides.
+	if s.extendPCR != nil {
+		if err := s.extendPCR(ctx); err != nil {
+			s.logger.Warnf("TPM token: extending the platform PCR: %v", err)
+		}
 	}
 	var errs []error
 	for _, ts := range s.tokenSlots(ctx, volume) {
