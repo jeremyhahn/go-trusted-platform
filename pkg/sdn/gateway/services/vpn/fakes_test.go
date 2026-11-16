@@ -214,6 +214,12 @@ func (p *fakePlane) failRemovals(err error) {
 	p.mu.Unlock()
 }
 
+func (p *fakePlane) installedCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.installed)
+}
+
 func (p *fakePlane) hosts(id LeaseID) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -315,6 +321,16 @@ func (f *fakeIPAM) Release(_ context.Context, ip netip.Addr) error {
 	return nil
 }
 
+func (f *fakeIPAM) GetAllocation(_ context.Context, ip netip.Addr) (*ipam.Allocation, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	dev, ok := f.allocated[ip]
+	if !ok {
+		return nil, ipam.ErrAllocationNotFound
+	}
+	return &ipam.Allocation{ID: ip.String(), IP: ip, DeviceID: dev, Status: ipam.AllocationStatusActive}, nil
+}
+
 func (f *fakeIPAM) Renew(_ context.Context, ip netip.Addr) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -409,6 +425,48 @@ func testConfig() Config {
 
 func newHarness(t testing.TB, cfg Config) *harness {
 	t.Helper()
+	return newHarnessWith(t, cfg, nil)
+}
+
+// putFailStore is a lease store whose Put fails while putErr is set.
+type putFailStore struct {
+	LeaseStore
+	mu     sync.Mutex
+	putErr error
+}
+
+func (s *putFailStore) Put(ctx context.Context, lease *Lease) error {
+	s.mu.Lock()
+	err := s.putErr
+	s.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	return s.LeaseStore.Put(ctx, lease)
+}
+
+func (s *putFailStore) failPuts(err error) {
+	s.mu.Lock()
+	s.putErr = err
+	s.mu.Unlock()
+}
+
+// inProcessPlane is a data plane without ReconcilePeers, as the in-process
+// WireGuard and MASQUE planes are: its peers start empty with the child.
+type inProcessPlane struct{ p *fakePlane }
+
+func (i inProcessPlane) Kind() DataPlaneKind { return i.p.Kind() }
+func (i inProcessPlane) InstallPeer(ctx context.Context, l *Lease) error {
+	return i.p.InstallPeer(ctx, l)
+}
+func (i inProcessPlane) RemovePeer(ctx context.Context, id LeaseID) error {
+	return i.p.RemovePeer(ctx, id)
+}
+
+// newHarnessWith builds the harness with edit applied to its deps before
+// the service is built.
+func newHarnessWith(t testing.TB, cfg Config, edit func(*Deps)) *harness {
+	t.Helper()
 	h := &harness{
 		clock:    newFakeClock(),
 		identity: &fakeIdentity{decision: calleradmission.Decision{Admitted: true, Identity: "mini-99", Reason: calleradmission.ReasonAdmitted}},
@@ -432,6 +490,9 @@ func newHarness(t testing.TB, cfg Config) *harness {
 		Audit:      h.audit,
 		Clock:      h.clock,
 		Logger:     slog.New(h.logs),
+	}
+	if edit != nil {
+		edit(&deps)
 	}
 	svc, err := New(deps, cfg)
 	require.NoError(t, err)
