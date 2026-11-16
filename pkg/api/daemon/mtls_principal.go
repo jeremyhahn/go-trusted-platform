@@ -123,12 +123,19 @@ func (p *iamCertificatePrincipals) ResolveCertificatePrincipal(ctx context.Conte
 	}
 
 	// The policy decision point decides each candidate; the role lists
-	// never grant on their own (docs/SPEC.md: go-qrdb decides).
+	// never grant on their own (docs/SPEC.md: go-qrdb decides). A
+	// permission with a wildcard in its resource or action part is not
+	// honoured for certificate principals: RequireScope matches a
+	// wildcard scope against any concrete operation, so copying "*:*"
+	// would admit an operation (say device:write) the PEP denies without
+	// the PEP ever deciding it. Only concrete permissions the PEP allows
+	// become scopes (fail closed) until each transport asks the PEP for
+	// the concrete operation (follow-up on row #646).
 	subject := &tokenPrincipal{Subject: user.ID, TenantID: tenantID, Roles: user.Roles}
 	scopes := make([]string, 0, len(candidates))
 	for _, permission := range candidates {
 		resource, action, ok := strings.Cut(permission, ":")
-		if !ok {
+		if !ok || strings.Contains(resource, "*") || strings.Contains(action, "*") {
 			continue
 		}
 		allowed, checkErr := checkPrincipalPermission(lookupCtx, p.pep, subject, resource, action)
