@@ -236,6 +236,9 @@ var (
 
 	attestationRead  = OpcodePermission{Resource: "attestation", Action: actionRead}
 	attestationWrite = OpcodePermission{Resource: "attestation", Action: actionWrite}
+	// attestationDelete matches the gRPC DeleteManifest permission
+	// (attestation:delete), so QUIC grants no wider access than gRPC.
+	attestationDelete = OpcodePermission{Resource: "attestation", Action: actionDelete}
 
 	caRead = OpcodePermission{Resource: "ca", Action: actionRead}
 
@@ -430,8 +433,8 @@ var opcodePermissions = map[byte]OpcodePermission{
 	quicwire.OpAttestQuote:          attestationWrite,
 	quicwire.OpAttestVerify:         attestationRead,
 	quicwire.OpAttestCollectHost:    attestationWrite,
-	quicwire.OpAttestGetAK:          attestationRead,
-	quicwire.OpAttestChallenge:      attestationWrite,
+	quicwire.OpAttestListManifests:  attestationRead,
+	quicwire.OpAttestDeleteManifest: attestationDelete,
 	quicwire.OpAttestPollVerdicts:   attestationRead,
 	quicwire.OpAttestGetReport:      attestationRead,
 	quicwire.OpAttestGetPCRs:        attestationRead,
