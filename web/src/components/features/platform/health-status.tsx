@@ -29,6 +29,13 @@ const statusConfig = {
   },
 };
 
+const unknownStatusConfig = {
+  label: "Unknown",
+  icon: AlertCircle,
+  className: "text-muted-foreground",
+  bgClassName: "bg-muted",
+};
+
 /**
  * Overall system health status indicator
  *
@@ -38,7 +45,9 @@ const statusConfig = {
  * ```
  */
 export function HealthStatus({ status, className = "" }: HealthStatusProps) {
-  const config = statusConfig[status];
+  // A status this build does not know (a newer server) renders as Unknown
+  // instead of throwing on the missing entry.
+  const config = statusConfig[status] ?? unknownStatusConfig;
   const Icon = config.icon;
 
   return (

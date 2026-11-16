@@ -366,6 +366,71 @@ func TestDeviceProfileUpdate_EKPrestageFields(t *testing.T) {
 	}
 }
 
+// mcpTestGoldenFWHash is a well-formed 32-byte golden firmware hash.
+const mcpTestGoldenFWHash = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+
+// TestDeviceProfileCreate_DICEFields verifies profile_create persists the
+// DICE device id and golden firmware hash (transport parity with gRPC and
+// REST, Codex round 3 on #1853).
+func TestDeviceProfileCreate_DICEFields(t *testing.T) {
+	registry, stub := newDeviceProfileRegistry()
+
+	result, err := registry.ExecuteTool(context.Background(), "profile_create", map[string]interface{}{
+		"name":           "dice-profile",
+		"role":           "server",
+		"dice_device_id": "a1b2c3d4e5f60718",
+		"golden_fw_hash": mcpTestGoldenFWHash,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	obj := result.(map[string]interface{})
+	if obj["dice_device_id"] != "a1b2c3d4e5f60718" || obj["golden_fw_hash"] != mcpTestGoldenFWHash {
+		t.Errorf("result missing DICE fields: %v / %v", obj["dice_device_id"], obj["golden_fw_hash"])
+	}
+	if len(stub.profiles) != 1 {
+		t.Fatalf("stored %d profiles, want 1", len(stub.profiles))
+	}
+	for _, stored := range stub.profiles {
+		if stored.DICEDeviceID != "a1b2c3d4e5f60718" || stored.GoldenFWHash != mcpTestGoldenFWHash {
+			t.Errorf("stored profile missing DICE fields: %+v", stored)
+		}
+	}
+}
+
+// TestDeviceProfileUpdate_DICEFields verifies profile_update_by_id sets the
+// DICE fields and keeps them when a later update omits them.
+func TestDeviceProfileUpdate_DICEFields(t *testing.T) {
+	registry, stub := newDeviceProfileRegistry()
+	stub.profiles[43] = &entities.DeviceProfile{ID: 43, Name: "dice-target"}
+
+	if _, err := registry.ExecuteTool(context.Background(), "profile_update_by_id", map[string]interface{}{
+		"id":             43,
+		"dice_device_id": "00ff",
+		"golden_fw_hash": mcpTestGoldenFWHash,
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	stored := stub.profiles[43]
+	if stored.DICEDeviceID != "00ff" || stored.GoldenFWHash != mcpTestGoldenFWHash {
+		t.Fatalf("stored profile missing DICE fields: %+v", stored)
+	}
+	if stored.Name != "dice-target" {
+		t.Errorf("unset name must be preserved, got %q", stored.Name)
+	}
+
+	if _, err := registry.ExecuteTool(context.Background(), "profile_update_by_id", map[string]interface{}{
+		"id":   43,
+		"name": "renamed",
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	stored = stub.profiles[43]
+	if stored.DICEDeviceID != "00ff" || stored.GoldenFWHash != mcpTestGoldenFWHash {
+		t.Errorf("an update without DICE fields must keep them: %+v", stored)
+	}
+}
+
 // TestDeviceProfileUpdate_Errors verifies the update error paths: missing
 // id and invalid EK certificate.
 func TestDeviceProfileUpdate_Errors(t *testing.T) {

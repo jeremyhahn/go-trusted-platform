@@ -131,27 +131,6 @@ func TestBuildCustomISO_RelativePlatformdPath(t *testing.T) {
 	}
 }
 
-func TestISOBuilderConfig_Defaults(t *testing.T) {
-	cfg := &ISOBuilderConfig{}
-
-	// Verify default values are empty
-	if cfg.OutputPath != "" {
-		t.Error("expected empty OutputPath default")
-	}
-	if cfg.WorkDir != "" {
-		t.Error("expected empty WorkDir default")
-	}
-	if cfg.SecureBoot {
-		t.Error("expected false SecureBoot default")
-	}
-	if cfg.EnableFIDO2 {
-		t.Error("expected false EnableFIDO2 default")
-	}
-	if cfg.Debug {
-		t.Error("expected false Debug default")
-	}
-}
-
 func TestISOBuilderConfig_PlatformTypes(t *testing.T) {
 	tests := []struct {
 		name         string

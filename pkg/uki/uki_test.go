@@ -242,47 +242,6 @@ func TestDefaultStubPath(t *testing.T) {
 	assert.Equal(t, "/usr/lib/systemd/boot/efi/linuxx64.efi.stub", DefaultStubPath)
 }
 
-func TestSectionStruct(t *testing.T) {
-	section := Section{
-		Name: ".cmdline",
-		Data: []byte("root=/dev/sda1"),
-	}
-
-	assert.Equal(t, ".cmdline", section.Name)
-	assert.Equal(t, []byte("root=/dev/sda1"), section.Data)
-}
-
-func TestUKIStructFields(t *testing.T) {
-	kernel := strings.NewReader("kernel data")
-	initramfs := strings.NewReader("initramfs data")
-	stub := strings.NewReader("stub data")
-	microcode := strings.NewReader("microcode data")
-	splash := strings.NewReader("splash data")
-	deviceTree := strings.NewReader("device tree data")
-
-	uki := &UKI{
-		Kernel:     kernel,
-		Initramfs:  initramfs,
-		Cmdline:    "root=/dev/sda1 ro quiet",
-		OSRelease:  "NAME=TestOS",
-		Stub:       stub,
-		Microcode:  microcode,
-		Splash:     splash,
-		DeviceTree: deviceTree,
-		SBAT:       "sbat,1,2025,Test",
-	}
-
-	assert.NotNil(t, uki.Kernel)
-	assert.NotNil(t, uki.Initramfs)
-	assert.Equal(t, "root=/dev/sda1 ro quiet", uki.Cmdline)
-	assert.Equal(t, "NAME=TestOS", uki.OSRelease)
-	assert.NotNil(t, uki.Stub)
-	assert.NotNil(t, uki.Microcode)
-	assert.NotNil(t, uki.Splash)
-	assert.NotNil(t, uki.DeviceTree)
-	assert.Equal(t, "sbat,1,2025,Test", uki.SBAT)
-}
-
 func TestFromFilesWithRealFiles(t *testing.T) {
 	tmpDir := t.TempDir()
 

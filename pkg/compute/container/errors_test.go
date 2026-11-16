@@ -427,30 +427,6 @@ func TestSentinelErrors_AreDistinct(t *testing.T) {
 	}
 }
 
-func TestSentinelErrors_NotNil(t *testing.T) {
-	t.Parallel()
-
-	allErrors := []error{
-		ErrContainerNotFound,
-		ErrContainerExists,
-		ErrContainerRunning,
-		ErrContainerStopped,
-		ErrInvalidSpec,
-		ErrPolicyDenied,
-		ErrAttestationFailed,
-		ErrNetworkSetupFailed,
-		ErrServiceError,
-		ErrImageNotFound,
-		ErrImageVerificationFailed,
-	}
-
-	for i, err := range allErrors {
-		if err == nil {
-			t.Errorf("Error at index %d is nil", i)
-		}
-	}
-}
-
 func TestWrappedErrors_PreserveContext(t *testing.T) {
 	t.Parallel()
 

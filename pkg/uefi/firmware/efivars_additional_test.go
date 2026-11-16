@@ -100,16 +100,3 @@ func TestEfiVarsPathConstant(t *testing.T) {
 func TestTrustedPlatformVariableName(t *testing.T) {
 	assert.Equal(t, "TRUSTED_PLATFORM", TrustedPlatformVariableName)
 }
-
-func TestVariableInfoStruct(t *testing.T) {
-	info := VariableInfo{
-		Name:       "TestVar",
-		GUID:       TrustedPlatformGUID,
-		Attributes: 0x07,
-		Size:       100,
-	}
-
-	assert.Equal(t, "TestVar", info.Name)
-	assert.Equal(t, uint32(0x07), info.Attributes)
-	assert.Equal(t, 100, info.Size)
-}

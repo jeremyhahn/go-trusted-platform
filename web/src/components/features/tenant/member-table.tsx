@@ -1,11 +1,10 @@
 "use client";
 
 import * as React from "react";
-import { Crown, MoreHorizontal, Shield, Trash2, User, Eye } from "lucide-react";
+import { MoreHorizontal, Trash2 } from "lucide-react";
 import type { ColumnDef } from "@tanstack/react-table";
 import { DataTable } from "@/components/ui/data-table";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -25,19 +24,7 @@ interface MemberTableProps {
   isLoading?: boolean;
 }
 
-const roleIcons: Record<TenantRole, typeof Crown> = {
-  owner: Crown,
-  admin: Shield,
-  member: User,
-  viewer: Eye,
-};
 
-const roleColors: Record<TenantRole, "default" | "secondary" | "outline"> = {
-  owner: "default",
-  admin: "secondary",
-  member: "outline",
-  viewer: "outline",
-};
 
 export function MemberTable({
   members,
@@ -104,7 +91,6 @@ export function MemberTable({
       header: "Role",
       cell: ({ row }) => {
         const role = row.original.role;
-        const Icon = roleIcons[role];
         const isProcessing = processingId === row.original.id;
 
         return (

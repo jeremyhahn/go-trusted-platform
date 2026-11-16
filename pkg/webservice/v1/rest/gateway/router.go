@@ -55,7 +55,7 @@ func NewGatewayRouter(
 //	POST   /api/v1/gateway/bgp/prefixes             - AnnouncePrefix
 //	DELETE /api/v1/gateway/bgp/prefixes             - WithdrawPrefix (?prefix=)
 //	GET    /api/v1/gateway/ipam/pools               - ListIPAMPools
-//	GET    /api/v1/gateway/ipam/allocations         - ListAllocations
+//	GET    /api/v1/gateway/ipam/allocations         - ListAllocations (?poolId=)
 //	POST   /api/v1/gateway/ipam/allocations         - AllocateIP
 //	DELETE /api/v1/gateway/ipam/allocations         - ReleaseIP (?ip=)
 func (r *GatewayRouter) RegisterRoutes(parent *mux.Router) {
@@ -192,7 +192,14 @@ func (r *GatewayRouter) listAllocations(w http.ResponseWriter, req *http.Request
 	if !r.ensure(w, req) {
 		return
 	}
-	resp, err := r.server.ListAllocations(req.Context(), &platformv1.ListAllocationsRequest{})
+	// The pool filter arrives as ?poolId= (JS SDK) or ?pool_id= (the proto
+	// field name, as the IPAM router reads it); empty lists every pool.
+	q := req.URL.Query()
+	poolID := q.Get("poolId")
+	if poolID == "" {
+		poolID = q.Get("pool_id")
+	}
+	resp, err := r.server.ListAllocations(req.Context(), &platformv1.ListAllocationsRequest{PoolId: poolID})
 	if err != nil {
 		protorest.WriteError(w, req, r.respWriter, err)
 		return

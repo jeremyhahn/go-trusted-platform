@@ -105,17 +105,14 @@ func daemonRouteTable(t *testing.T, guard *restapi.ScopeGuard) (*RESTServer, []s
 }
 
 // daemonDivergentClaims are SDK claims under a prefix both REST servers serve
-// that reach no daemon route of their own shape. All but GetBootConfig and
-// GetContainerLogs resolve on the webservice router, where
-// route_coverage_test.go checks them. One SDK route table addresses both
+// that reach no daemon route of their own shape. All but GetBootConfig
+// resolve on the webservice router, where route_coverage_test.go checks them. One SDK route table addresses both
 // servers, so repointing a claim at the daemon's shape would break it on the
 // webservice: which server answers the operation, or the daemon gaining the
 // webservice's route, is a capability decision (#452). Keyed by gRPC method.
 // TestDaemonDivergentClaims_StillDiverge makes the map shrink-only.
 var daemonDivergentClaims = map[string]string{
 	"/platform.v1.CAService/RevokeCertificate": "#452: the daemon revokes at POST /api/v1/ca/certificates/{serial}/revoke; the claim is the webservice's DELETE shape",
-
-	"/platform.v1.ComputeService/GetContainerLogs": "#452: lands on GET /api/v1/compute/containers/{id} with id=\"logs\"; neither server serves container logs (claim_operation_resolution_test.go)",
 
 	"/platform.v1.AttestationService/CollectHostAttestation": attestationQuoteOnWebservice,
 	"/platform.v1.AttestationService/GetAttestationQuote":    attestationQuoteOnWebservice,

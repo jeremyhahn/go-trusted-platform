@@ -146,37 +146,6 @@ func TestCryptoRewrapCommand_RequiredKeyID(t *testing.T) {
 	}
 }
 
-// rewrapFlags struct tests
-
-func TestRewrapFlags_DefaultValues(t *testing.T) {
-	flags := rewrapFlags{}
-
-	if flags.keyID != "" {
-		t.Errorf("keyID default should be empty, got %q", flags.keyID)
-	}
-	if flags.inputPath != "" {
-		t.Errorf("inputPath default should be empty, got %q", flags.inputPath)
-	}
-	if flags.outputPath != "" {
-		t.Errorf("outputPath default should be empty, got %q", flags.outputPath)
-	}
-	if flags.context != "" {
-		t.Errorf("context default should be empty, got %q", flags.context)
-	}
-	if flags.nonce != "" {
-		t.Errorf("nonce default should be empty, got %q", flags.nonce)
-	}
-	if flags.sourceVersion != 0 {
-		t.Errorf("sourceVersion default should be 0, got %d", flags.sourceVersion)
-	}
-	if flags.base64In {
-		t.Error("base64In default should be false (zero value)")
-	}
-	if flags.base64Out {
-		t.Error("base64Out default should be false (zero value)")
-	}
-}
-
 func TestCryptoRewrapCommand_GetFlagsNotCalledOnCreation(t *testing.T) {
 	callCount := 0
 	getFlags := func() *cli.CommonFlags {

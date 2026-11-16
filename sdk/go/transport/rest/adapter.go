@@ -127,6 +127,37 @@ func Connect(ctx context.Context, opts *platform.Options) (transport.Adapter, er
 	return a, nil
 }
 
+// ErrNilRoundTripper is returned by NewWithRoundTripper when it is given no
+// RoundTripper to send requests through.
+type ErrNilRoundTripper struct{}
+
+func (ErrNilRoundTripper) Error() string {
+	return "REST adapter: a RoundTripper is required"
+}
+
+// NewWithRoundTripper returns an adapter that sends every request through rt
+// with baseURL as the URL prefix. It skips Connect's TLS dialing and health
+// probe, so it suits an in-process caller that serves the daemon's REST
+// handler directly, such as a test that exercises the real route table
+// against the real handler without a listener.
+func NewWithRoundTripper(baseURL string, rt http.RoundTripper, token string) (*Adapter, error) {
+	if baseURL == "" {
+		return nil, platform.ErrEmptyAddress
+	}
+	if rt == nil {
+		return nil, ErrNilRoundTripper{}
+	}
+	a := &Adapter{
+		httpClient: &http.Client{Transport: rt},
+		baseURL:    strings.TrimSuffix(baseURL, "/"),
+	}
+	a.connected.Store(true)
+	if token != "" {
+		a.SetToken(token)
+	}
+	return a, nil
+}
+
 // probeHealth issues GET /health/live and succeeds only on a 2xx answer.
 // Every REST listener serves the liveness probe unauthenticated. It probes
 // liveness, not /health, because /health answers 503 while a component is
@@ -1293,6 +1324,20 @@ var templatedRouteTable = map[string]templatedRoute{
 	"/platform.v1.PlatformIAMService/UpdateGroup": tenantItemRoute("/api/v1/iam/tenants/{tenant}/groups/{id}", http.MethodPut,
 		pathParam{placeholder: "{id}", field: "group_id"}),
 	"/platform.v1.PlatformIAMService/UpdateTenant": itemRoute("/api/v1/iam/tenants/{tenant}", http.MethodPut, "{tenant}", "tenant_id"),
+
+	// The tenant-scoped collections and the live PEP check --
+	// registerUserRoutes, registerGroupRoutes, registerRoleRoutes and the
+	// tenants/{tenant}/permissions/check route in router.go. The daemon's
+	// tenant guard (restiam.RequestedTenant) reads the tenant from the path
+	// or the tenant_id query, never the body, so a flat path with the
+	// tenant in the body was refused with 403 before the handler ran.
+	"/platform.v1.PlatformIAMService/CreateUser":      tenantItemRoute("/api/v1/iam/tenants/{tenant}/users", http.MethodPost),
+	"/platform.v1.PlatformIAMService/ListUsers":       tenantItemRoute("/api/v1/iam/tenants/{tenant}/users", http.MethodGet),
+	"/platform.v1.PlatformIAMService/CreateRole":      tenantItemRoute("/api/v1/iam/tenants/{tenant}/roles", http.MethodPost),
+	"/platform.v1.PlatformIAMService/ListRoles":       tenantItemRoute("/api/v1/iam/tenants/{tenant}/roles", http.MethodGet),
+	"/platform.v1.PlatformIAMService/CreateGroup":     tenantItemRoute("/api/v1/iam/tenants/{tenant}/groups", http.MethodPost),
+	"/platform.v1.PlatformIAMService/ListGroups":      tenantItemRoute("/api/v1/iam/tenants/{tenant}/groups", http.MethodGet),
+	"/platform.v1.PlatformIAMService/CheckPermission": tenantItemRoute("/api/v1/iam/tenants/{tenant}/permissions/check", http.MethodPost),
 }
 
 // itemRoute constructs a templated route for a singular accessor: the
@@ -1419,22 +1464,14 @@ var grpcMethodToRESTMap = map[string]struct {
 	"/platform.v1.CAService/GetCRL":            {"/api/v1/ca/crl", http.MethodGet},
 	"/platform.v1.CAService/GetCABundle":       {"/api/v1/ca/bundle", http.MethodGet},
 
-	// IAM Service
-	"/platform.v1.PlatformIAMService/CreateUser": {"/api/v1/iam/users", http.MethodPost},
-	"/platform.v1.PlatformIAMService/ListUsers":  {"/api/v1/iam/users", http.MethodGet},
-
-	"/platform.v1.PlatformIAMService/CreateRole": {"/api/v1/iam/roles", http.MethodPost},
-	"/platform.v1.PlatformIAMService/ListRoles":  {"/api/v1/iam/roles", http.MethodGet},
-
-	"/platform.v1.PlatformIAMService/CreateGroup": {"/api/v1/iam/groups", http.MethodPost},
-	"/platform.v1.PlatformIAMService/ListGroups":  {"/api/v1/iam/groups", http.MethodGet},
-
+	// IAM Service. The tenant-scoped collections (users, roles, groups)
+	// and CheckPermission are templated routes above: the daemon's tenant
+	// guard reads the tenant from the path, never the body.
 	"/platform.v1.PlatformIAMService/CreateTenant": {"/api/v1/iam/tenants", http.MethodPost},
 	"/platform.v1.PlatformIAMService/ListTenants":  {"/api/v1/iam/tenants", http.MethodGet},
 
 	// GetCurrentUser was removed (#415): iam.proto declares no such rpc, and
 	// its path /iam/users/current routed to GetUser with id="current".
-	"/platform.v1.PlatformIAMService/CheckPermission": {"/api/v1/iam/permissions/check", http.MethodPost},
 	// CreateToken, RevokeToken and VerifyToken have no REST route: route()
 	// refuses them through restRefusedMethods (iam.go).
 
@@ -1569,9 +1606,8 @@ var grpcMethodToRESTMap = map[string]struct {
 	// Switch Service routes are templated: see switches.go.
 
 	// Compute Service
-	"/platform.v1.ComputeService/CreateContainer":  {"/api/v1/compute/containers", http.MethodPost},
-	"/platform.v1.ComputeService/ListContainers":   {"/api/v1/compute/containers", http.MethodGet},
-	"/platform.v1.ComputeService/GetContainerLogs": {"/api/v1/compute/containers/logs", http.MethodGet},
+	"/platform.v1.ComputeService/CreateContainer": {"/api/v1/compute/containers", http.MethodPost},
+	"/platform.v1.ComputeService/ListContainers":  {"/api/v1/compute/containers", http.MethodGet},
 	// ListVMs sends its whole request (states, selector, pagination) as the
 	// JSON body, which both REST servers decode on this GET.
 	"/platform.v1.ComputeService/ListVMs": {"/api/v1/compute/vms", http.MethodGet},

@@ -60,7 +60,7 @@ func newSimulatorSocket(t *testing.T) *simulatorSocket {
 	t.Helper()
 
 	s := &simulatorSocket{
-		path: filepath.Join(t.TempDir(), "swtpm.sock"),
+		path: filepath.Join(shortSocketDir(t), "swtpm.sock"),
 		sim:  newSimulator(t),
 	}
 	tpm := transport.FromReadWriter(s.sim)

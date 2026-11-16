@@ -227,40 +227,6 @@ func TestManager_MultipleInstances(t *testing.T) {
 	}
 }
 
-func TestTAPInfo_EmbeddedFields(t *testing.T) {
-	// Verify that TAPInfo properly embeds LinkInfo and all fields are accessible
-	tapInfo := &TAPInfo{
-		LinkInfo: LinkInfo{
-			Index:        1,
-			Name:         "tap0",
-			Type:         "tuntap",
-			Flags:        0x1003,
-			MTU:          1500,
-			HardwareAddr: "00:11:22:33:44:55",
-			OperState:    LinkStateUp,
-			Master:       0,
-		},
-		Owner:      1000,
-		Group:      1000,
-		MultiQueue: true,
-		Persist:    false,
-	}
-
-	// Test embedded field access
-	if tapInfo.Index != 1 {
-		t.Errorf("Index = %d, want 1", tapInfo.Index)
-	}
-	if tapInfo.Name != "tap0" {
-		t.Errorf("Name = %s, want tap0", tapInfo.Name)
-	}
-	if tapInfo.MTU != 1500 {
-		t.Errorf("MTU = %d, want 1500", tapInfo.MTU)
-	}
-	if tapInfo.Owner != 1000 {
-		t.Errorf("Owner = %d, want 1000", tapInfo.Owner)
-	}
-}
-
 func TestIsFlagSet_MultipleFlags(t *testing.T) {
 	// Test with multiple flags set
 	flags := uint32(net.FlagUp | net.FlagBroadcast | net.FlagMulticast | net.FlagRunning)

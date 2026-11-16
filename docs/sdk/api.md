@@ -55,7 +55,7 @@ folder's own `api.md`. Streaming RPCs are ✅ only on gRPC / Unix.
 | `ConfigDeliveryService` | `ConfigDelivery()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `PlatformIAMService` | `IAM()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `KeyManagementService` | `KMS()` | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `BarrierService` | `Barrier()` | `MISSING — docs/13 G7` | ✅ | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` |
+| `BarrierService` | `Barrier()` | `MISSING — docs/13 G7` | ✅ | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
 | `EABService` | `EAB()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `InvitationService` | `Invitation()` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `CacheService` (§3.5) | `Cache()` | ✅ | ✅ | ✅ | ✅ | ✅ |

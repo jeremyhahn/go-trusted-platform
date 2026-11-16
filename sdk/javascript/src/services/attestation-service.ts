@@ -31,7 +31,40 @@ import type {
   ListDeviceReportsResponse,
   RefreshDeviceReportResponse,
   CallerPolicyDescription,
+  AttestationHashAlgorithm,
+  AttestationHashAlgorithmProtoName,
+  AttestationPCRValue,
 } from '../types/attestation.js';
+import { ATTESTATION_HASH_ALGORITHM_PROTO_NAMES } from '../types/attestation.js';
+import { encodeEnum } from './wire-enum.js';
+
+/**
+ * Replaces a config's short hash algorithm with its proto name. The REST
+ * decoder is protojson, which discards the short name.
+ */
+function withWireHashAlgorithm<T extends { hashAlgorithm?: AttestationHashAlgorithm }>(
+  config: T,
+): Omit<T, 'hashAlgorithm'> & { hashAlgorithm?: AttestationHashAlgorithmProtoName } {
+  const { hashAlgorithm, ...rest } = config;
+  if (hashAlgorithm === undefined) {
+    return rest;
+  }
+  return { ...rest, hashAlgorithm: encodeEnum('hashAlgorithm', ATTESTATION_HASH_ALGORITHM_PROTO_NAMES, hashAlgorithm) };
+}
+
+/** Replaces a request's config with its wire form, when the request has one. */
+function withWireConfig<T extends { config?: { hashAlgorithm?: AttestationHashAlgorithm } }>(request: T) {
+  if (request.config === undefined) {
+    return request;
+  }
+  return { ...request, config: withWireHashAlgorithm(request.config) };
+}
+
+function toWirePCRValue(
+  pcr: AttestationPCRValue,
+): Omit<AttestationPCRValue, 'algorithm'> & { algorithm: AttestationHashAlgorithmProtoName } {
+  return { ...pcr, algorithm: encodeEnum('algorithm', ATTESTATION_HASH_ALGORITHM_PROTO_NAMES, pcr.algorithm) };
+}
 
 /**
  * Attestation Service class
@@ -86,7 +119,7 @@ export class AttestationService extends BaseService {
    * @returns Built manifest
    */
   async buildManifest(request: BuildManifestRequest): Promise<ApiResponse<BuildManifestResponse>> {
-    return this.client.post<BuildManifestResponse>(this.buildUrl('/manifests/build'), request);
+    return this.client.post<BuildManifestResponse>(this.buildUrl('/manifests/build'), withWireConfig(request));
   }
 
   /**
@@ -96,7 +129,7 @@ export class AttestationService extends BaseService {
    * @returns Verification result
    */
   async verifyManifest(request: VerifyManifestRequest): Promise<ApiResponse<VerifyManifestResponse>> {
-    return this.client.post<VerifyManifestResponse>(this.buildUrl('/manifests/verify'), request);
+    return this.client.post<VerifyManifestResponse>(this.buildUrl('/manifests/verify'), withWireConfig(request));
   }
 
   /**
@@ -140,7 +173,7 @@ export class AttestationService extends BaseService {
    * @returns Attestation quote
    */
   async getQuote(request: GetAttestationQuoteRequest): Promise<ApiResponse<GetAttestationQuoteResponse>> {
-    return this.client.post<GetAttestationQuoteResponse>(this.buildUrl('/quote'), request);
+    return this.client.post<GetAttestationQuoteResponse>(this.buildUrl('/quote'), withWireConfig(request));
   }
 
   /**
@@ -150,7 +183,11 @@ export class AttestationService extends BaseService {
    * @returns Verification result
    */
   async verifyQuote(request: VerifyAttestationQuoteRequest): Promise<ApiResponse<VerifyAttestationQuoteResponse>> {
-    return this.client.post<VerifyAttestationQuoteResponse>(this.buildUrl('/quote/verify'), request);
+    const { expectedPcrs, ...rest } = request;
+    return this.client.post<VerifyAttestationQuoteResponse>(this.buildUrl('/quote/verify'), {
+      ...rest,
+      ...(expectedPcrs !== undefined && { expectedPcrs: expectedPcrs.map(toWirePCRValue) }),
+    });
   }
 
   // =========================================================================
@@ -214,7 +251,7 @@ export class AttestationService extends BaseService {
   }
 
   async collectHostAttestation(request: CollectHostAttestationRequest): Promise<ApiResponse<CollectHostAttestationResponse>> {
-    return this.client.post<CollectHostAttestationResponse>(this.buildUrl('/host'), request);
+    return this.client.post<CollectHostAttestationResponse>(this.buildUrl('/host'), withWireConfig(request));
   }
 
   /**
@@ -226,7 +263,7 @@ export class AttestationService extends BaseService {
   async collectVMAttestation(request: CollectVMAttestationRequest): Promise<ApiResponse<CollectVMAttestationResponse>> {
     return this.client.post<CollectVMAttestationResponse>(
       this.buildUrl(`/vm/${this.encodePathSegment(request.vmId)}`),
-      request
+      withWireConfig(request)
     );
   }
 

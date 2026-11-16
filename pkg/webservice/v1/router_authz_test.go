@@ -678,10 +678,9 @@ var pendingRoutes = map[string]string{
 // below: a nil in a fixture can hide a route that production always serves.
 //
 // Slice 1 also named /bmc here. That was wrong: the webservice serves no
-// /bmc route. pkg/webservice/v1/router/bmc.go exists but NewBMCRouter has
-// no non-test caller, and the live BMC surface belongs to the second REST
-// server tracked on #232. It is not this audit's blind spot, and the
-// unreferenced router is filed separately.
+// /bmc route. The live BMC surface belongs to the daemon REST server
+// (#232), so it is not this audit's blind spot. The unreferenced webservice
+// BMC router (pkg/webservice/v1/router/bmc.go) was deleted (#239).
 func TestRegisterRoutes_EveryRouteDeniesWithoutCredential(t *testing.T) {
 	router := newGatedTestRouter(t, &testHandlerRegistry{tokenHandler: &anonymousAuth{}})
 

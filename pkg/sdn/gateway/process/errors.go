@@ -437,3 +437,50 @@ type ErrStateFileLinked struct {
 func (e *ErrStateFileLinked) Error() string {
 	return fmt.Sprintf("gatewayd supervisor: state file %q has %d hard links", e.Path, e.Links)
 }
+
+// ErrNotifyEmpty reports a notify datagram that carries no assignment: it is
+// empty or holds only blank lines.
+type ErrNotifyEmpty struct{}
+
+func (e *ErrNotifyEmpty) Error() string {
+	return "gatewayd supervisor: notify datagram carries no assignment"
+}
+
+// ErrNotifyMalformed reports a notify datagram line that is not a valid
+// sd_notify(3) assignment: no '=', an empty or ill-formed key, or a known key
+// whose value is not the one the wire format allows.
+type ErrNotifyMalformed struct {
+	Line   string
+	Reason string
+}
+
+func (e *ErrNotifyMalformed) Error() string {
+	return fmt.Sprintf("gatewayd supervisor: malformed notify line %q: %s", e.Line, e.Reason)
+}
+
+// ErrNotifySocket reports a failure of the supervisor's notify socket: create,
+// bind, set its options, or receive on it.
+type ErrNotifySocket struct {
+	Path  string
+	Op    string
+	Cause error
+}
+
+func (e *ErrNotifySocket) Error() string {
+	return fmt.Sprintf("gatewayd supervisor: notify socket %s %q: %v", e.Op, e.Path, e.Cause)
+}
+
+func (e *ErrNotifySocket) Unwrap() error { return e.Cause }
+
+// ErrNotifySend reports a child that could not send its notify state to the
+// socket NOTIFY_SOCKET names.
+type ErrNotifySend struct {
+	Socket string
+	Cause  error
+}
+
+func (e *ErrNotifySend) Error() string {
+	return fmt.Sprintf("gatewayd supervisor: notify send to %q: %v", e.Socket, e.Cause)
+}
+
+func (e *ErrNotifySend) Unwrap() error { return e.Cause }

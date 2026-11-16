@@ -350,18 +350,3 @@ func TestErrVerificationFailed_Unwrap(t *testing.T) {
 	errNoCause := ErrVerificationFailed{Step: "test"}
 	assert.Nil(t, errNoCause.Unwrap())
 }
-
-func TestErrorsImplementError(t *testing.T) {
-	// Verify all error types implement the error interface
-	var _ error = ErrAttestationRequired{}
-	var _ error = ErrAttestationExpired{}
-	var _ error = ErrAttestationTooOld{}
-	var _ error = ErrPCRMismatch{}
-	var _ error = ErrEKNotAuthorized{}
-	var _ error = ErrOperationNotAllowed{}
-	var _ error = ErrZoneNotAllowed{}
-	var _ error = ErrInvalidToken{}
-	var _ error = ErrServiceUnavailable{}
-	var _ error = ErrInvalidConfig{}
-	var _ error = ErrVerificationFailed{}
-}

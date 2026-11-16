@@ -84,6 +84,11 @@ type SeederParams struct {
 	// the run agree on which file a role's template is. Empty leaves
 	// configured paths as written.
 	ConfigDir string
+	// ClientCertificate is the firstboot admin bundle (admin@system) the
+	// seeder presents to the control plane: the mTLS gate on the device
+	// routes the seeder calls verifies it against the platform CA (#178).
+	// Nil presents no client certificate.
+	ClientCertificate *tls.Certificate
 }
 
 // Seeder uploads device templates and creates per-node profiles on the control plane.
@@ -111,6 +116,15 @@ func NewSeeder(params SeederParams) *Seeder {
 		logger = slog.Default()
 	}
 
+	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS13,
+		RootCAs:    params.CPCAPool,
+		ServerName: params.ServerName,
+	}
+	if params.ClientCertificate != nil {
+		tlsConfig.Certificates = []tls.Certificate{*params.ClientCertificate}
+	}
+
 	return &Seeder{
 		controlPlaneAddr: params.ControlPlaneAddr,
 		config:           params.Config,
@@ -128,11 +142,7 @@ func NewSeeder(params SeederParams) *Seeder {
 					Timeout:  10 * time.Second,
 					Resolver: &net.Resolver{PreferGo: true},
 				}).DialContext,
-				TLSClientConfig: &tls.Config{
-					MinVersion: tls.VersionTLS13,
-					RootCAs:    params.CPCAPool,
-					ServerName: params.ServerName,
-				},
+				TLSClientConfig: tlsConfig,
 			},
 		},
 	}

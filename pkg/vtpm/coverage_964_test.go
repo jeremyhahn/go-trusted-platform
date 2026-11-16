@@ -66,7 +66,7 @@ func newHangUpTPMOperations(t *testing.T) (*TPMOperations, string, func()) {
 	t.Helper()
 
 	tpm := transport.FromReadWriter(newSimulator(t))
-	socketPath := filepath.Join(t.TempDir(), "swtpm.sock")
+	socketPath := filepath.Join(shortSocketDir(t), "swtpm.sock")
 	listener, err := net.Listen("unix", socketPath)
 	require.NoError(t, err)
 
@@ -940,7 +940,7 @@ func undefineNVIndex(t *testing.T, tpm transport.TPM, nvIndex uint32) {
 func serveTPMOnSocket(t *testing.T, tpm transport.TPM) string {
 	t.Helper()
 
-	socketPath := filepath.Join(t.TempDir(), "swtpm.sock")
+	socketPath := filepath.Join(shortSocketDir(t), "swtpm.sock")
 	listener, err := net.Listen("unix", socketPath)
 	require.NoError(t, err)
 

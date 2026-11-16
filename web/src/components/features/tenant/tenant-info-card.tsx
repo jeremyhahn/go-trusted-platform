@@ -56,8 +56,9 @@ export function TenantInfoCard({
   const displayName = tenant.display_name || tenant.name;
 
   // Format created date
-  const createdAt = tenant.created_at
-    ? new Date(tenant.created_at).toLocaleDateString("en-US", {
+  const createdDate = tenant.created_at ? new Date(tenant.created_at) : null;
+  const createdAt = createdDate && !Number.isNaN(createdDate.getTime())
+    ? createdDate.toLocaleDateString("en-US", {
         month: "long",
         day: "numeric",
         year: "numeric",

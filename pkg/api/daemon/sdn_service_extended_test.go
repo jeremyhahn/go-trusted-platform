@@ -15,7 +15,6 @@ package daemon
 
 import (
 	"testing"
-	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -645,74 +644,6 @@ func TestSDNService_pbToOvsFlowMod_Extended(t *testing.T) {
 
 		require.NotNil(t, flowMod)
 		assert.Empty(t, flowMod.Actions)
-	})
-}
-
-// =============================================================================
-// Resource Tracking Structure Tests
-// =============================================================================
-
-func TestSDNService_ResourceStructures(t *testing.T) {
-	t.Run("bridgeResource fields", func(t *testing.T) {
-		now := time.Now()
-		br := &bridgeResource{
-			id:         "test-id",
-			name:       "test-bridge",
-			bridgeType: platformv1.BridgeType_BRIDGE_TYPE_OVS,
-			createdAt:  now,
-		}
-
-		assert.Equal(t, "test-id", br.id)
-		assert.Equal(t, "test-bridge", br.name)
-		assert.Equal(t, platformv1.BridgeType_BRIDGE_TYPE_OVS, br.bridgeType)
-		assert.Equal(t, now, br.createdAt)
-	})
-
-	t.Run("portResource fields", func(t *testing.T) {
-		now := time.Now()
-		pr := &portResource{
-			id:        "port-id",
-			name:      "port-name",
-			bridgeID:  "bridge-id",
-			portType:  platformv1.PortType_PORT_TYPE_TAP,
-			createdAt: now,
-		}
-
-		assert.Equal(t, "port-id", pr.id)
-		assert.Equal(t, "port-name", pr.name)
-		assert.Equal(t, "bridge-id", pr.bridgeID)
-		assert.Equal(t, platformv1.PortType_PORT_TYPE_TAP, pr.portType)
-		assert.Equal(t, now, pr.createdAt)
-	})
-
-	t.Run("tapResource fields", func(t *testing.T) {
-		now := time.Now()
-		tr := &tapResource{
-			name:      "tap-name",
-			createdAt: now,
-		}
-
-		assert.Equal(t, "tap-name", tr.name)
-		assert.Equal(t, now, tr.createdAt)
-	})
-
-	t.Run("vlanResource fields", func(t *testing.T) {
-		now := time.Now()
-		vr := &vlanResource{
-			id:        "vlan-id",
-			vlanID:    100,
-			bridgeID:  "bridge-id",
-			name:      "vlan-name",
-			ports:     []string{"port1", "port2"},
-			createdAt: now,
-		}
-
-		assert.Equal(t, "vlan-id", vr.id)
-		assert.Equal(t, uint32(100), vr.vlanID)
-		assert.Equal(t, "bridge-id", vr.bridgeID)
-		assert.Equal(t, "vlan-name", vr.name)
-		assert.ElementsMatch(t, []string{"port1", "port2"}, vr.ports)
-		assert.Equal(t, now, vr.createdAt)
 	})
 }
 

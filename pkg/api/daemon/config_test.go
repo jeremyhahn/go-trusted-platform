@@ -302,53 +302,6 @@ func TestConfig_Validate(t *testing.T) {
 	}
 }
 
-func TestServiceConfig(t *testing.T) {
-	t.Run("all fields are settable", func(t *testing.T) {
-		config := ServiceConfig{
-			Enabled:    true,
-			AutoStart:  true,
-			Timeout:    15 * time.Second,
-			MaxRetries: 5,
-		}
-
-		if !config.Enabled {
-			t.Error("Enabled should be true")
-		}
-
-		if !config.AutoStart {
-			t.Error("AutoStart should be true")
-		}
-
-		if config.Timeout != 15*time.Second {
-			t.Errorf("Timeout = %v, want %v", config.Timeout, 15*time.Second)
-		}
-
-		if config.MaxRetries != 5 {
-			t.Errorf("MaxRetries = %d, want %d", config.MaxRetries, 5)
-		}
-	})
-
-	t.Run("zero value is valid struct", func(t *testing.T) {
-		var config ServiceConfig
-
-		if config.Enabled {
-			t.Error("zero value Enabled should be false")
-		}
-
-		if config.AutoStart {
-			t.Error("zero value AutoStart should be false")
-		}
-
-		if config.Timeout != 0 {
-			t.Error("zero value Timeout should be 0")
-		}
-
-		if config.MaxRetries != 0 {
-			t.Error("zero value MaxRetries should be 0")
-		}
-	})
-}
-
 // TestDefaultConfig_ListenAddressesAreLoopback pins the defaults layer of
 // the 2026-08-26 ruling (#93, #552): no transport reaches an interface
 // unless the resolved `daemon:` section says so.

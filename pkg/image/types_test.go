@@ -276,16 +276,3 @@ func TestVerificationOptions_TrustAnchorsPEM(t *testing.T) {
 	assert.NotEmpty(t, opts.TrustAnchorsPEM)
 	assert.NotEmpty(t, opts.IntermediateCertsPEM)
 }
-
-func TestVerificationResult_Errors(t *testing.T) {
-	result := &VerificationResult{
-		Verified:    false,
-		Errors:      []string{"error 1", "error 2"},
-		Warnings:    []string{"warning 1"},
-		ImageDigest: "sha256:abc123",
-	}
-
-	assert.Len(t, result.Errors, 2)
-	assert.Len(t, result.Warnings, 1)
-	assert.False(t, result.Verified)
-}

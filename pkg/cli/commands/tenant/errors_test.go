@@ -113,15 +113,3 @@ func TestErrTenantAlreadyActive(t *testing.T) {
 		t.Errorf("expected %q, got %q", expected, err.Error())
 	}
 }
-
-// Test that errors implement the error interface
-func TestErrorsImplementErrorInterface(t *testing.T) {
-	var _ error = ErrMissingTenantName{}
-	var _ error = ErrTenantNotFound{}
-	var _ error = ErrInvalidQuotaValue{}
-	var _ error = ErrOperationFailed{}
-	var _ error = ErrQuotaUpdateFailed{}
-	var _ error = ErrUsageRetrievalFailed{}
-	var _ error = ErrTenantSuspended{}
-	var _ error = ErrTenantAlreadyActive{}
-}

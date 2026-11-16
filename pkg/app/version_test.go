@@ -239,30 +239,6 @@ func TestAppVersionJSONUnmarshal(t *testing.T) {
 	}
 }
 
-func TestAppVersionStruct(t *testing.T) {
-	version := &AppVersion{
-		Name:       "platform",
-		Repository: "github.com/example/repo",
-		Package:    "pkg",
-		Version:    "1.0.0",
-		GitBranch:  "develop",
-		GitTag:     "v1.0.0",
-		GitHash:    "hash123",
-		BuildDate:  "2025-12-19",
-		BuildUser:  "builder",
-	}
-
-	assert.Equal(t, "platform", version.Name)
-	assert.Equal(t, "github.com/example/repo", version.Repository)
-	assert.Equal(t, "pkg", version.Package)
-	assert.Equal(t, "1.0.0", version.Version)
-	assert.Equal(t, "develop", version.GitBranch)
-	assert.Equal(t, "v1.0.0", version.GitTag)
-	assert.Equal(t, "hash123", version.GitHash)
-	assert.Equal(t, "2025-12-19", version.BuildDate)
-	assert.Equal(t, "builder", version.BuildUser)
-}
-
 func TestGlobalVersionVariables(t *testing.T) {
 	// Save originals
 	origName := Name

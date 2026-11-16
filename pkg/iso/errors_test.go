@@ -215,15 +215,3 @@ func TestISOError_ErrorWrapping(t *testing.T) {
 	// Test errors.Is
 	assert.True(t, errors.Is(isoErr, baseErr))
 }
-
-func TestISOError_TypeChecking(t *testing.T) {
-	// Test that we can differentiate error types
-	configErr := &ISOError{Type: ErrorTypeConfig, Message: "config error"}
-	platformErr := &ISOError{Type: ErrorTypePlatform, Message: "platform error"}
-	buildErr := &ISOError{Type: ErrorTypeBuild, Message: "build error"}
-
-	assert.Equal(t, ErrorTypeConfig, configErr.Type)
-	assert.Equal(t, ErrorTypePlatform, platformErr.Type)
-	assert.Equal(t, ErrorTypeBuild, buildErr.Type)
-	assert.NotEqual(t, configErr.Type, platformErr.Type)
-}

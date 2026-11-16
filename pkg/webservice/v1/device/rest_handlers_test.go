@@ -30,6 +30,7 @@ import (
 	devicepkg "github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 )
 
@@ -1059,6 +1060,43 @@ func TestCRUDHandler_HandleServiceError(t *testing.T) {
 		handler.handleServiceError(w, req, errors.New("some other error"))
 		assert.Equal(t, http.StatusInternalServerError, w.Code)
 	})
+}
+
+// TestCRUDHandler_InvalidDICEFields_Are400 pins that a malformed
+// dice_device_id or golden_fw_hash answers 400 on create and update, not 500.
+func TestCRUDHandler_InvalidDICEFields_Are400(t *testing.T) {
+	storage := quicbaas.NewMockStorage()
+	require.NoError(t, storage.Start(context.Background()))
+	profiles, err := devicepkg.NewProfileService(devicepkg.NewDatastore(storage, logging.DefaultLogger()))
+	require.NoError(t, err)
+	handler := &CRUDHandler{
+		logger:         logging.DefaultLogger(),
+		responseWriter: &mockResponseWriter{},
+		deviceService:  newMockDeviceService(),
+		profileService: profiles,
+	}
+	require.NoError(t, profiles.Save(context.Background(), &entities.DeviceProfile{
+		ID: 1699, Name: "avr", Role: entities.DeviceRoleWorker,
+	}))
+
+	for _, field := range []string{`"dice_device_id": "zz"`, `"golden_fw_hash": "aa"`} {
+		t.Run(field, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/device/profiles",
+				bytes.NewBufferString(`{"id": 1700, "name": "avr", "role": "worker", `+field+`}`))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			handler.CreateProfile(w, req)
+			assert.Equal(t, http.StatusBadRequest, w.Code, "create: %s", w.Body.String())
+
+			req = httptest.NewRequest(http.MethodPut, "/device/profiles/1699",
+				bytes.NewBufferString(`{"name": "avr", "role": "worker", `+field+`}`))
+			req = mux.SetURLVars(req, map[string]string{"id": "1699"})
+			req.Header.Set("Content-Type", "application/json")
+			w = httptest.NewRecorder()
+			handler.UpdateProfile(w, req)
+			assert.Equal(t, http.StatusBadRequest, w.Code, "update: %s", w.Body.String())
+		})
+	}
 }
 
 func TestErrors(t *testing.T) {

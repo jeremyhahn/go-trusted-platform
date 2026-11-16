@@ -72,6 +72,10 @@ type ServiceRegistry struct {
 	NTP  platformv1.NTPServiceServer
 	LUKS platformv1.LUKSServiceServer
 
+	// Barrier backs the platform barrier lifecycle verbs (init, status,
+	// unseal, seal, rekey).
+	Barrier platformv1.BarrierServiceServer
+
 	// Switch backs the managed-switch port verbs (list, status, VLAN,
 	// enable, disable).
 	Switch platformv1.SwitchServiceServer

@@ -282,14 +282,16 @@ export default function BackupPage() {
       });
       return;
     }
-    await createBackupMutation.mutateAsync(backupFormData);
+    // A refusal is reported by the mutation's onError toast; mutateAsync
+    // still rethrows it, so catch it here rather than leak a rejection.
+    await createBackupMutation.mutateAsync(backupFormData).catch(() => undefined);
   };
 
   const handleDelete = async (backup: BackupUI) => {
     if (!confirm(`Delete backup "${backup.name}"? This action cannot be undone.`)) {
       return;
     }
-    await deleteBackupMutation.mutateAsync(backup);
+    await deleteBackupMutation.mutateAsync(backup).catch(() => undefined);
   };
 
   const handleRestore = async () => {
@@ -298,7 +300,7 @@ export default function BackupPage() {
       backup: selectedBackup,
       targetPrefix: restoreDestination,
       overwrite: restoreOverwrite,
-    });
+    }).catch(() => undefined);
   };
 
   const formatSize = (bytes?: number): string => {
@@ -725,7 +727,7 @@ export default function BackupPage() {
                         )
                       ) {
                         for (const row of rows) {
-                          await deleteBackupMutation.mutateAsync(row);
+                          await deleteBackupMutation.mutateAsync(row).catch(() => undefined);
                         }
                       }
                     },

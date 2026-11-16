@@ -58,8 +58,6 @@ import (
 var _ router.RootRouter = (*Router)(nil)
 
 type Router struct {
-	baseURI             string
-	baseServiceURI      string
 	ca                  trustedca.CACertificateAuthority
 	caConfig            *trustedca.CAConfig
 	restHandlerRegistry RestHandlerRegistry

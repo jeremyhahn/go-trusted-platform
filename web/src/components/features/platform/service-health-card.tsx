@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, Clock, Zap, AlertTriangle } from "lucide-react";
+import { Clock, Zap, AlertTriangle } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -33,7 +33,17 @@ const statusConfig = {
   },
 };
 
+const unknownStatusConfig = {
+  label: "Unknown",
+  variant: "secondary" as const,
+  className: "bg-muted text-muted-foreground",
+};
+
 function formatUptime(seconds: number): string {
+  // A negative or non-finite uptime (clock skew, a missing field) shows as 0m.
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    return "0m";
+  }
   const days = Math.floor(seconds / 86400);
   const hours = Math.floor((seconds % 86400) / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
@@ -65,7 +75,7 @@ function formatUptime(seconds: number): string {
  * ```
  */
 export function ServiceHealthCard({ service }: ServiceHealthCardProps) {
-  const config = statusConfig[service.status];
+  const config = statusConfig[service.status] ?? unknownStatusConfig;
 
   return (
     <Card>

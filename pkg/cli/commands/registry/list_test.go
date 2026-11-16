@@ -165,31 +165,6 @@ func TestNewListCommand_DefaultFlagValues(t *testing.T) {
 	}
 }
 
-func TestListResult_EmptyImages(t *testing.T) {
-	result := ListResult{
-		Images:     []*ImageListItem{},
-		TotalCount: 0,
-		HasMore:    false,
-		NextCursor: "",
-	}
-
-	if len(result.Images) != 0 {
-		t.Errorf("expected 0 images, got %d", len(result.Images))
-	}
-
-	if result.TotalCount != 0 {
-		t.Errorf("expected TotalCount 0, got %d", result.TotalCount)
-	}
-
-	if result.HasMore {
-		t.Error("expected HasMore to be false")
-	}
-
-	if result.NextCursor != "" {
-		t.Errorf("expected empty NextCursor, got %q", result.NextCursor)
-	}
-}
-
 func TestNewListCommand_FlagUsage(t *testing.T) {
 	getFlags := func() *cli.CommonFlags {
 		return &cli.CommonFlags{}

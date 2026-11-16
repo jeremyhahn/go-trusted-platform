@@ -27,6 +27,28 @@ export type CertStorageType =
   | 'NVRAM'
   | 'FILESYSTEM';
 
+/** Protobuf name of a device key algorithm, as the REST decoder reads it. */
+export type DeviceKeyAlgorithmProtoName = `DEVICE_KEY_ALGORITHM_${DeviceKeyAlgorithm}`;
+
+/** Maps each device key algorithm to the protobuf name the server decodes. */
+export const DEVICE_KEY_ALGORITHM_PROTO_NAMES: Readonly<Record<DeviceKeyAlgorithm, DeviceKeyAlgorithmProtoName>> = {
+  UNSPECIFIED: 'DEVICE_KEY_ALGORITHM_UNSPECIFIED',
+  ECDSA_P256: 'DEVICE_KEY_ALGORITHM_ECDSA_P256',
+  ECDSA_P384: 'DEVICE_KEY_ALGORITHM_ECDSA_P384',
+  RSA_2048: 'DEVICE_KEY_ALGORITHM_RSA_2048',
+  RSA_3072: 'DEVICE_KEY_ALGORITHM_RSA_3072',
+};
+
+/** Protobuf name of a certificate storage type, as the REST decoder reads it. */
+export type CertStorageTypeProtoName = `CERT_STORAGE_TYPE_${CertStorageType}`;
+
+/** Maps each certificate storage type to the protobuf name the server decodes. */
+export const CERT_STORAGE_TYPE_PROTO_NAMES: Readonly<Record<CertStorageType, CertStorageTypeProtoName>> = {
+  UNSPECIFIED: 'CERT_STORAGE_TYPE_UNSPECIFIED',
+  NVRAM: 'CERT_STORAGE_TYPE_NVRAM',
+  FILESYSTEM: 'CERT_STORAGE_TYPE_FILESYSTEM',
+};
+
 // =============================================================================
 // Configuration Types
 // =============================================================================

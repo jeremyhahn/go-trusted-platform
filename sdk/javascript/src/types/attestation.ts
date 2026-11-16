@@ -19,6 +19,24 @@ export type AttestationHashAlgorithm =
   | 'SHA384'
   | 'SHA512';
 
+/** Proto name of an attestation hash algorithm. */
+export type AttestationHashAlgorithmProtoName = `ATTESTATION_HASH_ALGORITHM_${AttestationHashAlgorithm}`;
+
+/**
+ * Proto name of each attestation hash algorithm. The REST decoder is
+ * protojson, which discards the short name; requests send the value from
+ * this map.
+ */
+export const ATTESTATION_HASH_ALGORITHM_PROTO_NAMES: Readonly<
+  Record<AttestationHashAlgorithm, AttestationHashAlgorithmProtoName>
+> = {
+  UNSPECIFIED: 'ATTESTATION_HASH_ALGORITHM_UNSPECIFIED',
+  SHA1: 'ATTESTATION_HASH_ALGORITHM_SHA1',
+  SHA256: 'ATTESTATION_HASH_ALGORITHM_SHA256',
+  SHA384: 'ATTESTATION_HASH_ALGORITHM_SHA384',
+  SHA512: 'ATTESTATION_HASH_ALGORITHM_SHA512',
+};
+
 /**
  * Manifest verification status
  */

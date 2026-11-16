@@ -245,67 +245,69 @@ export function useMutation<TData, TVariables>(
       // Call onMutate callback (can be used for optimistic updates)
       optionsRef.current?.onMutate?.(vars);
 
-      try {
-        const response = await mutationFnRef.current(vars);
-
-        // Check if component is still mounted
-        if (!isMountedRef.current) {
-          throw new Error('Component unmounted during mutation');
-        }
-
-        // Handle API error response
-        if (response.error !== undefined) {
-          const mutationError = toMutationError(response.error);
-          setError(mutationError);
-          setStatus('error');
-          optionsRef.current?.onError?.(mutationError, vars);
-          optionsRef.current?.onSettled?.(undefined, mutationError, vars);
-          throw mutationError;
-        }
-
-        // Handle successful response
-        if (response.data !== undefined) {
-          setData(response.data);
-          setStatus('success');
-          optionsRef.current?.onSuccess?.(response.data, vars);
-          optionsRef.current?.onSettled?.(response.data, undefined, vars);
-          return response.data;
-        }
-
-        // Handle unexpected empty response
-        const emptyError: MutationError = {
-          code: 'EMPTY_RESPONSE',
-          message: 'Mutation returned empty response',
-        };
-        setError(emptyError);
-        setStatus('error');
-        optionsRef.current?.onError?.(emptyError, vars);
-        optionsRef.current?.onSettled?.(undefined, emptyError, vars);
-        throw emptyError;
-      } catch (err) {
-        // Check if component is still mounted
-        if (!isMountedRef.current) {
-          throw err;
-        }
-
-        // Error already handled if it's a MutationError we created
-        if (
-          err !== null &&
-          typeof err === 'object' &&
-          'code' in err &&
-          (err as MutationError).code !== undefined
-        ) {
-          throw err;
-        }
-
-        // Handle unexpected errors
-        const mutationError = toMutationError(err);
+      // Report an error once, through state and the callbacks, then reject
+      // with it. The callbacks run outside the try/catch below, so a
+      // callback that throws (even rethrowing the error it was given)
+      // propagates as is and is never reported a second time.
+      // A settle callback that throws after a success is reported the same
+      // way, with settle=false so it is not called a second time.
+      const fail = (mutationError: MutationError, settle = true): never => {
         setError(mutationError);
         setStatus('error');
         optionsRef.current?.onError?.(mutationError, vars);
-        optionsRef.current?.onSettled?.(undefined, mutationError, vars);
+        if (settle) {
+          optionsRef.current?.onSettled?.(undefined, mutationError, vars);
+        }
         throw mutationError;
+      };
+
+      // Only the mutation function sits inside the try: its failures,
+      // whether thrown or rejected, are mapped to a MutationError here.
+      let response: ApiResponse<TData>;
+      try {
+        response = await mutationFnRef.current(vars);
+      } catch (err) {
+        // After unmount, rethrow the original rejection without callbacks
+        if (!isMountedRef.current) {
+          throw err;
+        }
+        return fail(toMutationError(err));
       }
+
+      // Check if component is still mounted
+      if (!isMountedRef.current) {
+        throw new Error('Component unmounted during mutation');
+      }
+
+      // Handle API error response
+      if (response.error !== undefined) {
+        return fail(toMutationError(response.error));
+      }
+
+      // Handle successful response
+      if (response.data !== undefined) {
+        setData(response.data);
+        setStatus('success');
+        // A throwing onSuccess is reported once, as a failure of the mutation
+        try {
+          optionsRef.current?.onSuccess?.(response.data, vars);
+        } catch (err) {
+          return fail(toMutationError(err));
+        }
+        try {
+          optionsRef.current?.onSettled?.(response.data, undefined, vars);
+        } catch (err) {
+          // onSettled already ran once: report the failure without calling it again
+          return fail(toMutationError(err), false);
+        }
+        return response.data;
+      }
+
+      // Handle unexpected empty response
+      return fail({
+        code: 'EMPTY_RESPONSE',
+        message: 'Mutation returned empty response',
+      });
     },
     [toMutationError]
   );

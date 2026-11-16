@@ -209,19 +209,3 @@ func TestRunPull_InvalidImageReference(t *testing.T) {
 		})
 	}
 }
-
-func TestPullResult_EmptyPlatform(t *testing.T) {
-	result := PullResult{
-		Reference: "myrepo/myimage:v1.0",
-		Digest:    "sha256:abc123",
-		Size:      1024,
-		Decrypted: false,
-		Verified:  false,
-		Platform:  "",
-		Timestamp: 0,
-	}
-
-	if result.Platform != "" {
-		t.Errorf("expected empty Platform, got %q", result.Platform)
-	}
-}

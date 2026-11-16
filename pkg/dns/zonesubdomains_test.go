@@ -24,22 +24,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestConfig_ZoneSubdomains_DefaultOff verifies that the ZoneSubdomains field
-// defaults to false (zero value) and is correctly decoded from YAML.
-func TestConfig_ZoneSubdomains_DefaultOff(t *testing.T) {
-	cfg := Config{}
-	assert.False(t, cfg.ZoneSubdomains, "ZoneSubdomains must default to false")
-}
-
-func TestConfig_ZoneSubdomains_YAMLTag(t *testing.T) {
-	// Verify the struct tag is correct by checking it round-trips via YAML.
-	// Using gopkg.in/yaml.v2 matching the surrounding test file convention.
-	import_yaml := `zone-subdomains: true`
-	_ = import_yaml // tag syntax verified via build-time struct tag check
-	cfg := &Config{ZoneSubdomains: true}
-	assert.True(t, cfg.ZoneSubdomains)
-}
-
 // TestInitNetworkZoneSubdomains_Disabled verifies that when ZoneSubdomains is
 // false the function is a no-op and returns nil.
 func TestInitNetworkZoneSubdomains_Disabled(t *testing.T) {

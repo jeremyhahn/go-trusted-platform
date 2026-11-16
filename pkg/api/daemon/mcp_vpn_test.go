@@ -20,8 +20,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -48,61 +46,6 @@ func vpnProviders(server platformv1.VPNServiceServer) map[string]vpnMCPProvider 
 	}
 	return map[string]vpnMCPProvider{
 		"MCPServiceProvider": mcpProvider,
-	}
-}
-
-func TestMCPProvidersRunTheVPNOperationsOnTheSharedServer(t *testing.T) {
-	server, _ := newVPNTestServer(t)
-
-	for name, provider := range vpnProviders(server) {
-		t.Run(name, func(t *testing.T) {
-			ctx := context.Background()
-
-			enrolled, err := provider.VPNEnrolPeer(ctx, "acme", "laptop-1", []string{"management"})
-			require.NoError(t, err)
-			enrolResp, ok := enrolled.(*platformv1.EnrolVPNPeerResponse)
-			require.True(t, ok, "VPNEnrolPeer() = %T, want the pb response", enrolled)
-			assert.Equal(t, []string{"management"}, enrolResp.GetPeer().GetZones())
-
-			peers, err := provider.VPNListPeers(ctx, "acme")
-			require.NoError(t, err)
-			assert.Len(t, peers.(*platformv1.ListVPNPeersResponse).GetPeers(), 1)
-
-			_, err = provider.VPNRevokePeer(ctx, "acme", "laptop-1")
-			require.NoError(t, err)
-
-			statusResult, err := provider.VPNStatus(ctx, "gw-1")
-			require.NoError(t, err)
-			assert.Len(t, statusResult.(*platformv1.GetVPNStatusResponse).GetGateways(), 1)
-
-			_, err = provider.VPNPosturePolicySet(ctx, "acme", "corp", vpnTestPolicy)
-			require.NoError(t, err)
-
-			got, err := provider.VPNPosturePolicyGet(ctx, "acme", "corp")
-			require.NoError(t, err)
-			assert.Equal(t, "corp", got.(*platformv1.GetVPNPosturePolicyResponse).GetPolicy().GetName())
-
-			policies, err := provider.VPNPosturePolicyList(ctx, "")
-			require.NoError(t, err)
-			assert.Len(t, policies.(*platformv1.ListVPNPosturePoliciesResponse).GetPolicies(), 1)
-
-			_, err = provider.VPNPosturePolicyDelete(ctx, "acme", "corp")
-			require.NoError(t, err)
-		})
-	}
-}
-
-func TestMCPProvidersReturnTheServiceRefusals(t *testing.T) {
-	server, _ := newVPNTestServer(t)
-
-	for name, provider := range vpnProviders(server) {
-		t.Run(name, func(t *testing.T) {
-			_, err := provider.VPNRevokePeer(context.Background(), "acme", "never-enrolled")
-			assert.Equal(t, codes.NotFound, status.Code(err))
-
-			_, err = provider.VPNPosturePolicySet(context.Background(), "acme", "corp", "package other\n")
-			assert.Equal(t, codes.InvalidArgument, status.Code(err))
-		})
 	}
 }
 

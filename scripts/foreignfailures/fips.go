@@ -134,6 +134,15 @@ func attributePanic(module string, p *packageRun, b *baseline) (*entry, string) 
 	name := failed[0]
 	e, listed := b.tests[testKey{Package: p.Package, Name: name}]
 	if !listed {
+		// Rows hold top-level tests only: a subtest's panic is its
+		// listed parent's, and the frame checks below run on the parent.
+		if parent, _, sub := strings.Cut(name, "/"); sub {
+			if e, listed = b.tests[testKey{Package: p.Package, Name: parent}]; listed {
+				name = parent
+			}
+		}
+	}
+	if !listed {
 		return nil, fmt.Sprintf("%s %s: panicked and is not in the FIPS baseline: %s", p.Package, name, strings.Join(p.Panic.Messages, "; "))
 	}
 	for _, message := range p.Panic.Messages {
@@ -144,7 +153,7 @@ func attributePanic(module string, p *packageRun, b *baseline) (*entry, string) 
 	if !hasFrame(p.Panic.Frames, e.Frame) {
 		return nil, fmt.Sprintf("%s %s: the panicking goroutine's stack does not pass through %s", p.Package, name, e.Frame)
 	}
-	if testFrame := module + "/" + p.Package + "." + name; !hasFrame(p.Panic.Frames, testFrame) {
+	if testFrame := module + "/" + p.Package + "." + name; !hasTestFrame(p.Panic.Frames, testFrame) {
 		return nil, fmt.Sprintf("%s %s: the panicking goroutine's stack does not pass through %s: the panic is not the listed test's", p.Package, name, testFrame)
 	}
 	return e, ""
@@ -155,6 +164,18 @@ func attributePanic(module string, p *packageRun, b *baseline) (*entry, string) 
 func hasFrame(frames []string, function string) bool {
 	for _, frame := range frames {
 		if strings.HasPrefix(frame, function+"(") {
+			return true
+		}
+	}
+	return false
+}
+
+// hasTestFrame reports whether frames holds a call of the test function
+// test or of one of its closures, test.funcN: a subtest's goroutine runs
+// the closure its parent passed to t.Run, not the parent itself.
+func hasTestFrame(frames []string, test string) bool {
+	for _, frame := range frames {
+		if strings.HasPrefix(frame, test+"(") || strings.HasPrefix(frame, test+".func") {
 			return true
 		}
 	}

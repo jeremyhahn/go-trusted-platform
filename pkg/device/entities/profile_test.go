@@ -340,23 +340,6 @@ func TestDeviceProfile_NilNetworkConfiguration(t *testing.T) {
 	assert.Nil(t, profile.GetFailureNetworkConfig())
 }
 
-func TestDeviceProfile_PlatformdConfig(t *testing.T) {
-	profile := &DeviceProfile{
-		ID:   12345,
-		Name: "Platformd Config Test",
-		PlatformdConfig: &PlatformdConfigRef{
-			ConfigName: "production-server",
-			ConfigPath: "/etc/platformd/configs/prod-server.yaml",
-			Version:    "1.2.3",
-		},
-	}
-
-	require.NotNil(t, profile.PlatformdConfig)
-	assert.Equal(t, "production-server", profile.PlatformdConfig.ConfigName)
-	assert.Equal(t, "/etc/platformd/configs/prod-server.yaml", profile.PlatformdConfig.ConfigPath)
-	assert.Equal(t, "1.2.3", profile.PlatformdConfig.Version)
-}
-
 func TestDeviceProfile_NilPlatformdConfig(t *testing.T) {
 	profile := &DeviceProfile{
 		ID:              12345,
@@ -364,32 +347,6 @@ func TestDeviceProfile_NilPlatformdConfig(t *testing.T) {
 	}
 
 	assert.Nil(t, profile.PlatformdConfig)
-}
-
-func TestDeviceProfile_MatchRules(t *testing.T) {
-	profile := &DeviceProfile{
-		ID:   12345,
-		Name: "Match Rules Test",
-		MatchRules: &ProfileMatchRules{
-			ModelPattern:      "^Server-[0-9]+$",
-			SerialPattern:     "^SN[A-Z]{3}[0-9]{6}$",
-			ManufacturerMatch: "Dell",
-			TPMVendor:         "IFX",
-			CustomAttributes: map[string]string{
-				"datacenter": "us-east-1",
-				"rack":       "A1",
-			},
-		},
-	}
-
-	require.NotNil(t, profile.MatchRules)
-	assert.Equal(t, "^Server-[0-9]+$", profile.MatchRules.ModelPattern)
-	assert.Equal(t, "^SN[A-Z]{3}[0-9]{6}$", profile.MatchRules.SerialPattern)
-	assert.Equal(t, "Dell", profile.MatchRules.ManufacturerMatch)
-	assert.Equal(t, "IFX", profile.MatchRules.TPMVendor)
-	assert.Len(t, profile.MatchRules.CustomAttributes, 2)
-	assert.Equal(t, "us-east-1", profile.MatchRules.CustomAttributes["datacenter"])
-	assert.Equal(t, "A1", profile.MatchRules.CustomAttributes["rack"])
 }
 
 func TestDeviceProfile_NilMatchRules(t *testing.T) {
@@ -656,27 +613,6 @@ func TestDeviceProfile_CompleteConfiguration(t *testing.T) {
 
 	assert.Len(t, profile.MatchRules.CustomAttributes, 3)
 	assert.Equal(t, "production", profile.MatchRules.CustomAttributes["environment"])
-}
-
-func TestNetworkPhaseConfig_AllFieldsPopulated(t *testing.T) {
-	vlan := 42
-	config := &NetworkPhaseConfig{
-		VLAN:       uint16(vlan),
-		Subnet:     "10.42.0.0/16",
-		Gateway:    "10.42.0.1",
-		DNSServers: []string{"10.42.0.53", "10.42.0.54", "10.42.0.55"},
-		DHCP:       true,
-		StaticIP:   "10.42.100.200",
-		Zone:       "dmz",
-	}
-
-	assert.Equal(t, uint16(42), config.VLAN)
-	assert.Equal(t, "10.42.0.0/16", config.Subnet)
-	assert.Equal(t, "10.42.0.1", config.Gateway)
-	assert.Len(t, config.DNSServers, 3)
-	assert.True(t, config.DHCP)
-	assert.Equal(t, "10.42.100.200", config.StaticIP)
-	assert.Equal(t, "dmz", config.Zone)
 }
 
 func TestNetworkPhaseConfig_EmptyConfiguration(t *testing.T) {

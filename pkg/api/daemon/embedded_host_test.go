@@ -102,6 +102,32 @@ func TestNewEmbeddedHost_ServesTheAuthenticatorServices(t *testing.T) {
 	}
 }
 
+// TestNewEmbeddedHost_ServesTheBarrierService: the embedded registry carries
+// the daemon's Barrier service, the one gRPC and the Unix socket serve, so
+// BarrierService is reachable in-process (#1690).
+func TestNewEmbeddedHost_ServesTheBarrierService(t *testing.T) {
+	host, err := NewEmbeddedHost(testConfig(filepath.Join(t.TempDir(), "platformd.sock")))
+	if err != nil {
+		t.Fatalf("NewEmbeddedHost: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := host.Stop(context.Background()); err != nil {
+			t.Errorf("Stop: %v", err)
+		}
+	})
+
+	if host.daemon.BarrierGRPCService() == nil {
+		t.Fatal("the daemon keeps no Barrier service")
+	}
+	services := host.daemon.embeddedServices()
+	if services.Barrier == nil {
+		t.Fatal("embeddedServices().Barrier is nil")
+	}
+	if services.Barrier != platformv1.BarrierServiceServer(host.daemon.BarrierGRPCService()) {
+		t.Errorf("Barrier = %v, want the daemon's service", services.Barrier)
+	}
+}
+
 // The embedder's wiring is handed the hosted daemon; without a hook there is
 // nothing to wire.
 func TestEmbeddedHost_WireBackendsReceivesTheDaemon(t *testing.T) {
