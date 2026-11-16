@@ -132,8 +132,13 @@ func (s *Service) retryPeerReconcile(ctx context.Context) {
 		stored[l.ID] = true
 	}
 	for kind, held := range due {
-		r, ok := s.deps.DataPlanes[kind].(PeerReconciler)
+		plane, ok := s.deps.DataPlanes[kind]
 		if !ok {
+			continue
+		}
+		r, ok := plane.(PeerReconciler)
+		if !ok {
+			s.retryPeerRemovals(ctx, kind, plane, held, stored)
 			continue
 		}
 		// A held lease was rejected: its record may still be stored when
@@ -154,6 +159,28 @@ func (s *Service) retryPeerReconcile(ctx context.Context) {
 			if h, err := s.holdsAddress(ctx, l); err == nil && h {
 				s.releaseAddress(ctx, l.Address)
 			}
+		}
+	}
+}
+
+// retryPeerRemovals retries, on a plane that cannot reconcile, the removal
+// of each owed peer; a peer removed (or already gone) releases its address
+// unless its lease is still stored, and a failure stays owed.
+func (s *Service) retryPeerRemovals(ctx context.Context, kind DataPlaneKind, plane DataPlane, held []*Lease, stored map[LeaseID]bool) {
+	for _, l := range held {
+		err := plane.RemovePeer(ctx, l.ID)
+		var nf *ErrLeaseNotFound
+		if err != nil && !errors.As(err, &nf) {
+			s.logger.Warn("vpn: owed peer removal failed again",
+				slog.String("data_plane", string(kind)), slog.String("lease", string(l.ID)), slog.Any("error", err))
+			s.owePeerRetry(kind, l)
+			continue
+		}
+		if stored[l.ID] {
+			continue
+		}
+		if h, err := s.holdsAddress(ctx, l); err == nil && h {
+			s.releaseAddress(ctx, l.Address)
 		}
 	}
 }

@@ -131,9 +131,13 @@ func (s *Service) Admit(ctx context.Context, req *AdmissionRequest) (*Lease, err
 	if err := s.deps.Leases.Put(ctx, lease); err != nil {
 		if rmErr := plane.RemovePeer(ctx, lease.ID); rmErr != nil {
 			// Both the store and the datapath failed: the peer may be live
-			// with no lease behind it, and the operator must be told.
-			s.logger.Warn("vpn.admit: peer left in the datapath after a lease-store failure",
+			// with no lease behind it. Owe its removal to the sweep and
+			// hold the address until then, so no other device gets it
+			// while this peer may still route it.
+			s.logger.Warn("vpn.admit: peer left in the datapath after a lease-store failure; owed to the sweep",
 				slog.String("lease", string(lease.ID)), slog.Any("error", rmErr))
+			s.owePeerRetry(lease.DataPlane, lease)
+			return nil, s.refuse(ctx, req.DeviceID, &ErrLeaseStoreUnavailable{Cause: err})
 		}
 		s.releaseAddress(ctx, addr)
 		return nil, s.refuse(ctx, req.DeviceID, &ErrLeaseStoreUnavailable{Cause: err})
@@ -278,8 +282,11 @@ func (s *Service) OwnLease(ctx context.Context, id LeaseID, peer *calleradmissio
 // under a lease a restart restores would be a session the gateway and its
 // next start disagree on. Any other store error still tears the lease down,
 // because a lease past its authority is dead whether or not its record went;
-// the peer is removed even when that error is returned, and a removal error
-// is returned so the caller retries the peer.
+// the peer is removed even when that error is returned. A peer the plane
+// failed to remove is never forgotten: its removal is owed to the next
+// Sweep, which retries it, and the address stays held until the peer is
+// gone, so it cannot go to another device while the revoked key may still
+// pass traffic. The removal error is returned too.
 func (s *Service) revoke(ctx context.Context, lease *Lease, reason RevokeReason) error {
 	var storeErr error
 	if err := s.deps.Leases.Delete(ctx, lease.ID); err != nil {
@@ -298,7 +305,11 @@ func (s *Service) revoke(ctx context.Context, lease *Lease, reason RevokeReason)
 			planeErr = &ErrDataPlaneUnavailable{Kind: lease.DataPlane, Cause: err}
 		}
 	}
-	s.releaseAddress(ctx, lease.Address)
+	if planeErr != nil {
+		s.owePeerRetry(lease.DataPlane, lease)
+	} else {
+		s.releaseAddress(ctx, lease.Address)
+	}
 	s.revocations.inc(string(reason))
 	s.logger.Info("vpn.revoke", slog.String("lease", string(lease.ID)), slog.String("device", lease.DeviceID), slog.String("reason", string(reason)))
 	return errors.Join(storeErr, planeErr)
