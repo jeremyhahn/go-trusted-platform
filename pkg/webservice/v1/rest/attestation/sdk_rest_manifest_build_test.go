@@ -100,11 +100,13 @@ func TestSDKREST_ManifestBuildAndVerify(t *testing.T) {
 	})
 
 	t.Run("build refused", func(t *testing.T) {
-		fake := &recordingAttestationServer{err: status.Error(codes.FailedPrecondition, "no TPM")}
+		fake := &recordingAttestationServer{err: status.Error(codes.PermissionDenied, "caller not admitted")}
 		client := connectManifestBuildSDK(t, fake)
 
 		_, err := client.BuildManifest(ctx, &platformv1.BuildManifestRequest{Nonce: []byte("n-1")})
 		require.Error(t, err)
-		assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+		// The handler answers PermissionDenied as 403, which the SDK reads
+		// back as PermissionDenied (a missing route would be NotFound).
+		assert.Equal(t, codes.PermissionDenied, status.Code(err))
 	})
 }
