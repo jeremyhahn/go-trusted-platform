@@ -181,9 +181,9 @@ MCP: eleven tools.
 | Version | `GET /api/v1/platform/version` | `GetVersion` | `OpDaemonVersion` (`0x8A`) | `platform_daemon_version` | ✅ |
 | System info | `GET /api/v1/platform/system` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
 | **Shutdown** | `MISSING — docs/13 G7` | `Shutdown` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
-| Get config | `GET /api/v1/platform/config` | `GetConfig` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
+| Get config | `GET /api/v1/platform/config` | `GetConfig` | `MISSING — docs/13 G7` | `platform_daemon_get_config` | ✅ |
 | Update config | `MISSING — docs/13 G7` | `UpdateConfig` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
-| Reload config | `POST /api/v1/platform/config/reload` | `ReloadConfig` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | ✅ |
+| Reload config | `POST /api/v1/platform/config/reload` | `ReloadConfig` | `MISSING — docs/13 G7` | `platform_daemon_reload_config` | ✅ |
 | **Validate config** | `POST /api/v1/platform/config/validate` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | `MISSING — docs/13 G7` | — |
 | List services | `GET /api/v1/platform/services` | `ListServices` | `OpDaemonListServices` (`0x8B`) | `platform_daemon_list_services` | ✅ |
 | Get service | `GET /api/v1/platform/services/{service}` | `GetServiceStatus` | `OpDaemonGetService` (`0x8C`) | `platform_daemon_get_service` | ✅ |

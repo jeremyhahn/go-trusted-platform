@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/channelbind"
 )
 
 // AuthorizationChecker validates tool authorization.
@@ -735,6 +736,10 @@ func toolPermissionCatalog() map[string]string {
 	permissions["platform_daemon_start_service"] = "platform:write"
 	permissions["platform_daemon_stop_service"] = "platform:write"
 	permissions["platform_daemon_restart_service"] = "platform:write"
+	// GetConfig and ReloadConfig carry the scopes of their gRPC twins
+	// (/platform.v1.PlatformDaemon/GetConfig and /ReloadConfig).
+	permissions["platform_daemon_get_config"] = "platform:read"
+	permissions["platform_daemon_reload_config"] = "platform:write"
 
 	// Provisioning tools (#304) take the scope of their gRPC
 	// ConfigDeliveryService twin. The operator session tools need a
@@ -793,85 +798,17 @@ func (c *AuthorizationChecker) AuthorizeTool(ctx context.Context, toolName strin
 		return ctx, nil
 	}
 
-	// Under mTLS the verified client certificate authenticates a tokenless
-	// request, as on REST, gRPC and QUIC. A presented token never takes this
-	// path: it is validated by the token backend below.
-	if token == "" && c.peerAuthenticator != nil {
-		return c.authorizePeer(ctx, permission)
+	authCtx, outcome, authErr := c.authenticate(ctx, token, scopeForToolPermission(permission))
+	if authErr != nil {
+		return ctx, authErr
+	}
+	if outcome == authScoped {
+		return authCtx, nil
 	}
 
-	// With no authorization backend there is nothing that can grant the
-	// permission this tool requires, so the tool is refused (#440).
-	//
-	// This used to be the FIRST check and it returned allow: "when no
-	// authorization backend is configured, allow all operations", for test
-	// mode and standalone deployments. That made a missing backend -- the
-	// daemon's "MCP server running without QuicBaaS authorization" warning,
-	// reached whenever the IAM wiring fails at startup -- serve every
-	// registered tool to any caller with no token, including the tools #300
-	// made refuse for lack of a mapping and the BMC power controls #313
-	// classified. A default that allows when the deciding component is
-	// absent is the shape #300 closed one layer up; this closes it here.
-	// Explicitly open tools ("") stay open, because "" means no permission
-	// is required of anyone, backend or not. Test code that needs a tool to
-	// execute configures a backend, as production does.
-	if c.authService == nil && c.authManager == nil {
-		return ctx, &AuthorizationError{
-			Type:    AuthErrorMissingToken,
-			Message: "Authentication required for this operation: no authorization backend is configured",
-		}
-	}
-
-	// Token required for protected tools
-	if token == "" {
-		return ctx, &AuthorizationError{
-			Type:    AuthErrorMissingToken,
-			Message: "Authentication required for this operation",
-		}
-	}
-
-	// Prefer the platform-token (claims) path when the AuthManager supports it:
-	// validate the token, project scp -> RBAC / tenant_id -> RLS, stash the
-	// AuthorizedContext, and enforce the tool's required scope against it.
-	//
-	// The tool's required scope is enforced INSIDE the validator: pass it as
-	// requiredPerm so the offline scope check and online liveness run in one
-	// pipeline. A scope denial surfaces as a *platformtoken.ScopeDeniedError;
-	// every other failure (auth, liveness) is an invalid/expired token.
-	if cv, ok := c.authManager.(ClaimsAuthManager); ok && cv != nil {
-		scope := scopeForToolPermission(permission)
-		authCtx, err := cv.AuthorizeToken(ctx, token, scope, "", "", "")
-		if err != nil {
-			var scopeErr *platformtoken.ScopeDeniedError
-			if errors.As(err, &scopeErr) {
-				return ctx, &AuthorizationError{
-					Type:    AuthErrorPermissionDenied,
-					Message: "Permission denied: insufficient privileges",
-				}
-			}
-			return ctx, &AuthorizationError{
-				Type:    AuthErrorInvalidToken,
-				Message: "Invalid or expired token",
-			}
-		}
-		// The token goes on ctx with its grant, whether it came in the
-		// params or the request: a tool that accepts only a token's grant,
-		// never a peer certificate's, tells the two apart by it.
-		return ContextWithAuthorizedContext(ContextWithToken(ctx, token), authCtx), nil
-	}
-
-	// Validate token if auth manager configured (legacy bool-only path)
-	if c.authManager != nil {
-		valid, err := c.authManager.ValidateToken(ctx, token)
-		if err != nil || !valid {
-			return ctx, &AuthorizationError{
-				Type:    AuthErrorInvalidToken,
-				Message: "Invalid or expired token",
-			}
-		}
-	}
-
-	// Check permission if authorization service configured
+	// Check permission if authorization service configured: the token was
+	// validated without a scope (legacy path) or not verified at all
+	// (authService only), so the service decides the permission.
 	if c.authService != nil {
 		// Parse permission into resource and action
 		parts := strings.SplitN(permission, ":", 2)
@@ -895,6 +832,146 @@ func (c *AuthorizationChecker) AuthorizeTool(ctx context.Context, toolName strin
 	}
 
 	return ctx, nil
+}
+
+// Authenticate establishes that the caller is a principal, with the same
+// authentication branches as AuthorizeTool but no tool permission lookup
+// and no scope check. Listing methods (tools/list, resources/list) call it
+// so an anonymous client cannot enumerate the catalogue, as the REST stack
+// answers the equivalent with 401 (#414).
+//
+// A tokenless request under mTLS authenticates with its verified client
+// certificate. With no authorization backend nothing can establish a
+// principal, so the request is refused (#440). A token is validated by the
+// claims path (empty requiredPerm: liveness kept, scope skipped) or the
+// legacy ValidateToken. With only an authService configured no backend
+// verifies a presented token (that service checks permissions, not
+// identity), so the token is refused as invalid: an arbitrary string is
+// not a principal (#1879).
+func (c *AuthorizationChecker) Authenticate(ctx context.Context, token string) *AuthorizationError {
+	_, outcome, authErr := c.authenticate(ctx, token, "")
+	if authErr != nil {
+		return authErr
+	}
+	if outcome == authUnverified {
+		return &AuthorizationError{
+			Type:    AuthErrorInvalidToken,
+			Message: "Invalid or expired token: no authentication backend can verify it",
+		}
+	}
+	return nil
+}
+
+// authOutcome says how far authenticate established the caller.
+type authOutcome int
+
+const (
+	// authScoped: the caller is a verified principal and the requested
+	// scope (if any) was enforced; the returned context carries the
+	// AuthorizedContext.
+	authScoped authOutcome = iota
+	// authValidated: the legacy AuthManager validated the token, but no
+	// scope was enforced.
+	authValidated
+	// authUnverified: a token was presented but no backend verified it
+	// (only an authService is configured).
+	authUnverified
+)
+
+// authenticate holds the authentication branches shared by AuthorizeTool and
+// Authenticate. scope is the required scope enforced on the peer and claims
+// paths; empty skips the scope check.
+//
+// Under mTLS the verified client certificate authenticates a tokenless
+// request, as on REST, gRPC and QUIC. A presented token never takes that
+// path: it is validated by the token backend.
+//
+// With no authorization backend there is nothing that can grant a
+// permission or establish a principal, so the request is refused (#440).
+// This used to allow everything "for test mode and standalone deployments",
+// which served every tool to any caller whenever the IAM wiring failed at
+// startup; a default that allows when the deciding component is absent is
+// the shape #300 closed one layer up.
+func (c *AuthorizationChecker) authenticate(ctx context.Context, token, scope string) (context.Context, authOutcome, *AuthorizationError) {
+	if token == "" && c.peerAuthenticator != nil {
+		state, _, _ := channelbind.ConnectionTLS(ctx)
+		if state == nil || len(state.VerifiedChains) == 0 || len(state.VerifiedChains[0]) == 0 {
+			return ctx, authUnverified, &AuthorizationError{
+				Type:    AuthErrorMissingToken,
+				Message: "Authentication required for this operation: no bearer token and no verified client certificate",
+			}
+		}
+		authCtx, err := c.peerAuthenticator.AuthenticatePeer(ctx, state.VerifiedChains[0])
+		if err != nil || authCtx == nil {
+			return ctx, authUnverified, &AuthorizationError{
+				Type:    AuthErrorInvalidToken,
+				Message: "Invalid client certificate",
+			}
+		}
+		if scope != "" {
+			if err := authCtx.RequireScope(scope); err != nil {
+				return ctx, authUnverified, &AuthorizationError{
+					Type:    AuthErrorPermissionDenied,
+					Message: "Permission denied: insufficient privileges",
+				}
+			}
+		}
+		return ContextWithAuthorizedContext(ctx, authCtx), authScoped, nil
+	}
+
+	if c.authService == nil && c.authManager == nil {
+		return ctx, authUnverified, &AuthorizationError{
+			Type:    AuthErrorMissingToken,
+			Message: "Authentication required for this operation: no authorization backend is configured",
+		}
+	}
+
+	if token == "" {
+		return ctx, authUnverified, &AuthorizationError{
+			Type:    AuthErrorMissingToken,
+			Message: "Authentication required for this operation",
+		}
+	}
+
+	// Prefer the platform-token (claims) path when the AuthManager supports
+	// it: the scope is enforced INSIDE the validator so the offline scope
+	// check and online liveness run in one pipeline. A scope denial surfaces
+	// as a *platformtoken.ScopeDeniedError; every other failure (auth,
+	// liveness) is an invalid/expired token.
+	if cv, ok := c.authManager.(ClaimsAuthManager); ok && cv != nil {
+		authCtx, err := cv.AuthorizeToken(ctx, token, scope, "", "", "")
+		if err != nil {
+			var scopeErr *platformtoken.ScopeDeniedError
+			if errors.As(err, &scopeErr) {
+				return ctx, authUnverified, &AuthorizationError{
+					Type:    AuthErrorPermissionDenied,
+					Message: "Permission denied: insufficient privileges",
+				}
+			}
+			return ctx, authUnverified, &AuthorizationError{
+				Type:    AuthErrorInvalidToken,
+				Message: "Invalid or expired token",
+			}
+		}
+		// The token goes on ctx with its grant, whether it came in the
+		// params or the request: a tool that accepts only a token's grant,
+		// never a peer certificate's, tells the two apart by it.
+		return ContextWithAuthorizedContext(ContextWithToken(ctx, token), authCtx), authScoped, nil
+	}
+
+	// Legacy bool-only path.
+	if c.authManager != nil {
+		valid, err := c.authManager.ValidateToken(ctx, token)
+		if err != nil || !valid {
+			return ctx, authUnverified, &AuthorizationError{
+				Type:    AuthErrorInvalidToken,
+				Message: "Invalid or expired token",
+			}
+		}
+		return ctx, authValidated, nil
+	}
+
+	return ctx, authUnverified, nil
 }
 
 // IsEnabled returns true if authorization checking is enabled.

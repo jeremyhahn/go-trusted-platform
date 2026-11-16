@@ -28,6 +28,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
@@ -117,6 +118,13 @@ var quicStatuses = map[codes.Code]byte{
 func Code(err error) codes.Code {
 	if err == nil {
 		return codes.OK
+	}
+	// Typed device profile validation failures are invalid input on every
+	// transport (MCP falls back to this classifier).
+	var diceID entities.ErrInvalidDICEDeviceID
+	var fwHash entities.ErrInvalidGoldenFWHash
+	if errors.As(err, &diceID) || errors.As(err, &fwHash) {
+		return codes.InvalidArgument
 	}
 	for _, classify := range classifiers {
 		if class, ok := classify(err); ok {

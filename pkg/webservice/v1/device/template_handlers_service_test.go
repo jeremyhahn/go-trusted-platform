@@ -198,6 +198,21 @@ func TestTemplateHandler_CreateProfileFromTemplate_RealService(t *testing.T) {
 	assert.NotEqual(t, http.StatusCreated, rec.Code, rec.Body.String())
 }
 
+// Invalid DICE overrides are a client error on the template path too, not a
+// server fault (#1699, Codex round 3).
+func TestTemplateHandler_CreateProfileFromTemplate_InvalidDICEFields_Are400(t *testing.T) {
+	h, templates, _ := newServiceTemplateHandler(t)
+	require.NoError(t, templates.Save(context.Background(), &entities.DeviceTemplate{
+		ID: 7199, Name: "avr", Role: entities.DeviceRoleWorker,
+	}))
+
+	for _, field := range []string{`"dice_device_id":"zz"`, `"golden_fw_hash":"aa"`} {
+		rec := serveTemplateRoute(h.CreateProfileFromTemplate, http.MethodPost, "/t/{id}/create-profile", "/t/7199/create-profile",
+			`{"overrides":{"name":"avr-01",`+field+`}}`)
+		assert.Equal(t, http.StatusBadRequest, rec.Code, "%s: %s", field, rec.Body.String())
+	}
+}
+
 // TestTemplateHandler_FindConfigForDevice resolves an assigned profile by
 // either identity, and refuses a request that names neither or an unknown one.
 func TestTemplateHandler_FindConfigForDevice(t *testing.T) {
