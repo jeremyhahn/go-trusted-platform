@@ -2571,12 +2571,16 @@ func TestRelaunch_AVPNRelaunchWhoseServiceFailsToStartIsRetried(t *testing.T) {
 	launcher.mu.Unlock()
 	vpn.setHealth(gateway.ServiceManagementVPN, true, nil)
 
+	// The stopped child shares the fake's vpn node, so until it is reaped
+	// its client can read the healthy status set above. Health alone is not
+	// the verdict: the fifth launch has to be there too.
+	launches := 0
 	require.Eventually(t, func() bool {
-		return supervisor.ServiceHealth(gateway.ServiceManagementVPN) == nil
+		launcher.mu.Lock()
+		launches = len(launcher.children)
+		launcher.mu.Unlock()
+		return launches >= 5 && supervisor.ServiceHealth(gateway.ServiceManagementVPN) == nil
 	}, 5*time.Second, 10*time.Millisecond, "the vpn child is relaunched again and comes up")
-	launcher.mu.Lock()
-	launches := len(launcher.children)
-	launcher.mu.Unlock()
 	assert.GreaterOrEqual(t, launches, 5, "the vpn child is relaunched after the failed start")
 }
 
