@@ -562,24 +562,35 @@ func TestServeProcess_NotifiesReadyOnceItsServicesStart(t *testing.T) {
 }
 
 func TestServeProcess_AFailedStartSendsNoReady(t *testing.T) {
+	const marker = "secret-marker-1193"
 	sock := bindTestNotifySocket(t)
 	run := newServiceRun()
-	run.handler.startErr = &gateway.ErrNilServiceHandler{}
+	run.handler.startErr = errors.New("start failed: " + marker)
 	opts := serviceTestOptions(t)
 
 	cancel, done := startServiceProcess(t, "routing", run, opts)
-	require.Eventually(t, func() bool {
-		startErr, _, ok := processStatus(t, opts.socket)
-		return ok && startErr != ""
-	}, 5*time.Second, 10*time.Millisecond, "the supervisor must read the start error")
 
-	msg, err := sock.Receive(time.Now().Add(200 * time.Millisecond))
-	if err == nil {
-		assert.False(t, msg.Ready, "a child whose services failed to start never sends READY=1")
-	}
+	msg, err := sock.Receive(time.Now().Add(5 * time.Second))
+	require.NoError(t, err, "a child whose services failed to start sends a STATUS=")
+	require.True(t, msg.HasStatus, "the first datagram carries STATUS=")
+	assert.Contains(t, msg.Status, "routing", "the STATUS= names the process")
+	assert.NotContains(t, msg.Status, marker, "the start error never goes through the notify socket")
+	assert.False(t, msg.Ready, "a child whose services failed to start never sends READY=1")
 
 	cancel()
-	<-done
+	for {
+		m, err := sock.Receive(time.Now().Add(2 * time.Second))
+		if err != nil {
+			break
+		}
+		assert.False(t, m.Ready, "a child whose services failed to start never sends READY=1")
+		assert.NotContains(t, m.Status, marker, "the start error never goes through the notify socket")
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("serveProcess did not return after cancel")
+	}
 }
 
 func TestServeProcess_TheVPNProcessWiresItsLeaseRecord(t *testing.T) {
