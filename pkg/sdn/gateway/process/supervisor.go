@@ -172,6 +172,9 @@ type supervised struct {
 	// notify is the current child's sd_notify socket, bound under the
 	// runtime directory and passed to it as NOTIFY_SOCKET.
 	notify *NotifySocket
+	// ready is the current child's readiness signal: its notify reader
+	// closes it on the child's first READY=1. Each launch makes a new one.
+	ready chan struct{}
 	// cancel stops the watch goroutine and the launch context.
 	cancel context.CancelFunc
 	// done closes when the watch goroutine has exited.
@@ -630,6 +633,8 @@ func (s *Supervisor) launch(ctx context.Context, proc *supervised) error {
 	proc.client = client
 	proc.notify = notify
 	published = true
+	ready := make(chan struct{})
+	proc.ready = ready
 	proc.cancel = cancel
 	proc.startedAt = s.cfg.Clock.Now()
 	proc.failure = nil
@@ -637,7 +642,8 @@ func (s *Supervisor) launch(ctx context.Context, proc *supervised) error {
 	done := proc.done
 	s.mu.Unlock()
 
-	go s.watch(runCtx, proc, child, done)
+	go s.readNotify(proc.def.Name, notify, ready)
+	go s.watch(runCtx, proc, child, notify, done)
 
 	s.cfg.Logger.Info("gatewayd supervisor: process started",
 		slog.String("process", proc.def.Name),
@@ -662,10 +668,16 @@ func (s *Supervisor) awaitService(ctx context.Context, proc *supervised, service
 	deadline := s.cfg.Clock.Now().Add(s.cfg.ReadyTimeout)
 	var lastErr error
 	var detail string
+	var seen chan struct{}
 	for {
 		s.mu.Lock()
-		client, failure, restoring := proc.client, proc.failure, proc.restoring
+		client, failure, restoring, ready := proc.client, proc.failure, proc.restoring, proc.ready
 		s.mu.Unlock()
+		if ready == seen {
+			// Already woken by this child's READY=1: a closed channel in
+			// the select would spin the loop.
+			ready = nil
+		}
 		if failure != nil {
 			return &ErrProcessDown{Process: proc.def.Name, Service: service, Cause: failure}
 		}
@@ -715,6 +727,8 @@ func (s *Supervisor) awaitService(ctx context.Context, proc *supervised, service
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-ready:
+			seen = ready
 		case <-s.cfg.Clock.After(readyPollInterval):
 		}
 	}
@@ -726,12 +740,16 @@ const readyPollInterval = 25 * time.Millisecond
 
 // watch waits for the child to exit and restarts it while the parent still
 // wants services from it and its restart budget holds.
-func (s *Supervisor) watch(ctx context.Context, proc *supervised, child Child, done chan struct{}) {
+func (s *Supervisor) watch(ctx context.Context, proc *supervised, child Child, notify *NotifySocket, done chan struct{}) {
 	defer close(done)
 
 	waitErr := child.Wait()
 
 	s.mu.Lock()
+	// The child is reaped: its notify socket goes with it, which is what
+	// ends its reader. Nothing else would close it when no launch follows
+	// (an exhausted restart budget).
+	s.closeNotifyOfLocked(proc, notify)
 	// A stop cancelled the context: the exit is expected and the process
 	// stays down.
 	if ctx.Err() != nil || s.stopped || len(proc.wanted) == 0 {
@@ -853,10 +871,16 @@ func (s *Supervisor) awaitProcess(ctx context.Context, proc *supervised) error {
 	started := s.cfg.Clock.Now()
 	deadline := started.Add(s.cfg.ReadyTimeout)
 	var lastErr error
+	var seen chan struct{}
 	for {
 		s.mu.Lock()
-		client, failure := proc.client, proc.failure
+		client, failure, ready := proc.client, proc.failure, proc.ready
 		s.mu.Unlock()
+		if ready == seen {
+			// Already woken by this child's READY=1: a closed channel in
+			// the select would spin the loop.
+			ready = nil
+		}
 		if failure != nil {
 			return &ErrProcessDown{Process: proc.def.Name, Cause: failure}
 		}
@@ -879,6 +903,8 @@ func (s *Supervisor) awaitProcess(ctx context.Context, proc *supervised) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-ready:
+			seen = ready
 		case <-s.cfg.Clock.After(readyPollInterval):
 		}
 	}
@@ -968,7 +994,7 @@ func (s *Supervisor) releaseApply() {
 // next restart attempt does not race the last one's leftovers.
 func (s *Supervisor) stopUnservingChild(ctx context.Context, proc *supervised) {
 	s.mu.Lock()
-	child, cancel, done := proc.child, proc.cancel, proc.done
+	child, cancel, done, notify := proc.child, proc.cancel, proc.done, proc.notify
 	proc.cancel = nil
 	s.mu.Unlock()
 
@@ -981,6 +1007,9 @@ func (s *Supervisor) stopUnservingChild(ctx context.Context, proc *supervised) {
 		cancel()
 	}
 	if child == nil {
+		s.mu.Lock()
+		s.closeNotifyOfLocked(proc, notify)
+		s.mu.Unlock()
 		return
 	}
 	if err := s.terminate(context.WithoutCancel(ctx), proc.def.Name, child, done); err != nil {
@@ -990,6 +1019,9 @@ func (s *Supervisor) stopUnservingChild(ctx context.Context, proc *supervised) {
 	s.mu.Lock()
 	proc.child = nil
 	s.closeClientLocked(proc)
+	// The watch goroutine closes it on reaping; this covers a child that
+	// would not die, so its reader does not outlive the teardown.
+	s.closeNotifyOfLocked(proc, notify)
 	s.mu.Unlock()
 }
 
@@ -1028,6 +1060,51 @@ func (s *Supervisor) closeNotifyLocked(proc *supervised) {
 			slog.String("process", proc.def.Name), slog.Any("error", err))
 	}
 	proc.notify = nil
+}
+
+// closeNotifyOfLocked closes notify only while it is still proc's current
+// notify socket: a newer launch's socket is never closed on behalf of an
+// older child, and a socket already closed (proc.notify reset to nil) is not
+// closed twice. The caller holds s.mu.
+func (s *Supervisor) closeNotifyOfLocked(proc *supervised, notify *NotifySocket) {
+	if notify == nil || proc.notify != notify {
+		return
+	}
+	s.closeNotifyLocked(proc)
+}
+
+// readNotify reads one child's notify socket until closeNotifyLocked closes
+// it. It closes ready on the child's first READY=1, so a wait for the child
+// asks again at once rather than a poll interval later; the poll stays the
+// fallback for a child that never notifies. It touches no proc field: the
+// socket and the channel are its own launch's, passed in.
+func (s *Supervisor) readNotify(process string, notify *NotifySocket, ready chan struct{}) {
+	signalled := false
+	for {
+		msg, err := notify.Receive(time.Time{})
+		if err != nil {
+			var sockErr *ErrNotifySocket
+			if errors.As(err, &sockErr) {
+				// Closed by closeNotifyLocked: this child's socket is gone.
+				return
+			}
+			s.cfg.Logger.Warn("gatewayd supervisor: unparsable notify datagram",
+				slog.String("process", process), slog.Any("error", err))
+			continue
+		}
+		if msg.Status != "" {
+			s.cfg.Logger.Debug("gatewayd supervisor: process status",
+				slog.String("process", process), slog.Int("pid", msg.Pid), slog.String("status", msg.Status))
+		}
+		if msg.Stopping {
+			s.cfg.Logger.Info("gatewayd supervisor: process stopping",
+				slog.String("process", process), slog.Int("pid", msg.Pid))
+		}
+		if msg.Ready && !signalled {
+			signalled = true
+			close(ready)
+		}
+	}
 }
 
 // StopService implements gateway.ServiceSupervisor: the service is released,

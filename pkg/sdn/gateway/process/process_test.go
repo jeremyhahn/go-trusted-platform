@@ -441,6 +441,9 @@ type fakeLauncher struct {
 	// loop can outrun (#742).
 	failCount int
 	nextPID   int
+	// pid, when set, is the pid every child reports instead of a counted
+	// one; os.Getpid() lets a test's own Notify pass the pid check.
+	pid int
 	// gate, when set, blocks inside Launch until it is closed, so a test
 	// can run a stop while a launch is in flight. launched is closed once
 	// Launch has been entered.
@@ -523,6 +526,9 @@ func (l *fakeLauncher) Launch(ctx context.Context, spec Spec) (Child, error) {
 	}
 	l.nextPID++
 	pid := l.nextPID
+	if l.pid != 0 {
+		pid = l.pid
+	}
 	l.mu.Unlock()
 	if failure != nil {
 		return nil, &ErrProcessLaunch{Process: spec.Definition.Name, Cause: failure}
@@ -1147,6 +1153,208 @@ func TestSupervisor_StopRemovesTheNotifySocket(t *testing.T) {
 	assert.ErrorIs(t, err, os.ErrNotExist, "stopping the last service closes and removes the socket")
 }
 
+// notifyState returns a process's current notify socket and the ready
+// channel its reader closes on the first READY=1.
+func (s *Supervisor) notifyState(t *testing.T, process string) (*NotifySocket, <-chan struct{}) {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	proc := s.processes[process]
+	require.NotNil(t, proc, "process %s is supervised", process)
+	return proc.notify, proc.ready
+}
+
+func TestSupervisor_ReadyNotifyIsRecorded(t *testing.T) {
+	// docs/gateway/supervisor.md: the supervisor reads each child's notify
+	// socket and records its READY=1 (#1193 slice 3).
+	supervisor, launcher, _ := newSupervisor(t, nil)
+	launcher.pid = os.Getpid()
+	ctx := testContext(t)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceProxy))
+	spec := launcher.lastSpec(t)
+	_, ready := supervisor.notifyState(t, spec.Definition.Name)
+	require.NotNil(t, ready)
+
+	t.Setenv(NotifySocketEnv, spec.NotifySocket)
+	require.NoError(t, Notify("STATUS=serving\nREADY=1"))
+	select {
+	case <-ready:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the supervisor never saw the child's READY=1")
+	}
+}
+
+func TestSupervisor_AwaitWakesOnReady(t *testing.T) {
+	// A child that is still starting at the first status question is asked
+	// again as soon as it sends READY=1, not a poll interval later.
+	supervisor, launcher, clock := newSupervisor(t, nil)
+	launcher.pid = os.Getpid()
+	node := launcher.node("datapath", nil)
+	node.services = []gateway.ServiceReport{{Name: gateway.ServiceLoadBalancer, Active: true}}
+	// awaitProcess's question takes the first reply, awaitService's first
+	// question the second: both say the child is still starting.
+	node.startingPolls = 2
+	// The poll never fires on its own: only READY=1 can wake the wait.
+	held := clock.holdDelay(readyPollInterval)
+	released := false
+	defer func() {
+		if !released {
+			close(held.release)
+		}
+	}()
+
+	ctx := testContext(t)
+	result := make(chan error, 1)
+	go func() { result <- supervisor.StartService(ctx, gateway.ServiceLoadBalancer) }()
+	held.awaitEntered(t, ctx)
+
+	t.Setenv(NotifySocketEnv, launcher.lastSpec(t).NotifySocket)
+	require.NoError(t, Notify("READY=1"))
+	select {
+	case err := <-result:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		close(held.release)
+		released = true
+		<-result
+		t.Fatal("StartService waited out the poll instead of waking on READY=1")
+	}
+	assert.True(t, supervisor.ServiceActive(gateway.ServiceLoadBalancer))
+}
+
+func TestSupervisor_AwaitProcessWakesOnReady(t *testing.T) {
+	// A child that does not answer its first status question is asked again
+	// as soon as it sends READY=1: awaitProcess, not only awaitService,
+	// wakes on the notify (Codex P1, #1926).
+	supervisor, launcher, clock := newSupervisor(t, nil)
+	launcher.pid = os.Getpid()
+	node := launcher.node("datapath", nil)
+	node.services = []gateway.ServiceReport{{Name: gateway.ServiceLoadBalancer, Active: true}}
+	// The child does not listen yet, so awaitProcess's first status
+	// question fails and it goes to its poll wait.
+	listen := launcher.deferNextListen()
+	listened := false
+	defer func() {
+		if !listened {
+			close(listen)
+		}
+	}()
+	// The poll never fires on its own: only READY=1 can wake the wait.
+	held := clock.holdDelay(readyPollInterval)
+	released := false
+	defer func() {
+		if !released {
+			close(held.release)
+		}
+	}()
+
+	ctx := testContext(t)
+	result := make(chan error, 1)
+	go func() { result <- supervisor.StartService(ctx, gateway.ServiceLoadBalancer) }()
+	held.awaitEntered(t, ctx)
+
+	close(listen)
+	listened = true
+	t.Setenv(NotifySocketEnv, launcher.lastSpec(t).NotifySocket)
+	require.NoError(t, Notify("READY=1"))
+	select {
+	case err := <-result:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		close(held.release)
+		released = true
+		<-result
+		t.Fatal("awaitProcess waited out the poll instead of waking on READY=1")
+	}
+	assert.True(t, supervisor.ServiceActive(gateway.ServiceLoadBalancer))
+}
+
+func TestSupervisor_ReadyButInactiveTimesOut(t *testing.T) {
+	// READY=1 only wakes the wait: a child that notified but whose service
+	// never comes up is still polled, still held to ReadyTimeout, and
+	// stopped when it runs out.
+	const readyTimeout = 200 * time.Millisecond
+	supervisor, launcher, clock := newSupervisor(t, func(c *Config) { c.ReadyTimeout = readyTimeout })
+	launcher.pid = os.Getpid()
+	node := launcher.node("datapath", nil)
+	node.services = []gateway.ServiceReport{{Name: gateway.ServiceLoadBalancer, Active: true}}
+	node.startingPolls = math.MaxInt
+	// awaitProcess is answered at once; awaitService's first poll is held
+	// so READY=1 lands while it waits.
+	held := clock.holdDelay(readyPollInterval)
+	defer close(held.release)
+
+	ctx := testContext(t)
+	result := make(chan error, 1)
+	go func() { result <- supervisor.StartService(ctx, gateway.ServiceLoadBalancer) }()
+	held.awaitEntered(t, ctx)
+	clock.mu.Lock()
+	pollsBefore := countDelays(clock.delays, readyPollInterval)
+	clock.mu.Unlock()
+
+	t.Setenv(NotifySocketEnv, launcher.lastSpec(t).NotifySocket)
+	require.NoError(t, Notify("READY=1"))
+	var err error
+	select {
+	case err = <-result:
+	case <-ctx.Done():
+		t.Fatal("a ready but inactive child was waited on past ReadyTimeout")
+	}
+	var notActive *ErrServiceNotActiveInProcess
+	require.ErrorAs(t, err, &notActive, "the readiness deadline still bounds the wait after READY=1")
+	assert.Equal(t, gateway.ServiceLoadBalancer, notActive.Service)
+
+	clock.mu.Lock()
+	pollsAfter := countDelays(clock.delays, readyPollInterval) - pollsBefore
+	clock.mu.Unlock()
+	// Every collapsed poll moves the clock one interval on, so reaching the
+	// deadline after READY=1 took polls; half the timeout's worth leaves
+	// room for the real time the status questions took.
+	assert.GreaterOrEqual(t, pollsAfter, int(readyTimeout/readyPollInterval)/2,
+		"polling goes on after the readiness channel is closed")
+	assert.Contains(t, launcher.lastChild().signalled(), os.Signal(syscall.SIGTERM))
+	assert.False(t, supervisor.ServiceActive(gateway.ServiceLoadBalancer))
+}
+
+// countDelays is how many of the recorded clock waits were of length d.
+func countDelays(delays []time.Duration, d time.Duration) int {
+	n := 0
+	for _, delay := range delays {
+		if delay == d {
+			n++
+		}
+	}
+	return n
+}
+
+func TestSupervisor_WrongPidNotifyIsDropped(t *testing.T) {
+	// The fake child's pid is not this test's, so the test's datagram comes
+	// from the wrong sender: it is dropped and the child is not marked
+	// ready. The polled path still brings the service up (a child that
+	// never notifies is started the way it always was).
+	supervisor, launcher, _ := newSupervisor(t, nil)
+	node := launcher.node("datapath", nil)
+	node.services = []gateway.ServiceReport{{Name: gateway.ServiceLoadBalancer, Active: true}}
+	node.startingPolls = 3
+	ctx := testContext(t)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceLoadBalancer))
+	assert.True(t, supervisor.ServiceActive(gateway.ServiceLoadBalancer))
+
+	spec := launcher.lastSpec(t)
+	require.NotEqual(t, os.Getpid(), launcher.lastChild().PID())
+	notify, ready := supervisor.notifyState(t, spec.Definition.Name)
+	require.NotNil(t, notify)
+	t.Setenv(NotifySocketEnv, spec.NotifySocket)
+	require.NoError(t, Notify("READY=1"))
+	require.Eventually(t, func() bool { return notify.Dropped() > 0 }, 2*time.Second, 5*time.Millisecond,
+		"the datagram from the wrong pid is dropped")
+	select {
+	case <-ready:
+		t.Fatal("a READY=1 from the wrong pid marked the child ready")
+	default:
+	}
+}
+
 func TestExecLauncher_CancellingTheContextAsksTheChildToStopRatherThanKillingIt(t *testing.T) {
 	// exec.CommandContext's default cancellation is Process.Kill. A gatewayd
 	// child holds kernel state it withdraws on SIGTERM, so the launcher
@@ -1369,6 +1577,68 @@ func TestCrashLoop_StopsAtTheRestartBudget(t *testing.T) {
 	assert.Equal(t, "routing", exhausted.Process)
 	assert.Contains(t, exhausted.Error(), "restart budget")
 	assert.Equal(t, 3, launcher.launchCount(), "no fourth launch after the budget is gone")
+}
+
+// requireNotifySocketGone waits for the last launch's notify socket to be
+// closed: Close removes the path, and a closed socket is what ends the
+// launch's notify reader (Codex P1 #1926).
+func requireNotifySocketGone(t *testing.T, launcher *fakeLauncher, why string) {
+	t.Helper()
+	path := launcher.lastSpec(t).NotifySocket
+	require.NotEmpty(t, path)
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(path)
+		return os.IsNotExist(err)
+	}, 5*time.Second, 10*time.Millisecond, why)
+}
+
+func TestCrashLoop_ExhaustedBudgetClosesTheNotifySocket(t *testing.T) {
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
+		c.RestartBackoff = time.Millisecond
+		c.RestartBudget = 2
+	})
+	ctx := testContext(t)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceTransit))
+
+	child := launcher.lastChild()
+	for i := 0; i < 3; i++ {
+		child.exit(errors.New("signal: killed"))
+		if i < 2 {
+			child = awaitRelaunch(t, supervisor, launcher, "routing", i+2)
+		}
+	}
+	var exhausted *ErrRestartBudgetExhausted
+	require.Eventually(t, func() bool {
+		return errors.As(supervisor.ServiceHealth(gateway.ServiceTransit), &exhausted)
+	}, 20*time.Second, 10*time.Millisecond)
+
+	// No launch follows, so nothing else would ever close the dead child's
+	// socket and its reader would block in Receive for good.
+	requireNotifySocketGone(t, launcher, "the reaped child's notify socket is closed")
+}
+
+func TestRestart_AnUnservingChildsNotifySocketIsClosed(t *testing.T) {
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
+		c.RestartBackoff = time.Millisecond
+		c.ReadyTimeout = 150 * time.Millisecond
+		c.RestartBudget = 2
+	})
+	ctx := testContext(t)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceTransit))
+
+	launcher.mu.Lock()
+	launcher.mute = true
+	launcher.mu.Unlock()
+	launcher.lastChild().exit(errors.New("signal: killed"))
+
+	var exhausted *ErrRestartBudgetExhausted
+	require.Eventually(t, func() bool {
+		return errors.As(supervisor.ServiceHealth(gateway.ServiceTransit), &exhausted)
+	}, 10*time.Second, 20*time.Millisecond)
+
+	// The last attempt was torn down by stopUnservingChild: its socket
+	// goes with it.
+	requireNotifySocketGone(t, launcher, "an unserving child's notify socket is closed on teardown")
 }
 
 // provisioningConfig enables the three sections the provisioning process
