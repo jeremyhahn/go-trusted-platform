@@ -156,10 +156,24 @@ func (s *Service) retryPeerReconcile(ctx context.Context) {
 			if stored[l.ID] {
 				continue
 			}
-			if h, err := s.holdsAddress(ctx, l); err == nil && h {
-				s.releaseAddress(ctx, l.Address)
-			}
+			s.releaseOwedAddress(ctx, kind, l)
 		}
+	}
+}
+
+// releaseOwedAddress releases the address of an owed lease whose peer is
+// gone and whose record is no longer stored. The retry set is the only
+// place that still knows the allocation, so a failed lookup or release
+// puts the lease back on it for a later sweep.
+func (s *Service) releaseOwedAddress(ctx context.Context, kind DataPlaneKind, l *Lease) {
+	h, err := s.holdsAddress(ctx, l)
+	if err == nil && h {
+		err = s.deps.IPAM.Release(ctx, l.Address.Addr())
+	}
+	if err != nil {
+		s.logger.Warn("vpn: owed address release failed",
+			slog.String("data_plane", string(kind)), slog.String("lease", string(l.ID)), slog.Any("error", err))
+		s.owePeerRetry(kind, l)
 	}
 }
 
@@ -179,9 +193,7 @@ func (s *Service) retryPeerRemovals(ctx context.Context, kind DataPlaneKind, pla
 		if stored[l.ID] {
 			continue
 		}
-		if h, err := s.holdsAddress(ctx, l); err == nil && h {
-			s.releaseAddress(ctx, l.Address)
-		}
+		s.releaseOwedAddress(ctx, kind, l)
 	}
 }
 
