@@ -9,8 +9,10 @@
 
 - `platformctl luks` validates its input and reaches platformd over the active
   transport, where the go-luks2 backend runs the verb on the host's volume.
-  TPM enrollment is refused (*not wired*) until a boot unlock path can open
-  the slots it adds ([engineering.md](engineering.md) §6). FIDO2 enrollment
+  TPM enrollment seals the new slot's passphrase to the TPM and the initrd
+  opens that slot at boot from its `systemd-tpm2` token
+  ([engineering.md](engineering.md) §6); it is refused (*not wired*) only when
+  platformd could not open the TPM at startup. FIDO2 enrollment
   is refused (*not wired*) when platformd found no FIDO2 library at startup.
   A FIDO2 slot opens at boot only when `fido2` is one of the host's unlock
   methods.

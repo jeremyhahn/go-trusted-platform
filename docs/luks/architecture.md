@@ -75,8 +75,11 @@ sdk/go/services/luks  (Service)          pkg/api/daemon transport adapters
 the go-luks2 backend (`NewLUKSBackend`) and the effective-UID root checker into
 `LUKSService`, next to the ceremony backend. Its FIDO2 handler is the
 default one; the initrd FIDO2 strategy opens the slots it enrolls from their
-`fido2-manual` tokens. Its TPM handler is left unset until a boot unlock
-path consumes what it enrolls, so TPM enrollment answers *not wired*. When that wiring is refused (no SDK client), nothing is injected and
+`fido2-manual` tokens. Its TPM handler is the default one behind the
+PCR-index check; the initrd `TPMTokenStrategy` opens the slots it enrolls from
+their `systemd-tpm2` tokens (after the firstboot seal is confirmed, and with the
+platform PCR extended first). TPM enrollment answers *not wired* only when no
+TPM could be opened. When that wiring is refused (no SDK client), nothing is injected and
 every server transport answers *backend not configured* or *root required*.
 `platformctl luks` builds the SDK's `GRPCClient` from `platform.Client.LUKS()`
 and reaches the service over whichever transport is active.
