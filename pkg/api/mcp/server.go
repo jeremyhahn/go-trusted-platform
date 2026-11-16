@@ -480,6 +480,10 @@ func (s *Server) handleInitialize(ctx context.Context, req *mcpwire.JSONRPCReque
 
 // handleToolsList handles the "tools/list" method.
 func (s *Server) handleToolsList(ctx context.Context, req *mcpwire.JSONRPCRequest) *mcpwire.JSONRPCResponse {
+	if authErr := s.authenticateList(ctx, req); authErr != nil {
+		return s.handleAuthError(req.ID, authErr)
+	}
+
 	tools := s.tools.ListTools()
 
 	result := map[string]interface{}{
@@ -491,6 +495,23 @@ func (s *Server) handleToolsList(ctx context.Context, req *mcpwire.JSONRPCReques
 		ID:      req.ID,
 		Result:  result,
 	}
+}
+
+// authenticateList requires a principal before a catalogue is listed: the
+// tool and resource lists with their argument schemas are not served to an
+// anonymous client, as REST answers the equivalent with 401 (#414). The
+// token comes from the params when they are an object, else from the
+// request context. initialize and ping stay open: they are the protocol
+// handshake a client runs before it can present anything.
+func (s *Server) authenticateList(ctx context.Context, req *mcpwire.JSONRPCRequest) *AuthorizationError {
+	var token string
+	if params, ok := req.Params.(map[string]interface{}); ok {
+		token = extractTokenFromParams(params)
+	}
+	if token == "" {
+		token = TokenFromContext(ctx)
+	}
+	return s.authChecker.Authenticate(ctx, token)
 }
 
 // handleToolsCall handles the "tools/call" method.
@@ -549,6 +570,10 @@ func (s *Server) handleToolsCall(ctx context.Context, req *mcpwire.JSONRPCReques
 
 // handleResourcesList handles the "resources/list" method.
 func (s *Server) handleResourcesList(ctx context.Context, req *mcpwire.JSONRPCRequest) *mcpwire.JSONRPCResponse {
+	if authErr := s.authenticateList(ctx, req); authErr != nil {
+		return s.handleAuthError(req.ID, authErr)
+	}
+
 	resources := s.resources.ListResources()
 
 	result := map[string]interface{}{
