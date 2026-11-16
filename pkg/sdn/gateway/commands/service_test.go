@@ -528,6 +528,60 @@ func TestServeProcess_HostsItsOwnServicesAndServesTheSupervisor(t *testing.T) {
 	assert.Empty(t, run.leaseGateways, "only the process hosting the VPN builds its lease record")
 }
 
+// bindTestNotifySocket binds a notify socket accepting datagrams from this
+// test process, which runs serveProcess in a goroutine, and points
+// NOTIFY_SOCKET at it.
+func bindTestNotifySocket(t *testing.T) *process.NotifySocket {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "n.notify")
+	sock, err := process.ListenNotify(path, os.Getpid(), -1)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sock.Close() })
+	t.Setenv(process.NotifySocketEnv, path)
+	return sock
+}
+
+func TestServeProcess_NotifiesReadyOnceItsServicesStart(t *testing.T) {
+	sock := bindTestNotifySocket(t)
+	run := newServiceRun()
+	opts := serviceTestOptions(t)
+
+	cancel, done := startServiceProcess(t, "routing", run, opts)
+	msg, err := sock.Receive(time.Now().Add(5 * time.Second))
+	require.NoError(t, err, "the child must notify once its services start")
+	assert.True(t, msg.Ready, "the first notification is READY=1")
+	_, active, ok := processStatus(t, opts.socket)
+	require.True(t, ok)
+	assert.True(t, active[gateway.ServiceTransit], "READY=1 follows the services' start")
+
+	cancel()
+	msg, err = sock.Receive(time.Now().Add(5 * time.Second))
+	require.NoError(t, err, "a stopping child must notify STOPPING=1")
+	assert.True(t, msg.Stopping)
+	require.NoError(t, <-done)
+}
+
+func TestServeProcess_AFailedStartSendsNoReady(t *testing.T) {
+	sock := bindTestNotifySocket(t)
+	run := newServiceRun()
+	run.handler.startErr = &gateway.ErrNilServiceHandler{}
+	opts := serviceTestOptions(t)
+
+	cancel, done := startServiceProcess(t, "routing", run, opts)
+	require.Eventually(t, func() bool {
+		startErr, _, ok := processStatus(t, opts.socket)
+		return ok && startErr != ""
+	}, 5*time.Second, 10*time.Millisecond, "the supervisor must read the start error")
+
+	msg, err := sock.Receive(time.Now().Add(200 * time.Millisecond))
+	if err == nil {
+		assert.False(t, msg.Ready, "a child whose services failed to start never sends READY=1")
+	}
+
+	cancel()
+	<-done
+}
+
 func TestServeProcess_TheVPNProcessWiresItsLeaseRecord(t *testing.T) {
 	run := newVPNServiceRun()
 	opts := serviceTestOptions(t)
