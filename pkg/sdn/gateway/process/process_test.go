@@ -241,6 +241,9 @@ type fakeNode struct {
 	// status question mid-flight; each holds one call.
 	holdApply  *heldCall
 	holdStatus *heldCall
+	// holdStatusAfter, when positive, is how many status questions pass
+	// before holdStatus holds one.
+	holdStatusAfter int
 	// startingPolls, when positive, is how many more status replies come
 	// from a child whose Gateway.Start is still running; starting marks
 	// the reply being built as one of them.
@@ -299,8 +302,13 @@ func (f *fakeNode) GetState() gateway.GatewayState {
 
 func (f *fakeNode) ServiceReports() []gateway.ServiceReport {
 	f.mu.Lock()
-	held := f.holdStatus
-	f.holdStatus = nil
+	var held *heldCall
+	if f.holdStatusAfter > 0 {
+		f.holdStatusAfter--
+	} else {
+		held = f.holdStatus
+		f.holdStatus = nil
+	}
 	f.mu.Unlock()
 	held.hold()
 
@@ -2617,6 +2625,54 @@ func TestRelaunch_ADatapathCrashDuringTheVPNRelaunchRelaunchesTheVPNAgain(t *tes
 	}, 5*time.Second, 10*time.Millisecond, "the vpn child is reported up after its second relaunch")
 	assert.Equal(t, []string{"v1", "v1", "v1"}, vpn.appliedVersions(),
 		"each vpn start restores the document, the last one into the third datapath")
+}
+
+func TestRelaunch_DesiredApplyDuringAwaitWantedStillReady(t *testing.T) {
+	// A document applied while a relaunched vpn child is past its restore,
+	// waiting for its service, marks it restoring again; the forward that
+	// child answers is what clears that, so its readiness is still read and
+	// it comes up without being stopped and launched once more.
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) { c.RestartBackoff = time.Millisecond })
+	ctx := testContext(t)
+	startDatapath(t, ctx, supervisor, launcher, "v1")
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceManagementVPN))
+	vpn := launcher.node("vpn", nil)
+	vpnChild := launcher.lastChild()
+
+	// The relaunched child answers (awaitProcess, the first status
+	// question) with its service not yet active; hold the second one, the
+	// relaunch's wait for that service.
+	waiting := newHeldCall()
+	vpn.mu.Lock()
+	vpn.holdStatusAfter = 1
+	vpn.holdStatus = waiting
+	vpn.mu.Unlock()
+	vpn.setHealth(gateway.ServiceManagementVPN, false, nil)
+	vpnChild.exit(errors.New("signal: killed"))
+	waiting.awaitEntered(t, ctx)
+
+	// The next status question is held too, so the service comes up only
+	// after the held one has read it inactive.
+	next := newHeldCall()
+	vpn.mu.Lock()
+	vpn.holdStatus = next
+	vpn.mu.Unlock()
+	_, err := supervisor.Apply(ctx, &gwstate.DesiredConfig{GatewayID: "gw", Version: "v2"})
+	require.NoError(t, err)
+	close(waiting.release)
+
+	next.awaitEntered(t, ctx)
+	vpn.setHealth(gateway.ServiceManagementVPN, true, nil)
+	close(next.release)
+
+	relaunched := awaitRelaunch(t, supervisor, launcher, "vpn", 3)
+	require.NoError(t, supervisor.ServiceHealth(gateway.ServiceManagementVPN))
+	launcher.mu.Lock()
+	launches := len(launcher.children)
+	launcher.mu.Unlock()
+	assert.Equal(t, 3, launches, "the vpn child is not launched again")
+	assert.NotContains(t, relaunched.signalled(), os.Signal(syscall.SIGTERM),
+		"the relaunched vpn child is not stopped")
 }
 
 func TestClassTable_OnlyTheVPNFollowsTheDatapath(t *testing.T) {
