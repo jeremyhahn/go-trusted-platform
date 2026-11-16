@@ -19,6 +19,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -151,6 +152,18 @@ func TestRender_ValidationErrors(t *testing.T) {
 			assert.ErrorIs(t, err, c.want)
 			assert.Contains(t, err.Error(), c.field+"[")
 		})
+	}
+}
+
+// VRRP (IP protocol 112) is admitted only on the interfaces of enabled
+// FHRP groups, which the caller derives at run time (Deps.VRRP); no
+// operator setting opens protocol 112 on its own.
+func TestConfig_HasNoVRRPSetting(t *testing.T) {
+	typ := reflect.TypeOf(Config{})
+	for i := 0; i < typ.NumField(); i++ {
+		f := typ.Field(i)
+		assert.NotEqual(t, "VRRP", f.Name)
+		assert.NotContains(t, f.Tag.Get("yaml"), "vrrp", "field %s", f.Name)
 	}
 }
 
