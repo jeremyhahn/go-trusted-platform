@@ -212,6 +212,11 @@ type supervised struct {
 	// child has been given desired. While it is set the process's services
 	// are reported down, never up with their configuration missing.
 	restoring bool
+	// missed is the watchdog failure of missedChild: the watchdog records
+	// it before stopping that child, and watch reports it, rather than the
+	// signal's exit, when that child is reaped.
+	missed      error
+	missedChild Child
 }
 
 // New builds a supervisor. Nothing is launched until StartService.
@@ -642,8 +647,15 @@ func (s *Supervisor) launch(ctx context.Context, proc *supervised) error {
 	done := proc.done
 	s.mu.Unlock()
 
-	go s.readNotify(proc.def.Name, notify, ready)
+	// keepalive carries the child's WATCHDOG=1 to its watchdog; gone
+	// closes when the child's notify reader ends, with its socket.
+	keepalive := make(chan struct{}, 1)
+	gone := make(chan struct{})
+	go s.readNotify(proc.def.Name, notify, ready, keepalive, gone)
 	go s.watch(runCtx, proc, child, notify, done)
+	if interval := proc.def.WatchdogInterval; interval > 0 {
+		go s.watchdog(runCtx, proc, child, interval, ready, keepalive, gone)
+	}
 
 	s.cfg.Logger.Info("gatewayd supervisor: process started",
 		slog.String("process", proc.def.Name),
@@ -754,15 +766,23 @@ func (s *Supervisor) watch(ctx context.Context, proc *supervised, child Child, n
 	// stays down.
 	if ctx.Err() != nil || s.stopped || len(proc.wanted) == 0 {
 		proc.child = nil
+		proc.missed, proc.missedChild = nil, nil
 		s.closeClientLocked(proc)
 		s.mu.Unlock()
 		return
 	}
 	proc.child = nil
 	s.closeClientLocked(proc)
+	// A child its watchdog stopped failed by missing its keep-alive, not
+	// by the signal that ended it.
+	var failure, cause error = &ErrProcessExited{Process: proc.def.Name, Cause: waitErr}, waitErr
+	if proc.missedChild == child && proc.missed != nil {
+		failure, cause = proc.missed, proc.missed
+	}
+	proc.missed, proc.missedChild = nil, nil
 	s.mu.Unlock()
 
-	s.restartLoop(ctx, proc, &ErrProcessExited{Process: proc.def.Name, Cause: waitErr}, waitErr)
+	s.restartLoop(ctx, proc, failure, cause)
 }
 
 // restartLoop brings a process back up, and keeps trying while its restart
@@ -1078,7 +1098,8 @@ func (s *Supervisor) closeNotifyOfLocked(proc *supervised, notify *NotifySocket)
 // asks again at once rather than a poll interval later; the poll stays the
 // fallback for a child that never notifies. It touches no proc field: the
 // socket and the channel are its own launch's, passed in.
-func (s *Supervisor) readNotify(process string, notify *NotifySocket, ready chan struct{}) {
+func (s *Supervisor) readNotify(process string, notify *NotifySocket, ready chan struct{}, keepalive chan<- struct{}, gone chan struct{}) {
+	defer close(gone)
 	signalled := false
 	for {
 		msg, err := notify.Receive(time.Time{})
@@ -1104,6 +1125,66 @@ func (s *Supervisor) readNotify(process string, notify *NotifySocket, ready chan
 			signalled = true
 			close(ready)
 		}
+		if msg.Watchdog {
+			// Non-blocking: one pending keep-alive re-arms the deadline as
+			// well as several would.
+			select {
+			case keepalive <- struct{}{}:
+			default:
+			}
+		}
+	}
+}
+
+// watchdog enforces a ready child's WATCHDOG=1 keep-alives: from its
+// readiness, every keep-alive re-arms a deadline of one interval, and a
+// deadline that passes stops the child, recording ErrWatchdogMissed as its
+// failure so that watch restarts it through the restart backoff. It acts
+// only on child, never on a later launch, and returns when the child's
+// notify reader ends (the child is reaped) or the launch context is
+// cancelled.
+func (s *Supervisor) watchdog(ctx context.Context, proc *supervised, child Child, interval time.Duration, ready <-chan struct{}, keepalive <-chan struct{}, gone <-chan struct{}) {
+	select {
+	case <-ready:
+	case <-gone:
+		return
+	case <-ctx.Done():
+		return
+	}
+	deadline := s.cfg.Clock.After(interval)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-gone:
+			return
+		case <-keepalive:
+			deadline = s.cfg.Clock.After(interval)
+			continue
+		case <-deadline:
+		}
+		break
+	}
+
+	s.mu.Lock()
+	current := proc.child == child && !proc.stopping && !s.stopped
+	if current {
+		proc.missed = &ErrWatchdogMissed{Process: proc.def.Name, Interval: interval}
+		proc.missedChild = child
+	}
+	s.mu.Unlock()
+	if !current {
+		return
+	}
+	s.cfg.Logger.Warn("gatewayd supervisor: process missed its watchdog, stopping it",
+		slog.String("process", proc.def.Name),
+		slog.Duration("interval", interval),
+		slog.Int("pid", child.PID()))
+	// gone closes when watch has reaped the child and closed its notify
+	// socket; watch's done would wait for the whole restart.
+	if err := s.terminate(ctx, proc.def.Name, child, gone); err != nil && ctx.Err() == nil {
+		s.cfg.Logger.Warn("gatewayd supervisor: stopping a process that missed its watchdog",
+			slog.String("process", proc.def.Name), slog.Any("error", err))
 	}
 }
 
