@@ -94,6 +94,7 @@ func init() {
 	// The daemon's routes take no filter and ignore the request body, so a
 	// request that asks for either is refused rather than silently widened.
 	restRequestEncoders[platformv1.PlatformDaemon_ListServices_FullMethodName] = encodeDaemonListServices
+	restRequestEncoders[platformv1.PlatformDaemon_StartService_FullMethodName] = encodeDaemonStartService
 	restRequestEncoders[platformv1.PlatformDaemon_StopService_FullMethodName] = encodeDaemonStopService
 	restRequestEncoders[platformv1.PlatformDaemon_RestartService_FullMethodName] = encodeDaemonRestartService
 
@@ -128,6 +129,18 @@ func encodeDaemonListServices(body interface{}) (interface{}, error) {
 	if len(in.GetTypes()) > 0 || len(in.GetStatuses()) > 0 {
 		return nil, fmt.Errorf("%s: the daemon REST route takes no types or statuses filter",
 			platformv1.PlatformDaemon_ListServices_FullMethodName)
+	}
+	return body, nil
+}
+
+func encodeDaemonStartService(body interface{}) (interface{}, error) {
+	in, ok := body.(*platformv1.StartServiceRequest)
+	if !ok {
+		return nil, ErrUnexpectedRequestType{Method: platformv1.PlatformDaemon_StartService_FullMethodName}
+	}
+	if len(in.GetOptions()) > 0 {
+		return nil, fmt.Errorf("%s: the daemon REST route honours no options",
+			platformv1.PlatformDaemon_StartService_FullMethodName)
 	}
 	return body, nil
 }
