@@ -246,6 +246,8 @@ transport:
 | QUIC | `StatusInvalidRequest` | `grpcDelegateErrorToQUIC` (`quic_grpc_delegates.go`) |
 | MCP | `-32007` (`FailedPrecondition`) | `toolErrorCode` (`pkg/api/mcp/error_class.go`) |
 
+The SDK REST transport sends `ListServices`, `GetServiceStatus`, `StartService`, `StopService` and `RestartService` to the daemon server's `/api/v1/services` routes (`sdk/go/transport/rest/daemon_services.go`), and refuses list filters, `force` and `timeout_seconds` with `InvalidArgument` because those routes do not honour them.
+
 A refused verb changes nothing: the service's status, start and stop counts
 and last error are as they were, and a refused stop of a running service
 still reports `running`. Status is read from the subsystem, never from what
