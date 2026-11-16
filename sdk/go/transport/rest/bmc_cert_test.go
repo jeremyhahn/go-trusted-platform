@@ -37,16 +37,16 @@ const (
 	bmcTestCAPEM   = "-----BEGIN CERTIFICATE-----\nC\n-----END CERTIFICATE-----\n"
 )
 
-// bmcCapture records the one API request a test sends and answers it with
+// certCapture records the one API request a test sends and answers it with
 // the given status and body. The /health/live probe from Connect is ignored.
-type bmcCapture struct {
+type certCapture struct {
 	method string
 	path   string
 	body   map[string]interface{}
 	hits   int
 }
 
-func (c *bmcCapture) handler(t *testing.T, code int, reply string) http.HandlerFunc {
+func (c *certCapture) handler(t *testing.T, code int, reply string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health/live" {
 			w.WriteHeader(http.StatusOK)
@@ -72,7 +72,7 @@ func (c *bmcCapture) handler(t *testing.T, code int, reply string) http.HandlerF
 }
 
 func TestBMCReplaceWebCertificate_SendsPEMText(t *testing.T) {
-	var c bmcCapture
+	var c certCapture
 	a, _ := adapterAgainst(t, c.handler(t, http.StatusOK, `{"success":true,"payload":{"status":"ok"}}`))
 
 	req := &platformv1.BMCReplaceWebCertificateRequest{
@@ -108,7 +108,7 @@ func TestBMCReplaceWebCertificate_EmptyPEMRefused(t *testing.T) {
 		"key":  {ProfileId: 42, CertPem: []byte(bmcTestCertPEM)},
 	} {
 		t.Run(name, func(t *testing.T) {
-			var c bmcCapture
+			var c certCapture
 			a, _ := adapterAgainst(t, c.handler(t, http.StatusOK, `{"success":true,"payload":{"status":"ok"}}`))
 			err := a.Connection().Invoke(context.Background(),
 				platformv1.BMCService_ReplaceWebCertificate_FullMethodName, req,
@@ -182,7 +182,7 @@ func TestBMCEnroll_RouteAndReply(t *testing.T) {
 		`"factory_cert_pem":` + jsonString(bmcTestCertPEM) + `,"factory_cert_meta":` + bmcTestMetaJSON + `,` +
 		`"new_cert_pem":` + jsonString(bmcTestKeyPEM) + `,"ca_cert_pem":` + jsonString(bmcTestCAPEM) + `,` +
 		`"steps":` + bmcTestStepsJSON + `}}`
-	var c bmcCapture
+	var c certCapture
 	a, _ := adapterAgainst(t, c.handler(t, http.StatusOK, reply))
 
 	req := &platformv1.BMCEnrollRequest{ProfileId: 42, RotatePassword: proto.Bool(false)}
@@ -216,7 +216,7 @@ func TestBMCRestoreFactoryCert_RouteAndReply(t *testing.T) {
 	reply := `{"success":true,"payload":{"device_id":"7","endpoint":"bmc:443","hostname":"bmc",` +
 		`"new_cert_meta":` + bmcTestMetaJSON + `,"new_cert_pem":` + jsonString(bmcTestCertPEM) + `,` +
 		`"steps":` + bmcTestStepsJSON + `}}`
-	var c bmcCapture
+	var c certCapture
 	a, _ := adapterAgainst(t, c.handler(t, http.StatusOK, reply))
 
 	resp := &platformv1.BMCRestoreResponse{}
@@ -242,7 +242,7 @@ func TestBMCRestoreFactoryCert_RouteAndReply(t *testing.T) {
 }
 
 func TestBMCRestoreFactoryCert_UnavailableMapsCode(t *testing.T) {
-	var c bmcCapture
+	var c certCapture
 	a, _ := adapterAgainst(t, c.handler(t, http.StatusServiceUnavailable,
 		`{"success":false,"error":"BMC restorer not available"}`))
 
