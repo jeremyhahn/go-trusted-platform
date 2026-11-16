@@ -298,6 +298,37 @@ func TestIAMCertificatePrincipals_ThePEPDecidesEachScope(t *testing.T) {
 	assert.Equal(t, [][2]string{{"device", "read"}, {"attestation", "submit"}, {"tenant", "read"}}, got)
 }
 
+// A role permission holding a wildcard never becomes a certificate
+// principal's scope: RequireScope matches a wildcard scope against any
+// concrete operation, so copying "*:*" would admit "device:write" without
+// the PEP ever deciding it (docs/SPEC.md: the decision point decides every
+// request). Only concrete permissions the PEP allows become scopes.
+func TestIAMCertificatePrincipals_AWildcardPermissionNeverBecomesAScope(t *testing.T) {
+	t.Parallel()
+	users, roles := newCertPrincipalDirectory()
+	roles.roles["device"] = &sdkiam.Role{ID: "device", Permissions: []string{"*:*", "device:read"}}
+	roles.roles["reader"] = &sdkiam.Role{ID: "reader", Permissions: []string{"device:*", "*:read"}}
+	var asked []*sdkiam.CheckRequest
+	pep := &mockSDKPEPClient{checkFunc: func(_ context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+		asked = append(asked, req)
+		return &sdkiam.CheckResponse{Allowed: req.Resource != "device" || req.Action != "write"}, nil
+	}}
+	resolver := newTestIAMCertificatePrincipals(t, users, roles, pep)
+
+	principal, err := resolver.ResolveCertificatePrincipal(context.Background(),
+		&auth.Identity{ID: "device-01", TenantID: "tenant-a"})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"device:read"}, principal.Scopes,
+		"only concrete permissions the PEP allows become scopes")
+	for _, scope := range principal.Scopes {
+		assert.NotContains(t, scope, "*", "a wildcard pattern is never a certificate principal's scope")
+	}
+	for _, req := range asked {
+		assert.NotContains(t, req.Resource+":"+req.Action, "*", "the PEP is never asked about a wildcard pattern")
+	}
+}
+
 func TestIAMCertificatePrincipals_APEPThatDeniesAllGrantsNoScopes(t *testing.T) {
 	t.Parallel()
 	users, roles := newCertPrincipalDirectory()
