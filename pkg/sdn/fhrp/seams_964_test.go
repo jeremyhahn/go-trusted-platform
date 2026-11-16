@@ -24,6 +24,7 @@ package fhrp
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/netip"

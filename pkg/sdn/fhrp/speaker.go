@@ -303,15 +303,36 @@ func (r *runner) dropStaleVIPs(g *Group) error {
 	if !ok || g.Priority() == PriorityOwner {
 		return nil
 	}
+	lister, lists := r.speaker.deps.Programmer.(PrefixReader)
+	hw := VirtualMAC(g.family, g.cfg.VRID)
 	stale := false
 	for _, p := range g.prefixes {
-		present, err := reader.HasAddress(g.cfg.Interface, p)
+		if !lists {
+			present, err := reader.HasAddress(g.cfg.Interface, p)
+			if err != nil {
+				return &ErrAddressOperationFailed{VRID: g.cfg.VRID, Interface: g.cfg.Interface, Operation: "list", Address: p, Cause: err}
+			}
+			if present {
+				r.owned[p] = true
+				stale = true
+			}
+			continue
+		}
+		// Match by address: a crashed master may have installed the VIP
+		// with the prefix length of an older configuration.
+		installed, err := lister.AddressPrefixes(g.cfg.Interface, p.Addr())
 		if err != nil {
 			return &ErrAddressOperationFailed{VRID: g.cfg.VRID, Interface: g.cfg.Interface, Operation: "list", Address: p, Cause: err}
 		}
-		if present {
-			r.owned[p] = true
-			stale = true
+		for _, q := range installed {
+			if q == p {
+				r.owned[p] = true
+				stale = true
+				continue
+			}
+			if err := r.speaker.deps.Programmer.DeleteAddress(g.cfg.Interface, q, hw); err != nil {
+				return &ErrAddressOperationFailed{VRID: g.cfg.VRID, Interface: g.cfg.Interface, Operation: "delete", Address: q, Cause: err}
+			}
 		}
 	}
 	if stale {

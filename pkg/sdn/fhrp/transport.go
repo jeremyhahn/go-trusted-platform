@@ -63,6 +63,15 @@ type AddressReader interface {
 	HasAddress(iface string, prefix netip.Prefix) (bool, error)
 }
 
+// PrefixReader is optional: a Programmer that implements it lets a
+// restarted non-owner find a VIP a crashed master left behind even when it
+// was installed with another prefix length, and delete it at that length.
+type PrefixReader interface {
+	// AddressPrefixes returns every prefix on iface whose address is addr,
+	// whatever its length.
+	AddressPrefixes(iface string, addr netip.Addr) ([]netip.Prefix, error)
+}
+
 // Clock is the time source the speaker's timers run on; tests inject one.
 type Clock interface {
 	Now() time.Time
