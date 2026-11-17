@@ -56,22 +56,43 @@ func TestX509PolicyExtractor_ExtractTenantID(t *testing.T) {
 		assert.ErrorIs(t, err, ErrInvalidCertificate)
 	})
 
-	t.Run("from organisation", func(t *testing.T) {
+	t.Run("organisational unit wins over O and CN", func(t *testing.T) {
+		cert := selfSignedCert(t, x509.Certificate{
+			Subject: pkix.Name{
+				OrganizationalUnit: []string{"tenant-ou"},
+				Organization:       []string{"acme-corp"},
+				CommonName:         "tenant-42.example.com",
+			},
+		})
+		got, err := e.ExtractTenantID(cert)
+		require.NoError(t, err)
+		assert.Equal(t, "tenant-ou", got)
+	})
+
+	t.Run("organisation only gives no tenant", func(t *testing.T) {
 		cert := selfSignedCert(t, x509.Certificate{
 			Subject: pkix.Name{Organization: []string{"acme-corp"}},
 		})
 		got, err := e.ExtractTenantID(cert)
-		require.NoError(t, err)
-		assert.Equal(t, "acme-corp", got)
+		assert.ErrorIs(t, err, ErrMissingTenantID)
+		assert.Empty(t, got)
 	})
 
-	t.Run("from common name", func(t *testing.T) {
+	t.Run("common name only gives no tenant", func(t *testing.T) {
 		cert := selfSignedCert(t, x509.Certificate{
 			Subject: pkix.Name{CommonName: "tenant-42.example.com"},
 		})
 		got, err := e.ExtractTenantID(cert)
-		require.NoError(t, err)
-		assert.Equal(t, "tenant-42", got)
+		assert.ErrorIs(t, err, ErrMissingTenantID)
+		assert.Empty(t, got)
+	})
+
+	t.Run("empty organisational unit gives no tenant", func(t *testing.T) {
+		cert := selfSignedCert(t, x509.Certificate{
+			Subject: pkix.Name{OrganizationalUnit: []string{""}, Organization: []string{"acme-corp"}},
+		})
+		_, err := e.ExtractTenantID(cert)
+		assert.ErrorIs(t, err, ErrMissingTenantID)
 	})
 
 	t.Run("missing", func(t *testing.T) {

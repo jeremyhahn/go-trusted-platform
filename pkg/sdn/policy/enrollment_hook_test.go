@@ -162,6 +162,86 @@ func createEnrollmentCertificate(t *testing.T, org string) *x509.Certificate {
 	return cert
 }
 
+// createSubjectCertificate issues a self-signed device certificate with the
+// given subject.
+func createSubjectCertificate(t *testing.T, subject pkix.Name) *x509.Certificate {
+	t.Helper()
+
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               subject,
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &priv.PublicKey, priv)
+	require.NoError(t, err)
+	cert, err := x509.ParseCertificate(der)
+	require.NoError(t, err)
+	return cert
+}
+
+// TestSDNEnrollmentHook_TenantFromSubjectOU checks SPEC row 122: the device
+// tenant is the subject OU, and a certificate without one gets no tenant and
+// no port assignment.
+func TestSDNEnrollmentHook_TenantFromSubjectOU(t *testing.T) {
+	newHook := func(t *testing.T) (*SDNEnrollmentHook, *MockPolicyEngine) {
+		t.Helper()
+		mockEngine := &MockPolicyEngine{}
+		hook, err := NewSDNEnrollmentHook(SDNEnrollmentHookConfig{
+			Logger:       slog.Default(),
+			PolicyEngine: mockEngine,
+			ProfileDAO:   &MockDeviceProfileDAO{},
+		})
+		require.NoError(t, err)
+		return hook, mockEngine
+	}
+
+	t.Run("OU is the tenant", func(t *testing.T) {
+		hook, _ := newHook(t)
+		cert := createSubjectCertificate(t, pkix.Name{
+			OrganizationalUnit: []string{"tenant-ou"},
+			Organization:       []string{"acme-corp"},
+			CommonName:         "test-device",
+		})
+		profile := createTestDeviceProfile(1, "Test Profile", "52:54:00", "", 100)
+		policy, err := hook.buildPortPolicy(profile, cert)
+		require.NoError(t, err)
+		require.NotNil(t, policy)
+		assert.Equal(t, "tenant-ou", policy.TenantID)
+	})
+
+	for name, subject := range map[string]pkix.Name{
+		"organisation only": {Organization: []string{"acme-corp"}, CommonName: "test-device"},
+		"common name only":  {CommonName: "tenant-42.example.com"},
+	} {
+		t.Run(name+" is refused", func(t *testing.T) {
+			hook, mockEngine := newHook(t)
+			cert := createSubjectCertificate(t, subject)
+			profile := createTestDeviceProfile(1, "Test Profile", "52:54:00", "", 100)
+
+			policy, err := hook.buildPortPolicy(profile, cert)
+			require.ErrorIs(t, err, ErrMissingTenantID)
+			assert.Nil(t, policy, "no tenant means no policy")
+
+			hook.pendingActivations.Store("SRV-NO-OU", &PendingActivation{
+				PortID:      "port1",
+				Profile:     profile,
+				Certificate: cert,
+				EnrolledAt:  time.Now(),
+			})
+			plan, err := hook.PrecheckActivation("SRV-NO-OU")
+			require.ErrorIs(t, err, ErrMissingTenantID)
+			assert.Nil(t, plan, "no tenant means no port assignment")
+			mockEngine.AssertNotCalled(t, "ApplyPolicy", mock.Anything, mock.Anything)
+		})
+	}
+}
+
 // Helper function to create a test device profile
 func createTestDeviceProfile(id uint64, name, macPrefix, serialPrefix string, vlan uint16) *entities.DeviceProfile {
 	return &entities.DeviceProfile{
