@@ -3134,17 +3134,22 @@ jobs:
             done
           fi
 
-          # The base and the owner hold, read live from the PR after the wait:
-          # a retargeted PR fails, and needs-owner on the PR refuses even an
+          # The base and the hold, read live from the PR after the wait: a
+          # retargeted PR fails, and a hold label on the PR refuses even an
           # approval already on the head. The labels come from the PR itself,
           # never from the issue-labels list, which Gitea does not paginate
-          # (Codex P1, #1921).
+          # (Codex P1, #1921). v5.12.0: the review job swaps `needs-owner`
+          # for `needs-coordinator` (v5.11.3, owner ruling 732), so the hold
+          # is either label; the coordinator takes needs-coordinator off to
+          # release it (Codex P1 round 2, #1986).
           pr=$(get "/pulls/$PR_NUM")
           same_base "$pr"
           labels=$(jq -r '.labels[].name' <<<"$pr") ||
             fail "cannot read the labels of PR $PR_NUM"
           ! grep -qx needs-owner <<<"$labels" ||
             fail "PR $PR_NUM is on owner hold (needs-owner): an existing approval does not pass the gate"
+          ! grep -qx needs-coordinator <<<"$labels" ||
+            fail "PR $PR_NUM is on coordinator hold (needs-coordinator): an existing approval does not pass the gate"
 
           # (b) The reviewer's latest standing verdict on this head. PENDING,
           # COMMENTED and dismissed reviews are no verdict.
