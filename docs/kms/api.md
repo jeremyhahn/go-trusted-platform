@@ -142,6 +142,19 @@ name answers 400 before the KMS is called: `invalid algorithm: <name>`
 have no REST name. The replies carry `algorithm` and `usage` as the
 `platform.v1` numbers, never as names.
 
+**The SDK REST client sends key status by the server's names.**
+`UpdateKeyStatus` calls `PUT /api/v1/kms/keys/{name}/status` with the key id in
+the path and a body of `status` and, when non-zero, `version`
+(`sdk/go/transport/rest/kms_admin.go` `kmsKeyStatusNames`,
+`encodeKMSUpdateKeyStatus`). `ENABLED`, `DISABLED` and `PENDING_DELETION` go by
+those names; `KEY_STATUS_DESTROYED` is sent as `DELETED`. On decode
+(`kmsKeyStatusesByName`) `DELETED` reads as `DESTROYED`, and, as in the gRPC
+daemon (`pkg/api/daemon/kms_platform_service.go`), `ROTATING` reads as
+`ENABLED` and `COMPROMISED` as `DISABLED`: their distinct states are lost over
+REST. An unknown name reads as `UNSPECIFIED`. `PENDING_IMPORT` and
+`UNSPECIFIED` have no server name and are refused before sending with
+`key status <status> has no REST name`.
+
 ---
 
 ## 3. Cryptographic operations
