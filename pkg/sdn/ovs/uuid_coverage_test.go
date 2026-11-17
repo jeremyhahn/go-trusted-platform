@@ -24,7 +24,7 @@ import (
 
 // TestGetOpenVSwitchUUIDErrorPaths tests error paths in getOpenVSwitchUUID
 func TestGetOpenVSwitchUUIDErrorPaths(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -63,7 +63,7 @@ func TestGetOpenVSwitchUUIDErrorPaths(t *testing.T) {
 
 // TestListDatabasesUnmarshalPath tests the unmarshal path
 func TestListDatabasesUnmarshalPath(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -89,7 +89,7 @@ func TestListDatabasesUnmarshalPath(t *testing.T) {
 
 // TestGetSchemaUnmarshalPath tests the unmarshal path
 func TestGetSchemaUnmarshalPath(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -116,7 +116,7 @@ func TestGetSchemaUnmarshalPath(t *testing.T) {
 
 // TestEchoUnmarshalPath tests the unmarshal path
 func TestEchoUnmarshalPath(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -142,7 +142,7 @@ func TestEchoUnmarshalPath(t *testing.T) {
 
 // TestSelectEmptyResult tests Select returning empty result
 func TestSelectEmptyResult(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
