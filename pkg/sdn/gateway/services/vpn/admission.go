@@ -415,8 +415,9 @@ func (s *Service) posture(ctx context.Context, tenantID string, report *PostureR
 	evaluator, lookupName, policyName, err := s.postureFor(tenantID)
 	if err != nil {
 		// A tenant policy that failed to compile refuses; it never falls
-		// back to the default.
-		return &ErrPostureUnavailable{TenantID: tenantID, Cause: err}
+		// back to the default. SetPosturePolicies keeps only a policy named
+		// s.cfg.PosturePolicy, so that is the policy that failed.
+		return &ErrPostureUnavailable{TenantID: tenantID, Name: s.cfg.PosturePolicy, Cause: err}
 	}
 	result, err := evaluator.Evaluate(ctx, lookupName, input)
 	if err != nil {
