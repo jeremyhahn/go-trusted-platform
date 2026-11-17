@@ -93,6 +93,7 @@ type RESTServer struct {
 	gatewayHandlers       *restapi.GatewayHandlers
 	gatewayService        *gatewayRESTService
 	idevidService         *IDevIDGRPCService
+	authFactorHandlers    *restapi.AuthFactorHandlers
 }
 
 // NewRESTServer creates a new REST server for the daemon
@@ -548,9 +549,33 @@ func (s *RESTServer) SetCAHandlers(ca quicbaasca.CACertificateAuthority, guard *
 	// Wire auth factor endpoints (AAGUID lookup, mTLS probe, cert issuance,
 	// MFA policy). These share the same CA instance as the CA handlers so
 	// certificate issuance goes through the live platform CA.
+	// Cert issuance is decided by the IAM PEP for the request's platform-token
+	// principal; until SetAuthFactorPEP runs (the PEP is built after the CA
+	// handlers), issuance is refused.
 	authFactorHandlers := restapi.NewAuthFactorHandlers(ca, s.logger)
+	authFactorHandlers.SetAuthorization(nil, authFactorPrincipal)
+	s.authFactorHandlers = authFactorHandlers
 	authFactorHandlers.RegisterRoutes(s.router)
 	s.logger.Info("Auth factor REST routes registered")
+}
+
+// SetAuthFactorPEP hands the daemon's IAM PEP to the auth-factor handlers, so
+// mTLS cert issuance is decided by the PEP. A nil pep keeps issuance refused.
+func (s *RESTServer) SetAuthFactorPEP(pep restapi.AuthFactorPEP) {
+	if s.authFactorHandlers == nil {
+		return
+	}
+	s.authFactorHandlers.SetAuthorization(pep, authFactorPrincipal)
+}
+
+// authFactorPrincipal resolves the platform-token principal the catalog
+// guard put on the request.
+func authFactorPrincipal(r *http.Request) (restapi.AuthFactorPrincipal, bool) {
+	caller, ok := restCaller(r)
+	if !ok {
+		return restapi.AuthFactorPrincipal{}, false
+	}
+	return restapi.AuthFactorPrincipal{Subject: caller.Subject, TenantID: caller.TenantID, Roles: caller.Roles}, true
 }
 
 // SetTPMHandlers mounts the physical TPM routes (/api/v1/tpm/...). Every

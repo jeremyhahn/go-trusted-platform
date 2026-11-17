@@ -26,8 +26,36 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 )
+
+// go-qrdb has no auth-factor permission constant, so the action and resource
+// follow the "<resource-type>:<action>" convention under auth_factors.
+const (
+	// AuthFactorIssueCertAction is the permission a principal needs to issue
+	// an mTLS auth-factor certificate for a user.
+	AuthFactorIssueCertAction = "auth_factors:issue-cert"
+	authFactorResourcePrefix  = "auth_factors://"
+	authFactorPEPTimeout      = 5 * time.Second
+)
+
+// AuthFactorPEP is the IAM decision point the auth-factor handlers ask;
+// quicbaassdk.IAMPEPClient satisfies it.
+type AuthFactorPEP interface {
+	Check(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error)
+}
+
+// AuthFactorPrincipal is the authenticated session principal of a request.
+type AuthFactorPrincipal struct {
+	Subject  string
+	TenantID string
+	Roles    []string
+}
+
+// AuthFactorPrincipalResolver returns the request's authenticated principal,
+// false when the request carries none.
+type AuthFactorPrincipalResolver func(r *http.Request) (AuthFactorPrincipal, bool)
 
 // authCA is the minimal interface required from the CA by AuthFactorHandlers.
 // Using a narrow internal interface allows tests to inject lightweight stubs
@@ -226,6 +254,11 @@ type mfaPolicy struct {
 type AuthFactorHandlers struct {
 	ca     authCA
 	logger *slog.Logger
+
+	// PEP decision point and session-principal resolver for cert issuance.
+	authMu    sync.RWMutex
+	pep       AuthFactorPEP
+	principal AuthFactorPrincipalResolver
 
 	// aaguid cache — keyed by lowercase UUID string
 	cacheMu sync.RWMutex
@@ -433,31 +466,49 @@ func (h *AuthFactorHandlers) handleIssueCert(w http.ResponseWriter, r *http.Requ
 	})
 }
 
-// callerAuthorized returns true when the caller is allowed to act on the
-// given userID. The caller is allowed when:
-//   - mTLS is not in use (IAM layer is authoritative), OR
-//   - the client cert CN matches userID, OR
-//   - the client cert has the "admin" OID in its SubjectAltName or CN prefix.
+// callerAuthorized returns true when the IAM PEP grants the request's
+// authenticated session principal AuthFactorIssueCertAction on userID.
+// A request with no principal, no PEP wired, or a PEP error is refused;
+// client-certificate names grant nothing.
 func (h *AuthFactorHandlers) callerAuthorized(r *http.Request, userID string) bool {
-	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
-		// No mTLS — IAM/JWT layer is authoritative; permit.
-		return true
+	h.authMu.RLock()
+	pep, resolve := h.pep, h.principal
+	h.authMu.RUnlock()
+	if pep == nil || resolve == nil {
+		return false
 	}
-	leaf := r.TLS.PeerCertificates[0]
-	cn := leaf.Subject.CommonName
-
-	// Admin prefix or org unit.
-	if strings.HasPrefix(cn, "admin") || strings.EqualFold(cn, "admin") {
-		return true
-	}
-	for _, ou := range leaf.Subject.OrganizationalUnit {
-		if strings.EqualFold(ou, "admin") {
-			return true
-		}
+	principal, ok := resolve(r)
+	if !ok || principal.Subject == "" || principal.TenantID == "" {
+		return false
 	}
 
-	// Caller is the user themselves.
-	return cn == userID
+	ctx, cancel := context.WithTimeout(r.Context(), authFactorPEPTimeout)
+	defer cancel()
+	resp, err := pep.Check(ctx, &sdkiam.CheckRequest{
+		Subject: sdkiam.CheckSubject{
+			ID:       principal.Subject,
+			TenantID: principal.TenantID,
+			Roles:    principal.Roles,
+		},
+		Action:   AuthFactorIssueCertAction,
+		Resource: authFactorResourcePrefix + userID,
+		TenantID: principal.TenantID,
+	})
+	if err != nil {
+		h.logger.Warn("auth-factor PEP check failed", "subject", principal.Subject, "error", err)
+		return false
+	}
+	return resp != nil && resp.Allowed
+}
+
+// SetAuthorization wires the PEP decision point and the principal resolver
+// callerAuthorized consults. Either one nil refuses every request (fail
+// closed). Safe to call while the handlers serve.
+func (h *AuthFactorHandlers) SetAuthorization(pep AuthFactorPEP, principal AuthFactorPrincipalResolver) {
+	h.authMu.Lock()
+	defer h.authMu.Unlock()
+	h.pep = pep
+	h.principal = principal
 }
 
 // =============================================================================
