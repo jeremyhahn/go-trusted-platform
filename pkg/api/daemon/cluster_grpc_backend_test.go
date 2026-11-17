@@ -69,7 +69,7 @@ func serveRegisteredClusterGRPC(t *testing.T) (map[string]platformv1.ClusterServ
 
 	tcpListener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	udsListener, err := net.Listen("unix", filepath.Join(t.TempDir(), "cluster.sock"))
+	udsListener, err := net.Listen("unix", filepath.Join(shortSocketDir(t), "cluster.sock"))
 	require.NoError(t, err)
 
 	clients := map[string]platformv1.ClusterServiceClient{
