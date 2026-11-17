@@ -33,6 +33,8 @@ const (
 	IdentityFieldSubjectDN
 	// IdentityFieldOrganization extracts identity from Organization.
 	IdentityFieldOrganization
+	// IdentityFieldOrganizationalUnit extracts identity from the first subject OU.
+	IdentityFieldOrganizationalUnit
 )
 
 // String returns a human-readable representation of the IdentityField.
@@ -48,6 +50,8 @@ func (f IdentityField) String() string {
 		return "subject_dn"
 	case IdentityFieldOrganization:
 		return "organization"
+	case IdentityFieldOrganizationalUnit:
+		return "organizational_unit"
 	default:
 		return "unknown"
 	}
@@ -134,7 +138,8 @@ type MTLSConfig struct {
 	// TenantField specifies which certificate field to extract tenant from.
 	TenantField IdentityField
 
-	// DefaultTenant is used when no tenant can be extracted from the certificate.
+	// DefaultTenant is kept for API compatibility only: the mTLS adapter
+	// never uses it, a certificate with no tenant field is refused (SPEC row 122).
 	DefaultTenant string
 
 	// ValidateIDevID enables additional validation for IDevID certificates.
@@ -201,7 +206,7 @@ func WithRequireClientAuth(required bool) MTLSOption {
 func DefaultMTLSConfig() *MTLSConfig {
 	return &MTLSConfig{
 		IdentityField:     IdentityFieldEmail,
-		TenantField:       IdentityFieldOrganization,
+		TenantField:       IdentityFieldOrganizationalUnit,
 		RequireClientAuth: true,
 	}
 }

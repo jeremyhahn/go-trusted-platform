@@ -117,12 +117,7 @@ func (m *MTLSAdapter) Authenticate(ctx context.Context, cert *x509.Certificate) 
 	// Extract tenant
 	tenantID, err := m.ExtractTenant(cert)
 	if err != nil {
-		// Use default tenant if available
-		if m.config.DefaultTenant != "" {
-			tenantID = m.config.DefaultTenant
-		} else {
-			return nil, err
-		}
+		return nil, err
 	}
 	identity.TenantID = tenantID
 
@@ -219,12 +214,6 @@ func (m *MTLSAdapter) ExtractTenant(cert *x509.Certificate) (string, error) {
 	}
 
 	tenant := m.extractFromField(cert, m.config.TenantField)
-	if tenant == "" {
-		// Fallback: try Organization
-		if len(cert.Subject.Organization) > 0 {
-			tenant = cert.Subject.Organization[0]
-		}
-	}
 
 	if tenant == "" {
 		return "", ErrTenantNotFound{}
@@ -249,6 +238,10 @@ func (m *MTLSAdapter) extractFromField(cert *x509.Certificate, field IdentityFie
 	case IdentityFieldOrganization:
 		if len(cert.Subject.Organization) > 0 {
 			return cert.Subject.Organization[0]
+		}
+	case IdentityFieldOrganizationalUnit:
+		if len(cert.Subject.OrganizationalUnit) > 0 {
+			return cert.Subject.OrganizationalUnit[0]
 		}
 	}
 	return ""
