@@ -264,7 +264,7 @@ type deviceHarness struct {
 // profile 42 (rack-a).
 func startDeviceServer(t *testing.T) *deviceHarness {
 	t.Helper()
-	sock := filepath.Join(t.TempDir(), "platformd.sock")
+	sock := filepath.Join(shortSocketDir(t), "platformd.sock")
 	lis, err := net.Listen("unix", sock)
 	require.NoError(t, err)
 	srv := &fakeDeviceService{
