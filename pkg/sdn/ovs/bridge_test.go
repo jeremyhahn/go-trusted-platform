@@ -24,7 +24,7 @@ import (
 )
 
 func setupBridgeTest(t *testing.T) (*Client, *mockOVSDBServer) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -82,7 +82,7 @@ func TestClient_CreateBridge(t *testing.T) {
 	})
 
 	t.Run("create bridge when not connected", func(t *testing.T) {
-		disconnectedClient, err := NewClient(filepath.Join(t.TempDir(), "disconnected.sock"))
+		disconnectedClient, err := NewClient(filepath.Join(shortSocketDir(t), "disconnected.sock"))
 		require.NoError(t, err)
 
 		_, err = disconnectedClient.CreateBridge(ctx, "br-fail")
@@ -134,7 +134,7 @@ func TestClient_DeleteBridge(t *testing.T) {
 	})
 
 	t.Run("delete bridge when not connected", func(t *testing.T) {
-		disconnectedClient, err := NewClient(filepath.Join(t.TempDir(), "disconnected.sock"))
+		disconnectedClient, err := NewClient(filepath.Join(shortSocketDir(t), "disconnected.sock"))
 		require.NoError(t, err)
 
 		err = disconnectedClient.DeleteBridge(ctx, "br-fail")
@@ -182,7 +182,7 @@ func TestClient_GetBridge(t *testing.T) {
 	})
 
 	t.Run("get bridge when not connected", func(t *testing.T) {
-		disconnectedClient, err := NewClient(filepath.Join(t.TempDir(), "disconnected.sock"))
+		disconnectedClient, err := NewClient(filepath.Join(shortSocketDir(t), "disconnected.sock"))
 		require.NoError(t, err)
 
 		_, err = disconnectedClient.GetBridge(ctx, "br-test")
@@ -233,7 +233,7 @@ func TestClient_ListBridges(t *testing.T) {
 	})
 
 	t.Run("list bridges when not connected", func(t *testing.T) {
-		disconnectedClient, err := NewClient(filepath.Join(t.TempDir(), "disconnected.sock"))
+		disconnectedClient, err := NewClient(filepath.Join(shortSocketDir(t), "disconnected.sock"))
 		require.NoError(t, err)
 
 		_, err = disconnectedClient.ListBridges(ctx)

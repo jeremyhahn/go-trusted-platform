@@ -144,7 +144,7 @@ func TestStart_QEMUDialsTheSocketSWTPMListensOn(t *testing.T) {
 	orch, instance := newExitingQEMUInstance(t, &fakeHost{}, "test-vm-sock")
 	qemuInst := orch.instances[instance.ID]
 	created := instance.Metadata["tpm_socket"]
-	running := filepath.Join(t.TempDir(), "swtpm.sock")
+	running := filepath.Join(shortSocketDir(t), "swtpm.sock")
 	qemuInst.swtpm.(*fakeEmulator).runSocket = running
 
 	err := orch.Start(context.Background(), instance.ID)
