@@ -21,13 +21,15 @@ func TestAppMethodsOverSDKREST_RoundTrip(t *testing.T) {
 	const tenant = "tenant-a"
 	type call struct{ op, tenant, client, name string }
 	var calls []call
+	var listLimit, listOffset int32
 	iamClient := &mockIAMClient{
 		registerAppFn: func(_ context.Context, tenantID string, req *iamsdk.RegisterAppRequest) (*iamsdk.Application, error) {
 			calls = append(calls, call{"register", tenantID, "", req.Name})
 			return &iamsdk.Application{ClientID: "c1", TenantID: tenantID, Name: req.Name}, nil
 		},
-		listAppsFn: func(_ context.Context, tenantID string, _, _ int32) (*ListAppsResponse, error) {
+		listAppsFn: func(_ context.Context, tenantID string, limit, offset int32) (*ListAppsResponse, error) {
 			calls = append(calls, call{"list", tenantID, "", ""})
+			listLimit, listOffset = limit, offset
 			return &ListAppsResponse{
 				PaginatedResponse: PaginatedResponse{Total: 1},
 				Apps:              []AppResponse{{ClientID: "c1", TenantID: tenantID, Name: "app"}},
@@ -64,6 +66,15 @@ func TestAppMethodsOverSDKREST_RoundTrip(t *testing.T) {
 	require.Len(t, listed.GetApps(), 1)
 	assert.Equal(t, "c1", listed.GetApps()[0].GetClientId())
 	assert.Equal(t, int64(1), listed.GetTotal())
+
+	// A non-default page reaches the backend as limit and offset.
+	_, err = client.ListApps(ctx, &platformv1.ListIAMAppsRequest{
+		TenantId:   tenant,
+		Pagination: &platformv1.PaginationRequest{Page: 2, PageSize: 7},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int32(7), listLimit)
+	assert.Equal(t, int32(7), listOffset)
 
 	got, err := client.GetApp(ctx, &platformv1.GetIAMAppRequest{TenantId: tenant, ClientId: "c1"})
 	require.NoError(t, err)

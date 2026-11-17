@@ -2,8 +2,10 @@ package rest
 
 import (
 	"net/http"
+	"strconv"
 
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -33,8 +35,12 @@ func init() {
 
 	templatedRouteTable[platformv1.PlatformIAMService_RegisterApp_FullMethodName] =
 		tenantItemRoute(apps, http.MethodPost)
-	templatedRouteTable[platformv1.PlatformIAMService_ListApps_FullMethodName] =
-		tenantItemRoute(apps, http.MethodGet)
+	listApps := tenantItemRoute(apps, http.MethodGet)
+	listApps.queryParams = []queryParam{
+		{name: "limit", field: "pagination.page_size"},
+		{name: "offset", field: "pagination", encode: paginationOffset},
+	}
+	templatedRouteTable[platformv1.PlatformIAMService_ListApps_FullMethodName] = listApps
 	templatedRouteTable[platformv1.PlatformIAMService_GetApp_FullMethodName] =
 		tenantItemRoute(app, http.MethodGet, clientID)
 	templatedRouteTable[platformv1.PlatformIAMService_UpdateApp_FullMethodName] =
@@ -64,4 +70,18 @@ func decodeIAMRotateAppSecret(raw []byte) (*platformv1.RotateIAMAppSecretRespons
 		return nil, ErrUnmarshalFailed{Err: err}
 	}
 	return out, nil
+}
+
+// paginationOffset renders a 1-based PaginationRequest page as the
+// zero-based row offset the IAM handlers read (getPaginationParams):
+// (page-1)*page_size. The first page, or no page size, sends no offset.
+func paginationOffset(v protoreflect.Value) string {
+	m := v.Message()
+	fields := m.Descriptor().Fields()
+	page := paginationInt(m.Get(fields.ByName("page")))
+	size := paginationInt(m.Get(fields.ByName("page_size")))
+	if page <= 1 || size <= 0 {
+		return ""
+	}
+	return strconv.FormatInt((page-1)*size, 10)
 }

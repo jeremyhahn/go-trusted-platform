@@ -197,3 +197,38 @@ func TestIAMAppMissingClientID_RejectedBeforeTheWire(t *testing.T) {
 		})
 	}
 }
+
+// The IAM handlers read pagination only from limit/offset query params,
+// so a non-default page must reach the URL, not the GET body.
+func TestIAMListApps_SendsPaginationAsLimitAndOffset(t *testing.T) {
+	cases := []struct {
+		name      string
+		page      *platformv1.PaginationRequest
+		wantQuery string
+	}{
+		{"second page", &platformv1.PaginationRequest{Page: 2, PageSize: 7}, "limit=7&offset=7"},
+		{"third page", &platformv1.PaginationRequest{Page: 3, PageSize: 7}, "limit=7&offset=14"},
+		{"first page", &platformv1.PaginationRequest{Page: 1, PageSize: 7}, "limit=7"},
+		{"no pagination", nil, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotQuery string
+			a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/v1/iam/tenants/t1/apps" {
+					gotQuery = r.URL.RawQuery
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"apps":[],"total":"0"}`))
+			})
+			req := &platformv1.ListIAMAppsRequest{TenantId: "t1", Pagination: tc.page}
+			if err := a.Connection().Invoke(context.Background(),
+				platformv1.PlatformIAMService_ListApps_FullMethodName, req, &platformv1.ListIAMAppsResponse{}); err != nil {
+				t.Fatalf("ListApps: %v", err)
+			}
+			if gotQuery != tc.wantQuery {
+				t.Errorf("query = %q, want %q", gotQuery, tc.wantQuery)
+			}
+		})
+	}
+}
