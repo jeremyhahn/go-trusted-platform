@@ -3,8 +3,10 @@ package rest
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -26,8 +28,14 @@ var iamPolicyNameParam = pathParam{placeholder: "{id}", field: "policy_name"}
 func init() {
 	templatedRouteTable[platformv1.PlatformIAMService_CreatePolicy_FullMethodName] =
 		tenantItemRoute(iamPoliciesPath, http.MethodPost)
-	templatedRouteTable[platformv1.PlatformIAMService_ListPolicies_FullMethodName] =
-		tenantItemRoute(iamPoliciesPath, http.MethodGet)
+	// The server reads paging only from ?limit= and ?offset=
+	// (pkg/webservice/v1/rest/iam getPaginationParams); pages are 1-based.
+	listPolicies := tenantItemRoute(iamPoliciesPath, http.MethodGet)
+	listPolicies.queryParams = append(listPolicies.queryParams,
+		queryParam{name: "limit", field: "pagination.page_size"},
+		queryParam{name: "offset", field: "pagination", encode: encodePageOffset},
+	)
+	templatedRouteTable[platformv1.PlatformIAMService_ListPolicies_FullMethodName] = listPolicies
 	templatedRouteTable[platformv1.PlatformIAMService_GetPolicy_FullMethodName] =
 		tenantItemRoute(iamPolicyPath, http.MethodGet, iamPolicyNameParam)
 	templatedRouteTable[platformv1.PlatformIAMService_UpdatePolicy_FullMethodName] =
@@ -58,6 +66,25 @@ func init() {
 		wireDecoder(platformv1.PlatformIAMService_ValidatePolicy_FullMethodName, protoJSONReply[platformv1.ValidateIAMPolicyResponse])
 	restResponseDecoders[platformv1.PlatformIAMService_TestPolicy_FullMethodName] =
 		wireDecoder(platformv1.PlatformIAMService_TestPolicy_FullMethodName, protoJSONReply[platformv1.TestIAMPolicyResponse])
+}
+
+// encodePageOffset renders a PaginationRequest as the server's row offset,
+// (page-1)*page_size; the first page, or a page without a size, has none.
+func encodePageOffset(v protoreflect.Value) string {
+	if !v.IsValid() {
+		return ""
+	}
+	msg := v.Message()
+	if !msg.IsValid() {
+		return ""
+	}
+	fields := msg.Descriptor().Fields()
+	page := msg.Get(fields.ByName("page")).Uint()
+	size := msg.Get(fields.ByName("page_size")).Uint()
+	if page <= 1 || size == 0 {
+		return ""
+	}
+	return strconv.FormatUint((page-1)*size, 10)
 }
 
 // iamPolicyWriteBody is the server's CreatePolicyRequest / UpdatePolicyRequest
