@@ -525,6 +525,47 @@ func TestRegisterDefaultStrategiesAllMethods(t *testing.T) {
 	}
 }
 
+// registeredStrategyNames lists the names of the strategies a manager built
+// with the given fallback methods registers.
+func registeredStrategyNames(t *testing.T, methods []luks.UnlockMethod) map[string]bool {
+	t.Helper()
+	platform := createTestPlatform()
+	platform.Config.FallbackMethods = methods
+
+	mgr, err := NewManager(platform, logging.DefaultLogger())
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+	names := make(map[string]bool)
+	for _, s := range mgr.(*initrdManager).chain.List() {
+		names[s.Name()] = true
+	}
+	return names
+}
+
+// TestRegisterDefaultStrategies_TPMPCRRegistersTokenStrategy: the tpm-pcr
+// method registers the systemd-tpm2 token strategy ahead of the PCR one.
+func TestRegisterDefaultStrategies_TPMPCRRegistersTokenStrategy(t *testing.T) {
+	names := registeredStrategyNames(t, []luks.UnlockMethod{luks.UnlockTPMPCR})
+	for _, name := range []string{StrategyNameTPMToken, "TPM-PCR"} {
+		if !names[name] {
+			t.Errorf("expected strategy %s to be registered, got %v", name, names)
+		}
+	}
+}
+
+// TestRegisterDefaultStrategies_TPMTokenIsNotAMethod: "tpm-token" is not a
+// selectable unlock method; it falls to the unknown-method branch.
+func TestRegisterDefaultStrategies_TPMTokenIsNotAMethod(t *testing.T) {
+	names := registeredStrategyNames(t, []luks.UnlockMethod{luks.UnlockMethod("tpm-token")})
+	if names[StrategyNameTPMToken] {
+		t.Errorf("tpm-token must not register %s, got %v", StrategyNameTPMToken, names)
+	}
+	if len(names) != 1 || !names["Keyfile"] {
+		t.Errorf("expected only Keyfile, got %v", names)
+	}
+}
+
 func TestMergeConfigAuditLogPath(t *testing.T) {
 	base := &Config{
 		RootDevice:   "/dev/sda2",
