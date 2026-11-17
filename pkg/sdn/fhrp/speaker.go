@@ -91,6 +91,9 @@ type Speaker struct {
 	mu      sync.Mutex
 	active  bool
 	runners []*runner
+	// pending holds the stopped runners whose VIP release failed at Stop;
+	// a later Stop retries their group's Shutdown until it succeeds.
+	pending []*runner
 	// dropped counts advertisements discarded by the §7.1 receive checks.
 	dropped atomic.Uint64
 }
@@ -166,21 +169,58 @@ func (s *Speaker) Start(ctx context.Context) error {
 }
 
 // Stop shuts every group down (§6.4.3: a master sends a priority-0
-// advertisement and releases its addresses) and closes the sockets.
+// advertisement and releases its addresses) and closes the sockets. The
+// speaker is inactive afterwards even when a group fails to release a VIP;
+// such a group stays pending, and a later Stop retries its release (#1716).
+// Stop on an inactive speaker returns ErrSpeakerNotRunning only when no
+// release is pending.
 func (s *Speaker) Stop(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.active {
-		return ErrSpeakerNotRunning{}
+		if len(s.pending) == 0 {
+			return ErrSpeakerNotRunning{}
+		}
+		return s.retryPending()
 	}
 	var first error
 	for _, r := range s.runners {
-		if err := r.stop(s.clock.Now()); err != nil && first == nil {
-			first = err
+		if err := r.stop(s.clock.Now()); err != nil {
+			s.pending = append(s.pending, r)
+			if first == nil {
+				first = err
+			}
 		}
 	}
 	s.runners = nil
 	s.active = false
+	return first
+}
+
+// retryPending re-runs Shutdown on every runner whose release failed at an
+// earlier Stop. Its loops and socket are already closed, so only the group
+// is driven. Runners that still fail stay pending. s.mu must be held.
+func (s *Speaker) retryPending() error {
+	var first error
+	still := s.pending[:0]
+	for _, r := range s.pending {
+		r.mu.Lock()
+		err := r.group.Shutdown(s.clock.Now())
+		r.mu.Unlock()
+		if err != nil {
+			still = append(still, r)
+			if first == nil {
+				first = err
+			}
+		}
+	}
+	for i := len(still); i < len(s.pending); i++ {
+		s.pending[i] = nil
+	}
+	s.pending = still
+	if len(s.pending) == 0 {
+		s.pending = nil
+	}
 	return first
 }
 
