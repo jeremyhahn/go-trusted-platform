@@ -686,6 +686,52 @@ func TestEABGRPCService_CleanupExpiredCredentials(t *testing.T) {
 	}
 }
 
+// TestEABGRPCService_CallerTenantBinding is SPEC row 125 (#2008): a
+// tenant-bound caller may create, list and clean up EAB credentials only in
+// its own tenant. Naming another tenant, or no tenant for the all-tenant
+// cleanup, is refused with PermissionDenied before the service is reached.
+func TestEABGRPCService_CallerTenantBinding(t *testing.T) {
+	calls := map[string]func(*EABGRPCService, context.Context, string) error{
+		"CreateCredential": func(s *EABGRPCService, ctx context.Context, tenantID string) error {
+			_, err := s.CreateCredential(ctx, &platformv1.CreateEABCredentialRequest{ProfileId: 1, TenantId: tenantID})
+			return err
+		},
+		"ListCredentials": func(s *EABGRPCService, ctx context.Context, tenantID string) error {
+			_, err := s.ListCredentials(ctx, &platformv1.ListEABCredentialsRequest{TenantId: tenantID})
+			return err
+		},
+		"CleanupExpiredCredentials": func(s *EABGRPCService, ctx context.Context, tenantID string) error {
+			_, err := s.CleanupExpiredCredentials(ctx, &platformv1.CleanupExpiredEABCredentialsRequest{TenantId: tenantID})
+			return err
+		},
+	}
+	cases := []struct {
+		name     string
+		ctx      context.Context
+		tenantID string
+		wantCode codes.Code
+	}{
+		{name: "own tenant", ctx: tokenCallerContext("tenant-a"), tenantID: "tenant-a", wantCode: codes.OK},
+		{name: "another tenant", ctx: tokenCallerContext("tenant-a"), tenantID: "tenant-b", wantCode: codes.PermissionDenied},
+		{name: "every tenant", ctx: tokenCallerContext("tenant-a"), tenantID: "", wantCode: codes.PermissionDenied},
+		{name: "unbound local caller", ctx: context.Background(), tenantID: "tenant-b", wantCode: codes.OK},
+	}
+	for method, call := range calls {
+		for _, tc := range cases {
+			t.Run(method+"/"+tc.name, func(t *testing.T) {
+				service, svc, _ := newEABGRPCFixture()
+				err := call(service, tc.ctx, tc.tenantID)
+				if got := status.Code(err); got != tc.wantCode {
+					t.Fatalf("code = %v, want %v (err %v)", got, tc.wantCode, err)
+				}
+				if tc.wantCode == codes.PermissionDenied && svc.lastGenerate.TenantID != "" {
+					t.Fatalf("refused create reached the service: %+v", svc.lastGenerate)
+				}
+			})
+		}
+	}
+}
+
 func TestEABGRPCService_CleanupExpiredCredentials_Errors(t *testing.T) {
 	service, svc, _ := newEABGRPCFixture()
 	ctx := context.Background()
