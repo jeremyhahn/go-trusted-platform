@@ -39,9 +39,11 @@ func (m *mockTokenValidator) ValidateToken(ctx context.Context, token string) (*
 type mockPEPClient struct {
 	checkResp *iam.CheckResponse
 	checkErr  error
+	calls     int
 }
 
 func (m *mockPEPClient) Check(ctx context.Context, req *iam.CheckRequest) (*iam.CheckResponse, error) {
+	m.calls++
 	if m.checkErr != nil {
 		return nil, m.checkErr
 	}
@@ -452,7 +454,7 @@ func TestQuicBaaSAuthAdapter_CheckPermission(t *testing.T) {
 		}
 	})
 
-	t.Run("uses default tenant when not in token", func(t *testing.T) {
+	t.Run("refuses a token with no tenant without calling the PEP", func(t *testing.T) {
 		validator := &mockTokenValidator{
 			result: &TokenValidationResult{
 				Valid:  true,
@@ -464,18 +466,24 @@ func TestQuicBaaSAuthAdapter_CheckPermission(t *testing.T) {
 			checkResp: &iam.CheckResponse{Allowed: true},
 		}
 		adapter := NewQuicBaaSAuthAdapter(&QuicBaaSAuthConfig{
-			TokenValidator:  validator,
-			PEPClient:       pepClient,
-			DefaultTenantID: "default-tenant",
+			TokenValidator: validator,
+			PEPClient:      pepClient,
 		})
 
 		allowed, err := adapter.CheckPermission(context.Background(), "test-token", "vtpm", "read")
 
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
+		if err == nil {
+			t.Fatal("expected an error for a token with no tenant")
 		}
-		if !allowed {
-			t.Error("expected allowed to be true")
+		var authErr *QuicBaaSAuthError
+		if !errors.As(err, &authErr) || authErr.Code != QuicBaaSAuthErrorClaimsExtraction {
+			t.Errorf("error = %v, want QuicBaaSAuthErrorClaimsExtraction", err)
+		}
+		if allowed {
+			t.Error("expected allowed to be false")
+		}
+		if pepClient.calls != 0 {
+			t.Errorf("PEP Check called %d times, want 0", pepClient.calls)
 		}
 	})
 
