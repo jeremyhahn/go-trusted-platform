@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -124,12 +125,96 @@ func (a *authTestCA) CABundle() ([]byte, error) {
 
 // newHandlerWithCA builds an AuthFactorHandlers with the given authCA stub.
 func newHandlerWithCA(ca authCA) *AuthFactorHandlers {
-	return &AuthFactorHandlers{
+	h := &AuthFactorHandlers{
 		ca:       ca,
 		logger:   slog.Default(),
 		cache:    make(map[string]aaguidEntry),
 		policies: make(map[string]mfaPolicy),
 	}
+	h.SetAuthorization(&fakeAuthFactorPEP{allow: true}, principalResolver(&AuthFactorPrincipal{Subject: "alice", TenantID: "tenant-1"}))
+	return h
+}
+
+// fakeAuthFactorPEP is the PEP decision point the tests control: it records
+// the last request and answers allow.
+type fakeAuthFactorPEP struct {
+	allow bool
+	err   error
+	got   *sdkiam.CheckRequest
+}
+
+func (f *fakeAuthFactorPEP) Check(_ context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+	f.got = req
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &sdkiam.CheckResponse{Allowed: f.allow}, nil
+}
+
+// principalResolver resolves every request to p; a nil p means no
+// authenticated principal.
+func principalResolver(p *AuthFactorPrincipal) AuthFactorPrincipalResolver {
+	return func(*http.Request) (AuthFactorPrincipal, bool) {
+		if p == nil {
+			return AuthFactorPrincipal{}, false
+		}
+		return *p, true
+	}
+}
+
+func issueCertRequest(t *testing.T, userID string) *http.Request {
+	t.Helper()
+	body, _ := json.Marshal(IssueMTLSCertRequest{CSRPEM: generateAuthTestCSRPEM(t)})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/users/"+userID+"/factors/mtls/issue-cert", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	return req
+}
+
+func TestIssueCert_PEPDecides(t *testing.T) {
+	bob := &AuthFactorPrincipal{Subject: "bob", TenantID: "tenant-1", Roles: []string{"operator"}}
+	cases := []struct {
+		name      string
+		pep       *fakeAuthFactorPEP
+		principal *AuthFactorPrincipal
+		adminCert bool
+		want      int
+	}{
+		{"principal without the permission", &fakeAuthFactorPEP{allow: false}, bob, false, http.StatusForbidden},
+		{"certificate-only caller with CN admin", &fakeAuthFactorPEP{allow: true}, nil, true, http.StatusForbidden},
+		{"no principal", &fakeAuthFactorPEP{allow: true}, nil, false, http.StatusForbidden},
+		{"PEP error", &fakeAuthFactorPEP{err: assert.AnError}, bob, false, http.StatusForbidden},
+		{"principal holding the permission", &fakeAuthFactorPEP{allow: true}, bob, false, http.StatusCreated},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHandlerWithCA(newAuthTestCA(t))
+			h.SetAuthorization(tc.pep, principalResolver(tc.principal))
+			req := issueCertRequest(t, "alice")
+			if tc.adminCert {
+				req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{selfSignedClientCert(t, "admin")}}
+			}
+			rr := httptest.NewRecorder()
+			registerRoutes(h).ServeHTTP(rr, req)
+			assert.Equal(t, tc.want, rr.Code)
+			if tc.principal == nil {
+				assert.Nil(t, tc.pep.got, "no principal is refused before the PEP is asked")
+				return
+			}
+			require.NotNil(t, tc.pep.got)
+			assert.Equal(t, sdkiam.CheckSubject{ID: "bob", TenantID: "tenant-1", Roles: []string{"operator"}}, tc.pep.got.Subject)
+			assert.Equal(t, AuthFactorIssueCertAction, tc.pep.got.Action)
+			assert.Equal(t, "auth_factors://alice", tc.pep.got.Resource)
+			assert.Equal(t, "tenant-1", tc.pep.got.TenantID)
+		})
+	}
+}
+
+func TestIssueCert_NoPEP_Returns403(t *testing.T) {
+	h := newHandlerWithCA(newAuthTestCA(t))
+	h.SetAuthorization(nil, principalResolver(&AuthFactorPrincipal{Subject: "alice", TenantID: "tenant-1"}))
+	rr := httptest.NewRecorder()
+	registerRoutes(h).ServeHTTP(rr, issueCertRequest(t, "alice"))
+	assert.Equal(t, http.StatusForbidden, rr.Code)
 }
 
 // generateTestCSRPEM creates a minimal PEM-encoded CSR for testing.
@@ -344,7 +429,10 @@ func TestIssueCert_NoCAService_Returns503(t *testing.T) {
 
 func TestIssueCert_NonAdminOtherUser_Returns403(t *testing.T) {
 	testCA := newAuthTestCA(t)
-	router := registerRoutes(newHandlerWithCA(testCA))
+	h := newHandlerWithCA(testCA)
+	// The PEP does not grant regular-user the auth-factor permission on other-user.
+	h.SetAuthorization(&fakeAuthFactorPEP{allow: false}, principalResolver(&AuthFactorPrincipal{Subject: "regular-user", TenantID: "tenant-1"}))
+	router := registerRoutes(h)
 
 	csrPEM := generateAuthTestCSRPEM(t)
 	body, _ := json.Marshal(IssueMTLSCertRequest{CSRPEM: csrPEM})
