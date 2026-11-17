@@ -610,7 +610,7 @@ func TestCoverage964_StartRemoteTransports(t *testing.T) {
 
 	logger := logging.NewLogger(slog.LevelDebug, nil)
 	caPath := writeTestCA(t)
-	socket := filepath.Join(t.TempDir(), "quicbaas.sock")
+	socket := filepath.Join(shortSocketDir(t), "quicbaas.sock")
 	tests := []struct {
 		name string
 		cfg  *Config
@@ -658,7 +658,7 @@ func TestCoverage964_StartRemoteFailsWithoutUsableTLS(t *testing.T) {
 		cfg  *Config
 	}{
 		// gRPC-based transports refuse to dial without TLS at all.
-		{"unix without tls", &Config{Transport: TransportUnix, UnixSocket: filepath.Join(t.TempDir(), "s.sock")}},
+		{"unix without tls", &Config{Transport: TransportUnix, UnixSocket: filepath.Join(shortSocketDir(t), "s.sock")}},
 		{"grpc without tls", &Config{Transport: TransportGRPC, Address: "127.0.0.1:1", TLS: &TLSConfig{}}},
 		// Every transport fails when the configured CA file cannot be read.
 		{"grpc missing ca", &Config{Transport: TransportGRPC, Address: "127.0.0.1:1", TLS: &TLSConfig{CACert: missing}}},
