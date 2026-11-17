@@ -31,6 +31,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/restwire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -186,6 +187,7 @@ func TestNewHandler_Success(t *testing.T) {
 	responseWriter := newTestResponseWriter()
 
 	invHandler, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    responseWriter,
@@ -211,6 +213,7 @@ func TestNewHandler_MissingLogger(t *testing.T) {
 	responseWriter := newTestResponseWriter()
 
 	invHandler, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            nil,
 		InvitationService: mockService,
 		ResponseWriter:    responseWriter,
@@ -228,6 +231,7 @@ func TestNewHandler_MissingInvitationService(t *testing.T) {
 	responseWriter := newTestResponseWriter()
 
 	invHandler, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: nil,
 		ResponseWriter:    responseWriter,
@@ -245,6 +249,7 @@ func TestNewHandler_MissingResponseWriter(t *testing.T) {
 	mockService := &MockInvitationService{}
 
 	invHandler, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    nil,
@@ -263,6 +268,7 @@ func TestHandler_Create_Success(t *testing.T) {
 	responseWriter := newTestResponseWriter()
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    responseWriter,
@@ -304,6 +310,7 @@ func TestHandler_Create_MissingTenantContext(t *testing.T) {
 	mockWriter := &MockHttpWriter{}
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    mockWriter,
@@ -336,6 +343,7 @@ func TestHandler_Create_MissingUserContext(t *testing.T) {
 	mockWriter := &MockHttpWriter{}
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    mockWriter,
@@ -371,6 +379,7 @@ func TestHandler_Create_NotOwner(t *testing.T) {
 	mockWriter := &MockHttpWriter{}
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    mockWriter,
@@ -406,6 +415,7 @@ func TestHandler_Create_InvalidBody(t *testing.T) {
 	mockWriter := &MockHttpWriter{}
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    mockWriter,
@@ -435,6 +445,7 @@ func TestHandler_Create_MissingEmail(t *testing.T) {
 	mockWriter := &MockHttpWriter{}
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    mockWriter,
@@ -469,6 +480,7 @@ func TestHandler_Create_InvalidEmail(t *testing.T) {
 	mockWriter := &MockHttpWriter{}
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    mockWriter,
@@ -515,6 +527,7 @@ func TestHandler_Create_MissingRole(t *testing.T) {
 	mockWriter := &MockHttpWriter{}
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    mockWriter,
@@ -543,12 +556,39 @@ func TestHandler_Create_MissingRole(t *testing.T) {
 }
 
 // TestHandler_Create_InvalidRole verifies 400 when role is not in ValidRoles.
+// fakeRoleLister stands in for the IAM client's ListRoles.
+type fakeRoleLister struct {
+	roles []*platformv1.IAMRole
+	err   error
+	calls int
+}
+
+func newFakeRoleLister(names ...string) *fakeRoleLister {
+	if len(names) == 0 {
+		names = []string{"admin", "member", "viewer"}
+	}
+	f := &fakeRoleLister{}
+	for _, n := range names {
+		f.roles = append(f.roles, &platformv1.IAMRole{Name: n})
+	}
+	return f
+}
+
+func (f *fakeRoleLister) ListRoles(_ context.Context, _ *platformv1.ListIAMRolesRequest) ([]*platformv1.IAMRole, int64, error) {
+	f.calls++
+	if f.err != nil {
+		return nil, 0, f.err
+	}
+	return f.roles, int64(len(f.roles)), nil
+}
+
 func TestHandler_Create_InvalidRole(t *testing.T) {
 	logger := newTestLogger()
 	mockService := &MockInvitationService{}
 	mockWriter := &MockHttpWriter{}
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    mockWriter,
@@ -589,6 +629,7 @@ func TestHandler_Create_ServiceError(t *testing.T) {
 	mockWriter := &MockHttpWriter{}
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    mockWriter,
@@ -625,6 +666,7 @@ func TestHandler_Create_DuplicateInvitation(t *testing.T) {
 	responseWriter := newTestResponseWriter()
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    responseWriter,
@@ -658,6 +700,7 @@ func TestHandler_Create_EmailAlreadyRegistered(t *testing.T) {
 	responseWriter := newTestResponseWriter()
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    responseWriter,
@@ -695,6 +738,7 @@ func TestHandler_Create_AllValidRoles(t *testing.T) {
 			responseWriter := newTestResponseWriter()
 
 			h, err := NewHandler(HandlerParams{
+				RoleLister:        newFakeRoleLister(),
 				Logger:            logger,
 				InvitationService: mockService,
 				ResponseWriter:    responseWriter,
@@ -730,6 +774,7 @@ func TestHandler_Create_WithExpiresIn(t *testing.T) {
 	responseWriter := newTestResponseWriter()
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    responseWriter,
@@ -765,6 +810,7 @@ func TestHandler_List_Success(t *testing.T) {
 	responseWriter := newTestResponseWriter()
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    responseWriter,
@@ -802,6 +848,7 @@ func TestHandler_List_MissingTenantContext(t *testing.T) {
 	mockWriter := &MockHttpWriter{}
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    mockWriter,
@@ -829,6 +876,7 @@ func TestHandler_List_ServiceError(t *testing.T) {
 	mockWriter := &MockHttpWriter{}
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    mockWriter,
@@ -860,6 +908,7 @@ func TestHandler_List_EmptyResult(t *testing.T) {
 	responseWriter := newTestResponseWriter()
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    responseWriter,
@@ -892,6 +941,7 @@ func TestHandler_GetByToken_Success(t *testing.T) {
 	responseWriter := newTestResponseWriter()
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    responseWriter,
@@ -924,6 +974,7 @@ func TestHandler_GetByToken_MissingToken(t *testing.T) {
 	mockWriter := &MockHttpWriter{}
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    mockWriter,
@@ -952,6 +1003,7 @@ func TestHandler_GetByToken_NotFound(t *testing.T) {
 	mockWriter := &MockHttpWriter{}
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    mockWriter,
@@ -981,6 +1033,7 @@ func TestHandler_GetByToken_Expired(t *testing.T) {
 	mockWriter := &MockHttpWriter{}
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    mockWriter,
@@ -1011,6 +1064,7 @@ func TestHandler_GetByToken_Revoked(t *testing.T) {
 	mockWriter := &MockHttpWriter{}
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    mockWriter,
@@ -1041,6 +1095,7 @@ func TestHandler_GetByToken_AlreadyAccepted(t *testing.T) {
 	mockWriter := &MockHttpWriter{}
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    mockWriter,
@@ -1071,6 +1126,7 @@ func TestHandler_GetByToken_ServiceError(t *testing.T) {
 	mockWriter := &MockHttpWriter{}
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    mockWriter,
@@ -1101,6 +1157,7 @@ func TestHandler_Get_Success(t *testing.T) {
 	responseWriter := newTestResponseWriter()
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    responseWriter,
@@ -1135,6 +1192,7 @@ func TestHandler_Get_MissingTenantContext(t *testing.T) {
 	mockWriter := &MockHttpWriter{}
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    mockWriter,
@@ -1163,6 +1221,7 @@ func TestHandler_Get_MissingID(t *testing.T) {
 	mockWriter := &MockHttpWriter{}
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    mockWriter,
@@ -1193,6 +1252,7 @@ func TestHandler_Get_InvalidID(t *testing.T) {
 	mockWriter := &MockHttpWriter{}
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    mockWriter,
@@ -1229,6 +1289,7 @@ func TestHandler_Get_NotFound(t *testing.T) {
 	mockWriter := &MockHttpWriter{}
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    mockWriter,
@@ -1260,6 +1321,7 @@ func TestHandler_Get_ServiceError(t *testing.T) {
 	mockWriter := &MockHttpWriter{}
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    mockWriter,
@@ -1292,6 +1354,7 @@ func TestHandler_Get_WrongTenant(t *testing.T) {
 	mockWriter := &MockHttpWriter{}
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    mockWriter,
@@ -1324,6 +1387,7 @@ func TestHandler_Revoke_Success(t *testing.T) {
 	responseWriter := newTestResponseWriter()
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    responseWriter,
@@ -1359,6 +1423,7 @@ func TestHandler_Revoke_NotOwner(t *testing.T) {
 	mockWriter := &MockHttpWriter{}
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    mockWriter,
@@ -1390,6 +1455,7 @@ func TestHandler_Revoke_MissingID(t *testing.T) {
 	mockWriter := &MockHttpWriter{}
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    mockWriter,
@@ -1421,6 +1487,7 @@ func TestHandler_Revoke_InvalidID(t *testing.T) {
 	mockWriter := &MockHttpWriter{}
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    mockWriter,
@@ -1458,6 +1525,7 @@ func TestHandler_Revoke_NotFound(t *testing.T) {
 	mockWriter := &MockHttpWriter{}
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    mockWriter,
@@ -1490,6 +1558,7 @@ func TestHandler_Revoke_WrongTenant(t *testing.T) {
 	mockWriter := &MockHttpWriter{}
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    mockWriter,
@@ -1525,6 +1594,7 @@ func TestHandler_Revoke_MissingTenantContext(t *testing.T) {
 	mockWriter := &MockHttpWriter{}
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    mockWriter,
@@ -1554,6 +1624,7 @@ func TestHandler_Revoke_MissingUserContext(t *testing.T) {
 	mockWriter := &MockHttpWriter{}
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    mockWriter,
@@ -1586,6 +1657,7 @@ func TestHandler_Revoke_GetServiceError(t *testing.T) {
 	mockWriter := &MockHttpWriter{}
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    mockWriter,
@@ -1619,6 +1691,7 @@ func TestHandler_Revoke_RevokeServiceError(t *testing.T) {
 	mockWriter := &MockHttpWriter{}
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    mockWriter,
@@ -1653,6 +1726,7 @@ func TestHandler_Revoke_AlreadyRevoked(t *testing.T) {
 	responseWriter := newTestResponseWriter()
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    responseWriter,
@@ -1682,6 +1756,7 @@ func TestHandler_Revoke_AlreadyAccepted(t *testing.T) {
 	responseWriter := newTestResponseWriter()
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    responseWriter,
@@ -1967,6 +2042,7 @@ func TestHandler_Create_ResponseIncludesToken(t *testing.T) {
 	mockWriter := &MockHttpWriter{}
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    mockWriter,
@@ -2020,6 +2096,7 @@ func TestHandler_GetByToken_ResponseExcludesToken(t *testing.T) {
 	mockWriter := &MockHttpWriter{}
 
 	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister(),
 		Logger:            logger,
 		InvitationService: mockService,
 		ResponseWriter:    mockWriter,
