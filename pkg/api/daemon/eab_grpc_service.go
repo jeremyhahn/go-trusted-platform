@@ -175,6 +175,9 @@ func (s *EABGRPCService) CreateCredential(
 	if err := s.requireService(); err != nil {
 		return nil, err
 	}
+	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+		return nil, err
+	}
 
 	params := eab.GenerateParams{
 		ProfileID:  req.GetProfileId(),
@@ -251,6 +254,9 @@ func (s *EABGRPCService) ListCredentials(
 	req *platformv1.ListEABCredentialsRequest,
 ) (*platformv1.ListEABCredentialsResponse, error) {
 	if err := s.requireService(); err != nil {
+		return nil, err
+	}
+	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 
@@ -553,6 +559,11 @@ func (s *EABGRPCService) CleanupExpiredCredentials(
 	req *platformv1.CleanupExpiredEABCredentialsRequest,
 ) (*platformv1.CleanupExpiredEABCredentialsResponse, error) {
 	if err := s.requireService(); err != nil {
+		return nil, err
+	}
+	// A tenant-bound caller names its own tenant; the empty tenant (every
+	// tenant's expired credentials) is left to an unbound local caller.
+	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
 		return nil, err
 	}
 
