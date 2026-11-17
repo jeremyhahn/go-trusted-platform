@@ -148,6 +148,46 @@ func TestAddVIP_SendsTheFlatVIPDocument(t *testing.T) {
 	}
 }
 
+func TestSetVIPBackends_SendsTheBackendsAndFoldsTheVIP(t *testing.T) {
+	a, seen := lbServer(t)
+	req := &platformv1.SetVIPBackendsRequest{Protocol: "tcp", Address: "10.100.0.10", Port: 443,
+		Backends: []*platformv1.VIPBackend{{Address: "10.0.1.9", Port: 9000, Weight: 3}}}
+	reply := &platformv1.SetVIPBackendsResponse{}
+	if err := a.Connection().Invoke(context.Background(), platformv1.GatewayService_SetVIPBackends_FullMethodName, req, reply); err != nil {
+		t.Fatalf("SetVIPBackends: %v", err)
+	}
+
+	var sent struct {
+		Backends []struct {
+			Address string `json:"address"`
+			Port    uint32 `json:"port"`
+			Weight  uint32 `json:"weight"`
+		} `json:"backends"`
+	}
+	if err := json.Unmarshal(seen.body, &sent); err != nil {
+		t.Fatalf("body %q is not the backends document: %v", seen.body, err)
+	}
+	if len(sent.Backends) != 1 || sent.Backends[0].Address != "10.0.1.9" || sent.Backends[0].Port != 9000 || sent.Backends[0].Weight != 3 {
+		t.Errorf("sent backends %+v, want the one backend 10.0.1.9:9000 weight 3", sent.Backends)
+	}
+
+	if !reply.GetStatus().GetSuccess() {
+		t.Errorf("reply status %v, want success", reply.GetStatus())
+	}
+	vip := reply.GetVip()
+	cfg := vip.GetVip()
+	if cfg.GetAddress() != "10.100.0.10" || cfg.GetPort() != 443 || cfg.GetProtocol() != "tcp" || cfg.GetAlgorithm() != "hash" {
+		t.Errorf("reply VIP %v, want the served VIP config", cfg)
+	}
+	if vip.GetCtZone() != 7 || vip.GetGroupId() != 12 {
+		t.Errorf("reply %v, want ct_zone 7 and group_id 12", vip)
+	}
+	if len(vip.GetBackends()) != 1 || !vip.GetBackends()[0].GetHealthy() ||
+		vip.GetBackends()[0].GetBackend().GetAddress() != "10.0.1.5" || vip.GetBackends()[0].GetBackend().GetWeight() != 2 {
+		t.Errorf("reply backends %v, want the one served healthy backend", vip.GetBackends())
+	}
+}
+
 func TestLBVIP_RepliesFoldIntoTheProtoReplies(t *testing.T) {
 	a, _ := lbServer(t)
 	ctx := context.Background()
