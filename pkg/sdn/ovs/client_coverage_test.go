@@ -25,7 +25,7 @@ import (
 
 // TestClientDispatcherEdgeCases tests edge cases in dispatcher lifecycle
 func TestClientDispatcherEdgeCases(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -83,7 +83,7 @@ func TestClientDispatcherEdgeCases(t *testing.T) {
 
 // TestClientGetOpenVSwitchUUIDEdgeCases tests edge cases in getOpenVSwitchUUID
 func TestClientGetOpenVSwitchUUIDEdgeCases(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -125,7 +125,7 @@ func TestClientGetOpenVSwitchUUIDEdgeCases(t *testing.T) {
 
 // TestClientCallEdgeCases tests edge cases in the call method
 func TestClientCallEdgeCases(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -198,7 +198,7 @@ func TestClientCallEdgeCases(t *testing.T) {
 
 // TestClientSelectEdgeCases tests edge cases in Select
 func TestClientSelectEdgeCases(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -243,7 +243,7 @@ func TestClientSelectEdgeCases(t *testing.T) {
 
 // TestClientTransactEdgeCases tests edge cases in Transact
 func TestClientTransactEdgeCases(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -287,7 +287,7 @@ func TestClientTransactEdgeCases(t *testing.T) {
 
 // TestClientListDatabasesEdgeCases tests edge cases in ListDatabases
 func TestClientListDatabasesEdgeCases(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -321,7 +321,7 @@ func TestClientListDatabasesEdgeCases(t *testing.T) {
 
 // TestClientGetSchemaEdgeCases tests edge cases in GetSchema
 func TestClientGetSchemaEdgeCases(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -356,7 +356,7 @@ func TestClientGetSchemaEdgeCases(t *testing.T) {
 
 // TestClientEchoEdgeCases tests edge cases in Echo
 func TestClientEchoEdgeCases(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -439,7 +439,7 @@ func TestClientOptionsEdgeCases(t *testing.T) {
 
 // TestClientCloseOpenFlowClient tests closeOpenFlowClient
 func TestClientCloseOpenFlowClient(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -487,7 +487,7 @@ func TestClientCloseOpenFlowClient(t *testing.T) {
 
 // TestClientResponseHandling tests response handling edge cases
 func TestClientResponseHandling(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -537,7 +537,7 @@ func TestJSONRPCResponseError(t *testing.T) {
 	t.Run("response with error is handled", func(t *testing.T) {
 		// This tests the error path in the call method
 		// The mock server can return errors for invalid operations
-		tmpDir := t.TempDir()
+		tmpDir := shortSocketDir(t)
 		socketPath := filepath.Join(tmpDir, "db.sock")
 
 		server, err := newMockOVSDBServer(t, socketPath)

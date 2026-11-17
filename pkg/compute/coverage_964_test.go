@@ -428,7 +428,7 @@ func TestCov964_DefaultStopVMProcess(t *testing.T) {
 
 func TestCov964_DefaultVTPMDeviceWithoutSWTPM(t *testing.T) {
 	orch := newSWTPMTestOrchestrator(t, &fakeHost{})
-	socket := filepath.Join(t.TempDir(), "missing.sock")
+	socket := filepath.Join(shortSocketDir(t), "missing.sock")
 
 	device, err := orch.defaultVTPMDevice(socket)
 
@@ -442,7 +442,7 @@ func TestCov964_DefaultVTPMDeviceWithoutSWTPM(t *testing.T) {
 func TestCov964_RealMigrateSessionNeedsAConnectedMonitor(t *testing.T) {
 	ctx := context.Background()
 	logger := logging.DefaultLogger()
-	mon := qemu.NewMonitor(filepath.Join(t.TempDir(), "qmp.sock"), time.Second, logger)
+	mon := qemu.NewMonitor(filepath.Join(shortSocketDir(t), "qmp.sock"), time.Second, logger)
 	session := &realMigrateSession{mon: mon, mgr: qemu.NewMigrationManager(mon, logger)}
 
 	tests := []struct {
@@ -475,7 +475,7 @@ func TestCov964_RealMigrateSessionNeedsAConnectedMonitor(t *testing.T) {
 func TestCov964_QEMUIncomingReceiver(t *testing.T) {
 	ctx := context.Background()
 	_, qi := cov964Created(t)
-	mon := qemu.NewMonitor(filepath.Join(t.TempDir(), "qmp.sock"), time.Second, logging.DefaultLogger())
+	mon := qemu.NewMonitor(filepath.Join(shortSocketDir(t), "qmp.sock"), time.Second, logging.DefaultLogger())
 	receiver := &qemuIncomingReceiver{vm: qi.vm, monitor: mon, port: 49152}
 
 	assert.Equal(t, 49152, receiver.Port())
