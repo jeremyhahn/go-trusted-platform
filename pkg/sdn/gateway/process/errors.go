@@ -161,6 +161,38 @@ func (e *ErrProcessDown) Unwrap() error { return e.Cause }
 // It is the cause carried inside ErrProcessDown, so a service-level error
 // reads as "service X's process exited" once rather than naming the process
 // twice.
+// ErrWatchdogMissed is the failure of a ready child that sent no WATCHDOG=1
+// for a whole watchdog interval. The supervisor stops it and restarts it
+// under the restart policy, as it would a crashed one.
+type ErrWatchdogMissed struct {
+	Process  string
+	Interval time.Duration
+}
+
+func (e *ErrWatchdogMissed) Error() string {
+	return fmt.Sprintf("process %q missed its watchdog: no WATCHDOG=1 in %s", e.Process, e.Interval)
+}
+
+// ErrWatchdogIntervalInvalid refuses a negative watchdog interval, or a
+// positive one below 1 µs, which would reach the child as WATCHDOG_USEC=0
+// while the supervisor armed a deadline: 0 is how the watchdog is turned off.
+type ErrWatchdogIntervalInvalid struct {
+	Interval time.Duration
+}
+
+func (e *ErrWatchdogIntervalInvalid) Error() string {
+	return fmt.Sprintf("process watchdog-interval %s is negative or below 1µs: use 0 to turn the watchdog off", e.Interval)
+}
+
+// checkWatchdogInterval refuses an interval the child could not be told:
+// negative, or positive and below 1 µs.
+func checkWatchdogInterval(interval time.Duration) error {
+	if interval < 0 || (interval > 0 && interval < time.Microsecond) {
+		return &ErrWatchdogIntervalInvalid{Interval: interval}
+	}
+	return nil
+}
+
 type ErrProcessExited struct {
 	Process string
 	Cause   error

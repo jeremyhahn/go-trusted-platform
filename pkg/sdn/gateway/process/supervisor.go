@@ -91,6 +91,10 @@ type Config struct {
 	RestartBackoffMax time.Duration
 	RestartBudget     int
 	RestartWindow     time.Duration
+	// WatchdogInterval is the watchdog interval given to every process
+	// whose definition sets none: the child must send WATCHDOG=1 at least
+	// once per interval once it is ready. Zero leaves the watchdog off.
+	WatchdogInterval time.Duration
 	// Clock is the time source; nil means the system clock.
 	Clock Clock
 	// Logger receives supervision events; nil means slog.Default().
@@ -212,6 +216,11 @@ type supervised struct {
 	// child has been given desired. While it is set the process's services
 	// are reported down, never up with their configuration missing.
 	restoring bool
+	// missed is the watchdog failure of missedChild: the watchdog records
+	// it before stopping that child, and watch reports it, rather than the
+	// signal's exit, when that child is reaped.
+	missed      error
+	missedChild Child
 }
 
 // New builds a supervisor. Nothing is launched until StartService.
@@ -234,6 +243,15 @@ func (s *Supervisor) socketPath(process string) string {
 func (s *Supervisor) StartService(ctx context.Context, service string) error {
 	def, err := DefinitionForService(service)
 	if err != nil {
+		return err
+	}
+	// def is a copy: the package's definitions are left as they are.
+	if def.WatchdogInterval == 0 {
+		def.WatchdogInterval = s.cfg.WatchdogInterval
+	}
+	// A definition's own interval, or a Config built without Settings, has
+	// not been checked yet: refuse one the child would get as WATCHDOG_USEC=0.
+	if err := checkWatchdogInterval(def.WatchdogInterval); err != nil {
 		return err
 	}
 
@@ -642,8 +660,16 @@ func (s *Supervisor) launch(ctx context.Context, proc *supervised) error {
 	done := proc.done
 	s.mu.Unlock()
 
-	go s.readNotify(proc.def.Name, notify, ready)
+	// wd is the child's watchdog deadline, kept by its notify reader (nil
+	// without a watchdog); gone closes when the child's notify reader ends,
+	// with its socket.
+	wd := newWatchdogState(proc.def.WatchdogInterval, s.cfg.Clock)
+	gone := make(chan struct{})
+	go s.readNotify(proc.def.Name, notify, ready, wd, gone)
 	go s.watch(runCtx, proc, child, notify, done)
+	if wd != nil {
+		go s.watchdog(runCtx, proc, child, wd, ready, gone)
+	}
 
 	s.cfg.Logger.Info("gatewayd supervisor: process started",
 		slog.String("process", proc.def.Name),
@@ -738,6 +764,95 @@ func (s *Supervisor) awaitService(ctx context.Context, proc *supervised, service
 // services are up.
 const readyPollInterval = 25 * time.Millisecond
 
+// watchdogState is one child's watchdog deadline, kept by its notify reader
+// and read by its watchdog. Each WATCHDOG=1 updates it on receipt, so no
+// keep-alive is ever dropped or judged by when the watchdog gets to it
+// (Codex P1 #1928). Every stamp reads the clock under the same lock as the
+// expiry decision, so each keep-alive is ordered before or after it (Codex
+// P1 #1928 round 4). A nil *watchdogState is a child without a watchdog.
+type watchdogState struct {
+	interval time.Duration
+	clock    Clock
+
+	mu sync.Mutex
+	// deadline is absolute, on clock; zero until READY=1.
+	deadline time.Time
+	// missed is set by a keep-alive received after the deadline.
+	missed bool
+	// expired is set by expire once the child has missed its watchdog;
+	// it is final: no later keep-alive revives the child.
+	expired bool
+	// wake tells the watchdog the state changed. One pending signal is
+	// enough: the watchdog reads the whole state each time.
+	wake chan struct{}
+}
+
+func newWatchdogState(interval time.Duration, clock Clock) *watchdogState {
+	if interval <= 0 {
+		return nil
+	}
+	return &watchdogState{interval: interval, clock: clock, wake: make(chan struct{}, 1)}
+}
+
+// ready sets the first deadline, one interval after READY=1's receipt.
+func (w *watchdogState) ready() {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	if w.deadline.IsZero() {
+		w.deadline = w.clock.Now().Add(w.interval)
+	}
+	w.mu.Unlock()
+	// No wake-up: the watchdog reads the state once ready closes.
+}
+
+// keepAlive records a WATCHDOG=1 received now: past the deadline it is a
+// miss, otherwise the deadline moves to one interval after it. Before
+// READY=1 there is no deadline yet, and after the expiry the verdict is
+// final: in both cases a keep-alive changes nothing.
+func (w *watchdogState) keepAlive() {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	now := w.clock.Now()
+	switch {
+	case w.deadline.IsZero(), w.expired:
+	case now.After(w.deadline):
+		w.missed = true
+	default:
+		w.deadline = now.Add(w.interval)
+	}
+	w.mu.Unlock()
+	w.signal()
+}
+
+func (w *watchdogState) signal() {
+	select {
+	case w.wake <- struct{}{}:
+	default:
+	}
+}
+
+// expire decides, under the stamps' lock, whether the child has missed its
+// watchdog: once the deadline has passed (or a keep-alive came late) it
+// sets the final expired verdict and reports it; otherwise it returns how
+// long the child has left.
+func (w *watchdogState) expire() (left time.Duration, expired bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.expired {
+		return 0, true
+	}
+	left = w.deadline.Sub(w.clock.Now())
+	if w.missed || left <= 0 {
+		w.expired = true
+		return 0, true
+	}
+	return left, false
+}
+
 // watch waits for the child to exit and restarts it while the parent still
 // wants services from it and its restart budget holds.
 func (s *Supervisor) watch(ctx context.Context, proc *supervised, child Child, notify *NotifySocket, done chan struct{}) {
@@ -754,15 +869,23 @@ func (s *Supervisor) watch(ctx context.Context, proc *supervised, child Child, n
 	// stays down.
 	if ctx.Err() != nil || s.stopped || len(proc.wanted) == 0 {
 		proc.child = nil
+		proc.missed, proc.missedChild = nil, nil
 		s.closeClientLocked(proc)
 		s.mu.Unlock()
 		return
 	}
 	proc.child = nil
 	s.closeClientLocked(proc)
+	// A child its watchdog stopped failed by missing its keep-alive, not
+	// by the signal that ended it.
+	var failure, cause error = &ErrProcessExited{Process: proc.def.Name, Cause: waitErr}, waitErr
+	if proc.missedChild == child && proc.missed != nil {
+		failure, cause = proc.missed, proc.missed
+	}
+	proc.missed, proc.missedChild = nil, nil
 	s.mu.Unlock()
 
-	s.restartLoop(ctx, proc, &ErrProcessExited{Process: proc.def.Name, Cause: waitErr}, waitErr)
+	s.restartLoop(ctx, proc, failure, cause)
 }
 
 // restartLoop brings a process back up, and keeps trying while its restart
@@ -1078,7 +1201,8 @@ func (s *Supervisor) closeNotifyOfLocked(proc *supervised, notify *NotifySocket)
 // asks again at once rather than a poll interval later; the poll stays the
 // fallback for a child that never notifies. It touches no proc field: the
 // socket and the channel are its own launch's, passed in.
-func (s *Supervisor) readNotify(process string, notify *NotifySocket, ready chan struct{}) {
+func (s *Supervisor) readNotify(process string, notify *NotifySocket, ready chan struct{}, wd *watchdogState, gone chan struct{}) {
+	defer close(gone)
 	signalled := false
 	for {
 		msg, err := notify.Receive(time.Time{})
@@ -1102,8 +1226,73 @@ func (s *Supervisor) readNotify(process string, notify *NotifySocket, ready chan
 		}
 		if msg.Ready && !signalled {
 			signalled = true
+			// The first deadline counts from READY=1's receipt.
+			wd.ready()
 			close(ready)
 		}
+		if msg.Watchdog {
+			// Judged on receipt against the absolute deadline, never by
+			// when the watchdog gets to it (Codex P1 #1928).
+			wd.keepAlive()
+		}
+	}
+}
+
+// watchdog enforces a ready child's WATCHDOG=1 keep-alives: from its
+// readiness, every keep-alive re-arms a deadline of one interval, and a
+// deadline that passes stops the child, recording ErrWatchdogMissed as its
+// failure so that watch restarts it through the restart backoff. It acts
+// only on child, never on a later launch, and returns when the child's
+// notify reader ends (the child is reaped) or the launch context is
+// cancelled.
+func (s *Supervisor) watchdog(ctx context.Context, proc *supervised, child Child, wd *watchdogState, ready <-chan struct{}, gone <-chan struct{}) {
+	interval := wd.interval
+	select {
+	case <-ready:
+	case <-gone:
+		return
+	case <-ctx.Done():
+		return
+	}
+	// The deadline is absolute and kept by the notify reader (Codex P1
+	// #1928): on every wake-up or timer the watchdog waits only for the
+	// time left to it, so a late wake-up never extends it.
+	for {
+		// The child is stopped only on expire's verdict, taken under the
+		// lock that orders every keep-alive stamp (Codex P1 #1928 round 4).
+		left, expired := wd.expire()
+		if expired {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-gone:
+			return
+		case <-wd.wake:
+		case <-s.cfg.Clock.After(left):
+		}
+	}
+
+	s.mu.Lock()
+	current := proc.child == child && !proc.stopping && !s.stopped
+	if current {
+		proc.missed = &ErrWatchdogMissed{Process: proc.def.Name, Interval: interval}
+		proc.missedChild = child
+	}
+	s.mu.Unlock()
+	if !current {
+		return
+	}
+	s.cfg.Logger.Warn("gatewayd supervisor: process missed its watchdog, stopping it",
+		slog.String("process", proc.def.Name),
+		slog.Duration("interval", interval),
+		slog.Int("pid", child.PID()))
+	// gone closes when watch has reaped the child and closed its notify
+	// socket; watch's done would wait for the whole restart.
+	if err := s.terminate(ctx, proc.def.Name, child, gone); err != nil && ctx.Err() == nil {
+		s.cfg.Logger.Warn("gatewayd supervisor: stopping a process that missed its watchdog",
+			slog.String("process", proc.def.Name), slog.Any("error", err))
 	}
 }
 

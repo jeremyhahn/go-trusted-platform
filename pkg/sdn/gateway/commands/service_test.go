@@ -176,7 +176,7 @@ func TestChildInheritance_TheProxyChildOpensTheSupervisorsPinStore(t *testing.T)
 	require.NoError(t, err)
 	spec := process.Spec{
 		Definition: def,
-		Socket:     filepath.Join(t.TempDir(), "proxy.sock"),
+		Socket:     filepath.Join(shortSocketDir(t), "proxy.sock"),
 		SocketGID:  -1,
 		Inherited:  childInheritance(&ServeConfig{DataDir: dataDir}, ""),
 	}
@@ -463,7 +463,7 @@ func newVPNServiceRun() *serviceRun {
 func serviceTestOptions(t *testing.T) serviceOptions {
 	t.Helper()
 	return serviceOptions{
-		socket:        filepath.Join(t.TempDir(), "routing.sock"),
+		socket:        filepath.Join(shortSocketDir(t), "routing.sock"),
 		socketGroup:   -1,
 		supervisorUID: uint32(os.Getuid()),
 		uid:           4242,
@@ -533,7 +533,7 @@ func TestServeProcess_HostsItsOwnServicesAndServesTheSupervisor(t *testing.T) {
 // NOTIFY_SOCKET at it.
 func bindTestNotifySocket(t *testing.T) *process.NotifySocket {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "n.notify")
+	path := filepath.Join(shortSocketDir(t), "n.notify")
 	sock, err := process.ListenNotify(path, os.Getpid(), -1)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = sock.Close() })
@@ -559,6 +559,81 @@ func TestServeProcess_NotifiesReadyOnceItsServicesStart(t *testing.T) {
 	require.NoError(t, err, "a stopping child must notify STOPPING=1")
 	assert.True(t, msg.Stopping)
 	require.NoError(t, <-done)
+}
+
+func TestServeProcess_SendsWatchdogKeepAlivesAtHalfTheInterval(t *testing.T) {
+	// Codex P1 #1928 round 4 (B): a child given WATCHDOG_USEC sends one
+	// WATCHDOG=1 per tick of a ticker at half the interval once it is
+	// ready, none without a tick, and stops when it shuts down. The ticker
+	// is injected, so the period is asserted exactly. Not parallel: it
+	// swaps newKeepAliveTicker (and t.Setenv forbids t.Parallel anyway).
+	periods := make(chan time.Duration, 4)
+	ticks := make(chan time.Time)
+	stopped := make(chan struct{})
+	saved := newKeepAliveTicker
+	t.Cleanup(func() { newKeepAliveTicker = saved })
+	newKeepAliveTicker = func(d time.Duration) (<-chan time.Time, func()) {
+		periods <- d
+		return ticks, func() { close(stopped) }
+	}
+
+	sock := bindTestNotifySocket(t)
+	t.Setenv(process.WatchdogUsecEnv, "80000") // 80 ms: a keep-alive every 40 ms
+	run := newServiceRun()
+	opts := serviceTestOptions(t)
+
+	cancel, done := startServiceProcess(t, "routing", run, opts)
+	msg, err := sock.Receive(time.Now().Add(5 * time.Second))
+	require.NoError(t, err)
+	require.True(t, msg.Ready, "READY=1 comes first")
+	select {
+	case d := <-periods:
+		assert.Equal(t, 40*time.Millisecond, d, "the keep-alive ticks at half of WATCHDOG_USEC")
+	case <-time.After(5 * time.Second):
+		t.Fatal("the child never started its keep-alive ticker")
+	}
+	_, err = sock.Receive(time.Now().Add(100 * time.Millisecond))
+	require.Error(t, err, "no keep-alive without a tick")
+	for i := 0; i < 3; i++ {
+		ticks <- time.Now()
+		msg, err = sock.Receive(time.Now().Add(5 * time.Second))
+		require.NoError(t, err, "keep-alive %d", i)
+		assert.True(t, msg.Watchdog, "keep-alive %d is WATCHDOG=1", i)
+		_, err = sock.Receive(time.Now().Add(100 * time.Millisecond))
+		require.Error(t, err, "exactly one keep-alive for tick %d", i)
+	}
+
+	cancel()
+	msg, err = sock.Receive(time.Now().Add(5 * time.Second))
+	require.NoError(t, err, "a stopping child must notify STOPPING=1")
+	assert.True(t, msg.Stopping, "STOPPING=1 follows, with no keep-alive between")
+	require.NoError(t, <-done)
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the keep-alive ticker is never stopped")
+	}
+	_, err = sock.Receive(time.Now().Add(200 * time.Millisecond))
+	assert.Error(t, err, "no keep-alive after the child has stopped")
+	assert.Empty(t, periods, "one ticker per child")
+}
+
+func TestServeProcess_SendsNoKeepAliveWithoutAnInterval(t *testing.T) {
+	for _, usec := range []string{"", "0", "not-a-number"} {
+		t.Run("WATCHDOG_USEC="+usec, func(t *testing.T) {
+			sock := bindTestNotifySocket(t)
+			t.Setenv(process.WatchdogUsecEnv, usec)
+			cancel, done := startServiceProcess(t, "routing", newServiceRun(), serviceTestOptions(t))
+			msg, err := sock.Receive(time.Now().Add(5 * time.Second))
+			require.NoError(t, err)
+			require.True(t, msg.Ready)
+			cancel()
+			msg, err = sock.Receive(time.Now().Add(5 * time.Second))
+			require.NoError(t, err)
+			assert.True(t, msg.Stopping, "STOPPING=1 follows READY=1 with no keep-alive between")
+			require.NoError(t, <-done)
+		})
+	}
 }
 
 func TestServeProcess_AFailedStartSendsNoReady(t *testing.T) {

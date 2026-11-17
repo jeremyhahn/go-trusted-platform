@@ -42,10 +42,13 @@ const (
 	DefaultAlpineVersion = "3.22.2"
 	DefaultArch          = "x86_64"
 	DefaultMirror        = "http://mirror.cs.odu.edu/alpine"
-	DefaultWorkDir       = "work-test"
-	DefaultDiskSize      = "10G"
-	DefaultMemoryMB      = 4096
-	DefaultCPUs          = 2
+	// FallbackMirror serves the shared ISO when DefaultMirror fails or
+	// stalls (#1927): the package default mirror (pkg/iso/config.go).
+	FallbackMirror  = "https://dl-cdn.alpinelinux.org/alpine"
+	DefaultWorkDir  = "work-test"
+	DefaultDiskSize = "10G"
+	DefaultMemoryMB = 4096
+	DefaultCPUs     = 2
 )
 
 // ServiceEndpoints contains default endpoints for all protocols.
