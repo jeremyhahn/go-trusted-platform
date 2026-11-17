@@ -293,6 +293,36 @@ func TestErrPostureUnavailable_NamesTheTenant(t *testing.T) {
 	assert.ErrorIs(t, named, cause)
 }
 
+// TestAdmitRenew_ACompileFailureNamesThePolicy pins that the refusal for a
+// tenant policy that failed to compile names the configured policy: the
+// outer ErrPostureUnavailable is the one errors.As finds first.
+func TestAdmitRenew_ACompileFailureNamesThePolicy(t *testing.T) {
+	h := newHarness(t, testConfig())
+	policy := h.svc.cfg.PosturePolicy
+	require.NotEmpty(t, policy)
+	lease, err := h.svc.Admit(context.Background(), h.request(t))
+	require.NoError(t, err)
+
+	err = h.svc.SetPosturePolicies(context.Background(), []PosturePolicy{
+		{TenantID: lease.TenantID, Name: policy, Module: "package vpn.posture\n\nthis is not rego {"},
+	})
+	require.Error(t, err)
+
+	check := func(what string, err error) {
+		t.Helper()
+		var unavailable *ErrPostureUnavailable
+		require.True(t, errors.As(err, &unavailable), "%s: got %v", what, err)
+		assert.Equal(t, policy, unavailable.Name, what)
+		assert.Equal(t, lease.TenantID, unavailable.TenantID, what)
+		assert.NotContains(t, err.Error(), `posture policy ""`, what)
+	}
+	_, err = h.svc.Admit(context.Background(), h.request(t))
+	check("admit", err)
+	h.intoRenewWindow()
+	_, err = h.svc.Renew(context.Background(), lease.ID, h.evidence(t))
+	check("renew", err)
+}
+
 // lookupRecordingPosture is a tenant engine that records the name it was
 // asked to evaluate and answers with a fixed result or error.
 type lookupRecordingPosture struct {
