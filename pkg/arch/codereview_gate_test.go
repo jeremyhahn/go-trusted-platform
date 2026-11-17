@@ -134,6 +134,10 @@ func TestCodeReviewGateRefusesAnApprovalOnOwnerHold(t *testing.T) {
 		// endpoint is not paginated (Gitea) never loops (Codex P1, #1921).
 		{"an approval without the hold", `[{"name":"code-review"},{"name":"task:ready"}]`, "", "", "", true, "codex approved"},
 		{"an approval on owner hold", `[{"name":"code-review"},{"name":"needs-owner"}]`, "", "", "", false, "owner hold"},
+		// The review job swaps needs-owner for needs-coordinator (v5.11.3);
+		// the hold carries over, so the swap never releases an approval
+		// (Codex P1 round 2, #1986).
+		{"an approval on coordinator hold", `[{"name":"code-review"},{"name":"needs-coordinator"}]`, "", "", "", false, "coordinator hold"},
 		{"a docs-only change", `[]`, docsOnly, "", "", true, "no review is required"},
 		// A PR retargeted while the run waited never passes on the old
 		// base's exempt diff or approval (Codex P1, #1921).
