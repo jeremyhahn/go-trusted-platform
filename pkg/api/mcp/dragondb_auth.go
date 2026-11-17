@@ -53,9 +53,6 @@ type QuicBaaSAuthAdapter struct {
 	// for authorization checks
 	pepClient iam.PEPClient
 
-	// defaultTenantID is used when no tenant is specified in the token
-	defaultTenantID string
-
 	// cachedClaims stores validated token claims (simple cache)
 	cachedClaims map[string]*TokenValidationResult
 }
@@ -67,9 +64,6 @@ type QuicBaaSAuthConfig struct {
 
 	// PEPClient is the QuicBaaS PEP service SDK client
 	PEPClient iam.PEPClient
-
-	// DefaultTenantID is the default tenant for operations without explicit tenant
-	DefaultTenantID string
 }
 
 // NewQuicBaaSAuthAdapter creates a new QuicBaaS authentication adapter.
@@ -85,10 +79,9 @@ func NewQuicBaaSAuthAdapter(config *QuicBaaSAuthConfig) *QuicBaaSAuthAdapter {
 		config = &QuicBaaSAuthConfig{}
 	}
 	return &QuicBaaSAuthAdapter{
-		tokenValidator:  config.TokenValidator,
-		pepClient:       config.PEPClient,
-		defaultTenantID: config.DefaultTenantID,
-		cachedClaims:    make(map[string]*TokenValidationResult),
+		tokenValidator: config.TokenValidator,
+		pepClient:      config.PEPClient,
+		cachedClaims:   make(map[string]*TokenValidationResult),
 	}
 }
 
@@ -237,9 +230,14 @@ func (a *QuicBaaSAuthAdapter) CheckPermission(ctx context.Context, token string,
 	}
 
 	// Build the subject from token claims
+	// A token that names no tenant is refused: the PEP is never asked to
+	// evaluate a request against a tenant the token did not carry.
 	tenantID := result.TenantID
 	if tenantID == "" {
-		tenantID = a.defaultTenantID
+		return false, &QuicBaaSAuthError{
+			Code:    QuicBaaSAuthErrorClaimsExtraction,
+			Message: "token carries no tenant",
+		}
 	}
 
 	// Build the PEP check request using SDK types
@@ -314,11 +312,6 @@ func (a *QuicBaaSAuthAdapter) HasPEPClient() bool {
 // ClearCache clears the token claims cache.
 func (a *QuicBaaSAuthAdapter) ClearCache() {
 	a.cachedClaims = make(map[string]*TokenValidationResult)
-}
-
-// SetDefaultTenantID sets the default tenant ID for operations.
-func (a *QuicBaaSAuthAdapter) SetDefaultTenantID(tenantID string) {
-	a.defaultTenantID = tenantID
 }
 
 // =============================================================================
