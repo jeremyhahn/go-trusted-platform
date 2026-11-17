@@ -185,7 +185,7 @@ func (s *unsealRecordingServer) tenantIDByName(t *testing.T, name string) string
 // registered in place of the bare in-process server.
 func startUnsealRecordingServer(t *testing.T) (*unsealRecordingServer, func(cli.OutputFormat) *cli.CommonFlags) {
 	t.Helper()
-	sock := filepath.Join(t.TempDir(), "platformd.sock")
+	sock := filepath.Join(shortSocketDir(t), "platformd.sock")
 	lis, err := net.Listen("unix", sock)
 	require.NoError(t, err)
 	srv := &unsealRecordingServer{inProcTenantServer: &inProcTenantServer{tenants: map[string]*platformv1.Tenant{}}}
