@@ -592,6 +592,26 @@ func TestSpeaker_StopDeletesTheAddressItAdded(t *testing.T) {
 	assert.False(t, prog.holds("br-int", "10.4.200.1/24"), "an address the speaker added is deleted on Stop")
 }
 
+func TestSpeaker_StopRetriesAFailedRelease(t *testing.T) {
+	seg := newSegment()
+	prog := newFakeProgrammer()
+	prog.delErr = errors.New("EBUSY")
+	s, err := New(speakerConfig(PriorityOwner, "10.4.200.2"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: prog, Logger: quietLogger()})
+	require.NoError(t, err)
+	require.NoError(t, s.Start(context.Background()))
+	require.True(t, prog.holds("br-int", "10.4.200.1/24"))
+
+	require.Error(t, s.Stop(context.Background()), "a VIP that cannot be deleted fails Stop")
+	assert.True(t, prog.holds("br-int", "10.4.200.1/24"), "the VIP is still held after the failed delete")
+	assert.False(t, s.Active(), "a failed Stop still stops the speaker")
+
+	prog.delErr = nil
+	require.NoError(t, s.Stop(context.Background()), "a second Stop retries the outstanding release")
+	assert.False(t, prog.holds("br-int", "10.4.200.1/24"), "the retried release deletes the VIP")
+
+	assert.ErrorIs(t, s.Stop(context.Background()), ErrSpeakerNotRunning{}, "nothing outstanding: Stop reports not running")
+}
+
 func TestSpeaker_RollbackKeepsThePreexistingOwnerAddress(t *testing.T) {
 	seg := newSegment()
 	prog := newFakeProgrammer()
