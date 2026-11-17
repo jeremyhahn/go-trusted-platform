@@ -35,11 +35,6 @@ import (
 // strategy that RETURNED SUCCESS rather than the one it was about to try.
 const UnlockStrategyMarkerPath = "/run/platform/unlock-strategy"
 
-// UnlockTPMToken selects the TPMTokenStrategy: unseal the passphrase that
-// SDK TPM enrolment stored in the volume's systemd-tpm2 header token
-// (ruling 673). Configuring luks.UnlockTPMPCR registers it as well.
-const UnlockTPMToken luks.UnlockMethod = "tpm-token"
-
 // StrategyChain executes unlock strategies in priority order with fallback
 type StrategyChain struct {
 	strategies []UnlockStrategy

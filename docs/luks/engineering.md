@@ -198,8 +198,9 @@ ceremony backend, injects the production LUKS pieces through the
     `EnrollFIDO2` answers `ErrLUKSFIDO2NotWired`.
   - TPM (ruling 673): `EnrollTPM` seals a fresh passphrase to the requested
     PCRs and writes the sealed blob in a `systemd-tpm2` header token naming
-    the slot. At boot the initrd `TPMTokenStrategy` (`tpm-token`, priority
-    0, ahead of the ESP-based TPM-PCR strategy) lists the header's
+    the slot. At boot the initrd `TPMTokenStrategy` (TPM2-Token, priority
+    0, ahead of the ESP-based TPM-PCR strategy; the `tpm-pcr` unlock method
+    registers it, and there is no `tpm-token` config value) lists the header's
     `systemd-tpm2` tokens, unseals each blob through its `TokenUnsealer`
     (the go-xkms sealer by default; `SetUnsealer` swaps it) and opens the
     slot the token names. A header without such a token leaves `CanUnlock`

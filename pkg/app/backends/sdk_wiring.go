@@ -96,7 +96,7 @@ func WireSDKBackends(target SDKBackendTarget, src SDKBackendSources, logger *log
 	//
 	// TPM enrolment is on (ruling 673): the default handler seals a slot
 	// passphrase and writes a systemd-tpm2 token, and the initrd
-	// TPMTokenStrategy (pkg/initrd, UnlockTPMToken) reads that token and
+	// TPMTokenStrategy (pkg/initrd, registered by tpm-pcr) reads that token and
 	// unseals it at boot, ahead of the ESP-sealed TPM-PCR strategy. The
 	// handler is wrapped by pcrCheckedTPMHandler so an empty or
 	// out-of-range PCR list is refused before the sealer runs or a slot is
