@@ -892,6 +892,113 @@ func TestArchiver_ImportFromFile_RejectsSiblingPrefix(t *testing.T) {
 	}
 }
 
+// writeHostileIDArchive writes a bundle archive whose manifest carries id and
+// whose one regular file entry sits under the archive prefix.
+func writeHostileIDArchive(t *testing.T, id string) string {
+	t.Helper()
+	archivePath := filepath.Join(t.TempDir(), "hostile.tar.gz")
+	f, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatalf("create archive: %v", err)
+	}
+	gzw := gzip.NewWriter(f)
+	tw := tar.NewWriter(gzw)
+	manifestData, err := json.Marshal(&Manifest{
+		Version:   ManifestVersion,
+		ID:        id,
+		Mode:      BundleModePreAssigned,
+		CreatedAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	for _, file := range []struct {
+		name    string
+		content []byte
+	}{
+		{"vtpm-bundle-hostile/manifest.json", manifestData},
+		{"vtpm-bundle-hostile/f", []byte("evil")},
+	} {
+		if err := tw.WriteHeader(&tar.Header{Name: file.name, Mode: 0600, Size: int64(len(file.content)), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatalf("write header: %v", err)
+		}
+		if _, err := tw.Write(file.content); err != nil {
+			t.Fatalf("write entry: %v", err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar: %v", err)
+	}
+	if err := gzw.Close(); err != nil {
+		t.Fatalf("close gzip: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close archive: %v", err)
+	}
+	return archivePath
+}
+
+func TestArchiver_Import_HostileManifestID(t *testing.T) {
+	absTarget := filepath.Join(t.TempDir(), "abs-bundle")
+	tests := []struct {
+		name string
+		id   string
+		// outside is a path that must not exist after the import.
+		outside func(baseDir string) string
+	}{
+		{"parent", "../x", func(baseDir string) string { return filepath.Join(baseDir, "x") }},
+		{"nested", "a/b", func(baseDir string) string { return filepath.Join(baseDir, "bundles", "a") }},
+		{"absolute", absTarget, func(string) string { return absTarget }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := &Config{BaseDir: t.TempDir()}
+			archivePath := writeHostileIDArchive(t, tt.id)
+
+			for _, importer := range []struct {
+				name string
+				run  func() error
+			}{
+				{"ImportFromFile", func() error {
+					_, err := NewArchiver(config, nil).ImportFromFile(context.Background(), archivePath)
+					return err
+				}},
+				{"Import", func() error {
+					f, err := os.Open(archivePath)
+					if err != nil {
+						t.Fatalf("open archive: %v", err)
+					}
+					defer f.Close()
+					_, err = NewArchiver(config, nil).Import(context.Background(), f)
+					return err
+				}},
+			} {
+				err := importer.run()
+				var invalid ErrInvalidManifest
+				if !errors.As(err, &invalid) {
+					t.Fatalf("%s(id %q): want ErrInvalidManifest, got %v", importer.name, tt.id, err)
+				}
+			}
+
+			if _, err := os.Stat(tt.outside(config.BaseDir)); !os.IsNotExist(err) {
+				t.Errorf("hostile id %q created %s (stat err %v)", tt.id, tt.outside(config.BaseDir), err)
+			}
+			entries, err := os.ReadDir(config.BaseDir)
+			if err != nil {
+				t.Fatalf("read base dir: %v", err)
+			}
+			for _, e := range entries {
+				if filepath.Join(config.BaseDir, e.Name()) != filepath.Clean(config.BundlesDir()) {
+					t.Errorf("hostile id %q created %s outside the bundle store", tt.id, e.Name())
+				}
+			}
+			if bundles, err := os.ReadDir(config.BundlesDir()); err == nil && len(bundles) != 0 {
+				t.Errorf("hostile id %q left %d entries in the bundle store", tt.id, len(bundles))
+			}
+		})
+	}
+}
+
 func TestArchiver_Export_EmptyBundle(t *testing.T) {
 	tmpDir := t.TempDir()
 	bundleID := "empty-bundle"
