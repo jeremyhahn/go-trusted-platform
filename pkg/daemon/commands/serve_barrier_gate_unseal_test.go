@@ -152,7 +152,7 @@ func unixRequest(t *testing.T, client *http.Client, method, path, body string) (
 // its result.
 func startGate(t *testing.T, ctx context.Context, gate *lockedGateBarrier, pollEvery time.Duration) (string, <-chan error) {
 	t.Helper()
-	socket := filepath.Join(t.TempDir(), "platformd.sock")
+	socket := filepath.Join(shortSocketDir(t), "platformd.sock")
 	cfg := barrierGateConfig{socketPath: socket, httpAddr: "127.0.0.1:0", pollEvery: pollEvery}
 	state := &barrierStateProvider{barrier: gate}
 	done := make(chan error, 1)
@@ -293,7 +293,7 @@ func TestServeUntilUnsealed_AlreadyUnsealedReturnsAtOnce(t *testing.T) {
 // A gate that cannot be built returns the server's error.
 func TestServeUntilUnsealed_MissingLogger(t *testing.T) {
 	gate := newLockedGateBarrier(true, true)
-	cfg := barrierGateConfig{socketPath: filepath.Join(t.TempDir(), "platformd.sock"), httpAddr: "127.0.0.1:0"}
+	cfg := barrierGateConfig{socketPath: filepath.Join(shortSocketDir(t), "platformd.sock"), httpAddr: "127.0.0.1:0"}
 	err := serveUntilUnsealed(context.Background(), nil, cfg, gate, &barrierStateProvider{barrier: gate}, nil, gate)
 	var want apidaemon.ErrInitOnlyMissingLogger
 	if !errors.As(err, &want) {
