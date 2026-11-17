@@ -7,6 +7,9 @@ import (
 	"net/http"
 	"testing"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -107,6 +110,36 @@ func TestSDNZoneCreate_SendsTheFlatZoneDocument(t *testing.T) {
 	pa, _ := call.body["privileged_access"].(map[string]interface{})
 	if pa["approved_by"] != "owner" {
 		t.Errorf("privileged_access = %v", call.body["privileged_access"])
+	}
+}
+
+// The flat zone document has no omit field on either the webservice or the
+// daemon side, so an Omit=true Create or Update is refused before the wire,
+// as the gRPC path refuses it, instead of creating or replacing the zone.
+func TestSDNZoneOmit_RefusedBeforeTheWire(t *testing.T) {
+	cfg := &platformv1.NetworkZoneConfig{Name: "lab", Offset: 12, Omit: true}
+	cases := []struct {
+		name   string
+		method string
+		req    interface{}
+		reply  interface{}
+	}{
+		{"create", platformv1.SDNService_CreateNetworkZone_FullMethodName,
+			&platformv1.CreateNetworkZoneRequest{Config: cfg}, &platformv1.CreateNetworkZoneResponse{}},
+		{"update", platformv1.SDNService_UpdateNetworkZone_FullMethodName,
+			&platformv1.UpdateNetworkZoneRequest{Name: "lab", Config: cfg}, &platformv1.UpdateNetworkZoneResponse{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a, call := zoneAdapter(t, http.StatusOK, flatZoneReply)
+			err := a.Connection().Invoke(context.Background(), tc.method, tc.req, tc.reply)
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("err = %v, want InvalidArgument", err)
+			}
+			if call.method != "" || call.path != "" {
+				t.Fatalf("request reached the server: %s %s", call.method, call.path)
+			}
+		})
 	}
 }
 

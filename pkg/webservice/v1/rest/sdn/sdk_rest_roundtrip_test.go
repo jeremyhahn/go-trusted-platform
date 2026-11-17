@@ -250,3 +250,21 @@ func TestSDKRESTZoneRoundTrip(t *testing.T) {
 	assert.True(t, deleted.GetRestartRequired())
 	assert.True(t, deleted.GetStatus().GetSuccess())
 }
+
+// TestSDKRESTZoneOmitMutatesNothing proves an Omit=true Create or Update is
+// refused with InvalidArgument and never reaches the zone service, so no zone
+// is created or replaced for a field the REST document cannot carry.
+func TestSDKRESTZoneOmitMutatesNothing(t *testing.T) {
+	ctx := context.Background()
+	cfg := &platformv1.NetworkZoneConfig{Name: "lab", Offset: 12, Omit: true}
+	server := &zoneSDNServer{zone: &platformv1.NetworkZone{Config: cfg}}
+	client := connectSDNSDK(t, server)
+
+	_, err := client.CreateNetworkZone(ctx, &platformv1.CreateNetworkZoneRequest{Config: cfg})
+	assert.Equal(t, codes.InvalidArgument, status.Code(err), "create err = %v", err)
+	assert.Nil(t, server.got, "create reached the zone service: %v", server.got)
+
+	_, err = client.UpdateNetworkZone(ctx, &platformv1.UpdateNetworkZoneRequest{Name: "lab", Config: cfg})
+	assert.Equal(t, codes.InvalidArgument, status.Code(err), "update err = %v", err)
+	assert.Nil(t, server.got, "update reached the zone service: %v", server.got)
+}
