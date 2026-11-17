@@ -26,7 +26,7 @@ import (
 
 // TestGetOFPort tests the GetOFPort function which retrieves OpenFlow port numbers
 func TestGetOFPort(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -78,7 +78,7 @@ func TestGetOFPort(t *testing.T) {
 
 // TestGetOFPortWithValidOFPort tests GetOFPort when interface has valid ofport
 func TestGetOFPortWithValidOFPort(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -297,7 +297,7 @@ func TestDeleteBridgeNilBridgeCheck(t *testing.T) {
 
 // TestListBridgesParseError tests ListBridges handling of unparseable bridges
 func TestListBridgesParseError(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -521,7 +521,7 @@ func TestConvertToOpenFlowInvalidActions(t *testing.T) {
 
 // TestListPortsErrorHandlingPaths tests error paths in ListPorts
 func TestListPortsErrorHandlingPaths(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)

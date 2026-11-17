@@ -176,7 +176,7 @@ func TestChildInheritance_TheProxyChildOpensTheSupervisorsPinStore(t *testing.T)
 	require.NoError(t, err)
 	spec := process.Spec{
 		Definition: def,
-		Socket:     filepath.Join(t.TempDir(), "proxy.sock"),
+		Socket:     filepath.Join(shortSocketDir(t), "proxy.sock"),
 		SocketGID:  -1,
 		Inherited:  childInheritance(&ServeConfig{DataDir: dataDir}, ""),
 	}
@@ -463,7 +463,7 @@ func newVPNServiceRun() *serviceRun {
 func serviceTestOptions(t *testing.T) serviceOptions {
 	t.Helper()
 	return serviceOptions{
-		socket:        filepath.Join(t.TempDir(), "routing.sock"),
+		socket:        filepath.Join(shortSocketDir(t), "routing.sock"),
 		socketGroup:   -1,
 		supervisorUID: uint32(os.Getuid()),
 		uid:           4242,
@@ -533,7 +533,7 @@ func TestServeProcess_HostsItsOwnServicesAndServesTheSupervisor(t *testing.T) {
 // NOTIFY_SOCKET at it.
 func bindTestNotifySocket(t *testing.T) *process.NotifySocket {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "n.notify")
+	path := filepath.Join(shortSocketDir(t), "n.notify")
 	sock, err := process.ListenNotify(path, os.Getpid(), -1)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = sock.Close() })

@@ -508,7 +508,7 @@ func serveGlobals(t *testing.T, a *app.App, grpc, quic bool) {
 		serveSkipIAM, serveEnableMTLS = prevSkipIAM, prevMTLS
 	})
 	App = a
-	serveSocketPath = filepath.Join(t.TempDir(), "platformd.sock")
+	serveSocketPath = filepath.Join(shortSocketDir(t), "platformd.sock")
 	serveEnableREST, serveEnableGRPC, serveEnableQUIC, serveEnableMCP = false, grpc, quic, false
 	serveSkipIAM, serveEnableMTLS = true, false
 }
