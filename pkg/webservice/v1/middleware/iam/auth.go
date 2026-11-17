@@ -198,11 +198,9 @@ func (m *AuthMiddleware) authenticateWithMTLS(r *http.Request) (IAMSession, erro
 		}
 	}
 
-	// Extract tenant ID from certificate
+	// The tenant comes only from the authenticated certificate: no
+	// configured default stands in for it (SPEC row 123).
 	tenantID := m.extractTenantFromCert(clientCert)
-	if tenantID == "" && m.config.DefaultTenantID != "" {
-		tenantID = m.config.DefaultTenantID
-	}
 	if tenantID == "" {
 		return nil, ErrMissingTenantID{}
 	}
@@ -240,14 +238,9 @@ func (m *AuthMiddleware) authenticateWithJWT(r *http.Request) (IAMSession, error
 		return nil, err
 	}
 
-	// Get tenant ID from claims or header
+	// The tenant comes only from the validated token's claims: neither a
+	// request header nor a configured default stands in for it (SPEC row 123).
 	tenantID := claims.TenantID
-	if tenantID == "" {
-		tenantID = r.Header.Get(TenantIDHeader)
-	}
-	if tenantID == "" && m.config.DefaultTenantID != "" {
-		tenantID = m.config.DefaultTenantID
-	}
 	if tenantID == "" {
 		return nil, ErrMissingTenantID{}
 	}

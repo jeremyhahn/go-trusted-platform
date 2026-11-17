@@ -87,8 +87,7 @@ func TestNewAuthMiddleware(t *testing.T) {
 
 	t.Run("creates_middleware_with_valid_config", func(t *testing.T) {
 		config := AuthConfig{
-			RequireTLS:      true,
-			DefaultTenantID: "default-tenant",
+			RequireTLS: true,
 		}
 
 		middleware, err := NewAuthMiddleware(logger, httpWriter, config, iamService, nil, nil, nil)
@@ -310,13 +309,12 @@ func TestAuthMiddleware_AuthenticateWithMTLS(t *testing.T) {
 		}
 	})
 
-	t.Run("refuses_configured_default_when_cert_names_no_tenant", func(t *testing.T) {
+	t.Run("refuses_cert_naming_no_tenant", func(t *testing.T) {
 		httpWriter := newMockHttpWriter()
 		iamService := newMockIAMServiceClient()
 
 		config := AuthConfig{
 			ExtractTenantFromCert: false,
-			DefaultTenantID:       "default-tenant",
 		}
 		middleware, _ := NewAuthMiddleware(logger, httpWriter, config, iamService, nil, nil, nil)
 
@@ -336,7 +334,8 @@ func TestAuthMiddleware_AuthenticateWithMTLS(t *testing.T) {
 		iamService := newMockIAMServiceClient()
 
 		config := AuthConfig{
-			DefaultTenantID: "default-tenant",
+			ExtractTenantFromCert: true,
+			TenantCertField:       "o",
 		}
 		middleware, _ := NewAuthMiddleware(logger, httpWriter, config, iamService, nil, nil, nil)
 
@@ -384,7 +383,8 @@ func TestAuthMiddleware_AuthenticateWithMTLS(t *testing.T) {
 		}
 
 		config := AuthConfig{
-			DefaultTenantID: "default-tenant",
+			ExtractTenantFromCert: true,
+			TenantCertField:       "o",
 		}
 		middleware, _ := NewAuthMiddleware(logger, httpWriter, config, iamService, nil, nil, nil)
 
@@ -435,7 +435,8 @@ func TestAuthMiddleware_AuthenticateWithMTLS(t *testing.T) {
 		}
 
 		config := AuthConfig{
-			DefaultTenantID: "default-tenant",
+			ExtractTenantFromCert: true,
+			TenantCertField:       "o",
 		}
 		middleware, _ := NewAuthMiddleware(logger, httpWriter, config, iamService, nil, nil, nil)
 
@@ -480,7 +481,8 @@ func TestAuthMiddleware_AuthenticateWithMTLS(t *testing.T) {
 		}
 
 		config := AuthConfig{
-			DefaultTenantID: "default-tenant",
+			ExtractTenantFromCert: true,
+			TenantCertField:       "o",
 		}
 		middleware, _ := NewAuthMiddleware(logger, httpWriter, config, iamService, nil, nil, nil)
 
@@ -513,7 +515,6 @@ func TestAuthMiddleware_AuthenticateWithMTLS(t *testing.T) {
 
 		config := AuthConfig{
 			ExtractTenantFromCert: false,
-			// No DefaultTenantID
 		}
 		middleware, _ := NewAuthMiddleware(logger, httpWriter, config, iamService, nil, nil, nil)
 
@@ -1067,9 +1068,7 @@ func TestAuthMiddleware_CreateSession(t *testing.T) {
 		}
 		jwtMiddleware, _ := NewJWTMiddleware(logger, httpWriter, jwtConfig, iamService)
 
-		config := AuthConfig{
-			DefaultTenantID: "default-tenant",
-		}
+		config := AuthConfig{}
 		middleware, _ := NewAuthMiddleware(logger, httpWriter, config, iamService, jwtMiddleware, nil, nil)
 
 		claims := jwt.MapClaims{
@@ -1125,8 +1124,7 @@ func TestAuthMiddleware_AuthenticateWithJWT(t *testing.T) {
 		jwtMiddleware, _ := NewJWTMiddleware(logger, httpWriter, jwtConfig, iamService)
 
 		authConfig := AuthConfig{
-			RequireJWT:      true,
-			DefaultTenantID: "default-tenant",
+			RequireJWT: true,
 		}
 		middleware, _ := NewAuthMiddleware(logger, httpWriter, authConfig, iamService, jwtMiddleware, nil, nil)
 
@@ -1174,8 +1172,7 @@ func TestAuthMiddleware_AuthenticateWithJWT(t *testing.T) {
 		jwtMiddleware, _ := NewJWTMiddleware(logger, httpWriter, jwtConfig, iamService)
 
 		authConfig := AuthConfig{
-			RequireJWT:      true,
-			DefaultTenantID: "default-tenant",
+			RequireJWT: true,
 		}
 		middleware, _ := NewAuthMiddleware(logger, httpWriter, authConfig, iamService, jwtMiddleware, nil, nil)
 
@@ -1218,12 +1215,11 @@ func TestAuthMiddleware_AuthenticateWithJWT(t *testing.T) {
 	// no tenant is refused, whatever the request header or the server
 	// configuration says (SPEC row 123, #2005).
 	for _, tc := range []struct {
-		name          string
-		defaultTenant string
-		header        string
+		name   string
+		header string
 	}{
 		{name: "refuses_x_tenant_id_header_when_not_in_claims", header: "header-tenant"},
-		{name: "refuses_configured_default_when_not_in_claims", defaultTenant: "default-tenant"},
+		{name: "refuses_token_naming_no_tenant"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			httpWriter := newMockHttpWriter()
@@ -1233,7 +1229,7 @@ func TestAuthMiddleware_AuthenticateWithJWT(t *testing.T) {
 			}
 
 			jwtMiddleware, _ := NewJWTMiddleware(logger, httpWriter, JWTConfig{PublicKey: rsaPubKey}, iamService)
-			authConfig := AuthConfig{RequireJWT: true, DefaultTenantID: tc.defaultTenant}
+			authConfig := AuthConfig{RequireJWT: true}
 			middleware, _ := NewAuthMiddleware(logger, httpWriter, authConfig, iamService, jwtMiddleware, nil, nil)
 
 			claims := jwt.MapClaims{
@@ -1308,7 +1304,6 @@ func TestAuthMiddleware_AuthenticateWithJWT(t *testing.T) {
 
 		authConfig := AuthConfig{
 			RequireJWT: true,
-			// No DefaultTenantID
 		}
 		middleware, _ := NewAuthMiddleware(logger, httpWriter, authConfig, iamService, jwtMiddleware, nil, nil)
 
@@ -1345,9 +1340,7 @@ func TestAuthMiddleware_AuthenticateWithJWT(t *testing.T) {
 		httpWriter := newMockHttpWriter()
 		iamService := newMockIAMServiceClient()
 
-		authConfig := AuthConfig{
-			DefaultTenantID: "default-tenant",
-		}
+		authConfig := AuthConfig{}
 		// No JWT middleware configured
 		middleware, _ := NewAuthMiddleware(logger, httpWriter, authConfig, iamService, nil, nil, nil)
 
@@ -1434,9 +1427,7 @@ func TestAuthMiddleware_LookupUserByID(t *testing.T) {
 		}
 		jwtMiddleware, _ := NewJWTMiddleware(logger, httpWriter, jwtConfig, iamService)
 
-		authConfig := AuthConfig{
-			DefaultTenantID: "default-tenant",
-		}
+		authConfig := AuthConfig{}
 		middleware, _ := NewAuthMiddleware(logger, httpWriter, authConfig, iamService, jwtMiddleware, nil, nil)
 
 		claims := jwt.MapClaims{
@@ -1480,9 +1471,7 @@ func TestAuthMiddleware_LookupUserByID(t *testing.T) {
 		}
 		jwtMiddleware, _ := NewJWTMiddleware(logger, httpWriter, jwtConfig, iamService)
 
-		authConfig := AuthConfig{
-			DefaultTenantID: "default-tenant",
-		}
+		authConfig := AuthConfig{}
 		middleware, _ := NewAuthMiddleware(logger, httpWriter, authConfig, iamService, jwtMiddleware, nil, nil)
 
 		claims := jwt.MapClaims{

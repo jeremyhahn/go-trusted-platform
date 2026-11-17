@@ -29,9 +29,6 @@ const (
 	// SessionContextKey is the context key for storing IAM sessions.
 	SessionContextKey ContextKey = "iam_session"
 
-	// TenantIDHeader is the HTTP header for tenant identification.
-	TenantIDHeader = "X-Tenant-ID"
-
 	// AuthorizationHeader is the standard HTTP authorization header.
 	AuthorizationHeader = "Authorization"
 
@@ -185,9 +182,6 @@ type AuthConfig struct {
 	// TenantCertField specifies which certificate field contains the tenant ID.
 	// Valid values: "cn", "ou", "o", "san_email", "san_dns"
 	TenantCertField string
-
-	// DefaultTenantID is used when no tenant can be extracted.
-	DefaultTenantID string
 
 	// TPM Attestation Settings
 	// RequireTPMAttestation requires valid TPM attestation for authentication.
