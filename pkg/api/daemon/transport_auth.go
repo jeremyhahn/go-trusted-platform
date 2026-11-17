@@ -119,6 +119,7 @@ func selectGRPCTCPAuth(config *Config, shared *platformTokenValidator, pep quicb
 			Authenticator: mtlsAuth,
 			Logger:        logger,
 			SkipMethods:   skipMethods,
+			PEP:           pep,
 		}
 		logger.Info("gRPC TCP server: mTLS authentication enabled")
 		return grpcAuthSelection{
