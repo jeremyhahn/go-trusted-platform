@@ -80,9 +80,10 @@ type Group struct {
 	// claimErr is the last address-claim failure while Master; advertise
 	// never clears it, only a successful claim or leaving Master does.
 	claimErr error
-	// releaseErr is the failure of the release that demoted the group to
-	// Backup: while it is set the interface may still hold the VIPs, so
-	// Backup retries the release at releaseRetryAt and at Shutdown.
+	// releaseErr is the failure of the last release of the VIPs (at
+	// demotion to Backup or at Shutdown): while it is set the interface may
+	// still hold the VIPs, so Backup retries the release at releaseRetryAt,
+	// and Shutdown, in Backup or Initialize, retries it until it succeeds.
 	releaseErr     error
 	releaseRetryAt time.Time
 	// transitions counts state changes, for telemetry and tests.
@@ -204,19 +205,24 @@ func (g *Group) Shutdown(now time.Time) error {
 		if err := g.act.Advertise(g, PriorityRelease); err != nil {
 			first = err
 		}
-		if err := g.act.Release(g); err != nil && first == nil {
-			first = err
+		relErr := g.act.Release(g)
+		if relErr != nil && first == nil {
+			first = relErr
 		}
+		// A release that failed stays outstanding: a later Shutdown retries it.
+		g.releaseErr = relErr
 		g.claimErr = nil
 		g.setState(StateInitialize)
 		g.lastErr = first
 		return first
-	case StateBackup:
+	case StateBackup, StateInitialize:
 		var err error
 		if g.releaseErr != nil {
-			// Demotion left the VIPs on the interface: release them now.
+			// Demotion or an earlier Shutdown left the VIPs on the
+			// interface: release them now, and keep the failure recorded
+			// until a release succeeds.
 			err = g.act.Release(g)
-			g.releaseErr = nil
+			g.releaseErr = err
 			g.lastErr = err
 		}
 		g.setState(StateInitialize)
