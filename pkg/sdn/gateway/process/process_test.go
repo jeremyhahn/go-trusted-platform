@@ -559,7 +559,7 @@ func (l *fakeLauncher) Launch(ctx context.Context, spec Spec) (Child, error) {
 		// The child is up but nothing is listening where the supervisor
 		// dialled. ipc.Dial cannot notice — grpc.NewClient is lazy — so only
 		// a readiness check catches it.
-		socket = filepath.Join(l.t.TempDir(), "unreachable.sock")
+		socket = filepath.Join(shortSocketDir(l.t), "unreachable.sock")
 	}
 	l.mu.Lock()
 	stubborn := l.stubborn
@@ -850,7 +850,7 @@ func TestEnsureRuntimeDir_RepairsADirectoryTheChildrenCouldNotBindIn(t *testing.
 	// created it 0750. The supervisor brings it to the mode its children
 	// actually need instead of launching four parsers that all get EACCES
 	// from bind and time out in readiness.
-	dir := filepath.Join(t.TempDir(), "run")
+	dir := filepath.Join(shortSocketDir(t), "run")
 	require.NoError(t, os.Mkdir(dir, 0o750))
 
 	supervisor := New(Config{RuntimeDir: dir, SocketGID: -1, Logger: slog.New(slog.DiscardHandler)})
