@@ -206,8 +206,20 @@ func (a *Archiver) ImportFromFile(ctx context.Context, archivePath string) (*Bun
 		return nil, ErrInvalidManifest{Reason: "manifest.json not found"}
 	}
 
+	// The manifest ID names the bundle directory: it must be exactly one
+	// local path component, so a hostile ID cannot select a directory
+	// outside the bundle store.
+	id := manifest.ID
+	if id == "" || id == "." || id == ".." || strings.ContainsAny(id, `/\`) ||
+		!filepath.IsLocal(id) || filepath.Base(id) != id {
+		return nil, ErrInvalidManifest{Reason: fmt.Sprintf("bundle ID %q is not a single path component", id)}
+	}
+
 	// Check if bundle exists
-	bundlePath := a.config.BundlePath(manifest.ID)
+	bundlePath := a.config.BundlePath(id)
+	if filepath.Dir(bundlePath) != filepath.Clean(a.config.BundlesDir()) {
+		return nil, ErrInvalidManifest{Reason: fmt.Sprintf("bundle ID %q resolves outside the bundle store", id)}
+	}
 	if _, err := os.Stat(bundlePath); err == nil {
 		return nil, ErrBundleAlreadyExists{ID: manifest.ID}
 	}
