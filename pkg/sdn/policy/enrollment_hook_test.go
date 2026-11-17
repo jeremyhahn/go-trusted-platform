@@ -143,8 +143,9 @@ func createEnrollmentCertificate(t *testing.T, org string) *x509.Certificate {
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject: pkix.Name{
-			Organization: []string{org},
-			CommonName:   "test-device",
+			OrganizationalUnit: []string{org},
+			Organization:       []string{org},
+			CommonName:         "test-device",
 		},
 		NotBefore:             time.Now(),
 		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
@@ -1403,7 +1404,7 @@ func TestPrecheckActivation_MalformedZoneExtension_FailsClosed(t *testing.T) {
 	require.NoError(t, err)
 	tmpl := x509.Certificate{
 		SerialNumber: big.NewInt(46),
-		Subject:      pkix.Name{Organization: []string{"org"}, CommonName: "SRV-MALFORMED"},
+		Subject:      pkix.Name{OrganizationalUnit: []string{"org"}, Organization: []string{"org"}, CommonName: "SRV-MALFORMED"},
 		NotBefore:    time.Now().Add(-time.Minute),
 		NotAfter:     time.Now().Add(24 * time.Hour),
 		ExtraExtensions: []pkix.Extension{{
@@ -2008,7 +2009,7 @@ func TestActivateDevice_ZoneMismatch_RealEngineNoZoneFlowManager(t *testing.T) {
 		require.NoError(t, err)
 		tmpl := x509.Certificate{
 			SerialNumber:    big.NewInt(44),
-			Subject:         pkix.Name{Organization: []string{"org"}, CommonName: "SRV-MISMATCH"},
+			Subject:         pkix.Name{OrganizationalUnit: []string{"org"}, Organization: []string{"org"}, CommonName: "SRV-MISMATCH"},
 			NotBefore:       time.Now().Add(-time.Minute),
 			NotAfter:        time.Now().Add(24 * time.Hour),
 			ExtraExtensions: []pkix.Extension{ext},
@@ -2178,7 +2179,7 @@ func TestActivateDevice_QuarantineStateFailure_IsIndeterminate(t *testing.T) {
 	require.NoError(t, err)
 	tmpl := x509.Certificate{
 		SerialNumber:    big.NewInt(45),
-		Subject:         pkix.Name{Organization: []string{"org"}, CommonName: "SRV-STATE"},
+		Subject:         pkix.Name{OrganizationalUnit: []string{"org"}, Organization: []string{"org"}, CommonName: "SRV-STATE"},
 		NotBefore:       time.Now().Add(-time.Minute),
 		NotAfter:        time.Now().Add(24 * time.Hour),
 		ExtraExtensions: []pkix.Extension{ext},
@@ -2266,7 +2267,7 @@ func TestBuildPortPolicy_ZoneCrossCheck(t *testing.T) {
 		require.NoError(t, err)
 		tmpl := x509.Certificate{
 			SerialNumber:    big.NewInt(42),
-			Subject:         pkix.Name{Organization: []string{org}, CommonName: "device-sn"},
+			Subject:         pkix.Name{OrganizationalUnit: []string{org}, Organization: []string{org}, CommonName: "device-sn"},
 			NotBefore:       time.Now().Add(-time.Minute),
 			NotAfter:        time.Now().Add(24 * time.Hour),
 			ExtraExtensions: []pkix.Extension{ext},
@@ -2284,7 +2285,7 @@ func TestBuildPortPolicy_ZoneCrossCheck(t *testing.T) {
 		require.NoError(t, err)
 		tmpl := x509.Certificate{
 			SerialNumber: big.NewInt(43),
-			Subject:      pkix.Name{Organization: []string{org}},
+			Subject:      pkix.Name{OrganizationalUnit: []string{org}, Organization: []string{org}},
 			NotBefore:    time.Now().Add(-time.Minute),
 			NotAfter:     time.Now().Add(24 * time.Hour),
 		}

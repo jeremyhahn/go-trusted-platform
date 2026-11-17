@@ -144,7 +144,8 @@ func TestX509PolicyExtractor_ExtractPolicy_HappyPath(t *testing.T) {
 
 	cert := selfSignedCert(t, x509.Certificate{
 		Subject: pkix.Name{
-			Organization: []string{"corp"},
+			OrganizationalUnit: []string{"corp"},
+			Organization:       []string{"corp"},
 		},
 		ExtraExtensions: []pkix.Extension{ext},
 	})
@@ -163,7 +164,7 @@ func TestX509PolicyExtractor_ExtractPolicy_MissingExtension(t *testing.T) {
 
 	e := NewX509PolicyExtractor()
 	cert := selfSignedCert(t, x509.Certificate{
-		Subject: pkix.Name{Organization: []string{"org"}},
+		Subject: pkix.Name{OrganizationalUnit: []string{"org"}, Organization: []string{"org"}},
 	})
 
 	pol, err := e.ExtractPolicy(cert)
@@ -192,7 +193,8 @@ func TestX509PolicyExtractor_ExtractPolicy_UndeclaredZone_FailClosed(t *testing.
 
 	cert := selfSignedCert(t, x509.Certificate{
 		Subject: pkix.Name{
-			Organization: []string{"tenant"},
+			OrganizationalUnit: []string{"tenant"},
+			Organization:       []string{"tenant"},
 		},
 		ExtraExtensions: []pkix.Extension{ext},
 	})
