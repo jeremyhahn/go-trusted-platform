@@ -136,8 +136,10 @@ func TestSDNZoneOmit_RefusedBeforeTheWire(t *testing.T) {
 			if status.Code(err) != codes.InvalidArgument {
 				t.Fatalf("err = %v, want InvalidArgument", err)
 			}
-			if call.method != "" || call.path != "" {
-				t.Fatalf("request reached the server: %s %s", call.method, call.path)
+			// The adapter's connect-time health probe is a GET; a zone
+			// Create or Update would be a POST or PUT.
+			if call.method == http.MethodPost || call.method == http.MethodPut {
+				t.Fatalf("zone write reached the server: %s %s", call.method, call.path)
 			}
 		})
 	}

@@ -17,6 +17,8 @@ import (
 	"net/http"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -81,12 +83,23 @@ func flatZoneDocument(cfg *platformv1.NetworkZoneConfig) (interface{}, error) {
 	return json.RawMessage(raw), nil
 }
 
+// zoneDocumentOrRefuse refuses omit=true with InvalidArgument before any
+// body is built: neither the webservice's NetworkZoneRequest nor the daemon's
+// zone spec carries omit, so sending it would create or replace the zone
+// while the gRPC path refuses the same request.
+func zoneDocumentOrRefuse(cfg *platformv1.NetworkZoneConfig) (interface{}, error) {
+	if cfg.GetOmit() {
+		return nil, status.Error(codes.InvalidArgument, "network zone omit is not supported over REST")
+	}
+	return flatZoneDocument(cfg)
+}
+
 func encodeCreateNetworkZone(body interface{}) (interface{}, error) {
 	req, ok := body.(*platformv1.CreateNetworkZoneRequest)
 	if !ok {
 		return nil, ErrUnexpectedRequestType{Method: platformv1.SDNService_CreateNetworkZone_FullMethodName}
 	}
-	return flatZoneDocument(req.GetConfig())
+	return zoneDocumentOrRefuse(req.GetConfig())
 }
 
 // encodeUpdateNetworkZone sends the config flat; the name is already in
@@ -96,7 +109,7 @@ func encodeUpdateNetworkZone(body interface{}) (interface{}, error) {
 	if !ok {
 		return nil, ErrUnexpectedRequestType{Method: platformv1.SDNService_UpdateNetworkZone_FullMethodName}
 	}
-	return flatZoneDocument(req.GetConfig())
+	return zoneDocumentOrRefuse(req.GetConfig())
 }
 
 // flatZoneExtras are the reply-only fields of the flat zone document.
