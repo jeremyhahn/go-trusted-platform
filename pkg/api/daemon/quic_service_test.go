@@ -44,6 +44,7 @@ func newTestQUICServiceHandler(logger *logging.Logger, opts ...QUICServiceHandle
 // token and grants a fixed scope set.
 type quicScopeValidator struct {
 	scopes []string
+	tenant string
 }
 
 func (v *quicScopeValidator) ValidateToken(ctx context.Context, token string) (bool, error) {
@@ -51,7 +52,7 @@ func (v *quicScopeValidator) ValidateToken(ctx context.Context, token string) (b
 }
 
 func (v *quicScopeValidator) AuthorizeToken(ctx context.Context, token, requiredPerm, dpopProof, htm, htu string) (*platformtoken.AuthorizedContext, error) {
-	authCtx := &platformtoken.AuthorizedContext{Subject: "test", Scopes: v.scopes}
+	authCtx := &platformtoken.AuthorizedContext{Subject: "test", Scopes: v.scopes, TenantID: v.tenant}
 	if requiredPerm != "" {
 		if err := authCtx.RequireScope(requiredPerm); err != nil {
 			return nil, err

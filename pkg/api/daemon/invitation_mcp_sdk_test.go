@@ -32,8 +32,9 @@ func connectInvitationMCP(t *testing.T, server platformv1.InvitationServiceServe
 	provider.SetInvitationServer(server)
 	config := mcp.DefaultConfig()
 	config.AuthManager = tenantMCPTokens{tokenContexts{phase35MCPToken: &platformtoken.AuthorizedContext{
-		Subject: "operator",
-		Scopes:  scopes,
+		Subject:  "operator",
+		Scopes:   scopes,
+		TenantID: "tenant-1", // the tenant the parity requests name (#2009)
 	}}}
 	return serveMCPConfig(t, provider, config).Connection()
 }
