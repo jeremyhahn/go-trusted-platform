@@ -612,6 +612,27 @@ func TestSpeaker_StopRetriesAFailedRelease(t *testing.T) {
 	assert.ErrorIs(t, s.Stop(context.Background()), ErrSpeakerNotRunning{}, "nothing outstanding: Stop reports not running")
 }
 
+func TestSpeaker_StartRefusedWhileReleasePending_ThenVIPRemoved(t *testing.T) {
+	seg := newSegment()
+	prog := newFakeProgrammer()
+	s, err := New(speakerConfig(PriorityOwner, "10.4.200.2"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: prog, Logger: quietLogger()})
+	require.NoError(t, err)
+	require.NoError(t, s.Start(context.Background()))
+	require.True(t, prog.holds("br-int", "10.4.200.1/24"))
+
+	prog.delErr = errors.New("EBUSY")
+	require.Error(t, s.Stop(context.Background()), "a VIP that cannot be deleted fails Stop")
+
+	var pending ErrReleasePending
+	require.ErrorAs(t, s.Start(context.Background()), &pending, "Start is refused while a release is outstanding")
+	assert.False(t, s.Active(), "a refused Start starts no runner")
+
+	prog.delErr = nil
+	require.NoError(t, s.Start(context.Background()), "Start drains the outstanding release first")
+	require.NoError(t, s.Stop(context.Background()))
+	assert.False(t, prog.holds("br-int", "10.4.200.1/24"), "the VIP is gone after the last Stop")
+}
+
 func TestSpeaker_RollbackKeepsThePreexistingOwnerAddress(t *testing.T) {
 	seg := newSegment()
 	prog := newFakeProgrammer()
