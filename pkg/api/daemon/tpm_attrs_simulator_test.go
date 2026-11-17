@@ -16,6 +16,7 @@ package daemon
 import (
 	"context"
 	"crypto"
+	"crypto/fips140"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
@@ -229,7 +230,19 @@ func TestTPMSimulator_Attrs(t *testing.T) {
 // reaches go-tpm, whose policy session HMAC panics under
 // GODEBUG=fips140=only (go-quicbaas#1389), and the FIPS foreign-failure
 // baseline can only list, and rerun around, a top-level test.
+// skipIfFIPSOnlyXKMSSession skips a simulator test under GODEBUG=fips140=only.
+// go-xkms opens an unsalted, unbound policy session in ActivateCredential, so
+// the session HMAC key is zero bytes and crypto/hmac panics in FIPS-only mode
+// (#1979). The upstream go-xkms fix (plan slice 2) drops this skip.
+func skipIfFIPSOnlyXKMSSession(t *testing.T) {
+	t.Helper()
+	if fips140.Enforced() {
+		t.Skip("#1979: go-xkms ActivateCredential uses an unsalted policy session (zero-length HMAC key), which panics under fips140=only")
+	}
+}
+
 func TestTPMSimulator_ActivateCredentialRefusesAForeignCredential(t *testing.T) {
+	skipIfFIPSOnlyXKMSSession(t)
 	tpm := newSimulatedTPM(t)
 	svc := newTPMGRPCServiceWith(tpm)
 	mcp := newMCPProviderWithTPM(tpm)
