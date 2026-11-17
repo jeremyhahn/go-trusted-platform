@@ -157,7 +157,7 @@ func TestSDKREST_DaemonServicesRefuse(t *testing.T) {
 	require.Equal(t, codes.NotFound, status.Code(err), "an unregistered service: %v", err)
 
 	_, err = client.StopService(ctx, &platformv1.StopServiceRequest{Service: platformv1.ServiceType_SERVICE_TYPE_TPM})
-	require.Error(t, err, "stopping a stopped service is refused")
+	require.Equal(t, codes.FailedPrecondition, status.Code(err), "stopping a stopped service, as gRPC answers: %v", err)
 
 	_, err = client.StopService(ctx, &platformv1.StopServiceRequest{Service: platformv1.ServiceType_SERVICE_TYPE_TPM, Force: true})
 	require.Error(t, err)
@@ -170,4 +170,33 @@ func TestSDKREST_DaemonServicesRefuse(t *testing.T) {
 
 	starts, stops := tpm.calls()
 	require.Zero(t, starts+stops, "no refused request reaches the backend")
+}
+
+// TestSDKREST_DaemonServicesConflictCodes pins the gRPC class of each 409 the
+// daemon's service routes answer: the SDK REST transport reads them back as
+// the gRPC service returns them, not as the default POST 409, AlreadyExists.
+func TestSDKREST_DaemonServicesConflictCodes(t *testing.T) {
+	ctx := context.Background()
+	tpm := &recordingManagedService{name: "tpm"}
+	s := newTestRESTServerForPhase35(t)
+	require.NoError(t, s.service.RegisterService(tpm))
+	require.NoError(t, s.service.RegisterService(newOwnedService("compute", true)))
+	client := platformv1.NewPlatformDaemonClient(connectPhase35REST(t, s.router).Connection())
+
+	tpmType := platformv1.ServiceType_SERVICE_TYPE_TPM
+	_, err := client.StopService(ctx, &platformv1.StopServiceRequest{Service: tpmType})
+	require.Equal(t, codes.FailedPrecondition, status.Code(err), "stop of a stopped service: %v", err)
+
+	_, err = client.StartService(ctx, &platformv1.StartServiceRequest{Service: tpmType})
+	require.NoError(t, err)
+	_, err = client.StartService(ctx, &platformv1.StartServiceRequest{Service: tpmType})
+	require.Equal(t, codes.AlreadyExists, status.Code(err), "start of a running service: %v", err)
+
+	owned := platformv1.ServiceType_SERVICE_TYPE_COMPUTE
+	_, err = client.StartService(ctx, &platformv1.StartServiceRequest{Service: owned})
+	require.Equal(t, codes.FailedPrecondition, status.Code(err), "start of a process-owned service: %v", err)
+	_, err = client.StopService(ctx, &platformv1.StopServiceRequest{Service: owned})
+	require.Equal(t, codes.FailedPrecondition, status.Code(err), "stop of a process-owned service: %v", err)
+	_, err = client.RestartService(ctx, &platformv1.RestartServiceRequest{Service: owned})
+	require.Equal(t, codes.FailedPrecondition, status.Code(err), "restart of a process-owned service: %v", err)
 }

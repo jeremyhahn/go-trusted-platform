@@ -213,6 +213,60 @@ func TestDaemonServices_ActionReplyFillsStatus(t *testing.T) {
 	}
 }
 
+// TestDaemonServices_ConflictKeepsTheGRPCCode reads each 409 the daemon's
+// service routes answer as the gRPC service's code: only a start of a running
+// service is AlreadyExists; a stop of a stopped service and any action on a
+// process-owned service are FailedPrecondition.
+func TestDaemonServices_ConflictKeepsTheGRPCCode(t *testing.T) {
+	var body string
+	a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodPost {
+			_, _ = io.WriteString(w, `{"status":"ok"}`)
+			return
+		}
+		w.WriteHeader(http.StatusConflict)
+		_, _ = io.WriteString(w, body)
+	})
+	ctx := context.Background()
+	dns := platformv1.ServiceType_SERVICE_TYPE_DNS
+	const owned = `{"error":"service compute is not controllable: owned by the process"}`
+	cases := []struct {
+		name   string
+		method string
+		req    proto.Message
+		reply  proto.Message
+		body   string
+		want   codes.Code
+	}{
+		{"start running", platformv1.PlatformDaemon_StartService_FullMethodName,
+			&platformv1.StartServiceRequest{Service: dns}, &platformv1.StartServiceResponse{},
+			`{"error":"service already running: dns"}`, codes.AlreadyExists},
+		{"start owned", platformv1.PlatformDaemon_StartService_FullMethodName,
+			&platformv1.StartServiceRequest{Service: dns}, &platformv1.StartServiceResponse{},
+			owned, codes.FailedPrecondition},
+		{"stop stopped", platformv1.PlatformDaemon_StopService_FullMethodName,
+			&platformv1.StopServiceRequest{Service: dns}, &platformv1.StopServiceResponse{},
+			`{"error":"service is not running: dns"}`, codes.FailedPrecondition},
+		{"stop owned", platformv1.PlatformDaemon_StopService_FullMethodName,
+			&platformv1.StopServiceRequest{Service: dns}, &platformv1.StopServiceResponse{},
+			owned, codes.FailedPrecondition},
+		{"restart owned", platformv1.PlatformDaemon_RestartService_FullMethodName,
+			&platformv1.RestartServiceRequest{Service: dns}, &platformv1.RestartServiceResponse{},
+			owned, codes.FailedPrecondition},
+	}
+	for _, tc := range cases {
+		body = tc.body
+		err := a.Connection().Invoke(ctx, tc.method, tc.req, tc.reply)
+		if status.Code(err) != tc.want {
+			t.Errorf("%s: code = %s (%v), want %s", tc.name, status.Code(err), err, tc.want)
+		}
+		if msg := status.Convert(err).Message(); msg == "" || msg[0] == '{' {
+			t.Errorf("%s: message = %q, want the envelope's error", tc.name, msg)
+		}
+	}
+}
+
 func TestDaemonServices_RefusedBeforeTheWire(t *testing.T) {
 	dns := platformv1.ServiceType_SERVICE_TYPE_DNS
 	cases := []struct {
