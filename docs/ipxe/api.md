@@ -264,12 +264,29 @@ who arrived here can find them:
 **The install-complete webhook route exists only when the operator sets
 `pxe.ServiceConfig.WebhookEnabled`** (default `false`). Disabled, the path is
 not registered and answers 404 like any unknown path. Enabled, it admits only
-a report whose `X-PXE-Webhook-Signature` header is `sha256=` and the lower-case
-hex HMAC-SHA256 of the raw request body under `pxe.ServiceConfig.WebhookSecret`
-(#240). A missing or wrong signature answers `401`; with no secret configured
-every report is refused. The secret is shared, so it does not say which machine
-sent a report, and a captured report can be replayed; a per-machine credential
-is #238.
+a report that passes two checks, in this order:
+
+1. **HMAC signature (#240).** The `X-PXE-Webhook-Signature` header is `sha256=`
+   and the lower-case hex HMAC-SHA256 of the raw request body under
+   `pxe.ServiceConfig.WebhookSecret`.
+2. **Device identity (ruling 673).** The TLS connection carries a verified mTLS
+   client certificate chain, and the lower-case hex SHA-256 of its leaf
+   certificate is the IDevID fingerprint recorded for the device registered
+   under the MAC address the report names.
+
+The refusals:
+
+| Status | When |
+|---|---|
+| `401` | no webhook secret configured (every report is refused); `X-PXE-Webhook-Signature` missing or wrong; no verified device client certificate on the connection |
+| `400` | the body cannot be read, does not decode, or names no MAC address |
+| `403` | no device is recorded for the reported MAC; the device has no IDevID fingerprint recorded; the client certificate is not the one whose fingerprint is recorded for that device (for example another device's certificate) |
+
+Any other failure of the device lookup maps through the normal error writer (a
+server without the device lookup answers service unavailable). The HMAC secret
+is shared by every machine; the client certificate is what ties a report to one
+device, so a report signed with the right secret but sent over another
+device's certificate is refused.
 
 **The `REST base` column is a locator, not the contract.** It gives the prefix a
 route hangs under; it does not give the route. The normative per-route path

@@ -842,7 +842,7 @@ gated. In every case the giveaway was reading the **handler**, not the prefix.
 | `/gateway` | `/gateway/telemetry`, `/gateway/desired-config/{id}`, `/gateway/vpn-leases/**` | A **verified mTLS client certificate**, bound to `gateway_id` |
 | `/provisioning` | `/provisioning/{config,config/nonce,sign}` | **EAB**, plus the EK for the signing route |
 | `/invitations` | `/invitations/{accept,token/{token}}` | The **invitation token itself** — an invitee has no session by construction |
-| `/pxe` | `/pxe/webhook/complete` | An **HMAC-SHA256 of the body** under `pxe.ServiceConfig.WebhookSecret` (#240); a per-machine credential is #238 |
+| `/pxe` | `/pxe/webhook/complete` | An **HMAC-SHA256 of the body** under `pxe.ServiceConfig.WebhookSecret` (#240) **and** a verified mTLS device client certificate whose SHA-256 is the IDevID fingerprint recorded for the reported MAC's device (ruling 673); see [`docs/ipxe/api.md`](../ipxe/api.md) §4 |
 
 **Two of these would have caused an outage** had the prefix been gated:
 `/gateway` stops every gateway in the fleet reporting, and `/invitations`
@@ -1100,7 +1100,7 @@ all three routers carry a half whose caller has no operator session.
 |---|---|---|
 | `invitation` | list, create, read, delete, revoke | `GET /invitations/token/{token}`, `POST /invitations/accept` — **the invitation token is the credential**; the invitee has no session, which is the point of an invitation |
 | `device` | device and profile CRUD, templates, profile assignment, provisioning **session** views and fulfilment | `/device/{profile,activate,heartbeat}` — **verified mTLS client certificate**; `/provisioning/{config,config/nonce}` — **EAB**; `/provisioning/sign` — **EAB + EK**; `/provisioning/sessions/{id}/poll` — polled by the client while it waits |
-| `pxe` | service start/stop/status, and the device lifecycle including **authorize**, **quarantine**, **retry** and the provisioning-state write | `POST /pxe/webhook/complete` — **an HMAC-SHA256 of the body** under `pxe.ServiceConfig.WebhookSecret`; see below |
+| `pxe` | service start/stop/status, and the device lifecycle including **authorize**, **quarantine**, **retry** and the provisioning-state write | `POST /pxe/webhook/complete` — **an HMAC-SHA256 of the body** under `pxe.ServiceConfig.WebhookSecret` **and** a verified mTLS device client certificate matching the device's recorded IDevID fingerprint; see below |
 
 Two of these are worth stating plainly.
 
@@ -1109,7 +1109,7 @@ Two of these are worth stating plainly.
 one, which decides what configuration that machine boots with. It is now
 `admin`.
 
-**The PXE webhook authenticates its caller with a shared secret (#240).** Its
+**The PXE webhook authenticates its caller with a shared secret (#240) and the device's certificate (ruling 673).** Its
 caller is a booting node, so it cannot take a role gate. It was left open by
 this campaign — the device identified by a MAC from the body, and the
 `WebhookSecret` that `pkg/compute/pxe/config.go` required read by nothing.
@@ -1118,8 +1118,12 @@ HMAC-SHA256 of the raw body under that secret, checked in constant time before
 the body is decoded (`pkg/webservice/v1/rest/pxe/webhook_auth.go`). A missing
 or wrong signature answers `401`, and an enabled webhook with no secret
 refuses every report. The secret proves possession, not which machine sent the
-report, and a captured report can be replayed; a per-machine credential is
-**#238.**
+report, so a signed report must also arrive over a verified mTLS client
+certificate whose lower-case hex SHA-256 is the IDevID fingerprint recorded for
+the device registered under the reported MAC: no client certificate answers
+`401`, an unknown MAC, a device with no fingerprint recorded, or another
+device's certificate `403`. The full refusal list is in
+[`docs/ipxe/api.md`](../ipxe/api.md) §4.
 
 #### #171: the unverified decoders are deleted, not corrected
 

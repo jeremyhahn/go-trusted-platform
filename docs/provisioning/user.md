@@ -226,8 +226,11 @@ BMC, `pxe_*` and `provision_*` tools take the scopes of their gRPC twins, and
 the four device-facing `provision_*` tools are open as their gRPC methods are.
 The install-completion webhook `POST /api/v1/pxe/webhook/complete` takes no
 token: it admits a report signed with `pxe.ServiceConfig.WebhookSecret`, an
-HMAC-SHA256 of the body in `X-PXE-Webhook-Signature` (#240). The secret is
-shared by every installing node, so treat it as a fleet credential. See
+HMAC-SHA256 of the body in `X-PXE-Webhook-Signature` (#240), and only over a
+verified mTLS device client certificate whose SHA-256 is the IDevID fingerprint
+recorded for the reported MAC's device (ruling 673). The secret is shared by
+every installing node, so treat it as a fleet credential; the certificate is
+what ties a report to one device. See
 [api.md](api.md) §6 and [`docs/ipxe/api.md`](../ipxe/api.md) §4–§5.
 
 **Test coverage.** Two provisioning integration suites do not exercise what they
