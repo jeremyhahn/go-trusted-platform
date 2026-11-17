@@ -448,10 +448,6 @@ func TestMockFactory_DAOs_DefaultNil(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, invDAO)
 
-	roleDAO, err := mf.RoleDAO()
-	require.NoError(t, err)
-	assert.Nil(t, roleDAO)
-
 	waDAO, err := mf.WebAuthnDAO()
 	require.NoError(t, err)
 	assert.Nil(t, waDAO)
@@ -812,8 +808,6 @@ func TestFactory_DAO_NotStarted(t *testing.T) {
 	_, err = factory.RegistrationDAO()
 	require.Error(t, err)
 	_, err = factory.InvitationDAO()
-	require.Error(t, err)
-	_, err = factory.RoleDAO()
 	require.Error(t, err)
 	_, err = factory.WebAuthnDAO()
 	require.Error(t, err)
@@ -1439,11 +1433,6 @@ func TestMockFactory_SetDAOs(t *testing.T) {
 	invDAO, err := mf.InvitationDAO()
 	require.NoError(t, err)
 	assert.Nil(t, invDAO)
-
-	mf.SetRoleDAO(nil)
-	roleDAO, err := mf.RoleDAO()
-	require.NoError(t, err)
-	assert.Nil(t, roleDAO)
 
 	mf.SetWebAuthnDAO(nil)
 	waDAO, err := mf.WebAuthnDAO()
