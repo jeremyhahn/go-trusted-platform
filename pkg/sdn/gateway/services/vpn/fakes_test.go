@@ -167,9 +167,12 @@ type fakePlane struct {
 	kind       DataPlaneKind
 	installErr error
 	removeErr  error
-	mu         sync.Mutex
-	installed  map[LeaseID]*Lease
-	removed    []LeaseID
+	// installThenErr installs the peer and then returns this error, as a
+	// hosted datapath does when SetPeer lands but its response is lost.
+	installThenErr error
+	mu             sync.Mutex
+	installed      map[LeaseID]*Lease
+	removed        []LeaseID
 	// reconciles records the keep list of every ReconcilePeers call.
 	reconciles [][]LeaseID
 	pause      *pause
@@ -189,8 +192,9 @@ func (p *fakePlane) InstallPeer(_ context.Context, lease *Lease) error {
 	p.mu.Lock()
 	cp := *lease
 	p.installed[lease.ID] = &cp
+	thenErr := p.installThenErr
 	p.mu.Unlock()
-	return nil
+	return thenErr
 }
 
 // RemovePeer removes the peer; with removeErr set it fails and the peer

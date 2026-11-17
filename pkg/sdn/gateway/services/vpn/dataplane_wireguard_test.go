@@ -171,6 +171,29 @@ func TestWireGuardPlane_KernelRefusalIsReported(t *testing.T) {
 	assert.Contains(t, plane.peers, LeaseID("l1"), "the lease must stay mapped when the kernel refused the removal")
 }
 
+// A public key belongs to one lease at a time. Removal is by key, so a
+// second lease on a key whose removal failed would lose its peer to the
+// retry of the first lease's removal; the plane refuses it instead.
+func TestWireGuardPlane_RefusesAKeyAnotherLeaseHolds(t *testing.T) {
+	plane, hub := newWireGuardPlaneForTest(t)
+	key := wgClientKey(1)
+	require.NoError(t, plane.InstallPeer(context.Background(), wgLease("l1", "10.9.0.23/32", key)))
+	hub.removeErr = errors.New("kernel says no")
+	require.Error(t, plane.RemovePeer(context.Background(), "l1"))
+
+	err := plane.InstallPeer(context.Background(), wgLease("l2", "10.9.0.24/32", key))
+	var conflict *ErrPeerConflict
+	require.True(t, errors.As(err, &conflict), "got %v", err)
+	assert.Equal(t, LeaseID("l2"), conflict.LeaseID)
+	assert.Equal(t, LeaseID("l1"), conflict.Existing)
+	assert.Equal(t, []netip.Prefix{netip.MustParsePrefix("10.9.0.23/32")}, hub.peers[string(key)],
+		"the refused lease does not reprogram l1's peer")
+	assert.NotContains(t, plane.peers, LeaseID("l2"))
+
+	require.NoError(t, plane.InstallPeer(context.Background(), wgLease("l1", "10.9.0.23/32", key)),
+		"re-installing a lease with its own key still succeeds")
+}
+
 func TestWireGuardPlane_Lifecycle(t *testing.T) {
 	hub := newFakeHub()
 	plane, err := NewWireGuardPlane(hub, nil)

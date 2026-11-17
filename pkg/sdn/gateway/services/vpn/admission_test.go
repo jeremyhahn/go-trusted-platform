@@ -211,6 +211,40 @@ func TestAdmit_FailedPeerInstallReleasesTheAddress(t *testing.T) {
 	assert.Equal(t, 0, h.ipam.allocatedCount())
 }
 
+// An install whose call fails may still have taken effect in the datapath
+// (a lost response or a cancelled caller). Admit removes the peer before
+// it releases the address; when removal fails, the peer is owed to the
+// sweep and the address is held until the sweep removes it.
+func TestAdmit_AmbiguousPeerInstallIsCleanedUp(t *testing.T) {
+	t.Run("removal succeeds", func(t *testing.T) {
+		h := newHarness(t, testConfig())
+		h.plane.installThenErr = errors.New("response lost")
+		_, err := h.svc.Admit(context.Background(), h.request(t))
+		var unavailable *ErrDataPlaneUnavailable
+		require.True(t, errors.As(err, &unavailable), "got %v", err)
+		assert.Zero(t, h.plane.installedCount(), "the peer the install left is removed")
+		assert.Equal(t, 0, h.ipam.allocatedCount(), "the address is released")
+	})
+	t.Run("removal fails", func(t *testing.T) {
+		h := newHarness(t, testConfig())
+		h.plane.installThenErr = errors.New("response lost")
+		h.plane.failRemovals(errors.New("datapath unreachable"))
+		_, err := h.svc.Admit(context.Background(), h.request(t))
+		var unavailable *ErrDataPlaneUnavailable
+		require.True(t, errors.As(err, &unavailable), "got %v", err)
+		require.Equal(t, 1, h.plane.installedCount(), "the peer is still installed")
+		assert.Equal(t, 1, h.ipam.allocatedCount(), "its address is held while the peer may route it")
+
+		h.svc.Sweep(context.Background())
+		assert.Equal(t, 1, h.ipam.allocatedCount(), "held while removal still fails")
+
+		h.plane.failRemovals(nil)
+		h.svc.Sweep(context.Background())
+		assert.Zero(t, h.plane.installedCount(), "the sweep removes the owed peer")
+		assert.Equal(t, 0, h.ipam.allocatedCount(), "and releases the address")
+	})
+}
+
 func TestAdmit_SecondAdmissionReplacesTheFirst(t *testing.T) {
 	h := newHarness(t, testConfig())
 	first, err := h.svc.Admit(context.Background(), h.request(t))
