@@ -83,3 +83,83 @@ func TestShippedHATemplates_FormOneCluster(t *testing.T) {
 	}
 	assert.Len(t, seen, 3)
 }
+
+// haComputeIdentityLeaves are the only leaf keys allowed to differ between
+// the two compute templates of the high-availability profile: the node's
+// hostname, its addresses and its TPM serial.
+var haComputeIdentityLeaves = map[string]bool{
+	"hostname":     true,
+	"address":      true,
+	"ipv4-address": true,
+	"serial":       true,
+}
+
+// diffYAMLLeaves records in out the path of every leaf where a and b differ,
+// together with the name of the key holding it.
+func diffYAMLLeaves(path, key string, a, b any, out map[string]string) {
+	switch av := a.(type) {
+	case map[string]any:
+		bv, ok := b.(map[string]any)
+		if !ok || len(av) != len(bv) {
+			out[path] = key
+			return
+		}
+		for k, x := range av {
+			y, ok := bv[k]
+			if !ok {
+				out[path+"."+k] = k
+				continue
+			}
+			diffYAMLLeaves(path+"."+k, k, x, y, out)
+		}
+	case []any:
+		bv, ok := b.([]any)
+		if !ok || len(av) != len(bv) {
+			out[path] = key
+			return
+		}
+		for i := range av {
+			diffYAMLLeaves(fmt.Sprintf("%s[%d]", path, i), key, av[i], bv[i], out)
+		}
+	default:
+		if fmt.Sprint(a) != fmt.Sprint(b) {
+			out[path] = key
+		}
+	}
+}
+
+// TestShippedHATemplates_ComputePair pins the compute pair of the
+// high-availability profile: both templates load and validate, and they
+// differ only in node identity (hostname, addresses, TPM serial), each of
+// which is distinct between the two nodes.
+func TestShippedHATemplates_ComputePair(t *testing.T) {
+	docs := make([]map[string]any, 2)
+	for i := range docs {
+		path := filepath.Join(haTemplateRoot, fmt.Sprintf("compute%d", i+1), "compute.yaml")
+		c := loadHATemplateQuicBaaS(t, path)
+		require.NoError(t, c.Validate(), path)
+
+		raw, err := os.ReadFile(path)
+		require.NoError(t, err)
+		require.NoError(t, yaml.Unmarshal(raw, &docs[i]), path)
+	}
+
+	diffs := map[string]string{}
+	diffYAMLLeaves("", "", docs[0], docs[1], diffs)
+	require.NotEmpty(t, diffs, "compute1 and compute2 are identical")
+	for path, key := range diffs {
+		assert.True(t, haComputeIdentityLeaves[key],
+			"compute templates differ at %s, which is not a node identity field", path)
+	}
+	for _, path := range []string{".os.hostname", ".bmc.address"} {
+		_, ok := diffs[path]
+		assert.True(t, ok, "compute templates share %s", path)
+	}
+	serials := 0
+	for _, key := range diffs {
+		if key == "serial" {
+			serials++
+		}
+	}
+	assert.Positive(t, serials, "compute templates share the TPM serial")
+}
