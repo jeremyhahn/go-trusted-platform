@@ -166,3 +166,37 @@ func TestDecodeCloneTemplateJSON(t *testing.T) {
 	assert.Equal(t, "tpl-1", resp.GetBundle().GetClonedFrom())
 	assert.Equal(t, "node-a", resp.GetBundle().GetManifest().GetHostname())
 }
+
+// The daemon (pkg/api/rest) replies to a clone with a flat bundle: hostname,
+// labels, ek_algorithm, secure_boot_enabled and the EK certificate sit at the
+// top level, not inside a manifest. The decoder builds the Manifest from them.
+func TestDecodeCloneTemplateJSON_DaemonFlatShape(t *testing.T) {
+	resp, err := DecodeCloneTemplateJSON([]byte(`{"id":"bundle-1","mode":"pre-assigned",` +
+		`"hostname":"node-a","ek_algorithm":"ECC","secure_boot_enabled":true,"running":false,` +
+		`"created_at":"2026-11-17T10:00:00Z","cloned_from":"tpl-1","labels":{"env":"prod"},` +
+		`"ek_certificate":{"subject":"CN=node-a","issuer":"CN=ca","serial_number":"42",` +
+		`"not_before":"2026-11-17T10:00:00Z","not_after":"2027-11-17T10:00:00Z","fingerprint":"ab:cd"},` +
+		`"secure_boot_keys":{"pk_fingerprint":"pk","kek_fingerprint":"kek","db_fingerprint":"db"}}`))
+	require.NoError(t, err)
+	assert.True(t, resp.GetStatus().GetSuccess())
+
+	bundle := resp.GetBundle()
+	assert.Equal(t, "bundle-1", bundle.GetId())
+	assert.Equal(t, platformv1.BundleMode_BUNDLE_MODE_PRE_ASSIGNED, bundle.GetMode())
+	assert.Equal(t, "tpl-1", bundle.GetClonedFrom())
+	assert.Nil(t, bundle.GetSecureBootKeys(), "the flat fingerprints are not key paths")
+
+	manifest := bundle.GetManifest()
+	require.NotNil(t, manifest)
+	assert.Equal(t, "bundle-1", manifest.GetId())
+	assert.Equal(t, platformv1.BundleMode_BUNDLE_MODE_PRE_ASSIGNED, manifest.GetMode())
+	assert.Equal(t, "node-a", manifest.GetHostname())
+	assert.Equal(t, platformv1.EKAlgorithm_EK_ALGORITHM_ECC, manifest.GetEkAlgorithm())
+	assert.True(t, manifest.GetSecureBootEnabled())
+	assert.Equal(t, map[string]string{"env": "prod"}, manifest.GetLabels())
+	assert.Equal(t, "tpl-1", manifest.GetClonedFrom())
+	assert.Equal(t, "CN=node-a", manifest.GetEkCertificate().GetSubject())
+	assert.Equal(t, "ab:cd", manifest.GetEkCertificate().GetFingerprint())
+	assert.Equal(t, "pk", manifest.GetSecureBootKeys().GetPkFingerprint())
+	assert.Equal(t, "db", manifest.GetSecureBootKeys().GetDbFingerprint())
+}
