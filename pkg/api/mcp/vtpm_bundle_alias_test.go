@@ -293,7 +293,7 @@ func TestVTPMBundleAlias_CarriesTwinScope(t *testing.T) {
 func callVTPMAliasViaServer(tc bundleAliasCase, granted func(scope string) bool) (*mcpwire.JSONRPCResponse, *vtpmBackendRecorder) {
 	rec := newVTPMBackendRecorder(nil)
 	server := NewServer(rec, nil, newTestLogger())
-	server.SetAuthorizationService(&mockAuthorizationService{
+	usePEP(server, &mockAuthorizationService{
 		checkFunc: func(_ context.Context, _, resource, action string) (bool, error) {
 			return granted(resource + ":" + action), nil
 		},

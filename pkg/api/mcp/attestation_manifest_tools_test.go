@@ -105,7 +105,7 @@ func callManifestTool(t *testing.T, p *manifestProvider, tool string, grant func
 			return grant(resource, action), nil
 		},
 	}
-	server := NewServer(p, &Config{AuthorizationService: authSvc, AuthManager: &mockAuthManager{}}, newTestLogger())
+	server := NewServer(p, &Config{AuthorizationService: authSvc, AuthManager: pepCaller(&mockAuthManager{}), PEPClient: servicePEP{authSvc}}, newTestLogger())
 	return server.handleRequest(context.Background(), &mcpwire.JSONRPCRequest{
 		JSONRPC: "2.0",
 		ID:      1,

@@ -293,7 +293,7 @@ func callTPMTool(t *testing.T, tc classifiedTPMTool, granted func(scope string) 
 	t.Helper()
 	provider := &tpmCallRecorder{mockServiceProvider: newMockServiceProvider()}
 	server := NewServer(provider, nil, newTestLogger())
-	server.SetAuthorizationService(&mockAuthorizationService{
+	usePEP(server, &mockAuthorizationService{
 		checkFunc: func(_ context.Context, _, resource, action string) (bool, error) {
 			return granted(resource + ":" + action), nil
 		},

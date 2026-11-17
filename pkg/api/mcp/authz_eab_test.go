@@ -77,7 +77,7 @@ func callEABTool(t *testing.T, grant *mockAuthorizationService, tool string, arg
 	t.Helper()
 	stub := &eabStubProvider{}
 	svc := &eabCombinedProvider{mockServiceProvider: newMockServiceProvider(), eabStubProvider: stub}
-	server := NewServer(svc, &Config{AuthorizationService: grant}, newTestLogger())
+	server := NewServer(svc, &Config{AuthorizationService: grant, AuthManager: legacyCaller(), PEPClient: servicePEP{grant}}, newTestLogger())
 
 	arguments := map[string]interface{}{"_token": "caller-token"}
 	for key, value := range args {

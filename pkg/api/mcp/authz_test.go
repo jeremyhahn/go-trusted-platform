@@ -231,12 +231,8 @@ func TestAuthorizationChecker_CheckToolAuthorization(t *testing.T) {
 	})
 
 	t.Run("validates token with auth manager", func(t *testing.T) {
-		authMgr := &mockAuthManager{
-			validateFunc: func(ctx context.Context, token string) (bool, error) {
-				return true, nil
-			},
-		}
-		checker := NewAuthorizationChecker(nil, authMgr)
+		authMgr := legacyCaller()
+		checker := NewAuthorizationChecker(nil, authMgr, WithPEPClient(&recordingPEP{allowed: true}))
 
 		err := checker.CheckToolAuthorization(ctx, "vtpm_create", "valid-token")
 		if err != nil {
@@ -290,7 +286,7 @@ func TestAuthorizationChecker_CheckToolAuthorization(t *testing.T) {
 				return true, nil
 			},
 		}
-		checker := NewAuthorizationChecker(authSvc, nil)
+		checker := pepChecker(authSvc, nil)
 
 		err := checker.CheckToolAuthorization(ctx, "vtpm_create", "token")
 		if err != nil {
@@ -299,8 +295,8 @@ func TestAuthorizationChecker_CheckToolAuthorization(t *testing.T) {
 		if !authSvc.checkCalled {
 			t.Error("CheckPermission was not called")
 		}
-		if authSvc.lastSubject != "token" {
-			t.Errorf("lastSubject = %s, want token", authSvc.lastSubject)
+		if authSvc.lastSubject != "user-1" {
+			t.Errorf("lastSubject = %s, want the caller user-1", authSvc.lastSubject)
 		}
 		if authSvc.lastResource != "vtpm" {
 			t.Errorf("lastResource = %s, want vtpm", authSvc.lastResource)
@@ -316,7 +312,7 @@ func TestAuthorizationChecker_CheckToolAuthorization(t *testing.T) {
 				return false, nil
 			},
 		}
-		checker := NewAuthorizationChecker(authSvc, nil)
+		checker := pepChecker(authSvc, nil)
 
 		err := checker.CheckToolAuthorization(ctx, "vtpm_delete", "token")
 		if err == nil {
@@ -333,7 +329,7 @@ func TestAuthorizationChecker_CheckToolAuthorization(t *testing.T) {
 				return false, errors.New("permission check failed")
 			},
 		}
-		checker := NewAuthorizationChecker(authSvc, nil)
+		checker := pepChecker(authSvc, nil)
 
 		err := checker.CheckToolAuthorization(ctx, "dns_add_record", "token")
 		if err == nil {
@@ -351,6 +347,7 @@ func TestAuthorizationChecker_CheckToolAuthorization(t *testing.T) {
 				callOrder = append(callOrder, "validate")
 				return true, nil
 			},
+			getClaimsFunc: legacyCaller().getClaimsFunc,
 		}
 		authSvc := &mockAuthorizationService{
 			checkFunc: func(ctx context.Context, subject, resource, action string) (bool, error) {
@@ -358,7 +355,7 @@ func TestAuthorizationChecker_CheckToolAuthorization(t *testing.T) {
 				return true, nil
 			},
 		}
-		checker := NewAuthorizationChecker(authSvc, authMgr)
+		checker := pepChecker(authSvc, authMgr)
 
 		err := checker.CheckToolAuthorization(ctx, "vtpm_list", "token")
 		if err != nil {
@@ -407,7 +404,7 @@ func TestAuthorizationChecker_IsEnabled(t *testing.T) {
 func TestAuthorizationChecker_InvalidPermissionConfig(t *testing.T) {
 	t.Run("returns error for malformed permission string", func(t *testing.T) {
 		authSvc := &mockAuthorizationService{}
-		checker := NewAuthorizationChecker(authSvc, nil)
+		checker := pepChecker(authSvc, nil)
 
 		// Override toolPermissions with malformed permission (no colon)
 		checker.toolPermissions["malformed_tool"] = "invalid_permission_no_colon"
@@ -427,7 +424,7 @@ func TestAuthorizationChecker_InvalidPermissionConfig(t *testing.T) {
 func TestAuthorizationChecker_PermissionParsing(t *testing.T) {
 	t.Run("correctly parses resource and action from permission", func(t *testing.T) {
 		authSvc := &mockAuthorizationService{}
-		checker := NewAuthorizationChecker(authSvc, nil)
+		checker := pepChecker(authSvc, nil)
 
 		tests := []struct {
 			tool             string

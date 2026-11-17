@@ -187,7 +187,7 @@ func callIDevIDTool(t *testing.T, tc classifiedIDevIDTool, granted func(scope st
 	t.Helper()
 	provider := &idevidCallRecorder{mockServiceProvider: newMockServiceProvider()}
 	server := NewServer(provider, nil, newTestLogger())
-	server.SetAuthorizationService(&mockAuthorizationService{
+	usePEP(server, &mockAuthorizationService{
 		checkFunc: func(_ context.Context, _, resource, action string) (bool, error) {
 			return granted(resource + ":" + action), nil
 		},
