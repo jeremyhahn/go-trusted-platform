@@ -148,7 +148,7 @@ func (s *inProcProfileServer) FindConfigForDevice(_ context.Context, r *platform
 // and returns it with CLI flags for each output format pointing at it.
 func startProfileServer(t *testing.T) (*inProcProfileServer, func(cli.OutputFormat) *cli.CommonFlags) {
 	t.Helper()
-	sock := filepath.Join(t.TempDir(), "platformd.sock")
+	sock := filepath.Join(shortSocketDir(t), "platformd.sock")
 	lis, err := net.Listen("unix", sock)
 	require.NoError(t, err)
 	srv := &inProcProfileServer{profiles: map[uint64]*platformv1.DeviceProfile{
