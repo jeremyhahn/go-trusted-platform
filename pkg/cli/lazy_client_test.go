@@ -22,7 +22,7 @@ import (
 )
 
 func TestLazyClient_ConnectsOnceOnFirstUse(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	socketPath := filepath.Join(shortSocketDir(t), "test.sock")
 	_, cleanup := startTestGRPCServer(t, socketPath)
 	defer cleanup()
 	contexts := 0

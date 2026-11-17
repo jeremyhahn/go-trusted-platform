@@ -24,7 +24,7 @@ import (
 
 // TestListPortsEdgeCases tests edge cases in ListPorts
 func TestListPortsEdgeCases(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -94,7 +94,7 @@ func TestListPortsEdgeCases(t *testing.T) {
 
 // TestUpdatePortEdgeCases tests edge cases in UpdatePort
 func TestUpdatePortEdgeCases(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -139,7 +139,7 @@ func TestUpdatePortEdgeCases(t *testing.T) {
 
 // TestSetPortVLANEdgeCases tests edge cases in SetPortVLAN
 func TestSetPortVLANEdgeCases(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -191,7 +191,7 @@ func TestSetPortVLANEdgeCases(t *testing.T) {
 
 // TestSetPortTrunksEdgeCases tests edge cases in SetPortTrunks
 func TestSetPortTrunksEdgeCases(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -248,7 +248,7 @@ func TestSetPortTrunksEdgeCases(t *testing.T) {
 
 // TestSetPortStateEdgeCases tests edge cases in SetPortState
 func TestSetPortStateEdgeCases(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -295,7 +295,7 @@ func TestSetPortStateEdgeCases(t *testing.T) {
 
 // TestGetInterfaceEdgeCases tests edge cases in GetInterface
 func TestGetInterfaceEdgeCases(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -494,7 +494,7 @@ func TestParseInterfaceEdgeCases(t *testing.T) {
 
 // TestGetPortVLANTag tests the internal getPortVLANTag function
 func TestGetPortVLANTag(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
