@@ -207,6 +207,25 @@ func TestManifests_SDKError(t *testing.T) {
 	})
 }
 
+// TestManifestsList_UnconfiguredBackendFails pins that a daemon with no
+// attestation backend surfaces as a list failure, never as an empty
+// inventory (Codex P1 on #1704).
+func TestManifestsList_UnconfiguredBackendFails(t *testing.T) {
+	cause := status.Error(codes.FailedPrecondition, "attestation service backend is not configured")
+	for _, format := range []cli.OutputFormat{cli.OutputFormatTable, cli.OutputFormatJSON} {
+		t.Run(string(format), func(t *testing.T) {
+			r, out := newRunner(&fakeManifestsClient{err: cause}, format)
+			err := r.listManifests(manifestsListOptions{})
+			var typed ErrListManifestsFailed
+			require.ErrorAs(t, err, &typed)
+			assert.Contains(t, err.Error(), "not configured")
+			assert.Empty(t, out.String())
+			assert.NotContains(t, out.String(), "No attestation manifests")
+			assert.NotContains(t, out.String(), `"total"`)
+		})
+	}
+}
+
 func TestManifests_Surface(t *testing.T) {
 	manifests, _, err := quietCommand().Find([]string{"manifests"})
 	require.NoError(t, err)
