@@ -399,7 +399,7 @@ func awaitSocketMode(t *testing.T, done <-chan error, path string, mode fs.FileM
 func TestSocketTakeoverHandsTheSocketOver(t *testing.T) {
 	me, err := user.Current()
 	require.NoError(t, err)
-	socket := filepath.Join(t.TempDir(), "daemon.sock")
+	socket := filepath.Join(shortSocketDir(t), "daemon.sock")
 	// A socket file left by a daemon that died is removed first; the daemon
 	// could not listen over it.
 	require.NoError(t, os.WriteFile(socket, nil, 0o600))
@@ -415,7 +415,7 @@ func TestSocketTakeoverHandsTheSocketOver(t *testing.T) {
 }
 
 func TestSocketTakeoverStopsADaemonThatNeverServes(t *testing.T) {
-	socket := filepath.Join(t.TempDir(), "daemon.sock")
+	socket := filepath.Join(shortSocketDir(t), "daemon.sock")
 	_, done := startTakeover(t, []string{"SOCKET_TAKEOVER_TRIES=2"},
 		socket, "root", "0:0", "0600", "sleep", "30")
 
@@ -429,7 +429,7 @@ func TestSocketTakeoverStopsADaemonThatNeverServes(t *testing.T) {
 func TestSocketTakeoverStopsTheDaemonWhenTheTakeoverFails(t *testing.T) {
 	me, err := user.Current()
 	require.NoError(t, err)
-	socket := filepath.Join(t.TempDir(), "daemon.sock")
+	socket := filepath.Join(shortSocketDir(t), "daemon.sock")
 	_, done := startTakeover(t, []string{takeoverDaemonEnv + "=" + socket},
 		socket, me.Username, "no-such-user-709:no-such-group-709", "0600", os.Args[0])
 
