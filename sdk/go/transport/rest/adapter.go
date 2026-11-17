@@ -903,6 +903,9 @@ var templatedRouteTable = map[string]templatedRoute{
 	"/platform.v1.BMCService/GetSystemInfo":      bmcRoute("/api/v1/bmc/{profileID}/system-info", http.MethodGet),
 	"/platform.v1.BMCService/Provision":          bmcRoute("/api/v1/bmc/{profileID}/provision", http.MethodPost),
 	"/platform.v1.BMCService/ProvisionStatus":    bmcRoute("/api/v1/bmc/{profileID}/provision", http.MethodGet),
+	"/platform.v1.BMCService/GetWebCertificate":  bmcRoute("/api/v1/bmc/{profileID}/cert", http.MethodGet),
+	"/platform.v1.BMCService/DeleteUser":         bmcSlotRoute("/api/v1/bmc/{profileID}/users/{slot}", http.MethodDelete),
+	"/platform.v1.BMCService/SetUserPassword":    bmcSlotRoute("/api/v1/bmc/{profileID}/users/{slot}/password", http.MethodPut),
 
 	// Per-tenant barrier RPCs on PlatformTenantService — proto:
 	// pkg/api/grpc/proto/tenant.proto. Server registrations live in
@@ -1414,6 +1417,20 @@ func bmcRoute(path, method string) templatedRoute {
 		path:       path,
 		method:     method,
 		pathParams: []pathParam{{placeholder: "{profileID}", field: "profile_id"}},
+	}
+}
+
+// bmcSlotRoute builds a templatedRoute for /api/v1/bmc/{profileID}/users/{slot}
+// sub-routes, carrying profile_id and the IPMI user slot in the path. A zero
+// slot is refused with InvalidArgument before any request.
+func bmcSlotRoute(path, method string) templatedRoute {
+	return templatedRoute{
+		path:   path,
+		method: method,
+		pathParams: []pathParam{
+			{placeholder: "{profileID}", field: "profile_id"},
+			{placeholder: "{slot}", field: "slot"},
+		},
 	}
 }
 
