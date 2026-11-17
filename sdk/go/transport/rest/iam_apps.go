@@ -85,3 +85,20 @@ func paginationOffset(v protoreflect.Value) string {
 	}
 	return strconv.FormatInt((page-1)*size, 10)
 }
+
+// paginationInt reads a PaginationRequest number field whatever its
+// integer kind: protoreflect panics on Int() of an unsigned value.
+func paginationInt(v protoreflect.Value) int64 {
+	switch n := v.Interface().(type) {
+	case int32:
+		return int64(n)
+	case int64:
+		return n
+	case uint32:
+		return int64(n)
+	case uint64:
+		return int64(n)
+	default:
+		return 0
+	}
+}

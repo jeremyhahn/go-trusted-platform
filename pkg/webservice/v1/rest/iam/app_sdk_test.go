@@ -98,6 +98,7 @@ func TestAppMethodsOverSDKREST_RoundTrip(t *testing.T) {
 	assert.Equal(t, []call{
 		{"register", tenant, "", "app"},
 		{"list", tenant, "", ""},
+		{"list", tenant, "", ""},
 		{"get", tenant, "c1", ""},
 		{"update", tenant, "c1", "renamed"},
 		{"delete", tenant, "c1", ""},
