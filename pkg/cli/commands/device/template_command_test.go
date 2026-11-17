@@ -126,7 +126,7 @@ func (s *fakeTemplateServer) CreateProfileFromTemplate(_ context.Context, in *pl
 
 func startTemplateServer(t *testing.T) (*deviceHarness, *fakeTemplateServer) {
 	t.Helper()
-	sock := filepath.Join(t.TempDir(), "platformd.sock")
+	sock := filepath.Join(shortSocketDir(t), "platformd.sock")
 	lis, err := net.Listen("unix", sock)
 	require.NoError(t, err)
 	srv := &fakeTemplateServer{
