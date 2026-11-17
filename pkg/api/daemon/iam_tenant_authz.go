@@ -7,6 +7,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -14,8 +15,9 @@ import (
 
 // callerTenant reports the tenant the authenticated caller is bound to. The
 // second result is false when the caller carries no tenant-bound identity:
-// the Unix-socket operator, authenticated by peer credentials, and a daemon
-// run with SkipIAMValidation.
+// the Unix-socket operator, authenticated by peer credentials, and a caller
+// with no identity at all (a daemon run with SkipIAMValidation).
+// authorizeUnboundCaller decides the unbound case.
 //
 // The sources mirror the REST session: a validated platform token (gRPC,
 // QUIC or MCP) carries its tenant_id claim, and an mTLS client certificate carries
@@ -36,6 +38,27 @@ func callerTenant(ctx context.Context) (string, bool) {
 	return "", false
 }
 
+// ErrUnboundCaller is the refusal a caller with no identity at all gets from
+// a tenant-scoped call: no platform token, no mTLS identity and no Unix peer
+// credentials, so there is no tenant to check the request against.
+type ErrUnboundCaller struct{}
+
+func (ErrUnboundCaller) Error() string {
+	return "tenant-scoped call refused: the caller carries no authenticated identity"
+}
+
+// authorizeUnboundCaller decides a caller callerTenant reports unbound (SPEC
+// row 109, fail closed). The local operator is admitted: a Unix-socket peer
+// carries kernel-verified SO_PEERCRED credentials, and an in-process embedder
+// carries the process credentials (peercred.ContextWithProcessCredentials).
+// Any other caller is refused with codes.PermissionDenied.
+func authorizeUnboundCaller(ctx context.Context) error {
+	if _, ok := peercred.UnixCredentialsFromContext(ctx); ok {
+		return nil
+	}
+	return status.Error(codes.PermissionDenied, ErrUnboundCaller{}.Error())
+}
+
 // authorizeIAMTenant refuses an IAM request that names a tenant other than
 // the caller's own, with codes.PermissionDenied — the same refusal the REST
 // IAM tree gives with 403 from RequireOwnTenant, so no transport answers a
@@ -43,7 +66,7 @@ func callerTenant(ctx context.Context) (string, bool) {
 func authorizeIAMTenant(ctx context.Context, requested string) error {
 	caller, bound := callerTenant(ctx)
 	if !bound {
-		return nil
+		return authorizeUnboundCaller(ctx)
 	}
 	if err := iamTenantDecision(caller, requested); err != nil {
 		return status.Error(codes.PermissionDenied, err.Error())
@@ -66,12 +89,12 @@ func iamTenantDecision(caller, requested string) error {
 // tenants — from any tenant-bound caller but the system tenant
 // (tenant.AuthorizeCrossTenant), with codes.PermissionDenied. It is the rule
 // the REST trees enforce with RequireSystemTenant; a caller with no
-// tenant-bound identity is admitted, as callerTenant documents, and an unset
+// tenant-bound identity is decided by authorizeUnboundCaller, and an unset
 // systemTenantID admits no tenant-bound caller.
 func authorizeSystemCaller(ctx context.Context, systemTenantID, method string) error {
 	caller, bound := callerTenant(ctx)
 	if !bound {
-		return nil
+		return authorizeUnboundCaller(ctx)
 	}
 	if err := systemCallerDecision(systemTenantID, caller, method); err != nil {
 		return status.Error(codes.PermissionDenied, err.Error())
