@@ -66,7 +66,7 @@ func TestEncodeCreateTemplateRequest_Refusals(t *testing.T) {
 	assert.Equal(t, "EK algorithm", unknown.Kind)
 
 	_, err = EncodeCreateTemplateRequest(&platformv1.CreateTemplateRequest{})
-	var missing *ErrRequiredWireField
+	var missing *errRequiredWireField
 	require.ErrorAs(t, err, &missing)
 	assert.Equal(t, "options.id", missing.Field)
 }
@@ -81,7 +81,7 @@ func TestEncodeCloneTemplateRequest(t *testing.T) {
 	assert.NotContains(t, body, "template_id")
 
 	_, err = EncodeCloneTemplateRequest(&platformv1.CloneTemplateRequest{Options: &platformv1.CloneOptions{}})
-	var missing *ErrRequiredWireField
+	var missing *errRequiredWireField
 	require.ErrorAs(t, err, &missing)
 	assert.Equal(t, "options.hostname", missing.Field)
 }

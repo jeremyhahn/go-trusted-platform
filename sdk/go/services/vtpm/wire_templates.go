@@ -22,19 +22,20 @@ package vtpm
 // labels} with the template id in the path and replies with the new bundle.
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
-// ErrRequiredWireField is returned when a request lacks a field the route
+// errRequiredWireField is returned when a request lacks a field the route
 // requires, so the call is refused before anything is sent.
-type ErrRequiredWireField struct {
+type errRequiredWireField struct {
 	Field string
 }
 
-func (e *ErrRequiredWireField) Error() string {
+func (e *errRequiredWireField) Error() string {
 	return fmt.Sprintf("vtpm: %s is required", e.Field)
 }
 
@@ -45,7 +46,7 @@ func (e *ErrRequiredWireField) Error() string {
 func EncodeCreateTemplateRequest(req *platformv1.CreateTemplateRequest) (map[string]interface{}, error) {
 	opts := req.GetOptions()
 	if opts.GetId() == "" {
-		return nil, &ErrRequiredWireField{Field: "options.id"}
+		return nil, &errRequiredWireField{Field: "options.id"}
 	}
 	body := map[string]interface{}{
 		"id":                  opts.GetId(),
@@ -70,7 +71,7 @@ func EncodeCreateTemplateRequest(req *platformv1.CreateTemplateRequest) (map[str
 func EncodeCloneTemplateRequest(req *platformv1.CloneTemplateRequest) (map[string]interface{}, error) {
 	opts := req.GetOptions()
 	if opts.GetHostname() == "" {
-		return nil, &ErrRequiredWireField{Field: "options.hostname"}
+		return nil, &errRequiredWireField{Field: "options.hostname"}
 	}
 	body := map[string]interface{}{"hostname": opts.GetHostname()}
 	if labels := opts.GetLabels(); len(labels) > 0 {
@@ -149,8 +150,22 @@ func DecodeDeleteTemplateJSON(data []byte) (*platformv1.DeleteTemplateResponse, 
 // DecodeCloneTemplateJSON decodes the bundle POST
 // /api/v1/vtpm/templates/{id}/clone returns.
 func DecodeCloneTemplateJSON(data []byte) (*platformv1.CloneTemplateResponse, error) {
+	var probe struct {
+		Manifest json.RawMessage `json:"manifest"`
+	}
+	if err := decodeJSON(data, "clone template", &probe); err != nil {
+		return nil, err
+	}
 	var w bundleJSON
-	if err := decodeJSON(data, "clone template", &w); err != nil {
+	if len(probe.Manifest) == 0 || string(probe.Manifest) == "null" {
+		// The daemon (pkg/api/rest) replies with a flat bundle: the manifest
+		// fields sit at the top level.
+		var flat flatCloneJSON
+		if err := decodeJSON(data, "clone template", &flat); err != nil {
+			return nil, err
+		}
+		w = flat.toBundleJSON()
+	} else if err := decodeJSON(data, "clone template", &w); err != nil {
 		return nil, err
 	}
 	bundle, err := w.toProto()
@@ -161,6 +176,43 @@ func DecodeCloneTemplateJSON(data []byte) (*platformv1.CloneTemplateResponse, er
 		Status: &platformv1.Status{Success: true, Message: "template cloned successfully"},
 		Bundle: bundle,
 	}, nil
+}
+
+// flatCloneJSON is the daemon's clone reply: a bundle whose manifest fields
+// are flattened to the top level, with Secure Boot key fingerprints (not key
+// paths) under secure_boot_keys.
+type flatCloneJSON struct {
+	ID                string                 `json:"id"`
+	Mode              string                 `json:"mode"`
+	Hostname          string                 `json:"hostname"`
+	EKAlgorithm       string                 `json:"ek_algorithm"`
+	SecureBootEnabled bool                   `json:"secure_boot_enabled"`
+	CreatedAt         *time.Time             `json:"created_at"`
+	ClonedFrom        string                 `json:"cloned_from"`
+	Labels            map[string]string      `json:"labels"`
+	EKCertificate     *ekCertJSON            `json:"ek_certificate"`
+	SecureBootKeys    *secureBootKeyInfoJSON `json:"secure_boot_keys"`
+}
+
+func (f *flatCloneJSON) toBundleJSON() bundleJSON {
+	return bundleJSON{
+		ID:         f.ID,
+		Mode:       f.Mode,
+		CreatedAt:  f.CreatedAt,
+		ClonedFrom: f.ClonedFrom,
+		Manifest: &manifestJSON{
+			ID:                f.ID,
+			Mode:              f.Mode,
+			Hostname:          f.Hostname,
+			CreatedAt:         f.CreatedAt,
+			EKCertificate:     f.EKCertificate,
+			EKAlgorithm:       f.EKAlgorithm,
+			SecureBootEnabled: f.SecureBootEnabled,
+			SecureBootKeys:    f.SecureBootKeys,
+			Labels:            f.Labels,
+			ClonedFrom:        f.ClonedFrom,
+		},
+	}
 }
 
 type templateJSON struct {
