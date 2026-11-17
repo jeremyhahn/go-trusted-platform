@@ -188,7 +188,7 @@ func writePlaceholder(t *testing.T, dir, name string) string {
 func newSWTPMTestOrchestrator(t *testing.T, host *fakeHost) *QEMUOrchestrator {
 	t.Helper()
 	config := DefaultOrchestratorConfig(ComputeTypeVM)
-	config.WorkDir = t.TempDir()
+	config.WorkDir = shortSocketDir(t)
 	config.Debug = true
 	orch, _, err := newFakeHostOrchestratorWith(t, config, logging.DefaultLogger(), host)
 	require.NoError(t, err)
@@ -199,7 +199,7 @@ func newSWTPMTestOrchestrator(t *testing.T, host *fakeHost) *QEMUOrchestrator {
 func TestQEMUOrchestrator_HostSeamDefaults(t *testing.T) {
 	config := DefaultOrchestratorConfig(ComputeTypeVM)
 	config.WorkDir = t.TempDir()
-	config.OVSSocketPath = filepath.Join(t.TempDir(), "ovsdb.sock")
+	config.OVSSocketPath = filepath.Join(shortSocketDir(t), "ovsdb.sock")
 	orch, err := NewQEMUOrchestrator(config, logging.DefaultLogger())
 	require.NoError(t, err)
 	defer orch.Close()
