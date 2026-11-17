@@ -14,7 +14,9 @@
 package vtpm
 
 import (
+	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -32,6 +34,101 @@ func TestDecodeGetBundleJSON(t *testing.T) {
 		assert.Equal(t, platformv1.BundleMode_BUNDLE_MODE_TEMPLATE, resp.GetBundle().GetMode())
 		assert.Equal(t, "node-1", resp.GetBundle().GetManifest().GetHostname())
 		assert.Equal(t, platformv1.EKAlgorithm_EK_ALGORITHM_ECC, resp.GetBundle().GetManifest().GetEkAlgorithm())
+	})
+	t.Run("daemon flat bundle", func(t *testing.T) {
+		// The JSON field set of the daemon's BundleResponse
+		// (pkg/api/rest/vtpm_handlers.go), which carries the manifest
+		// fields at the top level and secure-boot key fingerprints.
+		type ekCert struct {
+			Subject      string    `json:"subject"`
+			Issuer       string    `json:"issuer"`
+			SerialNumber string    `json:"serial_number"`
+			NotBefore    time.Time `json:"not_before"`
+			NotAfter     time.Time `json:"not_after"`
+			Fingerprint  string    `json:"fingerprint"`
+		}
+		type sbKeys struct {
+			PKFingerprint  string `json:"pk_fingerprint"`
+			KEKFingerprint string `json:"kek_fingerprint"`
+			DBFingerprint  string `json:"db_fingerprint"`
+		}
+		type daemonBundle struct {
+			ID                string            `json:"id"`
+			Mode              string            `json:"mode"`
+			Hostname          string            `json:"hostname,omitempty"`
+			EKAlgorithm       string            `json:"ek_algorithm"`
+			SecureBootEnabled bool              `json:"secure_boot_enabled"`
+			Running           bool              `json:"running"`
+			CreatedAt         time.Time         `json:"created_at"`
+			ClonedFrom        string            `json:"cloned_from,omitempty"`
+			Labels            map[string]string `json:"labels,omitempty"`
+			SocketPath        string            `json:"socket_path,omitempty"`
+			EKCertificate     *ekCert           `json:"ek_certificate,omitempty"`
+			SecureBootKeys    *sbKeys           `json:"secure_boot_keys,omitempty"`
+		}
+		notBefore := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		created := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+		body, err := json.Marshal(daemonBundle{
+			ID:                "b2",
+			Mode:              "pre-assigned",
+			Hostname:          "node-2",
+			EKAlgorithm:       "RSA",
+			SecureBootEnabled: true,
+			Running:           true,
+			CreatedAt:         created,
+			ClonedFrom:        "b1",
+			Labels:            map[string]string{"env": "test"},
+			EKCertificate: &ekCert{
+				Subject:      "CN=ek",
+				Issuer:       "CN=ca",
+				SerialNumber: "42",
+				NotBefore:    notBefore,
+				NotAfter:     notBefore.AddDate(1, 0, 0),
+				Fingerprint:  "ek-fp",
+			},
+			SecureBootKeys: &sbKeys{PKFingerprint: "pk-fp", KEKFingerprint: "kek-fp", DBFingerprint: "db-fp"},
+		})
+		require.NoError(t, err)
+
+		resp, err := DecodeGetBundleJSON(body)
+
+		require.NoError(t, err)
+		bundle := resp.GetBundle()
+		assert.Equal(t, "b2", bundle.GetId())
+		assert.Equal(t, platformv1.BundleMode_BUNDLE_MODE_PRE_ASSIGNED, bundle.GetMode())
+		assert.Equal(t, "b1", bundle.GetClonedFrom())
+		assert.True(t, created.Equal(bundle.GetCreatedAt().AsTime()))
+		manifest := bundle.GetManifest()
+		require.NotNil(t, manifest)
+		assert.Equal(t, "b2", manifest.GetId())
+		assert.Equal(t, platformv1.BundleMode_BUNDLE_MODE_PRE_ASSIGNED, manifest.GetMode())
+		assert.Equal(t, "node-2", manifest.GetHostname())
+		assert.Equal(t, platformv1.EKAlgorithm_EK_ALGORITHM_RSA, manifest.GetEkAlgorithm())
+		assert.True(t, manifest.GetSecureBootEnabled())
+		assert.Equal(t, map[string]string{"env": "test"}, manifest.GetLabels())
+		assert.Equal(t, "b1", manifest.GetClonedFrom())
+		cert := manifest.GetEkCertificate()
+		require.NotNil(t, cert)
+		assert.Equal(t, "CN=ek", cert.GetSubject())
+		assert.Equal(t, "CN=ca", cert.GetIssuer())
+		assert.Equal(t, "42", cert.GetSerialNumber())
+		assert.Equal(t, "ek-fp", cert.GetFingerprint())
+		assert.True(t, notBefore.Equal(cert.GetNotBefore().AsTime()))
+		keys := manifest.GetSecureBootKeys()
+		require.NotNil(t, keys)
+		assert.Equal(t, "pk-fp", keys.GetPkFingerprint())
+		assert.Equal(t, "kek-fp", keys.GetKekFingerprint())
+		assert.Equal(t, "db-fp", keys.GetDbFingerprint())
+		assert.Nil(t, bundle.GetSecureBootKeys(), "fingerprints must not land in the key path fields")
+	})
+	t.Run("daemon bundle without manifest", func(t *testing.T) {
+		resp, err := DecodeGetBundleJSON([]byte(
+			`{"id":"b3","mode":"template","ek_algorithm":"","secure_boot_enabled":false,"running":false}`))
+
+		require.NoError(t, err)
+		assert.Equal(t, "b3", resp.GetBundle().GetId())
+		assert.Nil(t, resp.GetBundle().GetManifest())
+		assert.Nil(t, resp.GetBundle().GetSecureBootKeys())
 	})
 	t.Run("malformed JSON", func(t *testing.T) {
 		_, err := DecodeGetBundleJSON([]byte(`{"id":`))
