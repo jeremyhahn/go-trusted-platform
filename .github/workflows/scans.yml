@@ -23,6 +23,9 @@
 #     fix PR and the CI dispatch on it are not taken. They come with the full
 #     ci-template catch-up (v1.39 to v1.42).
 #   - The cron minute: off ci.yml's Friday 04:00 schedule.
+#   - The runner: the self-hosted bigdisk-docker pool, where main's vuln job
+#     ran. `make vuln` needs a 20g container (#1425: govulncheck's symbol
+#     scan reached 16.7 GB), more than a standard hosted runner's memory.
 
 name: Scheduled Scans
 
@@ -46,7 +49,7 @@ jobs:
   scans:
     name: Scheduled scans
     if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, bigdisk-docker]
     timeout-minutes: 120
     env:
       GH_TOKEN: ${{ github.token }}
@@ -66,11 +69,8 @@ jobs:
             case $val in *://*:*@*) t=${val#*://}; t=${t%%@*}; echo "::add-mask::${t#*:}" ;; esac
           done
 
-      - name: Free the runner's disk
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          docker image prune -af >/dev/null
-          df -h /
+      - name: Reap stale CI stacks
+        run: scripts/reap-stale-ci-stacks.sh go-trusted-platform-ci-
 
       # The package keys the toolchain build hashes, as in ci.yml.
       - name: Read the package indexes
