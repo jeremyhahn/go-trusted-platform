@@ -50,45 +50,6 @@ type authzCacheEntry struct {
 	expiresAt time.Time
 }
 
-// NewAuthzMiddleware creates a new authorization middleware instance.
-func NewAuthzMiddleware(
-	logger *logging.Logger,
-	responseWriter response.HttpWriter,
-	config AuthzConfig,
-	pepService PEPServiceClient,
-	opts ...AuthzOption,
-) (*AuthzMiddleware, error) {
-
-	if logger == nil {
-		return nil, ErrInvalidConfig{Field: "logger", Reason: "logger is required"}
-	}
-	if responseWriter == nil {
-		return nil, ErrInvalidConfig{Field: "responseWriter", Reason: "response writer is required"}
-	}
-	if pepService == nil {
-		return nil, ErrInvalidConfig{Field: "pepService", Reason: "PEP service client is required"}
-	}
-
-	m := &AuthzMiddleware{
-		logger:         logger,
-		responseWriter: responseWriter,
-		config:         config,
-		pepService:     pepService,
-	}
-
-	// Apply functional options
-	for _, opt := range opts {
-		opt(m)
-	}
-
-	if config.CacheDecisions {
-		m.cache = make(map[string]*authzCacheEntry)
-		go m.cleanupCache()
-	}
-
-	return m, nil
-}
-
 // Handler returns an http.Handler middleware for authorization.
 func (m *AuthzMiddleware) Handler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

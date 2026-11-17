@@ -1,0 +1,52 @@
+--- FAIL: TestProvisioningSurface_DocumentedExampleLoads (0.00s)
+    provisioning_doc_test.go:58: 
+        	Error Trace:	/mnt/disk2/lanes/go-trusted-platform-lanes/wt/row1990a/pkg/webservice/provisioning_doc_test.go:58
+        	Error:      	Received unexpected error:
+        	            	webservice "provisioning": provisioning bind-host 192.0.2.1 is outside the provisioning zone (VLAN 405, 10.4.5.0/24 or fd12:3456:789a:405::/64)
+        	Test:       	TestProvisioningSurface_DocumentedExampleLoads
+{"time":"2026-11-17T13:50:13.124531767Z","level":"DEBUG","msg":"webservice: signing digest","digest":"746573742d6469676573742d64617461"}
+{"time":"2026-11-17T13:50:13.124803809Z","level":"DEBUG","msg":"webservice: signing digest","digest":"746573742d6469676573742d64617461"}
+{"time":"2026-11-17T13:50:13.124830132Z","level":"ERROR","msg":"ca signer unavailable","error":{"msg":"ca signer unavailable","trace":[{"func":"logging.(*Logger).Error","source":"logging/logger.go","line":253},{"func":"webservice.(*Signer).Sign","source":"webservice/mtls_signer.go","line":78},{"func":"webservice.TestSigner_Sign_CASignerError","source":"webservice/webserver_coverage_test.go","line":164},{"func":"testing.tRunner","source":"testing/testing.go","line":2195},{"func":"runtime.goexit","source":"runtime/asm_amd64.s","line":1264}]}}
+{"time":"2026-11-17T13:50:13.125229187Z","level":"INFO","msg":"requesting client certificate: client-cert"}
+{"time":"2026-11-17T13:50:13.12527291Z","level":"INFO","msg":"requesting client certificate: nonexistent"}
+FAIL
+FAIL	github.com/jeremyhahn/go-trusted-platform/pkg/webservice	0.102s
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1	6.170s
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/adminclaim	0.704s
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc	0.120s
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device	0.347s
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/invitation	0.092s
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt	4.875s
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/login	0.062s
+?   	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/login/logintest	[no test files]
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware	0.689s
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam	3.669s
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/tenant	0.064s
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response	0.033s
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/attestation	0.285s
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/ca	1.102s
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/compute	0.413s
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/device	0.082s
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/dns	0.309s
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/eab	0.123s
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/gateway	0.273s
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/iam	0.976s
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/idevid	0.199s
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/internal/protorest	0.041s
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/invitation	0.173s
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/kms	0.231s
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/ntp	0.036s
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/overlay	0.466s
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/platform	0.073s
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/pxe	0.172s
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/registry	0.051s
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/sdn	0.305s
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/switch	0.095s
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/tenant	0.252s
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/tpm	0.217s
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/vpn	0.071s
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/vtpm	0.088s
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/router	0.260s
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/system	0.052s
+ok  	github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/webauthn	0.053s
+FAIL
