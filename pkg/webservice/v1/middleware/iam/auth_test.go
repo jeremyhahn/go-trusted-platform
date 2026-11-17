@@ -310,20 +310,9 @@ func TestAuthMiddleware_AuthenticateWithMTLS(t *testing.T) {
 		}
 	})
 
-	t.Run("uses_default_tenant_when_not_extracted_from_cert", func(t *testing.T) {
+	t.Run("refuses_configured_default_when_cert_names_no_tenant", func(t *testing.T) {
 		httpWriter := newMockHttpWriter()
 		iamService := newMockIAMServiceClient()
-
-		iamService.listUsersByEmailFunc = func(ctx context.Context, tenantID, email string) ([]sdkiam.User, error) {
-			return []sdkiam.User{
-				{
-					ID:          "user-123",
-					TenantID:    tenantID,
-					Email:       email,
-					DisplayName: "Test User",
-				},
-			}, nil
-		}
 
 		config := AuthConfig{
 			ExtractTenantFromCert: false,
@@ -332,25 +321,13 @@ func TestAuthMiddleware_AuthenticateWithMTLS(t *testing.T) {
 		middleware, _ := NewAuthMiddleware(logger, httpWriter, config, iamService, nil, nil, nil)
 
 		cert, _ := createTestCertificate()
-
-		var sessionFromContext IAMSession
-		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			sessionFromContext, _ = GetSessionFromContext(r.Context())
-		})
-
 		req := httptest.NewRequest(http.MethodGet, "/test", nil)
-		req.TLS = &tls.ConnectionState{
-			PeerCertificates: []*x509.Certificate{cert},
-		}
-		rec := httptest.NewRecorder()
+		req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{cert}}
 
-		middleware.Authenticate(rec, req, next)
-
-		if sessionFromContext == nil {
-			t.Fatal("expected session to be set in context")
-		}
-		if sessionFromContext.TenantID() != "default-tenant" {
-			t.Errorf("expected tenant 'default-tenant', got %q", sessionFromContext.TenantID())
+		session, err := middleware.authenticateWithMTLS(req)
+		var missing ErrMissingTenantID
+		if !errors.As(err, &missing) {
+			t.Fatalf("expected ErrMissingTenantID, got session=%v err=%v", session, err)
 		}
 	})
 
@@ -1237,56 +1214,55 @@ func TestAuthMiddleware_AuthenticateWithJWT(t *testing.T) {
 		}
 	})
 
-	t.Run("uses_tenant_from_header_when_not_in_claims", func(t *testing.T) {
-		httpWriter := newMockHttpWriter()
-		iamService := newMockIAMServiceClient()
+	// The tenant comes only from the authenticated principal: a JWT naming
+	// no tenant is refused, whatever the request header or the server
+	// configuration says (SPEC row 123, #2005).
+	for _, tc := range []struct {
+		name          string
+		defaultTenant string
+		header        string
+	}{
+		{name: "refuses_x_tenant_id_header_when_not_in_claims", header: "header-tenant"},
+		{name: "refuses_configured_default_when_not_in_claims", defaultTenant: "default-tenant"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			httpWriter := newMockHttpWriter()
+			iamService := newMockIAMServiceClient()
+			iamService.getUserFunc = func(ctx context.Context, tenantID, userID string) (*sdkiam.User, error) {
+				return &sdkiam.User{ID: userID, TenantID: tenantID}, nil
+			}
 
-		iamService.getUserFunc = func(ctx context.Context, tenantID, userID string) (*sdkiam.User, error) {
-			return &sdkiam.User{
-				ID:       userID,
-				TenantID: tenantID,
-				Email:    "user@example.com",
-			}, nil
-		}
+			jwtMiddleware, _ := NewJWTMiddleware(logger, httpWriter, JWTConfig{PublicKey: rsaPubKey}, iamService)
+			authConfig := AuthConfig{RequireJWT: true, DefaultTenantID: tc.defaultTenant}
+			middleware, _ := NewAuthMiddleware(logger, httpWriter, authConfig, iamService, jwtMiddleware, nil, nil)
 
-		jwtConfig := JWTConfig{
-			PublicKey: rsaPubKey,
-		}
-		jwtMiddleware, _ := NewJWTMiddleware(logger, httpWriter, jwtConfig, iamService)
+			claims := jwt.MapClaims{
+				"sub": "user-123",
+				"iat": time.Now().Unix(),
+				"exp": time.Now().Add(time.Hour).Unix(),
+			}
+			tokenString, _ := jwt.NewWithClaims(jwt.SigningMethodRS256, claims).SignedString(rsaPrivKey)
 
-		authConfig := AuthConfig{
-			RequireJWT: true,
-		}
-		middleware, _ := NewAuthMiddleware(logger, httpWriter, authConfig, iamService, jwtMiddleware, nil, nil)
+			req := httptest.NewRequest(http.MethodGet, "/test", nil)
+			req.Header.Set(AuthorizationHeader, BearerPrefix+tokenString)
+			if tc.header != "" {
+				req.Header.Set("X-Tenant-ID", tc.header)
+			}
 
-		// No tenant_id in claims
-		claims := jwt.MapClaims{
-			"sub": "user-123",
-			"iat": time.Now().Unix(),
-			"exp": time.Now().Add(time.Hour).Unix(),
-		}
-		token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-		tokenString, _ := token.SignedString(rsaPrivKey)
+			session, err := middleware.authenticateWithJWT(req)
+			var missing ErrMissingTenantID
+			if !errors.As(err, &missing) {
+				t.Fatalf("expected ErrMissingTenantID, got session=%v err=%v", session, err)
+			}
 
-		var sessionFromContext IAMSession
-		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			sessionFromContext, _ = GetSessionFromContext(r.Context())
+			called := false
+			next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called = true })
+			middleware.Authenticate(httptest.NewRecorder(), req, next)
+			if called {
+				t.Error("expected handler not to be called without a principal tenant")
+			}
 		})
-
-		req := httptest.NewRequest(http.MethodGet, "/test", nil)
-		req.Header.Set(AuthorizationHeader, BearerPrefix+tokenString)
-		req.Header.Set(TenantIDHeader, "header-tenant")
-		rec := httptest.NewRecorder()
-
-		middleware.Authenticate(rec, req, next)
-
-		if sessionFromContext == nil {
-			t.Fatal("expected session to be set")
-		}
-		if sessionFromContext.TenantID() != "header-tenant" {
-			t.Errorf("expected tenant 'header-tenant', got %q", sessionFromContext.TenantID())
-		}
-	})
+	}
 
 	t.Run("rejects_request_with_invalid_jwt_when_required", func(t *testing.T) {
 		httpWriter := newMockHttpWriter()
