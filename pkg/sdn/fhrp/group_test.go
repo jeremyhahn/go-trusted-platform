@@ -260,6 +260,14 @@ func TestGroup_BackupShutdownRetriesAFailedRelease(t *testing.T) {
 		assert.Equal(t, 2, act.releases)
 		assert.Equal(t, StateInitialize, g.State())
 		assert.Error(t, g.LastError())
+
+		// The failed release stays outstanding: a later shutdown retries it.
+		act.failRel = nil
+		require.NoError(t, g.Shutdown(now))
+		assert.Equal(t, 3, act.releases, "a second shutdown retries the release")
+		assert.NoError(t, g.LastError())
+		require.NoError(t, g.Shutdown(now))
+		assert.Equal(t, 3, act.releases, "nothing outstanding: shutdown is a no-op")
 	})
 }
 
@@ -301,6 +309,17 @@ func TestGroup_ActuatorFailuresAreReported(t *testing.T) {
 	err = g.Shutdown(t0.Add(time.Hour))
 	assert.ErrorIs(t, err, act.failRel)
 	assert.Equal(t, StateInitialize, g.State())
+
+	// The release a master could not finish stays outstanding.
+	releases := act.releases
+	require.Error(t, g.Shutdown(t0.Add(time.Hour)), "a retry that still fails reports it")
+	assert.Equal(t, releases+1, act.releases)
+	act.failRel = nil
+	require.NoError(t, g.Shutdown(t0.Add(time.Hour)))
+	assert.Equal(t, releases+2, act.releases)
+	assert.NoError(t, g.LastError())
+	require.NoError(t, g.Shutdown(t0.Add(time.Hour)))
+	assert.Equal(t, releases+2, act.releases, "nothing outstanding: shutdown is a no-op")
 }
 
 // A claim that fails at takeover stays reported, and is retried, until a
