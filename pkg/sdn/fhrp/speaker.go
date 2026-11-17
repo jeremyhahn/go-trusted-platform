@@ -148,6 +148,11 @@ func (s *Speaker) Start(ctx context.Context) error {
 	if s.active {
 		return ErrSpeakerAlreadyRunning{}
 	}
+	// Drain the releases an earlier Stop left outstanding first: a VIP
+	// still installed would look like a pre-existing owner address.
+	if err := s.retryPending(); err != nil {
+		return ErrReleasePending{Cause: err}
+	}
 	var started []*runner
 	for _, gc := range s.cfg.Groups {
 		r, err := s.startGroup(ctx, gc)
@@ -184,6 +189,11 @@ func (s *Speaker) Stop(ctx context.Context) error {
 		return s.retryPending()
 	}
 	var first error
+	// Retry the releases still outstanding from an earlier Stop before
+	// queueing this Stop's failures, so each runner is shut down once here.
+	if err := s.retryPending(); err != nil {
+		first = err
+	}
 	for _, r := range s.runners {
 		if err := r.stop(s.clock.Now()); err != nil {
 			s.pending = append(s.pending, r)
