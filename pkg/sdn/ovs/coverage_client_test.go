@@ -295,7 +295,7 @@ func TestHandleRequest_WithDeadline(t *testing.T) {
 // TestGetOpenFlowClient_StaleClient verifies that getOpenFlowClient handles
 // a disconnected cached client by trying to create a new one.
 func TestGetOpenFlowClient_StaleClient(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
