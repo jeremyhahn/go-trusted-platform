@@ -22,6 +22,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/calleradmission"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/manifest"
@@ -35,6 +36,10 @@ import (
 // tenant has that lease revoked (RevokeReplaced) before the new one is
 // issued — a lost laptop coming back cannot keep a session open beside its
 // replacement. A failed peer install releases the address.
+// installCleanupTimeout bounds the removal Admit attempts after a failed
+// peer install, independent of the caller's context.
+const installCleanupTimeout = 5 * time.Second
+
 func (s *Service) Admit(ctx context.Context, req *AdmissionRequest) (*Lease, error) {
 	if !s.Active() {
 		return nil, &ErrNotStarted{}
@@ -125,7 +130,20 @@ func (s *Service) Admit(ctx context.Context, req *AdmissionRequest) (*Lease, err
 	}
 	plane := s.deps.DataPlanes[req.DataPlane]
 	if err := plane.InstallPeer(ctx, lease); err != nil {
-		s.releaseAddress(ctx, addr)
+		// A failed install is ambiguous: a hosted datapath may have set
+		// the peer while the response was lost or the caller gave up.
+		// Remove it on a context the caller cannot cancel; if that fails,
+		// owe the removal to the sweep and hold the address until then.
+		rmCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), installCleanupTimeout)
+		rmErr := plane.RemovePeer(rmCtx, lease.ID)
+		cancel()
+		if rmErr != nil {
+			s.logger.Warn("vpn.admit: peer may be left in the datapath after a failed install; owed to the sweep",
+				slog.String("lease", string(lease.ID)), slog.Any("error", rmErr))
+			s.owePeerRetry(lease.DataPlane, lease)
+		} else {
+			s.releaseAddress(ctx, addr)
+		}
 		return nil, s.refuse(ctx, req.DeviceID, &ErrDataPlaneUnavailable{Kind: req.DataPlane, Cause: err})
 	}
 	if err := s.deps.Leases.Put(ctx, lease); err != nil {

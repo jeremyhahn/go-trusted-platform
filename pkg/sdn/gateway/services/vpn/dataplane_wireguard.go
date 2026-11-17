@@ -16,6 +16,7 @@
 package vpn
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -116,6 +117,13 @@ func (p *wireguardPlane) InstallPeer(ctx context.Context, lease *Lease) error {
 	defer p.mu.Unlock()
 	if !p.started {
 		return &ErrDataPlaneNotStarted{Kind: DataPlaneWireGuard}
+	}
+	// Peers are removed by key, so a key holds one lease at a time:
+	// otherwise a retried removal of the old lease drops the new one.
+	for id, held := range p.peers {
+		if id != lease.ID && bytes.Equal(held, key) {
+			return &ErrPeerConflict{Kind: DataPlaneWireGuard, LeaseID: lease.ID, Existing: id, Reason: "the public key already holds a lease"}
+		}
 	}
 	if err := p.hub.SetPeer(ctx, key, []netip.Prefix{lease.Address}); err != nil {
 		return err
