@@ -48,7 +48,8 @@ env:
 jobs:
   scans:
     name: Scheduled scans
-    if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    # GitHub only, as the template: the issue calls are GitHub's API (gh).
+    if: ${{ github.server_url == 'https://github.com' && github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     runs-on: [self-hosted, linux, x64, bigdisk-docker]
     timeout-minutes: 120
     env:
