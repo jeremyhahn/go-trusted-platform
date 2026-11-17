@@ -13,10 +13,14 @@
 package rest
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
+	"time"
+
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
-	"github.com/jeremyhahn/go-trusted-platform/sdk/go/services/gateway"
 )
 
 // lbBasePath is the daemon's gateway load-balancer surface
@@ -129,7 +133,7 @@ func decodeAddVIP(raw []byte, reply interface{}) error {
 	if !ok {
 		return ErrUnexpectedReplyType{Method: platformv1.GatewayService_AddVIP_FullMethodName}
 	}
-	vip, err := gateway.DecodeVIPStatusJSON(raw)
+	vip, err := decodeVIPStatusJSON(raw)
 	if err != nil {
 		return err
 	}
@@ -143,7 +147,7 @@ func decodeGetVIP(raw []byte, reply interface{}) error {
 	if !ok {
 		return ErrUnexpectedReplyType{Method: platformv1.GatewayService_GetVIP_FullMethodName}
 	}
-	vip, err := gateway.DecodeVIPStatusJSON(raw)
+	vip, err := decodeVIPStatusJSON(raw)
 	if err != nil {
 		return err
 	}
@@ -156,7 +160,7 @@ func decodeSetVIPBackends(raw []byte, reply interface{}) error {
 	if !ok {
 		return ErrUnexpectedReplyType{Method: platformv1.GatewayService_SetVIPBackends_FullMethodName}
 	}
-	vip, err := gateway.DecodeVIPStatusJSON(raw)
+	vip, err := decodeVIPStatusJSON(raw)
 	if err != nil {
 		return err
 	}
@@ -170,7 +174,7 @@ func decodeListVIPs(raw []byte, reply interface{}) error {
 	if !ok {
 		return ErrUnexpectedReplyType{Method: platformv1.GatewayService_ListVIPs_FullMethodName}
 	}
-	decoded, err := gateway.DecodeListVIPsJSON(raw)
+	decoded, err := decodeListVIPsJSON(raw)
 	if err != nil {
 		return err
 	}
@@ -196,10 +200,128 @@ func decodeGetLBStatus(raw []byte, reply interface{}) error {
 	if !ok {
 		return ErrUnexpectedReplyType{Method: platformv1.GatewayService_GetLBStatus_FullMethodName}
 	}
-	decoded, err := gateway.DecodeLBStatusJSON(raw)
+	decoded, err := decodeLBStatusJSON(raw)
 	if err != nil {
 		return err
 	}
 	out.Status = decoded.GetStatus()
 	return nil
 }
+
+// lbBackendJSON is one load-balanced endpoint as the daemon lb routes carry
+// it.
+type lbBackendJSON struct {
+	Address string `json:"address"`
+	Port    uint32 `json:"port"`
+	Weight  uint32 `json:"weight"`
+}
+
+// lbBackendStatusJSON is an endpoint with its health.
+type lbBackendStatusJSON struct {
+	Backend lbBackendJSON `json:"backend"`
+	Healthy bool          `json:"healthy"`
+}
+
+// lbVIPJSON is the flat VIP document the daemon lb routes answer with: the
+// VIP config fields sit at the top level beside ct_zone and group_id,
+// where the gRPC VIPStatus nests the config under vip.
+type lbVIPJSON struct {
+	Address   string                `json:"address"`
+	Port      uint32                `json:"port"`
+	Protocol  string                `json:"protocol"`
+	Algorithm string                `json:"algorithm"`
+	CTZone    uint32                `json:"ct_zone"`
+	GroupID   uint32                `json:"group_id"`
+	Backends  []lbBackendStatusJSON `json:"backends"`
+}
+
+// lbVIPListJSON is the VIP list reply: {vips, count, timestamp}.
+type lbVIPListJSON struct {
+	VIPs []lbVIPJSON `json:"vips"`
+}
+
+// lbStatusJSON is the bare load-balancer status object.
+type lbStatusJSON struct {
+	Active          bool      `json:"active"`
+	VIPCount        uint32    `json:"vip_count"`
+	HealthyBackends uint32    `json:"healthy_backends"`
+	TotalBackends   uint32    `json:"total_backends"`
+	LastReconcile   time.Time `json:"last_reconcile"`
+}
+
+func (w lbVIPJSON) status() *platformv1.VIPStatus {
+	cfg := &platformv1.VIPConfig{
+		Address:   w.Address,
+		Port:      w.Port,
+		Protocol:  w.Protocol,
+		Algorithm: w.Algorithm,
+	}
+	out := &platformv1.VIPStatus{Vip: cfg, CtZone: w.CTZone, GroupId: w.GroupID}
+	for _, b := range w.Backends {
+		be := &platformv1.VIPBackend{Address: b.Backend.Address, Port: b.Backend.Port, Weight: b.Backend.Weight}
+		cfg.Backends = append(cfg.Backends, be)
+		out.Backends = append(out.Backends, &platformv1.VIPBackendStatus{
+			Backend: &platformv1.VIPBackend{Address: be.Address, Port: be.Port, Weight: be.Weight},
+			Healthy: b.Healthy,
+		})
+	}
+	return out
+}
+
+// decodeVIPStatusJSON decodes the flat VIP document a daemon lb route
+// returns (add, get, set backends) into the gRPC VIPStatus.
+func decodeVIPStatusJSON(data []byte) (*platformv1.VIPStatus, error) {
+	var wire lbVIPJSON
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return nil, &lbDecodeError{what: "VIP", cause: err}
+	}
+	return wire.status(), nil
+}
+
+// decodeListVIPsJSON decodes the daemon VIP list into the gRPC reply; the
+// count and timestamp have no proto field and are dropped.
+func decodeListVIPsJSON(data []byte) (*platformv1.ListVIPsResponse, error) {
+	var wire lbVIPListJSON
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return nil, &lbDecodeError{what: "VIP list", cause: err}
+	}
+	out := &platformv1.ListVIPsResponse{}
+	for _, v := range wire.VIPs {
+		out.Vips = append(out.Vips, v.status())
+	}
+	return out, nil
+}
+
+// decodeLBStatusJSON decodes the bare load-balancer status object into the
+// gRPC reply that wraps it under status. A zero last_reconcile means the
+// service never converged, so it is left unset rather than encoded as
+// year 1.
+func decodeLBStatusJSON(data []byte) (*platformv1.GetLBStatusResponse, error) {
+	var wire lbStatusJSON
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return nil, &lbDecodeError{what: "LB status", cause: err}
+	}
+	status := &platformv1.LBStatus{
+		Active:          wire.Active,
+		VipCount:        wire.VIPCount,
+		HealthyBackends: wire.HealthyBackends,
+		TotalBackends:   wire.TotalBackends,
+	}
+	if !wire.LastReconcile.IsZero() {
+		status.LastReconcile = timestamppb.New(wire.LastReconcile)
+	}
+	return &platformv1.GetLBStatusResponse{Status: status}, nil
+}
+
+// lbDecodeError is returned when a load-balancer reply is not the document
+// the daemon lb routes serve.
+type lbDecodeError struct {
+	what  string
+	cause error
+}
+
+func (e *lbDecodeError) Error() string {
+	return fmt.Sprintf("rest: decode gateway %s: %v", e.what, e.cause)
+}
+
+func (e *lbDecodeError) Unwrap() error { return e.cause }
