@@ -275,13 +275,7 @@ func (s *AttestationServiceServer) ListManifests(
 ) (*platformv1.ListManifestsResponse, error) {
 
 	if err := s.requireService(); err != nil {
-		// Treat the unconfigured backend as an empty list rather than an
-		// error so the dashboard renders the empty state instead of an
-		// inline "Loading..." that never resolves.
-		return &platformv1.ListManifestsResponse{
-			Manifests: []*platformv1.HostManifest{},
-			Total:     0,
-		}, nil
+		return nil, err
 	}
 	filter := &ListManifestsFilter{
 		HostID: req.GetHostId(),
