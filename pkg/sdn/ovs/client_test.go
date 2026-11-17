@@ -86,7 +86,7 @@ func TestNewClient(t *testing.T) {
 }
 
 func TestClient_Connect(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	// Start mock server
@@ -162,7 +162,7 @@ func TestClient_Connect(t *testing.T) {
 }
 
 func TestClient_Disconnect(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -217,7 +217,7 @@ func TestClient_Disconnect(t *testing.T) {
 // The read fails and the dispatcher marks the client disconnected; that must
 // not need c.mu, which Disconnect holds while it waits for the dispatcher.
 func TestClient_Disconnect_DoesNotDeadlockAgainstAPendingCall(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "db.sock")
+	socketPath := filepath.Join(shortSocketDir(t), "db.sock")
 	listener, err := net.Listen("unix", socketPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = listener.Close() })
@@ -258,7 +258,7 @@ func TestClient_Disconnect_DoesNotDeadlockAgainstAPendingCall(t *testing.T) {
 }
 
 func TestClient_ListDatabases(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -296,7 +296,7 @@ func TestClient_ListDatabases(t *testing.T) {
 }
 
 func TestClient_GetSchema(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -338,7 +338,7 @@ func TestClient_GetSchema(t *testing.T) {
 }
 
 func TestClient_Echo(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -387,7 +387,7 @@ func TestClient_Echo(t *testing.T) {
 }
 
 func TestClient_Transact(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -445,7 +445,7 @@ func TestClient_Transact(t *testing.T) {
 }
 
 func TestClient_Select(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -503,7 +503,7 @@ func TestClient_Select(t *testing.T) {
 }
 
 func TestClient_IsConnected(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -538,7 +538,7 @@ func TestClient_IsConnected(t *testing.T) {
 }
 
 func TestClient_ContextCancellation(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -569,7 +569,7 @@ func TestClient_ContextCancellation(t *testing.T) {
 }
 
 func TestClient_ConcurrentOperations(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)

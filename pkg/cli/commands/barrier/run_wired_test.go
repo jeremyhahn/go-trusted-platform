@@ -38,7 +38,7 @@ func connectedFlags(t *testing.T) *cli.CommonFlags {
 	t.Setenv(cli.EnvPlatformQuicBaaSAddr, "")
 	t.Setenv(cli.EnvPlatformQuicBaaSTransport, "")
 
-	dir := t.TempDir()
+	dir := shortSocketDir(t)
 	sock := filepath.Join(dir, "platformd.sock")
 	lis, err := net.Listen("unix", sock)
 	if err != nil {
