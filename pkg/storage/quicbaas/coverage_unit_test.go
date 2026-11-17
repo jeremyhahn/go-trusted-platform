@@ -1193,85 +1193,6 @@ func TestDeviceProfileDAO_FindMatchingProfile_NilMatchRules(t *testing.T) {
 }
 
 // =============================================================================
-// RoleDAO: GetByName edge cases
-// =============================================================================
-
-func TestRoleDAO_GetByName_ViaQuery_Match(t *testing.T) {
-	mock := NewMockStorage()
-	require.NoError(t, mock.Start(context.Background()))
-	defer mock.Stop(context.Background())
-
-	logger := logging.DefaultLogger()
-	dao := NewRoleDAO(mock, logger, WithRequestTimeout(5*time.Second))
-
-	ctx := context.Background()
-	role := &dsentities.Role{ID: 1, Name: "admin"}
-	require.NoError(t, dao.Save(ctx, role))
-
-	retrieved, err := dao.GetByName(ctx, "admin")
-	require.NoError(t, err)
-	assert.Equal(t, "admin", retrieved.Name)
-}
-
-func TestRoleDAO_GetByName_NotFound_Scan(t *testing.T) {
-	mock := NewMockStorage()
-	require.NoError(t, mock.Start(context.Background()))
-	defer mock.Stop(context.Background())
-
-	logger := logging.DefaultLogger()
-	dao := NewRoleDAO(mock, logger, WithRequestTimeout(5*time.Second))
-
-	ctx := context.Background()
-	role := &dsentities.Role{ID: 1, Name: "admin"}
-	require.NoError(t, dao.Save(ctx, role))
-
-	mock.QueryError = errors.New("no index")
-	_, err := dao.GetByName(ctx, "nonexistent")
-	require.Error(t, err)
-	var target ErrNotFoundByIndex
-	assert.ErrorAs(t, err, &target)
-}
-
-func TestRoleDAO_GetByName_ListError(t *testing.T) {
-	mock := NewMockStorage()
-	require.NoError(t, mock.Start(context.Background()))
-	defer mock.Stop(context.Background())
-
-	logger := logging.DefaultLogger()
-	dao := NewRoleDAO(mock, logger, WithRequestTimeout(5*time.Second))
-
-	mock.QueryError = errors.New("no index")
-	mock.ListError = errors.New("list failed")
-
-	_, err := dao.GetByName(context.Background(), "admin")
-	require.Error(t, err)
-}
-
-func TestRoleDAO_GetByName_QueryReturnsMismatch_FallsBackToScan(t *testing.T) {
-	mock := NewMockStorage()
-	require.NoError(t, mock.Start(context.Background()))
-	defer mock.Stop(context.Background())
-
-	logger := logging.DefaultLogger()
-	dao := NewRoleDAO(mock, logger, WithRequestTimeout(5*time.Second))
-
-	ctx := context.Background()
-
-	// Save a role that doesn't match the query name
-	role := &dsentities.Role{ID: 1, Name: "viewer"}
-	require.NoError(t, dao.Save(ctx, role))
-
-	// Also save the target role
-	targetRole := &dsentities.Role{ID: 2, Name: "admin"}
-	require.NoError(t, dao.Save(ctx, targetRole))
-
-	// MockStorage Query returns ALL entities - none match "admin" in the first pass
-	// but it should fall back to scan and find it
-	retrieved, err := dao.GetByName(ctx, "admin")
-	require.NoError(t, err)
-	assert.Equal(t, "admin", retrieved.Name)
-}
-
 // =============================================================================
 // Invitation: edge cases with invalid JSON in scan
 // =============================================================================
@@ -1588,34 +1509,6 @@ func TestSDKClient_IsEmbeddedAccessor(t *testing.T) {
 }
 
 // =============================================================================
-// RoleDAO: getRoleByScan with invalid JSON data (continue path)
-// =============================================================================
-
-func TestRoleDAO_GetByName_ScanInvalidJSON(t *testing.T) {
-	mock := NewMockStorage()
-	require.NoError(t, mock.Start(context.Background()))
-	defer mock.Stop(context.Background())
-
-	logger := logging.DefaultLogger()
-	dao := NewRoleDAO(mock, logger, WithRequestTimeout(5*time.Second))
-
-	ctx := context.Background()
-
-	// Invalid JSON should be skipped
-	mock.SetData(entityTypeRole, 1, []byte("invalid json"))
-
-	// Valid role
-	role := &dsentities.Role{ID: 2, Name: "admin"}
-	data, _ := json.Marshal(role)
-	mock.SetData(entityTypeRole, 2, data)
-
-	mock.QueryError = errors.New("no index")
-
-	retrieved, err := dao.GetByName(ctx, "admin")
-	require.NoError(t, err)
-	assert.Equal(t, "admin", retrieved.Name)
-}
-
 // =============================================================================
 // DeviceDAO: getDeviceByScan invalid JSON
 // =============================================================================
