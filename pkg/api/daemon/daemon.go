@@ -2225,16 +2225,19 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 		mcpConfig.PeerAuthenticator = peers
 	}
 
-	// Set up MCP auth. Only the shared broker platform-token validator is
-	// accepted (claims path: scp -> RBAC, tenant_id -> RLS): the legacy
-	// QuicBaaS wrapper carried no tenant, so the adapter would refuse every
-	// token at request time (#1933). With no validator, fail closed.
+	// Try to set up MCP auth. Prefer the shared broker platform-token
+	// validator (claims path: scp -> RBAC, tenant_id -> RLS) when configured,
+	// falling back to the legacy QuicBaaS adapter otherwise.
 	// Skip authentication when SkipIAMValidation is set (testing mode).
 	if !d.config.SkipIAMValidation {
 		if d.platformTokenValidatorShared != nil {
 			mcpConfig.AuthorizationService = d.platformTokenValidatorShared
 			mcpConfig.AuthManager = d.platformTokenValidatorShared
 			d.logger.Info("MCP server configured with platform-token validation")
+		} else if authAdapter := d.createMCPAuthAdapter(); authAdapter != nil {
+			mcpConfig.AuthorizationService = authAdapter
+			mcpConfig.AuthManager = authAdapter
+			d.logger.Info("MCP server configured with QuicBaaS authorization")
 		} else {
 			// Fail closed (#440). With no backend AuthorizeTool refuses every
 			// tool that requires a permission, so a server started here would
@@ -2258,6 +2261,107 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 	mcpServer := mcp.NewServer(serviceProvider, mcpConfig, mcpLogger)
 
 	return mcpServer, nil
+}
+
+// createMCPAuthAdapter attempts to create a QuicBaaS auth adapter for MCP.
+// Returns nil if QuicBaaS is not available or not properly configured.
+func (d *Daemon) createMCPAuthAdapter() *mcp.QuicBaaSAuthAdapter {
+	// Check if we have an App with DAOFactory
+	if d.config.App == nil {
+		d.logger.Debug("No App configured for MCP auth")
+		return nil
+	}
+
+	daoFactory := d.config.App.DAOFactory()
+	if daoFactory == nil {
+		d.logger.Debug("No DAOFactory configured for MCP auth")
+		return nil
+	}
+
+	// Try to get QuicBaaS factory
+	dbFactory, ok := daoFactory.(quicbaas.FactoryInterface)
+	if !ok {
+		d.logger.Debug("DAOFactory is not a QuicBaaS factory")
+		return nil
+	}
+
+	client := dbFactory.QuicBaaSClient()
+	if client == nil {
+		d.logger.Debug("QuicBaaS client not available")
+		return nil
+	}
+
+	if !client.IsStarted() {
+		d.logger.Debug("QuicBaaS client not started")
+		return nil
+	}
+
+	dbSvc := client.Service()
+	if dbSvc == nil {
+		d.logger.Debug("QuicBaaS service not available")
+		return nil
+	}
+
+	// Adapt the QuicBaaS service to our ServiceInterface
+	svcAdapter := &quicbaasServiceAdapter{svc: dbSvc}
+
+	// Wrap the adapted service for token validation
+	tokenValidator := &quicbaasServiceWrapper{service: svcAdapter}
+
+	// Create the PEP client adapter if IAM service is available
+	var pepClient iamsdk.PEPClient
+	if d.iamService != nil {
+		sdkPEP := d.iamService.PEP()
+		if sdkPEP != nil {
+			pepClient = sdkPEP
+			d.logger.Debug("PEP client wired into MCP auth adapter")
+		} else {
+			d.logger.Debug("IAM PEP client not available")
+		}
+	} else {
+		d.logger.Debug("IAM service not available for PEP authorization")
+	}
+
+	// Create the auth adapter with token validation and optional PEP authorization
+	adapter := mcp.NewQuicBaaSAuthAdapter(&mcp.QuicBaaSAuthConfig{
+		TokenValidator: tokenValidator,
+		PEPClient:      pepClient,
+	})
+
+	d.logger.Debug("Created QuicBaaS auth adapter for MCP")
+	return adapter
+}
+
+// quicbaasServiceWrapper wraps a QuicBaaS service to implement mcp.TokenValidator.
+type quicbaasServiceWrapper struct {
+	service quicbaas.ServiceInterface
+}
+
+// ValidateToken implements mcp.TokenValidator.
+func (w *quicbaasServiceWrapper) ValidateToken(ctx context.Context, token string) (*mcp.TokenValidationResult, error) {
+	if w.service == nil {
+		return nil, &mcp.QuicBaaSAuthError{
+			Code:    mcp.QuicBaaSAuthErrorServiceUnavailable,
+			Message: "QuicBaaS service not available",
+		}
+	}
+
+	resp, err := w.service.ValidateToken(ctx, &quicbaas.ValidateTokenRequest{
+		AccessToken: token,
+	})
+	if err != nil {
+		return nil, &mcp.QuicBaaSAuthError{
+			Code:    mcp.QuicBaaSAuthErrorTokenValidation,
+			Message: "token validation failed: " + err.Error(),
+		}
+	}
+
+	return &mcp.TokenValidationResult{
+		Valid:     resp.Valid,
+		UserID:    resp.UserID,
+		Roles:     resp.Roles,
+		ExpiresAt: resp.ExpiresAt,
+	}, nil
 }
 
 // quicbaasServiceAdapter adapts service.QuicBaaS to quicbaas.ServiceInterface.

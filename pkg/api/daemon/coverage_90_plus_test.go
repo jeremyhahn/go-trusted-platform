@@ -339,6 +339,16 @@ func TestGRPCTokenValidator_ValidateToken(t *testing.T) {
 	})
 }
 
+func TestQuicBaaSServiceWrapper_ValidateToken(t *testing.T) {
+	t.Run("NilService_ReturnsError", func(t *testing.T) {
+		wrapper := &quicbaasServiceWrapper{service: nil}
+
+		result, err := wrapper.ValidateToken(context.Background(), "test-token")
+		assert.Nil(t, result)
+		assert.Error(t, err)
+	})
+}
+
 func TestQuicBaaSServiceAdapter(t *testing.T) {
 	t.Run("AdapterCreation", func(t *testing.T) {
 		// Just verify the adapter struct can be instantiated
