@@ -2247,6 +2247,13 @@ func (d *Daemon) createMCPServer() (*mcp.Server, error) {
 			// error (#444) rather than run without the enabled transport.
 			return nil, ErrMCPAuthorizationBackendRequired{}
 		}
+		// A token without a scope grant has its tool permission decided by
+		// the IAM PEP (SPEC row 116, #1995).
+		if d.iamService != nil {
+			if pep := d.iamService.PEP(); pep != nil {
+				mcpConfig.PEPClient = pep
+			}
+		}
 	}
 
 	// Get logging.Logger from App if available

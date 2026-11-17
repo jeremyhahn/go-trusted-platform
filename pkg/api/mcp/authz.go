@@ -18,6 +18,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/channelbind"
 )
@@ -33,6 +34,9 @@ type AuthorizationChecker struct {
 
 	// toolPermissions maps tool names to required permissions
 	toolPermissions map[string]string
+
+	// pep decides a tool permission when the token carried no scope grant.
+	pep iam.PEPClient
 }
 
 // NewAuthorizationChecker creates a new authorization checker.
@@ -806,32 +810,76 @@ func (c *AuthorizationChecker) AuthorizeTool(ctx context.Context, toolName strin
 		return authCtx, nil
 	}
 
-	// Check permission if authorization service configured: the token was
-	// validated without a scope (legacy path) or not verified at all
-	// (authService only), so the service decides the permission.
-	if c.authService != nil {
-		// Parse permission into resource and action
-		parts := strings.SplitN(permission, ":", 2)
-		if len(parts) != 2 {
-			return ctx, &AuthorizationError{
-				Type:    AuthErrorPermissionDenied,
-				Message: "Invalid permission configuration",
-			}
-		}
-
-		resource := parts[0]
-		action := parts[1]
-
-		allowed, err := c.authService.CheckPermission(ctx, token, resource, action)
-		if err != nil || !allowed {
-			return ctx, &AuthorizationError{
-				Type:    AuthErrorPermissionDenied,
-				Message: "Permission denied: insufficient privileges",
-			}
+	// The token was validated without a scope (legacy path) or not verified
+	// at all (authService only): the IAM PEP decides the tool's permission
+	// for the caller (SPEC row 116, #1995). No PEP, no caller or a PEP
+	// failure is a denial.
+	denied := &AuthorizationError{
+		Type:    AuthErrorPermissionDenied,
+		Message: "Permission denied: insufficient privileges",
+	}
+	if c.pep == nil || c.authManager == nil {
+		return ctx, denied
+	}
+	resource, action, ok := strings.Cut(permission, ":")
+	if !ok || resource == "" || action == "" {
+		return ctx, &AuthorizationError{
+			Type:    AuthErrorPermissionDenied,
+			Message: "Invalid permission configuration",
 		}
 	}
-
+	claims, err := c.authManager.GetTokenClaims(ctx, token)
+	if err != nil {
+		return ctx, denied
+	}
+	subject := pepSubjectFromClaims(claims)
+	if subject.ID == "" {
+		return ctx, denied
+	}
+	resp, err := c.pep.Check(ctx, &iam.CheckRequest{
+		Subject:  subject,
+		Resource: resource,
+		Action:   action,
+	})
+	if err != nil || resp == nil || !resp.Allowed {
+		return ctx, denied
+	}
 	return ctx, nil
+}
+
+// pepSubjectFromClaims builds the PEP subject from a token's claims.
+func pepSubjectFromClaims(claims map[string]interface{}) iam.CheckSubject {
+	var s iam.CheckSubject
+	s.ID, _ = claims["sub"].(string)
+	s.TenantID, _ = claims["tenant_id"].(string)
+	s.Roles = claimStrings(claims["roles"])
+	s.Groups = claimStrings(claims["groups"])
+	return s
+}
+
+// claimStrings reads a claim that is a []string or a JSON-decoded []interface{}.
+func claimStrings(v interface{}) []string {
+	switch vals := v.(type) {
+	case []string:
+		return vals
+	case []interface{}:
+		out := make([]string, 0, len(vals))
+		for _, x := range vals {
+			if s, ok := x.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+// WithPEPClient sets the IAM policy enforcement point that decides a tool
+// permission on the unscoped path.
+func WithPEPClient(pep iam.PEPClient) AuthorizationCheckerOption {
+	return func(c *AuthorizationChecker) {
+		c.pep = pep
+	}
 }
 
 // Authenticate establishes that the caller is a principal, with the same
