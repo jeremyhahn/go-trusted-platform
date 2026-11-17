@@ -1,4 +1,4 @@
-# code-review-template: v5.11.2 -- the code review in Gitea or GitHub CI for a pull request
+# code-review-template: v5.12.0 -- the code review in Gitea or GitHub CI for a pull request
 # that carries `code-review` and `task:ready`, routed by its labels through
 # route-labels (labels.md §2). Codex on the `codex` runner reviews every such
 # PR; `agent:opencode` adds an advisory COMMENT review by the opencode job on
@@ -28,6 +28,34 @@
 #   COORDINATOR_TURNS         the codex rounds the project coordinator has
 #                             on a `needs-coordinator` PR after the two-round
 #                             stop (v5.9.8, Tenant Agent m2185); default 3
+#
+# v5.12.0 (2026-11-16, ruling 742 (3), the owner: "one approval only,
+# GitHub merges, agents never merge"): RE-ARM AFTER THE APPROVAL. The
+# factory arms squash auto-merge on every non-draft PR at its opening and
+# when a draft is marked ready; on GitHub this workflow arms it again once
+# the confirm step has found a codex APPROVED standing on the head, pinned
+# to that head (expectedHeadOid), so an arm GitHub dropped or refused
+# earlier is restored by the approval itself. A PR GitHub reads in clean
+# status (every requirement met, so it refuses to arm) is squash-merged
+# here instead, pinned to the approved head; GitHub enforces the ruleset on
+# that call too. The step never fails the job: a refused or failed arm is a
+# warning, and the factory's project check retries it. The reviewer App
+# needs pull-requests and contents write for it. Gitea is unchanged
+# (automerge.yml). A copy takes the version line and the new step.
+#
+# v5.11.3 (2026-11-16, owner ruling 732: "why do we have PRs coming to
+# me?! get them reviewed by codex and get them merged"): THE OWNER IS OUT
+# OF THE PR LOOP. A PR that exhausts its codex rounds keeps
+# `needs-coordinator` and the coordinator escalates it to the Tenant Agent,
+# which may restart the count with `owner-resume`; nobody sets `needs-owner`
+# on a PR. A `needs-owner` label found on a PR (a copy older than v5.11.2, or
+# a hand) still gets no round and no reused approval, but it is no longer a
+# wait for the owner: the run ends red, skip=needs-owner, stop=
+# needs-coordinator, and the hand-on step takes `needs-owner` off and puts
+# `needs-coordinator` on. The reviewer taking it off is not a person, so it
+# never restarts the count. The round-limit message names the escalation.
+# A copy takes the version line, owner_hold, the hand-on step's
+# `needs-coordinator` case and the round-limit message (marked v5.11.3).
 #
 # v5.11.2 (2026-11-15, Tenant Agent ruling 673; 16 PRs labelled
 # `needs-owner` at round 5 never reached the owner queue): THE LAST ROUND
@@ -280,9 +308,10 @@
 #   it to the Tenant Agent, never straight to the owner). A head past the
 #   limit is not reviewed: the run ends skip=round-limit, red, posts
 #   nothing and sets `needs-coordinator`. A PR
-#   labelled `needs-owner` is not reviewed (skip=needs-owner, red) until
-#   the owner takes the label off (v5.10.8: no approval is reused past it,
-#   and the count starts over only on evidence of the owner). Removing and re-adding `code-review`
+#   labelled `needs-owner` is not reviewed (skip=needs-owner, red; v5.10.8:
+#   no approval is reused past it); since v5.11.3 (owner ruling 732) the
+#   hand-on step swaps it for `needs-coordinator`, and the Tenant Agent
+#   restarts the count with `owner-resume`. Removing and re-adding `code-review`
 #   starts the count over (round 1); re-running the run that added it
 #   replays its event and also starts over. `review:round-3` (unreleased)
 #   is gone. The labelling step re-reads the labels (Gitea can answer 200
@@ -859,9 +888,11 @@ jobs:
             [ -n "$names" ] || names=$(api GET "/pulls/$PR_NUM" | jq -c '[.labels[]?.name]')
             jq -e 'type == "array"' <<<"$names" >/dev/null 2>&1 || die "could not read the labels of PR $PR_NUM"
             jq -e 'index("needs-owner") != null' <<<"$names" >/dev/null || return 0
-            echo "skip=needs-owner" >> "$GITHUB_OUTPUT"
+            # v5.11.3 (owner ruling 732): the owner is out of the PR loop. The
+            # hand-on step swaps `needs-owner` for `needs-coordinator`.
+            { echo "skip=needs-owner"; echo "stop=needs-coordinator"; } >> "$GITHUB_OUTPUT"
             touch "$WORK/verdict"
-            echo "::error::PR $PR_NUM is labelled needs-owner: codex reviews no round and reuses no approval until the owner takes the label off (sdlc.md §2b)."
+            echo "::error::PR $PR_NUM is labelled needs-owner, which no PR carries since owner ruling 732: codex reviews no round and reuses no approval on it. The PR goes to needs-coordinator, and the coordinator escalates to the Tenant Agent (sdlc.md §2b)."
             exit 1
           }
           # FAIL CLOSED on the credential: no token, no review, and no other
@@ -1367,7 +1398,8 @@ jobs:
           # keeps `needs-coordinator` (v5.11.2, ruling 673). A head past the
           # limit with no standing approval ends red, skip=round-limit, posts
           # nothing, and gets `needs-coordinator`. A PR labelled `needs-owner` is
-          # not reviewed (skip=needs-owner) until the owner takes it off.
+          # not reviewed (skip=needs-owner); v5.11.3 hands it on to
+          # needs-coordinator (owner ruling 732).
           # Removing and re-adding `code-review` starts over (that run is
           # round 1 again); re-running the run that added it replays its
           # event and also starts over. A marker without round= (v5.9.6 or
@@ -1508,7 +1540,7 @@ jobs:
             stop=needs-coordinator
             { echo "skip=round-limit"; echo "stop=$stop"; } >> "$GITHUB_OUTPUT"
             touch "$WORK/verdict"
-            echo "::error::$REVIEWER has reviewed PR $PR_NUM for $done_rounds rounds and the latest verdict is ${latest:-none}, not an approval: the round limit is $limit (sdlc.md §2b). The PR goes to $stop."
+            echo "::error::$REVIEWER has reviewed PR $PR_NUM for $done_rounds rounds and the latest verdict is ${latest:-none}, not an approval: the round limit is $limit (sdlc.md §2b). The PR goes to $stop; the coordinator escalates it to the Tenant Agent, which may restart the count with owner-resume (v5.11.3, owner ruling 732)."
             exit 1
           fi
           round=$((done_rounds + 1))
@@ -2294,6 +2326,7 @@ jobs:
       # confirms the approval it posted. None passes on a PR labelled
       # `needs-owner`, read live as the last check (v5.10.8).
       - name: Confirm a codex verdict stands on this head
+        id: confirm
         if: >-
           steps.guard.outputs.requested == 'true' &&
           (steps.guard.outputs.skip == '' || steps.guard.outputs.skip == 'reviewed' ||
@@ -2335,18 +2368,86 @@ jobs:
           owner_hold
           echo "$REVIEWER approved $EVENT_SHA."
 
+      # ROOT. RE-ARM AUTO-MERGE (v5.12.0, ruling 742 (3): "one approval only,
+      # GitHub merges, agents never merge"). GitHub only, after the confirm
+      # step passed: a codex APPROVED stands on this exact head. Squash
+      # auto-merge is armed pinned to that head; GitHub merges once its
+      # required checks pass. A PR GitHub reads in clean status cannot be
+      # armed and is squash-merged here, pinned to the approved head. Never
+      # fails the job: the verdict is the confirm step's, and an arm that does
+      # not take is a warning the factory's project check retries.
+      - name: Re-arm auto-merge on the approved head
+        if: env.FORGE == 'github' && steps.confirm.outcome == 'success'
+        continue-on-error: true
+        run: |
+          # shellcheck source=/dev/null
+          . "$WORK/lib.sh"
+          skip() { echo "::warning::PR $PR_NUM: $*; auto-merge not re-armed here (the factory's project check retries it)"; exit 0; }
+          # load_token dies on a missing or malformed token; a subshell keeps
+          # that from ending the step red.
+          ( load_token ) || skip "the reviewer token cannot be read"
+          # One GitHub call that never dies: the body on stdout, 1 unless 2xx.
+          gh_call() { # method url [json-file]
+            local code
+            code=$(curl -sS --proto '=https' --max-time 60 -o "$WORK/arm.json" -w '%{http_code}' \
+                     -X "$1" -H @"$HDR" -H 'Content-Type: application/json' \
+                     -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28' \
+                     ${3:+--data-binary "@$3"} "$2") || return 1
+            cat "$WORK/arm.json"
+            case "$code" in 2??) return 0 ;; *) return 1 ;; esac
+          }
+          pr=$(gh_call GET "$REPO_API/pulls/$PR_NUM") || skip "the PR cannot be read"
+          if [ "$(jq -r '.state // empty' <<<"$pr")" != open ] ||
+             [ "$(jq -r '.head.sha // empty' <<<"$pr")" != "$EVENT_SHA" ]; then
+            echo "PR $PR_NUM was closed or moved off $EVENT_SHA; nothing to arm from this run."
+            exit 0
+          fi
+          if [ "$(jq -r '.draft // false' <<<"$pr")" = true ]; then
+            echo "PR $PR_NUM is a draft; the factory arms it when it is marked ready."
+            exit 0
+          fi
+          if [ "$(jq -r '.auto_merge != null' <<<"$pr")" = true ]; then
+            echo "PR $PR_NUM is armed to auto-merge already; GitHub merges it once its required checks pass."
+            exit 0
+          fi
+          node=$(jq -r '.node_id // empty' <<<"$pr")
+          [ -n "$node" ] || skip "its node id cannot be read"
+          jq -n --arg id "$node" --arg h "$EVENT_SHA" \
+            --arg q 'mutation($id:ID!,$h:GitObjectID!){enablePullRequestAutoMerge(input:{pullRequestId:$id,expectedHeadOid:$h,mergeMethod:SQUASH}){pullRequest{number}}}' \
+            '{query: $q, variables: {id: $id, h: $h}}' > "$WORK/arm-query.json"
+          out=$(gh_call POST "$FORGE_API/graphql" "$WORK/arm-query.json") ||
+            skip "GitHub gave no answer to arming auto-merge: $(head -c 300 <<<"$out")"
+          why=$(jq -r '[.errors[]? | .message // "?"] | join("; ")' <<<"$out" 2>/dev/null) || why="an unreadable answer"
+          if [ -z "$why" ]; then
+            echo "PR $PR_NUM armed to auto-merge (squash) at $EVENT_SHA; GitHub merges it once its required checks pass (ruling 742 (3))."
+            exit 0
+          fi
+          case "$why" in
+            *"clean status"*) ;;
+            *) skip "GitHub refused to arm auto-merge: $why" ;;
+          esac
+          # Clean status: every requirement is met, so GitHub merges now on a
+          # call pinned to the approved head, and refuses it on any other.
+          jq -n --arg s "$EVENT_SHA" '{merge_method: "squash", sha: $s}' > "$WORK/merge.json"
+          out=$(gh_call PUT "$REPO_API/pulls/$PR_NUM/merge" "$WORK/merge.json") ||
+            skip "GitHub read it clean but refused the squash merge at $EVENT_SHA: $(jq -r '.message // empty' <<<"$out" 2>/dev/null | head -c 300)"
+          echo "PR $PR_NUM squash-merged at $EVENT_SHA as $(jq -r '.sha // "?"' <<<"$out"): GitHub read it clean, so auto-merge could not be armed (ruling 742 (3))."
+
       # ROOT. THE HAND-ON (v5.9.8, Tenant Agent m2185; sdlc.md §2b): a loop
       # that reached its round limit without an approval goes to the project
       # coordinator (`needs-coordinator`), also after the coordinator's
       # rounds (v5.11.2, ruling 673: the coordinator takes it to the Tenant
       # Agent; the workflow never sets `needs-owner`). A failure here is
-      # reported on the PR by the next step.
+      # reported on the PR by the next step. v5.11.3 (owner ruling 732;
+      # Codex's P2 at handbook #49): the confirm step's stop too, so a
+      # `needs-owner` its live re-read finds is swapped for `needs-coordinator`.
       - name: Hand a stopped review loop on
         if: >-
           always() && steps.guard.outputs.requested == 'true' &&
-          (steps.guard.outputs.stop != '' || steps.post.outputs.stop != '')
+          (steps.guard.outputs.stop != '' || steps.post.outputs.stop != '' ||
+          steps.confirm.outputs.stop != '')
         env:
-          STOP: ${{ steps.post.outputs.stop || steps.guard.outputs.stop }}
+          STOP: ${{ steps.confirm.outputs.stop || steps.post.outputs.stop || steps.guard.outputs.stop }}
         run: |
           # shellcheck source=/dev/null
           . "$WORK/lib.sh"
@@ -2362,7 +2463,8 @@ jobs:
           fi
           printf '%s\n' "$STOP" > "$WORK/stop-error"
           case "$STOP" in
-            needs-coordinator) relabel needs-coordinator ;;
+            # v5.11.3 (owner ruling 732): a leftover `needs-owner` comes off.
+            needs-coordinator) relabel needs-coordinator needs-owner ;;
             *) die "no hand-on label '$STOP'" ;;
           esac
           rm -f "$WORK/stop-error"
