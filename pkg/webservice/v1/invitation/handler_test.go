@@ -555,7 +555,6 @@ func TestHandler_Create_MissingRole(t *testing.T) {
 	mockService.AssertNotCalled(t, "Create")
 }
 
-// TestHandler_Create_InvalidRole verifies 400 when role is not in ValidRoles.
 // fakeRoleLister stands in for the IAM client's ListRoles.
 type fakeRoleLister struct {
 	roles []*platformv1.IAMRole
@@ -582,6 +581,7 @@ func (f *fakeRoleLister) ListRoles(_ context.Context, _ *platformv1.ListIAMRoles
 	return f.roles, int64(len(f.roles)), nil
 }
 
+// TestHandler_Create_InvalidRole verifies 400 when role is not listed by IAM.
 func TestHandler_Create_InvalidRole(t *testing.T) {
 	logger := newTestLogger()
 	mockService := &MockInvitationService{}
@@ -1779,22 +1779,88 @@ func TestHandler_Revoke_AlreadyAccepted(t *testing.T) {
 	mockService.AssertNotCalled(t, "Revoke")
 }
 
-// TestIsValidRole verifies role validation function.
-func TestIsValidRole(t *testing.T) {
-	validRoles := []string{"admin", "member", "viewer"}
-	invalidRoles := []string{"superadmin", "guest", "owner", "root", "", "Admin", "MEMBER"}
+// TestNewHandler_MissingRoleLister verifies NewHandler refuses a nil RoleLister.
+func TestNewHandler_MissingRoleLister(t *testing.T) {
+	invHandler, err := NewHandler(HandlerParams{
+		Logger:            newTestLogger(),
+		InvitationService: &MockInvitationService{},
+		ResponseWriter:    newTestResponseWriter(),
+	})
 
-	for _, role := range validRoles {
-		t.Run("valid_"+role, func(t *testing.T) {
-			assert.True(t, IsValidRole(role))
-		})
-	}
+	assert.Nil(t, invHandler)
+	require.Error(t, err)
+	var missing ErrMissingRoleLister
+	assert.ErrorAs(t, err, &missing)
+}
 
-	for _, role := range invalidRoles {
-		t.Run("invalid_"+role, func(t *testing.T) {
-			assert.False(t, IsValidRole(role))
-		})
-	}
+// createRoleRequest builds an owner's create request for the given role.
+func createRoleRequest(role string) *http.Request {
+	body, _ := json.Marshal(CreateInvitationRequest{Email: "user@example.com", Role: role})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/invitations", bytes.NewReader(body))
+	return req.WithContext(tenant.SetTenantContext(req.Context(), "tenant-123", 100, true))
+}
+
+// TestHandler_Create_IAMListedRole verifies a role IAM lists is accepted,
+// even one the old hard-coded set did not know.
+func TestHandler_Create_IAMListedRole(t *testing.T) {
+	mockService := &MockInvitationService{}
+	lister := newFakeRoleLister("auditor")
+	h, err := NewHandler(HandlerParams{
+		RoleLister:        lister,
+		Logger:            newTestLogger(),
+		InvitationService: mockService,
+		ResponseWriter:    newTestResponseWriter(),
+	})
+	require.NoError(t, err)
+
+	inv := createTestInvitation(1, "tenant-123", "user@example.com", "auditor", entities.InvitationStatusPending)
+	mockService.On("Create", mock.Anything, "tenant-123", "user@example.com", "auditor", uint64(100), time.Duration(0)).Return(inv, nil)
+
+	w := httptest.NewRecorder()
+	h.Create(w, createRoleRequest("auditor"))
+
+	assert.Equal(t, http.StatusCreated, w.Code)
+	assert.Equal(t, 1, lister.calls)
+	mockService.AssertExpectations(t)
+}
+
+// TestHandler_Create_IAMUnlistedRole verifies 400 for a role IAM does not list.
+func TestHandler_Create_IAMUnlistedRole(t *testing.T) {
+	mockService := &MockInvitationService{}
+	h, err := NewHandler(HandlerParams{
+		RoleLister:        newFakeRoleLister("member"),
+		Logger:            newTestLogger(),
+		InvitationService: mockService,
+		ResponseWriter:    newTestResponseWriter(),
+	})
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	h.Create(w, createRoleRequest("admin"))
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	mockService.AssertNotCalled(t, "Create")
+}
+
+// TestHandler_Create_ListRolesError verifies a ListRoles failure gets 500 and
+// creates nothing.
+func TestHandler_Create_ListRolesError(t *testing.T) {
+	mockService := &MockInvitationService{}
+	lister := newFakeRoleLister()
+	lister.err = errors.New("iam unavailable")
+	h, err := NewHandler(HandlerParams{
+		RoleLister:        lister,
+		Logger:            newTestLogger(),
+		InvitationService: mockService,
+		ResponseWriter:    newTestResponseWriter(),
+	})
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	h.Create(w, createRoleRequest("member"))
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	mockService.AssertNotCalled(t, "Create")
 }
 
 // TestToInvitationResponse verifies response conversion.
