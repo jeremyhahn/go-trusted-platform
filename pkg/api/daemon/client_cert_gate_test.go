@@ -290,7 +290,7 @@ func TestQUICServerMTLS_SharesTheAuthenticatorsPool(t *testing.T) {
 		t.Fatalf("remove CA file: %v", err)
 	}
 
-	mw, _, err := selectQUICAuth(config, nil, pool, logger)
+	mw, _, err := selectQUICAuth(config, nil, nil, pool, logger)
 	if err != nil {
 		t.Fatalf("selectQUICAuth: %v", err)
 	}

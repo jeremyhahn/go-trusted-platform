@@ -32,8 +32,10 @@ import (
 // are still refused, as in production. A test passing its own
 // WithQUICAuthMiddleware overrides it.
 func newTestQUICServiceHandler(logger *logging.Logger, opts ...QUICServiceHandlerOption) *QUICServiceHandler {
-	peerAuthenticated := WithQUICAuthMiddleware(quic.NewAuthMiddleware(quic.WithQUICPeerAuthenticated()))
-	h, err := NewQUICServiceHandler(logger, append([]QUICServiceHandlerOption{peerAuthenticated}, opts...)...)
+	// The explicit testing opt-out: a peer-authenticated middleware with no
+	// claims and no checker has no decision point and is refused (#1988).
+	authOff := WithQUICAuthMiddleware(quic.NewAuthMiddleware(quic.WithQUICRequireAuth(false)))
+	h, err := NewQUICServiceHandler(logger, append([]QUICServiceHandlerOption{authOff}, opts...)...)
 	if err != nil {
 		panic(err) // unreachable: a middleware is always installed above
 	}

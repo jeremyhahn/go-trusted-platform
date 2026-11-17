@@ -1141,7 +1141,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		if poolErr != nil {
 			return nil, poolErr
 		}
-		quicAuthMiddleware, quicLocalValidator, quicAuthErr := selectQUICAuth(config, platformTokenValidatorShared, quicClientCAPool, logger)
+		quicAuthMiddleware, quicLocalValidator, quicAuthErr := selectQUICAuth(config, platformTokenValidatorShared, iamPEP, quicClientCAPool, logger)
 		if quicAuthErr != nil {
 			return nil, quicAuthErr
 		}

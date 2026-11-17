@@ -414,6 +414,15 @@ func TestAuthMiddleware_AuthorizeRequest_NoChecker(t *testing.T) {
 	}
 }
 
+// The explicit testing opt-out disables authorization with authentication.
+func TestAuthMiddleware_AuthorizeRequest_RequireAuthOff(t *testing.T) {
+	m := NewAuthMiddleware(WithQUICRequireAuth(false))
+
+	if resp := m.AuthorizeRequest(context.Background(), "vtpm", "write"); resp != nil {
+		t.Fatalf("expected the testing opt-out to allow, got %+v", resp)
+	}
+}
+
 // An operation with no permission (empty resource/action) is refused on the
 // checker path, without asking the checker (#1988).
 func TestAuthMiddleware_AuthorizeRequest_NoPermission_CheckerPath(t *testing.T) {
