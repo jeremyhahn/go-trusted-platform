@@ -446,10 +446,6 @@ failed to find config: <reason>`.
 | `--match-mac-prefix` | string | | Match rule: MAC address prefix (e.g. `52:54:00`) |
 | `--match-serial-prefix` | string | | Match rule: serial number prefix |
 | `--match-model` | string | | Match rule: exact device model |
-| `--match-model-pattern` | string | | Match rule: device model, exact match (legacy `model_pattern` field), for example `r650` |
-| `--match-serial-pattern` | string | | Match rule: literal serial number prefix (legacy `serial_pattern` field), for example `SN12` |
-| `--match-manufacturer` | string | | Match rule: device manufacturer (`manufacturer_match`) |
-| `--match-tpm-vendor` | string | | Match rule: TPM vendor, e.g. `IFX` (`tpm_vendor`) |
 
 **The match-rule flags set only the rules given.** On `update` every other
 stored rule keeps its value; `match` (§3.0a) and boot-time profile lookup read
@@ -604,7 +600,9 @@ its columns are not a stable interface.
 
 **No CLI verb covers**: the separate by-MAC / by-serial profile lookups
 (`match` covers both) or device activation. Reach those
-through the transports in [api.md](api.md).
+through the transports in [api.md](api.md). The match-rule flags (§3.1) set
+the MAC prefix, serial prefix and model rules only; the pattern, manufacturer
+and TPM-vendor rules are rendered but have no flag.
 
 **Parity gap.** `conventions/feature-docs.md` §4 requires every verb here to
 have a matching `CommandDefinition` in the integration parity suite. **This

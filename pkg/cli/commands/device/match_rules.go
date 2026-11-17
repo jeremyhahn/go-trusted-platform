@@ -25,31 +25,22 @@ import (
 // share. A device matches a rule set when its MAC address and serial start
 // with the prefixes and its model equals the model (docs/device/cli.md §3.1).
 type matchRuleFlags struct {
-	macPrefix     string
-	serialPrefix  string
-	model         string
-	modelPattern  string
-	serialPattern string
-	manufacturer  string
-	tpmVendor     string
+	macPrefix    string
+	serialPrefix string
+	model        string
 }
 
 func registerMatchRuleFlags(cmd *cobra.Command, mf *matchRuleFlags) {
 	cmd.Flags().StringVar(&mf.macPrefix, "match-mac-prefix", "", "match rule: MAC address prefix (e.g. 52:54:00)")
 	cmd.Flags().StringVar(&mf.serialPrefix, "match-serial-prefix", "", "match rule: serial number prefix")
 	cmd.Flags().StringVar(&mf.model, "match-model", "", "match rule: exact device model")
-	cmd.Flags().StringVar(&mf.modelPattern, "match-model-pattern", "", "match rule: device model, exact match (legacy model_pattern field)")
-	cmd.Flags().StringVar(&mf.serialPattern, "match-serial-pattern", "", "match rule: literal serial number prefix (legacy serial_pattern field)")
-	cmd.Flags().StringVar(&mf.manufacturer, "match-manufacturer", "", "match rule: device manufacturer")
-	cmd.Flags().StringVar(&mf.tpmVendor, "match-tpm-vendor", "", "match rule: TPM vendor (e.g. IFX)")
 }
 
 // applyMatchRuleFlags sets each rule whose flag was given on rules, keeping
 // the others. It returns rules unchanged (nil included) when no flag was
 // given, and allocates a rule set when rules is nil and one was.
 func applyMatchRuleFlags(rules *platformv1.ProfileMatchRules, mf *matchRuleFlags) *platformv1.ProfileMatchRules {
-	if mf.macPrefix == "" && mf.serialPrefix == "" && mf.model == "" &&
-		mf.modelPattern == "" && mf.serialPattern == "" && mf.manufacturer == "" && mf.tpmVendor == "" {
+	if mf.macPrefix == "" && mf.serialPrefix == "" && mf.model == "" {
 		return rules
 	}
 	if rules == nil {
@@ -63,18 +54,6 @@ func applyMatchRuleFlags(rules *platformv1.ProfileMatchRules, mf *matchRuleFlags
 	}
 	if mf.model != "" {
 		rules.Model = mf.model
-	}
-	if mf.modelPattern != "" {
-		rules.ModelPattern = mf.modelPattern
-	}
-	if mf.serialPattern != "" {
-		rules.SerialPattern = mf.serialPattern
-	}
-	if mf.manufacturer != "" {
-		rules.ManufacturerMatch = mf.manufacturer
-	}
-	if mf.tpmVendor != "" {
-		rules.TpmVendor = mf.tpmVendor
 	}
 	return rules
 }
