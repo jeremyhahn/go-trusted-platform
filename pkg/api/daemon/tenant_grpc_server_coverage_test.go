@@ -164,7 +164,7 @@ func TestTenantGRPCServer_WithTenantManager_Option(t *testing.T) {
 	)
 
 	// Verify manager was set by performing an operation
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	createResp, err := server.CreateTenant(ctx, &platformv1.CreateTenantRequest{
 		Name: "option-test",
 	})
@@ -178,7 +178,7 @@ func TestTenantGRPCServer_WithTenantManager_Option(t *testing.T) {
 // =============================================================================
 
 func TestTenantGRPCServer_ListTenants_ManagerNotInitialized(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createUninitializedServer()
 
 	resp, err := server.ListTenants(ctx, &platformv1.ListTenantsRequest{})
@@ -192,7 +192,7 @@ func TestTenantGRPCServer_ListTenants_ManagerNotInitialized(t *testing.T) {
 }
 
 func TestTenantGRPCServer_GetTenant_ManagerNotInitialized(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createUninitializedServer()
 
 	resp, err := server.GetTenant(ctx, &platformv1.GetTenantRequest{TenantId: "test"})
@@ -205,7 +205,7 @@ func TestTenantGRPCServer_GetTenant_ManagerNotInitialized(t *testing.T) {
 }
 
 func TestTenantGRPCServer_GetTenantByName_ManagerNotInitialized(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createUninitializedServer()
 
 	resp, err := server.GetTenantByName(ctx, &platformv1.GetTenantByNameRequest{Name: "test"})
@@ -218,7 +218,7 @@ func TestTenantGRPCServer_GetTenantByName_ManagerNotInitialized(t *testing.T) {
 }
 
 func TestTenantGRPCServer_CreateTenant_ManagerNotInitialized(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createUninitializedServer()
 
 	resp, err := server.CreateTenant(ctx, &platformv1.CreateTenantRequest{Name: "test"})
@@ -231,7 +231,7 @@ func TestTenantGRPCServer_CreateTenant_ManagerNotInitialized(t *testing.T) {
 }
 
 func TestTenantGRPCServer_UpdateTenant_ManagerNotInitialized(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createUninitializedServer()
 
 	resp, err := server.UpdateTenant(ctx, &platformv1.UpdateTenantRequest{TenantId: "test"})
@@ -244,7 +244,7 @@ func TestTenantGRPCServer_UpdateTenant_ManagerNotInitialized(t *testing.T) {
 }
 
 func TestTenantGRPCServer_DeleteTenant_ManagerNotInitialized(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createUninitializedServer()
 
 	resp, err := server.DeleteTenant(ctx, &platformv1.DeleteTenantRequest{TenantId: "test"})
@@ -257,7 +257,7 @@ func TestTenantGRPCServer_DeleteTenant_ManagerNotInitialized(t *testing.T) {
 }
 
 func TestTenantGRPCServer_SuspendTenant_ManagerNotInitialized(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createUninitializedServer()
 
 	resp, err := server.SuspendTenant(ctx, &platformv1.SuspendTenantRequest{TenantId: "test"})
@@ -270,7 +270,7 @@ func TestTenantGRPCServer_SuspendTenant_ManagerNotInitialized(t *testing.T) {
 }
 
 func TestTenantGRPCServer_ResumeTenant_ManagerNotInitialized(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createUninitializedServer()
 
 	resp, err := server.ResumeTenant(ctx, &platformv1.ResumeTenantRequest{TenantId: "test"})
@@ -283,7 +283,7 @@ func TestTenantGRPCServer_ResumeTenant_ManagerNotInitialized(t *testing.T) {
 }
 
 func TestTenantGRPCServer_GetQuotas_ManagerNotInitialized(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createUninitializedServer()
 
 	resp, err := server.GetQuotas(ctx, &platformv1.GetQuotasRequest{TenantId: "test"})
@@ -296,7 +296,7 @@ func TestTenantGRPCServer_GetQuotas_ManagerNotInitialized(t *testing.T) {
 }
 
 func TestTenantGRPCServer_UpdateQuotas_ManagerNotInitialized(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createUninitializedServer()
 
 	resp, err := server.UpdateQuotas(ctx, &platformv1.UpdateQuotasRequest{TenantId: "test"})
@@ -309,7 +309,7 @@ func TestTenantGRPCServer_UpdateQuotas_ManagerNotInitialized(t *testing.T) {
 }
 
 func TestTenantGRPCServer_GetUsage_ManagerNotInitialized(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createUninitializedServer()
 
 	resp, err := server.GetUsage(ctx, &platformv1.GetUsageRequest{TenantId: "test"})
@@ -322,7 +322,7 @@ func TestTenantGRPCServer_GetUsage_ManagerNotInitialized(t *testing.T) {
 }
 
 func TestTenantGRPCServer_CheckQuota_ManagerNotInitialized(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createUninitializedServer()
 
 	resp, err := server.CheckQuota(ctx, &platformv1.CheckQuotaRequest{
@@ -339,7 +339,7 @@ func TestTenantGRPCServer_CheckQuota_ManagerNotInitialized(t *testing.T) {
 }
 
 func TestTenantGRPCServer_Sync_ManagerNotInitialized(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createUninitializedServer()
 
 	resp, err := server.Sync(ctx, &platformv1.SyncTenantsRequest{})
@@ -352,7 +352,7 @@ func TestTenantGRPCServer_Sync_ManagerNotInitialized(t *testing.T) {
 }
 
 func TestTenantGRPCServer_RotateTenantDEK_ManagerNotInitialized(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createUninitializedServer()
 
 	resp, err := server.RotateTenantDEK(ctx, &platformv1.RotateTenantDEKRequest{TenantId: "test"})
@@ -365,7 +365,7 @@ func TestTenantGRPCServer_RotateTenantDEK_ManagerNotInitialized(t *testing.T) {
 }
 
 func TestTenantGRPCServer_GetTenantDEKStatus_ManagerNotInitialized(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createUninitializedServer()
 
 	resp, err := server.GetTenantDEKStatus(ctx, &platformv1.GetTenantDEKStatusRequest{TenantId: "test"})
@@ -382,7 +382,7 @@ func TestTenantGRPCServer_GetTenantDEKStatus_ManagerNotInitialized(t *testing.T)
 // =============================================================================
 
 func TestTenantGRPCServer_ListTenants_Success(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	// Create some tenants
@@ -404,7 +404,7 @@ func TestTenantGRPCServer_ListTenants_Success(t *testing.T) {
 }
 
 func TestTenantGRPCServer_ListTenants_DefaultLimit(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	// List tenants with zero limit (should use default 100)
@@ -418,7 +418,7 @@ func TestTenantGRPCServer_ListTenants_DefaultLimit(t *testing.T) {
 }
 
 func TestTenantGRPCServer_ListTenants_NegativeOffset(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	// List tenants with negative offset (should become 0)
@@ -436,7 +436,7 @@ func TestTenantGRPCServer_ListTenants_NegativeOffset(t *testing.T) {
 // =============================================================================
 
 func TestTenantGRPCServer_GetTenant_Success(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	// Create a tenant
@@ -458,7 +458,7 @@ func TestTenantGRPCServer_GetTenant_Success(t *testing.T) {
 }
 
 func TestTenantGRPCServer_GetTenant_InvalidArgument(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	resp, err := server.GetTenant(ctx, &platformv1.GetTenantRequest{
@@ -473,7 +473,7 @@ func TestTenantGRPCServer_GetTenant_InvalidArgument(t *testing.T) {
 }
 
 func TestTenantGRPCServer_GetTenant_NotFound(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	resp, err := server.GetTenant(ctx, &platformv1.GetTenantRequest{
@@ -492,7 +492,7 @@ func TestTenantGRPCServer_GetTenant_NotFound(t *testing.T) {
 // =============================================================================
 
 func TestTenantGRPCServer_GetTenantByName_Success(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	// Create a tenant
@@ -514,7 +514,7 @@ func TestTenantGRPCServer_GetTenantByName_Success(t *testing.T) {
 }
 
 func TestTenantGRPCServer_GetTenantByName_InvalidArgument(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	resp, err := server.GetTenantByName(ctx, &platformv1.GetTenantByNameRequest{
@@ -529,7 +529,7 @@ func TestTenantGRPCServer_GetTenantByName_InvalidArgument(t *testing.T) {
 }
 
 func TestTenantGRPCServer_GetTenantByName_NotFound(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	resp, err := server.GetTenantByName(ctx, &platformv1.GetTenantByNameRequest{
@@ -544,7 +544,7 @@ func TestTenantGRPCServer_GetTenantByName_NotFound(t *testing.T) {
 }
 
 func TestTenantGRPCServer_CreateTenant_Success(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	resp, err := server.CreateTenant(ctx, &platformv1.CreateTenantRequest{
@@ -562,7 +562,7 @@ func TestTenantGRPCServer_CreateTenant_Success(t *testing.T) {
 }
 
 func TestTenantGRPCServer_CreateTenant_InvalidArgument(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	resp, err := server.CreateTenant(ctx, &platformv1.CreateTenantRequest{
@@ -579,7 +579,7 @@ func TestTenantGRPCServer_CreateTenant_InvalidArgument(t *testing.T) {
 // =============================================================================
 
 func TestTenantGRPCServer_UpdateTenant_Success(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	// Create a tenant
@@ -606,7 +606,7 @@ func TestTenantGRPCServer_UpdateTenant_Success(t *testing.T) {
 }
 
 func TestTenantGRPCServer_UpdateTenant_InvalidArgument(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	resp, err := server.UpdateTenant(ctx, &platformv1.UpdateTenantRequest{
@@ -621,7 +621,7 @@ func TestTenantGRPCServer_UpdateTenant_InvalidArgument(t *testing.T) {
 }
 
 func TestTenantGRPCServer_UpdateTenant_NotFound(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	resp, err := server.UpdateTenant(ctx, &platformv1.UpdateTenantRequest{
@@ -641,7 +641,7 @@ func TestTenantGRPCServer_UpdateTenant_NotFound(t *testing.T) {
 // =============================================================================
 
 func TestTenantGRPCServer_DeleteTenant_Success(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	// Create a tenant
@@ -665,7 +665,7 @@ func TestTenantGRPCServer_DeleteTenant_Success(t *testing.T) {
 }
 
 func TestTenantGRPCServer_DeleteTenant_InvalidArgument(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	resp, err := server.DeleteTenant(ctx, &platformv1.DeleteTenantRequest{
@@ -680,7 +680,7 @@ func TestTenantGRPCServer_DeleteTenant_InvalidArgument(t *testing.T) {
 }
 
 func TestTenantGRPCServer_DeleteTenant_NotFound(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	resp, err := server.DeleteTenant(ctx, &platformv1.DeleteTenantRequest{
@@ -699,7 +699,7 @@ func TestTenantGRPCServer_DeleteTenant_NotFound(t *testing.T) {
 // =============================================================================
 
 func TestTenantGRPCServer_SuspendTenant_Success(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	// Create a tenant
@@ -719,7 +719,7 @@ func TestTenantGRPCServer_SuspendTenant_Success(t *testing.T) {
 }
 
 func TestTenantGRPCServer_SuspendTenant_InvalidArgument(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	resp, err := server.SuspendTenant(ctx, &platformv1.SuspendTenantRequest{
@@ -734,7 +734,7 @@ func TestTenantGRPCServer_SuspendTenant_InvalidArgument(t *testing.T) {
 }
 
 func TestTenantGRPCServer_SuspendTenant_NotFound(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	resp, err := server.SuspendTenant(ctx, &platformv1.SuspendTenantRequest{
@@ -753,7 +753,7 @@ func TestTenantGRPCServer_SuspendTenant_NotFound(t *testing.T) {
 // =============================================================================
 
 func TestTenantGRPCServer_ResumeTenant_Success(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	// Create a tenant first
@@ -782,7 +782,7 @@ func TestTenantGRPCServer_ResumeTenant_Success(t *testing.T) {
 }
 
 func TestTenantGRPCServer_ResumeTenant_InvalidArgument(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	// Empty tenant_id
@@ -798,7 +798,7 @@ func TestTenantGRPCServer_ResumeTenant_InvalidArgument(t *testing.T) {
 }
 
 func TestTenantGRPCServer_ResumeTenant_ActiveIsIdempotent(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	// Create a tenant (which starts active, not suspended)
@@ -822,7 +822,7 @@ func TestTenantGRPCServer_ResumeTenant_ActiveIsIdempotent(t *testing.T) {
 }
 
 func TestTenantGRPCServer_ResumeTenant_NotFound(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	resp, err := server.ResumeTenant(ctx, &platformv1.ResumeTenantRequest{
@@ -841,7 +841,7 @@ func TestTenantGRPCServer_ResumeTenant_NotFound(t *testing.T) {
 // =============================================================================
 
 func TestTenantGRPCServer_GetQuotas_Success(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	// Create a tenant with custom quotas
@@ -880,7 +880,7 @@ func TestTenantGRPCServer_GetQuotas_Success(t *testing.T) {
 }
 
 func TestTenantGRPCServer_GetQuotas_InvalidArgument(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	resp, err := server.GetQuotas(ctx, &platformv1.GetQuotasRequest{
@@ -895,7 +895,7 @@ func TestTenantGRPCServer_GetQuotas_InvalidArgument(t *testing.T) {
 }
 
 func TestTenantGRPCServer_GetQuotas_NotFound(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	resp, err := server.GetQuotas(ctx, &platformv1.GetQuotasRequest{
@@ -914,7 +914,7 @@ func TestTenantGRPCServer_GetQuotas_NotFound(t *testing.T) {
 // =============================================================================
 
 func TestTenantGRPCServer_UpdateQuotas_Success(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	// Create a tenant first
@@ -958,7 +958,7 @@ func TestTenantGRPCServer_UpdateQuotas_Success(t *testing.T) {
 }
 
 func TestTenantGRPCServer_UpdateQuotas_PartialUpdate(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	createResp, err := server.CreateTenant(ctx, &platformv1.CreateTenantRequest{
@@ -997,7 +997,7 @@ func TestTenantGRPCServer_UpdateQuotas_PartialUpdate(t *testing.T) {
 }
 
 func TestTenantGRPCServer_UpdateQuotas_InvalidArgument(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	resp, err := server.UpdateQuotas(ctx, &platformv1.UpdateQuotasRequest{
@@ -1012,7 +1012,7 @@ func TestTenantGRPCServer_UpdateQuotas_InvalidArgument(t *testing.T) {
 }
 
 func TestTenantGRPCServer_UpdateQuotas_NotFound(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	resp, err := server.UpdateQuotas(ctx, &platformv1.UpdateQuotasRequest{
@@ -1035,7 +1035,7 @@ func TestTenantGRPCServer_UpdateQuotas_NotFound(t *testing.T) {
 // =============================================================================
 
 func TestTenantGRPCServer_GetUsage_InvalidArgument(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	resp, err := server.GetUsage(ctx, &platformv1.GetUsageRequest{
@@ -1050,7 +1050,7 @@ func TestTenantGRPCServer_GetUsage_InvalidArgument(t *testing.T) {
 }
 
 func TestTenantGRPCServer_GetUsage_TenantNotConfigured(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	// Create a tenant
@@ -1082,7 +1082,7 @@ func TestTenantGRPCServer_GetUsage_TenantNotConfigured(t *testing.T) {
 // =============================================================================
 
 func TestTenantGRPCServer_CheckQuota_UsesTenantQuotaWithoutEnforcer(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	createResp, err := server.CreateTenant(ctx, &platformv1.CreateTenantRequest{
@@ -1114,7 +1114,7 @@ func TestTenantGRPCServer_CheckQuota_UsesTenantQuotaWithoutEnforcer(t *testing.T
 func TestTenantGRPCServer_CheckQuota_TenantNotFound(t *testing.T) {
 	server := createTestTenantGRPCServer(t)
 
-	_, err := server.CheckQuota(context.Background(), &platformv1.CheckQuotaRequest{
+	_, err := server.CheckQuota(unixOperatorContext(), &platformv1.CheckQuotaRequest{
 		TenantId: "missing-tenant",
 		Resource: "vms",
 		Amount:   1,
@@ -1124,7 +1124,7 @@ func TestTenantGRPCServer_CheckQuota_TenantNotFound(t *testing.T) {
 }
 
 func TestTenantGRPCServer_CheckQuota_InvalidArgument_EmptyTenantID(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	resp, err := server.CheckQuota(ctx, &platformv1.CheckQuotaRequest{
@@ -1141,7 +1141,7 @@ func TestTenantGRPCServer_CheckQuota_InvalidArgument_EmptyTenantID(t *testing.T)
 }
 
 func TestTenantGRPCServer_CheckQuota_InvalidArgument_EmptyResource(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	resp, err := server.CheckQuota(ctx, &platformv1.CheckQuotaRequest{
@@ -1158,7 +1158,7 @@ func TestTenantGRPCServer_CheckQuota_InvalidArgument_EmptyResource(t *testing.T)
 }
 
 func TestTenantGRPCServer_CheckQuota_InvalidArgument_ZeroAmount(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	resp, err := server.CheckQuota(ctx, &platformv1.CheckQuotaRequest{
@@ -1175,7 +1175,7 @@ func TestTenantGRPCServer_CheckQuota_InvalidArgument_ZeroAmount(t *testing.T) {
 }
 
 func TestTenantGRPCServer_CheckQuota_InvalidArgument_NegativeAmount(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	resp, err := server.CheckQuota(ctx, &platformv1.CheckQuotaRequest{
@@ -1192,7 +1192,7 @@ func TestTenantGRPCServer_CheckQuota_InvalidArgument_NegativeAmount(t *testing.T
 }
 
 func TestTenantGRPCServer_CheckQuota_InvalidArgument_InvalidResource(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	resp, err := server.CheckQuota(ctx, &platformv1.CheckQuotaRequest{
@@ -1209,7 +1209,7 @@ func TestTenantGRPCServer_CheckQuota_InvalidArgument_InvalidResource(t *testing.
 }
 
 func TestTenantGRPCServer_Sync_Success(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	resp, err := server.Sync(ctx, &platformv1.SyncTenantsRequest{})
@@ -1225,7 +1225,7 @@ func TestTenantGRPCServer_Sync_Success(t *testing.T) {
 // =============================================================================
 
 func TestTenantGRPCServer_RotateTenantDEK_InvalidArgument(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	resp, err := server.RotateTenantDEK(ctx, &platformv1.RotateTenantDEKRequest{
@@ -1240,7 +1240,7 @@ func TestTenantGRPCServer_RotateTenantDEK_InvalidArgument(t *testing.T) {
 }
 
 func TestTenantGRPCServer_RotateTenantDEK_DEKIsolationDisabled(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	// Create a tenant
@@ -1263,7 +1263,7 @@ func TestTenantGRPCServer_RotateTenantDEK_DEKIsolationDisabled(t *testing.T) {
 }
 
 func TestTenantGRPCServer_RotateTenantDEK_NotFound(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	resp, err := server.RotateTenantDEK(ctx, &platformv1.RotateTenantDEKRequest{
@@ -1283,7 +1283,7 @@ func TestTenantGRPCServer_RotateTenantDEK_NotFound(t *testing.T) {
 // =============================================================================
 
 func TestTenantGRPCServer_GetTenantDEKStatus_InvalidArgument(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	resp, err := server.GetTenantDEKStatus(ctx, &platformv1.GetTenantDEKStatusRequest{
@@ -1298,7 +1298,7 @@ func TestTenantGRPCServer_GetTenantDEKStatus_InvalidArgument(t *testing.T) {
 }
 
 func TestTenantGRPCServer_GetTenantDEKStatus_DEKIsolationDisabled(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	// Create a tenant
@@ -1320,7 +1320,7 @@ func TestTenantGRPCServer_GetTenantDEKStatus_DEKIsolationDisabled(t *testing.T) 
 }
 
 func TestTenantGRPCServer_GetTenantDEKStatus_NotFound(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	server := createTestTenantGRPCServer(t)
 
 	resp, err := server.GetTenantDEKStatus(ctx, &platformv1.GetTenantDEKStatusRequest{

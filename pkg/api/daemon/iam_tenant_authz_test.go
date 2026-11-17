@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"testing"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
@@ -14,6 +15,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -77,6 +79,24 @@ func tokenCallerContext(tenantID string) context.Context {
 // caller with kernel-verified peer credentials and no tenant binding.
 func unixOperatorContext() context.Context {
 	return peercred.ContextWithUnixCredentials(context.Background(), peercred.UnixCredentials{PID: 1, UID: 0, GID: 0})
+}
+
+// operatorGRPCServerOption stamps the in-process operator's credentials on
+// every call a test gRPC server takes, as embedded_host does for its
+// embedder, so a fixture that serves over TCP still has an identified local
+// caller (SPEC row 109 refuses one with no identity at all).
+func operatorGRPCServerOption() grpc.ServerOption {
+	return grpc.ChainUnaryInterceptor(func(ctx context.Context, req interface{}, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+		return handler(peercred.ContextWithProcessCredentials(ctx), req)
+	})
+}
+
+// operatorHTTPHandler does the same for a test MCP or REST bridge served
+// over httptest.
+func operatorHTTPHandler(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(peercred.ContextWithProcessCredentials(r.Context())))
+	})
 }
 
 // TestUnboundTenantCallers covers SPEC row 109: a caller with no identity

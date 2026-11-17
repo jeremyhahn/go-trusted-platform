@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http/httptest"
 	"testing"
 
@@ -26,7 +27,9 @@ import (
 	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -34,9 +37,11 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/testutil"
 	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	platformiam "github.com/jeremyhahn/go-trusted-platform/sdk/go/services/iam"
+	sdkgrpc "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/grpc"
 	sdkmcp "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/mcp"
 )
 
@@ -52,15 +57,31 @@ func wiredIAMToolRegistry(iam *memIAM) *mcp.ToolRegistry {
 func iamParityTransports() map[string]func(t *testing.T, iam *memIAM) *platformiam.Client {
 	return map[string]func(t *testing.T, iam *memIAM) *platformiam.Client{
 		"gRPC": func(t *testing.T, iam *memIAM) *platformiam.Client {
-			return iamTokenGRPCClient(t, wiredIAMGRPCService(iam), nil)
+			return operatorIAMGRPCClient(t, wiredIAMGRPCService(iam))
 		},
 		"MCP": func(t *testing.T, iam *memIAM) *platformiam.Client {
-			srv := httptest.NewServer(mcpToolBridge(t, wiredIAMToolRegistry(iam)))
+			srv := httptest.NewServer(operatorHTTPHandler(mcpToolBridge(t, wiredIAMToolRegistry(iam))))
 			t.Cleanup(srv.Close)
 			adapter, err := sdkmcp.Connect(context.Background(), platform.NewOptions(platform.WithMCPAddr(srv.URL)))
 			return iamClient(connection(t, adapter, err))
 		},
 	}
+}
+
+// operatorIAMGRPCClient serves svc over TLS to a client whose calls carry
+// the in-process operator's credentials, the identified local caller.
+func operatorIAMGRPCClient(t *testing.T, svc *IAMGRPCService) *platformiam.Client {
+	tlsBundle := testutil.GenerateTestTLSBundle(t)
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	serveGRPCServices(t, lis, func(srv grpc.ServiceRegistrar) {
+		platformv1.RegisterPlatformIAMServiceServer(srv, svc)
+	}, grpc.Creds(credentials.NewTLS(tlsBundle.ServerTLSConfig())), operatorGRPCServerOption())
+	adapter, err := sdkgrpc.Connect(context.Background(), platform.NewOptions(
+		platform.WithGRPCAddr(lis.Addr().String()),
+		platform.WithTLSConfig(tlsBundle.ClientTLSConfig()),
+	))
+	return iamClient(connection(t, adapter, err))
 }
 
 // iamScript runs one tool group's calls through an SDK IAM client and
@@ -102,7 +123,7 @@ func iamUsersScript(ctx context.Context, t *testing.T, c *platformiam.Client) []
 func TestIAMGRPCService_CreateUserDerivesUsernameFromEmail(t *testing.T) {
 	iam := newMemIAM()
 	svc := wiredIAMGRPCService(iam)
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 
 	_, err := svc.CreateUser(ctx, &platformv1.CreateIAMUserRequest{TenantId: "acme", Email: "alice@acme.test"})
 	require.NoError(t, err)
@@ -115,7 +136,7 @@ func TestIAMGRPCService_CreateUserDerivesUsernameFromEmail(t *testing.T) {
 func TestIAMGRPCService_CreateUserWithoutEmailIsRefused(t *testing.T) {
 	svc := wiredIAMGRPCService(newMemIAM())
 
-	_, err := svc.CreateUser(context.Background(), &platformv1.CreateIAMUserRequest{TenantId: "acme"})
+	_, err := svc.CreateUser(unixOperatorContext(), &platformv1.CreateIAMUserRequest{TenantId: "acme"})
 	require.Error(t, err)
 }
 
@@ -424,7 +445,7 @@ func iamErrorCases() map[string]iamErrorCase {
 // input. The SDK's MCP wire client retries every error one second apart, so
 // the MCP side is asserted at the tool registry the MCP server runs.
 func TestIAMMCPErrorParity(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	svc := wiredIAMGRPCService(newMemIAM())
 	registry := wiredIAMToolRegistry(newMemIAM())
 
@@ -444,7 +465,7 @@ func TestIAMMCPErrorParity(t *testing.T) {
 // above answers the typed unavailable error over both transports, before
 // any input check.
 func TestIAMMCPUnavailableParity(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	svc := NewIAMGRPCService(slog.Default(), nil, nil)
 	registry := mcp.NewToolRegistry(NewMCPServiceProvider(&MCPServiceProviderConfig{}), logging.DefaultLogger())
 
@@ -539,7 +560,7 @@ func newMCPTestDaemon(t *testing.T, socketPath string) *Daemon {
 // TestCreateMCPServer_HandsTheIAMClientsToTheProvider: with QuicBaaS IAM the
 // MCP IAM tools answer from the daemon's IAM client and its PEP.
 func TestCreateMCPServer_HandsTheIAMClientsToTheProvider(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	iam := newMemIAM()
 	_, err := iam.User().Create(ctx, "acme", &sdkiam.CreateUserRequest{Username: "alice", Email: "alice@acme.test"})
 	require.NoError(t, err)
@@ -567,7 +588,7 @@ func TestCreateMCPServer_HandsTheIAMClientsToTheProvider(t *testing.T) {
 // TestCreateMCPServer_WithoutIAMTheToolsAreUnavailable: without QuicBaaS IAM
 // the MCP IAM tools answer the typed unavailable error.
 func TestCreateMCPServer_WithoutIAMTheToolsAreUnavailable(t *testing.T) {
-	ctx := context.Background()
+	ctx := unixOperatorContext()
 	d := newMCPTestDaemon(t, "/tmp/test-mcp-iam-absent.sock")
 	d.iamService = nil
 	_, err := d.createMCPServer()
