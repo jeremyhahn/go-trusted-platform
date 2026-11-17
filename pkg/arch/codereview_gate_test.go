@@ -168,6 +168,12 @@ func TestCodeReviewGateRefusesAnApprovalOnOwnerHold(t *testing.T) {
 				"BASE_REF=main",
 				"GH_API_TOKEN=x",
 				`NO_REVIEW_PATHS=^docs/.+$`,
+				// code-review v5.12.1 and v5.12.2: the docs list, the scope job
+				// (InfoSec's guard) and this run's review job.
+				`DOCS_PATHS=^docs/.+$`,
+				"SCOPE_SKIP=",
+				"SCOPE_RESULT=success",
+				"REVIEW_RESULT=success",
 				"FAKE_LABELS=" + tc.labels,
 				"FAKE_FILES=" + tc.files,
 				"FAKE_BASE_REF=" + tc.base,
