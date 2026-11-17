@@ -26,7 +26,7 @@ import (
 
 // TestGetFlowStatsEmptyMatch tests GetFlowStats with empty match string
 func TestGetFlowStatsEmptyMatch(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -69,7 +69,7 @@ func TestGetFlowStatsEmptyMatch(t *testing.T) {
 
 // TestDispatcherNetworkErrors tests dispatcher error handling on connection close
 func TestDispatcherNetworkErrors(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -111,7 +111,7 @@ func TestDispatcherNetworkErrors(t *testing.T) {
 
 // TestCallContextCancellation tests call with context cancellation
 func TestCallContextCancellation(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -152,7 +152,7 @@ func TestCloseOpenFlowClient(t *testing.T) {
 
 // TestListPortsWithContinueOnError tests ListPorts error handling
 func TestListPortsWithContinueOnError(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -205,7 +205,7 @@ func TestGetInterfaceWithEmptyName(t *testing.T) {
 
 // TestGetInterfaceNotFound tests GetInterface when interface doesn't exist
 func TestGetInterfaceNotFound(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -230,7 +230,7 @@ func TestGetInterfaceNotFound(t *testing.T) {
 
 // TestDisconnectWithOpenFlowClients tests Disconnect cleanup of OpenFlow clients
 func TestDisconnectWithOpenFlowClients(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -266,7 +266,7 @@ func TestCallNotConnected(t *testing.T) {
 
 // TestGetOpenVSwitchUUIDNoRows tests getOpenVSwitchUUID with no rows
 func TestGetOpenVSwitchUUIDNoRows(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)

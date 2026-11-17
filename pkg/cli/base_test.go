@@ -117,7 +117,7 @@ func TestBaseCommand_Close_NilClient(t *testing.T) {
 }
 
 func TestBaseCommand_AllOutputFormats(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	socketPath := filepath.Join(shortSocketDir(t), "test.sock")
 
 	server, cleanup := startTestGRPCServer(t, socketPath)
 	defer cleanup()
@@ -160,7 +160,7 @@ func TestBaseCommand_AllOutputFormats(t *testing.T) {
 }
 
 func TestBaseCommand_FullWorkflow(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "workflow.sock")
+	socketPath := filepath.Join(shortSocketDir(t), "workflow.sock")
 
 	server, cleanup := startTestGRPCServer(t, socketPath)
 	defer cleanup()

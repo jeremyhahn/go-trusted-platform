@@ -98,7 +98,7 @@ func startMTLSProxy(t *testing.T, backendURL string) *mtlsProxyFixture {
 		Sync: proxysvc.SyncConfig{Enabled: true, Interval: time.Hour},
 		Platformd: proxysvc.PlatformdConfig{
 			Protocol: proxysvc.PlatformdProtocolUnix,
-			Socket:   filepath.Join(t.TempDir(), "platformd.sock"),
+			Socket:   filepath.Join(shortSocketDir(t), "platformd.sock"),
 		},
 	}
 
