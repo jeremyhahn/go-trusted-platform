@@ -10,7 +10,6 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -94,7 +93,7 @@ func certSDKClient(t *testing.T, server *httptest.Server) platformv1.BMCServiceC
 			t.Errorf("Close: %v", err)
 		}
 	})
-	var cc grpc.ClientConnInterface = conn.(*sdkrest.Adapter).Connection()
+	cc := conn.(*sdkrest.Adapter).Connection()
 	return platformv1.NewBMCServiceClient(cc)
 }
 
