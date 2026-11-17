@@ -17,6 +17,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 )
 
 // mockAuthManager is a mock implementation of AuthManager.
@@ -464,6 +466,99 @@ func TestAuthorizationChecker_PermissionParsing(t *testing.T) {
 					t.Errorf("action = %s, want %s", authSvc.lastAction, tt.expectedAction)
 				}
 			})
+		}
+	})
+}
+
+// recordingPEP is an iam.PEPClient fake that records the last check request.
+type recordingPEP struct {
+	allowed bool
+	err     error
+	calls   int
+	last    *iam.CheckRequest
+}
+
+func (p *recordingPEP) Check(_ context.Context, req *iam.CheckRequest) (*iam.CheckResponse, error) {
+	p.calls++
+	p.last = req
+	if p.err != nil {
+		return nil, p.err
+	}
+	return &iam.CheckResponse{Allowed: p.allowed}, nil
+}
+
+func (p *recordingPEP) CheckBatch(context.Context, *iam.CheckBatchRequest) (*iam.CheckBatchResponse, error) {
+	return nil, errors.New("not used")
+}
+
+// legacyCaller is a bool-only AuthManager whose token carries a subject,
+// a tenant and roles, so an unscoped tool call reaches the PEP fallback.
+func legacyCaller() *mockAuthManager {
+	return &mockAuthManager{
+		validateFunc: func(context.Context, string) (bool, error) { return true, nil },
+		getClaimsFunc: func(context.Context, string) (map[string]interface{}, error) {
+			return map[string]interface{}{
+				"sub":       "user-1",
+				"tenant_id": "tenant-1",
+				"roles":     []string{"operator"},
+			}, nil
+		},
+	}
+}
+
+// TestAuthorizeTool_UnscopedPathDecidedByPEP pins SPEC row 116 (#1995): an
+// unscoped tool call is decided by the IAM PEP for the caller and the
+// tool's permission, never by a split of the permission string.
+func TestAuthorizeTool_UnscopedPathDecidedByPEP(t *testing.T) {
+	const tool = "pep_probe_tool"
+
+	newChecker := func(pep iam.PEPClient) *AuthorizationChecker {
+		var opts []AuthorizationCheckerOption
+		if pep != nil {
+			opts = append(opts, WithPEPClient(pep))
+		}
+		c := NewAuthorizationChecker(nil, legacyCaller(), opts...)
+		c.toolPermissions[tool] = "device:power:write"
+		return c
+	}
+
+	t.Run("allow", func(t *testing.T) {
+		pep := &recordingPEP{allowed: true}
+		if _, err := newChecker(pep).AuthorizeTool(context.Background(), tool, "tok"); err != nil {
+			t.Fatalf("PEP allow: want nil error, got %v", err)
+		}
+		if pep.calls != 1 || pep.last == nil {
+			t.Fatalf("PEP calls = %d, want 1", pep.calls)
+		}
+		if pep.last.Subject.ID != "user-1" || pep.last.Subject.TenantID != "tenant-1" {
+			t.Errorf("subject = %+v, want user-1 in tenant-1", pep.last.Subject)
+		}
+		if len(pep.last.Subject.Roles) != 1 || pep.last.Subject.Roles[0] != "operator" {
+			t.Errorf("roles = %v, want [operator]", pep.last.Subject.Roles)
+		}
+		if pep.last.Resource != "device" || pep.last.Action != "power:write" {
+			t.Errorf("resource/action = %q/%q, want device/power:write", pep.last.Resource, pep.last.Action)
+		}
+	})
+
+	t.Run("deny", func(t *testing.T) {
+		_, err := newChecker(&recordingPEP{allowed: false}).AuthorizeTool(context.Background(), tool, "tok")
+		if err == nil || err.Type != AuthErrorPermissionDenied {
+			t.Fatalf("PEP deny: want permission denied, got %v", err)
+		}
+	})
+
+	t.Run("error", func(t *testing.T) {
+		_, err := newChecker(&recordingPEP{err: errors.New("pep down")}).AuthorizeTool(context.Background(), tool, "tok")
+		if err == nil || err.Type != AuthErrorPermissionDenied {
+			t.Fatalf("PEP error: want permission denied, got %v", err)
+		}
+	})
+
+	t.Run("nil PEP", func(t *testing.T) {
+		_, err := newChecker(nil).AuthorizeTool(context.Background(), tool, "tok")
+		if err == nil || err.Type != AuthErrorPermissionDenied {
+			t.Fatalf("nil PEP: want permission denied, got %v", err)
 		}
 	})
 }
