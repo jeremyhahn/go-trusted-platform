@@ -11,6 +11,7 @@ import (
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
 	"google.golang.org/grpc/codes"
@@ -72,6 +73,45 @@ func tokenCallerContext(tenantID string) context.Context {
 	return grpcapi.ContextWithAuthorizedContext(context.Background(), &platformtoken.AuthorizedContext{TenantID: tenantID})
 }
 
+// unixOperatorContext is the context of the local operator: a Unix-socket
+// caller with kernel-verified peer credentials and no tenant binding.
+func unixOperatorContext() context.Context {
+	return peercred.ContextWithUnixCredentials(context.Background(), peercred.UnixCredentials{PID: 1, UID: 0, GID: 0})
+}
+
+// TestUnboundTenantCallers covers SPEC row 109: a caller with no identity
+// at all is refused every tenant-scoped IAM and tenant call with
+// PermissionDenied, and the Unix peer-credential operator is still admitted.
+func TestUnboundTenantCallers(t *testing.T) {
+	s := &TenantGRPCServer{}
+	s.SetSystemTenant("system")
+
+	checks := []struct {
+		name string
+		call func(ctx context.Context) error
+	}{
+		{"authorizeIAMTenant", func(ctx context.Context) error { return authorizeIAMTenant(ctx, "tenant-a") }},
+		{"authorizeSystemCaller", func(ctx context.Context) error { return authorizeSystemCaller(ctx, "system", "ListTenants") }},
+		{"authorizeTenant", func(ctx context.Context) error { return s.authorizeTenant(ctx, "tenant-a") }},
+		{"authorizeSystemTenant", func(ctx context.Context) error { return s.authorizeSystemTenant(ctx, "CreateTenant") }},
+		{"authorizeTenantName", func(ctx context.Context) error { return s.authorizeTenantName(ctx, "tenant-a") }},
+	}
+
+	for _, c := range checks {
+		t.Run(c.name+" refuses a caller with no identity", func(t *testing.T) {
+			err := c.call(context.Background())
+			if status.Code(err) != codes.PermissionDenied {
+				t.Fatalf("code = %v, want PermissionDenied (err %v)", status.Code(err), err)
+			}
+		})
+		t.Run(c.name+" admits the Unix peer-credential operator", func(t *testing.T) {
+			if err := c.call(unixOperatorContext()); err != nil {
+				t.Fatalf("%s() = %v, want nil", c.name, err)
+			}
+		})
+	}
+}
+
 func TestCallerTenant(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -126,8 +166,15 @@ func TestAuthorizeIAMTenant(t *testing.T) {
 		}
 	})
 
-	t.Run("unbound caller is allowed", func(t *testing.T) {
-		if err := authorizeIAMTenant(context.Background(), "tenant-a"); err != nil {
+	t.Run("caller with no identity is refused", func(t *testing.T) {
+		err := authorizeIAMTenant(context.Background(), "tenant-a")
+		if status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("code = %v, want PermissionDenied (err %v)", status.Code(err), err)
+		}
+	})
+
+	t.Run("Unix peer-credential operator is allowed", func(t *testing.T) {
+		if err := authorizeIAMTenant(unixOperatorContext(), "tenant-a"); err != nil {
 			t.Fatalf("authorizeIAMTenant() = %v, want nil", err)
 		}
 	})
