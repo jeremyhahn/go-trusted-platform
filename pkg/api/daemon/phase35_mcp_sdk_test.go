@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -42,6 +43,16 @@ func (tokenGrantAuthz) CheckPermission(_ context.Context, subject, _, _ string) 
 	return subject == phase35MCPToken, nil
 }
 
+// ValidateToken and GetTokenClaims make tokenGrantAuthz the AuthManager too:
+// the token is the caller, and the IAM PEP decides its tool permission (#1995).
+func (tokenGrantAuthz) ValidateToken(_ context.Context, token string) (bool, error) {
+	return token == phase35MCPToken, nil
+}
+
+func (tokenGrantAuthz) GetTokenClaims(_ context.Context, token string) (map[string]interface{}, error) {
+	return map[string]interface{}{"sub": token}, nil
+}
+
 // newPhase35MCPClient serves the daemon's MCP provider through the MCP
 // server's HTTP routes and connects the SDK's MCP adapter to it, so a call
 // travels the client's tool name and arguments through the server's tool
@@ -59,6 +70,10 @@ func serveMCPProvider(t *testing.T, provider *MCPServiceProvider) *sdkmcp.Adapte
 	t.Helper()
 	config := mcp.DefaultConfig()
 	config.AuthorizationService = tokenGrantAuthz{}
+	config.AuthManager = tokenGrantAuthz{}
+	config.PEPClient = &mockSDKPEPClient{checkFunc: func(_ context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+		return &sdkiam.CheckResponse{Allowed: req.Subject.ID == phase35MCPToken}, nil
+	}}
 	return serveMCPConfig(t, provider, config)
 }
 

@@ -25,6 +25,7 @@ import (
 	"sync"
 	"testing"
 
+	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -53,12 +54,30 @@ func (a scopeGrantAuthz) CheckPermission(_ context.Context, _, resource, action 
 	return resource+":"+action == a.scope, nil
 }
 
+// ValidateToken and GetTokenClaims make scopeGrantAuthz the AuthManager too,
+// so the unscoped tool path reaches the IAM PEP with a caller (#1995).
+func (scopeGrantAuthz) ValidateToken(context.Context, string) (bool, error) { return true, nil }
+
+func (scopeGrantAuthz) GetTokenClaims(context.Context, string) (map[string]interface{}, error) {
+	return map[string]interface{}{"sub": "mcp-test-caller"}, nil
+}
+
+// pep answers the IAM PEP Check with the same grant: allowed only for scope.
+func (a scopeGrantAuthz) pep() *mockSDKPEPClient {
+	return &mockSDKPEPClient{checkFunc: func(_ context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+		return &sdkiam.CheckResponse{Allowed: req.Resource+":"+req.Action == a.scope}, nil
+	}}
+}
+
 // callMCPTool sends one tools/call through the MCP server's HTTP handler,
 // in memory, as a caller holding scope, and returns the JSON-RPC answer.
 func callMCPTool(t *testing.T, provider mcp.ServiceProvider, scope, tool string, args map[string]interface{}) mcpwire.JSONRPCResponse {
 	t.Helper()
 	config := mcp.DefaultConfig()
-	config.AuthorizationService = scopeGrantAuthz{scope: scope}
+	grant := scopeGrantAuthz{scope: scope}
+	config.AuthorizationService = grant
+	config.AuthManager = grant
+	config.PEPClient = grant.pep()
 	handler := mcp.NewServer(provider, config, logging.DefaultLogger()).Handler()
 
 	body, err := json.Marshal(mcpwire.JSONRPCRequest{
