@@ -121,7 +121,7 @@ func startFakeConsole(t *testing.T, path string, release <-chan struct{}) chan s
 
 func TestAttachConsole_MultiViewer(t *testing.T) {
 	orch := newOpsOrchestrator(t)
-	wd := t.TempDir()
+	wd := shortSocketDir(t)
 	insertVMInstance(t, orch, "vmc", true, &InstanceConfig{WorkDir: wd})
 	release := make(chan struct{})
 	inputs := startFakeConsole(t, filepath.Join(wd, "console.sock"), release)

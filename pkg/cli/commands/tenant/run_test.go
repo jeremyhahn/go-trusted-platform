@@ -236,7 +236,7 @@ func (s *inProcTenantServer) GetTenantBarrierStatus(_ context.Context, r *platfo
 // returns it with CLI flags for each output format pointing at it.
 func startTenantServer(t *testing.T) (*inProcTenantServer, func(cli.OutputFormat) *cli.CommonFlags) {
 	t.Helper()
-	sock := filepath.Join(t.TempDir(), "platformd.sock")
+	sock := filepath.Join(shortSocketDir(t), "platformd.sock")
 	lis, err := net.Listen("unix", sock)
 	require.NoError(t, err)
 	srv := &inProcTenantServer{tenants: map[string]*platformv1.Tenant{}}
