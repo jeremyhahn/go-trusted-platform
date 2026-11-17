@@ -274,3 +274,54 @@ func TestIAMPolicyMissingName_RejectedBeforeTheWire(t *testing.T) {
 		})
 	}
 }
+
+// TestIAMListPolicies_PaginationTravelsAsLimitAndOffset pins the list
+// route's paging: the server reads only ?limit= and ?offset=
+// (pkg/webservice/v1/rest/iam getPaginationParams), with 1-based pages,
+// so page 2 of 7 is limit=7&offset=7. No pagination sends no query.
+func TestIAMListPolicies_PaginationTravelsAsLimitAndOffset(t *testing.T) {
+	cases := []struct {
+		name       string
+		pagination *platformv1.PaginationRequest
+		wantQuery  string
+	}{
+		{"page2", &platformv1.PaginationRequest{Page: 2, PageSize: 7}, "limit=7&offset=7"},
+		{"page1", &platformv1.PaginationRequest{Page: 1, PageSize: 7}, "limit=7"},
+		{"absent", nil, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotPath, gotQuery string
+			var gotBody []byte
+			a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/health/live" {
+					w.WriteHeader(http.StatusOK)
+					return
+				}
+				gotPath, gotQuery = r.URL.Path, r.URL.RawQuery
+				gotBody, _ = io.ReadAll(r.Body)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{}`))
+			})
+			req := &platformv1.ListIAMPoliciesRequest{TenantId: "t1", Pagination: tc.pagination}
+			if err := a.Connection().Invoke(context.Background(),
+				platformv1.PlatformIAMService_ListPolicies_FullMethodName, req, &platformv1.ListIAMPoliciesResponse{}); err != nil {
+				t.Fatalf("Invoke: %v", err)
+			}
+			if gotPath != "/api/v1/iam/tenants/t1/policies" {
+				t.Errorf("path = %q", gotPath)
+			}
+			if gotQuery != tc.wantQuery {
+				t.Errorf("query = %q, want %q", gotQuery, tc.wantQuery)
+			}
+			if len(gotBody) > 0 {
+				var body map[string]interface{}
+				if err := json.Unmarshal(gotBody, &body); err == nil {
+					if _, ok := body["pagination"]; ok {
+						t.Errorf("body carries pagination %v; it travels in the query", body["pagination"])
+					}
+				}
+			}
+		})
+	}
+}

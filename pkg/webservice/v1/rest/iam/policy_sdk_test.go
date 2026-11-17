@@ -32,6 +32,8 @@ func TestPolicyMethodsOverSDKREST_RoundTrip(t *testing.T) {
 		updatedReq   *UpdatePolicyRequest
 		validatedYML string
 		testedReq    *TestPolicyRequest
+		listLimit    int32
+		listOffset   int32
 		seen         = map[string]string{}
 	)
 	iamClient := &mockIAMClient{
@@ -39,8 +41,9 @@ func TestPolicyMethodsOverSDKREST_RoundTrip(t *testing.T) {
 			seen["create"], createdReq = tenantID, req
 			return policy(req.Name), nil
 		},
-		listPoliciesFn: func(_ context.Context, tenantID string, _, _ int32) (*ListPoliciesResponse, error) {
+		listPoliciesFn: func(_ context.Context, tenantID string, limit, offset int32) (*ListPoliciesResponse, error) {
 			seen["list"] = tenantID
+			listLimit, listOffset = limit, offset
 			resp := &ListPoliciesResponse{Policies: []PolicyResponse{*policy("p1"), *policy("p2")}}
 			resp.Total = 2
 			return resp, nil
@@ -94,9 +97,13 @@ func TestPolicyMethodsOverSDKREST_RoundTrip(t *testing.T) {
 	assert.Equal(t, spec, createdReq.SpecYAML)
 	assert.Equal(t, int32(5), createdReq.Priority)
 
-	listResp, err := client.ListPolicies(ctx, &platformv1.ListIAMPoliciesRequest{TenantId: "tenant-a"})
+	listResp, err := client.ListPolicies(ctx, &platformv1.ListIAMPoliciesRequest{
+		TenantId: "tenant-a", Pagination: &platformv1.PaginationRequest{Page: 2, PageSize: 7},
+	})
 	require.NoError(t, err)
 	assert.Equal(t, "tenant-a", seen["list"])
+	assert.Equal(t, int32(7), listLimit, "page_size reaches the backend as the limit")
+	assert.Equal(t, int32(7), listOffset, "page 2 of 7 reaches the backend as offset 7")
 	require.Len(t, listResp.GetPolicies(), 2)
 	assertPolicy(t, listResp.GetPolicies()[1], "p2")
 	assert.Equal(t, int64(2), listResp.GetTotal())
