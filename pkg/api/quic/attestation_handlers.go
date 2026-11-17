@@ -83,13 +83,6 @@ type AttestationServiceInterface interface {
 	// GetManifest retrieves an existing attestation manifest by ID or the current manifest.
 	GetManifest(ctx context.Context, id string) (*manifest.HostManifest, error)
 
-	// ListManifests lists stored attestation manifests and the total that
-	// match the filter before pagination.
-	ListManifests(ctx context.Context, filter *AttestationManifestFilter) ([]*manifest.HostManifest, int, error)
-
-	// DeleteManifest deletes a stored attestation manifest by ID.
-	DeleteManifest(ctx context.Context, id string) error
-
 	// BuildManifest builds a new attestation manifest for the host and its workloads.
 	BuildManifest(ctx context.Context, config *AttestationBuildManifestConfig) (*manifest.HostManifest, error)
 
@@ -264,10 +257,6 @@ func (h *AttestationHandler) HandleRequest(ctx context.Context, req *quicwire.Re
 	switch req.Opcode {
 	case quicwire.OpAttestGetManifest:
 		return h.handleGetManifest(ctx, req)
-	case quicwire.OpAttestListManifests:
-		return h.handleListManifests(ctx, req)
-	case quicwire.OpAttestDeleteManifest:
-		return h.handleDeleteManifest(ctx, req)
 	case quicwire.OpAttestBuildManifest:
 		return h.handleBuildManifest(ctx, req)
 	case quicwire.OpAttestVerifyManifest:
@@ -309,74 +298,6 @@ type GetManifestRequest struct {
 type GetManifestResponse struct {
 	Manifest  *ManifestData `codec:"manifest"`
 	Timestamp int64         `codec:"timestamp"`
-}
-
-// AttestationManifestFilter narrows OpAttestListManifests. A zero StartTime
-// or EndTime is no bound.
-type AttestationManifestFilter struct {
-	HostID    string
-	StartTime time.Time
-	EndTime   time.Time
-	Limit     uint32
-	Offset    uint32
-}
-
-// ListManifestsRequest is the OpAttestListManifests payload. StartTime and
-// EndTime are RFC 3339 times with up to nanosecond precision; "" is no bound.
-type ListManifestsRequest struct {
-	HostID    string `codec:"host_id"`
-	StartTime string `codec:"start_time"`
-	EndTime   string `codec:"end_time"`
-	Limit     uint32 `codec:"limit"`
-	Offset    uint32 `codec:"offset"`
-}
-
-// ListManifestsResponse answers OpAttestListManifests.
-type ListManifestsResponse struct {
-	Manifests []*ManifestData `codec:"manifests"`
-	Total     uint32          `codec:"total"`
-	Timestamp int64           `codec:"timestamp"`
-}
-
-// DeleteManifestRequest is the OpAttestDeleteManifest payload.
-type DeleteManifestRequest struct {
-	ID string `codec:"id"`
-}
-
-// DeleteManifestResponse answers OpAttestDeleteManifest.
-type DeleteManifestResponse struct {
-	ID        string `codec:"id"`
-	Deleted   bool   `codec:"deleted"`
-	Timestamp int64  `codec:"timestamp"`
-}
-
-// ErrAttestationInvalidTimeBound refuses a list time bound that is not an
-// RFC 3339 time.
-type ErrAttestationInvalidTimeBound struct {
-	Field string
-	Value string
-	Cause error
-}
-
-func (e ErrAttestationInvalidTimeBound) Error() string {
-	return fmt.Sprintf("invalid %s %q: must be an RFC 3339 time: %v", e.Field, e.Value, e.Cause)
-}
-
-func (e ErrAttestationInvalidTimeBound) Unwrap() error { return e.Cause }
-
-// QUICStatus reports the wire status for a malformed time bound.
-func (e ErrAttestationInvalidTimeBound) QUICStatus() byte { return quicwire.StatusInvalidArgument }
-
-// parseManifestTimeBound reads one optional RFC 3339 list bound.
-func parseManifestTimeBound(field, raw string) (time.Time, error) {
-	if raw == "" {
-		return time.Time{}, nil
-	}
-	t, err := time.Parse(time.RFC3339Nano, raw)
-	if err != nil {
-		return time.Time{}, ErrAttestationInvalidTimeBound{Field: field, Value: raw, Cause: err}
-	}
-	return t, nil
 }
 
 // ManifestData represents attestation manifest data for QUIC transport
@@ -721,82 +642,6 @@ func (h *AttestationHandler) handleGetManifest(ctx context.Context, req *quicwir
 		Status:  quicwire.StatusOK,
 		Payload: payload,
 	}
-}
-
-// handleListManifests serves OpAttestListManifests.
-func (h *AttestationHandler) handleListManifests(ctx context.Context, req *quicwire.Request) *quicwire.Response {
-	if h.service == nil {
-		return h.errorResponse(quicwire.StatusUnavailable, ErrAttestationServiceNotAvailable)
-	}
-
-	var listReq ListManifestsRequest
-	if err := quicwire.DecodePayload(req.Payload, &listReq); err != nil {
-		return h.errorResponse(quicwire.StatusInvalidRequest, ErrAttestationDecodingFailed{Cause: err})
-	}
-	start, err := parseManifestTimeBound("start_time", listReq.StartTime)
-	if err != nil {
-		return h.attestationErrorResponse(err)
-	}
-	end, err := parseManifestTimeBound("end_time", listReq.EndTime)
-	if err != nil {
-		return h.attestationErrorResponse(err)
-	}
-
-	manifests, total, err := h.service.ListManifests(ctx, &AttestationManifestFilter{
-		HostID:    listReq.HostID,
-		StartTime: start,
-		EndTime:   end,
-		Limit:     listReq.Limit,
-		Offset:    listReq.Offset,
-	})
-	if err != nil {
-		h.logger.Error(err, "failed to list manifests")
-		return h.attestationErrorResponse(err)
-	}
-
-	data := make([]*ManifestData, 0, len(manifests))
-	for _, m := range manifests {
-		data = append(data, h.manifestToData(m))
-	}
-	payload, err := quicwire.EncodePayload(&ListManifestsResponse{
-		Manifests: data,
-		Total:     uint32(total),
-		Timestamp: time.Now().Unix(),
-	})
-	if err != nil {
-		return h.errorResponse(quicwire.StatusInternalError, ErrAttestationEncodingFailed{Cause: err})
-	}
-	return &quicwire.Response{Status: quicwire.StatusOK, Payload: payload}
-}
-
-// handleDeleteManifest serves OpAttestDeleteManifest.
-func (h *AttestationHandler) handleDeleteManifest(ctx context.Context, req *quicwire.Request) *quicwire.Response {
-	if h.service == nil {
-		return h.errorResponse(quicwire.StatusUnavailable, ErrAttestationServiceNotAvailable)
-	}
-
-	var delReq DeleteManifestRequest
-	if err := quicwire.DecodePayload(req.Payload, &delReq); err != nil {
-		return h.errorResponse(quicwire.StatusInvalidRequest, ErrAttestationDecodingFailed{Cause: err})
-	}
-	if delReq.ID == "" {
-		return h.errorResponse(quicwire.StatusInvalidArgument, ErrAttestationMissingManifestID)
-	}
-
-	if err := h.service.DeleteManifest(ctx, delReq.ID); err != nil {
-		h.logger.Error(err, "failed to delete manifest")
-		return h.attestationErrorResponse(err)
-	}
-
-	payload, err := quicwire.EncodePayload(&DeleteManifestResponse{
-		ID:        delReq.ID,
-		Deleted:   true,
-		Timestamp: time.Now().Unix(),
-	})
-	if err != nil {
-		return h.errorResponse(quicwire.StatusInternalError, ErrAttestationEncodingFailed{Cause: err})
-	}
-	return &quicwire.Response{Status: quicwire.StatusOK, Payload: payload}
 }
 
 // handleBuildManifest builds a new attestation manifest

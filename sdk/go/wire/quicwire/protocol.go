@@ -222,14 +222,14 @@ const (
 	// 0x6F reserved
 
 	// Attestation Operations (0x70-0x7F)
-	OpAttestQuote          byte = 0x70
-	OpAttestVerify         byte = 0x71
-	OpAttestCollectHost    byte = 0x72 // repurposed from the never-implemented OpAttestGetEK
-	OpAttestListManifests  byte = 0x73 // repurposed from the never-implemented OpAttestGetAK
-	OpAttestDeleteManifest byte = 0x74 // repurposed from the never-implemented OpAttestChallenge
-	OpAttestPollVerdicts   byte = 0x75 // repurposed from the never-implemented OpAttestResponse
-	OpAttestGetReport      byte = 0x76
-	OpAttestGetPCRs        byte = 0x77
+	OpAttestQuote        byte = 0x70
+	OpAttestVerify       byte = 0x71
+	OpAttestCollectHost  byte = 0x72 // repurposed from the never-implemented OpAttestGetEK
+	OpAttestGetAK        byte = 0x73
+	OpAttestChallenge    byte = 0x74
+	OpAttestPollVerdicts byte = 0x75 // repurposed from the never-implemented OpAttestResponse
+	OpAttestGetReport    byte = 0x76
+	OpAttestGetPCRs      byte = 0x77
 	// 0x78-0x7E reserved
 	// IDevID/IAK Extended Operations (0x7F)
 	OpHasIDevID        byte = 0x78
@@ -893,14 +893,14 @@ var opcodeNames = map[byte]string{
 	OpVMExtendedCategory: "VMExtendedCategory",
 
 	// Attestation
-	OpAttestQuote:          "AttestQuote",
-	OpAttestVerify:         "AttestVerify",
-	OpAttestCollectHost:    "AttestCollectHost",
-	OpAttestListManifests:  "AttestListManifests",
-	OpAttestDeleteManifest: "AttestDeleteManifest",
-	OpAttestPollVerdicts:   "AttestPollVerdicts",
-	OpAttestGetReport:      "AttestGetReport",
-	OpAttestGetPCRs:        "AttestGetPCRs",
+	OpAttestQuote:        "AttestQuote",
+	OpAttestVerify:       "AttestVerify",
+	OpAttestCollectHost:  "AttestCollectHost",
+	OpAttestGetAK:        "AttestGetAK",
+	OpAttestChallenge:    "AttestChallenge",
+	OpAttestPollVerdicts: "AttestPollVerdicts",
+	OpAttestGetReport:    "AttestGetReport",
+	OpAttestGetPCRs:      "AttestGetPCRs",
 
 	// Certificate
 	OpCertIssue:    "CertIssue",
