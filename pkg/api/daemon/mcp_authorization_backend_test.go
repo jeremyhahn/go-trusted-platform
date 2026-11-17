@@ -17,6 +17,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -44,6 +46,27 @@ func TestCreateMCPServer_RefusesWithoutAnAuthorizationBackend(t *testing.T) {
 	var want ErrMCPAuthorizationBackendRequired
 	assert.True(t, errors.As(err, &want), "error is %T, want ErrMCPAuthorizationBackendRequired", err)
 	assert.Nil(t, server, "no server may exist when the backend is missing")
+}
+
+// TestCreateMCPServer_QuicBaaSWithoutPlatformTokenValidatorFailsClosed covers
+// the case that used to pick the legacy QuicBaaS adapter (#1933): a QuicBaaS
+// App is configured but no platform-token validator is shared. The tenantless
+// adapter is gone, so createMCPServer must refuse rather than fall back.
+func TestCreateMCPServer_QuicBaaSWithoutPlatformTokenValidatorFailsClosed(t *testing.T) {
+	config := testConfig("/tmp/test-mcp-quicbaas-no-ptv.sock")
+	config.EnableMCP = false
+	d, err := New(config)
+	require.NoError(t, err)
+	d.config.App = &app.App{}
+	d.platformTokenValidatorShared = nil
+	d.config.SkipIAMValidation = false
+	d.config.MCPConfig = &MCPConfig{Transport: "stdio"}
+
+	server, err := d.createMCPServer()
+	require.Error(t, err, "a QuicBaaS App alone must not authorize MCP")
+	var want ErrMCPAuthorizationBackendRequired
+	assert.True(t, errors.As(err, &want), "error is %T, want ErrMCPAuthorizationBackendRequired", err)
+	assert.Nil(t, server, "no server may exist without the platform-token validator")
 }
 
 // TestCreateMCPServer_SkipIAMValidationIsTheOnlyOptOut pins the explicit
