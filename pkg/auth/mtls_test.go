@@ -98,6 +98,7 @@ func defaultTestCertOptions() testCertOptions {
 	return testCertOptions{
 		commonName:     "Test User",
 		organization:   []string{"Test Org"},
+		orgUnit:        []string{"Test Tenant"},
 		notBefore:      now.Add(-1 * time.Hour),
 		notAfter:       now.Add(24 * time.Hour),
 		keyUsage:       x509.KeyUsageDigitalSignature,
@@ -332,9 +333,10 @@ func TestMTLSAdapter_ExtractTenant(t *testing.T) {
 		config: DefaultMTLSConfig(),
 	}
 
-	t.Run("extract tenant from organization", func(t *testing.T) {
+	t.Run("extract tenant from organizational unit", func(t *testing.T) {
 		opts := defaultTestCertOptions()
 		opts.organization = []string{"Acme Corp"}
+		opts.orgUnit = []string{"tenant-ou"}
 		cert := createTestCertificate(t, opts)
 
 		tenant, err := adapter.ExtractTenant(cert)
@@ -342,8 +344,20 @@ func TestMTLSAdapter_ExtractTenant(t *testing.T) {
 			t.Fatalf("ExtractTenant failed: %v", err)
 		}
 
-		if tenant != "Acme Corp" {
-			t.Errorf("tenant = %v, want Acme Corp", tenant)
+		if tenant != "tenant-ou" {
+			t.Errorf("tenant = %v, want tenant-ou", tenant)
+		}
+	})
+
+	t.Run("organization without OU is refused", func(t *testing.T) {
+		opts := defaultTestCertOptions()
+		opts.organization = []string{"Acme Corp"}
+		opts.orgUnit = nil
+		cert := createTestCertificate(t, opts)
+
+		tenant, err := adapter.ExtractTenant(cert)
+		if _, ok := err.(ErrTenantNotFound); !ok {
+			t.Fatalf("ExtractTenant = %q, %v; want ErrTenantNotFound", tenant, err)
 		}
 	})
 
@@ -363,20 +377,16 @@ func TestMTLSAdapter_ExtractTenant(t *testing.T) {
 		}
 	})
 
-	t.Run("fallback to organization when primary empty", func(t *testing.T) {
+	t.Run("no fallback to organization when primary empty", func(t *testing.T) {
 		adapter.config.TenantField = IdentityFieldSerialNumber
 		opts := defaultTestCertOptions()
 		opts.serialNumber = ""
 		opts.organization = []string{"Fallback Org"}
 		cert := createTestCertificate(t, opts)
 
-		tenant, err := adapter.ExtractTenant(cert)
-		if err != nil {
-			t.Fatalf("ExtractTenant failed: %v", err)
-		}
-
-		if tenant != "Fallback Org" {
-			t.Errorf("tenant = %v, want Fallback Org", tenant)
+		_, err := adapter.ExtractTenant(cert)
+		if _, ok := err.(ErrTenantNotFound); !ok {
+			t.Fatalf("Expected ErrTenantNotFound, got %v", err)
 		}
 	})
 
@@ -521,14 +531,13 @@ func TestMTLSAdapter_Authenticate(t *testing.T) {
 		}
 	})
 
-	t.Run("uses default tenant when extraction fails", func(t *testing.T) {
+	t.Run("no OU is refused even with a default tenant", func(t *testing.T) {
 		opts := defaultTestCertOptions()
-		opts.organization = nil
+		opts.orgUnit = nil
 		cert := createTestCertificate(t, opts)
 
 		config := DefaultMTLSConfig()
 		config.DefaultTenant = "default-tenant"
-		config.TenantField = IdentityFieldSerialNumber
 		config.TrustedRoots = selfRoots(cert)
 
 		adapter := &MTLSAdapter{
@@ -537,12 +546,8 @@ func TestMTLSAdapter_Authenticate(t *testing.T) {
 		}
 
 		identity, err := adapter.Authenticate(context.Background(), cert)
-		if err != nil {
-			t.Fatalf("Authenticate failed: %v", err)
-		}
-
-		if identity.TenantID != "default-tenant" {
-			t.Errorf("TenantID = %v, want default-tenant", identity.TenantID)
+		if _, ok := err.(ErrTenantNotFound); !ok {
+			t.Fatalf("Authenticate = %+v, %v; want ErrTenantNotFound", identity, err)
 		}
 	})
 
@@ -572,6 +577,7 @@ func TestMTLSAdapter_Authenticate(t *testing.T) {
 		opts := defaultTestCertOptions()
 		opts.emailAddresses = []string{"user@acme.com"}
 		opts.organization = []string{"Acme Corp"}
+		opts.orgUnit = []string{"acme-tenant"}
 		cert := createTestCertificate(t, opts)
 
 		config := DefaultMTLSConfig()
@@ -589,8 +595,8 @@ func TestMTLSAdapter_Authenticate(t *testing.T) {
 		if identity.ID != "user@acme.com" {
 			t.Errorf("ID = %v, want user@acme.com", identity.ID)
 		}
-		if identity.TenantID != "Acme Corp" {
-			t.Errorf("TenantID = %v, want Acme Corp", identity.TenantID)
+		if identity.TenantID != "acme-tenant" {
+			t.Errorf("TenantID = %v, want acme-tenant", identity.TenantID)
 		}
 		if identity.Email != "user@acme.com" {
 			t.Errorf("Email = %v, want user@acme.com", identity.Email)
@@ -976,6 +982,7 @@ func TestMTLSAdapterFromRoots_Authenticate(t *testing.T) {
 
 	leaf := createTestCertificate(t, testCertOptions{
 		commonName:  "client-1",
+		orgUnit:     []string{"tenant-1"},
 		notBefore:   time.Now().Add(-time.Hour),
 		notAfter:    time.Now().Add(time.Hour),
 		keyUsage:    x509.KeyUsageDigitalSignature,
@@ -989,7 +996,7 @@ func TestMTLSAdapterFromRoots_Authenticate(t *testing.T) {
 	self := x509.NewCertPool()
 	self.AddCert(leaf)
 	trusted, err := NewMTLSAdapterFromRoots(logger, self,
-		WithIdentityField(IdentityFieldCN), WithDefaultTenant("default"))
+		WithIdentityField(IdentityFieldCN))
 	if err != nil {
 		t.Fatalf("NewMTLSAdapterFromRoots: %v", err)
 	}
@@ -1000,8 +1007,8 @@ func TestMTLSAdapterFromRoots_Authenticate(t *testing.T) {
 	if ident.ID != "client-1" {
 		t.Fatalf("ID = %q, want client-1", ident.ID)
 	}
-	if ident.TenantID != "default" {
-		t.Fatalf("TenantID = %q, want default", ident.TenantID)
+	if ident.TenantID != "tenant-1" {
+		t.Fatalf("TenantID = %q, want tenant-1", ident.TenantID)
 	}
 }
 
@@ -1086,7 +1093,7 @@ func newRealTestCA(t *testing.T) quicbaasca.CACertificateAuthority {
 func issueClientAuthOnly(t *testing.T, ca quicbaasca.CACertificateAuthority, cn string) *x509.Certificate {
 	t.Helper()
 	issued, err := ca.IssueCertificate(context.Background(), &quicbaasca.CACertificateRequest{
-		Subject:     quicbaasca.CASubject{CommonName: cn, Organization: "Test Org", Country: "US"},
+		Subject:     quicbaasca.CASubject{CommonName: cn, Organization: "Test Org", OrganizationalUnit: "Test Tenant", Country: "US"},
 		Valid:       1,
 		KeyUsage:    x509.KeyUsageDigitalSignature,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
