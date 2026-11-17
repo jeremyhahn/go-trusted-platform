@@ -17,6 +17,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"strings"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -24,6 +25,9 @@ import (
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+
+	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 )
@@ -47,6 +51,15 @@ type MTLSInterceptorConfig struct {
 	// SkipMethods lists gRPC method names that bypass mTLS authentication.
 	// Health check endpoints are typically skipped.
 	SkipMethods []string
+
+	// PEP decides, per method, whether the certificate principal holds the
+	// method's permission. A nil PEP refuses every non-skipped method.
+	PEP quicbaassdk.IAMPEPClient
+
+	// Permission maps a full gRPC method name to its "resource:action"
+	// permission. Nil means grpcapi.ScopeForMethod. An unmapped method is
+	// refused.
+	Permission func(fullMethod string) string
 }
 
 // ErrMTLSNoPeerInfo indicates no peer info was found in the gRPC context.
@@ -91,6 +104,9 @@ func MTLSUnaryInterceptor(cfg *MTLSInterceptorConfig) grpc.UnaryServerIntercepto
 		if err != nil {
 			return nil, err
 		}
+		if err := authorizeMTLSMethod(enrichedCtx, cfg, info.FullMethod); err != nil {
+			return nil, err
+		}
 
 		return handler(enrichedCtx, req)
 	}
@@ -115,6 +131,9 @@ func MTLSStreamInterceptor(cfg *MTLSInterceptorConfig) grpc.StreamServerIntercep
 		// Extract and validate client certificate
 		enrichedCtx, err := authenticateFromPeer(ss.Context(), cfg)
 		if err != nil {
+			return err
+		}
+		if err := authorizeMTLSMethod(enrichedCtx, cfg, info.FullMethod); err != nil {
 			return err
 		}
 
@@ -173,6 +192,42 @@ func authenticateFromPeer(ctx context.Context, cfg *MTLSInterceptorConfig) (cont
 
 	// Attach identity to context
 	return context.WithValue(ctx, ContextKeyIdentity, identity), nil
+}
+
+// authorizeMTLSMethod asks the PEP whether the certificate principal attached
+// to ctx holds the permission of fullMethod. An unmapped method, a missing
+// PEP or a deny is PermissionDenied; a PEP failure is Unavailable.
+func authorizeMTLSMethod(ctx context.Context, cfg *MTLSInterceptorConfig, fullMethod string) error {
+	permission := grpcapi.ScopeForMethod
+	if cfg.Permission != nil {
+		permission = cfg.Permission
+	}
+	resource, action, ok := strings.Cut(permission(fullMethod), ":")
+	if !ok || resource == "" || action == "" {
+		return status.Errorf(codes.PermissionDenied, "mtls: method %s has no permission mapping", fullMethod)
+	}
+	if cfg.PEP == nil {
+		return status.Errorf(codes.PermissionDenied, "mtls: no policy enforcement point to authorize %s", fullMethod)
+	}
+	identity := IdentityFromContext(ctx)
+	if identity == nil {
+		return status.Error(codes.PermissionDenied, "mtls: no certificate principal")
+	}
+	allowed, err := checkPrincipalPermission(ctx, cfg.PEP, &tokenPrincipal{
+		Subject:  identity.ID,
+		TenantID: identity.TenantID,
+	}, resource, action)
+	if err != nil {
+		if cfg.Logger != nil {
+			cfg.Logger.Debug("mtls: permission check failed", "method", fullMethod, "error", err)
+		}
+		return status.Errorf(codes.Unavailable, "mtls: permission check for %s failed: %v", fullMethod, err)
+	}
+	if !allowed {
+		return status.Errorf(codes.PermissionDenied, "mtls: %s (tenant %s) lacks %s:%s for %s",
+			identity.ID, identity.TenantID, resource, action, fullMethod)
+	}
+	return nil
 }
 
 // extractClientCerts returns client certificates from TLS connection state.
