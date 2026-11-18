@@ -133,6 +133,7 @@ type RevocationBlobs interface {
 	Get(ctx context.Context, id uint64) (*entities.Blob, error)
 	Save(ctx context.Context, blob *entities.Blob) error
 	Delete(ctx context.Context, blob *entities.Blob) error
+	Page(ctx context.Context, query datastore.PageQuery) (datastore.PageResult[*entities.Blob], error)
 }
 
 // revocationBlobKind tags a revocation record, so a blob of another kind
@@ -148,10 +149,63 @@ type revocationRecord struct {
 // BlobRevocationStore keeps revocations in the daemon's persistent store,
 // so a signed-out token stays refused after a restart and on every
 // platformd instance sharing that store. A record lives until the token's
-// own expiry; an expired record is deleted when it is next looked up (the
-// token is refused as expired before revocation is consulted anyway).
+// own expiry. An expired token is refused before revocation is consulted,
+// so expired records are removed by the sweep each logout runs (at most
+// once per revocationSweepInterval), and also when one is looked up.
 type BlobRevocationStore struct {
 	blobs RevocationBlobs
+
+	// mu guards lastSweep.
+	mu sync.Mutex
+	// lastSweep is when the last successful sweep ran; zero until then.
+	lastSweep time.Time
+}
+
+// revocationSweepInterval is the least time between two sweeps the logout
+// path runs.
+const revocationSweepInterval = time.Hour
+
+// revocationSweepPageSize is how many blobs a sweep reads per page.
+const revocationSweepPageSize = 100
+
+// Sweep deletes every revocation record that expired before now and
+// returns how many it deleted. WebAuthn session blobs and revocations
+// with no expiry are never touched. It reads every page before deleting,
+// so its deletes never shift the pages it reads.
+func (store *BlobRevocationStore) Sweep(ctx context.Context, now time.Time) (int, error) {
+	var expired []*entities.Blob
+	for page := 1; ; page++ {
+		result, err := store.blobs.Page(ctx, datastore.PageQuery{
+			Page: page, PageSize: revocationSweepPageSize, SortOrder: datastore.SortAscending,
+		})
+		if err != nil {
+			return 0, fmt.Errorf("%w: sweep: %w", ErrRevocationUnavailable, err)
+		}
+		for _, blob := range result.Entities {
+			if blob == nil {
+				continue
+			}
+			var record revocationRecord
+			if json.Unmarshal(blob.Bytes, &record) != nil ||
+				record.Kind != revocationBlobKind || blob.ID != revocationBlobID(record.Key) {
+				continue
+			}
+			if record.Expires != 0 && time.Unix(record.Expires, 0).Before(now) {
+				expired = append(expired, blob)
+			}
+		}
+		if !result.HasMore || len(result.Entities) == 0 {
+			break
+		}
+	}
+	deleted := 0
+	for _, blob := range expired {
+		if err := store.blobs.Delete(ctx, blob); err != nil {
+			return deleted, fmt.Errorf("%w: sweep: %w", ErrRevocationUnavailable, err)
+		}
+		deleted++
+	}
+	return deleted, nil
 }
 
 // NewBlobRevocationStore returns a RevocationStore over blobs.
@@ -170,7 +224,7 @@ func revocationBlobID(key string) uint64 {
 }
 
 // Revoke implements RevocationStore.
-func (store *BlobRevocationStore) Revoke(ctx context.Context, key string, expiry, _ time.Time) error {
+func (store *BlobRevocationStore) Revoke(ctx context.Context, key string, expiry, now time.Time) error {
 	record := revocationRecord{Kind: revocationBlobKind, Key: key}
 	if !expiry.IsZero() {
 		record.Expires = expiry.Unix()
@@ -181,6 +235,17 @@ func (store *BlobRevocationStore) Revoke(ctx context.Context, key string, expiry
 	}
 	if err := store.blobs.Save(ctx, entities.NewBlob(revocationBlobID(key), bytes)); err != nil {
 		return fmt.Errorf("%w: save: %w", ErrRevocationUnavailable, err)
+	}
+	// Only a logout adds a record, so sweeping on the logout path bounds
+	// the store; the first logout after a restart sweeps the records an
+	// earlier process left. A failed sweep does not fail the logout (the
+	// record is saved) and the next Revoke retries it.
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.lastSweep.IsZero() || now.Sub(store.lastSweep) >= revocationSweepInterval {
+		if _, err := store.Sweep(ctx, now); err == nil {
+			store.lastSweep = now
+		}
 	}
 	return nil
 }
