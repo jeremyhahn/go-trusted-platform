@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -175,6 +176,74 @@ func TestTPMTokenStrategy_StandsAsideWhileFirstbootSealPending(t *testing.T) {
 	s.sealPending = func() bool { return false }
 	if !s.CanUnlock(context.Background(), tpmTokenVolume()) {
 		t.Fatal("CanUnlock = false after the seal is confirmed")
+	}
+}
+
+// The upgrade seals on the ESP are deleted only by a TPM-PCR unlock, so the
+// token stands aside while they exist and TPM-PCR's cleanup runs (#1692).
+func TestTPMTokenStrategy_StandsAsideWhileUpgradeSealsPresent(t *testing.T) {
+	platform, _ := tpmTokenPlatform(map[int]*luks.Token{
+		2: {Type: "systemd-tpm2", Keyslots: []string{"4"}, TPM2Blob: "c2VhbGVk"},
+	})
+	s := NewTPMTokenStrategy(platform, logging.DefaultLogger())
+	fake := &fakeTokenUnsealer{passphrase: []byte("sealed-pass")}
+	s.unsealer = fake
+	s.sealPending = func() bool { return false }
+	s.upgradeSealsPending = func() bool { return true }
+
+	if s.CanUnlock(context.Background(), tpmTokenVolume()) {
+		t.Fatal("CanUnlock = true while upgrade seals are on the ESP")
+	}
+
+	pcr := &tpmPCRStandIn{}
+	marker := t.TempDir() + "/unlock-strategy"
+	chain := NewStrategyChain(logging.DefaultLogger())
+	chain.SetMarkerPath(marker)
+	chain.Add(s)
+	chain.Add(pcr)
+	if err := chain.Execute(context.Background(), tpmTokenVolume()); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !pcr.unlocked || fake.calls != 0 {
+		t.Fatalf("TPM-PCR unlocked = %v, token unseals = %d; want TPM-PCR to win and no token unseal", pcr.unlocked, fake.calls)
+	}
+	got, err := os.ReadFile(marker)
+	if err != nil || strings.TrimSpace(string(got)) != StrategyNameTPMPCR {
+		t.Fatalf("marker = %q (%v), want %q", got, err, StrategyNameTPMPCR)
+	}
+
+	// Once TPM-PCR has removed the upgrade seals the token is used again.
+	s.upgradeSealsPending = func() bool { return false }
+	if !s.CanUnlock(context.Background(), tpmTokenVolume()) {
+		t.Fatal("CanUnlock = false after the upgrade seals are gone")
+	}
+}
+
+func TestUpgradeSealsUnder(t *testing.T) {
+	writeSeal := func(t *testing.T, root, name string) {
+		t.Helper()
+		p := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(p, []byte("seal"), 0o600); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+
+	root := t.TempDir()
+	if upgradeSealsUnder(root) {
+		t.Fatal("upgradeSealsUnder = true on an empty ESP")
+	}
+	writeSeal(t, root, pcrUpgradePublicFile)
+	if !upgradeSealsUnder(root) {
+		t.Fatal("upgradeSealsUnder = false with the upgrade .pub present")
+	}
+
+	privRoot := t.TempDir()
+	writeSeal(t, privRoot, pcrUpgradePrivateFile)
+	if !upgradeSealsUnder(privRoot) {
+		t.Fatal("upgradeSealsUnder = false with the upgrade .priv present")
 	}
 }
 
