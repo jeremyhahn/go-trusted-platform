@@ -748,6 +748,23 @@ func TestService_QuarantineDevice_Valid(t *testing.T) {
 	assert.Equal(t, StateQuarantined, retrieved.State)
 }
 
+func TestService_GetEvents_ListsAQuarantine(t *testing.T) {
+	svc, _ := initializeTestService(t)
+	ctx := context.Background()
+
+	device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
+	require.NoError(t, err)
+	require.NoError(t, svc.QuarantineDevice(ctx, device.ID, "security violation"))
+
+	events, err := svc.GetEvents(ctx, device.ID)
+	require.NoError(t, err)
+	require.Len(t, events, 2)
+	assert.Equal(t, EventDeviceDiscovered, events[0].EventType)
+	assert.Equal(t, EventQuarantined, events[1].EventType)
+	assert.Equal(t, StateQuarantined, events[1].ToState)
+	assert.Equal(t, "security violation", events[1].Details["reason"])
+}
+
 func TestService_QuarantineDevice_NotFound(t *testing.T) {
 	svc, _ := initializeTestService(t)
 	ctx := context.Background()
