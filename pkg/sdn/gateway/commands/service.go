@@ -100,8 +100,9 @@ type serviceDeps struct {
 	// InstallVPNPeer refused.
 	vpnDataPlanes func(cfg *ServeConfig, gw *gateway.Gateway, logger *slog.Logger) ([]vpn.ManagedDataPlane, error)
 	// removeStaleVPNHub removes the WireGuard hub device a killed
-	// predecessor left, with its peers, when the datapath child hosts no
-	// plane whose start would remove it (#1698). Nil does nothing.
+	// predecessor left, with its peers. The kernel-class child calls it at
+	// start, before any fallible step, whether or not it hosts a plane
+	// (#1698). Nil does nothing.
 	removeStaleVPNHub func(logger *slog.Logger) error
 }
 
@@ -139,6 +140,15 @@ func serveProcess(ctx context.Context, name string, opts serviceOptions, deps se
 	}
 	if err := deps.enterHardened(def, opts.uid, opts.gid); err != nil {
 		return err
+	}
+	// A freshly started kernel-class child owns no hub yet, so a hub device
+	// of its name is a killed predecessor's: its peers would otherwise pass
+	// traffic past their leases through every startup step below that can
+	// fail, so it goes before configuration or assembly (Codex #1717 round 2).
+	if def.Class == process.ClassKernel && deps.removeStaleVPNHub != nil {
+		if err := deps.removeStaleVPNHub(logger); err != nil {
+			return err
+		}
 	}
 	// The root command read the configuration too, but treats a read error
 	// as a warning; a child without its configuration must not start.
@@ -381,10 +391,9 @@ func datapathServices(def process.Definition, gw *gateway.Gateway) (ipc.Services
 // in a vpn.PlaneHost. Only the kernel-class child, which holds
 // CAP_NET_ADMIN, hosts planes, and only while the management VPN is
 // enabled; otherwise, or when the factory builds none, it returns nil and
-// every InstallVPNPeer keeps its refusal. A kernel-class child that hosts
-// no plane removes the hub device a killed predecessor left, since no
-// hub's Up will: its peers would otherwise pass traffic past their leases
-// while every removal RPC is refused.
+// every InstallVPNPeer keeps its refusal. A killed predecessor's hub is not
+// removed here: serveProcess removes it at kernel-child start, before any
+// fallible step.
 func (d serviceDeps) datapathVPNPlanes(def process.Definition, cfg *ServeConfig, gw *gateway.Gateway, logger *slog.Logger) (*vpn.PlaneHost, error) {
 	if def.Class != process.ClassKernel {
 		return nil, nil
@@ -397,11 +406,6 @@ func (d serviceDeps) datapathVPNPlanes(def process.Definition, cfg *ServeConfig,
 		}
 	}
 	if len(planes) == 0 {
-		if d.removeStaleVPNHub != nil {
-			if err := d.removeStaleVPNHub(logger); err != nil {
-				return nil, err
-			}
-		}
 		return nil, nil
 	}
 	return vpn.NewPlaneHost(planes...)
