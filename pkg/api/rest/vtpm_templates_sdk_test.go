@@ -75,11 +75,18 @@ func connectDaemonVTPMSDK(t *testing.T, service VTPMServiceInterface) platformv1
 	return platformv1.NewVTPMServiceClient(adapter.Connection())
 }
 
-func assertTemplatePaths(t *testing.T, id string, tpl *platformv1.Template) {
+// assertDaemonTemplate checks a template the daemon replied with, decoded
+// through the SDK: the daemon's reply carries no on-disk paths, even when the
+// service's template has them, so the SDK decodes it with empty paths.
+func assertDaemonTemplate(t *testing.T, id string, tpl *platformv1.Template) {
 	t.Helper()
-	assert.Equal(t, "/var/lib/vtpm/templates/"+id+"/tpm", tpl.GetTpmStateDir())
-	assert.Equal(t, "/var/lib/vtpm/templates/"+id+"/OVMF_VARS.fd", tpl.GetNvramPath())
-	assert.Equal(t, "/var/lib/vtpm/templates/"+id+"/keys", tpl.GetSecureBootKeysDir())
+	assert.Equal(t, id, tpl.GetId())
+	assert.Equal(t, "golden image", tpl.GetDescription())
+	assert.Equal(t, platformv1.EKAlgorithm_EK_ALGORITHM_ECC, tpl.GetEkAlgorithm())
+	assert.True(t, tpl.GetSecureBootEnabled())
+	assert.Empty(t, tpl.GetTpmStateDir())
+	assert.Empty(t, tpl.GetNvramPath())
+	assert.Empty(t, tpl.GetSecureBootKeysDir())
 }
 
 func seededTemplateService(ids ...string) *mockVTPMService {
@@ -98,38 +105,36 @@ func seededTemplateService(ids ...string) *mockVTPMService {
 	return svc
 }
 
-func TestDaemonSDKREST_CreateTemplateCarriesPaths(t *testing.T) {
+func TestDaemonSDKREST_CreateTemplateDecodes(t *testing.T) {
 	client := connectDaemonVTPMSDK(t, &pathedTemplateService{newMockVTPMService()})
 
 	resp, err := client.CreateTemplate(context.Background(), &platformv1.CreateTemplateRequest{
 		Options: &platformv1.CreateTemplateOptions{
 			Id:                "golden",
+			Description:       "golden image",
 			EkAlgorithm:       platformv1.EKAlgorithm_EK_ALGORITHM_ECC,
 			SecureBootEnabled: true,
 		},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "golden", resp.GetTemplate().GetId())
-	assertTemplatePaths(t, "golden", resp.GetTemplate())
+	assertDaemonTemplate(t, "golden", resp.GetTemplate())
 }
 
-func TestDaemonSDKREST_GetTemplateCarriesPaths(t *testing.T) {
+func TestDaemonSDKREST_GetTemplateDecodes(t *testing.T) {
 	client := connectDaemonVTPMSDK(t, seededTemplateService("golden"))
 
 	resp, err := client.GetTemplate(context.Background(), &platformv1.GetTemplateRequest{Id: "golden"})
 	require.NoError(t, err)
-	assert.Equal(t, "golden image", resp.GetTemplate().GetDescription())
-	assert.Equal(t, platformv1.EKAlgorithm_EK_ALGORITHM_ECC, resp.GetTemplate().GetEkAlgorithm())
-	assertTemplatePaths(t, "golden", resp.GetTemplate())
+	assertDaemonTemplate(t, "golden", resp.GetTemplate())
 }
 
-func TestDaemonSDKREST_ListTemplatesCarryPaths(t *testing.T) {
+func TestDaemonSDKREST_ListTemplatesDecode(t *testing.T) {
 	client := connectDaemonVTPMSDK(t, seededTemplateService("golden"))
 
 	resp, err := client.ListTemplates(context.Background(), &platformv1.ListTemplatesRequest{})
 	require.NoError(t, err)
 	require.Len(t, resp.GetTemplates(), 1)
-	assertTemplatePaths(t, "golden", resp.GetTemplates()[0])
+	assertDaemonTemplate(t, "golden", resp.GetTemplates()[0])
 }
 
 func TestDaemonSDKREST_CloneTemplateCarriesManifest(t *testing.T) {

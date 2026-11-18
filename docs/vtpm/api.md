@@ -69,9 +69,10 @@ The REST create bodies are flat and snake_case (`mode`, `hostname`,
 `secure_boot_enabled`), and an unknown field is 400. The JavaScript SDK maps
 its `options` object onto that body, sending `UNSPECIFIED` as an omitted field.
 
-A template reply, from the daemon (`pkg/api/rest`) and the web service alike,
-carries the template's on-disk paths: `tpm_state_dir`, `nvram_path` and
-`secure_boot_keys_dir`. The daemon's clone reply is a flat bundle (`hostname`,
+The web service's template reply carries the template's on-disk paths:
+`tpm_state_dir`, `nvram_path` and `secure_boot_keys_dir`. The daemon's
+(`pkg/api/rest`) template reply does not, and the Go SDK decodes it with empty
+paths. The daemon's clone reply is a flat bundle (`hostname`,
 `labels`, `ek_algorithm`, `secure_boot_enabled` and `ek_certificate` at the top
 level, Secure Boot key fingerprints under `secure_boot_keys`); the Go SDK
 decodes it into the bundle's `Manifest`.
