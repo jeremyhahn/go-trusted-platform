@@ -79,6 +79,121 @@ func TestBMCPower_PathTemplated(t *testing.T) {
 	}
 }
 
+// bmcCapture records one request the BMC route tests send.
+type bmcCapture struct {
+	method string
+	path   string
+	body   map[string]interface{}
+	calls  int
+}
+
+// bmcCaptureServer answers every request with reply and records it.
+func bmcCaptureServer(t *testing.T, reply string) (*Adapter, *bmcCapture) {
+	t.Helper()
+	c := &bmcCapture{}
+	a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
+		c.calls++
+		c.method = r.Method
+		c.path = r.URL.Path
+		c.body = nil
+		if r.Body != nil {
+			_ = json.NewDecoder(r.Body).Decode(&c.body)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(reply))
+	})
+	// Connect probes the health route; count only what the test sends.
+	*c = bmcCapture{}
+	return a, c
+}
+
+func TestBMCGetWebCertificate_PathTemplated(t *testing.T) {
+	a, c := bmcCaptureServer(t, `{"success":true,"payload":{"subject":"CN=bmc42","issuer":"CN=ca","not_after":"2027-01-02T03:04:05Z","days_remaining":47}}`)
+
+	resp := &platformv1.BMCGetWebCertificateResponse{}
+	err := a.Connection().Invoke(context.Background(), "/platform.v1.BMCService/GetWebCertificate",
+		&platformv1.BMCGetWebCertificateRequest{ProfileId: 42}, resp)
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if c.method != http.MethodGet {
+		t.Errorf("method = %q, want GET", c.method)
+	}
+	if c.path != "/api/v1/bmc/42/cert" {
+		t.Errorf("path = %q, want /api/v1/bmc/42/cert", c.path)
+	}
+	if resp.GetSubject() != "CN=bmc42" {
+		t.Errorf("Subject = %q, want CN=bmc42", resp.GetSubject())
+	}
+	if got := resp.GetNotAfter().AsTime().UTC().Format("2006-01-02T15:04:05Z"); got != "2027-01-02T03:04:05Z" {
+		t.Errorf("NotAfter = %s, want 2027-01-02T03:04:05Z", got)
+	}
+	if resp.GetDaysRemaining() != 47 {
+		t.Errorf("DaysRemaining = %d, want 47", resp.GetDaysRemaining())
+	}
+}
+
+func TestBMCDeleteUser_PathTemplated(t *testing.T) {
+	a, c := bmcCaptureServer(t, `{"success":true,"payload":{"status":"ok"}}`)
+
+	err := a.Connection().Invoke(context.Background(), "/platform.v1.BMCService/DeleteUser",
+		&platformv1.BMCDeleteUserRequest{ProfileId: 42, Slot: 3}, &platformv1.BMCDeleteUserResponse{})
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if c.method != http.MethodDelete {
+		t.Errorf("method = %q, want DELETE", c.method)
+	}
+	if c.path != "/api/v1/bmc/42/users/3" {
+		t.Errorf("path = %q, want /api/v1/bmc/42/users/3", c.path)
+	}
+}
+
+func TestBMCSetUserPassword_PathTemplated(t *testing.T) {
+	a, c := bmcCaptureServer(t, `{"success":true,"payload":{"status":"ok"}}`)
+
+	err := a.Connection().Invoke(context.Background(), "/platform.v1.BMCService/SetUserPassword",
+		&platformv1.BMCSetUserPasswordRequest{ProfileId: 42, Slot: 3, Password: "s3cret"},
+		&platformv1.BMCSetUserPasswordResponse{})
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if c.method != http.MethodPut {
+		t.Errorf("method = %q, want PUT", c.method)
+	}
+	if c.path != "/api/v1/bmc/42/users/3/password" {
+		t.Errorf("path = %q, want /api/v1/bmc/42/users/3/password", c.path)
+	}
+	if c.body["password"] != "s3cret" {
+		t.Errorf("body password = %v, want s3cret (body %v)", c.body["password"], c.body)
+	}
+	for _, k := range []string{"profile_id", "slot"} {
+		if _, has := c.body[k]; has {
+			t.Errorf("body still contains %s: %v", k, c.body)
+		}
+	}
+}
+
+func TestBMCUserSlotZero_Refused(t *testing.T) {
+	a, c := bmcCaptureServer(t, `{"success":true,"payload":{"status":"ok"}}`)
+	conn := a.Connection()
+
+	err := conn.Invoke(context.Background(), "/platform.v1.BMCService/DeleteUser",
+		&platformv1.BMCDeleteUserRequest{ProfileId: 42}, &platformv1.BMCDeleteUserResponse{})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("DeleteUser slot 0: code = %v, want InvalidArgument (err %v)", status.Code(err), err)
+	}
+	err = conn.Invoke(context.Background(), "/platform.v1.BMCService/SetUserPassword",
+		&platformv1.BMCSetUserPasswordRequest{ProfileId: 42, Password: "x"}, &platformv1.BMCSetUserPasswordResponse{})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("SetUserPassword slot 0: code = %v, want InvalidArgument (err %v)", status.Code(err), err)
+	}
+	if c.calls != 0 {
+		t.Errorf("server saw %d requests, want 0", c.calls)
+	}
+}
+
 func TestBMCPower_ZeroProfileIDRejected(t *testing.T) {
 	var apiHits int
 	a, _ := adapterAgainst(t, func(w http.ResponseWriter, r *http.Request) {
