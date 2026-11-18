@@ -18,10 +18,13 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	qbstore "github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/kvstore"
 	"github.com/stretchr/testify/require"
 )
 
@@ -31,6 +34,9 @@ type memoryBlobs struct {
 	mu    sync.Mutex
 	blobs map[uint64][]byte
 	fail  error
+	// miss, when set, is the error Get returns for an absent blob, so a
+	// test can answer with a production DAO's own not-found type.
+	miss error
 }
 
 func (m *memoryBlobs) Get(_ context.Context, id uint64) (*entities.Blob, error) {
@@ -41,6 +47,9 @@ func (m *memoryBlobs) Get(_ context.Context, id uint64) (*entities.Blob, error) 
 	}
 	bytes, ok := m.blobs[id]
 	if !ok {
+		if m.miss != nil {
+			return nil, m.miss
+		}
 		return nil, datastore.ErrRecordNotFound
 	}
 	return entities.NewBlob(id, append([]byte(nil), bytes...)), nil
@@ -131,4 +140,34 @@ func TestRevocation_UnreachableStoreFailsClosed(t *testing.T) {
 	err = verifyString(issuer, bearer)
 	require.Error(t, err)
 	require.NotErrorIs(t, err, ErrTokenRevoked)
+}
+
+// The production blob DAOs answer a miss with their own ErrNotFound types,
+// not the bare datastore sentinel. A token that was never revoked must still
+// verify over either of them, and a revoked one must still be refused.
+func TestRevocation_ProductionDAOMissIsNotRevoked(t *testing.T) {
+	t.Parallel()
+	for name, miss := range map[string]error{
+		"quicbaas": qbstore.ErrNotFound{EntityType: "Blob", ID: 1},
+		"kvstore":  kvstore.ErrNotFound{EntityType: "Blob", ID: 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			blobs := &memoryBlobs{miss: miss}
+			issuer, other := servicesOverOneKey(t, blobs)
+
+			bearer, err := issuer.GenerateToken(entities.NewUser("fresh@example.com"))
+			require.NoError(t, err)
+			token, err := issuer.ParseTokenString(bearer)
+			require.NoError(t, err)
+
+			revoked, err := NewBlobRevocationStore(blobs).Revoked(context.Background(), revocationKey(token), time.Now())
+			require.NoError(t, err, "a DAO miss is not a lookup failure")
+			require.False(t, revoked)
+			require.NoError(t, verifyString(other, bearer), "a never-revoked token verifies")
+
+			require.NoError(t, issuer.Revoke(token))
+			require.ErrorIs(t, verifyString(other, bearer), ErrTokenRevoked)
+		})
+	}
 }
