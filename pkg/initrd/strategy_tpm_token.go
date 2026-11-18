@@ -47,6 +47,11 @@ type TPMTokenStrategy struct {
 	// (shouldConfirmSeal, pkg/boot/commands/sealconfirm.go), so the token
 	// strategy stands aside until then.
 	sealPending func() bool
+	// upgradeSealsPending reports that the insecure upgrade seals are still
+	// on the ESP. They are deleted only by a TPM-PCR unlock
+	// (deleteInsecureUpgradeSeals, strategy_tpm_pcr.go), so the token
+	// strategy stands aside while they exist (#1692).
+	upgradeSealsPending func() bool
 	// extendPCR restores the runtime platform-PCR state that enrolment
 	// sealed against, before any token is unsealed.
 	extendPCR func(ctx context.Context) error
@@ -64,8 +69,9 @@ func NewTPMTokenStrategy(platform *Platform, logger *logging.Logger) *TPMTokenSt
 		// 0: ahead of TPM-PCR (1). The token is what SDK enrolment wrote
 		// under the PCR policy, so it is the current enrolment when present;
 		// without a token CanUnlock is false and TPM-PCR (ESP) runs next.
-		priority:    0,
-		sealPending: firstbootSealPending,
+		priority:            0,
+		sealPending:         firstbootSealPending,
+		upgradeSealsPending: upgradeSealsOnESP,
 	}
 	s.extendPCR = func(ctx context.Context) error {
 		return extendPlatformPCRWith(ctx, s.platform, s.logger)
@@ -82,6 +88,20 @@ func firstbootSealPending() bool {
 		"/mnt/installer/luks-key.bin",
 	} {
 		if _, err := os.Stat(p); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// upgradeSealsOnESP reports whether the insecure upgrade seals are still on
+// the mounted ESP.
+func upgradeSealsOnESP() bool { return upgradeSealsUnder(pcrEfiMountPoint) }
+
+// upgradeSealsUnder reports whether either upgrade seal file exists under root.
+func upgradeSealsUnder(root string) bool {
+	for _, name := range []string{pcrUpgradePublicFile, pcrUpgradePrivateFile} {
+		if _, err := os.Stat(filepath.Join(root, name)); err == nil {
 			return true
 		}
 	}
@@ -150,6 +170,10 @@ func (s *TPMTokenStrategy) CanUnlock(ctx context.Context, volume *luks.VolumeCon
 	}
 	if s.sealPending != nil && s.sealPending() {
 		s.logger.Info("TPM token: firstboot seal not yet confirmed; leaving the unlock to TPM-PCR")
+		return false
+	}
+	if s.upgradeSealsPending != nil && s.upgradeSealsPending() {
+		s.logger.Info("TPM token: upgrade seals present on the ESP; deferring to TPM-PCR so it removes them")
 		return false
 	}
 	return len(s.tokenSlots(ctx, volume)) > 0
