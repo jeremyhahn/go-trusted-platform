@@ -231,9 +231,6 @@ type CreateTemplateRequest struct {
 type TemplateResponse struct {
 	ID                string    `json:"id"`
 	Description       string    `json:"description,omitempty"`
-	TPMStateDir       string    `json:"tpm_state_dir"`
-	NVRAMPath         string    `json:"nvram_path"`
-	SecureBootKeysDir string    `json:"secure_boot_keys_dir"`
 	EKAlgorithm       string    `json:"ek_algorithm"`
 	SecureBootEnabled bool      `json:"secure_boot_enabled"`
 	CreatedAt         time.Time `json:"created_at"`
@@ -1399,9 +1396,6 @@ func (h *VTPMHandlers) templateToResponse(template *vtpm.Template) TemplateRespo
 	return TemplateResponse{
 		ID:                template.ID,
 		Description:       template.Description,
-		TPMStateDir:       template.TPMStateDir,
-		NVRAMPath:         template.NVRAMPath,
-		SecureBootKeysDir: template.SecureBootKeysDir,
 		EKAlgorithm:       string(template.EKAlgorithm),
 		SecureBootEnabled: template.SecureBootEnabled,
 		CreatedAt:         template.CreatedAt,
