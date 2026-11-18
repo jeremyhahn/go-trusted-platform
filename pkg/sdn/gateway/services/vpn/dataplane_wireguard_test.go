@@ -192,6 +192,31 @@ func TestWireGuardPlane_RefusesAKeyAnotherLeaseHolds(t *testing.T) {
 
 	require.NoError(t, plane.InstallPeer(context.Background(), wgLease("l1", "10.9.0.23/32", key)),
 		"re-installing a lease with its own key still succeeds")
+
+	hub.removeErr = nil
+	require.NoError(t, plane.ReconcilePeers(context.Background(), []LeaseID{}))
+	require.NoError(t, plane.InstallPeer(context.Background(), wgLease("l2", "10.9.0.24/32", key)),
+		"the key is free once l1's peer is gone")
+	require.NoError(t, plane.ReconcilePeers(context.Background(), []LeaseID{"l2"}))
+	assert.Contains(t, hub.peers, string(key), "reconciling keeps l2's peer")
+}
+
+// Removal is by key: a lease whose key another mapped lease still holds
+// drops only its own entry, never the other lease's peer.
+func TestWireGuardPlane_RemovalKeepsAKeyAnotherLeaseHolds(t *testing.T) {
+	plane, hub := newWireGuardPlaneForTest(t)
+	key := wgClientKey(1)
+	require.NoError(t, plane.InstallPeer(context.Background(), wgLease("l1", "10.9.0.23/32", key)))
+	plane.peers["l0"] = key
+
+	require.NoError(t, plane.RemovePeer(context.Background(), "l0"))
+	assert.Contains(t, hub.peers, string(key), "l1 still holds the key")
+	assert.NotContains(t, plane.peers, LeaseID("l0"))
+
+	plane.peers["l0"] = key
+	require.NoError(t, plane.ReconcilePeers(context.Background(), []LeaseID{"l1"}))
+	assert.Contains(t, hub.peers, string(key), "reconciling away l0 keeps l1's peer")
+	assert.NotContains(t, plane.peers, LeaseID("l0"))
 }
 
 func TestWireGuardPlane_Lifecycle(t *testing.T) {
