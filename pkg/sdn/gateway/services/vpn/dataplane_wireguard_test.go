@@ -217,6 +217,25 @@ func TestWireGuardPlane_ReconcileRemovesPeersOutsideKeep(t *testing.T) {
 	assert.False(t, ok, "the revoked peer is still on the hub")
 }
 
+func TestWireGuardPlane_ACancelledReconcileRemovesNothing(t *testing.T) {
+	// A given-up follower's withdrawal is cancelled by its replacement's
+	// launch: the cancelled reconciliation must not remove a peer the
+	// replacement installs after it.
+	plane, hub := newWireGuardPlaneForTest(t)
+	first, second := wgClientKey(1), wgClientKey(2)
+	require.NoError(t, plane.InstallPeer(context.Background(), wgLease("l1", "10.9.0.23/32", first)))
+	require.NoError(t, plane.InstallPeer(context.Background(), wgLease("l2", "10.9.0.24/32", second)))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var r PeerReconciler = plane
+	require.ErrorIs(t, r.ReconcilePeers(ctx, nil), context.Canceled)
+	_, ok := hub.peers[string(first)]
+	assert.True(t, ok, "a cancelled reconciliation removed a peer")
+	_, ok = hub.peers[string(second)]
+	assert.True(t, ok, "a cancelled reconciliation removed a peer")
+}
+
 func TestWireGuardPlane_RefusesBadLeases(t *testing.T) {
 	plane, hub := newWireGuardPlaneForTest(t)
 	ctx := context.Background()

@@ -343,6 +343,20 @@ func (f *fakeIPAM) GetAllocation(_ context.Context, ip netip.Addr) (*ipam.Alloca
 	return &ipam.Allocation{ID: ip.String(), IP: ip, DeviceID: dev, Status: ipam.AllocationStatusActive}, nil
 }
 
+func (f *fakeIPAM) GetAllocationsByPool(_ context.Context, _ string) ([]*ipam.Allocation, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
+	allocs := make([]*ipam.Allocation, 0, len(f.allocated))
+	for ip, dev := range f.allocated {
+		allocs = append(allocs, &ipam.Allocation{ID: ip.String(), IP: ip, DeviceID: dev,
+			Status: ipam.AllocationStatusActive, Tags: []string{"vpn"}})
+	}
+	return allocs, nil
+}
+
 func (f *fakeIPAM) Renew(_ context.Context, ip netip.Addr) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

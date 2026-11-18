@@ -72,6 +72,14 @@ func newRestoreHarness(t *testing.T) *restoreHarness {
 		store: &seededStore{MemoryLeaseStore: NewMemoryLeaseStore()},
 	}
 	require.NoError(t, h.ipam.CreatePool(ctx, h.pool))
+	h.svc = h.newService(t)
+	return h
+}
+
+// newService builds a Service over the harness's IPAM, plane, store and
+// clock.
+func (h *restoreHarness) newService(t *testing.T) *Service {
+	t.Helper()
 	svc, err := New(Deps{
 		Identity:   &fakeIdentity{},
 		Verifier:   &fakeVerifier{},
@@ -85,15 +93,35 @@ func newRestoreHarness(t *testing.T) *restoreHarness {
 		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}, testConfig())
 	require.NoError(t, err)
-	h.svc = svc
-	return h
+	return svc
+}
+
+// restart replaces the service with a new one over the same IPAM backend,
+// plane, store and clock, as a restarted VPN child would see them, and
+// starts it. What the old service held only in memory is gone.
+func (h *restoreHarness) restart(t *testing.T) {
+	t.Helper()
+	h.svc = h.newService(t)
+	h.start(t)
+}
+
+// allocateVPN holds addr for device the way an admission does: a
+// vpn-tagged allocation in the lease pool.
+func (h *restoreHarness) allocateVPN(t *testing.T, device string, addr netip.Prefix) {
+	t.Helper()
+	_, err := h.ipam.AllocateSpecific(context.Background(), &ipam.AllocationRequest{
+		PoolID: h.pool.ID, DeviceID: device, RequestedIP: addr.Addr(),
+		Description: "vpn lease", Tags: []string{"vpn", "tenant:tenant-a"},
+	})
+	require.NoError(t, err)
 }
 
 // start starts the service and stops it when the test ends.
 func (h *restoreHarness) start(t *testing.T) {
 	t.Helper()
-	require.NoError(t, h.svc.Start(context.Background()))
-	t.Cleanup(func() { require.NoError(t, h.svc.Stop(context.Background())) })
+	svc := h.svc
+	require.NoError(t, svc.Start(context.Background()))
+	t.Cleanup(func() { require.NoError(t, svc.Stop(context.Background())) })
 }
 
 // seed records a live lease for device at address.
@@ -365,6 +393,51 @@ func TestRestore_LeavesAnotherDevicesAddressAlone(t *testing.T) {
 
 	require.Error(t, h.svc.Restore(context.Background()))
 	assert.Equal(t, "mini-other", h.holder(t, lease.Address), "dropping a lease must not free an address it never held")
+}
+
+func TestRestore_LeavesAnUntaggedAllocationAlone(t *testing.T) {
+	// Only a vpn-tagged allocation records a VPN address; another holder
+	// of the pool keeps its address with no lease.
+	h := newRestoreHarness(t)
+	addr := netip.MustParsePrefix("100.64.0.9/32")
+	h.allocate(t, "mini-other", addr)
+	h.start(t)
+
+	require.NoError(t, h.svc.Restore(context.Background()))
+	assert.Equal(t, "mini-other", h.holder(t, addr), "an untagged allocation is not a VPN lease's address")
+}
+
+func TestRestore_ARestartReclaimsTheAddressOfAForgottenRemoval(t *testing.T) {
+	// An expired lease whose peer removal failed is deleted from the
+	// store and its address kept until the retry removes the peer. A
+	// restart forgets that retry: Restore reclaims the address once the
+	// orphan peer is gone.
+	ctx := context.Background()
+	h := newRestoreHarness(t)
+	lease := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
+	h.allocateVPN(t, "mini-1", lease.Address)
+	h.start(t)
+	require.NoError(t, h.svc.Restore(ctx))
+
+	h.plane.failRemovals(errors.New("datapath unreachable"))
+	h.clock.Advance(2 * time.Hour)
+	h.svc.Sweep(ctx)
+
+	stored, err := h.store.List(ctx)
+	require.NoError(t, err)
+	require.Empty(t, stored, "the expired lease is deleted")
+	require.True(t, h.plane.hosts(lease.ID), "its peer removal failed")
+	require.Equal(t, "mini-1", h.holder(t, lease.Address), "so its address is kept")
+
+	h.restart(t)
+	var unavailable *ErrDataPlaneUnavailable
+	require.ErrorAs(t, h.svc.Restore(ctx), &unavailable)
+	assert.Equal(t, "mini-1", h.holder(t, lease.Address), "an orphan peer still installed keeps its address")
+
+	h.plane.failRemovals(nil)
+	require.NoError(t, h.svc.Restore(ctx))
+	assert.False(t, h.plane.hosts(lease.ID), "the orphan peer is removed")
+	assert.Equal(t, "", h.holder(t, lease.Address), "and its forgotten address reclaimed")
 }
 
 func TestRestore_ReportsADropTheStoreCouldNotRecord(t *testing.T) {

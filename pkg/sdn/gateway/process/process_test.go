@@ -1689,6 +1689,106 @@ func (r *recordingVPNPlanes) withdrewAll(plane string) bool {
 	return false
 }
 
+// blockingVPNPlanes holds the first wireguard reconciliation until its
+// context ends or release closes, then calls onReturn. A request whose
+// context ended removes nothing in the real plane, so only a live one is
+// recorded.
+type blockingVPNPlanes struct {
+	recordingVPNPlanes
+	entered  chan struct{}
+	release  chan struct{}
+	once     sync.Once
+	mu       sync.Mutex
+	onReturn func()
+}
+
+func (b *blockingVPNPlanes) ReconcileVPNPeers(ctx context.Context, req *ipcv1.ReconcileVPNPeersRequest) *ipcv1.ReconcileVPNPeersResponse {
+	first := false
+	if req.GetDataPlane() == "wireguard" {
+		b.once.Do(func() { first = true })
+	}
+	if !first {
+		return b.recordingVPNPlanes.ReconcileVPNPeers(ctx, req)
+	}
+	close(b.entered)
+	select {
+	case <-ctx.Done():
+	case <-b.release:
+	}
+	b.mu.Lock()
+	onReturn := b.onReturn
+	b.mu.Unlock()
+	if onReturn != nil {
+		onReturn()
+	}
+	if ctx.Err() != nil {
+		return &ipcv1.ReconcileVPNPeersResponse{}
+	}
+	return b.recordingVPNPlanes.ReconcileVPNPeers(ctx, req)
+}
+
+func TestCrashLoop_AReplacementLaunchFencesAnInFlightWithdrawal(t *testing.T) {
+	// The given-up vpn child's withdrawal may still be in flight when a
+	// replacement is started. The replacement restores its peers into the
+	// datapath, so the old withdrawal must end before it launches.
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
+		c.RestartBackoff = time.Millisecond
+		c.RestartBudget = 1
+	})
+	ctx := testContext(t)
+	startDatapath(t, ctx, supervisor, launcher, "")
+	planes := &blockingVPNPlanes{entered: make(chan struct{}), release: make(chan struct{})}
+	launcher.lastChild().server.SetVPNPlanes(planes)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceManagementVPN))
+
+	vpnChild := launcher.lastChild()
+	vpnChild.exit(errors.New("signal: killed"))
+	vpnChild = awaitRelaunch(t, supervisor, launcher, "vpn", 3)
+	vpnChild.exit(errors.New("signal: killed"))
+
+	var exhausted *ErrRestartBudgetExhausted
+	require.Eventually(t, func() bool {
+		return errors.As(supervisor.ServiceHealth(gateway.ServiceManagementVPN), &exhausted)
+	}, 20*time.Second, 10*time.Millisecond, "the supervisor gives up on the vpn child")
+	select {
+	case <-planes.entered:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the withdrawal never reached the datapath")
+	}
+
+	before := launcher.launchCount()
+	var (
+		countMu  sync.Mutex
+		atReturn int
+		returned bool
+	)
+	planes.mu.Lock()
+	planes.onReturn = func() {
+		countMu.Lock()
+		defer countMu.Unlock()
+		atReturn, returned = launcher.launchCount(), true
+	}
+	planes.mu.Unlock()
+
+	started := make(chan error, 1)
+	go func() { started <- supervisor.StartService(ctx, gateway.ServiceManagementVPN) }()
+	select {
+	case err := <-started:
+		require.NoError(t, err)
+	case <-time.After(20 * time.Second):
+		close(planes.release)
+		t.Fatal("the replacement launch waited on the withdrawal")
+	}
+	close(planes.release)
+
+	countMu.Lock()
+	assert.True(t, returned, "the withdrawal was still in flight when the replacement launched")
+	assert.Equal(t, before, atReturn, "the withdrawal ended before the replacement launched")
+	countMu.Unlock()
+	assert.Never(t, func() bool { return planes.withdrewAll("wireguard") },
+		300*time.Millisecond, 10*time.Millisecond, "the fenced withdrawal removed the replacement's peers")
+}
+
 func TestCrashLoop_AnExhaustedVPNWithdrawsTheDatapathPeers(t *testing.T) {
 	// Only the vpn child expires leases, but its peers live in the planes
 	// the datapath child hosts. When the supervisor gives up on the vpn
