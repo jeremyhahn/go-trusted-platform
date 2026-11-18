@@ -41,6 +41,8 @@ import (
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
+	devicepkg "github.com/jeremyhahn/go-trusted-platform/pkg/device"
+	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ipxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
@@ -272,4 +274,40 @@ func TestPXEIdentityHook_UnresolvableIPRecordsNothing(t *testing.T) {
 	rec := f.report(cert)
 	assert.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
 	assert.Equal(t, pxe.StateInstalling, f.state(t))
+}
+
+// webhookEKProfiles resolves a device profile by its exact EK serial.
+type webhookEKProfiles map[string]*deviceentities.DeviceProfile
+
+func (p webhookEKProfiles) FindConfigForDevice(_ context.Context, ekSerial, mac string) (*deviceentities.DeviceProfile, error) {
+	if profile, ok := p[ekSerial]; ok {
+		return profile, nil
+	}
+	return nil, devicepkg.ErrNoMatchingConfig{EKSerial: ekSerial, MAC: mac}
+}
+
+// A device that enrols across a router has no neighbour entry on the control
+// plane; its EK-bound profile names the PXE device, so the webhook accepts
+// the IDevID it was issued.
+func TestPXEIdentityHook_RoutedEnrolmentCompletesThroughTheWebhook(t *testing.T) {
+	ctx := context.Background()
+	cert := webhookIdentityCert(t)
+	ek := webhookIdentityCert(t)
+	f := newWebhookIdentityFixture(t)
+	stubMACForIP(t, "192.0.2.10", webhookIdentityMAC)
+	profiles := webhookEKProfiles{ek.SerialNumber.String(): {MACAddress: webhookIdentityMAC}}
+
+	logger := logging.NewLogger(slog.LevelError, io.Discard)
+	hook := webv1.NewPXEIdentityHookWithProfiles(NewPXEGRPCService(logger, f.svc), profiles, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	require.NoError(t, hook(&trustedca.ACMEOrderFinalizeHookContext{
+		Context:     ctx,
+		IsTCGCSR:    true,
+		ClientIP:    "198.51.100.7",
+		Certificate: cert,
+		TCGData:     &trustedca.ACMETCGEnrollmentData{EKCertificate: ek},
+	}))
+
+	rec := f.report(cert)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, pxe.StateInstallComplete, f.state(t))
 }

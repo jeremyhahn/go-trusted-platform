@@ -647,7 +647,29 @@ func TestNewDeviceRegistrationHook_SkipsNilTCGData(t *testing.T) {
 type fakePXEIdentityRecorder struct {
 	err   error
 	calls []string
+	macs  []string
 }
+
+func (f *fakePXEIdentityRecorder) RecordEnrolledIDevIDFingerprintForMAC(_ context.Context, mac string, _ *x509.Certificate) error {
+	f.macs = append(f.macs, mac)
+	return f.err
+}
+
+// ekProfiles resolves a device profile by its exact EK serial, the way
+// devicepkg.ConfigForDeviceFinder does with an empty MAC.
+type ekProfiles map[string]*deviceentities.DeviceProfile
+
+func (p ekProfiles) FindConfigForDevice(_ context.Context, ekSerial, mac string) (*deviceentities.DeviceProfile, error) {
+	if profile, ok := p[ekSerial]; ok {
+		return profile, nil
+	}
+	return nil, devicepkg.ErrNoMatchingConfig{EKSerial: ekSerial, MAC: mac}
+}
+
+// errHookFailedOnce is the typed error of a finalize hook that fails once.
+type errHookFailedOnce struct{}
+
+func (errHookFailedOnce) Error() string { return "finalize hook failed once" }
 
 func (f *fakePXEIdentityRecorder) RecordEnrolledIDevIDFingerprint(_ context.Context, clientIP string, _ *x509.Certificate) error {
 	f.calls = append(f.calls, clientIP)
@@ -709,6 +731,64 @@ func TestNewPXEIdentityHook_ToleratesServiceNotConfigured(t *testing.T) {
 	t.Run("bare unavailable fails the enrolment", func(t *testing.T) {
 		assert.Error(t, finalize(status.Error(codes.Unavailable, "down")))
 	})
+}
+
+// pxeIdentityEKCert returns a self-signed EK certificate whose serial is
+// serial.
+func pxeIdentityEKCert(t *testing.T, serial int64) *x509.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	tmpl := x509.Certificate{
+		SerialNumber: big.NewInt(serial),
+		Subject:      pkix.Name{CommonName: "ek"},
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &key.PublicKey, key)
+	require.NoError(t, err)
+	cert, err := x509.ParseCertificate(der)
+	require.NoError(t, err)
+	return cert
+}
+
+func pxeIdentityTCGContext(ek *x509.Certificate) *trustedca.ACMEOrderFinalizeHookContext {
+	return &trustedca.ACMEOrderFinalizeHookContext{
+		Context:     context.Background(),
+		IsTCGCSR:    true,
+		ClientIP:    "198.51.100.7",
+		Certificate: &x509.Certificate{Raw: []byte{1}},
+		TCGData:     &trustedca.ACMETCGEnrollmentData{EKCertificate: ek},
+	}
+}
+
+func TestNewPXEIdentityHook_ResolvesTheDeviceByItsEKBoundProfile(t *testing.T) {
+	const mac = "52:54:00:12:34:56"
+	ek := pxeIdentityEKCert(t, 1001)
+	profiles := ekProfiles{"1001": {MACAddress: mac}}
+	rec := &fakePXEIdentityRecorder{}
+
+	hook := NewPXEIdentityHookWithProfiles(rec, profiles, slog.Default())
+	require.NoError(t, hook(pxeIdentityTCGContext(ek)))
+
+	assert.Equal(t, []string{mac}, rec.macs)
+	assert.Empty(t, rec.calls, "a bound profile needs no neighbour-table lookup")
+}
+
+func TestNewPXEIdentityHook_FallsBackToTheClientIPWithoutABoundProfile(t *testing.T) {
+	ek := pxeIdentityEKCert(t, 1001)
+	for name, profiles := range map[string]ekProfiles{
+		"no profile for the EK": {},
+		"a profile with no MAC": {"1001": {}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := &fakePXEIdentityRecorder{}
+			hook := NewPXEIdentityHookWithProfiles(rec, profiles, slog.Default())
+			require.NoError(t, hook(pxeIdentityTCGContext(ek)))
+			assert.Equal(t, []string{"198.51.100.7"}, rec.calls)
+			assert.Empty(t, rec.macs)
+		})
+	}
 }
 
 func TestNewDeviceRegistrationHook_SkipsMissingSerial(t *testing.T) {
