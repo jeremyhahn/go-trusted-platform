@@ -227,39 +227,9 @@ type registryArtifactJSON struct {
 	PullCount    int64
 }
 
-type registrySignatureJSON struct {
-	KeyID     string
-	Algorithm string
-	Signature []byte
-	SignedAt  time.Time
-	Signer    string
-}
-
-type registryVulnerabilityJSON struct {
-	ID             string
-	Severity       int32
-	PackageName    string
-	PackageVersion string
-	FixedVersion   string
-	Description    string
-	Link           string
-}
-
-type registryScanJSON struct {
-	Scanner         string
-	ScannedAt       time.Time
-	Vulnerabilities []registryVulnerabilityJSON
-	LowCount        int32
-	MediumCount     int32
-	HighCount       int32
-	CriticalCount   int32
-}
-
 type registryDetailJSON struct {
-	Artifact   *registryArtifactJSON
-	Signatures []registrySignatureJSON
-	ScanResult *registryScanJSON
-	Tags       []string
+	Artifact *registryArtifactJSON
+	Tags     []string
 }
 
 func (a *registryArtifactJSON) toPB() *platformv1.Artifact {
@@ -318,41 +288,7 @@ func decodeRegistryInspect(raw []byte, reply interface{}) error {
 	if err := json.Unmarshal(raw, &in); err != nil {
 		return ErrUnmarshalFailed{Err: err}
 	}
-	detail := &platformv1.ArtifactDetail{
-		Artifact: in.Artifact.toPB(),
-		Tags:     in.Tags,
-	}
-	for _, s := range in.Signatures {
-		detail.Signatures = append(detail.Signatures, &platformv1.ArtifactSignature{
-			KeyId:     s.KeyID,
-			Algorithm: s.Algorithm,
-			Signature: s.Signature,
-			SignedAt:  registryTimestamp(s.SignedAt),
-			Signer:    s.Signer,
-		})
-	}
-	if sr := in.ScanResult; sr != nil {
-		scan := &platformv1.ScanResult{
-			Scanner:       sr.Scanner,
-			ScannedAt:     registryTimestamp(sr.ScannedAt),
-			LowCount:      sr.LowCount,
-			MediumCount:   sr.MediumCount,
-			HighCount:     sr.HighCount,
-			CriticalCount: sr.CriticalCount,
-		}
-		for _, v := range sr.Vulnerabilities {
-			scan.Vulnerabilities = append(scan.Vulnerabilities, &platformv1.Vulnerability{
-				Id:             v.ID,
-				Severity:       platformv1.VulnerabilitySeverity(v.Severity),
-				PackageName:    v.PackageName,
-				PackageVersion: v.PackageVersion,
-				FixedVersion:   v.FixedVersion,
-				Description:    v.Description,
-				Link:           v.Link,
-			})
-		}
-		detail.ScanResult = scan
-	}
+	detail := &platformv1.ArtifactDetail{Artifact: in.Artifact.toPB(), Tags: in.Tags}
 	out.Detail = detail
 	out.Status = &platformv1.Status{Success: true}
 	return nil
