@@ -24,6 +24,7 @@ import (
 	"sync"
 	"testing"
 
+	ipcv1 "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/ipc/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -124,6 +125,79 @@ func TestWireGuardPlane_InstallAndRemove(t *testing.T) {
 	require.NoError(t, plane.RemovePeer(context.Background(), "l1"))
 	require.NoError(t, plane.RemovePeer(context.Background(), "never"))
 	assert.Len(t, hub.removed, 1)
+}
+
+// TestWireGuardPlane_AnInstallAfterItsRemovalIsRefused pins finding 3: the
+// removal of a lease the plane does not hold yet, the cleanup of a cancelled
+// install, fences that install when it arrives late.
+func TestWireGuardPlane_AnInstallAfterItsRemovalIsRefused(t *testing.T) {
+	plane, hub := newWireGuardPlaneForTest(t)
+	ctx := context.Background()
+	require.NoError(t, plane.RemovePeer(ctx, "l1"))
+
+	var notFound *ErrLeaseNotFound
+	require.ErrorAs(t, plane.InstallPeer(ctx, wgLease("l1", "10.9.0.23/32", wgClientKey(1))), &notFound)
+	assert.Equal(t, LeaseID("l1"), notFound.LeaseID)
+
+	hub.mu.Lock()
+	defer hub.mu.Unlock()
+	assert.Empty(t, hub.peers, "the late install programs no peer")
+	assert.Empty(t, plane.peers, "the plane records no peer")
+}
+
+func TestWireGuardPlane_ACancelledInstallProgramsNothing(t *testing.T) {
+	plane, hub := newWireGuardPlaneForTest(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := plane.InstallPeer(ctx, wgLease("l1", "10.9.0.23/32", wgClientKey(1)))
+	require.ErrorIs(t, err, context.Canceled)
+
+	hub.mu.Lock()
+	defer hub.mu.Unlock()
+	assert.Empty(t, hub.peers, "a cancelled install programs no peer")
+}
+
+// heldInstallPeers holds each install's server handler until release closes,
+// as a datapath child still working on an RPC its caller gave up on.
+type heldInstallPeers struct {
+	*hostPeers
+	release chan struct{}
+	handled chan struct{}
+}
+
+func (p *heldInstallPeers) InstallVPNPeer(ctx context.Context, req *ipcv1.InstallVPNPeerRequest) (*ipcv1.InstallVPNPeerResponse, error) {
+	go func() {
+		defer close(p.handled)
+		<-p.release
+		p.host.InstallVPNPeer(context.Background(), req)
+	}()
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestDatapathPlane_AnInstallHeldPastItsCleanupProgramsNothing(t *testing.T) {
+	plane, hub := newWireGuardPlaneForTest(t)
+	peers := &heldInstallPeers{
+		hostPeers: &hostPeers{host: hostOf(t, plane)},
+		release:   make(chan struct{}),
+		handled:   make(chan struct{}),
+	}
+	remote, err := NewDatapathPlane(DataPlaneWireGuard, peers)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	lease := wgLease("l1", "10.9.0.23/32", wgClientKey(1))
+	require.Error(t, remote.InstallPeer(ctx, lease), "the cancelled install fails")
+	require.NoError(t, remote.RemovePeer(context.Background(), lease.ID), "the cleanup removal succeeds")
+
+	close(peers.release)
+	<-peers.handled
+
+	hub.mu.Lock()
+	defer hub.mu.Unlock()
+	assert.Empty(t, hub.peers, "the install held past its cleanup programs no peer")
 }
 
 // TestWireGuardPlane_ReconcileRemovesPeersOutsideKeep covers the hosted
