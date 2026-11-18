@@ -347,20 +347,51 @@ func (a *QuicBaaSIAMAdapter) GetPolicy(ctx context.Context, tenantID, policyName
 	return decodePolicy(tenantID, p), nil
 }
 
+// ListPolicies returns the page [offset, offset+limit) of the tenant's
+// policies, or every policy from offset when limit <= 0. The upstream pages
+// by cursor, so the adapter walks it from the start until it holds
+// offset+limit policies or the upstream has no more, and reports the
+// upstream total.
 func (a *QuicBaaSIAMAdapter) ListPolicies(ctx context.Context, tenantID string, limit, offset int32) (*ListPoliciesResponse, error) {
+	if offset < 0 {
+		offset = 0
+	}
+	want := -1
 	sdkReq := &iamsdk.ListPoliciesRequest{}
 	if limit > 0 {
+		want = int(offset) + int(limit)
 		sdkReq.Limit = int(limit)
 	}
-	resp, err := a.client.Policy().List(ctx, tenantID, sdkReq)
-	if err != nil {
-		return nil, err
+	var (
+		collected []iamsdk.Policy
+		total     int64
+	)
+	for first := true; ; first = false {
+		resp, err := a.client.Policy().List(ctx, tenantID, sdkReq)
+		if err != nil {
+			return nil, err
+		}
+		if first {
+			total = resp.TotalCount
+		}
+		collected = append(collected, resp.Policies...)
+		if (want >= 0 && len(collected) >= want) || !resp.HasMore || resp.NextCursor == "" {
+			break
+		}
+		sdkReq = &iamsdk.ListPoliciesRequest{Limit: sdkReq.Limit, Cursor: resp.NextCursor}
 	}
+	start := min(int(offset), len(collected))
+	end := len(collected)
+	if want >= 0 && want < end {
+		end = want
+	}
+	page := collected[start:end]
 	out := &ListPoliciesResponse{
-		Policies: make([]PolicyResponse, 0, len(resp.Policies)),
+		Policies: make([]PolicyResponse, 0, len(page)),
 	}
-	for i := range resp.Policies {
-		out.Policies = append(out.Policies, *decodePolicy(tenantID, &resp.Policies[i]))
+	out.Total = total
+	for i := range page {
+		out.Policies = append(out.Policies, *decodePolicy(tenantID, &page[i]))
 	}
 	return out, nil
 }
@@ -369,12 +400,11 @@ func (a *QuicBaaSIAMAdapter) UpdatePolicy(ctx context.Context, tenantID, policyN
 	if req == nil {
 		return nil, errors.New("update policy request is required")
 	}
-	// SDK does not accept raw SpecYAML on update — to reapply YAML we must
-	// delete and re-create the policy. Surface the limitation as an error so
-	// callers fall through to the create+delete path or use the partial
-	// pointer-field updates the SDK does support.
+	// The SDK's UpdatePolicyRequest carries no SpecYAML: reapplying YAML
+	// means deleting and re-creating the policy. Refuse it as a bad request
+	// (400, InvalidArgument over the SDK) before the upstream is called.
 	if req.SpecYAML != "" {
-		return nil, errors.New("update via spec_yaml not supported by IAM SDK; delete and re-create instead")
+		return nil, ErrInvalidRequestBody{Reason: "spec_yaml cannot be updated in place; delete and re-create the policy"}
 	}
 	desc := req.Description
 	prio := int(req.Priority)
