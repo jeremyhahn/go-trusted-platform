@@ -1910,16 +1910,6 @@ func (registry *HandlerRegistry) ACMERestService() trustedca.ACMERestServicer {
 		deviceHook := NewDeviceRegistrationHook(deviceService, registry.params.Logger.Slog())
 		hookRegistry.Register(deviceHook)
 		registry.params.Logger.Info("Registered device registration hook for ACME device enrollment")
-		if recorder, ok := registry.params.PXEServiceServer.(PXEIdentityRecorder); ok {
-			var profiles devicepkg.ConfigForDeviceFinder
-			if registry.params.ServiceRegistry != nil {
-				if ps := registry.params.ServiceRegistry.ProfileService(); ps != nil {
-					profiles = ps
-				}
-			}
-			hookRegistry.Register(NewPXEIdentityHookWithProfiles(recorder, profiles, registry.params.Logger.Slog()))
-			registry.params.Logger.Info("Registered PXE identity hook for ACME device enrollment")
-		}
 	} else {
 		registry.params.Logger.Warn("Device service is nil - device registration hook not registered")
 	}
@@ -1992,6 +1982,21 @@ func (registry *HandlerRegistry) ACMERestService() trustedca.ACMERestServicer {
 		}
 	} else {
 		registry.params.Logger.Debug("TLSA generation hook not registered - DNS service or DANE config unavailable")
+	}
+
+	// The PXE identity hook is registered last. Execute stops at the first
+	// error, so a DNS, SDN or TLSA failure leaves no fingerprint and the
+	// retry's new IDevID is recorded: the fingerprint is the last step that
+	// can fail before the CA returns the certificate (#1694).
+	if recorder, ok := registry.params.PXEServiceServer.(PXEIdentityRecorder); ok {
+		var profiles devicepkg.ConfigForDeviceFinder
+		if registry.params.ServiceRegistry != nil {
+			if ps := registry.params.ServiceRegistry.ProfileService(); ps != nil {
+				profiles = ps
+			}
+		}
+		hookRegistry.Register(NewPXEIdentityHookWithProfiles(recorder, profiles, registry.params.Logger.Slog()))
+		registry.params.Logger.Info("Registered PXE identity hook for ACME device enrollment")
 	}
 
 	// Build the pre-sign extension hook registry and register the zone extension
