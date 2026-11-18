@@ -38,6 +38,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/ipc"
+	ipcv1 "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/ipc/gen"
 	gwstate "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/state"
 )
 
@@ -1642,6 +1643,72 @@ func TestCrashLoop_StopsAtTheRestartBudget(t *testing.T) {
 	assert.Equal(t, "routing", exhausted.Process)
 	assert.Contains(t, exhausted.Error(), "restart budget")
 	assert.Equal(t, 3, launcher.launchCount(), "no fourth launch after the budget is gone")
+}
+
+// recordingVPNPlanes is an ipc.VPNPlanes that records every
+// ReconcileVPNPeers request a datapath child is sent.
+type recordingVPNPlanes struct {
+	mu         sync.Mutex
+	reconciles []*ipcv1.ReconcileVPNPeersRequest
+}
+
+func (r *recordingVPNPlanes) InstallVPNPeer(context.Context, *ipcv1.InstallVPNPeerRequest) *ipcv1.InstallVPNPeerResponse {
+	return &ipcv1.InstallVPNPeerResponse{}
+}
+
+func (r *recordingVPNPlanes) RemoveVPNPeer(context.Context, *ipcv1.RemoveVPNPeerRequest) *ipcv1.RemoveVPNPeerResponse {
+	return &ipcv1.RemoveVPNPeerResponse{}
+}
+
+func (r *recordingVPNPlanes) ReconcileVPNPeers(_ context.Context, req *ipcv1.ReconcileVPNPeersRequest) *ipcv1.ReconcileVPNPeersResponse {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.reconciles = append(r.reconciles, req)
+	return &ipcv1.ReconcileVPNPeersResponse{}
+}
+
+// withdrewAll reports whether plane was reconciled to an empty keep list.
+func (r *recordingVPNPlanes) withdrewAll(plane string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, req := range r.reconciles {
+		if req.GetDataPlane() == plane && len(req.GetLeaseIds()) == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func TestCrashLoop_AnExhaustedVPNWithdrawsTheDatapathPeers(t *testing.T) {
+	// Only the vpn child expires leases, but its peers live in the planes
+	// the datapath child hosts. When the supervisor gives up on the vpn
+	// child, no expiry authority is left, so it withdraws every hosted
+	// peer rather than leave them open with no expiry.
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
+		c.RestartBackoff = time.Millisecond
+		c.RestartBudget = 1
+	})
+	ctx := testContext(t)
+	startDatapath(t, ctx, supervisor, launcher, "")
+	rec := &recordingVPNPlanes{}
+	launcher.lastChild().server.SetVPNPlanes(rec)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceManagementVPN))
+
+	vpnChild := launcher.lastChild()
+	vpnChild.exit(errors.New("signal: killed"))
+	vpnChild = awaitRelaunch(t, supervisor, launcher, "vpn", 3)
+	assert.False(t, rec.withdrewAll("wireguard"), "a vpn child still within its budget keeps its peers")
+	vpnChild.exit(errors.New("signal: killed"))
+
+	var exhausted *ErrRestartBudgetExhausted
+	require.Eventually(t, func() bool {
+		return errors.As(supervisor.ServiceHealth(gateway.ServiceManagementVPN), &exhausted)
+	}, 20*time.Second, 10*time.Millisecond, "the supervisor gives up on the vpn child")
+	require.Eventually(t, func() bool { return rec.withdrewAll("wireguard") },
+		20*time.Second, 10*time.Millisecond, "every wireguard peer is withdrawn from the datapath")
+	require.Eventually(t, func() bool { return rec.withdrewAll("masque") },
+		20*time.Second, 10*time.Millisecond, "and every masque peer")
+	require.NoError(t, supervisor.ServiceHealth(gateway.ServiceNAT), "the datapath itself stays up")
 }
 
 // watchdogClock is a testClock that holds every wait of the watchdog
