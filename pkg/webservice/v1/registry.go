@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -298,7 +299,11 @@ type PXEIdentityRecorder interface {
 // install-complete webhook requires over mTLS (#1694). Non-TCG enrolments and
 // a missing certificate are skipped. An enrolment that is not a PXE install
 // in progress (no MAC, no PXE device, or a device past Installing) is logged
-// and does not fail the enrolment; any other error does.
+// and does not fail the enrolment. A node with no PXE backend answers with the
+// typed SERVICE_NOT_CONFIGURED discriminator (an ErrorInfo detail, see
+// isServiceNotConfigured); that is not an error either, so a TCG enrolment on
+// such a node succeeds. Any other error fails the enrolment, a bare
+// Unavailable included.
 func NewPXEIdentityHook(recorder PXEIdentityRecorder, logger *slog.Logger) trustedca.ACMEOrderFinalizeHook {
 	return func(ctx *trustedca.ACMEOrderFinalizeHookContext) error {
 		if !ctx.IsTCGCSR || ctx.Certificate == nil {
@@ -309,6 +314,11 @@ func NewPXEIdentityHook(recorder PXEIdentityRecorder, logger *slog.Logger) trust
 			reqCtx = context.Background()
 		}
 		err := recorder.RecordEnrolledIDevIDFingerprint(reqCtx, ctx.ClientIP, ctx.Certificate)
+		if isServiceNotConfigured(err) {
+			logger.Debug("PXE identity: PXE is not configured on this node - IDevID not recorded",
+				slog.String("client_ip", ctx.ClientIP))
+			return nil
+		}
 		switch status.Code(err) {
 		case codes.OK:
 			logger.Info("PXE identity: enrolled IDevID recorded on the PXE record",
@@ -323,6 +333,27 @@ func NewPXEIdentityHook(recorder PXEIdentityRecorder, logger *slog.Logger) trust
 			return fmt.Errorf("record the enrolled IDevID on the PXE record: %w", err)
 		}
 	}
+}
+
+// isServiceNotConfigured reports whether err is a gRPC status carrying the
+// typed SERVICE_NOT_CONFIGURED discriminator: a google.rpc.ErrorInfo detail
+// whose Reason and Domain are response.ReasonServiceNotConfigured and
+// response.ErrorInfoDomain. The status code and message are not consulted.
+func isServiceNotConfigured(err error) bool {
+	if err == nil {
+		return false
+	}
+	st, ok := status.FromError(err)
+	if !ok {
+		return false
+	}
+	for _, detail := range st.Details() {
+		info, ok := detail.(*errdetails.ErrorInfo)
+		if ok && info.GetReason() == response.ReasonServiceNotConfigured && info.GetDomain() == response.ErrorInfoDomain {
+			return true
+		}
+	}
+	return false
 }
 
 // issuedCommonName returns the issued certificate's Common Name, or "" when
