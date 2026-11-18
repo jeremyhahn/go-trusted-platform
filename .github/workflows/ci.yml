@@ -1680,15 +1680,18 @@ jobs:
           name: ${{ needs.integration-image.outputs.artifact }}
           path: ${{ runner.temp }}/it-image
 
-      # Ruling 862: on a pool runner, the image job's image reaches this
-      # daemon only by the lease or the LAN registry. With neither (no lease
-      # and no registry reference), fail here: the artifact would cross the
-      # owner's WAN, and the fallback below would build an image the image
-      # job never verified. Gitea keeps its LAN artifact path.
-      - name: No integration image on this pool runner
-        if: steps.lease.outputs.leased != 'true' && needs.integration-image.outputs.image_ref == '' && runner.environment != 'github-hosted' && github.server_url == 'https://github.com'
+      # Rulings 862 and 876 (876 supersedes 675 for pool legs): on a pool
+      # runner the image job's image reaches this daemon only by the lease or
+      # the LAN registry pull, which sets leased=true only once the pulled
+      # layers match IT_IMAGE_IDENTITY. With neither (a failed pull, a failed
+      # re-tag, an identity mismatch, or no registry reference), fail here:
+      # the artifact would cross the owner's WAN, and the fallback below
+      # would build an image the image job never verified. Hosted runners and
+      # Gitea keep their paths.
+      - name: No verified integration image on this pool runner
+        if: steps.lease.outputs.leased != 'true' && steps.pull.outputs.leased != 'true' && runner.environment != 'github-hosted' && github.server_url == 'https://github.com'
         run: |
-          echo "::error::no lease and no LAN registry reference for the integration image on this pool runner: it is never fetched over the WAN nor rebuilt unverified (ruling 862)"
+          echo "::error::neither the lease nor the LAN registry pull gave this pool runner the image job's integration image ($IT_IMAGE_IDENTITY): it is never fetched over the WAN nor rebuilt unverified (rulings 862, 876)"
           exit 1
 
       # The load keeps the image, not its id (run 70938): the id is the
