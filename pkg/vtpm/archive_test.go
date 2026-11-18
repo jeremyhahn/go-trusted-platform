@@ -1497,6 +1497,90 @@ func TestArchiver_ValidateArchive_ManifestInDirectory(t *testing.T) {
 	}
 }
 
+// writeValidateArchive writes a gzip tar of the given entries, in order, to a
+// buffer for ValidateArchive.
+func writeValidateArchive(t *testing.T, entries []struct {
+	name    string
+	content []byte
+}) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	gzw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gzw)
+	for _, e := range entries {
+		if err := tw.WriteHeader(&tar.Header{Name: e.name, Mode: 0600, Size: int64(len(e.content)), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatalf("write header: %v", err)
+		}
+		if _, err := tw.Write(e.content); err != nil {
+			t.Fatalf("write entry: %v", err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar: %v", err)
+	}
+	if err := gzw.Close(); err != nil {
+		t.Fatalf("close gzip: %v", err)
+	}
+	return &buf
+}
+
+// TestArchiver_ValidateArchive_BudgetsTheManifestRead checks that validation
+// reads the decompressed stream within the expansion budget: an oversized
+// manifest and an oversized entry before the manifest are both refused with
+// ErrArchiveTooLarge, and a cancelled context stops the read.
+func TestArchiver_ValidateArchive_BudgetsTheManifestRead(t *testing.T) {
+	manifestData, err := json.Marshal(&Manifest{
+		Version:   ManifestVersion,
+		ID:        "x",
+		Mode:      BundleModePreAssigned,
+		CreatedAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	padded := append(append([]byte{}, manifestData...), bytes.Repeat([]byte(" "), 64*1024)...)
+
+	type entry = struct {
+		name    string
+		content []byte
+	}
+	tests := []struct {
+		name    string
+		entries []entry
+	}{
+		{"oversized manifest", []entry{{"vtpm-bundle-x/manifest.json", padded}}},
+		{"oversized entry before the manifest", []entry{
+			{"other/blob.bin", make([]byte, 64*1024)},
+			{"vtpm-bundle-x/manifest.json", manifestData},
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := NewArchiver(&Config{BaseDir: t.TempDir()}, nil)
+			a.maxExpandedBytes = 1024
+
+			_, err := a.ValidateArchive(context.Background(), writeValidateArchive(t, tt.entries))
+			var tooLarge ErrArchiveTooLarge
+			if !errors.As(err, &tooLarge) {
+				t.Fatalf("ValidateArchive error = %v, want ErrArchiveTooLarge", err)
+			}
+			if tooLarge.Limit != 1024 {
+				t.Errorf("ErrArchiveTooLarge.Limit = %d, want 1024", tooLarge.Limit)
+			}
+		})
+	}
+
+	t.Run("cancelled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		a := NewArchiver(&Config{BaseDir: t.TempDir()}, nil)
+		_, err := a.ValidateArchive(ctx, writeValidateArchive(t, []entry{{"vtpm-bundle-x/manifest.json", manifestData}}))
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("ValidateArchive error = %v, want context.Canceled", err)
+		}
+	})
+}
+
 func TestArchiver_Import_WithSecureBootEnabled(t *testing.T) {
 	var buf bytes.Buffer
 	gzw := gzip.NewWriter(&buf)
