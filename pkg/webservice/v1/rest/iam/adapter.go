@@ -16,6 +16,7 @@ package iam
 import (
 	"context"
 	"errors"
+	"maps"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
@@ -593,6 +594,7 @@ func decodePolicy(tenantID string, p *iamsdk.Policy) *PolicyResponse {
 		Description: p.Description,
 		Priority:    int32(p.Priority),
 		SpecYAML:    string(p.SpecYAML),
+		Labels:      maps.Clone(p.Labels),
 	}
 	if !p.CreatedAt.IsZero() {
 		ts := p.CreatedAt
