@@ -276,9 +276,12 @@ func (s *Service) holdsAddress(ctx context.Context, l *Lease) (bool, error) {
 // dropLease removes a lease Restore will not reinstate: the record is deleted
 // so the control plane forgets it too, and the address goes back to the pool
 // when the device holds it. A store that could not record the drop
-// (ErrRevocationNotRecorded) keeps the lease, with its hosted peer and its
-// address: the deletion is recorded before the peer is removed.
+// (ErrRevocationNotRecorded) keeps the lease and its address. A lease that
+// is not expired keeps its hosted peer too: the deletion is recorded before
+// the peer is removed. An expired lease's peer is removed anyway (a removal
+// that fails is owed to Sweep); only its address waits for the deletion.
 func (s *Service) dropLease(ctx context.Context, l *Lease, plane DataPlane, reason string, cause error) error {
+	expired := l.Expired(s.deps.Clock.Now())
 	dropped := &ErrLeaseNotRestored{LeaseID: l.ID, Reason: reason, Cause: cause}
 	s.logger.Warn("vpn.restore: lease dropped",
 		slog.String("lease", string(l.ID)), slog.String("device", l.DeviceID), slog.String("reason", reason))
@@ -289,7 +292,19 @@ func (s *Service) dropLease(ctx context.Context, l *Lease, plane DataPlane, reas
 		var nf *ErrLeaseNotFound
 		var unrecorded *ErrRevocationNotRecorded
 		if errors.As(err, &unrecorded) {
-			return errors.Join(dropped, err)
+			if !expired {
+				return errors.Join(dropped, err)
+			}
+			// An expired lease is dead whether or not its deletion was
+			// recorded, and a restart drops it again before anything
+			// else: its peer goes now. The kept record keeps the
+			// address; an owed removal is retried by Sweep, which
+			// releases the address only once the record is gone.
+			removeErr := s.removeRejectedPeer(ctx, l, plane)
+			if removeErr != nil {
+				s.owePeerRetry(l.DataPlane, l)
+			}
+			return errors.Join(dropped, err, removeErr)
 		}
 		if !errors.As(err, &nf) {
 			storeErr = err

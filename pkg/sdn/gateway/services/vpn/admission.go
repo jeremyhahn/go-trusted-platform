@@ -299,7 +299,11 @@ func (s *Service) OwnLease(ctx context.Context, id LeaseID, peer *calleradmissio
 // record the revocation nowhere (ErrRevocationNotRecorded) keeps the lease,
 // and revoke then tears nothing down: a peer removed or an address released
 // under a lease a restart restores would be a session the gateway and its
-// next start disagree on. Any other store error still tears the lease down,
+// next start disagree on. An expired lease (RevokeExpired) is the exception:
+// it is dead whether or not its deletion was recorded, and a restart drops
+// it before anything else, so its peer is removed anyway (a failed removal
+// is owed to Sweep) and only its address waits for a recorded deletion. Any
+// other store error still tears the lease down,
 // because a lease past its authority is dead whether or not its record went;
 // the peer is removed even when that error is returned. A peer the plane
 // failed to remove is never forgotten: its removal is owed to the next
@@ -307,14 +311,31 @@ func (s *Service) OwnLease(ctx context.Context, id LeaseID, peer *calleradmissio
 // gone, so it cannot go to another device while the revoked key may still
 // pass traffic. The removal error is returned too. Restore's dropLease
 // keeps the same order: the deletion is recorded before the peer goes, so an
-// unrecorded drop leaves the peer with the lease a restart reinstates.
+// unrecorded drop of a lease that is not expired leaves the peer with the
+// lease a restart reinstates.
 func (s *Service) revoke(ctx context.Context, lease *Lease, reason RevokeReason) error {
 	var storeErr error
 	if err := s.deps.Leases.Delete(ctx, lease.ID); err != nil {
 		var nf *ErrLeaseNotFound
 		var unrecorded *ErrRevocationNotRecorded
 		if errors.As(err, &unrecorded) {
-			return err
+			if reason != RevokeExpired {
+				return err
+			}
+			// An expired lease is dead whether or not its deletion was
+			// recorded: its peer goes now, and the kept record keeps the
+			// address until a later Sweep records the deletion.
+			var planeErr error
+			if plane, ok := s.deps.DataPlanes[lease.DataPlane]; ok {
+				if rmErr := plane.RemovePeer(ctx, lease.ID); rmErr != nil {
+					var nf *ErrLeaseNotFound
+					if !errors.As(rmErr, &nf) {
+						planeErr = &ErrDataPlaneUnavailable{Kind: lease.DataPlane, Cause: rmErr}
+						s.owePeerRetry(lease.DataPlane, lease)
+					}
+				}
+			}
+			return errors.Join(err, planeErr)
 		}
 		if !errors.As(err, &nf) {
 			storeErr = err
