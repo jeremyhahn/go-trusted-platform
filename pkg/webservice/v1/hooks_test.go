@@ -791,6 +791,36 @@ func TestNewPXEIdentityHook_FallsBackToTheClientIPWithoutABoundProfile(t *testin
 	}
 }
 
+// failingOnceHook returns a finalize hook that fails its first call with
+// errHookFailedOnce and succeeds afterwards.
+func failingOnceHook() trustedca.ACMEOrderFinalizeHook {
+	failed := false
+	return func(*trustedca.ACMEOrderFinalizeHookContext) error {
+		if failed {
+			return nil
+		}
+		failed = true
+		return errHookFailedOnce{}
+	}
+}
+
+// The PXE identity hook runs after every other finalize hook: a later hook
+// that fails leaves no fingerprint, so the retry's IDevID is recorded.
+func TestPXEIdentityHook_ALaterHookFailureRecordsNothing(t *testing.T) {
+	rec := &fakePXEIdentityRecorder{}
+	hooks := trustedca.NewACMEOrderFinalizeHookRegistry()
+	hooks.Register(failingOnceHook())
+	hooks.Register(NewPXEIdentityHook(rec, slog.Default()))
+	finalize := &trustedca.ACMEOrderFinalizeHookContext{Context: context.Background(), IsTCGCSR: true, ClientIP: "192.0.2.10", Certificate: &x509.Certificate{Raw: []byte{1}}}
+
+	err := hooks.Execute(finalize)
+	require.ErrorAs(t, err, new(errHookFailedOnce))
+	assert.Empty(t, rec.calls, "a failed finalize records no fingerprint")
+
+	require.NoError(t, hooks.Execute(finalize))
+	assert.Equal(t, []string{"192.0.2.10"}, rec.calls)
+}
+
 func TestNewDeviceRegistrationHook_SkipsMissingSerial(t *testing.T) {
 	reg := newMockDeviceRegistrar()
 	hook := NewDeviceRegistrationHook(reg, slog.Default())

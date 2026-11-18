@@ -311,3 +311,53 @@ func TestPXEIdentityHook_RoutedEnrolmentCompletesThroughTheWebhook(t *testing.T)
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	assert.Equal(t, pxe.StateInstallComplete, f.state(t))
 }
+
+// errWebhookHookFailedOnce is the typed error of a finalize hook that fails
+// once.
+type errWebhookHookFailedOnce struct{}
+
+func (errWebhookHookFailedOnce) Error() string { return "finalize hook failed once" }
+
+// A finalize that fails in a hook before the PXE identity hook records no
+// fingerprint, so the retry's new IDevID is the one the webhook accepts.
+func TestPXEIdentityHook_AFailedFinalizeThenARetryEnrols(t *testing.T) {
+	ctx := context.Background()
+	f := newWebhookIdentityFixture(t)
+	stubMACForIP(t, "192.0.2.10", webhookIdentityMAC)
+
+	logger := logging.NewLogger(slog.LevelError, io.Discard)
+	grpcSvc := NewPXEGRPCService(logger, f.svc)
+	failed := false
+	hooks := trustedca.NewACMEOrderFinalizeHookRegistry()
+	hooks.Register(func(*trustedca.ACMEOrderFinalizeHookContext) error {
+		if failed {
+			return nil
+		}
+		failed = true
+		return errWebhookHookFailedOnce{}
+	})
+	hooks.Register(webv1.NewPXEIdentityHook(grpcSvc, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	finalize := func(cert *x509.Certificate) error {
+		return hooks.Execute(&trustedca.ACMEOrderFinalizeHookContext{
+			Context:     ctx,
+			IsTCGCSR:    true,
+			ClientIP:    "192.0.2.10",
+			Certificate: cert,
+		})
+	}
+
+	first := webhookIdentityCert(t)
+	require.ErrorAs(t, finalize(first), new(errWebhookHookFailedOnce))
+	fp, err := grpcSvc.RecordedIDevIDFingerprint(ctx, webhookIdentityMAC)
+	require.NoError(t, err)
+	assert.Empty(t, fp, "a failed finalize records no fingerprint")
+
+	retry := webhookIdentityCert(t)
+	require.NoError(t, finalize(retry))
+
+	rec := f.report(first)
+	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	rec = f.report(retry)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, pxe.StateInstallComplete, f.state(t))
+}
