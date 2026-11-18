@@ -34,43 +34,13 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
  * that validates TPM quotes against reference manifests.
  */
 /**
- * A row's result. Only the verifier's verdict makes a row passed or failed:
- * a signature or Merkle root on the manifest proves nothing until it is
- * verified. "unverified" covers invalid evidence, an unknown or missing
- * verdict and a failed verifier call; "in_progress" means no answer yet or a
- * PENDING verdict.
+ * A row's result. This page shows no verdict: it never runs the verifier,
+ * because VerifyManifest without fresh trusted expectations (nonce, PCR
+ * baseline, public key) changes quarantine state, so merely viewing history
+ * could release or quarantine a device (Codex #1675). Every listed manifest
+ * is therefore "unverified" until a stored verdict exists to display.
  */
 type VerificationStatus = "passed" | "failed" | "unverified" | "in_progress";
-
-/** What the verifier answered for one manifest. */
-interface Verdict {
-  status: VerificationStatus;
-  verifiedAt?: string;
-  errors: string[];
-}
-
-/** Maps a verifyManifest response (or its rejection, as null) to a verdict. */
-function verdictOf(
-  response: {
-    success?: boolean;
-    data?: {
-      result?: { status?: string; verifiedAt?: string; errors?: string[] };
-    };
-  } | null
-): Verdict {
-  const result = response?.success ? response.data?.result : undefined;
-  const errors = result?.errors ?? [];
-  switch (result?.status) {
-    case "VERIFIED":
-      return { status: "passed", verifiedAt: result.verifiedAt, errors };
-    case "FAILED":
-      return { status: "failed", verifiedAt: result.verifiedAt, errors };
-    case "PENDING":
-      return { status: "in_progress", errors };
-    default:
-      return { status: "unverified", errors };
-  }
-}
 
 interface Verification {
   id: string;
@@ -221,68 +191,22 @@ export default function VerifyPage() {
     }
   );
 
-  // Ask the verifier about every listed manifest. The verdicts are kept with
-  // the list they answer, so a refetched list shows in progress until its own
-  // verdicts arrive.
-  const verifier = React.useRef(attestation);
-  React.useEffect(() => {
-    verifier.current = attestation;
-  });
-  const [verdicts, setVerdicts] = React.useState<{
-    source: unknown;
-    byId: Record<string, Verdict>;
-  }>({ source: null, byId: {} });
-
-  React.useEffect(() => {
-    const manifests = manifestsData?.manifests;
-    if (!manifests?.length) return;
-    let cancelled = false;
-    for (const manifest of manifests) {
-      Promise.resolve(verifier.current.verifyManifest({ manifest }))
-        .then(
-          (response) => verdictOf(response),
-          () => verdictOf(null)
-        )
-        .then((verdict) => {
-          if (cancelled) return;
-          setVerdicts((prev) => ({
-            source: manifestsData,
-            byId: {
-              ...(prev.source === manifestsData ? prev.byId : {}),
-              [manifest.id]: verdict,
-            },
-          }));
-        });
-    }
-    return () => {
-      cancelled = true;
-    };
-  }, [manifestsData]);
-
   const verifications = React.useMemo<Verification[]>(() => {
     if (!manifestsData?.manifests) return [];
-    const byId = verdicts.source === manifestsData ? verdicts.byId : {};
 
-    return manifestsData.manifests.map((manifest) => {
-      const verdict: Verdict = byId[manifest.id] ?? {
-        status: "in_progress",
-        errors: [],
-      };
-
-      return {
-        id: manifest.id,
-        deviceId: manifest.hostId,
-        deviceName: manifest.hostId,
-        quoteId: manifest.id,
-        manifestId: manifest.id,
-        manifestName: `Manifest ${manifest.hostId}`,
-        status: verdict.status,
-        verifiedAt: verdict.verifiedAt || manifest.timestamp,
-        pcrMismatches: 0,
-        errors: verdict.errors,
-      };
-    });
-  }, [manifestsData, verdicts]);
+    return manifestsData.manifests.map((manifest) => ({
+      id: manifest.id,
+      deviceId: manifest.hostId,
+      deviceName: manifest.hostId,
+      quoteId: manifest.id,
+      manifestId: manifest.id,
+      manifestName: `Manifest ${manifest.hostId}`,
+      status: "unverified",
+      verifiedAt: manifest.timestamp,
+      pcrMismatches: 0,
+      errors: [],
+    }));
+  }, [manifestsData]);
 
   const stats = React.useMemo(() => {
     return {
@@ -421,7 +345,7 @@ export default function VerifyPage() {
               {stats.unverified}
             </div>
             <p className="text-xs text-muted-foreground">
-              No verdict from the verifier
+              No verdict recorded; this page does not run the verifier
             </p>
           </CardContent>
         </Card>
