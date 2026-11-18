@@ -282,6 +282,13 @@ func (s *Server) RemoveVPNPeer(ctx context.Context, req *ipcv1.RemoveVPNPeerRequ
 func (s *Server) ReconcileVPNPeers(ctx context.Context, req *ipcv1.ReconcileVPNPeersRequest) (*ipcv1.ReconcileVPNPeersResponse, error) {
 	planes := s.vpn.Load()
 	if planes == nil {
+		// A process hosting no plane holds no peer, so withdrawing every
+		// peer of a named plane is already done: the supervisor's withdrawal
+		// for a given-up vpn child must be able to finish. Keeping a peer, or
+		// naming no plane, still refuses.
+		if req.GetDataPlane() != "" && len(req.GetLeaseIds()) == 0 {
+			return &ipcv1.ReconcileVPNPeersResponse{}, nil
+		}
 		return &ipcv1.ReconcileVPNPeersResponse{Refusal: noVPNPlanes()}, nil
 	}
 	return planes.host.ReconcileVPNPeers(ctx, req), nil
