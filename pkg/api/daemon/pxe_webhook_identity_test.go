@@ -207,18 +207,49 @@ func stubMACForIP(t *testing.T, ip, mac string) {
 // the issued IDevID's fingerprint on the PXE record of the enrolling MAC, and
 // the install-complete webhook then accepts that IDevID over mTLS.
 func TestPXEIdentityHook_EnrolmentRecordsTheIDevIDTheWebhookRequires(t *testing.T) {
-	const clientIP = "192.0.2.10"
 	ctx := context.Background()
 	cert := webhookIdentityCert(t)
+	ek := webhookIdentityCert(t)
 	f := newWebhookIdentityFixture(t)
-	stubMACForIP(t, clientIP, webhookIdentityMAC)
+	profiles := webhookEKProfiles{ek.SerialNumber.String(): {MACAddress: webhookIdentityMAC}}
 
 	// Before enrolment nothing is recorded, so the webhook refuses.
 	rec := f.report(cert)
 	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
 
 	logger := logging.NewLogger(slog.LevelError, io.Discard)
-	hook := webv1.NewPXEIdentityHook(NewPXEGRPCService(logger, f.svc), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	grpcSvc := NewPXEGRPCService(logger, f.svc)
+	hook := webv1.NewPXEIdentityHookWithProfiles(grpcSvc, profiles, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	require.NoError(t, hook(&trustedca.ACMEOrderFinalizeHookContext{
+		Context:     ctx,
+		IsTCGCSR:    true,
+		ClientIP:    "198.51.100.7",
+		Certificate: cert,
+		TCGData:     &trustedca.ACMETCGEnrollmentData{EKCertificate: ek},
+	}))
+
+	fp, err := grpcSvc.RecordedIDevIDFingerprint(ctx, webhookIdentityMAC)
+	require.NoError(t, err)
+	require.Equal(t, webhookIdentityFingerprint(cert), fp)
+
+	rec = f.report(cert)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, pxe.StateInstallComplete, f.state(t))
+}
+
+// TestPXEIdentityHook_NoProfileResolverRecordsNothingAndTheWebhookRefuses
+// pins the refusal: a hook without a profile resolver records no
+// fingerprint, so the device's install report is refused.
+func TestPXEIdentityHook_NoProfileResolverRecordsNothingAndTheWebhookRefuses(t *testing.T) {
+	const clientIP = "192.0.2.10"
+	ctx := context.Background()
+	cert := webhookIdentityCert(t)
+	f := newWebhookIdentityFixture(t)
+	stubMACForIP(t, clientIP, webhookIdentityMAC)
+
+	logger := logging.NewLogger(slog.LevelError, io.Discard)
+	grpcSvc := NewPXEGRPCService(logger, f.svc)
+	hook := webv1.NewPXEIdentityHook(grpcSvc, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	require.NoError(t, hook(&trustedca.ACMEOrderFinalizeHookContext{
 		Context:     ctx,
 		IsTCGCSR:    true,
@@ -226,9 +257,12 @@ func TestPXEIdentityHook_EnrolmentRecordsTheIDevIDTheWebhookRequires(t *testing.
 		Certificate: cert,
 	}))
 
-	rec = f.report(cert)
-	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	assert.Equal(t, pxe.StateInstallComplete, f.state(t))
+	fp, err := grpcSvc.RecordedIDevIDFingerprint(ctx, webhookIdentityMAC)
+	require.NoError(t, err)
+	assert.Empty(t, fp, "a hook without a profile resolver records no fingerprint")
+
+	rec := f.report(cert)
+	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
 }
 
 // TestPXEIdentityHook_NoPXEBackendDoesNotFailEnrolment covers the production
@@ -336,13 +370,16 @@ func TestPXEIdentityHook_AFailedFinalizeThenARetryEnrols(t *testing.T) {
 		failed = true
 		return errWebhookHookFailedOnce{}
 	})
-	hooks.Register(webv1.NewPXEIdentityHook(grpcSvc, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	ek := webhookIdentityCert(t)
+	profiles := webhookEKProfiles{ek.SerialNumber.String(): {MACAddress: webhookIdentityMAC}}
+	hooks.Register(webv1.NewPXEIdentityHookWithProfiles(grpcSvc, profiles, slog.New(slog.NewTextHandler(io.Discard, nil))))
 	finalize := func(cert *x509.Certificate) error {
 		return hooks.Execute(&trustedca.ACMEOrderFinalizeHookContext{
 			Context:     ctx,
 			IsTCGCSR:    true,
 			ClientIP:    "192.0.2.10",
 			Certificate: cert,
+			TCGData:     &trustedca.ACMETCGEnrollmentData{EKCertificate: ek},
 		})
 	}
 

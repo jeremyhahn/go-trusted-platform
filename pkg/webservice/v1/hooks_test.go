@@ -32,7 +32,9 @@ import (
 	devicepkg "github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	dnsentities "github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -832,6 +834,30 @@ func TestNewPXEIdentityHook_AProfileLookupErrorFailsTheEnrolment(t *testing.T) {
 	err := hook(pxeIdentityTCGContext(pxeIdentityEKCert(t, 1001)))
 
 	require.Error(t, err)
+	assert.ErrorAs(t, err, new(errProfileStoreDown))
+	assert.Empty(t, rec.calls)
+	assert.Empty(t, rec.macs)
+}
+
+// TestNewPXEIdentityHook_AProfileStoreFailureThroughTheProfileServiceFailsTheEnrolment
+// drives a storage failure through the production resolver
+// (devicepkg.ProfileService over the quicbaas DAO): it must fail the
+// enrolment, not pass as an unbound device.
+func TestNewPXEIdentityHook_AProfileStoreFailureThroughTheProfileServiceFailsTheEnrolment(t *testing.T) {
+	ctx := context.Background()
+	mock := quicbaas.NewMockStorage()
+	require.NoError(t, mock.Start(ctx))
+	profiles, err := devicepkg.NewProfileService(devicepkg.NewDatastore(mock, logging.DefaultLogger()))
+	require.NoError(t, err)
+	mock.ListError = errProfileStoreDown{}
+
+	rec := &fakePXEIdentityRecorder{}
+	hook := NewPXEIdentityHookWithProfiles(rec, profiles, slog.Default())
+
+	err = hook(pxeIdentityTCGContext(pxeIdentityEKCert(t, 1001)))
+
+	require.Error(t, err)
+	assert.ErrorAs(t, err, new(ErrPXEIdentityProfileLookup))
 	assert.ErrorAs(t, err, new(errProfileStoreDown))
 	assert.Empty(t, rec.calls)
 	assert.Empty(t, rec.macs)
