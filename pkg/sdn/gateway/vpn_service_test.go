@@ -340,6 +340,35 @@ func TestVPNService_ARestartBuildsFreshPlanes(t *testing.T) {
 	assert.Equal(t, 2, r.builds)
 }
 
+// reconcilingVPNPlane is a fakeVPNPlane that also reconciles its peers, as a
+// plane the datapath child hosts does, and records each keep list.
+type reconcilingVPNPlane struct {
+	*fakeVPNPlane
+	reconciles [][]vpn.LeaseID
+}
+
+func (p *reconcilingVPNPlane) ReconcilePeers(_ context.Context, keep []vpn.LeaseID) error {
+	p.reconciles = append(p.reconciles, keep)
+	return nil
+}
+
+// TestVPNBackend_AStartWithoutAControlPlaneReconcilesTheHostedPeers pins
+// finding 1: a vpn child on a memory-only store still reconciles the planes
+// that outlived its predecessor, keeping nothing.
+func TestVPNBackend_AStartWithoutAControlPlaneReconcilesTheHostedPeers(t *testing.T) {
+	ctx := context.Background()
+	r := newVPNRig(t)
+	plane := &reconcilingVPNPlane{fakeVPNPlane: &fakeVPNPlane{name: "masque", events: &r.events}}
+	r.gw.config.Runtime.VPN.DataPlanes[vpn.DataPlaneMASQUE] = func(*slog.Logger) (vpn.ManagedDataPlane, error) {
+		return plane, nil
+	}
+
+	require.NoError(t, r.handler().Start(ctx))
+	require.Len(t, plane.reconciles, 1, "the start reconciles the hosted peers once")
+	assert.Empty(t, plane.reconciles[0], "an empty store keeps no hosted peer")
+	require.NoError(t, r.handler().Stop(ctx))
+}
+
 // TestVPNService_StartAppliesTheRecordedSectionAndStopRevokes: a section
 // delivered before the service starts is applied as it starts, and stopping
 // the service hands every address back.

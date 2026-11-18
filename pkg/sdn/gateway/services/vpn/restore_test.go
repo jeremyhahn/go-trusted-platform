@@ -177,6 +177,27 @@ func TestRestore_RemovesAHostedPeerWhoseLeaseIsGone(t *testing.T) {
 	assert.Contains(t, h.plane.installed, kept.ID, "the stored lease's peer stays")
 }
 
+// TestReconcileHostedPeers_AnEmptyStoreWithdrawsEveryHostedPeer pins the
+// memory-only restart: a replacement child whose store is empty withdraws
+// every peer its predecessor left in the surviving hosted planes.
+func TestReconcileHostedPeers_AnEmptyStoreWithdrawsEveryHostedPeer(t *testing.T) {
+	h := newRestoreHarness(t)
+	h.plane.installed["lease-orphan"] = &Lease{ID: "lease-orphan", DataPlane: DataPlaneMASQUE}
+	h.start(t)
+
+	require.NoError(t, h.svc.ReconcileHostedPeers(context.Background()))
+
+	h.plane.mu.Lock()
+	defer h.plane.mu.Unlock()
+	assert.NotContains(t, h.plane.installed, LeaseID("lease-orphan"), "the orphaned peer is withdrawn")
+}
+
+func TestReconcileHostedPeers_RefusesBeforeStart(t *testing.T) {
+	h := newRestoreHarness(t)
+	var notStarted *ErrNotStarted
+	assert.True(t, errors.As(h.svc.ReconcileHostedPeers(context.Background()), &notStarted))
+}
+
 func TestRestore_DropsLeasesItCannotReinstate(t *testing.T) {
 	cases := map[string]struct {
 		prepare func(*testing.T, *restoreHarness, *Lease)
