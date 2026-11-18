@@ -111,6 +111,20 @@ type releasePendingService interface {
 	ReleasePending() bool
 }
 
+// cleanupPendingHandler is a ServiceHandler that can be left holding
+// cleanup after its Start failed; the Gateway calls its Stop to finish it.
+type cleanupPendingHandler interface {
+	CleanupPending() bool
+}
+
+// CleanupPending reports whether a failed Start left a service whose
+// cleanup is still outstanding; Stop finishes it.
+func (h *backedServiceHandler) CleanupPending() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.retained != nil
+}
+
 func newBackedServiceHandler(g *Gateway, name string, build serviceBuilder) *backedServiceHandler {
 	return &backedServiceHandler{gateway: g, name: name, build: build}
 }
