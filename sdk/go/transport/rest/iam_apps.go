@@ -72,16 +72,32 @@ func decodeIAMRotateAppSecret(raw []byte) (*platformv1.RotateIAMAppSecretRespons
 	return out, nil
 }
 
+// iamDefaultPageSize and iamMaxPageSize mirror the IAM handlers'
+// defaultLimit and maxLimit (pkg/webservice/v1/rest/iam/handlers.go): a
+// missing limit lists 50 apps and a limit above 1000 lists 1000.
+const (
+	iamDefaultPageSize int64 = 50
+	iamMaxPageSize     int64 = 1000
+)
+
 // paginationOffset renders a 1-based PaginationRequest page as the
 // zero-based row offset the IAM handlers read (getPaginationParams):
-// (page-1)*page_size. The first page, or no page size, sends no offset.
+// (page-1)*page_size, using the page size the server applies. No page size
+// means the server's 50, and sizes above 1000 count as 1000. The first page
+// sends no offset.
 func paginationOffset(v protoreflect.Value) string {
 	m := v.Message()
 	fields := m.Descriptor().Fields()
 	page := paginationInt(m.Get(fields.ByName("page")))
 	size := paginationInt(m.Get(fields.ByName("page_size")))
-	if page <= 1 || size <= 0 {
+	if page <= 1 {
 		return ""
+	}
+	if size <= 0 {
+		size = iamDefaultPageSize
+	}
+	if size > iamMaxPageSize {
+		size = iamMaxPageSize
 	}
 	return strconv.FormatInt((page-1)*size, 10)
 }
