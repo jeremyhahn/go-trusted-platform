@@ -170,6 +170,40 @@ func (a *Archiver) Import(ctx context.Context, r io.Reader) (*Bundle, error) {
 }
 
 // ImportFromFile imports a bundle from a tar.gz file (supports full extraction).
+// expansionBudget bounds a decompressed stream: every byte the tar reader
+// pulls, including the bodies of entries it skips, is charged against
+// remaining, and each Read stops once ctx is done. The first byte past the
+// limit is refused with ErrArchiveTooLarge.
+type expansionBudget struct {
+	ctx       context.Context
+	r         io.Reader
+	remaining int64
+	limit     int64
+}
+
+func (b *expansionBudget) Read(p []byte) (int, error) {
+	if err := b.ctx.Err(); err != nil {
+		return 0, err
+	}
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if b.remaining <= 0 {
+		var probe [1]byte
+		n, err := b.r.Read(probe[:])
+		if n > 0 {
+			return 0, ErrArchiveTooLarge{Limit: b.limit}
+		}
+		return 0, err
+	}
+	if int64(len(p)) > b.remaining {
+		p = p[:b.remaining]
+	}
+	n, err := b.r.Read(p)
+	b.remaining -= int64(n)
+	return n, err
+}
+
 func (a *Archiver) ImportFromFile(ctx context.Context, archivePath string) (*Bundle, error) {
 	a.logger.Info("Importing bundle from file", "path", archivePath)
 
@@ -187,7 +221,7 @@ func (a *Archiver) ImportFromFile(ctx context.Context, archivePath string) (*Bun
 	defer gzr.Close()
 
 	// Create tar reader
-	tr := tar.NewReader(gzr)
+	tr := tar.NewReader(&expansionBudget{ctx: ctx, r: gzr, remaining: a.maxExpandedBytes, limit: a.maxExpandedBytes})
 
 	// First pass: find manifest
 	var manifest *Manifest
@@ -252,7 +286,7 @@ func (a *Archiver) ImportFromFile(ctx context.Context, archivePath string) (*Bun
 		return nil, ErrArchiveOperationFailed{Operation: "import", Cause: err}
 	}
 	defer gzr2.Close()
-	tr2 := tar.NewReader(gzr2)
+	tr2 := tar.NewReader(&expansionBudget{ctx: ctx, r: gzr2, remaining: a.maxExpandedBytes, limit: a.maxExpandedBytes})
 
 	// refuse removes the partial bundle and reports why the import stopped.
 	refuse := func(cause error) (*Bundle, error) {
