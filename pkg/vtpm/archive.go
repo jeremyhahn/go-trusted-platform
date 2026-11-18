@@ -405,7 +405,10 @@ func (a *Archiver) ValidateArchive(ctx context.Context, r io.Reader) (*Manifest,
 	}
 	defer gzr.Close()
 
-	tr := tar.NewReader(gzr)
+	// Every decompressed byte, the manifest's and those of the entries tar
+	// skips before it, counts against the expansion budget, so a gzip bomb
+	// is refused here as it is on import.
+	tr := tar.NewReader(&expansionBudget{ctx: ctx, r: gzr, remaining: a.maxExpandedBytes, limit: a.maxExpandedBytes})
 
 	var manifest *Manifest
 
