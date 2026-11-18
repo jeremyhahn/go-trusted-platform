@@ -20,6 +20,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -296,7 +297,7 @@ type PXEIdentityRecorder interface {
 }
 
 // NewPXEIdentityHook returns NewPXEIdentityHookWithProfiles with no profile
-// resolver: the enrolling device is found through the client IP only.
+// resolver: with no source of an EK-bound MAC it records nothing.
 func NewPXEIdentityHook(recorder PXEIdentityRecorder, logger *slog.Logger) trustedca.ACMEOrderFinalizeHook {
 	return NewPXEIdentityHookWithProfiles(recorder, nil, logger)
 }
@@ -304,11 +305,13 @@ func NewPXEIdentityHook(recorder PXEIdentityRecorder, logger *slog.Logger) trust
 // NewPXEIdentityHookWithProfiles returns an ACME finalize hook that records
 // the issued IDevID's fingerprint on the PXE record of the enrolling device,
 // which the install-complete webhook requires over mTLS (#1694). The device is
-// resolved through its verified enrolment identity first: the MAC of the
+// resolved through its verified enrolment identity only: the MAC of the
 // device profile bound to the CA-verified EK certificate's serial, which works
-// across a router and over IPv6. With no resolver, no EK, no bound profile or
-// a profile with no MAC, the client IP is resolved through the ARP table,
-// which covers an on-link device. Non-TCG enrolments and a missing
+// across a router and over IPv6. The client IP proves no MAC, so it is never
+// used. With no resolver, no EK, no profile bound to the EK
+// (devicepkg.ErrNoMatchingConfig) or a profile with no MAC, nothing is
+// recorded and the enrolment proceeds; any other profile lookup error fails
+// the enrolment. Non-TCG enrolments and a missing
 // certificate are skipped. An enrolment that is not a PXE install in progress
 // (no MAC, no PXE device, or a device past Installing) is logged and does not
 // fail the enrolment. A node with no PXE backend answers with the typed
@@ -325,12 +328,16 @@ func NewPXEIdentityHookWithProfiles(recorder PXEIdentityRecorder, profiles devic
 		if reqCtx == nil {
 			reqCtx = context.Background()
 		}
-		var err error
-		if mac := boundProfileMAC(reqCtx, profiles, ctx.TCGData); mac != "" {
-			err = recorder.RecordEnrolledIDevIDFingerprintForMAC(reqCtx, mac, ctx.Certificate)
-		} else {
-			err = recorder.RecordEnrolledIDevIDFingerprint(reqCtx, ctx.ClientIP, ctx.Certificate)
+		mac, err := boundProfileMAC(reqCtx, profiles, ctx.TCGData)
+		if err != nil {
+			return err
 		}
+		if mac == "" {
+			logger.Debug("PXE identity: no MAC bound to the verified EK - IDevID not recorded",
+				slog.String("client_ip", ctx.ClientIP))
+			return nil
+		}
+		err = recorder.RecordEnrolledIDevIDFingerprintForMAC(reqCtx, mac, ctx.Certificate)
 		if isServiceNotConfigured(err) {
 			logger.Debug("PXE identity: PXE is not configured on this node - IDevID not recorded",
 				slog.String("client_ip", ctx.ClientIP))
@@ -354,17 +361,42 @@ func NewPXEIdentityHookWithProfiles(recorder PXEIdentityRecorder, profiles devic
 
 // boundProfileMAC returns the MAC of the device profile bound to the
 // CA-verified EK certificate's serial (an exact EK-serial match), or "" when
-// there is no resolver, no EK, no bound profile or the profile has no MAC.
-func boundProfileMAC(ctx context.Context, profiles devicepkg.ConfigForDeviceFinder, tcg *trustedca.ACMETCGEnrollmentData) string {
+// there is no resolver, no EK, no bound profile (devicepkg.ErrNoMatchingConfig)
+// or the profile has no MAC. Any other lookup error is returned as
+// ErrPXEIdentityProfileLookup.
+func boundProfileMAC(ctx context.Context, profiles devicepkg.ConfigForDeviceFinder, tcg *trustedca.ACMETCGEnrollmentData) (string, error) {
 	if profiles == nil || tcg == nil || tcg.EKCertificate == nil || tcg.EKCertificate.SerialNumber == nil {
-		return ""
+		return "", nil
 	}
-	profile, err := profiles.FindConfigForDevice(ctx, tcg.EKCertificate.SerialNumber.String(), "")
-	if err != nil || profile == nil {
-		return ""
+	ekSerial := tcg.EKCertificate.SerialNumber.String()
+	profile, err := profiles.FindConfigForDevice(ctx, ekSerial, "")
+	if err != nil {
+		var noMatch devicepkg.ErrNoMatchingConfig
+		var noMatchPtr *devicepkg.ErrNoMatchingConfig
+		if errors.As(err, &noMatch) || errors.As(err, &noMatchPtr) {
+			return "", nil
+		}
+		return "", ErrPXEIdentityProfileLookup{EKSerial: ekSerial, Err: err}
 	}
-	return profile.MACAddress
+	if profile == nil {
+		return "", nil
+	}
+	return profile.MACAddress, nil
 }
+
+// ErrPXEIdentityProfileLookup is returned by the PXE identity hook when the
+// lookup of the profile bound to the verified EK fails for a reason other
+// than devicepkg.ErrNoMatchingConfig; the enrolment fails with it.
+type ErrPXEIdentityProfileLookup struct {
+	EKSerial string
+	Err      error
+}
+
+func (e ErrPXEIdentityProfileLookup) Error() string {
+	return fmt.Sprintf("PXE identity: look up the profile bound to ek_serial=%q: %v", e.EKSerial, e.Err)
+}
+
+func (e ErrPXEIdentityProfileLookup) Unwrap() error { return e.Err }
 
 // isServiceNotConfigured reports whether err is a gRPC status carrying the
 // typed SERVICE_NOT_CONFIGURED discriminator: a google.rpc.ErrorInfo detail
