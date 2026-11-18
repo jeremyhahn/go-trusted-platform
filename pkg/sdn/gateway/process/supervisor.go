@@ -211,6 +211,12 @@ type supervised struct {
 	// restored its state into the datapath child that is gone, so the
 	// process is relaunched once more when the launch completes.
 	followPending bool
+	// withdrawCancel and withdrawDone fence a given-up follower's peer
+	// withdrawal against its replacement launch: the launch claimant
+	// cancels the withdrawal and waits on withdrawDone before it execs the
+	// replacement, so no withdrawal request outlives the claim.
+	withdrawCancel context.CancelFunc
+	withdrawDone   chan struct{}
 	// desired is the last desired document Apply sent to this process. A
 	// child that crashed took what it had applied with it, and the new one
 	// sweeps its predecessor's flows on Start, so a relaunched child is
@@ -292,8 +298,12 @@ func (s *Supervisor) StartService(ctx context.Context, service string) error {
 	s.mu.Unlock()
 
 	if claimed {
-		err := s.launch(ctx, proc)
-		launched := err == nil
+		launched := false
+		err := s.awaitWithdrawal(ctx, proc)
+		if err == nil {
+			err = s.launch(ctx, proc)
+			launched = err == nil
+		}
 		if launched {
 			err = s.serveLaunched(ctx, proc)
 		}
@@ -910,7 +920,19 @@ func (s *Supervisor) restartLoop(ctx context.Context, proc *supervised, failure 
 		backoff, over := s.noteRestart(proc, failure, cause)
 		if over {
 			if proc.def.FollowsDatapath {
-				s.withdrawFollowerPeers(ctx, proc)
+				wctx, cancel := context.WithCancel(ctx)
+				done := make(chan struct{})
+				s.mu.Lock()
+				proc.withdrawCancel, proc.withdrawDone = cancel, done
+				s.mu.Unlock()
+				s.withdrawFollowerPeers(wctx, proc)
+				cancel()
+				close(done)
+				s.mu.Lock()
+				if proc.withdrawDone == done {
+					proc.withdrawCancel, proc.withdrawDone = nil, nil
+				}
+				s.mu.Unlock()
 			}
 			return
 		}
@@ -976,12 +998,17 @@ var followerVPNPlanes = []string{"wireguard", "masque"}
 // a missing datapath is logged and retried, the backoff doubling from
 // RestartBackoff up to RestartBackoffMax, until every plane is confirmed, ctx
 // ends (stopProcess cancels it at Shutdown), the supervisor stops, or the
-// follower launches again and becomes the expiry authority.
+// follower launches again and becomes the expiry authority. A replacement
+// launch cancels ctx and waits for this to return (awaitWithdrawal), so no
+// withdrawal request outlives the launch claim.
 func (s *Supervisor) withdrawFollowerPeers(ctx context.Context, proc *supervised) {
 	pending := append([]string(nil), followerVPNPlanes...)
 	backoff := s.cfg.RestartBackoff
 	for {
 		pending = s.withdrawRound(ctx, proc, pending)
+		if ctx.Err() != nil {
+			return
+		}
 		if len(pending) == 0 {
 			s.cfg.Logger.Info("gatewayd supervisor: vpn peers withdrawn from the datapath",
 				slog.String("process", proc.def.Name))
@@ -1009,7 +1036,10 @@ func (s *Supervisor) withdrawFollowerPeers(ctx context.Context, proc *supervised
 
 // withdrawRound asks the datapath once to withdraw every peer of each pending
 // plane and returns the planes whose withdrawal it did not confirm. Without a
-// datapath every plane stays pending.
+// datapath every plane stays pending. Each request runs on ctx, which a
+// replacement launch cancels before it execs the new child, so the datapath
+// handler stops a withdrawal the replacement fenced; the planes not yet
+// asked stay pending.
 func (s *Supervisor) withdrawRound(ctx context.Context, proc *supervised, pending []string) []string {
 	_, client, err := s.datapathProcess()
 	if err != nil {
@@ -1018,8 +1048,11 @@ func (s *Supervisor) withdrawRound(ctx context.Context, proc *supervised, pendin
 		return pending
 	}
 	var left []string
-	for _, plane := range pending {
-		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), statusTimeout)
+	for i, plane := range pending {
+		if ctx.Err() != nil {
+			return append(left, pending[i:]...)
+		}
+		rctx, cancel := context.WithTimeout(ctx, statusTimeout)
 		resp, err := client.ReconcileVPNPeers(rctx, &ipcv1.ReconcileVPNPeersRequest{DataPlane: plane})
 		cancel()
 		switch {
@@ -1035,6 +1068,26 @@ func (s *Supervisor) withdrawRound(ctx context.Context, proc *supervised, pendin
 		}
 	}
 	return left
+}
+
+// awaitWithdrawal cancels a given-up follower's peer withdrawal still in
+// flight and waits for it to return, so the replacement the caller is about
+// to launch restores its peers after the last withdrawal request ended. It
+// returns ctx.Err() when ctx ends first.
+func (s *Supervisor) awaitWithdrawal(ctx context.Context, proc *supervised) error {
+	s.mu.Lock()
+	cancel, done := proc.withdrawCancel, proc.withdrawDone
+	s.mu.Unlock()
+	if done == nil {
+		return nil
+	}
+	cancel()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // relaunchFollowers relaunches every running process that keeps state in

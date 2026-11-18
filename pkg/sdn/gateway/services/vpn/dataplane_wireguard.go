@@ -215,7 +215,15 @@ func (p *wireguardPlane) ReconcilePeers(ctx context.Context, keep []LeaseID) err
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	var errs []error
+	// A cancelled reconciliation, such as a given-up follower's withdrawal
+	// its replacement fenced, removes nothing more.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	for id, key := range p.peers {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(append(errs, err)...)
+		}
 		if want[id] {
 			continue
 		}

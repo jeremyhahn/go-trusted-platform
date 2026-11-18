@@ -17,6 +17,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/netip"
+	"slices"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
 )
@@ -42,6 +44,8 @@ func (s *Service) Restore(ctx context.Context) error {
 	var errs []error
 	if err := s.reconcilePeers(ctx, leases); err != nil {
 		errs = append(errs, err)
+	} else {
+		s.reclaimOrphanAddresses(ctx, leases)
 	}
 	for _, l := range leases {
 		if err := s.restore(ctx, l); err != nil {
@@ -86,6 +90,46 @@ func (s *Service) reconcilePeers(ctx context.Context, leases []*Lease) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// reclaimOrphanAddresses releases every vpn-tagged allocation in the lease
+// pool whose address no stored lease holds. The vpn-tagged allocation is the
+// durable record of an address whose cleanup peerRetry held, and peerRetry
+// does not survive a restart; once every hosted plane matches the stored
+// leases (reconcilePeers succeeded), its peer is gone and the address is free
+// to go back. A pool, list or release failure is logged and the allocation
+// stays held for the next restart.
+func (s *Service) reclaimOrphanAddresses(ctx context.Context, leases []*Lease) {
+	s.enrolGate.Lock()
+	defer s.enrolGate.Unlock()
+	pool, err := s.deps.IPAM.GetPoolByName(ctx, s.cfg.Pool)
+	if err != nil {
+		s.logger.Warn("vpn.restore: no lease pool to reclaim orphan addresses from", slog.Any("error", err))
+		return
+	}
+	allocs, err := s.deps.IPAM.GetAllocationsByPool(ctx, pool.ID)
+	if err != nil {
+		s.logger.Warn("vpn.restore: could not list the lease pool's allocations", slog.Any("error", err))
+		return
+	}
+	held := make(map[netip.Addr]bool, len(leases))
+	for _, l := range leases {
+		if l.Address.IsValid() {
+			held[l.Address.Addr()] = true
+		}
+	}
+	for _, alloc := range allocs {
+		if alloc.Status != ipam.AllocationStatusActive || !slices.Contains(alloc.Tags, "vpn") || held[alloc.IP] {
+			continue
+		}
+		if err := s.deps.IPAM.Release(ctx, alloc.IP); err != nil {
+			s.logger.Warn("vpn.restore: orphan address release failed",
+				slog.String("ip", alloc.IP.String()), slog.String("device", alloc.DeviceID), slog.Any("error", err))
+			continue
+		}
+		s.logger.Info("vpn.restore.address.reclaim",
+			slog.String("ip", alloc.IP.String()), slog.String("device", alloc.DeviceID))
+	}
 }
 
 // reconcilePlane removes every peer of one hosted plane whose lease is not
