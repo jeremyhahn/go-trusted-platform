@@ -35,12 +35,17 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/ipxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
+	webv1 "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restpxe "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/pxe"
 )
@@ -179,4 +184,78 @@ func TestPXEWebhook_InstallingDeviceWithRecordedIDevIDCompletes(t *testing.T) {
 		assert.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
 		assert.Equal(t, pxe.StateInstalling, f.state(t))
 	})
+}
+
+// stubMACForIP answers mac for ip and "" for any other address, the way an
+// ARP table answers for an address that is not on-link.
+func stubMACForIP(t *testing.T, ip, mac string) {
+	t.Helper()
+	orig := macForIP
+	macForIP = func(addr string) string {
+		if addr == ip {
+			return mac
+		}
+		return ""
+	}
+	t.Cleanup(func() { macForIP = orig })
+}
+
+// TestPXEIdentityHook_EnrolmentRecordsTheIDevIDTheWebhookRequires drives the
+// production path (#1694, Codex P1 on #1896): the ACME finalize hook records
+// the issued IDevID's fingerprint on the PXE record of the enrolling MAC, and
+// the install-complete webhook then accepts that IDevID over mTLS.
+func TestPXEIdentityHook_EnrolmentRecordsTheIDevIDTheWebhookRequires(t *testing.T) {
+	const clientIP = "192.0.2.10"
+	ctx := context.Background()
+	cert := webhookIdentityCert(t)
+	f := newWebhookIdentityFixture(t)
+	stubMACForIP(t, clientIP, webhookIdentityMAC)
+
+	// Before enrolment nothing is recorded, so the webhook refuses.
+	rec := f.report(cert)
+	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+
+	logger := logging.NewLogger(slog.LevelError, io.Discard)
+	hook := webv1.NewPXEIdentityHook(NewPXEGRPCService(logger, f.svc), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	require.NoError(t, hook(&trustedca.ACMEOrderFinalizeHookContext{
+		Context:     ctx,
+		IsTCGCSR:    true,
+		ClientIP:    clientIP,
+		Certificate: cert,
+	}))
+
+	rec = f.report(cert)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, pxe.StateInstallComplete, f.state(t))
+}
+
+// TestPXEIdentityHook_UnresolvableIPRecordsNothing pins that an enrolment
+// from an address with no on-link MAC (not a PXE install) still succeeds and
+// records no fingerprint, so the webhook keeps refusing.
+func TestPXEIdentityHook_UnresolvableIPRecordsNothing(t *testing.T) {
+	ctx := context.Background()
+	cert := webhookIdentityCert(t)
+	f := newWebhookIdentityFixture(t)
+	stubMACForIP(t, "192.0.2.10", webhookIdentityMAC)
+
+	logger := logging.NewLogger(slog.LevelError, io.Discard)
+	grpcSvc := NewPXEGRPCService(logger, f.svc)
+	hook := webv1.NewPXEIdentityHook(grpcSvc, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	require.NoError(t, hook(&trustedca.ACMEOrderFinalizeHookContext{
+		Context:     ctx,
+		IsTCGCSR:    true,
+		ClientIP:    "198.51.100.7",
+		Certificate: cert,
+	}))
+
+	fp, err := grpcSvc.RecordedIDevIDFingerprint(ctx, webhookIdentityMAC)
+	require.NoError(t, err)
+	assert.Empty(t, fp)
+
+	err = grpcSvc.RecordEnrolledIDevIDFingerprint(ctx, "198.51.100.7", cert)
+	assert.Equal(t, codes.NotFound, status.Code(err), "an unresolvable IP is a typed not-found")
+
+	rec := f.report(cert)
+	assert.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	assert.Equal(t, pxe.StateInstalling, f.state(t))
 }

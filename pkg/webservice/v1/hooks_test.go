@@ -37,6 +37,8 @@ import (
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
@@ -638,6 +640,49 @@ func TestNewDeviceRegistrationHook_SkipsNilTCGData(t *testing.T) {
 	})
 	assert.NoError(t, err)
 	assert.Empty(t, reg.saveCalls)
+}
+
+type fakePXEIdentityRecorder struct {
+	err   error
+	calls []string
+}
+
+func (f *fakePXEIdentityRecorder) RecordEnrolledIDevIDFingerprint(_ context.Context, clientIP string, _ *x509.Certificate) error {
+	f.calls = append(f.calls, clientIP)
+	return f.err
+}
+
+func TestNewPXEIdentityHook_SkipsNonTCGAndNilCertificate(t *testing.T) {
+	rec := &fakePXEIdentityRecorder{}
+	hook := NewPXEIdentityHook(rec, slog.Default())
+	cert := &x509.Certificate{Raw: []byte{1}}
+
+	assert.NoError(t, hook(&trustedca.ACMEOrderFinalizeHookContext{Context: context.Background(), ClientIP: "192.0.2.10", Certificate: cert}))
+	assert.NoError(t, hook(&trustedca.ACMEOrderFinalizeHookContext{Context: context.Background(), IsTCGCSR: true, ClientIP: "192.0.2.10"}))
+	assert.Empty(t, rec.calls)
+}
+
+func TestNewPXEIdentityHook_RecordsAndToleratesNotAPXEInstall(t *testing.T) {
+	cert := &x509.Certificate{Raw: []byte{1}}
+	for name, err := range map[string]error{
+		"recorded":        nil,
+		"not found":       status.Error(codes.NotFound, "no MAC"),
+		"past installing": status.Error(codes.FailedPrecondition, "installed"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := &fakePXEIdentityRecorder{err: err}
+			hook := NewPXEIdentityHook(rec, slog.Default())
+			require.NoError(t, hook(&trustedca.ACMEOrderFinalizeHookContext{Context: context.Background(), IsTCGCSR: true, ClientIP: "192.0.2.10", Certificate: cert}))
+			assert.Equal(t, []string{"192.0.2.10"}, rec.calls)
+		})
+	}
+}
+
+func TestNewPXEIdentityHook_OtherErrorFailsTheEnrolment(t *testing.T) {
+	rec := &fakePXEIdentityRecorder{err: status.Error(codes.InvalidArgument, "a different IDevID fingerprint is already recorded")}
+	hook := NewPXEIdentityHook(rec, slog.Default())
+	err := hook(&trustedca.ACMEOrderFinalizeHookContext{Context: context.Background(), IsTCGCSR: true, ClientIP: "192.0.2.10", Certificate: &x509.Certificate{Raw: []byte{1}}})
+	assert.Error(t, err)
 }
 
 func TestNewDeviceRegistrationHook_SkipsMissingSerial(t *testing.T) {
