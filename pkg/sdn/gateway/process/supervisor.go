@@ -971,16 +971,54 @@ var followerVPNPlanes = []string{"wireguard", "masque"}
 // withdrawFollowerPeers removes every peer the datapath child hosts for a
 // follower the supervisor has given up on. The follower is the only lease
 // expiry authority, so its peers must not outlive it; a later start of the
-// follower reinstalls the leases that are still valid (Restore). An unhosted
-// plane refuses and a transport failure is logged: neither stops the loop.
+// follower reinstalls the leases that are still valid (Restore). A plane the
+// datapath does not host confirms at once. A refusal, a transport failure or
+// a missing datapath is logged and retried, the backoff doubling from
+// RestartBackoff up to RestartBackoffMax, until every plane is confirmed, ctx
+// ends (stopProcess cancels it at Shutdown), the supervisor stops, or the
+// follower launches again and becomes the expiry authority.
 func (s *Supervisor) withdrawFollowerPeers(ctx context.Context, proc *supervised) {
+	pending := append([]string(nil), followerVPNPlanes...)
+	backoff := s.cfg.RestartBackoff
+	for {
+		pending = s.withdrawRound(ctx, proc, pending)
+		if len(pending) == 0 {
+			s.cfg.Logger.Info("gatewayd supervisor: vpn peers withdrawn from the datapath",
+				slog.String("process", proc.def.Name))
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.cfg.Clock.After(backoff):
+		}
+		backoff *= 2
+		if backoff > s.cfg.RestartBackoffMax {
+			backoff = s.cfg.RestartBackoffMax
+		}
+		// A new launch of the follower is the expiry authority again and
+		// reconciles the hosted peers at its own start.
+		s.mu.Lock()
+		done := s.stopped || proc.stopping || proc.child != nil || proc.launching
+		s.mu.Unlock()
+		if done {
+			return
+		}
+	}
+}
+
+// withdrawRound asks the datapath once to withdraw every peer of each pending
+// plane and returns the planes whose withdrawal it did not confirm. Without a
+// datapath every plane stays pending.
+func (s *Supervisor) withdrawRound(ctx context.Context, proc *supervised, pending []string) []string {
 	_, client, err := s.datapathProcess()
 	if err != nil {
 		s.cfg.Logger.Warn("gatewayd supervisor: no datapath to withdraw the given-up process's vpn peers from",
 			slog.String("process", proc.def.Name), slog.Any("error", err))
-		return
+		return pending
 	}
-	for _, plane := range followerVPNPlanes {
+	var left []string
+	for _, plane := range pending {
 		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), statusTimeout)
 		resp, err := client.ReconcileVPNPeers(rctx, &ipcv1.ReconcileVPNPeersRequest{DataPlane: plane})
 		cancel()
@@ -988,15 +1026,15 @@ func (s *Supervisor) withdrawFollowerPeers(ctx context.Context, proc *supervised
 		case err != nil:
 			s.cfg.Logger.Warn("gatewayd supervisor: withdrawing vpn peers failed",
 				slog.String("process", proc.def.Name), slog.String("plane", plane), slog.Any("error", err))
+			left = append(left, plane)
 		case resp.GetRefusal() != nil:
 			s.cfg.Logger.Warn("gatewayd supervisor: datapath refused the vpn peer withdrawal",
 				slog.String("process", proc.def.Name), slog.String("plane", plane),
 				slog.String("refusal", resp.GetRefusal().String()))
-		default:
-			s.cfg.Logger.Warn("gatewayd supervisor: vpn peers withdrawn from the datapath",
-				slog.String("process", proc.def.Name), slog.String("plane", plane))
+			left = append(left, plane)
 		}
 	}
+	return left
 }
 
 // relaunchFollowers relaunches every running process that keeps state in
