@@ -909,6 +909,9 @@ func (s *Supervisor) restartLoop(ctx context.Context, proc *supervised, failure 
 	for {
 		backoff, over := s.noteRestart(proc, failure, cause)
 		if over {
+			if proc.def.FollowsDatapath {
+				s.withdrawFollowerPeers(ctx, proc)
+			}
 			return
 		}
 		s.cfg.Logger.Warn("gatewayd supervisor: process down, restarting",
@@ -957,6 +960,42 @@ func (s *Supervisor) restartLoop(ctx context.Context, proc *supervised, failure 
 		s.cfg.Logger.Error("gatewayd supervisor: restart failed",
 			slog.String("process", proc.def.Name), slog.Any("error", err))
 		failure, cause = err, err
+	}
+}
+
+// followerVPNPlanes names the VPN planes a datapath child may host for a
+// follower (vpn.DataPlaneWireGuard and vpn.DataPlaneMASQUE; the vpn package
+// is not imported here, so the names are repeated).
+var followerVPNPlanes = []string{"wireguard", "masque"}
+
+// withdrawFollowerPeers removes every peer the datapath child hosts for a
+// follower the supervisor has given up on. The follower is the only lease
+// expiry authority, so its peers must not outlive it; a later start of the
+// follower reinstalls the leases that are still valid (Restore). An unhosted
+// plane refuses and a transport failure is logged: neither stops the loop.
+func (s *Supervisor) withdrawFollowerPeers(ctx context.Context, proc *supervised) {
+	_, client, err := s.datapathProcess()
+	if err != nil {
+		s.cfg.Logger.Warn("gatewayd supervisor: no datapath to withdraw the given-up process's vpn peers from",
+			slog.String("process", proc.def.Name), slog.Any("error", err))
+		return
+	}
+	for _, plane := range followerVPNPlanes {
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), statusTimeout)
+		resp, err := client.ReconcileVPNPeers(rctx, &ipcv1.ReconcileVPNPeersRequest{DataPlane: plane})
+		cancel()
+		switch {
+		case err != nil:
+			s.cfg.Logger.Warn("gatewayd supervisor: withdrawing vpn peers failed",
+				slog.String("process", proc.def.Name), slog.String("plane", plane), slog.Any("error", err))
+		case resp.GetRefusal() != nil:
+			s.cfg.Logger.Warn("gatewayd supervisor: datapath refused the vpn peer withdrawal",
+				slog.String("process", proc.def.Name), slog.String("plane", plane),
+				slog.String("refusal", resp.GetRefusal().String()))
+		default:
+			s.cfg.Logger.Warn("gatewayd supervisor: vpn peers withdrawn from the datapath",
+				slog.String("process", proc.def.Name), slog.String("plane", plane))
+		}
 	}
 }
 
