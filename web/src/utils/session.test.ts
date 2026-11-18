@@ -133,10 +133,14 @@ describe("revokeSession", () => {
     wipe();
   });
 
-  it("posts the bearer to the logout endpoint", () => {
+  function respond(status: number): void {
+    fetchMock.mockImplementation(() => Promise.resolve(new Response(null, { status })));
+  }
+
+  it("posts the bearer to the logout endpoint and reports it revoked on 200", async () => {
     setCookie("jwt", "the-bearer", { secure: true, sameSite: "Strict" });
 
-    revokeSession();
+    await expect(revokeSession()).resolves.toBe("revoked");
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
@@ -148,11 +152,12 @@ describe("revokeSession", () => {
     );
   });
 
-  it("sends the bearer it read even when the cookies are cleared right after", () => {
+  it("sends the bearer it read even when the cookies are cleared right after", async () => {
     setCookie("jwt", "the-bearer", { secure: true, sameSite: "Strict" });
 
-    revokeSession();
+    const outcome = revokeSession();
     clearSession();
+    await outcome;
 
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect((init.headers as Record<string, string>).Authorization).toBe(
@@ -160,17 +165,33 @@ describe("revokeSession", () => {
     );
   });
 
-  it("does nothing when there is no session", () => {
-    revokeSession();
+  it("reports none and sends nothing when there is no session", async () => {
+    await expect(revokeSession()).resolves.toBe("none");
 
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("swallows a failed request", async () => {
+  // #646: a bearer the server already refuses has nothing left to revoke.
+  it("reports rejected on 401", async () => {
+    setCookie("jwt", "the-bearer", { secure: true, sameSite: "Strict" });
+    respond(401);
+
+    await expect(revokeSession()).resolves.toBe("rejected");
+  });
+
+  // #646: the server could not record the revocation, so the session may
+  // still be valid there, and the caller must not call it signed out.
+  it("reports failed on 503", async () => {
+    setCookie("jwt", "the-bearer", { secure: true, sameSite: "Strict" });
+    respond(503);
+
+    await expect(revokeSession()).resolves.toBe("failed");
+  });
+
+  it("reports failed when the request itself fails", async () => {
     setCookie("jwt", "the-bearer", { secure: true, sameSite: "Strict" });
     fetchMock.mockImplementation(() => Promise.reject(new Error("offline")));
 
-    expect(() => revokeSession()).not.toThrow();
-    await Promise.resolve();
+    await expect(revokeSession()).resolves.toBe("failed");
   });
 });

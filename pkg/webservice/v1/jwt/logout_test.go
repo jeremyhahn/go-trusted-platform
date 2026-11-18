@@ -14,11 +14,15 @@
 package jwt
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -148,6 +152,32 @@ func TestLogout_SigningOutTwiceSucceeds(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, logout(handler, bearer).Code)
 	assert.Equal(t, http.StatusOK, logout(handler, bearer).Code)
+}
+
+// A logout the revocation store cannot record is not a refused bearer:
+// the handler answers 503 so the console can offer a retry, and the
+// retry, once the store is back, revokes the token for good (#646).
+func TestLogout_AnUnavailableRevocationStoreAnswers503(t *testing.T) {
+	t.Parallel()
+	blobs := &memoryBlobs{}
+	svc, _ := servicesOverOneKey(t, blobs)
+	logger := logging.DefaultLogger()
+	handler, err := NewRestHandler(logger, response.NewResponseWriter(logger, nil),
+		svc, new(MockUserService))
+	require.NoError(t, err)
+	bearer, err := svc.GenerateToken(entities.NewUser("unavailable@example.com"))
+	require.NoError(t, err)
+
+	blobs.mu.Lock()
+	blobs.fail = errors.New("store down")
+	blobs.mu.Unlock()
+	require.Equal(t, http.StatusServiceUnavailable, logout(handler, bearer).Code)
+
+	blobs.mu.Lock()
+	blobs.fail = nil
+	blobs.mu.Unlock()
+	require.Equal(t, http.StatusOK, logout(handler, bearer).Code)
+	require.ErrorIs(t, verifyString(svc, bearer), ErrTokenRevoked)
 }
 
 func TestLogout_RefusesARequestWithoutAToken(t *testing.T) {

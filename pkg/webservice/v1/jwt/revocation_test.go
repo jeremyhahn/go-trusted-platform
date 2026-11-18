@@ -140,6 +140,7 @@ func TestRevocation_UnreachableStoreFailsClosed(t *testing.T) {
 	err = verifyString(issuer, bearer)
 	require.Error(t, err)
 	require.NotErrorIs(t, err, ErrTokenRevoked)
+	require.ErrorIs(t, err, ErrRevocationUnavailable)
 }
 
 // The production blob DAOs answer a miss with their own ErrNotFound types,
