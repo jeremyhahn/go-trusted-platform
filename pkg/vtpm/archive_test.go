@@ -958,6 +958,105 @@ func TestArchiver_ImportFromFile_RefusesExpansionBeyondBudget(t *testing.T) {
 	}
 }
 
+// writeForeignEntryArchive writes a valid manifest under the bundle prefix,
+// then one regular entry with the raw tar name name and size zero bytes.
+func writeForeignEntryArchive(t *testing.T, id, name string, size int) string {
+	t.Helper()
+	archivePath := filepath.Join(t.TempDir(), "bundle.tar.gz")
+	f, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatalf("create archive: %v", err)
+	}
+	gzw := gzip.NewWriter(f)
+	tw := tar.NewWriter(gzw)
+
+	manifestData, _ := json.Marshal(&Manifest{
+		Version:   ManifestVersion,
+		ID:        id,
+		Mode:      BundleModePreAssigned,
+		CreatedAt: time.Now(),
+	})
+	write := func(name string, content []byte) {
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0600, Size: int64(len(content)), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatalf("write header: %v", err)
+		}
+		if _, err := tw.Write(content); err != nil {
+			t.Fatalf("write entry: %v", err)
+		}
+	}
+	write("vtpm-bundle-"+id+"/manifest.json", manifestData)
+	write(name, make([]byte, size))
+	tw.Close()
+	gzw.Close()
+	f.Close()
+	return archivePath
+}
+
+func TestArchiver_ImportFromFile_BudgetsSkippedEntries(t *testing.T) {
+	id := "skipped"
+	tests := []struct {
+		name  string
+		entry string
+	}{
+		{name: "a foreign prefix", entry: "other/blob.bin"},
+		{name: "a traversal entry", entry: "vtpm-bundle-" + id + "/../../escape.bin"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			archivePath := writeForeignEntryArchive(t, id, tt.entry, 64*1024)
+
+			config := &Config{BaseDir: t.TempDir()}
+			a := NewArchiver(config, nil)
+			a.maxExpandedBytes = 1024
+
+			_, err := a.ImportFromFile(context.Background(), archivePath)
+			var tooLarge ErrArchiveTooLarge
+			if !errors.As(err, &tooLarge) {
+				t.Fatalf("ImportFromFile error = %v, want ErrArchiveTooLarge", err)
+			}
+			if tooLarge.Limit != 1024 {
+				t.Errorf("ErrArchiveTooLarge.Limit = %d, want 1024", tooLarge.Limit)
+			}
+			if _, err := os.Stat(config.BundlePath(id)); !os.IsNotExist(err) {
+				t.Errorf("partial bundle left at %s (stat err %v)", config.BundlePath(id), err)
+			}
+		})
+	}
+}
+
+func TestArchiver_ImportFromFile_CancelledDuringASkippedEntry(t *testing.T) {
+	t.Run("cancelled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		b := &expansionBudget{ctx: ctx, r: bytes.NewReader(make([]byte, 64)), remaining: 1024, limit: 1024}
+		buf := make([]byte, 16)
+		if _, err := b.Read(buf); err != nil {
+			t.Fatalf("Read before cancel: %v", err)
+		}
+		cancel()
+		if _, err := b.Read(buf); !errors.Is(err, context.Canceled) {
+			t.Fatalf("Read after cancel error = %v, want context.Canceled", err)
+		}
+	})
+	t.Run("first byte past the limit", func(t *testing.T) {
+		b := &expansionBudget{ctx: context.Background(), r: bytes.NewReader(make([]byte, 17)), remaining: 16, limit: 16}
+		n, err := io.ReadAll(b)
+		var tooLarge ErrArchiveTooLarge
+		if !errors.As(err, &tooLarge) || tooLarge.Limit != 16 {
+			t.Fatalf("ReadAll error = %v, want ErrArchiveTooLarge{Limit: 16}", err)
+		}
+		if len(n) != 16 {
+			t.Errorf("read %d bytes before refusal, want 16", len(n))
+		}
+	})
+	t.Run("exactly the limit", func(t *testing.T) {
+		b := &expansionBudget{ctx: context.Background(), r: bytes.NewReader(make([]byte, 16)), remaining: 16, limit: 16}
+		n, err := io.ReadAll(b)
+		if err != nil || len(n) != 16 {
+			t.Fatalf("ReadAll = %d bytes, %v; want 16 bytes, nil", len(n), err)
+		}
+	})
+}
+
 func TestArchiver_ImportFromFile_RefusesTooManyEntries(t *testing.T) {
 	id := "many"
 	archivePath := writeBudgetTestArchive(t, id, map[string][]byte{
