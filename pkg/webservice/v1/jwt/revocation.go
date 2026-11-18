@@ -35,6 +35,12 @@ import (
 // from a forged or expired one in its logs; on the wire both are 401.
 var ErrTokenRevoked = errors.New("rest/jwt: token revoked")
 
+// ErrRevocationUnavailable wraps a revocation store that cannot be read or
+// written (#646). Verify still fails closed on it, and Logout answers it
+// with 503 rather than 401: the bearer is not refused, the server simply
+// could not record its revocation, so the client can retry.
+var ErrRevocationUnavailable = errors.New("rest/jwt: revocation store unavailable")
+
 // revocationList is the server-side deny-list that makes logout real
 // (#215). Before it, logout only deleted the browser cookie: the token
 // itself stayed valid until it expired, so a copy of it (another tab, a
@@ -173,7 +179,10 @@ func (store *BlobRevocationStore) Revoke(ctx context.Context, key string, expiry
 	if err != nil {
 		return err
 	}
-	return store.blobs.Save(ctx, entities.NewBlob(revocationBlobID(key), bytes))
+	if err := store.blobs.Save(ctx, entities.NewBlob(revocationBlobID(key), bytes)); err != nil {
+		return fmt.Errorf("%w: save: %w", ErrRevocationUnavailable, err)
+	}
+	return nil
 }
 
 // Revoked implements RevocationStore.
@@ -183,7 +192,7 @@ func (store *BlobRevocationStore) Revoked(ctx context.Context, key string, now t
 		return false, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("rest/jwt: revocation lookup: %w", err)
+		return false, fmt.Errorf("%w: lookup: %w", ErrRevocationUnavailable, err)
 	}
 	var record revocationRecord
 	if json.Unmarshal(blob.Bytes, &record) != nil ||

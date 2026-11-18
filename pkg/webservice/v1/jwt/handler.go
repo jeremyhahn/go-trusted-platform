@@ -294,6 +294,13 @@ func (handler *RestHandler) Logout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := handler.jwtService.Revoke(token); err != nil && !errors.Is(err, ErrTokenRevoked) {
+		if errors.Is(err, ErrRevocationUnavailable) {
+			// The bearer was not refused; its revocation could not be
+			// recorded, so the client may retry (#646).
+			handler.logger.Errorf("rest/jwt: logout not recorded: %v", err)
+			handler.responseWriter.Error503(w, r, ErrRevocationUnavailable)
+			return
+		}
 		handler.logger.Debugf("rest/jwt: logout rejected: %v", err)
 		handler.responseWriter.Error401(w, r, ErrInvalidToken)
 		return

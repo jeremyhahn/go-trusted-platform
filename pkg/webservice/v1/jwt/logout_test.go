@@ -162,9 +162,10 @@ func TestLogout_AnUnavailableRevocationStoreAnswers503(t *testing.T) {
 	blobs := &memoryBlobs{}
 	svc, _ := servicesOverOneKey(t, blobs)
 	logger := logging.DefaultLogger()
-	handler, err := NewRestHandler(logger, response.NewResponseWriter(logger, nil),
+	tokens, err := NewRestHandler(logger, response.NewResponseWriter(logger, nil),
 		svc, new(MockUserService))
 	require.NoError(t, err)
+	handler := tokens.(*RestHandler)
 	bearer, err := svc.GenerateToken(entities.NewUser("unavailable@example.com"))
 	require.NoError(t, err)
 
