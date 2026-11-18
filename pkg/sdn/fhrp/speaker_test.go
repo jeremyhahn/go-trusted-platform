@@ -552,6 +552,37 @@ func TestSpeaker_OpenFailureReportsAFailedRollback(t *testing.T) {
 	assert.False(t, s.Active())
 }
 
+// A runner whose rollback at a failed Start could not release its VIP is
+// kept pending: the next Start drains it first (and is refused while it
+// still fails), so the VIP is never mistaken for a preexisting owner
+// address, and the Stop after a successful restart deletes it.
+func TestSpeaker_FailedRollbackKeepsTheVIPPendingThroughRestartAndStop(t *testing.T) {
+	seg := newSegment()
+	prog := newFakeProgrammer()
+	prog.delErr = errors.New("EBUSY")
+	cfg := speakerConfig(PriorityOwner, "10.4.200.2")
+	cfg.Groups = append(cfg.Groups, GroupConfig{VRID: 21, Interface: "public0", Priority: 100, Addresses: []string{"203.0.113.1/24"}, Source: "203.0.113.4"})
+	s, err := New(cfg, Deps{Transport: &failOnSecondOpen{seg: seg}, Programmer: prog, Logger: quietLogger()})
+	require.NoError(t, err)
+
+	err = s.Start(context.Background())
+	var rb *ErrRollbackIncomplete
+	require.True(t, errors.As(err, &rb), "got %v", err)
+	assert.True(t, prog.holds("br-int", "10.4.200.1/24"), "the failed rollback left the VIP installed")
+	assert.True(t, s.ReleasePending(), "the failed rollback is kept for cleanup")
+
+	err = s.Start(context.Background())
+	var rp ErrReleasePending
+	require.True(t, errors.As(err, &rp), "got %v", err)
+	assert.False(t, s.Active())
+
+	prog.delErr = nil
+	require.NoError(t, s.Start(context.Background()))
+	assert.False(t, s.ReleasePending())
+	require.NoError(t, s.Stop(context.Background()))
+	assert.False(t, prog.holds("br-int", "10.4.200.1/24"), "the restarted speaker's Stop releases the VIP")
+}
+
 func TestSpeaker_ClaimFailureIsReportedInHealth(t *testing.T) {
 	seg := newSegment()
 	prog := newFakeProgrammer()

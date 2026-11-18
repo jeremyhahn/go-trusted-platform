@@ -33,11 +33,21 @@ import (
 type fakeFHRPTransport struct {
 	mu     sync.Mutex
 	opened []string
+	// failOpen lists the interfaces whose Open fails with errFHRPOpen.
+	failOpen map[string]bool
 }
+
+// errFHRPOpen is the typed failure an Open on a failOpen interface returns.
+type errFHRPOpen struct{ iface string }
+
+func (e errFHRPOpen) Error() string { return "fake fhrp open failed on " + e.iface }
 
 func (t *fakeFHRPTransport) Open(iface string, _ fhrp.Family, _ netip.Addr) (fhrp.Conn, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.failOpen[iface] {
+		return nil, errFHRPOpen{iface: iface}
+	}
 	t.opened = append(t.opened, iface)
 	return &fakeFHRPConn{closed: make(chan struct{})}, nil
 }
@@ -74,9 +84,12 @@ func (c *fakeFHRPConn) Close() error {
 type fakeFHRPProgrammer struct {
 	mu    sync.Mutex
 	added []netip.Prefix
-	// present holds the addresses found on the interface before Start.
+	// present holds the addresses on the interface: seeded ones are found
+	// there before Start, AddAddress sets one and DeleteAddress clears it.
 	present map[netip.Prefix]bool
 	deleted []netip.Prefix
+	// delErr, when set, fails DeleteAddress and leaves the address present.
+	delErr error
 	// announced holds the addresses the speaker announced on takeover.
 	announced []netip.Addr
 }
@@ -85,13 +98,21 @@ func (p *fakeFHRPProgrammer) AddAddress(_ string, prefix netip.Prefix, _ net.Har
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.added = append(p.added, prefix)
+	if p.present == nil {
+		p.present = make(map[netip.Prefix]bool)
+	}
+	p.present[prefix] = true
 	return nil
 }
 
 func (p *fakeFHRPProgrammer) DeleteAddress(_ string, prefix netip.Prefix, _ net.HardwareAddr) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.delErr != nil {
+		return p.delErr
+	}
 	p.deleted = append(p.deleted, prefix)
+	delete(p.present, prefix)
 	return nil
 }
 
@@ -241,6 +262,77 @@ func TestBuildFHRP_StopKeepsThePreexistingOwnerAddress(t *testing.T) {
 	require.NoError(t, svc.Start(context.Background()))
 	require.NoError(t, svc.Stop(context.Background()))
 	assert.Empty(t, programmer.Deleted(), "a preexisting owner address is never deleted")
+}
+
+func (p *fakeFHRPProgrammer) setDelErr(err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.delErr = err
+}
+
+func (p *fakeFHRPProgrammer) holds(prefix netip.Prefix) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.present[prefix]
+}
+
+func (t *fakeFHRPTransport) setFailOpen(failOpen map[string]bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.failOpen = failOpen
+}
+
+// errFHRPDelete is the typed VIP delete failure the rollback tests inject.
+type errFHRPDelete struct{}
+
+func (errFHRPDelete) Error() string { return "fake fhrp delete failed" }
+
+// rollbackFHRPHandler builds a handler over an owner group on trusted0
+// that adds its VIP (the source is not the VIP) and a second group whose
+// Open fails, with VIP deletes failing, so its first Start fails with the
+// VIP rollback outstanding.
+func rollbackFHRPHandler(t *testing.T) (*backedServiceHandler, *fakeFHRPTransport, *fakeFHRPProgrammer) {
+	t.Helper()
+	cfg := baseGatewayConfig("fhrp-gw")
+	cfg.FHRP = ownerFHRPConfig()
+	cfg.FHRP.Groups[0].Source = "192.0.2.2"
+	cfg.FHRP.Groups = append(cfg.FHRP.Groups, fhrp.GroupConfig{
+		VRID: 11, Interface: "public0", Priority: 100,
+		Addresses: []string{"198.51.100.1/24"}, Source: "198.51.100.6",
+	})
+	transport := &fakeFHRPTransport{failOpen: map[string]bool{"public0": true}}
+	programmer := &fakeFHRPProgrammer{delErr: errFHRPDelete{}}
+	cfg.Host = &HostRuntime{FHRPTransport: transport, FHRPProgrammer: programmer}
+	h := newBackedServiceHandler(&Gateway{config: cfg}, ServiceFHRP, buildFHRP)
+
+	var sf *ErrServiceStartFailed
+	require.True(t, errors.As(h.Start(context.Background()), &sf))
+	require.True(t, programmer.holds(netip.MustParsePrefix("192.0.2.1/24")), "the failed rollback left the VIP installed")
+	return h, transport, programmer
+}
+
+func TestBackedFHRPHandler_FailedRollbackIsCleanedUpOnRestartAndStop(t *testing.T) {
+	vip := netip.MustParsePrefix("192.0.2.1/24")
+
+	t.Run("restart then stop", func(t *testing.T) {
+		h, transport, programmer := rollbackFHRPHandler(t)
+		programmer.setDelErr(nil)
+		transport.setFailOpen(nil)
+		require.NoError(t, h.Start(context.Background()))
+		require.NoError(t, h.Stop(context.Background()))
+		assert.False(t, programmer.holds(vip), "the VIP the rollback left is released")
+		assert.Contains(t, programmer.Deleted(), vip)
+	})
+
+	t.Run("stop after the failed start", func(t *testing.T) {
+		h, _, programmer := rollbackFHRPHandler(t)
+		programmer.setDelErr(nil)
+		require.NoError(t, h.Stop(context.Background()))
+		assert.False(t, programmer.holds(vip))
+		assert.Contains(t, programmer.Deleted(), vip)
+		var na *ErrServiceNotActive
+		assert.True(t, errors.As(h.Stop(context.Background()), &na))
+	})
 }
 
 // A group may name a tunnel interface, so tunnels come up before fhrp and
