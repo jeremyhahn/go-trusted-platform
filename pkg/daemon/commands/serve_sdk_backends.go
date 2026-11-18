@@ -14,6 +14,8 @@
 package commands
 
 import (
+	xkms "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	appbackends "github.com/jeremyhahn/go-trusted-platform/pkg/app/backends"
 )
@@ -25,5 +27,8 @@ func platformSDKBackendSources(a *app.App) appbackends.SDKBackendSources {
 	if a == nil {
 		return appbackends.SDKBackendSources{}
 	}
-	return appbackends.PlatformSDKBackendSources(a.QuicBaaSSDKClient(), a.CA, appbackends.PlatformAdminIdentity(a))
+	src := appbackends.PlatformSDKBackendSources(a.QuicBaaSSDKClient(), a.CA, appbackends.PlatformAdminIdentity(a))
+	// LUKS TPM enrolment seals over the platform's selected TPM.
+	src.TPM = appbackends.PlatformTPMOpener(func() xkms.TrustedPlatformModule { return a.TPM })
+	return src
 }

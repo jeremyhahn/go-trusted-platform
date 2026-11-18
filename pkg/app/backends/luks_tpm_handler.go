@@ -14,6 +14,10 @@
 package backends
 
 import (
+	"context"
+
+	"github.com/google/go-tpm/tpm2/transport"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	luks "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/luks"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -72,6 +76,36 @@ type LUKSTPMSealResult = luks.TPMSealResult
 // If the TPM device is missing the opener returns ErrLUKSTPMNoTransport so
 // callers can downgrade cleanly to a "not wired" failure mode.
 var DefaultTPMOpener = luks.DefaultTPMOpener
+
+// PlatformTPMOpener returns a TPMOpener over the platform's selected TPM:
+// every Open hands the sealer the module's own transport (the device the
+// platform resolved, swtpm or simulator) instead of the SDK default device.
+// module is resolved at Open time; a nil module or transport answers
+// ErrLUKSTPMNoTransport.
+func PlatformTPMOpener(module func() xkmssdk.TrustedPlatformModule) TPMOpener {
+	return TPMOpenerFunc(func(context.Context) (transport.TPMCloser, error) {
+		if module == nil {
+			return nil, ErrLUKSTPMNoTransport
+		}
+		m := module()
+		if m == nil {
+			return nil, ErrLUKSTPMNoTransport
+		}
+		tpm := m.Transport()
+		if tpm == nil {
+			return nil, ErrLUKSTPMNoTransport
+		}
+		return sharedTPM{tpm}, nil
+	})
+}
+
+// sharedTPM lends the platform's transport to the sealer. The sealer closes
+// its transport after each command batch, but the platform owns and closes
+// its transport, so Close is a no-op.
+type sharedTPM struct{ transport.TPM }
+
+// Close leaves the platform's transport open.
+func (sharedTPM) Close() error { return nil }
 
 // Compile-time assertion: the canonical sealer satisfies the platform's
 // narrow LUKSTPMHandler interface.

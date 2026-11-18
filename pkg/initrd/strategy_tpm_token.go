@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 
+	"github.com/google/go-tpm/tpm2/transport"
 	xkmsluks "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/luks"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -62,10 +63,16 @@ func NewTPMTokenStrategy(platform *Platform, logger *logging.Logger) *TPMTokenSt
 	if logger == nil {
 		logger = logging.DefaultLogger()
 	}
+	// Unseal over the platform's selected TPM, the device enrolment sealed
+	// on; without one, the SDK default device.
+	opener := xkmsluks.DefaultTPMOpener()
+	if platform != nil && platform.TPM != nil {
+		opener = platformTPMOpener(platform)
+	}
 	s := &TPMTokenStrategy{
 		platform: platform,
 		logger:   logger,
-		unsealer: newDefaultTokenUnsealer(logger),
+		unsealer: newTokenUnsealer(logger, opener),
 		// 0: ahead of TPM-PCR (1). The token is what SDK enrolment wrote
 		// under the PCR policy, so it is the current enrolment when present;
 		// without a token CanUnlock is false and TPM-PCR (ESP) runs next.
@@ -248,13 +255,38 @@ func (u *xkmsTokenUnsealer) Unseal(ctx context.Context, token *luks.Token) ([]by
 	return u.sealer.UnsealPassphrase(ctx, payload)
 }
 
-// newDefaultTokenUnsealer opens the go-xkms sealer on the default TPM
-// transport, or returns nil when it cannot be built.
-func newDefaultTokenUnsealer(logger *logging.Logger) TokenUnsealer {
-	sealer, err := xkmsluks.NewTPMSealer(logger.Slog(), xkmsluks.DefaultTPMOpener())
+// newTokenUnsealer opens the go-xkms sealer over opener (the platform's TPM,
+// or the SDK default device when the platform has none), or returns nil
+// when it cannot be built.
+func newTokenUnsealer(logger *logging.Logger, opener xkmsluks.TPMOpener) TokenUnsealer {
+	sealer, err := xkmsluks.NewTPMSealer(logger.Slog(), opener)
 	if err != nil {
 		logger.Debugf("TPM token: sealer unavailable: %v", err)
 		return nil
 	}
 	return &xkmsTokenUnsealer{sealer: sealer}
 }
+
+// platformTPMOpener hands the sealer the platform's own TPM transport (the
+// device the boot manager detected). The sealer closes its transport after
+// each command batch, but the platform owns and closes its transport, so
+// the lent transport's Close is a no-op. A nil platform TPM or transport
+// answers xkmsluks.ErrTPMNoTransport.
+func platformTPMOpener(platform *Platform) xkmsluks.TPMOpener {
+	return xkmsluks.TPMOpenerFunc(func(context.Context) (transport.TPMCloser, error) {
+		if platform == nil || platform.TPM == nil {
+			return nil, xkmsluks.ErrTPMNoTransport
+		}
+		tpm := platform.TPM.Transport()
+		if tpm == nil {
+			return nil, xkmsluks.ErrTPMNoTransport
+		}
+		return platformSharedTPM{tpm}, nil
+	})
+}
+
+// platformSharedTPM lends the platform's transport; Close leaves it open.
+type platformSharedTPM struct{ transport.TPM }
+
+// Close is a no-op: the platform owns and closes its transport.
+func (platformSharedTPM) Close() error { return nil }

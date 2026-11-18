@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
@@ -48,6 +49,9 @@ type SDKBackendSources struct {
 	SDK quicbaassdk.Client
 	// Admin mints the admin bundle CeremonyService.Init returns.
 	Admin AdminBundleIssuer
+	// TPM is the platform's selected TPM the LUKS TPM enrolment seals over;
+	// nil keeps the SDK default device.
+	TPM TPMOpener
 }
 
 // PlatformSDKBackendSources returns the sources for a running platform: its
@@ -100,8 +104,10 @@ func WireSDKBackends(target SDKBackendTarget, src SDKBackendSources, logger *log
 	// unseals it at boot, ahead of the ESP-sealed TPM-PCR strategy. The
 	// handler is wrapped by pcrCheckedTPMHandler so an empty or
 	// out-of-range PCR list is refused before the sealer runs or a slot is
-	// written. With no TPM transport the handler stays nil.
-	luks := NewLUKSBackend(logger, WithDefaultLUKSHandlers())
+	// written. The handler seals over src.TPM, the platform's selected TPM
+	// (the initrd unseals over the same Platform.TPM); a nil src.TPM keeps
+	// the SDK default device. With no TPM transport the handler stays nil.
+	luks := NewLUKSBackend(logger, WithLUKSTPMOpener(src.TPM), WithDefaultLUKSHandlers())
 	luks.SetTPMHandler(pcrCheckedTPMHandler(luks.TPMHandler()))
 	target.SetLUKSBackend(luks)
 	target.SetLUKSRootChecker(DefaultRootChecker())
@@ -140,5 +146,7 @@ func (p pcrCheckedTPM) Seal(ctx context.Context, handle string, pcrs []int32) ([
 // from the platform the host initialized. Without an SDK client it fails,
 // and the host does not start, as platformd does not.
 func WireEmbeddedHost(d *daemon.Daemon, a *app.App) error {
-	return WireSDKBackends(d, PlatformSDKBackendSources(a.QuicBaaSSDKClient(), a.CA, PlatformAdminIdentity(a)), a.Logger)
+	src := PlatformSDKBackendSources(a.QuicBaaSSDKClient(), a.CA, PlatformAdminIdentity(a))
+	src.TPM = PlatformTPMOpener(func() xkmssdk.TrustedPlatformModule { return a.TPM })
+	return WireSDKBackends(d, src, a.Logger)
 }

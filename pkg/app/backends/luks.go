@@ -145,6 +145,10 @@ type LUKSBackend struct {
 	fido2  LUKSFIDO2Handler
 	tpm    LUKSTPMHandler
 
+	// tpmOpener is the platform's selected TPM the default TPM handler
+	// seals over (WithLUKSTPMOpener). nil keeps the SDK default device.
+	tpmOpener TPMOpener
+
 	// kdfCost, when set, fixes the KDF cost of every keyslot the backend
 	// writes. Production leaves it nil so go-luks2 calibrates the cost for
 	// the host; the package's unit tests set it so a keyslot write does not
@@ -372,6 +376,13 @@ func WithLUKSTPMHandler(h LUKSTPMHandler) LUKSBackendOption {
 	return func(b *LUKSBackend) { b.tpm = h }
 }
 
+// WithLUKSTPMOpener sets the TPM the default TPM handler seals over (the
+// platform's selected TPM). Pass it before WithDefaultLUKSHandlers; nil
+// keeps the SDK default device.
+func WithLUKSTPMOpener(o TPMOpener) LUKSBackendOption {
+	return func(b *LUKSBackend) { b.tpmOpener = o }
+}
+
 // WithDefaultLUKSHandlers attempts to build default FIDO2 and TPM handlers
 // from the host environment. Failures are non-fatal — when a handler can't
 // be constructed the backend is left unwired and the corresponding Enroll
@@ -386,7 +397,7 @@ func WithDefaultLUKSHandlers() LUKSBackendOption {
 			}
 		}
 		if b.tpm == nil {
-			if h, err := defaultLUKSTPMHandler(b.logger); err == nil {
+			if h, err := defaultLUKSTPMHandler(b.logger, b.tpmOpener); err == nil {
 				b.tpm = h
 			} else if b.logger != nil {
 				b.logger.Debug("default luks tpm handler unavailable", "err", err.Error())
@@ -955,11 +966,15 @@ func defaultLUKSFIDO2Handler(logger *logging.Logger) (LUKSFIDO2EnrollingHandler,
 	return NewLUKSFIDO2Handler(logger, xkmsHandler, defaultCfg.RelyingPartyID)
 }
 
-// defaultLUKSTPMHandler builds a production TPM handler bound to
-// /dev/tpmrm0. Callers inspect the returned error to decide whether to wire
-// the handler or leave it unset.
-func defaultLUKSTPMHandler(logger *logging.Logger) (LUKSTPMHandler, error) {
-	h, err := NewLUKSTPMHandler(logger, DefaultTPMOpener())
+// defaultLUKSTPMHandler builds a production TPM handler over opener, the
+// platform's selected TPM; a nil opener falls back to the SDK default device
+// (DefaultTPMOpener). Callers inspect the returned error to decide whether
+// to wire the handler or leave it unset.
+func defaultLUKSTPMHandler(logger *logging.Logger, opener TPMOpener) (LUKSTPMHandler, error) {
+	if opener == nil {
+		opener = DefaultTPMOpener()
+	}
+	h, err := NewLUKSTPMHandler(logger, opener)
 	if err != nil {
 		return nil, errors.Join(ErrLUKSHardwareUnavailable, err)
 	}
