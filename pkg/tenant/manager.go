@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
@@ -1260,37 +1261,25 @@ func (m *Manager) getFromIAMByName(ctx context.Context, name string) (*iam.Tenan
 	return found, nil
 }
 
-// iamListPageSize is the page size used when walking IAM tenant pages.
-const iamListPageSize = 100
-
-// walkIAMTenants visits every IAM tenant page by page, following
-// NextPageToken, and calls visit with each tenant and the total count IAM
-// reports. The walk stops when visit returns false, when IAM reports no
-// next page, when a page is empty, or when a token repeats.
+// walkIAMTenants reads every IAM tenant once, sorts them by ID and calls
+// visit with each tenant and the number of tenants read. The walk stops
+// when visit returns false.
 func (m *Manager) walkIAMTenants(ctx context.Context, visit func(t *iam.Tenant, total int) bool) error {
-	token := ""
-	seen := map[string]bool{}
-	for {
-		resp, err := m.iamTenantClient.List(ctx, &iam.ListTenantsRequest{
-			PageSize:  iamListPageSize,
-			PageToken: token,
-		})
-		if err != nil {
-			return err
-		}
-		total := resp.Pagination.TotalCount
-		for i := range resp.Tenants {
-			if !visit(&resp.Tenants[i], total) {
-				return nil
-			}
-		}
-		next := resp.Pagination.NextPageToken
-		if len(resp.Tenants) == 0 || next == "" || seen[next] {
+	// The pinned embedded SDK ignores PageToken and returns no Pagination,
+	// so the walk reads the whole list once (PageSize 0) and the total is
+	// its length, as QuicBaaSIAMAdapter.ListTenants does.
+	resp, err := m.iamTenantClient.List(ctx, &iam.ListTenantsRequest{})
+	if err != nil {
+		return err
+	}
+	all := resp.Tenants
+	sort.SliceStable(all, func(i, j int) bool { return all[i].ID < all[j].ID })
+	for i := range all {
+		if !visit(&all[i], len(all)) {
 			return nil
 		}
-		seen[next] = true
-		token = next
 	}
+	return nil
 }
 
 func (m *Manager) listFromIAM(ctx context.Context, limit, offset int) ([]iam.Tenant, int, error) {
