@@ -15,6 +15,7 @@ package attestation
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -90,6 +91,20 @@ func TestManifestsList_Table(t *testing.T) {
 	for _, want := range []string{"m-1", "host-a", "2026-11-12T10:00:00Z", "ECDSA-P256-SHA256"} {
 		assert.Contains(t, got, want)
 	}
+
+	// The VM and container counts are columns 6 and 7 (fields 5 and 6).
+	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
+	require.Len(t, lines, 2)
+	header := strings.Fields(lines[0])
+	row := strings.Fields(lines[1])
+	require.Len(t, header, 7)
+	require.Len(t, row, 7)
+	assert.Equal(t, "VMS", header[5])
+	assert.Equal(t, "CONTAINERS", header[6])
+	assert.Equal(t, "2", row[5])
+	assert.Equal(t, "1", row[6])
+
+	checkGolden(t, "manifests_list", out.Bytes())
 }
 
 func TestManifestsList_TableEmpty(t *testing.T) {
