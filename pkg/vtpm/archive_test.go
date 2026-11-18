@@ -23,6 +23,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -889,6 +890,116 @@ func TestArchiver_ImportFromFile_RejectsSiblingPrefix(t *testing.T) {
 	evil := filepath.Join(config.BundlesDir(), "x-evil")
 	if _, err := os.Stat(evil); !os.IsNotExist(err) {
 		t.Errorf("entry outside the bundle was written to %s (stat err %v)", evil, err)
+	}
+}
+
+// writeBudgetTestArchive writes a bundle archive for id holding manifest.json
+// and the given extra entries, built as the sibling-prefix test does.
+func writeBudgetTestArchive(t *testing.T, id string, entries map[string][]byte) string {
+	t.Helper()
+	archivePath := filepath.Join(t.TempDir(), "bundle.tar.gz")
+	f, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatalf("create archive: %v", err)
+	}
+	gzw := gzip.NewWriter(f)
+	tw := tar.NewWriter(gzw)
+
+	manifestData, _ := json.Marshal(&Manifest{
+		Version:   ManifestVersion,
+		ID:        id,
+		Mode:      BundleModePreAssigned,
+		CreatedAt: time.Now(),
+	})
+	prefix := "vtpm-bundle-" + id + "/"
+	write := func(name string, content []byte) {
+		if err := tw.WriteHeader(&tar.Header{Name: prefix + name, Mode: 0600, Size: int64(len(content)), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatalf("write header: %v", err)
+		}
+		if _, err := tw.Write(content); err != nil {
+			t.Fatalf("write entry: %v", err)
+		}
+	}
+	write("manifest.json", manifestData)
+	names := make([]string, 0, len(entries))
+	for name := range entries {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		write(name, entries[name])
+	}
+	tw.Close()
+	gzw.Close()
+	f.Close()
+	return archivePath
+}
+
+func TestArchiver_ImportFromFile_RefusesExpansionBeyondBudget(t *testing.T) {
+	id := "big"
+	archivePath := writeBudgetTestArchive(t, id, map[string][]byte{
+		"tpm/tpm2-00.permall": bytes.Repeat([]byte{0xA5}, 4096),
+	})
+
+	config := &Config{BaseDir: t.TempDir()}
+	a := NewArchiver(config, nil)
+	a.maxExpandedBytes = 1024
+
+	_, err := a.ImportFromFile(context.Background(), archivePath)
+	var tooLarge ErrArchiveTooLarge
+	if !errors.As(err, &tooLarge) {
+		t.Fatalf("ImportFromFile error = %v, want ErrArchiveTooLarge", err)
+	}
+	if tooLarge.Limit != 1024 {
+		t.Errorf("ErrArchiveTooLarge.Limit = %d, want 1024", tooLarge.Limit)
+	}
+	if _, err := os.Stat(config.BundlePath(id)); !os.IsNotExist(err) {
+		t.Errorf("partial bundle left at %s (stat err %v)", config.BundlePath(id), err)
+	}
+}
+
+func TestArchiver_ImportFromFile_RefusesTooManyEntries(t *testing.T) {
+	id := "many"
+	archivePath := writeBudgetTestArchive(t, id, map[string][]byte{
+		"a": []byte("a"),
+		"b": []byte("b"),
+		"c": []byte("c"),
+		"d": []byte("d"),
+	})
+
+	config := &Config{BaseDir: t.TempDir()}
+	a := NewArchiver(config, nil)
+	a.maxEntries = 2
+
+	_, err := a.ImportFromFile(context.Background(), archivePath)
+	var tooMany ErrArchiveTooManyEntries
+	if !errors.As(err, &tooMany) {
+		t.Fatalf("ImportFromFile error = %v, want ErrArchiveTooManyEntries", err)
+	}
+	if tooMany.Limit != 2 {
+		t.Errorf("ErrArchiveTooManyEntries.Limit = %d, want 2", tooMany.Limit)
+	}
+	if _, err := os.Stat(config.BundlePath(id)); !os.IsNotExist(err) {
+		t.Errorf("partial bundle left at %s (stat err %v)", config.BundlePath(id), err)
+	}
+}
+
+func TestArchiver_ImportFromFile_CancelledRemovesPartialOutput(t *testing.T) {
+	id := "cancelled"
+	archivePath := writeBudgetTestArchive(t, id, map[string][]byte{
+		"tpm/tpm2-00.permall": []byte("state"),
+	})
+
+	config := &Config{BaseDir: t.TempDir()}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := NewArchiver(config, nil).ImportFromFile(ctx, archivePath)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("ImportFromFile error = %v, want context.Canceled", err)
+	}
+	if _, err := os.Stat(config.BundlePath(id)); !os.IsNotExist(err) {
+		t.Errorf("partial bundle left at %s (stat err %v)", config.BundlePath(id), err)
 	}
 }
 

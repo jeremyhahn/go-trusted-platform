@@ -31,7 +31,21 @@ import (
 type Archiver struct {
 	config *Config
 	logger *logging.Logger
+
+	// maxExpandedBytes bounds the decompressed bytes an import may read
+	// and write; maxEntries bounds the tar entries it may process.
+	maxExpandedBytes int64
+	maxEntries       int
 }
+
+// DefaultMaxImportExpandedBytes and DefaultMaxImportEntries bound a bundle
+// import. A bundle is TPM state, OVMF vars and Secure Boot keys, a few MiB
+// in a handful of files, so these leave ample headroom while refusing a
+// decompression bomb that the compressed-size cap of the upload cannot see.
+const (
+	DefaultMaxImportExpandedBytes int64 = 256 << 20
+	DefaultMaxImportEntries             = 4096
+)
 
 // NewArchiver creates a new bundle archiver.
 func NewArchiver(config *Config, logger *logging.Logger) *Archiver {
@@ -39,8 +53,10 @@ func NewArchiver(config *Config, logger *logging.Logger) *Archiver {
 		logger = logging.DefaultLogger()
 	}
 	return &Archiver{
-		config: config,
-		logger: logger,
+		config:           config,
+		logger:           logger,
+		maxExpandedBytes: DefaultMaxImportExpandedBytes,
+		maxEntries:       DefaultMaxImportEntries,
 	}
 }
 
