@@ -908,6 +908,37 @@ func TestCov964Adapter_GetListDeletePolicy(t *testing.T) {
 	assert.ErrorIs(t, err, cov964Unavailable{})
 }
 
+// TestCov964Adapter_PolicyResponsesKeepLabels checks that a labeled upstream
+// policy keeps its labels through the production adapter, and that
+// decodePolicy copies the label map rather than aliasing it.
+func TestCov964Adapter_PolicyResponsesKeepLabels(t *testing.T) {
+	ctx := context.Background()
+	client := cov964NewClient()
+	client.policies.policies["labeled"] = &iamsdk.Policy{Name: "labeled", Labels: map[string]string{"team": "sec"}}
+	adapter := NewQuicBaaSIAMAdapter(client)
+
+	got, err := adapter.GetPolicy(ctx, "tenant-a", "labeled")
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"team": "sec"}, got.Labels)
+
+	list, err := adapter.ListPolicies(ctx, "tenant-a", 20, 0)
+	require.NoError(t, err)
+	var found *PolicyResponse
+	for i := range list.Policies {
+		if list.Policies[i].Name == "labeled" {
+			found = &list.Policies[i]
+		}
+	}
+	require.NotNil(t, found, "the labeled policy is listed")
+	assert.Equal(t, map[string]string{"team": "sec"}, found.Labels)
+
+	in := map[string]string{"env": "dev"}
+	resp := decodePolicy("tenant-a", &iamsdk.Policy{Name: "p", Labels: in})
+	assert.Equal(t, map[string]string{"env": "dev"}, resp.Labels)
+	in["env"] = "prod"
+	assert.Equal(t, "dev", resp.Labels["env"], "the response holds a copy of the labels")
+}
+
 func TestCov964Adapter_UpdatePolicy(t *testing.T) {
 	ctx := context.Background()
 	client := cov964NewClient()
