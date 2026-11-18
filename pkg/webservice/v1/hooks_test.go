@@ -856,15 +856,16 @@ func TestPXEIdentityHook_ALaterHookFailureRecordsNothing(t *testing.T) {
 	rec := &fakePXEIdentityRecorder{}
 	hooks := trustedca.NewACMEOrderFinalizeHookRegistry()
 	hooks.Register(failingOnceHook())
-	hooks.Register(NewPXEIdentityHook(rec, slog.Default()))
-	finalize := &trustedca.ACMEOrderFinalizeHookContext{Context: context.Background(), IsTCGCSR: true, ClientIP: "192.0.2.10", Certificate: &x509.Certificate{Raw: []byte{1}}}
+	hooks.Register(NewPXEIdentityHookWithProfiles(rec, ekProfiles{"1001": {MACAddress: pxeIdentityBoundMAC}}, slog.Default()))
+	finalize := pxeIdentityTCGContext(pxeIdentityEKCert(t, 1001))
 
 	err := hooks.Execute(finalize)
 	require.ErrorAs(t, err, new(errHookFailedOnce))
-	assert.Empty(t, rec.calls, "a failed finalize records no fingerprint")
+	assert.Empty(t, rec.macs, "a failed finalize records no fingerprint")
 
 	require.NoError(t, hooks.Execute(finalize))
-	assert.Equal(t, []string{"192.0.2.10"}, rec.calls)
+	assert.Equal(t, []string{pxeIdentityBoundMAC}, rec.macs)
+	assert.Empty(t, rec.calls)
 }
 
 func TestNewDeviceRegistrationHook_SkipsMissingSerial(t *testing.T) {
