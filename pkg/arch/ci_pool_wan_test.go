@@ -64,20 +64,78 @@ type poolWorkflow struct {
 }
 
 // poolConjunct reports whether term is a top-level conjunct of the if:
-// expression cond, which must hold no ||: only then does the term alone
-// decide that the step is skipped when the term is false.
+// expression cond: only then does the term alone decide that the step is
+// skipped when the term is false. The && it splits on are those outside every
+// parenthesis, so a term inside a group (negated or compared) is not a
+// conjunct; an expression with || never qualifies.
 func poolConjunct(cond, term string) bool {
 	c := strings.TrimSpace(cond)
-	c = strings.TrimSuffix(strings.TrimPrefix(c, "${{"), "}}")
+	c = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(c, "${{"), "}}"))
 	if strings.Contains(c, "||") {
 		return false
 	}
-	for _, part := range strings.Split(c, "&&") {
-		if strings.Trim(strings.TrimSpace(part), "() ") == term {
+	for _, part := range poolTopLevelAnd(c) {
+		if poolUnwrap(part) == term {
 			return true
 		}
 	}
 	return false
+}
+
+// poolTopLevelAnd splits an expression at the && outside every parenthesis;
+// unbalanced parentheses yield no parts.
+func poolTopLevelAnd(c string) []string {
+	var parts []string
+	depth, start := 0, 0
+	for i := 0; i < len(c); i++ {
+		switch {
+		case c[i] == '(':
+			depth++
+		case c[i] == ')':
+			depth--
+			if depth < 0 {
+				return nil
+			}
+		case depth == 0 && strings.HasPrefix(c[i:], "&&"):
+			parts = append(parts, c[start:i])
+			start = i + 2
+			i++
+		}
+	}
+	if depth != 0 {
+		return nil
+	}
+	return append(parts, c[start:])
+}
+
+// poolUnwrap trims a part and the parentheses that enclose all of it.
+func poolUnwrap(p string) string {
+	p = strings.TrimSpace(p)
+	for strings.HasPrefix(p, "(") && strings.HasSuffix(p, ")") {
+		inner := p[1 : len(p)-1]
+		if parts := poolTopLevelAnd(inner); parts == nil {
+			break
+		}
+		// "(a) && (b)" is not enclosed by one pair: the inner text must
+		// keep its own parentheses balanced throughout.
+		depth, ok := 0, true
+		for _, r := range inner {
+			if r == '(' {
+				depth++
+			} else if r == ')' {
+				depth--
+				if depth < 0 {
+					ok = false
+					break
+				}
+			}
+		}
+		if !ok {
+			break
+		}
+		p = strings.TrimSpace(inner)
+	}
+	return p
 }
 
 func poolOff(s poolStep) bool {
@@ -291,6 +349,8 @@ func TestPoolWANProblems(t *testing.T) {
 		{"a pool job sets GOPROXY", "jobs:\n  a:\n" + pool + "    env:\n      GOPROXY: https://proxy.golang.org\n    steps: []\n", "the job env sets GOPROXY"},
 		{"an expression that can reach the pool", "jobs:\n  a:\n    runs-on: ${{ cond && fromJSON('[\"self-hosted\",\"bigdisk\"]') || 'ubuntu-latest' }}\n    steps:\n      - name: s\n        env:\n          GOPROXY: x\n", "step s: sets GOPROXY"},
 		{"a hosted term under || is not hosted-only", "jobs:\n  a:\n" + pool + "    steps:\n      - name: d\n        if: runner.environment == 'github-hosted' || true\n        uses: actions/download-artifact@0000\n", "uses actions/download-artifact@"},
+		{"a hosted term inside a negated group is not hosted-only", "jobs:\n  a:\n" + pool + "    steps:\n      - name: d\n        if: ${{ !(failure() && runner.environment == 'github-hosted') }}\n        uses: actions/download-artifact@0000\n", "uses actions/download-artifact@"},
+		{"a hosted term inside a group with another term is not hosted-only", "jobs:\n  a:\n" + pool + "    steps:\n      - name: d\n        if: (x && runner.environment == 'github-hosted') == false\n        uses: actions/download-artifact@0000\n", "uses actions/download-artifact@"},
 		{"a negated hosted term is not hosted-only", "jobs:\n  a:\n" + pool + "    steps:\n      - name: d\n        if: \"!(runner.environment == 'github-hosted')\"\n        uses: actions/download-artifact@0000\n", "uses actions/download-artifact@"},
 		{"unparsable", "jobs: [", "not parseable"},
 		{"a server_url split that is the pool on github.com", "jobs:\n  a:\n    runs-on: ${{ github.server_url == 'https://github.com' && 'bigdisk' || 'ubuntu-latest' }}\n    steps:\n      - name: s\n        env:\n          GOPROXY: x\n", "step s: sets GOPROXY"},
@@ -320,6 +380,7 @@ func TestPoolWANProblems(t *testing.T) {
 		{"a Go step before setup-go needs no gate", "jobs:\n  a:\n" + pool + ro + "    steps:\n      - name: pin\n        run: make -s pin\n" + setup + gated("go test ./...")},
 		{"a hosted-only Go step needs no gate", "jobs:\n  a:\n" + pool + ro + "    steps:\n" + setup + "      - name: t\n        if: ${{ !cancelled() && runner.environment == 'github-hosted' }}\n        run: make test\n"},
 		{"a Gitea-only step of a pool job may download", "jobs:\n  a:\n" + pool + "    steps:\n      - name: d\n        if: x && github.server_url != 'https://github.com'\n        uses: actions/download-artifact@0000\n"},
+		{"a parenthesised hosted conjunct is hosted-only", "jobs:\n  a:\n" + pool + "    steps:\n      - name: d\n        if: ${{ x != 'y' && (runner.environment == 'github-hosted') }}\n        uses: actions/download-artifact@0000\n"},
 		{"a hosted-only step of a pool job may download", "jobs:\n  a:\n" + pool + "    steps:\n      - name: d\n        if: runner.environment == 'github-hosted'\n        uses: actions/download-artifact@0000\n"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
