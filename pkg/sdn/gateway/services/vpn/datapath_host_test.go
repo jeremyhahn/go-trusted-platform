@@ -145,6 +145,21 @@ func TestPlaneHost_RefusesAPlaneItDoesNotHost(t *testing.T) {
 	assert.Equal(t, ipcv1.VPNPeerRefusalClass_VPN_PEER_REFUSAL_CLASS_UNAVAILABLE, remove.GetClass())
 }
 
+// TestPlaneHost_WithdrawingEveryPeerOfAPlaneItDoesNotHostSucceeds pins
+// finding 2: a plane the host does not have holds no peer, so withdrawing all
+// of them is already done; keeping a peer of it is still refused.
+func TestPlaneHost_WithdrawingEveryPeerOfAPlaneItDoesNotHostSucceeds(t *testing.T) {
+	var log []string
+	host := hostOf(t, newManagedFakePlane(DataPlaneMASQUE, &log))
+	ctx := context.Background()
+
+	withdrawn := host.ReconcileVPNPeers(ctx, &ipcv1.ReconcileVPNPeersRequest{DataPlane: "quic"})
+	assert.Nil(t, withdrawn.GetRefusal(), "withdrawing every peer of an unhosted plane succeeds")
+
+	kept := host.ReconcileVPNPeers(ctx, &ipcv1.ReconcileVPNPeersRequest{DataPlane: "quic", LeaseIds: []string{"l1"}}).GetRefusal()
+	assert.Equal(t, ipcv1.VPNPeerRefusalClass_VPN_PEER_REFUSAL_CLASS_UNAVAILABLE, kept.GetClass())
+}
+
 func TestPlaneHost_RefusesAnUnknownPeerAsLeaseNotFound(t *testing.T) {
 	var log []string
 	plane := newManagedFakePlane(DataPlaneMASQUE, &log)
