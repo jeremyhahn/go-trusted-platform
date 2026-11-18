@@ -494,6 +494,49 @@ func TestGatewayStart_RollbackStopFailureIsLoggedNotLost(t *testing.T) {
 	assert.Empty(t, gw.ActiveServices())
 }
 
+// startWithRetainedCleanup registers one handler whose Start fails with a
+// release still pending and starts the gateway, which must fail.
+func startWithRetainedCleanup(t *testing.T, id string, svc *fakeBacked) *Gateway {
+	t.Helper()
+	gw, err := NewGateway(baseGatewayConfig(id))
+	require.NoError(t, err)
+	require.NoError(t, gw.RegisterServiceHandler(&backedServiceHandler{
+		gateway: gw, name: "retained", build: func(*Gateway) (backedService, error) { return svc, nil },
+	}))
+	gw.SetNodeMetrics(validNodeMetrics())
+
+	err = gw.Start(context.Background())
+	var startFailed *ErrServiceStartFailed
+	require.True(t, errors.As(err, &startFailed), "the start error is the handler's, got %v", err)
+	return gw
+}
+
+func TestGatewayStop_FinishesARetainedCleanupAfterAFailedStart(t *testing.T) {
+	svc := &fakeBacked{startErr: errors.New("start failed"), releasePending: true}
+	gw := startWithRetainedCleanup(t, "retained-stop", svc)
+
+	require.NoError(t, gw.Stop(context.Background()))
+	svc.mu.Lock()
+	defer svc.mu.Unlock()
+	assert.Equal(t, 1, svc.stopCalls, "Stop finishes the cleanup the failed Start left")
+}
+
+func TestGatewayStop_KeepsARetainedCleanupThatFailsToStop(t *testing.T) {
+	svc := &fakeBacked{startErr: errors.New("start failed"), releasePending: true, stopErr: errors.New("release still failing")}
+	gw := startWithRetainedCleanup(t, "retained-stop-fail", svc)
+
+	var shutdown *ErrShutdownFailed
+	require.True(t, errors.As(gw.Stop(context.Background()), &shutdown), "a cleanup that fails to stop is a shutdown failure")
+
+	svc.mu.Lock()
+	svc.stopErr = nil
+	svc.mu.Unlock()
+	require.NoError(t, gw.Stop(context.Background()), "the kept entry is stopped on the next Stop")
+	svc.mu.Lock()
+	defer svc.mu.Unlock()
+	assert.Equal(t, 2, svc.stopCalls)
+}
+
 // ---------------------------------------------------------------------------
 // The generic handler.
 // ---------------------------------------------------------------------------
@@ -505,6 +548,16 @@ type fakeBacked struct {
 	startErr   error
 	stopErr    error
 	startCalls int
+	stopCalls  int
+	// releasePending makes the fake report a release still outstanding,
+	// as an FHRP speaker does when its startup rollback failed.
+	releasePending bool
+}
+
+func (f *fakeBacked) ReleasePending() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.releasePending
 }
 
 func (f *fakeBacked) Start(context.Context) error {
@@ -521,6 +574,7 @@ func (f *fakeBacked) Start(context.Context) error {
 func (f *fakeBacked) Stop(context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.stopCalls++
 	if f.stopErr != nil {
 		return f.stopErr
 	}
