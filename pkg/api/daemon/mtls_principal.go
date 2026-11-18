@@ -17,9 +17,13 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"strings"
 
 	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
+	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
+	apiquic "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth/iamuser"
 )
@@ -54,6 +58,57 @@ type iamCertificatePrincipals struct {
 	// pep decides each candidate permission (IAMPEPClient.Check); the
 	// roles' permission lists only name the candidates.
 	pep sdkiam.PEPClient
+	// catalog holds the concrete permissions a wildcard candidate is
+	// expanded against before the PEP decides each of them.
+	catalog []string
+}
+
+// concretePermissionCatalog returns every concrete resource:action the
+// platform's transports require: the gRPC, QUIC and MCP scope catalogs,
+// plus the REST method actions (read, write, delete) for each of their
+// resources, since REST route scopes are computed rather than tabled.
+// The result is sorted and distinct and holds no wildcard.
+func concretePermissionCatalog() []string {
+	var union []string
+	union = append(union, grpcapi.Scopes()...)
+	union = append(union, apiquic.OperationScopes()...)
+	union = append(union, mcp.SupportedScopes()...)
+	resources := make(map[string]struct{})
+	for _, permission := range union {
+		if resource, _, ok := strings.Cut(permission, ":"); ok && resource != "" {
+			resources[resource] = struct{}{}
+		}
+	}
+	for resource := range resources {
+		for _, action := range restMethodActions {
+			union = append(union, resource+":"+action)
+		}
+	}
+	catalog := make([]string, 0, len(union))
+	for _, permission := range union {
+		if permission != "" && !strings.Contains(permission, "*") {
+			catalog = append(catalog, permission)
+		}
+	}
+	slices.Sort(catalog)
+	return slices.Compact(catalog)
+}
+
+// wildcardCovers reports whether the concrete permission matches the
+// resource:action pattern. Only a whole-segment "*" is a wildcard, as in
+// go-qrdb's RBAC; a partial glob such as "pi*" never matches.
+func wildcardCovers(resource, action, permission string) bool {
+	permResource, permAction, ok := strings.Cut(permission, ":")
+	if !ok {
+		return false
+	}
+	return (resource == "*" || resource == permResource) && (action == "*" || action == permAction)
+}
+
+// wholeSegmentOrConcrete reports whether a permission segment is exactly
+// the wildcard "*" or holds no "*" at all.
+func wholeSegmentOrConcrete(segment string) bool {
+	return segment == "*" || !strings.Contains(segment, "*")
 }
 
 // newIAMCertificatePrincipals returns a resolver backed by IAM. Both clients
@@ -65,7 +120,7 @@ func newIAMCertificatePrincipals(users sdkiam.UserClient, roles sdkiam.RoleClien
 	if pep == nil {
 		return nil, ErrPEPClientNotAvailable{}
 	}
-	return &iamCertificatePrincipals{users: users, roles: roles, pep: pep}, nil
+	return &iamCertificatePrincipals{users: users, roles: roles, pep: pep, catalog: concretePermissionCatalog()}, nil
 }
 
 // ResolveCertificatePrincipal implements CertificatePrincipalResolver. It
@@ -122,22 +177,48 @@ func (p *iamCertificatePrincipals) ResolveCertificatePrincipal(ctx context.Conte
 		}
 	}
 
-	// The policy decision point decides each candidate; the role lists
-	// never grant on their own (docs/SPEC.md: go-qrdb decides). A
-	// permission with a wildcard in its resource or action part is not
-	// honoured for certificate principals: RequireScope matches a
-	// wildcard scope against any concrete operation, so copying "*:*"
-	// would admit an operation (say device:write) the PEP denies without
-	// the PEP ever deciding it. Only concrete permissions the PEP allows
-	// become scopes (fail closed) until each transport asks the PEP for
-	// the concrete operation (follow-up on row #646).
-	subject := &tokenPrincipal{Subject: user.ID, TenantID: tenantID, Roles: user.Roles}
-	scopes := make([]string, 0, len(candidates))
-	for _, permission := range candidates {
-		resource, action, ok := strings.Cut(permission, ":")
-		if !ok || strings.Contains(resource, "*") || strings.Contains(action, "*") {
+	// The policy decision point decides each concrete permission; the role
+	// lists never grant on their own (docs/SPEC.md: go-qrdb decides). A
+	// candidate with a whole-segment wildcard ("piv:*", "*:read", "*:*")
+	// is expanded into the catalog's concrete permissions it covers, and
+	// the PEP decides each of them: RequireScope matches a wildcard scope
+	// against any operation, so a pattern is never copied into Scopes and
+	// the PEP is never asked about one. A partial glob ("pi*:use") is not
+	// a go-qrdb wildcard and grants nothing. Only concrete permissions the
+	// PEP allows become scopes; a PEP error refuses the principal (fail
+	// closed).
+	concrete := make([]string, 0, len(candidates))
+	listed := make(map[string]struct{})
+	appendConcrete := func(permission string) {
+		if _, dup := listed[permission]; dup {
+			return
+		}
+		listed[permission] = struct{}{}
+		concrete = append(concrete, permission)
+	}
+	for _, candidate := range candidates {
+		resource, action, ok := strings.Cut(candidate, ":")
+		if !ok {
 			continue
 		}
+		if !strings.Contains(candidate, "*") {
+			appendConcrete(candidate)
+			continue
+		}
+		if !wholeSegmentOrConcrete(resource) || !wholeSegmentOrConcrete(action) {
+			continue
+		}
+		for _, permission := range p.catalog {
+			if wildcardCovers(resource, action, permission) {
+				appendConcrete(permission)
+			}
+		}
+	}
+
+	subject := &tokenPrincipal{Subject: user.ID, TenantID: tenantID, Roles: user.Roles}
+	scopes := make([]string, 0, len(concrete))
+	for _, permission := range concrete {
+		resource, action, _ := strings.Cut(permission, ":")
 		allowed, checkErr := checkPrincipalPermission(lookupCtx, p.pep, subject, resource, action)
 		if checkErr != nil {
 			return nil, ErrCertificatePrincipalUnresolved{

@@ -15,6 +15,7 @@ package quic
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
@@ -130,6 +131,28 @@ func LookupOperationPermission(opcode byte, payload []byte) (perm OpcodePermissi
 		return OpcodePermission{}, false, ErrOperationNotClassified{Opcode: opcode}
 	}
 	return perm, false, nil
+}
+
+// OperationScopes returns the concrete scope vocabulary of the QUIC opcode
+// catalog: the sorted, distinct, non-empty Scope of every opcode and every
+// category sub-operation.
+func OperationScopes() []string {
+	scopes := make([]string, 0, len(opcodePermissions))
+	add := func(perm OpcodePermission) {
+		if scope := perm.Scope(); scope != "" {
+			scopes = append(scopes, scope)
+		}
+	}
+	for _, perm := range opcodePermissions {
+		add(perm)
+	}
+	for _, table := range categoryPermissions {
+		for _, perm := range table {
+			add(perm)
+		}
+	}
+	slices.Sort(scopes)
+	return slices.Compact(scopes)
 }
 
 // preAuthOpcodes are the only operations served without credentials. Each
