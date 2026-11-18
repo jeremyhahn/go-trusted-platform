@@ -1521,9 +1521,11 @@ func (h *IAMHandlers) RegisterApp(w http.ResponseWriter, r *http.Request) {
 
 	req.Resolve()
 	sdkReq := &iamsdk.RegisterAppRequest{
-		Name:         req.Name,
-		RedirectURIs: req.RedirectURIs,
-		GrantTypes:   parseGrantTypes(req.GrantTypes),
+		Name:           req.Name,
+		RedirectURIs:   req.RedirectURIs,
+		GrantTypes:     parseGrantTypes(req.GrantTypes),
+		ResponseTypes:  req.ResponseTypes,
+		ResourcePrefix: req.ResourcePrefix,
 	}
 
 	app, err := h.iamClient.RegisterApp(ctx, tenantID, sdkReq)
@@ -1619,9 +1621,11 @@ func (h *IAMHandlers) UpdateApp(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	sdkReq := &iamsdk.UpdateAppRequest{
-		Name:         req.Name,
-		RedirectURIs: req.RedirectURIs,
-		GrantTypes:   parseGrantTypes(req.GrantTypes),
+		Name:           req.Name,
+		RedirectURIs:   req.RedirectURIs,
+		GrantTypes:     parseGrantTypes(req.GrantTypes),
+		ResponseTypes:  req.ResponseTypes,
+		ResourcePrefix: req.ResourcePrefix,
 	}
 
 	app, err := h.iamClient.UpdateApp(ctx, tenantID, appID, sdkReq)
@@ -1696,6 +1700,9 @@ func appToResponse(a *iamsdk.Application) AppResponse {
 		Name:         a.Name,
 		RedirectURIs: a.RedirectURIs,
 		GrantTypes:   grantTypesToStrings(a.GrantTypes),
+
+		ResponseTypes:  a.ResponseTypes,
+		ResourcePrefix: a.ResourcePrefix,
 	}
 	if !a.CreatedAt.IsZero() {
 		t := a.CreatedAt

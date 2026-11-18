@@ -473,11 +473,23 @@ func (a *QuicBaaSIAMAdapter) ListApps(ctx context.Context, tenantID string, limi
 	if err != nil {
 		return nil, err
 	}
-	out := &ListAppsResponse{
-		Apps: make([]AppResponse, 0, len(resp.Applications)),
+	// The upstream List takes no paging, so the page is cut here.
+	total := resp.TotalCount
+	if n := len(resp.Applications); n > total {
+		total = n
 	}
-	for i := range resp.Applications {
-		out.Apps = append(out.Apps, *decodeApp(tenantID, &resp.Applications[i]))
+	start := min(max(int(offset), 0), len(resp.Applications))
+	end := len(resp.Applications)
+	if limit > 0 && start+int(limit) < end {
+		end = start + int(limit)
+	}
+	page := resp.Applications[start:end]
+	out := &ListAppsResponse{
+		PaginatedResponse: PaginatedResponse{Total: int64(total)},
+		Apps:              make([]AppResponse, 0, len(page)),
+	}
+	for i := range page {
+		out.Apps = append(out.Apps, *decodeApp(tenantID, &page[i]))
 	}
 	return out, nil
 }
@@ -491,12 +503,19 @@ func (a *QuicBaaSIAMAdapter) DeleteApp(ctx context.Context, tenantID, clientID s
 }
 
 func (a *QuicBaaSIAMAdapter) RotateAppSecret(ctx context.Context, tenantID, clientID string) (*RotateSecretResponse, error) {
+	// The upstream rotate reply carries no name: fetch the app first, which
+	// also refuses a missing app before any secret rotates.
+	app, err := a.client.App().Get(ctx, tenantID, clientID)
+	if err != nil {
+		return nil, err
+	}
 	resp, err := a.client.App().RotateSecret(ctx, tenantID, clientID)
 	if err != nil {
 		return nil, err
 	}
 	return &RotateSecretResponse{
 		ClientID:     resp.ClientID,
+		Name:         app.Name,
 		ClientSecret: resp.ClientSecret,
 	}, nil
 }
@@ -584,12 +603,13 @@ func decodeApp(tenantID string, app *iamsdk.Application) *AppResponse {
 		grants = append(grants, g.String())
 	}
 	resp := &AppResponse{
-		ClientID:      app.ClientID,
-		TenantID:      tenantID,
-		Name:          app.Name,
-		RedirectURIs:  app.RedirectURIs,
-		GrantTypes:    grants,
-		ResponseTypes: app.ResponseTypes,
+		ClientID:       app.ClientID,
+		TenantID:       tenantID,
+		Name:           app.Name,
+		RedirectURIs:   app.RedirectURIs,
+		GrantTypes:     grants,
+		ResponseTypes:  app.ResponseTypes,
+		ResourcePrefix: app.ResourcePrefix,
 	}
 	if !app.CreatedAt.IsZero() {
 		ts := app.CreatedAt

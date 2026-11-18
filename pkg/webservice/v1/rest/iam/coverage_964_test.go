@@ -1083,7 +1083,7 @@ func TestCov964Adapter_RotateAppSecret(t *testing.T) {
 
 	resp, err := adapter.RotateAppSecret(ctx, "tenant-a", "client-1")
 	require.NoError(t, err)
-	assert.Equal(t, &RotateSecretResponse{ClientID: "client-1", ClientSecret: "rotated-secret"}, resp)
+	assert.Equal(t, &RotateSecretResponse{ClientID: "client-1", Name: "portal", ClientSecret: "rotated-secret"}, resp)
 
 	_, err = adapter.RotateAppSecret(ctx, "tenant-a", "missing")
 	cov964RequireNotFound(t, err, "app", "missing")
