@@ -908,11 +908,6 @@ jobs:
           cache: ${{ runner.environment != 'self-hosted' }}
           go-version: ${{ env.GO_VERSION }}
 
-      # Ruling 869: the module-integrity gate of a native Go job on the pool
-      # (checksum database on, no exemptions, -mod=readonly, no direct).
-      - name: Module integrity (ruling 869)
-        if: ${{ steps.probe.outputs.has_target == 'true' }}
-        run: scripts/ci-go-integrity.sh
       # v1.29.1: no -k; the first failing gate ends the step (ruling 226(15)).
       - name: make lint-gates
         if: ${{ steps.probe.outputs.has_target == 'true' }}
@@ -922,7 +917,9 @@ jobs:
         # step checks. -buildvcs=false is kept from the workflow env.
         env:
           GOFLAGS: -mod=readonly -buildvcs=false
-        run: make lint-gates
+        run: |
+          scripts/ci-go-integrity.sh
+          make lint-gates
 
       # v1.32 (2026-11-08, Company Agent m2098 item 2, InfoSec finding): the
       # internal-name gate. Its patterns are internal values, so they never
@@ -1067,10 +1064,6 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
 
       # Pinned, like GO_VERSION. sdk/javascript declares only
-      # Ruling 869: the module-integrity gate of a native Go job on the pool
-      # (checksum database on, no exemptions, -mod=readonly, no direct).
-      - name: Module integrity (ruling 869)
-        run: scripts/ci-go-integrity.sh
       # `engines: >=18.0.0`; 22 is the active LTS line.
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
@@ -1082,13 +1075,17 @@ jobs:
         # setting). npm test and npm run still run the script they name.
         env:
           npm_config_ignore_scripts: ${{ runner.environment == 'self-hosted' }}
-        run: make test-sdk-js
+        run: |
+          scripts/ci-go-integrity.sh
+          make test-sdk-js
 
       - name: JavaScript SDK lint
         # InfoSec O-3: as in the sdkjs job.
         env:
           npm_config_ignore_scripts: ${{ runner.environment == 'self-hosted' }}
-        run: make lint-sdk-js
+        run: |
+          scripts/ci-go-integrity.sh
+          make lint-sdk-js
 
   # CUSTOMIZE (race): the unit suite under the race detector, minus
   # RACE_EXCLUDE (#37). Race detection is sampling, not proof: a ratchet
@@ -1127,10 +1124,6 @@ jobs:
       # cpio: pkg/diskimage/netboot repacks an initramfs with it. libssl-dev:
       # pkg/app's IDevID mTLS tests run go-tpm-tools' simulator, which
       # compiles the reference TPM with cgo against OpenSSL (#149). The
-      # Ruling 869: the module-integrity gate of a native Go job on the pool
-      # (checksum database on, no exemptions, -mod=readonly, no direct).
-      - name: Module integrity (ruling 869)
-        run: scripts/ci-go-integrity.sh
       # bigdisk runner's image carries both: hosted runners only.
       - name: Install cpio and the OpenSSL headers
         if: runner.environment == 'github-hosted'
@@ -1143,7 +1136,9 @@ jobs:
         # step checks. -buildvcs=false is kept from the workflow env.
         env:
           GOFLAGS: -mod=readonly -buildvcs=false
-        run: make test-race SHARD=${{ matrix.shard }} SHARDS=4
+        run: |
+          scripts/ci-go-integrity.sh
+          make test-race SHARD=${{ matrix.shard }} SHARDS=4
 
   # ==========================================================================
   # The full tier. These gate every push to main, the schedule, and a PR
@@ -1178,10 +1173,6 @@ jobs:
           cache: ${{ runner.environment != 'self-hosted' }}
           go-version: ${{ env.GO_VERSION }}
 
-      # Ruling 869: the module-integrity gate of a native Go job on the pool
-      # (checksum database on, no exemptions, -mod=readonly, no direct).
-      - name: Module integrity (ruling 869)
-        run: scripts/ci-go-integrity.sh
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
@@ -1190,16 +1181,24 @@ jobs:
         # InfoSec O-3: as in the sdkjs job.
         env:
           npm_config_ignore_scripts: ${{ runner.environment == 'self-hosted' }}
-        run: make web-deps
+        run: |
+          scripts/ci-go-integrity.sh
+          make web-deps
 
       - name: Web console unit tests
-        run: make web-test-unit
+        run: |
+          scripts/ci-go-integrity.sh
+          make web-test-unit
 
       - name: Web console typecheck
-        run: make web-typecheck
+        run: |
+          scripts/ci-go-integrity.sh
+          make web-typecheck
 
       - name: Web console build
-        run: make web-build-check
+        run: |
+          scripts/ci-go-integrity.sh
+          make web-build-check
 
   # One integration image per run for every leg (#1119). Each leg used to build
   # it itself: five `docker buildx build --load` runs of 6.5 to 7.3 minutes on
@@ -1763,13 +1762,11 @@ jobs:
       # verdict: every failed leaf test must be a row of
       # .github/foreign-failures.tsv, and anything the checker cannot attribute
       # to a listed test (a build failure, a panic or timeout, an unreadable
-      # Ruling 869: the module-integrity gate of a native Go job on the pool
-      # (checksum database on, no exemptions, -mod=readonly, no direct).
-      - name: Module integrity (ruling 869)
-        run: scripts/ci-go-integrity.sh
       # log) fails the step. ci-gate reads this job's result unchanged.
       - name: Run integration suite leg ${{ matrix.leg }} in the integration image
-        run: make integration-test-leg LEG="${{ matrix.leg }}" IT_PREBUILT=1 IT_PROJECT="$IT_PROJECT" IT_IMAGE="$IT_IMAGE" IT_FOREIGN_BASELINE=1 IT_LOG="$RUNNER_TEMP/integration-leg${{ matrix.leg }}.log"
+        run: |
+          scripts/ci-go-integrity.sh
+          make integration-test-leg LEG="${{ matrix.leg }}" IT_PREBUILT=1 IT_PROJECT="$IT_PROJECT" IT_IMAGE="$IT_IMAGE" IT_FOREIGN_BASELINE=1 IT_LOG="$RUNNER_TEMP/integration-leg${{ matrix.leg }}.log"
 
       - name: Tear down
         if: always()
@@ -1930,13 +1927,10 @@ jobs:
 
       # CUSTOMIZE (ruling 125): each iteration applies the foreign-failure
       # baseline with its own IT_LOG, as the integration job does. Every
-      # Ruling 869: the module-integrity gate of a native Go job on the pool
-      # (checksum database on, no exemptions, -mod=readonly, no direct).
-      - name: Module integrity (ruling 869)
-        run: scripts/ci-go-integrity.sh
       # iteration runs in the leased image (IT_PREBUILT=1).
       - name: Soak (integration suite, looped)
         run: |
+          scripts/ci-go-integrity.sh
           deadline=$(( $(date +%s) + SOAK_MINUTES * 60 ))
           i=0
           while [ "$(date +%s)" -lt "$deadline" ]; do
@@ -2009,16 +2003,14 @@ jobs:
           cache: ${{ runner.environment != 'self-hosted' }}
           go-version: ${{ env.GO_VERSION }}
 
-      # Ruling 869: the module-integrity gate of a native Go job on the pool
-      # (checksum database on, no exemptions, -mod=readonly, no direct).
-      - name: Module integrity (ruling 869)
-        run: scripts/ci-go-integrity.sh
       - name: Install cpio and the OpenSSL headers
         if: runner.environment == 'github-hosted'
         run: sudo apt-get update && sudo apt-get install -y cpio libssl-dev
 
       - name: FIPS build and unit tests
-        run: make test-fips SHARD=${{ matrix.shard }} SHARDS=4
+        run: |
+          scripts/ci-go-integrity.sh
+          make test-fips SHARD=${{ matrix.shard }} SHARDS=4
 
   # ==========================================================================
   # The gate
