@@ -269,6 +269,7 @@ type fakeIPAM struct {
 	next       netip.Addr
 	free       []netip.Addr
 	allocated  map[netip.Addr]string
+	tags       map[netip.Addr][]string
 	capacity   int
 	renewErr   error
 	releases   int
@@ -281,6 +282,7 @@ func newFakeIPAM(capacity int) *fakeIPAM {
 		pool:      &ipam.Pool{ID: "pool-1", Name: "vpn-clients", CIDR: netip.MustParsePrefix("10.200.0.0/24")},
 		next:      netip.MustParseAddr("10.200.0.10"),
 		allocated: map[netip.Addr]string{},
+		tags:      map[netip.Addr][]string{},
 		capacity:  capacity,
 	}
 }
@@ -312,6 +314,7 @@ func (f *fakeIPAM) Allocate(_ context.Context, req *ipam.AllocationRequest) (*ip
 		f.next = f.next.Next()
 	}
 	f.allocated[addr] = req.DeviceID
+	f.tags[addr] = append([]string(nil), req.Tags...)
 	return &ipam.Allocation{ID: addr.String(), PoolID: req.PoolID, IP: addr, DeviceID: req.DeviceID}, nil
 }
 
@@ -325,6 +328,7 @@ func (f *fakeIPAM) Release(_ context.Context, ip netip.Addr) error {
 		return errors.New("not allocated")
 	}
 	delete(f.allocated, ip)
+	delete(f.tags, ip)
 	f.free = append(f.free, ip)
 	f.releases++
 	return nil
@@ -352,7 +356,7 @@ func (f *fakeIPAM) GetAllocationsByPool(_ context.Context, _ string) ([]*ipam.Al
 	allocs := make([]*ipam.Allocation, 0, len(f.allocated))
 	for ip, dev := range f.allocated {
 		allocs = append(allocs, &ipam.Allocation{ID: ip.String(), IP: ip, DeviceID: dev,
-			Status: ipam.AllocationStatusActive, Tags: []string{"vpn"}})
+			Status: ipam.AllocationStatusActive, Tags: f.tags[ip]})
 	}
 	return allocs, nil
 }
@@ -440,6 +444,7 @@ func (r *logRecorder) events(msg string) []map[string]string {
 func testConfig() Config {
 	return Config{
 		Pool:       "vpn-clients",
+		GatewayID:  "gw-a",
 		DataPlanes: []DataPlaneKind{DataPlaneMASQUE},
 		AllowTo:    []string{"management"},
 		MASQUE: MASQUESettings{

@@ -1821,6 +1821,62 @@ func TestCrashLoop_AnExhaustedVPNWithdrawsTheDatapathPeers(t *testing.T) {
 	require.NoError(t, supervisor.ServiceHealth(gateway.ServiceNAT), "the datapath itself stays up")
 }
 
+func TestCrashLoop_AReplacementClaimedBeforeTheGiveUpGetsNoWithdrawal(t *testing.T) {
+	// A replacement launch claimed before the give-up decision restores
+	// its own peers: the given-up loop must register no withdrawal and
+	// remove nothing.
+	supervisor, launcher, clock := newSupervisor(t, func(c *Config) {
+		c.RestartBackoff = time.Millisecond
+		c.RestartBudget = 1
+	})
+	ctx := testContext(t)
+	startDatapath(t, ctx, supervisor, launcher, "")
+	rec := &recordingVPNPlanes{}
+	launcher.lastChild().server.SetVPNPlanes(rec)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceManagementVPN))
+
+	supervisor.mu.Lock()
+	proc := supervisor.processes["vpn"]
+	proc.launching = true
+	proc.restarts = []time.Time{clock.Now()}
+	supervisor.mu.Unlock()
+
+	failure := errors.New("signal: killed")
+	supervisor.restartLoop(ctx, proc, failure, failure)
+
+	assert.False(t, rec.withdrewAll("wireguard"), "the claimed replacement's peers are not withdrawn")
+	assert.False(t, rec.withdrewAll("masque"), "nor its masque peers")
+	supervisor.mu.Lock()
+	assert.Nil(t, proc.withdrawal, "no withdrawal is registered behind a claimed replacement")
+	proc.launching = false
+	supervisor.mu.Unlock()
+}
+
+func TestCrashLoop_TheGiveUpRegistersItsWithdrawalUnderTheSameLock(t *testing.T) {
+	// The withdrawal is published in the critical section that decides the
+	// give-up, so a claimant that takes the lock afterwards always sees it.
+	supervisor, _, clock := newSupervisor(t, func(c *Config) {
+		c.RestartBackoff = time.Millisecond
+		c.RestartBudget = 1
+	})
+	ctx := testContext(t)
+
+	supervisor.mu.Lock()
+	proc := supervisor.processes["vpn"]
+	require.NotNil(t, proc)
+	proc.restarts = []time.Time{clock.Now()}
+	supervisor.mu.Unlock()
+
+	failure := errors.New("signal: killed")
+	_, over, w := supervisor.noteRestart(ctx, proc, failure, failure)
+	require.True(t, over, "the budget is exhausted")
+	require.NotNil(t, w, "an unclaimed follower gets a withdrawal")
+	supervisor.mu.Lock()
+	assert.Same(t, w, proc.withdrawal, "registered before noteRestart returns")
+	supervisor.mu.Unlock()
+	w.cancel()
+}
+
 func TestCrashLoop_AFailedPeerWithdrawalIsRetriedUntilConfirmed(t *testing.T) {
 	// A withdrawal the datapath refuses leaves the peers installed with no
 	// expiry authority, so the supervisor keeps retrying until the datapath

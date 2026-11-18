@@ -80,18 +80,25 @@ func newRestoreHarness(t *testing.T) *restoreHarness {
 // clock.
 func (h *restoreHarness) newService(t *testing.T) *Service {
 	t.Helper()
+	return h.newServiceFor(t, testConfig(), h.plane, h.store)
+}
+
+// newServiceFor builds a Service over the harness's IPAM pool with its own
+// config, plane and lease store: a second gateway sharing the pool.
+func (h *restoreHarness) newServiceFor(t *testing.T, cfg Config, plane *fakePlane, store LeaseStore) *Service {
+	t.Helper()
 	svc, err := New(Deps{
 		Identity:   &fakeIdentity{},
 		Verifier:   &fakeVerifier{},
 		Posture:    &fakePosture{},
 		Factors:    &fakeFactors{},
 		IPAM:       h.ipam,
-		DataPlanes: map[DataPlaneKind]DataPlane{DataPlaneMASQUE: h.plane},
-		Leases:     h.store,
+		DataPlanes: map[DataPlaneKind]DataPlane{DataPlaneMASQUE: plane},
+		Leases:     store,
 		Audit:      &fakeAudit{},
 		Clock:      h.clock,
 		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
-	}, testConfig())
+	}, cfg)
 	require.NoError(t, err)
 	return svc
 }
@@ -109,9 +116,15 @@ func (h *restoreHarness) restart(t *testing.T) {
 // vpn-tagged allocation in the lease pool.
 func (h *restoreHarness) allocateVPN(t *testing.T, device string, addr netip.Prefix) {
 	t.Helper()
+	h.allocateTagged(t, device, addr, "vpn", "tenant:tenant-a", "gateway:gw-a")
+}
+
+// allocateTagged allocates addr to device in the lease pool with tags.
+func (h *restoreHarness) allocateTagged(t *testing.T, device string, addr netip.Prefix, tags ...string) {
+	t.Helper()
 	_, err := h.ipam.AllocateSpecific(context.Background(), &ipam.AllocationRequest{
 		PoolID: h.pool.ID, DeviceID: device, RequestedIP: addr.Addr(),
-		Description: "vpn lease", Tags: []string{"vpn", "tenant:tenant-a"},
+		Description: "vpn lease", Tags: tags,
 	})
 	require.NoError(t, err)
 }
@@ -407,11 +420,12 @@ func TestRestore_LeavesAnUntaggedAllocationAlone(t *testing.T) {
 	assert.Equal(t, "mini-other", h.holder(t, addr), "an untagged allocation is not a VPN lease's address")
 }
 
-func TestRestore_ARestartReclaimsTheAddressOfAForgottenRemoval(t *testing.T) {
+func TestRestore_ASweepReclaimsTheAddressAfterAFailedRestoreReconcile(t *testing.T) {
 	// An expired lease whose peer removal failed is deleted from the
 	// store and its address kept until the retry removes the peer. A
-	// restart forgets that retry: Restore reclaims the address once the
-	// orphan peer is gone.
+	// restart forgets that retry, and the replacement's first
+	// reconciliation fails too: the reclaim is still owed, and the Sweep
+	// that recovers the reconciliation pays it.
 	ctx := context.Background()
 	h := newRestoreHarness(t)
 	lease := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
@@ -419,6 +433,24 @@ func TestRestore_ARestartReclaimsTheAddressOfAForgottenRemoval(t *testing.T) {
 	h.start(t)
 	require.NoError(t, h.svc.Restore(ctx))
 
+	h.forgetAFailedRemoval(t, lease)
+
+	h.restart(t)
+	var unavailable *ErrDataPlaneUnavailable
+	require.ErrorAs(t, h.svc.Restore(ctx), &unavailable)
+	assert.Equal(t, "mini-1", h.holder(t, lease.Address), "an orphan peer still installed keeps its address")
+
+	h.plane.failRemovals(nil)
+	h.svc.Sweep(ctx)
+	assert.False(t, h.plane.hosts(lease.ID), "the orphan peer is removed")
+	assert.Equal(t, "", h.holder(t, lease.Address), "and its forgotten address reclaimed")
+}
+
+// forgetAFailedRemoval expires lease with peer removals failing: the lease
+// is deleted, its peer stays installed and its address is kept.
+func (h *restoreHarness) forgetAFailedRemoval(t *testing.T, lease *Lease) {
+	t.Helper()
+	ctx := context.Background()
 	h.plane.failRemovals(errors.New("datapath unreachable"))
 	h.clock.Advance(2 * time.Hour)
 	h.svc.Sweep(ctx)
@@ -428,16 +460,51 @@ func TestRestore_ARestartReclaimsTheAddressOfAForgottenRemoval(t *testing.T) {
 	require.Empty(t, stored, "the expired lease is deleted")
 	require.True(t, h.plane.hosts(lease.ID), "its peer removal failed")
 	require.Equal(t, "mini-1", h.holder(t, lease.Address), "so its address is kept")
+}
 
-	h.restart(t)
-	var unavailable *ErrDataPlaneUnavailable
-	require.ErrorAs(t, h.svc.Restore(ctx), &unavailable)
-	assert.Equal(t, "mini-1", h.holder(t, lease.Address), "an orphan peer still installed keeps its address")
-
-	h.plane.failRemovals(nil)
+func TestRestore_ReclaimSkipsAnAddressAnOwedRemovalStillHolds(t *testing.T) {
+	ctx := context.Background()
+	h := newRestoreHarness(t)
+	lease := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
+	h.allocateVPN(t, "mini-1", lease.Address)
+	h.start(t)
 	require.NoError(t, h.svc.Restore(ctx))
-	assert.False(t, h.plane.hosts(lease.ID), "the orphan peer is removed")
-	assert.Equal(t, "", h.holder(t, lease.Address), "and its forgotten address reclaimed")
+
+	h.forgetAFailedRemoval(t, lease)
+
+	require.NoError(t, h.svc.reclaimOrphanAddresses(ctx))
+	assert.Equal(t, "mini-1", h.holder(t, lease.Address), "an owed peer removal still holds its address")
+}
+
+func TestRestore_ReclaimLeavesAnotherGatewaysAllocationAlone(t *testing.T) {
+	ctx := context.Background()
+	h := newRestoreHarness(t)
+	lease := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
+	h.allocateVPN(t, "mini-1", lease.Address)
+
+	cfgB := testConfig()
+	cfgB.GatewayID = "gw-b"
+	gwB := h.newServiceFor(t, cfgB, newFakePlane(DataPlaneMASQUE), NewMemoryLeaseStore())
+	require.NoError(t, gwB.Start(ctx))
+	t.Cleanup(func() { require.NoError(t, gwB.Stop(context.Background())) })
+	other := netip.MustParsePrefix("100.64.0.3/32")
+	h.allocateTagged(t, "mini-b", other, "vpn", "tenant:tenant-a", gwB.ownerTag())
+
+	h.start(t)
+	require.NoError(t, h.svc.Restore(ctx))
+	assert.Equal(t, "mini-1", h.holder(t, lease.Address), "this gateway's leased address is kept")
+	assert.Equal(t, "mini-b", h.holder(t, other), "another gateway's live allocation in the shared pool is not reclaimed")
+}
+
+func TestRestore_ReclaimLeavesAnUnownedVPNAllocationAlone(t *testing.T) {
+	ctx := context.Background()
+	h := newRestoreHarness(t)
+	legacy := netip.MustParsePrefix("100.64.0.4/32")
+	h.allocateTagged(t, "mini-legacy", legacy, "vpn", "tenant:tenant-a")
+	h.start(t)
+
+	require.NoError(t, h.svc.Restore(ctx))
+	assert.Equal(t, "mini-legacy", h.holder(t, legacy), "an allocation with no owner tag is never reclaimed")
 }
 
 func TestRestore_ReportsADropTheStoreCouldNotRecord(t *testing.T) {
