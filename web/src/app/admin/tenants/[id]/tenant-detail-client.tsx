@@ -85,7 +85,8 @@ export default function TenantDetailClient() {
   const suspend = () =>
     setPending({
       title: "Suspend this tenant?",
-      description: "Its members lose access until the tenant is resumed.",
+      description:
+        "The tenant is marked suspended. This changes its state only: members keep their access and its traffic is not blocked.",
       confirmLabel: "Suspend",
       run: async () => {
         const res = await tenants.suspendTenant(tenantId);
