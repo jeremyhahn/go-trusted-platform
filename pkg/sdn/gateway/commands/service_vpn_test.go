@@ -229,51 +229,53 @@ func TestDatapathVPNPlanes_NonKernelClassNone(t *testing.T) {
 // hub's Up runs to remove it, so the child removes it itself; otherwise
 // those peers would pass traffic past their leases while every removal RPC
 // is refused. A removal failure keeps the child from starting.
-func TestDatapathVPNPlanes_NoPlaneRemovesStaleHub(t *testing.T) {
-	def, err := process.DefinitionByName("datapath")
-	require.NoError(t, err)
-	require.Equal(t, process.ClassKernel, def.Class)
-	gw, err := gateway.NewGateway(&gateway.GatewayConfig{Enabled: true, ID: "gw-test"})
-	require.NoError(t, err)
-
-	for name, tc := range map[string]struct {
-		vpnEnabled bool
-		planes     []vpn.ManagedDataPlane
-		removals   int
-	}{
-		"vpn disabled":        {vpnEnabled: false, removals: 1},
-		"factory builds none": {vpnEnabled: true, removals: 1},
-		"plane hosted":        {vpnEnabled: true, planes: []vpn.ManagedDataPlane{&fakeVPNPlane{}}, removals: 0},
-	} {
-		t.Run(name, func(t *testing.T) {
-			removals := 0
-			deps := newServiceRun().deps()
-			deps.vpnDataPlanes = (&vpnPlaneFactory{planes: tc.planes}).build
-			deps.removeStaleVPNHub = func(*slog.Logger) error { removals++; return nil }
-			host, err := deps.datapathVPNPlanes(def, newDatapathRun(tc.vpnEnabled).loaded, gw, testLogger())
-			require.NoError(t, err)
-			assert.Equal(t, len(tc.planes) > 0, host != nil)
-			assert.Equal(t, tc.removals, removals, "the stale hub is removed exactly when no plane's Up will")
-		})
-	}
-
-	t.Run("removal fails", func(t *testing.T) {
-		boom := errors.New("link busy")
-		deps := newServiceRun().deps()
-		deps.vpnDataPlanes = (&vpnPlaneFactory{}).build
-		deps.removeStaleVPNHub = func(*slog.Logger) error { return boom }
-		_, err := deps.datapathVPNPlanes(def, newDatapathRun(false).loaded, gw, testLogger())
-		require.ErrorIs(t, err, boom)
+func TestServeProcess_TheKernelChildRemovesTheStaleHubFirst(t *testing.T) {
+	// A killed predecessor's hub and peers pass traffic past their leases
+	// until removed, so the kernel-class child removes them before any
+	// startup step that can fail (Codex #1717 round 2).
+	t.Run("the gateway does not assemble", func(t *testing.T) {
+		run := newDatapathRun(true)
+		run.buildErr = errors.New("ovsdb unavailable")
+		removals := 0
+		deps := run.deps()
+		deps.removeStaleVPNHub = func(*slog.Logger) error { removals++; return nil }
+		err := serveProcess(context.Background(), "datapath", serviceTestOptions(t), deps, testLogger())
+		require.ErrorIs(t, err, run.buildErr)
+		assert.Equal(t, 1, removals, "the stale hub goes before assembly can fail")
 	})
 
-	t.Run("non-kernel child leaves the hub", func(t *testing.T) {
-		routing, err := process.DefinitionByName("routing")
-		require.NoError(t, err)
+	t.Run("the configuration is unreadable", func(t *testing.T) {
+		run := newDatapathRun(true)
+		run.readErr = os.ErrPermission
 		removals := 0
-		deps := newServiceRun().deps()
+		deps := run.deps()
 		deps.removeStaleVPNHub = func(*slog.Logger) error { removals++; return nil }
-		_, err = deps.datapathVPNPlanes(routing, newDatapathRun(false).loaded, gw, testLogger())
-		require.NoError(t, err)
+		err := serveProcess(context.Background(), "datapath", serviceTestOptions(t), deps, testLogger())
+		var unreadable *ErrServiceConfigUnreadable
+		require.ErrorAs(t, err, &unreadable)
+		assert.Equal(t, 1, removals, "the stale hub goes before the configuration is read")
+	})
+
+	t.Run("the removal fails", func(t *testing.T) {
+		run := newDatapathRun(true)
+		boom := errors.New("link busy")
+		deps := run.deps()
+		deps.removeStaleVPNHub = func(*slog.Logger) error { return boom }
+		err := serveProcess(context.Background(), "datapath", serviceTestOptions(t), deps, testLogger())
+		require.ErrorIs(t, err, boom)
+		assert.Zero(t, run.readCalls, "nothing runs after a failed removal")
+		assert.Nil(t, run.built, "no gateway is assembled after a failed removal")
+	})
+
+	t.Run("a non-kernel child leaves the hub", func(t *testing.T) {
+		run := newServiceRun()
+		failure := errors.New("injected")
+		run.buildErr = failure
+		removals := 0
+		deps := run.deps()
+		deps.removeStaleVPNHub = func(*slog.Logger) error { removals++; return nil }
+		err := serveProcess(context.Background(), "routing", serviceTestOptions(t), deps, testLogger())
+		require.ErrorIs(t, err, failure)
 		assert.Zero(t, removals, "only the kernel-class child owns the hub device")
 	})
 }
