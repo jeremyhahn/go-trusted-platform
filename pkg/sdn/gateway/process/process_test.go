@@ -1650,6 +1650,10 @@ func TestCrashLoop_StopsAtTheRestartBudget(t *testing.T) {
 type recordingVPNPlanes struct {
 	mu         sync.Mutex
 	reconciles []*ipcv1.ReconcileVPNPeersRequest
+	// refuseWireGuard refuses that many wireguard reconciliations as
+	// UNAVAILABLE before one succeeds; refused counts them.
+	refuseWireGuard int
+	refused         int
 }
 
 func (r *recordingVPNPlanes) InstallVPNPeer(context.Context, *ipcv1.InstallVPNPeerRequest) *ipcv1.InstallVPNPeerResponse {
@@ -1663,6 +1667,12 @@ func (r *recordingVPNPlanes) RemoveVPNPeer(context.Context, *ipcv1.RemoveVPNPeer
 func (r *recordingVPNPlanes) ReconcileVPNPeers(_ context.Context, req *ipcv1.ReconcileVPNPeersRequest) *ipcv1.ReconcileVPNPeersResponse {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if req.GetDataPlane() == "wireguard" && r.refuseWireGuard > 0 {
+		r.refuseWireGuard--
+		r.refused++
+		return &ipcv1.ReconcileVPNPeersResponse{Refusal: &ipcv1.VPNPeerRefusal{
+			Class: ipcv1.VPNPeerRefusalClass_VPN_PEER_REFUSAL_CLASS_UNAVAILABLE}}
+	}
 	r.reconciles = append(r.reconciles, req)
 	return &ipcv1.ReconcileVPNPeersResponse{}
 }
@@ -1709,6 +1719,42 @@ func TestCrashLoop_AnExhaustedVPNWithdrawsTheDatapathPeers(t *testing.T) {
 	require.Eventually(t, func() bool { return rec.withdrewAll("masque") },
 		20*time.Second, 10*time.Millisecond, "and every masque peer")
 	require.NoError(t, supervisor.ServiceHealth(gateway.ServiceNAT), "the datapath itself stays up")
+}
+
+func TestCrashLoop_AFailedPeerWithdrawalIsRetriedUntilConfirmed(t *testing.T) {
+	// A withdrawal the datapath refuses leaves the peers installed with no
+	// expiry authority, so the supervisor keeps retrying until the datapath
+	// confirms it: a failure followed by recovery ends withdrawn.
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
+		c.RestartBackoff = time.Millisecond
+		c.RestartBudget = 1
+	})
+	ctx := testContext(t)
+	startDatapath(t, ctx, supervisor, launcher, "")
+	rec := &recordingVPNPlanes{}
+	launcher.lastChild().server.SetVPNPlanes(rec)
+	rec.mu.Lock()
+	rec.refuseWireGuard = 2
+	rec.mu.Unlock()
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceManagementVPN))
+
+	vpnChild := launcher.lastChild()
+	vpnChild.exit(errors.New("signal: killed"))
+	vpnChild = awaitRelaunch(t, supervisor, launcher, "vpn", 3)
+	vpnChild.exit(errors.New("signal: killed"))
+
+	var exhausted *ErrRestartBudgetExhausted
+	require.Eventually(t, func() bool {
+		return errors.As(supervisor.ServiceHealth(gateway.ServiceManagementVPN), &exhausted)
+	}, 20*time.Second, 10*time.Millisecond, "the supervisor gives up on the vpn child")
+	require.Eventually(t, func() bool { return rec.withdrewAll("wireguard") },
+		20*time.Second, 10*time.Millisecond, "the refused wireguard withdrawal is retried until confirmed")
+	require.Eventually(t, func() bool { return rec.withdrewAll("masque") },
+		20*time.Second, 10*time.Millisecond, "and every masque peer is withdrawn")
+
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	assert.Equal(t, 2, rec.refused, "both refusals were met before the withdrawal was confirmed")
 }
 
 // watchdogClock is a testClock that holds every wait of the watchdog
