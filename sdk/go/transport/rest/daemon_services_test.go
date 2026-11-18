@@ -108,6 +108,9 @@ func TestDaemonServices_StatusReplyFillsServiceInfo(t *testing.T) {
 	if info.GetStatus() != platformv1.ServiceStatus_SERVICE_STATUS_RUNNING {
 		t.Errorf("status = %v, want RUNNING", info.GetStatus())
 	}
+	if info.GetHealth() != platformv1.HealthStatus_HEALTH_STATUS_HEALTHY {
+		t.Errorf("health = %v, want HEALTHY", info.GetHealth())
+	}
 	wantStart := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	if !info.GetStartedAt().AsTime().Equal(wantStart) {
 		t.Errorf("started_at = %v, want %v", info.GetStartedAt().AsTime(), wantStart)
@@ -169,6 +172,42 @@ func TestDaemonServices_ListDecodesEveryService(t *testing.T) {
 		got[1].GetStatus() != platformv1.ServiceStatus_SERVICE_STATUS_STOPPED ||
 		got[1].GetMetadata()["stop_count"] != "3" {
 		t.Errorf("services[1] = %v", got[1])
+	}
+	if got[0].GetHealth() != platformv1.HealthStatus_HEALTH_STATUS_HEALTHY {
+		t.Errorf("services[0] health = %v, want HEALTHY", got[0].GetHealth())
+	}
+	if got[1].GetHealth() != platformv1.HealthStatus_HEALTH_STATUS_UNSPECIFIED {
+		t.Errorf("services[1] health = %v, want UNSPECIFIED", got[1].GetHealth())
+	}
+}
+
+// TestDaemonServices_HealthFollowsStatus: the decoder derives ServiceInfo.Health
+// from the decoded status as the gRPC handlers do (healthStatusFromServiceStatus).
+func TestDaemonServices_HealthFollowsStatus(t *testing.T) {
+	for _, tc := range []struct {
+		status string
+		want   platformv1.HealthStatus
+	}{
+		{"running", platformv1.HealthStatus_HEALTH_STATUS_HEALTHY},
+		{"error", platformv1.HealthStatus_HEALTH_STATUS_UNHEALTHY},
+		{"starting", platformv1.HealthStatus_HEALTH_STATUS_DEGRADED},
+		{"stopping", platformv1.HealthStatus_HEALTH_STATUS_DEGRADED},
+		{"stopped", platformv1.HealthStatus_HEALTH_STATUS_UNSPECIFIED},
+		{"sleeping", platformv1.HealthStatus_HEALTH_STATUS_UNSPECIFIED},
+	} {
+		t.Run(tc.status, func(t *testing.T) {
+			rec := &daemonServicesRecorder{reply: `{"name":"sdn","status":"` + tc.status + `","start_count":0,"stop_count":0}`}
+			a, _ := adapterAgainst(t, rec.handle)
+			reply := &platformv1.GetServiceStatusResponse{}
+			req := &platformv1.GetServiceStatusRequest{Service: platformv1.ServiceType_SERVICE_TYPE_SDN}
+			if err := a.Connection().Invoke(context.Background(),
+				platformv1.PlatformDaemon_GetServiceStatus_FullMethodName, req, reply); err != nil {
+				t.Fatalf("Invoke: %v", err)
+			}
+			if got := reply.GetService().GetHealth(); got != tc.want {
+				t.Errorf("health = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

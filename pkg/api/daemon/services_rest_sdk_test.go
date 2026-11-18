@@ -118,6 +118,7 @@ func TestSDKREST_DaemonServicesRoundTrip(t *testing.T) {
 	info := st.GetService()
 	require.Equal(t, platformv1.ServiceType_SERVICE_TYPE_TPM, info.GetType())
 	require.Equal(t, platformv1.ServiceStatus_SERVICE_STATUS_RUNNING, info.GetStatus())
+	require.Equal(t, platformv1.HealthStatus_HEALTH_STATUS_HEALTHY, info.GetHealth())
 	require.NotNil(t, info.GetStartedAt())
 	require.Equal(t, "1", info.GetMetadata()["start_count"])
 	require.Equal(t, "0", info.GetMetadata()["stop_count"])
@@ -141,6 +142,7 @@ func TestSDKREST_DaemonServicesRoundTrip(t *testing.T) {
 	st, err = client.GetServiceStatus(ctx, &platformv1.GetServiceStatusRequest{Service: platformv1.ServiceType_SERVICE_TYPE_TPM})
 	require.NoError(t, err)
 	require.Equal(t, platformv1.ServiceStatus_SERVICE_STATUS_STOPPED, st.GetService().GetStatus())
+	require.Equal(t, platformv1.HealthStatus_HEALTH_STATUS_UNSPECIFIED, st.GetService().GetHealth())
 	require.Equal(t, "2", st.GetService().GetMetadata()["start_count"])
 	require.Equal(t, "2", st.GetService().GetMetadata()["stop_count"])
 }
