@@ -1944,7 +1944,12 @@ key, client-certificate fingerprint). A plane's refusal rides in the response
 as a `VPNPeerRefusal` whose class names the `vpn` error it came from, so the
 caller rebuilds the same typed error; an unknown class reads as unavailable.
 Until `SetVPNPlanes` is called, both RPCs are refused unavailable ("this
-process hosts no VPN data plane"). They are `DatapathService` methods, so the
+process hosts no VPN data plane"). A `ReconcileVPNPeers` that withdraws every
+peer of a named plane succeeds with no planes, since such a process holds no
+peer, except after a failed plane start: `serveProcess` then calls
+`SetVPNPlanesFailed`, because a predecessor's peers may still be in the kernel,
+and the withdrawal is refused unavailable, naming the start failure, until
+`SetVPNPlanes` is called. They are `DatapathService` methods, so the
 per-method `Policy` admits the parser class to them.
 
 ### The conntrack stage classifies tagged ingress only (open question)

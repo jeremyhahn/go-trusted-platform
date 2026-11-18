@@ -199,6 +199,7 @@ func serveProcess(ctx context.Context, name string, opts serviceOptions, deps se
 		if planesErr = vpnPlanes.Start(ctx); planesErr == nil {
 			server.SetVPNPlanes(vpnPlanes)
 		} else {
+			server.SetVPNPlanesFailed(planesErr)
 			vpnPlanes = nil
 		}
 	}
