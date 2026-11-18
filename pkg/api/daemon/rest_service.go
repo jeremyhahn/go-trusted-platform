@@ -922,18 +922,24 @@ func (s *RESTServer) handleRestartService(w http.ResponseWriter, r *http.Request
 	ctx := r.Context()
 
 	state.mu.Lock()
-	// Stop if running
-	if state.observedStatus() == platformv1.ServiceStatus_SERVICE_STATUS_RUNNING {
-		state.status.Store(int32(platformv1.ServiceStatus_SERVICE_STATUS_STOPPING))
-		if err := state.service.Stop(ctx); err != nil {
-			state.status.Store(int32(platformv1.ServiceStatus_SERVICE_STATUS_ERROR))
-			state.lastError = err.Error()
-			state.mu.Unlock()
-			s.writeError(w, http.StatusInternalServerError, ErrServiceStopFailed{ServiceName: serviceName, Reason: err.Error()})
-			return
-		}
-		state.stopCount.Add(1)
+	// This mirrors gRPC RestartService, which is StopService (refusing a
+	// stopped service) then StartService (docs/SPEC.md transport parity):
+	// a stopped service is refused with no backend call, any other status
+	// is stopped and then started.
+	if state.observedStatus() == platformv1.ServiceStatus_SERVICE_STATUS_STOPPED {
+		state.mu.Unlock()
+		s.writeError(w, http.StatusConflict, ErrServiceNotRunning{ServiceName: serviceName})
+		return
 	}
+	state.status.Store(int32(platformv1.ServiceStatus_SERVICE_STATUS_STOPPING))
+	if err := state.service.Stop(ctx); err != nil {
+		state.status.Store(int32(platformv1.ServiceStatus_SERVICE_STATUS_ERROR))
+		state.lastError = err.Error()
+		state.mu.Unlock()
+		s.writeError(w, http.StatusInternalServerError, ErrServiceStopFailed{ServiceName: serviceName, Reason: err.Error()})
+		return
+	}
+	state.stopCount.Add(1)
 
 	// Start
 	state.status.Store(int32(platformv1.ServiceStatus_SERVICE_STATUS_STARTING))
