@@ -200,3 +200,37 @@ func TestRegistryReads_DecodeTheServedReplies(t *testing.T) {
 		t.Errorf("tags = %v", tags)
 	}
 }
+
+// TestRegistryReads_InspectDecodesArtifactAndTagsOnly pins the agreed
+// Inspect contract: the artifact and its tags decode, and signatures and
+// scan results in the reply are left out (reserved for a later row).
+func TestRegistryReads_InspectDecodesArtifactAndTagsOnly(t *testing.T) {
+	const inspectBody = `{"Artifact":{"ID":"id1","Repository":"team/app","Tag":"v1","Digest":"sha256:bb","Type":1,"State":2,` +
+		`"Size":9,"Manifest":null,"Labels":{"l":"1"},"Annotations":null,"OS":"linux","Architecture":"amd64","Author":"me",` +
+		`"CreatedAt":"2025-01-02T03:04:05Z","UpdatedAt":"0001-01-01T00:00:00Z","PushedAt":"0001-01-01T00:00:00Z",` +
+		`"LastPulledAt":"0001-01-01T00:00:00Z","PullCount":3},` +
+		`"Signatures":[{"KeyID":"k1","Algorithm":"ES256","Signature":"c2ln","SignedAt":"2025-01-02T03:04:05Z","Signer":"me"}],` +
+		`"ScanResult":{"Scanner":"s","ScannedAt":"2025-01-02T03:04:05Z","Vulnerabilities":[{"ID":"CVE-1"}],"HighCount":1},` +
+		`"Tags":["v1","latest"]}`
+
+	a, _ := registryReadsAdapter(t, func(r *http.Request) string {
+		return registryReadsEnvelope(inspectBody)
+	})
+	in := &platformv1.InspectArtifactResponse{}
+	if err := a.Connection().Invoke(context.Background(), platformv1.RegistryService_Inspect_FullMethodName,
+		&platformv1.InspectArtifactRequest{Repository: "team/app", Reference: "v1"}, in); err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if d := in.GetDetail().GetArtifact().GetDigest(); d != "sha256:bb" {
+		t.Errorf("digest = %q, want sha256:bb", d)
+	}
+	if tags := in.GetDetail().GetTags(); len(tags) != 2 || tags[0] != "v1" || tags[1] != "latest" {
+		t.Errorf("tags = %v", tags)
+	}
+	if sigs := in.GetDetail().GetSignatures(); len(sigs) != 0 {
+		t.Errorf("signatures = %v, want none (out of scope)", sigs)
+	}
+	if sr := in.GetDetail().GetScanResult(); sr != nil {
+		t.Errorf("scan result = %v, want nil (out of scope)", sr)
+	}
+}
