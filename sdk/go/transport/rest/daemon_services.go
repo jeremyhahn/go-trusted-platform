@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
+	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -62,6 +64,32 @@ type daemonServiceActionWire struct {
 	Success bool   `json:"success"`
 	Message string `json:"message"`
 }
+
+// daemonAlreadyRunningPrefix is the start of the envelope error the daemon
+// writes with its 409 for a start of a running service: it mirrors the
+// Error() text of pkg/api/daemon.ErrServiceAlreadyRunning. It is the one
+// 409 the daemon's gRPC service answers with AlreadyExists.
+const daemonAlreadyRunningPrefix = "service already running: "
+
+// restConflictCodes maps a gRPC full method name to the code a 409 from its
+// REST route takes, given the envelope's error message. The daemon answers
+// 409 for refusals of the service's state (not running, owned by the
+// process), which its gRPC service reports as FailedPrecondition, so the
+// generic POST-409-is-AlreadyExists rule would break parity (docs/SPEC.md).
+var restConflictCodes = map[string]func(message string) codes.Code{
+	platformv1.PlatformDaemon_StartService_FullMethodName: func(message string) codes.Code {
+		if strings.HasPrefix(message, daemonAlreadyRunningPrefix) {
+			return codes.AlreadyExists
+		}
+		return codes.FailedPrecondition
+	},
+	platformv1.PlatformDaemon_StopService_FullMethodName:    alwaysFailedPrecondition,
+	platformv1.PlatformDaemon_RestartService_FullMethodName: alwaysFailedPrecondition,
+}
+
+// alwaysFailedPrecondition is the conflict code of a route whose every 409
+// is the service's state refusing the action.
+func alwaysFailedPrecondition(string) codes.Code { return codes.FailedPrecondition }
 
 func init() {
 	serviceParam := []pathParam{{placeholder: "{service}", field: "service", encode: encodeDaemonServiceName}}
