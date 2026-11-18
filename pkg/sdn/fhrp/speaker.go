@@ -91,8 +91,9 @@ type Speaker struct {
 	mu      sync.Mutex
 	active  bool
 	runners []*runner
-	// pending holds the stopped runners whose VIP release failed at Stop;
-	// a later Stop retries their group's Shutdown until it succeeds.
+	// pending holds the stopped runners whose VIP release failed, at Stop
+	// or in the rollback of a failed Start; a later Start or Stop retries
+	// their group's Shutdown until it succeeds.
 	pending []*runner
 	// dropped counts advertisements discarded by the §7.1 receive checks.
 	dropped atomic.Uint64
@@ -141,7 +142,8 @@ type Health struct {
 
 // Start opens every group's socket, performs the RFC 5798 §6.4.1 startup
 // and runs one loop per group. A group that cannot open its socket fails
-// the start; groups already started are stopped again.
+// the start; groups already started are stopped again, and one whose VIP
+// release fails in that rollback stays pending (see ReleasePending).
 func (s *Speaker) Start(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -161,6 +163,9 @@ func (s *Speaker) Start(ctx context.Context) error {
 			// fails is reported beside the cause, never dropped.
 			for _, sr := range started {
 				if rbErr := sr.stop(s.clock.Now()); rbErr != nil {
+					// Keep the runner for cleanup: its VIP is still
+					// installed, and the next Start or Stop releases it.
+					s.pending = append(s.pending, sr)
 					err = &ErrRollbackIncomplete{Cause: err, Rollback: rbErr}
 				}
 			}
@@ -171,6 +176,15 @@ func (s *Speaker) Start(ctx context.Context) error {
 	s.runners = started
 	s.active = true
 	return nil
+}
+
+// ReleasePending reports whether a VIP release is outstanding, from a
+// failed Stop or a failed startup rollback. A speaker in that state must be
+// kept, not rebuilt, so its next Start or Stop can delete that VIP.
+func (s *Speaker) ReleasePending() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.pending) > 0
 }
 
 // Stop shuts every group down (§6.4.3: a master sends a priority-0

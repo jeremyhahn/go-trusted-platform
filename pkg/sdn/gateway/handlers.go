@@ -88,7 +88,9 @@ var serviceRefusals = map[string]string{
 // backedServiceHandler is the one ServiceHandler shape for every
 // config-driven service: it builds the service on Start through the
 // section's builder, drives its lifecycle, and derives IsActive and Health
-// from the service — never from a flag of its own.
+// from the service — never from a flag of its own. A service whose Start
+// failed with cleanup still outstanding (releasePendingService) is retained
+// rather than dropped: the next Start reuses it and a Stop finishes it.
 type backedServiceHandler struct {
 	gateway *Gateway
 	name    string
@@ -96,6 +98,17 @@ type backedServiceHandler struct {
 
 	mu  sync.Mutex
 	svc backedService
+	// retained is a service whose Start failed but which still has
+	// cleanup outstanding; nil when there is none.
+	retained backedService
+}
+
+// releasePendingService is implemented by a backedService that can be left
+// holding host state after a failed Start (the fhrp speaker's VIPs). While
+// ReleasePending reports true the handler keeps that service instance, so
+// its next Start or Stop can release the state; a fresh build cannot.
+type releasePendingService interface {
+	ReleasePending() bool
 }
 
 func newBackedServiceHandler(g *Gateway, name string, build serviceBuilder) *backedServiceHandler {
@@ -111,13 +124,22 @@ func (h *backedServiceHandler) Start(ctx context.Context) error {
 	if h.svc != nil {
 		return &ErrServiceAlreadyActive{Service: h.name}
 	}
-	svc, err := h.build(h.gateway)
-	if err != nil {
-		return err
+	svc := h.retained
+	if svc == nil {
+		built, err := h.build(h.gateway)
+		if err != nil {
+			return err
+		}
+		svc = built
 	}
 	if err := svc.Start(ctx); err != nil {
+		h.retained = nil
+		if rp, ok := svc.(releasePendingService); ok && rp.ReleasePending() {
+			h.retained = svc
+		}
 		return &ErrServiceStartFailed{Service: h.name, Cause: err}
 	}
+	h.retained = nil
 	h.svc = svc
 	return nil
 }
@@ -127,7 +149,15 @@ func (h *backedServiceHandler) Stop(ctx context.Context) error {
 	defer h.mu.Unlock()
 
 	if h.svc == nil {
-		return &ErrServiceNotActive{Service: h.name}
+		if h.retained == nil {
+			return &ErrServiceNotActive{Service: h.name}
+		}
+		// Finish the cleanup a failed Start left outstanding.
+		if err := h.retained.Stop(ctx); err != nil {
+			return &ErrServiceStopFailed{Service: h.name, Cause: err}
+		}
+		h.retained = nil
+		return nil
 	}
 	if err := h.svc.Stop(ctx); err != nil {
 		return &ErrServiceStopFailed{Service: h.name, Cause: err}
