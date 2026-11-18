@@ -34,9 +34,11 @@ import (
 	dnsentities "github.com/jeremyhahn/go-trusted-platform/pkg/dns/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/provisioning"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/device"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -683,6 +685,30 @@ func TestNewPXEIdentityHook_OtherErrorFailsTheEnrolment(t *testing.T) {
 	hook := NewPXEIdentityHook(rec, slog.Default())
 	err := hook(&trustedca.ACMEOrderFinalizeHookContext{Context: context.Background(), IsTCGCSR: true, ClientIP: "192.0.2.10", Certificate: &x509.Certificate{Raw: []byte{1}}})
 	assert.Error(t, err)
+}
+
+// TestNewPXEIdentityHook_ToleratesServiceNotConfigured: a node with no PXE
+// backend answers with the typed SERVICE_NOT_CONFIGURED discriminator, and
+// that must not fail a TCG enrolment; a bare Unavailable still does.
+func TestNewPXEIdentityHook_ToleratesServiceNotConfigured(t *testing.T) {
+	finalize := func(err error) error {
+		hook := NewPXEIdentityHook(&fakePXEIdentityRecorder{err: err}, slog.Default())
+		return hook(&trustedca.ACMEOrderFinalizeHookContext{Context: context.Background(), IsTCGCSR: true, ClientIP: "192.0.2.10", Certificate: &x509.Certificate{Raw: []byte{1}}})
+	}
+
+	t.Run("typed not-configured is tolerated", func(t *testing.T) {
+		st, err := status.New(codes.Unavailable, "pxe is not configured").WithDetails(&errdetails.ErrorInfo{
+			Reason:   response.ReasonServiceNotConfigured,
+			Domain:   response.ErrorInfoDomain,
+			Metadata: map[string]string{"service": "pxe"},
+		})
+		require.NoError(t, err)
+		assert.NoError(t, finalize(st.Err()))
+	})
+
+	t.Run("bare unavailable fails the enrolment", func(t *testing.T) {
+		assert.Error(t, finalize(status.Error(codes.Unavailable, "down")))
+	})
 }
 
 func TestNewDeviceRegistrationHook_SkipsMissingSerial(t *testing.T) {

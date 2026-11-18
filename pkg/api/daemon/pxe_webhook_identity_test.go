@@ -229,6 +229,20 @@ func TestPXEIdentityHook_EnrolmentRecordsTheIDevIDTheWebhookRequires(t *testing.
 	assert.Equal(t, pxe.StateInstallComplete, f.state(t))
 }
 
+// TestPXEIdentityHook_NoPXEBackendDoesNotFailEnrolment covers the production
+// configuration: platformd builds the PXE gRPC service with no backend, and
+// a TCG enrolment on such a node must still succeed.
+func TestPXEIdentityHook_NoPXEBackendDoesNotFailEnrolment(t *testing.T) {
+	logger := logging.NewLogger(slog.LevelError, io.Discard)
+	hook := webv1.NewPXEIdentityHook(NewPXEGRPCService(logger, nil), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	require.NoError(t, hook(&trustedca.ACMEOrderFinalizeHookContext{
+		Context:     context.Background(),
+		IsTCGCSR:    true,
+		ClientIP:    "192.0.2.10",
+		Certificate: webhookIdentityCert(t),
+	}))
+}
+
 // TestPXEIdentityHook_UnresolvableIPRecordsNothing pins that an enrolment
 // from an address with no on-link MAC (not a PXE install) still succeeds and
 // records no fingerprint, so the webhook keeps refusing.
