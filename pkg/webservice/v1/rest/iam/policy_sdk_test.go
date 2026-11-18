@@ -2,11 +2,15 @@ package iam
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
+	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -114,13 +118,12 @@ func TestPolicyMethodsOverSDKREST_RoundTrip(t *testing.T) {
 	assertPolicy(t, getResp.GetPolicy(), "p1")
 
 	updateResp, err := client.UpdatePolicy(ctx, &platformv1.UpdateIAMPolicyRequest{
-		TenantId: "tenant-a", PolicyName: "p1", Description: "readers", SpecYaml: []byte(spec),
+		TenantId: "tenant-a", PolicyName: "p1", Description: "readers",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "tenant-a/p1", seen["update"])
 	assertPolicy(t, updateResp.GetPolicy(), "p1")
 	require.NotNil(t, updatedReq)
-	assert.Equal(t, spec, updatedReq.SpecYAML)
 	assert.Equal(t, "readers", updatedReq.Description)
 
 	deleteResp, err := client.DeletePolicy(ctx, &platformv1.DeleteIAMPolicyRequest{TenantId: "tenant-a", PolicyName: "p1"})
@@ -153,4 +156,91 @@ func TestPolicyMethodsOverSDKREST_RoundTrip(t *testing.T) {
 	assert.Equal(t, "p1", testResp.GetMatchedPolicy())
 	assert.Equal(t, "r1", testResp.GetMatchedRule())
 	assert.Equal(t, int64(4200), testResp.GetEvaluationTimeNs())
+}
+
+// pagedPolicies is an upstream policy client that pages by cursor, as the
+// quicbaas IAM service does: the cursor is the index of the next policy.
+type pagedPolicies struct {
+	iamsdk.PolicyClient
+	t        *testing.T
+	policies []iamsdk.Policy
+}
+
+func (p *pagedPolicies) List(_ context.Context, _ string, req *iamsdk.ListPoliciesRequest) (*iamsdk.ListPoliciesResponse, error) {
+	start := 0
+	if req.Cursor != "" {
+		n, err := strconv.Atoi(req.Cursor)
+		require.NoError(p.t, err)
+		start = n
+	}
+	end := len(p.policies)
+	if req.Limit > 0 && start+req.Limit < end {
+		end = start + req.Limit
+	}
+	resp := &iamsdk.ListPoliciesResponse{
+		Policies:   append([]iamsdk.Policy(nil), p.policies[start:end]...),
+		HasMore:    end < len(p.policies),
+		TotalCount: int64(len(p.policies)),
+	}
+	if resp.HasMore {
+		resp.NextCursor = strconv.Itoa(end)
+	}
+	return resp, nil
+}
+
+func (p *pagedPolicies) Update(context.Context, string, string, *iamsdk.UpdatePolicyRequest) (*iamsdk.Policy, error) {
+	p.t.Fatal("a spec_yaml update must be refused before the upstream is called")
+	return nil, nil
+}
+
+// pagedPolicyClient is the cov964 SDK client with the cursor-paged policies.
+type pagedPolicyClient struct {
+	*cov964Client
+	policies *pagedPolicies
+}
+
+func (c *pagedPolicyClient) Policy() iamsdk.PolicyClient { return c.policies }
+
+// TestPolicyMethodsOverSDKREST_ProductionAdapter serves the production
+// QuicBaaSIAMAdapter over SDK REST: a page past the first returns that page
+// of the cursor-paged upstream with its total, and a spec_yaml update is
+// refused as InvalidArgument without reaching the upstream.
+func TestPolicyMethodsOverSDKREST_ProductionAdapter(t *testing.T) {
+	t.Parallel()
+	upstream := &pagedPolicies{t: t}
+	for _, name := range []string{"p1", "p2", "p3", "p4", "p5"} {
+		upstream.policies = append(upstream.policies, iamsdk.Policy{Name: name, SpecYAML: []byte("rules: []")})
+	}
+	adapter := NewQuicBaaSIAMAdapter(&pagedPolicyClient{cov964Client: cov964NewClient(), policies: upstream})
+	client := platformv1.NewPlatformIAMServiceClient(
+		sdkRESTConnection(t, adminSessionIAMServer(t, adapter, &mockPEPClient{})))
+	ctx := context.Background()
+
+	names := func(resp *platformv1.ListIAMPoliciesResponse) []string {
+		var out []string
+		for _, p := range resp.GetPolicies() {
+			out = append(out, p.GetName())
+		}
+		return out
+	}
+
+	page2, err := client.ListPolicies(ctx, &platformv1.ListIAMPoliciesRequest{
+		TenantId: "tenant-a", Pagination: &platformv1.PaginationRequest{Page: 2, PageSize: 2},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"p3", "p4"}, names(page2))
+	assert.Equal(t, int64(5), page2.GetTotal())
+
+	page3, err := client.ListPolicies(ctx, &platformv1.ListIAMPoliciesRequest{
+		TenantId: "tenant-a", Pagination: &platformv1.PaginationRequest{Page: 3, PageSize: 2},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"p5"}, names(page3))
+	assert.Equal(t, int64(5), page3.GetTotal())
+
+	_, err = client.UpdatePolicy(ctx, &platformv1.UpdateIAMPolicyRequest{
+		TenantId: "tenant-a", PolicyName: "p1", SpecYaml: []byte("rules: []"),
+	})
+	require.Error(t, err)
+	assert.Equal(t, codes.InvalidArgument, status.Code(err), "err %v", err)
 }
