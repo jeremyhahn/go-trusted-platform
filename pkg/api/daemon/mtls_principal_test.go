@@ -17,10 +17,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 
 	quiciam "github.com/jeremyhahn/go-quicbaas/pkg/iam"
 	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
+	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
+	apiquic "github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth/iamuser"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth/iamuser/iamusertest"
@@ -303,7 +307,7 @@ func TestIAMCertificatePrincipals_ThePEPDecidesEachScope(t *testing.T) {
 // concrete operation, so copying "*:*" would admit "device:write" without
 // the PEP ever deciding it (docs/SPEC.md: the decision point decides every
 // request). Only concrete permissions the PEP allows become scopes.
-func TestIAMCertificatePrincipals_AWildcardPermissionNeverBecomesAScope(t *testing.T) {
+func TestIAMCertificatePrincipals_AWildcardIsDecidedPerConcretePermission(t *testing.T) {
 	t.Parallel()
 	users, roles := newCertPrincipalDirectory()
 	roles.roles["device"] = &sdkiam.Role{ID: "device", Permissions: []string{"*:*", "device:read"}}
@@ -314,18 +318,62 @@ func TestIAMCertificatePrincipals_AWildcardPermissionNeverBecomesAScope(t *testi
 		return &sdkiam.CheckResponse{Allowed: req.Resource != "device" || req.Action != "write"}, nil
 	}}
 	resolver := newTestIAMCertificatePrincipals(t, users, roles, pep)
+	resolver.catalog = []string{"attestation:submit", "device:read", "device:write", "tenant:read"}
 
 	principal, err := resolver.ResolveCertificatePrincipal(context.Background(),
 		&auth.Identity{ID: "device-01", TenantID: "tenant-a"})
 
 	require.NoError(t, err)
-	assert.Equal(t, []string{"device:read"}, principal.Scopes,
-		"only concrete permissions the PEP allows become scopes")
+	assert.Equal(t, []string{"attestation:submit", "device:read", "tenant:read"}, principal.Scopes,
+		"a wildcard grants the concrete permissions it covers that the PEP allows")
 	for _, scope := range principal.Scopes {
 		assert.NotContains(t, scope, "*", "a wildcard pattern is never a certificate principal's scope")
 	}
 	for _, req := range asked {
 		assert.NotContains(t, req.Resource+":"+req.Action, "*", "the PEP is never asked about a wildcard pattern")
+	}
+	assert.Len(t, asked, 4, "each concrete permission is asked once")
+}
+
+func TestIAMCertificatePrincipals_AResourceWildcardGrantsTheConcretePermissionsThePEPAllows(t *testing.T) {
+	t.Parallel()
+	users, roles := newCertPrincipalDirectory()
+	roles.roles["device"] = &sdkiam.Role{ID: "device", Permissions: []string{"piv:*", "pi*:use"}}
+	roles.roles["reader"] = &sdkiam.Role{ID: "reader", Permissions: []string{"*:read"}}
+	type pair struct{ resource, action string }
+	var asked []pair
+	pep := &mockSDKPEPClient{checkFunc: func(_ context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+		asked = append(asked, pair{req.Resource, req.Action})
+		return &sdkiam.CheckResponse{Allowed: req.Resource != "piv" || req.Action != "read"}, nil
+	}}
+	resolver := newTestIAMCertificatePrincipals(t, users, roles, pep)
+	resolver.catalog = []string{"device:read", "piv:read", "piv:use", "tenant:write"}
+
+	principal, err := resolver.ResolveCertificatePrincipal(context.Background(),
+		&auth.Identity{ID: "device-01", TenantID: "tenant-a"})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"piv:use", "device:read"}, principal.Scopes,
+		"piv:* grants piv:use, which the PEP allows, and not piv:read, which it denies")
+	assert.Equal(t, []pair{{"piv", "read"}, {"piv", "use"}, {"device", "read"}}, asked,
+		"a partial glob is never expanded, and a permission no grant covers is never asked")
+}
+
+func TestConcretePermissionCatalog_HoldsEveryTransportsConcretePermissions(t *testing.T) {
+	t.Parallel()
+	catalog := concretePermissionCatalog()
+
+	require.NotEmpty(t, catalog)
+	assert.True(t, slices.IsSorted(catalog), "the catalog is sorted")
+	assert.Len(t, slices.Compact(slices.Clone(catalog)), len(catalog), "the catalog is distinct")
+	for _, permission := range catalog {
+		assert.NotContains(t, permission, "*", "the catalog holds concrete permissions only")
+	}
+	assert.Contains(t, catalog, "piv:use")
+	for _, source := range [][]string{grpcapi.Scopes(), apiquic.OperationScopes(), mcp.SupportedScopes()} {
+		for _, scope := range source {
+			assert.Contains(t, catalog, scope)
+		}
 	}
 }
 

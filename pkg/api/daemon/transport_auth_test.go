@@ -414,6 +414,28 @@ func TestMTLSPeerAuthenticator_TrustedCertificate_ActsAsItsPrincipal(t *testing.
 	assert.False(t, authCtx.HasScope("ceremony:init"), "a verified certificate is not every scope (#1107)")
 }
 
+func TestMTLSPeerAuthenticator_AWildcardRoleGrantsItsConcretePermissions(t *testing.T) {
+	t.Parallel()
+	bundle := testutil.GenerateTestTLSBundle(t)
+	users := &certPrincipalUsers{users: map[string]*sdkiam.User{
+		"Test Platform Client/test-client": {ID: "u-client", TenantID: "Test Platform Client", Username: "test-client",
+			Lifecycle: "active", Roles: []string{"signer"}},
+	}}
+	roles := &certPrincipalRoles{roles: map[string]*sdkiam.Role{
+		"signer": {ID: "signer", Permissions: []string{"piv:*"}},
+	}}
+	resolver := newTestIAMCertificatePrincipals(t, users, roles, allowAllPEP())
+	peer := newTestMTLSPeerAuthenticatorWith(t, bundle.CAPool, resolver)
+
+	authCtx, err := peer.AuthenticatePeer(context.Background(), []*x509.Certificate{leafOf(t, bundle.ClientCert), bundle.CACert})
+	require.NoError(t, err)
+	assert.True(t, authCtx.HasScope("piv:use"), "a piv:* role grants the concrete piv:use the PEP allows")
+	assert.False(t, authCtx.HasScope("ceremony:init"), "a piv:* role grants nothing outside piv")
+	for _, scope := range authCtx.Scopes {
+		assert.NotContains(t, scope, "*", "a wildcard is never copied into the principal's scopes")
+	}
+}
+
 func TestMTLSPeerAuthenticator_UnresolvedPrincipal_IsRefused(t *testing.T) {
 	t.Parallel()
 	bundle := testutil.GenerateTestTLSBundle(t)
