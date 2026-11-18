@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1157,9 +1158,27 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 	// Convert PolicyType enum to string for internal tracking
 	policyType := strings.ToLower(strings.TrimPrefix(config.GetType().String(), "POLICY_TYPE_"))
 
+	// Translate every rule before any flow is installed, so a rule the flow
+	// grammar cannot carry is refused with nothing applied.
+	flowMods := make([]*ovs.FlowMod, len(config.GetRules()))
+	for i, rule := range config.GetRules() {
+		flowMod, err := s.policyRuleToFlowMod(rule, config.GetPriority())
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "rule %q: %v", rule.GetRuleId(), err)
+		}
+		flowMods[i] = flowMod
+	}
+
 	client := s.getOVSClient()
 
-	// Install OpenFlow rules for each target bridge without holding the lock
+	// Install OpenFlow rules for each target bridge without holding the lock.
+	// A flow the switch refuses fails the apply: the flows this call already
+	// installed are removed and no policy is recorded.
+	type installedFlow struct {
+		bridge string
+		flow   *ovs.FlowMod
+	}
+	var installed []installedFlow
 	var flowIDs []string
 	for _, target := range config.GetTargets() {
 		if target.GetType() != platformv1.PolicyTargetType_POLICY_TARGET_TYPE_BRIDGE {
@@ -1171,13 +1190,15 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 			continue
 		}
 
-		// Translate policy rules to OpenFlow rules
-		for _, rule := range config.GetRules() {
-			flowMod := s.policyRuleToFlowMod(rule, config.GetPriority())
+		for i, rule := range config.GetRules() {
+			flowMod := flowMods[i]
 			if err := client.AddFlow(ctx, bridgeName, flowMod); err != nil {
-				// Best-effort: log flow installation failures but continue
-				continue
+				for _, f := range installed {
+					_ = client.DeleteFlowStrict(ctx, f.bridge, f.flow)
+				}
+				return nil, status.Errorf(codes.Internal, "install flow for rule %q on bridge %q: %v", rule.GetRuleId(), bridgeName, err)
 			}
+			installed = append(installed, installedFlow{bridge: bridgeName, flow: flowMod})
 			flowID := fmt.Sprintf("policy-%s-rule-%s-%s", policyID, rule.GetRuleId(), uuid.NewString())
 			flowIDs = append(flowIDs, flowID)
 		}
@@ -1315,7 +1336,12 @@ func (s *SDNService) DeletePolicy(ctx context.Context, req *platformv1.DeletePol
 			continue
 		}
 		for _, rule := range policyRules {
-			match := s.policyRuleToMatchString(rule)
+			match, err := s.policyRuleToMatchString(rule)
+			if err != nil {
+				// The stored rule no longer translates, so no flow of it
+				// can be matched for removal.
+				continue
+			}
 			if match != "" {
 				// Best-effort cleanup of flow rules
 				_ = client.DeleteFlow(ctx, bridgeName, match)
@@ -1337,7 +1363,7 @@ func (s *SDNService) DeletePolicy(ctx context.Context, req *platformv1.DeletePol
 }
 
 // policyRuleToFlowMod converts a policy rule to an OVS FlowMod
-func (s *SDNService) policyRuleToFlowMod(rule *platformv1.PolicyRule, policyPriority int32) *ovs.FlowMod {
+func (s *SDNService) policyRuleToFlowMod(rule *platformv1.PolicyRule, policyPriority int32) (*ovs.FlowMod, error) {
 	flowMod := &ovs.FlowMod{
 		Priority: int(rule.GetPriority()),
 	}
@@ -1345,31 +1371,11 @@ func (s *SDNService) policyRuleToFlowMod(rule *platformv1.PolicyRule, policyPrio
 		flowMod.Priority = int(policyPriority)
 	}
 
-	// Build match from rule match criteria
-	var matchParts []string
-	if match := rule.GetMatch(); match != nil {
-		if match.GetSourceIp() != "" {
-			matchParts = append(matchParts, fmt.Sprintf("nw_src=%s", match.GetSourceIp()))
-		}
-		if match.GetDestinationIp() != "" {
-			matchParts = append(matchParts, fmt.Sprintf("nw_dst=%s", match.GetDestinationIp()))
-		}
-		if match.GetProtocol() != "" {
-			matchParts = append(matchParts, fmt.Sprintf("nw_proto=%s", match.GetProtocol()))
-		}
-		if match.GetSourcePort() > 0 {
-			matchParts = append(matchParts, fmt.Sprintf("tp_src=%d", match.GetSourcePort()))
-		}
-		if match.GetDestinationPort() > 0 {
-			matchParts = append(matchParts, fmt.Sprintf("tp_dst=%d", match.GetDestinationPort()))
-		}
-		if match.GetVlanId() > 0 {
-			matchParts = append(matchParts, fmt.Sprintf("dl_vlan=%d", match.GetVlanId()))
-		}
+	match, err := policyRuleMatch(rule)
+	if err != nil {
+		return nil, err
 	}
-	if len(matchParts) > 0 {
-		flowMod.Match = strings.Join(matchParts, ",")
-	}
+	flowMod.Match = match
 
 	// Map policy action to OpenFlow action
 	switch rule.GetAction() {
@@ -1389,30 +1395,67 @@ func (s *SDNService) policyRuleToFlowMod(rule *platformv1.PolicyRule, policyPrio
 		flowMod.Actions = "normal"
 	}
 
-	return flowMod
+	return flowMod, nil
 }
 
 // policyRuleToMatchString converts a policy rule to an OVS match string for deletion
-func (s *SDNService) policyRuleToMatchString(rule *platformv1.PolicyRule) string {
-	var matchParts []string
-	if match := rule.GetMatch(); match != nil {
-		if match.GetSourceIp() != "" {
-			matchParts = append(matchParts, fmt.Sprintf("nw_src=%s", match.GetSourceIp()))
-		}
-		if match.GetDestinationIp() != "" {
-			matchParts = append(matchParts, fmt.Sprintf("nw_dst=%s", match.GetDestinationIp()))
-		}
-		if match.GetProtocol() != "" {
-			matchParts = append(matchParts, fmt.Sprintf("nw_proto=%s", match.GetProtocol()))
-		}
-		if match.GetSourcePort() > 0 {
-			matchParts = append(matchParts, fmt.Sprintf("tp_src=%d", match.GetSourcePort()))
-		}
-		if match.GetDestinationPort() > 0 {
-			matchParts = append(matchParts, fmt.Sprintf("tp_dst=%d", match.GetDestinationPort()))
-		}
+func (s *SDNService) policyRuleToMatchString(rule *platformv1.PolicyRule) (string, error) {
+	return policyRuleMatch(rule)
+}
+
+// policyProtocolMatch renders a policy protocol as the head of an OVS match the
+// flow grammar parses: tcp, udp, icmp and sctp as their shorthands (which also
+// set the IPv4 eth_type that nw_src, nw_dst and tp_* need), and a decimal
+// protocol number 0-255 as "ip,nw_proto=<n>". An empty protocol renders as "".
+func policyProtocolMatch(p string) (string, error) {
+	v := strings.ToLower(strings.TrimSpace(p))
+	switch v {
+	case "":
+		return "", nil
+	case "tcp", "udp", "icmp", "sctp":
+		return v, nil
 	}
-	return strings.Join(matchParts, ",")
+	n, err := strconv.ParseUint(v, 10, 8)
+	if err != nil {
+		return "", fmt.Errorf("protocol %q is not tcp, udp, icmp, sctp or a number 0-255", p)
+	}
+	return fmt.Sprintf("ip,nw_proto=%d", n), nil
+}
+
+// policyRuleMatch builds the OVS match a policy rule installs. ApplyPolicy and
+// DeletePolicy both use it, so a delete removes exactly what the apply added.
+func policyRuleMatch(rule *platformv1.PolicyRule) (string, error) {
+	match := rule.GetMatch()
+	if match == nil {
+		return "", nil
+	}
+	var parts []string
+	proto, err := policyProtocolMatch(match.GetProtocol())
+	if err != nil {
+		return "", err
+	}
+	switch {
+	case proto != "":
+		parts = append(parts, proto)
+	case match.GetSourceIp() != "" || match.GetDestinationIp() != "":
+		parts = append(parts, "ip")
+	}
+	if match.GetSourceIp() != "" {
+		parts = append(parts, fmt.Sprintf("nw_src=%s", match.GetSourceIp()))
+	}
+	if match.GetDestinationIp() != "" {
+		parts = append(parts, fmt.Sprintf("nw_dst=%s", match.GetDestinationIp()))
+	}
+	if match.GetSourcePort() > 0 {
+		parts = append(parts, fmt.Sprintf("tp_src=%d", match.GetSourcePort()))
+	}
+	if match.GetDestinationPort() > 0 {
+		parts = append(parts, fmt.Sprintf("tp_dst=%d", match.GetDestinationPort()))
+	}
+	if match.GetVlanId() > 0 {
+		parts = append(parts, fmt.Sprintf("dl_vlan=%d", match.GetVlanId()))
+	}
+	return strings.Join(parts, ","), nil
 }
 
 // policyResourceToPb converts a policyResource to a protobuf Policy message
