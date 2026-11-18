@@ -25,6 +25,9 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	cryptoclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/crypto"
 	dekclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/dek"
@@ -279,6 +282,46 @@ func NewDeviceRegistrationHook(deviceService DeviceRegistrar, logger *slog.Logge
 			slog.Uint64("device_id", result.Device.ID),
 			slog.Bool("created", result.Created))
 		return nil
+	}
+}
+
+// PXEIdentityRecorder records the IDevID issued at enrolment on the PXE
+// record of the enrolling device. pkg/api/daemon.PXEGRPCService implements
+// it. It answers codes.NotFound when the client IP resolves to no PXE device
+// and codes.FailedPrecondition when the device is past Installing.
+type PXEIdentityRecorder interface {
+	RecordEnrolledIDevIDFingerprint(ctx context.Context, clientIP string, leaf *x509.Certificate) error
+}
+
+// NewPXEIdentityHook returns an ACME finalize hook that records the issued
+// IDevID's fingerprint on the PXE record of the enrolling device, which the
+// install-complete webhook requires over mTLS (#1694). Non-TCG enrolments and
+// a missing certificate are skipped. An enrolment that is not a PXE install
+// in progress (no MAC, no PXE device, or a device past Installing) is logged
+// and does not fail the enrolment; any other error does.
+func NewPXEIdentityHook(recorder PXEIdentityRecorder, logger *slog.Logger) trustedca.ACMEOrderFinalizeHook {
+	return func(ctx *trustedca.ACMEOrderFinalizeHookContext) error {
+		if !ctx.IsTCGCSR || ctx.Certificate == nil {
+			return nil
+		}
+		reqCtx := ctx.Context
+		if reqCtx == nil {
+			reqCtx = context.Background()
+		}
+		err := recorder.RecordEnrolledIDevIDFingerprint(reqCtx, ctx.ClientIP, ctx.Certificate)
+		switch status.Code(err) {
+		case codes.OK:
+			logger.Info("PXE identity: enrolled IDevID recorded on the PXE record",
+				slog.String("client_ip", ctx.ClientIP))
+			return nil
+		case codes.NotFound, codes.FailedPrecondition:
+			logger.Warn("PXE identity: enrolment is not a PXE install in progress - IDevID not recorded",
+				slog.String("client_ip", ctx.ClientIP),
+				slog.String("reason", err.Error()))
+			return nil
+		default:
+			return fmt.Errorf("record the enrolled IDevID on the PXE record: %w", err)
+		}
 	}
 }
 
@@ -1805,6 +1848,10 @@ func (registry *HandlerRegistry) ACMERestService() trustedca.ACMERestServicer {
 		deviceHook := NewDeviceRegistrationHook(deviceService, registry.params.Logger.Slog())
 		hookRegistry.Register(deviceHook)
 		registry.params.Logger.Info("Registered device registration hook for ACME device enrollment")
+		if recorder, ok := registry.params.PXEServiceServer.(PXEIdentityRecorder); ok {
+			hookRegistry.Register(NewPXEIdentityHook(recorder, registry.params.Logger.Slog()))
+			registry.params.Logger.Info("Registered PXE identity hook for ACME device enrollment")
+		}
 	} else {
 		registry.params.Logger.Warn("Device service is nil - device registration hook not registered")
 	}

@@ -15,10 +15,15 @@ package daemon
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/hex"
 	"errors"
+	"net"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/arp"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
 	"google.golang.org/grpc/codes"
@@ -84,6 +89,49 @@ func (s *PXEGRPCService) RecordedIDevIDFingerprint(ctx context.Context, mac stri
 		return "", s.mapPXEError(err, "get device for webhook identity")
 	}
 	return device.IDevIDFingerprint, nil
+}
+
+// macForIP resolves an on-link client IP to its MAC ("" when the address has
+// no neighbour entry). A package seam so tests need no ARP table.
+var macForIP = arp.GetMACForIP
+
+// RecordEnrolledIDevIDFingerprint records, on the PXE record of the device
+// that enrolled from clientIP, the SHA-256 of the IDevID leaf the CA issued at
+// ACME finalize: the same digest the install-complete webhook compares
+// (pkg/webservice/v1/rest/pxe/webhook_auth.go). The PXE record is keyed by
+// MAC, so the client IP is resolved through the ARP table. An address with no
+// MAC, or a MAC with no PXE device, answers codes.NotFound and records
+// nothing; a device past Installing answers codes.FailedPrecondition. Like
+// RecordedIDevIDFingerprint, this is a Go method for the enrolment hook, not
+// a proto RPC.
+func (s *PXEGRPCService) RecordEnrolledIDevIDFingerprint(ctx context.Context, clientIP string, leaf *x509.Certificate) error {
+	if err := s.requireService(); err != nil {
+		return err
+	}
+	if leaf == nil || len(leaf.Raw) == 0 {
+		return status.Error(codes.InvalidArgument, "no issued certificate")
+	}
+	ip := clientIP
+	if host, _, err := net.SplitHostPort(clientIP); err == nil {
+		ip = host
+	}
+	mac := macForIP(ip)
+	if mac == "" {
+		return status.Errorf(codes.NotFound, "no MAC for client IP %s", ip)
+	}
+	device, err := s.pxeService.GetDeviceByMAC(ctx, mac)
+	if err != nil {
+		var notFound pxe.ErrDeviceNotFound
+		if errors.As(err, &notFound) {
+			return status.Errorf(codes.NotFound, "no PXE device for MAC %s", mac)
+		}
+		return s.mapPXEError(err, "get device for enrolled IDevID")
+	}
+	sum := sha256.Sum256(leaf.Raw)
+	if err := s.pxeService.RecordIDevIDFingerprint(ctx, device.ID, hex.EncodeToString(sum[:])); err != nil {
+		return s.mapPXEError(err, "record enrolled IDevID fingerprint")
+	}
+	return nil
 }
 
 // =============================================================================
