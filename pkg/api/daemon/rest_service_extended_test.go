@@ -337,7 +337,10 @@ func TestRESTHandlerStopService_StopFailed(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 }
 
-func TestRESTHandlerRestartService_Success(t *testing.T) {
+// TestRESTHandlerRestartService_StoppedIsRefused: a restart of a stopped
+// service is refused with 409 and calls neither Stop nor Start, as gRPC
+// RestartService (StopService then StartService) refuses it.
+func TestRESTHandlerRestartService_StoppedIsRefused(t *testing.T) {
 	config := DefaultConfig()
 	service, err := NewService(config)
 	require.NoError(t, err)
@@ -357,13 +360,9 @@ func TestRESTHandlerRestartService_Success(t *testing.T) {
 	resp := w.Result()
 	defer resp.Body.Close()
 
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-	var actionResp ServiceActionResponse
-	err = json.NewDecoder(resp.Body).Decode(&actionResp)
-	require.NoError(t, err)
-	assert.True(t, actionResp.Success)
-	assert.Equal(t, "restart", actionResp.Action)
+	assert.Equal(t, http.StatusConflict, resp.StatusCode)
+	assert.Equal(t, int32(0), mockSvc.startCount.Load())
+	assert.Equal(t, int32(0), mockSvc.stopCount.Load())
 }
 
 func TestRESTHandlerRestartService_NotFound(t *testing.T) {
@@ -463,6 +462,7 @@ func TestRESTHandlerRestartService_StartFailed(t *testing.T) {
 
 	mockSvc := newMockService("test-service")
 	mockSvc.startErr = ErrServiceStartFailed{ServiceName: "test-service", Reason: "simulated error"}
+	mockSvc.running.Store(true)
 	service.RegisterService(mockSvc)
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))

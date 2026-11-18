@@ -200,3 +200,33 @@ func TestSDKREST_DaemonServicesConflictCodes(t *testing.T) {
 	_, err = client.RestartService(ctx, &platformv1.RestartServiceRequest{Service: owned})
 	require.Equal(t, codes.FailedPrecondition, status.Code(err), "restart of a process-owned service: %v", err)
 }
+
+// TestSDKREST_DaemonRestartOfAStoppedServiceIsRefused pins transport parity
+// for a restart of a stopped service: gRPC RestartService is StopService then
+// StartService, so a stopped service is refused with FailedPrecondition and
+// nothing is started. The REST route answers the same, with no backend call.
+func TestSDKREST_DaemonRestartOfAStoppedServiceIsRefused(t *testing.T) {
+	ctx := context.Background()
+	tpm := &recordingManagedService{name: "tpm"}
+	s := newTestRESTServerForPhase35(t)
+	require.NoError(t, s.service.RegisterService(tpm))
+	client := platformv1.NewPlatformDaemonClient(connectPhase35REST(t, s.router).Connection())
+
+	tpmType := platformv1.ServiceType_SERVICE_TYPE_TPM
+	_, err := client.RestartService(ctx, &platformv1.RestartServiceRequest{Service: tpmType})
+	require.Equal(t, codes.FailedPrecondition, status.Code(err), "REST restart of a stopped service: %v", err)
+	starts, stops := tpm.calls()
+	require.Equal(t, 0, starts, "a refused restart starts nothing")
+	require.Equal(t, 0, stops, "a refused restart stops nothing")
+
+	st, err := client.GetServiceStatus(ctx, &platformv1.GetServiceStatusRequest{Service: tpmType})
+	require.NoError(t, err)
+	require.Equal(t, platformv1.ServiceStatus_SERVICE_STATUS_STOPPED, st.GetService().GetStatus())
+	require.Equal(t, "0", st.GetService().GetMetadata()["start_count"])
+
+	_, err = s.service.RestartService(ctx, &platformv1.RestartServiceRequest{Service: tpmType})
+	require.Equal(t, codes.FailedPrecondition, status.Code(err), "gRPC restart of a stopped service: %v", err)
+	starts, stops = tpm.calls()
+	require.Equal(t, 0, starts)
+	require.Equal(t, 0, stops)
+}
