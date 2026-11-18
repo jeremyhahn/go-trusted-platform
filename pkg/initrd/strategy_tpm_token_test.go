@@ -8,6 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/go-tpm/tpm2/transport"
+	xkms "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	xkmsluks "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/luks"
 	"github.com/stretchr/testify/mock"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -74,6 +77,55 @@ func TestTPMTokenStrategy_UnsealsTheTokenSlot(t *testing.T) {
 		t.Errorf("unsealer calls = %d, token = %+v; want one call with the systemd-tpm2 token", fake.calls, fake.lastToken)
 	}
 	m.AssertExpectations(t)
+}
+
+// tokenRecordingTPM counts the commands sent over the platform transport.
+type tokenRecordingTPM struct{ sends int }
+
+func (r *tokenRecordingTPM) Send(input []byte) ([]byte, error) {
+	r.sends++
+	return input, nil
+}
+
+// tokenPlatformTPM is the platform's TPM module; only Transport is used.
+type tokenPlatformTPM struct {
+	xkms.TrustedPlatformModule
+	tpm transport.TPM
+}
+
+func (m tokenPlatformTPM) Transport() transport.TPM { return m.tpm }
+
+func TestNewTPMTokenStrategy_UnsealsOverThePlatformTPM(t *testing.T) {
+	rec := &tokenRecordingTPM{}
+	platform := &Platform{TPM: tokenPlatformTPM{tpm: rec}}
+
+	s := NewTPMTokenStrategy(platform, logging.DefaultLogger())
+	if s.unsealer == nil {
+		t.Fatal("unsealer = nil, want the sealer over the platform TPM")
+	}
+	tpm, err := platformTPMOpener(platform).Open(context.Background())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if _, err := tpm.Send([]byte{1}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if err := tpm.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if _, err := tpm.Send([]byte{2}); err != nil {
+		t.Fatalf("Send after Close: %v", err)
+	}
+	if rec.sends != 2 {
+		t.Fatalf("platform transport saw %d commands, want 2", rec.sends)
+	}
+}
+
+func TestNewTPMTokenStrategy_NoPlatformTransportIsNoTransport(t *testing.T) {
+	_, err := platformTPMOpener(&Platform{TPM: tokenPlatformTPM{}}).Open(context.Background())
+	if !errors.Is(err, xkmsluks.ErrTPMNoTransport) {
+		t.Fatalf("Open error = %v, want ErrTPMNoTransport", err)
+	}
 }
 
 func TestTPMTokenStrategy_CannotUnlockWithoutAToken(t *testing.T) {

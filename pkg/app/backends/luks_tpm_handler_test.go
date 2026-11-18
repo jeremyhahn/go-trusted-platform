@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/google/go-tpm/tpm2/transport"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 )
 
 // These tests cover the thin platform wiring around the canonical go-xkms
@@ -81,4 +82,63 @@ type erroringOpener struct {
 // Open satisfies the TPMOpener contract.
 func (e erroringOpener) Open(context.Context) (transport.TPMCloser, error) {
 	return nil, e.err
+}
+
+// recordingTPM is a transport.TPM that counts the commands sent over it.
+type recordingTPM struct{ sends int }
+
+func (r *recordingTPM) Send(input []byte) ([]byte, error) {
+	r.sends++
+	return input, nil
+}
+
+// fakePlatformModule is the platform's TPM module; only Transport is used.
+type fakePlatformModule struct {
+	xkmssdk.TrustedPlatformModule
+	tpm transport.TPM
+}
+
+func (m fakePlatformModule) Transport() transport.TPM { return m.tpm }
+
+func TestPlatformTPMOpener_SharesThePlatformTransport(t *testing.T) {
+	rec := &recordingTPM{}
+	fake := fakePlatformModule{tpm: rec}
+	opener := PlatformTPMOpener(func() xkmssdk.TrustedPlatformModule { return fake })
+
+	tpm, err := opener.Open(context.Background())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if _, err := tpm.Send([]byte{1}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if err := tpm.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	// Close leaves the platform's transport open: the platform owns it.
+	again, err := opener.Open(context.Background())
+	if err != nil {
+		t.Fatalf("second Open: %v", err)
+	}
+	if _, err := again.Send([]byte{2}); err != nil {
+		t.Fatalf("Send after Close: %v", err)
+	}
+	if rec.sends != 2 {
+		t.Fatalf("platform transport saw %d commands, want 2", rec.sends)
+	}
+}
+
+func TestPlatformTPMOpener_NoModuleIsNoTransport(t *testing.T) {
+	cases := map[string]func() xkmssdk.TrustedPlatformModule{
+		"nil module":    func() xkmssdk.TrustedPlatformModule { return nil },
+		"nil transport": func() xkmssdk.TrustedPlatformModule { return fakePlatformModule{} },
+	}
+	for name, module := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := PlatformTPMOpener(module).Open(context.Background())
+			if !errors.Is(err, ErrLUKSTPMNoTransport) {
+				t.Fatalf("Open error = %v, want ErrLUKSTPMNoTransport", err)
+			}
+		})
+	}
 }

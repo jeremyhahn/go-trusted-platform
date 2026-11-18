@@ -20,6 +20,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/go-tpm/tpm2/transport"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -111,6 +113,31 @@ func TestWireSDKBackends_WiresPCRCheckedTPMEnrollment(t *testing.T) {
 	}
 	if !errors.Is(err, daemon.ErrLUKSPCRInvalid) {
 		t.Fatalf("EnrollTPM error = %v, want ErrLUKSPCRInvalid from the PCR check", err)
+	}
+}
+
+// errSourceTPMUnavailable is what the counting opener answers.
+var errSourceTPMUnavailable = errors.New("source tpm unavailable")
+
+func TestWireSDKBackends_TPMEnrollmentUsesTheSourceOpener(t *testing.T) {
+	opens := 0
+	opener := TPMOpenerFunc(func(context.Context) (transport.TPMCloser, error) {
+		opens++
+		return nil, errSourceTPMUnavailable
+	})
+	target := &recordingSDKTarget{}
+	if err := WireSDKBackends(target, SDKBackendSources{SDK: &fakeQuicbaasClient{}, TPM: opener}, logging.DefaultLogger()); err != nil {
+		t.Fatalf("WireSDKBackends: %v", err)
+	}
+	lb, ok := target.luks.(*LUKSBackend)
+	if !ok || lb == nil || lb.tpm == nil {
+		t.Fatalf("LUKS backend = %T, want a *LUKSBackend with a TPM handler", target.luks)
+	}
+	if _, _, err := lb.tpm.Seal(context.Background(), "0x81000001", []int32{7}); err == nil {
+		t.Fatal("Seal succeeded, want the source opener's failure")
+	}
+	if opens != 1 {
+		t.Fatalf("source opener opened %d times, want 1", opens)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 	luks2 "github.com/jeremyhahn/go-luks2/pkg/luks2"
+	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/daemon"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/initrd"
@@ -21,16 +22,9 @@ import (
 // by default (TCG PC Client 0x81000001).
 const roundTripSRKHandle = 0x81000001
 
-// simTPM hands every sealer operation the one in-process simulator. The
-// sealer closes its transport after each command batch; closing must not
-// stop the simulator, so Close is a no-op and the test closes it at the end.
-type simTPM struct{ transport.TPM }
-
-func (simTPM) Close() error { return nil }
-
 // newRoundTripSimulator starts the TPM simulator, persists an ECC storage
-// SRK at roundTripSRKHandle and returns an opener for the SDK sealer.
-func newRoundTripSimulator(t *testing.T) TPMOpener {
+// SRK at roundTripSRKHandle and returns the simulator transport.
+func newRoundTripSimulator(t *testing.T) transport.TPM {
 	t.Helper()
 	sim, err := simulator.GetWithFixedSeedInsecure(1234567890)
 	if err != nil {
@@ -56,28 +50,21 @@ func newRoundTripSimulator(t *testing.T) TPMOpener {
 	if _, err := (tpm2.FlushContext{FlushHandle: srk.ObjectHandle}).Execute(tpm); err != nil {
 		t.Fatalf("flush SRK: %v", err)
 	}
-	return TPMOpenerFunc(func(context.Context) (transport.TPMCloser, error) {
-		return simTPM{tpm}, nil
-	})
+	return tpm
 }
 
-// sdkTokenUnsealer is the initrd's xkmsTokenUnsealer over a simulator
-// opener: it hands the header token, re-encoded, to the same SDK sealer's
-// UnsealPassphrase. The initrd type is unexported and opens only the host
-// TPM device, so the test builds the same two steps over the simulator.
-type sdkTokenUnsealer struct {
-	sealer interface {
-		UnsealPassphrase(ctx context.Context, tokenJSON []byte) ([]byte, error)
-	}
+// simModule is the platform TPM module over the simulator: the daemon and
+// the initrd both reach the TPM through its Transport. The platform PCR
+// reads as extended so the strategy's cold-boot extension does not reach
+// the nil embedded module.
+type simModule struct {
+	xkmssdk.TrustedPlatformModule
+	tpm transport.TPM
 }
 
-func (u sdkTokenUnsealer) Unseal(ctx context.Context, token *luks.Token) ([]byte, error) {
-	payload, err := json.Marshal(token)
-	if err != nil {
-		return nil, err
-	}
-	return u.sealer.UnsealPassphrase(ctx, payload)
-}
+func (m simModule) Transport() transport.TPM { return m.tpm }
+
+func (simModule) IsPlatformPCRExtended() (bool, error) { return true, nil }
 
 // roundTripLUKS is the initrd's view of the volume: tokens come from the
 // real LUKS2 header and Open checks the passphrase against its keyslot.
@@ -146,9 +133,9 @@ func (l *roundTripLUKS) TokenCount(context.Context, string) (int, error) { retur
 // strategy unseals it with the SDK sealer and opens the enrolled keyslot.
 func TestLUKSTPMBootRoundTrip_InitrdUnsealsWhatEnrolmentSealed(t *testing.T) {
 	ctx := context.Background()
-	opener := newRoundTripSimulator(t)
+	module := simModule{tpm: newRoundTripSimulator(t)}
 
-	sealer, err := NewLUKSTPMHandler(nil, opener)
+	sealer, err := NewLUKSTPMHandler(nil, PlatformTPMOpener(func() xkmssdk.TrustedPlatformModule { return module }))
 	if err != nil {
 		t.Fatalf("NewLUKSTPMHandler: %v", err)
 	}
@@ -181,8 +168,8 @@ func TestLUKSTPMBootRoundTrip_InitrdUnsealsWhatEnrolmentSealed(t *testing.T) {
 	}
 
 	header := &roundTripLUKS{device: device, tokens: map[int]*luks.Token{tokenID: &token}}
-	strategy := initrd.NewTPMTokenStrategy(&initrd.Platform{LUKS: header}, nil)
-	strategy.SetUnsealer(sdkTokenUnsealer{sealer: sealer})
+	// No SetUnsealer: the strategy unseals over the platform's own TPM.
+	strategy := initrd.NewTPMTokenStrategy(&initrd.Platform{LUKS: header, TPM: module}, nil)
 
 	volume := &luks.VolumeConfig{DevicePath: device, MappingName: "cryptroot"}
 	if !strategy.CanUnlock(ctx, volume) {
