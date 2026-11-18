@@ -59,7 +59,17 @@ type wireguardPlane struct {
 	mu      sync.Mutex
 	started bool
 	peers   map[LeaseID][]byte
+	// removed tombstones each lease removed before the plane held it, so
+	// the install it cleaned up after cannot land late; removedOrder evicts
+	// the oldest past maxRemovedTombstones.
+	removed      map[LeaseID]struct{}
+	removedOrder []LeaseID
 }
+
+// maxRemovedTombstones bounds the removal tombstones. A tombstone only has to
+// outlive the delayed handler of one cancelled install, and lease IDs are new
+// per admission, so the oldest can go once far more removals have followed.
+const maxRemovedTombstones = 1024
 
 // NewWireGuardPlane returns the WireGuard data plane over hub.
 func NewWireGuardPlane(hub WireGuardHub, logger *slog.Logger) (ManagedDataPlane, error) {
@@ -69,7 +79,12 @@ func NewWireGuardPlane(hub WireGuardHub, logger *slog.Logger) (ManagedDataPlane,
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &wireguardPlane{hub: hub, logger: logger, peers: make(map[LeaseID][]byte)}, nil
+	return &wireguardPlane{
+		hub:     hub,
+		logger:  logger,
+		peers:   make(map[LeaseID][]byte),
+		removed: make(map[LeaseID]struct{}),
+	}, nil
 }
 
 func (p *wireguardPlane) Kind() DataPlaneKind { return DataPlaneWireGuard }
@@ -97,7 +112,23 @@ func (p *wireguardPlane) Stop(_ context.Context) error {
 	}
 	p.started = false
 	p.peers = make(map[LeaseID][]byte)
+	p.removed = make(map[LeaseID]struct{})
+	p.removedOrder = nil
 	return p.hub.Down()
+}
+
+// tombstone records the removal of a lease the plane does not hold, evicting
+// the oldest tombstone past maxRemovedTombstones. The caller holds p.mu.
+func (p *wireguardPlane) tombstone(id LeaseID) {
+	if _, ok := p.removed[id]; ok {
+		return
+	}
+	p.removed[id] = struct{}{}
+	p.removedOrder = append(p.removedOrder, id)
+	if len(p.removedOrder) > maxRemovedTombstones {
+		delete(p.removed, p.removedOrder[0])
+		p.removedOrder = p.removedOrder[1:]
+	}
 }
 
 // InstallPeer programs the lease's client public key with the lease
@@ -117,6 +148,14 @@ func (p *wireguardPlane) InstallPeer(ctx context.Context, lease *Lease) error {
 	defer p.mu.Unlock()
 	if !p.started {
 		return &ErrDataPlaneNotStarted{Kind: DataPlaneWireGuard}
+	}
+	// A removal that ran first, the cleanup of a cancelled install, fences
+	// the late install: its caller has already released the lease.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, gone := p.removed[lease.ID]; gone {
+		return &ErrLeaseNotFound{LeaseID: lease.ID}
 	}
 	// Peers are removed by key, so a key holds one lease at a time:
 	// otherwise a retried removal of the old lease drops the new one.
@@ -140,6 +179,7 @@ func (p *wireguardPlane) RemovePeer(ctx context.Context, leaseID LeaseID) error 
 	defer p.mu.Unlock()
 	key, ok := p.peers[leaseID]
 	if !ok {
+		p.tombstone(leaseID)
 		return nil
 	}
 	if !p.keyHeldByOther(leaseID, key) {
