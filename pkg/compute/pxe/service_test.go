@@ -793,6 +793,42 @@ func TestService_RetryDevice_Valid(t *testing.T) {
 	assert.Equal(t, 1, retrieved.RetryCount)
 }
 
+// TestService_RetryDevice_ReEnrolmentRecordsTheNewIDevID: a retry is a new
+// provisioning attempt, so the IDevID the retried install enrols is recorded
+// even though the failed attempt recorded a different one.
+func TestService_RetryDevice_ReEnrolmentRecordsTheNewIDevID(t *testing.T) {
+	const fp = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	const otherFP = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+	svc, cfg := initializeTestService(t)
+	ctx := context.Background()
+	cfg.MaxRetries = DefaultMaxRetries
+
+	device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
+	require.NoError(t, err)
+	for _, st := range []ProvisioningState{StateBooting, StateInstalling} {
+		require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, st, string(st)))
+	}
+	require.NoError(t, svc.RecordIDevIDFingerprint(ctx, device.ID, fp))
+	require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, StateFailed, "install failed"))
+
+	require.NoError(t, svc.RetryDevice(ctx, device.ID))
+	retried, err := svc.GetDevice(ctx, device.ID)
+	require.NoError(t, err)
+	assert.Equal(t, StateDiscovered, retried.State)
+	assert.Empty(t, retried.IDevIDFingerprint, "a retry keeps the previous attempt's fingerprint")
+
+	for _, st := range []ProvisioningState{StateBooting, StateInstalling} {
+		require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, st, string(st)))
+	}
+	require.NoError(t, svc.RecordIDevIDFingerprint(ctx, device.ID, otherFP))
+	got, err := svc.GetDevice(ctx, device.ID)
+	require.NoError(t, err)
+	assert.Equal(t, otherFP, got.IDevIDFingerprint)
+
+	// Within the same attempt a different fingerprint is still refused.
+	assert.Error(t, svc.RecordIDevIDFingerprint(ctx, device.ID, fp))
+}
+
 func TestService_RetryDevice_MaxRetriesExceeded(t *testing.T) {
 	cfg := createTestConfig()
 	cfg.MaxRetries = 2
