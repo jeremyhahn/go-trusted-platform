@@ -166,8 +166,8 @@ func (g *Gateway) RegisterServiceHandler(handler ServiceHandler) error {
 
 // Start starts the gateway and activates all configured services. When a
 // handler fails to start, the services already started are rolled back; a
-// failed handler that still holds cleanup (CleanupPending) is recorded so
-// that Stop finishes it.
+// failed handler that still holds cleanup (CleanupPending), and a started
+// one whose rollback Stop fails, is recorded so that Stop finishes it.
 func (g *Gateway) Start(ctx context.Context) error {
 	if !g.state.CompareAndSwap(uint32(GatewayStateStopped), uint32(GatewayStateInitializing)) {
 		currentState := GatewayState(g.state.Load())
@@ -258,6 +258,9 @@ func (g *Gateway) rollbackStartedServices(ctx context.Context) {
 		if handler, ok := g.serviceHandlers[name]; ok {
 			if err := handler.Stop(ctx); err != nil {
 				logger.Warn("gateway: rollback stop failed", slog.String("service", name), slog.Any("error", err))
+				// The handler keeps what it could not release; Stop
+				// retries it.
+				g.recordCleanupPending(name)
 			}
 		}
 	}
@@ -268,8 +271,8 @@ func (g *Gateway) rollbackStartedServices(ctx context.Context) {
 	g.mu.Unlock()
 }
 
-// recordCleanupPending adds a handler whose failed Start left cleanup
-// outstanding to the list Stop finishes, once.
+// recordCleanupPending adds a handler whose failed Start, or whose failed
+// rollback Stop, left cleanup outstanding to the list Stop finishes, once.
 func (g *Gateway) recordCleanupPending(name string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()

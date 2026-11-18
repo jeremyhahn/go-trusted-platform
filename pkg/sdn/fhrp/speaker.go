@@ -159,6 +159,11 @@ func (s *Speaker) Start(ctx context.Context) error {
 	for _, gc := range s.cfg.Groups {
 		r, err := s.startGroup(ctx, gc)
 		if err != nil {
+			if r != nil {
+				// A stale VIP it could not remove: its loops never ran,
+				// and retryPending drives only its group's Shutdown.
+				s.pending = append(s.pending, r)
+			}
 			// Roll back the groups already started; a rollback that itself
 			// fails is reported beside the cause, never dropped.
 			for _, sr := range started {
@@ -179,7 +184,8 @@ func (s *Speaker) Start(ctx context.Context) error {
 }
 
 // ReleasePending reports whether a VIP release is outstanding, from a
-// failed Stop or a failed startup rollback. A speaker in that state must be
+// failed Stop, a failed startup rollback or a stale VIP that Start could
+// not remove. A speaker in that state must be
 // kept, not rebuilt, so its next Start or Stop can delete that VIP.
 func (s *Speaker) ReleasePending() bool {
 	s.mu.Lock()
@@ -299,6 +305,9 @@ type runner struct {
 	// never in it, so it stays; a non-owner adopts any VIP it finds (one a
 	// crashed master left), so it is released on demotion and Stop (#1716).
 	owned map[netip.Prefix]bool
+	// stale holds prefixes of another length that dropStaleVIPs found and
+	// could not delete; Release deletes them too.
+	stale []netip.Prefix
 }
 
 type event struct {
@@ -329,8 +338,16 @@ func (s *Speaker) startGroup(ctx context.Context, gc GroupConfig) (*runner, erro
 	r.conn = conn
 	if err := r.dropStaleVIPs(g); err != nil {
 		// Nothing is running yet: close the socket and fail the start, so
-		// Start rolls back the groups already started.
+		// Start rolls back the groups already started. A stale VIP that
+		// could not be removed stays recorded as a failed release, and the
+		// runner is returned so Start keeps it pending for Stop or the next
+		// Start to retry (Group.Shutdown releases in Initialize only when
+		// releaseErr is set).
 		_ = conn.Close()
+		if len(r.owned) > 0 || len(r.stale) > 0 {
+			g.releaseErr = err
+			return r, err
+		}
 		return nil, err
 	}
 	now := s.clock.Now()
@@ -362,6 +379,8 @@ func (s *Speaker) startGroup(ctx context.Context, gc GroupConfig) (*runner, erro
 // 673, Codex #1716 round 5): a backup that cannot prove its interface free
 // of the master's VIP must not run, so the supervisor restarts the speaker
 // instead of a backup answering for the VIP while Health shows no error.
+// A VIP whose removal failed stays pending (see ReleasePending), and Stop
+// or the next Start retries it.
 func (r *runner) dropStaleVIPs(g *Group) error {
 	reader, ok := r.speaker.deps.Programmer.(AddressReader)
 	if !ok || g.Priority() == PriorityOwner {
@@ -395,6 +414,7 @@ func (r *runner) dropStaleVIPs(g *Group) error {
 				continue
 			}
 			if err := r.speaker.deps.Programmer.DeleteAddress(g.cfg.Interface, q, hw); err != nil {
+				r.stale = append(r.stale, q)
 				return &ErrAddressOperationFailed{VRID: g.cfg.VRID, Interface: g.cfg.Interface, Operation: "delete", Address: q, Cause: err}
 			}
 		}
@@ -641,6 +661,20 @@ func (r *runner) Release(g *Group) error {
 			continue
 		}
 		delete(r.owned, p)
+	}
+	// Prefixes of another length a failed stale removal left behind.
+	kept := r.stale[:0]
+	for _, q := range r.stale {
+		if err := r.speaker.deps.Programmer.DeleteAddress(g.cfg.Interface, q, hw); err != nil {
+			kept = append(kept, q)
+			if first == nil {
+				first = &ErrAddressOperationFailed{VRID: g.cfg.VRID, Interface: g.cfg.Interface, Operation: "delete", Address: q, Cause: err}
+			}
+		}
+	}
+	r.stale = kept
+	if len(r.stale) == 0 {
+		r.stale = nil
 	}
 	return first
 }
