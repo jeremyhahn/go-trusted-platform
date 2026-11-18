@@ -620,8 +620,9 @@ func (s *service) SetDeviceEnrolled(ctx context.Context, deviceID, certSerial st
 // enrolment. Per ruling 70 and ruling 673, enrolment comes before install
 // completion: the fingerprint is accepted while the device is discovered,
 // booting or installing, and refused once the install is complete. It
-// makes no state transition. Re-recording the same fingerprint is a no-op;
-// a different one is refused.
+// makes no state transition. The fingerprint is fixed for one provisioning
+// attempt: re-recording the same fingerprint is a no-op and a different one
+// is refused, until RetryDevice starts a new attempt and clears it.
 func (s *service) RecordIDevIDFingerprint(ctx context.Context, deviceID, fingerprint string) error {
 	if !s.initialized.Load() {
 		return ErrServiceNotInitialized{}
@@ -826,7 +827,9 @@ func (s *service) QuarantineDevice(ctx context.Context, deviceID string, reason 
 	return nil
 }
 
-// RetryDevice resets a device to discovered state for retry.
+// RetryDevice resets a device to discovered state for retry. A retry is a new
+// provisioning attempt, so it clears the IDevID fingerprint the previous
+// attempt recorded: the retried install enrols a new IDevID.
 func (s *service) RetryDevice(ctx context.Context, deviceID string) error {
 	if !s.initialized.Load() {
 		return ErrServiceNotInitialized{}
@@ -856,6 +859,7 @@ func (s *service) RetryDevice(ctx context.Context, deviceID string) error {
 
 	updateErr := s.stateManager.UpdateDevice(deviceID, func(d *DeviceInfo) error {
 		d.RetryCount++
+		d.IDevIDFingerprint = ""
 		return nil
 	})
 	if updateErr != nil {
