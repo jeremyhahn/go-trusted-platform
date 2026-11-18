@@ -300,6 +300,22 @@ func TestVPNPeer_RefusedWhenTheProcessHostsNoPlanes(t *testing.T) {
 	}
 }
 
+// TestVPNPeer_WithdrawingEveryPeerWithNoPlanesSucceeds pins finding 2: a
+// datapath that hosts no plane holds no peer, so withdrawing every peer of a
+// plane is confirmed; keeping one is still refused.
+func TestVPNPeer_WithdrawingEveryPeerWithNoPlanesSucceeds(t *testing.T) {
+	_, client := serve(t, &fakeNode{state: gateway.GatewayStateRunning}, selfPolicy())
+
+	withdrawn, err := client.ReconcileVPNPeers(testContext(t), &ipcv1.ReconcileVPNPeersRequest{DataPlane: "wireguard"})
+	if err != nil || withdrawn.GetRefusal() != nil {
+		t.Fatalf("withdraw every peer with no planes = %v, %v; want success", withdrawn.GetRefusal(), err)
+	}
+	kept, err := client.ReconcileVPNPeers(testContext(t), &ipcv1.ReconcileVPNPeersRequest{DataPlane: "wireguard", LeaseIds: []string{"l1"}})
+	if err != nil || kept.GetRefusal().GetClass() != ipcv1.VPNPeerRefusalClass_VPN_PEER_REFUSAL_CLASS_UNAVAILABLE {
+		t.Fatalf("keep a peer with no planes = %v, %v; want an UNAVAILABLE refusal", kept.GetRefusal(), err)
+	}
+}
+
 func TestPolicy_DeniesAnUnadmittedUIDOnEveryService(t *testing.T) {
 	// No caller is uid 4294967000, so both services must refuse us.
 	policy := Policy{ControlUIDs: []uint32{4294967000}, DatapathUIDs: []uint32{4294967000}}
