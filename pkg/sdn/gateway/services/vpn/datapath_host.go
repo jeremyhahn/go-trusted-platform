@@ -111,6 +111,11 @@ func (h *PlaneHost) reconcile(ctx context.Context, req *ipcv1.ReconcileVPNPeersR
 	}
 	plane, err := h.plane(kind)
 	if err != nil {
+		// A plane this process does not host holds no peer, so withdrawing
+		// every peer of it is already done. Keeping a peer still refuses.
+		if len(keep) == 0 {
+			return nil
+		}
 		return err
 	}
 	r, ok := plane.(PeerReconciler)
