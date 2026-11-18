@@ -197,14 +197,36 @@ func encodeDaemonRestartService(body interface{}) (interface{}, error) {
 	return body, nil
 }
 
+// daemonServiceHealth derives a service's health from its status. It copies
+// healthStatusFromServiceStatus in the daemon's gRPC service
+// (pkg/api/daemon/service.go), since sdk/go imports nothing from the root
+// module: RUNNING is HEALTHY, ERROR is UNHEALTHY, STARTING and STOPPING are
+// DEGRADED, and any other status is UNSPECIFIED.
+func daemonServiceHealth(s platformv1.ServiceStatus) platformv1.HealthStatus {
+	switch s {
+	case platformv1.ServiceStatus_SERVICE_STATUS_RUNNING:
+		return platformv1.HealthStatus_HEALTH_STATUS_HEALTHY
+	case platformv1.ServiceStatus_SERVICE_STATUS_ERROR:
+		return platformv1.HealthStatus_HEALTH_STATUS_UNHEALTHY
+	case platformv1.ServiceStatus_SERVICE_STATUS_STARTING,
+		platformv1.ServiceStatus_SERVICE_STATUS_STOPPING:
+		return platformv1.HealthStatus_HEALTH_STATUS_DEGRADED
+	default:
+		return platformv1.HealthStatus_HEALTH_STATUS_UNSPECIFIED
+	}
+}
+
 // serviceInfo converts the daemon's wire record into the proto ServiceInfo.
-// An unknown status string maps to SERVICE_STATUS_UNSPECIFIED; an unparsable
-// uptime is an error.
+// An unknown status string maps to SERVICE_STATUS_UNSPECIFIED; Health is
+// derived from the decoded status as the gRPC handlers derive it; an
+// unparsable uptime is an error.
 func (w daemonServiceInfoWire) serviceInfo() (*platformv1.ServiceInfo, error) {
+	status := daemonServiceStatuses[w.Status]
 	info := &platformv1.ServiceInfo{
 		Type:   daemonServiceTypeOf(w.Name),
 		Name:   w.Name,
-		Status: daemonServiceStatuses[w.Status],
+		Status: status,
+		Health: daemonServiceHealth(status),
 		Metadata: map[string]string{
 			"start_count": strconv.FormatUint(w.StartCount, 10),
 			"stop_count":  strconv.FormatUint(w.StopCount, 10),
