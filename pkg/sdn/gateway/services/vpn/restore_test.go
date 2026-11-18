@@ -402,10 +402,11 @@ func TestRestore_ADropRecordedNowhereKeepsTheAddress(t *testing.T) {
 	assert.Equal(t, "mini-1", alloc.DeviceID)
 }
 
-// A drop the store could not record keeps the lease, so a later restart
-// reinstates it: its hosted peer must stay with it, not go before the
-// deletion is known to be recorded.
-func TestRestore_AnUnrecordedDropLeavesTheHostedPeer(t *testing.T) {
+// An expired lease is dead whether or not its deletion was recorded, and a
+// later restart drops it again before anything else: its hosted peer goes
+// at once, while the kept record keeps its address until the deletion is
+// recorded.
+func TestRestore_AnUnrecordedExpiredDropRemovesTheHostedPeer(t *testing.T) {
 	h := newRestoreHarness(t)
 	lease := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
 	lease.ExpiresAt = h.clock.Now()
@@ -419,10 +420,44 @@ func TestRestore_AnUnrecordedDropLeavesTheHostedPeer(t *testing.T) {
 
 	var unrecorded *ErrRevocationNotRecorded
 	require.True(t, errors.As(err, &unrecorded), "got %v", err)
-	assert.True(t, h.plane.hosts(lease.ID), "the kept lease keeps its hosted peer")
+	assert.False(t, h.plane.hosts(lease.ID), "the expired lease's hosted peer is removed")
 	stored, err := h.store.List(context.Background())
 	require.NoError(t, err)
 	assert.Len(t, stored, 1, "the lease whose drop was not recorded is still stored")
+	alloc, err := h.ipam.GetAllocation(context.Background(), lease.Address.Addr())
+	require.NoError(t, err)
+	assert.Equal(t, ipam.AllocationStatusActive, alloc.Status, "the kept record keeps its address")
+	assert.Equal(t, "mini-1", alloc.DeviceID)
+}
+
+// A lease that expires while the store cannot record its deletion loses its
+// peer at the first Sweep; its address stays held until a later Sweep
+// records the deletion, and only then goes back to the pool.
+func TestSweep_AnUnrecordedExpiryRemovesThePeerAndKeepsTheAddress(t *testing.T) {
+	ctx := context.Background()
+	h := newRestoreHarness(t)
+	lease := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
+	h.allocate(t, "mini-1", lease.Address)
+	h.start(t)
+	require.NoError(t, h.svc.Restore(ctx))
+	require.True(t, h.plane.hosts(lease.ID))
+	h.store.deleteErr = &ErrRevocationNotRecorded{LeaseID: lease.ID, Cause: errors.New("disk full")}
+	h.clock.Advance(2 * time.Hour)
+
+	h.svc.Sweep(ctx)
+
+	assert.False(t, h.plane.hosts(lease.ID), "the expired lease's peer is removed")
+	alloc, err := h.ipam.GetAllocation(ctx, lease.Address.Addr())
+	require.NoError(t, err)
+	assert.Equal(t, ipam.AllocationStatusActive, alloc.Status, "the kept record keeps its address")
+
+	h.store.deleteErr = nil
+	h.svc.Sweep(ctx)
+
+	stored, err := h.store.List(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, stored, "the recorded deletion removes the lease")
+	assert.NotEqual(t, "mini-1", h.holder(t, lease.Address), "then the address is released")
 }
 
 func TestRevoke_ARevocationRecordedNowhereTearsNothingDown(t *testing.T) {
