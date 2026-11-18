@@ -62,6 +62,9 @@ export function clearSession(): void {
   deleteCookie("uid");
 }
 
+/** What the server said to a sign-out; see revokeSession. */
+export type RevokeOutcome = "revoked" | "rejected" | "failed" | "none";
+
 /**
  * revokeSession signs the session out on the server (#215): the platform
  * adds the bearer to its deny-list, so a copy of the token stops working
@@ -69,18 +72,27 @@ export function clearSession(): void {
  *
  * The bearer is read and sent as an explicit Authorization header before
  * the caller clears the cookies, so the request cannot race the cookie
- * teardown. `keepalive` lets it finish while the page navigates to the
- * sign-in screen. Sign-out never waits on the server: the local session
- * is cleared whatever the answer, and a failure is not surfaced because
- * there is nothing the operator could do about it.
+ * teardown. `keepalive` lets it finish if the page navigates away.
+ *
+ * The promise resolves to what the server said (#646), so the caller can
+ * tell a server-side logout from a local one:
+ * - "revoked": a 2xx answer, the bearer is on the deny-list;
+ * - "rejected": 401, the server already refuses this bearer, so there is
+ *   nothing left to revoke;
+ * - "failed": any other status (503 when the revocation store is down)
+ *   or a request that never got an answer; the session may still be
+ *   valid on the server, and the bearer should be kept for a retry;
+ * - "none": no bearer cookie, so no request was sent.
  */
-export function revokeSession(): void {
+export async function revokeSession(): Promise<RevokeOutcome> {
+  // Read the bearer before any await: a caller may clear the cookies
+  // right after starting the revocation.
   const bearer = getCookie("jwt");
   if (!bearer) {
-    return;
+    return "none";
   }
   try {
-    void fetch(`${getBaseUrl()}/api/v1/logout`, {
+    const response = await fetch(`${getBaseUrl()}/api/v1/logout`, {
       method: "POST",
       credentials: "same-origin",
       keepalive: true,
@@ -88,8 +100,15 @@ export function revokeSession(): void {
         Accept: "application/json",
         Authorization: `Bearer ${bearer}`,
       },
-    }).catch(() => undefined);
+    });
+    if (response.ok) {
+      return "revoked";
+    }
+    if (response.status === 401) {
+      return "rejected";
+    }
+    return "failed";
   } catch {
-    // fetch unavailable: the local sign-out still happens.
+    return "failed";
   }
 }
