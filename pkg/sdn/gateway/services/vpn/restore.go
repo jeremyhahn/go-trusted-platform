@@ -51,6 +51,23 @@ func (s *Service) Restore(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
+// ReconcileHostedPeers withdraws from every hosted plane each peer whose lease
+// the store does not hold. It is the restart step of a vpn child without a
+// lease control plane: its memory store starts empty, so the peers its
+// predecessor left in the surviving datapath planes would otherwise stay up
+// with no expiry authority. Unlike Restore it neither holds addresses nor
+// drops leases; a plane that fails is owed to the Sweep, as in Restore.
+func (s *Service) ReconcileHostedPeers(ctx context.Context) error {
+	if !s.Active() {
+		return &ErrNotStarted{}
+	}
+	leases, err := s.deps.Leases.List(ctx)
+	if err != nil {
+		return &ErrLeaseStoreUnavailable{Cause: err}
+	}
+	return s.reconcilePeers(ctx, leases)
+}
+
 // reconcilePeers removes from every plane that outlives the service each
 // peer whose lease is not among the stored leases: a revoke that deleted the
 // record and died before it removed the peer leaves that peer behind.

@@ -150,8 +150,11 @@ type vpnBackend struct {
 // admits nobody. A section that does not apply cleanly does not fail the
 // start: the peers and tenants it refuses stay refused. A control plane that
 // cannot be read at start fails it with ErrLeaseStoreUnavailable: starting
-// empty would forget every client admitted before the restart. The listener
-// outlives ctx; Stop cancels it.
+// empty would forget every client admitted before the restart. Without a
+// control plane the store starts empty, so the start reconciles the hosted
+// planes against it instead, withdrawing the peers a crashed predecessor
+// left; a failure is logged and owed to the Sweep, never failing the start.
+// The listener outlives ctx; Stop cancels it.
 func (b *vpnBackend) Start(ctx context.Context) error {
 	if err := b.rebuild(ctx); err != nil {
 		return err
@@ -168,6 +171,8 @@ func (b *vpnBackend) Start(ctx context.Context) error {
 		if err := b.svc.Restore(ctx); err != nil {
 			b.logger.Warn("vpn: some recorded leases were not reinstated", slog.Any("error", err))
 		}
+	} else if err := b.svc.ReconcileHostedPeers(ctx); err != nil {
+		b.logger.Warn("vpn: the hosted peers were not reconciled", slog.Any("error", err))
 	}
 
 	g := b.gateway
