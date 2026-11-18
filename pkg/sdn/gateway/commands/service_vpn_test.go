@@ -118,6 +118,20 @@ func installVPNPeer(t *testing.T, socket string) (*ipcv1.InstallVPNPeerResponse,
 	}})
 }
 
+// withdrawVPNPeers asks the child to withdraw every peer of the WireGuard
+// plane, as the supervisor does for a given-up vpn child.
+func withdrawVPNPeers(t *testing.T, socket string) (*ipcv1.ReconcileVPNPeersResponse, error) {
+	t.Helper()
+	client, err := ipc.Dial(socket)
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	return client.ReconcileVPNPeers(ctx, &ipcv1.ReconcileVPNPeersRequest{DataPlane: "wireguard"})
+}
+
 func TestServeProcess_DatapathHostsVPNPlanes(t *testing.T) {
 	plane := &fakeVPNPlane{}
 	factory := &vpnPlaneFactory{planes: []vpn.ManagedDataPlane{plane}}
@@ -164,6 +178,10 @@ func TestServeProcess_PlaneFailureKeepsServicesInactive(t *testing.T) {
 		assert.False(t, on, "service %s must not be active after a plane failure", name)
 	}
 	assert.False(t, run.handler.active.Load(), "the gateway's services must not start after a plane failure")
+	withdrawn, err := withdrawVPNPeers(t, opts.socket)
+	require.NoError(t, err)
+	assert.Equal(t, ipcv1.VPNPeerRefusalClass_VPN_PEER_REFUSAL_CLASS_UNAVAILABLE, withdrawn.GetRefusal().GetClass(),
+		"a failed plane start must not confirm a peer withdrawal")
 
 	cancel()
 	<-done

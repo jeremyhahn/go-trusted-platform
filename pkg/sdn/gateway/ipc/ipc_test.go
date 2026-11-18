@@ -20,6 +20,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -313,6 +314,29 @@ func TestVPNPeer_WithdrawingEveryPeerWithNoPlanesSucceeds(t *testing.T) {
 	kept, err := client.ReconcileVPNPeers(testContext(t), &ipcv1.ReconcileVPNPeersRequest{DataPlane: "wireguard", LeaseIds: []string{"l1"}})
 	if err != nil || kept.GetRefusal().GetClass() != ipcv1.VPNPeerRefusalClass_VPN_PEER_REFUSAL_CLASS_UNAVAILABLE {
 		t.Fatalf("keep a peer with no planes = %v, %v; want an UNAVAILABLE refusal", kept.GetRefusal(), err)
+	}
+}
+
+// A process whose plane start failed may still carry a predecessor's peers
+// in the kernel: withdrawing every peer is not confirmed until planes are
+// up, so the supervisor keeps retrying.
+func TestVPNPeer_AFailedPlaneStartNeverConfirmsAWithdrawal(t *testing.T) {
+	srv, client := serve(t, &fakeNode{state: gateway.GatewayStateRunning}, selfPolicy())
+	srv.SetVPNPlanesFailed(errors.New("stale hub could not be deleted"))
+
+	withdrawn, err := client.ReconcileVPNPeers(testContext(t), &ipcv1.ReconcileVPNPeersRequest{DataPlane: "wireguard"})
+	if err != nil || withdrawn.GetRefusal().GetClass() != ipcv1.VPNPeerRefusalClass_VPN_PEER_REFUSAL_CLASS_UNAVAILABLE {
+		t.Fatalf("withdraw after a failed plane start = %v, %v; want an UNAVAILABLE refusal", withdrawn.GetRefusal(), err)
+	}
+	if !strings.Contains(withdrawn.GetRefusal().GetReason(), "stale hub could not be deleted") {
+		t.Fatalf("refusal reason = %q; want the start failure named", withdrawn.GetRefusal().GetReason())
+	}
+
+	planes := &fakeVPNPlanes{}
+	srv.SetVPNPlanes(planes)
+	served, err := client.ReconcileVPNPeers(testContext(t), &ipcv1.ReconcileVPNPeersRequest{DataPlane: "wireguard"})
+	if err != nil || served.GetRefusal() != nil || planes.reconciled.GetDataPlane() != "wireguard" {
+		t.Fatalf("withdraw once planes are set = %v, %v; planes saw %v", served.GetRefusal(), err, planes.reconciled)
 	}
 }
 
