@@ -30,16 +30,17 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
 )
 
+// installCleanupTimeout bounds the removal Admit attempts after a failed
+// peer install, independent of the caller's context.
+const installCleanupTimeout = 5 * time.Second
+
 // Admit runs the five steps for a fresh session and returns the lease. Every
 // step fails closed; the order is fixed: identity, attestation, posture,
 // person factor, address, peer. A device that already holds a lease in the
 // tenant has that lease revoked (RevokeReplaced) before the new one is
 // issued — a lost laptop coming back cannot keep a session open beside its
-// replacement. A failed peer install releases the address.
-// installCleanupTimeout bounds the removal Admit attempts after a failed
-// peer install, independent of the caller's context.
-const installCleanupTimeout = 5 * time.Second
-
+// replacement. A failed peer install removes the peer it may have left and
+// releases the address, or owes the removal to the sweep and holds it.
 func (s *Service) Admit(ctx context.Context, req *AdmissionRequest) (*Lease, error) {
 	if !s.Active() {
 		return nil, &ErrNotStarted{}

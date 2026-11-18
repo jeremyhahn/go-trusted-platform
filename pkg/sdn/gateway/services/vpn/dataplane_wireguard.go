@@ -142,12 +142,26 @@ func (p *wireguardPlane) RemovePeer(ctx context.Context, leaseID LeaseID) error 
 	if !ok {
 		return nil
 	}
-	if err := p.hub.RemovePeer(ctx, key); err != nil {
-		return err
+	if !p.keyHeldByOther(leaseID, key) {
+		if err := p.hub.RemovePeer(ctx, key); err != nil {
+			return err
+		}
 	}
 	delete(p.peers, leaseID)
 	p.logger.Info("vpn.wireguard.peer.remove", slog.String("lease", string(leaseID)))
 	return nil
+}
+
+// keyHeldByOther reports whether a lease other than leaseID still maps to
+// key. Peers are removed by key, so removing leaseID's peer then would drop
+// the other lease's session. Callers hold p.mu.
+func (p *wireguardPlane) keyHeldByOther(leaseID LeaseID, key []byte) bool {
+	for id, held := range p.peers {
+		if id != leaseID && bytes.Equal(held, key) {
+			return true
+		}
+	}
+	return false
 }
 
 // ReconcilePeers removes every peer whose lease is not in keep: the plane
@@ -165,9 +179,11 @@ func (p *wireguardPlane) ReconcilePeers(ctx context.Context, keep []LeaseID) err
 		if want[id] {
 			continue
 		}
-		if err := p.hub.RemovePeer(ctx, key); err != nil {
-			errs = append(errs, err)
-			continue
+		if !p.keyHeldByOther(id, key) {
+			if err := p.hub.RemovePeer(ctx, key); err != nil {
+				errs = append(errs, err)
+				continue
+			}
 		}
 		delete(p.peers, id)
 		p.logger.Info("vpn.wireguard.peer.reconcile.remove", slog.String("lease", string(id)))
