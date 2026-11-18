@@ -346,7 +346,13 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// SPEC 107-108: IAMPEPClient.Check decides every request).
 	if config.MTLSPrincipals == nil && iamService != nil {
 		if client := iamService.Client(); client != nil {
-			principals, principalsErr := newIAMCertificatePrincipals(client.User(), client.Role(), iamPEP)
+			// The pinned embedded transport answers every IAM.PEP check
+			// "not configured": ask the app's policy engine when it has one.
+			certPEP, usesEngine := certificatePrincipalPEP(context.Background(), config.App.QuicBaaSService(), iamPEP)
+			if !usesEngine {
+				logger.Info("mTLS certificate principals use the IAM SDK PEP: no app policy engine available")
+			}
+			principals, principalsErr := newIAMCertificatePrincipals(client.User(), client.Role(), certPEP)
 			if principalsErr != nil {
 				return nil, principalsErr
 			}
