@@ -84,23 +84,77 @@ func poolOff(s poolStep) bool {
 	return poolConjunct(s.If, poolHostedTerm) || poolConjunct(s.If, poolGiteaTerm)
 }
 
-// poolMayRun reports whether a runs-on can name a self-hosted runner.
-func poolMayRun(n yaml.Node) bool {
-	var b strings.Builder
+// poolHostedLabel matches the GitHub-hosted labels actionlint.yaml lists
+// beside the self-hosted ones.
+var poolHostedLabel = regexp.MustCompile(`^(ubuntu|windows|macos)-`)
+
+// poolWord is a runner label as it appears in a runs-on value or expression.
+var poolWord = regexp.MustCompile(`[A-Za-z0-9_.-]+`)
+
+// poolLabels are the self-hosted labels: self-hosted itself and every label
+// the repository declares in .github/actionlint.yaml that is not
+// GitHub-hosted.
+func poolLabels(t testing.TB) map[string]bool {
+	labels := map[string]bool{"self-hosted": true}
+	data, err := os.ReadFile("../../.github/actionlint.yaml")
+	if err != nil {
+		t.Fatalf("read actionlint.yaml: %v", err)
+	}
+	var cfg struct {
+		Runner struct {
+			Labels []string `yaml:"labels"`
+		} `yaml:"self-hosted-runner"`
+	}
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("parse actionlint.yaml: %v", err)
+	}
+	for _, l := range cfg.Runner.Labels {
+		if !poolHostedLabel.MatchString(l) {
+			labels[l] = true
+		}
+	}
+	return labels
+}
+
+// poolServerSplit is the Gitea-era runs-on that names one label on github.com
+// and another on Gitea; on github.com only the first applies.
+var poolServerSplit = regexp.MustCompile(`^\$\{\{\s*github\.server_url == 'https://github\.com' && '([^']+)' \|\| '[^']+'\s*\}\}$`)
+
+// poolMayRun reports whether a runs-on, a scalar, a list or an expression,
+// can name a self-hosted runner on github.com: one of its words is a pool
+// label (a server_url split counts only its github.com label).
+func poolMayRun(n yaml.Node, labels map[string]bool) bool {
+	if m := poolServerSplit.FindStringSubmatch(strings.TrimSpace(n.Value)); m != nil {
+		return labels[m[1]]
+	}
+	found := false
 	var walk func(*yaml.Node)
 	walk = func(x *yaml.Node) {
-		b.WriteString(x.Value + " ")
+		for _, w := range poolWord.FindAllString(x.Value, -1) {
+			if labels[w] {
+				found = true
+			}
+		}
 		for _, c := range x.Content {
 			walk(c)
 		}
 	}
 	walk(&n)
-	return strings.Contains(b.String(), "self-hosted")
+	return found
 }
 
+// poolReadonly: GOFLAGS sets -mod=readonly and no other -mod or -insecure
+// (--flag counts as -flag), with no quoting, which go parses differently
+// from a split on spaces.
 func poolReadonly(flags string) bool {
+	if strings.ContainsAny(flags, "'\"\\") {
+		return false
+	}
 	ro := false
 	for _, f := range strings.Fields(flags) {
+		if strings.HasPrefix(f, "--") {
+			f = f[1:]
+		}
 		switch {
 		case f == "-mod=readonly":
 			ro = true
@@ -161,7 +215,7 @@ func poolIntegrityProblems(where string, wf poolWorkflow, job poolJob) []string 
 
 // poolWANProblems lists every step of a self-hosted-capable job that can
 // reach the WAN, or run Go, in a way rulings 862 and 869 forbid.
-func poolWANProblems(file string, data []byte) []string {
+func poolWANProblems(file string, data []byte, labels map[string]bool) []string {
 	var wf poolWorkflow
 	if err := yaml.Unmarshal(data, &wf); err != nil {
 		return []string{file + ": not parseable YAML: " + err.Error()}
@@ -174,7 +228,7 @@ func poolWANProblems(file string, data []byte) []string {
 	sort.Strings(names)
 	for _, name := range names {
 		job := wf.Jobs[name]
-		if !poolMayRun(job.RunsOn) {
+		if !poolMayRun(job.RunsOn, labels) {
 			continue
 		}
 		where := file + ": job " + name
@@ -208,18 +262,20 @@ func TestCIPoolStepsKeepTheLANProxy(t *testing.T) {
 	if err != nil || len(files) == 0 {
 		t.Fatalf("no workflows found: %v", err)
 	}
+	labels := poolLabels(t)
 	for _, f := range files {
 		data, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatalf("read %s: %v", f, err)
 		}
-		for _, p := range poolWANProblems(filepath.Base(f), data) {
+		for _, p := range poolWANProblems(filepath.Base(f), data, labels) {
 			t.Error(p)
 		}
 	}
 }
 
 func TestPoolWANProblems(t *testing.T) {
+	labels := map[string]bool{"self-hosted": true, "bigdisk": true, "bigdisk-docker": true}
 	const pool = "    runs-on: [self-hosted, linux, x64, bigdisk]\n"
 	const ro = "    env:\n      GOFLAGS: -mod=readonly\n"
 	const setup = "      - uses: actions/setup-go@0\n"
@@ -237,6 +293,11 @@ func TestPoolWANProblems(t *testing.T) {
 		{"a hosted term under || is not hosted-only", "jobs:\n  a:\n" + pool + "    steps:\n      - name: d\n        if: runner.environment == 'github-hosted' || true\n        uses: actions/download-artifact@0000\n", "uses actions/download-artifact@"},
 		{"a negated hosted term is not hosted-only", "jobs:\n  a:\n" + pool + "    steps:\n      - name: d\n        if: \"!(runner.environment == 'github-hosted')\"\n        uses: actions/download-artifact@0000\n", "uses actions/download-artifact@"},
 		{"unparsable", "jobs: [", "not parseable"},
+		{"a server_url split that is the pool on github.com", "jobs:\n  a:\n    runs-on: ${{ github.server_url == 'https://github.com' && 'bigdisk' || 'ubuntu-latest' }}\n    steps:\n      - name: s\n        env:\n          GOPROXY: x\n", "step s: sets GOPROXY"},
+		{"a pool label alone", "jobs:\n  a:\n    runs-on: bigdisk\n    steps:\n      - name: s\n        env:\n          GOPROXY: x\n", "step s: sets GOPROXY"},
+		{"a pool label in an expression", "jobs:\n  a:\n    runs-on: ${{ cond && 'bigdisk-docker' || 'ubuntu-latest' }}\n    steps:\n      - name: s\n        env:\n          GOPROXY: x\n", "step s: sets GOPROXY"},
+		{"a quoted -mod override in the job GOFLAGS", "jobs:\n  a:\n" + pool + "    env:\n      GOFLAGS: -mod=readonly '-mod=mod'\n    steps:\n" + setup + gated("go test ./..."), "without -mod=readonly"},
+		{"a --mod override in the job GOFLAGS", "jobs:\n  a:\n" + pool + "    env:\n      GOFLAGS: -mod=readonly --mod=mod\n    steps:\n" + setup + gated("go test ./..."), "without -mod=readonly"},
 		{"native Go without read-only modules", "jobs:\n  a:\n" + pool + "    steps:\n" + setup + gated("go test ./..."), "without -mod=readonly"},
 		{"a later -mod in the job GOFLAGS", "jobs:\n  a:\n" + pool + "    env:\n      GOFLAGS: -mod=readonly -mod=mod\n    steps:\n" + setup + gated("go test ./..."), "without -mod=readonly"},
 		{"a Go step without the gate first", "jobs:\n  a:\n" + pool + ro + "    steps:\n" + setup + "      - name: t\n        run: go test ./...\n", "step t: runs go or make on the pool without"},
@@ -246,13 +307,14 @@ func TestPoolWANProblems(t *testing.T) {
 		{"a step drops read-only modules", "jobs:\n  a:\n" + pool + ro + "    steps:\n" + setup + "      - name: t\n        env:\n          GOFLAGS: -mod=mod\n", "sets GOFLAGS without -mod=readonly"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			p := poolWANProblems("f.yml", []byte(c.body))
+			p := poolWANProblems("f.yml", []byte(c.body), labels)
 			if len(p) == 0 || !strings.Contains(strings.Join(p, "\n"), c.want) {
 				t.Fatalf("want a problem containing %q, got %v", c.want, p)
 			}
 		})
 	}
 	for _, c := range []struct{ name, body string }{
+		{"a server_url split that is hosted on github.com", "jobs:\n  a:\n    runs-on: ${{ github.server_url == 'https://github.com' && 'ubuntu-latest' || 'bigdisk' }}\n    steps:\n      - name: s\n        env:\n          GOPROXY: x\n"},
 		{"a hosted job may set GOPROXY", "jobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - name: s\n        env:\n          GOPROXY: https://proxy.golang.org\n"},
 		{"native Go with read-only modules and the gate first", "jobs:\n  a:\n" + pool + ro + "    steps:\n" + setup + gated("go test ./...") + "      - name: e\n        run: echo done\n"},
 		{"a Go step before setup-go needs no gate", "jobs:\n  a:\n" + pool + ro + "    steps:\n      - name: pin\n        run: make -s pin\n" + setup + gated("go test ./...")},
@@ -261,7 +323,7 @@ func TestPoolWANProblems(t *testing.T) {
 		{"a hosted-only step of a pool job may download", "jobs:\n  a:\n" + pool + "    steps:\n      - name: d\n        if: runner.environment == 'github-hosted'\n        uses: actions/download-artifact@0000\n"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			if p := poolWANProblems("f.yml", []byte(c.body)); len(p) != 0 {
+			if p := poolWANProblems("f.yml", []byte(c.body), labels); len(p) != 0 {
 				t.Fatalf("want no problem, got %v", p)
 			}
 		})

@@ -51,6 +51,12 @@ func TestCIGoIntegrityScript(t *testing.T) {
 		{name: "an -insecure flag", change: map[string]string{"GOFLAGS": "-mod=readonly -insecure"}, want: "carries -insecure"},
 		{name: "no read-only module mode", change: map[string]string{"GOFLAGS": "-buildvcs=false"}, want: "lacks -mod=readonly"},
 		{name: "a direct fallback", change: map[string]string{"GOPROXY": "https://proxy.golang.org,direct"}, want: "falls back to direct"},
+		{name: "a direct fallback behind a space", change: map[string]string{"GOPROXY": "http://lan.example:3300|https://proxy.golang.org, direct"}, want: "falls back to direct"},
+		{name: "a direct fallback with trailing space", change: map[string]string{"GOPROXY": "direct ,https://proxy.golang.org"}, want: "falls back to direct"},
+		{name: "a quoted -mod override", change: map[string]string{"GOFLAGS": "-mod=readonly '-mod=mod'"}, want: "holds quoting"},
+		{name: "a double-quoted -mod override", change: map[string]string{"GOFLAGS": `-mod=readonly "-mod=mod"`}, want: "holds quoting"},
+		{name: "a --mod override", change: map[string]string{"GOFLAGS": "-mod=readonly --mod=mod"}, want: "sets -mod=mod"},
+		{name: "--mod=readonly counts as readonly", change: map[string]string{"GOFLAGS": "--mod=readonly"}, want: ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			// RUNNER_ENVIRONMENT is unset unless a case sets it: unset is checked.
