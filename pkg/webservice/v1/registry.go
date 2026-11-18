@@ -288,23 +288,35 @@ func NewDeviceRegistrationHook(deviceService DeviceRegistrar, logger *slog.Logge
 
 // PXEIdentityRecorder records the IDevID issued at enrolment on the PXE
 // record of the enrolling device. pkg/api/daemon.PXEGRPCService implements
-// it. It answers codes.NotFound when the client IP resolves to no PXE device
-// and codes.FailedPrecondition when the device is past Installing.
+// it. It answers codes.NotFound when the client IP or MAC resolves to no PXE
+// device and codes.FailedPrecondition when the device is past Installing.
 type PXEIdentityRecorder interface {
 	RecordEnrolledIDevIDFingerprint(ctx context.Context, clientIP string, leaf *x509.Certificate) error
+	RecordEnrolledIDevIDFingerprintForMAC(ctx context.Context, mac string, leaf *x509.Certificate) error
 }
 
-// NewPXEIdentityHook returns an ACME finalize hook that records the issued
-// IDevID's fingerprint on the PXE record of the enrolling device, which the
-// install-complete webhook requires over mTLS (#1694). Non-TCG enrolments and
-// a missing certificate are skipped. An enrolment that is not a PXE install
-// in progress (no MAC, no PXE device, or a device past Installing) is logged
-// and does not fail the enrolment. A node with no PXE backend answers with the
-// typed SERVICE_NOT_CONFIGURED discriminator (an ErrorInfo detail, see
+// NewPXEIdentityHook returns NewPXEIdentityHookWithProfiles with no profile
+// resolver: the enrolling device is found through the client IP only.
+func NewPXEIdentityHook(recorder PXEIdentityRecorder, logger *slog.Logger) trustedca.ACMEOrderFinalizeHook {
+	return NewPXEIdentityHookWithProfiles(recorder, nil, logger)
+}
+
+// NewPXEIdentityHookWithProfiles returns an ACME finalize hook that records
+// the issued IDevID's fingerprint on the PXE record of the enrolling device,
+// which the install-complete webhook requires over mTLS (#1694). The device is
+// resolved through its verified enrolment identity first: the MAC of the
+// device profile bound to the CA-verified EK certificate's serial, which works
+// across a router and over IPv6. With no resolver, no EK, no bound profile or
+// a profile with no MAC, the client IP is resolved through the ARP table,
+// which covers an on-link device. Non-TCG enrolments and a missing
+// certificate are skipped. An enrolment that is not a PXE install in progress
+// (no MAC, no PXE device, or a device past Installing) is logged and does not
+// fail the enrolment. A node with no PXE backend answers with the typed
+// SERVICE_NOT_CONFIGURED discriminator (an ErrorInfo detail, see
 // isServiceNotConfigured); that is not an error either, so a TCG enrolment on
 // such a node succeeds. Any other error fails the enrolment, a bare
 // Unavailable included.
-func NewPXEIdentityHook(recorder PXEIdentityRecorder, logger *slog.Logger) trustedca.ACMEOrderFinalizeHook {
+func NewPXEIdentityHookWithProfiles(recorder PXEIdentityRecorder, profiles devicepkg.ConfigForDeviceFinder, logger *slog.Logger) trustedca.ACMEOrderFinalizeHook {
 	return func(ctx *trustedca.ACMEOrderFinalizeHookContext) error {
 		if !ctx.IsTCGCSR || ctx.Certificate == nil {
 			return nil
@@ -313,7 +325,12 @@ func NewPXEIdentityHook(recorder PXEIdentityRecorder, logger *slog.Logger) trust
 		if reqCtx == nil {
 			reqCtx = context.Background()
 		}
-		err := recorder.RecordEnrolledIDevIDFingerprint(reqCtx, ctx.ClientIP, ctx.Certificate)
+		var err error
+		if mac := boundProfileMAC(reqCtx, profiles, ctx.TCGData); mac != "" {
+			err = recorder.RecordEnrolledIDevIDFingerprintForMAC(reqCtx, mac, ctx.Certificate)
+		} else {
+			err = recorder.RecordEnrolledIDevIDFingerprint(reqCtx, ctx.ClientIP, ctx.Certificate)
+		}
 		if isServiceNotConfigured(err) {
 			logger.Debug("PXE identity: PXE is not configured on this node - IDevID not recorded",
 				slog.String("client_ip", ctx.ClientIP))
@@ -333,6 +350,20 @@ func NewPXEIdentityHook(recorder PXEIdentityRecorder, logger *slog.Logger) trust
 			return fmt.Errorf("record the enrolled IDevID on the PXE record: %w", err)
 		}
 	}
+}
+
+// boundProfileMAC returns the MAC of the device profile bound to the
+// CA-verified EK certificate's serial (an exact EK-serial match), or "" when
+// there is no resolver, no EK, no bound profile or the profile has no MAC.
+func boundProfileMAC(ctx context.Context, profiles devicepkg.ConfigForDeviceFinder, tcg *trustedca.ACMETCGEnrollmentData) string {
+	if profiles == nil || tcg == nil || tcg.EKCertificate == nil || tcg.EKCertificate.SerialNumber == nil {
+		return ""
+	}
+	profile, err := profiles.FindConfigForDevice(ctx, tcg.EKCertificate.SerialNumber.String(), "")
+	if err != nil || profile == nil {
+		return ""
+	}
+	return profile.MACAddress
 }
 
 // isServiceNotConfigured reports whether err is a gRPC status carrying the
@@ -1880,7 +1911,13 @@ func (registry *HandlerRegistry) ACMERestService() trustedca.ACMERestServicer {
 		hookRegistry.Register(deviceHook)
 		registry.params.Logger.Info("Registered device registration hook for ACME device enrollment")
 		if recorder, ok := registry.params.PXEServiceServer.(PXEIdentityRecorder); ok {
-			hookRegistry.Register(NewPXEIdentityHook(recorder, registry.params.Logger.Slog()))
+			var profiles devicepkg.ConfigForDeviceFinder
+			if registry.params.ServiceRegistry != nil {
+				if ps := registry.params.ServiceRegistry.ProfileService(); ps != nil {
+					profiles = ps
+				}
+			}
+			hookRegistry.Register(NewPXEIdentityHookWithProfiles(recorder, profiles, registry.params.Logger.Slog()))
 			registry.params.Logger.Info("Registered PXE identity hook for ACME device enrollment")
 		}
 	} else {

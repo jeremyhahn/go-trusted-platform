@@ -99,11 +99,13 @@ var macForIP = arp.GetMACForIP
 // that enrolled from clientIP, the SHA-256 of the IDevID leaf the CA issued at
 // ACME finalize: the same digest the install-complete webhook compares
 // (pkg/webservice/v1/rest/pxe/webhook_auth.go). The PXE record is keyed by
-// MAC, so the client IP is resolved through the ARP table. An address with no
-// MAC, or a MAC with no PXE device, answers codes.NotFound and records
-// nothing; a device past Installing answers codes.FailedPrecondition. Like
-// RecordedIDevIDFingerprint, this is a Go method for the enrolment hook, not
-// a proto RPC.
+// MAC, so the client IP is resolved through the control plane's ARP table,
+// which holds only on-link devices; the enrolment hook first resolves the
+// device through its EK-bound profile (RecordEnrolledIDevIDFingerprintForMAC)
+// and uses this only as the fallback. An address with no MAC, or a MAC with no
+// PXE device, answers codes.NotFound and records nothing; a device past
+// Installing answers codes.FailedPrecondition. Like RecordedIDevIDFingerprint,
+// this is a Go method for the enrolment hook, not a proto RPC.
 func (s *PXEGRPCService) RecordEnrolledIDevIDFingerprint(ctx context.Context, clientIP string, leaf *x509.Certificate) error {
 	if err := s.requireService(); err != nil {
 		return err
@@ -118,6 +120,22 @@ func (s *PXEGRPCService) RecordEnrolledIDevIDFingerprint(ctx context.Context, cl
 	mac := macForIP(ip)
 	if mac == "" {
 		return status.Errorf(codes.NotFound, "no MAC for client IP %s", ip)
+	}
+	return s.RecordEnrolledIDevIDFingerprintForMAC(ctx, mac, leaf)
+}
+
+// RecordEnrolledIDevIDFingerprintForMAC records the SHA-256 of the issued
+// IDevID leaf on the PXE record of the device with the given MAC: the MAC the
+// operator bound to the device's verified EK in its profile, which resolves a
+// device enrolling across a router or over IPv6 (#1694). A MAC with no PXE
+// device answers codes.NotFound and records nothing; a device past Installing
+// answers codes.FailedPrecondition. A Go method, not a proto RPC.
+func (s *PXEGRPCService) RecordEnrolledIDevIDFingerprintForMAC(ctx context.Context, mac string, leaf *x509.Certificate) error {
+	if err := s.requireService(); err != nil {
+		return err
+	}
+	if leaf == nil || len(leaf.Raw) == 0 {
+		return status.Error(codes.InvalidArgument, "no issued certificate")
 	}
 	device, err := s.pxeService.GetDeviceByMAC(ctx, mac)
 	if err != nil {
