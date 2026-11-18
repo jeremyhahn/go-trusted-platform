@@ -203,9 +203,12 @@ func (a *Archiver) ImportFromFile(ctx context.Context, archivePath string) (*Bun
 		}
 
 		if strings.HasSuffix(header.Name, "manifest.json") && !header.FileInfo().IsDir() {
-			data, err := io.ReadAll(tr)
+			data, err := io.ReadAll(io.LimitReader(tr, a.maxExpandedBytes+1))
 			if err != nil {
 				return nil, ErrArchiveOperationFailed{Operation: "import", Cause: err}
+			}
+			if int64(len(data)) > a.maxExpandedBytes {
+				return nil, ErrArchiveOperationFailed{Operation: "import", Cause: ErrArchiveTooLarge{Limit: a.maxExpandedBytes}}
 			}
 
 			manifest = &Manifest{}
@@ -251,7 +254,18 @@ func (a *Archiver) ImportFromFile(ctx context.Context, archivePath string) (*Bun
 	defer gzr2.Close()
 	tr2 := tar.NewReader(gzr2)
 
+	// refuse removes the partial bundle and reports why the import stopped.
+	refuse := func(cause error) (*Bundle, error) {
+		os.RemoveAll(bundlePath)
+		return nil, ErrArchiveOperationFailed{Operation: "import", Cause: cause}
+	}
+	remaining := a.maxExpandedBytes
+	entries := 0
+
 	for {
+		if err := ctx.Err(); err != nil {
+			return refuse(err)
+		}
 		header, err := tr2.Next()
 		if err == io.EOF {
 			break
@@ -259,6 +273,11 @@ func (a *Archiver) ImportFromFile(ctx context.Context, archivePath string) (*Bun
 		if err != nil {
 			os.RemoveAll(bundlePath)
 			return nil, ErrArchiveOperationFailed{Operation: "import", Cause: err}
+		}
+
+		entries++
+		if entries > a.maxEntries {
+			return refuse(ErrArchiveTooManyEntries{Limit: a.maxEntries})
 		}
 
 		// Calculate destination path
@@ -295,12 +314,19 @@ func (a *Archiver) ImportFromFile(ctx context.Context, archivePath string) (*Bun
 				return nil, ErrArchiveOperationFailed{Operation: "import", Cause: err}
 			}
 
-			if _, err := io.Copy(outFile, tr2); err != nil {
+			n, err := io.CopyN(outFile, tr2, remaining+1)
+			if err != nil && err != io.EOF {
 				outFile.Close()
-				os.RemoveAll(bundlePath)
-				return nil, ErrArchiveOperationFailed{Operation: "import", Cause: err}
+				return refuse(err)
 			}
-			outFile.Close()
+			if n > remaining {
+				outFile.Close()
+				return refuse(ErrArchiveTooLarge{Limit: a.maxExpandedBytes})
+			}
+			remaining -= n
+			if err := outFile.Close(); err != nil {
+				return refuse(err)
+			}
 		}
 	}
 
