@@ -286,7 +286,9 @@ type ciJob struct {
 	If     string
 	RunsOn string
 	Needs  []string
-	Steps  []ciStep
+	// Env is the job-level env, which every step inherits.
+	Env   map[string]string
+	Steps []ciStep
 }
 
 // ciGateCheck is one tagged `check` line in the gate's script.
@@ -363,9 +365,10 @@ func parseCIWorkflow(file string, data []byte) (ciWorkflow, error) {
 // parseCIJob decodes one job from its key and value nodes.
 func parseCIJob(file string, key, value *yaml.Node) (ciJob, error) {
 	var raw struct {
-		If     string    `yaml:"if"`
-		RunsOn yaml.Node `yaml:"runs-on"`
-		Needs  yaml.Node `yaml:"needs"`
+		If     string            `yaml:"if"`
+		RunsOn yaml.Node         `yaml:"runs-on"`
+		Needs  yaml.Node         `yaml:"needs"`
+		Env    map[string]string `yaml:"env"`
 		Steps  []struct {
 			Env map[string]string `yaml:"env"`
 			Run yaml.Node         `yaml:"run"`
@@ -375,7 +378,7 @@ func parseCIJob(file string, key, value *yaml.Node) (ciJob, error) {
 		return ciJob{}, TestReachLoadError{File: file, Line: key.Line, Detail: "job " + key.Value + " does not decode", Err: err}
 	}
 
-	job := ciJob{ID: key.Value, Line: key.Line, If: raw.If, RunsOn: raw.RunsOn.Value}
+	job := ciJob{ID: key.Value, Line: key.Line, If: raw.If, RunsOn: raw.RunsOn.Value, Env: raw.Env}
 	// A label list: every label, so a bigdisk label in it is seen.
 	for _, label := range raw.RunsOn.Content {
 		job.RunsOn += " " + label.Value
