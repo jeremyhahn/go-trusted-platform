@@ -47,6 +47,11 @@ type mockIAMClient struct {
 	roles          map[string][]string
 	reconcileCalls int
 	reconcileErr   error
+
+	// embeddedPaging makes List behave as the pinned embedded go-quicbaas
+	// v0.12.0-alpha handler: PageToken is ignored, the first PageSize
+	// tenants (all when PageSize is 0) come back and Pagination is zero.
+	embeddedPaging bool
 }
 
 // mockBuiltInRoles mirrors the built-in role set the IAM role reconciler
@@ -153,6 +158,12 @@ func (m *mockIAMClient) List(ctx context.Context, req *iam.ListTenantsRequest) (
 	sort.Slice(tenants, func(i, j int) bool { return tenants[i].ID < tenants[j].ID })
 
 	total := len(tenants)
+	if m.embeddedPaging {
+		if req != nil && req.PageSize > 0 && req.PageSize < total {
+			tenants = tenants[:req.PageSize]
+		}
+		return &iam.ListTenantsResponse{Tenants: tenants}, nil
+	}
 	start := 0
 	if req != nil && req.PageToken != "" {
 		n, err := strconv.Atoi(req.PageToken)
@@ -1193,6 +1204,41 @@ func TestGetTenantByName_BeyondFirstPage(t *testing.T) {
 
 	if _, err := manager.GetTenantByName(context.Background(), "name-999"); err == nil {
 		t.Error("expected an error for a tenant that does not exist")
+	}
+}
+
+func TestListTenants_EmbeddedPagingBeyondFirst100(t *testing.T) {
+	manager, iamClient := newTestManager(t)
+	iamClient.embeddedPaging = true
+	seedIAMTenants(iamClient, 250)
+
+	entities, total, err := manager.ListTenants(context.Background(), 100, 200)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if total != 250 {
+		t.Errorf("expected total 250, got %d", total)
+	}
+	if len(entities) != 50 {
+		t.Fatalf("expected 50 tenants, got %d", len(entities))
+	}
+	if entities[0].ID != "tenant-200" || entities[49].ID != "tenant-249" {
+		t.Errorf("expected tenant-200..tenant-249, got %q..%q", entities[0].ID, entities[49].ID)
+	}
+}
+
+func TestGetTenantByName_EmbeddedPagingBeyondFirst100(t *testing.T) {
+	manager, iamClient := newTestManager(t)
+	iamClient.embeddedPaging = true
+	seedIAMTenants(iamClient, 250)
+	manager.InvalidateCache("")
+
+	entity, err := manager.GetTenantByName(context.Background(), "name-150")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if entity.ID != "tenant-150" {
+		t.Errorf("expected ID tenant-150, got %q", entity.ID)
 	}
 }
 
