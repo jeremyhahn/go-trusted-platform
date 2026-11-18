@@ -784,6 +784,14 @@ func TestSpeaker_StartFailsWhenTheStaleVIPOfAnotherLengthCannotBeRemoved(t *test
 	assert.Equal(t, "delete", aof.Operation)
 	assert.Equal(t, netip.MustParsePrefix("10.4.200.1/16"), aof.Address)
 	assert.False(t, s.Active())
+
+	// The prefix that could not be removed stays pending, and Stop removes
+	// it once the error clears.
+	assert.True(t, s.ReleasePending(), "the failed stale removal stays pending")
+	prog.delErr = nil
+	require.NoError(t, s.Stop(context.Background()))
+	assert.False(t, prog.holds("br-int", "10.4.200.1/16"))
+	assert.False(t, s.ReleasePending())
 }
 
 // TestSpeaker_StartFailsWhenTheStaleVIPCheckFails pins ruling 673 (Codex
@@ -828,6 +836,37 @@ func TestSpeaker_StartFailsWhenTheStaleVIPRemovalFails(t *testing.T) {
 	require.True(t, errors.As(err, &aof), "got %v", err)
 	assert.Equal(t, "delete", aof.Operation)
 	assert.False(t, s.Active())
+
+	// The VIP that could not be removed stays pending, and Stop removes it
+	// once the error clears.
+	assert.True(t, s.ReleasePending(), "the failed stale removal stays pending")
+	prog.delErr = nil
+	require.NoError(t, s.Stop(context.Background()))
+	assert.False(t, prog.holds("br-int", "10.4.200.1/24"))
+	assert.False(t, s.ReleasePending())
+}
+
+// TestSpeaker_NextStartRemovesAStaleVIPAnEarlierStartCouldNot checks that
+// the next Start drains a failed stale-VIP removal before it starts.
+func TestSpeaker_NextStartRemovesAStaleVIPAnEarlierStartCouldNot(t *testing.T) {
+	seg := newSegment()
+	prog := newFakeProgrammer()
+	prog.addrs["br-int/10.4.200.1/24"] = nil
+	prog.delErr = errors.New("netlink: permission denied")
+	s, err := New(speakerConfig(200, "10.4.200.10"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: prog, Clock: newFakeClock(t0), Logger: quietLogger()})
+	require.NoError(t, err)
+
+	var aof *ErrAddressOperationFailed
+	require.True(t, errors.As(s.Start(context.Background()), &aof))
+	require.True(t, s.ReleasePending())
+	require.True(t, prog.holds("br-int", "10.4.200.1/24"), "the stale VIP is still installed")
+
+	prog.delErr = nil
+	require.NoError(t, s.Start(context.Background()))
+	assert.True(t, s.Active())
+	assert.False(t, s.ReleasePending())
+	assert.False(t, prog.holds("br-int", "10.4.200.1/24"))
+	require.NoError(t, s.Stop(context.Background()))
 }
 
 func TestWallClock(t *testing.T) {

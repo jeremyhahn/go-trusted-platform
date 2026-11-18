@@ -494,6 +494,56 @@ func TestGatewayStart_RollbackStopFailureIsLoggedNotLost(t *testing.T) {
 	assert.Empty(t, gw.ActiveServices())
 }
 
+// startWithFailedRollback starts a gateway whose first service starts and
+// then cannot be stopped by the rollback a later refusal triggers.
+func startWithFailedRollback(t *testing.T, id string, stuck *fakeBacked) *Gateway {
+	t.Helper()
+	gw, err := NewGateway(baseGatewayConfig(id))
+	require.NoError(t, err)
+	require.NoError(t, gw.RegisterServiceHandler(&backedServiceHandler{
+		gateway: gw, name: "stuck", build: func(*Gateway) (backedService, error) { return stuck, nil },
+	}))
+	require.NoError(t, gw.RegisterServiceHandler(&refusedServiceHandler{name: "never", reason: "test refusal"}))
+	gw.SetNodeMetrics(validNodeMetrics())
+
+	err = gw.Start(context.Background())
+	var unavailable *ErrServiceUnavailable
+	require.True(t, errors.As(err, &unavailable), "the start error is the refusal, got %v", err)
+	return gw
+}
+
+func TestGatewayStop_RetriesARollbackStopThatFailed(t *testing.T) {
+	t.Run("the next Stop finishes it", func(t *testing.T) {
+		stuck := &fakeBacked{stopErr: errors.New("release failed")}
+		gw := startWithFailedRollback(t, "rollback-retry", stuck)
+
+		stuck.mu.Lock()
+		stuck.stopErr = nil
+		stuck.mu.Unlock()
+		require.NoError(t, gw.Stop(context.Background()))
+		stuck.mu.Lock()
+		defer stuck.mu.Unlock()
+		assert.Equal(t, 2, stuck.stopCalls, "the rollback Stop and the retry")
+		assert.False(t, stuck.started)
+	})
+
+	t.Run("a Stop that still fails keeps it for the next", func(t *testing.T) {
+		stuck := &fakeBacked{stopErr: errors.New("release failed")}
+		gw := startWithFailedRollback(t, "rollback-retry-twice", stuck)
+
+		var shutdown *ErrShutdownFailed
+		require.True(t, errors.As(gw.Stop(context.Background()), &shutdown), "a rollback cleanup that fails again is a shutdown failure")
+
+		stuck.mu.Lock()
+		stuck.stopErr = nil
+		stuck.mu.Unlock()
+		require.NoError(t, gw.Stop(context.Background()))
+		stuck.mu.Lock()
+		defer stuck.mu.Unlock()
+		assert.Equal(t, 3, stuck.stopCalls)
+	})
+}
+
 // startWithRetainedCleanup registers one handler whose Start fails with a
 // release still pending and starts the gateway, which must fail.
 func startWithRetainedCleanup(t *testing.T, id string, svc *fakeBacked) *Gateway {
