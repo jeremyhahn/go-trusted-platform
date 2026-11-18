@@ -210,6 +210,9 @@ func TestIAMListApps_SendsPaginationAsLimitAndOffset(t *testing.T) {
 		{"third page", &platformv1.PaginationRequest{Page: 3, PageSize: 7}, "limit=7&offset=14"},
 		{"first page", &platformv1.PaginationRequest{Page: 1, PageSize: 7}, "limit=7"},
 		{"no pagination", nil, ""},
+		{"second page, no page size", &platformv1.PaginationRequest{Page: 2}, "offset=50"},
+		{"second page, capped page size", &platformv1.PaginationRequest{Page: 2, PageSize: 2000}, "limit=2000&offset=1000"},
+		{"third page at the cap", &platformv1.PaginationRequest{Page: 3, PageSize: 1000}, "limit=1000&offset=2000"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
