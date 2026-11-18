@@ -885,6 +885,8 @@ jobs:
     # and a same-repository PR, ubuntu-latest otherwise.
     runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk"]') || 'ubuntu-latest' }}
     timeout-minutes: 15
+    env:
+      GOFLAGS: -buildvcs=false -mod=readonly   # ruling 869: modules are never rewritten on the pool
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -906,15 +908,20 @@ jobs:
           cache: ${{ runner.environment != 'self-hosted' }}
           go-version: ${{ env.GO_VERSION }}
 
+      # Ruling 869: the module-integrity gate of a native Go job on the pool
+      # (checksum database on, no exemptions, -mod=readonly, no direct).
+      - name: Module integrity (ruling 869)
+        if: ${{ steps.probe.outputs.has_target == 'true' }}
+        run: scripts/ci-go-integrity.sh
       # v1.29.1: no -k; the first failing gate ends the step (ruling 226(15)).
       - name: make lint-gates
         if: ${{ steps.probe.outputs.has_target == 'true' }}
-        # InfoSec O-2: the public proxy alone, no direct fallback, and
-        # read-only module mode, as go-quicbaas's pool test jobs set them.
-        # -buildvcs=false is kept from the workflow env this GOFLAGS replaces.
+        # Ruling 869 (provisional, pending InfoSec's review of M-8 and O-2):
+        # the pool's LAN-first GOPROXY, never direct, with the checksum
+        # database on and read-only module mode, which the job's integrity
+        # step checks. -buildvcs=false is kept from the workflow env.
         env:
           GOFLAGS: -mod=readonly -buildvcs=false
-          GOPROXY: https://proxy.golang.org
         run: make lint-gates
 
       # v1.32 (2026-11-08, Company Agent m2098 item 2, InfoSec finding): the
@@ -1044,6 +1051,8 @@ jobs:
     if: ${{ needs.preflight.outputs.docs_only != 'true' && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
     needs: preflight
     timeout-minutes: 15
+    env:
+      GOFLAGS: -buildvcs=false -mod=readonly   # ruling 869: modules are never rewritten on the pool
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -1058,6 +1067,10 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
 
       # Pinned, like GO_VERSION. sdk/javascript declares only
+      # Ruling 869: the module-integrity gate of a native Go job on the pool
+      # (checksum database on, no exemptions, -mod=readonly, no direct).
+      - name: Module integrity (ruling 869)
+        run: scripts/ci-go-integrity.sh
       # `engines: >=18.0.0`; 22 is the active LTS line.
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
@@ -1099,6 +1112,8 @@ jobs:
       fail-fast: false
       matrix:
         shard: [0, 1, 2, 3]
+    env:
+      GOFLAGS: -buildvcs=false -mod=readonly   # ruling 869: modules are never rewritten on the pool
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -1112,18 +1127,22 @@ jobs:
       # cpio: pkg/diskimage/netboot repacks an initramfs with it. libssl-dev:
       # pkg/app's IDevID mTLS tests run go-tpm-tools' simulator, which
       # compiles the reference TPM with cgo against OpenSSL (#149). The
+      # Ruling 869: the module-integrity gate of a native Go job on the pool
+      # (checksum database on, no exemptions, -mod=readonly, no direct).
+      - name: Module integrity (ruling 869)
+        run: scripts/ci-go-integrity.sh
       # bigdisk runner's image carries both: hosted runners only.
       - name: Install cpio and the OpenSSL headers
         if: runner.environment == 'github-hosted'
         run: sudo apt-get update && sudo apt-get install -y cpio libssl-dev
 
       - name: make test-race
-        # InfoSec O-2: the public proxy alone, no direct fallback, and
-        # read-only module mode, as go-quicbaas's pool test jobs set them.
-        # -buildvcs=false is kept from the workflow env this GOFLAGS replaces.
+        # Ruling 869 (provisional, pending InfoSec's review of M-8 and O-2):
+        # the pool's LAN-first GOPROXY, never direct, with the checksum
+        # database on and read-only module mode, which the job's integrity
+        # step checks. -buildvcs=false is kept from the workflow env.
         env:
           GOFLAGS: -mod=readonly -buildvcs=false
-          GOPROXY: https://proxy.golang.org
         run: make test-race SHARD=${{ matrix.shard }} SHARDS=4
 
   # ==========================================================================
@@ -1147,6 +1166,8 @@ jobs:
     if: ${{ (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')) && !github.event.pull_request.draft && (needs.preflight.outputs.verdict == 'run') }}
     needs: preflight
     timeout-minutes: 15
+    env:
+      GOFLAGS: -buildvcs=false -mod=readonly   # ruling 869: modules are never rewritten on the pool
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -1157,6 +1178,10 @@ jobs:
           cache: ${{ runner.environment != 'self-hosted' }}
           go-version: ${{ env.GO_VERSION }}
 
+      # Ruling 869: the module-integrity gate of a native Go job on the pool
+      # (checksum database on, no exemptions, -mod=readonly, no direct).
+      - name: Module integrity (ruling 869)
+        run: scripts/ci-go-integrity.sh
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
@@ -1467,6 +1492,7 @@ jobs:
     # load, about 13 min, rounded up to 15 above the old 60.
     timeout-minutes: 75
     env:
+      GOFLAGS: -buildvcs=false -mod=readonly   # ruling 869: modules are never rewritten on the pool
       IT_PROJECT: go-trusted-platform-ci-${{ github.run_id }}-${{ github.run_attempt }}-leg${{ matrix.leg }}
       IT_IMAGE_ID: ${{ needs.integration-image.outputs.image_id }}
       IT_IMAGE_IDENTITY: ${{ needs.integration-image.outputs.image_identity }}
@@ -1646,7 +1672,10 @@ jobs:
           path: ${{ runner.temp }}/it-image
 
       - name: Download the integration image (GitHub)
-        if: steps.lease.outputs.leased != 'true' && needs.integration-image.outputs.image_ref == '' && github.server_url == 'https://github.com'
+        # Ruling 862: hosted runners only. On the pool the image comes from the
+        # LAN registry or the lease; a failed pull fails the job rather than
+        # fetching the artifact over the owner's WAN.
+        if: steps.lease.outputs.leased != 'true' && needs.integration-image.outputs.image_ref == '' && github.server_url == 'https://github.com' && runner.environment == 'github-hosted'
         uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
           name: ${{ needs.integration-image.outputs.artifact }}
@@ -1734,6 +1763,10 @@ jobs:
       # verdict: every failed leaf test must be a row of
       # .github/foreign-failures.tsv, and anything the checker cannot attribute
       # to a listed test (a build failure, a panic or timeout, an unreadable
+      # Ruling 869: the module-integrity gate of a native Go job on the pool
+      # (checksum database on, no exemptions, -mod=readonly, no direct).
+      - name: Module integrity (ruling 869)
+        run: scripts/ci-go-integrity.sh
       # log) fails the step. ci-gate reads this job's result unchanged.
       - name: Run integration suite leg ${{ matrix.leg }} in the integration image
         run: make integration-test-leg LEG="${{ matrix.leg }}" IT_PREBUILT=1 IT_PROJECT="$IT_PROJECT" IT_IMAGE="$IT_IMAGE" IT_FOREIGN_BASELINE=1 IT_LOG="$RUNNER_TEMP/integration-leg${{ matrix.leg }}.log"
@@ -1768,6 +1801,7 @@ jobs:
     runs-on: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk-docker"]') || 'ubuntu-latest' }}
     timeout-minutes: 90       # CUSTOMIZE: SOAK_MINUTES plus one iteration
     env:
+      GOFLAGS: -buildvcs=false -mod=readonly   # ruling 869: modules are never rewritten on the pool
       SOAK_MINUTES: 30        # CUSTOMIZE
       SOAK_TARGET: integration-test   # CUSTOMIZE: a make target of the integration image
       IT_PROJECT: go-trusted-platform-ci-${{ github.run_id }}-${{ github.run_attempt }}-soak
@@ -1896,6 +1930,10 @@ jobs:
 
       # CUSTOMIZE (ruling 125): each iteration applies the foreign-failure
       # baseline with its own IT_LOG, as the integration job does. Every
+      # Ruling 869: the module-integrity gate of a native Go job on the pool
+      # (checksum database on, no exemptions, -mod=readonly, no direct).
+      - name: Module integrity (ruling 869)
+        run: scripts/ci-go-integrity.sh
       # iteration runs in the leased image (IT_PREBUILT=1).
       - name: Soak (integration suite, looped)
         run: |
@@ -1959,6 +1997,8 @@ jobs:
     needs: preflight
     if: ${{ github.event_name != 'pull_request' && (needs.preflight.outputs.verdict == 'run') }}
     timeout-minutes: 60
+    env:
+      GOFLAGS: -buildvcs=false -mod=readonly   # ruling 869: modules are never rewritten on the pool
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -1969,6 +2009,10 @@ jobs:
           cache: ${{ runner.environment != 'self-hosted' }}
           go-version: ${{ env.GO_VERSION }}
 
+      # Ruling 869: the module-integrity gate of a native Go job on the pool
+      # (checksum database on, no exemptions, -mod=readonly, no direct).
+      - name: Module integrity (ruling 869)
+        run: scripts/ci-go-integrity.sh
       - name: Install cpio and the OpenSSL headers
         if: runner.environment == 'github-hosted'
         run: sudo apt-get update && sudo apt-get install -y cpio libssl-dev
