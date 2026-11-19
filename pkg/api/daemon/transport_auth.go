@@ -18,8 +18,10 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"os"
+	"strings"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	"google.golang.org/grpc"
 
@@ -187,7 +189,16 @@ func iamUserRoles(client quicbaassdk.IAMClient) func(ctx context.Context, tenant
 		if users == nil {
 			return nil, ErrIAMServiceNotAvailable{}
 		}
-		user, err := users.Get(ctx, tenantID, subject)
+		// The subject is the certificate's email SAN, else its CN: neither
+		// is the stored user ID, so look the user up by what the subject
+		// is. No fallback between lookups: a miss is refused (#1989).
+		var user *iam.User
+		var err error
+		if strings.Contains(subject, "@") {
+			user, err = users.GetByEmail(ctx, tenantID, subject)
+		} else {
+			user, err = users.FindByUsername(ctx, tenantID, subject)
+		}
 		if err != nil {
 			return nil, err
 		}
