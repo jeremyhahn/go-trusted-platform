@@ -234,6 +234,10 @@ func (i *localCACertIssuer) issue(ctx context.Context, req *certclient.IssueCert
 		DNSNames:    req.DNSNames,
 		IPAddresses: ips,
 	}
+	// mTLS takes the tenant from the subject OU only; never write an empty OU.
+	if req.OrganizationalUnit != "" {
+		csrTpl.Subject.OrganizationalUnit = []string{req.OrganizationalUnit}
+	}
 	csrDER, err := x509.CreateCertificateRequest(rand.Reader, csrTpl, priv)
 	if err != nil {
 		return nil, &ErrCertIssue{Usage: req.Usage, Cause: err}
