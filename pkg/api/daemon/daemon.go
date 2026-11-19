@@ -2925,8 +2925,6 @@ func (d *Daemon) Stop(ctx context.Context) error {
 		return ErrDaemonNotRunning{}
 	}
 
-	d.closePXEBackend("stop")
-
 	// Close health registry
 	if d.healthRegistry != nil {
 		if err := d.healthRegistry.Close(); err != nil {
@@ -3014,6 +3012,10 @@ func (d *Daemon) Stop(ctx context.Context) error {
 		_ = d.grpcListener.Close()
 	}
 
+	// Close the PXE backend only after every transport has stopped and
+	// drained, so no PXE request is still in flight against it.
+	d.closePXEBackend("stop")
+
 	// Trigger shutdown through the service
 	_, err := d.service.Shutdown(ctx, &platformv1.ShutdownRequest{
 		Graceful:       true,
@@ -3053,8 +3055,6 @@ func (d *Daemon) ForceStop() error {
 	if !d.running.Load() {
 		return ErrDaemonNotRunning{}
 	}
-
-	d.closePXEBackend("force stop")
 
 	// Close health registry
 	if d.healthRegistry != nil {
@@ -3116,6 +3116,10 @@ func (d *Daemon) ForceStop() error {
 	if d.grpcListener != nil {
 		_ = d.grpcListener.Close()
 	}
+
+	// Close the PXE backend only after every transport has stopped; the
+	// backend's Close also waits for any PXE call still in flight.
+	d.closePXEBackend("force stop")
 
 	// Force shutdown through the service
 	_, _ = d.service.Shutdown(context.Background(), &platformv1.ShutdownRequest{
