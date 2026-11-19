@@ -361,10 +361,11 @@ func TestMTLSAdapter_ExtractTenant(t *testing.T) {
 		}
 	})
 
-	t.Run("extract tenant from CN", func(t *testing.T) {
+	t.Run("TenantField CN does not select the CN over the OU", func(t *testing.T) {
 		adapter.config.TenantField = IdentityFieldCN
 		opts := defaultTestCertOptions()
 		opts.commonName = "tenant-123"
+		opts.orgUnit = []string{"tenant-ou"}
 		cert := createTestCertificate(t, opts)
 
 		tenant, err := adapter.ExtractTenant(cert)
@@ -372,21 +373,25 @@ func TestMTLSAdapter_ExtractTenant(t *testing.T) {
 			t.Fatalf("ExtractTenant failed: %v", err)
 		}
 
-		if tenant != "tenant-123" {
-			t.Errorf("tenant = %v, want tenant-123", tenant)
+		if tenant != "tenant-ou" {
+			t.Errorf("tenant = %v, want tenant-ou", tenant)
 		}
 	})
 
-	t.Run("no fallback to organization when primary empty", func(t *testing.T) {
+	t.Run("TenantField SerialNumber still yields the OU, no organization fallback", func(t *testing.T) {
 		adapter.config.TenantField = IdentityFieldSerialNumber
 		opts := defaultTestCertOptions()
 		opts.serialNumber = ""
 		opts.organization = []string{"Fallback Org"}
+		opts.orgUnit = []string{"tenant-ou"}
 		cert := createTestCertificate(t, opts)
 
-		_, err := adapter.ExtractTenant(cert)
-		if _, ok := err.(ErrTenantNotFound); !ok {
-			t.Fatalf("Expected ErrTenantNotFound, got %v", err)
+		tenant, err := adapter.ExtractTenant(cert)
+		if err != nil {
+			t.Fatalf("ExtractTenant failed: %v", err)
+		}
+		if tenant != "tenant-ou" {
+			t.Errorf("tenant = %v, want tenant-ou", tenant)
 		}
 	})
 
@@ -397,11 +402,12 @@ func TestMTLSAdapter_ExtractTenant(t *testing.T) {
 		}
 	})
 
-	t.Run("no tenant returns error", func(t *testing.T) {
+	t.Run("no OU returns error whatever TenantField says", func(t *testing.T) {
 		adapter.config.TenantField = IdentityFieldSerialNumber
 		opts := defaultTestCertOptions()
-		opts.serialNumber = ""
+		opts.serialNumber = "serial-1"
 		opts.organization = nil
+		opts.orgUnit = nil
 		cert := createTestCertificate(t, opts)
 
 		_, err := adapter.ExtractTenant(cert)
@@ -410,6 +416,47 @@ func TestMTLSAdapter_ExtractTenant(t *testing.T) {
 		}
 		if _, ok := err.(ErrTenantNotFound); !ok {
 			t.Errorf("Expected ErrTenantNotFound, got %T", err)
+		}
+	})
+}
+
+// TestMTLSAdapter_ExtractTenant_OverrideCannotBypassOU pins SPEC.md:122: a
+// TenantField override never selects the tenant; the subject OU does.
+func TestMTLSAdapter_ExtractTenant_OverrideCannotBypassOU(t *testing.T) {
+	logger := logging.DefaultLogger()
+
+	t.Run("TenantField Organization refuses an O-only certificate", func(t *testing.T) {
+		config := DefaultMTLSConfig()
+		config.TenantField = IdentityFieldOrganization
+		adapter := &MTLSAdapter{logger: logger, config: config}
+
+		opts := defaultTestCertOptions()
+		opts.organization = []string{"Acme Corp"}
+		opts.orgUnit = nil
+		cert := createTestCertificate(t, opts)
+
+		tenant, err := adapter.ExtractTenant(cert)
+		if _, ok := err.(ErrTenantNotFound); !ok {
+			t.Fatalf("ExtractTenant = %q, %v; want ErrTenantNotFound", tenant, err)
+		}
+	})
+
+	t.Run("TenantField CN yields the OU when OU and CN differ", func(t *testing.T) {
+		config := DefaultMTLSConfig()
+		config.TenantField = IdentityFieldCN
+		adapter := &MTLSAdapter{logger: logger, config: config}
+
+		opts := defaultTestCertOptions()
+		opts.orgUnit = []string{"a"}
+		opts.commonName = "b"
+		cert := createTestCertificate(t, opts)
+
+		tenant, err := adapter.ExtractTenant(cert)
+		if err != nil {
+			t.Fatalf("ExtractTenant failed: %v", err)
+		}
+		if tenant != "a" {
+			t.Errorf("tenant = %q, want %q", tenant, "a")
 		}
 	})
 }
@@ -554,6 +601,7 @@ func TestMTLSAdapter_Authenticate(t *testing.T) {
 	t.Run("fails when no tenant and no default", func(t *testing.T) {
 		opts := defaultTestCertOptions()
 		opts.organization = nil
+		opts.orgUnit = nil
 		opts.serialNumber = ""
 		cert := createTestCertificate(t, opts)
 
