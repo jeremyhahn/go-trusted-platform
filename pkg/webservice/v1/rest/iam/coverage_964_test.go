@@ -461,6 +461,7 @@ func cov964NewClient() *cov964Client {
 		apps: &cov964Apps{apps: map[string]*iamsdk.Application{
 			"client-1": {
 				ClientID:     "client-1",
+				TenantID:     "tenant-a",
 				Name:         "portal",
 				RedirectURIs: []string{"https://portal.example.com/cb"},
 				GrantTypes:   []iamsdk.GrantType{iamsdk.ParseGrantType("client_credentials")},

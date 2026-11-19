@@ -465,7 +465,16 @@ func (a *QuicBaaSIAMAdapter) RegisterApp(ctx context.Context, tenantID string, r
 }
 
 func (a *QuicBaaSIAMAdapter) GetApp(ctx context.Context, tenantID, clientID string) (*iamsdk.Application, error) {
-	return a.client.App().Get(ctx, tenantID, clientID)
+	// Upstream looks an app up by client ID alone: refuse another tenant's
+	// app as absent, so its existence is not leaked.
+	app, err := a.client.App().Get(ctx, tenantID, clientID)
+	if err != nil {
+		return nil, err
+	}
+	if app == nil || app.TenantID != tenantID {
+		return nil, ErrAppNotFound{TenantID: tenantID, AppID: clientID}
+	}
+	return app, nil
 }
 
 func (a *QuicBaaSIAMAdapter) ListApps(ctx context.Context, tenantID string, limit, offset int32) (*ListAppsResponse, error) {
@@ -495,17 +504,23 @@ func (a *QuicBaaSIAMAdapter) ListApps(ctx context.Context, tenantID string, limi
 }
 
 func (a *QuicBaaSIAMAdapter) UpdateApp(ctx context.Context, tenantID, clientID string, req *iamsdk.UpdateAppRequest) (*iamsdk.Application, error) {
+	if _, err := a.GetApp(ctx, tenantID, clientID); err != nil {
+		return nil, err
+	}
 	return a.client.App().Update(ctx, tenantID, clientID, req)
 }
 
 func (a *QuicBaaSIAMAdapter) DeleteApp(ctx context.Context, tenantID, clientID string) error {
+	if _, err := a.GetApp(ctx, tenantID, clientID); err != nil {
+		return err
+	}
 	return a.client.App().Delete(ctx, tenantID, clientID)
 }
 
 func (a *QuicBaaSIAMAdapter) RotateAppSecret(ctx context.Context, tenantID, clientID string) (*RotateSecretResponse, error) {
 	// The upstream rotate reply carries no name: fetch the app first, which
-	// also refuses a missing app before any secret rotates.
-	app, err := a.client.App().Get(ctx, tenantID, clientID)
+	// also refuses a missing or foreign app before any secret rotates.
+	app, err := a.GetApp(ctx, tenantID, clientID)
 	if err != nil {
 		return nil, err
 	}
