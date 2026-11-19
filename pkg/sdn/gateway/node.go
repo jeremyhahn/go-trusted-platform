@@ -167,7 +167,9 @@ func (g *Gateway) RegisterServiceHandler(handler ServiceHandler) error {
 // Start starts the gateway and activates all configured services. When a
 // handler fails to start, the services already started are rolled back; a
 // failed handler that still holds cleanup (CleanupPending), and a started
-// one whose rollback Stop fails, is recorded so that Stop finishes it.
+// one whose rollback Stop fails, is recorded so that Stop finishes it. While
+// such cleanup is pending, the services started earlier (the host firewall
+// among them) and the pipeline stay up until Stop finishes the cleanup.
 func (g *Gateway) Start(ctx context.Context) error {
 	if !g.state.CompareAndSwap(uint32(GatewayStateStopped), uint32(GatewayStateInitializing)) {
 		currentState := GatewayState(g.state.Load())
@@ -205,9 +207,14 @@ func (g *Gateway) Start(ctx context.Context) error {
 				g.recordCleanupPending(name)
 			}
 			// Rollback: stop already started services
-			g.rollbackStartedServices(ctx)
+			kept := g.rollbackStartedServices(ctx)
 			g.state.Store(uint32(GatewayStateError))
 			startErr := namedStartError(name, err)
+			if kept {
+				// The kept services gate out of the pipeline; Stop removes
+				// it after them.
+				return &ErrStartupFailed{GatewayID: g.config.ID, Phase: "service-start", Cause: startErr}
+			}
 			if rmErr := g.removePipeline(ctx); rmErr != nil {
 				// The service failure is the cause the operator acts on; the
 				// pipeline left behind is reported beside it, not instead.
@@ -242,26 +249,48 @@ func namedStartError(name string, err error) error {
 	return &ErrServiceStartFailed{Service: name, Cause: err}
 }
 
-// rollbackStartedServices stops any services that were already started during a failed Start.
-func (g *Gateway) rollbackStartedServices(ctx context.Context) {
+// rollbackStartedServices stops any services that were already started
+// during a failed Start, in reverse order. When cleanup is pending (the
+// failed handler kept some, or a rollback Stop fails), it stops nothing more:
+// the services started earlier stay up, and kept is true, until Stop
+// finishes the pending cleanup and then stops them.
+func (g *Gateway) rollbackStartedServices(ctx context.Context) (kept bool) {
 	g.mu.Lock()
 	order := make([]string, len(g.activeOrder))
 	copy(order, g.activeOrder)
+	pending := len(g.cleanupPending) > 0
 	g.mu.Unlock()
+
+	// The failed handler still holds cleanup (an FHRP VIP still installed):
+	// the services started before it, the host firewall among them, stay up
+	// until Stop finishes that cleanup.
+	if pending {
+		return true
+	}
 
 	// Stop in reverse order. The start error is what the caller sees; a
 	// backend that will not stop during rollback is logged so the failure is
-	// still visible.
+	// still visible, and the rollback stops there.
 	logger := g.config.hostRuntime().Logger
 	for i := len(order) - 1; i >= 0; i-- {
 		name := order[i]
-		if handler, ok := g.serviceHandlers[name]; ok {
-			if err := handler.Stop(ctx); err != nil {
-				logger.Warn("gateway: rollback stop failed", slog.String("service", name), slog.Any("error", err))
-				// The handler keeps what it could not release; Stop
-				// retries it.
-				g.recordCleanupPending(name)
+		handler, ok := g.serviceHandlers[name]
+		if !ok {
+			continue
+		}
+		if err := handler.Stop(ctx); err != nil {
+			logger.Warn("gateway: rollback stop failed", slog.String("service", name), slog.Any("error", err))
+			// The handler keeps what it could not release; Stop retries
+			// it, then stops the services started before it.
+			g.recordCleanupPending(name)
+			g.mu.Lock()
+			g.activeOrder = append([]string(nil), order[:i]...)
+			g.node.ActiveServices = make(map[string]bool, i)
+			for _, earlier := range g.activeOrder {
+				g.node.ActiveServices[earlier] = true
 			}
+			g.mu.Unlock()
+			return true
 		}
 	}
 
@@ -269,6 +298,7 @@ func (g *Gateway) rollbackStartedServices(ctx context.Context) {
 	g.node.ActiveServices = make(map[string]bool)
 	g.activeOrder = nil
 	g.mu.Unlock()
+	return false
 }
 
 // recordCleanupPending adds a handler whose failed Start, or whose failed
