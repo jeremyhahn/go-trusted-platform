@@ -105,6 +105,39 @@ type Gateway struct {
 }
 
 // NewGateway creates a new gateway with the given configuration.
+// fhrpDatapathServices are the services of the process that holds the
+// datapath and the FHRP speaker: the datapath row of the supervisor's class
+// table (process/class.go), the one supervised process that keeps
+// CAP_NET_ADMIN and owns the fhrp state directory.
+var fhrpDatapathServices = []string{
+	ServiceFirewall,
+	ServiceNAT,
+	ServiceLoadBalancer,
+	ServiceNAT64,
+	ServiceHostFW,
+	ServiceTunnels,
+	ServiceFHRP,
+	ServiceOverlay,
+}
+
+// ownsFHRPAddresses reports whether this process holds the FHRP virtual
+// addresses, and so sweeps the VIP inventory at Start: a single-process
+// gateway does, a supervisor whose FHRP runs in a child does not, and a
+// child does only when it hosts the datapath's services. The routing,
+// proxy, VPN and parser children drop their credentials before Start and
+// never touch the inventory.
+func (g *Gateway) ownsFHRPAddresses() bool {
+	if g.supervises(ServiceFHRP) {
+		return false
+	}
+	if len(g.config.HostedServices) == 0 {
+		return true
+	}
+	return slices.ContainsFunc(g.config.HostedServices, func(s string) bool {
+		return slices.Contains(fhrpDatapathServices, s)
+	})
+}
+
 func NewGateway(config *GatewayConfig) (*Gateway, error) {
 	if config == nil {
 		return nil, ErrConfigNil
@@ -187,10 +220,14 @@ func (g *Gateway) Start(ctx context.Context) error {
 
 	// VIPs a crashed predecessor left for FHRP groups since removed go
 	// before any service starts, so neither ARP/ND nor the host firewall
-	// ever sees an address no runner owns.
-	if err := sweepRemovedFHRPGroups(g.config); err != nil {
-		g.state.Store(uint32(GatewayStateStopped))
-		return &ErrStartupFailed{GatewayID: g.config.ID, Phase: "fhrp-sweep", Cause: err}
+	// ever sees an address no runner owns. Only the process that owns the
+	// datapath and FHRP sweeps: the other children have dropped the
+	// credentials the inventory and the addresses need.
+	if g.ownsFHRPAddresses() {
+		if err := sweepRemovedFHRPGroups(g.config); err != nil {
+			g.state.Store(uint32(GatewayStateStopped))
+			return &ErrStartupFailed{GatewayID: g.config.ID, Phase: "fhrp-sweep", Cause: err}
+		}
 	}
 
 	// The base pipeline goes in before any service handler: every datapath
