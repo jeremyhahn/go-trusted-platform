@@ -16,6 +16,7 @@ package vpn
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/netip"
 	"slices"
@@ -43,9 +44,13 @@ func (s *Service) Restore(ctx context.Context) error {
 	}
 	var errs []error
 	if err := s.reconcilePeers(ctx, leases); err != nil {
+		// An orphan peer may still hold its address: the reclaim waits
+		// for the retry that reconciles it (see retryPeerReconcile).
+		s.oweReclaim()
 		errs = append(errs, err)
-	} else {
-		s.reclaimOrphanAddresses(ctx, leases)
+	} else if err := s.reclaimOrphanAddresses(ctx); err != nil {
+		s.logger.Warn("vpn.restore: orphan address reclaim incomplete; a sweep retries it", slog.Any("error", err))
+		s.oweReclaim()
 	}
 	for _, l := range leases {
 		if err := s.restore(ctx, l); err != nil {
@@ -99,18 +104,52 @@ func (s *Service) reconcilePeers(ctx context.Context, leases []*Lease) error {
 // leases (reconcilePeers succeeded), its peer is gone and the address is free
 // to go back. A pool, list or release failure is logged and the allocation
 // stays held for the next restart.
-func (s *Service) reclaimOrphanAddresses(ctx context.Context, leases []*Lease) {
+func (s *Service) reclaimOrphanAddresses(ctx context.Context) error {
 	s.enrolGate.Lock()
 	defer s.enrolGate.Unlock()
+	return s.reclaimOrphanAddressesLocked(ctx)
+}
+
+// ErrOrphanReclaimFailed reports that the orphan addresses of this
+// gateway's lease pool could not all be listed or released; the reclaim
+// stays owed and a later Sweep retries it.
+type ErrOrphanReclaimFailed struct {
+	// Address is the allocation whose release failed; invalid when the
+	// pool or its allocations could not be read.
+	Address netip.Addr
+	Cause   error
+}
+
+func (e *ErrOrphanReclaimFailed) Error() string {
+	if e.Address.IsValid() {
+		return fmt.Sprintf("vpn: orphan address %s not reclaimed: %v", e.Address, e.Cause)
+	}
+	return fmt.Sprintf("vpn: orphan addresses not reclaimed: %v", e.Cause)
+}
+
+func (e *ErrOrphanReclaimFailed) Unwrap() error { return e.Cause }
+
+// reclaimOrphanAddressesLocked releases each active allocation in the
+// lease pool that this gateway provably wrote (tagged vpn and with its
+// exact owner tag) and that neither a stored lease nor an owed peer
+// removal holds. A gateway with no owner tag reclaims nothing; an
+// allocation without one is never reclaimed. The caller holds enrolGate.
+func (s *Service) reclaimOrphanAddressesLocked(ctx context.Context) error {
+	owner := s.ownerTag()
+	if owner == "" {
+		return nil
+	}
+	leases, err := s.deps.Leases.List(ctx)
+	if err != nil {
+		return &ErrLeaseStoreUnavailable{Cause: err}
+	}
 	pool, err := s.deps.IPAM.GetPoolByName(ctx, s.cfg.Pool)
 	if err != nil {
-		s.logger.Warn("vpn.restore: no lease pool to reclaim orphan addresses from", slog.Any("error", err))
-		return
+		return &ErrOrphanReclaimFailed{Cause: err}
 	}
 	allocs, err := s.deps.IPAM.GetAllocationsByPool(ctx, pool.ID)
 	if err != nil {
-		s.logger.Warn("vpn.restore: could not list the lease pool's allocations", slog.Any("error", err))
-		return
+		return &ErrOrphanReclaimFailed{Cause: err}
 	}
 	held := make(map[netip.Addr]bool, len(leases))
 	for _, l := range leases {
@@ -118,18 +157,33 @@ func (s *Service) reclaimOrphanAddresses(ctx context.Context, leases []*Lease) {
 			held[l.Address.Addr()] = true
 		}
 	}
+	s.mu.Lock()
+	for _, owed := range s.peerRetry {
+		for _, l := range owed {
+			if l.Address.IsValid() {
+				held[l.Address.Addr()] = true
+			}
+		}
+	}
+	s.mu.Unlock()
+	var first error
 	for _, alloc := range allocs {
-		if alloc.Status != ipam.AllocationStatusActive || !slices.Contains(alloc.Tags, "vpn") || held[alloc.IP] {
+		if alloc.Status != ipam.AllocationStatusActive || held[alloc.IP] ||
+			!slices.Contains(alloc.Tags, "vpn") || !slices.Contains(alloc.Tags, owner) {
 			continue
 		}
 		if err := s.deps.IPAM.Release(ctx, alloc.IP); err != nil {
 			s.logger.Warn("vpn.restore: orphan address release failed",
 				slog.String("ip", alloc.IP.String()), slog.String("device", alloc.DeviceID), slog.Any("error", err))
+			if first == nil {
+				first = &ErrOrphanReclaimFailed{Address: alloc.IP, Cause: err}
+			}
 			continue
 		}
 		s.logger.Info("vpn.restore.address.reclaim",
 			slog.String("ip", alloc.IP.String()), slog.String("device", alloc.DeviceID))
 	}
+	return first
 }
 
 // reconcilePlane removes every peer of one hosted plane whose lease is not
@@ -174,8 +228,9 @@ func (s *Service) retryPeerReconcile(ctx context.Context) {
 	s.mu.Lock()
 	due := s.peerRetry
 	s.peerRetry = nil
+	owed := s.reclaimOwed
 	s.mu.Unlock()
-	if len(due) == 0 {
+	if len(due) == 0 && !owed {
 		return
 	}
 	s.enrolGate.Lock()
@@ -192,6 +247,7 @@ func (s *Service) retryPeerReconcile(ctx context.Context) {
 	for _, l := range leases {
 		stored[l.ID] = true
 	}
+	reconciled := true
 	for kind, held := range due {
 		plane, ok := s.deps.DataPlanes[kind]
 		if !ok {
@@ -211,6 +267,7 @@ func (s *Service) retryPeerReconcile(ctx context.Context) {
 		if err := reconcilePlane(ctx, kind, r, leases, except); err != nil {
 			s.logger.Warn("vpn: peer reconciliation failed again", slog.String("data_plane", string(kind)), slog.Any("error", err))
 			s.owePeerRetry(kind, held...)
+			reconciled = false
 			continue
 		}
 		for _, l := range held {
@@ -220,6 +277,25 @@ func (s *Service) retryPeerReconcile(ctx context.Context) {
 			s.releaseOwedAddress(ctx, kind, l)
 		}
 	}
+	// The reclaim waits until every plane reconciles: an orphan peer of a
+	// plane still owed may hold an address no lease records.
+	if !owed || !reconciled {
+		return
+	}
+	if err := s.reclaimOrphanAddressesLocked(ctx); err != nil {
+		s.logger.Warn("vpn: orphan address reclaim failed again", slog.Any("error", err))
+		return
+	}
+	s.mu.Lock()
+	s.reclaimOwed = false
+	s.mu.Unlock()
+}
+
+// oweReclaim records that orphan addresses still wait to be reclaimed.
+func (s *Service) oweReclaim() {
+	s.mu.Lock()
+	s.reclaimOwed = true
+	s.mu.Unlock()
 }
 
 // releaseOwedAddress releases the address of an owed lease whose peer is

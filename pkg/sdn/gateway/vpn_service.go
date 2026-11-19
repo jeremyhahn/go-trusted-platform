@@ -74,8 +74,12 @@ func buildManagementVPN(g *Gateway) (backedService, error) {
 	if leases == nil {
 		leases = vpn.NewMemoryLeaseStore()
 	}
+	vcfg := cfg.Config
 	var projection *projectedLeaseStore
 	if control, journal := g.vpnLeaseControlSet(); control != nil {
+		if id, ok := control.(gatewayIdentity); ok {
+			vcfg.GatewayID = id.GatewayID()
+		}
 		if journal == nil {
 			return nil, &ErrServiceUnavailable{Service: ServiceManagementVPN,
 				Reason: "a lease control plane needs a revocation journal, or a restart could reinstate a revoked lease"}
@@ -110,7 +114,7 @@ func buildManagementVPN(g *Gateway) (backedService, error) {
 		Leases:     leases,
 		Audit:      rt.Audit,
 		Logger:     logger,
-	}, cfg.Config)
+	}, vcfg)
 	if err != nil {
 		return nil, &ErrServiceStartFailed{Service: ServiceManagementVPN,
 			Cause: errors.Join(err, stopPlanes(context.Background(), managed))}

@@ -71,6 +71,10 @@ type Service struct {
 	// retryPeerReconcile). A key with a nil slice is a failed
 	// reconciliation alone. Guarded by mu.
 	peerRetry map[DataPlaneKind][]*Lease
+	// reclaimOwed records that orphan addresses still wait to be reclaimed
+	// (a reconciliation or a reclaim failed); retryPeerReconcile pays it
+	// once every plane reconciles. Guarded by mu.
+	reclaimOwed bool
 
 	// enrolments is the control plane's peer set; nil until the first
 	// delivery, which refuses every admission.

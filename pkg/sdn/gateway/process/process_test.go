@@ -1861,10 +1861,13 @@ func TestCrashLoop_TheGiveUpRegistersItsWithdrawalUnderTheSameLock(t *testing.T)
 	})
 	ctx := testContext(t)
 
-	supervisor.mu.Lock()
-	proc := supervisor.processes["vpn"]
-	require.NotNil(t, proc)
+	def, err := DefinitionForService(gateway.ServiceManagementVPN)
+	require.NoError(t, err)
+	require.True(t, def.FollowsDatapath)
+	proc := &supervised{def: def, wanted: map[string]bool{}, socket: supervisor.socketPath(def.Name)}
 	proc.restarts = []time.Time{clock.Now()}
+	supervisor.mu.Lock()
+	supervisor.processes[def.Name] = proc
 	supervisor.mu.Unlock()
 
 	failure := errors.New("signal: killed")

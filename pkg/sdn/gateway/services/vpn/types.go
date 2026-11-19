@@ -222,6 +222,10 @@ type Config struct {
 	// MASQUE is the MASQUE CONNECT-IP plane's settings; required when
 	// DataPlanes offers masque.
 	MASQUE MASQUESettings `yaml:"masque" json:"masque" mapstructure:"masque"`
+	// GatewayID is this gateway's cert-bound control-plane identity. It
+	// owner-tags every lease allocation; empty means no owner tag is
+	// written and no orphan address is reclaimed.
+	GatewayID string `yaml:"-" json:"-" mapstructure:"-"`
 }
 
 // WireGuardSettings are the `wireguard.*` keys.

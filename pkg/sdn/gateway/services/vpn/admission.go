@@ -541,13 +541,26 @@ func (s *Service) allocationRequest(ctx context.Context, tenantID, deviceID stri
 	if err != nil {
 		return nil, &ErrPoolExhausted{Pool: s.cfg.Pool, Cause: err}
 	}
+	tags := []string{"vpn", "tenant:" + tenantID}
+	if owner := s.ownerTag(); owner != "" {
+		tags = append(tags, owner)
+	}
 	return &ipam.AllocationRequest{
 		PoolID:        pool.ID,
 		DeviceID:      deviceID,
 		Description:   "vpn lease",
-		Tags:          []string{"vpn", "tenant:" + tenantID},
+		Tags:          tags,
 		LeaseDuration: s.cfg.LeaseTTL,
 	}, nil
+}
+
+// ownerTag is the allocation tag that proves this gateway wrote an
+// allocation, or "" when the gateway has no cert-bound identity.
+func (s *Service) ownerTag() string {
+	if s.cfg.GatewayID == "" {
+		return ""
+	}
+	return "gateway:" + s.cfg.GatewayID
 }
 
 // zonesAllowed is exported for the daemon's authorization layer: the lease's
