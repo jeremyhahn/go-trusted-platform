@@ -181,6 +181,9 @@ export default function KmsOperationsPage() {
   };
 
   const onVerifyHmac = async () => {
+    // A verdict belongs to the inputs it was computed for (#2024 Codex P1):
+    // clear it before the call so a failed request leaves no stale verdict.
+    setVResult(null);
     const res = await ops.verifyHmac(vKey, vData, vMac, vHash);
     if (res !== null) {
       setVResult(res ? "HMAC valid" : "HMAC invalid");
@@ -328,10 +331,42 @@ export default function KmsOperationsPage() {
           description="Check an HMAC (base64) against the data"
           result={vResult}
         >
-          <Field id="verify-hmac-key" label="Key name" value={vKey} onChange={setVKey} />
-          <Field id="verify-hmac-data" label="Data" value={vData} onChange={setVData} />
-          <Field id="verify-hmac-mac" label="HMAC (base64)" value={vMac} onChange={setVMac} />
-          <Field id="verify-hmac-hash" label="Hash algorithm" value={vHash} onChange={setVHash} />
+          <Field
+            id="verify-hmac-key"
+            label="Key name"
+            value={vKey}
+            onChange={(v) => {
+              setVKey(v);
+              setVResult(null);
+            }}
+          />
+          <Field
+            id="verify-hmac-data"
+            label="Data"
+            value={vData}
+            onChange={(v) => {
+              setVData(v);
+              setVResult(null);
+            }}
+          />
+          <Field
+            id="verify-hmac-mac"
+            label="HMAC (base64)"
+            value={vMac}
+            onChange={(v) => {
+              setVMac(v);
+              setVResult(null);
+            }}
+          />
+          <Field
+            id="verify-hmac-hash"
+            label="Hash algorithm"
+            value={vHash}
+            onChange={(v) => {
+              setVHash(v);
+              setVResult(null);
+            }}
+          />
           <Button onClick={onVerifyHmac} disabled={ops.busy || !vKey || !vData || !vMac}>
             Verify HMAC
           </Button>
