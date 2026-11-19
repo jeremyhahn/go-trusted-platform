@@ -79,4 +79,25 @@ describe('KmsOperationsPage verify HMAC verdict', () => {
     expect(verifyHmac).toHaveBeenCalledTimes(2);
     expect(screen.queryByTestId('verify-hmac-result')).toBeNull();
   });
+
+  // #2024 Codex round 2 P1: a response that arrives after an edit belongs to
+  // the old inputs and must not show a verdict for the new ones.
+  it('drops a verdict that arrives after an input changed', async () => {
+    let resolve: (v: boolean) => void = () => {};
+    verifyHmac.mockReturnValueOnce(
+      new Promise<boolean>((r) => {
+        resolve = r;
+      }),
+    );
+    render(<KmsOperationsPage />);
+    const card = fillVerify();
+    await clickVerify(card);
+    expect(verifyHmac).toHaveBeenCalledTimes(1);
+
+    fireEvent.change(card.getByLabelText('Data'), { target: { value: 'changed' } });
+    await act(async () => {
+      resolve(true);
+    });
+    expect(screen.queryByTestId('verify-hmac-result')).toBeNull();
+  });
 });

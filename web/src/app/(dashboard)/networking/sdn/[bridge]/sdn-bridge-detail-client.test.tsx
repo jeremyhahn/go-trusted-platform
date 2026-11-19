@@ -232,10 +232,12 @@ describe('SDNBridgeDetailClient policy apply and policy identity', () => {
     const values = Array.from(select.options).map((o) => o.value);
     expect(values).not.toContain('POLICY_RULE_ACTION_RATE_LIMIT');
     expect(values).not.toContain('POLICY_RULE_ACTION_MIRROR');
+    // #2024 Codex round 2 P1: the form has no redirect destination, and a
+    // REDIRECT rule without one installs no actions (a drop).
+    expect(values).not.toContain('POLICY_RULE_ACTION_REDIRECT');
     for (const v of [
       'POLICY_RULE_ACTION_ALLOW',
       'POLICY_RULE_ACTION_DENY',
-      'POLICY_RULE_ACTION_REDIRECT',
       'POLICY_RULE_ACTION_LOG',
     ]) {
       expect(values).toContain(v);
