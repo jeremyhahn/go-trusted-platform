@@ -305,7 +305,8 @@ type runner struct {
 	timer Timer
 	// owned holds the prefixes this runner added or adopted; Release
 	// deletes only these. A priority-255 owner's preexisting address is
-	// never in it, so it stays; a non-owner adopts any VIP it finds (one a
+	// never in it, so it stays, unless the inventory records that this
+	// node installed it (restoreOwned); a non-owner adopts any VIP it finds (one a
 	// crashed master left), so it is released on demotion and Stop (#1716).
 	owned map[netip.Prefix]bool
 	// stale holds prefixes of another length that dropStaleVIPs found and
@@ -339,6 +340,12 @@ func (s *Speaker) startGroup(ctx context.Context, gc GroupConfig) (*runner, erro
 		return nil, &ErrTransportFailed{VRID: gc.VRID, Interface: gc.Interface, Operation: "open", Cause: err}
 	}
 	r.conn = conn
+	// The inventory's record comes first: an address this node installed
+	// is never classified as an owner's preexisting one (Claim).
+	if err := r.restoreOwned(g); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
 	if err := r.dropStaleVIPs(g); err != nil {
 		// Nothing is running yet: close the socket and fail the start, so
 		// Start rolls back the groups already started. A stale VIP that
@@ -433,6 +440,29 @@ func (r *runner) dropStaleVIPs(g *Group) error {
 	}
 	if stale {
 		return r.Release(g)
+	}
+	return nil
+}
+
+// restoreOwned marks as owned every configured prefix of g the inventory
+// says this node installed, so a runner restarted after a crash releases on
+// demotion or Stop the VIPs its predecessor added, rather than Claim taking
+// one still on the interface for a priority-255 owner's permanent address.
+// Without an inventory nothing is restored.
+func (r *runner) restoreOwned(g *Group) error {
+	entries, err := r.speaker.deps.Inventory.Entries()
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.Interface != g.cfg.Interface || e.VRID != g.cfg.VRID {
+			continue
+		}
+		for _, p := range g.prefixes {
+			if p == e.Prefix {
+				r.owned[p] = true
+			}
+		}
 	}
 	return nil
 }
