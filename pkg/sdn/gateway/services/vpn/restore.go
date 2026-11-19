@@ -165,6 +165,9 @@ func (s *Service) reclaimOrphanAddressesLocked(ctx context.Context) error {
 			}
 		}
 	}
+	for addr := range s.tearingDown {
+		held[addr] = true
+	}
 	s.mu.Unlock()
 	var first error
 	for _, alloc := range allocs {
@@ -223,8 +226,18 @@ func (s *Service) owePeerRetry(kind DataPlaneKind, held ...*Lease) {
 // leases, under the enrolment gate so no admission is between installing
 // a peer and storing its lease. Once a plane's reconciliation succeeds, the
 // addresses of the rejected leases that waited on it are released; a
-// failure keeps the obligation for the next sweep.
+// failure keeps the obligation for the next sweep. Obligations are
+// detached only under the gate: until then the owed addresses stay in
+// peerRetry, where a concurrent orphan reclaim sees them as held.
 func (s *Service) retryPeerReconcile(ctx context.Context) {
+	s.mu.Lock()
+	pending := len(s.peerRetry) > 0 || s.reclaimOwed
+	s.mu.Unlock()
+	if !pending {
+		return
+	}
+	s.enrolGate.Lock()
+	defer s.enrolGate.Unlock()
 	s.mu.Lock()
 	due := s.peerRetry
 	s.peerRetry = nil
@@ -233,8 +246,6 @@ func (s *Service) retryPeerReconcile(ctx context.Context) {
 	if len(due) == 0 && !owed {
 		return
 	}
-	s.enrolGate.Lock()
-	defer s.enrolGate.Unlock()
 	leases, err := s.deps.Leases.List(ctx)
 	if err != nil {
 		s.logger.Warn("vpn: peer reconciliation retry could not list leases", slog.Any("error", err))
@@ -247,6 +258,14 @@ func (s *Service) retryPeerReconcile(ctx context.Context) {
 	for _, l := range leases {
 		stored[l.ID] = true
 	}
+	// An address a stored lease holds belongs to that lease, whatever
+	// owed cleanup still names it.
+	inUse := make(map[netip.Addr]bool, len(leases))
+	for _, l := range leases {
+		if l.Address.IsValid() {
+			inUse[l.Address.Addr()] = true
+		}
+	}
 	reconciled := true
 	for kind, held := range due {
 		plane, ok := s.deps.DataPlanes[kind]
@@ -255,7 +274,7 @@ func (s *Service) retryPeerReconcile(ctx context.Context) {
 		}
 		r, ok := plane.(PeerReconciler)
 		if !ok {
-			s.retryPeerRemovals(ctx, kind, plane, held, stored)
+			s.retryPeerRemovals(ctx, kind, plane, held, stored, inUse)
 			continue
 		}
 		// A held lease was rejected: its record may still be stored when
@@ -274,7 +293,7 @@ func (s *Service) retryPeerReconcile(ctx context.Context) {
 			if stored[l.ID] {
 				continue
 			}
-			s.releaseOwedAddress(ctx, kind, l)
+			s.releaseOwedAddress(ctx, kind, l, inUse)
 		}
 	}
 	// The reclaim waits until every plane reconciles: an orphan peer of a
@@ -301,8 +320,16 @@ func (s *Service) oweReclaim() {
 // releaseOwedAddress releases the address of an owed lease whose peer is
 // gone and whose record is no longer stored. The retry set is the only
 // place that still knows the allocation, so a failed lookup or release
-// puts the lease back on it for a later sweep.
-func (s *Service) releaseOwedAddress(ctx context.Context, kind DataPlaneKind, l *Lease) {
+// puts the lease back on it for a later sweep. The caller holds enrolGate,
+// so no admission is in flight: a stored lease is the only way a newer
+// admission holds the address, and then the obligation is dropped (a
+// release whose response was lost may already have freed it once).
+func (s *Service) releaseOwedAddress(ctx context.Context, kind DataPlaneKind, l *Lease, inUse map[netip.Addr]bool) {
+	if l.Address.IsValid() && inUse[l.Address.Addr()] {
+		s.logger.Info("vpn: owed address is held by a stored lease; nothing to release",
+			slog.String("data_plane", string(kind)), slog.String("lease", string(l.ID)))
+		return
+	}
 	h, err := s.holdsAddress(ctx, l)
 	if err == nil && h {
 		err = s.deps.IPAM.Release(ctx, l.Address.Addr())
@@ -317,7 +344,7 @@ func (s *Service) releaseOwedAddress(ctx context.Context, kind DataPlaneKind, l 
 // retryPeerRemovals retries, on a plane that cannot reconcile, the removal
 // of each owed peer; a peer removed (or already gone) releases its address
 // unless its lease is still stored, and a failure stays owed.
-func (s *Service) retryPeerRemovals(ctx context.Context, kind DataPlaneKind, plane DataPlane, held []*Lease, stored map[LeaseID]bool) {
+func (s *Service) retryPeerRemovals(ctx context.Context, kind DataPlaneKind, plane DataPlane, held []*Lease, stored map[LeaseID]bool, inUse map[netip.Addr]bool) {
 	for _, l := range held {
 		err := plane.RemovePeer(ctx, l.ID)
 		var nf *ErrLeaseNotFound
@@ -330,7 +357,7 @@ func (s *Service) retryPeerRemovals(ctx context.Context, kind DataPlaneKind, pla
 		if stored[l.ID] {
 			continue
 		}
-		s.releaseOwedAddress(ctx, kind, l)
+		s.releaseOwedAddress(ctx, kind, l, inUse)
 	}
 }
 

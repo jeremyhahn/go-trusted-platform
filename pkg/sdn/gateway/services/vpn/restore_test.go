@@ -19,6 +19,8 @@ import (
 	"io"
 	"log/slog"
 	"net/netip"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -474,6 +476,323 @@ func TestRestore_ReclaimSkipsAnAddressAnOwedRemovalStillHolds(t *testing.T) {
 
 	require.NoError(t, h.svc.reclaimOrphanAddresses(ctx))
 	assert.Equal(t, "mini-1", h.holder(t, lease.Address), "an owed peer removal still holds its address")
+}
+
+// revokeInFlight starts a revocation of lease and returns once the
+// revocation has deleted the lease and is held in RemovePeer, with the
+// channel its result arrives on.
+func (h *restoreHarness) revokeInFlight(t *testing.T, lease *Lease) (*pause, <-chan error) {
+	t.Helper()
+	ctx := context.Background()
+	p := newPause()
+	h.plane.mu.Lock()
+	h.plane.removePause = p
+	h.plane.mu.Unlock()
+	done := make(chan error, 1)
+	go func() { done <- h.svc.Revoke(ctx, lease.ID, RevokeClient) }()
+	select {
+	case <-p.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Revoke never reached RemovePeer")
+	}
+	h.plane.mu.Lock()
+	h.plane.removePause = nil
+	h.plane.mu.Unlock()
+	stored, err := h.store.List(ctx)
+	require.NoError(t, err)
+	require.Empty(t, stored, "the lease is deleted before its peer removal")
+	return p, done
+}
+
+func TestReclaimOrphans_RevokeInFlightKeepsAddress(t *testing.T) {
+	ctx := context.Background()
+	h := newRestoreHarness(t)
+	lease := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
+	h.allocateVPN(t, "mini-1", lease.Address)
+	h.start(t)
+	require.NoError(t, h.svc.Restore(ctx))
+
+	// Reclaim started during the revocation runs after it, so it never
+	// sees the address between the lease deletion and its release.
+	p, done := h.revokeInFlight(t, lease)
+	require.NoError(t, h.reclaimAfterRevoke(t, p, done))
+	assert.Empty(t, h.holder(t, lease.Address), "the settled revocation releases its address")
+
+	// The address goes to a replacement; neither a late release nor a
+	// reclaim may take it from it.
+	h.allocateVPN(t, "mini-2", lease.Address)
+	h.seed(t, "lease-2", "mini-2", "100.64.0.2/32")
+	require.NoError(t, h.svc.reclaimOrphanAddresses(ctx))
+	assert.Equal(t, "mini-2", h.holder(t, lease.Address), "the address was released exactly once")
+}
+
+// pausingAllocator is the shared pool seen through one gateway: once
+// armed, its next GetAllocationsByPool returns its snapshot and then
+// blocks until resume is closed, and it records every Release of watch
+// made after the address was reassigned.
+type pausingAllocator struct {
+	ipam.Allocator
+	armed      atomic.Bool
+	paused     chan struct{}
+	resume     chan struct{}
+	once       sync.Once
+	watch      netip.Addr
+	reassigned atomic.Bool
+	mu         sync.Mutex
+	stolen     int
+}
+
+func (p *pausingAllocator) GetAllocationsByPool(ctx context.Context, poolID string) ([]*ipam.Allocation, error) {
+	allocs, err := p.Allocator.GetAllocationsByPool(ctx, poolID)
+	if p.armed.Load() {
+		p.once.Do(func() {
+			close(p.paused)
+			<-p.resume
+		})
+	}
+	return allocs, err
+}
+
+func (p *pausingAllocator) Release(ctx context.Context, ip netip.Addr) error {
+	if ip == p.watch && p.reassigned.Load() {
+		p.mu.Lock()
+		p.stolen++
+		p.mu.Unlock()
+	}
+	return p.Allocator.Release(ctx, ip)
+}
+
+func TestService_OrphanReclaimNeverReleasesAReassignedAddress(t *testing.T) {
+	ctx := context.Background()
+	h := newRestoreHarness(t)
+	lease := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
+	h.allocateVPN(t, "mini-1", lease.Address)
+	shared := &pausingAllocator{
+		Allocator: h.ipam,
+		paused:    make(chan struct{}),
+		resume:    make(chan struct{}),
+		watch:     lease.Address.Addr(),
+	}
+	svc, err := New(Deps{
+		Identity:   &fakeIdentity{},
+		Verifier:   &fakeVerifier{},
+		Posture:    &fakePosture{},
+		Factors:    &fakeFactors{},
+		IPAM:       shared,
+		DataPlanes: map[DataPlaneKind]DataPlane{DataPlaneMASQUE: h.plane},
+		Leases:     h.store,
+		Audit:      &fakeAudit{},
+		Clock:      h.clock,
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}, testConfig())
+	require.NoError(t, err)
+	h.svc = svc
+	h.start(t)
+	require.NoError(t, h.svc.Restore(ctx))
+	require.Equal(t, "mini-1", h.holder(t, lease.Address))
+
+	// A revocation is in flight: its lease is deleted and its peer
+	// removal is paused.
+	p, revoked := h.revokeInFlight(t, lease)
+
+	// Reclaim starts now. It waits behind the revocation (the two are
+	// serialized by enrolGate), so it must not reach GetAllocationsByPool
+	// until the revocation has finished; there it pauses after taking its
+	// snapshot.
+	shared.armed.Store(true)
+	reclaimed := make(chan error, 1)
+	go func() { reclaimed <- h.svc.reclaimOrphanAddresses(ctx) }()
+	select {
+	case <-shared.paused:
+		assert.Fail(t, "reclaim took its snapshot while a revocation was in flight")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	// The revocation settles and releases the address.
+	close(p.release)
+	select {
+	case err := <-revoked:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("revocation never finished")
+	}
+	select {
+	case <-shared.paused:
+	case <-time.After(10 * time.Second):
+		t.Fatal("reclaim never reached GetAllocationsByPool")
+	}
+
+	// While reclaim is paused, another gateway on the shared pool takes
+	// the freed address with the same tags.
+	h.allocateVPN(t, "mini-b", lease.Address)
+	shared.reassigned.Store(true)
+
+	close(shared.resume)
+	select {
+	case err := <-reclaimed:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("reclaim never finished")
+	}
+
+	shared.mu.Lock()
+	stolen := shared.stolen
+	shared.mu.Unlock()
+	assert.Zero(t, stolen, "reclaim never releases the reassigned allocation")
+	assert.Equal(t, "mini-b", h.holder(t, lease.Address), "the other gateway's allocation is still active")
+}
+
+func TestReclaimOrphans_RevokeInFlightFailedRemovalKeepsAddress(t *testing.T) {
+	ctx := context.Background()
+	h := newRestoreHarness(t)
+	lease := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
+	h.allocateVPN(t, "mini-1", lease.Address)
+	h.start(t)
+	require.NoError(t, h.svc.Restore(ctx))
+
+	// Reclaim started during the revocation runs after it: the failed
+	// removal is owed through peerRetry by then and holds the address.
+	p, done := h.revokeInFlight(t, lease)
+	h.plane.failRemovals(errors.New("datapath unreachable"))
+	require.Error(t, h.reclaimAfterRevoke(t, p, done), "the peer removal failed")
+	assert.Equal(t, "mini-1", h.holder(t, lease.Address), "a reclaim behind the revocation keeps its address")
+	require.True(t, h.plane.hosts(lease.ID), "the revoked peer is still installed")
+
+	require.NoError(t, h.svc.reclaimOrphanAddresses(ctx))
+	assert.Equal(t, "mini-1", h.holder(t, lease.Address), "the owed removal holds the address through peerRetry")
+}
+
+// lostReleaseAllocator commits a Release and, when armed, loses its
+// response: the caller sees an error although the address was freed.
+type lostReleaseAllocator struct {
+	ipam.Allocator
+	lose atomic.Bool
+}
+
+func (a *lostReleaseAllocator) Release(ctx context.Context, ip netip.Addr) error {
+	if err := a.Allocator.Release(ctx, ip); err != nil {
+		return err
+	}
+	if a.lose.CompareAndSwap(true, false) {
+		return errors.New("response lost")
+	}
+	return nil
+}
+
+func TestRetry_ALostReleaseResponseNeverFreesAReadmittedLease(t *testing.T) {
+	ctx := context.Background()
+	h := newRestoreHarness(t)
+	lossy := &lostReleaseAllocator{Allocator: h.ipam}
+	svc, err := New(Deps{
+		Identity:   &fakeIdentity{},
+		Verifier:   &fakeVerifier{},
+		Posture:    &fakePosture{},
+		Factors:    &fakeFactors{},
+		IPAM:       lossy,
+		DataPlanes: map[DataPlaneKind]DataPlane{DataPlaneMASQUE: h.plane},
+		Leases:     h.store,
+		Audit:      &fakeAudit{},
+		Clock:      h.clock,
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}, testConfig())
+	require.NoError(t, err)
+	h.svc = svc
+
+	lease := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
+	lease.Zones = []string{"fabric"}
+	require.NoError(t, h.store.Put(ctx, lease))
+	h.plane.installed[lease.ID] = lease
+	h.allocate(t, "mini-1", lease.Address)
+	h.start(t)
+	h.plane.failRemovals(errors.New("datapath unreachable"))
+	err = h.svc.Restore(ctx)
+	var dropped *ErrLeaseNotRestored
+	require.True(t, errors.As(err, &dropped), "got %v", err)
+
+	// The retried removal succeeds; the release commits but its response
+	// is lost, so lease-1 is owed again.
+	h.plane.failRemovals(nil)
+	lossy.lose.Store(true)
+	h.svc.Sweep(ctx)
+	require.False(t, h.plane.hosts(lease.ID))
+	require.Equal(t, "", h.holder(t, lease.Address), "the release committed")
+
+	// The same device is readmitted at the freed address.
+	h.allocate(t, "mini-1", lease.Address)
+	lease2 := h.seed(t, "lease-2", "mini-1", lease.Address.String())
+	h.plane.mu.Lock()
+	h.plane.installed[lease2.ID] = lease2
+	h.plane.mu.Unlock()
+
+	h.svc.Sweep(ctx)
+	assert.Equal(t, "mini-1", h.holder(t, lease.Address), "the owed cleanup never frees the readmitted lease's address")
+	assert.True(t, h.plane.hosts("lease-2"))
+
+	h.svc.Sweep(ctx)
+	assert.Equal(t, "mini-1", h.holder(t, lease.Address), "the obligation was dropped, not owed again")
+	assert.True(t, h.plane.hosts("lease-2"))
+}
+
+func TestRetry_ReclaimDuringAWaitingRetryKeepsTheOwedAddress(t *testing.T) {
+	ctx := context.Background()
+	h := newRestoreHarness(t)
+	lease := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
+	h.allocateVPN(t, "mini-1", lease.Address)
+	h.start(t)
+	require.NoError(t, h.svc.Restore(ctx))
+	h.forgetAFailedRemoval(t, lease)
+
+	// A retry waits for the gate while another holder of it reclaims.
+	h.svc.enrolGate.RLock()
+	done := make(chan struct{})
+	go func() {
+		h.svc.retryPeerReconcile(ctx)
+		close(done)
+	}()
+	<-time.After(200 * time.Millisecond)
+	err := h.svc.reclaimOrphanAddressesLocked(ctx)
+	assert.NoError(t, err)
+	assert.Equal(t, "mini-1", h.holder(t, lease.Address), "a waiting retry still owes the peer removal")
+	assert.True(t, h.plane.hosts(lease.ID))
+	h.svc.enrolGate.RUnlock()
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the retry never finished")
+	}
+	assert.Equal(t, "mini-1", h.holder(t, lease.Address), "the retry failed again, so the obligation is kept")
+}
+
+// reclaimAfterRevoke starts orphan reclaim while the revocation paused at
+// p is in flight, checks that reclaim waits behind it (the two are
+// serialized by enrolGate), lets the revocation finish and waits for
+// reclaim. It returns the revocation's error.
+func (h *restoreHarness) reclaimAfterRevoke(t *testing.T, p *pause, revoked <-chan error) error {
+	t.Helper()
+	reclaimed := make(chan error, 1)
+	go func() { reclaimed <- h.svc.reclaimOrphanAddresses(context.Background()) }()
+	select {
+	case err := <-reclaimed:
+		close(p.release)
+		<-revoked
+		t.Fatalf("reclaim returned (%v) while a revocation was in flight", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(p.release)
+	var revokeErr error
+	select {
+	case revokeErr = <-revoked:
+	case <-time.After(10 * time.Second):
+		t.Fatal("revocation never finished")
+	}
+	select {
+	case err := <-reclaimed:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("reclaim never finished after the revocation")
+	}
+	return revokeErr
 }
 
 func TestRestore_ReclaimLeavesAnotherGatewaysAllocationAlone(t *testing.T) {
