@@ -15,15 +15,25 @@ package daemon
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"testing"
 
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
+	platform "github.com/jeremyhahn/go-trusted-platform/sdk/go"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	sdkrest "github.com/jeremyhahn/go-trusted-platform/sdk/go/transport/rest"
 )
 
 // recordingManagedService is the fake backend behind the daemon's service
@@ -67,16 +77,82 @@ func (f *recordingManagedService) calls() (starts, stops int) {
 	return f.starts, f.stops
 }
 
+// allowServiceRoutes mounts the service-control routes on s behind a scope
+// guard over servicesTokens, as the daemon mounts them behind restGuard.
+func allowServiceRoutes(t *testing.T, s *RESTServer) {
+	t.Helper()
+	require.NoError(t, s.SetServiceControlHandlers(restapi.NewScopeGuard(servicesTokens, nil, nil)))
+}
+
+// servicesRequest is httptest.NewRequest presenting a bearer that holds
+// platform:read and platform:write.
+func servicesRequest(method, path string, body io.Reader) *http.Request {
+	req := httptest.NewRequest(method, path, body)
+	req.Header.Set("Authorization", "Bearer writer")
+	return req
+}
+
+// serviceTokenScopes maps a bearer token to the scopes it was granted; an
+// unknown token is refused as unauthenticated.
+type serviceTokenScopes map[string][]string
+
+func (s serviceTokenScopes) AuthorizeToken(_ context.Context, token, _, _, _, _ string) (*platformtoken.AuthorizedContext, error) {
+	scopes, ok := s[token]
+	if !ok {
+		return nil, status.Error(codes.Unauthenticated, "unknown token")
+	}
+	return &platformtoken.AuthorizedContext{Subject: token, Scopes: scopes}, nil
+}
+
+// servicesTokens grants the service-control routes' catalog scopes: reader
+// holds platform:read only, writer holds platform:read and platform:write.
+var servicesTokens = serviceTokenScopes{
+	"reader": {"platform:read"},
+	"writer": {"platform:read", "platform:write"},
+}
+
 // connectServicesREST mounts the daemon's real REST router with the fake
 // services registered and returns a PlatformDaemon client over the SDK REST
-// transport (#1947).
+// transport (#1947), presenting a bearer that holds platform:write.
 func connectServicesREST(t *testing.T, services ...*recordingManagedService) platformv1.PlatformDaemonClient {
 	t.Helper()
 	s := newTestRESTServerForPhase35(t)
 	for _, svc := range services {
 		require.NoError(t, s.service.RegisterService(svc))
 	}
-	return platformv1.NewPlatformDaemonClient(connectPhase35REST(t, s.router).Connection())
+	return connectServicesRESTAs(t, s, "writer")
+}
+
+// connectServicesRESTAs mounts the service-control routes behind a scope
+// guard over servicesTokens and returns a PlatformDaemon client over the SDK
+// REST transport presenting token ("" sends no bearer).
+func connectServicesRESTAs(t *testing.T, s *RESTServer, token string) platformv1.PlatformDaemonClient {
+	t.Helper()
+	require.NoError(t, s.SetServiceControlHandlers(restapi.NewScopeGuard(servicesTokens, nil, nil)))
+	server := httptest.NewTLSServer(s.router)
+	t.Cleanup(server.Close)
+
+	opts := []platform.Option{
+		platform.WithRESTAddr(server.URL),
+		platform.WithTLSConfig(phase35ClientTLS(server)),
+	}
+	if token != "" {
+		opts = append(opts, platform.WithBearerToken(token))
+	}
+	conn, err := sdkrest.Connect(context.Background(), platform.NewOptions(opts...))
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := conn.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+	a, ok := conn.(*sdkrest.Adapter)
+	if !ok {
+		t.Fatalf("Connect returned %T, want *rest.Adapter", conn)
+	}
+	return platformv1.NewPlatformDaemonClient(a.Connection())
 }
 
 // TestSDKREST_DaemonServicesRoundTrip drives ListServices, GetServiceStatus,
@@ -183,7 +259,7 @@ func TestSDKREST_DaemonServicesConflictCodes(t *testing.T) {
 	s := newTestRESTServerForPhase35(t)
 	require.NoError(t, s.service.RegisterService(tpm))
 	require.NoError(t, s.service.RegisterService(newOwnedService("compute", true)))
-	client := platformv1.NewPlatformDaemonClient(connectPhase35REST(t, s.router).Connection())
+	client := connectServicesRESTAs(t, s, "writer")
 
 	tpmType := platformv1.ServiceType_SERVICE_TYPE_TPM
 	_, err := client.StopService(ctx, &platformv1.StopServiceRequest{Service: tpmType})
@@ -212,7 +288,7 @@ func TestSDKREST_DaemonRestartOfAStoppedServiceIsRefused(t *testing.T) {
 	tpm := &recordingManagedService{name: "tpm"}
 	s := newTestRESTServerForPhase35(t)
 	require.NoError(t, s.service.RegisterService(tpm))
-	client := platformv1.NewPlatformDaemonClient(connectPhase35REST(t, s.router).Connection())
+	client := connectServicesRESTAs(t, s, "writer")
 
 	tpmType := platformv1.ServiceType_SERVICE_TYPE_TPM
 	_, err := client.RestartService(ctx, &platformv1.RestartServiceRequest{Service: tpmType})
@@ -231,4 +307,109 @@ func TestSDKREST_DaemonRestartOfAStoppedServiceIsRefused(t *testing.T) {
 	starts, stops = tpm.calls()
 	require.Equal(t, 0, starts)
 	require.Equal(t, 0, stops)
+}
+
+// serviceRPCs calls each of the five service-control RPCs on tpm and returns
+// their errors, keyed by RPC name.
+func serviceRPCs(ctx context.Context, client platformv1.PlatformDaemonClient) map[string]error {
+	tpmType := platformv1.ServiceType_SERVICE_TYPE_TPM
+	errs := map[string]error{}
+	_, errs["ListServices"] = client.ListServices(ctx, &platformv1.ListServicesRequest{})
+	_, errs["GetServiceStatus"] = client.GetServiceStatus(ctx, &platformv1.GetServiceStatusRequest{Service: tpmType})
+	_, errs["StartService"] = client.StartService(ctx, &platformv1.StartServiceRequest{Service: tpmType})
+	_, errs["StopService"] = client.StopService(ctx, &platformv1.StopServiceRequest{Service: tpmType})
+	_, errs["RestartService"] = client.RestartService(ctx, &platformv1.RestartServiceRequest{Service: tpmType})
+	return errs
+}
+
+// requireServicesRefused drives every service-control RPC as token and
+// requires each to fail with want before reaching the backend.
+func requireServicesRefused(t *testing.T, token string, want codes.Code) {
+	t.Helper()
+	ctx := context.Background()
+	tpm := &recordingManagedService{name: "tpm"}
+	s := newTestRESTServerForPhase35(t)
+	require.NoError(t, s.service.RegisterService(tpm))
+	client := connectServicesRESTAs(t, s, token)
+
+	for rpc, err := range serviceRPCs(ctx, client) {
+		require.Equal(t, want, status.Code(err), "%s: %v", rpc, err)
+	}
+	starts, stops := tpm.calls()
+	require.Equal(t, 0, starts, "a refused caller starts nothing")
+	require.Equal(t, 0, stops, "a refused caller stops nothing")
+
+	st, err := s.service.GetServiceStatus(ctx, &platformv1.GetServiceStatusRequest{Service: platformv1.ServiceType_SERVICE_TYPE_TPM})
+	require.NoError(t, err)
+	require.Equal(t, platformv1.ServiceStatus_SERVICE_STATUS_STOPPED, st.GetService().GetStatus())
+}
+
+// TestSDKREST_DaemonServicesRefuseACallerWithNoCredential requires every
+// service-control route to answer a caller with no credential 401
+// (Unauthenticated) before reading state or driving the backend.
+func TestSDKREST_DaemonServicesRefuseACallerWithNoCredential(t *testing.T) {
+	requireServicesRefused(t, "", codes.Unauthenticated)
+}
+
+// TestSDKREST_DaemonServicesRefuseAnUnknownBearer requires a bearer the
+// guard cannot verify to be refused as Unauthenticated on every route.
+func TestSDKREST_DaemonServicesRefuseAnUnknownBearer(t *testing.T) {
+	requireServicesRefused(t, "forged", codes.Unauthenticated)
+}
+
+// TestSDKREST_DaemonServicesReadScopeCannotDriveLifecycle requires
+// platform:read to list and read services, and platform:write, as the gRPC
+// catalog does, for start, stop and restart.
+func TestSDKREST_DaemonServicesReadScopeCannotDriveLifecycle(t *testing.T) {
+	ctx := context.Background()
+	tpm := &recordingManagedService{name: "tpm"}
+	s := newTestRESTServerForPhase35(t)
+	require.NoError(t, s.service.RegisterService(tpm))
+	client := connectServicesRESTAs(t, s, "reader")
+
+	errs := serviceRPCs(ctx, client)
+	require.NoError(t, errs["ListServices"])
+	require.NoError(t, errs["GetServiceStatus"])
+	for _, rpc := range []string{"StartService", "StopService", "RestartService"} {
+		require.Equal(t, codes.PermissionDenied, status.Code(errs[rpc]), "%s: %v", rpc, errs[rpc])
+	}
+	starts, stops := tpm.calls()
+	require.Equal(t, 0, starts)
+	require.Equal(t, 0, stops)
+}
+
+// countingPeers admits every verified client certificate with every scope
+// and counts how often it was asked.
+type countingPeers struct{ calls atomic.Int32 }
+
+func (p *countingPeers) AuthenticatePeer(context.Context, []*x509.Certificate) (*platformtoken.AuthorizedContext, error) {
+	p.calls.Add(1)
+	return &platformtoken.AuthorizedContext{Subject: "peer", Scopes: []string{"*:*"}}, nil
+}
+
+// TestDaemonServicesREST_ABadBearerIsNotRescuedByAClientCertificate requires
+// an invalid bearer to be refused even when the TLS handshake verified a
+// client certificate: the guard never falls back to the certificate.
+func TestDaemonServicesREST_ABadBearerIsNotRescuedByAClientCertificate(t *testing.T) {
+	s := newTestRESTServerForPhase35(t)
+	peers := &countingPeers{}
+	require.NoError(t, s.SetServiceControlHandlers(restapi.NewScopeGuard(servicesTokens, peers, nil)))
+
+	certRequest := func() *http.Request {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/services", nil)
+		req.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{{}}}}
+		return req
+	}
+
+	forged := certRequest()
+	forged.Header.Set("Authorization", "Bearer forged")
+	rec := httptest.NewRecorder()
+	s.router.ServeHTTP(rec, forged)
+	require.Equal(t, http.StatusUnauthorized, rec.Code)
+	require.Zero(t, peers.calls.Load(), "a bad bearer never falls back to the certificate")
+
+	rec = httptest.NewRecorder()
+	s.router.ServeHTTP(rec, certRequest())
+	require.Equal(t, http.StatusOK, rec.Code, "the verified certificate alone still admits")
+	require.Equal(t, int32(1), peers.calls.Load())
 }
