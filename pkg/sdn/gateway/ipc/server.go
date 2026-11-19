@@ -79,6 +79,7 @@ var stateToProto = map[gateway.GatewayState]ipcv1.ProcessState{
 type Server struct {
 	ipcv1.UnimplementedProcessControlServiceServer
 	ipcv1.UnimplementedDatapathServiceServer
+	ipcv1.UnimplementedVPNPlaneServiceServer
 	ipcv1.UnimplementedGatewayServicesServiceServer
 
 	node     Node
@@ -109,6 +110,7 @@ func NewServer(node Node, policy Policy) *Server {
 	)
 	ipcv1.RegisterProcessControlServiceServer(s.grpc, s)
 	ipcv1.RegisterDatapathServiceServer(s.grpc, s)
+	ipcv1.RegisterVPNPlaneServiceServer(s.grpc, s)
 	ipcv1.RegisterGatewayServicesServiceServer(s.grpc, s)
 	return s
 }
@@ -277,7 +279,7 @@ func (s *Server) ApplyDesired(ctx context.Context, req *ipcv1.ApplyDesiredReques
 	return resp, nil
 }
 
-// InstallVPNPeer implements DatapathService through the hosted VPN planes.
+// InstallVPNPeer implements VPNPlaneService through the hosted VPN planes.
 func (s *Server) InstallVPNPeer(ctx context.Context, req *ipcv1.InstallVPNPeerRequest) (*ipcv1.InstallVPNPeerResponse, error) {
 	planes := s.vpn.Load()
 	if planes == nil {
@@ -286,7 +288,7 @@ func (s *Server) InstallVPNPeer(ctx context.Context, req *ipcv1.InstallVPNPeerRe
 	return planes.host.InstallVPNPeer(ctx, req), nil
 }
 
-// RemoveVPNPeer implements DatapathService through the hosted VPN planes.
+// RemoveVPNPeer implements VPNPlaneService through the hosted VPN planes.
 func (s *Server) RemoveVPNPeer(ctx context.Context, req *ipcv1.RemoveVPNPeerRequest) (*ipcv1.RemoveVPNPeerResponse, error) {
 	planes := s.vpn.Load()
 	if planes == nil {
@@ -295,7 +297,7 @@ func (s *Server) RemoveVPNPeer(ctx context.Context, req *ipcv1.RemoveVPNPeerRequ
 	return planes.host.RemoveVPNPeer(ctx, req), nil
 }
 
-// ReconcileVPNPeers implements DatapathService through the hosted VPN planes.
+// ReconcileVPNPeers implements VPNPlaneService through the hosted VPN planes.
 func (s *Server) ReconcileVPNPeers(ctx context.Context, req *ipcv1.ReconcileVPNPeersRequest) (*ipcv1.ReconcileVPNPeersResponse, error) {
 	planes := s.vpn.Load()
 	if planes == nil {
@@ -318,4 +320,27 @@ func (s *Server) ReconcileVPNPeers(ctx context.Context, req *ipcv1.ReconcileVPNP
 		return &ipcv1.ReconcileVPNPeersResponse{Refusal: noVPNPlanes()}, nil
 	}
 	return planes.host.ReconcileVPNPeers(ctx, req), nil
+}
+
+// VPNPeerRenewer is the optional VPNPlanes extension that extends a held
+// peer's deadline. Hosted planes that do not implement it refuse every
+// renewal UNAVAILABLE, so the old deadline stands (fail closed).
+type VPNPeerRenewer interface {
+	RenewVPNPeer(ctx context.Context, req *ipcv1.RenewVPNPeerRequest) *ipcv1.RenewVPNPeerResponse
+}
+
+// RenewVPNPeer implements VPNPlaneService through the hosted VPN planes.
+func (s *Server) RenewVPNPeer(ctx context.Context, req *ipcv1.RenewVPNPeerRequest) (*ipcv1.RenewVPNPeerResponse, error) {
+	planes := s.vpn.Load()
+	if planes == nil {
+		return &ipcv1.RenewVPNPeerResponse{Refusal: noVPNPlanes()}, nil
+	}
+	renewer, ok := planes.host.(VPNPeerRenewer)
+	if !ok {
+		return &ipcv1.RenewVPNPeerResponse{Refusal: &ipcv1.VPNPeerRefusal{
+			Class:  ipcv1.VPNPeerRefusalClass_VPN_PEER_REFUSAL_CLASS_UNAVAILABLE,
+			Reason: "this process's VPN data planes do not renew peers",
+		}}, nil
+	}
+	return renewer.RenewVPNPeer(ctx, req), nil
 }

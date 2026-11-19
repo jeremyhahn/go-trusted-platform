@@ -10,9 +10,10 @@
 // supervisor; each `gatewayd service run <process>` child serves this
 // contract over a Unix socket the supervisor created. The transport is gRPC
 // over that socket with SO_PEERCRED as the only authentication: the child
-// admits the supervisor (uid 0) on ProcessControlService and the supervisor
-// plus the parser uid on DatapathService, and the supervisor plus the
-// platform uids on GatewayServicesService.
+// admits the supervisor (uid 0) on ProcessControlService and DatapathService,
+// the supervisor plus the parser uid on VPNPlaneService (the `wireguard`
+// process only), and the supervisor plus the platform uids on
+// GatewayServicesService.
 //
 // Structured gateway documents ride as JSON: gwstate.Snapshot and
 // gwstate.DesiredConfig (pkg/sdn/gateway/state) are the one schema the
@@ -655,8 +656,11 @@ type VPNPeer struct {
 	// client_certificate_sha256 is the admitted client certificate's
 	// fingerprint (MASQUE).
 	ClientCertificateSha256 []byte `protobuf:"bytes,5,opt,name=client_certificate_sha256,json=clientCertificateSha256,proto3" json:"client_certificate_sha256,omitempty"`
-	unknownFields           protoimpl.UnknownFields
-	sizeCache               protoimpl.SizeCache
+	// expires_at_unix_nano is the lease's deadline (Unix nanoseconds): the
+	// plane removes the peer once it passes. 0 means no deadline was sent.
+	ExpiresAtUnixNano int64 `protobuf:"varint,6,opt,name=expires_at_unix_nano,json=expiresAtUnixNano,proto3" json:"expires_at_unix_nano,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *VPNPeer) Reset() {
@@ -722,6 +726,13 @@ func (x *VPNPeer) GetClientCertificateSha256() []byte {
 		return x.ClientCertificateSha256
 	}
 	return nil
+}
+
+func (x *VPNPeer) GetExpiresAtUnixNano() int64 {
+	if x != nil {
+		return x.ExpiresAtUnixNano
+	}
+	return 0
 }
 
 type InstallVPNPeerRequest struct {
@@ -1008,6 +1019,105 @@ func (x *ReconcileVPNPeersResponse) GetRefusal() *VPNPeerRefusal {
 	return nil
 }
 
+type RenewVPNPeerRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// public_key is the held peer's 32-byte Curve25519 key.
+	PublicKey []byte `protobuf:"bytes,1,opt,name=public_key,json=publicKey,proto3" json:"public_key,omitempty"`
+	// expires_at_unix_nano is the new deadline (Unix nanoseconds).
+	ExpiresAtUnixNano int64 `protobuf:"varint,2,opt,name=expires_at_unix_nano,json=expiresAtUnixNano,proto3" json:"expires_at_unix_nano,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *RenewVPNPeerRequest) Reset() {
+	*x = RenewVPNPeerRequest{}
+	mi := &file_ipc_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RenewVPNPeerRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RenewVPNPeerRequest) ProtoMessage() {}
+
+func (x *RenewVPNPeerRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ipc_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RenewVPNPeerRequest.ProtoReflect.Descriptor instead.
+func (*RenewVPNPeerRequest) Descriptor() ([]byte, []int) {
+	return file_ipc_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *RenewVPNPeerRequest) GetPublicKey() []byte {
+	if x != nil {
+		return x.PublicKey
+	}
+	return nil
+}
+
+func (x *RenewVPNPeerRequest) GetExpiresAtUnixNano() int64 {
+	if x != nil {
+		return x.ExpiresAtUnixNano
+	}
+	return 0
+}
+
+type RenewVPNPeerResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// refusal is absent when the peer's deadline was extended.
+	Refusal       *VPNPeerRefusal `protobuf:"bytes,1,opt,name=refusal,proto3" json:"refusal,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RenewVPNPeerResponse) Reset() {
+	*x = RenewVPNPeerResponse{}
+	mi := &file_ipc_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RenewVPNPeerResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RenewVPNPeerResponse) ProtoMessage() {}
+
+func (x *RenewVPNPeerResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_ipc_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RenewVPNPeerResponse.ProtoReflect.Descriptor instead.
+func (*RenewVPNPeerResponse) Descriptor() ([]byte, []int) {
+	return file_ipc_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *RenewVPNPeerResponse) GetRefusal() *VPNPeerRefusal {
+	if x != nil {
+		return x.Refusal
+	}
+	return nil
+}
+
 type VPNPeerRefusal struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	Class           VPNPeerRefusalClass    `protobuf:"varint,1,opt,name=class,proto3,enum=gatewayd.ipc.v1.VPNPeerRefusalClass" json:"class,omitempty"`
@@ -1020,7 +1130,7 @@ type VPNPeerRefusal struct {
 
 func (x *VPNPeerRefusal) Reset() {
 	*x = VPNPeerRefusal{}
-	mi := &file_ipc_proto_msgTypes[14]
+	mi := &file_ipc_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1032,7 +1142,7 @@ func (x *VPNPeerRefusal) String() string {
 func (*VPNPeerRefusal) ProtoMessage() {}
 
 func (x *VPNPeerRefusal) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[14]
+	mi := &file_ipc_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1045,7 +1155,7 @@ func (x *VPNPeerRefusal) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VPNPeerRefusal.ProtoReflect.Descriptor instead.
 func (*VPNPeerRefusal) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{14}
+	return file_ipc_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *VPNPeerRefusal) GetClass() VPNPeerRefusalClass {
@@ -1087,7 +1197,7 @@ type VIPKey struct {
 
 func (x *VIPKey) Reset() {
 	*x = VIPKey{}
-	mi := &file_ipc_proto_msgTypes[15]
+	mi := &file_ipc_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1099,7 +1209,7 @@ func (x *VIPKey) String() string {
 func (*VIPKey) ProtoMessage() {}
 
 func (x *VIPKey) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[15]
+	mi := &file_ipc_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1112,7 +1222,7 @@ func (x *VIPKey) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VIPKey.ProtoReflect.Descriptor instead.
 func (*VIPKey) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{15}
+	return file_ipc_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *VIPKey) GetProtocol() string {
@@ -1137,7 +1247,7 @@ type LBStatusRequest struct {
 
 func (x *LBStatusRequest) Reset() {
 	*x = LBStatusRequest{}
-	mi := &file_ipc_proto_msgTypes[16]
+	mi := &file_ipc_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1149,7 +1259,7 @@ func (x *LBStatusRequest) String() string {
 func (*LBStatusRequest) ProtoMessage() {}
 
 func (x *LBStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[16]
+	mi := &file_ipc_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1162,7 +1272,7 @@ func (x *LBStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LBStatusRequest.ProtoReflect.Descriptor instead.
 func (*LBStatusRequest) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{16}
+	return file_ipc_proto_rawDescGZIP(), []int{18}
 }
 
 type LBStatusResponse struct {
@@ -1176,7 +1286,7 @@ type LBStatusResponse struct {
 
 func (x *LBStatusResponse) Reset() {
 	*x = LBStatusResponse{}
-	mi := &file_ipc_proto_msgTypes[17]
+	mi := &file_ipc_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1188,7 +1298,7 @@ func (x *LBStatusResponse) String() string {
 func (*LBStatusResponse) ProtoMessage() {}
 
 func (x *LBStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[17]
+	mi := &file_ipc_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1201,7 +1311,7 @@ func (x *LBStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LBStatusResponse.ProtoReflect.Descriptor instead.
 func (*LBStatusResponse) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{17}
+	return file_ipc_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *LBStatusResponse) GetHealthJson() []byte {
@@ -1226,7 +1336,7 @@ type ListVIPsRequest struct {
 
 func (x *ListVIPsRequest) Reset() {
 	*x = ListVIPsRequest{}
-	mi := &file_ipc_proto_msgTypes[18]
+	mi := &file_ipc_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1238,7 +1348,7 @@ func (x *ListVIPsRequest) String() string {
 func (*ListVIPsRequest) ProtoMessage() {}
 
 func (x *ListVIPsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[18]
+	mi := &file_ipc_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1251,7 +1361,7 @@ func (x *ListVIPsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListVIPsRequest.ProtoReflect.Descriptor instead.
 func (*ListVIPsRequest) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{18}
+	return file_ipc_proto_rawDescGZIP(), []int{20}
 }
 
 type ListVIPsResponse struct {
@@ -1265,7 +1375,7 @@ type ListVIPsResponse struct {
 
 func (x *ListVIPsResponse) Reset() {
 	*x = ListVIPsResponse{}
-	mi := &file_ipc_proto_msgTypes[19]
+	mi := &file_ipc_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1277,7 +1387,7 @@ func (x *ListVIPsResponse) String() string {
 func (*ListVIPsResponse) ProtoMessage() {}
 
 func (x *ListVIPsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[19]
+	mi := &file_ipc_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1290,7 +1400,7 @@ func (x *ListVIPsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListVIPsResponse.ProtoReflect.Descriptor instead.
 func (*ListVIPsResponse) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{19}
+	return file_ipc_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *ListVIPsResponse) GetVipsJson() []byte {
@@ -1316,7 +1426,7 @@ type GetVIPRequest struct {
 
 func (x *GetVIPRequest) Reset() {
 	*x = GetVIPRequest{}
-	mi := &file_ipc_proto_msgTypes[20]
+	mi := &file_ipc_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1328,7 +1438,7 @@ func (x *GetVIPRequest) String() string {
 func (*GetVIPRequest) ProtoMessage() {}
 
 func (x *GetVIPRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[20]
+	mi := &file_ipc_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1341,7 +1451,7 @@ func (x *GetVIPRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetVIPRequest.ProtoReflect.Descriptor instead.
 func (*GetVIPRequest) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{20}
+	return file_ipc_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *GetVIPRequest) GetVip() *VIPKey {
@@ -1362,7 +1472,7 @@ type GetVIPResponse struct {
 
 func (x *GetVIPResponse) Reset() {
 	*x = GetVIPResponse{}
-	mi := &file_ipc_proto_msgTypes[21]
+	mi := &file_ipc_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1374,7 +1484,7 @@ func (x *GetVIPResponse) String() string {
 func (*GetVIPResponse) ProtoMessage() {}
 
 func (x *GetVIPResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[21]
+	mi := &file_ipc_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1387,7 +1497,7 @@ func (x *GetVIPResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetVIPResponse.ProtoReflect.Descriptor instead.
 func (*GetVIPResponse) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{21}
+	return file_ipc_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *GetVIPResponse) GetVipJson() []byte {
@@ -1414,7 +1524,7 @@ type AddVIPRequest struct {
 
 func (x *AddVIPRequest) Reset() {
 	*x = AddVIPRequest{}
-	mi := &file_ipc_proto_msgTypes[22]
+	mi := &file_ipc_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1426,7 +1536,7 @@ func (x *AddVIPRequest) String() string {
 func (*AddVIPRequest) ProtoMessage() {}
 
 func (x *AddVIPRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[22]
+	mi := &file_ipc_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1439,7 +1549,7 @@ func (x *AddVIPRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddVIPRequest.ProtoReflect.Descriptor instead.
 func (*AddVIPRequest) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{22}
+	return file_ipc_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *AddVIPRequest) GetVipJson() []byte {
@@ -1459,7 +1569,7 @@ type AddVIPResponse struct {
 
 func (x *AddVIPResponse) Reset() {
 	*x = AddVIPResponse{}
-	mi := &file_ipc_proto_msgTypes[23]
+	mi := &file_ipc_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1471,7 +1581,7 @@ func (x *AddVIPResponse) String() string {
 func (*AddVIPResponse) ProtoMessage() {}
 
 func (x *AddVIPResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[23]
+	mi := &file_ipc_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1484,7 +1594,7 @@ func (x *AddVIPResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddVIPResponse.ProtoReflect.Descriptor instead.
 func (*AddVIPResponse) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{23}
+	return file_ipc_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *AddVIPResponse) GetRefusal() *ServiceRefusal {
@@ -1503,7 +1613,7 @@ type RemoveVIPRequest struct {
 
 func (x *RemoveVIPRequest) Reset() {
 	*x = RemoveVIPRequest{}
-	mi := &file_ipc_proto_msgTypes[24]
+	mi := &file_ipc_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1515,7 +1625,7 @@ func (x *RemoveVIPRequest) String() string {
 func (*RemoveVIPRequest) ProtoMessage() {}
 
 func (x *RemoveVIPRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[24]
+	mi := &file_ipc_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1528,7 +1638,7 @@ func (x *RemoveVIPRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveVIPRequest.ProtoReflect.Descriptor instead.
 func (*RemoveVIPRequest) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{24}
+	return file_ipc_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *RemoveVIPRequest) GetVip() *VIPKey {
@@ -1548,7 +1658,7 @@ type RemoveVIPResponse struct {
 
 func (x *RemoveVIPResponse) Reset() {
 	*x = RemoveVIPResponse{}
-	mi := &file_ipc_proto_msgTypes[25]
+	mi := &file_ipc_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1560,7 +1670,7 @@ func (x *RemoveVIPResponse) String() string {
 func (*RemoveVIPResponse) ProtoMessage() {}
 
 func (x *RemoveVIPResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[25]
+	mi := &file_ipc_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1573,7 +1683,7 @@ func (x *RemoveVIPResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveVIPResponse.ProtoReflect.Descriptor instead.
 func (*RemoveVIPResponse) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{25}
+	return file_ipc_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *RemoveVIPResponse) GetRefusal() *ServiceRefusal {
@@ -1594,7 +1704,7 @@ type SetVIPBackendsRequest struct {
 
 func (x *SetVIPBackendsRequest) Reset() {
 	*x = SetVIPBackendsRequest{}
-	mi := &file_ipc_proto_msgTypes[26]
+	mi := &file_ipc_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1606,7 +1716,7 @@ func (x *SetVIPBackendsRequest) String() string {
 func (*SetVIPBackendsRequest) ProtoMessage() {}
 
 func (x *SetVIPBackendsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[26]
+	mi := &file_ipc_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1619,7 +1729,7 @@ func (x *SetVIPBackendsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetVIPBackendsRequest.ProtoReflect.Descriptor instead.
 func (*SetVIPBackendsRequest) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{26}
+	return file_ipc_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *SetVIPBackendsRequest) GetVip() *VIPKey {
@@ -1646,7 +1756,7 @@ type SetVIPBackendsResponse struct {
 
 func (x *SetVIPBackendsResponse) Reset() {
 	*x = SetVIPBackendsResponse{}
-	mi := &file_ipc_proto_msgTypes[27]
+	mi := &file_ipc_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1658,7 +1768,7 @@ func (x *SetVIPBackendsResponse) String() string {
 func (*SetVIPBackendsResponse) ProtoMessage() {}
 
 func (x *SetVIPBackendsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[27]
+	mi := &file_ipc_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1671,7 +1781,7 @@ func (x *SetVIPBackendsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetVIPBackendsResponse.ProtoReflect.Descriptor instead.
 func (*SetVIPBackendsResponse) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{27}
+	return file_ipc_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *SetVIPBackendsResponse) GetRefusal() *ServiceRefusal {
@@ -1689,7 +1799,7 @@ type NAT64StatusRequest struct {
 
 func (x *NAT64StatusRequest) Reset() {
 	*x = NAT64StatusRequest{}
-	mi := &file_ipc_proto_msgTypes[28]
+	mi := &file_ipc_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1701,7 +1811,7 @@ func (x *NAT64StatusRequest) String() string {
 func (*NAT64StatusRequest) ProtoMessage() {}
 
 func (x *NAT64StatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[28]
+	mi := &file_ipc_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1714,7 +1824,7 @@ func (x *NAT64StatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NAT64StatusRequest.ProtoReflect.Descriptor instead.
 func (*NAT64StatusRequest) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{28}
+	return file_ipc_proto_rawDescGZIP(), []int{30}
 }
 
 type NAT64StatusResponse struct {
@@ -1728,7 +1838,7 @@ type NAT64StatusResponse struct {
 
 func (x *NAT64StatusResponse) Reset() {
 	*x = NAT64StatusResponse{}
-	mi := &file_ipc_proto_msgTypes[29]
+	mi := &file_ipc_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1740,7 +1850,7 @@ func (x *NAT64StatusResponse) String() string {
 func (*NAT64StatusResponse) ProtoMessage() {}
 
 func (x *NAT64StatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[29]
+	mi := &file_ipc_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1753,7 +1863,7 @@ func (x *NAT64StatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NAT64StatusResponse.ProtoReflect.Descriptor instead.
 func (*NAT64StatusResponse) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{29}
+	return file_ipc_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *NAT64StatusResponse) GetHealthJson() []byte {
@@ -1781,7 +1891,7 @@ type PerfFlowsRequest struct {
 
 func (x *PerfFlowsRequest) Reset() {
 	*x = PerfFlowsRequest{}
-	mi := &file_ipc_proto_msgTypes[30]
+	mi := &file_ipc_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1793,7 +1903,7 @@ func (x *PerfFlowsRequest) String() string {
 func (*PerfFlowsRequest) ProtoMessage() {}
 
 func (x *PerfFlowsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[30]
+	mi := &file_ipc_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1806,7 +1916,7 @@ func (x *PerfFlowsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PerfFlowsRequest.ProtoReflect.Descriptor instead.
 func (*PerfFlowsRequest) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{30}
+	return file_ipc_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *PerfFlowsRequest) GetBridge() string {
@@ -1841,7 +1951,7 @@ type PerfFlowsResponse struct {
 
 func (x *PerfFlowsResponse) Reset() {
 	*x = PerfFlowsResponse{}
-	mi := &file_ipc_proto_msgTypes[31]
+	mi := &file_ipc_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1853,7 +1963,7 @@ func (x *PerfFlowsResponse) String() string {
 func (*PerfFlowsResponse) ProtoMessage() {}
 
 func (x *PerfFlowsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[31]
+	mi := &file_ipc_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1866,7 +1976,7 @@ func (x *PerfFlowsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PerfFlowsResponse.ProtoReflect.Descriptor instead.
 func (*PerfFlowsResponse) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{31}
+	return file_ipc_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *PerfFlowsResponse) GetResultJson() []byte {
@@ -1892,7 +2002,7 @@ type PerfDatapathRequest struct {
 
 func (x *PerfDatapathRequest) Reset() {
 	*x = PerfDatapathRequest{}
-	mi := &file_ipc_proto_msgTypes[32]
+	mi := &file_ipc_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1904,7 +2014,7 @@ func (x *PerfDatapathRequest) String() string {
 func (*PerfDatapathRequest) ProtoMessage() {}
 
 func (x *PerfDatapathRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[32]
+	mi := &file_ipc_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1917,7 +2027,7 @@ func (x *PerfDatapathRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PerfDatapathRequest.ProtoReflect.Descriptor instead.
 func (*PerfDatapathRequest) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{32}
+	return file_ipc_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *PerfDatapathRequest) GetBridge() string {
@@ -1938,7 +2048,7 @@ type PerfDatapathResponse struct {
 
 func (x *PerfDatapathResponse) Reset() {
 	*x = PerfDatapathResponse{}
-	mi := &file_ipc_proto_msgTypes[33]
+	mi := &file_ipc_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1950,7 +2060,7 @@ func (x *PerfDatapathResponse) String() string {
 func (*PerfDatapathResponse) ProtoMessage() {}
 
 func (x *PerfDatapathResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[33]
+	mi := &file_ipc_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1963,7 +2073,7 @@ func (x *PerfDatapathResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PerfDatapathResponse.ProtoReflect.Descriptor instead.
 func (*PerfDatapathResponse) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{33}
+	return file_ipc_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *PerfDatapathResponse) GetResultJson() []byte {
@@ -1989,7 +2099,7 @@ type PerfConntrackRequest struct {
 
 func (x *PerfConntrackRequest) Reset() {
 	*x = PerfConntrackRequest{}
-	mi := &file_ipc_proto_msgTypes[34]
+	mi := &file_ipc_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2001,7 +2111,7 @@ func (x *PerfConntrackRequest) String() string {
 func (*PerfConntrackRequest) ProtoMessage() {}
 
 func (x *PerfConntrackRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[34]
+	mi := &file_ipc_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2014,7 +2124,7 @@ func (x *PerfConntrackRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PerfConntrackRequest.ProtoReflect.Descriptor instead.
 func (*PerfConntrackRequest) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{34}
+	return file_ipc_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *PerfConntrackRequest) GetZone() int32 {
@@ -2035,7 +2145,7 @@ type PerfConntrackResponse struct {
 
 func (x *PerfConntrackResponse) Reset() {
 	*x = PerfConntrackResponse{}
-	mi := &file_ipc_proto_msgTypes[35]
+	mi := &file_ipc_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2047,7 +2157,7 @@ func (x *PerfConntrackResponse) String() string {
 func (*PerfConntrackResponse) ProtoMessage() {}
 
 func (x *PerfConntrackResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[35]
+	mi := &file_ipc_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2060,7 +2170,7 @@ func (x *PerfConntrackResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PerfConntrackResponse.ProtoReflect.Descriptor instead.
 func (*PerfConntrackResponse) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{35}
+	return file_ipc_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *PerfConntrackResponse) GetResultJson() []byte {
@@ -2099,7 +2209,7 @@ type ServiceRefusal struct {
 
 func (x *ServiceRefusal) Reset() {
 	*x = ServiceRefusal{}
-	mi := &file_ipc_proto_msgTypes[36]
+	mi := &file_ipc_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2111,7 +2221,7 @@ func (x *ServiceRefusal) String() string {
 func (*ServiceRefusal) ProtoMessage() {}
 
 func (x *ServiceRefusal) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[36]
+	mi := &file_ipc_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2124,7 +2234,7 @@ func (x *ServiceRefusal) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServiceRefusal.ProtoReflect.Descriptor instead.
 func (*ServiceRefusal) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{36}
+	return file_ipc_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *ServiceRefusal) GetClass() ServiceRefusalClass {
@@ -2208,14 +2318,15 @@ const file_ipc_proto_rawDesc = "" +
 	"\n" +
 	"state_json\x18\x01 \x01(\fR\tstateJson\x12\x1f\n" +
 	"\vapply_error\x18\x02 \x01(\tR\n" +
-	"applyError\"\xcb\x01\n" +
+	"applyError\"\xfc\x01\n" +
 	"\aVPNPeer\x12\x19\n" +
 	"\blease_id\x18\x01 \x01(\tR\aleaseId\x12\x1d\n" +
 	"\n" +
 	"data_plane\x18\x02 \x01(\tR\tdataPlane\x12\x18\n" +
 	"\aaddress\x18\x03 \x01(\tR\aaddress\x120\n" +
 	"\x14wireguard_public_key\x18\x04 \x01(\fR\x12wireguardPublicKey\x12:\n" +
-	"\x19client_certificate_sha256\x18\x05 \x01(\fR\x17clientCertificateSha256\"E\n" +
+	"\x19client_certificate_sha256\x18\x05 \x01(\fR\x17clientCertificateSha256\x12/\n" +
+	"\x14expires_at_unix_nano\x18\x06 \x01(\x03R\x11expiresAtUnixNano\"E\n" +
 	"\x15InstallVPNPeerRequest\x12,\n" +
 	"\x04peer\x18\x01 \x01(\v2\x18.gatewayd.ipc.v1.VPNPeerR\x04peer\"S\n" +
 	"\x16InstallVPNPeerResponse\x129\n" +
@@ -2231,6 +2342,12 @@ const file_ipc_proto_rawDesc = "" +
 	"data_plane\x18\x01 \x01(\tR\tdataPlane\x12\x1b\n" +
 	"\tlease_ids\x18\x02 \x03(\tR\bleaseIds\"V\n" +
 	"\x19ReconcileVPNPeersResponse\x129\n" +
+	"\arefusal\x18\x01 \x01(\v2\x1f.gatewayd.ipc.v1.VPNPeerRefusalR\arefusal\"e\n" +
+	"\x13RenewVPNPeerRequest\x12\x1d\n" +
+	"\n" +
+	"public_key\x18\x01 \x01(\fR\tpublicKey\x12/\n" +
+	"\x14expires_at_unix_nano\x18\x02 \x01(\x03R\x11expiresAtUnixNano\"Q\n" +
+	"\x14RenewVPNPeerResponse\x129\n" +
 	"\arefusal\x18\x01 \x01(\v2\x1f.gatewayd.ipc.v1.VPNPeerRefusalR\arefusal\"\xa6\x01\n" +
 	"\x0eVPNPeerRefusal\x12:\n" +
 	"\x05class\x18\x01 \x01(\x0e2$.gatewayd.ipc.v1.VPNPeerRefusalClassR\x05class\x12\x14\n" +
@@ -2341,12 +2458,14 @@ const file_ipc_proto_rawDesc = "" +
 	"-SERVICE_REFUSAL_CLASS_PERF_APPCTL_UNAVAILABLE\x10\x132\xb3\x01\n" +
 	"\x15ProcessControlService\x12I\n" +
 	"\x06Status\x12\x1e.gatewayd.ipc.v1.StatusRequest\x1a\x1f.gatewayd.ipc.v1.StatusResponse\x12O\n" +
-	"\bSnapshot\x12 .gatewayd.ipc.v1.SnapshotRequest\x1a!.gatewayd.ipc.v1.SnapshotResponse2\x9d\x03\n" +
+	"\bSnapshot\x12 .gatewayd.ipc.v1.SnapshotRequest\x1a!.gatewayd.ipc.v1.SnapshotResponse2n\n" +
 	"\x0fDatapathService\x12[\n" +
-	"\fApplyDesired\x12$.gatewayd.ipc.v1.ApplyDesiredRequest\x1a%.gatewayd.ipc.v1.ApplyDesiredResponse\x12a\n" +
+	"\fApplyDesired\x12$.gatewayd.ipc.v1.ApplyDesiredRequest\x1a%.gatewayd.ipc.v1.ApplyDesiredResponse2\x9d\x03\n" +
+	"\x0fVPNPlaneService\x12a\n" +
 	"\x0eInstallVPNPeer\x12&.gatewayd.ipc.v1.InstallVPNPeerRequest\x1a'.gatewayd.ipc.v1.InstallVPNPeerResponse\x12^\n" +
 	"\rRemoveVPNPeer\x12%.gatewayd.ipc.v1.RemoveVPNPeerRequest\x1a&.gatewayd.ipc.v1.RemoveVPNPeerResponse\x12j\n" +
-	"\x11ReconcileVPNPeers\x12).gatewayd.ipc.v1.ReconcileVPNPeersRequest\x1a*.gatewayd.ipc.v1.ReconcileVPNPeersResponse2\xf2\x06\n" +
+	"\x11ReconcileVPNPeers\x12).gatewayd.ipc.v1.ReconcileVPNPeersRequest\x1a*.gatewayd.ipc.v1.ReconcileVPNPeersResponse\x12[\n" +
+	"\fRenewVPNPeer\x12$.gatewayd.ipc.v1.RenewVPNPeerRequest\x1a%.gatewayd.ipc.v1.RenewVPNPeerResponse2\xf2\x06\n" +
 	"\x16GatewayServicesService\x12O\n" +
 	"\bLBStatus\x12 .gatewayd.ipc.v1.LBStatusRequest\x1a!.gatewayd.ipc.v1.LBStatusResponse\x12O\n" +
 	"\bListVIPs\x12 .gatewayd.ipc.v1.ListVIPsRequest\x1a!.gatewayd.ipc.v1.ListVIPsResponse\x12I\n" +
@@ -2372,7 +2491,7 @@ func file_ipc_proto_rawDescGZIP() []byte {
 }
 
 var file_ipc_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_ipc_proto_msgTypes = make([]protoimpl.MessageInfo, 37)
+var file_ipc_proto_msgTypes = make([]protoimpl.MessageInfo, 39)
 var file_ipc_proto_goTypes = []any{
 	(ProcessState)(0),                 // 0: gatewayd.ipc.v1.ProcessState
 	(VPNPeerRefusalClass)(0),          // 1: gatewayd.ipc.v1.VPNPeerRefusalClass
@@ -2391,89 +2510,94 @@ var file_ipc_proto_goTypes = []any{
 	(*RemoveVPNPeerResponse)(nil),     // 14: gatewayd.ipc.v1.RemoveVPNPeerResponse
 	(*ReconcileVPNPeersRequest)(nil),  // 15: gatewayd.ipc.v1.ReconcileVPNPeersRequest
 	(*ReconcileVPNPeersResponse)(nil), // 16: gatewayd.ipc.v1.ReconcileVPNPeersResponse
-	(*VPNPeerRefusal)(nil),            // 17: gatewayd.ipc.v1.VPNPeerRefusal
-	(*VIPKey)(nil),                    // 18: gatewayd.ipc.v1.VIPKey
-	(*LBStatusRequest)(nil),           // 19: gatewayd.ipc.v1.LBStatusRequest
-	(*LBStatusResponse)(nil),          // 20: gatewayd.ipc.v1.LBStatusResponse
-	(*ListVIPsRequest)(nil),           // 21: gatewayd.ipc.v1.ListVIPsRequest
-	(*ListVIPsResponse)(nil),          // 22: gatewayd.ipc.v1.ListVIPsResponse
-	(*GetVIPRequest)(nil),             // 23: gatewayd.ipc.v1.GetVIPRequest
-	(*GetVIPResponse)(nil),            // 24: gatewayd.ipc.v1.GetVIPResponse
-	(*AddVIPRequest)(nil),             // 25: gatewayd.ipc.v1.AddVIPRequest
-	(*AddVIPResponse)(nil),            // 26: gatewayd.ipc.v1.AddVIPResponse
-	(*RemoveVIPRequest)(nil),          // 27: gatewayd.ipc.v1.RemoveVIPRequest
-	(*RemoveVIPResponse)(nil),         // 28: gatewayd.ipc.v1.RemoveVIPResponse
-	(*SetVIPBackendsRequest)(nil),     // 29: gatewayd.ipc.v1.SetVIPBackendsRequest
-	(*SetVIPBackendsResponse)(nil),    // 30: gatewayd.ipc.v1.SetVIPBackendsResponse
-	(*NAT64StatusRequest)(nil),        // 31: gatewayd.ipc.v1.NAT64StatusRequest
-	(*NAT64StatusResponse)(nil),       // 32: gatewayd.ipc.v1.NAT64StatusResponse
-	(*PerfFlowsRequest)(nil),          // 33: gatewayd.ipc.v1.PerfFlowsRequest
-	(*PerfFlowsResponse)(nil),         // 34: gatewayd.ipc.v1.PerfFlowsResponse
-	(*PerfDatapathRequest)(nil),       // 35: gatewayd.ipc.v1.PerfDatapathRequest
-	(*PerfDatapathResponse)(nil),      // 36: gatewayd.ipc.v1.PerfDatapathResponse
-	(*PerfConntrackRequest)(nil),      // 37: gatewayd.ipc.v1.PerfConntrackRequest
-	(*PerfConntrackResponse)(nil),     // 38: gatewayd.ipc.v1.PerfConntrackResponse
-	(*ServiceRefusal)(nil),            // 39: gatewayd.ipc.v1.ServiceRefusal
+	(*RenewVPNPeerRequest)(nil),       // 17: gatewayd.ipc.v1.RenewVPNPeerRequest
+	(*RenewVPNPeerResponse)(nil),      // 18: gatewayd.ipc.v1.RenewVPNPeerResponse
+	(*VPNPeerRefusal)(nil),            // 19: gatewayd.ipc.v1.VPNPeerRefusal
+	(*VIPKey)(nil),                    // 20: gatewayd.ipc.v1.VIPKey
+	(*LBStatusRequest)(nil),           // 21: gatewayd.ipc.v1.LBStatusRequest
+	(*LBStatusResponse)(nil),          // 22: gatewayd.ipc.v1.LBStatusResponse
+	(*ListVIPsRequest)(nil),           // 23: gatewayd.ipc.v1.ListVIPsRequest
+	(*ListVIPsResponse)(nil),          // 24: gatewayd.ipc.v1.ListVIPsResponse
+	(*GetVIPRequest)(nil),             // 25: gatewayd.ipc.v1.GetVIPRequest
+	(*GetVIPResponse)(nil),            // 26: gatewayd.ipc.v1.GetVIPResponse
+	(*AddVIPRequest)(nil),             // 27: gatewayd.ipc.v1.AddVIPRequest
+	(*AddVIPResponse)(nil),            // 28: gatewayd.ipc.v1.AddVIPResponse
+	(*RemoveVIPRequest)(nil),          // 29: gatewayd.ipc.v1.RemoveVIPRequest
+	(*RemoveVIPResponse)(nil),         // 30: gatewayd.ipc.v1.RemoveVIPResponse
+	(*SetVIPBackendsRequest)(nil),     // 31: gatewayd.ipc.v1.SetVIPBackendsRequest
+	(*SetVIPBackendsResponse)(nil),    // 32: gatewayd.ipc.v1.SetVIPBackendsResponse
+	(*NAT64StatusRequest)(nil),        // 33: gatewayd.ipc.v1.NAT64StatusRequest
+	(*NAT64StatusResponse)(nil),       // 34: gatewayd.ipc.v1.NAT64StatusResponse
+	(*PerfFlowsRequest)(nil),          // 35: gatewayd.ipc.v1.PerfFlowsRequest
+	(*PerfFlowsResponse)(nil),         // 36: gatewayd.ipc.v1.PerfFlowsResponse
+	(*PerfDatapathRequest)(nil),       // 37: gatewayd.ipc.v1.PerfDatapathRequest
+	(*PerfDatapathResponse)(nil),      // 38: gatewayd.ipc.v1.PerfDatapathResponse
+	(*PerfConntrackRequest)(nil),      // 39: gatewayd.ipc.v1.PerfConntrackRequest
+	(*PerfConntrackResponse)(nil),     // 40: gatewayd.ipc.v1.PerfConntrackResponse
+	(*ServiceRefusal)(nil),            // 41: gatewayd.ipc.v1.ServiceRefusal
 }
 var file_ipc_proto_depIdxs = []int32{
 	0,  // 0: gatewayd.ipc.v1.StatusResponse.state:type_name -> gatewayd.ipc.v1.ProcessState
 	4,  // 1: gatewayd.ipc.v1.StatusResponse.services:type_name -> gatewayd.ipc.v1.ServiceStatus
 	10, // 2: gatewayd.ipc.v1.InstallVPNPeerRequest.peer:type_name -> gatewayd.ipc.v1.VPNPeer
-	17, // 3: gatewayd.ipc.v1.InstallVPNPeerResponse.refusal:type_name -> gatewayd.ipc.v1.VPNPeerRefusal
-	17, // 4: gatewayd.ipc.v1.RemoveVPNPeerResponse.refusal:type_name -> gatewayd.ipc.v1.VPNPeerRefusal
-	17, // 5: gatewayd.ipc.v1.ReconcileVPNPeersResponse.refusal:type_name -> gatewayd.ipc.v1.VPNPeerRefusal
-	1,  // 6: gatewayd.ipc.v1.VPNPeerRefusal.class:type_name -> gatewayd.ipc.v1.VPNPeerRefusalClass
-	39, // 7: gatewayd.ipc.v1.LBStatusResponse.refusal:type_name -> gatewayd.ipc.v1.ServiceRefusal
-	39, // 8: gatewayd.ipc.v1.ListVIPsResponse.refusal:type_name -> gatewayd.ipc.v1.ServiceRefusal
-	18, // 9: gatewayd.ipc.v1.GetVIPRequest.vip:type_name -> gatewayd.ipc.v1.VIPKey
-	39, // 10: gatewayd.ipc.v1.GetVIPResponse.refusal:type_name -> gatewayd.ipc.v1.ServiceRefusal
-	39, // 11: gatewayd.ipc.v1.AddVIPResponse.refusal:type_name -> gatewayd.ipc.v1.ServiceRefusal
-	18, // 12: gatewayd.ipc.v1.RemoveVIPRequest.vip:type_name -> gatewayd.ipc.v1.VIPKey
-	39, // 13: gatewayd.ipc.v1.RemoveVIPResponse.refusal:type_name -> gatewayd.ipc.v1.ServiceRefusal
-	18, // 14: gatewayd.ipc.v1.SetVIPBackendsRequest.vip:type_name -> gatewayd.ipc.v1.VIPKey
-	39, // 15: gatewayd.ipc.v1.SetVIPBackendsResponse.refusal:type_name -> gatewayd.ipc.v1.ServiceRefusal
-	39, // 16: gatewayd.ipc.v1.NAT64StatusResponse.refusal:type_name -> gatewayd.ipc.v1.ServiceRefusal
-	39, // 17: gatewayd.ipc.v1.PerfFlowsResponse.refusal:type_name -> gatewayd.ipc.v1.ServiceRefusal
-	39, // 18: gatewayd.ipc.v1.PerfDatapathResponse.refusal:type_name -> gatewayd.ipc.v1.ServiceRefusal
-	39, // 19: gatewayd.ipc.v1.PerfConntrackResponse.refusal:type_name -> gatewayd.ipc.v1.ServiceRefusal
-	2,  // 20: gatewayd.ipc.v1.ServiceRefusal.class:type_name -> gatewayd.ipc.v1.ServiceRefusalClass
-	3,  // 21: gatewayd.ipc.v1.ProcessControlService.Status:input_type -> gatewayd.ipc.v1.StatusRequest
-	6,  // 22: gatewayd.ipc.v1.ProcessControlService.Snapshot:input_type -> gatewayd.ipc.v1.SnapshotRequest
-	8,  // 23: gatewayd.ipc.v1.DatapathService.ApplyDesired:input_type -> gatewayd.ipc.v1.ApplyDesiredRequest
-	11, // 24: gatewayd.ipc.v1.DatapathService.InstallVPNPeer:input_type -> gatewayd.ipc.v1.InstallVPNPeerRequest
-	13, // 25: gatewayd.ipc.v1.DatapathService.RemoveVPNPeer:input_type -> gatewayd.ipc.v1.RemoveVPNPeerRequest
-	15, // 26: gatewayd.ipc.v1.DatapathService.ReconcileVPNPeers:input_type -> gatewayd.ipc.v1.ReconcileVPNPeersRequest
-	19, // 27: gatewayd.ipc.v1.GatewayServicesService.LBStatus:input_type -> gatewayd.ipc.v1.LBStatusRequest
-	21, // 28: gatewayd.ipc.v1.GatewayServicesService.ListVIPs:input_type -> gatewayd.ipc.v1.ListVIPsRequest
-	23, // 29: gatewayd.ipc.v1.GatewayServicesService.GetVIP:input_type -> gatewayd.ipc.v1.GetVIPRequest
-	25, // 30: gatewayd.ipc.v1.GatewayServicesService.AddVIP:input_type -> gatewayd.ipc.v1.AddVIPRequest
-	27, // 31: gatewayd.ipc.v1.GatewayServicesService.RemoveVIP:input_type -> gatewayd.ipc.v1.RemoveVIPRequest
-	29, // 32: gatewayd.ipc.v1.GatewayServicesService.SetVIPBackends:input_type -> gatewayd.ipc.v1.SetVIPBackendsRequest
-	31, // 33: gatewayd.ipc.v1.GatewayServicesService.NAT64Status:input_type -> gatewayd.ipc.v1.NAT64StatusRequest
-	33, // 34: gatewayd.ipc.v1.GatewayServicesService.PerfFlows:input_type -> gatewayd.ipc.v1.PerfFlowsRequest
-	35, // 35: gatewayd.ipc.v1.GatewayServicesService.PerfDatapath:input_type -> gatewayd.ipc.v1.PerfDatapathRequest
-	37, // 36: gatewayd.ipc.v1.GatewayServicesService.PerfConntrack:input_type -> gatewayd.ipc.v1.PerfConntrackRequest
-	5,  // 37: gatewayd.ipc.v1.ProcessControlService.Status:output_type -> gatewayd.ipc.v1.StatusResponse
-	7,  // 38: gatewayd.ipc.v1.ProcessControlService.Snapshot:output_type -> gatewayd.ipc.v1.SnapshotResponse
-	9,  // 39: gatewayd.ipc.v1.DatapathService.ApplyDesired:output_type -> gatewayd.ipc.v1.ApplyDesiredResponse
-	12, // 40: gatewayd.ipc.v1.DatapathService.InstallVPNPeer:output_type -> gatewayd.ipc.v1.InstallVPNPeerResponse
-	14, // 41: gatewayd.ipc.v1.DatapathService.RemoveVPNPeer:output_type -> gatewayd.ipc.v1.RemoveVPNPeerResponse
-	16, // 42: gatewayd.ipc.v1.DatapathService.ReconcileVPNPeers:output_type -> gatewayd.ipc.v1.ReconcileVPNPeersResponse
-	20, // 43: gatewayd.ipc.v1.GatewayServicesService.LBStatus:output_type -> gatewayd.ipc.v1.LBStatusResponse
-	22, // 44: gatewayd.ipc.v1.GatewayServicesService.ListVIPs:output_type -> gatewayd.ipc.v1.ListVIPsResponse
-	24, // 45: gatewayd.ipc.v1.GatewayServicesService.GetVIP:output_type -> gatewayd.ipc.v1.GetVIPResponse
-	26, // 46: gatewayd.ipc.v1.GatewayServicesService.AddVIP:output_type -> gatewayd.ipc.v1.AddVIPResponse
-	28, // 47: gatewayd.ipc.v1.GatewayServicesService.RemoveVIP:output_type -> gatewayd.ipc.v1.RemoveVIPResponse
-	30, // 48: gatewayd.ipc.v1.GatewayServicesService.SetVIPBackends:output_type -> gatewayd.ipc.v1.SetVIPBackendsResponse
-	32, // 49: gatewayd.ipc.v1.GatewayServicesService.NAT64Status:output_type -> gatewayd.ipc.v1.NAT64StatusResponse
-	34, // 50: gatewayd.ipc.v1.GatewayServicesService.PerfFlows:output_type -> gatewayd.ipc.v1.PerfFlowsResponse
-	36, // 51: gatewayd.ipc.v1.GatewayServicesService.PerfDatapath:output_type -> gatewayd.ipc.v1.PerfDatapathResponse
-	38, // 52: gatewayd.ipc.v1.GatewayServicesService.PerfConntrack:output_type -> gatewayd.ipc.v1.PerfConntrackResponse
-	37, // [37:53] is the sub-list for method output_type
-	21, // [21:37] is the sub-list for method input_type
-	21, // [21:21] is the sub-list for extension type_name
-	21, // [21:21] is the sub-list for extension extendee
-	0,  // [0:21] is the sub-list for field type_name
+	19, // 3: gatewayd.ipc.v1.InstallVPNPeerResponse.refusal:type_name -> gatewayd.ipc.v1.VPNPeerRefusal
+	19, // 4: gatewayd.ipc.v1.RemoveVPNPeerResponse.refusal:type_name -> gatewayd.ipc.v1.VPNPeerRefusal
+	19, // 5: gatewayd.ipc.v1.ReconcileVPNPeersResponse.refusal:type_name -> gatewayd.ipc.v1.VPNPeerRefusal
+	19, // 6: gatewayd.ipc.v1.RenewVPNPeerResponse.refusal:type_name -> gatewayd.ipc.v1.VPNPeerRefusal
+	1,  // 7: gatewayd.ipc.v1.VPNPeerRefusal.class:type_name -> gatewayd.ipc.v1.VPNPeerRefusalClass
+	41, // 8: gatewayd.ipc.v1.LBStatusResponse.refusal:type_name -> gatewayd.ipc.v1.ServiceRefusal
+	41, // 9: gatewayd.ipc.v1.ListVIPsResponse.refusal:type_name -> gatewayd.ipc.v1.ServiceRefusal
+	20, // 10: gatewayd.ipc.v1.GetVIPRequest.vip:type_name -> gatewayd.ipc.v1.VIPKey
+	41, // 11: gatewayd.ipc.v1.GetVIPResponse.refusal:type_name -> gatewayd.ipc.v1.ServiceRefusal
+	41, // 12: gatewayd.ipc.v1.AddVIPResponse.refusal:type_name -> gatewayd.ipc.v1.ServiceRefusal
+	20, // 13: gatewayd.ipc.v1.RemoveVIPRequest.vip:type_name -> gatewayd.ipc.v1.VIPKey
+	41, // 14: gatewayd.ipc.v1.RemoveVIPResponse.refusal:type_name -> gatewayd.ipc.v1.ServiceRefusal
+	20, // 15: gatewayd.ipc.v1.SetVIPBackendsRequest.vip:type_name -> gatewayd.ipc.v1.VIPKey
+	41, // 16: gatewayd.ipc.v1.SetVIPBackendsResponse.refusal:type_name -> gatewayd.ipc.v1.ServiceRefusal
+	41, // 17: gatewayd.ipc.v1.NAT64StatusResponse.refusal:type_name -> gatewayd.ipc.v1.ServiceRefusal
+	41, // 18: gatewayd.ipc.v1.PerfFlowsResponse.refusal:type_name -> gatewayd.ipc.v1.ServiceRefusal
+	41, // 19: gatewayd.ipc.v1.PerfDatapathResponse.refusal:type_name -> gatewayd.ipc.v1.ServiceRefusal
+	41, // 20: gatewayd.ipc.v1.PerfConntrackResponse.refusal:type_name -> gatewayd.ipc.v1.ServiceRefusal
+	2,  // 21: gatewayd.ipc.v1.ServiceRefusal.class:type_name -> gatewayd.ipc.v1.ServiceRefusalClass
+	3,  // 22: gatewayd.ipc.v1.ProcessControlService.Status:input_type -> gatewayd.ipc.v1.StatusRequest
+	6,  // 23: gatewayd.ipc.v1.ProcessControlService.Snapshot:input_type -> gatewayd.ipc.v1.SnapshotRequest
+	8,  // 24: gatewayd.ipc.v1.DatapathService.ApplyDesired:input_type -> gatewayd.ipc.v1.ApplyDesiredRequest
+	11, // 25: gatewayd.ipc.v1.VPNPlaneService.InstallVPNPeer:input_type -> gatewayd.ipc.v1.InstallVPNPeerRequest
+	13, // 26: gatewayd.ipc.v1.VPNPlaneService.RemoveVPNPeer:input_type -> gatewayd.ipc.v1.RemoveVPNPeerRequest
+	15, // 27: gatewayd.ipc.v1.VPNPlaneService.ReconcileVPNPeers:input_type -> gatewayd.ipc.v1.ReconcileVPNPeersRequest
+	17, // 28: gatewayd.ipc.v1.VPNPlaneService.RenewVPNPeer:input_type -> gatewayd.ipc.v1.RenewVPNPeerRequest
+	21, // 29: gatewayd.ipc.v1.GatewayServicesService.LBStatus:input_type -> gatewayd.ipc.v1.LBStatusRequest
+	23, // 30: gatewayd.ipc.v1.GatewayServicesService.ListVIPs:input_type -> gatewayd.ipc.v1.ListVIPsRequest
+	25, // 31: gatewayd.ipc.v1.GatewayServicesService.GetVIP:input_type -> gatewayd.ipc.v1.GetVIPRequest
+	27, // 32: gatewayd.ipc.v1.GatewayServicesService.AddVIP:input_type -> gatewayd.ipc.v1.AddVIPRequest
+	29, // 33: gatewayd.ipc.v1.GatewayServicesService.RemoveVIP:input_type -> gatewayd.ipc.v1.RemoveVIPRequest
+	31, // 34: gatewayd.ipc.v1.GatewayServicesService.SetVIPBackends:input_type -> gatewayd.ipc.v1.SetVIPBackendsRequest
+	33, // 35: gatewayd.ipc.v1.GatewayServicesService.NAT64Status:input_type -> gatewayd.ipc.v1.NAT64StatusRequest
+	35, // 36: gatewayd.ipc.v1.GatewayServicesService.PerfFlows:input_type -> gatewayd.ipc.v1.PerfFlowsRequest
+	37, // 37: gatewayd.ipc.v1.GatewayServicesService.PerfDatapath:input_type -> gatewayd.ipc.v1.PerfDatapathRequest
+	39, // 38: gatewayd.ipc.v1.GatewayServicesService.PerfConntrack:input_type -> gatewayd.ipc.v1.PerfConntrackRequest
+	5,  // 39: gatewayd.ipc.v1.ProcessControlService.Status:output_type -> gatewayd.ipc.v1.StatusResponse
+	7,  // 40: gatewayd.ipc.v1.ProcessControlService.Snapshot:output_type -> gatewayd.ipc.v1.SnapshotResponse
+	9,  // 41: gatewayd.ipc.v1.DatapathService.ApplyDesired:output_type -> gatewayd.ipc.v1.ApplyDesiredResponse
+	12, // 42: gatewayd.ipc.v1.VPNPlaneService.InstallVPNPeer:output_type -> gatewayd.ipc.v1.InstallVPNPeerResponse
+	14, // 43: gatewayd.ipc.v1.VPNPlaneService.RemoveVPNPeer:output_type -> gatewayd.ipc.v1.RemoveVPNPeerResponse
+	16, // 44: gatewayd.ipc.v1.VPNPlaneService.ReconcileVPNPeers:output_type -> gatewayd.ipc.v1.ReconcileVPNPeersResponse
+	18, // 45: gatewayd.ipc.v1.VPNPlaneService.RenewVPNPeer:output_type -> gatewayd.ipc.v1.RenewVPNPeerResponse
+	22, // 46: gatewayd.ipc.v1.GatewayServicesService.LBStatus:output_type -> gatewayd.ipc.v1.LBStatusResponse
+	24, // 47: gatewayd.ipc.v1.GatewayServicesService.ListVIPs:output_type -> gatewayd.ipc.v1.ListVIPsResponse
+	26, // 48: gatewayd.ipc.v1.GatewayServicesService.GetVIP:output_type -> gatewayd.ipc.v1.GetVIPResponse
+	28, // 49: gatewayd.ipc.v1.GatewayServicesService.AddVIP:output_type -> gatewayd.ipc.v1.AddVIPResponse
+	30, // 50: gatewayd.ipc.v1.GatewayServicesService.RemoveVIP:output_type -> gatewayd.ipc.v1.RemoveVIPResponse
+	32, // 51: gatewayd.ipc.v1.GatewayServicesService.SetVIPBackends:output_type -> gatewayd.ipc.v1.SetVIPBackendsResponse
+	34, // 52: gatewayd.ipc.v1.GatewayServicesService.NAT64Status:output_type -> gatewayd.ipc.v1.NAT64StatusResponse
+	36, // 53: gatewayd.ipc.v1.GatewayServicesService.PerfFlows:output_type -> gatewayd.ipc.v1.PerfFlowsResponse
+	38, // 54: gatewayd.ipc.v1.GatewayServicesService.PerfDatapath:output_type -> gatewayd.ipc.v1.PerfDatapathResponse
+	40, // 55: gatewayd.ipc.v1.GatewayServicesService.PerfConntrack:output_type -> gatewayd.ipc.v1.PerfConntrackResponse
+	39, // [39:56] is the sub-list for method output_type
+	22, // [22:39] is the sub-list for method input_type
+	22, // [22:22] is the sub-list for extension type_name
+	22, // [22:22] is the sub-list for extension extendee
+	0,  // [0:22] is the sub-list for field type_name
 }
 
 func init() { file_ipc_proto_init() }
@@ -2487,9 +2611,9 @@ func file_ipc_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ipc_proto_rawDesc), len(file_ipc_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   37,
+			NumMessages:   39,
 			NumExtensions: 0,
-			NumServices:   3,
+			NumServices:   4,
 		},
 		GoTypes:           file_ipc_proto_goTypes,
 		DependencyIndexes: file_ipc_proto_depIdxs,

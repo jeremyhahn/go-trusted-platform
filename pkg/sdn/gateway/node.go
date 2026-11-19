@@ -50,6 +50,10 @@ const (
 	// ServiceManagementVPN is the attested remote-access VPN (docs/vpn/).
 	// It runs over the assembly's VPNRuntime; without one it is refused.
 	ServiceManagementVPN = "management-vpn"
+	// ServiceVPNWireGuard is the management VPN's WireGuard data plane, run
+	// by its own supervised `wireguard` process (ruling 942): it owns the
+	// hub device and serves VPNPlaneService. Nothing enables it yet (#1698).
+	ServiceVPNWireGuard = "vpn-wireguard"
 )
 
 // Gateway manages the lifecycle and operations of a gateway node.

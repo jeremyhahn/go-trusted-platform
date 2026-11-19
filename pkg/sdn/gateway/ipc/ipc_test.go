@@ -106,10 +106,11 @@ func testContext(t *testing.T) context.Context {
 }
 
 // The running process is the caller here, so its own uid is what the
-// kernel reports; a policy admitting it exercises the allow path.
+// kernel reports; a policy admitting it exercises the allow path. It is the
+// `wireguard` process's socket (VPNPlane), so the VPN verbs answer too.
 func selfPolicy() Policy {
 	uid := uint32(os.Getuid())
-	return Policy{ControlUIDs: []uint32{uid}, DatapathUIDs: []uint32{uid}}
+	return Policy{ControlUIDs: []uint32{uid}, DatapathUIDs: []uint32{uid}, VPNPlane: true}
 }
 
 func TestStatus_ReportsStateServicesAndStartError(t *testing.T) {
@@ -372,7 +373,7 @@ func TestPolicy_TheParserUIDReachesOnlyTheVPNPeerMethods(t *testing.T) {
 	// admits the parser class. The VPN peer methods must answer while
 	// Status and ApplyDesired, the supervisor's alone, are refused: a
 	// compromised parser must not replace the firewall's desired document.
-	policy := Policy{ControlUIDs: []uint32{4294967000}, DatapathUIDs: []uint32{uint32(os.Getuid())}}
+	policy := Policy{ControlUIDs: []uint32{4294967000}, DatapathUIDs: []uint32{uint32(os.Getuid())}, VPNPlane: true}
 	_, client := serve(t, &fakeNode{state: gateway.GatewayStateRunning}, policy)
 
 	if _, err := client.Status(testContext(t)); status.Code(err) != codes.PermissionDenied {
@@ -393,7 +394,7 @@ func TestPolicy_TheParserUIDReachesOnlyTheVPNPeerMethods(t *testing.T) {
 }
 
 func TestPolicyAdmit_TableAndUnknownMethod(t *testing.T) {
-	p := Policy{DatapathUIDs: []uint32{1001}}
+	p := Policy{DatapathUIDs: []uint32{1001}, VPNPlane: true}
 	cases := []struct {
 		method string
 		parser bool
@@ -401,9 +402,10 @@ func TestPolicyAdmit_TableAndUnknownMethod(t *testing.T) {
 		{ipcv1.ProcessControlService_Status_FullMethodName, false},
 		{ipcv1.ProcessControlService_Snapshot_FullMethodName, false},
 		{ipcv1.DatapathService_ApplyDesired_FullMethodName, false},
-		{ipcv1.DatapathService_InstallVPNPeer_FullMethodName, true},
-		{ipcv1.DatapathService_RemoveVPNPeer_FullMethodName, true},
-		{ipcv1.DatapathService_ReconcileVPNPeers_FullMethodName, true},
+		{ipcv1.VPNPlaneService_InstallVPNPeer_FullMethodName, true},
+		{ipcv1.VPNPlaneService_RemoveVPNPeer_FullMethodName, true},
+		{ipcv1.VPNPlaneService_ReconcileVPNPeers_FullMethodName, true},
+		{ipcv1.VPNPlaneService_RenewVPNPeer_FullMethodName, true},
 	}
 	for _, tc := range cases {
 		if err := p.admit(tc.method, creds(0)); err != nil {
@@ -429,10 +431,61 @@ func TestPolicyAdmit_TableAndUnknownMethod(t *testing.T) {
 	}
 }
 
+func TestPolicy_VPNPlaneServiceIsAdmittedOnlyOnTheWireGuardSocket(t *testing.T) {
+	// Ruling 942: the `wireguard` process alone owns the hub device, so
+	// every other socket (VPNPlane unset) refuses VPNPlaneService to every
+	// uid, the supervisor's and the parser's included, while still
+	// admitting the supervisor to its own services.
+	p := Policy{DatapathUIDs: []uint32{1001}}
+	for _, method := range []string{
+		ipcv1.VPNPlaneService_InstallVPNPeer_FullMethodName,
+		ipcv1.VPNPlaneService_RemoveVPNPeer_FullMethodName,
+		ipcv1.VPNPlaneService_ReconcileVPNPeers_FullMethodName,
+		ipcv1.VPNPlaneService_RenewVPNPeer_FullMethodName,
+	} {
+		for _, uid := range []uint32{0, 1001} {
+			var denied *ErrPeerDenied
+			if err := p.admit(method, creds(uid)); !errors.As(err, &denied) || denied.Method != method {
+				t.Fatalf("uid %d on %s off the wireguard socket = %v, want ErrPeerDenied", uid, method, err)
+			}
+		}
+	}
+	if err := p.admit(ipcv1.DatapathService_ApplyDesired_FullMethodName, creds(0)); err != nil {
+		t.Fatalf("root on ApplyDesired: %v", err)
+	}
+
+	// Over the socket: the same refusal reaches the client as
+	// PermissionDenied.
+	uid := uint32(os.Getuid())
+	_, client := serve(t, &fakeNode{state: gateway.GatewayStateRunning}, Policy{ControlUIDs: []uint32{uid}, DatapathUIDs: []uint32{uid}})
+	if _, err := client.InstallVPNPeer(testContext(t), &ipcv1.InstallVPNPeerRequest{Peer: &ipcv1.VPNPeer{LeaseId: "l1"}}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("InstallVPNPeer off the wireguard socket err = %v, want PermissionDenied", err)
+	}
+	if _, err := client.RenewVPNPeer(testContext(t), &ipcv1.RenewVPNPeerRequest{PublicKey: make([]byte, 32)}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("RenewVPNPeer off the wireguard socket err = %v, want PermissionDenied", err)
+	}
+}
+
+func TestVPNPeer_RenewIsRefusedByPlanesThatDoNotRenew(t *testing.T) {
+	// Renewal fails closed: planes with no RenewVPNPeer, or no planes at
+	// all, refuse UNAVAILABLE and the old deadline stands.
+	server, client := serve(t, &fakeNode{state: gateway.GatewayStateRunning}, selfPolicy())
+	req := &ipcv1.RenewVPNPeerRequest{PublicKey: make([]byte, 32), ExpiresAtUnixNano: 1}
+	resp, err := client.RenewVPNPeer(testContext(t), req)
+	if err != nil || resp.GetRefusal().GetClass() != ipcv1.VPNPeerRefusalClass_VPN_PEER_REFUSAL_CLASS_UNAVAILABLE {
+		t.Fatalf("RenewVPNPeer with no planes = %v, %v; want an UNAVAILABLE refusal", resp, err)
+	}
+	server.SetVPNPlanes(&fakeVPNPlanes{})
+	resp, err = client.RenewVPNPeer(testContext(t), req)
+	if err != nil || resp.GetRefusal().GetClass() != ipcv1.VPNPeerRefusalClass_VPN_PEER_REFUSAL_CLASS_UNAVAILABLE {
+		t.Fatalf("RenewVPNPeer on planes that do not renew = %v, %v; want an UNAVAILABLE refusal", resp, err)
+	}
+}
+
 func TestPolicy_EveryContractMethodIsPlaced(t *testing.T) {
 	// A method added to ipc.proto without a policy entry would be refused
 	// to everyone, the supervisor included; this fails before that ships.
-	for _, desc := range []grpc.ServiceDesc{ipcv1.ProcessControlService_ServiceDesc, ipcv1.DatapathService_ServiceDesc, ipcv1.GatewayServicesService_ServiceDesc} {
+	for _, desc := range []grpc.ServiceDesc{ipcv1.ProcessControlService_ServiceDesc, ipcv1.DatapathService_ServiceDesc, ipcv1.VPNPlaneService_ServiceDesc, ipcv1.GatewayServicesService_ServiceDesc} {
 		for _, m := range desc.Methods {
 			method := "/" + desc.ServiceName + "/" + m.MethodName
 			if _, ok := methodAdmissions[method]; !ok {

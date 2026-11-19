@@ -78,12 +78,13 @@ type Definition struct {
 	// the desired document. The supervisor sends the document to each such
 	// child on every apply and gives it to the child at every launch.
 	ReconcilesDesired bool
-	// FollowsDatapath reports whether the process keeps state in the
-	// datapath child: the vpn child's peers live in the planes the datapath
-	// child hosts. When the supervisor relaunches the datapath child it
-	// relaunches such a process too, so its start (the VPN's Restore)
-	// reinstalls that state before the process is reported up again.
-	FollowsDatapath bool
+	// Follows names the process this one keeps state in: the vpn child's
+	// peers live in the planes the `wireguard` process hosts. When the
+	// supervisor relaunches the named process it relaunches this one too,
+	// so its start (the VPN's Restore) reinstalls that state before it is
+	// reported up again; when it gives up on this one, it withdraws that
+	// state from the named process. Empty follows nothing.
+	Follows string
 	// StateDir is the directory under the gatewayd data directory
 	// (--data-dir) the process writes its own state to. The supervisor
 	// creates it before every launch, owned by the credentials the process
@@ -119,6 +120,10 @@ var serviceFamilies = []uint32{unix.AF_UNIX, unix.AF_INET, unix.AF_INET6, unix.A
 // too: their refusal belongs to the child that would host them, so an
 // operator who enables one still gets that section's own ErrServiceUnavailable
 // rather than a supervisor that cannot place it.
+// WireGuardProcess is the `wireguard` process row: the one process that
+// owns the management VPN's WireGuard hub and serves VPNPlaneService.
+const WireGuardProcess = "wireguard"
+
 var definitions = []Definition{
 	{
 		Name:  "datapath",
@@ -143,6 +148,23 @@ var definitions = []Definition{
 		Supervised: true,
 		// The load-balancer and NAT sections.
 		ReconcilesDesired: true,
+	},
+	{
+		Name:     WireGuardProcess,
+		Class:    ClassKernel,
+		Services: []string{gateway.ServiceVPNWireGuard},
+		// The management VPN's WireGuard plane (ruling 942): it creates,
+		// programs and deletes the hub device and nothing else. The kernel
+		// module binds the UDP port, so it opens no inet socket: AF_UNIX for
+		// its IPC, AF_NETLINK for the device.
+		Capabilities:    []uintptr{unix.CAP_NET_ADMIN},
+		AddressFamilies: []uint32{unix.AF_UNIX, unix.AF_NETLINK},
+		MemoryMax:       128 << 20,
+		CPUMax:          "100000 100000",
+		Supervised:      true,
+		// A hung plane is restarted like a crashed one; the supervisor's
+		// exit hook deletes the hub before the relaunch.
+		WatchdogInterval: 10 * time.Second,
 	},
 	{
 		Name:            "routing",
@@ -202,8 +224,8 @@ var definitions = []Definition{
 		Supervised: true,
 		// The vpn section.
 		ReconcilesDesired: true,
-		// Its peers live in the datapath child's planes.
-		FollowsDatapath: true,
+		// Its peers live in the wireguard process's plane.
+		Follows: WireGuardProcess,
 		// Its revocation journal, vpn/pending-revocations.json.
 		StateDir:   "vpn",
 		StateFiles: []string{gateway.VPNRevocationJournalFile},
