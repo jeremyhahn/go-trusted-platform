@@ -2659,6 +2659,8 @@ func (d *Daemon) tlsPreflight() error {
 // cleanup path, and a retry could meet duplicate workers (#32). Stop
 // errors are logged, never masked over the original startup error.
 func (d *Daemon) rollbackPartialStart(ctx context.Context) {
+	d.closePXEBackend("startup rollback")
+
 	// QUIC first: a QUIC Start that acquired resources (bound its
 	// listener, started workers) before returning an error can leave the
 	// surface reachable; IsRunning gates the stop so an unstarted server
@@ -2923,6 +2925,8 @@ func (d *Daemon) Stop(ctx context.Context) error {
 		return ErrDaemonNotRunning{}
 	}
 
+	d.closePXEBackend("stop")
+
 	// Close health registry
 	if d.healthRegistry != nil {
 		if err := d.healthRegistry.Close(); err != nil {
@@ -3024,6 +3028,18 @@ func (d *Daemon) Stop(ctx context.Context) error {
 // Stop. A forced stop ignores the error a failed or expired Stop returns.
 const forceStopTimeoutSeconds = 5
 
+// closePXEBackend stops the PXE backend named in the pxe: section, if any,
+// releasing its iPXE listener and VLAN integration (#1694). A failure is
+// logged; the rest of the shutdown goes on.
+func (d *Daemon) closePXEBackend(phase string) {
+	if d.pxeGRPCService == nil {
+		return
+	}
+	if err := d.pxeGRPCService.Close(); err != nil {
+		d.logger.Warn(phase+": PXE backend close failed", "error", err)
+	}
+}
+
 // ForceStop immediately stops the daemon
 func (d *Daemon) ForceStop() error {
 	if !d.running.Load() {
@@ -3037,6 +3053,8 @@ func (d *Daemon) ForceStop() error {
 	if !d.running.Load() {
 		return ErrDaemonNotRunning{}
 	}
+
+	d.closePXEBackend("force stop")
 
 	// Close health registry
 	if d.healthRegistry != nil {
