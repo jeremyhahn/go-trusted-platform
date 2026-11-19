@@ -169,6 +169,10 @@ func TestAdminBundleIssuer_MintsAdminClientCert(t *testing.T) {
 	if len(cert.Subject.Organization) != 1 || cert.Subject.Organization[0] != app.SystemTenantID {
 		t.Errorf("Organization = %v, want [%s]", cert.Subject.Organization, app.SystemTenantID)
 	}
+	// Since #2020 mTLS reads the tenant from the subject OU only.
+	if len(cert.Subject.OrganizationalUnit) != 1 || cert.Subject.OrganizationalUnit[0] != app.SystemTenantID {
+		t.Errorf("OrganizationalUnit = %v, want [%s]", cert.Subject.OrganizationalUnit, app.SystemTenantID)
+	}
 	if len(cert.ExtKeyUsage) != 1 || cert.ExtKeyUsage[0] != x509.ExtKeyUsageClientAuth {
 		t.Errorf("ExtKeyUsage = %v, want client auth only", cert.ExtKeyUsage)
 	}
