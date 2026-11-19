@@ -16,10 +16,96 @@ package gateway
 import (
 	"context"
 	"errors"
+	"net/netip"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/fhrp"
 )
+
+// TestGatewayStartSweepsOnlyInThePrivilegedProcess: the routing, proxy, VPN
+// and parser children drop their credentials before Gateway.Start and hold
+// no FHRP addresses, so they never sweep the VIP inventory, with FHRP on or
+// off and with the root-owned fhrp state directory unreadable to them. The
+// datapath child, which hosts FHRP, sweeps.
+func TestGatewayStartSweepsOnlyInThePrivilegedProcess(t *testing.T) {
+	recorded := netip.MustParsePrefix("198.51.100.1/24")
+	inventory := func(t *testing.T) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), FHRPStateDir, FHRPInventoryFile)
+		require.NoError(t, fhrp.NewInventory(path).Record("trusted1", 20, recorded))
+		return path
+	}
+	// unreadable stands in for the 0700 root-owned fhrp/ an unprivileged
+	// child cannot read: the inventory path is a directory, which no
+	// load can read as a file, root included.
+	unreadable := func(t *testing.T) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), FHRPStateDir, FHRPInventoryFile)
+		require.NoError(t, os.MkdirAll(path, 0o700))
+		return path
+	}
+	start := func(t *testing.T, cfg *GatewayConfig) error {
+		t.Helper()
+		gw, err := NewGateway(cfg)
+		require.NoError(t, err)
+		gw.SetNodeMetrics(validNodeMetrics())
+		err = gw.Start(context.Background())
+		if err == nil {
+			t.Cleanup(func() { _ = gw.Stop(context.Background()) })
+		}
+		return err
+	}
+
+	for _, hosted := range []string{ServiceTransit, ServiceProxy, ServiceManagementVPN, ServiceDHCP} {
+		for _, fhrpOn := range []bool{false, true} {
+			name := hosted + "/fhrp-off"
+			if fhrpOn {
+				name = hosted + "/fhrp-on"
+			}
+			t.Run(name, func(t *testing.T) {
+				for _, path := range []string{unreadable(t), inventory(t)} {
+					programmer := &fakeFHRPProgrammer{present: map[netip.Prefix]bool{recorded: true}}
+					cfg := baseGatewayConfig("fhrp-sweep-child")
+					if fhrpOn {
+						cfg.FHRP = ownerFHRPConfig()
+					}
+					cfg.HostedServices = []string{hosted}
+					cfg.Host = &HostRuntime{FHRPProgrammer: programmer, FHRPInventory: path}
+
+					require.NoError(t, start(t, cfg), "an unprivileged child never reads the FHRP inventory")
+					assert.Empty(t, programmer.Deleted(), "an unprivileged child never sweeps")
+				}
+			})
+		}
+	}
+
+	t.Run("the datapath child sweeps", func(t *testing.T) {
+		path := inventory(t)
+		programmer := &fakeFHRPProgrammer{present: map[netip.Prefix]bool{recorded: true}}
+		cfg := baseGatewayConfig("fhrp-sweep-datapath")
+		cfg.HostedServices = []string{ServiceFHRP}
+		cfg.Host = &HostRuntime{FHRPProgrammer: programmer, FHRPInventory: path}
+
+		require.NoError(t, start(t, cfg))
+		assert.Equal(t, []netip.Prefix{recorded}, programmer.Deleted())
+	})
+
+	t.Run("a datapath child cannot start on an unreadable inventory", func(t *testing.T) {
+		cfg := baseGatewayConfig("fhrp-sweep-datapath-unreadable")
+		cfg.HostedServices = []string{ServiceFHRP}
+		cfg.Host = &HostRuntime{FHRPProgrammer: &fakeFHRPProgrammer{}, FHRPInventory: unreadable(t)}
+
+		var startup *ErrStartupFailed
+		require.ErrorAs(t, start(t, cfg), &startup)
+	})
+}
 
 // validConfig is a gateway with one runnable service — the firewall on
 // the fake OVS runtime — so lifecycle tests exercise a real backed handler
