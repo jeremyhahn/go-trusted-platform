@@ -1426,10 +1426,19 @@ func TestPXEGRPCServiceFromConfig_DaemonPXESection(t *testing.T) {
 // the zone flow manager sets.
 type pxeRecordingPort struct {
 	vlans []int64
+	// fail makes every flow and VLAN move fail, as an unreachable switch.
+	fail bool
 }
 
-func (p *pxeRecordingPort) InstallFlow(string, int, string, string) error                { return nil }
-func (p *pxeRecordingPort) InstallFlows(string, []zoneflows.FlowRule) error              { return nil }
+var errPXEPortDown = errors.New("switch unreachable")
+
+func (p *pxeRecordingPort) InstallFlow(string, int, string, string) error { return nil }
+func (p *pxeRecordingPort) InstallFlows(string, []zoneflows.FlowRule) error {
+	if p.fail {
+		return errPXEPortDown
+	}
+	return nil
+}
 func (p *pxeRecordingPort) DeleteFlow(string, string) error                              { return nil }
 func (p *pxeRecordingPort) DeleteFlowsByPort(string, string) error                       { return nil }
 func (p *pxeRecordingPort) ListFlows(string) ([]string, error)                           { return nil, nil }
@@ -1437,6 +1446,9 @@ func (p *pxeRecordingPort) SetPortTrunk(context.Context, string, []uint16, uint1
 func (p *pxeRecordingPort) SetPortState(context.Context, string, ovs.PortState) error    { return nil }
 func (p *pxeRecordingPort) GetOFPort(context.Context, string) (int32, error)             { return 1, nil }
 func (p *pxeRecordingPort) SetPortVLAN(_ context.Context, _ string, v int64) error {
+	if p.fail {
+		return errPXEPortDown
+	}
 	p.vlans = append(p.vlans, v)
 	return nil
 }
@@ -1579,6 +1591,33 @@ func TestDaemonStopStopsPXEBackend(t *testing.T) {
 			_ = l.Close()
 		})
 	}
+}
+
+// TestPXEGRPC_UpdateStateFailsWhenTheVLANMoveFails checks that the
+// UpdateState RPC on the configured backend fails, and the device keeps
+// its state, when the flow manager cannot move the device (#1694).
+func TestPXEGRPC_UpdateStateFailsWhenTheVLANMoveFails(t *testing.T) {
+	ctx := context.Background()
+	port := &pxeRecordingPort{}
+	svc, err := pxeGRPCServiceFromConfig(ctx, logging.DefaultLogger(), pxeSectionApp(), pxeEnabledSection(t), pxeTestFlowManager(t, port))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+
+	reg, err := svc.RegisterDevice(ctx, &platformv1.RegisterPXEDeviceRequest{MacAddress: "00:11:22:33:44:dd", PortId: "port-1"})
+	require.NoError(t, err)
+	deviceID := reg.GetDevice().GetId()
+
+	port.fail = true
+	resp, err := svc.UpdateState(ctx, &platformv1.UpdatePXEStateRequest{
+		DeviceId: deviceID,
+		State:    platformv1.ProvisioningState_PROVISIONING_STATE_QUARANTINED,
+		Reason:   "quarantine",
+	})
+	require.Error(t, err, "UpdateState succeeded although the VLAN move failed: %v", resp)
+
+	got, err := svc.GetDevice(ctx, &platformv1.GetPXEDeviceRequest{DeviceId: deviceID})
+	require.NoError(t, err)
+	assert.Equal(t, platformv1.ProvisioningState_PROVISIONING_STATE_DISCOVERED, got.GetDevice().GetState())
 }
 
 // TestPXEGRPCService_FilterFromProto tests filter conversion from proto.
