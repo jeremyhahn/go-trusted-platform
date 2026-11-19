@@ -98,11 +98,112 @@ func (r *recordingTPM) Send(input []byte) ([]byte, error) {
 type fakePlatformModule struct {
 	xkmssdk.TrustedPlatformModule
 	tpm transport.TPM
+	// device is the platform's TPM device path; empty is an in-process
+	// TPM (the simulator).
+	device string
+}
+
+func (f fakePlatformModule) Device() string { return f.device }
+
+// deviceConnTPM is one fake connection to the platform's TPM device.
+type deviceConnTPM struct {
+	sends  int
+	closes int
+}
+
+func (d *deviceConnTPM) Send(input []byte) ([]byte, error) {
+	d.sends++
+	return input, nil
+}
+
+func (d *deviceConnTPM) Close() error {
+	d.closes++
+	return nil
+}
+
+// stubTPMDevice replaces the device check and the device open for one test.
+func stubTPMDevice(t *testing.T, isDevice func(string) bool, open func(string) (transport.TPMCloser, error)) {
+	t.Helper()
+	prevIs, prevOpen := isTPMCharDevice, openTPMDevice
+	isTPMCharDevice, openTPMDevice = isDevice, open
+	t.Cleanup(func() { isTPMCharDevice, openTPMDevice = prevIs, prevOpen })
+}
+
+// TestPlatformTPMOpener_DeviceTPMOpensItsOwnConnection: with a TPM
+// character device each Open is a new connection to that device, never the
+// platform's own transport, so an enrolment never interleaves commands with
+// the platform's TPM work, and a second Open does not wait for the first.
+func TestPlatformTPMOpener_DeviceTPMOpensItsOwnConnection(t *testing.T) {
+	platform := &recordingTPM{}
+	fake := fakePlatformModule{tpm: platform, device: "/dev/tpmrm0"}
+	var conns []*deviceConnTPM
+	var paths []string
+	stubTPMDevice(t, func(string) bool { return true }, func(path string) (transport.TPMCloser, error) {
+		paths = append(paths, path)
+		c := &deviceConnTPM{}
+		conns = append(conns, c)
+		return c, nil
+	})
+	opener := PlatformTPMOpener(func() xkmssdk.TrustedPlatformModule { return fake })
+
+	first, err := opener.Open(context.Background())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	second, err := opener.Open(ctx)
+	if err != nil {
+		t.Fatalf("second Open while the first connection is held: %v", err)
+	}
+	if len(conns) != 2 {
+		t.Fatalf("opened %d device connections, want 2", len(conns))
+	}
+	for i, p := range paths {
+		if p != fake.device {
+			t.Fatalf("connection %d opened %q, want %q", i, p, fake.device)
+		}
+	}
+	if _, err := first.Send([]byte{1}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if _, err := second.Send([]byte{2}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if conns[0].sends != 1 || conns[1].sends != 1 {
+		t.Fatalf("device connections saw %d and %d commands, want 1 each", conns[0].sends, conns[1].sends)
+	}
+	if platform.sends != 0 {
+		t.Fatalf("platform transport saw %d enrolment commands, want 0", platform.sends)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if conns[0].closes != 1 || conns[1].closes != 1 {
+		t.Fatalf("device connections closed %d and %d times, want 1 each", conns[0].closes, conns[1].closes)
+	}
+}
+
+// TestPlatformTPMOpener_DeviceOpenFailureIsNoTransport: a device that does
+// not open answers ErrLUKSTPMNoTransport wrapping the cause.
+func TestPlatformTPMOpener_DeviceOpenFailureIsNoTransport(t *testing.T) {
+	cause := errors.New("device busy")
+	stubTPMDevice(t, func(string) bool { return true }, func(string) (transport.TPMCloser, error) { return nil, cause })
+	fake := fakePlatformModule{tpm: &recordingTPM{}, device: "/dev/tpmrm0"}
+	_, err := PlatformTPMOpener(func() xkmssdk.TrustedPlatformModule { return fake }).Open(context.Background())
+	if !errors.Is(err, ErrLUKSTPMNoTransport) || !errors.Is(err, cause) {
+		t.Fatalf("Open = %v, want ErrLUKSTPMNoTransport wrapping %v", err, cause)
+	}
 }
 
 func (m fakePlatformModule) Transport() transport.TPM { return m.tpm }
 
-func TestPlatformTPMOpener_SharesThePlatformTransport(t *testing.T) {
+// TestPlatformTPMOpener_InProcessTPMSharesThePlatformTransport: an
+// in-process TPM (the simulator, no device path) lends the module transport.
+func TestPlatformTPMOpener_InProcessTPMSharesThePlatformTransport(t *testing.T) {
 	rec := &recordingTPM{}
 	fake := fakePlatformModule{tpm: rec}
 	opener := PlatformTPMOpener(func() xkmssdk.TrustedPlatformModule { return fake })

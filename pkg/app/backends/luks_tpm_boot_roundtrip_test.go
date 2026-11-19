@@ -62,6 +62,10 @@ type simModule struct {
 	tpm transport.TPM
 }
 
+// Device is empty: the simulator is an in-process TPM, so the opener lends
+// its transport.
+func (simModule) Device() string { return "" }
+
 func (m simModule) Transport() transport.TPM { return m.tpm }
 
 func (simModule) IsPlatformPCRExtended() (bool, error) { return true, nil }
