@@ -23,6 +23,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/policy/opa"
 )
 
 func TestConfig_DefaultsAndValidation(t *testing.T) {
@@ -277,4 +279,99 @@ func TestErrors_Messages(t *testing.T) {
 	assert.ErrorIs(t, &ErrPersonFactorInvalid{Cause: cause}, cause)
 	assert.ErrorIs(t, &ErrPoolExhausted{Cause: cause}, cause)
 	assert.ErrorIs(t, &ErrDataPlaneUnavailable{Cause: cause}, cause)
+}
+
+// TestErrPostureUnavailable_NamesTheTenant pins that the refusal names the
+// tenant and the policy when it has them and keeps the gateway default's
+// text when it does not.
+func TestErrPostureUnavailable_NamesTheTenant(t *testing.T) {
+	cause := errors.New("boom")
+	assert.Equal(t, "vpn: posture policy unavailable: boom", (&ErrPostureUnavailable{Cause: cause}).Error())
+
+	named := &ErrPostureUnavailable{TenantID: "tenant-a", Name: "corp", Cause: cause}
+	assert.Equal(t, `vpn: posture policy "corp" of tenant "tenant-a" unavailable: boom`, named.Error())
+	assert.ErrorIs(t, named, cause)
+}
+
+// TestAdmitRenew_ACompileFailureNamesThePolicy pins that the refusal for a
+// tenant policy that failed to compile names the configured policy: the
+// outer ErrPostureUnavailable is the one errors.As finds first.
+func TestAdmitRenew_ACompileFailureNamesThePolicy(t *testing.T) {
+	h := newHarness(t, testConfig())
+	policy := h.svc.cfg.PosturePolicy
+	require.NotEmpty(t, policy)
+	lease, err := h.svc.Admit(context.Background(), h.request(t))
+	require.NoError(t, err)
+
+	err = h.svc.SetPosturePolicies(context.Background(), []PosturePolicy{
+		{TenantID: lease.TenantID, Name: policy, Module: "package vpn.posture\n\nthis is not rego {"},
+	})
+	require.Error(t, err)
+
+	check := func(what string, err error) {
+		t.Helper()
+		var unavailable *ErrPostureUnavailable
+		require.True(t, errors.As(err, &unavailable), "%s: got %v", what, err)
+		assert.Equal(t, policy, unavailable.Name, what)
+		assert.Equal(t, lease.TenantID, unavailable.TenantID, what)
+		assert.NotContains(t, err.Error(), `posture policy ""`, what)
+	}
+	_, err = h.svc.Admit(context.Background(), h.request(t))
+	check("admit", err)
+	h.intoRenewWindow()
+	_, err = h.svc.Renew(context.Background(), lease.ID, h.evidence(t))
+	check("renew", err)
+}
+
+// lookupRecordingPosture is a tenant engine that records the name it was
+// asked to evaluate and answers with a fixed result or error.
+type lookupRecordingPosture struct {
+	result  *opa.EvaluationResult
+	err     error
+	lookups []string
+}
+
+func (p *lookupRecordingPosture) Evaluate(_ context.Context, policyName string, _ map[string]interface{}) (*opa.EvaluationResult, error) {
+	p.lookups = append(p.lookups, policyName)
+	return p.result, p.err
+}
+
+// TestAdmission_PostureUnavailable_NamesTheDeliveredPolicy: a tenant policy
+// is loaded into its engine under DefaultPosturePolicy, but a refusal names
+// the policy the gateway is configured with and the tenant delivered
+// ("corp"), never the engine's internal alias.
+func TestAdmission_PostureUnavailable_NamesTheDeliveredPolicy(t *testing.T) {
+	cases := map[string]*lookupRecordingPosture{
+		"evaluation fails": {err: errors.New("boom")},
+		"nil result":       {},
+	}
+	for name, engine := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg := testConfig()
+			cfg.PosturePolicy = "corp"
+			h := newHarness(t, cfg)
+			h.svc.tenantPosture.Store(&map[string]tenantPosture{"tenant-a": {engine: engine}})
+
+			_, err := h.svc.Admit(context.Background(), h.request(t))
+			var unavailable *ErrPostureUnavailable
+			require.True(t, errors.As(err, &unavailable), "got %v", err)
+			assert.Equal(t, "tenant-a", unavailable.TenantID)
+			assert.Equal(t, "corp", unavailable.Name, "the delivered policy, not the engine alias")
+			assert.NotContains(t, unavailable.Error(), DefaultPosturePolicy)
+			assert.Equal(t, []string{DefaultPosturePolicy}, engine.lookups, "the engine is still asked under its load name")
+			assert.Equal(t, 0, h.posture.inputCount(), "the gateway default is not consulted")
+		})
+	}
+
+	t.Run("gateway default", func(t *testing.T) {
+		cfg := testConfig()
+		cfg.PosturePolicy = "corp"
+		h := newHarness(t, cfg)
+		h.posture.err = errors.New("boom")
+
+		_, err := h.svc.Admit(context.Background(), h.request(t))
+		var unavailable *ErrPostureUnavailable
+		require.True(t, errors.As(err, &unavailable), "got %v", err)
+		assert.Equal(t, "corp", unavailable.Name)
+	})
 }

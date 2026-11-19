@@ -408,7 +408,7 @@ func (c *restClientConn) Invoke(ctx context.Context, method string, args interfa
 		if probeVerdict(method, reqErr, reply) {
 			return nil
 		}
-		return translateInvokeError(httpMethod, reqErr)
+		return translateInvokeError(method, httpMethod, reqErr)
 	}
 	return c.finishInvoke(hasDecoder, decode, raw, reply)
 }
@@ -903,6 +903,9 @@ var templatedRouteTable = map[string]templatedRoute{
 	"/platform.v1.BMCService/GetSystemInfo":      bmcRoute("/api/v1/bmc/{profileID}/system-info", http.MethodGet),
 	"/platform.v1.BMCService/Provision":          bmcRoute("/api/v1/bmc/{profileID}/provision", http.MethodPost),
 	"/platform.v1.BMCService/ProvisionStatus":    bmcRoute("/api/v1/bmc/{profileID}/provision", http.MethodGet),
+	"/platform.v1.BMCService/GetWebCertificate":  bmcRoute("/api/v1/bmc/{profileID}/cert", http.MethodGet),
+	"/platform.v1.BMCService/DeleteUser":         bmcSlotRoute("/api/v1/bmc/{profileID}/users/{slot}", http.MethodDelete),
+	"/platform.v1.BMCService/SetUserPassword":    bmcSlotRoute("/api/v1/bmc/{profileID}/users/{slot}/password", http.MethodPut),
 
 	// Per-tenant barrier RPCs on PlatformTenantService — proto:
 	// pkg/api/grpc/proto/tenant.proto. Server registrations live in
@@ -1398,6 +1401,20 @@ func bmcRoute(path, method string) templatedRoute {
 	}
 }
 
+// bmcSlotRoute builds a templatedRoute for /api/v1/bmc/{profileID}/users/{slot}
+// sub-routes, carrying profile_id and the IPMI user slot in the path. A zero
+// slot is refused with InvalidArgument before any request.
+func bmcSlotRoute(path, method string) templatedRoute {
+	return templatedRoute{
+		path:   path,
+		method: method,
+		pathParams: []pathParam{
+			{placeholder: "{profileID}", field: "profile_id"},
+			{placeholder: "{slot}", field: "slot"},
+		},
+	}
+}
+
 // tenantBarrierRoute constructs a templated route that pulls tenant_id
 // from a per-tenant barrier request message and substitutes {id}.
 func tenantBarrierRoute(path, method string) templatedRoute {
@@ -1803,10 +1820,16 @@ var httpStatusToGRPCMap = map[int]codes.Code{
 // the status it also answers AlreadyExists with. A delete creates nothing, so
 // a 409 on a DELETE is the target's state refusing it: FailedPrecondition.
 // Every other answer takes translateErrorToGRPC.
-func translateInvokeError(httpMethod string, err error) error {
+func translateInvokeError(grpcMethod, httpMethod string, err error) error {
 	var httpErr ErrHTTPStatus
-	if httpMethod == http.MethodDelete && errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusConflict {
-		return status.Error(codes.FailedPrecondition, restErrorMessage(httpErr.Body))
+	if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusConflict {
+		msg := restErrorMessage(httpErr.Body)
+		if conflictCode, ok := restConflictCodes[grpcMethod]; ok {
+			return status.Error(conflictCode(msg), msg)
+		}
+		if httpMethod == http.MethodDelete {
+			return status.Error(codes.FailedPrecondition, msg)
+		}
 	}
 	return translateErrorToGRPC(err)
 }
