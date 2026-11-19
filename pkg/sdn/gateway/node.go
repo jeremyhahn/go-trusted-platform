@@ -122,13 +122,18 @@ var fhrpDatapathServices = []string{
 
 // ownsFHRPAddresses reports whether this process holds the FHRP virtual
 // addresses, and so sweeps the VIP inventory at Start: a single-process
-// gateway does, a supervisor whose FHRP runs in a child does not, and a
-// child does only when it hosts the datapath's services. The routing,
-// proxy, VPN and parser children drop their credentials before Start and
-// never touch the inventory.
+// gateway does; a supervisor parent does when no datapath child will start
+// (no enabled, hosted service of the datapath's row), and leaves the sweep
+// to that child when one will; a child does only when it hosts the
+// datapath's services. The routing, proxy, VPN and parser children drop
+// their credentials before Start and never touch the inventory.
 func (g *Gateway) ownsFHRPAddresses() bool {
 	if g.supervises(ServiceFHRP) {
-		return false
+		// Supervises reads the static class table, not the config: what
+		// is enabled decides whether a datapath child will run.
+		return !slices.ContainsFunc(g.config.EnabledServices(), func(s string) bool {
+			return slices.Contains(fhrpDatapathServices, s) && g.config.Hosts(s)
+		})
 	}
 	if len(g.config.HostedServices) == 0 {
 		return true
@@ -221,8 +226,9 @@ func (g *Gateway) Start(ctx context.Context) error {
 	// VIPs a crashed predecessor left for FHRP groups since removed go
 	// before any service starts, so neither ARP/ND nor the host firewall
 	// ever sees an address no runner owns. Only the process that owns the
-	// datapath and FHRP sweeps: the other children have dropped the
-	// credentials the inventory and the addresses need.
+	// datapath and FHRP sweeps, or the supervisor parent when no datapath
+	// child runs: the other children have dropped the credentials the
+	// inventory and the addresses need.
 	if g.ownsFHRPAddresses() {
 		if err := sweepRemovedFHRPGroups(g.config); err != nil {
 			g.state.Store(uint32(GatewayStateStopped))

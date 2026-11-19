@@ -623,28 +623,30 @@ func buildFHRP(g *Gateway) (backedService, error) {
 // in the current configuration (all of them when FHRP is disabled): a
 // datapath child that died while such a group was Master left them on the
 // interface, and no runner of that group will ever release them. A recorded
-// address a still-configured group no longer lists goes the same way; the
-// addresses a group still configures are left to its own runner.
+// prefix a still-configured group no longer lists goes the same way, also
+// when only its length changed; the prefixes a group still configures are
+// left to its own runner.
 func sweepRemovedFHRPGroups(cfg *GatewayConfig) error {
 	host := cfg.hostRuntime()
 	inv := fhrp.NewInventory(host.FHRPInventory)
 	if inv == nil {
 		return nil
 	}
-	// desired is every address each configured group holds, keyed with
+	// desired is every prefix each configured group holds, keyed with
 	// its group: a recorded VIP stays only while its own group still
-	// configures that address (netip.Addr equality includes the family).
+	// configures that exact prefix, the match the runner's restoreOwned
+	// uses (netip.Prefix equality includes the family and the length).
 	type desired struct {
-		iface string
-		vrid  uint8
-		addr  netip.Addr
+		iface  string
+		vrid   uint8
+		prefix netip.Prefix
 	}
 	configured := make(map[desired]bool)
 	if cfg.FHRP != nil && cfg.FHRP.Enabled {
 		for _, gc := range cfg.FHRP.Groups {
 			for _, raw := range gc.Addresses {
 				if pfx, err := netip.ParsePrefix(raw); err == nil {
-					configured[desired{gc.Interface, gc.VRID, pfx.Addr()}] = true
+					configured[desired{gc.Interface, gc.VRID, pfx}] = true
 				}
 			}
 		}
@@ -658,7 +660,7 @@ func sweepRemovedFHRPGroups(cfg *GatewayConfig) error {
 		programmer = fhrp.NewNetlinkProgrammer()
 	}
 	return inv.Sweep(programmer, func(e fhrp.InventoryEntry) bool {
-		return configured[desired{e.Interface, e.VRID, e.Prefix.Addr()}]
+		return configured[desired{e.Interface, e.VRID, e.Prefix}]
 	})
 }
 
