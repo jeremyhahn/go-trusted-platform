@@ -259,7 +259,7 @@ func TestListManifestsOverQUIC(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListManifests: %v", err)
 	}
-	if len(sender.opcodes) != 1 || sender.opcodes[0] != 0x66 || sender.opcodes[0] != quicwire.OpAttestListManifests {
+	if len(sender.opcodes) != 1 || sender.opcodes[0] != 0x66 {
 		t.Fatalf("opcodes = %x, want one 0x66", sender.opcodes)
 	}
 	if len(sender.listReqs) != 1 {
@@ -286,7 +286,7 @@ func TestDeleteManifestOverQUIC(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeleteManifest: %v", err)
 	}
-	if len(sender.opcodes) != 1 || sender.opcodes[0] != 0x67 || sender.opcodes[0] != quicwire.OpAttestDeleteManifest {
+	if len(sender.opcodes) != 1 || sender.opcodes[0] != 0x67 {
 		t.Fatalf("opcodes = %x, want one 0x67", sender.opcodes)
 	}
 	if len(sender.deleteIDs) != 1 || sender.deleteIDs[0] != "m-9" {

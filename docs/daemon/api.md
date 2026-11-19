@@ -328,7 +328,7 @@ distinct values, twenty-three names:
 | `0x54` | `OpSchedulerCategory` | Scheduler through the composed go-quicbaas SDK; sub-opcodes `SchedulerSub*` `0x01`–`0x0B`, scopes `scheduler:read`/`scheduler:write`/`scheduler:delete` ([docs/sdk/api.md](../sdk/api.md) §3.5) |
 | `0x55` | `OpMessagingCategory` | Messaging through the composed go-quicbaas SDK; sub-opcodes `MessagingSub*` `0x01`–`0x08`, scopes `messaging:read`/`messaging:write`/`messaging:delete` ([docs/sdk/api.md](../sdk/api.md) §3.5) |
 | `0x60` | `OpObjectStorageCategory` | Object storage through the composed go-quicbaas SDK; sub-opcodes `ObjectStorageSub*` `0x01`–`0x08`, scopes `objectstorage:read`/`objectstorage:write`/`objectstorage:delete` ([docs/objectstorage/api-reference-quic.md](../objectstorage/api-reference-quic.md)) |
-| `0x69` | `OpVMExtendedCategory` | VM verbs (create, delete, start, stop, get, list `0x60`–`0x65`; reboot, suspend, resume `0xB6`–`0xB8`), snapshot get, create, restore, delete, list (`0xBA`–`0xBE`), attest and verify attestation (`0xB9`, `0xBF`) and operational sub-opcodes (`0xCC`–`0xD2`, including the destination-side prepare and finalize migration `0xD1`, `0xD2`), each answered by `ComputeService` ([`docs/compute/api.md`](../compute/api.md) §2, §3, §5, §6). The top-level bytes `0x61`–`0x68` and `0x6A` are unassigned and refused as unclassified (#704) |
+| `0x69` | `OpVMExtendedCategory` | VM verbs (create, delete, start, stop, get, list `0x60`–`0x65`; reboot, suspend, resume `0xB6`–`0xB8`), snapshot get, create, restore, delete, list (`0xBA`–`0xBE`), attest and verify attestation (`0xB9`, `0xBF`) and operational sub-opcodes (`0xCC`–`0xD2`, including the destination-side prepare and finalize migration `0xD1`, `0xD2`), each answered by `ComputeService` ([`docs/compute/api.md`](../compute/api.md) §2, §3, §5, §6). `0x61` is `OpDNSCategory`, and `0x66`/`0x67` are the attestation manifest list/delete opcodes (#1686); the top-level bytes `0x62`–`0x65`, `0x68` and `0x6A` are unassigned and refused as unclassified (#704) |
 | `0x90` | `OpClusterCategory` | Cluster; sub-opcodes `ClusterSub*` `0x01`–`0x05`, one per `ClusterService` RPC, scopes `cluster:read`/`cluster:write` ([`docs/cluster/api.md`](../cluster/api.md)). Reclaimed from the never-implemented `OpJWTCreate` |
 | `0x99` | `OpTPM2Category` | Physical TPM |
 | `0x9A` | `OpCeremonyCategory` | Bootstrap ceremony; per-sub-opcode scopes in [`docs/cli/ceremony.md`](../cli/ceremony.md) |
@@ -354,10 +354,10 @@ sub-opcodes routed under that category"*.
 
 ### Two dead opcode names
 
-`OpAttestGetReport` (`0x76`) and `OpAttestGetPCRs` (`0x77`) are shadowed by
-`OpAttestGetManifest` and `OpAttestGetReportByID` at the same values, and the
-handler dispatches on the latter pair. **Both dead names are still in the
-`OpcodeNames` table**, so logs mislabel those two operations. See
+`OpAttestGetManifest` (`0x76`) and `OpAttestGetReportByID` (`0x77`) are what
+the handler dispatches on; `OpAttestGetReport` and `OpAttestGetPCRs` are dead
+aliases at those same two values. **Both dead names are still in the
+`opcodeNames` table**, so logs mislabel those two operations. See
 [`docs/attestation/api.md`](../attestation/api.md) §4.
 
 `sdk/go/wire/quicwire/opcode_uniqueness_test.go` enforces the rule this section

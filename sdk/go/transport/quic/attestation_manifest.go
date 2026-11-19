@@ -29,6 +29,10 @@ import (
 func init() {
 	methodRequestEncoders[platformv1.AttestationService_GetManifest_FullMethodName] = encodeGetManifestRequest
 	methodResponseDecoders[platformv1.AttestationService_GetManifest_FullMethodName] = decodeGetManifestReply
+	methodRequestEncoders[platformv1.AttestationService_ListManifests_FullMethodName] = encodeListManifestsRequest
+	methodResponseDecoders[platformv1.AttestationService_ListManifests_FullMethodName] = decodeListManifestsReply
+	methodRequestEncoders[platformv1.AttestationService_DeleteManifest_FullMethodName] = encodeDeleteManifestRequest
+	methodResponseDecoders[platformv1.AttestationService_DeleteManifest_FullMethodName] = decodeDeleteManifestReply
 }
 
 // manifestGetRequestWire mirrors the server's GetManifestRequest in
@@ -250,5 +254,99 @@ func decodeGetManifestReply(payload []byte, reply interface{}) error {
 		return nil
 	}
 	out.Manifest = wire.Manifest.toProto()
+	return nil
+}
+
+// manifestListRequestWire mirrors the server's ListManifestsRequest
+// (pkg/api/quic/attestation_handlers.go): time bounds cross as RFC 3339
+// nano strings, "" meaning no bound.
+type manifestListRequestWire struct {
+	HostID    string `codec:"host_id"`
+	StartTime string `codec:"start_time"`
+	EndTime   string `codec:"end_time"`
+	Limit     int    `codec:"limit"`
+	Offset    int    `codec:"offset"`
+}
+
+// manifestListWire mirrors the server's ListManifestsResponse.
+type manifestListWire struct {
+	Manifests []*manifestWire `codec:"manifests"`
+	Total     int             `codec:"total"`
+	Timestamp int64           `codec:"timestamp"`
+}
+
+// manifestDeleteRequestWire mirrors the server's DeleteManifestRequest.
+type manifestDeleteRequestWire struct {
+	ID string `codec:"id"`
+}
+
+// manifestDeleteWire mirrors the server's DeleteManifestResponse.
+type manifestDeleteWire struct {
+	Success bool   `codec:"success"`
+	Message string `codec:"message"`
+}
+
+// rfc3339NanoBound renders a protobuf time bound for the wire; nil is "".
+func rfc3339NanoBound(ts *timestamppb.Timestamp) string {
+	if ts == nil {
+		return ""
+	}
+	return ts.AsTime().UTC().Format(time.RFC3339Nano)
+}
+
+func encodeListManifestsRequest(args interface{}) (interface{}, error) {
+	in, ok := args.(*platformv1.ListManifestsRequest)
+	if !ok {
+		return nil, ErrInvalidArgsType{Method: platformv1.AttestationService_ListManifests_FullMethodName}
+	}
+	return &manifestListRequestWire{
+		HostID:    in.GetHostId(),
+		StartTime: rfc3339NanoBound(in.GetStartTime()),
+		EndTime:   rfc3339NanoBound(in.GetEndTime()),
+		Limit:     int(in.GetLimit()),
+		Offset:    int(in.GetOffset()),
+	}, nil
+}
+
+func decodeListManifestsReply(payload []byte, reply interface{}) error {
+	out, ok := reply.(*platformv1.ListManifestsResponse)
+	if !ok {
+		return ErrInvalidReplyType{Method: platformv1.AttestationService_ListManifests_FullMethodName}
+	}
+	var wire manifestListWire
+	if err := quicwire.DecodePayload(payload, &wire); err != nil {
+		return ErrDecodingFailed{Err: err}
+	}
+	out.Manifests = make([]*platformv1.HostManifest, 0, len(wire.Manifests))
+	for _, m := range wire.Manifests {
+		if m == nil {
+			continue
+		}
+		out.Manifests = append(out.Manifests, m.toProto())
+	}
+	if wire.Total > 0 {
+		out.Total = uint32(wire.Total)
+	}
+	return nil
+}
+
+func encodeDeleteManifestRequest(args interface{}) (interface{}, error) {
+	in, ok := args.(*platformv1.DeleteManifestRequest)
+	if !ok {
+		return nil, ErrInvalidArgsType{Method: platformv1.AttestationService_DeleteManifest_FullMethodName}
+	}
+	return &manifestDeleteRequestWire{ID: in.GetId()}, nil
+}
+
+func decodeDeleteManifestReply(payload []byte, reply interface{}) error {
+	out, ok := reply.(*platformv1.DeleteManifestResponse)
+	if !ok {
+		return ErrInvalidReplyType{Method: platformv1.AttestationService_DeleteManifest_FullMethodName}
+	}
+	var wire manifestDeleteWire
+	if err := quicwire.DecodePayload(payload, &wire); err != nil {
+		return ErrDecodingFailed{Err: err}
+	}
+	out.Status = &platformv1.Status{Success: wire.Success, Message: wire.Message}
 	return nil
 }
