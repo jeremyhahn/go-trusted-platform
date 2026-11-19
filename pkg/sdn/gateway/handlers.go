@@ -622,22 +622,31 @@ func buildFHRP(g *Gateway) (backedService, error) {
 // sweepRemovedFHRPGroups deletes the recorded VIPs of every FHRP group not
 // in the current configuration (all of them when FHRP is disabled): a
 // datapath child that died while such a group was Master left them on the
-// interface, and no runner of that group will ever release them. A
-// still-configured group's addresses are left to its own runner.
+// interface, and no runner of that group will ever release them. A recorded
+// address a still-configured group no longer lists goes the same way; the
+// addresses a group still configures are left to its own runner.
 func sweepRemovedFHRPGroups(cfg *GatewayConfig) error {
 	host := cfg.hostRuntime()
 	inv := fhrp.NewInventory(host.FHRPInventory)
 	if inv == nil {
 		return nil
 	}
-	type group struct {
+	// desired is every address each configured group holds, keyed with
+	// its group: a recorded VIP stays only while its own group still
+	// configures that address (netip.Addr equality includes the family).
+	type desired struct {
 		iface string
 		vrid  uint8
+		addr  netip.Addr
 	}
-	configured := make(map[group]bool)
+	configured := make(map[desired]bool)
 	if cfg.FHRP != nil && cfg.FHRP.Enabled {
 		for _, gc := range cfg.FHRP.Groups {
-			configured[group{gc.Interface, gc.VRID}] = true
+			for _, raw := range gc.Addresses {
+				if pfx, err := netip.ParsePrefix(raw); err == nil {
+					configured[desired{gc.Interface, gc.VRID, pfx.Addr()}] = true
+				}
+			}
 		}
 	}
 	programmer := host.FHRPProgrammer
@@ -648,8 +657,8 @@ func sweepRemovedFHRPGroups(cfg *GatewayConfig) error {
 		}
 		programmer = fhrp.NewNetlinkProgrammer()
 	}
-	return inv.Sweep(programmer, func(iface string, vrid uint8) bool {
-		return configured[group{iface, vrid}]
+	return inv.Sweep(programmer, func(e fhrp.InventoryEntry) bool {
+		return configured[desired{e.Interface, e.VRID, e.Prefix.Addr()}]
 	})
 }
 

@@ -54,7 +54,7 @@ func TestInventory_RecordForgetAndSweep(t *testing.T) {
 		t.Fatalf("Forget: %v", err)
 	}
 	prog := &sweepProgrammer{failing: b}
-	err = inv.Sweep(prog, func(iface string, vrid uint8) bool { return false })
+	err = inv.Sweep(prog, func(InventoryEntry) bool { return false })
 	var invErr *ErrInventory
 	var addrErr *ErrAddressOperationFailed
 	if !errors.As(err, &invErr) || !errors.As(err, &addrErr) || addrErr.Address != b {
@@ -77,7 +77,7 @@ func TestInventory_NilAndMissingFileRecordNothing(t *testing.T) {
 	if err := none.Record("eth0", 1, netip.MustParsePrefix("192.0.2.1/24")); err != nil {
 		t.Fatalf("nil Record: %v", err)
 	}
-	if err := none.Sweep(&sweepProgrammer{}, func(string, uint8) bool { return false }); err != nil {
+	if err := none.Sweep(&sweepProgrammer{}, func(InventoryEntry) bool { return false }); err != nil {
 		t.Fatalf("nil Sweep: %v", err)
 	}
 	path := filepath.Join(t.TempDir(), VIPInventoryFile)

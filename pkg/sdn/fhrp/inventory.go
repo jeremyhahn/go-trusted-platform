@@ -105,10 +105,11 @@ func (inv *Inventory) Forget(iface string, vrid uint8, p netip.Prefix) error {
 	return inv.store(kept)
 }
 
-// Sweep deletes, through prog, every recorded address whose group
-// (interface, VRID) keep rejects, and rewrites the file with what is left.
+// Sweep deletes, through prog, every recorded entry keep rejects (a group
+// no longer configured, or an address its group no longer configures), and
+// rewrites the file with what is left.
 // A delete that fails stays recorded and fails the sweep.
-func (inv *Inventory) Sweep(prog Programmer, keep func(iface string, vrid uint8) bool) error {
+func (inv *Inventory) Sweep(prog Programmer, keep func(InventoryEntry) bool) error {
 	if inv == nil {
 		return nil
 	}
@@ -121,7 +122,7 @@ func (inv *Inventory) Sweep(prog Programmer, keep func(iface string, vrid uint8)
 	var first error
 	kept := make([]InventoryEntry, 0, len(entries))
 	for _, e := range entries {
-		if keep(e.Interface, e.VRID) {
+		if keep(e) {
 			kept = append(kept, e)
 			continue
 		}
