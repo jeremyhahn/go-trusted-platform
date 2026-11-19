@@ -7,6 +7,8 @@ import (
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
@@ -113,6 +115,9 @@ type orderedApps struct {
 	apps       []iamsdk.Application
 	registered *iamsdk.RegisterAppRequest
 	updated    *iamsdk.UpdateAppRequest
+	updates    int
+	deleted    []string
+	rotated    []string
 }
 
 func (o *orderedApps) List(_ context.Context, _ string) (*iamsdk.ListAppsResponse, error) {
@@ -129,6 +134,7 @@ func (o *orderedApps) Register(_ context.Context, tenantID string, req *iamsdk.R
 
 func (o *orderedApps) Update(_ context.Context, tenantID, clientID string, req *iamsdk.UpdateAppRequest) (*iamsdk.Application, error) {
 	o.updated = req
+	o.updates++
 	return &iamsdk.Application{
 		ClientID: clientID, TenantID: tenantID, Name: req.Name,
 		ResourcePrefix: req.ResourcePrefix, ResponseTypes: req.ResponseTypes,
@@ -145,7 +151,13 @@ func (o *orderedApps) Get(_ context.Context, _, clientID string) (*iamsdk.Applic
 }
 
 func (o *orderedApps) RotateSecret(_ context.Context, _, clientID string) (*iamsdk.RotateSecretResponse, error) {
+	o.rotated = append(o.rotated, clientID)
 	return &iamsdk.RotateSecretResponse{ClientID: clientID, ClientSecret: "s3"}, nil
+}
+
+func (o *orderedApps) Delete(_ context.Context, _, clientID string) error {
+	o.deleted = append(o.deleted, clientID)
+	return nil
 }
 
 // orderedAppsClient is the cov964 upstream client with orderedApps as its
@@ -206,4 +218,44 @@ func TestAppMethodsOverSDKREST_ProductionAdapter(t *testing.T) {
 	assert.Equal(t, "c1", rotated.GetClientId())
 	assert.Equal(t, "one", rotated.GetName())
 	assert.Equal(t, "s3", rotated.GetClientSecret())
+
+	_, err = client.DeleteApp(ctx, &platformv1.DeleteIAMAppRequest{TenantId: tenant, ClientId: "c1"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"c1"}, apps.deleted)
+}
+
+// TestAppMethodsOverSDKREST_ProductionAdapterForeignApp proves the production
+// adapter refuses another tenant's app: upstream looks apps up by client ID
+// alone, so the adapter checks the fetched app's tenant before it returns,
+// updates, deletes or rotates anything (#1957).
+func TestAppMethodsOverSDKREST_ProductionAdapterForeignApp(t *testing.T) {
+	t.Parallel()
+	const tenant = "tenant-a"
+	apps := &orderedApps{apps: []iamsdk.Application{
+		{ClientID: "x9", TenantID: "tenant-b", Name: "theirs"},
+	}}
+	adapter := NewQuicBaaSIAMAdapter(&orderedAppsClient{cov964Client: cov964NewClient(), apps: apps})
+	conn := sdkRESTConnection(t, adminSessionIAMServer(t, adapter, &mockPEPClient{}))
+	client := platformv1.NewPlatformIAMServiceClient(conn)
+	ctx := context.Background()
+
+	_, err := client.GetApp(ctx, &platformv1.GetIAMAppRequest{TenantId: tenant, ClientId: "x9"})
+	require.Error(t, err)
+	assert.Equal(t, codes.NotFound, status.Code(err), "get: %v", err)
+
+	_, err = client.UpdateApp(ctx, &platformv1.UpdateIAMAppRequest{TenantId: tenant, ClientId: "x9", Name: "mine"})
+	require.Error(t, err)
+	assert.Equal(t, codes.NotFound, status.Code(err), "update: %v", err)
+
+	_, err = client.DeleteApp(ctx, &platformv1.DeleteIAMAppRequest{TenantId: tenant, ClientId: "x9"})
+	require.Error(t, err)
+	assert.Equal(t, codes.NotFound, status.Code(err), "delete: %v", err)
+
+	_, err = client.RotateAppSecret(ctx, &platformv1.RotateIAMAppSecretRequest{TenantId: tenant, ClientId: "x9"})
+	require.Error(t, err)
+	assert.Equal(t, codes.NotFound, status.Code(err), "rotate: %v", err)
+
+	assert.Empty(t, apps.deleted)
+	assert.Empty(t, apps.rotated)
+	assert.Zero(t, apps.updates)
 }
