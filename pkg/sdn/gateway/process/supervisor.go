@@ -977,6 +977,9 @@ func (s *Supervisor) watch(ctx context.Context, proc *supervised, child Child, n
 		failure, cause = proc.missed, proc.missed
 	}
 	proc.missed, proc.missedChild = nil, nil
+	// Recorded with the child cleared: a StartService claim made before
+	// runExitHook or noteRestart sees a replacement and replays followers.
+	proc.failure = failure
 	// The generation that exited: the hook below and its retries clean up
 	// after this child only, never over a replacement claimed since.
 	gen := proc.launchGen
@@ -1071,7 +1074,7 @@ func (e *ErrExitHook) Unwrap() error { return e.Cause }
 // against a process that can never start.
 func (s *Supervisor) restartLoop(ctx context.Context, proc *supervised, gen uint64, failure error, cause error) {
 	for {
-		backoff, over, w := s.noteRestart(ctx, proc, failure, cause)
+		backoff, over, w := s.noteRestart(ctx, proc, gen, failure, cause)
 		if over {
 			if w != nil {
 				w.err = s.withdrawFollowerPeers(w.ctx, w.stop, proc)
@@ -1396,9 +1399,17 @@ func (s *Supervisor) relaunchFollower(ctx context.Context, p *supervised) {
 // noteRestart records one restart against the budget and returns the backoff
 // to wait before the next attempt. It reports over when the budget is spent,
 // having left the exhaustion in the process's failure for the health report.
-func (s *Supervisor) noteRestart(ctx context.Context, proc *supervised, failure error, cause error) (time.Duration, bool, *withdrawal) {
+func (s *Supervisor) noteRestart(ctx context.Context, proc *supervised, gen uint64, failure error, cause error) (time.Duration, bool, *withdrawal) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// A replacement of another generation is up or claimed: it owns the
+	// process's failure, budget and follower replay, so this loop's
+	// bookkeeping stops here. A claim of gen itself (a crash during
+	// readiness) is not fenced.
+	if proc.child != nil || (proc.launching && proc.claimGen != gen) {
+		return 0, true, nil
+	}
 
 	now := s.cfg.Clock.Now()
 	// A process that stayed up longer than the whole window is not in a

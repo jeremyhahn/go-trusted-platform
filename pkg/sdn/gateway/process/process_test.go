@@ -1913,7 +1913,7 @@ func TestCrashLoop_TheGiveUpRegistersItsWithdrawalUnderTheSameLock(t *testing.T)
 	supervisor.mu.Unlock()
 
 	failure := errors.New("signal: killed")
-	_, over, w := supervisor.noteRestart(ctx, proc, failure, failure)
+	_, over, w := supervisor.noteRestart(ctx, proc, proc.launchGen, failure, failure)
 	require.True(t, over, "the budget is exhausted")
 	require.NotNil(t, w, "an unclaimed follower gets a withdrawal")
 	supervisor.mu.Lock()
