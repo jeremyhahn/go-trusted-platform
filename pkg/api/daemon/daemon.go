@@ -1498,6 +1498,11 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		}
 		daemon.concreteRestServer.SetVPNHandlers(vpnGRPCService, restGuard)
 		daemon.concreteRestServer.SetAppServiceHandlers(appServices.restServers(), restGuard)
+		if err := daemon.concreteRestServer.SetServiceControlHandlers(restGuard); err != nil {
+			constructErr := ErrTransportConstructionFailed{Transport: transportREST, Cause: err}
+			logger.Error(constructErr, "component", "rest_server")
+			return nil, constructErr
+		}
 		if computeService != nil {
 			daemon.concreteRestServer.SetComputeHandlers(computeService, restGuard)
 		}
