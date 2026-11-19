@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -724,6 +725,51 @@ func TestSpeaker_AdoptsAStaleVIPAfterRestart(t *testing.T) {
 		<-prog.claimed
 		require.NoError(t, s.Stop(context.Background()))
 		assert.False(t, prog.holds("br-int", "10.4.200.1/24"), "Stop deleted the stale VIP the master adopted")
+	})
+}
+
+// TestSpeakerRestoresInventoryOwnedVIPAfterCrash: a priority-255 runner that
+// crashed after adding its VIP finds the address on the interface at
+// restart. The inventory says this node installed it, so the restarted
+// runner owns it again rather than taking it for a permanent owner address,
+// and Stop removes it after the priority-zero handoff. An address the
+// inventory does not record stays the owner's own.
+func TestSpeakerRestoresInventoryOwnedVIPAfterCrash(t *testing.T) {
+	vip := netip.MustParsePrefix("10.4.200.1/24")
+	run := func(t *testing.T, recorded bool) (*fakeProgrammer, *Inventory) {
+		t.Helper()
+		inv := NewInventory(filepath.Join(t.TempDir(), VIPInventoryFile))
+		if recorded {
+			require.NoError(t, inv.Record("br-int", 20, vip))
+		}
+		clock := newFakeClock(t0)
+		sink := newEventSink()
+		prog := newFakeProgrammer()
+		prog.addrs["br-int/10.4.200.1/24"] = nil
+		s, err := New(speakerConfig(PriorityOwner, "10.4.200.2"), Deps{
+			Transport: &fakeTransport{seg: newSegment()}, Programmer: prog, Clock: clock,
+			Logger: quietLogger(), Observer: sink, Inventory: inv,
+		})
+		require.NoError(t, err)
+		require.NoError(t, s.Start(context.Background()))
+		sink.await(t, func(ev Event) bool { return ev.Kind == EventTransition && ev.Status.State == StateMaster })
+		require.NoError(t, s.Stop(context.Background()))
+		return prog, inv
+	}
+
+	t.Run("an address this node installed is released at Stop", func(t *testing.T) {
+		prog, inv := run(t, true)
+		assert.False(t, prog.holds("br-int", "10.4.200.1/24"), "Stop deleted the VIP the crashed owner had installed")
+		entries, err := inv.Entries()
+		require.NoError(t, err)
+		assert.Empty(t, entries, "the released VIP is forgotten")
+	})
+	t.Run("an address the inventory does not record stays the owner's", func(t *testing.T) {
+		prog, inv := run(t, false)
+		assert.True(t, prog.holds("br-int", "10.4.200.1/24"))
+		entries, err := inv.Entries()
+		require.NoError(t, err)
+		assert.Empty(t, entries)
 	})
 }
 
