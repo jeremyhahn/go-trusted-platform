@@ -733,6 +733,62 @@ func TestRetry_ALostReleaseResponseNeverFreesAReadmittedLease(t *testing.T) {
 	assert.True(t, h.plane.hosts("lease-2"))
 }
 
+// A lost release response leaves the release owed; if the device is then
+// readmitted at the freed address through another gateway sharing the pool,
+// this gateway's store cannot see that lease, and the retried release must
+// not free the other gateway's live allocation.
+func TestRetry_ALostReleaseResponseNeverFreesAnotherGatewaysReadmission(t *testing.T) {
+	ctx := context.Background()
+	h := newRestoreHarness(t)
+	lossy := &lostReleaseAllocator{Allocator: h.ipam}
+	svc, err := New(Deps{
+		Identity:   &fakeIdentity{},
+		Verifier:   &fakeVerifier{},
+		Posture:    &fakePosture{},
+		Factors:    &fakeFactors{},
+		IPAM:       lossy,
+		DataPlanes: map[DataPlaneKind]DataPlane{DataPlaneMASQUE: h.plane},
+		Leases:     h.store,
+		Audit:      &fakeAudit{},
+		Clock:      h.clock,
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}, testConfig())
+	require.NoError(t, err)
+	h.svc = svc
+
+	lease := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
+	lease.Zones = []string{"fabric"}
+	require.NoError(t, h.store.Put(ctx, lease))
+	h.plane.installed[lease.ID] = lease
+	h.allocateVPN(t, "mini-1", lease.Address)
+	h.start(t)
+	h.plane.failRemovals(errors.New("datapath unreachable"))
+	err = h.svc.Restore(ctx)
+	var dropped *ErrLeaseNotRestored
+	require.True(t, errors.As(err, &dropped), "got %v", err)
+
+	// The retried removal succeeds; the release commits but its response
+	// is lost, so lease-1 is owed again.
+	h.plane.failRemovals(nil)
+	lossy.lose.Store(true)
+	h.svc.Sweep(ctx)
+	require.False(t, h.plane.hosts(lease.ID))
+	require.Equal(t, "", h.holder(t, lease.Address), "the release committed")
+
+	// gw-b readmits the same device at the freed address; gw-a's store
+	// holds no lease for it.
+	h.allocateTagged(t, "mini-1", lease.Address, "vpn", "tenant:tenant-a", "gateway:gw-b")
+
+	h.svc.Sweep(ctx)
+	assert.Equal(t, "mini-1", h.holder(t, lease.Address), "the owed release never frees gw-b's allocation")
+	alloc, err := h.ipam.GetAllocation(ctx, lease.Address.Addr())
+	require.NoError(t, err)
+	assert.Contains(t, alloc.Tags, "gateway:gw-b")
+
+	h.svc.Sweep(ctx)
+	assert.Equal(t, "mini-1", h.holder(t, lease.Address), "the obligation was dropped, not owed again")
+}
+
 func TestRetry_ReclaimDuringAWaitingRetryKeepsTheOwedAddress(t *testing.T) {
 	ctx := context.Background()
 	h := newRestoreHarness(t)
