@@ -43,6 +43,12 @@ import type { TPMCapability } from "trusted-platform-sdk";
 const findCapability = (caps: TPMCapability[] | undefined, name: string) =>
   caps?.find((c) => c.name === name);
 
+// A missing or non-numeric capability reads as 0, never NaN (#1824).
+const capabilityInt = (caps: TPMCapability[] | undefined, name: string): number => {
+  const n = parseInt(findCapability(caps, name)?.value || "0", 10);
+  return Number.isFinite(n) ? n : 0;
+};
+
 const formatSeconds = (seconds: number): string => {
   if (seconds === 0) return "0";
   if (seconds < 60) return `${seconds}s`;
@@ -76,10 +82,10 @@ export default function TPMLockoutPage() {
 
   const lockout = React.useMemo(() => {
     const caps = tpmInfo?.capabilities;
-    const counter = parseInt(findCapability(caps, "lockoutCounter")?.value || "0", 10);
-    const intervalSec = parseInt(findCapability(caps, "lockoutInterval")?.value || "0", 10);
-    const recoverySec = parseInt(findCapability(caps, "lockoutRecovery")?.value || "0", 10);
-    const maxAuthFail = parseInt(findCapability(caps, "maxAuthFail")?.value || "0", 10);
+    const counter = capabilityInt(caps, "lockoutCounter");
+    const intervalSec = capabilityInt(caps, "lockoutInterval");
+    const recoverySec = capabilityInt(caps, "lockoutRecovery");
+    const maxAuthFail = capabilityInt(caps, "maxAuthFail");
     return {
       counter,
       maxAuthFail,

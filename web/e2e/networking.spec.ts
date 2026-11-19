@@ -2291,7 +2291,6 @@ test.describe('Networking Management', () => {
 
       // Wait for page to settle
       await page.waitForLoadState('domcontentloaded');
-      await page.waitForTimeout(500);
 
       // Page should handle error gracefully - check for multiple indicators
       // The page may show: error state, empty state, or still load with degraded content
@@ -2302,6 +2301,7 @@ test.describe('Networking Management', () => {
         page.locator('[data-testid*="error"]'),
         page.locator('[class*="error"]').first(),
       ];
+      await errorIndicators.slice(1).reduce((acc, l) => acc.or(l), errorIndicators[0]).first().waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
 
       const gracefulIndicators = [
         page.getByRole('heading', { name: /pxe/i }),
@@ -2390,9 +2390,6 @@ test.describe('Networking Management', () => {
             if (bodyVisible) return true;
           } catch {
             // Retry on connection failure
-            if (attempt < 1) {
-              await page.waitForTimeout(500);
-            }
           }
         }
         return false;

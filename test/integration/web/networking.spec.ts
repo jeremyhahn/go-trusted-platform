@@ -519,9 +519,6 @@ test.describe('VLANs Page', () => {
     test('should display VLANs table', async ({ authenticatedPage }) => {
       await authenticatedPage.goto('/networking/vlans');
 
-      // Wait for page to render with internal mock data
-      await authenticatedPage.waitForTimeout(500);
-
       // The page uses DataTable component which renders a table
       const table = authenticatedPage.locator('table');
       await expect(table).toBeVisible();
@@ -705,8 +702,7 @@ test.describe('VLANs Page', () => {
     test('should display port count badges', async ({ authenticatedPage }) => {
       await authenticatedPage.goto('/networking/vlans');
 
-      // Wait for page to render with internal mock data
-      await authenticatedPage.waitForTimeout(500);
+      await expect(authenticatedPage.locator('table')).toBeVisible();
 
       // Check for port count badge (e.g., "X port(s)")
       const portCount = authenticatedPage.locator('text=/\\d+ ports?/');

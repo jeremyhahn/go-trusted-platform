@@ -68,31 +68,47 @@ export default function ImagesPage() {
     [],
   );
 
+  // applyImages settles the list request into state from its promise
+  // callbacks, so the mount effect can start it without a synchronous
+  // setState (react-hooks/set-state-in-effect).
+  const applyImages = React.useCallback(
+    (request: Promise<ImageSummary[]>) =>
+      request
+        .then(
+          (list) => {
+            setImages(list);
+            setError(null);
+          },
+          (e: unknown) => {
+            setError(e instanceof Error ? e.message : String(e));
+          }
+        )
+        .finally(() => setIsLoading(false)),
+    []
+  );
+
+  const loadImages = React.useCallback(async (): Promise<ImageSummary[]> => {
+    const res = await fetch("/api/v1/compute/images", fetchOpts);
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+    }
+    const body = await res.json();
+    const data: ListResponse =
+      body.payload && typeof body.payload === "object"
+        ? (body.payload as ListResponse)
+        : (body as ListResponse);
+    return data.images ?? [];
+  }, [fetchOpts]);
+
   const fetchImages = React.useCallback(async () => {
     setIsLoading(true);
     setError(null);
-    try {
-      const res = await fetch("/api/v1/compute/images", fetchOpts);
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}: ${await res.text()}`);
-      }
-      const body = await res.json();
-      const data: ListResponse =
-        body.payload && typeof body.payload === "object"
-          ? (body.payload as ListResponse)
-          : (body as ListResponse);
-      setImages(data.images ?? []);
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setError(msg);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [fetchOpts]);
+    await applyImages(loadImages());
+  }, [applyImages, loadImages]);
 
   React.useEffect(() => {
-    void fetchImages();
-  }, [fetchImages]);
+    void applyImages(loadImages());
+  }, [applyImages, loadImages]);
 
   const handleDelete = async (img: ImageSummary) => {
     const ref = img.tag ? `${img.repository}:${img.tag}` : img.repository;

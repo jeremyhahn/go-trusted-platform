@@ -257,10 +257,13 @@ export default function TimeSeriesPage() {
     }
   );
 
-  // Load sample metrics on mount
-  React.useEffect(() => {
+  // Load sample metrics on mount (state adjusted during render, not in an
+  // effect).
+  const [loadedSample, setLoadedSample] = React.useState<TimeSeriesMetricUI[] | null>(null);
+  if (loadedSample !== sampleMetrics) {
+    setLoadedSample(sampleMetrics);
     setMetrics(sampleMetrics);
-  }, [sampleMetrics]);
+  }
 
   const handleQuery = async () => {
     if (!queryData.metric.trim()) {
