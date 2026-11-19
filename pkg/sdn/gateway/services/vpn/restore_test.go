@@ -476,6 +476,76 @@ func TestRestore_ReclaimSkipsAnAddressAnOwedRemovalStillHolds(t *testing.T) {
 	assert.Equal(t, "mini-1", h.holder(t, lease.Address), "an owed peer removal still holds its address")
 }
 
+// revokeInFlight starts a revocation of lease and returns once the
+// revocation has deleted the lease and is held in RemovePeer, with the
+// channel its result arrives on.
+func (h *restoreHarness) revokeInFlight(t *testing.T, lease *Lease) (*pause, <-chan error) {
+	t.Helper()
+	ctx := context.Background()
+	p := newPause()
+	h.plane.mu.Lock()
+	h.plane.removePause = p
+	h.plane.mu.Unlock()
+	done := make(chan error, 1)
+	go func() { done <- h.svc.Revoke(ctx, lease.ID, RevokeClient) }()
+	select {
+	case <-p.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Revoke never reached RemovePeer")
+	}
+	h.plane.mu.Lock()
+	h.plane.removePause = nil
+	h.plane.mu.Unlock()
+	stored, err := h.store.List(ctx)
+	require.NoError(t, err)
+	require.Empty(t, stored, "the lease is deleted before its peer removal")
+	return p, done
+}
+
+func TestReclaimOrphans_RevokeInFlightKeepsAddress(t *testing.T) {
+	ctx := context.Background()
+	h := newRestoreHarness(t)
+	lease := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
+	h.allocateVPN(t, "mini-1", lease.Address)
+	h.start(t)
+	require.NoError(t, h.svc.Restore(ctx))
+
+	p, done := h.revokeInFlight(t, lease)
+	require.NoError(t, h.svc.reclaimOrphanAddresses(ctx))
+	assert.Equal(t, "mini-1", h.holder(t, lease.Address), "a revocation in flight still holds its address")
+
+	close(p.release)
+	require.NoError(t, <-done)
+	assert.Empty(t, h.holder(t, lease.Address), "the settled revocation releases its address")
+
+	// The address goes to a replacement; neither a late release nor a
+	// reclaim may take it from it.
+	h.allocateVPN(t, "mini-2", lease.Address)
+	h.seed(t, "lease-2", "mini-2", "100.64.0.2/32")
+	require.NoError(t, h.svc.reclaimOrphanAddresses(ctx))
+	assert.Equal(t, "mini-2", h.holder(t, lease.Address), "the address was released exactly once")
+}
+
+func TestReclaimOrphans_RevokeInFlightFailedRemovalKeepsAddress(t *testing.T) {
+	ctx := context.Background()
+	h := newRestoreHarness(t)
+	lease := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
+	h.allocateVPN(t, "mini-1", lease.Address)
+	h.start(t)
+	require.NoError(t, h.svc.Restore(ctx))
+
+	p, done := h.revokeInFlight(t, lease)
+	h.plane.failRemovals(errors.New("datapath unreachable"))
+	require.NoError(t, h.svc.reclaimOrphanAddresses(ctx))
+	assert.Equal(t, "mini-1", h.holder(t, lease.Address), "a revocation in flight still holds its address")
+
+	close(p.release)
+	require.Error(t, <-done, "the peer removal failed")
+	require.True(t, h.plane.hosts(lease.ID), "the revoked peer is still installed")
+	require.NoError(t, h.svc.reclaimOrphanAddresses(ctx))
+	assert.Equal(t, "mini-1", h.holder(t, lease.Address), "the owed removal holds the address through peerRetry")
+}
+
 func TestRestore_ReclaimLeavesAnotherGatewaysAllocationAlone(t *testing.T) {
 	ctx := context.Background()
 	h := newRestoreHarness(t)
