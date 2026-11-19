@@ -281,7 +281,8 @@ func TestIAMGRPCService_CrossTenantRPCsAreSystemOnly(t *testing.T) {
 		wantCode     codes.Code
 	}{
 		{name: "system tenant", systemTenant: "system", ctx: tokenCallerContext("system"), wantCode: codes.OK},
-		{name: "unbound local caller", systemTenant: "system", ctx: context.Background(), wantCode: codes.OK},
+		{name: "local operator", systemTenant: "system", ctx: unixOperatorContext(), wantCode: codes.OK},
+		{name: "anonymous caller", systemTenant: "system", ctx: context.Background(), wantCode: codes.PermissionDenied},
 		{name: "other tenant", systemTenant: "system", ctx: tokenCallerContext("tenant-a"), wantCode: codes.PermissionDenied},
 		{name: "unset system tenant", systemTenant: "", ctx: tokenCallerContext("system"), wantCode: codes.PermissionDenied},
 	}
@@ -300,7 +301,7 @@ func TestIAMGRPCService_CrossTenantRPCsAreSystemOnly(t *testing.T) {
 				t.Fatalf("ListTenants code = %v, want %v (err %v)", status.Code(err), tc.wantCode, err)
 			}
 
-			listed, err := svc.ListTenants(context.Background(), &platformv1.ListIAMTenantsRequest{})
+			listed, err := svc.ListTenants(unixOperatorContext(), &platformv1.ListIAMTenantsRequest{})
 			if err != nil {
 				t.Fatalf("ListTenants as the local caller: %v", err)
 			}
