@@ -103,6 +103,56 @@ func TestQUICAttestation_GetManifest(t *testing.T) {
 	assert.Equal(t, quicwire.StatusInvalidArgument, resp.Status, "gRPC InvalidArgument is QUIC InvalidArgument")
 }
 
+// dispatchAttestation sends one request through QUICServiceHandler's
+// top-level opcode dispatch, not straight to handleAttestationOperation.
+func dispatchAttestation(t *testing.T, h *QUICServiceHandler, opcode byte, msg any) *quicwire.Response {
+	t.Helper()
+	payload, err := quicwire.EncodePayload(msg)
+	require.NoError(t, err)
+	resp := h.HandleRequest(context.Background(), &quicwire.Request{Opcode: opcode, Payload: payload})
+	require.NotNil(t, resp)
+	return resp
+}
+
+// TestQUICAttestation_ListManifests: 0x66 reaches the gRPC servicer's
+// ListManifests through the daemon dispatch (#1686, ruling 931).
+func TestQUICAttestation_ListManifests(t *testing.T) {
+	h := quicAttestationHandler(newCollectingManifestService())
+
+	resp := dispatchAttestation(t, h, quicwire.OpAttestListManifests, &apiquic.ListManifestsRequest{HostID: "host-a"})
+	require.Equal(t, quicwire.StatusOK, resp.Status, string(resp.Payload))
+	var got apiquic.ListManifestsResponse
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &got))
+	require.Len(t, got.Manifests, 1)
+	assert.Equal(t, "m-1", got.Manifests[0].ID)
+	assert.Equal(t, 1, got.Total)
+
+	resp = dispatchAttestation(t, h, quicwire.OpAttestListManifests, &apiquic.ListManifestsRequest{HostID: "host-b"})
+	require.Equal(t, quicwire.StatusOK, resp.Status, string(resp.Payload))
+	got = apiquic.ListManifestsResponse{}
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &got))
+	assert.Empty(t, got.Manifests)
+	assert.Equal(t, 0, got.Total)
+}
+
+// TestQUICAttestation_DeleteManifest: 0x67 reaches the gRPC servicer's
+// DeleteManifest through the daemon dispatch.
+func TestQUICAttestation_DeleteManifest(t *testing.T) {
+	h := quicAttestationHandler(newCollectingManifestService())
+
+	resp := dispatchAttestation(t, h, quicwire.OpAttestDeleteManifest, &apiquic.DeleteManifestRequest{ID: "absent"})
+	assert.Equal(t, quicwire.StatusNotFound, resp.Status, "gRPC NotFound is QUIC NotFound")
+
+	resp = dispatchAttestation(t, h, quicwire.OpAttestDeleteManifest, &apiquic.DeleteManifestRequest{ID: "m-1"})
+	require.Equal(t, quicwire.StatusOK, resp.Status, string(resp.Payload))
+	var got apiquic.DeleteManifestResponse
+	require.NoError(t, quicwire.DecodePayload(resp.Payload, &got))
+	assert.True(t, got.Success)
+
+	resp = dispatchAttestation(t, h, quicwire.OpAttestGetManifest, &apiquic.GetManifestRequest{ID: "m-1"})
+	assert.Equal(t, quicwire.StatusNotFound, resp.Status, "a deleted manifest is gone")
+}
+
 // TestQUICAttestation_GetManifestKeepsUnspecifiedHashAlgorithms pins that a
 // manifest captured from enrolment (no hash algorithm recorded) reads back
 // over QUIC as unspecified, the same as over gRPC, and never as SHA256 (#1686).

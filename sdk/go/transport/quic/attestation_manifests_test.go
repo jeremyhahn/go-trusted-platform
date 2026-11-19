@@ -20,6 +20,7 @@ import (
 
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // Test-local copies of the server's manifest wire shape
@@ -73,8 +74,70 @@ type testGetManifestResponse struct {
 // opcode (pkg/api/quic/attestation_handlers.go), with an encoded server
 // wire response, and records the request.
 type manifestSender struct {
-	opcodes []byte
-	ids     []string
+	opcodes   []byte
+	ids       []string
+	listReqs  []testListManifestsRequest
+	deleteIDs []string
+}
+
+// testListManifestsRequest mirrors the server's ListManifestsRequest
+// (pkg/api/quic/attestation_handlers.go): time bounds cross as RFC 3339
+// nano strings, "" meaning no bound.
+type testListManifestsRequest struct {
+	HostID    string `codec:"host_id"`
+	StartTime string `codec:"start_time"`
+	EndTime   string `codec:"end_time"`
+	Limit     int    `codec:"limit"`
+	Offset    int    `codec:"offset"`
+}
+
+type testListManifestsResponse struct {
+	Manifests []*testManifestData `codec:"manifests"`
+	Total     int                 `codec:"total"`
+	Timestamp int64               `codec:"timestamp"`
+}
+
+type testDeleteManifestResponse struct {
+	Success bool   `codec:"success"`
+	Message string `codec:"message"`
+}
+
+// answerManifestListOrDelete answers OpAttestListManifests and
+// OpAttestDeleteManifest; ok is false for any other opcode.
+func (s *manifestSender) answerManifestListOrDelete(opcode byte, payload []byte) (*quicwire.Response, bool, error) {
+	var v interface{}
+	switch opcode {
+	case quicwire.OpAttestListManifests:
+		var req testListManifestsRequest
+		if err := quicwire.DecodePayload(payload, &req); err != nil {
+			return nil, true, err
+		}
+		s.listReqs = append(s.listReqs, req)
+		v = &testListManifestsResponse{
+			Manifests: []*testManifestData{
+				{ID: "m-1", HostID: req.HostID, Timestamp: 1700000000},
+				{ID: "m-2", HostID: req.HostID, Timestamp: 1700000100},
+			},
+			Total:     2,
+			Timestamp: 1700000300,
+		}
+	case quicwire.OpAttestDeleteManifest:
+		var req struct {
+			ID string `codec:"id"`
+		}
+		if err := quicwire.DecodePayload(payload, &req); err != nil {
+			return nil, true, err
+		}
+		s.deleteIDs = append(s.deleteIDs, req.ID)
+		v = &testDeleteManifestResponse{Success: true, Message: "manifest deleted successfully"}
+	default:
+		return nil, false, nil
+	}
+	p, err := quicwire.EncodePayload(v)
+	if err != nil {
+		return nil, true, err
+	}
+	return &quicwire.Response{Status: quicwire.StatusOK, Payload: p}, true, nil
 }
 
 func (s *manifestSender) Send(context.Context, byte, interface{}, interface{}) error {
@@ -83,6 +146,9 @@ func (s *manifestSender) Send(context.Context, byte, interface{}, interface{}) e
 
 func (s *manifestSender) SendRequest(_ context.Context, opcode byte, payload []byte) (*quicwire.Response, error) {
 	s.opcodes = append(s.opcodes, opcode)
+	if resp, ok, err := s.answerManifestListOrDelete(opcode, payload); ok {
+		return resp, err
+	}
 	if opcode != quicwire.OpAttestGetManifest {
 		return nil, &quicwire.ErrProtocol{Status: quicwire.StatusNotFound, Message: "unexpected opcode"}
 	}
@@ -172,5 +238,61 @@ func TestGetManifestOverQUIC(t *testing.T) {
 	if c := m.GetContainers()[1]; c.GetContainerId() != "c-2" ||
 		!c.GetTimestamp().AsTime().Equal(time.Unix(1700000300, 333333333)) {
 		t.Fatalf("container c-2 = %+v", c)
+	}
+}
+
+func newManifestConn(sender *manifestSender) *quicClientConn {
+	a := &Adapter{client: &quicwire.Client{}, timeout: 8 * time.Second}
+	a.connected.Store(true)
+	return &quicClientConn{adapter: a, sender: sender}
+}
+
+// TestListManifestsOverQUIC: manifest list rides its own opcode 0x66
+// (#1686, ruling 931) with RFC 3339 nano time bounds.
+func TestListManifestsOverQUIC(t *testing.T) {
+	sender := &manifestSender{}
+	conn := newManifestConn(sender)
+	start := time.Unix(1700000000, 123456789).UTC()
+
+	resp, err := platformv1.NewAttestationServiceClient(conn).ListManifests(context.Background(),
+		&platformv1.ListManifestsRequest{HostId: "host-a", StartTime: timestamppb.New(start), Limit: 5})
+	if err != nil {
+		t.Fatalf("ListManifests: %v", err)
+	}
+	if len(sender.opcodes) != 1 || sender.opcodes[0] != 0x66 || sender.opcodes[0] != quicwire.OpAttestListManifests {
+		t.Fatalf("opcodes = %x, want one 0x66", sender.opcodes)
+	}
+	if len(sender.listReqs) != 1 {
+		t.Fatalf("list requests = %+v", sender.listReqs)
+	}
+	got := sender.listReqs[0]
+	if got.HostID != "host-a" || got.StartTime != start.Format(time.RFC3339Nano) || got.EndTime != "" ||
+		got.Limit != 5 || got.Offset != 0 {
+		t.Fatalf("list request = %+v", got)
+	}
+	if len(resp.GetManifests()) != 2 || resp.GetTotal() != 2 ||
+		resp.GetManifests()[0].GetId() != "m-1" || resp.GetManifests()[1].GetHostId() != "host-a" {
+		t.Fatalf("list reply = %+v", resp)
+	}
+}
+
+// TestDeleteManifestOverQUIC: manifest delete rides its own opcode 0x67.
+func TestDeleteManifestOverQUIC(t *testing.T) {
+	sender := &manifestSender{}
+	conn := newManifestConn(sender)
+
+	resp, err := platformv1.NewAttestationServiceClient(conn).DeleteManifest(context.Background(),
+		&platformv1.DeleteManifestRequest{Id: "m-9"})
+	if err != nil {
+		t.Fatalf("DeleteManifest: %v", err)
+	}
+	if len(sender.opcodes) != 1 || sender.opcodes[0] != 0x67 || sender.opcodes[0] != quicwire.OpAttestDeleteManifest {
+		t.Fatalf("opcodes = %x, want one 0x67", sender.opcodes)
+	}
+	if len(sender.deleteIDs) != 1 || sender.deleteIDs[0] != "m-9" {
+		t.Fatalf("delete ids = %q", sender.deleteIDs)
+	}
+	if !resp.GetStatus().GetSuccess() || resp.GetStatus().GetMessage() != "manifest deleted successfully" {
+		t.Fatalf("delete reply = %+v", resp)
 	}
 }
