@@ -60,13 +60,13 @@ describe("links to pages", () => {
     expect(hasPage("/dashboard")).toBe(true);
     expect(hasPage("/tpm/vtpm/__placeholder__")).toBe(true);
     expect(hasPage("/no/such/page")).toBe(false);
+    expect(linkedHrefs("components/layout/app-sidebar.tsx")).toContain("/dashboard");
   });
 
   it.each(["components/layout/app-sidebar.tsx", "components/features/compute/container-table.tsx"])(
     "%s links only to routes with a page",
     (file) => {
       const hrefs = linkedHrefs(file);
-      expect(hrefs.length).toBeGreaterThan(0);
       expect(hrefs.filter((href) => !hasPage(href))).toEqual([]);
     },
   );

@@ -6,7 +6,7 @@
  * attest-then-verify round trip (VerifyVMAttestation) for one VM.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useCompute } from 'trusted-platform-sdk';
 import type {
   ApiResponse,
@@ -104,68 +104,90 @@ export interface UseContainerOpsResult {
   attest: () => Promise<AttestContainerResponse>;
 }
 
+/** A value tagged with the container ID it was read for. */
+interface Tagged<T> {
+  id: string;
+  value: T;
+}
+
+function valueFor<T>(tagged: Tagged<T> | null, id: string, fallback: T): T {
+  return tagged !== null && tagged.id === id ? tagged.value : fallback;
+}
+
 export function useContainerOps(containerId: string): UseContainerOpsResult {
   const compute = useCompute();
-  const [container, setContainer] = useState<Container | null>(null);
-  const [metrics, setMetrics] = useState<ContainerMetrics | null>(null);
-  // No id means nothing to load: start out of the loading state rather
-  // than leaving it from inside the effect.
-  const [loading, setLoading] = useState(Boolean(containerId));
-  const [error, setError] = useState<string | null>(null);
+  // The container the hook is showing now. A response is kept only while
+  // the ID it was requested for is still this one, so a delayed read of a
+  // previous container (an effect, refresh() or refreshMetrics()) is dropped.
+  const currentId = useRef(containerId);
+  useEffect(() => {
+    currentId.current = containerId;
+  }, [containerId]);
+
+  // State is tagged with its container ID, so a changed ID shows nothing
+  // of the previous container while its own reads are in flight.
+  const [containerState, setContainerState] = useState<Tagged<Container | null> | null>(null);
+  const [metricsState, setMetricsState] = useState<Tagged<ContainerMetrics | null> | null>(null);
+  const [errorState, setErrorState] = useState<Tagged<string | null> | null>(null);
+  const [loadedId, setLoadedId] = useState<string | null>(null);
 
   // The fetches set state only in promise callbacks, never synchronously
   // in the effect body (react-hooks/set-state-in-effect).
+  const fetchContainer = useCallback(
+    (id: string): Promise<void> =>
+      compute
+        .getContainer(id)
+        .then((response) => {
+          const value = unwrap(response, 'GetContainer').container;
+          if (currentId.current !== id) return;
+          setContainerState({ id, value });
+          setErrorState({ id, value: null });
+        })
+        .catch((err: unknown) => {
+          if (currentId.current !== id) return;
+          setErrorState({ id, value: err instanceof Error ? err.message : String(err) });
+        })
+        .finally(() => {
+          if (currentId.current === id) setLoadedId(id);
+        }),
+    [compute]
+  );
+
+  const fetchMetrics = useCallback(
+    (id: string): Promise<void> =>
+      compute
+        .getContainerMetrics(id)
+        .then((response) => {
+          const value = unwrap(response, 'GetContainerMetrics').metrics;
+          if (currentId.current === id) setMetricsState({ id, value });
+        })
+        .catch(() => {
+          if (currentId.current === id) setMetricsState({ id, value: null });
+        }),
+    [compute]
+  );
+
   const refresh = useCallback((): Promise<void> => {
     if (!containerId) return Promise.resolve();
-    return compute
-      .getContainer(containerId)
-      .then((response) => {
-        setContainer(unwrap(response, 'GetContainer').container);
-        setError(null);
-      })
-      .catch((err: unknown) => {
-        setError(err instanceof Error ? err.message : String(err));
-      })
-      .finally(() => {
-        setLoading(false);
-      });
-  }, [compute, containerId]);
+    return fetchContainer(containerId);
+  }, [fetchContainer, containerId]);
 
   const refreshMetrics = useCallback((): Promise<void> => {
     if (!containerId) return Promise.resolve();
-    return compute
-      .getContainerMetrics(containerId)
-      .then((response) => {
-        setMetrics(unwrap(response, 'GetContainerMetrics').metrics);
-      })
-      .catch(() => {
-        setMetrics(null);
-      });
-  }, [compute, containerId]);
+    return fetchMetrics(containerId);
+  }, [fetchMetrics, containerId]);
 
   useEffect(() => {
     if (!containerId) return;
-    compute
-      .getContainer(containerId)
-      .then((response) => {
-        setContainer(unwrap(response, 'GetContainer').container);
-        setError(null);
-      })
-      .catch((err: unknown) => {
-        setError(err instanceof Error ? err.message : String(err));
-      })
-      .finally(() => {
-        setLoading(false);
-      });
-    compute
-      .getContainerMetrics(containerId)
-      .then((response) => {
-        setMetrics(unwrap(response, 'GetContainerMetrics').metrics);
-      })
-      .catch(() => {
-        setMetrics(null);
-      });
-  }, [compute, containerId]);
+    void fetchContainer(containerId);
+    void fetchMetrics(containerId);
+  }, [fetchContainer, fetchMetrics, containerId]);
+
+  const container = valueFor(containerState, containerId, null);
+  const metrics = valueFor(metricsState, containerId, null);
+  const error = valueFor(errorState, containerId, null);
+  // No id means nothing to load.
+  const loading = Boolean(containerId) && loadedId !== containerId;
 
   const exec = useCallback(
     async (command: string[]) =>
