@@ -95,6 +95,36 @@ func TestBuildSupervisor_AttachesTheSupervisorToTheGateway(t *testing.T) {
 	assert.True(t, cfg.Gateway.Supervisor.Supervises(gateway.ServiceProxy))
 }
 
+func TestBuildSupervisor_OnChildExitRemovesHubForWireGuardOnly(t *testing.T) {
+	var removals int
+	removeErr := errors.New("link busy")
+	prevRemove, prevNew := supervisorRemoveVPNHub, newProcessSupervisor
+	t.Cleanup(func() { supervisorRemoveVPNHub, newProcessSupervisor = prevRemove, prevNew })
+	supervisorRemoveVPNHub = func(*slog.Logger) error { removals++; return removeErr }
+	var built process.Config
+	newProcessSupervisor = func(c process.Config) *process.Supervisor {
+		built = c
+		return prevNew(c)
+	}
+
+	cfg := &ServeConfig{Gateway: &gateway.GatewayConfig{Enabled: true}, Process: supervisorSettings(t)}
+	_, err := BuildSupervisor(cfg, process.Inherited{ConfigFile: "/etc/gatewayd/config.yaml"}, testLogger())
+	require.NoError(t, err)
+	require.NotNil(t, built.OnChildExit, "BuildSupervisor must set the exit hook")
+
+	for _, name := range []string{"datapath", "routing"} {
+		def, err := process.DefinitionByName(name)
+		require.NoError(t, err)
+		require.NoError(t, built.OnChildExit(context.Background(), def))
+	}
+	assert.Zero(t, removals, "only the wireguard row owns the hub")
+
+	def, err := process.DefinitionByName(process.WireGuardProcess)
+	require.NoError(t, err)
+	require.ErrorIs(t, built.OnChildExit(context.Background(), def), removeErr)
+	assert.Equal(t, 1, removals, "the wireguard child's exit removes the hub")
+}
+
 func TestBuildSupervisor_NothingToSupervise(t *testing.T) {
 	tests := map[string]*ServeConfig{
 		"no process section": {Gateway: &gateway.GatewayConfig{Enabled: true}},

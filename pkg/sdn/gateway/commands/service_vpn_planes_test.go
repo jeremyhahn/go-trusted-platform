@@ -29,7 +29,7 @@ func (s *stubSecrets) resolve(_ context.Context, _ string) ([]byte, error) {
 // carries resolver (none when resolver is nil).
 func wireGuardPlaneRun(t *testing.T, offered []vpn.DataPlaneKind, keyRef string, address netip.Prefix, resolver *stubSecrets) (*ServeConfig, *gateway.Gateway) {
 	t.Helper()
-	cfg := newDatapathRun(true).loaded
+	cfg := newWireGuardRun(true).loaded
 	cfg.Gateway.ManagementVPN.DataPlanes = offered
 	cfg.Gateway.ManagementVPN.WireGuard.KeyRef = keyRef
 	cfg.Gateway.ManagementVPN.WireGuard.Address = address
@@ -93,7 +93,7 @@ func TestVPNDataPlanes_WireGuardNotOfferedBuildsNone(t *testing.T) {
 func hostRuntimeWithHub(t *testing.T) *ServeConfig {
 	t.Helper()
 	cfg, _ := secretStoreFixture(t)
-	cfg.Gateway = newDatapathRun(true).loaded.Gateway
+	cfg.Gateway = newWireGuardRun(true).loaded.Gateway
 	cfg.Gateway.ManagementVPN.DataPlanes = []vpn.DataPlaneKind{vpn.DataPlaneWireGuard}
 	cfg.Gateway.ManagementVPN.WireGuard.KeyRef = "secret://vpn/hub"
 	cfg.Gateway.ManagementVPN.WireGuard.Address = hubAddress
