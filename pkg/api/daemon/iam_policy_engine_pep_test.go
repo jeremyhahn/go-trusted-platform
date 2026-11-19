@@ -18,6 +18,7 @@ import (
 	"errors"
 	"testing"
 
+	qrdbsdk "github.com/jeremyhahn/go-qrdb/sdk/go"
 	quiciam "github.com/jeremyhahn/go-quicbaas/pkg/iam"
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
@@ -105,6 +106,82 @@ func TestPolicyEnginePEP_CheckBatch(t *testing.T) {
 	}
 	if resp.AllAllowed || resp.AllowedCount != 1 || resp.DeniedCount != 1 {
 		t.Fatalf("got all=%v allowed=%d denied=%d", resp.AllAllowed, resp.AllowedCount, resp.DeniedCount)
+	}
+}
+
+// tenantRecordingAuthorizer records the target tenant bound on the context
+// that reaches the RBAC authorizer, which is the tenant qrdb's authorizer
+// reads (an unbound context defaults to system there).
+type tenantRecordingAuthorizer struct {
+	bound *[]string
+}
+
+func (a tenantRecordingAuthorizer) Authorize(ctx context.Context, _ *quiciam.Subject, _, _ string) error {
+	tenantID, ok := qrdbsdk.TenantFromContext(ctx)
+	if !ok {
+		*a.bound = append(*a.bound, "<unbound>")
+		return errors.New("no target tenant bound")
+	}
+	*a.bound = append(*a.bound, tenantID)
+	return nil
+}
+
+func newTenantRecordingPEP() (policyEnginePEP, *[]string) {
+	bound := &[]string{}
+	engine := quiciam.NewPolicyEngine(quiciam.PolicyEngineOptions{
+		RBACAuthorizer: tenantRecordingAuthorizer{bound: bound},
+	})
+	return policyEnginePEP{engine: engine}, bound
+}
+
+func TestPolicyEnginePEP_BindsSubjectTenant(t *testing.T) {
+	pep, bound := newTenantRecordingPEP()
+	resp, err := pep.Check(context.Background(), pepCheck("alice", "acme", "device", "read"))
+	if err != nil || !resp.Allowed {
+		t.Fatalf("got resp=%+v err=%v, want allow with the subject tenant bound", resp, err)
+	}
+	if len(*bound) != 1 || (*bound)[0] != "acme" {
+		t.Fatalf("bound tenants = %v, want [acme]", *bound)
+	}
+}
+
+func TestPolicyEnginePEP_BindsRequestTenant(t *testing.T) {
+	pep, bound := newTenantRecordingPEP()
+	req := pepCheck("alice", "", "device", "read")
+	req.TenantID = "acme"
+	resp, err := pep.Check(context.Background(), req)
+	if err != nil || !resp.Allowed {
+		t.Fatalf("got resp=%+v err=%v, want allow with the request tenant bound", resp, err)
+	}
+	if len(*bound) != 1 || (*bound)[0] != "acme" {
+		t.Fatalf("bound tenants = %v, want [acme]", *bound)
+	}
+}
+
+func TestPolicyEnginePEP_CheckBatchBindsEachTenant(t *testing.T) {
+	pep, bound := newTenantRecordingPEP()
+	resp, err := pep.CheckBatch(context.Background(), &sdkiam.CheckBatchRequest{Requests: []sdkiam.CheckRequest{
+		*pepCheck("alice", "acme", "device", "read"),
+		*pepCheck("bob", "globex", "device", "read"),
+	}})
+	if err != nil {
+		t.Fatalf("CheckBatch: %v", err)
+	}
+	if !resp.AllAllowed {
+		t.Fatalf("results = %+v, want all allowed with each tenant bound", resp.Results)
+	}
+	if len(*bound) != 2 || (*bound)[0] != "acme" || (*bound)[1] != "globex" {
+		t.Fatalf("bound tenants = %v, want [acme globex]", *bound)
+	}
+}
+
+func TestPolicyEnginePEP_NoTenantRefused(t *testing.T) {
+	pep, bound := newTenantRecordingPEP()
+	if _, err := pep.Check(context.Background(), pepCheck("alice", "", "device", "read")); err == nil {
+		t.Fatal("a check naming no tenant was evaluated, want a refusal")
+	}
+	if len(*bound) != 0 {
+		t.Fatalf("authorizer reached with %v, want no evaluation", *bound)
 	}
 }
 
