@@ -1,0 +1,150 @@
+/**
+ * VTPMService.importBundle answers with BundleResponse from
+ * pkg/webservice/v1/rest/vtpm/types.go: snake_case fields at every level.
+ * ApiClient only unwraps the envelope, so the service must map the wire
+ * shape onto the camelCase VTPMBundle it promises.
+ */
+
+import { describe, it, expect, vi } from 'vitest';
+import { ApiClient } from '../../client/api-client.js';
+import { VTPMService } from '../vtpm-service.js';
+
+/** A complete handler-shaped BundleResponse. */
+const wireBundle = {
+  id: 'bundle-1',
+  mode: 'INSTANCE',
+  manifest: {
+    version: '1',
+    id: 'bundle-1',
+    mode: 'INSTANCE',
+    hostname: 'vm-web',
+    created_at: '2026-11-19T10:00:00Z',
+    ek_certificate: {
+      subject: 'CN=ek',
+      issuer: 'CN=ca',
+      serial_number: '42',
+      not_before: '2026-01-01T00:00:00Z',
+      not_after: '2036-01-01T00:00:00Z',
+      fingerprint: 'ab:cd',
+    },
+    ek_algorithm: 'ECC_P256',
+    ek_handle: 0x81010001,
+    secure_boot_enabled: true,
+    secure_boot_keys: {
+      pk_fingerprint: 'pk',
+      kek_fingerprint: 'kek',
+      db_fingerprint: 'db',
+      owner_guid: 'guid-1',
+    },
+    checksums: { 'tpm2-00.permall': 'sha256:00' },
+    labels: { tier: 'web' },
+    cloned_from: 'tmpl-1',
+  },
+  tpm_state: {
+    state_dir: '/var/lib/vtpm/bundle-1/tpm',
+    permall_file: 'tpm2-00.permall',
+    volatile_file: 'tpm2-00.volatilestate',
+  },
+  ovmf_state: { nvram_file: '/var/lib/vtpm/bundle-1/OVMF_VARS.fd' },
+  secure_boot_keys: {
+    dir: '/var/lib/vtpm/bundle-1/keys',
+    pk_key: 'PK.key',
+    pk_crt: 'PK.crt',
+    kek_key: 'KEK.key',
+    kek_crt: 'KEK.crt',
+    db_key: 'db.key',
+    db_crt: 'db.crt',
+  },
+  created_at: '2026-11-19T10:00:01Z',
+  cloned_from: 'tmpl-1',
+};
+
+describe('VTPMService.importBundle wire shape', () => {
+  it('returns the camelCase VTPMBundle for a snake_case BundleResponse', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ success: true, payload: wireBundle }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    );
+    const client = new ApiClient({
+      baseUrl: 'https://platform.test/api/v1',
+      fetch: fetchImpl as unknown as typeof fetch,
+      retry: { maxRetries: 0 },
+    });
+
+    const result = await new VTPMService(client).importBundle(new Blob([new Uint8Array([0x1f, 0x8b])]));
+
+    expect(result.success).toBe(true);
+    expect(result.data).toEqual({
+      id: 'bundle-1',
+      mode: 'INSTANCE',
+      manifest: {
+        version: '1',
+        id: 'bundle-1',
+        mode: 'INSTANCE',
+        hostname: 'vm-web',
+        createdAt: '2026-11-19T10:00:00Z',
+        ekCertificate: {
+          subject: 'CN=ek',
+          issuer: 'CN=ca',
+          serialNumber: '42',
+          notBefore: '2026-01-01T00:00:00Z',
+          notAfter: '2036-01-01T00:00:00Z',
+          fingerprint: 'ab:cd',
+        },
+        ekAlgorithm: 'ECC_P256',
+        ekHandle: 0x81010001,
+        secureBootEnabled: true,
+        secureBootKeys: {
+          pkFingerprint: 'pk',
+          kekFingerprint: 'kek',
+          dbFingerprint: 'db',
+          ownerGuid: 'guid-1',
+        },
+        checksums: { 'tpm2-00.permall': 'sha256:00' },
+        labels: { tier: 'web' },
+        clonedFrom: 'tmpl-1',
+      },
+      tpmState: {
+        stateDir: '/var/lib/vtpm/bundle-1/tpm',
+        permallFile: 'tpm2-00.permall',
+        volatileFile: 'tpm2-00.volatilestate',
+      },
+      ovmfState: { nvramFile: '/var/lib/vtpm/bundle-1/OVMF_VARS.fd' },
+      secureBootKeys: {
+        dir: '/var/lib/vtpm/bundle-1/keys',
+        pkKey: 'PK.key',
+        pkCrt: 'PK.crt',
+        kekKey: 'KEK.key',
+        kekCrt: 'KEK.crt',
+        dbKey: 'db.key',
+        dbCrt: 'db.crt',
+      },
+      createdAt: '2026-11-19T10:00:01Z',
+      clonedFrom: 'tmpl-1',
+    });
+    expect(result.data?.tpmState.stateDir).toBe('/var/lib/vtpm/bundle-1/tpm');
+    expect(result.data?.createdAt).toBe('2026-11-19T10:00:01Z');
+  });
+
+  it('passes an error response through unchanged', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ code: 'INVALID', error: 'bad archive' }), {
+        status: 400,
+        headers: { 'content-type': 'application/json' },
+      })
+    );
+    const client = new ApiClient({
+      baseUrl: 'https://platform.test/api/v1',
+      fetch: fetchImpl as unknown as typeof fetch,
+      retry: { maxRetries: 0 },
+    });
+
+    const result = await new VTPMService(client).importBundle(new Blob([new Uint8Array([0])]));
+
+    expect(result.success).toBe(false);
+    expect(result.data).toBeUndefined();
+    expect(result.error?.message).toBe('bad archive');
+  });
+});
