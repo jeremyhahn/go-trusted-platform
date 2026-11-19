@@ -217,6 +217,39 @@ func TestVPNGRPCService_RefusesCrossTenantCaller(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// TestVPNGRPC_TenantlessCallerCannotListAllTenants proves an authenticated
+// caller with no tenant cannot list every tenant's peers or posture policies
+// by omitting tenant_id: the empty request tenant reads as "all tenants" in
+// the backend, so the refusal must come before the backend is reached.
+func TestVPNGRPC_TenantlessCallerCannotListAllTenants(t *testing.T) {
+	server, storage := newVPNTestServer(t)
+	_, err := server.EnrolPeer(context.Background(), &platformv1.EnrolVPNPeerRequest{
+		Peer: &platformv1.VPNPeer{TenantId: "globex", DeviceId: "phone-1"},
+	})
+	require.NoError(t, err)
+
+	tenantless := context.WithValue(context.Background(), ContextKeyIdentity, &auth.Identity{ID: "op"})
+
+	// A store failure makes any backend call Unavailable, so PermissionDenied
+	// proves the backend was never called.
+	storage.ListError = errors.New("backend must not be called")
+	peers, err := server.ListPeers(tenantless, &platformv1.ListVPNPeersRequest{TenantId: ""})
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+	assert.Nil(t, peers)
+	policies, err := server.ListPosturePolicies(tenantless, &platformv1.ListVPNPosturePoliciesRequest{TenantId: ""})
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+	assert.Nil(t, policies)
+	storage.ListError = nil
+
+	// A tenant-bound caller naming its own tenant still lists.
+	globex := context.WithValue(context.Background(), ContextKeyIdentity, &auth.Identity{ID: "op", TenantID: "globex"})
+	listed, err := server.ListPeers(globex, &platformv1.ListVPNPeersRequest{TenantId: "globex"})
+	require.NoError(t, err)
+	assert.Len(t, listed.GetPeers(), 1)
+	_, err = server.ListPosturePolicies(globex, &platformv1.ListVPNPosturePoliciesRequest{TenantId: "globex"})
+	require.NoError(t, err)
+}
+
 func TestVPNGRPCService_StoreFailureIsUnavailable(t *testing.T) {
 	server, storage := newVPNTestServer(t)
 	storage.ListError = errors.New("raft leader lost")
