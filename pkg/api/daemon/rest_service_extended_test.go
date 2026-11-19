@@ -347,10 +347,9 @@ func TestRESTHandlerStopService_StopFailed(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 }
 
-// TestRESTHandlerRestartService_StoppedIsRefused: a restart of a stopped
-// service is refused with 409 and calls neither Stop nor Start, as gRPC
-// RestartService (StopService then StartService) refuses it.
-func TestRESTHandlerRestartService_StoppedIsRefused(t *testing.T) {
+// TestRESTHandlerRestartService_Success: a REST restart of a stopped service
+// starts it, with no Stop call (the behaviour before #1947, ruling 939).
+func TestRESTHandlerRestartService_Success(t *testing.T) {
 	config := DefaultConfig()
 	service, err := NewService(config)
 	require.NoError(t, err)
@@ -371,8 +370,14 @@ func TestRESTHandlerRestartService_StoppedIsRefused(t *testing.T) {
 	resp := w.Result()
 	defer resp.Body.Close()
 
-	assert.Equal(t, http.StatusConflict, resp.StatusCode)
-	assert.Equal(t, int32(0), mockSvc.startCount.Load())
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var actionResp ServiceActionResponse
+	err = json.NewDecoder(resp.Body).Decode(&actionResp)
+	require.NoError(t, err)
+	assert.True(t, actionResp.Success)
+	assert.Equal(t, "restart", actionResp.Action)
+	assert.Equal(t, int32(1), mockSvc.startCount.Load())
 	assert.Equal(t, int32(0), mockSvc.stopCount.Load())
 }
 

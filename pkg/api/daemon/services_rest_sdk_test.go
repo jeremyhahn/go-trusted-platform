@@ -279,11 +279,9 @@ func TestSDKREST_DaemonServicesConflictCodes(t *testing.T) {
 	require.Equal(t, codes.FailedPrecondition, status.Code(err), "restart of a process-owned service: %v", err)
 }
 
-// TestSDKREST_DaemonRestartOfAStoppedServiceIsRefused pins transport parity
-// for a restart of a stopped service: gRPC RestartService is StopService then
-// StartService, so a stopped service is refused with FailedPrecondition and
-// nothing is started. The REST route answers the same, with no backend call.
-func TestSDKREST_DaemonRestartOfAStoppedServiceIsRefused(t *testing.T) {
+// TestSDKREST_DaemonRestartOfAStoppedServiceStartsIt: a REST restart of a
+// stopped service starts it with no Stop call, as before #1947 (ruling 939).
+func TestSDKREST_DaemonRestartOfAStoppedServiceStartsIt(t *testing.T) {
 	ctx := context.Background()
 	tpm := &recordingManagedService{name: "tpm"}
 	s := newTestRESTServerForPhase35(t)
@@ -292,21 +290,15 @@ func TestSDKREST_DaemonRestartOfAStoppedServiceIsRefused(t *testing.T) {
 
 	tpmType := platformv1.ServiceType_SERVICE_TYPE_TPM
 	_, err := client.RestartService(ctx, &platformv1.RestartServiceRequest{Service: tpmType})
-	require.Equal(t, codes.FailedPrecondition, status.Code(err), "REST restart of a stopped service: %v", err)
+	require.NoError(t, err, "REST restart of a stopped service")
 	starts, stops := tpm.calls()
-	require.Equal(t, 0, starts, "a refused restart starts nothing")
-	require.Equal(t, 0, stops, "a refused restart stops nothing")
+	require.Equal(t, 1, starts, "a restart of a stopped service starts it")
+	require.Equal(t, 0, stops, "a restart of a stopped service stops nothing")
 
 	st, err := client.GetServiceStatus(ctx, &platformv1.GetServiceStatusRequest{Service: tpmType})
 	require.NoError(t, err)
-	require.Equal(t, platformv1.ServiceStatus_SERVICE_STATUS_STOPPED, st.GetService().GetStatus())
-	require.Equal(t, "0", st.GetService().GetMetadata()["start_count"])
-
-	_, err = s.service.RestartService(ctx, &platformv1.RestartServiceRequest{Service: tpmType})
-	require.Equal(t, codes.FailedPrecondition, status.Code(err), "gRPC restart of a stopped service: %v", err)
-	starts, stops = tpm.calls()
-	require.Equal(t, 0, starts)
-	require.Equal(t, 0, stops)
+	require.Equal(t, platformv1.ServiceStatus_SERVICE_STATUS_RUNNING, st.GetService().GetStatus())
+	require.Equal(t, "1", st.GetService().GetMetadata()["start_count"])
 }
 
 // serviceRPCs calls each of the five service-control RPCs on tpm and returns
