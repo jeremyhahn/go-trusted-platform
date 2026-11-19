@@ -314,6 +314,10 @@ func (s *Service) OwnLease(ctx context.Context, id LeaseID, peer *calleradmissio
 // unrecorded drop of a lease that is not expired leaves the peer with the
 // lease a restart reinstates.
 func (s *Service) revoke(ctx context.Context, lease *Lease, reason RevokeReason) error {
+	// The address stays visible to orphan reclaim from before the lease
+	// deletion until the teardown settles (released, or owed through
+	// peerRetry), on every return path.
+	defer s.markTearingDown(lease.Address)()
 	var storeErr error
 	if err := s.deps.Leases.Delete(ctx, lease.ID); err != nil {
 		var nf *ErrLeaseNotFound
@@ -363,6 +367,30 @@ func (s *Service) releaseAddress(ctx context.Context, addr netip.Prefix) {
 	}
 	if err := s.deps.IPAM.Release(ctx, addr.Addr()); err != nil {
 		s.logger.Warn("vpn address release failed", slog.String("address", addr.String()), slog.Any("error", err))
+	}
+}
+
+// markTearingDown records addr as held by a revocation in flight and returns
+// the function that clears the mark. s.mu is held only for the map updates.
+func (s *Service) markTearingDown(addr netip.Prefix) func() {
+	if !addr.IsValid() {
+		return func() {}
+	}
+	a := addr.Addr()
+	s.mu.Lock()
+	if s.tearingDown == nil {
+		s.tearingDown = map[netip.Addr]int{}
+	}
+	s.tearingDown[a]++
+	s.mu.Unlock()
+	return func() {
+		s.mu.Lock()
+		if s.tearingDown[a] <= 1 {
+			delete(s.tearingDown, a)
+		} else {
+			s.tearingDown[a]--
+		}
+		s.mu.Unlock()
 	}
 }
 

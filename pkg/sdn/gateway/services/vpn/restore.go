@@ -165,6 +165,9 @@ func (s *Service) reclaimOrphanAddressesLocked(ctx context.Context) error {
 			}
 		}
 	}
+	for addr := range s.tearingDown {
+		held[addr] = true
+	}
 	s.mu.Unlock()
 	var first error
 	for _, alloc := range allocs {
