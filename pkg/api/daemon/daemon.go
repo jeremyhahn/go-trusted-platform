@@ -210,6 +210,7 @@ type Daemon struct {
 	mcpServer                    MCPServerInterface
 	mcpProvider                  *MCPServiceProvider
 	bmcGRPCService               *BMCGRPCService
+	bmcRestHandler               bmcwebsvc.RestHandler
 	switchGRPCService            *SwitchGRPCService
 	eabService                   EABServicer
 	eabGRPCService               *EABGRPCService
@@ -1866,35 +1867,40 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		}
 		logger.Info("BMC gRPC service initialized and registered successfully")
 
-		// Wire BMC handler into REST server for bare metal management.
-		if daemon.concreteRestServer != nil {
-			respWriter := response.NewResponseWriter(logger, nil)
-			bmcHandler, bmcHandlerErr := bmcwebsvc.NewHandler(bmcwebsvc.HandlerParams{
-				BMCService:     bmcSvc,
-				ResponseWriter: respWriter,
-				Logger:         logger,
-			})
-			if bmcHandlerErr == nil {
-				// Wire the BMCEnrollerServicer adapter so the REST enroll
-				// endpoint delegates to the real App enrollment ceremony.
-				if config.App != nil && config.DeviceProfileService != nil {
-					lookup := &profileLookupAdapter{profileSvc: config.DeviceProfileService}
-					bmcHandler.SetEnroller(
-						newRESTBMCEnrollerAdapter(config.App),
-						lookup,
-					)
-					logger.Info("BMC REST enroller wired")
-					bmcHandler.SetRestorer(
-						newRESTBMCRestorerAdapter(config.App),
-						lookup,
-					)
-					logger.Info("BMC REST restorer wired")
-				}
+		// Build the BMC REST handler whenever the BMC service exists: the
+		// console (webservice) router mounts it admin-gated through
+		// BMCRestHandler, and the daemon REST server, when it runs, mounts
+		// it too.
+		respWriter := response.NewResponseWriter(logger, nil)
+		bmcHandler, bmcHandlerErr := bmcwebsvc.NewHandler(bmcwebsvc.HandlerParams{
+			BMCService:     bmcSvc,
+			ResponseWriter: respWriter,
+			Logger:         logger,
+		})
+		if bmcHandlerErr == nil {
+			// Wire the BMCEnrollerServicer adapter so the REST enroll
+			// endpoint delegates to the real App enrollment ceremony.
+			if config.App != nil && config.DeviceProfileService != nil {
+				lookup := &profileLookupAdapter{profileSvc: config.DeviceProfileService}
+				bmcHandler.SetEnroller(
+					newRESTBMCEnrollerAdapter(config.App),
+					lookup,
+				)
+				logger.Info("BMC REST enroller wired")
+				bmcHandler.SetRestorer(
+					newRESTBMCRestorerAdapter(config.App),
+					lookup,
+				)
+				logger.Info("BMC REST restorer wired")
+			}
+			daemon.bmcRestHandler = bmcHandler
+			// Wire BMC handler into REST server for bare metal management.
+			if daemon.concreteRestServer != nil {
 				daemon.concreteRestServer.SetBMCHandler(bmcHandler)
 				logger.Info("BMC management handler wired into REST server")
-			} else {
-				logger.Warn("BMC handler creation failed", "error", bmcHandlerErr)
 			}
+		} else {
+			logger.Warn("BMC handler creation failed", "error", bmcHandlerErr)
 		}
 
 		// Stash the BMC gRPC servicer so the MCP server (created below)
@@ -3814,6 +3820,14 @@ func (d *Daemon) BMCService() *BMCGRPCService {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.bmcGRPCService
+}
+
+// BMCRestHandler returns the BMC REST handler the console (webservice)
+// router mounts admin-gated, or nil when the daemon built no BMC service.
+func (d *Daemon) BMCRestHandler() bmcwebsvc.RestHandler {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.bmcRestHandler
 }
 
 // SetPIVBackend wires a backend into the PIV service.

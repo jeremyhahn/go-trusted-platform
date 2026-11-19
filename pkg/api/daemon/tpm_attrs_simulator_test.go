@@ -31,6 +31,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -273,4 +274,22 @@ func TestTPMSimulator_ActivateCredentialRefusesAForeignCredential(t *testing.T) 
 		"the guard must pass a well-formed pair through to the TPM")
 	assert.ErrorIs(t, helperErr, xkmssdk.ErrTPMInvalidActivationCredential,
 		"the TPM refuses a credential made for another key's name")
+}
+
+// TestTPMSimulator_IAKCSRRefusesMissingIDevIDConfig pins the daemon-side
+// guard: with no IDevID configuration the TPM library's TCG CSR builder
+// dereferences it, so CreateIAKCSR must refuse before calling the library.
+func TestTPMSimulator_IAKCSRRefusesMissingIDevIDConfig(t *testing.T) {
+	tpm := newSimulatedTPM(t)
+	svc := NewIDevIDGRPCService(logging.DefaultLogger())
+	svc.SetTPM2Service(tpm)
+
+	var err error
+	require.NotPanics(t, func() {
+		_, err = svc.CreateIAKCSR(context.Background(), &platformv1.CreateIAKCSRRequest{})
+	})
+	require.Error(t, err)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.FailedPrecondition, st.Code())
 }

@@ -250,3 +250,24 @@ func TestHandlers_RotateDEKCarriesBackground(t *testing.T) {
 		})
 	}
 }
+
+func TestHandlers_ListTenantsForwardsLimitOffset(t *testing.T) {
+	srv := &fakeTenantServer{}
+	rec := serve(newRouterWithServer(t, srv), http.MethodGet, "/api/v1/tenants?limit=100&offset=200", "")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	req, ok := srv.last.(*platformv1.ListTenantsRequest)
+	require.True(t, ok, "server received %T", srv.last)
+	assert.Equal(t, int32(100), req.GetLimit())
+	assert.Equal(t, int32(200), req.GetOffset())
+}
+
+func TestHandlers_ListTenantsRejectsBadPaging(t *testing.T) {
+	for _, query := range []string{"?offset=-1", "?limit=abc", "?limit=-5", "?offset=1.5"} {
+		t.Run(query, func(t *testing.T) {
+			srv := &fakeTenantServer{}
+			rec := serve(newRouterWithServer(t, srv), http.MethodGet, "/api/v1/tenants"+query, "")
+			assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+			assert.Nil(t, srv.last, "bad paging must not reach the server")
+		})
+	}
+}

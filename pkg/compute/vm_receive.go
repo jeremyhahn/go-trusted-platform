@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/qemu"
 )
@@ -216,6 +217,54 @@ type receiverRegistry struct {
 type trackedReceiver struct {
 	recv    incomingReceiver
 	cleanup func()
+	// endLifetime stops the receiver's lifetime watch once it is finalized
+	// or reaped.
+	endLifetime context.CancelFunc
+}
+
+// receiverLifetime bounds how long a prepared receiver waits for
+// FinalizeIncoming. If the prepare reply is lost or the caller goes away, the
+// orchestrator reaps the receiver (aborts its QEMU and releases its TLS
+// material) at this deadline instead of leaving it running. Tests shorten it.
+var receiverLifetime = 30 * time.Minute
+
+// watchReceiverLifetime reaps receiverID when lifetime ends, unless
+// FinalizeIncoming or Close took it first.
+func (o *QEMUOrchestrator) watchReceiverLifetime(lifetime context.Context, receiverID string) {
+	<-lifetime.Done()
+	if errors.Is(lifetime.Err(), context.DeadlineExceeded) {
+		o.reapReceiver(receiverID, "lifetime expired before finalize")
+	}
+}
+
+// reapReceiver aborts and releases a receiver that was never finalized. It is a
+// no-op when the receiver has already been taken.
+func (o *QEMUOrchestrator) reapReceiver(receiverID, reason string) {
+	tr, ok := receiversFor(o).take(receiverID)
+	if !ok {
+		return
+	}
+	o.releaseReceiver(receiverID, tr, reason)
+}
+
+func (o *QEMUOrchestrator) releaseReceiver(receiverID string, tr *trackedReceiver, reason string) {
+	if tr.endLifetime != nil {
+		tr.endLifetime()
+	}
+	defer tr.cleanup()
+	if err := tr.recv.Abort(context.Background()); err != nil {
+		o.logger.Errorf("Failed to abort migration receiver %s (%s): %v", receiverID, reason, err)
+		return
+	}
+	o.logger.Infof("Aborted migration receiver %s: %s", receiverID, reason)
+}
+
+// closeReceivers reaps every receiver still pending on o; Close calls it so
+// orchestrator shutdown does not leak receiving QEMUs.
+func (o *QEMUOrchestrator) closeReceivers() {
+	for id, tr := range receiversFor(o).takeAll() {
+		o.releaseReceiver(id, tr, "orchestrator shutdown")
+	}
 }
 
 func receiversFor(o *QEMUOrchestrator) *receiverRegistry {
@@ -241,6 +290,14 @@ func (r *receiverRegistry) take(id string) (*trackedReceiver, bool) {
 		delete(r.receivers, id)
 	}
 	return tr, ok
+}
+
+func (r *receiverRegistry) takeAll() map[string]*trackedReceiver {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	all := r.receivers
+	r.receivers = make(map[string]*trackedReceiver)
+	return all
 }
 
 // =============================================================================
@@ -282,7 +339,10 @@ func (o *QEMUOrchestrator) ReceiveIncoming(ctx context.Context, spec MigrationSp
 		return nil, &SentinelCauseError{Sentinel: ErrMigrationReceiveFailed, Cause: &WrappedError{Msg: "materialize server migration TLS creds", Err: err}}
 	}
 
-	recv, err := newIncomingReceiver(ctx, &incomingReceiverParams{
+	// The receiver lives until FinalizeIncoming commits or aborts it, not until
+	// the prepare request ends: the transfer arrives on a later request, so the
+	// receiving QEMU must not be killed when this request's context is cancelled.
+	recv, err := newIncomingReceiver(context.WithoutCancel(ctx), &incomingReceiverParams{
 		orchestrator: o,
 		spec:         spec,
 		credsDir:     credsDir,
@@ -293,8 +353,19 @@ func (o *QEMUOrchestrator) ReceiveIncoming(ctx context.Context, spec MigrationSp
 		return nil, &SentinelCauseError{Sentinel: ErrMigrationReceiveFailed, Cause: &WrappedError{Msg: "launch migration receiver", Err: err}}
 	}
 
+	// The orchestrator, not the request, owns the receiver's lifetime: it is
+	// reaped at receiverLifetime unless FinalizeIncoming or Close takes it.
 	receiverID := generateInstanceID()
-	receiversFor(o).put(receiverID, &trackedReceiver{recv: recv, cleanup: cleanup})
+	lifetime, endLifetime := context.WithTimeout(context.Background(), receiverLifetime)
+	receiversFor(o).put(receiverID, &trackedReceiver{recv: recv, cleanup: cleanup, endLifetime: endLifetime})
+	go o.watchReceiverLifetime(lifetime, receiverID)
+
+	// A caller that went away before the reply never gets the receiver token,
+	// so nobody could finalize it: reap it now rather than at the deadline.
+	if err := ctx.Err(); err != nil {
+		o.reapReceiver(receiverID, "prepare request cancelled before the reply")
+		return nil, &SentinelCauseError{Sentinel: ErrMigrationReceiveFailed, Cause: &WrappedError{Msg: "prepare request cancelled", Err: err}}
+	}
 
 	o.logger.Infof("Prepared migration receiver %s for VM %s on port %d", receiverID, spec.VMName, recv.Port())
 	return &ReceiverHandle{
@@ -313,6 +384,9 @@ func (o *QEMUOrchestrator) FinalizeIncoming(ctx context.Context, receiverID stri
 	tr, ok := receiversFor(o).take(receiverID)
 	if !ok {
 		return ErrReceiverNotFound
+	}
+	if tr.endLifetime != nil {
+		tr.endLifetime()
 	}
 	defer tr.cleanup()
 

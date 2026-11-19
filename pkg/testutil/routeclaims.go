@@ -39,7 +39,6 @@ import (
 // each entry against the daemon's own table. An entry therefore cannot excuse
 // a claim nobody serves.
 var DaemonOnlyPrefixes = map[string]string{
-	"bmc":      "RESTServer.SetBMCHandler (pkg/api/daemon/rest_service.go)",
 	"ceremony": "RESTServer.SetCeremonyService (pkg/api/daemon/ceremony_rest.go)",
 	"cluster":  "RESTServer.SetClusterService (pkg/api/daemon/cluster_rest.go)",
 	"fido2":    "RESTServer.SetFIDO2Service (pkg/api/daemon/fido2_rest.go)",
