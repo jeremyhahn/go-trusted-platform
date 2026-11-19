@@ -92,9 +92,12 @@ func AdminCertificateRequest() *certclient.IssueCertificateRequest {
 	return &certclient.IssueCertificateRequest{
 		CommonName:   common.AdminUsername,
 		Organization: app.SystemTenantID,
-		Usage:        "client",
-		KeyAlgorithm: "ecdsa",
-		ValidityDays: 365,
+		// The mTLS authenticator reads the tenant from the subject OU
+		// only (#2020), so the admin certificate must carry it there.
+		OrganizationalUnit: app.SystemTenantID,
+		Usage:              "client",
+		KeyAlgorithm:       "ecdsa",
+		ValidityDays:       365,
 	}
 }
 

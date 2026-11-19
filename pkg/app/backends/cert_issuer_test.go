@@ -263,8 +263,23 @@ func TestAdminBundleIssuer_SDKIssuerGetsTheAdminRequest(t *testing.T) {
 	if issuer.req.Organization != app.SystemTenantID {
 		t.Errorf("request Organization = %q, want the system tenant %q", issuer.req.Organization, app.SystemTenantID)
 	}
+	if issuer.req.OrganizationalUnit != app.SystemTenantID {
+		t.Errorf("request OrganizationalUnit = %q, want the system tenant %q", issuer.req.OrganizationalUnit, app.SystemTenantID)
+	}
 	if bundle.CertPEM != "cert" || bundle.KeyPEM != "key" {
 		t.Errorf("bundle = %+v, want the issuer's answer", bundle)
+	}
+}
+
+// The mTLS authenticator takes the tenant from the subject OU only
+// (#2020): the admin request must name the system tenant there.
+func TestAdminCertificateRequest_CarriesTheSystemTenantOU(t *testing.T) {
+	req := AdminCertificateRequest()
+	if req.OrganizationalUnit != app.SystemTenantID {
+		t.Errorf("OrganizationalUnit = %q, want %q", req.OrganizationalUnit, app.SystemTenantID)
+	}
+	if req.Organization != app.SystemTenantID {
+		t.Errorf("Organization = %q, want %q", req.Organization, app.SystemTenantID)
 	}
 }
 

@@ -66,6 +66,7 @@ func writeHarnessAdminBundle(ctx context.Context, logger *logging.Logger, issuer
 	// client-bundle.pem, so once that file exists both bundles do.
 	tenantReq := appbackends.AdminCertificateRequest()
 	tenantReq.Organization = harnessTenantID
+	tenantReq.OrganizationalUnit = harnessTenantID
 	if err := writeHarnessBundle(ctx, logger, issuer, tenantReq, "tenant admin", filepath.Join(dir, harnessTenantBundleName)); err != nil {
 		return err
 	}
