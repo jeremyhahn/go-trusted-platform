@@ -18,6 +18,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -1500,6 +1503,82 @@ func TestDaemonPXEBackendRequiresFlowManager(t *testing.T) {
 		require.NoError(t, err)
 		assert.Greater(t, len(port.vlans), before, "the quarantine set no VLAN through the flow manager")
 	})
+}
+
+// pxeFreePort asks the OS for a loopback port nothing listens on.
+func pxeFreePort(t *testing.T, network string) int {
+	t.Helper()
+	if network == "udp" {
+		c, err := net.ListenPacket("udp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer c.Close()
+		return c.LocalAddr().(*net.UDPAddr).Port
+	}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port
+}
+
+// pxeStartedBackend builds the PXEGRPCService a daemon holds around a
+// started backend whose iPXE HTTP listener is on the returned port.
+func pxeStartedBackend(t *testing.T) (*PXEGRPCService, string) {
+	t.Helper()
+	section := pxeEnabledSection(t)
+	require.NoError(t, os.WriteFile(filepath.Join(section.FirmwareDir, "ipxe.efi"), []byte("test firmware"), 0o600))
+	zones, env := zoneServiceSeed(pxeSectionApp())
+	require.NotNil(t, env)
+	if len(zones) == 0 {
+		zones = zone.Defaults()
+	}
+	plan, err := netplan.New(*env, zones)
+	require.NoError(t, err)
+	cfg, err := section.ToServiceConfig(plan)
+	require.NoError(t, err)
+	httpPort := pxeFreePort(t, "tcp")
+	cfg.IPXEConfig.HTTPPort = httpPort
+	cfg.IPXEConfig.TFTPPort = pxeFreePort(t, "udp")
+
+	backend := pxe.NewService(pxe.WithVLANIntegration(pxe.NewNoopVLANIntegration(plan)))
+	require.NoError(t, backend.Initialize(context.Background(), cfg))
+	require.NoError(t, backend.Start(context.Background()))
+	t.Cleanup(func() { _ = backend.Close() })
+
+	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(httpPort))
+	conn, err := net.Dial("tcp", addr)
+	require.NoError(t, err, "the started backend is not listening")
+	_ = conn.Close()
+
+	svc := NewPXEGRPCService(logging.DefaultLogger(), nil)
+	svc.SetPXEService(backend)
+	return svc, addr
+}
+
+// TestDaemonStopStopsPXEBackend: Stop, ForceStop and startup rollback stop
+// the PXE backend, so its iPXE listener port is free afterwards (#1694).
+func TestDaemonStopStopsPXEBackend(t *testing.T) {
+	cases := map[string]func(d *Daemon){
+		"Stop":      func(d *Daemon) { _ = d.Stop(context.Background()) },
+		"ForceStop": func(d *Daemon) { _ = d.ForceStop() },
+		"rollback":  func(d *Daemon) { d.rollbackPartialStart(context.Background()) },
+	}
+	for name, stop := range cases {
+		t.Run(name, func(t *testing.T) {
+			svc, addr := pxeStartedBackend(t)
+			config := DefaultConfig()
+			config.Logger = logging.DefaultLogger()
+			service, err := NewService(config)
+			require.NoError(t, err)
+			d := &Daemon{logger: config.Logger, config: config, service: service, pxeGRPCService: svc}
+			d.running.Store(true)
+
+			stop(d)
+
+			l, err := net.Listen("tcp", addr)
+			require.NoError(t, err, "the PXE listener is still bound after %s", name)
+			_ = l.Close()
+		})
+	}
 }
 
 // TestPXEGRPCService_FilterFromProto tests filter conversion from proto.
