@@ -206,6 +206,18 @@ type supervised struct {
 	// orphan holding CAP_NET_ADMIN, which is the failure this package
 	// exists to prevent.
 	launching bool
+	// followPending records a datapath relaunch that landed while this
+	// FollowsDatapath process was launching: that launch may already have
+	// restored its state into the datapath child that is gone, so the
+	// process is relaunched once more when the launch completes.
+	followPending bool
+	// withdrawal fences a given-up follower's peer withdrawal against its
+	// replacement launch. noteRestart registers it in the critical section
+	// that decides the give-up, and only when no launch is claimed; a
+	// launch claimant reads it in its own claim section, cancels it and
+	// waits on its done before it execs the replacement, so no withdrawal
+	// request outlives the claim.
+	withdrawal *withdrawal
 	// desired is the last desired document Apply sent to this process. A
 	// child that crashed took what it had applied with it, and the new one
 	// sweeps its predecessor's flows on Start, so a relaunched child is
@@ -221,6 +233,15 @@ type supervised struct {
 	// signal's exit, when that child is reaped.
 	missed      error
 	missedChild Child
+}
+
+// withdrawal is a given-up follower's in-flight peer withdrawal: ctx is
+// cancelled by a replacement claimant, and done closes when the
+// withdrawal has returned.
+type withdrawal struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+	done   chan struct{}
 }
 
 // New builds a supervisor. Nothing is launched until StartService.
@@ -276,8 +297,13 @@ func (s *Supervisor) StartService(ctx context.Context, service string) error {
 	// poll already tolerates a process mid-launch, so it is the natural
 	// second caller.
 	claimed := proc.child == nil && !proc.launching
+	var pending *withdrawal
 	if claimed {
+		// Read with the claim: a give-up either registered its withdrawal
+		// before this point, or sees the claim and registers none.
+		pending = proc.withdrawal
 		proc.launching = true
+		proc.followPending = false
 		// A process started again after a stop, or while its restart is
 		// backing off, still has its predecessor's desired document; the
 		// parent's version check will not send it again (#557).
@@ -286,8 +312,12 @@ func (s *Supervisor) StartService(ctx context.Context, service string) error {
 	s.mu.Unlock()
 
 	if claimed {
-		err := s.launch(ctx, proc)
-		launched := err == nil
+		launched := false
+		err := awaitWithdrawal(ctx, pending)
+		if err == nil {
+			err = s.launch(ctx, proc)
+			launched = err == nil
+		}
 		if launched {
 			err = s.serveLaunched(ctx, proc)
 		}
@@ -304,6 +334,7 @@ func (s *Supervisor) StartService(ctx context.Context, service string) error {
 			s.releaseFailedStart(ctx, proc, service)
 			return err
 		}
+		s.relaunchPendingFollower(ctx, proc)
 	}
 	if err := s.awaitService(ctx, proc, service); err != nil {
 		s.releaseFailedStart(ctx, proc, service)
@@ -865,9 +896,9 @@ func (s *Supervisor) watch(ctx context.Context, proc *supervised, child Child, n
 	// ends its reader. Nothing else would close it when no launch follows
 	// (an exhausted restart budget).
 	s.closeNotifyOfLocked(proc, notify)
-	// A stop cancelled the context: the exit is expected and the process
-	// stays down.
-	if ctx.Err() != nil || s.stopped || len(proc.wanted) == 0 {
+	// A stop cancelled the context, or is under way: the exit is expected
+	// and the process stays down (or is relaunched by whoever stopped it).
+	if ctx.Err() != nil || s.stopped || proc.stopping || len(proc.wanted) == 0 {
 		proc.child = nil
 		proc.missed, proc.missedChild = nil, nil
 		s.closeClientLocked(proc)
@@ -900,8 +931,18 @@ func (s *Supervisor) watch(ctx context.Context, proc *supervised, child Child, n
 // against a process that can never start.
 func (s *Supervisor) restartLoop(ctx context.Context, proc *supervised, failure error, cause error) {
 	for {
-		backoff, over := s.noteRestart(proc, failure, cause)
+		backoff, over, w := s.noteRestart(ctx, proc, failure, cause)
 		if over {
+			if w != nil {
+				s.withdrawFollowerPeers(w.ctx, proc)
+				w.cancel()
+				close(w.done)
+				s.mu.Lock()
+				if proc.withdrawal == w {
+					proc.withdrawal = nil
+				}
+				s.mu.Unlock()
+			}
 			return
 		}
 		s.cfg.Logger.Warn("gatewayd supervisor: process down, restarting",
@@ -920,6 +961,7 @@ func (s *Supervisor) restartLoop(ctx context.Context, proc *supervised, failure 
 		stillWanted := !s.stopped && !proc.stopping && len(proc.wanted) > 0 && proc.child == nil && !proc.launching
 		if stillWanted {
 			proc.launching = true
+			proc.followPending = false
 			proc.restoring = proc.desired != nil
 		}
 		s.mu.Unlock()
@@ -931,10 +973,19 @@ func (s *Supervisor) restartLoop(ctx context.Context, proc *supervised, failure 
 			err = s.serveLaunched(ctx, proc)
 		}
 		s.mu.Lock()
-		proc.launching = false
 		proc.restoring = false
 		s.mu.Unlock()
 		if err == nil {
+			err = s.awaitWanted(ctx, proc)
+		}
+		s.mu.Lock()
+		proc.launching = false
+		s.mu.Unlock()
+		if err == nil {
+			if proc.def.Class == ClassKernel {
+				s.relaunchFollowers(ctx, proc)
+			}
+			s.relaunchPendingFollower(ctx, proc)
 			return
 		}
 		s.cfg.Logger.Error("gatewayd supervisor: restart failed",
@@ -943,10 +994,212 @@ func (s *Supervisor) restartLoop(ctx context.Context, proc *supervised, failure 
 	}
 }
 
+// followerVPNPlanes names the VPN planes a datapath child may host for a
+// follower (vpn.DataPlaneWireGuard and vpn.DataPlaneMASQUE; the vpn package
+// is not imported here, so the names are repeated).
+var followerVPNPlanes = []string{"wireguard", "masque"}
+
+// withdrawFollowerPeers removes every peer the datapath child hosts for a
+// follower the supervisor has given up on. The follower is the only lease
+// expiry authority, so its peers must not outlive it; a later start of the
+// follower reinstalls the leases that are still valid (Restore). A plane the
+// datapath does not host confirms at once. A refusal, a transport failure or
+// a missing datapath is logged and retried, the backoff doubling from
+// RestartBackoff up to RestartBackoffMax, until every plane is confirmed, ctx
+// ends (stopProcess cancels it at Shutdown), the supervisor stops, or the
+// follower launches again and becomes the expiry authority. A replacement
+// launch cancels ctx and waits for this to return (awaitWithdrawal), so no
+// withdrawal request outlives the launch claim.
+func (s *Supervisor) withdrawFollowerPeers(ctx context.Context, proc *supervised) {
+	pending := append([]string(nil), followerVPNPlanes...)
+	backoff := s.cfg.RestartBackoff
+	for {
+		// A new launch of the follower is the expiry authority again and
+		// reconciles the hosted peers at its own start: checked before
+		// every round, the first included.
+		if ctx.Err() != nil || s.followerRelaunched(proc) {
+			return
+		}
+		pending = s.withdrawRound(ctx, proc, pending)
+		if ctx.Err() != nil {
+			return
+		}
+		if len(pending) == 0 {
+			s.cfg.Logger.Info("gatewayd supervisor: vpn peers withdrawn from the datapath",
+				slog.String("process", proc.def.Name))
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.cfg.Clock.After(backoff):
+		}
+		backoff *= 2
+		if backoff > s.cfg.RestartBackoffMax {
+			backoff = s.cfg.RestartBackoffMax
+		}
+	}
+}
+
+// followerRelaunched reports whether a given-up follower is being, or has
+// been, launched again (or is stopping), so its withdrawal must not run.
+func (s *Supervisor) followerRelaunched(proc *supervised) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.stopped || proc.stopping || proc.child != nil || proc.launching
+}
+
+// withdrawRound asks the datapath once to withdraw every peer of each pending
+// plane and returns the planes whose withdrawal it did not confirm. Without a
+// datapath every plane stays pending. Each request runs on ctx, which a
+// replacement launch cancels before it execs the new child, so the datapath
+// handler stops a withdrawal the replacement fenced; the planes not yet
+// asked stay pending.
+func (s *Supervisor) withdrawRound(ctx context.Context, proc *supervised, pending []string) []string {
+	_, client, err := s.datapathProcess()
+	if err != nil {
+		s.cfg.Logger.Warn("gatewayd supervisor: no datapath to withdraw the given-up process's vpn peers from",
+			slog.String("process", proc.def.Name), slog.Any("error", err))
+		return pending
+	}
+	var left []string
+	for i, plane := range pending {
+		if ctx.Err() != nil {
+			return append(left, pending[i:]...)
+		}
+		rctx, cancel := context.WithTimeout(ctx, statusTimeout)
+		resp, err := client.ReconcileVPNPeers(rctx, &ipcv1.ReconcileVPNPeersRequest{DataPlane: plane})
+		cancel()
+		switch {
+		case err != nil:
+			s.cfg.Logger.Warn("gatewayd supervisor: withdrawing vpn peers failed",
+				slog.String("process", proc.def.Name), slog.String("plane", plane), slog.Any("error", err))
+			left = append(left, plane)
+		case resp.GetRefusal() != nil:
+			s.cfg.Logger.Warn("gatewayd supervisor: datapath refused the vpn peer withdrawal",
+				slog.String("process", proc.def.Name), slog.String("plane", plane),
+				slog.String("refusal", resp.GetRefusal().String()))
+			left = append(left, plane)
+		}
+	}
+	return left
+}
+
+// awaitWithdrawal cancels a given-up follower's peer withdrawal still in
+// flight and waits for it to return, so the replacement the caller is about
+// to launch restores its peers after the last withdrawal request ended. It
+// returns ctx.Err() when ctx ends first.
+func awaitWithdrawal(ctx context.Context, w *withdrawal) error {
+	if w == nil {
+		return nil
+	}
+	w.cancel()
+	select {
+	case <-w.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// relaunchFollowers relaunches every running process that keeps state in
+// the datapath child (Definition.FollowsDatapath) once datapath, its
+// relaunched kernel process, answers. The crashed datapath child took that
+// state with it, and such a process reinstalls it only at its start: the
+// vpn child's Restore reinstalls each stored lease into the new planes.
+// The process is reported down (restoring) until that start is done.
+func (s *Supervisor) relaunchFollowers(ctx context.Context, datapath *supervised) {
+	s.mu.Lock()
+	var followers []*supervised
+	for _, p := range s.processes {
+		if p == datapath || !p.def.FollowsDatapath || s.stopped || p.stopping || len(p.wanted) == 0 {
+			continue
+		}
+		if p.launching {
+			// Its launch may already have restored into the datapath child
+			// that is gone: relaunch it once that launch completes.
+			p.followPending = true
+			continue
+		}
+		if p.child == nil {
+			continue
+		}
+		p.launching = true
+		p.followPending = false
+		followers = append(followers, p)
+	}
+	s.mu.Unlock()
+
+	for _, p := range followers {
+		s.relaunchFollower(ctx, p)
+	}
+}
+
+// relaunchPendingFollower relaunches proc, whose launch has just
+// completed, when a datapath relaunch landed while it was in flight
+// (followPending). It does nothing otherwise.
+func (s *Supervisor) relaunchPendingFollower(ctx context.Context, proc *supervised) {
+	s.mu.Lock()
+	claimed := proc.followPending && !s.stopped && !proc.stopping && !proc.launching &&
+		proc.child != nil && len(proc.wanted) > 0
+	proc.followPending = false
+	if claimed {
+		proc.launching = true
+	}
+	s.mu.Unlock()
+	if claimed {
+		s.relaunchFollower(ctx, proc)
+	}
+}
+
+// relaunchFollower stops and relaunches p, a FollowsDatapath process the
+// caller has claimed (p.launching), so its start reinstalls its state
+// into the current datapath child.
+func (s *Supervisor) relaunchFollower(ctx context.Context, p *supervised) {
+	if err := s.stopProcess(ctx, p); err != nil {
+		s.mu.Lock()
+		p.launching = false
+		p.followPending = false
+		s.mu.Unlock()
+		s.cfg.Logger.Error("gatewayd supervisor: stopping a process for the datapath relaunch failed",
+			slog.String("process", p.def.Name), slog.Any("error", err))
+		return
+	}
+	s.mu.Lock()
+	p.stopping = false
+	stillWanted := !s.stopped && len(p.wanted) > 0
+	p.restoring = stillWanted && p.desired != nil
+	s.mu.Unlock()
+	var err error
+	if stillWanted {
+		s.cfg.Logger.Info("gatewayd supervisor: relaunching a process after the datapath relaunch",
+			slog.String("process", p.def.Name))
+		if err = s.launch(ctx, p); err == nil {
+			err = s.serveLaunched(ctx, p)
+		}
+	}
+	s.mu.Lock()
+	p.restoring = false
+	s.mu.Unlock()
+	if stillWanted && err == nil {
+		err = s.awaitWanted(ctx, p)
+	}
+	s.mu.Lock()
+	p.launching = false
+	s.mu.Unlock()
+	if err != nil {
+		s.cfg.Logger.Error("gatewayd supervisor: relaunch after the datapath relaunch failed",
+			slog.String("process", p.def.Name), slog.Any("error", err))
+		go s.restartLoop(ctx, p, err, err)
+		return
+	}
+	s.relaunchPendingFollower(ctx, p)
+}
+
 // noteRestart records one restart against the budget and returns the backoff
 // to wait before the next attempt. It reports over when the budget is spent,
 // having left the exhaustion in the process's failure for the health report.
-func (s *Supervisor) noteRestart(proc *supervised, failure error, cause error) (time.Duration, bool) {
+func (s *Supervisor) noteRestart(ctx context.Context, proc *supervised, failure error, cause error) (time.Duration, bool, *withdrawal) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -972,7 +1225,18 @@ func (s *Supervisor) noteRestart(proc *supervised, failure error, cause error) (
 			Last:     cause,
 		}
 		s.cfg.Logger.Error("gatewayd supervisor: giving up on process", slog.Any("error", proc.failure))
-		return 0, true
+		// A given-up follower leaves its peers in the datapath with no
+		// expiry authority. Its withdrawal is registered here, under the
+		// lock that decided the give-up, and only when no replacement
+		// launch is claimed: a claimant either came first (and restores
+		// its own peers) or sees this withdrawal and fences it.
+		if !proc.def.FollowsDatapath || proc.child != nil || proc.launching || s.stopped || proc.stopping {
+			return 0, true, nil
+		}
+		wctx, cancel := context.WithCancel(ctx)
+		w := &withdrawal{ctx: wctx, cancel: cancel, done: make(chan struct{})}
+		proc.withdrawal = w
+		return 0, true, w
 	}
 	if proc.backoff == 0 {
 		proc.backoff = s.cfg.RestartBackoff
@@ -983,7 +1247,7 @@ func (s *Supervisor) noteRestart(proc *supervised, failure error, cause error) (
 		}
 	}
 	proc.failure = failure
-	return proc.backoff, false
+	return proc.backoff, false, nil
 }
 
 // awaitProcess waits for a freshly launched child to answer on its control
@@ -1065,6 +1329,28 @@ func (s *Supervisor) serveLaunched(ctx context.Context, proc *supervised) error 
 		s.stopUnservingChild(ctx, proc)
 	}
 	return ready
+}
+
+// awaitWanted waits, once a relaunched child has been given its document,
+// for every service still wanted of it to start. A child that answers its
+// socket and took its document has not recovered if its Gateway.Start
+// failed (a vpn child that could not fetch its lease projection during a
+// control-plane outage keeps serving that start error, VPN inactive): it is
+// stopped, and the caller retries it as a failed restart.
+func (s *Supervisor) awaitWanted(ctx context.Context, proc *supervised) error {
+	s.mu.Lock()
+	services := make([]string, 0, len(proc.wanted))
+	for service := range proc.wanted {
+		services = append(services, service)
+	}
+	s.mu.Unlock()
+	for _, service := range services {
+		if err := s.awaitService(ctx, proc, service); err != nil {
+			s.stopUnservingChild(ctx, proc)
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Supervisor) restoreDesired(ctx context.Context, proc *supervised) error {
@@ -1683,7 +1969,7 @@ func (s *Supervisor) applyDatapath(ctx context.Context, desired *gwstate.Desired
 // apply slot the caller holds. The caller holds the apply slot.
 func (s *Supervisor) forwardDesired(ctx context.Context, desired *gwstate.DesiredConfig) error {
 	type target struct {
-		name   string
+		proc   *supervised
 		client *ipc.Client
 	}
 	var targets []target
@@ -1698,7 +1984,7 @@ func (s *Supervisor) forwardDesired(ctx context.Context, desired *gwstate.Desire
 			proc.restoring = true
 		}
 		if proc.client != nil {
-			targets = append(targets, target{name: proc.def.Name, client: proc.client})
+			targets = append(targets, target{proc: proc, client: proc.client})
 		}
 	}
 	s.mu.Unlock()
@@ -1707,8 +1993,18 @@ func (s *Supervisor) forwardDesired(ctx context.Context, desired *gwstate.Desire
 	for _, t := range targets {
 		if _, err := t.client.ApplyDesired(ctx, desired); err != nil {
 			failures = append(failures, &ErrDesiredForwardFailed{
-				Process: t.name, Version: desired.EffectiveVersion(), Cause: err})
+				Process: t.proc.def.Name, Version: desired.EffectiveVersion(), Cause: err})
+			continue
 		}
+		// The child that answered now holds the document restoring stands
+		// for. A relaunch past its restore (awaiting readiness) clears
+		// restoring no more, so this forward is what clears it; a child
+		// relaunched since has another client and keeps its own.
+		s.mu.Lock()
+		if t.proc.client == t.client && t.proc.desired == desired {
+			t.proc.restoring = false
+		}
+		s.mu.Unlock()
 	}
 	return errors.Join(failures...)
 }

@@ -28,9 +28,13 @@ import (
 // Policy names the kernel-verified uids each IPC method admits. The
 // supervisor is root, so ControlUIDs is {0} unless a test says otherwise;
 // DatapathUIDs additionally admits the parser processes' uid to the
-// kernel-programming process's narrow surface: the VPN peer RPCs, never
+// kernel-programming process's narrow surface: the VPN peer RPCs
+// (InstallVPNPeer, RemoveVPNPeer and ReconcileVPNPeers), never
 // ApplyDesired, which replaces the whole desired document and is the
-// supervisor's alone. PlatformUIDs admits platformd's uid to
+// supervisor's alone. ReconcileVPNPeers is the bulk form of RemoveVPNPeer
+// under the same admission: it removes only what a run of RemoveVPNPeer
+// calls on the plane it names could remove, so it grants the parser uid
+// nothing the per-peer verb does not already grant. PlatformUIDs admits platformd's uid to
 // GatewayServicesService (#660), the live load-balancer, NAT64 and perf
 // surface, and to nothing else.
 type Policy struct {
@@ -67,11 +71,12 @@ func supervisorOrPlatform(p Policy, uid uint32) bool {
 // method. A method it does not name is refused (ErrUnknownService), so a
 // method added to the contract is closed until it is placed here.
 var methodAdmissions = map[string]admission{
-	ipcv1.ProcessControlService_Status_FullMethodName:   supervisorOnly,
-	ipcv1.ProcessControlService_Snapshot_FullMethodName: supervisorOnly,
-	ipcv1.DatapathService_ApplyDesired_FullMethodName:   supervisorOnly,
-	ipcv1.DatapathService_InstallVPNPeer_FullMethodName: supervisorOrParser,
-	ipcv1.DatapathService_RemoveVPNPeer_FullMethodName:  supervisorOrParser,
+	ipcv1.ProcessControlService_Status_FullMethodName:      supervisorOnly,
+	ipcv1.ProcessControlService_Snapshot_FullMethodName:    supervisorOnly,
+	ipcv1.DatapathService_ApplyDesired_FullMethodName:      supervisorOnly,
+	ipcv1.DatapathService_InstallVPNPeer_FullMethodName:    supervisorOrParser,
+	ipcv1.DatapathService_RemoveVPNPeer_FullMethodName:     supervisorOrParser,
+	ipcv1.DatapathService_ReconcileVPNPeers_FullMethodName: supervisorOrParser,
 
 	ipcv1.GatewayServicesService_LBStatus_FullMethodName:       supervisorOrPlatform,
 	ipcv1.GatewayServicesService_ListVIPs_FullMethodName:       supervisorOrPlatform,

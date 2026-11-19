@@ -49,6 +49,7 @@ type Node interface {
 type VPNPlanes interface {
 	InstallVPNPeer(ctx context.Context, req *ipcv1.InstallVPNPeerRequest) *ipcv1.InstallVPNPeerResponse
 	RemoveVPNPeer(ctx context.Context, req *ipcv1.RemoveVPNPeerRequest) *ipcv1.RemoveVPNPeerResponse
+	ReconcileVPNPeers(ctx context.Context, req *ipcv1.ReconcileVPNPeersRequest) *ipcv1.ReconcileVPNPeersResponse
 }
 
 // vpnPlanes boxes a VPNPlanes for Server's atomic pointer.
@@ -86,7 +87,10 @@ type Server struct {
 	listener net.Listener
 	startErr atomic.Pointer[string]
 	vpn      atomic.Pointer[vpnPlanes]
-	services atomic.Pointer[Services]
+	// planesFailed is the reason this process's planes failed to start;
+	// while it is set no peer withdrawal is confirmed without planes.
+	planesFailed atomic.Pointer[string]
+	services     atomic.Pointer[Services]
 	// chown is os.Chown; a test replaces it to stand for a process that
 	// holds neither CAP_CHOWN nor membership of the socket group.
 	chown func(name string, uid, gid int) error
@@ -127,7 +131,21 @@ func (s *Server) SetVPNPlanes(host VPNPlanes) {
 		s.vpn.Store(nil)
 		return
 	}
+	s.planesFailed.Store(nil)
 	s.vpn.Store(&vpnPlanes{host: host})
+}
+
+// SetVPNPlanesFailed records that this process's VPN planes failed to start
+// with err: a predecessor's peers may still be in the kernel, so withdrawing
+// every peer of a plane is refused UNAVAILABLE, naming err, until planes are
+// set. A nil err clears the record.
+func (s *Server) SetVPNPlanesFailed(err error) {
+	if err == nil {
+		s.planesFailed.Store(nil)
+		return
+	}
+	text := err.Error()
+	s.planesFailed.Store(&text)
 }
 
 // Listen binds the Unix socket at path with the given mode and group. A
@@ -275,4 +293,29 @@ func (s *Server) RemoveVPNPeer(ctx context.Context, req *ipcv1.RemoveVPNPeerRequ
 		return &ipcv1.RemoveVPNPeerResponse{Refusal: noVPNPlanes()}, nil
 	}
 	return planes.host.RemoveVPNPeer(ctx, req), nil
+}
+
+// ReconcileVPNPeers implements DatapathService through the hosted VPN planes.
+func (s *Server) ReconcileVPNPeers(ctx context.Context, req *ipcv1.ReconcileVPNPeersRequest) (*ipcv1.ReconcileVPNPeersResponse, error) {
+	planes := s.vpn.Load()
+	if planes == nil {
+		// A process hosting no plane, and whose planes did not fail to
+		// start, holds no peer (a kernel-class child with no plane removes
+		// any stale hub before it serves), so withdrawing every peer of a
+		// named plane is already done: the supervisor's withdrawal for a
+		// given-up vpn child must be able to finish. A failed plane start
+		// may leave a predecessor's peers in place, so it refuses until
+		// planes are set; keeping a peer, or naming no plane, still refuses.
+		if failed := s.planesFailed.Load(); failed != nil {
+			return &ipcv1.ReconcileVPNPeersResponse{Refusal: &ipcv1.VPNPeerRefusal{
+				Class:  ipcv1.VPNPeerRefusalClass_VPN_PEER_REFUSAL_CLASS_UNAVAILABLE,
+				Reason: "the VPN data planes failed to start: " + *failed,
+			}}, nil
+		}
+		if req.GetDataPlane() != "" && len(req.GetLeaseIds()) == 0 {
+			return &ipcv1.ReconcileVPNPeersResponse{}, nil
+		}
+		return &ipcv1.ReconcileVPNPeersResponse{Refusal: noVPNPlanes()}, nil
+	}
+	return planes.host.ReconcileVPNPeers(ctx, req), nil
 }

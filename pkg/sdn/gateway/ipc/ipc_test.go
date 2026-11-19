@@ -20,6 +20,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -201,9 +202,10 @@ func TestApplyDesired_CarriesTheApplyErrorBesideTheState(t *testing.T) {
 // fakeVPNPlanes records the peer RPCs it is handed and answers with a
 // scripted refusal.
 type fakeVPNPlanes struct {
-	refusal   *ipcv1.VPNPeerRefusal
-	installed *ipcv1.VPNPeer
-	removed   *ipcv1.RemoveVPNPeerRequest
+	refusal    *ipcv1.VPNPeerRefusal
+	installed  *ipcv1.VPNPeer
+	removed    *ipcv1.RemoveVPNPeerRequest
+	reconciled *ipcv1.ReconcileVPNPeersRequest
 }
 
 func (f *fakeVPNPlanes) InstallVPNPeer(_ context.Context, req *ipcv1.InstallVPNPeerRequest) *ipcv1.InstallVPNPeerResponse {
@@ -214,6 +216,11 @@ func (f *fakeVPNPlanes) InstallVPNPeer(_ context.Context, req *ipcv1.InstallVPNP
 func (f *fakeVPNPlanes) RemoveVPNPeer(_ context.Context, req *ipcv1.RemoveVPNPeerRequest) *ipcv1.RemoveVPNPeerResponse {
 	f.removed = req
 	return &ipcv1.RemoveVPNPeerResponse{Refusal: f.refusal}
+}
+
+func (f *fakeVPNPlanes) ReconcileVPNPeers(_ context.Context, req *ipcv1.ReconcileVPNPeersRequest) *ipcv1.ReconcileVPNPeersResponse {
+	f.reconciled = req
+	return &ipcv1.ReconcileVPNPeersResponse{Refusal: f.refusal}
 }
 
 func TestVPNPeer_ForwardsToTheHostedPlanes(t *testing.T) {
@@ -240,6 +247,15 @@ func TestVPNPeer_ForwardsToTheHostedPlanes(t *testing.T) {
 	}
 	if removed.GetRefusal() != nil || planes.removed.GetLeaseId() != "l1" || planes.removed.GetDataPlane() != "masque" {
 		t.Fatalf("remove = %v, planes saw %v", removed.GetRefusal(), planes.removed)
+	}
+
+	reconciled, err := client.ReconcileVPNPeers(testContext(t), &ipcv1.ReconcileVPNPeersRequest{DataPlane: "masque", LeaseIds: []string{"l2"}})
+	if err != nil {
+		t.Fatalf("ReconcileVPNPeers: %v", err)
+	}
+	if reconciled.GetRefusal() != nil || planes.reconciled.GetDataPlane() != "masque" ||
+		len(planes.reconciled.GetLeaseIds()) != 1 || planes.reconciled.GetLeaseIds()[0] != "l2" {
+		t.Fatalf("reconcile = %v, planes saw %v", reconciled.GetRefusal(), planes.reconciled)
 	}
 }
 
@@ -285,6 +301,45 @@ func TestVPNPeer_RefusedWhenTheProcessHostsNoPlanes(t *testing.T) {
 	}
 }
 
+// TestVPNPeer_WithdrawingEveryPeerWithNoPlanesSucceeds pins finding 2: a
+// datapath that hosts no plane holds no peer, so withdrawing every peer of a
+// plane is confirmed; keeping one is still refused.
+func TestVPNPeer_WithdrawingEveryPeerWithNoPlanesSucceeds(t *testing.T) {
+	_, client := serve(t, &fakeNode{state: gateway.GatewayStateRunning}, selfPolicy())
+
+	withdrawn, err := client.ReconcileVPNPeers(testContext(t), &ipcv1.ReconcileVPNPeersRequest{DataPlane: "wireguard"})
+	if err != nil || withdrawn.GetRefusal() != nil {
+		t.Fatalf("withdraw every peer with no planes = %v, %v; want success", withdrawn.GetRefusal(), err)
+	}
+	kept, err := client.ReconcileVPNPeers(testContext(t), &ipcv1.ReconcileVPNPeersRequest{DataPlane: "wireguard", LeaseIds: []string{"l1"}})
+	if err != nil || kept.GetRefusal().GetClass() != ipcv1.VPNPeerRefusalClass_VPN_PEER_REFUSAL_CLASS_UNAVAILABLE {
+		t.Fatalf("keep a peer with no planes = %v, %v; want an UNAVAILABLE refusal", kept.GetRefusal(), err)
+	}
+}
+
+// A process whose plane start failed may still carry a predecessor's peers
+// in the kernel: withdrawing every peer is not confirmed until planes are
+// up, so the supervisor keeps retrying.
+func TestVPNPeer_AFailedPlaneStartNeverConfirmsAWithdrawal(t *testing.T) {
+	srv, client := serve(t, &fakeNode{state: gateway.GatewayStateRunning}, selfPolicy())
+	srv.SetVPNPlanesFailed(errors.New("stale hub could not be deleted"))
+
+	withdrawn, err := client.ReconcileVPNPeers(testContext(t), &ipcv1.ReconcileVPNPeersRequest{DataPlane: "wireguard"})
+	if err != nil || withdrawn.GetRefusal().GetClass() != ipcv1.VPNPeerRefusalClass_VPN_PEER_REFUSAL_CLASS_UNAVAILABLE {
+		t.Fatalf("withdraw after a failed plane start = %v, %v; want an UNAVAILABLE refusal", withdrawn.GetRefusal(), err)
+	}
+	if !strings.Contains(withdrawn.GetRefusal().GetReason(), "stale hub could not be deleted") {
+		t.Fatalf("refusal reason = %q; want the start failure named", withdrawn.GetRefusal().GetReason())
+	}
+
+	planes := &fakeVPNPlanes{}
+	srv.SetVPNPlanes(planes)
+	served, err := client.ReconcileVPNPeers(testContext(t), &ipcv1.ReconcileVPNPeersRequest{DataPlane: "wireguard"})
+	if err != nil || served.GetRefusal() != nil || planes.reconciled.GetDataPlane() != "wireguard" {
+		t.Fatalf("withdraw once planes are set = %v, %v; planes saw %v", served.GetRefusal(), err, planes.reconciled)
+	}
+}
+
 func TestPolicy_DeniesAnUnadmittedUIDOnEveryService(t *testing.T) {
 	// No caller is uid 4294967000, so both services must refuse us.
 	policy := Policy{ControlUIDs: []uint32{4294967000}, DatapathUIDs: []uint32{4294967000}}
@@ -305,6 +360,10 @@ func TestPolicy_DeniesAnUnadmittedUIDOnEveryService(t *testing.T) {
 	_, err = client.RemoveVPNPeer(testContext(t), &ipcv1.RemoveVPNPeerRequest{LeaseId: "l1"})
 	if status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("RemoveVPNPeer err = %v, want PermissionDenied", err)
+	}
+	_, err = client.ReconcileVPNPeers(testContext(t), &ipcv1.ReconcileVPNPeersRequest{DataPlane: "wireguard", LeaseIds: []string{"l1"}})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("ReconcileVPNPeers err = %v, want PermissionDenied", err)
 	}
 }
 
@@ -328,6 +387,9 @@ func TestPolicy_TheParserUIDReachesOnlyTheVPNPeerMethods(t *testing.T) {
 	if _, err := client.RemoveVPNPeer(testContext(t), &ipcv1.RemoveVPNPeerRequest{LeaseId: "l1"}); err != nil {
 		t.Fatalf("RemoveVPNPeer: %v", err)
 	}
+	if _, err := client.ReconcileVPNPeers(testContext(t), &ipcv1.ReconcileVPNPeersRequest{DataPlane: "wireguard", LeaseIds: []string{"l1"}}); err != nil {
+		t.Fatalf("ReconcileVPNPeers: %v", err)
+	}
 }
 
 func TestPolicyAdmit_TableAndUnknownMethod(t *testing.T) {
@@ -341,6 +403,7 @@ func TestPolicyAdmit_TableAndUnknownMethod(t *testing.T) {
 		{ipcv1.DatapathService_ApplyDesired_FullMethodName, false},
 		{ipcv1.DatapathService_InstallVPNPeer_FullMethodName, true},
 		{ipcv1.DatapathService_RemoveVPNPeer_FullMethodName, true},
+		{ipcv1.DatapathService_ReconcileVPNPeers_FullMethodName, true},
 	}
 	for _, tc := range cases {
 		if err := p.admit(tc.method, creds(0)); err != nil {
