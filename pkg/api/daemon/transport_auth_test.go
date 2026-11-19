@@ -302,6 +302,38 @@ func TestSelectQUICAuth_JWTVerifier_BuildsRequiredMiddleware(t *testing.T) {
 	require.NotNil(t, validator)
 }
 
+// #1988: a local-token QUIC request is decided by the IAM PEP for the token's
+// principal; removing the authorization checker wiring fails this test.
+func TestSelectQUICAuth_LocalValidator_AuthorizesEachOperationThroughIAM(t *testing.T) {
+	t.Parallel()
+	config := failClosedConfig()
+	config.App = &app.App{}
+	config.PlatformJWTVerifier = alwaysValidJWTVerifier{claims: jwt.TokenClaims{
+		UserIDStr: "42", TenantID: "acme", Roles: []string{"operator"},
+	}}
+	var last *sdkiam.CheckRequest
+	pep := pepAllowing("42", "kms", "read", &last)
+
+	mw, _, err := selectQUICAuth(config, nil, pep, nil, logging.DefaultLogger())
+	require.NoError(t, err)
+	require.NotNil(t, mw)
+
+	// The principal holds kms:read: ListKeys is allowed...
+	_, resp := mw.GuardRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpKMSListKeys, Token: "jwt"})
+	assert.Nil(t, resp)
+	require.NotNil(t, last)
+	assert.Equal(t, sdkiam.CheckSubject{ID: "42", TenantID: "acme", Roles: []string{"operator"}}, last.Subject)
+	assert.Equal(t, "kms", last.Resource)
+	assert.Equal(t, "read", last.Action)
+
+	// ...but the same valid token cannot delete a key: the PEP is asked and refuses.
+	_, resp = mw.GuardRequest(context.Background(), &quicwire.Request{Opcode: quicwire.OpKMSDeleteKey, Token: "jwt"})
+	require.NotNil(t, resp)
+	assert.Equal(t, quicwire.StatusPermissionDenied, resp.Status)
+	assert.Equal(t, "kms", last.Resource)
+	assert.Equal(t, "delete", last.Action)
+}
+
 // Local tokens carry no scope claims: without the IAM policy enforcement
 // point the QUIC transport has no decision point and is refused (#1988).
 func TestSelectQUICAuth_JWTVerifier_NoPEP_ReturnsTypedError(t *testing.T) {
