@@ -177,8 +177,8 @@ func TestPolicyEnginePEP_CheckBatchBindsEachTenant(t *testing.T) {
 
 func TestPolicyEnginePEP_NoTenantRefused(t *testing.T) {
 	pep, bound := newTenantRecordingPEP()
-	if _, err := pep.Check(context.Background(), pepCheck("alice", "", "device", "read")); err == nil {
-		t.Fatal("a check naming no tenant was evaluated, want a refusal")
+	if _, err := pep.Check(context.Background(), pepCheck("alice", "", "device", "read")); !errors.Is(err, errPolicyEngineNoTenant) {
+		t.Fatalf("err = %v, want errPolicyEngineNoTenant", err)
 	}
 	if len(*bound) != 0 {
 		t.Fatalf("authorizer reached with %v, want no evaluation", *bound)

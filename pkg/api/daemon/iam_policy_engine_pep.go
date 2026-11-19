@@ -18,6 +18,7 @@ import (
 	"errors"
 	"time"
 
+	qrdbsdk "github.com/jeremyhahn/go-qrdb/sdk/go"
 	quiciam "github.com/jeremyhahn/go-quicbaas/pkg/iam"
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
@@ -29,6 +30,9 @@ var (
 	errPolicyEngineUnavailable = errors.New("iam policy engine: not available")
 	// errPolicyEngineNilRequest denies a check made with no request.
 	errPolicyEngineNilRequest = errors.New("iam policy engine: nil check request")
+	// errPolicyEngineNoTenant refuses a check that names no tenant, so an
+	// unbound check never evaluates as the system tenant.
+	errPolicyEngineNoTenant = errors.New("iam policy engine: check names no tenant")
 )
 
 // policyEnginePEP is an SDK PEPClient answered by the app's own IAM policy
@@ -54,6 +58,17 @@ func (p policyEnginePEP) Check(ctx context.Context, req *sdkiam.CheckRequest) (*
 	if tenantID == "" {
 		tenantID = req.TenantID
 	}
+	// The engine's RBAC authorizer reads the target tenant from the context
+	// and treats an unbound context as the system tenant, so bind the
+	// request's tenant (or the subject's own) before evaluating.
+	target := req.TenantID
+	if target == "" {
+		target = tenantID
+	}
+	if target == "" {
+		return nil, errPolicyEngineNoTenant
+	}
+	ctx = qrdbsdk.ContextWithTenant(ctx, target)
 	resp, err := p.engine.Evaluate(ctx, &quiciam.CheckRequest{
 		Subject: quiciam.Subject{
 			ID:            req.Subject.ID,
