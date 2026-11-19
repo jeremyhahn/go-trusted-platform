@@ -125,6 +125,13 @@ machine boots (provisioning zone: enrollment traffic only)
 Two states have no forward path without an external decision: **pending**
 (needs fulfilment) and **quarantined** (needs an operator).
 
+A state transition that moves the device's VLAN fails closed. When the SDN
+flow manager cannot enforce the new VLAN, the transition is not recorded:
+the device keeps its earlier state, and the RPC that asked for the
+transition (for example `UpdateState`) returns the
+enforcement error. A device is never recorded in a state whose zone it is
+not in.
+
 ## What this feature deliberately does not do
 
 - **It does not decide whether a machine belongs.** Fulfilment does, and
