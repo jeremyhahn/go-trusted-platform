@@ -3,7 +3,6 @@ package daemon
 import (
 	"context"
 	"log/slog"
-	"net/http"
 	"testing"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
@@ -16,7 +15,6 @@ import (
 	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -82,23 +80,13 @@ func unixOperatorContext() context.Context {
 	return peercred.ContextWithUnixCredentials(context.Background(), peercred.UnixCredentials{PID: 1, UID: 0, GID: 0})
 }
 
-// operatorGRPCServerOption stamps the in-process operator's credentials on
-// every call a test gRPC server takes, as embedded_host does for its
-// embedder, so a fixture that serves over TCP still has an identified local
-// caller (SPEC row 109 refuses one with no identity at all).
-func operatorGRPCServerOption() grpc.ServerOption {
-	return grpc.ChainUnaryInterceptor(func(ctx context.Context, req interface{}, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-		return handler(peercred.ContextWithProcessCredentials(ctx), req)
-	})
+// tenantOnlySession is an IAM session that names only its tenant.
+type tenantOnlySession struct {
+	iammw.IAMSession
+	tenant string
 }
 
-// operatorHTTPHandler does the same for a test MCP or REST bridge served
-// over httptest.
-func operatorHTTPHandler(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		next.ServeHTTP(w, r.WithContext(peercred.ContextWithProcessCredentials(r.Context())))
-	})
-}
+func (s tenantOnlySession) TenantID() string { return s.tenant }
 
 // TestUnboundTenantCallers covers SPEC row 109: a caller with no identity
 // at all is refused every tenant-scoped IAM and tenant call with
@@ -156,6 +144,12 @@ func TestCallerTenant(t *testing.T) {
 			name:       "REST platform token (webservice PlatformTokenMiddleware)",
 			ctx:        iammw.SetAuthorizedContext(context.Background(), &platformtoken.AuthorizedContext{TenantID: "tenant-r"}),
 			wantTenant: "tenant-r",
+			wantBound:  true,
+		},
+		{
+			name:       "REST IAM session (webservice JWT handler)",
+			ctx:        iammw.SetSessionInContext(context.Background(), tenantOnlySession{tenant: "tenant-s"}),
+			wantTenant: "tenant-s",
 			wantBound:  true,
 		},
 		{
