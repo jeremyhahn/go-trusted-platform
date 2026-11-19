@@ -1197,8 +1197,10 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 		for i, rule := range config.GetRules() {
 			flowMod := flowMods[i]
 			if err := client.AddFlow(ctx, bridgeName, flowMod); err != nil {
+				removed := make(map[flowEntryKey]bool, len(installed))
 				for _, f := range installed {
 					_ = client.DeleteFlowStrict(ctx, f.bridge, f.flow)
+					removed[newFlowEntryKey(f.bridge, f.flow)] = true
 				}
 				// An update's AddFlow replaced the previous policy's flow with
 				// the same match, and the delete above removed it: put the
@@ -1208,6 +1210,10 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 					old.status = "error"
 					s.mu.Unlock()
 				}
+				// A flow this call installed may also have replaced another
+				// policy's entry with the same table, priority and match: put
+				// those entries back so that policy stays enforced.
+				s.restoreOverwrittenFlows(ctx, client, policyID, removed)
 				return nil, status.Errorf(codes.Internal, "install flow for rule %q on bridge %q: %v", rule.GetRuleId(), bridgeName, err)
 			}
 			installed = append(installed, installedFlow{bridge: bridgeName, flow: flowMod})
@@ -1273,6 +1279,68 @@ func (s *SDNService) restorePolicyFlows(ctx context.Context, client ovs.ClientIn
 		}
 	}
 	return ok
+}
+
+// flowEntryKey identifies a switch entry: OpenFlow keeps one flow per bridge,
+// table, priority and match, so a flow with the same key replaces another.
+type flowEntryKey struct {
+	bridge   string
+	table    int
+	priority int
+	match    string
+}
+
+func newFlowEntryKey(bridge string, f *ovs.FlowMod) flowEntryKey {
+	return flowEntryKey{bridge: bridge, table: f.Table, priority: f.Priority, match: f.Match}
+}
+
+// restoreOverwrittenFlows re-installs the flows of every recorded policy other
+// than skipID whose switch entry is in removed: a failed apply replaced those
+// entries and its rollback deleted them. A policy whose flow cannot be put back
+// is marked "error".
+func (s *SDNService) restoreOverwrittenFlows(ctx context.Context, client ovs.ClientInterface, skipID string, removed map[flowEntryKey]bool) {
+	type restore struct {
+		p      *policyResource
+		bridge string
+		flow   *ovs.FlowMod
+	}
+	var others []*policyResource
+	s.mu.RLock()
+	for id, p := range s.policies {
+		if id != skipID {
+			others = append(others, p)
+		}
+	}
+	s.mu.RUnlock()
+
+	// findBridgeName takes s.mu itself, so resolve outside the lock.
+	var restores []restore
+	for _, p := range others {
+		for _, target := range p.targets {
+			if target.GetType() != platformv1.PolicyTargetType_POLICY_TARGET_TYPE_BRIDGE {
+				continue
+			}
+			bridgeName, found := s.findBridgeName(target.GetId())
+			if !found {
+				continue
+			}
+			for _, rule := range p.rules {
+				flowMod, err := s.policyRuleToFlowMod(rule, p.priority)
+				if err != nil || !removed[newFlowEntryKey(bridgeName, flowMod)] {
+					continue
+				}
+				restores = append(restores, restore{p: p, bridge: bridgeName, flow: flowMod})
+			}
+		}
+	}
+
+	for _, r := range restores {
+		if err := client.AddFlow(ctx, r.bridge, r.flow); err != nil {
+			s.mu.Lock()
+			r.p.status = "error"
+			s.mu.Unlock()
+		}
+	}
 }
 
 // GetPolicy retrieves a policy by ID

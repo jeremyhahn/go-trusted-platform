@@ -281,6 +281,27 @@ func (o *QEMUOrchestrator) adoptReceived(tr *trackedReceiver) (string, error) {
 		return "", &MessageError{Msg: "received VM has no QEMU process"}
 	}
 
+	// A fresh config with the destination's resolved runtime paths: the spec
+	// carries the source's settings only, and disk operations, snapshots and
+	// Delete need the receiver's work directory and disk.
+	config := &InstanceConfig{}
+	if tr.spec.Config != nil {
+		*config = *tr.spec.Config
+	}
+	if qcfg := vm.GetConfig(); qcfg != nil {
+		config.WorkDir = qcfg.WorkDir
+		config.DiskPath = qcfg.DiskPath
+		if qcfg.DiskSize != "" {
+			config.DiskSize = qcfg.DiskSize
+		}
+		if qcfg.Memory > 0 {
+			config.Memory = qcfg.Memory
+		}
+		if qcfg.CPUs > 0 {
+			config.CPUs = qcfg.CPUs
+		}
+	}
+
 	o.mu.Lock()
 	instanceID := tr.spec.InstanceID
 	if _, taken := o.instances[instanceID]; instanceID == "" || taken {
@@ -301,7 +322,7 @@ func (o *QEMUOrchestrator) adoptReceived(tr *trackedReceiver) (string, error) {
 			Name:               tr.spec.VMName,
 			Type:               ComputeTypeVM,
 			State:              StateRunning,
-			Config:             tr.spec.Config,
+			Config:             config,
 			NetworkAttachments: []NetworkAttachment{},
 			CreatedAt:          now,
 			UpdatedAt:          now,
@@ -310,14 +331,12 @@ func (o *QEMUOrchestrator) adoptReceived(tr *trackedReceiver) (string, error) {
 			PID:                vm.GetPID(),
 		},
 	}
-	o.instances[instanceID] = qemuInst
-	o.mu.Unlock()
-
+	// The run and its exit watcher are in place before the instance is
+	// published, so a stop that lands at once finds the run to wait on and
+	// the watcher records the exit and reaps the process.
 	if vm.IsRunning() {
-		qemuInst.mu.Lock()
 		run := &qemuRun{cancel: func() {}, done: make(chan struct{})}
 		qemuInst.run = run
-		qemuInst.mu.Unlock()
 		go func() {
 			defer close(run.done)
 			if err := vm.Wait(); err != nil {
@@ -326,8 +345,18 @@ func (o *QEMUOrchestrator) adoptReceived(tr *trackedReceiver) (string, error) {
 			o.recordExit(instanceID, qemuInst)
 		}()
 	}
+	o.instances[instanceID] = qemuInst
+	o.mu.Unlock()
+
+	if hook := receiverAdoptedHook; hook != nil {
+		hook(instanceID)
+	}
 	return instanceID, nil
 }
+
+// receiverAdoptedHook, when set by a test, runs right after a received
+// instance is published.
+var receiverAdoptedHook func(instanceID string)
 
 // reapReceiver aborts and releases a receiver that was never finalized. It is a
 // no-op when the receiver has already been taken.
