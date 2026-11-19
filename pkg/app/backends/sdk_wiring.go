@@ -106,7 +106,11 @@ func WireSDKBackends(target SDKBackendTarget, src SDKBackendSources, logger *log
 	// out-of-range PCR list is refused before the sealer runs or a slot is
 	// written. The handler seals over src.TPM, the platform's selected TPM
 	// (the initrd unseals over the same Platform.TPM); a nil src.TPM keeps
-	// the SDK default device. With no TPM transport the handler stays nil.
+	// the SDK default device. With PlatformTPMOpener, a TPM character device
+	// gives each enrolment its own connection to that device (the resource
+	// manager keeps it apart from the platform's own TPM work), and an
+	// in-process simulator lends the platform's transport (single-user test
+	// hardware). With no TPM transport the handler stays nil.
 	luks := NewLUKSBackend(logger, WithLUKSTPMOpener(src.TPM), WithDefaultLUKSHandlers())
 	luks.SetTPMHandler(pcrCheckedTPMHandler(luks.TPMHandler()))
 	target.SetLUKSBackend(luks)

@@ -15,9 +15,12 @@ package backends
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"sync"
 
 	"github.com/google/go-tpm/tpm2/transport"
+	"github.com/google/go-tpm/tpm2/transport/linuxtpm"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	luks "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/luks"
 
@@ -78,15 +81,28 @@ type LUKSTPMSealResult = luks.TPMSealResult
 // callers can downgrade cleanly to a "not wired" failure mode.
 var DefaultTPMOpener = luks.DefaultTPMOpener
 
-// PlatformTPMOpener returns a TPMOpener over the platform's selected TPM:
-// every Open hands the sealer the module's own transport (the device the
-// platform resolved, swtpm or simulator) instead of the SDK default device.
-// module is resolved at Open time; a nil module or transport answers
-// ErrLUKSTPMNoTransport.
+// PlatformTPMOpener returns a TPMOpener over the platform's selected TPM
+// instead of the SDK default device. module is resolved at Open time; a nil
+// module answers ErrLUKSTPMNoTransport. Which mode applies depends on the
+// module's Device():
+//
+//   - A TPM character device (a kernel resource-manager device such as the
+//     default /dev/tpmrm0): every Open opens a new connection to that same
+//     device and the closer closes it. The resource manager gives each
+//     connection its own context and serializes commands between them, so
+//     the sealer never shares a connection with the platform's own TPM work
+//     (quotes, NV reads and writes, transient-handle flushes), and an
+//     enrolment runs at the same time as that work. An open failure answers
+//     ErrLUKSTPMNoTransport wrapping the cause.
+//   - An in-process TPM (the simulator: no device path): every Open lends the
+//     module's own transport under a lock that orders the sealers only, not
+//     the platform's own users of that transport. This mode is for
+//     single-user test hardware; a nil transport answers
+//     ErrLUKSTPMNoTransport.
 func PlatformTPMOpener(module func() xkmssdk.TrustedPlatformModule) TPMOpener {
 	// lock (capacity 1) is held from Open until the returned closer's
-	// Close, so one sealer at a time exchanges commands over the
-	// platform's transport.
+	// Close, so in the in-process mode one sealer at a time exchanges
+	// commands over the platform's transport.
 	lock := make(chan struct{}, 1)
 	return TPMOpenerFunc(func(ctx context.Context) (transport.TPMCloser, error) {
 		if module == nil {
@@ -95,6 +111,13 @@ func PlatformTPMOpener(module func() xkmssdk.TrustedPlatformModule) TPMOpener {
 		m := module()
 		if m == nil {
 			return nil, ErrLUKSTPMNoTransport
+		}
+		if device := m.Device(); device != "" && isTPMCharDevice(device) {
+			conn, err := openTPMDevice(device)
+			if err != nil {
+				return nil, fmt.Errorf("%w: %w", ErrLUKSTPMNoTransport, err)
+			}
+			return conn, nil
 		}
 		tpm := m.Transport()
 		if tpm == nil {
@@ -109,9 +132,21 @@ func PlatformTPMOpener(module func() xkmssdk.TrustedPlatformModule) TPMOpener {
 	})
 }
 
-// sharedTPM lends the platform's transport to the sealer. The sealer closes
-// its transport after each command batch, but the platform owns and closes
-// its transport, so Close only hands the transport to the next sealer.
+// openTPMDevice opens a new connection to the TPM character device at path;
+// isTPMCharDevice reports whether path is one. Tests replace both.
+var (
+	openTPMDevice   = linuxtpm.Open
+	isTPMCharDevice = func(path string) bool {
+		info, err := os.Stat(path)
+		return err == nil && info.Mode()&os.ModeCharDevice != 0
+	}
+)
+
+// sharedTPM lends the platform's transport to the sealer in the in-process
+// (simulator) mode of PlatformTPMOpener; the device mode hands the sealer
+// its own connection instead. The sealer closes its transport after each
+// command batch, but the platform owns and closes its transport, so Close
+// only hands the transport to the next sealer.
 type sharedTPM struct {
 	transport.TPM
 	release func()
