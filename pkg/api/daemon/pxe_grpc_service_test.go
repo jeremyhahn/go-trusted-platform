@@ -27,6 +27,9 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy/zoneflows"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -1371,13 +1374,13 @@ func TestPXEGRPCServiceFromConfig_DaemonPXESection(t *testing.T) {
 	}
 
 	t.Run("no section", func(t *testing.T) {
-		svc, err := pxeGRPCServiceFromConfig(ctx, logger, pxeSectionApp(), nil)
+		svc, err := pxeGRPCServiceFromConfig(ctx, logger, pxeSectionApp(), nil, nil)
 		require.NoError(t, err)
 		notConfigured(t, svc)
 	})
 
 	t.Run("enabled false", func(t *testing.T) {
-		svc, err := pxeGRPCServiceFromConfig(ctx, logger, pxeSectionApp(), &pxe.DaemonConfig{BridgeName: "br-pxe"})
+		svc, err := pxeGRPCServiceFromConfig(ctx, logger, pxeSectionApp(), &pxe.DaemonConfig{BridgeName: "br-pxe"}, nil)
 		require.NoError(t, err)
 		notConfigured(t, svc)
 	})
@@ -1393,7 +1396,7 @@ func TestPXEGRPCServiceFromConfig_DaemonPXESection(t *testing.T) {
 			FirmwareOffline: true,
 			BootEntries:     []ipxe.BootEntry{{Name: "test", Description: "Test Entry", Kernel: "http://example.com/kernel"}},
 		}
-		svc, err := pxeGRPCServiceFromConfig(ctx, logger, pxeSectionApp(), section)
+		svc, err := pxeGRPCServiceFromConfig(ctx, logger, pxeSectionApp(), section, pxeTestFlowManager(t, &pxeRecordingPort{}))
 		require.NoError(t, err)
 		resp, err := svc.ListDevices(ctx, &platformv1.ListPXEDevicesRequest{})
 		require.NoError(t, err)
@@ -1401,18 +1404,101 @@ func TestPXEGRPCServiceFromConfig_DaemonPXESection(t *testing.T) {
 	})
 
 	t.Run("invalid enabled section fails start", func(t *testing.T) {
-		svc, err := pxeGRPCServiceFromConfig(ctx, logger, pxeSectionApp(), &pxe.DaemonConfig{Enabled: true})
+		svc, err := pxeGRPCServiceFromConfig(ctx, logger, pxeSectionApp(), &pxe.DaemonConfig{Enabled: true}, nil)
 		require.Error(t, err)
 		assert.Nil(t, svc)
 		assert.True(t, errors.Is(err, pxe.ErrInvalidConfig), "got %v", err)
 	})
 
 	t.Run("enabled without a network plan fails start", func(t *testing.T) {
-		svc, err := pxeGRPCServiceFromConfig(ctx, logger, &app.App{}, &pxe.DaemonConfig{Enabled: true, BridgeName: "br-pxe"})
+		svc, err := pxeGRPCServiceFromConfig(ctx, logger, &app.App{}, &pxe.DaemonConfig{Enabled: true, BridgeName: "br-pxe"}, nil)
 		require.Error(t, err)
 		assert.Nil(t, svc)
 		var want pxe.ErrNetworkPlanRequired
 		assert.True(t, errors.As(err, &want), "got %v", err)
+	})
+}
+
+// pxeRecordingPort is an OVS port controller that records the access VLANs
+// the zone flow manager sets.
+type pxeRecordingPort struct {
+	vlans []int64
+}
+
+func (p *pxeRecordingPort) InstallFlow(string, int, string, string) error                { return nil }
+func (p *pxeRecordingPort) InstallFlows(string, []zoneflows.FlowRule) error              { return nil }
+func (p *pxeRecordingPort) DeleteFlow(string, string) error                              { return nil }
+func (p *pxeRecordingPort) DeleteFlowsByPort(string, string) error                       { return nil }
+func (p *pxeRecordingPort) ListFlows(string) ([]string, error)                           { return nil, nil }
+func (p *pxeRecordingPort) SetPortTrunk(context.Context, string, []uint16, uint16) error { return nil }
+func (p *pxeRecordingPort) SetPortState(context.Context, string, ovs.PortState) error    { return nil }
+func (p *pxeRecordingPort) GetOFPort(context.Context, string) (int32, error)             { return 1, nil }
+func (p *pxeRecordingPort) SetPortVLAN(_ context.Context, _ string, v int64) error {
+	p.vlans = append(p.vlans, v)
+	return nil
+}
+
+// pxeTestFlowManager builds a zone flow manager on the network plan of
+// pxeSectionApp, driving port.
+func pxeTestFlowManager(t *testing.T, port *pxeRecordingPort) *policy.ZoneFlowManager {
+	t.Helper()
+	zones, env := zoneServiceSeed(pxeSectionApp())
+	require.NotNil(t, env)
+	if len(zones) == 0 {
+		zones = zone.Defaults()
+	}
+	plan, err := netplan.New(*env, zones)
+	require.NoError(t, err)
+	zfm, err := policy.NewZoneFlowManager(policy.ZoneFlowManagerConfig{
+		BridgeName: "br-pxe", FlowController: port, PortController: port, Plan: plan,
+	})
+	require.NoError(t, err)
+	return zfm
+}
+
+// pxeEnabledSection is a valid, enabled pxe: section on temporary dirs.
+func pxeEnabledSection(t *testing.T) *pxe.DaemonConfig {
+	t.Helper()
+	return &pxe.DaemonConfig{
+		Enabled:         true,
+		BridgeName:      "br-pxe",
+		BindHost:        "127.0.0.1",
+		LocalFilesDir:   t.TempDir(),
+		InstallsDir:     t.TempDir(),
+		FirmwareDir:     t.TempDir(),
+		FirmwareOffline: true,
+		BootEntries:     []ipxe.BootEntry{{Name: "test", Description: "Test Entry", Kernel: "http://example.com/kernel"}},
+	}
+}
+
+// TestDaemonPXEBackendRequiresFlowManager: an enabled pxe: section with no
+// zone flow manager is refused at start rather than running with no-op
+// quarantine, provisioning and authorization flows; with one, a quarantine
+// reaches the flow manager (Codex P1 on #1896).
+func TestDaemonPXEBackendRequiresFlowManager(t *testing.T) {
+	ctx := context.Background()
+	logger := logging.DefaultLogger()
+
+	t.Run("no flow manager fails start", func(t *testing.T) {
+		svc, err := pxeGRPCServiceFromConfig(ctx, logger, pxeSectionApp(), pxeEnabledSection(t), nil)
+		require.Error(t, err)
+		assert.Nil(t, svc)
+		var want pxe.ErrInvalidConfiguration
+		assert.True(t, errors.As(err, &want), "got %v", err)
+	})
+
+	t.Run("quarantine reaches the flow manager", func(t *testing.T) {
+		port := &pxeRecordingPort{}
+		svc, err := pxeGRPCServiceFromConfig(ctx, logger, pxeSectionApp(), pxeEnabledSection(t), pxeTestFlowManager(t, port))
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = svc.Close() })
+
+		reg, err := svc.RegisterDevice(ctx, &platformv1.RegisterPXEDeviceRequest{MacAddress: "52:54:00:12:34:56", PortId: "port-1"})
+		require.NoError(t, err)
+		before := len(port.vlans)
+		_, err = svc.Quarantine(ctx, &platformv1.QuarantinePXEDeviceRequest{DeviceId: reg.GetDevice().GetId(), Reason: "test"})
+		require.NoError(t, err)
+		assert.Greater(t, len(port.vlans), before, "the quarantine set no VLAN through the flow manager")
 	})
 }
 
