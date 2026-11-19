@@ -190,18 +190,6 @@ func TestPXEWebhook_InstallingDeviceWithRecordedIDevIDCompletes(t *testing.T) {
 
 // stubMACForIP answers mac for ip and "" for any other address, the way an
 // ARP table answers for an address that is not on-link.
-func stubMACForIP(t *testing.T, ip, mac string) {
-	t.Helper()
-	orig := macForIP
-	macForIP = func(addr string) string {
-		if addr == ip {
-			return mac
-		}
-		return ""
-	}
-	t.Cleanup(func() { macForIP = orig })
-}
-
 // TestPXEIdentityHook_EnrolmentRecordsTheIDevIDTheWebhookRequires drives the
 // production path (#1694, Codex P1 on #1896): the ACME finalize hook records
 // the issued IDevID's fingerprint on the PXE record of the enrolling MAC, and
@@ -245,7 +233,6 @@ func TestPXEIdentityHook_NoProfileResolverRecordsNothingAndTheWebhookRefuses(t *
 	ctx := context.Background()
 	cert := webhookIdentityCert(t)
 	f := newWebhookIdentityFixture(t)
-	stubMACForIP(t, clientIP, webhookIdentityMAC)
 
 	logger := logging.NewLogger(slog.LevelError, io.Discard)
 	grpcSvc := NewPXEGRPCService(logger, f.svc)
@@ -286,7 +273,6 @@ func TestPXEIdentityHook_UnresolvableIPRecordsNothing(t *testing.T) {
 	ctx := context.Background()
 	cert := webhookIdentityCert(t)
 	f := newWebhookIdentityFixture(t)
-	stubMACForIP(t, "192.0.2.10", webhookIdentityMAC)
 
 	logger := logging.NewLogger(slog.LevelError, io.Discard)
 	grpcSvc := NewPXEGRPCService(logger, f.svc)
@@ -298,12 +284,11 @@ func TestPXEIdentityHook_UnresolvableIPRecordsNothing(t *testing.T) {
 		Certificate: cert,
 	}))
 
+	// The client IP is never a binding (#1694): with no EK-bound profile
+	// the hook records nothing, whatever address the device enrolled from.
 	fp, err := grpcSvc.RecordedIDevIDFingerprint(ctx, webhookIdentityMAC)
 	require.NoError(t, err)
 	assert.Empty(t, fp)
-
-	err = grpcSvc.RecordEnrolledIDevIDFingerprint(ctx, "198.51.100.7", cert)
-	assert.Equal(t, codes.NotFound, status.Code(err), "an unresolvable IP is a typed not-found")
 
 	rec := f.report(cert)
 	assert.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
@@ -328,7 +313,6 @@ func TestPXEIdentityHook_RoutedEnrolmentCompletesThroughTheWebhook(t *testing.T)
 	cert := webhookIdentityCert(t)
 	ek := webhookIdentityCert(t)
 	f := newWebhookIdentityFixture(t)
-	stubMACForIP(t, "192.0.2.10", webhookIdentityMAC)
 	profiles := webhookEKProfiles{ek.SerialNumber.String(): {MACAddress: webhookIdentityMAC}}
 
 	logger := logging.NewLogger(slog.LevelError, io.Discard)
@@ -357,7 +341,6 @@ func (errWebhookHookFailedOnce) Error() string { return "finalize hook failed on
 func TestPXEIdentityHook_AFailedFinalizeThenARetryEnrols(t *testing.T) {
 	ctx := context.Background()
 	f := newWebhookIdentityFixture(t)
-	stubMACForIP(t, "192.0.2.10", webhookIdentityMAC)
 
 	logger := logging.NewLogger(slog.LevelError, io.Discard)
 	grpcSvc := NewPXEGRPCService(logger, f.svc)

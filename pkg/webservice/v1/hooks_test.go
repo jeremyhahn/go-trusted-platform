@@ -647,9 +647,8 @@ func TestNewDeviceRegistrationHook_SkipsNilTCGData(t *testing.T) {
 }
 
 type fakePXEIdentityRecorder struct {
-	err   error
-	calls []string
-	macs  []string
+	err  error
+	macs []string
 }
 
 func (f *fakePXEIdentityRecorder) RecordEnrolledIDevIDFingerprintForMAC(_ context.Context, mac string, _ *x509.Certificate) error {
@@ -673,11 +672,6 @@ type errHookFailedOnce struct{}
 
 func (errHookFailedOnce) Error() string { return "finalize hook failed once" }
 
-func (f *fakePXEIdentityRecorder) RecordEnrolledIDevIDFingerprint(_ context.Context, clientIP string, _ *x509.Certificate) error {
-	f.calls = append(f.calls, clientIP)
-	return f.err
-}
-
 func TestNewPXEIdentityHook_SkipsNonTCGAndNilCertificate(t *testing.T) {
 	rec := &fakePXEIdentityRecorder{}
 	hook := NewPXEIdentityHook(rec, slog.Default())
@@ -685,7 +679,7 @@ func TestNewPXEIdentityHook_SkipsNonTCGAndNilCertificate(t *testing.T) {
 
 	assert.NoError(t, hook(&trustedca.ACMEOrderFinalizeHookContext{Context: context.Background(), ClientIP: "192.0.2.10", Certificate: cert}))
 	assert.NoError(t, hook(&trustedca.ACMEOrderFinalizeHookContext{Context: context.Background(), IsTCGCSR: true, ClientIP: "192.0.2.10"}))
-	assert.Empty(t, rec.calls)
+	assert.Empty(t, rec.macs)
 }
 
 // pxeIdentityBoundMAC is the MAC of the profile bound to EK serial 1001.
@@ -709,7 +703,6 @@ func TestNewPXEIdentityHook_RecordsAndToleratesNotAPXEInstall(t *testing.T) {
 			rec := &fakePXEIdentityRecorder{err: err}
 			require.NoError(t, finalizeEKBound(t, rec))
 			assert.Equal(t, []string{pxeIdentityBoundMAC}, rec.macs)
-			assert.Empty(t, rec.calls)
 		})
 	}
 }
@@ -782,7 +775,6 @@ func TestNewPXEIdentityHook_ResolvesTheDeviceByItsEKBoundProfile(t *testing.T) {
 	require.NoError(t, hook(pxeIdentityTCGContext(ek)))
 
 	assert.Equal(t, []string{mac}, rec.macs)
-	assert.Empty(t, rec.calls, "a bound profile needs no neighbour-table lookup")
 }
 
 func TestNewPXEIdentityHook_SkipsWithoutABoundProfile(t *testing.T) {
@@ -802,7 +794,6 @@ func TestNewPXEIdentityHook_SkipsWithoutABoundProfile(t *testing.T) {
 			rec := &fakePXEIdentityRecorder{}
 			hook := NewPXEIdentityHookWithProfiles(rec, tc.profiles, slog.Default())
 			require.NoError(t, hook(tc.ctx))
-			assert.Empty(t, rec.calls, "the client IP proves no MAC")
 			assert.Empty(t, rec.macs)
 		})
 	}
@@ -810,7 +801,6 @@ func TestNewPXEIdentityHook_SkipsWithoutABoundProfile(t *testing.T) {
 	t.Run("NewPXEIdentityHook has no profile source", func(t *testing.T) {
 		rec := &fakePXEIdentityRecorder{}
 		require.NoError(t, NewPXEIdentityHook(rec, slog.Default())(pxeIdentityTCGContext(ek)))
-		assert.Empty(t, rec.calls)
 		assert.Empty(t, rec.macs)
 	})
 }
@@ -835,7 +825,6 @@ func TestNewPXEIdentityHook_AProfileLookupErrorFailsTheEnrolment(t *testing.T) {
 
 	require.Error(t, err)
 	assert.ErrorAs(t, err, new(errProfileStoreDown))
-	assert.Empty(t, rec.calls)
 	assert.Empty(t, rec.macs)
 }
 
@@ -859,7 +848,6 @@ func TestNewPXEIdentityHook_AProfileStoreFailureThroughTheProfileServiceFailsThe
 	require.Error(t, err)
 	assert.ErrorAs(t, err, new(ErrPXEIdentityProfileLookup))
 	assert.ErrorAs(t, err, new(errProfileStoreDown))
-	assert.Empty(t, rec.calls)
 	assert.Empty(t, rec.macs)
 }
 
@@ -891,7 +879,6 @@ func TestPXEIdentityHook_ALaterHookFailureRecordsNothing(t *testing.T) {
 
 	require.NoError(t, hooks.Execute(finalize))
 	assert.Equal(t, []string{pxeIdentityBoundMAC}, rec.macs)
-	assert.Empty(t, rec.calls)
 }
 
 func TestNewDeviceRegistrationHook_SkipsMissingSerial(t *testing.T) {

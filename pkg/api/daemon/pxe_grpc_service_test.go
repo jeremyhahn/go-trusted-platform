@@ -15,16 +15,24 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"testing"
 	"time"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/ipxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -1318,6 +1326,94 @@ func TestPXEGRPCService_SetPXEService(t *testing.T) {
 	svc.SetPXEService(mockService)
 
 	assert.NotNil(t, svc.pxeService)
+}
+
+// pxeSectionApp is an app whose sdn: section numbers the zones the PXE
+// backend's VLANs come from.
+func pxeSectionApp() *app.App {
+	return &app.App{SDNConfig: &sdn.Config{
+		Enabled:     true,
+		Environment: &netplan.Environment{ID: 4},
+		Zones:       zone.Defaults(),
+	}}
+}
+
+// isPXEServiceNotConfigured reports whether err carries the typed
+// SERVICE_NOT_CONFIGURED ErrorInfo detail.
+func isPXEServiceNotConfigured(err error) bool {
+	st, ok := status.FromError(err)
+	if !ok {
+		return false
+	}
+	for _, d := range st.Details() {
+		if info, ok := d.(*errdetails.ErrorInfo); ok && info.GetReason() == response.ReasonServiceNotConfigured {
+			return true
+		}
+	}
+	return false
+}
+
+// TestPXEGRPCServiceFromConfig_DaemonPXESection pins the daemon side of the
+// pxe: section (#1694): no section or enabled: false leaves the service with
+// no backend (every verb answers SERVICE_NOT_CONFIGURED, as before), a valid
+// enabled section reaches a real backend, and an invalid enabled section
+// fails daemon start with a typed error.
+func TestPXEGRPCServiceFromConfig_DaemonPXESection(t *testing.T) {
+	ctx := context.Background()
+	logger := logging.DefaultLogger()
+
+	notConfigured := func(t *testing.T, svc *PXEGRPCService) {
+		t.Helper()
+		_, err := svc.ListDevices(ctx, &platformv1.ListPXEDevicesRequest{})
+		require.Error(t, err)
+		assert.Equal(t, codes.Unavailable, status.Code(err))
+		assert.True(t, isPXEServiceNotConfigured(err), "want SERVICE_NOT_CONFIGURED, got %v", err)
+	}
+
+	t.Run("no section", func(t *testing.T) {
+		svc, err := pxeGRPCServiceFromConfig(ctx, logger, pxeSectionApp(), nil)
+		require.NoError(t, err)
+		notConfigured(t, svc)
+	})
+
+	t.Run("enabled false", func(t *testing.T) {
+		svc, err := pxeGRPCServiceFromConfig(ctx, logger, pxeSectionApp(), &pxe.DaemonConfig{BridgeName: "br-pxe"})
+		require.NoError(t, err)
+		notConfigured(t, svc)
+	})
+
+	t.Run("enabled reaches the backend", func(t *testing.T) {
+		section := &pxe.DaemonConfig{
+			Enabled:         true,
+			BridgeName:      "br-pxe",
+			BindHost:        "127.0.0.1",
+			LocalFilesDir:   t.TempDir(),
+			InstallsDir:     t.TempDir(),
+			FirmwareDir:     t.TempDir(),
+			FirmwareOffline: true,
+			BootEntries:     []ipxe.BootEntry{{Name: "test", Description: "Test Entry", Kernel: "http://example.com/kernel"}},
+		}
+		svc, err := pxeGRPCServiceFromConfig(ctx, logger, pxeSectionApp(), section)
+		require.NoError(t, err)
+		resp, err := svc.ListDevices(ctx, &platformv1.ListPXEDevicesRequest{})
+		require.NoError(t, err)
+		assert.Empty(t, resp.GetDevices())
+	})
+
+	t.Run("invalid enabled section fails start", func(t *testing.T) {
+		svc, err := pxeGRPCServiceFromConfig(ctx, logger, pxeSectionApp(), &pxe.DaemonConfig{Enabled: true})
+		require.Error(t, err)
+		assert.Nil(t, svc)
+		assert.True(t, errors.Is(err, pxe.ErrInvalidConfig), "got %v", err)
+	})
+
+	t.Run("enabled without a network plan fails start", func(t *testing.T) {
+		svc, err := pxeGRPCServiceFromConfig(ctx, logger, &app.App{}, &pxe.DaemonConfig{Enabled: true, BridgeName: "br-pxe"})
+		require.Error(t, err)
+		assert.Nil(t, svc)
+		var want pxe.ErrNetworkPlanRequired
+		assert.True(t, errors.As(err, &want), "got %v", err)
+	})
 }
 
 // TestPXEGRPCService_FilterFromProto tests filter conversion from proto.
