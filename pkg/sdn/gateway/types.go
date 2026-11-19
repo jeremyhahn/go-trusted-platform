@@ -1655,6 +1655,12 @@ func (c *GatewayConfig) EnabledServices() []string {
 	add(c.DHCP != nil && c.DHCP.Enabled, ServiceDHCP)
 	add(c.PXE != nil && c.PXE.Enabled, ServicePXE)
 	add(c.ManagementVPN != nil && c.ManagementVPN.Enabled, ServiceManagementVPN)
+	// The WireGuard plane runs in its own `wireguard` process (ruling 942),
+	// enabled with the management VPN whenever its data-planes offer
+	// wireguard. The kind is spelled out: vpn.DataPlaneWireGuard does not
+	// exist in a FIPS build, where Validate refuses the kind anyway.
+	add(c.ManagementVPN != nil && c.ManagementVPN.Enabled &&
+		c.ManagementVPN.Offers(vpn.DataPlaneKind("wireguard")), ServiceVPNWireGuard)
 	return out
 }
 

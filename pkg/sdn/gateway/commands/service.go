@@ -351,7 +351,8 @@ func vpnLeaseControl(ctx context.Context, cfg *ServeConfig, gw *gateway.Gateway,
 // parser processes reach the kernel state they may not program themselves;
 // a parser process admits no other parser.
 func servicePolicy(def process.Definition, opts serviceOptions, settings *process.Settings) ipc.Policy {
-	policy := ipc.Policy{ControlUIDs: []uint32{opts.supervisorUID}}
+	// Only the wireguard child's socket admits VPNPlaneService (ruling 942).
+	policy := ipc.Policy{ControlUIDs: []uint32{opts.supervisorUID}, VPNPlane: def.Name == process.WireGuardProcess}
 	if def.Class == process.ClassKernel {
 		policy.DatapathUIDs = []uint32{opts.uid}
 		if settings != nil {

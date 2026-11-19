@@ -78,8 +78,9 @@ func newWireGuardRun(vpnEnabled bool) *serviceRun {
 	run := newServiceRun()
 	run.handler = &fakeServiceHandler{name: gateway.ServiceVPNWireGuard}
 	run.loaded = &ServeConfig{Gateway: &gateway.GatewayConfig{
-		Enabled:       true,
-		ManagementVPN: &gateway.ManagementVPNServiceConfig{Enabled: vpnEnabled},
+		Enabled: true,
+		ManagementVPN: &gateway.ManagementVPNServiceConfig{Enabled: vpnEnabled,
+			Config: vpn.Config{DataPlanes: []vpn.DataPlaneKind{"wireguard"}}},
 	}}
 	return run
 }
@@ -187,21 +188,23 @@ func TestServeProcess_PlaneFailureKeepsServicesInactive(t *testing.T) {
 }
 
 func TestDatapathVPNPlanes_DisabledLeavesRefusal(t *testing.T) {
+	// With the VPN disabled no configuration enables vpn-wireguard, so the
+	// wireguard child refuses to serve and builds no plane; the
+	// supervisor does not launch it in the first place.
 	factory := &vpnPlaneFactory{planes: []vpn.ManagedDataPlane{&fakeVPNPlane{}}}
-	opts, cancel, done := startWireGuardProcess(t, newWireGuardRun(false), factory)
+	_, cancel, done := startWireGuardProcess(t, newWireGuardRun(false), factory)
+	defer cancel()
 
-	var resp *ipcv1.InstallVPNPeerResponse
-	require.Eventually(t, func() bool {
-		var err error
-		resp, err = installVPNPeer(t, opts.socket)
-		return err == nil
-	}, 5*time.Second, 10*time.Millisecond, "the datapath child must answer InstallVPNPeer")
-	require.NotNil(t, resp.GetRefusal(), "with the VPN disabled the child hosts no plane")
-	assert.Equal(t, ipcv1.VPNPeerRefusalClass_VPN_PEER_REFUSAL_CLASS_UNAVAILABLE, resp.GetRefusal().GetClass())
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the wireguard child must refuse a configuration that enables none of its services")
+	}
+	var nothing *ErrProcessHostsNothing
+	require.ErrorAs(t, err, &nothing)
+	assert.Equal(t, process.WireGuardProcess, nothing.Process)
 	assert.Zero(t, factory.calls, "a disabled VPN builds no plane")
-
-	cancel()
-	require.NoError(t, <-done)
 }
 
 func TestDatapathVPNPlanes_OnlyTheWireGuardRow(t *testing.T) {
@@ -274,6 +277,9 @@ func TestServeProcess_WireGuardChildRemovesStaleHubFirst(t *testing.T) {
 	for _, name := range []string{"datapath", "routing"} {
 		t.Run("the "+name+" child leaves the hub", func(t *testing.T) {
 			run := newServiceRun()
+			// newServiceRun enables transit and dhcp only; the firewall
+			// gives the datapath child a service to host.
+			run.loaded.Gateway.Firewall = &gateway.FirewallConfig{Enabled: true}
 			failure := errors.New("injected")
 			run.buildErr = failure
 			removals := 0
