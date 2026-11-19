@@ -71,7 +71,7 @@ func newGatePKI(t *testing.T) gatePKI {
 		}
 		tmpl := &x509.Certificate{
 			SerialNumber: big.NewInt(serial),
-			Subject:      pkix.Name{CommonName: cn},
+			Subject:      pkix.Name{CommonName: cn, OrganizationalUnit: []string{"gate-test"}},
 			NotBefore:    time.Now().Add(-time.Hour),
 			NotAfter:     time.Now().Add(time.Hour),
 			KeyUsage:     x509.KeyUsageDigitalSignature,
