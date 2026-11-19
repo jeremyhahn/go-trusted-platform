@@ -14,6 +14,49 @@ interface TenantInfo {
   member_count: number;
 }
 
+/**
+ * loadTenantInfo reads the tenant of the signed-in user. With no tenant it
+ * returns no info (the empty state); when the read fails it still returns
+ * the tenant ID with the error.
+ */
+async function loadTenantInfo(
+  tenantId: string | null | undefined
+): Promise<{ info: TenantInfo | null; error: string | null }> {
+  if (!tenantId) {
+    return { info: null, error: null };
+  }
+  try {
+    const baseUrl = getBaseUrl();
+    const jwt = getCookie("jwt");
+
+    const response = await fetch(`${baseUrl}/api/v1/tenant`, {
+      headers: {
+        Authorization: `Bearer ${jwt}`,
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error("Failed to fetch tenant information");
+    }
+
+    const data = await response.json();
+    return {
+      info: {
+        id: tenantId,
+        name: data.name,
+        member_count: data.member_count || 0,
+      },
+      error: null,
+    };
+  } catch (error) {
+    return {
+      info: { id: tenantId, member_count: 0 },
+      error:
+        error instanceof Error ? error.message : "Failed to fetch tenant info",
+    };
+  }
+}
+
 export default function TenantPage() {
   const router = useRouter();
   const [tenantInfo, setTenantInfo] = useState<TenantInfo | null>(null);
@@ -21,6 +64,8 @@ export default function TenantPage() {
   const [error, setError] = useState<string | null>(null);
   const [isTenantOwner, setIsTenantOwner] = useState(false);
 
+  // The effect reads the session, then settles the tenant read into state
+  // from its promise callback (no synchronous setState in the effect).
   useEffect(() => {
     const user = getUserFromToken();
     if (!user) {
@@ -28,53 +73,20 @@ export default function TenantPage() {
       return;
     }
 
-    setIsTenantOwner(user.isTenantOwner);
-    if (user.tenantId) {
-      fetchTenantInfo(user.tenantId);
-    } else {
-      // No tenant - show empty state
-      setTenantInfo(null);
+    let active = true;
+    void loadTenantInfo(user.tenantId).then((result) => {
+      if (!active) {
+        return;
+      }
+      setIsTenantOwner(user.isTenantOwner);
+      setTenantInfo(result.info);
+      setError(result.error);
       setLoading(false);
-    }
+    });
+    return () => {
+      active = false;
+    };
   }, [router]);
-
-  const fetchTenantInfo = async (tenantId: string) => {
-    try {
-      const baseUrl = getBaseUrl();
-      const jwt = getCookie("jwt");
-
-      const response = await fetch(`${baseUrl}/api/v1/tenant`, {
-        headers: {
-          Authorization: `Bearer ${jwt}`,
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to fetch tenant information");
-      }
-
-      const data = await response.json();
-      setTenantInfo({
-        id: tenantId,
-        name: data.name,
-        member_count: data.member_count || 0,
-      });
-    } catch (error) {
-      setError(
-        error instanceof Error ? error.message : "Failed to fetch tenant info"
-      );
-      // If API fails, at least show tenant ID
-      const user = getUserFromToken();
-      if (user && user.tenantId) {
-        setTenantInfo({
-          id: user.tenantId,
-          member_count: 0,
-        });
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleLogout = useLogout();
 
