@@ -16,6 +16,7 @@ package commands
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math"
 	"net"
@@ -98,12 +99,46 @@ type serviceDeps struct {
 	// vpnDataPlanes builds the VPN data planes the wireguard child hosts
 	// for VPNPlaneService. Nil, or no planes, leaves every
 	// InstallVPNPeer refused.
-	vpnDataPlanes func(cfg *ServeConfig, gw *gateway.Gateway, logger *slog.Logger) ([]vpn.ManagedDataPlane, error)
+	vpnDataPlanes func(cfg *ServeConfig, hubKey *vpnHubKey, logger *slog.Logger) ([]vpn.ManagedDataPlane, error)
 	// removeStaleVPNHub removes the WireGuard hub device a killed
 	// predecessor left, with its peers. The wireguard child calls it at
 	// start, before any fallible step, whether or not it hosts a plane
 	// (#1698). Nil does nothing.
 	removeStaleVPNHub func(logger *slog.Logger) error
+	// resolveVPNHubKey resolves the WireGuard hub's key before
+	// EnterHardened, for vpnDataPlanes. Nil, or a nil key, builds no hub.
+	resolveVPNHubKey func(ctx context.Context, cfg *ServeConfig, logger *slog.Logger) *vpnHubKey
+}
+
+// vpnHubKey is the WireGuard hub's private key, resolved before
+// EnterHardened and held in memory for the hub as its tunnel.KeyProvider.
+// A resolution failure is held too, so the plane's start reports it as it
+// did when the hub resolved the key itself.
+type vpnHubKey struct {
+	ref string
+	key []byte
+	err error
+}
+
+// Key returns a copy of the held key for its own reference.
+func (k *vpnHubKey) Key(_ context.Context, ref string) ([]byte, error) {
+	if k.err != nil {
+		return nil, k.err
+	}
+	if ref != k.ref {
+		return nil, fmt.Errorf("the hub holds the key of %q, not %q", k.ref, ref)
+	}
+	return append([]byte(nil), k.key...), nil
+}
+
+// loadServiceConfig reads and loads a child's configuration. The root
+// command read it too, but treats a read error as a warning; a child
+// without its configuration must not start.
+func loadServiceConfig(def process.Definition, deps serviceDeps) (*ServeConfig, error) {
+	if err := deps.readConfig(); err != nil {
+		return nil, &ErrServiceConfigUnreadable{Process: def.Name, Cause: err}
+	}
+	return deps.loadConfig()
 }
 
 func runService(cmd *cobra.Command, args []string) error {
@@ -124,6 +159,7 @@ func runService(cmd *cobra.Command, args []string) error {
 		vpnLeaseControl:   vpnLeaseControl,
 		vpnDataPlanes:     vpnDataPlanes,
 		removeStaleVPNHub: removeStaleVPNHub,
+		resolveVPNHubKey:  resolveVPNHubKey,
 	}
 	return serveProcess(ctx, args[0], opts, deps, buildServeLogger())
 }
@@ -138,26 +174,38 @@ func serveProcess(ctx context.Context, name string, opts serviceOptions, deps se
 	if err != nil {
 		return err
 	}
+	// The wireguard child's hub key comes from the secret store, which is
+	// reached over the network: EnterHardened's filter admits AF_UNIX and
+	// AF_NETLINK only, so the key is resolved before it and held in memory
+	// for the hub (Codex #2029 round 1). Only this child reads its
+	// configuration before the drop; every other class reads it after.
+	var cfg *ServeConfig
+	var hubKey *vpnHubKey
+	if def.Name == process.WireGuardProcess {
+		// A freshly started wireguard child owns no hub yet, so a hub device
+		// of its name is a killed predecessor's: its peers would otherwise
+		// pass traffic past their leases through every startup step below
+		// that can fail, so it goes before configuration, the key or
+		// assembly (Codex #1717 round 2).
+		if deps.removeStaleVPNHub != nil {
+			if err := deps.removeStaleVPNHub(logger); err != nil {
+				return err
+			}
+		}
+		if cfg, err = loadServiceConfig(def, deps); err != nil {
+			return err
+		}
+		if deps.resolveVPNHubKey != nil {
+			hubKey = deps.resolveVPNHubKey(ctx, cfg, logger)
+		}
+	}
 	if err := deps.enterHardened(def, opts.uid, opts.gid); err != nil {
 		return err
 	}
-	// A freshly started wireguard child owns no hub yet, so a hub device of
-	// its name is a killed predecessor's: its peers would otherwise pass
-	// traffic past their leases through every startup step below that can
-	// fail, so it goes before configuration or assembly (Codex #1717 round 2).
-	if def.Name == process.WireGuardProcess && deps.removeStaleVPNHub != nil {
-		if err := deps.removeStaleVPNHub(logger); err != nil {
+	if cfg == nil {
+		if cfg, err = loadServiceConfig(def, deps); err != nil {
 			return err
 		}
-	}
-	// The root command read the configuration too, but treats a read error
-	// as a warning; a child without its configuration must not start.
-	if err := deps.readConfig(); err != nil {
-		return &ErrServiceConfigUnreadable{Process: def.Name, Cause: err}
-	}
-	cfg, err := deps.loadConfig()
-	if err != nil {
-		return err
 	}
 	if cfg.Gateway == nil {
 		return &ErrProcessHostsNothing{Process: def.Name}
@@ -195,7 +243,7 @@ func serveProcess(ctx context.Context, name string, opts serviceOptions, deps se
 	if err != nil {
 		return err
 	}
-	vpnPlanes, err := deps.datapathVPNPlanes(def, cfg, gw, logger)
+	vpnPlanes, err := deps.datapathVPNPlanes(def, cfg, hubKey, logger)
 	if err != nil {
 		return err
 	}
@@ -396,14 +444,14 @@ func datapathServices(def process.Definition, gw *gateway.Gateway) (ipc.Services
 // serveProcess removes it at wireguard-child start, before any fallible
 // step, and the supervisor's OnChildExit hook removes it when the child
 // exits.
-func (d serviceDeps) datapathVPNPlanes(def process.Definition, cfg *ServeConfig, gw *gateway.Gateway, logger *slog.Logger) (*vpn.PlaneHost, error) {
+func (d serviceDeps) datapathVPNPlanes(def process.Definition, cfg *ServeConfig, hubKey *vpnHubKey, logger *slog.Logger) (*vpn.PlaneHost, error) {
 	if def.Name != process.WireGuardProcess {
 		return nil, nil
 	}
 	var planes []vpn.ManagedDataPlane
 	if d.vpnDataPlanes != nil && cfg.Gateway != nil && cfg.Gateway.ManagementVPN != nil && cfg.Gateway.ManagementVPN.Enabled {
 		var err error
-		if planes, err = d.vpnDataPlanes(cfg, gw, logger); err != nil {
+		if planes, err = d.vpnDataPlanes(cfg, hubKey, logger); err != nil {
 			return nil, err
 		}
 	}

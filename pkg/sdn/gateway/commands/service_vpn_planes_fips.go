@@ -16,9 +16,9 @@
 package commands
 
 import (
+	"context"
 	"log/slog"
 
-	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/hostfw"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/vpn"
 )
@@ -26,12 +26,16 @@ import (
 // vpnDataPlanes is gatewayd's plane factory in a FIPS build. WireGuard is
 // not a FIPS plane and the datapath builds no MASQUE plane yet, so it builds
 // none and says so: the vpn process's peer RPCs keep their refusal.
-func vpnDataPlanes(cfg *ServeConfig, _ *gateway.Gateway, logger *slog.Logger) ([]vpn.ManagedDataPlane, error) {
+func vpnDataPlanes(cfg *ServeConfig, _ *vpnHubKey, logger *slog.Logger) ([]vpn.ManagedDataPlane, error) {
 	offered := cfg.Gateway.ManagementVPN.Config.WithDefaults().DataPlanes
 	logger.Warn("The datapath hosts no VPN data plane: the configuration does not name the plane's key and address",
 		slog.Any("data_planes", offered))
 	return nil, nil
 }
+
+// resolveVPNHubKey resolves nothing in a FIPS build: it builds no
+// WireGuard hub, so there is no hub key to hold.
+func resolveVPNHubKey(context.Context, *ServeConfig, *slog.Logger) *vpnHubKey { return nil }
 
 // vpnHubListeners is empty in a FIPS build: it builds no WireGuard hub,
 // so there is no hub port for the host filter to admit.
