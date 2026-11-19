@@ -512,12 +512,10 @@ func TestReclaimOrphans_RevokeInFlightKeepsAddress(t *testing.T) {
 	h.start(t)
 	require.NoError(t, h.svc.Restore(ctx))
 
+	// Reclaim started during the revocation runs after it, so it never
+	// sees the address between the lease deletion and its release.
 	p, done := h.revokeInFlight(t, lease)
-	require.NoError(t, h.svc.reclaimOrphanAddresses(ctx))
-	assert.Equal(t, "mini-1", h.holder(t, lease.Address), "a revocation in flight still holds its address")
-
-	close(p.release)
-	require.NoError(t, <-done)
+	require.NoError(t, h.reclaimAfterRevoke(t, p, done))
 	assert.Empty(t, h.holder(t, lease.Address), "the settled revocation releases its address")
 
 	// The address goes to a replacement; neither a late release nor a
@@ -597,15 +595,17 @@ func TestService_OrphanReclaimNeverReleasesAReassignedAddress(t *testing.T) {
 	// removal is paused.
 	p, revoked := h.revokeInFlight(t, lease)
 
-	// Reclaim starts now and pauses after GetAllocationsByPool has taken
-	// its snapshot.
+	// Reclaim starts now. It waits behind the revocation (the two are
+	// serialized by enrolGate), so it must not reach GetAllocationsByPool
+	// until the revocation has finished; there it pauses after taking its
+	// snapshot.
 	shared.armed.Store(true)
 	reclaimed := make(chan error, 1)
 	go func() { reclaimed <- h.svc.reclaimOrphanAddresses(ctx) }()
 	select {
 	case <-shared.paused:
-	case <-time.After(500 * time.Millisecond):
-		// Reclaim waits for the revocation: the two are serialized.
+		assert.Fail(t, "reclaim took its snapshot while a revocation was in flight")
+	case <-time.After(200 * time.Millisecond):
 	}
 
 	// The revocation settles and releases the address.
@@ -650,16 +650,47 @@ func TestReclaimOrphans_RevokeInFlightFailedRemovalKeepsAddress(t *testing.T) {
 	h.start(t)
 	require.NoError(t, h.svc.Restore(ctx))
 
+	// Reclaim started during the revocation runs after it: the failed
+	// removal is owed through peerRetry by then and holds the address.
 	p, done := h.revokeInFlight(t, lease)
 	h.plane.failRemovals(errors.New("datapath unreachable"))
-	require.NoError(t, h.svc.reclaimOrphanAddresses(ctx))
-	assert.Equal(t, "mini-1", h.holder(t, lease.Address), "a revocation in flight still holds its address")
-
-	close(p.release)
-	require.Error(t, <-done, "the peer removal failed")
+	require.Error(t, h.reclaimAfterRevoke(t, p, done), "the peer removal failed")
+	assert.Equal(t, "mini-1", h.holder(t, lease.Address), "a reclaim behind the revocation keeps its address")
 	require.True(t, h.plane.hosts(lease.ID), "the revoked peer is still installed")
+
 	require.NoError(t, h.svc.reclaimOrphanAddresses(ctx))
 	assert.Equal(t, "mini-1", h.holder(t, lease.Address), "the owed removal holds the address through peerRetry")
+}
+
+// reclaimAfterRevoke starts orphan reclaim while the revocation paused at
+// p is in flight, checks that reclaim waits behind it (the two are
+// serialized by enrolGate), lets the revocation finish and waits for
+// reclaim. It returns the revocation's error.
+func (h *restoreHarness) reclaimAfterRevoke(t *testing.T, p *pause, revoked <-chan error) error {
+	t.Helper()
+	reclaimed := make(chan error, 1)
+	go func() { reclaimed <- h.svc.reclaimOrphanAddresses(context.Background()) }()
+	select {
+	case err := <-reclaimed:
+		close(p.release)
+		<-revoked
+		t.Fatalf("reclaim returned (%v) while a revocation was in flight", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(p.release)
+	var revokeErr error
+	select {
+	case revokeErr = <-revoked:
+	case <-time.After(10 * time.Second):
+		t.Fatal("revocation never finished")
+	}
+	select {
+	case err := <-reclaimed:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("reclaim never finished after the revocation")
+	}
+	return revokeErr
 }
 
 func TestRestore_ReclaimLeavesAnotherGatewaysAllocationAlone(t *testing.T) {
