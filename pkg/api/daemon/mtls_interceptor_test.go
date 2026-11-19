@@ -482,6 +482,7 @@ func TestMTLSUnaryInterceptorSuccess(t *testing.T) {
 		Logger:     logging.DefaultLogger(),
 		PEP:        &mockSDKPEPClient{checkFunc: grantAllCheck},
 		Permission: func(string) string { return "daemon:test" },
+		Roles:      staticRoles([]string{"operator"}, nil, nil),
 	}
 
 	interceptor := MTLSUnaryInterceptor(cfg)
@@ -717,6 +718,7 @@ func TestMTLSStreamInterceptorSuccess(t *testing.T) {
 		Logger:     logging.DefaultLogger(),
 		PEP:        &mockSDKPEPClient{checkFunc: grantAllCheck},
 		Permission: func(string) string { return "daemon:test" },
+		Roles:      staticRoles([]string{"operator"}, nil, nil),
 	}
 
 	interceptor := MTLSStreamInterceptor(cfg)
@@ -1163,6 +1165,39 @@ func recordingPEP(subject string, granted ...string) (*mockSDKPEPClient, *[]*sdk
 	return pep, &calls
 }
 
+// rolePEP grants a permission only when the CheckRequest's Subject.Roles
+// hold a role that grants it (grants maps role -> "resource:action"
+// permissions); the subject ID never grants anything.
+func rolePEP(grants map[string][]string) (*mockSDKPEPClient, *[]*sdkiam.CheckRequest) {
+	var calls []*sdkiam.CheckRequest
+	pep := &mockSDKPEPClient{
+		checkFunc: func(_ context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+			calls = append(calls, req)
+			want := req.Resource + ":" + req.Action
+			for _, role := range req.Subject.Roles {
+				for _, p := range grants[role] {
+					if p == want {
+						return &sdkiam.CheckResponse{Allowed: true}, nil
+					}
+				}
+			}
+			return &sdkiam.CheckResponse{Allowed: false}, nil
+		},
+	}
+	return pep, &calls
+}
+
+// staticRoles returns a Roles resolver that answers roles for the test
+// certificate principal and records the tenant and subject it was asked for.
+func staticRoles(roles []string, err error, asked *[]string) func(context.Context, string, string) ([]string, error) {
+	return func(_ context.Context, tenantID, subject string) ([]string, error) {
+		if asked != nil {
+			*asked = append(*asked, tenantID+"/"+subject)
+		}
+		return roles, err
+	}
+}
+
 func mtlsPEPConfig(pep *mockSDKPEPClient) *MTLSInterceptorConfig {
 	cfg := &MTLSInterceptorConfig{
 		Authenticator: &mockAuthenticator{
@@ -1172,6 +1207,7 @@ func mtlsPEPConfig(pep *mockSDKPEPClient) *MTLSInterceptorConfig {
 		},
 		Logger:     logging.DefaultLogger(),
 		Permission: mtlsTestPermission,
+		Roles:      staticRoles([]string{"operator"}, nil, nil),
 	}
 	if pep != nil {
 		cfg.PEP = pep
@@ -1266,6 +1302,74 @@ func TestMTLSInterceptorsPEPCheck(t *testing.T) {
 			}
 			if called {
 				t.Fatal("handler called on a PEP error")
+			}
+		})
+	}
+}
+
+func TestMTLSAuthorizeUsesCertificatePrincipalRoles(t *testing.T) {
+	runners := map[string]func(*testing.T, *MTLSInterceptorConfig, string) (bool, error){
+		"unary":  runMTLSUnary,
+		"stream": runMTLSStream,
+	}
+	grants := map[string][]string{"operator": {"daemon:shutdown"}}
+	for name, run := range runners {
+		t.Run(name+"/role grants the permission", func(t *testing.T) {
+			pep, calls := rolePEP(grants)
+			var asked []string
+			cfg := mtlsPEPConfig(pep)
+			cfg.Roles = staticRoles([]string{"operator"}, nil, &asked)
+			called, err := run(t, cfg, mtlsPEPTestMethod)
+			if err != nil {
+				t.Fatalf("err = %v, want nil", err)
+			}
+			if !called {
+				t.Fatal("handler not called for a principal whose role grants the permission")
+			}
+			if len(asked) != 1 || asked[0] != "acme-corp/cert-client" {
+				t.Errorf("Roles asked for %v, want [acme-corp/cert-client]", asked)
+			}
+			if len(*calls) != 1 {
+				t.Fatalf("PEP calls = %d, want 1", len(*calls))
+			}
+			if got := (*calls)[0].Subject.Roles; len(got) != 1 || got[0] != "operator" {
+				t.Errorf("PEP request roles = %v, want [operator]", got)
+			}
+		})
+		t.Run(name+"/principal with no roles", func(t *testing.T) {
+			pep, _ := rolePEP(grants)
+			cfg := mtlsPEPConfig(pep)
+			cfg.Roles = staticRoles(nil, nil, nil)
+			called, err := run(t, cfg, mtlsPEPTestMethod)
+			if status.Code(err) != codes.PermissionDenied {
+				t.Fatalf("code = %v, want PermissionDenied (err %v)", status.Code(err), err)
+			}
+			if called {
+				t.Fatal("handler called for a principal with no roles")
+			}
+		})
+		t.Run(name+"/no roles resolver", func(t *testing.T) {
+			pep, calls := rolePEP(grants)
+			cfg := mtlsPEPConfig(pep)
+			cfg.Roles = nil
+			called, err := run(t, cfg, mtlsPEPTestMethod)
+			if status.Code(err) != codes.PermissionDenied {
+				t.Fatalf("code = %v, want PermissionDenied (err %v)", status.Code(err), err)
+			}
+			if called || len(*calls) != 0 {
+				t.Fatalf("handler called = %v, PEP calls = %d; want neither", called, len(*calls))
+			}
+		})
+		t.Run(name+"/roles resolver error", func(t *testing.T) {
+			pep, calls := rolePEP(grants)
+			cfg := mtlsPEPConfig(pep)
+			cfg.Roles = staticRoles(nil, errors.New("iam down"), nil)
+			called, err := run(t, cfg, mtlsPEPTestMethod)
+			if status.Code(err) != codes.Unavailable {
+				t.Fatalf("code = %v, want Unavailable (err %v)", status.Code(err), err)
+			}
+			if called || len(*calls) != 0 {
+				t.Fatalf("handler called = %v, PEP calls = %d; want neither", called, len(*calls))
 			}
 		})
 	}
