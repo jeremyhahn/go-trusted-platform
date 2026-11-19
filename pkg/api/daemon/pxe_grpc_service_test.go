@@ -1620,6 +1620,78 @@ func TestPXEGRPC_UpdateStateFailsWhenTheVLANMoveFails(t *testing.T) {
 	assert.Equal(t, platformv1.ProvisioningState_PROVISIONING_STATE_DISCOVERED, got.GetDevice().GetState())
 }
 
+// pxeBlockingVLAN blocks ApplyQuarantineFlows until release is closed.
+type pxeBlockingVLAN struct {
+	pxe.VLANIntegration
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *pxeBlockingVLAN) ApplyQuarantineFlows(context.Context, string, net.HardwareAddr) error {
+	close(b.entered)
+	<-b.release
+	return nil
+}
+
+// TestDaemonStopWaitsForAPXECallInFlight checks, under -race, that a
+// RegisterDevice blocked mid-call while Stop or ForceStop closes the PXE
+// backend returns cleanly, and that the stop waits for it (#1694).
+func TestDaemonStopWaitsForAPXECallInFlight(t *testing.T) {
+	cases := map[string]func(d *Daemon){
+		"Stop":      func(d *Daemon) { _ = d.Stop(context.Background()) },
+		"ForceStop": func(d *Daemon) { _ = d.ForceStop() },
+	}
+	for name, stop := range cases {
+		t.Run(name, func(t *testing.T) {
+			zones, env := zoneServiceSeed(pxeSectionApp())
+			require.NotNil(t, env)
+			if len(zones) == 0 {
+				zones = zone.Defaults()
+			}
+			plan, err := netplan.New(*env, zones)
+			require.NoError(t, err)
+			cfg, err := pxeEnabledSection(t).ToServiceConfig(plan)
+			require.NoError(t, err)
+
+			vlan := &pxeBlockingVLAN{
+				VLANIntegration: pxe.NewNoopVLANIntegration(plan),
+				entered:         make(chan struct{}),
+				release:         make(chan struct{}),
+			}
+			backend := pxe.NewService(pxe.WithVLANIntegration(vlan))
+			require.NoError(t, backend.Initialize(context.Background(), cfg))
+			svc := NewPXEGRPCService(logging.DefaultLogger(), nil)
+			svc.SetPXEService(backend)
+
+			config := DefaultConfig()
+			config.Logger = logging.DefaultLogger()
+			service, err := NewService(config)
+			require.NoError(t, err)
+			d := &Daemon{logger: config.Logger, config: config, service: service, pxeGRPCService: svc}
+			d.running.Store(true)
+
+			registered := make(chan error, 1)
+			go func() {
+				_, err := svc.RegisterDevice(context.Background(), &platformv1.RegisterPXEDeviceRequest{MacAddress: "00:11:22:33:44:ee", PortId: "port-1"})
+				registered <- err
+			}()
+			<-vlan.entered
+
+			stopped := make(chan struct{})
+			go func() { stop(d); close(stopped) }()
+			select {
+			case <-stopped:
+				t.Fatalf("%s returned while a PXE call was in flight", name)
+			case <-time.After(100 * time.Millisecond):
+			}
+
+			close(vlan.release)
+			require.NoError(t, <-registered)
+			<-stopped
+		})
+	}
+}
+
 // TestPXEGRPCService_FilterFromProto tests filter conversion from proto.
 func TestPXEGRPCService_FilterFromProto(t *testing.T) {
 	svc := &PXEGRPCService{}
