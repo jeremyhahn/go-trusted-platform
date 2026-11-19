@@ -12,11 +12,11 @@ import { VTPMService } from '../vtpm-service.js';
 /** A complete handler-shaped BundleResponse. */
 const wireBundle = {
   id: 'bundle-1',
-  mode: 'INSTANCE',
+  mode: 'pre-assigned',
   manifest: {
     version: '1',
     id: 'bundle-1',
-    mode: 'INSTANCE',
+    mode: 'pre-assigned',
     hostname: 'vm-web',
     created_at: '2026-11-19T10:00:00Z',
     ek_certificate: {
@@ -27,7 +27,7 @@ const wireBundle = {
       not_after: '2036-01-01T00:00:00Z',
       fingerprint: 'ab:cd',
     },
-    ek_algorithm: 'ECC_P256',
+    ek_algorithm: 'ECC',
     ek_handle: 0x81010001,
     secure_boot_enabled: true,
     secure_boot_keys: {
@@ -78,11 +78,11 @@ describe('VTPMService.importBundle wire shape', () => {
     expect(result.success).toBe(true);
     expect(result.data).toEqual({
       id: 'bundle-1',
-      mode: 'INSTANCE',
+      mode: 'PRE_ASSIGNED',
       manifest: {
         version: '1',
         id: 'bundle-1',
-        mode: 'INSTANCE',
+        mode: 'PRE_ASSIGNED',
         hostname: 'vm-web',
         createdAt: '2026-11-19T10:00:00Z',
         ekCertificate: {
@@ -93,7 +93,7 @@ describe('VTPMService.importBundle wire shape', () => {
           notAfter: '2036-01-01T00:00:00Z',
           fingerprint: 'ab:cd',
         },
-        ekAlgorithm: 'ECC_P256',
+        ekAlgorithm: 'ECC',
         ekHandle: 0x81010001,
         secureBootEnabled: true,
         secureBootKeys: {
@@ -126,6 +126,31 @@ describe('VTPMService.importBundle wire shape', () => {
     });
     expect(result.data?.tpmState.stateDir).toBe('/var/lib/vtpm/bundle-1/tpm');
     expect(result.data?.createdAt).toBe('2026-11-19T10:00:01Z');
+  });
+
+  it('decodes an unknown wire mode and EK algorithm to UNSPECIFIED', async () => {
+    const odd = {
+      ...wireBundle,
+      mode: 'INSTANCE',
+      manifest: { ...wireBundle.manifest, mode: 'INSTANCE', ek_algorithm: 'ECC_P256' },
+    };
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ success: true, payload: odd }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    );
+    const client = new ApiClient({
+      baseUrl: 'https://platform.test/api/v1',
+      fetch: fetchImpl as unknown as typeof fetch,
+      retry: { maxRetries: 0 },
+    });
+
+    const result = await new VTPMService(client).importBundle(new Blob([new Uint8Array([0x1f, 0x8b])]));
+
+    expect(result.data?.mode).toBe('UNSPECIFIED');
+    expect(result.data?.manifest.mode).toBe('UNSPECIFIED');
+    expect(result.data?.manifest.ekAlgorithm).toBe('UNSPECIFIED');
   });
 
   it('passes an error response through unchanged', async () => {
