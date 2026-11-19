@@ -297,6 +297,8 @@ func (s *Service) Sweep(ctx context.Context) {
 		if !l.Expired(now) {
 			continue
 		}
+		// revoke needs enrolGate held; it is taken before the device lock.
+		s.enrolGate.RLock()
 		unlock := s.devices.lock(deviceKey(l.TenantID, l.DeviceID))
 		// Re-read under the lock: a renewal may have landed since List.
 		current, err := s.deps.Leases.Get(ctx, l.ID)
@@ -310,6 +312,7 @@ func (s *Service) Sweep(ctx context.Context) {
 			}
 		}
 		unlock()
+		s.enrolGate.RUnlock()
 	}
 }
 
