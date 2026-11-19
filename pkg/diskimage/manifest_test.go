@@ -336,11 +336,11 @@ func TestCreateRefusesASecureBootBuildWithoutAPlatformClient(t *testing.T) {
 	}
 }
 
-// TestPublishManifestRefusesAMissingRegistrar: a measured build's manifest
-// must reach the reference-values store the verifier reads, so with no
-// registrar publishManifest fails rather than reporting an unregistered
-// success (Codex P1, #1907).
-func TestPublishManifestRefusesAMissingRegistrar(t *testing.T) {
+// TestPublishManifestSkipsRegistrationWithoutARegistrar: the pinned
+// go-quicbaas SDK has no reference-values client, so with no registrar
+// publishManifest still signs and writes the manifest beside the image, warns,
+// and reports it unregistered rather than failing the build (Codex P1, #1907).
+func TestPublishManifestSkipsRegistrationWithoutARegistrar(t *testing.T) {
 	pki := newManifestPKI(t)
 	target, err := NewTarget("rpi", "")
 	if err != nil {
@@ -349,31 +349,28 @@ func TestPublishManifestRefusesAMissingRegistrar(t *testing.T) {
 	digest := sha256.Sum256([]byte("the image"))
 	sum := hex.EncodeToString(digest[:])
 	image := filepath.Join(t.TempDir(), "trusted-platform-rpi.img")
-	cfg := &BuildConfig{ManifestKey: "kms://build/manifest", KMSClients: pki.clients()}
-	_, registered, err := cfg.publishManifest(context.Background(), image, sum, target, manifestBanks())
-	var me *MeasureError
-	if !errors.As(err, &me) || !errors.Is(err, errNoReferenceValues) || registered {
-		t.Fatalf("no registrar: registered %v, err %v", registered, err)
+	cfg := (&BuildConfig{ManifestKey: "kms://build/manifest", KMSClients: pki.clients()}).withDefaults()
+	out, registered, err := cfg.publishManifest(context.Background(), image, sum, target, manifestBanks())
+	if err != nil || registered || out != ManifestPath(image) {
+		t.Fatalf("no registrar: out %q, registered %v, err %v", out, registered, err)
+	}
+	if _, err := os.Stat(out); err != nil {
+		t.Fatalf("the manifest was not written beside the image: %v", err)
 	}
 }
 
-// TestCreateRefusesASecureBootBuildWithoutARegistrar: a measured build with
-// no reference-values registrar is refused before any container runs, so the
-// build never reports success with its manifest unregistered.
-func TestCreateRefusesASecureBootBuildWithoutARegistrar(t *testing.T) {
+// TestValidateManifestKeyAllowsASecureBootBuildWithoutARegistrar: a measured
+// build with no reference-values registrar is not refused up front; its
+// manifest is signed and left beside the image, unregistered.
+func TestValidateManifestKeyAllowsASecureBootBuildWithoutARegistrar(t *testing.T) {
 	t.Parallel()
 	rec := &diskimagetest.Runner{}
 	cfg := buildConfigForTest(t, "qemu-virt", rec)
 	cfg.ISO.SecureBoot = true
 	cfg.KMSClients = newManifestPKI(t).clients()
 	cfg.ReferenceValues = nil
-	var se *StageError
-	res, err := Create(context.Background(), cfg)
-	if !errors.As(err, &se) || !errors.Is(err, errNoReferenceValues) || res != nil {
-		t.Fatalf("result %+v, err %v", res, err)
-	}
-	if len(rec.Calls) != 0 {
-		t.Errorf("the build ran before refusing: %v", rec.Calls)
+	if err := cfg.withDefaults().validateManifestKey(); err != nil {
+		t.Fatalf("validateManifestKey: %v", err)
 	}
 }
 
