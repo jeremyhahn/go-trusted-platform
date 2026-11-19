@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+
+	vnl "github.com/vishvananda/netlink"
 )
 
 // VIPInventoryFile is the inventory's file name in the fhrp state
@@ -108,7 +110,8 @@ func (inv *Inventory) Forget(iface string, vrid uint8, p netip.Prefix) error {
 // Sweep deletes, through prog, every recorded entry keep rejects (a group
 // no longer configured, or an address its group no longer configures), and
 // rewrites the file with what is left.
-// A delete that fails stays recorded and fails the sweep.
+// A delete that fails stays recorded and fails the sweep, unless it failed
+// because the interface no longer exists: that entry is forgotten.
 func (inv *Inventory) Sweep(prog Programmer, keep func(InventoryEntry) bool) error {
 	if inv == nil {
 		return nil
@@ -131,6 +134,10 @@ func (inv *Inventory) Sweep(prog Programmer, keep func(InventoryEntry) bool) err
 			fam = FamilyIPv6
 		}
 		if err := prog.DeleteAddress(e.Interface, e.Prefix, VirtualMAC(fam, e.VRID)); err != nil {
+			if linkGone(err) {
+				// The interface is gone, and its addresses with it.
+				continue
+			}
 			kept = append(kept, e)
 			if first == nil {
 				first = &ErrAddressOperationFailed{VRID: e.VRID, Interface: e.Interface, Operation: "delete", Address: e.Prefix, Cause: err}
@@ -146,6 +153,14 @@ func (inv *Inventory) Sweep(prog Programmer, keep func(InventoryEntry) bool) err
 		return &ErrInventory{Path: inv.path, Op: "sweep", Cause: first}
 	}
 	return nil
+}
+
+// linkGone reports whether a delete failed because the link lookup found no
+// interface of that name (netlink's typed LinkNotFoundError). Any other
+// lookup failure is not proof the address went.
+func linkGone(err error) bool {
+	var nf vnl.LinkNotFoundError
+	return errors.As(err, &nf)
 }
 
 func (inv *Inventory) load() ([]InventoryEntry, error) {
