@@ -72,28 +72,69 @@ func newRestoreHarness(t *testing.T) *restoreHarness {
 		store: &seededStore{MemoryLeaseStore: NewMemoryLeaseStore()},
 	}
 	require.NoError(t, h.ipam.CreatePool(ctx, h.pool))
+	h.svc = h.newService(t)
+	return h
+}
+
+// newService builds a Service over the harness's IPAM, plane, store and
+// clock.
+func (h *restoreHarness) newService(t *testing.T) *Service {
+	t.Helper()
+	return h.newServiceFor(t, testConfig(), h.plane, h.store)
+}
+
+// newServiceFor builds a Service over the harness's IPAM pool with its own
+// config, plane and lease store: a second gateway sharing the pool.
+func (h *restoreHarness) newServiceFor(t *testing.T, cfg Config, plane *fakePlane, store LeaseStore) *Service {
+	t.Helper()
 	svc, err := New(Deps{
 		Identity:   &fakeIdentity{},
 		Verifier:   &fakeVerifier{},
 		Posture:    &fakePosture{},
 		Factors:    &fakeFactors{},
 		IPAM:       h.ipam,
-		DataPlanes: map[DataPlaneKind]DataPlane{DataPlaneMASQUE: h.plane},
-		Leases:     h.store,
+		DataPlanes: map[DataPlaneKind]DataPlane{DataPlaneMASQUE: plane},
+		Leases:     store,
 		Audit:      &fakeAudit{},
 		Clock:      h.clock,
 		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
-	}, testConfig())
+	}, cfg)
 	require.NoError(t, err)
-	h.svc = svc
-	return h
+	return svc
+}
+
+// restart replaces the service with a new one over the same IPAM backend,
+// plane, store and clock, as a restarted VPN child would see them, and
+// starts it. What the old service held only in memory is gone.
+func (h *restoreHarness) restart(t *testing.T) {
+	t.Helper()
+	h.svc = h.newService(t)
+	h.start(t)
+}
+
+// allocateVPN holds addr for device the way an admission does: a
+// vpn-tagged allocation in the lease pool.
+func (h *restoreHarness) allocateVPN(t *testing.T, device string, addr netip.Prefix) {
+	t.Helper()
+	h.allocateTagged(t, device, addr, "vpn", "tenant:tenant-a", "gateway:gw-a")
+}
+
+// allocateTagged allocates addr to device in the lease pool with tags.
+func (h *restoreHarness) allocateTagged(t *testing.T, device string, addr netip.Prefix, tags ...string) {
+	t.Helper()
+	_, err := h.ipam.AllocateSpecific(context.Background(), &ipam.AllocationRequest{
+		PoolID: h.pool.ID, DeviceID: device, RequestedIP: addr.Addr(),
+		Description: "vpn lease", Tags: tags,
+	})
+	require.NoError(t, err)
 }
 
 // start starts the service and stops it when the test ends.
 func (h *restoreHarness) start(t *testing.T) {
 	t.Helper()
-	require.NoError(t, h.svc.Start(context.Background()))
-	t.Cleanup(func() { require.NoError(t, h.svc.Stop(context.Background())) })
+	svc := h.svc
+	require.NoError(t, svc.Start(context.Background()))
+	t.Cleanup(func() { require.NoError(t, svc.Stop(context.Background())) })
 }
 
 // seed records a live lease for device at address.
@@ -157,6 +198,47 @@ func TestRestore_ReinstatesRecordedLeases(t *testing.T) {
 	assert.Equal(t, first.Keys, stored.Keys, "the restored lease keeps its peer keys")
 }
 
+// TestRestore_RemovesAHostedPeerWhoseLeaseIsGone covers a vpn child that
+// dies after a revoke deleted the lease record but before it removed the
+// peer: the datapath's plane outlives the child and still hosts the peer.
+// The replacement child's Restore reconciles the plane's peers against the
+// stored leases, so the revoked key stops passing traffic.
+func TestRestore_RemovesAHostedPeerWhoseLeaseIsGone(t *testing.T) {
+	h := newRestoreHarness(t)
+	kept := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
+	h.plane.installed[kept.ID] = kept
+	h.plane.installed["lease-revoked"] = &Lease{ID: "lease-revoked", DataPlane: DataPlaneMASQUE}
+	h.start(t)
+
+	require.NoError(t, h.svc.Restore(context.Background()))
+
+	h.plane.mu.Lock()
+	defer h.plane.mu.Unlock()
+	assert.NotContains(t, h.plane.installed, LeaseID("lease-revoked"), "the revoked lease's peer is removed")
+	assert.Contains(t, h.plane.installed, kept.ID, "the stored lease's peer stays")
+}
+
+// TestReconcileHostedPeers_AnEmptyStoreWithdrawsEveryHostedPeer pins the
+// memory-only restart: a replacement child whose store is empty withdraws
+// every peer its predecessor left in the surviving hosted planes.
+func TestReconcileHostedPeers_AnEmptyStoreWithdrawsEveryHostedPeer(t *testing.T) {
+	h := newRestoreHarness(t)
+	h.plane.installed["lease-orphan"] = &Lease{ID: "lease-orphan", DataPlane: DataPlaneMASQUE}
+	h.start(t)
+
+	require.NoError(t, h.svc.ReconcileHostedPeers(context.Background()))
+
+	h.plane.mu.Lock()
+	defer h.plane.mu.Unlock()
+	assert.NotContains(t, h.plane.installed, LeaseID("lease-orphan"), "the orphaned peer is withdrawn")
+}
+
+func TestReconcileHostedPeers_RefusesBeforeStart(t *testing.T) {
+	h := newRestoreHarness(t)
+	var notStarted *ErrNotStarted
+	assert.True(t, errors.As(h.svc.ReconcileHostedPeers(context.Background()), &notStarted))
+}
+
 func TestRestore_DropsLeasesItCannotReinstate(t *testing.T) {
 	cases := map[string]struct {
 		prepare func(*testing.T, *restoreHarness, *Lease)
@@ -211,6 +293,111 @@ func requireRestoreDrops(t *testing.T, prepare func(*testing.T, *restoreHarness,
 	assert.NotEqual(t, "mini-1", h.holder(t, lease.Address), "a dropped lease holds no address")
 }
 
+// A datapath that survived the vpn child's restart still hosts the peer of
+// a recorded lease Restore now rejects: the peer is removed with the lease.
+func TestRestore_RemovesTheHostedPeerOfALeaseItRejects(t *testing.T) {
+	cases := map[string]func(*testing.T, *restoreHarness, *Lease){
+		"expired": func(t *testing.T, h *restoreHarness, l *Lease) {
+			l.ExpiresAt = h.clock.Now()
+			require.NoError(t, h.store.Put(context.Background(), l))
+		},
+		"zone withdrawn from the gateway": func(t *testing.T, h *restoreHarness, l *Lease) {
+			l.Zones = []string{"fabric"}
+			require.NoError(t, h.store.Put(context.Background(), l))
+		},
+		"address taken by another device": func(t *testing.T, h *restoreHarness, l *Lease) {
+			h.allocate(t, "mini-other", l.Address)
+		},
+	}
+	for name, prepare := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := newRestoreHarness(t)
+			lease := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
+			prepare(t, h, lease)
+			h.plane.installed[lease.ID] = lease
+			h.start(t)
+
+			err := h.svc.Restore(context.Background())
+
+			var dropped *ErrLeaseNotRestored
+			require.True(t, errors.As(err, &dropped), "got %v", err)
+			assert.False(t, h.plane.hosts(lease.ID), "the rejected lease's hosted peer is removed")
+		})
+	}
+}
+
+// A revoked lease's peer the datapath could not remove at Restore stays an
+// obligation: Sweep retries the reconciliation until it succeeds.
+func TestRestore_AFailedPeerReconciliationIsRetried(t *testing.T) {
+	h := newRestoreHarness(t)
+	h.plane.installed["lease-revoked"] = &Lease{ID: "lease-revoked", DataPlane: DataPlaneMASQUE}
+	h.plane.failRemovals(errors.New("datapath unreachable"))
+	h.start(t)
+
+	err := h.svc.Restore(context.Background())
+	var unavailable *ErrDataPlaneUnavailable
+	require.True(t, errors.As(err, &unavailable), "got %v", err)
+	require.True(t, h.plane.hosts("lease-revoked"))
+
+	h.svc.Sweep(context.Background())
+	require.True(t, h.plane.hosts("lease-revoked"), "the datapath is still unreachable")
+
+	h.plane.failRemovals(nil)
+	h.svc.Sweep(context.Background())
+	assert.False(t, h.plane.hosts("lease-revoked"), "the retried reconciliation removes the revoked peer")
+}
+
+// A rejected lease whose hosted peer the datapath could not remove keeps
+// its address until a retried removal succeeds.
+func TestRestore_AFailedRejectedPeerRemovalIsRetried(t *testing.T) {
+	h := newRestoreHarness(t)
+	lease := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
+	lease.Zones = []string{"fabric"}
+	require.NoError(t, h.store.Put(context.Background(), lease))
+	h.plane.installed[lease.ID] = lease
+	// The persistent IPAM still holds the address for the device.
+	h.allocate(t, "mini-1", lease.Address)
+	h.start(t)
+	h.plane.failRemovals(errors.New("datapath unreachable"))
+
+	err := h.svc.Restore(context.Background())
+	var dropped *ErrLeaseNotRestored
+	require.True(t, errors.As(err, &dropped), "got %v", err)
+	require.True(t, h.plane.hosts(lease.ID))
+	assert.Equal(t, "mini-1", h.holder(t, lease.Address), "the address stays held while the peer may route it")
+
+	h.plane.failRemovals(nil)
+	h.svc.Sweep(context.Background())
+	assert.False(t, h.plane.hosts(lease.ID), "the retried removal takes the peer down")
+	assert.NotEqual(t, "mini-1", h.holder(t, lease.Address), "then the address is released")
+}
+
+// A rejected lease whose record the store could not delete is still listed
+// when the reconciliation is retried: the retry must not keep its peer.
+func TestRestore_ARetriedReconciliationRemovesARejectedLeaseStillStored(t *testing.T) {
+	h := newRestoreHarness(t)
+	lease := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
+	lease.Zones = []string{"fabric"}
+	require.NoError(t, h.store.Put(context.Background(), lease))
+	h.plane.installed[lease.ID] = lease
+	h.allocate(t, "mini-1", lease.Address)
+	h.store.deleteErr = errors.New("control plane unreachable")
+	h.start(t)
+	h.plane.failRemovals(errors.New("datapath unreachable"))
+
+	err := h.svc.Restore(context.Background())
+	var dropped *ErrLeaseNotRestored
+	require.True(t, errors.As(err, &dropped), "got %v", err)
+	require.True(t, h.plane.hosts(lease.ID))
+	stored, err := h.store.List(context.Background())
+	require.NoError(t, err)
+	require.Len(t, stored, 1, "the rejected lease's record is still stored")
+
+	h.plane.failRemovals(nil)
+	h.svc.Sweep(context.Background())
+	assert.False(t, h.plane.hosts(lease.ID), "the retried reconciliation takes the rejected lease's peer down")
+}
+
 func TestRestore_LeavesAnotherDevicesAddressAlone(t *testing.T) {
 	h := newRestoreHarness(t)
 	lease := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
@@ -219,6 +406,105 @@ func TestRestore_LeavesAnotherDevicesAddressAlone(t *testing.T) {
 
 	require.Error(t, h.svc.Restore(context.Background()))
 	assert.Equal(t, "mini-other", h.holder(t, lease.Address), "dropping a lease must not free an address it never held")
+}
+
+func TestRestore_LeavesAnUntaggedAllocationAlone(t *testing.T) {
+	// Only a vpn-tagged allocation records a VPN address; another holder
+	// of the pool keeps its address with no lease.
+	h := newRestoreHarness(t)
+	addr := netip.MustParsePrefix("100.64.0.9/32")
+	h.allocate(t, "mini-other", addr)
+	h.start(t)
+
+	require.NoError(t, h.svc.Restore(context.Background()))
+	assert.Equal(t, "mini-other", h.holder(t, addr), "an untagged allocation is not a VPN lease's address")
+}
+
+func TestRestore_ASweepReclaimsTheAddressAfterAFailedRestoreReconcile(t *testing.T) {
+	// An expired lease whose peer removal failed is deleted from the
+	// store and its address kept until the retry removes the peer. A
+	// restart forgets that retry, and the replacement's first
+	// reconciliation fails too: the reclaim is still owed, and the Sweep
+	// that recovers the reconciliation pays it.
+	ctx := context.Background()
+	h := newRestoreHarness(t)
+	lease := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
+	h.allocateVPN(t, "mini-1", lease.Address)
+	h.start(t)
+	require.NoError(t, h.svc.Restore(ctx))
+
+	h.forgetAFailedRemoval(t, lease)
+
+	h.restart(t)
+	var unavailable *ErrDataPlaneUnavailable
+	require.ErrorAs(t, h.svc.Restore(ctx), &unavailable)
+	assert.Equal(t, "mini-1", h.holder(t, lease.Address), "an orphan peer still installed keeps its address")
+
+	h.plane.failRemovals(nil)
+	h.svc.Sweep(ctx)
+	assert.False(t, h.plane.hosts(lease.ID), "the orphan peer is removed")
+	assert.Equal(t, "", h.holder(t, lease.Address), "and its forgotten address reclaimed")
+}
+
+// forgetAFailedRemoval expires lease with peer removals failing: the lease
+// is deleted, its peer stays installed and its address is kept.
+func (h *restoreHarness) forgetAFailedRemoval(t *testing.T, lease *Lease) {
+	t.Helper()
+	ctx := context.Background()
+	h.plane.failRemovals(errors.New("datapath unreachable"))
+	h.clock.Advance(2 * time.Hour)
+	h.svc.Sweep(ctx)
+
+	stored, err := h.store.List(ctx)
+	require.NoError(t, err)
+	require.Empty(t, stored, "the expired lease is deleted")
+	require.True(t, h.plane.hosts(lease.ID), "its peer removal failed")
+	require.Equal(t, "mini-1", h.holder(t, lease.Address), "so its address is kept")
+}
+
+func TestRestore_ReclaimSkipsAnAddressAnOwedRemovalStillHolds(t *testing.T) {
+	ctx := context.Background()
+	h := newRestoreHarness(t)
+	lease := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
+	h.allocateVPN(t, "mini-1", lease.Address)
+	h.start(t)
+	require.NoError(t, h.svc.Restore(ctx))
+
+	h.forgetAFailedRemoval(t, lease)
+
+	require.NoError(t, h.svc.reclaimOrphanAddresses(ctx))
+	assert.Equal(t, "mini-1", h.holder(t, lease.Address), "an owed peer removal still holds its address")
+}
+
+func TestRestore_ReclaimLeavesAnotherGatewaysAllocationAlone(t *testing.T) {
+	ctx := context.Background()
+	h := newRestoreHarness(t)
+	lease := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
+	h.allocateVPN(t, "mini-1", lease.Address)
+
+	cfgB := testConfig()
+	cfgB.GatewayID = "gw-b"
+	gwB := h.newServiceFor(t, cfgB, newFakePlane(DataPlaneMASQUE), NewMemoryLeaseStore())
+	require.NoError(t, gwB.Start(ctx))
+	t.Cleanup(func() { require.NoError(t, gwB.Stop(context.Background())) })
+	other := netip.MustParsePrefix("100.64.0.3/32")
+	h.allocateTagged(t, "mini-b", other, "vpn", "tenant:tenant-a", gwB.ownerTag())
+
+	h.start(t)
+	require.NoError(t, h.svc.Restore(ctx))
+	assert.Equal(t, "mini-1", h.holder(t, lease.Address), "this gateway's leased address is kept")
+	assert.Equal(t, "mini-b", h.holder(t, other), "another gateway's live allocation in the shared pool is not reclaimed")
+}
+
+func TestRestore_ReclaimLeavesAnUnownedVPNAllocationAlone(t *testing.T) {
+	ctx := context.Background()
+	h := newRestoreHarness(t)
+	legacy := netip.MustParsePrefix("100.64.0.4/32")
+	h.allocateTagged(t, "mini-legacy", legacy, "vpn", "tenant:tenant-a")
+	h.start(t)
+
+	require.NoError(t, h.svc.Restore(ctx))
+	assert.Equal(t, "mini-legacy", h.holder(t, legacy), "an allocation with no owner tag is never reclaimed")
 }
 
 func TestRestore_ReportsADropTheStoreCouldNotRecord(t *testing.T) {
@@ -254,6 +540,64 @@ func TestRestore_ADropRecordedNowhereKeepsTheAddress(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, ipam.AllocationStatusActive, alloc.Status, "the kept lease keeps its address")
 	assert.Equal(t, "mini-1", alloc.DeviceID)
+}
+
+// An expired lease is dead whether or not its deletion was recorded, and a
+// later restart drops it again before anything else: its hosted peer goes
+// at once, while the kept record keeps its address until the deletion is
+// recorded.
+func TestRestore_AnUnrecordedExpiredDropRemovesTheHostedPeer(t *testing.T) {
+	h := newRestoreHarness(t)
+	lease := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
+	lease.ExpiresAt = h.clock.Now()
+	require.NoError(t, h.store.Put(context.Background(), lease))
+	h.plane.installed[lease.ID] = lease
+	h.allocate(t, "mini-1", lease.Address)
+	h.store.deleteErr = &ErrRevocationNotRecorded{LeaseID: lease.ID, Cause: errors.New("disk full")}
+	h.start(t)
+
+	err := h.svc.Restore(context.Background())
+
+	var unrecorded *ErrRevocationNotRecorded
+	require.True(t, errors.As(err, &unrecorded), "got %v", err)
+	assert.False(t, h.plane.hosts(lease.ID), "the expired lease's hosted peer is removed")
+	stored, err := h.store.List(context.Background())
+	require.NoError(t, err)
+	assert.Len(t, stored, 1, "the lease whose drop was not recorded is still stored")
+	alloc, err := h.ipam.GetAllocation(context.Background(), lease.Address.Addr())
+	require.NoError(t, err)
+	assert.Equal(t, ipam.AllocationStatusActive, alloc.Status, "the kept record keeps its address")
+	assert.Equal(t, "mini-1", alloc.DeviceID)
+}
+
+// A lease that expires while the store cannot record its deletion loses its
+// peer at the first Sweep; its address stays held until a later Sweep
+// records the deletion, and only then goes back to the pool.
+func TestSweep_AnUnrecordedExpiryRemovesThePeerAndKeepsTheAddress(t *testing.T) {
+	ctx := context.Background()
+	h := newRestoreHarness(t)
+	lease := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
+	h.allocate(t, "mini-1", lease.Address)
+	h.start(t)
+	require.NoError(t, h.svc.Restore(ctx))
+	require.True(t, h.plane.hosts(lease.ID))
+	h.store.deleteErr = &ErrRevocationNotRecorded{LeaseID: lease.ID, Cause: errors.New("disk full")}
+	h.clock.Advance(2 * time.Hour)
+
+	h.svc.Sweep(ctx)
+
+	assert.False(t, h.plane.hosts(lease.ID), "the expired lease's peer is removed")
+	alloc, err := h.ipam.GetAllocation(ctx, lease.Address.Addr())
+	require.NoError(t, err)
+	assert.Equal(t, ipam.AllocationStatusActive, alloc.Status, "the kept record keeps its address")
+
+	h.store.deleteErr = nil
+	h.svc.Sweep(ctx)
+
+	stored, err := h.store.List(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, stored, "the recorded deletion removes the lease")
+	assert.NotEqual(t, "mini-1", h.holder(t, lease.Address), "then the address is released")
 }
 
 func TestRevoke_ARevocationRecordedNowhereTearsNothingDown(t *testing.T) {

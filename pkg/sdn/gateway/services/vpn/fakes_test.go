@@ -167,9 +167,14 @@ type fakePlane struct {
 	kind       DataPlaneKind
 	installErr error
 	removeErr  error
-	mu         sync.Mutex
-	installed  map[LeaseID]*Lease
-	removed    []LeaseID
+	// installThenErr installs the peer and then returns this error, as a
+	// hosted datapath does when SetPeer lands but its response is lost.
+	installThenErr error
+	mu             sync.Mutex
+	installed      map[LeaseID]*Lease
+	removed        []LeaseID
+	// reconciles records the keep list of every ReconcilePeers call.
+	reconciles [][]LeaseID
 	pause      *pause
 }
 
@@ -187,16 +192,65 @@ func (p *fakePlane) InstallPeer(_ context.Context, lease *Lease) error {
 	p.mu.Lock()
 	cp := *lease
 	p.installed[lease.ID] = &cp
+	thenErr := p.installThenErr
 	p.mu.Unlock()
+	return thenErr
+}
+
+// RemovePeer removes the peer; with removeErr set it fails and the peer
+// stays installed, as a datapath that cannot be reached leaves it.
+func (p *fakePlane) RemovePeer(_ context.Context, id LeaseID) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.removeErr != nil {
+		return p.removeErr
+	}
+	delete(p.installed, id)
+	p.removed = append(p.removed, id)
 	return nil
 }
 
-func (p *fakePlane) RemovePeer(_ context.Context, id LeaseID) error {
+// failRemovals sets (or, with nil, clears) the error RemovePeer and
+// ReconcilePeers return.
+func (p *fakePlane) failRemovals(err error) {
 	p.mu.Lock()
-	delete(p.installed, id)
-	p.removed = append(p.removed, id)
+	p.removeErr = err
 	p.mu.Unlock()
-	return p.removeErr
+}
+
+func (p *fakePlane) installedCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.installed)
+}
+
+func (p *fakePlane) hosts(id LeaseID) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	_, ok := p.installed[id]
+	return ok
+}
+
+// ReconcilePeers removes every installed peer whose lease is not in keep,
+// as a hosted plane does when the vpn child restarts.
+func (p *fakePlane) ReconcilePeers(_ context.Context, keep []LeaseID) error {
+	want := make(map[LeaseID]bool, len(keep))
+	for _, id := range keep {
+		want[id] = true
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.reconciles = append(p.reconciles, append([]LeaseID(nil), keep...))
+	if p.removeErr != nil {
+		return p.removeErr
+	}
+	for id := range p.installed {
+		if !want[id] {
+			delete(p.installed, id)
+			p.removed = append(p.removed, id)
+		}
+	}
+	return nil
 }
 
 func (p *fakePlane) count() int {
@@ -209,15 +263,18 @@ func (p *fakePlane) count() int {
 // addresses, released back on Release.
 type fakeIPAM struct {
 	ipam.Allocator
-	mu        sync.Mutex
-	pool      *ipam.Pool
-	poolErr   error
-	next      netip.Addr
-	free      []netip.Addr
-	allocated map[netip.Addr]string
-	capacity  int
-	renewErr  error
-	releases  int
+	mu         sync.Mutex
+	pool       *ipam.Pool
+	poolErr    error
+	next       netip.Addr
+	free       []netip.Addr
+	allocated  map[netip.Addr]string
+	tags       map[netip.Addr][]string
+	capacity   int
+	renewErr   error
+	releases   int
+	getErr     error
+	releaseErr error
 }
 
 func newFakeIPAM(capacity int) *fakeIPAM {
@@ -225,6 +282,7 @@ func newFakeIPAM(capacity int) *fakeIPAM {
 		pool:      &ipam.Pool{ID: "pool-1", Name: "vpn-clients", CIDR: netip.MustParsePrefix("10.200.0.0/24")},
 		next:      netip.MustParseAddr("10.200.0.10"),
 		allocated: map[netip.Addr]string{},
+		tags:      map[netip.Addr][]string{},
 		capacity:  capacity,
 	}
 }
@@ -256,19 +314,51 @@ func (f *fakeIPAM) Allocate(_ context.Context, req *ipam.AllocationRequest) (*ip
 		f.next = f.next.Next()
 	}
 	f.allocated[addr] = req.DeviceID
+	f.tags[addr] = append([]string(nil), req.Tags...)
 	return &ipam.Allocation{ID: addr.String(), PoolID: req.PoolID, IP: addr, DeviceID: req.DeviceID}, nil
 }
 
 func (f *fakeIPAM) Release(_ context.Context, ip netip.Addr) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.releaseErr != nil {
+		return f.releaseErr
+	}
 	if _, ok := f.allocated[ip]; !ok {
 		return errors.New("not allocated")
 	}
 	delete(f.allocated, ip)
+	delete(f.tags, ip)
 	f.free = append(f.free, ip)
 	f.releases++
 	return nil
+}
+
+func (f *fakeIPAM) GetAllocation(_ context.Context, ip netip.Addr) (*ipam.Allocation, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
+	dev, ok := f.allocated[ip]
+	if !ok {
+		return nil, ipam.ErrAllocationNotFound
+	}
+	return &ipam.Allocation{ID: ip.String(), IP: ip, DeviceID: dev, Status: ipam.AllocationStatusActive}, nil
+}
+
+func (f *fakeIPAM) GetAllocationsByPool(_ context.Context, _ string) ([]*ipam.Allocation, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
+	allocs := make([]*ipam.Allocation, 0, len(f.allocated))
+	for ip, dev := range f.allocated {
+		allocs = append(allocs, &ipam.Allocation{ID: ip.String(), IP: ip, DeviceID: dev,
+			Status: ipam.AllocationStatusActive, Tags: f.tags[ip]})
+	}
+	return allocs, nil
 }
 
 func (f *fakeIPAM) Renew(_ context.Context, ip netip.Addr) error {
@@ -354,6 +444,7 @@ func (r *logRecorder) events(msg string) []map[string]string {
 func testConfig() Config {
 	return Config{
 		Pool:       "vpn-clients",
+		GatewayID:  "gw-a",
 		DataPlanes: []DataPlaneKind{DataPlaneMASQUE},
 		AllowTo:    []string{"management"},
 		MASQUE: MASQUESettings{
@@ -364,6 +455,48 @@ func testConfig() Config {
 }
 
 func newHarness(t testing.TB, cfg Config) *harness {
+	t.Helper()
+	return newHarnessWith(t, cfg, nil)
+}
+
+// putFailStore is a lease store whose Put fails while putErr is set.
+type putFailStore struct {
+	LeaseStore
+	mu     sync.Mutex
+	putErr error
+}
+
+func (s *putFailStore) Put(ctx context.Context, lease *Lease) error {
+	s.mu.Lock()
+	err := s.putErr
+	s.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	return s.LeaseStore.Put(ctx, lease)
+}
+
+func (s *putFailStore) failPuts(err error) {
+	s.mu.Lock()
+	s.putErr = err
+	s.mu.Unlock()
+}
+
+// inProcessPlane is a data plane without ReconcilePeers, as the in-process
+// WireGuard and MASQUE planes are: its peers start empty with the child.
+type inProcessPlane struct{ p *fakePlane }
+
+func (i inProcessPlane) Kind() DataPlaneKind { return i.p.Kind() }
+func (i inProcessPlane) InstallPeer(ctx context.Context, l *Lease) error {
+	return i.p.InstallPeer(ctx, l)
+}
+func (i inProcessPlane) RemovePeer(ctx context.Context, id LeaseID) error {
+	return i.p.RemovePeer(ctx, id)
+}
+
+// newHarnessWith builds the harness with edit applied to its deps before
+// the service is built.
+func newHarnessWith(t testing.TB, cfg Config, edit func(*Deps)) *harness {
 	t.Helper()
 	h := &harness{
 		clock:    newFakeClock(),
@@ -388,6 +521,9 @@ func newHarness(t testing.TB, cfg Config) *harness {
 		Audit:      h.audit,
 		Clock:      h.clock,
 		Logger:     slog.New(h.logs),
+	}
+	if edit != nil {
+		edit(&deps)
 	}
 	svc, err := New(deps, cfg)
 	require.NoError(t, err)
