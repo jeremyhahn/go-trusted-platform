@@ -74,16 +74,8 @@ func (c *BuildConfig) validateManifestKey() error {
 	if c.ISO != nil && c.ISO.SecureBoot && c.KMSClients == nil {
 		return errNoManifestKMS
 	}
-	if c.ISO != nil && c.ISO.SecureBoot && c.ReferenceValues == nil {
-		return errNoReferenceValues
-	}
 	return nil
 }
-
-// errNoReferenceValues refuses a measured build with no ReferenceValues: its
-// signed manifest must be registered in the reference-values store the
-// verifier reads, so the build never reports success without it.
-var errNoReferenceValues = errors.New("diskimage: a measured image needs a reference-values registrar to register its manifest")
 
 // writeManifest signs the measurement manifest of the image whose SHA-256
 // is sum, with banks its predicted PCRs, and writes it to
@@ -163,14 +155,18 @@ type ReferenceValueRegistrar interface {
 
 // publishManifest writes the image's signed manifest beside it and registers
 // it through c.ReferenceValues when one is set. It reports whether the
-// manifest was registered; a registration failure is a MeasureError.
+// manifest was registered; a registration failure is a MeasureError. With no
+// registrar (the pinned go-quicbaas SDK has no reference-values client until
+// the bump held to #1348) the manifest stays beside the image, a warning is
+// logged and it is reported unregistered.
 func (c *BuildConfig) publishManifest(ctx context.Context, image, sum string, target Target, banks []measure.Bank) (string, bool, error) {
 	out, err := c.writeManifest(ctx, image, sum, target, banks)
 	if err != nil {
 		return "", false, err
 	}
 	if c.ReferenceValues == nil {
-		return out, false, &MeasureError{Step: "registering the measurement manifest", Err: errNoReferenceValues}
+		c.Logger.Warn("[DISKIMAGE] no reference-values registrar: the signed manifest is written beside the image but not registered", "manifest", out)
+		return out, false, nil
 	}
 	signed, err := os.ReadFile(out)
 	if err != nil {

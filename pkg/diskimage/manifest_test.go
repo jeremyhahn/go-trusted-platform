@@ -388,7 +388,7 @@ func TestCreateReportsAnUnknownTargetBeforeAMissingRegistrar(t *testing.T) {
 	cfg.ReferenceValues = nil
 	var ue *UnknownTargetError
 	res, err := Create(context.Background(), cfg)
-	if !errors.As(err, &ue) || errors.Is(err, errNoReferenceValues) || res != nil {
+	if !errors.As(err, &ue) || res != nil {
 		t.Fatalf("result %+v, err %v", res, err)
 	}
 	if len(rec.Calls) != 0 {

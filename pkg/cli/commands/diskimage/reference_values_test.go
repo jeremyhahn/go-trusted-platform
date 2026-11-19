@@ -43,8 +43,9 @@ func TestImageBuildSetsReferenceValues(t *testing.T) {
 }
 
 // The pinned go-quicbaas SDK has no reference-values verb, so the production
-// resolver yields no registrar and diskimage.Create refuses a measured build
-// before it starts rather than report an unregistered manifest as success.
+// resolver yields no registrar: a measured build signs and writes its
+// manifest beside the image, warns, and leaves it unregistered
+// (Result.Registered false) until the SDK bump (#1348).
 func TestProductionReferenceValuesUnavailable(t *testing.T) {
 	if reg := referenceValues(cli.NewLazyClient(&cli.CommonFlags{})); reg != nil {
 		t.Fatalf("referenceValues() = %v, want nil until the SDK carries PutReferenceValues", reg)
