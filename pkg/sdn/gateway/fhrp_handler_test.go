@@ -316,6 +316,34 @@ func TestFHRPSweepsAddressRemovedFromARetainedGroup(t *testing.T) {
 	assert.Equal(t, []fhrp.InventoryEntry{{Interface: "trusted0", VRID: 10, Prefix: kept}}, entries)
 }
 
+// A recorded VIP whose group now configures the same address with another
+// prefix length goes: the runner restores ownership by the full prefix, so
+// the old prefix would otherwise never be released (#1716 Codex round 4).
+func TestFHRPSweepsARecordedPrefixOfAnotherLength(t *testing.T) {
+	old := netip.MustParsePrefix("192.0.2.1/24")
+	path := filepath.Join(t.TempDir(), FHRPStateDir, FHRPInventoryFile)
+	require.NoError(t, fhrp.NewInventory(path).Record("trusted0", 10, old))
+	programmer := &fakeFHRPProgrammer{present: map[netip.Prefix]bool{old: true}}
+	cfg := baseGatewayConfig("fhrp-sweep-prefix-length")
+	cfg.FHRP = ownerFHRPConfig()
+	cfg.FHRP.Groups[0].Addresses = []string{"192.0.2.1/25"}
+	cfg.Host = &HostRuntime{FHRPProgrammer: programmer, FHRPInventory: path}
+
+	require.NoError(t, sweepRemovedFHRPGroups(cfg))
+	assert.Equal(t, []netip.Prefix{old}, programmer.Deleted(),
+		"the recorded prefix of the old length goes")
+	entries, err := fhrp.NewInventory(path).Entries()
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+
+	cfg.Host.FHRPTransport = &fakeFHRPTransport{}
+	svc, err := buildFHRP(&Gateway{config: cfg})
+	require.NoError(t, err)
+	require.NoError(t, svc.Start(context.Background()))
+	require.NoError(t, svc.Stop(context.Background()))
+	assert.False(t, programmer.holds(old), "the old prefix is not installed after Stop")
+}
+
 // TestBuildFHRP_IPv6TakeoverAnnouncesTheVIP: an IPv6 owner group built by
 // gatewayd announces its virtual address through the programmer on
 // takeover. The default programmer (fhrp.NewNetlinkProgrammer) sends that
