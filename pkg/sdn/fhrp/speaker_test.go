@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -28,6 +29,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	vnl "github.com/vishvananda/netlink"
 )
 
 // ---- fakes -----------------------------------------------------------------
@@ -913,6 +915,81 @@ func TestSpeaker_NextStartRemovesAStaleVIPAnEarlierStartCouldNot(t *testing.T) {
 	assert.False(t, s.ReleasePending())
 	assert.False(t, prog.holds("br-int", "10.4.200.1/24"))
 	require.NoError(t, s.Stop(context.Background()))
+}
+
+// inventoryBreakingProgrammer turns the inventory file into a directory at
+// the first address listing, after restoreOwned read it, so the stale-VIP
+// Record that follows fails as it would on a full state filesystem.
+type inventoryBreakingProgrammer struct {
+	*fakeProgrammer
+	path string
+	once sync.Once
+}
+
+func (p *inventoryBreakingProgrammer) AddressPrefixes(iface string, addr netip.Addr) ([]netip.Prefix, error) {
+	p.once.Do(func() {
+		_ = os.Remove(p.path)
+		_ = os.MkdirAll(filepath.Join(p.path, "blocked"), 0o700)
+	})
+	return p.fakeProgrammer.AddressPrefixes(iface, addr)
+}
+
+func TestSpeaker_StaleVIPCleanupSurvivesAnInventoryRecordFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), VIPInventoryFile)
+	prog := &inventoryBreakingProgrammer{fakeProgrammer: newFakeProgrammer(), path: path}
+	prog.addrs["br-int/10.4.200.1/24"] = nil
+	s, err := New(speakerConfig(200, "10.4.200.10"), Deps{
+		Transport: &fakeTransport{seg: newSegment()}, Programmer: prog, Clock: newFakeClock(t0),
+		Logger: quietLogger(), Inventory: NewInventory(path),
+	})
+	require.NoError(t, err)
+
+	err = s.Start(context.Background())
+	var inv *ErrInventory
+	require.True(t, errors.As(err, &inv), "got %v", err)
+	assert.False(t, s.Active())
+
+	// The present, unrecorded VIP stays this node's to clean up, so Stop
+	// removes it although the inventory could not record it.
+	assert.True(t, s.ReleasePending(), "the stale VIP whose record failed stays pending")
+	require.NoError(t, s.Stop(context.Background()))
+	assert.False(t, prog.holds("br-int", "10.4.200.1/24"), "Stop removed the stale VIP")
+	assert.False(t, s.ReleasePending())
+}
+
+func TestSpeaker_ReleaseTreatsAMissingInterfaceAsReleased(t *testing.T) {
+	t.Run("a claimed VIP", func(t *testing.T) {
+		prog := newFakeProgrammer()
+		sink := newEventSink()
+		s, err := New(speakerConfig(PriorityOwner, "10.4.200.2"), Deps{
+			Transport: &fakeTransport{seg: newSegment()}, Programmer: prog, Clock: newFakeClock(t0),
+			Logger: quietLogger(), Observer: sink,
+		})
+		require.NoError(t, err)
+		require.NoError(t, s.Start(context.Background()))
+		sink.await(t, func(ev Event) bool { return ev.Kind == EventTransition && ev.Status.State == StateMaster })
+		require.True(t, prog.holds("br-int", "10.4.200.1/24"))
+
+		// The interface goes, and its addresses with it.
+		prog.delErr = vnl.LinkNotFoundError{}
+		require.NoError(t, s.Stop(context.Background()))
+		assert.False(t, s.ReleasePending(), "a VIP whose interface is gone is released")
+		require.NoError(t, s.Start(context.Background()), "the next Start is not refused")
+		require.NoError(t, s.Stop(context.Background()))
+	})
+	t.Run("a stale VIP of another length", func(t *testing.T) {
+		prog := newFakeProgrammer()
+		prog.addrs["br-int/10.4.200.1/16"] = nil
+		prog.delErr = errors.New("netlink: permission denied")
+		s, err := New(speakerConfig(200, "10.4.200.10"), Deps{Transport: &fakeTransport{seg: newSegment()}, Programmer: prog, Clock: newFakeClock(t0), Logger: quietLogger()})
+		require.NoError(t, err)
+		require.Error(t, s.Start(context.Background()))
+		require.True(t, s.ReleasePending())
+
+		prog.delErr = vnl.LinkNotFoundError{}
+		require.NoError(t, s.Stop(context.Background()))
+		assert.False(t, s.ReleasePending(), "a stale VIP whose interface is gone is released")
+	})
 }
 
 func TestWallClock(t *testing.T) {
