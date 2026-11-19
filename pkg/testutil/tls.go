@@ -109,8 +109,9 @@ func GenerateTestTLSBundle(t *testing.T) *TestTLSBundle {
 	clientCert := generateLeafCert(t, caCert, caKey, &x509.Certificate{
 		SerialNumber: big.NewInt(3),
 		Subject: pkix.Name{
-			Organization: []string{"Test Platform Client"},
-			CommonName:   "test-client",
+			Organization:       []string{"Test Platform Client"},
+			OrganizationalUnit: []string{"Test Platform Client"},
+			CommonName:         "test-client",
 		},
 		NotBefore: notBefore,
 		NotAfter:  notAfter,
