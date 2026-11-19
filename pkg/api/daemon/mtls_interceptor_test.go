@@ -1270,3 +1270,71 @@ func TestMTLSInterceptorsPEPCheck(t *testing.T) {
 		})
 	}
 }
+
+// TestMTLSInterceptorsPreAuthMethods checks, with the production method
+// catalog, that a method classified pre-auth in pkg/api/grpc is served after
+// certificate authentication without a PEP call, while an unclassified method
+// is still denied and a pre-auth call with no certificate is unauthenticated.
+func TestMTLSInterceptorsPreAuthMethods(t *testing.T) {
+	preAuth := []string{
+		"/platform.v1.InvitationService/GetInvitationByToken",
+		"/platform.v1.InvitationService/AcceptInvitation",
+		"/platform.v1.ConfigDeliveryService/GetNonce",
+		"/platform.v1.ConfigDeliveryService/FetchConfig",
+		"/platform.v1.ConfigDeliveryService/SignDigest",
+		"/platform.v1.ConfigDeliveryService/PollSession",
+	}
+	runners := map[string]func(*testing.T, *MTLSInterceptorConfig, string) (bool, error){
+		"unary":  runMTLSUnary,
+		"stream": runMTLSStream,
+	}
+	for name, run := range runners {
+		for _, method := range preAuth {
+			t.Run(name+"/pre-auth "+method, func(t *testing.T) {
+				pep, calls := recordingPEP("cert-client")
+				cfg := mtlsPEPConfig(pep)
+				cfg.Permission = nil
+				called, err := run(t, cfg, method)
+				if err != nil {
+					t.Fatalf("err = %v, want nil", err)
+				}
+				if !called {
+					t.Fatal("handler not called for a pre-auth method")
+				}
+				if len(*calls) != 0 {
+					t.Fatalf("PEP calls = %d, want 0", len(*calls))
+				}
+			})
+		}
+		t.Run(name+"/unclassified method", func(t *testing.T) {
+			pep, calls := recordingPEP("cert-client")
+			cfg := mtlsPEPConfig(pep)
+			cfg.Permission = nil
+			called, err := run(t, cfg, "/platform.v1.PlatformDaemon/NotAClassifiedMethod")
+			if status.Code(err) != codes.PermissionDenied {
+				t.Fatalf("code = %v, want PermissionDenied (err %v)", status.Code(err), err)
+			}
+			if called || len(*calls) != 0 {
+				t.Fatalf("handler called = %v, PEP calls = %d; want neither", called, len(*calls))
+			}
+		})
+	}
+	t.Run("unary/pre-auth method without a client certificate", func(t *testing.T) {
+		pep, calls := recordingPEP("cert-client")
+		cfg := mtlsPEPConfig(pep)
+		cfg.Permission = nil
+		called := false
+		handler := func(context.Context, interface{}) (interface{}, error) {
+			called = true
+			return "ok", nil
+		}
+		info := &grpc.UnaryServerInfo{FullMethod: "/platform.v1.InvitationService/AcceptInvitation"}
+		_, err := MTLSUnaryInterceptor(cfg)(createPeerContextNoCerts(), "req", info, handler)
+		if status.Code(err) != codes.Unauthenticated {
+			t.Fatalf("code = %v, want Unauthenticated (err %v)", status.Code(err), err)
+		}
+		if called || len(*calls) != 0 {
+			t.Fatalf("handler called = %v, PEP calls = %d; want neither", called, len(*calls))
+		}
+	})
+}
