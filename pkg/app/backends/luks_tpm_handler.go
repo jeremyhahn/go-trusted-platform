@@ -15,6 +15,7 @@ package backends
 
 import (
 	"context"
+	"sync"
 
 	"github.com/google/go-tpm/tpm2/transport"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
@@ -83,7 +84,11 @@ var DefaultTPMOpener = luks.DefaultTPMOpener
 // module is resolved at Open time; a nil module or transport answers
 // ErrLUKSTPMNoTransport.
 func PlatformTPMOpener(module func() xkmssdk.TrustedPlatformModule) TPMOpener {
-	return TPMOpenerFunc(func(context.Context) (transport.TPMCloser, error) {
+	// lock (capacity 1) is held from Open until the returned closer's
+	// Close, so one sealer at a time exchanges commands over the
+	// platform's transport.
+	lock := make(chan struct{}, 1)
+	return TPMOpenerFunc(func(ctx context.Context) (transport.TPMCloser, error) {
 		if module == nil {
 			return nil, ErrLUKSTPMNoTransport
 		}
@@ -95,17 +100,30 @@ func PlatformTPMOpener(module func() xkmssdk.TrustedPlatformModule) TPMOpener {
 		if tpm == nil {
 			return nil, ErrLUKSTPMNoTransport
 		}
-		return sharedTPM{tpm}, nil
+		select {
+		case lock <- struct{}{}:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		return &sharedTPM{TPM: tpm, release: func() { <-lock }}, nil
 	})
 }
 
 // sharedTPM lends the platform's transport to the sealer. The sealer closes
 // its transport after each command batch, but the platform owns and closes
-// its transport, so Close is a no-op.
-type sharedTPM struct{ transport.TPM }
+// its transport, so Close only hands the transport to the next sealer.
+type sharedTPM struct {
+	transport.TPM
+	release func()
+	once    sync.Once
+}
 
-// Close leaves the platform's transport open.
-func (sharedTPM) Close() error { return nil }
+// Close leaves the platform's transport open and releases the opener's
+// lock, at most once.
+func (s *sharedTPM) Close() error {
+	s.once.Do(s.release)
+	return nil
+}
 
 // Compile-time assertion: the canonical sealer satisfies the platform's
 // narrow LUKSTPMHandler interface.
