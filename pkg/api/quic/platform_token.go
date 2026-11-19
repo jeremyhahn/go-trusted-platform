@@ -58,6 +58,28 @@ func AuthorizedContextFromContext(ctx context.Context) (*platformtoken.Authorize
 	return authCtx, ok
 }
 
+// legacyPrincipalContextKey holds the principal a legacy (bool-only) token
+// validator named. It is separate from the platform-token AuthorizedContext,
+// so AuthorizeRequest does not enforce scp scopes on a scope-free local JWT.
+type legacyPrincipalContextKey struct{}
+
+// ContextWithLegacyPrincipal stores the principal a legacy-path token names.
+func ContextWithLegacyPrincipal(ctx context.Context, p *platformtoken.AuthorizedContext) context.Context {
+	return context.WithValue(ctx, legacyPrincipalContextKey{}, p)
+}
+
+// LegacyPrincipalFromContext returns the principal ContextWithLegacyPrincipal stored.
+func LegacyPrincipalFromContext(ctx context.Context) (*platformtoken.AuthorizedContext, bool) {
+	p, ok := ctx.Value(legacyPrincipalContextKey{}).(*platformtoken.AuthorizedContext)
+	return p, ok && p != nil
+}
+
+// PrincipalTokenValidator is an optional TokenValidator extension for the
+// legacy path: it names the principal and tenant of a token it validated.
+type PrincipalTokenValidator interface {
+	TokenPrincipal(ctx context.Context, token string) (*platformtoken.AuthorizedContext, error)
+}
+
 // tokenAuthorizedContext returns the AuthorizedContext only when a platform
 // token produced it. A peer authenticated by its client certificate alone
 // carries an AuthorizedContext too, under the same key, but no token; an

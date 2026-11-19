@@ -30,6 +30,10 @@ func callerTenant(ctx context.Context) (string, bool) {
 	if authCtx, ok := quic.AuthorizedContextFromContext(ctx); ok && authCtx != nil {
 		return authCtx.TenantID, true
 	}
+	// QUIC local-JWT callers on the legacy validator path.
+	if p, ok := quic.LegacyPrincipalFromContext(ctx); ok {
+		return p.TenantID, true
+	}
 	if authCtx, ok := mcp.AuthorizedContextFromContext(ctx); ok && authCtx != nil {
 		return authCtx.TenantID, true
 	}

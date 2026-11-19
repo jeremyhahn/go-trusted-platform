@@ -272,6 +272,22 @@ func (m *AuthMiddleware) AuthenticateRequest(ctx context.Context, req *quicwire.
 		}
 	}
 
+	// A validator that names the token's principal binds the caller to its
+	// tenant. The principal is kept apart from the platform-token
+	// AuthorizedContext so AuthorizeRequest enforces no scp scopes on it.
+	if pv, ok := m.tokenValidator.(PrincipalTokenValidator); ok {
+		p, err := pv.TokenPrincipal(ctx, req.Token)
+		if err != nil {
+			return ctx, &quicwire.Response{
+				Status:  quicwire.StatusUnauthorized,
+				Payload: []byte(ErrTokenValidationFailed{Cause: err}.Error()),
+			}
+		}
+		if p != nil {
+			ctx = ContextWithLegacyPrincipal(ctx, p)
+		}
+	}
+
 	// Add validated token to context
 	return ContextWithToken(ctx, req.Token), nil
 }
