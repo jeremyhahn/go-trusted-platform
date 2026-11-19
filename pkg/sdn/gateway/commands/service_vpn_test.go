@@ -65,9 +65,11 @@ func (p *fakeVPNPlane) state() (started, stopped bool, installed []vpn.LeaseID) 
 type vpnPlaneFactory struct {
 	planes []vpn.ManagedDataPlane
 	calls  int
+	hubKey *vpnHubKey
 }
 
-func (f *vpnPlaneFactory) build(_ *ServeConfig, _ *gateway.Gateway, _ *slog.Logger) ([]vpn.ManagedDataPlane, error) {
+func (f *vpnPlaneFactory) build(_ *ServeConfig, hubKey *vpnHubKey, _ *slog.Logger) ([]vpn.ManagedDataPlane, error) {
+	f.hubKey = hubKey
 	f.calls++
 	return f.planes, nil
 }

@@ -254,6 +254,7 @@ func (f *fakeShutdowner) Shutdown(ctx context.Context) error {
 func TestShutdownSupervisor_StopsTheChildrenWithinTheShutdownTimeout(t *testing.T) {
 	var logged bytes.Buffer
 	supervisor := &fakeShutdowner{}
+	fakeHubRemoval(t, nil, nil)
 
 	shutdownSupervisor(supervisor, slog.New(slog.NewTextHandler(&logged, nil)))
 
@@ -264,11 +265,53 @@ func TestShutdownSupervisor_StopsTheChildrenWithinTheShutdownTimeout(t *testing.
 func TestShutdownSupervisor_LogsAFailure(t *testing.T) {
 	var logged bytes.Buffer
 	supervisor := &fakeShutdowner{err: context.DeadlineExceeded}
+	fakeHubRemoval(t, nil, nil)
 
 	shutdownSupervisor(supervisor, slog.New(slog.NewTextHandler(&logged, nil)))
 
 	assert.Contains(t, logged.String(), "Process supervisor shutdown failed")
 	assert.Contains(t, logged.String(), context.DeadlineExceeded.Error())
+}
+
+// fakeHubRemoval swaps the stale-hub remover for one that counts its calls
+// and records whether the supervisor had shut down when it ran.
+func fakeHubRemoval(t *testing.T, removeErr error, shutdown *fakeShutdowner) *int {
+	t.Helper()
+	removals := 0
+	prev := supervisorRemoveVPNHub
+	t.Cleanup(func() { supervisorRemoveVPNHub = prev })
+	supervisorRemoveVPNHub = func(*slog.Logger) error {
+		if shutdown != nil && !shutdown.hadDeadline {
+			t.Error("the hub was removed before the children were shut down")
+		}
+		removals++
+		return removeErr
+	}
+	return &removals
+}
+
+// TestShutdownSupervisor_RemovesTheHubAfterAKilledChild checks Codex #2029
+// round 1 P1 2: a WireGuard child killed at the shutdown deadline runs no
+// exit hook, so the shutdown removes its hub once the children are gone.
+func TestShutdownSupervisor_RemovesTheHubAfterAKilledChild(t *testing.T) {
+	var logged bytes.Buffer
+	supervisor := &fakeShutdowner{err: context.DeadlineExceeded}
+	removals := fakeHubRemoval(t, nil, supervisor)
+
+	shutdownSupervisor(supervisor, slog.New(slog.NewTextHandler(&logged, nil)))
+
+	assert.Equal(t, 1, *removals, "the killed child's hub is removed")
+}
+
+func TestShutdownSupervisor_LogsAHubRemovalFailure(t *testing.T) {
+	var logged bytes.Buffer
+	supervisor := &fakeShutdowner{}
+	fakeHubRemoval(t, errors.New("netlink refused"), supervisor)
+
+	shutdownSupervisor(supervisor, slog.New(slog.NewTextHandler(&logged, nil)))
+
+	assert.Contains(t, logged.String(), "Stale VPN hub removal at shutdown failed")
+	assert.Contains(t, logged.String(), "netlink refused")
 }
 
 func TestServicePolicy_OnlyTheDatapathProcessAdmitsTheServiceAccount(t *testing.T) {

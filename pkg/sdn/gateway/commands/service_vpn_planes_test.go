@@ -4,12 +4,14 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/hostfw"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/vpn"
@@ -27,64 +29,141 @@ func (s *stubSecrets) resolve(_ context.Context, _ string) ([]byte, error) {
 // wireGuardPlaneRun returns a VPN configuration offering wireguard with the
 // given key reference and hub address, and a gateway whose host runtime
 // carries resolver (none when resolver is nil).
-func wireGuardPlaneRun(t *testing.T, offered []vpn.DataPlaneKind, keyRef string, address netip.Prefix, resolver *stubSecrets) (*ServeConfig, *gateway.Gateway) {
+func wireGuardPlaneRun(t *testing.T, offered []vpn.DataPlaneKind, keyRef string, address netip.Prefix, resolver *stubSecrets) (*ServeConfig, *vpnHubKey) {
 	t.Helper()
 	cfg := newWireGuardRun(true).loaded
 	cfg.Gateway.ManagementVPN.DataPlanes = offered
 	cfg.Gateway.ManagementVPN.WireGuard.KeyRef = keyRef
 	cfg.Gateway.ManagementVPN.WireGuard.Address = address
-	gwCfg := &gateway.GatewayConfig{Enabled: true, ID: "gw-test"}
+	var resolve bgp.SecretResolver
 	if resolver != nil {
-		gwCfg.Host = &gateway.HostRuntime{SecretResolver: resolver.resolve}
+		resolve = resolver.resolve
 	}
-	gw, err := gateway.NewGateway(gwCfg)
-	require.NoError(t, err)
-	return cfg, gw
+	return cfg, resolveVPNHubKeyWith(context.Background(), cfg, resolve)
 }
 
 var hubAddress = netip.MustParsePrefix("100.64.0.1/24")
 
 func TestVPNDataPlanes_BuildsWireGuardHubPlane(t *testing.T) {
 	secrets := &stubSecrets{}
-	cfg, gw := wireGuardPlaneRun(t, []vpn.DataPlaneKind{vpn.DataPlaneWireGuard}, "kms://vpn/hub0", hubAddress, secrets)
+	cfg, hubKey := wireGuardPlaneRun(t, []vpn.DataPlaneKind{vpn.DataPlaneWireGuard}, "kms://vpn/hub0", hubAddress, secrets)
 
-	planes, err := vpnDataPlanes(cfg, gw, testLogger())
+	planes, err := vpnDataPlanes(cfg, hubKey, testLogger())
 	require.NoError(t, err)
 	require.Len(t, planes, 1, "the factory builds the WireGuard hub plane")
 	assert.Equal(t, vpn.DataPlaneWireGuard, planes[0].Kind())
-	assert.Zero(t, secrets.calls, "the plane is not started: the key is resolved only when the hub comes up")
+	assert.Equal(t, 1, secrets.calls, "the key is resolved once, before the child hardens, and held for the hub")
 }
 
 func TestVPNDataPlanes_MissingKeyRefBuildsNone(t *testing.T) {
-	cfg, gw := wireGuardPlaneRun(t, []vpn.DataPlaneKind{vpn.DataPlaneWireGuard}, "", hubAddress, &stubSecrets{})
+	cfg, hubKey := wireGuardPlaneRun(t, []vpn.DataPlaneKind{vpn.DataPlaneWireGuard}, "", hubAddress, &stubSecrets{})
 
-	planes, err := vpnDataPlanes(cfg, gw, testLogger())
+	planes, err := vpnDataPlanes(cfg, hubKey, testLogger())
 	require.NoError(t, err)
 	assert.Empty(t, planes, "no wireguard.key-ref, no plane")
 }
 
 func TestVPNDataPlanes_InvalidAddressBuildsNone(t *testing.T) {
-	cfg, gw := wireGuardPlaneRun(t, []vpn.DataPlaneKind{vpn.DataPlaneWireGuard}, "kms://vpn/hub0", netip.Prefix{}, &stubSecrets{})
+	cfg, hubKey := wireGuardPlaneRun(t, []vpn.DataPlaneKind{vpn.DataPlaneWireGuard}, "kms://vpn/hub0", netip.Prefix{}, &stubSecrets{})
 
-	planes, err := vpnDataPlanes(cfg, gw, testLogger())
+	planes, err := vpnDataPlanes(cfg, hubKey, testLogger())
 	require.NoError(t, err)
 	assert.Empty(t, planes, "no valid wireguard.address, no plane")
 }
 
 func TestVPNDataPlanes_NoSecretResolverBuildsNone(t *testing.T) {
-	cfg, gw := wireGuardPlaneRun(t, []vpn.DataPlaneKind{vpn.DataPlaneWireGuard}, "kms://vpn/hub0", hubAddress, nil)
+	cfg, hubKey := wireGuardPlaneRun(t, []vpn.DataPlaneKind{vpn.DataPlaneWireGuard}, "kms://vpn/hub0", hubAddress, nil)
 
-	planes, err := vpnDataPlanes(cfg, gw, testLogger())
+	planes, err := vpnDataPlanes(cfg, hubKey, testLogger())
 	require.NoError(t, err)
 	assert.Empty(t, planes, "without a secret resolver the hub key cannot be resolved")
 }
 
 func TestVPNDataPlanes_WireGuardNotOfferedBuildsNone(t *testing.T) {
-	cfg, gw := wireGuardPlaneRun(t, []vpn.DataPlaneKind{vpn.DataPlaneMASQUE}, "kms://vpn/hub0", hubAddress, &stubSecrets{})
+	cfg, hubKey := wireGuardPlaneRun(t, []vpn.DataPlaneKind{vpn.DataPlaneMASQUE}, "kms://vpn/hub0", hubAddress, &stubSecrets{})
 
-	planes, err := vpnDataPlanes(cfg, gw, testLogger())
+	planes, err := vpnDataPlanes(cfg, hubKey, testLogger())
 	require.NoError(t, err)
 	assert.Empty(t, planes, "wireguard not in data-planes, no plane")
+}
+
+// outsideHubNetwork is the first address past the hub's network.
+func outsideHubNetwork() netip.Addr {
+	network := hubAddress.Masked()
+	addr := network.Addr()
+	for network.Contains(addr) {
+		addr = addr.Next()
+	}
+	return addr
+}
+
+// TestHubNetworkPlane_RefusesAPeerOutsideTheHubNetwork checks Codex #2029
+// round 1 P1 1: a lease address outside the hub prefix (SPEC.md:80) or
+// equal to the hub's own is refused before the plane installs a peer, and
+// one inside the pool is installed.
+func TestHubNetworkPlane_RefusesAPeerOutsideTheHubNetwork(t *testing.T) {
+	inner := &fakeVPNPlane{}
+	plane := hubNetworkPlane{ManagedDataPlane: inner, network: hubAddress.Masked(), hub: hubAddress.Addr()}
+	ctx := context.Background()
+
+	for name, addr := range map[string]netip.Addr{
+		"outside the pool": outsideHubNetwork(),
+		"the hub's own":    hubAddress.Addr(),
+	} {
+		err := plane.InstallPeer(ctx, &vpn.Lease{ID: vpn.LeaseID(name), Address: netip.PrefixFrom(addr, 32)})
+		var invalid *vpn.ErrPeerKeyInvalid
+		require.ErrorAs(t, err, &invalid, name)
+	}
+	_, _, installed := inner.state()
+	assert.Empty(t, installed, "a refused address reaches no peer")
+
+	require.NoError(t, plane.InstallPeer(ctx, &vpn.Lease{ID: "in-pool", Address: netip.PrefixFrom(hubAddress.Addr().Next(), 32)}))
+	_, _, installed = inner.state()
+	assert.Equal(t, []vpn.LeaseID{"in-pool"}, installed, "an in-pool address is installed")
+}
+
+// TestVPNDataPlanes_WrapsTheHubInItsNetwork checks the built WireGuard plane
+// carries the hub-network check.
+func TestVPNDataPlanes_WrapsTheHubInItsNetwork(t *testing.T) {
+	cfg, hubKey := wireGuardPlaneRun(t, []vpn.DataPlaneKind{vpn.DataPlaneWireGuard}, "kms://vpn/hub0", hubAddress, &stubSecrets{})
+
+	planes, err := vpnDataPlanes(cfg, hubKey, testLogger())
+	require.NoError(t, err)
+	require.Len(t, planes, 1)
+	wrapped, ok := planes[0].(hubNetworkPlane)
+	require.True(t, ok, "the hub plane refuses addresses outside its network")
+	assert.Equal(t, hubAddress.Masked(), wrapped.network)
+	assert.Equal(t, hubAddress.Addr(), wrapped.hub)
+}
+
+// TestVPNHubKey_HoldsTheResolvedKey checks Codex #2029 round 1 P1 4: the
+// key is resolved once, up front, and the hub reads the held copy; a
+// key-store failure is held and reported when the hub asks.
+func TestVPNHubKey_HoldsTheResolvedKey(t *testing.T) {
+	secrets := &stubSecrets{}
+	_, hubKey := wireGuardPlaneRun(t, []vpn.DataPlaneKind{vpn.DataPlaneWireGuard}, "kms://vpn/hub0", hubAddress, secrets)
+	require.NotNil(t, hubKey)
+	require.Equal(t, 1, secrets.calls)
+
+	first, err := hubKey.Key(context.Background(), "kms://vpn/hub0")
+	require.NoError(t, err)
+	require.NotEmpty(t, first)
+	first[0] ^= 0xff
+	second, err := hubKey.Key(context.Background(), "kms://vpn/hub0")
+	require.NoError(t, err)
+	assert.NotEqual(t, first, second, "each caller gets its own copy")
+	assert.Equal(t, 1, secrets.calls, "the hub reads the held key, never the key store")
+
+	failure := errors.New("key store unreachable")
+	failed := resolveVPNHubKeyWith(context.Background(), wireGuardPlaneRunConfig(t), func(context.Context, string) ([]byte, error) { return nil, failure })
+	_, err = failed.Key(context.Background(), "kms://vpn/hub0")
+	assert.ErrorIs(t, err, failure, "a key-store failure is reported when the hub starts")
+}
+
+func wireGuardPlaneRunConfig(t *testing.T) *ServeConfig {
+	t.Helper()
+	cfg, _ := wireGuardPlaneRun(t, []vpn.DataPlaneKind{vpn.DataPlaneWireGuard}, "kms://vpn/hub0", hubAddress, nil)
+	return cfg
 }
 
 // hostRuntimeWithHub is a configuration whose datapath builds the
