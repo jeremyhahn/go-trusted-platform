@@ -52,6 +52,16 @@ func (s *PXEGRPCService) SetPXEService(svc pxe.Service) {
 	s.pxeService = svc
 }
 
+// Close stops the PXE backend, when one is set, releasing its iPXE listener
+// and VLAN integration. The daemon calls it on Stop, ForceStop and startup
+// rollback (#1694).
+func (s *PXEGRPCService) Close() error {
+	if s == nil || s.pxeService == nil {
+		return nil
+	}
+	return s.pxeService.Close()
+}
+
 // requireService returns the canonical not-configured error when this
 // node has no PXE backend. PXE is served by the GATEWAY role, so on a
 // control plane an absent backend is the expected topology, not an

@@ -29,6 +29,7 @@ import (
 	tpconfig "github.com/jeremyhahn/go-trusted-platform/pkg/config"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 )
@@ -42,6 +43,12 @@ type Config struct {
 	// enabled: false builds no PXE backend, and every PXE RPC answers
 	// SERVICE_NOT_CONFIGURED. An invalid enabled section fails daemon start.
 	PXE *pxe.DaemonConfig `yaml:"pxe,omitempty" json:"pxe,omitempty"`
+
+	// PXEFlowManager is the SDN zone flow manager the PXE backend's VLAN
+	// integration moves devices with (quarantine, provisioning, authorized).
+	// serve hands over the attestation SDN policy's manager; an enabled
+	// `pxe:` section without one fails daemon start.
+	PXEFlowManager *policy.ZoneFlowManager `yaml:"-" json:"-"`
 
 	// Logger for daemon operations
 	Logger *logging.Logger

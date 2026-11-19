@@ -964,6 +964,11 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 	defer attestation.Stop()
 	attestationSvcs := attestation.Services
 	sdnPolicy := attestation.SDNPolicy
+	// The PXE backend moves devices between zones on the SDN policy's flow
+	// manager; an enabled pxe: section without one fails daemon start.
+	if sdnPolicy != nil {
+		daemonConfig.PXEFlowManager = sdnPolicy.ZoneFlowManager
+	}
 	reportingRest := attestation.ReportingRest
 
 	// Construct the SDN enrollment hook on the same engine. The webservice

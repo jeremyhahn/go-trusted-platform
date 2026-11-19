@@ -52,6 +52,7 @@ import (
 	ipambackends "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam/backends"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
@@ -996,7 +997,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// default: with no section or enabled: false each call answers
 	// Unavailable with SERVICE_NOT_CONFIGURED (requireService); an invalid
 	// enabled section fails daemon start.
-	pxeGRPCService, err := pxeGRPCServiceFromConfig(context.Background(), logger, config.App, config.PXE)
+	pxeGRPCService, err := pxeGRPCServiceFromConfig(context.Background(), logger, config.App, config.PXE, config.PXEFlowManager)
 	if err != nil {
 		return nil, err
 	}
@@ -2008,7 +2009,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 // enabled section is built against the SDN network plan, initialized, and
 // set as the backend; an invalid section returns its typed error so the
 // daemon does not start.
-func pxeGRPCServiceFromConfig(ctx context.Context, logger *logging.Logger, a *app.App, section *pxe.DaemonConfig) (*PXEGRPCService, error) {
+func pxeGRPCServiceFromConfig(ctx context.Context, logger *logging.Logger, a *app.App, section *pxe.DaemonConfig, flows *policy.ZoneFlowManager) (*PXEGRPCService, error) {
 	svc := NewPXEGRPCService(logger, nil)
 	if section == nil || !section.Enabled {
 		return svc, nil
@@ -2028,10 +2029,19 @@ func pxeGRPCServiceFromConfig(ctx context.Context, logger *logging.Logger, a *ap
 	if err != nil {
 		return nil, err
 	}
+	// The quarantine, provisioning and authorized transitions are flows on
+	// the SDN zone flow manager; without one they would be no-ops, so an
+	// enabled backend refuses to start instead (#1694).
+	if flows == nil {
+		return nil, pxe.ErrInvalidConfiguration{Field: "pxe.enabled", Reason: "the SDN zone flow manager is required"}
+	}
 	backend := pxe.NewService(
 		pxe.WithLogger(logger),
 		pxe.WithStateManager(pxe.NewStateManager()),
-		pxe.WithVLANIntegration(pxe.NewVLANIntegrationWrapper(pxe.WithBridgeName(cfg.BridgeName))),
+		pxe.WithVLANIntegration(pxe.NewVLANIntegrationWrapper(
+			pxe.WithBridgeName(cfg.BridgeName),
+			pxe.WithFlowManager(flows),
+		)),
 	)
 	if err := backend.Initialize(ctx, cfg); err != nil {
 		return nil, err
