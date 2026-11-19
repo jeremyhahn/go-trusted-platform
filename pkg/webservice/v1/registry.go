@@ -38,6 +38,7 @@ import (
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/common"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	devicepkg "github.com/jeremyhahn/go-trusted-platform/pkg/device"
 	deviceentities "github.com/jeremyhahn/go-trusted-platform/pkg/device/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/dns"
@@ -2266,6 +2267,13 @@ func (registry *HandlerRegistry) PXEWebhookEnabled() bool {
 // (pxe.ServiceConfig.WebhookSecret).
 func (registry *HandlerRegistry) PXEWebhookSecret() string {
 	return registry.params.PXEWebhookSecret
+}
+
+// SetPXEWebhook sets PXEWebhookEnabled and PXEWebhookSecret from the daemon
+// pxe: section, so the install-completion route follows the configuration
+// (#1694).
+func (p *RegistryParams) SetPXEWebhook(section *pxe.DaemonConfig) {
+	p.PXEWebhookEnabled, p.PXEWebhookSecret = section.Webhook()
 }
 
 // NTPServiceServer returns the in-process NTPService gRPC implementation, or nil.

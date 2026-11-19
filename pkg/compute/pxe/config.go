@@ -219,6 +219,16 @@ type DaemonConfig struct {
 	BootEntries []ipxe.BootEntry `yaml:"boot-entries,omitempty" json:"boot-entries,omitempty" mapstructure:"boot-entries"`
 }
 
+// Webhook returns whether the install-completion webhook is served and the
+// HMAC key it verifies reports with. It is served only when the section and
+// its webhook are both enabled; a nil section serves nothing (#1694).
+func (c *DaemonConfig) Webhook() (enabled bool, secret string) {
+	if c == nil || !c.Enabled || !c.WebhookEnabled {
+		return false, ""
+	}
+	return true, c.WebhookSecret
+}
+
 // ToServiceConfig builds the PXE ServiceConfig for an enabled section. A nil
 // or disabled section returns nil and no error: no backend is built. An
 // enabled section starts from NewServiceConfig(plan), takes the fields it

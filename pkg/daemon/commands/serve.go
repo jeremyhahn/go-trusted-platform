@@ -1328,6 +1328,9 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			if svc := platformDaemon.PXEGRPCServiceServer(); svc != nil {
 				params.PXEServiceServer = svc
 			}
+			// The install-completion webhook follows the pxe: section's
+			// webhook-enabled and webhook-secret (#1694).
+			params.SetPXEWebhook(App.PXEConfig)
 			if svc := platformDaemon.NTPGRPCServiceServer(); svc != nil {
 				params.NTPServiceServer = svc
 			}
