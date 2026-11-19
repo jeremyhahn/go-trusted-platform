@@ -28,6 +28,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restpxe "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/pxe"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -163,6 +164,66 @@ func TestPXEWebhook_UnsignedReportIsRefused(t *testing.T) {
 			assert.Equal(t, http.StatusUnauthorized, code)
 			assert.Zero(t, server.calls, "an unsigned report reached WebhookComplete")
 			assert.Equal(t, pxeInstalling, server.state)
+		})
+	}
+}
+
+// pxeConfigRegistry answers the webhook switch and key from a real
+// HandlerRegistry whose params were filled from a pxe: config, so the route
+// is built from the config rather than from hand-set registry fields.
+type pxeConfigRegistry struct {
+	*testHandlerRegistry
+	real *HandlerRegistry
+}
+
+func (r *pxeConfigRegistry) PXEWebhookEnabled() bool  { return r.real.PXEWebhookEnabled() }
+func (r *pxeConfigRegistry) PXEWebhookSecret() string { return r.real.PXEWebhookSecret() }
+
+// TestPXEWebhookRouteFromConfig: the daemon pxe: section's webhook-enabled
+// and webhook-secret reach the registry, so the install-completion route is
+// served exactly when the section and its webhook are both enabled (#1694).
+func TestPXEWebhookRouteFromConfig(t *testing.T) {
+	cases := []struct {
+		name    string
+		section *pxe.DaemonConfig
+		want    int
+	}{
+		{"no pxe section", nil, http.StatusNotFound},
+		{"pxe disabled", &pxe.DaemonConfig{WebhookEnabled: true, WebhookSecret: pxeTestWebhookSecret}, http.StatusNotFound},
+		{"webhook disabled", &pxe.DaemonConfig{Enabled: true, WebhookSecret: pxeTestWebhookSecret}, http.StatusNotFound},
+		{"webhook enabled", &pxe.DaemonConfig{Enabled: true, WebhookEnabled: true, WebhookSecret: pxeTestWebhookSecret}, http.StatusOK},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := &recordingPXEServer{state: pxeInstalling}
+			var params RegistryParams
+			params.SetPXEWebhook(tc.section)
+
+			logger := testLogger()
+			respWriter := response.NewResponseWriter(logger, nil)
+			registry := &pxeConfigRegistry{
+				testHandlerRegistry: &testHandlerRegistry{
+					tokenHandler:   &mockTokenHandler{},
+					responseWriter: respWriter,
+					pxeService:     server,
+				},
+				real: &HandlerRegistry{params: params},
+			}
+			root := mux.NewRouter()
+			NewRouter(logger, nil, nil, nil, registry, respWriter).
+				RegisterRoutes(root.PathPrefix("/api/v1").Subrouter())
+
+			req := httptest.NewRequest(http.MethodPost, pxeWebhookPath, strings.NewReader(pxeWebhookBody))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set(restpxe.WebhookSignatureHeader, signedPXEWebhook())
+			req.TLS = &tls.ConnectionState{
+				PeerCertificates: []*x509.Certificate{pxeDeviceCert},
+				VerifiedChains:   [][]*x509.Certificate{{pxeDeviceCert}},
+			}
+			rec := httptest.NewRecorder()
+			root.ServeHTTP(rec, req)
+
+			assert.Equal(t, tc.want, rec.Code)
 		})
 	}
 }
