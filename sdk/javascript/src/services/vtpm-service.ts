@@ -43,6 +43,7 @@ import type {
   ExtendBundlePCRResponse,
   ReadBundlePCRResponse,
   VTPMRuntimeStatus,
+  VTPMBundle,
   CreateBundleOptions,
   CreateTemplateOptions,
 } from '../types/vtpm.js';
@@ -233,6 +234,8 @@ export class VTPMService extends BaseService {
    * @param request - List request with filters (mode, labels, pagination, and
    *                  optional deviceProfileId to return only the bundle bound
    *                  to a given device profile)
+   *                  The REST handler pages by `limit` and `offset`; both
+   *                  are sent as-is.
    * @returns List of bundles
    */
   async listBundles(request?: ListBundlesRequest): Promise<ApiResponse<ListBundlesResponse>> {
@@ -248,11 +251,11 @@ export class VTPMService extends BaseService {
     if (request?.options?.deviceProfileId !== undefined) {
       filters.device_profile_id = request.options.deviceProfileId;
     }
+    if (request?.options?.offset !== undefined) {
+      filters.offset = request.options.offset;
+    }
     return this.client.get<ListBundlesResponse>(this.buildUrl('/bundles', {
       limit: request?.options?.limit,
-      page: request?.options?.offset !== undefined
-        ? Math.floor(request.options.offset / (request.options.limit ?? 10)) + 1
-        : undefined,
       filters,
     }));
   }
@@ -507,6 +510,10 @@ export class VTPMService extends BaseService {
   /**
    * Create a vTPM template
    *
+   * Posts the REST handler's flat body `{ id, description?, ek_algorithm?,
+   * secure_boot_enabled }`; the handler rejects unknown fields, so the
+   * request's `options` wrapper is never sent.
+   *
    * @param request - Template creation request
    * @returns Created template
    */
@@ -558,5 +565,17 @@ export class VTPMService extends BaseService {
       this.buildUrl(`/templates/${this.encodePathSegment(request.options.templateId)}/clone`),
       { hostname: request.options.hostname, labels: request.options.labels }
     );
+  }
+
+
+  /**
+   * Import a bundle archive.
+   *
+   * POST /api/v1/vtpm/bundles/import reads the raw request body as the
+   * gzip tar that GET /bundles/{id}/export writes (at most 100 MB), so the
+   * Blob is sent unchanged.
+   */
+  async importBundle(archive: Blob): Promise<ApiResponse<VTPMBundle>> {
+    return this.client.post<VTPMBundle>(this.buildUrl('/bundles/import'), archive);
   }
 }

@@ -97,6 +97,12 @@ export {
   type RegistryTagList,
   type RegistryComponentHealth,
   SDNService,
+  SwitchService,
+  SWITCH_MAX_VLAN_ID,
+  type SwitchPortMode,
+  type SwitchPortStatus,
+  type SwitchPortActionResponse,
+  type SwitchSetPortVLANResponse,
   TenantService,
   TPMService,
   VTPMService,
@@ -147,6 +153,18 @@ export type {
   ListNTPSourcesResponse,
   StepNTPClockResponse,
 } from './services/ntp-service.js';
+
+// BMC users and web certificate (#1720)
+export {
+  BMCService,
+  BMC_PRIVILEGE_CODES,
+  bmcPrivilegeName,
+  type BMCPrivilegeName,
+  type BMCUser,
+  type CreateBMCUserRequest,
+  type ReplaceBMCWebCertificateRequest,
+  type BMCStatusResponse,
+} from './services/bmc-service.js';
 
 // =============================================================================
 // Error Exports
@@ -331,6 +349,7 @@ export type {
   DeleteIAKRequest,
   CreateIDevIDCSRRequest,
   CreateIAKCSRRequest,
+  CreateLDevIDRequest,
   InstallIDevIDCertificateRequest,
   InstallIAKCertificateRequest,
   GetIDevIDCertificateRequest,
@@ -351,6 +370,7 @@ export type {
   DeleteIAKResponse,
   CreateIDevIDCSRResponse,
   CreateIAKCSRResponse,
+  CreateLDevIDResponse,
   InstallIDevIDCertificateResponse,
   InstallIAKCertificateResponse,
   GetIDevIDCertificateResponse,
@@ -424,6 +444,11 @@ export type {
   ReadNVRAMResponse,
   UndefineNVRAMResponse,
   GetRandomResponse,
+  TPMCapabilitiesResponse,
+  TPMKeyRef,
+  TPMPlatformAttributesResponse,
+  CertifyRequest,
+  CertifyResponse,
   ExtendPCRRequest,
   ExtendPCRResponse,
   TPMMakeCredentialRequest,
@@ -651,7 +676,17 @@ export type {
   ContainerMetricsResponse,
   ExecContainerResponse,
   AttestVMResponse,
+  AttestContainerRequest,
+  AttestContainerResponse,
   VerifyVMAttestationResponse,
+  SuspendVMResponse,
+  ResumeVMResponse,
+  GetSnapshotResponse,
+  VMMigrationSpec,
+  PrepareMigrationRequest,
+  PrepareMigrationResponse,
+  FinalizeMigrationRequest,
+  FinalizeMigrationResponse,
 } from './types/compute.js';
 
 // IAM types
@@ -862,6 +897,21 @@ export type {
   AuthenticatePortResponse,
   RevokePortAuthResponse,
   GetPortStatsResponse,
+  SetPortStateRequest,
+  SetPortStateResponse,
+  SDNPolicyType,
+  SDNPolicyStatus,
+  SDNPolicyRule,
+  SDNPolicyRuleAction,
+  SDNPolicyRuleMatch,
+  SDNPolicyTargetType,
+  SDNPolicyTarget,
+  SDNPolicyConfig,
+  SDNPolicy,
+  ApplyPolicyRequest,
+  ApplyPolicyResponse,
+  GetPolicyResponse,
+  ListPoliciesResponse,
   GetFlowStatsResponse,
 } from './types/sdn.js';
 
@@ -1045,11 +1095,54 @@ export type {
   ListVPNPosturePoliciesResponse,
 } from './types/vpn.js';
 
+// BMC types (#1736)
+export type {
+  BMCPowerStatus,
+  BMCBootDevice,
+  BMCMountISORequest,
+  BMCVirtualMediaStatus,
+  BMCSensor,
+  BMCSystemInfo,
+  BMCProvisionStatus,
+  BMCWebCertificate,
+  BMCOperationResult,
+} from './services/bmc-service.js';
+
+// Tenant lifecycle, quota and DEK types (#1758)
+export type {
+  Tenant,
+  TenantState,
+  TenantStatus,
+  TenantDEKStatus,
+  ComputeQuota,
+  NetworkQuota,
+  StorageQuota,
+  CheckQuotaRequest,
+  CheckQuotaResponse,
+  RotateTenantDEKRequest,
+  RotateTenantDEKResponse,
+  GetTenantDEKStatusResponse,
+  GetTenantByNameResponse,
+  UpdateTenantRequest,
+  UpdateTenantResponse,
+  UpdateQuotasRequest,
+  SyncTenantsResponse,
+} from './types/tenant.js';
+
 // =============================================================================
 // QuicBaaS Type Exports (28 services)
 // =============================================================================
 
 // QuicBaaS types are exported from the quicbaas types index
+// Platform daemon status and service lifecycle (#1752)
+export type {
+  DaemonStatusResponse,
+  DaemonServiceInfo,
+  ListDaemonServicesResponse,
+  DaemonServiceAction,
+  DaemonServiceActionResponse,
+} from './types/platform.js';
+
 export * from './types/quicbaas/index.js';
 
 // =============================================================================

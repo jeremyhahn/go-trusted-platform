@@ -162,19 +162,48 @@ export function createLoggingResponseInterceptor(
 }
 
 /**
+ * Turns any HeadersInit (a Headers object, an array of pairs or a plain
+ * record) into a plain record that can be spread. Plain records keep their
+ * key case; the other forms come back with lower-case names.
+ */
+function normalizeHeaders(init: HeadersInit | undefined): Record<string, string> {
+  if (init === undefined || init === null) {
+    return {};
+  }
+  if (init instanceof Headers || Array.isArray(init)) {
+    return Object.fromEntries(new Headers(init));
+  }
+  return init;
+}
+
+/**
+ * Returns the normalized headers with `name` set to `value`, dropping every
+ * existing key that matches `name` case-insensitively first. Fetch joins
+ * same-named headers of different case, so a stale value would otherwise
+ * travel as "old, new".
+ */
+function withHeader(init: HeadersInit | undefined, name: string, value: string): Record<string, string> {
+  const lower = name.toLowerCase();
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(normalizeHeaders(init))) {
+    if (k.toLowerCase() !== lower) {
+      out[k] = v;
+    }
+  }
+  out[name] = value;
+  return out;
+}
+
+/**
  * Creates an authorization header interceptor
  */
 export function createAuthInterceptor(getToken: () => string | Promise<string>): RequestInterceptor {
   return async (config, _context) => {
     const token = await getToken();
-    const headers = config.headers instanceof Headers ? Object.fromEntries(config.headers) : config.headers ?? {};
 
     return {
       ...config,
-      headers: {
-        ...headers,
-        Authorization: `Bearer ${token}`,
-      },
+      headers: withHeader(config.headers, 'Authorization', `Bearer ${token}`),
     };
   };
 }
@@ -187,14 +216,9 @@ export function createRequestIdInterceptor(generateId: () => string = () => cryp
     const requestId = generateId();
     context.metadata['requestId'] = requestId;
 
-    const headers = config.headers instanceof Headers ? Object.fromEntries(config.headers) : config.headers ?? {};
-
     return {
       ...config,
-      headers: {
-        ...headers,
-        'X-Request-ID': requestId,
-      },
+      headers: withHeader(config.headers, 'X-Request-ID', requestId),
     };
   };
 }
@@ -214,7 +238,7 @@ export function createRetryAfterInterceptor(): ResponseInterceptor {
             ...response.error.details,
             context: {
               ...response.error.details?.context,
-              retryAfterSeconds: parseInt(retryAfter, 10) || retryAfter,
+              retryAfterSeconds: Number.isNaN(parseInt(retryAfter, 10)) ? retryAfter : parseInt(retryAfter, 10),
             },
           };
         }

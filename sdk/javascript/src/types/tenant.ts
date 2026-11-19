@@ -526,3 +526,49 @@ export interface GetTenantDEKStatusResponse {
   /** DEK status */
   dekStatus: TenantDEKStatus;
 }
+
+/**
+ * Request to initialise a tenant's barrier
+ */
+export interface InitTenantBarrierRequest {
+  /** Tenant ID */
+  tenantId: string;
+  /** Number of key shares needed to unseal */
+  threshold?: number;
+  /** Number of key shares to split the key into */
+  shares?: number;
+}
+
+/**
+ * Response from initialising a tenant's barrier
+ */
+export interface InitTenantBarrierResponse {
+  /** Operation status */
+  status: TenantStatus;
+}
+
+/**
+ * Request to unseal a tenant's barrier
+ */
+export interface UnsealTenantBarrierRequest {
+  /** Tenant ID */
+  tenantId: string;
+  /** Unseal key, base64 encoded */
+  key: string;
+}
+
+/**
+ * Response from unsealing a tenant's barrier
+ */
+export interface UnsealTenantBarrierResponse {
+  /** Operation status */
+  status: TenantStatus;
+}
+
+/**
+ * Response from sealing a tenant's barrier
+ */
+export interface SealTenantBarrierResponse {
+  /** Operation status */
+  status: TenantStatus;
+}

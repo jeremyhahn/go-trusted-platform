@@ -16,6 +16,7 @@ import type {
   RevokeCertificateRequest,
   RenewCertificateRequest,
   VerifyCertificateRequest,
+  SignCSRRequest,
   GetCAInfoResponse,
   IssueCertificateResponse,
   GetCertificateResponse,
@@ -175,6 +176,17 @@ export class CAService extends BaseService {
    */
   async verifyCertificate(request: VerifyCertificateRequest): Promise<ApiResponse<VerifyCertificateResponse>> {
     return this.client.post<VerifyCertificateResponse>(this.buildUrl('/certificates/verify'), request);
+  }
+
+  /**
+   * Certify, for code signing, the KMS key a CSR names. The caller's token
+   * must carry the ca:sign-csr scope.
+   *
+   * @param request - The CSR in PEM format and an optional validity
+   * @returns The issued certificate
+   */
+  async signCSR(request: SignCSRRequest): Promise<ApiResponse<IssueCertificateResponse>> {
+    return this.client.post<IssueCertificateResponse>(this.buildUrl('/sign-csr'), request);
   }
 
   /**
