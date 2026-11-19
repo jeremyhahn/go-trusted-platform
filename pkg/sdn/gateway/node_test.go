@@ -747,6 +747,95 @@ func (h *registeredTestHandler) Stop(ctx context.Context) error  { h.active = fa
 func (h *registeredTestHandler) IsActive() bool                  { return h.active }
 func (h *registeredTestHandler) Health() error                   { return nil }
 
+// flakyStopHandler is a ServiceHandler whose Stop fails failStops times
+// before it succeeds.
+type flakyStopHandler struct {
+	name      string
+	active    bool
+	failStops int
+	stopCalls int
+}
+
+func (h *flakyStopHandler) Name() string                    { return h.name }
+func (h *flakyStopHandler) Start(ctx context.Context) error { h.active = true; return nil }
+func (h *flakyStopHandler) Stop(ctx context.Context) error {
+	h.stopCalls++
+	if h.failStops > 0 {
+		h.failStops--
+		return &ErrServiceUnavailable{Service: h.name, Reason: "test stop failure"}
+	}
+	h.active = false
+	return nil
+}
+func (h *flakyStopHandler) IsActive() bool { return h.active }
+func (h *flakyStopHandler) Health() error  { return nil }
+
+// startFlakyPair starts a gateway with handlers a then b.
+func startFlakyPair(t *testing.T, id string, a, b *flakyStopHandler) *Gateway {
+	t.Helper()
+	gw, err := NewGateway(baseGatewayConfig(id))
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	for _, h := range []*flakyStopHandler{a, b} {
+		if err := gw.RegisterServiceHandler(h); err != nil {
+			t.Fatalf("register %s: %v", h.name, err)
+		}
+	}
+	gw.SetNodeMetrics(validNodeMetrics())
+	if err := gw.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	return gw
+}
+
+// TestGatewayStopRetriesAfterAPartialFailure: a Stop that fails part-way
+// keeps only the services not yet stopped, so the next Stop starts with
+// the one that failed and never re-stops the ones already down.
+func TestGatewayStopRetriesAfterAPartialFailure(t *testing.T) {
+	t.Run("the later service fails", func(t *testing.T) {
+		a := &flakyStopHandler{name: "a"}
+		b := &flakyStopHandler{name: "b", failStops: 1}
+		gw := startFlakyPair(t, "stop-partial", a, b)
+
+		var shutdown *ErrShutdownFailed
+		if err := gw.Stop(context.Background()); !errors.As(err, &shutdown) {
+			t.Fatalf("first Stop = %v, want *ErrShutdownFailed", err)
+		}
+		if a.stopCalls != 0 {
+			t.Fatalf("a stopped %d times after b failed, want 0", a.stopCalls)
+		}
+		if err := gw.Stop(context.Background()); err != nil {
+			t.Fatalf("second Stop: %v", err)
+		}
+		if b.stopCalls != 2 || a.stopCalls != 1 {
+			t.Fatalf("stop calls b=%d a=%d, want b=2 a=1", b.stopCalls, a.stopCalls)
+		}
+		if got := gw.ActiveServices(); len(got) != 0 {
+			t.Fatalf("ActiveServices = %v, want none", got)
+		}
+	})
+
+	t.Run("the earlier service fails after the later one stopped", func(t *testing.T) {
+		a := &flakyStopHandler{name: "a", failStops: 1}
+		b := &flakyStopHandler{name: "b"}
+		gw := startFlakyPair(t, "stop-partial-earlier", a, b)
+
+		if err := gw.Stop(context.Background()); err == nil {
+			t.Fatal("first Stop succeeded, want a failure from a")
+		}
+		if got := gw.ActiveServices(); len(got) != 1 || got[0] != "a" {
+			t.Fatalf("ActiveServices after a failed = %v, want [a]", got)
+		}
+		if err := gw.Stop(context.Background()); err != nil {
+			t.Fatalf("second Stop: %v", err)
+		}
+		if b.stopCalls != 1 || a.stopCalls != 2 {
+			t.Fatalf("stop calls b=%d a=%d, want b=1 a=2", b.stopCalls, a.stopCalls)
+		}
+	})
+}
+
 func TestGateway_RegisterServiceHandler(t *testing.T) {
 	gw, err := NewGateway(validConfig())
 	if err != nil {
