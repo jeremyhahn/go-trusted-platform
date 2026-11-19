@@ -61,10 +61,13 @@ type MTLSInterceptorConfig struct {
 	// refused.
 	Permission func(fullMethod string) string
 
-	// Roles resolves the certificate principal's authoritative IAM roles
-	// (tenant, subject) before the PEP check. A nil Roles refuses every
-	// non-skipped method: a certificate carries no roles of its own.
-	Roles func(ctx context.Context, tenantID, subject string) ([]string, error)
+	// Principal resolves the certificate principal (tenant, subject) to its
+	// stored IAM user ID and authoritative IAM roles before the PEP check.
+	// The PEP is asked about the stored user ID, not the certificate
+	// identifier, so ABAC user selectors match. A nil Principal, an error or
+	// an empty user ID refuses every non-skipped method: a certificate
+	// carries no roles of its own.
+	Principal func(ctx context.Context, tenantID, subject string) (userID string, roles []string, err error)
 }
 
 // ErrMTLSNoPeerInfo indicates no peer info was found in the gRPC context.
@@ -224,18 +227,22 @@ func authorizeMTLSMethod(ctx context.Context, cfg *MTLSInterceptorConfig, fullMe
 	if identity == nil {
 		return status.Error(codes.PermissionDenied, "mtls: no certificate principal")
 	}
-	if cfg.Roles == nil {
-		return status.Errorf(codes.PermissionDenied, "mtls: no IAM role resolver to authorize %s", fullMethod)
+	if cfg.Principal == nil {
+		return status.Errorf(codes.PermissionDenied, "mtls: no IAM principal resolver to authorize %s", fullMethod)
 	}
-	roles, err := cfg.Roles(ctx, identity.TenantID, identity.ID)
+	userID, roles, err := cfg.Principal(ctx, identity.TenantID, identity.ID)
 	if err != nil {
 		if cfg.Logger != nil {
-			cfg.Logger.Debug("mtls: role resolution failed", "method", fullMethod, "error", err)
+			cfg.Logger.Debug("mtls: principal resolution failed", "method", fullMethod, "error", err)
 		}
-		return status.Errorf(codes.Unavailable, "mtls: resolving the roles of %s for %s failed: %v", identity.ID, fullMethod, err)
+		return status.Errorf(codes.Unavailable, "mtls: resolving the IAM user of %s for %s failed: %v", identity.ID, fullMethod, err)
+	}
+	if userID == "" {
+		return status.Errorf(codes.PermissionDenied, "mtls: %s (tenant %s) resolves to no stored IAM user ID for %s",
+			identity.ID, identity.TenantID, fullMethod)
 	}
 	allowed, err := checkPrincipalPermission(ctx, cfg.PEP, &tokenPrincipal{
-		Subject:  identity.ID,
+		Subject:  userID,
 		TenantID: identity.TenantID,
 		Roles:    roles,
 	}, resource, action)

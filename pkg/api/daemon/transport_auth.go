@@ -17,6 +17,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"fmt"
 	"os"
 	"strings"
 
@@ -101,7 +102,7 @@ var grpcTCPSkipMethods = []string{
 	platformv1.DeviceService_BootDelivery_FullMethodName,
 }
 
-func selectGRPCTCPAuth(config *Config, shared *platformTokenValidator, pep quicbaassdk.IAMPEPClient, roles func(ctx context.Context, tenantID, subject string) ([]string, error), logger *logging.Logger, skipMethods []string) (grpcAuthSelection, error) {
+func selectGRPCTCPAuth(config *Config, shared *platformTokenValidator, pep quicbaassdk.IAMPEPClient, principal func(ctx context.Context, tenantID, subject string) (string, []string, error), logger *logging.Logger, skipMethods []string) (grpcAuthSelection, error) {
 	if config.EnableMTLS {
 		if config.CAService == nil {
 			return grpcAuthSelection{}, ErrTransportAuthRequired{
@@ -122,7 +123,7 @@ func selectGRPCTCPAuth(config *Config, shared *platformTokenValidator, pep quicb
 			Logger:        logger,
 			SkipMethods:   skipMethods,
 			PEP:           pep,
-			Roles:         roles,
+			Principal:     principal,
 		}
 		logger.Info("gRPC TCP server: mTLS authentication enabled")
 		return grpcAuthSelection{
@@ -176,18 +177,19 @@ func selectGRPCTCPAuth(config *Config, shared *platformTokenValidator, pep quicb
 	}, nil
 }
 
-// iamUserRoles returns the mTLS role resolver backed by the IAM user record:
-// the certificate principal's roles are the roles IAM holds for the user, so
-// a certificate never carries its own. A nil client gives a nil resolver,
+// iamUserPrincipal returns the mTLS principal resolver backed by the IAM user
+// record: the certificate principal is the stored user ID and the roles IAM
+// holds for that user, so a certificate never carries its own roles and the
+// PEP's user selectors see the stored ID. A record without an ID is refused. A nil client gives a nil resolver,
 // which the mTLS interceptor refuses (fail closed).
-func iamUserRoles(client quicbaassdk.IAMClient) func(ctx context.Context, tenantID, subject string) ([]string, error) {
+func iamUserPrincipal(client quicbaassdk.IAMClient) func(ctx context.Context, tenantID, subject string) (string, []string, error) {
 	if client == nil {
 		return nil
 	}
-	return func(ctx context.Context, tenantID, subject string) ([]string, error) {
+	return func(ctx context.Context, tenantID, subject string) (string, []string, error) {
 		users := client.User()
 		if users == nil {
-			return nil, ErrIAMServiceNotAvailable{}
+			return "", nil, ErrIAMServiceNotAvailable{}
 		}
 		// The subject is the certificate's email SAN, else its CN: neither
 		// is the stored user ID, so look the user up by what the subject
@@ -200,12 +202,14 @@ func iamUserRoles(client quicbaassdk.IAMClient) func(ctx context.Context, tenant
 			user, err = users.FindByUsername(ctx, tenantID, subject)
 		}
 		if err != nil {
-			return nil, err
+			return "", nil, err
 		}
-		if user == nil {
-			return nil, nil
+		// The PEP is asked about the stored user ID, so a record without
+		// one fails closed (#1989).
+		if user == nil || user.ID == "" {
+			return "", nil, fmt.Errorf("mtls: IAM holds no user ID for %q in tenant %q", subject, tenantID)
 		}
-		return user.Roles, nil
+		return user.ID, user.Roles, nil
 	}
 }
 
