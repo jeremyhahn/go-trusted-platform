@@ -1593,6 +1593,34 @@ func TestDaemonStopStopsPXEBackend(t *testing.T) {
 	}
 }
 
+// TestDaemonRollbackKeepsPXEBackendUsable: startup rollback frees the iPXE
+// listener but keeps the backend initialized, so a Start retry serves PXE
+// device operations and StartService (#1896 P1).
+func TestDaemonRollbackKeepsPXEBackendUsable(t *testing.T) {
+	svc, addr := pxeStartedBackend(t)
+	config := DefaultConfig()
+	config.Logger = logging.DefaultLogger()
+	service, err := NewService(config)
+	require.NoError(t, err)
+	d := &Daemon{logger: config.Logger, config: config, service: service, pxeGRPCService: svc}
+	d.running.Store(true)
+
+	d.rollbackPartialStart(context.Background())
+
+	l, err := net.Listen("tcp", addr)
+	require.NoError(t, err, "the PXE listener is still bound after rollback")
+	_ = l.Close()
+
+	ctx := context.Background()
+	_, err = svc.ListDevices(ctx, &platformv1.ListPXEDevicesRequest{})
+	require.NoError(t, err)
+	_, err = svc.RegisterDevice(ctx, &platformv1.RegisterPXEDeviceRequest{MacAddress: "00:11:22:33:44:ee", PortId: "port-1"})
+	require.NoError(t, err)
+	_, err = svc.StartService(ctx, &platformv1.StartPXEServiceRequest{})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+}
+
 // TestPXEGRPC_UpdateStateFailsWhenTheVLANMoveFails checks that the
 // UpdateState RPC on the configured backend fails, and the device keeps
 // its state, when the flow manager cannot move the device (#1694).

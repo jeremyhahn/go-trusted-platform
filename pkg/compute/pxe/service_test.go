@@ -1463,6 +1463,74 @@ func TestService_UpdateDeviceState_VLANFailureFailsClosed(t *testing.T) {
 	}
 }
 
+// TestService_RegisterDevice_QuarantineFailureFailsClosed: a registration
+// whose quarantine move fails registers nothing, so a retry once the flow
+// manager recovers succeeds (#1896 P1).
+func TestService_RegisterDevice_QuarantineFailureFailsClosed(t *testing.T) {
+	vlan := &failingFlowVLAN{VLANIntegration: NewNoopVLANIntegration(testNetPlan)}
+	svc := &service{
+		logger:       logging.DefaultLogger(),
+		stateManager: NewStateManager(),
+		vlanManager:  vlan,
+		config:       createTestConfig(),
+	}
+	svc.initialized.Store(true)
+	ctx := context.Background()
+
+	vlan.fail.Store(true)
+	device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
+	require.Error(t, err)
+	assert.Nil(t, device)
+	assert.ErrorIs(t, err, errFlowMove)
+
+	_, err = svc.GetDeviceByMAC(ctx, "00:11:22:33:44:55")
+	require.Error(t, err, "a device whose quarantine move failed is registered")
+
+	vlan.fail.Store(false)
+	device, err = svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
+	require.NoError(t, err)
+	require.NotNil(t, device)
+}
+
+// TestService_UpdateDeviceState_CommitsCurrentVLAN: a state move records the
+// VLAN it enforced, so GetDevice and a VLAN filter see the device where its
+// port is (#1896 P1).
+func TestService_UpdateDeviceState_CommitsCurrentVLAN(t *testing.T) {
+	cfg := createTestConfig()
+	require.NotEqual(t, cfg.QuarantineVLAN, cfg.ProvisioningVLAN)
+	vlan := &failingFlowVLAN{VLANIntegration: NewNoopVLANIntegration(testNetPlan)}
+	svc := &service{
+		logger:       logging.DefaultLogger(),
+		stateManager: NewStateManager(),
+		vlanManager:  vlan,
+		config:       cfg,
+	}
+	svc.initialized.Store(true)
+	ctx := context.Background()
+
+	device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
+	require.NoError(t, err)
+	assert.Equal(t, cfg.QuarantineVLAN, device.CurrentVLAN)
+
+	require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, StateBooting, "test"))
+	got, err := svc.GetDevice(ctx, device.ID)
+	require.NoError(t, err)
+	assert.Equal(t, cfg.ProvisioningVLAN, got.CurrentVLAN)
+
+	inProvisioning, err := svc.ListDevices(ctx, &DeviceFilter{VLAN: cfg.ProvisioningVLAN})
+	require.NoError(t, err)
+	require.Len(t, inProvisioning, 1)
+	assert.Equal(t, device.ID, inProvisioning[0].ID)
+	inQuarantine, err := svc.ListDevices(ctx, &DeviceFilter{VLAN: cfg.QuarantineVLAN})
+	require.NoError(t, err)
+	assert.Empty(t, inQuarantine)
+
+	require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, StateFailed, "test"))
+	got, err = svc.GetDevice(ctx, device.ID)
+	require.NoError(t, err)
+	assert.Equal(t, cfg.QuarantineVLAN, got.CurrentVLAN)
+}
+
 // blockingFlowVLAN blocks ApplyQuarantineFlows until release is closed.
 type blockingFlowVLAN struct {
 	VLANIntegration
