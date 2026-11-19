@@ -158,6 +158,29 @@ func TestServeProcess_WireGuardChildHostsThePlanes(t *testing.T) {
 	assert.True(t, stopped, "the plane stops with the child")
 }
 
+// TestServeProcess_WireGuardChildResolvesTheHubKeyBeforeHardening checks
+// Codex #2029 round 1 P1 4: the hardened child may open only AF_UNIX and
+// AF_NETLINK sockets, so the hub key is resolved before EnterHardened and
+// the held key reaches the plane factory.
+func TestServeProcess_WireGuardChildResolvesTheHubKeyBeforeHardening(t *testing.T) {
+	run := newWireGuardRun(true)
+	run.hubKey = &vpnHubKey{ref: "kms://vpn/hub0", key: make([]byte, 32)}
+	factory := &vpnPlaneFactory{planes: []vpn.ManagedDataPlane{&fakeVPNPlane{}}}
+	opts, cancel, done := startWireGuardProcess(t, run, factory)
+
+	require.Eventually(t, func() bool {
+		_, err := installVPNPeer(t, opts.socket)
+		return err == nil
+	}, 5*time.Second, 10*time.Millisecond, "the wireguard child must answer InstallVPNPeer")
+	cancel()
+	require.NoError(t, <-done)
+
+	assert.Equal(t, 1, run.keyResolves, "the key is resolved once")
+	assert.Zero(t, run.keyHardened, "the key is resolved before the child hardens")
+	assert.Len(t, run.hardened, 1, "the child hardens after resolving")
+	assert.Same(t, run.hubKey, factory.hubKey, "the held key reaches the hub")
+}
+
 // A plane that fails to start (an unresolvable key, a hub that cannot be
 // created) keeps the child's hosted services from starting: the
 // supervisor accepts an active service before it reads the start error,
@@ -221,10 +244,10 @@ func TestDatapathVPNPlanes_OnlyTheWireGuardRow(t *testing.T) {
 			deps := newServiceRun().deps()
 			deps.vpnDataPlanes = factory.build
 			cfg := newWireGuardRun(true).loaded
-			gw, err := gateway.NewGateway(&gateway.GatewayConfig{Enabled: true, ID: "gw-test"})
-			require.NoError(t, err)
+			// A resolved key changes nothing: the row decides, not the key.
+			hubKey := &vpnHubKey{ref: "kms://vpn/hub0", key: make([]byte, 32)}
 
-			host, err := deps.datapathVPNPlanes(def, cfg, gw, testLogger())
+			host, err := deps.datapathVPNPlanes(def, cfg, hubKey, testLogger())
 			require.NoError(t, err)
 			assert.Nil(t, host, "only the wireguard child hosts VPN planes")
 			assert.Zero(t, factory.calls)

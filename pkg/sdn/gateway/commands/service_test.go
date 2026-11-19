@@ -435,6 +435,11 @@ func (h *fakeServiceHandler) Health() error { return nil }
 
 // serviceRun records what serveProcess handed its collaborators.
 type serviceRun struct {
+	// keyResolves counts the hub-key resolutions; keyHardened is how many
+	// hardenings had run at the first one.
+	keyResolves int
+	keyHardened int
+	hubKey      *vpnHubKey
 	hardened    []process.Definition
 	built       *ServeConfig
 	handler     *fakeServiceHandler
@@ -514,6 +519,13 @@ func (r *serviceRun) deps() serviceDeps {
 				return r.leaseControl, r.journal, nil
 			}
 			return fakeLeaseControl{}, nil, nil
+		},
+		resolveVPNHubKey: func(context.Context, *ServeConfig, *slog.Logger) *vpnHubKey {
+			if r.keyResolves == 0 {
+				r.keyHardened = len(r.hardened)
+			}
+			r.keyResolves++
+			return r.hubKey
 		},
 	}
 }
