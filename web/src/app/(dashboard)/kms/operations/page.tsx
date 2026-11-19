@@ -127,6 +127,12 @@ export default function KmsOperationsPage() {
   const [vMac, setVMac] = React.useState("");
   const [vHash, setVHash] = React.useState("SHA256");
   const [vResult, setVResult] = React.useState<string | null>(null);
+  // Bumped by every verify request and every edit of a verify input.
+  const verifySeq = React.useRef(0);
+  const clearVerdict = () => {
+    verifySeq.current++;
+    setVResult(null);
+  };
 
   // Random and data keys
   const [randomBytes, setRandomBytes] = React.useState("32");
@@ -183,9 +189,12 @@ export default function KmsOperationsPage() {
   const onVerifyHmac = async () => {
     // A verdict belongs to the inputs it was computed for (#2024 Codex P1):
     // clear it before the call so a failed request leaves no stale verdict.
+    // A response that arrives after an edit or a newer request belongs to
+    // other inputs and is dropped (#2024 Codex round 2 P1).
     setVResult(null);
+    const seq = ++verifySeq.current;
     const res = await ops.verifyHmac(vKey, vData, vMac, vHash);
-    if (res !== null) {
+    if (seq === verifySeq.current && res !== null) {
       setVResult(res ? "HMAC valid" : "HMAC invalid");
     }
   };
@@ -337,7 +346,7 @@ export default function KmsOperationsPage() {
             value={vKey}
             onChange={(v) => {
               setVKey(v);
-              setVResult(null);
+              clearVerdict();
             }}
           />
           <Field
@@ -346,7 +355,7 @@ export default function KmsOperationsPage() {
             value={vData}
             onChange={(v) => {
               setVData(v);
-              setVResult(null);
+              clearVerdict();
             }}
           />
           <Field
@@ -355,7 +364,7 @@ export default function KmsOperationsPage() {
             value={vMac}
             onChange={(v) => {
               setVMac(v);
-              setVResult(null);
+              clearVerdict();
             }}
           />
           <Field
@@ -364,7 +373,7 @@ export default function KmsOperationsPage() {
             value={vHash}
             onChange={(v) => {
               setVHash(v);
-              setVResult(null);
+              clearVerdict();
             }}
           />
           <Button onClick={onVerifyHmac} disabled={ops.busy || !vKey || !vData || !vMac}>

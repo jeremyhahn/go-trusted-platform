@@ -54,10 +54,11 @@ interface PolicyView {
 }
 
 // RATE_LIMIT and MIRROR are left out: SDNService.policyRuleToFlowMod installs "normal" for both (#2024 Codex P1).
+// REDIRECT is left out too: the form has no output destination, and a REDIRECT rule
+// without actionValue installs no actions, which drops the traffic (#2024 Codex round 2 P1).
 const RULE_ACTIONS: SDNPolicyRuleAction[] = [
   'POLICY_RULE_ACTION_ALLOW',
   'POLICY_RULE_ACTION_DENY',
-  'POLICY_RULE_ACTION_REDIRECT',
   'POLICY_RULE_ACTION_LOG',
 ];
 
