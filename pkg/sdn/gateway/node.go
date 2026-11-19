@@ -52,7 +52,8 @@ const (
 	ServiceManagementVPN = "management-vpn"
 	// ServiceVPNWireGuard is the management VPN's WireGuard data plane, run
 	// by its own supervised `wireguard` process (ruling 942): it owns the
-	// hub device and serves VPNPlaneService. Nothing enables it yet (#1698).
+	// hub device and serves VPNPlaneService. EnabledServices enables it with
+	// the management VPN when its data-planes offer wireguard (#1698).
 	ServiceVPNWireGuard = "vpn-wireguard"
 )
 
