@@ -587,6 +587,84 @@ func TestGatewayStop_KeepsARetainedCleanupThatFailsToStop(t *testing.T) {
 	assert.Equal(t, 2, svc.stopCalls)
 }
 
+// A start rollback that leaves cleanup pending keeps the services started
+// before it (the host firewall among them) up until Stop finishes that
+// cleanup: a VIP still installed must not lose the filter guarding it.
+func TestGatewayStart_PendingCleanupKeepsEarlierServicesUp(t *testing.T) {
+	backed := func(gw *Gateway, name string, svc *fakeBacked) ServiceHandler {
+		return &backedServiceHandler{gateway: gw, name: name, build: func(*Gateway) (backedService, error) { return svc, nil }}
+	}
+
+	t.Run("a failed start that keeps its cleanup", func(t *testing.T) {
+		gw, err := NewGateway(baseGatewayConfig("pending-keeps-dep"))
+		require.NoError(t, err)
+		dep := &fakeBacked{}
+		svc := &fakeBacked{startErr: errors.New("start failed"), releasePending: true, stopErr: errors.New("release failed")}
+		require.NoError(t, gw.RegisterServiceHandler(backed(gw, "dep", dep)))
+		require.NoError(t, gw.RegisterServiceHandler(backed(gw, "retained", svc)))
+		gw.SetNodeMetrics(validNodeMetrics())
+
+		var startFailed *ErrServiceStartFailed
+		require.True(t, errors.As(gw.Start(context.Background()), &startFailed), "the start error is the handler's")
+		dep.mu.Lock()
+		assert.Equal(t, 0, dep.stopCalls, "the earlier service is not rolled back while cleanup is pending")
+		assert.True(t, dep.started)
+		dep.mu.Unlock()
+		assert.Equal(t, []string{"dep"}, gw.ActiveServices())
+
+		var shutdown *ErrShutdownFailed
+		require.True(t, errors.As(gw.Stop(context.Background()), &shutdown), "the pending cleanup still fails")
+		dep.mu.Lock()
+		assert.Equal(t, 0, dep.stopCalls, "the earlier service outlives a failed cleanup")
+		dep.mu.Unlock()
+
+		svc.mu.Lock()
+		svc.stopErr = nil
+		svc.mu.Unlock()
+		require.NoError(t, gw.Stop(context.Background()))
+		dep.mu.Lock()
+		assert.Equal(t, 1, dep.stopCalls)
+		assert.False(t, dep.started)
+		dep.mu.Unlock()
+		assert.Equal(t, GatewayStateStopped, gw.GetState())
+	})
+
+	t.Run("a rollback stop that fails", func(t *testing.T) {
+		gw, err := NewGateway(baseGatewayConfig("rollback-keeps-dep"))
+		require.NoError(t, err)
+		dep := &fakeBacked{}
+		stuck := &fakeBacked{stopErr: errors.New("release failed")}
+		require.NoError(t, gw.RegisterServiceHandler(backed(gw, "dep", dep)))
+		require.NoError(t, gw.RegisterServiceHandler(backed(gw, "stuck", stuck)))
+		require.NoError(t, gw.RegisterServiceHandler(&refusedServiceHandler{name: "never", reason: "test refusal"}))
+		gw.SetNodeMetrics(validNodeMetrics())
+
+		var unavailable *ErrServiceUnavailable
+		require.True(t, errors.As(gw.Start(context.Background()), &unavailable), "the start error is the refusal")
+		stuck.mu.Lock()
+		assert.Equal(t, 1, stuck.stopCalls)
+		stuck.mu.Unlock()
+		dep.mu.Lock()
+		assert.Equal(t, 0, dep.stopCalls, "the rollback stops at the service that would not stop")
+		assert.True(t, dep.started)
+		dep.mu.Unlock()
+		assert.Equal(t, []string{"dep"}, gw.ActiveServices())
+
+		stuck.mu.Lock()
+		stuck.stopErr = nil
+		stuck.mu.Unlock()
+		require.NoError(t, gw.Stop(context.Background()))
+		stuck.mu.Lock()
+		assert.Equal(t, 2, stuck.stopCalls)
+		assert.False(t, stuck.started)
+		stuck.mu.Unlock()
+		dep.mu.Lock()
+		assert.Equal(t, 1, dep.stopCalls)
+		assert.False(t, dep.started)
+		dep.mu.Unlock()
+	})
+}
+
 // ---------------------------------------------------------------------------
 // The generic handler.
 // ---------------------------------------------------------------------------
