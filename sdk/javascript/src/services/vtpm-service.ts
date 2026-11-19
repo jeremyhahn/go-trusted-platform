@@ -46,6 +46,11 @@ import type {
   VTPMBundle,
   CreateBundleOptions,
   CreateTemplateOptions,
+  BundleMode,
+  EKAlgorithm,
+  VTPMManifest,
+  WireManifest,
+  WireSecureBootKeyPaths,
 } from '../types/vtpm.js';
 import { BUNDLE_MODE_WIRE_NAMES, EK_ALGORITHM_WIRE_NAMES } from '../types/vtpm.js';
 import { encodeOptionalEnum } from './wire-enum.js';
@@ -142,6 +147,104 @@ function toWireCreateTemplate(options: CreateTemplateOptions): WireCreateTemplat
     ...(options.description !== undefined && { description: options.description }),
     ...(ekAlgorithm !== undefined && { ek_algorithm: ekAlgorithm }),
     ...(options.secureBootEnabled !== undefined && { secure_boot_enabled: options.secureBootEnabled }),
+  };
+}
+
+/** TPMStateResponse (pkg/webservice/v1/rest/vtpm/types.go). */
+interface WireTPMStateResponse {
+  state_dir: string;
+  permall_file: string;
+  volatile_file: string;
+}
+
+/** OVMFStateResponse (pkg/webservice/v1/rest/vtpm/types.go). */
+interface WireOVMFStateResponse {
+  nvram_file: string;
+}
+
+/** BundleResponse (pkg/webservice/v1/rest/vtpm/types.go): snake_case at every level. */
+interface WireBundleResponse {
+  id: string;
+  mode: string;
+  manifest: WireManifest;
+  tpm_state: WireTPMStateResponse;
+  ovmf_state: WireOVMFStateResponse;
+  secure_boot_keys?: WireSecureBootKeyPaths;
+  created_at: string;
+  cloned_from?: string;
+}
+
+/** Inverts a wire-name table; an unknown or missing wire name decodes to UNSPECIFIED. */
+function decodeWireEnum<T extends string>(table: Readonly<Record<T, string | undefined>>, wire: string | undefined): T | 'UNSPECIFIED' {
+  if (wire !== undefined) {
+    for (const key of Object.keys(table) as T[]) {
+      if (table[key] === wire) {
+        return key;
+      }
+    }
+  }
+  return 'UNSPECIFIED';
+}
+
+function fromWireManifest(m: WireManifest): VTPMManifest {
+  return {
+    version: m.version,
+    id: m.id,
+    mode: decodeWireEnum<BundleMode>(BUNDLE_MODE_WIRE_NAMES, m.mode) as BundleMode,
+    hostname: m.hostname ?? '',
+    createdAt: m.created_at ?? '',
+    ...(m.ek_certificate !== undefined && {
+      ekCertificate: {
+        subject: m.ek_certificate.subject,
+        issuer: m.ek_certificate.issuer,
+        serialNumber: m.ek_certificate.serial_number,
+        notBefore: m.ek_certificate.not_before ?? '',
+        notAfter: m.ek_certificate.not_after ?? '',
+        fingerprint: m.ek_certificate.fingerprint,
+      },
+    }),
+    ekAlgorithm: decodeWireEnum<EKAlgorithm>(EK_ALGORITHM_WIRE_NAMES, m.ek_algorithm) as EKAlgorithm,
+    ekHandle: m.ek_handle,
+    secureBootEnabled: m.secure_boot_enabled,
+    ...(m.secure_boot_keys !== undefined && {
+      secureBootKeys: {
+        pkFingerprint: m.secure_boot_keys.pk_fingerprint,
+        kekFingerprint: m.secure_boot_keys.kek_fingerprint,
+        dbFingerprint: m.secure_boot_keys.db_fingerprint,
+        ownerGuid: m.secure_boot_keys.owner_guid,
+      },
+    }),
+    ...(m.checksums !== undefined && { checksums: m.checksums }),
+    ...(m.labels !== undefined && { labels: m.labels }),
+    ...(m.cloned_from !== undefined && { clonedFrom: m.cloned_from }),
+  };
+}
+
+/** Maps the handler's BundleResponse onto the SDK's VTPMBundle. */
+function fromWireBundle(b: WireBundleResponse): VTPMBundle {
+  return {
+    id: b.id,
+    mode: decodeWireEnum<BundleMode>(BUNDLE_MODE_WIRE_NAMES, b.mode) as BundleMode,
+    manifest: fromWireManifest(b.manifest),
+    tpmState: {
+      stateDir: b.tpm_state.state_dir,
+      permallFile: b.tpm_state.permall_file,
+      volatileFile: b.tpm_state.volatile_file,
+    },
+    ovmfState: { nvramFile: b.ovmf_state.nvram_file },
+    ...(b.secure_boot_keys !== undefined && {
+      secureBootKeys: {
+        dir: b.secure_boot_keys.dir,
+        pkKey: b.secure_boot_keys.pk_key,
+        pkCrt: b.secure_boot_keys.pk_crt,
+        kekKey: b.secure_boot_keys.kek_key,
+        kekCrt: b.secure_boot_keys.kek_crt,
+        dbKey: b.secure_boot_keys.db_key,
+        dbCrt: b.secure_boot_keys.db_crt,
+      },
+    }),
+    createdAt: b.created_at,
+    ...(b.cloned_from !== undefined && { clonedFrom: b.cloned_from }),
   };
 }
 
@@ -576,6 +679,8 @@ export class VTPMService extends BaseService {
    * Blob is sent unchanged.
    */
   async importBundle(archive: Blob): Promise<ApiResponse<VTPMBundle>> {
-    return this.client.post<VTPMBundle>(this.buildUrl('/bundles/import'), archive);
+    const response = await this.client.post<WireBundleResponse>(this.buildUrl('/bundles/import'), archive);
+    const { data, ...rest } = response;
+    return data === undefined ? rest : { ...rest, data: fromWireBundle(data) };
   }
 }
