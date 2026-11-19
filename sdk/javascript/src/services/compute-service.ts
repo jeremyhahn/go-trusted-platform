@@ -378,7 +378,10 @@ export class ComputeService extends BaseService {
   async finalizeMigration(request: FinalizeMigrationRequest): Promise<ApiResponse<FinalizeMigrationResponse>> {
     return this.client.post<FinalizeMigrationResponse>(
       this.buildUrl(`/migrations/${this.encodePathSegment(request.receiverId)}/finalize`),
-      { commit: request.commit }
+      { commit: request.commit },
+      // No retries: the daemon drops the receiver token before it commits,
+      // so a resend after a lost response answers 404 for a resumed guest.
+      { retry: { enabled: false } }
     );
   }
 

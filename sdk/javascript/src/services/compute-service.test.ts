@@ -9,12 +9,15 @@ import { ComputeService } from './compute-service.js';
 import type { ApiClient } from '../client/api-client.js';
 import type {
   AttachDiskRequest,
+  AttestContainerRequest,
   AttestVMRequest,
   CreateContainerRequest,
   CreateSnapshotRequest,
   CreateVMRequest,
   ExecContainerRequest,
+  FinalizeMigrationRequest,
   MigrateVMRequest,
+  PrepareMigrationRequest,
   VerifyVMAttestationRequest,
 } from '../types/compute.js';
 
@@ -27,6 +30,8 @@ interface Case {
   path: string;
   query?: Array<[string, string]>;
   body?: unknown;
+  /** Third (request options) argument of a POST or PATCH, when one is sent. */
+  options?: unknown;
 }
 
 const BASE = 'https://api.example.com';
@@ -134,10 +139,52 @@ const cases: Case[] = [
   },
   {
     name: 'migrateVM',
-    call: (s) => s.migrateVM(migrateVMRequest),
+    call: (s) => s.migrateVM(migrateVMRequest, { timeoutMs: 600000 }),
     method: 'post',
     path: '/v1/compute/vms/vm%2F1/migrate',
     body: { destinationHost: 'host-b', liveMigration: true, bandwidthLimitMbps: 500 },
+    options: { timeout: 600000 },
+  },
+  {
+    name: 'prepareMigration',
+    call: (s) =>
+      s.prepareMigration({
+        vmId: 'vm/1',
+        vmName: 'vm-a',
+        mode: 'live',
+        spec: { cpu: 2 },
+      } as unknown as PrepareMigrationRequest),
+    method: 'post',
+    path: '/v1/compute/migrations/prepare',
+    body: { vmId: 'vm/1', vmName: 'vm-a', mode: 'live', spec: { cpu: 2 } },
+  },
+  {
+    name: 'finalizeMigration',
+    call: (s) => s.finalizeMigration({ receiverId: 'r/1', commit: true } as FinalizeMigrationRequest),
+    method: 'post',
+    path: '/v1/compute/migrations/r%2F1/finalize',
+    body: { commit: true },
+    options: { retry: { enabled: false } },
+  },
+  {
+    name: 'suspendVM',
+    call: (s) => s.suspendVM('vm/1'),
+    method: 'post',
+    path: '/v1/compute/vms/vm%2F1/suspend',
+    body: {},
+  },
+  {
+    name: 'resumeVM',
+    call: (s) => s.resumeVM('vm/1'),
+    method: 'post',
+    path: '/v1/compute/vms/vm%2F1/resume',
+    body: {},
+  },
+  {
+    name: 'getSnapshot',
+    call: (s) => s.getSnapshot('vm/1', 's/3'),
+    method: 'get',
+    path: '/v1/compute/vms/vm%2F1/snapshots/s%2F3',
   },
   {
     name: 'attestVM',
@@ -277,6 +324,13 @@ const cases: Case[] = [
     method: 'get',
     path: '/v1/compute/containers/ctr%2F1/metrics',
   },
+  {
+    name: 'attestContainer',
+    call: (s) => s.attestContainer({ id: 'ctr/1' } as AttestContainerRequest),
+    method: 'post',
+    path: '/v1/compute/containers/ctr%2F1/attest',
+    body: {},
+  },
 ];
 
 const ALL_METHODS: HttpMethod[] = ['get', 'post', 'patch', 'delete'];
@@ -317,8 +371,12 @@ describe('ComputeService', () => {
       expect([...url.searchParams.entries()]).toEqual(c.query ?? []);
 
       if (c.method === 'post' || c.method === 'patch') {
-        expect(args).toHaveLength(2);
+        // POST and PATCH may carry a third request-options argument, which
+        // is undefined when the call sets no option.
+        expect(args.length).toBeGreaterThanOrEqual(2);
+        expect(args.length).toBeLessThanOrEqual(3);
         expect(args[1]).toEqual(c.body);
+        expect(args[2]).toEqual(c.options);
       } else {
         expect(args).toHaveLength(1);
       }

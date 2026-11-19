@@ -176,6 +176,15 @@ const cases: Case[] = [
     call: (s) => s.activateCredential({ credentialBlob: 'Y3JlZA==', secret: 'c2VjcmV0' }),
     rest: [{ credentialBlob: 'Y3JlZA==', secret: 'c2VjcmV0' }],
   },
+  {
+    name: 'createLDevID',
+    verb: 'post',
+    path: '/v1/idevid/ldevid',
+    call: (s) =>
+      s.createLDevID({ template: { commonName: 'ldevid-001' }, algorithm: 'ECDSA_P384', handle: 0x81020001 }),
+    // The algorithm goes out as its proto enum name.
+    rest: [{ template: { commonName: 'ldevid-001' }, algorithm: 'DEVICE_KEY_ALGORITHM_ECDSA_P384', handle: 0x81020001 }],
+  },
 ];
 
 const verbs: Verb[] = ['get', 'post', 'delete'];
