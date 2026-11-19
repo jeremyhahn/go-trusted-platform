@@ -18,6 +18,7 @@ import (
 	"errors"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1405,4 +1406,121 @@ func TestService_Status_NilStateManager(t *testing.T) {
 	status := svc.Status()
 	assert.NotNil(t, status)
 	assert.Equal(t, 0, status.DeviceCount)
+}
+
+// failingFlowVLAN is a flow manager whose flow moves fail on demand.
+type failingFlowVLAN struct {
+	VLANIntegration
+	fail atomic.Bool
+}
+
+var errFlowMove = errors.New("flow manager unavailable")
+
+func (f *failingFlowVLAN) ApplyQuarantineFlows(ctx context.Context, portID string, mac net.HardwareAddr) error {
+	if f.fail.Load() {
+		return errFlowMove
+	}
+	return f.VLANIntegration.ApplyQuarantineFlows(ctx, portID, mac)
+}
+
+func (f *failingFlowVLAN) ApplyProvisioningFlows(ctx context.Context, portID string, mac net.HardwareAddr) error {
+	if f.fail.Load() {
+		return errFlowMove
+	}
+	return f.VLANIntegration.ApplyProvisioningFlows(ctx, portID, mac)
+}
+
+// TestService_UpdateDeviceState_VLANFailureFailsClosed checks that a
+// failed VLAN move fails the transition: the device keeps its old state
+// and the caller sees the error.
+func TestService_UpdateDeviceState_VLANFailureFailsClosed(t *testing.T) {
+	for _, target := range []ProvisioningState{StateQuarantined, StateFailed, StateBooting} {
+		t.Run(string(target), func(t *testing.T) {
+			vlan := &failingFlowVLAN{VLANIntegration: NewNoopVLANIntegration(testNetPlan)}
+			svc := &service{
+				logger:       logging.DefaultLogger(),
+				stateManager: NewStateManager(),
+				vlanManager:  vlan,
+				config:       createTestConfig(),
+			}
+			svc.initialized.Store(true)
+			ctx := context.Background()
+
+			device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
+			require.NoError(t, err)
+
+			vlan.fail.Store(true)
+			err = svc.UpdateDeviceState(ctx, device.ID, target, "test")
+			require.Error(t, err)
+			var provErr ErrProvisioningFailed
+			require.ErrorAs(t, err, &provErr)
+			assert.ErrorIs(t, err, errFlowMove)
+
+			got, err := svc.GetDevice(ctx, device.ID)
+			require.NoError(t, err)
+			assert.Equal(t, StateDiscovered, got.State)
+		})
+	}
+}
+
+// blockingFlowVLAN blocks ApplyQuarantineFlows until release is closed.
+type blockingFlowVLAN struct {
+	VLANIntegration
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingFlowVLAN) ApplyQuarantineFlows(ctx context.Context, portID string, mac net.HardwareAddr) error {
+	close(b.entered)
+	<-b.release
+	return nil
+}
+
+// TestService_Close_WaitsForInFlightOperations checks that Close waits
+// for a RegisterDevice in flight before it clears the config, so the
+// call returns cleanly, and later calls see ErrServiceNotInitialized.
+func TestService_Close_WaitsForInFlightOperations(t *testing.T) {
+	vlan := &blockingFlowVLAN{
+		VLANIntegration: NewNoopVLANIntegration(testNetPlan),
+		entered:         make(chan struct{}),
+		release:         make(chan struct{}),
+	}
+	svc := &service{
+		logger:       logging.DefaultLogger(),
+		stateManager: NewStateManager(),
+		vlanManager:  vlan,
+		config:       createTestConfig(),
+	}
+	svc.initialized.Store(true)
+	ctx := context.Background()
+
+	type result struct {
+		device *DeviceInfo
+		err    error
+	}
+	registered := make(chan result, 1)
+	go func() {
+		d, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
+		registered <- result{d, err}
+	}()
+	<-vlan.entered
+
+	closed := make(chan error, 1)
+	go func() { closed <- svc.Close() }()
+
+	select {
+	case <-closed:
+		t.Fatal("Close returned while RegisterDevice was in flight")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(vlan.release)
+	r := <-registered
+	require.NoError(t, r.err)
+	require.NotNil(t, r.device)
+	require.NoError(t, <-closed)
+
+	_, err := svc.RegisterDevice(ctx, "00:11:22:33:44:66", "port-2")
+	var notInit ErrServiceNotInitialized
+	assert.ErrorAs(t, err, &notInit)
 }
