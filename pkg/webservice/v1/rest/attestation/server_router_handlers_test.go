@@ -22,6 +22,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
@@ -164,6 +165,28 @@ var attestationRoutes = []attestationRoute{
 		},
 	},
 	{
+		// The query carries the page and the host filter (#1686).
+		name: "list manifests paged", method: http.MethodGet,
+		path: "/api/v1/attestation/manifests?host_id=h1&limit=10&offset=20", status: http.StatusOK,
+		check: func(t *testing.T, req proto.Message, payload map[string]any) {
+			got := req.(*platformv1.ListManifestsRequest)
+			assert.Equal(t, "h1", got.GetHostId())
+			assert.Equal(t, uint32(10), got.GetLimit())
+			assert.Equal(t, uint32(20), got.GetOffset())
+		},
+	},
+	{
+		// The query carries the time window, as gRPC does (#1686).
+		name: "list manifests time window", method: http.MethodGet,
+		path:   "/api/v1/attestation/manifests?start_time=2023-11-14T22:13:20Z&end_time=2023-11-14T23:13:20Z",
+		status: http.StatusOK,
+		check: func(t *testing.T, req proto.Message, payload map[string]any) {
+			got := req.(*platformv1.ListManifestsRequest)
+			assert.Equal(t, int64(1700000000), got.GetStartTime().AsTime().Unix())
+			assert.Equal(t, int64(1700003600), got.GetEndTime().AsTime().Unix())
+		},
+	},
+	{
 		name: "build manifest", method: http.MethodPost, path: "/api/v1/attestation/manifests/build",
 		body: `{"nonce":"AQID","vmIds":["vm-1"],"sign":true}`, status: http.StatusCreated,
 		check: func(t *testing.T, req proto.Message, payload map[string]any) {
@@ -284,6 +307,50 @@ func TestAttestationServerRouter_MalformedBodyIs400(t *testing.T) {
 			rec := serveAttestationRoute(mountAllAttestationRoutes(server), rt, `{"nonce":`)
 			assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 			assert.Nil(t, server.req, "the server is not called with an undecoded request")
+		})
+	}
+}
+
+// A manifest list time bound that is not RFC 3339 is refused before the
+// server is called, not dropped (#1686).
+func TestAttestationServerRouter_ListManifestsMalformedTimeIs400(t *testing.T) {
+	for _, query := range []string{"start_time=yesterday", "end_time=yesterday"} {
+		t.Run(query, func(t *testing.T) {
+			server := &recordingAttestationServer{}
+			rt := attestationRoute{method: http.MethodGet, path: "/api/v1/attestation/manifests?" + query}
+			rec := serveAttestationRoute(mountAllAttestationRoutes(server), rt, "")
+			assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+			assert.Nil(t, server.req, "the server is not called with a malformed time bound")
+		})
+	}
+}
+
+// The manifest list keeps full nanosecond precision, so a time bound with
+// a fractional second reaches the server as the same instant, never
+// truncated into a wider or narrower window (#1686, ruling 673).
+func TestAttestationServerRouter_ListManifestsKeepsFractionalTime(t *testing.T) {
+	for _, tc := range []struct {
+		query string
+		start bool
+		want  time.Time
+	}{
+		{"start_time=2026-11-12T10:00:00.250Z", true, time.Date(2026, 11, 12, 10, 0, 0, 250_000_000, time.UTC)},
+		{"end_time=2026-11-12T10:00:00.5Z", false, time.Date(2026, 11, 12, 10, 0, 0, 500_000_000, time.UTC)},
+		{"end_time=2026-11-12T10:00:00.000000001%2B02:00", false, time.Date(2026, 11, 12, 8, 0, 0, 1, time.UTC)},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			server := &recordingAttestationServer{}
+			rt := attestationRoute{method: http.MethodGet, path: "/api/v1/attestation/manifests?" + tc.query}
+			rec := serveAttestationRoute(mountAllAttestationRoutes(server), rt, "")
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			got, ok := server.req.(*platformv1.ListManifestsRequest)
+			require.True(t, ok, "the server is called with a ListManifestsRequest")
+			bound := got.GetEndTime()
+			if tc.start {
+				bound = got.GetStartTime()
+			}
+			require.NotNil(t, bound)
+			assert.True(t, bound.AsTime().Equal(tc.want), "got %s, want %s", bound.AsTime(), tc.want)
 		})
 	}
 }
