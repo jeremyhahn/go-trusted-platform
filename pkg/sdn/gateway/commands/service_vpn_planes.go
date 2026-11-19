@@ -26,6 +26,12 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/tunnel"
 )
 
+// vpnHubZoneEnforced stays false until the hub's traffic is wired through
+// the compiled zone policy (SPEC.md:80, docs/vpn/architecture.md:160-163;
+// Codex #2029 round 2): until then the kernel hub plane is not built, so the
+// child fails closed and refuses every InstallVPNPeer.
+var vpnHubZoneEnforced = false
+
 // vpnDataPlanes is gatewayd's plane factory. It builds the WireGuard hub
 // plane when the management VPN offers wireguard and names the hub's key
 // reference (`wireguard.key-ref`) and address (`wireguard.address`), with
@@ -43,6 +49,12 @@ func vpnDataPlanes(cfg *ServeConfig, hubKey *vpnHubKey, logger *slog.Logger) ([]
 	}
 	if hubKey == nil {
 		logger.Warn("The datapath hosts no VPN data plane: no secret resolver for the WireGuard hub key",
+			slog.String("key_ref", wg.KeyRef))
+		return nil, nil
+	}
+	if !vpnHubZoneEnforced {
+		hubKey.erase()
+		logger.Warn("The datapath hosts no VPN data plane: the WireGuard hub has no destination-zone enforcement yet",
 			slog.String("key_ref", wg.KeyRef))
 		return nil, nil
 	}

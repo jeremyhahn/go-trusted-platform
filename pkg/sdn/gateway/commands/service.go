@@ -113,7 +113,8 @@ type serviceDeps struct {
 // vpnHubKey is the WireGuard hub's private key, resolved before
 // EnterHardened and held in memory for the hub as its tunnel.KeyProvider.
 // A resolution failure is held too, so the plane's start reports it as it
-// did when the hub resolved the key itself.
+// did when the hub resolved the key itself. The held key is erased once the
+// planes start, and on every exit of serveProcess (Codex #2029 round 2).
 type vpnHubKey struct {
 	ref string
 	key []byte
@@ -129,6 +130,18 @@ func (k *vpnHubKey) Key(_ context.Context, ref string) ([]byte, error) {
 		return nil, fmt.Errorf("the hub holds the key of %q, not %q", k.ref, ref)
 	}
 	return append([]byte(nil), k.key...), nil
+}
+
+// erase zeroes the held key and drops it; nil-safe, idempotent.
+func (k *vpnHubKey) erase() {
+	if k == nil {
+		return
+	}
+	clear(k.key)
+	k.key = nil
+	if k.err == nil {
+		k.err = errors.New("the hub key was erased")
+	}
 }
 
 // loadServiceConfig reads and loads a child's configuration. The root
@@ -197,6 +210,7 @@ func serveProcess(ctx context.Context, name string, opts serviceOptions, deps se
 		}
 		if deps.resolveVPNHubKey != nil {
 			hubKey = deps.resolveVPNHubKey(ctx, cfg, logger)
+			defer hubKey.erase()
 		}
 	}
 	if err := deps.enterHardened(def, opts.uid, opts.gid); err != nil {
@@ -261,6 +275,8 @@ func serveProcess(ctx context.Context, name string, opts serviceOptions, deps se
 			vpnPlanes = nil
 		}
 	}
+	// The hub keyed the device in Start, so the held copy goes now (Codex #2029 round 2 P1 2).
+	hubKey.erase()
 	// Hardened already, so the kernel-class child holds no CAP_CHOWN and is
 	// not in the socket group: its socket takes the group from the
 	// supervisor's setgid runtime directory, and Listen only verifies it.
