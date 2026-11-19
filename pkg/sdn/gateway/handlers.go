@@ -611,11 +611,46 @@ func buildFHRP(g *Gateway) (backedService, error) {
 		Transport:  transport,
 		Programmer: programmer,
 		Logger:     host.Logger,
+		Inventory:  fhrp.NewInventory(host.FHRPInventory),
 	})
 	if err != nil {
 		return nil, &ErrServiceStartFailed{Service: ServiceFHRP, Cause: err}
 	}
 	return fhrpBackend{speaker}, nil
+}
+
+// sweepRemovedFHRPGroups deletes the recorded VIPs of every FHRP group not
+// in the current configuration (all of them when FHRP is disabled): a
+// datapath child that died while such a group was Master left them on the
+// interface, and no runner of that group will ever release them. A
+// still-configured group's addresses are left to its own runner.
+func sweepRemovedFHRPGroups(cfg *GatewayConfig) error {
+	host := cfg.hostRuntime()
+	inv := fhrp.NewInventory(host.FHRPInventory)
+	if inv == nil {
+		return nil
+	}
+	type group struct {
+		iface string
+		vrid  uint8
+	}
+	configured := make(map[group]bool)
+	if cfg.FHRP != nil && cfg.FHRP.Enabled {
+		for _, gc := range cfg.FHRP.Groups {
+			configured[group{gc.Interface, gc.VRID}] = true
+		}
+	}
+	programmer := host.FHRPProgrammer
+	if programmer == nil {
+		entries, err := inv.Entries()
+		if err != nil || len(entries) == 0 {
+			return err
+		}
+		programmer = fhrp.NewNetlinkProgrammer()
+	}
+	return inv.Sweep(programmer, func(iface string, vrid uint8) bool {
+		return configured[group{iface, vrid}]
+	})
 }
 
 // TunnelManager is the tunnel-manager surface the tunnels service drives.

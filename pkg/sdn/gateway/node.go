@@ -185,6 +185,14 @@ func (g *Gateway) Start(ctx context.Context) error {
 		return &ErrStartupFailed{GatewayID: g.config.ID, Phase: "requirements-check", Cause: err}
 	}
 
+	// VIPs a crashed predecessor left for FHRP groups since removed go
+	// before any service starts, so neither ARP/ND nor the host firewall
+	// ever sees an address no runner owns.
+	if err := sweepRemovedFHRPGroups(g.config); err != nil {
+		g.state.Store(uint32(GatewayStateStopped))
+		return &ErrStartupFailed{GatewayID: g.config.ID, Phase: "fhrp-sweep", Cause: err}
+	}
+
 	// The base pipeline goes in before any service handler: every datapath
 	// service gates out of table 10, and handler iteration is map-random,
 	// so the hand-off from table 0 must already exist (#567). A gateway

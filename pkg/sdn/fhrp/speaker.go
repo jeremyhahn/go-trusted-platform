@@ -40,6 +40,9 @@ type Deps struct {
 	// deterministic hook the tests wait on. Calls are made from the group's
 	// run loop and must not block for long.
 	Observer Observer
+	// Inventory, when set, records every VIP a group adds or adopts, so a
+	// restart that drops the group can still delete it (Inventory.Sweep).
+	Inventory *Inventory
 }
 
 // EventKind classifies an Observer notification.
@@ -396,6 +399,9 @@ func (r *runner) dropStaleVIPs(g *Group) error {
 				return &ErrAddressOperationFailed{VRID: g.cfg.VRID, Interface: g.cfg.Interface, Operation: "list", Address: p, Cause: err}
 			}
 			if present {
+				if err := r.speaker.deps.Inventory.Record(g.cfg.Interface, g.cfg.VRID, p); err != nil {
+					return err
+				}
 				r.owned[p] = true
 				stale = true
 			}
@@ -409,12 +415,18 @@ func (r *runner) dropStaleVIPs(g *Group) error {
 		}
 		for _, q := range installed {
 			if q == p {
+				if err := r.speaker.deps.Inventory.Record(g.cfg.Interface, g.cfg.VRID, p); err != nil {
+					return err
+				}
 				r.owned[p] = true
 				stale = true
 				continue
 			}
 			if err := r.speaker.deps.Programmer.DeleteAddress(g.cfg.Interface, q, hw); err != nil {
 				r.stale = append(r.stale, q)
+				if rerr := r.speaker.deps.Inventory.Record(g.cfg.Interface, g.cfg.VRID, q); rerr != nil {
+					r.speaker.logger.Warn("fhrp: VIP inventory record failed", slog.Any("error", rerr))
+				}
 				return &ErrAddressOperationFailed{VRID: g.cfg.VRID, Interface: g.cfg.Interface, Operation: "delete", Address: q, Cause: err}
 			}
 		}
@@ -629,6 +641,11 @@ func (r *runner) Claim(g *Group) error {
 				continue
 			}
 		}
+		// Recorded before it is added, so a crash between the two leaves
+		// at most an entry for an address that is not there.
+		if err := r.speaker.deps.Inventory.Record(g.cfg.Interface, g.cfg.VRID, p); err != nil {
+			return err
+		}
 		if err := r.speaker.deps.Programmer.AddAddress(g.cfg.Interface, p, hw); err != nil {
 			return &ErrAddressOperationFailed{VRID: g.cfg.VRID, Interface: g.cfg.Interface, Operation: "add", Address: p, Cause: err}
 		}
@@ -661,6 +678,7 @@ func (r *runner) Release(g *Group) error {
 			continue
 		}
 		delete(r.owned, p)
+		r.forget(g, p)
 	}
 	// Prefixes of another length a failed stale removal left behind.
 	kept := r.stale[:0]
@@ -670,11 +688,22 @@ func (r *runner) Release(g *Group) error {
 			if first == nil {
 				first = &ErrAddressOperationFailed{VRID: g.cfg.VRID, Interface: g.cfg.Interface, Operation: "delete", Address: q, Cause: err}
 			}
+			continue
 		}
+		r.forget(g, q)
 	}
 	r.stale = kept
 	if len(r.stale) == 0 {
 		r.stale = nil
 	}
 	return first
+}
+
+// forget drops a deleted VIP from the inventory. The address is already
+// gone, so a failed rewrite is logged: the stale entry only makes a later
+// sweep delete an absent address, which succeeds.
+func (r *runner) forget(g *Group, p netip.Prefix) {
+	if err := r.speaker.deps.Inventory.Forget(g.cfg.Interface, g.cfg.VRID, p); err != nil {
+		r.speaker.logger.Warn("fhrp: VIP inventory forget failed", slog.Any("error", err))
+	}
 }

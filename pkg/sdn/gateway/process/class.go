@@ -143,6 +143,10 @@ var definitions = []Definition{
 		Supervised: true,
 		// The load-balancer and NAT sections.
 		ReconcilesDesired: true,
+		// The FHRP speaker's VIP inventory, fhrp/vips.json: the sweep of
+		// removed groups' VIPs deletes only what it records.
+		StateDir:   gateway.FHRPStateDir,
+		StateFiles: []string{gateway.FHRPInventoryFile},
 	},
 	{
 		Name:            "routing",
