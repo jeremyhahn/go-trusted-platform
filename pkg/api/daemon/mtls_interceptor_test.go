@@ -482,7 +482,7 @@ func TestMTLSUnaryInterceptorSuccess(t *testing.T) {
 		Logger:     logging.DefaultLogger(),
 		PEP:        &mockSDKPEPClient{checkFunc: grantAllCheck},
 		Permission: func(string) string { return "daemon:test" },
-		Roles:      staticRoles([]string{"operator"}, nil, nil),
+		Principal:  staticPrincipal("cert-client", []string{"operator"}, nil, nil),
 	}
 
 	interceptor := MTLSUnaryInterceptor(cfg)
@@ -718,7 +718,7 @@ func TestMTLSStreamInterceptorSuccess(t *testing.T) {
 		Logger:     logging.DefaultLogger(),
 		PEP:        &mockSDKPEPClient{checkFunc: grantAllCheck},
 		Permission: func(string) string { return "daemon:test" },
-		Roles:      staticRoles([]string{"operator"}, nil, nil),
+		Principal:  staticPrincipal("cert-client", []string{"operator"}, nil, nil),
 	}
 
 	interceptor := MTLSStreamInterceptor(cfg)
@@ -1187,14 +1187,15 @@ func rolePEP(grants map[string][]string) (*mockSDKPEPClient, *[]*sdkiam.CheckReq
 	return pep, &calls
 }
 
-// staticRoles returns a Roles resolver that answers roles for the test
-// certificate principal and records the tenant and subject it was asked for.
-func staticRoles(roles []string, err error, asked *[]string) func(context.Context, string, string) ([]string, error) {
-	return func(_ context.Context, tenantID, subject string) ([]string, error) {
+// staticPrincipal returns a Principal resolver that answers the stored user
+// ID and roles for the test certificate principal and records the tenant and
+// subject it was asked for.
+func staticPrincipal(userID string, roles []string, err error, asked *[]string) func(context.Context, string, string) (string, []string, error) {
+	return func(_ context.Context, tenantID, subject string) (string, []string, error) {
 		if asked != nil {
 			*asked = append(*asked, tenantID+"/"+subject)
 		}
-		return roles, err
+		return userID, roles, err
 	}
 }
 
@@ -1207,7 +1208,7 @@ func mtlsPEPConfig(pep *mockSDKPEPClient) *MTLSInterceptorConfig {
 		},
 		Logger:     logging.DefaultLogger(),
 		Permission: mtlsTestPermission,
-		Roles:      staticRoles([]string{"operator"}, nil, nil),
+		Principal:  staticPrincipal("cert-client", []string{"operator"}, nil, nil),
 	}
 	if pep != nil {
 		cfg.PEP = pep
@@ -1307,6 +1308,62 @@ func TestMTLSInterceptorsPEPCheck(t *testing.T) {
 	}
 }
 
+// TestMTLS_PEPSubjectIsTheStoredUserID: the PEP is asked about the stored IAM
+// user ID the certificate identifier resolves to, not the identifier itself,
+// so an ABAC rule naming the user ID matches (#1989, Codex round 4).
+func TestMTLS_PEPSubjectIsTheStoredUserID(t *testing.T) {
+	newCfg := func(pep *mockSDKPEPClient, userID string) *MTLSInterceptorConfig {
+		cfg := mtlsPEPConfig(pep)
+		cfg.Authenticator = &mockAuthenticator{
+			authenticateFunc: func(context.Context, *x509.Certificate) (*auth.Identity, error) {
+				return &auth.Identity{ID: "operator@example.com", TenantID: "acme-corp"}, nil
+			},
+		}
+		cfg.Principal = staticPrincipal(userID, []string{"operator"}, nil, nil)
+		return cfg
+	}
+	runners := map[string]func(*testing.T, *MTLSInterceptorConfig, string) (bool, error){
+		"unary":  runMTLSUnary,
+		"stream": runMTLSStream,
+	}
+	for name, run := range runners {
+		t.Run(name+"/subject is the stored user ID", func(t *testing.T) {
+			pep, calls := rolePEP(map[string][]string{"operator": {"daemon:shutdown"}})
+			called, err := run(t, newCfg(pep, "123"), mtlsPEPTestMethod)
+			if err != nil || !called {
+				t.Fatalf("called = %v, err = %v; want the handler called", called, err)
+			}
+			if len(*calls) != 1 || (*calls)[0].Subject.ID != "123" {
+				t.Fatalf("PEP subjects = %+v, want exactly the stored user ID 123", *calls)
+			}
+		})
+		t.Run(name+"/deny rule on the stored user ID refuses", func(t *testing.T) {
+			pep, _ := rolePEP(map[string][]string{"operator": {"daemon:shutdown"}})
+			grant := pep.checkFunc
+			pep.checkFunc = func(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+				if req.Subject.ID == "123" {
+					return &sdkiam.CheckResponse{Allowed: false}, nil
+				}
+				return grant(ctx, req)
+			}
+			called, err := run(t, newCfg(pep, "123"), mtlsPEPTestMethod)
+			if status.Code(err) != codes.PermissionDenied || called {
+				t.Fatalf("called = %v, code = %v; want PermissionDenied from the user-ID deny rule", called, status.Code(err))
+			}
+		})
+		t.Run(name+"/empty resolved user ID refuses", func(t *testing.T) {
+			pep, calls := rolePEP(map[string][]string{"operator": {"daemon:shutdown"}})
+			called, err := run(t, newCfg(pep, ""), mtlsPEPTestMethod)
+			if err == nil || called {
+				t.Fatalf("called = %v, err = %v; want a refusal on an empty user ID", called, err)
+			}
+			if len(*calls) != 0 {
+				t.Fatalf("PEP calls = %d, want none on an empty user ID", len(*calls))
+			}
+		})
+	}
+}
+
 func TestMTLSAuthorizeUsesCertificatePrincipalRoles(t *testing.T) {
 	runners := map[string]func(*testing.T, *MTLSInterceptorConfig, string) (bool, error){
 		"unary":  runMTLSUnary,
@@ -1318,7 +1375,7 @@ func TestMTLSAuthorizeUsesCertificatePrincipalRoles(t *testing.T) {
 			pep, calls := rolePEP(grants)
 			var asked []string
 			cfg := mtlsPEPConfig(pep)
-			cfg.Roles = staticRoles([]string{"operator"}, nil, &asked)
+			cfg.Principal = staticPrincipal("cert-client", []string{"operator"}, nil, &asked)
 			called, err := run(t, cfg, mtlsPEPTestMethod)
 			if err != nil {
 				t.Fatalf("err = %v, want nil", err)
@@ -1339,7 +1396,7 @@ func TestMTLSAuthorizeUsesCertificatePrincipalRoles(t *testing.T) {
 		t.Run(name+"/principal with no roles", func(t *testing.T) {
 			pep, _ := rolePEP(grants)
 			cfg := mtlsPEPConfig(pep)
-			cfg.Roles = staticRoles(nil, nil, nil)
+			cfg.Principal = staticPrincipal("cert-client", nil, nil, nil)
 			called, err := run(t, cfg, mtlsPEPTestMethod)
 			if status.Code(err) != codes.PermissionDenied {
 				t.Fatalf("code = %v, want PermissionDenied (err %v)", status.Code(err), err)
@@ -1351,7 +1408,7 @@ func TestMTLSAuthorizeUsesCertificatePrincipalRoles(t *testing.T) {
 		t.Run(name+"/no roles resolver", func(t *testing.T) {
 			pep, calls := rolePEP(grants)
 			cfg := mtlsPEPConfig(pep)
-			cfg.Roles = nil
+			cfg.Principal = nil
 			called, err := run(t, cfg, mtlsPEPTestMethod)
 			if status.Code(err) != codes.PermissionDenied {
 				t.Fatalf("code = %v, want PermissionDenied (err %v)", status.Code(err), err)
@@ -1363,7 +1420,7 @@ func TestMTLSAuthorizeUsesCertificatePrincipalRoles(t *testing.T) {
 		t.Run(name+"/roles resolver error", func(t *testing.T) {
 			pep, calls := rolePEP(grants)
 			cfg := mtlsPEPConfig(pep)
-			cfg.Roles = staticRoles(nil, errors.New("iam down"), nil)
+			cfg.Principal = staticPrincipal("cert-client", nil, errors.New("iam down"), nil)
 			called, err := run(t, cfg, mtlsPEPTestMethod)
 			if status.Code(err) != codes.Unavailable {
 				t.Fatalf("code = %v, want Unavailable (err %v)", status.Code(err), err)
