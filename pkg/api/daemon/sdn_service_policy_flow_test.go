@@ -176,6 +176,48 @@ func TestSDNService_ApplyPolicy_FailedUpdateRestoresTheActivePolicy(t *testing.T
 	assert.Equal(t, "r1", rules[0].GetRuleId())
 }
 
+// A new policy whose rule shares another policy's table, priority and match
+// replaces that policy's switch entry. When a later rule of the new policy
+// fails, the rollback deletes the entry, so the other policy's flow must be
+// put back (Codex P1, PR #2021).
+func TestSDNService_ApplyPolicy_FailedApplyRestoresAnotherPolicysFlow(t *testing.T) {
+	svc, mock, _ := newPolicyFlowFixture(t)
+	ctx := context.Background()
+
+	a := denyPolicy("a", denyRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 22}))
+	a.PolicyId = "pol-a"
+	_, err := svc.ApplyPolicy(ctx, a)
+	require.NoError(t, err)
+
+	var adds []ovs.FlowMod
+	calls := 0
+	mock.OnAddFlow(func(_ context.Context, _ string, flow *ovs.FlowMod) error {
+		calls++
+		if calls == 2 {
+			return errFlowInstall
+		}
+		adds = append(adds, *flow)
+		return nil
+	})
+
+	b := denyPolicy("b",
+		denyRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 22}),
+		denyRule("r2", &platformv1.PolicyRuleMatch{Protocol: "udp", DestinationPort: 53}),
+	)
+	b.PolicyId = "pol-b"
+	_, err = svc.ApplyPolicy(ctx, b)
+	require.Error(t, err)
+
+	require.GreaterOrEqual(t, len(adds), 2, "policy a's overwritten flow must be re-installed after the rollback")
+	last := adds[len(adds)-1]
+	assert.Equal(t, "tcp,tp_dst=22", last.Match)
+	assert.Equal(t, "drop", last.Actions)
+
+	got, err := svc.GetPolicy(ctx, &platformv1.GetPolicyRequest{PolicyId: "pol-a"})
+	require.NoError(t, err)
+	assert.Equal(t, platformv1.PolicyStatus_POLICY_STATUS_ACTIVE, got.GetPolicy().GetStatus())
+}
+
 // TestSDNService_DeletePolicy_UsesTheSameMatch checks that deleting a policy
 // removes flows by the match its apply installed.
 func TestSDNService_DeletePolicy_UsesTheSameMatch(t *testing.T) {
