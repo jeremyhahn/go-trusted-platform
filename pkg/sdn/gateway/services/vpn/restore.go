@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"net/netip"
 	"slices"
+	"strings"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
 )
@@ -330,7 +331,7 @@ func (s *Service) releaseOwedAddress(ctx context.Context, kind DataPlaneKind, l 
 			slog.String("data_plane", string(kind)), slog.String("lease", string(l.ID)))
 		return
 	}
-	h, err := s.holdsAddress(ctx, l)
+	h, err := s.ownsOwedAllocation(ctx, l)
 	if err == nil && h {
 		err = s.deps.IPAM.Release(ctx, l.Address.Addr())
 	}
@@ -418,6 +419,42 @@ func (s *Service) holdsAddress(ctx context.Context, l *Lease) (bool, error) {
 		return false, err
 	}
 	return alloc.Status == ipam.AllocationStatusActive && alloc.DeviceID == l.DeviceID, nil
+}
+
+// ownsOwedAllocation reports whether the active allocation at l's address
+// is still the one this gateway allocated for l, so an owed release may
+// free it. The IPAM has no conditional release, so the retry is fenced on
+// what the allocation records: the device, the vpn and tenant tags of a
+// lease allocation, and no owner tag but this gateway's. A release whose
+// response was lost may already have committed; the device can then hold
+// the address again through another gateway sharing the pool, whose lease
+// this gateway's store cannot see, and that allocation carries the other
+// gateway's owner tag. An untagged allocation (one made before owner tags)
+// is still released.
+func (s *Service) ownsOwedAllocation(ctx context.Context, l *Lease) (bool, error) {
+	if !l.Address.IsValid() {
+		return false, nil
+	}
+	alloc, err := s.deps.IPAM.GetAllocation(ctx, l.Address.Addr())
+	if errors.Is(err, ipam.ErrAllocationNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if alloc.Status != ipam.AllocationStatusActive || alloc.DeviceID != l.DeviceID {
+		return false, nil
+	}
+	owner := s.ownerTag()
+	for _, tag := range alloc.Tags {
+		switch {
+		case strings.HasPrefix(tag, "gateway:") && tag != owner:
+			return false, nil
+		case strings.HasPrefix(tag, "tenant:") && tag != "tenant:"+l.TenantID:
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // dropLease removes a lease Restore will not reinstate: the record is deleted
