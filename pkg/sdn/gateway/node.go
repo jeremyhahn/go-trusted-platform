@@ -376,6 +376,13 @@ func (g *Gateway) Stop(ctx context.Context) error {
 			g.state.Store(uint32(GatewayStateError))
 			return &ErrShutdownFailed{GatewayID: g.config.ID, Phase: "service-stop", Cause: &ErrServiceStopFailed{Service: name, Cause: err}}
 		}
+		// A stopped service leaves the active set at once, so a Stop that
+		// fails further on is retried from the service that failed (an FHRP
+		// VIP still to release), not from one already down.
+		g.mu.Lock()
+		g.activeOrder = slices.DeleteFunc(g.activeOrder, func(n string) bool { return n == name })
+		delete(g.node.ActiveServices, name)
+		g.mu.Unlock()
 	}
 
 	// The pipeline comes out after the last service gate is gone, so no
