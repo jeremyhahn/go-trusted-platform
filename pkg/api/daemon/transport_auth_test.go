@@ -91,7 +91,7 @@ func TestSelectGRPCTCPAuth_NoBackend_ReturnsTypedError(t *testing.T) {
 	}
 	for name, config := range cases {
 		t.Run(name, func(t *testing.T) {
-			sel, err := selectGRPCTCPAuth(config, nil, nil, logging.DefaultLogger(), nil)
+			sel, err := selectGRPCTCPAuth(config, nil, nil, nil, logging.DefaultLogger(), nil)
 			require.Error(t, err)
 			var want ErrTransportAuthRequired
 			require.True(t, errors.As(err, &want), "error is %T, want ErrTransportAuthRequired", err)
@@ -110,7 +110,7 @@ func TestSelectGRPCTCPAuth_MTLSWithoutCAService_ReturnsTypedError(t *testing.T) 
 	config.App = &app.App{}
 	config.PlatformJWTVerifier = alwaysValidJWTVerifier{}
 
-	_, err := selectGRPCTCPAuth(config, nil, nil, logging.DefaultLogger(), nil)
+	_, err := selectGRPCTCPAuth(config, nil, nil, nil, logging.DefaultLogger(), nil)
 	require.Error(t, err)
 	var want ErrTransportAuthRequired
 	require.True(t, errors.As(err, &want), "error is %T", err)
@@ -124,7 +124,7 @@ func TestSelectGRPCTCPAuth_JWTVerifier_BuildsRequiredAuth(t *testing.T) {
 	config.App = &app.App{}
 	config.PlatformJWTVerifier = alwaysValidJWTVerifier{}
 
-	sel, err := selectGRPCTCPAuth(config, nil, &mockSDKPEPClient{}, logging.DefaultLogger(), nil)
+	sel, err := selectGRPCTCPAuth(config, nil, &mockSDKPEPClient{}, nil, logging.DefaultLogger(), nil)
 	require.NoError(t, err)
 	require.Len(t, sel.options(), 2, "unary and stream interceptors")
 	require.NotNil(t, sel.validator, "the local validator is retained for SetPlatformJWTVerifier")
@@ -141,7 +141,7 @@ func TestSelectGRPCTCPAuth_LocalValidatorWithoutPEP_ReturnsTypedError(t *testing
 	config.App = &app.App{}
 	config.PlatformJWTVerifier = alwaysValidJWTVerifier{}
 
-	sel, err := selectGRPCTCPAuth(config, nil, nil, logging.DefaultLogger(), nil)
+	sel, err := selectGRPCTCPAuth(config, nil, nil, nil, logging.DefaultLogger(), nil)
 	var want ErrTransportAuthRequired
 	require.True(t, errors.As(err, &want), "error is %T, want ErrTransportAuthRequired", err)
 	assert.Equal(t, transportGRPCTCP, want.Transport)
@@ -161,7 +161,7 @@ func TestSelectGRPCTCPAuth_LocalValidator_AuthorizesEachMethodThroughIAM(t *test
 	var last *sdkiam.CheckRequest
 	pep := pepAllowing("42", "platform", "read", &last)
 
-	sel, err := selectGRPCTCPAuth(config, nil, pep, logging.DefaultLogger(), nil)
+	sel, err := selectGRPCTCPAuth(config, nil, pep, nil, logging.DefaultLogger(), nil)
 	require.NoError(t, err)
 	require.NotNil(t, sel.unary)
 
@@ -200,7 +200,7 @@ func TestSelectGRPCTCPAuth_OnlyHealthCheckIsAnonymous(t *testing.T) {
 	config.App = &app.App{}
 	config.PlatformJWTVerifier = alwaysValidJWTVerifier{}
 
-	sel, err := selectGRPCTCPAuth(config, nil, &mockSDKPEPClient{}, logging.DefaultLogger(), grpcTCPSkipMethods)
+	sel, err := selectGRPCTCPAuth(config, nil, &mockSDKPEPClient{}, nil, logging.DefaultLogger(), grpcTCPSkipMethods)
 	require.NoError(t, err)
 	require.NotNil(t, sel.unary)
 	require.NotNil(t, sel.stream)
@@ -247,7 +247,7 @@ func TestSelectGRPCTCPAuth_SharedValidator_BuildsRequiredAuth(t *testing.T) {
 	config := failClosedConfig()
 	shared := &platformTokenValidator{}
 
-	sel, err := selectGRPCTCPAuth(config, shared, nil, logging.DefaultLogger(), nil)
+	sel, err := selectGRPCTCPAuth(config, shared, nil, nil, logging.DefaultLogger(), nil)
 	require.NoError(t, err)
 	require.Len(t, sel.options(), 2)
 	assert.Nil(t, sel.validator, "the shared validator is not a local one")
@@ -259,7 +259,7 @@ func TestSelectGRPCTCPAuth_SkipIAMValidation_IsTheOnlyOptOut(t *testing.T) {
 	config := DefaultConfig()
 	config.SkipIAMValidation = true
 
-	sel, err := selectGRPCTCPAuth(config, nil, nil, logging.DefaultLogger(), nil)
+	sel, err := selectGRPCTCPAuth(config, nil, nil, nil, logging.DefaultLogger(), nil)
 	require.NoError(t, err)
 	assert.Empty(t, sel.options(), "the testing opt-out installs no token interceptor at all")
 	assert.False(t, sel.required)
@@ -540,7 +540,7 @@ func TestNew_GRPCTCPWithJWTVerifier_RejectsAnonymousCalls(t *testing.T) {
 	config := failClosedConfig()
 	config.App = &app.App{}
 	config.PlatformJWTVerifier = alwaysValidJWTVerifier{}
-	sel, err := selectGRPCTCPAuth(config, nil, &mockSDKPEPClient{}, logging.DefaultLogger(), nil)
+	sel, err := selectGRPCTCPAuth(config, nil, &mockSDKPEPClient{}, nil, logging.DefaultLogger(), nil)
 	require.NoError(t, err)
 
 	unary := sel.unary

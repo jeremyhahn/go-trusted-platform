@@ -99,7 +99,7 @@ var grpcTCPSkipMethods = []string{
 	platformv1.DeviceService_BootDelivery_FullMethodName,
 }
 
-func selectGRPCTCPAuth(config *Config, shared *platformTokenValidator, pep quicbaassdk.IAMPEPClient, logger *logging.Logger, skipMethods []string) (grpcAuthSelection, error) {
+func selectGRPCTCPAuth(config *Config, shared *platformTokenValidator, pep quicbaassdk.IAMPEPClient, roles func(ctx context.Context, tenantID, subject string) ([]string, error), logger *logging.Logger, skipMethods []string) (grpcAuthSelection, error) {
 	if config.EnableMTLS {
 		if config.CAService == nil {
 			return grpcAuthSelection{}, ErrTransportAuthRequired{
@@ -120,6 +120,7 @@ func selectGRPCTCPAuth(config *Config, shared *platformTokenValidator, pep quicb
 			Logger:        logger,
 			SkipMethods:   skipMethods,
 			PEP:           pep,
+			Roles:         roles,
 		}
 		logger.Info("gRPC TCP server: mTLS authentication enabled")
 		return grpcAuthSelection{
@@ -171,6 +172,30 @@ func selectGRPCTCPAuth(config *Config, shared *platformTokenValidator, pep quicb
 		validator: local,
 		required:  true,
 	}, nil
+}
+
+// iamUserRoles returns the mTLS role resolver backed by the IAM user record:
+// the certificate principal's roles are the roles IAM holds for the user, so
+// a certificate never carries its own. A nil client gives a nil resolver,
+// which the mTLS interceptor refuses (fail closed).
+func iamUserRoles(client quicbaassdk.IAMClient) func(ctx context.Context, tenantID, subject string) ([]string, error) {
+	if client == nil {
+		return nil
+	}
+	return func(ctx context.Context, tenantID, subject string) ([]string, error) {
+		users := client.User()
+		if users == nil {
+			return nil, ErrIAMServiceNotAvailable{}
+		}
+		user, err := users.Get(ctx, tenantID, subject)
+		if err != nil {
+			return nil, err
+		}
+		if user == nil {
+			return nil, nil
+		}
+		return user.Roles, nil
+	}
 }
 
 // selectQUICAuth decides how the QUIC transport authenticates callers. It

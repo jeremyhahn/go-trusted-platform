@@ -60,6 +60,11 @@ type MTLSInterceptorConfig struct {
 	// permission. Nil means grpcapi.ScopeForMethod. An unmapped method is
 	// refused.
 	Permission func(fullMethod string) string
+
+	// Roles resolves the certificate principal's authoritative IAM roles
+	// (tenant, subject) before the PEP check. A nil Roles refuses every
+	// non-skipped method: a certificate carries no roles of its own.
+	Roles func(ctx context.Context, tenantID, subject string) ([]string, error)
 }
 
 // ErrMTLSNoPeerInfo indicates no peer info was found in the gRPC context.
@@ -219,9 +224,20 @@ func authorizeMTLSMethod(ctx context.Context, cfg *MTLSInterceptorConfig, fullMe
 	if identity == nil {
 		return status.Error(codes.PermissionDenied, "mtls: no certificate principal")
 	}
+	if cfg.Roles == nil {
+		return status.Errorf(codes.PermissionDenied, "mtls: no IAM role resolver to authorize %s", fullMethod)
+	}
+	roles, err := cfg.Roles(ctx, identity.TenantID, identity.ID)
+	if err != nil {
+		if cfg.Logger != nil {
+			cfg.Logger.Debug("mtls: role resolution failed", "method", fullMethod, "error", err)
+		}
+		return status.Errorf(codes.Unavailable, "mtls: resolving the roles of %s for %s failed: %v", identity.ID, fullMethod, err)
+	}
 	allowed, err := checkPrincipalPermission(ctx, cfg.PEP, &tokenPrincipal{
 		Subject:  identity.ID,
 		TenantID: identity.TenantID,
+		Roles:    roles,
 	}, resource, action)
 	if err != nil {
 		if cfg.Logger != nil {
