@@ -196,8 +196,14 @@ func authenticateFromPeer(ctx context.Context, cfg *MTLSInterceptorConfig) (cont
 
 // authorizeMTLSMethod asks the PEP whether the certificate principal attached
 // to ctx holds the permission of fullMethod. An unmapped method, a missing
-// PEP or a deny is PermissionDenied; a PEP failure is Unavailable.
+// PEP or a deny is PermissionDenied; a PEP failure is Unavailable. A method
+// classified pre-auth in pkg/api/grpc is served after certificate
+// authentication without a PEP check, since it carries its own credential in
+// the request.
 func authorizeMTLSMethod(ctx context.Context, cfg *MTLSInterceptorConfig, fullMethod string) error {
+	if grpcapi.IsPreAuthMethod(fullMethod) {
+		return nil
+	}
 	permission := grpcapi.ScopeForMethod
 	if cfg.Permission != nil {
 		permission = cfg.Permission
