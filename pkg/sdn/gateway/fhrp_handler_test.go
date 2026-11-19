@@ -288,6 +288,34 @@ func TestFHRPSweepsVIPsOfRemovedGroups(t *testing.T) {
 	})
 }
 
+// TestFHRPSweepsAddressRemovedFromARetainedGroup: a crashed runner's VIP
+// whose address the group no longer configures is deleted and forgotten
+// although the group itself stays; the group's configured address is left
+// to its runner, and a recorded address of the other family never matches
+// a configured one.
+func TestFHRPSweepsAddressRemovedFromARetainedGroup(t *testing.T) {
+	kept := netip.MustParsePrefix("192.0.2.1/24")
+	dropped := netip.MustParsePrefix("192.0.2.2/24")
+	mapped := netip.MustParsePrefix("::ffff:192.0.2.1/120")
+	path := filepath.Join(t.TempDir(), FHRPStateDir, FHRPInventoryFile)
+	inv := fhrp.NewInventory(path)
+	for _, p := range []netip.Prefix{kept, dropped, mapped} {
+		require.NoError(t, inv.Record("trusted0", 10, p))
+	}
+	programmer := &fakeFHRPProgrammer{present: map[netip.Prefix]bool{kept: true, dropped: true, mapped: true}}
+	cfg := baseGatewayConfig("fhrp-sweep-address")
+	cfg.FHRP = ownerFHRPConfig()
+	cfg.Host = &HostRuntime{FHRPProgrammer: programmer, FHRPInventory: path}
+
+	require.NoError(t, sweepRemovedFHRPGroups(cfg))
+	assert.ElementsMatch(t, []netip.Prefix{dropped, mapped}, programmer.Deleted(),
+		"a recorded address the retained group no longer configures goes")
+	assert.True(t, programmer.holds(kept), "the group's configured address is left to its runner")
+	entries, err := fhrp.NewInventory(path).Entries()
+	require.NoError(t, err)
+	assert.Equal(t, []fhrp.InventoryEntry{{Interface: "trusted0", VRID: 10, Prefix: kept}}, entries)
+}
+
 // TestBuildFHRP_IPv6TakeoverAnnouncesTheVIP: an IPv6 owner group built by
 // gatewayd announces its virtual address through the programmer on
 // takeover. The default programmer (fhrp.NewNetlinkProgrammer) sends that
