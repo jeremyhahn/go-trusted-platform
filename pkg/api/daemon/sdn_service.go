@@ -1180,6 +1180,10 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 	}
 	var installed []installedFlow
 	var flowIDs []string
+	// The policy this call updates, if any: a failed update restores its flows.
+	s.mu.RLock()
+	old := s.policies[policyID]
+	s.mu.RUnlock()
 	for _, target := range config.GetTargets() {
 		if target.GetType() != platformv1.PolicyTargetType_POLICY_TARGET_TYPE_BRIDGE {
 			continue
@@ -1195,6 +1199,14 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 			if err := client.AddFlow(ctx, bridgeName, flowMod); err != nil {
 				for _, f := range installed {
 					_ = client.DeleteFlowStrict(ctx, f.bridge, f.flow)
+				}
+				// An update's AddFlow replaced the previous policy's flow with
+				// the same match, and the delete above removed it: put the
+				// previous policy's flows back so it stays enforced.
+				if old != nil && !s.restorePolicyFlows(ctx, client, old) {
+					s.mu.Lock()
+					old.status = "error"
+					s.mu.Unlock()
 				}
 				return nil, status.Errorf(codes.Internal, "install flow for rule %q on bridge %q: %v", rule.GetRuleId(), bridgeName, err)
 			}
@@ -1234,6 +1246,33 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 		},
 		Policy: policy,
 	}, nil
+}
+
+// restorePolicyFlows re-installs a recorded policy's flows on its bridge
+// targets, after a failed update's rollback deleted the flows that had
+// replaced them. It reports whether every flow was installed.
+func (s *SDNService) restorePolicyFlows(ctx context.Context, client ovs.ClientInterface, p *policyResource) bool {
+	ok := true
+	for _, target := range p.targets {
+		if target.GetType() != platformv1.PolicyTargetType_POLICY_TARGET_TYPE_BRIDGE {
+			continue
+		}
+		bridgeName, found := s.findBridgeName(target.GetId())
+		if !found {
+			continue
+		}
+		for _, rule := range p.rules {
+			flowMod, err := s.policyRuleToFlowMod(rule, p.priority)
+			if err != nil {
+				ok = false
+				continue
+			}
+			if err := client.AddFlow(ctx, bridgeName, flowMod); err != nil {
+				ok = false
+			}
+		}
+	}
+	return ok
 }
 
 // GetPolicy retrieves a policy by ID

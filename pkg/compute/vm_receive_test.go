@@ -176,9 +176,11 @@ type signalReceiver struct {
 	// transferring is what Transferring reports: an active migration
 	// stream renews the receiver lifetime.
 	transferring atomic.Bool
+	// vm is the receiving QEMU a commit hands over (never started).
+	vm *qemu.VM
 }
 
-func (s *signalReceiver) VM() *qemu.VM { return nil }
+func (s *signalReceiver) VM() *qemu.VM { return s.vm }
 
 func (s *signalReceiver) Transferring(context.Context) bool { return s.transferring.Load() }
 
@@ -395,6 +397,7 @@ func TestFinalizeIncoming_EndsTheReceiverLifetime(t *testing.T) {
 	orch.config.MigrationTLS = tlsProv
 
 	recv := newSignalReceiver()
+	recv.vm = newReceivedVM(t, orch)
 	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
 		return recv, nil
 	})
@@ -700,7 +703,7 @@ func TestFinalizeIncoming_Commit(t *testing.T) {
 	tlsProv := &fakeServerTLS{dir: t.TempDir()}
 	orch.config.MigrationTLS = tlsProv
 
-	recv := &fakeIncomingReceiver{port: 5000}
+	recv := &fakeIncomingReceiver{port: 5000, vm: newReceivedVM(t, orch)}
 	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
 		return recv, nil
 	})
