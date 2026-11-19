@@ -434,21 +434,24 @@ func (s *service) RegisterDevice(ctx context.Context, macAddress, portID string)
 	}
 	device.Events = append(device.Events, event)
 
+	// Fail closed: the device is registered, and advertised on the
+	// quarantine VLAN, only once its port has been moved there.
+	if s.vlanManager != nil {
+		if vlanErr := s.vlanManager.ApplyQuarantineFlows(ctx, portID, mac); vlanErr != nil {
+			return nil, ErrVLANTransitionFailed{
+				DeviceID: deviceID,
+				ToVLAN:   s.config.QuarantineVLAN,
+				Reason:   "failed to apply quarantine VLAN; device not registered",
+				Cause:    vlanErr,
+			}
+		}
+	}
+
 	if err := s.stateManager.Register(device); err != nil {
 		return nil, ErrProvisioningFailed{
 			DeviceID: deviceID,
 			Reason:   "failed to register device",
 			Cause:    err,
-		}
-	}
-
-	if s.vlanManager != nil {
-		if vlanErr := s.vlanManager.ApplyQuarantineFlows(ctx, portID, mac); vlanErr != nil {
-			s.logger.Warn("Failed to apply quarantine VLAN",
-				"device_id", deviceID,
-				"port_id", portID,
-				"error", vlanErr.Error(),
-			)
 		}
 	}
 
@@ -588,6 +591,22 @@ func (s *service) UpdateDeviceState(ctx context.Context, deviceID string, state 
 			DeviceID: deviceID,
 			Reason:   "failed to transition device state",
 			Cause:    err,
+		}
+	}
+
+	// Record the VLAN the move enforced, so GetDevice and a VLAN filter
+	// report the device where its port now is.
+	if vlan, ok := s.vlanForState(state); s.vlanManager != nil && ok {
+		updateErr := s.stateManager.UpdateDevice(deviceID, func(d *DeviceInfo) error {
+			d.CurrentVLAN = vlan
+			return nil
+		})
+		if updateErr != nil {
+			return ErrProvisioningFailed{
+				DeviceID: deviceID,
+				Reason:   "failed to record current VLAN",
+				Cause:    updateErr,
+			}
 		}
 	}
 
@@ -997,5 +1016,20 @@ func (s *service) applyVLANForState(ctx context.Context, device *DeviceInfo, sta
 
 	default:
 		return nil
+	}
+}
+
+// vlanForState returns the VLAN applyVLANForState moves a device's port to
+// for state, and false when the state moves no flows.
+func (s *service) vlanForState(state ProvisioningState) (uint16, bool) {
+	switch state {
+	case StateBooting, StateInstalling, StateInstallComplete, StateEnrolling, StateEnrolled, StateAuthorizing:
+		return s.config.ProvisioningVLAN, true
+
+	case StateQuarantined, StateFailed:
+		return s.config.QuarantineVLAN, true
+
+	default:
+		return 0, false
 	}
 }

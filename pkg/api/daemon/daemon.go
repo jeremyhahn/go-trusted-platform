@@ -2659,7 +2659,7 @@ func (d *Daemon) tlsPreflight() error {
 // cleanup path, and a retry could meet duplicate workers (#32). Stop
 // errors are logged, never masked over the original startup error.
 func (d *Daemon) rollbackPartialStart(ctx context.Context) {
-	d.closePXEBackend("startup rollback")
+	d.stopPXEBackend(ctx, "startup rollback")
 
 	// QUIC first: a QUIC Start that acquired resources (bound its
 	// listener, started workers) before returning an error can leave the
@@ -3039,6 +3039,17 @@ func (d *Daemon) closePXEBackend(phase string) {
 	}
 	if err := d.pxeGRPCService.Close(); err != nil {
 		d.logger.Warn(phase+": PXE backend close failed", "error", err)
+	}
+}
+
+// stopPXEBackend stops the PXE backend's iPXE server and keeps the backend
+// initialized, so a Start retry after a startup rollback serves PXE.
+func (d *Daemon) stopPXEBackend(ctx context.Context, phase string) {
+	if d.pxeGRPCService == nil {
+		return
+	}
+	if err := d.pxeGRPCService.StopBackend(ctx); err != nil {
+		d.logger.Warn(phase+": PXE backend stop failed", "error", err)
 	}
 }
 

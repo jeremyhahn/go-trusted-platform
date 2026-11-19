@@ -53,13 +53,25 @@ func (s *PXEGRPCService) SetPXEService(svc pxe.Service) {
 }
 
 // Close stops the PXE backend, when one is set, releasing its iPXE listener
-// and VLAN integration. The daemon calls it on Stop, ForceStop and startup
-// rollback (#1694).
+// and VLAN integration. The daemon calls it on Stop and ForceStop (#1694).
 func (s *PXEGRPCService) Close() error {
 	if s == nil || s.pxeService == nil {
 		return nil
 	}
 	return s.pxeService.Close()
+}
+
+// StopBackend stops the PXE backend's iPXE server, when it is running. It
+// frees the iPXE listener and keeps the backend initialized, so a Start
+// retry after a startup rollback serves PXE (#1694).
+func (s *PXEGRPCService) StopBackend(ctx context.Context) error {
+	if s == nil || s.pxeService == nil {
+		return nil
+	}
+	if s.pxeService.IsRunning() {
+		return s.pxeService.Stop(ctx)
+	}
+	return nil
 }
 
 // requireService returns the canonical not-configured error when this
