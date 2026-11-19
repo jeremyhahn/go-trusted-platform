@@ -16,7 +16,9 @@ package backends
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/go-tpm/tpm2/transport"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
@@ -125,6 +127,78 @@ func TestPlatformTPMOpener_SharesThePlatformTransport(t *testing.T) {
 	}
 	if rec.sends != 2 {
 		t.Fatalf("platform transport saw %d commands, want 2", rec.sends)
+	}
+}
+
+// TestPlatformTPMOpenerSerializes pins the opener as the transport's lock:
+// a second Open waits for the first closer's Close, a waiter whose context
+// ends gets ctx.Err(), and a doubled Close releases the lock only once.
+func TestPlatformTPMOpenerSerializes(t *testing.T) {
+	fake := fakePlatformModule{tpm: &recordingTPM{}}
+	opener := PlatformTPMOpener(func() xkmssdk.TrustedPlatformModule { return fake })
+
+	first, err := opener.Open(context.Background())
+	if err != nil {
+		t.Fatalf("first Open: %v", err)
+	}
+
+	var released atomic.Bool
+	opened := make(chan transport.TPMCloser, 1)
+	go func() {
+		second, err := opener.Open(context.Background())
+		if err != nil {
+			t.Errorf("second Open: %v", err)
+			opened <- nil
+			return
+		}
+		if !released.Load() {
+			t.Errorf("second Open returned while the first closer was still open")
+		}
+		opened <- second
+	}()
+
+	select {
+	case <-opened:
+		t.Fatal("second Open returned before the first Close")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	// A waiter whose context is cancelled gives up with ctx.Err().
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := opener.Open(cancelled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Open with a cancelled ctx: err = %v, want context.Canceled", err)
+	}
+
+	released.Store(true)
+	if err := first.Close(); err != nil {
+		t.Fatalf("first Close: %v", err)
+	}
+	second := <-opened
+	if second == nil {
+		t.FailNow()
+	}
+
+	// A second Close of the first closer must not release the lock that
+	// the second closer now holds.
+	if err := first.Close(); err != nil {
+		t.Fatalf("first Close again: %v", err)
+	}
+	ctx, stop := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer stop()
+	if _, err := opener.Open(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Open while the second closer holds the lock: err = %v, want context.DeadlineExceeded", err)
+	}
+
+	if err := second.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	third, err := opener.Open(context.Background())
+	if err != nil {
+		t.Fatalf("Open after every Close: %v", err)
+	}
+	if err := third.Close(); err != nil {
+		t.Fatalf("third Close: %v", err)
 	}
 }
 
