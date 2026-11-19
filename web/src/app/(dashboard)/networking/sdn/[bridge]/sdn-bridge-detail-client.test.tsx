@@ -222,6 +222,26 @@ describe('SDNBridgeDetailClient policy apply and policy identity', () => {
     push.mockReset();
   });
 
+  // #2024 Codex P1: the backend installs "normal" for RATE_LIMIT and MIRROR,
+  // so the action select must not offer them.
+  it('apply policy offers only the actions the backend enforces', async () => {
+    await renderPage({});
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Policy' }));
+    const select = screen.getByLabelText('Action *') as HTMLSelectElement;
+    const values = Array.from(select.options).map((o) => o.value);
+    expect(values).not.toContain('POLICY_RULE_ACTION_RATE_LIMIT');
+    expect(values).not.toContain('POLICY_RULE_ACTION_MIRROR');
+    for (const v of [
+      'POLICY_RULE_ACTION_ALLOW',
+      'POLICY_RULE_ACTION_DENY',
+      'POLICY_RULE_ACTION_REDIRECT',
+      'POLICY_RULE_ACTION_LOG',
+    ]) {
+      expect(values).toContain(v);
+    }
+  });
+
   it('apply policy submits a rule and a bridge target', async () => {
     const sent = await renderPage({ [`POST ${SDN}/policies`]: ok({ policy: { id: 'pol-9' } }) });
 
