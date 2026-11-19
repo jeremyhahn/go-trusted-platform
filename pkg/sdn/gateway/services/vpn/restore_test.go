@@ -662,6 +662,108 @@ func TestReclaimOrphans_RevokeInFlightFailedRemovalKeepsAddress(t *testing.T) {
 	assert.Equal(t, "mini-1", h.holder(t, lease.Address), "the owed removal holds the address through peerRetry")
 }
 
+// lostReleaseAllocator commits a Release and, when armed, loses its
+// response: the caller sees an error although the address was freed.
+type lostReleaseAllocator struct {
+	ipam.Allocator
+	lose atomic.Bool
+}
+
+func (a *lostReleaseAllocator) Release(ctx context.Context, ip netip.Addr) error {
+	if err := a.Allocator.Release(ctx, ip); err != nil {
+		return err
+	}
+	if a.lose.CompareAndSwap(true, false) {
+		return errors.New("response lost")
+	}
+	return nil
+}
+
+func TestRetry_ALostReleaseResponseNeverFreesAReadmittedLease(t *testing.T) {
+	ctx := context.Background()
+	h := newRestoreHarness(t)
+	lossy := &lostReleaseAllocator{Allocator: h.ipam}
+	svc, err := New(Deps{
+		Identity:   &fakeIdentity{},
+		Verifier:   &fakeVerifier{},
+		Posture:    &fakePosture{},
+		Factors:    &fakeFactors{},
+		IPAM:       lossy,
+		DataPlanes: map[DataPlaneKind]DataPlane{DataPlaneMASQUE: h.plane},
+		Leases:     h.store,
+		Audit:      &fakeAudit{},
+		Clock:      h.clock,
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}, testConfig())
+	require.NoError(t, err)
+	h.svc = svc
+
+	lease := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
+	lease.Zones = []string{"fabric"}
+	require.NoError(t, h.store.Put(ctx, lease))
+	h.plane.installed[lease.ID] = lease
+	h.allocate(t, "mini-1", lease.Address)
+	h.start(t)
+	h.plane.failRemovals(errors.New("datapath unreachable"))
+	err = h.svc.Restore(ctx)
+	var dropped *ErrLeaseNotRestored
+	require.True(t, errors.As(err, &dropped), "got %v", err)
+
+	// The retried removal succeeds; the release commits but its response
+	// is lost, so lease-1 is owed again.
+	h.plane.failRemovals(nil)
+	lossy.lose.Store(true)
+	h.svc.Sweep(ctx)
+	require.False(t, h.plane.hosts(lease.ID))
+	require.Equal(t, "", h.holder(t, lease.Address), "the release committed")
+
+	// The same device is readmitted at the freed address.
+	h.allocate(t, "mini-1", lease.Address)
+	lease2 := h.seed(t, "lease-2", "mini-1", lease.Address.String())
+	h.plane.mu.Lock()
+	h.plane.installed[lease2.ID] = lease2
+	h.plane.mu.Unlock()
+
+	h.svc.Sweep(ctx)
+	assert.Equal(t, "mini-1", h.holder(t, lease.Address), "the owed cleanup never frees the readmitted lease's address")
+	assert.True(t, h.plane.hosts("lease-2"))
+
+	h.svc.Sweep(ctx)
+	assert.Equal(t, "mini-1", h.holder(t, lease.Address), "the obligation was dropped, not owed again")
+	assert.True(t, h.plane.hosts("lease-2"))
+}
+
+func TestRetry_ReclaimDuringAWaitingRetryKeepsTheOwedAddress(t *testing.T) {
+	ctx := context.Background()
+	h := newRestoreHarness(t)
+	lease := h.seed(t, "lease-1", "mini-1", "100.64.0.2/32")
+	h.allocateVPN(t, "mini-1", lease.Address)
+	h.start(t)
+	require.NoError(t, h.svc.Restore(ctx))
+	h.forgetAFailedRemoval(t, lease)
+
+	// A retry waits for the gate while another holder of it reclaims.
+	h.svc.enrolGate.RLock()
+	done := make(chan struct{})
+	go func() {
+		h.svc.retryPeerReconcile(ctx)
+		close(done)
+	}()
+	<-time.After(200 * time.Millisecond)
+	err := h.svc.reclaimOrphanAddressesLocked(ctx)
+	assert.NoError(t, err)
+	assert.Equal(t, "mini-1", h.holder(t, lease.Address), "a waiting retry still owes the peer removal")
+	assert.True(t, h.plane.hosts(lease.ID))
+	h.svc.enrolGate.RUnlock()
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the retry never finished")
+	}
+	assert.Equal(t, "mini-1", h.holder(t, lease.Address), "the retry failed again, so the obligation is kept")
+}
+
 // reclaimAfterRevoke starts orphan reclaim while the revocation paused at
 // p is in flight, checks that reclaim waits behind it (the two are
 // serialized by enrolGate), lets the revocation finish and waits for
