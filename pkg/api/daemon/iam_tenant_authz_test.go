@@ -13,6 +13,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
+	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 
 	"google.golang.org/grpc"
@@ -149,6 +150,12 @@ func TestCallerTenant(t *testing.T) {
 			name:       "QUIC platform token",
 			ctx:        quic.ContextWithAuthorizedContext(context.Background(), &platformtoken.AuthorizedContext{TenantID: "tenant-q"}),
 			wantTenant: "tenant-q",
+			wantBound:  true,
+		},
+		{
+			name:       "REST platform token (webservice PlatformTokenMiddleware)",
+			ctx:        iammw.SetAuthorizedContext(context.Background(), &platformtoken.AuthorizedContext{TenantID: "tenant-r"}),
+			wantTenant: "tenant-r",
 			wantBound:  true,
 		},
 		{

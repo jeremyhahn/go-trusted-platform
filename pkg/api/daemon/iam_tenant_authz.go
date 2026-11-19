@@ -8,6 +8,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/tenant"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
+	iammw "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware/iam"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -32,18 +33,26 @@ func callerTenant(ctx context.Context) (string, bool) {
 	if authCtx, ok := mcp.AuthorizedContextFromContext(ctx); ok && authCtx != nil {
 		return authCtx.TenantID, true
 	}
+	// REST callers: the webservice's PlatformTokenMiddleware stores the
+	// verified platform token here, and its JWT handler an IAM session.
+	if authCtx, ok := iammw.AuthorizedContextFromContext(ctx); ok && authCtx != nil {
+		return authCtx.TenantID, true
+	}
+	if session, ok := iammw.GetSessionFromContext(ctx); ok && session != nil {
+		return session.TenantID(), true
+	}
 	if identity := IdentityFromContext(ctx); identity != nil {
 		return identity.TenantID, true
 	}
 	return "", false
 }
 
-// ErrUnboundCaller is the refusal a caller with no identity at all gets from
+// errUnboundCaller is the refusal a caller with no identity at all gets from
 // a tenant-scoped call: no platform token, no mTLS identity and no Unix peer
 // credentials, so there is no tenant to check the request against.
-type ErrUnboundCaller struct{}
+type errUnboundCaller struct{}
 
-func (ErrUnboundCaller) Error() string {
+func (errUnboundCaller) Error() string {
 	return "tenant-scoped call refused: the caller carries no authenticated identity"
 }
 
@@ -56,7 +65,7 @@ func authorizeUnboundCaller(ctx context.Context) error {
 	if _, ok := peercred.UnixCredentialsFromContext(ctx); ok {
 		return nil
 	}
-	return status.Error(codes.PermissionDenied, ErrUnboundCaller{}.Error())
+	return status.Error(codes.PermissionDenied, errUnboundCaller{}.Error())
 }
 
 // authorizeIAMTenant refuses an IAM request that names a tenant other than
