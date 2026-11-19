@@ -18,6 +18,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -185,6 +186,106 @@ func TestBuildFHRP_StartsSpeakerWithInjectedTransport(t *testing.T) {
 
 	require.NoError(t, svc.Stop(context.Background()))
 	assert.False(t, svc.Active())
+}
+
+// TestFHRPSweepsVIPsOfRemovedGroups: a datapath child that died while a
+// group held its VIPs left them on the interface; a restart without that
+// group (or without FHRP) deletes exactly the recorded ones, and never an
+// owner's own address, which is never recorded (Codex #1716 round 2).
+func TestFHRPSweepsVIPsOfRemovedGroups(t *testing.T) {
+	kept := netip.MustParsePrefix("192.0.2.1/24")
+	removed := netip.MustParsePrefix("198.51.100.1/24")
+	crashed := func(t *testing.T) (string, *fakeFHRPProgrammer) {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), FHRPStateDir, FHRPInventoryFile)
+		inv := fhrp.NewInventory(path)
+		require.NoError(t, inv.Record("trusted0", 10, kept))
+		require.NoError(t, inv.Record("trusted1", 20, removed))
+		return path, &fakeFHRPProgrammer{present: map[netip.Prefix]bool{kept: true, removed: true}}
+	}
+
+	t.Run("a group removed after a crash", func(t *testing.T) {
+		path, programmer := crashed(t)
+		cfg := baseGatewayConfig("fhrp-sweep-removed")
+		cfg.FHRP = ownerFHRPConfig()
+		cfg.Host = &HostRuntime{FHRPProgrammer: programmer, FHRPInventory: path}
+
+		require.NoError(t, sweepRemovedFHRPGroups(cfg))
+		assert.Equal(t, []netip.Prefix{removed}, programmer.Deleted(), "only the removed group's VIP goes")
+		assert.True(t, programmer.holds(kept), "a configured group's VIP is left to its runner")
+		entries, err := fhrp.NewInventory(path).Entries()
+		require.NoError(t, err)
+		assert.Equal(t, []fhrp.InventoryEntry{{Interface: "trusted0", VRID: 10, Prefix: kept}}, entries)
+	})
+
+	t.Run("FHRP disabled after a crash", func(t *testing.T) {
+		path, programmer := crashed(t)
+		cfg := baseGatewayConfig("fhrp-sweep-disabled")
+		cfg.Host = &HostRuntime{FHRPProgrammer: programmer, FHRPInventory: path}
+
+		require.NoError(t, sweepRemovedFHRPGroups(cfg))
+		assert.ElementsMatch(t, []netip.Prefix{kept, removed}, programmer.Deleted())
+		entries, err := fhrp.NewInventory(path).Entries()
+		require.NoError(t, err)
+		assert.Empty(t, entries)
+	})
+
+	t.Run("an owner address is never swept", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), FHRPStateDir, FHRPInventoryFile)
+		programmer := &fakeFHRPProgrammer{present: map[netip.Prefix]bool{kept: true}}
+		cfg := baseGatewayConfig("fhrp-sweep-owner")
+		cfg.FHRP = ownerFHRPConfig()
+		cfg.Host = &HostRuntime{FHRPTransport: &fakeFHRPTransport{}, FHRPProgrammer: programmer, FHRPInventory: path}
+
+		svc, err := buildFHRP(&Gateway{config: cfg})
+		require.NoError(t, err)
+		require.NoError(t, svc.Start(context.Background()))
+		require.NoError(t, svc.Stop(context.Background()))
+
+		cfg.FHRP = nil
+		require.NoError(t, sweepRemovedFHRPGroups(cfg))
+		assert.Empty(t, programmer.Deleted())
+		assert.True(t, programmer.holds(kept), "the owner's own address stays")
+	})
+
+	t.Run("a VIP the speaker adds is recorded until it is released", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), FHRPStateDir, FHRPInventoryFile)
+		cfg := baseGatewayConfig("fhrp-sweep-record")
+		cfg.FHRP = ownerFHRPConfig()
+		cfg.Host = &HostRuntime{FHRPTransport: &fakeFHRPTransport{}, FHRPProgrammer: &fakeFHRPProgrammer{}, FHRPInventory: path}
+
+		svc, err := buildFHRP(&Gateway{config: cfg})
+		require.NoError(t, err)
+		require.NoError(t, svc.Start(context.Background()))
+		entries, err := fhrp.NewInventory(path).Entries()
+		require.NoError(t, err)
+		assert.Equal(t, []fhrp.InventoryEntry{{Interface: "trusted0", VRID: 10, Prefix: kept}}, entries)
+
+		require.NoError(t, svc.Stop(context.Background()))
+		entries, err = fhrp.NewInventory(path).Entries()
+		require.NoError(t, err)
+		assert.Empty(t, entries)
+	})
+
+	t.Run("a sweep that fails fails the start", func(t *testing.T) {
+		path, programmer := crashed(t)
+		programmer.delErr = &ErrServiceUnavailable{Service: ServiceFHRP, Reason: "test delete failure"}
+		cfg := baseGatewayConfig("fhrp-sweep-fails")
+		cfg.Host = &HostRuntime{FHRPProgrammer: programmer, FHRPInventory: path}
+		gw, err := NewGateway(cfg)
+		require.NoError(t, err)
+		gw.SetNodeMetrics(validNodeMetrics())
+
+		err = gw.Start(context.Background())
+		var startup *ErrStartupFailed
+		require.True(t, errors.As(err, &startup), "got %v", err)
+		var inv *fhrp.ErrInventory
+		assert.True(t, errors.As(err, &inv))
+		assert.Equal(t, GatewayStateStopped, gw.GetState())
+		entries, err := fhrp.NewInventory(path).Entries()
+		require.NoError(t, err)
+		assert.Len(t, entries, 2, "an address not deleted stays recorded")
+	})
 }
 
 // TestBuildFHRP_IPv6TakeoverAnnouncesTheVIP: an IPv6 owner group built by

@@ -36,6 +36,19 @@ func TestClassTable_FHRPRunsInTheDatapath(t *testing.T) {
 	assert.Equal(t, ClassKernel, def.Class)
 }
 
+// TestClassTable_DatapathKeepsTheFHRPInventory: the supervisor lays out
+// fhrp/ for the datapath child and hands it fhrp/vips.json, the record
+// the sweep of removed groups' VIPs deletes from.
+func TestClassTable_DatapathKeepsTheFHRPInventory(t *testing.T) {
+	def, err := DefinitionForService(gateway.ServiceFHRP)
+	if err != nil {
+		t.Fatalf("DefinitionForService: %v", err)
+	}
+	if def.StateDir != "fhrp" || !slices.Equal(def.StateFiles, []string{"vips.json"}) {
+		t.Fatalf("datapath state = %q %v, want fhrp [vips.json]", def.StateDir, def.StateFiles)
+	}
+}
+
 // A group may name a tunnel interface: the datapath starts tunnels before
 // fhrp, and ServicesFor keeps that order (Codex #1716 P1).
 func TestClassTable_DatapathStartsTunnelsBeforeFHRP(t *testing.T) {
