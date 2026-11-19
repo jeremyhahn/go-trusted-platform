@@ -250,6 +250,12 @@ type supervised struct {
 	// decided and runs only while it is unchanged, so a hook is fenced to
 	// the child that exited and never runs over a replacement.
 	launchGen uint64
+	// claimGen is the generation of the launch claim launching holds: it
+	// is set with launching at every claim. A child of that same
+	// generation that exits before the claim is released (a crash during
+	// readiness) still gets its exit hook; only a claim for a newer
+	// generation is a replacement the hook must not run over.
+	claimGen uint64
 	// cleaning is set while Config.OnChildExit runs for this process. A
 	// launch claim that finds it set waits on cleanDone before it claims.
 	cleaning bool
@@ -339,12 +345,19 @@ func (s *Supervisor) StartService(ctx context.Context, service string) error {
 	// second caller.
 	claimed := proc.child == nil && !proc.launching
 	var pending *withdrawal
+	// replacing records a claim over a child that went down unrequested
+	// (a crash backing off, a given-up budget, a failed start): its
+	// followers' state went with that child, and the restart loop that
+	// would have replayed them finds this replacement live and returns.
+	replacing := false
 	if claimed {
+		replacing = proc.failure != nil
 		// Read with the claim: a give-up either registered its withdrawal
 		// before this point, or sees the claim and registers none.
 		pending = proc.withdrawal
 		proc.launchGen++
 		proc.launching = true
+		proc.claimGen = proc.launchGen
 		proc.followPending = false
 		// A process started again after a stop, or while its restart is
 		// backing off, still has its predecessor's desired document; the
@@ -380,6 +393,9 @@ func (s *Supervisor) StartService(ctx context.Context, service string) error {
 		if err != nil {
 			s.releaseFailedStart(ctx, proc, service)
 			return err
+		}
+		if replacing {
+			s.relaunchFollowers(ctx, proc)
 		}
 		s.relaunchPendingFollower(ctx, proc)
 	}
@@ -983,9 +999,11 @@ func (s *Supervisor) runExitHook(ctx context.Context, proc *supervised, gen uint
 	// Fenced to the exited child: a replacement that is running, or whose
 	// launch is claimed, owns the process's state now, and the hook's
 	// cleanup would tear down what it set up. A hook already in flight is
-	// left to finish alone.
+	// left to finish alone. A claim held for gen itself is the exited
+	// child's own unfinished launch (a crash during readiness): its
+	// cleanup is owed, so only a claim for another generation skips it.
 	s.mu.Lock()
-	if proc.child != nil || proc.launching || proc.cleaning || proc.launchGen != gen {
+	if proc.child != nil || (proc.launching && proc.claimGen != gen) || proc.cleaning || proc.launchGen != gen {
 		s.mu.Unlock()
 		return
 	}
@@ -1096,6 +1114,7 @@ func (s *Supervisor) restartLoop(ctx context.Context, proc *supervised, gen uint
 			proc.launchGen++
 			gen = proc.launchGen
 			proc.launching = true
+			proc.claimGen = proc.launchGen
 			proc.followPending = false
 			proc.restoring = proc.desired != nil
 		}
@@ -1296,6 +1315,7 @@ func (s *Supervisor) relaunchFollowers(ctx context.Context, followed *supervised
 		}
 		p.launchGen++
 		p.launching = true
+		p.claimGen = p.launchGen
 		p.followPending = false
 		followers = append(followers, p)
 	}
@@ -1317,6 +1337,7 @@ func (s *Supervisor) relaunchPendingFollower(ctx context.Context, proc *supervis
 	if claimed {
 		proc.launchGen++
 		proc.launching = true
+		proc.claimGen = proc.launchGen
 	}
 	s.mu.Unlock()
 	if claimed {
