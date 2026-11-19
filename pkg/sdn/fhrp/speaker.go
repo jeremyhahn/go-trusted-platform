@@ -406,10 +406,12 @@ func (r *runner) dropStaleVIPs(g *Group) error {
 				return &ErrAddressOperationFailed{VRID: g.cfg.VRID, Interface: g.cfg.Interface, Operation: "list", Address: p, Cause: err}
 			}
 			if present {
+				// Owned before the fallible record, so a failed write
+				// still leaves the VIP pending for Stop to remove.
+				r.owned[p] = true
 				if err := r.speaker.deps.Inventory.Record(g.cfg.Interface, g.cfg.VRID, p); err != nil {
 					return err
 				}
-				r.owned[p] = true
 				stale = true
 			}
 			continue
@@ -422,10 +424,12 @@ func (r *runner) dropStaleVIPs(g *Group) error {
 		}
 		for _, q := range installed {
 			if q == p {
+				// Owned before the fallible record, so a failed write
+				// still leaves the VIP pending for Stop to remove.
+				r.owned[p] = true
 				if err := r.speaker.deps.Inventory.Record(g.cfg.Interface, g.cfg.VRID, p); err != nil {
 					return err
 				}
-				r.owned[p] = true
 				stale = true
 				continue
 			}
@@ -701,7 +705,9 @@ func (r *runner) Release(g *Group) error {
 		if reads && !r.owned[p] {
 			continue
 		}
-		if err := r.speaker.deps.Programmer.DeleteAddress(g.cfg.Interface, p, hw); err != nil {
+		// A missing interface took its addresses with it (as in
+		// Inventory.Sweep): the release is complete.
+		if err := r.speaker.deps.Programmer.DeleteAddress(g.cfg.Interface, p, hw); err != nil && !linkGone(err) {
 			if first == nil {
 				first = &ErrAddressOperationFailed{VRID: g.cfg.VRID, Interface: g.cfg.Interface, Operation: "delete", Address: p, Cause: err}
 			}
@@ -713,7 +719,7 @@ func (r *runner) Release(g *Group) error {
 	// Prefixes of another length a failed stale removal left behind.
 	kept := r.stale[:0]
 	for _, q := range r.stale {
-		if err := r.speaker.deps.Programmer.DeleteAddress(g.cfg.Interface, q, hw); err != nil {
+		if err := r.speaker.deps.Programmer.DeleteAddress(g.cfg.Interface, q, hw); err != nil && !linkGone(err) {
 			kept = append(kept, q)
 			if first == nil {
 				first = &ErrAddressOperationFailed{VRID: g.cfg.VRID, Interface: g.cfg.Interface, Operation: "delete", Address: q, Cause: err}
