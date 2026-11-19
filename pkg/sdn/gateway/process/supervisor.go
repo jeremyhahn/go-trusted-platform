@@ -95,6 +95,13 @@ type Config struct {
 	// whose definition sets none: the child must send WATCHDOG=1 at least
 	// once per interval once it is ready. Zero leaves the watchdog off.
 	WatchdogInterval time.Duration
+	// OnChildExit, when set, runs after every exit of a child the
+	// supervisor did not ask for (a crash, a SIGKILL, a missed watchdog)
+	// and before its restart backoff. An error is logged at Error, recorded
+	// in the process's health, and the hook is called again on each
+	// backoff tick until it succeeds or a relaunched child is up. It is
+	// not called on an operator stop.
+	OnChildExit func(ctx context.Context, def Definition) error
 	// Clock is the time source; nil means the system clock.
 	Clock Clock
 	// Logger receives supervision events; nil means slog.Default().
@@ -207,7 +214,7 @@ type supervised struct {
 	// exists to prevent.
 	launching bool
 	// followPending records a datapath relaunch that landed while this
-	// FollowsDatapath process was launching: that launch may already have
+	// Follows process was launching: that launch may already have
 	// restored its state into the datapath child that is gone, so the
 	// process is relaunched once more when the launch completes.
 	followPending bool
@@ -233,6 +240,10 @@ type supervised struct {
 	// signal's exit, when that child is reaped.
 	missed      error
 	missedChild Child
+	// exitHookErr is the last failure of Config.OnChildExit for this
+	// process's last unrequested exit; nil once the hook has succeeded.
+	// restartLoop retries the hook on each backoff tick while it is set.
+	exitHookErr error
 }
 
 // withdrawal is a given-up follower's in-flight peer withdrawal: ctx is
@@ -916,8 +927,40 @@ func (s *Supervisor) watch(ctx context.Context, proc *supervised, child Child, n
 	proc.missed, proc.missedChild = nil, nil
 	s.mu.Unlock()
 
+	s.runExitHook(ctx, proc)
 	s.restartLoop(ctx, proc, failure, cause)
 }
+
+// runExitHook calls Config.OnChildExit for proc's unrequested exit and
+// records the outcome: a failure is logged at Error and kept in
+// proc.exitHookErr, which noteRestart folds into the process's health and
+// restartLoop retries on each backoff tick.
+func (s *Supervisor) runExitHook(ctx context.Context, proc *supervised) {
+	if s.cfg.OnChildExit == nil {
+		return
+	}
+	err := s.cfg.OnChildExit(ctx, proc.def)
+	if err != nil {
+		err = &ErrExitHook{Process: proc.def.Name, Cause: err}
+		s.cfg.Logger.Error("gatewayd supervisor: child exit hook failed",
+			slog.String("process", proc.def.Name), slog.Any("error", err))
+	}
+	s.mu.Lock()
+	proc.exitHookErr = err
+	s.mu.Unlock()
+}
+
+// ErrExitHook reports a failed Config.OnChildExit call.
+type ErrExitHook struct {
+	Process string
+	Cause   error
+}
+
+func (e *ErrExitHook) Error() string {
+	return "gatewayd supervisor: exit hook for process " + e.Process + " failed: " + e.Cause.Error()
+}
+
+func (e *ErrExitHook) Unwrap() error { return e.Cause }
 
 // restartLoop brings a process back up, and keeps trying while its restart
 // budget holds.
@@ -958,6 +1001,13 @@ func (s *Supervisor) restartLoop(ctx context.Context, proc *supervised, failure 
 		}
 
 		s.mu.Lock()
+		hookPending := proc.exitHookErr != nil
+		s.mu.Unlock()
+		if hookPending {
+			s.runExitHook(ctx, proc)
+		}
+
+		s.mu.Lock()
 		stillWanted := !s.stopped && !proc.stopping && len(proc.wanted) > 0 && proc.child == nil && !proc.launching
 		if stillWanted {
 			proc.launching = true
@@ -982,9 +1032,12 @@ func (s *Supervisor) restartLoop(ctx context.Context, proc *supervised, failure 
 		proc.launching = false
 		s.mu.Unlock()
 		if err == nil {
-			if proc.def.Class == ClassKernel {
-				s.relaunchFollowers(ctx, proc)
-			}
+			// The relaunched child is up: a stale exit-hook failure no
+			// longer describes it.
+			s.mu.Lock()
+			proc.exitHookErr = nil
+			s.mu.Unlock()
+			s.relaunchFollowers(ctx, proc)
 			s.relaunchPendingFollower(ctx, proc)
 			return
 		}
@@ -1056,9 +1109,9 @@ func (s *Supervisor) followerRelaunched(proc *supervised) bool {
 // handler stops a withdrawal the replacement fenced; the planes not yet
 // asked stay pending.
 func (s *Supervisor) withdrawRound(ctx context.Context, proc *supervised, pending []string) []string {
-	_, client, err := s.datapathProcess()
+	client, err := s.followedClient(proc.def.Follows)
 	if err != nil {
-		s.cfg.Logger.Warn("gatewayd supervisor: no datapath to withdraw the given-up process's vpn peers from",
+		s.cfg.Logger.Warn("gatewayd supervisor: no followed process to withdraw the given-up process's vpn peers from",
 			slog.String("process", proc.def.Name), slog.Any("error", err))
 		return pending
 	}
@@ -1103,16 +1156,16 @@ func awaitWithdrawal(ctx context.Context, w *withdrawal) error {
 }
 
 // relaunchFollowers relaunches every running process that keeps state in
-// the datapath child (Definition.FollowsDatapath) once datapath, its
-// relaunched kernel process, answers. The crashed datapath child took that
+// the followed child (Definition.Follows names it) once followed, the
+// relaunched process, answers. The crashed datapath child took that
 // state with it, and such a process reinstalls it only at its start: the
 // vpn child's Restore reinstalls each stored lease into the new planes.
 // The process is reported down (restoring) until that start is done.
-func (s *Supervisor) relaunchFollowers(ctx context.Context, datapath *supervised) {
+func (s *Supervisor) relaunchFollowers(ctx context.Context, followed *supervised) {
 	s.mu.Lock()
 	var followers []*supervised
 	for _, p := range s.processes {
-		if p == datapath || !p.def.FollowsDatapath || s.stopped || p.stopping || len(p.wanted) == 0 {
+		if p == followed || p.def.Follows != followed.def.Name || s.stopped || p.stopping || len(p.wanted) == 0 {
 			continue
 		}
 		if p.launching {
@@ -1152,7 +1205,7 @@ func (s *Supervisor) relaunchPendingFollower(ctx context.Context, proc *supervis
 	}
 }
 
-// relaunchFollower stops and relaunches p, a FollowsDatapath process the
+// relaunchFollower stops and relaunches p, a Follows process the
 // caller has claimed (p.launching), so its start reinstalls its state
 // into the current datapath child.
 func (s *Supervisor) relaunchFollower(ctx context.Context, p *supervised) {
@@ -1230,7 +1283,7 @@ func (s *Supervisor) noteRestart(ctx context.Context, proc *supervised, failure 
 		// lock that decided the give-up, and only when no replacement
 		// launch is claimed: a claimant either came first (and restores
 		// its own peers) or sees this withdrawal and fences it.
-		if !proc.def.FollowsDatapath || proc.child != nil || proc.launching || s.stopped || proc.stopping {
+		if proc.def.Follows == "" || proc.child != nil || proc.launching || s.stopped || proc.stopping {
 			return 0, true, nil
 		}
 		wctx, cancel := context.WithCancel(ctx)
@@ -1247,6 +1300,9 @@ func (s *Supervisor) noteRestart(ctx context.Context, proc *supervised, failure 
 		}
 	}
 	proc.failure = failure
+	if proc.exitHookErr != nil {
+		proc.failure = errors.Join(failure, proc.exitHookErr)
+	}
 	return proc.backoff, false, nil
 }
 
@@ -1871,6 +1927,23 @@ func (s *Supervisor) datapathProcess() (*supervised, *ipc.Client, error) {
 	return datapath, datapath.client, nil
 }
 
+// followedClient returns the serving client of the process a follower
+// names in Definition.Follows (the `wireguard` process for the vpn row).
+func (s *Supervisor) followedClient(name string) (*ipc.Client, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	proc, ok := s.processes[name]
+	if !ok || proc.client == nil {
+		var cause error = &ErrProcessNeverStarted{Process: name}
+		if ok && proc.failure != nil {
+			cause = proc.failure
+		}
+		return nil, &ErrProcessDown{Process: name, Cause: cause}
+	}
+	return proc.client, nil
+}
+
 // kernelProcessLocked returns the one kernel-class process the supervisor
 // knows, only among those with a child serving when serving is set. The
 // caller holds s.mu.
@@ -1878,7 +1951,9 @@ func (s *Supervisor) kernelProcessLocked(serving bool) (*supervised, error) {
 	var datapath *supervised
 	var names []string
 	for _, proc := range s.processes {
-		if proc.def.Class != ClassKernel || (serving && proc.client == nil) {
+		// The wireguard row is kernel-class too, but it hosts the VPN
+		// planes, not the datapath.
+		if proc.def.Class != ClassKernel || proc.def.Name == WireGuardProcess || (serving && proc.client == nil) {
 			continue
 		}
 		names = append(names, proc.def.Name)
