@@ -35,8 +35,6 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 
 	trustedca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/acme"
 

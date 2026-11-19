@@ -804,6 +804,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 
 	daemonConfig := daemon.DefaultConfig()
 	daemonConfig.App = App
+	daemonConfig.PXE = App.PXEConfig
 	daemonConfig.Logger = logger
 	daemonConfig.SocketPath = serveSocketPath
 	daemonConfig.GRPCSocketPath = serveSocketPath

@@ -168,6 +168,114 @@ func NewServiceConfig(plan *netplan.Plan) (*ServiceConfig, error) {
 	}, nil
 }
 
+// DaemonConfig is the daemon's optional `pxe:` section (#1694). It is off
+// by default: with no section, or with enabled: false, the daemon builds no
+// PXE backend and every PXE RPC answers SERVICE_NOT_CONFIGURED. Fields left
+// at their zero value keep the NewServiceConfig defaults.
+type DaemonConfig struct {
+	// Enabled turns the PXE backend on.
+	Enabled bool `yaml:"enabled" json:"enabled" mapstructure:"enabled"`
+
+	// BridgeName is the OVS bridge for VLAN management (required when enabled).
+	BridgeName string `yaml:"bridge-name,omitempty" json:"bridge-name,omitempty" mapstructure:"bridge-name"`
+
+	// RegistryAddr is the ISO registry endpoint.
+	RegistryAddr string `yaml:"registry-addr,omitempty" json:"registry-addr,omitempty" mapstructure:"registry-addr"`
+
+	// DefaultISORef is the default ISO registry reference.
+	DefaultISORef string `yaml:"default-iso-ref,omitempty" json:"default-iso-ref,omitempty" mapstructure:"default-iso-ref"`
+
+	// MaxRetries is the maximum number of retry attempts.
+	MaxRetries int `yaml:"max-retries,omitempty" json:"max-retries,omitempty" mapstructure:"max-retries"`
+
+	// InstallTimeout is the OS installation timeout.
+	InstallTimeout time.Duration `yaml:"install-timeout,omitempty" json:"install-timeout,omitempty" mapstructure:"install-timeout"`
+
+	// EnrollmentTimeout is the device enrollment timeout.
+	EnrollmentTimeout time.Duration `yaml:"enrollment-timeout,omitempty" json:"enrollment-timeout,omitempty" mapstructure:"enrollment-timeout"`
+
+	// WebhookEnabled mounts the install-completion webhook; it needs WebhookSecret.
+	WebhookEnabled bool `yaml:"webhook-enabled,omitempty" json:"webhook-enabled,omitempty" mapstructure:"webhook-enabled"`
+
+	// WebhookSecret is the HMAC key for install-completion webhooks.
+	WebhookSecret string `yaml:"webhook-secret,omitempty" json:"webhook-secret,omitempty" mapstructure:"webhook-secret"`
+
+	// BindHost is the iPXE server bind address.
+	BindHost string `yaml:"bind-host,omitempty" json:"bind-host,omitempty" mapstructure:"bind-host"`
+
+	// LocalFilesDir is the iPXE server's local files directory.
+	LocalFilesDir string `yaml:"local-files-dir,omitempty" json:"local-files-dir,omitempty" mapstructure:"local-files-dir"`
+
+	// InstallsDir is the iPXE server's installs directory.
+	InstallsDir string `yaml:"installs-dir,omitempty" json:"installs-dir,omitempty" mapstructure:"installs-dir"`
+
+	// FirmwareDir is the iPXE server's firmware directory.
+	FirmwareDir string `yaml:"firmware-dir,omitempty" json:"firmware-dir,omitempty" mapstructure:"firmware-dir"`
+
+	// FirmwareOffline serves firmware from FirmwareDir without fetching it.
+	FirmwareOffline bool `yaml:"firmware-offline,omitempty" json:"firmware-offline,omitempty" mapstructure:"firmware-offline"`
+
+	// BootEntries are the iPXE boot menu entries.
+	BootEntries []ipxe.BootEntry `yaml:"boot-entries,omitempty" json:"boot-entries,omitempty" mapstructure:"boot-entries"`
+}
+
+// ToServiceConfig builds the PXE ServiceConfig for an enabled section. A nil
+// or disabled section returns nil and no error: no backend is built. An
+// enabled section starts from NewServiceConfig(plan), takes the fields it
+// sets, and returns Validate's typed error unchanged when it is invalid.
+func (d *DaemonConfig) ToServiceConfig(plan *netplan.Plan) (*ServiceConfig, error) {
+	if d == nil || !d.Enabled {
+		return nil, nil
+	}
+	cfg, err := NewServiceConfig(plan)
+	if err != nil {
+		return nil, err
+	}
+	cfg.BridgeName = d.BridgeName
+	if d.RegistryAddr != "" {
+		cfg.RegistryAddr = d.RegistryAddr
+	}
+	if d.DefaultISORef != "" {
+		cfg.DefaultISORef = d.DefaultISORef
+	}
+	if d.MaxRetries != 0 {
+		cfg.MaxRetries = d.MaxRetries
+	}
+	if d.InstallTimeout != 0 {
+		cfg.InstallTimeout = d.InstallTimeout
+	}
+	if d.EnrollmentTimeout != 0 {
+		cfg.EnrollmentTimeout = d.EnrollmentTimeout
+	}
+	cfg.WebhookEnabled = d.WebhookEnabled
+	cfg.WebhookSecret = d.WebhookSecret
+	if cfg.IPXEConfig == nil {
+		cfg.IPXEConfig = ipxe.DefaultServerConfig()
+	}
+	if d.BindHost != "" {
+		cfg.IPXEConfig.BindHost = d.BindHost
+	}
+	if d.LocalFilesDir != "" {
+		cfg.IPXEConfig.LocalFilesDir = d.LocalFilesDir
+	}
+	if d.InstallsDir != "" {
+		cfg.IPXEConfig.InstallsDir = d.InstallsDir
+	}
+	if d.FirmwareDir != "" {
+		cfg.IPXEConfig.FirmwareDir = d.FirmwareDir
+	}
+	if d.FirmwareOffline {
+		cfg.IPXEConfig.FirmwareOffline = true
+	}
+	if len(d.BootEntries) > 0 {
+		cfg.IPXEConfig.BootEntries = d.BootEntries
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
 // DefaultFirmwareConfig returns a FirmwareConfig with sensible defaults.
 func DefaultFirmwareConfig() *FirmwareConfig {
 	return &FirmwareConfig{

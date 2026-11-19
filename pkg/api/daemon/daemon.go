@@ -37,8 +37,10 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/app"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/barrier"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/eab"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/health"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
@@ -48,7 +50,9 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/ipc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/perf"
 	ipambackends "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam/backends"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/netplan"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ovs"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/util/peercred"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vpn"
@@ -988,10 +992,14 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	logger.Info("DNS gRPC service registered")
 
 	// Create the PXE gRPC service. Every transport serves this one
-	// instance. platformd never sets its backend (PXE is a gateway-role
-	// service and the platformd config has no pxe: section), so each call
-	// answers Unavailable with SERVICE_NOT_CONFIGURED (requireService).
-	pxeGRPCService := NewPXEGRPCService(logger, nil)
+	// instance. Its backend comes from the optional `pxe:` section, off by
+	// default: with no section or enabled: false each call answers
+	// Unavailable with SERVICE_NOT_CONFIGURED (requireService); an invalid
+	// enabled section fails daemon start.
+	pxeGRPCService, err := pxeGRPCServiceFromConfig(context.Background(), logger, config.App, config.PXE)
+	if err != nil {
+		return nil, err
+	}
 	if grpcServer != nil {
 		platformv1.RegisterPXEServiceServer(grpcServer, pxeGRPCService)
 	}
@@ -1992,6 +2000,44 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 
 	logger.Info("Daemon created successfully")
 	return daemon, nil
+}
+
+// pxeGRPCServiceFromConfig builds the PXE gRPC service from the daemon's
+// optional `pxe:` section (#1694). With no section, or enabled: false, the
+// service has no backend and every call answers SERVICE_NOT_CONFIGURED. An
+// enabled section is built against the SDN network plan, initialized, and
+// set as the backend; an invalid section returns its typed error so the
+// daemon does not start.
+func pxeGRPCServiceFromConfig(ctx context.Context, logger *logging.Logger, a *app.App, section *pxe.DaemonConfig) (*PXEGRPCService, error) {
+	svc := NewPXEGRPCService(logger, nil)
+	if section == nil || !section.Enabled {
+		return svc, nil
+	}
+	var plan *netplan.Plan
+	if zones, env := zoneServiceSeed(a); env != nil {
+		if len(zones) == 0 {
+			zones = zone.Defaults()
+		}
+		p, err := netplan.New(*env, zones)
+		if err != nil {
+			return nil, err
+		}
+		plan = p
+	}
+	cfg, err := section.ToServiceConfig(plan)
+	if err != nil {
+		return nil, err
+	}
+	backend := pxe.NewService(
+		pxe.WithLogger(logger),
+		pxe.WithStateManager(pxe.NewStateManager()),
+		pxe.WithVLANIntegration(pxe.NewVLANIntegrationWrapper(pxe.WithBridgeName(cfg.BridgeName))),
+	)
+	if err := backend.Initialize(ctx, cfg); err != nil {
+		return nil, err
+	}
+	svc.SetPXEService(backend)
+	return svc, nil
 }
 
 // grpcServerWrapper wraps *grpc.Server to implement GRPCServerInterface

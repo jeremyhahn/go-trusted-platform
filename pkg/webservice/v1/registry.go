@@ -289,10 +289,11 @@ func NewDeviceRegistrationHook(deviceService DeviceRegistrar, logger *slog.Logge
 
 // PXEIdentityRecorder records the IDevID issued at enrolment on the PXE
 // record of the enrolling device. pkg/api/daemon.PXEGRPCService implements
-// it. It answers codes.NotFound when the client IP or MAC resolves to no PXE
-// device and codes.FailedPrecondition when the device is past Installing.
+// it. The device is found by the MAC bound to its verified EK in its profile,
+// never by the client IP (#1694). It answers codes.NotFound when the MAC
+// resolves to no PXE device and codes.FailedPrecondition when the device is
+// past Installing.
 type PXEIdentityRecorder interface {
-	RecordEnrolledIDevIDFingerprint(ctx context.Context, clientIP string, leaf *x509.Certificate) error
 	RecordEnrolledIDevIDFingerprintForMAC(ctx context.Context, mac string, leaf *x509.Certificate) error
 }
 
