@@ -213,7 +213,13 @@ func (m *MTLSAdapter) ExtractTenant(cert *x509.Certificate) (string, error) {
 		return "", ErrNilCertificate{}
 	}
 
-	tenant := m.extractFromField(cert, m.config.TenantField)
+	// SPEC.md:122: the tenant is the subject OU on every path. TenantField
+	// no longer selects the field, so an override cannot admit an O-only
+	// certificate or let the CN name a tenant other than the OU.
+	if len(cert.Subject.OrganizationalUnit) == 0 {
+		return "", ErrTenantNotFound{}
+	}
+	tenant := cert.Subject.OrganizationalUnit[0]
 
 	if tenant == "" {
 		return "", ErrTenantNotFound{}

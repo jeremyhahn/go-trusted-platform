@@ -135,7 +135,8 @@ type MTLSConfig struct {
 	// IdentityField specifies which certificate field to extract identity from.
 	IdentityField IdentityField
 
-	// TenantField specifies which certificate field to extract tenant from.
+	// TenantField is kept for compatibility only: it no longer selects the
+	// tenant. The tenant is always the certificate subject OU (SPEC.md:122).
 	TenantField IdentityField
 
 	// DefaultTenant is kept for API compatibility only: the mTLS adapter
