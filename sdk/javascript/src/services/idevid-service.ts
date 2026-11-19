@@ -289,7 +289,12 @@ export class IDevIDService extends BaseService {
         ? algorithm
         : `DEVICE_KEY_ALGORITHM_${algorithm}`;
     }
-    return this.client.post<CreateLDevIDResponse>(this.buildUrl('/ldevid'), body);
+    // No retries: the daemon creates and saves a fresh key on each call, so a
+    // resend after a lost response replaces the just-issued identity
+    // (overwrite=true) or reports a false failure (overwrite=false).
+    return this.client.post<CreateLDevIDResponse>(this.buildUrl('/ldevid'), body, {
+      retry: { enabled: false },
+    });
   }
 
   // =========================================================================

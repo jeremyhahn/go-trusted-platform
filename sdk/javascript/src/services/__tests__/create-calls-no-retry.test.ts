@@ -45,6 +45,8 @@ function lossyClient(): { client: ApiClient; fetchImpl: ReturnType<typeof vi.fn>
   return { client, fetchImpl };
 }
 
+const spec = { memoryMb: 2048, cpus: 2, diskSize: '20G', bootMode: 'uefi', arch: 'x86_64', tpmEnabled: true };
+
 describe('create calls go out without client retries', () => {
   it('createLDevID passes retry disabled to the client', async () => {
     const mockClient = createMockApiClient();
@@ -54,7 +56,7 @@ describe('create calls go out without client retries', () => {
 
   it('prepareMigration passes retry disabled to the client', async () => {
     const mockClient = createMockApiClient();
-    await new ComputeService(mockClient).prepareMigration({ vmId: 'vm-1', vmName: 'web', mode: 'live' });
+    await new ComputeService(mockClient).prepareMigration({ vmId: 'vm-1', vmName: 'web', mode: 'live', spec });
     expect(vi.mocked(mockClient.post).mock.calls[0]?.[2]).toEqual({ retry: { enabled: false } });
   });
 
@@ -72,6 +74,7 @@ describe('create calls go out without client retries', () => {
       vmId: 'vm-1',
       vmName: 'web',
       mode: 'live',
+      spec,
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(result.success).toBe(false);
