@@ -3,6 +3,7 @@
 package commands
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/netip"
@@ -43,7 +44,52 @@ func wireGuardPlaneRun(t *testing.T, offered []vpn.DataPlaneKind, keyRef string,
 
 var hubAddress = netip.MustParsePrefix("100.64.0.1/24")
 
+// withHubZoneEnforced builds the hub for the test, as the later
+// destination-zone row will: until then vpnDataPlanes fails closed.
+func withHubZoneEnforced(t *testing.T) {
+	t.Helper()
+	vpnHubZoneEnforced = true
+	t.Cleanup(func() { vpnHubZoneEnforced = false })
+}
+
+// assertErased checks every byte of held is zero.
+func assertErased(t *testing.T, held []byte) {
+	t.Helper()
+	require.NotEmpty(t, held)
+	assert.Equal(t, make([]byte, len(held)), held, "the held hub key is erased")
+}
+
+// TestVPNDataPlanes_RefusesTheHubWithoutZoneEnforcement checks Codex #2029
+// round 2 P1 1: with no destination-zone enforcement the factory builds no
+// hub plane, so every peer RPC keeps its refusal, and the held key goes.
+func TestVPNDataPlanes_RefusesTheHubWithoutZoneEnforcement(t *testing.T) {
+	cfg, hubKey := wireGuardPlaneRun(t, []vpn.DataPlaneKind{vpn.DataPlaneWireGuard}, "kms://vpn/hub0", hubAddress, &stubSecrets{})
+	require.NotNil(t, hubKey)
+	held := hubKey.key
+	copy(held, bytes.Repeat([]byte{0xa5}, len(held)))
+
+	planes, err := vpnDataPlanes(cfg, hubKey, testLogger())
+	require.NoError(t, err)
+	assert.Empty(t, planes, "no zone enforcement, no hub plane")
+	assertErased(t, held)
+}
+
+// TestVPNHubKey_EraseClearsTheHeldKey checks Codex #2029 round 2 P1 2.
+func TestVPNHubKey_EraseClearsTheHeldKey(t *testing.T) {
+	hubKey := &vpnHubKey{ref: "kms://vpn/hub0", key: bytes.Repeat([]byte{0xa5}, 32)}
+	held := hubKey.key
+
+	hubKey.erase()
+	assertErased(t, held)
+	_, err := hubKey.Key(context.Background(), "kms://vpn/hub0")
+	assert.Error(t, err, "an erased key is not handed out")
+	hubKey.erase()
+
+	assert.NotPanics(t, func() { (*vpnHubKey)(nil).erase() })
+}
+
 func TestVPNDataPlanes_BuildsWireGuardHubPlane(t *testing.T) {
+	withHubZoneEnforced(t)
 	secrets := &stubSecrets{}
 	cfg, hubKey := wireGuardPlaneRun(t, []vpn.DataPlaneKind{vpn.DataPlaneWireGuard}, "kms://vpn/hub0", hubAddress, secrets)
 
@@ -124,6 +170,7 @@ func TestHubNetworkPlane_RefusesAPeerOutsideTheHubNetwork(t *testing.T) {
 // TestVPNDataPlanes_WrapsTheHubInItsNetwork checks the built WireGuard plane
 // carries the hub-network check.
 func TestVPNDataPlanes_WrapsTheHubInItsNetwork(t *testing.T) {
+	withHubZoneEnforced(t)
 	cfg, hubKey := wireGuardPlaneRun(t, []vpn.DataPlaneKind{vpn.DataPlaneWireGuard}, "kms://vpn/hub0", hubAddress, &stubSecrets{})
 
 	planes, err := vpnDataPlanes(cfg, hubKey, testLogger())

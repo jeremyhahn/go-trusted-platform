@@ -181,6 +181,46 @@ func TestServeProcess_WireGuardChildResolvesTheHubKeyBeforeHardening(t *testing.
 	assert.Same(t, run.hubKey, factory.hubKey, "the held key reaches the hub")
 }
 
+// TestServeProcess_WireGuardChildErasesTheHubKey checks Codex #2029 round 2
+// P1 2: the held hub key is erased once the planes start, and on an early
+// exit before them.
+func TestServeProcess_WireGuardChildErasesTheHubKey(t *testing.T) {
+	t.Run("shutdown", func(t *testing.T) {
+		run := newWireGuardRun(true)
+		run.hubKey = &vpnHubKey{ref: "kms://vpn/hub0", key: bytesOf(0xa5, 32)}
+		held := run.hubKey.key
+		factory := &vpnPlaneFactory{planes: []vpn.ManagedDataPlane{&fakeVPNPlane{}}}
+		opts, cancel, done := startWireGuardProcess(t, run, factory)
+
+		require.Eventually(t, func() bool {
+			_, err := installVPNPeer(t, opts.socket)
+			return err == nil
+		}, 5*time.Second, 10*time.Millisecond, "the wireguard child must answer InstallVPNPeer")
+		cancel()
+		require.NoError(t, <-done)
+		assert.Equal(t, make([]byte, 32), held, "the held hub key is erased")
+	})
+	t.Run("harden failure", func(t *testing.T) {
+		run := newWireGuardRun(true)
+		run.hubKey = &vpnHubKey{ref: "kms://vpn/hub0", key: bytesOf(0xa5, 32)}
+		held := run.hubKey.key
+		run.hardenErr = errors.New("harden")
+		opts := serviceTestOptions(t)
+
+		err := serveProcess(context.Background(), process.WireGuardProcess, opts, run.deps(), testLogger())
+		require.ErrorIs(t, err, run.hardenErr)
+		assert.Equal(t, make([]byte, 32), held, "an early exit erases the held hub key")
+	})
+}
+
+func bytesOf(b byte, n int) []byte {
+	out := make([]byte, n)
+	for i := range out {
+		out[i] = b
+	}
+	return out
+}
+
 // A plane that fails to start (an unresolvable key, a hub that cannot be
 // created) keeps the child's hosted services from starting: the
 // supervisor accepts an active service before it reads the start error,
