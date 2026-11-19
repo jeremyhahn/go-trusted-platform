@@ -1858,7 +1858,7 @@ func TestCrashLoop_AReplacementClaimedBeforeTheGiveUpGetsNoWithdrawal(t *testing
 	supervisor.mu.Unlock()
 
 	failure := errors.New("signal: killed")
-	supervisor.restartLoop(ctx, proc, failure, failure)
+	supervisor.restartLoop(ctx, proc, proc.launchGen, failure, failure)
 
 	assert.False(t, rec.withdrewAll("wireguard"), "the claimed replacement's peers are not withdrawn")
 	assert.False(t, rec.withdrewAll("masque"), "nor its masque peers")
