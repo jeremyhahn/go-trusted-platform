@@ -115,12 +115,24 @@ func (a *QuicBaaSAuthAdapter) ValidateToken(ctx context.Context, token string) (
 		}
 	}
 
-	// Cache the result for use in permission checking
-	if result.Valid {
-		a.cachedClaims[token] = result
+	if !result.Valid {
+		return false, nil
 	}
 
-	return result.Valid, nil
+	// A verified token naming no tenant is not a principal: refuse it
+	// here, at authentication, so the catalogue listings (tools/list,
+	// resources/list) are refused too, not only permission checks (SPEC
+	// row 123).
+	if strings.TrimSpace(result.TenantID) == "" {
+		return false, &QuicBaaSAuthError{
+			Code:    QuicBaaSAuthErrorMissingTenant,
+			Message: "token names no tenant",
+		}
+	}
+
+	// Cache the result for use in permission checking
+	a.cachedClaims[token] = result
+	return true, nil
 }
 
 // GetTokenClaims extracts claims from a validated access token.
@@ -249,6 +261,7 @@ func (a *QuicBaaSAuthAdapter) CheckPermission(ctx context.Context, token string,
 		},
 		Action:   action,
 		Resource: resource,
+		TenantID: tenantID,
 	}
 
 	// Execute the policy check
