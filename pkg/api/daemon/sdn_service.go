@@ -1691,11 +1691,13 @@ func (s *SDNService) DeletePolicy(ctx context.Context, req *platformv1.DeletePol
 	var foundID string
 	var policyTargets []*platformv1.PolicyTarget
 	var policyRules []*platformv1.PolicyRule
+	var policyPriority int32
 	for id, p := range s.policies {
 		if id == req.GetPolicyId() || p.name == req.GetPolicyId() {
 			foundID = id
 			policyTargets = p.targets
 			policyRules = p.rules
+			policyPriority = p.priority
 			break
 		}
 	}
@@ -1707,7 +1709,11 @@ func (s *SDNService) DeletePolicy(ctx context.Context, req *platformv1.DeletePol
 
 	client := s.getOVSClient()
 
-	// Remove associated OpenFlow rules from target bridges without holding the lock
+	// Remove the policy's own entries from target bridges without holding
+	// the lock. A non-strict delete would remove every entry whose match
+	// overlaps, at any priority, including other policies' enforcement
+	// rules: delete each translated flow strictly, at its own priority.
+	removed := make(map[flowEntryKey]bool)
 	for _, target := range policyTargets {
 		if target.GetType() != platformv1.PolicyTargetType_POLICY_TARGET_TYPE_BRIDGE {
 			continue
@@ -1717,15 +1723,15 @@ func (s *SDNService) DeletePolicy(ctx context.Context, req *platformv1.DeletePol
 			continue
 		}
 		for _, rule := range policyRules {
-			match, err := s.policyRuleToMatchString(rule)
+			flowMod, err := s.policyRuleToFlowMod(rule, policyPriority)
 			if err != nil {
 				// The stored rule no longer translates, so no flow of it
 				// can be matched for removal.
 				continue
 			}
-			if match != "" {
-				// Best-effort cleanup of flow rules
-				_ = client.DeleteFlow(ctx, bridgeName, match)
+			// Best-effort cleanup of flow rules
+			if err := client.DeleteFlowStrict(ctx, bridgeName, flowMod); err == nil {
+				removed[newFlowEntryKey(bridgeName, flowMod)] = true
 			}
 		}
 	}
@@ -1734,6 +1740,14 @@ func (s *SDNService) DeletePolicy(ctx context.Context, req *platformv1.DeletePol
 	s.mu.Lock()
 	delete(s.policies, foundID)
 	s.mu.Unlock()
+
+	// A surviving policy with the same entry (bridge, table, priority and
+	// match) lost its flow with the strict delete: put it back.
+	if len(removed) > 0 {
+		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), policyRollbackTimeout)
+		s.restoreOverwrittenFlows(cctx, client, foundID, removed)
+		cancel()
+	}
 
 	return &platformv1.DeletePolicyResponse{
 		Status: &platformv1.Status{
@@ -1850,6 +1864,11 @@ func policyRuleMatch(rule *platformv1.PolicyRule) (string, error) {
 	}
 	if match.GetDestinationPort() > 0 {
 		parts = append(parts, fmt.Sprintf("tp_dst=%d", match.GetDestinationPort()))
+	}
+	// A VLAN ID is 12 bits: the switch encodes 4097 as VLAN 1, which would
+	// alias another entry under a different ownership and rollback key.
+	if match.GetVlanId() > 4095 {
+		return "", status.Errorf(codes.InvalidArgument, "vlan_id %d is outside 0-4095", match.GetVlanId())
 	}
 	if match.GetVlanId() > 0 {
 		parts = append(parts, fmt.Sprintf("dl_vlan=%d", match.GetVlanId()))

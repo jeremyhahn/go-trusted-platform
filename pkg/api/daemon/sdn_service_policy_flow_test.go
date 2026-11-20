@@ -434,9 +434,13 @@ func TestSDNService_DeletePolicy_UsesTheSameMatch(t *testing.T) {
 	_, err = svc.DeletePolicy(context.Background(), &platformv1.DeletePolicyRequest{PolicyId: resp.GetPolicy().GetId()})
 	require.NoError(t, err)
 
-	deletes := mock.GetCalls("DeleteFlow")
+	assert.Empty(t, mock.GetCalls("DeleteFlow"), "a non-strict delete reaches other policies' entries")
+	deletes := mock.GetCalls("DeleteFlowStrict")
 	require.Len(t, deletes, 1)
-	assert.Equal(t, (*mods)[0].Match, deletes[0].Args[1])
+	flow, ok := deletes[0].Args[1].(*ovs.FlowMod)
+	require.True(t, ok)
+	assert.Equal(t, (*mods)[0].Match, flow.Match)
+	assert.Equal(t, (*mods)[0].Priority, flow.Priority)
 }
 
 // switchModelClient models the switch's flow table on top of the mock: an
