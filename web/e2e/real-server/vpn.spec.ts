@@ -61,7 +61,7 @@ test.describe('VPN (real server)', () => {
 
     const after = await sdk.vpn.listPeers(tenant.id);
     expect(after.success).toBe(true);
-    expect((after.data?.peers ?? []).map((p) => p.deviceId)).not.toContain(deviceId);
+    expect((after.data?.peers ?? []).map((p: { deviceId: string }) => p.deviceId)).not.toContain(deviceId);
   });
 
   test('peers: enrol through the dialog stores the peer with its zones', async ({
@@ -82,7 +82,7 @@ test.describe('VPN (real server)', () => {
 
     const listed = await sdk.vpn.listPeers(tenant.id);
     expect(listed.success).toBe(true);
-    const peer = (listed.data?.peers ?? []).find((p) => p.deviceId === deviceId);
+    const peer = (listed.data?.peers ?? []).find((p: { deviceId: string }) => p.deviceId === deviceId);
     expect(peer?.zones).toEqual(['management', 'storage']);
 
     await sdk.vpn.revokePeer(tenant.id, deviceId);
@@ -121,7 +121,7 @@ test.describe('VPN (real server)', () => {
     await adminPage.getByRole('button', { name: 'Confirm Delete' }).click();
     await expect(row).toHaveCount(0);
     const listed = await sdk.vpn.listPosturePolicies(tenant.id);
-    expect((listed.data?.policies ?? []).map((p) => p.name)).not.toContain(name);
+    expect((listed.data?.policies ?? []).map((p: { name: string }) => p.name)).not.toContain(name);
   });
 
   test('posture policies: a module that does not compile is refused and not stored', async ({

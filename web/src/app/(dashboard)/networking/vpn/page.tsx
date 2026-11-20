@@ -27,8 +27,8 @@ import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { ServiceUnavailableState } from '@/components/features/platform';
 import { isServiceNotConfigured } from 'trusted-platform-sdk';
-import { useApi, useToast, useVPN } from '@/hooks';
-import type { ApiResponse, VPNPeer, VPNPosturePolicy } from 'trusted-platform-sdk';
+import { useApi, useToast, useVPN, useVpnOps } from '@/hooks';
+import type { VPNPeer, VPNPosturePolicy } from 'trusted-platform-sdk';
 
 /** A posture policy in the editor; `isNew` unlocks the tenant and name. */
 interface PolicyDraft {
@@ -45,14 +45,6 @@ interface PeerDraft {
   zones: string;
 }
 
-/** Splits the comma-separated zone list; an empty list means every allowed zone. */
-function parseZones(text: string): string[] {
-  return text
-    .split(',')
-    .map((zone) => zone.trim())
-    .filter((zone) => zone !== '');
-}
-
 /** Renders a protojson Unix-seconds string; zero means the field is unset. */
 function formatUnix(seconds: string): string {
   const value = Number(seconds);
@@ -62,16 +54,10 @@ function formatUnix(seconds: string): string {
   return new Date(value * 1000).toLocaleString();
 }
 
-/** The SDK reports a failed call in the response; mutations need it thrown. */
-function throwOnError<T>(response: ApiResponse<T>): void {
-  if (response.error !== undefined) {
-    throw new Error(response.error.message);
-  }
-}
-
 export default function VPNPage() {
   const { toast } = useToast();
   const vpn = useVPN();
+  const ops = useVpnOps();
   const [revoking, setRevoking] = useState<VPNPeer | null>(null);
   const [revokeSubmitting, setRevokeSubmitting] = useState(false);
   const [draft, setDraft] = useState<PolicyDraft | null>(null);
@@ -138,7 +124,7 @@ export default function VPNPage() {
   const revokePeer = async (peer: VPNPeer) => {
     setRevokeSubmitting(true);
     try {
-      throwOnError(await vpn.revokePeer(peer.tenantId, peer.deviceId));
+      await ops.revokePeer(peer.tenantId, peer.deviceId);
       toast({ title: `Revoked ${peer.deviceId}`, variant: 'success' });
       setRevoking(null);
       refetchPeers();
@@ -157,15 +143,7 @@ export default function VPNPage() {
   const enrolPeer = async (peer: PeerDraft) => {
     setEnrolSubmitting(true);
     try {
-      // Enrolling an enrolled device replaces its zones and keeps its first
-      // enrolment time (docs/vpn/cli.md).
-      throwOnError(
-        await vpn.enrolPeer({
-          tenantId: peer.tenantId.trim(),
-          deviceId: peer.deviceId.trim(),
-          zones: parseZones(peer.zones),
-        })
-      );
+      await ops.enrolPeer(peer);
       toast({ title: `Enrolled ${peer.deviceId.trim()}`, variant: 'success' });
       setEnrolling(null);
       refetchPeers();
@@ -183,7 +161,7 @@ export default function VPNPage() {
   const deletePolicy = async (policy: VPNPosturePolicy) => {
     setDeleteSubmitting(true);
     try {
-      throwOnError(await vpn.deletePosturePolicy(policy.tenantId, policy.name));
+      await ops.deletePosturePolicy(policy.tenantId, policy.name);
       toast({ title: `Deleted posture policy ${policy.name}`, variant: 'success' });
       setDeleting(null);
       refetchPolicies();
@@ -200,9 +178,7 @@ export default function VPNPage() {
 
   const openPolicy = async (policy: VPNPosturePolicy) => {
     try {
-      const response = await vpn.getPosturePolicy(policy.tenantId, policy.name);
-      throwOnError(response);
-      const stored = response.data?.policy ?? policy;
+      const stored = await ops.getPosturePolicy(policy.tenantId, policy.name);
       setDraft({ tenantId: stored.tenantId, name: stored.name, module: stored.module, isNew: false });
     } catch (err) {
       toast({
@@ -216,13 +192,7 @@ export default function VPNPage() {
   const savePolicy = async (policy: PolicyDraft) => {
     setDraftSubmitting(true);
     try {
-      throwOnError(
-        await vpn.setPosturePolicy({
-          tenantId: policy.tenantId,
-          name: policy.name,
-          module: policy.module,
-        })
-      );
+      await ops.setPosturePolicy(policy);
       toast({ title: `Saved posture policy ${policy.name}`, variant: 'success' });
       setDraft(null);
       refetchPolicies();

@@ -163,6 +163,8 @@ export {
 } from './use-invitation-detail';
 export type { InvitationView, InvitationWire } from './use-invitation-detail';
 export { useTenantLifecycle } from './use-tenant-lifecycle';
+export { useVpnOps, parseZones } from './use-vpn-ops';
+export type { UseVpnOpsResult, VPNPeerDraft, VPNPolicyDraft } from './use-vpn-ops';
 export type { UseTenantLifecycleResult } from './use-tenant-lifecycle';
 export { useOverlayVteps } from './use-overlay-vteps';
 export { useRegistry, encodeRepository } from './use-registry';
