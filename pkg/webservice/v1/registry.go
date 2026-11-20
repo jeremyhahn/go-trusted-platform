@@ -14,6 +14,7 @@
 package v1
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/sha256"
@@ -383,7 +384,38 @@ func boundProfileMAC(ctx context.Context, profiles devicepkg.ConfigForDeviceFind
 	if profile == nil {
 		return "", nil
 	}
+	// The serial alone proves nothing: another machine can present an
+	// EK certificate with the victim's serial. The submitted EK must
+	// carry the public key of the EK certificate the operator bound to
+	// the profile.
+	if profile.EKCert == "" {
+		return "", ErrPXEIdentityEKNotBound{EKSerial: ekSerial, Reason: "the matched profile has no registered EK certificate"}
+	}
+	bound, err := deviceentities.ParseEKCertPEM(profile.EKCert)
+	if err != nil {
+		return "", ErrPXEIdentityEKNotBound{EKSerial: ekSerial, Reason: "the profile's EK certificate does not parse: " + err.Error()}
+	}
+	if !bytes.Equal(bound.RawSubjectPublicKeyInfo, tcg.EKCertificate.RawSubjectPublicKeyInfo) {
+		return "", ErrPXEIdentityEKNotBound{EKSerial: ekSerial, Reason: "the submitted EK public key is not the one bound to the profile"}
+	}
 	return profile.MACAddress, nil
+}
+
+// ErrPXEIdentityEKNotBound refuses an enrolment whose EK certificate
+// matches a device profile by serial but is not the EK bound to it. It
+// carries PermissionDenied (HTTP 403).
+type ErrPXEIdentityEKNotBound struct {
+	EKSerial string
+	Reason   string
+}
+
+func (e ErrPXEIdentityEKNotBound) Error() string {
+	return fmt.Sprintf("PXE identity: EK serial %s: %s", e.EKSerial, e.Reason)
+}
+
+// GRPCStatus makes status.Code report PermissionDenied for the refusal.
+func (e ErrPXEIdentityEKNotBound) GRPCStatus() *status.Status {
+	return status.New(codes.PermissionDenied, e.Error())
 }
 
 // ErrPXEIdentityProfileLookup is returned by the PXE identity hook when the
