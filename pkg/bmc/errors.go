@@ -213,6 +213,18 @@ func (e ErrProfileNotFound) Error() string {
 	return fmt.Sprintf("bmc: profile not found: %d", e.ProfileID)
 }
 
+// ErrConnectionAccount indicates a write that would change or remove the
+// account a BMC profile itself connects with: the stored profile credential
+// would no longer authenticate, locking the profile out of its BMC.
+type ErrConnectionAccount struct {
+	ProfileID uint64
+	Slot      uint8
+}
+
+func (e ErrConnectionAccount) Error() string {
+	return fmt.Sprintf("bmc: user slot %d is the connection account of profile %d; change it in the profile instead", e.Slot, e.ProfileID)
+}
+
 // ErrInvalidBootDevice indicates an unrecognized boot device value.
 type ErrInvalidBootDevice struct {
 	Device string

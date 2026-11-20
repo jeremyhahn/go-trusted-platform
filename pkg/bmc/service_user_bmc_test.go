@@ -15,6 +15,7 @@ package bmc_test
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"testing"
 
@@ -123,6 +124,44 @@ func TestService_UserMethods_Simulator(t *testing.T) {
 		}
 		if got, ok := userInSlot(t, svc, 4); ok {
 			t.Errorf("slot 4 after delete = %+v, want no user", got)
+		}
+	})
+}
+
+// The profile connects as "admin" (slot 1 on the simulator). Changing that
+// account's password or deleting it would lock the profile out of its own
+// BMC, so the service refuses both and leaves the account as it was.
+func TestService_ConnectionAccount_Refused_Simulator(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	assertRefused := func(t *testing.T, err error) {
+		t.Helper()
+		var refused bmc.ErrConnectionAccount
+		if !errors.As(err, &refused) {
+			t.Fatalf("err = %v, want ErrConnectionAccount", err)
+		}
+		if refused.ProfileID != 1 || refused.Slot != 1 {
+			t.Errorf("refused = %+v, want profile 1 slot 1", refused)
+		}
+	}
+
+	t.Run("SetUserPassword", func(t *testing.T) {
+		t.Parallel()
+		svc := newSimUserService(t)
+		assertRefused(t, svc.SetUserPassword(ctx, 1, 1, "n3w-secret-pass"))
+		// The profile still authenticates with its stored password.
+		if got, ok := userInSlot(t, svc, 1); !ok || got.Username != "admin" {
+			t.Errorf("slot 1 = %+v (found %v), want admin", got, ok)
+		}
+	})
+
+	t.Run("DeleteUser", func(t *testing.T) {
+		t.Parallel()
+		svc := newSimUserService(t)
+		assertRefused(t, svc.DeleteUser(ctx, 1, 1))
+		if got, ok := userInSlot(t, svc, 1); !ok || got.Username != "admin" {
+			t.Errorf("slot 1 after refused delete = %+v (found %v), want admin", got, ok)
 		}
 	})
 }
