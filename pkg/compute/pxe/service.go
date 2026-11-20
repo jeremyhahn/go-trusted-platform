@@ -90,6 +90,47 @@ type service struct {
 	// call, and for writing by Close, so Close waits for the calls in
 	// flight before it clears config.
 	ops sync.RWMutex
+
+	// devLocks holds one lock per device (keyed by the device ID, which
+	// is derived from the MAC address), guarded by mu. Every lifecycle
+	// method holds its device's lock for the whole state check, flow
+	// change and state/VLAN commit, so two transitions of one device
+	// cannot interleave and leave its port flows and recorded state
+	// disagreeing.
+	devLocks map[string]*deviceLock
+}
+
+// deviceLock is a device's lifecycle lock; refs counts the holders and
+// waiters, so the entry is dropped when the last one releases it.
+type deviceLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// lockDevice takes deviceID's lifecycle lock and returns its release.
+func (s *service) lockDevice(deviceID string) func() {
+	s.mu.Lock()
+	if s.devLocks == nil {
+		s.devLocks = make(map[string]*deviceLock)
+	}
+	l := s.devLocks[deviceID]
+	if l == nil {
+		l = &deviceLock{}
+		s.devLocks[deviceID] = l
+	}
+	l.refs++
+	s.mu.Unlock()
+
+	l.mu.Lock()
+	return func() {
+		l.mu.Unlock()
+		s.mu.Lock()
+		l.refs--
+		if l.refs == 0 {
+			delete(s.devLocks, deviceID)
+		}
+		s.mu.Unlock()
+	}
 }
 
 // beginOp enters a device operation. It reports false when the service
@@ -395,6 +436,9 @@ func (s *service) RegisterDevice(ctx context.Context, macAddress, portID string)
 		}
 	}
 
+	unlock := s.lockDevice(generateDeviceID(mac))
+	defer unlock()
+
 	existing, err := s.stateManager.GetByMAC(mac)
 	if err == nil && existing != nil {
 		return nil, ErrDeviceAlreadyExists{
@@ -519,6 +563,7 @@ func (s *service) RemoveDevice(ctx context.Context, deviceID string) error {
 		return ErrServiceNotInitialized{}
 	}
 	defer s.ops.RUnlock()
+	defer s.lockDevice(deviceID)()
 
 	device, err := s.stateManager.Get(deviceID)
 	if err != nil {
@@ -547,6 +592,7 @@ func (s *service) UpdateDeviceState(ctx context.Context, deviceID string, state 
 		return ErrServiceNotInitialized{}
 	}
 	defer s.ops.RUnlock()
+	defer s.lockDevice(deviceID)()
 
 	if !state.IsValid() {
 		return ErrInvalidState{
@@ -626,6 +672,7 @@ func (s *service) SetDeviceEnrolled(ctx context.Context, deviceID, certSerial st
 		return ErrServiceNotInitialized{}
 	}
 	defer s.ops.RUnlock()
+	defer s.lockDevice(deviceID)()
 
 	device, err := s.stateManager.Get(deviceID)
 	if err != nil {
@@ -682,6 +729,7 @@ func (s *service) RecordIDevIDFingerprint(ctx context.Context, deviceID, fingerp
 		return ErrServiceNotInitialized{}
 	}
 	defer s.ops.RUnlock()
+	defer s.lockDevice(deviceID)()
 	if !isIDevIDFingerprint(fingerprint) {
 		return ErrInvalidConfiguration{
 			Field:  "idevid_fingerprint",
@@ -746,6 +794,7 @@ func (s *service) AuthorizeDevice(ctx context.Context, deviceID string, targetVL
 		return ErrServiceNotInitialized{}
 	}
 	defer s.ops.RUnlock()
+	defer s.lockDevice(deviceID)()
 
 	if targetVLAN < MinVLANID || targetVLAN > MaxVLANID {
 		return ErrVLANTransitionFailed{
@@ -828,6 +877,7 @@ func (s *service) QuarantineDevice(ctx context.Context, deviceID string, reason 
 		return ErrServiceNotInitialized{}
 	}
 	defer s.ops.RUnlock()
+	defer s.lockDevice(deviceID)()
 
 	device, err := s.stateManager.Get(deviceID)
 	if err != nil {
@@ -892,6 +942,7 @@ func (s *service) RetryDevice(ctx context.Context, deviceID string) error {
 		return ErrServiceNotInitialized{}
 	}
 	defer s.ops.RUnlock()
+	defer s.lockDevice(deviceID)()
 
 	device, err := s.stateManager.Get(deviceID)
 	if err != nil {
