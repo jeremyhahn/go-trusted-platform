@@ -30,6 +30,7 @@ import (
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
+	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	resttypes "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/kms"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
@@ -1426,24 +1427,22 @@ func (r *RESTAdapter) purposeToKeyUsage(purpose string) []service.KeyUsage {
 // convertToGenerateKeyRequest maps the domain generate request onto the
 // REST wire contract, including the generate-time protection flags now
 // carried end-to-end by the QuicBaaS SDK kms client.
-func (r *RESTAdapter) convertToGenerateKeyRequest(req *service.GenerateKeyRequest) *resttypes.GenerateKeyRequest {
-	restReq := &resttypes.GenerateKeyRequest{
-		Name:               req.Name,
-		Description:        req.Description,
-		Tags:               req.Tags,
-		Owner:              req.Owner,
-		Usage:              r.keyUsageToStrings(req.Usage),
-		Exportable:         req.Exportable,
-		DeletionProtection: req.DeletionProtection,
+func (r *RESTAdapter) convertToGenerateKeyRequest(req *service.GenerateKeyRequest) *restapi.KMSGenerateKeyRequest {
+	restReq := &restapi.KMSGenerateKeyRequest{
+		Name:        req.Name,
+		Description: req.Description,
+		Tags:        req.Tags,
+		Owner:       req.Owner,
+		KeySpec: restapi.KMSKeySpecRequest{
+			Usage:              r.keyUsageToStrings(req.Usage),
+			Exportable:         req.Exportable,
+			DeletionProtection: req.DeletionProtection,
+		},
 	}
 
 	if req.KeyAttributes != nil {
-		restReq.Algorithm = r.keyAttributesToAlgorithmString(req.KeyAttributes)
-		restReq.KeySpec = &resttypes.KMSKeySpec{
-			Algorithm: restReq.Algorithm,
-			KeySize:   int(r.getKeySize(req.KeyAttributes)),
-			Usage:     restReq.Usage,
-		}
+		restReq.KeySpec.Algorithm = r.keyAttributesToAlgorithmString(req.KeyAttributes)
+		restReq.KeySpec.KeySize = int32(r.getKeySize(req.KeyAttributes))
 	}
 
 	return restReq
