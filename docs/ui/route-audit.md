@@ -261,6 +261,14 @@ Counted with Serena `search_for_pattern` over `web/src`, excluding `__tests__/`,
 - Default-config basis: gateway (default.yaml:631), sdn (:571) and ntp (:420) are enabled; VPN registers always and has a store through the embedded quicBaaS (pkg/api/daemon/vpn_grpc_service.go:70); compute and vTPM depend on the host runtime, not a config key (pkg/daemon/commands/serve.go:857-863).
 - Table B (45 rows covering 37 fetch sites): implemented 35, unimplemented 9, stubbed 1, not-configured 0 (pending).
 
+## Stub pass over the `implemented` rows
+
+Each `implemented` row was checked for a handler that answers fixed data, `codes.Unimplemented` or a "not wired" error. No row changed status:
+
+- **Invitations** (table B, `app/admin/invitations/page.tsx:66/102/140`): `InvitationGRPCService` answers Unimplemented while its servicer is nil (`pkg/api/daemon/invitation_grpc_service.go:73`, created with nil at `pkg/api/daemon/daemon.go:957`). Production wires it: `serve.go:805` sets `daemonConfig.App`, `daemon.go:1451-1459` calls `App.ServiceRegistry()` and `SetService`, the registry builds the servicer when the factory returns an invitation DAO (`pkg/platform/service/registry.go:100-102`), and the started quicBaaS factory always does (`pkg/storage/quicbaas/factory.go:297-300`). The rows stay `implemented`.
+- **ca.getCRL**: `pkg/api/daemon/ca_grpc_service.go:557-568` answers Unimplemented only when the configured CA cannot generate a CRL; that depends on the CA backend, not a stub. Stays `implemented`.
+- **Router**: the only fixed-data handlers in `pkg/webservice/v1/router.go` are `quicbaasStubRoutes` (:252-332), already marked `stubbed` above. The other `codes.Unimplemented` answers in `pkg/api/daemon/*_grpc_service.go` (IAM CreateToken/RevokeToken, container attach/exec/logs/metrics/attest, BMC, PIV) belong to methods no row in tables A or B calls.
+
 ## Every row that is not `implemented`
 
 1. `ca.downloadCertificatePEM`: GET /ca/certificates/{serial}/download has no route.
