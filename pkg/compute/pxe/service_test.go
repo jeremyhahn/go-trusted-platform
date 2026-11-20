@@ -1643,3 +1643,103 @@ func TestService_Close_WaitsForInFlightOperations(t *testing.T) {
 	var notInit ErrServiceNotInitialized
 	assert.ErrorAs(t, err, &notInit)
 }
+
+// gatedQuarantineVLAN blocks ApplyQuarantineFlows while armed, and
+// records the last flow set it installed, so a test can see which
+// flows a device's port is left with.
+type gatedQuarantineVLAN struct {
+	VLANIntegration
+	armed   atomic.Bool
+	entered chan struct{}
+	release chan struct{}
+
+	mu        sync.Mutex
+	lastFlows string
+}
+
+func (g *gatedQuarantineVLAN) ApplyQuarantineFlows(ctx context.Context, portID string, mac net.HardwareAddr) error {
+	// The flows are installed first; the block stands for the time the
+	// call takes to return to the service.
+	g.mu.Lock()
+	g.lastFlows = "quarantine"
+	g.mu.Unlock()
+	if g.armed.CompareAndSwap(true, false) {
+		close(g.entered)
+		<-g.release
+	}
+	return nil
+}
+
+func (g *gatedQuarantineVLAN) ApplyAuthorizedFlows(ctx context.Context, portID string, mac net.HardwareAddr, vlanID uint16) error {
+	g.mu.Lock()
+	g.lastFlows = "authorized"
+	g.mu.Unlock()
+	return nil
+}
+
+func (g *gatedQuarantineVLAN) flows() string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.lastFlows
+}
+
+// TestService_QuarantineAuthorize_Serialized checks that an
+// AuthorizeDevice started while a QuarantineDevice of the same device is
+// inside its flow change waits for it, so the device never ends
+// quarantined with production flows on its port.
+func TestService_QuarantineAuthorize_Serialized(t *testing.T) {
+	vlan := &gatedQuarantineVLAN{
+		VLANIntegration: NewNoopVLANIntegration(testNetPlan),
+		entered:         make(chan struct{}),
+		release:         make(chan struct{}),
+	}
+	svc := &service{
+		logger:       logging.DefaultLogger(),
+		stateManager: NewStateManager(),
+		vlanManager:  vlan,
+		config:       createTestConfig(),
+	}
+	svc.initialized.Store(true)
+	ctx := context.Background()
+
+	device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:77", "port-7")
+	require.NoError(t, err)
+	require.NoError(t, svc.stateManager.UpdateDevice(device.ID, func(d *DeviceInfo) error {
+		d.State = StateAuthorizing
+		return nil
+	}))
+
+	vlan.armed.Store(true)
+	quarantined := make(chan error, 1)
+	go func() { quarantined <- svc.QuarantineDevice(ctx, device.ID, "test") }()
+	<-vlan.entered
+
+	authorized := make(chan error, 1)
+	go func() { authorized <- svc.AuthorizeDevice(ctx, device.ID, 200) }()
+
+	authReturned := false
+	select {
+	case <-authorized:
+		// The old code lets authorize run to the end here; the
+		// release below still lets the quarantine commit.
+		authReturned = true
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(vlan.release)
+	require.NoError(t, <-quarantined)
+
+	if !authReturned {
+		select {
+		case <-authorized:
+		case <-time.After(5 * time.Second):
+			t.Fatal("AuthorizeDevice did not return after the quarantine finished")
+		}
+	}
+
+	got, err := svc.GetDevice(ctx, device.ID)
+	require.NoError(t, err)
+	assert.Equal(t, StateQuarantined, got.State)
+	assert.Equal(t, svc.config.QuarantineVLAN, got.CurrentVLAN)
+	assert.Equal(t, "quarantine", vlan.flows(),
+		"a quarantined device must not be left with production flows")
+}
