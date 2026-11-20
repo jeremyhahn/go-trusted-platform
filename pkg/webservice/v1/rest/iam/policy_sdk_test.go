@@ -2,7 +2,6 @@ package iam
 
 import (
 	"context"
-	"strconv"
 	"testing"
 	"time"
 
@@ -158,8 +157,9 @@ func TestPolicyMethodsOverSDKREST_RoundTrip(t *testing.T) {
 	assert.Equal(t, int64(4200), testResp.GetEvaluationTimeNs())
 }
 
-// pagedPolicies is an upstream policy client that pages by cursor, as the
-// quicbaas IAM service does: the cursor is the index of the next policy.
+// pagedPolicies is an upstream policy client with the pinned embedded
+// transport's list contract: it applies Limit to the head of the collection
+// and returns neither HasMore, NextCursor nor TotalCount.
 type pagedPolicies struct {
 	iamsdk.PolicyClient
 	t        *testing.T
@@ -167,25 +167,11 @@ type pagedPolicies struct {
 }
 
 func (p *pagedPolicies) List(_ context.Context, _ string, req *iamsdk.ListPoliciesRequest) (*iamsdk.ListPoliciesResponse, error) {
-	start := 0
-	if req.Cursor != "" {
-		n, err := strconv.Atoi(req.Cursor)
-		require.NoError(p.t, err)
-		start = n
-	}
 	end := len(p.policies)
-	if req.Limit > 0 && start+req.Limit < end {
-		end = start + req.Limit
+	if req.Limit > 0 && req.Limit < end {
+		end = req.Limit
 	}
-	resp := &iamsdk.ListPoliciesResponse{
-		Policies:   append([]iamsdk.Policy(nil), p.policies[start:end]...),
-		HasMore:    end < len(p.policies),
-		TotalCount: int64(len(p.policies)),
-	}
-	if resp.HasMore {
-		resp.NextCursor = strconv.Itoa(end)
-	}
-	return resp, nil
+	return &iamsdk.ListPoliciesResponse{Policies: append([]iamsdk.Policy(nil), p.policies[:end]...)}, nil
 }
 
 func (p *pagedPolicies) Update(context.Context, string, string, *iamsdk.UpdatePolicyRequest) (*iamsdk.Policy, error) {
