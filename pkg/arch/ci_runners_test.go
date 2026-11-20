@@ -163,6 +163,9 @@ func TestRunnerProblems_Mutations(t *testing.T) {
 	lint := func(runsOn string) func(string) string {
 		return func(b string) string { return replaceJobRunner(t, b, "lint", runsOn) }
 	}
+	guarded := func(mutate func(string) string) func(string) string {
+		return func(b string) string { return replaceJobIf(t, mutate(b), "lint", "${{ "+sameRepoExpr+" }}") }
+	}
 	const split = `${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","linux","x64","bigdisk-docker"]') || 'ubuntu-latest' }}`
 	for _, c := range []struct {
 		name   string
@@ -182,8 +185,17 @@ func TestRunnerProblems_Mutations(t *testing.T) {
 		{"a waiver with an empty reason", lint("bigdisk  " + selfHostedWaiver + "hardware: "), "hardware: waiver with an empty reason"},
 		{"a waiver with an empty oversize reason", lint("bigdisk  " + selfHostedWaiver + "oversize:"), "oversize: waiver with an empty reason"},
 		{"a waiver with neither category nor reason", lint("bigdisk  " + selfHostedWaiver), "names no category"},
-		{"a hardware waiver is allowed", lint("gpu  " + selfHostedWaiver + "hardware: needs the GPU host"), ""},
-		{"an oversize waiver is allowed", lint("bigdisk  " + selfHostedWaiver + "oversize: measured 40 GB of disk"), ""},
+		{"a hardware waiver is allowed", guarded(lint("gpu  " + selfHostedWaiver + "hardware: needs the GPU host")), ""},
+		{"an oversize waiver is allowed", guarded(lint("bigdisk  " + selfHostedWaiver + "oversize: measured 40 GB of disk")), ""},
+		{"a self-hosted job without the fork guard", func(b string) string {
+			return replaceJobIf(t, b, "image", docsOnlyGuardedIf)
+		}, "job image: self-hosted runner without the fork guard"},
+		{"a self-hosted job on bigdisk-docker without the fork guard", func(b string) string {
+			return replaceJobIf(t, lint("bigdisk-docker  "+selfHostedWaiver+"oversize: measured 40 GB of disk")(b), "lint", "${{ github.event_name != 'schedule' }}")
+		}, "job lint: self-hosted runner without the fork guard"},
+		{"a self-hosted job with only the fork guard is allowed", func(b string) string {
+			return replaceJobIf(t, b, "image", "${{ "+sameRepoExpr+" }}")
+		}, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			mutated := c.mutate(body)
@@ -223,4 +235,25 @@ func replaceJobRunner(t *testing.T, body, job, runsOn string) string {
 	i := strings.Index(body[start:], "    runs-on: ") + start
 	end := strings.Index(body[i:], "\n") + i
 	return body[:i] + "    runs-on: " + runsOn + body[end:]
+}
+
+// replaceJobIf sets (or adds) the job-level if: of job in the ci.yml body.
+func replaceJobIf(t *testing.T, body, job, cond string) string {
+	t.Helper()
+	start := strings.Index(body, "\n  "+job+":\n")
+	if start < 0 {
+		t.Fatalf("ci.yml has no job %s", job)
+	}
+	lines := strings.Split(body[start+1:], "\n")
+	for k, l := range lines[1:] {
+		if strings.HasPrefix(l, "  ") && !strings.HasPrefix(l, "   ") {
+			break // the next job
+		}
+		if strings.HasPrefix(l, "    if: ") {
+			lines[k+1] = "    if: " + cond
+			return body[:start+1] + strings.Join(lines, "\n")
+		}
+	}
+	// No job-level if: yet, so add one under the job name.
+	return body[:start+1] + lines[0] + "\n    if: " + cond + "\n" + strings.Join(lines[1:], "\n")
 }
