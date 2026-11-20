@@ -5,7 +5,15 @@
  * mocks, and every assertion reads what the server returned.
  * Page: (dashboard)/networking/overlays/vteps.
  */
+import type { Page } from '@playwright/test';
+import type { PlatformClient } from 'trusted-platform-sdk';
 import { test, expect } from './fixtures';
+
+/** The harness fixtures this spec uses (see ./fixtures). */
+interface Fx {
+  adminPage: Page;
+  sdk: PlatformClient;
+}
 
 const PAGE = '/networking/overlays/vteps';
 
@@ -15,7 +23,7 @@ function testVni(): number {
 }
 
 test.describe('overlay (real server)', () => {
-  test('GetOverlayStatus: the status card shows what the server reports', async ({ adminPage, sdk }) => {
+  test('GetOverlayStatus: the status card shows what the server reports', async ({ adminPage, sdk }: Fx) => {
     const res = await sdk.overlay.getStatus();
     expect(res.success).toBe(true);
     const status = res.data!.status;
@@ -32,7 +40,7 @@ test.describe('overlay (real server)', () => {
     }
   });
 
-  test('ListVTEPs and GetVTEP: the table lists every VTEP and Details opens it', async ({ adminPage, sdk }) => {
+  test('ListVTEPs and GetVTEP: the table lists every VTEP and Details opens it', async ({ adminPage, sdk }: Fx) => {
     const res = await sdk.overlay.listVTEPs();
     expect(res.success).toBe(true);
     const vteps = res.data?.vteps ?? [];
@@ -56,7 +64,7 @@ test.describe('overlay (real server)', () => {
     await expect(dialog).toContainText(detail.data!.vtep.ip);
   });
 
-  test('ListTunnels and GetTunnelStats: the table lists every tunnel and Stats opens it', async ({ adminPage, sdk }) => {
+  test('ListTunnels and GetTunnelStats: the table lists every tunnel and Stats opens it', async ({ adminPage, sdk }: Fx) => {
     const res = await sdk.overlay.listTunnels();
     expect(res.success).toBe(true);
     const tunnels = res.data?.tunnels ?? [];
@@ -75,7 +83,7 @@ test.describe('overlay (real server)', () => {
     await expect(dialog).toContainText(`${t.remoteVtep} on VNI ${t.vni}`);
   });
 
-  test('DeleteVNI: a seeded VNI is deleted from the page and the server no longer lists it', async ({ adminPage, sdk }) => {
+  test('DeleteVNI: a seeded VNI is deleted from the page and the server no longer lists it', async ({ adminPage, sdk }: Fx) => {
     const vni = testVni();
     const created = await sdk.overlay.createVNI({ config: { vni, name: `e2e-${vni}` } });
     expect(created.success).toBe(true);
@@ -91,7 +99,7 @@ test.describe('overlay (real server)', () => {
     expect((after.data?.vnis ?? []).some((v) => v.config.vni === vni)).toBe(false);
   });
 
-  test('ListRemoteMACs and ForgetMAC: the MAC table follows the server and forget reports its answer', async ({ adminPage, sdk }) => {
+  test('ListRemoteMACs and ForgetMAC: the MAC table follows the server and forget reports its answer', async ({ adminPage, sdk }: Fx) => {
     const vni = testVni();
     const created = await sdk.overlay.createVNI({ config: { vni, name: `e2e-mac-${vni}` } });
     expect(created.success).toBe(true);

@@ -3,6 +3,7 @@
 import * as React from 'react';
 import { useApi, useOverlay } from 'trusted-platform-sdk';
 import type {
+  GetOverlayStatusResponse,
   ListRemoteMACsResponse,
   ListTunnelsResponse,
   ListVNIsResponse,
@@ -23,6 +24,7 @@ function failure(message: string | undefined): Error {
 export function useOverlayVteps() {
   const overlay = useOverlay();
 
+  const status = useApi<GetOverlayStatusResponse>(() => overlay.getStatus(), []);
   const vteps = useApi<ListVTEPsResponse>(() => overlay.listVTEPs(), []);
   const vnis = useApi<ListVNIsResponse>(() => overlay.listVNIs(), []);
   const tunnels = useApi<ListTunnelsResponse>(() => overlay.listTunnels(), []);
@@ -46,6 +48,7 @@ export function useOverlayVteps() {
     [overlay]
   );
 
+  const refetchStatus = status.refetch;
   const refetchVteps = vteps.refetch;
   const refetchVnis = vnis.refetch;
   const refetchTunnels = tunnels.refetch;
@@ -58,8 +61,9 @@ export function useOverlayVteps() {
       // The server removes every remote MAC of a deleted VNI as well.
       await refetchVnis();
       await refetchMacs();
+      void refetchStatus();
     },
-    [overlay, refetchVnis, refetchMacs]
+    [overlay, refetchVnis, refetchMacs, refetchStatus]
   );
 
   const forgetMAC = React.useCallback(
@@ -67,18 +71,22 @@ export function useOverlayVteps() {
       const res = await overlay.forgetMAC({ mac, vni });
       if (!res.success) throw failure(res.error?.message);
       await refetchMacs();
+      void refetchStatus();
     },
-    [overlay, refetchMacs]
+    [overlay, refetchMacs, refetchStatus]
   );
 
   const refetchAll = React.useCallback(() => {
+    void refetchStatus();
     void refetchVteps();
     void refetchVnis();
     void refetchTunnels();
     void refetchMacs();
-  }, [refetchVteps, refetchVnis, refetchTunnels, refetchMacs]);
+  }, [refetchStatus, refetchVteps, refetchVnis, refetchTunnels, refetchMacs]);
 
   return {
+    status: status.data?.status,
+    statusError: status.error ?? null,
     vteps: vteps.data?.vteps ?? [],
     vnis: vnis.data?.vnis ?? [],
     tunnels: tunnels.data?.tunnels ?? [],

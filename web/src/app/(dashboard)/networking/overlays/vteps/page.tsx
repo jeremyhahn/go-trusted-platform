@@ -43,6 +43,8 @@ function errorText(err: unknown): string {
 export default function OverlayVtepsPage() {
   const { toast } = useToast();
   const {
+    status,
+    statusError,
     vteps,
     vnis,
     tunnels,
@@ -155,6 +157,38 @@ export default function OverlayVtepsPage() {
           <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
         </Button>
       </div>
+
+      <section className="space-y-2" data-testid="overlay-status">
+        <h2 className="text-xl font-semibold">Overlay status</h2>
+        {statusError ? (
+          <p className="text-destructive" data-testid="overlay-status-error">
+            {statusError.message || 'Failed to load overlay status'}
+          </p>
+        ) : !status ? (
+          <p className="text-muted-foreground">Loading overlay status</p>
+        ) : (
+          <dl className="grid grid-cols-2 gap-2 rounded-md border border-border p-4 text-sm sm:grid-cols-4">
+            <dt className="text-muted-foreground">Node</dt>
+            <dd className="font-medium">{status.nodeId || '-'}</dd>
+            <dt className="text-muted-foreground">VTEP IP</dt>
+            <dd className="font-mono">{status.vtepIp || '-'}</dd>
+            <dt className="text-muted-foreground">Health</dt>
+            <dd>
+              <Badge variant="outline" data-testid="overlay-status-health">
+                {status.healthy ? 'healthy' : 'unhealthy'}
+              </Badge>
+            </dd>
+            <dt className="text-muted-foreground">VTEPs</dt>
+            <dd data-testid="overlay-status-vtep-count">{status.vtepCount ?? 0}</dd>
+            <dt className="text-muted-foreground">VNIs</dt>
+            <dd data-testid="overlay-status-vni-count">{status.vniCount ?? 0}</dd>
+            <dt className="text-muted-foreground">Tunnels</dt>
+            <dd data-testid="overlay-status-tunnel-count">{status.tunnelCount ?? 0}</dd>
+            <dt className="text-muted-foreground">Remote MACs</dt>
+            <dd data-testid="overlay-status-mac-count">{status.remoteMacCount ?? 0}</dd>
+          </dl>
+        )}
+      </section>
 
       <section className="space-y-2">
         <h2 className="text-xl font-semibold">VTEPs</h2>
