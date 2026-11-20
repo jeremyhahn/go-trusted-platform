@@ -44,6 +44,7 @@ var waiverCategories = []string{"hardware", "oversize"}
 type runnerJob struct {
 	name   string
 	runsOn *yaml.Node
+	cond   string // the job-level if:, "" when there is none
 }
 
 // runnerJobs parses ci.yml and returns its jobs in order, or a problem.
@@ -58,7 +59,11 @@ func runnerJobs(body []byte) ([]runnerJob, string) {
 	}
 	var out []runnerJob
 	for i := 0; i+1 < len(jobs.Content); i += 2 {
-		out = append(out, runnerJob{jobs.Content[i].Value, mapValue(jobs.Content[i+1], "runs-on")})
+		j := runnerJob{name: jobs.Content[i].Value, runsOn: mapValue(jobs.Content[i+1], "runs-on")}
+		if c := mapValue(jobs.Content[i+1], "if"); c != nil {
+			j.cond = c.Value
+		}
+		out = append(out, j)
 	}
 	return out, ""
 }
@@ -110,6 +115,12 @@ func runnerProblems(body []byte) []string {
 			if p := waiverProblem(j.runsOn.LineComment); p != "" {
 				problems = append(problems, where+" runs on "+strconv.Quote(j.runsOn.Value)+" and "+p)
 			}
+		}
+		// A self-hosted runner is persistent: fork pull requests must
+		// never reach it, so the job's if: carries the same-repository guard.
+		if j.runsOn != nil && (j.runsOn.Kind != yaml.ScalarNode || j.runsOn.Value != hostedRunner) &&
+			!strings.Contains(j.cond, sameRepoExpr) {
+			problems = append(problems, where+": self-hosted runner without the fork guard")
 		}
 	}
 	return problems
