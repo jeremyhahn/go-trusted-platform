@@ -214,12 +214,10 @@ func TestStateManager_UnregisterRacingPersist(t *testing.T) {
 				return nil
 			})
 		}()
-		// Let UpdateDevice swap its entry in and block in persist.
-		for {
-			entryVal, ok := sm.devices.Load("dev-race")
-			if ok && entryVal.(*deviceEntry).device.StateReason == "racing update" {
-				break
-			}
+		// Let UpdateDevice reach the store lock Unregister holds: it
+		// writes before it swaps (#2081 Codex), so it blocks there and,
+		// once the delete lands, finds the device gone.
+		for j := 0; j < 10; j++ {
 			runtime.Gosched()
 		}
 		close(gate)

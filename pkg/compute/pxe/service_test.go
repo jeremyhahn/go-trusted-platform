@@ -1826,3 +1826,110 @@ func TestService_QuarantineAuthorize_Serialized(t *testing.T) {
 	assert.Equal(t, "quarantine", vlan.flows(),
 		"a quarantined device must not be left with production flows")
 }
+
+// recordingFlowsVLAN records the last flow set applied to the device.
+type recordingFlowsVLAN struct {
+	VLANIntegration
+	mu   sync.Mutex
+	last string
+}
+
+func (r *recordingFlowsVLAN) set(flows string) {
+	r.mu.Lock()
+	r.last = flows
+	r.mu.Unlock()
+}
+
+func (r *recordingFlowsVLAN) flows() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.last
+}
+
+func (r *recordingFlowsVLAN) ApplyQuarantineFlows(ctx context.Context, portID string, mac net.HardwareAddr) error {
+	r.set("quarantine")
+	return nil
+}
+
+func (r *recordingFlowsVLAN) ApplyProvisioningFlows(ctx context.Context, portID string, mac net.HardwareAddr) error {
+	r.set("provisioning")
+	return nil
+}
+
+func (r *recordingFlowsVLAN) ApplyAuthorizedFlows(ctx context.Context, portID string, mac net.HardwareAddr, vlanID uint16) error {
+	r.set("authorized")
+	return nil
+}
+
+// newStoreBackedService returns a service over a failing store with an
+// authorizing device whose state writes fail when failState is written.
+func newStoreBackedService(t *testing.T, failState ProvisioningState) (*service, *recordingFlowsVLAN, *failingDeviceStore, string) {
+	t.Helper()
+	store := newFailingDeviceStore()
+	vlan := &recordingFlowsVLAN{VLANIntegration: NewNoopVLANIntegration(testNetPlan)}
+	svc := &service{
+		logger:       logging.DefaultLogger(),
+		stateManager: NewStateManager(WithDeviceStore(store)),
+		vlanManager:  vlan,
+		config:       createTestConfig(),
+	}
+	svc.initialized.Store(true)
+	device, err := svc.RegisterDevice(context.Background(), "00:11:22:33:44:81", "port-81")
+	require.NoError(t, err)
+	require.NoError(t, svc.stateManager.UpdateDevice(device.ID, func(d *DeviceInfo) error {
+		d.State = StateAuthorizing
+		return nil
+	}))
+	store.mu.Lock()
+	store.failPut = func(d *DeviceInfo) bool { return d.State == failState }
+	store.mu.Unlock()
+	return svc, vlan, store, device.ID
+}
+
+func TestService_AuthorizeDevice_FailedStateWriteUndoesFlows(t *testing.T) {
+	svc, vlan, store, id := newStoreBackedService(t, StateAuthorized)
+	before, err := svc.stateManager.Get(id)
+	require.NoError(t, err)
+
+	require.Error(t, svc.AuthorizeDevice(context.Background(), id, 200))
+
+	got, err := svc.stateManager.Get(id)
+	require.NoError(t, err)
+	assert.Equal(t, StateAuthorizing, got.State)
+	assert.Equal(t, before.CurrentVLAN, got.CurrentVLAN)
+	assert.Equal(t, "provisioning", vlan.flows(), "the production flows must be undone")
+
+	reloaded, err := reloadFrom(t, store).Get(id)
+	require.NoError(t, err)
+	assert.NotEqual(t, StateAuthorized, reloaded.State)
+	assert.Equal(t, before.CurrentVLAN, reloaded.CurrentVLAN)
+}
+
+func TestService_QuarantineDevice_FailedStateWriteUndoesFlows(t *testing.T) {
+	svc, vlan, store, id := newStoreBackedService(t, StateQuarantined)
+	before, err := svc.stateManager.Get(id)
+	require.NoError(t, err)
+
+	require.Error(t, svc.QuarantineDevice(context.Background(), id, "posture failed"))
+
+	got, err := svc.stateManager.Get(id)
+	require.NoError(t, err)
+	assert.Equal(t, StateAuthorizing, got.State)
+	assert.Equal(t, before.CurrentVLAN, got.CurrentVLAN)
+	assert.Equal(t, "provisioning", vlan.flows(), "the quarantine flows must be undone")
+
+	reloaded, err := reloadFrom(t, store).Get(id)
+	require.NoError(t, err)
+	assert.NotEqual(t, StateQuarantined, reloaded.State)
+	assert.Equal(t, before.CurrentVLAN, reloaded.CurrentVLAN)
+
+	// After the outage the quarantine goes through and is stored.
+	store.mu.Lock()
+	store.failPut = nil
+	store.mu.Unlock()
+	require.NoError(t, svc.QuarantineDevice(context.Background(), id, "posture failed"))
+	reloaded, err = reloadFrom(t, store).Get(id)
+	require.NoError(t, err)
+	assert.Equal(t, StateQuarantined, reloaded.State)
+	assert.Equal(t, svc.config.QuarantineVLAN, reloaded.CurrentVLAN)
+}
