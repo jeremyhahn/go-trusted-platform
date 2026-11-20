@@ -20,6 +20,8 @@ func TestDaemonREST_KMSRoutesReachTheirHandlers(t *testing.T) {
 		{http.MethodGet, "/api/v1/kms/keys"},
 		{http.MethodPost, "/api/v1/kms/keys"},
 		{http.MethodGet, "/api/v1/kms/keys/k1"},
+		{http.MethodGet, "/api/v1/kms/keys/k1/metadata"},
+		{http.MethodPut, "/api/v1/kms/keys/k1/metadata"},
 		{http.MethodPost, "/api/v1/kms/hash"},
 		{http.MethodPost, "/api/v1/kms/sign/k1"},
 		{http.MethodPost, "/api/v1/kms/verify/k1"},

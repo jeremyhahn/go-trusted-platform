@@ -25,6 +25,7 @@ import (
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 
 	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
+	resttypes "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/kms"
 )
 
 // TestRESTAdapterKeyGenerateDaemonResponse checks that KeyGenerate decodes
@@ -130,6 +131,65 @@ func TestRESTAdapterKeyGenerateDaemonResponse(t *testing.T) {
 			t.Fatalf("KeyGenerate on {} = %+v, want error", res)
 		}
 	})
+}
+
+// TestRESTAdapterKeyGenerateWithDisplay pins the follow-up a KeyGenerate
+// with Name or Description makes: PUT /api/v1/kms/keys/{id}/metadata
+// carrying both, whose reply sets the result's Name (#646 Codex r2).
+func TestRESTAdapterKeyGenerateWithDisplay(t *testing.T) {
+	genBody, err := json.Marshal(restapi.KMSGenerateKeyResponse{
+		Key: &restapi.KMSKeyHandleResponse{KeyID: "gen-key-1", Version: 1, Algorithm: 22, Status: 1},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	metaPayload, err := json.Marshal(resttypes.KeyMetadataResponse{KeyID: "gen-key-1", Name: "server-name"})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	metaBody, err := json.Marshal(restEnvelope{Code: http.StatusOK, Success: true, Payload: metaPayload})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var gotMeta *resttypes.UpdateKeyMetadataRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case req.Method == http.MethodPost && req.URL.Path == "/api/v1/kms/keys":
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write(genBody)
+		case req.Method == http.MethodPut && req.URL.Path == "/api/v1/kms/keys/gen-key-1/metadata":
+			var m resttypes.UpdateKeyMetadataRequest
+			if err := json.NewDecoder(req.Body).Decode(&m); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			gotMeta = &m
+			_, _ = w.Write(metaBody)
+		default:
+			http.NotFound(w, req)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	r := &RESTAdapter{baseURL: srv.URL, httpClient: srv.Client()}
+
+	res, err := r.KeyGenerate(context.Background(), KeyGenerateOptions{
+		KeyID: "gen-key-1", Algorithm: "AES-256-GCM", Purpose: "encrypt",
+		Name: "display", Description: "desc",
+	})
+	if err != nil {
+		t.Fatalf("KeyGenerate: %v", err)
+	}
+	if gotMeta == nil {
+		t.Fatal("KeyGenerate with Name/Description sent no PUT .../metadata")
+	}
+	if gotMeta.Name != "display" || gotMeta.Description != "desc" {
+		t.Fatalf("metadata request name=%q description=%q, want display/desc", gotMeta.Name, gotMeta.Description)
+	}
+	if res.Name != "server-name" || res.Description != "desc" {
+		t.Fatalf("result name=%q description=%q, want server-name/desc", res.Name, res.Description)
+	}
 }
 
 // TestRESTAdapterGenerateKeyBodyKeySpec checks that the body the REST
