@@ -20,10 +20,12 @@ import (
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/eab"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -54,6 +56,19 @@ type EABGRPCService struct {
 	// tenant-scoped EAB operations (docs/SPEC.md line 125). Without it the
 	// service falls back to the caller-tenant equality check.
 	pepClient quicbaassdk.IAMPEPClient
+
+	// users resolves an mTLS certificate identity to its stored IAM user
+	// and roles before the PEP check: the PEP projects the supplied subject
+	// into RBAC as is and does not hydrate roles from the subject ID.
+	users eabUserDirectory
+}
+
+// eabUserDirectory is the part of the SDK IAM UserClient the EAB service
+// uses to resolve an mTLS caller to its stored IAM user.
+type eabUserDirectory interface {
+	Get(ctx context.Context, tenantID, userID string) (*sdkiam.User, error)
+	GetByEmail(ctx context.Context, tenantID, email string) (*sdkiam.User, error)
+	FindByUsername(ctx context.Context, tenantID, username string) (*sdkiam.User, error)
 }
 
 // SetPEPClient wires the IAM PEP client that authorises tenant-scoped EAB
@@ -62,11 +77,62 @@ func (s *EABGRPCService) SetPEPClient(c quicbaassdk.IAMPEPClient) {
 	s.pepClient = c
 }
 
+// SetUserClient wires the IAM user directory that resolves mTLS callers to
+// their stored user and roles. With a PEP configured and no directory, an
+// mTLS caller is refused rather than checked without its roles.
+func (s *EABGRPCService) SetUserClient(c eabUserDirectory) {
+	s.users = c
+}
+
 // eabCaller is the authenticated caller of a tenant-scoped EAB operation.
+// identity is set for an mTLS certificate caller, whose IAM user and roles
+// are not yet resolved.
 type eabCaller struct {
 	id       string
 	tenantID string
 	roles    []string
+	identity *auth.Identity
+}
+
+// resolveEABMTLSCaller resolves an mTLS certificate identity to its stored
+// IAM user in the identity's tenant: by the resolved user ID when the
+// interceptor set one, else by the email SAN, else by the CN as username.
+// A missing user, or one stored in another tenant, is refused.
+func (s *EABGRPCService) resolveEABMTLSCaller(ctx context.Context, caller eabCaller) (eabCaller, error) {
+	identity := caller.identity
+	denied := status.Error(codes.PermissionDenied, ErrIAMTenantForbidden{Requested: caller.tenantID}.Error())
+	if s.users == nil {
+		return eabCaller{}, status.Error(codes.Unavailable, "caller identity resolution unavailable")
+	}
+	var (
+		user *sdkiam.User
+		err  error
+	)
+	switch {
+	case identity.UserID != "":
+		user, err = s.users.Get(ctx, identity.TenantID, identity.UserID)
+	case identity.Email != "":
+		user, err = s.users.GetByEmail(ctx, identity.TenantID, identity.Email)
+	case identity.Name != "":
+		user, err = s.users.FindByUsername(ctx, identity.TenantID, identity.Name)
+	case identity.ID != "":
+		user, err = s.users.FindByUsername(ctx, identity.TenantID, identity.ID)
+	default:
+		return eabCaller{}, denied
+	}
+	if err != nil {
+		if sdkerrors.IsNotFound(err) {
+			return eabCaller{}, denied
+		}
+		if s.logger != nil {
+			s.logger.Error(err, "eab grpc: caller identity lookup failed", "tenant_id", identity.TenantID)
+		}
+		return eabCaller{}, status.Error(codes.Unavailable, "caller identity resolution unavailable")
+	}
+	if user == nil || user.ID == "" || user.TenantID != identity.TenantID {
+		return eabCaller{}, denied
+	}
+	return eabCaller{id: user.ID, tenantID: user.TenantID, roles: user.Roles}, nil
 }
 
 // eabCallerFromContext returns the authenticated caller, or false for an
@@ -86,7 +152,7 @@ func eabCallerFromContext(ctx context.Context) (eabCaller, bool) {
 		if id == "" {
 			id = identity.ID
 		}
-		return eabCaller{id: id, tenantID: identity.TenantID}, true
+		return eabCaller{id: id, tenantID: identity.TenantID, identity: identity}, true
 	}
 	return eabCaller{}, false
 }
@@ -110,6 +176,13 @@ func (s *EABGRPCService) authorizeEABTenant(ctx context.Context, requestTenant, 
 	}
 	if s.pepClient == nil {
 		return authorizeIAMTenant(ctx, requestTenant)
+	}
+	if caller.identity != nil {
+		resolved, err := s.resolveEABMTLSCaller(ctx, caller)
+		if err != nil {
+			return err
+		}
+		caller = resolved
 	}
 	resp, err := s.pepClient.Check(ctx, &sdkiam.CheckRequest{
 		Subject: sdkiam.CheckSubject{

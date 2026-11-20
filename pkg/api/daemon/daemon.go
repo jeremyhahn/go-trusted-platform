@@ -949,6 +949,11 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		if pep := iamService.PEP(); pep != nil {
 			eabGRPCService.SetPEPClient(pep)
 		}
+		// mTLS callers are resolved to their stored IAM user and roles
+		// before the PEP check.
+		if client := iamService.Client(); client != nil {
+			eabGRPCService.SetUserClient(client.User())
+		}
 	}
 	if grpcServer != nil {
 		platformv1.RegisterEABServiceServer(grpcServer, eabGRPCService)
