@@ -1684,6 +1684,34 @@ func TestPXEGRPC_BootingAllowsTheIPXEHTTPPort(t *testing.T) {
 	assert.True(t, allowed, "no provisioning allow rule for the iPXE HTTP port %d", ipxe.DefaultHTTPPort)
 }
 
+// TestDaemonPXEBackendRefusesABridgeMismatch: the VLAN wrapper only
+// delegates to the shared flow manager, so a pxe.bridge-name other than
+// the manager's sdn.ovs.bridge is refused at startup (#1694).
+func TestDaemonPXEBackendRefusesABridgeMismatch(t *testing.T) {
+	ctx := context.Background()
+	zones, env := zoneServiceSeed(pxeSectionApp())
+	require.NotNil(t, env)
+	if len(zones) == 0 {
+		zones = zone.Defaults()
+	}
+	plan, err := netplan.New(*env, zones)
+	require.NoError(t, err)
+	port := &pxeRecordingPort{}
+	flows, err := policy.NewZoneFlowManager(policy.ZoneFlowManagerConfig{
+		BridgeName: "br-int", FlowController: port, PortController: port, Plan: plan,
+	})
+	require.NoError(t, err)
+
+	section := pxeEnabledSection(t)
+	require.Equal(t, "br-pxe", section.BridgeName)
+	svc, err := pxeGRPCServiceFromConfig(ctx, logging.DefaultLogger(), pxeSectionApp(), section, flows)
+	require.Error(t, err)
+	assert.Nil(t, svc)
+	var cfgErr pxe.ErrInvalidConfiguration
+	require.ErrorAs(t, err, &cfgErr)
+	assert.Equal(t, "pxe.bridge-name", cfgErr.Field)
+}
+
 // pxeBlockingVLAN blocks ApplyQuarantineFlows until release is closed.
 type pxeBlockingVLAN struct {
 	pxe.VLANIntegration
