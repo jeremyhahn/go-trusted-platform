@@ -77,6 +77,15 @@ type Group struct {
 	nextAdvertAt time.Time
 	// lastErr is the last actuator failure, surfaced through Health.
 	lastErr error
+	// claimErr is the last address-claim failure while Master; advertise
+	// never clears it, only a successful claim or leaving Master does.
+	claimErr error
+	// releaseErr is the failure of the last release of the VIPs (at
+	// demotion to Backup or at Shutdown): while it is set the interface may
+	// still hold the VIPs, so Backup retries the release at releaseRetryAt,
+	// and Shutdown, in Backup or Initialize, retries it until it succeeds.
+	releaseErr     error
+	releaseRetryAt time.Time
 	// transitions counts state changes, for telemetry and tests.
 	transitions uint64
 }
@@ -140,6 +149,9 @@ func (g *Group) Transitions() uint64 { return g.transitions }
 // LastError returns the most recent actuator failure, if any.
 func (g *Group) LastError() error { return g.lastErr }
 
+// ClaimError returns the unrepaired address-claim failure, if any.
+func (g *Group) ClaimError() error { return g.claimErr }
+
 // SkewTime is ((256 − Priority) × Master_Adver_Interval) / 256 (§6.1),
 // using the interval currently in force.
 func (g *Group) SkewTime() time.Duration {
@@ -157,6 +169,9 @@ func (g *Group) MasterDownInterval() time.Duration {
 func (g *Group) NextDeadline() time.Time {
 	switch g.state {
 	case StateBackup:
+		if g.releaseErr != nil && g.releaseRetryAt.Before(g.masterDownAt) {
+			return g.releaseRetryAt
+		}
 		return g.masterDownAt
 	case StateMaster:
 		return g.nextAdvertAt
@@ -190,15 +205,28 @@ func (g *Group) Shutdown(now time.Time) error {
 		if err := g.act.Advertise(g, PriorityRelease); err != nil {
 			first = err
 		}
-		if err := g.act.Release(g); err != nil && first == nil {
-			first = err
+		relErr := g.act.Release(g)
+		if relErr != nil && first == nil {
+			first = relErr
 		}
+		// A release that failed stays outstanding: a later Shutdown retries it.
+		g.releaseErr = relErr
+		g.claimErr = nil
 		g.setState(StateInitialize)
 		g.lastErr = first
 		return first
-	case StateBackup:
+	case StateBackup, StateInitialize:
+		var err error
+		if g.releaseErr != nil {
+			// Demotion or an earlier Shutdown left the VIPs on the
+			// interface: release them now, and keep the failure recorded
+			// until a release succeeds.
+			err = g.act.Release(g)
+			g.releaseErr = err
+			g.lastErr = err
+		}
 		g.setState(StateInitialize)
-		return nil
+		return err
 	default:
 		return nil
 	}
@@ -209,8 +237,12 @@ func (g *Group) Shutdown(now time.Time) error {
 func (g *Group) Tick(now time.Time) error {
 	switch g.state {
 	case StateBackup:
+		var relErr error
+		if g.releaseErr != nil && !now.Before(g.releaseRetryAt) {
+			relErr = g.retryRelease(now)
+		}
 		if now.Before(g.masterDownAt) {
-			return nil
+			return relErr
 		}
 		return g.becomeMaster(now)
 	case StateMaster:
@@ -218,7 +250,18 @@ func (g *Group) Tick(now time.Time) error {
 			return nil
 		}
 		g.nextAdvertAt = now.Add(g.AdvertInterval())
-		return g.advertise()
+		if g.claimErr != nil {
+			// Retry the claim that failed at takeover before advertising.
+			g.claimErr = g.act.Claim(g)
+		}
+		if err := g.advertise(); err != nil {
+			return err
+		}
+		if g.claimErr != nil {
+			g.lastErr = g.claimErr
+			return g.claimErr
+		}
+		return nil
 	default:
 		return nil
 	}
@@ -254,8 +297,13 @@ func (g *Group) HandleAdvertisement(adv *Advertisement, sender netip.Addr, now t
 			g.masterAdverInterval = adv.MaxAdvertInterval
 			g.masterDownAt = now.Add(g.MasterDownInterval())
 			err := g.act.Release(g)
+			g.claimErr = nil
 			g.setState(StateBackup)
 			g.lastErr = err
+			g.releaseErr = err
+			if err != nil {
+				g.releaseRetryAt = now.Add(g.AdvertInterval())
+			}
 			return err
 		}
 		return nil
@@ -264,15 +312,31 @@ func (g *Group) HandleAdvertisement(adv *Advertisement, sender netip.Addr, now t
 	}
 }
 
+// retryRelease retries the release a demotion left outstanding, and on a
+// further failure schedules the next try one advertisement interval on.
+func (g *Group) retryRelease(now time.Time) error {
+	err := g.act.Release(g)
+	g.releaseErr = err
+	g.lastErr = err
+	if err != nil {
+		g.releaseRetryAt = now.Add(g.AdvertInterval())
+	}
+	return err
+}
+
 func (g *Group) becomeMaster(now time.Time) error {
 	g.setState(StateMaster)
+	// Claim takes the VIPs back: nothing is left to release.
+	g.releaseErr = nil
 	g.nextAdvertAt = now.Add(g.AdvertInterval())
 	var first error
 	if err := g.advertise(); err != nil {
 		first = err
 	}
-	if err := g.act.Claim(g); err != nil && first == nil {
-		first = err
+	claimErr := g.act.Claim(g)
+	g.claimErr = claimErr
+	if claimErr != nil && first == nil {
+		first = claimErr
 	}
 	g.lastErr = first
 	return first

@@ -251,31 +251,6 @@ func TestFactory_RegistrationDAO_FactoryClosed(t *testing.T) {
 	assert.ErrorAs(t, err, &closedErr)
 }
 
-func TestFactory_RoleDAO_Success(t *testing.T) {
-	factory, cleanup := newTestFactory(t)
-	defer cleanup()
-
-	dao, err := factory.RoleDAO()
-	require.NoError(t, err)
-	assert.NotNil(t, dao)
-
-	// Second call should return same instance
-	dao2, err := factory.RoleDAO()
-	require.NoError(t, err)
-	assert.Same(t, dao, dao2)
-}
-
-func TestFactory_RoleDAO_FactoryClosed(t *testing.T) {
-	factory, cleanup := newTestFactory(t)
-	cleanup()
-
-	_, err := factory.RoleDAO()
-	require.Error(t, err)
-
-	var closedErr ErrFactoryClosed
-	assert.ErrorAs(t, err, &closedErr)
-}
-
 func TestFactory_WebAuthnDAO_Success(t *testing.T) {
 	factory, cleanup := newTestFactory(t)
 	defer cleanup()
@@ -326,7 +301,7 @@ func TestFactory_ConcurrentDAOAccess(t *testing.T) {
 
 	// Concurrently access all DAOs
 	for i := 0; i < 10; i++ {
-		wg.Add(4)
+		wg.Add(3)
 
 		go func() {
 			defer wg.Done()
@@ -339,14 +314,6 @@ func TestFactory_ConcurrentDAOAccess(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			_, err := factory.RegistrationDAO()
-			if err != nil {
-				errors <- err
-			}
-		}()
-
-		go func() {
-			defer wg.Done()
-			_, err := factory.RoleDAO()
 			if err != nil {
 				errors <- err
 			}
@@ -377,9 +344,6 @@ func TestFactory_AllDAOs_Integration(t *testing.T) {
 	userDAO, err := factory.UserDAO()
 	require.NoError(t, err)
 
-	roleDAO, err := factory.RoleDAO()
-	require.NoError(t, err)
-
 	regDAO, err := factory.RegistrationDAO()
 	require.NoError(t, err)
 
@@ -388,7 +352,6 @@ func TestFactory_AllDAOs_Integration(t *testing.T) {
 
 	// Verify they all work
 	assert.NotNil(t, userDAO)
-	assert.NotNil(t, roleDAO)
 	assert.NotNil(t, regDAO)
 	assert.NotNil(t, webAuthnDAO)
 }
@@ -429,12 +392,6 @@ func TestFactory_DAOSavedEntities_ListedByTypeName(t *testing.T) {
 
 	ctx := context.Background()
 
-	roleDAO, err := factory.RoleDAO()
-	require.NoError(t, err)
-	role := &entities.Role{Name: "dump-role"}
-	require.NoError(t, roleDAO.Save(ctx, role))
-	require.NotZero(t, role.ID)
-
 	userDAO, err := factory.UserDAO()
 	require.NoError(t, err)
 	user := entities.NewUser("dump@example.com")
@@ -458,11 +415,6 @@ func TestFactory_DAOSavedEntities_ListedByTypeName(t *testing.T) {
 	require.NoError(t, zoneDAO.Save(ctx, zone))
 	require.NotZero(t, zone.ID)
 
-	roles := listPartition(t, factory, "Role")
-	require.Contains(t, roles, role.ID)
-	roleObject := decodeObject(t, roles[role.ID])
-	assert.Equal(t, "dump-role", roleObject["name"])
-
 	users := listPartition(t, factory, "User")
 	require.Contains(t, users, user.ID)
 	assert.Equal(t, "dump@example.com", decodeObject(t, users[user.ID])["email"])
@@ -480,8 +432,8 @@ func TestFactory_DAOSavedEntities_ListedByTypeName(t *testing.T) {
 	require.True(t, ok, "zone A records must be a JSON array under \"a\"")
 	assert.Len(t, aRecords, 3)
 
-	for id, data := range roles {
-		assert.NotContains(t, decodeObject(t, data), "records", "Role partition holds a zone at ID %d", id)
+	for id, data := range users {
+		assert.NotContains(t, decodeObject(t, data), "records", "User partition holds a zone at ID %d", id)
 	}
 }
 
@@ -571,25 +523,25 @@ func TestFactory_List_UnpopulatedTypeIsEmpty(t *testing.T) {
 
 // TestFactory_List_ReturnsEverySavedRole asserts that one listing page
 // returns every DAO-saved role, and keeps doing so under concurrent readers.
-func TestFactory_List_ReturnsEverySavedRole(t *testing.T) {
+func TestFactory_List_ReturnsEverySavedUser(t *testing.T) {
 	factory, cleanup := newTestFactory(t)
 	defer cleanup()
 
 	ctx := context.Background()
-	roleDAO, err := factory.RoleDAO()
+	userDAO, err := factory.UserDAO()
 	require.NoError(t, err)
 
-	const numRoles = 20
-	saved := make([]uint64, 0, numRoles)
-	for i := 0; i < numRoles; i++ {
-		role := &entities.Role{Name: fmt.Sprintf("bulk-role-%d", i)}
-		require.NoError(t, roleDAO.Save(ctx, role))
-		saved = append(saved, role.ID)
+	const numUsers = 20
+	saved := make([]uint64, 0, numUsers)
+	for i := 0; i < numUsers; i++ {
+		user := entities.NewUser(fmt.Sprintf("bulk-user-%d@example.com", i))
+		require.NoError(t, userDAO.Save(ctx, user))
+		saved = append(saved, user.ID)
 	}
 
-	roles := listPartition(t, factory, "Role")
+	users := listPartition(t, factory, "User")
 	for _, id := range saved {
-		assert.Contains(t, roles, id)
+		assert.Contains(t, users, id)
 	}
 
 	const numReaders = 3
@@ -600,7 +552,7 @@ func TestFactory_List_ReturnsEverySavedRole(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			listed, _, err := factory.Client().List(ctx, "Role", 100, "", 0)
+			listed, _, err := factory.Client().List(ctx, "User", 100, "", 0)
 			if err != nil {
 				errs <- err
 				return
@@ -616,7 +568,7 @@ func TestFactory_List_ReturnsEverySavedRole(t *testing.T) {
 		t.Errorf("concurrent list failed: %v", err)
 	}
 	for count := range results {
-		assert.Equal(t, len(roles), count, "a concurrent reader saw a different Role partition")
+		assert.Equal(t, len(users), count, "a concurrent reader saw a different User partition")
 	}
 }
 

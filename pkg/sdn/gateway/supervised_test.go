@@ -18,12 +18,15 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/netip"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/fhrp"
 	gwstate "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/state"
 )
 
@@ -386,6 +389,49 @@ func TestSupervisedStart_StartsEverySectionThroughTheSupervisor(t *testing.T) {
 
 	require.NoError(t, gw.Stop(context.Background()))
 	assert.ElementsMatch(t, []string{ServiceFirewall, ServiceNAT, ServiceManagementVPN}, sup.stopped)
+}
+
+// The supervisor parent sweeps a crashed predecessor's recorded VIPs when
+// no datapath child will start, and leaves them to that child when one
+// will (#1716 Codex round 4).
+func TestSupervisedStart_SweepsRecordedVIPsWhenNoDatapathChildStarts(t *testing.T) {
+	vip := netip.MustParsePrefix("192.0.2.1/24")
+	for _, tc := range []struct {
+		name     string
+		firewall bool
+		swept    bool
+	}{
+		{name: "no datapath child", firewall: false, swept: true},
+		{name: "datapath child", firewall: true, swept: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), FHRPStateDir, FHRPInventoryFile)
+			require.NoError(t, fhrp.NewInventory(path).Record("trusted0", 10, vip))
+			programmer := &fakeFHRPProgrammer{present: map[netip.Prefix]bool{vip: true}}
+			cfg := supervisedConfig(newFakeSupervisor())
+			cfg.NAT = nil
+			if !tc.firewall {
+				cfg.Firewall = nil
+			}
+			cfg.Host = &HostRuntime{FHRPProgrammer: programmer, FHRPInventory: path}
+			gw, err := NewGateway(cfg)
+			require.NoError(t, err)
+			gw.SetNodeMetrics(cfg.MinReputation, time.Duration(cfg.MinAgeDays)*24*time.Hour, cfg.MinUptimePct)
+
+			require.NoError(t, gw.Start(context.Background()))
+			t.Cleanup(func() { _ = gw.Stop(context.Background()) })
+			entries, err := fhrp.NewInventory(path).Entries()
+			require.NoError(t, err)
+			if tc.swept {
+				assert.Equal(t, []netip.Prefix{vip}, programmer.Deleted())
+				assert.Empty(t, entries)
+			} else {
+				assert.Empty(t, programmer.Deleted())
+				assert.True(t, programmer.holds(vip))
+				assert.Len(t, entries, 1)
+			}
+		})
+	}
 }
 
 func TestSupervisedStart_AFailedServiceRollsBackTheStartedOnes(t *testing.T) {
