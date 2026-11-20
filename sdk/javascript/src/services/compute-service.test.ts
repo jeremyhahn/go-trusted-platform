@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ComputeService } from './compute-service.js';
-import type { ApiClient } from '../client/api-client.js';
+import { ApiClient } from '../client/api-client.js';
 import type {
   AttachDiskRequest,
   AttestContainerRequest,
@@ -143,7 +143,7 @@ const cases: Case[] = [
     method: 'post',
     path: '/v1/compute/vms/vm%2F1/migrate',
     body: { destinationHost: 'host-b', liveMigration: true, bandwidthLimitMbps: 500 },
-    options: { timeout: 600000 },
+    options: { retry: { enabled: false }, timeout: 600000 },
   },
   {
     name: 'prepareMigration',
@@ -388,6 +388,50 @@ describe('ComputeService', () => {
       vi.mocked(mockClient[c.method]).mockRejectedValueOnce(failure);
 
       await expect(c.call(service)).rejects.toBe(failure);
+    });
+  });
+
+  describe('migrateVM retries (#2023 Codex r2)', () => {
+    it('passes retry disabled to the client without a timeout', async () => {
+      vi.mocked(mockClient.post).mockResolvedValueOnce({ data: {}, status: 200 } as never);
+
+      await service.migrateVM(migrateVMRequest);
+
+      expect(vi.mocked(mockClient.post).mock.calls[0]?.[2]).toEqual({ retry: { enabled: false } });
+    });
+
+    it('passes retry disabled to the client with a timeout', async () => {
+      vi.mocked(mockClient.post).mockResolvedValueOnce({ data: {}, status: 200 } as never);
+
+      await service.migrateVM(migrateVMRequest, { timeoutMs: 600000 });
+
+      expect(vi.mocked(mockClient.post).mock.calls[0]?.[2]).toEqual({
+        retry: { enabled: false },
+        timeout: 600000,
+      });
+    });
+
+    it('surfaces a lost response with exactly one request', async () => {
+      const fetchImpl = vi
+        .fn()
+        .mockRejectedValueOnce(new TypeError('network error: response lost after the migration committed'))
+        .mockResolvedValue(
+          new Response(JSON.stringify({ success: true, payload: {} }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })
+        );
+      const client = new ApiClient({
+        baseUrl: 'https://platform.test/api/v1',
+        fetch: fetchImpl as unknown as typeof fetch,
+        retry: { maxRetries: 3, initialDelayMs: 1, maxDelayMs: 1 },
+      });
+
+      const result = await new ComputeService(client).migrateVM(migrateVMRequest, { timeoutMs: 600000 });
+
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(result.success).toBe(false);
+      expect(result.error?.message).toMatch(/network error/);
     });
   });
 

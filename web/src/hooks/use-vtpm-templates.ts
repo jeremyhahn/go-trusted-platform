@@ -9,7 +9,7 @@
  * below, and the pages use only these wire types.
  */
 
-import type { ApiResponse } from 'trusted-platform-sdk';
+import type { ApiResponse, VTPMService } from 'trusted-platform-sdk';
 import { useVTPM, useApi, useMutation } from '@/hooks';
 import { useToast } from '@/hooks/use-toast';
 import { useState } from 'react';
@@ -75,6 +75,17 @@ export interface CloneTemplateInput {
 /** Converts an SDK response to its wire shape (#445). */
 function wire<T>(response: unknown): ApiResponse<T> {
   return response as unknown as ApiResponse<T>;
+}
+
+/** The camelCase bundle VTPMService.importBundle resolves with. */
+export type VTPMBundle = NonNullable<Awaited<ReturnType<VTPMService['importBundle']>>['data']>;
+
+/**
+ * bundleToWire maps the SDK's camelCase VTPMBundle onto the snake_case wire
+ * shape the bundle views read, so an imported bundle keeps its fields.
+ */
+export function bundleToWire(b: VTPMBundle): VTPMBundleWire {
+  return b as unknown as VTPMBundleWire;
 }
 
 export function useVTPMTemplates() {
