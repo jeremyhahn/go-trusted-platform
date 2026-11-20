@@ -26,25 +26,17 @@ type Service struct {
 	profiles ProfileStore
 	logger   *slog.Logger
 
-	// userLocksMu guards userLocks, which holds one mutex per profile ID
-	// serializing user-slot writes that check occupancy first.
-	userLocksMu sync.Mutex
-	userLocks   map[uint64]*sync.Mutex
+	// userLocks are striped mutexes serializing user-slot writes that check
+	// occupancy first. A fixed array keeps the storage bounded however many
+	// distinct (even nonexistent) profile IDs are requested.
+	userLocks [64]sync.Mutex
 }
 
-// userLock returns the mutex serializing user-slot writes on a profile.
+// userLock returns the mutex serializing user-slot writes on a profile. One
+// profile always maps to the same stripe, so its occupancy check and create
+// stay serialized; distinct profiles may share a stripe.
 func (s *Service) userLock(profileID uint64) *sync.Mutex {
-	s.userLocksMu.Lock()
-	defer s.userLocksMu.Unlock()
-	if s.userLocks == nil {
-		s.userLocks = make(map[uint64]*sync.Mutex)
-	}
-	mu, ok := s.userLocks[profileID]
-	if !ok {
-		mu = &sync.Mutex{}
-		s.userLocks[profileID] = mu
-	}
-	return mu
+	return &s.userLocks[profileID%uint64(len(s.userLocks))]
 }
 
 // ServiceParams holds dependencies for creating a BMC Service.
