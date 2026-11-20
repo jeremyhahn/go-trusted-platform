@@ -192,3 +192,10 @@ export type {
   UseReportedGatewaysOptions,
   UseReportedGatewaysResult,
 } from './use-reported-gateways';
+export { useEABGate, EAB_OPERATIONS, eabRouteMissing } from './use-eab-gate';
+export type {
+  EABOperation,
+  EABOperationInfo,
+  EABGateReasons,
+  UseEABGateResult,
+} from './use-eab-gate';

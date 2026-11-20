@@ -14,6 +14,9 @@ import {
   CardTitle,
 } from "@/components/ui";
 import { useApi, useEAB } from "@/hooks";
+import { useEABGate } from "@/hooks/use-eab-gate";
+import type { EABOperation } from "@/hooks/use-eab-gate";
+import { EABGate } from "../eab-gate";
 import { resolveDynamicId } from "@/utils/dynamic-route";
 import { normalizeEABStatus } from "@/utils/eab-status";
 import type {
@@ -54,32 +57,40 @@ export default function EABCredentialDetailClient() {
   const [message, setMessage] = React.useState<string | null>(null);
   const [actionError, setActionError] = React.useState<string | null>(null);
 
-  const run = async (action: () => Promise<string | null>, fallback: string) => {
+  const gate = useEABGate();
+  const { report } = gate;
+
+  React.useEffect(() => {
+    if (credential.error) report("GetCredential", credential.error);
+  }, [credential.error, report]);
+
+  const run = async (op: EABOperation, action: () => Promise<string | null>, fallback: string) => {
     setActionError(null);
     setMessage(null);
     try {
       setMessage(await action());
     } catch (err) {
+      report(op, err);
       setActionError(errorText(err, fallback));
     }
   };
 
   const handleQRCode = () => {
-    void run(async () => {
+    void run("GetCredentialQRCode", async () => {
       setQrCode(await eab.getQRCode.mutateAsync({ id, size: 256 }));
       return null;
     }, "Failed to get QR code");
   };
 
   const handleEnrollmentURL = () => {
-    void run(async () => {
+    void run("GetEnrollmentURL", async () => {
       setEnrollment(await eab.getEnrollmentURL.mutateAsync(id));
       return null;
     }, "Failed to get enrollment URL");
   };
 
   const handleMarkUsed = () => {
-    void run(async () => {
+    void run("MarkCredentialUsed", async () => {
       await eab.markUsed.mutateAsync(id);
       await credential.refetch();
       return "Credential marked as used";
@@ -147,15 +158,21 @@ export default function EABCredentialDetailClient() {
               <dd>{cred.createdAt}</dd>
             </dl>
             <div className="mt-4 flex gap-2">
-              <Button variant="outline" onClick={handleQRCode}>
+              <EABGate gate={gate} op="GetCredentialQRCode">
+                <Button variant="outline" onClick={handleQRCode}>
                 Show QR Code
               </Button>
-              <Button variant="outline" onClick={handleEnrollmentURL}>
+              </EABGate>
+              <EABGate gate={gate} op="GetEnrollmentURL">
+                <Button variant="outline" onClick={handleEnrollmentURL}>
                 Get Enrollment URL
               </Button>
-              <Button onClick={handleMarkUsed} disabled={status !== "ACTIVE"}>
+              </EABGate>
+              <EABGate gate={gate} op="MarkCredentialUsed">
+                <Button onClick={handleMarkUsed} disabled={status !== "ACTIVE"}>
                 Mark Used
               </Button>
+              </EABGate>
             </div>
           </CardContent>
         </Card>
@@ -182,8 +199,8 @@ export default function EABCredentialDetailClient() {
         <Card>
           <CardHeader>
             <CardTitle>Enrollment URL</CardTitle>
-            {enrollment.expiresAt && (
-              <CardDescription>Expires {enrollment.expiresAt}</CardDescription>
+            {enrollment.timestamp && (
+              <CardDescription>Generated {enrollment.timestamp}</CardDescription>
             )}
           </CardHeader>
           <CardContent>

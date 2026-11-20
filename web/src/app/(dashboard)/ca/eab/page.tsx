@@ -23,6 +23,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useEAB, useEABList } from "@/hooks";
+import { useEABGate } from "@/hooks/use-eab-gate";
+import type { EABOperation } from "@/hooks/use-eab-gate";
+import { EABGate } from "./eab-gate";
 import { parseExpiresIn } from "@/utils/eab-expiry";
 import { normalizeEABStatus } from "@/utils/eab-status";
 import type {
@@ -76,12 +79,20 @@ export default function EABCredentialsPage() {
   const [lookupKeyId, setLookupKeyId] = React.useState("");
   const [lookupResult, setLookupResult] = React.useState<EABCredentialSummary | null>(null);
 
-  const run = async (action: () => Promise<string>, fallback: string) => {
+  const gate = useEABGate();
+  const { report } = gate;
+
+  React.useEffect(() => {
+    if (list.error) report("ListCredentials", list.error);
+  }, [list.error, report]);
+
+  const run = async (op: EABOperation, action: () => Promise<string>, fallback: string) => {
     setActionError(null);
     setMessage(null);
     try {
       setMessage(await action());
     } catch (err) {
+      report(op, err);
       setActionError(errorText(err, fallback));
     }
   };
@@ -102,7 +113,7 @@ export default function EABCredentialsPage() {
       setActionError("Expires in must be a positive whole number of seconds, or blank");
       return;
     }
-    void run(async () => {
+    void run("CreateCredential", async () => {
       const res = await eab.create.mutateAsync({
         profileId: profile,
         tenantId,
@@ -115,7 +126,7 @@ export default function EABCredentialsPage() {
   };
 
   const handleRevoke = (id: string) => {
-    void run(async () => {
+    void run("RevokeCredential", async () => {
       await eab.revoke.mutateAsync(id);
       await list.refetch();
       return `Credential ${id} revoked`;
@@ -124,7 +135,7 @@ export default function EABCredentialsPage() {
 
   const handleDelete = (id: string) => {
     if (!confirm(`Delete EAB credential ${id}?`)) return;
-    void run(async () => {
+    void run("DeleteCredential", async () => {
       await eab.deleteCredential.mutateAsync(id);
       await list.refetch();
       return `Credential ${id} deleted`;
@@ -132,7 +143,7 @@ export default function EABCredentialsPage() {
   };
 
   const handleCleanup = () => {
-    void run(async () => {
+    void run("CleanupExpiredCredentials", async () => {
       const res = await eab.cleanupExpired.mutateAsync(undefined);
       await list.refetch();
       return `Deleted ${res.deletedCount ?? 0} expired credentials`;
@@ -164,6 +175,7 @@ export default function EABCredentialsPage() {
         setValidation(res);
         setMessage(res.valid ? "Credential is valid" : "Credential is not valid");
       } catch (err) {
+        report("ValidateCredential", err);
         if (gen !== validateGen.current) return;
         setActionError(errorText(err, "Failed to validate credential"));
       }
@@ -173,10 +185,11 @@ export default function EABCredentialsPage() {
   const handleLookup = (e: React.FormEvent) => {
     e.preventDefault();
     setLookupResult(null);
-    void run(async () => {
+    void run("GetCredentialByKeyID", async () => {
       const res = await eab.service.getByKeyId(lookupKeyId);
       if (!res.success || !res.data) {
-        throw new Error(errorText(res.error, "Credential not found"));
+        // Keep the error's status, which the capability gate reads.
+        throw res.error ?? new Error("Credential not found");
       }
       setLookupResult(res.data.credential);
       return `Found credential ${res.data.credential.id}`;
@@ -193,14 +206,18 @@ export default function EABCredentialsPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={handleCleanup}>
+          <EABGate gate={gate} op="CleanupExpiredCredentials">
+            <Button variant="outline" onClick={handleCleanup}>
             <Trash2 className="mr-2 h-4 w-4" />
             Clean Up Expired
           </Button>
-          <Button variant="outline" onClick={() => void list.refetch()} disabled={list.isFetching}>
+          </EABGate>
+          <EABGate gate={gate} op="ListCredentials">
+            <Button variant="outline" onClick={() => void list.refetch()} disabled={list.isFetching}>
             <RefreshCw className={`mr-2 h-4 w-4 ${list.isFetching ? "animate-spin" : ""}`} />
             Refresh
           </Button>
+          </EABGate>
         </div>
       </div>
 
@@ -263,6 +280,7 @@ export default function EABCredentialsPage() {
                   </TableCell>
                   <TableCell>{cred.expiresAt}</TableCell>
                   <TableCell className="flex gap-2">
+                    <EABGate gate={gate} op="RevokeCredential">
                     <Button
                       size="sm"
                       variant="outline"
@@ -271,9 +289,12 @@ export default function EABCredentialsPage() {
                     >
                       Revoke
                     </Button>
+                    </EABGate>
+                    <EABGate gate={gate} op="DeleteCredential">
                     <Button size="sm" variant="destructive" onClick={() => handleDelete(cred.id)}>
                       Delete
                     </Button>
+                    </EABGate>
                   </TableCell>
                 </TableRow>
               ))}
@@ -288,6 +309,7 @@ export default function EABCredentialsPage() {
             <CardTitle>Create Credential</CardTitle>
           </CardHeader>
           <CardContent>
+            <EABGate gate={gate} op="CreateCredential">
             <form className="space-y-3" onSubmit={handleCreate}>
               <div className="space-y-1">
                 <Label htmlFor="eab-profile-id">Profile ID</Label>
@@ -321,6 +343,7 @@ export default function EABCredentialsPage() {
               </div>
               <Button type="submit">Create</Button>
             </form>
+            </EABGate>
             {created?.credential && (
               <div className="mt-4 space-y-1 text-sm" data-testid="eab-created">
                 <div>
@@ -340,6 +363,7 @@ export default function EABCredentialsPage() {
             <CardTitle>Validate Credential</CardTitle>
           </CardHeader>
           <CardContent>
+            <EABGate gate={gate} op="ValidateCredential">
             <form className="space-y-3" onSubmit={handleValidate}>
               <div className="space-y-1">
                 <Label htmlFor="eab-validate-key-id">Key ID</Label>
@@ -361,6 +385,7 @@ export default function EABCredentialsPage() {
               </div>
               <Button type="submit">Validate</Button>
             </form>
+            </EABGate>
             {validation && (
               <div className="mt-4" data-testid="eab-validation">
                 <Badge variant={validation.valid ? "default" : "destructive"}>
@@ -376,6 +401,7 @@ export default function EABCredentialsPage() {
             <CardTitle>Look Up by Key ID</CardTitle>
           </CardHeader>
           <CardContent>
+            <EABGate gate={gate} op="GetCredentialByKeyID">
             <form className="space-y-3" onSubmit={handleLookup}>
               <div className="space-y-1">
                 <Label htmlFor="eab-lookup-key-id">Key ID</Label>
@@ -388,6 +414,7 @@ export default function EABCredentialsPage() {
               </div>
               <Button type="submit">Look Up</Button>
             </form>
+            </EABGate>
             {lookupResult && (
               <div className="mt-4 space-y-1 text-sm" data-testid="eab-lookup-result">
                 <div>

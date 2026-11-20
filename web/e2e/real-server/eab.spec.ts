@@ -5,7 +5,7 @@
  * `/ca/eab/[id]`; state is seeded through the SDK client the harness hands
  * out, and each test asserts on what the server returns, never on a mock.
  */
-import type { Page } from '@playwright/test';
+import type { Dialog, Page } from '@playwright/test';
 import type { PlatformClient } from 'trusted-platform-sdk';
 import { test, expect } from './fixtures';
 import { normalizeEABStatus } from '../../src/utils/eab-status';
@@ -18,6 +18,10 @@ type Seeded = { id: string; keyId: string; hmacKey: string };
 
 type SDK = PlatformClient;
 
+// The harness fixtures (web/e2e/real-server/fixtures, #2034), typed here so
+// the spec checks on its own.
+type Fx = { adminPage: Page; sdk: SDK; tenant: { id: string; name: string } };
+
 async function seed(sdk: SDK, tenantId: string, expiresInSeconds?: number): Promise<Seeded> {
   const res = await sdk.eab.create({
     profileId: PROFILE_ID,
@@ -25,7 +29,8 @@ async function seed(sdk: SDK, tenantId: string, expiresInSeconds?: number): Prom
     ...(expiresInSeconds !== undefined ? { expiresInSeconds } : {}),
   });
   expect(res.success, JSON.stringify(res.error)).toBe(true);
-  const cred = res.data!.credential;
+  const cred = res.data?.credential;
+  if (!cred) throw new Error('CreateCredential returned no credential');
   return { id: String(cred.id), keyId: cred.keyId, hmacKey: cred.hmacKey };
 }
 
@@ -45,7 +50,7 @@ test.describe('EAB credentials (real server)', () => {
     adminPage,
     sdk,
     tenant,
-  }) => {
+  }: Fx) => {
     const cred = await seed(sdk, tenant.id);
     await openList(adminPage);
     const row = adminPage.getByTestId(`eab-row-${cred.id}`);
@@ -58,7 +63,7 @@ test.describe('EAB credentials (real server)', () => {
     adminPage,
     sdk,
     tenant,
-  }) => {
+  }: Fx) => {
     await openList(adminPage);
     await adminPage.getByLabel('Profile ID').fill(PROFILE_ID);
     await adminPage.getByLabel('Tenant ID').fill(tenant.id);
@@ -80,7 +85,7 @@ test.describe('EAB credentials (real server)', () => {
     adminPage,
     sdk,
     tenant,
-  }) => {
+  }: Fx) => {
     const cred = await seed(sdk, tenant.id);
     await openList(adminPage);
     await adminPage.locator('#eab-validate-key-id').fill(cred.keyId);
@@ -97,7 +102,7 @@ test.describe('EAB credentials (real server)', () => {
     adminPage,
     sdk,
     tenant,
-  }) => {
+  }: Fx) => {
     const cred = await seed(sdk, tenant.id);
     await openList(adminPage);
     await adminPage.locator('#eab-lookup-key-id').fill(cred.keyId);
@@ -111,7 +116,7 @@ test.describe('EAB credentials (real server)', () => {
     adminPage,
     sdk,
     tenant,
-  }) => {
+  }: Fx) => {
     const cred = await seed(sdk, tenant.id);
     await openList(adminPage);
     const row = adminPage.getByTestId(`eab-row-${cred.id}`);
@@ -125,10 +130,10 @@ test.describe('EAB credentials (real server)', () => {
     adminPage,
     sdk,
     tenant,
-  }) => {
+  }: Fx) => {
     const cred = await seed(sdk, tenant.id);
     await openList(adminPage);
-    adminPage.once('dialog', (d) => void d.accept());
+    adminPage.once('dialog', (d: Dialog) => void d.accept());
     await adminPage.getByTestId(`eab-row-${cred.id}`).getByRole('button', { name: 'Delete' }).click();
     await expect(adminPage.getByTestId('eab-message')).toHaveText(`Credential ${cred.id} deleted`);
     await expect(adminPage.getByTestId(`eab-row-${cred.id}`)).toHaveCount(0);
@@ -139,7 +144,7 @@ test.describe('EAB credentials (real server)', () => {
     adminPage,
     sdk,
     tenant,
-  }) => {
+  }: Fx) => {
     const cred = await seed(sdk, tenant.id, 1);
     await adminPage.waitForTimeout(2_000);
     await openList(adminPage);
@@ -152,7 +157,7 @@ test.describe('EAB credentials (real server)', () => {
     adminPage,
     sdk,
     tenant,
-  }) => {
+  }: Fx) => {
     const cred = await seed(sdk, tenant.id);
     await adminPage.goto(`/ca/eab/${cred.id}`);
     await expect(adminPage.getByRole('heading', { name: `EAB Credential ${cred.id}` })).toBeVisible();
@@ -164,7 +169,7 @@ test.describe('EAB credentials (real server)', () => {
     adminPage,
     sdk,
     tenant,
-  }) => {
+  }: Fx) => {
     const cred = await seed(sdk, tenant.id);
     await adminPage.goto(`/ca/eab/${cred.id}`);
     await adminPage.getByRole('button', { name: 'Show QR Code' }).click();
@@ -177,7 +182,7 @@ test.describe('EAB credentials (real server)', () => {
     adminPage,
     sdk,
     tenant,
-  }) => {
+  }: Fx) => {
     const cred = await seed(sdk, tenant.id);
     const server = await sdk.eab.getEnrollmentURL(cred.id);
     expect(server.success).toBe(true);
@@ -190,7 +195,7 @@ test.describe('EAB credentials (real server)', () => {
     adminPage,
     sdk,
     tenant,
-  }) => {
+  }: Fx) => {
     const cred = await seed(sdk, tenant.id);
     await adminPage.goto(`/ca/eab/${cred.id}`);
     await adminPage.getByRole('button', { name: 'Mark Used' }).click();
