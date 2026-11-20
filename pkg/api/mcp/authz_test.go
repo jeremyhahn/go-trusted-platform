@@ -15,11 +15,15 @@ package mcp
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"testing"
 
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/channelbind"
 )
 
 // mockAuthManager is a mock implementation of AuthManager.
@@ -627,4 +631,68 @@ func TestAuthorizeTool_ModuleDeclaredPermissions(t *testing.T) {
 			t.Errorf("advertised scopes = %v, want only the scope of bmc:power", got)
 		}
 	})
+}
+
+// fixedPeer is a PeerAuthenticator that admits every verified chain as one
+// principal.
+type fixedPeer struct {
+	authCtx *platformtoken.AuthorizedContext
+	calls   int
+}
+
+func (p *fixedPeer) AuthenticatePeer(context.Context, []*x509.Certificate) (*platformtoken.AuthorizedContext, error) {
+	p.calls++
+	return p.authCtx, nil
+}
+
+// TestAuthorizeTool_MalformedDeclarationRefusedBeforeAuth pins #2011 Codex
+// r2: a module declaring "bmc" or "bmc:" has no scope, and an empty scope
+// passes authentication for any claims or mTLS caller. The declaration is
+// refused before the caller is authenticated, and the PEP is never asked.
+func TestAuthorizeTool_MalformedDeclarationRefusedBeforeAuth(t *testing.T) {
+	module := declaredTools{
+		"t1": quicbaas.Permission("bmc"),
+		"t2": quicbaas.Permission("bmc:"),
+	}
+	grant := &platformtoken.AuthorizedContext{
+		Subject:  "u",
+		TenantID: "t",
+		Scopes:   []string{"*", "bmc", "bmc:", "bmc:power", "bmc:read", "bmc:write"},
+	}
+
+	for _, tool := range []string{"t1", "t2"} {
+		t.Run(tool+" claims token", func(t *testing.T) {
+			pep := &recordingPEP{allowed: true}
+			mgr := &claimsAuthManagerStub{authCtx: grant}
+			c := NewAuthorizationChecker(nil, mgr, WithPEPClient(pep), WithToolPermissions(module))
+			_, err := c.AuthorizeTool(context.Background(), tool, "tok")
+			if err == nil || err.Type != AuthErrorPermissionDenied {
+				t.Fatalf("malformed declaration with a claims token: want permission denied, got %v", err)
+			}
+			if mgr.calls != 0 {
+				t.Errorf("token validator calls = %d, want 0", mgr.calls)
+			}
+			if pep.calls != 0 {
+				t.Errorf("PEP calls = %d, want 0", pep.calls)
+			}
+		})
+
+		t.Run(tool+" mTLS peer", func(t *testing.T) {
+			pep := &recordingPEP{allowed: true}
+			peer := &fixedPeer{authCtx: grant}
+			c := NewAuthorizationChecker(nil, legacyCaller(), WithPEPClient(pep), WithToolPermissions(module), WithPeerAuthenticator(peer))
+			state := &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{&x509.Certificate{}}}}
+			ctx := channelbind.WithConnectionTLS(context.Background(), "mcp", state)
+			_, err := c.AuthorizeTool(ctx, tool, "")
+			if err == nil || err.Type != AuthErrorPermissionDenied {
+				t.Fatalf("malformed declaration with an mTLS peer: want permission denied, got %v", err)
+			}
+			if peer.calls != 0 {
+				t.Errorf("peer authenticator calls = %d, want 0", peer.calls)
+			}
+			if pep.calls != 0 {
+				t.Errorf("PEP calls = %d, want 0", pep.calls)
+			}
+		})
+	}
 }
