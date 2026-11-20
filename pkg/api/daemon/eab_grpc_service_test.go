@@ -19,6 +19,9 @@ import (
 	"testing"
 	"time"
 
+	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
+	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/eab"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -715,6 +718,8 @@ func TestEABGRPCService_CallerTenantBinding(t *testing.T) {
 		{name: "another tenant", ctx: tokenCallerContext("tenant-a"), tenantID: "tenant-b", wantCode: codes.PermissionDenied},
 		{name: "every tenant", ctx: tokenCallerContext("tenant-a"), tenantID: "", wantCode: codes.PermissionDenied},
 		{name: "unbound local caller", ctx: context.Background(), tenantID: "tenant-b", wantCode: codes.OK},
+		{name: "empty-tenant bound caller, every tenant", ctx: tokenCallerContext(""), tenantID: "", wantCode: codes.PermissionDenied},
+		{name: "empty-tenant bound caller, named tenant", ctx: tokenCallerContext(""), tenantID: "tenant-a", wantCode: codes.PermissionDenied},
 	}
 	for method, call := range calls {
 		for _, tc := range cases {
@@ -729,6 +734,91 @@ func TestEABGRPCService_CallerTenantBinding(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestEABGRPCService_PEPDecision drives the three tenant-scoped methods with a
+// PEP configured: the PEP decision, not tenant equality, decides (SPEC row
+// 125), so a policy-granted cross-tenant request passes and a denied
+// own-tenant request is refused before the service is reached.
+func TestEABGRPCService_PEPDecision(t *testing.T) {
+	calls := map[string]struct {
+		action string
+		call   func(*EABGRPCService, context.Context, string) error
+	}{
+		"CreateCredential": {action: "eab:write", call: func(s *EABGRPCService, ctx context.Context, tenantID string) error {
+			_, err := s.CreateCredential(ctx, &platformv1.CreateEABCredentialRequest{ProfileId: 1, TenantId: tenantID})
+			return err
+		}},
+		"ListCredentials": {action: "eab:read", call: func(s *EABGRPCService, ctx context.Context, tenantID string) error {
+			_, err := s.ListCredentials(ctx, &platformv1.ListEABCredentialsRequest{TenantId: tenantID})
+			return err
+		}},
+		"CleanupExpiredCredentials": {action: "eab:write", call: func(s *EABGRPCService, ctx context.Context, tenantID string) error {
+			_, err := s.CleanupExpiredCredentials(ctx, &platformv1.CleanupExpiredEABCredentialsRequest{TenantId: tenantID})
+			return err
+		}},
+	}
+	caller := grpcapi.ContextWithAuthorizedContext(context.Background(), &platformtoken.AuthorizedContext{
+		Subject:  "user-a",
+		TenantID: "tenant-a",
+		Roles:    []string{"eab-admin"},
+	})
+	cases := []struct {
+		name      string
+		ctx       context.Context
+		tenantID  string
+		allow     bool
+		wantCode  codes.Code
+		wantCheck bool
+	}{
+		{name: "allowed cross tenant", ctx: caller, tenantID: "tenant-b", allow: true, wantCode: codes.OK, wantCheck: true},
+		{name: "denied own tenant", ctx: caller, tenantID: "tenant-a", allow: false, wantCode: codes.PermissionDenied, wantCheck: true},
+		{name: "denied cross tenant", ctx: caller, tenantID: "tenant-b", allow: false, wantCode: codes.PermissionDenied, wantCheck: true},
+		{name: "every tenant refused before the PEP", ctx: caller, tenantID: "", allow: true, wantCode: codes.PermissionDenied},
+		{name: "empty-tenant caller refused before the PEP", ctx: tokenCallerContext(""), tenantID: "tenant-a", allow: true, wantCode: codes.PermissionDenied},
+	}
+	for method, m := range calls {
+		for _, tc := range cases {
+			t.Run(method+"/"+tc.name, func(t *testing.T) {
+				service, svc, _ := newEABGRPCFixture()
+				var got *sdkiam.CheckRequest
+				service.SetPEPClient(&mockSDKPEPClient{checkFunc: func(_ context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+					got = req
+					return &sdkiam.CheckResponse{Allowed: tc.allow}, nil
+				}})
+				err := m.call(service, tc.ctx, tc.tenantID)
+				if code := status.Code(err); code != tc.wantCode {
+					t.Fatalf("code = %v, want %v (err %v)", code, tc.wantCode, err)
+				}
+				if (got != nil) != tc.wantCheck {
+					t.Fatalf("PEP checked = %v, want %v", got != nil, tc.wantCheck)
+				}
+				if got != nil {
+					if got.TenantID != tc.tenantID || got.Subject.TenantID != "tenant-a" || got.Subject.ID != "user-a" || got.Action != m.action {
+						t.Fatalf("check request = %+v", got)
+					}
+				}
+				if tc.wantCode == codes.PermissionDenied && svc.lastGenerate.TenantID != "" {
+					t.Fatalf("refused create reached the service: %+v", svc.lastGenerate)
+				}
+			})
+		}
+	}
+}
+
+// TestEABGRPCService_PEPError refuses the request when the PEP cannot decide.
+func TestEABGRPCService_PEPError(t *testing.T) {
+	service, svc, _ := newEABGRPCFixture()
+	service.SetPEPClient(&mockSDKPEPClient{checkFunc: func(context.Context, *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+		return nil, context.DeadlineExceeded
+	}})
+	_, err := service.CreateCredential(tokenCallerContext("tenant-a"), &platformv1.CreateEABCredentialRequest{ProfileId: 1, TenantId: "tenant-a"})
+	if status.Code(err) == codes.OK {
+		t.Fatal("create passed with an undecided PEP")
+	}
+	if svc.lastGenerate.TenantID != "" {
+		t.Fatalf("undecided create reached the service: %+v", svc.lastGenerate)
 	}
 }
 
