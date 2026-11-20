@@ -28,9 +28,25 @@ import (
 	resttypes "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/kms"
 )
 
+// generateKeyEnvelope is the body the webservice KMS handler writes for
+// POST /api/v1/kms/keys: the response envelope around a GenerateKeyResponse.
+func generateKeyEnvelope(t *testing.T, payload any) []byte {
+	t.Helper()
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	body, err := json.Marshal(restEnvelope{Code: http.StatusCreated, Success: true, Payload: raw})
+	if err != nil {
+		t.Fatalf("marshal envelope: %v", err)
+	}
+	return body
+}
+
 // TestRESTAdapterKeyGenerateDaemonResponse checks that KeyGenerate decodes
-// the body the mounted REST handler writes (a bare KMSGenerateKeyResponse
-// with nested key and metadata) instead of reporting an empty key.
+// the body the mounted webservice KMS handler writes (the envelope around a
+// GenerateKeyResponse with a string algorithm) instead of reporting an empty
+// key, and that the algorithm is the server's, never the request echo.
 func TestRESTAdapterKeyGenerateDaemonResponse(t *testing.T) {
 	serve := func(t *testing.T, status int, body []byte) *RESTAdapter {
 		t.Helper()
@@ -47,21 +63,17 @@ func TestRESTAdapterKeyGenerateDaemonResponse(t *testing.T) {
 		return &RESTAdapter{baseURL: srv.URL, httpClient: srv.Client()}
 	}
 	opts := KeyGenerateOptions{KeyID: "gen-key-1", Algorithm: "AES-256-GCM", Purpose: "encrypt"}
+	withAlgorithm := func(t *testing.T, alg string) []byte {
+		t.Helper()
+		return generateKeyEnvelope(t, resttypes.GenerateKeyResponse{KeyID: "gen-key-1", Version: 1, Algorithm: alg})
+	}
 
-	t.Run("nested key and metadata", func(t *testing.T) {
-		body, err := json.Marshal(restapi.KMSGenerateKeyResponse{
-			Key: &restapi.KMSKeyHandleResponse{KeyID: "gen-key-1", Version: 3, Algorithm: 1, Status: 1, CreatedAt: 1700000000},
-			Metadata: &restapi.KMSKeyMetadataResponse{
-				KeyID: "gen-key-1", Name: "gen-key-1", Description: "d", Version: 3,
-				Exportable: true, DeletionProtection: true,
-			},
-			Timestamp: 1700000000,
+	t.Run("envelope payload", func(t *testing.T) {
+		body := generateKeyEnvelope(t, resttypes.GenerateKeyResponse{
+			KeyID: "gen-key-1", Version: 3, Algorithm: "RSA-2048",
+			Exportable: true, DeletionProtection: true,
 		})
-		if err != nil {
-			t.Fatalf("marshal: %v", err)
-		}
-		r := serve(t, http.StatusCreated, body)
-		res, err := r.KeyGenerate(context.Background(), opts)
+		res, err := serve(t, http.StatusCreated, body).KeyGenerate(context.Background(), opts)
 		if err != nil {
 			t.Fatalf("KeyGenerate: %v", err)
 		}
@@ -72,26 +84,14 @@ func TestRESTAdapterKeyGenerateDaemonResponse(t *testing.T) {
 			t.Fatalf("result exportable=%v deletion_protection=%v, want true/true", res.Exportable, res.DeletionProtection)
 		}
 		// The request asked for AES-256-GCM; the result reports what the
-		// server generated (Algorithm 1 = KMS_KEY_ALGORITHM_RSA_2048).
+		// server generated.
 		if res.Algorithm != "RSA-2048" {
 			t.Fatalf("result algorithm=%q, want RSA-2048 (the server's key type)", res.Algorithm)
 		}
 	})
 
-	withAlgorithm := func(t *testing.T, alg int32) []byte {
-		t.Helper()
-		body, err := json.Marshal(restapi.KMSGenerateKeyResponse{
-			Key: &restapi.KMSKeyHandleResponse{KeyID: "gen-key-1", Version: 1, Algorithm: alg, Status: 1},
-		})
-		if err != nil {
-			t.Fatalf("marshal: %v", err)
-		}
-		return body
-	}
-
 	t.Run("matching algorithm", func(t *testing.T) {
-		r := serve(t, http.StatusCreated, withAlgorithm(t, 22)) // KMS_KEY_ALGORITHM_AES_256
-		res, err := r.KeyGenerate(context.Background(), opts)
+		res, err := serve(t, http.StatusCreated, withAlgorithm(t, "AES-256-GCM")).KeyGenerate(context.Background(), opts)
 		if err != nil {
 			t.Fatalf("KeyGenerate: %v", err)
 		}
@@ -101,48 +101,50 @@ func TestRESTAdapterKeyGenerateDaemonResponse(t *testing.T) {
 	})
 
 	t.Run("mismatched algorithm is reported, not masked", func(t *testing.T) {
-		r := serve(t, http.StatusCreated, withAlgorithm(t, 1)) // KMS_KEY_ALGORITHM_RSA_2048
-		res, err := r.KeyGenerate(context.Background(), opts)
-		if err == nil && res.Algorithm == "AES-256-GCM" {
-			t.Fatalf("result algorithm=%q for an RSA-2048 response, want RSA-2048 or an error", res.Algorithm)
+		res, err := serve(t, http.StatusCreated, withAlgorithm(t, "RSA-2048")).KeyGenerate(context.Background(), opts)
+		if err != nil {
+			t.Fatalf("KeyGenerate: %v", err)
 		}
-		if err == nil && res.Algorithm != "RSA-2048" {
-			t.Fatalf("result algorithm=%q, want RSA-2048", res.Algorithm)
-		}
-	})
-
-	t.Run("unspecified algorithm is an error", func(t *testing.T) {
-		r := serve(t, http.StatusCreated, withAlgorithm(t, 0))
-		if res, err := r.KeyGenerate(context.Background(), opts); err == nil {
-			t.Fatalf("KeyGenerate with unspecified algorithm = %+v, want error", res)
+		if res.Algorithm != "RSA-2048" {
+			t.Fatalf("result algorithm=%q for an RSA-2048 response, want RSA-2048", res.Algorithm)
 		}
 	})
 
-	t.Run("unknown algorithm is an error", func(t *testing.T) {
-		r := serve(t, http.StatusCreated, withAlgorithm(t, 99))
-		if res, err := r.KeyGenerate(context.Background(), opts); err == nil {
-			t.Fatalf("KeyGenerate with unknown algorithm = %+v, want error", res)
-		}
-	})
-
-	t.Run("empty body is an error", func(t *testing.T) {
-		r := serve(t, http.StatusOK, []byte(`{}`))
-		if res, err := r.KeyGenerate(context.Background(), opts); err == nil {
-			t.Fatalf("KeyGenerate on {} = %+v, want error", res)
-		}
-	})
+	errorCases := []struct {
+		name   string
+		status int
+		body   func(t *testing.T) []byte
+	}{
+		{"empty algorithm is an error", http.StatusCreated, func(t *testing.T) []byte { return withAlgorithm(t, "") }},
+		{"UNKNOWN algorithm is an error", http.StatusCreated, func(t *testing.T) []byte { return withAlgorithm(t, "UNKNOWN") }},
+		{"payload without key_id is an error", http.StatusCreated, func(t *testing.T) []byte {
+			return generateKeyEnvelope(t, resttypes.GenerateKeyResponse{Version: 1, Algorithm: "AES-256-GCM"})
+		}},
+		{"legacy bare KMSGenerateKeyResponse is an error", http.StatusCreated, func(t *testing.T) []byte {
+			body, err := json.Marshal(restapi.KMSGenerateKeyResponse{
+				Key: &restapi.KMSKeyHandleResponse{KeyID: "gen-key-1", Version: 1, Algorithm: 22, Status: 1},
+			})
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			return body
+		}},
+		{"empty body is an error", http.StatusOK, func(*testing.T) []byte { return []byte(`{}`) }},
+	}
+	for _, tc := range errorCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if res, err := serve(t, tc.status, tc.body(t)).KeyGenerate(context.Background(), opts); err == nil {
+				t.Fatalf("KeyGenerate = %+v, want error", res)
+			}
+		})
+	}
 }
 
 // TestRESTAdapterKeyGenerateWithDisplay pins the follow-up a KeyGenerate
 // with Name or Description makes: PUT /api/v1/kms/keys/{id}/metadata
 // carrying both, whose reply sets the result's Name (#646 Codex r2).
 func TestRESTAdapterKeyGenerateWithDisplay(t *testing.T) {
-	genBody, err := json.Marshal(restapi.KMSGenerateKeyResponse{
-		Key: &restapi.KMSKeyHandleResponse{KeyID: "gen-key-1", Version: 1, Algorithm: 22, Status: 1},
-	})
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
+	genBody := generateKeyEnvelope(t, resttypes.GenerateKeyResponse{KeyID: "gen-key-1", Version: 1, Algorithm: "AES-256-GCM"})
 	metaPayload, err := json.Marshal(resttypes.KeyMetadataResponse{KeyID: "gen-key-1", Name: "server-name"})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -193,8 +195,9 @@ func TestRESTAdapterKeyGenerateWithDisplay(t *testing.T) {
 }
 
 // TestRESTAdapterGenerateKeyBodyKeySpec checks that the body the REST
-// adapter sends for key generation carries key_spec.algorithm, the field
-// the daemon's handler requires (docs/kms/api.md).
+// adapter sends for key generation is the flat GenerateKeyRequest the
+// webservice KMS handler reads (types.go): a top-level algorithm and no
+// legacy key_spec object, which the handler never reads.
 func TestRESTAdapterGenerateKeyBodyKeySpec(t *testing.T) {
 	r := &RESTAdapter{}
 	for _, alg := range []string{"AES-128-GCM", "AES-256-GCM", "RSA-2048", "ECDSA-P256"} {
@@ -208,19 +211,16 @@ func TestRESTAdapterGenerateKeyBodyKeySpec(t *testing.T) {
 			if err != nil {
 				t.Fatalf("marshal: %v", err)
 			}
-			var wire struct {
-				KeySpec *struct {
-					Algorithm string `json:"algorithm"`
-				} `json:"key_spec"`
-			}
+			var wire map[string]json.RawMessage
 			if err := json.Unmarshal(body, &wire); err != nil {
 				t.Fatalf("unmarshal: %v", err)
 			}
-			if wire.KeySpec == nil {
-				t.Fatalf("body has no key_spec object: %s", body)
+			if _, ok := wire["key_spec"]; ok {
+				t.Fatalf("body carries the legacy key_spec object the handler never reads: %s", body)
 			}
-			if wire.KeySpec.Algorithm != alg {
-				t.Fatalf("key_spec.algorithm = %q, want %q: %s", wire.KeySpec.Algorithm, alg, body)
+			var got string
+			if err := json.Unmarshal(wire["algorithm"], &got); err != nil || got != alg {
+				t.Fatalf("algorithm = %q (err %v), want %q: %s", got, err, alg, body)
 			}
 		})
 	}
