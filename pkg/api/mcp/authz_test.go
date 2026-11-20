@@ -565,6 +565,47 @@ func TestAuthorizeTool_UnscopedPathDecidedByPEP(t *testing.T) {
 	})
 }
 
+// A token the legacy ValidateToken path accepts carries a user and roles but
+// may carry no tenant. The old QuicBaaSAuthAdapter refused a blank tenant
+// before deciding; the PEP fallback must too, before asking the PEP
+// (#2011 Codex).
+func TestAuthorizeTool_BlankTenantRefusedBeforePEP(t *testing.T) {
+	const tool = "pep_probe_tool"
+
+	for name, tenant := range map[string]interface{}{
+		"empty":      "",
+		"whitespace": " \t ",
+		"missing":    nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			claims := map[string]interface{}{
+				"sub":   "user-1",
+				"roles": []string{"operator"},
+			}
+			if tenant != nil {
+				claims["tenant_id"] = tenant
+			}
+			mgr := &mockAuthManager{
+				validateFunc: func(context.Context, string) (bool, error) { return true, nil },
+				getClaimsFunc: func(context.Context, string) (map[string]interface{}, error) {
+					return claims, nil
+				},
+			}
+			pep := &recordingPEP{allowed: true}
+			c := NewAuthorizationChecker(nil, mgr, WithPEPClient(pep))
+			c.toolPermissions[tool] = "device:power:write"
+
+			_, err := c.AuthorizeTool(context.Background(), tool, "tok")
+			if err == nil || err.Type != AuthErrorPermissionDenied {
+				t.Fatalf("blank tenant: want permission denied, got %v", err)
+			}
+			if pep.calls != 0 {
+				t.Errorf("PEP calls = %d, want 0: a tenantless caller must not reach the PEP", pep.calls)
+			}
+		})
+	}
+}
+
 // declaredTools is a module declaring its MCP tool permissions through the
 // SDK's ModuleMCPToolPermissions extension.
 type declaredTools map[string]quicbaas.Permission
