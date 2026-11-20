@@ -116,6 +116,7 @@ certificate-authority:
       keystore-type: software
       keystores:
         software:
+          password: "kms://ca/root/software/password?ensure=true&len=32&enc=base64"
           platform-policy: true
         tpm2:
           srk-handle: 0x81000001
@@ -183,6 +184,7 @@ certificate-authority:
       keystore-type: software
       keystores:
         software:
+          password: "kms://ca/issuing/software/password?ensure=true&len=32&enc=base64"
           platform-policy: true
         tpm2:
           srk-handle: 0x81000001
