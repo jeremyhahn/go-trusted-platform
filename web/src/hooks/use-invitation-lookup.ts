@@ -1,16 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { getBaseUrl } from "@/utils/getBaseUrl";
-import { getCookie } from "@/utils/cookie";
+import { usePlatformClient, type ApiResponse } from "trusted-platform-sdk";
 
 /**
- * Invitation detail, lookup by token and accept (#1753).
+ * Invitation detail, lookup by token and accept (#1753), through
+ * `PlatformClient.invitation`, so the SDK's base URL, auth interceptors and
+ * transport apply (#1675 F27).
  *
  * - GetInvitation         GET  /api/v1/invitations/{id}            (authenticated)
  * - GetInvitationByToken  GET  /api/v1/invitations/token/{token}   (public)
  * - AcceptInvitation      POST /api/v1/invitations/accept          (public)
  */
+
+export type InvitationClient = ReturnType<typeof usePlatformClient>["invitation"];
 
 export interface InvitationDetail {
   id: string;
@@ -30,13 +33,14 @@ export interface AcceptInvitationResult {
   userId?: string;
 }
 
-async function readError(response: Response): Promise<string> {
-  try {
-    const body = (await response.json()) as { message?: string; error?: string };
-    return body.message || body.error || `Request failed (${response.status})`;
-  } catch {
-    return `Request failed (${response.status})`;
+// The SDK client unwraps the {success, payload} envelope and never throws on
+// an HTTP error; a failed call becomes an Error with the server's message.
+async function sdkData<T>(p: Promise<ApiResponse<T>>): Promise<T> {
+  const res = await p;
+  if (!res.success) {
+    throw new Error(res.error?.message || "invitation request failed");
   }
+  return res.data as T;
 }
 
 function unwrapInvitation(body: unknown): InvitationDetail {
@@ -64,46 +68,29 @@ export function isPendingInvitation(status: string | undefined | null): boolean 
   return s === "pending" || s === "invitation_status_pending";
 }
 
-/** GetInvitation: reads one invitation by its id with the session bearer. */
-export async function fetchInvitation(id: string): Promise<InvitationDetail> {
-  const jwt = getCookie("jwt");
-  const response = await fetch(
-    `${getBaseUrl()}/api/v1/invitations/${encodeURIComponent(id)}`,
-    { headers: jwt ? { Authorization: `Bearer ${jwt}` } : {} }
-  );
-  if (!response.ok) {
-    throw new Error(await readError(response));
-  }
-  return unwrapInvitation(await response.json());
+/** GetInvitation: reads one invitation by its id (the SDK carries the session). */
+export async function fetchInvitation(
+  invitations: InvitationClient,
+  id: string
+): Promise<InvitationDetail> {
+  return unwrapInvitation(await sdkData(invitations.get(id)));
 }
 
 /** GetInvitationByToken: public lookup of the invitation a token names. */
-export async function fetchInvitationByToken(token: string): Promise<InvitationDetail> {
-  const response = await fetch(
-    `${getBaseUrl()}/api/v1/invitations/token/${encodeURIComponent(token)}`
-  );
-  if (!response.ok) {
-    throw new Error(await readError(response));
-  }
-  return unwrapInvitation(await response.json());
+export async function fetchInvitationByToken(
+  invitations: InvitationClient,
+  token: string
+): Promise<InvitationDetail> {
+  return unwrapInvitation(await sdkData(invitations.getByToken(token)));
 }
 
 /** AcceptInvitation: public accept of the invitation a token names. */
 export async function acceptInvitation(
+  invitations: InvitationClient,
   token: string,
   userId: string
 ): Promise<AcceptInvitationResult> {
-  // AcceptInvitationRequest is {token, user_id}.
-  const body = { token, user_id: userId };
-  const response = await fetch(`${getBaseUrl()}/api/v1/invitations/accept`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!response.ok) {
-    throw new Error(await readError(response));
-  }
-  return (await response.json()) as AcceptInvitationResult;
+  return (await sdkData(invitations.accept({ token, userId }))) as AcceptInvitationResult;
 }
 
 export interface InvitationLookupState {
@@ -119,6 +106,7 @@ export interface InvitationLookupState {
  */
 export function useInvitationLookup(key: { id?: string | null; token?: string | null }): InvitationLookupState {
   const { id, token } = key;
+  const invitations = usePlatformClient().invitation;
   const [nonce, setNonce] = useState(0);
   // The settled answer, tagged with the request it answers, so loading is
   // derived (no synchronous setState in the effect).
@@ -138,7 +126,9 @@ export function useInvitationLookup(key: { id?: string | null; token?: string | 
       return;
     }
     let cancelled = false;
-    const request = id ? fetchInvitation(id) : fetchInvitationByToken(token as string);
+    const request = id
+      ? fetchInvitation(invitations, id)
+      : fetchInvitationByToken(invitations, token as string);
     request
       .then((found) => {
         if (!cancelled) setResult({ requestKey, invitation: found, error: null });
@@ -155,7 +145,7 @@ export function useInvitationLookup(key: { id?: string | null; token?: string | 
     return () => {
       cancelled = true;
     };
-  }, [id, token, requestKey]);
+  }, [invitations, id, token, requestKey]);
 
   if (!named) {
     return { invitation: null, loading: false, error: "No invitation was named", reload };

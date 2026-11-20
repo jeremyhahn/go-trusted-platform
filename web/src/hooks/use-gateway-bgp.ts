@@ -1,5 +1,8 @@
 'use client';
 import * as React from 'react';
+import { usePlatformClient, type ApiResponse } from 'trusted-platform-sdk';
+
+type GatewayClient = ReturnType<typeof usePlatformClient>['gateway'];
 
 /** One BGP peer as the gateway reports it. */
 export interface GatewayBGPPeer {
@@ -47,8 +50,6 @@ export interface UseGatewayBgpResult {
   ) => Promise<GatewayIPAllocation | null>;
   releaseIP: (ip: string) => Promise<void>;
 }
-
-const BASE = '/api/v1/gateway';
 
 const NO_ERRORS: GatewayBgpErrors = { peers: null, prefixes: null, allocations: null };
 
@@ -112,37 +113,23 @@ export function toAllocation(r: Raw): GatewayIPAllocation {
   };
 }
 
-async function call(path: string, init?: RequestInit): Promise<unknown> {
-  const res = await fetch(`${BASE}${path}`, {
-    credentials: 'include',
-    ...init,
-    headers: init?.body ? { 'Content-Type': 'application/json' } : undefined,
-  });
-  const text = await res.text();
-  let body: unknown = null;
-  if (text) {
-    try {
-      body = JSON.parse(text);
-    } catch {
-      body = null;
-    }
+// The SDK client unwraps the {success, payload} envelope and never throws on
+// an HTTP error; a failed call becomes an Error with the server's message.
+async function sdkData<T>(p: Promise<ApiResponse<T>>): Promise<T> {
+  const res = await p;
+  if (!res.success) {
+    throw new Error(res.error?.message || 'gateway request failed');
   }
-  if (!res.ok) {
-    const msg =
-      body && typeof body === 'object'
-        ? str((body as Raw).message ?? (body as Raw).error)
-        : '';
-    throw new Error(msg || `request failed with status ${res.status}`);
-  }
-  return unwrapPayload(body);
+  return res.data as T;
 }
 
 /**
  * The gateway's BGP peers, announced prefixes and IPAM allocations, with the
  * four mutations the web service routes: announce and withdraw a prefix,
- * allocate and release an IP. The web service takes the withdraw prefix and
- * the release IP as query parameters. Each section loads on its own: a node
- * with IPAM but no BGP speaker (or the reverse) still shows what it has.
+ * allocate and release an IP. The hook drives `PlatformClient.gateway`, so
+ * the SDK's base URL, auth interceptors and transport apply (#1675 F27).
+ * Each section loads on its own: a node with IPAM but no BGP speaker (or the
+ * reverse) still shows what it has.
  */
 interface GatewayBgpData {
   peers: GatewayBGPPeer[];
@@ -156,11 +143,11 @@ function reason(r: PromiseRejectedResult): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-async function fetchGatewayBgp(): Promise<GatewayBgpData> {
+async function fetchGatewayBgp(gw: GatewayClient): Promise<GatewayBgpData> {
   const [p, x, a] = await Promise.allSettled([
-    call('/bgp/peers'),
-    call('/bgp/prefixes'),
-    call('/ipam/allocations'),
+    sdkData(gw.listBGPPeers()),
+    sdkData(gw.listAnnouncedPrefixes()),
+    sdkData(gw.listAllocations()),
   ]);
   return {
     peers: p.status === 'fulfilled' ? list(p.value, 'peers').map(toPeer) : [],
@@ -176,6 +163,7 @@ async function fetchGatewayBgp(): Promise<GatewayBgpData> {
 }
 
 export function useGatewayBgp(): UseGatewayBgpResult {
+  const gw = usePlatformClient().gateway;
   const [peers, setPeers] = React.useState<GatewayBGPPeer[]>([]);
   const [prefixes, setPrefixes] = React.useState<GatewayAnnouncedPrefix[]>([]);
   const [allocations, setAllocations] = React.useState<GatewayIPAllocation[]>([]);
@@ -197,9 +185,9 @@ export function useGatewayBgp(): UseGatewayBgpResult {
 
   const load = React.useCallback(async () => {
     const gen = ++generation.current;
-    const d = await fetchGatewayBgp();
+    const d = await fetchGatewayBgp(gw);
     if (gen === generation.current) apply(d);
-  }, [apply]);
+  }, [apply, gw]);
 
   const refetch = React.useCallback(async () => {
     setIsLoading(true);
@@ -216,42 +204,36 @@ export function useGatewayBgp(): UseGatewayBgpResult {
 
   const announcePrefix = React.useCallback(
     async (prefix: string, nextHop: string) => {
-      await call('/bgp/prefixes', {
-        method: 'POST',
-        body: JSON.stringify({ prefix, next_hop: nextHop }),
-      });
+      await sdkData(gw.announcePrefix({ prefix, nextHop }));
       await refetch();
     },
-    [refetch]
+    [gw, refetch]
   );
 
   const withdrawPrefix = React.useCallback(
     async (prefix: string) => {
-      await call(`/bgp/prefixes?prefix=${encodeURIComponent(prefix)}`, { method: 'DELETE' });
+      await sdkData(gw.withdrawPrefix({ prefix }));
       await refetch();
     },
-    [refetch]
+    [gw, refetch]
   );
 
   const allocateIP = React.useCallback(
     async (poolId: string, deviceId: string, hostname: string) => {
-      const body = await call('/ipam/allocations', {
-        method: 'POST',
-        body: JSON.stringify({ pool_id: poolId, device_id: deviceId, hostname }),
-      });
+      const data = await sdkData(gw.allocateIP({ poolId, deviceId, hostname }));
       await refetch();
-      const alloc = body && typeof body === 'object' ? (body as Raw).allocation : undefined;
+      const alloc: unknown = data?.allocation;
       return alloc && typeof alloc === 'object' ? toAllocation(alloc as Raw) : null;
     },
-    [refetch]
+    [gw, refetch]
   );
 
   const releaseIP = React.useCallback(
     async (ip: string) => {
-      await call(`/ipam/allocations?ip=${encodeURIComponent(ip)}`, { method: 'DELETE' });
+      await sdkData(gw.releaseIP({ ip }));
       await refetch();
     },
-    [refetch]
+    [gw, refetch]
   );
 
   return {
