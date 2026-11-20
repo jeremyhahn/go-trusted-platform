@@ -199,6 +199,9 @@ export default function EABCredentialDetailClient() {
         <Card>
           <CardHeader>
             <CardTitle>Enrollment URL</CardTitle>
+            {cred?.expiresAt && (
+              <CardDescription>Expires {cred.expiresAt}</CardDescription>
+            )}
             {enrollment.timestamp && (
               <CardDescription>Generated {enrollment.timestamp}</CardDescription>
             )}
