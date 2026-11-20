@@ -1397,6 +1397,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		if platformDaemon != nil {
 			if svc := platformDaemon.Service(); svc != nil {
 				params.ConfigReloader = svc
+				params.DaemonOps = svc
 			}
 		}
 		if jsonlQuerier != nil {

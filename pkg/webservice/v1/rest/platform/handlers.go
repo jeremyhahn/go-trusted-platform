@@ -37,6 +37,7 @@ type PlatformHandlers struct {
 	sysSampler      *sysstats.Sampler
 	configReloader  ConfigReloader
 	logQuerier      LogQuerier
+	daemonOps       DaemonOps
 }
 
 // NewPlatformHandlers creates a new PlatformHandlers instance

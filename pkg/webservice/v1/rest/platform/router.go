@@ -101,6 +101,7 @@ func (r *PlatformRouter) RegisterRoutes(router *mux.Router) {
 	r.registerMetricsRoutes(platformRouter)
 	r.registerConfigRoutes(platformRouter)
 	r.registerLogRoutes(platformRouter)
+	r.registerDaemonRoutes(platformRouter)
 }
 
 // registerConfigRoutes registers platform configuration endpoints.
