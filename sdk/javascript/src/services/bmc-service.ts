@@ -197,6 +197,11 @@ export class BMCService extends BaseService {
       privilege: request.privilege,
       enabled: request.enabled,
       channel: request.channel,
+    }, {
+      // The BMC creates the Redfish account before it answers and the
+      // POST carries no idempotency key: never resend it after a lost
+      // response.
+      retry: { enabled: false },
     });
   }
 

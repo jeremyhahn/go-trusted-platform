@@ -57,7 +57,7 @@ describe('BMCService', () => {
       privilege: 'operator',
       enabled: true,
       channel: 1,
-    });
+    }, { retry: { enabled: false } });
   });
 
   it('deleteUser DELETEs /v1/bmc/{profileID}/users/{slot}', async () => {
