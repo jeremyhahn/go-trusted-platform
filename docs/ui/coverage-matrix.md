@@ -628,24 +628,24 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
-| `TenantService.ListTenants` | - | - | - | - | missing |
+| `TenantService.ListTenants` | `GET /` | `admin/tenants/page.tsx` | - | `real-server/tenant.spec.ts` | covered |
 | `TenantService.GetTenant` | `GET /{id}` | `(dashboard)/dashboard/page.tsx`<br>`(dashboard)/tenant/page.tsx` | - | `auth.spec.ts`<br>`dashboard.spec.ts`<br>`tenant.spec.ts` | covered |
-| `TenantService.GetTenantByName` | `GET /by-name/{name}` | - | - | - | missing |
-| `TenantService.CreateTenant` | - | `(dashboard)/dashboard/page.tsx`<br>`(dashboard)/tenant/page.tsx` (read-only) | - | - | partial |
-| `TenantService.UpdateTenant` | `PUT /{id}` | `(dashboard)/dashboard/page.tsx`<br>`(dashboard)/tenant/page.tsx` (read-only) | - | - | partial |
-| `TenantService.DeleteTenant` | `DELETE /{id}` | `(dashboard)/dashboard/page.tsx`<br>`(dashboard)/tenant/page.tsx` (read-only) | - | - | partial |
-| `TenantService.SuspendTenant` | `POST /{id}/suspend` | - | - | - | missing |
-| `TenantService.ResumeTenant` | `POST /{id}/resume` | - | - | - | missing |
+| `TenantService.GetTenantByName` | `GET /by-name/{name}` | `admin/tenants/page.tsx` | - | `real-server/tenant.spec.ts` | covered |
+| `TenantService.CreateTenant` | `POST /` | `admin/tenants/page.tsx` | - | `real-server/tenant.spec.ts` | covered |
+| `TenantService.UpdateTenant` | `PUT /{id}` | `admin/tenants/[id]/tenant-detail-client.tsx` | - | `real-server/tenant.spec.ts` | covered |
+| `TenantService.DeleteTenant` | `DELETE /{id}` | `admin/tenants/page.tsx` | - | `real-server/tenant.spec.ts` | covered |
+| `TenantService.SuspendTenant` | `POST /{id}/suspend` | `admin/tenants/[id]/tenant-detail-client.tsx` | - | `real-server/tenant.spec.ts` | covered |
+| `TenantService.ResumeTenant` | `POST /{id}/resume` | `admin/tenants/[id]/tenant-detail-client.tsx` | - | `real-server/tenant.spec.ts` | covered |
 | `TenantService.GetQuotas` | `GET /{id}/quotas` | `(dashboard)/tenant/quotas/page.tsx` | - | `tenant-management.spec.ts` | covered |
-| `TenantService.UpdateQuotas` | `PUT /{id}/quotas` | `(dashboard)/tenant/quotas/page.tsx` (read-only) | - | - | partial |
+| `TenantService.UpdateQuotas` | `PUT /{id}/quotas` | `admin/tenants/[id]/tenant-detail-client.tsx` | - | `real-server/tenant.spec.ts` | covered |
 | `TenantService.GetUsage` | `GET /{id}/usage` | `(dashboard)/tenant/quotas/page.tsx` | - | `tenant-management.spec.ts` | covered |
-| `TenantService.CheckQuota` | `POST /{id}/quota-check` | - | - | - | missing |
-| `TenantService.Sync` | `POST /sync` | - | - | - | missing |
-| `TenantService.RotateTenantDEK` | `POST /{id}/dek/rotate` | - | - | - | missing |
-| `TenantService.GetTenantDEKStatus` | `GET /{id}/dek` | - | - | - | missing |
-| `TenantService.InitTenantBarrier` | - | - | - | - | missing |
-| `TenantService.UnsealTenantBarrier` | - | - | - | - | missing |
-| `TenantService.SealTenantBarrier` | - | - | - | - | missing |
+| `TenantService.CheckQuota` | `POST /{id}/quota-check` | `admin/tenants/[id]/tenant-detail-client.tsx` | - | `real-server/tenant.spec.ts` | covered |
+| `TenantService.Sync` | `POST /sync` | `admin/tenants/[id]/tenant-detail-client.tsx` | - | `real-server/tenant.spec.ts` | covered |
+| `TenantService.RotateTenantDEK` | `POST /{id}/dek/rotate` | `admin/tenants/[id]/tenant-detail-client.tsx` | - | `real-server/tenant.spec.ts` | covered |
+| `TenantService.GetTenantDEKStatus` | `GET /{id}/dek` | `admin/tenants/[id]/tenant-detail-client.tsx` | - | `real-server/tenant.spec.ts` | covered |
+| `TenantService.InitTenantBarrier` | `POST /{id}/barrier/init` | `admin/tenants/[id]/tenant-detail-client.tsx` | - | `real-server/tenant.spec.ts` | covered |
+| `TenantService.UnsealTenantBarrier` | `POST /{id}/barrier/unseal` | `admin/tenants/[id]/tenant-detail-client.tsx` | - | `real-server/tenant.spec.ts` | covered |
+| `TenantService.SealTenantBarrier` | `POST /{id}/barrier/seal` | `admin/tenants/[id]/tenant-detail-client.tsx` | - | `real-server/tenant.spec.ts` | covered |
 | `TenantService.GetTenantBarrierStatus` | `GET /{id}` | `(dashboard)/dashboard/page.tsx`<br>`(dashboard)/tenant/page.tsx` | - | `auth.spec.ts`<br>`dashboard.spec.ts`<br>`tenant.spec.ts` | covered |
 
 ## TPMService (`tpm.proto`)
