@@ -1152,4 +1152,150 @@ test.describe('Applications', () => {
     }
     expect(await adminPage.locator('tbody tr').count()).toBeGreaterThanOrEqual(3);
   });
+
+  test('should load applications with no error', async ({ adminPage, sdk, tenant }) => {
+    const app = await seedApp(sdk, tenant, 'Loaded App');
+
+    await adminPage.goto('/iam/apps');
+    await expect(adminPage.getByRole('heading', { name: 'Applications', exact: true })).toBeVisible();
+    await expect(adminPage.getByText(app.name).first()).toBeVisible();
+    await expect(adminPage.getByText(/error loading applications/i)).toHaveCount(0);
+  });
+
+  test('should show what the server answers to deleting an app already deleted', async ({ adminPage, sdk, tenant }) => {
+    const app = await seedApp(sdk, tenant, 'Error Delete App');
+
+    await adminPage.goto('/iam/apps');
+    await expect(appRow(adminPage, app.name)).toBeVisible();
+    ok(await sdk.iam.deleteApp(tenant.id, app.clientId));
+
+    await openAppActions(adminPage, app.name);
+    adminPage.once('dialog', (dialog) => void dialog.accept());
+    await adminPage.getByRole('menuitem', { name: /delete/i }).click();
+    await expect(
+      adminPage.getByText(/error deleting application|not found|application deleted|deleted successfully/i).first(),
+    ).toBeVisible();
+    const listed = (await listedApps(sdk, tenant)) as ListedApp[];
+    expect(listed.some((a) => a.clientId === app.clientId)).toBe(false);
+  });
+
+  test('should search/filter applications', async ({ adminPage, sdk, tenant }) => {
+    const web = await seedApp(sdk, tenant, 'Web Frontend Application');
+    const mobile = await seedApp(sdk, tenant, 'Mobile Backend Service');
+    const admin = await seedApp(sdk, tenant, 'Admin Dashboard App');
+
+    await adminPage.goto('/iam/apps');
+    for (const a of [web, mobile, admin]) await expect(appRow(adminPage, a.name)).toBeVisible();
+
+    const search = adminPage.getByPlaceholder(/search applications/i);
+    await search.fill(mobile.name);
+    await expect(appRow(adminPage, web.name)).toHaveCount(0);
+    await expect(appRow(adminPage, admin.name)).toHaveCount(0);
+    await expect(appRow(adminPage, mobile.name)).toBeVisible();
+
+    await search.fill('');
+    for (const a of [web, mobile, admin]) await expect(appRow(adminPage, a.name)).toBeVisible();
+  });
+
+  test('should display grant types badges correctly', async ({ adminPage, sdk, tenant }) => {
+    const app = await seedAppWithUris(sdk, tenant, 'OAuth App', ['https://oauth.example.com/callback'], [
+      'authorization_code',
+      'refresh_token',
+      'client_credentials',
+    ]);
+    const served = ((await listedApps(sdk, tenant)) as (ListedApp & { grantTypes?: string[] })[]).find(
+      (a) => a.clientId === app.clientId,
+    );
+    const grants = served?.grantTypes ?? [];
+    expect(grants.length, 'grant types the server holds').toBeGreaterThan(0);
+
+    await adminPage.goto('/iam/apps');
+    const row = appRow(adminPage, app.name);
+    await expect(row).toBeVisible();
+    for (const g of grants.slice(0, 2)) await expect(row.getByText(g.replace('_', ' '), { exact: true })).toBeVisible();
+    if (grants.length > 2) await expect(row.getByText(`+${grants.length - 2}`, { exact: true })).toBeVisible();
+  });
+
+  test('should handle row click navigation to details', async ({ adminPage, sdk, tenant }) => {
+    const app = await seedApp(sdk, tenant, 'Clickable Application');
+
+    await adminPage.goto('/iam/apps');
+    await expect(appRow(adminPage, app.name)).toBeVisible();
+    await adminPage.getByText(app.name, { exact: true }).first().click();
+    await expect(adminPage).toHaveURL(new RegExp(`/iam/apps/${app.clientId}`));
+  });
+
+  test('should finish loading the applications list', async ({ adminPage, sdk, tenant }) => {
+    const app = await seedApp(sdk, tenant, 'Loading App');
+
+    await adminPage.goto('/iam/apps');
+    await expect(appRow(adminPage, app.name)).toBeVisible();
+    await expect(adminPage.getByText(/loading authentication/i)).toHaveCount(0);
+  });
+
+  test('should show toast when rotate secret is clicked', async ({ adminPage, sdk, tenant }) => {
+    const app = await seedApp(sdk, tenant, 'Rotate Secret App');
+
+    await adminPage.goto('/iam/apps');
+    await openAppActions(adminPage, app.name);
+    await adminPage.getByRole('menuitem', { name: /rotate secret/i }).click();
+    await expect(adminPage.getByText(/feature coming soon|coming soon/i).first()).toBeVisible();
+  });
+
+  test('should display client ID truncated in table', async ({ adminPage, sdk, tenant }) => {
+    const app = await seedApp(sdk, tenant, 'Truncated ID App');
+    const shown = app.clientId.length > 16 ? `${app.clientId.slice(0, 16)}...` : app.clientId;
+
+    await adminPage.goto('/iam/apps');
+    const row = appRow(adminPage, app.name);
+    await expect(row).toBeVisible();
+    await expect(row.getByText(shown, { exact: true })).toBeVisible();
+  });
+
+  test('should display redirect URIs count', async ({ adminPage, sdk, tenant }) => {
+    const uris = ['https://example.com/callback1', 'https://example.com/callback2', 'https://example.com/callback3'];
+    const app = await seedAppWithUris(sdk, tenant, 'Multi URI App', uris);
+    const served = ((await listedApps(sdk, tenant)) as ListedApp[]).find((a) => a.clientId === app.clientId);
+    expect(served?.redirectUris ?? []).toHaveLength(uris.length);
+
+    await adminPage.goto('/iam/apps');
+    const row = appRow(adminPage, app.name);
+    await expect(row).toBeVisible();
+    await expect(row.getByText(String(uris.length), { exact: true })).toBeVisible();
+  });
+
+  test('should navigate to edit on edit action', async ({ adminPage, sdk, tenant }) => {
+    const app = await seedApp(sdk, tenant, 'Edit Test App');
+
+    await adminPage.goto('/iam/apps');
+    await openAppActions(adminPage, app.name);
+    await adminPage.getByRole('menuitem', { name: /edit/i }).click();
+    await expect(adminPage).toHaveURL(new RegExp(`/iam/apps/${app.clientId}`));
+  });
+});
+
+test.describe('Access Control', () => {
+  test('should allow the tenant admin to view users', async ({ adminPage, sdk, tenant }) => {
+    const user = await seedUser(sdk, tenant, 'visible');
+
+    await adminPage.goto('/iam/users');
+    await expect(userRow(adminPage, user.email)).toBeVisible();
+  });
+
+  test('should send unauthenticated users to login', async ({ browser, baseURL }) => {
+    const context = await browser.newContext({ baseURL, ignoreHTTPSErrors: true });
+    try {
+      const page = await context.newPage();
+      await page.goto('/iam/users');
+      await expect(
+        page
+          .getByRole('button', { name: /log in|register/i })
+          .first()
+          .or(page.getByText(/permission denied|forbidden|unauthori[sz]ed|sign in/i).first()),
+      ).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'Users', exact: true })).toHaveCount(0);
+    } finally {
+      await context.close();
+    }
+  });
 });
