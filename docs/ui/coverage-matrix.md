@@ -518,20 +518,20 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
-| `ProxyService.CreateRoute` | - | - | - | - | missing |
-| `ProxyService.GetRoute` | - | - | - | - | missing |
-| `ProxyService.UpdateRoute` | - | - | - | - | missing |
-| `ProxyService.DeleteRoute` | - | - | - | - | missing |
-| `ProxyService.ListRoutes` | - | - | - | - | missing |
-| `ProxyService.CreatePool` | - | - | - | - | missing |
-| `ProxyService.GetPool` | - | - | - | - | missing |
-| `ProxyService.UpdatePool` | - | - | - | - | missing |
-| `ProxyService.DeletePool` | - | - | - | - | missing |
-| `ProxyService.ListPools` | - | - | - | - | missing |
-| `ProxyService.GetProxyConfig` | - | - | - | - | missing |
-| `ProxyService.GetProxyStatus` | - | - | - | - | missing |
-| `ProxyService.ReloadProxyConfig` | - | - | - | - | missing |
-| `ProxyService.GetZoneMatrix` | - | - | - | - | missing |
+| `ProxyService.CreateRoute` | `POST /api/v1/proxy/routes` | `/networking/proxy` | - | `web/e2e/real-server/proxy.spec.ts` | covered |
+| `ProxyService.GetRoute` | `GET /api/v1/proxy/routes/{id}` | `/networking/proxy` | - | `web/e2e/real-server/proxy.spec.ts` | covered |
+| `ProxyService.UpdateRoute` | `PUT /api/v1/proxy/routes/{id}` | `/networking/proxy` | - | `web/e2e/real-server/proxy.spec.ts` | covered |
+| `ProxyService.DeleteRoute` | `DELETE /api/v1/proxy/routes/{id}` | `/networking/proxy` | - | `web/e2e/real-server/proxy.spec.ts` | covered |
+| `ProxyService.ListRoutes` | `GET /api/v1/proxy/routes` | `/networking/proxy` | - | `web/e2e/real-server/proxy.spec.ts` | covered |
+| `ProxyService.CreatePool` | `POST /api/v1/proxy/pools` | `/networking/proxy` | - | `web/e2e/real-server/proxy.spec.ts` | covered |
+| `ProxyService.GetPool` | `GET /api/v1/proxy/pools/{id}` | `/networking/proxy` | - | `web/e2e/real-server/proxy.spec.ts` | covered |
+| `ProxyService.UpdatePool` | `PUT /api/v1/proxy/pools/{id}` | `/networking/proxy` | - | `web/e2e/real-server/proxy.spec.ts` | covered |
+| `ProxyService.DeletePool` | `DELETE /api/v1/proxy/pools/{id}` | `/networking/proxy` | - | `web/e2e/real-server/proxy.spec.ts` | covered |
+| `ProxyService.ListPools` | `GET /api/v1/proxy/pools` | `/networking/proxy` | - | `web/e2e/real-server/proxy.spec.ts` | covered |
+| `ProxyService.GetProxyConfig` | `GET /api/v1/proxy/config` | `/networking/proxy` | - | `web/e2e/real-server/proxy.spec.ts` | covered |
+| `ProxyService.GetProxyStatus` | `GET /api/v1/proxy/status` | `/networking/proxy` | - | `web/e2e/real-server/proxy.spec.ts` | covered |
+| `ProxyService.ReloadProxyConfig` | `POST /api/v1/proxy/config/reload` | `/networking/proxy` | - | `web/e2e/real-server/proxy.spec.ts` | covered |
+| `ProxyService.GetZoneMatrix` | `GET /api/v1/proxy/zone-matrix` | `/networking/proxy` | - | `web/e2e/real-server/proxy.spec.ts` | covered |
 
 ## PXEService (`pxe.proto`)
 

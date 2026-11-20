@@ -2,6 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import { parseBackends, useProxy } from './use-proxy';
 
+vi.mock('trusted-platform-sdk', async (importOriginal) => {
+  const sdk = await importOriginal<typeof import('trusted-platform-sdk')>();
+  // Built per render so it binds the fetch each test stubs.
+  return { ...sdk, usePlatformClient: () => new sdk.PlatformClient({ baseUrl: 'http://platform.test' }) };
+});
+
 interface Seen {
   url: string;
   method: string;
