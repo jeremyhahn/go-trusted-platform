@@ -30,9 +30,7 @@ import (
 
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/service"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
-	restapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/rest"
 	resttypes "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/kms"
-	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 	"github.com/jeremyhahn/go-trusted-platform/test/integration/helpers"
 )
 
@@ -228,21 +226,13 @@ func (r *RESTAdapter) KeyGenerate(ctx context.Context, opts KeyGenerateOptions) 
 		return nil, err
 	}
 
-	// Errors keep the handleResponse path; a 2xx body is the mounted
-	// handler's bare KMSGenerateKeyResponse with nested key and metadata.
-	if statusCode < 200 || statusCode >= 300 {
-		var restResp resttypes.GenerateKeyResponse
-		if err := r.handleResponse(respBody, statusCode, &restResp); err != nil {
-			return nil, err
-		}
-		return nil, ErrRESTUnexpectedStatus{Expected: http.StatusCreated, Actual: statusCode}
+	// The daemon serves this route with the webservice KMS handler, whose
+	// 201 body is the response envelope around a GenerateKeyResponse.
+	var restResp resttypes.GenerateKeyResponse
+	if err := r.handleResponse(respBody, statusCode, &restResp); err != nil {
+		return nil, err
 	}
-
-	var genResp restapi.KMSGenerateKeyResponse
-	if err := json.Unmarshal(respBody, &genResp); err != nil {
-		return nil, ErrRESTUnmarshalFailed{Err: err}
-	}
-	result, err := r.convertDaemonGenerateKeyResult(&genResp)
+	result, err := convertGenerateKeyResponse(&restResp)
 	if err != nil {
 		return nil, err
 	}
@@ -1440,24 +1430,21 @@ func (r *RESTAdapter) purposeToKeyUsage(purpose string) []service.KeyUsage {
 // convertToGenerateKeyRequest maps the domain generate request onto the
 // REST wire contract, including the generate-time protection flags now
 // carried end-to-end by the QuicBaaS SDK kms client.
-func (r *RESTAdapter) convertToGenerateKeyRequest(req *service.GenerateKeyRequest) *restapi.KMSGenerateKeyRequest {
-	restReq := &restapi.KMSGenerateKeyRequest{
-		Name:        req.Name,
-		Description: req.Description,
-		Tags:        req.Tags,
-		Owner:       req.Owner,
-		KeySpec: restapi.KMSKeySpecRequest{
-			Usage:              r.keyUsageToStrings(req.Usage),
-			Exportable:         req.Exportable,
-			DeletionProtection: req.DeletionProtection,
-		},
+func (r *RESTAdapter) convertToGenerateKeyRequest(req *service.GenerateKeyRequest) *resttypes.GenerateKeyRequest {
+	// The flat body the webservice KMS handler reads; the key size is
+	// carried by the algorithm name.
+	restReq := &resttypes.GenerateKeyRequest{
+		Name:               req.Name,
+		Description:        req.Description,
+		Tags:               req.Tags,
+		Owner:              req.Owner,
+		Usage:              r.keyUsageToStrings(req.Usage),
+		Exportable:         req.Exportable,
+		DeletionProtection: req.DeletionProtection,
 	}
-
 	if req.KeyAttributes != nil {
-		restReq.KeySpec.Algorithm = r.keyAttributesToAlgorithmString(req.KeyAttributes)
-		restReq.KeySpec.KeySize = int32(r.getKeySize(req.KeyAttributes))
+		restReq.Algorithm = r.keyAttributesToAlgorithmString(req.KeyAttributes)
 	}
-
 	return restReq
 }
 
@@ -1466,74 +1453,38 @@ func (r *RESTAdapter) convertToGenerateKeyRequest(req *service.GenerateKeyReques
 // response (nested key handle and metadata) onto KeyGenerateResult. The wire
 // algorithm is an enum, so the result carries the requested algorithm name.
 // A response without a key ID is an error.
-// restKeyAlgorithmNames maps the platform.v1 KMSKeyAlgorithm enum a
-// generate-key response carries to the adapter's algorithm string (the
-// form keyAttributesToAlgorithmString produces for the request side).
-var restKeyAlgorithmNames = map[platformv1.KMSKeyAlgorithm]string{
-	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_2048:          "RSA-2048",
-	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_3072:          "RSA-3072",
-	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_RSA_4096:          "RSA-4096",
-	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P256:        "ECDSA-P256",
-	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P384:        "ECDSA-P384",
-	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ECDSA_P521:        "ECDSA-P521",
-	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_ED25519:           "ED25519",
-	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_DILITHIUM2:        "DILITHIUM2",
-	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_DILITHIUM3:        "DILITHIUM3",
-	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_DILITHIUM5:        "DILITHIUM5",
-	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_128:           "AES-128-GCM",
-	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_192:           "AES-192-GCM",
-	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_AES_256:           "AES-256-GCM",
-	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_CHACHA20_POLY1305: "CHACHA20-POLY1305",
-	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_HMAC_SHA256:       "HMAC-SHA256",
-	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_HMAC_SHA384:       "HMAC-SHA384",
-	platformv1.KMSKeyAlgorithm_KMS_KEY_ALGORITHM_HMAC_SHA512:       "HMAC-SHA512",
+// restGeneratedKeyAlgorithms is the set of algorithm names the webservice
+// KMS handler writes in a GenerateKeyResponse (kmsclient.KeyAlgorithm.String).
+var restGeneratedKeyAlgorithms = map[string]struct{}{
+	"AES-256-GCM":       {},
+	"CHACHA20-POLY1305": {},
+	"RSA-2048":          {},
+	"RSA-4096":          {},
+	"ECDSA-P256":        {},
+	"ECDSA-P384":        {},
+	"ED25519":           {},
 }
 
-// restKeyAlgorithmName decodes a response's KMSKeyAlgorithm; an unspecified
-// or unknown value is an error, never the requested algorithm.
-func restKeyAlgorithmName(v int32) (string, error) {
-	name, ok := restKeyAlgorithmNames[platformv1.KMSKeyAlgorithm(v)]
-	if !ok {
-		return "", fmt.Errorf("generate-key response: unsupported key algorithm %d (%s)", v, platformv1.KMSKeyAlgorithm(v))
+// convertGenerateKeyResponse turns the webservice handler's
+// GenerateKeyResponse into a result. The algorithm is the server's; an
+// unknown or missing one is an error, never the request echo.
+func convertGenerateKeyResponse(resp *resttypes.GenerateKeyResponse) (*KeyGenerateResult, error) {
+	if resp.KeyID == "" {
+		return nil, ErrRESTMissingParameter{Parameter: "key_id in generate-key response"}
 	}
-	return name, nil
-}
-
-func (r *RESTAdapter) convertDaemonGenerateKeyResult(resp *restapi.KMSGenerateKeyResponse) (*KeyGenerateResult, error) {
-	result := &KeyGenerateResult{}
-	var algorithm int32
-	if resp.Key != nil {
-		algorithm = resp.Key.Algorithm
-		result.KeyID = resp.Key.KeyID
-		result.Version = resp.Key.Version
-		if resp.Key.CreatedAt != 0 {
-			result.CreatedAt = time.Unix(resp.Key.CreatedAt, 0)
-		}
+	if resp.Version < 0 {
+		return nil, fmt.Errorf("generate-key response: negative key version %d", resp.Version)
 	}
-	if md := resp.Metadata; md != nil {
-		if result.KeyID == "" {
-			result.KeyID = md.KeyID
-		}
-		if result.Version == 0 {
-			result.Version = md.Version
-		}
-		result.Name = md.Name
-		result.Description = md.Description
-		result.Exportable = md.Exportable
-		result.DeletionProtection = md.DeletionProtection
-		if algorithm == 0 {
-			algorithm = md.Algorithm
-		}
+	if _, ok := restGeneratedKeyAlgorithms[resp.Algorithm]; !ok {
+		return nil, fmt.Errorf("generate-key response: unsupported key algorithm %q", resp.Algorithm)
 	}
-	if result.KeyID == "" {
-		return nil, ErrRESTMissingParameter{Parameter: "key.key_id in generate-key response"}
-	}
-	name, err := restKeyAlgorithmName(algorithm)
-	if err != nil {
-		return nil, err
-	}
-	result.Algorithm = name
-	return result, nil
+	return &KeyGenerateResult{
+		KeyID:              resp.KeyID,
+		Version:            uint64(resp.Version),
+		Algorithm:          resp.Algorithm,
+		Exportable:         resp.Exportable,
+		DeletionProtection: resp.DeletionProtection,
+	}, nil
 }
 
 // convertToKeyGetResult converts REST response to KeyGetResult. The
