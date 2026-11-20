@@ -2035,6 +2035,15 @@ func pxeGRPCServiceFromConfig(ctx context.Context, logger *logging.Logger, a *ap
 	if flows == nil {
 		return nil, pxe.ErrInvalidConfiguration{Field: "pxe.enabled", Reason: "the SDN zone flow manager is required"}
 	}
+	// The VLAN wrapper only delegates to the shared flow manager, which
+	// deletes and installs on sdn.ovs.bridge; a different pxe.bridge-name
+	// would be silently ignored, so it is refused.
+	if cfg.BridgeName != flows.BridgeName() {
+		return nil, pxe.ErrInvalidConfiguration{
+			Field:  "pxe.bridge-name",
+			Reason: "must match the SDN flow manager's bridge " + flows.BridgeName() + ", got " + cfg.BridgeName,
+		}
+	}
 	// A device in provisioning fetches its boot script and payloads from
 	// the iPXE HTTP server, so the provisioning flows allow its port.
 	if cfg.IPXEConfig != nil && cfg.IPXEConfig.HTTPPort > 0 && cfg.IPXEConfig.HTTPPort <= 65535 {
