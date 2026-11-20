@@ -182,8 +182,9 @@ const cases: Case[] = [
     path: '/v1/idevid/ldevid',
     call: (s) =>
       s.createLDevID({ template: { commonName: 'ldevid-001' }, algorithm: 'ECDSA_P384', handle: 0x81020001 }),
-    // The algorithm goes out as its proto enum name.
-    rest: [{ template: { commonName: 'ldevid-001' }, algorithm: 'DEVICE_KEY_ALGORITHM_ECDSA_P384', handle: 0x81020001 },
+    // The algorithm goes out as its proto enum number (the daemon decodes
+    // with encoding/json; protojson in the webservice accepts it too).
+    rest: [{ template: { commonName: 'ldevid-001' }, algorithm: 2, handle: 0x81020001 },
       // A create is not idempotent: the client must not retry it.
       { retry: { enabled: false } },
     ],
