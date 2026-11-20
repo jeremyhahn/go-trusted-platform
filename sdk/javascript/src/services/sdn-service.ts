@@ -285,6 +285,16 @@ export class SDNService extends BaseService {
    * @returns Applied policy
    */
   async applyPolicy(request: ApplyPolicyRequest): Promise<ApiResponse<ApplyPolicyResponse>> {
+    // The daemon installs flows on BRIDGE targets only and reports success for
+    // any other target type, so refuse those here rather than send a policy
+    // that silently does nothing on them.
+    for (const target of request.config.targets ?? []) {
+      if (target.type !== 'POLICY_TARGET_TYPE_BRIDGE') {
+        throw new RangeError(
+          `policy target type ${target.type} is not supported: only POLICY_TARGET_TYPE_BRIDGE is applied`
+        );
+      }
+    }
     // Not idempotent: the daemon installs the policy (generating an ID when
     // none is given) before it answers, so a resend after a lost response
     // fails AlreadyExists although the policy is enforced.

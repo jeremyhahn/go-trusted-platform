@@ -60,6 +60,21 @@ import type { NetworkPhaseConfig } from '../types/device.js';
 import { AUTH_METHOD_WIRE_NAMES } from '../types/device.js';
 import { encodeOptionalEnum } from './wire-enum.js';
 
+const UINT64_MAX = 18446744073709551615n;
+
+/**
+ * Validates a device profile ID (a server uint64) and returns it as an encoded
+ * path segment. A free-form string would otherwise be interpolated into the
+ * route, so '7/unassign?' could reach another action.
+ */
+function profileIdSegment(profileId: number | string): string {
+  const id = String(profileId);
+  if (!/^[0-9]{1,20}$/.test(id) || BigInt(id) > UINT64_MAX) {
+    throw new RangeError(`device profile id must be a decimal uint64, got ${JSON.stringify(id)}`);
+  }
+  return encodeURIComponent(id);
+}
+
 /** A network phase as pkg/webservice/v1/device/types.go decodes it. */
 type WireNetworkPhase = Omit<NetworkPhaseConfig, 'auth_method' | 'firewallZone'> & {
   auth_method?: string;
@@ -580,7 +595,7 @@ export class DeviceService extends BaseService {
       body.mac_address = request.macAddress;
     }
     return this.client.post<DeviceProfile>(
-      this.singularUrl(`/profiles/${request.profileId}/assign`),
+      this.singularUrl(`/profiles/${profileIdSegment(request.profileId)}/assign`),
       body
     );
   }
@@ -596,7 +611,7 @@ export class DeviceService extends BaseService {
    */
   async unassignProfileFromDevice(profileId: number | string): Promise<ApiResponse<DeviceProfile>> {
     return this.client.post<DeviceProfile>(
-      this.singularUrl(`/profiles/${profileId}/unassign`),
+      this.singularUrl(`/profiles/${profileIdSegment(profileId)}/unassign`),
       {}
     );
   }
