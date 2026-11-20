@@ -69,7 +69,12 @@ func AppCAInitializer(a *app.App) CAInitializer {
 // an existing CA (Force) is not supported. Admin capability: catalog scope
 // ca:create.
 func (s *CAGRPCService) InitCA(ctx context.Context, req *platformv1.InitCARequest) (*platformv1.InitCAResponse, error) {
-	initialised := s.ca != nil && s.ca.IsInitialized()
+	// initMu serializes InitCA: concurrent calls run the initializer once,
+	// and the later ones see the swapped CA as already initialised.
+	s.initMu.Lock()
+	defer s.initMu.Unlock()
+	cur := s.authority()
+	initialised := cur != nil && cur.IsInitialized()
 	if initialised && req.GetForce() {
 		return nil, status.Error(codes.FailedPrecondition, "re-initialising an existing CA is not supported")
 	}
@@ -91,15 +96,22 @@ func (s *CAGRPCService) InitCA(ctx context.Context, req *platformv1.InitCAReques
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	// s.ca is not swapped here: other RPCs read it without a lock.
-	caInfo := &platformv1.CAInfo{}
-	if ca != nil {
-		caInfo.IsInitialized = ca.IsInitialized()
-		caInfo.CommonName = ca.Identity()
+	if ca == nil || !ca.IsInitialized() {
+		return nil, status.Error(codes.Internal, "CA bring-up returned no initialised CA")
 	}
+	// Only this gRPC/UDS CA service is swapped. The REST and QUIC CA
+	// handlers and the device verifier still hold the CA they were built
+	// with at start-up; they follow the swap in the next slice.
+	s.setAuthority(ca)
 	return &platformv1.InitCAResponse{
-		Status:    &platformv1.Status{Success: true, Message: "CA initialised; restart platformd to serve it on every transport"},
-		CaInfo:    caInfo,
+		Status: &platformv1.Status{
+			Success: true,
+			Message: "CA initialised; the gRPC CA service serves it now; restart platformd to serve it over REST and QUIC",
+		},
+		CaInfo: &platformv1.CAInfo{
+			IsInitialized: true,
+			CommonName:    ca.Identity(),
+		},
 		Timestamp: timestamppb.Now(),
 	}, nil
 }
@@ -107,8 +119,8 @@ func (s *CAGRPCService) InitCA(ctx context.Context, req *platformv1.InitCAReques
 // caTrustBundles returns the PEM bundle of the trusted root and the full
 // bundle (root followed by the intermediate, when there is one), with their
 // certificate counts.
-func (s *CAGRPCService) caTrustBundles() (rootPEM []byte, rootCount int32, fullPEM []byte, fullCount int32, err error) {
-	root, err := s.ca.TrustedRoot()
+func (s *CAGRPCService) caTrustBundles(ca quicbaasca.CACertificateAuthority) (rootPEM []byte, rootCount int32, fullPEM []byte, fullCount int32, err error) {
+	root, err := ca.TrustedRoot()
 	if err != nil {
 		return nil, 0, nil, 0, err
 	}
@@ -118,7 +130,7 @@ func (s *CAGRPCService) caTrustBundles() (rootPEM []byte, rootCount int32, fullP
 	rootPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: root.Raw})
 	fullPEM = append([]byte{}, rootPEM...)
 	rootCount, fullCount = 1, 1
-	if inter, ierr := s.ca.TrustedIntermediate(); ierr == nil && inter != nil {
+	if inter, ierr := ca.TrustedIntermediate(); ierr == nil && inter != nil {
 		fullPEM = append(fullPEM, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: inter.Raw})...)
 		fullCount = 2
 	}
@@ -131,10 +143,11 @@ func (s *CAGRPCService) caTrustBundles() (rootPEM []byte, rootCount int32, fullP
 // place answers "already installed". Admin capability: catalog scope
 // trust:write.
 func (s *CAGRPCService) InstallCACertificates(ctx context.Context, req *platformv1.InstallCACertificatesRequest) (*platformv1.InstallCACertificatesResponse, error) {
-	if s.ca == nil || !s.ca.IsInitialized() {
+	ca := s.authority()
+	if ca == nil || !ca.IsInitialized() {
 		return nil, status.Error(codes.FailedPrecondition, ErrCANotInitialized{}.Error())
 	}
-	rootPEM, rootCount, fullPEM, fullCount, err := s.caTrustBundles()
+	rootPEM, rootCount, fullPEM, fullCount, err := s.caTrustBundles(ca)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -165,10 +178,11 @@ func (s *CAGRPCService) InstallCACertificates(ctx context.Context, req *platform
 // file holding anything this CA did not write. Admin capability: catalog
 // scope trust:write.
 func (s *CAGRPCService) UninstallCACertificates(ctx context.Context, req *platformv1.UninstallCACertificatesRequest) (*platformv1.UninstallCACertificatesResponse, error) {
-	if s.ca == nil || !s.ca.IsInitialized() {
+	ca := s.authority()
+	if ca == nil || !ca.IsInitialized() {
 		return nil, status.Error(codes.FailedPrecondition, ErrCANotInitialized{}.Error())
 	}
-	rootPEM, rootCount, fullPEM, fullCount, err := s.caTrustBundles()
+	rootPEM, rootCount, fullPEM, fullCount, err := s.caTrustBundles(ca)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
