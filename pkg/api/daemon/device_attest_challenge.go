@@ -19,7 +19,10 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,6 +38,13 @@ import (
 // attestChallengeTTL is how long an issued attestation challenge stays
 // usable (#2136).
 const attestChallengeTTL = 5 * time.Minute
+
+// attestChallengeSweepInterval is how often the DeviceGRPCService sweeps
+// expired, never-used challenges from the store (#2136).
+const attestChallengeSweepInterval = time.Minute
+
+// attestChallengeSweepPage is the ListObjects page size of one sweep.
+const attestChallengeSweepPage = 100
 
 const (
 	attestChallengeNonceBytes = 32
@@ -77,12 +87,27 @@ type attestChallengeRecord struct {
 // already gone. Without a backend it is in-memory and per process: a
 // challenge issued by one daemon is unknown to another, and a restart
 // forgets every outstanding challenge (the device asks for a new one).
+// A challenge that is issued and never used is swept once its TTL has
+// passed: sweep removes expired objects (or entries), and the
+// DeviceGRPCService runs it on a ticker (StartChallengeSweeper).
 type attestChallengeStore struct {
 	mu      sync.Mutex
 	entries map[string]attestChallenge
 	ttl     time.Duration
 	now     func() time.Time
 	backend objectstorage.Client
+	logger  *slog.Logger
+	sweeper challengeSweeper
+}
+
+// challengeSweeper is the state of the ticker goroutine that sweeps the
+// store; mu guards every field.
+type challengeSweeper struct {
+	mu      sync.Mutex
+	cancel  context.CancelFunc
+	ticker  *time.Ticker
+	wg      sync.WaitGroup
+	started int
 }
 
 func newAttestChallengeStore() *attestChallengeStore {
@@ -270,4 +295,165 @@ func (s *DeviceGRPCService) checkAttestChallenge(ctx context.Context, req *platf
 		return status.Error(codes.FailedPrecondition, "evidence nonce does not match the challenge")
 	}
 	return nil
+}
+
+func (c *attestChallengeStore) log() *slog.Logger {
+	if c.logger != nil {
+		return c.logger
+	}
+	return slog.Default()
+}
+
+// sweep removes every challenge whose TTL has passed and returns how many
+// went. A challenge at exactly its expiry is kept, the rule take applies.
+// With a backend it lists every page of attest-challenges/, then deletes
+// the expired keys it found: an unreadable or
+// undecodable record is skipped (logged), a delete another daemon won is
+// not counted, and a failed delete is reported after the rest are tried.
+func (c *attestChallengeStore) sweep(ctx context.Context) (int, error) {
+	if c.backend == nil {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		now := c.now()
+		removed := 0
+		for k, e := range c.entries {
+			if now.After(e.expiresAt) {
+				delete(c.entries, k)
+				removed++
+			}
+		}
+		return removed, nil
+	}
+
+	// List every page first and delete after: a delete during the listing
+	// would shift an offset cursor and skip keys.
+	var expired []string
+	cursor := ""
+	for {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		page, err := c.backend.ListObjects(ctx, &objectstorage.ListObjectsRequest{
+			Prefix: attestChallengeKeyPrefix,
+			Limit:  attestChallengeSweepPage,
+			Cursor: cursor,
+		})
+		if err != nil {
+			return 0, fmt.Errorf("list challenges: %w", err)
+		}
+		if page == nil {
+			break
+		}
+		for _, obj := range page.Objects {
+			if obj == nil || !strings.HasPrefix(obj.Key, attestChallengeKeyPrefix) {
+				continue
+			}
+			got, err := c.backend.GetObject(ctx, &objectstorage.GetObjectRequest{Key: obj.Key})
+			if err != nil || got == nil {
+				// Gone already (used, or swept by another daemon).
+				continue
+			}
+			var rec attestChallengeRecord
+			if err := json.Unmarshal(got.Value, &rec); err != nil {
+				c.log().Warn("attestation challenge record is not readable; kept", "key", obj.Key, "error", err)
+				continue
+			}
+			if c.now().After(rec.ExpiresAt) {
+				expired = append(expired, obj.Key)
+			}
+		}
+		if !page.HasMore {
+			break
+		}
+		cursor = page.NextCursor
+	}
+
+	removed := 0
+	var errs error
+	for _, key := range expired {
+		if err := ctx.Err(); err != nil {
+			return removed, errors.Join(errs, err)
+		}
+		del, err := c.backend.DeleteObject(ctx, &objectstorage.DeleteObjectRequest{Key: key})
+		if err != nil {
+			errs = errors.Join(errs, fmt.Errorf("delete %s: %w", key, err))
+			continue
+		}
+		// Not Success: another daemon took or swept it first.
+		if del != nil && del.Success {
+			removed++
+		}
+	}
+	return removed, errs
+}
+
+// runSweeper sweeps the store on every tick until ctx is done, handing each
+// result to done when it is non-nil.
+func (c *attestChallengeStore) runSweeper(ctx context.Context, ticks <-chan time.Time, done func(removed int, err error)) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticks:
+			removed, err := c.sweep(ctx)
+			if done != nil {
+				done(removed, err)
+			}
+		}
+	}
+}
+
+// StartChallengeSweeper sweeps expired, never-used attestation challenges
+// from the store every interval (attestChallengeSweepInterval when interval
+// is not positive) until StopChallengeSweeper (#2136). It is a no-op while
+// a sweeper runs.
+func (s *DeviceGRPCService) StartChallengeSweeper(interval time.Duration) {
+	c := s.challenges
+	sw := &c.sweeper
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+	if sw.cancel != nil {
+		return
+	}
+	if interval <= 0 {
+		interval = attestChallengeSweepInterval
+	}
+	if c.logger == nil {
+		c.logger = s.logger
+	}
+	logger := c.log()
+	ctx, cancel := context.WithCancel(context.Background())
+	ticker := time.NewTicker(interval)
+	sw.cancel = cancel
+	sw.ticker = ticker
+	sw.started++
+	sw.wg.Add(1)
+	go func() {
+		defer sw.wg.Done()
+		c.runSweeper(ctx, ticker.C, func(removed int, err error) {
+			if err != nil {
+				logger.Warn("attestation challenge sweep failed", "removed", removed, "error", err)
+				return
+			}
+			if removed > 0 {
+				logger.Debug("expired attestation challenges swept", "removed", removed)
+			}
+		})
+	}()
+}
+
+// StopChallengeSweeper stops the sweeper StartChallengeSweeper started and
+// waits for it to exit. It is a no-op when none runs.
+func (s *DeviceGRPCService) StopChallengeSweeper() {
+	sw := &s.challenges.sweeper
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+	if sw.cancel == nil {
+		return
+	}
+	sw.cancel()
+	sw.ticker.Stop()
+	sw.wg.Wait()
+	sw.cancel = nil
+	sw.ticker = nil
 }
