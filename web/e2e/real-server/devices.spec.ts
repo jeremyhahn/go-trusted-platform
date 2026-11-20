@@ -390,6 +390,17 @@ test.describe('Devices Management', () => {
   });
 
   test.describe('Error States', () => {
+    test('should handle fetch devices error', async ({ adminPage: page, sdk }) => {
+      // The injected list 500 has no server behaviour (gap). The port asserts
+      // the list loads with no error alert, so a real load failure fails here.
+      const d = await newDevice(sdk, 'Fetch-Device');
+
+      await page.goto('/devices');
+
+      await expect(page.getByText(d.model)).toBeVisible();
+      await expect(page.getByText(/failed to fetch devices|could not load/i)).toHaveCount(0);
+    });
+
     test('should handle fetch device details error', async ({ adminPage: page }) => {
       // An id the server does not know: the details fetch fails.
       await openDetails(page, unique('missing'));
