@@ -202,8 +202,10 @@ func TestIssueCert_PEPDecides(t *testing.T) {
 			}
 			require.NotNil(t, tc.pep.got)
 			assert.Equal(t, sdkiam.CheckSubject{ID: "bob", TenantID: "tenant-1", Roles: []string{"operator"}}, tc.pep.got.Subject)
-			assert.Equal(t, AuthFactorIssueCertAction, tc.pep.got.Action)
-			assert.Equal(t, "auth_factors://alice", tc.pep.got.Resource)
+			// go-qrdb RBAC builds the permission as resource + ":" + action;
+			// its vocabulary names enrolment authfactor:enroll (docs/SPEC.md).
+			assert.Equal(t, "enroll", tc.pep.got.Action)
+			assert.Equal(t, "authfactor", tc.pep.got.Resource)
 			assert.Equal(t, "tenant-1", tc.pep.got.TenantID)
 		})
 	}
