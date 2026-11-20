@@ -218,6 +218,112 @@ func TestSDNService_ApplyPolicy_FailedApplyRestoresAnotherPolicysFlow(t *testing
 	assert.Equal(t, platformv1.PolicyStatus_POLICY_STATUS_ACTIVE, got.GetPolicy().GetStatus())
 }
 
+func allowRule(id string, match *platformv1.PolicyRuleMatch) *platformv1.PolicyRule {
+	return &platformv1.PolicyRule{
+		RuleId: id,
+		Action: platformv1.PolicyRuleAction_POLICY_RULE_ACTION_ALLOW,
+		Match:  match,
+	}
+}
+
+// An AddFlow error does not prove the switch refused the flow: the
+// flow-mod is written before its barrier is awaited, so a barrier timeout
+// can come after installation. The rollback must remove the uncertain flow
+// and put back the entry it may have replaced, even when the request
+// context is already cancelled (#2021 Codex r1).
+func TestSDNService_ApplyPolicy_FailedApplyRemovesTheUncertainFlow(t *testing.T) {
+	svc, mock, _ := newPolicyFlowFixture(t)
+
+	a := denyPolicy("a", denyRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 22}))
+	a.PolicyId = "pol-a"
+	_, err := svc.ApplyPolicy(context.Background(), a)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var adds []ovs.FlowMod
+	var cancelledAdds int
+	calls := 0
+	mock.OnAddFlow(func(callCtx context.Context, _ string, flow *ovs.FlowMod) error {
+		calls++
+		if callCtx.Err() != nil {
+			cancelledAdds++
+			return callCtx.Err()
+		}
+		adds = append(adds, *flow)
+		if calls == 1 {
+			// Installed, then the barrier times out and the caller goes away.
+			cancel()
+			return errFlowInstall
+		}
+		return nil
+	})
+
+	b := denyPolicy("b", allowRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 22}))
+	b.PolicyId = "pol-b"
+	_, err = svc.ApplyPolicy(ctx, b)
+	require.Error(t, err)
+
+	deletes := mock.GetCalls("DeleteFlowStrict")
+	require.NotEmpty(t, deletes, "the flow whose AddFlow failed must be removed")
+	deleted, ok := deletes[0].Args[1].(*ovs.FlowMod)
+	require.True(t, ok)
+	assert.Equal(t, "tcp,tp_dst=22", deleted.Match)
+
+	assert.Zero(t, cancelledAdds, "the rollback must not use the cancelled request context")
+	require.GreaterOrEqual(t, len(adds), 2, "policy a's overwritten flow must be re-installed")
+	last := adds[len(adds)-1]
+	assert.Equal(t, "tcp,tp_dst=22", last.Match)
+	assert.Equal(t, "drop", last.Actions)
+}
+
+// Two policies with the same match and priority: the later one's entry is
+// the effective one. A failed apply that overwrote it must leave the later
+// policy's entry installed, whatever the map order (#2021 Codex r1).
+func TestSDNService_ApplyPolicy_FailedApplyRestoresTheEffectiveOverlappingEntry(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		svc, mock, _ := newPolicyFlowFixture(t)
+		ctx := context.Background()
+
+		a := denyPolicy("a", allowRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 22}))
+		a.PolicyId = "pol-a"
+		_, err := svc.ApplyPolicy(ctx, a)
+		require.NoError(t, err)
+		b := denyPolicy("b", denyRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 22}))
+		b.PolicyId = "pol-b"
+		_, err = svc.ApplyPolicy(ctx, b)
+		require.NoError(t, err)
+
+		var adds []ovs.FlowMod
+		calls := 0
+		mock.OnAddFlow(func(_ context.Context, _ string, flow *ovs.FlowMod) error {
+			calls++
+			if calls == 2 {
+				return errFlowInstall
+			}
+			adds = append(adds, *flow)
+			return nil
+		})
+
+		c := denyPolicy("c",
+			allowRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 22}),
+			denyRule("r2", &platformv1.PolicyRuleMatch{Protocol: "udp", DestinationPort: 53}),
+		)
+		c.PolicyId = "pol-c"
+		_, err = svc.ApplyPolicy(ctx, c)
+		require.Error(t, err)
+
+		var effective *ovs.FlowMod
+		for j := range adds {
+			if adds[j].Match == "tcp,tp_dst=22" {
+				effective = &adds[j]
+			}
+		}
+		require.NotNil(t, effective, "run %d: an overwritten entry must be re-installed", i)
+		require.Equal(t, "drop", effective.Actions, "run %d: policy b's deny was the effective entry", i)
+	}
+}
+
 // A protocol number and its name parse to the same switch entry, so the
 // rollback must restore policy a's deny even when b spells it differently.
 func TestSDNService_ApplyPolicy_FailedApplyRestoresAFlowSpelledDifferently(t *testing.T) {
