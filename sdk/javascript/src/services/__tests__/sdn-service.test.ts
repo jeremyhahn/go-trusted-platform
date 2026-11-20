@@ -64,6 +64,39 @@ describe('SDNService port state and policies (#1745)', () => {
     expect(mockClient.post).toHaveBeenCalledWith('/v1/sdn/policies', request, { retry: { enabled: false } });
   });
 
+  // #2022 Codex: the server installs flows on BRIDGE targets only and reports
+  // success for the rest, so the SDK refuses other target types up front.
+  it.each(['POLICY_TARGET_TYPE_PORT', 'POLICY_TARGET_TYPE_VLAN'] as const)(
+    'applyPolicy rejects a %s target without a request',
+    async (type) => {
+      const request = {
+        config: {
+          name: 'deny-all',
+          type: 'POLICY_TYPE_ACL' as const,
+          targets: [
+            { type: 'POLICY_TARGET_TYPE_BRIDGE' as const, id: 'br0' },
+            { type, id: 'p1' },
+          ],
+        },
+      };
+      await expect(service.applyPolicy(request)).rejects.toThrow(RangeError);
+      await expect(service.applyPolicy(request)).rejects.toThrow(type);
+      expect(mockClient.post).not.toHaveBeenCalled();
+    }
+  );
+
+  it('applyPolicy still sends a BRIDGE target', async () => {
+    const request = {
+      config: {
+        name: 'deny-all',
+        type: 'POLICY_TYPE_ACL' as const,
+        targets: [{ type: 'POLICY_TARGET_TYPE_BRIDGE' as const, id: 'br0' }],
+      },
+    };
+    await service.applyPolicy(request);
+    expect(mockClient.post).toHaveBeenCalledWith('/v1/sdn/policies', request, { retry: { enabled: false } });
+  });
+
   it('applyPolicy surfaces a lost response with exactly one POST', async () => {
     // The daemon installs the policy before it answers; with no policyId a
     // resend gets a fresh ID and is refused AlreadyExists on the name.

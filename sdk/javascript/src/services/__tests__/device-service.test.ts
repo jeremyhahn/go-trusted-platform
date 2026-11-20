@@ -471,6 +471,29 @@ describe('DeviceService assignProfileToDevice and updateTemplate wire bodies', (
     vi.mocked(mockClient.put).mockResolvedValue({ success: true, data: undefined });
   });
 
+  // #2022 Codex: a string profile ID is interpolated into the path, so
+  // '7/unassign?' would reach the unassign action. Only a decimal uint64 passes.
+  const badProfileIds = ['7/unassign?', '-1', '1.5', '', '18446744073709551616'];
+
+  it.each(badProfileIds)('assignProfileToDevice rejects profile ID %j without a request', async (profileId) => {
+    await expect(service.assignProfileToDevice({ profileId, ekSerial: 'EK1' })).rejects.toThrow(RangeError);
+    expect(mockClient.post).not.toHaveBeenCalled();
+  });
+
+  it.each(badProfileIds)('unassignProfileFromDevice rejects profile ID %j without a request', async (profileId) => {
+    await expect(service.unassignProfileFromDevice(profileId)).rejects.toThrow(RangeError);
+    expect(mockClient.post).not.toHaveBeenCalled();
+  });
+
+  it('assignProfileToDevice and unassignProfileFromDevice accept 42 and the uint64 maximum', async () => {
+    await service.assignProfileToDevice({ profileId: '42', ekSerial: 'EK1' });
+    expect(mockClient.post).toHaveBeenCalledWith('/v1/device/profiles/42/assign', { ek_serial: 'EK1' });
+    await service.unassignProfileFromDevice(42);
+    expect(mockClient.post).toHaveBeenCalledWith('/v1/device/profiles/42/unassign', {});
+    await service.unassignProfileFromDevice('18446744073709551615');
+    expect(mockClient.post).toHaveBeenCalledWith('/v1/device/profiles/18446744073709551615/unassign', {});
+  });
+
   it('assign keeps a large profile id exact in the path and posts snake_case identity only', async () => {
     await service.assignProfileToDevice({ profileId: '9007199254740993', ekSerial: 'EK1', macAddress: '' });
 
