@@ -2,12 +2,45 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChangeEvent, ReactNode } from "react";
 
-// #1844: the page drives the gateway IPAM REST routes with fetch; these
-// tests stub fetch, the boundary the browser crosses.
+// #2051: the page drives the gateway IPAM routes through the SDK gateway
+// service; these tests stub useGateway(), the boundary the page crosses.
 
 const { toast } = vi.hoisted(() => ({ toast: vi.fn() }));
 
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast }) }));
+
+type Reply = { success: boolean; data?: unknown; error?: { code: string; message: string; status?: number; details?: unknown } };
+type Call = { op: string; args: unknown[] };
+type Handler = (op: string, args: unknown[]) => Reply | undefined;
+
+const sdk = vi.hoisted(() => ({
+  calls: [] as Array<{ op: string; args: unknown[] }>,
+  handler: null as null | ((op: string, args: unknown[]) => unknown),
+}));
+
+const gateway = vi.hoisted(() => {
+  const op =
+    (name: string) =>
+    async (...args: unknown[]) => {
+      sdk.calls.push({ op: name, args });
+      return (
+        sdk.handler?.(name, args) ?? { success: false, error: { code: "NOT_FOUND", message: "unrouted", status: 404 } }
+      );
+    };
+  return {
+    listIPAMPools: op("listIPAMPools"),
+    createIPAMPool: op("createIPAMPool"),
+    getIPAMPool: op("getIPAMPool"),
+    updateIPAMPool: op("updateIPAMPool"),
+    deleteIPAMPool: op("deleteIPAMPool"),
+    listAllocations: op("listAllocations"),
+  };
+});
+
+vi.mock("trusted-platform-sdk", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("trusted-platform-sdk")>()),
+  useGateway: () => gateway,
+}));
 
 type Row = Record<string, unknown> & { id: string };
 type Column = { id?: string; accessorKey?: string; cell?: (ctx: { row: { getValue: (k: string) => unknown; original: Row } }) => ReactNode };
@@ -76,31 +109,24 @@ const poolA = {
 };
 const poolB = { id: "pool-b", name: "lab", cidr: "10.1.0.0/30", zone: "lab", total: "0", allocated: "0", available: "0" };
 
-type Call = { method: string; url: string; body: unknown };
 let calls: Call[];
-type Handler = (method: string, url: URL, body: unknown) => Response | undefined;
 
-function json(status: number, body: unknown): Response {
-  return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+function ok(data: unknown): Reply {
+  return { success: true, data };
+}
+
+function fail(status: number, message: string, details?: unknown): Reply {
+  return { success: false, error: { code: `HTTP_${status}`, message, status, ...(details ? { details } : {}) } };
 }
 
 function serve(handler: Handler) {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = new URL(String(input), "http://localhost");
-      const method = init?.method ?? "GET";
-      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
-      calls.push({ method, url: url.pathname + url.search, body });
-      return handler(method, url, body) ?? json(404, { error: "unrouted" });
-    }),
-  );
+  sdk.handler = handler;
 }
 
 function listing(pools: unknown[], extra: Handler = () => undefined): Handler {
-  return (method, url, body) => {
-    if (method === "GET" && url.pathname === "/api/v1/sdn/gateway/ipam/pools") return json(200, { payload: { pools } });
-    return extra(method, url, body);
+  return (op, args) => {
+    if (op === "listIPAMPools") return ok({ pools });
+    return extra(op, args);
   };
 }
 
@@ -113,12 +139,14 @@ function input(id: string): HTMLInputElement {
 }
 
 beforeEach(() => {
-  calls = [];
+  sdk.calls.length = 0;
+  calls = sdk.calls;
   toast.mockReset();
 });
 
 afterEach(() => {
   cleanup();
+  sdk.handler = null;
   vi.unstubAllGlobals();
 });
 
@@ -128,7 +156,7 @@ describe("IPAMPage", () => {
     render(<IPAMPage />);
 
     await screen.findByTestId("row-pool-a");
-    expect(calls[0]).toEqual({ method: "GET", url: "/api/v1/sdn/gateway/ipam/pools", body: undefined });
+    expect(calls[0]).toEqual({ op: "listIPAMPools", args: [] });
     expect(cell("pool-a", "window")).toContain("10.0.0.50 – 10.0.0.200");
     expect(cell("pool-b", "window")).toContain("whole CIDR");
     expect(cell("pool-a", "counts")).toBe("127 / 254");
@@ -140,36 +168,36 @@ describe("IPAMPage", () => {
   });
 
   it("accepts the bare daemon body as well as the payload envelope", async () => {
-    serve((method, url) => (url.pathname.endsWith("/pools") ? json(200, { pools: [poolB] }) : undefined));
+    serve((op) => (op === "listIPAMPools" ? ok({ code: 200, success: true, payload: { pools: [poolB] } }) : undefined));
     render(<IPAMPage />);
 
     expect(await screen.findByTestId("row-pool-b")).toBeTruthy();
   });
 
   it("shows the load error with the server's message and retries", async () => {
-    let fail = true;
-    serve((method, url) => {
-      if (!url.pathname.endsWith("/pools")) return undefined;
-      return fail ? json(500, { error: "ipam store unavailable" }) : json(200, { payload: { pools: [poolA] } });
+    let failing = true;
+    serve((op) => {
+      if (op !== "listIPAMPools") return undefined;
+      return failing ? fail(500, "ipam store unavailable") : ok({ pools: [poolA] });
     });
     render(<IPAMPage />);
 
     expect(await screen.findByText("Error Loading IPAM Pools")).toBeTruthy();
     expect(screen.getByText(/ipam store unavailable/)).toBeTruthy();
 
-    fail = false;
+    failing = false;
     fireEvent.click(screen.getByText("Retry"));
     expect(await screen.findByTestId("row-pool-a")).toBeTruthy();
   });
 
   it("falls back to the HTTP status when the error body is not JSON", async () => {
-    serve(() => new Response("oops", { status: 502 }));
+    serve(() => fail(502, ""));
     render(<IPAMPage />);
 
     expect(await screen.findByText(/HTTP 502/)).toBeTruthy();
   });
 
-  it("filters by zone through the query string", async () => {
+  it("filters by zone", async () => {
     serve(listing([poolA, poolB]));
     render(<IPAMPage />);
     await screen.findByTestId("row-pool-a");
@@ -177,11 +205,13 @@ describe("IPAMPage", () => {
     const filter = screen.getByLabelText("zone-filter") as HTMLSelectElement;
     expect(Array.from(filter.options).map((o) => o.value)).toEqual(["__all__", "control-plane", "lab"]);
     fireEvent.change(filter, { target: { value: "control-plane" } });
-    await waitFor(() => expect(calls.some((c) => c.url === "/api/v1/sdn/gateway/ipam/pools?zone=control-plane")).toBe(true));
+    await waitFor(() => expect(calls.filter((c) => c.op === "listIPAMPools")).toHaveLength(2));
+    await waitFor(() => expect(screen.queryByTestId("row-pool-b")).toBeNull());
+    expect(screen.getByTestId("row-pool-a")).toBeTruthy();
   });
 
   it("creates a pool, leaving empty optional fields out", async () => {
-    serve(listing([], (method) => (method === "POST" ? json(200, { payload: {} }) : undefined)));
+    serve(listing([], (op) => (op === "createIPAMPool" ? ok({}) : undefined)));
     render(<IPAMPage />);
     await waitFor(() => expect(calls).toHaveLength(1));
 
@@ -193,14 +223,52 @@ describe("IPAMPage", () => {
     const dialog = screen.getByRole("dialog");
     fireEvent.click(within(dialog).getByRole("button", { name: "Create Pool" }));
 
-    await waitFor(() => expect(calls.find((c) => c.method === "POST")).toBeTruthy());
-    expect(calls.find((c) => c.method === "POST")).toEqual({
-      method: "POST",
-      url: "/api/v1/sdn/gateway/ipam/pools",
-      body: { name: "edge", cidr: "10.9.0.0/24", reserved: ["10.9.0.1/32", "10.9.0.8/30"] },
+    await waitFor(() => expect(calls.find((c) => c.op === "createIPAMPool")).toBeTruthy());
+    expect(calls.find((c) => c.op === "createIPAMPool")).toEqual({
+      op: "createIPAMPool",
+      args: [{ name: "edge", cidr: "10.9.0.0/24", reserved: ["10.9.0.1/32", "10.9.0.8/30"] }],
     });
     await waitFor(() => expect(toast).toHaveBeenCalledWith({ title: "Pool created", variant: "success" }));
-    await waitFor(() => expect(calls.filter((c) => c.method === "GET")).toHaveLength(2));
+    await waitFor(() => expect(calls.filter((c) => c.op === "listIPAMPools")).toHaveLength(2));
+  });
+
+  it("creates a pool through createIPAMPool, not fetch", async () => {
+    const fetchSpy = vi.fn(() => Promise.reject(new Error("hand-written fetch")));
+    vi.stubGlobal("fetch", fetchSpy);
+    serve(listing([], (op) => (op === "createIPAMPool" ? ok({ id: "pool-c" }) : undefined)));
+    render(<IPAMPage />);
+    await waitFor(() => expect(calls).toHaveLength(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Pool" }));
+    await screen.findByText("Create IPAM Pool");
+    fireEvent.change(input("pool-name"), { target: { value: "core" } });
+    fireEvent.change(input("pool-cidr"), { target: { value: "10.8.0.0/24" } });
+    fireEvent.change(input("pool-zone"), { target: { value: "provisioning" } });
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Create Pool" }));
+
+    await waitFor(() =>
+      expect(calls.filter((c) => c.op === "createIPAMPool")).toEqual([
+        { op: "createIPAMPool", args: [{ name: "core", cidr: "10.8.0.0/24", zone: "provisioning" }] },
+      ]),
+    );
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("disables create, edit and delete with the reason when the gateway IPAM is not configured", async () => {
+    serve((op) =>
+      op === "listIPAMPools"
+        ? fail(503, "gateway service not configured", { reason: "SERVICE_NOT_CONFIGURED" })
+        : undefined,
+    );
+    render(<IPAMPage />);
+
+    expect(await screen.findByText(/IPAM is not available on this node/)).toBeTruthy();
+    const create = screen.getByRole("button", { name: "Create Pool" }) as HTMLButtonElement;
+    expect(create.disabled).toBe(true);
+    expect(screen.getAllByText(/gateway service not configured/).length).toBeGreaterThan(0);
+    fireEvent.click(create);
+    expect(screen.queryByText("Create IPAM Pool")).toBeNull();
+    expect(calls.some((c) => c.op !== "listIPAMPools")).toBe(false);
   });
 
   it("does not create a pool without a name and CIDR", async () => {
@@ -214,11 +282,11 @@ describe("IPAMPage", () => {
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Create Pool" }));
 
     await new Promise((r) => setTimeout(r, 20));
-    expect(calls.some((c) => c.method === "POST")).toBe(false);
+    expect(calls.some((c) => c.op === "createIPAMPool")).toBe(false);
   });
 
   it("toasts a failed create with the server's error", async () => {
-    serve(listing([], (method) => (method === "POST" ? json(409, { error: "CIDR overlaps pool-a" }) : undefined)));
+    serve(listing([], (op) => (op === "createIPAMPool" ? fail(409, "CIDR overlaps pool-a") : undefined)));
     render(<IPAMPage />);
     await waitFor(() => expect(calls).toHaveLength(1));
 
@@ -235,7 +303,7 @@ describe("IPAMPage", () => {
   });
 
   it("edits a pool: prefills the form and PUTs every field but the CIDR", async () => {
-    serve(listing([poolA], (method) => (method === "PUT" ? json(200, { payload: {} }) : undefined)));
+    serve(listing([poolA], (op) => (op === "updateIPAMPool" ? ok({}) : undefined)));
     render(<IPAMPage />);
     const row = await screen.findByTestId("row-pool-a");
 
@@ -247,25 +315,27 @@ describe("IPAMPage", () => {
     fireEvent.change(input("pool-range-start"), { target: { value: "" } });
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
-    await waitFor(() => expect(calls.find((c) => c.method === "PUT")).toBeTruthy());
-    expect(calls.find((c) => c.method === "PUT")).toEqual({
-      method: "PUT",
-      url: "/api/v1/sdn/gateway/ipam/pools/pool-a",
-      body: {
-        name: "prod",
-        gateway: "10.0.0.1",
-        zone: "control-plane",
-        description: "prod pool",
-        reserved: ["10.0.0.1/32", "10.0.0.8/30"],
-        range_start: "",
-        range_end: "",
-      },
+    await waitFor(() => expect(calls.find((c) => c.op === "updateIPAMPool")).toBeTruthy());
+    expect(calls.find((c) => c.op === "updateIPAMPool")).toEqual({
+      op: "updateIPAMPool",
+      args: [
+        "pool-a",
+        {
+          name: "prod",
+          gateway: "10.0.0.1",
+          zone: "control-plane",
+          description: "prod pool",
+          reserved: ["10.0.0.1/32", "10.0.0.8/30"],
+          range_start: "",
+          range_end: "",
+        },
+      ],
     });
     await waitFor(() => expect(toast).toHaveBeenCalledWith({ title: "Pool updated", variant: "success" }));
   });
 
   it("prefills empty strings for a pool with no optional fields and toasts a failed update", async () => {
-    serve(listing([poolB], (method) => (method === "PUT" ? new Response("", { status: 500 }) : undefined)));
+    serve(listing([poolB], (op) => (op === "updateIPAMPool" ? fail(500, "") : undefined)));
     render(<IPAMPage />);
     const row = await screen.findByTestId("row-pool-b");
 
@@ -281,7 +351,7 @@ describe("IPAMPage", () => {
   });
 
   it("deletes a pool after confirmation", async () => {
-    serve(listing([poolA], (method) => (method === "DELETE" ? json(200, { payload: {} }) : undefined)));
+    serve(listing([poolA], (op) => (op === "deleteIPAMPool" ? ok(undefined) : undefined)));
     render(<IPAMPage />);
     const row = await screen.findByTestId("row-pool-a");
 
@@ -290,13 +360,13 @@ describe("IPAMPage", () => {
     expect(within(dialog).getByText("Delete Pool: prod")).toBeTruthy();
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
 
-    await waitFor(() => expect(calls.find((c) => c.method === "DELETE")?.url).toBe("/api/v1/sdn/gateway/ipam/pools/pool-a"));
+    await waitFor(() => expect(calls.find((c) => c.op === "deleteIPAMPool")?.args).toEqual(["pool-a"]));
     await waitFor(() => expect(toast).toHaveBeenCalledWith({ title: "Pool deleted", variant: "success" }));
     await waitFor(() => expect(screen.queryByText("Delete Pool: prod")).toBeNull());
   });
 
   it("shows a failed delete inside the dialog and clears it on Cancel", async () => {
-    serve(listing([poolA], (method) => (method === "DELETE" ? json(409, { error: "pool has allocations" }) : undefined)));
+    serve(listing([poolA], (op) => (op === "deleteIPAMPool" ? fail(409, "pool has allocations") : undefined)));
     render(<IPAMPage />);
     const row = await screen.findByTestId("row-pool-a");
 
@@ -312,14 +382,12 @@ describe("IPAMPage", () => {
 
   it("lists a pool's allocations", async () => {
     serve(
-      listing([poolA], (method, url) =>
-        url.pathname.endsWith("/allocations")
-          ? json(200, {
-              payload: {
-                allocations: [
-                  { ip: "10.0.0.51", pool_id: "pool-a", device_id: "dev-1", hostname: "node-1", allocated_at: "2026-11-01T00:00:00Z", expires_at: "" },
-                ],
-              },
+      listing([poolA], (op) =>
+        op === "listAllocations"
+          ? ok({
+              allocations: [
+                { ip: "10.0.0.51", pool_id: "pool-a", device_id: "dev-1", hostname: "node-1", allocated_at: "2026-11-01T00:00:00Z", expires_at: "" },
+              ],
             })
           : undefined,
       ),
@@ -330,11 +398,11 @@ describe("IPAMPage", () => {
     fireEvent.click(within(row).getByText("View Allocations"));
     expect(await screen.findByText("10.0.0.51")).toBeTruthy();
     expect(screen.getByText(/Allocations: prod \(10\.0\.0\.0\/24\)/)).toBeTruthy();
-    expect(calls.some((c) => c.url === "/api/v1/sdn/gateway/ipam/allocations?pool_id=pool-a")).toBe(true);
+    expect(calls.some((c) => c.op === "listAllocations" && JSON.stringify(c.args) === JSON.stringify([{ poolId: "pool-a" }]))).toBe(true);
   });
 
   it("shows no allocations for an empty pool", async () => {
-    serve(listing([poolB], (method, url) => (url.pathname.endsWith("/allocations") ? json(200, { allocations: [] }) : undefined)));
+    serve(listing([poolB], (op) => (op === "listAllocations" ? ok({ allocations: [] }) : undefined)));
     render(<IPAMPage />);
     const row = await screen.findByTestId("row-pool-b");
 
@@ -343,7 +411,7 @@ describe("IPAMPage", () => {
   });
 
   it("toasts a failed allocations read", async () => {
-    serve(listing([poolA], (method, url) => (url.pathname.endsWith("/allocations") ? json(403, { error: "forbidden" }) : undefined)));
+    serve(listing([poolA], (op) => (op === "listAllocations" ? fail(403, "forbidden") : undefined)));
     render(<IPAMPage />);
     const row = await screen.findByTestId("row-pool-a");
 
