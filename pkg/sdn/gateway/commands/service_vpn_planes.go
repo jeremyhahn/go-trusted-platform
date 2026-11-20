@@ -28,8 +28,10 @@ import (
 
 // vpnHubZoneEnforced stays false until the hub's traffic is wired through
 // the compiled zone policy (SPEC.md:80, docs/vpn/architecture.md:160-163;
-// Codex #2029 round 2): until then the kernel hub plane is not built, so the
-// child fails closed and refuses every InstallVPNPeer.
+// Codex #2029 round 2): until then the kernel hub plane is not built. A
+// configuration that names the hub then fails the wireguard child's start
+// with ErrVPNHubZoneUnenforced, so the supervisor never sees a ready child
+// that refuses every InstallVPNPeer (Codex #2029 round 3).
 var vpnHubZoneEnforced = false
 
 // vpnDataPlanes is gatewayd's plane factory. It builds the WireGuard hub
@@ -54,9 +56,9 @@ func vpnDataPlanes(cfg *ServeConfig, hubKey *vpnHubKey, logger *slog.Logger) ([]
 	}
 	if !vpnHubZoneEnforced {
 		hubKey.erase()
-		logger.Warn("The datapath hosts no VPN data plane: the WireGuard hub has no destination-zone enforcement yet",
+		logger.Error("The datapath hosts no VPN data plane: the WireGuard hub has no destination-zone enforcement yet",
 			slog.String("key_ref", wg.KeyRef))
-		return nil, nil
+		return nil, &ErrVPNHubZoneUnenforced{KeyRef: wg.KeyRef}
 	}
 	hub, err := tunnel.NewWireGuardHub(logger, tunnel.WireGuardHubConfig{
 		Name:       vpnHubInterface,

@@ -257,17 +257,23 @@ func serveProcess(ctx context.Context, name string, opts serviceOptions, deps se
 	if err != nil {
 		return err
 	}
-	vpnPlanes, err := deps.datapathVPNPlanes(def, cfg, hubKey, logger)
-	if err != nil {
-		return err
+	// A configured hub the zone guard refuses fails the start, read by the
+	// supervisor, rather than a ready child refusing every peer (Codex #2029
+	// round 3); any other factory error refuses before serving.
+	vpnPlanes, planesErr := deps.datapathVPNPlanes(def, cfg, hubKey, logger)
+	var unenforced *ErrVPNHubZoneUnenforced
+	if planesErr != nil && !errors.As(planesErr, &unenforced) {
+		return planesErr
 	}
 	server := ipc.NewServer(gw, servicePolicy(def, opts, cfg.Process))
 	server.SetServices(services)
 	// The planes start with the child and before the socket is bound, so
 	// the first peer RPC finds them up; one that fails to start is reported
 	// to the supervisor with the services.
-	var planesErr error
-	if vpnPlanes != nil {
+	if planesErr != nil {
+		server.SetVPNPlanesFailed(planesErr)
+		vpnPlanes = nil
+	} else if vpnPlanes != nil {
 		if planesErr = vpnPlanes.Start(ctx); planesErr == nil {
 			server.SetVPNPlanes(vpnPlanes)
 		} else {
