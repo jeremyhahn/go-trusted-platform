@@ -78,9 +78,31 @@ export function useCeremony(): UseCeremonyResult {
     }
   }, [ceremony]);
 
+  // Initial load: state is set only in the promise callbacks, never
+  // synchronously in the effect body (loading starts true).
   React.useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    let cancelled = false;
+    ceremony
+      .getStatus()
+      .then(
+        (res) => {
+          if (cancelled) return;
+          setStatus(res.data ?? null);
+          setStatusError(null);
+        },
+        (err: unknown) => {
+          if (cancelled) return;
+          setStatus(null);
+          setStatusError(message(err));
+        },
+      )
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [ceremony]);
 
   const run = React.useCallback(
     async <T,>(step: CeremonyStep, call: () => Promise<ApiResponse<T>>): Promise<T | null> => {
