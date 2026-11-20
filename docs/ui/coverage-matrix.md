@@ -132,26 +132,26 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `ComputeService.StartVM` | `POST /vms/{id}/start` | `(dashboard)/compute/vms/[id]/page.tsx`<br>`(dashboard)/compute/vms/page.tsx` | - | `compute.spec.ts` | covered |
 | `ComputeService.StopVM` | `POST /vms/{id}/stop` | `(dashboard)/compute/vms/[id]/page.tsx`<br>`(dashboard)/compute/vms/page.tsx` | - | `compute.spec.ts` | covered |
 | `ComputeService.RebootVM` | `POST /vms/{id}/reboot` | `(dashboard)/compute/vms/[id]/page.tsx`<br>`(dashboard)/compute/vms/page.tsx` | - | `compute.spec.ts` | covered |
-| `ComputeService.SuspendVM` | `POST /vms/{id}/suspend` | - | - | - | missing |
-| `ComputeService.ResumeVM` | `POST /vms/{id}/resume` | - | - | - | missing |
+| `ComputeService.SuspendVM` | `POST /vms/{id}/suspend` | `(dashboard)/compute/vms/[id]/page.tsx` | - | `real-server/compute-vm.spec.ts` | covered |
+| `ComputeService.ResumeVM` | `POST /vms/{id}/resume` | `(dashboard)/compute/vms/[id]/page.tsx` | - | `real-server/compute-vm.spec.ts` | covered |
 | `ComputeService.DeleteVM` | `DELETE /vms/{id}` | `(dashboard)/compute/vms/[id]/page.tsx`<br>`(dashboard)/compute/vms/page.tsx` | - | `compute.spec.ts` | covered |
-| `ComputeService.GetVM` | `GET /vms/{id}` | `(dashboard)/compute/vms/[id]/page.tsx` | - | - | partial |
+| `ComputeService.GetVM` | `GET /vms/{id}` | `(dashboard)/compute/vms/[id]/page.tsx` | - | `real-server/compute-vm.spec.ts` | covered |
 | `ComputeService.ListVMs` | `GET /vms` | `(dashboard)/compute/snapshots/page.tsx`<br>`(dashboard)/compute/vms/page.tsx` | - | `compute.spec.ts` | covered |
 | `ComputeService.AttachVMConsole` | - | - | - | - | not-UI: streaming plumbing |
 | `ComputeService.SendVMConsoleInput` | - | - | - | - | not-UI: streaming plumbing |
 | `ComputeService.GetVMLogs` | - | - | - | - | not-UI: streaming plumbing |
-| `ComputeService.GetVMMetrics` | `GET /vms/{id}/metrics` | - | - | - | missing |
-| `ComputeService.AttachDisk` | `POST /vms/{id}/disks` | - | - | - | missing |
-| `ComputeService.DetachDisk` | `DELETE /vms/{id}/disks/{diskId}` | - | - | - | missing |
-| `ComputeService.ResizeDisk` | `PATCH /vms/{id}/disks/{diskId}` | - | - | - | missing |
-| `ComputeService.CreateSnapshot` | `POST /vms/{id}/snapshots` | `(dashboard)/compute/snapshots/page.tsx` (read-only) | - | - | partial |
+| `ComputeService.GetVMMetrics` | `GET /vms/{id}/metrics` | `(dashboard)/compute/vms/[id]/page.tsx` | - | `real-server/compute-vm.spec.ts` | covered |
+| `ComputeService.AttachDisk` | `POST /vms/{id}/disks` | `(dashboard)/compute/vms/[id]/page.tsx` | - | `real-server/compute-vm.spec.ts` | covered |
+| `ComputeService.DetachDisk` | `DELETE /vms/{id}/disks/{diskId}` | `(dashboard)/compute/vms/[id]/page.tsx` | - | `real-server/compute-vm.spec.ts` | covered |
+| `ComputeService.ResizeDisk` | `PATCH /vms/{id}/disks/{diskId}` | `(dashboard)/compute/vms/[id]/page.tsx` | - | `real-server/compute-vm.spec.ts` | covered |
+| `ComputeService.CreateSnapshot` | `POST /vms/{id}/snapshots` | `(dashboard)/compute/vms/[id]/page.tsx` | - | `real-server/compute-vm.spec.ts` | covered |
 | `ComputeService.RestoreSnapshot` | `POST /vms/{id}/snapshots/{snapshotId}/restore` | `(dashboard)/compute/snapshots/page.tsx` | - | `compute.spec.ts` | covered |
 | `ComputeService.DeleteSnapshot` | `DELETE /vms/{id}/snapshots/{snapshotId}` | `(dashboard)/compute/snapshots/page.tsx` | - | `compute.spec.ts` | covered |
 | `ComputeService.ListSnapshots` | `GET /vms/{id}/snapshots` | `(dashboard)/compute/snapshots/page.tsx` | - | `compute.spec.ts` | covered |
-| `ComputeService.GetSnapshot` | `GET /vms/{id}/snapshots/{snapshotId}` | - | - | - | missing |
-| `ComputeService.MigrateVM` | `POST /vms/{id}/migrate` | - | - | - | missing |
-| `ComputeService.PrepareMigration` | `POST /migrations/prepare` | - | - | - | missing |
-| `ComputeService.FinalizeMigration` | `POST /migrations/{receiverId}/finalize` | - | - | - | missing |
+| `ComputeService.GetSnapshot` | `GET /vms/{id}/snapshots/{snapshotId}` | `(dashboard)/compute/vms/[id]/page.tsx` | - | `real-server/compute-vm.spec.ts` | covered |
+| `ComputeService.MigrateVM` | `POST /vms/{id}/migrate` | `(dashboard)/compute/vms/[id]/page.tsx` | - | `real-server/compute-vm.spec.ts` | covered |
+| `ComputeService.PrepareMigration` | `POST /migrations/prepare` | `(dashboard)/compute/migrations/page.tsx` | - | `real-server/compute-vm.spec.ts` | covered |
+| `ComputeService.FinalizeMigration` | `POST /migrations/{receiverId}/finalize` | `(dashboard)/compute/migrations/page.tsx` | - | `real-server/compute-vm.spec.ts` | covered |
 | `ComputeService.CreateContainer` | `POST /containers` | `(dashboard)/compute/containers/page.tsx` | - | `compute.spec.ts` | covered |
 | `ComputeService.StartContainer` | `POST /containers/{id}/start` | `(dashboard)/compute/containers/page.tsx` | - | `compute.spec.ts` | covered |
 | `ComputeService.StopContainer` | `POST /containers/{id}/stop` | `(dashboard)/compute/containers/page.tsx` | - | `compute.spec.ts` | covered |
@@ -162,7 +162,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `ComputeService.ExecContainer` | `POST /containers/{id}/exec` | - | - | - | missing |
 | `ComputeService.GetContainerLogs` | `GET /containers/{id}` | - | - | - | not-UI: streaming plumbing |
 | `ComputeService.GetContainerMetrics` | `GET /containers/{id}/metrics` | - | - | - | missing |
-| `ComputeService.AttestVM` | `POST /vms/{id}/attest` | - | - | - | missing |
+| `ComputeService.AttestVM` | `POST /vms/{id}/attest` | `(dashboard)/compute/vms/[id]/page.tsx` | - | `real-server/compute-vm.spec.ts` | covered |
 | `ComputeService.VerifyVMAttestation` | `POST /vms/{id}/attest/verify` | - | - | - | missing |
 | `ComputeService.AttestContainer` | `POST /containers/{id}/attest` | - | - | - | missing |
 
