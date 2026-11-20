@@ -1504,6 +1504,8 @@ var networkProbes = []struct {
 	{"sdn add port", http.MethodPost, "/api/v1/sdn/bridges/br0/ports"},
 	{"sdn authenticate port", http.MethodPost, "/api/v1/sdn/bridges/br0/ports/p1/auth"},
 	{"sdn revoke port auth", http.MethodDelete, "/api/v1/sdn/bridges/br0/ports/p1/auth"},
+	{"sdn delete policy", http.MethodDelete, "/api/v1/sdn/policies/p1"},
+	{"sdn delete vlan", http.MethodDelete, "/api/v1/sdn/vlans/100"},
 	{"switch list ports", http.MethodGet, "/api/v1/switches/sw1/ports"},
 	{"switch get port status", http.MethodGet, "/api/v1/switches/sw1/ports/1"},
 	{"switch set port vlan", http.MethodPost, "/api/v1/switches/sw1/ports/1/vlan"},
@@ -1533,6 +1535,8 @@ func TestNetworkRoutes_AreRegisteredAndGated(t *testing.T) {
 	}
 	for _, want := range []string{
 		"DELETE /api/v1/sdn/bridges/{name}",
+		"DELETE /api/v1/sdn/policies/{id}",
+		"DELETE /api/v1/sdn/vlans/{vlan_id}",
 		"POST /api/v1/sdn/bridges/{name}/ports/{port}/auth",
 		"DELETE /api/v1/sdn/bridges/{name}/ports/{port}/auth",
 		"POST /api/v1/switches/{switch}/ports/{port}/vlan",
