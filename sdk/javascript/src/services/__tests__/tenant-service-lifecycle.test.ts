@@ -84,9 +84,11 @@ describe('TenantService lifecycle routes', () => {
 
   it('rotateDEK POSTs /{id}/dek/rotate', async () => {
     await service.rotateDEK({ tenantId: 't-1', background: true });
-    expect(mockClient.post).toHaveBeenCalledWith('/v1/tenants/t-1/dek/rotate', {
-      background: true,
-    });
+    expect(mockClient.post).toHaveBeenCalledWith(
+      '/v1/tenants/t-1/dek/rotate',
+      { background: true },
+      { retry: { enabled: false } }
+    );
   });
 
   it('getDEKStatus GETs the served /{id}/dek path, not /dek/status', async () => {
