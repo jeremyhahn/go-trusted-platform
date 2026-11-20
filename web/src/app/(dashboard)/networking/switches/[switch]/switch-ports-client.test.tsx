@@ -21,6 +21,8 @@ vi.mock('@/components/ui/dialog', () => ({
 }));
 
 const hook = vi.hoisted(() => ({
+  unavailable: false,
+  unavailableReason: undefined as string | undefined,
   ports: [{ port: 'Eth1/2', mode: 'access', access_vlan: 10, enabled: false, link_up: false, description: 'uplink' }],
   isLoading: false,
   error: null,
@@ -39,6 +41,30 @@ vi.mock('@/hooks', () => ({
 
 afterEach(() => {
   cleanup();
+  hook.unavailable = false;
+  hook.unavailableReason = undefined;
+});
+
+describe('SwitchPortsClient capability gate', () => {
+  it('with the switch service not configured, shows the reason and offers no port control', () => {
+    hook.unavailable = true;
+    hook.unavailableReason = 'switch service not configured by daemon';
+    render(<SwitchPortsClient />);
+
+    expect(screen.getByText('Switch is not available on this node')).toBeTruthy();
+    expect(screen.getByText(/switch service not configured by daemon/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Enable' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Disable' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Set VLAN' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Status' })).toBeNull();
+  });
+
+  it('with the service available, every port control is offered', () => {
+    render(<SwitchPortsClient />);
+    expect(screen.getByRole('button', { name: 'Enable' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Set VLAN' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Status' })).toBeTruthy();
+  });
 });
 
 describe('SwitchPortsClient status dialog', () => {
