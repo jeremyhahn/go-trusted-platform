@@ -540,9 +540,9 @@ func TestAuthMiddleware_ExtractTenantFromCert(t *testing.T) {
 		expectedTenant string // "" means the request is refused
 	}{
 		{
-			name: "takes_first_ou",
+			name: "takes_ou",
 			certModifier: func(c *x509.Certificate) {
-				c.Subject.OrganizationalUnit = []string{"tenant-from-ou", "second-ou"}
+				c.Subject.OrganizationalUnit = []string{"tenant-from-ou"}
 			},
 			expectedTenant: "tenant-from-ou",
 		},

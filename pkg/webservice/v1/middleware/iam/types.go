@@ -176,13 +176,6 @@ type AuthConfig struct {
 	// RequireJWT requires JWT token authentication when true.
 	RequireJWT bool
 
-	// ExtractTenantFromCert extracts tenant ID from certificate when true.
-	ExtractTenantFromCert bool
-
-	// TenantCertField specifies which certificate field contains the tenant ID.
-	// Valid values: "cn", "ou", "o", "san_email", "san_dns"
-	TenantCertField string
-
 	// TPM Attestation Settings
 	// RequireTPMAttestation requires valid TPM attestation for authentication.
 	RequireTPMAttestation bool

@@ -17,7 +17,6 @@ import (
 	"context"
 	"crypto/x509"
 	"net/http"
-	"strings"
 	"time"
 
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
@@ -259,37 +258,12 @@ func (m *AuthMiddleware) authenticateWithJWT(r *http.Request) (IAMSession, error
 
 // extractTenantFromCert extracts the tenant ID from a certificate based on configuration.
 func (m *AuthMiddleware) extractTenantFromCert(cert *x509.Certificate) string {
-	if !m.config.ExtractTenantFromCert {
+	// SPEC row 123: the tenant is the certificate's first subject OU.
+	// No other field (CN, O, SAN email or DNS name) stands in for it.
+	if len(cert.Subject.OrganizationalUnit) == 0 {
 		return ""
 	}
-
-	switch m.config.TenantCertField {
-	case "cn":
-		return cert.Subject.CommonName
-	case "ou":
-		if len(cert.Subject.OrganizationalUnit) > 0 {
-			return cert.Subject.OrganizationalUnit[0]
-		}
-	case "o":
-		if len(cert.Subject.Organization) > 0 {
-			return cert.Subject.Organization[0]
-		}
-	case "san_email":
-		if len(cert.EmailAddresses) > 0 {
-			// Extract domain from email as tenant ID
-			email := cert.EmailAddresses[0]
-			parts := strings.Split(email, "@")
-			if len(parts) == 2 {
-				return parts[1]
-			}
-		}
-	case "san_dns":
-		if len(cert.DNSNames) > 0 {
-			return cert.DNSNames[0]
-		}
-	}
-
-	return ""
+	return cert.Subject.OrganizationalUnit[0]
 }
 
 // extractIdentityFromCert extracts the user identity from a certificate.
