@@ -96,7 +96,7 @@ var attestationQuoteToolArgs = map[string]map[string]interface{}{
 
 // Each tool is classified with the scope its gRPC method requires.
 func TestAttestationQuoteTools_CarryTheirGRPCScope(t *testing.T) {
-	permissions := toolPermissionCatalog()
+	permissions := declaredToolPermissions(PlatformTools{})
 	for name, tool := range attestationQuoteTools {
 		permission, classified := permissions[name]
 		require.True(t, classified, "%s is not classified", name)

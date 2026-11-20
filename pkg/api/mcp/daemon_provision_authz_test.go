@@ -92,7 +92,7 @@ func daemonProvisionServer(scope string) (*Server, *provisionStubProvider) {
 
 	svc := &provisionCombinedProvider{mockServiceProvider: mock, provisionStubProvider: stub}
 	server := NewServer(svc, nil, newTestLogger())
-	server.SetAuthorizationService(scopeChecker(scope), &mockAuthManager{})
+	usePEP(server, scopeChecker(scope), &mockAuthManager{})
 	return server, stub
 }
 
@@ -139,7 +139,7 @@ func TestDaemonProvisionAuthorizeToolEnforcesScope(t *testing.T) {
 	scopes := []string{"platform:read", "platform:write", "provisioning:read", "provisioning:write"}
 	for tool, want := range daemonProvisionToolScopes {
 		for _, held := range scopes {
-			checker := NewAuthorizationChecker(scopeChecker(held), &mockAuthManager{})
+			checker := pepChecker(scopeChecker(held), &mockAuthManager{})
 			_, authErr := checker.AuthorizeTool(ctx, tool, "tok")
 			if held == want {
 				if authErr != nil {

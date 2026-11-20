@@ -110,6 +110,12 @@ wireguard:
 `)
 	assertInvalidField(t, cfg.Validate(), "wireguard.listen-port")
 
+	cfg.WireGuard = WireGuardSettings{KeyRef: "secret://vpn/hub-key"}
+	assertInvalidField(t, cfg.Validate(), "wireguard.key-ref")
+
+	cfg.WireGuard = WireGuardSettings{Address: netip.MustParsePrefix("10.99.0.1/24")}
+	assertInvalidField(t, cfg.Validate(), "wireguard.address")
+
 	cfg.WireGuard = WireGuardSettings{}
 	require.NoError(t, cfg.Validate())
 	assert.Zero(t, cfg.WithDefaults().WireGuard.ListenPort, "no WireGuard default in a FIPS build")
