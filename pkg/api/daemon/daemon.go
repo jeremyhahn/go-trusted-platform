@@ -308,6 +308,9 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	if err := config.validateGRPCAuthorization(); err != nil {
 		return nil, err
 	}
+	if err := config.validateQUICAuthorization(); err != nil {
+		return nil, err
+	}
 
 	// Set up logger
 	logger := config.Logger
@@ -1141,7 +1144,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		if poolErr != nil {
 			return nil, poolErr
 		}
-		quicAuthMiddleware, quicLocalValidator, quicAuthErr := selectQUICAuth(config, platformTokenValidatorShared, quicClientCAPool, logger)
+		quicAuthMiddleware, quicLocalValidator, quicAuthErr := selectQUICAuth(config, platformTokenValidatorShared, iamPEP, quicClientCAPool, logger)
 		if quicAuthErr != nil {
 			return nil, quicAuthErr
 		}
