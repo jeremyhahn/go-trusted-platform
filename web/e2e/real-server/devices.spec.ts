@@ -1504,3 +1504,366 @@ test.describe('Device IDevID', () => {
     });
   });
 });
+
+// --- Device vTPM -------------------------------------------------------------
+//
+// /devices/vtpm lists the server's bundles (GET /api/v1/vtpm/bundles?limit=100):
+// each bundle is one row named after its manifest hostname, with the bundle id
+// as its VM ID, the state 'active' (the page maps every bundle to it) and an
+// empty PCR profile. Search and the VM ID filter run in the browser; the state
+// filter only re-fetches. Each test seeds its own bundles (unique hostname)
+// through sdk.vtpm.createBundle and finds its rows by that hostname, since
+// other specs of the worker may leave bundles behind.
+
+interface ServedBundle {
+  id: string;
+  manifest?: { hostname?: string };
+  createdAt?: string;
+}
+
+const createdBundles: string[] = [];
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function newBundle(sdk: any, hostname = unique('vtpm-dev')): Promise<string> {
+  const res = must(
+    await sdk.vtpm.createBundle({ options: { hostname } }),
+    'vtpm.createBundle',
+  ) as { id: string };
+  createdBundles.push(res.id);
+  return res.id;
+}
+
+/** The bundles the server answers to the page's own list request. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function servedBundles(sdk: any): Promise<ServedBundle[]> {
+  const list = must(await sdk.vtpm.listBundles({ options: { limit: 100 } }), 'vtpm.listBundles') as {
+    bundles?: ServedBundle[];
+  };
+  return list.bundles ?? [];
+}
+
+const reEscape = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+async function openVTPMPage(page: Page): Promise<void> {
+  await page.goto('/devices/vtpm');
+  await expect(page.getByRole('heading', { name: /virtual tpm \(vtpm\)/i })).toBeVisible();
+  await expect(page.getByText(/loading vtpm instances/i)).toHaveCount(0);
+}
+
+function bundleRow(page: Page, hostname: string) {
+  return page.getByRole('row').filter({ hasText: hostname });
+}
+
+async function openBundleMenu(page: Page, hostname: string): Promise<void> {
+  await expect(bundleRow(page, hostname)).toHaveCount(1);
+  await bundleRow(page, hostname).getByRole('button', { name: /open menu/i }).click();
+}
+
+test.describe('Device vTPM', () => {
+  test.afterEach(async ({ sdk }) => {
+    while (createdBundles.length > 0) {
+      await sdk.vtpm.deleteBundle(createdBundles.pop() as string);
+    }
+  });
+
+  test.describe('vTPM List', () => {
+    test('should display vTPM page header and description', async ({ adminPage: page }) => {
+      await openVTPMPage(page);
+
+      await expect(page.getByText(/manage virtual tpm instances/i)).toBeVisible();
+    });
+
+    test('should display vTPM table with columns', async ({ adminPage: page, sdk }) => {
+      const web = unique('web-server');
+      const db = unique('db-server');
+      const webId = await newBundle(sdk, web);
+      const dbId = await newBundle(sdk, db);
+      const served = (await servedBundles(sdk)).map((b) => b.id);
+      expect(served).toEqual(expect.arrayContaining([webId, dbId]));
+
+      await openVTPMPage(page);
+
+      for (const name of [/name/i, /vm\/container/i, /state/i, /pcr profile/i, /created/i, /actions/i]) {
+        await expect(page.getByRole('columnheader', { name })).toBeVisible();
+      }
+      await expect(bundleRow(page, web)).toContainText(webId);
+      await expect(bundleRow(page, db)).toContainText(dbId);
+    });
+
+    test('should display vTPM state badges correctly', async ({ adminPage: page, sdk }) => {
+      // The server keeps no bundle state: the page shows every bundle as Active
+      // (the other badges are a gap).
+      const hostname = unique('active-vtpm');
+      await newBundle(sdk, hostname);
+
+      await openVTPMPage(page);
+
+      await expect(bundleRow(page, hostname)).toContainText('Active');
+    });
+
+    test('should show empty state when no vTPM instances', async ({ adminPage: page }) => {
+      // Other specs of the worker may leave bundles: a search with no match.
+      await openVTPMPage(page);
+
+      await page.getByPlaceholder(/search vtpm/i).fill(unique('no-such-vtpm'));
+      await expect(page.getByText(/no vtpm instances found/i)).toBeVisible();
+    });
+
+    test('should show loading state', async ({ adminPage: page }) => {
+      // A held-open list has no server behaviour (gap): the load finishes.
+      await page.goto('/devices/vtpm');
+
+      await expect(page.getByRole('columnheader', { name: /pcr profile/i })).toBeVisible();
+      await expect(page.getByText(/loading vtpm instances/i)).toHaveCount(0);
+    });
+
+    test('should filter vTPM instances by search query', async ({ adminPage: page, sdk }) => {
+      const production = unique('production-web');
+      const development = unique('development-db');
+      await newBundle(sdk, production);
+      await newBundle(sdk, development);
+
+      await openVTPMPage(page);
+      await expect(bundleRow(page, production)).toHaveCount(1);
+      await expect(bundleRow(page, development)).toHaveCount(1);
+
+      await page.getByPlaceholder(/search vtpm/i).fill(production);
+
+      await expect(bundleRow(page, production)).toHaveCount(1);
+      await expect(bundleRow(page, development)).toHaveCount(0);
+    });
+
+    test('should filter vTPM instances by VM ID', async ({ adminPage: page, sdk }) => {
+      const abc = unique('vtpm-abc');
+      const xyz = unique('vtpm-xyz');
+      const abcId = await newBundle(sdk, abc);
+      await newBundle(sdk, xyz);
+
+      await openVTPMPage(page);
+      await expect(bundleRow(page, xyz)).toHaveCount(1);
+
+      // The VM ID column is the bundle id.
+      await page.getByPlaceholder(/filter by vm id/i).fill(abcId);
+
+      await expect(bundleRow(page, abc)).toContainText(abcId);
+      await expect(bundleRow(page, xyz)).toHaveCount(0);
+    });
+
+    test('should filter vTPM instances by state', async ({ adminPage: page, sdk }) => {
+      // The state filter only re-fetches the list (gap: no state on the server).
+      const hostname = unique('active-vtpm');
+      await newBundle(sdk, hostname);
+
+      await openVTPMPage(page);
+      await expect(bundleRow(page, hostname)).toHaveCount(1);
+
+      await page.locator('[role="combobox"]').filter({ hasText: /all states/i }).click();
+      await page.getByRole('option', { name: /^active$/i }).click();
+
+      await expect(bundleRow(page, hostname)).toContainText('Active');
+    });
+
+    test('should clear filters', async ({ adminPage: page, sdk }) => {
+      const one = unique('vtpm-one');
+      const two = unique('vtpm-two');
+      await newBundle(sdk, one);
+      await newBundle(sdk, two);
+
+      await openVTPMPage(page);
+      const searchInput = page.getByPlaceholder(/search vtpm/i);
+      await searchInput.fill(one);
+      await expect(bundleRow(page, two)).toHaveCount(0);
+
+      await page.getByRole('button', { name: /clear filters/i }).click();
+
+      await expect(searchInput).toHaveValue('');
+      await expect(bundleRow(page, one)).toHaveCount(1);
+      await expect(bundleRow(page, two)).toHaveCount(1);
+    });
+  });
+
+  test.describe('Create vTPM', () => {
+    test('should open create vTPM dialog', async ({ adminPage: page }) => {
+      await openVTPMPage(page);
+
+      await page.getByRole('button', { name: /create vtpm/i }).click();
+
+      await expect(page.getByRole('dialog')).toBeVisible();
+      await expect(page.getByRole('heading', { name: /create new vtpm instance/i })).toBeVisible();
+    });
+
+    test('should display all form fields in create dialog', async ({ adminPage: page }) => {
+      await openVTPMPage(page);
+
+      await page.getByRole('button', { name: /create vtpm/i }).click();
+
+      await expect(page.getByPlaceholder('my-vtpm')).toBeVisible();
+      await expect(page.getByPlaceholder('vm-123456')).toBeVisible();
+      await expect(page.getByPlaceholder('my-vm')).toBeVisible();
+      await expect(page.getByPlaceholder('default')).toBeVisible();
+    });
+
+    test('should create a new vTPM instance', async ({ adminPage: page, sdk }) => {
+      // The form sends only the VM name, as the bundle hostname.
+      const hostname = unique('New-VM');
+      await openVTPMPage(page);
+
+      await page.getByRole('button', { name: /create vtpm/i }).click();
+      await page.getByPlaceholder('my-vtpm').fill(unique('New-vTPM-Instance'));
+      await page.getByPlaceholder('vm-123456').fill(unique('vm-new'));
+      await page.getByPlaceholder('my-vm').fill(hostname);
+      await page.getByRole('dialog').getByRole('button', { name: /create vtpm/i }).click();
+
+      let id: string | undefined;
+      await expect
+        .poll(async () => {
+          id = (await servedBundles(sdk)).find((b) => b.manifest?.hostname === hostname)?.id;
+          return id;
+        })
+        .toBeTruthy();
+      createdBundles.push(id as string);
+
+      await expect(page.getByText(/vtpm instance created successfully/i)).toBeVisible();
+      await expect(page.getByRole('dialog')).toHaveCount(0);
+      await expect(bundleRow(page, hostname)).toContainText(id as string);
+    });
+
+    test('should validate vTPM name is required', async ({ adminPage: page }) => {
+      await openVTPMPage(page);
+
+      await page.getByRole('button', { name: /create vtpm/i }).click();
+      await page.getByRole('dialog').getByRole('button', { name: /create vtpm/i }).click();
+
+      await expect(page.getByText('Name is required').first()).toBeVisible();
+    });
+
+    test('should validate VM ID is required', async ({ adminPage: page }) => {
+      await openVTPMPage(page);
+
+      await page.getByRole('button', { name: /create vtpm/i }).click();
+      await page.getByPlaceholder('my-vtpm').fill('Test-vTPM');
+      await page.getByRole('dialog').getByRole('button', { name: /create vtpm/i }).click();
+
+      await expect(page.getByText(/vm id is required/i)).toBeVisible();
+    });
+
+    test('should validate VM name is required', async ({ adminPage: page }) => {
+      await openVTPMPage(page);
+
+      await page.getByRole('button', { name: /create vtpm/i }).click();
+      await page.getByPlaceholder('my-vtpm').fill('Test-vTPM');
+      await page.getByPlaceholder('vm-123456').fill('vm-test-123');
+      await page.getByRole('dialog').getByRole('button', { name: /create vtpm/i }).click();
+
+      await expect(page.getByText(/vm name is required/i)).toBeVisible();
+    });
+
+    test('should close create dialog on cancel', async ({ adminPage: page }) => {
+      await openVTPMPage(page);
+
+      await page.getByRole('button', { name: /create vtpm/i }).click();
+      await expect(page.getByRole('dialog')).toBeVisible();
+      await page.getByRole('button', { name: /cancel/i }).click();
+
+      await expect(page.getByRole('dialog')).not.toBeVisible();
+    });
+
+    test('should close create dialog with Escape key', async ({ adminPage: page }) => {
+      await openVTPMPage(page);
+
+      await page.getByRole('button', { name: /create vtpm/i }).click();
+      await expect(page.getByRole('dialog')).toBeVisible();
+      await page.keyboard.press('Escape');
+
+      await expect(page.getByRole('dialog')).not.toBeVisible();
+    });
+  });
+
+  test.describe('vTPM Actions', () => {
+    test('should open actions menu for vTPM', async ({ adminPage: page, sdk }) => {
+      const hostname = unique('test-vtpm');
+      await newBundle(sdk, hostname);
+      await openVTPMPage(page);
+
+      await openBundleMenu(page, hostname);
+
+      await expect(page.getByRole('menuitem', { name: /view details/i })).toBeVisible();
+      await expect(page.getByRole('menuitem', { name: /seal data/i })).toBeVisible();
+      await expect(page.getByRole('menuitem', { name: /suspend/i })).toBeVisible();
+      await expect(page.getByRole('menuitem', { name: /migrate/i })).toBeVisible();
+      await expect(page.getByRole('menuitem', { name: /delete/i })).toBeVisible();
+    });
+
+    test('should navigate to vTPM details from actions menu', async ({ adminPage: page, sdk }) => {
+      const hostname = unique('detail-vtpm');
+      const id = await newBundle(sdk, hostname);
+      await openVTPMPage(page);
+
+      await openBundleMenu(page, hostname);
+      await page.getByRole('menuitem', { name: /view details/i }).click();
+
+      await expect(page).toHaveURL(new RegExp(`/devices/vtpm/${reEscape(id)}/?$`));
+    });
+
+    test('should navigate to seal data action', async ({ adminPage: page, sdk }) => {
+      const hostname = unique('seal-vtpm');
+      const id = await newBundle(sdk, hostname);
+      await openVTPMPage(page);
+
+      await openBundleMenu(page, hostname);
+      await page.getByRole('menuitem', { name: /seal data/i }).click();
+
+      await expect(page).toHaveURL(new RegExp(`/devices/vtpm/${reEscape(id)}/?\\?action=seal`));
+    });
+
+    test('should show suspend info toast for active vTPM', async ({ adminPage: page, sdk }) => {
+      // Suspend is a placeholder toast in the table: nothing reaches the server.
+      const hostname = unique('suspend-vtpm');
+      await newBundle(sdk, hostname);
+      await openVTPMPage(page);
+
+      await openBundleMenu(page, hostname);
+      await page.getByRole('menuitem', { name: /suspend/i }).click();
+
+      await expect(page.getByText(/suspend operation not yet implemented/i)).toBeVisible();
+    });
+
+    test('should navigate to migrate action', async ({ adminPage: page, sdk }) => {
+      const hostname = unique('migrate-vtpm');
+      const id = await newBundle(sdk, hostname);
+      await openVTPMPage(page);
+
+      await openBundleMenu(page, hostname);
+      await page.getByRole('menuitem', { name: /migrate/i }).click();
+
+      await expect(page).toHaveURL(new RegExp(`/devices/vtpm/${reEscape(id)}/?\\?action=migrate`));
+    });
+
+    test('should delete vTPM with confirmation', async ({ adminPage: page, sdk }) => {
+      const hostname = unique('delete-vtpm');
+      const id = await newBundle(sdk, hostname);
+      await openVTPMPage(page);
+
+      page.once('dialog', (dialog) => dialog.accept());
+      await openBundleMenu(page, hostname);
+      await page.getByRole('menuitem', { name: /delete/i }).click();
+
+      await expect(page.getByText(/vtpm deleted successfully/i)).toBeVisible();
+      await expect(bundleRow(page, hostname)).toHaveCount(0);
+      expect((await servedBundles(sdk)).map((b) => b.id)).not.toContain(id);
+    });
+
+    test('should cancel delete when dialog is dismissed', async ({ adminPage: page, sdk }) => {
+      const hostname = unique('keep-vtpm');
+      const id = await newBundle(sdk, hostname);
+      await openVTPMPage(page);
+
+      page.once('dialog', (dialog) => dialog.dismiss());
+      await openBundleMenu(page, hostname);
+      await page.getByRole('menuitem', { name: /delete/i }).click();
+
+      await expect(bundleRow(page, hostname)).toHaveCount(1);
+      expect((await servedBundles(sdk)).map((b) => b.id)).toContain(id);
+    });
+  });
+});
