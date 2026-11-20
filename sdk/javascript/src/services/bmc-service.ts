@@ -197,11 +197,6 @@ export class BMCService extends BaseService {
       privilege: request.privilege,
       enabled: request.enabled,
       channel: request.channel,
-    }, {
-      // The BMC creates the Redfish account before it answers and the
-      // POST carries no idempotency key: never resend it after a lost
-      // response.
-      retry: { enabled: false },
     });
   }
 
@@ -292,14 +287,12 @@ export class BMCService extends BaseService {
    * (PXE), an operating system is installed, then disk boot is set and the
    * host power-cycled. The host's disks can be overwritten.
    *
-   * Sent with client retries disabled: the server starts the workflow before
+   * Never resent (the api-client default for a POST): the server starts the workflow before
    * it answers, so a resend after a lost response is rejected (409) while the
    * host is already being reinstalled.
    */
   async provision(profileID: string): Promise<ApiResponse<BMCProvisionStatus>> {
-    const response = await this.client.post<BMCProvisionStatus>(this.path(profileID, 'provision'), {}, {
-      retry: { enabled: false },
-    });
+    const response = await this.client.post<BMCProvisionStatus>(this.path(profileID, 'provision'), {});
     return this.withProfileID(response, profileID);
   }
 

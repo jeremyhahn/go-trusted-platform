@@ -371,10 +371,7 @@ export class ComputeService extends BaseService {
         vmName: request.vmName,
         mode: request.mode,
         spec: request.spec,
-      },
-      // No retries: each prepare launches a QEMU receiver, and a resend after
-      // a lost response leaks one whose token the caller never saw.
-      { retry: { enabled: false } }
+      }
     );
   }
 
@@ -384,10 +381,7 @@ export class ComputeService extends BaseService {
   async finalizeMigration(request: FinalizeMigrationRequest): Promise<ApiResponse<FinalizeMigrationResponse>> {
     return this.client.post<FinalizeMigrationResponse>(
       this.buildUrl(`/migrations/${this.encodePathSegment(request.receiverId)}/finalize`),
-      { commit: request.commit },
-      // No retries: the daemon drops the receiver token before it commits,
-      // so a resend after a lost response answers 404 for a resumed guest.
-      { retry: { enabled: false } }
+      { commit: request.commit }
     );
   }
 
@@ -397,10 +391,7 @@ export class ComputeService extends BaseService {
   async suspendVM(id: string): Promise<ApiResponse<SuspendVMResponse>> {
     return this.client.post<SuspendVMResponse>(
       this.buildUrl(`/vms/${this.encodePathSegment(id)}/suspend`),
-      {},
-      // No retries: a resend after a lost response fails (the run state
-      // already changed) or undoes another caller's transition.
-      { retry: { enabled: false } }
+      {}
     );
   }
 
@@ -410,10 +401,7 @@ export class ComputeService extends BaseService {
   async resumeVM(id: string): Promise<ApiResponse<ResumeVMResponse>> {
     return this.client.post<ResumeVMResponse>(
       this.buildUrl(`/vms/${this.encodePathSegment(id)}/resume`),
-      {},
-      // No retries: a resend after a lost response fails (the run state
-      // already changed) or undoes another caller's transition.
-      { retry: { enabled: false } }
+      {}
     );
   }
 

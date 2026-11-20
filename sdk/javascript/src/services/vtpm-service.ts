@@ -509,8 +509,7 @@ export class VTPMService extends BaseService {
     return this.withStatus(
       await this.client.post<StartBundleResponse>(
         this.buildUrl(`/bundles/${this.encodePathSegment(id)}/start`),
-        {},
-        { retry: { enabled: false } }
+        {}
       )
     );
   }
@@ -549,8 +548,7 @@ export class VTPMService extends BaseService {
   async stopBundle(id: string): Promise<ApiResponse<StopBundleResponse>> {
     const r = await this.client.post<StopBundleResponse>(
       this.buildUrl(`/bundles/${this.encodePathSegment(id)}/stop`),
-      {},
-      { retry: { enabled: false } }
+      {}
     );
     const data = r.data as (Partial<StopBundleResponse> & { success?: boolean }) | undefined;
     if (r.success === true && data && typeof data.stopped !== 'boolean') {
@@ -602,9 +600,8 @@ export class VTPMService extends BaseService {
     request: ExtendBundlePCRRequest
   ): Promise<ApiResponse<ExtendBundlePCRResponse>> {
     const bundle = `/bundles/${this.encodePathSegment(id)}`;
-    const noRetry = { retry: { enabled: false } };
     const first = await this.settle(
-      this.client.post<ExtendBundlePCRResponse>(this.buildUrl(`${bundle}/pcrs/extend`), request, noRetry)
+      this.client.post<ExtendBundlePCRResponse>(this.buildUrl(`${bundle}/pcrs/extend`), request)
     );
     if (!this.isRouteMissing(first)) {
       return this.unsettle(first);
@@ -612,8 +609,7 @@ export class VTPMService extends BaseService {
     const second = await this.settle(
       this.client.post<{ bundle_id: string; action?: string; success?: boolean; message?: string }>(
         this.buildUrl(`${bundle}/pcr/${encodeURIComponent(String(request.pcr_index))}/extend`),
-        { data: request.data },
-        noRetry
+        { data: request.data }
       )
     );
     if (this.isRouteMissing(second)) {
@@ -762,11 +758,10 @@ export class VTPMService extends BaseService {
   async importBundle(archive: Blob): Promise<ApiResponse<VTPMBundle>> {
     // The server persists the bundle under the archive's ID and refuses a
     // second import, so a resend after a lost response would report a false
-    // conflict: no client retries.
+    // conflict; the api-client default never resends a POST.
     const response = await this.client.post<WireBundleResponse | WireDaemonImportResponse>(
       this.buildUrl('/bundles/import'),
-      archive,
-      { retry: { enabled: false } }
+      archive
     );
     const { data, ...rest } = response;
     if (data === undefined) return rest;

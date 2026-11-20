@@ -435,13 +435,8 @@ export class IDevIDService extends BaseService {
     if (validityDays !== undefined) {
       body.validity_days = validityDays;
     }
-    // No retries: the daemon creates and saves a fresh key on each call, so a
-    // resend after a lost response replaces the just-issued identity
-    // (overwrite=true) or reports a false failure (overwrite=false).
     return normalizeCreateLDevIDResponse(
-      await this.client.post<CreateLDevIDResponse>(this.buildUrl('/ldevid'), body, {
-        retry: { enabled: false },
-      })
+      await this.client.post<CreateLDevIDResponse>(this.buildUrl('/ldevid'), body)
     );
   }
 
