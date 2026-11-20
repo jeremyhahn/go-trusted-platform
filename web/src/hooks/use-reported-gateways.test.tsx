@@ -175,4 +175,19 @@ describe("useReportedGateways", () => {
     expect(errorSpy).not.toHaveBeenCalled();
     errorSpy.mockRestore();
   });
+
+  it("clears the error when a re-enabled hook reloads successfully", async () => {
+    fetchMock.mockResolvedValue(reply({}, 503));
+    const { result, rerender } = renderHook(
+      ({ enabled }) => useReportedGateways({ enabled }),
+      { initialProps: { enabled: true } }
+    );
+    await waitFor(() => expect(result.current.error).toBe("HTTP 503"));
+
+    rerender({ enabled: false });
+    fetchMock.mockResolvedValue(reply({ gateways: [gw("a")] }));
+    rerender({ enabled: true });
+    await waitFor(() => expect(result.current.gateways).toEqual([gw("a")]));
+    expect(result.current.error).toBeNull();
+  });
 });
