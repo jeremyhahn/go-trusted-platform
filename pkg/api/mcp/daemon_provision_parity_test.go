@@ -105,7 +105,7 @@ func TestDaemonProvisionScopeParity(t *testing.T) {
 // catalogs.
 func assertScopeParity(t *testing.T, rows []scopeParityRow) {
 	t.Helper()
-	catalog := toolPermissionCatalog()
+	catalog := declaredToolPermissions(PlatformTools{})
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
 			if row.grpcMethod != "" {

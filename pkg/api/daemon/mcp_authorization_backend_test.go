@@ -14,8 +14,13 @@
 package daemon
 
 import (
+	"context"
 	"errors"
 	"testing"
+
+	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -44,6 +49,39 @@ func TestCreateMCPServer_RefusesWithoutAnAuthorizationBackend(t *testing.T) {
 	var want ErrMCPAuthorizationBackendRequired
 	assert.True(t, errors.As(err, &want), "error is %T, want ErrMCPAuthorizationBackendRequired", err)
 	assert.Nil(t, server, "no server may exist when the backend is missing")
+}
+
+// TestQuicBaaSServiceWrapper_TenantlessTokenRefusedBeforePEP drives the legacy
+// QuicBaaS validator wrapper through the MCP adapter (#1933): the validator
+// names no tenant, so a bearer token on this path is refused with the
+// missing-tenant code and the PEP is never asked (docs/SPEC.md).
+func TestQuicBaaSServiceWrapper_TenantlessTokenRefusedBeforePEP(t *testing.T) {
+	svc := &tenantlessQuicBaaSService{}
+	pep := &mockSDKPEPClient{checkFunc: func(ctx context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+		t.Fatalf("PEP Check must not run for a tenantless token")
+		return nil, nil
+	}}
+	adapter := mcp.NewQuicBaaSAuthAdapter(&mcp.QuicBaaSAuthConfig{
+		TokenValidator: &quicbaasServiceWrapper{service: svc},
+		PEPClient:      pep,
+	})
+
+	allowed, err := adapter.CheckPermission(context.Background(), "bearer-token", "keys", "read")
+	assert.False(t, allowed, "a tenantless token must be refused")
+	require.Error(t, err)
+	var authErr *mcp.QuicBaaSAuthError
+	require.True(t, errors.As(err, &authErr), "error is %T, want *mcp.QuicBaaSAuthError", err)
+	assert.Equal(t, mcp.QuicBaaSAuthErrorMissingTenant, authErr.Code)
+	assert.Equal(t, 1, svc.calls, "the legacy validator must have validated the token")
+}
+
+// tenantlessQuicBaaSService validates every token without naming a tenant,
+// as the legacy QuicBaaS validator does.
+type tenantlessQuicBaaSService struct{ calls int }
+
+func (s *tenantlessQuicBaaSService) ValidateToken(ctx context.Context, req *quicbaas.ValidateTokenRequest) (*quicbaas.ValidateTokenResponse, error) {
+	s.calls++
+	return &quicbaas.ValidateTokenResponse{Valid: true, UserID: "user-1", Roles: []string{"admin"}}, nil
 }
 
 // TestCreateMCPServer_SkipIAMValidationIsTheOnlyOptOut pins the explicit

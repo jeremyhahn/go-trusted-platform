@@ -69,6 +69,7 @@ var (
 	netlinkLinkByName  = vnl.LinkByName
 	netlinkAddrReplace = vnl.AddrReplace
 	netlinkAddrDel     = vnl.AddrDel
+	netlinkAddrList    = vnl.AddrList
 	listenARP          = func(ifi *net.Interface) (frameWriter, error) {
 		conn, err := packet.Listen(ifi, packet.Raw, unix.ETH_P_ARP, nil)
 		if err != nil {
@@ -127,6 +128,56 @@ func (p *netlinkProgrammer) DeleteAddress(iface string, prefix netip.Prefix, _ n
 		return nil
 	}
 	return err
+}
+
+// HasAddress implements AddressReader: true when iface holds an address
+// with prefix's IP and prefix length.
+func (p *netlinkProgrammer) HasAddress(iface string, prefix netip.Prefix) (bool, error) {
+	installed, err := p.AddressPrefixes(iface, prefix.Addr())
+	if err != nil {
+		return false, err
+	}
+	for _, q := range installed {
+		if q.Bits() == prefix.Bits() {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// AddressPrefixes implements PrefixReader: every prefix on iface whose
+// address is addr, whatever its length.
+func (p *netlinkProgrammer) AddressPrefixes(iface string, addr netip.Addr) ([]netip.Prefix, error) {
+	link, err := p.linkByName(iface)
+	if err != nil {
+		return nil, err
+	}
+	family := vnl.FAMILY_V6
+	if addr.Is4() {
+		family = vnl.FAMILY_V4
+	}
+	var addrs []vnl.Addr
+	if p.handle != nil {
+		addrs, err = p.handle.AddrList(link, family)
+	} else {
+		addrs, err = netlinkAddrList(link, family)
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []netip.Prefix
+	for _, a := range addrs {
+		if a.IPNet == nil {
+			continue
+		}
+		ip, ok := netip.AddrFromSlice(a.IP)
+		if !ok || ip.Unmap() != addr {
+			continue
+		}
+		ones, _ := a.Mask.Size()
+		out = append(out, netip.PrefixFrom(addr, ones))
+	}
+	return out, nil
 }
 
 // Announce implements Programmer. The raw sockets it opens live in the

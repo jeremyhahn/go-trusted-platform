@@ -28,6 +28,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -38,6 +39,7 @@ import (
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/ipc"
+	ipcv1 "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/ipc/gen"
 	gwstate "github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/state"
 )
 
@@ -91,8 +93,17 @@ func TestSupervises_OnlyTheMovedProcessIsSupervised(t *testing.T) {
 		if !def.Supervised {
 			continue
 		}
+		if def.Class == ClassKernel && def.Name == WireGuardProcess {
+			// The WireGuard plane (ruling 942) programs only its hub device:
+			// CAP_NET_ADMIN, and no inet socket.
+			assert.False(t, def.Unprivileged, "wireguard programs the kernel and cannot drop to the service account")
+			assert.Equal(t, []uintptr{unix.CAP_NET_ADMIN}, def.Capabilities)
+			assert.ElementsMatch(t, []uint32{unix.AF_UNIX, unix.AF_NETLINK}, def.AddressFamilies)
+			assert.Equal(t, []string{gateway.ServiceVPNWireGuard}, def.Services)
+			continue
+		}
 		if def.Class == ClassKernel {
-			assert.Equal(t, "datapath", def.Name, "datapath is the only kernel-class process")
+			assert.Equal(t, "datapath", def.Name, "datapath and wireguard are the only kernel-class processes")
 			assert.False(t, def.Unprivileged, "datapath programs the kernel and cannot drop to the service account")
 			assert.ElementsMatch(t, []uintptr{unix.CAP_NET_ADMIN, unix.CAP_NET_RAW}, def.Capabilities)
 			continue
@@ -173,7 +184,7 @@ func TestClassTable_OnlyTheKernelClassKeepsNetAdmin(t *testing.T) {
 		assert.NotZerof(t, def.MemoryMax, "process %q needs a memory limit", def.Name)
 		assert.NotEmptyf(t, def.CPUMax, "process %q needs a cpu limit", def.Name)
 	}
-	assert.Equal(t, 1, kernel, "exactly one process programs the kernel")
+	assert.Equal(t, 2, kernel, "two processes program the kernel: datapath and wireguard")
 }
 
 func TestClassTable_EveryProcessOpensOnlyServiceFamilies(t *testing.T) {
@@ -181,7 +192,12 @@ func TestClassTable_EveryProcessOpensOnlyServiceFamilies(t *testing.T) {
 		// A process with no families could not reach its own supervisor.
 		assert.Containsf(t, def.AddressFamilies, uint32(unix.AF_UNIX),
 			"process %q needs AF_UNIX for its IPC", def.Name)
-		for _, family := range []uint32{unix.AF_PACKET, unix.AF_ALG, unix.AF_VSOCK, unix.AF_KEY} {
+		forbidden := []uint32{unix.AF_ALG, unix.AF_VSOCK, unix.AF_KEY}
+		if def.Name != "datapath" {
+			// Only the datapath, which hosts the FHRP announcer, sends raw frames.
+			forbidden = append(forbidden, unix.AF_PACKET)
+		}
+		for _, family := range forbidden {
 			assert.NotContainsf(t, def.AddressFamilies, family,
 				"process %q opens no family %d socket", def.Name, family)
 		}
@@ -241,6 +257,9 @@ type fakeNode struct {
 	// status question mid-flight; each holds one call.
 	holdApply  *heldCall
 	holdStatus *heldCall
+	// holdStatusAfter, when positive, is how many status questions pass
+	// before holdStatus holds one.
+	holdStatusAfter int
 	// startingPolls, when positive, is how many more status replies come
 	// from a child whose Gateway.Start is still running; starting marks
 	// the reply being built as one of them.
@@ -299,8 +318,13 @@ func (f *fakeNode) GetState() gateway.GatewayState {
 
 func (f *fakeNode) ServiceReports() []gateway.ServiceReport {
 	f.mu.Lock()
-	held := f.holdStatus
-	f.holdStatus = nil
+	var held *heldCall
+	if f.holdStatusAfter > 0 {
+		f.holdStatusAfter--
+	} else {
+		held = f.holdStatus
+		f.holdStatus = nil
+	}
 	f.mu.Unlock()
 	held.hold()
 
@@ -457,6 +481,9 @@ type fakeLauncher struct {
 	// listenGate, when set, makes the next child listen only once it is
 	// closed; see deferNextListen.
 	listenGate chan struct{}
+	// startErrors, keyed by process name, is the Gateway.Start failure
+	// every child of that process launched from now on reports in Status.
+	startErrors map[string]error
 	// events is an ordered log of what the supervisor did to its children,
 	// so a test can assert the ORDER of a signal and a cancellation rather
 	// than only that both happened.
@@ -545,9 +572,18 @@ func (l *fakeLauncher) Launch(ctx context.Context, spec Spec) (Child, error) {
 	// The supervisor runs as this test process, so the policy that admits
 	// it is the one naming this uid.
 	uid := uint32(os.Getuid())
-	server := ipc.NewServer(node, ipc.Policy{ControlUIDs: []uint32{uid}, DatapathUIDs: []uint32{uid}})
+	// The wireguard child's socket is the one VPNPlaneService is admitted
+	// on, as in production.
+	server := ipc.NewServer(node, ipc.Policy{
+		ControlUIDs:  []uint32{uid},
+		DatapathUIDs: []uint32{uid},
+		VPNPlane:     spec.Definition.Name == WireGuardProcess,
+	})
 	socket := spec.Socket
 	l.mu.Lock()
+	if startErr := l.startErrors[spec.Definition.Name]; startErr != nil {
+		server.SetStartError(startErr)
+	}
 	mute := l.mute
 	l.mu.Unlock()
 	if mute {
@@ -1467,6 +1503,57 @@ func TestRestart_AChildThatNeverServesIsNotAcceptedAsLive(t *testing.T) {
 	}
 }
 
+func TestRestart_ARestartedChildWhoseServiceFailsToStartIsRestartedAgain(t *testing.T) {
+	// The vpn child itself crashes. Its restart answers the socket, but its
+	// start failed and its VPN service is inactive: the restart loop stops
+	// it and restarts it again until the service comes up.
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) { c.RestartBackoff = time.Millisecond })
+	ctx := testContext(t)
+	startDatapath(t, ctx, supervisor, launcher, "v1")
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceManagementVPN))
+	vpnChild := launcher.lastChild()
+	vpn := launcher.node("vpn", nil)
+	launcher.mu.Lock()
+	before := len(launcher.children)
+	launcher.mu.Unlock()
+
+	launcher.mu.Lock()
+	launcher.startErrors = map[string]error{"vpn": errors.New("vpn: lease projection: control plane unavailable")}
+	launcher.mu.Unlock()
+	vpn.setHealth(gateway.ServiceManagementVPN, false, nil)
+
+	vpnChild.exit(errors.New("signal: killed"))
+	require.Eventually(t, func() bool {
+		launcher.mu.Lock()
+		if len(launcher.children) <= before {
+			launcher.mu.Unlock()
+			return false
+		}
+		restarted := launcher.children[before]
+		launcher.mu.Unlock()
+		for _, sig := range restarted.signalled() {
+			if sig == os.Signal(syscall.SIGTERM) {
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, 10*time.Millisecond, "the restarted vpn child whose service failed to start is stopped")
+
+	// The control plane is back.
+	launcher.mu.Lock()
+	launcher.startErrors = nil
+	launcher.mu.Unlock()
+	vpn.setHealth(gateway.ServiceManagementVPN, true, nil)
+
+	require.Eventually(t, func() bool {
+		return supervisor.ServiceHealth(gateway.ServiceManagementVPN) == nil
+	}, 5*time.Second, 10*time.Millisecond, "the vpn child is restarted again and comes up")
+	launcher.mu.Lock()
+	launches := len(launcher.children)
+	launcher.mu.Unlock()
+	assert.GreaterOrEqual(t, launches, before+2, "the vpn child is restarted after the failed start")
+}
+
 func TestCrashedProcess_IsRestartedWithGrowingBackoff(t *testing.T) {
 	supervisor, launcher, clock := newSupervisor(t, func(c *Config) {
 		c.RestartBackoff = 100 * time.Millisecond
@@ -1577,6 +1664,303 @@ func TestCrashLoop_StopsAtTheRestartBudget(t *testing.T) {
 	assert.Equal(t, "routing", exhausted.Process)
 	assert.Contains(t, exhausted.Error(), "restart budget")
 	assert.Equal(t, 3, launcher.launchCount(), "no fourth launch after the budget is gone")
+}
+
+// recordingVPNPlanes is an ipc.VPNPlanes that records every
+// ReconcileVPNPeers request a datapath child is sent.
+type recordingVPNPlanes struct {
+	mu         sync.Mutex
+	reconciles []*ipcv1.ReconcileVPNPeersRequest
+	// refuseWireGuard refuses that many wireguard reconciliations as
+	// UNAVAILABLE before one succeeds; refused counts them.
+	refuseWireGuard int
+	refused         int
+}
+
+func (r *recordingVPNPlanes) InstallVPNPeer(context.Context, *ipcv1.InstallVPNPeerRequest) *ipcv1.InstallVPNPeerResponse {
+	return &ipcv1.InstallVPNPeerResponse{}
+}
+
+func (r *recordingVPNPlanes) RemoveVPNPeer(context.Context, *ipcv1.RemoveVPNPeerRequest) *ipcv1.RemoveVPNPeerResponse {
+	return &ipcv1.RemoveVPNPeerResponse{}
+}
+
+func (r *recordingVPNPlanes) ReconcileVPNPeers(_ context.Context, req *ipcv1.ReconcileVPNPeersRequest) *ipcv1.ReconcileVPNPeersResponse {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if req.GetDataPlane() == "wireguard" && r.refuseWireGuard > 0 {
+		r.refuseWireGuard--
+		r.refused++
+		return &ipcv1.ReconcileVPNPeersResponse{Refusal: &ipcv1.VPNPeerRefusal{
+			Class: ipcv1.VPNPeerRefusalClass_VPN_PEER_REFUSAL_CLASS_UNAVAILABLE}}
+	}
+	r.reconciles = append(r.reconciles, req)
+	return &ipcv1.ReconcileVPNPeersResponse{}
+}
+
+// withdrewAll reports whether plane was reconciled to an empty keep list.
+func (r *recordingVPNPlanes) withdrewAll(plane string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, req := range r.reconciles {
+		if req.GetDataPlane() == plane && len(req.GetLeaseIds()) == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// withdrawals counts the reconciliations of plane to an empty keep list.
+func (r *recordingVPNPlanes) withdrawals(plane string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, req := range r.reconciles {
+		if req.GetDataPlane() == plane && len(req.GetLeaseIds()) == 0 {
+			n++
+		}
+	}
+	return n
+}
+
+// blockingVPNPlanes holds the first wireguard reconciliation until its
+// context ends or release closes, then calls onReturn. A request whose
+// context ended removes nothing in the real plane, so only a live one is
+// recorded.
+type blockingVPNPlanes struct {
+	recordingVPNPlanes
+	entered  chan struct{}
+	release  chan struct{}
+	once     sync.Once
+	mu       sync.Mutex
+	onReturn func()
+}
+
+func (b *blockingVPNPlanes) ReconcileVPNPeers(ctx context.Context, req *ipcv1.ReconcileVPNPeersRequest) *ipcv1.ReconcileVPNPeersResponse {
+	first := false
+	if req.GetDataPlane() == "wireguard" {
+		b.once.Do(func() { first = true })
+	}
+	if !first {
+		return b.recordingVPNPlanes.ReconcileVPNPeers(ctx, req)
+	}
+	close(b.entered)
+	select {
+	case <-ctx.Done():
+	case <-b.release:
+	}
+	b.mu.Lock()
+	onReturn := b.onReturn
+	b.mu.Unlock()
+	if onReturn != nil {
+		onReturn()
+	}
+	if ctx.Err() != nil {
+		return &ipcv1.ReconcileVPNPeersResponse{}
+	}
+	return b.recordingVPNPlanes.ReconcileVPNPeers(ctx, req)
+}
+
+func TestSupervisor_ReplacementReplayWaitsForTheWithdrawalHandler(t *testing.T) {
+	// The given-up vpn child's withdrawal may still be in flight when a
+	// replacement is started. The replacement restores its peers into the
+	// datapath, so the server-side withdrawal handler must have returned
+	// before it launches: a cancelled client call is no fence, because the
+	// handler goes on and would remove the restored peers with its old,
+	// empty keep list.
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
+		c.RestartBackoff = time.Millisecond
+		c.RestartBudget = 1
+	})
+	ctx := testContext(t)
+	startWireGuard(t, ctx, supervisor, launcher)
+	planes := &blockingVPNPlanes{entered: make(chan struct{}), release: make(chan struct{})}
+	launcher.lastChild().server.SetVPNPlanes(planes)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceManagementVPN))
+
+	vpnChild := launcher.lastChild()
+	vpnChild.exit(errors.New("signal: killed"))
+	vpnChild = awaitRelaunch(t, supervisor, launcher, "vpn", 3)
+	vpnChild.exit(errors.New("signal: killed"))
+
+	var exhausted *ErrRestartBudgetExhausted
+	require.Eventually(t, func() bool {
+		return errors.As(supervisor.ServiceHealth(gateway.ServiceManagementVPN), &exhausted)
+	}, 20*time.Second, 10*time.Millisecond, "the supervisor gives up on the vpn child")
+	select {
+	case <-planes.entered:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the withdrawal never reached the datapath")
+	}
+
+	before := launcher.launchCount()
+	var (
+		countMu  sync.Mutex
+		atReturn int
+		returned bool
+	)
+	planes.mu.Lock()
+	planes.onReturn = func() {
+		countMu.Lock()
+		defer countMu.Unlock()
+		atReturn, returned = launcher.launchCount(), true
+	}
+	planes.mu.Unlock()
+
+	started := make(chan error, 1)
+	go func() { started <- supervisor.StartService(ctx, gateway.ServiceManagementVPN) }()
+	select {
+	case err := <-started:
+		close(planes.release)
+		t.Fatalf("the replacement launch did not wait for the withdrawal handler: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	assert.Equal(t, before, launcher.launchCount(), "nothing launched while the withdrawal handler runs")
+
+	close(planes.release)
+	select {
+	case err := <-started:
+		require.NoError(t, err, "the replacement launches once the withdrawal handler has returned")
+	case <-time.After(20 * time.Second):
+		t.Fatal("the replacement launch never followed the withdrawal")
+	}
+
+	countMu.Lock()
+	assert.True(t, returned, "the withdrawal handler returned")
+	assert.Equal(t, before, atReturn, "the withdrawal handler returned before the replacement launched")
+	countMu.Unlock()
+	assert.Equal(t, before+1, launcher.launchCount(), "the replacement launched once")
+	withdrawn := planes.withdrawals("wireguard")
+	assert.Equal(t, 1, withdrawn, "the given-up child's peers were withdrawn once")
+	assert.Never(t, func() bool { return planes.withdrawals("wireguard") != withdrawn },
+		300*time.Millisecond, 10*time.Millisecond, "no withdrawal removed the replacement's restored peers")
+}
+
+func TestCrashLoop_AnExhaustedVPNWithdrawsTheWireGuardPlanePeers(t *testing.T) {
+	// Only the vpn child expires leases, but its peers live in the planes
+	// the wireguard child hosts. When the supervisor gives up on the vpn
+	// child, no expiry authority is left, so it withdraws every hosted
+	// peer rather than leave them open with no expiry.
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
+		c.RestartBackoff = time.Millisecond
+		c.RestartBudget = 1
+	})
+	ctx := testContext(t)
+	startWireGuard(t, ctx, supervisor, launcher)
+	rec := &recordingVPNPlanes{}
+	launcher.lastChild().server.SetVPNPlanes(rec)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceManagementVPN))
+
+	vpnChild := launcher.lastChild()
+	vpnChild.exit(errors.New("signal: killed"))
+	vpnChild = awaitRelaunch(t, supervisor, launcher, "vpn", 3)
+	assert.False(t, rec.withdrewAll("wireguard"), "a vpn child still within its budget keeps its peers")
+	vpnChild.exit(errors.New("signal: killed"))
+
+	var exhausted *ErrRestartBudgetExhausted
+	require.Eventually(t, func() bool {
+		return errors.As(supervisor.ServiceHealth(gateway.ServiceManagementVPN), &exhausted)
+	}, 20*time.Second, 10*time.Millisecond, "the supervisor gives up on the vpn child")
+	require.Eventually(t, func() bool { return rec.withdrewAll("wireguard") },
+		20*time.Second, 10*time.Millisecond, "every wireguard peer is withdrawn from the datapath")
+	require.Eventually(t, func() bool { return rec.withdrewAll("masque") },
+		20*time.Second, 10*time.Millisecond, "and every masque peer")
+	require.NoError(t, supervisor.ServiceHealth(gateway.ServiceVPNWireGuard), "the wireguard process itself stays up")
+}
+
+func TestCrashLoop_AReplacementClaimedBeforeTheGiveUpGetsNoWithdrawal(t *testing.T) {
+	// A replacement launch claimed before the give-up decision restores
+	// its own peers: the given-up loop must register no withdrawal and
+	// remove nothing.
+	supervisor, launcher, clock := newSupervisor(t, func(c *Config) {
+		c.RestartBackoff = time.Millisecond
+		c.RestartBudget = 1
+	})
+	ctx := testContext(t)
+	startWireGuard(t, ctx, supervisor, launcher)
+	rec := &recordingVPNPlanes{}
+	launcher.lastChild().server.SetVPNPlanes(rec)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceManagementVPN))
+
+	supervisor.mu.Lock()
+	proc := supervisor.processes["vpn"]
+	proc.launching = true
+	proc.restarts = []time.Time{clock.Now()}
+	supervisor.mu.Unlock()
+
+	failure := errors.New("signal: killed")
+	supervisor.restartLoop(ctx, proc, proc.launchGen, failure, failure)
+
+	assert.False(t, rec.withdrewAll("wireguard"), "the claimed replacement's peers are not withdrawn")
+	assert.False(t, rec.withdrewAll("masque"), "nor its masque peers")
+	supervisor.mu.Lock()
+	assert.Nil(t, proc.withdrawal, "no withdrawal is registered behind a claimed replacement")
+	proc.launching = false
+	supervisor.mu.Unlock()
+}
+
+func TestCrashLoop_TheGiveUpRegistersItsWithdrawalUnderTheSameLock(t *testing.T) {
+	// The withdrawal is published in the critical section that decides the
+	// give-up, so a claimant that takes the lock afterwards always sees it.
+	supervisor, _, clock := newSupervisor(t, func(c *Config) {
+		c.RestartBackoff = time.Millisecond
+		c.RestartBudget = 1
+	})
+	ctx := testContext(t)
+
+	def, err := DefinitionForService(gateway.ServiceManagementVPN)
+	require.NoError(t, err)
+	require.Equal(t, WireGuardProcess, def.Follows)
+	proc := &supervised{def: def, wanted: map[string]bool{}, socket: supervisor.socketPath(def.Name)}
+	proc.restarts = []time.Time{clock.Now()}
+	supervisor.mu.Lock()
+	supervisor.processes[def.Name] = proc
+	supervisor.mu.Unlock()
+
+	failure := errors.New("signal: killed")
+	_, over, w := supervisor.noteRestart(ctx, proc, proc.launchGen, failure, failure)
+	require.True(t, over, "the budget is exhausted")
+	require.NotNil(t, w, "an unclaimed follower gets a withdrawal")
+	supervisor.mu.Lock()
+	assert.Same(t, w, proc.withdrawal, "registered before noteRestart returns")
+	supervisor.mu.Unlock()
+	w.cancel()
+}
+
+func TestCrashLoop_AFailedPeerWithdrawalIsRetriedUntilConfirmed(t *testing.T) {
+	// A withdrawal the datapath refuses leaves the peers installed with no
+	// expiry authority, so the supervisor keeps retrying until the datapath
+	// confirms it: a failure followed by recovery ends withdrawn.
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
+		c.RestartBackoff = time.Millisecond
+		c.RestartBudget = 1
+	})
+	ctx := testContext(t)
+	startWireGuard(t, ctx, supervisor, launcher)
+	rec := &recordingVPNPlanes{}
+	launcher.lastChild().server.SetVPNPlanes(rec)
+	rec.mu.Lock()
+	rec.refuseWireGuard = 2
+	rec.mu.Unlock()
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceManagementVPN))
+
+	vpnChild := launcher.lastChild()
+	vpnChild.exit(errors.New("signal: killed"))
+	vpnChild = awaitRelaunch(t, supervisor, launcher, "vpn", 3)
+	vpnChild.exit(errors.New("signal: killed"))
+
+	var exhausted *ErrRestartBudgetExhausted
+	require.Eventually(t, func() bool {
+		return errors.As(supervisor.ServiceHealth(gateway.ServiceManagementVPN), &exhausted)
+	}, 20*time.Second, 10*time.Millisecond, "the supervisor gives up on the vpn child")
+	require.Eventually(t, func() bool { return rec.withdrewAll("wireguard") },
+		20*time.Second, 10*time.Millisecond, "the refused wireguard withdrawal is retried until confirmed")
+	require.Eventually(t, func() bool { return rec.withdrewAll("masque") },
+		20*time.Second, 10*time.Millisecond, "and every masque peer is withdrawn")
+
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	assert.Equal(t, 2, rec.refused, "both refusals were met before the withdrawal was confirmed")
 }
 
 // watchdogClock is a testClock that holds every wait of the watchdog
@@ -1885,6 +2269,11 @@ func TestWatchdog_ConfigGivesProductionChildrenAnInterval(t *testing.T) {
 	env := launchEnv([]string{"PATH=/usr/bin"}, spec)
 	assert.Contains(t, env, WatchdogUsecEnv+"=7000000")
 	for _, def := range Definitions() {
+		if def.Name == WireGuardProcess {
+			// The one row that sets its own interval (ruling 942).
+			assert.Equal(t, 10*time.Second, def.WatchdogInterval, "wireguard: the package definitions are not mutated")
+			continue
+		}
 		assert.Zero(t, def.WatchdogInterval, "%s: the package definitions are not mutated", def.Name)
 	}
 }
@@ -2447,6 +2836,181 @@ func TestApply_TheVPNChildIsGivenTheDocumentAtStartAndOnEveryApply(t *testing.T)
 	assert.Equal(t, []string{"v1", "v2"}, datapath.appliedVersions())
 }
 
+func TestSupervisor_WireGuardCrashRelaunchesVPNFollower(t *testing.T) {
+	// The VPN's WireGuard peers live in the plane the wireguard child
+	// hosts, so its crash takes them with it. The vpn child reinstalls its
+	// stored leases (Restore) only when it starts, so the supervisor
+	// relaunches it after the wireguard child, and it is reported up only
+	// once that start is done.
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) { c.RestartBackoff = time.Millisecond })
+	ctx := testContext(t)
+	startDatapath(t, ctx, supervisor, launcher, "v1")
+	wgChild := startWireGuard(t, ctx, supervisor, launcher)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceManagementVPN))
+	vpnChild := launcher.lastChild()
+	vpn := launcher.node("vpn", nil)
+
+	wgChild.exit(errors.New("signal: killed"))
+	awaitRelaunch(t, supervisor, launcher, WireGuardProcess, 4)
+	awaitRelaunch(t, supervisor, launcher, "vpn", 5)
+
+	assert.Contains(t, vpnChild.signalled(), os.Signal(syscall.SIGTERM),
+		"the vpn child whose peers went with the wireguard child is stopped")
+	assert.Equal(t, []string{"v1", "v1"}, vpn.appliedVersions(),
+		"the relaunched vpn child is given the document before it is reported up")
+	require.NoError(t, supervisor.ServiceHealth(gateway.ServiceManagementVPN))
+	require.NoError(t, supervisor.ServiceHealth(gateway.ServiceVPNWireGuard))
+	require.NoError(t, supervisor.ServiceHealth(gateway.ServiceNAT))
+}
+
+func TestRelaunch_AVPNRelaunchWhoseServiceFailsToStartIsRetried(t *testing.T) {
+	// The vpn child relaunched after a wireguard crash answers its socket,
+	// but its start failed (it could not fetch its lease projection during
+	// a control-plane outage) and its VPN service is inactive. That is not
+	// a recovery: the supervisor stops it and relaunches it again, and the
+	// VPN comes up once the dependency is back.
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) { c.RestartBackoff = time.Millisecond })
+	ctx := testContext(t)
+	startDatapath(t, ctx, supervisor, launcher, "v1")
+	wgChild := startWireGuard(t, ctx, supervisor, launcher)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceManagementVPN))
+	vpn := launcher.node("vpn", nil)
+
+	launcher.mu.Lock()
+	launcher.startErrors = map[string]error{"vpn": errors.New("vpn: lease projection: control plane unavailable")}
+	launcher.mu.Unlock()
+	vpn.setHealth(gateway.ServiceManagementVPN, false, nil)
+
+	wgChild.exit(errors.New("signal: killed"))
+	awaitRelaunch(t, supervisor, launcher, WireGuardProcess, 4)
+	require.Eventually(t, func() bool {
+		launcher.mu.Lock()
+		if len(launcher.children) < 5 {
+			launcher.mu.Unlock()
+			return false
+		}
+		relaunched := launcher.children[4]
+		launcher.mu.Unlock()
+		for _, sig := range relaunched.signalled() {
+			if sig == os.Signal(syscall.SIGTERM) {
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, 10*time.Millisecond, "the relaunched vpn child whose service failed to start is stopped")
+
+	// The control plane is back.
+	launcher.mu.Lock()
+	launcher.startErrors = nil
+	launcher.mu.Unlock()
+	vpn.setHealth(gateway.ServiceManagementVPN, true, nil)
+
+	// The stopped child shares the fake's vpn node, so until it is reaped
+	// its client can read the healthy status set above. Health alone is not
+	// the verdict: the sixth launch has to be there too.
+	launches := 0
+	require.Eventually(t, func() bool {
+		launcher.mu.Lock()
+		launches = len(launcher.children)
+		launcher.mu.Unlock()
+		return launches >= 6 && supervisor.ServiceHealth(gateway.ServiceManagementVPN) == nil
+	}, 5*time.Second, 10*time.Millisecond, "the vpn child is relaunched again and comes up")
+	assert.GreaterOrEqual(t, launches, 6, "the vpn child is relaunched after the failed start")
+}
+
+func TestRelaunch_AWireGuardCrashDuringTheVPNRelaunchRelaunchesTheVPNAgain(t *testing.T) {
+	// The wireguard child crashes again while the vpn child it caused to
+	// relaunch is still starting: that start may already have restored its
+	// leases into the plane that is gone. The vpn child is relaunched once
+	// more after its start completes, so its leases reach the fresh hub.
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) { c.RestartBackoff = time.Millisecond })
+	ctx := testContext(t)
+	startDatapath(t, ctx, supervisor, launcher, "v1")
+	wgChild := startWireGuard(t, ctx, supervisor, launcher)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceManagementVPN))
+	vpn := launcher.node("vpn", nil)
+
+	// Hold the relaunched vpn child's start mid-flight: its readiness
+	// answer, which a real vpn child gives once its Restore is done.
+	restore := newHeldCall()
+	vpn.mu.Lock()
+	vpn.holdStatus = restore
+	vpn.mu.Unlock()
+	wgChild.exit(errors.New("signal: killed"))
+	secondWG := awaitRelaunch(t, supervisor, launcher, WireGuardProcess, 4)
+	restore.awaitEntered(t, ctx)
+
+	// The fresh wireguard child crashes while that vpn start is held.
+	secondWG.exit(errors.New("signal: killed"))
+	awaitRelaunch(t, supervisor, launcher, WireGuardProcess, 6)
+	close(restore.release)
+
+	awaitRelaunch(t, supervisor, launcher, "vpn", 7)
+	require.Eventually(t, func() bool {
+		return supervisor.ServiceHealth(gateway.ServiceManagementVPN) == nil
+	}, 5*time.Second, 10*time.Millisecond, "the vpn child is reported up after its second relaunch")
+	assert.Equal(t, []string{"v1", "v1", "v1"}, vpn.appliedVersions(),
+		"each vpn start restores the document, the last one into the third wireguard child")
+}
+
+func TestRelaunch_DesiredApplyDuringAwaitWantedStillReady(t *testing.T) {
+	// A document applied while a relaunched vpn child is past its restore,
+	// waiting for its service, marks it restoring again; the forward that
+	// child answers is what clears that, so its readiness is still read and
+	// it comes up without being stopped and launched once more.
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) { c.RestartBackoff = time.Millisecond })
+	ctx := testContext(t)
+	startDatapath(t, ctx, supervisor, launcher, "v1")
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceManagementVPN))
+	vpn := launcher.node("vpn", nil)
+	vpnChild := launcher.lastChild()
+
+	// The relaunched child answers (awaitProcess, the first status
+	// question) with its service not yet active; hold the second one, the
+	// relaunch's wait for that service.
+	waiting := newHeldCall()
+	vpn.mu.Lock()
+	vpn.holdStatusAfter = 1
+	vpn.holdStatus = waiting
+	vpn.mu.Unlock()
+	vpn.setHealth(gateway.ServiceManagementVPN, false, nil)
+	vpnChild.exit(errors.New("signal: killed"))
+	waiting.awaitEntered(t, ctx)
+
+	// The next status question is held too, so the service comes up only
+	// after the held one has read it inactive.
+	next := newHeldCall()
+	vpn.mu.Lock()
+	vpn.holdStatus = next
+	vpn.mu.Unlock()
+	_, err := supervisor.Apply(ctx, &gwstate.DesiredConfig{GatewayID: "gw", Version: "v2"})
+	require.NoError(t, err)
+	close(waiting.release)
+
+	next.awaitEntered(t, ctx)
+	vpn.setHealth(gateway.ServiceManagementVPN, true, nil)
+	close(next.release)
+
+	relaunched := awaitRelaunch(t, supervisor, launcher, "vpn", 3)
+	require.NoError(t, supervisor.ServiceHealth(gateway.ServiceManagementVPN))
+	launcher.mu.Lock()
+	launches := len(launcher.children)
+	launcher.mu.Unlock()
+	assert.Equal(t, 3, launches, "the vpn child is not launched again")
+	assert.NotContains(t, relaunched.signalled(), os.Signal(syscall.SIGTERM),
+		"the relaunched vpn child is not stopped")
+}
+
+func TestClassTable_OnlyTheVPNFollowsTheWireGuardProcess(t *testing.T) {
+	for _, def := range Definitions() {
+		want := ""
+		if def.Name == "vpn" {
+			want = WireGuardProcess
+		}
+		assert.Equalf(t, want, def.Follows, "process %q", def.Name)
+	}
+}
+
 func TestApply_AVPNChildFailureIsJoinedToTheDatapathState(t *testing.T) {
 	supervisor, launcher, _ := newSupervisor(t, nil)
 	ctx := testContext(t)
@@ -2670,6 +3234,306 @@ func startDatapath(t *testing.T, ctx context.Context, supervisor *Supervisor, la
 		require.NoError(t, err)
 	}
 	return launcher.node("datapath", nil)
+}
+
+// startWireGuard starts the `wireguard` process, the VPN plane host the vpn
+// row follows (ruling 942), and returns its child.
+func startWireGuard(t *testing.T, ctx context.Context, supervisor *Supervisor, launcher *fakeLauncher) *fakeChild {
+	t.Helper()
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceVPNWireGuard))
+	child := launcher.lastChild()
+	supervisor.mu.Lock()
+	defer supervisor.mu.Unlock()
+	require.Same(t, Child(child), supervisor.processes[WireGuardProcess].child, "the last launch is the wireguard child")
+	return child
+}
+
+// exitHookRecorder is a Config.OnChildExit that records each call, the
+// launch count at the call, and fails its first failures calls.
+type exitHookRecorder struct {
+	mu       sync.Mutex
+	launcher *fakeLauncher
+	failures int
+	calls    []string
+	launches []int
+}
+
+func (r *exitHookRecorder) hook(_ context.Context, def Definition) error {
+	launches := r.launcher.launchCount()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, def.Name)
+	r.launches = append(r.launches, launches)
+	if r.failures > 0 {
+		r.failures--
+		return errors.New("wireguard hub: device busy")
+	}
+	return nil
+}
+
+func (r *exitHookRecorder) callCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.calls)
+}
+
+func newHookedSupervisor(t *testing.T, failures int, tune func(*Config)) (*Supervisor, *fakeLauncher, *exitHookRecorder) {
+	t.Helper()
+	rec := &exitHookRecorder{failures: failures}
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
+		c.RestartBackoff = time.Millisecond
+		c.OnChildExit = rec.hook
+		if tune != nil {
+			tune(c)
+		}
+	})
+	rec.launcher = launcher
+	return supervisor, launcher, rec
+}
+
+func TestSupervisor_OnChildExitRunsAfterACrashBeforeRelaunch(t *testing.T) {
+	// B2 wires the hook to the stale WireGuard hub removal: it must run
+	// after the crashed child is reaped and before its replacement execs.
+	supervisor, launcher, rec := newHookedSupervisor(t, 0, nil)
+	ctx := testContext(t)
+	child := startWireGuard(t, ctx, supervisor, launcher)
+
+	child.exit(errors.New("signal: killed"))
+	awaitRelaunch(t, supervisor, launcher, WireGuardProcess, 2)
+
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	assert.Equal(t, []string{WireGuardProcess}, rec.calls, "the hook runs once for the crash")
+	assert.Equal(t, []int{1}, rec.launches, "the hook runs before the relaunch")
+}
+
+func TestSupervisor_OnChildExitFailureIsRetriedEachBackoff(t *testing.T) {
+	// A failed hook is reported in health and retried on each backoff
+	// tick; here the relaunch fails twice too, so three ticks pass.
+	supervisor, launcher, rec := newHookedSupervisor(t, 3, func(c *Config) { c.RestartBudget = 10 })
+	ctx := testContext(t)
+	child := startWireGuard(t, ctx, supervisor, launcher)
+
+	var sawInHealth atomic.Bool
+	launcher.mu.Lock()
+	launcher.failWith = errors.New("fork/exec: resource temporarily unavailable")
+	launcher.failCount = 2
+	launcher.mu.Unlock()
+	health := func() {
+		var hookErr *ErrExitHook
+		if errors.As(supervisor.ServiceHealth(gateway.ServiceVPNWireGuard), &hookErr) {
+			sawInHealth.Store(true)
+		}
+	}
+
+	child.exit(errors.New("signal: killed"))
+	require.Eventually(t, func() bool {
+		health()
+		return rec.callCount() >= 4
+	}, 20*time.Second, time.Millisecond, "the failed hook is called again on each backoff tick")
+	require.Eventually(t, func() bool {
+		return supervisor.ServiceHealth(gateway.ServiceVPNWireGuard) == nil
+	}, 20*time.Second, 10*time.Millisecond, "the process comes back once the hook and the launch succeed")
+
+	assert.Equal(t, 4, rec.callCount(), "the crash, then one retry per tick until the hook succeeds")
+	assert.True(t, sawInHealth.Load(), "the hook failure is reported in the process's health")
+}
+
+func TestSupervisor_OnChildExitNeverRunsOverAReplacement(t *testing.T) {
+	// The hook fails after the crash, so restartLoop would retry it on
+	// its next backoff tick. A replacement started during that backoff
+	// owns the process now: the retried hook, the stale hub removal in
+	// B2, must not tear down the replacement's device and peers.
+	const backoff = 7 * time.Second
+	rec := &exitHookRecorder{failures: 1}
+	supervisor, launcher, clock := newSupervisor(t, func(c *Config) {
+		c.RestartBackoff = backoff
+		c.RestartBudget = 10
+		c.OnChildExit = rec.hook
+	})
+	rec.launcher = launcher
+	ctx := testContext(t)
+	child := startWireGuard(t, ctx, supervisor, launcher)
+
+	held := clock.holdDelay(backoff)
+	child.exit(errors.New("signal: killed"))
+	held.awaitEntered(t, ctx)
+	require.Equal(t, 1, rec.callCount(), "the hook ran once for the crash")
+	var hookErr *ErrExitHook
+	require.ErrorAs(t, supervisor.ServiceHealth(gateway.ServiceVPNWireGuard), &hookErr, "the hook failure is pending")
+
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceVPNWireGuard), "a replacement starts during the backoff")
+	replacement := launcher.lastChild()
+	require.Equal(t, 2, launcher.launchCount())
+
+	close(held.release)
+	assert.Never(t, func() bool { return rec.callCount() != 1 || launcher.launchCount() != 2 },
+		300*time.Millisecond, 10*time.Millisecond, "the backoff tick neither runs the hook nor relaunches over the replacement")
+	supervisor.mu.Lock()
+	assert.Same(t, Child(replacement), supervisor.processes[WireGuardProcess].child, "the replacement is still the process's child")
+	supervisor.mu.Unlock()
+	assert.NoError(t, supervisor.ServiceHealth(gateway.ServiceVPNWireGuard), "the replacement cleared the stale hook failure")
+}
+
+func TestSupervisor_LaunchWaitsForAnExitHookInFlight(t *testing.T) {
+	// A launch claimed while the hook is cleaning up after the exited
+	// child waits for it: the cleanup never runs over the launch.
+	hook := newHeldCall()
+	var calls atomic.Int32
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
+		c.RestartBackoff = time.Millisecond
+		c.OnChildExit = func(context.Context, Definition) error {
+			if calls.Add(1) == 1 {
+				hook.hold()
+			}
+			return nil
+		}
+	})
+	ctx := testContext(t)
+	child := startWireGuard(t, ctx, supervisor, launcher)
+
+	child.exit(errors.New("signal: killed"))
+	hook.awaitEntered(t, ctx)
+
+	started := make(chan error, 1)
+	go func() { started <- supervisor.StartService(ctx, gateway.ServiceVPNWireGuard) }()
+	select {
+	case err := <-started:
+		close(hook.release)
+		t.Fatalf("StartService did not wait for the exit hook: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	assert.Equal(t, 1, launcher.launchCount(), "nothing launched while the hook runs")
+
+	close(hook.release)
+	select {
+	case err := <-started:
+		require.NoError(t, err)
+	case <-time.After(20 * time.Second):
+		t.Fatal("StartService never followed the exit hook")
+	}
+	assert.Never(t, func() bool { return launcher.launchCount() != 2 },
+		300*time.Millisecond, 10*time.Millisecond, "one replacement, from whichever claim came first")
+	assert.Equal(t, int32(1), calls.Load(), "the hook ran once, for the exited child only")
+}
+
+func TestSupervisor_OnChildExitNotCalledOnOperatorStop(t *testing.T) {
+	supervisor, launcher, rec := newHookedSupervisor(t, 0, nil)
+	ctx := testContext(t)
+	startWireGuard(t, ctx, supervisor, launcher)
+
+	require.NoError(t, supervisor.StopService(ctx, gateway.ServiceVPNWireGuard))
+	assert.Never(t, func() bool { return rec.callCount() > 0 },
+		200*time.Millisecond, 10*time.Millisecond, "an operator stop is not an unrequested exit")
+}
+
+func TestSupervisor_OnChildExitRetriedPastTheRestartBudget(t *testing.T) {
+	// WireGuard has no Follows value, so no withdrawal covers a given-up
+	// child: a failed hub cleanup on the crash that exhausts the budget
+	// must still be retried until it succeeds, and stay in health until it
+	// does (#2029 Codex r1).
+	supervisor, launcher, rec := newHookedSupervisor(t, 0, func(c *Config) { c.RestartBudget = 1 })
+	ctx := testContext(t)
+	child := startWireGuard(t, ctx, supervisor, launcher)
+
+	child.exit(errors.New("signal: killed"))
+	child = awaitRelaunch(t, supervisor, launcher, WireGuardProcess, 2)
+	require.Equal(t, 1, rec.callCount(), "the first crash's hook succeeded")
+
+	rec.mu.Lock()
+	rec.failures = 3
+	rec.mu.Unlock()
+	var sawInHealth atomic.Bool
+	child.exit(errors.New("signal: killed"))
+	require.Eventually(t, func() bool {
+		var hookErr *ErrExitHook
+		if errors.As(supervisor.ServiceHealth(gateway.ServiceVPNWireGuard), &hookErr) {
+			sawInHealth.Store(true)
+		}
+		return rec.callCount() >= 5
+	}, 5*time.Second, time.Millisecond, "the failed hook is retried after the budget is exhausted")
+
+	assert.True(t, sawInHealth.Load(), "the cleanup failure is reported in health while it lasts")
+	require.Eventually(t, func() bool {
+		var hookErr *ErrExitHook
+		var budget *ErrRestartBudgetExhausted
+		health := supervisor.ServiceHealth(gateway.ServiceVPNWireGuard)
+		return errors.As(health, &budget) && !errors.As(health, &hookErr)
+	}, 5*time.Second, 10*time.Millisecond, "a successful retry clears the cleanup failure, the give-up stays")
+	assert.Never(t, func() bool { return rec.callCount() > 5 },
+		100*time.Millisecond, 10*time.Millisecond, "a succeeded cleanup is not retried")
+	assert.Equal(t, 2, launcher.launchCount(), "a given-up process is not relaunched")
+}
+
+func TestSupervisor_OnChildExitFencesReplacementLaunch(t *testing.T) {
+	// A replacement started while the exit hook runs must not exec until
+	// the hook returns: the hook removes vpn-hub0, and the replacement's
+	// hub would be the one removed (#2029 Codex r1).
+	release := make(chan struct{})
+	var mu sync.Mutex
+	var seen []int
+	var launcher *fakeLauncher
+	supervisor, l, _ := newSupervisor(t, func(c *Config) {
+		c.RestartBackoff = time.Millisecond
+		c.OnChildExit = func(context.Context, Definition) error {
+			n := launcher.launchCount()
+			mu.Lock()
+			first := len(seen) == 0
+			seen = append(seen, n)
+			mu.Unlock()
+			if first {
+				<-release
+			}
+			return nil
+		}
+	})
+	launcher = l
+	ctx := testContext(t)
+	child := startWireGuard(t, ctx, supervisor, launcher)
+
+	child.exit(errors.New("signal: killed"))
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(seen) == 1
+	}, 5*time.Second, time.Millisecond, "the hook runs for the crash")
+
+	started := make(chan error, 1)
+	go func() { started <- supervisor.StartService(ctx, gateway.ServiceVPNWireGuard) }()
+	assert.Never(t, func() bool { return launcher.launchCount() > 1 },
+		200*time.Millisecond, 10*time.Millisecond, "no replacement execs while the hook runs")
+
+	close(release)
+	select {
+	case err := <-started:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("StartService did not return after the hook")
+	}
+	awaitRelaunch(t, supervisor, launcher, WireGuardProcess, 2)
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []int{1}, seen, "the hook never sees the replacement's child")
+}
+
+func TestSupervisor_DatapathCrashDoesNotRelaunchVPN(t *testing.T) {
+	// The vpn child's peers live in the wireguard process's plane (ruling
+	// 942), so a datapath crash leaves it running.
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) { c.RestartBackoff = time.Millisecond })
+	ctx := testContext(t)
+	startDatapath(t, ctx, supervisor, launcher, "v1")
+	datapathChild := launcher.lastChild()
+	startWireGuard(t, ctx, supervisor, launcher)
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceManagementVPN))
+	vpnChild := launcher.lastChild()
+
+	datapathChild.exit(errors.New("signal: killed"))
+	awaitRelaunch(t, supervisor, launcher, "datapath", 4)
+	assert.Never(t, func() bool { return launcher.launchCount() > 4 },
+		300*time.Millisecond, 10*time.Millisecond, "nothing but the datapath is relaunched")
+	assert.NotContains(t, vpnChild.signalled(), os.Signal(syscall.SIGTERM), "the vpn child is left running")
+	require.NoError(t, supervisor.ServiceHealth(gateway.ServiceManagementVPN))
 }
 
 func TestRelaunch_ReappliesTheLastDesiredDocument(t *testing.T) {

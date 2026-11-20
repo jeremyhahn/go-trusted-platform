@@ -41,11 +41,14 @@ func gratuitousARPFrame(hw net.HardwareAddr, addr netip.Addr) ([]byte, error) {
 }
 
 // neighborAdvertisementBody builds the ICMPv6 body of an unsolicited
-// neighbour advertisement (RFC 4861 §4.4): flags R=0 S=0 O=1, the target
+// neighbour advertisement (RFC 4861 §4.4): flags R=1 S=0 O=1, the target
 // address, and a target link-layer address option carrying hw.
 func neighborAdvertisementBody(addr netip.Addr, hw net.HardwareAddr) []byte {
 	body := make([]byte, 4+16+8)
-	binary.BigEndian.PutUint32(body[0:4], 0x20000000)
+	// Router=1, Solicited=0, Override=1: the virtual address is a
+	// router, and a clear R flag would drop it from a client's Default
+	// Router List (RFC 4861 section 7.2.5).
+	binary.BigEndian.PutUint32(body[0:4], 0xA0000000)
 	copy(body[4:20], addr.AsSlice())
 	body[20], body[21] = 2, 1
 	copy(body[22:28], hw)

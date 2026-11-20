@@ -77,11 +77,6 @@ func NewRegistryWithConfig(config *RegistryConfig) (*Registry, error) {
 		return nil, err
 	}
 
-	roleDAO, err := config.DAOFactory.RoleDAO()
-	if err != nil {
-		return nil, err
-	}
-
 	userDAO, err := config.DAOFactory.UserDAO()
 	if err != nil {
 		return nil, err
@@ -95,7 +90,6 @@ func NewRegistryWithConfig(config *RegistryConfig) (*Registry, error) {
 	userService := NewUserService(
 		config.Logger,
 		userDAO,
-		roleDAO,
 		nil)
 
 	registrationService := NewRegistrationService(config.Logger, regDAO)

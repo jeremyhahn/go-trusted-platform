@@ -155,6 +155,7 @@ func newRESTServerWithS6(t *testing.T) *RESTServer {
 	require.NoError(t, s.SetClusterService(cluster, guard))
 	require.NoError(t, s.SetOverlayHandlers(newOverlayControllerRESTAdapter(&stubOverlayController{}), guard))
 	require.NoError(t, s.SetGatewayIPAMService(nil, nil, guard))
+	require.NoError(t, s.SetServiceControlHandlers(guard))
 	return s
 }
 
@@ -186,6 +187,15 @@ func TestS6REST_EveryRouteNeedsItsCatalogScope(t *testing.T) {
 	}
 }
 
+// serviceControlRoutes are the routes SetServiceControlHandlers mounts.
+var serviceControlRoutes = []string{
+	"GET /api/v1/services",
+	"GET /api/v1/services/{service}",
+	"POST /api/v1/services/{service}/start",
+	"POST /api/v1/services/{service}/stop",
+	"POST /api/v1/services/{service}/restart",
+}
+
 // TestCatalogRouteRPCs_CoverEveryMountedRoute walks the router the three
 // setters build: every mounted route has a catalog entry with a scope, and
 // the map names no route that is not mounted.
@@ -206,7 +216,7 @@ func TestCatalogRouteRPCs_CoverEveryMountedRoute(t *testing.T) {
 	sort.Strings(mounted)
 	sort.Strings(mapped)
 	assert.Equal(t, mapped, mounted)
-	assert.Len(t, mounted, len(s6RouteScopes)+len(s9RouteScopes))
+	assert.Len(t, mounted, len(s6RouteScopes)+len(s9RouteScopes)+len(serviceControlRoutes))
 }
 
 func TestCatalogRouteScope(t *testing.T) {

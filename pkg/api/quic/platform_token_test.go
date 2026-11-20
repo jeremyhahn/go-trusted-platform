@@ -285,26 +285,27 @@ func TestQUICAuthenticateRequest_NoValidator(t *testing.T) {
 	}
 }
 
-func TestQUICAuthorizeRequest_NoChecker_LegacyAllows(t *testing.T) {
-	// Legacy path with no AuthorizationChecker and no AuthorizedContext: allow.
+func TestQUICAuthorizeRequest_NoChecker_LegacyDenies(t *testing.T) {
+	// Legacy path with no AuthorizationChecker and no AuthorizedContext: no
+	// decision point, so the request is refused (#1988).
 	mw := NewAuthMiddleware(WithQUICTokenValidator(&legacyValidator{valid: true}), WithQUICRequireAuth(true))
 	req := &quicwire.Request{Opcode: quicwire.OpDNSAddRecord, Token: "tok"}
 	ctx, resp := mw.AuthenticateRequest(context.Background(), req)
 	if resp != nil {
 		t.Fatalf("authenticate failed: %s", resp.Payload)
 	}
-	if resp := mw.AuthorizeRequest(ctx, "dns", "write"); resp != nil {
-		t.Fatalf("no checker should allow, got status=%d", resp.Status)
+	if resp := mw.AuthorizeRequest(ctx, "dns", "write"); resp == nil || resp.Status != quicwire.StatusPermissionDenied {
+		t.Fatalf("no checker should deny, got %+v", resp)
 	}
 }
 
-func TestQUICAuthorizeRequest_ClaimsPath_EmptyScopeAllows(t *testing.T) {
+func TestQUICAuthorizeRequest_ClaimsPath_EmptyScopeDenies(t *testing.T) {
 	mw := NewAuthMiddleware(WithQUICTokenValidator(
 		&claimsValidatorStub{authCtx: &platformtoken.AuthorizedContext{}}), WithQUICRequireAuth(true))
 	req := &quicwire.Request{Opcode: quicwire.OpDNSAddRecord, Token: "tok"}
 	ctx, _ := mw.AuthenticateRequest(context.Background(), req)
-	// Empty resource/action -> no scope required -> allowed.
-	if resp := mw.AuthorizeRequest(ctx, "", ""); resp != nil {
-		t.Fatalf("empty resource/action should allow, got status=%d", resp.Status)
+	// Empty resource/action -> no permission -> denied (#1988).
+	if resp := mw.AuthorizeRequest(ctx, "", ""); resp == nil || resp.Status != quicwire.StatusPermissionDenied {
+		t.Fatalf("empty resource/action should deny, got %+v", resp)
 	}
 }
