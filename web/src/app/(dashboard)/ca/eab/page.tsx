@@ -139,17 +139,35 @@ export default function EABCredentialsPage() {
     }, "Failed to clean up expired credentials");
   };
 
+  // Each validation request, and each edit of its inputs, takes a new
+  // generation: only the current generation's response is published, so an
+  // older or overlapping response never shows beside other inputs.
+  const validateGen = React.useRef(0);
+
+  const editValidate = (set: (v: string) => void, value: string) => {
+    validateGen.current += 1;
+    setValidation(null);
+    set(value);
+  };
+
   const handleValidate = (e: React.FormEvent) => {
     e.preventDefault();
+    const gen = ++validateGen.current;
+    const request = { keyId: validateKeyId, hmacKey: validateHmac };
     setValidation(null);
-    void run(async () => {
-      const res = await eab.validate.mutateAsync({
-        keyId: validateKeyId,
-        hmacKey: validateHmac,
-      });
-      setValidation(res);
-      return res.valid ? "Credential is valid" : "Credential is not valid";
-    }, "Failed to validate credential");
+    setActionError(null);
+    setMessage(null);
+    void (async () => {
+      try {
+        const res = await eab.validate.mutateAsync(request);
+        if (gen !== validateGen.current) return;
+        setValidation(res);
+        setMessage(res.valid ? "Credential is valid" : "Credential is not valid");
+      } catch (err) {
+        if (gen !== validateGen.current) return;
+        setActionError(errorText(err, "Failed to validate credential"));
+      }
+    })();
   };
 
   const handleLookup = (e: React.FormEvent) => {
@@ -329,7 +347,7 @@ export default function EABCredentialsPage() {
                   id="eab-validate-key-id"
                   required
                   value={validateKeyId}
-                  onChange={(e) => setValidateKeyId(e.target.value)}
+                  onChange={(e) => editValidate(setValidateKeyId, e.target.value)}
                 />
               </div>
               <div className="space-y-1">
@@ -338,7 +356,7 @@ export default function EABCredentialsPage() {
                   id="eab-validate-hmac"
                   required
                   value={validateHmac}
-                  onChange={(e) => setValidateHmac(e.target.value)}
+                  onChange={(e) => editValidate(setValidateHmac, e.target.value)}
                 />
               </div>
               <Button type="submit">Validate</Button>
