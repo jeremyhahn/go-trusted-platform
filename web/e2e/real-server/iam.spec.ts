@@ -51,7 +51,12 @@ function ok(res: Result<unknown>): void {
 }
 
 /** What one test made, deleted again in afterEach. */
-const made = { users: [] as string[], roles: [] as string[], groups: [] as string[] };
+const made = {
+  users: [] as string[],
+  roles: [] as string[],
+  groups: [] as string[],
+  policies: [] as string[],
+};
 
 async function seedUser(
   sdk: PlatformClient,
@@ -82,6 +87,7 @@ test.afterEach(async ({ sdk, tenant }) => {
   for (const id of made.users.splice(0)) await sdk.iam.deleteUser(tenant.id, id);
   for (const id of made.roles.splice(0)) await sdk.iam.deleteRole(tenant.id, id);
   for (const id of made.groups.splice(0)) await sdk.iam.deleteGroup(tenant.id, id);
+  for (const name of made.policies.splice(0)) await sdk.iam.deletePolicy(tenant.id, name);
 });
 
 function userRow(page: import('@playwright/test').Page, email: string) {
@@ -420,5 +426,128 @@ test.describe('Groups', () => {
     await expect(adminPage.getByText(/group deleted|successfully/i).first()).toBeVisible();
     await expect(adminPage.getByText(group.name)).toBeHidden();
     await expect.poll(async () => (await sdk.iam.getGroup(tenant.id, group.id)).success).toBe(false);
+  });
+});
+
+// The permissions page lists the permissions of the tenant's roles: each test
+// seeds a role whose permissions name a resource no other role uses.
+test.describe('Permissions', () => {
+  test('should display permissions list', async ({ adminPage, sdk, tenant }) => {
+    const tag = suffix();
+    const perms = [`devices${tag}:read`, `devices${tag}:write`, `users${tag}:read`];
+    await seedRole(sdk, tenant, 'Admin', perms);
+
+    await adminPage.goto('/iam/permissions');
+    await expect(adminPage.getByRole('heading', { name: /access control|permissions/i }).first()).toBeVisible();
+    const tab = adminPage.getByRole('tab', { name: /permissions/i });
+    if (await tab.isVisible().catch(() => false)) await tab.click();
+    for (const p of perms) await expect(adminPage.getByText(p).first()).toBeVisible();
+  });
+
+  // The tenant always holds the admin's own role, so the list is never empty:
+  // the port shows a permission leaving the list once its role is deleted.
+  test('should drop the permissions of a deleted role', async ({ adminPage, sdk, tenant }) => {
+    const perm = `gone${suffix()}:read`;
+    const role = await seedRole(sdk, tenant, 'Gone Role', [perm]);
+
+    await adminPage.goto('/iam/permissions');
+    const tab = adminPage.getByRole('tab', { name: /permissions/i });
+    if (await tab.isVisible().catch(() => false)) await tab.click();
+    await expect(adminPage.getByText(perm).first()).toBeVisible();
+
+    ok(await sdk.iam.deleteRole(tenant.id, role.id));
+    made.roles.splice(made.roles.indexOf(role.id), 1);
+    await adminPage.reload();
+    if (await tab.isVisible().catch(() => false)) await tab.click();
+    await expect(adminPage.getByText(perm)).toHaveCount(0);
+  });
+
+  test('should filter permissions by resource', async ({ adminPage, sdk, tenant }) => {
+    const tag = suffix();
+    const devices = `devices${tag}:read`;
+    const users = `users${tag}:read`;
+    await seedRole(sdk, tenant, 'Admin', [devices, users]);
+
+    await adminPage.goto('/iam/permissions');
+    const tab = adminPage.getByRole('tab', { name: /permissions/i });
+    if (await tab.isVisible().catch(() => false)) await tab.click();
+    await expect(adminPage.getByText(devices).first()).toBeVisible();
+    await expect(adminPage.getByText(users).first()).toBeVisible();
+
+    const resourceFilter = adminPage.getByRole('button', { name: /resource/i });
+    if (await resourceFilter.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await resourceFilter.click();
+      await adminPage.getByRole('option', { name: new RegExp(`devices${tag}`) }).click();
+      await adminPage.keyboard.press('Escape');
+      await expect(adminPage.getByText(devices).first()).toBeVisible();
+      await expect(adminPage.getByText(users)).toHaveCount(0);
+    }
+  });
+});
+
+/** The policy YAML the new policy page sends, for one allow or deny rule. */
+function policyYaml(tenant: Tenant, name: string, description: string, actions: string[]): string {
+  return [
+    'apiVersion: v1',
+    'kind: Policy',
+    'metadata:',
+    `  name: ${name}`,
+    `  tenant: ${tenant.id}`,
+    `  description: ${description}`,
+    'spec:',
+    '  rules:',
+    '    - name: rule-1',
+    '      effect: allow',
+    `      actions: [${actions.map((a) => `"${a}"`).join(', ')}]`,
+    '      resources: ["*"]',
+  ].join('\n');
+}
+
+async function seedPolicy(
+  sdk: PlatformClient,
+  tenant: Tenant,
+  label: string,
+  description: string,
+  actions: string[],
+): Promise<string> {
+  const name = `${label}-${suffix()}`;
+  const res = await sdk.iam.createPolicy({
+    tenantId: tenant.id,
+    name,
+    description,
+    specYaml: policyYaml(tenant, name, description, actions),
+  });
+  ok(res);
+  made.policies.push(name);
+  return name;
+}
+
+// Create from the new policy page is covered by iam-policies.spec.ts
+// ('CreatePolicy from the new policy page lands in the server') and is not
+// repeated here.
+test.describe('Policies', () => {
+  test('should display policies list', async ({ adminPage, sdk, tenant }) => {
+    const names = [
+      await seedPolicy(sdk, tenant, 'admin-policy', 'Full admin access', ['*']),
+      await seedPolicy(sdk, tenant, 'read-only-policy', 'Read-only access', ['read']),
+    ];
+
+    await adminPage.goto('/iam/policies');
+    await expect(adminPage.getByRole('heading', { name: 'Policies', exact: true })).toBeVisible();
+    for (const n of names) await expect(adminPage.getByText(n).first()).toBeVisible();
+  });
+
+  test('should delete policy', async ({ adminPage, sdk, tenant }) => {
+    const name = await seedPolicy(sdk, tenant, 'delete-policy', 'Delete me', ['read']);
+
+    adminPage.on('dialog', (dialog) => void dialog.accept());
+    await adminPage.goto('/iam/policies');
+    await expect(adminPage.getByText(name).first()).toBeVisible();
+    await userRow(adminPage, name).getByRole('button').last().click();
+    await adminPage.getByRole('menuitem', { name: /delete/i }).click();
+
+    await expect(adminPage.getByText(/policy deleted|deleted successfully/i).first()).toBeVisible({ timeout: 15000 });
+    await expect(adminPage.getByText(name)).toHaveCount(0);
+    await expect.poll(async () => (await sdk.iam.getPolicy(tenant.id, name)).success).toBe(false);
   });
 });
