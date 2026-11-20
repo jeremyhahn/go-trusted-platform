@@ -747,6 +747,11 @@ func (vm *VM) ForceStop() error {
 	return nil
 }
 
+// Kill SIGKILLs the launched process. Not implemented yet.
+func (vm *VM) Kill() error {
+	return nil
+}
+
 // ConnectMonitor establishes a connection to the QMP socket.
 // This should be called after the VM has started and the QMP socket is available.
 // The connection enables runtime control via QMP commands.
