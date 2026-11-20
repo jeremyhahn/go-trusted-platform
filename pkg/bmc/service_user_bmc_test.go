@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync"
 	"testing"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/bmc"
@@ -96,12 +97,15 @@ func TestService_UserMethods_Simulator(t *testing.T) {
 	t.Run("SetUserPrivilege", func(t *testing.T) {
 		t.Parallel()
 		svc := newSimUserService(t)
-		if err := svc.SetUserPrivilege(ctx, 1, 1, 1, bmc.PrivilegeOperator); err != nil {
+		if err := svc.CreateUser(ctx, 1, bmc.User{Slot: 3, Username: "operator1", Enabled: true, Privilege: bmc.PrivilegeUser}, "s3cret-pass"); err != nil {
+			t.Fatalf("CreateUser: %v", err)
+		}
+		if err := svc.SetUserPrivilege(ctx, 1, 3, 1, bmc.PrivilegeOperator); err != nil {
 			t.Fatalf("SetUserPrivilege: %v", err)
 		}
-		got, ok := userInSlot(t, svc, 1)
-		if !ok || got.Username != "admin" || got.Privilege != bmc.PrivilegeOperator {
-			t.Errorf("slot 1 = %+v (found %v), want admin at operator", got, ok)
+		got, ok := userInSlot(t, svc, 3)
+		if !ok || got.Username != "operator1" || got.Privilege != bmc.PrivilegeOperator {
+			t.Errorf("slot 3 = %+v (found %v), want operator1 at operator", got, ok)
 		}
 	})
 
@@ -162,6 +166,86 @@ func TestService_ConnectionAccount_Refused_Simulator(t *testing.T) {
 		assertRefused(t, svc.DeleteUser(ctx, 1, 1))
 		if got, ok := userInSlot(t, svc, 1); !ok || got.Username != "admin" {
 			t.Errorf("slot 1 after refused delete = %+v (found %v), want admin", got, ok)
+		}
+	})
+
+	// Setting no-access, or any privilege below administrator, on the
+	// connection account would disable or weaken the profile's own login.
+	for _, priv := range []bmc.Privilege{bmc.PrivilegeNoAccess, bmc.PrivilegeOperator} {
+		t.Run("SetUserPrivilege_"+priv.String(), func(t *testing.T) {
+			t.Parallel()
+			svc := newSimUserService(t)
+			assertRefused(t, svc.SetUserPrivilege(ctx, 1, 1, 1, priv))
+			got, ok := userInSlot(t, svc, 1)
+			if !ok || got.Username != "admin" || got.Privilege != bmc.PrivilegeAdministrator {
+				t.Errorf("slot 1 after refused privilege = %+v (found %v), want admin at administrator", got, ok)
+			}
+		})
+	}
+}
+
+// CreateUser must not overwrite a slot that already holds a user: the page
+// checks occupancy against a listing that may be stale, so the service
+// checks again under a per-profile lock.
+func TestService_CreateUser_SlotOccupied_Simulator(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	assertOccupied := func(t *testing.T, err error, slot uint8) {
+		t.Helper()
+		var occupied bmc.ErrSlotOccupied
+		if !errors.As(err, &occupied) {
+			t.Fatalf("err = %v, want ErrSlotOccupied", err)
+		}
+		if occupied.ProfileID != 1 || occupied.Slot != slot {
+			t.Errorf("occupied = %+v, want profile 1 slot %d", occupied, slot)
+		}
+	}
+
+	t.Run("Occupied", func(t *testing.T) {
+		t.Parallel()
+		svc := newSimUserService(t)
+		err := svc.CreateUser(ctx, 1, bmc.User{Slot: 1, Username: "intruder", Enabled: true, Privilege: bmc.PrivilegeUser}, "s3cret-pass")
+		assertOccupied(t, err, 1)
+		if got, ok := userInSlot(t, svc, 1); !ok || got.Username != "admin" {
+			t.Errorf("slot 1 after refused create = %+v (found %v), want admin", got, ok)
+		}
+	})
+
+	t.Run("Concurrent", func(t *testing.T) {
+		t.Parallel()
+		svc := newSimUserService(t)
+		names := []string{"first", "second"}
+		start := make(chan struct{})
+		errs := make([]error, len(names))
+		var wg sync.WaitGroup
+		for i, name := range names {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				errs[i] = svc.CreateUser(ctx, 1, bmc.User{Slot: 5, Username: name, Enabled: true, Privilege: bmc.PrivilegeUser}, "s3cret-pass")
+			}()
+		}
+		close(start)
+		wg.Wait()
+
+		winner := -1
+		for i, err := range errs {
+			if err == nil {
+				if winner >= 0 {
+					t.Fatalf("both creates succeeded on slot 5")
+				}
+				winner = i
+				continue
+			}
+			assertOccupied(t, err, 5)
+		}
+		if winner < 0 {
+			t.Fatalf("no create succeeded: %v", errs)
+		}
+		if got, ok := userInSlot(t, svc, 5); !ok || got.Username != names[winner] {
+			t.Errorf("slot 5 = %+v (found %v), want %s", got, ok, names[winner])
 		}
 	})
 }
