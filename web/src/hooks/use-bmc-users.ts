@@ -137,7 +137,13 @@ export function useBMCUsers(profileID: string): UseBMCUsersResult {
     let next: Listing;
     try {
       const list = unwrap<BMCUserSlot[]>(await call('GET', `${base}/users`));
-      next = { base, users: Array.isArray(list) ? list : [], error: null };
+      // Only a user array establishes slot occupancy. An unparseable or
+      // empty body, or a payload that is not an array, never listed the
+      // slots, so it must not mark the profile listed: createUser writes
+      // the requested slot without an occupancy check of its own.
+      next = Array.isArray(list)
+        ? { base, users: list, error: null }
+        : { base, users: [], error: 'BMC returned an unreadable user listing' };
     } catch (e: unknown) {
       next = { base, users: [], error: e instanceof Error ? e.message : String(e) };
     }
