@@ -84,16 +84,35 @@ export type VTPMBundle = NonNullable<Awaited<ReturnType<VTPMService['importBundl
  * bundleToWire maps the SDK's camelCase VTPMBundle onto the snake_case wire
  * shape the bundle views read, so an imported bundle keeps its fields.
  */
+/**
+ * The SDK's BundleMode names mapped to the wire names the list, get and clone
+ * paths return; a copy of the SDK's BUNDLE_MODE_WIRE_NAMES, which the SDK root
+ * does not export.
+ */
+const BUNDLE_MODE_WIRE_NAMES: Readonly<Record<string, string | undefined>> = {
+  UNSPECIFIED: undefined,
+  TEMPLATE: 'template',
+  PRE_ASSIGNED: 'pre-assigned',
+};
+
+/** An SDK BundleMode as its wire name; a value already on the wire passes through. */
+function bundleModeWire(mode: unknown): string {
+  const name = String(mode);
+  return Object.prototype.hasOwnProperty.call(BUNDLE_MODE_WIRE_NAMES, name)
+    ? (BUNDLE_MODE_WIRE_NAMES[name] ?? '')
+    : name;
+}
+
 export function bundleToWire(b: VTPMBundle): VTPMBundleWire {
   const m = b.manifest;
   return {
     id: b.id,
-    mode: String(b.mode),
+    mode: bundleModeWire(b.mode),
     ...(m !== undefined && {
       manifest: {
         version: m.version,
         id: m.id,
-        mode: String(m.mode),
+        mode: bundleModeWire(m.mode),
         hostname: m.hostname,
         created_at: m.createdAt,
         ek_algorithm: String(m.ekAlgorithm),
