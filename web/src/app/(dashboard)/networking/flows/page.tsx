@@ -21,8 +21,9 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
-import { useSDN, useApi } from '@/hooks';
-import type { Flow, FlowMatch, FlowAction } from 'trusted-platform-sdk';
+import { useSDN, useApi, useSDNOps } from '@/hooks';
+import type { Flow, FlowMatch, FlowAction, FlowStats } from 'trusted-platform-sdk';
+import { BarChart3 } from 'lucide-react';
 import { flowActionKind, flowTableNumber, readUint64 } from '@/lib/sdn-wire';
 
 // Types for OpenFlow flow management
@@ -104,7 +105,10 @@ export default function OpenFlowsPage() {
   const { toast } = useToast();
   const sdn = useSDN();
   const [selectedBridgeId, setSelectedBridgeId] = useState<string>('');
+  const sdnOps = useSDNOps(selectedBridgeId);
   const [createOpen, setCreateOpen] = useState(false);
+  const [flushOpen, setFlushOpen] = useState(false);
+  const [flowStats, setFlowStats] = useState<{ flowId: string; stats: FlowStats } | null>(null);
   const [createPriority, setCreatePriority] = useState('100');
   const [createInPort, setCreateInPort] = useState('');
   const [createSubmitting, setCreateSubmitting] = useState(false);
@@ -212,6 +216,26 @@ export default function OpenFlowsPage() {
       title: 'Duplicate Flow',
       description: `Duplicating flow "${flow.name}" is not yet implemented`,
     });
+  };
+
+  const handleFlushFlows = async () => {
+    const deleted = await sdnOps.flushFlows();
+    setFlushOpen(false);
+    if (deleted === null) {
+      toast({ title: 'Error flushing flows', description: 'The server refused the request; the reason is shown on the page.', variant: 'destructive' });
+      return;
+    }
+    toast({ title: 'Flows flushed', description: `${deleted} flow(s) removed from ${selectedBridgeId}` });
+    refetchFlows();
+  };
+
+  const handleFlowStats = async (flow: OpenFlowRule) => {
+    const stats = await sdnOps.getFlowStats(flow.id);
+    if (!stats) {
+      toast({ title: 'Error reading flow statistics', description: 'The server refused the request; the reason is shown on the page.', variant: 'destructive' });
+      return;
+    }
+    setFlowStats({ flowId: flow.id, stats });
   };
 
   const handleDeleteFlow = async (flow: OpenFlowRule) => {
@@ -353,6 +377,16 @@ export default function OpenFlowsPage() {
     {
       id: 'actions',
       cell: ({ row }) => (
+        <div className="flex items-center gap-1">
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label={`Stats for flow ${row.original.id}`}
+          disabled={!selectedBridgeId || sdnOps.pending === 'getFlowStats'}
+          onClick={() => void handleFlowStats(row.original)}
+        >
+          <BarChart3 className="h-4 w-4" />
+        </Button>
         <DataTableRowActions
           row={row.original}
           actions={[
@@ -372,6 +406,7 @@ export default function OpenFlowsPage() {
             },
           ]}
         />
+        </div>
       ),
     },
   ];
@@ -462,12 +497,66 @@ export default function OpenFlowsPage() {
           <Button variant="outline" size="icon" onClick={fetchFlows} disabled={isLoading}>
             <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
           </Button>
+          <Button variant="outline" onClick={() => setFlushOpen(true)} disabled={!selectedBridgeId}>
+            <Trash2 className="mr-2 h-4 w-4" />
+            Flush Flows
+          </Button>
           <Button onClick={() => setCreateOpen(true)} disabled={!selectedBridgeId}>
             <Plus className="mr-2 h-4 w-4" />
             Add Flow Rule
           </Button>
         </div>
       </div>
+
+      {sdnOps.error && (
+        <Alert variant="destructive" role="alert">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>SDN request failed</AlertTitle>
+          <AlertDescription>{sdnOps.error}</AlertDescription>
+        </Alert>
+      )}
+
+      <Dialog open={flushOpen} onOpenChange={setFlushOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Flush flows</DialogTitle>
+            <DialogDescription>
+              Remove every flow rule from bridge {selectedBridgeId}. This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setFlushOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={!selectedBridgeId || sdnOps.pending === 'flushFlows'}
+              onClick={() => void handleFlushFlows()}
+            >
+              Flush
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={flowStats !== null} onOpenChange={(open) => !open && setFlowStats(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Flow statistics</DialogTitle>
+            <DialogDescription>Flow {flowStats?.flowId} on bridge {selectedBridgeId}</DialogDescription>
+          </DialogHeader>
+          {flowStats && (
+            <dl className="grid grid-cols-2 gap-2 text-sm">
+              <dt className="text-muted-foreground">Packets</dt>
+              <dd data-testid="flow-stats-packets">{readUint64(flowStats.stats.packetCount)}</dd>
+              <dt className="text-muted-foreground">Bytes</dt>
+              <dd data-testid="flow-stats-bytes">{readUint64(flowStats.stats.byteCount)}</dd>
+              <dt className="text-muted-foreground">Duration</dt>
+              <dd>{flowStats.stats.durationSeconds ?? 0} s</dd>
+            </dl>
+          )}
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent>

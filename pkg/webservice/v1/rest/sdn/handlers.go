@@ -315,6 +315,39 @@ func (h *SDNHandlers) GetPolicy(w http.ResponseWriter, r *http.Request) {
 	h.reply(w, r, resp, err)
 }
 
+// DeletePolicy handles DELETE /api/v1/sdn/policies/{id}.
+func (h *SDNHandlers) DeletePolicy(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureAvailable(w, r) {
+		return
+	}
+	req := &platformv1.DeletePolicyRequest{PolicyId: mux.Vars(r)["id"]}
+	resp, err := h.sdnService.DeletePolicy(r.Context(), req)
+	h.reply(w, r, resp, err)
+}
+
+// FlushFlows handles POST /api/v1/sdn/bridges/{name}/flows/flush. The body
+// may name a table; the bridge is the path's.
+func (h *SDNHandlers) FlushFlows(w http.ResponseWriter, r *http.Request) {
+	req := &platformv1.FlushFlowsRequest{}
+	if !h.decode(w, r, req) {
+		return
+	}
+	req.BridgeId = bridgeScope(r, req.GetBridgeId())
+	resp, err := h.sdnService.FlushFlows(r.Context(), req)
+	h.reply(w, r, resp, err)
+}
+
+// GetFlowStats handles GET /api/v1/sdn/bridges/{name}/flows/{flow}/stats.
+func (h *SDNHandlers) GetFlowStats(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureAvailable(w, r) {
+		return
+	}
+	vars := mux.Vars(r)
+	req := &platformv1.GetFlowStatsRequest{BridgeId: vars["name"], FlowId: vars["flow"]}
+	resp, err := h.sdnService.GetFlowStats(r.Context(), req)
+	h.reply(w, r, resp, err)
+}
+
 // VLAN Handlers
 
 // CreateVLAN handles POST /api/v1/sdn/vlans and

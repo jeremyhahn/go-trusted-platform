@@ -180,6 +180,8 @@ export type { ValidatePolicyInput, TestPolicyInput } from './use-policy-tools';
 export { useDeviceTemplateActions } from './use-device-template-actions';
 export { useSDNBridge } from './use-sdn-bridge';
 export type { UseSDNBridgeResult } from './use-sdn-bridge';
+export { useSDNOps } from './use-sdn-ops';
+export type { SDNOp, UseSDNOpsResult } from './use-sdn-ops';
 export { useDeviceLookup } from './use-device-lookup';
 export type {
   DeviceLookup,

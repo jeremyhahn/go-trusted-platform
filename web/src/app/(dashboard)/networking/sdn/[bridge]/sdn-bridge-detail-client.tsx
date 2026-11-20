@@ -27,7 +27,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { useSDN, useSDNBridge, useToast } from '@/hooks';
+import { useSDN, useSDNBridge, useSDNOps, useToast } from '@/hooks';
 import type {
   Port,
   PortStats,
@@ -119,6 +119,8 @@ export default function SDNBridgeDetailClient() {
   } = useSDNBridge(bridgeId);
 
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deletePolicy, setDeletePolicy] = useState<{ id: string; name: string } | null>(null);
+  const sdnOps = useSDNOps(bridgeId);
   const [selectedPort, setSelectedPort] = useState('');
   const [adminState, setAdminState] = useState('down');
   const [certificate, setCertificate] = useState('');
@@ -290,6 +292,41 @@ export default function SDNBridgeDetailClient() {
           </Button>
         </div>
       </div>
+
+      <Dialog open={deletePolicy !== null} onOpenChange={(open) => !open && setDeletePolicy(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete policy {deletePolicy?.name}?</DialogTitle>
+            <DialogDescription>
+              The policy is removed from the SDN controller and stops being enforced.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeletePolicy(null)}>Cancel</Button>
+            <Button
+              variant="destructive"
+              disabled={!deletePolicy || sdnOps.pending === 'deletePolicy'}
+              onClick={async () => {
+                if (!deletePolicy) return;
+                const deleted = await sdnOps.deletePolicy(deletePolicy.id);
+                if (deleted) {
+                  toast({ title: 'Policy deleted', variant: 'success' });
+                  setDeletePolicy(null);
+                  if (viewPolicyId === deletePolicy.id) setViewPolicyId('');
+                  refetchPolicies();
+                } else {
+                  toast({ title: 'Delete policy failed', description: 'The server refused the request.', variant: 'destructive' });
+                }
+              }}
+            >
+              Delete
+            </Button>
+          </DialogFooter>
+          {sdnOps.error && (
+            <p role="alert" className="text-sm text-destructive">{sdnOps.error}</p>
+          )}
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
         <DialogContent>
@@ -575,6 +612,15 @@ export default function SDNBridgeDetailClient() {
                         onClick={() => setViewPolicyId(p.id)}
                       >
                         View
+                      </Button>{' '}
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        aria-label={`Delete policy ${p.config?.name || p.id}`}
+                        disabled={sdnOps.pending === 'deletePolicy'}
+                        onClick={() => setDeletePolicy({ id: p.id, name: p.config?.name || p.id })}
+                      >
+                        <Trash2 className="h-4 w-4" />
                       </Button>
                     </TableCell>
                   </TableRow>

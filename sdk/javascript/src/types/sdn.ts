@@ -987,6 +987,13 @@ export interface ListPoliciesResponse {
 }
 
 /**
+ * Delete policy response (DELETE /policies/{id})
+ */
+export interface DeletePolicyResponse {
+  status?: SDNStatus;
+}
+
+/**
  * Get flow stats response
  */
 export interface GetFlowStatsResponse {

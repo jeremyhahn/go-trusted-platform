@@ -912,6 +912,7 @@ export type {
   ApplyPolicyResponse,
   GetPolicyResponse,
   ListPoliciesResponse,
+  DeletePolicyResponse,
   GetFlowStatsResponse,
 } from './types/sdn.js';
 

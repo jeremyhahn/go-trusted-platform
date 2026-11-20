@@ -23,7 +23,7 @@ test.describe('SDN service', () => {
     expect(got.success).toBe(true);
 
     await adminPage.getByRole('button', { name: /delete bridge/i }).first().click();
-    await adminPage.getByRole('button', { name: /^delete$/i }).click();
+    await adminPage.getByRole('button', { name: /confirm delete/i }).click();
     await expect(adminPage.getByText('Bridge deleted')).toBeVisible();
 
     const after = await sdk.sdn.getBridge(name);
