@@ -854,9 +854,39 @@ func TestValidateQUICAuthorization_RejectsEmbeddedPEPPath(t *testing.T) {
 	assert.Equal(t, transportQUIC, want.Transport)
 }
 
+// A certificate principal is decided by the IAM PEP (#2016), which the
+// embedded quicbaas SDK cannot do: config validation refuses mTLS on QUIC
+// with the embedded PEP, as selectQUICAuth does, whatever the token mode.
+func TestValidateQUICAuthorization_RejectsMTLSWithEmbeddedPEP(t *testing.T) {
+	cases := map[string]func(*Config){
+		"mTLS":                           func(*Config) {},
+		"mTLS with platform tokens":      func(c *Config) { c.PlatformToken.Enabled = true },
+		"mTLS with testing-only opt-out": func(c *Config) { c.SkipIAMValidation = true },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			config := quicPEPGuardConfig()
+			config.EnableMTLS = true
+			mutate(config)
+			err := config.validateQUICAuthorization()
+			var want ErrEmbeddedPEPUnavailable
+			require.True(t, errors.As(err, &want), "error is %T (%v), want ErrEmbeddedPEPUnavailable", err, err)
+			assert.Equal(t, transportQUIC, want.Transport)
+			assert.True(t, want.MTLS, "the refusal names mTLS")
+		})
+	}
+}
+
 func TestValidateQUICAuthorization_AcceptsWorkingModes(t *testing.T) {
 	cases := map[string]func(*Config){
-		"mTLS enabled":            func(c *Config) { c.EnableMTLS = true },
+		"mTLS with remote quicbaas": func(c *Config) {
+			c.EnableMTLS = true
+			c.App.QuicBaaSConfig.Transport = quicbaas.TransportGRPC
+		},
+		"mTLS with QUIC disabled": func(c *Config) {
+			c.EnableMTLS = true
+			c.EnableQUIC = false
+		},
 		"platform tokens enabled": func(c *Config) { c.PlatformToken.Enabled = true },
 		"remote quicbaas transport": func(c *Config) {
 			c.App.QuicBaaSConfig.Transport = quicbaas.TransportGRPC
