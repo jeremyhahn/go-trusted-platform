@@ -75,6 +75,42 @@ function ruleMatch(protocol: string, sourceIp: string, destinationIp: string, de
   return match;
 }
 
+// A match in a form two equal matches share: unset and empty fields dropped,
+// keys sorted, so key order or a blank field never hides an equal match.
+function matchKey(match: SDNPolicyRuleMatch | undefined) {
+  const entries = Object.entries(match ?? {})
+    .filter(([, v]) => v !== undefined && v !== null && v !== '' && v !== 0)
+    .map(([k, v]) => [k, typeof v === 'string' ? v.trim() : v] as const)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return JSON.stringify(entries);
+}
+
+// OpenFlow OFPFCAdd replaces a flow with the same match and priority, so a
+// differently named policy on the same bridge with such a rule would take
+// over that policy's flow while both stay ACTIVE (#2024 Codex, P1). Returns
+// the policy the new rule would displace, if any. A policy with no targets is
+// counted as on this bridge: the page lists it here.
+function conflictingPolicy(
+  policies: SDNPolicy[],
+  bridgeId: string,
+  name: string,
+  priority: number,
+  match: SDNPolicyRuleMatch
+): SDNPolicy | undefined {
+  const key = matchKey(match);
+  return policies.find((p) => {
+    const config = p.config;
+    if (!config || config.name === name) return false;
+    const targets = config.targets ?? [];
+    const onBridge =
+      targets.length === 0 || targets.some((t) => t.type === 'POLICY_TARGET_TYPE_BRIDGE' && t.id === bridgeId);
+    if (!onBridge) return false;
+    return (config.rules ?? []).some(
+      (r) => (r.priority ?? config.priority ?? 100) === priority && matchKey(r.match) === key
+    );
+  });
+}
+
 const POLICY_TYPES: SDNPolicyType[] = [
   'POLICY_TYPE_ACL',
   'POLICY_TYPE_QOS',
@@ -113,6 +149,7 @@ export default function SDNBridgeDetailClient() {
     bridgeError,
     portsError,
     policiesError,
+    policiesLoaded,
     refetchBridge,
     refetchPorts,
     refetchPolicies,
@@ -263,6 +300,20 @@ export default function SDNBridgeDetailClient() {
   // A policy is applied only to a bridge this page loaded: an unresolved URL
   // ID would target nothing (#2024 Codex round 5, P1).
   const bridgeLoaded = !!bridge && !bridgeError;
+  const conflict = policyName
+    ? conflictingPolicy(
+        policies,
+        bridgeId,
+        policyName,
+        Number(rulePriority) || 100,
+        ruleMatch(ruleProtocol, ruleSourceIp, ruleDestinationIp, ruleDestinationPort)
+      )
+    : undefined;
+  const policyConflictError = conflict
+    ? `Policy ${conflict.config?.name || conflict.id} already matches this traffic at priority ${
+        Number(rulePriority) || 100
+      } on this bridge: a second policy would replace its flow. Change the match or the priority, or edit that policy.`
+    : '';
   const changeRuleProtocol = (protocol: string) => {
     setRuleProtocol(protocol);
     if (!portNeedsTransport(protocol)) setRuleDestinationPort('');
@@ -706,13 +757,36 @@ export default function SDNBridgeDetailClient() {
               </div>
             </div>
           </div>
+          {policyConflictError && (
+            <p role="alert" data-testid="policy-conflict-error" className="text-sm text-destructive">
+              {policyConflictError}
+            </p>
+          )}
+          {!policiesLoaded && (
+            // #2024 Codex: an unloaded policy list is not "no conflict": a policy
+            // sharing another's match and priority would replace its flow.
+            <p role="alert" data-testid="policy-list-not-loaded" className="text-sm text-destructive">
+              {policiesError
+                ? 'The policy list could not be loaded, so a conflicting policy cannot be ruled out. Retry the policy list before applying.'
+                : 'Waiting for the policy list to load before a policy can be applied.'}
+            </p>
+          )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setApplyOpen(false)}>Cancel</Button>
             <Button
-              disabled={!bridgeLoaded || !policyName || !ruleAction || !!rulePortError}
+              disabled={
+                !bridgeLoaded ||
+                !policiesLoaded ||
+                !policyName ||
+                !ruleAction ||
+                !!rulePortError ||
+                !!policyConflictError
+              }
               onClick={() =>
                 bridgeLoaded &&
+                policiesLoaded &&
                 !rulePortError &&
+                !policyConflictError &&
                 run(
                   'Policy applied',
                   applyPolicy,
