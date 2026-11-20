@@ -309,6 +309,47 @@ func TestInvitationGRPCService_WithService_List(t *testing.T) {
 	}
 }
 
+// TestInvitationGRPCService_CallerTenantEnforced pins SPEC row 125 (#2009):
+// a caller bound to tenant A cannot create or list invitations in tenant B,
+// while a same-tenant caller is served.
+func TestInvitationGRPCService_CallerTenantEnforced(t *testing.T) {
+	fake := &fakeInvitationServicer{
+		createResult: newTestInvitation(),
+		listResult:   []*entities.Invitation{newTestInvitation()},
+	}
+	svc := NewInvitationGRPCService(logging.DefaultLogger(), fake)
+	tenantA := tokenCallerContext("tenant-a")
+
+	_, err := svc.CreateInvitation(tenantA, &platformv1.CreateInvitationRequest{
+		TenantId: "tenant-b",
+		Email:    "eve@example.com",
+		Role:     "admin",
+	})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("cross-tenant CreateInvitation: want PermissionDenied, got %v", err)
+	}
+	for _, pending := range []bool{false, true} {
+		_, err = svc.ListInvitations(tenantA, &platformv1.ListInvitationsRequest{
+			TenantId:    "tenant-b",
+			PendingOnly: pending,
+		})
+		if status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("cross-tenant ListInvitations(pending=%v): want PermissionDenied, got %v", pending, err)
+		}
+	}
+
+	if _, err = svc.CreateInvitation(tenantA, &platformv1.CreateInvitationRequest{
+		TenantId: "tenant-a",
+		Email:    "alice@example.com",
+		Role:     "admin",
+	}); err != nil {
+		t.Fatalf("same-tenant CreateInvitation: unexpected error: %v", err)
+	}
+	if _, err = svc.ListInvitations(tenantA, &platformv1.ListInvitationsRequest{TenantId: "tenant-a"}); err != nil {
+		t.Fatalf("same-tenant ListInvitations: unexpected error: %v", err)
+	}
+}
+
 func TestInvitationGRPCService_WithService_List_Error(t *testing.T) {
 	sentinel := errors.New("db gone")
 	fake := &fakeInvitationServicer{listErr: sentinel}

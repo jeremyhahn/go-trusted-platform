@@ -30,7 +30,8 @@ import (
 // requires, and connects the SDK's QUIC adapter as a caller holding scopes.
 func connectInvitationQUIC(t *testing.T, server platformv1.InvitationServiceServer, scopes ...string) grpc.ClientConnInterface {
 	t.Helper()
-	validator := &quicScopeValidator{scopes: scopes}
+	// The caller is bound to the tenant the parity requests name (#2009).
+	validator := &quicScopeValidator{scopes: scopes, tenant: "tenant-1"}
 	handler, err := NewQUICServiceHandler(logging.DefaultLogger(),
 		WithQUICAuthMiddleware(quic.NewAuthMiddleware(quic.WithQUICTokenValidator(validator))))
 	if err != nil {

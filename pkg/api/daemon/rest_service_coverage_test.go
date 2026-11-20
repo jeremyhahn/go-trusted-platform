@@ -445,8 +445,9 @@ func TestHandleGetService_NotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRESTServer failed: %v", err)
 	}
+	allowServiceRoutes(t, server)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/services/nonexistent-service", nil)
+	req := servicesRequest(http.MethodGet, "/api/v1/services/nonexistent-service", nil)
 	w := httptest.NewRecorder()
 
 	server.router.ServeHTTP(w, req)
@@ -502,8 +503,9 @@ func TestHandleGetService_AllStatuses(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewRESTServer failed: %v", err)
 			}
+			allowServiceRoutes(t, server)
 
-			req := httptest.NewRequest(http.MethodGet, "/api/v1/services/test-service", nil)
+			req := servicesRequest(http.MethodGet, "/api/v1/services/test-service", nil)
 			w := httptest.NewRecorder()
 
 			server.router.ServeHTTP(w, req)
