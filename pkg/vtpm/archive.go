@@ -23,6 +23,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -258,7 +259,7 @@ func (a *Archiver) ImportFromFile(ctx context.Context, archivePath string) (*Bun
 			return nil, ErrArchiveOperationFailed{Operation: "import", Cause: err}
 		}
 
-		if strings.HasSuffix(header.Name, "manifest.json") && !header.FileInfo().IsDir() {
+		if path.Base(cleanArchiveName(header.Name)) == "manifest.json" && !header.FileInfo().IsDir() {
 			data, err := io.ReadAll(io.LimitReader(tr, a.maxExpandedBytes+1))
 			if err != nil {
 				return nil, ErrArchiveOperationFailed{Operation: "import", Cause: err}
@@ -272,7 +273,7 @@ func (a *Archiver) ImportFromFile(ctx context.Context, archivePath string) (*Bun
 				return nil, ErrInvalidManifest{Reason: err.Error()}
 			}
 
-			archivePrefix = filepath.Dir(header.Name)
+			archivePrefix = path.Dir(cleanArchiveName(header.Name))
 			break
 		}
 	}
@@ -354,8 +355,8 @@ func (a *Archiver) ImportFromFile(ctx context.Context, archivePath string) (*Bun
 		}
 
 		// Calculate destination path
-		relPath := strings.TrimPrefix(header.Name, archivePrefix+"/")
-		if relPath == "" || relPath == header.Name {
+		relPath, ok := archiveRelPath(archivePrefix, header.Name)
+		if !ok {
 			continue
 		}
 
@@ -402,6 +403,11 @@ func (a *Archiver) ImportFromFile(ctx context.Context, archivePath string) (*Bun
 
 	if err := ctx.Err(); err != nil {
 		return refuse(err)
+	}
+	// An archive whose entries all fell outside the manifest's prefix would
+	// otherwise publish an empty bundle that GetBundle cannot find (#2021).
+	if _, err := os.Stat(filepath.Join(stagePath, "manifest.json")); err != nil {
+		return nil, ErrInvalidManifest{Reason: "manifest.json not extracted"}
 	}
 	if err := publishStagedBundle(stagePath, bundlePath); err != nil {
 		if errors.Is(err, fs.ErrExist) {
@@ -451,6 +457,32 @@ func (a *Archiver) ImportFromFile(ctx context.Context, archivePath string) (*Bun
 // bundle appears complete in one step. A failed rename releases the claim.
 // The rename is syscall.Rename: os.Rename refuses any existing directory,
 // while rename(2) atomically replaces an empty one, which is the claim.
+// cleanArchiveName normalises a tar entry name: a leading "./" is dropped
+// and the slash path cleaned, so "./tpm/" and "tpm" compare equal.
+func cleanArchiveName(name string) string {
+	return path.Clean(strings.TrimPrefix(name, "./"))
+}
+
+// archiveRelPath returns name relative to the manifest's directory prefix,
+// both cleaned with cleanArchiveName. With a root-level manifest (prefix
+// ".") the whole cleaned name is returned. It reports false for the prefix
+// itself and for a name outside it.
+func archiveRelPath(prefix, name string) (string, bool) {
+	prefix = cleanArchiveName(prefix)
+	name = cleanArchiveName(name)
+	if name == "." || name == prefix {
+		return "", false
+	}
+	if prefix == "." {
+		return name, true
+	}
+	rel, found := strings.CutPrefix(name, prefix+"/")
+	if !found || rel == "" {
+		return "", false
+	}
+	return rel, true
+}
+
 func publishStagedBundle(stagePath, bundlePath string) error {
 	if err := os.Mkdir(bundlePath, 0700); err != nil {
 		return err
@@ -486,7 +518,7 @@ func (a *Archiver) ValidateArchive(ctx context.Context, r io.Reader) (*Manifest,
 			return nil, ErrArchiveOperationFailed{Operation: "validate", Cause: err}
 		}
 
-		if strings.HasSuffix(header.Name, "manifest.json") && !header.FileInfo().IsDir() {
+		if path.Base(cleanArchiveName(header.Name)) == "manifest.json" && !header.FileInfo().IsDir() {
 			data, err := io.ReadAll(tr)
 			if err != nil {
 				return nil, ErrArchiveOperationFailed{Operation: "validate", Cause: err}
