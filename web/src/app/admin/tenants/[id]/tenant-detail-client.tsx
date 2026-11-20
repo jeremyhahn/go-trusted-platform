@@ -30,6 +30,16 @@ function toNumber(v: string): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+/** A whole, nonnegative number in plain digits, or undefined (blank or malformed). */
+function toWholeNumber(v: string): number | undefined {
+  const t = v.trim();
+  if (!/^\d+$/.test(t)) return undefined;
+  const n = Number(t);
+  return Number.isSafeInteger(n) ? n : undefined;
+}
+
+type QuotaErrors = Partial<Record<"maxVms" | "maxVcpus" | "maxMemoryMb", string>>;
+
 export default function TenantDetailClient() {
   const params = useParams();
   const pathname = usePathname();
@@ -54,6 +64,7 @@ export default function TenantDetailClient() {
   const [maxVms, setMaxVms] = React.useState("");
   const [maxVcpus, setMaxVcpus] = React.useState("");
   const [maxMemoryMb, setMaxMemoryMb] = React.useState("");
+  const [quotaErrors, setQuotaErrors] = React.useState<QuotaErrors>({});
   const [checkResource, setCheckResource] = React.useState("vms");
   const [checkAmount, setCheckAmount] = React.useState("1");
   const [unsealKey, setUnsealKey] = React.useState("");
@@ -105,8 +116,22 @@ export default function TenantDetailClient() {
     e.preventDefault();
     // The server replaces every limit of a supplied compute section, so send
     // the current limits for the fields that were not edited.
+    // A blank field keeps its current limit; a nonblank value that is not a
+    // whole number is refused here, before any request, and the edit stays.
     const cur: Record<string, unknown> = { ...(tenant?.computeQuota ?? {}) };
-    const keep = (edited: string, current: unknown) => toNumber(edited) ?? (Number(current ?? 0) || 0);
+    const errors: QuotaErrors = {};
+    for (const [field, label, value] of [
+      ["maxVms", "Max VMs", maxVms],
+      ["maxVcpus", "Max vCPUs", maxVcpus],
+      ["maxMemoryMb", "Max memory (MB)", maxMemoryMb],
+    ] as const) {
+      if (value.trim() !== "" && toWholeNumber(value) === undefined) {
+        errors[field] = `${label} must be a whole number`;
+      }
+    }
+    setQuotaErrors(errors);
+    if (Object.keys(errors).length > 0) return;
+    const keep = (edited: string, current: unknown) => toWholeNumber(edited) ?? (Number(current ?? 0) || 0);
     const res = await tenants.updateQuotas({
       tenantId,
       compute: {
@@ -253,11 +278,33 @@ export default function TenantDetailClient() {
           <form onSubmit={saveQuotas} className="flex flex-wrap items-end gap-3">
             <div>
               <Label htmlFor="quota-max-vms">Max VMs</Label>
-              <Input id="quota-max-vms" value={maxVms} onChange={(e) => setMaxVms(e.target.value)} />
+              <Input
+                id="quota-max-vms"
+                value={maxVms}
+                onChange={(e) => setMaxVms(e.target.value)}
+                aria-invalid={quotaErrors.maxVms ? true : undefined}
+                aria-describedby={quotaErrors.maxVms ? "quota-max-vms-error" : undefined}
+              />
+              {quotaErrors.maxVms && (
+                <p id="quota-max-vms-error" role="alert" className="text-sm text-destructive">
+                  {quotaErrors.maxVms}
+                </p>
+              )}
             </div>
             <div>
               <Label htmlFor="quota-max-vcpus">Max vCPUs</Label>
-              <Input id="quota-max-vcpus" value={maxVcpus} onChange={(e) => setMaxVcpus(e.target.value)} />
+              <Input
+                id="quota-max-vcpus"
+                value={maxVcpus}
+                onChange={(e) => setMaxVcpus(e.target.value)}
+                aria-invalid={quotaErrors.maxVcpus ? true : undefined}
+                aria-describedby={quotaErrors.maxVcpus ? "quota-max-vcpus-error" : undefined}
+              />
+              {quotaErrors.maxVcpus && (
+                <p id="quota-max-vcpus-error" role="alert" className="text-sm text-destructive">
+                  {quotaErrors.maxVcpus}
+                </p>
+              )}
             </div>
             <div>
               <Label htmlFor="quota-max-memory">Max memory (MB)</Label>
@@ -265,7 +312,14 @@ export default function TenantDetailClient() {
                 id="quota-max-memory"
                 value={maxMemoryMb}
                 onChange={(e) => setMaxMemoryMb(e.target.value)}
+                aria-invalid={quotaErrors.maxMemoryMb ? true : undefined}
+                aria-describedby={quotaErrors.maxMemoryMb ? "quota-max-memory-error" : undefined}
               />
+              {quotaErrors.maxMemoryMb && (
+                <p id="quota-max-memory-error" role="alert" className="text-sm text-destructive">
+                  {quotaErrors.maxMemoryMb}
+                </p>
+              )}
             </div>
             <Button type="submit">Save quotas</Button>
           </form>
