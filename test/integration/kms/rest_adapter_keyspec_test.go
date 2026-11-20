@@ -70,8 +70,57 @@ func TestRESTAdapterKeyGenerateDaemonResponse(t *testing.T) {
 		if !res.Exportable || !res.DeletionProtection {
 			t.Fatalf("result exportable=%v deletion_protection=%v, want true/true", res.Exportable, res.DeletionProtection)
 		}
+		// The request asked for AES-256-GCM; the result reports what the
+		// server generated (Algorithm 1 = KMS_KEY_ALGORITHM_RSA_2048).
+		if res.Algorithm != "RSA-2048" {
+			t.Fatalf("result algorithm=%q, want RSA-2048 (the server's key type)", res.Algorithm)
+		}
+	})
+
+	withAlgorithm := func(t *testing.T, alg int32) []byte {
+		t.Helper()
+		body, err := json.Marshal(restapi.KMSGenerateKeyResponse{
+			Key: &restapi.KMSKeyHandleResponse{KeyID: "gen-key-1", Version: 1, Algorithm: alg, Status: 1},
+		})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		return body
+	}
+
+	t.Run("matching algorithm", func(t *testing.T) {
+		r := serve(t, http.StatusCreated, withAlgorithm(t, 22)) // KMS_KEY_ALGORITHM_AES_256
+		res, err := r.KeyGenerate(context.Background(), opts)
+		if err != nil {
+			t.Fatalf("KeyGenerate: %v", err)
+		}
 		if res.Algorithm != "AES-256-GCM" {
 			t.Fatalf("result algorithm=%q, want AES-256-GCM", res.Algorithm)
+		}
+	})
+
+	t.Run("mismatched algorithm is reported, not masked", func(t *testing.T) {
+		r := serve(t, http.StatusCreated, withAlgorithm(t, 1)) // KMS_KEY_ALGORITHM_RSA_2048
+		res, err := r.KeyGenerate(context.Background(), opts)
+		if err == nil && res.Algorithm == "AES-256-GCM" {
+			t.Fatalf("result algorithm=%q for an RSA-2048 response, want RSA-2048 or an error", res.Algorithm)
+		}
+		if err == nil && res.Algorithm != "RSA-2048" {
+			t.Fatalf("result algorithm=%q, want RSA-2048", res.Algorithm)
+		}
+	})
+
+	t.Run("unspecified algorithm is an error", func(t *testing.T) {
+		r := serve(t, http.StatusCreated, withAlgorithm(t, 0))
+		if res, err := r.KeyGenerate(context.Background(), opts); err == nil {
+			t.Fatalf("KeyGenerate with unspecified algorithm = %+v, want error", res)
+		}
+	})
+
+	t.Run("unknown algorithm is an error", func(t *testing.T) {
+		r := serve(t, http.StatusCreated, withAlgorithm(t, 99))
+		if res, err := r.KeyGenerate(context.Background(), opts); err == nil {
+			t.Fatalf("KeyGenerate with unknown algorithm = %+v, want error", res)
 		}
 	})
 
