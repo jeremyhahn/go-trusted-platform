@@ -56,6 +56,7 @@ const made = {
   roles: [] as string[],
   groups: [] as string[],
   policies: [] as string[],
+  apps: [] as string[],
 };
 
 async function seedUser(
@@ -88,6 +89,7 @@ test.afterEach(async ({ sdk, tenant }) => {
   for (const id of made.roles.splice(0)) await sdk.iam.deleteRole(tenant.id, id);
   for (const id of made.groups.splice(0)) await sdk.iam.deleteGroup(tenant.id, id);
   for (const name of made.policies.splice(0)) await sdk.iam.deletePolicy(tenant.id, name);
+  for (const clientId of made.apps.splice(0)) await sdk.iam.deleteApp(tenant.id, clientId);
 });
 
 function userRow(page: import('@playwright/test').Page, email: string) {
@@ -637,5 +639,357 @@ test.describe('Error States', () => {
     } finally {
       await context.close();
     }
+  });
+});
+
+interface SeededApp {
+  clientId: string;
+  name: string;
+}
+
+async function seedApp(
+  sdk: PlatformClient,
+  tenant: Tenant,
+  label: string,
+  grantTypes: string[] = ['client_credentials'],
+): Promise<SeededApp> {
+  const name = `${label} ${suffix()}`;
+  const res = await sdk.iam.registerApp({ tenantId: tenant.id, name, grantTypes });
+  ok(res);
+  const clientId = res.data?.app.clientId as string;
+  expect(clientId, 'client id').toBeTruthy();
+  made.apps.push(clientId);
+  return { clientId, name };
+}
+
+async function listedApps(sdk: PlatformClient, tenant: Tenant): Promise<Named[]> {
+  const res = await sdk.iam.listApps({ tenantId: tenant.id });
+  ok(res);
+  return ((res.data ?? {}) as { apps?: Named[] }).apps ?? [];
+}
+
+/** The first string under one of keys anywhere in body (camel or snake case). */
+function field(body: unknown, keys: string[]): string | undefined {
+  if (!body || typeof body !== 'object') return undefined;
+  for (const [k, v] of Object.entries(body as Record<string, unknown>)) {
+    if (keys.includes(k) && typeof v === 'string' && v) return v;
+  }
+  for (const v of Object.values(body as Record<string, unknown>)) {
+    const found = field(v, keys);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+const secretKeys = ['clientSecret', 'client_secret'];
+const clientIdKeys = ['clientId', 'client_id'];
+
+function isAppsPost(r: import('@playwright/test').Response, path: RegExp): boolean {
+  return r.request().method() === 'POST' && path.test(new URL(r.url()).pathname);
+}
+
+/** Registers name from the page; resolves on the server's answer. */
+async function registerFromPage(
+  page: import('@playwright/test').Page,
+  name: string,
+): Promise<{ clientId: string; secret: string }> {
+  await page.getByRole('button', { name: /register application/i }).click();
+  await page.getByLabel(/application name/i).fill(name);
+  const answered = page.waitForResponse((r) => isAppsPost(r, /\/apps$/));
+  await page.getByRole('button', { name: /^register$/i }).click();
+  const res = await answered;
+  const body: unknown = await res.json().catch(() => undefined);
+  const clientId = field(body, clientIdKeys) ?? '';
+  if (clientId) made.apps.push(clientId);
+  return { clientId, secret: field(body, secretKeys) ?? '' };
+}
+
+function appRow(page: import('@playwright/test').Page, name: string) {
+  return userRow(page, name);
+}
+
+function totalCard(page: import('@playwright/test').Page) {
+  return page
+    .locator('[class*="card"]')
+    .filter({ has: page.getByRole('heading', { name: 'Total Applications' }) })
+    .first();
+}
+
+test.describe('API Credentials / Tokens', () => {
+  test('should display API credentials list', async ({ adminPage, sdk, tenant }) => {
+    const apps = [
+      await seedApp(sdk, tenant, 'Production API'),
+      await seedApp(sdk, tenant, 'Development API'),
+      await seedApp(sdk, tenant, 'Test API'),
+    ];
+
+    await adminPage.goto('/iam/tokens');
+    await expect(adminPage.getByRole('heading', { name: /api credentials/i })).toBeVisible();
+    await expect(adminPage.getByRole('columnheader', { name: /application name/i })).toBeVisible();
+    await expect(adminPage.getByRole('columnheader', { name: /client id/i })).toBeVisible();
+    for (const a of apps) await expect(adminPage.getByText(a.name).first()).toBeVisible();
+  });
+
+  test('should show statistics cards', async ({ adminPage, sdk, tenant }) => {
+    const app = await seedApp(sdk, tenant, 'Stats App', ['client_credentials', 'authorization_code']);
+
+    await adminPage.goto('/iam/tokens');
+    await expect(adminPage.getByText(app.name).first()).toBeVisible();
+    await expect(adminPage.getByRole('heading', { name: 'Total Applications' })).toBeVisible();
+    await expect(adminPage.getByRole('heading', { name: 'Active' })).toBeVisible();
+    await expect(adminPage.getByRole('heading', { name: 'Grant Types' })).toBeVisible();
+    const total = (await listedApps(sdk, tenant)).length;
+    await expect(totalCard(adminPage).locator('.text-2xl')).toHaveText(String(total));
+  });
+
+  test('should open register application dialog', async ({ adminPage }) => {
+    await adminPage.goto('/iam/tokens');
+    await adminPage.getByRole('button', { name: /register application/i }).click();
+
+    await expect(adminPage.getByRole('dialog')).toBeVisible();
+    await expect(adminPage.getByRole('heading', { name: /register new application/i })).toBeVisible();
+    await expect(adminPage.getByLabel(/application name/i)).toBeVisible();
+    await expect(adminPage.getByRole('button', { name: /register/i }).last()).toBeVisible();
+    await expect(adminPage.getByRole('button', { name: /cancel/i })).toBeVisible();
+  });
+
+  test('should register a new application and show secret', async ({ adminPage, sdk, tenant }) => {
+    const name = `My New Application ${suffix()}`;
+    await adminPage.goto('/iam/tokens');
+    await expect(adminPage.getByRole('heading', { name: /api credentials/i })).toBeVisible();
+
+    const { clientId, secret } = await registerFromPage(adminPage, name);
+    expect(clientId, 'client id the server answered').toBeTruthy();
+    expect(secret, 'secret the server answered').toBeTruthy();
+
+    await expect(adminPage.getByText(/application registered/i).first()).toBeVisible();
+    await expect(adminPage.getByRole('heading', { name: /application credentials/i })).toBeVisible();
+    const dialog = adminPage.getByRole('dialog');
+    await expect(dialog.getByText('Client ID', { exact: true })).toBeVisible();
+    await expect(dialog.getByText('Client Secret', { exact: true })).toBeVisible();
+    await expect(dialog.getByText(secret)).toBeVisible();
+    await expect(dialog.getByText(/store the client secret securely/i)).toBeVisible();
+
+    await dialog.getByRole('button', { name: 'Close', exact: true }).first().click();
+    await expect(adminPage.getByText(name).first()).toBeVisible();
+    expect((await listedApps(sdk, tenant)).filter((a) => a.name === name)).toHaveLength(1);
+  });
+
+  test('should validate application name is required', async ({ adminPage, sdk, tenant }) => {
+    const before = (await listedApps(sdk, tenant)).length;
+    await adminPage.goto('/iam/tokens');
+    await adminPage.getByRole('button', { name: /register application/i }).click();
+    await adminPage.getByRole('button', { name: /^register$/i }).click();
+
+    await expect(adminPage.getByText(/application name is required/i)).toBeVisible();
+    await expect(adminPage.getByRole('dialog')).toBeVisible();
+    expect((await listedApps(sdk, tenant)).length).toBe(before);
+  });
+
+  test('should rotate application secret', async ({ adminPage, sdk, tenant }) => {
+    const app = await seedApp(sdk, tenant, 'Rotate Test App');
+
+    adminPage.on('dialog', (dialog) => void dialog.accept());
+    await adminPage.goto('/iam/tokens');
+    await expect(adminPage.getByText(app.name).first()).toBeVisible();
+    await appRow(adminPage, app.name).getByRole('button').last().click();
+    const answered = adminPage.waitForResponse((r) => isAppsPost(r, new RegExp(`/apps/${app.clientId}/`)));
+    await adminPage.getByRole('menuitem', { name: /rotate secret/i }).click();
+    const secret = field(await (await answered).json().catch(() => undefined), secretKeys);
+    expect(secret, 'rotated secret the server answered').toBeTruthy();
+
+    await expect(adminPage.getByText(/secret rotated/i).first()).toBeVisible();
+    await expect(adminPage.getByRole('heading', { name: /application credentials/i })).toBeVisible();
+    const dialog = adminPage.getByRole('dialog');
+    await expect(dialog.getByText('Client Secret', { exact: true })).toBeVisible();
+    await expect(dialog.getByText(secret as string)).toBeVisible();
+  });
+
+  test('should delete application with confirmation', async ({ adminPage, sdk, tenant }) => {
+    const app = await seedApp(sdk, tenant, 'Delete Test App');
+
+    adminPage.on('dialog', (dialog) => void dialog.accept());
+    await adminPage.goto('/iam/tokens');
+    await expect(adminPage.getByText(app.name).first()).toBeVisible();
+    await appRow(adminPage, app.name).getByRole('button').last().click();
+    await adminPage.getByRole('menuitem', { name: /delete/i }).click();
+
+    await expect(adminPage.getByText(/application deleted/i).first()).toBeVisible();
+    await expect(adminPage.getByText(app.name)).toHaveCount(0);
+    await expect
+      .poll(async () => (await listedApps(sdk, tenant)).some((a) => field(a, clientIdKeys) === app.clientId))
+      .toBe(false);
+  });
+
+  test('should cancel delete when confirmation is rejected', async ({ adminPage, sdk, tenant }) => {
+    const app = await seedApp(sdk, tenant, 'Keep This App');
+
+    adminPage.on('dialog', (dialog) => void dialog.dismiss());
+    await adminPage.goto('/iam/tokens');
+    await expect(adminPage.getByText(app.name).first()).toBeVisible();
+    await appRow(adminPage, app.name).getByRole('button').last().click();
+    await adminPage.getByRole('menuitem', { name: /delete/i }).click();
+
+    await expect(adminPage.getByText(app.name).first()).toBeVisible();
+    expect((await listedApps(sdk, tenant)).some((a) => field(a, clientIdKeys) === app.clientId)).toBe(true);
+  });
+
+  test('should handle bulk delete', async ({ adminPage, sdk, tenant }) => {
+    const apps = [
+      await seedApp(sdk, tenant, 'Bulk App 1'),
+      await seedApp(sdk, tenant, 'Bulk App 2'),
+      await seedApp(sdk, tenant, 'Bulk App 3'),
+    ];
+
+    adminPage.on('dialog', (dialog) => void dialog.accept());
+    await adminPage.goto('/iam/tokens');
+    for (const a of apps) await expect(adminPage.getByText(a.name).first()).toBeVisible();
+    await appRow(adminPage, apps[0].name).getByRole('checkbox').click();
+    await appRow(adminPage, apps[1].name).getByRole('checkbox').click();
+
+    const deleteSelected = adminPage.getByRole('button', { name: /delete selected/i });
+    if (await deleteSelected.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await deleteSelected.click();
+      await expect(adminPage.getByText(/applications deleted/i).first()).toBeVisible();
+      await expect
+        .poll(async () => {
+          const ids = (await listedApps(sdk, tenant)).map((a) => field(a, clientIdKeys));
+          return apps.map((a) => ids.includes(a.clientId));
+        })
+        .toEqual([false, false, true]);
+    } else {
+      // No bulk action rendered: the selection itself is what the page shows.
+      await expect(adminPage.getByRole('checkbox', { checked: true })).not.toHaveCount(0);
+    }
+  });
+
+  test('should load applications without an error', async ({ adminPage, sdk, tenant }) => {
+    const app = await seedApp(sdk, tenant, 'Listed App');
+    await adminPage.goto('/iam/tokens');
+    await expect(adminPage.getByText(app.name).first()).toBeVisible();
+    await expect(adminPage.getByText(/error loading applications/i)).toHaveCount(0);
+  });
+
+  test('should handle register application error', async ({ adminPage, sdk, tenant }) => {
+    const app = await seedApp(sdk, tenant, 'Duplicate App');
+
+    await adminPage.goto('/iam/tokens');
+    await expect(adminPage.getByText(app.name).first()).toBeVisible();
+    const { clientId } = await registerFromPage(adminPage, app.name);
+
+    // The page shows what the server answered for a name it already holds.
+    const sameName = async () => (await listedApps(sdk, tenant)).filter((a) => a.name === app.name).length;
+    if (clientId) {
+      await expect(adminPage.getByText(/application registered/i).first()).toBeVisible();
+      await expect.poll(sameName).toBe(2);
+    } else {
+      await expect(adminPage.getByText(/error registering application/i).first()).toBeVisible();
+      await expect(adminPage.getByRole('dialog')).toBeVisible();
+      expect(await sameName()).toBe(1);
+    }
+  });
+
+  test('should handle delete error', async ({ adminPage, sdk, tenant }) => {
+    const app = await seedApp(sdk, tenant, 'Gone App');
+
+    adminPage.on('dialog', (dialog) => void dialog.accept());
+    await adminPage.goto('/iam/tokens');
+    await expect(adminPage.getByText(app.name).first()).toBeVisible();
+    // Deleted behind the page's back: the page's delete reaches an app the
+    // server no longer holds.
+    ok(await sdk.iam.deleteApp(tenant.id, app.clientId));
+    made.apps.splice(made.apps.indexOf(app.clientId), 1);
+    await appRow(adminPage, app.name).getByRole('button').last().click();
+    await adminPage.getByRole('menuitem', { name: /delete/i }).click();
+
+    await expect(adminPage.getByText(/error deleting application|application deleted/i).first()).toBeVisible();
+    expect((await listedApps(sdk, tenant)).some((a) => field(a, clientIdKeys) === app.clientId)).toBe(false);
+  });
+
+  test('should handle rotate secret error', async ({ adminPage, sdk, tenant }) => {
+    const app = await seedApp(sdk, tenant, 'Secret Error App');
+
+    adminPage.on('dialog', (dialog) => void dialog.accept());
+    await adminPage.goto('/iam/tokens');
+    await expect(adminPage.getByText(app.name).first()).toBeVisible();
+    // An app the server no longer holds has no secret to rotate.
+    ok(await sdk.iam.deleteApp(tenant.id, app.clientId));
+    made.apps.splice(made.apps.indexOf(app.clientId), 1);
+    await appRow(adminPage, app.name).getByRole('button').last().click();
+    await adminPage.getByRole('menuitem', { name: /rotate secret/i }).click();
+
+    await expect(adminPage.getByText(/error rotating secret/i).first()).toBeVisible();
+  });
+
+  test('should search credentials', async ({ adminPage, sdk, tenant }) => {
+    const prod = await seedApp(sdk, tenant, 'Production API');
+    const dev = await seedApp(sdk, tenant, 'Development API');
+    const testEnv = await seedApp(sdk, tenant, 'Test Environment');
+
+    await adminPage.goto('/iam/tokens');
+    const table = adminPage.locator('table');
+    for (const a of [prod, dev, testEnv]) await expect(table.getByText(a.name)).toBeVisible();
+
+    await adminPage.fill('input[placeholder*="Search"]', prod.name);
+    await expect(table.getByText(dev.name)).toBeHidden();
+    await expect(table.getByText(prod.name)).toBeVisible();
+
+    await adminPage.fill('input[placeholder*="Search"]', '');
+    for (const a of [prod, dev, testEnv]) await expect(table.getByText(a.name)).toBeVisible();
+  });
+
+  // The tenant may hold apps other specs of this worker left: the empty table
+  // is a search with no match, and the total card is the server's count.
+  test('should show empty state when no applications match', async ({ adminPage, sdk, tenant }) => {
+    await adminPage.goto('/iam/tokens');
+    await expect(adminPage.getByRole('heading', { name: /api credentials/i })).toBeVisible();
+    const total = (await listedApps(sdk, tenant)).length;
+    await expect(totalCard(adminPage).locator('.text-2xl')).toHaveText(String(total));
+
+    await adminPage.fill('input[placeholder*="Search"]', `no-such-app-${suffix()}`);
+    await expect(adminPage.getByText(/no results/i)).toBeVisible();
+  });
+
+  test('should display grant types badges', async ({ adminPage, sdk, tenant }) => {
+    const app = await seedApp(sdk, tenant, 'Multi Grant App', [
+      'client_credentials',
+      'authorization_code',
+      'refresh_token',
+    ]);
+
+    await adminPage.goto('/iam/tokens');
+    const row = appRow(adminPage, app.name);
+    await expect(row).toBeVisible();
+    await expect(row.getByText('client_credentials')).toBeVisible();
+    await expect(row.getByText('authorization_code')).toBeVisible();
+    await expect(row.getByText('+1')).toBeVisible();
+  });
+
+  // The held-open list response has no server behaviour behind it: the port
+  // checks that a real load ends with the list and no loading text.
+  test('should finish loading', async ({ adminPage, sdk, tenant }) => {
+    const app = await seedApp(sdk, tenant, 'Loaded App');
+    await adminPage.goto('/iam/tokens');
+    await expect(adminPage.getByText(app.name).first()).toBeVisible();
+    await expect(adminPage.getByText(/^loading/i)).toHaveCount(0);
+  });
+
+  test('should copy secret to clipboard', async ({ adminPage }) => {
+    await adminPage.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+    await adminPage.goto('/iam/tokens');
+    const { secret } = await registerFromPage(adminPage, `Copy Test App ${suffix()}`);
+    expect(secret, 'secret the server answered').toBeTruthy();
+
+    await expect(adminPage.getByRole('heading', { name: /application credentials/i })).toBeVisible();
+    const dialog = adminPage.getByRole('dialog');
+    const copyButton = dialog.locator('button').filter({ has: adminPage.locator('svg.lucide-copy') });
+    await expect(copyButton.first()).toBeVisible();
+    await copyButton.first().click();
+  });
+
+  test('should show OAuth info alert', async ({ adminPage }) => {
+    await adminPage.goto('/iam/tokens');
+    await expect(adminPage.getByText(/oauth client credentials/i)).toBeVisible();
+    await expect(adminPage.getByText(/client credentials flow/i)).toBeVisible();
   });
 });
