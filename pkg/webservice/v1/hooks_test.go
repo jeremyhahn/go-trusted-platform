@@ -689,8 +689,18 @@ const pxeIdentityBoundMAC = "52:54:00:12:34:56"
 // EK (serial 1001) is bound to a profile with pxeIdentityBoundMAC.
 func finalizeEKBound(t *testing.T, rec *fakePXEIdentityRecorder) error {
 	t.Helper()
-	hook := NewPXEIdentityHookWithProfiles(rec, ekProfiles{"1001": {MACAddress: pxeIdentityBoundMAC}}, slog.Default())
-	return hook(pxeIdentityTCGContext(pxeIdentityEKCert(t, 1001)))
+	profiles, ek := pxeIdentityBoundProfiles(t)
+	hook := NewPXEIdentityHookWithProfiles(rec, profiles, slog.Default())
+	return hook(pxeIdentityTCGContext(ek))
+}
+
+// pxeIdentityBoundProfiles returns a profile store with EK serial 1001
+// bound to pxeIdentityBoundMAC and to the registered EK certificate it
+// returns, the one a test then presents.
+func pxeIdentityBoundProfiles(t *testing.T) (ekProfiles, *x509.Certificate) {
+	t.Helper()
+	ek := pxeIdentityEKCert(t, 1001)
+	return ekProfiles{"1001": {MACAddress: pxeIdentityBoundMAC, EKCert: pxeIdentityEKCertPEM(ek)}}, ek
 }
 
 func TestNewPXEIdentityHook_RecordsAndToleratesNotAPXEInstall(t *testing.T) {
@@ -827,7 +837,7 @@ func TestNewPXEIdentityHook_SkipsWithoutABoundProfile(t *testing.T) {
 		"no profile resolver":   {profiles: nil, ctx: pxeIdentityTCGContext(ek)},
 		"no EK certificate":     {profiles: ekProfiles{"1001": {MACAddress: pxeIdentityBoundMAC}}, ctx: noEK},
 		"no profile for the EK": {profiles: ekProfiles{}, ctx: pxeIdentityTCGContext(ek)},
-		"a profile with no MAC": {profiles: ekProfiles{"1001": {}}, ctx: pxeIdentityTCGContext(ek)},
+		"a profile with no MAC": {profiles: ekProfiles{"1001": {EKCert: pxeIdentityEKCertPEM(ek)}}, ctx: pxeIdentityTCGContext(ek)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			rec := &fakePXEIdentityRecorder{}
@@ -909,8 +919,9 @@ func TestPXEIdentityHook_ALaterHookFailureRecordsNothing(t *testing.T) {
 	rec := &fakePXEIdentityRecorder{}
 	hooks := trustedca.NewACMEOrderFinalizeHookRegistry()
 	hooks.Register(failingOnceHook())
-	hooks.Register(NewPXEIdentityHookWithProfiles(rec, ekProfiles{"1001": {MACAddress: pxeIdentityBoundMAC}}, slog.Default()))
-	finalize := pxeIdentityTCGContext(pxeIdentityEKCert(t, 1001))
+	profiles, ek := pxeIdentityBoundProfiles(t)
+	hooks.Register(NewPXEIdentityHookWithProfiles(rec, profiles, slog.Default()))
+	finalize := pxeIdentityTCGContext(ek)
 
 	err := hooks.Execute(finalize)
 	require.ErrorAs(t, err, new(errHookFailedOnce))
