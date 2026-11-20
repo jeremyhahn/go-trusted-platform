@@ -33,10 +33,12 @@ test.describe('TPM Management (real server)', () => {
 
     test('shows the manufacturer the server reports', async ({ adminPage, sdk }) => {
       const info = must(await sdk.tpm.getInfo(), 'tpm.getInfo');
-      test.skip(!info.manufacturer, 'server could not identify the TPM manufacturer');
+      const manufacturer = info.manufacturer;
+      test.skip(!manufacturer, 'server could not identify the TPM manufacturer');
+      if (!manufacturer) return;
 
       await adminPage.goto('/tpm/status');
-      await expect(adminPage.getByText(info.manufacturer.name).first()).toBeVisible();
+      await expect(adminPage.getByText(manufacturer.name).first()).toBeVisible();
     });
 
     test('shows the TPM version', async ({ adminPage }) => {
@@ -194,7 +196,12 @@ test.describe('Attestation Management (real server)', () => {
       await sdk.attestation.buildManifest({ config: { hostId }, sign }),
       'attestation.buildManifest',
     );
-    const manifest = built.manifest ?? built;
+    type BuiltManifest = { id: string; hostId?: string };
+    const reply = built as { manifest?: BuiltManifest } & Partial<BuiltManifest>;
+    const manifest = reply.manifest ?? reply;
+    if (typeof manifest.id !== 'string' || !manifest.id) {
+      throw new Error(`attestation.buildManifest returned no manifest id: ${JSON.stringify(built)}`);
+    }
     return { id: manifest.id, hostId: manifest.hostId ?? hostId };
   }
 
