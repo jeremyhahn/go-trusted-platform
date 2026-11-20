@@ -105,9 +105,33 @@ describe('KMSService', () => {
       keySpec: { algorithm: 'ECDSA_P256', usage: ['SIGN', 'VERIFY'] },
     };
 
-    it('POSTs the request to /v1/kms/keys/import', async () => {
+    it('POSTs the server ImportKeyRequest wire body to /v1/kms/keys/import', async () => {
       await expect(service.importKey(req)).resolves.toBe(ok);
-      expectOnlyCall('post', '/v1/kms/keys/import', req);
+      expectOnlyCall('post', '/v1/kms/keys/import', {
+        name: 'imported',
+        algorithm: 'ECDSA_P256',
+        key_material: 'a2V5',
+        wrapping_key_id: 'wrap-1',
+        usage: ['SIGN', 'VERIFY'],
+      });
+    });
+
+    it('sends description and tags when they are set', async () => {
+      await service.importKey({
+        name: 'imported',
+        keyMaterial: 'a2V5',
+        keySpec: { algorithm: 'ECDSA_P256', usage: ['SIGN', 'VERIFY'] },
+        description: 'd',
+        tags: { env: 'dev' },
+      });
+      expectOnlyCall('post', '/v1/kms/keys/import', {
+        name: 'imported',
+        algorithm: 'ECDSA_P256',
+        key_material: 'a2V5',
+        usage: ['SIGN', 'VERIFY'],
+        description: 'd',
+        tags: { env: 'dev' },
+      });
     });
 
     it('propagates a client error', async () => {
@@ -183,14 +207,14 @@ describe('KMSService', () => {
   });
 
   describe('updateKeyStatus', () => {
-    it('PATCHes version and status to /v1/kms/keys/{id}/status', async () => {
+    it('PUTs version and status to /v1/kms/keys/{id}/status, as the REST router serves', async () => {
       const req: UpdateKeyStatusRequest = { keyId: 'key-1', version: 2, status: 'DISABLED' };
       await expect(service.updateKeyStatus(req)).resolves.toBe(ok);
-      expectOnlyCall('patch', '/v1/kms/keys/key-1/status', { version: 2, status: 'DISABLED' });
+      expectOnlyCall('put', '/v1/kms/keys/key-1/status', { version: 2, status: 'DISABLED' });
     });
 
     it('propagates a client error', async () => {
-      await expectRejects('patch', () =>
+      await expectRejects('put', () =>
         service.updateKeyStatus({ keyId: 'key-1', status: 'ENABLED' })
       );
     });
@@ -251,49 +275,106 @@ describe('KMSService', () => {
     hashAlgorithm: 'SHA384',
     keyVersion: 1,
   };
-  const hashReq: HashRequest = { data: 'ZGF0YQ==', algorithm: 'SHA3_256' };
-  const hmacReq: HMACRequest = { keyId: 'hmac-1', message: 'bXNn', hashAlgorithm: 'SHA512' };
-  const verifyHmacReq: VerifyHMACRequest = { keyId: 'hmac-1', message: 'bXNn', hmac: 'bWFj' };
-  const randomReq: GenerateRandomRequest = { numBytes: 32 };
-  const dataKeyReq: GenerateDataKeyRequest = { keyId: 'kek-1', algorithm: 'AES_256', keySize: 256 };
-  const wrappedDataKeyReq: GenerateWrappedDataKeyRequest = {
-    wrappingKeyId: 'wrap-1',
-    wrappingAlgorithm: 'AES_KWP',
-    keyAlgorithm: 'AES_128',
-    keySize: 128,
-  };
+
+  describe('hmac', () => {
+    const req: HMACRequest = { keyId: 'hmac-1', message: 'bXNn', hashAlgorithm: 'SHA512' };
+
+    it('POSTs { data, hash } to /v1/kms/hmac/{name}', async () => {
+      await expect(service.hmac(req)).resolves.toBe(ok);
+      expectOnlyCall('post', '/v1/kms/hmac/hmac-1', { data: 'bXNn', hash: 'SHA512' });
+    });
+
+    it('encodes the key name as one path segment and omits an unset hash', async () => {
+      await service.hmac({ keyId: 'a/b', message: 'bXNn' });
+      expectOnlyCall('post', '/v1/kms/hmac/a%2Fb', { data: 'bXNn' });
+    });
+
+    it('propagates a client error', async () => {
+      await expectRejects('post', () => service.hmac(req));
+    });
+  });
+
+  describe('verifyHMAC', () => {
+    const req: VerifyHMACRequest = { keyId: 'hmac-1', message: 'bXNn', hmac: 'bWFj', hashAlgorithm: 'SHA256' };
+
+    it('POSTs { data, hmac, hash } to /v1/kms/hmac/{name}/verify', async () => {
+      await expect(service.verifyHMAC(req)).resolves.toBe(ok);
+      expectOnlyCall('post', '/v1/kms/hmac/hmac-1/verify', { data: 'bXNn', hmac: 'bWFj', hash: 'SHA256' });
+    });
+
+    it('propagates a client error', async () => {
+      await expectRejects('post', () => service.verifyHMAC(req));
+    });
+  });
+
+  describe('hash', () => {
+    const req: HashRequest = { data: 'ZGF0YQ==', algorithm: 'SHA3_256' };
+
+    it('POSTs { data, hash } to /v1/kms/hash', async () => {
+      await expect(service.hash(req)).resolves.toBe(ok);
+      expectOnlyCall('post', '/v1/kms/hash', { data: 'ZGF0YQ==', hash: 'SHA3_256' });
+    });
+
+    it('propagates a client error', async () => {
+      await expectRejects('post', () => service.hash(req));
+    });
+  });
+
+  describe('generateRandom', () => {
+    const req: GenerateRandomRequest = { numBytes: 32 };
+
+    it('POSTs { num_bytes } to /v1/kms/random', async () => {
+      await expect(service.generateRandom(req)).resolves.toBe(ok);
+      expectOnlyCall('post', '/v1/kms/random', { num_bytes: 32 });
+    });
+
+    it('propagates a client error', async () => {
+      await expectRejects('post', () => service.generateRandom(req));
+    });
+  });
+
+  describe('generateDataKey', () => {
+    const req: GenerateDataKeyRequest = { keyId: 'kek-1', algorithm: 'AES_256', keySize: 256, context: 'Y3R4' };
+
+    it('POSTs { key_id, algorithm, key_size, context } to /v1/kms/data-keys', async () => {
+      await expect(service.generateDataKey(req)).resolves.toBe(ok);
+      expectOnlyCall('post', '/v1/kms/data-keys', {
+        key_id: 'kek-1',
+        algorithm: 'AES_256',
+        key_size: 256,
+        context: 'Y3R4',
+      });
+    });
+
+    it('propagates a client error', async () => {
+      await expectRejects('post', () => service.generateDataKey(req));
+    });
+  });
+
+  describe('generateWrappedDataKey', () => {
+    const req: GenerateWrappedDataKeyRequest = { wrappingKeyId: 'wrap-1', keyAlgorithm: 'AES_128', keySize: 128 };
+
+    it('POSTs { wrapping_key_id, key_algorithm, key_size } to /v1/kms/data-keys/wrapped', async () => {
+      await expect(service.generateWrappedDataKey(req)).resolves.toBe(ok);
+      expectOnlyCall('post', '/v1/kms/data-keys/wrapped', {
+        wrapping_key_id: 'wrap-1',
+        key_algorithm: 'AES_128',
+        key_size: 128,
+      });
+      const body = mock.post.mock.calls[0]?.[1] as Record<string, unknown>;
+      expect(Object.keys(body).sort()).toEqual(['key_algorithm', 'key_size', 'wrapping_key_id']);
+    });
+
+    it('propagates a client error', async () => {
+      await expectRejects('post', () => service.generateWrappedDataKey(req));
+    });
+  });
 
   const postCases: Array<{ method: string; path: string; body: unknown; call: () => Promise<unknown> }> = [
     { method: 'encrypt', path: '/v1/kms/encrypt', body: encryptReq, call: () => service.encrypt(encryptReq) },
     { method: 'decrypt', path: '/v1/kms/decrypt', body: decryptReq, call: () => service.decrypt(decryptReq) },
     { method: 'sign', path: '/v1/kms/sign', body: signReq, call: () => service.sign(signReq) },
     { method: 'verify', path: '/v1/kms/verify', body: verifyReq, call: () => service.verify(verifyReq) },
-    { method: 'hash', path: '/v1/kms/hash', body: hashReq, call: () => service.hash(hashReq) },
-    { method: 'hmac', path: '/v1/kms/hmac', body: hmacReq, call: () => service.hmac(hmacReq) },
-    {
-      method: 'verifyHMAC',
-      path: '/v1/kms/hmac/verify',
-      body: verifyHmacReq,
-      call: () => service.verifyHMAC(verifyHmacReq),
-    },
-    {
-      method: 'generateRandom',
-      path: '/v1/kms/random',
-      body: randomReq,
-      call: () => service.generateRandom(randomReq),
-    },
-    {
-      method: 'generateDataKey',
-      path: '/v1/kms/datakey',
-      body: dataKeyReq,
-      call: () => service.generateDataKey(dataKeyReq),
-    },
-    {
-      method: 'generateWrappedDataKey',
-      path: '/v1/kms/datakey/wrapped',
-      body: wrappedDataKeyReq,
-      call: () => service.generateWrappedDataKey(wrappedDataKeyReq),
-    },
   ];
 
   for (const c of postCases) {
