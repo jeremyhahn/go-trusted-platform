@@ -425,7 +425,11 @@ func route(method string, args interface{}) (httpMethod, path string, body inter
 		if err != nil {
 			return "", "", nil, err
 		}
-		if body, err = encodeInvokeBody(method, body); err != nil {
+		if entry.encodeBody != nil {
+			if body, err = entry.encodeBody(body); err != nil {
+				return "", "", nil, status.Error(codes.InvalidArgument, err.Error())
+			}
+		} else if body, err = encodeInvokeBody(method, body); err != nil {
 			return "", "", nil, err
 		}
 		return entry.method, path, body, nil
@@ -769,6 +773,11 @@ type templatedRoute struct {
 	method      string
 	pathParams  []pathParam
 	queryParams []queryParam
+	// encodeBody, when set, replaces the method's request encoder for
+	// this route: it receives the body with the templated fields cleared
+	// and returns what is sent (a route whose REST document differs
+	// from the proto request, such as the flat SDN zone document).
+	encodeBody restRequestEncoder
 }
 
 // templatedRouteTable maps gRPC methods to REST routes whose URLs
