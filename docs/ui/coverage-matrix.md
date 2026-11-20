@@ -182,24 +182,24 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
-| `PlatformDaemon.GetStatus` | `GET /status` | - | `Dashboard.svelte` | - | partial |
+| `PlatformDaemon.GetStatus` | `GET /status` | `(dashboard)/platform/services/page.tsx` | `Dashboard.svelte` | `real-server/platform-daemon.spec.ts` | covered |
 | `PlatformDaemon.GetHealth` | `GET /health` | `(dashboard)/dashboard/page.tsx`<br>`(dashboard)/platform/events/page.tsx`<br>`(dashboard)/platform/health/page.tsx` (+2) | `Dashboard.svelte` | `auth.spec.ts`<br>`dashboard.spec.ts`<br>`platform.spec.ts` (+1) | covered |
-| `PlatformDaemon.Liveness` | - | - | - | - | missing |
-| `PlatformDaemon.Readiness` | - | - | - | - | missing |
-| `PlatformDaemon.Shutdown` | - | - | - | - | missing |
-| `PlatformDaemon.GetVersion` | `GET /version` | - | `Dashboard.svelte` | - | partial |
-| `PlatformDaemon.GetConfig` | `GET /config` | - | - | - | missing |
-| `PlatformDaemon.UpdateConfig` | - | - | - | - | missing |
-| `PlatformDaemon.ReloadConfig` | `POST /config/reload` | - | - | - | missing |
-| `PlatformDaemon.StartService` | `POST /services/{service}/start` | - | `Dashboard.svelte` | - | partial |
-| `PlatformDaemon.StopService` | `POST /services/{service}/stop` | - | `Dashboard.svelte` | - | partial |
-| `PlatformDaemon.RestartService` | `POST /services/{service}/restart` | - | `Dashboard.svelte` | - | partial |
-| `PlatformDaemon.GetServiceStatus` | `GET /services/{service}` | - | - | - | missing |
-| `PlatformDaemon.ListServices` | `GET /services` | - | `Dashboard.svelte` | - | partial |
+| `PlatformDaemon.Liveness` | `GET /health/live` | `(dashboard)/platform/services/page.tsx` | - | `real-server/platform-daemon.spec.ts` | covered |
+| `PlatformDaemon.Readiness` | `GET /health/ready` | `(dashboard)/platform/services/page.tsx` | - | `real-server/platform-daemon.spec.ts` | covered |
+| `PlatformDaemon.Shutdown` | `POST /shutdown` | `(dashboard)/platform/services/page.tsx` | - | `real-server/platform-daemon.spec.ts` | covered |
+| `PlatformDaemon.GetVersion` | `GET /version` | `(dashboard)/platform/services/page.tsx` | `Dashboard.svelte` | `real-server/platform-daemon.spec.ts` | covered |
+| `PlatformDaemon.GetConfig` | `GET /config` | `(dashboard)/platform/services/page.tsx` | - | `real-server/platform-daemon.spec.ts` | covered |
+| `PlatformDaemon.UpdateConfig` | `PATCH /config` | `(dashboard)/platform/services/page.tsx` | - | `real-server/platform-daemon.spec.ts` | covered |
+| `PlatformDaemon.ReloadConfig` | `POST /config/reload` | `(dashboard)/platform/services/page.tsx` | - | `real-server/platform-daemon.spec.ts` | covered |
+| `PlatformDaemon.StartService` | `POST /services/{service}/start` | `(dashboard)/platform/services/page.tsx` | `Dashboard.svelte` | `real-server/platform-daemon.spec.ts` | covered |
+| `PlatformDaemon.StopService` | `POST /services/{service}/stop` | `(dashboard)/platform/services/page.tsx` | `Dashboard.svelte` | `real-server/platform-daemon.spec.ts` | covered |
+| `PlatformDaemon.RestartService` | `POST /services/{service}/restart` | `(dashboard)/platform/services/page.tsx` | `Dashboard.svelte` | `real-server/platform-daemon.spec.ts` | covered |
+| `PlatformDaemon.GetServiceStatus` | `GET /services/{service}` | `(dashboard)/platform/services/page.tsx` | - | `real-server/platform-daemon.spec.ts` | covered |
+| `PlatformDaemon.ListServices` | `GET /services` | `(dashboard)/platform/services/page.tsx` | `Dashboard.svelte` | `real-server/platform-daemon.spec.ts` | covered |
 | `PlatformDaemon.StreamEvents` | - | - | - | - | not-UI: streaming plumbing |
 | `PlatformDaemon.StreamLogs` | `GET /logs/stream` | - | - | - | not-UI: streaming plumbing |
 | `PlatformDaemon.StreamMetrics` | - | - | - | - | not-UI: streaming plumbing |
-| `PlatformDaemon.ListEntityTypes` | - | - | - | - | missing |
+| `PlatformDaemon.ListEntityTypes` | `GET /entity-types` | `(dashboard)/platform/services/page.tsx` | - | `real-server/platform-daemon.spec.ts` | covered |
 | `PlatformDaemon.DumpEntityType` | - | - | - | - | not-UI: streaming plumbing |
 
 ## DeviceService (`device.proto`)
@@ -738,7 +738,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | ClusterService | 5 | 0 | 0 | 5 | 0 | 0 |
 | ComputeService | 37 | 14 | 2 | 16 | 5 | 0 |
 | ConfigDeliveryService | 7 | 1 | 2 | 0 | 4 | 0 |
-| PlatformDaemon | 19 | 1 | 6 | 8 | 4 | 0 |
+| PlatformDaemon | 19 | 15 | 0 | 0 | 4 | 0 |
 | DeviceService | 32 | 10 | 7 | 15 | 0 | 0 |
 | EABService | 11 | 0 | 0 | 11 | 0 | 0 |
 | FIDO2Service | 5 | 0 | 0 | 0 | 5 | 0 |

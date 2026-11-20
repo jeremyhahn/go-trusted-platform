@@ -25,6 +25,11 @@ import type {
   ListDaemonServicesResponse,
   DaemonServiceAction,
   DaemonServiceActionResponse,
+  DaemonProbeResponse,
+  UpdateDaemonConfigRequest,
+  DaemonShutdownRequest,
+  DaemonOperationResult,
+  ListDaemonEntityTypesResponse,
 } from '../types/platform.js';
 
 /**
@@ -229,6 +234,54 @@ export class PlatformService extends BaseService {
       {},
       { retry: { enabled: false } }
     );
+  }
+
+  // =========================================================================
+  // Probes, configuration update, shutdown and entity types (#2047)
+  // =========================================================================
+
+  /** Liveness probe: the daemon process answers */
+  async liveness(): Promise<ApiResponse<DaemonProbeResponse>> {
+    return this.client.get<DaemonProbeResponse>(this.buildUrl('/health/live'));
+  }
+
+  /** Readiness probe: every registered component is healthy */
+  async readiness(): Promise<ApiResponse<DaemonProbeResponse>> {
+    return this.client.get<DaemonProbeResponse>(this.buildUrl('/health/ready'));
+  }
+
+  /**
+   * Apply one configuration section
+   *
+   * @param request - Section, values and whether to persist
+   * @returns Operation result
+   */
+  async updateConfig(
+    request: UpdateDaemonConfigRequest
+  ): Promise<ApiResponse<DaemonOperationResult>> {
+    return this.client.patch<DaemonOperationResult>(this.buildUrl('/config'), request, {
+      retry: { enabled: false },
+    });
+  }
+
+  /**
+   * Shut the daemon down. Never retried: a resend after a dropped answer
+   * would reach the next daemon instance.
+   *
+   * @param request - Graceful flag and timeout
+   * @returns Operation result
+   */
+  async shutdown(request: DaemonShutdownRequest = {}): Promise<ApiResponse<DaemonOperationResult>> {
+    return this.client.post<DaemonOperationResult>(
+      this.buildUrl('/shutdown'),
+      { graceful: request.graceful ?? true, timeout_seconds: request.timeout_seconds ?? 0 },
+      { retry: { enabled: false } }
+    );
+  }
+
+  /** List the stored entity types and their counts */
+  async listEntityTypes(): Promise<ApiResponse<ListDaemonEntityTypesResponse>> {
+    return this.client.get<ListDaemonEntityTypesResponse>(this.buildUrl('/entity-types'));
   }
 
 }

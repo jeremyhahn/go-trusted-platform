@@ -11,6 +11,8 @@ import {
   AlertCircle,
   Loader2,
   FileCog,
+  Activity,
+  Power,
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
@@ -91,6 +93,10 @@ export default function ServicesPage() {
   // action bumps the generation, so a read begun before it never lands.
   const selectedRef = React.useRef<string | null>(null);
   const detailSeq = React.useRef(0);
+  const [sectionName, setSectionName] = React.useState("");
+  const [sectionValues, setSectionValues] = React.useState("{}");
+  const [persistSection, setPersistSection] = React.useState(false);
+  const [confirmShutdown, setConfirmShutdown] = React.useState(false);
 
   const services = daemon.services.data?.services ?? [];
 
@@ -130,6 +136,9 @@ export default function ServicesPage() {
     daemon.version.refetch();
     daemon.config.refetch();
     daemon.services.refetch();
+    daemon.liveness.refetch();
+    daemon.readiness.refetch();
+    daemon.entityTypes.refetch();
     if (selectedRef.current) void refreshDetail(selectedRef.current);
   };
 
@@ -159,7 +168,50 @@ export default function ServicesPage() {
     }
   };
 
+  const handleUpdateConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    let values: Record<string, string>;
+    try {
+      const parsed: unknown = JSON.parse(sectionValues || "{}");
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("Values must be a JSON object");
+      }
+      values = Object.fromEntries(
+        Object.entries(parsed as Record<string, unknown>).map(([k, v]) => [
+          k,
+          typeof v === "string" ? v : JSON.stringify(v),
+        ])
+      );
+    } catch (err) {
+      fail("Configuration update failed", err);
+      return;
+    }
+    try {
+      const res = await daemon.updateConfig(sectionName.trim(), values, persistSection);
+      if (res && res.success === false) {
+        fail("Configuration update failed", new Error(res.error || res.message));
+        return;
+      }
+      toast({ title: "Configuration updated", description: res?.message || sectionName });
+    } catch (err) {
+      fail("Configuration update failed", err);
+    }
+  };
+
+  const handleShutdown = async () => {
+    setConfirmShutdown(false);
+    try {
+      const res = await daemon.shutdown({ graceful: true });
+      toast({ title: "Daemon shutting down", description: res?.message || "Shutdown requested" });
+    } catch (err) {
+      fail("Shutdown failed", err);
+    }
+  };
+
   const status = daemon.status.data;
+  const live = daemon.liveness.data;
+  const ready = daemon.readiness.data;
+  const entityTypes = daemon.entityTypes.data?.entity_types ?? [];
   const anyLoading =
     daemon.status.isLoading || daemon.services.isLoading || daemon.config.isLoading;
 
@@ -172,6 +224,15 @@ export default function ServicesPage() {
         <Button variant="outline" size="sm" onClick={refreshAll} disabled={anyLoading}>
           <RefreshCw className={`h-4 w-4 mr-2 ${anyLoading ? "animate-spin" : ""}`} />
           Refresh
+        </Button>
+        <Button
+          variant="destructive"
+          size="sm"
+          onClick={() => setConfirmShutdown(true)}
+          disabled={daemon.isPending("shutdown")}
+        >
+          <Power className="h-4 w-4 mr-2" />
+          Shut Down Daemon
         </Button>
       </PageHeader>
 
@@ -210,6 +271,39 @@ export default function ServicesPage() {
         </Card>
       </div>
 
+      <Card data-testid="daemon-probes">
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+          <CardTitle className="text-sm font-medium">Health Probes</CardTitle>
+          <Activity className="h-4 w-4 text-muted-foreground" />
+        </CardHeader>
+        <CardContent className="flex gap-6 text-sm">
+          <div>
+            Liveness:{" "}
+            <Badge data-testid="probe-liveness" variant={live?.alive ? "default" : "destructive"}>
+              {daemon.liveness.error
+                ? daemon.liveness.error.message
+                : live
+                  ? live.alive
+                    ? "Alive"
+                    : "Down"
+                  : "Loading..."}
+            </Badge>
+          </div>
+          <div>
+            Readiness:{" "}
+            <Badge data-testid="probe-readiness" variant={ready?.ready ? "default" : "destructive"}>
+              {daemon.readiness.error
+                ? daemon.readiness.error.message
+                : ready
+                  ? ready.ready
+                    ? "Ready"
+                    : "Not ready"
+                  : "Loading..."}
+            </Badge>
+          </div>
+        </CardContent>
+      </Card>
+
       <Card>
         <CardHeader className="flex flex-row items-center justify-between space-y-0">
           <div>
@@ -240,6 +334,72 @@ export default function ServicesPage() {
             >
               {daemon.config.data ? JSON.stringify(daemon.config.data, null, 2) : "Loading..."}
             </pre>
+          )}
+          <form className="mt-4 space-y-2 text-sm" onSubmit={handleUpdateConfig}>
+            <div className="flex flex-col gap-1">
+              <label htmlFor="config-section">Section</label>
+              <input
+                id="config-section"
+                className="rounded border bg-background px-2 py-1"
+                value={sectionName}
+                onChange={(e) => setSectionName(e.target.value)}
+                placeholder="logging"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label htmlFor="config-values">Values (JSON)</label>
+              <textarea
+                id="config-values"
+                className="rounded border bg-background px-2 py-1 font-mono text-xs"
+                rows={3}
+                value={sectionValues}
+                onChange={(e) => setSectionValues(e.target.value)}
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                id="config-persist"
+                type="checkbox"
+                checked={persistSection}
+                onChange={(e) => setPersistSection(e.target.checked)}
+              />
+              <label htmlFor="config-persist">Persist to the config file</label>
+            </div>
+            <Button
+              type="submit"
+              size="sm"
+              disabled={!sectionName.trim() || daemon.isPending("update-config")}
+            >
+              Apply Section
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+
+      <Card data-testid="entity-types">
+        <CardHeader>
+          <CardTitle>Entity Types</CardTitle>
+          <CardDescription>Entity types stored by the daemon</CardDescription>
+        </CardHeader>
+        <CardContent className="text-sm">
+          {daemon.entityTypes.error ? (
+            <span className="text-destructive">{daemon.entityTypes.error.message}</span>
+          ) : daemon.entityTypes.isLoading ? (
+            <span className="text-muted-foreground">Loading...</span>
+          ) : entityTypes.length === 0 ? (
+            <span className="text-muted-foreground">No entity types</span>
+          ) : (
+            <ul className="space-y-1">
+              {entityTypes.map((t) => (
+                <li key={t.name} className="flex gap-2">
+                  <span className="font-medium">{t.name}</span>
+                  <span>{t.count}</span>
+                  <Badge variant={statusVariant(t.status || "")} className="capitalize">
+                    {t.status}
+                  </Badge>
+                </li>
+              ))}
+            </ul>
           )}
         </CardContent>
       </Card>
@@ -378,6 +538,26 @@ export default function ServicesPage() {
               }}
             >
               Confirm
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={confirmShutdown} onOpenChange={(open) => !open && setConfirmShutdown(false)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Shut down the daemon?</DialogTitle>
+            <DialogDescription>
+              The daemon drains its services and exits; this console loses its backend until
+              the daemon is started again.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmShutdown(false)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={() => void handleShutdown()}>
+              Shut Down
             </Button>
           </DialogFooter>
         </DialogContent>

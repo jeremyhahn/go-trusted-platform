@@ -1141,6 +1141,12 @@ export type {
   ListDaemonServicesResponse,
   DaemonServiceAction,
   DaemonServiceActionResponse,
+  DaemonProbeResponse,
+  UpdateDaemonConfigRequest,
+  DaemonShutdownRequest,
+  DaemonOperationResult,
+  DaemonEntityType,
+  ListDaemonEntityTypesResponse,
 } from './types/platform.js';
 
 export * from './types/quicbaas/index.js';

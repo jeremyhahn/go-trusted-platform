@@ -341,3 +341,54 @@ export interface DaemonServiceActionResponse {
   /** Message */
   message: string;
 }
+
+/** Liveness or readiness probe answer (GET /platform/health/live|ready, #2047) */
+export interface DaemonProbeResponse {
+  /** Set by the liveness probe */
+  alive?: boolean;
+  /** Set by the readiness probe */
+  ready?: boolean;
+  /** Probe status (healthy, degraded, unhealthy) */
+  status: string;
+  /** RFC 3339 time of the probe */
+  timestamp: string;
+}
+
+/** Body of PATCH /platform/config: apply one configuration section (#2047) */
+export interface UpdateDaemonConfigRequest {
+  /** Configuration section name */
+  section: string;
+  /** Section values */
+  values: Record<string, string>;
+  /** Write the change to the config file */
+  persist?: boolean;
+}
+
+/** Body of POST /platform/shutdown (#2047) */
+export interface DaemonShutdownRequest {
+  /** Drain the services before stopping */
+  graceful?: boolean;
+  /** Shutdown timeout in seconds (0 = the daemon's default) */
+  timeout_seconds?: number;
+}
+
+/** Answer of UpdateConfig and Shutdown (#2047) */
+export interface DaemonOperationResult {
+  success: boolean;
+  message: string;
+  error?: string;
+}
+
+/** One stored entity type (#2047) */
+export interface DaemonEntityType {
+  name: string;
+  count: number;
+  status: string;
+}
+
+/** Answer of GET /platform/entity-types (#2047) */
+export interface ListDaemonEntityTypesResponse {
+  entity_types: DaemonEntityType[];
+  total_entities: number;
+  active_types: number;
+}

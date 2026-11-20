@@ -21,6 +21,9 @@ export function usePlatformDaemon() {
   const status = useApi(() => platform.getStatus(), []);
   const version = useApi(() => platform.getVersion(), []);
   const config = useApi(() => platform.getConfig(), []);
+  const liveness = useApi(() => platform.liveness(), []);
+  const readiness = useApi(() => platform.readiness(), []);
+  const entityTypes = useApi(() => platform.listEntityTypes(), []);
   // Service-list reads are sequenced: only the latest read may land, and a
   // lifecycle action invalidates every read started before it, so a slow
   // pre-action response can never overwrite the post-action list. A stale
@@ -93,11 +96,37 @@ export function usePlatformDaemon() {
     [run, platform]
   );
 
+  const updateConfig = React.useCallback(
+    async (section: string, values: Record<string, string>, persist: boolean) => {
+      try {
+        return await run("update-config", () =>
+          platform.updateConfig({ section, values, persist })
+        );
+      } finally {
+        config.refetch();
+      }
+    },
+    [run, platform, config]
+  );
+
+  const shutdown = React.useCallback(
+    (opts: { graceful: boolean; timeoutSeconds?: number }) =>
+      run("shutdown", () =>
+        platform.shutdown({ graceful: opts.graceful, timeout_seconds: opts.timeoutSeconds ?? 0 })
+      ),
+    [run, platform]
+  );
+
   return {
     status,
     version,
     config,
     services,
+    liveness,
+    readiness,
+    entityTypes,
+    updateConfig,
+    shutdown,
     /** Whether a request under `key` is in flight. */
     isPending: (key: string) => active.includes(key),
     /** Whether any start, stop or restart is in flight. */
