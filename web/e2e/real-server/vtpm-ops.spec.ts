@@ -5,7 +5,11 @@
  * /tpm/vtpm/<bundle>. State is seeded through the SDK and every assertion
  * is checked against what the server returns; no route mocks.
  */
+import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
+
+// Annotated so the spec typechecks before the harness's ./fixtures lands.
+type Fx = { adminPage: Page; sdk: unknown };
 
 type SDK = {
   vtpm: {
@@ -41,24 +45,24 @@ async function serverRunning(sdk: SDK, id: string): Promise<boolean | undefined>
 test.describe('vTPM runtime operations (real server)', () => {
   let bundleId = '';
 
-  test.beforeEach(async ({ sdk }) => {
+  test.beforeEach(async ({ sdk }: Fx) => {
     bundleId = await seedBundle(sdk as unknown as SDK, `e2e-vtpm-ops-${Date.now()}`);
   });
 
-  test.afterEach(async ({ sdk }) => {
+  test.afterEach(async ({ sdk }: Fx) => {
     if (!bundleId) return;
     const s = sdk as unknown as SDK;
     await s.vtpm.stopBundle(bundleId).catch(() => undefined);
     await s.vtpm.deleteBundle(bundleId).catch(() => undefined);
   });
 
-  test('a fresh bundle shows the server running state: stopped', async ({ adminPage, sdk }) => {
+  test('a fresh bundle shows the server running state: stopped', async ({ adminPage, sdk }: Fx) => {
     expect(await serverRunning(sdk as unknown as SDK, bundleId)).toBe(false);
     await adminPage.goto(`/tpm/vtpm/${bundleId}`);
     await expect(adminPage.getByTestId('vtpm-run-state')).toHaveText('Stopped');
   });
 
-  test('start, reload, stop: the page and IsVTPMRunning agree', async ({ adminPage, sdk }) => {
+  test('start, reload, stop: the page and IsVTPMRunning agree', async ({ adminPage, sdk }: Fx) => {
     const s = sdk as unknown as SDK;
     await adminPage.goto(`/tpm/vtpm/${bundleId}`);
     await adminPage.getByRole('button', { name: 'Start vTPM' }).click();
@@ -75,7 +79,7 @@ test.describe('vTPM runtime operations (real server)', () => {
     await expect.poll(() => serverRunning(s, bundleId)).toBe(false);
   });
 
-  test('quote returns a signed quote over the chosen PCRs', async ({ adminPage }) => {
+  test('quote returns a signed quote over the chosen PCRs', async ({ adminPage }: Fx) => {
     await adminPage.goto(`/tpm/vtpm/${bundleId}`);
     await adminPage.getByRole('button', { name: 'Start vTPM' }).click();
     await expect(adminPage.getByTestId('vtpm-run-state')).toHaveText('Running');
@@ -89,7 +93,7 @@ test.describe('vTPM runtime operations (real server)', () => {
     await expect(result).toContainText('PCR 7:');
   });
 
-  test('seal then unseal returns the sealed text', async ({ adminPage }) => {
+  test('seal then unseal returns the sealed text', async ({ adminPage }: Fx) => {
     await adminPage.goto(`/tpm/vtpm/${bundleId}`);
     await adminPage.getByRole('button', { name: 'Start vTPM' }).click();
     await expect(adminPage.getByTestId('vtpm-run-state')).toHaveText('Running');
@@ -103,7 +107,7 @@ test.describe('vTPM runtime operations (real server)', () => {
     await expect(adminPage.getByTestId('vtpm-unsealed-data')).toContainText('e2e secret');
   });
 
-  test('read and extend a PCR: the extend changes the server value', async ({ adminPage, sdk }) => {
+  test('read and extend a PCR: the extend changes the server value', async ({ adminPage, sdk }: Fx) => {
     const s = sdk as unknown as SDK;
     await adminPage.goto(`/tpm/vtpm/${bundleId}`);
     await adminPage.getByRole('button', { name: 'Start vTPM' }).click();

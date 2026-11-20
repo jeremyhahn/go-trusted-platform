@@ -1063,6 +1063,7 @@ export type {
   VTPMRuntimeStatus,
   StartBundleResponse,
   StopBundleResponse,
+  BundleStateResponse,
   QuoteBundleRequest,
   QuoteBundleResponse,
   SealBundleRequest,

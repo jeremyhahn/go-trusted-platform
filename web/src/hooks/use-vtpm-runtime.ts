@@ -23,13 +23,59 @@ export type VTPMRunState = "unknown" | "running" | "stopped";
 export function useVTPMRuntime(bundleId: string) {
   const vtpm = useVTPM();
   const [runState, setRunState] = React.useState<VTPMRunState>("unknown");
+  const [stateError, setStateError] = React.useState<string | null>(null);
+
+  // Every write of the running state (a state read sent, a start or stop
+  // reply) takes the next sequence number; a state read applies only when
+  // nothing wrote after it was sent, so a late read cannot overwrite a newer
+  // start or stop reply.
+  const seq = React.useRef(0);
+  const alive = React.useRef(true);
+  React.useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+
+  const writeRunState = (s: VTPMRunState) => {
+    seq.current += 1;
+    setRunState(s);
+  };
+
+  // IsVTPMRunning (GET /bundles/{id}/state).
+  const refreshState = React.useCallback(async () => {
+    if (bundleId.trim() === "") return;
+    seq.current += 1;
+    const sent = seq.current;
+    try {
+      const r = await vtpm.isBundleRunning(bundleId);
+      if (!alive.current || seq.current !== sent) return;
+      if (!r.success || !r.data) {
+        const message = (r as { error?: { message?: string } }).error?.message;
+        throw new Error(message || "Failed to read the vTPM state");
+      }
+      setRunState(r.data.running ? "running" : "stopped");
+      setStateError(null);
+    } catch (err) {
+      if (!alive.current || seq.current !== sent) return;
+      setStateError(err instanceof Error ? err.message : String(err));
+    }
+  }, [vtpm, bundleId]);
+
+  // Read the server state once per bundle; the panel is keyed on the bundle,
+  // so a new bundle remounts the hook.
+  React.useEffect(() => {
+    void refreshState();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bundleId]);
 
   const start = useMutation(() => vtpm.startBundle(bundleId), {
-    onSuccess: (r) => setRunState(r.running ? "running" : "stopped"),
+    onSuccess: (r) => writeRunState(r.running ? "running" : "stopped"),
   });
   const stop = useMutation(() => vtpm.stopBundle(bundleId), {
     onSuccess: (r) => {
-      if (r.stopped) setRunState("stopped");
+      if (r.stopped) writeRunState("stopped");
     },
   });
   const quote = useMutation((req: QuoteBundleRequest) => vtpm.quoteBundle(bundleId, req));
@@ -44,7 +90,19 @@ export function useVTPMRuntime(bundleId: string) {
   // neither may be sent, so a late reply cannot overwrite a newer one.
   const lifecycleBusy = start.isLoading || stop.isLoading;
 
-  return { runState, lifecycleBusy, start, stop, quote, seal, unseal, extendPCR, readPCR };
+  return {
+    runState,
+    stateError,
+    refreshState,
+    lifecycleBusy,
+    start,
+    stop,
+    quote,
+    seal,
+    unseal,
+    extendPCR,
+    readPCR,
+  };
 }
 
 /** Text to base64 (UTF-8). */

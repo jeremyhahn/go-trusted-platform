@@ -584,6 +584,13 @@ export interface StopBundleResponse {
   stopped: boolean;
 }
 
+/** IsVTPMRunning: the reply to GET /bundles/{id}/state. */
+export interface BundleStateResponse {
+  bundle_id: string;
+  running: boolean;
+  socket_path: string;
+}
+
 /** Body of POST /bundles/{id}/quote */
 export interface QuoteBundleRequest {
   /** Nonce, base64 */

@@ -209,11 +209,24 @@ function BundleRuntimePanel({ bundleId }: { bundleId: string }) {
             </Badge>
           </div>
           <CardDescription>
-            The running state comes from the last start or stop result for this bundle.
+            The running state comes from the server (IsVTPMRunning) and from the last start or stop
+            result for this bundle.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          {rt.stateError && (
+            <p className="text-sm text-destructive" data-testid="vtpm-state-error">
+              Could not read the running state: {rt.stateError}
+            </p>
+          )}
           <div className="flex gap-2">
+            <Button
+              variant="outline"
+              onClick={() => void rt.refreshState()}
+              disabled={noBundle || rt.lifecycleBusy}
+            >
+              Refresh state
+            </Button>
             <Button onClick={handleStart} disabled={noBundle || rt.lifecycleBusy}>
               {rt.start.isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}
               Start vTPM

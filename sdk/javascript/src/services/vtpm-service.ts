@@ -33,6 +33,7 @@ import type {
   GetNVRAMPathResponse,
   StartBundleResponse,
   StopBundleResponse,
+  BundleStateResponse,
   QuoteBundleRequest,
   QuoteBundleResponse,
   SealBundleRequest,
@@ -557,6 +558,16 @@ export class VTPMService extends BaseService {
       return this.withStatus({ ...r, data: { ...data, stopped: data.success === true } as StopBundleResponse });
     }
     return this.withStatus(r);
+  }
+
+  /**
+   * IsVTPMRunning: whether the bundle's vTPM is running, from
+   * GET /bundles/{id}/state. An unknown bundle is a 404, not "not running".
+   */
+  async isBundleRunning(id: string): Promise<ApiResponse<BundleStateResponse>> {
+    return this.client.get<BundleStateResponse>(
+      this.buildUrl(`/bundles/${this.encodePathSegment(id)}/state`)
+    );
   }
 
   /** Quote PCRs of a running bundle (POST /bundles/{id}/quote) */

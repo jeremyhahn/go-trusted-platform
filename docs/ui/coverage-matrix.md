@@ -716,14 +716,14 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `VTPMService.GetBundlePath` | `GET /bundles/{id}/path` | - | - | - | missing |
 | `VTPMService.GetTPMSocketPath` | `GET /bundles/{id}/tpm-socket` | - | - | - | missing |
 | `VTPMService.GetNVRAMPath` | `GET /bundles/{id}/nvram` | - | - | - | missing |
-| `VTPMService.StartVTPM` | `POST /bundles/{id}/start` | - | - | - | missing |
-| `VTPMService.StopVTPM` | `POST /bundles/{id}/stop` | - | - | - | missing |
-| `VTPMService.IsVTPMRunning` | - | - | - | - | missing |
-| `VTPMService.QuoteVTPM` | `POST /bundles/{id}/quote` | - | - | - | missing |
-| `VTPMService.SealVTPM` | `POST /bundles/{id}/seal` | - | - | - | missing |
-| `VTPMService.UnsealVTPM` | `POST /bundles/{id}/unseal` | - | - | - | missing |
-| `VTPMService.ExtendVTPMPCR` | `POST /bundles/{id}/pcrs/extend` | - | - | - | missing |
-| `VTPMService.ReadVTPMPCR` | `GET /bundles/{id}/pcrs` | - | - | - | missing |
+| `VTPMService.StartVTPM` | `POST /bundles/{id}/start` | `(dashboard)/tpm/vtpm/[id]/page.tsx` | - | `real-server/vtpm-ops.spec.ts` | covered |
+| `VTPMService.StopVTPM` | `POST /bundles/{id}/stop` | `(dashboard)/tpm/vtpm/[id]/page.tsx` | - | `real-server/vtpm-ops.spec.ts` | covered |
+| `VTPMService.IsVTPMRunning` | `GET /bundles/{id}/state` | `(dashboard)/tpm/vtpm/[id]/page.tsx` | - | `real-server/vtpm-ops.spec.ts` | covered |
+| `VTPMService.QuoteVTPM` | `POST /bundles/{id}/quote` | `(dashboard)/tpm/vtpm/[id]/page.tsx` | - | `real-server/vtpm-ops.spec.ts` | covered |
+| `VTPMService.SealVTPM` | `POST /bundles/{id}/seal` | `(dashboard)/tpm/vtpm/[id]/page.tsx` | - | `real-server/vtpm-ops.spec.ts` | covered |
+| `VTPMService.UnsealVTPM` | `POST /bundles/{id}/unseal` | `(dashboard)/tpm/vtpm/[id]/page.tsx` | - | `real-server/vtpm-ops.spec.ts` | covered |
+| `VTPMService.ExtendVTPMPCR` | `POST /bundles/{id}/pcrs/extend` | `(dashboard)/tpm/vtpm/[id]/page.tsx` | - | `real-server/vtpm-ops.spec.ts` | covered |
+| `VTPMService.ReadVTPMPCR` | `GET /bundles/{id}/pcrs` | `(dashboard)/tpm/vtpm/[id]/page.tsx` | - | `real-server/vtpm-ops.spec.ts` | covered |
 
 ## Status summary by area
 
