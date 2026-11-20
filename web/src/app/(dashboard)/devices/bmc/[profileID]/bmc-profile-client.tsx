@@ -27,6 +27,7 @@ import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useBMC, useToast } from "@/hooks";
 import type { BMCPart } from "@/hooks";
+import type { BMCPowerAction } from "@/hooks/use-bmc";
 
 // The boot devices the server accepts (pkg/bmc/types.go); any other is a 400.
 const BOOT_DEVICES = ["none", "pxe", "disk", "cdrom", "virtual_media"];
@@ -37,6 +38,43 @@ interface PendingAction {
   run: () => Promise<void>;
   done: string;
 }
+
+const POWER_ACTIONS: {
+  action: BMCPowerAction;
+  label: string;
+  title: string;
+  description: string;
+  done: string;
+}[] = [
+  {
+    action: "on",
+    label: "Power on",
+    title: "Power on",
+    description: "Turn the server's chassis power on.",
+    done: "Power on sent",
+  },
+  {
+    action: "off",
+    label: "Power off",
+    title: "Power off",
+    description: "Cut the server's chassis power. Running workloads stop without a clean shutdown.",
+    done: "Power off sent",
+  },
+  {
+    action: "reset",
+    label: "Reset",
+    title: "Reset",
+    description: "Hard-reset the server. Running workloads stop without a clean shutdown.",
+    done: "Reset sent",
+  },
+  {
+    action: "cycle",
+    label: "Power cycle",
+    title: "Power cycle",
+    description: "Turn the server's power off, then on again. Running workloads stop without a clean shutdown.",
+    done: "Power cycle sent",
+  },
+];
 
 function PartError({ errors, part }: { errors: Partial<Record<BMCPart, string>>; part: BMCPart }) {
   const message = errors[part];
@@ -128,6 +166,26 @@ export default function BMCProfileClient() {
               </Badge>
             )}
             <PartError errors={bmc.errors} part="power" />
+            <div className="mt-3 flex flex-wrap gap-2">
+              {POWER_ACTIONS.map((p) => (
+                <Button
+                  key={p.action}
+                  size="sm"
+                  variant={p.action === "on" ? "outline" : "destructive"}
+                  data-testid={`bmc-power-${p.action}`}
+                  onClick={() =>
+                    ask({
+                      title: p.title,
+                      description: p.description,
+                      run: () => bmc.powerAction(p.action),
+                      done: p.done,
+                    })
+                  }
+                >
+                  {p.label}
+                </Button>
+              ))}
+            </div>
           </CardContent>
         </Card>
 

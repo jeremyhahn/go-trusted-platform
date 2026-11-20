@@ -82,7 +82,12 @@ export interface UseBMCResult extends BMCState {
   mountISO: (isoURL: string) => Promise<void>;
   unmountISO: () => Promise<void>;
   provision: () => Promise<void>;
+  /** PowerOn, PowerOff, PowerReset, PowerCycle: POST /bmc/{id}/power {action} */
+  powerAction: (action: BMCPowerAction) => Promise<void>;
 }
+
+/** The chassis power actions the server's POST /bmc/{id}/power accepts */
+export type BMCPowerAction = "on" | "off" | "reset" | "cycle";
 
 const EMPTY: BMCState = {
   power: null,
@@ -192,6 +197,7 @@ export function useBMC(profileID: string): UseBMCResult {
     mountISO: (isoURL) => mutate("virtual-media", "POST", { iso_url: isoURL }),
     unmountISO: () => mutate("virtual-media", "DELETE"),
     provision: () => mutate("provision", "POST", {}),
+    powerAction: (action) => mutate("power", "POST", { action }),
   };
 }
 

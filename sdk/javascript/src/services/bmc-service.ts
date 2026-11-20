@@ -76,6 +76,15 @@ export interface BMCPowerStatus {
   state: string;
 }
 
+/** The chassis power actions POST /bmc/{profileID}/power accepts */
+export type BMCPowerAction = 'on' | 'off' | 'reset' | 'cycle';
+
+/** POST /bmc/{profileID}/power answer */
+export interface BMCPowerActionResult {
+  status: string;
+  action: BMCPowerAction;
+}
+
 /** GET and POST /bmc/{profileID}/boot-device */
 export interface BMCBootDevice {
   device: string;
@@ -244,6 +253,20 @@ export class BMCService extends BaseService {
   /** PowerStatus: GET /bmc/{profileID}/power */
   async getPowerStatus(profileID: string): Promise<ApiResponse<BMCPowerStatus>> {
     return this.client.get<BMCPowerStatus>(this.path(profileID, 'power'));
+  }
+
+  /**
+   * PowerOn, PowerOff, PowerReset, PowerCycle: POST /bmc/{profileID}/power
+   * with {action}. Sent with client retries disabled: a resent power
+   * action after a lost response would act on the host twice.
+   */
+  async powerAction(
+    profileID: string,
+    action: BMCPowerAction
+  ): Promise<ApiResponse<BMCPowerActionResult>> {
+    return this.client.post<BMCPowerActionResult>(this.path(profileID, 'power'), { action }, {
+      retry: { enabled: false },
+    });
   }
 
   /** GetBootDevice: GET /bmc/{profileID}/boot-device */
