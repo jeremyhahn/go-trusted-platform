@@ -33,11 +33,13 @@ import (
 // go-qrdb has no auth-factor permission constant, so the action and resource
 // follow the "<resource-type>:<action>" convention under auth_factors.
 const (
-	// AuthFactorIssueCertAction is the permission a principal needs to issue
-	// an mTLS auth-factor certificate for a user.
-	AuthFactorIssueCertAction = "auth_factors:issue-cert"
-	authFactorResourcePrefix  = "auth_factors://"
-	authFactorPEPTimeout      = 5 * time.Second
+	// AuthFactorResource and AuthFactorEnrollAction are the go-qrdb RBAC
+	// resource and action of auth-factor enrolment: go-quicbaas forwards
+	// them unchanged and go-qrdb checks the permission authfactor:enroll
+	// (docs/SPEC.md: the platform uses go-qrdb's permission vocabulary).
+	AuthFactorResource     = "authfactor"
+	AuthFactorEnrollAction = "enroll"
+	authFactorPEPTimeout   = 5 * time.Second
 )
 
 // AuthFactorPEP is the IAM decision point the auth-factor handlers ask;
@@ -467,7 +469,8 @@ func (h *AuthFactorHandlers) handleIssueCert(w http.ResponseWriter, r *http.Requ
 }
 
 // callerAuthorized returns true when the IAM PEP grants the request's
-// authenticated session principal AuthFactorIssueCertAction on userID.
+// authenticated session principal authfactor:enroll for the enrolment of
+// userID's certificate (the handler keeps userID from the route).
 // A request with no principal, no PEP wired, or a PEP error is refused;
 // client-certificate names grant nothing.
 func (h *AuthFactorHandlers) callerAuthorized(r *http.Request, userID string) bool {
@@ -490,8 +493,8 @@ func (h *AuthFactorHandlers) callerAuthorized(r *http.Request, userID string) bo
 			TenantID: principal.TenantID,
 			Roles:    principal.Roles,
 		},
-		Action:   AuthFactorIssueCertAction,
-		Resource: authFactorResourcePrefix + userID,
+		Action:   AuthFactorEnrollAction,
+		Resource: AuthFactorResource,
 		TenantID: principal.TenantID,
 	})
 	if err != nil {
