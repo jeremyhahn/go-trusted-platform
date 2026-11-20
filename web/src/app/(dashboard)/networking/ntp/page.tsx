@@ -29,7 +29,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { useApi, useNTP, useToast } from '@/hooks';
+import { ntpStepCapability, useApi, useNTP, useToast } from '@/hooks';
 
 /** `lastSyncUnix` is seconds since the epoch; 0 means never. */
 function formatLastSync(value: number | string | undefined): string {
@@ -95,6 +95,9 @@ export default function NTPPage() {
   // failed clock service never reads as synchronised, even while a retry is
   // pending.
   const statusStale = Boolean(staleError && status);
+  // The capability gate of the Step control: allowed only on a current,
+  // successful status read; otherwise disabled with the server's reason.
+  const stepGate = ntpStepCapability({ status, error: staleError });
   const sources = sourcesData?.sources ?? [];
   // useApi applies responses in completion order, so a refresh never starts
   // while a read is in flight: an older response cannot overwrite a newer one.
@@ -151,10 +154,22 @@ export default function NTPPage() {
           >
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           </Button>
-          <Button onClick={() => setStepOpen(true)}>
-            <Clock className="mr-2 h-4 w-4" />
-            Step Clock
-          </Button>
+          <span className="inline-flex flex-col items-end gap-1">
+            <Button
+              onClick={() => setStepOpen(true)}
+              disabled={!stepGate.allowed}
+              title={stepGate.reason ?? undefined}
+              aria-describedby={stepGate.reason ? 'ntp-step-reason' : undefined}
+            >
+              <Clock className="mr-2 h-4 w-4" />
+              Step Clock
+            </Button>
+            {stepGate.reason && !statusLoading && (
+              <span id="ntp-step-reason" data-testid="ntp-step-reason" className="text-xs text-muted-foreground">
+                {stepGate.reason}
+              </span>
+            )}
+          </span>
         </div>
       </div>
 

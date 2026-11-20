@@ -442,9 +442,9 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
-| `NTPService.GetStatus` | `GET /status` | - | - | - | missing |
-| `NTPService.ListSources` | `GET /sources` | - | - | - | missing |
-| `NTPService.Step` | `POST /step` | - | - | - | missing |
+| `NTPService.GetStatus` | `GET /status` | `(dashboard)/networking/ntp/page.tsx` | - | `ntp.spec.ts`<br>`real-server/ntp.spec.ts` | covered |
+| `NTPService.ListSources` | `GET /sources` | `(dashboard)/networking/ntp/page.tsx` | - | `ntp.spec.ts`<br>`real-server/ntp.spec.ts` | covered |
+| `NTPService.Step` | `POST /step` | `(dashboard)/networking/ntp/page.tsx` | - | `ntp.spec.ts`<br>`real-server/ntp.spec.ts` | covered |
 
 ## ObjectStorageService (`objectstorage.proto`)
 
@@ -749,7 +749,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | KeyManagementService | 23 | 10 | 1 | 12 | 0 | 0 |
 | LUKSService | 10 | 0 | 0 | 0 | 10 | 0 |
 | MessagingService | 8 | 0 | 0 | 0 | 0 | 8 |
-| NTPService | 3 | 0 | 0 | 3 | 0 | 0 |
+| NTPService | 3 | 3 | 0 | 0 | 0 | 0 |
 | ObjectStorageService | 8 | 0 | 0 | 0 | 0 | 8 |
 | OverlayService | 10 | 2 | 1 | 7 | 0 | 0 |
 | PIVService | 8 | 0 | 0 | 0 | 8 | 0 |

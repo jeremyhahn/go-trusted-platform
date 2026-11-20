@@ -9,8 +9,14 @@
 export { useSessionToken, useHydrated, notifySessionChanged } from "./use-session-token";
 
 // NTP status, sources and clock step (#1682)
-export { useNTP } from "./use-ntp";
-export type { NTPStatus, NTPSource, NTPStatusResponse, NTPSourcesResponse } from "./use-ntp";
+export { useNTP, ntpStepCapability } from "./use-ntp";
+export type {
+  NTPStatus,
+  NTPSource,
+  NTPStatusResponse,
+  NTPSourcesResponse,
+  NTPStepCapability,
+} from "./use-ntp";
 
 // SDK hooks (exported from main entry point for bundler compatibility)
 export {

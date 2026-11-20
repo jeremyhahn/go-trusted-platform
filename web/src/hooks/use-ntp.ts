@@ -8,58 +8,60 @@
  */
 
 import { useMemo } from "react";
-import { usePlatformClient } from "trusted-platform-sdk";
+import {
+  usePlatformClient,
+  type GetNTPStatusResponse,
+  type ListNTPSourcesResponse,
+  type NTPSource as SdkNTPSource,
+  type NTPStatus as SdkNTPStatus,
+} from "trusted-platform-sdk";
 
-/** Node clock synchronisation status (protojson, lowerCamelCase). */
-export interface NTPStatus {
-  synced: boolean;
-  stratum: number;
-  leapStatus: string;
-  offsetSeconds: number;
-  rootDispersion: number;
-  rootDelay: number;
-  /** Seconds since the epoch; 0 means never synced. */
-  lastSyncUnix: number | string;
-  mode: string;
-  referenceId: string;
-  referenceName: string;
-  sourcesReachable: number;
-  sourcesTotal: number;
-  anomaly: boolean;
-  anomalyReason: string;
-}
+export type NTPStatus = SdkNTPStatus;
+export type NTPSource = SdkNTPSource;
+export type NTPStatusResponse = GetNTPStatusResponse;
+export type NTPSourcesResponse = ListNTPSourcesResponse;
 
-/** One configured time source. */
-export interface NTPSource {
-  address: string;
-  mode: string;
-  state: string;
-  stratum: number;
-  pollSeconds: number;
-  reach: number;
-  lastRxSeconds: number | string;
-  offsetSeconds: number;
-  reachable: boolean;
-}
-
-export interface NTPStatusResponse {
-  status: NTPStatus;
-}
-
-export interface NTPSourcesResponse {
-  sources: NTPSource[];
-}
-
-const NTP_BASE = "/v1/ntp";
-
+/**
+ * useNTP returns the node's NTP operations (GetStatus, ListSources, Step)
+ * through the SDK's NTP service.
+ */
 export function useNTP() {
   const client = usePlatformClient();
-  return useMemo(() => {
-    const api = client.getApiClient();
-    return {
-      getStatus: () => api.get<NTPStatusResponse>(`${NTP_BASE}/status`),
-      listSources: () => api.get<NTPSourcesResponse>(`${NTP_BASE}/sources`),
-      step: () => api.post<NTPStatusResponse>(`${NTP_BASE}/step`),
-    };
-  }, [client]);
+  return useMemo(
+    () => ({
+      getStatus: () => client.ntp.getStatus(),
+      listSources: () => client.ntp.listSources(),
+      step: () => client.ntp.step(),
+    }),
+    [client],
+  );
+}
+
+/** Whether the Step control is allowed, and the reason when it is not. */
+export interface NTPStepCapability {
+  allowed: boolean;
+  reason: string | null;
+}
+
+/**
+ * ntpStepCapability is the capability gate of the Step control. Step is
+ * allowed only after a successful status read whose result is current: a
+ * node without an `ntp:` configuration answers every NTP route with 503,
+ * and a failed refresh leaves a stale status, so Step is gated off with the
+ * server's reason in both cases.
+ */
+export function ntpStepCapability({
+  status,
+  error,
+}: {
+  status: NTPStatus | undefined;
+  error: { message: string } | null;
+}): NTPStepCapability {
+  if (error) {
+    return { allowed: false, reason: `NTP is unavailable on this node: ${error.message}` };
+  }
+  if (!status) {
+    return { allowed: false, reason: "The NTP status has not been read yet." };
+  }
+  return { allowed: true, reason: null };
 }
