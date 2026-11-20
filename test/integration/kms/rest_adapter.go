@@ -227,12 +227,24 @@ func (r *RESTAdapter) KeyGenerate(ctx context.Context, opts KeyGenerateOptions) 
 		return nil, err
 	}
 
-	var restResp resttypes.GenerateKeyResponse
-	if err := r.handleResponse(respBody, statusCode, &restResp); err != nil {
-		return nil, err
+	// Errors keep the handleResponse path; a 2xx body is the mounted
+	// handler's bare KMSGenerateKeyResponse with nested key and metadata.
+	if statusCode < 200 || statusCode >= 300 {
+		var restResp resttypes.GenerateKeyResponse
+		if err := r.handleResponse(respBody, statusCode, &restResp); err != nil {
+			return nil, err
+		}
+		return nil, ErrRESTUnexpectedStatus{Expected: http.StatusCreated, Actual: statusCode}
 	}
 
-	result := r.convertToKeyGenerateResult(&restResp)
+	var genResp restapi.KMSGenerateKeyResponse
+	if err := json.Unmarshal(respBody, &genResp); err != nil {
+		return nil, ErrRESTUnmarshalFailed{Err: err}
+	}
+	result, err := r.convertDaemonGenerateKeyResult(&genResp, opts.Algorithm)
+	if err != nil {
+		return nil, err
+	}
 	if err := applyKeyDisplay(ctx, r, opts, result); err != nil {
 		return nil, err
 	}
@@ -1449,14 +1461,35 @@ func (r *RESTAdapter) convertToGenerateKeyRequest(req *service.GenerateKeyReques
 }
 
 // convertToKeyGenerateResult converts REST response to KeyGenerateResult.
-func (r *RESTAdapter) convertToKeyGenerateResult(resp *resttypes.GenerateKeyResponse) *KeyGenerateResult {
-	return &KeyGenerateResult{
-		Exportable:         resp.Exportable,
-		DeletionProtection: resp.DeletionProtection,
-		KeyID:              resp.KeyID,
-		Version:            uint64(resp.Version),
-		Algorithm:          resp.Algorithm,
+// convertDaemonGenerateKeyResult maps the mounted handler's generate-key
+// response (nested key handle and metadata) onto KeyGenerateResult. The wire
+// algorithm is an enum, so the result carries the requested algorithm name.
+// A response without a key ID is an error.
+func (r *RESTAdapter) convertDaemonGenerateKeyResult(resp *restapi.KMSGenerateKeyResponse, algorithm string) (*KeyGenerateResult, error) {
+	result := &KeyGenerateResult{Algorithm: algorithm}
+	if resp.Key != nil {
+		result.KeyID = resp.Key.KeyID
+		result.Version = resp.Key.Version
+		if resp.Key.CreatedAt != 0 {
+			result.CreatedAt = time.Unix(resp.Key.CreatedAt, 0)
+		}
 	}
+	if md := resp.Metadata; md != nil {
+		if result.KeyID == "" {
+			result.KeyID = md.KeyID
+		}
+		if result.Version == 0 {
+			result.Version = md.Version
+		}
+		result.Name = md.Name
+		result.Description = md.Description
+		result.Exportable = md.Exportable
+		result.DeletionProtection = md.DeletionProtection
+	}
+	if result.KeyID == "" {
+		return nil, ErrRESTMissingParameter{Parameter: "key.key_id in generate-key response"}
+	}
+	return result, nil
 }
 
 // convertToKeyGetResult converts REST response to KeyGetResult. The
