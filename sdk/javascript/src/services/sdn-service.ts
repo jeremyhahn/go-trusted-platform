@@ -45,7 +45,14 @@ import type {
   ApplyPolicyResponse,
   GetPolicyResponse,
   ListPoliciesResponse,
+  SDNPolicyRuleMatch,
 } from '../types/sdn.js';
+
+/**
+ * Match fields policyRuleMatch (pkg/api/daemon/sdn_service.go) ignores when it
+ * builds a policy flow; applyPolicy refuses a rule that sets any of them.
+ */
+const UNENFORCED_MATCH_FIELDS = ['interface', 'direction', 'dscp', 'application'] as const satisfies readonly (keyof SDNPolicyRuleMatch)[];
 
 /**
  * Builds the query parameters of an SDN list request under the proto field
@@ -294,6 +301,23 @@ export class SDNService extends BaseService {
           `policy target type ${target.type} is not supported: only POLICY_TARGET_TYPE_BRIDGE is applied`
         );
       }
+      // The daemon installs flows from the target type and bridge ID only, so
+      // a zone or direction would not narrow them: the policy would apply
+      // across the whole bridge. Refuse it before sending.
+      for (const field of ['zone', 'direction'] as const) {
+        if (target[field]) {
+          throw new RangeError(
+            `policy target ${field} is not supported: the daemon does not enforce it`
+          );
+        }
+      }
+    }
+    // The daemon installs every rule before merely recording config.enabled,
+    // so a disabled policy would be active at once: refuse it before sending.
+    if (request.config.enabled === false) {
+      throw new RangeError(
+        'policy config enabled=false is not supported: the daemon installs the rules regardless'
+      );
     }
     // The daemon installs RATE_LIMIT and MIRROR rules as a plain forward, so
     // such a policy would be reported active while limiting or mirroring
@@ -303,6 +327,20 @@ export class SDNService extends BaseService {
         throw new RangeError(
           `policy rule action ${rule.action} is not supported: the daemon does not enforce it`
         );
+      }
+      // The daemon builds the flow from protocol, addresses, ports and VLAN
+      // only and drops these fields, so a rule scoped by one would apply
+      // across the whole bridge: refuse it before sending.
+      const match = rule.match;
+      if (match) {
+        for (const field of UNENFORCED_MATCH_FIELDS) {
+          const value = match[field];
+          if (value !== undefined && value !== null && value !== '' && value !== 0) {
+            throw new RangeError(
+              `policy rule match field ${field} is not supported: the daemon does not enforce it`
+            );
+          }
+        }
       }
     }
     // Not idempotent: the daemon installs the policy (generating an ID when

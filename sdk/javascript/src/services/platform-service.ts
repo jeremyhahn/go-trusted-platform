@@ -44,6 +44,28 @@ export interface PlatformServiceOptions {
 }
 
 /**
+ * The daemon layout returns `timestamp` as an RFC 3339 string (Go time.Time).
+ * Normalize it to Unix seconds so callers always see the declared number;
+ * an unparseable string is dropped rather than returned as NaN.
+ */
+function withUnixTimestamp<T extends { timestamp?: number | undefined }>(
+  response: ApiResponse<T>
+): ApiResponse<T> {
+  const data = response.data as (T & { timestamp?: unknown }) | undefined;
+  if (data === undefined || data === null || typeof data.timestamp !== 'string') {
+    return response;
+  }
+  const ms = Date.parse(data.timestamp);
+  const normalized = { ...data } as T & { timestamp?: number | undefined };
+  if (Number.isNaN(ms)) {
+    delete normalized.timestamp;
+  } else {
+    normalized.timestamp = Math.floor(ms / 1000);
+  }
+  return { ...response, data: normalized };
+}
+
+/**
  * Platform Service class
  *
  * @example
@@ -183,7 +205,9 @@ export class PlatformService extends BaseService {
    * @returns Daemon status
    */
   async getStatus(): Promise<ApiResponse<DaemonStatusResponse>> {
-    return this.client.get<DaemonStatusResponse>(this.buildUrlUnder(this.lifecycleBasePath, '/status'));
+    return withUnixTimestamp(
+      await this.client.get<DaemonStatusResponse>(this.buildUrlUnder(this.lifecycleBasePath, '/status'))
+    );
   }
 
   /**
@@ -192,7 +216,9 @@ export class PlatformService extends BaseService {
    * @returns Services and their status
    */
   async listServices(): Promise<ApiResponse<ListDaemonServicesResponse>> {
-    return this.client.get<ListDaemonServicesResponse>(this.buildUrlUnder(this.lifecycleBasePath, '/services'));
+    return withUnixTimestamp(
+      await this.client.get<ListDaemonServicesResponse>(this.buildUrlUnder(this.lifecycleBasePath, '/services'))
+    );
   }
 
   /**
