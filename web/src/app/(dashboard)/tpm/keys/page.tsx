@@ -44,6 +44,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useApi, useIDevID, useTPM, useToast } from "@/hooks";
+import { TPMKeyOperations } from "./key-operations";
 import type { KeyAlgorithm } from "trusted-platform-sdk";
 import { errorMessage } from "@/utils/errors";
 
@@ -557,6 +558,9 @@ export default function TPMKeysPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Key lifecycle operations (#1735) */}
+      <TPMKeyOperations onChanged={handleRefresh} />
 
       {/* Key Hierarchy */}
       <Card>
