@@ -944,6 +944,12 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		})
 	}
 	eabGRPCService := NewEABGRPCService(logger, eabServicer, eabDeliveryServicer)
+	if iamService != nil {
+		// The IAM PEP decides tenant-scoped EAB operations (docs/SPEC.md line 125).
+		if pep := iamService.PEP(); pep != nil {
+			eabGRPCService.SetPEPClient(pep)
+		}
+	}
 	if grpcServer != nil {
 		platformv1.RegisterEABServiceServer(grpcServer, eabGRPCService)
 	}

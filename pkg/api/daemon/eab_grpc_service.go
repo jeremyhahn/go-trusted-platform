@@ -18,6 +18,12 @@ import (
 	"encoding/base64"
 	"time"
 
+	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
+	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
+	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
+	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/eab"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -43,6 +49,86 @@ type EABGRPCService struct {
 	service  EABServicer
 	delivery EABDeliveryServicer
 	logger   *logging.Logger
+
+	// pepClient, when set, makes the IAM authorisation decision for the
+	// tenant-scoped EAB operations (docs/SPEC.md line 125). Without it the
+	// service falls back to the caller-tenant equality check.
+	pepClient quicbaassdk.IAMPEPClient
+}
+
+// SetPEPClient wires the IAM PEP client that authorises tenant-scoped EAB
+// operations. A nil client keeps the caller-tenant equality check.
+func (s *EABGRPCService) SetPEPClient(c quicbaassdk.IAMPEPClient) {
+	s.pepClient = c
+}
+
+// eabCaller is the authenticated caller of a tenant-scoped EAB operation.
+type eabCaller struct {
+	id       string
+	tenantID string
+	roles    []string
+}
+
+// eabCallerFromContext returns the authenticated caller, or false for an
+// unbound local caller.
+func eabCallerFromContext(ctx context.Context) (eabCaller, bool) {
+	for _, from := range []func(context.Context) (*platformtoken.AuthorizedContext, bool){
+		grpcapi.AuthorizedContextFromContext,
+		quic.AuthorizedContextFromContext,
+		mcp.AuthorizedContextFromContext,
+	} {
+		if authCtx, ok := from(ctx); ok && authCtx != nil {
+			return eabCaller{id: authCtx.Subject, tenantID: authCtx.TenantID, roles: authCtx.Roles}, true
+		}
+	}
+	if identity := IdentityFromContext(ctx); identity != nil {
+		id := identity.UserID
+		if id == "" {
+			id = identity.ID
+		}
+		return eabCaller{id: id, tenantID: identity.TenantID}, true
+	}
+	return eabCaller{}, false
+}
+
+// authorizeEABTenant authorises a tenant-scoped EAB operation. A bound caller
+// must carry a tenant and must name one tenant (the empty tenant spans every
+// tenant's store). With a PEP configured the IAM decision is final, with the
+// request tenant in CheckRequest.TenantID and the caller's OU tenant in the
+// subject, so policy can grant cross-tenant access (docs/SPEC.md line 125).
+// Without a PEP the caller may only name its own tenant. An unbound local
+// caller is not checked.
+func (s *EABGRPCService) authorizeEABTenant(ctx context.Context, requestTenant, action string) error {
+	caller, bound := eabCallerFromContext(ctx)
+	if !bound {
+		return nil
+	}
+	if caller.tenantID == "" || requestTenant == "" {
+		return status.Error(codes.PermissionDenied, ErrIAMTenantForbidden{Requested: requestTenant}.Error())
+	}
+	if s.pepClient == nil {
+		return authorizeIAMTenant(ctx, requestTenant)
+	}
+	resp, err := s.pepClient.Check(ctx, &sdkiam.CheckRequest{
+		Subject: sdkiam.CheckSubject{
+			ID:       caller.id,
+			TenantID: caller.tenantID,
+			Roles:    caller.roles,
+		},
+		Action:   action,
+		Resource: "eab:credentials",
+		TenantID: requestTenant,
+	})
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Error(err, "eab grpc: permission check failed", "tenant_id", requestTenant, "action", action)
+		}
+		return status.Error(codes.Unavailable, "authorization decision unavailable")
+	}
+	if resp == nil || !resp.Allowed {
+		return status.Error(codes.PermissionDenied, ErrIAMTenantForbidden{Requested: requestTenant}.Error())
+	}
+	return nil
 }
 
 // NewEABGRPCService creates a new EAB gRPC service instance. The backing
@@ -175,7 +261,7 @@ func (s *EABGRPCService) CreateCredential(
 	if err := s.requireService(); err != nil {
 		return nil, err
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := s.authorizeEABTenant(ctx, req.GetTenantId(), "eab:write"); err != nil {
 		return nil, err
 	}
 
@@ -256,7 +342,7 @@ func (s *EABGRPCService) ListCredentials(
 	if err := s.requireService(); err != nil {
 		return nil, err
 	}
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	if err := s.authorizeEABTenant(ctx, req.GetTenantId(), "eab:read"); err != nil {
 		return nil, err
 	}
 
@@ -561,9 +647,10 @@ func (s *EABGRPCService) CleanupExpiredCredentials(
 	if err := s.requireService(); err != nil {
 		return nil, err
 	}
-	// A tenant-bound caller names its own tenant; the empty tenant (every
-	// tenant's expired credentials) is left to an unbound local caller.
-	if err := authorizeIAMTenant(ctx, req.GetTenantId()); err != nil {
+	// A tenant-bound caller must name a tenant the IAM decision allows; the
+	// empty tenant (every tenant's expired credentials) is left to an
+	// unbound local caller.
+	if err := s.authorizeEABTenant(ctx, req.GetTenantId(), "eab:write"); err != nil {
 		return nil, err
 	}
 
