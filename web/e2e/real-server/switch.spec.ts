@@ -7,9 +7,13 @@
  * no port control offered. When it does, the flows below drive each control
  * and assert on what the server returns afterwards through the SDK.
  */
+import type { Page } from '@playwright/test';
 import { isServiceNotConfigured } from 'trusted-platform-sdk';
+import type { PlatformClient } from 'trusted-platform-sdk';
 
 import { test, expect } from './fixtures';
+
+type Fixtures = { adminPage: Page; sdk: PlatformClient };
 
 const SWITCH_NAME = process.env.E2E_SWITCH_NAME ?? 'core-1';
 
@@ -32,7 +36,7 @@ async function probe(sdk: any): Promise<Probe> {
 }
 
 test.describe('switch ports', () => {
-  test('the switch page reflects what ListPorts returns', async ({ adminPage, sdk }) => {
+  test('the switch page reflects what ListPorts returns', async ({ adminPage, sdk }: Fixtures) => {
     const state = await probe(sdk);
     await adminPage.goto(`/networking/switches/${encodeURIComponent(SWITCH_NAME)}`);
     await expect(adminPage.getByRole('heading', { name: `Switch ${SWITCH_NAME}` })).toBeVisible();
@@ -52,7 +56,7 @@ test.describe('switch ports', () => {
     }
   });
 
-  test('GetPortStatus: the status dialog shows the port the server reports', async ({ adminPage, sdk }) => {
+  test('GetPortStatus: the status dialog shows the port the server reports', async ({ adminPage, sdk }: Fixtures) => {
     const state = await probe(sdk);
     test.skip(!state.configured || state.ports.length === 0, 'no switch service or no ports on the harness server');
     if (!state.configured) return;
@@ -68,7 +72,7 @@ test.describe('switch ports', () => {
     await expect(status).toContainText(String(res.data?.mode ?? port.mode));
   });
 
-  test('DisablePort then EnablePort: the server reports each admin state', async ({ adminPage, sdk }) => {
+  test('DisablePort then EnablePort: the server reports each admin state', async ({ adminPage, sdk }: Fixtures) => {
     const state = await probe(sdk);
     test.skip(!state.configured || state.ports.length === 0, 'no switch service or no ports on the harness server');
     if (!state.configured) return;
@@ -93,7 +97,7 @@ test.describe('switch ports', () => {
     expect(afterEnable.data?.find((p: { port: string }) => p.port === port.port)?.enabled).toBe(true);
   });
 
-  test('SetPortVLAN: the access VLAN the server reports changes', async ({ adminPage, sdk }) => {
+  test('SetPortVLAN: the access VLAN the server reports changes', async ({ adminPage, sdk }: Fixtures) => {
     const state = await probe(sdk);
     const access = state.configured ? state.ports.find((p) => p.mode === 'access') : undefined;
     test.skip(!access, 'no switch service or no access port on the harness server');

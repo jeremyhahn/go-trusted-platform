@@ -31,7 +31,7 @@ const NOT_CONFIGURED = {
   success: false,
   error: "switch service not configured by daemon — REST surface is dark",
   service: "switch",
-  reason: "service_not_configured",
+  reason: "SERVICE_NOT_CONFIGURED",
 };
 
 const ok: Responder = (url, init) => {
@@ -53,11 +53,17 @@ const fetchStub = vi.fn(async (url: string, init?: RequestInit) => {
   return respond(String(url), init);
 }) as unknown as typeof fetch;
 
+// The SDK resolves its own @types/react: view its provider through the web's.
+const Provider = PlatformProvider as unknown as React.ComponentType<{
+  config: Record<string, unknown>;
+  children: React.ReactNode;
+}>;
+
 function wrapper({ children }: { children: React.ReactNode }) {
   return (
-    <PlatformProvider config={{ baseUrl: "/api", fetch: fetchStub, retry: { maxRetries: 0 } }}>
+    <Provider config={{ baseUrl: "/api", fetch: fetchStub, retry: { maxRetries: 0 } }}>
       {children}
-    </PlatformProvider>
+    </Provider>
   );
 }
 
