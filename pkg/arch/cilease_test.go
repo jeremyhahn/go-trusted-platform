@@ -770,12 +770,19 @@ func imageArchiveFindings(wf ciWorkflow) []error {
 	return findings
 }
 
+// scansWorkflowFile runs the integration image's trivy scan from ci-template
+// v1.42 (ruling 742 (1)): the scan reads an advisory database, so it left
+// ci.yml's hermetic gate.
+const scansWorkflowFile = ".github/workflows/scans.yml"
+
 func TestCIKeepsTheImageArchiveOutOfTheCheckout(t *testing.T) {
 	root := repoRoot(t)
-	for _, finding := range imageArchiveFindings(loadCIWorkflow(t, root, ciWorkflowFile)) {
-		t.Error(finding)
+	for _, file := range []string{ciWorkflowFile, scansWorkflowFile} {
+		for _, finding := range imageArchiveFindings(loadCIWorkflow(t, root, file)) {
+			t.Error(finding)
+		}
 	}
-	data, err := os.ReadFile(filepath.Join(root, ciWorkflowFile))
+	data, err := os.ReadFile(filepath.Join(root, scansWorkflowFile))
 	require.NoError(t, err)
 	require.Contains(t, string(data), ciArchiveSave, "the trivy save step writes the archive under $RUNNER_TEMP")
 	require.Contains(t, string(data), "name: "+ciArchiveTrivy)

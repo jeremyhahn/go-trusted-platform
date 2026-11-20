@@ -26,6 +26,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/mcp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/manifest"
@@ -70,9 +71,18 @@ func (s *memoryManifestService) GetManifest(_ context.Context, id string) (*mani
 	return m, nil
 }
 
-func (s *memoryManifestService) ListManifests(_ context.Context, _ *ListManifestsFilter) ([]*manifest.HostManifest, int, error) {
+func (s *memoryManifestService) ListManifests(_ context.Context, filter *ListManifestsFilter) ([]*manifest.HostManifest, int, error) {
 	out := make([]*manifest.HostManifest, 0, len(s.manifests))
 	for _, m := range s.manifests {
+		if filter != nil && filter.HostID != "" && m.HostID != filter.HostID {
+			continue
+		}
+		if filter != nil && !filter.StartTime.IsZero() && m.Timestamp.Before(filter.StartTime) {
+			continue
+		}
+		if filter != nil && !filter.EndTime.IsZero() && m.Timestamp.After(filter.EndTime) {
+			continue
+		}
 		out = append(out, m)
 	}
 	return out, len(out), nil
@@ -164,6 +174,93 @@ func TestMCPManifestParity_List(t *testing.T) {
 	got, err := f.mcp(t, "attestation_list_manifests", map[string]interface{}{"limit": float64(5)})
 	require.NoError(t, err)
 	assert.Equal(t, asToolResult(t, want), got)
+}
+
+func TestMCPManifestParity_ListHostFilter(t *testing.T) {
+	f := newManifestParity()
+	f.svc.manifests["m-2"] = &manifest.HostManifest{ID: "m-2", HostID: "host-b", Timestamp: manifestFixtureTime, Nonce: []byte{4}, MerkleRoot: []byte{8}, Version: "1"}
+	f.svc.manifests["m-3"] = &manifest.HostManifest{ID: "m-3", HostID: "host-b", Timestamp: manifestFixtureTime, Nonce: []byte{5}, MerkleRoot: []byte{7}, Version: "1"}
+
+	got, err := f.mcp(t, "attestation_list_manifests", map[string]interface{}{"host_id": "host-a", "limit": float64(5)})
+	require.NoError(t, err)
+	want, err := f.grpc.ListManifests(context.Background(), &platformv1.ListManifestsRequest{HostId: "host-a", Limit: 5})
+	require.NoError(t, err)
+	require.Len(t, want.GetManifests(), 1)
+	assert.Equal(t, "host-a", want.GetManifests()[0].GetHostId())
+	assert.Equal(t, int32(1), int32(want.GetTotal()))
+	assert.Equal(t, asToolResult(t, want), got)
+
+	all, err := f.grpc.ListManifests(context.Background(), &platformv1.ListManifestsRequest{Limit: 5})
+	require.NoError(t, err)
+	assert.NotEqual(t, asToolResult(t, all), got)
+}
+
+// The MCP list keeps the start_time/end_time window the gRPC list applies
+// (#1686).
+func TestMCPManifestParity_ListTimeWindow(t *testing.T) {
+	f := newManifestParity()
+	later := manifestFixtureTime.Add(48 * time.Hour)
+	f.svc.manifests["m-2"] = &manifest.HostManifest{ID: "m-2", HostID: "host-a", Timestamp: later, Nonce: []byte{4}, MerkleRoot: []byte{8}, Version: "1"}
+
+	start := manifestFixtureTime.Add(-time.Hour)
+	end := manifestFixtureTime.Add(time.Hour)
+	got, err := f.mcp(t, "attestation_list_manifests", map[string]interface{}{
+		"start_time": start.Format(time.RFC3339),
+		"end_time":   end.Format(time.RFC3339),
+	})
+	require.NoError(t, err)
+	want, err := f.grpc.ListManifests(context.Background(), &platformv1.ListManifestsRequest{
+		StartTime: timestamppb.New(start),
+		EndTime:   timestamppb.New(end),
+	})
+	require.NoError(t, err)
+	require.Len(t, want.GetManifests(), 1)
+	assert.Equal(t, "m-1", want.GetManifests()[0].GetId())
+	assert.Equal(t, asToolResult(t, want), got)
+
+	all, err := f.grpc.ListManifests(context.Background(), &platformv1.ListManifestsRequest{})
+	require.NoError(t, err)
+	require.Len(t, all.GetManifests(), 2)
+	assert.NotEqual(t, asToolResult(t, all), got)
+}
+
+// The manifest filter keeps full nanosecond precision, so a sub-second
+// bound selects the same manifests on gRPC and MCP alike, never truncated
+// into a wider or narrower window (#1686, ruling 673).
+func TestMCPManifestParity_ListKeepsFractionalTimeBound(t *testing.T) {
+	early := manifestFixtureTime.Add(250 * time.Millisecond)
+	late := manifestFixtureTime.Add(750 * time.Millisecond)
+	mid := manifestFixtureTime.Add(500 * time.Millisecond)
+	cases := []struct {
+		field string
+		want  string
+	}{
+		{"end_time", "m-1"},
+		{"start_time", "m-2"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.field, func(t *testing.T) {
+			f := newManifestParity()
+			f.svc.manifests["m-1"].Timestamp = early
+			f.svc.manifests["m-2"] = &manifest.HostManifest{ID: "m-2", HostID: "host-a", Timestamp: late, Nonce: []byte{4}, MerkleRoot: []byte{8}, Version: "1"}
+
+			got, err := f.mcp(t, "attestation_list_manifests", map[string]interface{}{
+				tc.field: mid.Format(time.RFC3339Nano),
+			})
+			require.NoError(t, err)
+			req := &platformv1.ListManifestsRequest{}
+			if tc.field == "start_time" {
+				req.StartTime = timestamppb.New(mid)
+			} else {
+				req.EndTime = timestamppb.New(mid)
+			}
+			want, err := f.grpc.ListManifests(context.Background(), req)
+			require.NoError(t, err)
+			require.Len(t, want.GetManifests(), 1)
+			assert.Equal(t, tc.want, want.GetManifests()[0].GetId())
+			assert.Equal(t, asToolResult(t, want), got)
+		})
+	}
 }
 
 func TestMCPManifestParity_Delete(t *testing.T) {

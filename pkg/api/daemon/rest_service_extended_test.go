@@ -45,9 +45,10 @@ func TestRESTHandlerGetService_ExistingService(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	server, err := NewRESTServer(config, service, logger)
 	require.NoError(t, err)
+	allowServiceRoutes(t, server)
 
 	// Test getting existing service
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/services/test-service", nil)
+	req := servicesRequest(http.MethodGet, "/api/v1/services/test-service", nil)
 	w := httptest.NewRecorder()
 
 	server.router.ServeHTTP(w, req)
@@ -99,8 +100,9 @@ func TestRESTHandlerGetService_ServiceStates(t *testing.T) {
 			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 			server, err := NewRESTServer(config, service, logger)
 			require.NoError(t, err)
+			allowServiceRoutes(t, server)
 
-			req := httptest.NewRequest(http.MethodGet, "/api/v1/services/test-service", nil)
+			req := servicesRequest(http.MethodGet, "/api/v1/services/test-service", nil)
 			w := httptest.NewRecorder()
 
 			server.router.ServeHTTP(w, req)
@@ -129,8 +131,9 @@ func TestRESTHandlerStartService_Success(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	server, err := NewRESTServer(config, service, logger)
 	require.NoError(t, err)
+	allowServiceRoutes(t, server)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/services/test-service/start", nil)
+	req := servicesRequest(http.MethodPost, "/api/v1/services/test-service/start", nil)
 	w := httptest.NewRecorder()
 
 	server.router.ServeHTTP(w, req)
@@ -157,8 +160,9 @@ func TestRESTHandlerStartService_NotFound(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	server, err := NewRESTServer(config, service, logger)
 	require.NoError(t, err)
+	allowServiceRoutes(t, server)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/services/nonexistent/start", nil)
+	req := servicesRequest(http.MethodPost, "/api/v1/services/nonexistent/start", nil)
 	w := httptest.NewRecorder()
 
 	server.router.ServeHTTP(w, req)
@@ -188,8 +192,9 @@ func TestRESTHandlerStartService_AlreadyRunning(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	server, err := NewRESTServer(config, service, logger)
 	require.NoError(t, err)
+	allowServiceRoutes(t, server)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/services/test-service/start", nil)
+	req := servicesRequest(http.MethodPost, "/api/v1/services/test-service/start", nil)
 	w := httptest.NewRecorder()
 
 	server.router.ServeHTTP(w, req)
@@ -212,8 +217,9 @@ func TestRESTHandlerStartService_StartFailed(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	server, err := NewRESTServer(config, service, logger)
 	require.NoError(t, err)
+	allowServiceRoutes(t, server)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/services/test-service/start", nil)
+	req := servicesRequest(http.MethodPost, "/api/v1/services/test-service/start", nil)
 	w := httptest.NewRecorder()
 
 	server.router.ServeHTTP(w, req)
@@ -243,8 +249,9 @@ func TestRESTHandlerStopService_Success(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	server, err := NewRESTServer(config, service, logger)
 	require.NoError(t, err)
+	allowServiceRoutes(t, server)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/services/test-service/stop", nil)
+	req := servicesRequest(http.MethodPost, "/api/v1/services/test-service/stop", nil)
 	w := httptest.NewRecorder()
 
 	server.router.ServeHTTP(w, req)
@@ -270,8 +277,9 @@ func TestRESTHandlerStopService_NotFound(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	server, err := NewRESTServer(config, service, logger)
 	require.NoError(t, err)
+	allowServiceRoutes(t, server)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/services/nonexistent/stop", nil)
+	req := servicesRequest(http.MethodPost, "/api/v1/services/nonexistent/stop", nil)
 	w := httptest.NewRecorder()
 
 	server.router.ServeHTTP(w, req)
@@ -293,8 +301,9 @@ func TestRESTHandlerStopService_NotRunning(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	server, err := NewRESTServer(config, service, logger)
 	require.NoError(t, err)
+	allowServiceRoutes(t, server)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/services/test-service/stop", nil)
+	req := servicesRequest(http.MethodPost, "/api/v1/services/test-service/stop", nil)
 	w := httptest.NewRecorder()
 
 	server.router.ServeHTTP(w, req)
@@ -325,8 +334,9 @@ func TestRESTHandlerStopService_StopFailed(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	server, err := NewRESTServer(config, service, logger)
 	require.NoError(t, err)
+	allowServiceRoutes(t, server)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/services/test-service/stop", nil)
+	req := servicesRequest(http.MethodPost, "/api/v1/services/test-service/stop", nil)
 	w := httptest.NewRecorder()
 
 	server.router.ServeHTTP(w, req)
@@ -337,6 +347,8 @@ func TestRESTHandlerStopService_StopFailed(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 }
 
+// TestRESTHandlerRestartService_Success: a REST restart of a stopped service
+// starts it, with no Stop call (the behaviour before #1947, ruling 939).
 func TestRESTHandlerRestartService_Success(t *testing.T) {
 	config := DefaultConfig()
 	service, err := NewService(config)
@@ -348,8 +360,9 @@ func TestRESTHandlerRestartService_Success(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	server, err := NewRESTServer(config, service, logger)
 	require.NoError(t, err)
+	allowServiceRoutes(t, server)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/services/test-service/restart", nil)
+	req := servicesRequest(http.MethodPost, "/api/v1/services/test-service/restart", nil)
 	w := httptest.NewRecorder()
 
 	server.router.ServeHTTP(w, req)
@@ -364,6 +377,8 @@ func TestRESTHandlerRestartService_Success(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, actionResp.Success)
 	assert.Equal(t, "restart", actionResp.Action)
+	assert.Equal(t, int32(1), mockSvc.startCount.Load())
+	assert.Equal(t, int32(0), mockSvc.stopCount.Load())
 }
 
 func TestRESTHandlerRestartService_NotFound(t *testing.T) {
@@ -374,8 +389,9 @@ func TestRESTHandlerRestartService_NotFound(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	server, err := NewRESTServer(config, service, logger)
 	require.NoError(t, err)
+	allowServiceRoutes(t, server)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/services/nonexistent/restart", nil)
+	req := servicesRequest(http.MethodPost, "/api/v1/services/nonexistent/restart", nil)
 	w := httptest.NewRecorder()
 
 	server.router.ServeHTTP(w, req)
@@ -405,8 +421,9 @@ func TestRESTHandlerRestartService_RunningThenRestart(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	server, err := NewRESTServer(config, service, logger)
 	require.NoError(t, err)
+	allowServiceRoutes(t, server)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/services/test-service/restart", nil)
+	req := servicesRequest(http.MethodPost, "/api/v1/services/test-service/restart", nil)
 	w := httptest.NewRecorder()
 
 	server.router.ServeHTTP(w, req)
@@ -444,8 +461,9 @@ func TestRESTHandlerRestartService_StopFailed(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	server, err := NewRESTServer(config, service, logger)
 	require.NoError(t, err)
+	allowServiceRoutes(t, server)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/services/test-service/restart", nil)
+	req := servicesRequest(http.MethodPost, "/api/v1/services/test-service/restart", nil)
 	w := httptest.NewRecorder()
 
 	server.router.ServeHTTP(w, req)
@@ -463,13 +481,15 @@ func TestRESTHandlerRestartService_StartFailed(t *testing.T) {
 
 	mockSvc := newMockService("test-service")
 	mockSvc.startErr = ErrServiceStartFailed{ServiceName: "test-service", Reason: "simulated error"}
+	mockSvc.running.Store(true)
 	service.RegisterService(mockSvc)
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	server, err := NewRESTServer(config, service, logger)
 	require.NoError(t, err)
+	allowServiceRoutes(t, server)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/services/test-service/restart", nil)
+	req := servicesRequest(http.MethodPost, "/api/v1/services/test-service/restart", nil)
 	w := httptest.NewRecorder()
 
 	server.router.ServeHTTP(w, req)
@@ -510,8 +530,9 @@ func TestRESTHandlerListServices_MultipleServices(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	server, err := NewRESTServer(config, service, logger)
 	require.NoError(t, err)
+	allowServiceRoutes(t, server)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/services", nil)
+	req := servicesRequest(http.MethodGet, "/api/v1/services", nil)
 	w := httptest.NewRecorder()
 
 	server.router.ServeHTTP(w, req)

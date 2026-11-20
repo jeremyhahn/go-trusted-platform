@@ -295,29 +295,36 @@ func (m *AuthMiddleware) AuthenticateRequest(ctx context.Context, req *quicwire.
 // AuthorizeRequest checks if the authenticated user has permission for the operation.
 // This should be called after AuthenticateRequest.
 func (m *AuthMiddleware) AuthorizeRequest(ctx context.Context, resource, action string) *quicwire.Response {
+	// The explicit testing opt-out (WithQUICRequireAuth(false), the daemon's
+	// SkipIAMValidation) disables authentication and authorization together.
+	if !m.requireAuth && !m.peerAuthenticated {
+		if _, ok := AuthorizedContextFromContext(ctx); !ok && m.authzChecker == nil {
+			return nil
+		}
+	}
+
+	// An operation with no permission has no decision to ask for: refuse it
+	// rather than allow it by default (#1988).
+	scope := scopeForOperation(resource, action)
+	if scope == "" {
+		return permissionDenied(resource, action)
+	}
+
 	// When the request was validated via the platform-token (claims) path, an
 	// AuthorizedContext is present: enforce scp -> RBAC against it directly
 	// (the resource/action pair projects to the "resource:action" scope). This
 	// is the canonical authorization path for broker-issued tokens.
 	if authCtx, ok := AuthorizedContextFromContext(ctx); ok {
-		scope := scopeForOperation(resource, action)
-		if scope == "" {
-			return nil
-		}
 		if err := authCtx.RequireScope(scope); err != nil {
-			return &quicwire.Response{
-				Status:  quicwire.StatusPermissionDenied,
-				Payload: []byte(ErrPermissionDenied{Resource: resource, Action: action}.Error()),
-			}
+			return permissionDenied(resource, action)
 		}
 		return nil
 	}
 
-	// No claims and no authorization checker: the caller was authenticated
-	// by a scope-less credential (a peer certificate, or a validator without
-	// claims), which authorizes every classified operation, as on gRPC.
+	// No claims and no authorization checker: there is no decision point for
+	// this request, so it is refused rather than allowed by default (#1988).
 	if m.authzChecker == nil {
-		return nil
+		return permissionDenied(resource, action)
 	}
 
 	// Get token from context
@@ -338,11 +345,16 @@ func (m *AuthMiddleware) AuthorizeRequest(ctx context.Context, resource, action 
 		}
 	}
 	if !allowed {
-		return &quicwire.Response{
-			Status:  quicwire.StatusPermissionDenied,
-			Payload: []byte(ErrPermissionDenied{Resource: resource, Action: action}.Error()),
-		}
+		return permissionDenied(resource, action)
 	}
 
 	return nil
+}
+
+// permissionDenied is the PermissionDenied response for resource/action.
+func permissionDenied(resource, action string) *quicwire.Response {
+	return &quicwire.Response{
+		Status:  quicwire.StatusPermissionDenied,
+		Payload: []byte(ErrPermissionDenied{Resource: resource, Action: action}.Error()),
+	}
 }

@@ -171,6 +171,9 @@ func (s *InvitationGRPCService) CreateInvitation(
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "invitation: request is required")
 	}
+	if err := authorizeIAMTenant(ctx, req.TenantId); err != nil {
+		return nil, err
+	}
 	createReq := &platformservice.CreateInvitationRequest{
 		TenantID:    req.TenantId,
 		Email:       req.Email,
@@ -242,6 +245,9 @@ func (s *InvitationGRPCService) ListInvitations(
 	}
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "invitation: request is required")
+	}
+	if err := authorizeIAMTenant(ctx, req.TenantId); err != nil {
+		return nil, err
 	}
 	var (
 		invs []*entities.Invitation

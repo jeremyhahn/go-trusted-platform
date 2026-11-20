@@ -18,6 +18,13 @@ const (
 	// OpAttestGetManifest retrieves an attestation manifest
 	OpAttestGetManifest byte = 0x76 // Reusing OpAttestGetReport for manifest get
 
+	// OpAttestListManifests lists stored attestation manifests, filtered by
+	// host and RFC 3339 nano time bounds, with limit/offset paging (#1686).
+	OpAttestListManifests byte = 0x66
+
+	// OpAttestDeleteManifest deletes one stored attestation manifest by ID (#1686).
+	OpAttestDeleteManifest byte = 0x67
+
 	// OpAttestBuildManifest builds a new attestation manifest
 	OpAttestBuildManifest byte = 0x7C
 
