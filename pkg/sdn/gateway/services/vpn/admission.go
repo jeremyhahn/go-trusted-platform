@@ -187,6 +187,10 @@ func (s *Service) Renew(ctx context.Context, id LeaseID, ev *Evidence) (*Lease, 
 	if err != nil {
 		return nil, err
 	}
+	// Every revoke below needs enrolGate held (see revoke); it is taken
+	// before the device lock, the lock order Admit and enrolment keep.
+	s.enrolGate.RLock()
+	defer s.enrolGate.RUnlock()
 	unlock := s.devices.lock(deviceKey(probe.TenantID, probe.DeviceID))
 	defer unlock()
 	// Re-read under the lock: a concurrent renewal or revoke may have
@@ -257,6 +261,9 @@ func (s *Service) Revoke(ctx context.Context, id LeaseID, reason RevokeReason) e
 	if err != nil {
 		return err
 	}
+	// revoke needs enrolGate held; it is taken before the device lock.
+	s.enrolGate.RLock()
+	defer s.enrolGate.RUnlock()
 	unlock := s.devices.lock(deviceKey(probe.TenantID, probe.DeviceID))
 	defer unlock()
 	lease, err := s.deps.Leases.Get(ctx, id)
@@ -314,6 +321,17 @@ func (s *Service) OwnLease(ctx context.Context, id LeaseID, peer *calleradmissio
 // unrecorded drop of a lease that is not expired leaves the peer with the
 // lease a restart reinstates.
 func (s *Service) revoke(ctx context.Context, lease *Lease, reason RevokeReason) error {
+	// The caller holds enrolGate (read or write), taken before the device
+	// lock. Orphan reclaim holds it for writing across its snapshot and
+	// its releases, so a revocation can neither release an address and
+	// clear its teardown mark under a reclaim that has already listed the
+	// leases, nor let the freed address be reassigned and then released
+	// by that reclaim. revoke does not take it itself: Admit and the
+	// enrolment sweep already hold it when they call here.
+	// The address stays visible to orphan reclaim from before the lease
+	// deletion until the teardown settles (released, or owed through
+	// peerRetry), on every return path.
+	defer s.markTearingDown(lease.Address)()
 	var storeErr error
 	if err := s.deps.Leases.Delete(ctx, lease.ID); err != nil {
 		var nf *ErrLeaseNotFound
@@ -363,6 +381,30 @@ func (s *Service) releaseAddress(ctx context.Context, addr netip.Prefix) {
 	}
 	if err := s.deps.IPAM.Release(ctx, addr.Addr()); err != nil {
 		s.logger.Warn("vpn address release failed", slog.String("address", addr.String()), slog.Any("error", err))
+	}
+}
+
+// markTearingDown records addr as held by a revocation in flight and returns
+// the function that clears the mark. s.mu is held only for the map updates.
+func (s *Service) markTearingDown(addr netip.Prefix) func() {
+	if !addr.IsValid() {
+		return func() {}
+	}
+	a := addr.Addr()
+	s.mu.Lock()
+	if s.tearingDown == nil {
+		s.tearingDown = map[netip.Addr]int{}
+	}
+	s.tearingDown[a]++
+	s.mu.Unlock()
+	return func() {
+		s.mu.Lock()
+		if s.tearingDown[a] <= 1 {
+			delete(s.tearingDown, a)
+		} else {
+			s.tearingDown[a]--
+		}
+		s.mu.Unlock()
 	}
 }
 

@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"net/netip"
 	"slices"
+	"strings"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/ipam"
 )
@@ -165,6 +166,9 @@ func (s *Service) reclaimOrphanAddressesLocked(ctx context.Context) error {
 			}
 		}
 	}
+	for addr := range s.tearingDown {
+		held[addr] = true
+	}
 	s.mu.Unlock()
 	var first error
 	for _, alloc := range allocs {
@@ -223,8 +227,18 @@ func (s *Service) owePeerRetry(kind DataPlaneKind, held ...*Lease) {
 // leases, under the enrolment gate so no admission is between installing
 // a peer and storing its lease. Once a plane's reconciliation succeeds, the
 // addresses of the rejected leases that waited on it are released; a
-// failure keeps the obligation for the next sweep.
+// failure keeps the obligation for the next sweep. Obligations are
+// detached only under the gate: until then the owed addresses stay in
+// peerRetry, where a concurrent orphan reclaim sees them as held.
 func (s *Service) retryPeerReconcile(ctx context.Context) {
+	s.mu.Lock()
+	pending := len(s.peerRetry) > 0 || s.reclaimOwed
+	s.mu.Unlock()
+	if !pending {
+		return
+	}
+	s.enrolGate.Lock()
+	defer s.enrolGate.Unlock()
 	s.mu.Lock()
 	due := s.peerRetry
 	s.peerRetry = nil
@@ -233,8 +247,6 @@ func (s *Service) retryPeerReconcile(ctx context.Context) {
 	if len(due) == 0 && !owed {
 		return
 	}
-	s.enrolGate.Lock()
-	defer s.enrolGate.Unlock()
 	leases, err := s.deps.Leases.List(ctx)
 	if err != nil {
 		s.logger.Warn("vpn: peer reconciliation retry could not list leases", slog.Any("error", err))
@@ -247,6 +259,14 @@ func (s *Service) retryPeerReconcile(ctx context.Context) {
 	for _, l := range leases {
 		stored[l.ID] = true
 	}
+	// An address a stored lease holds belongs to that lease, whatever
+	// owed cleanup still names it.
+	inUse := make(map[netip.Addr]bool, len(leases))
+	for _, l := range leases {
+		if l.Address.IsValid() {
+			inUse[l.Address.Addr()] = true
+		}
+	}
 	reconciled := true
 	for kind, held := range due {
 		plane, ok := s.deps.DataPlanes[kind]
@@ -255,7 +275,7 @@ func (s *Service) retryPeerReconcile(ctx context.Context) {
 		}
 		r, ok := plane.(PeerReconciler)
 		if !ok {
-			s.retryPeerRemovals(ctx, kind, plane, held, stored)
+			s.retryPeerRemovals(ctx, kind, plane, held, stored, inUse)
 			continue
 		}
 		// A held lease was rejected: its record may still be stored when
@@ -274,7 +294,7 @@ func (s *Service) retryPeerReconcile(ctx context.Context) {
 			if stored[l.ID] {
 				continue
 			}
-			s.releaseOwedAddress(ctx, kind, l)
+			s.releaseOwedAddress(ctx, kind, l, inUse)
 		}
 	}
 	// The reclaim waits until every plane reconciles: an orphan peer of a
@@ -301,9 +321,17 @@ func (s *Service) oweReclaim() {
 // releaseOwedAddress releases the address of an owed lease whose peer is
 // gone and whose record is no longer stored. The retry set is the only
 // place that still knows the allocation, so a failed lookup or release
-// puts the lease back on it for a later sweep.
-func (s *Service) releaseOwedAddress(ctx context.Context, kind DataPlaneKind, l *Lease) {
-	h, err := s.holdsAddress(ctx, l)
+// puts the lease back on it for a later sweep. The caller holds enrolGate,
+// so no admission is in flight: a stored lease is the only way a newer
+// admission holds the address, and then the obligation is dropped (a
+// release whose response was lost may already have freed it once).
+func (s *Service) releaseOwedAddress(ctx context.Context, kind DataPlaneKind, l *Lease, inUse map[netip.Addr]bool) {
+	if l.Address.IsValid() && inUse[l.Address.Addr()] {
+		s.logger.Info("vpn: owed address is held by a stored lease; nothing to release",
+			slog.String("data_plane", string(kind)), slog.String("lease", string(l.ID)))
+		return
+	}
+	h, err := s.ownsOwedAllocation(ctx, l)
 	if err == nil && h {
 		err = s.deps.IPAM.Release(ctx, l.Address.Addr())
 	}
@@ -317,7 +345,7 @@ func (s *Service) releaseOwedAddress(ctx context.Context, kind DataPlaneKind, l 
 // retryPeerRemovals retries, on a plane that cannot reconcile, the removal
 // of each owed peer; a peer removed (or already gone) releases its address
 // unless its lease is still stored, and a failure stays owed.
-func (s *Service) retryPeerRemovals(ctx context.Context, kind DataPlaneKind, plane DataPlane, held []*Lease, stored map[LeaseID]bool) {
+func (s *Service) retryPeerRemovals(ctx context.Context, kind DataPlaneKind, plane DataPlane, held []*Lease, stored map[LeaseID]bool, inUse map[netip.Addr]bool) {
 	for _, l := range held {
 		err := plane.RemovePeer(ctx, l.ID)
 		var nf *ErrLeaseNotFound
@@ -330,7 +358,7 @@ func (s *Service) retryPeerRemovals(ctx context.Context, kind DataPlaneKind, pla
 		if stored[l.ID] {
 			continue
 		}
-		s.releaseOwedAddress(ctx, kind, l)
+		s.releaseOwedAddress(ctx, kind, l, inUse)
 	}
 }
 
@@ -391,6 +419,42 @@ func (s *Service) holdsAddress(ctx context.Context, l *Lease) (bool, error) {
 		return false, err
 	}
 	return alloc.Status == ipam.AllocationStatusActive && alloc.DeviceID == l.DeviceID, nil
+}
+
+// ownsOwedAllocation reports whether the active allocation at l's address
+// is still the one this gateway allocated for l, so an owed release may
+// free it. The IPAM has no conditional release, so the retry is fenced on
+// what the allocation records: the device, the vpn and tenant tags of a
+// lease allocation, and no owner tag but this gateway's. A release whose
+// response was lost may already have committed; the device can then hold
+// the address again through another gateway sharing the pool, whose lease
+// this gateway's store cannot see, and that allocation carries the other
+// gateway's owner tag. An untagged allocation (one made before owner tags)
+// is still released.
+func (s *Service) ownsOwedAllocation(ctx context.Context, l *Lease) (bool, error) {
+	if !l.Address.IsValid() {
+		return false, nil
+	}
+	alloc, err := s.deps.IPAM.GetAllocation(ctx, l.Address.Addr())
+	if errors.Is(err, ipam.ErrAllocationNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if alloc.Status != ipam.AllocationStatusActive || alloc.DeviceID != l.DeviceID {
+		return false, nil
+	}
+	owner := s.ownerTag()
+	for _, tag := range alloc.Tags {
+		switch {
+		case strings.HasPrefix(tag, "gateway:") && tag != owner:
+			return false, nil
+		case strings.HasPrefix(tag, "tenant:") && tag != "tenant:"+l.TenantID:
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // dropLease removes a lease Restore will not reinstate: the record is deleted

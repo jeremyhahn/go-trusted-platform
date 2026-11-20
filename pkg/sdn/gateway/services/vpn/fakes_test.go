@@ -176,6 +176,9 @@ type fakePlane struct {
 	// reconciles records the keep list of every ReconcilePeers call.
 	reconciles [][]LeaseID
 	pause      *pause
+	// removePause, when set, holds RemovePeer on entry, before it removes
+	// the peer or returns removeErr.
+	removePause *pause
 }
 
 func newFakePlane(kind DataPlaneKind) *fakePlane {
@@ -200,6 +203,10 @@ func (p *fakePlane) InstallPeer(_ context.Context, lease *Lease) error {
 // RemovePeer removes the peer; with removeErr set it fails and the peer
 // stays installed, as a datapath that cannot be reached leaves it.
 func (p *fakePlane) RemovePeer(_ context.Context, id LeaseID) error {
+	p.mu.Lock()
+	hold := p.removePause
+	p.mu.Unlock()
+	hold.wait()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.removeErr != nil {

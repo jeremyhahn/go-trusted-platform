@@ -148,7 +148,7 @@
 - **Zones are the zone matrix's**: the lease's `Zones` ⊆ `ManagementVPNConfig.AllowTo`
   ∩ the person's IAM entitlement; the datapath enforces them through the
   compiled zone matrix, the same object the OVS flows and the trusted proxy use.
-- **Idempotent revoke**; concurrent renew/revoke resolve to revoked. Every multi-step lease operation for one (tenant, device) — admit's find/replace/allocate/install/put, renew's get/verify/put, revoke and the expiry sweep — runs under a per-device lock (`keyLock`), so concurrent admissions cannot both see "no lease" and orphan a peer. Lock order is `enrolGate` before a device lock, never the reverse.
+- **Idempotent revoke**; concurrent renew/revoke resolve to revoked. Every multi-step lease operation for one (tenant, device) — admit's find/replace/allocate/install/put, renew's get/verify/put, revoke and the expiry sweep — runs under a per-device lock (`keyLock`), so concurrent admissions cannot both see "no lease" and orphan a peer. Lock order is `enrolGate` before a device lock, never the reverse. Revocation and orphan address reclaim are serialized by the enrolment gate: every revoke path (renew, revoke, the expiry sweep, admit's replacement, the enrolment sweep) holds `enrolGate`, and reclaim holds it for writing across its lease and allocation snapshots and its releases, so reclaim never sees an address between its lease's deletion and its release, and never releases an address another gateway took from the shared pool after a revocation freed it.
 - **Ordering**: the address is allocated before the peer is installed and
   released after the peer is removed; a failed install releases the address.
 - **FIPS**: `DataPlaneWireGuard` and `wireguardPlane` live in `//go:build !fips`

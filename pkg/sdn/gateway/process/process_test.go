@@ -192,7 +192,12 @@ func TestClassTable_EveryProcessOpensOnlyServiceFamilies(t *testing.T) {
 		// A process with no families could not reach its own supervisor.
 		assert.Containsf(t, def.AddressFamilies, uint32(unix.AF_UNIX),
 			"process %q needs AF_UNIX for its IPC", def.Name)
-		for _, family := range []uint32{unix.AF_PACKET, unix.AF_ALG, unix.AF_VSOCK, unix.AF_KEY} {
+		forbidden := []uint32{unix.AF_ALG, unix.AF_VSOCK, unix.AF_KEY}
+		if def.Name != "datapath" {
+			// Only the datapath, which hosts the FHRP announcer, sends raw frames.
+			forbidden = append(forbidden, unix.AF_PACKET)
+		}
+		for _, family := range forbidden {
 			assert.NotContainsf(t, def.AddressFamilies, family,
 				"process %q opens no family %d socket", def.Name, family)
 		}
@@ -1705,6 +1710,19 @@ func (r *recordingVPNPlanes) withdrewAll(plane string) bool {
 	return false
 }
 
+// withdrawals counts the reconciliations of plane to an empty keep list.
+func (r *recordingVPNPlanes) withdrawals(plane string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, req := range r.reconciles {
+		if req.GetDataPlane() == plane && len(req.GetLeaseIds()) == 0 {
+			n++
+		}
+	}
+	return n
+}
+
 // blockingVPNPlanes holds the first wireguard reconciliation until its
 // context ends or release closes, then calls onReturn. A request whose
 // context ended removes nothing in the real plane, so only a live one is
@@ -1743,10 +1761,13 @@ func (b *blockingVPNPlanes) ReconcileVPNPeers(ctx context.Context, req *ipcv1.Re
 	return b.recordingVPNPlanes.ReconcileVPNPeers(ctx, req)
 }
 
-func TestCrashLoop_AReplacementLaunchFencesAnInFlightWithdrawal(t *testing.T) {
+func TestSupervisor_ReplacementReplayWaitsForTheWithdrawalHandler(t *testing.T) {
 	// The given-up vpn child's withdrawal may still be in flight when a
 	// replacement is started. The replacement restores its peers into the
-	// datapath, so the old withdrawal must end before it launches.
+	// datapath, so the server-side withdrawal handler must have returned
+	// before it launches: a cancelled client call is no fence, because the
+	// handler goes on and would remove the restored peers with its old,
+	// empty keep list.
 	supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
 		c.RestartBackoff = time.Millisecond
 		c.RestartBudget = 1
@@ -1790,19 +1811,29 @@ func TestCrashLoop_AReplacementLaunchFencesAnInFlightWithdrawal(t *testing.T) {
 	go func() { started <- supervisor.StartService(ctx, gateway.ServiceManagementVPN) }()
 	select {
 	case err := <-started:
-		require.NoError(t, err)
-	case <-time.After(20 * time.Second):
 		close(planes.release)
-		t.Fatal("the replacement launch waited on the withdrawal")
+		t.Fatalf("the replacement launch did not wait for the withdrawal handler: %v", err)
+	case <-time.After(300 * time.Millisecond):
 	}
+	assert.Equal(t, before, launcher.launchCount(), "nothing launched while the withdrawal handler runs")
+
 	close(planes.release)
+	select {
+	case err := <-started:
+		require.NoError(t, err, "the replacement launches once the withdrawal handler has returned")
+	case <-time.After(20 * time.Second):
+		t.Fatal("the replacement launch never followed the withdrawal")
+	}
 
 	countMu.Lock()
-	assert.True(t, returned, "the withdrawal was still in flight when the replacement launched")
-	assert.Equal(t, before, atReturn, "the withdrawal ended before the replacement launched")
+	assert.True(t, returned, "the withdrawal handler returned")
+	assert.Equal(t, before, atReturn, "the withdrawal handler returned before the replacement launched")
 	countMu.Unlock()
-	assert.Never(t, func() bool { return planes.withdrewAll("wireguard") },
-		300*time.Millisecond, 10*time.Millisecond, "the fenced withdrawal removed the replacement's peers")
+	assert.Equal(t, before+1, launcher.launchCount(), "the replacement launched once")
+	withdrawn := planes.withdrawals("wireguard")
+	assert.Equal(t, 1, withdrawn, "the given-up child's peers were withdrawn once")
+	assert.Never(t, func() bool { return planes.withdrawals("wireguard") != withdrawn },
+		300*time.Millisecond, 10*time.Millisecond, "no withdrawal removed the replacement's restored peers")
 }
 
 func TestCrashLoop_AnExhaustedVPNWithdrawsTheWireGuardPlanePeers(t *testing.T) {
@@ -1858,7 +1889,7 @@ func TestCrashLoop_AReplacementClaimedBeforeTheGiveUpGetsNoWithdrawal(t *testing
 	supervisor.mu.Unlock()
 
 	failure := errors.New("signal: killed")
-	supervisor.restartLoop(ctx, proc, failure, failure)
+	supervisor.restartLoop(ctx, proc, proc.launchGen, failure, failure)
 
 	assert.False(t, rec.withdrewAll("wireguard"), "the claimed replacement's peers are not withdrawn")
 	assert.False(t, rec.withdrewAll("masque"), "nor its masque peers")
@@ -1887,7 +1918,7 @@ func TestCrashLoop_TheGiveUpRegistersItsWithdrawalUnderTheSameLock(t *testing.T)
 	supervisor.mu.Unlock()
 
 	failure := errors.New("signal: killed")
-	_, over, w := supervisor.noteRestart(ctx, proc, failure, failure)
+	_, over, w := supervisor.noteRestart(ctx, proc, proc.launchGen, failure, failure)
 	require.True(t, over, "the budget is exhausted")
 	require.NotNil(t, w, "an unclaimed follower gets a withdrawal")
 	supervisor.mu.Lock()
@@ -3306,6 +3337,84 @@ func TestSupervisor_OnChildExitFailureIsRetriedEachBackoff(t *testing.T) {
 
 	assert.Equal(t, 4, rec.callCount(), "the crash, then one retry per tick until the hook succeeds")
 	assert.True(t, sawInHealth.Load(), "the hook failure is reported in the process's health")
+}
+
+func TestSupervisor_OnChildExitNeverRunsOverAReplacement(t *testing.T) {
+	// The hook fails after the crash, so restartLoop would retry it on
+	// its next backoff tick. A replacement started during that backoff
+	// owns the process now: the retried hook, the stale hub removal in
+	// B2, must not tear down the replacement's device and peers.
+	const backoff = 7 * time.Second
+	rec := &exitHookRecorder{failures: 1}
+	supervisor, launcher, clock := newSupervisor(t, func(c *Config) {
+		c.RestartBackoff = backoff
+		c.RestartBudget = 10
+		c.OnChildExit = rec.hook
+	})
+	rec.launcher = launcher
+	ctx := testContext(t)
+	child := startWireGuard(t, ctx, supervisor, launcher)
+
+	held := clock.holdDelay(backoff)
+	child.exit(errors.New("signal: killed"))
+	held.awaitEntered(t, ctx)
+	require.Equal(t, 1, rec.callCount(), "the hook ran once for the crash")
+	var hookErr *ErrExitHook
+	require.ErrorAs(t, supervisor.ServiceHealth(gateway.ServiceVPNWireGuard), &hookErr, "the hook failure is pending")
+
+	require.NoError(t, supervisor.StartService(ctx, gateway.ServiceVPNWireGuard), "a replacement starts during the backoff")
+	replacement := launcher.lastChild()
+	require.Equal(t, 2, launcher.launchCount())
+
+	close(held.release)
+	assert.Never(t, func() bool { return rec.callCount() != 1 || launcher.launchCount() != 2 },
+		300*time.Millisecond, 10*time.Millisecond, "the backoff tick neither runs the hook nor relaunches over the replacement")
+	supervisor.mu.Lock()
+	assert.Same(t, Child(replacement), supervisor.processes[WireGuardProcess].child, "the replacement is still the process's child")
+	supervisor.mu.Unlock()
+	assert.NoError(t, supervisor.ServiceHealth(gateway.ServiceVPNWireGuard), "the replacement cleared the stale hook failure")
+}
+
+func TestSupervisor_LaunchWaitsForAnExitHookInFlight(t *testing.T) {
+	// A launch claimed while the hook is cleaning up after the exited
+	// child waits for it: the cleanup never runs over the launch.
+	hook := newHeldCall()
+	var calls atomic.Int32
+	supervisor, launcher, _ := newSupervisor(t, func(c *Config) {
+		c.RestartBackoff = time.Millisecond
+		c.OnChildExit = func(context.Context, Definition) error {
+			if calls.Add(1) == 1 {
+				hook.hold()
+			}
+			return nil
+		}
+	})
+	ctx := testContext(t)
+	child := startWireGuard(t, ctx, supervisor, launcher)
+
+	child.exit(errors.New("signal: killed"))
+	hook.awaitEntered(t, ctx)
+
+	started := make(chan error, 1)
+	go func() { started <- supervisor.StartService(ctx, gateway.ServiceVPNWireGuard) }()
+	select {
+	case err := <-started:
+		close(hook.release)
+		t.Fatalf("StartService did not wait for the exit hook: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	assert.Equal(t, 1, launcher.launchCount(), "nothing launched while the hook runs")
+
+	close(hook.release)
+	select {
+	case err := <-started:
+		require.NoError(t, err)
+	case <-time.After(20 * time.Second):
+		t.Fatal("StartService never followed the exit hook")
+	}
+	assert.Never(t, func() bool { return launcher.launchCount() != 2 },
+		300*time.Millisecond, 10*time.Millisecond, "one replacement, from whichever claim came first")
+	assert.Equal(t, int32(1), calls.Load(), "the hook ran once, for the exited child only")
 }
 
 func TestSupervisor_OnChildExitNotCalledOnOperatorStop(t *testing.T) {

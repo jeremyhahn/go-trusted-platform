@@ -899,7 +899,7 @@ func overlayPlatformdConfig(cfg *ServeConfig) proxysvc.PlatformdConfig {
 // A proxy listener address that cannot be turned into a rule is a
 // configuration error, not a silently open port.
 func buildHostRuntime(cfg *ServeConfig, anchor *trust.Anchor, logger *slog.Logger) (*gateway.HostRuntime, error) {
-	host := &gateway.HostRuntime{Logger: logger, IPsecInventory: ipsecInventoryPath(cfg.DataDir)}
+	host := &gateway.HostRuntime{Logger: logger, IPsecInventory: ipsecInventoryPath(cfg.DataDir), FHRPInventory: fhrpInventoryPath(cfg.DataDir)}
 	if cfg.Proxy != nil && cfg.Proxy.Enabled && len(cfg.Proxy.Listeners) > 0 {
 		addresses := make(map[string]string, len(cfg.Proxy.Listeners))
 		for _, l := range cfg.Proxy.Listeners {
@@ -1027,6 +1027,16 @@ func ipsecInventoryPath(dataDir string) string {
 		return ""
 	}
 	return filepath.Join(dataDir, gatewayIPsecInventory)
+}
+
+// fhrpInventoryPath is the FHRP speaker's VIP inventory under dataDir (the
+// datapath process's fhrp state directory), or "" without a data
+// directory: nothing is recorded, so nothing is swept.
+func fhrpInventoryPath(dataDir string) string {
+	if dataDir == "" {
+		return ""
+	}
+	return filepath.Join(dataDir, gateway.FHRPStateDir, gateway.FHRPInventoryFile)
 }
 
 // tofuScopes reports whether any configured class lists the tofu strategy.
