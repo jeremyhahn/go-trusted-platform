@@ -104,7 +104,7 @@ export default function PXEBootPage() {
   const { gateways: gatewayReports, isLoading: gatewayReportsLoading } =
     useReportedGateways({ enabled: pxeUnavailable });
 
-  const devices = devicesData?.devices || [];
+  const devices = useMemo(() => devicesData?.devices || [], [devicesData]);
   const status = statusData?.status || null;
   const isLoading = devicesLoading || statusLoading;
   const error = devicesError || statusError;
