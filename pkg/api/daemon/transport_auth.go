@@ -195,10 +195,23 @@ func selectQUICAuth(config *Config, shared *platformTokenValidator, pep quicbaas
 		if err != nil {
 			return nil, nil, ErrTLSConfigFailed{Reason: "QUIC mTLS auth: " + err.Error()}
 		}
+		// A certificate principal is decided by the IAM PEP (#2016). The
+		// embedded quicbaas SDK PEP cannot decide a Check, so every
+		// classified request would be refused: refuse the listener at
+		// startup, as on the local-token path.
+		if config.quicbaasEmbedded() {
+			return nil, nil, ErrEmbeddedPEPUnavailable{Transport: transportQUIC, MTLS: true}
+		}
 		logger.Info("QUIC server: mTLS authentication enabled")
 		opts := []quic.AuthMiddlewareOption{
 			quic.WithQUICPeerAuthenticator(mtlsPeerAuthenticator{authenticator: mtlsAuth}),
 			quic.WithQUICRequireAuth(true),
+		}
+		if pep != nil {
+			opts = append(opts, quic.WithQUICPeerAuthorizationChecker(&iamTokenAuthorizer{pep: pep}))
+		} else {
+			// No decision point: every certificate principal is refused.
+			logger.Warn("QUIC server: no IAM policy enforcement point; mTLS callers are refused")
 		}
 		if shared != nil {
 			opts = append(opts, quic.WithQUICTokenValidator(shared))
