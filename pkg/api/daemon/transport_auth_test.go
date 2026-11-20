@@ -75,6 +75,15 @@ func pepAllowing(subject, resource, action string, last **sdkiam.CheckRequest) *
 	}}
 }
 
+// pepAllowingAll is a PEP that admits every Check: tests that need a
+// certificate principal admitted give it, since without a PEP every
+// certificate principal is refused (#2016).
+func pepAllowingAll() *mockSDKPEPClient {
+	return &mockSDKPEPClient{checkFunc: func(context.Context, *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+		return &sdkiam.CheckResponse{Allowed: true}, nil
+	}}
+}
+
 func failClosedConfig() *Config {
 	config := DefaultConfig()
 	config.SkipIAMValidation = false
