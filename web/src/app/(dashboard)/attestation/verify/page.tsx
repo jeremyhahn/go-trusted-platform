@@ -21,13 +21,13 @@ import {
   XCircle,
   Clock,
   Cpu,
-  Play,
   Eye,
   AlertTriangle,
   Loader2,
 } from "lucide-react";
 import { useApi, useAttestation, useToast } from "@/hooks";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { VerifyManifestCard } from "./verify-manifest-card";
 
 /**
  * Verification represents an attestation verification operation
@@ -278,12 +278,10 @@ export default function VerifyPage() {
             />
             Refresh
           </Button>
-          <Button>
-            <Play className="mr-2 h-4 w-4" />
-            Run Verification
-          </Button>
         </div>
       </div>
+
+      <VerifyManifestCard />
 
       {/* Statistics Cards */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">

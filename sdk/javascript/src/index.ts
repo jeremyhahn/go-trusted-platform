@@ -290,6 +290,9 @@ export type {
   ListDeviceReportsResponse,
   RefreshDeviceReportResponse,
   CallerPolicyDescription,
+  PollDeviceVerdictsRequest,
+  PollDeviceVerdictsResponse,
+  DeviceVerdictEvent,
 } from './types/attestation.js';
 
 // Attestation values: the response-shape gate for a device report route

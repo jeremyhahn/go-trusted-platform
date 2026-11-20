@@ -22,20 +22,20 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 |---|---|---|---|---|---|
 | `AttestationService.GetManifest` | `GET /manifests/{id}` | `(dashboard)/attestation/[id]/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
 | `AttestationService.BuildManifest` | `POST /manifests/build` | `(dashboard)/attestation/page.tsx` | - | `tpm-attestation.spec.ts` | covered |
-| `AttestationService.VerifyManifest` | `POST /manifests/verify` | - | - | - | missing |
+| `AttestationService.VerifyManifest` | `POST /manifests/verify` | `(dashboard)/attestation/verify/page.tsx` | - | `real-server/attestation.spec.ts` | covered |
 | `AttestationService.ListManifests` | `GET /manifests` | `(dashboard)/attestation/eventlogs/page.tsx`<br>`(dashboard)/attestation/manifests/page.tsx`<br>`(dashboard)/attestation/page.tsx` (+2) | - | `tpm-attestation.spec.ts` | covered |
-| `AttestationService.DeleteManifest` | `DELETE /manifests/{id}` | `(dashboard)/attestation/[id]/page.tsx`<br>`(dashboard)/attestation/eventlogs/page.tsx`<br>`(dashboard)/attestation/manifests/page.tsx` (+3) (read-only) | - | - | partial |
-| `AttestationService.GetAttestationQuote` | - | - | - | - | missing |
-| `AttestationService.VerifyAttestationQuote` | - | - | - | - | missing |
-| `AttestationService.CollectHostAttestation` | `POST /host` | - | - | - | missing |
-| `AttestationService.CollectVMAttestation` | `POST /vm/{id}` | - | - | - | missing |
-| `AttestationService.CollectContainerAttestation` | `POST /container/{id}` | - | - | - | missing |
+| `AttestationService.DeleteManifest` | `DELETE /manifests/{id}` | `(dashboard)/attestation/collect/page.tsx` | - | `real-server/attestation.spec.ts` | covered |
+| `AttestationService.GetAttestationQuote` | `POST /quote` | `(dashboard)/attestation/quotes/page.tsx` | - | `real-server/attestation.spec.ts` | covered |
+| `AttestationService.VerifyAttestationQuote` | `POST /quote/verify` | `(dashboard)/attestation/quotes/page.tsx` | - | `real-server/attestation.spec.ts` | covered |
+| `AttestationService.CollectHostAttestation` | `POST /host` | `(dashboard)/attestation/collect/page.tsx` | - | `real-server/attestation.spec.ts` | covered |
+| `AttestationService.CollectVMAttestation` | `POST /vm/{id}` | `(dashboard)/attestation/collect/page.tsx` (gated off: no daemon-managed TPM session for workloads) | - | `real-server/attestation.spec.ts` | covered |
+| `AttestationService.CollectContainerAttestation` | `POST /container/{id}` | `(dashboard)/attestation/collect/page.tsx` (gated off: no daemon-managed TPM session for workloads) | - | `real-server/attestation.spec.ts` | covered |
 | `AttestationService.GetDeviceReport` | - | `(dashboard)/devices/[id]/page.tsx` | - | `attest-cert-record.spec.ts`<br>`attestation-reports.spec.ts`<br>`devices.spec.ts` | covered |
 | `AttestationService.ListDeviceReports` | - | `(dashboard)/attestation/page.tsx`<br>`(dashboard)/devices/page.tsx` | - | `attestation-reports.spec.ts`<br>`dashboard.spec.ts`<br>`devices.spec.ts` (+1) | covered |
 | `AttestationService.RefreshDeviceReport` | - | `(dashboard)/devices/[id]/page.tsx`<br>`(dashboard)/devices/page.tsx` | - | `attest-cert-record.spec.ts`<br>`attestation-reports.spec.ts`<br>`dashboard.spec.ts` (+1) | covered |
-| `AttestationService.DescribeCallerPolicy` | - | - | - | - | missing |
+| `AttestationService.DescribeCallerPolicy` | `GET /callers` | `(dashboard)/attestation/callers/page.tsx` | - | `real-server/attestation.spec.ts` | covered |
 | `AttestationService.StreamDeviceVerdicts` | - | - | - | - | not-UI: streaming plumbing |
-| `AttestationService.PollDeviceVerdicts` | - | - | - | - | missing |
+| `AttestationService.PollDeviceVerdicts` | `GET /verdicts` | `(dashboard)/attestation/verdicts/page.tsx` | - | `real-server/attestation.spec.ts` | covered |
 
 ## BarrierService (`barrier.proto`)
 
@@ -729,7 +729,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Area (service) | Operations | covered | partial | missing | not-UI | blocked: integration |
 |---|---|---|---|---|---|---|
-| AttestationService | 16 | 6 | 1 | 8 | 1 | 0 |
+| AttestationService | 16 | 15 | 0 | 0 | 1 | 0 |
 | BarrierService | 5 | 0 | 0 | 0 | 5 | 0 |
 | BMCService | 23 | 0 | 0 | 23 | 0 | 0 |
 | CAService | 13 | 7 | 0 | 6 | 0 | 0 |

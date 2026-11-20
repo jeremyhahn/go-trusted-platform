@@ -694,6 +694,39 @@ export interface CallerPolicyDescription {
 }
 
 /**
+ * Poll device verdicts request (GET /v1/attestation/verdicts). An empty
+ * cursor starts from the oldest verdict the caller may see; waitMs > 0
+ * long-polls until a verdict arrives or the wait ends.
+ */
+export interface PollDeviceVerdictsRequest {
+  cursor?: string;
+  waitMs?: number;
+}
+
+/** One device verdict as platformd recorded it in the attestation event log. */
+export interface DeviceVerdictEvent {
+  eventId: string;
+  recordedAt: string;
+  /** uint64 on the wire, a decimal string in JSON */
+  deviceId: string;
+  tenantId: string;
+  hostId: string;
+  serial: string;
+  passed: boolean;
+  /** A failed verdict that was evidence of compromise, not missing evidence */
+  cryptographic: boolean;
+  /** Failure detail; empty when passed */
+  reason: string;
+}
+
+/** Poll device verdicts response */
+export interface PollDeviceVerdictsResponse {
+  /** Where the next poll continues from */
+  cursor: string;
+  verdicts: DeviceVerdictEvent[];
+}
+
+/**
  * The four states a device report route can leave a console in. They must
  * render distinctly (docs/attestation/user.md): "never collected" is a 404
  * and is not a failed verdict; "not configured" is a 503 from a node without

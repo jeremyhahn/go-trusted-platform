@@ -31,6 +31,8 @@ import type {
   ListDeviceReportsResponse,
   RefreshDeviceReportResponse,
   CallerPolicyDescription,
+  PollDeviceVerdictsRequest,
+  PollDeviceVerdictsResponse,
   AttestationHashAlgorithm,
   AttestationHashAlgorithmProtoName,
   AttestationPCRValue,
@@ -248,6 +250,20 @@ export class AttestationService extends BaseService {
    */
   async describeCallers(): Promise<ApiResponse<CallerPolicyDescription>> {
     return this.client.get<CallerPolicyDescription>(this.buildUrl('/callers'));
+  }
+
+  /**
+   * Poll the device verdict feed (PollDeviceVerdicts). Pass the cursor of
+   * the previous page to continue; waitMs > 0 long-polls on the server.
+   */
+  async pollDeviceVerdicts(
+    request: PollDeviceVerdictsRequest = {}
+  ): Promise<ApiResponse<PollDeviceVerdictsResponse>> {
+    const query = new URLSearchParams();
+    if (request.cursor) query.set('cursor', request.cursor);
+    if (request.waitMs !== undefined) query.set('wait_ms', String(request.waitMs));
+    const qs = query.toString();
+    return this.client.get<PollDeviceVerdictsResponse>(this.buildUrl(qs ? `/verdicts?${qs}` : '/verdicts'));
   }
 
   async collectHostAttestation(request: CollectHostAttestationRequest): Promise<ApiResponse<CollectHostAttestationResponse>> {

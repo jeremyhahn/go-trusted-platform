@@ -5,9 +5,10 @@
  * the harness server returns: no route mocks. The page under test is driven
  * by the logged-in `adminPage`.
  */
+import type { PlatformClient } from 'trusted-platform-sdk';
 import { test, expect } from './fixtures';
 
-async function buildManifest(sdk: Parameters<Parameters<typeof test>[2]>[0]['sdk']) {
+async function buildManifest(sdk: PlatformClient) {
   const built = await sdk.attestation.buildManifest({ config: {}, includeVms: false, sign: false });
   expect(built.success, built.error?.message).toBe(true);
   const manifest = built.data?.manifest;
@@ -38,10 +39,11 @@ test.describe('attestation: manifests', () => {
     const id = manifest.id;
     expect(id).toBeTruthy();
 
-    await adminPage.goto(`/attestation/${encodeURIComponent(id!)}`);
+    await adminPage.goto('/attestation/collect');
+    await adminPage.getByLabel('Manifest ID').fill(id!);
     await adminPage.getByRole('button', { name: 'Delete manifest' }).click();
     await adminPage.getByRole('button', { name: 'Confirm delete' }).click();
-    await expect(adminPage).toHaveURL(/\/attestation\/manifests$/);
+    await expect(adminPage.getByTestId('collect-result')).toBeVisible();
 
     const after = await sdk.attestation.getManifest(id!);
     expect(after.success).toBe(false);
@@ -78,36 +80,27 @@ test.describe('attestation: collection', () => {
 
     await adminPage.goto('/attestation/collect');
     await adminPage.getByRole('button', { name: 'Collect host attestation' }).click();
-    const result = adminPage.getByTestId('collect-result');
-    await expect(result).toBeVisible();
-    if (!server.success) {
-      await expect(result).toContainText(/unavailable|failed|error/i);
+    if (server.success) {
+      await expect(adminPage.getByTestId('collect-result')).toBeVisible();
+    } else {
+      await expect(adminPage.getByTestId('collect-error')).toBeVisible();
     }
   });
 
-  test('collect VM attestation for an unknown VM reports the server error', async ({ adminPage, sdk }) => {
-    const vmId = 'e2e-missing-vm';
-    const server = await sdk.attestation.collectVMAttestation({ vmId, config: {}, nonce: 'cHJvYmU=' });
-    expect(server.success).toBe(false);
+  // VM and container collection are gated off: the attestation service has no
+  // daemon-managed TPM session for workloads, so the server refuses both.
+  test('VM and container collection are gated off with the reason', async ({ adminPage, sdk }) => {
+    const vm = await sdk.attestation.collectVMAttestation({ vmId: 'e2e-vm', config: {}, nonce: 'cHJvYmU=' });
+    const ctr = await sdk.attestation.collectContainerAttestation({ containerId: 'e2e-ctr' });
+    expect(vm.success).toBe(false);
+    expect(ctr.success).toBe(false);
 
     await adminPage.goto('/attestation/collect');
-    await adminPage.getByLabel('VM ID').fill(vmId);
-    await adminPage.getByRole('button', { name: 'Collect VM attestation' }).click();
-    await expect(adminPage.getByTestId('collect-result')).toBeVisible();
-  });
-
-  test('collect container attestation for an unknown container reports the server error', async ({
-    adminPage,
-    sdk,
-  }) => {
-    const containerId = 'e2e-missing-container';
-    const server = await sdk.attestation.collectContainerAttestation({ containerId });
-    expect(server.success).toBe(false);
-
-    await adminPage.goto('/attestation/collect');
-    await adminPage.getByLabel('Container ID').fill(containerId);
-    await adminPage.getByRole('button', { name: 'Collect container attestation' }).click();
-    await expect(adminPage.getByTestId('collect-result')).toBeVisible();
+    await expect(adminPage.getByTestId('workload-collect-unavailable')).toBeVisible();
+    await adminPage.getByLabel('VM ID').fill('e2e-vm');
+    await expect(adminPage.getByRole('button', { name: 'Collect VM attestation' })).toBeDisabled();
+    await adminPage.getByLabel('Container ID').fill('e2e-ctr');
+    await expect(adminPage.getByRole('button', { name: 'Collect container attestation' })).toBeDisabled();
   });
 });
 

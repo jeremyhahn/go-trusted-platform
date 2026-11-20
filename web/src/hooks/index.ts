@@ -124,6 +124,9 @@ export type { UseContainerOpsResult } from './use-container-ops';
 export { useVMOperations, attestationNonce } from './use-vm-operations';
 export type { UseVMOperationsResult } from './use-vm-operations';
 export { useAttestationCollect, newAttestationNonce } from './use-attestation-collect';
+export { useAttestationVerify, QUOTE_REQUIRED } from './use-attestation-verify';
+export { useCallerPolicy } from './use-caller-policy';
+export { useDeviceVerdicts } from './use-device-verdicts';
 export type {
   AttestationCollectOperation,
   AttestationCollectState,

@@ -21,6 +21,11 @@ const api: {
   options: undefined,
 };
 
+vi.mock("trusted-platform-sdk", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("trusted-platform-sdk")>()),
+  useAttestation: () => service,
+}));
+
 vi.mock("@/hooks", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks")>()),
   useAttestation: () => service,

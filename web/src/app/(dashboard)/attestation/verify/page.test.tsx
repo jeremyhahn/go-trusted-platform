@@ -21,6 +21,11 @@ const api: {
   options: undefined,
 };
 
+vi.mock("trusted-platform-sdk", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("trusted-platform-sdk")>()),
+  useAttestation: () => service,
+}));
+
 vi.mock("@/hooks", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks")>()),
   useAttestation: () => service,
@@ -181,12 +186,32 @@ describe("VerifyPage", () => {
     expect(mismatches.className).toContain("text-green-600");
   });
 
-  it("refetches on Refresh and offers Run Verification", () => {
+  it("refetches on Refresh and offers manifest verification", () => {
     api.state = { data: manifestsFixture, isLoading: false, error: null };
     render(<VerifyPage />);
 
     fireEvent.click(screen.getByRole("button", { name: /Refresh/ }));
     expect(refetch).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole("button", { name: /Run Verification/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Verify manifest/ })).toBeTruthy();
+  });
+
+  // #2038: VerifyManifest goes to the server through the SDK, and the page
+  // shows the server's verdict.
+  it("verifies a pasted manifest through the SDK and shows the verdict", async () => {
+    api.state = { data: manifestsFixture, isLoading: false, error: null };
+    const manifest = { id: "m-9", hostId: "h", timestamp: "t", nonce: "bg==", vms: [] };
+    service.verifyManifest = vi.fn().mockResolvedValue({
+      success: true,
+      data: { status: { success: true, message: "" }, result: { status: "VALID", signatureValid: true } },
+    });
+    render(<VerifyPage />);
+
+    fireEvent.change(screen.getByLabelText("Manifest JSON"), { target: { value: JSON.stringify(manifest) } });
+    fireEvent.click(screen.getByRole("button", { name: /Verify manifest/ }));
+
+    const result = await screen.findByTestId("verify-manifest-result");
+    expect(service.verifyManifest).toHaveBeenCalledWith({ manifest });
+    expect(result.textContent).toContain("VALID");
+    expect(result.textContent).toContain("Signature: valid");
   });
 });
