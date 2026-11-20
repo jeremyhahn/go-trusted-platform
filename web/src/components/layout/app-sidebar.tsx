@@ -103,6 +103,8 @@ const navigation = [
       { title: "Verification", href: "/attestation/verify" },
       { title: "Event Logs", href: "/attestation/eventlogs" },
       { title: "Collect", href: "/attestation/collect" },
+      { title: "Callers", href: "/attestation/callers" },
+      { title: "Verdicts", href: "/attestation/verdicts" },
     ],
   },
   {
