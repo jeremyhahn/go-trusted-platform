@@ -65,7 +65,7 @@ func newClusterTestRegistry(server platformv1.ClusterServiceServer) *ToolRegistr
 // Every ClusterService method has one tool, and the tool requires the scope
 // its gRPC method requires.
 func TestClusterTools_CoverEveryMethodWithItsGRPCScope(t *testing.T) {
-	permissions := toolPermissionCatalog()
+	permissions := declaredToolPermissions(PlatformTools{})
 	byMethod := make(map[string]string, len(clusterTools))
 	for name, tool := range clusterTools {
 		byMethod[tool.method] = name
