@@ -10,11 +10,33 @@
  * branch instead. No route mocks.
  */
 import type { Page } from '@playwright/test';
-import type { PlatformClient } from 'trusted-platform-sdk';
-import { test, expect } from './fixtures';
+import { test as base, expect } from '@playwright/test';
+import { PlatformClient } from 'trusted-platform-sdk';
 
 /** The fixtures this spec uses, typed so the spec checks on its own. */
 type Fx = { adminPage: Page; sdk: PlatformClient };
+
+/**
+ * Real-server fixtures. The spec runs only against a live server: set
+ * E2E_REAL_SERVER_API_URL (the REST base URL) and E2E_REAL_SERVER_ADMIN_JWT
+ * (an admin token). Without them every test is skipped, so the mocked e2e
+ * run that also collects e2e/ is unaffected.
+ */
+const apiUrl = process.env.E2E_REAL_SERVER_API_URL ?? '';
+const adminJwt = process.env.E2E_REAL_SERVER_ADMIN_JWT ?? '';
+
+const test = base.extend<Fx>({
+  sdk: async ({}, provide, testInfo) => {
+    testInfo.skip(!apiUrl || !adminJwt, 'real server not configured (E2E_REAL_SERVER_API_URL, E2E_REAL_SERVER_ADMIN_JWT)');
+    await provide(new PlatformClient({ baseUrl: apiUrl, headers: { Authorization: `Bearer ${adminJwt}` } }));
+  },
+  adminPage: async ({ page, context, baseURL }, provide, testInfo) => {
+    testInfo.skip(!apiUrl || !adminJwt, 'real server not configured (E2E_REAL_SERVER_API_URL, E2E_REAL_SERVER_ADMIN_JWT)');
+    const domain = new URL(baseURL ?? 'http://localhost:3000').hostname;
+    await context.addCookies([{ name: 'jwt', value: adminJwt, domain, path: '/', httpOnly: false, secure: false, sameSite: 'Lax' }]);
+    await provide(page);
+  },
+});
 
 type Res<T> = { success?: boolean; data?: T; error?: { message?: string } };
 

@@ -170,6 +170,8 @@ GET /api/v1/gateway/ipam/pools
 GET /api/v1/gateway/state
 GET /api/v1/gateway/state/{id}
 GET /api/v1/gateway/status
+GET /api/v1/gateway/vteps
+GET /api/v1/gateway/vteps/{vtep}
 GET /api/v1/iam
 GET /api/v1/iam/apps
 GET /api/v1/iam/apps/{id}
