@@ -246,6 +246,17 @@ export default function SDNBridgeDetailClient() {
     });
   };
   const refreshPort = () => setPortReload((n) => n + 1);
+  // OpenFlow matches a destination port only under tcp or udp; the switch
+  // rejects a port match with any or icmp (#2024 Codex round 4, P1).
+  const portNeedsTransport = (protocol: string) => protocol === 'tcp' || protocol === 'udp';
+  const rulePortError =
+    ruleDestinationPort.trim() && !portNeedsTransport(ruleProtocol)
+      ? 'Rule rule-1: a destination port needs protocol tcp or udp'
+      : '';
+  const changeRuleProtocol = (protocol: string) => {
+    setRuleProtocol(protocol);
+    if (!portNeedsTransport(protocol)) setRuleDestinationPort('');
+  };
 
   return (
     <div className="space-y-6">
@@ -641,7 +652,7 @@ export default function SDNBridgeDetailClient() {
                   id="rule-protocol"
                   className="h-9 w-full rounded-md border border-input bg-background px-2"
                   value={ruleProtocol}
-                  onChange={(e) => setRuleProtocol(e.target.value)}
+                  onChange={(e) => changeRuleProtocol(e.target.value)}
                 >
                   {RULE_PROTOCOLS.map((p) => (
                     <option key={p} value={p}>{p}</option>
@@ -657,7 +668,14 @@ export default function SDNBridgeDetailClient() {
                   max={65535}
                   value={ruleDestinationPort}
                   onChange={(e) => setRuleDestinationPort(e.target.value)}
+                  aria-invalid={rulePortError ? true : undefined}
+                  aria-describedby={rulePortError ? 'rule-port-error' : undefined}
                 />
+                {rulePortError && (
+                  <p id="rule-port-error" role="alert" data-testid="rule-port-error" className="text-sm text-destructive">
+                    {rulePortError}
+                  </p>
+                )}
               </div>
               <div className="space-y-1">
                 <Label htmlFor="rule-source-ip">Source IP</Label>
@@ -676,8 +694,9 @@ export default function SDNBridgeDetailClient() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setApplyOpen(false)}>Cancel</Button>
             <Button
-              disabled={!policyName || !ruleAction}
+              disabled={!policyName || !ruleAction || !!rulePortError}
               onClick={() =>
+                !rulePortError &&
                 run(
                   'Policy applied',
                   applyPolicy,
