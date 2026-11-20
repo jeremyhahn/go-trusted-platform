@@ -43,6 +43,45 @@ describe("fetchInvitationByToken", () => {
     await expect(fetchInvitationByToken("tok")).resolves.toEqual(invitation);
   });
 
+  it("normalizes the protojson camelCase fields GetInvitation answers with", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          code: 200,
+          success: true,
+          payload: {
+            invitation: {
+              ...invitation,
+              expiresAt: "2026-12-01T00:00:00Z",
+              createdAt: "2026-11-12T00:00:00Z",
+              tenantId: "t-1",
+              tenantName: "Acme",
+            },
+          },
+        })
+      )
+    );
+
+    const got = await fetchInvitationByToken("tok");
+    expect(got.expires_at).toBe("2026-12-01T00:00:00Z");
+    expect(got.created_at).toBe("2026-11-12T00:00:00Z");
+    expect(got.tenant_id).toBe("t-1");
+    expect(got.tenant_name).toBe("Acme");
+  });
+
+  it("keeps snake_case fields when the body already uses them", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({ invitation: { ...invitation, expires_at: "2026-12-01T00:00:00Z" } })
+      )
+    );
+
+    const got = await fetchInvitationByToken("tok");
+    expect(got.expires_at).toBe("2026-12-01T00:00:00Z");
+  });
+
   it("refuses an envelope without an invitation", async () => {
     vi.stubGlobal(
       "fetch",

@@ -16,7 +16,6 @@ import {
   Settings,
   ChevronRight,
   LogOut,
-  User,
   Database,
   FileCheck,
   Fingerprint,
@@ -61,9 +60,7 @@ const navigation = [
       { title: "Roles", href: "/iam/roles" },
       { title: "Groups", href: "/iam/groups" },
       { title: "Permissions", href: "/iam/permissions" },
-      { title: "Tenants", href: "/iam/tenants" },
       { title: "Policies", href: "/iam/policies" },
-      { title: "Policy Test", href: "/iam/policies/test" },
       { title: "Applications", href: "/iam/apps" },
       { title: "API Tokens", href: "/iam/tokens" },
     ],
@@ -77,24 +74,18 @@ const navigation = [
       { title: "Invitations", href: "/tenant/invitations" },
       { title: "Quotas", href: "/tenant/quotas" },
       { title: "All Tenants", href: "/admin/tenants" },
-      { title: "Lifecycle", href: "/tenant/lifecycle" },
     ],
   },
   {
     title: "Security",
     icon: Lock,
     children: [
-      { title: "Overview", href: "/ca" },
       { title: "Certificates", href: "/ca/certificates" },
-      { title: "Sign CSR", href: "/ca/sign" },
-      { title: "Verify Certificate", href: "/ca/verify" },
       { title: "Certificate Requests", href: "/ca/requests" },
       { title: "CA Bundle", href: "/ca/bundle" },
       { title: "CRL", href: "/ca/crl" },
-      { title: "EAB Credentials", href: "/ca/eab" },
       { title: "Key Management", href: "/kms" },
       { title: "Key Encryption", href: "/kms/encrypt" },
-      { title: "Key Operations", href: "/kms/operations" },
     ],
   },
   {
@@ -104,7 +95,6 @@ const navigation = [
       { title: "Manifests", href: "/attestation/manifests" },
       { title: "Quotes", href: "/attestation/quotes" },
       { title: "Verification", href: "/attestation/verify" },
-      { title: "Collect", href: "/attestation/collect" },
       { title: "Event Logs", href: "/attestation/eventlogs" },
     ],
   },
@@ -118,7 +108,6 @@ const navigation = [
       { title: "Event Log", href: "/tpm/eventlog" },
       { title: "Quote / Attestation", href: "/tpm/quote" },
       { title: "Lockout", href: "/tpm/lockout" },
-      { title: "IDevID / IAK", href: "/tpm/idevid" },
       { title: "NVRAM", href: "/tpm/nvram" },
       { title: "Seal/Unseal", href: "/tpm/seal" },
       { title: "Credential / Random", href: "/tpm/credential" },
@@ -131,14 +120,9 @@ const navigation = [
     children: [
       { title: "All Devices", href: "/devices" },
       { title: "Device Profiles", href: "/devices/profiles" },
-      { title: "Device Lookup", href: "/devices/lookup" },
       { title: "Device Templates", href: "/devices/templates" },
       { title: "vTPM Bundles", href: "/devices/vtpm" },
-      { title: "vTPM Templates", href: "/devices/vtpm/templates" },
-      { title: "vTPM Bundle Import", href: "/devices/vtpm/bundles" },
       { title: "IDevID/IAK", href: "/devices/idevid" },
-      { title: "BMC Users", href: "/devices/bmc" },
-      { title: "BMC", href: "/devices/bmc" },
     ],
   },
   {
@@ -156,7 +140,6 @@ const navigation = [
       { title: "Containers", href: "/compute/containers" },
       { title: "Snapshots", href: "/compute/snapshots" },
       { title: "Images", href: "/compute/images" },
-      { title: "Migrations", href: "/compute/migrations" },
       { title: "Registry", href: "/compute/registry" },
     ],
   },
@@ -168,7 +151,6 @@ const navigation = [
       { title: "Network Zones", href: "/networking/zones" },
       { title: "IPAM Pools", href: "/networking/ipam" },
       { title: "Ports", href: "/networking/ports" },
-      { title: "Switches", href: "/networking/switches" },
       { title: "Flows", href: "/networking/flows" },
       { title: "VLANs", href: "/networking/vlans" },
       { title: "DNS Zones", href: "/networking/dns" },
@@ -176,7 +158,6 @@ const navigation = [
       { title: "Overlays", href: "/networking/overlays" },
       { title: "VTEPs", href: "/networking/overlays/vteps" },
       { title: "Gateway", href: "/networking/gateway" },
-      { title: "Gateway BGP & IPAM", href: "/networking/gateway/bgp" },
       { title: "VPN", href: "/networking/vpn" },
       { title: "PXE Boot", href: "/networking/pxe" },
     ],
@@ -336,19 +317,6 @@ export function AppSidebar(props: AppSidebarProps) {
               </DropdownMenuTrigger>
               <DropdownMenuContent side="top" className="w-56">
                 <DropdownMenuLabel>My Account</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem asChild>
-                  <Link href="/profile" className="cursor-pointer">
-                    <User className="mr-2 h-4 w-4" />
-                    <span>Profile</span>
-                  </Link>
-                </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <Link href="/settings" className="cursor-pointer">
-                    <Settings className="mr-2 h-4 w-4" />
-                    <span>Settings</span>
-                  </Link>
-                </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   onClick={handleLogout}

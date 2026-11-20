@@ -131,6 +131,51 @@ func TestSDNService_ApplyPolicy_FailsWhenAFlowIsNotInstalled(t *testing.T) {
 	assert.Empty(t, list.GetPolicies(), "a failed apply must record no policy")
 }
 
+// A failed update of an existing policy must leave the old policy enforced:
+// the update's AddFlow replaced the old flow (same table, priority and
+// match), so deleting it on rollback must be followed by re-installing the
+// old policy's flows (#2021 Codex P1).
+func TestSDNService_ApplyPolicy_FailedUpdateRestoresTheActivePolicy(t *testing.T) {
+	svc, mock, _ := newPolicyFlowFixture(t)
+	ctx := context.Background()
+
+	first := denyPolicy("p", denyRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 22}))
+	first.PolicyId = "pol-1"
+	_, err := svc.ApplyPolicy(ctx, first)
+	require.NoError(t, err)
+
+	var adds []ovs.FlowMod
+	calls := 0
+	mock.OnAddFlow(func(_ context.Context, _ string, flow *ovs.FlowMod) error {
+		calls++
+		if calls == 2 {
+			return errFlowInstall
+		}
+		adds = append(adds, *flow)
+		return nil
+	})
+
+	update := denyPolicy("p",
+		denyRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 22}),
+		denyRule("r2", &platformv1.PolicyRuleMatch{Protocol: "udp", DestinationPort: 53}),
+	)
+	update.PolicyId = "pol-1"
+	_, err = svc.ApplyPolicy(ctx, update)
+	require.Error(t, err)
+	assert.Equal(t, codes.Internal, status.Code(err))
+
+	require.GreaterOrEqual(t, len(adds), 2, "the old policy's flow must be re-installed after the rollback")
+	last := adds[len(adds)-1]
+	assert.Equal(t, "tcp,tp_dst=22", last.Match)
+	assert.Equal(t, "drop", last.Actions)
+
+	got, err := svc.GetPolicy(ctx, &platformv1.GetPolicyRequest{PolicyId: "pol-1"})
+	require.NoError(t, err)
+	rules := got.GetPolicy().GetConfig().GetRules()
+	require.Len(t, rules, 1, "the failed update must not replace the recorded policy")
+	assert.Equal(t, "r1", rules[0].GetRuleId())
+}
+
 // TestSDNService_DeletePolicy_UsesTheSameMatch checks that deleting a policy
 // removes flows by the match its apply installed.
 func TestSDNService_DeletePolicy_UsesTheSameMatch(t *testing.T) {

@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { TenantService } from './tenant-service.js';
-import type { ApiClient } from '../client/api-client.js';
+import { ApiClient } from '../client/api-client.js';
 import type { ComputeQuota, NetworkQuota, StorageQuota } from '../types/tenant.js';
 
 function createMockApiClient(): ApiClient {
@@ -102,7 +102,7 @@ describe('TenantService', () => {
       expect(mockClient.get).toHaveBeenCalledWith('/v1/tenants');
     });
 
-    it('turns offset and limit into page and limit, and labels into label_ filters', async () => {
+    it('sends offset and limit as they are, and labels as label_ filters', async () => {
       vi.mocked(mockClient.get).mockResolvedValue({ success: true, data: { tenants: [] } });
 
       await service.listTenants({
@@ -111,10 +111,10 @@ describe('TenantService', () => {
         selector: { matchLabels: { env: 'prod' } },
       });
 
-      expect(mockClient.get).toHaveBeenCalledWith('/v1/tenants?page=3&limit=10&label_env=prod');
+      expect(mockClient.get).toHaveBeenCalledWith('/v1/tenants?limit=10&label_env=prod&offset=20');
     });
 
-    it('sends limit without page when no offset is given', async () => {
+    it('sends limit without offset when no offset is given', async () => {
       vi.mocked(mockClient.get).mockResolvedValue({ success: true, data: { tenants: [] } });
 
       await service.listTenants({ limit: 5 });
@@ -258,12 +258,12 @@ describe('TenantService', () => {
   });
 
   describe('checkQuota', () => {
-    it('POSTs resource and amount to /v1/tenants/{id}/quotas/check', async () => {
+    it('POSTs resource and amount to /v1/tenants/{id}/quota-check', async () => {
       vi.mocked(mockClient.post).mockResolvedValue({ success: true, data: { allowed: true } });
 
       await service.checkQuota({ tenantId: 't-1', resource: 'vcpu', amount: 2 });
 
-      expect(mockClient.post).toHaveBeenCalledWith('/v1/tenants/t-1/quotas/check', {
+      expect(mockClient.post).toHaveBeenCalledWith('/v1/tenants/t-1/quota-check', {
         resource: 'vcpu',
         amount: 2,
       });
@@ -285,9 +285,34 @@ describe('TenantService', () => {
 
       await service.rotateDEK({ tenantId: 't-1', background: true });
 
-      expect(mockClient.post).toHaveBeenCalledWith('/v1/tenants/t-1/dek/rotate', {
-        background: true,
+      expect(mockClient.post).toHaveBeenCalledWith(
+        '/v1/tenants/t-1/dek/rotate',
+        { background: true },
+        { retry: { enabled: false } }
+      );
+    });
+
+    it('never replays a rotation whose response was lost', async () => {
+      // The server rotated the DEK, then the response was lost: a client
+      // resend would rotate the key a second time for one confirmation.
+      const fetchImpl = vi
+        .fn()
+        .mockRejectedValueOnce(new TypeError('network error: response lost after the server acted'))
+        .mockResolvedValue(
+          new Response(JSON.stringify({ success: true, payload: {} }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })
+        );
+      const client = new ApiClient({
+        baseUrl: 'https://platform.test/api',
+        fetch: fetchImpl as unknown as typeof fetch,
+        retry: { maxRetries: 3, initialDelayMs: 1, maxDelayMs: 1 },
       });
+
+      const result = await new TenantService(client).rotateDEK({ tenantId: 't-1' });
+      expect(result.success).toBe(false);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
     });
 
     it('propagates a transport error', async () => {
@@ -299,12 +324,12 @@ describe('TenantService', () => {
   });
 
   describe('getDEKStatus', () => {
-    it('GETs /v1/tenants/{id}/dek/status', async () => {
+    it('GETs /v1/tenants/{id}/dek', async () => {
       vi.mocked(mockClient.get).mockResolvedValue({ success: true, data: {} });
 
       await service.getDEKStatus('t-1');
 
-      expect(mockClient.get).toHaveBeenCalledWith('/v1/tenants/t-1/dek/status');
+      expect(mockClient.get).toHaveBeenCalledWith('/v1/tenants/t-1/dek');
     });
 
     it('propagates a transport error', async () => {

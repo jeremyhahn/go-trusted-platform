@@ -56,8 +56,8 @@ class MemoryTransport implements Transport {
     return this.answer<T>({ method: 'patch', path, body, options });
   }
 
-  delete<T>(path: string, options?: RequestOptions): Promise<ApiResponse<T>> {
-    return this.answer<T>({ method: 'delete', path, options });
+  delete<T>(path: string, options?: RequestOptions, body?: RequestBody): Promise<ApiResponse<T>> {
+    return this.answer<T>({ method: 'delete', path, body, options });
   }
 }
 
@@ -68,7 +68,7 @@ describe('Transport interface', () => {
 
   it('types each verb with a path, an optional body where it carries one, and optional options', () => {
     expectTypeOf<Transport['get']>().parameters.toEqualTypeOf<[string, RequestOptions?]>();
-    expectTypeOf<Transport['delete']>().parameters.toEqualTypeOf<[string, RequestOptions?]>();
+    expectTypeOf<Transport['delete']>().parameters.toEqualTypeOf<[string, RequestOptions?, RequestBody?]>();
     expectTypeOf<Transport['post']>().parameters.toEqualTypeOf<[string, RequestBody?, RequestOptions?]>();
     expectTypeOf<Transport['put']>().parameters.toEqualTypeOf<[string, RequestBody?, RequestOptions?]>();
     expectTypeOf<Transport['patch']>().parameters.toEqualTypeOf<[string, RequestBody?, RequestOptions?]>();

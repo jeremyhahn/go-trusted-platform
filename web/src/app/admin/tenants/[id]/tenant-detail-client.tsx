@@ -145,6 +145,11 @@ export default function TenantDetailClient() {
 
   const sync = async () => {
     const res = await tenants.syncTenants();
+    // Sync reports a failed run in status (HTTP 200), not as an RPC error.
+    if (res.success && res.data?.status?.success === false) {
+      setStatus(res.data.status.message || "Sync failed");
+      return;
+    }
     report(res, "Tenants synced", "Sync failed");
   };
 

@@ -56,7 +56,7 @@ describe('EABService', () => {
 
   describe('create', () => {
     it('posts the request to /v1/eab/credentials with no query', async () => {
-      const request = { profileId: 3, tenantId: 'tenant-a', description: 'lab' };
+      const request = { profileId: '3', tenantId: 'tenant-a', description: 'lab' };
       const res = await service.create(request as never);
       const call = onlyCall(client);
       expect(call.verb).toBe('post');
@@ -74,7 +74,7 @@ describe('EABService', () => {
 
   describe('get', () => {
     it('gets /v1/eab/credentials/{id} with no query and no body', async () => {
-      const res = await service.get(42);
+      const res = await service.get('42');
       const call = onlyCall(client);
       expect(call.verb).toBe('get');
       expect(call.path).toBe('/v1/eab/credentials/42');
@@ -85,7 +85,7 @@ describe('EABService', () => {
 
     it('passes a transport failure through', async () => {
       const err = failNext('get');
-      await expect(service.get(1)).rejects.toBe(err);
+      await expect(service.get('1')).rejects.toBe(err);
     });
   });
 
@@ -123,7 +123,7 @@ describe('EABService', () => {
     });
 
     it('sends paging and every filter in the query', async () => {
-      await service.list({ page: 2, pageSize: 25, profileId: 7, tenantId: 'tenant-a', status: 'active' } as never);
+      await service.list({ page: 2, pageSize: 25, profileId: '7', tenantId: 'tenant-a', status: 'active' } as never);
       const call = onlyCall(client);
       expect(call.verb).toBe('get');
       expect(call.path).toBe('/v1/eab/credentials');
@@ -150,7 +150,7 @@ describe('EABService', () => {
 
   describe('revoke', () => {
     it('posts an empty body to /v1/eab/credentials/{id}/revoke', async () => {
-      const res = await service.revoke(9);
+      const res = await service.revoke('9');
       const call = onlyCall(client);
       expect(call.verb).toBe('post');
       expect(call.path).toBe('/v1/eab/credentials/9/revoke');
@@ -161,7 +161,7 @@ describe('EABService', () => {
 
     it('passes a transport failure through', async () => {
       const err = failNext('post');
-      await expect(service.revoke(9)).rejects.toBe(err);
+      await expect(service.revoke('9')).rejects.toBe(err);
     });
   });
 
@@ -184,7 +184,7 @@ describe('EABService', () => {
 
   describe('delete', () => {
     it('deletes /v1/eab/credentials/{id} with no query and no body', async () => {
-      const res = await service.delete(5);
+      const res = await service.delete('5');
       const call = onlyCall(client);
       expect(call.verb).toBe('delete');
       expect(call.path).toBe('/v1/eab/credentials/5');
@@ -195,13 +195,13 @@ describe('EABService', () => {
 
     it('passes a transport failure through', async () => {
       const err = failNext('delete');
-      await expect(service.delete(5)).rejects.toBe(err);
+      await expect(service.delete('5')).rejects.toBe(err);
     });
   });
 
   describe('getQRCode', () => {
     it('gets /v1/eab/credentials/{id}/qrcode with no query when no size is given', async () => {
-      await service.getQRCode(4);
+      await service.getQRCode('4');
       const call = onlyCall(client);
       expect(call.verb).toBe('get');
       expect(call.path).toBe('/v1/eab/credentials/4/qrcode');
@@ -210,7 +210,7 @@ describe('EABService', () => {
     });
 
     it('sends the size in the query', async () => {
-      await service.getQRCode(4, 256);
+      await service.getQRCode('4', 256);
       const call = onlyCall(client);
       expect(call.path).toBe('/v1/eab/credentials/4/qrcode');
       expect(Object.fromEntries(call.query)).toEqual({ size: '256' });
@@ -218,23 +218,23 @@ describe('EABService', () => {
 
     it('passes a transport failure through', async () => {
       const err = failNext('get');
-      await expect(service.getQRCode(4)).rejects.toBe(err);
+      await expect(service.getQRCode('4')).rejects.toBe(err);
     });
   });
 
   describe('getEnrollmentURL', () => {
-    it('gets /v1/eab/credentials/{id}/enrollment-url with no query and no body', async () => {
-      await service.getEnrollmentURL(8);
+    it('gets /v1/eab/credentials/{id}/url with no query and no body', async () => {
+      await service.getEnrollmentURL('8');
       const call = onlyCall(client);
       expect(call.verb).toBe('get');
-      expect(call.path).toBe('/v1/eab/credentials/8/enrollment-url');
+      expect(call.path).toBe('/v1/eab/credentials/8/url');
       expect([...call.query.keys()]).toEqual([]);
       expect(call.argc).toBe(1);
     });
 
     it('passes a transport failure through', async () => {
       const err = failNext('get');
-      await expect(service.getEnrollmentURL(8)).rejects.toBe(err);
+      await expect(service.getEnrollmentURL('8')).rejects.toBe(err);
     });
   });
 });

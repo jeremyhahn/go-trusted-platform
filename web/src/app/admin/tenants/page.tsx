@@ -80,9 +80,15 @@ export default function AdminTenantsPage() {
     }
   };
 
+  // Find stays enabled while a lookup is pending: only the latest lookup's
+  // completion may set the result (and the Delete action's target) or status.
+  const searchSeq = React.useRef<number>(0);
+
   const find = async (e: React.FormEvent) => {
     e.preventDefault();
+    const seq = ++searchSeq.current;
     const res = await tenants.getTenantByName(search);
+    if (seq !== searchSeq.current) return;
     if (res.success && res.data?.tenant) {
       setFound(res.data.tenant);
       setStatus("");

@@ -364,12 +364,18 @@ export class ComputeService extends BaseService {
    * Prepare a migration receiver on this (destination) host
    */
   async prepareMigration(request: PrepareMigrationRequest): Promise<ApiResponse<PrepareMigrationResponse>> {
-    return this.client.post<PrepareMigrationResponse>(this.buildUrl('/migrations/prepare'), {
-      vmId: request.vmId,
-      vmName: request.vmName,
-      mode: request.mode,
-      spec: request.spec,
-    });
+    return this.client.post<PrepareMigrationResponse>(
+      this.buildUrl('/migrations/prepare'),
+      {
+        vmId: request.vmId,
+        vmName: request.vmName,
+        mode: request.mode,
+        spec: request.spec,
+      },
+      // No retries: each prepare launches a QEMU receiver, and a resend after
+      // a lost response leaks one whose token the caller never saw.
+      { retry: { enabled: false } }
+    );
   }
 
   /**
@@ -378,7 +384,10 @@ export class ComputeService extends BaseService {
   async finalizeMigration(request: FinalizeMigrationRequest): Promise<ApiResponse<FinalizeMigrationResponse>> {
     return this.client.post<FinalizeMigrationResponse>(
       this.buildUrl(`/migrations/${this.encodePathSegment(request.receiverId)}/finalize`),
-      { commit: request.commit }
+      { commit: request.commit },
+      // No retries: the daemon drops the receiver token before it commits,
+      // so a resend after a lost response answers 404 for a resumed guest.
+      { retry: { enabled: false } }
     );
   }
 

@@ -146,12 +146,14 @@ describe("AppSidebar", () => {
     expect(screen.getByLabelText("Account menu")).toBeTruthy();
   });
 
-  it("opens the account menu with profile, settings and log out entries", () => {
+  // #2023 Codex round 2: /profile and /settings have no page on this branch,
+  // so the menu carries no links to them.
+  it("opens the account menu with the log out entry only", () => {
     renderSidebar();
     openAccountMenu();
     expect(screen.getByText("My Account")).toBeTruthy();
-    expect(screen.getByText("Profile").closest("a")?.getAttribute("href")).toBe("/profile");
-    expect(screen.getByText("Settings").closest("a")?.getAttribute("href")).toBe("/settings");
+    expect(screen.queryByText("Profile")).toBeNull();
+    expect(screen.queryByText("Settings")).toBeNull();
     expect(screen.getByText("Log out")).toBeTruthy();
   });
 

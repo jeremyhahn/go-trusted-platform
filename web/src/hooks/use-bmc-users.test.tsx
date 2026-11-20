@@ -94,4 +94,119 @@ describe('useBMCUsers across a profile change', () => {
     expect(result.current.users).toEqual([bob]);
     expect(result.current.listed).toBe(true);
   });
+
+  // A mutation started on profile 7 settles after the hook moved to
+  // profile 9 and 9 has listed: its follow-up listing must not run for 7,
+  // and 9's rows must stay listed.
+  const mutations: Array<{
+    name: string;
+    method: string;
+    url: string;
+    run: (r: ReturnType<typeof useBMCUsers>) => Promise<void>;
+  }> = [
+    { name: 'deleteUser', method: 'DELETE', url: '/api/v1/bmc/7/users/3', run: (r) => r.deleteUser(3) },
+    {
+      name: 'createUser',
+      method: 'POST',
+      url: '/api/v1/bmc/7/users',
+      run: (r) =>
+        r.createUser({ slot: 4, username: 'carol', password: 'pw', privilege: 'user', enabled: true, channel: 1 }),
+    },
+    {
+      name: 'setUserPrivilege',
+      method: 'PUT',
+      url: '/api/v1/bmc/7/users/3/privilege',
+      run: (r) => r.setUserPrivilege(3, 'operator', 1),
+    },
+  ];
+
+  it.each(mutations)(
+    "keeps the new profile's rows when a $name of the previous profile settles last",
+    async ({ method, url, run }) => {
+      const { result, rerender } = renderHook(({ id }) => useBMCUsers(id), {
+        initialProps: { id: '7' },
+      });
+      await flush();
+      await act(async () => answer('/api/v1/bmc/7/users', [alice]));
+      await waitFor(() => expect(result.current.listed).toBe(true));
+
+      let done: Promise<void> = Promise.resolve();
+      await act(async () => {
+        done = run(result.current);
+      });
+      expect(pending.some((p) => p.method === method && p.url === url)).toBe(true);
+
+      rerender({ id: '9' });
+      await flush();
+      await act(async () => answer('/api/v1/bmc/9/users', [bob]));
+      await waitFor(() => expect(result.current.listed).toBe(true));
+
+      await act(async () => answerMethod(method, url, {}));
+      await flush();
+      await flush();
+
+      // A follow-up listing of profile 7 must not have started. Answer any
+      // that did, so the mutation settles and the test can check the rows.
+      const stale = pending.filter((p) => p.url.startsWith('/api/v1/bmc/7/')).map((p) => p.url);
+      await act(async () => {
+        for (const u of stale) answer(u, [alice]);
+        await done;
+      });
+      await flush();
+
+      expect(stale).toEqual([]);
+      expect(result.current.users).toEqual([bob]);
+      expect(result.current.listed).toBe(true);
+      expect(result.current.isLoading).toBe(false);
+    }
+  );
+});
+
+function answerMethod(method: string, url: string, payload: unknown): void {
+  const i = pending.findIndex((p) => p.method === method && p.url === url);
+  if (i < 0) throw new Error(`no pending ${method} ${url}`);
+  const [p] = pending.splice(i, 1);
+  p.resolve(payload);
+}
+
+// #2023 Codex round 5: an HTTP 200 whose body is not a user list (invalid
+// JSON, an empty body, an object) never established slot occupancy, so it
+// must not mark the profile listed, and createUser must send no POST.
+describe('useBMCUsers with an unreadable listing', () => {
+  const unreadable = [
+    { name: 'invalid JSON', body: '{"payload": [' },
+    { name: 'an empty body', body: '' },
+    { name: 'an object payload', body: '{}' },
+    { name: 'a non-array payload', body: JSON.stringify({ payload: { slot: 3 } }) },
+  ];
+
+  it.each(unreadable)('keeps listed false and refuses createUser after $name', async ({ body }) => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      if ((init?.method ?? 'GET') !== 'GET') throw new Error(`unexpected ${init?.method}`);
+      return { ok: true, status: 200, text: async () => body };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { result } = renderHook(() => useBMCUsers('7'));
+    await flush();
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.listed).toBe(false);
+    expect(result.current.error).toMatch(/unreadable user listing/);
+    expect(result.current.users).toEqual([]);
+    await expect(
+      result.current.createUser({ slot: 3, username: 'eve', password: 'pw', privilege: 4, channel: 1 } as never)
+    ).rejects.toThrow(/still loading|unreadable/);
+    expect(fetchMock.mock.calls.every(([, init]) => (init?.method ?? 'GET') === 'GET')).toBe(true);
+  });
+
+  it('lists an empty array as listed with no users', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, status: 200, text: async () => JSON.stringify({ payload: [] }) }))
+    );
+    const { result } = renderHook(() => useBMCUsers('7'));
+    await flush();
+    await waitFor(() => expect(result.current.listed).toBe(true));
+    expect(result.current.error).toBeNull();
+    expect(result.current.users).toEqual([]);
+  });
 });
