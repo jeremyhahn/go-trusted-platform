@@ -80,6 +80,20 @@ type iamTokenAuthorizer struct {
 	pep        quicbaassdk.IAMPEPClient
 }
 
+// CheckPeerPermission implements quic.PeerAuthorizationChecker: a QUIC
+// caller authenticated by its client certificate is decided by the IAM PEP
+// for the certificate's subject in its tenant, never by a wildcard scope
+// (#2016). A missing subject or tenant is a denial; an error is never allow.
+func (a *iamTokenAuthorizer) CheckPeerPermission(ctx context.Context, authCtx *platformtoken.AuthorizedContext, resource, action string) (bool, error) {
+	if authCtx == nil {
+		return false, nil
+	}
+	return checkPrincipalPermission(ctx, a.pep, &tokenPrincipal{
+		Subject:  authCtx.Subject,
+		TenantID: authCtx.TenantID,
+	}, resource, action)
+}
+
 // newIAMTokenAuthorizer returns an authorizer backed by pep. Both arguments
 // are required; without a PEP there is no decision to delegate to.
 func newIAMTokenAuthorizer(principals principalResolver, pep quicbaassdk.IAMPEPClient) (*iamTokenAuthorizer, error) {
