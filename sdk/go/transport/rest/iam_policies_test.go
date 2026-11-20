@@ -288,6 +288,11 @@ func TestIAMListPolicies_PaginationTravelsAsLimitAndOffset(t *testing.T) {
 		{"page2", &platformv1.PaginationRequest{Page: 2, PageSize: 7}, "limit=7&offset=7"},
 		{"page1", &platformv1.PaginationRequest{Page: 1, PageSize: 7}, "limit=7"},
 		{"absent", nil, ""},
+		// The server defaults an omitted limit to 50 and clamps it to 1000;
+		// the offset must use that effective size or pages overlap or skip.
+		{"page2 omitted size", &platformv1.PaginationRequest{Page: 2}, "limit=50&offset=50"},
+		{"page2 oversized", &platformv1.PaginationRequest{Page: 2, PageSize: 2000}, "limit=1000&offset=1000"},
+		{"page3 in range", &platformv1.PaginationRequest{Page: 3, PageSize: 1000}, "limit=1000&offset=2000"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
