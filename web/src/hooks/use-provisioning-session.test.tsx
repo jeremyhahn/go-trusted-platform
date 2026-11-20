@@ -4,16 +4,35 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createProfileAndFulfil,
+  FULFIL_ROLE_REASON,
   fulfilBlockedReason,
   provisioningSessionStatus,
   useProvisioningSession,
   type ProfileCreator,
 } from "./use-provisioning-session";
 
-type MutationFn = (create: ProfileCreator) => Promise<unknown>;
+type MutationFn = (variables: { create: ProfileCreator }) => Promise<unknown>;
 interface MutationOptions {
   onSuccess?: (...args: unknown[]) => void;
+  onError?: (...args: unknown[]) => void;
 }
+
+const auth = vi.hoisted(() => ({ roles: ["admin"] as string[] | null }));
+
+vi.mock("@/contexts/AuthContext", () => ({
+  useOptionalAuth: () =>
+    auth.roles === null
+      ? null
+      : {
+          user: {
+            id: "u1",
+            email: "a@example.test",
+            tenantId: null,
+            isTenantOwner: false,
+            roles: auth.roles,
+          },
+        },
+}));
 
 const sdk = vi.hoisted(() => ({
   getProvisioningSession: vi.fn(),
@@ -24,7 +43,7 @@ const sdk = vi.hoisted(() => ({
   apiDeps: undefined as unknown,
   mutationFn: undefined as unknown,
   mutationOptions: undefined as unknown,
-  mutationResult: { mutate: () => undefined, isLoading: false },
+  mutationResult: { mutate: () => undefined, isLoading: false } as Record<string, unknown>,
 }));
 
 vi.mock("trusted-platform-sdk", () => ({
@@ -140,7 +159,7 @@ describe("useProvisioningSession", () => {
   it("fulfil creates the profile, fulfils and refetches the session", async () => {
     sdk.fulfillProvisioningSession.mockResolvedValue({ success: true });
     renderHook(() => useProvisioningSession("sess-1"));
-    const reply = await (sdk.mutationFn as MutationFn)(async () => "7");
+    const reply = await (sdk.mutationFn as MutationFn)({ create: async () => "7" });
     expect(reply).toEqual({ success: true, data: { profileId: "7" } });
     expect(sdk.fulfillProvisioningSession).toHaveBeenCalledWith({
       session_id: "sess-1",
@@ -155,8 +174,51 @@ describe("useProvisioningSession", () => {
     const { result } = renderHook(() => useProvisioningSession("sess-1"));
     expect(result.current.status).toBe("expired");
     const create = vi.fn(async () => "7");
-    await expect((sdk.mutationFn as MutationFn)(create)).rejects.toThrow(/expired/i);
+    await expect((sdk.mutationFn as MutationFn)({ create })).rejects.toThrow(/expired/i);
     expect(create).not.toHaveBeenCalled();
     expect(sdk.fulfillProvisioningSession).not.toHaveBeenCalled();
+  });
+
+  it("without the admin role, fulfil is gated and creates no profile", async () => {
+    auth.roles = ["operator"];
+    try {
+      const { result } = renderHook(() => useProvisioningSession("sess-1"));
+      expect(result.current.status).toBe("pending");
+      expect(result.current.fulfilBlockedReason).toBe(FULFIL_ROLE_REASON);
+      expect(result.current.fulfilBlockedReason).toMatch(/admin role/);
+      expect(result.current.fulfilBlockedReason).toMatch(/provisioning:write/);
+      const create = vi.fn(async () => "7");
+      await expect((sdk.mutationFn as MutationFn)({ create })).rejects.toThrow(/admin role/);
+      expect(create).not.toHaveBeenCalled();
+      expect(sdk.fulfillProvisioningSession).not.toHaveBeenCalled();
+    } finally {
+      auth.roles = ["admin"];
+    }
+  });
+
+  it("outside an auth session, fulfil is gated on the admin role", () => {
+    auth.roles = null;
+    try {
+      const { result } = renderHook(() => useProvisioningSession("sess-1"));
+      expect(result.current.fulfilBlockedReason).toBe(FULFIL_ROLE_REASON);
+    } finally {
+      auth.roles = ["admin"];
+    }
+  });
+
+  it("a 403 from fulfil gates the controls with the server's message and blocks a retry", async () => {
+    const forbidden = { code: "FORBIDDEN", status: 403, message: "missing scope provisioning:write" };
+    const previous = sdk.mutationResult;
+    sdk.mutationResult = { ...previous, error: forbidden };
+    try {
+      const { result } = renderHook(() => useProvisioningSession("sess-1"));
+      expect(result.current.fulfilBlockedReason).toBe("missing scope provisioning:write");
+      (sdk.mutationOptions as MutationOptions).onError?.(forbidden, undefined);
+      const create = vi.fn(async () => "7");
+      await expect((sdk.mutationFn as MutationFn)({ create })).rejects.toThrow(/provisioning:write/);
+      expect(create).not.toHaveBeenCalled();
+    } finally {
+      sdk.mutationResult = previous;
+    }
   });
 });
