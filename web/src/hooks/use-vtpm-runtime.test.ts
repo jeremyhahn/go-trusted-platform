@@ -34,6 +34,7 @@ vi.mock("trusted-platform-sdk", async (importOriginal) => ({
   useVTPM: () => vtpm,
 }));
 
+import { ApiError, SERVICE_NOT_CONFIGURED, isServiceNotConfigured } from "trusted-platform-sdk";
 import { useVTPMRuntime } from "./use-vtpm-runtime";
 
 describe("useVTPMRuntime running state", () => {
@@ -104,5 +105,75 @@ describe("useVTPMRuntime running state", () => {
     });
     expect(result.current.runState).toBe("running");
     expect(vtpm.isBundleRunning).toHaveBeenCalledTimes(2);
+  });
+});
+
+// Capability gate: a node without the vTPM service answers the state read
+// with the structured 503 SERVICE_NOT_CONFIGURED (or 501 when the route is
+// not implemented); the hook then exposes a reason and sends no runtime call.
+describe("useVTPMRuntime capability gate", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  async function expectEveryMutationRefused(result: { current: ReturnType<typeof useVTPMRuntime> }) {
+    await act(async () => {
+      await expect(result.current.start.mutateAsync(undefined)).rejects.toBeTruthy();
+      await expect(result.current.stop.mutateAsync(undefined)).rejects.toBeTruthy();
+      await expect(result.current.quote.mutateAsync({ nonce: "AA==", pcr_selection: [0] } as never)).rejects.toBeTruthy();
+      await expect(result.current.seal.mutateAsync({ data: "AA==" } as never)).rejects.toBeTruthy();
+      await expect(result.current.unseal.mutateAsync({ sealed_blob: "AA==" } as never)).rejects.toBeTruthy();
+      await expect(result.current.readPCR.mutateAsync(0)).rejects.toBeTruthy();
+      await expect(result.current.extendPCR.mutateAsync({ pcr_index: 16, digest: "AA==" } as never)).rejects.toBeTruthy();
+    });
+    expect(vtpm.startBundle).not.toHaveBeenCalled();
+    expect(vtpm.stopBundle).not.toHaveBeenCalled();
+    expect(vtpm.quoteBundle).not.toHaveBeenCalled();
+    expect(vtpm.sealBundle).not.toHaveBeenCalled();
+    expect(vtpm.unsealBundle).not.toHaveBeenCalled();
+    expect(vtpm.readBundlePCR).not.toHaveBeenCalled();
+    expect(vtpm.extendBundlePCR).not.toHaveBeenCalled();
+  }
+
+  it("gates every runtime control when the state read rejects with service-not-configured", async () => {
+    const err = new ApiError("vTPM service not configured", "SERVICE_UNAVAILABLE", {
+      status: 503,
+      details: { reason: SERVICE_NOT_CONFIGURED },
+    });
+    expect(isServiceNotConfigured(err)).toBe(true);
+    vtpm.isBundleRunning.mockRejectedValue(err);
+    const { result } = renderHook(() => useVTPMRuntime("b1"));
+
+    await waitFor(() => expect(result.current.gatedReason).not.toBeNull());
+    expect(typeof result.current.gatedReason).toBe("string");
+    await expectEveryMutationRefused(result);
+  });
+
+  it("gates every runtime control when the state reply is a not-configured error envelope", async () => {
+    vtpm.isBundleRunning.mockResolvedValue({
+      success: false,
+      error: { message: "vTPM service not configured", status: 503, details: { reason: SERVICE_NOT_CONFIGURED } },
+    });
+    const { result } = renderHook(() => useVTPMRuntime("b1"));
+
+    await waitFor(() => expect(result.current.gatedReason).not.toBeNull());
+    await expectEveryMutationRefused(result);
+  });
+
+  it("gates every runtime control when the state read answers 501", async () => {
+    vtpm.isBundleRunning.mockRejectedValue(new ApiError("not implemented", "NOT_IMPLEMENTED", { status: 501 }));
+    const { result } = renderHook(() => useVTPMRuntime("b1"));
+
+    await waitFor(() => expect(result.current.gatedReason).not.toBeNull());
+    await expectEveryMutationRefused(result);
+  });
+
+  it("does not gate on an ordinary state read failure", async () => {
+    vtpm.isBundleRunning.mockRejectedValue(new Error("boom"));
+    const { result } = renderHook(() => useVTPMRuntime("b1"));
+
+    await act(async () => {});
+    expect(result.current.stateError).toBe("boom");
+    expect(result.current.gatedReason).toBeNull();
   });
 });
