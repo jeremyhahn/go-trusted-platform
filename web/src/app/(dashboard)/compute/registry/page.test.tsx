@@ -29,6 +29,10 @@ function base(over: Partial<UseRegistryResult> = {}): UseRegistryResult {
     isTagsLoading: false,
     listTags: vi.fn().mockResolvedValue(undefined),
     deleteManifest: vi.fn().mockResolvedValue(undefined),
+    inspection: null,
+    inspectError: null,
+    isInspecting: false,
+    inspect: vi.fn().mockResolvedValue(undefined),
     ...over,
   };
 }
@@ -238,5 +242,53 @@ describe("RegistryPage", () => {
     await waitFor(() =>
       expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Delete failed", description: "refused" })),
     );
+  });
+
+  // #2063: Inspect and the capability gate on Delete.
+  it("inspects a tag and shows the artifact the hook returns", () => {
+    const inspect = vi.fn().mockResolvedValue(undefined);
+    registry = base({
+      tags: appTags,
+      inspect,
+      inspection: {
+        Artifact: { Repository: "team/app", Tag: "v1", Digest: "sha256:abc", Size: 42 },
+      },
+    });
+    render(<RegistryPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Inspect v1" }));
+    expect(inspect).toHaveBeenCalledWith("team/app", "v1");
+    const panel = screen.getByTestId("registry-inspect");
+    expect(panel.textContent).toContain("sha256:abc");
+    expect(panel.textContent).toContain("team/app:v1");
+  });
+
+  it("shows the inspect error", () => {
+    registry = base({ tags: appTags, inspectError: "not found" });
+    render(<RegistryPage />);
+
+    expect(screen.getByTestId("registry-inspect").textContent).toContain("Failed to inspect: not found");
+  });
+
+  it("gates Delete off with the reason while the registry is read-only", () => {
+    const deleteManifest = vi.fn();
+    registry = base({ tags: appTags, deleteManifest, status: { Health: 1, ReadOnly: true } });
+    render(<RegistryPage />);
+
+    const del = screen.getByRole("button", { name: "Delete v1" }) as HTMLButtonElement;
+    expect(del.disabled).toBe(true);
+    expect(del.title).toContain("registry is read-only");
+    fireEvent.click(del);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(deleteManifest).not.toHaveBeenCalled();
+  });
+
+  it("gates Delete off while the status is unknown", () => {
+    registry = base({ tags: appTags, status: null, statusError: "down" });
+    render(<RegistryPage />);
+
+    const del = screen.getByRole("button", { name: "Delete v1" }) as HTMLButtonElement;
+    expect(del.disabled).toBe(true);
+    expect(del.title).toContain("registry status is unknown");
   });
 });
