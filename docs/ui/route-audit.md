@@ -66,7 +66,7 @@ Counted with Serena `search_for_pattern` over `web/src`, excluding `__tests__/`,
 | device.deleteTemplate | template-detail-client.tsx:94 | device:465 | DELETE /device/templates/{id} | g:10 | implemented |
 | device.createProfileFromTemplate | create-profile-client.tsx:75, session-detail-client.tsx:161 | device:490 | POST /device/templates/{id}/create-profile | g:404 | implemented |
 | device.getProvisioningSession | session-detail-client.tsx:134 | device:591 | GET /provisioning/sessions/{id} | g:256 | implemented |
-| device.fulfillProvisioningSession | session-detail-client.tsx:164, 198 | device:607 | POST /provisioning/sessions/{id}/fulfill | g:496 | implemented (path at device:607 not yet read) |
+| device.fulfillProvisioningSession | session-detail-client.tsx:164, 198 | device:607 | POST /provisioning/sessions/{id}/fulfill (absolute `/v1/provisioning/...` at device:608, not under the device base) | g:496 | implemented |
 | dns.listZones | (d)/networking/dns/page.tsx:42 | dns:112 | GET /dns/zones | g:141 | implemented |
 | dns.createZone | dns/page.tsx:132 | dns:90 | POST /dns/zones | g:413 | implemented |
 | dns.getZone | (d)/networking/dns/[zone]/dns-zone-detail-client.tsx:32 | dns:100 | GET /dns/zones/{zone} | g:142 | implemented |
@@ -112,9 +112,9 @@ Counted with Serena `search_for_pattern` over `web/src`, excluding `__tests__/`,
 | idevid.getIAKInfo | tpm/keys/page.tsx:210, tpm/status/page.tsx:134 | idevid:212 | GET /idevid/iak | g:191 | implemented |
 | idevid.getIAKCertificate | tpm/keys/page.tsx:137 | idevid:259 | GET /idevid/iak/certificate | g:192 | implemented |
 | kms.listKeys | (d)/kms/page.tsx:60 | kms:133 | GET /kms/keys | g:204 | implemented |
-| kms.getKey | (d)/kms/[id]/key-detail-client.tsx:61 | kms:123 | GET /kms/keys/{name} | g:205 | implemented (URL built above kms:123, not yet read) |
+| kms.getKey | (d)/kms/[id]/key-detail-client.tsx:61 | kms:123 | GET /kms/keys/{name}[?version=] (URL at kms:121-122) | g:205 | implemented |
 | kms.generateKey | kms/page.tsx:134 | kms:99 | POST /kms/keys | g:469 | implemented |
-| kms.deleteKey | kms/page.tsx:189, key-detail-client.tsx:108 | kms:152 | DELETE /kms/keys/{name} | g:40 | implemented (URL not yet read) |
+| kms.deleteKey | kms/page.tsx:189, key-detail-client.tsx:108 | kms:152 | DELETE /kms/keys/{name}?pendingWindowDays=&force= (URL at kms:146) | g:40 | implemented |
 | kms.rotateKey | kms/page.tsx:165 | kms:162 | POST /kms/keys/{id}/rotate | g:472 | implemented |
 | kms.exportKey | kms/page.tsx:213 | kms:188 | POST /kms/keys/{id}/export | - | **unimplemented** |
 | kms.encrypt | key-detail-client.tsx:148 | kms:224 | POST /kms/encrypt (key in body) | - (server: `/kms/encrypt/{name}`, g:465) | **unimplemented** |
@@ -164,7 +164,7 @@ Counted with Serena `search_for_pattern` over `web/src`, excluding `__tests__/`,
 | tpm.verifyQuote | quote/page.tsx:205 | tpm:365 | POST /tpm/quote/verify | g:553 | implemented |
 | tpm.seal | (d)/tpm/seal/page.tsx:73 | tpm:331 | POST /tpm/seal | g:555 | implemented |
 | tpm.unseal | seal/page.tsx:105 | tpm:341 | POST /tpm/unseal | g:557 | implemented |
-| tpm.extendPCR | hooks/use-tpm-ops.ts:16 | tpm:491 | POST /tpm/pcrs/extend | g:550 | implemented (path at tpm:492 not yet read) |
+| tpm.extendPCR | hooks/use-tpm-ops.ts:16 | tpm:491 | POST /tpm/pcrs/extend | g:550 | implemented (`buildUrl('/pcrs/extend')` at tpm:492) |
 | tpm.makeCredential | use-tpm-ops.ts:18 | tpm:509 | POST /tpm/make-credential | g:547 | implemented |
 | tpm.activateCredential | use-tpm-ops.ts:21 | tpm:519 | POST /tpm/activate-credential | g:541 | implemented |
 | tpm.getRandom | use-tpm-ops.ts:23 | tpm:477 | POST /tpm/random | g:554 | implemented |
@@ -244,8 +244,8 @@ Counted with Serena `search_for_pattern` over `web/src`, excluding `__tests__/`,
 | components/security/add-factor-wizard.tsx:255 | POST /api/v1/users/{id}/factors/mtls/issue-cert | - | **unimplemented** |
 | components/security/add-factor-wizard.tsx:394 | POST /api/v1/webauthn/register/begin | - (server: `/webauthn/registration/begin`, g:336) | **unimplemented** |
 | hooks/use-registry.ts:58 | GET /api/v1/compute/images/status | g:117 | implemented |
-| hooks/use-registry.ts:98 | GET /v2/{name}/tags/list | rest/registry/ocidist.go:257 (`/v2` subrouter) | implemented (handler not yet read) |
-| hooks/use-registry.ts:114 | DELETE /v2/{name}/manifests/{ref} | rest/registry/ocidist.go:257 | implemented (handler not yet read) |
+| hooks/use-registry.ts:98 | GET /v2/{name}/tags/list | rest/registry/ocidist.go:261 (`h.listTags`, `/v2` subrouter at :257) | implemented |
+| hooks/use-registry.ts:114 | DELETE /v2/{name}/manifests/{ref} | rest/registry/ocidist.go:265 (`h.deleteManifest`) | implemented |
 | hooks/use-reported-gateways.ts:90 | GET /api/v1/gateway/state | g:160 | implemented |
 | utils/auth-factors-api.ts:75 (via :106) | GET /api/v1/users/{id}/factors | router.go:290 | **stubbed** (fixed empty list) |
 | utils/auth-factors-api.ts:75 (via :115) | POST /api/v1/users/{id}/factors | - | **unimplemented** |
@@ -300,5 +300,4 @@ Counted with Serena `search_for_pattern` over `web/src`, excluding `__tests__/`,
 ## Remaining for slice 2
 
 - The not-configured pass: for each area whose `*Routes()` in `router.go` registers only on a non-nil server (gateway, vpn, overlay, sdn, pxe, compute, dns, ntp, vtpm and others), check the backend against `configs/platform/templates/single-node/default.yaml` and re-mark the rows.
-- Read the paths not yet verified: `device:607`, `kms:123/152`, `tpm:492`, and the `/v2` handlers.
 - Look for stubs inside handlers that the golden file lists as registered (Unimplemented, TODO, fixed data).
