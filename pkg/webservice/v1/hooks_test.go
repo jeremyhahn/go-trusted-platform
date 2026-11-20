@@ -649,9 +649,16 @@ func TestNewDeviceRegistrationHook_SkipsNilTCGData(t *testing.T) {
 // Configured reports a PXE backend: these tests exercise the enabled path.
 func (r *fakePXEIdentityRecorder) Configured() bool { return true }
 
+// PXEInstallInProgressForMAC answers true unless idle is set, so the EK
+// binding is enforced as for a PXE install in progress.
+func (r *fakePXEIdentityRecorder) PXEInstallInProgressForMAC(context.Context, string) (bool, error) {
+	return !r.idle, nil
+}
+
 type fakePXEIdentityRecorder struct {
 	err  error
 	macs []string
+	idle bool
 }
 
 func (f *fakePXEIdentityRecorder) RecordEnrolledIDevIDFingerprintForMAC(_ context.Context, mac string, _ *x509.Certificate) error {

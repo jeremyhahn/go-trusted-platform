@@ -144,6 +144,33 @@ func (s *PXEGRPCService) RecordEnrolledIDevIDFingerprintForMAC(ctx context.Conte
 	return nil
 }
 
+// PXEInstallInProgressForMAC reports whether mac names a PXE device whose
+// install is still in progress: Discovered, Booting or Installing, the
+// states in which an enrolment records its IDevID. An unknown MAC is no
+// install. With no backend it answers SERVICE_NOT_CONFIGURED (#1694).
+func (s *PXEGRPCService) PXEInstallInProgressForMAC(ctx context.Context, mac string) (bool, error) {
+	if err := s.requireService(); err != nil {
+		return false, err
+	}
+	if mac == "" {
+		return false, nil
+	}
+	device, err := s.pxeService.GetDeviceByMAC(ctx, mac)
+	if err != nil {
+		var notFound pxe.ErrDeviceNotFound
+		if errors.As(err, &notFound) {
+			return false, nil
+		}
+		return false, s.mapPXEError(err, "get device for PXE install check")
+	}
+	switch device.State {
+	case pxe.StateDiscovered, pxe.StateBooting, pxe.StateInstalling:
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
 // =============================================================================
 // Device Registration and Management
 // =============================================================================

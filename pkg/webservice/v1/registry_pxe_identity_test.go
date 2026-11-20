@@ -25,6 +25,11 @@ type unconfiguredPXERecorder struct{ t *testing.T }
 
 func (r unconfiguredPXERecorder) Configured() bool { return false }
 
+func (r unconfiguredPXERecorder) PXEInstallInProgressForMAC(context.Context, string) (bool, error) {
+	r.t.Error("the PXE identity hook queried a PXE install with PXE disabled")
+	return false, nil
+}
+
 func (r unconfiguredPXERecorder) RecordEnrolledIDevIDFingerprintForMAC(context.Context, string, *x509.Certificate) error {
 	r.t.Error("the PXE identity hook recorded a fingerprint with PXE disabled")
 	return nil

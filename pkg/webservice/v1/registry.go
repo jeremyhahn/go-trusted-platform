@@ -300,6 +300,11 @@ type PXEIdentityRecorder interface {
 	// Configured reports whether a PXE backend is present. With none, the
 	// hook imposes no PXE profile requirement on an enrolment.
 	Configured() bool
+	// PXEInstallInProgressForMAC reports whether the MAC names a PXE device
+	// whose install is still in progress (Discovered, Booting or
+	// Installing). Only such an enrolment must present the EK bound to its
+	// profile; any other enrolment is outside the PXE workflow.
+	PXEInstallInProgressForMAC(ctx context.Context, mac string) (bool, error)
 }
 
 // NewPXEIdentityHook returns NewPXEIdentityHookWithProfiles with no profile
@@ -340,6 +345,27 @@ func NewPXEIdentityHookWithProfiles(recorder PXEIdentityRecorder, profiles devic
 			reqCtx = context.Background()
 		}
 		mac, err := boundProfileMAC(reqCtx, profiles, ctx.TCGData)
+		var notBound ErrPXEIdentityEKNotBound
+		if errors.As(err, &notBound) {
+			// A serial-only or otherwise unbound profile is refused only
+			// when its MAC names a PXE install in progress: an ordinary
+			// enrolment or renewal is outside the PXE workflow, and its
+			// IDevID is never recorded on a PXE record.
+			active, activeErr := recorder.PXEInstallInProgressForMAC(reqCtx, mac)
+			if isServiceNotConfigured(activeErr) {
+				return nil
+			}
+			if activeErr != nil {
+				return fmt.Errorf("check for a PXE install in progress: %w", activeErr)
+			}
+			if active {
+				return err
+			}
+			logger.Debug("PXE identity: profile EK not bound and no PXE install in progress - IDevID not recorded",
+				slog.String("client_ip", ctx.ClientIP),
+				slog.String("reason", notBound.Reason))
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -374,7 +400,9 @@ func NewPXEIdentityHookWithProfiles(recorder PXEIdentityRecorder, profiles devic
 // CA-verified EK certificate's serial (an exact EK-serial match), or "" when
 // there is no resolver, no EK, no bound profile (devicepkg.ErrNoMatchingConfig)
 // or the profile has no MAC. Any other lookup error is returned as
-// ErrPXEIdentityProfileLookup.
+// ErrPXEIdentityProfileLookup. A profile with a MAC whose EK certificate
+// is missing or is not the submitted EK returns its MAC with
+// ErrPXEIdentityEKNotBound.
 func boundProfileMAC(ctx context.Context, profiles devicepkg.ConfigForDeviceFinder, tcg *trustedca.ACMETCGEnrollmentData) (string, error) {
 	if profiles == nil || tcg == nil || tcg.EKCertificate == nil || tcg.EKCertificate.SerialNumber == nil {
 		return "", nil
@@ -389,22 +417,26 @@ func boundProfileMAC(ctx context.Context, profiles devicepkg.ConfigForDeviceFind
 		}
 		return "", ErrPXEIdentityProfileLookup{EKSerial: ekSerial, Err: err}
 	}
-	if profile == nil {
+	// A profile with no MAC names no PXE device: it is outside the PXE
+	// workflow, so no EK binding is required of it.
+	if profile == nil || profile.MACAddress == "" {
 		return "", nil
 	}
 	// The serial alone proves nothing: another machine can present an
 	// EK certificate with the victim's serial. The submitted EK must
 	// carry the public key of the EK certificate the operator bound to
-	// the profile.
+	// the profile. The refusal carries the profile's MAC, so the caller
+	// enforces it only for a PXE install in progress.
+	mac := profile.MACAddress
 	if profile.EKCert == "" {
-		return "", ErrPXEIdentityEKNotBound{EKSerial: ekSerial, Reason: "the matched profile has no registered EK certificate"}
+		return mac, ErrPXEIdentityEKNotBound{EKSerial: ekSerial, Reason: "the matched profile has no registered EK certificate"}
 	}
 	bound, err := deviceentities.ParseEKCertPEM(profile.EKCert)
 	if err != nil {
-		return "", ErrPXEIdentityEKNotBound{EKSerial: ekSerial, Reason: "the profile's EK certificate does not parse: " + err.Error()}
+		return mac, ErrPXEIdentityEKNotBound{EKSerial: ekSerial, Reason: "the profile's EK certificate does not parse: " + err.Error()}
 	}
 	if !bytes.Equal(bound.RawSubjectPublicKeyInfo, tcg.EKCertificate.RawSubjectPublicKeyInfo) {
-		return "", ErrPXEIdentityEKNotBound{EKSerial: ekSerial, Reason: "the submitted EK public key is not the one bound to the profile"}
+		return mac, ErrPXEIdentityEKNotBound{EKSerial: ekSerial, Reason: "the submitted EK public key is not the one bound to the profile"}
 	}
 	return profile.MACAddress, nil
 }
