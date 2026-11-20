@@ -1903,6 +1903,15 @@ management VPN when the VPN's `data-planes` offer `wireguard`; the default
 plane is MASQUE alone, and a FIPS build refuses the kind at validation, so
 neither starts the process (`TestGatewayConfig_EnabledServicesVPNWireGuard`).
 
+Part B2 (#2029) is preparatory wiring: the supervised `wireguard` process,
+the plane factory and the socket restriction are in place, but the hub plane
+refuses to start with `ErrVPNHubZoneUnenforced` until #2093 wires the hub
+through the compiled zone matrix. A configured hub therefore fails the
+process's start (no READY=1) and no WireGuard peer is admitted
+(`TestVPNDataPlanes_ProductionDefaultRefusesTheHubUntilZoneEnforcement`,
+`TestServeProcess_AnUnenforcedHubFailsTheStart`). The paragraphs below
+describe the wiring the plane runs on once #2093 lands.
+
 The process owns the hub device and is the only one that serves
 `VPNPlaneService`: its socket alone sets `ipc.Policy.VPNPlane`, admitting the
 supervisor and the parser uid (the `vpn` child) to `InstallVPNPeer`,
