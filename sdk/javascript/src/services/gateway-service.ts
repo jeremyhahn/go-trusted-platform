@@ -29,7 +29,29 @@ import type {
   GatewaySnapshot,
   ListGatewayStateResponse,
   GetNAT64StatusResponse,
+  VIPConfig,
+  AddVIPResponse,
+  RemoveVIPResponse,
+  GetVIPResponse,
+  ListVIPsResponse,
+  SetVIPBackendsRequest,
+  SetVIPBackendsResponse,
+  GetLBStatusResponse,
+  GetPerfFlowsRequest,
+  GetPerfFlowsResponse,
+  GetPerfDatapathResponse,
+  GetPerfConntrackResponse,
 } from '../types/gateway.js';
+
+/** Absolute prefix of the load balancer and perf routes. */
+const SDN_GATEWAY_PATH = '/v1/sdn/gateway';
+
+/** The path of one VIP, keyed {protocol}/{address}/{port}. */
+function vipPath(address: string, port: number, protocol: string): string {
+  return `${SDN_GATEWAY_PATH}/lb/vips/${encodeURIComponent(protocol)}/${encodeURIComponent(
+    address
+  )}/${port}`;
+}
 
 /**
  * Gateway Service class
@@ -154,6 +176,68 @@ export class GatewayService extends BaseService {
    */
   async getNAT64Status(): Promise<ApiResponse<GetNAT64StatusResponse>> {
     return this.client.get<GetNAT64StatusResponse>('/v1/sdn/gateway/nat64/status');
+  }
+
+  // =========================================================================
+  // Load balancer VIPs (#2052)
+  // =========================================================================
+
+  /** Add a virtual IP. The config is sent wrapped as `{vip}`. */
+  async addVIP(vip: VIPConfig): Promise<ApiResponse<AddVIPResponse>> {
+    return this.client.post<AddVIPResponse>(`${SDN_GATEWAY_PATH}/lb/vips`, { vip });
+  }
+
+  /** Remove the virtual IP with this key. */
+  async removeVIP(
+    address: string,
+    port: number,
+    protocol: string
+  ): Promise<ApiResponse<RemoveVIPResponse>> {
+    return this.client.delete<RemoveVIPResponse>(vipPath(address, port, protocol));
+  }
+
+  /** Get one virtual IP with its backend health. */
+  async getVIP(address: string, port: number, protocol: string): Promise<ApiResponse<GetVIPResponse>> {
+    return this.client.get<GetVIPResponse>(vipPath(address, port, protocol));
+  }
+
+  /** List the configured virtual IPs. */
+  async listVIPs(): Promise<ApiResponse<ListVIPsResponse>> {
+    return this.client.get<ListVIPsResponse>(`${SDN_GATEWAY_PATH}/lb/vips`);
+  }
+
+  /** Replace a VIP's backends. The key goes in the path, only `{backends}` in the body. */
+  async setVIPBackends(req: SetVIPBackendsRequest): Promise<ApiResponse<SetVIPBackendsResponse>> {
+    return this.client.put<SetVIPBackendsResponse>(
+      `${vipPath(req.address, req.port, req.protocol)}/backends`,
+      { backends: req.backends }
+    );
+  }
+
+  /** Get the load balancer status. */
+  async getLBStatus(): Promise<ApiResponse<GetLBStatusResponse>> {
+    return this.client.get<GetLBStatusResponse>(`${SDN_GATEWAY_PATH}/lb/status`);
+  }
+
+  // =========================================================================
+  // Gateway performance (#2052)
+  // =========================================================================
+
+  /** Run the flow performance report. */
+  async getPerfFlows(req: GetPerfFlowsRequest = {}): Promise<ApiResponse<GetPerfFlowsResponse>> {
+    return this.client.post<GetPerfFlowsResponse>(`${SDN_GATEWAY_PATH}/perf/flows`, req);
+  }
+
+  /** Get datapath counters, optionally for one bridge. */
+  async getPerfDatapath(bridge?: string): Promise<ApiResponse<GetPerfDatapathResponse>> {
+    const query = bridge ? `?bridge=${encodeURIComponent(bridge)}` : '';
+    return this.client.get<GetPerfDatapathResponse>(`${SDN_GATEWAY_PATH}/perf/datapath${query}`);
+  }
+
+  /** Get conntrack counters, optionally for one zone. */
+  async getPerfConntrack(zone?: number): Promise<ApiResponse<GetPerfConntrackResponse>> {
+    const query = zone !== undefined ? `?zone=${zone}` : '';
+    return this.client.get<GetPerfConntrackResponse>(`${SDN_GATEWAY_PATH}/perf/conntrack${query}`);
   }
 
   // =========================================================================

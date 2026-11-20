@@ -549,3 +549,92 @@ export interface NAT64Status {
 
 /** Response of the NAT64 status endpoint. */
 export type GetNAT64StatusResponse = NAT64Status;
+
+// ============================================================================
+// Load balancer VIPs (#2052)
+//
+// Served at /api/v1/sdn/gateway/lb/... by both the daemon and the web
+// service. JSON is protojson camelCase; uint64 fields arrive as strings.
+// ============================================================================
+
+/** One backend of a virtual IP. */
+export interface VIPBackend {
+  address: string;
+  port: number;
+  /** Relative weight; the server treats 0 or absent as 1. */
+  weight?: number;
+}
+
+/** A virtual IP and the backends it balances across. */
+export interface VIPConfig {
+  address: string;
+  port: number;
+  /** "tcp" or "udp". */
+  protocol: string;
+  /** Balancing algorithm; the server picks its default when absent. */
+  algorithm?: string;
+  backends: VIPBackend[];
+}
+
+/** A backend with its last health check. */
+export interface VIPBackendStatus {
+  backend?: VIPBackend;
+  healthy?: boolean;
+}
+
+/** A configured VIP with its datapath state. */
+export interface VIPStatus {
+  vip?: VIPConfig;
+  /** Conntrack zone (uint32). */
+  ctZone?: number | string;
+  /** OpenFlow group ID (uint64, a string on the wire). */
+  groupId?: number | string;
+  backends?: VIPBackendStatus[];
+}
+
+/** The key of one VIP. */
+export interface VIPKey {
+  address: string;
+  port: number;
+  protocol: string;
+}
+
+/** Request body of AddVIP. */
+export interface AddVIPRequest {
+  vip: VIPConfig;
+}
+
+export type AddVIPResponse = Record<string, unknown>;
+export type RemoveVIPResponse = Record<string, unknown>;
+
+/** Arguments of SetVIPBackends: the VIP key plus the new backend list. */
+export interface SetVIPBackendsRequest extends VIPKey {
+  backends: VIPBackend[];
+}
+
+export type SetVIPBackendsResponse = Record<string, unknown>;
+
+export interface GetVIPResponse {
+  vip?: VIPStatus;
+}
+
+export interface ListVIPsResponse {
+  vips?: VIPStatus[];
+}
+
+/**
+ * Load balancer status. The fields are rendered as reported, so the type
+ * only names the shape loosely.
+ */
+export type GetLBStatusResponse = Record<string, unknown>;
+
+// ============================================================================
+// Gateway performance (#2052)
+// ============================================================================
+
+/** Request body of GetPerfFlows. */
+export type GetPerfFlowsRequest = Record<string, unknown>;
+
+export type GetPerfFlowsResponse = Record<string, unknown>;
+export type GetPerfDatapathResponse = Record<string, unknown>;
+export type GetPerfConntrackResponse = Record<string, unknown>;
