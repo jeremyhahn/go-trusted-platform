@@ -359,6 +359,69 @@ describe('SDNBridgeDetailClient policy apply and policy identity', () => {
     });
   }
 
+  // OpenFlow OFPFCAdd replaces a flow with the same match and priority, so a
+  // second, differently named policy for the same traffic would silently take
+  // over the first one's flow while both stay ACTIVE (#2024 Codex, P1).
+  const denyTelnet = {
+    id: 'pol-deny',
+    config: {
+      name: 'deny-telnet',
+      enabled: true,
+      priority: 100,
+      rules: [
+        {
+          ruleId: 'rule-1',
+          priority: 100,
+          action: 'POLICY_RULE_ACTION_DENY',
+          match: { protocol: 'tcp', destinationPort: 23 },
+        },
+      ],
+      targets: [{ type: 'POLICY_TARGET_TYPE_BRIDGE', id: 'br-1' }],
+    },
+    status: 'POLICY_STATUS_ACTIVE',
+  };
+
+  async function fillSecondPolicy(rule: { priority: string; port: string }, existing: unknown[] = [denyTelnet]) {
+    const sent = await renderPage({
+      [`GET ${SDN}/policies`]: ok({ policies: existing }),
+      [`POST ${SDN}/policies`]: ok({ policy: { id: 'pol-9' } }),
+    });
+    await screen.findByRole('button', { name: 'View policy deny-telnet' });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Policy' }));
+    fireEvent.change(screen.getByLabelText('Name *'), { target: { value: 'allow-telnet' } });
+    fireEvent.change(screen.getByLabelText('Action *'), { target: { value: 'POLICY_RULE_ACTION_ALLOW' } });
+    fireEvent.change(screen.getByLabelText('Priority'), { target: { value: rule.priority } });
+    fireEvent.change(screen.getByLabelText('Protocol'), { target: { value: 'tcp' } });
+    fireEvent.change(screen.getByLabelText('Destination port'), { target: { value: rule.port } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    });
+    return sent;
+  }
+
+  it('a policy sharing another policy\'s match and priority is refused and nothing is sent', async () => {
+    const sent = await fillSecondPolicy({ priority: '100', port: '23' });
+    expect(screen.getByTestId('policy-conflict-error').textContent).toContain('deny-telnet');
+    expect((screen.getByRole('button', { name: 'Apply' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(sent.some((r) => r.method === 'POST' && r.path === `${SDN}/policies`)).toBe(false);
+  });
+
+  for (const [what, rule, existing] of [
+    ['a different priority', { priority: '200', port: '23' }, [denyTelnet]],
+    ['a different match', { priority: '100', port: '22' }, [denyTelnet]],
+    [
+      'a policy on another bridge',
+      { priority: '100', port: '23' },
+      [{ ...denyTelnet, config: { ...denyTelnet.config, targets: [{ type: 'POLICY_TARGET_TYPE_BRIDGE', id: 'br-2' }] } }],
+    ],
+  ] as const) {
+    it(`${what} is not a conflict and is sent`, async () => {
+      const sent = await fillSecondPolicy(rule, [...existing]);
+      await waitFor(() => expect(sent.some((r) => r.method === 'POST' && r.path === `${SDN}/policies`)).toBe(true));
+      expect(screen.queryByTestId('policy-conflict-error')).toBeNull();
+    });
+  }
+
   it('switching to icmp clears an entered destination port', async () => {
     await renderPage({});
     fireEvent.click(screen.getByRole('button', { name: 'Apply Policy' }));
