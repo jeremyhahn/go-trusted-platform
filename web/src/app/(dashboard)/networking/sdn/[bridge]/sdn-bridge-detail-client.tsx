@@ -149,6 +149,7 @@ export default function SDNBridgeDetailClient() {
     bridgeError,
     portsError,
     policiesError,
+    policiesLoaded,
     refetchBridge,
     refetchPorts,
     refetchPolicies,
@@ -761,12 +762,29 @@ export default function SDNBridgeDetailClient() {
               {policyConflictError}
             </p>
           )}
+          {!policiesLoaded && (
+            // #2024 Codex: an unloaded policy list is not "no conflict": a policy
+            // sharing another's match and priority would replace its flow.
+            <p role="alert" data-testid="policy-list-not-loaded" className="text-sm text-destructive">
+              {policiesError
+                ? 'The policy list could not be loaded, so a conflicting policy cannot be ruled out. Retry the policy list before applying.'
+                : 'Waiting for the policy list to load before a policy can be applied.'}
+            </p>
+          )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setApplyOpen(false)}>Cancel</Button>
             <Button
-              disabled={!bridgeLoaded || !policyName || !ruleAction || !!rulePortError || !!policyConflictError}
+              disabled={
+                !bridgeLoaded ||
+                !policiesLoaded ||
+                !policyName ||
+                !ruleAction ||
+                !!rulePortError ||
+                !!policyConflictError
+              }
               onClick={() =>
                 bridgeLoaded &&
+                policiesLoaded &&
                 !rulePortError &&
                 !policyConflictError &&
                 run(
