@@ -144,6 +144,50 @@ describe("useBMC", () => {
     expect(result.current.virtualMedia?.image_url).toBe("installer.iso");
   });
 
+  it("a failed mutation that invalidates the initial read still settles loading", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    let holdFirst = true;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const op = url.split("/").pop() ?? "";
+        const method = init?.method ?? "GET";
+        if (method !== "GET") {
+          return new Response(JSON.stringify({ success: false, error: "BMC unreachable" }), {
+            status: 502,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        if (op === "power" && holdFirst) {
+          holdFirst = false;
+          await held;
+        }
+        return new Response(JSON.stringify({ success: true, payload: PAYLOADS[op] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      })
+    );
+
+    const { result } = renderHook(() => useBMC(PROFILE_ID));
+    expect(result.current.isLoading).toBe(true);
+
+    let failure: unknown;
+    await act(async () => {
+      try {
+        await result.current.mountISO("installer.iso");
+      } catch (err) {
+        failure = err;
+      }
+    });
+    expect((failure as Error | undefined)?.message).toBe("BMC unreachable");
+
+    release();
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.systemInfo?.product).toBe("PowerEdge R640");
+  });
+
   it("a mutation for an earlier profile does not refresh it over the current profile", async () => {
     let release!: () => void;
     const held = new Promise<void>((r) => (release = r));
