@@ -167,6 +167,58 @@ func TestQuicBaaSAuthAdapter_ValidateToken(t *testing.T) {
 	})
 }
 
+// TestQuicBaaSAuthAdapter_TenantlessTokenFailsAuthentication: a token the
+// validator accepts but that names no tenant is not a principal (SPEC row
+// 123), so authentication refuses it and the catalogue listings
+// (tools/list, resources/list call Authenticate) disclose nothing, while a
+// token naming its tenant still authenticates (#2080 Codex).
+func TestQuicBaaSAuthAdapter_TenantlessTokenFailsAuthentication(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("adapter refuses a verified token with no tenant", func(t *testing.T) {
+		adapter := NewQuicBaaSAuthAdapter(&QuicBaaSAuthConfig{
+			TokenValidator: &mockTokenValidator{result: &TokenValidationResult{Valid: true, UserID: "user-123"}},
+		})
+		valid, err := adapter.ValidateToken(ctx, "tenantless-token")
+		if valid {
+			t.Fatal("ValidateToken accepted a token naming no tenant")
+		}
+		var authErr *QuicBaaSAuthError
+		if !errors.As(err, &authErr) || authErr.Code != QuicBaaSAuthErrorMissingTenant {
+			t.Fatalf("err = %v, want missing-tenant QuicBaaSAuthError", err)
+		}
+		if _, ok := adapter.cachedClaims["tenantless-token"]; ok {
+			t.Error("tenantless token was cached")
+		}
+	})
+
+	t.Run("catalogue listing refuses a verified token with no tenant", func(t *testing.T) {
+		adapter := NewQuicBaaSAuthAdapter(&QuicBaaSAuthConfig{
+			TokenValidator: &mockTokenValidator{result: &TokenValidationResult{Valid: true, UserID: "user-123"}},
+			PEPClient:      &mockPEPClient{},
+		})
+		checker := NewAuthorizationChecker(adapter, adapter)
+		authErr := checker.Authenticate(ctx, "tenantless-token")
+		if authErr == nil {
+			t.Fatal("Authenticate (tools/list, resources/list) accepted a token naming no tenant")
+		}
+		if authErr.Type != AuthErrorInvalidToken {
+			t.Fatalf("Authenticate error type = %v, want invalid token", authErr.Type)
+		}
+	})
+
+	t.Run("catalogue listing accepts a verified token naming its tenant", func(t *testing.T) {
+		adapter := NewQuicBaaSAuthAdapter(&QuicBaaSAuthConfig{
+			TokenValidator: &mockTokenValidator{result: &TokenValidationResult{Valid: true, UserID: "user-123", TenantID: "tenant-456"}},
+			PEPClient:      &mockPEPClient{},
+		})
+		checker := NewAuthorizationChecker(adapter, adapter)
+		if authErr := checker.Authenticate(ctx, "tenant-token"); authErr != nil {
+			t.Fatalf("Authenticate = %v, want nil", authErr)
+		}
+	})
+}
+
 func TestQuicBaaSAuthAdapter_GetTokenClaims(t *testing.T) {
 	t.Run("returns error when validator not configured", func(t *testing.T) {
 		adapter := NewQuicBaaSAuthAdapter(nil)
