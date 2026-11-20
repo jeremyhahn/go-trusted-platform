@@ -32,7 +32,7 @@ func init() {
 	// (pkg/webservice/v1/rest/iam getPaginationParams); pages are 1-based.
 	listPolicies := tenantItemRoute(iamPoliciesPath, http.MethodGet)
 	listPolicies.queryParams = append(listPolicies.queryParams,
-		queryParam{name: "limit", field: "pagination.page_size"},
+		queryParam{name: "limit", field: "pagination", encode: encodePageLimit},
 		queryParam{name: "offset", field: "pagination", encode: encodePageOffset},
 	)
 	templatedRouteTable[platformv1.PlatformIAMService_ListPolicies_FullMethodName] = listPolicies
@@ -69,22 +69,62 @@ func init() {
 }
 
 // encodePageOffset renders a PaginationRequest as the server's row offset,
-// (page-1)*page_size; the first page, or a page without a size, has none.
+// (page-1)*size with the server's effective size; the first page has none.
 func encodePageOffset(v protoreflect.Value) string {
-	if !v.IsValid() {
-		return ""
-	}
-	msg := v.Message()
-	if !msg.IsValid() {
-		return ""
-	}
-	fields := msg.Descriptor().Fields()
-	page := msg.Get(fields.ByName("page")).Uint()
-	size := msg.Get(fields.ByName("page_size")).Uint()
-	if page <= 1 || size == 0 {
+	page, size, ok := effectivePage(v)
+	if !ok || page <= 1 {
 		return ""
 	}
 	return strconv.FormatUint((page-1)*size, 10)
+}
+
+// The server's IAM list paging (pkg/webservice/v1/rest/iam getPaginationParams):
+// an omitted or non-positive limit means 50 rows, and a limit above 1000 is
+// clamped to 1000.
+const (
+	iamServerDefaultPageSize uint64 = 50
+	iamServerMaxPageSize     uint64 = 1000
+)
+
+// encodePageLimit renders a PaginationRequest as the server's row limit, the
+// effective page size; a first page without a size sends none and takes the
+// server's default.
+func encodePageLimit(v protoreflect.Value) string {
+	page, size, ok := effectivePage(v)
+	if !ok {
+		return ""
+	}
+	if page <= 1 && rawPageSize(v) == 0 {
+		return ""
+	}
+	return strconv.FormatUint(size, 10)
+}
+
+// effectivePage reads page and page_size from a PaginationRequest and
+// normalizes the size to the one the server applies, so that the limit and
+// the offset agree with the rows the server returns.
+func effectivePage(v protoreflect.Value) (page, size uint64, ok bool) {
+	if !v.IsValid() {
+		return 0, 0, false
+	}
+	msg := v.Message()
+	if !msg.IsValid() {
+		return 0, 0, false
+	}
+	page = msg.Get(msg.Descriptor().Fields().ByName("page")).Uint()
+	size = rawPageSize(v)
+	switch {
+	case size == 0:
+		size = iamServerDefaultPageSize
+	case size > iamServerMaxPageSize:
+		size = iamServerMaxPageSize
+	}
+	return page, size, true
+}
+
+func rawPageSize(v protoreflect.Value) uint64 {
+	msg := v.Message()
+	return msg.Get(msg.Descriptor().Fields().ByName("page_size")).Uint()
 }
 
 // iamPolicyWriteBody is the server's CreatePolicyRequest / UpdatePolicyRequest
