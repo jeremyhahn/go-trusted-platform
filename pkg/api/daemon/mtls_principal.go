@@ -177,18 +177,18 @@ func (p *iamCertificatePrincipals) ResolveCertificatePrincipal(ctx context.Conte
 		}
 	}
 
-	// The policy decision point decides each concrete permission; the role
-	// lists never grant on their own (docs/SPEC.md: go-qrdb decides). A
-	// candidate with a whole-segment wildcard ("piv:*", "*:read", "*:*")
-	// is expanded into the catalog's concrete permissions it covers, and
-	// the PEP decides each of them: RequireScope matches a wildcard scope
-	// against any operation, so a pattern is never copied into Scopes and
-	// the PEP is never asked about one. A partial glob ("pi*:use") is not
-	// a go-qrdb wildcard and grants nothing. Only concrete permissions the
-	// PEP allows become scopes; a PEP error refuses the principal (fail
-	// closed).
-	concrete := make([]string, 0, len(candidates))
-	listed := make(map[string]struct{})
+	// The policy decision point decides every request (docs/SPEC.md:
+	// go-qrdb decides), so it is asked about every concrete permission in
+	// the catalog, not only those the roles list: an explicit ABAC allow
+	// with no matching role permission is a scope too, and a principal
+	// with no roles is still decided (#1906 Codex). A concrete role
+	// permission outside the catalog is asked as well. A wildcard is
+	// never copied into Scopes (RequireScope matches a wildcard scope
+	// against any operation); the catalog already holds every concrete
+	// permission one covers. Only permissions the PEP allows become
+	// scopes; a PEP error refuses the principal (fail closed).
+	concrete := make([]string, 0, len(p.catalog)+len(candidates))
+	listed := make(map[string]struct{}, len(p.catalog)+len(candidates))
 	appendConcrete := func(permission string) {
 		if _, dup := listed[permission]; dup {
 			return
@@ -196,22 +196,12 @@ func (p *iamCertificatePrincipals) ResolveCertificatePrincipal(ctx context.Conte
 		listed[permission] = struct{}{}
 		concrete = append(concrete, permission)
 	}
+	for _, permission := range p.catalog {
+		appendConcrete(permission)
+	}
 	for _, candidate := range candidates {
-		resource, action, ok := strings.Cut(candidate, ":")
-		if !ok {
-			continue
-		}
-		if !strings.Contains(candidate, "*") {
+		if _, _, ok := strings.Cut(candidate, ":"); ok && !strings.Contains(candidate, "*") {
 			appendConcrete(candidate)
-			continue
-		}
-		if !wholeSegmentOrConcrete(resource) || !wholeSegmentOrConcrete(action) {
-			continue
-		}
-		for _, permission := range p.catalog {
-			if wildcardCovers(resource, action, permission) {
-				appendConcrete(permission)
-			}
 		}
 	}
 

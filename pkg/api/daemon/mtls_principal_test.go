@@ -148,6 +148,7 @@ func TestIAMCertificatePrincipals_GrantsThePrincipalsRolePermissions(t *testing.
 	t.Parallel()
 	users, roles := newCertPrincipalDirectory()
 	resolver := newTestIAMCertificatePrincipals(t, users, roles, allowAllPEP())
+	resolver.catalog = []string{"device:read", "tenant:read"}
 
 	principal, err := resolver.ResolveCertificatePrincipal(context.Background(),
 		&auth.Identity{ID: "device-01", TenantID: "tenant-a"})
@@ -156,8 +157,8 @@ func TestIAMCertificatePrincipals_GrantsThePrincipalsRolePermissions(t *testing.
 	assert.Equal(t, "u-device", principal.Subject, "the subject is the IAM principal")
 	assert.Equal(t, "tenant-a", principal.TenantID)
 	assert.Equal(t, []string{"device", "reader"}, principal.Roles)
-	assert.Equal(t, []string{"device:read", "attestation:submit", "tenant:read"}, principal.Scopes,
-		"the union of the principal's role permissions, each once")
+	assert.Equal(t, []string{"device:read", "tenant:read", "attestation:submit"}, principal.Scopes,
+		"every catalog permission and each concrete role permission outside it, each once")
 	assert.Equal(t, "tenant-a", users.lastTenantID, "the principal is looked up in the certificate's tenant")
 }
 
@@ -218,6 +219,7 @@ func TestIAMCertificatePrincipals_PrefersTheIAMUserID(t *testing.T) {
 	t.Parallel()
 	users, roles := newCertPrincipalDirectory()
 	resolver := newTestIAMCertificatePrincipals(t, users, roles, allowAllPEP())
+	resolver.catalog = nil
 
 	principal, err := resolver.ResolveCertificatePrincipal(context.Background(),
 		&auth.Identity{ID: "device-01", UserID: "u-device", TenantID: "tenant-a"})
@@ -286,20 +288,21 @@ func TestIAMCertificatePrincipals_ThePEPDecidesEachScope(t *testing.T) {
 		return &sdkiam.CheckResponse{Allowed: req.Resource != "attestation" || req.Action != "submit"}, nil
 	}}
 	resolver := newTestIAMCertificatePrincipals(t, users, roles, pep)
+	resolver.catalog = []string{"device:read", "tenant:read", "tenant:write"}
 
 	principal, err := resolver.ResolveCertificatePrincipal(context.Background(),
 		&auth.Identity{ID: "device-01", TenantID: "tenant-a"})
 
 	require.NoError(t, err)
-	assert.Equal(t, []string{"device:read", "tenant:read"}, principal.Scopes,
-		"only the permissions the PEP allows become scopes")
-	require.Len(t, asked, 3, "each role permission is asked once")
+	assert.Equal(t, []string{"device:read", "tenant:read", "tenant:write"}, principal.Scopes,
+		"only the permissions the PEP allows become scopes, listed by a role or not")
+	require.Len(t, asked, 4, "each catalog and role permission is asked once")
 	got := make([][2]string, 0, len(asked))
 	for _, req := range asked {
 		assert.Equal(t, sdkiam.CheckSubject{ID: "u-device", TenantID: "tenant-a", Roles: []string{"device", "reader"}}, req.Subject)
 		got = append(got, [2]string{req.Resource, req.Action})
 	}
-	assert.Equal(t, [][2]string{{"device", "read"}, {"attestation", "submit"}, {"tenant", "read"}}, got)
+	assert.Equal(t, [][2]string{{"device", "read"}, {"tenant", "read"}, {"tenant", "write"}, {"attestation", "submit"}}, got)
 }
 
 // TestIAMCertificatePrincipals_AnABACOnlyAllowBecomesAScope pins #1906
@@ -383,10 +386,10 @@ func TestIAMCertificatePrincipals_AResourceWildcardGrantsTheConcretePermissionsT
 		&auth.Identity{ID: "device-01", TenantID: "tenant-a"})
 
 	require.NoError(t, err)
-	assert.Equal(t, []string{"piv:use", "device:read"}, principal.Scopes,
-		"piv:* grants piv:use, which the PEP allows, and not piv:read, which it denies")
-	assert.Equal(t, []pair{{"piv", "read"}, {"piv", "use"}, {"device", "read"}}, asked,
-		"a partial glob is never expanded, and a permission no grant covers is never asked")
+	assert.Equal(t, []string{"device:read", "piv:use", "tenant:write"}, principal.Scopes,
+		"the PEP decides each catalog permission; a wildcard never becomes a scope")
+	assert.Equal(t, []pair{{"device", "read"}, {"piv", "read"}, {"piv", "use"}, {"tenant", "write"}}, asked,
+		"only concrete permissions are asked, a wildcard or partial glob never")
 }
 
 func TestConcretePermissionCatalog_HoldsEveryTransportsConcretePermissions(t *testing.T) {

@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/mux"
 
 	iamsdk "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
@@ -213,13 +214,16 @@ func (handler *RestHandler) RefreshToken(w http.ResponseWriter, r *http.Request)
 	// roles are the ones IAM holds now, as at login, never the platform
 	// user store's (#646: one user store).
 	if claims.UID == "" {
-		handler.refreshBackboneSession(w, r, claims)
+		handler.refreshBackboneSession(w, r, token, claims)
 		return
 	}
 	user, err := handler.sessionUser(r.Context(), claims)
 	if err != nil {
 		handler.logger.Error(err, "rest/jwt: refresh could not resolve the user")
 		handler.responseWriter.Error401(w, r, ErrInvalidToken)
+		return
+	}
+	if !handler.stillLive(w, r, token) {
 		return
 	}
 
@@ -236,11 +240,24 @@ func (handler *RestHandler) RefreshToken(w http.ResponseWriter, r *http.Request)
 	handler.responseWriter.Success200(w, r, tokenString)
 }
 
+// stillLive re-checks the presented token after a refresh's IAM read and
+// answers 401 when a logout revoked its session meanwhile: the check at
+// the top of the refresh ran before the read, and a token minted now
+// would belong to a signed-out session (#1906 Codex).
+func (handler *RestHandler) stillLive(w http.ResponseWriter, r *http.Request, token *jwt.Token) bool {
+	if err := handler.jwtService.Verify(token); err != nil {
+		handler.logger.Debugf("rest/jwt: refresh refused after the IAM read: %v", err)
+		handler.responseWriter.Error401(w, r, ErrInvalidToken)
+		return false
+	}
+	return true
+}
+
 // refreshBackboneSession re-issues a backbone session from the principal
 // its IAM tenant holds now. It fails closed when no IAM read is wired, when
 // the session names no principal or tenant, and when the tenant no longer
 // holds the principal.
-func (handler *RestHandler) refreshBackboneSession(w http.ResponseWriter, r *http.Request, claims *TokenClaims) {
+func (handler *RestHandler) refreshBackboneSession(w http.ResponseWriter, r *http.Request, token *jwt.Token, claims *TokenClaims) {
 	if handler.principals == nil {
 		handler.logger.Warn("rest/jwt: backbone session refresh refused: no IAM principal resolver is wired")
 		handler.responseWriter.Error401(w, r, ErrInvalidToken)
@@ -260,6 +277,9 @@ func (handler *RestHandler) refreshBackboneSession(w http.ResponseWriter, r *htt
 		handler.logger.Debugf("rest/jwt: refresh refused: tenant %s holds no principal %s",
 			claims.TenantID, claims.Subject)
 		handler.responseWriter.Error401(w, r, ErrInvalidToken)
+		return
+	}
+	if !handler.stillLive(w, r, token) {
 		return
 	}
 	// The refreshed token stays in the presented token's login session,

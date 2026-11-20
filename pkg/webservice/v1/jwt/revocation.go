@@ -109,11 +109,19 @@ func sessionRevocationExpiry(token *jwt.Token, lifetime time.Duration, now time.
 	if lifetime <= 0 {
 		return expiry
 	}
-	if bound := now.Add(lifetime); expiry.IsZero() || bound.After(expiry) {
+	// A refresh re-checks the session after its IAM read, but it signs
+	// a moment later: a token it mints just after this logout expires
+	// after now+lifetime, so the revocation stands a refresh window
+	// longer than the lifetime (#1906 Codex).
+	if bound := now.Add(lifetime + sessionRefreshWindow); expiry.IsZero() || bound.After(expiry) {
 		return bound
 	}
 	return expiry
 }
+
+// sessionRefreshWindow bounds the time between a refresh's last
+// revocation check and the signing of the token it mints.
+const sessionRefreshWindow = time.Minute
 
 // revoke records the token and forgets every entry whose token has
 // expired, so the list cannot grow past one token lifetime of sign-outs.
