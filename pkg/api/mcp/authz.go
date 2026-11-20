@@ -140,6 +140,17 @@ func (c *AuthorizationChecker) AuthorizeTool(ctx context.Context, toolName strin
 		return authCtx, nil
 	}
 
+	// A malformed declaration ("bmc", "bmc:") has no scope, and an empty
+	// scope passes authenticate for any claims or mTLS caller: refuse it
+	// before authenticating, not after (#2011 Codex r2).
+	resource, action, ok := permissionResourceAction(quicbaas.Permission(permission))
+	if !ok {
+		return ctx, &AuthorizationError{
+			Type:    AuthErrorPermissionDenied,
+			Message: "Invalid permission configuration",
+		}
+	}
+
 	authCtx, outcome, authErr := c.authenticate(ctx, token, scopeForToolPermission(permission))
 	if authErr != nil {
 		return ctx, authErr
@@ -158,13 +169,6 @@ func (c *AuthorizationChecker) AuthorizeTool(ctx context.Context, toolName strin
 	}
 	if c.pep == nil || c.authManager == nil {
 		return ctx, denied
-	}
-	resource, action, ok := permissionResourceAction(quicbaas.Permission(permission))
-	if !ok {
-		return ctx, &AuthorizationError{
-			Type:    AuthErrorPermissionDenied,
-			Message: "Invalid permission configuration",
-		}
 	}
 	claims, err := c.authManager.GetTokenClaims(ctx, token)
 	if err != nil {
