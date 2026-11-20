@@ -222,6 +222,10 @@ type Config struct {
 	// MASQUE is the MASQUE CONNECT-IP plane's settings; required when
 	// DataPlanes offers masque.
 	MASQUE MASQUESettings `yaml:"masque" json:"masque" mapstructure:"masque"`
+	// GatewayID is this gateway's cert-bound control-plane identity. It
+	// owner-tags every lease allocation; empty means no owner tag is
+	// written and no orphan address is reclaimed.
+	GatewayID string `yaml:"-" json:"-" mapstructure:"-"`
 }
 
 // WireGuardSettings are the `wireguard.*` keys.
@@ -229,6 +233,14 @@ type WireGuardSettings struct {
 	// ListenPort is the WireGuard UDP port; DefaultWireGuardListenPort
 	// when WireGuard is offered and the key is unset.
 	ListenPort int `yaml:"listen-port" json:"listen_port" mapstructure:"listen-port"`
+	// KeyRef is the secret reference the host's SecretResolver resolves to
+	// the hub's 32-byte private key; the configuration never carries the
+	// key itself. The datapath builds no WireGuard plane while it is unset.
+	KeyRef string `yaml:"key-ref" json:"key_ref" mapstructure:"key-ref"`
+	// Address is the hub's own address on its interface, the gateway
+	// address of the remote-access pool. The datapath builds no WireGuard
+	// plane while it is unset.
+	Address netip.Prefix `yaml:"address" json:"address" mapstructure:"address"`
 }
 
 // MASQUESettings are the `masque.*` keys.
@@ -354,6 +366,12 @@ func (c Config) validateWireGuard() error {
 	if !c.Offers(wireGuardKind) {
 		if c.WireGuard.ListenPort != 0 {
 			return &ErrInvalidConfig{Field: "wireguard.listen-port", Reason: "set, but wireguard is not in data-planes"}
+		}
+		if c.WireGuard.KeyRef != "" {
+			return &ErrInvalidConfig{Field: "wireguard.key-ref", Reason: "set, but wireguard is not in data-planes"}
+		}
+		if c.WireGuard.Address.IsValid() {
+			return &ErrInvalidConfig{Field: "wireguard.address", Reason: "set, but wireguard is not in data-planes"}
 		}
 		return nil
 	}

@@ -20,12 +20,16 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	vnl "github.com/vishvananda/netlink"
 )
 
 // ---- fakes -----------------------------------------------------------------
@@ -116,6 +120,7 @@ type fakeProgrammer struct {
 	claimed chan string
 	addErr  error
 	delErr  error
+	hasErr  error
 }
 
 func newFakeProgrammer() *fakeProgrammer {
@@ -155,6 +160,40 @@ func (p *fakeProgrammer) holds(iface string, prefix string) bool {
 	defer p.mu.Unlock()
 	_, ok := p.addrs[iface+"/"+prefix]
 	return ok
+}
+
+// HasAddress makes fakeProgrammer an AddressReader: an address seeded in
+// addrs before Start is one the speaker found on the interface.
+func (p *fakeProgrammer) HasAddress(iface string, prefix netip.Prefix) (bool, error) {
+	if p.hasErr != nil {
+		return false, p.hasErr
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	_, ok := p.addrs[iface+"/"+prefix.String()]
+	return ok, nil
+}
+
+// AddressPrefixes makes fakeProgrammer a PrefixReader: every seeded prefix
+// on iface whose address is addr, whatever its length.
+func (p *fakeProgrammer) AddressPrefixes(iface string, addr netip.Addr) ([]netip.Prefix, error) {
+	if p.hasErr != nil {
+		return nil, p.hasErr
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out []netip.Prefix
+	for key := range p.addrs {
+		rest, ok := strings.CutPrefix(key, iface+"/")
+		if !ok {
+			continue
+		}
+		pfx, err := netip.ParsePrefix(rest)
+		if err == nil && pfx.Addr() == addr {
+			out = append(out, pfx)
+		}
+	}
+	return out, nil
 }
 
 // fakeClock fires timers when the test advances it.
@@ -516,6 +555,37 @@ func TestSpeaker_OpenFailureReportsAFailedRollback(t *testing.T) {
 	assert.False(t, s.Active())
 }
 
+// A runner whose rollback at a failed Start could not release its VIP is
+// kept pending: the next Start drains it first (and is refused while it
+// still fails), so the VIP is never mistaken for a preexisting owner
+// address, and the Stop after a successful restart deletes it.
+func TestSpeaker_FailedRollbackKeepsTheVIPPendingThroughRestartAndStop(t *testing.T) {
+	seg := newSegment()
+	prog := newFakeProgrammer()
+	prog.delErr = errors.New("EBUSY")
+	cfg := speakerConfig(PriorityOwner, "10.4.200.2")
+	cfg.Groups = append(cfg.Groups, GroupConfig{VRID: 21, Interface: "public0", Priority: 100, Addresses: []string{"203.0.113.1/24"}, Source: "203.0.113.4"})
+	s, err := New(cfg, Deps{Transport: &failOnSecondOpen{seg: seg}, Programmer: prog, Logger: quietLogger()})
+	require.NoError(t, err)
+
+	err = s.Start(context.Background())
+	var rb *ErrRollbackIncomplete
+	require.True(t, errors.As(err, &rb), "got %v", err)
+	assert.True(t, prog.holds("br-int", "10.4.200.1/24"), "the failed rollback left the VIP installed")
+	assert.True(t, s.ReleasePending(), "the failed rollback is kept for cleanup")
+
+	err = s.Start(context.Background())
+	var rp ErrReleasePending
+	require.True(t, errors.As(err, &rp), "got %v", err)
+	assert.False(t, s.Active())
+
+	prog.delErr = nil
+	require.NoError(t, s.Start(context.Background()))
+	assert.False(t, s.ReleasePending())
+	require.NoError(t, s.Stop(context.Background()))
+	assert.False(t, prog.holds("br-int", "10.4.200.1/24"), "the restarted speaker's Stop releases the VIP")
+}
+
 func TestSpeaker_ClaimFailureIsReportedInHealth(t *testing.T) {
 	seg := newSegment()
 	prog := newFakeProgrammer()
@@ -529,6 +599,397 @@ func TestSpeaker_ClaimFailureIsReportedInHealth(t *testing.T) {
 	var ao *ErrAddressOperationFailed
 	require.True(t, errors.As(h.Groups[0].LastError, &ao))
 	require.NoError(t, s.Stop(context.Background()))
+}
+
+// An owner whose source is its virtual address finds that address on the
+// interface before it claims: Stop must leave it there (Codex #1716 P1).
+func TestSpeaker_StopKeepsThePreexistingOwnerAddress(t *testing.T) {
+	seg := newSegment()
+	prog := newFakeProgrammer()
+	prog.addrs["br-int/10.4.200.1/24"] = nil
+	s, err := New(speakerConfig(PriorityOwner, "10.4.200.1"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: prog, Logger: quietLogger()})
+	require.NoError(t, err)
+	require.NoError(t, s.Start(context.Background()))
+	require.Equal(t, StateMaster, s.Health().Groups[0].State)
+	require.NoError(t, s.Stop(context.Background()))
+	assert.True(t, prog.holds("br-int", "10.4.200.1/24"), "the owner's preexisting address survives Stop")
+}
+
+func TestSpeaker_StopDeletesTheAddressItAdded(t *testing.T) {
+	seg := newSegment()
+	prog := newFakeProgrammer()
+	s, err := New(speakerConfig(PriorityOwner, "10.4.200.2"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: prog, Logger: quietLogger()})
+	require.NoError(t, err)
+	require.NoError(t, s.Start(context.Background()))
+	require.True(t, prog.holds("br-int", "10.4.200.1/24"))
+	require.NoError(t, s.Stop(context.Background()))
+	assert.False(t, prog.holds("br-int", "10.4.200.1/24"), "an address the speaker added is deleted on Stop")
+}
+
+func TestSpeaker_StopRetriesAFailedRelease(t *testing.T) {
+	seg := newSegment()
+	prog := newFakeProgrammer()
+	prog.delErr = errors.New("EBUSY")
+	s, err := New(speakerConfig(PriorityOwner, "10.4.200.2"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: prog, Logger: quietLogger()})
+	require.NoError(t, err)
+	require.NoError(t, s.Start(context.Background()))
+	require.True(t, prog.holds("br-int", "10.4.200.1/24"))
+
+	require.Error(t, s.Stop(context.Background()), "a VIP that cannot be deleted fails Stop")
+	assert.True(t, prog.holds("br-int", "10.4.200.1/24"), "the VIP is still held after the failed delete")
+	assert.False(t, s.Active(), "a failed Stop still stops the speaker")
+
+	prog.delErr = nil
+	require.NoError(t, s.Stop(context.Background()), "a second Stop retries the outstanding release")
+	assert.False(t, prog.holds("br-int", "10.4.200.1/24"), "the retried release deletes the VIP")
+
+	assert.ErrorIs(t, s.Stop(context.Background()), ErrSpeakerNotRunning{}, "nothing outstanding: Stop reports not running")
+}
+
+func TestSpeaker_StartRefusedWhileReleasePending_ThenVIPRemoved(t *testing.T) {
+	seg := newSegment()
+	prog := newFakeProgrammer()
+	s, err := New(speakerConfig(PriorityOwner, "10.4.200.2"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: prog, Logger: quietLogger()})
+	require.NoError(t, err)
+	require.NoError(t, s.Start(context.Background()))
+	require.True(t, prog.holds("br-int", "10.4.200.1/24"))
+
+	prog.delErr = errors.New("EBUSY")
+	require.Error(t, s.Stop(context.Background()), "a VIP that cannot be deleted fails Stop")
+
+	var pending ErrReleasePending
+	require.ErrorAs(t, s.Start(context.Background()), &pending, "Start is refused while a release is outstanding")
+	assert.False(t, s.Active(), "a refused Start starts no runner")
+
+	prog.delErr = nil
+	require.NoError(t, s.Start(context.Background()), "Start drains the outstanding release first")
+	require.NoError(t, s.Stop(context.Background()))
+	assert.False(t, prog.holds("br-int", "10.4.200.1/24"), "the VIP is gone after the last Stop")
+}
+
+func TestSpeaker_RollbackKeepsThePreexistingOwnerAddress(t *testing.T) {
+	seg := newSegment()
+	prog := newFakeProgrammer()
+	prog.addrs["br-int/10.4.200.1/24"] = nil
+	cfg := speakerConfig(PriorityOwner, "10.4.200.1")
+	cfg.Groups = append(cfg.Groups, GroupConfig{VRID: 21, Interface: "public0", Priority: 100, Addresses: []string{"203.0.113.1/24"}, Source: "203.0.113.4"})
+	s, err := New(cfg, Deps{Transport: &failOnSecondOpen{seg: seg}, Programmer: prog, Logger: quietLogger()})
+	require.NoError(t, err)
+	var tf *ErrTransportFailed
+	require.True(t, errors.As(s.Start(context.Background()), &tf))
+	assert.False(t, s.Active())
+	assert.True(t, prog.holds("br-int", "10.4.200.1/24"), "the rollback leaves the owner's preexisting address in place")
+}
+
+// A master that crashed leaves its VIP on the interface. Only a
+// priority-255 owner holds a VIP as its own address, so a restarted
+// non-owner runner adopts the stale VIP and releases it on demotion and on
+// Stop (Codex #1716 round 3 P1).
+func TestSpeaker_AdoptsAStaleVIPAfterRestart(t *testing.T) {
+	t.Run("demotion", func(t *testing.T) {
+		seg := newSegment()
+		clock := newFakeClock(t0)
+		sink := newEventSink()
+		prog := newFakeProgrammer()
+		prog.addrs["br-int/10.4.200.1/24"] = nil
+		s, err := New(speakerConfig(200, "10.4.200.10"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: prog, Clock: clock, Logger: quietLogger(), Observer: sink})
+		require.NoError(t, err)
+		require.NoError(t, s.Start(context.Background()))
+		defer func() { _ = s.Stop(context.Background()) }()
+		// Consume the startup Backup transition so the demotion wait below
+		// cannot match it.
+		sink.await(t, func(ev Event) bool { return ev.Kind == EventTransition && ev.Status.State == StateBackup })
+		clock.Advance(3600 * time.Millisecond)
+		sink.await(t, func(ev Event) bool { return ev.Kind == EventTransition && ev.Status.State == StateMaster })
+		<-prog.claimed
+
+		progHigh := newFakeProgrammer()
+		high, err := New(speakerConfig(PriorityOwner, "10.4.200.2"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: progHigh, Clock: clock, Logger: quietLogger()})
+		require.NoError(t, err)
+		require.NoError(t, high.Start(context.Background()))
+		defer func() { _ = high.Stop(context.Background()) }()
+		sink.await(t, func(ev Event) bool {
+			return ev.Kind == EventTransition && ev.Status.State == StateBackup && ev.Status.Priority == 200
+		})
+		assert.False(t, prog.holds("br-int", "10.4.200.1/24"), "the demoted master deleted the stale VIP it adopted")
+	})
+	t.Run("stop", func(t *testing.T) {
+		seg := newSegment()
+		clock := newFakeClock(t0)
+		sink := newEventSink()
+		prog := newFakeProgrammer()
+		prog.addrs["br-int/10.4.200.1/24"] = nil
+		s, err := New(speakerConfig(200, "10.4.200.10"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: prog, Clock: clock, Logger: quietLogger(), Observer: sink})
+		require.NoError(t, err)
+		require.NoError(t, s.Start(context.Background()))
+		clock.Advance(3600 * time.Millisecond)
+		sink.await(t, func(ev Event) bool { return ev.Kind == EventTransition && ev.Status.State == StateMaster })
+		<-prog.claimed
+		require.NoError(t, s.Stop(context.Background()))
+		assert.False(t, prog.holds("br-int", "10.4.200.1/24"), "Stop deleted the stale VIP the master adopted")
+	})
+}
+
+// TestSpeakerRestoresInventoryOwnedVIPAfterCrash: a priority-255 runner that
+// crashed after adding its VIP finds the address on the interface at
+// restart. The inventory says this node installed it, so the restarted
+// runner owns it again rather than taking it for a permanent owner address,
+// and Stop removes it after the priority-zero handoff. An address the
+// inventory does not record stays the owner's own.
+func TestSpeakerRestoresInventoryOwnedVIPAfterCrash(t *testing.T) {
+	vip := netip.MustParsePrefix("10.4.200.1/24")
+	run := func(t *testing.T, recorded bool) (*fakeProgrammer, *Inventory) {
+		t.Helper()
+		inv := NewInventory(filepath.Join(t.TempDir(), VIPInventoryFile))
+		if recorded {
+			require.NoError(t, inv.Record("br-int", 20, vip))
+		}
+		clock := newFakeClock(t0)
+		sink := newEventSink()
+		prog := newFakeProgrammer()
+		prog.addrs["br-int/10.4.200.1/24"] = nil
+		s, err := New(speakerConfig(PriorityOwner, "10.4.200.2"), Deps{
+			Transport: &fakeTransport{seg: newSegment()}, Programmer: prog, Clock: clock,
+			Logger: quietLogger(), Observer: sink, Inventory: inv,
+		})
+		require.NoError(t, err)
+		require.NoError(t, s.Start(context.Background()))
+		sink.await(t, func(ev Event) bool { return ev.Kind == EventTransition && ev.Status.State == StateMaster })
+		require.NoError(t, s.Stop(context.Background()))
+		return prog, inv
+	}
+
+	t.Run("an address this node installed is released at Stop", func(t *testing.T) {
+		prog, inv := run(t, true)
+		assert.False(t, prog.holds("br-int", "10.4.200.1/24"), "Stop deleted the VIP the crashed owner had installed")
+		entries, err := inv.Entries()
+		require.NoError(t, err)
+		assert.Empty(t, entries, "the released VIP is forgotten")
+	})
+	t.Run("an address the inventory does not record stays the owner's", func(t *testing.T) {
+		prog, inv := run(t, false)
+		assert.True(t, prog.holds("br-int", "10.4.200.1/24"))
+		entries, err := inv.Entries()
+		require.NoError(t, err)
+		assert.Empty(t, entries)
+	})
+}
+
+// A non-owner restarted while a peer stays master never runs Claim, so
+// the VIP its crashed predecessor left must go before it enters Backup:
+// otherwise it answers ARP/ND for the peer's VIP (Codex #1716 round 4 P1).
+func TestSpeaker_RestartedBackupRemovesAStaleVIP(t *testing.T) {
+	seg := newSegment()
+	clock := newFakeClock(t0)
+	progHigh := newFakeProgrammer()
+	high, err := New(speakerConfig(PriorityOwner, "10.4.200.2"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: progHigh, Clock: clock, Logger: quietLogger()})
+	require.NoError(t, err)
+	require.NoError(t, high.Start(context.Background()))
+	defer func() { _ = high.Stop(context.Background()) }()
+	<-progHigh.claimed
+
+	prog := newFakeProgrammer()
+	prog.addrs["br-int/10.4.200.1/24"] = nil
+	s, err := New(speakerConfig(200, "10.4.200.10"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: prog, Clock: clock, Logger: quietLogger()})
+	require.NoError(t, err)
+	require.NoError(t, s.Start(context.Background()))
+	defer func() { _ = s.Stop(context.Background()) }()
+	state, err := s.GroupState("br-int", 20)
+	require.NoError(t, err)
+	assert.Equal(t, StateBackup, state)
+	assert.False(t, prog.holds("br-int", "10.4.200.1/24"), "the restarted backup removed the stale VIP before entering Backup")
+	assert.True(t, progHigh.holds("br-int", "10.4.200.1/24"), "the peer master keeps its VIP")
+}
+
+// A crashed master left the VIP with the prefix length of an older config:
+// the restarted backup finds it by address and deletes the installed prefix.
+func TestSpeaker_RestartedBackupRemovesAStaleVIPWithAnotherPrefixLength(t *testing.T) {
+	seg := newSegment()
+	prog := newFakeProgrammer()
+	prog.addrs["br-int/10.4.200.1/16"] = nil
+	prog.addrs["br-int/10.4.200.10/24"] = nil
+	s, err := New(speakerConfig(200, "10.4.200.10"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: prog, Clock: newFakeClock(t0), Logger: quietLogger()})
+	require.NoError(t, err)
+	require.NoError(t, s.Start(context.Background()))
+	defer func() { _ = s.Stop(context.Background()) }()
+	state, err := s.GroupState("br-int", 20)
+	require.NoError(t, err)
+	assert.Equal(t, StateBackup, state)
+	assert.False(t, prog.holds("br-int", "10.4.200.1/16"), "the stale VIP is removed at its installed length")
+	assert.True(t, prog.holds("br-int", "10.4.200.10/24"), "the node's own address stays")
+}
+
+func TestSpeaker_StartFailsWhenTheStaleVIPOfAnotherLengthCannotBeRemoved(t *testing.T) {
+	seg := newSegment()
+	prog := newFakeProgrammer()
+	prog.addrs["br-int/10.4.200.1/16"] = nil
+	prog.delErr = errors.New("netlink: permission denied")
+	s, err := New(speakerConfig(200, "10.4.200.10"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: prog, Clock: newFakeClock(t0), Logger: quietLogger()})
+	require.NoError(t, err)
+	err = s.Start(context.Background())
+	var aof *ErrAddressOperationFailed
+	require.True(t, errors.As(err, &aof), "got %v", err)
+	assert.Equal(t, "delete", aof.Operation)
+	assert.Equal(t, netip.MustParsePrefix("10.4.200.1/16"), aof.Address)
+	assert.False(t, s.Active())
+
+	// The prefix that could not be removed stays pending, and Stop removes
+	// it once the error clears.
+	assert.True(t, s.ReleasePending(), "the failed stale removal stays pending")
+	prog.delErr = nil
+	require.NoError(t, s.Stop(context.Background()))
+	assert.False(t, prog.holds("br-int", "10.4.200.1/16"))
+	assert.False(t, s.ReleasePending())
+}
+
+// TestSpeaker_StartFailsWhenTheStaleVIPCheckFails pins ruling 673 (Codex
+// #1716 round 5): a backup that cannot tell whether a stale VIP is on its
+// interface must not start, or it could keep answering ARP/ND for the
+// master's address while Health shows no error.
+func TestSpeaker_StartFailsWhenTheStaleVIPCheckFails(t *testing.T) {
+	seg := newSegment()
+	prog := newFakeProgrammer()
+	prog.hasErr = errors.New("netlink: dump failed")
+	s, err := New(speakerConfig(200, "10.4.200.10"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: prog, Clock: newFakeClock(t0), Logger: quietLogger()})
+	require.NoError(t, err)
+
+	err = s.Start(context.Background())
+	var aof *ErrAddressOperationFailed
+	require.True(t, errors.As(err, &aof), "got %v", err)
+	assert.Equal(t, "list", aof.Operation)
+	assert.False(t, s.Active())
+	seg.mu.Lock()
+	require.Len(t, seg.conns, 1)
+	conn := seg.conns[0]
+	seg.mu.Unlock()
+	select {
+	case <-conn.closed:
+	default:
+		t.Fatal("the socket opened for the failed group was not closed")
+	}
+}
+
+// TestSpeaker_StartFailsWhenTheStaleVIPRemovalFails pins ruling 673: a stale
+// VIP the backup cannot remove fails the start instead of being logged.
+func TestSpeaker_StartFailsWhenTheStaleVIPRemovalFails(t *testing.T) {
+	seg := newSegment()
+	prog := newFakeProgrammer()
+	prog.addrs["br-int/10.4.200.1/24"] = nil
+	prog.delErr = errors.New("netlink: permission denied")
+	s, err := New(speakerConfig(200, "10.4.200.10"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: prog, Clock: newFakeClock(t0), Logger: quietLogger()})
+	require.NoError(t, err)
+
+	err = s.Start(context.Background())
+	var aof *ErrAddressOperationFailed
+	require.True(t, errors.As(err, &aof), "got %v", err)
+	assert.Equal(t, "delete", aof.Operation)
+	assert.False(t, s.Active())
+
+	// The VIP that could not be removed stays pending, and Stop removes it
+	// once the error clears.
+	assert.True(t, s.ReleasePending(), "the failed stale removal stays pending")
+	prog.delErr = nil
+	require.NoError(t, s.Stop(context.Background()))
+	assert.False(t, prog.holds("br-int", "10.4.200.1/24"))
+	assert.False(t, s.ReleasePending())
+}
+
+// TestSpeaker_NextStartRemovesAStaleVIPAnEarlierStartCouldNot checks that
+// the next Start drains a failed stale-VIP removal before it starts.
+func TestSpeaker_NextStartRemovesAStaleVIPAnEarlierStartCouldNot(t *testing.T) {
+	seg := newSegment()
+	prog := newFakeProgrammer()
+	prog.addrs["br-int/10.4.200.1/24"] = nil
+	prog.delErr = errors.New("netlink: permission denied")
+	s, err := New(speakerConfig(200, "10.4.200.10"), Deps{Transport: &fakeTransport{seg: seg}, Programmer: prog, Clock: newFakeClock(t0), Logger: quietLogger()})
+	require.NoError(t, err)
+
+	var aof *ErrAddressOperationFailed
+	require.True(t, errors.As(s.Start(context.Background()), &aof))
+	require.True(t, s.ReleasePending())
+	require.True(t, prog.holds("br-int", "10.4.200.1/24"), "the stale VIP is still installed")
+
+	prog.delErr = nil
+	require.NoError(t, s.Start(context.Background()))
+	assert.True(t, s.Active())
+	assert.False(t, s.ReleasePending())
+	assert.False(t, prog.holds("br-int", "10.4.200.1/24"))
+	require.NoError(t, s.Stop(context.Background()))
+}
+
+// inventoryBreakingProgrammer turns the inventory file into a directory at
+// the first address listing, after restoreOwned read it, so the stale-VIP
+// Record that follows fails as it would on a full state filesystem.
+type inventoryBreakingProgrammer struct {
+	*fakeProgrammer
+	path string
+	once sync.Once
+}
+
+func (p *inventoryBreakingProgrammer) AddressPrefixes(iface string, addr netip.Addr) ([]netip.Prefix, error) {
+	p.once.Do(func() {
+		_ = os.Remove(p.path)
+		_ = os.MkdirAll(filepath.Join(p.path, "blocked"), 0o700)
+	})
+	return p.fakeProgrammer.AddressPrefixes(iface, addr)
+}
+
+func TestSpeaker_StaleVIPCleanupSurvivesAnInventoryRecordFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), VIPInventoryFile)
+	prog := &inventoryBreakingProgrammer{fakeProgrammer: newFakeProgrammer(), path: path}
+	prog.addrs["br-int/10.4.200.1/24"] = nil
+	s, err := New(speakerConfig(200, "10.4.200.10"), Deps{
+		Transport: &fakeTransport{seg: newSegment()}, Programmer: prog, Clock: newFakeClock(t0),
+		Logger: quietLogger(), Inventory: NewInventory(path),
+	})
+	require.NoError(t, err)
+
+	err = s.Start(context.Background())
+	var inv *ErrInventory
+	require.True(t, errors.As(err, &inv), "got %v", err)
+	assert.False(t, s.Active())
+
+	// The present, unrecorded VIP stays this node's to clean up, so Stop
+	// removes it although the inventory could not record it.
+	assert.True(t, s.ReleasePending(), "the stale VIP whose record failed stays pending")
+	require.NoError(t, s.Stop(context.Background()))
+	assert.False(t, prog.holds("br-int", "10.4.200.1/24"), "Stop removed the stale VIP")
+	assert.False(t, s.ReleasePending())
+}
+
+func TestSpeaker_ReleaseTreatsAMissingInterfaceAsReleased(t *testing.T) {
+	t.Run("a claimed VIP", func(t *testing.T) {
+		prog := newFakeProgrammer()
+		sink := newEventSink()
+		s, err := New(speakerConfig(PriorityOwner, "10.4.200.2"), Deps{
+			Transport: &fakeTransport{seg: newSegment()}, Programmer: prog, Clock: newFakeClock(t0),
+			Logger: quietLogger(), Observer: sink,
+		})
+		require.NoError(t, err)
+		require.NoError(t, s.Start(context.Background()))
+		sink.await(t, func(ev Event) bool { return ev.Kind == EventTransition && ev.Status.State == StateMaster })
+		require.True(t, prog.holds("br-int", "10.4.200.1/24"))
+
+		// The interface goes, and its addresses with it.
+		prog.delErr = vnl.LinkNotFoundError{}
+		require.NoError(t, s.Stop(context.Background()))
+		assert.False(t, s.ReleasePending(), "a VIP whose interface is gone is released")
+		require.NoError(t, s.Start(context.Background()), "the next Start is not refused")
+		require.NoError(t, s.Stop(context.Background()))
+	})
+	t.Run("a stale VIP of another length", func(t *testing.T) {
+		prog := newFakeProgrammer()
+		prog.addrs["br-int/10.4.200.1/16"] = nil
+		prog.delErr = errors.New("netlink: permission denied")
+		s, err := New(speakerConfig(200, "10.4.200.10"), Deps{Transport: &fakeTransport{seg: newSegment()}, Programmer: prog, Clock: newFakeClock(t0), Logger: quietLogger()})
+		require.NoError(t, err)
+		require.Error(t, s.Start(context.Background()))
+		require.True(t, s.ReleasePending())
+
+		prog.delErr = vnl.LinkNotFoundError{}
+		require.NoError(t, s.Stop(context.Background()))
+		assert.False(t, s.ReleasePending(), "a stale VIP whose interface is gone is released")
+	})
 }
 
 func TestWallClock(t *testing.T) {

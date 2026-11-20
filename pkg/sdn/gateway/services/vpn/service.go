@@ -18,6 +18,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"log/slog"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -65,6 +66,26 @@ type Service struct {
 	// nonces are the outstanding challenges, keyed by hex nonce, with the
 	// instant they expire.
 	nonces map[string]time.Time
+
+	// peerRetry holds, per hosted plane, a peer removal Restore could not
+	// complete, with the rejected leases whose addresses wait on it (see
+	// retryPeerReconcile). A key with a nil slice is a failed
+	// reconciliation alone. Guarded by mu.
+	peerRetry map[DataPlaneKind][]*Lease
+	// tearingDown counts, per address, the revocations whose teardown has
+	// not settled: the lease may already be deleted while the peer removal
+	// runs and neither releaseAddress nor owePeerRetry has run yet. Orphan
+	// reclaim treats these addresses as held. Allocated on first use, like
+	// peerRetry. Guarded by mu.
+	tearingDown map[netip.Addr]int
+	// sweepGateHook, when set by a test, runs in retryPeerReconcile after
+	// its pending check and before it takes enrolGate: it parks one sweep
+	// at that point while an overlapping one runs. Nil in production.
+	sweepGateHook func()
+	// reclaimOwed records that orphan addresses still wait to be reclaimed
+	// (a reconciliation or a reclaim failed); retryPeerReconcile pays it
+	// once every plane reconciles. Guarded by mu.
+	reclaimOwed bool
 
 	// enrolments is the control plane's peer set; nil until the first
 	// delivery, which refuses every admission.
@@ -265,6 +286,7 @@ func (s *Service) Sweep(ctx context.Context) {
 	}
 	s.mu.Unlock()
 
+	s.retryPeerReconcile(ctx)
 	if pending, ok := s.deps.Leases.(PendingDeleteStore); ok {
 		if err := pending.RetryPendingDeletes(ctx); err != nil {
 			s.logger.Warn("vpn lease sweep: a pending lease deletion failed again", slog.Any("error", err))
@@ -279,6 +301,8 @@ func (s *Service) Sweep(ctx context.Context) {
 		if !l.Expired(now) {
 			continue
 		}
+		// revoke needs enrolGate held; it is taken before the device lock.
+		s.enrolGate.RLock()
 		unlock := s.devices.lock(deviceKey(l.TenantID, l.DeviceID))
 		// Re-read under the lock: a renewal may have landed since List.
 		current, err := s.deps.Leases.Get(ctx, l.ID)
@@ -292,6 +316,7 @@ func (s *Service) Sweep(ctx context.Context) {
 			}
 		}
 		unlock()
+		s.enrolGate.RUnlock()
 	}
 }
 

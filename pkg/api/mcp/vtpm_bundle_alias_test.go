@@ -277,7 +277,7 @@ func TestVTPMBundleAlias_TwinArgumentNameIsIgnored(t *testing.T) {
 }
 
 func TestVTPMBundleAlias_CarriesTwinScope(t *testing.T) {
-	catalog := toolPermissionCatalog()
+	catalog := declaredToolPermissions(PlatformTools{})
 	for _, tc := range bundleAliasCases {
 		scope, ok := catalog[tc.alias]
 		if !ok || scope == "" {
@@ -293,7 +293,7 @@ func TestVTPMBundleAlias_CarriesTwinScope(t *testing.T) {
 func callVTPMAliasViaServer(tc bundleAliasCase, granted func(scope string) bool) (*mcpwire.JSONRPCResponse, *vtpmBackendRecorder) {
 	rec := newVTPMBackendRecorder(nil)
 	server := NewServer(rec, nil, newTestLogger())
-	server.SetAuthorizationService(&mockAuthorizationService{
+	usePEP(server, &mockAuthorizationService{
 		checkFunc: func(_ context.Context, _, resource, action string) (bool, error) {
 			return granted(resource + ":" + action), nil
 		},
@@ -312,7 +312,7 @@ func callVTPMAliasViaServer(tc bundleAliasCase, granted func(scope string) bool)
 }
 
 func TestVTPMBundleAlias_CallerWithoutScopeIsRefused(t *testing.T) {
-	catalog := toolPermissionCatalog()
+	catalog := declaredToolPermissions(PlatformTools{})
 	for _, tc := range bundleAliasCases {
 		t.Run(tc.alias, func(t *testing.T) {
 			scope := catalog[tc.twin]
@@ -331,7 +331,7 @@ func TestVTPMBundleAlias_CallerWithoutScopeIsRefused(t *testing.T) {
 }
 
 func TestVTPMBundleAlias_CallerWithScopeReachesBackend(t *testing.T) {
-	catalog := toolPermissionCatalog()
+	catalog := declaredToolPermissions(PlatformTools{})
 	for _, tc := range bundleAliasCases {
 		t.Run(tc.alias, func(t *testing.T) {
 			scope := catalog[tc.twin]

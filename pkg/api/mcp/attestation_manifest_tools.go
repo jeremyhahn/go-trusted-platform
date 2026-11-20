@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -31,7 +32,8 @@ import (
 // rendered as JSON.
 type AttestationManifestProvider interface {
 	AttestationGetManifest(ctx context.Context, id string) (any, error)
-	AttestationListManifests(ctx context.Context, limit, offset uint32) (any, error)
+	// A zero start or end time sets no bound on that side.
+	AttestationListManifests(ctx context.Context, hostID string, start, end time.Time, limit, offset uint32) (any, error)
 	AttestationBuildManifest(ctx context.Context, req ManifestBuildRequest) (any, error)
 	AttestationVerifyManifest(ctx context.Context, req ManifestVerifyRequest) (any, error)
 	AttestationDeleteManifest(ctx context.Context, id string) (any, error)
@@ -135,7 +137,15 @@ func (r *ToolRegistry) executeAttestationListManifests(ctx context.Context, p At
 	if err != nil {
 		return nil, err
 	}
-	return p.AttestationListManifests(ctx, limit, offset)
+	start, err := manifestTimeArg(args, "start_time")
+	if err != nil {
+		return nil, err
+	}
+	end, err := manifestTimeArg(args, "end_time")
+	if err != nil {
+		return nil, err
+	}
+	return p.AttestationListManifests(ctx, getString(args, "host_id"), start, end, limit, offset)
 }
 
 func (r *ToolRegistry) executeAttestationCreateManifest(ctx context.Context, p AttestationManifestProvider, args map[string]interface{}) (interface{}, error) {
@@ -220,6 +230,28 @@ func manifestUint32Arg(args map[string]interface{}, key string) (uint32, error) 
 		return 0, ErrInvalidManifestArgument{Field: key, Reason: "must be between 0 and 4294967295"}
 	}
 	return uint32(n), nil
+}
+
+// manifestTimeArg reads an optional RFC 3339 time argument. An absent or
+// empty value is the zero time (no bound); a value that is not an RFC 3339
+// string is refused.
+func manifestTimeArg(args map[string]interface{}, key string) (time.Time, error) {
+	raw, ok := args[key]
+	if !ok || raw == nil {
+		return time.Time{}, nil
+	}
+	s, ok := raw.(string)
+	if !ok {
+		return time.Time{}, ErrInvalidManifestArgument{Field: key, Reason: "must be an RFC 3339 time string"}
+	}
+	if s == "" {
+		return time.Time{}, nil
+	}
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return time.Time{}, ErrInvalidManifestArgument{Field: key, Reason: "not an RFC 3339 time"}
+	}
+	return t, nil
 }
 
 // manifestPCRIndicesArg reads the optional pcr_indices array. Every entry

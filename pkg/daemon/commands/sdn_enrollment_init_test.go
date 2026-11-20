@@ -158,13 +158,25 @@ func newWiringFixture(t *testing.T) (*policy.SDNEnrollmentHook, *wiringStubEngin
 // OIDTPNetworkZone extension for zoneName.
 func wiringCertWithZone(t *testing.T, zoneName string) *x509.Certificate {
 	t.Helper()
+	return wiringCert(t, zoneName, []string{"wiring-tenant"})
+}
+
+// wiringCert issues a self-signed device certificate carrying the network
+// zone extension. The tenant is the first subject OU (SPEC row 122); a nil
+// ou gives a certificate with no tenant.
+func wiringCert(t *testing.T, zoneName string, ou []string) *x509.Certificate {
+	t.Helper()
 	ext, err := quicbaasca.CreateNetworkZoneExtension(zoneName)
 	require.NoError(t, err)
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 	tmpl := x509.Certificate{
-		SerialNumber:    big.NewInt(77),
-		Subject:         pkix.Name{Organization: []string{"org"}, CommonName: "SRV-WIRE-01"},
+		SerialNumber: big.NewInt(77),
+		Subject: pkix.Name{
+			OrganizationalUnit: ou,
+			Organization:       []string{"org"},
+			CommonName:         "SRV-WIRE-01",
+		},
 		NotBefore:       time.Now().Add(-time.Minute),
 		NotAfter:        time.Now().Add(24 * time.Hour),
 		ExtraExtensions: []pkix.Extension{ext},
@@ -237,4 +249,27 @@ func TestSDNEnrollmentHookWiring_MatchingZoneActivatesClean(t *testing.T) {
 	assert.Equal(t, policy.ActivationStatusActivated, result.Status)
 	assert.Equal(t, uint16(200), result.VLAN)
 	assert.Equal(t, policy.PortStateAuthorized, engine.portStates["port1"])
+}
+
+// TestSDNEnrollmentHookWiring_MissingTenantOURefuses: through the production
+// wiring, a device certificate with no subject OU has no tenant, so the
+// precheck refuses it and no port policy is applied (SPEC row 122).
+func TestSDNEnrollmentHookWiring_MissingTenantOURefuses(t *testing.T) {
+	hook, engine := newWiringFixture(t)
+
+	event := &policy.EnrollmentEvent{
+		Context:       context.Background(),
+		Certificate:   wiringCert(t, "provisioning", nil),
+		ClientIP:      "192.168.1.50",
+		IsTCGCSR:      true,
+		ProductSerial: "SRV-WIRE-01",
+	}
+	require.NoError(t, hook.OnEnrollmentComplete(event))
+
+	plan, err := hook.PrecheckActivation("SRV-WIRE-01")
+	require.ErrorIs(t, err, policy.ErrMissingTenantID)
+	assert.Nil(t, plan, "no tenant means no port assignment")
+
+	_, applied := engine.appliedPolicies["port1"]
+	assert.False(t, applied, "no tenant means no policy on the port")
 }

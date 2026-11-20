@@ -16,10 +16,96 @@ package gateway
 import (
 	"context"
 	"errors"
+	"net/netip"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/fhrp"
 )
+
+// TestGatewayStartSweepsOnlyInThePrivilegedProcess: the routing, proxy, VPN
+// and parser children drop their credentials before Gateway.Start and hold
+// no FHRP addresses, so they never sweep the VIP inventory, with FHRP on or
+// off and with the root-owned fhrp state directory unreadable to them. The
+// datapath child, which hosts FHRP, sweeps.
+func TestGatewayStartSweepsOnlyInThePrivilegedProcess(t *testing.T) {
+	recorded := netip.MustParsePrefix("198.51.100.1/24")
+	inventory := func(t *testing.T) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), FHRPStateDir, FHRPInventoryFile)
+		require.NoError(t, fhrp.NewInventory(path).Record("trusted1", 20, recorded))
+		return path
+	}
+	// unreadable stands in for the 0700 root-owned fhrp/ an unprivileged
+	// child cannot read: the inventory path is a directory, which no
+	// load can read as a file, root included.
+	unreadable := func(t *testing.T) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), FHRPStateDir, FHRPInventoryFile)
+		require.NoError(t, os.MkdirAll(path, 0o700))
+		return path
+	}
+	start := func(t *testing.T, cfg *GatewayConfig) error {
+		t.Helper()
+		gw, err := NewGateway(cfg)
+		require.NoError(t, err)
+		gw.SetNodeMetrics(validNodeMetrics())
+		err = gw.Start(context.Background())
+		if err == nil {
+			t.Cleanup(func() { _ = gw.Stop(context.Background()) })
+		}
+		return err
+	}
+
+	for _, hosted := range []string{ServiceTransit, ServiceProxy, ServiceManagementVPN, ServiceDHCP} {
+		for _, fhrpOn := range []bool{false, true} {
+			name := hosted + "/fhrp-off"
+			if fhrpOn {
+				name = hosted + "/fhrp-on"
+			}
+			t.Run(name, func(t *testing.T) {
+				for _, path := range []string{unreadable(t), inventory(t)} {
+					programmer := &fakeFHRPProgrammer{present: map[netip.Prefix]bool{recorded: true}}
+					cfg := baseGatewayConfig("fhrp-sweep-child")
+					if fhrpOn {
+						cfg.FHRP = ownerFHRPConfig()
+					}
+					cfg.HostedServices = []string{hosted}
+					cfg.Host = &HostRuntime{FHRPProgrammer: programmer, FHRPInventory: path}
+
+					require.NoError(t, start(t, cfg), "an unprivileged child never reads the FHRP inventory")
+					assert.Empty(t, programmer.Deleted(), "an unprivileged child never sweeps")
+				}
+			})
+		}
+	}
+
+	t.Run("the datapath child sweeps", func(t *testing.T) {
+		path := inventory(t)
+		programmer := &fakeFHRPProgrammer{present: map[netip.Prefix]bool{recorded: true}}
+		cfg := baseGatewayConfig("fhrp-sweep-datapath")
+		cfg.HostedServices = []string{ServiceFHRP}
+		cfg.Host = &HostRuntime{FHRPProgrammer: programmer, FHRPInventory: path}
+
+		require.NoError(t, start(t, cfg))
+		assert.Equal(t, []netip.Prefix{recorded}, programmer.Deleted())
+	})
+
+	t.Run("a datapath child cannot start on an unreadable inventory", func(t *testing.T) {
+		cfg := baseGatewayConfig("fhrp-sweep-datapath-unreadable")
+		cfg.HostedServices = []string{ServiceFHRP}
+		cfg.Host = &HostRuntime{FHRPProgrammer: &fakeFHRPProgrammer{}, FHRPInventory: unreadable(t)}
+
+		var startup *ErrStartupFailed
+		require.ErrorAs(t, start(t, cfg), &startup)
+	})
+}
 
 // validConfig is a gateway with one runnable service — the firewall on
 // the fake OVS runtime — so lifecycle tests exercise a real backed handler
@@ -746,6 +832,95 @@ func (h *registeredTestHandler) Start(ctx context.Context) error { h.active = tr
 func (h *registeredTestHandler) Stop(ctx context.Context) error  { h.active = false; return nil }
 func (h *registeredTestHandler) IsActive() bool                  { return h.active }
 func (h *registeredTestHandler) Health() error                   { return nil }
+
+// flakyStopHandler is a ServiceHandler whose Stop fails failStops times
+// before it succeeds.
+type flakyStopHandler struct {
+	name      string
+	active    bool
+	failStops int
+	stopCalls int
+}
+
+func (h *flakyStopHandler) Name() string                    { return h.name }
+func (h *flakyStopHandler) Start(ctx context.Context) error { h.active = true; return nil }
+func (h *flakyStopHandler) Stop(ctx context.Context) error {
+	h.stopCalls++
+	if h.failStops > 0 {
+		h.failStops--
+		return &ErrServiceUnavailable{Service: h.name, Reason: "test stop failure"}
+	}
+	h.active = false
+	return nil
+}
+func (h *flakyStopHandler) IsActive() bool { return h.active }
+func (h *flakyStopHandler) Health() error  { return nil }
+
+// startFlakyPair starts a gateway with handlers a then b.
+func startFlakyPair(t *testing.T, id string, a, b *flakyStopHandler) *Gateway {
+	t.Helper()
+	gw, err := NewGateway(baseGatewayConfig(id))
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	for _, h := range []*flakyStopHandler{a, b} {
+		if err := gw.RegisterServiceHandler(h); err != nil {
+			t.Fatalf("register %s: %v", h.name, err)
+		}
+	}
+	gw.SetNodeMetrics(validNodeMetrics())
+	if err := gw.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	return gw
+}
+
+// TestGatewayStopRetriesAfterAPartialFailure: a Stop that fails part-way
+// keeps only the services not yet stopped, so the next Stop starts with
+// the one that failed and never re-stops the ones already down.
+func TestGatewayStopRetriesAfterAPartialFailure(t *testing.T) {
+	t.Run("the later service fails", func(t *testing.T) {
+		a := &flakyStopHandler{name: "a"}
+		b := &flakyStopHandler{name: "b", failStops: 1}
+		gw := startFlakyPair(t, "stop-partial", a, b)
+
+		var shutdown *ErrShutdownFailed
+		if err := gw.Stop(context.Background()); !errors.As(err, &shutdown) {
+			t.Fatalf("first Stop = %v, want *ErrShutdownFailed", err)
+		}
+		if a.stopCalls != 0 {
+			t.Fatalf("a stopped %d times after b failed, want 0", a.stopCalls)
+		}
+		if err := gw.Stop(context.Background()); err != nil {
+			t.Fatalf("second Stop: %v", err)
+		}
+		if b.stopCalls != 2 || a.stopCalls != 1 {
+			t.Fatalf("stop calls b=%d a=%d, want b=2 a=1", b.stopCalls, a.stopCalls)
+		}
+		if got := gw.ActiveServices(); len(got) != 0 {
+			t.Fatalf("ActiveServices = %v, want none", got)
+		}
+	})
+
+	t.Run("the earlier service fails after the later one stopped", func(t *testing.T) {
+		a := &flakyStopHandler{name: "a", failStops: 1}
+		b := &flakyStopHandler{name: "b"}
+		gw := startFlakyPair(t, "stop-partial-earlier", a, b)
+
+		if err := gw.Stop(context.Background()); err == nil {
+			t.Fatal("first Stop succeeded, want a failure from a")
+		}
+		if got := gw.ActiveServices(); len(got) != 1 || got[0] != "a" {
+			t.Fatalf("ActiveServices after a failed = %v, want [a]", got)
+		}
+		if err := gw.Stop(context.Background()); err != nil {
+			t.Fatalf("second Stop: %v", err)
+		}
+		if b.stopCalls != 1 || a.stopCalls != 2 {
+			t.Fatalf("stop calls b=%d a=%d, want b=1 a=2", b.stopCalls, a.stopCalls)
+		}
+	})
+}
 
 func TestGateway_RegisterServiceHandler(t *testing.T) {
 	gw, err := NewGateway(validConfig())
