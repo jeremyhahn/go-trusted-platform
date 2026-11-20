@@ -68,5 +68,6 @@ describe('EAB credential detail', () => {
     expect(screen.getByTestId('eab-enrollment-url').textContent).toBe(response.url);
     expect(screen.getByText('Expires 2026-12-31T00:00:00Z')).toBeTruthy();
     expect(screen.queryByText(/Expires undefined/)).toBeNull();
+    expect(screen.getByText('Generated 2026-11-20T12:00:00Z')).toBeTruthy();
   });
 });
