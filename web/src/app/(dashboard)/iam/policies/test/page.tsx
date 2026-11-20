@@ -7,7 +7,7 @@
 
 import React, { useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, CheckCircle2, Loader2, XCircle } from "lucide-react";
+import { ArrowLeft, CheckCircle2, XCircle } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { usePolicyTools, splitList } from "@/hooks";
 import { Button } from "@/components/ui/button";
@@ -22,6 +22,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { EmbeddedIamGate } from "../../embedded-iam-gate";
 
 // Result shapes as the REST API sends them: camelCase or snake_case keys (#445).
 interface ValidateWire {
@@ -125,15 +126,8 @@ export default function PolicyTestPage() {
             />
           </div>
           <div className="flex justify-end">
-            <Button
-              onClick={() => {
-                if (tenantId) validate.mutate({ tenantId, specYaml });
-              }}
-              disabled={!tenantId || !specYaml || validate.isLoading}
-            >
-              {validate.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Validate
-            </Button>
+            {/* The embedded IAM backend has no Policy.Validate handler (#2024 Codex). */}
+            <EmbeddedIamGate method="Policy.Validate">Validate</EmbeddedIamGate>
           </div>
           {validate.isError && (
             <p className="text-sm text-destructive" role="alert">
@@ -194,23 +188,8 @@ export default function PolicyTestPage() {
             </div>
           </div>
           <div className="flex justify-end">
-            <Button
-              onClick={() => {
-                if (!tenantId) return;
-                test.mutate({
-                  tenantId,
-                  subjectId,
-                  action,
-                  resource,
-                  roles: splitList(roles),
-                  groups: splitList(groups),
-                });
-              }}
-              disabled={!tenantId || !subjectId || !action || !resource || test.isLoading}
-            >
-              {test.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Run Test
-            </Button>
+            {/* The embedded IAM backend has no Policy.Simulate handler (#2024 Codex). */}
+            <EmbeddedIamGate method="Policy.Simulate">Run Test</EmbeddedIamGate>
           </div>
           {test.isError && (
             <p className="text-sm text-destructive" role="alert">

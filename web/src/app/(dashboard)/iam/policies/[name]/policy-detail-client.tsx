@@ -8,12 +8,9 @@
  * URL pathname instead of `useParams()`.
  */
 
-import React, { useState } from 'react';
+import React from 'react';
 import { useParams, usePathname, useRouter } from 'next/navigation';
 import { ArrowLeft, Loader2, Pencil, Trash2 } from 'lucide-react';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import type { UpdateIAMPolicyRequest } from 'trusted-platform-sdk';
 import { resolveDynamicId } from '@/utils/dynamic-route';
 import { useAuth } from '@/contexts/AuthContext';
 import { useIAM, useApi, useMutation, useToast } from '@/hooks';
@@ -26,6 +23,7 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { EmbeddedIamGate } from '../../embedded-iam-gate';
 
 // Policy record as the REST API sends it: camelCase or snake_case keys (#445).
 interface PolicyWire {
@@ -48,11 +46,7 @@ export default function PolicyDetailClient() {
     resolveDynamicId(params, pathname, 'policies', 'name'),
   );
 
-  const [editing, setEditing] = useState(false);
-  const [draftDescription, setDraftDescription] = useState('');
-  const [draftPriority, setDraftPriority] = useState('0');
-
-  const { data: policy, isLoading, error, refetch } = useApi(
+  const { data: policy, isLoading, error } = useApi(
     () => {
       if (!tenantId) return Promise.reject(new Error('No tenant ID'));
       return iam.getPolicy(tenantId, policyName);
@@ -73,34 +67,6 @@ export default function PolicyDetailClient() {
       onError: (err) => {
         toast({
           title: 'Failed to delete policy',
-          description: err instanceof Error ? err.message : 'Unknown error',
-          variant: 'destructive',
-        });
-      },
-    },
-  );
-
-  const updateMutation = useMutation(
-    async () => {
-      if (!tenantId) throw new Error('No tenant ID');
-      // Metadata only: the IAM adapter rejects any spec YAML on update.
-      const request: UpdateIAMPolicyRequest = {
-        tenantId,
-        policyName,
-        description: draftDescription,
-        priority: Number(draftPriority) || 0,
-      };
-      return iam.updatePolicy(request);
-    },
-    {
-      onSuccess: () => {
-        toast({ title: 'Policy updated', variant: 'success' });
-        setEditing(false);
-        void refetch();
-      },
-      onError: (err) => {
-        toast({
-          title: 'Failed to update policy',
           description: err instanceof Error ? err.message : 'Unknown error',
           variant: 'destructive',
         });
@@ -146,17 +112,10 @@ export default function PolicyDetailClient() {
           <ArrowLeft className="h-4 w-4 mr-2" /> Back to Policies
         </Button>
         <div className="flex gap-2">
-          <Button
-            variant="outline"
-            disabled={editing}
-            onClick={() => {
-              setDraftDescription(p?.description ?? '');
-              setDraftPriority(String(p?.priority ?? 0));
-              setEditing(true);
-            }}
-          >
+          {/* The embedded IAM backend has no Policy.Update handler (#2024 Codex). */}
+          <EmbeddedIamGate method="Policy.Update" variant="outline">
             <Pencil className="h-4 w-4 mr-2" /> Edit
-          </Button>
+          </EmbeddedIamGate>
           <Button
             variant="destructive"
             disabled={deleteMutation.isLoading}
@@ -181,43 +140,6 @@ export default function PolicyDetailClient() {
           <CardDescription>{p?.description || 'No description'}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {editing && (
-            <div className="space-y-4 rounded-md border p-4">
-              <div className="space-y-2">
-                <Label htmlFor="policy-description">Description</Label>
-                <Input
-                  id="policy-description"
-                  value={draftDescription}
-                  onChange={(e) => setDraftDescription(e.target.value)}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="policy-priority">Priority</Label>
-                <Input
-                  id="policy-priority"
-                  type="number"
-                  value={draftPriority}
-                  onChange={(e) => setDraftPriority(e.target.value)}
-                />
-              </div>
-              <div className="flex justify-end gap-2">
-                <Button variant="outline" onClick={() => setEditing(false)}>
-                  Cancel
-                </Button>
-                <Button
-                  disabled={updateMutation.isLoading}
-                  onClick={() => {
-                    if (window.confirm(`Save changes to policy "${policyName}"?`)) {
-                      updateMutation.mutate(undefined);
-                    }
-                  }}
-                >
-                  {updateMutation.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                  Save
-                </Button>
-              </div>
-            </div>
-          )}
           <div>
             <h3 className="text-sm font-medium mb-2">Spec (YAML)</h3>
             <p className="text-xs text-muted-foreground mb-2">

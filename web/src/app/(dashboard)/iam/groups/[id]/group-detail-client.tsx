@@ -5,14 +5,6 @@ import { useState } from 'react';
 import { ArrowLeft, Loader2, Trash2, UserMinus, UserPlus } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
 import { resolveDynamicId } from '@/utils/dynamic-route';
 import { useAuth } from '@/contexts/AuthContext';
 import { useIAM, useApi, useMutation, useToast } from '@/hooks';
@@ -25,6 +17,7 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { EmbeddedIamGate } from '../../embedded-iam-gate';
 
 // Group record as the REST API sends it: camelCase or snake_case keys (#445).
 interface GroupWire {
@@ -80,7 +73,6 @@ export default function GroupDetailClient() {
   const [editDescription, setEditDescription] = useState<string | null>(null);
   const [newMember, setNewMember] = useState('');
   const [removeMember, setRemoveMember] = useState('');
-  const [pendingRemove, setPendingRemove] = useState<string | null>(null);
 
   const failToast = (title: string) => (err: unknown) => {
     toast({
@@ -101,37 +93,6 @@ export default function GroupDetailClient() {
         refetch();
       },
       onError: failToast('Failed to update group'),
-    },
-  );
-
-  const addMemberMutation = useMutation(
-    async (userId: string) => {
-      if (!tenantId) throw new Error('No tenant ID');
-      return iam.addGroupMember({ tenantId, groupId, userId });
-    },
-    {
-      onSuccess: () => {
-        toast({ title: 'Member added', variant: 'success' });
-        setNewMember('');
-        refetch();
-      },
-      onError: failToast('Failed to add member'),
-    },
-  );
-
-  const removeMemberMutation = useMutation(
-    async (userId: string) => {
-      if (!tenantId) throw new Error('No tenant ID');
-      return iam.removeGroupMember({ tenantId, groupId, userId });
-    },
-    {
-      onSuccess: () => {
-        toast({ title: 'Member removed', variant: 'success' });
-        setPendingRemove(null);
-        setRemoveMember('');
-        refetch();
-      },
-      onError: failToast('Failed to remove member'),
     },
   );
 
@@ -203,14 +164,15 @@ export default function GroupDetailClient() {
                 {members.map((m) => (
                   <li key={m} className="font-mono text-xs flex items-center gap-2">
                     <span>{m}</span>
-                    <Button
+                    <EmbeddedIamGate
+                      method="Group.RemoveMember"
+                      showReason={false}
                       size="sm"
                       variant="ghost"
                       aria-label={`Remove member ${m}`}
-                      onClick={() => setPendingRemove(m)}
                     >
                       <UserMinus className="h-4 w-4" />
-                    </Button>
+                    </EmbeddedIamGate>
                   </li>
                 ))}
               </ul>
@@ -218,10 +180,8 @@ export default function GroupDetailClient() {
           )}
           <form
             className="flex items-end gap-2"
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (newMember.trim()) addMemberMutation.mutate(newMember.trim());
-            }}
+            // The embedded IAM backend has no Group.AddMember handler (#2024 Codex).
+            onSubmit={(e) => e.preventDefault()}
           >
             <div className="space-y-2 flex-1">
               <Label htmlFor="group-new-member">User ID</Label>
@@ -231,17 +191,15 @@ export default function GroupDetailClient() {
                 onChange={(e) => setNewMember(e.target.value)}
               />
             </div>
-            <Button type="submit" disabled={addMemberMutation.isLoading || !newMember.trim()}>
+            <EmbeddedIamGate method="Group.AddMember">
               <UserPlus className="h-4 w-4 mr-2" /> Add member
-            </Button>
+            </EmbeddedIamGate>
           </form>
           {/* GET /groups/{id} carries no members list (groupToResponse), so removal goes by user ID. */}
           <form
             className="flex items-end gap-2"
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (removeMember.trim()) setPendingRemove(removeMember.trim());
-            }}
+            // The embedded IAM backend has no Group.RemoveMember handler (#2024 Codex).
+            onSubmit={(e) => e.preventDefault()}
           >
             <div className="space-y-2 flex-1">
               <Label htmlFor="group-remove-member">User ID to remove</Label>
@@ -251,13 +209,9 @@ export default function GroupDetailClient() {
                 onChange={(e) => setRemoveMember(e.target.value)}
               />
             </div>
-            <Button
-              type="submit"
-              variant="outline"
-              disabled={removeMemberMutation.isLoading || !removeMember.trim()}
-            >
+            <EmbeddedIamGate method="Group.RemoveMember" variant="outline">
               <UserMinus className="h-4 w-4 mr-2" /> Remove by user ID
-            </Button>
+            </EmbeddedIamGate>
           </form>
           {roles.length > 0 && (
             <div>
@@ -312,28 +266,6 @@ export default function GroupDetailClient() {
         </CardContent>
       </Card>
 
-      <Dialog open={pendingRemove !== null} onOpenChange={(open) => !open && setPendingRemove(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Remove member?</DialogTitle>
-            <DialogDescription>
-              Remove {pendingRemove} from group &quot;{g?.name || groupId}&quot;.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setPendingRemove(null)}>
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              disabled={removeMemberMutation.isLoading}
-              onClick={() => pendingRemove && removeMemberMutation.mutate(pendingRemove)}
-            >
-              Remove member
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
