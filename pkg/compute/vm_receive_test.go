@@ -176,13 +176,17 @@ type signalReceiver struct {
 	// transferring is what Transferring reports: an active migration
 	// stream renews the receiver lifetime.
 	transferring atomic.Bool
+	// completed marks a stream that finished and awaits finalize.
+	completed atomic.Bool
 	// vm is the receiving QEMU a commit hands over (never started).
 	vm *qemu.VM
 }
 
 func (s *signalReceiver) VM() *qemu.VM { return s.vm }
 
-func (s *signalReceiver) Transferring(context.Context) bool { return s.transferring.Load() }
+func (s *signalReceiver) Transferring(context.Context) bool {
+	return s.transferring.Load() || s.completed.Load()
+}
 
 func newSignalReceiver() *signalReceiver {
 	return &signalReceiver{abortedC: make(chan struct{})}
@@ -300,6 +304,33 @@ func TestReceiveIncoming_ActiveTransferRenewsTheLifetime(t *testing.T) {
 	recv.transferring.Store(false)
 	awaitSignal(t, recv.abortedC, "the idle receiver to be aborted")
 	awaitSignal(t, tlsProv.cleanedUp, "the idle receiver's creds to be released")
+}
+
+// A completed transfer that is never finalized (the source crashed after the
+// stream) gets a bounded finalization grace, not endless renewal: the receiver
+// is reaped and its creds released (#2021 Codex P1).
+func TestReceiveIncoming_CompletedTransferIsReapedAfterGrace(t *testing.T) {
+	swapReceiverLifetime(t, 20*time.Millisecond)
+	orch := newOpsOrchestrator(t)
+	tlsProv := newSignalServerTLS(t.TempDir())
+	orch.config.MigrationTLS = tlsProv
+
+	recv := newSignalReceiver()
+	recv.completed.Store(true)
+	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
+		return recv, nil
+	})
+
+	_, err := orch.ReceiveIncoming(context.Background(), MigrationSpec{
+		Arch:   orch.config.Arch,
+		VMName: "guest",
+		Config: &InstanceConfig{Memory: 1024},
+	})
+	require.NoError(t, err)
+
+	awaitSignal(t, recv.abortedC, "the completed, unfinalized receiver to be aborted")
+	awaitSignal(t, tlsProv.cleanedUp, "the completed receiver's creds to be released")
+	assert.Equal(t, int32(0), recv.commits.Load())
 }
 
 // newReceivedVM builds a qemu.VM that is never started, standing in for the
