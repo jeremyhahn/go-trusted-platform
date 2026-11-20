@@ -341,6 +341,24 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	if iamService != nil {
 		iamPEP = iamService.PEP()
 	}
+	// A client certificate acts as its IAM principal, with the permissions
+	// of that principal the IAM PEP allows, on QUIC, REST and MCP (#1107;
+	// SPEC 107-108: IAMPEPClient.Check decides every request).
+	if config.MTLSPrincipals == nil && iamService != nil {
+		if client := iamService.Client(); client != nil {
+			// The pinned embedded transport answers every IAM.PEP check
+			// "not configured": ask the app's policy engine when it has one.
+			certPEP, usesEngine := certificatePrincipalPEP(context.Background(), config.App.QuicBaaSService(), iamPEP)
+			if !usesEngine {
+				logger.Info("mTLS certificate principals use the IAM SDK PEP: no app policy engine available")
+			}
+			principals, principalsErr := newIAMCertificatePrincipals(client.User(), client.Role(), certPEP)
+			if principalsErr != nil {
+				return nil, principalsErr
+			}
+			config.MTLSPrincipals = principals
+		}
+	}
 
 	// Build the shared broker platform-token validator once when configured. It
 	// is reused across the gRPC, QUIC, and MCP inbound transports so all of them

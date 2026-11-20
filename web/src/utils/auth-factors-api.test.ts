@@ -1,7 +1,46 @@
 import { ErrorCode } from "trusted-platform-sdk";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { toApiResponse } from "./auth-factors-api";
+import { probeMTLS, toApiResponse } from "./auth-factors-api";
+
+describe("probeMTLS", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function answer(status: number) {
+    const fetchMock = vi.fn(() => Promise.resolve(new Response(null, { status })));
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("asks the webservice's probe route with a HEAD", async () => {
+    const fetchMock = answer(204);
+
+    expect(await probeMTLS()).toEqual({ status: "available" });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toMatch(/\/api\/v1\/auth\/mtls\/probe$/);
+    expect(init.method).toBe("HEAD");
+  });
+
+  it("reads 501 as a deployment that cannot sign in with a certificate (#201)", async () => {
+    answer(501);
+
+    expect(await probeMTLS()).toEqual({ status: "not-supported" });
+  });
+
+  it("reads 404 from a server without the route as not supported", async () => {
+    answer(404);
+
+    expect(await probeMTLS()).toEqual({ status: "not-supported" });
+  });
+
+  it("reads 401 as no client certificate", async () => {
+    answer(401);
+
+    expect(await probeMTLS()).toEqual({ status: "no-client-certificate" });
+  });
+});
 
 describe("toApiResponse", () => {
   it("carries the data of a successful result", () => {

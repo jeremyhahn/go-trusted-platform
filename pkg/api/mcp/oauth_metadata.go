@@ -118,6 +118,12 @@ func (h *OAuthMetadataHandler) getSupportedScopes() []string {
 	return advertisedScopes(toolPermissionCatalog())
 }
 
+// SupportedScopes returns the concrete scopes the MCP tool catalog requires,
+// sorted and distinct: the same list the OAuth metadata advertises.
+func SupportedScopes() []string {
+	return advertisedScopes(toolPermissionCatalog())
+}
+
 // advertisedScopes returns the sorted, deduplicated token scopes the given
 // tool permissions require. An open tool ("") requires no scope and a
 // malformed permission is not a scope a client can request; neither is

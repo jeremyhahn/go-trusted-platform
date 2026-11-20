@@ -91,6 +91,11 @@ type Config struct {
 	EnableMTLS       bool           // Enable mutual TLS client certificate authentication
 	MTLSClientCAFile string         // Path to CA certificate file for validating client certs
 	MTLSClientCAPool *x509.CertPool // Pre-loaded CA cert pool (takes precedence over MTLSClientCAFile)
+	// MTLSPrincipals maps a verified client certificate to its IAM principal
+	// and that principal's permissions on QUIC, REST and MCP (#1107). The
+	// daemon fills it from its IAM service when left nil; with neither, a
+	// client certificate is refused rather than granted a default scope.
+	MTLSPrincipals CertificatePrincipalResolver
 
 	// Service configurations
 	Services map[string]ServiceConfig

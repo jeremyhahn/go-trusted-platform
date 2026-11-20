@@ -16,12 +16,28 @@ package quicbaas
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	quicbaas "github.com/jeremyhahn/go-quicbaas/sdk/go"
 	baaserrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 )
+
+// TestErrNotFound_IsRecordNotFound pins that a DAO miss is a
+// datastore.ErrRecordNotFound, bare and wrapped, so callers that test for the
+// shared sentinel (the JWT revocation store) read a miss as a miss.
+func TestErrNotFound_IsRecordNotFound(t *testing.T) {
+	err := ErrNotFound{EntityType: "Blob", ID: 1}
+	assert.True(t, errors.Is(err, datastore.ErrRecordNotFound))
+	assert.True(t, errors.Is(fmt.Errorf("wrap: %w", err), datastore.ErrRecordNotFound))
+
+	var nf ErrNotFound
+	assert.True(t, errors.As(fmt.Errorf("wrap: %w", err), &nf))
+	assert.Equal(t, uint64(1), nf.ID)
+}
 
 func TestErrNotFound_Error(t *testing.T) {
 	err := ErrNotFound{EntityType: "User", ID: 12345}

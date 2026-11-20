@@ -50,6 +50,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/vtpm"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice"
 	v1 "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/adminclaim"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/jwt"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restiam "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/iam"
@@ -1194,8 +1195,15 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 		var fido2SDK quicbaassdk.FIDO2Client
 		var authSDK quicbaassdk.AuthService
 		var factorsSDK quicbaassdk.AuthFactorsClient
+		var adminClaimTxn adminclaim.TransactionExecutor
 		if App != nil {
 			if sdkClient := App.QuicBaaSSDKClient(); sdkClient != nil {
+				if txn := sdkClient.Transaction(); txn != nil {
+					probeCtx, probeCancel := context.WithTimeout(context.Background(), 15*time.Second)
+					adminClaimTxn = adminClaimTransactions(probeCtx,
+						isMultiInstanceDeployment(App.QuicBaaSConfig), txn, App.TenantID, logger)
+					probeCancel()
+				}
 				kmsSDK = sdkClient.Security().KMS()
 				cryptoSDK = sdkClient.Security().Crypto()
 				dekSDK = sdkClient.Security().DEK()
@@ -1268,6 +1276,7 @@ func runWithWebservices(cmd *cobra.Command, ctx context.Context, sigChan chan os
 			AdminTrustAnchorPath:      adminTrustAnchorPath,
 			AdminEmail:                App.AdminEmail,
 			AdminClaimMultiInstance:   isMultiInstanceDeployment(App.QuicBaaSConfig),
+			AdminClaimTransactions:    adminClaimTxn,
 			SDNEnrollmentHook:         sdnEnrollmentHook,
 			TenantManager:             daemonConfig.PlatformTenantManager,
 			PublicRegistrationEnabled: App.QuicBaaSConfig != nil && App.QuicBaaSConfig.SelfServiceRegistration.Active(),
@@ -1994,4 +2003,33 @@ func isMultiInstanceDeployment(cfg *platformquicbaas.Config) bool {
 		return true
 	}
 	return platformquicbaas.IsRoutableRaftAddress(cfg.RaftAddress)
+}
+
+// adminClaimTransactions returns the compare-and-swap client the
+// admin-claim completion lease runs on, or nil. Only a multi-instance
+// deployment needs the store-wide lease (#172); there it is wired only
+// once the store has answered a read-only probe, so a store that cannot
+// run the transaction keeps the ceremony refused up front rather than
+// failing it at the operator's last step. At the pinned SDK the
+// embedded transport does not yet carry transactions (go-quicbaas
+// #1319), and this is what keeps such a deployment refused.
+func adminClaimTransactions(
+	ctx context.Context,
+	multiInstance bool,
+	txn adminclaim.TransactionExecutor,
+	tenantID string,
+	logger *logging.Logger,
+) adminclaim.TransactionExecutor {
+	if !multiInstance || txn == nil {
+		return nil
+	}
+	if err := adminclaim.ProbeTransactions(ctx, txn, tenantID); err != nil {
+		if logger != nil {
+			logger.Warn("admin claim refused on this multi-instance deployment: "+
+				"the store's compare-and-swap did not answer, so completion cannot be made atomic",
+				"error", err)
+		}
+		return nil
+	}
+	return txn
 }

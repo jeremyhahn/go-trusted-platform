@@ -109,6 +109,7 @@ func (service *Service) IssueSession(identity *quicbaas.Identity) (string, time.
 		TenantID:  identity.TenantID,
 		Roles:     roles,
 		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        newTokenID(),
 			Subject:   identity.Subject,
 			Audience:  jwt.ClaimStrings{service.params.Audience},
 			Issuer:    service.params.Issuer,

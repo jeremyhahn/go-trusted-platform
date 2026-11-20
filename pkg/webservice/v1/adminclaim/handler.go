@@ -232,6 +232,20 @@ func (h *RestHandler) writeClaimError(w http.ResponseWriter, r *http.Request, er
 			Error:   err.Error(),
 			Success: false,
 		})
+	case ErrClaimInProgress:
+		// Another instance holds the completion lease right now.
+		h.responseWriter.Write(w, r, http.StatusConflict, restwire.WebServiceResponse{
+			Code:    http.StatusConflict,
+			Error:   err.Error(),
+			Success: false,
+		})
+	case ErrCompletionLockUnavailable:
+		h.logger.Error(err, "adminclaim: completion lease unavailable")
+		h.responseWriter.Write(w, r, http.StatusServiceUnavailable, restwire.WebServiceResponse{
+			Code:    http.StatusServiceUnavailable,
+			Error:   ErrCompletionLockUnavailable{}.Error(),
+			Success: false,
+		})
 	case ErrTooManyOutstanding:
 		h.responseWriter.Write(w, r, http.StatusTooManyRequests, restwire.WebServiceResponse{
 			Code:    http.StatusTooManyRequests,

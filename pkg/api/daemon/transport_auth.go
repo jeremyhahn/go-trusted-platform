@@ -197,7 +197,7 @@ func selectQUICAuth(config *Config, shared *platformTokenValidator, clientCAPool
 		}
 		logger.Info("QUIC server: mTLS authentication enabled")
 		opts := []quic.AuthMiddlewareOption{
-			quic.WithQUICPeerAuthenticator(mtlsPeerAuthenticator{authenticator: mtlsAuth}),
+			quic.WithQUICPeerAuthenticator(mtlsPeerAuthenticator{authenticator: mtlsAuth, principals: config.MTLSPrincipals}),
 			quic.WithQUICRequireAuth(true),
 		}
 		if shared != nil {
@@ -229,18 +229,16 @@ func selectQUICAuth(config *Config, shared *platformTokenValidator, clientCAPool
 	), local, nil
 }
 
-// mtlsOperatorScope is the grant of a principal authenticated by an mTLS
-// client certificate. The daemon's client CA pool admits only operator
-// certificates (the admin bundle /init issues), and gRPC and REST authorize
-// such a caller for every operation without a scope check, so QUIC grants the
-// same authority rather than refusing the operator its own platform.
-const mtlsOperatorScope = "*:*"
-
 // mtlsPeerAuthenticator turns the verified client certificate of a QUIC
 // connection or REST request into the principal it acts as, through the same
-// certificate authenticator the gRPC mTLS interceptor uses.
+// certificate authenticator the gRPC mTLS interceptor uses. The caller is
+// granted its IAM principal's permissions, never a default grant: a client
+// CA can issue more than operator certificates, so a verified chain proves
+// who the caller is, not what it may do (#1107). A certificate without a
+// resolvable principal is refused.
 type mtlsPeerAuthenticator struct {
 	authenticator auth.Authenticator
+	principals    CertificatePrincipalResolver
 }
 
 // AuthenticatePeer implements quic.PeerAuthenticator.
@@ -252,18 +250,26 @@ func (a mtlsPeerAuthenticator) AuthenticatePeer(ctx context.Context, chain []*x5
 	if err != nil {
 		return nil, err
 	}
+	if a.principals == nil {
+		return nil, ErrCertificatePrincipalUnresolved{Reason: "no IAM principal resolver is wired"}
+	}
+	principal, err := a.principals.ResolveCertificatePrincipal(ctx, identity)
+	if err != nil {
+		return nil, err
+	}
 	return &platformtoken.AuthorizedContext{
-		Subject:  identity.ID,
+		Subject:  principal.Subject,
 		Username: identity.Name,
-		TenantID: identity.TenantID,
-		Scopes:   []string{mtlsOperatorScope},
+		TenantID: principal.TenantID,
+		Scopes:   principal.Scopes,
+		Roles:    principal.Roles,
 	}, nil
 }
 
 // newRESTScopeGuard builds the guard that checks each daemon REST route's
 // scope. It accepts the same credentials as QUIC: a platform token through
 // the shared validator, else a client certificate verified against the mTLS
-// client CA pool, admitted as the operator. A credential with no verifier
+// client CA pool, granted its IAM principal's permissions. A credential with no verifier
 // configured is refused, so the guard never admits by default.
 func newRESTScopeGuard(config *Config, shared *platformTokenValidator, logger *logging.Logger) (*restapi.ScopeGuard, error) {
 	var tokens restapi.TokenAuthorizer
@@ -281,7 +287,7 @@ func newRESTScopeGuard(config *Config, shared *platformTokenValidator, logger *l
 		if authErr != nil {
 			return nil, ErrTLSConfigFailed{Reason: "REST mTLS auth: " + authErr.Error()}
 		}
-		peers = mtlsPeerAuthenticator{authenticator: mtlsAuth}
+		peers = mtlsPeerAuthenticator{authenticator: mtlsAuth, principals: config.MTLSPrincipals}
 	}
 	return restapi.NewScopeGuard(tokens, peers, logger.Slog()), nil
 }
@@ -304,7 +310,7 @@ func newMCPPeerAuthenticator(config *Config, logger *logging.Logger) (mcp.PeerAu
 		return nil, ErrTLSConfigFailed{Reason: "MCP mTLS auth: " + err.Error()}
 	}
 	logger.Info("MCP server: mTLS authentication enabled")
-	return mtlsPeerAuthenticator{authenticator: mtlsAuth}, nil
+	return mtlsPeerAuthenticator{authenticator: mtlsAuth, principals: config.MTLSPrincipals}, nil
 }
 
 // buildLocalTokenValidator builds the per-transport token validator from the
