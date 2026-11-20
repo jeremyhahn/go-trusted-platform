@@ -61,7 +61,8 @@ func TestCertificateMonitor_RevocationChecking(t *testing.T) {
 			cert := createTestCertificate(t, x509.Certificate{
 				SerialNumber: big.NewInt(12345),
 				Subject: pkix.Name{
-					Organization: []string{"tenant-1"},
+					OrganizationalUnit: []string{"tenant-1"},
+					Organization:       []string{"tenant-1"},
 				},
 			})
 

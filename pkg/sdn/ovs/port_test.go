@@ -24,7 +24,7 @@ import (
 )
 
 func setupPortTest(t *testing.T) (*Client, *mockOVSDBServer) {
-	tmpDir := t.TempDir()
+	tmpDir := shortSocketDir(t)
 	socketPath := filepath.Join(tmpDir, "db.sock")
 
 	server, err := newMockOVSDBServer(t, socketPath)
@@ -90,7 +90,7 @@ func TestClient_AddPort(t *testing.T) {
 	})
 
 	t.Run("add port when not connected", func(t *testing.T) {
-		disconnectedClient, err := NewClient(filepath.Join(t.TempDir(), "disconnected.sock"))
+		disconnectedClient, err := NewClient(filepath.Join(shortSocketDir(t), "disconnected.sock"))
 		require.NoError(t, err)
 
 		_, err = disconnectedClient.AddPort(ctx, "br-port-test", "eth-fail")
@@ -210,7 +210,7 @@ func TestClient_GetPort(t *testing.T) {
 	})
 
 	t.Run("get port when not connected", func(t *testing.T) {
-		disconnectedClient, err := NewClient(filepath.Join(t.TempDir(), "disconnected.sock"))
+		disconnectedClient, err := NewClient(filepath.Join(shortSocketDir(t), "disconnected.sock"))
 		require.NoError(t, err)
 
 		_, err = disconnectedClient.GetPort(ctx, "eth-get")

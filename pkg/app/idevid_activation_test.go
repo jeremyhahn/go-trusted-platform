@@ -48,6 +48,9 @@ const (
 	activationIP     = "10.0.0.5"
 	activationPort   = "port1"
 	admittedVLAN     = 200
+	// activationTenant is the subject OU of the IDevID certificate: a device
+	// certificate carries its tenant there (#2003).
+	activationTenant = "tenant-a"
 )
 
 // newIDevIDApp returns a device App whose TPM holds the simulator IDevID, with
@@ -210,7 +213,7 @@ func TestDeviceActivation_IDevIDOverMTLS(t *testing.T) {
 	require.NoError(t, err)
 
 	platformCA := newTestIssuer(t)
-	cert := platformCA.issueClient(t, activationSerial, pub)
+	cert := platformCA.issueClient(t, activationSerial, pub, activationTenant)
 
 	t.Run("the IDevID activates the device", func(t *testing.T) {
 		server := newActivationServer(t, platformCA, platformCA)
@@ -256,11 +259,25 @@ func TestDeviceActivation_IDevIDOverMTLS(t *testing.T) {
 		server := newActivationServer(t, platformCA, platformCA)
 		server.enroll(t, cert)
 
-		foreign := newTestIssuer(t).issueClient(t, activationSerial, pub)
+		foreign := newTestIssuer(t).issueClient(t, activationSerial, pub, activationTenant)
 		client, err := app.newIDevIDClient(server.srv.URL, foreign, server.serverPool())
 		require.NoError(t, err)
 		_, err = client.Activate(context.Background())
 		require.ErrorIs(t, err, provisioning.ErrConnectionFailed)
+
+		server.requirePortState(t, policy.PortStateEnrolled)
+	})
+
+	t.Run("an IDevID certificate without a tenant OU is a 403 and changes nothing", func(t *testing.T) {
+		noOU := platformCA.issueClient(t, activationSerial, pub)
+		server := newActivationServer(t, platformCA, platformCA)
+		server.enroll(t, noOU)
+
+		client, err := app.newIDevIDClient(server.srv.URL, noOU, server.serverPool())
+		require.NoError(t, err)
+		_, err = client.Activate(context.Background())
+		require.ErrorIs(t, err, provisioning.ErrServerError)
+		assert.ErrorContains(t, err, "server returned status 403")
 
 		server.requirePortState(t, policy.PortStateEnrolled)
 	})
@@ -277,7 +294,7 @@ func TestFetchProfileAndActivate_IDevIDOverMTLS(t *testing.T) {
 	require.NoError(t, err)
 
 	platformCA := newTestIssuer(t)
-	cert := platformCA.issueClient(t, activationSerial, pub)
+	cert := platformCA.issueClient(t, activationSerial, pub, activationTenant)
 
 	// The simulated TPM has no certificate store, so the enrolled IDevID
 	// certificate is served the way the store would after enrollment.
