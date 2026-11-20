@@ -232,6 +232,12 @@ func selectQUICAuth(config *Config, shared *platformTokenValidator, pep quicbaas
 			Reason:    "tokens without scope claims need the IAM policy enforcement point to be authorized: " + err.Error(),
 		}
 	}
+	// The embedded quicbaas SDK PEP (the default deployment) cannot decide a
+	// Check, so every classified request would fail with an internal error:
+	// refuse the listener at startup, as gRPC does (PR #2000 review).
+	if config.quicbaasEmbedded() {
+		return nil, nil, ErrEmbeddedPEPUnavailable{Transport: transportQUIC}
+	}
 	return quic.NewAuthMiddleware(
 		quic.WithQUICTokenValidator(local),
 		quic.WithQUICAuthorizationChecker(authorizer),
