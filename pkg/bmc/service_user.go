@@ -22,20 +22,41 @@ import (
 // userManagerFor builds a ManagedUserManager for the given profile by
 // opening a fresh IPMI 2.0 RMCP+ session against the BMC. Callers MUST
 // Close the returned manager when finished to release the session.
-func (s *Service) userManagerFor(ctx context.Context, profileID uint64) (ManagedUserManager, error) {
+func (s *Service) userManagerFor(ctx context.Context, profileID uint64) (ManagedUserManager, *Config, error) {
 	if s.profiles == nil {
-		return nil, ErrProfileNotFound{ProfileID: profileID}
+		return nil, nil, ErrProfileNotFound{ProfileID: profileID}
 	}
 	cfg, err := s.profiles.Get(ctx, profileID)
 	if err != nil {
-		return nil, ErrProfileNotFound{ProfileID: profileID}
+		return nil, nil, ErrProfileNotFound{ProfileID: profileID}
 	}
-	return NewUserManager(ctx, cfg, s.logger)
+	mgr, err := NewUserManager(ctx, cfg, s.logger)
+	if err != nil {
+		return nil, nil, err
+	}
+	return mgr, cfg, nil
+}
+
+// refuseConnectionAccount returns ErrConnectionAccount when the user in slot
+// is the account the profile itself connects with: changing its password or
+// deleting it would leave the stored profile credential unable to
+// authenticate, so every later request on the profile would fail.
+func refuseConnectionAccount(ctx context.Context, mgr ManagedUserManager, cfg *Config, profileID uint64, slot uint8) error {
+	users, err := mgr.ListUsers(ctx)
+	if err != nil {
+		return err
+	}
+	for _, u := range users {
+		if u.Slot == slot && u.Username == cfg.Username {
+			return ErrConnectionAccount{ProfileID: profileID, Slot: slot}
+		}
+	}
+	return nil
 }
 
 // ListUsers returns the populated BMC user slots for the given profile.
 func (s *Service) ListUsers(ctx context.Context, profileID uint64) ([]User, error) {
-	mgr, err := s.userManagerFor(ctx, profileID)
+	mgr, _, err := s.userManagerFor(ctx, profileID)
 	if err != nil {
 		return nil, err
 	}
@@ -48,7 +69,7 @@ func (s *Service) ListUsers(ctx context.Context, profileID uint64) ([]User, erro
 // duration of the call; callers should pass an empty string for
 // name-only entries. Most BMCs reject empty-password users.
 func (s *Service) CreateUser(ctx context.Context, profileID uint64, user User, password string) error {
-	mgr, err := s.userManagerFor(ctx, profileID)
+	mgr, _, err := s.userManagerFor(ctx, profileID)
 	if err != nil {
 		return err
 	}
@@ -62,21 +83,27 @@ func (s *Service) CreateUser(ctx context.Context, profileID uint64, user User, p
 
 // DeleteUser removes the BMC user at the given slot.
 func (s *Service) DeleteUser(ctx context.Context, profileID uint64, slot uint8) error {
-	mgr, err := s.userManagerFor(ctx, profileID)
+	mgr, cfg, err := s.userManagerFor(ctx, profileID)
 	if err != nil {
 		return err
 	}
 	defer mgr.Close()
+	if err := refuseConnectionAccount(ctx, mgr, cfg, profileID, slot); err != nil {
+		return err
+	}
 	return mgr.DeleteUser(ctx, slot)
 }
 
 // SetUserPassword updates the password for the BMC user at the given slot.
 func (s *Service) SetUserPassword(ctx context.Context, profileID uint64, slot uint8, password string) error {
-	mgr, err := s.userManagerFor(ctx, profileID)
+	mgr, cfg, err := s.userManagerFor(ctx, profileID)
 	if err != nil {
 		return err
 	}
 	defer mgr.Close()
+	if err := refuseConnectionAccount(ctx, mgr, cfg, profileID, slot); err != nil {
+		return err
+	}
 
 	pwSecret := memguard.NewMemoryEnclaveFromString(password)
 	defer pwSecret.Destroy()
@@ -88,7 +115,7 @@ func (s *Service) SetUserPassword(ctx context.Context, profileID uint64, slot ui
 // given slot. The channel argument selects the IPMI logical channel;
 // pass 0 to use the package default LAN channel.
 func (s *Service) SetUserPrivilege(ctx context.Context, profileID uint64, slot, channel uint8, privilege Privilege) error {
-	mgr, err := s.userManagerFor(ctx, profileID)
+	mgr, _, err := s.userManagerFor(ctx, profileID)
 	if err != nil {
 		return err
 	}
