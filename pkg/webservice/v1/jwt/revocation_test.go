@@ -15,13 +15,21 @@ package jwt
 
 import (
 	"context"
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"math/big"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	qbstore "github.com/jeremyhahn/go-trusted-platform/pkg/storage/quicbaas"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
@@ -178,6 +186,68 @@ func TestRevocation_PersistsAcrossStoresOverTheSameBackend(t *testing.T) {
 	require.ErrorIs(t, verifyString(other, bearer), ErrTokenRevoked,
 		"another instance over the same store refuses the signed-out token")
 	require.NoError(t, verifyString(other, kept), "a session that was not signed out stays valid")
+}
+
+// A token issued before jti existed is keyed by what was signed, not by its
+// signature: ECDSA signatures are malleable ((r, s) -> (r, N-s) verifies
+// without the key), so a copy with the other signature must stay revoked.
+func TestRevocation_LegacyTokenWithMalleatedSignatureStaysRevoked(t *testing.T) {
+	t.Parallel()
+	params, ks := testServiceParamsWithXKMS()
+	params.KeyAttrs = &xkmssdk.KeyAttributes{
+		CN:                 "ES256-legacy",
+		Hash:               crypto.SHA256,
+		KeyAlgorithm:       x509.ECDSA,
+		KeyType:            xkmssdk.KeyTypeTLS,
+		SignatureAlgorithm: x509.ECDSAWithSHA256,
+		StoreType:          xkmssdk.StoreSoftware,
+		ECCAttributes:      &xkmssdk.ECCAttributes{Curve: elliptic.P256()},
+	}
+	_, err := ks.GenerateKey(context.Background(), params.KeyAttrs)
+	require.NoError(t, err)
+	blobs := &memoryBlobs{}
+	params.Revocations = NewBlobRevocationStore(blobs)
+	issuer, err := NewService(context.Background(), params)
+	require.NoError(t, err)
+	params.Revocations = NewBlobRevocationStore(blobs)
+	other, err := NewService(context.Background(), params)
+	require.NoError(t, err)
+	pub, ok := issuer.PublicKey().(*ecdsa.PublicKey)
+	require.True(t, ok, "the test key is ECDSA")
+
+	now := time.Now()
+	legacy, err := jwt.NewWithClaims(issuer.signingMethod, TokenClaims{
+		UID: "7", TenantID: "default",
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   "7",
+			Audience:  jwt.ClaimStrings{"localhost"},
+			Issuer:    "localhost",
+			IssuedAt:  jwt.NewNumericDate(now),
+			NotBefore: jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
+		},
+	}).SignedString(issuer.signer)
+	require.NoError(t, err)
+
+	dot := strings.LastIndex(legacy, ".")
+	raw, err := base64.RawURLEncoding.DecodeString(legacy[dot+1:])
+	require.NoError(t, err)
+	size := (pub.Curve.Params().BitSize + 7) / 8
+	require.Len(t, raw, 2*size, "a JWS ECDSA signature is r||s")
+	s := new(big.Int).SetBytes(raw[size:])
+	flipped := new(big.Int).Sub(pub.Curve.Params().N, s).FillBytes(make([]byte, size))
+	malleated := legacy[:dot+1] + base64.RawURLEncoding.EncodeToString(append(slices.Clone(raw[:size]), flipped...))
+	require.NotEqual(t, legacy, malleated)
+	require.NoError(t, verifyString(other, malleated), "the malleated signature verifies")
+
+	token, err := issuer.ParseTokenString(legacy)
+	require.NoError(t, err)
+	require.NoError(t, issuer.Revoke(token))
+
+	require.ErrorIs(t, verifyString(issuer, legacy), ErrTokenRevoked)
+	require.ErrorIs(t, verifyString(issuer, malleated), ErrTokenRevoked,
+		"a malleated copy of a signed-out legacy token is refused")
+	require.ErrorIs(t, verifyString(other, malleated), ErrTokenRevoked)
 }
 
 // The sweep removes expired revocation records and nothing else: not a
