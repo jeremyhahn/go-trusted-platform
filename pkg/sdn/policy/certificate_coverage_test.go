@@ -79,18 +79,18 @@ func TestX509PolicyExtractor_ExtractACLsDefaultBehaviour(t *testing.T) {
 	assert.Equal(t, 100, acls[0].Priority)
 }
 
-// TestX509PolicyExtractor_ExtractTenantIDFromExtension tests org/CN fallbacks.
+// TestX509PolicyExtractor_ExtractTenantIDFromExtension checks there is no
+// org fallback for the tenant (SPEC row 122).
 func TestX509PolicyExtractor_ExtractTenantIDFromExtension(t *testing.T) {
 	t.Parallel()
 	e := NewX509PolicyExtractor()
 
-	t.Run("fallback to org", func(t *testing.T) {
+	t.Run("no fallback to org", func(t *testing.T) {
 		cert := selfSignedCert(t, x509.Certificate{
 			Subject: pkix.Name{Organization: []string{"tenant-ext-123"}},
 		})
-		tid, err := e.ExtractTenantID(cert)
-		require.NoError(t, err)
-		assert.Equal(t, "tenant-ext-123", tid)
+		_, err := e.ExtractTenantID(cert)
+		assert.ErrorIs(t, err, ErrMissingTenantID)
 	})
 
 	t.Run("missing returns error", func(t *testing.T) {
@@ -133,7 +133,7 @@ func TestIsZoneDeclared_Private(t *testing.T) {
 	require.NoError(t, err)
 
 	cert := selfSignedCert(t, x509.Certificate{
-		Subject:         pkix.Name{Organization: []string{"org"}},
+		Subject:         pkix.Name{OrganizationalUnit: []string{"org"}, Organization: []string{"org"}},
 		ExtraExtensions: []pkix.Extension{ext},
 	})
 

@@ -97,6 +97,20 @@ func (e *ErrNoZoneNetworks) Error() string {
 	return "gatewayd: service " + e.Service + " requires sdn.environment so every zone has a VLAN; an empty zone matrix would enforce nothing"
 }
 
+// ErrVPNHubZoneUnenforced is returned when the configuration names a
+// WireGuard hub but the hub has no destination-zone enforcement yet (#1698):
+// the wireguard child fails its start rather than report a healthy child
+// whose every peer install is refused (Codex #2029 round 3 P1).
+type ErrVPNHubZoneUnenforced struct {
+	// KeyRef is the hub's configured key reference.
+	KeyRef string
+}
+
+// Error implements the error interface.
+func (e *ErrVPNHubZoneUnenforced) Error() string {
+	return "gatewayd: the WireGuard hub " + e.KeyRef + " is configured but has no destination-zone enforcement yet; the wireguard process does not start it"
+}
+
 // ErrOVSClientInit wraps an OVS client or flow-controller construction
 // failure.
 type ErrOVSClientInit struct {

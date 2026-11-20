@@ -19,6 +19,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/quic"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/attestation/manifest"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // attestationQUICAdapter serves the daemon-native QUIC attestation opcodes
@@ -48,6 +49,45 @@ func (a *attestationQUICAdapter) GetManifest(ctx context.Context, id string) (*m
 		return nil, ErrQUICAttestationRefused{Op: "GetManifest", Cause: err}
 	}
 	return a.grpc.protoToHostManifest(resp.GetManifest()), nil
+}
+
+// ListManifests lists stored manifests through the gRPC servicer's
+// ListManifests (#1686); zero time bounds stay unset.
+func (a *attestationQUICAdapter) ListManifests(ctx context.Context, filter *quic.AttestationListManifestsFilter) ([]*manifest.HostManifest, int, error) {
+	req := &platformv1.ListManifestsRequest{}
+	if filter != nil {
+		req.HostId = filter.HostID
+		if filter.Limit > 0 {
+			req.Limit = uint32(filter.Limit)
+		}
+		if filter.Offset > 0 {
+			req.Offset = uint32(filter.Offset)
+		}
+		if !filter.StartTime.IsZero() {
+			req.StartTime = timestamppb.New(filter.StartTime)
+		}
+		if !filter.EndTime.IsZero() {
+			req.EndTime = timestamppb.New(filter.EndTime)
+		}
+	}
+	resp, err := a.grpc.ListManifests(ctx, req)
+	if err != nil {
+		return nil, 0, ErrQUICAttestationRefused{Op: "ListManifests", Cause: err}
+	}
+	out := make([]*manifest.HostManifest, 0, len(resp.GetManifests()))
+	for _, m := range resp.GetManifests() {
+		out = append(out, a.grpc.protoToHostManifest(m))
+	}
+	return out, int(resp.GetTotal()), nil
+}
+
+// DeleteManifest deletes one stored manifest through the gRPC servicer's
+// DeleteManifest (#1686).
+func (a *attestationQUICAdapter) DeleteManifest(ctx context.Context, id string) error {
+	if _, err := a.grpc.DeleteManifest(ctx, &platformv1.DeleteManifestRequest{Id: id}); err != nil {
+		return ErrQUICAttestationRefused{Op: "DeleteManifest", Cause: err}
+	}
+	return nil
 }
 
 // BuildManifest builds (and, when asked, signs) a manifest through BuildManifest.
