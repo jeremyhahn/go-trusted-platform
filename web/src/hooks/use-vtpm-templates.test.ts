@@ -49,4 +49,23 @@ describe("bundleToWire", () => {
     expect(w.manifest?.cloned_from).toBe("bundle-0");
     expect(w.manifest?.labels).toEqual({ env: "dev" });
   });
+
+  // #2023 Codex r2: importBundle resolves with SDK BundleMode names; the
+  // list, get and clone results carry the wire names, so imports must too.
+  it("converts SDK bundle modes to their wire names", () => {
+    const sdkBundle = {
+      ...(bundle as unknown as Record<string, unknown>),
+      mode: "PRE_ASSIGNED",
+      manifest: { ...(bundle.manifest as unknown as Record<string, unknown>), mode: "PRE_ASSIGNED" },
+    } as unknown as VTPMBundle;
+    const w = bundleToWire(sdkBundle);
+
+    expect(w.mode).toBe("pre-assigned");
+    expect(w.manifest?.mode).toBe("pre-assigned");
+  });
+
+  it("maps the TEMPLATE mode to template", () => {
+    const sdkBundle = { ...(bundle as unknown as Record<string, unknown>), mode: "TEMPLATE" } as unknown as VTPMBundle;
+    expect(bundleToWire(sdkBundle).mode).toBe("template");
+  });
 });

@@ -173,3 +173,60 @@ describe("AdminTenantsPage find by name", () => {
     expect(screen.getByTestId("action-result").textContent).toBe("");
   });
 });
+
+// #2023 Codex r2: the Create tenant form sends exactly the typed name and
+// display name, refreshes the list on success, and on a refusal shows the
+// error and keeps what was typed.
+describe("AdminTenantsPage create", () => {
+  async function fillAndCreate(name: string, displayName: string) {
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Name"), { target: { value: name } });
+      fireEvent.change(screen.getByLabelText("Display name"), { target: { value: displayName } });
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    });
+  }
+
+  beforeEach(() => {
+    for (const fn of Object.values(tenantSvc)) fn.mockReset();
+    apiResult.data = { tenants: [...initialTenants], total: initialTenants.length };
+    apiResult.refetch.mockReset();
+    apiResult.refetch.mockResolvedValue(undefined);
+  });
+  afterEach(() => cleanup());
+
+  it("sends exactly the typed name and display name", async () => {
+    tenantSvc.createTenant.mockResolvedValue({ success: true, data: {} });
+    render(<AdminTenantsPage />);
+    await fillAndCreate("gamma", "Gamma Corp");
+    expect(tenantSvc.createTenant).toHaveBeenCalledTimes(1);
+    expect(tenantSvc.createTenant).toHaveBeenCalledWith({ name: "gamma", displayName: "Gamma Corp" });
+  });
+
+  it("refreshes the list and clears the form after a successful create", async () => {
+    tenantSvc.createTenant.mockResolvedValue({ success: true, data: {} });
+    const created = { id: "t-3", name: "gamma", displayName: "Gamma Corp", state: 1 };
+    apiResult.refetch.mockImplementation(async () => {
+      apiResult.data = { tenants: [...initialTenants, created], total: 3 };
+    });
+    render(<AdminTenantsPage />);
+    await fillAndCreate("gamma", "Gamma Corp");
+    expect(apiResult.refetch).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("action-result").textContent).toBe("Created tenant gamma");
+    expect(screen.getByTestId("tenant-row-t-3")).toBeTruthy();
+    expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("Display name") as HTMLInputElement).value).toBe("");
+  });
+
+  it("shows the error and keeps the inputs when the create is refused", async () => {
+    tenantSvc.createTenant.mockResolvedValue({ success: false, error: { message: "tenant name taken" } });
+    render(<AdminTenantsPage />);
+    await fillAndCreate("alpha", "Alpha Again");
+    expect(tenantSvc.createTenant).toHaveBeenCalledWith({ name: "alpha", displayName: "Alpha Again" });
+    expect(screen.getByTestId("action-result").textContent).toBe("tenant name taken");
+    expect(apiResult.refetch).not.toHaveBeenCalled();
+    expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("alpha");
+    expect((screen.getByLabelText("Display name") as HTMLInputElement).value).toBe("Alpha Again");
+  });
+});
