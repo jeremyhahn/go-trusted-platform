@@ -15,10 +15,13 @@ package daemon
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -2359,6 +2362,7 @@ func (w *quicbaasServiceWrapper) ValidateToken(ctx context.Context, token string
 	return &mcp.TokenValidationResult{
 		Valid:     resp.Valid,
 		UserID:    resp.UserID,
+		TenantID:  resp.TenantID,
 		Roles:     resp.Roles,
 		ExpiresAt: resp.ExpiresAt,
 	}, nil
@@ -2378,13 +2382,42 @@ func (a *quicbaasServiceAdapter) ValidateToken(ctx context.Context, req *quicbaa
 		return nil, err
 	}
 
-	return &quicbaas.ValidateTokenResponse{
+	out := &quicbaas.ValidateTokenResponse{
 		Valid:     resp.Valid,
 		UserID:    resp.UserID,
 		Username:  resp.Username,
 		Roles:     resp.Roles,
 		ExpiresAt: resp.ExpiresAt,
-	}, nil
+	}
+	// The service response carries no tenant, so read it from the token
+	// the service has just verified; an unverified token names none.
+	if resp.Valid {
+		out.TenantID = verifiedTokenTenant(req.AccessToken)
+	}
+	return out, nil
+}
+
+// verifiedTokenTenant returns the tenant_id claim of a JWT access token the
+// QuicBaaS service has already verified. It does not verify the token
+// itself: call it only after the service accepted the token. An opaque
+// token, a malformed payload or a token naming no tenant yields "".
+func verifiedTokenTenant(token string) string {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return ""
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return ""
+	}
+	var claims struct {
+		TenantID interface{} `json:"tenant_id"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return ""
+	}
+	tid, _ := claims.TenantID.(string)
+	return tid
 }
 
 // =============================================================================
