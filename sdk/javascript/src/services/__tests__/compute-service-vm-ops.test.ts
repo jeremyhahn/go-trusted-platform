@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { ApiClient } from '../../client/api-client.js';
+import { ApiClient } from '../../client/api-client.js';
 import { ComputeService } from '../compute-service.js';
 
 function createMockApiClient(): ApiClient {
@@ -96,5 +96,40 @@ describe('ComputeService VM operations', () => {
   it('migrateVM without options passes no request options', async () => {
     await service.migrateVM({ vmId: 'vm-1', destinationHost: 'dest', liveMigration: false });
     expect(vi.mocked(mockClient.post).mock.calls[0]![2]).toBeUndefined();
+  });
+});
+
+/** A real ApiClient whose transport loses the first response after the server acted. */
+function lossyClient(): { client: ApiClient; fetchImpl: ReturnType<typeof vi.fn> } {
+  const fetchImpl = vi
+    .fn()
+    .mockRejectedValueOnce(new TypeError('network error: response lost after the server acted'))
+    .mockResolvedValue(
+      new Response(JSON.stringify({ success: true, payload: { id: 'vm-1' } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    );
+  const client = new ApiClient({
+    baseUrl: 'https://platform.test/api/v1',
+    fetch: fetchImpl as unknown as typeof fetch,
+    retry: { maxRetries: 3, initialDelayMs: 1, maxDelayMs: 1 },
+  });
+  return { client, fetchImpl };
+}
+
+describe('ComputeService suspend/resume send one request', () => {
+  it('suspendVM does not resend when the first response is lost', async () => {
+    const { client, fetchImpl } = lossyClient();
+    const response = await new ComputeService(client).suspendVM('vm-1');
+    expect(response.success).toBe(false);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('resumeVM does not resend when the first response is lost', async () => {
+    const { client, fetchImpl } = lossyClient();
+    const response = await new ComputeService(client).resumeVM('vm-1');
+    expect(response.success).toBe(false);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });
