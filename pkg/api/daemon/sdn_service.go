@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"sort"
 	"strconv"
 	"strings"
@@ -1334,6 +1335,15 @@ func normalizeFlowMatch(match string) string {
 			}
 			if n, err := strconv.ParseUint(v, 0, 64); err == nil {
 				v = strconv.FormatUint(n, 10)
+			} else if _, prefix, err := net.ParseCIDR(v); err == nil {
+				// The OpenFlow encoder writes a prefix's masked network
+				// (10.0.0.1/24 and 10.0.0.0/24 are one switch entry), and
+				// a full-length prefix is the plain address.
+				if ones, bits := prefix.Mask.Size(); ones == bits {
+					v = prefix.IP.String()
+				} else {
+					v = prefix.String()
+				}
 			}
 			part = k + "=" + v
 		}

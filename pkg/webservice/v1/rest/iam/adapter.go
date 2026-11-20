@@ -432,15 +432,12 @@ func (a *QuicBaaSIAMAdapter) TestPolicy(ctx context.Context, tenantID string, re
 	if req == nil {
 		return nil, errors.New("test policy request is required")
 	}
-	// The REST shape describes one inline check (subject, action, resource,
-	// context) against the tenant's whole policy set, which is the SDK's
-	// Simulate. Policy.Test needs a named policy and cannot serve it.
-	var contextMap map[string]interface{}
-	if len(req.Context) > 0 {
-		contextMap = make(map[string]interface{}, len(req.Context))
-		for k, v := range req.Context {
-			contextMap[k] = v
-		}
+	// The QuicBaaS SDK runs test cases against a named policy. The REST
+	// shape only describes a single inline check; wrap it as a one-element
+	// test case so the underlying engine evaluates the same scenario.
+	contextMap := make(map[string]interface{}, len(req.Context))
+	for k, v := range req.Context {
+		contextMap[k] = v
 	}
 	subject := iamsdk.Subject{
 		ID:       req.SubjectID,
@@ -448,40 +445,32 @@ func (a *QuicBaaSIAMAdapter) TestPolicy(ctx context.Context, tenantID string, re
 		Roles:    req.Roles,
 		Groups:   req.Groups,
 	}
-	if len(req.Attributes) > 0 {
-		subject.Attributes = make(map[string]interface{}, len(req.Attributes))
-		for k, v := range req.Attributes {
-			subject.Attributes[k] = v
-		}
+	sdkReq := &iamsdk.TestPolicyRequest{
+		TestCases: []iamsdk.TestCase{{
+			Name:     "rest-inline",
+			Subject:  subject,
+			Action:   req.Action,
+			Resource: req.Resource,
+			Context:  contextMap,
+		}},
 	}
-	resp, err := a.client.Policy().Simulate(ctx, tenantID, &iamsdk.SimulateRequest{
-		Subject:  subject,
-		Action:   req.Action,
-		Resource: req.Resource,
-		Context:  contextMap,
-	})
+	resp, err := a.client.Policy().Test(ctx, tenantID, sdkReq)
 	if err != nil {
-		return nil, simulateError(err)
+		return nil, err
 	}
-	return testPolicyResponseFromSimulate(resp), nil
+	return testPolicyResponseFromSDK(resp), nil
 }
 
-// testPolicyResponseFromSimulate maps the SDK's simulation result to the REST
-// shape: the first matched policy and rule name the decision's source. A nil
-// response is a denial with no match.
-func testPolicyResponseFromSimulate(resp *iamsdk.SimulateResponse) *TestPolicyResponse {
+// testPolicyResponseFromSDK maps the inline case's result to the REST shape.
+// Allowed is the actual authorization decision: the SDK's Passed only says
+// whether the case met its expected result, so a passing deny case is denied.
+func testPolicyResponseFromSDK(resp *iamsdk.TestPolicyResponse) *TestPolicyResponse {
 	out := &TestPolicyResponse{}
-	if resp == nil {
-		return out
+	if len(resp.Results) > 0 {
+		first := resp.Results[0]
+		out.MatchedRule = first.MatchedRule
+		out.Allowed = first.ActualResult == iamsdk.EffectAllow
 	}
-	out.Allowed = resp.Allowed
-	if len(resp.MatchedPolicies) > 0 {
-		out.MatchedPolicy = resp.MatchedPolicies[0]
-	}
-	if len(resp.MatchedRules) > 0 {
-		out.MatchedRule = resp.MatchedRules[0]
-	}
-	out.EvaluationTimeNs = resp.EvaluationTimeNs
 	return out
 }
 
