@@ -145,7 +145,7 @@ describe('useKmsOps batch and rewrap (#2057)', () => {
     expect(result.current.error).toBe('key disabled');
   });
 
-  it('rewrap posts the ciphertext to /rewrap/{name}', async () => {
+  it('rewrap posts the ciphertext to /keys/{name}/rewrap', async () => {
     const seen = stubFetch(() => ({
       status: 200,
       json: { key_id: 'k/1', old_version: 1, new_version: 2, ciphertext: 'Zm9v' },
@@ -156,7 +156,7 @@ describe('useKmsOps batch and rewrap (#2057)', () => {
       out = await result.current.rewrap('k/1', 'AAE=');
     });
     expect(seen).toEqual([
-      { url: '/api/v1/kms/rewrap/k%2F1', method: 'POST', body: { ciphertext: 'AAE=' } },
+      { url: '/api/v1/kms/keys/k%2F1/rewrap', method: 'POST', body: { ciphertext: 'AAE=' } },
     ]);
     expect(out).toEqual({ key_id: 'k/1', old_version: 1, new_version: 2, ciphertext: 'Zm9v' });
   });
