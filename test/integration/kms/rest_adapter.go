@@ -84,8 +84,11 @@ func (r *RESTAdapter) Setup(ctx context.Context) error {
 	// The REST listener is mTLS: present the runner's client certificate.
 	r.httpClient = helpers.NewHTTPClient(30 * time.Second)
 
-	// Verify connectivity by checking backend status
-	_, statusCode, err := r.doRequest(ctx, http.MethodGet, "/api/v1/kms/backend/status", nil)
+	// Verify connectivity with a core KMS route the router serves. The
+	// backend/status probe answered 404 on the embedded QuicBaaS backend
+	// (an upstream "not found" mapped by the handler), which failed every
+	// REST subtest at setup although the KMS routes were mounted.
+	_, statusCode, err := r.doRequest(ctx, http.MethodGet, "/api/v1/kms/keys", nil)
 	if err != nil {
 		return ErrRESTConnectionFailed{URL: r.baseURL, Err: err}
 	}
