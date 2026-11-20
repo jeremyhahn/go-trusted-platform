@@ -96,6 +96,8 @@ func eabCallerFromContext(ctx context.Context) (eabCaller, bool) {
 // tenant's store). With a PEP configured the IAM decision is final, with the
 // request tenant in CheckRequest.TenantID and the caller's OU tenant in the
 // subject, so policy can grant cross-tenant access (docs/SPEC.md line 125).
+// action is "read" or "write": the authorizer joins it with the "eab"
+// resource into the granted eab:read / eab:write permission.
 // Without a PEP the caller may only name its own tenant. An unbound local
 // caller is not checked.
 func (s *EABGRPCService) authorizeEABTenant(ctx context.Context, requestTenant, action string) error {
@@ -116,7 +118,7 @@ func (s *EABGRPCService) authorizeEABTenant(ctx context.Context, requestTenant, 
 			Roles:    caller.roles,
 		},
 		Action:   action,
-		Resource: "eab:credentials",
+		Resource: "eab",
 		TenantID: requestTenant,
 	})
 	if err != nil {
@@ -261,7 +263,7 @@ func (s *EABGRPCService) CreateCredential(
 	if err := s.requireService(); err != nil {
 		return nil, err
 	}
-	if err := s.authorizeEABTenant(ctx, req.GetTenantId(), "eab:write"); err != nil {
+	if err := s.authorizeEABTenant(ctx, req.GetTenantId(), "write"); err != nil {
 		return nil, err
 	}
 
@@ -342,7 +344,7 @@ func (s *EABGRPCService) ListCredentials(
 	if err := s.requireService(); err != nil {
 		return nil, err
 	}
-	if err := s.authorizeEABTenant(ctx, req.GetTenantId(), "eab:read"); err != nil {
+	if err := s.authorizeEABTenant(ctx, req.GetTenantId(), "read"); err != nil {
 		return nil, err
 	}
 
@@ -650,7 +652,7 @@ func (s *EABGRPCService) CleanupExpiredCredentials(
 	// A tenant-bound caller must name a tenant the IAM decision allows; the
 	// empty tenant (every tenant's expired credentials) is left to an
 	// unbound local caller.
-	if err := s.authorizeEABTenant(ctx, req.GetTenantId(), "eab:write"); err != nil {
+	if err := s.authorizeEABTenant(ctx, req.GetTenantId(), "write"); err != nil {
 		return nil, err
 	}
 
