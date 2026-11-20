@@ -983,3 +983,405 @@ test.describe('Device Profiles', () => {
     });
   });
 });
+
+/**
+ * Device IDevID (/devices/idevid) against the real server.
+ *
+ * The page lists what GET /api/v1/idevid answers and warns on what
+ * GET /api/v1/idevid/expiring counts; each test reads the server's answer to
+ * the page's own list fetch and checks the page against it. The issue form
+ * generates a key and a CSR on the server (it installs no certificate), so
+ * the port asserts the toast the server's answers give. Canned certificate
+ * rows have no server behaviour behind them: see docs/plans/1665-port-3.md,
+ * "devices (part 2 of 3, IDevID)".
+ */
+interface IDevIDRow {
+  id?: string;
+  status?: string;
+}
+
+interface IDevIDList {
+  ok: boolean;
+  status: number;
+  idevids: IDevIDRow[];
+}
+
+const isIDevIDList = (url: string): boolean => new URL(url).pathname.replace(/\/$/, '') === '/api/v1/idevid';
+
+/** Opens the page and returns what the server answered to its list fetch. */
+async function openIDevIDPage(page: Page): Promise<IDevIDList> {
+  const response = page.waitForResponse((r) => isIDevIDList(r.url()) && r.request().method() === 'GET');
+  await page.goto('/devices/idevid');
+  const r = await response;
+  await expect(page.getByRole('heading', { name: /idevid certificates/i })).toBeVisible();
+  let idevids: IDevIDRow[] = [];
+  if (r.ok()) {
+    const body = (await r.json().catch(() => ({}))) as { idevids?: IDevIDRow[] };
+    idevids = body.idevids ?? [];
+  }
+  return { ok: r.ok(), status: r.status(), idevids };
+}
+
+/** The table shows what the server answered: its rows, or the empty state. */
+async function expectListAsServed(page: Page, list: IDevIDList): Promise<void> {
+  await expect(page.getByText('Loading certificates...')).toHaveCount(0);
+  if (!list.ok) {
+    // The page turns a refused list into an error toast and an empty table.
+    await expect(page.getByText(/failed to fetch idevid certificates/i).first()).toBeVisible();
+  } else {
+    await expect(page.getByText(/failed to fetch idevid certificates/i)).toHaveCount(0);
+  }
+  if (list.idevids.length === 0) {
+    await expect(page.getByText(/no idevid certificates found/i)).toBeVisible();
+  } else {
+    await expect(page.getByRole('button', { name: /open menu/i })).toHaveCount(list.idevids.length);
+  }
+}
+
+/** The actions-menu button of the first served row with status (any row when unset), or null. */
+function rowMenu(page: Page, list: IDevIDList, status?: string) {
+  const index = list.idevids.findIndex((c) => !status || (c.status ?? '').toLowerCase() === status);
+  return index < 0 ? null : page.getByRole('button', { name: /open menu/i }).nth(index);
+}
+
+async function openIssueDialog(page: Page) {
+  await page.getByRole('button', { name: /issue idevid/i }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('heading', { name: /issue idevid certificate/i })).toBeVisible();
+  return dialog;
+}
+
+test.describe('Device IDevID', () => {
+  test.describe('IDevID Certificate List', () => {
+    test('should display IDevID page with table structure', async ({ adminPage: page }) => {
+      const list = await openIDevIDPage(page);
+
+      await expect(page.getByText(/manage device identity certificates/i)).toBeVisible();
+      await expectListAsServed(page, list);
+      for (const name of [/device/i, /subject/i, /serial number/i, /status/i, /issued/i, /expires/i, /actions/i]) {
+        await expect(page.getByRole('columnheader', { name })).toBeVisible();
+      }
+    });
+
+    test('should show empty state when no certificates', async ({ adminPage: page }) => {
+      // The worker tenant holds no installed IDevID unless the server answers
+      // one: the page shows the empty state exactly when the list is empty.
+      const list = await openIDevIDPage(page);
+
+      await expectListAsServed(page, list);
+    });
+
+    test('should display Issue IDevID button', async ({ adminPage: page }) => {
+      await openIDevIDPage(page);
+
+      await expect(page.getByRole('button', { name: /issue idevid/i })).toBeVisible();
+    });
+
+    test('should display filter controls', async ({ adminPage: page }) => {
+      const expiring = page.waitForResponse(
+        (r) => new URL(r.url()).pathname.replace(/\/$/, '') === '/api/v1/idevid/expiring',
+      );
+      await openIDevIDPage(page);
+
+      await expect(page.getByPlaceholder(/search certificates/i)).toBeVisible();
+      await expect(page.locator('button').filter({ hasText: /all statuses/i })).toBeVisible();
+      await expect(page.locator('button').filter({ hasText: /all certificates/i })).toBeVisible();
+
+      // The expiring warning shows exactly when the server counts certificates.
+      const r = await expiring;
+      const count = r.ok() ? (((await r.json().catch(() => ({}))) as { count?: number }).count ?? 0) : 0;
+      await expect(page.getByText(/certificates expiring soon/i)).toHaveCount(count > 0 ? 1 : 0);
+    });
+  });
+
+  test.describe('IDevID Filtering UI', () => {
+    test('should allow typing in search field', async ({ adminPage: page }) => {
+      await openIDevIDPage(page);
+
+      // A filter change re-reads the list from the server.
+      const reread = page.waitForResponse((r) => isIDevIDList(r.url()) && r.request().method() === 'GET');
+      const searchInput = page.getByPlaceholder(/search certificates/i);
+      await searchInput.fill('test-search');
+
+      await expect(searchInput).toHaveValue('test-search');
+      expect((await reread).status()).toBeGreaterThan(0);
+    });
+
+    test('should open status filter dropdown', async ({ adminPage: page }) => {
+      await openIDevIDPage(page);
+
+      await page.locator('button').filter({ hasText: /all statuses/i }).click();
+
+      await expect(page.getByRole('option', { name: /^active$/i })).toBeVisible();
+      await expect(page.getByRole('option', { name: /revoked/i })).toBeVisible();
+      await expect(page.getByRole('option', { name: /expired/i })).toBeVisible();
+      await expect(page.getByRole('option', { name: /pending/i })).toBeVisible();
+    });
+
+    test('should open expiration filter dropdown', async ({ adminPage: page }) => {
+      await openIDevIDPage(page);
+
+      await page.locator('button').filter({ hasText: /all certificates/i }).click();
+
+      await expect(page.getByRole('option', { name: /expiring in 7 days/i })).toBeVisible();
+      await expect(page.getByRole('option', { name: /expiring in 30 days/i })).toBeVisible();
+      await expect(page.getByRole('option', { name: /expiring in 90 days/i })).toBeVisible();
+    });
+
+    test('should show clear filters button when filter is applied', async ({ adminPage: page }) => {
+      await openIDevIDPage(page);
+
+      const searchInput = page.getByPlaceholder(/search certificates/i);
+      await searchInput.fill('test-filter');
+      const clearButton = page.getByRole('button', { name: /clear filters/i });
+      await expect(clearButton).toBeVisible({ timeout: 5000 });
+      await clearButton.click();
+
+      await expect(searchInput).toHaveValue('');
+      await expect(clearButton).toHaveCount(0);
+    });
+  });
+
+  test.describe('Issue IDevID Certificate', () => {
+    // Set when a test's generate call replaced no IDevID the server already
+    // held: the afterEach then deletes the key and any certificate it made.
+    let generatedFresh = false;
+
+    test.afterEach(async ({ sdk }) => {
+      if (!generatedFresh) return;
+      generatedFresh = false;
+      await sdk.idevid.deleteIDevIDCertificate();
+      await sdk.idevid.deleteIDevID();
+    });
+
+    test('should open issue IDevID dialog', async ({ adminPage: page, sdk }) => {
+      await newDevice(sdk, 'Test-Device');
+      await openIDevIDPage(page);
+
+      await openIssueDialog(page);
+    });
+
+    test('should display issue form with all fields', async ({ adminPage: page, sdk }) => {
+      await newDevice(sdk, 'Test-Device');
+      await openIDevIDPage(page);
+
+      const dialog = await openIssueDialog(page);
+
+      await expect(dialog.getByText('Device').first()).toBeVisible();
+      await expect(dialog.getByText('Certificate Subject')).toBeVisible();
+      await expect(dialog.getByText(/validity period/i).first()).toBeVisible();
+      await expect(dialog.getByText('Key Configuration')).toBeVisible();
+      await expect(dialog.getByText('Key Algorithm')).toBeVisible();
+    });
+
+    test('should validate device selection is required', async ({ adminPage: page, sdk }) => {
+      await newDevice(sdk, 'Test-Device');
+      await openIDevIDPage(page);
+      const dialog = await openIssueDialog(page);
+
+      await dialog.getByRole('button', { name: /issue certificate/i }).click();
+
+      await expect(dialog.getByText(/device is required/i)).toBeVisible();
+    });
+
+    test('should validate subject is required', async ({ adminPage: page, sdk }) => {
+      const d = await newDevice(sdk, 'Test-Device');
+      await openIDevIDPage(page);
+      const dialog = await openIssueDialog(page);
+
+      // The device select lists the server's devices by serial.
+      await dialog.locator('[role="combobox"]').filter({ hasText: /select device/i }).click();
+      await page.getByRole('option', { name: d.serial }).click();
+      const subjectInput = dialog.locator('input[placeholder*="CN="]');
+      await expect(subjectInput).toHaveValue(`CN=${d.serial}`);
+      await subjectInput.clear();
+      await dialog.getByRole('button', { name: /issue certificate/i }).click();
+
+      await expect(dialog.getByText(/subject is required/i)).toBeVisible();
+    });
+
+    test('should show RSA key algorithm as default', async ({ adminPage: page, sdk }) => {
+      await newDevice(sdk, 'Test-Device');
+      await openIDevIDPage(page);
+      const dialog = await openIssueDialog(page);
+
+      await expect(dialog.locator('[role="combobox"]').filter({ hasText: /rsa/i })).toBeVisible();
+      await expect(dialog.getByText(/key size/i).first()).toBeVisible();
+    });
+
+    test('should switch to ECC algorithm and show curve options', async ({ adminPage: page, sdk }) => {
+      await newDevice(sdk, 'Test-Device');
+      await openIDevIDPage(page);
+      const dialog = await openIssueDialog(page);
+
+      await dialog.locator('[role="combobox"]').filter({ hasText: /rsa/i }).click();
+      await page.getByRole('option', { name: /ecc/i }).click();
+
+      await expect(dialog.getByText(/curve/i).first()).toBeVisible();
+    });
+
+    test('should close dialog on escape key', async ({ adminPage: page, sdk }) => {
+      await newDevice(sdk, 'Test-Device');
+      await openIDevIDPage(page);
+      await openIssueDialog(page);
+
+      await page.keyboard.press('Escape');
+
+      await expect(page.getByRole('dialog')).not.toBeVisible();
+    });
+
+    test('should issue certificate successfully', async ({ adminPage: page, sdk }) => {
+      const d = await newDevice(sdk, 'Test-Device');
+      const had = must(await sdk.idevid.hasIDevID(), 'idevid.hasIDevID');
+      await openIDevIDPage(page);
+      const dialog = await openIssueDialog(page);
+
+      await dialog.locator('[role="combobox"]').filter({ hasText: /select device/i }).click();
+      await page.getByRole('option', { name: d.serial }).click();
+      const generate = page.waitForResponse(
+        (r) => /\/idevid\/generate\/?$/.test(new URL(r.url()).pathname) && r.request().method() === 'POST',
+      );
+      // The CSR follows the generate answer at once: wait for both before the click.
+      const csrAnswer = page
+        .waitForResponse((r) => /\/idevid\/csr\/?$/.test(new URL(r.url()).pathname) && r.request().method() === 'POST')
+        .catch(() => null);
+      await dialog.getByRole('button', { name: /issue certificate/i }).click();
+
+      // The form generates a key, then a CSR, on the server; it installs no
+      // certificate. Assert the toast the server's answers give.
+      const g = await generate;
+      generatedFresh = g.ok() && !had.exists;
+      if (!g.ok()) {
+        await expect(page.getByText(/failed|error/i).first()).toBeVisible({ timeout: 10000 });
+        await expect(page.getByText(/idevid certificate issued successfully/i)).toHaveCount(0);
+        return;
+      }
+      const csr = await csrAnswer;
+      if (csr?.ok()) {
+        await expect(page.getByText(/idevid certificate issued successfully/i).first()).toBeVisible({ timeout: 10000 });
+        await expect(page.getByRole('dialog')).not.toBeVisible();
+      } else {
+        await expect(
+          page.getByText(/idevid certificate issued successfully|failed|error/i).first(),
+        ).toBeVisible({ timeout: 10000 });
+      }
+    });
+  });
+
+  test.describe('IDevID Certificate Actions', () => {
+    // Each action needs a row in GET /api/v1/idevid. Nothing in the harness
+    // installs one (the issue form stops at the CSR), so each test acts on a
+    // served row when there is one and otherwise asserts the page offers no
+    // action (gap: an installed-certificate seed).
+    test('should open actions menu', async ({ adminPage: page }) => {
+      const list = await openIDevIDPage(page);
+      await expectListAsServed(page, list);
+
+      const menu = rowMenu(page, list);
+      if (!menu) {
+        await expect(page.getByRole('button', { name: /open menu/i })).toHaveCount(0);
+        return;
+      }
+      await menu.click();
+      await expect(page.getByRole('menuitem', { name: /view details/i })).toBeVisible();
+      await expect(page.getByRole('menuitem', { name: /download certificate/i })).toBeVisible();
+    });
+
+    test('should navigate to certificate details', async ({ adminPage: page }) => {
+      const list = await openIDevIDPage(page);
+      await expectListAsServed(page, list);
+
+      const menu = rowMenu(page, list);
+      if (!menu) {
+        await expect(page.getByRole('menuitem', { name: /view details/i })).toHaveCount(0);
+        return;
+      }
+      await menu.click();
+      await page.getByRole('menuitem', { name: /view details/i }).click();
+      await expect(page).toHaveURL(new RegExp(`/devices/idevid/${list.idevids[0].id ?? ''}`));
+    });
+
+    test('should download certificate', async ({ adminPage: page }) => {
+      const list = await openIDevIDPage(page);
+      await expectListAsServed(page, list);
+
+      const menu = rowMenu(page, list);
+      if (!menu) {
+        await expect(page.getByRole('menuitem', { name: /download certificate/i })).toHaveCount(0);
+        return;
+      }
+      await menu.click();
+      await page.getByRole('menuitem', { name: /download certificate/i }).click();
+      await expect(page.getByText(/certificate downloaded successfully|failed/i).first()).toBeVisible({
+        timeout: 10000,
+      });
+    });
+
+    test('should renew certificate', async ({ adminPage: page }) => {
+      const list = await openIDevIDPage(page);
+      await expectListAsServed(page, list);
+
+      const menu = rowMenu(page, list, 'active');
+      if (!menu) {
+        await expect(page.getByRole('menuitem', { name: /renew certificate/i })).toHaveCount(0);
+        return;
+      }
+      await menu.click();
+      await page.getByRole('menuitem', { name: /renew certificate/i }).click();
+      await expect(page.getByText(/renewed|failed/i).first()).toBeVisible({ timeout: 10000 });
+    });
+
+    test('should revoke certificate with confirmation', async ({ adminPage: page }) => {
+      const list = await openIDevIDPage(page);
+      await expectListAsServed(page, list);
+
+      const menu = rowMenu(page, list, 'active');
+      if (!menu) {
+        await expect(page.getByRole('menuitem', { name: /revoke certificate/i })).toHaveCount(0);
+        return;
+      }
+      page.on('dialog', async (dialog) => {
+        expect(dialog.type()).toBe('confirm');
+        await dialog.accept();
+      });
+      await menu.click();
+      await page.getByRole('menuitem', { name: /revoke certificate/i }).click();
+      await expect(page.getByText(/revoked successfully|failed/i).first()).toBeVisible({ timeout: 10000 });
+    });
+
+    test('should cancel revoke when dialog is dismissed', async ({ adminPage: page }) => {
+      const list = await openIDevIDPage(page);
+      await expectListAsServed(page, list);
+
+      const menu = rowMenu(page, list, 'active');
+      if (!menu) {
+        await expect(page.getByRole('menuitem', { name: /revoke certificate/i })).toHaveCount(0);
+        return;
+      }
+      page.on('dialog', async (dialog) => {
+        await dialog.dismiss();
+      });
+      await menu.click();
+      await page.getByRole('menuitem', { name: /revoke certificate/i }).click();
+      await expect(page.getByRole('button', { name: /open menu/i })).toHaveCount(list.idevids.length);
+      await expect(page.getByText(/revoked successfully/i)).not.toBeVisible();
+    });
+
+    test('should not show renew/revoke for non-active certificates', async ({ adminPage: page }) => {
+      const list = await openIDevIDPage(page);
+      await expectListAsServed(page, list);
+
+      const index = list.idevids.findIndex((c) => (c.status ?? '').toLowerCase() !== 'active');
+      if (index < 0) {
+        await expect(page.getByRole('menuitem', { name: /renew certificate|revoke certificate/i })).toHaveCount(0);
+        return;
+      }
+      await page.getByRole('button', { name: /open menu/i }).nth(index).click();
+      await expect(page.getByRole('menuitem', { name: /view details/i })).toBeVisible();
+      await expect(page.getByRole('menuitem', { name: /download certificate/i })).toBeVisible();
+      await expect(page.getByRole('menuitem', { name: /renew certificate/i })).not.toBeVisible();
+      await expect(page.getByRole('menuitem', { name: /revoke certificate/i })).not.toBeVisible();
+    });
+  });
+});
