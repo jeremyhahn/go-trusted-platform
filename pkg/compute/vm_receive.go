@@ -515,13 +515,13 @@ func (o *QEMUOrchestrator) FinalizeIncoming(ctx context.Context, receiverID stri
 	if !ok {
 		return ErrReceiverNotFound
 	}
-	if tr.endLifetime != nil {
-		tr.endLifetime()
-	}
-	defer tr.cleanup()
-
 	if commit {
+		// The receiver stays owned by this call until adoption succeeds: a
+		// failed or expired Commit, or a failed adoption, aborts it so its
+		// QEMU process (started without the request context) is killed and
+		// reaped rather than left running with no owner.
 		if err := tr.recv.Commit(ctx); err != nil {
+			o.releaseReceiver(receiverID, tr, "commit failed")
 			return &SentinelCauseError{Sentinel: ErrMigrationReceiveFailed, Cause: &WrappedError{Msg: "commit received VM", Err: err}}
 		}
 		// The resumed guest becomes a normal instance before success is
@@ -529,12 +529,21 @@ func (o *QEMUOrchestrator) FinalizeIncoming(ctx context.Context, receiverID stri
 		instanceID, err := o.adoptReceived(tr)
 		if err != nil {
 			o.logger.Errorf("Committed migration receiver %s but could not adopt its VM: %v", receiverID, err)
+			o.releaseReceiver(receiverID, tr, "adoption failed")
 			return &SentinelCauseError{Sentinel: ErrMigrationReceiveFailed, Cause: &WrappedError{Msg: "adopt received VM", Err: err}}
 		}
+		if tr.endLifetime != nil {
+			tr.endLifetime()
+		}
+		tr.cleanup()
 		o.logger.Infof("Committed migration receiver %s as instance %s", receiverID, instanceID)
 		return nil
 	}
 
+	if tr.endLifetime != nil {
+		tr.endLifetime()
+	}
+	defer tr.cleanup()
 	if err := tr.recv.Abort(ctx); err != nil {
 		return &SentinelCauseError{Sentinel: ErrMigrationReceiveFailed, Cause: &WrappedError{Msg: "abort received VM", Err: err}}
 	}
