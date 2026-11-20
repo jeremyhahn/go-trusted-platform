@@ -216,3 +216,38 @@ describe('BMCService.provision without client retries', () => {
     expect(result.error?.message).toMatch(/network error/);
   });
 });
+
+describe('BMCService provision keeps the profile ID string (#2022 Codex r1)', () => {
+  // The server sends profile_id as a JSON number; above 2^53 it rounds
+  // (9007199254740993 parses as 9007199254740992).
+  const rounded = { success: true, data: { provision_id: 'p-1', profile_id: 9007199254740993, state: 'running' } };
+
+  it('provision returns the requested profile ID', async () => {
+    const client = createRouteMockApiClient();
+    vi.mocked(client.post).mockResolvedValue(rounded);
+
+    const res = await new BMCService(client).provision('9007199254740993');
+
+    expect(res.data?.profile_id).toBe('9007199254740993');
+    expect(res.data?.provision_id).toBe('p-1');
+  });
+
+  it('getProvisionStatus returns the requested profile ID', async () => {
+    const client = createRouteMockApiClient();
+    vi.mocked(client.get).mockResolvedValue(rounded);
+
+    const res = await new BMCService(client).getProvisionStatus('9007199254740993');
+
+    expect(res.data?.profile_id).toBe('9007199254740993');
+  });
+
+  it('leaves a response without data alone', async () => {
+    const client = createRouteMockApiClient();
+    vi.mocked(client.get).mockResolvedValue({ success: false, error: { message: 'no' } });
+
+    const res = await new BMCService(client).getProvisionStatus('9007199254740993');
+
+    expect(res.data).toBeUndefined();
+    expect(res.success).toBe(false);
+  });
+});
