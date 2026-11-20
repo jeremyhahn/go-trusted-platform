@@ -264,6 +264,9 @@ func TestArchiver_ImportFromFile_RefusesAnArchiveWithoutManifestJSON(t *testing.
 		t.Fatalf("write archive: %v", err)
 	}
 	config := &Config{BaseDir: t.TempDir()}
+	if err := os.MkdirAll(config.BundlesDir(), 0o700); err != nil {
+		t.Fatalf("create bundles dir: %v", err)
+	}
 	_, err := NewArchiver(config, nil).ImportFromFile(context.Background(), archivePath)
 	if !errors.As(err, &ErrInvalidManifest{}) {
 		t.Fatalf("ImportFromFile error = %v, want ErrInvalidManifest", err)
