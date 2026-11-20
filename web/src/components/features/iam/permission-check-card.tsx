@@ -25,11 +25,23 @@ export function PermissionCheckCard({ tenantId, defaultSubjectId = "" }: Permiss
   const [action, setAction] = useState("");
   const [resource, setResource] = useState("");
 
-  const check = useMutation((vars: { subjectId: string; action: string; resource: string }) =>
-    iam.checkPermission({ tenantId, ...vars }),
-  );
+  // Each verdict carries the tenant and inputs it was checked for, so a
+  // verdict is shown only beneath those same inputs.
+  type Checked = { tenantId: string; subjectId: string; action: string; resource: string };
+  const [checked, setChecked] = useState<Checked | null>(null);
+  const check = useMutation((vars: Checked) => iam.checkPermission(vars));
 
-  const result = check.data as CheckIAMPermissionResponse | undefined;
+  const data = check.data as CheckIAMPermissionResponse | undefined;
+  const result =
+    data &&
+    checked &&
+    !check.isLoading &&
+    checked.tenantId === tenantId &&
+    checked.subjectId === subjectId.trim() &&
+    checked.action === action.trim() &&
+    checked.resource === resource.trim()
+      ? data
+      : undefined;
   const ready = subjectId.trim() && action.trim() && resource.trim();
 
   return (
@@ -45,11 +57,14 @@ export function PermissionCheckCard({ tenantId, defaultSubjectId = "" }: Permiss
           onSubmit={(e: React.FormEvent) => {
             e.preventDefault();
             if (ready) {
-              check.mutate({
+              const vars = {
+                tenantId,
                 subjectId: subjectId.trim(),
                 action: action.trim(),
                 resource: resource.trim(),
-              });
+              };
+              setChecked(vars);
+              check.mutate(vars);
             }
           }}
         >

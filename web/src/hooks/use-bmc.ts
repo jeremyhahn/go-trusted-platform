@@ -156,6 +156,11 @@ export function useBMC(profileID: string): UseBMCResult {
     }
   }, [profileID, load]);
 
+  // The profile the hook shows now: a mutation started for an earlier
+  // profile must not refresh that profile over this one.
+  const currentProfile = React.useRef(profileID);
+  currentProfile.current = profileID;
+
   const mutate = React.useCallback(
     async (op: string, method: "POST" | "DELETE", body?: unknown) => {
       generation.current++;
@@ -163,7 +168,9 @@ export function useBMC(profileID: string): UseBMCResult {
         method,
         body: body === undefined ? undefined : JSON.stringify(body),
       });
-      await refetch();
+      if (currentProfile.current === profileID) {
+        await refetch();
+      }
     },
     [profileID, refetch]
   );
