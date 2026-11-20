@@ -206,11 +206,56 @@ func (r *PXERouter) verifyWebhookIdentity(w http.ResponseWriter, req *http.Reque
 		return false
 	}
 	sum := sha256.Sum256(leaf.Raw)
-	if !hmac.Equal([]byte(hex.EncodeToString(sum[:])), []byte(recorded)) {
+	fingerprint := hex.EncodeToString(sum[:])
+	if !hmac.Equal([]byte(fingerprint), []byte(recorded)) {
 		r.respWriter.Error403(w, req, ErrWebhookIdentity{Reason: "the client certificate is not the reported device's"}, nil)
 		return false
 	}
+	// The lookup above is an early refusal only: enrolment can record a
+	// new IDevID before the transition, so the handler hands the
+	// authenticated fingerprint to the backend, which compares it again
+	// under the device lock it transitions under (#1896 Codex r2).
+	*req = *req.WithContext(context.WithValue(req.Context(), webhookFingerprintKey{}, fingerprint))
 	return true
+}
+
+// webhookFingerprintKey carries the authenticated IDevID fingerprint from
+// the webhook check to the completion handler.
+type webhookFingerprintKey struct{}
+
+// WebhookCompleter is the backend's compare-and-transition for the
+// install-completion webhook: under the device lock it compares the
+// authenticated IDevID fingerprint with the one recorded at enrolment and
+// only then applies the report. A mismatch is PermissionDenied, an unknown
+// MAC NotFound.
+type WebhookCompleter interface {
+	WebhookCompleteForIDevID(ctx context.Context, req *platformv1.PXEWebhookCompleteRequest, fingerprint string) (*platformv1.PXEWebhookCompleteResponse, error)
+}
+
+// completeWebhook applies an authenticated report through the backend's
+// compare-and-transition. A backend without one is refused: a separate
+// lookup and transition would let a superseded IDevID complete the install.
+func (r *PXERouter) completeWebhook(w http.ResponseWriter, req *http.Request, report *platformv1.PXEWebhookCompleteRequest) (*platformv1.PXEWebhookCompleteResponse, bool) {
+	fingerprint, _ := req.Context().Value(webhookFingerprintKey{}).(string)
+	if fingerprint == "" {
+		r.respWriter.Error401(w, req, ErrWebhookIdentity{Unauthenticated: true})
+		return nil, false
+	}
+	completer, ok := r.server.(WebhookCompleter)
+	if !ok {
+		protorest.WriteError(w, req, r.respWriter, &protorest.ErrServiceUnavailable{Service: "pxe"})
+		return nil, false
+	}
+	resp, err := completer.WebhookCompleteForIDevID(req.Context(), report, fingerprint)
+	switch status.Code(err) {
+	case codes.OK:
+		return resp, true
+	case codes.PermissionDenied:
+		r.respWriter.Error403(w, req, ErrWebhookIdentity{Reason: "the client certificate is not the reported device's"}, nil)
+	default:
+		protorest.WriteError(w, req, r.respWriter, err)
+	}
+	return nil, false
 }
 
 // ErrWebhookIdentity refuses an install-completion report whose caller did

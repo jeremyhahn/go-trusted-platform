@@ -405,9 +405,8 @@ func (r *PXERouter) webhookComplete(w http.ResponseWriter, req *http.Request) {
 		r.respWriter.Error400(w, req, err)
 		return
 	}
-	resp, err := r.server.WebhookComplete(req.Context(), pbReq)
-	if err != nil {
-		protorest.WriteError(w, req, r.respWriter, err)
+	resp, ok := r.completeWebhook(w, req, pbReq)
+	if !ok {
 		return
 	}
 	protorest.WriteSuccess(w, req, r.respWriter, resp)

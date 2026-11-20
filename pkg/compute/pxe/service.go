@@ -16,6 +16,7 @@ package pxe
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
 	"net"
@@ -46,6 +47,11 @@ type Service interface {
 
 	// State Transitions
 	UpdateDeviceState(ctx context.Context, deviceID string, state ProvisioningState, reason string) error
+
+	// UpdateDeviceStateForIDevID is UpdateDeviceState for a change the
+	// device reported: it compares fingerprint with the recorded IDevID
+	// fingerprint under the same device lock as the transition.
+	UpdateDeviceStateForIDevID(ctx context.Context, deviceID, fingerprint string, state ProvisioningState, reason string) error
 	SetDeviceEnrolled(ctx context.Context, deviceID, certSerial string) error
 	// RecordIDevIDFingerprint stores the device's IDevID fingerprint at
 	// enrolment, before install completion (ruling 673).
@@ -593,7 +599,46 @@ func (s *service) UpdateDeviceState(ctx context.Context, deviceID string, state 
 	}
 	defer s.ops.RUnlock()
 	defer s.lockDevice(deviceID)()
+	return s.updateDeviceStateLocked(ctx, deviceID, state, reason)
+}
 
+// UpdateDeviceStateForIDevID applies a device-reported state change only
+// when fingerprint is the IDevID fingerprint recorded for the device. The
+// comparison and the transition run under one device lock, so an
+// enrolment recording a new IDevID cannot land between them (#1896 Codex
+// r2). A missing or different fingerprint is ErrIDevIDMismatch.
+func (s *service) UpdateDeviceStateForIDevID(ctx context.Context, deviceID, fingerprint string, state ProvisioningState, reason string) error {
+	if !s.beginOp() {
+		return ErrServiceNotInitialized{}
+	}
+	defer s.ops.RUnlock()
+	defer s.lockDevice(deviceID)()
+
+	device, err := s.stateManager.Get(deviceID)
+	if err != nil {
+		return ErrDeviceNotFound{DeviceID: deviceID}
+	}
+	if device.IDevIDFingerprint == "" || fingerprint == "" ||
+		subtle.ConstantTimeCompare([]byte(device.IDevIDFingerprint), []byte(fingerprint)) != 1 {
+		return ErrIDevIDMismatch{DeviceID: deviceID}
+	}
+	return s.updateDeviceStateLocked(ctx, deviceID, state, reason)
+}
+
+// ErrIDevIDMismatch is returned when a device-reported change is
+// authenticated with an IDevID other than the one recorded for the device.
+type ErrIDevIDMismatch struct {
+	DeviceID string
+}
+
+// Error implements error.
+func (e ErrIDevIDMismatch) Error() string {
+	return "pxe: the authenticated IDevID is not the one recorded for device " + e.DeviceID
+}
+
+// updateDeviceStateLocked is UpdateDeviceState's body; the caller holds
+// the operation read lock and the device lock.
+func (s *service) updateDeviceStateLocked(ctx context.Context, deviceID string, state ProvisioningState, reason string) error {
 	if !state.IsValid() {
 		return ErrInvalidState{
 			DeviceID: deviceID,

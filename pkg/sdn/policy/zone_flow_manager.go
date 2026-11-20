@@ -15,6 +15,7 @@ package policy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -186,6 +187,13 @@ func (m *ZoneFlowManager) ApplyZoneFlows(ctx context.Context, portID string, z z
 			slog.String("port_id", portID),
 			slog.String("zone", string(z)),
 			slog.String("error", err.Error()))
+		// The switch may have accepted part of the batch, and the port is
+		// already on the new VLAN: roll both back so the port is never on
+		// the new zone's VLAN while the manager records the old zone
+		// (fail closed, #1896 Codex r2).
+		if rbErr := m.rollbackZoneMove(ctx, portID, templateFlows); rbErr != nil {
+			return errors.Join(&SentinelCauseError{Sentinel: ErrFlowInstallFailed, Cause: err}, rbErr)
+		}
 		return &SentinelCauseError{Sentinel: ErrFlowInstallFailed, Cause: err}
 	}
 
@@ -224,6 +232,52 @@ func (m *ZoneFlowManager) ApplyZoneFlows(ctx context.Context, portID string, z z
 		complianceAttr(complianceSC7, complianceAC4))
 
 	return nil
+}
+
+// ErrPortStateUnknown is returned when a failed zone move could not be
+// rolled back: the port's VLAN or flows on the switch are not known. The
+// manager records the port in the quarantine zone.
+var ErrPortStateUnknown = errors.New("sdn/policy: zone move failed and could not be rolled back; the port is in an unknown state")
+
+// rollbackZoneMove undoes a zone move whose template batch failed after
+// SetPortVLAN: it deletes every flow of the batch (deleting an absent flow
+// is harmless) and puts the port back on its previous VLAN, or on the
+// quarantine VLAN when the manager had none recorded. When either step
+// fails it records the port as quarantined, forgets its VLAN and returns
+// ErrPortStateUnknown. Callers hold m.mu.
+func (m *ZoneFlowManager) rollbackZoneMove(ctx context.Context, portID string, batch []zoneflows.FlowRule) error {
+	var errs []error
+	for _, f := range batch {
+		if err := m.flowController.DeleteFlow(m.bridgeName, f.Match); err != nil {
+			errs = append(errs, &WrappedError{Msg: "zone flow manager: delete flow of the failed batch", Err: err})
+		}
+	}
+
+	restoreVLAN, ok := m.portVLANMap[portID]
+	if !ok {
+		v, err := m.resolveVLAN(zone.ZoneQuarantine)
+		if err != nil {
+			errs = append(errs, &WrappedError{Msg: "zone flow manager: resolve quarantine VLAN for rollback", Err: err})
+		}
+		restoreVLAN = v
+	}
+	if restoreVLAN != 0 {
+		if err := m.portController.SetPortVLAN(ctx, portID, int64(restoreVLAN)); err != nil {
+			errs = append(errs, &WrappedError{Msg: "zone flow manager: restore port VLAN", Err: err})
+		}
+	}
+	if len(errs) == 0 {
+		return nil
+	}
+
+	m.portZoneMap[portID] = zone.ZoneQuarantine
+	delete(m.portClassMap, portID)
+	delete(m.portVLANMap, portID)
+	m.logger.Error("zone move rollback failed; port state unknown, recorded as quarantined",
+		slog.String("port_id", portID),
+		slog.String("error", errors.Join(errs...).Error()),
+		complianceAttr(complianceSC7, complianceAC4))
+	return errors.Join(append([]error{ErrPortStateUnknown}, errs...)...)
 }
 
 // RemoveFlows removes all OpenFlow rules for portID and clears zone/VLAN tracking.

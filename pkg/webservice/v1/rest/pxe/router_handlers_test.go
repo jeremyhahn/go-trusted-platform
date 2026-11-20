@@ -46,6 +46,9 @@ type operatorPXE struct {
 	err  error
 	rpc  string
 	req  proto.Message
+	// fingerprint is the authenticated IDevID fingerprint the webhook
+	// route handed the service.
+	fingerprint string
 }
 
 func answer[T proto.Message](s *operatorPXE, rpc string, req proto.Message) (T, error) {
@@ -115,6 +118,14 @@ func (s *operatorPXE) GetEvents(_ context.Context, req *platformv1.GetPXEEventsR
 
 func (s *operatorPXE) WebhookComplete(_ context.Context, req *platformv1.PXEWebhookCompleteRequest) (*platformv1.PXEWebhookCompleteResponse, error) {
 	return answer[*platformv1.PXEWebhookCompleteResponse](s, "WebhookComplete", req)
+}
+
+// WebhookCompleteForIDevID is the path the webhook route takes: it records
+// the authenticated fingerprint the route hands over, which verifyWebhook
+// sets from the certificate serveHandler presents.
+func (s *operatorPXE) WebhookCompleteForIDevID(ctx context.Context, req *platformv1.PXEWebhookCompleteRequest, fingerprint string) (*platformv1.PXEWebhookCompleteResponse, error) {
+	s.fingerprint = fingerprint
+	return s.WebhookComplete(ctx, req)
 }
 
 // handlerRoot mounts the operator routes and the enabled webhook under
@@ -325,6 +336,10 @@ func TestOperatorHandlers_HandTheServiceTheRequestAndAnswerItsResponse(t *testin
 			require.Equal(t, c.wantCode, rec.Code, rec.Body.String())
 			assert.Equal(t, c.rpc, server.rpc)
 			assert.Empty(t, cmpProto(c.wantReq, server.req), "request handed to the service")
+			if c.rpc == "WebhookComplete" {
+				assert.Equal(t, fingerprintOf(handlerDeviceCert), server.fingerprint,
+					"the webhook hands the service the authenticated fingerprint")
+			}
 
 			var env envelope
 			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &env))

@@ -177,6 +177,13 @@ func (m *mockPXEService) RemoveDevice(ctx context.Context, deviceID string) erro
 	return nil
 }
 
+func (m *mockPXEService) UpdateDeviceStateForIDevID(ctx context.Context, deviceID, fingerprint string, state pxe.ProvisioningState, reason string) error {
+	if d, ok := m.devices[deviceID]; ok && d.IDevIDFingerprint != fingerprint {
+		return pxe.ErrIDevIDMismatch{DeviceID: deviceID}
+	}
+	return m.UpdateDeviceState(ctx, deviceID, state, reason)
+}
+
 func (m *mockPXEService) UpdateDeviceState(ctx context.Context, deviceID string, state pxe.ProvisioningState, reason string) error {
 	if m.updateStateErr != nil {
 		return m.updateStateErr
