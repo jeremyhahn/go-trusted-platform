@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/bgp"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/fhrp"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/modes"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/secrets"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/gateway/services/firewall"
@@ -64,6 +65,7 @@ var serviceBuilders = map[string]serviceBuilder{
 	ServiceNAT:           buildNAT,
 	ServiceNAT64:         buildNAT64,
 	ServiceHostFW:        buildHostFW,
+	ServiceFHRP:          buildFHRP,
 	ServiceTunnels:       buildTunnels,
 	ServiceOverlay:       buildOverlay,
 	ServiceTransit:       buildTransit,
@@ -86,7 +88,9 @@ var serviceRefusals = map[string]string{
 // backedServiceHandler is the one ServiceHandler shape for every
 // config-driven service: it builds the service on Start through the
 // section's builder, drives its lifecycle, and derives IsActive and Health
-// from the service — never from a flag of its own.
+// from the service — never from a flag of its own. A service whose Start
+// failed with cleanup still outstanding (releasePendingService) is retained
+// rather than dropped: the next Start reuses it and a Stop finishes it.
 type backedServiceHandler struct {
 	gateway *Gateway
 	name    string
@@ -94,6 +98,31 @@ type backedServiceHandler struct {
 
 	mu  sync.Mutex
 	svc backedService
+	// retained is a service whose Start failed but which still has
+	// cleanup outstanding; nil when there is none.
+	retained backedService
+}
+
+// releasePendingService is implemented by a backedService that can be left
+// holding host state after a failed Start (the fhrp speaker's VIPs). While
+// ReleasePending reports true the handler keeps that service instance, so
+// its next Start or Stop can release the state; a fresh build cannot.
+type releasePendingService interface {
+	ReleasePending() bool
+}
+
+// cleanupPendingHandler is a ServiceHandler that can be left holding
+// cleanup after its Start failed; the Gateway calls its Stop to finish it.
+type cleanupPendingHandler interface {
+	CleanupPending() bool
+}
+
+// CleanupPending reports whether a failed Start left a service whose
+// cleanup is still outstanding; Stop finishes it.
+func (h *backedServiceHandler) CleanupPending() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.retained != nil
 }
 
 func newBackedServiceHandler(g *Gateway, name string, build serviceBuilder) *backedServiceHandler {
@@ -109,13 +138,22 @@ func (h *backedServiceHandler) Start(ctx context.Context) error {
 	if h.svc != nil {
 		return &ErrServiceAlreadyActive{Service: h.name}
 	}
-	svc, err := h.build(h.gateway)
-	if err != nil {
-		return err
+	svc := h.retained
+	if svc == nil {
+		built, err := h.build(h.gateway)
+		if err != nil {
+			return err
+		}
+		svc = built
 	}
 	if err := svc.Start(ctx); err != nil {
+		h.retained = nil
+		if rp, ok := svc.(releasePendingService); ok && rp.ReleasePending() {
+			h.retained = svc
+		}
 		return &ErrServiceStartFailed{Service: h.name, Cause: err}
 	}
+	h.retained = nil
 	h.svc = svc
 	return nil
 }
@@ -125,7 +163,15 @@ func (h *backedServiceHandler) Stop(ctx context.Context) error {
 	defer h.mu.Unlock()
 
 	if h.svc == nil {
-		return &ErrServiceNotActive{Service: h.name}
+		if h.retained == nil {
+			return &ErrServiceNotActive{Service: h.name}
+		}
+		// Finish the cleanup a failed Start left outstanding.
+		if err := h.retained.Stop(ctx); err != nil {
+			return &ErrServiceStopFailed{Service: h.name, Cause: err}
+		}
+		h.retained = nil
+		return nil
 	}
 	if err := h.svc.Stop(ctx); err != nil {
 		return &ErrServiceStopFailed{Service: h.name, Cause: err}
@@ -452,7 +498,8 @@ func (b hostFWBackend) Healthy() bool { return b.Service.Health().Active }
 
 // buildHostFW builds the nftables host packet filter from the `hostfw:`
 // section, the daemon-injected listener inventory and applier
-// (HostRuntime), and the tunnel interfaces the gateway itself configures.
+// (HostRuntime), the tunnel interfaces the gateway itself configures, and
+// the enabled FHRP groups' interfaces, on which VRRP is admitted.
 // Without an injected applier it opens the real netlink connection, which
 // needs CAP_NET_ADMIN — the gateway's normal privilege.
 func buildHostFW(g *Gateway) (backedService, error) {
@@ -478,16 +525,143 @@ func buildHostFW(g *Gateway) (backedService, error) {
 			rendered.Tunnels = append(rendered.Tunnels, g.config.Tunnels[i].Name)
 		}
 	}
+	var vipDeny []hostfw.VIPDeny
+	// Every enabled FHRP group's interface carries its peers' VRRP
+	// advertisements; without them a backup never hears the master and
+	// claims the same addresses. These are the only interfaces that
+	// admit VRRP: no operator setting opens protocol 112.
+	var vrrp []string
+	if f := g.config.FHRP; f != nil && f.Enabled {
+		for i := range f.Groups {
+			if !slices.Contains(vrrp, f.Groups[i].Interface) {
+				vrrp = append(vrrp, f.Groups[i].Interface)
+			}
+		}
+		// accept-mode false (RFC 5798 §6.4.3): a non-owner master holds
+		// the VIPs as local addresses, so the filter drops traffic to
+		// them. The owner always accepts its own address.
+		for i := range f.Groups {
+			grp := f.Groups[i]
+			if grp.AcceptMode || fhrpAddressOwner(grp) {
+				continue
+			}
+			for _, raw := range grp.Addresses {
+				if pfx, err := netip.ParsePrefix(raw); err == nil {
+					vipDeny = append(vipDeny, hostfw.VIPDeny{Interface: grp.Interface, Address: pfx.Addr()})
+				}
+			}
+		}
+	}
 	svc, err := hostfw.New(hostfw.Deps{
 		Applier:   applier,
 		Inventory: inventory,
 		Config:    rendered,
+		VIPDeny:   vipDeny,
+		VRRP:      vrrp,
 		Logger:    host.Logger,
 	})
 	if err != nil {
 		return nil, &ErrServiceStartFailed{Service: ServiceHostFW, Cause: err}
 	}
 	return hostFWBackend{svc}, nil
+}
+
+// fhrpAddressOwner reports whether the group runs at the address-owner
+// priority 255; priority 0 means the RFC default 100, not the owner.
+func fhrpAddressOwner(grp fhrp.GroupConfig) bool {
+	return grp.Priority == fhrp.PriorityOwner
+}
+
+// fhrpBackend adapts *fhrp.Speaker.
+type fhrpBackend struct{ *fhrp.Speaker }
+
+// Healthy reports a started speaker none of whose groups' last actuation
+// (advertise, claim, release) failed and none of which holds an unrepaired
+// address claim: a later successful advertisement does not hide it.
+func (b fhrpBackend) Healthy() bool { return fhrpHealthy(b.Health()) }
+
+// fhrpHealthy reports a started speaker none of whose groups has a failed
+// last actuation or an unrepaired address claim.
+func fhrpHealthy(h fhrp.Health) bool {
+	if !h.Active {
+		return false
+	}
+	for _, g := range h.Groups {
+		if g.LastError != nil || g.ClaimError != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// buildFHRP builds the VRRPv3 speaker from the `fhrp:` section over the
+// daemon-injected transport and address programmer; without them it opens
+// raw sockets and programs addresses over netlink.
+func buildFHRP(g *Gateway) (backedService, error) {
+	host := g.config.hostRuntime()
+	transport := host.FHRPTransport
+	if transport == nil {
+		transport = fhrp.NewRawTransport()
+	}
+	programmer := host.FHRPProgrammer
+	if programmer == nil {
+		programmer = fhrp.NewNetlinkProgrammer()
+	}
+	speaker, err := fhrp.New(*g.config.FHRP, fhrp.Deps{
+		Transport:  transport,
+		Programmer: programmer,
+		Logger:     host.Logger,
+		Inventory:  fhrp.NewInventory(host.FHRPInventory),
+	})
+	if err != nil {
+		return nil, &ErrServiceStartFailed{Service: ServiceFHRP, Cause: err}
+	}
+	return fhrpBackend{speaker}, nil
+}
+
+// sweepRemovedFHRPGroups deletes the recorded VIPs of every FHRP group not
+// in the current configuration (all of them when FHRP is disabled): a
+// datapath child that died while such a group was Master left them on the
+// interface, and no runner of that group will ever release them. A recorded
+// prefix a still-configured group no longer lists goes the same way, also
+// when only its length changed; the prefixes a group still configures are
+// left to its own runner.
+func sweepRemovedFHRPGroups(cfg *GatewayConfig) error {
+	host := cfg.hostRuntime()
+	inv := fhrp.NewInventory(host.FHRPInventory)
+	if inv == nil {
+		return nil
+	}
+	// desired is every prefix each configured group holds, keyed with
+	// its group: a recorded VIP stays only while its own group still
+	// configures that exact prefix, the match the runner's restoreOwned
+	// uses (netip.Prefix equality includes the family and the length).
+	type desired struct {
+		iface  string
+		vrid   uint8
+		prefix netip.Prefix
+	}
+	configured := make(map[desired]bool)
+	if cfg.FHRP != nil && cfg.FHRP.Enabled {
+		for _, gc := range cfg.FHRP.Groups {
+			for _, raw := range gc.Addresses {
+				if pfx, err := netip.ParsePrefix(raw); err == nil {
+					configured[desired{gc.Interface, gc.VRID, pfx}] = true
+				}
+			}
+		}
+	}
+	programmer := host.FHRPProgrammer
+	if programmer == nil {
+		entries, err := inv.Entries()
+		if err != nil || len(entries) == 0 {
+			return err
+		}
+		programmer = fhrp.NewNetlinkProgrammer()
+	}
+	return inv.Sweep(programmer, func(e fhrp.InventoryEntry) bool {
+		return configured[desired{e.Interface, e.VRID, e.Prefix}]
+	})
 }
 
 // TunnelManager is the tunnel-manager surface the tunnels service drives.

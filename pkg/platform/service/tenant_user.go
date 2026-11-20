@@ -593,15 +593,12 @@ func (s *TenantUserService) IssueToken(
 		return "", nil
 	}
 
-	// Extract role names
+	// Token roles come from IAM bindings only (SPEC row 114). Ownership is
+	// not synthesized into a role; the issuer still derives the
+	// is_tenant_owner claim from the stored user record.
 	roles := make([]string, 0, len(user.Roles))
 	for _, role := range user.Roles {
 		roles = append(roles, role.Name)
-	}
-
-	// Add tenant owner role if applicable
-	if user.IsTenantOwner {
-		roles = append(roles, "tenant_owner")
 	}
 
 	token, err := s.tokenIssuer.IssueToken(ctx, user.ID, user.TenantID, roles)

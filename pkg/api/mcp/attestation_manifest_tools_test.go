@@ -16,6 +16,7 @@ package mcp
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -40,6 +41,9 @@ type manifestProvider struct {
 	*mockServiceProvider
 	calls  int
 	id     string
+	hostID string
+	start  time.Time
+	end    time.Time
 	limit  uint32
 	offset uint32
 	build  ManifestBuildRequest
@@ -64,8 +68,8 @@ func (p *manifestProvider) AttestationGetManifest(_ context.Context, id string) 
 	return p.answer()
 }
 
-func (p *manifestProvider) AttestationListManifests(_ context.Context, limit, offset uint32) (any, error) {
-	p.limit, p.offset = limit, offset
+func (p *manifestProvider) AttestationListManifests(_ context.Context, hostID string, start, end time.Time, limit, offset uint32) (any, error) {
+	p.hostID, p.start, p.end, p.limit, p.offset = hostID, start, end, limit, offset
 	return p.answer()
 }
 
@@ -162,10 +166,20 @@ func TestAttestationManifestTools_DecodeArguments(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "m-2", p.id)
 
-	_, err = r.ExecuteTool(ctx, "attestation_list_manifests", map[string]interface{}{"limit": float64(10), "offset": float64(20)})
+	_, err = r.ExecuteTool(ctx, "attestation_list_manifests", map[string]interface{}{"host_id": "host-a", "limit": float64(10), "offset": float64(20)})
 	require.NoError(t, err)
+	assert.Equal(t, "host-a", p.hostID)
 	assert.Equal(t, uint32(10), p.limit)
 	assert.Equal(t, uint32(20), p.offset)
+	assert.True(t, p.start.IsZero() && p.end.IsZero(), "no time bound without start_time or end_time")
+
+	_, err = r.ExecuteTool(ctx, "attestation_list_manifests", map[string]interface{}{
+		"start_time": "2023-11-14T22:13:20Z",
+		"end_time":   "2023-11-14T23:13:20Z",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(1700000000), p.start.Unix())
+	assert.Equal(t, int64(1700003600), p.end.Unix())
 
 	_, err = r.ExecuteTool(ctx, "attestation_create_manifest", map[string]interface{}{
 		"host_id":            "host-a",
@@ -222,6 +236,9 @@ func TestAttestationManifestTools_InvalidArgumentsNeverReachBackend(t *testing.T
 		{"pcr indices not an array", "attestation_create_manifest", map[string]interface{}{"pcr_indices": "0,7"}},
 		{"negative limit", "attestation_list_manifests", map[string]interface{}{"limit": float64(-1)}},
 		{"offset above uint32", "attestation_list_manifests", map[string]interface{}{"offset": float64(1 << 33)}},
+		{"malformed start time", "attestation_list_manifests", map[string]interface{}{"start_time": "yesterday"}},
+		{"malformed end time", "attestation_list_manifests", map[string]interface{}{"end_time": "2023-11-14"}},
+		{"start time not a string", "attestation_list_manifests", map[string]interface{}{"start_time": float64(1700000000)}},
 		{"bad expected nonce", "attestation_verify_manifest", map[string]interface{}{"id": "m", "expected_nonce": "%%"}},
 		{"pcr key not an index", "attestation_verify_manifest", map[string]interface{}{"id": "m", "expected_pcrs": map[string]interface{}{"seven": "AA=="}}},
 		{"pcr value not a string", "attestation_verify_manifest", map[string]interface{}{"id": "m", "expected_pcrs": map[string]interface{}{"7": float64(1)}}},
