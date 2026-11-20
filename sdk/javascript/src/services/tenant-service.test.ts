@@ -310,7 +310,8 @@ describe('TenantService', () => {
         retry: { maxRetries: 3, initialDelayMs: 1, maxDelayMs: 1 },
       });
 
-      await expect(new TenantService(client).rotateDEK({ tenantId: 't-1' })).rejects.toBeDefined();
+      const result = await new TenantService(client).rotateDEK({ tenantId: 't-1' });
+      expect(result.success).toBe(false);
       expect(fetchImpl).toHaveBeenCalledTimes(1);
     });
 
