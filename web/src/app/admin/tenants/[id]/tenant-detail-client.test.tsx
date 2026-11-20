@@ -189,6 +189,34 @@ describe("TenantDetailClient actions", () => {
     expect(screen.getByTestId("action-result").textContent).toBe("refused by policy");
     expect((screen.getByLabelText("Max VMs") as HTMLInputElement).value).toBe("2");
   });
+
+  // #2023 Codex round 3: a malformed nonblank limit must not fall back to
+  // the current limit and report success; only a blank field keeps it.
+  it.each([
+    ["Max VMs", "1,000"],
+    ["Max vCPUs", "10x"],
+    ["Max memory (MB)", "1.5"],
+  ])("refuses %s = %s before any request and keeps the edit", async (label, value) => {
+    tenantSvc.updateQuotas.mockResolvedValue({ success: true, data: {} });
+    await saveQuotas({ [label]: value });
+    expect(tenantSvc.updateQuotas).not.toHaveBeenCalled();
+    const input = screen.getByLabelText(label) as HTMLInputElement;
+    expect(input.value).toBe(value);
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(screen.getByText(`${label} must be a whole number`)).toBeTruthy();
+    expect(screen.queryByTestId("action-result")?.textContent ?? "").not.toBe("Quotas updated");
+  });
+
+  it("keeps the current limits of blank fields and sends a valid number", async () => {
+    tenantSvc.updateQuotas.mockResolvedValue({ success: true, data: {} });
+    await saveQuotas({ "Max VMs": "  ", "Max memory (MB)": " 2048 " });
+    expect(tenantSvc.updateQuotas).toHaveBeenCalledWith({
+      tenantId: "t-1",
+      compute: { maxVms: 4, maxContainers: 7, maxVcpus: 8, maxMemoryMb: 2048 },
+    });
+    expect(screen.queryByText(/must be a whole number/)).toBeNull();
+    expect(screen.getByTestId("action-result").textContent).toBe("Quotas updated");
+  });
 });
 
 // #2023 Codex round 5: barrier init and unseal change access to the
