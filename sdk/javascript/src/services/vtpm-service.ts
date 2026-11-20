@@ -563,11 +563,21 @@ export class VTPMService extends BaseService {
   /**
    * IsVTPMRunning: whether the bundle's vTPM is running, from
    * GET /bundles/{id}/state. An unknown bundle is a 404, not "not running".
+   * The daemon REST listener answers a BundleStateResponse
+   * (pkg/api/rest/vtpm_handlers.go) of { id, running, socket_path, timestamp }:
+   * its `id` is given back as `bundle_id`. A webservice reply
+   * ({ bundle_id, running, socket_path }) passes unchanged.
    */
   async isBundleRunning(id: string): Promise<ApiResponse<BundleStateResponse>> {
-    return this.client.get<BundleStateResponse>(
+    const r = await this.client.get<BundleStateResponse>(
       this.buildUrl(`/bundles/${this.encodePathSegment(id)}/state`)
     );
+    const data = r.data as (Partial<BundleStateResponse> & { id?: unknown }) | undefined;
+    if (r.success === true && data && typeof data.id === 'string' && data.bundle_id === undefined) {
+      const { id: bundleId, ...rest } = data;
+      return { ...r, data: { ...rest, bundle_id: bundleId } as BundleStateResponse };
+    }
+    return r;
   }
 
   /** Quote PCRs of a running bundle (POST /bundles/{id}/quote) */
