@@ -2044,6 +2044,33 @@ func pxeDeviceStoreFor(a *app.App, logger *logging.Logger) (pxe.DeviceStore, err
 	if client == nil {
 		return nil, nil
 	}
+	return pxeDeviceStoreForClient(client, logger)
+}
+
+// pxeDatastoreClient is the quicbaas client surface the PXE device store
+// needs: the KV storage and the transport it runs over. *quicbaas.Client
+// satisfies it.
+type pxeDatastoreClient interface {
+	quicbaas.Storage
+	IsEmbedded() bool
+}
+
+// pxeDeviceStoreForClient builds the PXE device store over client, refusing
+// a remote (non-embedded) transport. The pinned go-quicbaas REST KV handlers
+// return only the first List batch and ignore the page token, so a restart
+// would reload an incomplete inventory; and they transmit neither the tenant
+// nor a tenant-bound identity, so records would not land in the system tenant
+// (docs/SPEC.md:23). Until the SDK pages and scopes REST KV, an enabled PXE
+// backend needs the embedded datastore.
+func pxeDeviceStoreForClient(client pxeDatastoreClient, logger *logging.Logger) (pxe.DeviceStore, error) {
+	if !client.IsEmbedded() {
+		return nil, pxe.ErrInvalidConfiguration{
+			Field: "quicbaas.transport",
+			Reason: "PXE device persistence requires the embedded datastore: the pinned " +
+				"go-quicbaas REST KV transport neither pages List (a reload would miss devices) " +
+				"nor carries the system tenant scope",
+		}
+	}
 	// PXE device records are system-level: they live in the system tenant
 	// (docs/SPEC.md:23).
 	store, err := quicbaas.NewPXEDeviceStore(client, app.SystemTenantID, logger)

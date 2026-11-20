@@ -61,9 +61,13 @@ func NewPXEDeviceStore(storage Storage, tenantID string, logger *logging.Logger)
 // tenantContext scopes ctx to the store's tenant: PXE device records are
 // system-level and live in the system tenant (docs/SPEC.md:23).
 func (s *PXEDeviceStore) tenantContext(ctx context.Context) context.Context {
-	// The transport carries the tenant to a remote server; the embedded
-	// keyspace (service/keyspace.go BuildKey) reads it from pkg/iam's
-	// context key instead, so set both (#2081).
+	// The store is embedded-only: the embedded keyspace (service/keyspace.go
+	// BuildKey) reads the tenant from pkg/iam's context key. The pinned
+	// go-quicbaas v0.12.0-alpha REST KV handlers send neither value nor a
+	// tenant-bound identity, so records written over REST would not land in
+	// the system tenant; the daemon refuses an enabled PXE backend over a
+	// remote transport (pxeDeviceStoreForClient, #2028). The SDK transport
+	// value is set too, for when the SDK carries it.
 	return iam.ContextWithTenant(sdktransport.ContextWithTenant(ctx, s.tenantID), s.tenantID)
 }
 
@@ -104,7 +108,12 @@ func (s *PXEDeviceStore) List(ctx context.Context) ([]*pxe.DeviceInfo, error) {
 	// The pinned go-quicbaas v0.12.0-alpha embedded transport ignores the
 	// page token: it returns every record in one response but keeps the
 	// first batch's NextPageToken. So the walk stops on a token already
-	// sent or a page larger than the page size, and dedupes by ID.
+	// sent or a page larger than the page size, and dedupes by ID. That stop
+	// is only complete on the embedded transport, which returns every record:
+	// the pinned REST KV List returns one batch and restarts its scan on each
+	// call, so a repeated token there means devices were left out. The store
+	// is therefore embedded-only; the daemon refuses an enabled PXE backend
+	// over a remote transport (pxeDeviceStoreForClient, #2028).
 	ctx = s.tenantContext(ctx)
 	var devices []*pxe.DeviceInfo
 	seenIDs := make(map[string]struct{})
