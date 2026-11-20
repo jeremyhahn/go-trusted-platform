@@ -20,8 +20,10 @@ import (
 	"time"
 
 	sdkiam "github.com/jeremyhahn/go-quicbaas/sdk/go/client/iam"
+	sdkerrors "github.com/jeremyhahn/go-quicbaas/sdk/go/errors"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/platformtoken"
 	grpcapi "github.com/jeremyhahn/go-trusted-platform/pkg/api/grpc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/auth"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/eab"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
@@ -825,6 +827,140 @@ func TestEABGRPCService_PEPError(t *testing.T) {
 	}
 	if svc.lastGenerate.TenantID != "" {
 		t.Fatalf("undecided create reached the service: %+v", svc.lastGenerate)
+	}
+}
+
+// eabUserStub is the IAM user directory the EAB service resolves mTLS
+// callers against. Get answers only canonical numeric IDs, as the qrdb store
+// does; a certificate email or CN must go through GetByEmail or
+// FindByUsername.
+type eabUserStub struct {
+	users []*sdkiam.User
+}
+
+func (s *eabUserStub) Get(_ context.Context, tenantID, userID string) (*sdkiam.User, error) {
+	for _, r := range userID {
+		if r < '0' || r > '9' {
+			return nil, sdkerrors.NewNotFound("get user", "not a canonical user id")
+		}
+	}
+	for _, u := range s.users {
+		if u.ID == userID && u.TenantID == tenantID {
+			return u, nil
+		}
+	}
+	return nil, sdkerrors.NewNotFound("get user", "no such user")
+}
+
+func (s *eabUserStub) GetByEmail(_ context.Context, tenantID, email string) (*sdkiam.User, error) {
+	for _, u := range s.users {
+		if u.Email == email && (u.TenantID == tenantID || tenantID == "") {
+			return u, nil
+		}
+	}
+	return nil, sdkerrors.NewNotFound("get user by email", "no such user")
+}
+
+func (s *eabUserStub) FindByUsername(_ context.Context, tenantID, username string) (*sdkiam.User, error) {
+	for _, u := range s.users {
+		if u.Username == username && (u.TenantID == tenantID || tenantID == "") {
+			return u, nil
+		}
+	}
+	return nil, sdkerrors.NewNotFound("find user", "no such user")
+}
+
+func TestEABGRPCService_MTLSCallerResolvesIAMUser(t *testing.T) {
+	users := &eabUserStub{users: []*sdkiam.User{
+		{ID: "1001", TenantID: "tenant-a", Username: "alice", Email: "alice@example.com", Roles: []string{"eab-admin"}},
+		{ID: "1002", TenantID: "tenant-a", Username: "bob-cn", Email: "bob@example.com", Roles: []string{"eab-operator"}},
+		{ID: "2001", TenantID: "tenant-b", Username: "mallory", Email: "mallory@example.com", Roles: []string{"eab-admin"}},
+	}}
+	mtls := func(id *auth.Identity) context.Context {
+		return context.WithValue(context.Background(), ContextKeyIdentity, id)
+	}
+	cases := []struct {
+		name      string
+		identity  *auth.Identity
+		wantCode  codes.Code
+		wantID    string
+		wantRoles []string
+	}{
+		{
+			name:      "email SAN resolves to the stored admin",
+			identity:  &auth.Identity{ID: "alice@example.com", Email: "alice@example.com", Name: "Alice", TenantID: "tenant-a"},
+			wantCode:  codes.OK,
+			wantID:    "1001",
+			wantRoles: []string{"eab-admin"},
+		},
+		{
+			name:      "CN resolves by username",
+			identity:  &auth.Identity{ID: "bob-cn", Name: "bob-cn", TenantID: "tenant-a"},
+			wantCode:  codes.OK,
+			wantID:    "1002",
+			wantRoles: []string{"eab-operator"},
+		},
+		{
+			name:     "unknown subject denied without a PEP call",
+			identity: &auth.Identity{ID: "nobody@example.com", Email: "nobody@example.com", Name: "nobody", TenantID: "tenant-a"},
+			wantCode: codes.PermissionDenied,
+		},
+		{
+			name:     "user of another tenant denied",
+			identity: &auth.Identity{ID: "mallory@example.com", Email: "mallory@example.com", Name: "mallory", TenantID: "tenant-a"},
+			wantCode: codes.PermissionDenied,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			service, svc, _ := newEABGRPCFixture()
+			service.SetUserClient(users)
+			var got *sdkiam.CheckRequest
+			service.SetPEPClient(&mockSDKPEPClient{checkFunc: func(_ context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+				got = req
+				allowed := req.Subject.ID == "1001" || req.Subject.ID == "1002"
+				return &sdkiam.CheckResponse{Allowed: allowed && len(req.Subject.Roles) > 0}, nil
+			}})
+			_, err := service.CreateCredential(mtls(tc.identity), &platformv1.CreateEABCredentialRequest{ProfileId: 1, TenantId: "tenant-a"})
+			if code := status.Code(err); code != tc.wantCode {
+				t.Fatalf("code = %v, want %v (err %v)", code, tc.wantCode, err)
+			}
+			if tc.wantCode != codes.OK {
+				if got != nil {
+					t.Fatalf("PEP called for a refused caller: %+v", got)
+				}
+				if svc.lastGenerate.TenantID != "" {
+					t.Fatalf("refused create reached the service: %+v", svc.lastGenerate)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatal("PEP not called")
+			}
+			if got.Subject.ID != tc.wantID || got.Subject.TenantID != "tenant-a" {
+				t.Fatalf("subject = %+v, want ID %q in tenant-a", got.Subject, tc.wantID)
+			}
+			if len(got.Subject.Roles) != len(tc.wantRoles) || got.Subject.Roles[0] != tc.wantRoles[0] {
+				t.Fatalf("subject roles = %v, want %v", got.Subject.Roles, tc.wantRoles)
+			}
+		})
+	}
+}
+
+func TestEABGRPCService_MTLSCallerWithoutUserDirectory(t *testing.T) {
+	service, svc, _ := newEABGRPCFixture()
+	called := false
+	service.SetPEPClient(&mockSDKPEPClient{checkFunc: func(context.Context, *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+		called = true
+		return &sdkiam.CheckResponse{Allowed: true}, nil
+	}})
+	ctx := context.WithValue(context.Background(), ContextKeyIdentity, &auth.Identity{ID: "alice@example.com", Email: "alice@example.com", TenantID: "tenant-a"})
+	_, err := service.CreateCredential(ctx, &platformv1.CreateEABCredentialRequest{ProfileId: 1, TenantId: "tenant-a"})
+	if code := status.Code(err); code != codes.Unavailable {
+		t.Fatalf("code = %v, want Unavailable (err %v)", code, err)
+	}
+	if called || svc.lastGenerate.TenantID != "" {
+		t.Fatal("an unresolved mTLS caller reached the PEP or the service")
 	}
 }
 
