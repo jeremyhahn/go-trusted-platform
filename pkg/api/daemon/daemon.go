@@ -1110,7 +1110,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 
 	logger.Info("Creating health registry...")
 	// Create health registry
-	healthRegistry := health.NewRegistry()
+	healthRegistry := health.NewRegistry(health.WithLogger(logger.Slog()))
 
 	// Create QUIC service handler and server if enabled
 	var quicServerIntf QUICServerInterface // Use interface type to avoid typed nil issue
