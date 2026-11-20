@@ -35,7 +35,32 @@ import type {
   RotateTenantDEKRequest,
   RotateTenantDEKResponse,
   GetTenantDEKStatusResponse,
+  TenantStatus,
 } from '../types/tenant.js';
+
+/**
+ * Normalises a barrier action response into the declared `{ status }` shape.
+ * The daemon REST handlers (pkg/api/rest/tenant_handlers.go) write a flat
+ * TenantBarrierActionResponse `{ tenant_id, success, message, timestamp }`;
+ * the webservice writes `{ status }`, which is returned unchanged.
+ */
+function normalizeBarrierResponse<T extends { status: TenantStatus }>(res: ApiResponse<T>): ApiResponse<T> {
+  const data: unknown = res.data;
+  if (
+    data === null ||
+    typeof data !== 'object' ||
+    'status' in data ||
+    typeof (data as { success?: unknown }).success !== 'boolean'
+  ) {
+    return res;
+  }
+  const flat = data as { success: boolean; message?: unknown };
+  const status: TenantStatus = {
+    success: flat.success,
+    message: typeof flat.message === 'string' ? flat.message : '',
+  };
+  return { ...res, data: { status } as T };
+}
 
 /**
  * Tenant Service class
@@ -304,9 +329,11 @@ export class TenantService extends BaseService {
         'initBarrier: threshold and shares are not supported; the server initialises a non-Shamir barrier'
       );
     }
-    return this.client.post<InitTenantBarrierResponse>(
-      this.buildUrl(`/${this.encodePathSegment(request.tenantId)}/barrier/init`),
-      {}
+    return normalizeBarrierResponse(
+      await this.client.post<InitTenantBarrierResponse>(
+        this.buildUrl(`/${this.encodePathSegment(request.tenantId)}/barrier/init`),
+        {}
+      )
     );
   }
 
@@ -317,9 +344,11 @@ export class TenantService extends BaseService {
    * @returns Unseal result
    */
   async unsealBarrier(request: UnsealTenantBarrierRequest): Promise<ApiResponse<UnsealTenantBarrierResponse>> {
-    return this.client.post<UnsealTenantBarrierResponse>(
-      this.buildUrl(`/${this.encodePathSegment(request.tenantId)}/barrier/unseal`),
-      { key: request.key }
+    return normalizeBarrierResponse(
+      await this.client.post<UnsealTenantBarrierResponse>(
+        this.buildUrl(`/${this.encodePathSegment(request.tenantId)}/barrier/unseal`),
+        { key: request.key }
+      )
     );
   }
 
@@ -330,9 +359,11 @@ export class TenantService extends BaseService {
    * @returns Seal result
    */
   async sealBarrier(tenantId: string): Promise<ApiResponse<SealTenantBarrierResponse>> {
-    return this.client.post<SealTenantBarrierResponse>(
-      this.buildUrl(`/${this.encodePathSegment(tenantId)}/barrier/seal`),
-      {}
+    return normalizeBarrierResponse(
+      await this.client.post<SealTenantBarrierResponse>(
+        this.buildUrl(`/${this.encodePathSegment(tenantId)}/barrier/seal`),
+        {}
+      )
     );
   }
 }
