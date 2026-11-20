@@ -299,6 +299,10 @@ func (h *Handler) Activate(w http.ResponseWriter, r *http.Request) {
 		case errors.As(err, &noPending), errors.As(err, &noPort):
 			// Retryable preconditions — nothing has been changed anywhere.
 			h.responseWriter.Error404(w, r, err)
+		case errors.Is(err, policy.ErrMissingTenantID):
+			// The certificate carries no tenant OU (#2003): the device is
+			// refused, not a server fault. Nothing has been changed.
+			h.responseWriter.Error403(w, r, err, nil)
 		default:
 			h.logger.Errorf("SDN activation precheck failed for device %s: %v", serial, err)
 			h.responseWriter.Error500(w, r, err)

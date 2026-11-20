@@ -56,6 +56,8 @@ type Rule struct {
 	Source netip.Prefix
 	// Peer is the peer address for peer allowance rules.
 	Peer netip.Addr
+	// Destination is the virtual address for VIP deny rules.
+	Destination netip.Addr
 	// IPProto is the IP protocol number for peer rules.
 	IPProto uint8
 	// Comment is the rule comment.
@@ -86,6 +88,14 @@ const (
 	RulePeer
 	// RuleTunnelPort accepts BGP/BFD on a tunnel interface.
 	RuleTunnelPort
+	// RuleVRRP accepts VRRP (IP protocol 112) on an FHRP interface.
+	RuleVRRP
+	// RuleVIPDeny drops traffic to an accept-mode-off FHRP virtual
+	// address: every IPv4 packet, and every IPv6 packet but ICMPv6.
+	RuleVIPDeny
+	// RuleVIPDenyICMPv6 drops ICMPv6 to an accept-mode-off IPv6 virtual
+	// address other than neighbour solicitation and advertisement.
+	RuleVIPDenyICMPv6
 )
 
 // Render validates and normalises the ruleset and produces both forms.
@@ -112,6 +122,44 @@ func compile(rs Ruleset) []Rule {
 	var rules []Rule
 	rules = append(rules,
 		Rule{Kind: RuleLoopback, Interface: "lo", Comment: "loopback"},
+	)
+	// Input chain only: traffic forwarded through the VIP as a gateway is
+	// unaffected. ARP is not in the inet family, so the VIP still resolves.
+	// No ingress match for a global address: Linux delivers an installed
+	// VIP locally whatever interface the packet arrives on, so it is
+	// deduplicated by address. An IPv6 link-local VIP is scoped to its
+	// link: the same fe80:: address can be accept-mode off on one link and
+	// must be accepted on another, so its deny matches its own interface
+	// only and is deduplicated per interface (ruling 673, Codex #1716
+	// round 5). Ahead of the conntrack allowance, so an established flow to
+	// the VIP, or a reply to VIP-sourced traffic, is dropped once
+	// accept-mode is off (Codex #1716 round 4).
+	type vipKey struct {
+		iface string
+		addr  netip.Addr
+	}
+	seen := make(map[vipKey]bool, len(rs.VIPDeny))
+	for _, v := range rs.VIPDeny {
+		key := vipKey{addr: v.Address}
+		linkLocal := v.Address.Is6() && v.Address.IsLinkLocalUnicast()
+		if linkLocal {
+			key.iface = v.Interface
+		}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		comment := fmt.Sprintf("vip %s accept-mode off", v.Address)
+		if v.Address.Is4() {
+			rules = append(rules, Rule{Kind: RuleVIPDeny, Family: 4, Destination: v.Address, Comment: comment})
+			continue
+		}
+		rules = append(rules,
+			Rule{Kind: RuleVIPDeny, Interface: key.iface, Family: 6, Destination: v.Address, Comment: comment},
+			Rule{Kind: RuleVIPDenyICMPv6, Interface: key.iface, Family: 6, Destination: v.Address, Comment: comment},
+		)
+	}
+	rules = append(rules,
 		Rule{Kind: RuleEstablished, Comment: "established/related"},
 		Rule{Kind: RuleInvalid, Comment: "invalid"},
 	)
@@ -159,6 +207,9 @@ func compile(rs Ruleset) []Rule {
 			Rule{Kind: RuleTunnelPort, Interface: t, Protocol: ProtocolTCP, Port: PortBGP, Comment: "bgp on " + t},
 			Rule{Kind: RuleTunnelPort, Interface: t, Protocol: ProtocolUDP, Port: PortBFD, Comment: "bfd on " + t},
 		)
+	}
+	for _, ifc := range rs.VRRP {
+		rules = append(rules, Rule{Kind: RuleVRRP, Interface: ifc, IPProto: ipProtoVRRP, Comment: "vrrp on " + ifc})
 	}
 	return rules
 }
@@ -217,6 +268,17 @@ func ruleText(r Rule, icmp RateLimit) string {
 			name = "gre"
 		}
 		parts = append(parts, fmt.Sprintf("%s saddr %s meta l4proto %s accept", familyKeyword(r.Family), r.Peer, name))
+	case RuleVRRP:
+		// Numeric, so the boot-time nft -f does not depend on /etc/protocols.
+		parts = append(parts, "meta l4proto 112 accept")
+	case RuleVIPDeny:
+		if r.Family == 6 {
+			parts = append(parts, fmt.Sprintf("ip6 daddr %s meta l4proto != ipv6-icmp drop", r.Destination))
+		} else {
+			parts = append(parts, fmt.Sprintf("ip daddr %s drop", r.Destination))
+		}
+	case RuleVIPDenyICMPv6:
+		parts = append(parts, fmt.Sprintf("ip6 daddr %s icmpv6 type != { nd-neighbor-solicit, nd-neighbor-advert } drop", r.Destination))
 	}
 	return strings.Join(parts, " ") + fmt.Sprintf(" comment %q", r.Comment)
 }

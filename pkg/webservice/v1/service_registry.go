@@ -64,6 +64,9 @@ type ServiceRegistry struct {
 	logger  *logging.Logger
 	writer  response.HttpWriter
 	entries map[string]*ServiceEntry
+	// unavailable holds the routes requireService mounted with the
+	// service-unavailable handler, keyed to the missing service's name.
+	unavailable map[*mux.Route]string
 }
 
 // ServiceEntry is a single service's wire status.
@@ -173,7 +176,37 @@ func (r *ServiceRegistry) requireService(
 		route = route.MatcherFunc(excludeSubtreeMatcher(prefix, excludePrefixes))
 	}
 	route.HandlerFunc(handler)
-	router.HandleFunc(prefix, handler)
+	exact := router.HandleFunc(prefix, handler)
+	r.recordUnavailable(name, route, exact)
+}
+
+// recordUnavailable remembers the routes requireService mounted with the
+// service-unavailable handler, so the capabilities listing reports exactly
+// those routes as not configured.
+func (r *ServiceRegistry) recordUnavailable(name string, routes ...*mux.Route) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.unavailable == nil {
+		r.unavailable = map[*mux.Route]string{}
+	}
+	for _, route := range routes {
+		r.unavailable[route] = name
+	}
+}
+
+// unavailableRoutes returns a copy of the routes served by the
+// service-unavailable handler, keyed to the missing service's name.
+func (r *ServiceRegistry) unavailableRoutes() map[*mux.Route]string {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make(map[*mux.Route]string, len(r.unavailable))
+	for route, name := range r.unavailable {
+		out[route] = name
+	}
+	return out
 }
 
 // excludeSubtreeMatcher returns a mux matcher that rejects requests

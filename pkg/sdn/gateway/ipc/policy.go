@@ -28,17 +28,26 @@ import (
 // Policy names the kernel-verified uids each IPC method admits. The
 // supervisor is root, so ControlUIDs is {0} unless a test says otherwise;
 // DatapathUIDs additionally admits the parser processes' uid to the
-// kernel-programming process's narrow surface: the VPN peer RPCs, never
-// ApplyDesired, which replaces the whole desired document and is the
-// supervisor's alone. PlatformUIDs admits platformd's uid to
+// VPN plane surface (VPNPlaneService: InstallVPNPeer, RemoveVPNPeer,
+// ReconcileVPNPeers and RenewVPNPeer), never ApplyDesired, which replaces
+// the whole desired document and is the supervisor's alone. VPNPlaneService
+// is served only where VPNPlane is set, the `wireguard` process's socket
+// (ruling 942); every other socket refuses it to every uid. ReconcileVPNPeers is the bulk form of RemoveVPNPeer
+// under the same admission: it removes only what a run of RemoveVPNPeer
+// calls on the plane it names could remove, so it grants the parser uid
+// nothing the per-peer verb does not already grant. PlatformUIDs admits platformd's uid to
 // GatewayServicesService (#660), the live load-balancer, NAT64 and perf
 // surface, and to nothing else.
 type Policy struct {
 	// ControlUIDs may call every method. Empty means uid 0 only.
 	ControlUIDs []uint32
-	// DatapathUIDs may call the parser-facing DatapathService methods in
-	// addition to ControlUIDs.
+	// DatapathUIDs may call the parser-facing VPNPlaneService methods in
+	// addition to ControlUIDs, on a socket whose VPNPlane is set.
 	DatapathUIDs []uint32
+	// VPNPlane reports whether this socket is the `wireguard` process's,
+	// the one VPNPlaneService is admitted on. False refuses VPNPlaneService
+	// to every uid, the supervisor's included.
+	VPNPlane bool
 	// PlatformUIDs may call the GatewayServicesService methods in addition
 	// to ControlUIDs. Empty admits no one beyond ControlUIDs: a platformd
 	// running as root is already a control uid.
@@ -58,6 +67,12 @@ func supervisorOrParser(p Policy, uid uint32) bool {
 	return admits(p.ControlUIDs, uid) || admits(p.DatapathUIDs, uid)
 }
 
+// vpnPlaneSupervisorOrParser admits supervisorOrParser to VPNPlaneService,
+// and only on the `wireguard` process's socket (Policy.VPNPlane).
+func vpnPlaneSupervisorOrParser(p Policy, uid uint32) bool {
+	return p.VPNPlane && supervisorOrParser(p, uid)
+}
+
 // supervisorOrPlatform admits the control uids and platformd's uids.
 func supervisorOrPlatform(p Policy, uid uint32) bool {
 	return admits(p.ControlUIDs, uid) || slices.Contains(p.PlatformUIDs, uid)
@@ -70,8 +85,11 @@ var methodAdmissions = map[string]admission{
 	ipcv1.ProcessControlService_Status_FullMethodName:   supervisorOnly,
 	ipcv1.ProcessControlService_Snapshot_FullMethodName: supervisorOnly,
 	ipcv1.DatapathService_ApplyDesired_FullMethodName:   supervisorOnly,
-	ipcv1.DatapathService_InstallVPNPeer_FullMethodName: supervisorOrParser,
-	ipcv1.DatapathService_RemoveVPNPeer_FullMethodName:  supervisorOrParser,
+
+	ipcv1.VPNPlaneService_InstallVPNPeer_FullMethodName:    vpnPlaneSupervisorOrParser,
+	ipcv1.VPNPlaneService_RemoveVPNPeer_FullMethodName:     vpnPlaneSupervisorOrParser,
+	ipcv1.VPNPlaneService_ReconcileVPNPeers_FullMethodName: vpnPlaneSupervisorOrParser,
+	ipcv1.VPNPlaneService_RenewVPNPeer_FullMethodName:      vpnPlaneSupervisorOrParser,
 
 	ipcv1.GatewayServicesService_LBStatus_FullMethodName:       supervisorOrPlatform,
 	ipcv1.GatewayServicesService_ListVIPs_FullMethodName:       supervisorOrPlatform,
