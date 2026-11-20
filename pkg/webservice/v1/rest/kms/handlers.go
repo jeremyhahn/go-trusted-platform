@@ -773,6 +773,40 @@ func (h *Handlers) Decrypt(w http.ResponseWriter, r *http.Request) {
 	h.success200(w, r, &DecryptResponse{Plaintext: resp.Plaintext})
 }
 
+// Rewrap re-encrypts a ciphertext of the named key under its newest version
+// (POST /rewrap/{name}, KeyManagementService.Rewrap, #2057).
+func (h *Handlers) Rewrap(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureCrypto(w, r) {
+		return
+	}
+	var req RewrapRequest
+	if err := h.decodeJSON(r, &req); err != nil {
+		h.respWriter.Error400(w, r, err)
+		return
+	}
+	if len(req.Ciphertext) == 0 {
+		h.respWriter.Error400(w, r, &ErrInvalidRequest{Field: "ciphertext", Reason: "is required"})
+		return
+	}
+	ctx, cancel := h.ctx(r)
+	defer cancel()
+	resp, err := h.crypto.Rewrap(ctx, &cryptoclient.RewrapRequest{
+		KeyID:      h.name(r),
+		Ciphertext: req.Ciphertext,
+		Context:    req.Context,
+	})
+	if err != nil {
+		h.fail(w, r, err)
+		return
+	}
+	h.success200(w, r, &RewrapResponse{
+		KeyID:      h.name(r),
+		OldVersion: int(resp.OldKeyVersion),
+		NewVersion: int(resp.NewKeyVersion),
+		Ciphertext: resp.Ciphertext,
+	})
+}
+
 // Sign handles POST /api/v1/kms/sign/{name}.
 func (h *Handlers) Sign(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureCrypto(w, r) {

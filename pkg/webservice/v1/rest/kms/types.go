@@ -289,6 +289,22 @@ type DecryptResponse struct {
 	Plaintext []byte `json:"plaintext"`
 }
 
+// RewrapRequest is the body of POST /rewrap/{name}: a ciphertext of the
+// named key to re-encrypt under that key's newest version.
+type RewrapRequest struct {
+	Ciphertext []byte `json:"ciphertext"`
+	Context    []byte `json:"context,omitempty"`
+}
+
+// RewrapResponse carries the re-encrypted ciphertext and the key versions
+// it moved between.
+type RewrapResponse struct {
+	KeyID      string `json:"key_id"`
+	OldVersion int    `json:"old_version"`
+	NewVersion int    `json:"new_version"`
+	Ciphertext []byte `json:"ciphertext"`
+}
+
 // SignRequest is the JSON body for POST /api/v1/kms/sign/{name}.
 type SignRequest struct {
 	Data      []byte `json:"data"`
