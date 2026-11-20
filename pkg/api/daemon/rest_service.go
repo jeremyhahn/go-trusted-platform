@@ -29,7 +29,11 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	cryptoclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/crypto"
+	dekclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/dek"
+	kmsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/kms"
 	"github.com/jeremyhahn/go-quicbaas/sdk/go/client/objectstorage"
+	secretsclient "github.com/jeremyhahn/go-quicbaas/sdk/go/client/secrets"
 	xkmssdk "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms"
 	quicbaasca "github.com/jeremyhahn/go-quicbaas/sdk/go/xkms/ca"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/api/healthprobe"
@@ -42,6 +46,7 @@ import (
 	bmcwebsvc "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
 	restgateway "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/gateway"
+	restkms "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/kms"
 	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
@@ -477,6 +482,21 @@ func (s *RESTServer) SetKMSHandlers(service restapi.KMSService) {
 	handlers := restapi.NewKMSHandlers(service, s.logger)
 	handlers.RegisterRoutes(s.router)
 	s.logger.Info("KMS REST routes registered")
+}
+
+// SetKMSRouter mounts the KMS routes of docs/kms/api.md, the contract the SDK
+// REST transport and the integration REST adapter speak: the key name in the
+// path of the crypto routes (POST /api/v1/kms/sign/{name}), the stored DEKs
+// under /deks and the secrets under /secrets. It is the webservice listener's
+// KMS router, so both REST listeners answer one contract. Call it before
+// SetKMSHandlers: a path this router does not serve (the bare-path crypto
+// routes, export, batch, rewrap, status) falls through to those handlers. A
+// nil client answers its routes 503, never 404.
+func (s *RESTServer) SetKMSRouter(kms kmsclient.Client, crypto cryptoclient.Client, dek dekclient.Client, secrets secretsclient.Client) {
+	logger := logging.NewFromSlog(s.logger)
+	restkms.NewKMSRouter(logger, kms, crypto, dek, secrets, response.NewResponseWriter(logger, nil)).
+		RegisterRoutes(s.router.PathPrefix(restBasePath).Subrouter())
+	s.logger.Info("KMS REST routes registered (docs/kms/api.md contract)")
 }
 
 // SetComputeHandlers wires the compute (VM and container) REST handlers onto
