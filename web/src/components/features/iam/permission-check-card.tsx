@@ -19,18 +19,47 @@ export interface PermissionCheckCardProps {
   defaultSubjectId?: string;
 }
 
+/** Parses a comma-separated list, dropping blanks. */
+function parseList(value: string): string[] {
+  return value
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 export function PermissionCheckCard({ tenantId, defaultSubjectId = "" }: PermissionCheckCardProps) {
   const iam = useIAM();
   const [subjectId, setSubjectId] = useState(defaultSubjectId);
   const [action, setAction] = useState("");
   const [resource, setResource] = useState("");
+  const [roles, setRoles] = useState("");
+  const [groups, setGroups] = useState("");
 
   // Each verdict carries the tenant and inputs it was checked for, so a
-  // verdict is shown only beneath those same inputs.
-  type Checked = { tenantId: string; subjectId: string; action: string; resource: string };
+  // verdict is shown only beneath those same inputs. Roles and groups feed
+  // the PEP subject, so a role-granted permission is not shown Denied.
+  type Checked = {
+    tenantId: string;
+    subjectId: string;
+    action: string;
+    resource: string;
+    roles: string[];
+    groups: string[];
+  };
   const [checked, setChecked] = useState<Checked | null>(null);
-  const check = useMutation((vars: Checked) => iam.checkPermission(vars));
+  const check = useMutation((vars: Checked) =>
+    iam.checkPermission({
+      tenantId: vars.tenantId,
+      subjectId: vars.subjectId,
+      action: vars.action,
+      resource: vars.resource,
+      ...(vars.roles.length ? { roles: vars.roles } : {}),
+      ...(vars.groups.length ? { groups: vars.groups } : {}),
+    })
+  );
 
+  const roleList = parseList(roles);
+  const groupList = parseList(groups);
   const data = check.data as CheckIAMPermissionResponse | undefined;
   const result =
     data &&
@@ -39,7 +68,9 @@ export function PermissionCheckCard({ tenantId, defaultSubjectId = "" }: Permiss
     checked.tenantId === tenantId &&
     checked.subjectId === subjectId.trim() &&
     checked.action === action.trim() &&
-    checked.resource === resource.trim()
+    checked.resource === resource.trim() &&
+    checked.roles.join(",") === roleList.join(",") &&
+    checked.groups.join(",") === groupList.join(",")
       ? data
       : undefined;
   const ready = subjectId.trim() && action.trim() && resource.trim();
@@ -53,7 +84,7 @@ export function PermissionCheckCard({ tenantId, defaultSubjectId = "" }: Permiss
       </CardHeader>
       <CardContent className="space-y-4">
         <form
-          className="grid gap-4 md:grid-cols-4 items-end"
+          className="grid gap-4 md:grid-cols-3 items-end"
           onSubmit={(e: React.FormEvent) => {
             e.preventDefault();
             if (ready) {
@@ -62,6 +93,8 @@ export function PermissionCheckCard({ tenantId, defaultSubjectId = "" }: Permiss
                 subjectId: subjectId.trim(),
                 action: action.trim(),
                 resource: resource.trim(),
+                roles: roleList,
+                groups: groupList,
               };
               setChecked(vars);
               check.mutate(vars);
@@ -79,6 +112,24 @@ export function PermissionCheckCard({ tenantId, defaultSubjectId = "" }: Permiss
           <div className="space-y-2">
             <Label htmlFor="perm-check-resource">Resource</Label>
             <Input id="perm-check-resource" value={resource} onChange={(e) => setResource(e.target.value)} />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="perm-check-roles">Roles</Label>
+            <Input
+              id="perm-check-roles"
+              placeholder="comma-separated, optional"
+              value={roles}
+              onChange={(e) => setRoles(e.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="perm-check-groups">Groups</Label>
+            <Input
+              id="perm-check-groups"
+              placeholder="comma-separated, optional"
+              value={groups}
+              onChange={(e) => setGroups(e.target.value)}
+            />
           </div>
           <Button type="submit" disabled={check.isLoading || !ready}>
             {check.isLoading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
