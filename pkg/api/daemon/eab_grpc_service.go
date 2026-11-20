@@ -85,8 +85,8 @@ func (s *EABGRPCService) SetUserClient(c eabUserDirectory) {
 }
 
 // eabCaller is the authenticated caller of a tenant-scoped EAB operation.
-// identity is set for an mTLS certificate caller, whose IAM user and roles
-// are not yet resolved.
+// identity is set for an mTLS certificate caller, on gRPC or on QUIC, whose
+// IAM user and roles are not yet resolved.
 type eabCaller struct {
 	id       string
 	tenantID string
@@ -136,7 +136,10 @@ func (s *EABGRPCService) resolveEABMTLSCaller(ctx context.Context, caller eabCal
 }
 
 // eabCallerFromContext returns the authenticated caller, or false for an
-// unbound local caller.
+// unbound local caller. A certificate caller on QUIC, which
+// mtlsPeerAuthenticator turns into an operator-scoped AuthorizedContext with
+// no roles, carries its identity so it is resolved through IAM the same way
+// as a certificate caller on gRPC.
 func eabCallerFromContext(ctx context.Context) (eabCaller, bool) {
 	for _, from := range []func(context.Context) (*platformtoken.AuthorizedContext, bool){
 		grpcapi.AuthorizedContextFromContext,
@@ -144,6 +147,13 @@ func eabCallerFromContext(ctx context.Context) (eabCaller, bool) {
 		mcp.AuthorizedContextFromContext,
 	} {
 		if authCtx, ok := from(ctx); ok && authCtx != nil {
+			if isMTLSPeerAuthorizedContext(authCtx) {
+				return eabCaller{
+					id:       authCtx.Subject,
+					tenantID: authCtx.TenantID,
+					identity: &auth.Identity{ID: authCtx.Subject, Name: authCtx.Username, TenantID: authCtx.TenantID},
+				}, true
+			}
 			return eabCaller{id: authCtx.Subject, tenantID: authCtx.TenantID, roles: authCtx.Roles}, true
 		}
 	}
@@ -155,6 +165,13 @@ func eabCallerFromContext(ctx context.Context) (eabCaller, bool) {
 		return eabCaller{id: id, tenantID: identity.TenantID, identity: identity}, true
 	}
 	return eabCaller{}, false
+}
+
+// isMTLSPeerAuthorizedContext reports whether authCtx has the shape
+// mtlsPeerAuthenticator builds for a client certificate: exactly the operator
+// scope and no roles.
+func isMTLSPeerAuthorizedContext(authCtx *platformtoken.AuthorizedContext) bool {
+	return len(authCtx.Roles) == 0 && len(authCtx.Scopes) == 1 && authCtx.Scopes[0] == mtlsOperatorScope
 }
 
 // authorizeEABTenant authorises a tenant-scoped EAB operation. A bound caller
