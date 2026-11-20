@@ -93,6 +93,9 @@ export function useReportedGateways(
           const body = await res.json();
           if (mounted.current) {
             setGateways(body.payload?.gateways ?? body.gateways ?? []);
+            // The effect calls settle directly, bypassing refetch's reset:
+            // a success clears an earlier failure's error (#2125 Codex).
+            setError(null);
           }
         })
         .catch((e: unknown) => {
