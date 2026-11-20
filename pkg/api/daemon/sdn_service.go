@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1291,7 +1292,59 @@ type flowEntryKey struct {
 }
 
 func newFlowEntryKey(bridge string, f *ovs.FlowMod) flowEntryKey {
-	return flowEntryKey{bridge: bridge, table: f.Table, priority: f.Priority, match: f.Match}
+	return flowEntryKey{bridge: bridge, table: f.Table, priority: f.Priority, match: normalizeFlowMatch(f.Match)}
+}
+
+// flowMatchShorthands expands the ovs-ofctl protocol shorthands to the fields
+// the switch parses them into, so "tcp" and "ip,nw_proto=6" compare equal.
+var flowMatchShorthands = map[string][]string{
+	"ip":    {"dl_type=2048"},
+	"ipv6":  {"dl_type=34525"},
+	"arp":   {"dl_type=2054"},
+	"icmp":  {"dl_type=2048", "nw_proto=1"},
+	"tcp":   {"dl_type=2048", "nw_proto=6"},
+	"udp":   {"dl_type=2048", "nw_proto=17"},
+	"sctp":  {"dl_type=2048", "nw_proto=132"},
+	"icmp6": {"dl_type=34525", "nw_proto=58"},
+	"tcp6":  {"dl_type=34525", "nw_proto=6"},
+	"udp6":  {"dl_type=34525", "nw_proto=17"},
+	"sctp6": {"dl_type=34525", "nw_proto=132"},
+}
+
+// normalizeFlowMatch returns a canonical form of an OpenFlow match: protocol
+// shorthands expanded to their fields, numeric values in decimal, fields
+// de-duplicated and sorted, so two spellings of one switch entry are equal.
+func normalizeFlowMatch(match string) string {
+	fields := make(map[string]struct{})
+	for _, part := range strings.Split(match, ",") {
+		part = strings.ToLower(strings.TrimSpace(part))
+		if part == "" {
+			continue
+		}
+		if expanded, ok := flowMatchShorthands[part]; ok {
+			for _, f := range expanded {
+				fields[f] = struct{}{}
+			}
+			continue
+		}
+		if k, v, ok := strings.Cut(part, "="); ok {
+			k, v = strings.TrimSpace(k), strings.TrimSpace(v)
+			if k == "ip_proto" {
+				k = "nw_proto"
+			}
+			if n, err := strconv.ParseUint(v, 0, 64); err == nil {
+				v = strconv.FormatUint(n, 10)
+			}
+			part = k + "=" + v
+		}
+		fields[part] = struct{}{}
+	}
+	out := make([]string, 0, len(fields))
+	for f := range fields {
+		out = append(out, f)
+	}
+	sort.Strings(out)
+	return strings.Join(out, ",")
 }
 
 // restoreOverwrittenFlows re-installs the flows of every recorded policy other
