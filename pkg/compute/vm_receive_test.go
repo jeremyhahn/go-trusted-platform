@@ -364,6 +364,95 @@ func TestFinalizeIncoming_CommitAdoptsTheGuest(t *testing.T) {
 	require.NoError(t, orch.Close())
 }
 
+// startReceivedVM returns a received VM whose QEMU is a running fake process.
+func startReceivedVM(t *testing.T, orch *QEMUOrchestrator) *qemu.VM {
+	t.Helper()
+	orch.config.QEMUBinary = filepath.Join(t.TempDir(), "qemu-system-x86_64")
+	require.NoError(t, os.WriteFile(orch.config.QEMUBinary, []byte("#!/bin/sh\nexec sleep 60\n"), 0o755))
+	vm := newReceivedVM(t, orch)
+	cfg := vm.GetConfig()
+	require.NoError(t, os.MkdirAll(cfg.WorkDir, 0o755))
+	require.NoError(t, os.WriteFile(cfg.DiskPath, []byte("disk"), 0o600))
+	nvram := cfg.GetNVRAMPath()
+	require.NoError(t, os.MkdirAll(filepath.Dir(nvram), 0o755))
+	require.NoError(t, os.WriteFile(nvram, []byte("vars"), 0o600))
+	_, err := vm.StartIncoming(context.Background(), "")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = vm.Stop() })
+	return vm
+}
+
+// A forced stop that lands as soon as the received instance is published
+// must find the run and its exit watcher: the exit is recorded and the
+// process reaped (Codex P1, PR #2021).
+func TestFinalizeIncoming_StopRightAfterAdoptionRecordsTheExit(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	orch.config.MigrationTLS = &fakeServerTLS{dir: t.TempDir()}
+
+	recv := &fakeIncomingReceiver{port: 5000, vm: startReceivedVM(t, orch)}
+	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
+		return recv, nil
+	})
+	var stopErr error
+	receiverAdoptedHook = func(id string) {
+		stopErr = orch.StopWithOptions(context.Background(), id, StopOptions{Force: true})
+	}
+	t.Cleanup(func() { receiverAdoptedHook = nil })
+
+	spec := MigrationSpec{
+		InstanceID: "vm-migrated",
+		Arch:       orch.config.Arch,
+		VMName:     "guest",
+		Config:     &InstanceConfig{Memory: 1024},
+	}
+	handle, err := orch.ReceiveIncoming(context.Background(), spec)
+	require.NoError(t, err)
+	require.NoError(t, orch.FinalizeIncoming(context.Background(), handle.ReceiverID, true))
+	require.NoError(t, stopErr)
+
+	require.Eventually(t, func() bool {
+		state, err := orch.GetState(context.Background(), spec.InstanceID)
+		return err == nil && state == StateStopped
+	}, 10*time.Second, 20*time.Millisecond, "the forced stop's exit must be recorded")
+	require.NoError(t, orch.Close())
+}
+
+// The adopted instance carries the destination's work directory and disk, so
+// disk operations find the migrated image and Delete removes the receiver's
+// directory (Codex P1, PR #2021).
+func TestFinalizeIncoming_AdoptedConfigCarriesTheDestinationPaths(t *testing.T) {
+	orch := newOpsOrchestrator(t)
+	orch.config.MigrationTLS = &fakeServerTLS{dir: t.TempDir()}
+
+	vm := startReceivedVM(t, orch)
+	qcfg := vm.GetConfig()
+	recv := &fakeIncomingReceiver{port: 5000, vm: vm}
+	swapReceiverLauncher(t, func(ctx context.Context, p *incomingReceiverParams) (incomingReceiver, error) {
+		return recv, nil
+	})
+
+	spec := MigrationSpec{
+		InstanceID: "vm-migrated",
+		Arch:       orch.config.Arch,
+		VMName:     "guest",
+		Config:     &InstanceConfig{Memory: 1024},
+	}
+	handle, err := orch.ReceiveIncoming(context.Background(), spec)
+	require.NoError(t, err)
+	require.NoError(t, orch.FinalizeIncoming(context.Background(), handle.ReceiverID, true))
+
+	got, err := orch.Get(context.Background(), spec.InstanceID)
+	require.NoError(t, err)
+	assert.Equal(t, qcfg.WorkDir, got.Config.WorkDir)
+	assert.Equal(t, qcfg.DiskPath, got.Config.DiskPath)
+	assert.Empty(t, spec.Config.WorkDir, "the caller's spec is not modified")
+
+	require.NoError(t, orch.StopWithOptions(context.Background(), spec.InstanceID, StopOptions{Force: true}))
+	require.NoError(t, orch.Delete(context.Background(), spec.InstanceID))
+	_, statErr := os.Stat(qcfg.WorkDir)
+	assert.True(t, os.IsNotExist(statErr), "Delete must remove the receiver's work directory")
+}
+
 // A failed commit registers nothing.
 func TestFinalizeIncoming_FailedCommitAdoptsNothing(t *testing.T) {
 	orch := newOpsOrchestrator(t)
@@ -382,6 +471,11 @@ func TestFinalizeIncoming_FailedCommitAdoptsNothing(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.ErrorIs(t, orch.FinalizeIncoming(context.Background(), handle.ReceiverID, true), ErrMigrationReceiveFailed)
+
+	// The failed finalize reaps the receiver's process: nothing is left
+	// running without an owner, and a retry finds no receiver.
+	assert.True(t, recv.aborted, "a failed commit must abort the receiver so its process is killed and waited")
+	require.ErrorIs(t, orch.FinalizeIncoming(context.Background(), handle.ReceiverID, true), ErrReceiverNotFound)
 
 	_, err = orch.Get(context.Background(), "vm-migrated")
 	require.ErrorIs(t, err, ErrInstanceNotFound)

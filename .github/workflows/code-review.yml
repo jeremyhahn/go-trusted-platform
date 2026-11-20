@@ -1,4 +1,4 @@
-# code-review-template: v5.11.2 -- the code review in Gitea or GitHub CI for a pull request
+# code-review-template: v5.12.3 -- the code review in Gitea or GitHub CI for a pull request
 # that carries `code-review` and `task:ready`, routed by its labels through
 # route-labels (labels.md §2). Codex on the `codex` runner reviews every such
 # PR; `agent:opencode` adds an advisory COMMENT review by the opencode job on
@@ -28,6 +28,98 @@
 #   COORDINATOR_TURNS         the codex rounds the project coordinator has
 #                             on a `needs-coordinator` PR after the two-round
 #                             stop (v5.9.8, Tenant Agent m2185); default 3
+#
+# v5.12.3 (2026-11-17, Tenant Agent; Codex's P1 on go-xkms #2251): THE SCOPE
+# JOB IS NOT CANCELLED. v5.12.2 gave it a per-head group with
+# cancel-in-progress, so an unrelated label (dept:*, ci:full) added while a
+# review-requesting run's scope job ran cancelled it, that run's review was
+# skipped, and the newer run's review failed its label allowlist: the head
+# had no review left. The scope job has no group again; it is one short
+# hosted job per event. The review job's group (no cancelling) and the
+# gate's (cancelling, and its twin wait reads the review in flight) stay.
+#
+# v5.12.2 (2026-11-17, Tenant Agent; go-trusted-platform ran 4 to 7 runs per
+# PR head, #2010 to #2015, and Codex's P1s on the v5.12.1 rollout PRs
+# go-xkms #2251, go-quicbaas #2515 and trusted-firmware #578):
+#   (1) ONE REVIEW, ONE GATE PER HEAD. Every `labeled` event starts a run,
+#       and the factory adds code-review, task:ready and dept:* (twice each)
+#       in the same second. The review job's GitHub group carried the run id
+#       (v5.9.7), so each run queued its own review on the one codex runner,
+#       and each run's gate held a hosted runner in the twin wait for up to
+#       75 minutes. The required context has been the gate since v5.11.0,
+#       so v5.9.7's reason is gone: the review job's group is the PR and its
+#       head on both forges (one review runs, one waits, a newer waiting run
+#       replaces an older one), and the scope job and the gate cancel an
+#       older run of their own on the same head (cancel-in-progress). The
+#       newest gate posts the head's `Code Review (codex)` check.
+#   (2) A SUCCESSFUL ROUND ENDS THE COORDINATOR HOLD. v5.12.1's gate holds on
+#       `needs-coordinator`, but a coordinator round that Codex approves left
+#       the label on, so the approved head could never pass. The posting step
+#       takes `needs-coordinator` off when it files an APPROVED verdict.
+#   (3) A SCOPE JOB THAT DID NOT FINISH IS NOT A PASS. When the scope job
+#       failed or was cancelled, the review job did not run, and the gate
+#       reused an older approval of the head. The gate now fails then.
+#
+# v5.12.1 (2026-11-17, Tenant Agent rulings 799, 804 and 805; Codex's P1s
+# on go-qrdb #1616, go-trusted-platform #1986 and trusted-firmware #572):
+#   (1) THE INFOSEC GUARD IS THE TEMPLATE'S. Owner ruling 443's review skip
+#       (InfoSec's guard, Y-1 to Y-8 and Y-10), which every repository
+#       copied into its review jobs, is the `scope` job here, moved
+#       byte-for-byte; only its wiring is new. It runs once per event; the
+#       review job needs it and does not run when it passed (skip=true). The
+#       gate exempts a change of docs only (DOCS_PATHS) as before, and a
+#       change of docs and CI config (NO_REVIEW_PATHS: .github/, .gitea/)
+#       only when the scope job passed, so a protected workflow, an added
+#       write permission or any other change the guard refuses needs a Codex
+#       approval. A repository customizes the guard's PROTECTED, CI_FILE and
+#       GATE_JOB in the scope job only, and deletes its own copies of the
+#       step and the `steps.scope.outputs.skip` tests.
+#   (2) NO APPROVAL IS REUSED ON A FAILED REVIEW OR A HOLD. Before it reads
+#       the verdict, the gate fails when this run's review job failed (a
+#       requested round that ended red, an owner or round-limit stop), and
+#       when the live PR carries `needs-owner` or `needs-coordinator`.
+#   (3) A FRESH `owner-resume` RESTARTS THE COUNT WITH `needs-coordinator`
+#       ON. The v5.11.2 stop message said the Tenant Agent restarts the count
+#       with owner-resume, but the guard resumed only with
+#       `needs-coordinator` off (ruling 799). A fresh label now resumes with
+#       it on, and the posting step takes `needs-coordinator` off with
+#       `owner-resume` when it files the resumed round's verdict, so hold (2)
+#       does not keep the approved head. The resume on a person removing
+#       `needs-owner` (GitHub) still needs `needs-coordinator` off.
+#   Not changed: the twin lookup's head_sha filter. On GitHub a
+#   pull_request_target run's head_sha is the PR head (see v5.10.10 below);
+#   Codex's P1 on trusted-firmware #572 read it as the base commit.
+#   A copy takes the version line, the scope job, the review job's `needs`
+#   and `if:` line, the gate's needs, env and exemption and hold blocks, the
+#   guard's resume block and the posting step's two relabel lines.
+#
+# v5.12.0 (2026-11-16, ruling 742 (3), the owner: "one approval only,
+# GitHub merges, agents never merge"): RE-ARM AFTER THE APPROVAL. The
+# factory arms squash auto-merge on every non-draft PR at its opening and
+# when a draft is marked ready; on GitHub this workflow arms it again once
+# the confirm step has found a codex APPROVED standing on the head, pinned
+# to that head (expectedHeadOid), so an arm GitHub dropped or refused
+# earlier is restored by the approval itself. A PR GitHub reads in clean
+# status (every requirement met, so it refuses to arm) is squash-merged
+# here instead, pinned to the approved head; GitHub enforces the ruleset on
+# that call too. The step never fails the job: a refused or failed arm is a
+# warning, and the factory's project check retries it. The reviewer App
+# needs pull-requests and contents write for it. Gitea is unchanged
+# (automerge.yml). A copy takes the version line and the new step.
+#
+# v5.11.3 (2026-11-16, owner ruling 732: "why do we have PRs coming to
+# me?! get them reviewed by codex and get them merged"): THE OWNER IS OUT
+# OF THE PR LOOP. A PR that exhausts its codex rounds keeps
+# `needs-coordinator` and the coordinator escalates it to the Tenant Agent,
+# which may restart the count with `owner-resume`; nobody sets `needs-owner`
+# on a PR. A `needs-owner` label found on a PR (a copy older than v5.11.2, or
+# a hand) still gets no round and no reused approval, but it is no longer a
+# wait for the owner: the run ends red, skip=needs-owner, stop=
+# needs-coordinator, and the hand-on step takes `needs-owner` off and puts
+# `needs-coordinator` on. The reviewer taking it off is not a person, so it
+# never restarts the count. The round-limit message names the escalation.
+# A copy takes the version line, owner_hold, the hand-on step's
+# `needs-coordinator` case and the round-limit message (marked v5.11.3).
 #
 # v5.11.2 (2026-11-15, Tenant Agent ruling 673; 16 PRs labelled
 # `needs-owner` at round 5 never reached the owner queue): THE LAST ROUND
@@ -280,9 +372,10 @@
 #   it to the Tenant Agent, never straight to the owner). A head past the
 #   limit is not reviewed: the run ends skip=round-limit, red, posts
 #   nothing and sets `needs-coordinator`. A PR
-#   labelled `needs-owner` is not reviewed (skip=needs-owner, red) until
-#   the owner takes the label off (v5.10.8: no approval is reused past it,
-#   and the count starts over only on evidence of the owner). Removing and re-adding `code-review`
+#   labelled `needs-owner` is not reviewed (skip=needs-owner, red; v5.10.8:
+#   no approval is reused past it); since v5.11.3 (owner ruling 732) the
+#   hand-on step swaps it for `needs-coordinator`, and the Tenant Agent
+#   restarts the count with `owner-resume`. Removing and re-adding `code-review`
 #   starts the count over (round 1); re-running the run that added it
 #   replays its event and also starts over. `review:round-3` (unreleased)
 #   is gone. The labelling step re-reads the labels (Gitea can answer 200
@@ -650,8 +743,442 @@ env:
   COORDINATOR_TURNS: 3
 
 jobs:
+  # v5.12.1 (rulings 443, 804, 805): InfoSec's guard as its own job, once
+  # per event, ahead of the review and the gate. Its step is the step every
+  # repository carried in its review jobs, byte-for-byte; the job around it
+  # is new. It reads the event data and the PR through the API with this
+  # job's token and never checks out the PR's code. CUSTOMIZE: PROTECTED,
+  # CI_FILE and GATE_JOB inside the step, per repository.
+  scope:
+    name: Review scope (InfoSec guard)
+    if: github.event.pull_request.state == 'open'
+    # v5.12.3: no concurrency group. Cancelling an older run's scope job
+    # skipped that run's requested review (v5.12.2), so each event's guard
+    # runs to the end; it is a short API-only job.
+    runs-on: ${{ github.server_url == 'https://github.com' && 'ubuntu-latest' || 'bigdisk' }}
+    # The guard's python runs at most 240 s (its timeout -k 10 240).
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      skip: ${{ steps.scope.outputs.skip }}
+    steps:
+      # Owner ruling 443 (2026-11-10): a pull request that changes only workflow
+      # files gets no review, and only when InfoSec's guard passes (Y-1 to Y-8,
+      # Y-10). FIRST, before the guard and any checkout: the step reads the event
+      # data and the pull request through the API with the job's own token, never
+      # the pull request's code. Every later step tests steps.scope.outputs.skip.
+      # A failed rule, an API error, missing data or a limit leaves skip=false, so
+      # the review runs as usual; the step always exits 0 and never fails the
+      # job. It prints one line per failed rule and path, never file contents.
+      #   Y-1  the head repository is this repository (event and live PR).
+      #   Y-2  every old and new path is .github/workflows/<name>.yml or .yaml;
+      #        composite actions, scripts, CODEOWNERS and the dependency bot
+      #        config take a normal round.
+      #   Y-3  no protected workflow: PROTECTED in the script (the review and
+      #        automerge workflows, every release, publish or nightly one).
+      #   Y-4  status added or modified only (never removed or renamed), and
+      #        every job in the CI gate's `needs` on main exists at the head
+      #        (CI_FILE and GATE_JOB, read at the base and head commits).
+      #   Y-5  no added line holds pull_request_target, push, workflow_run,
+      #        workflow_call, issue_comment, repository_dispatch, a YAML anchor
+      #        or alias, or a new or changed key under `on:` (an added workflow
+      #        file therefore takes a round); a missing or cut patch, or one that
+      #        disagrees with the head file, takes a round.
+      #   Y-6  no added line holds secrets, permissions, a write scope, id-token
+      #        or environment:.
+      #   Y-7  every added `uses:` ends in a 40-hex commit; no added line holds
+      #        container:, services:, docker, sudo, apt or a pipe into a shell.
+      #   Y-8  every added runs-on: value is, as a string, ubuntu-latest or the
+      #        approved routing expression (ROUTE); no runs-on from the matrix
+      #        or a job output.
+      #   Y-10 a job whose runs-on line changes, or a job that is added, takes
+      #        the Y-7 tests on every line of the job at the head.
+      - name: Is the change CI/SDLC-only and inside InfoSec's guard?
+        id: scope
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GUARD_SERVER: ${{ github.server_url }}
+          GUARD_REPO: ${{ github.repository }}
+          GUARD_PR: ${{ github.event.pull_request.number }}
+          GUARD_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          GUARD_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GUARD_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set +e
+          skip=false
+          res=$(mktemp 2>/dev/null) || res=
+          if [ -n "$res" ] && command -v python3 >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; then
+            GUARD_RESULT="$res" timeout -k 10 240 python3 -I - <<'GUARD_PY'
+          # CUSTOMIZE (per repository; keep everything below this block verbatim).
+          # PROTECTED: the workflow file names (stems) that always take a review round
+          # (InfoSec Y-3): the review workflow(s), the automerge workflow and every
+          # release, publish or nightly workflow in .github/workflows/.
+          PROTECTED = ["code-review", "qwen-review", "automerge", "release", "nightly"]
+          # CI_FILE and GATE_JOB: the CI workflow and its gate job, whose `needs` list
+          # on main must still name jobs that exist at the head (InfoSec Y-4).
+          CI_FILE = ".github/workflows/ci.yml"
+          GATE_JOB = "ci-gate"
+          # End of CUSTOMIZE.
+
+          # Owner ruling 443 review skip, InfoSec guard Y-1 to Y-8 and Y-10. It reads the
+          # event data and the pull request through the API only (no checkout). Any
+          # failed rule, error, missing datum or limit gives skip=false (a normal review
+          # round). It prints one line per failed rule and path, never file contents.
+          import base64, json, os, re, urllib.error, urllib.parse, urllib.request
+
+          API = "https://api.github.com"
+          MAX_PAGES = 30          # 3000 entries: the API's own cap on pulls/{n}/files
+          MAX_WORKFLOWS = 50      # changed workflow files read at the head
+          MAX_BYTES = 1000000     # a workflow file larger than this takes a round
+          PROTECTED_WORDS = ("review", "automerge", "release", "publish", "nightly")
+          # The approved routing expression (m2466), split so that the runner does not
+          # evaluate it inside this script.
+          ROUTE = "$" + ("{{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || "
+                         "(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && "
+                         "fromJSON('[\"self-hosted\",\"linux\",\"x64\",\"bigdisk\"]') || 'ubuntu-latest' }}")
+          RUNNERS = ("ubuntu-latest", ROUTE)
+
+          WF_PATH = re.compile(r"\.github/workflows/[^/]+\.(?:yml|yaml)")
+          KEY = re.compile(r"""^( *)(["']?)([A-Za-z0-9_.-]+)\2[ \t]*:(?:[ \t]+(.*))?$""")
+          SHA = re.compile(r"[0-9a-f]{40}")
+          Y5 = re.compile(r"pull_request_target|workflow_run|workflow_call|issue_comment|repository_dispatch", re.I)
+          Y5_PUSH = re.compile(r"""^\s*(?:-\s*)?["']?push["']?\s*(?::|$)""")
+          Y5_YAML = re.compile(r"""<<\s*:|(?:^\s*-\s+|:\s+|[\[{,]\s*)[&*][A-Za-z0-9_-]""")
+          Y6 = re.compile(r"""\bsecrets\b|\bpermissions\b|\bwrite-all\b|:\s*["']?write\b|\bid-token\b|\benvironment\s*:""", re.I)
+          USES = re.compile(r"""(?:^|[\s{,-])["']?uses["']?\s*:\s*(.*)$""")
+          RUNS_ON = re.compile(r"""(?:^|[\s{,-])["']?runs-on["']?\s*:(.*)$""")
+          Y7 = re.compile(r"""(?:^|[\s{,-])["']?(?:container|services)["']?\s*:|docker|\bsudo\b|\bapt\b""", re.I)
+          SHELLS = r"(?:/usr/bin/|/bin/)?(?:ba|z|da|k|c|tc|fi|a)?sh\b|python[0-9.]*\b|perl\b|ruby\b|node\b|php\b|pwsh\b|powershell\b|iex\b|invoke-expression\b"
+          Y7_PIPE = re.compile(r"\|\s*(?:sudo\s+(?:-\S+\s+)*)?(?:env\s+(?:\S+=\S*\s+)*)?(?:" + SHELLS + ")", re.I)
+          Y7_SUBST = re.compile(r"(?:\b(?:ba|z|da|k)?sh\b|\bsource\b|\beval\b|\biex\b|^\s*\.)[^\n]*(?:<\(|\$\(|`)\s*(?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)\b", re.I)
+
+
+          class Stop(Exception):
+              pass
+
+
+          failed = []
+
+
+          def fail(rule, path="-"):
+              item = (rule, path)
+              if item not in failed:
+                  failed.append(item)
+                  if len(failed) <= 60:
+                      print("no skip: %s %s" % (rule, json.dumps(path[:200])), flush=True)
+
+
+          def get(url):
+              if not url.startswith(API + "/repos/"):
+                  raise Stop("url")
+              r = urllib.request.Request(url, headers={
+                  "Authorization": "Bearer " + TOKEN, "Accept": "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "code-review-scope-guard"})
+              with urllib.request.urlopen(r, timeout=30) as f:
+                  if f.status != 200:
+                      raise Stop("status")
+                  return json.loads(f.read().decode("utf-8")), f.headers.get("Link", "") or ""
+
+
+          def read_file(path, ref):
+              body, _ = get("%s/repos/%s/contents/%s?ref=%s" % (API, REPO, urllib.parse.quote(path, safe="/"), ref))
+              if not isinstance(body, dict) or body.get("type") != "file" or body.get("encoding") != "base64":
+                  raise Stop("contents")
+              raw = base64.b64decode(body.get("content") or "", validate=False)
+              if len(raw) > MAX_BYTES or len(raw) != body.get("size"):
+                  raise Stop("size")
+              return raw.decode("utf-8").split("\n")
+
+
+          def strip_comment(v):
+              return re.sub(r"(?:^|\s+)#.*$", "", v or "").strip()
+
+
+          def structure(lines):
+              """Line ranges (1-based, inclusive) of the top-level keys, of `on:` and of
+              each job and each job key, read by indentation only. None when the file
+              cannot be read that way."""
+              content = [i for i, l in enumerate(lines, 1) if l.strip() and not l.lstrip().startswith("#")]
+              if any("\t" in lines[i - 1][:len(lines[i - 1]) - len(lines[i - 1].lstrip())] for i in content):
+                  return None
+              ind = lambda i: len(lines[i - 1]) - len(lines[i - 1].lstrip(" "))
+              end = len(lines)
+              top = []
+              for i in content:
+                  if ind(i) == 0:
+                      if lines[i - 1].rstrip() in ("---", "..."):
+                          if i != content[0]:
+                              return None
+                          continue
+                      m = KEY.match(lines[i - 1].rstrip())
+                      if not m:
+                          return None
+                      top.append((m.group(3), i, m.group(4)))
+
+              def ranges(items, last):
+                  out = []
+                  for n, (k, s, v) in enumerate(items):
+                      out.append((k, s, (items[n + 1][1] - 1) if n + 1 < len(items) else last, v))
+                  return out
+
+              def children(s, e):
+                  sub = [i for i in content if s < i <= e]
+                  if not sub:
+                      return []
+                  ci = ind(sub[0])
+                  items = []
+                  for i in sub:
+                      if ind(i) < ci:
+                          raise Stop("indent")
+                      if ind(i) == ci:
+                          m = KEY.match(lines[i - 1].rstrip())
+                          if not m:
+                              raise Stop("key")
+                          items.append((m.group(3), i, m.group(4)))
+                  return ranges(items, e)
+
+              tops = ranges(top, end)
+              on = [t for t in tops if t[0] in ("on", "true")]
+              jobs = [t for t in tops if t[0] == "jobs"]
+              if len(on) != 1 or len(jobs) != 1:
+                  return None
+              try:
+                  on_kids = [] if strip_comment(on[0][3]) else children(on[0][1], on[0][2])
+                  if strip_comment(jobs[0][3]):
+                      return None
+                  job_list = []
+                  for k, s, e, v in children(jobs[0][1], jobs[0][2]):
+                      if strip_comment(v):
+                          return None
+                      job_list.append((k, s, e, children(s, e)))
+              except Stop:
+                  return None
+              return {"on": on[0], "on_kids": on_kids, "jobs": job_list}
+
+
+          def needs_of(st, lines, job):
+              for k, s, e, keys in st["jobs"]:
+                  if k != job:
+                      continue
+                  for kk, ks, ke, kv in keys:
+                      if kk != "needs":
+                          continue
+                      v = strip_comment(kv)
+                      if v.startswith("[") and v.endswith("]"):
+                          names = [x.strip().strip("'\"") for x in v[1:-1].split(",") if x.strip()]
+                      elif v:
+                          names = [v.strip("'\"")]
+                      else:
+                          names = []
+                          for i in range(ks + 1, ke + 1):
+                              t = strip_comment(lines[i - 1])
+                              if t:
+                                  if not t.startswith("- "):
+                                      return None
+                                  names.append(t[2:].strip().strip("'\""))
+                      if not all(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", n) for n in names):
+                          return None
+                      return names
+                  return []
+              return None
+
+
+          def y7(path, text):
+              m = USES.search(text)
+              if m:
+                  v = strip_comment(m.group(1)).strip("'\"")
+                  if not re.search(r"@[0-9a-f]{40}$", v):
+                      fail("Y-7 uses", path)
+              if Y7.search(text):
+                  fail("Y-7 container/docker/sudo/apt", path)
+              if Y7_PIPE.search(text) or Y7_SUBST.search(text):
+                  fail("Y-7 pipe to shell", path)
+
+
+          def check_patch(f):
+              path = f["filename"]
+              patch = f.get("patch")
+              if not isinstance(patch, str) or not patch:
+                  fail("Y-5 patch missing", path)
+                  return
+              added, removed_runs = {}, []
+              new = 0
+              plus = minus = 0
+              hunk = False
+              for l in patch.split("\n"):
+                  m = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", l)
+                  if m:
+                      new, hunk = int(m.group(1)), True
+                      continue
+                  if not hunk or l == "" or l.startswith("\\"):
+                      continue
+                  if l.startswith("+"):
+                      added[new] = l[1:]
+                      new += 1
+                      plus += 1
+                  elif l.startswith("-"):
+                      minus += 1
+                      if RUNS_ON.search(l[1:]):
+                          removed_runs.append(new)
+                  else:
+                      new += 1
+              if not hunk or plus != f.get("additions") or minus != f.get("deletions"):
+                  fail("Y-5 patch cut", path)
+                  return
+              lines = read_file(path, HEAD_SHA)
+              for n, t in added.items():
+                  if n < 1 or n > len(lines) or lines[n - 1] != t:
+                      fail("Y-5 patch does not match the head", path)
+                      return
+              st = structure(lines)
+              if st is None:
+                  fail("Y-5 on/jobs not readable", path)
+                  return
+              on_key, on_s, on_e, _ = st["on"]
+              push = [k for k in st["on_kids"] if k[0] == "push"]
+              for n, t in added.items():
+                  if Y5.search(t) or Y5_PUSH.search(t):
+                      fail("Y-5 trigger", path)
+                  if Y5_YAML.search(t):
+                      fail("Y-5 anchor/alias", path)
+                  if n == on_s or any(n == k[1] for k in st["on_kids"]) or any(k[1] <= n <= k[2] for k in push):
+                      fail("Y-5 on:", path)
+                  if Y6.search(t):
+                      fail("Y-6", path)
+                  y7(path, t)
+                  m = RUNS_ON.search(t)
+                  if m and strip_comment(m.group(1)) not in RUNNERS:
+                      fail("Y-8", path)
+              for job, s, e, keys in st["jobs"]:
+                  ro = [k for k in keys if k[0] == "runs-on"]
+                  if any(re.search(r"matrix|needs|strategy|inputs", kv or "", re.I) for k, ks, ke, kv in ro):
+                      fail("Y-8 runs-on from the matrix or a job output", path)
+                  touched = s in added or any(s <= n <= e for n in removed_runs)
+                  for k, ks, ke, kv in ro:
+                      if any(ks <= n <= ke for n in added):
+                          touched = True
+                          if strip_comment(kv) not in RUNNERS or any(strip_comment(lines[i - 1]) for i in range(ks + 1, ke + 1)):
+                              fail("Y-8", path)
+                  if touched:
+                      for i in range(s, e + 1):
+                          y7(path, lines[i - 1])
+
+
+          def main():
+              global TOKEN, REPO, HEAD_SHA
+              e = os.environ
+              if e.get("GUARD_SERVER") != "https://github.com":
+                  fail("forge: not github.com")
+                  return False
+              REPO, head_repo = e.get("GUARD_REPO", ""), e.get("GUARD_HEAD_REPO", "")
+              if not REPO or head_repo != REPO:
+                  fail("Y-1 head repository")
+                  return False
+              TOKEN, HEAD_SHA, base_sha = e.get("GH_TOKEN", ""), e.get("GUARD_HEAD_SHA", ""), e.get("GUARD_BASE_SHA", "")
+              pr = e.get("GUARD_PR", "")
+              if not TOKEN or not re.fullmatch(r"[1-9][0-9]*", pr) or not SHA.fullmatch(HEAD_SHA) or not SHA.fullmatch(base_sha):
+                  fail("event data missing")
+                  return False
+
+              def live_head():
+                  p, _ = get("%s/repos/%s/pulls/%s" % (API, REPO, pr))
+                  if p["head"]["sha"] != HEAD_SHA or (p["head"].get("repo") or {}).get("full_name") != REPO:
+                      fail("Y-1 live head")
+                      raise Stop("head")
+
+              live_head()
+              files, url = [], "%s/repos/%s/pulls/%s/files?per_page=100" % (API, REPO, pr)
+              for _ in range(MAX_PAGES + 1):
+                  page, link = get(url)
+                  if not isinstance(page, list):
+                      raise Stop("list")
+                  files += page
+                  m = re.search(r'<([^>]+)>;\s*rel="next"', link)
+                  if not m:
+                      break
+                  url = m.group(1)
+              else:
+                  fail("limit: pages")
+                  return False
+              live_head()
+              if not files or len(files) >= 3000:
+                  fail("limit: %d files" % len(files))
+                  return False
+              readable = []
+              for f in files:
+                  path, old = f.get("filename") or "", f.get("previous_filename")
+                  ok = True
+                  for p in [path] + ([old] if old is not None else []):
+                      if not WF_PATH.fullmatch(p):
+                          fail("Y-2", p)
+                          ok = False
+                          continue
+                      stem = p.rsplit("/", 1)[1].rsplit(".", 1)[0].lower()
+                      if stem in [x.lower() for x in PROTECTED] or any(w in stem for w in PROTECTED_WORDS):
+                          fail("Y-3", p)
+                          ok = False
+                  if f.get("status") not in ("added", "modified") or old is not None:
+                      fail("Y-4 status %s" % f.get("status"), path)
+                      ok = False
+                  if ok:
+                      readable.append(f)
+              if len(readable) > MAX_WORKFLOWS:
+                  fail("limit: workflow files")
+                  return False
+              for f in readable:
+                  check_patch(f)
+              base_ci, head_ci = read_file(CI_FILE, base_sha), read_file(CI_FILE, HEAD_SHA)
+              bst, hst = structure(base_ci), structure(head_ci)
+              gate = needs_of(bst, base_ci, GATE_JOB) if bst else None
+              if gate is None or hst is None:
+                  fail("Y-4 gate needs not readable", CI_FILE)
+              else:
+                  have = {j[0] for j in hst["jobs"]}
+                  for n in gate:
+                      if n not in have:
+                          fail("Y-4 gate job missing at the head", CI_FILE)
+              return not failed
+
+
+          ok = False
+          try:
+              ok = main() is True and not failed
+          except Exception as x:
+              why = type(x).__name__
+              if isinstance(x, urllib.error.HTTPError):
+                  why += " %d" % x.code
+              elif isinstance(x, Stop):
+                  why += " " + str(x)
+              print("no skip: guard stopped (%s)" % why, flush=True)
+              ok = False
+          try:
+              with open(os.environ["GUARD_RESULT"], "w") as out:
+                  out.write("true" if ok else "false")
+          except Exception:
+              pass
+          GUARD_PY
+            [ "$(cat "$res" 2>/dev/null)" != true ] || skip=true
+          else
+            echo "no skip: python3, timeout or a temporary file is missing"
+          fi
+          [ -z "$res" ] || rm -f "$res"
+          if [ "$skip" = true ]; then
+            msg="CI/SDLC-only change: no review (owner 2026-11-10; InfoSec guard passed)"
+            echo "$msg"
+            [ -z "${GITHUB_STEP_SUMMARY:-}" ] || echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "review as usual"
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+          exit 0
+
   review:
     name: Codex review
+    # v5.12.1: after InfoSec's guard; a change it clears takes no round.
+    needs: scope
     # v5.3: a label that does not request a review starts no job. `skipped`
     # counts as SUCCESS where Gitea combines required checks, so this context
     # is never a required one (go-trusted-platform #536 merged with zero
@@ -680,6 +1207,7 @@ jobs:
       || startsWith(github.event.label.name, 'agent:')
       || startsWith(github.event.label.name, 'model:')
       || startsWith(github.event.label.name, 'effort:'))
+      && needs.scope.outputs.skip != 'true'
     # v5.9.7: on GitHub the group is the PR, its head sha and the run id, so
     # it never holds a pending run that a newer one could replace: a replaced
     # run is cancelled with no `Code Review (codex)` check-run, and a ruleset
@@ -692,10 +1220,14 @@ jobs:
     # v5.3's, the PR and its head sha: a twin on the same sha waits for the
     # review in flight and its guard ends skip=reviewed, and Gitea cancels
     # the replaced head's runs on the push.
+    # v5.12.2: one group per PR and head on both forges, as on Gitea: one
+    # review runs, one waits, and a newer waiting run replaces an older one.
+    # The required context is the gate (v5.11.0), so a replaced review run
+    # leaves no missing required check; its run's gate is replaced too.
     concurrency:
-      group: ${{ github.server_url == 'https://github.com' && format('code-review-{0}-{1}-{2}', github.event.pull_request.number, github.event.pull_request.head.sha, github.run_id) || format('code-review-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha) }}
+      group: ${{ format('code-review-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha) }}
       cancel-in-progress: false
-    runs-on: codex  # lab-string-ok: the public label of the Codex review runner, read by the review tier only
+    runs-on: codex  # lab-string-ok: the public label of the Codex review runner, read by the review tier only # self-hosted: credential: the reviewer token is mounted on this runner alone
     # The route, for the opencode job.
     outputs:
       agent: ${{ steps.guard.outputs.agent }}
@@ -859,9 +1391,11 @@ jobs:
             [ -n "$names" ] || names=$(api GET "/pulls/$PR_NUM" | jq -c '[.labels[]?.name]')
             jq -e 'type == "array"' <<<"$names" >/dev/null 2>&1 || die "could not read the labels of PR $PR_NUM"
             jq -e 'index("needs-owner") != null' <<<"$names" >/dev/null || return 0
-            echo "skip=needs-owner" >> "$GITHUB_OUTPUT"
+            # v5.11.3 (owner ruling 732): the owner is out of the PR loop. The
+            # hand-on step swaps `needs-owner` for `needs-coordinator`.
+            { echo "skip=needs-owner"; echo "stop=needs-coordinator"; } >> "$GITHUB_OUTPUT"
             touch "$WORK/verdict"
-            echo "::error::PR $PR_NUM is labelled needs-owner: codex reviews no round and reuses no approval until the owner takes the label off (sdlc.md §2b)."
+            echo "::error::PR $PR_NUM is labelled needs-owner, which no PR carries since owner ruling 732: codex reviews no round and reuses no approval on it. The PR goes to needs-coordinator, and the coordinator escalates to the Tenant Agent (sdlc.md §2b)."
             exit 1
           }
           # FAIL CLOSED on the credential: no token, no review, and no other
@@ -1367,7 +1901,8 @@ jobs:
           # keeps `needs-coordinator` (v5.11.2, ruling 673). A head past the
           # limit with no standing approval ends red, skip=round-limit, posts
           # nothing, and gets `needs-coordinator`. A PR labelled `needs-owner` is
-          # not reviewed (skip=needs-owner) until the owner takes it off.
+          # not reviewed (skip=needs-owner); v5.11.3 hands it on to
+          # needs-coordinator (owner ruling 732).
           # Removing and re-adding `code-review` starts over (that run is
           # round 1 again); re-running the run that added it replays its
           # event and also starts over. A marker without round= (v5.9.6 or
@@ -1473,8 +2008,15 @@ jobs:
           # fails before that (the checkout, the login, codex, the post)
           # leaves the evidence for the next run. v5.10.10: only a fresh
           # label is evidence (above), and its marker records resume=.
+          # v5.12.1 (ruling 799): a fresh label resumes with
+          # `needs-coordinator` on too, as the stop message says; the posting
+          # step takes both labels off with the resumed round's verdict. The
+          # resume on a person's removal of `needs-owner` still needs
+          # `needs-coordinator` off.
+          coordinator=0
+          if jq -e 'index("needs-coordinator") != null' <<<"$labels" >/dev/null; then coordinator=1; fi
           if [ "$done_rounds" -ge "$last_round" ] && [ "$latest" != APPROVED ] &&
-             ! jq -e 'index("needs-coordinator") != null' <<<"$labels" >/dev/null; then
+             { [ -n "$resume_id" ] || [ "$coordinator" = 0 ]; }; then
             resumed=""
             # v5.10.10: only a fresh label (above); its addition's id goes
             # into this round's marker as resume=.
@@ -1508,7 +2050,7 @@ jobs:
             stop=needs-coordinator
             { echo "skip=round-limit"; echo "stop=$stop"; } >> "$GITHUB_OUTPUT"
             touch "$WORK/verdict"
-            echo "::error::$REVIEWER has reviewed PR $PR_NUM for $done_rounds rounds and the latest verdict is ${latest:-none}, not an approval: the round limit is $limit (sdlc.md §2b). The PR goes to $stop."
+            echo "::error::$REVIEWER has reviewed PR $PR_NUM for $done_rounds rounds and the latest verdict is ${latest:-none}, not an approval: the round limit is $limit (sdlc.md §2b). The PR goes to $stop; the coordinator escalates it to the Tenant Agent, which may restart the count with owner-resume (v5.11.3, owner ruling 732)."
             exit 1
           fi
           round=$((done_rounds + 1))
@@ -2280,7 +2822,15 @@ jobs:
           # rather than resuming on it again.
           if [ "$OWNER_RESUME" = label ]; then
             relabel "" owner-resume
-            echo "Took owner-resume off PR $PR_NUM: round $ROUND's verdict records the resume."
+            # v5.12.1 (ruling 799): the resume ends the coordinator hold too.
+            relabel "" needs-coordinator
+            echo "Took owner-resume and needs-coordinator off PR $PR_NUM: round $ROUND's verdict records the resume."
+          fi
+          # v5.12.2: an approval ends the coordinator hold, so the gate
+          # (v5.12.1) passes the approved head of a coordinator round.
+          if [ "$event" = APPROVED ]; then
+            relabel "" needs-coordinator
+            echo "Took needs-coordinator off PR $PR_NUM, if it was on: $REVIEWER approved $EVENT_SHA."
           fi
 
       # ROOT. THE JOB'S STATUS IS NOT A VERDICT. A step exiting 0 says nothing
@@ -2294,6 +2844,7 @@ jobs:
       # confirms the approval it posted. None passes on a PR labelled
       # `needs-owner`, read live as the last check (v5.10.8).
       - name: Confirm a codex verdict stands on this head
+        id: confirm
         if: >-
           steps.guard.outputs.requested == 'true' &&
           (steps.guard.outputs.skip == '' || steps.guard.outputs.skip == 'reviewed' ||
@@ -2335,18 +2886,86 @@ jobs:
           owner_hold
           echo "$REVIEWER approved $EVENT_SHA."
 
+      # ROOT. RE-ARM AUTO-MERGE (v5.12.0, ruling 742 (3): "one approval only,
+      # GitHub merges, agents never merge"). GitHub only, after the confirm
+      # step passed: a codex APPROVED stands on this exact head. Squash
+      # auto-merge is armed pinned to that head; GitHub merges once its
+      # required checks pass. A PR GitHub reads in clean status cannot be
+      # armed and is squash-merged here, pinned to the approved head. Never
+      # fails the job: the verdict is the confirm step's, and an arm that does
+      # not take is a warning the factory's project check retries.
+      - name: Re-arm auto-merge on the approved head
+        if: env.FORGE == 'github' && steps.confirm.outcome == 'success'
+        continue-on-error: true
+        run: |
+          # shellcheck source=/dev/null
+          . "$WORK/lib.sh"
+          skip() { echo "::warning::PR $PR_NUM: $*; auto-merge not re-armed here (the factory's project check retries it)"; exit 0; }
+          # load_token dies on a missing or malformed token; a subshell keeps
+          # that from ending the step red.
+          ( load_token ) || skip "the reviewer token cannot be read"
+          # One GitHub call that never dies: the body on stdout, 1 unless 2xx.
+          gh_call() { # method url [json-file]
+            local code
+            code=$(curl -sS --proto '=https' --max-time 60 -o "$WORK/arm.json" -w '%{http_code}' \
+                     -X "$1" -H @"$HDR" -H 'Content-Type: application/json' \
+                     -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28' \
+                     ${3:+--data-binary "@$3"} "$2") || return 1
+            cat "$WORK/arm.json"
+            case "$code" in 2??) return 0 ;; *) return 1 ;; esac
+          }
+          pr=$(gh_call GET "$REPO_API/pulls/$PR_NUM") || skip "the PR cannot be read"
+          if [ "$(jq -r '.state // empty' <<<"$pr")" != open ] ||
+             [ "$(jq -r '.head.sha // empty' <<<"$pr")" != "$EVENT_SHA" ]; then
+            echo "PR $PR_NUM was closed or moved off $EVENT_SHA; nothing to arm from this run."
+            exit 0
+          fi
+          if [ "$(jq -r '.draft // false' <<<"$pr")" = true ]; then
+            echo "PR $PR_NUM is a draft; the factory arms it when it is marked ready."
+            exit 0
+          fi
+          if [ "$(jq -r '.auto_merge != null' <<<"$pr")" = true ]; then
+            echo "PR $PR_NUM is armed to auto-merge already; GitHub merges it once its required checks pass."
+            exit 0
+          fi
+          node=$(jq -r '.node_id // empty' <<<"$pr")
+          [ -n "$node" ] || skip "its node id cannot be read"
+          jq -n --arg id "$node" --arg h "$EVENT_SHA" \
+            --arg q 'mutation($id:ID!,$h:GitObjectID!){enablePullRequestAutoMerge(input:{pullRequestId:$id,expectedHeadOid:$h,mergeMethod:SQUASH}){pullRequest{number}}}' \
+            '{query: $q, variables: {id: $id, h: $h}}' > "$WORK/arm-query.json"
+          out=$(gh_call POST "$FORGE_API/graphql" "$WORK/arm-query.json") ||
+            skip "GitHub gave no answer to arming auto-merge: $(head -c 300 <<<"$out")"
+          why=$(jq -r '[.errors[]? | .message // "?"] | join("; ")' <<<"$out" 2>/dev/null) || why="an unreadable answer"
+          if [ -z "$why" ]; then
+            echo "PR $PR_NUM armed to auto-merge (squash) at $EVENT_SHA; GitHub merges it once its required checks pass (ruling 742 (3))."
+            exit 0
+          fi
+          case "$why" in
+            *"clean status"*) ;;
+            *) skip "GitHub refused to arm auto-merge: $why" ;;
+          esac
+          # Clean status: every requirement is met, so GitHub merges now on a
+          # call pinned to the approved head, and refuses it on any other.
+          jq -n --arg s "$EVENT_SHA" '{merge_method: "squash", sha: $s}' > "$WORK/merge.json"
+          out=$(gh_call PUT "$REPO_API/pulls/$PR_NUM/merge" "$WORK/merge.json") ||
+            skip "GitHub read it clean but refused the squash merge at $EVENT_SHA: $(jq -r '.message // empty' <<<"$out" 2>/dev/null | head -c 300)"
+          echo "PR $PR_NUM squash-merged at $EVENT_SHA as $(jq -r '.sha // "?"' <<<"$out"): GitHub read it clean, so auto-merge could not be armed (ruling 742 (3))."
+
       # ROOT. THE HAND-ON (v5.9.8, Tenant Agent m2185; sdlc.md §2b): a loop
       # that reached its round limit without an approval goes to the project
       # coordinator (`needs-coordinator`), also after the coordinator's
       # rounds (v5.11.2, ruling 673: the coordinator takes it to the Tenant
       # Agent; the workflow never sets `needs-owner`). A failure here is
-      # reported on the PR by the next step.
+      # reported on the PR by the next step. v5.11.3 (owner ruling 732;
+      # Codex's P2 at handbook #49): the confirm step's stop too, so a
+      # `needs-owner` its live re-read finds is swapped for `needs-coordinator`.
       - name: Hand a stopped review loop on
         if: >-
           always() && steps.guard.outputs.requested == 'true' &&
-          (steps.guard.outputs.stop != '' || steps.post.outputs.stop != '')
+          (steps.guard.outputs.stop != '' || steps.post.outputs.stop != '' ||
+          steps.confirm.outputs.stop != '')
         env:
-          STOP: ${{ steps.post.outputs.stop || steps.guard.outputs.stop }}
+          STOP: ${{ steps.confirm.outputs.stop || steps.post.outputs.stop || steps.guard.outputs.stop }}
         run: |
           # shellcheck source=/dev/null
           . "$WORK/lib.sh"
@@ -2362,7 +2981,8 @@ jobs:
           fi
           printf '%s\n' "$STOP" > "$WORK/stop-error"
           case "$STOP" in
-            needs-coordinator) relabel needs-coordinator ;;
+            # v5.11.3 (owner ruling 732): a leftover `needs-owner` comes off.
+            needs-coordinator) relabel needs-coordinator needs-owner ;;
             *) die "no hand-on label '$STOP'" ;;
           esac
           rm -f "$WORK/stop-error"
@@ -2464,7 +3084,7 @@ jobs:
     needs: review
     # Gitea only (v5.9.0): its token check and permission read are Gitea's.
     if: needs.review.outputs.agent == 'opencode' && github.server_url != 'https://github.com'
-    runs-on: qwen  # CUSTOMIZE: the opencode review host's runner label
+    runs-on: qwen  # CUSTOMIZE: the opencode review host's runner label # self-hosted: hardware: the GPU host that serves the model
     # 3300 s >= 1530 + 630 (the two runs, kill grace included) + 2 x 130 (the
     # debug calls) + 880 s for checkout, guard, prepare, post and cleanup.
     timeout-minutes: 55
@@ -2896,8 +3516,14 @@ jobs:
   # head first, so the newest check on the head reads their verdict.
   gate:
     name: Code Review (codex)
-    needs: review
+    needs: [scope, review]
     if: always()
+    # v5.12.2: one gate per head. A newer event's gate cancels an older one,
+    # which no longer holds a hosted runner in the twin wait; the newest
+    # gate's check is the head's `Code Review (codex)`.
+    concurrency:
+      group: ${{ format('code-review-gate-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha) }}
+      cancel-in-progress: true
     runs-on: ${{ github.server_url == 'https://github.com' && 'ubuntu-latest' || 'bigdisk' }}
     timeout-minutes: 80
     permissions:
@@ -2918,6 +3544,12 @@ jobs:
       # .gitea/, changelog.d/ and nothing else). An extended regex over the whole path;
       # a rename must match on both its old and its new path.
       NO_REVIEW_PATHS: '^(docs/.+|(.+/)?[^/]+\.md|\.github/.+|\.gitea/.+|(.+/)?changelog\.d/.+)$'
+      # v5.12.1: the docs half of NO_REVIEW_PATHS, exempt on its own; the CI
+      # config half (.github/, .gitea/) is exempt only when SCOPE_SKIP is true.
+      DOCS_PATHS: '^(docs/.+|(.+/)?[^/]+\.md|(.+/)?changelog\.d/.+)$'
+      SCOPE_SKIP: ${{ needs.scope.outputs.skip }}
+      SCOPE_RESULT: ${{ needs.scope.result }}
+      REVIEW_RESULT: ${{ needs.review.result }}
     steps:
       - name: Require a Codex approval of the head, or a no-review change
         run: |
@@ -2991,12 +3623,21 @@ jobs:
           fi
           n=$(jq 'length' <<<"$files")
           if [ "$n" -gt 0 ] && [ "$n" -lt 300 ]; then
-            outside=$(jq -r '.[] | .filename, (.previous_filename // empty)' <<<"$files" |
-                      grep -Evc "$NO_REVIEW_PATHS" || true)
-            [ "$outside" = 0 ] && exempt=1
+            names=$(jq -r '.[] | .filename, (.previous_filename // empty)' <<<"$files")
+            off_docs=$(grep -Evc "$DOCS_PATHS" <<<"$names" || true)
+            off_list=$(grep -Evc "$NO_REVIEW_PATHS" <<<"$names" || true)
+            # v5.12.1 (ruling 443): CI config is exempt only inside InfoSec's
+            # guard, which the scope job ran on this event.
+            if [ "$off_docs" = 0 ]; then
+              exempt=1
+            elif [ "$off_list" = 0 ] && [ "$SCOPE_SKIP" = true ]; then
+              exempt=1
+            elif [ "$off_list" = 0 ]; then
+              echo "The change is docs and CI config, but InfoSec's guard did not clear it (scope skip=${SCOPE_SKIP:-none}), so it needs a Codex approval (ruling 443, v5.12.1)."
+            fi
           fi
           if [ "$exempt" = 1 ]; then
-            echo "All $n changed files are on the no-review list (docs and CI config); no review is required."
+            echo "All $n changed files are on the no-review list (docs, or CI config inside InfoSec's guard); no review is required."
             exit 0
           fi
           echo "$n changed files; at least one is code, so $REVIEWER must approve $EVENT_SHA."
@@ -3032,20 +3673,43 @@ jobs:
             done
           fi
 
-          # The base and the owner hold, read live from the PR after the wait:
-          # a retargeted PR fails, and needs-owner on the PR refuses even an
+          # The base and the hold, read live from the PR after the wait: a
+          # retargeted PR fails, and a hold label on the PR refuses even an
           # approval already on the head. The labels come from the PR itself,
           # never from the issue-labels list, which Gitea does not paginate
-          # (Codex P1, #1921).
+          # (Codex P1, #1921). v5.12.0: the review job swaps `needs-owner`
+          # for `needs-coordinator` (v5.11.3, owner ruling 732), so the hold
+          # is either label; the coordinator takes needs-coordinator off to
+          # release it (Codex P1 round 2, #1986).
           pr=$(get "/pulls/$PR_NUM")
           same_base "$pr"
           labels=$(jq -r '.labels[].name' <<<"$pr") ||
             fail "cannot read the labels of PR $PR_NUM"
           ! grep -qx needs-owner <<<"$labels" ||
             fail "PR $PR_NUM is on owner hold (needs-owner): an existing approval does not pass the gate"
+          ! grep -qx needs-coordinator <<<"$labels" ||
+            fail "PR $PR_NUM is on coordinator hold (needs-coordinator): an existing approval does not pass the gate"
 
           # (b) The reviewer's latest standing verdict on this head. PENDING,
           # COMMENTED and dismissed reviews are no verdict.
+          # v5.12.1: NO APPROVAL IS REUSED on a failed review or a hold. This
+          # run's review job failed (a requested round that ended red, an
+          # owner or round-limit stop): its outcome stands over an earlier
+          # approval. The live PR's labels, read after the twin wait: a hold
+          # keeps even an approval of the head from passing.
+          [ "$REVIEW_RESULT" != failure ] ||
+            fail "this run's Codex review job failed, so no earlier approval of $EVENT_SHA is reused (v5.12.1)"
+          # v5.12.2: a scope job that failed or was cancelled ran no review.
+          case "$SCOPE_RESULT" in
+            failure|cancelled) fail "this run's scope job ended $SCOPE_RESULT, so no review ran and no earlier approval of $EVENT_SHA is reused (v5.12.2)" ;;
+          esac
+          labels=$(get "/pulls/$PR_NUM" | jq -r '.labels[]?.name') ||
+            fail "cannot read the labels of PR $PR_NUM"
+          for hold in needs-owner needs-coordinator; do
+            ! grep -qx "$hold" <<<"$labels" ||
+              fail "PR $PR_NUM is on hold ($hold): an approval of $EVENT_SHA does not pass the gate until the label comes off (v5.12.1)"
+          done
+
           verdict=$(get_all "/pulls/$PR_NUM/reviews?" | jq -r --arg u "$REVIEWER" --arg s "$EVENT_SHA" '
               [ .[] | (if .state == "CHANGES_REQUESTED" then .state = "REQUEST_CHANGES" else . end)
                     | select(.user.login == $u and .commit_id == $s and (.dismissed | not)

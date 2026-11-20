@@ -44,12 +44,12 @@ func setupMockDAO(t *testing.T) (*GenericDAO[*TestRole], *MockStorage) {
 	mock := NewMockStorage()
 	require.NoError(t, mock.Start(context.Background()))
 
-	return newMockRoleDAO(t, mock), mock
+	return newMockTestRoleStore(t, mock), mock
 }
 
-// newMockRoleDAO builds a TestRole DAO on an existing store, so a test can
+// newMockTestRoleStore builds a TestRole DAO on an existing store, so a test can
 // open a second DAO instance over the data the first one wrote.
-func newMockRoleDAO(t *testing.T, mock *MockStorage) *GenericDAO[*TestRole] {
+func newMockTestRoleStore(t *testing.T, mock *MockStorage) *GenericDAO[*TestRole] {
 	return NewGenericDAO[*TestRole](
 		mock,
 		"TestRole",
@@ -503,7 +503,7 @@ func TestGenericDAO_SecondInstanceReadsSavedEntities_Mock(t *testing.T) {
 	}
 
 	// A DAO opened later over the same store sees everything the first wrote.
-	dao2 := newMockRoleDAO(t, mock)
+	dao2 := newMockTestRoleStore(t, mock)
 	for _, role := range roles {
 		retrieved, err := dao2.Get(ctx, role.ID)
 		require.NoError(t, err)

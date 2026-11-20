@@ -14,6 +14,13 @@ export { ComputeService } from './compute-service.js';
 export { DeviceService } from './device-service.js';
 export { DNSService } from './dns-service.js';
 export { NTPService } from './ntp-service.js';
+export {
+  CapabilitiesService,
+  CAPABILITY_REASON_NOT_CONFIGURED,
+  CAPABILITY_REASON_UNIMPLEMENTED,
+  CAPABILITY_REASON_BLOCKED_INTEGRATION,
+} from './capabilities-service.js';
+export type { Capability, CapabilitiesResponse } from './capabilities-service.js';
 export type {
   NTPStatus,
   NTPSource,

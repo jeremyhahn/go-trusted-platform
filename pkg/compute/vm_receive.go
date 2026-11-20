@@ -281,6 +281,27 @@ func (o *QEMUOrchestrator) adoptReceived(tr *trackedReceiver) (string, error) {
 		return "", &MessageError{Msg: "received VM has no QEMU process"}
 	}
 
+	// A fresh config with the destination's resolved runtime paths: the spec
+	// carries the source's settings only, and disk operations, snapshots and
+	// Delete need the receiver's work directory and disk.
+	config := &InstanceConfig{}
+	if tr.spec.Config != nil {
+		*config = *tr.spec.Config
+	}
+	if qcfg := vm.GetConfig(); qcfg != nil {
+		config.WorkDir = qcfg.WorkDir
+		config.DiskPath = qcfg.DiskPath
+		if qcfg.DiskSize != "" {
+			config.DiskSize = qcfg.DiskSize
+		}
+		if qcfg.Memory > 0 {
+			config.Memory = qcfg.Memory
+		}
+		if qcfg.CPUs > 0 {
+			config.CPUs = qcfg.CPUs
+		}
+	}
+
 	o.mu.Lock()
 	instanceID := tr.spec.InstanceID
 	if _, taken := o.instances[instanceID]; instanceID == "" || taken {
@@ -301,7 +322,7 @@ func (o *QEMUOrchestrator) adoptReceived(tr *trackedReceiver) (string, error) {
 			Name:               tr.spec.VMName,
 			Type:               ComputeTypeVM,
 			State:              StateRunning,
-			Config:             tr.spec.Config,
+			Config:             config,
 			NetworkAttachments: []NetworkAttachment{},
 			CreatedAt:          now,
 			UpdatedAt:          now,
@@ -310,24 +331,44 @@ func (o *QEMUOrchestrator) adoptReceived(tr *trackedReceiver) (string, error) {
 			PID:                vm.GetPID(),
 		},
 	}
-	o.instances[instanceID] = qemuInst
-	o.mu.Unlock()
-
+	// The run and its exit watcher are in place before the instance is
+	// published, so a stop that lands at once finds the run to wait on and
+	// the watcher records the exit and reaps the process.
+	// A receiver that already waits on its process hands that waiter over:
+	// a second vm.Wait on the same process would fail at once.
+	waitExit := vm.Wait
+	if w, ok := tr.recv.(interface {
+		Done() <-chan struct{}
+		ExitErr() error
+	}); ok && w.Done() != nil {
+		waitExit = func() error {
+			<-w.Done()
+			return w.ExitErr()
+		}
+	}
 	if vm.IsRunning() {
-		qemuInst.mu.Lock()
 		run := &qemuRun{cancel: func() {}, done: make(chan struct{})}
 		qemuInst.run = run
-		qemuInst.mu.Unlock()
 		go func() {
 			defer close(run.done)
-			if err := vm.Wait(); err != nil {
+			if err := waitExit(); err != nil {
 				o.logger.Errorf("VM %s exited with error: %v", instanceID, err)
 			}
 			o.recordExit(instanceID, qemuInst)
 		}()
 	}
+	o.instances[instanceID] = qemuInst
+	o.mu.Unlock()
+
+	if hook := receiverAdoptedHook; hook != nil {
+		hook(instanceID)
+	}
 	return instanceID, nil
 }
+
+// receiverAdoptedHook, when set by a test, runs right after a received
+// instance is published.
+var receiverAdoptedHook func(instanceID string)
 
 // reapReceiver aborts and releases a receiver that was never finalized. It is a
 // no-op when the receiver has already been taken.
@@ -486,13 +527,13 @@ func (o *QEMUOrchestrator) FinalizeIncoming(ctx context.Context, receiverID stri
 	if !ok {
 		return ErrReceiverNotFound
 	}
-	if tr.endLifetime != nil {
-		tr.endLifetime()
-	}
-	defer tr.cleanup()
-
 	if commit {
+		// The receiver stays owned by this call until adoption succeeds: a
+		// failed or expired Commit, or a failed adoption, aborts it so its
+		// QEMU process (started without the request context) is killed and
+		// reaped rather than left running with no owner.
 		if err := tr.recv.Commit(ctx); err != nil {
+			o.releaseReceiver(receiverID, tr, "commit failed")
 			return &SentinelCauseError{Sentinel: ErrMigrationReceiveFailed, Cause: &WrappedError{Msg: "commit received VM", Err: err}}
 		}
 		// The resumed guest becomes a normal instance before success is
@@ -500,12 +541,21 @@ func (o *QEMUOrchestrator) FinalizeIncoming(ctx context.Context, receiverID stri
 		instanceID, err := o.adoptReceived(tr)
 		if err != nil {
 			o.logger.Errorf("Committed migration receiver %s but could not adopt its VM: %v", receiverID, err)
+			o.releaseReceiver(receiverID, tr, "adoption failed")
 			return &SentinelCauseError{Sentinel: ErrMigrationReceiveFailed, Cause: &WrappedError{Msg: "adopt received VM", Err: err}}
 		}
+		if tr.endLifetime != nil {
+			tr.endLifetime()
+		}
+		tr.cleanup()
 		o.logger.Infof("Committed migration receiver %s as instance %s", receiverID, instanceID)
 		return nil
 	}
 
+	if tr.endLifetime != nil {
+		tr.endLifetime()
+	}
+	defer tr.cleanup()
 	if err := tr.recv.Abort(ctx); err != nil {
 		return &SentinelCauseError{Sentinel: ErrMigrationReceiveFailed, Cause: &WrappedError{Msg: "abort received VM", Err: err}}
 	}
@@ -524,6 +574,58 @@ type qemuIncomingReceiver struct {
 	monitor *qemu.Monitor
 	mgr     *qemu.MigrationManager
 	port    int
+	// proc waits on the receiving QEMU from its launch, so an aborted
+	// receiver is reaped and an adopted one keeps the same waiter.
+	proc *receiverProcess
+}
+
+// receiverStopGrace bounds each wait for the receiver process to exit:
+// after the stop, and again after the kill that follows a stop it ignored.
+var receiverStopGrace = 10 * time.Second
+
+// receiverProcess is the waiter of one launched receiver process. done
+// closes once wait has returned, that is once the process has been reaped;
+// err is wait's result, readable after done.
+type receiverProcess struct {
+	stop func() error
+	kill func() error
+	done chan struct{}
+	err  error
+}
+
+// startReceiverProcess starts the waiter of a launched process: wait reaps
+// it, stop asks it to exit, kill forces it.
+func startReceiverProcess(wait, stop, kill func() error) *receiverProcess {
+	p := &receiverProcess{stop: stop, kill: kill, done: make(chan struct{})}
+	go func() {
+		p.err = wait()
+		close(p.done)
+	}()
+	return p
+}
+
+// terminate stops the process and returns once it has been reaped: it
+// waits receiverStopGrace after the stop, then kills the process and waits
+// as long again.
+func (p *receiverProcess) terminate() error {
+	select {
+	case <-p.done:
+		return nil
+	default:
+	}
+	stopErr := p.stop()
+	select {
+	case <-p.done:
+		return nil
+	case <-time.After(receiverStopGrace):
+	}
+	killErr := p.kill()
+	select {
+	case <-p.done:
+		return nil
+	case <-time.After(receiverStopGrace):
+	}
+	return &WrappedError{Msg: "receiver process did not exit after stop and kill", Err: errors.Join(stopErr, killErr)}
 }
 
 // VM returns the receiving QEMU.
@@ -564,7 +666,26 @@ func (r *qemuIncomingReceiver) Commit(ctx context.Context) error {
 }
 
 func (r *qemuIncomingReceiver) Abort(_ context.Context) error {
+	if r.proc != nil {
+		return r.proc.terminate()
+	}
 	return r.vm.Stop()
+}
+
+// Done is closed once the receiver's process has been reaped.
+func (r *qemuIncomingReceiver) Done() <-chan struct{} {
+	if r.proc == nil {
+		return nil
+	}
+	return r.proc.done
+}
+
+// ExitErr is the receiver process's exit result, valid once Done is closed.
+func (r *qemuIncomingReceiver) ExitErr() error {
+	if r.proc == nil {
+		return nil
+	}
+	return r.proc.err
 }
 
 // defaultNewIncomingReceiver launches a real receiving QEMU: it builds a machine
@@ -628,9 +749,12 @@ func defaultNewIncomingReceiver(ctx context.Context, p *incomingReceiverParams) 
 	if err != nil {
 		return nil, &WrappedError{Msg: "start receiver QEMU", Err: err}
 	}
+	// The waiter runs from launch, so every exit of the receiver, aborted,
+	// failed or adopted, is reaped.
+	proc := startReceiverProcess(vm.Wait, vm.Stop, vm.ForceStop)
 
 	if err := vm.ConnectMonitor(ctx); err != nil {
-		_ = vm.Stop()
+		_ = proc.terminate()
 		return nil, &WrappedError{Msg: "connect receiver QMP monitor", Err: err}
 	}
 	mon := vm.Monitor()
@@ -639,15 +763,15 @@ func defaultNewIncomingReceiver(ctx context.Context, p *incomingReceiverParams) 
 	// Install the migration TLS parameter BEFORE accepting the connection so the
 	// incoming stream is authenticated and encrypted.
 	if err := mgr.SetParameters(ctx, &qemu.MigrationParams{TLSCreds: credsID}); err != nil {
-		_ = vm.Stop()
+		_ = proc.terminate()
 		return nil, &WrappedError{Msg: "set receiver migration TLS parameter", Err: err}
 	}
 	if err := mgr.MigrateIncoming(ctx, migrateIncomingURI(p.listen.Addr(), port)); err != nil {
-		_ = vm.Stop()
+		_ = proc.terminate()
 		return nil, &WrappedError{Msg: "arm receiver migrate-incoming", Err: err}
 	}
 
-	return &qemuIncomingReceiver{vm: vm, monitor: mon, mgr: mgr, port: port}, nil
+	return &qemuIncomingReceiver{vm: vm, monitor: mon, mgr: mgr, port: port, proc: proc}, nil
 }
 
 // receiverPort is the TCP port the receiver listens on: the configured port,
