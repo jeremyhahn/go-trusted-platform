@@ -53,12 +53,12 @@ interface PolicyView {
   error?: string;
 }
 
+// The server applies RATE_LIMIT and MIRROR as normal forwarding, and REDIRECT
+// needs an actionValue this form does not collect (pkg/api/daemon/sdn_service.go
+// buildFlowMod), so they are offered only once the backend enforces them.
 const RULE_ACTIONS: SDNPolicyRuleAction[] = [
   'POLICY_RULE_ACTION_ALLOW',
   'POLICY_RULE_ACTION_DENY',
-  'POLICY_RULE_ACTION_RATE_LIMIT',
-  'POLICY_RULE_ACTION_REDIRECT',
-  'POLICY_RULE_ACTION_MIRROR',
   'POLICY_RULE_ACTION_LOG',
 ];
 

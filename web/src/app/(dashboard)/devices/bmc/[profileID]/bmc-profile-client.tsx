@@ -2,9 +2,10 @@
 
 /**
  * BMC profile page (#1736): power status, boot device, virtual media,
- * sensors, system info, provisioning and the BMC's web certificate. Every
- * action that changes the server (boot device, mount, unmount, provision)
- * runs only after a confirm dialog.
+ * sensors, system info and the BMC's web certificate. Every action that
+ * changes the server (boot device, mount, unmount) runs only after a confirm
+ * dialog. Provisioning is shown as unavailable: the daemon configures no
+ * bare-metal provisioning service, so the server answers it 503 (#1675).
  */
 
 import { useState } from "react";
@@ -267,31 +268,12 @@ export default function BMCProfileClient() {
             </CardTitle>
             <CardDescription>
               Installs an operating system on this host over the network. The host is shut down and its disks can be
-              overwritten.
+              overwritten. Provisioning is not available on this server: no bare-metal provisioning service is
+              configured.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            {bmc.provisionStatus && (
-              <p className="text-sm">
-                Status: <span data-testid="bmc-provision-state">{bmc.provisionStatus.status}</span>
-                {bmc.provisionStatus.message ? ` — ${bmc.provisionStatus.message}` : ""}
-              </p>
-            )}
-            <PartError errors={bmc.errors} part="provisionStatus" />
-            <Button
-              variant="destructive"
-              onClick={() =>
-                ask({
-                  title: "Provision host",
-                  description:
-                    "Provisioning powers the host off, boots it once from the network (PXE), installs an operating " +
-                    "system, then sets disk boot and power-cycles it. Running workloads stop and the host's disks " +
-                    "can be overwritten.",
-                  run: () => bmc.provision(),
-                  done: "Host provisioning started",
-                })
-              }
-            >
+            <Button variant="destructive" disabled title="Provisioning is not available on this server">
               Provision
             </Button>
           </CardContent>

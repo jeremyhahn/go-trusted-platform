@@ -75,7 +75,8 @@ test.describe("BMC power, boot device, virtual media, sensors and provision (#17
 
   test("cancelling the confirm dialog sends nothing", async ({ page }) => {
     const { requests } = await openProfile(page);
-    await page.getByRole("button", { name: "Provision" }).click();
+    await page.getByLabel("New boot device").selectOption("pxe");
+    await page.getByRole("button", { name: "Set boot device" }).click();
     await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
     await expect(page.getByRole("dialog")).toBeHidden();
     expect(requests).toEqual([]);
@@ -121,31 +122,10 @@ test.describe("BMC power, boot device, virtual media, sensors and provision (#17
     await expect(info).toContainText("SN-R640-01");
   });
 
-  test("provisions the host after a confirmation that names the shutdown and OS install", async ({ page }) => {
-    const { requests } = await openProfile(page);
-    await page.getByRole("button", { name: "Provision" }).click();
-    const dialog = page.getByRole("dialog");
-    await expect(dialog).toContainText("powers the host off");
-    await expect(dialog).toContainText("installs an operating system");
-    await confirmDialog(page, "Provision host");
-    expect(requests).toEqual([{ method: "POST", op: "provision", body: {} }]);
-    await expect(page.getByTestId("bmc-provision-state")).toHaveText("pending");
-  });
-
-  test("shows the provision status", async ({ page }) => {
-    await openProfile(page, {
-      state: {
-        provision: {
-          provision_id: "prov-2",
-          profile_id: PROFILE_ID,
-          status: "installing",
-          message: "waiting for the OS install",
-          started_at: "2026-11-12T00:00:00Z",
-          updated_at: "2026-11-12T00:10:00Z",
-        },
-      },
-    });
-    await expect(page.getByTestId("bmc-provision-state")).toHaveText("installing");
+  test("Provision is disabled as unavailable on this server", async ({ page }) => {
+    await openProfile(page);
+    await expect(page.getByRole("button", { name: "Provision" })).toBeDisabled();
+    await expect(page.getByText("Provisioning is not available on this server").first()).toBeVisible();
   });
 
   test("shows the web certificate", async ({ page }) => {
