@@ -156,6 +156,39 @@ describe('PlatformService', () => {
   });
 });
 
+// StatusResponse and ServicesListResponse (pkg/api/daemon/rest_service.go)
+// carry time.Time, so the daemon sends an RFC 3339 string; the SDK types
+// promise Unix seconds, and the service converts.
+describe('PlatformService daemon timestamps', () => {
+  const rfc3339 = '2026-11-20T10:15:30.5Z';
+  const unixSeconds = Date.UTC(2026, 10, 20, 10, 15, 30) / 1000;
+
+  function setup(data: unknown): { client: ApiClient; service: PlatformService } {
+    const client = createMockClient();
+    vi.mocked(client.get).mockResolvedValue({ success: true, data });
+    return { client, service: new PlatformService(client, { routeLayout: 'daemon' }) };
+  }
+
+  it('getStatus returns the daemon timestamp as Unix seconds', async () => {
+    const { service } = setup({ status: 'running', timestamp: rfc3339 });
+    const res = await service.getStatus();
+    expect(res.data?.timestamp).toBe(unixSeconds);
+    expect(res.data?.status).toBe('running');
+  });
+
+  it('listServices returns the daemon timestamp as Unix seconds', async () => {
+    const { service } = setup({ services: [], count: 0, timestamp: rfc3339 });
+    const res = await service.listServices();
+    expect(res.data?.timestamp).toBe(unixSeconds);
+  });
+
+  it('keeps a numeric timestamp as it is', async () => {
+    const { service } = setup({ status: 'running', timestamp: 1700000000 });
+    const res = await service.getStatus();
+    expect(res.data?.timestamp).toBe(1700000000);
+  });
+});
+
 // The daemon REST listener registers /api/v1/status and /api/v1/services
 // (pkg/api/daemon/rest_service.go); the webservice listener serves the same
 // operations under /api/v1/platform. The route layout picks one.

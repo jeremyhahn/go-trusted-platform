@@ -54,3 +54,56 @@ describe('SDNService.applyPolicy rule actions', () => {
     expect(client.post).toHaveBeenCalledTimes(1);
   });
 });
+
+// policyRuleMatch (pkg/api/daemon/sdn_service.go) builds the flow from the
+// protocol, addresses, ports and VLAN only: an interface, direction, dscp or
+// application constraint is dropped, so an ALLOW scoped to one interface
+// would open the whole bridge. The SDK refuses such a match unsent.
+describe('SDNService.applyPolicy match fields', () => {
+  let client: ApiClient;
+  let service: SDNService;
+
+  function policyWithMatch(match: Record<string, unknown>): ApplyPolicyRequest {
+    return {
+      config: {
+        name: 'p1',
+        targets: [{ type: 'POLICY_TARGET_TYPE_BRIDGE', id: 'br0' }],
+        rules: [{ ruleId: 'r1', priority: 100, action: 'POLICY_RULE_ACTION_ALLOW', match }],
+      },
+    } as unknown as ApplyPolicyRequest;
+  }
+
+  beforeEach(() => {
+    client = createMockClient();
+    vi.mocked(client.post).mockResolvedValue({ success: true, data: {} });
+    service = new SDNService(client);
+  });
+
+  it.each([
+    ['interface', 'eth0'],
+    ['direction', 'ingress'],
+    ['dscp', 46],
+    ['application', 'ssh'],
+  ] as const)('refuses a %s match before any request', async (field, value) => {
+    const request = policyWithMatch({ protocol: 'tcp', destinationPort: 22, [field]: value });
+    await expect(service.applyPolicy(request)).rejects.toThrow(RangeError);
+    await expect(service.applyPolicy(request)).rejects.toThrow(field);
+    expect(client.post).not.toHaveBeenCalled();
+  });
+
+  it('still sends a match on protocol, addresses, ports and VLAN', async () => {
+    await service.applyPolicy(
+      policyWithMatch({
+        protocol: 'tcp',
+        sourceIp: '10.0.0.1',
+        destinationIp: '10.0.0.2',
+        sourcePort: 1024,
+        destinationPort: 22,
+        vlanId: 10,
+        interface: '',
+        dscp: 0,
+      })
+    );
+    expect(client.post).toHaveBeenCalledTimes(1);
+  });
+});
