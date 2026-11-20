@@ -29,7 +29,14 @@ import type {
   GatewaySnapshot,
   ListGatewayStateResponse,
   GetNAT64StatusResponse,
+  IPAMPoolRecord,
+  IPAMPoolRequest,
+  ListGatewayAdmittedVTEPsResponse,
+  GetGatewayAdmittedVTEPResponse,
 } from '../types/gateway.js';
+
+/** The IPAM router serves pool CRUD under /sdn/gateway/ipam, not /gateway. */
+const IPAM_POOLS_PATH = '/v1/sdn/gateway/ipam/pools';
 
 /**
  * Gateway Service class
@@ -154,6 +161,43 @@ export class GatewayService extends BaseService {
    */
   async getNAT64Status(): Promise<ApiResponse<GetNAT64StatusResponse>> {
     return this.client.get<GetNAT64StatusResponse>('/v1/sdn/gateway/nat64/status');
+  }
+
+  /**
+   * List the VTEPs the gateway admitted (GET /gateway/vteps,
+   * ListGatewayAdmittedVTEPs). gatewayId names the reporting gateway.
+   */
+  async listAdmittedVTEPs(gatewayId?: string): Promise<ApiResponse<ListGatewayAdmittedVTEPsResponse>> {
+    const q = gatewayId ? `?gatewayId=${encodeURIComponent(gatewayId)}` : '';
+    return this.client.get<ListGatewayAdmittedVTEPsResponse>(this.buildUrl(`/vteps${q}`));
+  }
+
+  /** Get one admitted VTEP (GET /gateway/vteps/{vtep}, GetGatewayAdmittedVTEP). */
+  async getAdmittedVTEP(vtep: string, gatewayId?: string): Promise<ApiResponse<GetGatewayAdmittedVTEPResponse>> {
+    const q = gatewayId ? `?gatewayId=${encodeURIComponent(gatewayId)}` : '';
+    return this.client.get<GetGatewayAdmittedVTEPResponse>(
+      this.buildUrl(`/vteps/${encodeURIComponent(vtep)}${q}`)
+    );
+  }
+
+  /** Create an IPAM pool (POST /sdn/gateway/ipam/pools, CreateIPAMPool). */
+  async createIPAMPool(request: IPAMPoolRequest): Promise<ApiResponse<IPAMPoolRecord>> {
+    return this.client.post<IPAMPoolRecord>(IPAM_POOLS_PATH, request);
+  }
+
+  /** Get one IPAM pool (GET /sdn/gateway/ipam/pools/{id}, GetIPAMPool). */
+  async getIPAMPool(id: string): Promise<ApiResponse<IPAMPoolRecord>> {
+    return this.client.get<IPAMPoolRecord>(`${IPAM_POOLS_PATH}/${encodeURIComponent(id)}`);
+  }
+
+  /** Update an IPAM pool (PUT /sdn/gateway/ipam/pools/{id}, UpdateIPAMPool). */
+  async updateIPAMPool(id: string, request: IPAMPoolRequest): Promise<ApiResponse<IPAMPoolRecord>> {
+    return this.client.put<IPAMPoolRecord>(`${IPAM_POOLS_PATH}/${encodeURIComponent(id)}`, request);
+  }
+
+  /** Delete an IPAM pool (DELETE /sdn/gateway/ipam/pools/{id}, DeleteIPAMPool). */
+  async deleteIPAMPool(id: string): Promise<ApiResponse<void>> {
+    return this.client.delete<void>(`${IPAM_POOLS_PATH}/${encodeURIComponent(id)}`);
   }
 
   // =========================================================================

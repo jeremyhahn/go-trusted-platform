@@ -62,6 +62,8 @@ func (r *GatewayRouter) RegisterRoutes(parent *mux.Router) {
 	sr := parent.PathPrefix(basePath).Subrouter()
 	sr.HandleFunc("/status", r.getStatus).Methods("GET")
 	sr.HandleFunc("/mode", r.setMode).Methods("POST")
+	sr.HandleFunc("/vteps", r.listAdmittedVTEPs).Methods("GET")
+	sr.HandleFunc("/vteps/{vtep}", r.getAdmittedVTEP).Methods("GET")
 	sr.HandleFunc("/bgp/status", r.getBGPStatus).Methods("GET")
 	sr.HandleFunc("/bgp/peers", r.listBGPPeers).Methods("GET")
 	sr.HandleFunc("/bgp/prefixes", r.listAnnouncedPrefixes).Methods("GET")
@@ -103,6 +105,42 @@ func (r *GatewayRouter) setMode(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	resp, err := r.server.SetGatewayMode(req.Context(), pbReq)
+	if err != nil {
+		protorest.WriteError(w, req, r.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, req, r.respWriter, resp)
+}
+
+// listAdmittedVTEPs answers GET /vteps: the VTEPs this gateway admitted
+// (ListGatewayAdmittedVTEPs). The optional gatewayId query names the
+// reporting gateway.
+func (r *GatewayRouter) listAdmittedVTEPs(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	pbReq := &platformv1.ListGatewayAdmittedVTEPsRequest{
+		GatewayId: req.URL.Query().Get("gatewayId"),
+	}
+	resp, err := r.server.ListGatewayAdmittedVTEPs(req.Context(), pbReq)
+	if err != nil {
+		protorest.WriteError(w, req, r.respWriter, err)
+		return
+	}
+	protorest.WriteSuccess(w, req, r.respWriter, resp)
+}
+
+// getAdmittedVTEP answers GET /vteps/{vtep}: one admitted VTEP
+// (GetGatewayAdmittedVTEP).
+func (r *GatewayRouter) getAdmittedVTEP(w http.ResponseWriter, req *http.Request) {
+	if !r.ensure(w, req) {
+		return
+	}
+	pbReq := &platformv1.GetGatewayAdmittedVTEPRequest{
+		GatewayId: req.URL.Query().Get("gatewayId"),
+		Vtep:      mux.Vars(req)["vtep"],
+	}
+	resp, err := r.server.GetGatewayAdmittedVTEP(req.Context(), pbReq)
 	if err != nil {
 		protorest.WriteError(w, req, r.respWriter, err)
 		return

@@ -829,6 +829,13 @@ export type {
   GatewaySnapshotNATUplink,
   GatewaySnapshotPipeline,
   ListGatewayStateResponse,
+  SetGatewayModeRequest,
+  SetGatewayModeResponse,
+  IPAMPoolRecord,
+  IPAMPoolRequest,
+  GatewayAdmittedVTEP,
+  ListGatewayAdmittedVTEPsResponse,
+  GetGatewayAdmittedVTEPResponse,
 } from './types/gateway.js';
 
 // SDN types

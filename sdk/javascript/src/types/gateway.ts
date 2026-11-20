@@ -549,3 +549,59 @@ export interface NAT64Status {
 
 /** Response of the NAT64 status endpoint. */
 export type GetNAT64StatusResponse = NAT64Status;
+
+/**
+ * An IPAM pool as the IPAM REST router returns it
+ * (/v1/sdn/gateway/ipam/pools, snake_case wire names).
+ */
+export interface IPAMPoolRecord {
+  id: string;
+  name: string;
+  cidr: string;
+  gateway?: string;
+  zone?: string;
+  description?: string;
+  total: number;
+  allocated: number;
+  available: number;
+  reserved?: string[];
+  range_start?: string;
+  range_end?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+/** Body of POST and PUT /v1/sdn/gateway/ipam/pools[/{id}]. */
+export interface IPAMPoolRequest {
+  name: string;
+  cidr: string;
+  gateway?: string;
+  zone?: string;
+  description?: string;
+  reserved?: string[];
+  range_start?: string;
+  range_end?: string;
+}
+
+/** A VTEP the gateway admitted after its attestation verdict. */
+export interface GatewayAdmittedVTEP {
+  vtep: string;
+  deviceId?: number | string;
+  hostId?: string;
+  serial?: string;
+  hostname?: string;
+  allocationId?: string;
+  baselineSource?: string;
+  profileId?: number | string;
+  verdictAt?: string;
+}
+
+/** Answer of GET /v1/gateway/vteps (ListGatewayAdmittedVTEPs). */
+export interface ListGatewayAdmittedVTEPsResponse {
+  vteps?: GatewayAdmittedVTEP[];
+}
+
+/** Answer of GET /v1/gateway/vteps/{vtep} (GetGatewayAdmittedVTEP). */
+export interface GetGatewayAdmittedVTEPResponse {
+  vtep?: GatewayAdmittedVTEP;
+}

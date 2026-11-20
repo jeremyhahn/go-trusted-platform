@@ -239,3 +239,7 @@ describe("APIGatewayPage", () => {
     });
   });
 });
+
+// The gateway operations card has its own hook test (use-gateway-ops); this
+// page test covers the status, BGP, IPAM and reported-gateway sections.
+vi.mock('./gateway-operations', () => ({ GatewayOperations: () => null }));

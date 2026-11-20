@@ -270,24 +270,24 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
 | `GatewayService.GetGatewayStatus` | - | `(dashboard)/networking/gateway/page.tsx` | - | `networking.spec.ts` | covered |
-| `GatewayService.SetGatewayMode` | - | - | - | - | missing |
-| `GatewayService.GetGatewaySnapshot` | - | - | - | - | missing |
-| `GatewayService.ListGatewaySnapshots` | - | - | - | - | missing |
-| `GatewayService.GetGatewayAdmittedVTEP` | - | - | - | - | missing |
-| `GatewayService.ListGatewayAdmittedVTEPs` | - | - | - | - | missing |
+| `GatewayService.SetGatewayMode` | `POST /mode` | `(dashboard)/networking/gateway/page.tsx` | - | `real-server/gateway-mode.spec.ts` | covered |
+| `GatewayService.GetGatewaySnapshot` | `GET /state/{id}` | `(dashboard)/networking/gateway/page.tsx` | - | `real-server/gateway-mode.spec.ts` | covered |
+| `GatewayService.ListGatewaySnapshots` | `GET /state` | `(dashboard)/networking/gateway/page.tsx` | - | `real-server/gateway-mode.spec.ts` | covered |
+| `GatewayService.GetGatewayAdmittedVTEP` | `GET /vteps/{vtep}` | `(dashboard)/networking/gateway/page.tsx` | - | `real-server/gateway-mode.spec.ts` | covered |
+| `GatewayService.ListGatewayAdmittedVTEPs` | `GET /vteps` | `(dashboard)/networking/gateway/page.tsx` | - | `real-server/gateway-mode.spec.ts` | covered |
 | `GatewayService.GetBGPStatus` | `GET /bgp/status` | `(dashboard)/networking/gateway/page.tsx` | - | `networking.spec.ts` | covered |
-| `GatewayService.ListBGPPeers` | `GET /bgp/peers` | - | - | - | missing |
-| `GatewayService.AnnouncePrefix` | `POST /bgp/prefixes` | - | - | - | missing |
-| `GatewayService.WithdrawPrefix` | `DELETE /bgp/prefixes` | - | - | - | missing |
+| `GatewayService.ListBGPPeers` | `GET /bgp/peers` | `(dashboard)/networking/gateway/bgp/page.tsx` | - | `real-server/gateway-mode.spec.ts` | covered |
+| `GatewayService.AnnouncePrefix` | `POST /bgp/prefixes` | `(dashboard)/networking/gateway/bgp/page.tsx` | - | `real-server/gateway-mode.spec.ts` | covered |
+| `GatewayService.WithdrawPrefix` | `DELETE /bgp/prefixes` | `(dashboard)/networking/gateway/bgp/page.tsx` | - | `real-server/gateway-mode.spec.ts` | covered |
 | `GatewayService.ListAnnouncedPrefixes` | `GET /bgp/prefixes` | `(dashboard)/networking/gateway/page.tsx` | - | `networking.spec.ts` | covered |
-| `GatewayService.CreateIPAMPool` | - | `(dashboard)/networking/gateway/page.tsx` (read-only) | - | - | partial |
-| `GatewayService.GetIPAMPool` | - | - | - | - | missing |
-| `GatewayService.UpdateIPAMPool` | - | `(dashboard)/networking/gateway/page.tsx` (read-only) | - | - | partial |
-| `GatewayService.DeleteIPAMPool` | - | `(dashboard)/networking/gateway/page.tsx` (read-only) | - | - | partial |
+| `GatewayService.CreateIPAMPool` | `POST /sdn/gateway/ipam/pools` | `(dashboard)/networking/ipam/page.tsx` | - | `real-server/gateway-mode.spec.ts` | covered |
+| `GatewayService.GetIPAMPool` | `GET /sdn/gateway/ipam/pools/{id}` | `(dashboard)/networking/gateway/page.tsx` | - | `real-server/gateway-mode.spec.ts` | covered |
+| `GatewayService.UpdateIPAMPool` | `PUT /sdn/gateway/ipam/pools/{id}` | `(dashboard)/networking/ipam/page.tsx` | - | `real-server/gateway-mode.spec.ts` | covered |
+| `GatewayService.DeleteIPAMPool` | `DELETE /sdn/gateway/ipam/pools/{id}` | `(dashboard)/networking/gateway/page.tsx` | - | `real-server/gateway-mode.spec.ts` | covered |
 | `GatewayService.ListIPAMPools` | `GET /ipam/pools` | `(dashboard)/networking/gateway/page.tsx` | - | `networking.spec.ts` | covered |
-| `GatewayService.AllocateIP` | `POST /ipam/allocations` | - | - | - | missing |
-| `GatewayService.ReleaseIP` | `DELETE /ipam/allocations` | - | - | - | missing |
-| `GatewayService.ListAllocations` | `GET /allocations` | - | - | - | missing |
+| `GatewayService.AllocateIP` | `POST /ipam/allocations` | `(dashboard)/networking/gateway/bgp/page.tsx` | - | `real-server/gateway-mode.spec.ts` | covered |
+| `GatewayService.ReleaseIP` | `DELETE /ipam/allocations` | `(dashboard)/networking/gateway/bgp/page.tsx` | - | `real-server/gateway-mode.spec.ts` | covered |
+| `GatewayService.ListAllocations` | `GET /ipam/allocations` | `(dashboard)/networking/gateway/bgp/page.tsx` | - | `real-server/gateway-mode.spec.ts` | covered |
 | `GatewayService.AddVIP` | - | - | - | - | missing |
 | `GatewayService.RemoveVIP` | - | - | - | - | missing |
 | `GatewayService.GetVIP` | - | - | - | - | missing |

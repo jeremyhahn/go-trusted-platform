@@ -23,6 +23,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { isServiceNotConfigured } from 'trusted-platform-sdk';
 import { useGateway, useApi, useToast, useReportedGateways } from '@/hooks';
 import { GatewaySnapshotDetail } from '@/components/features/networking/gateway-snapshot-detail';
+import { GatewayOperations } from './gateway-operations';
 
 export default function APIGatewayPage() {
   const { toast } = useToast();
@@ -182,6 +183,19 @@ export default function APIGatewayPage() {
   // from the control-plane endpoint. We log the error inline if
   // there is one and let the rest of the page render.
 
+  // SetGatewayMode is a local gatewayd RPC: with no gateway status (the
+  // typed 503 of a node without gatewayd, or any failed read) the mode
+  // control is off and says why.
+  const modeGateReason: string | null = statusLoading
+    ? null
+    : statusError
+      ? `Set mode is unavailable: the gateway service is not configured or not running on this node (${
+          (statusError as { message?: string }).message ?? 'no status'
+        }).`
+      : !statusData?.status
+        ? 'Set mode is unavailable: the gateway service is not configured or not running on this node.'
+        : null;
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -197,6 +211,13 @@ export default function APIGatewayPage() {
           </Button>
         </div>
       </div>
+
+      <GatewayOperations
+        statusLoading={statusLoading}
+        currentModes={statusData?.status?.modes}
+        modeGateReason={modeGateReason}
+        onModeChanged={() => void refetchStatus()}
+      />
 
       <Card>
         <CardHeader>
@@ -224,7 +245,7 @@ export default function APIGatewayPage() {
               this view.
             </p>
           ) : (
-            <Table>
+            <Table aria-label="Reported gateways">
               <TableHeader>
                 <TableRow>
                   <TableHead>Gateway ID</TableHead>

@@ -155,6 +155,8 @@ export type {
 } from './use-kms-ops';
 
 export { useReportedGateways } from './use-reported-gateways';
+export { useGatewayOps, gatewayNotConfigured } from './use-gateway-ops';
+export type { GatewayOpResult, UseGatewayOpsResult } from './use-gateway-ops';
 
 export {
   useInvitationById,

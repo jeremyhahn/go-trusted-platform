@@ -9,7 +9,12 @@
  * shows the control disabled with that reason, and the spec asserts that
  * branch instead. No route mocks.
  */
+import type { Page } from '@playwright/test';
+import type { PlatformClient } from 'trusted-platform-sdk';
 import { test, expect } from './fixtures';
+
+/** The fixtures this spec uses, typed so the spec checks on its own. */
+type Fx = { adminPage: Page; sdk: PlatformClient };
 
 type Res<T> = { success?: boolean; data?: T; error?: { message?: string } };
 
@@ -18,7 +23,7 @@ function ok<T>(res: Res<T>): T | undefined {
 }
 
 test.describe('gateway mode and telemetry', () => {
-  test('mode control sets the mode the server reports, or is gated with the reason', async ({ adminPage, sdk }) => {
+  test('mode control sets the mode the server reports, or is gated with the reason', async ({ adminPage, sdk }: Fx) => {
     const status = ok(await sdk.gateway.getStatus());
     await adminPage.goto('/networking/gateway');
     const setMode = adminPage.getByRole('button', { name: 'Set mode' });
@@ -37,7 +42,7 @@ test.describe('gateway mode and telemetry', () => {
     expect(after?.status?.modes ?? 0).toBe(current);
   });
 
-  test('reported gateways list every snapshot the server lists', async ({ adminPage, sdk }) => {
+  test('reported gateways list every snapshot the server lists', async ({ adminPage, sdk }: Fx) => {
     const list = ok(await sdk.gateway.listState());
     const gateways = (list as { gateways?: Array<{ gateway_id: string }> } | undefined)?.gateways ?? [];
     await adminPage.goto('/networking/gateway');
@@ -51,7 +56,7 @@ test.describe('gateway mode and telemetry', () => {
     }
   });
 
-  test('snapshot lookup shows the server snapshot or its not-found answer', async ({ adminPage, sdk }) => {
+  test('snapshot lookup shows the server snapshot or its not-found answer', async ({ adminPage, sdk }: Fx) => {
     const id = 'gw-e2e-absent';
     const res = await sdk.gateway.getState(id);
     await adminPage.goto('/networking/gateway');
@@ -65,7 +70,7 @@ test.describe('gateway mode and telemetry', () => {
     }
   });
 
-  test('admitted VTEPs match the server list, and a lookup answers per server', async ({ adminPage, sdk }) => {
+  test('admitted VTEPs match the server list, and a lookup answers per server', async ({ adminPage, sdk }: Fx) => {
     const res = await sdk.gateway.listAdmittedVTEPs();
     await adminPage.goto('/networking/gateway');
     const card = adminPage.getByTestId('gateway-admitted-vteps');
@@ -88,7 +93,7 @@ test.describe('gateway mode and telemetry', () => {
 });
 
 test.describe('gateway BGP and IP allocations', () => {
-  test('BGP peers table matches the server list', async ({ adminPage, sdk }) => {
+  test('BGP peers table matches the server list', async ({ adminPage, sdk }: Fx) => {
     const res = ok(await sdk.gateway.listBGPPeers());
     await adminPage.goto('/networking/gateway/bgp');
     const table = adminPage.getByRole('table', { name: 'BGP peers' });
@@ -97,7 +102,7 @@ test.describe('gateway BGP and IP allocations', () => {
     }
   });
 
-  test('announce then withdraw a prefix through the page', async ({ adminPage, sdk }) => {
+  test('announce then withdraw a prefix through the page', async ({ adminPage, sdk }: Fx) => {
     const prefix = '198.51.100.0/24';
     await adminPage.goto('/networking/gateway/bgp');
     await adminPage.getByLabel('Prefix').fill(prefix);
@@ -112,12 +117,13 @@ test.describe('gateway BGP and IP allocations', () => {
     const row = table.getByRole('row', { name: new RegExp(prefix.replace(/[./]/g, '\\$&')) });
     await expect(row).toBeVisible();
     await row.getByRole('button', { name: /withdraw/i }).click();
+    await adminPage.getByRole('button', { name: 'Confirm', exact: true }).click();
     await expect(row).toHaveCount(0);
     const after = ok(await sdk.gateway.listAnnouncedPrefixes());
     expect((after?.prefixes ?? []).some((p) => p.prefix === prefix)).toBe(false);
   });
 
-  test('allocate then release an IP from a pool seeded through the SDK', async ({ adminPage, sdk }) => {
+  test('allocate then release an IP from a pool seeded through the SDK', async ({ adminPage, sdk }: Fx) => {
     const created = await sdk.gateway.createIPAMPool({ name: 'e2e-gw-pool', cidr: '10.251.0.0/28' });
     test.skip(created.success === false, `IPAM not available on this server: ${created.error?.message ?? ''}`);
     const pool = ok(created)!;
@@ -134,6 +140,7 @@ test.describe('gateway BGP and IP allocations', () => {
       const row = table.getByRole('row', { name: new RegExp(alloc.ip.replace(/\./g, '\\.')) });
       await expect(row).toBeVisible();
       await row.getByRole('button', { name: /release/i }).click();
+      await adminPage.getByRole('button', { name: 'Confirm', exact: true }).click();
       await expect(row).toHaveCount(0);
       const after = ok(await sdk.gateway.listAllocations({ poolId: pool.id }));
       expect(after?.allocations ?? []).toHaveLength(0);
@@ -144,7 +151,7 @@ test.describe('gateway BGP and IP allocations', () => {
 });
 
 test.describe('gateway IPAM pools', () => {
-  test('pool lookup, update and delete agree with the server', async ({ adminPage, sdk }) => {
+  test('pool lookup, update and delete agree with the server', async ({ adminPage, sdk }: Fx) => {
     const created = await sdk.gateway.createIPAMPool({ name: 'e2e-gw-lookup', cidr: '10.252.0.0/28' });
     test.skip(created.success === false, `IPAM not available on this server: ${created.error?.message ?? ''}`);
     const pool = ok(created)!;
