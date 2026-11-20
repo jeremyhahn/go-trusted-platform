@@ -203,6 +203,9 @@ type DaemonConfig struct {
 	// BindHost is the iPXE server bind address.
 	BindHost string `yaml:"bind-host,omitempty" json:"bind-host,omitempty" mapstructure:"bind-host"`
 
+	// HTTPPort is the iPXE HTTP server port; zero keeps ipxe.DefaultHTTPPort.
+	HTTPPort int `yaml:"http-port,omitempty" json:"http-port,omitempty" mapstructure:"http-port"`
+
 	// LocalFilesDir is the iPXE server's local files directory.
 	LocalFilesDir string `yaml:"local-files-dir,omitempty" json:"local-files-dir,omitempty" mapstructure:"local-files-dir"`
 
@@ -264,6 +267,12 @@ func (d *DaemonConfig) ToServiceConfig(plan *netplan.Plan) (*ServiceConfig, erro
 	}
 	if d.BindHost != "" {
 		cfg.IPXEConfig.BindHost = d.BindHost
+	}
+	if d.HTTPPort != 0 {
+		if d.HTTPPort < 0 || d.HTTPPort > 65535 {
+			return nil, &SentinelCauseError{Sentinel: ErrInvalidConfig, Cause: &MessageError{Msg: fmt.Sprintf("http-port must be between 1 and 65535, got %d", d.HTTPPort)}}
+		}
+		cfg.IPXEConfig.HTTPPort = d.HTTPPort
 	}
 	if d.LocalFilesDir != "" {
 		cfg.IPXEConfig.LocalFilesDir = d.LocalFilesDir

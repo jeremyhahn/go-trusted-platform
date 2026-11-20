@@ -7,5 +7,9 @@ pxe:
   enabled: true
   bridge-name: br-platform-int
   bind-host: 127.0.0.1
+  # 18089, not the iPXE default 8080: the ipxe suite's own iPXE server takes
+  # 8080 on the shared host network, and no other runner or daemon port
+  # (8443, 10443, 9444, 9445, the proxy suite's 18080) is 18089.
+  http-port: 18089
   local-files-dir: /tmp/platformd-pxe/files
   installs-dir: /tmp/platformd-pxe/installs

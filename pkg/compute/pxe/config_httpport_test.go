@@ -38,7 +38,7 @@ func TestDaemonConfigHTTPPort(t *testing.T) {
 			cfg, err := (&DaemonConfig{Enabled: true, BridgeName: "br-pxe", HTTPPort: port}).ToServiceConfig(plan)
 			require.Error(t, err, "port %d", port)
 			assert.Nil(t, cfg)
-			assert.True(t, errors.Is(err, ipxe.ErrInvalidPort) || errors.Is(err, ErrInvalidConfig), "port %d: %v", port, err)
+			assert.True(t, errors.Is(err, ErrInvalidConfig), "port %d: %v", port, err)
 		}
 	})
 }
