@@ -632,27 +632,20 @@ func (s *service) UpdateDeviceState(ctx context.Context, deviceID string, state 
 		}
 	}
 
-	if err := s.stateManager.Transition(deviceID, state, reason); err != nil {
+	// State and the VLAN the move enforced in one record write, so
+	// GetDevice and a VLAN filter report the device where its port now
+	// is, and a failed write leaves state and VLAN as they were.
+	vlan, recordVLAN := s.vlanForState(state)
+	recordVLAN = recordVLAN && s.vlanManager != nil
+	if err := s.stateManager.TransitionWithUpdate(deviceID, state, reason, func(d *DeviceInfo) {
+		if recordVLAN {
+			d.CurrentVLAN = vlan
+		}
+	}); err != nil {
 		return ErrProvisioningFailed{
 			DeviceID: deviceID,
 			Reason:   "failed to transition device state",
 			Cause:    err,
-		}
-	}
-
-	// Record the VLAN the move enforced, so GetDevice and a VLAN filter
-	// report the device where its port now is.
-	if vlan, ok := s.vlanForState(state); s.vlanManager != nil && ok {
-		updateErr := s.stateManager.UpdateDevice(deviceID, func(d *DeviceInfo) error {
-			d.CurrentVLAN = vlan
-			return nil
-		})
-		if updateErr != nil {
-			return ErrProvisioningFailed{
-				DeviceID: deviceID,
-				Reason:   "failed to record current VLAN",
-				Cause:    updateErr,
-			}
 		}
 	}
 
@@ -915,15 +908,21 @@ func (s *service) QuarantineDevice(ctx context.Context, deviceID string, reason 
 
 	}
 
-	// State and enforced VLAN in one record write; on failure the
-	// quarantine flows are undone (#2081 Codex).
+	// State and enforced VLAN in one record write. On failure the
+	// quarantine flows stay in place: a datastore outage must never
+	// restore the device's earlier (possibly production) access. The
+	// stored state is unchanged and the caller retries the quarantine
+	// (#2081 Codex).
 	err = s.stateManager.TransitionWithUpdate(deviceID, StateQuarantined, reason, func(d *DeviceInfo) {
 		if s.vlanManager != nil {
 			d.CurrentVLAN = s.config.QuarantineVLAN
 		}
 	})
 	if err != nil {
-		s.undoFlows(ctx, device)
+		s.logger.Warn("Quarantine state write failed; quarantine flows kept",
+			"device_id", deviceID,
+			"error", err.Error(),
+		)
 		return ErrProvisioningFailed{
 			DeviceID: deviceID,
 			Reason:   "failed to transition to quarantined state",
@@ -996,20 +995,13 @@ func (s *service) RetryDevice(ctx context.Context, deviceID string) error {
 		}
 	}
 
-	updateErr := s.stateManager.UpdateDevice(deviceID, func(d *DeviceInfo) error {
+	// Counter, fingerprint reset and transition in one record write, so
+	// a failed write never consumes a retry that did not start.
+	reason := fmt.Sprintf("retry initiated (attempt %d)", device.RetryCount+1)
+	if err := s.stateManager.TransitionWithUpdate(deviceID, StateDiscovered, reason, func(d *DeviceInfo) {
 		d.RetryCount++
 		d.IDevIDFingerprint = ""
-		return nil
-	})
-	if updateErr != nil {
-		return ErrProvisioningFailed{
-			DeviceID: deviceID,
-			Reason:   "failed to increment retry count",
-			Cause:    updateErr,
-		}
-	}
-
-	if err := s.stateManager.Transition(deviceID, StateDiscovered, fmt.Sprintf("retry initiated (attempt %d)", device.RetryCount+1)); err != nil {
+	}); err != nil {
 		return ErrProvisioningFailed{
 			DeviceID: deviceID,
 			Reason:   "failed to transition to discovered state",

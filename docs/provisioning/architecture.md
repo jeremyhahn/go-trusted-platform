@@ -139,10 +139,9 @@ deployment datastore (docs/SPEC.md:23, #2028). The `StateManager` in
 `pkg/compute/pxe` holds devices in memory for lookups and writes every
 change through a `DeviceStore` (`Put`, `Delete`, `List`):
 
-- `Register`, `Unregister`, `Transition` and `UpdateDevice` persist the
-  device's current record after the in-memory change. Writes are ordered
-  under one lock and always send the latest record, so a slower write never
-  overwrites a newer one.
+- `Register`, `Unregister`, `Transition` and `UpdateDevice` write the
+  device's new record to the store **before** changing memory. Writes are
+  ordered under one lock, so a slower write never overwrites a newer one.
 - When the daemon starts an enabled PXE backend it builds the store over
   the quicbaas client (`PXEDeviceStore` in `pkg/storage/quicbaas`: one
   `PXEDevice` entity per device in the system shard, the whole device as
@@ -150,10 +149,20 @@ change through a `DeviceStore` (`Put`, `Delete`, `List`):
   device in the state it was in, with its retry count, event history and
   IDevID binding, so a completion report or a quarantine still has its
   target. A record that does not decode is logged and skipped.
-- A failed store write is returned to the caller **without rollback**: the
-  in-memory change has already happened and any transition event has
-  already been emitted. The caller sees the error; the next successful
-  write of that device stores its full current record again.
+- A failed store write is returned to the caller and **nothing takes
+  effect**: memory keeps the previous record and no transition event is
+  emitted (events are emitted only after a committed write). The caller may
+  repeat the same request once the store is back.
+- An operation that changes several fields commits them in one write
+  (`TransitionWithUpdate`): `AuthorizeDevice`, `QuarantineDevice` and
+  `UpdateDeviceState` store the state with the VLAN they enforced, and
+  `RetryDevice` stores the retry count, the cleared IDevID fingerprint and
+  `discovered` together, so a failed write never consumes a retry.
+- Network enforcement happens before the write. If the write then fails,
+  `AuthorizeDevice` restores the device's previous flows, but
+  `QuarantineDevice` keeps the quarantine flows: a datastore outage never
+  gives a device being quarantined its earlier access back. Its stored
+  state stays the old one until the quarantine is repeated.
 - With no quicbaas DAO factory (tests, a daemon without the datastore) the
   backend keeps devices in memory only.
 
