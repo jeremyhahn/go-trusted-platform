@@ -302,6 +302,36 @@ func TestIAMCertificatePrincipals_ThePEPDecidesEachScope(t *testing.T) {
 	assert.Equal(t, [][2]string{{"device", "read"}, {"attestation", "submit"}, {"tenant", "read"}}, got)
 }
 
+// TestIAMCertificatePrincipals_AnABACOnlyAllowBecomesAScope pins #1906
+// Codex P1: go-qrdb decides every request (docs/SPEC.md), so an explicit
+// ABAC allow with no matching role permission, here for a principal with
+// no roles at all, still grants its scope; a principal the PEP allows
+// nothing gets no scope.
+func TestIAMCertificatePrincipals_AnABACOnlyAllowBecomesAScope(t *testing.T) {
+	t.Parallel()
+	users, roles := newCertPrincipalDirectory()
+	users.users["tenant-a/abac-01"] = &sdkiam.User{ID: "u-abac", TenantID: "tenant-a",
+		Username: "abac-01", Lifecycle: "active"}
+	users.users["tenant-a/nobody-01"] = &sdkiam.User{ID: "u-nobody", TenantID: "tenant-a",
+		Username: "nobody-01", Lifecycle: "active"}
+	pep := &mockSDKPEPClient{checkFunc: func(_ context.Context, req *sdkiam.CheckRequest) (*sdkiam.CheckResponse, error) {
+		return &sdkiam.CheckResponse{Allowed: req.Subject.ID == "u-abac" &&
+			req.Resource == "device" && req.Action == "read"}, nil
+	}}
+	resolver := newTestIAMCertificatePrincipals(t, users, roles, pep)
+
+	principal, err := resolver.ResolveCertificatePrincipal(context.Background(),
+		&auth.Identity{ID: "abac-01", TenantID: "tenant-a"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"device:read"}, principal.Scopes,
+		"an explicit ABAC allow is a scope even with no role permission")
+
+	principal, err = resolver.ResolveCertificatePrincipal(context.Background(),
+		&auth.Identity{ID: "nobody-01", TenantID: "tenant-a"})
+	require.NoError(t, err)
+	assert.Empty(t, principal.Scopes, "a principal the PEP allows nothing has no scope")
+}
+
 // A role permission holding a wildcard never becomes a certificate
 // principal's scope: RequireScope matches a wildcard scope against any
 // concrete operation, so copying "*:*" would admit "device:write" without

@@ -23,6 +23,8 @@ import (
 	"encoding/json"
 	"errors"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync"
@@ -35,6 +37,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/entities"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore/kvstore"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -356,4 +359,85 @@ func TestRevocation_ProductionDAOMissIsNotRevoked(t *testing.T) {
 			require.ErrorIs(t, verifyString(other, bearer), ErrTokenRevoked)
 		})
 	}
+}
+
+// TestRevocation_ARefreshInFlightAcrossALogoutMintsNoLiveToken pins #1906
+// Codex P1: a refresh that passed its revocation check before a logout but
+// mints after it must not produce a token that outlives the revocation.
+func TestRevocation_ARefreshInFlightAcrossALogoutMintsNoLiveToken(t *testing.T) {
+	t.Parallel()
+	handler := newHandlerForLoginTest(t)
+	principals := &blockingPrincipals{
+		fakePrincipals: fakePrincipals{tenants: map[string]map[string][]string{
+			"tenant-a": {backboneSubject: {"admin"}},
+		}},
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	handler.SetPrincipalResolver(principals)
+
+	a := issueBackboneBearer(t, handler)
+	type result struct {
+		code    int
+		payload string
+	}
+	done := make(chan result, 1)
+	go func() {
+		rec := httptest.NewRecorder()
+		handler.RefreshToken(rec, bearerRequest(http.MethodPost, "/login/refresh", a))
+		var env struct {
+			Payload string `json:"payload"`
+		}
+		_ = json.Unmarshal(rec.Body.Bytes(), &env)
+		done <- result{code: rec.Code, payload: env.Payload}
+	}()
+
+	// The refresh has passed its revocation check and is reading IAM.
+	<-principals.entered
+	require.Equal(t, http.StatusOK, logout(handler, a).Code)
+	close(principals.release)
+	got := <-done
+
+	assert.NotEqual(t, http.StatusOK, got.code,
+		"a refresh in flight across the logout minted a token of the signed-out session")
+	if got.payload != "" {
+		_, reached := verifyThrough(handler, got.payload)
+		assert.False(t, reached, "the token a refresh minted after the logout authenticates")
+	}
+}
+
+// TestRevocation_ASessionRevocationOutlivesATokenMintedJustAfterTheLogout
+// pins the expiry side of #1906 Codex P1: a refresh that passed its last
+// revocation check just before the logout signs a token whose expiry is
+// later than logout+lifetime; the session revocation must stand until that
+// token has expired too, at and after logout+lifetime.
+func TestRevocation_ASessionRevocationOutlivesATokenMintedJustAfterTheLogout(t *testing.T) {
+	t.Parallel()
+	lifetime := 15 * time.Minute
+	logoutAt := time.Unix(1_700_000_000, 0)
+	presented := &jwt.Token{Claims: jwt.MapClaims{
+		"exp": float64(logoutAt.Add(time.Minute).Unix()),
+	}}
+	expiry := sessionRevocationExpiry(presented, lifetime, logoutAt)
+	// A token minted up to a minute after the logout expires at
+	// mintedAt+lifetime; the revocation must still stand then.
+	mintedAt := logoutAt.Add(time.Minute)
+	assert.False(t, expiry.Before(mintedAt.Add(lifetime)),
+		"the session revocation expires at %s, before a token minted at %s (expiring %s)",
+		expiry, mintedAt, mintedAt.Add(lifetime))
+}
+
+// blockingPrincipals holds a backbone refresh inside its IAM read until
+// the test releases it.
+type blockingPrincipals struct {
+	fakePrincipals
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (p *blockingPrincipals) Principal(ctx context.Context, tenantID, subject string) ([]string, bool, error) {
+	p.once.Do(func() { close(p.entered) })
+	<-p.release
+	return p.fakePrincipals.Principal(ctx, tenantID, subject)
 }
