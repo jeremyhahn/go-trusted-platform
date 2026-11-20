@@ -637,17 +637,6 @@ func (wildcardPeerAuthenticator) AuthenticatePeer(context.Context, []*x509.Certi
 	return &platformtoken.AuthorizedContext{Subject: "operator-cert", TenantID: "tenant-a", Scopes: []string{"*:*"}}, nil
 }
 
-type stubPeerChecker struct {
-	allowed bool
-	err     error
-	asked   *platformtoken.AuthorizedContext
-}
-
-func (c *stubPeerChecker) CheckPeerPermission(_ context.Context, authCtx *platformtoken.AuthorizedContext, _, _ string) (bool, error) {
-	c.asked = authCtx
-	return c.allowed, c.err
-}
-
 func peerTLSContext() context.Context {
 	leaf := &x509.Certificate{}
 	return WithConnectionTLS(context.Background(), &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{leaf}}})

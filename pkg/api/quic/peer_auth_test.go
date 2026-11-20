@@ -26,6 +26,20 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/sdk/go/wire/quicwire"
 )
 
+// stubPeerChecker records the certificate principal it is asked about and
+// answers a fixed verdict. It lives in this untagged file so every tag set
+// that builds the package tests has it (auth_test.go is codec_msgpack only).
+type stubPeerChecker struct {
+	allowed bool
+	err     error
+	asked   *platformtoken.AuthorizedContext
+}
+
+func (c *stubPeerChecker) CheckPeerPermission(_ context.Context, authCtx *platformtoken.AuthorizedContext, _, _ string) (bool, error) {
+	c.asked = authCtx
+	return c.allowed, c.err
+}
+
 // peerAuthenticatorStub is a PeerAuthenticator test double.
 type peerAuthenticatorStub struct {
 	authCtx  *platformtoken.AuthorizedContext
