@@ -60,7 +60,10 @@ func TestConvertToOpenFlow_ZoneFlowRules(t *testing.T) {
 // TestParseMatchString_VLANTCI: vlan_tci's VID and CFI bits are OXM
 // VLAN_VID (CFI is OFPVID_PRESENT), so the access-port spelling
 // vlan_tci=0x0000/0x1fff is VLAN_VID=OFPVID_NONE; a full PCP mask on a
-// tagged frame is an exact VLAN_PCP after its VLAN_VID prerequisite.
+// tagged frame is an exact VLAN_PCP after its VLAN_VID prerequisite. A
+// PCP of zero is only encodable on a frame known to be untagged (the CFI
+// bit masked and clear, whose TCI reads 0); a PCP match on a frame whose
+// tag is not masked is refused, since dropping it would match every frame.
 func TestParseMatchString_VLANTCI(t *testing.T) {
 	type field struct {
 		field uint8
@@ -77,6 +80,8 @@ func TestParseMatchString_VLANTCI(t *testing.T) {
 			{openflow.OFPXMTOFBVlanPcp, []byte{0x05}, nil},
 		},
 		"vlan_tci=0x0000/0x0000": nil,
+		// The CFI bit masked and clear: an untagged frame, PCP 0.
+		"vlan_tci=0x0000/0xf000": {{openflow.OFPXMTOFBVlanVid, []byte{0x00, 0x00}, []byte{0x10, 0x00}}},
 	}
 	for spec, want := range cases {
 		t.Run(spec, func(t *testing.T) {
@@ -97,6 +102,7 @@ func TestParseMatchString_VLANTCI(t *testing.T) {
 		"vlan_tci=0x10000",
 		"vlan_tci=0x2000/0x2000", // partial PCP mask
 		"vlan_tci=0xa000/0xe000", // a PCP with no tag to carry it
+		"vlan_tci=0x0000/0xe000", // PCP 0 on a frame not known to be untagged
 	} {
 		assert.Error(t, parseMatchString(openflow.NewMatch(), bad), bad)
 	}

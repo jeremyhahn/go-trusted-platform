@@ -234,7 +234,7 @@ func initSDNPolicy(a *app.App, slogger *slog.Logger) *sdnPolicyComponents {
 	// observed and logged, and the terminal stays normal.
 	terminal := pipelineTerminalForBridge(context.Background(), concreteClient, bridgeName, slogger)
 
-	zfm, err := policy.NewZoneFlowManager(policy.ZoneFlowManagerConfig{
+	zfm, err := newSharedZoneFlowManager(policy.ZoneFlowManagerConfig{
 		BridgeName:     bridgeName,
 		FlowController: fc,
 		PortController: fc,
@@ -274,6 +274,12 @@ func initSDNPolicy(a *app.App, slogger *slog.Logger) *sdnPolicyComponents {
 		ZoneFlowManager: zfm,
 		ResolvedZones:   resolvedZones,
 	}
+}
+
+// newSharedZoneFlowManager builds the zone flow manager initSDNPolicy
+// shares with the policy engine, the quarantine loop and the PXE backend.
+func newSharedZoneFlowManager(cfg policy.ZoneFlowManagerConfig) (*policy.ZoneFlowManager, error) {
+	return policy.NewZoneFlowManager(cfg)
 }
 
 // wireQuarantineObserver constructs the QuarantineManager on the shared SDN
