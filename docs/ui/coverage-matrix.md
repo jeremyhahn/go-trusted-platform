@@ -387,28 +387,28 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
 | `KeyManagementService.GenerateKey` | `POST /keys` | `(dashboard)/kms/page.tsx` | - | `kms.spec.ts` | covered |
-| `KeyManagementService.ImportKey` | `POST /keys/import` | `(dashboard)/kms/[id]/page.tsx`<br>`(dashboard)/kms/page.tsx` (read-only) | - | - | partial |
+| `KeyManagementService.ImportKey` | `POST /keys/import` | `(dashboard)/kms/operations/page.tsx` | - | `real-server/kms.spec.ts` | covered |
 | `KeyManagementService.GetKey` | `GET /keys/{name}` | `(dashboard)/kms/[id]/page.tsx` | - | `kms.spec.ts` | covered |
 | `KeyManagementService.ListKeys` | `GET /keys` | `(dashboard)/kms/page.tsx` | - | `kms.spec.ts` | covered |
 | `KeyManagementService.DeleteKey` | `DELETE /keys/{name}` | `(dashboard)/kms/[id]/page.tsx`<br>`(dashboard)/kms/page.tsx` | - | `kms.spec.ts` | covered |
 | `KeyManagementService.RotateKey` | `POST /keys/{name}/rotate` | `(dashboard)/kms/page.tsx` | - | `kms.spec.ts` | covered |
-| `KeyManagementService.UpdateKeyStatus` | `PUT /keys/{name}/status` | - | - | - | missing |
+| `KeyManagementService.UpdateKeyStatus` | `PUT /keys/{name}/status` | `(dashboard)/kms/operations/page.tsx` | - | `real-server/kms.spec.ts` | covered |
 | `KeyManagementService.ExportKey` | - | `(dashboard)/kms/page.tsx` | - | `kms.spec.ts` | covered |
-| `KeyManagementService.GetKeyVersions` | `GET /keys/{name}` | - | - | - | missing |
+| `KeyManagementService.GetKeyVersions` | `GET /keys/{name}/versions` | `(dashboard)/kms/operations/page.tsx` | - | `real-server/kms.spec.ts` | covered |
 | `KeyManagementService.Encrypt` | `POST /encrypt/{name}` | `(dashboard)/kms/[id]/page.tsx` | - | `kms.spec.ts` | covered |
 | `KeyManagementService.Decrypt` | `POST /decrypt/{name}` | `(dashboard)/kms/[id]/page.tsx` | - | `kms.spec.ts` | covered |
-| `KeyManagementService.BatchEncrypt` | `POST /encrypt/{name}` | - | - | - | missing |
-| `KeyManagementService.BatchDecrypt` | `POST /decrypt/{name}` | - | - | - | missing |
-| `KeyManagementService.Rewrap` | - | - | - | - | missing |
+| `KeyManagementService.BatchEncrypt` | `POST /encrypt/{name}` | `(dashboard)/kms/operations/page.tsx` | - | `real-server/kms.spec.ts` | covered |
+| `KeyManagementService.BatchDecrypt` | `POST /decrypt/{name}` | `(dashboard)/kms/operations/page.tsx` | - | `real-server/kms.spec.ts` | covered |
+| `KeyManagementService.Rewrap` | `POST /keys/{name}/rewrap` | `(dashboard)/kms/operations/page.tsx` | - | `real-server/kms.spec.ts` | covered |
 | `KeyManagementService.Sign` | `POST /sign/{name}` | `(dashboard)/kms/[id]/page.tsx` | - | `kms.spec.ts` | covered |
 | `KeyManagementService.Verify` | `POST /verify/{name}` | `(dashboard)/kms/[id]/page.tsx` | - | `kms.spec.ts` | covered |
-| `KeyManagementService.Hash` | `POST /hash` | - | - | - | missing |
-| `KeyManagementService.HMAC` | `POST /hmac/{name}` | - | - | - | missing |
-| `KeyManagementService.VerifyHMAC` | `POST /hmac/{name}/verify` | - | - | - | missing |
-| `KeyManagementService.GenerateRandom` | `POST /random` | - | - | - | missing |
-| `KeyManagementService.GenerateDataKey` | `POST /data-keys` | - | - | - | missing |
-| `KeyManagementService.GenerateWrappedDataKey` | `POST /data-keys/wrapped` | - | - | - | missing |
-| `KeyManagementService.BackendStatus` | `GET /backend/status` | - | - | - | missing |
+| `KeyManagementService.Hash` | `POST /hash` | `(dashboard)/kms/operations/page.tsx` | - | `real-server/kms.spec.ts` | covered |
+| `KeyManagementService.HMAC` | `POST /hmac/{name}` | `(dashboard)/kms/operations/page.tsx` | - | `real-server/kms.spec.ts` | covered |
+| `KeyManagementService.VerifyHMAC` | `POST /hmac/{name}/verify` | `(dashboard)/kms/operations/page.tsx` | - | `real-server/kms.spec.ts` | covered |
+| `KeyManagementService.GenerateRandom` | `POST /random` | `(dashboard)/kms/operations/page.tsx` | - | `real-server/kms.spec.ts` | covered |
+| `KeyManagementService.GenerateDataKey` | `POST /data-keys` | `(dashboard)/kms/operations/page.tsx` | - | `real-server/kms.spec.ts` | covered |
+| `KeyManagementService.GenerateWrappedDataKey` | `POST /data-keys/wrapped` | `(dashboard)/kms/operations/page.tsx` | - | `real-server/kms.spec.ts` | covered |
+| `KeyManagementService.BackendStatus` | `GET /backend/status` | `(dashboard)/kms/operations/page.tsx` | - | `real-server/kms.spec.ts` | covered |
 
 ## LUKSService (`luks.proto`)
 
