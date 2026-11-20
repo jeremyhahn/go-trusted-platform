@@ -152,10 +152,7 @@ func TestAuthMiddleware_Handler(t *testing.T) {
 			}, nil
 		}
 
-		config := AuthConfig{
-			ExtractTenantFromCert: true,
-			TenantCertField:       "o",
-		}
+		config := AuthConfig{}
 		middleware, _ := NewAuthMiddleware(logger, httpWriter, config, iamService, nil, nil, nil)
 
 		called := false
@@ -255,10 +252,7 @@ func TestAuthMiddleware_AuthenticateWithMTLS(t *testing.T) {
 			}, nil
 		}
 
-		config := AuthConfig{
-			ExtractTenantFromCert: true,
-			TenantCertField:       "o",
-		}
+		config := AuthConfig{}
 		middleware, _ := NewAuthMiddleware(logger, httpWriter, config, iamService, nil, nil, nil)
 
 		cert, _ := createTestCertificate()
@@ -313,12 +307,13 @@ func TestAuthMiddleware_AuthenticateWithMTLS(t *testing.T) {
 		httpWriter := newMockHttpWriter()
 		iamService := newMockIAMServiceClient()
 
-		config := AuthConfig{
-			ExtractTenantFromCert: false,
-		}
+		config := AuthConfig{}
 		middleware, _ := NewAuthMiddleware(logger, httpWriter, config, iamService, nil, nil, nil)
 
-		cert, _ := createTestCertificate()
+		// O, CN and SANs are set; only the missing OU matters.
+		cert, _ := createTestCertificate(func(c *x509.Certificate) {
+			c.Subject.OrganizationalUnit = nil
+		})
 		req := httptest.NewRequest(http.MethodGet, "/test", nil)
 		req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{cert}}
 
@@ -333,10 +328,7 @@ func TestAuthMiddleware_AuthenticateWithMTLS(t *testing.T) {
 		httpWriter := newMockHttpWriter()
 		iamService := newMockIAMServiceClient()
 
-		config := AuthConfig{
-			ExtractTenantFromCert: true,
-			TenantCertField:       "o",
-		}
+		config := AuthConfig{}
 		middleware, _ := NewAuthMiddleware(logger, httpWriter, config, iamService, nil, nil, nil)
 
 		// Create cert with no email, no CN, and no serial number
@@ -382,10 +374,7 @@ func TestAuthMiddleware_AuthenticateWithMTLS(t *testing.T) {
 			}, nil
 		}
 
-		config := AuthConfig{
-			ExtractTenantFromCert: true,
-			TenantCertField:       "o",
-		}
+		config := AuthConfig{}
 		middleware, _ := NewAuthMiddleware(logger, httpWriter, config, iamService, nil, nil, nil)
 
 		// Create cert with CN but no email
@@ -434,10 +423,7 @@ func TestAuthMiddleware_AuthenticateWithMTLS(t *testing.T) {
 			}, nil
 		}
 
-		config := AuthConfig{
-			ExtractTenantFromCert: true,
-			TenantCertField:       "o",
-		}
+		config := AuthConfig{}
 		middleware, _ := NewAuthMiddleware(logger, httpWriter, config, iamService, nil, nil, nil)
 
 		// Create cert with only serial number
@@ -480,10 +466,7 @@ func TestAuthMiddleware_AuthenticateWithMTLS(t *testing.T) {
 			return nil, errors.New("service unavailable")
 		}
 
-		config := AuthConfig{
-			ExtractTenantFromCert: true,
-			TenantCertField:       "o",
-		}
+		config := AuthConfig{}
 		middleware, _ := NewAuthMiddleware(logger, httpWriter, config, iamService, nil, nil, nil)
 
 		cert, _ := createTestCertificate()
@@ -513,12 +496,12 @@ func TestAuthMiddleware_AuthenticateWithMTLS(t *testing.T) {
 		httpWriter := newMockHttpWriter()
 		iamService := newMockIAMServiceClient()
 
-		config := AuthConfig{
-			ExtractTenantFromCert: false,
-		}
+		config := AuthConfig{}
 		middleware, _ := NewAuthMiddleware(logger, httpWriter, config, iamService, nil, nil, nil)
 
-		cert, _ := createTestCertificate()
+		cert, _ := createTestCertificate(func(c *x509.Certificate) {
+			c.Subject.OrganizationalUnit = nil
+		})
 
 		called := false
 		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -549,51 +532,38 @@ func TestAuthMiddleware_ExtractTenantFromCert(t *testing.T) {
 	httpWriter := newMockHttpWriter()
 	iamService := newMockIAMServiceClient()
 
+	// SPEC row 123: the tenant is the certificate's first subject OU, and
+	// no other field (CN, O, SAN email or DNS name) stands in for it.
 	tests := []struct {
 		name           string
-		tenantField    string
 		certModifier   func(*x509.Certificate)
-		expectedTenant string
+		expectedTenant string // "" means the request is refused
 	}{
 		{
-			name:        "extracts_from_cn",
-			tenantField: "cn",
+			name: "takes_first_ou",
 			certModifier: func(c *x509.Certificate) {
-				c.Subject.CommonName = "tenant-from-cn"
+				c.Subject.OrganizationalUnit = []string{"tenant-from-ou", "second-ou"}
 			},
-			expectedTenant: "tenant-from-cn",
+			expectedTenant: "tenant-from-ou",
 		},
 		{
-			name:        "extracts_from_ou",
-			tenantField: "ou",
+			name: "ou_wins_over_different_o",
 			certModifier: func(c *x509.Certificate) {
+				c.Subject.Organization = []string{"tenant-from-org"}
 				c.Subject.OrganizationalUnit = []string{"tenant-from-ou"}
 			},
 			expectedTenant: "tenant-from-ou",
 		},
 		{
-			name:        "extracts_from_o",
-			tenantField: "o",
+			name: "refuses_cert_with_no_ou",
 			certModifier: func(c *x509.Certificate) {
+				c.Subject.OrganizationalUnit = nil
 				c.Subject.Organization = []string{"tenant-from-org"}
-			},
-			expectedTenant: "tenant-from-org",
-		},
-		{
-			name:        "extracts_from_san_dns",
-			tenantField: "san_dns",
-			certModifier: func(c *x509.Certificate) {
+				c.Subject.CommonName = "tenant-from-cn"
 				c.DNSNames = []string{"tenant.example.com"}
-			},
-			expectedTenant: "tenant.example.com",
-		},
-		{
-			name:        "extracts_domain_from_san_email",
-			tenantField: "san_email",
-			certModifier: func(c *x509.Certificate) {
 				c.EmailAddresses = []string{"user@tenant-domain.com"}
 			},
-			expectedTenant: "tenant-domain.com",
+			expectedTenant: "",
 		},
 	}
 
@@ -610,10 +580,7 @@ func TestAuthMiddleware_ExtractTenantFromCert(t *testing.T) {
 				}, nil
 			}
 
-			config := AuthConfig{
-				ExtractTenantFromCert: true,
-				TenantCertField:       tt.tenantField,
-			}
+			config := AuthConfig{}
 			middleware, _ := NewAuthMiddleware(logger, httpWriter, config, iamService, nil, nil, nil)
 
 			cert, _ := createTestCertificate(tt.certModifier)
@@ -631,6 +598,15 @@ func TestAuthMiddleware_ExtractTenantFromCert(t *testing.T) {
 
 			middleware.Authenticate(rec, req, next)
 
+			if tt.expectedTenant == "" {
+				if sessionFromContext != nil {
+					t.Fatalf("expected refusal, got session for tenant %q", sessionFromContext.TenantID())
+				}
+				if httpWriter.getError401Count() == 0 {
+					t.Error("expected Error401 to be called")
+				}
+				return
+			}
 			if sessionFromContext == nil {
 				t.Fatal("expected session to be set in context")
 			}
@@ -1026,10 +1002,7 @@ func TestAuthMiddleware_CreateSession(t *testing.T) {
 			}, nil
 		}
 
-		config := AuthConfig{
-			ExtractTenantFromCert: true,
-			TenantCertField:       "o",
-		}
+		config := AuthConfig{}
 		middleware, _ := NewAuthMiddleware(logger, httpWriter, config, iamService, nil, nil, nil)
 
 		cert, _ := createTestCertificate()

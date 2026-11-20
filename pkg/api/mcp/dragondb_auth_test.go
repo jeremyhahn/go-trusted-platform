@@ -39,9 +39,11 @@ func (m *mockTokenValidator) ValidateToken(ctx context.Context, token string) (*
 type mockPEPClient struct {
 	checkResp *iam.CheckResponse
 	checkErr  error
+	lastReq   *iam.CheckRequest
 }
 
 func (m *mockPEPClient) Check(ctx context.Context, req *iam.CheckRequest) (*iam.CheckResponse, error) {
+	m.lastReq = req
 	if m.checkErr != nil {
 		return nil, m.checkErr
 	}
@@ -452,7 +454,7 @@ func TestQuicBaaSAuthAdapter_CheckPermission(t *testing.T) {
 		}
 	})
 
-	t.Run("uses default tenant when not in token", func(t *testing.T) {
+	t.Run("refuses a token with no tenant", func(t *testing.T) {
 		validator := &mockTokenValidator{
 			result: &TokenValidationResult{
 				Valid:  true,
@@ -464,18 +466,51 @@ func TestQuicBaaSAuthAdapter_CheckPermission(t *testing.T) {
 			checkResp: &iam.CheckResponse{Allowed: true},
 		}
 		adapter := NewQuicBaaSAuthAdapter(&QuicBaaSAuthConfig{
-			TokenValidator:  validator,
-			PEPClient:       pepClient,
-			DefaultTenantID: "default-tenant",
+			TokenValidator: validator,
+			PEPClient:      pepClient,
 		})
 
 		allowed, err := adapter.CheckPermission(context.Background(), "test-token", "vtpm", "read")
 
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
+		var authErr *QuicBaaSAuthError
+		if !errors.As(err, &authErr) || authErr.Code != QuicBaaSAuthErrorMissingTenant {
+			t.Fatalf("expected QuicBaaSAuthErrorMissingTenant, got %v", err)
 		}
-		if !allowed {
-			t.Error("expected allowed to be true")
+		if allowed {
+			t.Error("expected allowed to be false")
+		}
+		if pepClient.lastReq != nil {
+			t.Error("PEP must not be consulted for a token with no tenant")
+		}
+	})
+
+	t.Run("check request carries the token tenant", func(t *testing.T) {
+		validator := &mockTokenValidator{
+			result: &TokenValidationResult{
+				Valid:    true,
+				UserID:   "user-123",
+				TenantID: "tenant-456",
+			},
+		}
+		pepClient := &mockPEPClient{
+			checkResp: &iam.CheckResponse{Allowed: true},
+		}
+		adapter := NewQuicBaaSAuthAdapter(&QuicBaaSAuthConfig{
+			TokenValidator: validator,
+			PEPClient:      pepClient,
+		})
+
+		if _, err := adapter.CheckPermission(context.Background(), "test-token", "vtpm", "read"); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if pepClient.lastReq == nil {
+			t.Fatal("expected a PEP check request")
+		}
+		if pepClient.lastReq.TenantID != "tenant-456" {
+			t.Errorf("CheckRequest.TenantID = %q, want tenant-456", pepClient.lastReq.TenantID)
+		}
+		if pepClient.lastReq.Subject.TenantID != "tenant-456" {
+			t.Errorf("CheckRequest.Subject.TenantID = %q, want tenant-456", pepClient.lastReq.Subject.TenantID)
 		}
 	})
 
