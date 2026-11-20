@@ -71,12 +71,18 @@ type CAGRPCService struct {
 	initMu sync.Mutex
 	// trustPath is where InstallCACertificates writes the CA bundle.
 	trustPath string
+	// holder, when set, is the CA shared with the REST CA handlers; it
+	// replaces ca for every read and write.
+	holder *CAHolder
 }
 
 // authority returns the CA the service serves now, or nil. Every read of
 // ca after construction goes through it; a method reads it once and uses
 // that value throughout, so one call sees one CA.
 func (s *CAGRPCService) authority() quicbaasca.CACertificateAuthority {
+	if s.holder != nil {
+		return s.holder.Get()
+	}
 	s.caMu.RLock()
 	defer s.caMu.RUnlock()
 	return s.ca
@@ -84,9 +90,34 @@ func (s *CAGRPCService) authority() quicbaasca.CACertificateAuthority {
 
 // setAuthority swaps the CA the service serves.
 func (s *CAGRPCService) setAuthority(ca quicbaasca.CACertificateAuthority) {
+	if s.holder != nil {
+		s.holder.Set(ca)
+		return
+	}
 	s.caMu.Lock()
 	defer s.caMu.Unlock()
 	s.ca = ca
+}
+
+// WithCAHolder makes the service read and swap the CA through h, the
+// holder the REST CA handlers share, and returns s. An empty holder is
+// seeded with the CA the service was built with.
+func (s *CAGRPCService) WithCAHolder(h *CAHolder) *CAGRPCService {
+	if h != nil && h.Get() == nil {
+		s.caMu.RLock()
+		ca := s.ca
+		s.caMu.RUnlock()
+		if ca != nil {
+			h.Set(ca)
+		}
+	}
+	s.holder = h
+	return s
+}
+
+// CAHolder returns the holder the service reads its CA through, or nil.
+func (s *CAGRPCService) CAHolder() *CAHolder {
+	return s.holder
 }
 
 // WithKMS sets the KMS whose keys SignCSR certifies, and returns s.

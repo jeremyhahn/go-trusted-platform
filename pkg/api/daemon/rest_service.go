@@ -522,8 +522,14 @@ func (s *RESTServer) SetCAHandlers(ca quicbaasca.CACertificateAuthority, guard *
 	if ca == nil {
 		return
 	}
-	adapter := restapi.NewCAAuthorityAdapter(ca)
-	if adapter == nil {
+	s.SetCAHolder(NewCAHolder(ca), guard)
+}
+
+// SetCAHolder mounts the CA REST routes on the CA held by holder, read on
+// every request, so a CA InitCA swaps into the holder is served without a
+// restart. A nil holder mounts nothing.
+func (s *RESTServer) SetCAHolder(holder *CAHolder, guard *restapi.ScopeGuard) {
+	if holder == nil {
 		return
 	}
 	var caObjStorage objectstorage.Client
@@ -534,14 +540,23 @@ func (s *RESTServer) SetCAHandlers(ca quicbaasca.CACertificateAuthority, guard *
 			caObjStorage = s.config.App.Storage
 		}
 	}
-	handlers := restapi.NewCAHandlers(adapter, s.logger, caObjStorage).WithKMS(caKMS).WithScopeGuard(guard)
+	source := func() restapi.CAServiceInterface {
+		ca := holder.Get()
+		if ca == nil {
+			// Untyped nil: a typed nil *CAAuthorityAdapter in the
+			// interface would pass the handlers' nil check.
+			return nil
+		}
+		return restapi.NewCAAuthorityAdapter(ca)
+	}
+	handlers := restapi.NewCAHandlers(nil, s.logger, caObjStorage).WithCASource(source).WithKMS(caKMS).WithScopeGuard(guard)
 	handlers.RegisterRoutes(s.router)
 	s.logger.Info("CA REST routes registered")
 
 	// Wire auth factor endpoints (AAGUID lookup, mTLS probe, cert issuance,
-	// MFA policy). These share the same CA instance as the CA handlers so
-	// certificate issuance goes through the live platform CA.
-	authFactorHandlers := restapi.NewAuthFactorHandlers(ca, s.logger)
+	// MFA policy). They still hold the CA the holder held at start-up; they
+	// follow the holder in a later slice.
+	authFactorHandlers := restapi.NewAuthFactorHandlers(holder.Get(), s.logger)
 	authFactorHandlers.RegisterRoutes(s.router)
 	s.logger.Info("Auth factor REST routes registered")
 }

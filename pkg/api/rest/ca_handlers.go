@@ -463,6 +463,26 @@ type CAHandlers struct {
 	objStorage objectstorage.Client
 	kms        issuance.KMS
 	guard      *ScopeGuard
+	// source, when set, returns the CA to serve on each request (nil when
+	// none is loaded); it replaces ca, so a CA swapped at run time is
+	// served without re-registering the routes.
+	source func() CAServiceInterface
+}
+
+// WithCASource makes the handlers read the CA from src on every request,
+// and returns h. src must return an untyped nil when no CA is loaded.
+func (h *CAHandlers) WithCASource(src func() CAServiceInterface) *CAHandlers {
+	h.source = src
+	return h
+}
+
+// authority returns the CA to serve now, or nil. A handler reads it once
+// and uses that value throughout, so one request sees one CA.
+func (h *CAHandlers) authority() CAServiceInterface {
+	if h.source != nil {
+		return h.source()
+	}
+	return h.ca
 }
 
 // TokenAuthorizer validates a platform bearer token, with its DPoP proof
@@ -531,7 +551,8 @@ func (h *CAHandlers) RegisterRoutes(router *mux.Router) {
 
 // handleGetCAInfo handles GET /api/v1/ca/info
 func (h *CAHandlers) handleGetCAInfo(w http.ResponseWriter, r *http.Request) {
-	if h.ca == nil {
+	ca := h.authority()
+	if ca == nil {
 		h.writeError(w, http.StatusServiceUnavailable, ErrCAServiceNotAvailable{})
 		return
 	}
@@ -539,24 +560,24 @@ func (h *CAHandlers) handleGetCAInfo(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().Unix()
 
 	resp := CAInfoResponse{
-		IsInitialized: h.ca.IsInitialized(),
+		IsInitialized: ca.IsInitialized(),
 		Timestamp:     now,
 	}
 
-	if h.ca.IsInitialized() {
-		resp.CommonName = h.ca.Identity()
-		resp.DefaultAlgorithm = h.keyAlgorithmToString(h.ca.DefaultKeyAlgorithm())
-		resp.DefaultValidity = int(h.ca.DefaultValidityPeriod() / (24 * time.Hour))
+	if ca.IsInitialized() {
+		resp.CommonName = ca.Identity()
+		resp.DefaultAlgorithm = h.keyAlgorithmToString(ca.DefaultKeyAlgorithm())
+		resp.DefaultValidity = int(ca.DefaultValidityPeriod() / (24 * time.Hour))
 
 		// Get root certificate info
-		rootCert, err := h.ca.TrustedRoot()
+		rootCert, err := ca.TrustedRoot()
 		if err == nil && rootCert != nil {
 			summary := h.certToSummary(rootCert)
 			resp.RootCert = &summary
 		}
 
 		// Get intermediate certificate info
-		intermediateCert, err := h.ca.TrustedIntermediate()
+		intermediateCert, err := ca.TrustedIntermediate()
 		if err == nil && intermediateCert != nil {
 			resp.IsIntermediate = true
 			resp.Intermediates = append(resp.Intermediates, h.certToSummary(intermediateCert))
@@ -568,7 +589,8 @@ func (h *CAHandlers) handleGetCAInfo(w http.ResponseWriter, r *http.Request) {
 
 // handleIssueCertificate handles POST /api/v1/ca/certificates
 func (h *CAHandlers) handleIssueCertificate(w http.ResponseWriter, r *http.Request) {
-	if h.ca == nil {
+	ca := h.authority()
+	if ca == nil {
 		h.writeError(w, http.StatusServiceUnavailable, ErrCAServiceNotAvailable{})
 		return
 	}
@@ -639,7 +661,7 @@ func (h *CAHandlers) handleIssueCertificate(w http.ResponseWriter, r *http.Reque
 	}
 
 	// Issue the certificate
-	cert, err := h.ca.IssueCertificate(r.Context(), caReq)
+	cert, err := ca.IssueCertificate(r.Context(), caReq)
 	if err != nil {
 		h.logger.Error("Failed to issue certificate", "error", err, "cn", subject.GetCommonName())
 		h.writeError(w, http.StatusInternalServerError, ErrCertificateIssueFailed{Err: err})
@@ -651,7 +673,8 @@ func (h *CAHandlers) handleIssueCertificate(w http.ResponseWriter, r *http.Reque
 // handleSignCSR handles POST /api/v1/ca/sign-csr. It certifies, for code
 // signing only, the KMS key a CSR names — a key the CA never holds.
 func (h *CAHandlers) handleSignCSR(w http.ResponseWriter, r *http.Request) {
-	if h.ca == nil {
+	ca := h.authority()
+	if ca == nil {
 		h.writeError(w, http.StatusServiceUnavailable, ErrCAServiceNotAvailable{})
 		return
 	}
@@ -661,7 +684,7 @@ func (h *CAHandlers) handleSignCSR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cert, err := issuance.SignCSR(r.Context(), h.ca, h.kms, &issuance.CSR{
+	cert, err := issuance.SignCSR(r.Context(), ca, h.kms, &issuance.CSR{
 		PEM:       []byte(req.GetCsrPem()),
 		ValidDays: int(req.GetValidDays()),
 	})
@@ -704,7 +727,8 @@ func (h *CAHandlers) writeIssued(w http.ResponseWriter, cert *x509.Certificate) 
 
 // handleListCertificates handles GET /api/v1/ca/certificates
 func (h *CAHandlers) handleListCertificates(w http.ResponseWriter, r *http.Request) {
-	if h.ca == nil {
+	ca := h.authority()
+	if ca == nil {
 		h.writeError(w, http.StatusServiceUnavailable, ErrCAServiceNotAvailable{})
 		return
 	}
@@ -726,18 +750,18 @@ func (h *CAHandlers) handleListCertificates(w http.ResponseWriter, r *http.Reque
 	// Collect certificates
 	var certificates []CACertificateSummary
 
-	rootCert, err := h.ca.TrustedRoot()
+	rootCert, err := ca.TrustedRoot()
 	if err == nil && rootCert != nil {
 		certificates = append(certificates, h.certToSummary(rootCert))
 	}
 
-	intermediateCert, err := h.ca.TrustedIntermediate()
+	intermediateCert, err := ca.TrustedIntermediate()
 	if err == nil && intermediateCert != nil {
 		certificates = append(certificates, h.certToSummary(intermediateCert))
 	}
 
 	// List from certificate store if available
-	certStore := h.ca.CertificateStore()
+	certStore := ca.CertificateStore()
 	if certStore != nil {
 		certs, err := certStore.ListCertificates()
 		if err == nil {
@@ -783,7 +807,8 @@ func (h *CAHandlers) handleListCertificates(w http.ResponseWriter, r *http.Reque
 
 // handleGetCertificate handles GET /api/v1/ca/certificates/{serial}
 func (h *CAHandlers) handleGetCertificate(w http.ResponseWriter, r *http.Request) {
-	if h.ca == nil {
+	ca := h.authority()
+	if ca == nil {
 		h.writeError(w, http.StatusServiceUnavailable, ErrCAServiceNotAvailable{})
 		return
 	}
@@ -800,7 +825,7 @@ func (h *CAHandlers) handleGetCertificate(w http.ResponseWriter, r *http.Request
 	includeDER := query.Get("include_der") == "true"
 
 	// Look up certificate by serial number
-	cert := h.findCertificateBySerial(serial)
+	cert := h.findCertificateBySerialIn(ca, serial)
 	if cert == nil {
 		h.writeError(w, http.StatusNotFound, ErrCertificateNotFound{Serial: serial})
 		return
@@ -814,7 +839,8 @@ func (h *CAHandlers) handleGetCertificate(w http.ResponseWriter, r *http.Request
 
 // handleRevokeCertificate handles POST /api/v1/ca/certificates/{serial}/revoke
 func (h *CAHandlers) handleRevokeCertificate(w http.ResponseWriter, r *http.Request) {
-	if h.ca == nil {
+	ca := h.authority()
+	if ca == nil {
 		h.writeError(w, http.StatusServiceUnavailable, ErrCAServiceNotAvailable{})
 		return
 	}
@@ -836,7 +862,7 @@ func (h *CAHandlers) handleRevokeCertificate(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Find the certificate
-	cert := h.findCertificateBySerial(serial)
+	cert := h.findCertificateBySerialIn(ca, serial)
 	if cert == nil {
 		h.writeError(w, http.StatusNotFound, ErrCertificateNotFound{Serial: serial})
 		return
@@ -851,7 +877,7 @@ func (h *CAHandlers) handleRevokeCertificate(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Revoke the certificate
-	if err := h.ca.Revoke(r.Context(), cert, keyAttrs); err != nil {
+	if err := ca.Revoke(r.Context(), cert, keyAttrs); err != nil {
 		h.logger.Error("Failed to revoke certificate", "error", err, "serial", serial)
 		h.writeError(w, http.StatusInternalServerError, ErrCertificateRevokeFailed{Serial: serial, Err: err})
 		return
@@ -872,7 +898,8 @@ func (h *CAHandlers) handleRevokeCertificate(w http.ResponseWriter, r *http.Requ
 
 // handleRenewCertificate handles POST /api/v1/ca/certificates/{serial}/renew
 func (h *CAHandlers) handleRenewCertificate(w http.ResponseWriter, r *http.Request) {
-	if h.ca == nil {
+	ca := h.authority()
+	if ca == nil {
 		h.writeError(w, http.StatusServiceUnavailable, ErrCAServiceNotAvailable{})
 		return
 	}
@@ -896,7 +923,7 @@ func (h *CAHandlers) handleRenewCertificate(w http.ResponseWriter, r *http.Reque
 	}
 
 	// Find the existing certificate
-	existingCert := h.findCertificateBySerial(serial)
+	existingCert := h.findCertificateBySerialIn(ca, serial)
 	if existingCert == nil {
 		h.writeError(w, http.StatusNotFound, ErrCertificateNotFound{Serial: serial})
 		return
@@ -915,7 +942,7 @@ func (h *CAHandlers) handleRenewCertificate(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	newCert, err := h.ca.Renew(r.Context(), existingCert, renewOpts)
+	newCert, err := ca.Renew(r.Context(), existingCert, renewOpts)
 	if err != nil {
 		h.logger.Error("Failed to renew certificate", "error", err, "serial", serial)
 		h.writeError(w, http.StatusInternalServerError, ErrCertificateRenewFailed{Serial: serial, Err: err})
@@ -936,7 +963,8 @@ func (h *CAHandlers) handleRenewCertificate(w http.ResponseWriter, r *http.Reque
 
 // handleVerifyCertificate handles POST /api/v1/ca/certificates/verify
 func (h *CAHandlers) handleVerifyCertificate(w http.ResponseWriter, r *http.Request) {
-	if h.ca == nil {
+	ca := h.authority()
+	if ca == nil {
 		h.writeError(w, http.StatusServiceUnavailable, ErrCAServiceNotAvailable{})
 		return
 	}
@@ -976,12 +1004,12 @@ func (h *CAHandlers) handleVerifyCertificate(w http.ResponseWriter, r *http.Requ
 	roots := x509.NewCertPool()
 	intermediates := x509.NewCertPool()
 
-	rootCert, err := h.ca.TrustedRoot()
+	rootCert, err := ca.TrustedRoot()
 	if err == nil && rootCert != nil {
 		roots.AddCert(rootCert)
 	}
 
-	intermediateCert, err := h.ca.TrustedIntermediate()
+	intermediateCert, err := ca.TrustedIntermediate()
 	if err == nil && intermediateCert != nil {
 		intermediates.AddCert(intermediateCert)
 	}
@@ -1026,7 +1054,7 @@ func (h *CAHandlers) handleVerifyCertificate(w http.ResponseWriter, r *http.Requ
 		type revokeChecker interface {
 			IsRevoked(serial *big.Int) (bool, error)
 		}
-		if checker, ok := h.ca.(revokeChecker); ok {
+		if checker, ok := ca.(revokeChecker); ok {
 			revoked, _ = checker.IsRevoked(cert.SerialNumber)
 		}
 		// Workaround: go-trusted-ca's IsRevoked() delegates to go-xkms's
@@ -1077,7 +1105,8 @@ func (h *CAHandlers) handleVerifyCertificate(w http.ResponseWriter, r *http.Requ
 
 // handleGetCRL handles GET /api/v1/ca/crl
 func (h *CAHandlers) handleGetCRL(w http.ResponseWriter, r *http.Request) {
-	if h.ca == nil {
+	ca := h.authority()
+	if ca == nil {
 		h.writeError(w, http.StatusServiceUnavailable, ErrCAServiceNotAvailable{})
 		return
 	}
@@ -1091,7 +1120,7 @@ func (h *CAHandlers) handleGetCRL(w http.ResponseWriter, r *http.Request) {
 	var crlDER []byte
 	var err error
 
-	if gen, ok := h.ca.(crlGenerator); ok {
+	if gen, ok := ca.(crlGenerator); ok {
 		crlDER, err = gen.GenerateCRL(r.Context())
 		if err != nil {
 			h.logger.Error("Failed to generate CRL", "error", err)
@@ -1143,7 +1172,8 @@ func (h *CAHandlers) handleGetCRL(w http.ResponseWriter, r *http.Request) {
 
 // handleGetCABundle handles GET /api/v1/ca/bundle
 func (h *CAHandlers) handleGetCABundle(w http.ResponseWriter, r *http.Request) {
-	if h.ca == nil {
+	ca := h.authority()
+	if ca == nil {
 		h.writeError(w, http.StatusServiceUnavailable, ErrCAServiceNotAvailable{})
 		return
 	}
@@ -1168,7 +1198,7 @@ func (h *CAHandlers) handleGetCABundle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get the CA bundle
-	bundle, err := h.ca.CABundle(storeType, keyAlg)
+	bundle, err := ca.CABundle(storeType, keyAlg)
 	if err != nil {
 		h.logger.Error("Failed to get CA bundle", "error", err)
 		h.writeError(w, http.StatusInternalServerError, ErrCABundleFailed{Err: err})
@@ -1183,7 +1213,7 @@ func (h *CAHandlers) handleGetCABundle(w http.ResponseWriter, r *http.Request) {
 	// Parse bundle to get certificate summaries
 	includeIntermediates := r.URL.Query().Get("include_intermediates") != "false"
 	var certificates []CACertificateSummary
-	certs, err := h.ca.ParseBundle(bundle)
+	certs, err := ca.ParseBundle(bundle)
 	if err == nil {
 		for _, cert := range certs {
 			// Skip non-CA intermediates if not requested
@@ -1246,8 +1276,18 @@ func (h *CAHandlers) certMatchesIdentifier(cert *x509.Certificate, identifier st
 // by CN (which is how certificates are keyed in the store), and finally falls back
 // to listing all certificates and matching by serial or CN.
 func (h *CAHandlers) findCertificateBySerial(identifier string) *x509.Certificate {
+	ca := h.authority()
+	if ca == nil {
+		return nil
+	}
+	return h.findCertificateBySerialIn(ca, identifier)
+}
+
+// findCertificateBySerialIn is findCertificateBySerial on ca, the CA the
+// calling handler read once for its request.
+func (h *CAHandlers) findCertificateBySerialIn(ca CAServiceInterface, identifier string) *x509.Certificate {
 	// Check if it matches root CA (by serial or CN)
-	rootCert, err := h.ca.TrustedRoot()
+	rootCert, err := ca.TrustedRoot()
 	if err == nil && rootCert != nil {
 		if h.certMatchesIdentifier(rootCert, identifier) {
 			return rootCert
@@ -1255,7 +1295,7 @@ func (h *CAHandlers) findCertificateBySerial(identifier string) *x509.Certificat
 	}
 
 	// Check if it matches intermediate CA (by serial or CN)
-	intermediateCert, err := h.ca.TrustedIntermediate()
+	intermediateCert, err := ca.TrustedIntermediate()
 	if err == nil && intermediateCert != nil {
 		if h.certMatchesIdentifier(intermediateCert, identifier) {
 			return intermediateCert
@@ -1263,7 +1303,7 @@ func (h *CAHandlers) findCertificateBySerial(identifier string) *x509.Certificat
 	}
 
 	// Try to look up in cert store by CN (certificates are stored by CN)
-	certStore := h.ca.CertificateStore()
+	certStore := ca.CertificateStore()
 	if certStore != nil {
 		cert, err := certStore.GetCertificate(identifier)
 		if err == nil && cert != nil {

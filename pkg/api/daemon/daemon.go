@@ -598,7 +598,11 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 
 	// Create CA gRPC service if CAService is configured
 	var caService *CAGRPCService
+	// caHolder is the CA the gRPC CA service and the REST CA handlers
+	// share, so a CA InitCA swaps in is served by both.
+	var caHolder *CAHolder
 	if config.CAService != nil {
+		caHolder = NewCAHolder(config.CAService)
 		// Get the logging.Logger from the App if available
 		var caLogger *logging.Logger
 		if config.App != nil && config.App.Logger != nil {
@@ -611,7 +615,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 		if config.App != nil {
 			caObjStorage = config.App.Storage
 		}
-		caService = NewCAGRPCService(caLogger, config.CAService, caObjStorage).WithKMS(config.csrKMS()).WithCAInitializer(AppCAInitializer(config.App))
+		caService = NewCAGRPCService(caLogger, config.CAService, caObjStorage).WithKMS(config.csrKMS()).WithCAInitializer(AppCAInitializer(config.App)).WithCAHolder(caHolder)
 
 		// Register with TCP gRPC server if available
 		if grpcServer != nil {
@@ -1576,7 +1580,7 @@ func New(config *Config, opts ...DaemonOption) (*Daemon, error) {
 	// the same CA instance as the gRPC, QUIC, MCP and Unix-socket adapters
 	// so all transports return identical results.
 	if daemon.concreteRestServer != nil && config.CAService != nil {
-		daemon.concreteRestServer.SetCAHandlers(config.CAService, restGuard)
+		daemon.concreteRestServer.SetCAHolder(caHolder, restGuard)
 	}
 
 	// Wire the physical TPM REST handlers. Quote and verify run on the same

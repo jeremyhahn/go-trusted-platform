@@ -99,14 +99,15 @@ func (s *CAGRPCService) InitCA(ctx context.Context, req *platformv1.InitCAReques
 	if ca == nil || !ca.IsInitialized() {
 		return nil, status.Error(codes.Internal, "CA bring-up returned no initialised CA")
 	}
-	// Only this gRPC/UDS CA service is swapped. The REST and QUIC CA
-	// handlers and the device verifier still hold the CA they were built
-	// with at start-up; they follow the swap in the next slice.
+	// The gRPC/UDS CA service and the REST CA handlers read one CAHolder,
+	// so both serve the new CA now. The QUIC CA handler, the device
+	// verifier and IDevID still hold the start-up CA; they follow the swap
+	// in the next slice.
 	s.setAuthority(ca)
 	return &platformv1.InitCAResponse{
 		Status: &platformv1.Status{
 			Success: true,
-			Message: "CA initialised; the gRPC CA service serves it now; restart platformd to serve it over REST and QUIC",
+			Message: "CA initialised; the gRPC and REST CA services serve it now; restart platformd to serve it over QUIC",
 		},
 		CaInfo: &platformv1.CAInfo{
 			IsInitialized: true,
