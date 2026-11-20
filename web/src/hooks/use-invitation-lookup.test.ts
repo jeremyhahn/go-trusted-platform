@@ -1,16 +1,22 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// One stable service: a new object per render would re-run the hook's effect.
+const invitations = { get: vi.fn(), getByToken: vi.fn(), accept: vi.fn() };
+const client = { invitation: invitations };
+
+vi.mock("trusted-platform-sdk", () => ({ usePlatformClient: () => client }));
+
 import {
   acceptInvitation,
+  fetchInvitation,
   fetchInvitationByToken,
   isPendingInvitation,
+  useInvitationLookup,
+  type InvitationClient,
 } from "./use-invitation-lookup";
 
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
-}
+const svc = invitations as unknown as InvitationClient;
 
 const invitation = {
   id: "inv-1",
@@ -19,49 +25,92 @@ const invitation = {
   status: "INVITATION_STATUS_PENDING",
 };
 
+beforeEach(() => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => {
+      throw new Error("the invitation hook must not call fetch");
+    })
+  );
+});
+
 afterEach(() => {
+  cleanup();
   vi.unstubAllGlobals();
+  vi.clearAllMocks();
 });
 
 describe("fetchInvitationByToken", () => {
-  it("unwraps the REST envelope's payload.invitation", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse({
-        code: 200,
-        success: true,
-        payload: { invitation, timestamp: "2026-11-12T00:00:00Z" },
-      })
-    );
-    vi.stubGlobal("fetch", fetchMock);
+  it("returns data.invitation", async () => {
+    invitations.getByToken.mockResolvedValue({ success: true, data: { invitation } });
 
-    await expect(fetchInvitationByToken("tok")).resolves.toEqual(invitation);
+    await expect(fetchInvitationByToken(svc, "tok")).resolves.toEqual(invitation);
+    expect(invitations.getByToken).toHaveBeenCalledWith("tok");
+    expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("falls back to a bare {invitation} body", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ invitation })));
+  it("refuses a response without an invitation", async () => {
+    invitations.getByToken.mockResolvedValue({ success: true, data: {} });
 
-    await expect(fetchInvitationByToken("tok")).resolves.toEqual(invitation);
+    await expect(fetchInvitationByToken(svc, "tok")).rejects.toThrow(/no invitation/i);
+    expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("refuses an envelope without an invitation", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(jsonResponse({ code: 200, success: true, payload: {} }))
-    );
+  it("throws the SDK error message", async () => {
+    invitations.getByToken.mockResolvedValue({
+      success: false,
+      error: { code: "HTTP_404", message: "invitation not found", status: 404 },
+    });
 
-    await expect(fetchInvitationByToken("tok")).rejects.toThrow(/no invitation/i);
+    await expect(fetchInvitationByToken(svc, "tok")).rejects.toThrow(/invitation not found/);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("fetchInvitation", () => {
+  it("reads the invitation by id through the SDK", async () => {
+    invitations.get.mockResolvedValue({ success: true, data: { invitation } });
+
+    await expect(fetchInvitation(svc, "inv-1")).resolves.toEqual(invitation);
+    expect(invitations.get).toHaveBeenCalledWith("inv-1");
+    expect(fetch).not.toHaveBeenCalled();
   });
 });
 
 describe("acceptInvitation", () => {
-  it("posts {token, user_id} and nothing else", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ success: true }));
-    vi.stubGlobal("fetch", fetchMock);
+  it("sends {token, userId} and nothing else", async () => {
+    invitations.accept.mockResolvedValue({ success: true, data: { success: true, tenantId: "t1" } });
 
-    await acceptInvitation("tok", "user-1");
+    await expect(acceptInvitation(svc, "tok", "user-1")).resolves.toEqual({
+      success: true,
+      tenantId: "t1",
+    });
+    expect(invitations.accept).toHaveBeenCalledWith({ token: "tok", userId: "user-1" });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});
 
-    const init = fetchMock.mock.calls[0][1] as RequestInit;
-    expect(JSON.parse(init.body as string)).toEqual({ token: "tok", user_id: "user-1" });
+describe("useInvitationLookup", () => {
+  it("loads by token through getByToken", async () => {
+    invitations.getByToken.mockResolvedValue({ success: true, data: { invitation } });
+
+    const { result } = renderHook(() => useInvitationLookup({ token: "tok" }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.invitation).toEqual(invitation);
+    expect(result.current.error).toBeNull();
+    expect(invitations.getByToken).toHaveBeenCalledWith("tok");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("loads by id through get", async () => {
+    invitations.get.mockResolvedValue({ success: true, data: { invitation } });
+
+    const { result } = renderHook(() => useInvitationLookup({ id: "inv-1" }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.invitation).toEqual(invitation);
+    expect(invitations.get).toHaveBeenCalledWith("inv-1");
+    expect(invitations.getByToken).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
   });
 });
 
