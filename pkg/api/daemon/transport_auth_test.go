@@ -512,7 +512,7 @@ func TestSelectQUICAuth_MTLS_AuthenticatesByCertificate(t *testing.T) {
 	config.App = remoteQuicBaaSApp()
 	bundle := testutil.GenerateTestTLSBundle(t)
 	var last *sdkiam.CheckRequest
-	pep := pepAllowing("test-client", "kms", "delete", &last)
+	pep := pepAllowing("1001", "kms", "delete", &last)
 
 	mw, validator, err := selectQUICAuth(config, nil, pep, iamStoringAnyUser(), bundle.CAPool, logging.DefaultLogger())
 	require.NoError(t, err)
@@ -520,14 +520,15 @@ func TestSelectQUICAuth_MTLS_AuthenticatesByCertificate(t *testing.T) {
 	assert.Nil(t, validator)
 
 	// The verified peer certificate authenticates a tokenless request, and
-	// the PEP decides it for the certificate's subject and tenant...
+	// the PEP decides it for the certificate subject's stored IAM user (its
+	// canonical ID, 1001 from iamStoringAnyUser) in the certificate's tenant...
 	verified := quic.WithConnectionTLS(context.Background(), &tls.ConnectionState{
 		VerifiedChains: [][]*x509.Certificate{{leafOf(t, bundle.ClientCert), bundle.CACert}},
 	})
 	_, resp := mw.GuardRequest(verified, &quicwire.Request{Opcode: quicwire.OpKMSDeleteKey})
 	assert.Nil(t, resp)
 	require.NotNil(t, last, "the IAM PEP must be asked for a certificate principal")
-	assert.Equal(t, "test-client", last.Subject.ID)
+	assert.Equal(t, "1001", last.Subject.ID)
 	assert.Equal(t, "Test Platform Client", last.Subject.TenantID)
 	assert.Equal(t, "kms", last.Resource)
 	assert.Equal(t, "delete", last.Action)
