@@ -220,6 +220,21 @@ func (m *ZoneFlowManager) ApplyZoneFlows(ctx context.Context, portID string, z z
 }
 
 // RemoveFlows removes all OpenFlow rules for portID and clears zone/VLAN tracking.
+// BridgeName returns the OVS bridge this manager deletes and installs
+// flows on.
+func (m *ZoneFlowManager) BridgeName() string {
+	return m.bridgeName
+}
+
+// AllowProvisioningBootPorts adds TCP ports (the PXE server's iPXE HTTP
+// port) to the provisioning zone's allow rules; it applies to every
+// provisioning flow set installed afterwards.
+func (m *ZoneFlowManager) AllowProvisioningBootPorts(ports ...uint16) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.generators.AddProvisioningBootHTTPPorts(ports...)
+}
+
 func (m *ZoneFlowManager) RemoveFlows(portID string) error {
 	if portID == "" {
 		return ErrInvalidPortID

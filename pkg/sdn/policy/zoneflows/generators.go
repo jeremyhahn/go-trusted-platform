@@ -16,6 +16,7 @@ package zoneflows
 import (
 	"fmt"
 	"net"
+	"slices"
 	"strings"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/zone"
@@ -100,6 +101,19 @@ var eastWestZones = []zone.Zone{
 // rules are returned; user-defined zones without a built-in template return
 // an empty slice (only matrix rules apply at that point, emitted separately by
 // CompileMatrixRules).
+// AddProvisioningBootHTTPPorts adds TCP ports to the provisioning
+// template's boot-server allowances; zero and already-listed ports are
+// skipped. It is not safe for concurrent use with Generate: the caller
+// serialises the two (ZoneFlowManager holds its lock across both).
+func (gs *GeneratorSet) AddProvisioningBootHTTPPorts(ports ...uint16) {
+	for _, p := range ports {
+		if p == 0 || slices.Contains(gs.cfg.Provisioning.BootHTTPPorts, p) {
+			continue
+		}
+		gs.cfg.Provisioning.BootHTTPPorts = append(gs.cfg.Provisioning.BootHTTPPorts, p)
+	}
+}
+
 func (gs *GeneratorSet) Generate(portID string, z zone.Zone, in Ingress) []FlowRule {
 	gen, ok := gs.generators[z]
 	if !ok || gen == nil {
@@ -596,6 +610,18 @@ func (gs *GeneratorSet) provisioning(portID string, in Ingress) []FlowRule {
 			Match:    matchInVLAN(portID, in, f.ipMatch("nw_proto=17", fmt.Sprintf("tp_dst=%d", portTFTP))),
 			Actions:  "normal",
 		})
+	}
+
+	// PXE boot server HTTP (iPXE boot script and payloads), both families.
+	for _, p := range cfg.BootHTTPPorts {
+		for _, f := range families {
+			flows = append(flows, FlowRule{
+				Table:    0,
+				Priority: prioTFTP,
+				Match:    matchInVLAN(portID, in, f.ipMatch("nw_proto=6", fmt.Sprintf("tp_dst=%d", p))),
+				Actions:  "normal",
+			})
+		}
 	}
 
 	// ACME / HTTPS

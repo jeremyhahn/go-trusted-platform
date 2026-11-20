@@ -95,6 +95,11 @@ type ProvisioningConfig struct {
 
 	// AllowICMP enables ICMP within the provisioning zone.
 	AllowICMP bool
+
+	// BootHTTPPorts are the TCP ports the PXE boot server serves boot
+	// scripts and payloads on (the iPXE HTTP port); each is allowed at
+	// TFTP priority, both families, like the TFTP rule.
+	BootHTTPPorts []uint16
 }
 
 // QuarantineConfig configures the quarantine zone flow generator.

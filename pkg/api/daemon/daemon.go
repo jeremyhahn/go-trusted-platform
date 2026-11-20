@@ -2035,6 +2035,11 @@ func pxeGRPCServiceFromConfig(ctx context.Context, logger *logging.Logger, a *ap
 	if flows == nil {
 		return nil, pxe.ErrInvalidConfiguration{Field: "pxe.enabled", Reason: "the SDN zone flow manager is required"}
 	}
+	// A device in provisioning fetches its boot script and payloads from
+	// the iPXE HTTP server, so the provisioning flows allow its port.
+	if cfg.IPXEConfig != nil && cfg.IPXEConfig.HTTPPort > 0 && cfg.IPXEConfig.HTTPPort <= 65535 {
+		flows.AllowProvisioningBootPorts(uint16(cfg.IPXEConfig.HTTPPort))
+	}
 	backend := pxe.NewService(
 		pxe.WithLogger(logger),
 		pxe.WithStateManager(pxe.NewStateManager()),
