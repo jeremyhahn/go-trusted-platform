@@ -295,8 +295,9 @@ var lifecycleTransports = map[string]lifecycleTransport{
 	"REST": func(t *testing.T, svc *Service, verb string) codes.Code {
 		server, err := NewRESTServer(DefaultConfig(), svc, slog.New(slog.NewTextHandler(io.Discard, nil)))
 		require.NoError(t, err)
+		allowServiceRoutes(t, server)
 		rec := httptest.NewRecorder()
-		server.router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/services/tpm/"+verb, nil))
+		server.router.ServeHTTP(rec, servicesRequest(http.MethodPost, "/api/v1/services/tpm/"+verb, nil))
 		assert.Contains(t, rec.Body.String(), "cannot be started or stopped at runtime")
 		// 409 is how the platform REST mapper sends FailedPrecondition (#665).
 		if rec.Code == http.StatusConflict {

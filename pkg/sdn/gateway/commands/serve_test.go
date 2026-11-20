@@ -120,6 +120,38 @@ func TestServeSweepsWithoutAGatewaySection(t *testing.T) {
 	assert.FileExists(t, record, "the record survives a failed sweep so the next start sweeps again")
 }
 
+// TestServeRemovesTheStaleHubWithWireGuardDisabled checks Codex #2029
+// round 1 P1 3: a start whose WireGuard child does not launch still removes
+// a killed predecessor's hub, whose peers pass traffic past their leases.
+func TestServeRemovesTheStaleHubWithWireGuardDisabled(t *testing.T) {
+	signals := make(chan os.Signal, 1)
+	signals <- syscall.SIGTERM
+	removals := fakeHubRemoval(t, nil, nil)
+
+	err := serve(serveConfig(t, "{}\n"), slog.New(slog.NewTextHandler(io.Discard, nil)), signals, (&sweepRecorder{}).sweep)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, *removals, "the start removes the stale hub with no WireGuard child")
+}
+
+// TestServeFailsWhenTheStaleHubRemovalFails checks a hub the start cannot
+// remove fails the start before anything launches.
+func TestServeFailsWhenTheStaleHubRemovalFails(t *testing.T) {
+	signals := make(chan os.Signal, 1)
+	signals <- syscall.SIGTERM
+	failure := errors.New("netlink refused")
+	fakeHubRemoval(t, failure, nil)
+	sweeps := &sweepRecorder{}
+	var logged bytes.Buffer
+
+	err := serve(serveConfig(t, "{}\n"), slog.New(slog.NewTextHandler(&logged, nil)), signals, sweeps.sweep)
+
+	require.ErrorIs(t, err, failure)
+	assert.Len(t, signals, 1, "a failed removal must not reach the wait for a stop")
+	assert.NotContains(t, logged.String(), "Gateway daemon started")
+	assert.Zero(t, sweeps.calls)
+}
+
 // writeRecord writes the tunnels record a start with tunnels leaves under
 // dataDir and returns its path.
 func writeRecord(t *testing.T, dataDir string) string {
