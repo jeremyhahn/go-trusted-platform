@@ -69,7 +69,11 @@ func TestVPNDataPlanes_RefusesTheHubWithoutZoneEnforcement(t *testing.T) {
 	copy(held, bytes.Repeat([]byte{0xa5}, len(held)))
 
 	planes, err := vpnDataPlanes(cfg, hubKey, testLogger())
-	require.NoError(t, err)
+	// Codex #2029 round 3 P1: a configured hub the guard refuses fails the
+	// child's start instead of reporting a healthy child with no plane.
+	var unenforced *ErrVPNHubZoneUnenforced
+	require.ErrorAs(t, err, &unenforced)
+	assert.Equal(t, "kms://vpn/hub0", unenforced.KeyRef)
 	assert.Empty(t, planes, "no zone enforcement, no hub plane")
 	assertErased(t, held)
 }

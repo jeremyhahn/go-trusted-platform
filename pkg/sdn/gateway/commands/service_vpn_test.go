@@ -64,6 +64,7 @@ func (p *fakeVPNPlane) state() (started, stopped bool, installed []vpn.LeaseID) 
 // hands out its planes.
 type vpnPlaneFactory struct {
 	planes []vpn.ManagedDataPlane
+	err    error
 	calls  int
 	hubKey *vpnHubKey
 }
@@ -71,7 +72,7 @@ type vpnPlaneFactory struct {
 func (f *vpnPlaneFactory) build(_ *ServeConfig, hubKey *vpnHubKey, _ *slog.Logger) ([]vpn.ManagedDataPlane, error) {
 	f.hubKey = hubKey
 	f.calls++
-	return f.planes, nil
+	return f.planes, f.err
 }
 
 // newWireGuardRun is a run of the datapath child: the firewall is its hosted
@@ -249,6 +250,38 @@ func TestServeProcess_PlaneFailureKeepsServicesInactive(t *testing.T) {
 		"a failed plane start must not confirm a peer withdrawal")
 
 	cancel()
+	<-done
+}
+
+// TestServeProcess_AnUnenforcedHubFailsTheStart checks Codex #2029 round 3
+// P1: a configured WireGuard hub the zone guard refuses fails the child's
+// start, read by the supervisor, and never sends READY=1.
+func TestServeProcess_AnUnenforcedHubFailsTheStart(t *testing.T) {
+	sock := bindTestNotifySocket(t)
+	factory := &vpnPlaneFactory{err: &ErrVPNHubZoneUnenforced{KeyRef: "kms://vpn/hub0"}}
+	run := newWireGuardRun(true)
+	opts, cancel, done := startWireGuardProcess(t, run, factory)
+
+	msg, err := sock.Receive(time.Now().Add(5 * time.Second))
+	require.NoError(t, err, "a child that failed its start sends a STATUS=")
+	assert.False(t, msg.Ready, "a blocked hub must not report READY=1")
+	assert.True(t, msg.HasStatus)
+	startErr, active, ok := processStatus(t, opts.socket)
+	require.True(t, ok, "the child keeps serving so the supervisor reads why")
+	assert.Contains(t, startErr, "kms://vpn/hub0")
+	for name, on := range active {
+		assert.False(t, on, "service %s must not be active while the hub is blocked", name)
+	}
+	assert.False(t, run.handler.active.Load(), "the gateway's services must not start while the hub is blocked")
+
+	cancel()
+	for {
+		m, err := sock.Receive(time.Now().Add(2 * time.Second))
+		if err != nil {
+			break
+		}
+		assert.False(t, m.Ready, "a blocked hub must not report READY=1")
+	}
 	<-done
 }
 
