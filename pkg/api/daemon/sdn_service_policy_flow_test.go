@@ -218,6 +218,48 @@ func TestSDNService_ApplyPolicy_FailedApplyRestoresAnotherPolicysFlow(t *testing
 	assert.Equal(t, platformv1.PolicyStatus_POLICY_STATUS_ACTIVE, got.GetPolicy().GetStatus())
 }
 
+// A protocol number and its name parse to the same switch entry, so the
+// rollback must restore policy a's deny even when b spells it differently.
+func TestSDNService_ApplyPolicy_FailedApplyRestoresAFlowSpelledDifferently(t *testing.T) {
+	svc, mock, _ := newPolicyFlowFixture(t)
+	ctx := context.Background()
+
+	var aMatch string
+	mock.OnAddFlow(func(_ context.Context, _ string, flow *ovs.FlowMod) error {
+		aMatch = flow.Match
+		return nil
+	})
+	a := denyPolicy("a", denyRule("r1", &platformv1.PolicyRuleMatch{Protocol: "6", DestinationPort: 22}))
+	a.PolicyId = "pol-a"
+	_, err := svc.ApplyPolicy(ctx, a)
+	require.NoError(t, err)
+	require.NotEmpty(t, aMatch)
+
+	var adds []ovs.FlowMod
+	calls := 0
+	mock.OnAddFlow(func(_ context.Context, _ string, flow *ovs.FlowMod) error {
+		calls++
+		if calls == 2 {
+			return errFlowInstall
+		}
+		adds = append(adds, *flow)
+		return nil
+	})
+
+	b := denyPolicy("b",
+		denyRule("r1", &platformv1.PolicyRuleMatch{Protocol: "tcp", DestinationPort: 22}),
+		denyRule("r2", &platformv1.PolicyRuleMatch{Protocol: "udp", DestinationPort: 53}),
+	)
+	b.PolicyId = "pol-b"
+	_, err = svc.ApplyPolicy(ctx, b)
+	require.Error(t, err)
+
+	require.GreaterOrEqual(t, len(adds), 2, "policy a's deny must be re-installed although b spells the protocol differently")
+	last := adds[len(adds)-1]
+	assert.Equal(t, aMatch, last.Match)
+	assert.Equal(t, "drop", last.Actions)
+}
+
 // TestSDNService_DeletePolicy_UsesTheSameMatch checks that deleting a policy
 // removes flows by the match its apply installed.
 func TestSDNService_DeletePolicy_UsesTheSameMatch(t *testing.T) {
