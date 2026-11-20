@@ -29,6 +29,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -90,8 +91,12 @@ func TestWebhook_SignedReportReachesTheService(t *testing.T) {
 // against, ruling 673), and the report it received.
 type webhookPXE struct {
 	platformv1.UnimplementedPXEServiceServer
+	mu           sync.Mutex
 	fingerprints map[string]string
 	report       *platformv1.PXEWebhookCompleteRequest
+	// afterLookup runs after a fingerprint lookup has read its answer:
+	// the window between a separate check and the transition.
+	afterLookup func(mac string)
 }
 
 func newWebhookPXE(mac, fingerprint string) *webhookPXE {
@@ -101,7 +106,12 @@ func newWebhookPXE(mac, fingerprint string) *webhookPXE {
 // RecordedIDevIDFingerprint answers the fingerprint recorded for mac, and
 // NotFound for a MAC with no device.
 func (s *webhookPXE) RecordedIDevIDFingerprint(_ context.Context, mac string) (string, error) {
+	s.mu.Lock()
 	fp, ok := s.fingerprints[mac]
+	s.mu.Unlock()
+	if s.afterLookup != nil {
+		s.afterLookup(mac)
+	}
 	if !ok {
 		return "", status.Error(codes.NotFound, "device not found")
 	}
@@ -109,8 +119,54 @@ func (s *webhookPXE) RecordedIDevIDFingerprint(_ context.Context, mac string) (s
 }
 
 func (s *webhookPXE) WebhookComplete(_ context.Context, req *platformv1.PXEWebhookCompleteRequest) (*platformv1.PXEWebhookCompleteResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.report = req
 	return &platformv1.PXEWebhookCompleteResponse{Status: handlerOK}, nil
+}
+
+// WebhookCompleteForIDevID is the backend's compare-and-transition: under
+// the device lock it compares the authenticated fingerprint with the one
+// recorded and only then applies the report.
+func (s *webhookPXE) WebhookCompleteForIDevID(_ context.Context, req *platformv1.PXEWebhookCompleteRequest, fingerprint string) (*platformv1.PXEWebhookCompleteResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fp, ok := s.fingerprints[req.GetMacAddress()]
+	if !ok {
+		return nil, status.Error(codes.NotFound, "device not found")
+	}
+	if fp == "" || fp != fingerprint {
+		return nil, status.Error(codes.PermissionDenied, "the IDevID fingerprint is not the device's")
+	}
+	s.report = req
+	return &platformv1.PXEWebhookCompleteResponse{Status: handlerOK}, nil
+}
+
+// recordIDevIDFingerprint is enrolment recording a new IDevID for mac.
+func (s *webhookPXE) recordIDevIDFingerprint(mac, fingerprint string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.fingerprints[mac] = fingerprint
+}
+
+// TestWebhook_FingerprintIsComparedWithTheTransition pins #1896 Codex r2:
+// a report signed with a superseded IDevID A passes a separate lookup, then
+// enrolment records B before the transition; the completion is refused.
+func TestWebhook_FingerprintIsComparedWithTheTransition(t *testing.T) {
+	const mac = "aa:bb:cc:dd:ee:ff"
+	sig := SignWebhookBody([]byte("s3cret"), []byte(webhookBody))
+	certA := deviceCert(t, 1001)
+	certB := deviceCert(t, 2002)
+	server := newWebhookPXE(mac, fingerprintOf(certA))
+	server.afterLookup = func(m string) {
+		server.recordIDevIDFingerprint(m, fingerprintOf(certB))
+	}
+
+	rec := postWebhookAs(webhookRoot(server, "s3cret"), webhookBody, sig, verifiedTLS(certA))
+	assert.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	assert.Nil(t, server.report, "the superseded identity completed the install")
 }
 
 // fingerprintOf is the IDevID fingerprint recorded at enrolment: the

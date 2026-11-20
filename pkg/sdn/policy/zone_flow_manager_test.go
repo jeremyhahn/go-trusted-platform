@@ -163,3 +163,110 @@ func TestZoneFlowManager_NoOpenFlowPort_Errors(t *testing.T) {
 		})
 	}
 }
+
+// partialInstallController is an ofPortController whose switch state is
+// tracked: the port's VLAN and the live flows. With failInstall set, a
+// batch install leaves its first rule on the switch and then fails, as the
+// real OpenFlow client allows partial batch success.
+type partialInstallController struct {
+	*ofPortController
+	vlans       map[string]int64
+	live        []zoneflows.FlowRule
+	failInstall bool
+	failVLANAt  int // fail the n-th SetPortVLAN call (1-based); 0 never
+	vlanCalls   int
+	partial     *zoneflows.FlowRule
+}
+
+func (c *partialInstallController) InstallFlows(bridge string, rules []zoneflows.FlowRule) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.failInstall && len(rules) > 0 {
+		r := rules[0]
+		c.partial = &r
+		c.live = append(c.live, r)
+		return errors.New("batch rejected after the first flow mod")
+	}
+	c.live = append(c.live, rules...)
+	return nil
+}
+
+func (c *partialInstallController) DeleteFlow(_ string, match string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	kept := c.live[:0]
+	for _, r := range c.live {
+		if r.Match != match {
+			kept = append(kept, r)
+		}
+	}
+	c.live = kept
+	return nil
+}
+
+func (c *partialInstallController) SetPortVLAN(_ context.Context, portName string, vlan int64) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.vlanCalls++
+	if c.failVLANAt != 0 && c.vlanCalls == c.failVLANAt {
+		return errors.New("ovsdb unavailable")
+	}
+	c.vlans[portName] = vlan
+	return nil
+}
+
+func newPartialInstallZFM(t *testing.T) (*partialInstallController, *ZoneFlowManager) {
+	t.Helper()
+	ctrl := &partialInstallController{
+		ofPortController: &ofPortController{ofPorts: map[string]int32{"tap0": 7}},
+		vlans:            map[string]int64{},
+	}
+	m, err := NewZoneFlowManager(ZoneFlowManagerConfig{
+		BridgeName:     "br0",
+		FlowController: ctrl,
+		PortController: ctrl,
+		Plan:           testPlan(t),
+	})
+	require.NoError(t, err)
+	return ctrl, m
+}
+
+func TestZoneFlowManager_ApplyZoneFlows_InstallFailureRestoresPort(t *testing.T) {
+	ctx := context.Background()
+	ctrl, m := newPartialInstallZFM(t)
+	require.NoError(t, m.ApplyZoneFlows(ctx, "tap0", zone.ZoneQuarantine))
+	prevVLAN := ctrl.vlans["tap0"]
+
+	ctrl.failInstall = true
+	err := m.ApplyZoneFlows(ctx, "tap0", zone.ZoneProvisioning)
+	require.Error(t, err)
+
+	require.Equal(t, prevVLAN, ctrl.vlans["tap0"], "the port is back on its previous VLAN")
+	require.NotNil(t, ctrl.partial)
+	for _, r := range ctrl.live {
+		require.NotEqual(t, *ctrl.partial, r, "a flow of the failed batch is still installed")
+	}
+	got, err := m.GetPortZone("tap0")
+	require.NoError(t, err)
+	require.Equal(t, zone.ZoneQuarantine, got)
+	gotVLAN, err := m.GetPortVLAN("tap0")
+	require.NoError(t, err)
+	require.Equal(t, prevVLAN, int64(gotVLAN))
+}
+
+func TestZoneFlowManager_ApplyZoneFlows_RestoreFailureIsUnknownState(t *testing.T) {
+	ctx := context.Background()
+	ctrl, m := newPartialInstallZFM(t)
+	require.NoError(t, m.ApplyZoneFlows(ctx, "tap0", zone.ZoneProvisioning))
+
+	ctrl.failInstall = true
+	ctrl.failVLANAt = 3 // 1: first apply, 2: the move, 3: the restore
+	err := m.ApplyZoneFlows(ctx, "tap0", zone.ZoneControlPlane)
+	require.ErrorIs(t, err, ErrPortStateUnknown)
+	for _, r := range ctrl.live {
+		require.NotEqual(t, *ctrl.partial, r, "a flow of the failed batch is still installed")
+	}
+	got, err := m.GetPortZone("tap0")
+	require.NoError(t, err)
+	require.Equal(t, zone.ZoneQuarantine, got, "the manager records the most restrictive zone")
+}
