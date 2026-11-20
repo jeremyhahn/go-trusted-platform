@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/sdn/policy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1529,6 +1530,56 @@ func TestService_UpdateDeviceState_CommitsCurrentVLAN(t *testing.T) {
 	got, err = svc.GetDevice(ctx, device.ID)
 	require.NoError(t, err)
 	assert.Equal(t, cfg.QuarantineVLAN, got.CurrentVLAN)
+}
+
+// deleteFailingPort is a recordingPort whose DeleteFlowsByPort fails on
+// demand while flow installation keeps succeeding.
+type deleteFailingPort struct {
+	recordingPort
+	failDelete bool
+}
+
+var errFlowDelete = errors.New("flow deletion failed")
+
+func (d *deleteFailingPort) DeleteFlowsByPort(string, string) error {
+	if d.failDelete {
+		return errFlowDelete
+	}
+	return nil
+}
+
+// TestService_UpdateDeviceState_FlowDeletionFailureFailsClosed: through the
+// real VLAN wrapper and zone flow manager, a failure to delete the port's
+// provisioning flows leaves the device in its old state, because the
+// provisioning allow rules would outrank quarantine's default drop.
+func TestService_UpdateDeviceState_FlowDeletionFailureFailsClosed(t *testing.T) {
+	port := &deleteFailingPort{}
+	zfm, err := policy.NewZoneFlowManager(policy.ZoneFlowManagerConfig{
+		BridgeName: "br-fabric", FlowController: port, PortController: port, Plan: testNetPlan,
+	})
+	require.NoError(t, err)
+	svc := &service{
+		logger:       logging.DefaultLogger(),
+		stateManager: NewStateManager(),
+		vlanManager:  NewVLANIntegrationWrapper(WithFlowManager(zfm)),
+		config:       createTestConfig(),
+	}
+	svc.initialized.Store(true)
+	ctx := context.Background()
+
+	device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
+	require.NoError(t, err)
+	require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, StateBooting, "test"))
+	require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, StateInstalling, "test"))
+
+	port.failDelete = true
+	err = svc.UpdateDeviceState(ctx, device.ID, StateQuarantined, "test")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errFlowDelete)
+
+	got, err := svc.GetDevice(ctx, device.ID)
+	require.NoError(t, err)
+	assert.Equal(t, StateInstalling, got.State)
 }
 
 // blockingFlowVLAN blocks ApplyQuarantineFlows until release is closed.
