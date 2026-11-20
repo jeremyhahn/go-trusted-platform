@@ -229,15 +229,15 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | `DeviceService.EnableDevice` | `POST /devices/{id:[0-9]+}/enable` | `(dashboard)/devices/[id]/page.tsx`<br>`(dashboard)/devices/page.tsx` | - | `attest-cert-record.spec.ts`<br>`attestation-reports.spec.ts`<br>`dashboard.spec.ts` (+1) | covered |
 | `DeviceService.BootCertificate` | `POST /device/boot/certificate` | - | - | - | missing |
 | `DeviceService.BootDelivery` | `POST /device/boot` | - | - | - | missing |
-| `DeviceService.CreateTemplate` | `POST /device/templates` | `(dashboard)/devices/templates/page.tsx` | - | - | partial |
-| `DeviceService.GetTemplate` | `GET /device/templates/{id:[0-9]+}` | `(dashboard)/devices/templates/[id]/create-profile/page.tsx`<br>`(dashboard)/devices/templates/[id]/page.tsx` | - | - | partial |
+| `DeviceService.CreateTemplate` | `POST /device/templates` | `(dashboard)/devices/templates/page.tsx` | - | `real-server/device-template.spec.ts` | covered |
+| `DeviceService.GetTemplate` | `GET /device/templates/{id:[0-9]+}` | `(dashboard)/devices/templates/[id]/create-profile/page.tsx`<br>`(dashboard)/devices/templates/[id]/page.tsx` | - | `real-server/device-template.spec.ts` | covered |
 | `DeviceService.ListTemplates` | `GET /device/templates` | `(dashboard)/devices/templates/page.tsx`<br>`(dashboard)/provisioning/sessions/[sessionId]/page.tsx`<br>`(dashboard)/provisioning/sessions/page.tsx` | - | `provisioning.spec.ts` | covered |
-| `DeviceService.UpdateTemplate` | `PUT /device/templates/{id:[0-9]+}` | `(dashboard)/devices/templates/[id]/create-profile/page.tsx`<br>`(dashboard)/devices/templates/[id]/page.tsx`<br>`(dashboard)/devices/templates/page.tsx` (+2) (read-only) | - | - | partial |
-| `DeviceService.DeleteTemplate` | `DELETE /device/templates/{id:[0-9]+}` | `(dashboard)/devices/templates/[id]/page.tsx`<br>`(dashboard)/devices/templates/page.tsx` | - | - | partial |
-| `DeviceService.CreateProfileFromTemplate` | `POST /device/templates/{id:[0-9]+}/create-profile` | `(dashboard)/devices/templates/[id]/create-profile/page.tsx`<br>`(dashboard)/provisioning/sessions/[sessionId]/page.tsx` | - | - | partial |
-| `DeviceService.FindConfigForDevice` | `GET /device/profiles/find-config` | - | - | - | missing |
-| `DeviceService.AssignProfileToDevice` | `POST /device/profiles/{id:[0-9]+}/assign` | - | - | - | missing |
-| `DeviceService.UnassignProfileFromDevice` | `POST /device/profiles/{id:[0-9]+}/unassign` | - | - | - | missing |
+| `DeviceService.UpdateTemplate` | `PUT /device/templates/{id:[0-9]+}` | `(dashboard)/devices/templates/[id]/create-profile/page.tsx`<br>`(dashboard)/devices/templates/[id]/page.tsx`<br>`(dashboard)/devices/templates/page.tsx` (+2) (read-only) | - | `real-server/device-template.spec.ts` | covered |
+| `DeviceService.DeleteTemplate` | `DELETE /device/templates/{id:[0-9]+}` | `(dashboard)/devices/templates/[id]/page.tsx`<br>`(dashboard)/devices/templates/page.tsx` | - | `real-server/device-template.spec.ts` | covered |
+| `DeviceService.CreateProfileFromTemplate` | `POST /device/templates/{id:[0-9]+}/create-profile` | `(dashboard)/devices/templates/[id]/create-profile/page.tsx`<br>`(dashboard)/provisioning/sessions/[sessionId]/page.tsx` | - | `real-server/device-template.spec.ts` | covered |
+| `DeviceService.FindConfigForDevice` | `GET /device/profiles/find-config` | `(dashboard)/devices/templates/page.tsx` (ProfileAssignmentPanel) | - | `real-server/device-template.spec.ts` | covered |
+| `DeviceService.AssignProfileToDevice` | `POST /device/profiles/{id:[0-9]+}/assign` | `(dashboard)/devices/templates/page.tsx` (ProfileAssignmentPanel) | - | `real-server/device-template.spec.ts` | covered |
+| `DeviceService.UnassignProfileFromDevice` | `POST /device/profiles/{id:[0-9]+}/unassign` | `(dashboard)/devices/templates/page.tsx` (ProfileAssignmentPanel) | - | `real-server/device-template.spec.ts` | covered |
 
 ## EABService (`eab.proto`)
 
