@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -67,7 +68,15 @@ func revocationKey(token *jwt.Token) string {
 	if claims, ok := token.Claims.(*TokenClaims); ok && claims.ID != "" {
 		return "jti:" + claims.ID
 	}
-	sum := sha256.Sum256([]byte(token.Raw))
+	// A token issued before jti existed is keyed by its signing input
+	// (header.payload, exactly as signed), never by its signature: ECDSA
+	// signatures are malleable, (r, s) -> (r, N-s) verifies without the
+	// key, so a key over the signature would let a copy survive logout.
+	signingInput := token.Raw
+	if dot := strings.LastIndexByte(signingInput, '.'); dot >= 0 {
+		signingInput = signingInput[:dot]
+	}
+	sum := sha256.Sum256([]byte(signingInput))
 	return "raw:" + hex.EncodeToString(sum[:])
 }
 
