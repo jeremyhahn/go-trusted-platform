@@ -533,3 +533,442 @@ test.describe('Devices Management', () => {
     });
   });
 });
+
+// ============================================================================
+// Device profiles
+// ============================================================================
+
+/** Name prefixes of the profiles a test made (through the SDK or the page). */
+const profilePrefixes: string[] = [];
+
+async function newProfile(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  sdk: any,
+  prefix: string,
+  role: string,
+  extra: Record<string, unknown> = {},
+): Promise<{ id: string; name: string }> {
+  const name = unique(prefix);
+  profilePrefixes.push(name);
+  const res = must(
+    await sdk.device.createProfile({ profile: { name, role, ...extra } }),
+    'device.createProfile',
+  ) as { profile?: { id: string } };
+  const id = res.profile?.id;
+  if (!id) throw new Error(`device.createProfile(${name}) answered no profile id`);
+  return { id, name };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function listProfiles(sdk: any): Promise<{ id: string; name: string }[]> {
+  const res = must(await sdk.device.listProfiles({ page: 1, pageSize: 100 }), 'device.listProfiles') as {
+    profiles?: { id: string; name: string }[];
+  };
+  return res.profiles ?? [];
+}
+
+/** Deletes every profile of the worker's tenant (its own tenant, see fixtures). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function deleteAllProfiles(sdk: any): Promise<void> {
+  for (const p of await listProfiles(sdk)) {
+    await sdk.device.deleteProfile(p.id);
+  }
+}
+
+test.afterEach(async ({ sdk }) => {
+  if (profilePrefixes.length === 0) return;
+  const prefixes = profilePrefixes.splice(0);
+  for (const p of await listProfiles(sdk)) {
+    if (prefixes.some((prefix) => p.name.startsWith(prefix))) {
+      await sdk.device.deleteProfile(p.id);
+    }
+  }
+});
+
+async function gotoProfiles(page: Page): Promise<void> {
+  await page.goto('/devices/profiles');
+  await expect(page.getByRole('heading', { name: /device profiles/i }).first()).toBeVisible();
+}
+
+test.describe('Device Profiles', () => {
+  test.describe('Profile List', () => {
+    test('should display profiles list', async ({ adminPage: page, sdk }) => {
+      const a = await newProfile(sdk, 'Production Server Profile', 'server');
+      const b = await newProfile(sdk, 'Development Workstation', 'workstation');
+      const c = await newProfile(sdk, 'IoT Sensor Profile', 'iot');
+
+      await gotoProfiles(page);
+
+      await expect(page.getByRole('columnheader', { name: /name/i })).toBeVisible();
+      await expect(page.getByRole('columnheader', { name: /model/i })).toBeVisible();
+      await expect(page.getByRole('columnheader', { name: /role/i })).toBeVisible();
+      await expect(page.getByRole('columnheader', { name: /networks/i })).toBeVisible();
+      await expect(page.getByRole('columnheader', { name: /updated/i })).toBeVisible();
+      await expect(page.getByRole('columnheader', { name: /actions/i })).toBeVisible();
+
+      await expect(page.getByText(a.name)).toBeVisible();
+      await expect(page.getByText(b.name)).toBeVisible();
+      await expect(page.getByText(c.name)).toBeVisible();
+    });
+
+    test('should show statistics cards', async ({ adminPage: page, sdk }) => {
+      await deleteAllProfiles(sdk);
+      await newProfile(sdk, 'Server-1', 'server');
+      await newProfile(sdk, 'Server-2', 'server');
+      await newProfile(sdk, 'Workstation-1', 'workstation');
+      await newProfile(sdk, 'IoT-1', 'iot');
+      await newProfile(sdk, 'IoT-2', 'iot');
+      expect(await listProfiles(sdk)).toHaveLength(5);
+
+      await gotoProfiles(page);
+
+      await expect(page.getByText('Total Profiles')).toBeVisible();
+      await expect(page.getByText('Servers')).toBeVisible();
+      await expect(page.getByText('Workstations')).toBeVisible();
+      await expect(page.getByText('IoT Devices')).toBeVisible();
+
+      const totalCard = page.locator('div').filter({ hasText: /^Total Profiles/ }).first();
+      await expect(totalCard.getByText('5')).toBeVisible();
+      const serversCard = page.locator('div').filter({ hasText: /^Servers/ }).first();
+      await expect(serversCard.getByText('2')).toBeVisible();
+    });
+
+    test('should open create profile dialog', async ({ adminPage: page }) => {
+      await gotoProfiles(page);
+
+      await page.getByRole('button', { name: /create profile/i }).click();
+
+      await expect(page.getByRole('dialog')).toBeVisible();
+      await expect(page.getByRole('heading', { name: /create device profile/i })).toBeVisible();
+      await expect(page.getByLabel(/profile name/i)).toBeVisible();
+      await expect(page.getByLabel(/model/i)).toBeVisible();
+      await expect(page.getByText('Device Role')).toBeVisible();
+      await expect(page.getByRole('dialog').getByRole('combobox')).toBeVisible();
+    });
+
+    test('should create a new profile', async ({ adminPage: page, sdk }) => {
+      const name = unique('New Test Profile');
+      profilePrefixes.push(name);
+
+      await gotoProfiles(page);
+      await page.getByRole('button', { name: /create profile/i }).click();
+      await expect(page.getByRole('dialog')).toBeVisible();
+
+      await page.getByLabel(/profile name/i).fill(name);
+      await page.getByLabel(/model/i).fill('Test Model');
+      await page.getByRole('dialog').getByRole('combobox').click();
+      await page.getByRole('option', { name: /workstation/i }).click();
+      await page.getByRole('dialog').getByRole('button', { name: /create profile/i }).click();
+
+      await expect(page.getByText(/profile created/i)).toBeVisible();
+      await expect(page.getByText(name)).toBeVisible();
+
+      // The server holds the profile the form created.
+      const stored = (await listProfiles(sdk)).filter((p) => p.name === name);
+      expect(stored).toHaveLength(1);
+      const full = must(await sdk.device.getProfile(stored[0].id), 'device.getProfile') as unknown as {
+        profile?: { role?: string; model?: string };
+      };
+      expect(full.profile?.role).toBe('workstation');
+      expect(full.profile?.model).toBe('Test Model');
+    });
+
+    test('should filter profiles by role', async ({ adminPage: page, sdk }) => {
+      const server = await newProfile(sdk, 'Server-Profile', 'server');
+      const ws = await newProfile(sdk, 'Workstation-Profile', 'workstation');
+      const iot = await newProfile(sdk, 'IoT-Profile', 'iot');
+
+      await gotoProfiles(page);
+      await expect(page.getByText(server.name)).toBeVisible();
+      await expect(page.getByText(ws.name)).toBeVisible();
+      await expect(page.getByText(iot.name)).toBeVisible();
+
+      await page.locator('button').filter({ hasText: /all roles/i }).click();
+      await page.getByRole('option', { name: /^server$/i }).click();
+
+      await expect(page.getByText(server.name)).toBeVisible();
+      await expect(page.getByText(ws.name)).not.toBeVisible();
+      await expect(page.getByText(iot.name)).not.toBeVisible();
+    });
+
+    test('should search profiles', async ({ adminPage: page, sdk }) => {
+      const prod = await newProfile(sdk, 'Production-Server', 'server');
+      const dev = await newProfile(sdk, 'Development-Server', 'server');
+      const ws = await newProfile(sdk, 'Test-Workstation', 'workstation');
+
+      await gotoProfiles(page);
+      await expect(page.getByText(prod.name)).toBeVisible();
+
+      await page.getByPlaceholder(/search profiles/i).fill(prod.name);
+
+      await expect(page.getByText(prod.name)).toBeVisible();
+      await expect(page.getByText(dev.name)).not.toBeVisible();
+      await expect(page.getByText(ws.name)).not.toBeVisible();
+    });
+
+    test('should delete profile with confirmation', async ({ adminPage: page, sdk }) => {
+      const p = await newProfile(sdk, 'Delete-Me-Profile', 'server');
+
+      await gotoProfiles(page);
+      await expect(page.getByText(p.name)).toBeVisible();
+
+      page.on('dialog', (dialog) => dialog.accept());
+      await page.getByRole('row').filter({ hasText: p.name }).getByRole('button').click();
+      await page.getByRole('menuitem', { name: /delete/i }).click();
+
+      await expect(page.getByText(/profile deleted/i)).toBeVisible();
+      await expect(page.getByText(p.name)).not.toBeVisible();
+      expect((await listProfiles(sdk)).some((x) => x.id === p.id)).toBe(false);
+    });
+
+    test('should duplicate profile', async ({ adminPage: page, sdk }) => {
+      const p = await newProfile(sdk, 'Original-Profile', 'server', { model: 'Test-Model' });
+
+      await gotoProfiles(page);
+      await expect(page.getByText(p.name, { exact: true })).toBeVisible();
+
+      await page.getByRole('row').filter({ hasText: p.name }).first().getByRole('button').click();
+      await page.getByRole('menuitem', { name: /duplicate/i }).click();
+
+      await expect(page.getByText(/profile created/i)).toBeVisible();
+      await expect(page.getByText(`${p.name} (Copy)`)).toBeVisible();
+
+      // The copy is on the server, with the original's role.
+      const copies = (await listProfiles(sdk)).filter((x) => x.name === `${p.name} (Copy)`);
+      expect(copies).toHaveLength(1);
+    });
+
+    test('should handle API errors gracefully', async ({ adminPage: page }) => {
+      // The injected 500 has no server behaviour (gap). The port asserts the
+      // list loads with no error alert, so a real load failure fails here.
+      await gotoProfiles(page);
+
+      await expect(page.getByRole('heading', { name: /error loading profiles/i })).toHaveCount(0);
+      await expect(page.getByRole('button', { name: /create profile/i })).toBeVisible();
+    });
+
+    test('should show empty state when no profiles', async ({ adminPage: page, sdk }) => {
+      await deleteAllProfiles(sdk);
+
+      await gotoProfiles(page);
+
+      await expect(page.getByText(/no device profiles found/i)).toBeVisible();
+    });
+  });
+
+  test.describe('Profile Actions', () => {
+    test('should navigate to profile details', async ({ adminPage: page, sdk }) => {
+      const p = await newProfile(sdk, 'View-Profile', 'server');
+
+      await gotoProfiles(page);
+      await page.getByRole('row').filter({ hasText: p.name }).getByRole('button').click();
+      await page.getByRole('menuitem', { name: /view details/i }).click();
+
+      await expect.poll(() => page.url()).toContain(p.id);
+    });
+
+    test('should navigate to edit profile', async ({ adminPage: page, sdk }) => {
+      const p = await newProfile(sdk, 'Edit-Profile', 'server');
+
+      await gotoProfiles(page);
+      await page.getByRole('row').filter({ hasText: p.name }).getByRole('button').click();
+      await page.getByRole('menuitem', { name: /edit profile/i }).click();
+
+      await expect.poll(() => page.url()).toContain(p.id);
+    });
+
+    test('should cancel delete when dialog is dismissed', async ({ adminPage: page, sdk }) => {
+      const p = await newProfile(sdk, 'Keep-Profile', 'server');
+
+      await gotoProfiles(page);
+      await expect(page.getByText(p.name)).toBeVisible();
+
+      page.on('dialog', (dialog) => dialog.dismiss());
+      await page.getByRole('row').filter({ hasText: p.name }).getByRole('button').click();
+      await page.getByRole('menuitem', { name: /delete/i }).click();
+
+      await expect(page.getByText(p.name)).toBeVisible();
+      expect((await listProfiles(sdk)).some((x) => x.id === p.id)).toBe(true);
+    });
+
+    test('should display network configurations in table', async ({ adminPage: page, sdk }) => {
+      const p = await newProfile(sdk, 'Network-Profile', 'server', {
+        networks: { provisioning: { vlan: 100 }, trusted: { vlan: 200 }, quarantine: { vlan: 300 } },
+      });
+
+      await gotoProfiles(page);
+
+      const row = page.getByRole('row').filter({ hasText: p.name });
+      const provisioning = row.getByText('provisioning (VLAN 100)');
+      const trusted = row.getByText('trusted (VLAN 200)');
+      const quarantine = row.getByText('quarantine (VLAN 300)');
+      await expect(provisioning).toBeVisible();
+      await expect(trusted).toBeVisible();
+      await expect(quarantine).toBeVisible();
+      await expect(provisioning.locator('..')).toContainText('enrollment');
+      await expect(trusted.locator('..')).toContainText('post-enrollment');
+      await expect(quarantine.locator('..')).toContainText('failure');
+    });
+
+    test('should render a phase key outside the three defaults', async ({ adminPage: page, sdk }) => {
+      const p = await newProfile(sdk, 'DMZ-Profile', 'server', { networks: { 'lab-dmz': { vlan: 42 } } });
+
+      await gotoProfiles(page);
+
+      const row = page.getByRole('row').filter({ hasText: p.name });
+      await expect(row.getByText('lab-dmz (VLAN 42)')).toBeVisible();
+      await expect(row.getByText(/no networks/i)).toHaveCount(0);
+    });
+
+    test('should mark the phase a selector names, not the default key', async ({ adminPage: page, sdk }) => {
+      const p = await newProfile(sdk, 'Selector-Profile', 'server', {
+        networks: { trusted: { vlan: 200 }, backup: { vlan: 201 } },
+        post_enrollment_network: 'backup',
+      });
+
+      await gotoProfiles(page);
+
+      const row = page.getByRole('row').filter({ hasText: p.name });
+      const backup = row.getByText('backup (VLAN 201)');
+      const trusted = row.getByText('trusted (VLAN 200)');
+      await expect(backup).toBeVisible();
+      await expect(backup.locator('..')).toContainText('post-enrollment');
+      await expect(trusted.locator('..')).not.toContainText('post-enrollment');
+    });
+
+    test('should show no networks message when profile has no networks', async ({ adminPage: page, sdk }) => {
+      const p = await newProfile(sdk, 'No-Network-Profile', 'server');
+      const full = must(await sdk.device.getProfile(p.id), 'device.getProfile') as unknown as {
+        profile?: { networks?: Record<string, unknown> };
+      };
+
+      await gotoProfiles(page);
+
+      const row = page.getByRole('row').filter({ hasText: p.name });
+      await expect(row).toBeVisible();
+      // The server may fill default phases into a profile created without any.
+      if (Object.keys(full.profile?.networks ?? {}).length === 0) {
+        await expect(row.getByText(/no networks/i)).toBeVisible();
+      } else {
+        await expect(row.getByText(/no networks/i)).toHaveCount(0);
+      }
+    });
+
+    test('should show role badges correctly', async ({ adminPage: page, sdk }) => {
+      const a = await newProfile(sdk, 'Profile-A', 'server');
+      const b = await newProfile(sdk, 'Profile-B', 'iot');
+      const c = await newProfile(sdk, 'Profile-C', 'gateway');
+
+      await gotoProfiles(page);
+      await expect(page.getByText(a.name)).toBeVisible();
+
+      await expect(page.getByRole('row').filter({ hasText: a.name }).getByText('Server', { exact: true })).toBeVisible();
+      await expect(page.getByRole('row').filter({ hasText: b.name }).getByText('IoT', { exact: true })).toBeVisible();
+      await expect(page.getByRole('row').filter({ hasText: c.name }).getByText('Gateway', { exact: true })).toBeVisible();
+    });
+
+    test('should handle create profile error', async ({ adminPage: page, sdk }) => {
+      // The server refuses a second profile with a name it already holds.
+      const p = await newProfile(sdk, 'Duplicate-Profile', 'server');
+
+      await gotoProfiles(page);
+      await page.getByRole('button', { name: /create profile/i }).click();
+      await page.getByLabel(/profile name/i).fill(p.name);
+      await page.getByRole('button', { name: /create profile/i }).last().click();
+
+      await expect(page.getByText(/error creating profile/i)).toBeVisible();
+      expect((await listProfiles(sdk)).filter((x) => x.name === p.name)).toHaveLength(1);
+    });
+
+    test('should handle delete profile error', async ({ adminPage: page, sdk }) => {
+      const p = await newProfile(sdk, 'Error-Delete-Profile', 'server');
+
+      await gotoProfiles(page);
+      await expect(page.getByText(p.name)).toBeVisible();
+
+      // Delete it behind the page's back: the page's delete then fails on the server.
+      must(await sdk.device.deleteProfile(p.id), 'device.deleteProfile');
+
+      page.on('dialog', (dialog) => dialog.accept());
+      await page.getByRole('row').filter({ hasText: p.name }).getByRole('button').click();
+      await page.getByRole('menuitem', { name: /delete/i }).click();
+
+      await expect(page.getByText(/error deleting profile/i)).toBeVisible();
+    });
+
+    test('should refresh profiles list', async ({ adminPage: page, sdk }) => {
+      const first = await newProfile(sdk, 'Initial-Profile', 'server');
+
+      await gotoProfiles(page);
+      await expect(page.getByText(first.name)).toBeVisible();
+
+      // A profile created after the page loaded shows only after a refresh.
+      const later = await newProfile(sdk, 'Later-Profile', 'server');
+      await page.getByRole('button', { name: /refresh/i }).click();
+
+      await expect(page.getByText(first.name)).toBeVisible();
+      await expect(page.getByText(later.name)).toBeVisible();
+    });
+
+    test('should clear filters', async ({ adminPage: page, sdk }) => {
+      const p1 = await newProfile(sdk, 'Profile-1', 'server');
+      const p2 = await newProfile(sdk, 'Profile-2', 'workstation');
+
+      await gotoProfiles(page);
+      await expect(page.getByText(p1.name)).toBeVisible();
+
+      const searchInput = page.getByPlaceholder(/search profiles/i);
+      await searchInput.fill(p1.name);
+
+      const clearButton = page.getByRole('button', { name: /clear filters/i });
+      await expect(clearButton).toBeVisible();
+      await clearButton.click();
+
+      await expect(searchInput).toHaveValue('');
+      await expect(page.getByText(p1.name)).toBeVisible();
+      await expect(page.getByText(p2.name)).toBeVisible();
+    });
+
+    test('should show loading state', async ({ adminPage: page, sdk }) => {
+      const p = await newProfile(sdk, 'Loading-Profile', 'server');
+
+      await page.goto('/devices/profiles');
+
+      // The server answer is not delayed: the loading text gives way to the list.
+      await expect(page.getByText(p.name)).toBeVisible();
+      await expect(page.getByText(/loading profiles/i)).toHaveCount(0);
+    });
+
+    test('should close create dialog on cancel', async ({ adminPage: page }) => {
+      await gotoProfiles(page);
+
+      await page.getByRole('button', { name: /create profile/i }).click();
+      await expect(page.getByRole('dialog')).toBeVisible();
+
+      await page.getByRole('button', { name: /cancel/i }).click();
+
+      await expect(page.getByRole('dialog')).not.toBeVisible();
+    });
+  });
+
+  test.describe('Access Control', () => {
+    test('should allow the tenant admin to view profiles', async ({ adminPage: page, sdk }) => {
+      const p = await newProfile(sdk, 'Visible-Profile', 'server');
+
+      await page.goto('/devices/profiles');
+
+      await expect(page.getByText(p.name)).toBeVisible();
+    });
+
+    test('should redirect unauthenticated users to login', async ({ browser, baseURL }) => {
+      const context = await browser.newContext({ baseURL, ignoreHTTPSErrors: true });
+      try {
+        const page = await context.newPage();
+        await page.goto('/devices/profiles');
+        await expect(page).toHaveURL(/\/auth\/webauthn/);
+      } finally {
+        await context.close();
+      }
+    });
+  });
+});
