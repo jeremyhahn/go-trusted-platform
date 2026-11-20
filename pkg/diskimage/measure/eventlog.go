@@ -187,7 +187,7 @@ func parseSpecID(raw []byte) (map[uint16]int, int, error) {
 // ReplayEventLog extends each PCR of bank h from its records in log order,
 // as Replay does, skipping EV_NO_ACTION records (they extend nothing). A
 // StartupLocality EV_NO_ACTION record seeds PCR 0 with its locality
-// (0x00..0L) before the first extend, as TCG PC Client 10.4.5.3 specifies. A
+// (0x00..0L) before the first extend, as TCG PC Client section 10.4.5, item 3 specifies. A
 // record without an h digest gives a *MissingBankError.
 func ReplayEventLog(events []Event, h crypto.Hash) (map[int][]byte, error) {
 	if err := checkHash(h); err != nil {
@@ -199,7 +199,7 @@ func ReplayEventLog(events []Event, h crypto.Hash) (map[int][]byte, error) {
 		if e.Type == EventNoAction {
 			// A StartupLocality record extends nothing, but the locality
 			// the CRTM started at is PCR 0's initial value: 0x00..0L
-			// (TCG PC Client 10.4.5.3). Other EV_NO_ACTION records are
+			// (TCG PC Client section 10.4.5, item 3). Other EV_NO_ACTION records are
 			// skipped.
 			if loc, ok := startupLocality(e); ok {
 				if _, extended := pcrs[0]; !extended {

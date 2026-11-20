@@ -132,7 +132,7 @@ func imageEvents(t *testing.T, img Image, banks ...crypto.Hash) []logEvent {
 	}
 	sep := []byte{0, 0, 0, 0}
 	gv, sdb := EFIGlobalVariable, EFIImageSecurityDatabase
-	// Firmware logs its startup locality first (TCG PC Client 10.4.5.3);
+	// Firmware logs its startup locality first (TCG PC Client section 10.4.5, item 3);
 	// an EV_NO_ACTION record extends nothing, so its digests are zero.
 	locality := startupLocalityEvent(banks, 0)
 	// Any other EV_NO_ACTION record is skipped whatever its digests hold.
@@ -272,7 +272,7 @@ func TestReplayEventLogSkipsNoAction(t *testing.T) {
 
 // TestReplayEventLogSeedsPCR0FromTheStartupLocality covers a log whose
 // StartupLocality record names locality 3: PCR 0 starts at 0x00..03, not
-// zero, before the first digest extends it (TCG PC Client 10.4.5.3).
+// zero, before the first digest extends it (TCG PC Client section 10.4.5, item 3).
 func TestReplayEventLogSeedsPCR0FromTheStartupLocality(t *testing.T) {
 	img, _ := testImage()
 	hashes := []crypto.Hash{crypto.SHA256, crypto.SHA384}
