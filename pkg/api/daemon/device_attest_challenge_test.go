@@ -43,7 +43,7 @@ func issueChallenge(t *testing.T, ctx context.Context, svc *DeviceGRPCService, d
 	return resp
 }
 
-func requireCode(t *testing.T, err error, want codes.Code) {
+func requireChallengeCode(t *testing.T, err error, want codes.Code) {
 	t.Helper()
 	require.Error(t, err)
 	assert.Equal(t, want, status.Code(err), "error: %v", err)
@@ -77,7 +77,7 @@ func TestDeviceAttestChallenge_IssueRequiresADeviceID(t *testing.T) {
 	svc := challengeService(t, f, &clock)
 
 	_, err := svc.IssueAttestationChallenge(tokenCallerContext("tenant-a"), &platformv1.IssueAttestationChallengeRequest{})
-	requireCode(t, err, codes.InvalidArgument)
+	requireChallengeCode(t, err, codes.InvalidArgument)
 }
 
 func TestDeviceAttestChallenge_RefusesAMissingChallenge(t *testing.T) {
@@ -89,7 +89,7 @@ func TestDeviceAttestChallenge_RefusesAMissingChallenge(t *testing.T) {
 		DeviceId: itoa(f.device.ID),
 		Evidence: f.evidence(t, []byte("caller-chosen-nonce"), goldenPCRs()),
 	})
-	requireCode(t, err, codes.InvalidArgument)
+	requireChallengeCode(t, err, codes.InvalidArgument)
 }
 
 func TestDeviceAttestChallenge_RefusesAnUnknownChallenge(t *testing.T) {
@@ -102,7 +102,7 @@ func TestDeviceAttestChallenge_RefusesAnUnknownChallenge(t *testing.T) {
 		Evidence:    f.evidence(t, []byte("caller-chosen-nonce"), goldenPCRs()),
 		ChallengeId: "deadbeef",
 	})
-	requireCode(t, err, codes.FailedPrecondition)
+	requireChallengeCode(t, err, codes.FailedPrecondition)
 }
 
 func TestDeviceAttestChallenge_RefusesAnExpiredChallenge(t *testing.T) {
@@ -119,7 +119,7 @@ func TestDeviceAttestChallenge_RefusesAnExpiredChallenge(t *testing.T) {
 		Evidence:    f.evidence(t, ch.GetNonce(), goldenPCRs()),
 		ChallengeId: ch.GetChallengeId(),
 	})
-	requireCode(t, err, codes.FailedPrecondition)
+	requireChallengeCode(t, err, codes.FailedPrecondition)
 }
 
 func TestDeviceAttestChallenge_RefusesAReusedChallenge(t *testing.T) {
@@ -146,7 +146,7 @@ func TestDeviceAttestChallenge_RefusesAReusedChallenge(t *testing.T) {
 		Evidence:    f.evidence(t, ch.GetNonce(), goldenPCRs()),
 		ChallengeId: ch.GetChallengeId(),
 	})
-	requireCode(t, err, codes.FailedPrecondition)
+	requireChallengeCode(t, err, codes.FailedPrecondition)
 }
 
 func TestDeviceAttestChallenge_RefusesANonceMismatch(t *testing.T) {
@@ -162,7 +162,7 @@ func TestDeviceAttestChallenge_RefusesANonceMismatch(t *testing.T) {
 		Evidence:    f.evidence(t, []byte("a-replayed-older-nonce"), goldenPCRs()),
 		ChallengeId: ch.GetChallengeId(),
 	})
-	requireCode(t, err, codes.FailedPrecondition)
+	requireChallengeCode(t, err, codes.FailedPrecondition)
 
 	// The mismatch consumed the challenge: the right nonce is now too late.
 	_, err = svc.AttestDevice(ctx, &platformv1.AttestDeviceRequest{
@@ -170,7 +170,7 @@ func TestDeviceAttestChallenge_RefusesANonceMismatch(t *testing.T) {
 		Evidence:    f.evidence(t, ch.GetNonce(), goldenPCRs()),
 		ChallengeId: ch.GetChallengeId(),
 	})
-	requireCode(t, err, codes.FailedPrecondition)
+	requireChallengeCode(t, err, codes.FailedPrecondition)
 }
 
 func TestDeviceAttestChallenge_RefusesAnotherDevicesChallenge(t *testing.T) {
@@ -186,7 +186,7 @@ func TestDeviceAttestChallenge_RefusesAnotherDevicesChallenge(t *testing.T) {
 		Evidence:    f.evidence(t, ch.GetNonce(), goldenPCRs()),
 		ChallengeId: ch.GetChallengeId(),
 	})
-	requireCode(t, err, codes.FailedPrecondition)
+	requireChallengeCode(t, err, codes.FailedPrecondition)
 }
 
 func TestDeviceAttestChallenge_RefusesAnotherTenantsChallenge(t *testing.T) {
@@ -201,5 +201,5 @@ func TestDeviceAttestChallenge_RefusesAnotherTenantsChallenge(t *testing.T) {
 		Evidence:    f.evidence(t, ch.GetNonce(), goldenPCRs()),
 		ChallengeId: ch.GetChallengeId(),
 	})
-	requireCode(t, err, codes.PermissionDenied)
+	requireChallengeCode(t, err, codes.PermissionDenied)
 }

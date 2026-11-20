@@ -46,6 +46,45 @@ const maxAttestEvidenceBytes = 1 << 20 // 1 MiB
 // per transport.
 type AttestRequest struct {
 	Evidence []byte `json:"evidence"`
+	// ChallengeID names a challenge from the challenge route; the evidence
+	// nonce must be its nonce (#2136).
+	ChallengeID string `json:"challenge_id"`
+}
+
+// AttestChallengeHandler serves POST /devices/{id}/attest/challenge: it
+// issues the single-use nonce AttestDevice checks the quote against (#2136).
+type AttestChallengeHandler interface {
+	HandleIssueAttestationChallenge(w http.ResponseWriter, r *http.Request)
+}
+
+// AttestChallengeResponse is the challenge route's body.
+type AttestChallengeResponse struct {
+	ChallengeID string    `json:"challenge_id"`
+	Nonce       []byte    `json:"nonce"`
+	ExpiresAt   time.Time `json:"expires_at"`
+}
+
+// HandleIssueAttestationChallenge delegates to the in-process
+// DeviceService.IssueAttestationChallenge for the path's device.
+func (h *attestHandler) HandleIssueAttestationChallenge(w http.ResponseWriter, r *http.Request) {
+	deviceID := mux.Vars(r)["id"]
+	if deviceID == "" {
+		h.responseWriter.Error400(w, r, ErrDeviceIDRequired{})
+		return
+	}
+	resp, err := h.deviceService.IssueAttestationChallenge(r.Context(), &platformv1.IssueAttestationChallengeRequest{
+		DeviceId: deviceID,
+	})
+	if err != nil {
+		h.logger.Errorf("device: attestation challenge could not be issued: device_id=%s error=%v", deviceID, err)
+		handleServiceErr(h.responseWriter, w, r, err)
+		return
+	}
+	h.responseWriter.Success200(w, r, &AttestChallengeResponse{
+		ChallengeID: resp.GetChallengeId(),
+		Nonce:       resp.GetNonce(),
+		ExpiresAt:   resp.GetExpiresAt().AsTime(),
+	})
 }
 
 // AttestResponse reports what was verified, not merely that the call
@@ -143,8 +182,9 @@ func (h *attestHandler) HandleAttestDevice(w http.ResponseWriter, r *http.Reques
 	}
 
 	resp, err := h.deviceService.AttestDevice(r.Context(), &platformv1.AttestDeviceRequest{
-		DeviceId: deviceID,
-		Evidence: req.Evidence,
+		DeviceId:    deviceID,
+		Evidence:    req.Evidence,
+		ChallengeId: req.ChallengeID,
 	})
 	if err != nil {
 		h.logger.Errorf("device: attestation could not be evaluated: device_id=%s error=%v", deviceID, err)
