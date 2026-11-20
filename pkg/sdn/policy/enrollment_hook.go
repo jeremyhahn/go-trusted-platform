@@ -896,7 +896,7 @@ func (h *SDNEnrollmentHook) buildPortPolicy(profile *entities.DeviceProfile, cer
 
 	// The tenant is the certificate subject OU (SPEC row 122). A certificate
 	// without one has no tenant and gets no port policy: never a "default".
-	var tenantExtractor PolicyExtractor = h.extractor
+	tenantExtractor := h.extractor
 	if tenantExtractor == nil {
 		tenantExtractor = &X509PolicyExtractor{}
 	}
