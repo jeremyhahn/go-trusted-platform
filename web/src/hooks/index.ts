@@ -10,6 +10,8 @@ export { useSessionToken, useHydrated, notifySessionChanged } from "./use-sessio
 
 // NTP status, sources and clock step (#1682)
 export { useNTP } from "./use-ntp";
+export { useCeremony } from "./use-ceremony";
+export type { UseCeremonyResult, CeremonyStep } from "./use-ceremony";
 export type { NTPStatus, NTPSource, NTPStatusResponse, NTPSourcesResponse } from "./use-ntp";
 
 // SDK hooks (exported from main entry point for bundler compatibility)

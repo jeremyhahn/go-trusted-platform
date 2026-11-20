@@ -13,6 +13,21 @@ export { CAService } from './ca-service.js';
 export { ComputeService } from './compute-service.js';
 export { DeviceService } from './device-service.js';
 export { DNSService } from './dns-service.js';
+export { CeremonyService } from './ceremony-service.js';
+export type {
+  CeremonyInitRequest,
+  CeremonyInitResponse,
+  CeremonyStatus,
+  CeremonyClaimCertBeginRequest,
+  CeremonyClaimCertBeginResponse,
+  CeremonyClaimCertCompleteRequest,
+  CeremonyCertificateResponse,
+  CeremonyClaimShareBeginRequest,
+  CeremonyClaimShareBeginResponse,
+  CeremonyClaimShareCompleteRequest,
+  CeremonyClaimShareCompleteResponse,
+  CeremonySignCSRRequest,
+} from './ceremony-service.js';
 export { NTPService } from './ntp-service.js';
 export type {
   NTPStatus,

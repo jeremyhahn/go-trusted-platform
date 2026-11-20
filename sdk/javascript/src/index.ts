@@ -153,6 +153,21 @@ export type {
   ListNTPSourcesResponse,
   StepNTPClockResponse,
 } from './services/ntp-service.js';
+export { CeremonyService } from './services/ceremony-service.js';
+export type {
+  CeremonyInitRequest,
+  CeremonyInitResponse,
+  CeremonyStatus,
+  CeremonyClaimCertBeginRequest,
+  CeremonyClaimCertBeginResponse,
+  CeremonyClaimCertCompleteRequest,
+  CeremonyCertificateResponse,
+  CeremonyClaimShareBeginRequest,
+  CeremonyClaimShareBeginResponse,
+  CeremonyClaimShareCompleteRequest,
+  CeremonyClaimShareCompleteResponse,
+  CeremonySignCSRRequest,
+} from './services/ceremony-service.js';
 
 // BMC users and web certificate (#1720)
 export {

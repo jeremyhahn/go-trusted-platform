@@ -33,7 +33,7 @@ test.describe('ceremony', () => {
   test('init flow: the form posts to the server and the status follows', async ({ adminPage, sdk }) => {
     const before = await sdk.ceremony.getStatus().catch(() => undefined);
     test.skip(
-      before === undefined || (before.data?.state ?? '') !== '' && before.data?.state !== 'uninitialized',
+      before === undefined || !['', 'uninitialized', 'unknown'].includes(before.data?.state ?? ''),
       'ceremony backend absent or already initialized on this server',
     );
 

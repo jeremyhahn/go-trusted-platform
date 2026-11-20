@@ -106,13 +106,13 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 
 | Operation | REST | Web page | platformctl | Playwright spec | Status |
 |---|---|---|---|---|---|
-| `CeremonyService.Init` | - | - | - | - | missing |
-| `CeremonyService.Status` | - | - | - | - | missing |
-| `CeremonyService.ClaimCertBegin` | - | - | - | - | missing |
-| `CeremonyService.ClaimCertComplete` | - | - | - | - | missing |
-| `CeremonyService.ClaimShareBegin` | - | - | - | - | missing |
-| `CeremonyService.ClaimShareComplete` | - | - | - | - | missing |
-| `CeremonyService.SignCSR` | - | - | - | - | missing |
+| `CeremonyService.Init` | `POST /ceremony/init` | `(dashboard)/ca/ceremony/page.tsx` | - | `real-server/ceremony.spec.ts` | covered |
+| `CeremonyService.Status` | `GET /ceremony/status` | `(dashboard)/ca/ceremony/page.tsx` | - | `real-server/ceremony.spec.ts` | covered |
+| `CeremonyService.ClaimCertBegin` | `POST /ceremony/claim-cert/begin` | `(dashboard)/ca/ceremony/page.tsx` | - | `real-server/ceremony.spec.ts` | covered |
+| `CeremonyService.ClaimCertComplete` | `POST /ceremony/claim-cert/complete` | `(dashboard)/ca/ceremony/page.tsx` | - | `real-server/ceremony.spec.ts` | covered |
+| `CeremonyService.ClaimShareBegin` | `POST /ceremony/claim-share/begin` | `(dashboard)/ca/ceremony/page.tsx` | - | `real-server/ceremony.spec.ts` | covered |
+| `CeremonyService.ClaimShareComplete` | `POST /ceremony/claim-share/complete` | `(dashboard)/ca/ceremony/page.tsx` | - | `real-server/ceremony.spec.ts` | covered |
+| `CeremonyService.SignCSR` | `POST /ceremony/sign-csr` | `(dashboard)/ca/ceremony/page.tsx` | - | `real-server/ceremony.spec.ts` | covered |
 
 ## ClusterService (`cluster.proto`)
 
@@ -734,7 +734,7 @@ Issue #1666, slice 1 of the UI epic #1665. One row per gRPC operation (`Service.
 | BMCService | 23 | 0 | 0 | 23 | 0 | 0 |
 | CAService | 13 | 7 | 0 | 6 | 0 | 0 |
 | CacheService | 4 | 0 | 0 | 0 | 0 | 4 |
-| CeremonyService | 7 | 0 | 0 | 7 | 0 | 0 |
+| CeremonyService | 7 | 7 | 0 | 0 | 0 | 0 |
 | ClusterService | 5 | 0 | 0 | 5 | 0 | 0 |
 | ComputeService | 37 | 14 | 2 | 16 | 5 | 0 |
 | ConfigDeliveryService | 7 | 1 | 2 | 0 | 4 | 0 |
