@@ -15,7 +15,7 @@ function clientWith(fetchImpl: FetchMock, headers?: Record<string, string>): Api
     baseUrl: 'https://platform.test/api/v1',
     fetch: fetchImpl as unknown as typeof fetch,
     retry: { maxRetries: 2, initialDelayMs: 1, maxDelayMs: 1 },
-    headers,
+    ...(headers !== undefined ? { headers } : {}),
   });
 }
 

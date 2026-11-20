@@ -7,7 +7,7 @@
  * - Cookie-based authentication (credentials: 'include')
  * - Configurable base URL from environment or explicit config
  * - Request/response interceptors with full context
- * - Automatic retries with exponential backoff
+ * - Automatic retries with exponential backoff (reads; mutations only with an idempotency key or retryOnMutation)
  * - Request timeout support
  * - SSR-safe design
  */
@@ -45,6 +45,11 @@ export interface RequestOptions {
   retry?: {
     enabled?: boolean;
     maxRetries?: number;
+    /**
+     * Retry a POST, PUT, PATCH or DELETE (on a retryable status or a network error); off by default.
+     * An `Idempotency-Key` request header has the same effect.
+     */
+    retryOnMutation?: boolean;
   };
   /** Custom metadata to pass through interceptors */
   metadata?: Record<string, unknown>;
@@ -70,6 +75,24 @@ function rootUrl(base: string, path: string): string {
     return `${protocolRelative[0]}${path}`;
   }
   return path;
+}
+
+/** Request header (any case) by which the caller states that the server dedupes the request. */
+const IDEMPOTENCY_KEY_HEADER = 'idempotency-key';
+
+/**
+ * True when any header set carries an `Idempotency-Key` (any case) with a non-blank value:
+ * the caller's statement that the server dedupes the request, so a resend is safe.
+ */
+function hasIdempotencyKey(...headerSets: Array<Record<string, string> | undefined>): boolean {
+  return headerSets.some(
+    (headers) =>
+      headers !== undefined &&
+      Object.entries(headers).some(
+        ([name, value]) =>
+          name.toLowerCase() === IDEMPOTENCY_KEY_HEADER && typeof value === 'string' && value.trim() !== ''
+      )
+  );
 }
 
 /**
@@ -258,13 +281,13 @@ export class ApiClient implements Transport {
   /**
    * Determines if a request should be retried.
    *
-   * Mutating HTTP verbs (POST, PUT, PATCH, DELETE) are NOT retried on
-   * server errors by default — the operation may have partially
-   * succeeded server-side, and retrying turns a fast user-visible
-   * failure into a 15+ second spinner that ultimately still fails.
-   * Read methods (GET, HEAD) keep the legacy retry-on-5xx behaviour.
-   * Callers can re-enable mutation retries via
-   * `options.retry.retryOnMutation = true`.
+   * A mutating verb (any verb but GET and HEAD) is retried neither on a
+   * status nor on a network error unless the caller passes
+   * `retry.retryOnMutation: true` or an `Idempotency-Key` header: a
+   * response lost after the server acted cannot be told from a connection
+   * that never reached it, so a blind resend can repeat the mutation.
+   * GET and HEAD keep the retry on the configured statuses and network
+   * errors.
    */
   private shouldRetry(
     attempt: number,
@@ -283,20 +306,20 @@ export class ApiClient implements Transport {
     }
 
     const isMutation = method !== undefined && method !== 'GET' && method !== 'HEAD';
-    const allowMutationRetry =
-      (options?.retry as { retryOnMutation?: boolean } | undefined)?.retryOnMutation === true;
+    if (
+      isMutation &&
+      options?.retry?.retryOnMutation !== true &&
+      !hasIdempotencyKey(this.config.headers, options?.headers)
+    ) {
+      return false;
+    }
 
     if (error instanceof ApiError) {
       // Check if the status code is retryable
       if (error.status !== undefined) {
-        if (isMutation && !allowMutationRetry) {
-          return false;
-        }
         return this.config.retry.retryableStatuses.includes(error.status);
       }
-      // Retry network errors (safe even for mutations because no
-      // server-side state was modified when the connection failed
-      // before reaching the server).
+      // Network errors: reached only by reads, or by mutations the caller marked safe to resend.
       if (error.isNetworkError() && this.config.retry.retryOnNetworkError) {
         return true;
       }
