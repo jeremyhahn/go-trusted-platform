@@ -301,6 +301,23 @@ export class SDNService extends BaseService {
           `policy target type ${target.type} is not supported: only POLICY_TARGET_TYPE_BRIDGE is applied`
         );
       }
+      // The daemon installs flows from the target type and bridge ID only, so
+      // a zone or direction would not narrow them: the policy would apply
+      // across the whole bridge. Refuse it before sending.
+      for (const field of ['zone', 'direction'] as const) {
+        if (target[field]) {
+          throw new RangeError(
+            `policy target ${field} is not supported: the daemon does not enforce it`
+          );
+        }
+      }
+    }
+    // The daemon installs every rule before merely recording config.enabled,
+    // so a disabled policy would be active at once: refuse it before sending.
+    if (request.config.enabled === false) {
+      throw new RangeError(
+        'policy config enabled=false is not supported: the daemon installs the rules regardless'
+      );
     }
     // The daemon installs RATE_LIMIT and MIRROR rules as a plain forward, so
     // such a policy would be reported active while limiting or mirroring
