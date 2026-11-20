@@ -47,11 +47,10 @@ var DaemonOnlyPrefixes = map[string]string{
 	"proxy":    "RESTServer.SetProxyService (pkg/api/daemon/proxy_rest.go)",
 	"version":  "RESTServer.registerRoutes, handleVersion (pkg/api/daemon/rest_service.go)",
 
-	// The webservice router serves /sdn/gateway/ipam, so the gateway surface
-	// is listed by the sub-prefixes only the daemon serves.
-	"sdn/gateway/nat64":   "RESTServer.SetGatewayIPAMService (pkg/api/daemon/rest_sdn.go)",
+	// The webservice router serves /sdn/gateway/ipam, lb, nat64 and perf
+	// (GatewayRouter.registerLBRoutes), so the gateway surface is listed by
+	// the sub-prefixes only the daemon serves.
 	"sdn/gateway/overlay": "RESTServer.SetGatewayIPAMService (pkg/api/daemon/rest_sdn.go)",
-	"sdn/gateway/perf":    "RESTServer.SetGatewayIPAMService (pkg/api/daemon/rest_sdn.go)",
 
 	// The webservice router serves the rest of /kms by key name in the path;
 	// export, the batch operations and rewrap are the daemon's alone. A

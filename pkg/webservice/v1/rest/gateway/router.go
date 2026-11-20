@@ -71,6 +71,7 @@ func (r *GatewayRouter) RegisterRoutes(parent *mux.Router) {
 	sr.HandleFunc("/ipam/allocations", r.listAllocations).Methods("GET")
 	sr.HandleFunc("/ipam/allocations", r.allocateIP).Methods("POST")
 	sr.HandleFunc("/ipam/allocations", r.releaseIP).Methods("DELETE")
+	r.registerLBRoutes(parent)
 }
 
 func (r *GatewayRouter) ensure(w http.ResponseWriter, req *http.Request) bool {

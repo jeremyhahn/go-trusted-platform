@@ -52,7 +52,7 @@ func TestDaemonOnlyPrefixOf(t *testing.T) {
 	}{
 		{"bare prefix", "/api/v1/version", "version", true},
 		{"under a prefix", "/api/v1/bmc/{profileID}/power", "bmc", true},
-		{"multi-segment prefix", "/api/v1/sdn/gateway/nat64/status", "sdn/gateway/nat64", true},
+		{"multi-segment prefix", "/api/v1/sdn/gateway/overlay/status", "sdn/gateway/overlay", true},
 		{"sibling of a multi-segment prefix", "/api/v1/sdn/gateway/ipam/pools", "", false},
 		{"prefix is only a word prefix", "/api/v1/versions", "", false},
 		{"shared prefix", "/api/v1/tpm/info", "", false},

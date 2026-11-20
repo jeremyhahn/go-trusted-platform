@@ -57,6 +57,7 @@ DELETE /api/v1/sdn/bridges/{name}/ports/{port}/auth
 DELETE /api/v1/sdn/flows
 DELETE /api/v1/sdn/gateway/ipam/allocations/{ip}
 DELETE /api/v1/sdn/gateway/ipam/pools/{id}
+DELETE /api/v1/sdn/gateway/lb/vips/{protocol}/{address}/{port}
 DELETE /api/v1/sdn/zones/{name}
 DELETE /api/v1/tenants/{id}
 DELETE /api/v1/tpm/ak
@@ -293,10 +294,17 @@ GET /api/v1/sdn/bridges/{name}/ports
 GET /api/v1/sdn/bridges/{name}/ports/{port}/state
 GET /api/v1/sdn/bridges/{name}/ports/{port}/stats
 GET /api/v1/sdn/flows
+GET /api/v1/sdn/gateway
 GET /api/v1/sdn/gateway/ipam
 GET /api/v1/sdn/gateway/ipam/allocations
 GET /api/v1/sdn/gateway/ipam/pools
 GET /api/v1/sdn/gateway/ipam/pools/{id}
+GET /api/v1/sdn/gateway/lb/status
+GET /api/v1/sdn/gateway/lb/vips
+GET /api/v1/sdn/gateway/lb/vips/{protocol}/{address}/{port}
+GET /api/v1/sdn/gateway/nat64/status
+GET /api/v1/sdn/gateway/perf/conntrack
+GET /api/v1/sdn/gateway/perf/datapath
 GET /api/v1/sdn/policies
 GET /api/v1/sdn/policies/{id}
 GET /api/v1/sdn/vlans
@@ -540,6 +548,8 @@ POST /api/v1/sdn/bridges/{name}/ports/{port}/auth
 POST /api/v1/sdn/flows
 POST /api/v1/sdn/gateway/ipam/allocations
 POST /api/v1/sdn/gateway/ipam/pools
+POST /api/v1/sdn/gateway/lb/vips
+POST /api/v1/sdn/gateway/perf/flows
 POST /api/v1/sdn/policies
 POST /api/v1/sdn/vlans
 POST /api/v1/sdn/zones
@@ -612,6 +622,7 @@ PUT /api/v1/kms/secrets/{name}/status
 PUT /api/v1/pxe/devices/{id}/state
 PUT /api/v1/sdn/bridges/{name}/ports/{port}/state
 PUT /api/v1/sdn/gateway/ipam/pools/{id}
+PUT /api/v1/sdn/gateway/lb/vips/{protocol}/{address}/{port}/backends
 PUT /api/v1/sdn/zones/{name}
 PUT /api/v1/tenants/{id}
 PUT /api/v1/tenants/{id}/quotas
