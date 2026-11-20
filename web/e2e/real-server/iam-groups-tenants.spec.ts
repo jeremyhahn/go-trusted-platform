@@ -9,7 +9,7 @@ import { test, expect } from './fixtures';
 interface Result<T> {
   success: boolean;
   data?: T;
-  error?: { message?: string; code?: string } & Record<string, unknown>;
+  error?: unknown;
 }
 
 interface Named {
