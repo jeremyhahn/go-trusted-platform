@@ -38,6 +38,7 @@ import {
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { SDNTopology } from '@/components/features/networking/sdn-topology';
+import Link from 'next/link';
 import { useSDN, useApi, useToast } from '@/hooks';
 import type { FlowRule } from '@/types/infrastructure';
 import type { BridgeType } from 'trusted-platform-sdk';
@@ -299,7 +300,14 @@ export default function SDNPage() {
                 ) : (
                   networks.map((network) => (
                     <TableRow key={network.id}>
-                      <TableCell className="font-medium">{network.name}</TableCell>
+                      <TableCell className="font-medium">
+                        <Link
+                          href={`/networking/sdn/${encodeURIComponent(network.id)}/`}
+                          className="hover:underline"
+                        >
+                          {network.name}
+                        </Link>
+                      </TableCell>
                       <TableCell>
                         <Badge variant="outline">
                           {bridgeKindLabels[network.kind]}
