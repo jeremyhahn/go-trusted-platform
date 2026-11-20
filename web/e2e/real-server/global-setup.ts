@@ -83,9 +83,12 @@ async function globalSetup(): Promise<void> {
   const log = path.join(dir, 'platformd.log');
   const out = fs.openSync(log, 'a');
   // `serve` explicitly: --socket-path is a serve flag. The socket lives in
-  // the run directory, never the daemon default under /run (#2034).
+  // the run directory, never the daemon default under /run (#2034). gRPC
+  // off: the console uses REST only, and gRPC TCP over the embedded
+  // quicbaas refuses to start without platform tokens or mTLS.
   const socket = path.join(dir, 'platformd.sock');
-  const child = spawn(binary, ['serve', '--config', 'config.yaml', '--init', '--socket-path', socket], {
+  const args = ['serve', '--config', 'config.yaml', '--init', '--socket-path', socket, '--enable-grpc=false'];
+  const child = spawn(binary, args, {
     cwd: dir,
     detached: true,
     stdio: ['ignore', out, out],
