@@ -138,13 +138,12 @@ test.describe('Device lookup, counts, profiles, activation and attestation (#174
     await expect(page.getByTestId('activate-result')).toHaveText('Admitted VLAN 20 (status activated; switch not changed)');
   });
 
-  test('GetProfile shows the device profile', async ({ page }) => {
-    await openLookup(page, {
-      'GET /device/profile': { serialNumber: 'SN-1', admittedNetwork: { name: 'trusted', vlan: 20 } },
-    });
-    await page.getByRole('button', { name: 'Load device profile' }).click();
-    await expect(page.getByTestId('device-profile-result')).toContainText('SN-1');
-    await expect(page.getByTestId('device-profile-result')).toContainText('trusted');
+  // GET /device/profile resolves the caller from its mTLS client certificate,
+  // which an operator's browser does not hold: the control is gated (#2048).
+  test('GetProfile over /device/profile is gated off with its reason', async ({ page }) => {
+    await openLookup(page, {});
+    await expect(page.getByRole('button', { name: 'Load device profile' })).toBeDisabled();
+    await expect(page.getByTestId('device-gate-GetProfile')).toContainText('client certificate');
   });
 
   test('FindProfileByMACAddress finds a profile by MAC', async ({ page }) => {

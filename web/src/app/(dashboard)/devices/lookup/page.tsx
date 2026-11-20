@@ -22,6 +22,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useDeviceLookup } from '@/hooks';
+import { DeviceRouteGate } from './device-route-gate';
 import type { Device, DeviceProfile } from 'trusted-platform-sdk';
 
 interface PendingAction {
@@ -92,6 +93,7 @@ export default function DeviceLookupPage() {
   // only while this matches the inputs.
   const [activatedFor, setActivatedFor] = useState<string | null>(null);
 
+  const [profileID, setProfileID] = useState('');
   const [profileMAC, setProfileMAC] = useState('');
   const [profileSerial, setProfileSerial] = useState('');
   const [matchModel, setMatchModel] = useState('');
@@ -137,7 +139,6 @@ export default function DeviceLookupPage() {
     }
   };
 
-  const deviceProfile = lookup.getDeviceProfile.data;
   const activateTarget = `${activateSerial.trim()}|${activateMAC.trim()}`;
   const changeActivateTarget = (set: (value: string) => void) => (value: string) => {
     set(value);
@@ -182,10 +183,10 @@ export default function DeviceLookupPage() {
       <Card>
         <CardHeader>
           <CardTitle>Device by serial</CardTitle>
-          {/* No paste-and-verify attestation here: the server verifies pasted
-              evidence against the nonce it carries, with no age limit, so an
-              old quote would replay as a fresh verdict. A challenge-based flow
-              is follow-up work (#2024 Codex round 4, P1). */}
+          {/* Attestation is gated off (DeviceRouteGate): the server verifies
+              pasted evidence against the nonce it carries, with no age limit,
+              so an old quote would replay as a fresh verdict. A challenge-based
+              flow is follow-up work (#2024 Codex round 4, P1). */}
           <CardDescription>Find a device and edit it</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
@@ -195,6 +196,9 @@ export default function DeviceLookupPage() {
               Find device
             </Button>
           </div>
+          <DeviceRouteGate operation="AttestDevice" variant="outline">
+            Verify attestation
+          </DeviceRouteGate>
           {lookup.findDeviceBySerial.isSettled && !device && (
             <p className="text-sm text-muted-foreground">No device found</p>
           )}
@@ -281,32 +285,39 @@ export default function DeviceLookupPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Device profile</CardTitle>
-          <CardDescription>The profile the calling device resolves to from its client certificate</CardDescription>
+          <CardTitle>Device-facing routes</CardTitle>
+          <CardDescription>
+            Operations a device performs over its own connection. An operator&apos;s session cannot perform them.
+          </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
-          <div>
-            <Button variant="outline" onClick={() => lookup.getDeviceProfile.mutate()}>
-              Load device profile
-            </Button>
-          </div>
-          {deviceProfile && (
-            <dl className="grid grid-cols-2 gap-1 text-sm" data-testid="device-profile-result">
-              <dt className="text-muted-foreground">Serial</dt>
-              <dd>{deviceProfile.serialNumber}</dd>
-              <dt className="text-muted-foreground">Admitted network</dt>
-              <dd>{JSON.stringify(deviceProfile.admittedNetwork)}</dd>
-            </dl>
-          )}
+          <DeviceRouteGate operation="GetProfile" variant="outline">
+            Load device profile
+          </DeviceRouteGate>
+          <DeviceRouteGate operation="BootCertificate" variant="outline">
+            Fetch boot certificate
+          </DeviceRouteGate>
+          <DeviceRouteGate operation="BootDelivery" variant="outline">
+            Request boot delivery
+          </DeviceRouteGate>
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
           <CardTitle>Profile lookup</CardTitle>
-          <CardDescription>Find a profile by MAC address, serial, or match criteria, then edit it</CardDescription>
+          <CardDescription>Find a profile by ID, MAC address, serial, or match criteria, then edit it</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
+          <div className="flex items-end gap-2">
+            <Field id="profile-id" label="Profile ID" value={profileID} onChange={setProfileID} />
+            <Button
+              disabled={!/^\d+$/.test(profileID.trim())}
+              onClick={() => runProfileLookup(() => lookup.getProfile.mutateAsync(profileID.trim()))}
+            >
+              Find by ID
+            </Button>
+          </div>
           <div className="flex items-end gap-2">
             <Field id="profile-mac" label="Profile MAC address" value={profileMAC} onChange={setProfileMAC} />
             <Button

@@ -1,9 +1,11 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
-import type { ReactNode } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { PlatformClient, PlatformProvider } from "trusted-platform-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useDeviceLookup } from "./use-device-lookup";
+
+type ProviderChildren = ComponentProps<typeof PlatformProvider>["children"];
 
 // #2048: the device row's operations through the lookup hook. fetch is the
 // stub, the boundary the browser crosses, answering with the envelopes the
@@ -40,8 +42,9 @@ describe("useDeviceLookup", () => {
       fetch: fetchMock,
       retry: { maxRetries: 0 },
     });
+    // The SDK resolves its own @types/react: type children as its provider does.
     const wrapper = ({ children }: { children: ReactNode }) => (
-      <PlatformProvider client={client}>{children}</PlatformProvider>
+      <PlatformProvider client={client}>{children as ProviderChildren}</PlatformProvider>
     );
     return renderHook(() => useDeviceLookup(), { wrapper });
   }

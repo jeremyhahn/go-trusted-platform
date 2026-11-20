@@ -37,6 +37,7 @@ export interface DeviceLookup {
   attestDevice: UseMutationResult<DeviceAttestResponse, DeviceAttestVariables>;
   activateDevice: UseMutationResult<ActivateDeviceResponse, ActivateDeviceRequest>;
   getDeviceProfile: UseMutationResult<DeviceSelfServiceProfile, void>;
+  getProfile: UseMutationResult<DeviceProfile, string>;
   findProfileByMAC: UseMutationResult<DeviceProfile, string>;
   findProfileBySerial: UseMutationResult<DeviceProfile, string>;
   findMatchingProfile: UseMutationResult<DeviceProfile, FindMatchingProfileRequest>;
@@ -89,6 +90,13 @@ export function useDeviceLookup(): DeviceLookup {
     () => deviceService.getDeviceProfile(),
     failed('Device profile failed')
   );
+  const getProfile = useMutation<DeviceProfile, string>(async (id: string) => {
+    // GET /device/profiles/{id} answers the flat ProfileFullResponse, not the
+    // `{ profile }` envelope GetProfileResponse declares: accept either.
+    const response = await deviceService.getProfile(id);
+    const data = response.data as (DeviceProfile & { profile?: DeviceProfile }) | undefined;
+    return { ...response, data: data?.profile ?? data };
+  }, failed('Profile lookup failed'));
   const findProfileByMAC = useMutation(
     (mac: string) => deviceService.findProfileByMACAddress(mac),
     failed('Profile lookup failed')
@@ -114,6 +122,7 @@ export function useDeviceLookup(): DeviceLookup {
     attestDevice,
     activateDevice,
     getDeviceProfile,
+    getProfile,
     findProfileByMAC,
     findProfileBySerial,
     findMatchingProfile,
