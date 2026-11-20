@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -1426,6 +1427,8 @@ func TestPXEGRPCServiceFromConfig_DaemonPXESection(t *testing.T) {
 // the zone flow manager sets.
 type pxeRecordingPort struct {
 	vlans []int64
+	// flows records every rule installed, in order.
+	flows []zoneflows.FlowRule
 	// fail makes every flow and VLAN move fail, as an unreachable switch.
 	fail bool
 }
@@ -1433,10 +1436,11 @@ type pxeRecordingPort struct {
 var errPXEPortDown = errors.New("switch unreachable")
 
 func (p *pxeRecordingPort) InstallFlow(string, int, string, string) error { return nil }
-func (p *pxeRecordingPort) InstallFlows(string, []zoneflows.FlowRule) error {
+func (p *pxeRecordingPort) InstallFlows(_ string, rules []zoneflows.FlowRule) error {
 	if p.fail {
 		return errPXEPortDown
 	}
+	p.flows = append(p.flows, rules...)
 	return nil
 }
 func (p *pxeRecordingPort) DeleteFlow(string, string) error                              { return nil }
@@ -1646,6 +1650,38 @@ func TestPXEGRPC_UpdateStateFailsWhenTheVLANMoveFails(t *testing.T) {
 	got, err := svc.GetDevice(ctx, &platformv1.GetPXEDeviceRequest{DeviceId: deviceID})
 	require.NoError(t, err)
 	assert.Equal(t, platformv1.ProvisioningState_PROVISIONING_STATE_DISCOVERED, got.GetDevice().GetState())
+}
+
+// TestPXEGRPC_BootingAllowsTheIPXEHTTPPort checks that moving a device to
+// booting on the configured backend installs an allow rule for the iPXE
+// server's HTTP port, from which the device fetches its boot script and
+// payloads (docs/SPEC.md provisioning ports, #1694).
+func TestPXEGRPC_BootingAllowsTheIPXEHTTPPort(t *testing.T) {
+	ctx := context.Background()
+	port := &pxeRecordingPort{}
+	svc, err := pxeGRPCServiceFromConfig(ctx, logging.DefaultLogger(), pxeSectionApp(), pxeEnabledSection(t), pxeTestFlowManager(t, port))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+
+	reg, err := svc.RegisterDevice(ctx, &platformv1.RegisterPXEDeviceRequest{MacAddress: "00:11:22:33:44:de", PortId: "port-1"})
+	require.NoError(t, err)
+
+	port.flows = nil
+	_, err = svc.UpdateState(ctx, &platformv1.UpdatePXEStateRequest{
+		DeviceId: reg.GetDevice().GetId(),
+		State:    platformv1.ProvisioningState_PROVISIONING_STATE_BOOTING,
+		Reason:   "boot",
+	})
+	require.NoError(t, err)
+
+	want := fmt.Sprintf("tp_dst=%d", ipxe.DefaultHTTPPort)
+	allowed := false
+	for _, f := range port.flows {
+		if strings.Contains(f.Match, "nw_proto=6") && strings.Contains(f.Match, want) && f.Actions != "drop" {
+			allowed = true
+		}
+	}
+	assert.True(t, allowed, "no provisioning allow rule for the iPXE HTTP port %d", ipxe.DefaultHTTPPort)
 }
 
 // pxeBlockingVLAN blocks ApplyQuarantineFlows until release is closed.
