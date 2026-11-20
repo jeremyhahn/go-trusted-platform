@@ -14,15 +14,35 @@
 package router
 
 import (
+	"bytes"
+	"encoding/json"
+	"io"
+	"net/http"
+
 	"github.com/gorilla/mux"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/bmc"
+	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/middleware"
 )
+
+// BMC operation scopes. Each REST route takes the scope its gRPC twin takes
+// in pkg/api/grpc/method_permissions.go (#2021).
+const (
+	bmcReadScope  = "bmc:read"
+	bmcWriteScope = "bmc:write"
+	bmcPowerScope = "bmc:power"
+	bmcMediaScope = "bmc:media"
+	bmcAdminScope = "bmc:admin"
+)
+
+// maxPowerActionBody bounds the power request body read by the scope check.
+const maxPowerActionBody = 64 << 10
 
 // BMCRouter handles BMC-related routes including power control, boot device
 // management, virtual media, sensors, system info, certificate management,
 // user management, and bare metal provisioning.
 type BMCRouter struct {
-	handler bmc.RestHandler
+	handler         bmc.RestHandler
+	scopeAuthorizer middleware.ScopeAuthorizer
 	WebServiceRouter
 }
 
@@ -49,80 +69,129 @@ type BMCRouter struct {
 // in pkg/webservice/v1) will fail if this is mounted ungated — but only once
 // it is mounted, and only if the suite is run before pushing. This comment
 // exists so the gate is the obvious move rather than the correction.
-func NewBMCRouter(handler bmc.RestHandler) WebServiceRouter {
+func NewBMCRouter(handler bmc.RestHandler) *BMCRouter {
 	return &BMCRouter{
 		handler: handler,
 	}
 }
 
+// SetScopeAuthorizer enables per-route operation scope checks. With none
+// configured (legacy JWT auth) the routes are gated by role and tenant only.
+func (r *BMCRouter) SetScopeAuthorizer(authorizer middleware.ScopeAuthorizer) {
+	r.scopeAuthorizer = authorizer
+}
+
+// requireScope wraps handler in the scope check when one is configured.
+func (r *BMCRouter) requireScope(scope string, handler http.HandlerFunc) http.Handler {
+	if r.scopeAuthorizer == nil {
+		return handler
+	}
+	return r.scopeAuthorizer.RequireScope(scope)(handler)
+}
+
+// powerActionScope requires the scope of the gRPC RPC the requested action
+// maps to: bmc:write for "on" (PowerOn), bmc:power for everything else
+// (PowerOff, PowerReset, PowerCycle, and any unknown, empty or undecodable
+// action, failing closed). The body is restored so the handler decodes it
+// unchanged.
+func (r *BMCRouter) powerActionScope(handler http.HandlerFunc) http.Handler {
+	if r.scopeAuthorizer == nil {
+		return handler
+	}
+	writeGate := r.scopeAuthorizer.RequireScope(bmcWriteScope)(handler)
+	powerGate := r.scopeAuthorizer.RequireScope(bmcPowerScope)(handler)
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		var buf []byte
+		if req.Body != nil {
+			read, err := io.ReadAll(io.LimitReader(req.Body, maxPowerActionBody))
+			if err != nil {
+				read = nil
+			}
+			buf = read
+			req.Body = io.NopCloser(bytes.NewReader(buf))
+		}
+		var action bmc.PowerActionRequest
+		if json.Unmarshal(buf, &action) == nil && action.Action == "on" {
+			writeGate.ServeHTTP(w, req)
+			return
+		}
+		powerGate.ServeHTTP(w, req)
+	})
+}
+
 // RegisterRoutes registers all BMC routes on the provided router.
 func (r *BMCRouter) RegisterRoutes(router *mux.Router) {
+	const (
+		profile = "/bmc/{profileID:[0-9]+}"
+		slot    = profile + "/users/{slot:[0-9]+}"
+	)
+
 	// Power management
 	// POST /api/v1/bmc/{profileID}/power - Execute power action (on, off, reset, cycle)
-	router.HandleFunc("/bmc/{profileID:[0-9]+}/power", r.handler.PowerAction).Methods("POST")
+	router.Handle(profile+"/power", r.powerActionScope(r.handler.PowerAction)).Methods("POST")
 
 	// GET /api/v1/bmc/{profileID}/power - Get power status
-	router.HandleFunc("/bmc/{profileID:[0-9]+}/power", r.handler.PowerStatus).Methods("GET")
+	router.Handle(profile+"/power", r.requireScope(bmcReadScope, r.handler.PowerStatus)).Methods("GET")
 
 	// Boot device management
 	// POST /api/v1/bmc/{profileID}/boot-device - Set boot device
-	router.HandleFunc("/bmc/{profileID:[0-9]+}/boot-device", r.handler.SetBootDevice).Methods("POST")
+	router.Handle(profile+"/boot-device", r.requireScope(bmcWriteScope, r.handler.SetBootDevice)).Methods("POST")
 
 	// GET /api/v1/bmc/{profileID}/boot-device - Get boot device
-	router.HandleFunc("/bmc/{profileID:[0-9]+}/boot-device", r.handler.GetBootDevice).Methods("GET")
+	router.Handle(profile+"/boot-device", r.requireScope(bmcReadScope, r.handler.GetBootDevice)).Methods("GET")
 
 	// Virtual media management
 	// POST /api/v1/bmc/{profileID}/virtual-media - Mount ISO
-	router.HandleFunc("/bmc/{profileID:[0-9]+}/virtual-media", r.handler.MountISO).Methods("POST")
+	router.Handle(profile+"/virtual-media", r.requireScope(bmcMediaScope, r.handler.MountISO)).Methods("POST")
 
 	// DELETE /api/v1/bmc/{profileID}/virtual-media - Unmount ISO
-	router.HandleFunc("/bmc/{profileID:[0-9]+}/virtual-media", r.handler.UnmountISO).Methods("DELETE")
+	router.Handle(profile+"/virtual-media", r.requireScope(bmcMediaScope, r.handler.UnmountISO)).Methods("DELETE")
 
 	// GET /api/v1/bmc/{profileID}/virtual-media - Get virtual media status
-	router.HandleFunc("/bmc/{profileID:[0-9]+}/virtual-media", r.handler.VirtualMediaStatus).Methods("GET")
+	router.Handle(profile+"/virtual-media", r.requireScope(bmcReadScope, r.handler.VirtualMediaStatus)).Methods("GET")
 
 	// Hardware information
 	// GET /api/v1/bmc/{profileID}/sensors - Get sensor readings
-	router.HandleFunc("/bmc/{profileID:[0-9]+}/sensors", r.handler.GetSensors).Methods("GET")
+	router.Handle(profile+"/sensors", r.requireScope(bmcReadScope, r.handler.GetSensors)).Methods("GET")
 
 	// GET /api/v1/bmc/{profileID}/system-info - Get system info
-	router.HandleFunc("/bmc/{profileID:[0-9]+}/system-info", r.handler.GetSystemInfo).Methods("GET")
+	router.Handle(profile+"/system-info", r.requireScope(bmcReadScope, r.handler.GetSystemInfo)).Methods("GET")
 
 	// Bare metal provisioning
 	// POST /api/v1/bmc/{profileID}/provision - Trigger provisioning
-	router.HandleFunc("/bmc/{profileID:[0-9]+}/provision", r.handler.Provision).Methods("POST")
+	router.Handle(profile+"/provision", r.requireScope(bmcAdminScope, r.handler.Provision)).Methods("POST")
 
 	// GET /api/v1/bmc/{profileID}/provision - Get provisioning status
-	router.HandleFunc("/bmc/{profileID:[0-9]+}/provision", r.handler.ProvisionStatus).Methods("GET")
+	router.Handle(profile+"/provision", r.requireScope(bmcReadScope, r.handler.ProvisionStatus)).Methods("GET")
 
 	// Enrollment
 	// POST /api/v1/bmc/{profileID}/enroll - Enroll the BMC with the platform CA
-	router.HandleFunc("/bmc/{profileID:[0-9]+}/enroll", r.handler.EnrollBMC).Methods("POST")
+	router.Handle(profile+"/enroll", r.requireScope(bmcAdminScope, r.handler.EnrollBMC)).Methods("POST")
 
 	// Certificate management
 	// POST /api/v1/bmc/{profileID}/cert/restore - Restore the BMC web certificate.
 	// Registered before the /cert routes, as the daemon REST server does.
-	router.HandleFunc("/bmc/{profileID:[0-9]+}/cert/restore", r.handler.RestoreBMC).Methods("POST")
+	router.Handle(profile+"/cert/restore", r.requireScope(bmcAdminScope, r.handler.RestoreBMC)).Methods("POST")
 
 	// GET /api/v1/bmc/{profileID}/cert - Get web TLS certificate metadata
-	router.HandleFunc("/bmc/{profileID:[0-9]+}/cert", r.handler.GetWebCertificate).Methods("GET")
+	router.Handle(profile+"/cert", r.requireScope(bmcReadScope, r.handler.GetWebCertificate)).Methods("GET")
 
 	// PUT /api/v1/bmc/{profileID}/cert - Replace web TLS certificate and key
-	router.HandleFunc("/bmc/{profileID:[0-9]+}/cert", r.handler.ReplaceWebCertificate).Methods("PUT")
+	router.Handle(profile+"/cert", r.requireScope(bmcAdminScope, r.handler.ReplaceWebCertificate)).Methods("PUT")
 
 	// User management
 	// GET /api/v1/bmc/{profileID}/users - List BMC user accounts
-	router.HandleFunc("/bmc/{profileID:[0-9]+}/users", r.handler.ListUsers).Methods("GET")
+	router.Handle(profile+"/users", r.requireScope(bmcReadScope, r.handler.ListUsers)).Methods("GET")
 
 	// POST /api/v1/bmc/{profileID}/users - Create a new BMC user account
-	router.HandleFunc("/bmc/{profileID:[0-9]+}/users", r.handler.CreateUser).Methods("POST")
+	router.Handle(profile+"/users", r.requireScope(bmcAdminScope, r.handler.CreateUser)).Methods("POST")
 
 	// DELETE /api/v1/bmc/{profileID}/users/{slot} - Delete the user occupying a slot
-	router.HandleFunc("/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}", r.handler.DeleteUser).Methods("DELETE")
+	router.Handle(slot, r.requireScope(bmcAdminScope, r.handler.DeleteUser)).Methods("DELETE")
 
 	// PUT /api/v1/bmc/{profileID}/users/{slot}/password - Update user password
-	router.HandleFunc("/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/password", r.handler.SetUserPassword).Methods("PUT")
+	router.Handle(slot+"/password", r.requireScope(bmcAdminScope, r.handler.SetUserPassword)).Methods("PUT")
 
 	// PUT /api/v1/bmc/{profileID}/users/{slot}/privilege - Update user privilege
-	router.HandleFunc("/bmc/{profileID:[0-9]+}/users/{slot:[0-9]+}/privilege", r.handler.SetUserPrivilege).Methods("PUT")
+	router.Handle(slot+"/privilege", r.requireScope(bmcAdminScope, r.handler.SetUserPrivilege)).Methods("PUT")
 }

@@ -737,7 +737,13 @@ func (v1Router *Router) bmcRoutes() {
 	group := v1Router.router.NewRoute().Subrouter()
 	group.Use(v1Router.roleGate([]string{common.ROLE_ADMIN})...)
 	group.Use(v1Router.bmcProfileTenantGate)
-	router.NewBMCRouter(h).RegisterRoutes(group)
+	bmcRouter := router.NewBMCRouter(h)
+	// Under platform-token auth each route also takes the operation scope
+	// of its gRPC twin (#2021), as the device routes do.
+	if scoped, ok := v1Router.authMiddleware().(middleware.ScopeAuthorizer); ok {
+		bmcRouter.SetScopeAuthorizer(scoped)
+	}
+	bmcRouter.RegisterRoutes(group)
 }
 
 // bmcProfileTenantGate admits a BMC request only when the session's tenant
