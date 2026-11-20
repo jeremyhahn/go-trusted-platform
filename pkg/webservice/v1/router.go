@@ -45,6 +45,7 @@ import (
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/kms"
 	restntp "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/ntp"
 	restoverlay "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/overlay"
+	restproxy "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/proxy"
 	restpxe "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/pxe"
 	restregistry "github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/registry"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/rest/sdn"
@@ -217,6 +218,7 @@ func (v1Router *Router) RegisterRoutes(router *mux.Router) {
 	v1Router.kmsRoutes()
 	v1Router.overlayRoutes()
 	v1Router.ntpRoutes()
+	v1Router.proxyRoutes()
 	v1Router.vpnRoutes()
 	v1Router.appServiceRoutes()
 	v1Router.pxeRoutes()
@@ -906,6 +908,21 @@ func (v1Router *Router) ntpRoutes() {
 	// wrong fails attestation, ACME issuance and token validation without
 	// any of those failures naming the clock (docs/ntp/user.md), which
 	// makes an anonymous stepper a denial-of-service primitive.
+	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
+}
+
+func (v1Router *Router) proxyRoutes() {
+	server := v1Router.restHandlerRegistry.ProxyServiceServer()
+	if server == nil {
+		v1Router.logger.Debug("Proxy service server is nil - proxy routes not registered")
+		return
+	}
+	r := restproxy.NewProxyRouter(
+		v1Router.logger,
+		server,
+		v1Router.responseWriter)
+	// The route and pool store decides where every gatewayd forwards
+	// traffic and which auth a route demands: admin only.
 	r.RegisterRoutes(v1Router.gated(common.ROLE_ADMIN))
 }
 

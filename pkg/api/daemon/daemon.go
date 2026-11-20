@@ -3259,6 +3259,12 @@ func (d *Daemon) NTPGRPCServiceServer() *NTPGRPCService {
 	return d.ntpGRPCService
 }
 
+// ProxyGRPCServiceServer returns the proxy gRPC service backing /api/v1/proxy.
+// Returns nil if not configured.
+func (d *Daemon) ProxyGRPCServiceServer() *grpccreds.ProxyGRPCService {
+	return d.proxyGRPCService
+}
+
 // VPNGRPCServiceServer returns the VPN gRPC service backing /api/v1/vpn.
 func (d *Daemon) VPNGRPCServiceServer() *VPNGRPCService {
 	return d.vpnGRPCService

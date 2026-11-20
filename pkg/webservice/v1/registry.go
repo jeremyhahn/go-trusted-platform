@@ -812,6 +812,7 @@ type RestHandlerRegistry interface {
 	PXEServiceServer() platformv1.PXEServiceServer
 	PXEWebhookEnabled() bool
 	NTPServiceServer() platformv1.NTPServiceServer
+	ProxyServiceServer() platformv1.ProxyServiceServer
 	VPNServiceServer() platformv1.VPNServiceServer
 	AppServiceServers() restapi.AppServiceServers
 	RegistryService() grpcapi.RegistryService
@@ -1041,7 +1042,10 @@ type RegistryParams struct {
 	// daemon sets it today, so the route is not served.
 	PXEWebhookEnabled bool
 	NTPServiceServer  platformv1.NTPServiceServer
-	VPNServiceServer  platformv1.VPNServiceServer
+	// ProxyServiceServer backs /api/v1/proxy (reverse-proxy routes and
+	// pools); nil leaves those routes unregistered.
+	ProxyServiceServer platformv1.ProxyServiceServer
+	VPNServiceServer   platformv1.VPNServiceServer
 	// AppServiceServers are the daemon's Cache, Scheduler, Messaging and
 	// ObjectStorage servers, the instances behind every other transport.
 	AppServiceServers restapi.AppServiceServers
@@ -2117,6 +2121,11 @@ func (registry *HandlerRegistry) PXEWebhookEnabled() bool {
 // NTPServiceServer returns the in-process NTPService gRPC implementation, or nil.
 func (registry *HandlerRegistry) NTPServiceServer() platformv1.NTPServiceServer {
 	return registry.params.NTPServiceServer
+}
+
+// ProxyServiceServer returns the in-process ProxyService gRPC implementation, or nil.
+func (registry *HandlerRegistry) ProxyServiceServer() platformv1.ProxyServiceServer {
+	return registry.params.ProxyServiceServer
 }
 
 // VPNServiceServer returns the in-process VPNService gRPC implementation, or nil.
