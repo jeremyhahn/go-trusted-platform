@@ -52,6 +52,10 @@ func (f *fakeIncomingReceiver) Abort(context.Context) error {
 	return f.abortErr
 }
 
+func (f *fakeIncomingReceiver) Transferring(context.Context) (bool, error) { return false, nil }
+
+func (f *fakeIncomingReceiver) VM() *qemu.VM { return nil }
+
 // fakeServerTLS satisfies BOTH the source (MigrationTLSProvider) and the
 // destination (MigrationServerTLSProvider) migration TLS seams, mirroring the
 // production caMigrationTLS concrete.
@@ -184,6 +188,10 @@ func (s *signalReceiver) Abort(context.Context) error {
 	s.once.Do(func() { close(s.abortedC) })
 	return nil
 }
+
+func (s *signalReceiver) Transferring(context.Context) (bool, error) { return false, nil }
+
+func (s *signalReceiver) VM() *qemu.VM { return nil }
 
 // signalServerTLS counts and signals the release of the receiver's creds.
 type signalServerTLS struct {

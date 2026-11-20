@@ -202,9 +202,10 @@ func TestFinalizeIncoming_AdoptedGuestStopsAndCloses(t *testing.T) {
 	require.NoError(t, orch.FinalizeIncoming(ctx, handle.ReceiverID, true))
 
 	// The guest's QEMU is not running, so the stop cannot power it off: it
-	// answers with an error, and the delete that stops first refuses.
-	assert.NotPanics(t, func() { _ = orch.Stop(ctx, "src-vm-1") })
-	assert.NotPanics(t, func() { _ = orch.Delete(ctx, "src-vm-1") })
+	// answers with an error and marks the instance in error, after which the
+	// delete removes it.
+	assert.NotPanics(t, func() { assert.Error(t, orch.Stop(ctx, "src-vm-1")) })
+	assert.NotPanics(t, func() { assert.NoError(t, orch.Delete(ctx, "src-vm-1")) })
 	assert.NotPanics(t, func() { assert.NoError(t, orch.Close()) })
 }
 
