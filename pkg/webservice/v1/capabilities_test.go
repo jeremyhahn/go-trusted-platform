@@ -7,12 +7,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/require"
 
 	"github.com/jeremyhahn/go-trusted-platform/pkg/webservice/v1/response"
+	platformv1 "github.com/jeremyhahn/go-trusted-platform/sdk/go/gen"
 )
 
 // decodeCapabilities reads the platform envelope and indexes the
@@ -153,4 +155,73 @@ func TestCapabilities_RegisterRoutesRequiresAnAuthenticatedCaller(t *testing.T) 
 	require.True(t, found, "the quicbaas stub routes are missing")
 	require.False(t, stub.Enabled)
 	require.Equal(t, CapabilityReasonBlockedIntegration, stub.Reason)
+}
+
+// ownershipFixture mounts the production gateway and sdn routes with the
+// SDN service nil and the gateway configured, plus a nil-backend platform
+// service beside the always-mounted /platform/service-registry endpoint.
+func ownershipFixture(t *testing.T) *mux.Router {
+	t.Helper()
+	logger := testLogger()
+	writer := response.NewResponseWriter(logger, nil)
+	root := mux.NewRouter()
+	api := root.PathPrefix("/api/v1").Subrouter()
+	v1Router := &Router{
+		logger:         logger,
+		responseWriter: writer,
+		router:         api,
+		restHandlerRegistry: &fakeSDNGatewayRegistry{
+			gateway: &platformv1.UnimplementedGatewayServiceServer{},
+			writer:  writer,
+		},
+		serviceRegistry: NewServiceRegistry(logger, writer),
+	}
+	v1Router.gatewayRoutes()
+	v1Router.sdnRoutes()
+	v1Router.serviceRegistry.RegisterStatusEndpoint(api)
+	v1Router.serviceRegistry.requireService(api, "platform", "/platform", nil, func() {
+		t.Fatal("a nil platform backend must not register its routes")
+	})
+	registerCapabilitiesEndpoint(api, v1Router.serviceRegistry, nil, writer, nil)
+	return root
+}
+
+func TestCapabilities_GatewayIPAMEnabledWhenSDNIsNil(t *testing.T) {
+	caps := getCapabilities(t, ownershipFixture(t))
+
+	ipam := 0
+	for op, c := range caps {
+		if c.Kind != CapabilityKindRoute || !strings.Contains(op, " /api/v1/sdn/gateway/ipam/") {
+			continue
+		}
+		ipam++
+		require.Truef(t, c.Enabled, "gateway IPAM route %q listed disabled (%s)", op, c.Reason)
+		require.Empty(t, c.Reason)
+	}
+	require.NotZero(t, ipam, "the gateway IPAM routes are missing")
+}
+
+func TestCapabilities_ServiceRegistryEnabledWhenPlatformIsNil(t *testing.T) {
+	caps := getCapabilities(t, ownershipFixture(t))
+
+	status, found := caps["GET /api/v1/platform/service-registry"]
+	require.True(t, found, "/platform/service-registry is missing")
+	require.Truef(t, status.Enabled, "/platform/service-registry listed disabled (%s)", status.Reason)
+}
+
+func TestCapabilities_UnavailableHandlerRoutesStayDisabled(t *testing.T) {
+	caps := getCapabilities(t, ownershipFixture(t))
+
+	for _, name := range []string{"sdn", "platform"} {
+		dark := 0
+		for op, c := range caps {
+			if c.Kind != CapabilityKindRoute || c.Reason != CapabilityReasonNotConfigured+name {
+				continue
+			}
+			dark++
+			require.Falsef(t, c.Enabled, "dark %s route %q listed enabled", name, op)
+			require.Equal(t, name, c.Service)
+		}
+		require.NotZerof(t, dark, "the %s 503 catch-alls are not listed not-configured", name)
+	}
 }
