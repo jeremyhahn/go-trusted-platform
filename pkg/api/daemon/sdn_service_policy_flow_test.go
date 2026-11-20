@@ -120,11 +120,16 @@ func TestSDNService_ApplyPolicy_FailsWhenAFlowIsNotInstalled(t *testing.T) {
 	assert.Equal(t, codes.Internal, status.Code(err))
 
 	deletes := mock.GetCalls("DeleteFlowStrict")
-	require.Len(t, deletes, 1, "the first rule's flow must be removed")
+	// The first rule's flow, and the second's: its AddFlow error does not
+	// prove the switch refused it (#2021 Codex r1).
+	require.Len(t, deletes, 2, "every attempted flow must be removed")
 	require.Len(t, installed, 1)
 	removed, ok := deletes[0].Args[1].(*ovs.FlowMod)
 	require.True(t, ok)
 	assert.Equal(t, installed[0].Match, removed.Match)
+	uncertain, ok := deletes[1].Args[1].(*ovs.FlowMod)
+	require.True(t, ok)
+	assert.Equal(t, "udp,tp_dst=53", uncertain.Match)
 
 	list, err := svc.ListPolicies(context.Background(), &platformv1.ListPoliciesRequest{})
 	require.NoError(t, err)

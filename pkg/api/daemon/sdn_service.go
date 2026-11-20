@@ -51,6 +51,9 @@ type SDNService struct {
 	taps     map[string]*tapResource
 	vlans    map[string]*vlanResource
 	policies map[string]*policyResource
+	// policySeq numbers policy applies, so a rollback can tell which of
+	// two policies with the same flow entry was applied last.
+	policySeq uint64
 }
 
 type bridgeResource struct {
@@ -100,6 +103,9 @@ type policyResource struct {
 	updatedAt   time.Time
 	// flowIDs tracks OpenFlow rules installed for this policy
 	flowIDs []string
+	// applySeq is SDNService.policySeq at this policy's last apply: of two
+	// policies with the same flow entry, the higher one's entry is in force.
+	applySeq uint64
 }
 
 // SDNServiceOption is a functional option for configuring the SDNService
@@ -1174,13 +1180,9 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 	client := s.getOVSClient()
 
 	// Install OpenFlow rules for each target bridge without holding the lock.
-	// A flow the switch refuses fails the apply: the flows this call already
-	// installed are removed and no policy is recorded.
-	type installedFlow struct {
-		bridge string
-		flow   *ovs.FlowMod
-	}
-	var installed []installedFlow
+	// A flow the switch refuses fails the apply: the flows this call
+	// attempted are removed and no policy is recorded.
+	var attempted []attemptedFlow
 	var flowIDs []string
 	// The policy this call updates, if any: a failed update restores its flows.
 	s.mu.RLock()
@@ -1198,27 +1200,14 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 
 		for i, rule := range config.GetRules() {
 			flowMod := flowMods[i]
+			// Record the flow before the call: an AddFlow error does not
+			// prove the switch refused it (the flow-mod is written before
+			// its barrier is awaited), so the rollback removes it too.
+			attempted = append(attempted, attemptedFlow{bridge: bridgeName, flow: flowMod})
 			if err := client.AddFlow(ctx, bridgeName, flowMod); err != nil {
-				removed := make(map[flowEntryKey]bool, len(installed))
-				for _, f := range installed {
-					_ = client.DeleteFlowStrict(ctx, f.bridge, f.flow)
-					removed[newFlowEntryKey(f.bridge, f.flow)] = true
-				}
-				// An update's AddFlow replaced the previous policy's flow with
-				// the same match, and the delete above removed it: put the
-				// previous policy's flows back so it stays enforced.
-				if old != nil && !s.restorePolicyFlows(ctx, client, old) {
-					s.mu.Lock()
-					old.status = "error"
-					s.mu.Unlock()
-				}
-				// A flow this call installed may also have replaced another
-				// policy's entry with the same table, priority and match: put
-				// those entries back so that policy stays enforced.
-				s.restoreOverwrittenFlows(ctx, client, policyID, removed)
+				s.rollbackPolicyApply(ctx, client, policyID, old, attempted)
 				return nil, status.Errorf(codes.Internal, "install flow for rule %q on bridge %q: %v", rule.GetRuleId(), bridgeName, err)
 			}
-			installed = append(installed, installedFlow{bridge: bridgeName, flow: flowMod})
 			flowID := fmt.Sprintf("policy-%s-rule-%s-%s", policyID, rule.GetRuleId(), uuid.NewString())
 			flowIDs = append(flowIDs, flowID)
 		}
@@ -1228,7 +1217,9 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 
 	// Track the policy under write lock
 	s.mu.Lock()
+	s.policySeq++
 	s.policies[policyID] = &policyResource{
+		applySeq:    s.policySeq,
 		id:          policyID,
 		name:        config.GetName(),
 		description: config.GetDescription(),
@@ -1259,28 +1250,62 @@ func (s *SDNService) ApplyPolicy(ctx context.Context, req *platformv1.ApplyPolic
 // restorePolicyFlows re-installs a recorded policy's flows on its bridge
 // targets, after a failed update's rollback deleted the flows that had
 // replaced them. It reports whether every flow was installed.
-func (s *SDNService) restorePolicyFlows(ctx context.Context, client ovs.ClientInterface, p *policyResource) bool {
-	ok := true
-	for _, target := range p.targets {
-		if target.GetType() != platformv1.PolicyTargetType_POLICY_TARGET_TYPE_BRIDGE {
-			continue
-		}
-		bridgeName, found := s.findBridgeName(target.GetId())
-		if !found {
-			continue
-		}
-		for _, rule := range p.rules {
-			flowMod, err := s.policyRuleToFlowMod(rule, p.priority)
-			if err != nil {
-				ok = false
+// policyRollbackTimeout bounds the flow clean-up after a failed apply.
+const policyRollbackTimeout = 30 * time.Second
+
+// attemptedFlow is a flow an apply sent to a bridge, whether or not the
+// switch confirmed it.
+type attemptedFlow struct {
+	bridge string
+	flow   *ovs.FlowMod
+}
+
+// rollbackPolicyApply undoes a failed apply of policyID: it deletes every
+// flow the apply attempted (including the one whose AddFlow failed) and
+// re-installs the entries those flows may have replaced, the previous
+// version of the policy (old, nil for a new policy) included.
+
+func (s *SDNService) rollbackPolicyApply(ctx context.Context, client ovs.ClientInterface, policyID string, old *policyResource, attempted []attemptedFlow) {
+	// The request may already be cancelled (a barrier timeout often is the
+	// caller going away): clean up on a context of its own, bounded.
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), policyRollbackTimeout)
+	defer cancel()
+
+	removed := make(map[flowEntryKey]bool, len(attempted))
+	for _, f := range attempted {
+		_ = client.DeleteFlowStrict(cctx, f.bridge, f.flow)
+		removed[newFlowEntryKey(f.bridge, f.flow)] = true
+	}
+
+	skipID := policyID
+	if old != nil {
+		// An update's flows replaced the previous policy's flows with the
+		// same match: every entry of the previous policy goes back, in
+		// apply order with the other policies sharing its entries.
+		skipID = ""
+		for _, target := range old.targets {
+			if target.GetType() != platformv1.PolicyTargetType_POLICY_TARGET_TYPE_BRIDGE {
 				continue
 			}
-			if err := client.AddFlow(ctx, bridgeName, flowMod); err != nil {
-				ok = false
+			bridgeName, found := s.findBridgeName(target.GetId())
+			if !found {
+				continue
+			}
+			for _, rule := range old.rules {
+				flowMod, err := s.policyRuleToFlowMod(rule, old.priority)
+				if err != nil {
+					s.mu.Lock()
+					old.status = "error"
+					s.mu.Unlock()
+					continue
+				}
+				removed[newFlowEntryKey(bridgeName, flowMod)] = true
 			}
 		}
 	}
-	return ok
+	// A flow this call attempted may also have replaced another policy's
+	// entry with the same table, priority and match: put those back.
+	s.restoreOverwrittenFlows(cctx, client, skipID, removed)
 }
 
 // flowEntryKey identifies a switch entry: OpenFlow keeps one flow per bridge,
@@ -1374,6 +1399,14 @@ func (s *SDNService) restoreOverwrittenFlows(ctx context.Context, client ovs.Cli
 			others = append(others, p)
 		}
 	}
+	// Map order is random: walk the policies in the order they were applied,
+	// so of two policies with the same entry the later one's is restored.
+	sort.SliceStable(others, func(i, j int) bool {
+		if others[i].applySeq != others[j].applySeq {
+			return others[i].applySeq < others[j].applySeq
+		}
+		return others[i].id < others[j].id
+	})
 	s.mu.RUnlock()
 
 	// findBridgeName takes s.mu itself, so resolve outside the lock.
@@ -1397,7 +1430,16 @@ func (s *SDNService) restoreOverwrittenFlows(ctx context.Context, client ovs.Cli
 		}
 	}
 
-	for _, r := range restores {
+	// Per entry, only the last applied policy's flow was in force: install
+	// that one alone, in apply order.
+	latest := make(map[flowEntryKey]int, len(restores))
+	for i, r := range restores {
+		latest[newFlowEntryKey(r.bridge, r.flow)] = i
+	}
+	for i, r := range restores {
+		if latest[newFlowEntryKey(r.bridge, r.flow)] != i {
+			continue
+		}
 		if err := client.AddFlow(ctx, r.bridge, r.flow); err != nil {
 			s.mu.Lock()
 			r.p.status = "error"
