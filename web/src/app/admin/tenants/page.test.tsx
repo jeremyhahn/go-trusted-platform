@@ -104,3 +104,72 @@ describe("AdminTenantsPage delete", () => {
     expect(screen.getByTestId("tenant-page-info").textContent).toBe("Showing 1-1 of 1");
   });
 });
+
+// #2023 Codex round 1: Find stays enabled while a lookup is pending, so a
+// superseded lookup that settles last must not replace the latest result.
+describe("AdminTenantsPage find by name", () => {
+  type Lookup = { success: boolean; data?: { tenant: Record<string, unknown> }; error?: { message: string } };
+
+  function deferredLookups() {
+    const resolvers = new Map<string, (r: Lookup) => void>();
+    tenantSvc.getTenantByName.mockImplementation(
+      (name: string) => new Promise<Lookup>((resolve) => resolvers.set(name, resolve)),
+    );
+    return resolvers;
+  }
+
+  async function search(name: string) {
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Tenant name"), { target: { value: name } });
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Find" }));
+    });
+  }
+
+  async function settle(resolve: ((r: Lookup) => void) | undefined, r: Lookup) {
+    await act(async () => {
+      resolve?.(r);
+    });
+  }
+
+  beforeEach(() => {
+    for (const fn of Object.values(tenantSvc)) fn.mockReset();
+    apiResult.data = { tenants: [], total: 0 };
+    apiResult.refetch.mockReset();
+    apiResult.refetch.mockResolvedValue(undefined);
+  });
+  afterEach(() => cleanup());
+
+  it("keeps the latest result when an earlier lookup succeeds last", async () => {
+    const resolvers = deferredLookups();
+    tenantSvc.deleteTenant.mockResolvedValue({ success: true, data: {} });
+    render(<AdminTenantsPage />);
+    await search("alpha");
+    await search("beta");
+    await settle(resolvers.get("beta"), { success: true, data: { tenant: initialTenants[1] } });
+    await settle(resolvers.get("alpha"), { success: true, data: { tenant: initialTenants[0] } });
+
+    const result = screen.getByTestId("search-result");
+    expect(within(result).getByTestId("tenant-row-t-2")).toBeTruthy();
+    expect(within(result).queryByTestId("tenant-row-t-1")).toBeNull();
+    await act(async () => {
+      fireEvent.click(within(result).getByRole("button", { name: "Delete" }));
+    });
+    await confirm();
+    expect(tenantSvc.deleteTenant).toHaveBeenCalledWith("t-2");
+  });
+
+  it("keeps the latest result when an earlier lookup fails last", async () => {
+    const resolvers = deferredLookups();
+    render(<AdminTenantsPage />);
+    await search("alpha");
+    await search("beta");
+    await settle(resolvers.get("beta"), { success: true, data: { tenant: initialTenants[1] } });
+    await settle(resolvers.get("alpha"), { success: false, error: { message: "alpha lookup failed" } });
+
+    const result = screen.getByTestId("search-result");
+    expect(within(result).getByTestId("tenant-row-t-2")).toBeTruthy();
+    expect(screen.getByTestId("action-result").textContent).toBe("");
+  });
+});
