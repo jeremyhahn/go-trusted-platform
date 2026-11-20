@@ -5,8 +5,9 @@
 // The values are predicted, not measured: each predictor replays the event
 // sequence the boot chain extends into one PCR (U-Boot's EFI TCG2 protocol,
 // then the Linux EFI stub) over the build's own inputs. Which PCRs the
-// manifest carries, and the exact event sequences, are settled by replaying
-// a live event log on the QEMU virt stand-in (docs/plans/669.md slice 5).
+// manifest carries, and the exact event sequences, are to be settled by
+// replaying a live event log on the QEMU virt stand-in (docs/plans/669.md
+// slice 5b, the follow-up PR).
 package measure
 
 import (

@@ -11,23 +11,27 @@ import (
 	"testing"
 )
 
-// liveEventLogPath is the firmware event log the kernel exposes, or the path
-// in DISKIMAGE_EVENTLOG (a log copied out of a booted x86 or QEMU aarch64
-// guest; CI runs this test under the eventlog_live tag on that guest).
-func liveEventLogPath() string {
+// givenEventLogPath is the firmware event log the test is given: the path in
+// DISKIMAGE_EVENTLOG (a log copied out of a booted guest), or else the
+// kernel's binary_bios_measurements.
+func givenEventLogPath() string {
 	if p := os.Getenv("DISKIMAGE_EVENTLOG"); p != "" {
 		return p
 	}
 	return "/sys/kernel/security/tpm0/binary_bios_measurements"
 }
 
-// TestLiveEventLogReplaysToItsPrediction parses a real firmware event log,
-// replays every bank it carries (PCR 0 seeded from its StartupLocality record)
-// and checks CheckEventLog accepts a prediction of the same records: the
-// parser and the replay agree with firmware's encoding, not only with the
-// fixtures (docs/SPEC.md:158, factory-image/architecture.md §8).
-func TestLiveEventLogReplaysToItsPrediction(t *testing.T) {
-	path := liveEventLogPath()
+// TestEventLogReplayAgreesWithCheckEventLog parses the firmware event log it
+// is given, replays every bank it carries (PCR 0 seeded from its
+// StartupLocality record) and checks CheckEventLog accepts that same replay.
+// It checks only that the parser, the replay and CheckEventLog agree on a
+// firmware-written log. It uses neither Predict nor a manifest, so it does
+// not check an image's predicted PCRs against a boot: that check is the
+// follow-up PR (row/669-live-eventlog) for the factory-image row of
+// docs/SPEC.md (factory-image/architecture.md §8). No CI job runs it; run it
+// with -tags eventlog_live and DISKIMAGE_EVENTLOG.
+func TestEventLogReplayAgreesWithCheckEventLog(t *testing.T) {
+	path := givenEventLogPath()
 	raw, err := os.ReadFile(path)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
