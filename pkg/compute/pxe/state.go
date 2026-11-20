@@ -245,11 +245,12 @@ func (sm *StateManager) Unregister(deviceID string) error {
 	// Delete the stored record first: if the datastore delete fails the
 	// device stays registered, so a later Unregister retries it instead of
 	// leaving a stale record that would restore the device on restart.
+	// storeMu stays held until the device is out of both maps, so a
+	// concurrent persist cannot Put the device back after the delete.
 	if sm.store != nil {
 		sm.storeMu.Lock()
-		err := sm.store.Delete(context.Background(), deviceID)
-		sm.storeMu.Unlock()
-		if err != nil {
+		defer sm.storeMu.Unlock()
+		if err := sm.store.Delete(context.Background(), deviceID); err != nil {
 			return fmt.Errorf("pxe: delete stored device %s: %w", deviceID, err)
 		}
 	}

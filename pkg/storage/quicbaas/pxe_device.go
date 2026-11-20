@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"hash/fnv"
 
+	sdktransport "github.com/jeremyhahn/go-quicbaas/sdk/go/transport"
+
 	"github.com/jeremyhahn/go-trusted-platform/pkg/compute/pxe"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/logging"
 	"github.com/jeremyhahn/go-trusted-platform/pkg/store/datastore"
@@ -46,10 +48,19 @@ var _ pxe.DeviceStore = (*PXEDeviceStore)(nil)
 
 // NewPXEDeviceStore returns a DeviceStore over storage.
 func NewPXEDeviceStore(storage Storage, tenantID string, logger *logging.Logger) (*PXEDeviceStore, error) {
+	if tenantID == "" {
+		return nil, errors.New("pxe device store: tenant ID is empty")
+	}
 	if logger == nil {
 		logger = logging.DefaultLogger()
 	}
 	return &PXEDeviceStore{storage: storage, tenantID: tenantID, logger: logger}, nil
+}
+
+// tenantContext scopes ctx to the store's tenant: PXE device records are
+// system-level and live in the system tenant (docs/SPEC.md:23).
+func (s *PXEDeviceStore) tenantContext(ctx context.Context) context.Context {
+	return sdktransport.ContextWithTenant(ctx, s.tenantID)
 }
 
 // pxeDeviceEntityID maps a PXE device ID to the datastore's numeric ID
@@ -69,7 +80,7 @@ func (s *PXEDeviceStore) Put(ctx context.Context, device *pxe.DeviceInfo) error 
 	if err != nil {
 		return fmt.Errorf("pxe device store: encode %s: %w", device.ID, err)
 	}
-	if err := s.storage.Put(ctx, entityTypePXEDevice, pxeDeviceEntityID(device.ID), data, s.shardID); err != nil {
+	if err := s.storage.Put(s.tenantContext(ctx), entityTypePXEDevice, pxeDeviceEntityID(device.ID), data, s.shardID); err != nil {
 		return fmt.Errorf("pxe device store: put %s: %w", device.ID, err)
 	}
 	return nil
@@ -77,7 +88,7 @@ func (s *PXEDeviceStore) Put(ctx context.Context, device *pxe.DeviceInfo) error 
 
 // Delete removes the record of deviceID.
 func (s *PXEDeviceStore) Delete(ctx context.Context, deviceID string) error {
-	if err := s.storage.Delete(ctx, entityTypePXEDevice, pxeDeviceEntityID(deviceID), s.shardID); err != nil {
+	if err := s.storage.Delete(s.tenantContext(ctx), entityTypePXEDevice, pxeDeviceEntityID(deviceID), s.shardID); err != nil {
 		return fmt.Errorf("pxe device store: delete %s: %w", deviceID, err)
 	}
 	return nil
@@ -90,6 +101,7 @@ func (s *PXEDeviceStore) List(ctx context.Context) ([]*pxe.DeviceInfo, error) {
 	// page token: it returns every record in one response but keeps the
 	// first batch's NextPageToken. So the walk stops on a token already
 	// sent or a page larger than the page size, and dedupes by ID.
+	ctx = s.tenantContext(ctx)
 	var devices []*pxe.DeviceInfo
 	seenIDs := make(map[string]struct{})
 	sentTokens := make(map[string]struct{})
