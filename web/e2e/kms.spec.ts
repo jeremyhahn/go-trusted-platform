@@ -828,14 +828,13 @@ test.describe('KMS (Key Management System)', () => {
 
       if (await actionButton.count() > 0) {
         await actionButton.click();
-        await page.waitForTimeout(300);
 
         // Try to click view details
         const viewDetails = page.getByRole('menuitem', { name: /view details/i });
-        const isVisible = await viewDetails.isVisible().catch(() => false);
+        const isVisible = await viewDetails.waitFor({ state: 'visible', timeout: 3000 }).then(() => true, () => false);
         if (isVisible) {
           await viewDetails.click();
-          await page.waitForTimeout(500);
+          await page.waitForURL(/\/kms\/test-key/, { timeout: 5000 }).catch(() => {});
         }
       }
 

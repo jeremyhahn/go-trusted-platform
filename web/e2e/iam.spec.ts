@@ -1762,8 +1762,8 @@ test.describe('IAM Management', () => {
         await addRoleButton.click();
       }
 
-      // Wait for navigation
-      await page.waitForTimeout(500);
+      // Wait for navigation (the page may also stay on /iam/roles)
+      await page.waitForURL(/\/iam\/roles\/new/, { timeout: 5000 }).catch(() => {});
 
       // Check what happened after clicking
       const currentUrl = page.url();
@@ -1790,11 +1790,10 @@ test.describe('IAM Management', () => {
           const submitButton = page.getByRole('button', { name: /create|save|submit/i }).last();
           if (await submitButton.isVisible({ timeout: 2000 }).catch(() => false)) {
             await submitButton.click();
-            await page.waitForTimeout(500);
 
             // Check for success
             const successVisible = await page.getByText(/role created|successfully/i)
-              .first().isVisible({ timeout: 3000 }).catch(() => false);
+              .first().waitFor({ state: 'visible', timeout: 3000 }).then(() => true, () => false);
 
             if (successVisible) {
               const roles = mockApi.getRoles();
@@ -1843,16 +1842,14 @@ test.describe('IAM Management', () => {
       const openMenuButton = page.getByRole('button', { name: /open menu/i }).first();
       await openMenuButton.click();
 
-      // Wait for dropdown animation
-      await page.waitForTimeout(300);
-
       // Click edit menu item - the actions are "View", "Edit", "Delete"
       const editMenuItem = page.getByRole('menuitem', { name: /^edit$/i });
-      const isEditVisible = await editMenuItem.isVisible().catch(() => false);
+      const isEditVisible = await editMenuItem
+        .waitFor({ state: 'visible', timeout: 3000 }).then(() => true, () => false);
       if (isEditVisible) {
         await editMenuItem.click();
         // Wait for navigation
-        await page.waitForTimeout(500);
+        await page.waitForURL(/\/iam\/roles\/role-1/, { timeout: 5000 }).catch(() => {});
       }
 
       // Check if navigation happened, if not navigate directly
@@ -1986,8 +1983,8 @@ test.describe('IAM Management', () => {
         await addGroupButton.click();
       }
 
-      // Wait for navigation
-      await page.waitForTimeout(500);
+      // Wait for navigation (the page may also stay on /iam/groups)
+      await page.waitForURL(/\/iam\/groups\/new/, { timeout: 5000 }).catch(() => {});
 
       // Check what happened after clicking
       const currentUrl = page.url();
@@ -2014,11 +2011,10 @@ test.describe('IAM Management', () => {
           const submitButton = page.getByRole('button', { name: /create|save|submit/i }).last();
           if (await submitButton.isVisible({ timeout: 2000 }).catch(() => false)) {
             await submitButton.click();
-            await page.waitForTimeout(500);
 
             // Check for success
             const successVisible = await page.getByText(/group created|successfully/i)
-              .first().isVisible({ timeout: 3000 }).catch(() => false);
+              .first().waitFor({ state: 'visible', timeout: 3000 }).then(() => true, () => false);
 
             if (successVisible) {
               const groups = mockApi.getGroups();
@@ -2067,12 +2063,9 @@ test.describe('IAM Management', () => {
       // Wait for network to settle
       await page.waitForLoadState('networkidle').catch(() => {});
 
-      // Wait for any loading state to complete
-      await page.waitForTimeout(500);
-
       // Verify groups page loaded - with fallback
       const headingVisible = await page.getByRole('heading', { name: 'Groups', exact: true })
-        .isVisible({ timeout: 10000 }).catch(() => false);
+        .waitFor({ state: 'visible', timeout: 10000 }).then(() => true, () => false);
 
       if (!headingVisible) {
         // Check for loading state or any IAM content
@@ -2100,7 +2093,7 @@ test.describe('IAM Management', () => {
         // No actions menu, test navigation by clicking the row
         try {
           await groupRow.click();
-          await page.waitForTimeout(500);
+          await page.waitForURL(/\/iam\/groups\/[^/?]+/, { timeout: 5000 }).catch(() => {});
         } catch {
           // Click failed, but groups page loaded successfully
           expect(true).toBe(true);
@@ -2108,21 +2101,21 @@ test.describe('IAM Management', () => {
         }
       } else {
         await actionsButton.click();
-        await page.waitForTimeout(300);
 
         // Try to find view/edit menu item
         const viewMenuItem = page.getByRole('menuitem', { name: /view|manage members|details|edit/i }).first();
-        const viewVisible = await viewMenuItem.isVisible({ timeout: 2000 }).catch(() => false);
+        const viewVisible = await viewMenuItem
+          .waitFor({ state: 'visible', timeout: 2000 }).then(() => true, () => false);
 
         if (viewVisible) {
           await viewMenuItem.click();
-          await page.waitForTimeout(500);
+          await page.waitForURL(/\/iam\/groups\/[^/?]+/, { timeout: 5000 }).catch(() => {});
         } else {
           // No view menu item, press escape and try row click
           await page.keyboard.press('Escape');
-          await page.waitForTimeout(200);
+          await expect(page.getByRole('menu')).toBeHidden();
           await groupRow.click().catch(() => {});
-          await page.waitForTimeout(500);
+          await page.waitForURL(/\/iam\/groups\/[^/?]+/, { timeout: 5000 }).catch(() => {});
         }
       }
 
@@ -2199,12 +2192,9 @@ test.describe('IAM Management', () => {
       // Wait for network to settle
       await page.waitForLoadState('networkidle').catch(() => {});
 
-      // Wait for any loading state to complete
-      await page.waitForTimeout(500);
-
       // Verify groups page loaded - with fallback
       const headingVisible = await page.getByRole('heading', { name: 'Groups', exact: true })
-        .isVisible({ timeout: 10000 }).catch(() => false);
+        .waitFor({ state: 'visible', timeout: 10000 }).then(() => true, () => false);
 
       if (!headingVisible) {
         // Check for loading state or any IAM content
@@ -2231,27 +2221,27 @@ test.describe('IAM Management', () => {
         // No actions menu, try clicking the row
         try {
           await groupRow.click();
-          await page.waitForTimeout(500);
+          await page.waitForURL(/\/iam\/groups\/[^/?]+/, { timeout: 5000 }).catch(() => {});
         } catch {
           expect(true).toBe(true);
           return;
         }
       } else {
         await actionsButton.click();
-        await page.waitForTimeout(300);
 
         // Try to find view/edit menu item
         const viewMenuItem = page.getByRole('menuitem', { name: /view|manage members|details|edit/i }).first();
-        const viewVisible = await viewMenuItem.isVisible({ timeout: 2000 }).catch(() => false);
+        const viewVisible = await viewMenuItem
+          .waitFor({ state: 'visible', timeout: 2000 }).then(() => true, () => false);
 
         if (viewVisible) {
           await viewMenuItem.click();
-          await page.waitForTimeout(500);
+          await page.waitForURL(/\/iam\/groups\/[^/?]+/, { timeout: 5000 }).catch(() => {});
         } else {
           await page.keyboard.press('Escape');
-          await page.waitForTimeout(200);
+          await expect(page.getByRole('menu')).toBeHidden();
           await groupRow.click().catch(() => {});
-          await page.waitForTimeout(500);
+          await page.waitForURL(/\/iam\/groups\/[^/?]+/, { timeout: 5000 }).catch(() => {});
         }
       }
 
@@ -2265,11 +2255,10 @@ test.describe('IAM Management', () => {
 
         if (removeVisible) {
           await removeMemberButton.click();
-          await page.waitForTimeout(500);
 
           // Check for success message
           const successVisible = await page.getByText(/member removed|removed|successfully/i)
-            .first().isVisible({ timeout: 3000 }).catch(() => false);
+            .first().waitFor({ state: 'visible', timeout: 3000 }).then(() => true, () => false);
           expect(successVisible || true).toBe(true);
         } else {
           // No remove button - page may not show members or limited UI
@@ -2347,9 +2336,7 @@ test.describe('IAM Management', () => {
           navigationSucceeded = true;
           break;
         } catch (error) {
-          if (attempt < 2) {
-            await page.waitForTimeout(1000);
-          }
+          // Retry the navigation at once
         }
       }
 
@@ -2365,9 +2352,6 @@ test.describe('IAM Management', () => {
         // Network idle timeout is acceptable, continue with test
       });
 
-      // Give the page time to render
-      await page.waitForTimeout(500);
-
       // Track multiple success conditions - test passes if ANY are met
       let pageLoaded = false;
       let headingVisible = false;
@@ -2381,7 +2365,7 @@ test.describe('IAM Management', () => {
 
         // Check if the page loads - it might be Access Control or Permissions heading
         headingVisible = await page.getByRole('heading', { name: /access control|permissions/i })
-          .isVisible({ timeout: 5000 }).catch(() => false);
+          .waitFor({ state: 'visible', timeout: 5000 }).then(() => true, () => false);
 
         // Check for any IAM-related heading as fallback
         if (!headingVisible) {
@@ -2396,13 +2380,11 @@ test.describe('IAM Management', () => {
           await permissionsTab.click().catch(() => {
             // Tab click failed, but we found it
           });
-          // Wait for tab content to load
-          await page.waitForTimeout(300);
         }
 
         // Check for permissions content with multiple selectors
         permissionsContentVisible = await page.getByText(/devices:read/i)
-          .first().isVisible({ timeout: 3000 }).catch(() => false);
+          .first().waitFor({ state: 'visible', timeout: 3000 }).then(() => true, () => false);
 
         if (!permissionsContentVisible) {
           // Try alternative permission text patterns
@@ -2557,8 +2539,8 @@ test.describe('IAM Management', () => {
         await addPolicyButton.click();
       }
 
-      // Wait for navigation
-      await page.waitForTimeout(500);
+      // Wait for navigation (a create dialog keeps the URL, so no throw)
+      await page.waitForURL(/\/iam\/policies\/new/, { timeout: 5000 }).catch(() => {});
 
       // Check what happened after clicking
       const currentUrl = page.url();
@@ -2585,11 +2567,10 @@ test.describe('IAM Management', () => {
           const submitButton = page.getByRole('button', { name: /create|save|submit/i }).last();
           if (await submitButton.isVisible({ timeout: 2000 }).catch(() => false)) {
             await submitButton.click();
-            await page.waitForTimeout(500);
 
             // Check for success
             const successVisible = await page.getByText(/policy created|successfully/i)
-              .first().isVisible({ timeout: 3000 }).catch(() => false);
+              .first().waitFor({ state: 'visible', timeout: 3000 }).then(() => true, () => false);
 
             if (successVisible) {
               const policies = mockApi.getPolicies();
@@ -2686,7 +2667,6 @@ test.describe('IAM Management', () => {
 
       // Wait for page to load
       await page.waitForLoadState('networkidle');
-      await page.waitForTimeout(1000);
 
       // Check for various error indicators
       const errorIndicators = [
@@ -2694,6 +2674,7 @@ test.describe('IAM Management', () => {
         page.getByText(/error loading roles|failed to fetch|error/i).first(),
         page.locator('[data-testid="error"]').first(),
       ];
+      await errorIndicators[0].or(errorIndicators[1]).or(errorIndicators[2]).first().waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
 
       let foundError = false;
       for (const indicator of errorIndicators) {
@@ -2720,7 +2701,6 @@ test.describe('IAM Management', () => {
 
       // Wait for page to load
       await page.waitForLoadState('networkidle');
-      await page.waitForTimeout(1000);
 
       // Check for various error indicators
       const errorIndicators = [
@@ -2728,6 +2708,7 @@ test.describe('IAM Management', () => {
         page.getByText(/error loading groups|failed to fetch|error/i).first(),
         page.locator('[data-testid="error"]').first(),
       ];
+      await errorIndicators[0].or(errorIndicators[1]).or(errorIndicators[2]).first().waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
 
       let foundError = false;
       for (const indicator of errorIndicators) {
@@ -3435,7 +3416,7 @@ test.describe('IAM Management', () => {
       await page.fill('input[placeholder*="Search"]', 'Production');
 
       // Wait for filter to apply - the table should only show Production API
-      await page.waitForTimeout(300);
+      await expect(table.getByText('Development API')).toBeHidden();
 
       // Verify only Production API is in the visible rows
       await expect(table.getByText('Production API')).toBeVisible();
@@ -3443,10 +3424,7 @@ test.describe('IAM Management', () => {
       // Clear search
       await page.fill('input[placeholder*="Search"]', '');
 
-      // Wait for filter to clear
-      await page.waitForTimeout(300);
-
-      // All apps should be visible again
+      // All apps should be visible again (the assertions retry until the filter clears)
       await expect(table.getByText('Production API')).toBeVisible();
       await expect(table.getByText('Development API')).toBeVisible();
       await expect(table.getByText('Test Environment')).toBeVisible();
@@ -3537,9 +3515,6 @@ test.describe('IAM Management', () => {
       // If copy button is visible, click it
       if (await copyButton.isVisible({ timeout: 3000 }).catch(() => false)) {
         await copyButton.click();
-
-        // Wait for state change - the icon changes from copy to check
-        await page.waitForTimeout(500);
 
         // Check that clicking worked by verifying the button still exists (state changed)
         await expect(dialog.locator('button').filter({ has: page.locator('svg') }).first()).toBeVisible();
@@ -3980,8 +3955,8 @@ test.describe('IAM Management', () => {
       await expect(registerButton).toBeVisible();
       await registerButton.click();
 
-      // Wait for action to process
-      await page.waitForTimeout(1000);
+      // The button navigates with router.push('/iam/apps/new')
+      await page.waitForURL(/\/iam\/apps\/new/);
 
       // Test passes if any action was taken (button click was successful)
       // The button either navigates or opens a dialog
@@ -4215,11 +4190,12 @@ test.describe('IAM Management', () => {
       // Click on actions menu
       await page.getByRole('row', { name: /Error Delete App/i }).getByRole('button').last().click();
 
-      // Click delete
+      // Click delete (the native confirm is accepted by the dialog handler)
+      const deleteResponse = page.waitForResponse((r) => r.request().method() === 'DELETE' && /\/api\/v1\/iam\/tenants\/[^/]+\/apps\/[^/]+$/.test(new URL(r.url()).pathname));
       await page.getByRole('menuitem', { name: /delete/i }).click();
 
-      // Wait for the action to process
-      await page.waitForTimeout(1000);
+      // Wait for the mocked DELETE to answer
+      await deleteResponse;
 
       // Test passes if page is still functional after delete attempt
       // We check multiple possible indicators of the error handling or page state
@@ -4254,8 +4230,8 @@ test.describe('IAM Management', () => {
       const searchInput = page.getByPlaceholder('Search applications...');
       await searchInput.fill('Mobile');
 
-      // Wait a moment for the filter to apply
-      await page.waitForTimeout(300);
+      // Wait for the filter to apply
+      await expect(page.getByText('Web Frontend Application')).toBeHidden();
 
       // Mobile Backend Service should still be visible
       await expect(page.getByText('Mobile Backend Service')).toBeVisible();
@@ -4263,10 +4239,7 @@ test.describe('IAM Management', () => {
       // Clear search
       await searchInput.fill('');
 
-      // Wait for all apps to reappear
-      await page.waitForTimeout(300);
-
-      // All apps should be visible again
+      // All apps should be visible again (the assertions retry until the filter clears)
       await expect(page.getByText('Web Frontend Application')).toBeVisible();
       await expect(page.getByText('Mobile Backend Service')).toBeVisible();
       await expect(page.getByText('Admin Dashboard App')).toBeVisible();
