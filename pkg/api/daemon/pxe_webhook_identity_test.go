@@ -23,6 +23,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
+	"encoding/pem"
 	"io"
 	"log/slog"
 	"math/big"
@@ -197,7 +198,7 @@ func TestPXEIdentityHook_EnrolmentRecordsTheIDevIDTheWebhookRequires(t *testing.
 	cert := webhookIdentityCert(t)
 	ek := webhookIdentityCert(t)
 	f := newWebhookIdentityFixture(t)
-	profiles := webhookEKProfiles{ek.SerialNumber.String(): {MACAddress: webhookIdentityMAC}}
+	profiles := webhookEKProfiles{ek.SerialNumber.String(): {MACAddress: webhookIdentityMAC, EKCert: webhookEKPEM(ek)}}
 
 	// Before enrolment nothing is recorded, so the webhook refuses.
 	rec := f.report(cert)
@@ -264,6 +265,22 @@ func TestPXEIdentityHook_NoPXEBackendDoesNotFailEnrolment(t *testing.T) {
 	}))
 }
 
+// With PXE disabled, a serial-only profile (no bound EK certificate, as
+// AssignToDeviceWithEK allows) must not abort ordinary TCG enrolment.
+func TestPXEIdentityHook_DisabledPXESerialOnlyProfileEnrols(t *testing.T) {
+	ek := webhookIdentityCert(t)
+	profiles := webhookEKProfiles{ek.SerialNumber.String(): {MACAddress: webhookIdentityMAC}}
+	logger := logging.NewLogger(slog.LevelError, io.Discard)
+	hook := webv1.NewPXEIdentityHookWithProfiles(NewPXEGRPCService(logger, nil), profiles, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	require.NoError(t, hook(&trustedca.ACMEOrderFinalizeHookContext{
+		Context:     context.Background(),
+		IsTCGCSR:    true,
+		ClientIP:    "192.0.2.10",
+		Certificate: webhookIdentityCert(t),
+		TCGData:     &trustedca.ACMETCGEnrollmentData{EKCertificate: ek},
+	}))
+}
+
 // TestPXEIdentityHook_UnresolvableIPRecordsNothing pins that an enrolment
 // from an address with no on-link MAC (not a PXE install) still succeeds and
 // records no fingerprint, so the webhook keeps refusing.
@@ -293,6 +310,11 @@ func TestPXEIdentityHook_UnresolvableIPRecordsNothing(t *testing.T) {
 	assert.Equal(t, pxe.StateInstalling, f.state(t))
 }
 
+// webhookEKPEM returns the PEM of ek, as an operator binds it to a profile.
+func webhookEKPEM(ek *x509.Certificate) string {
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ek.Raw}))
+}
+
 // webhookEKProfiles resolves a device profile by its exact EK serial.
 type webhookEKProfiles map[string]*deviceentities.DeviceProfile
 
@@ -311,7 +333,7 @@ func TestPXEIdentityHook_RoutedEnrolmentCompletesThroughTheWebhook(t *testing.T)
 	cert := webhookIdentityCert(t)
 	ek := webhookIdentityCert(t)
 	f := newWebhookIdentityFixture(t)
-	profiles := webhookEKProfiles{ek.SerialNumber.String(): {MACAddress: webhookIdentityMAC}}
+	profiles := webhookEKProfiles{ek.SerialNumber.String(): {MACAddress: webhookIdentityMAC, EKCert: webhookEKPEM(ek)}}
 
 	logger := logging.NewLogger(slog.LevelError, io.Discard)
 	hook := webv1.NewPXEIdentityHookWithProfiles(NewPXEGRPCService(logger, f.svc), profiles, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -352,7 +374,7 @@ func TestPXEIdentityHook_AFailedFinalizeThenARetryEnrols(t *testing.T) {
 		return errWebhookHookFailedOnce{}
 	})
 	ek := webhookIdentityCert(t)
-	profiles := webhookEKProfiles{ek.SerialNumber.String(): {MACAddress: webhookIdentityMAC}}
+	profiles := webhookEKProfiles{ek.SerialNumber.String(): {MACAddress: webhookIdentityMAC, EKCert: webhookEKPEM(ek)}}
 	hooks.Register(webv1.NewPXEIdentityHookWithProfiles(grpcSvc, profiles, slog.New(slog.NewTextHandler(io.Discard, nil))))
 	finalize := func(cert *x509.Certificate) error {
 		return hooks.Execute(&trustedca.ACMEOrderFinalizeHookContext{
@@ -372,6 +394,46 @@ func TestPXEIdentityHook_AFailedFinalizeThenARetryEnrols(t *testing.T) {
 
 	retry := webhookIdentityCert(t)
 	require.NoError(t, finalize(retry))
+
+	rec := f.report(first)
+	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	rec = f.report(retry)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, pxe.StateInstallComplete, f.state(t))
+}
+
+// The hook succeeds but certificate persistence after it fails (go-xkms runs
+// the finalize hooks before it saves the certificate and the order), so the
+// device never gets the first IDevID. The re-enrolment's IDevID, issued while
+// the device is still installing, replaces the recorded fingerprint and the
+// webhook accepts it; the undelivered first IDevID is refused.
+func TestPXEIdentityHook_StorageFailureAfterTheHookThenARetryEnrols(t *testing.T) {
+	ctx := context.Background()
+	f := newWebhookIdentityFixture(t)
+	logger := logging.NewLogger(slog.LevelError, io.Discard)
+	grpcSvc := NewPXEGRPCService(logger, f.svc)
+	ek := webhookIdentityCert(t)
+	profiles := webhookEKProfiles{ek.SerialNumber.String(): {MACAddress: webhookIdentityMAC, EKCert: webhookEKPEM(ek)}}
+	hook := webv1.NewPXEIdentityHookWithProfiles(grpcSvc, profiles, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	finalize := func(cert *x509.Certificate) error {
+		return hook(&trustedca.ACMEOrderFinalizeHookContext{
+			Context:     ctx,
+			IsTCGCSR:    true,
+			ClientIP:    "192.0.2.10",
+			Certificate: cert,
+			TCGData:     &trustedca.ACMETCGEnrollmentData{EKCertificate: ek},
+		})
+	}
+
+	// The hook records the first IDevID; saving the certificate then fails.
+	first := webhookIdentityCert(t)
+	require.NoError(t, finalize(first))
+
+	retry := webhookIdentityCert(t)
+	require.NoError(t, finalize(retry), "the re-enrolment after a storage failure is refused")
+	fp, err := grpcSvc.RecordedIDevIDFingerprint(ctx, webhookIdentityMAC)
+	require.NoError(t, err)
+	require.Equal(t, webhookIdentityFingerprint(retry), fp)
 
 	rec := f.report(first)
 	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())

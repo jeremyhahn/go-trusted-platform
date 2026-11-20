@@ -641,6 +641,38 @@ func TestService_RecordIDevIDFingerprint(t *testing.T) {
 	})
 }
 
+// TestService_RecordIDevIDFingerprint_ReEnrolmentWhileInstallingReplaces:
+// the finalize hook records the fingerprint before the CA commits the
+// certificate, so a delivery failure is followed by a re-enrolment that
+// issues a different IDevID. While the device is still installing (it has
+// not reported any certificate in use) the later fingerprint replaces the
+// earlier one; once the device is past installing it is fixed.
+func TestService_RecordIDevIDFingerprint_ReEnrolmentWhileInstallingReplaces(t *testing.T) {
+	const fpA = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	const fpB = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+	svc, _ := initializeTestService(t)
+	ctx := context.Background()
+
+	device, err := svc.RegisterDevice(ctx, "00:11:22:33:44:55", "port-1")
+	require.NoError(t, err)
+	for _, st := range []ProvisioningState{StateBooting, StateInstalling} {
+		require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, st, string(st)))
+	}
+
+	require.NoError(t, svc.RecordIDevIDFingerprint(ctx, device.ID, fpA))
+	require.NoError(t, svc.RecordIDevIDFingerprint(ctx, device.ID, fpB), "a re-enrolment while installing is refused")
+	got, err := svc.GetDevice(ctx, device.ID)
+	require.NoError(t, err)
+	assert.Equal(t, fpB, got.IDevIDFingerprint)
+	assert.Equal(t, StateInstalling, got.State)
+
+	require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, StateInstallComplete, "complete"))
+	assert.Error(t, svc.RecordIDevIDFingerprint(ctx, device.ID, fpA))
+	got, err = svc.GetDevice(ctx, device.ID)
+	require.NoError(t, err)
+	assert.Equal(t, fpB, got.IDevIDFingerprint)
+}
+
 func TestService_AuthorizeDevice_NotInitialized(t *testing.T) {
 	svc := NewService()
 	ctx := context.Background()
@@ -844,7 +876,10 @@ func TestService_RetryDevice_ReEnrolmentRecordsTheNewIDevID(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, otherFP, got.IDevIDFingerprint)
 
-	// Within the same attempt a different fingerprint is still refused.
+	// Within the same attempt a different fingerprint is refused once the
+	// install is complete (a re-enrolment while installing replaces it, see
+	// TestService_RecordIDevIDFingerprint_ReEnrolmentWhileInstallingReplaces).
+	require.NoError(t, svc.UpdateDeviceState(ctx, device.ID, StateInstallComplete, "complete"))
 	assert.Error(t, svc.RecordIDevIDFingerprint(ctx, device.ID, fp))
 }
 
