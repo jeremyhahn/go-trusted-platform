@@ -66,6 +66,8 @@ const (
 	// guard's `run` on every event (ci-template v1.30), so a schedule run
 	// skips while main is busy and a refused run skips everywhere.
 	scheduleGuardExpr = "needs.preflight.outputs.verdict == 'run'"
+	// sameRepoExpr holds a job to pushes and same-repository pull requests.
+	sameRepoExpr = "github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository"
 
 	// prTierGuardedIf, docsOnlyGuardedIf, fullTierGuardedIf and
 	// nightlyGuardedIf are the tier `if:`s of a bigdisk job, character for
@@ -73,8 +75,12 @@ const (
 	// docsOnlyGuardedIf (2026-11-10, m2406): race on the bigdisk runner.
 	prTierGuardedIf   = "${{ " + draftGuard + " && (" + scheduleGuardExpr + ") }}"
 	docsOnlyGuardedIf = "${{ needs.preflight.outputs.docs_only != 'true' && " + draftGuard + " && (" + scheduleGuardExpr + ") }}"
-	fullTierGuardedIf = "${{ (" + fullTierExpr + ") && " + draftGuard + " && (" + scheduleGuardExpr + ") }}"
-	nightlyGuardedIf  = "${{ (" + nightlyExpr + ") && " + scheduleGuardExpr + " }}"
+	// docsOnlyGuardedSameRepoIf is docsOnlyGuardedIf plus the fork guard
+	// the image job carries (#2076): its waived self-hosted runner only
+	// serves pushes and same-repository pull requests.
+	docsOnlyGuardedSameRepoIf = "${{ needs.preflight.outputs.docs_only != 'true' && " + draftGuard + " && (" + scheduleGuardExpr + ") && (" + sameRepoExpr + ") }}"
+	fullTierGuardedIf         = "${{ (" + fullTierExpr + ") && " + draftGuard + " && (" + scheduleGuardExpr + ") }}"
+	nightlyGuardedIf          = "${{ (" + nightlyExpr + ") && " + scheduleGuardExpr + " }}"
 
 	// scheduleEnv and scheduleGuardEnv are the gate's schedule flag and the
 	// guard's verdict: on a schedule run the gate fails on any verdict but
@@ -216,20 +222,22 @@ var tierByIf = map[string]string{
 	nightlyIf:  tierNightly,
 	mainOnlyIf: tierMain,
 
-	prTierGuardedIf:   tierPR,
-	docsOnlyGuardedIf: tierDocs,
-	fullTierGuardedIf: tierFull,
-	mainOnlyGuardedIf: tierMain,
-	nightlyGuardedIf:  tierNightly,
+	prTierGuardedIf:           tierPR,
+	docsOnlyGuardedIf:         tierDocs,
+	docsOnlyGuardedSameRepoIf: tierDocs,
+	fullTierGuardedIf:         tierFull,
+	mainOnlyGuardedIf:         tierMain,
+	nightlyGuardedIf:          tierNightly,
 }
 
 // scheduleGuardedIf holds the `if:`s that read the schedule guard's verdict.
 var scheduleGuardedIf = map[string]bool{
-	prTierGuardedIf:   true,
-	docsOnlyGuardedIf: true,
-	fullTierGuardedIf: true,
-	mainOnlyGuardedIf: true,
-	nightlyGuardedIf:  true,
+	prTierGuardedIf:           true,
+	docsOnlyGuardedIf:         true,
+	docsOnlyGuardedSameRepoIf: true,
+	fullTierGuardedIf:         true,
+	mainOnlyGuardedIf:         true,
+	nightlyGuardedIf:          true,
 }
 
 // gatedTiers are the tiers a gate `check` line may carry.
