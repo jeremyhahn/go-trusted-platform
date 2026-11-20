@@ -16,6 +16,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"strconv"
 	"testing"
 
 	quicbaassdk "github.com/jeremyhahn/go-quicbaas/sdk/go"
@@ -159,22 +160,27 @@ func TestErrPEPClientNotAvailable_Error(t *testing.T) {
 	}
 }
 
-// storedUsersIAM is an IAM client whose User().Get answers from a map of
-// stored users keyed by tenant and user ID, the way the IAM store holds them.
-// A missing user is an error; every other IAM method is the embedded nil
-// interface and panics if called.
+// storedUsersIAM is an IAM client whose user lookups follow the IAM store's
+// contract: users are tenant-scoped, Get answers only numeric Snowflake IDs
+// (the store's ParseUserID refuses anything else as not found), GetByEmail
+// matches the email and FindByUsername the username. A missing user is an
+// error; every other IAM method is the embedded nil interface and panics if
+// called.
 type storedUsersIAM struct {
 	quicbaassdk.IAMClient
-	users  map[string]*sdkiam.User // tenantID + "/" + userID
+	users  []*sdkiam.User
 	getErr error
-	// anyUser, when set, is the stored user for every lookup: tests whose
-	// PEP fake does not look at roles give it to admit a certificate caller.
+	// anyUser, when set, is the one stored user, found by any email or
+	// username in any tenant: tests whose PEP fake does not look at roles
+	// give it to admit a certificate caller.
 	anyUser *sdkiam.User
 }
 
 // iamStoringAnyUser is an IAM client that holds a user, with no roles, for
-// every subject and tenant.
-func iamStoringAnyUser() *storedUsersIAM { return &storedUsersIAM{anyUser: &sdkiam.User{}} }
+// every certificate subject and tenant.
+func iamStoringAnyUser() *storedUsersIAM {
+	return &storedUsersIAM{anyUser: &sdkiam.User{ID: "1001"}}
+}
 
 func (c *storedUsersIAM) User() sdkiam.UserClient { return storedUsers{client: c} }
 
@@ -183,18 +189,36 @@ type storedUsers struct {
 	client *storedUsersIAM
 }
 
-func (u storedUsers) Get(_ context.Context, tenantID, userID string) (*sdkiam.User, error) {
+var errStoredUserNotFound = errors.New("user not found")
+
+func (u storedUsers) find(tenantID string, match func(*sdkiam.User) bool) (*sdkiam.User, error) {
 	if u.client.getErr != nil {
 		return nil, u.client.getErr
 	}
 	if u.client.anyUser != nil {
 		return u.client.anyUser, nil
 	}
-	user, ok := u.client.users[tenantID+"/"+userID]
-	if !ok {
-		return nil, errors.New("user not found")
+	for _, user := range u.client.users {
+		if user.TenantID == tenantID && match(user) {
+			return user, nil
+		}
 	}
-	return user, nil
+	return nil, errStoredUserNotFound
+}
+
+func (u storedUsers) Get(_ context.Context, tenantID, userID string) (*sdkiam.User, error) {
+	if _, err := strconv.ParseUint(userID, 10, 64); err != nil {
+		return nil, errStoredUserNotFound
+	}
+	return u.find(tenantID, func(user *sdkiam.User) bool { return user.ID == userID })
+}
+
+func (u storedUsers) GetByEmail(_ context.Context, tenantID, email string) (*sdkiam.User, error) {
+	return u.find(tenantID, func(user *sdkiam.User) bool { return email != "" && user.Email == email })
+}
+
+func (u storedUsers) FindByUsername(_ context.Context, tenantID, username string) (*sdkiam.User, error) {
+	return u.find(tenantID, func(user *sdkiam.User) bool { return username != "" && user.Username == username })
 }
 
 // pepGrantingRole is a PEP that allows resource:action only when the Check
@@ -221,48 +245,90 @@ func pepGrantingRole(role, resource, action string, asked *[]*sdkiam.CheckReques
 // no permission and denies every certificate caller.
 func TestIAMTokenAuthorizer_CheckPeerPermission_ResolvesStoredRoles(t *testing.T) {
 	t.Parallel()
-	peer := &platformtoken.AuthorizedContext{Subject: "svc-1", TenantID: "acme"}
+	// The mTLS adapter sets Subject to the certificate's email SAN, else its
+	// CN: never the stored user's numeric ID.
+	emailPeer := &platformtoken.AuthorizedContext{Subject: "ops@acme.example", TenantID: "acme"}
+	cnPeer := &platformtoken.AuthorizedContext{Subject: "admin", TenantID: "acme"}
+	operator := &sdkiam.User{ID: "7301", TenantID: "acme", Email: "ops@acme.example", Roles: []string{"kms-operator"}}
+	admin := &sdkiam.User{ID: "7302", TenantID: "acme", Username: "admin", Roles: []string{"kms-operator"}}
 
-	t.Run("stored role granting the permission allows", func(t *testing.T) {
+	t.Run("email SAN resolves to the stored user and its roles", func(t *testing.T) {
 		var asked []*sdkiam.CheckRequest
 		authz := &iamTokenAuthorizer{
 			pep: pepGrantingRole("kms-operator", "kms", "delete", &asked),
-			iam: &storedUsersIAM{users: map[string]*sdkiam.User{
-				"acme/svc-1": {ID: "svc-1", TenantID: "acme", Roles: []string{"kms-operator"}},
-			}},
+			iam: &storedUsersIAM{users: []*sdkiam.User{operator, admin}},
 		}
-		allowed, err := authz.CheckPeerPermission(context.Background(), peer, "kms", "delete")
+		allowed, err := authz.CheckPeerPermission(context.Background(), emailPeer, "kms", "delete")
 		require.NoError(t, err)
 		assert.True(t, allowed)
 		require.Len(t, asked, 1)
-		assert.Equal(t, "svc-1", asked[0].Subject.ID)
+		assert.Equal(t, "7301", asked[0].Subject.ID, "the PEP decides on the canonical user ID")
 		assert.Equal(t, "acme", asked[0].Subject.TenantID)
+		assert.Equal(t, []string{"kms-operator"}, asked[0].Subject.Roles)
+	})
+	t.Run("CN resolves to the stored user by username", func(t *testing.T) {
+		var asked []*sdkiam.CheckRequest
+		authz := &iamTokenAuthorizer{
+			pep: pepGrantingRole("kms-operator", "kms", "delete", &asked),
+			iam: &storedUsersIAM{users: []*sdkiam.User{operator, admin}},
+		}
+		allowed, err := authz.CheckPeerPermission(context.Background(), cnPeer, "kms", "delete")
+		require.NoError(t, err)
+		assert.True(t, allowed)
+		require.Len(t, asked, 1)
+		assert.Equal(t, "7302", asked[0].Subject.ID)
 		assert.Equal(t, []string{"kms-operator"}, asked[0].Subject.Roles)
 	})
 	t.Run("stored user without the role is denied", func(t *testing.T) {
 		var asked []*sdkiam.CheckRequest
 		authz := &iamTokenAuthorizer{
 			pep: pepGrantingRole("kms-operator", "kms", "delete", &asked),
-			iam: &storedUsersIAM{users: map[string]*sdkiam.User{
-				"acme/svc-1": {ID: "svc-1", TenantID: "acme"},
+			iam: &storedUsersIAM{users: []*sdkiam.User{
+				{ID: "7301", TenantID: "acme", Email: "ops@acme.example"},
 			}},
 		}
+		allowed, err := authz.CheckPeerPermission(context.Background(), emailPeer, "kms", "delete")
+		require.NoError(t, err)
+		assert.False(t, allowed)
+	})
+	t.Run("unknown subject is denied without a PEP call", func(t *testing.T) {
+		var asked []*sdkiam.CheckRequest
+		authz := &iamTokenAuthorizer{
+			pep: pepGrantingRole("kms-operator", "kms", "delete", &asked),
+			iam: &storedUsersIAM{users: []*sdkiam.User{operator, admin}},
+		}
+		peer := &platformtoken.AuthorizedContext{Subject: "stranger@acme.example", TenantID: "acme"}
 		allowed, err := authz.CheckPeerPermission(context.Background(), peer, "kms", "delete")
 		require.NoError(t, err)
 		assert.False(t, allowed)
+		assert.Empty(t, asked)
 	})
 	t.Run("user stored in another tenant is denied", func(t *testing.T) {
 		var asked []*sdkiam.CheckRequest
 		authz := &iamTokenAuthorizer{
 			pep: pepGrantingRole("kms-operator", "kms", "delete", &asked),
-			iam: &storedUsersIAM{users: map[string]*sdkiam.User{
-				"other/svc-1": {ID: "svc-1", TenantID: "other", Roles: []string{"kms-operator"}},
+			iam: &storedUsersIAM{users: []*sdkiam.User{
+				{ID: "7301", TenantID: "other", Email: "ops@acme.example", Roles: []string{"kms-operator"}},
+				{ID: "7302", TenantID: "other", Username: "admin", Roles: []string{"kms-operator"}},
 			}},
 		}
-		allowed, err := authz.CheckPeerPermission(context.Background(), peer, "kms", "delete")
+		for _, peer := range []*platformtoken.AuthorizedContext{emailPeer, cnPeer} {
+			allowed, err := authz.CheckPeerPermission(context.Background(), peer, "kms", "delete")
+			require.NoError(t, err)
+			assert.False(t, allowed)
+		}
+		assert.Empty(t, asked, "a principal with no stored user never reaches the PEP")
+	})
+	t.Run("lookup returning a user of another tenant is denied", func(t *testing.T) {
+		var asked []*sdkiam.CheckRequest
+		authz := &iamTokenAuthorizer{
+			pep: pepGrantingRole("kms-operator", "kms", "delete", &asked),
+			iam: &storedUsersIAM{anyUser: &sdkiam.User{ID: "7301", TenantID: "other", Roles: []string{"kms-operator"}}},
+		}
+		allowed, err := authz.CheckPeerPermission(context.Background(), emailPeer, "kms", "delete")
 		require.NoError(t, err)
 		assert.False(t, allowed)
-		assert.Empty(t, asked, "a principal with no stored user never reaches the PEP")
+		assert.Empty(t, asked)
 	})
 	t.Run("lookup error is a denial without an error", func(t *testing.T) {
 		var asked []*sdkiam.CheckRequest
@@ -270,7 +336,7 @@ func TestIAMTokenAuthorizer_CheckPeerPermission_ResolvesStoredRoles(t *testing.T
 			pep: pepGrantingRole("kms-operator", "kms", "delete", &asked),
 			iam: &storedUsersIAM{getErr: errors.New("iam store unreachable: secret detail")},
 		}
-		allowed, err := authz.CheckPeerPermission(context.Background(), peer, "kms", "delete")
+		allowed, err := authz.CheckPeerPermission(context.Background(), emailPeer, "kms", "delete")
 		assert.NoError(t, err)
 		assert.False(t, allowed)
 		assert.Empty(t, asked)
@@ -278,7 +344,7 @@ func TestIAMTokenAuthorizer_CheckPeerPermission_ResolvesStoredRoles(t *testing.T
 	t.Run("no IAM client is a denial", func(t *testing.T) {
 		var asked []*sdkiam.CheckRequest
 		authz := &iamTokenAuthorizer{pep: pepGrantingRole("kms-operator", "kms", "delete", &asked)}
-		allowed, err := authz.CheckPeerPermission(context.Background(), peer, "kms", "delete")
+		allowed, err := authz.CheckPeerPermission(context.Background(), emailPeer, "kms", "delete")
 		assert.NoError(t, err)
 		assert.False(t, allowed)
 		assert.Empty(t, asked)
